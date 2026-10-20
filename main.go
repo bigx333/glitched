@@ -143,6 +143,10 @@ type app struct {
 	sectionClosed map[category]bool
 	// rowFx is the joke playing on a thread's row, by thread.
 	rowFx map[string]rowGagFx
+	// attachments go with the next message; pastes counts pasted images,
+	// to name them.
+	attachments []attachment
+	pastes      int
 	// lists are the threads' timelines, by thread.
 	lists map[string]*ui.ListState
 	// The diff panel: each file's viewer, by path, and their layout.

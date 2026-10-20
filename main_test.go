@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -464,5 +465,38 @@ func TestTimelineFollowsEnd(t *testing.T) {
 	tt.Advance(2 * time.Second)
 	if !l.AtEnd() {
 		t.Error("Jump to latest did not scroll to the end")
+	}
+}
+
+// Files dropped or picked become chips over the draft, and go with the
+// message sent; a long paste becomes one too.
+func TestAttachments(t *testing.T) {
+	a := newApp()
+	a.selected = "t3"
+	tt := ui.NewTester(a.view, 1320, 860)
+	a.attachFiles([]string{"go.mod", "resources/icon.png"})
+	tt.Frame()
+	if !tt.HasText("go.mod") || !tt.HasText("icon.png") {
+		t.Fatalf("chips missing: %q", tt.Texts())
+	}
+	if a.attachments[1].thumb == nil {
+		t.Error("no thumbnail for an image")
+	}
+	if !a.onPaste(strings.Repeat("x\n", longPaste)) || len(a.attachments) != 3 {
+		t.Error("a long paste should become an attachment")
+	}
+	if a.onPaste("short") {
+		t.Error("a short paste should go in the box")
+	}
+	if err := tt.Click("Remove go.mod"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.attachments) != 2 {
+		t.Fatalf("%d attachments after removing one", len(a.attachments))
+	}
+	_, th := a.current()
+	a.send(th)
+	if len(a.attachments) != 0 || len(th.entries[len(th.entries)-3].attachments) != 2 {
+		t.Error("sending should take the attachments with the message")
 	}
 }

@@ -69,6 +69,8 @@ type entry struct {
 	took      string
 	work      []workItem
 	files     []fileChange
+	// attachments went with a message of the user's.
+	attachments []attachment
 }
 
 type fileChange struct {

@@ -3,6 +3,7 @@ package main
 import (
 	"image/png"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with PAGE for a
-// path, DIFF, TERM2, CMDK, LIGHT, PICKER=<effort>, FAST and STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, GAG=snooze|settle|undo with AT=350ms for what to show, and HIDE=60ms for
+// path, DIFF, TERM2, CMDK, LIGHT, PICKER=<effort>, FAST and STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH, GAG=snooze|settle|undo with AT=350ms for what to show, and HIDE=60ms for
 // a frame that long into hiding the sidebar.
 func TestShot(t *testing.T) {
 	out := os.Getenv("SHOT")
@@ -43,6 +44,12 @@ func TestShot(t *testing.T) {
 			t.Fatal(err)
 		}
 		tt.Advance(d)
+	}
+	if os.Getenv("ATTACH") != "" {
+		a.attachFiles([]string{"resources/icon.png", "go.mod"})
+		a.onPaste(strings.Repeat("log line\n", 400))
+		tt.Frame()
+		tt.Advance(500 * time.Millisecond)
 	}
 	if os.Getenv("FULL") != "" {
 		a.access = accessFull

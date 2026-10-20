@@ -218,8 +218,15 @@ func (a *app) entry(c *ui.Context, t *thread, i int, e entry) {
 	case entryUser:
 		ui.Row(c).Key(key).Transition(riseIn).Children(func() {
 			ui.Spacer(c)
-			ui.Text(c, e.text).Selectable().LineHeight(1.5).Padding(10, 14).Radius(16, 16, 4, 16).
-				Background(palette.surface).Border(1, palette.border).MaxWidthPercent(80)
+			ui.Column(c).AlignItems(ui.End).Gap(6).MaxWidthPercent(80).Children(func() {
+				if len(e.attachments) > 0 {
+					attachmentChips(c, e.attachments, nil)
+				}
+				if e.text != "" {
+					ui.Text(c, e.text).Selectable().LineHeight(1.5).Padding(10, 14).Radius(16, 16, 4, 16).
+						Background(palette.surface).Border(1, palette.border)
+				}
+			})
 		})
 	case entryAssistant:
 		ui.Column(c).Key(key).LineHeight(1.55).Transition(riseIn).Children(func() {
@@ -329,18 +336,31 @@ func (a *app) composer(c *ui.Context, t *thread) {
 				card.Shadow(0, 0, 0, 3, palette.accent.Alpha(0.22))
 			}
 			a.accessEffects(card)
+			dragOver := a.dropZone(card)
 			a.pane(card, glass.Glass{}).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.28)).
 				Transition(ui.ElementTransition{Size: true, Duration: 150 * time.Millisecond, Ease: easeOut}).Children(func() {
+				if len(a.attachments) > 0 {
+					ui.Column(c).Key("attachments").Padding(12, 12, 0).Children(func() {
+						attachmentChips(c, a.attachments, func(i int) {
+							a.attachments = append(a.attachments[:i:i], a.attachments[i+1:]...)
+						})
+					})
+				}
 				ui.TextArea(c.Key("draft"), &a.draft).
 					Placeholder("Ask anything, @tag files/folders, or use / to show available commands").
 					Lines(2, 10).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).
-					Padding(14, 16, 4).AutoFocus()
+					Padding(14, 16, 4).AutoFocus().OnPaste(a.onPaste)
 				ui.Row(c).Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).Children(func() {
 					a.composerControls(c)
 					ui.Spacer(c)
-					iconButton(c, "attach", icPaperclip, "Attach", false)
+					if iconButton(c, "attach", icPaperclip, "Attach files", false).Clicked() {
+						a.pickFiles()
+					}
 					a.sendButton(c, t)
 				})
+				if dragOver {
+					dropRing(c)
+				}
 			})
 			ui.Row(c).Gap(4).AlignItems(ui.Center).Padding(0, 6).Children(func() {
 				ghost(c, "env", false).Padding(3, 6).Children(func() {
@@ -370,7 +390,7 @@ func (a *app) composer(c *ui.Context, t *thread) {
 // anything to send. While the agent works, it stops it.
 func (a *app) sendButton(c *ui.Context, t *thread) {
 	working := t.status == statusWorking
-	empty := strings.TrimSpace(a.draft) == ""
+	empty := strings.TrimSpace(a.draft) == "" && len(a.attachments) == 0
 	send := ui.ButtonBase(c.Key("send")).Label("Send").Size(30, 30).Radius(15).Center().
 		Cursor(ui.CursorPointer).Disabled(empty && !working)
 	bg := palette.text
@@ -413,18 +433,22 @@ var replyCount int
 // arrive one by one, then its reply streams in. There is no agent.
 func (a *app) send(t *thread) {
 	text := strings.TrimSpace(a.draft)
-	if text == "" {
+	if text == "" && len(a.attachments) == 0 {
 		return
 	}
 	if len(t.entries) == 0 {
 		t.title = text
+		if t.title == "" {
+			t.title = a.attachments[0].name
+		}
 		if len(t.title) > 48 {
 			t.title = t.title[:48] + "…"
 		}
 	}
 	a.draft = ""
 	a.listFor(t).ScrollToEnd()
-	t.entries = append(t.entries, entry{kind: entryUser, text: text})
+	t.entries = append(t.entries, entry{kind: entryUser, text: text, attachments: a.attachments})
+	a.attachments = nil
 	// The thread goes to Working while the agent runs, out of the
 	// snoozed and settled ones.
 	t.status, t.age, t.settled, t.snoozed = statusWorking, "now", false, ""
