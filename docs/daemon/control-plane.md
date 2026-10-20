@@ -1,5 +1,7 @@
 # Control plane, accounts and caching
 
+> The hub's implementation (Durable Objects in the user's Cloudflare account, no Turso) is chosen in `hub-on-cloudflare.md`.
+
 This revises the decision in `architecture.md`. Three new requirements change it.
 
 1. Agent accounts are managed in one place and every host receives credentials from there (bb's model).
