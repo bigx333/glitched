@@ -57,4 +57,9 @@ These bound abuse, since the hub is also a relay.
 
 Memory is most of that, and agents mostly wait on the API. VMs need to be paid by the user, either on their own Cloudflare account or as a paid tier.
 
-**Credentials.** A hosted multi-tenant hub holding other people's Claude and Codex tokens is a liability that costs more than any of the numbers above. The free hosted tier should seal each credential to the enrolled hosts' public keys, so the hub stores only ciphertext it can't use. A user's own deployment can keep the simpler model. A new ephemeral VM gets its sealed copy re-wrapped by an already-enrolled device or by the user's own deployment.
+**Credentials.** The hub holds credentials it can read, so it can refresh rotating tokens (decided 2026-10-20). Sealing credentials to host keys was rejected because the hub could then never refresh. The hosted tier therefore carries the liability and mitigates it.
+
+- Envelope encryption. Each user has a data key, wrapped by a master key held as a Workers secret. Credentials are decrypted only inside that user's `UserDO`, only to refresh or to issue a run credential, and are never logged or returned to clients.
+- Hosts get the shortest-lived credential the provider allows. For refreshable logins that is the access token, never the refresh token.
+- Every issuance is recorded per run and machine and shown to the user. Users can revoke an account, which deletes it and stops issuance.
+- Master key rotation re-wraps data keys without touching credentials.
