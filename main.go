@@ -163,6 +163,7 @@ type app struct {
 	cmdkOpen  bool
 	cmdkQuery string
 	cmdkIndex int
+	cmdkList  ui.ListState
 
 	keyQuery    string
 	glassOffset ui.Point

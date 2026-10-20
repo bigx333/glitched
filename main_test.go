@@ -504,11 +504,35 @@ func TestAttachments(t *testing.T) {
 func TestFirstLine(t *testing.T) {
 	for in, want := range map[string]string{
 		"Done. The **collapsed** projects are kept.\n\n- more": "Done. The collapsed projects are kept.",
-		"## Comparing\n\nbody":                                  "Comparing",
-		"> **Tip:** start small":                                "Tip: start small",
+		"## Comparing\n\nbody":                                 "Comparing",
+		"> **Tip:** start small":                               "Tip: start small",
 	} {
 		if got := firstLine(in); got != want {
 			t.Errorf("firstLine(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The palette's results scroll to the choice the arrows move to, though
+// the list builds only the rows in view.
+func TestPaletteScrollsToChoice(t *testing.T) {
+	a := newApp()
+	tt := ui.NewTester(a.view, 1320, 860)
+	a.openCommandPalette()
+	tt.Frame()
+	cmds := a.commands()
+	last := cmds[len(cmds)-1].label
+	tt.Key(0, ui.KeyUp) // wraps to the last
+	tt.Advance(time.Second)
+	if a.cmdkIndex != len(cmds)-1 {
+		t.Fatalf("choice %d, want the last, %d", a.cmdkIndex, len(cmds)-1)
+	}
+	r, ok := tt.Find(last)
+	if !ok || r.Y > 96+60+380 {
+		t.Errorf("the last result %q is not in view (%v, %v)", last, r, ok)
+	}
+	tt.Key(0, ui.KeyEnter)
+	if a.cmdkOpen {
+		t.Error("Enter should open the choice and close the palette")
 	}
 }

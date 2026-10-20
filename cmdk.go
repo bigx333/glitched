@@ -62,11 +62,17 @@ func (a *app) commandPalette(c *ui.Context) {
 
 		cmds := a.commands()
 		a.cmdkIndex = max(0, min(a.cmdkIndex, len(cmds)-1))
+		// The arrows move the choice from the search field, which keeps
+		// the keyboard, and the list scrolls it into view.
+		moved := false
 		if c.Shortcut(0, ui.KeyDown) && len(cmds) > 0 {
-			a.cmdkIndex = (a.cmdkIndex + 1) % len(cmds)
+			a.cmdkIndex, moved = (a.cmdkIndex+1)%len(cmds), true
 		}
 		if c.Shortcut(0, ui.KeyUp) && len(cmds) > 0 {
-			a.cmdkIndex = (a.cmdkIndex - 1 + len(cmds)) % len(cmds)
+			a.cmdkIndex, moved = (a.cmdkIndex-1+len(cmds))%len(cmds), true
+		}
+		if moved {
+			a.cmdkList.ScrollIntoView(a.cmdkIndex)
 		}
 
 		ui.Row(c).Gap(10).Padding(14, 16).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
@@ -82,19 +88,21 @@ func (a *app) commandPalette(c *ui.Context) {
 			}
 			kbd(c, "esc")
 		})
-		ui.Scroll(c).MaxHeight(380).Padding(6).Children(func() {
-			if len(cmds) == 0 {
-				ui.Text(c, "No results").TextColor(palette.muted).Padding(24).TextAlign(ui.Center)
-				return
-			}
-			section := ""
-			for i, cmd := range cmds {
-				if cmd.section != section {
-					section = cmd.section
-					ui.Text(c, section).FontSize(11).FontWeight(600).TextColor(palette.faint).Padding(8, 10, 4)
+		// The results are a ui.List, as MyGo's launcher example has them:
+		// it builds the rows in view, chooses one on a click or the keys
+		// while it has the keyboard, and opens it on Enter or a double
+		// click.
+		l := &a.cmdkList
+		l.Selected = &a.cmdkIndex
+		l.Key = func(i int) any { return cmds[i].section + "/" + cmds[i].label }
+		l.Label = func(i int) string { return cmds[i].label }
+		list := ui.List(c.Key("results"), l, len(cmds), func(i int) {
+			cmd := cmds[i]
+			ui.Column(c).Children(func() {
+				if i == 0 || cmds[i-1].section != cmd.section {
+					ui.Text(c, cmd.section).FontSize(11).FontWeight(600).TextColor(palette.faint).Padding(8, 10, 4)
 				}
-				selected := i == a.cmdkIndex
-				r := row(c, cmd.section+cmd.label, selected).Padding(8, 10)
+				r := row(c, "row", i == a.cmdkIndex).Padding(8, 10)
 				if r.Hovered() {
 					a.cmdkIndex = i
 				}
@@ -106,7 +114,31 @@ func (a *app) commandPalette(c *ui.Context) {
 					a.cmdkOpen = false
 					cmd.run()
 				}
+			})
+		}).Height(paletteHeight(cmds)).Padding(6).Children(func() {
+			if len(cmds) == 0 {
+				ui.Text(c, "No results").TextColor(palette.muted).Padding(24).TextAlign(ui.Center)
 			}
 		})
+		if list.Submitted() && len(cmds) > 0 {
+			a.cmdkOpen = false
+			cmds[a.cmdkIndex].run()
+		}
 	})
+}
+
+// paletteHeight is the results' height: as tall as they are, up to 380
+// DIPs, past which they scroll.
+func paletteHeight(cmds []command) float32 {
+	if len(cmds) == 0 {
+		return 72
+	}
+	h := float32(12)
+	for i, cmd := range cmds {
+		if i == 0 || cmds[i-1].section != cmd.section {
+			h += 26
+		}
+		h += 34
+	}
+	return min(h, 380)
 }
