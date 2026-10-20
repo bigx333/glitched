@@ -24,6 +24,8 @@ type family struct {
 var families = []family{
 	{"Claude", "Anthropic", ui.Hex("#d97757"), icClaude},
 	{"Codex", "OpenAI", ui.Hex("#10a37f"), icOpenAI},
+	{"Gemini", "Google", ui.Hex("#4f7cf7"), icGemini},
+	{"Grok", "xAI", ui.Hex("#2c2c31"), icGrok},
 }
 
 var models = []modelInfo{
@@ -32,6 +34,19 @@ var models = []modelInfo{
 	{"Claude Haiku 5.5", "Haiku 5.5", "Fastest, for quick edits", "Claude", ui.Hex("#d97757"), icClaude},
 	{"GPT-5.5 Codex", "GPT-5.5 Codex", "Tuned for agentic coding", "Codex", ui.Hex("#10a37f"), icOpenAI},
 	{"GPT-5.5", "GPT-5.5", "General reasoning", "Codex", ui.Hex("#10a37f"), icOpenAI},
+	{"Gemini 3 Pro", "Gemini 3 Pro", "Long context, sees images", "Gemini", ui.Hex("#4f7cf7"), icGemini},
+	{"Gemini 3 Flash", "Gemini 3 Flash", "Fast and light", "Gemini", ui.Hex("#4f7cf7"), icGemini},
+	{"Grok 4", "Grok 4", "Reasoning, with what's happening now", "Grok", ui.Hex("#2c2c31"), icGrok},
+	{"Grok Code Fast", "Grok Code Fast", "Quick agentic coding", "Grok", ui.Hex("#2c2c31"), icGrok},
+}
+
+// modelNames is every model's name, for the settings' choice.
+func modelNames() []string {
+	names := make([]string, len(models))
+	for i, m := range models {
+		names[i] = m.name
+	}
+	return names
 }
 
 func modelByName(name string) modelInfo {

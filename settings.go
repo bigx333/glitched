@@ -102,7 +102,7 @@ func (a *app) general(c *ui.Context) {
 			ui.Segmented(c, &s.newThreadMode, "Local", "New worktree").Label("New thread environment")
 		})
 		settingRow(c, "Default model", "Used for new threads. Each thread can pick its own.", func() {
-			ui.Select(c, &a.model, []string{"Claude Opus 5.5", "Claude Sonnet 5.5", "Claude Haiku 5.5", "GPT-5.5 Codex", "GPT-5.5"}).Width(200)
+			ui.Select(c, &a.model, modelNames()).Width(200)
 		})
 		settingRow(c, "Confirm before deleting threads", "", func() {
 			ui.Switch(c, &s.confirmDelete).Label("Confirm before deleting threads")
@@ -251,17 +251,17 @@ func (a *app) glassDemo(c *ui.Context) {
 
 func (a *app) providers(c *ui.Context) {
 	s := &a.settings
-	a.provider(c, "Claude Code", "C", ui.Hex("#d97757"), "v2.4.1", &s.claudeEnabled, &s.claudePath, &s.claudeModel, &s.claudeCustom,
+	a.provider(c, "Claude Code", icClaude, ui.Hex("#d97757"), "v2.4.1", &s.claudeEnabled, &s.claudePath, &s.claudeModel, &s.claudeCustom,
 		[]string{"Claude Opus 5.5", "Claude Sonnet 5.5", "Claude Haiku 5.5"})
-	a.provider(c, "Codex", "X", ui.Hex("#10a37f"), "v0.98.0", &s.codexEnabled, &s.codexPath, &s.codexModel, &s.codexCustom,
+	a.provider(c, "Codex", icOpenAI, ui.Hex("#10a37f"), "v0.98.0", &s.codexEnabled, &s.codexPath, &s.codexModel, &s.codexCustom,
 		[]string{"GPT-5.5 Codex", "GPT-5.5", "GPT-5.5 mini"})
 }
 
-func (a *app) provider(c *ui.Context, name, letter string, brand ui.Color, version string, enabled *bool, path, model *string, custom *[]string, models []string) {
+func (a *app) provider(c *ui.Context, name string, mark *ui.SVG, brand ui.Color, version string, enabled *bool, path, model *string, custom *[]string, models []string) {
 	ui.Column(c).Key(name).Radius(12).Border(1, palette.border).Background(palette.surface).Clip().
 		Transition(ui.ElementTransition{Size: true, Duration: 200 * time.Millisecond, Ease: easeOut}).Children(func() {
 		ui.Row(c).Padding(14, 16).Gap(12).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, letter).Bold().TextColor(ui.Hex("#ffffff")).Size(32, 32).Radius(8).Background(brand).TextAlign(ui.Center).Padding(7, 0)
+			modelTile(c, mark, brand, 32)
 			ui.Column(c).Grow(1).Gap(2).Children(func() {
 				ui.Text(c, name).FontWeight(600)
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
