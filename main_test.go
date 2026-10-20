@@ -536,3 +536,32 @@ func TestPaletteScrollsToChoice(t *testing.T) {
 		t.Error("Enter should open the choice and close the palette")
 	}
 }
+
+// @ suggests files and / commands; the keys move and take the choice.
+func TestAutocomplete(t *testing.T) {
+	a := newApp()
+	tt := ui.NewTester(a.view, 1320, 860)
+	a.draft = "look at @Side"
+	tt.Frame()
+	if len(a.suggestions) == 0 || !strings.Contains(a.suggestions[0].insert, "Sidebar.tsx") {
+		t.Fatalf("suggestions for @Side: %+v", a.suggestions)
+	}
+	tt.Key(0, ui.KeyEnter)
+	if a.draft != "look at @apps/web/src/components/Sidebar.tsx " {
+		t.Errorf("draft %q after taking the suggestion", a.draft)
+	}
+	a.draft = "/re"
+	tt.Frame()
+	if len(a.suggestions) != 1 || a.suggestions[0].label != "/review" {
+		t.Fatalf("suggestions for /re: %+v", a.suggestions)
+	}
+	tt.Key(0, ui.KeyEscape)
+	if len(a.suggestions) != 0 {
+		t.Error("Escape should dismiss the suggestions")
+	}
+	a.draft = "not a /command"
+	tt.Frame()
+	if len(a.suggestions) != 0 {
+		t.Error("/ mid-line should suggest nothing")
+	}
+}

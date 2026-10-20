@@ -147,6 +147,16 @@ type app struct {
 	// to name them.
 	attachments []attachment
 	pastes      int
+	// The composer's autocomplete: the token it's for, whether it was
+	// dismissed, its suggestions and choice, its flyout, and the projects'
+	// files it suggests.
+	suggestFor       string
+	suggestDismissed bool
+	suggestions      []suggestion
+	suggestIndex     int
+	suggestFly       *mygo.Window
+	suggestBox       [5]int // the flyout's anchor and height, as last set
+	files            map[string][]string
 	// lists are the threads' timelines, by thread.
 	lists map[string]*ui.ListState
 	// The diff panel: each file's viewer, by path, and their layout.
@@ -190,6 +200,7 @@ func newApp() *app {
 		shells:        map[string]*shell{},
 		diffs:         map[string]*editor.DiffState{},
 		lists:         map[string]*ui.ListState{},
+		files:         map[string][]string{},
 		diffLayout:    editor.DiffUnified,
 		settings: settings{
 			theme:         0,

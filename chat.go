@@ -340,6 +340,7 @@ func (a *app) composer(c *ui.Context, t *thread) {
 				card.Shadow(0, 0, 0, 3, palette.accent.Alpha(0.22))
 			}
 			a.accessEffects(card)
+			a.autocomplete(c, card)
 			dragOver := a.dropZone(card)
 			a.pane(card, glass.Glass{}).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.28)).
 				Transition(ui.ElementTransition{Size: true, Duration: 150 * time.Millisecond, Ease: easeOut}).Children(func() {
@@ -354,7 +355,7 @@ func (a *app) composer(c *ui.Context, t *thread) {
 				ui.TextArea(c.Key("draft"), &a.draft).
 					Placeholder("Ask anything, @tag files/folders, or use / to show available commands").
 					Lines(2, 10).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).
-					Padding(14, 16, 4).AutoFocus().OnPaste(a.onPaste)
+					Padding(14, 16, 4).AutoFocus().OnPaste(a.onPaste).OnTextKey(a.suggestKey)
 				ui.Row(c).Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).Children(func() {
 					a.composerControls(c)
 					ui.Spacer(c)

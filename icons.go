@@ -21,6 +21,7 @@ var (
 	icChevronR   = lucide(`<path d="m9 18 6-6-6-6"/>`)
 	icChevronD   = lucide(`<path d="m6 9 6 6 6-6"/>`)
 	icChevronUp  = lucide(`<path d="m18 15-6-6-6 6"/>`)
+	icListChecks = lucide(`<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>`)
 	icArrowDown  = lucide(`<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>`)
 	icSettings   = lucide(`<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>`)
 	icArrowUp    = lucide(`<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>`)
