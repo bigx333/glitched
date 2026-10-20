@@ -21,7 +21,7 @@ type AccountState struct {
 type Lease struct { // one per run
 	Run, Account ID
 	Issued       time.Time
-	Token        sealed // shortest-lived credential the provider allows
+	AccessToken  sealed // held by the host proxy; the refresh token stays at the hub
 }
 ```
 
@@ -37,7 +37,7 @@ This follows zeron (`research.md`). Runs don't receive credentials. Each host ru
 
 ## Picking an account
 
-The hub picks once per run, when the host asks for a credential.
+The hub picks once per run, when the host proxy asks which account serves it.
 
 Routing modes come from zeron. `sticky` pins a thread to an account for 30 minutes. `resetFirst` prefers the account whose weekly window resets soonest, so quota that would expire anyway is used first.
 
