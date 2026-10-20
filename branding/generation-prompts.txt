@@ -57,3 +57,86 @@ Subject: a compact stack of THREE substantial flat thread cards, arranged vertic
 Color: restrained heat gradient progresses coherently across the stack: top royal blue #2563eb through middle violet #7c3aed to bottom pink-red #db2777 / #ef4444. A very fine blue-white light catches just the slipped edge. Gentle localized inner glow on the graphite tile. Avoid shiny 3D candy, avoid translucent glass cards. Premium matte crisp forms.
 Constraints: straight-on; no literal face, no robot, no letters, no text, no speech balloons, no document mini-icons, no UI lines inside cards, no detached pixels. Distinctly different from a G, upright cursor, or lightning bolt. The sly offset is the joke.
 
+
+---
+
+MIX VARIANTS — 2026-10-20
+Generated with the built-in image_gen tool, referencing concept-1.png and concept-4.png. Final PNGs exported at 1024×1024 using sips, preserving alpha. Original generated files retained.
+
+MIX 1 — branding/mix-1.png
+Original generated file: /Users/ncamargo/.codex/generated_images/01a1599b-98c3-73e1-b5f6-7d9e5c2ad27f/exec-5023dc93-b13e-4aa8-9a0f-95a9e536b827.png
+
+Use case: logo-brand.
+Asset type: finished 1024×1024 PNG macOS app icon for Glitched, a polished native app for AI coding-agent threads.
+Input images: Image 1 (concept-1.png) is the G geometry and graphite tile reference to transform. Image 2 (concept-4.png) is the three coloured thread bars, stepped middle thread, and small notch reference. Produce ONE new blended icon, not a side-by-side.
+Primary request: MIX 1 — G OF THREADS. Replace the white monolithic G with a bold geometric capital G whose silhouette is constructed from THREE substantial stacked horizontal rounded thread bands. Shape the ends and negative space of the bands to form an unmistakable G, not three menu bars, not an E, not a C. Top blue band forms the G's upper hook and shoulder; the violet middle band supplies the left spine and strong inward right-hand G crossbar with an open dark counter; bottom red band forms the lower rounded return. Think three horizontal slices of one correctly drawn broad G, with modest rounded corners and narrow dark gutters between them. Preserve the large clear right-hand opening above the inward G crossbar. The central counter stays generous and clearly connected to that opening.
+The violet middle thread/crossbar is translated a little to the right (roughly 24 px on this canvas), creating ONE intentional sideways step. Give its exposed terminal one small broad rectangular notch like Image 2, part of its edge, not a detached pixel. Keep the overall G coherent.
+Color palette: top band royal blue #2563eb to #3b9eff; middle violet #7c3aed to #a855f7; bottom pink-red #db2777 to #ef4444. Subtle gradients within the three bands, crisp matte faces, only a faint localized edge light.
+Composition: a graphite continuous-curvature macOS squircle tile approximately 824×824 px, centered within the 1024×1024 canvas with about 100 px genuinely transparent outer margins. Tile interior opaque #0c0c0e to #18181b, restrained top edge light and very subtle depth. Mark about 510–560 px in height, optically centered, generous breathing room, straight-on.
+Constraints: the actual silhouette must read as a G when flattened into a single solid colour at 16–20 px. Colour cannot carry the letterform. Thick strokes, clear negative space, no tiny features required for recognition. Crisp premium controlled humour; one thread out of line.
+Avoid: text, words, labels, typography outside the symbol, watermark, mockups, multiple icons, extra symbols, AI sparkles, robots, faces, detached pixels, noisy scanlines, rainbow ghosting, excessive bloom, candy gloss, chunky 3D extrusion. Transparent only outside the dark tile.
+
+---
+
+MIX 2 — branding/mix-2.png
+Original generated file: /Users/ncamargo/.codex/generated_images/01a1599b-98c3-73e1-b5f6-7d9e5c2ad27f/exec-ae588a1b-be1e-4787-970c-4616c2b750a0.png
+
+Use case: logo-brand, precise-object-edit.
+Asset type: finished single 1024×1024 PNG macOS app icon for Glitched.
+Input images: Image 1 (concept-1.png) is the main edit target. Preserve its instantly legible geometric capital G, its single horizontal glitch cut, its graphite squircle, and its transparent outer margin. Image 2 (concept-4.png) is a palette/style reference only for its coherent blue, violet, red thread colours.
+Primary request: MIX 2 — SLICED G, HEAT-COLOURED. Keep the upper half of Image 1's substantial G icy near-white #eaf6ff. Recolour the displaced LOWER PART of that same G with a refined smooth vertical heat gradient: electric blue #2563eb/#3b9eff immediately below the horizontal slice, through violet #7c3aed/#a855f7 in the middle of the lower part, to pink-red #db2777/#ef4444 at the bottom return. The horizontal inward G bar belongs to the coloured lower section. Preserve a single clean horizontal dark slice across the G at mid-height, lower part translated a little to the right, roughly 24–30 px. Just a faint blue/violet chromatic split at the cut edge, no chromatic ghosts elsewhere.
+Letterform: thick monolithic G bowl, generous dark inner counter, broad opening at upper right, strong inward horizontal crossbar and right-hand lower return. Immediately readable as G in flat one colour at 16–20 px. Do not turn it into a C or power symbol, and do not add more cuts or stacked separate stripes.
+Composition: straight-on centred 824×824 px continuous-curvature graphite macOS squircle on a 1024×1024 canvas, about 100 px genuinely transparent outer margin. The tile interior is opaque #0c0c0e to #18181b with a very subtle softly lit top edge. Mark roughly 540 px across, large but with generous breathing room.
+Style: crisp vector-like geometry, premium matte faces, restrained depth and localized edge light. Quiet, composed, one deliberate glitch. Keep the colour vivid but reduce diffuse neon bloom compared with the references.
+Constraints: exactly one icon, one G, no text or labels, no watermark, no scene or presentation board. No particles, tiny extra squares, robots, AI sparkles, rainbow scanlines, metallic bevels, glossy candy, or chunky extrusion. Transparent outside the dark tile only.
+
+---
+
+MIX 3 — branding/mix-3.png
+Original generated file: /Users/ncamargo/.codex/generated_images/01a1599b-98c3-73e1-b5f6-7d9e5c2ad27f/exec-db39a8b7-30a9-43f3-b64d-01f2578d0f42.png
+
+Use case: logo-brand, precise-object-edit.
+Asset type: one finished 1024×1024 PNG macOS app icon for Glitched.
+Input images: Image 1 (concept-1.png) is the main G and graphite tile reference to transform. Image 2 (concept-4.png) is the reference for a single broad coloured thread card, its rightward slip and square edge notch. Do not reproduce the whole stack.
+Primary request: MIX 3 — G CHASSIS, ROGUE THREAD. Design a thick, stable icy-white geometric G outer bowl, with only its inward horizontal crossbar replaced by ONE broad heat-coloured rounded thread. The white outer bowl is continuous and clean, with a substantial left spine, upper hook, generous upper-right opening and lower-right return. Unlike Image 1, do not slice or translate the whole outer G bowl: leave its white silhouette steady. The inward crossbar alone is the glitch.
+The single crossbar thread extends horizontally inward from the G's right side. Translate this thread about 24 px to the RIGHT, creating one composed sideways step at its junction with the stable bowl. Use a small broad rectangular notch cut into its exposed LEFT end, echoing Image 2's middle card; no detached pixels. Keep it as one substantial thread, no miniature three-line stack. Its lower-right junction still clearly completes the G letterform at small sizes.
+Colour: outer G bowl icy near-white #eaf6ff with barely perceptible cool shading; crossbar alone has a smooth left-to-right blue #2563eb/#3b9eff through violet #7c3aed/#a855f7 to red #db2777/#ef4444 gradient. One very fine chromatic light edge at the slipped junction, very restrained. No colour on the lower white bowl. Colour is an accent confined to this one thread.
+Composition: graphite #0c0c0e to #18181b continuous-curvature macOS squircle about 824×824 px centred in the 1024 canvas, about 100 px genuinely transparent outer margins. Opaque dark tile interior, subtle top edge light, slight premium depth only. Optically centred G about 540 px tall, generous breathing room, straight-on.
+Constraints: recognise G instantly in a flat single-colour silhouette at 16–20 px. Thick geometry, open counter, no tiny details essential to letter recognition. Crisp premium matte vector-like mark, confident and quietly witty: one thread has slipped out of line.
+Avoid: additional slices across the white outer bowl, a coloured lower G half, extra floating shapes, text, labels, watermark, UI mockup, multiple icons, robots, faces, AI sparkles, particles, scanlines, rainbow ghost copies, diffuse neon bloom, candy gloss, bevel-heavy 3D. Transparent outside the dark tile only.
+
+---
+
+FINAL REFINEMENTS — 2026-10-20
+Generated with the built-in image_gen tool. Final PNGs exported at 1024×1024 using sips, preserving alpha. Original generated files retained.
+
+FINAL A — branding/final-a.png
+References: branding/mix-2.png (base) and branding/mix-3.png (crossbar).
+Original generated file: /Users/ncamargo/.codex/generated_images/01a1599b-98c3-73e1-b5f6-7d9e5c2ad27f/exec-eec24069-8a98-405f-961e-f4b47bbd2e46.png
+
+Use case: logo-brand, precise-object-edit.
+Asset type: finished single 1024×1024 PNG macOS app icon for Glitched.
+Input images: Image 1 (branding/mix-2.png) is the BASE EDIT TARGET: preserve its sliced G silhouette, relative offset, tile, framing, lighting and glow. Image 2 (branding/mix-3.png) is a CROSSBAR REFERENCE: take its single rounded horizontal rogue-thread bar with the small square notch cut into its left end.
+Primary request: FINAL A — combine mix-2's sliced G and colourful lower body with mix-3's notched multicolour crossbar.
+Geometry: keep ONE thin horizontal dark slice at the same middle height as Image 1, with the TOP part of the G shifted sideways to the LEFT relative to the lower part, as visibly stepped in Image 1 (about 30–40 px at 1024 resolution). Preserve that deliberate upper/lower misalignment; do not straighten it into a continuous bowl. Keep the faint violet/blue chromatic split along this cut.
+Crossbar: replace only Image 1's plain rectangular crossbar with Image 2's broad rounded horizontal rogue-thread crossbar: softly rounded outer corners, one small broad rectangular notch cut into the exposed LEFT end, and a smooth LEFT-TO-RIGHT gradient from blue #2563eb through violet #a855f7 to red #ef4444. Match Image 2's substantial bar proportions. Position it as the G's inward crossbar directly beneath the main horizontal slice, coherent with the G's lower-right return. It remains one bar, no miniature stripe stack, no detached pixels.
+G body colours: upper G hook icy white-ish #eef0ff; LOWER G bowl remains colourful like Image 1, smoothly graduating vertically from electric blue near the slice through violet in the middle to red at the bottom (#2563eb → #a855f7 → #ef4444). The crossbar's left-to-right gradient is distinct from the lower bowl's top-to-bottom gradient.
+KEEP THE GLOW: retain Image 1/Image 2's soft coloured glow around the mark, blue/violet bloom along the cut and around the crossbar, plus a gentle cool outer glow on the G. Soft atmospheric light is intentional; edges of the actual mark remain crisp, premium and legible.
+Composition/invariants: preserve the reference's graphite continuous-curvature macOS squircle, opaque #0c0c0e to #18181b interior, softly lit top rim, straight-on centred composition. Tile about 824×824 px on a 1024×1024 canvas with roughly 100 px genuinely transparent outer margins. Match the reference's size and positioning of the G.
+Constraints: instantly reads as G at 16–20 px, including in a flat single-colour silhouette without glow. Thick strokes, open counter, one horizontal glitch slice, one notched crossbar. No text, labels, watermark, extra symbols, multiple icons, mockup board, particles, noisy scanlines, rainbow ghosting, heavy extrusion or material changes. Transparent outside the graphite tile only.
+
+---
+
+FINAL B — branding/final-b.png
+Edit target: FINAL A original generated file above.
+Original generated file: /Users/ncamargo/.codex/generated_images/01a1599b-98c3-73e1-b5f6-7d9e5c2ad27f/exec-c49ff653-59d5-4dfa-89bf-bea117825460.png
+
+Use case: logo-brand, precise-object-edit.
+Asset type: finished single 1024×1024 PNG macOS app icon for Glitched.
+Input image: the supplied FINAL A icon is the edit target, itself combining branding/mix-2.png's horizontally sliced G and branding/mix-3.png's notched rogue-thread crossbar.
+Primary request: FINAL B — make ONE colour change to this icon: recolour the lower outer G bowl from its blue/violet/red gradient to the same white-ish #eef0ff as the upper G hook. The whole outer G body, TOP AND BOTTOM, is now white-ish #eef0ff with gentle cool shading. Keep the notched horizontal crossbar colourful.
+Preserve exactly: the existing G geometry, large open counter, the ONE horizontal dark slice at its existing middle height, and the TOP section's LEFTWARD sideways offset relative to the lower section. Do not join or realign the two G parts. Preserve the faint violet/blue chromatic split along the cut.
+Crossbar invariants: keep the one broad rounded rogue-thread crossbar in exactly the same position, size and shape, including the small rectangular notch cut into its LEFT end. Keep its smooth LEFT-TO-RIGHT blue #2563eb → violet #a855f7 → red #ef4444 gradient. It remains the ONLY multicolour-filled part of the G.
+KEEP THE GLOW: preserve soft blue/violet bloom at the horizontal cut and around the crossbar, and gentle cool coloured outer glow around the white G. Do not remove or flatten the soft glow; the crisp letterform edges remain clear within it.
+Other invariants: graphite continuous-curvature macOS squircle, opaque #0c0c0e to #18181b interior, subtle lit rim and depth, straight-on composition, same mark size and location, tile about 824×824 px centred on 1024×1024 canvas with about 100 px genuinely transparent outer margins.
+Constraints: crisp premium finish, unmistakable G at 16–20 px and in one-colour silhouette, generous negative space, no text, no labels or watermark, no extra cuts, no new elements or particles, no rainbow ghosting or noisy scanlines, no scene or presentation board. Transparent outside the graphite tile only. Change only the lower G body's fill; preserve all geometry and the colourful notched bar.
