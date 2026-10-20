@@ -96,7 +96,7 @@ func (a *app) quickView(c *ui.Context) {
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, icSparkles).FontSize(20).TextColor(palette.accent)
 			in := ui.TextInputBase(c, &q.query).Bind(&q.input).Grow(1).FontSize(20).
-				Placeholder("Ask T3 Code to build something…").Label("Quick ask")
+				Placeholder("Ask Glitched to build something…").Label("Quick ask")
 			if in.Submitted() && strings.TrimSpace(q.query) != "" {
 				a.startQuickThread()
 			}

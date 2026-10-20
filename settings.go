@@ -39,7 +39,7 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 				a.page(c, "Appearance", "Theme, accent color and the Liquid Glass material.", a.appearance)
 			case r.Match("/providers"):
 				r.Title("Providers")
-				a.page(c, "Providers", "The coding agents T3 Code runs, and their models.", a.providers)
+				a.page(c, "Providers", "The coding agents Glitched runs, and their models.", a.providers)
 			case r.Match("/keybindings"):
 				r.Title("Keybindings")
 				a.page(c, "Keybindings", "Shortcuts for the commands you use most.", a.keybindings)
@@ -372,9 +372,9 @@ func remove(ts []*thread, t *thread) []*thread {
 func (a *app) about(c *ui.Context) {
 	s := &a.settings
 	ui.Column(c).Center().Gap(10).Padding(24, 0).Children(func() {
-		ui.Text(c, "T3").FontSize(28).Bold().TextColor(ui.Hex("#ffffff")).Size(72, 72).Radius(18).
+		ui.Text(c, "G").FontSize(28).Bold().TextColor(ui.Hex("#ffffff")).Size(72, 72).Radius(18).
 			TextAlign(ui.Center).Padding(18, 0).LinearGradient(ui.LinearGradient{From: palette.accent, To: palette.accent.Mix(ui.Hex("#000000"), 0.35), Angle: 135, Oklab: true})
-		ui.Text(c, "T3 Code").FontSize(20).FontWeight(650)
+		ui.Text(c, "Glitched").FontSize(20).FontWeight(650)
 		ui.Text(c, "0.0.42 · native prototype built with MyGo v0.5.5").TextColor(palette.muted)
 	})
 	card(c, "", func() {
@@ -389,7 +389,7 @@ func (a *app) about(c *ui.Context) {
 					return
 				}
 				s.checking = false
-				c.AddToast(ui.Toast{Title: "You're up to date", Description: "T3 Code 0.0.42 is the newest version."})
+				c.AddToast(ui.Toast{Title: "You're up to date", Description: "Glitched 0.0.42 is the newest version."})
 			}
 			if ghost(c, "check", false).Border(1, palette.border).Padding(6, 12).Children(func() {
 				ui.Icon(c, icRotate).FontSize(13)

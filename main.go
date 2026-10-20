@@ -1,4 +1,4 @@
-// T3 Code, rebuilt in MyGo's native UI as a clickable prototype: the
+// Glitched: T3 Code, rebuilt in MyGo's native UI as a clickable prototype: the
 // projects and threads sidebar, the chat with its work log, the composer,
 // the diff panel, a command palette and the settings. Everything is mock
 // data; replies are canned and streamed in to show the motion.
@@ -455,7 +455,7 @@ func main() {
 		a.installMenu()
 		mygo.App.OnNotificationClick(a.onNotificationClick)
 		a.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:     "T3 Code",
+			Title:     "Glitched",
 			Width:     1320,
 			Height:    860,
 			MinWidth:  760,
