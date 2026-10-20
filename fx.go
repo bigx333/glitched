@@ -8,6 +8,7 @@ package main
 import (
 	"image"
 	"math"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -226,32 +227,73 @@ func drawElectricBorder(p *ui.Painter, r ui.Rect, radius float32, secs float64, 
 	}
 }
 
-// drawFlow draws light flowing through r, left to right, as pulses of
-// data through a fibre: lanes of comets, a bright head and a tail fading
-// behind it, over a faint glowing core. level, from 0 to 3, sets how many
-// pulses run and how fast; secs is the time, which moves them.
-func drawFlow(p *ui.Painter, r ui.Rect, level int, secs float64) {
-	if r.W <= 0 {
+// flowState is light flowing through the effort bar, as pulses of data
+// through a fibre. It moves on by itself, frame to frame: its pulses
+// travel a distance at a speed that eases toward the effort's, so a new
+// level speeds them up or slows them down rather than moving them, and
+// they're placed along the whole track, which the fill, growing and
+// shrinking with the thumb, reveals or hides.
+type flowState struct {
+	dist, speed, level float64 // DIPs traveled, DIPs a second, 0 to 3
+	last               time.Time
+}
+
+// draw draws the light in fill, the part of track up to the thumb, at the
+// effort level, moving it on to the painter's time. A pulse has a bright
+// head and a tail fading behind it, in three lanes over a faint core.
+func (f *flowState) draw(p *ui.Painter, track, fill ui.Rect, level int) {
+	f.step(p.Now(), level)
+	if fill.W <= 0 {
 		return
 	}
-	k := float32(level) / 3
-	// The core: a line of light along the fibre, brighter with effort.
-	core := ui.Rect{X: r.X, Y: r.Y + r.H/2 - 0.75, W: r.W, H: 1.5}
+	f.paint(p, track, fill)
+}
+
+// step moves the flow on to now, its speed and level easing toward
+// level's.
+func (f *flowState) step(now time.Time, level int) {
+	dt := 0.0
+	if !f.last.IsZero() {
+		dt = min(now.Sub(f.last).Seconds(), 0.1) // a frame's, not an absence's
+	}
+	f.last = now
+	// The speed and the level ease toward the effort's, in about a third
+	// of a second.
+	ease := min(1, dt*6)
+	if f.speed == 0 {
+		f.level, f.speed, ease = float64(level), 40+55*float64(level), 0
+	}
+	f.level += (float64(level) - f.level) * ease
+	f.speed += (40 + 55*float64(level) - f.speed) * ease
+	f.dist += f.speed * dt
+}
+
+// paint paints the flow as it stands, in fill, the part of track lit.
+func (f *flowState) paint(p *ui.Painter, track, fill ui.Rect) {
+	k := float32(f.level / 3)
+	core := ui.Rect{X: fill.X, Y: fill.Y + fill.H/2 - 0.75, W: fill.W, H: 1.5}
 	p.FillGradient(core, ui.LinearGradient{From: boltCore.Alpha(0), To: boltCore.Alpha(0.12 + 0.25*k), Angle: 90}, 0.75)
 
 	lanes := []float32{0.3, 0.5, 0.7} // across the fibre
-	pulses := 1 + level               // a lane's
-	speed := 40 + 55*float64(level)   // DIPs a second
 	tail := 18 + 22*k
-	span := float64(r.W + tail)
+	span := float64(track.W + tail)
 	for li, lane := range lanes {
-		y := r.Y + r.H*lane
-		for i := range pulses {
+		y := track.Y + track.H*lane
+		for i := range 4 {
+			// A level's pulses: one at Low, four at Max, each fading in
+			// and out as the level passes it.
+			on := float32(min(max(f.level+1-float64(i), 0), 1))
+			if on <= 0 {
+				continue
+			}
 			seed := li*17 + i
-			// Each pulse at a pace and a place of its own along the lane.
-			v := speed * (0.8 + 0.4*float64(hash(seed, 0, 11)))
-			x := r.X + float32(math.Mod(secs*v+float64(hash(seed, 0, 12))*span, span)) - tail
-			lit := (0.45 + 0.55*hash(seed, 0, 13)) * (0.5 + 0.5*k)
+			// Each at a pace and a place of its own along the lane.
+			pace := 0.8 + 0.4*float64(hash(seed, 0, 11))
+			x := track.X + float32(math.Mod(f.dist*pace+float64(hash(seed, 0, 12))*span, span)) - tail
+			if x > fill.X+fill.W {
+				continue // ahead of the thumb, in the dark part
+			}
+			lit := (0.45 + 0.55*hash(seed, 0, 13)) * (0.5 + 0.5*k) * on
 			h := float32(1.2)
 			if li == 1 {
 				h = 1.8 // the middle lane, the brightest

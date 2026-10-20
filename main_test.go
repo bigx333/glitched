@@ -707,3 +707,28 @@ func TestCompactComposer(t *testing.T) {
 		t.Error("back at the end, the composer should be full size")
 	}
 }
+
+// Moving the effort changes the flow's speed smoothly: the pulses go on
+// from where they were, never jumping, however far the level moves.
+func TestFlowKeepsGoing(t *testing.T) {
+	var f flowState
+	at := time.Unix(1000, 0)
+	f.step(at, 0)
+	prev := f.dist
+	for i := range 120 {
+		at = at.Add(16 * time.Millisecond)
+		level := 0
+		if i >= 30 {
+			level = 3 // moved to Max mid-flow
+		}
+		f.step(at, level)
+		moved := f.dist - prev
+		if moved < 0 || moved > 205*0.016*1.01 {
+			t.Fatalf("frame %d: the pulses moved %.2f DIPs, not a frame's way at up to Max's speed", i, moved)
+		}
+		prev = f.dist
+	}
+	if f.speed < 200 || f.level < 2.9 {
+		t.Errorf("speed %.0f, level %.2f: should have eased to Max's", f.speed, f.level)
+	}
+}

@@ -328,7 +328,7 @@ func (a *app) effortSlider(c *ui.Context) {
 		}
 		maxAt := a.maxAt
 		sb.Draw(func(p *ui.Painter, r ui.Rect) {
-			if drawEffortTrack(p, r, pos, level, maxAt) {
+			if drawEffortTrack(p, r, pos, level, maxAt, &a.effortFlow) {
 				p.AnimationFrame()
 			}
 		})
@@ -351,9 +351,8 @@ const (
 
 // drawEffortTrack draws the track in r with the thumb pos levels along it,
 // and reports whether it's still moving.
-func drawEffortTrack(p *ui.Painter, r ui.Rect, pos float32, level int, maxAt time.Time) bool {
+func drawEffortTrack(p *ui.Painter, r ui.Rect, pos float32, level int, maxAt time.Time, flow *flowState) bool {
 	t := p.Now()
-	secs := float64(t.UnixMilli()%1_000_000) / 1000
 	steps := float32(len(efforts) - 1)
 	x0, x1 := r.X+stopInset, r.X+r.W-stopInset
 	cy := r.Y + r.H/2
@@ -368,7 +367,7 @@ func drawEffortTrack(p *ui.Painter, r ui.Rect, pos float32, level int, maxAt tim
 	p.FillGradient(fill, g, trackH/2)
 	// Light flows through the fill toward the thumb, as through a fibre:
 	// more of it, and faster, the more effort.
-	p.Clip(fill, trackH/2, func() { drawFlow(p, fill, level, secs) })
+	p.Clip(fill, trackH/2, func() { flow.draw(p, track, fill, level) })
 	animating := fill.W > 0
 
 	// The stops.
