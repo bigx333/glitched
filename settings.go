@@ -13,7 +13,7 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 	left := 24 + bar.Left*(1-a.sidebarOpen)
 	ui.Column(c).Fill().Children(func() {
 		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Shrink(0).Padding(0, 12, 0, left).Gap(8).AlignItems(ui.Center)
-		a.chrome(head).DragWindow().Children(func() {
+		head.DragWindow().Children(func() {
 			if !a.showSidebar {
 				if iconButton(c, "show-sidebar", icPanelLeft, "Show sidebar  ⌘B", false).Clicked() {
 					a.toggleSidebar(false)

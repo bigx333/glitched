@@ -172,6 +172,9 @@ type app struct {
 	diffLayout editor.DiffLayout
 	// shells are the terminal drawer's shells, by project.
 	shells map[string]*shell
+	// windDraw paints the wind's field behind the chat, as the frame's
+	// pane has it.
+	windDraw func(p *ui.Painter, r ui.Rect)
 	// snoozeFor is the thread whose snooze popover is open.
 	snoozeFor string
 	// now is the frame's time, as the view builds it.
@@ -336,10 +339,9 @@ func (a *app) view(c *ui.Context) {
 		a.sidebarFrame(c)
 		// The pages paint their own backgrounds, under their headers,
 		// which show the window's vibrancy as the sidebar does.
-		main := ui.Box(c).Grow(1).Shrink(1)
-		if !a.vibrant {
-			main.Background(palette.sidebar) // the bars' color, around the content's corner
-		}
+		// The bars' tint, as the sidebar's: the headers are clear over it,
+		// and it shows around the content's rounded corner.
+		main := a.chrome(ui.Box(c).Grow(1).Shrink(1))
 		main.Children(func() {
 			ui.Column(c).Fill().Children(func() { a.pages(c) })
 		})
@@ -456,8 +458,9 @@ func matches(s, q string) bool {
 	return q == "" || strings.Contains(strings.ToLower(s), strings.ToLower(q))
 }
 
-// chrome is the look of the window's bars, the sidebar's and the
-// headers': the window's vibrancy tinted with the background by as much
+// chrome is the look of the window's bars, the sidebar's and, behind
+// the pages and their clear headers, the right side's: the window's
+// vibrancy tinted with the background by as much
 // as the setting leaves, or the background where there is none.
 func (a *app) chrome(e ui.Element) ui.Element {
 	if a.vibrant {
@@ -467,13 +470,18 @@ func (a *app) chrome(e ui.Element) ui.Element {
 }
 
 // contentCard is a page's content under the bar of glass: on the
-// background, edged with a hairline along its top and left, its top left
-// corner rounded where it meets the sidebar, square once the sidebar has
-// slid away and it meets the window's edge.
+// background, edged with a hairline, its top left corner rounded where it
+// meets the sidebar, square once the sidebar has slid away and it meets
+// the window's edge. The hairline is one border all round, which follows
+// the rounded corner (borders of differing sides draw straight), pushed
+// out a DIP on the right and at the bottom, where it leaves the window or
+// lies on the line of the panel or the terminal beside it.
 func (a *app) contentCard(e ui.Element) ui.Element {
-	r, left := 12*a.sidebarOpen, float32(0)
-	if a.sidebarOpen > 0 {
-		left = 1
+	r := 16 * a.sidebarOpen
+	left := float32(0)
+	if a.sidebarOpen == 0 {
+		left = -1 // against the window's edge: no line there either
 	}
-	return e.Background(palette.bg).Radius(r, 0, 0, 0).BorderWidth(1, 0, 0, left).BorderColor(palette.border).Clip()
+	return e.Background(palette.bg).Radius(r, 0, 0, 0).Border(1, palette.border).
+		Margin(0, -1, -1, left).Clip()
 }

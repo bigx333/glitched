@@ -40,6 +40,9 @@ func (a *app) chatPage(c *ui.Context) {
 			pane := a.contentCard(ui.Box(c).Grow(1))
 			a.windBackground(c, pane)
 			pane.Children(func() {
+				if a.windDraw != nil && a.settings.wind {
+					ui.Box(c).Key("wind").Absolute().Top(0).Left(0).Right(0).Bottom(0).PassThrough().Draw(a.windDraw)
+				}
 				a.ambient(c)
 				a.timeline(c, t)
 				// What scrolls fades out under the composer.
@@ -73,7 +76,9 @@ func (a *app) windBackground(c *ui.Context, pane ui.Element) {
 		a.wind.Wake()
 	}
 	dark := c.Theme().Dark
-	pane.Draw(func(p *ui.Painter, r ui.Rect) { a.wind.Draw(p, r, dark) })
+	// Drawn by a child, which the pane's rounded corner clips, as it
+	// would not its own drawing.
+	a.windDraw = func(p *ui.Painter, r ui.Rect) { a.wind.Draw(p, r, dark) }
 	pane.HandleInput(func(ev ui.InputEvent) bool {
 		switch ev.Kind {
 		case ui.InputPointerMove:
@@ -108,7 +113,6 @@ func (a *app) header(c *ui.Context, p *project, t *thread) {
 	left := 16 + bar.Left*(1-a.sidebarOpen)
 	head := ui.Row(c).Height(max(bar.Height, headerHeight)).Shrink(0).
 		Padding(0, 12, 0, left).Gap(8).AlignItems(ui.Center)
-	a.chrome(head)
 	head.DragWindow().Children(func() {
 		if !a.showSidebar {
 			if iconButton(c, "show-sidebar", icPanelLeft, "Show sidebar  ⌘B", false).Clicked() {

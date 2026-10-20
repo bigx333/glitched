@@ -59,7 +59,7 @@ func (a *app) previewPanel(c *ui.Context) {
 	ui.Column(c).Width(previewWidth).FillHeight().Children(func() {
 		bar := c.TitleBar()
 		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 10).Gap(4).AlignItems(ui.Center)
-		a.chrome(head).DragWindow().Children(func() {
+		head.DragWindow().Children(func() {
 			back := iconButton(c, "back", icArrowLeft, "Back", false).Padding(5)
 			fwd := iconButton(c, "forward", icArrowRight, "Forward", false).Padding(5)
 			reload := iconButton(c, "reload", icRotate, "Reload", false).Padding(5)
