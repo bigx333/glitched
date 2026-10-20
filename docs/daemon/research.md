@@ -48,3 +48,12 @@ Glitched: a native agent GUI written in Go with MyGo (module `glitched`, /Users/
 - Push via edge (APNs). MCP stdio + HTTP bearer; HMAC webhooks (chat.created, turn.completed, input.requested). Previews over WebRTC.
 - Login-shell PATH snapshot for agents run from services; pinned adapter installs so npm never runs mid-chat; capability list for version skew.
 - AVOID: any device on same account fully trusted, no pairing, no per-device revocation, local IPC unauthenticated, token in query string, no relay method allow-list, no path without hosted edge.
+
+## t3code provider credentials (traced 2026-10-21)
+
+- t3code does not own provider logins. Each provider instance points at the CLI's own config: `CLAUDE_CONFIG_DIR` for Claude, `CODEX_HOME` for Codex. The CLI stores and refreshes its login there (Claude on macOS uses the Keychain). Multiple accounts are multiple instances with separate directories (`docs/user/providers-claude.md`, `providers-codex.md`).
+- Codex accounts can share sessions through a "shadow home". Instances share one `CODEX_HOME` for sessions and config, and each has its own `auth.json`, so a thread can switch accounts (`apps/server/src/provider/Drivers/CodexHomeLayout.ts`). Claude has no equivalent, and threads switch only between instances with the same config directory.
+- "Connect with ChatGPT" drives Codex app-server's own `account/login/start`, so Codex persists and refreshes the tokens.
+- What t3code stores itself: API keys and env vars marked Sensitive in provider instance settings, plus source-control tokens. They go in `<stateDir>/secrets/<name>.bin`, one file each, mode 0600 in a 0700 dir, written atomically, and are **not encrypted** (`apps/server/src/auth/ServerSecretStore.ts`). They are redacted in settings sent to clients. The desktop app uses Electron safeStorage for its saved environment connections.
+- Pooling in t3code is read-only. **Usage → Limits** sums subscription windows across every account it sees, across environments and an optional CLIProxyAPI hub, and deduplicates the same account. It doesn't route runs between accounts. Routing is the external proxy's job, configured as a provider endpoint (`docs/user/usage.md`).
+- Codex app-server has a `chatgptAuthTokens` auth mode. The host app supplies tokens held only in memory and answers `account/chatgptAuthTokens/refresh` requests. That is exactly a hub-issued credential, but the schema marks it "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE". t3code generates the types but doesn't use it.
