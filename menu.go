@@ -26,6 +26,9 @@ func (a *app) installMenu() {
 		{Label: "Thread", Submenu: []*mygo.MenuItem{
 			{Label: "New Thread", Accelerator: "CmdOrCtrl+N", Click: do(a.newThread)},
 			{Label: "Search…", Accelerator: "CmdOrCtrl+K", Click: do(a.openCommandPalette)},
+			// The panel's shortcut is global, not the menu's: as both, a
+			// press while the app is active would toggle it twice.
+			{Label: "Quick Ask…  (⌥⇧T)", Click: func(*mygo.MenuItem, *mygo.Window) { a.toggleQuickAsk() }},
 			mygo.Separator(),
 			{Label: "Attach Files…", Accelerator: "CmdOrCtrl+Shift+A", Click: do(a.pickFiles)},
 			mygo.Separator(),

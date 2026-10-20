@@ -157,6 +157,8 @@ type app struct {
 	suggestFly       *mygo.Window
 	suggestBox       [5]int // the flyout's anchor and height, as last set
 	files            map[string][]string
+	// quick is the quick-ask panel over every app.
+	quick quickAsk
 	// lists are the threads' timelines, by thread.
 	lists map[string]*ui.ListState
 	// The diff panel: each file's viewer, by path, and their layout.
@@ -424,6 +426,7 @@ func main() {
 		})
 		// The wind's glyph atlases are drawn between the window's frames.
 		a.wind.SetLater(a.win.Update)
+		a.setUpQuickAsk()
 		// The terminals' shells hang up with the window.
 		a.win.OnClosed(a.closeShells)
 	})

@@ -565,3 +565,20 @@ func TestAutocomplete(t *testing.T) {
 		t.Error("/ mid-line should suggest nothing")
 	}
 }
+
+// Quick ask starts a thread in the chosen project with what was typed,
+// and opens it.
+func TestQuickAsk(t *testing.T) {
+	a := newApp()
+	tt := ui.NewTester(a.view, 1320, 860)
+	a.quick.project, a.quick.query = 2, "Why does the SIP stack drop calls?"
+	a.startQuickThread()
+	tt.Frame()
+	p, th := a.current()
+	if p.name != "agent-phone" || th.title != "Why does the SIP stack drop calls?" {
+		t.Fatalf("opened %q in %s", th.title, p.name)
+	}
+	if len(th.entries) == 0 || th.entries[0].text != "Why does the SIP stack drop calls?" {
+		t.Error("the question wasn't sent")
+	}
+}
