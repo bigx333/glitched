@@ -21,7 +21,7 @@ type AccountState struct {
 type Lease struct { // one per run
 	Run, Account ID
 	Issued       time.Time
-	AccessToken  sealed // minted by the token node, held by the host proxy
+	AccessToken  sealed // held by the host proxy; the refresh token stays at the hub
 }
 ```
 
@@ -30,59 +30,10 @@ type Lease struct { // one per run
 This follows zeron (`research.md`). Runs don't receive credentials. Each host runs a loopback proxy, and the CLI is started with its base URL (`http://127.0.0.1:<port>/claude`, `/codex/v1`) and a random per-process token.
 
 - The proxy injects the chosen account's **access token** per request. Model traffic goes from the host straight to the provider, never through Cloudflare.
-- **Refresh tokens never leave the token node** (next section). The token node refreshes single-flight per account and persists the result before replying. Once a refresh is sent it can't be cancelled. Host proxies hold only access tokens. On a 401 or near expiry they ask the token node for a fresh one.
-- ~~Refresh tokens never leave the hub.~~ Superseded 2026-10-21 by the token node.
+- **Refresh tokens never leave the hub.** The hub refreshes single-flight per account and persists the result before replying. Once a refresh is sent it can't be cancelled. Host proxies hold only access tokens. On a 401 or near expiry they ask the hub for a fresh one.
 - This removes the one-machine-at-a-time lease for Codex ChatGPT logins and avoids the internal-only `chatgptAuthTokens` mode. Every host can use every account at once because none of them rotates anything.
 - A login that is also the CLI's own live login on some machine is never refreshed by the hub, the same rule zeron uses. Accounts added through Glitched are pool-only.
 - If a provider rejects proxied traffic, the fallback is `claude setup-token` for Claude and API keys elsewhere.
-
-## Token node (the user's exit node for credentials)
-
-The user picks which of their machines holds the plaintext credentials, the way they'd pick a Tailscale exit node. That machine is the **token node**. It refreshes tokens and mints access tokens for every other host's proxy. The hub stores only ciphertext, so the hosted tier never holds a usable credential, and refresh still works.
-
-```go
-type Vault struct {
-	DataKeyWraps map[ID][]byte // the vault key wrapped to each custodian device's public key
-	Blobs        map[ID][]byte // per account, encrypted with the vault key
-}
-
-type TokenRole struct { // one per user, at the hub
-	Node       ID     // current token node
-	Epoch      uint64 // bumped on every change
-	Custodians []ID   // devices that can decrypt the vault, in failover order
-	Quorum     int    // approvals needed to change Node without the current node's consent
-	Mode       Mode   // tokensOnly | tokensAndTraffic
-}
-
-type RefreshIntent struct { // written before every refresh, cleared after persisting
-	Account ID
-	Epoch   uint64
-	Started time.Time
-}
-```
-
-**Roles.**
-- **Custodians** are devices the user enrolls to hold a wrapped copy of the vault key, for example the Mac mini, the laptop and the phone. Only custodians can ever become the token node.
-- **The token node** is one custodian chosen by the user. It's the only device that decrypts the vault and the only one that talks to the provider's token endpoints.
-- **The hub** stores the ciphertext, `TokenRole` and intents. It is the compare-and-swap point that fences the role, but it can't read a token. The fencing is the same whether the hub is the Durable Object hub or Turso remote transactions.
-
-**Modes.**
-- `tokensOnly` is the default. The token node mints access tokens, and model traffic goes from each host straight to the provider.
-- `tokensAndTraffic` routes every pooled request through the token node's proxy. Every account then talks to the provider from one IP. It costs latency and needs an always-on node with bandwidth.
-
-**Refreshing safely.**
-1. Before refreshing, the token node writes `RefreshIntent{account, epoch}` at the hub by CAS. The write fails if the epoch is stale, so a demoted node can't start a refresh.
-2. It calls the provider, re-encrypts the new pair, uploads the blob and clears the intent in one CAS.
-3. A demoted node that is mid-refresh can't be stopped, since the provider doesn't check our epoch. Its open intent stays visible instead.
-
-**Changing the token node.**
-- **Planned.** The user picks a new custodian. The current node finishes in-flight refreshes, then a CAS moves `Node` and bumps `Epoch`. The new node already has a wrapped vault key, so nothing is re-encrypted.
-- **Current node gone.** It takes `Quorum` approvals from other custodians, for example 2 of 3 devices tapping "approve" (a user-controlled quorum, not consensus among machines). The hub won't move the role while a `RefreshIntent` from the old epoch is open and younger than the intent timeout.
-  - After the timeout, the new node's first refresh of that account may hit a refresh token the old node already used.
-  - In that case only that one account needs a new login. The UI shows it rather than retrying, because a retry can revoke the whole token family.
-- **Removing a custodian** re-wraps the vault key for the remaining custodians, then rotates it.
-
-**While the token node is offline.** Access tokens already issued keep working until they expire. After that, pooled runs on affected accounts wait in the queue with a "token node offline" reason, until the node returns or the role moves. Accounts using long-lived tokens or API keys keep working, because the token node can hand those out ahead of time to hosts that the user allows to cache them.
 
 ## Picking an account
 
