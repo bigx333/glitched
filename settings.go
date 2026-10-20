@@ -372,8 +372,7 @@ func remove(ts []*thread, t *thread) []*thread {
 func (a *app) about(c *ui.Context) {
 	s := &a.settings
 	ui.Column(c).Center().Gap(10).Padding(24, 0).Children(func() {
-		ui.Text(c, "G").FontSize(28).Bold().TextColor(ui.Hex("#ffffff")).Size(72, 72).Radius(18).
-			TextAlign(ui.Center).Padding(18, 0).LinearGradient(ui.LinearGradient{From: palette.accent, To: palette.accent.Mix(ui.Hex("#000000"), 0.35), Angle: 135, Oklab: true})
+		ui.Image(c, appIcon).Size(96, 96)
 		ui.Text(c, "Glitched").FontSize(20).FontWeight(650)
 		ui.Text(c, "0.0.42 · native prototype built with MyGo v0.5.5").TextColor(palette.muted)
 	})

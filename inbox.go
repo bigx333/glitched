@@ -89,6 +89,7 @@ func (a *app) itemsIn(cat category) []inboxItem {
 
 func (a *app) threadsNav(c *ui.Context) {
 	ui.Row(c).Padding(0, 16, 6).Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Image(c, appIcon).Size(18, 18)
 		ui.Text(c, "Glitched").Bold().FontSize(13)
 		ui.Text(c, "ALPHA").FontSize(9).Bold().LetterSpacing(0.6).TextColor(palette.muted).
 			Padding(1, 5).Radius(4).Background(palette.hover)

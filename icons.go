@@ -18,6 +18,20 @@ import (
 //go:embed icons/*.svg
 var iconFiles embed.FS
 
+// appIcon is the app's icon, the sliced G (branding/concept-1.png), as the
+// About page and the sidebar's wordmark show it.
+//
+//go:embed resources/icon.png
+var appIconPNG []byte
+
+var appIcon = func() *ui.Bitmap {
+	b, err := ui.DecodeBitmap(appIconPNG)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}()
+
 // sizeAttrs are an SVG's own width and height, which may be in ems: the
 // icon takes its size from its text, and its proportions from its viewBox.
 var sizeAttrs = regexp.MustCompile(`\s(width|height)="[^"]*"`)

@@ -1,0 +1,59 @@
+Glitched icon concepts — built-in image_gen tool
+
+All final PNGs exported at 1024×1024 using sips; original generated files retained.
+
+CONCEPT 1
+Use case: logo-brand.
+Asset type: finished macOS app icon for Glitched, a polished native app for AI coding-agent threads.
+Output: one single 1024×1024 PNG app icon, straight-on, centered, no presentation board, no text labels.
+Composition: a graphite Big Sur/Tahoe-style continuous-curvature rounded square tile, approximately 824×824 px, centered within the 1024 canvas with about 100 px standard transparent outer margin on all sides. Genuine transparent pixels OUTSIDE the tile only; the tile interior is opaque near-black. No background scene. Subtle premium depth with a softly lit top edge, restrained dark inner glow, no chunky extrusion. Tile palette #0c0c0e to #18181b.
+The central mark must have a bold, clean vector-like silhouette that remains recognizable when reproduced FLAT IN ONE COLOR at 16–20 px without glow or gradients. Large simple geometry, generous negative space, optically centered. Color and glow are secondary polish. Exactly one main mark.
+Personality: confident, self-aware wit, precise and composed. Restraint and Apple-quality craft.
+Avoid generic AI sparkles, brains, robots, crypto/gaming/cyberpunk, noisy scanlines, tiny decorative particles, arbitrary little squares, muddy gradients, text, numbers, watermarks, words, UI mockups, multiple icons.
+Concept 1 — geometric G. A bespoke monolithic geometric capital G, built as a substantial near-circular squared ring with a clear open right side and strong inward horizontal G bar. The G should read immediately, rather than a power button or C. Its primary fill is icy near-white #eaf6ff with a subtle cool-violet tint. Across its middle, ONE clean horizontal slice of the whole G is shifted slightly to the right, about 30 px, making an intentional sideways step while preserving legibility. One thin dark separation along that slice. A faint violet #8b7cf6 and electric-blue #3b9eff chromatic separation only at the cut edges; no rainbow ghosting elsewhere. Approximately 470 px wide/tall, thick robust strokes. The sharp horizontal glitch is the distinctive branding detail.
+
+---
+
+CONCEPT 2
+Use case: logo-brand.
+Asset type: finished macOS app icon for Glitched, a polished native app for AI coding-agent threads.
+Output: one single 1024×1024 PNG app icon, straight-on, centered, no presentation board, no text labels.
+Composition: a graphite Big Sur/Tahoe-style continuous-curvature rounded square tile, approximately 824×824 px, centered within the 1024 canvas with about 100 px standard transparent outer margin on all sides. Genuine transparent pixels OUTSIDE the tile only; the tile interior is opaque near-black. No background scene. Subtle premium depth with a softly lit top edge, restrained dark inner glow, no chunky extrusion. Tile palette #0c0c0e to #18181b.
+The central mark must have a bold, clean vector-like silhouette that remains recognizable when reproduced FLAT IN ONE COLOR at 16–20 px without glow or gradients. Large simple geometry, generous negative space, optically centered. Color and glow are secondary polish. Exactly one main mark.
+Personality: confident, self-aware wit, precise and composed. Restraint and Apple-quality craft.
+Avoid generic AI sparkles, brains, robots, crypto/gaming/cyberpunk, noisy scanlines, tiny decorative particles, arbitrary little squares, muddy gradients, text, numbers, watermarks, words, UI mockups, multiple icons.
+Concept 2 — glitched terminal cursor. One upright thick terminal insertion cursor block, like ▍, tall and rectangular, approximately 170 px wide and 460 px tall, centered. Crisp squared corners, substantial glowing electric blue #3b9eff/#60c3ff with a blue-white #eaf6ff core. ONE horizontal band through the lower middle is cleanly sliced, offset sideways to the right by about 58 px and separated by two narrow graphite cuts. The visual is unmistakably one cursor whose middle band has slipped sideways, with large stable sections above and below. No terminal prompt chevron, no letters, no multiple cursors. Confined blue light softly reflects on the opaque graphite tile around the mark, while geometry stays sharp. Simpler and quieter than a lightning bolt.
+
+TARGETED REFINEMENT
+Use case: precise-object-edit, logo-brand refinement.
+Edit target: the supplied glitched electric-blue terminal cursor macOS app icon.
+Make ONE geometric correction: the small horizontal middle cursor segment should have exactly the SAME WIDTH as the upper and lower cursor segments and be TRANSLATED TO THE RIGHT. The upper and lower blocks stay exactly where they are. The middle segment's LEFT edge must start about 60 px to the right of the upper/lower blocks' left edges, while its RIGHT edge protrudes by the same 60 px. Thus both sides of the cursor show a clear sideways step across this sliced band. This is a cut and shifted segment, not a widening crossbar. Keep its current height and the two dark horizontal gaps.
+Preserve everything else: existing graphite squircle geometry and standard outer transparent margin, tile depth/lighting, upright cursor proportions, square corners, electric blue-white fill and localized glow, original composition. Strong one-color silhouette at 16–20px. No extra elements, no words or letters, no change to top/bottom cursor blocks. Export single square 1024×1024 PNG with genuine transparency outside the tile and opaque graphite inside.
+
+---
+
+CONCEPT 3
+Use case: logo-brand.
+Asset type: finished macOS app icon for Glitched, a polished native app for AI coding-agent threads.
+Output: one single 1024×1024 PNG app icon, straight-on, centered, no presentation board, no text labels.
+Composition: a graphite Big Sur/Tahoe-style continuous-curvature rounded square tile, approximately 824×824 px, centered within the 1024 canvas with about 100 px standard transparent outer margin on all sides. Genuine transparent pixels OUTSIDE the tile only; the tile interior is opaque near-black. No background scene. Subtle premium depth with a softly lit top edge, restrained dark inner glow, no chunky extrusion. Tile palette #0c0c0e to #18181b.
+The central mark must have a bold, clean vector-like silhouette that remains recognizable when reproduced FLAT IN ONE COLOR at 16–20 px without glow or gradients. Large simple geometry, generous negative space, optically centered. Color and glow are secondary polish. Exactly one main mark.
+Personality: confident, self-aware wit, precise and composed. Restraint and Apple-quality craft.
+Avoid generic AI sparkles, brains, robots, crypto/gaming/cyberpunk, noisy scanlines, tiny decorative particles, arbitrary little squares, muddy gradients, text, numbers, watermarks, words, UI mockups, multiple icons.
+Concept 3 — torn lightning. One strong angular lightning bolt, about 325 px wide by 500 px tall, with a memorable, asymmetric zigzag silhouette. Bold violet #8b7cf6 at its upper shoulder transitions smoothly into electric blue #3b9eff/#60c3ff at the lower point. Split it once horizontally through its center with one clean dark gap; the lower portion steps sideways by about 30 px. Treat that stepped junction as a deliberate SINGLE pixel tear, not a shattering effect. Clean solid vector-like body, crisp points, only a faint tightly contained colored edge glow. No starburst, no generic four-point AI sparkle, no extra bolts or particles. The separated upper and lower shapes still read instantly as one lightning bolt.
+
+---
+
+CONCEPT 4
+Use case: logo-brand.
+Asset type: finished macOS app icon for Glitched, a polished native app for AI coding-agent threads.
+Output: one single 1024×1024 PNG app icon, straight-on, centered, no presentation board, no text labels.
+Composition: a graphite Big Sur/Tahoe-style continuous-curvature rounded square tile, approximately 824×824 px, centered within the 1024 canvas with about 100 px standard transparent outer margin on all sides. Genuine transparent pixels OUTSIDE the tile only; the tile interior is opaque near-black. No background scene. Subtle premium depth with a softly lit top edge, restrained dark inner glow, no chunky extrusion. Tile palette #0c0c0e to #18181b.
+The central mark must have a bold, clean vector-like silhouette that remains recognizable when reproduced FLAT IN ONE COLOR at 16–20 px without glow or gradients. Large simple geometry, generous negative space, optically centered. Color and glow are secondary polish. Exactly one main mark.
+Personality: confident, self-aware wit, precise and composed. Restraint and Apple-quality craft.
+Avoid generic AI sparkles, brains, robots, crypto/gaming/cyberpunk, noisy scanlines, tiny decorative particles, arbitrary little squares, muddy gradients, text, numbers, watermarks, words, UI mockups, multiple icons.
+Concept 4 — Offbeat Stack, an ownable abstract mark for agent threads at work, with one thread cheekily out of line.
+Subject: a compact stack of THREE substantial flat thread cards, arranged vertically with clean narrow graphite gutters. These are broad low rectangular lozenges with subtly softened corners, not thin menu lines. The top and bottom cards align; the middle card slips to the right by one stroke-width, producing one conspicuous but composed sideways glitch. The stack as a whole is roughly 400 px wide and 360 px tall; the middle card's offset makes the final mark roughly 470 px wide. One broad square notch in the exposed end of the middle card gives a tiny self-aware wink, visible as negative space rather than a detached extra pixel. Use only these three simple shapes. The geometry should suggest multiple queued agent threads, with one mischievously out of line, and should still be clear in a single solid ink.
+Color: restrained heat gradient progresses coherently across the stack: top royal blue #2563eb through middle violet #7c3aed to bottom pink-red #db2777 / #ef4444. A very fine blue-white light catches just the slipped edge. Gentle localized inner glow on the graphite tile. Avoid shiny 3D candy, avoid translucent glass cards. Premium matte crisp forms.
+Constraints: straight-on; no literal face, no robot, no letters, no text, no speech balloons, no document mini-icons, no UI lines inside cards, no detached pixels. Distinctly different from a G, upright cursor, or lightning bolt. The sly offset is the joke.
+
