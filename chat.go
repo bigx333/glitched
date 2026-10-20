@@ -502,6 +502,7 @@ func (a *app) send(t *thread) {
 			t.entries[reply].streaming = false
 			if t.status == statusWorking {
 				t.finish()
+				a.notifyFinished(t)
 			}
 		})
 	}()

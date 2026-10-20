@@ -500,3 +500,15 @@ func TestAttachments(t *testing.T) {
 		t.Error("sending should take the attachments with the message")
 	}
 }
+
+func TestFirstLine(t *testing.T) {
+	for in, want := range map[string]string{
+		"Done. The **collapsed** projects are kept.\n\n- more": "Done. The collapsed projects are kept.",
+		"## Comparing\n\nbody":                                  "Comparing",
+		"> **Tip:** start small":                                "Tip: start small",
+	} {
+		if got := firstLine(in); got != want {
+			t.Errorf("firstLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

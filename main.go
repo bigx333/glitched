@@ -393,6 +393,7 @@ func main() {
 	a := newApp()
 	mygo.App.WhenReady(func() {
 		a.installMenu()
+		mygo.App.OnNotificationClick(a.onNotificationClick)
 		a.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:         "T3 Code",
 			Width:         1320,
