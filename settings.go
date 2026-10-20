@@ -157,8 +157,15 @@ func (a *app) appearance(c *ui.Context) {
 		settingRow(c, "Liquid Glass", "The sidebar shows the desktop through the window, and floating panels what scrolls under them.", func() {
 			ui.Switch(c, &s.glass).Label("Liquid Glass")
 		})
-		settingRow(c, "Sidebar vibrancy", fmt.Sprintf("%.0f%% of the desktop shows through", s.vibrancy*100), func() {
-			ui.Slider(c, &s.vibrancy, 0, 1).Width(200).Label("Sidebar vibrancy").Disabled(!s.glass)
+		// The setting is the app's tint over the glass, not how
+		// transparent the glass is: at Clear, the glass is macOS's own
+		// material, which it frosts and tints itself.
+		settingRow(c, "Glass tint", "How much the app tints all its glass: the sidebar and headers, and the panels over the chat. At Clear, the glass is untinted.", func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Tinted").FontSize(11.5).TextColor(palette.faint)
+				ui.Slider(c, &s.vibrancy, 0, 1).Width(160).Label("Glass tint").Disabled(!s.glass)
+				ui.Text(c, "Clear").FontSize(11.5).TextColor(palette.faint)
+			})
 		})
 		a.glassDemo(c)
 		settingRow(c, "Wind background", "Characters lit by a passing wind behind the chat. Move the pointer to warm the air, click to blow a ripple.", func() {
@@ -232,6 +239,7 @@ func (a *app) glassDemo(c *ui.Context) {
 			lift.Scale = 1.03
 		}
 		pane.AnimatePose(lift, press)
+		// The tint the slider sets, as every glass has it.
 		a.pane(pane, glass.Glass{}).Children(func() {
 			ui.Icon(c, icSparkles).FontSize(16)
 			ui.Text(c, "Drag me").FontWeight(600)

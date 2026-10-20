@@ -296,8 +296,16 @@ func (a *app) applyTheme(c *ui.Context) {
 
 // pane is the material of a floating panel: Liquid Glass, or a plain
 // surface when the glass is turned off in the settings.
+//
+// Every pane of glass takes the one tint the Glass tint setting sets, as
+// the window's vibrancy does in the sidebar and the headers: two kinds of
+// glass, macOS's showing the desktop and MyGo's what the app draws under
+// it, which read as one material by one setting.
 func (a *app) pane(e ui.Element, g glass.Glass) ui.Element {
 	if a.settings.glass {
+		if g.Tint == (ui.Color{}) {
+			g.Tint = a.glassTint()
+		}
 		return e.Material(g)
 	}
 	return e.Background(palette.surface).Border(1, palette.border)
@@ -464,7 +472,7 @@ func matches(s, q string) bool {
 // as the setting leaves, or the background where there is none.
 func (a *app) chrome(e ui.Element) ui.Element {
 	if a.vibrant {
-		return e.Background(palette.bg.Alpha(float32(1 - a.settings.vibrancy)))
+		return e.Background(a.glassTint())
 	}
 	return e.Background(palette.sidebar) // the sidebar's, to be one bar with it
 }
@@ -484,4 +492,10 @@ func (a *app) contentCard(e ui.Element) ui.Element {
 	}
 	return e.Background(palette.bg).Radius(r, 0, 0, 0).Border(1, palette.border).
 		Margin(0, -1, -1, left).Clip()
+}
+
+// glassTint is the tint over every glass, the app's background by as much
+// as the Glass tint setting leaves: clear at Clear.
+func (a *app) glassTint() ui.Color {
+	return palette.bg.Alpha(float32(1 - a.settings.vibrancy))
 }

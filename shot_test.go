@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"image/png"
 	"os"
 	"strings"
@@ -11,7 +12,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with PAGE for a
-// path, DIFF, TERM2, CMDK, LIGHT, PICKER=<effort>, FAST and STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH, TICK=<turn>, GAG=snooze|settle|undo with AT=350ms for what to show, and HIDE=60ms for
+// path, DIFF, TERM2, CMDK, LIGHT, PICKER=<effort>, FAST and STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH, TICK=<turn>, TINT=0..1, GAG=snooze|settle|undo with AT=350ms for what to show, and HIDE=60ms for
 // a frame that long into hiding the sidebar.
 func TestShot(t *testing.T) {
 	out := os.Getenv("SHOT")
@@ -24,6 +25,9 @@ func TestShot(t *testing.T) {
 	a.settings.theme = 2
 	if os.Getenv("LIGHT") != "" {
 		a.settings.theme = 1
+	}
+	if v := os.Getenv("TINT"); v != "" {
+		fmt.Sscan(v, &a.settings.vibrancy)
 	}
 	if p := os.Getenv("PAGE"); p != "" {
 		a.router.Push(p)

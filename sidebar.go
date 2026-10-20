@@ -78,7 +78,7 @@ func (a *app) sidebarFrame(c *ui.Context) {
 			// The app's background tints the material, all but what the
 			// vibrancy setting lets through: near black in the dark, the
 			// desktop still blurring through.
-			side.Background(palette.bg.Alpha(float32(1 - a.settings.vibrancy)))
+			side.Background(a.glassTint())
 		}
 		if a.sidebarOpen == 0 {
 			side.Invisible()
