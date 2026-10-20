@@ -48,7 +48,7 @@ func (a *app) chatPage(c *ui.Context) {
 				a.composer(c, t)
 			})
 			if a.showTerminal {
-				ui.Column(c).Key("terminal").Height(220).Transition(panel(0, 16)).Children(func() { a.terminal(c) })
+				ui.Column(c).Key("terminal").Height(220).Transition(panel(0, 16)).Children(func() { a.terminal(c, p) })
 			}
 		})
 		if a.showDiff {
@@ -444,36 +444,46 @@ func (a *app) send(t *thread) {
 	}()
 }
 
-func (a *app) terminal(c *ui.Context) {
+func (a *app) terminal(c *ui.Context, p *project) {
+	s, err := a.shellFor(p)
+	title := "zsh"
+	if s != nil {
+		title = s.Title()
+	}
 	ui.Column(c).Height(220).Background(ui.Hex("#08080a")).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
 		ui.Row(c).Padding(4, 8, 4, 12).Gap(6).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(ui.RGBA(255, 255, 255, 0.08)).Children(func() {
 			ui.Icon(c, icTerminal).FontSize(12).TextColor(darkColors.muted)
-			ui.Text(c, "zsh").FontSize(11.5).TextColor(darkColors.muted)
+			ui.Text(c, title).FontSize(11.5).TextColor(darkColors.muted).SingleLine().Shrink(1)
 			ui.Spacer(c)
 			if iconButton(c, "close-terminal", icX, "Close terminal", false).Padding(3).Clicked() {
 				a.showTerminal = false
 			}
 		})
-		ui.Scroll(c).Grow(1).Padding(8, 12).Gap(2).Font("monospace").FontSize(12).Children(func() {
-			for _, l := range []struct {
-				text string
-				col  ui.Color
-			}{
-				{"~/Projects/t3code (t3code/sidebar-sort) $ bun run typecheck", darkColors.text},
-				{"$ tsc --noEmit -p apps/web", darkColors.muted},
-				{"✓ No type errors", darkColors.green},
-				{"~/Projects/t3code (t3code/sidebar-sort) $ bun run test -- Sidebar", darkColors.text},
-				{" ✓ Sidebar > sorts threads by updatedAt (4ms)", darkColors.green},
-				{" ✓ Sidebar > collapses a project (2ms)", darkColors.green},
-				{" Test Files  1 passed (1)", darkColors.muted},
-			} {
-				ui.Text(c, l.text).TextColor(l.col).NoWrap()
-			}
-			ui.Row(c).Children(func() {
-				ui.Text(c, "~/Projects/t3code (t3code/sidebar-sort) $ ").TextColor(darkColors.text).NoWrap()
-				caret := ui.Box(c).Size(7, 14)
-				caret.Background(darkColors.text).Opacity(caret.Loop("blink", time.Second, blink))
-			})
+		a.terminalBody(c, s, err)
+	})
+}
+
+// cannedTerminal is the drawer's output where no shell runs, as in tests.
+func (a *app) cannedTerminal(c *ui.Context) {
+	ui.Scroll(c).Grow(1).Padding(8, 12).Gap(2).Font("monospace").FontSize(12).Children(func() {
+		for _, l := range []struct {
+			text string
+			col  ui.Color
+		}{
+			{"~/Projects/t3code (t3code/sidebar-sort) $ bun run typecheck", darkColors.text},
+			{"$ tsc --noEmit -p apps/web", darkColors.muted},
+			{"✓ No type errors", darkColors.green},
+			{"~/Projects/t3code (t3code/sidebar-sort) $ bun run test -- Sidebar", darkColors.text},
+			{" ✓ Sidebar > sorts threads by updatedAt (4ms)", darkColors.green},
+			{" ✓ Sidebar > collapses a project (2ms)", darkColors.green},
+			{" Test Files  1 passed (1)", darkColors.muted},
+		} {
+			ui.Text(c, l.text).TextColor(l.col).NoWrap()
+		}
+		ui.Row(c).Children(func() {
+			ui.Text(c, "~/Projects/t3code (t3code/sidebar-sort) $ ").TextColor(darkColors.text).NoWrap()
+			caret := ui.Box(c).Size(7, 14)
+			caret.Background(darkColors.text).Opacity(caret.Loop("blink", time.Second, blink))
 		})
 	})
 }

@@ -142,6 +142,8 @@ type app struct {
 	sectionClosed map[category]bool
 	// rowFx is the joke playing on a thread's row, by thread.
 	rowFx map[string]rowGagFx
+	// shells are the terminal drawer's shells, by project.
+	shells map[string]*shell
 	// snoozeFor is the thread whose snooze popover is open.
 	snoozeFor string
 	// now is the frame's time, as the view builds it.
@@ -175,6 +177,7 @@ func newApp() *app {
 		collapsed:     map[string]bool{},
 		sectionClosed: map[category]bool{catSettled: true},
 		rowFx:         map[string]rowGagFx{},
+		shells:        map[string]*shell{},
 		settings: settings{
 			theme:         0,
 			glass:         true,
@@ -390,6 +393,8 @@ func main() {
 		})
 		// The wind's glyph atlases are drawn between the window's frames.
 		a.wind.SetLater(a.win.Update)
+		// The terminals' shells hang up with the window.
+		a.win.OnClosed(a.closeShells)
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
