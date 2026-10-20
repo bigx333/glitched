@@ -319,8 +319,8 @@ func TestInbox(t *testing.T) {
 			}
 		}
 	}
-	if !tt.HasText("SIP re-INVITE handling") {
-		t.Error("filter to agent-phone hides its thread")
+	if items := a.itemsIn(catSnoozed); len(items) != 1 || items[0].t.title != "SIP re-INVITE handling" {
+		t.Errorf("filter to agent-phone: snoozed %v", items)
 	}
 }
 

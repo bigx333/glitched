@@ -206,7 +206,7 @@ func newApp() *app {
 		effort:        "High",
 		access:        accessAuto,
 		collapsed:     map[string]bool{},
-		sectionClosed: map[category]bool{catSettled: true},
+		sectionClosed: map[category]bool{catWorking: true, catSnoozed: true, catSettled: true},
 		projectFilter: map[string]bool{},
 		rowFx:         map[string]rowGagFx{},
 		shells:        map[string]*shell{},
@@ -324,6 +324,13 @@ func (a *app) view(c *ui.Context) {
 	// appearance: the sidebar shows it while the app's theme matches, and
 	// the Liquid Glass setting is on.
 	a.now = c.Now()
+	// Jokes over are gone, whether or not their rows show: a row in a
+	// closed section isn't built to see its own end.
+	for id, fx := range a.rowFx {
+		if fx.done(a.now) {
+			delete(a.rowFx, id)
+		}
+	}
 	systemDark := c.Theme().Dark
 	a.applyTheme(c)
 	a.shortcuts(c)
