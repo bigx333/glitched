@@ -600,3 +600,22 @@ func TestPreviewToggle(t *testing.T) {
 		t.Errorf("diff %v, preview %v: the diff should take the preview's place", a.showDiff, a.showPreview)
 	}
 }
+
+// A tick for each message sent; clicking one scrolls to it.
+func TestTurnMarkers(t *testing.T) {
+	a := newApp()
+	tt := ui.NewTester(a.view, 1320, 860)
+	tt.Advance(time.Second)
+	_, th := a.current()
+	first := "Go to: " + preview(th.entries[0])
+	if err := tt.Click(first); err != nil {
+		t.Fatal(err)
+	}
+	tt.Advance(time.Second)
+	if f, _ := a.listFor(th).Visible(); f > 0 {
+		t.Errorf("first row in view %d after clicking the first marker, want 0", f)
+	}
+	if !tt.HasText(th.entries[0].text) {
+		t.Error("the first message isn't in view")
+	}
+}

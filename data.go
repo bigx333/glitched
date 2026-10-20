@@ -87,6 +87,12 @@ func mockProjects() []*project {
 		status: statusWorking,
 		branch: "t3code/sidebar-sort",
 		entries: []entry{
+			{kind: entryUser, text: "Where does the sidebar get its threads from?"},
+			{kind: entryAssistant, text: "From `useThreads(projectId)` in `apps/web/src/hooks/useThreads.ts`, which subscribes to the thread store and returns that project's threads **in the order they were created**."},
+			{kind: entryUser, text: "And where is a thread's updatedAt set?"},
+			{kind: entryAssistant, text: "On the server, in `ThreadStore.touch()`, whenever a turn starts or ends, or the thread is renamed. The client receives it with every thread event, so it's always current there."},
+			{kind: entryUser, text: "Can the project groups collapse today?"},
+			{kind: entryAssistant, text: "No. `ProjectGroup` holds an `expanded` state that is always true: nothing sets it. The label is plain text."},
 			{kind: entryUser, text: "The sidebar threads are in creation order. Sort them by most recent activity, and let me collapse a project by clicking its name."},
 			{kind: entryWork, took: "Worked for 38s", work: []workItem{
 				{kind: "search", label: "Searched", detail: "useThreads in apps/web/src"},

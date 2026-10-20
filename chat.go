@@ -195,6 +195,7 @@ func (a *app) timeline(c *ui.Context, t *thread) {
 		}
 	})
 	a.jumpToLatest(c, l)
+	a.turnMarkers(c, t, l)
 }
 
 // jumpToLatest floats a pill over the composer while the user has
