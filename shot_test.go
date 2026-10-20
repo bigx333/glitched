@@ -12,7 +12,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with PAGE for a
-// path, DIFF, TERM2, CMDK, LIGHT, PICKER=<effort>, FAST and STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH, TICK=<turn>, TINT=0..1, GAG=snooze|settle|undo with AT=350ms for what to show, and HIDE=60ms for
+// path, DIFF, TERM2, CMDK, LIGHT, PICKER=<effort>, FAST and STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH, TICK=<turn>, TINT=0..1, SCROLLUP, GAG=snooze|settle|undo with AT=350ms for what to show, and HIDE=60ms for
 // a frame that long into hiding the sidebar.
 func TestShot(t *testing.T) {
 	out := os.Getenv("SHOT")
@@ -60,6 +60,11 @@ func TestShot(t *testing.T) {
 		}
 		tt.Move(r.X+r.W/2, r.Y+r.H/2)
 		tt.Advance(500 * time.Millisecond)
+	}
+	if os.Getenv("SCROLLUP") != "" {
+		_, th := a.current()
+		a.listFor(th).ScrollTo(0, ui.Start)
+		tt.Advance(time.Second)
 	}
 	if os.Getenv("ATTACH") != "" {
 		a.attachFiles([]string{"resources/icon.png", "go.mod"})

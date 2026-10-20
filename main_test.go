@@ -673,3 +673,37 @@ func TestNormalizeURL(t *testing.T) {
 		}
 	}
 }
+
+// Scrolled up from the end, the composer is compact, its controls folded
+// away; a draft, a click or the end of the thread brings it back.
+func TestCompactComposer(t *testing.T) {
+	a := newApp()
+	tt := ui.NewTester(a.view, 1320, 860)
+	_, th := a.current()
+	l := a.listFor(th)
+	tt.Advance(time.Second)
+	if !tt.HasText("Approve for me") {
+		t.Fatal("the composer should be full size at the end")
+	}
+	l.ScrollTo(0, ui.Start)
+	tt.Advance(time.Second)
+	if tt.HasText("Approve for me") {
+		t.Error("scrolled up, the composer should fold its controls away")
+	}
+	// Changes from outside the view, as typing's, which a frame shows.
+	a.draft = "a follow-up"
+	tt.Frame()
+	tt.Advance(time.Second)
+	if !tt.HasText("Approve for me") {
+		t.Error("with a draft, the composer should be full size")
+	}
+	a.draft = ""
+	tt.Frame()
+	tt.Advance(time.Second)
+	l.ScrollToEnd()
+	tt.Frame()
+	tt.Advance(2 * time.Second)
+	if !tt.HasText("Approve for me") {
+		t.Error("back at the end, the composer should be full size")
+	}
+}

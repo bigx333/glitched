@@ -175,6 +175,9 @@ type app struct {
 	// windDraw paints the wind's field behind the chat, as the frame's
 	// pane has it.
 	windDraw func(p *ui.Painter, r ui.Rect)
+	// composerOpened is the composer brought back to its full size by a
+	// click while compact, until the end of the thread shows again.
+	composerOpened bool
 	// snoozeFor is the thread whose snooze popover is open.
 	snoozeFor string
 	// now is the frame's time, as the view builds it.

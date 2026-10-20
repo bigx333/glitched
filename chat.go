@@ -48,6 +48,8 @@ func (a *app) chatPage(c *ui.Context) {
 				// What scrolls fades out under the composer.
 				ui.Box(c).Absolute().Bottom(0).Left(0).Right(0).Height(composerRoom - 40).PassThrough().
 					Material(glass.ScrollEdge{Bottom: true, Background: palette.bg})
+				// Over the edge, which would take its clicks.
+				a.jumpToLatest(c, a.listFor(t))
 				a.composer(c, t)
 			})
 			if a.showTerminal {
@@ -207,7 +209,6 @@ func (a *app) timeline(c *ui.Context, t *thread) {
 			ui.Row(c).Justify(ui.Center).Children(func() { a.emptyState(c) })
 		}
 	})
-	a.jumpToLatest(c, l)
 	a.turnMarkers(c, t, l)
 }
 
@@ -217,7 +218,8 @@ func (a *app) jumpToLatest(c *ui.Context, l *ui.ListState) {
 	if l.AtEnd() {
 		return
 	}
-	ui.Row(c).Absolute().Left(0).Right(0).Bottom(composerRoom - 24).Justify(ui.Center).PassThrough().Children(func() {
+	// Just over the composer, compact as it is while scrolled up.
+	ui.Row(c).Absolute().Left(0).Right(0).Bottom(80).Justify(ui.Center).PassThrough().Children(func() {
 		b := a.glassButton(c, "jump").Padding(5, 12).Transition(riseIn)
 		if b.Children(func() {
 			ui.Icon(c, icArrowDown).FontSize(13)
@@ -356,18 +358,49 @@ func (a *app) changes(c *ui.Context, key string, e entry) {
 	})
 }
 
+// composerResize is how the composer grows and shrinks, compact while the
+// user reads back up the thread.
+var composerResize = ui.ElementTransition{Size: true, Duration: 250 * time.Millisecond, Ease: easeOut}
+
+// composerCompact reports whether the composer is compact: away from the
+// end of the thread, not clicked open, holding nothing.
+func (a *app) composerCompact(t *thread) bool {
+	if a.listFor(t).AtEnd() {
+		a.composerOpened = false
+		return false
+	}
+	return !a.composerOpened && strings.TrimSpace(a.draft) == "" && len(a.attachments) == 0
+}
+
+// compactWidth is the composer's width while compact.
+const compactWidth = 520
+
 func (a *app) composer(c *ui.Context, t *thread) {
-	ui.Column(c).Absolute().Bottom(0).Left(0).Right(0).AlignItems(ui.Center).Padding(0, 24, 14).Children(func() {
-		ui.Column(c).WidthPercent(100).MaxWidth(contentWidth).Gap(8).Children(func() {
+	// While the user reads back up the thread, the composer steps out of
+	// the way: narrower, one line, its controls folded away. It comes back
+	// to its full size at the end of the thread, as it's clicked, and
+	// whenever it holds a draft or attachments, so it never hides work.
+	compact := a.composerCompact(t)
+	width := float32(contentWidth)
+	if compact {
+		width = compactWidth
+	}
+	// The frame lets the pointer through, but for the composer in it, to
+	// what is around it, as the pill taking the user to the end.
+	ui.Column(c).Absolute().Bottom(0).Left(0).Right(0).AlignItems(ui.Center).Padding(0, 24, 14).PassThrough().Children(func() {
+		ui.Column(c).Key("composer-frame").WidthPercent(100).MaxWidth(width).Gap(8).PassThrough().Transition(composerResize).Children(func() {
 			card := ui.Column(c).Key("composer").Radius(20)
+			if compact && card.Clicked() {
+				a.composerOpened = true
+			}
 			if card.FocusWithin() {
 				card.Shadow(0, 0, 0, 3, palette.accent.Alpha(0.22))
 			}
 			a.accessEffects(card)
 			a.autocomplete(c, card)
 			dragOver := a.dropZone(card)
-			a.pane(card, glass.Glass{}).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.28)).
-				Transition(ui.ElementTransition{Size: true, Duration: 150 * time.Millisecond, Ease: easeOut}).Children(func() {
+			a.pane(card, glass.Glass{}).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.28)).Clip().
+				Transition(composerResize).Children(func() {
 				workingGlow(c, card, t.status == statusWorking)
 				if len(a.attachments) > 0 {
 					ui.Column(c).Key("attachments").Padding(12, 12, 0).Children(func() {
@@ -376,11 +409,20 @@ func (a *app) composer(c *ui.Context, t *thread) {
 						})
 					})
 				}
+				if compact {
+					// A line to type a follow-up into, which a text area,
+					// at least two lines high, can't be; the first key
+					// typed brings the full composer back, its text with it.
+					ui.TextInput(c.Key("draft-compact"), &a.draft).Placeholder("Ask a follow-up…").
+						Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).Padding(11, 18).
+						OnPaste(a.onPaste)
+					return
+				}
 				ui.TextArea(c.Key("draft"), &a.draft).
 					Placeholder("Ask anything, @tag files/folders, or use / to show available commands").
 					Lines(2, 10).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).
 					Padding(14, 16, 4).AutoFocus().OnPaste(a.onPaste).OnTextKey(a.suggestKey)
-				ui.Row(c).Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Key("controls").Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
 					a.composerControls(c)
 					ui.Spacer(c)
 					if iconButton(c, "attach", icPaperclip, "Attach files", false).Clicked() {
@@ -392,7 +434,10 @@ func (a *app) composer(c *ui.Context, t *thread) {
 					dropRing(c)
 				}
 			})
-			ui.Row(c).Gap(4).AlignItems(ui.Center).Padding(0, 6).Children(func() {
+			if compact {
+				return
+			}
+			ui.Row(c).Key("env-row").Gap(4).AlignItems(ui.Center).Padding(0, 6).ClipY().Transition(fold).Children(func() {
 				ghost(c, "env", false).Padding(3, 6).Children(func() {
 					ui.Icon(c, icFolder).FontSize(12)
 					ui.Text(c, "Local").FontSize(11.5)
