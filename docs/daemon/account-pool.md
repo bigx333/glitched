@@ -66,3 +66,15 @@ Placement (`placement-and-handoff.md`) and the pool are separate choices. Placem
 2. Rate-limit reports from the Claude Code and Codex adapters into `LimitedUntil`. Check: a recorded limit transcript marks the account.
 3. Multiple accounts with sticky picking. Check: a limited account is skipped for new runs while threads on other accounts keep their account.
 4. Auto-continue on limit, behind a per-pool setting.
+
+## Rejected: Turso sync plus a host quorum for refresh
+
+Considered on 2026-10-21. Hosts would share account state through Turso Cloud sync and elect a refresher by quorum.
+
+- **Sync can't be the lock.** Turso sync resolves conflicts as "last push wins" (Turso docs). Two hosts that each see a free lease locally can both take it. A safe lease has to be a transaction against Turso Cloud's primary over the network. That makes Turso Cloud the central coordinator, which is a hub run by someone else.
+- **LWW can bring back a consumed token.** A host refreshes and pushes the new pair. A host that was offline then pushes its older row, and the consumed refresh token wins. The next refresh fails, and zeron notes a second use of a single-use refresh token can revoke the whole token family. Any row that carries tokens must never be written from an offline replica.
+- **A quorum of laptops rarely has a majority.** With two machines, one asleep means no quorum. Leader election over machines that sleep and roam is the hard part, and it buys nothing over a single always-on coordinator.
+- **No lease can fence the provider.** The danger is the refresh request itself. If the holder's laptop sleeps after sending it, the lease expires and another host refreshes with the old token. The provider doesn't check our epoch. Safety needs a refresher that doesn't stall mid-request and persists before anyone retries. A Durable Object handler fits that. A laptop doesn't.
+- **Blast radius.** Syncing refresh tokens puts every one on every host's disk. The hub design keeps them in one place.
+
+Turso Cloud with an online CAS lease row is workable, if the hub is ever dropped. Because it still needs every rule above, it ends up as a hub made of a database plus refresh logic on hosts that sleep. The Durable Object already in the design does the same job without a second vendor.
