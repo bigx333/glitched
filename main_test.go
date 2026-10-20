@@ -723,7 +723,7 @@ func TestFlowKeepsGoing(t *testing.T) {
 		}
 		f.step(at, level)
 		moved := f.dist - prev
-		if moved < 0 || moved > 205*0.016*1.01 {
+		if moved < 0 || moved > flowSpeed(3)*0.016*1.01 {
 			t.Fatalf("frame %d: the pulses moved %.2f DIPs, not a frame's way at up to Max's speed", i, moved)
 		}
 		prev = f.dist

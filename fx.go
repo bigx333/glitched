@@ -238,6 +238,10 @@ type flowState struct {
 	last               time.Time
 }
 
+// flowSpeed is how fast the pulses travel at an effort level, in DIPs a
+// second: 44 at Low to about 226 at Max.
+func flowSpeed(level int) float64 { return 1.1 * (40 + 55*float64(level)) }
+
 // draw draws the light in fill, the part of track up to the thumb, at the
 // effort level, moving it on to the painter's time. A pulse has a bright
 // head and a tail fading behind it, in three lanes over a faint core.
@@ -261,10 +265,10 @@ func (f *flowState) step(now time.Time, level int) {
 	// of a second.
 	ease := min(1, dt*6)
 	if f.speed == 0 {
-		f.level, f.speed, ease = float64(level), 40+55*float64(level), 0
+		f.level, f.speed, ease = float64(level), flowSpeed(level), 0
 	}
 	f.level += (float64(level) - f.level) * ease
-	f.speed += (40 + 55*float64(level) - f.speed) * ease
+	f.speed += (flowSpeed(level) - f.speed) * ease
 	f.dist += f.speed * dt
 }
 
