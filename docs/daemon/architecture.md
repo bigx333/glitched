@@ -16,7 +16,7 @@ What peer costs, accepted on purpose:
 
 - No global ordering. The inbox across machines is a client-side merge of N shell streams.
 - Each machine is paired, updated and backed up on its own.
-- Moving a thread between machines is an explicit export and import, never automatic.
+- A thread has one owner host at a time. Moving it is an explicit two-phase handoff, and only new threads are placed automatically. See `placement-and-handoff.md`.
 
 ## Grafted from the hub candidate
 
@@ -39,7 +39,7 @@ What peer costs, accepted on purpose:
 
 ```go
 type ID [16]byte                         // ULID; commands are client-minted
-type Ref struct{ Env, Object ID }        // every cached object is environment-qualified
+type Ref struct{ Env, Object ID }        // client cache key; for threads Env is a routing hint, the ID is global
 type Cursor struct{ Log ID; Seq uint64 } // Log changes after a restore, which fences stale cursors
 
 type Command struct {
@@ -56,6 +56,8 @@ type DispatchMode uint8 // StartNow, AfterActive, SteerActive, RestartActive, De
 type Thread struct {
 	id, workspace ID
 	revision      uint64
+	ownerEpoch    uint64   // bumped by each committed handoff
+	residency     residency // sealed: owned | handingOff{transfer, to} | moved{to, epoch}
 	model         ModelRef // provider, model, effort, fast
 	access        Access   // Ask, AutoEdits, Full
 	run           run      // sealed: idle | starting | running | waiting{requests} | stopping | uncertain
@@ -158,7 +160,7 @@ type Agent interface {
 
 **Reach and pairing.** The engine listens on a Unix socket by default. LAN is opt-in with pinned TLS. Tailscale uses `tailscale serve` to the loopback port. SSH forwards to the socket and checks host keys. The relay is last. A client tries routes in order, checks that the route answers with the expected environment id before sending credentials, and never falls back to loopback (t3code). `glitched pair` shows a 5-minute single-use QR holding the engine's fingerprint and a bootstrap secret. Redeeming it binds the client's public key to a grant. Sessions are short-lived, and a WebSocket ticket keeps tokens out of URLs. Revoking a grant closes its sockets, releases its terminal leases and rejects its queued commands at dispatch. Local IPC checks the OS peer identity plus an app credential. Nothing is anonymous, loopback included (unlike bb and zeron).
 
-**Multi-machine in the GUI.** The GUI keeps one client per environment, each with its own cursor and offline cache keyed by `Ref`. Projects carry a machine badge. The inbox merges the shell streams. Quick-ask picks its destination explicitly.
+**Multi-machine in the GUI.** The GUI keeps one client per environment, each with its own cursor and offline cache keyed by `Ref`. Projects carry a machine badge. The inbox merges the shell streams. Quick-ask and the composer pick a host, or Any, which places the thread by published capacity. Threads move between hosts with `thread.move` (`placement-and-handoff.md`).
 
 **Notifications and integrations.** A delivery outbox sends local notifications and, opt-in, redacted push through the relay (thread id and kind only). Push is a hint to refetch and can never approve. `/mcp` (stdio or bearer HTTP) maps a small allow-list onto the same `Endpoint` with its own restricted grant. Webhooks are HMAC-signed with a replay window and delivery-id dedup.
 
@@ -182,4 +184,4 @@ type Agent interface {
 
 ## Not building
 
-Replicated databases or CRDT transcripts, automatic thread migration, account-wide trust, a hosted gate as the only remote path, full-trust plugins, credential forwarding between machines, server-side browser tabs, WebRTC previews, port tunnels, and autonomous commit and push.
+Replicated databases or CRDT transcripts, automatic moves of running threads, account-wide trust, a hosted gate as the only remote path, full-trust plugins, credential forwarding between machines, server-side browser tabs, WebRTC previews, port tunnels, and autonomous commit and push.
