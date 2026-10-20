@@ -50,8 +50,11 @@ func (a *app) chatPage(c *ui.Context) {
 				ui.Column(c).Key("terminal").Height(220).Transition(panel(0, 16)).Children(func() { a.terminal(c, p) })
 			}
 		})
-		if a.showDiff {
+		switch {
+		case a.showDiff:
 			ui.Column(c).Key("diff").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.diffPanel(c, t) })
+		case a.showPreview:
+			ui.Column(c).Key("preview").Width(previewWidth).Transition(panel(16, 0)).Children(func() { a.previewPanel(c) })
 		}
 	})
 }
@@ -136,6 +139,13 @@ func (a *app) header(c *ui.Context, p *project, t *thread) {
 			}
 			if iconButton(c, "diff", icDiff, "Toggle diff  ⌘D", a.showDiff).Clicked() {
 				a.showDiff, a.panelsJump = !a.showDiff, false
+				if a.showDiff {
+					a.showPreview = false
+				}
+			}
+			if iconButton(c, "preview", icGlobe, "Toggle preview  ⇧⌘P", a.showPreview).Clicked() {
+				a.togglePreview()
+				a.panelsJump = false
 			}
 		})
 	})

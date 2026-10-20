@@ -39,6 +39,7 @@ func (a *app) installMenu() {
 			{Label: "Toggle Sidebar", Accelerator: "CmdOrCtrl+B", Click: do(func() { a.toggleSidebar(true) })},
 			{Label: "Toggle Terminal", Accelerator: "CmdOrCtrl+J", Click: do(func() { a.showTerminal, a.panelsJump = !a.showTerminal, true })},
 			{Label: "Toggle Diff", Accelerator: "CmdOrCtrl+D", Click: do(func() { a.showDiff, a.panelsJump = !a.showDiff, true })},
+			{Label: "Toggle Preview", Accelerator: "CmdOrCtrl+Shift+P", Click: do(func() { a.togglePreview(); a.panelsJump = true })},
 			mygo.Separator(),
 			{Label: "Appearance", Submenu: []*mygo.MenuItem{
 				{Label: "System", Type: mygo.MenuItemRadio, Checked: a.settings.theme == 0, Click: theme(0)},

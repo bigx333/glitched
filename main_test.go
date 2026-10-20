@@ -582,3 +582,21 @@ func TestQuickAsk(t *testing.T) {
 		t.Error("the question wasn't sent")
 	}
 }
+
+// The preview pane and the diff share the side of the chat: one at a time.
+func TestPreviewToggle(t *testing.T) {
+	a := newApp()
+	tt := ui.NewTester(a.view, 1320, 860)
+	if err := tt.Click("Toggle preview  ⇧⌘P"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.showPreview || !tt.HasText("The preview shows here, in the app's window.") {
+		t.Fatal("preview pane not shown")
+	}
+	if err := tt.Click("Toggle diff  ⌘D"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.showDiff || a.showPreview {
+		t.Errorf("diff %v, preview %v: the diff should take the preview's place", a.showDiff, a.showPreview)
+	}
+}

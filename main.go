@@ -157,6 +157,12 @@ type app struct {
 	suggestFly       *mygo.Window
 	suggestBox       [5]int // the flyout's anchor and height, as last set
 	files            map[string][]string
+	// The preview pane: shown, its web view, its address and the one
+	// being typed, and why it could not start.
+	showPreview              bool
+	preview                  *mygo.WebView
+	previewURL, previewDraft string
+	previewErr               string
 	// quick is the quick-ask panel over every app.
 	quick quickAsk
 	// lists are the threads' timelines, by thread.
@@ -203,6 +209,8 @@ func newApp() *app {
 		diffs:         map[string]*editor.DiffState{},
 		lists:         map[string]*ui.ListState{},
 		files:         map[string][]string{},
+		previewURL:    defaultPreviewURL,
+		previewDraft:  defaultPreviewURL,
 		diffLayout:    editor.DiffUnified,
 		settings: settings{
 			theme:         0,
@@ -360,6 +368,9 @@ func (a *app) shortcuts(c *ui.Context) {
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyD) {
 		a.showDiff, a.panelsJump = !a.showDiff, true
+	}
+	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyP) {
+		a.togglePreview()
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyJ) {
 		a.showTerminal, a.panelsJump = !a.showTerminal, true
