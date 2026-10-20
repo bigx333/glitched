@@ -4,6 +4,8 @@ This is the synthesis of two candidate designs, `candidate-hub.md` (one server, 
 
 ## Decision
 
+> **Revised in `control-plane.md`.** Central accounts and ephemeral VMs add a hub that holds accounts, machines, grants, thread locations and a read replica of every log. Hosts still own execution and write their own logs first. The rest of this document describes the host engine, which is unchanged.
+
 **Peer shape.** Every machine runs one `glitched` engine that owns its own SQLite, event log, agents, PTYs and worktrees. The GUI embeds that engine when no service runs, and attaches to N engines at once. A phone or a second Mac reaches an engine directly (LAN, Tailscale, SSH) or through an optional outbound relay.
 
 Why peer over hub:

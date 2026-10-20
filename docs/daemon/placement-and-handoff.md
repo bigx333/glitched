@@ -1,6 +1,6 @@
 # Placement and handoff
 
-This extends `architecture.md`. It covers three features. A thread can be opened on any host, a new thread can be placed on the least busy host, and a thread can be handed off from one host to another.
+This extends `architecture.md`. With the hub from `control-plane.md`, the hub records `Location`, and a handoff waits for the log to be acknowledged at the hub and then ships only the workspace and provider session files. It covers three features. A thread can be opened on any host, a new thread can be placed on the least busy host, and a thread can be handed off from one host to another.
 
 ## Decision
 
