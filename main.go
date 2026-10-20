@@ -299,6 +299,7 @@ func (a *app) view(c *ui.Context) {
 		c.Root().Background(ui.Transparent)
 	}
 	root := ui.Row(c).Fill().AlignItems(ui.Stretch)
+	noteGPU(root)
 	target := float32(0)
 	if a.showSidebar {
 		target = 1

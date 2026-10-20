@@ -252,7 +252,11 @@ func (a *app) workLog(c *ui.Context, key string, e entry) {
 			if working {
 				statusMark(c, statusWorking)
 			}
-			ui.Text(c, e.took).FontSize(12).Grow(1)
+			if working {
+				shimmerText(c, e.took, 12, palette.muted, palette.text)
+			} else {
+				ui.Text(c, e.took).FontSize(12).Grow(1)
+			}
 			ui.Textf(c, "%d steps", len(e.work)).FontSize(11).TextColor(palette.faint)
 			chevron(c, open)
 		}).Clicked() {
@@ -339,6 +343,7 @@ func (a *app) composer(c *ui.Context, t *thread) {
 			dragOver := a.dropZone(card)
 			a.pane(card, glass.Glass{}).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.28)).
 				Transition(ui.ElementTransition{Size: true, Duration: 150 * time.Millisecond, Ease: easeOut}).Children(func() {
+				workingGlow(c, card, t.status == statusWorking)
 				if len(a.attachments) > 0 {
 					ui.Column(c).Key("attachments").Padding(12, 12, 0).Children(func() {
 						attachmentChips(c, a.attachments, func(i int) {
