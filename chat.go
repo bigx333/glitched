@@ -52,7 +52,7 @@ func (a *app) chatPage(c *ui.Context) {
 			}
 		})
 		if a.showDiff {
-			ui.Column(c).Key("diff").Width(460).Transition(panel(16, 0)).Children(func() { a.diffPanel(c, t) })
+			ui.Column(c).Key("diff").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.diffPanel(c, t) })
 		}
 	})
 }
@@ -256,10 +256,11 @@ func counts(c *ui.Context, add, del int) {
 }
 
 func (a *app) changes(c *ui.Context, key string, e entry) {
+	// The counts are the diff's, as it stands after any review.
 	add, del := 0, 0
 	for _, f := range e.files {
-		add += f.add
-		del += f.del
+		fa, fd := a.diffStats(f.path)
+		add, del = add+fa, del+fd
 	}
 	ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.surface).Transition(riseIn).Children(func() {
 		ui.Row(c).Padding(8, 8, 8, 12).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
@@ -278,7 +279,8 @@ func (a *app) changes(c *ui.Context, key string, e entry) {
 				if ghost(c, f.path, false).Padding(5, 8).Children(func() {
 					ui.Icon(c, icFile).FontSize(12).TextColor(palette.faint)
 					ui.Text(c, f.path).FontSize(12).Font("monospace").SingleLine().Grow(1).Shrink(1).TextColor(palette.text)
-					counts(c, f.add, f.del)
+					fa, fd := a.diffStats(f.path)
+					counts(c, fa, fd)
 				}).Clicked() {
 					a.showDiff, a.diffFile = true, i
 				}
@@ -493,84 +495,4 @@ func blink(t float32) float32 {
 		return 1
 	}
 	return 0
-}
-
-func (a *app) diffPanel(c *ui.Context, t *thread) {
-	var files []fileChange
-	for _, e := range t.entries {
-		files = append(files, e.files...)
-	}
-	ui.Column(c).Width(460).FillHeight().Background(palette.sidebar).BorderWidth(0, 0, 0, 1).BorderColor(palette.border).Children(func() {
-		bar := c.TitleBar()
-		ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 14).Gap(8).AlignItems(ui.Center).
-			BorderWidth(0, 0, 1, 0).BorderColor(palette.border).DragWindow().Children(func() {
-			ui.Text(c, "Changes").FontWeight(600)
-			ui.Textf(c, "%d", len(files)).FontSize(11).TextColor(palette.muted).Padding(0, 6).Radius(999).Background(palette.hover)
-			ui.Spacer(c)
-			if iconButton(c, "close-diff", icX, "Close diff", false).Clicked() {
-				a.showDiff = false
-			}
-		})
-		if len(files) == 0 {
-			ui.Text(c, "No changes in this thread yet.").TextColor(palette.muted).Margin(ui.Auto)
-			return
-		}
-		a.diffFile = min(a.diffFile, len(files)-1)
-		ui.Column(c).Padding(6).Gap(1).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
-			for i, f := range files {
-				if row(c, f.path, i == a.diffFile).Padding(5, 8).Children(func() {
-					ui.Icon(c, icFile).FontSize(12)
-					ui.Text(c, f.path).FontSize(12).Font("monospace").SingleLine().Grow(1).Shrink(1)
-					counts(c, f.add, f.del)
-				}).Clicked() {
-					a.diffFile = i
-				}
-			}
-		})
-		ui.ScrollBoth(c).Key(a.diffFile).Grow(1).Padding(8, 0).Font("monospace").FontSize(12).Children(func() {
-			ui.Column(c).Children(func() {
-				oldN, newN := 42, 42
-				for _, l := range sampleDiff {
-					a.diffRow(c, l, &oldN, &newN)
-				}
-			})
-		})
-	})
-}
-
-func (a *app) diffRow(c *ui.Context, l diffLine, oldN, newN *int) {
-	row := ui.Row(c).Padding(1, 12, 1, 0).MinWidthPercent(100)
-	gutter := func(n int, show bool) {
-		s := ""
-		if show {
-			s = fmt.Sprint(n)
-		}
-		ui.Text(c, s).Width(36).TextAlign(ui.End).TextColor(palette.faint).Padding(0, 8, 0, 0)
-	}
-	sign, col := " ", palette.text
-	switch l.kind {
-	case '@':
-		row.Background(palette.blue.Alpha(0.08)).Children(func() {
-			ui.Text(c, l.text).TextColor(palette.blue).NoWrap().Padding(2, 12)
-		})
-		return
-	case '+':
-		row.Background(palette.green.Alpha(0.10))
-		sign, col = "+", palette.green
-	case '-':
-		row.Background(palette.red.Alpha(0.10))
-		sign, col = "−", palette.red
-	}
-	row.Children(func() {
-		gutter(*oldN, l.kind != '+')
-		gutter(*newN, l.kind != '-')
-		ui.Text(c, sign).Width(16).TextColor(col)
-		ui.Text(c, l.text).NoWrap()
-	})
-	if l.kind != '+' {
-		*oldN++
-	}
-	if l.kind != '-' {
-		*newN++
-	}
 }

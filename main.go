@@ -13,6 +13,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 	"github.com/egoist/mygo/ui/markdown"
 
 	"t3-mygo/wind"
@@ -142,6 +143,9 @@ type app struct {
 	sectionClosed map[category]bool
 	// rowFx is the joke playing on a thread's row, by thread.
 	rowFx map[string]rowGagFx
+	// The diff panel: each file's viewer, by path, and their layout.
+	diffs      map[string]*editor.DiffState
+	diffLayout editor.DiffLayout
 	// shells are the terminal drawer's shells, by project.
 	shells map[string]*shell
 	// snoozeFor is the thread whose snooze popover is open.
@@ -178,6 +182,8 @@ func newApp() *app {
 		sectionClosed: map[category]bool{catSettled: true},
 		rowFx:         map[string]rowGagFx{},
 		shells:        map[string]*shell{},
+		diffs:         map[string]*editor.DiffState{},
+		diffLayout:    editor.DiffUnified,
 		settings: settings{
 			theme:         0,
 			glass:         true,

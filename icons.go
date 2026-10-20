@@ -20,6 +20,7 @@ var (
 	icFolderOpen = lucide(`<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>`)
 	icChevronR   = lucide(`<path d="m9 18 6-6-6-6"/>`)
 	icChevronD   = lucide(`<path d="m6 9 6 6 6-6"/>`)
+	icChevronUp  = lucide(`<path d="m18 15-6-6-6 6"/>`)
 	icSettings   = lucide(`<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>`)
 	icArrowUp    = lucide(`<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>`)
 	icTerminal   = lucide(`<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>`)

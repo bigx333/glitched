@@ -77,33 +77,6 @@ type fileChange struct {
 	del  int
 }
 
-type diffLine struct {
-	kind byte // ' ', '+', '-', '@'
-	text string
-}
-
-var sampleDiff = []diffLine{
-	{'@', "@@ -42,9 +42,14 @@ export function Sidebar({ projects }: SidebarProps) {"},
-	{' ', "  const threads = useThreads(project.id);"},
-	{' ', "  const [expanded, setExpanded] = useState(true);"},
-	{'-', "  const sorted = threads.sort((a, b) => b.updatedAt - a.updatedAt);"},
-	{'+', "  const sorted = useMemo("},
-	{'+', "    () => [...threads].sort((a, b) => b.updatedAt - a.updatedAt),"},
-	{'+', "    [threads],"},
-	{'+', "  );"},
-	{' ', ""},
-	{' ', "  return ("},
-	{' ', "    <SidebarGroup>"},
-	{'-', "      <SidebarGroupLabel>{project.name}</SidebarGroupLabel>"},
-	{'+', "      <SidebarGroupLabel onClick={() => setExpanded(!expanded)}>"},
-	{'+', "        <ChevronIcon open={expanded} />"},
-	{'+', "        {project.name}"},
-	{'+', "      </SidebarGroupLabel>"},
-	{' ', "      {expanded && sorted.map((t) => ("},
-	{' ', "        <ThreadRow key={t.id} thread={t} />"},
-	{' ', "      ))}"},
-}
-
 func mockProjects() []*project {
 	active := &thread{
 		id:     "t1",

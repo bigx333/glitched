@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 )
 
 // The prototype builds without a window, and its toggles respond.
@@ -412,5 +413,32 @@ func TestGagTiming(t *testing.T) {
 	}
 	if _, ok := a.rowFx[th.id]; !ok {
 		t.Error("jk didn't play after the row landed")
+	}
+}
+
+// The diff panel shows each file's real diff, unified by default, and
+// accepting a change counts it out.
+func TestDiffPanel(t *testing.T) {
+	a := newApp()
+	a.showDiff = true
+	tt := ui.NewTester(a.view, 1320, 860)
+	d := a.diffFor("apps/web/src/components/Sidebar.tsx")
+	if d.Layout != editor.DiffUnified || !tt.HasText("Unified") {
+		t.Fatalf("layout %v", d.Layout)
+	}
+	n := len(d.Hunks())
+	if n == 0 {
+		t.Fatal("no changes in the mock diff")
+	}
+	d.Accept(0)
+	tt.Frame()
+	if len(d.Hunks()) != n-1 {
+		t.Errorf("%d changes after accepting one of %d", len(d.Hunks()), n)
+	}
+	if err := tt.Click("Split"); err != nil {
+		t.Fatal(err)
+	}
+	if a.diffLayout != editor.DiffSplit {
+		t.Error("Split did not switch the layout")
 	}
 }
