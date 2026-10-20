@@ -78,7 +78,7 @@ type inboxItem struct {
 func (a *app) itemsIn(cat category) []inboxItem {
 	var items []inboxItem
 	for _, p := range a.projects {
-		if a.projectFilter != "" && p.id != a.projectFilter {
+		if len(a.projectFilter) > 0 && !a.projectFilter[p.id] {
 			continue
 		}
 		for _, t := range p.threads {
@@ -113,11 +113,27 @@ func (a *app) threadsNav(c *ui.Context) {
 		}
 	})
 	a.projectStrip(c)
-	ui.Scroll(c).Grow(1).Padding(4, 8, 8).Gap(10).Children(func() {
+	// What needs the user at the top, the inbox; what's out of their hands
+	// at the bottom, over Settings, Working, Snoozed and Settled, each only
+	// while it has threads.
+	sections := func(cats ...category) {
 		for _, s := range categories {
-			a.section(c, s.cat, s.title, s.empty, s.icon, s.color)
+			for _, cat := range cats {
+				if s.cat == cat {
+					a.section(c, s.cat, s.title, s.empty, s.icon, s.color)
+				}
+			}
 		}
+	}
+	ui.Scroll(c).Grow(1).Padding(4, 8, 8).Gap(10).Children(func() {
+		sections(catInbox)
 	})
+	if len(a.itemsIn(catWorking))+len(a.itemsIn(catSnoozed))+len(a.itemsIn(catSettled)) > 0 {
+		// Settled may hold many: past half the sidebar, they scroll.
+		ui.Scroll(c).Key("bottom").MaxHeightPercent(50).Shrink(0).Padding(6, 8).Gap(6).Children(func() {
+			sections(catWorking, catSnoozed, catSettled)
+		})
+	}
 	ui.Column(c).Padding(8).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
 		if ghost(c, "settings", false).Padding(7, 8).Children(func() {
 			ui.Icon(c, icSettings).FontSize(15).TextColor(tintSettings)
@@ -136,31 +152,46 @@ func projectTile(c *ui.Context, p *project, size float32) ui.Element {
 		Children(func() { ui.Icon(c, p.icon).FontSize(size * 0.6).TextColor(ui.Hex("#ffffff")) })
 }
 
-// projectStrip filters the inbox to one project: All, then each project's
-// tile, then a button adding one.
+// projectStrip filters the inbox to some of the projects: each project's
+// tile toggles it in or out, All shows them all again, as does choosing
+// every one; then a button adding a project.
 func (a *app) projectStrip(c *ui.Context) {
+	filtered := len(a.projectFilter) > 0
 	ui.Row(c).Padding(6, 12, 6, 14).Gap(4).AlignItems(ui.Center).Children(func() {
-		all := ghost(c, "all", a.projectFilter == "").Padding(4, 8).Tooltip("All projects")
+		all := ghost(c, "all", !filtered).Padding(4, 8).Tooltip("All projects")
 		if all.Children(func() { ui.Text(c, "All").FontSize(11.5).FontWeight(500) }).Clicked() {
-			a.projectFilter = ""
+			clear(a.projectFilter)
 		}
 		for _, p := range a.projects {
-			on := a.projectFilter == p.id
-			b := ghost(c, p.id, on).Padding(3).Label(p.name).Tooltip(p.name)
-			if !on && a.projectFilter != "" {
-				b.Opacity(0.5)
+			on := a.projectFilter[p.id]
+			tip := "Show " + p.name
+			if on {
+				tip = "Hide " + p.name
+			}
+			b := ghost(c, p.id, on).Padding(3).Label(p.name).Tooltip(tip)
+			if filtered && !on {
+				b.Opacity(0.45)
 			}
 			if b.Children(func() { projectTile(c, p, 20) }).Clicked() {
-				if on {
-					a.projectFilter = ""
-				} else {
-					a.projectFilter = p.id
-				}
+				a.toggleProject(p.id)
 			}
 		}
 		ui.Spacer(c)
 		iconButton(c, "add-project", icPlus, "Add project", false).Padding(4)
 	})
+}
+
+// toggleProject puts a project in the sidebar's filter or takes it out;
+// a filter of every project, or of none, is no filter.
+func (a *app) toggleProject(id string) {
+	if a.projectFilter[id] {
+		delete(a.projectFilter, id)
+	} else {
+		a.projectFilter[id] = true
+	}
+	if len(a.projectFilter) == len(a.projects) {
+		clear(a.projectFilter)
+	}
 }
 
 // section lists a category's threads under a header that opens and closes
@@ -169,24 +200,39 @@ func (a *app) projectStrip(c *ui.Context) {
 func (a *app) section(c *ui.Context, cat category, title, empty string, icon *ui.SVG, color ui.Color) {
 	items := a.itemsIn(cat)
 	open := !a.sectionClosed[cat]
+	if len(items) == 0 && cat != catInbox {
+		return // Working, Snoozed and Settled show only while they have threads
+	}
+	// The inbox is always open: its header is a title, not a button.
+	collapsible := cat != catInbox
+	if !collapsible {
+		open = true
+	}
 	ui.Column(c).Key(title).Gap(2).Children(func() {
-		if len(items) > 0 || cat == catInbox {
-			if ghost(c, "head", false).Height(30).Padding(0, 8).Gap(8).Children(func() {
-				ui.Icon(c, icon).FontSize(14).TextColor(color)
-				ui.Text(c, title).FontSize(12.5).FontWeight(600).TextColor(palette.text)
-				if len(items) > 0 {
-					count := ui.Textf(c, "%d", len(items)).FontSize(11).FontWeight(600).Padding(1, 7).Radius(999)
-					if cat == catInbox && a.unreadCount() > 0 {
-						count.Background(color.Alpha(0.2)).TextColor(color)
-					} else {
-						count.Background(palette.hover).TextColor(palette.muted)
-					}
+		var head ui.Element
+		if collapsible {
+			head = ghost(c, "head", false)
+		} else {
+			head = ui.Row(c).Key("head").AlignItems(ui.Center)
+		}
+		head.Height(30).Padding(0, 8).Gap(8).Children(func() {
+			ui.Icon(c, icon).FontSize(14).TextColor(color)
+			ui.Text(c, title).FontSize(12.5).FontWeight(600).TextColor(palette.text)
+			if len(items) > 0 {
+				count := ui.Textf(c, "%d", len(items)).FontSize(11).FontWeight(600).Padding(1, 7).Radius(999)
+				if cat == catInbox && a.unreadCount() > 0 {
+					count.Background(color.Alpha(0.2)).TextColor(color)
+				} else {
+					count.Background(palette.hover).TextColor(palette.muted)
 				}
+			}
+			if collapsible {
 				ui.Spacer(c)
 				chevron(c, open).TextColor(palette.faint)
-			}).Clicked() {
-				a.sectionClosed[cat] = open
 			}
+		})
+		if collapsible && head.Clicked() {
+			a.sectionClosed[cat] = open
 		}
 		ui.Column(c).Key("rows").Gap(2).Children(func() {
 			if !open {

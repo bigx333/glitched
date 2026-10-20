@@ -139,7 +139,7 @@ type app struct {
 	accessAt                    time.Time // when the level last changed, for its effect
 	collapsed                   map[string]bool
 	// The inbox: the project it's filtered to, and its closed sections.
-	projectFilter string
+	projectFilter map[string]bool // the projects the sidebar shows; none is all
 	sectionClosed map[category]bool
 	// rowFx is the joke playing on a thread's row, by thread.
 	rowFx map[string]rowGagFx
@@ -204,6 +204,7 @@ func newApp() *app {
 		access:        accessAuto,
 		collapsed:     map[string]bool{},
 		sectionClosed: map[category]bool{catSettled: true},
+		projectFilter: map[string]bool{},
 		rowFx:         map[string]rowGagFx{},
 		shells:        map[string]*shell{},
 		diffs:         map[string]*editor.DiffState{},

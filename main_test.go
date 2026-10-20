@@ -619,3 +619,42 @@ func TestTurnMarkers(t *testing.T) {
 		t.Error("the first message isn't in view")
 	}
 }
+
+// The sidebar shows the projects chosen, several at once; choosing every
+// one is showing all.
+func TestProjectFilter(t *testing.T) {
+	a := newApp()
+	tt := ui.NewTester(a.view, 1320, 860)
+	shown := func() map[string]bool {
+		m := map[string]bool{}
+		for _, cat := range []category{catInbox, catWorking, catSnoozed, catSettled} {
+			for _, it := range a.itemsIn(cat) {
+				m[it.p.name] = true
+			}
+		}
+		return m
+	}
+	for _, name := range []string{"t3code", "agent-phone"} {
+		if err := tt.Click(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s := shown(); !s["t3code"] || !s["agent-phone"] || s["mygo"] {
+		t.Errorf("filtered to t3code and agent-phone, the sidebar shows %v", s)
+	}
+	if err := tt.Click("mygo"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.projectFilter) != 0 {
+		t.Errorf("every project chosen should be no filter, got %v", a.projectFilter)
+	}
+	if err := tt.Click("agent-phone"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("All"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.projectFilter) != 0 {
+		t.Error("All should clear the filter")
+	}
+}
