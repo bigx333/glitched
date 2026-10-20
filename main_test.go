@@ -442,3 +442,27 @@ func TestDiffPanel(t *testing.T) {
 		t.Error("Split did not switch the layout")
 	}
 }
+
+// The timeline starts at its end; scrolled up, a pill takes it back.
+func TestTimelineFollowsEnd(t *testing.T) {
+	a := newApp()
+	tt := ui.NewTester(a.view, 1320, 860)
+	_, th := a.current()
+	l := a.listFor(th)
+	tt.Advance(time.Second)
+	if !l.AtEnd() || tt.HasText("Jump to latest") {
+		t.Fatal("timeline should open at its end, without the pill")
+	}
+	l.ScrollTo(0, ui.Start)
+	tt.Advance(time.Second)
+	if l.AtEnd() || !tt.HasText("Jump to latest") {
+		t.Fatal("scrolled to the top, the pill should show")
+	}
+	if err := tt.Click("Jump to latest"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Advance(2 * time.Second)
+	if !l.AtEnd() {
+		t.Error("Jump to latest did not scroll to the end")
+	}
+}

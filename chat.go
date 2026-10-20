@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"math"
 	"math/rand/v2"
 	"strings"
 	"time"
@@ -154,21 +153,54 @@ func pill(c *ui.Context, label string) ui.Element {
 		Padding(2, 7).Radius(999).Border(1, palette.border)
 }
 
-func (a *app) timeline(c *ui.Context, t *thread) {
-	// Follow the end while the user is there, as a reply streams in.
-	if a.scroll.Y >= a.scroll.MaxY-48 {
-		a.scroll.Y = math.MaxFloat32
+// listFor is the thread's list of entries, kept per thread so that each
+// keeps where it was scrolled to.
+func (a *app) listFor(t *thread) *ui.ListState {
+	l := a.lists[t.id]
+	if l == nil {
+		l = &ui.ListState{}
+		a.lists[t.id] = l
 	}
-	ui.Scroll(c).Key(t.id).TrackScroll(&a.scroll).Fill().AlignItems(ui.Center).
-		Padding(headerHeight+20, 24, composerRoom).ScrollbarInsets(headerHeight, 0, composerRoom-40, 0).Children(func() {
-		ui.Column(c).WidthPercent(100).MaxWidth(contentWidth).Gap(22).Children(func() {
-			if len(t.entries) == 0 {
-				a.emptyState(c)
-			}
-			for i, e := range t.entries {
-				a.entry(c, t, i, e)
-			}
+	return l
+}
+
+// timeline lists the thread's entries, as MyGo's markdown-chat does: the
+// list builds only those in view, starts at the end and follows it as a
+// reply streams in, gliding, until the user scrolls up; scrolling back to
+// the end follows it again. Each entry is in the middle of a row as wide
+// as the pane, so that the wheel scrolls it wherever the pointer is.
+func (a *app) timeline(c *ui.Context, t *thread) {
+	l := a.listFor(t)
+	l.Key = func(i int) any { return fmt.Sprintf("%s/%d", t.id, i) }
+	l.FollowEnd = true
+	l.FollowAnimation = &ui.Smooth
+	ui.List(c.Key(t.id), l, len(t.entries), func(i int) {
+		ui.Row(c).Justify(ui.Center).Children(func() {
+			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, i, t.entries[i]) })
 		})
+	}).Fill().Padding(headerHeight+20, 24, composerRoom, 24).Gap(22).Justify(ui.End).
+		ScrollbarInsets(headerHeight, 0, composerRoom-40, 0).Children(func() {
+		if len(t.entries) == 0 {
+			ui.Row(c).Justify(ui.Center).Children(func() { a.emptyState(c) })
+		}
+	})
+	a.jumpToLatest(c, l)
+}
+
+// jumpToLatest floats a pill over the composer while the user has
+// scrolled up from the end, which takes them back.
+func (a *app) jumpToLatest(c *ui.Context, l *ui.ListState) {
+	if l.AtEnd() {
+		return
+	}
+	ui.Row(c).Absolute().Left(0).Right(0).Bottom(composerRoom - 24).Justify(ui.Center).PassThrough().Children(func() {
+		b := a.glassButton(c, "jump").Padding(5, 12).Transition(riseIn)
+		if b.Children(func() {
+			ui.Icon(c, icArrowDown).FontSize(13)
+			ui.Text(c, "Jump to latest").FontSize(12)
+		}).Clicked() {
+			l.ScrollToEnd()
+		}
 	})
 }
 
@@ -391,7 +423,7 @@ func (a *app) send(t *thread) {
 		}
 	}
 	a.draft = ""
-	a.scroll.Y = math.MaxFloat32
+	a.listFor(t).ScrollToEnd()
 	t.entries = append(t.entries, entry{kind: entryUser, text: text})
 	// The thread goes to Working while the agent runs, out of the
 	// snoozed and settled ones.

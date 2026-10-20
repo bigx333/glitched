@@ -143,6 +143,8 @@ type app struct {
 	sectionClosed map[category]bool
 	// rowFx is the joke playing on a thread's row, by thread.
 	rowFx map[string]rowGagFx
+	// lists are the threads' timelines, by thread.
+	lists map[string]*ui.ListState
 	// The diff panel: each file's viewer, by path, and their layout.
 	diffs      map[string]*editor.DiffState
 	diffLayout editor.DiffLayout
@@ -162,8 +164,7 @@ type app struct {
 	glassOffset ui.Point
 	checkUntil  time.Time
 
-	md     markdown.Options
-	scroll ui.ScrollState
+	md markdown.Options
 }
 
 func newApp() *app {
@@ -183,6 +184,7 @@ func newApp() *app {
 		rowFx:         map[string]rowGagFx{},
 		shells:        map[string]*shell{},
 		diffs:         map[string]*editor.DiffState{},
+		lists:         map[string]*ui.ListState{},
 		diffLayout:    editor.DiffUnified,
 		settings: settings{
 			theme:         0,
@@ -218,7 +220,6 @@ func (a *app) current() (*project, *thread) {
 
 func (a *app) select_(id string) {
 	a.selected = id
-	a.scroll.Y = 1e9
 	if a.router.Path() != "/" {
 		a.router.Push("/")
 	}
