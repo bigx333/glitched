@@ -216,7 +216,7 @@ func newApp() *app {
 		settings: settings{
 			theme:         0,
 			glass:         true,
-			vibrancy:      0.4,
+			vibrancy:      0.85,
 			wind:          true,
 			fontSize:      13,
 			timeFormat:    "Relative",
@@ -334,8 +334,13 @@ func (a *app) view(c *ui.Context) {
 	}
 	root.Children(func() {
 		a.sidebarFrame(c)
-		ui.Box(c).Grow(1).Shrink(1).Background(palette.bg).Children(func() {
-			a.ambient(c)
+		// The pages paint their own backgrounds, under their headers,
+		// which show the window's vibrancy as the sidebar does.
+		main := ui.Box(c).Grow(1).Shrink(1)
+		if !a.vibrant {
+			main.Background(palette.bg)
+		}
+		main.Children(func() {
 			ui.Column(c).Fill().Children(func() { a.pages(c) })
 		})
 	})
@@ -449,4 +454,14 @@ func main() {
 
 func matches(s, q string) bool {
 	return q == "" || strings.Contains(strings.ToLower(s), strings.ToLower(q))
+}
+
+// chrome is the look of the window's bars, the sidebar's and the
+// headers': the window's vibrancy tinted with the background by as much
+// as the setting leaves, or the background where there is none.
+func (a *app) chrome(e ui.Element) ui.Element {
+	if a.vibrant {
+		return e.Background(palette.bg.Alpha(float32(1 - a.settings.vibrancy)))
+	}
+	return e.Background(palette.bg)
 }

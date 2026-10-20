@@ -33,17 +33,18 @@ func (a *app) chatPage(c *ui.Context) {
 	}
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		ui.Column(c).Key("chat").Grow(1).Shrink(1).MinWidth(360).Children(func() {
-			pane := ui.Box(c).Grow(1)
+			// The header is glass, the window's vibrancy as the sidebar's;
+			// the chat is below it, on the background, and doesn't scroll
+			// under it.
+			a.header(c, p, t)
+			pane := ui.Box(c).Grow(1).Background(palette.bg)
 			a.windBackground(c, pane)
 			pane.Children(func() {
+				a.ambient(c)
 				a.timeline(c, t)
-				// What scrolls under the header frosts, and fades out
-				// under the composer.
-				ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(headerHeight).PassThrough().
-					Material(glass.ScrollEdge{Hard: true, Background: palette.bg})
+				// What scrolls fades out under the composer.
 				ui.Box(c).Absolute().Bottom(0).Left(0).Right(0).Height(composerRoom - 40).PassThrough().
 					Material(glass.ScrollEdge{Bottom: true, Background: palette.bg})
-				a.header(c, p, t)
 				a.composer(c, t)
 			})
 			if a.showTerminal {
@@ -105,8 +106,10 @@ func (a *app) header(c *ui.Context, p *project, t *thread) {
 	bar := c.TitleBar()
 	// Clear of the traffic lights as the sidebar slides away from them.
 	left := 16 + bar.Left*(1-a.sidebarOpen)
-	ui.Row(c).Absolute().Top(0).Left(0).Right(0).Height(max(bar.Height, headerHeight)).
-		Padding(0, 12, 0, left).Gap(8).AlignItems(ui.Center).DragWindow().Children(func() {
+	head := ui.Row(c).Height(max(bar.Height, headerHeight)).Shrink(0).
+		Padding(0, 12, 0, left).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border)
+	a.chrome(head)
+	head.DragWindow().Children(func() {
 		if !a.showSidebar {
 			if iconButton(c, "show-sidebar", icPanelLeft, "Show sidebar  ⌘B", false).Clicked() {
 				a.toggleSidebar(false)
@@ -116,7 +119,7 @@ func (a *app) header(c *ui.Context, p *project, t *thread) {
 		pill(c, p.name)
 		ui.Spacer(c)
 
-		a.glassButton(c, "open").Children(func() {
+		headerButton(c, "open").Children(func() {
 			ui.Icon(c, icCode).FontSize(14)
 			ui.Text(c, "Open").SingleLine()
 			ui.Icon(c, icChevronD).FontSize(11)
@@ -127,7 +130,7 @@ func (a *app) header(c *ui.Context, p *project, t *thread) {
 			m.Separator()
 			m.Item("Finder")
 		})
-		if a.glassButton(c, "commit").Children(func() {
+		if headerButton(c, "commit").Children(func() {
 			ui.Icon(c, icUpload).FontSize(14)
 			ui.Text(c, "Commit & push").SingleLine()
 		}).Clicked() {
@@ -149,6 +152,12 @@ func (a *app) header(c *ui.Context, p *project, t *thread) {
 			}
 		})
 	})
+}
+
+// headerButton is a button of the header's glass bar: a hairline pill,
+// over the window's vibrancy rather than glass over the chat.
+func headerButton(c *ui.Context, key any) ui.Element {
+	return ghost(c, key, false).Padding(5, 11).Radius(999).Border(1, palette.border).TextColor(palette.text)
 }
 
 // glassButton is a pill of interactive glass, which swells as it's pressed.
@@ -188,8 +197,8 @@ func (a *app) timeline(c *ui.Context, t *thread) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, i, t.entries[i]) })
 		})
-	}).Fill().Padding(headerHeight+20, 24, composerRoom, 24).Gap(22).Justify(ui.End).
-		ScrollbarInsets(headerHeight, 0, composerRoom-40, 0).Children(func() {
+	}).Fill().Padding(20, 24, composerRoom, 24).Gap(22).Justify(ui.End).
+		ScrollbarInsets(0, 0, composerRoom-40, 0).Children(func() {
 		if len(t.entries) == 0 {
 			ui.Row(c).Justify(ui.Center).Children(func() { a.emptyState(c) })
 		}

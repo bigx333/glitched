@@ -56,10 +56,11 @@ func unreachablePage(url string) string {
 
 func (a *app) previewPanel(c *ui.Context) {
 	v := a.previewView()
-	ui.Column(c).Width(previewWidth).FillHeight().Background(palette.sidebar).BorderWidth(0, 0, 0, 1).BorderColor(palette.border).Children(func() {
+	ui.Column(c).Width(previewWidth).FillHeight().BorderWidth(0, 0, 0, 1).BorderColor(palette.border).Children(func() {
 		bar := c.TitleBar()
-		ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 10).Gap(4).AlignItems(ui.Center).
-			BorderWidth(0, 0, 1, 0).BorderColor(palette.border).DragWindow().Children(func() {
+		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 10).Gap(4).AlignItems(ui.Center).
+			BorderWidth(0, 0, 1, 0).BorderColor(palette.border)
+		a.chrome(head).DragWindow().Children(func() {
 			back := iconButton(c, "back", icArrowLeft, "Back", false).Padding(5)
 			fwd := iconButton(c, "forward", icArrowRight, "Forward", false).Padding(5)
 			reload := iconButton(c, "reload", icRotate, "Reload", false).Padding(5)
@@ -96,14 +97,17 @@ func (a *app) previewPanel(c *ui.Context) {
 				a.showPreview = false
 			}
 		})
-		switch {
-		case v != nil:
-			ui.WebView(c, v).Grow(1)
-		case a.previewErr != "":
-			ui.Text(c, "The preview could not start: "+a.previewErr).TextColor(palette.muted).Margin(ui.Auto).Padding(24)
-		default:
-			ui.Text(c, "The preview shows here, in the app's window.").TextColor(palette.muted).Margin(ui.Auto)
-		}
+		// Below its glass header, the panel on the sidebar's color.
+		ui.Column(c).Grow(1).Background(palette.sidebar).Children(func() {
+			switch {
+			case v != nil:
+				ui.WebView(c, v).Grow(1)
+			case a.previewErr != "":
+				ui.Text(c, "The preview could not start: "+a.previewErr).TextColor(palette.muted).Margin(ui.Auto).Padding(24)
+			default:
+				ui.Text(c, "The preview shows here, in the app's window.").TextColor(palette.muted).Margin(ui.Auto)
+			}
+		})
 	})
 }
 

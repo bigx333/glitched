@@ -147,10 +147,11 @@ func (a *app) diffPanel(c *ui.Context, t *thread) {
 	for _, e := range t.entries {
 		files = append(files, e.files...)
 	}
-	ui.Column(c).Width(a.diffWidth()).FillHeight().Background(palette.sidebar).BorderWidth(0, 0, 0, 1).BorderColor(palette.border).Children(func() {
+	ui.Column(c).Width(a.diffWidth()).FillHeight().BorderWidth(0, 0, 0, 1).BorderColor(palette.border).Children(func() {
 		bar := c.TitleBar()
-		ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 14).Gap(8).AlignItems(ui.Center).
-			BorderWidth(0, 0, 1, 0).BorderColor(palette.border).DragWindow().Children(func() {
+		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 14).Gap(8).AlignItems(ui.Center).
+			BorderWidth(0, 0, 1, 0).BorderColor(palette.border)
+		a.chrome(head).DragWindow().Children(func() {
 			ui.Text(c, "Changes").FontWeight(600)
 			ui.Textf(c, "%d", len(files)).FontSize(11).TextColor(palette.muted).Padding(0, 6).Radius(999).Background(palette.hover)
 			ui.Spacer(c)
@@ -170,32 +171,35 @@ func (a *app) diffPanel(c *ui.Context, t *thread) {
 				a.showDiff = false
 			}
 		})
-		if len(files) == 0 {
-			ui.Text(c, "No changes in this thread yet.").TextColor(palette.muted).Margin(ui.Auto)
-			return
-		}
-		a.diffFile = min(a.diffFile, len(files)-1)
-		ui.Column(c).Padding(6).Gap(1).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
-			for i, f := range files {
-				if row(c, f.path, i == a.diffFile).Padding(5, 8).Children(func() {
-					ui.Icon(c, icFile).FontSize(12)
-					ui.Text(c, f.path).FontSize(12).Font("monospace").SingleLine().Grow(1).Shrink(1)
-					add, del := a.diffStats(f.path)
-					counts(c, add, del)
-				}).Clicked() {
-					a.diffFile = i
-				}
+		// Below its glass header, the panel on the sidebar's color.
+		ui.Column(c).Grow(1).Background(palette.sidebar).Children(func() {
+			if len(files) == 0 {
+				ui.Text(c, "No changes in this thread yet.").TextColor(palette.muted).Margin(ui.Auto)
+				return
 			}
+			a.diffFile = min(a.diffFile, len(files)-1)
+			ui.Column(c).Padding(6).Gap(1).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
+				for i, f := range files {
+					if row(c, f.path, i == a.diffFile).Padding(5, 8).Children(func() {
+						ui.Icon(c, icFile).FontSize(12)
+						ui.Text(c, f.path).FontSize(12).Font("monospace").SingleLine().Grow(1).Shrink(1)
+						add, del := a.diffStats(f.path)
+						counts(c, add, del)
+					}).Clicked() {
+						a.diffFile = i
+					}
+				}
+			})
+			path := files[a.diffFile].path
+			if _, ok := fileTexts[path]; !ok {
+				ui.Text(c, "No preview for this file.").TextColor(palette.muted).Margin(ui.Auto)
+				return
+			}
+			d := a.diffFor(path)
+			d.Layout = a.diffLayout
+			a.hunkBar(c, d)
+			editor.DiffView(c.Key(path), d).Grow(1).FillWidth()
 		})
-		path := files[a.diffFile].path
-		if _, ok := fileTexts[path]; !ok {
-			ui.Text(c, "No preview for this file.").TextColor(palette.muted).Margin(ui.Auto)
-			return
-		}
-		d := a.diffFor(path)
-		d.Layout = a.diffLayout
-		a.hunkBar(c, d)
-		editor.DiffView(c.Key(path), d).Grow(1).FillWidth()
 	})
 }
 

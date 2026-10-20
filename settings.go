@@ -12,8 +12,9 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 	bar := c.TitleBar()
 	left := 24 + bar.Left*(1-a.sidebarOpen)
 	ui.Column(c).Fill().Children(func() {
-		ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 12, 0, left).Gap(8).AlignItems(ui.Center).
-			BorderWidth(0, 0, 1, 0).BorderColor(palette.border).DragWindow().Children(func() {
+		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Shrink(0).Padding(0, 12, 0, left).Gap(8).AlignItems(ui.Center).
+			BorderWidth(0, 0, 1, 0).BorderColor(palette.border)
+		a.chrome(head).DragWindow().Children(func() {
 			if !a.showSidebar {
 				if iconButton(c, "show-sidebar", icPanelLeft, "Show sidebar  ⌘B", false).Clicked() {
 					a.toggleSidebar(false)
@@ -50,7 +51,7 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 				r.Title("About")
 				a.page(c, "About", "", a.about)
 			}
-		}).Grow(1)
+		}).Grow(1).Background(palette.bg)
 	})
 }
 
