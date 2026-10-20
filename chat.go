@@ -32,7 +32,9 @@ func (a *app) chatPage(c *ui.Context) {
 		return slideFrom(x, y)
 	}
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
-		ui.Column(c).Key("chat").Grow(1).Shrink(1).MinWidth(360).Children(func() {
+		chat := ui.Column(c).Key("chat").Grow(1).Shrink(1).MinWidth(minChatWidth)
+		a.chatWidth = chat.Bounds().W
+		chat.Children(func() {
 			// The header is glass, the window's vibrancy as the sidebar's;
 			// the chat is below it, on the background, and doesn't scroll
 			// under it.
@@ -60,7 +62,7 @@ func (a *app) chatPage(c *ui.Context) {
 		case a.showDiff:
 			ui.Column(c).Key("diff").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.diffPanel(c, t) })
 		case a.showPreview:
-			ui.Column(c).Key("preview").Width(previewWidth).Transition(panel(16, 0)).Children(func() { a.previewPanel(c) })
+			ui.Column(c).Key("preview").Width(a.previewWidth()).Transition(panel(16, 0)).Children(func() { a.previewPanel(c) })
 		}
 	})
 }
@@ -113,21 +115,28 @@ func (a *app) header(c *ui.Context, p *project, t *thread) {
 	bar := c.TitleBar()
 	// Clear of the traffic lights as the sidebar slides away from them.
 	left := 16 + bar.Left*(1-a.sidebarOpen)
+	// Narrow, beside a panel, the header keeps to icons, and never draws
+	// past the chat's edge.
+	narrow := a.chatWidth < 700
 	head := ui.Row(c).Height(max(bar.Height, headerHeight)).Shrink(0).
-		Padding(0, 12, 0, left).Gap(8).AlignItems(ui.Center)
+		Padding(0, 12, 0, left).Gap(8).AlignItems(ui.Center).ClipX()
 	head.DragWindow().Children(func() {
 		if !a.showSidebar {
 			if iconButton(c, "show-sidebar", icPanelLeft, "Show sidebar  ⌘B", false).Clicked() {
 				a.toggleSidebar(false)
 			}
 		}
-		ui.Text(c, t.title).FontWeight(600).SingleLine().Shrink(1)
-		pill(c, p.name)
+		ui.Text(c, t.title).FontWeight(600).SingleLine().Shrink(1).MinWidth(80)
+		if !narrow {
+			pill(c, p.name).Shrink(0)
+		}
 		ui.Spacer(c)
 
-		headerButton(c, "open").Children(func() {
+		headerButton(c, "open").Shrink(0).Label("Open in").Tooltip("Open in").Children(func() {
 			ui.Icon(c, icCode).FontSize(14)
-			ui.Text(c, "Open").SingleLine()
+			if !narrow {
+				ui.Text(c, "Open").SingleLine()
+			}
 			ui.Icon(c, icChevronD).FontSize(11)
 		}).Menu(func(m *ui.Menu) {
 			m.Item("Cursor")
@@ -136,13 +145,15 @@ func (a *app) header(c *ui.Context, p *project, t *thread) {
 			m.Separator()
 			m.Item("Finder")
 		})
-		if headerButton(c, "commit").Children(func() {
+		if headerButton(c, "commit").Shrink(0).Label("Commit & push").Tooltip("Commit & push").Children(func() {
 			ui.Icon(c, icUpload).FontSize(14)
-			ui.Text(c, "Commit & push").SingleLine()
+			if !narrow {
+				ui.Text(c, "Commit & push").SingleLine()
+			}
 		}).Clicked() {
 			c.AddToast(ui.Toast{Title: "Pushed to origin", Description: t.branch + " · 2 files, +23 −2"})
 		}
-		ui.Row(c).Padding(2).Gap(2).Radius(10).Children(func() {
+		ui.Row(c).Padding(2).Gap(2).Radius(10).Shrink(0).Children(func() {
 			if iconButton(c, "terminal", icTerminal, "Toggle terminal  ⌘J", a.showTerminal).Clicked() {
 				a.showTerminal, a.panelsJump = !a.showTerminal, false
 			}
@@ -203,7 +214,7 @@ func (a *app) timeline(c *ui.Context, t *thread) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, i, t.entries[i]) })
 		})
-	}).Fill().Padding(20, 24, composerRoom, 24).Gap(22).Justify(ui.End).
+	}).Fill().Padding(20, 24, composerRoom, markerColumnW+12).Gap(22).Justify(ui.End).
 		ScrollbarInsets(0, 0, composerRoom-40, 0).Children(func() {
 		if len(t.entries) == 0 {
 			ui.Row(c).Justify(ui.Center).Children(func() { a.emptyState(c) })

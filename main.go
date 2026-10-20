@@ -175,6 +175,10 @@ type app struct {
 	// windDraw paints the wind's field behind the chat, as the frame's
 	// pane has it.
 	windDraw func(p *ui.Painter, r ui.Rect)
+	// roomBeside is the window's width beside the sidebar, and chatWidth
+	// the chat's, as the last frame laid them out: the panels size to the
+	// one and the header to the other.
+	roomBeside, chatWidth float32
 	// composerOpened is the composer brought back to its full size by a
 	// click while compact, until the end of the thread shows again.
 	composerOpened bool
@@ -327,6 +331,9 @@ func (a *app) view(c *ui.Context) {
 	// appearance: the sidebar shows it while the app's theme matches, and
 	// the Liquid Glass setting is on.
 	a.now = c.Now()
+	if w, _ := c.Size(); w > 0 {
+		a.roomBeside = w - a.sidebarWidth*a.sidebarOpen
+	}
 	// Jokes over are gone, whether or not their rows show: a row in a
 	// closed section isn't built to see its own end.
 	for id, fx := range a.rowFx {

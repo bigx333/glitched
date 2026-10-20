@@ -9,10 +9,11 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with PAGE for a
-// path, DIFF, TERM2, CMDK, LIGHT, PICKER=<effort>, FAST and STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH, TICK=<turn>, TINT=0..1, SCROLLUP, GAG=snooze|settle|undo with AT=350ms for what to show, and HIDE=60ms for
+// path, DIFF, TERM2, CMDK, LIGHT, PICKER=<effort>, FAST and STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH, TICK=<turn>, TINT=0..1, SCROLLUP, SPLIT, WIDTH=1100, GAG=snooze|settle|undo with AT=350ms for what to show, and HIDE=60ms for
 // a frame that long into hiding the sidebar.
 func TestShot(t *testing.T) {
 	out := os.Getenv("SHOT")
@@ -21,6 +22,9 @@ func TestShot(t *testing.T) {
 	}
 	a := newApp()
 	a.showDiff = os.Getenv("DIFF") != ""
+	if os.Getenv("SPLIT") != "" {
+		a.showDiff, a.diffLayout = true, editor.DiffSplit
+	}
 	a.showTerminal = os.Getenv("TERM2") != ""
 	a.settings.theme = 2
 	if os.Getenv("LIGHT") != "" {
@@ -32,7 +36,11 @@ func TestShot(t *testing.T) {
 	if p := os.Getenv("PAGE"); p != "" {
 		a.router.Push(p)
 	}
-	tt := ui.NewTester(a.view, 1320, 860)
+	w := 1320
+	if v := os.Getenv("WIDTH"); v != "" {
+		fmt.Sscan(v, &w)
+	}
+	tt := ui.NewTester(a.view, w, 860)
 	if os.Getenv("CMDK") != "" {
 		a.openCommandPalette()
 	}

@@ -225,9 +225,23 @@ func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 }
 
 // diffWidth is the panel's width: wider side by side.
+// diffWidth is the panel's width: a share of the room beside the sidebar,
+// wider side by side, and never so wide the chat has less than
+// minChatWidth.
 func (a *app) diffWidth() float32 {
+	share, lo, hi := float32(0.42), float32(380), float32(520)
 	if a.diffLayout == editor.DiffSplit {
-		return 680
+		share, lo, hi = 0.58, 480, 820
 	}
-	return 480
+	return panelWidth(a.roomBeside, share, lo, hi)
+}
+
+// minChatWidth is the least room the chat keeps beside a panel.
+const minChatWidth = 420
+
+// panelWidth is a panel's width in room DIPs beside the sidebar: share of
+// it, within lo and hi, leaving the chat minChatWidth.
+func panelWidth(room, share, lo, hi float32) float32 {
+	w := min(max(room*share, lo), hi)
+	return max(min(w, room-minChatWidth), 0)
 }

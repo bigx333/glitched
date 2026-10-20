@@ -23,6 +23,10 @@ var accessLevels = []struct {
 	{accessFull, "Unrestricted access to the internet and any file on your computer", icShieldAlert},
 }
 
+// narrowComposer is the chat's width under which the composer's access
+// button shows only its icon, for the send button to keep its room.
+const narrowComposer = 600
+
 var (
 	danger     = ui.Hex("#f97316")
 	dangerDeep = ui.Hex("#dc2626")
@@ -175,7 +179,10 @@ func (a *app) accessPicker(c *ui.Context) {
 	}
 	if b.Children(func() {
 		a.accessIcon(c, icon)
-		ui.Text(c, a.access).FontSize(12).SingleLine()
+		// A narrow chat, beside a panel, keeps it to its icon.
+		if a.chatWidth == 0 || a.chatWidth >= narrowComposer {
+			ui.Text(c, a.access).FontSize(12).SingleLine()
+		}
 		ui.Icon(c, icChevronD).FontSize(11)
 	}).Clicked() {
 		a.accessOpen = !a.accessOpen

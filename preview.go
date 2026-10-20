@@ -106,7 +106,7 @@ func isLocal(url string) bool {
 
 func (a *app) previewPanel(c *ui.Context) {
 	v := a.previewView()
-	ui.Column(c).Width(previewWidth).FillHeight().Children(func() {
+	ui.Column(c).Width(a.previewWidth()).FillHeight().Children(func() {
 		bar := c.TitleBar()
 		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 10).Gap(4).AlignItems(ui.Center)
 		head.DragWindow().Children(func() {
@@ -157,7 +157,9 @@ func (a *app) previewPanel(c *ui.Context) {
 	})
 }
 
-const previewWidth = 560
+// previewWidth is the preview's width: as the unified diff's, a little
+// wider.
+func (a *app) previewWidth() float32 { return panelWidth(a.roomBeside, 0.45, 400, 640) }
 
 func (a *app) togglePreview() {
 	a.showPreview = !a.showPreview
