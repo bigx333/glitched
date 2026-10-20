@@ -11,7 +11,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with PAGE for a
-// path, DIFF, TERM2, CMDK, LIGHT, PICKER=<effort>, FAST and STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH, GAG=snooze|settle|undo with AT=350ms for what to show, and HIDE=60ms for
+// path, DIFF, TERM2, CMDK, LIGHT, PICKER=<effort>, FAST and STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH, TICK=<turn>, GAG=snooze|settle|undo with AT=350ms for what to show, and HIDE=60ms for
 // a frame that long into hiding the sidebar.
 func TestShot(t *testing.T) {
 	out := os.Getenv("SHOT")
@@ -44,6 +44,18 @@ func TestShot(t *testing.T) {
 			t.Fatal(err)
 		}
 		tt.Advance(d)
+	}
+	if k := os.Getenv("TICK"); k != "" {
+		// The pointer on the turn marker of that index.
+		_, th := a.current()
+		turns := turnsOf(th)
+		i := int(k[0] - '0')
+		r, ok := tt.Find("Go to: " + preview(th.entries[turns[i].entry]))
+		if !ok {
+			t.Fatal("no marker")
+		}
+		tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		tt.Advance(500 * time.Millisecond)
 	}
 	if os.Getenv("ATTACH") != "" {
 		a.attachFiles([]string{"resources/icon.png", "go.mod"})

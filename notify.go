@@ -76,3 +76,25 @@ func firstLine(md string) string {
 	}
 	return ""
 }
+
+// plainText is Markdown as prose on one line, for a preview: its marks
+// out, code blocks left out, lines joined by spaces.
+func plainText(md string) string {
+	var out []string
+	fence := false
+	for _, l := range strings.Split(md, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "```") {
+			fence = !fence
+			continue
+		}
+		if fence || strings.HasPrefix(strings.TrimSpace(l), "|") {
+			continue
+		}
+		l = strings.TrimSpace(strings.Trim(l, "#>*-` "))
+		l = strings.NewReplacer("**", "", "`", "", "*", "").Replace(l)
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, " ")
+}
