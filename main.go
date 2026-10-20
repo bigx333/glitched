@@ -395,15 +395,20 @@ func main() {
 		a.installMenu()
 		mygo.App.OnNotificationClick(a.onNotificationClick)
 		a.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:         "T3 Code",
-			Width:         1320,
-			Height:        860,
-			MinWidth:      760,
-			MinHeight:     480,
-			StateKey:      "main",
-			TitleBarStyle: mygo.TitleBarHidden,
-			Vibrancy:      mygo.VibrancySidebar,
-			Content:       ui.View(a.view),
+			Title:     "T3 Code",
+			Width:     1320,
+			Height:    860,
+			MinWidth:  760,
+			MinHeight: 480,
+			StateKey:  "main",
+			// The title bar is the view's, 52 DIPs as its header, the
+			// traffic lights inset to sit in its middle (macOS); elsewhere
+			// the window controls fill or center in a bar that high.
+			TitleBarStyle:        mygo.TitleBarHiddenInset,
+			TitleBarHeight:       headerHeight,
+			TrafficLightPosition: &mygo.Point{X: 20, Y: (headerHeight - 12) / 2},
+			Vibrancy:             mygo.VibrancySidebar,
+			Content:              ui.View(a.view),
 		})
 		// The wind's glyph atlases are drawn between the window's frames.
 		a.wind.SetLater(a.win.Update)

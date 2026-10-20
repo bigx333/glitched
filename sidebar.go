@@ -102,7 +102,7 @@ func (a *app) sidebar(c *ui.Context) {
 	inSettings := strings.HasPrefix(a.router.Path(), "/settings")
 	// Title bar: room for the traffic lights, which sit on the glass, the
 	// wordmark, and a button hiding the sidebar.
-	ui.Row(c).Height(max(bar.Height, 44)).Padding(0, 10, 0, max(bar.Left, 12)).
+	ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 10, 0, max(bar.Left, 12)).
 		AlignItems(ui.Center).Gap(6).DragWindow().Children(func() {
 		ui.Spacer(c)
 		if iconButton(c, "hide-sidebar", icPanelLeft, "Hide sidebar  ⌘B", false).Clicked() {
