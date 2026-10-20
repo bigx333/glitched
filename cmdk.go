@@ -88,15 +88,14 @@ func (a *app) commandPalette(c *ui.Context) {
 			}
 			kbd(c, "esc")
 		})
-		// The results are a ui.List, as MyGo's launcher example has them:
-		// it builds the rows in view, chooses one on a click or the keys
-		// while it has the keyboard, and opens it on Enter or a double
-		// click.
+		// The results are a ui.List, as MyGo's launcher example has them,
+		// which builds the rows in view and scrolls the choice into view.
+		// The choice is the palette's own, which the search field's arrows,
+		// Enter and clicks move: the list's selection would paint its
+		// accent on the section headers too.
 		l := &a.cmdkList
-		l.Selected = &a.cmdkIndex
 		l.Key = func(i int) any { return cmds[i].section + "/" + cmds[i].label }
-		l.Label = func(i int) string { return cmds[i].label }
-		list := ui.List(c.Key("results"), l, len(cmds), func(i int) {
+		ui.List(c.Key("results"), l, len(cmds), func(i int) {
 			cmd := cmds[i]
 			ui.Column(c).Children(func() {
 				if i == 0 || cmds[i-1].section != cmd.section {
@@ -120,10 +119,7 @@ func (a *app) commandPalette(c *ui.Context) {
 				ui.Text(c, "No results").TextColor(palette.muted).Padding(24).TextAlign(ui.Center)
 			}
 		})
-		if list.Submitted() && len(cmds) > 0 {
-			a.cmdkOpen = false
-			cmds[a.cmdkIndex].run()
-		}
+
 	})
 }
 
