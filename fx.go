@@ -40,29 +40,6 @@ func smoothstep(lo, hi, x float32) float32 {
 	return k * k * (3 - 2*k)
 }
 
-// drawPixels fills r with a grid of twinkling pixels, sparse at its left
-// and dense and bright toward its right, density from 0 to 1 of them lit.
-func drawPixels(p *ui.Painter, r ui.Rect, colors []ui.Color, density float32, secs float64) {
-	const pitch, size = 4, 2.5
-	cols, rows := int(r.W/pitch), int(r.H/pitch)
-	for c := range cols {
-		u := float32(c) / float32(max(cols-1, 1))
-		for row := range rows {
-			if hash(c, row, 0) > density*(0.35+u) {
-				continue
-			}
-			a := (0.15 + 0.85*smoothstep(0.2, 1, u)) * twinkle(c, row, secs)
-			if a < 0.04 {
-				continue
-			}
-			col := colors[int(hash(c, row, 4)*float32(len(colors)))%len(colors)]
-			x := r.X + (r.W-float32(cols)*pitch)/2 + float32(c)*pitch
-			y := r.Y + (r.H-float32(rows)*pitch)/2 + float32(row)*pitch
-			p.Fill(ui.Rect{X: x, Y: y, W: size, H: size}, col.Alpha(a), 0.6)
-		}
-	}
-}
-
 // drawBurst draws a ring of pixels bursting out of (cx, cy), k from 0 to
 // 1 into the burst, from radius r0 to about r1.
 func drawBurst(p *ui.Painter, cx, cy, r0, r1, k float32, colors []ui.Color) {
@@ -246,5 +223,42 @@ func drawElectricBorder(p *ui.Painter, r ui.Rect, radius float32, secs float64, 
 		p.StrokePath(&path, 1.2, boltCore.Alpha(0.95*lit))
 		hx, hy, _, _ := perimeter(r, radius, head)
 		drawGlow(p, hx, hy, 7, boltGlow, 0.6*lit)
+	}
+}
+
+// drawFlow draws light flowing through r, left to right, as pulses of
+// data through a fibre: lanes of comets, a bright head and a tail fading
+// behind it, over a faint glowing core. level, from 0 to 3, sets how many
+// pulses run and how fast; secs is the time, which moves them.
+func drawFlow(p *ui.Painter, r ui.Rect, level int, secs float64) {
+	if r.W <= 0 {
+		return
+	}
+	k := float32(level) / 3
+	// The core: a line of light along the fibre, brighter with effort.
+	core := ui.Rect{X: r.X, Y: r.Y + r.H/2 - 0.75, W: r.W, H: 1.5}
+	p.FillGradient(core, ui.LinearGradient{From: boltCore.Alpha(0), To: boltCore.Alpha(0.12 + 0.25*k), Angle: 90}, 0.75)
+
+	lanes := []float32{0.3, 0.5, 0.7} // across the fibre
+	pulses := 1 + level               // a lane's
+	speed := 40 + 55*float64(level)   // DIPs a second
+	tail := 18 + 22*k
+	span := float64(r.W + tail)
+	for li, lane := range lanes {
+		y := r.Y + r.H*lane
+		for i := range pulses {
+			seed := li*17 + i
+			// Each pulse at a pace and a place of its own along the lane.
+			v := speed * (0.8 + 0.4*float64(hash(seed, 0, 11)))
+			x := r.X + float32(math.Mod(secs*v+float64(hash(seed, 0, 12))*span, span)) - tail
+			lit := (0.45 + 0.55*hash(seed, 0, 13)) * (0.5 + 0.5*k)
+			h := float32(1.2)
+			if li == 1 {
+				h = 1.8 // the middle lane, the brightest
+			}
+			p.FillGradient(ui.Rect{X: x, Y: y - h/2, W: tail, H: h},
+				ui.LinearGradient{From: boltCore.Alpha(0), To: boltCore.Alpha(0.9 * lit), Angle: 90}, h/2)
+			drawGlow(p, x+tail, y, 3+2*k, boltCore, 0.55*lit)
+		}
 	}
 }

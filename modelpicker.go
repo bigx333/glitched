@@ -91,8 +91,7 @@ func effortColor(level int) ui.Color {
 }
 
 var (
-	maxPixels  = []ui.Color{ui.Hex("#fecaca"), ui.Hex("#fda4af"), ui.Hex("#ffffff"), ui.Hex("#fca5a5"), ui.Hex("#f9a8d4")}
-	highPixels = []ui.Color{ui.Hex("#f9a8d4"), ui.Hex("#c4b5fd"), ui.Hex("#ffffff")}
+	maxPixels = []ui.Color{ui.Hex("#fecaca"), ui.Hex("#fda4af"), ui.Hex("#ffffff"), ui.Hex("#fca5a5"), ui.Hex("#f9a8d4")}
 	// electric is fast mode's color: its lightning, its filled icon.
 	electric = ui.Hex("#60c3ff")
 )
@@ -367,15 +366,10 @@ func drawEffortTrack(p *ui.Painter, r ui.Rect, pos float32, level int, maxAt tim
 	fill := ui.Rect{X: track.X, Y: track.Y, W: tx - track.X, H: trackH}
 	g := ui.LinearGradient{Stops: stopsUpTo(effortStops, fill.W/r.W), Angle: 90, Oklab: true}
 	p.FillGradient(fill, g, trackH/2)
-	animating := false
-	switch {
-	case level >= 3:
-		drawPixels(p, fill, maxPixels, 1, secs)
-		animating = true
-	case level == 2:
-		drawPixels(p, fill, highPixels, 0.45, secs)
-		animating = true
-	}
+	// Light flows through the fill toward the thumb, as through a fibre:
+	// more of it, and faster, the more effort.
+	p.Clip(fill, trackH/2, func() { drawFlow(p, fill, level, secs) })
+	animating := fill.W > 0
 
 	// The stops.
 	for i := range len(efforts) {
