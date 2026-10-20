@@ -338,7 +338,7 @@ func (a *app) view(c *ui.Context) {
 		// which show the window's vibrancy as the sidebar does.
 		main := ui.Box(c).Grow(1).Shrink(1)
 		if !a.vibrant {
-			main.Background(palette.bg)
+			main.Background(palette.sidebar) // the bars' color, around the content's corner
 		}
 		main.Children(func() {
 			ui.Column(c).Fill().Children(func() { a.pages(c) })
@@ -463,5 +463,17 @@ func (a *app) chrome(e ui.Element) ui.Element {
 	if a.vibrant {
 		return e.Background(palette.bg.Alpha(float32(1 - a.settings.vibrancy)))
 	}
-	return e.Background(palette.bg)
+	return e.Background(palette.sidebar) // the sidebar's, to be one bar with it
+}
+
+// contentCard is a page's content under the bar of glass: on the
+// background, edged with a hairline along its top and left, its top left
+// corner rounded where it meets the sidebar, square once the sidebar has
+// slid away and it meets the window's edge.
+func (a *app) contentCard(e ui.Element) ui.Element {
+	r, left := 12*a.sidebarOpen, float32(0)
+	if a.sidebarOpen > 0 {
+		left = 1
+	}
+	return e.Background(palette.bg).Radius(r, 0, 0, 0).BorderWidth(1, 0, 0, left).BorderColor(palette.border).Clip()
 }

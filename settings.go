@@ -12,8 +12,7 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 	bar := c.TitleBar()
 	left := 24 + bar.Left*(1-a.sidebarOpen)
 	ui.Column(c).Fill().Children(func() {
-		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Shrink(0).Padding(0, 12, 0, left).Gap(8).AlignItems(ui.Center).
-			BorderWidth(0, 0, 1, 0).BorderColor(palette.border)
+		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Shrink(0).Padding(0, 12, 0, left).Gap(8).AlignItems(ui.Center)
 		a.chrome(head).DragWindow().Children(func() {
 			if !a.showSidebar {
 				if iconButton(c, "show-sidebar", icPanelLeft, "Show sidebar  ⌘B", false).Clicked() {
@@ -30,7 +29,7 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 			}
 			ui.Text(c, title).FontWeight(600)
 		})
-		r.View(c, func(r *ui.Route) {
+		body := r.View(c, func(r *ui.Route) {
 			switch {
 			case r.Match("/general"):
 				r.Title("General")
@@ -51,7 +50,8 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 				r.Title("About")
 				a.page(c, "About", "", a.about)
 			}
-		}).Grow(1).Background(palette.bg)
+		})
+		a.contentCard(body.Grow(1))
 	})
 }
 

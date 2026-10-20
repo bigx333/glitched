@@ -147,10 +147,9 @@ func (a *app) diffPanel(c *ui.Context, t *thread) {
 	for _, e := range t.entries {
 		files = append(files, e.files...)
 	}
-	ui.Column(c).Width(a.diffWidth()).FillHeight().BorderWidth(0, 0, 0, 1).BorderColor(palette.border).Children(func() {
+	ui.Column(c).Width(a.diffWidth()).FillHeight().Children(func() {
 		bar := c.TitleBar()
-		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 14).Gap(8).AlignItems(ui.Center).
-			BorderWidth(0, 0, 1, 0).BorderColor(palette.border)
+		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 14).Gap(8).AlignItems(ui.Center)
 		a.chrome(head).DragWindow().Children(func() {
 			ui.Text(c, "Changes").FontWeight(600)
 			ui.Textf(c, "%d", len(files)).FontSize(11).TextColor(palette.muted).Padding(0, 6).Radius(999).Background(palette.hover)
@@ -172,7 +171,7 @@ func (a *app) diffPanel(c *ui.Context, t *thread) {
 			}
 		})
 		// Below its glass header, the panel on the sidebar's color.
-		ui.Column(c).Grow(1).Background(palette.sidebar).Children(func() {
+		ui.Column(c).Grow(1).Background(palette.sidebar).BorderWidth(1, 0, 0, 1).BorderColor(palette.border).Children(func() {
 			if len(files) == 0 {
 				ui.Text(c, "No changes in this thread yet.").TextColor(palette.muted).Margin(ui.Auto)
 				return

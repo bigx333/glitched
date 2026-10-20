@@ -56,10 +56,9 @@ func unreachablePage(url string) string {
 
 func (a *app) previewPanel(c *ui.Context) {
 	v := a.previewView()
-	ui.Column(c).Width(previewWidth).FillHeight().BorderWidth(0, 0, 0, 1).BorderColor(palette.border).Children(func() {
+	ui.Column(c).Width(previewWidth).FillHeight().Children(func() {
 		bar := c.TitleBar()
-		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 10).Gap(4).AlignItems(ui.Center).
-			BorderWidth(0, 0, 1, 0).BorderColor(palette.border)
+		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 10).Gap(4).AlignItems(ui.Center)
 		a.chrome(head).DragWindow().Children(func() {
 			back := iconButton(c, "back", icArrowLeft, "Back", false).Padding(5)
 			fwd := iconButton(c, "forward", icArrowRight, "Forward", false).Padding(5)
@@ -98,7 +97,7 @@ func (a *app) previewPanel(c *ui.Context) {
 			}
 		})
 		// Below its glass header, the panel on the sidebar's color.
-		ui.Column(c).Grow(1).Background(palette.sidebar).Children(func() {
+		ui.Column(c).Grow(1).Background(palette.sidebar).BorderWidth(1, 0, 0, 1).BorderColor(palette.border).Children(func() {
 			switch {
 			case v != nil:
 				ui.WebView(c, v).Grow(1)

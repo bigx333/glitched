@@ -70,8 +70,7 @@ func kbd(c *ui.Context, keys ...string) {
 func (a *app) sidebarFrame(c *ui.Context) {
 	w := a.sidebarWidth * a.sidebarOpen
 	ui.Row(c).Key("sidebar").Width(w).Shrink(0).AlignItems(ui.Stretch).Clip().Children(func() {
-		side := ui.Column(c).Width(a.sidebarWidth).Shrink(0).Margin(0, 0, 0, w-a.sidebarWidth).
-			BorderWidth(0, 1, 0, 0).BorderColor(palette.border)
+		side := ui.Column(c).Width(a.sidebarWidth).Shrink(0).Margin(0, 0, 0, w-a.sidebarWidth)
 		switch {
 		case !a.vibrant:
 			side.Background(palette.sidebar)

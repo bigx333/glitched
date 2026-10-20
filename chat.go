@@ -37,7 +37,7 @@ func (a *app) chatPage(c *ui.Context) {
 			// the chat is below it, on the background, and doesn't scroll
 			// under it.
 			a.header(c, p, t)
-			pane := ui.Box(c).Grow(1).Background(palette.bg)
+			pane := a.contentCard(ui.Box(c).Grow(1))
 			a.windBackground(c, pane)
 			pane.Children(func() {
 				a.ambient(c)
@@ -107,7 +107,7 @@ func (a *app) header(c *ui.Context, p *project, t *thread) {
 	// Clear of the traffic lights as the sidebar slides away from them.
 	left := 16 + bar.Left*(1-a.sidebarOpen)
 	head := ui.Row(c).Height(max(bar.Height, headerHeight)).Shrink(0).
-		Padding(0, 12, 0, left).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border)
+		Padding(0, 12, 0, left).Gap(8).AlignItems(ui.Center)
 	a.chrome(head)
 	head.DragWindow().Children(func() {
 		if !a.showSidebar {
