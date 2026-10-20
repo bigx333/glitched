@@ -1,4 +1,4 @@
-module t3-mygo
+module glitched
 
 go 1.27.2
 

@@ -16,7 +16,7 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 	"github.com/egoist/mygo/ui/markdown"
 
-	"t3-mygo/wind"
+	"glitched/wind"
 )
 
 type colors struct {
