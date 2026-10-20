@@ -34,12 +34,9 @@ var categories = []struct {
 
 // Colors of the sidebar's icons and actions.
 var (
-	tintNew      = ui.Hex("#a78bfa")
-	tintSearch   = ui.Hex("#60a5fa")
-	tintSettings = ui.Hex("#fb923c")
-	tintSnooze   = ui.Hex("#fbbf24")
-	tintSettle   = ui.Hex("#4ade80")
-	tintBack     = ui.Hex("#60a5fa")
+	tintSnooze = ui.Hex("#fbbf24")
+	tintSettle = ui.Hex("#4ade80")
+	tintBack   = ui.Hex("#60a5fa")
 )
 
 // rowHeight is a thread row's height, the same whether it shows its time
@@ -98,14 +95,14 @@ func (a *app) threadsNav(c *ui.Context) {
 	})
 	ui.Column(c).Padding(0, 8, 4).Gap(1).Children(func() {
 		if ghost(c, "new-thread", false).Padding(7, 8).Children(func() {
-			ui.Icon(c, icSquarePen).FontSize(15).TextColor(tintNew)
+			ui.Icon(c, icSquarePen).FontSize(15)
 			ui.Text(c, "New thread").Grow(1)
 			shortcutHint(c, "⌘", "N")
 		}).Clicked() {
 			a.newThread()
 		}
 		if ghost(c, "search", false).Padding(7, 8).Children(func() {
-			ui.Icon(c, icSearch).FontSize(15).TextColor(tintSearch)
+			ui.Icon(c, icSearch).FontSize(15)
 			ui.Text(c, "Search").Grow(1)
 			shortcutHint(c, "⌘", "K")
 		}).Clicked() {
@@ -136,7 +133,7 @@ func (a *app) threadsNav(c *ui.Context) {
 	}
 	ui.Column(c).Padding(8).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
 		if ghost(c, "settings", false).Padding(7, 8).Children(func() {
-			ui.Icon(c, icSettings).FontSize(15).TextColor(tintSettings)
+			ui.Icon(c, icSettings).FontSize(15)
 			ui.Text(c, "Settings").Grow(1)
 			shortcutHint(c, "⌘", ",")
 		}).Clicked() {
