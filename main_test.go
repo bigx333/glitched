@@ -658,3 +658,18 @@ func TestProjectFilter(t *testing.T) {
 		t.Error("All should clear the filter")
 	}
 }
+
+func TestNormalizeURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"voip.othos.co.za":       "https://voip.othos.co.za",
+		"localhost:5173":         "http://localhost:5173",
+		"127.0.0.1:3000/app":     "http://127.0.0.1:3000/app",
+		"192.168.1.20:8080":      "http://192.168.1.20:8080",
+		"http://example.com":     "http://example.com",
+		" example.com/path?q=1 ": "https://example.com/path?q=1",
+	} {
+		if got := normalizeURL(in); got != want {
+			t.Errorf("normalizeURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

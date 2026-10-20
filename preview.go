@@ -37,21 +37,71 @@ func (a *app) previewView() *mygo.WebView {
 		a.win.Update(func() { a.previewURL, a.previewDraft = url, url })
 	})
 	page.OnDidFailLoad(func(e *mygo.LoadError) {
-		a.win.Update(func() { page.LoadHTML(unreachablePage(a.previewURL), "") })
+		// A load given up for another, as one typed over it, isn't a
+		// failure (NSURLErrorCancelled; WebKit's frame load interrupted).
+		if e.Code == -999 || e.Code == 102 {
+			return
+		}
+		a.win.Update(func() { page.LoadHTML(failedPage(a.previewURL, e.Description), "") })
 	})
 	a.preview = v
 	return v
 }
 
-// unreachablePage is what the pane shows where nothing answers.
-func unreachablePage(url string) string {
+// failedPage is what the pane shows where a page couldn't load: for the
+// project's own server, that it isn't running; for another, why.
+func failedPage(url, why string) string {
+	title, hint := "Couldn't load "+url, why
+	if isLocal(url) {
+		title = "Nothing running at " + url
+		hint = `Start the project's dev server, as <code style="background:#18181b;padding:1px 5px;border-radius:4px">bun dev</code>, then reload.`
+	} else {
+		hint = html.EscapeString(why)
+	}
 	return fmt.Sprintf(`<!doctype html><meta charset="utf-8">
 <body style="margin:0;height:100vh;display:grid;place-items:center;background:#0c0c0e;color:#ececf0;font:13px -apple-system,system-ui,sans-serif">
-<div style="text-align:center;max-width:320px;line-height:1.6">
+<div style="text-align:center;max-width:340px;line-height:1.6;padding:0 16px">
 <div style="font-size:28px;margin-bottom:8px">🔌</div>
-<div style="font-weight:600;font-size:15px">Nothing running at %s</div>
-<div style="color:#8e8e98;margin-top:6px">Start the project's dev server, as <code style="background:#18181b;padding:1px 5px;border-radius:4px">bun dev</code>, then reload.</div>
-</div>`, html.EscapeString(url))
+<div style="font-weight:600;font-size:15px;word-break:break-all">%s</div>
+<div style="color:#8e8e98;margin-top:6px">%s</div>
+</div>`, html.EscapeString(title), hint)
+}
+
+// normalizeURL makes what was typed in the address an address: as it is
+// with a scheme; else https, as macOS's web view loads plain http only
+// from the machine itself and the local network, where dev servers run,
+// which keep http.
+func normalizeURL(typed string) string {
+	u := strings.TrimSpace(typed)
+	if u == "" || strings.Contains(u, "://") {
+		return u
+	}
+	if isLocal("http://" + u) {
+		return "http://" + u
+	}
+	return "https://" + u
+}
+
+// isLocal reports whether an address is on this machine or the local
+// network.
+func isLocal(url string) bool {
+	host := url
+	if i := strings.Index(host, "://"); i >= 0 {
+		host = host[i+3:]
+	}
+	if i := strings.IndexAny(host, "/?#"); i >= 0 {
+		host = host[:i]
+	}
+	if i := strings.LastIndex(host, ":"); i >= 0 && !strings.Contains(host[i:], "]") {
+		host = host[:i]
+	}
+	switch {
+	case host == "localhost", strings.HasSuffix(host, ".localhost"), strings.HasSuffix(host, ".local"),
+		host == "0.0.0.0", host == "[::1]", strings.HasPrefix(host, "127."),
+		strings.HasPrefix(host, "10."), strings.HasPrefix(host, "192.168."):
+		return true
+	}
+	return false
 }
 
 func (a *app) previewPanel(c *ui.Context) {
@@ -78,15 +128,12 @@ func (a *app) previewPanel(c *ui.Context) {
 				}
 			}
 			// The address: Enter goes there; one without a scheme is
-			// local.
+			// https, or http on this machine and the local network.
 			in := ui.TextInput(c.Key("url"), &a.previewDraft).Grow(1).FontSize(12).Font("monospace").
 				Padding(5, 10).Radius(8).Label("Address")
-			if in.Submitted() && v != nil {
-				url := strings.TrimSpace(a.previewDraft)
-				if !strings.Contains(url, "://") {
-					url = "http://" + url
-				}
-				a.previewURL = url
+			if in.Submitted() && v != nil && strings.TrimSpace(a.previewDraft) != "" {
+				url := normalizeURL(a.previewDraft)
+				a.previewURL, a.previewDraft = url, url
 				v.Page().LoadURL(url)
 			}
 			if iconButton(c, "external", icExternal, "Open in browser", false).Padding(5).Clicked() {
