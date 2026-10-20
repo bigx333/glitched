@@ -391,6 +391,7 @@ func (a *app) toasts(c *ui.Context) {
 func main() {
 	a := newApp()
 	mygo.App.WhenReady(func() {
+		a.installMenu()
 		a.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:         "T3 Code",
 			Width:         1320,
