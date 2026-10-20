@@ -57,3 +57,19 @@ Glitched: a native agent GUI written in Go with MyGo (module `glitched`, /Users/
 - What t3code stores itself: API keys and env vars marked Sensitive in provider instance settings, plus source-control tokens. They go in `<stateDir>/secrets/<name>.bin`, one file each, mode 0600 in a 0700 dir, written atomically, and are **not encrypted** (`apps/server/src/auth/ServerSecretStore.ts`). They are redacted in settings sent to clients. The desktop app uses Electron safeStorage for its saved environment connections.
 - Pooling in t3code is read-only. **Usage → Limits** sums subscription windows across every account it sees, across environments and an optional CLIProxyAPI hub, and deduplicates the same account. It doesn't route runs between accounts. Routing is the external proxy's job, configured as a provider endpoint (`docs/user/usage.md`).
 - Codex app-server has a `chatgptAuthTokens` auth mode. The host app supplies tokens held only in memory and answers `account/chatgptAuthTokens/refresh` requests. That is exactly a hub-issued credential, but the schema marks it "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE". t3code generates the types but doesn't use it.
+
+## zeron agent accounts and pool (traced 2026-10-21)
+
+Source is `zeron/crates/engine/src/agent_accounts.rs` and `agent_accounts/pool.rs`.
+
+- **Slots per device, never synced.** Each saved login is a slot at `{data_dir}/agent-accounts/{harness}/{slotId}.json`, owner-only. It holds the CLI's own credential blob (Claude `.credentials.json` or the Keychain item, Codex `auth.json`). Accounts are device-scoped, and the CRDT sync never carries them (`ARCHITECTURE.md`).
+- **Swap.** `activate` overwrites the CLI's credential store with a slot and backs up the live login first. For Claude it keeps machine-shared keys (`mcpOAuth`, `pluginSecrets`) from the live blob so MCP servers don't re-auth.
+- **Add an account.** Zeron drives the CLI's own OAuth (Claude PKCE to a loopback callback, `codex login` in a throwaway `CODEX_HOME`) without touching the live login. A login for another device forwards the loopback port over the P2P link.
+- **The pool is a loopback HTTP proxy inside the engine.** For a pooled chat the CLI is started with a base URL of `http://127.0.0.1:<port>/claude` or `/codex/v1` and a random token. The proxy picks an account per request and injects that account's real token. The CLI never holds a pooled credential.
+- **Routing.** `Sequential` pins a session to an account for 30 minutes, for prompt-cache stickiness. `WeeklyReset` prefers the account whose weekly window resets soonest, so quota that would expire anyway is used first. Accounts with errors or a `held_until` from rate limits are skipped. Each chat can bypass the pool.
+- **Refresh, the important part.**
+  - Zeron refreshes pooled slots itself against the provider token endpoints. It does this single-flight per slot, and once the refresh token is sent it can't be cancelled.
+  - The refreshed slot is persisted with retries, because "a single-use refresh token must not disappear on a transient" failure.
+  - It backs off on failure.
+  - For the account that is the CLI's current live login, it never refreshes. "The CLI owns this refresh-token family. Re-read it, never rotate it."
+- **Usage probes** call the same endpoints the CLIs use (`/api/oauth/usage` for Claude, `wham/usage` for Codex), stale-while-revalidate, with `Retry-After` honoured.
