@@ -57,7 +57,7 @@ These bound abuse, since the hub is also a relay.
 
 Memory is most of that, and agents mostly wait on the API. VMs need to be paid by the user, either on their own Cloudflare account or as a paid tier.
 
-**Credentials.** The hub holds credentials it can read, so it can refresh rotating tokens (decided 2026-10-20). Sealing credentials to host keys was rejected because the hub could then never refresh. The hosted tier therefore carries the liability and mitigates it.
+**Credentials.** Superseded by the token node in `account-pool.md` (2026-10-21). The hub stores only ciphertext, and a user-chosen custodian device refreshes. The rest of this paragraph is the earlier hub-readable design. The hub holds credentials it can read, so it can refresh rotating tokens (decided 2026-10-20). Sealing credentials to host keys was rejected because the hub could then never refresh. The hosted tier therefore carries the liability and mitigates it.
 
 - Envelope encryption. Each user has a data key, wrapped by a master key held as a Workers secret. Credentials are decrypted only inside that user's `UserDO`, only to refresh or to issue a run credential, and are never logged or returned to clients.
 - Hosts get the shortest-lived credential the provider allows. For refreshable logins that is the access token, never the refresh token.
