@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -84,7 +85,7 @@ func (a *app) settle(c *ui.Context, t *thread, from category) {
 // archive moves the thread out of its project, to the archived ones,
 // which remember where it came from.
 func (a *app) archive(t *thread) {
-	t.home, t.age = a.drop(t), "now"
+	t.home, t.archivedAge = a.drop(t), "now"
 	a.archived = append([]*thread{t}, a.archived...)
 }
 
@@ -92,14 +93,13 @@ func (a *app) archive(t *thread) {
 // any turn the agent was taking on it. Was it the one open, the first
 // thread left opens, or a new one where none is.
 func (a *app) drop(t *thread) *project {
-	t.turn.Add(1)
+	if t.status == statusWorking {
+		t.stopTurn()
+	}
 	var home *project
 	for _, p := range a.projects {
-		if n := len(p.threads); n > 0 {
-			p.threads = remove(p.threads, t)
-			if len(p.threads) < n {
-				home = p
-			}
+		if slices.Contains(p.threads, t) {
+			p.threads, home = remove(p.threads, t), p
 		}
 	}
 	if a.selected != t.id {

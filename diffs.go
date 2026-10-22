@@ -38,19 +38,19 @@ export class Pty {
 `
 
 const ptyAfter = `import { spawn } from "node-pty";
+import { rafThrottle } from "../lib/raf";
 
 export class Pty {
   private proc = spawn(shell(), [], { cols: 80, rows: 24 });
-  private size = { cols: 80, rows: 24 };
 
-  // A resize to the size the PTY already has is a repaint for nothing,
-  // and the observer asks for one on every pixel of a drag.
-  resize(cols: number, rows: number) {
-    if (cols === this.size.cols && rows === this.size.rows) {
-      return;
-    }
-    this.size = { cols, rows };
+  // One resize per animation frame: the observer asks for one on every
+  // pixel of a drag, and each resize repaints the whole terminal.
+  private readonly resizeNow = rafThrottle((cols: number, rows: number) => {
     this.proc.resize(cols, rows);
+  });
+
+  resize(cols: number, rows: number) {
+    this.resizeNow(cols, rows);
   }
 
   write(data: string) {
@@ -200,32 +200,46 @@ func reviewButton(c *ui.Context, label string, primary bool) ui.Element {
 		Background(palette.surface).Border(1, palette.border).TextColor(palette.text).
 		Shadow(0, 2, 6, 0, ui.RGBA(0, 0, 0, 0.25)).Transition(hoverFade)
 	if primary {
-		bg := palette.green.Mix(ui.Hex("#000000"), 0.35)
-		b.Background(bg).Border(1, palette.green.Alpha(0.6)).TextColor(onColor(bg))
-	}
-	if b.Hovered() {
-		b.Background(palette.surface.Mix(palette.text, 0.1))
-		if primary {
-			b.Background(palette.green.Mix(ui.Hex("#000000"), 0.2))
+		shade := float32(0.35)
+		if b.Hovered() {
+			shade = 0.2
 		}
+		bg := palette.green.Mix(ui.Hex("#000000"), shade)
+		b.Background(bg).Border(1, palette.green.Alpha(0.6)).TextColor(onColor(bg))
+	} else if b.Hovered() {
+		b.Background(palette.surface.Mix(palette.text, 0.1))
 	}
 	return b.Children(func() { ui.Text(c, label).FontSize(11.5).FontWeight(500) })
 }
 
-// onColor is the color of text on bg, white on a dark one and near black
-// on a light one, as a theme's green may be either.
+// onColor is the color of text on bg: white or near black, whichever
+// contrasts more, as a theme's green may be dark or light.
 func onColor(bg ui.Color) ui.Color {
-	lum := func(v uint8) float64 {
-		c := float64(v) / 255
-		if c <= 0.03928 {
-			return c / 12.92
+	white, black := ui.Hex("#ffffff"), ui.Hex("#111114")
+	if contrast(white, bg) >= contrast(black, bg) {
+		return white
+	}
+	return black
+}
+
+// contrast is the WCAG contrast ratio of two colors.
+func contrast(a, b ui.Color) float64 {
+	la, lb := luminance(a), luminance(b)
+	if la < lb {
+		la, lb = lb, la
+	}
+	return (la + 0.05) / (lb + 0.05)
+}
+
+func luminance(c ui.Color) float64 {
+	lin := func(v uint8) float64 {
+		s := float64(v) / 255
+		if s <= 0.03928 {
+			return s / 12.92
 		}
-		return math.Pow((c+0.055)/1.055, 2.4)
+		return math.Pow((s+0.055)/1.055, 2.4)
 	}
-	if 0.2126*lum(bg.R)+0.7152*lum(bg.G)+0.0722*lum(bg.B) > 0.3 {
-		return ui.Hex("#111114")
-	}
-	return ui.Hex("#ffffff")
+	return 0.2126*lin(c.R) + 0.7152*lin(c.G) + 0.0722*lin(c.B)
 }
 
 // diffStats counts the lines a file's change adds and deletes, as its diff

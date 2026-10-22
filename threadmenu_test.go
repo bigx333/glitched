@@ -135,3 +135,15 @@ func indexOf(ts []*thread, t *thread) int {
 	}
 	return -1
 }
+
+// Archiving a working thread ends its turn, so it comes back idle.
+func TestArchiveStopsTurn(t *testing.T) {
+	a := newApp()
+	tt := ui.NewTester(a.view, 1320, 860)
+	t1 := a.projects[0].threads[0] // working
+	a.archive(t1)
+	tt.Frame()
+	if t1.status != statusIdle || t1.entries[len(t1.entries)-1].took != "Stopped" {
+		t.Errorf("archived working thread: status %d, work log %q", t1.status, t1.entries[len(t1.entries)-1].took)
+	}
+}

@@ -34,8 +34,10 @@ type thread struct {
 	// turn counts the agent's turns. A goroutine playing an older turn,
 	// stopped or replaced, writes nothing more.
 	turn atomic.Uint64
-	// home is the project an archived thread came from.
-	home *project
+	// home is the project an archived thread came from, and archivedAge
+	// how long ago.
+	home        *project
+	archivedAge string
 }
 
 type project struct {
@@ -95,14 +97,18 @@ type workItem struct {
 	output string
 }
 
+// working is a work log's label while the agent is at it.
+const working = "Working…"
+
 type entry struct {
 	kind      entryKind
 	text      string
 	streaming bool
-	took      string
-	work      []workItem
-	files     []fileChange
-	approval  *approval
+	// took is a work log's label: working, or how long it took.
+	took     string
+	work     []workItem
+	files    []fileChange
+	approval *approval
 	// attachments went with a message of the user's.
 	attachments []attachment
 }
@@ -148,7 +154,7 @@ func mockProjects() []*project {
 				{path: "apps/web/src/components/ChevronIcon.tsx", add: 14},
 			}},
 			{kind: entryUser, text: "Nice. Can you also persist the collapsed state in localStorage?"},
-			{kind: entryWork, took: "Working…", work: []workItem{
+			{kind: entryWork, took: working, work: []workItem{
 				{kind: "read", label: "Read", detail: "apps/web/src/lib/storage.ts"},
 				{kind: "command", label: "Ran", detail: "bun run test -- Sidebar", exit: 1, took: "3.4s",
 					output: "✗ Sidebar › restores collapsed state (12ms)\n  expected true, received undefined\nTest Files  1 failed (1)"},
@@ -192,9 +198,9 @@ func mockProjects() []*project {
 
 func mockArchived(home *project) []*thread {
 	return []*thread{
-		{id: "a1", title: "Try Tauri for the desktop shell", age: "3w", branch: "main", home: home},
-		{id: "a2", title: "Spike: SQLite event store", age: "1mo", branch: "main", home: home},
-		{id: "a3", title: "Rename provider adapters", age: "2mo", branch: "main", home: home},
+		{id: "a1", title: "Try Tauri for the desktop shell", age: "3w", archivedAge: "3w", branch: "main", home: home},
+		{id: "a2", title: "Spike: SQLite event store", age: "1mo", archivedAge: "1mo", branch: "main", home: home},
+		{id: "a3", title: "Rename provider adapters", age: "2mo", archivedAge: "2mo", branch: "main", home: home},
 	}
 }
 
@@ -259,7 +265,7 @@ func (t *thread) stopTurn() {
 	t.status = statusIdle
 	for i := range t.entries {
 		e := &t.entries[i]
-		if e.kind == entryWork && e.took == "Working…" {
+		if e.kind == entryWork && e.took == working {
 			e.took = "Stopped"
 		}
 		e.streaming = false

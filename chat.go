@@ -300,7 +300,7 @@ func (a *app) entry(c *ui.Context, t *thread, i int, e entry) {
 // workLog is the agent's steps of a turn, under a head that says how it
 // went: still working, paused for an approval, or how long it took.
 func (a *app) workLog(c *ui.Context, key string, t *thread, e entry, paused bool) {
-	working := strings.HasSuffix(e.took, "…")
+	working := e.took == working
 	open := !a.collapsed[key]
 	ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Clip().
 		Transition(riseIn).Children(func() {
@@ -347,8 +347,13 @@ func (a *app) step(c *ui.Context, t *thread, i int, w workItem) {
 		icon = icSearch
 	}
 	file := -1
+	add, del := w.add, w.del
 	if w.kind == "edit" {
 		file = slices.IndexFunc(t.changed(), func(f fileChange) bool { return f.path == w.detail })
+		if _, known := fileTexts[w.detail]; known {
+			// The counts are the diff's own, where there is one.
+			add, del = a.diffStats(w.detail)
+		}
 	}
 	var row ui.Element
 	if file >= 0 {
@@ -360,7 +365,7 @@ func (a *app) step(c *ui.Context, t *thread, i int, w workItem) {
 		ui.Icon(c, icon).FontSize(12).TextColor(palette.faint)
 		ui.Text(c, w.label).FontSize(12).TextColor(palette.muted).SingleLine().Width(64)
 		ui.Text(c, w.detail).FontSize(12).Font("monospace").SingleLine().Shrink(1).TextColor(palette.text)
-		counts(c, w.add, w.del)
+		counts(c, add, del)
 		ui.Spacer(c)
 		switch {
 		case w.kind == "command" && w.took != "":
@@ -609,13 +614,21 @@ func (a *app) run(t *thread) {
 	replyCount++
 }
 
-// turnRunner is how a canned turn runs off the UI thread: sleep waits
+// turnRunner is how a canned turn runs: start runs it, sleep waits
 // between its steps, and update posts a change to the UI thread. The
-// window's are time.Sleep and Window.Update; a test supplies its own,
-// or none, for the turn to play at once.
+// window's are a goroutine, time.Sleep and Window.Update. The tests'
+// run the turn inline, on the UI thread, in no time.
 type turnRunner struct {
+	start  func(func())
 	sleep  func(time.Duration)
 	update func(func())
+}
+
+// inlineTurns plays a turn at once, where it's started.
+var inlineTurns = &turnRunner{
+	start:  func(fn func()) { fn() },
+	sleep:  func(time.Duration) {},
+	update: func(fn func()) { fn() },
 }
 
 // play runs a canned turn: the agent's steps arrive one by one, then its
@@ -623,14 +636,8 @@ type turnRunner struct {
 // moves on to another, or is stopped: after that it writes nothing, as
 // the entries it knew may be cut.
 func (a *app) play(t *thread, s script) {
-	t.entries = append(t.entries, entry{kind: entryWork, took: "Working…"})
+	t.entries = append(t.entries, entry{kind: entryWork, took: working})
 	work := len(t.entries) - 1
-	if a.turns == nil {
-		t.entries[work].work, t.entries[work].took = s.steps, "Worked for 3s"
-		t.entries = append(t.entries, entry{kind: entryAssistant, text: s.reply})
-		t.finish()
-		return
-	}
 	id := t.turn.Add(1)
 	live := func() bool { return t.turn.Load() == id }
 	// post runs fn on the UI thread, while the turn is live there.
@@ -641,7 +648,7 @@ func (a *app) play(t *thread, s script) {
 			}
 		})
 	}
-	go func() {
+	a.turns.start(func() {
 		started := time.Now()
 		for _, step := range s.steps {
 			a.turns.sleep(time.Duration(500+rand.IntN(500)) * time.Millisecond)
@@ -675,7 +682,7 @@ func (a *app) play(t *thread, s script) {
 			t.finish()
 			a.notifyFinished(t)
 		})
-	}()
+	})
 }
 
 func (a *app) terminal(c *ui.Context, p *project) {

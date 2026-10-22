@@ -37,7 +37,7 @@ func (a *app) messageActions(c *ui.Context, t *thread, i int, e entry, pointed b
 		case entryUser:
 			if action(c, "edit", icPencil, "Edit & resend", busy).Clicked() {
 				a.draft, a.attachments = e.text, slices.Clone(e.attachments)
-				t.cut(i)
+				t.entries = t.entries[:i]
 			}
 		case entryAssistant:
 			if action(c, "retry", icRotate, "Retry", busy).Clicked() {
@@ -63,14 +63,8 @@ func (a *app) retry(t *thread, i int) {
 	for i > 0 && t.entries[i-1].kind != entryUser {
 		i--
 	}
-	t.cut(i)
-	a.run(t)
-}
-
-// cut drops the entries from i on; an approval among them is no longer
-// waited on, as the thread's pending one is the entries'.
-func (t *thread) cut(i int) {
 	t.entries = t.entries[:i]
+	a.run(t)
 }
 
 // fork starts a thread of the thread's messages up to i, in its project,

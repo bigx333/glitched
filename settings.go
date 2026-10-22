@@ -352,8 +352,8 @@ func (a *app) archivedThreads(c *ui.Context) {
 				ui.Icon(c, icMessage).FontSize(14).TextColor(palette.faint)
 				ui.Column(c).Grow(1).Gap(2).Children(func() {
 					ui.Text(c, t.title).SingleLine()
-					when := "Archived " + t.age + " ago"
-					if t.age == "now" {
+					when := "Archived " + t.archivedAge + " ago"
+					if t.archivedAge == "now" {
 						when = "Archived just now"
 					}
 					ui.Text(c, when).FontSize(11.5).TextColor(palette.faint)

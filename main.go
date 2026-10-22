@@ -33,19 +33,25 @@ type theme struct {
 	term   string
 }
 
+// The two looks the system's appearance picks between.
+var (
+	lightTheme = theme{"Light", false, lightColors, ""}
+	darkTheme  = theme{"Dark", true, darkColors, ""}
+)
+
 // themes are the looks the settings choose from, after System.
 var themes = []theme{
-	{"Light", false, lightColors, ""},
-	{"Dark", true, darkColors, ""},
+	lightTheme,
+	darkTheme,
 	{"Mocha", true, mochaColors, "Catppuccin Mocha"},
 	{"Dawn", false, dawnColors, "Rose Pine Dawn"},
 }
 
-// themeNames are the settings' choices: the system's appearance, then
-// each theme.
 // systemTheme is the choice that follows the system's appearance.
 const systemTheme = "System"
 
+// themeNames are the settings' choices: the system's appearance, then
+// each theme.
 func themeNames() []string {
 	names := []string{systemTheme}
 	for _, t := range themes {
@@ -63,9 +69,9 @@ func themeFor(name string, systemDark bool) theme {
 		}
 	}
 	if systemDark {
-		return themeFor("Dark", false)
+		return darkTheme
 	}
-	return themes[0]
+	return lightTheme
 }
 
 var (
@@ -148,7 +154,7 @@ var (
 
 // settings is what the settings pages edit. Most of it is only shown.
 type settings struct {
-	theme         string // a theme\'s name, or systemTheme
+	theme         string // a theme's name, or systemTheme
 	accent        int
 	glass         bool
 	vibrancy      float64 // 0 to 1: how much of the sidebar's vibrancy shows through the background
@@ -177,7 +183,8 @@ type app struct {
 	router   *ui.Router
 	projects []*project
 	archived []*thread
-	// turns runs the canned turns off the UI thread; nil plays them at once.
+	// turns runs the canned turns: the window's off the UI thread, the
+	// tests' inline.
 	turns    *turnRunner
 	selected string
 	settings settings
@@ -301,6 +308,7 @@ func newApp() *app {
 		router:        newRouter(),
 		wind:          wind.New(rand.Uint32(), nil),
 		projects:      projects,
+		turns:         inlineTurns,
 		archived:      mockArchived(projects[0]),
 		selected:      "t1",
 		showSidebar:   true,
@@ -544,7 +552,7 @@ func main() {
 	mygo.App.WhenReady(func() {
 		a.installMenu()
 		mygo.App.OnNotificationClick(a.onNotificationClick)
-		a.turns = &turnRunner{sleep: time.Sleep, update: func(fn func()) { a.win.Update(fn) }}
+		a.turns = &turnRunner{start: func(fn func()) { go fn() }, sleep: time.Sleep, update: func(fn func()) { a.win.Update(fn) }}
 		a.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:     "Glitched",
 			Width:     1320,

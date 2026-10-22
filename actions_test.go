@@ -31,10 +31,10 @@ func TestMessageActions(t *testing.T) {
 		t.Error("actions show without the pointer")
 	}
 	r, _ := tt.Find(msg)
-	below, _ := tt.Find("Worked for 3s")
+	below, _ := tt.Find("Worked for 0s")
 	tt.Move(r.X+r.W/2, r.Y+r.H/2)
 	tt.Advance(time.Second)
-	if after, _ := tt.Find("Worked for 3s"); after.Y != below.Y {
+	if after, _ := tt.Find("Worked for 0s"); after.Y != below.Y {
 		t.Errorf("the work log moved from y %v to %v as the message was pointed at", below.Y, after.Y)
 	}
 	if err := tt.Click("Copy"); err != nil {
@@ -135,6 +135,7 @@ func TestStoppedTurnWritesNothing(t *testing.T) {
 	var mu sync.Mutex
 	var queued []func()
 	a.turns = &turnRunner{
+		start:  func(fn func()) { go fn() },
 		sleep:  func(time.Duration) { <-ticks },
 		update: func(fn func()) { mu.Lock(); queued = append(queued, fn); mu.Unlock() },
 	}

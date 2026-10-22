@@ -57,3 +57,16 @@ func TestDiffFileActions(t *testing.T) {
 		t.Errorf("%d changes after ⇧⌘↩, want %d", len(d.Hunks()), n-1)
 	}
 }
+
+// The primary review button's text contrasts with its face in every
+// theme, hovered or not; the dark themes' greens are light.
+func TestReviewButtonContrast(t *testing.T) {
+	for _, th := range themes {
+		for _, shade := range []float32{0.35, 0.2} {
+			bg := th.colors.green.Mix(ui.Hex("#000000"), shade)
+			if r := contrast(onColor(bg), bg); r < 4.5 {
+				t.Errorf("%s: %.2f:1 on the review button at shade %.2f", th.name, r, shade)
+			}
+		}
+	}
+}

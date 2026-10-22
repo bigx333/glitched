@@ -26,9 +26,9 @@ func (a *app) openCommandPalette() {
 // toggleLightDark switches to Light from any dark theme, and to Dark from
 // any light one.
 func (a *app) toggleLightDark() {
-	a.settings.theme = "Light"
+	a.settings.theme = lightTheme.name
 	if !a.theme.dark {
-		a.settings.theme = "Dark"
+		a.settings.theme = darkTheme.name
 	}
 }
 
