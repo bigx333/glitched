@@ -232,3 +232,17 @@ func TestRefusedCommandsAreRejected(t *testing.T) {
 		t.Fatalf("second answer: %v, want ErrAlreadyAnswered", err)
 	}
 }
+
+func TestAnAnswerInFlightOutlivesItsRun(t *testing.T) {
+	f, run, req := waiting(t)
+	f.must(answer(req))
+	f.must(api.TurnInterrupt{})
+	f.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted})
+	if r, _ := f.th.Request(req.ID); r.State != api.RequestAnswered {
+		t.Fatalf("the run ended with its answer in flight and the request is %v, want answered", r.State)
+	}
+	f.observe(engine.Delivered{Request: req.ID})
+	if r, _ := f.th.Request(req.ID); r.State != api.RequestDelivered {
+		t.Fatalf("the agent took the answer and the request is %v, want delivered", r.State)
+	}
+}

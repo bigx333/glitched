@@ -13,6 +13,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/engine"
+	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 	"glitched/internal/runtime"
 	"glitched/internal/store"
@@ -25,7 +26,7 @@ type node struct {
 	h  *runtime.Host
 }
 
-func start(t *testing.T, path string, ad *fake.Adapter) node {
+func start(t *testing.T, path string, ad provider.Adapter) node {
 	t.Helper()
 	st, err := store.Open(path)
 	if err != nil {
@@ -567,4 +568,38 @@ func TestStreamResync(t *testing.T) {
 		t.Fatalf("gap of 130 events: %v, want a snapshot", it.Kind)
 	}
 	far.Close()
+}
+
+func TestInterruptDuringDeliveryLogsWhatTheAgentGot(t *testing.T) {
+	g := newGated(fake.Turn(true))
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	g.setGate(func(_ api.ID, a provider.Action) <-chan struct{} {
+		if _, ok := a.(provider.Respond); ok {
+			entered <- struct{}{}
+			return release
+		}
+		return nil
+	})
+	n := start(t, dbPath(t), g)
+	thread := newThread(t, n.h)
+	submit(t, n.h, thread, dispatch("edit", api.StartNow))
+	respond(t, n.h, thread, until(t, n.h, thread, "approval", waiting).Requests[0])
+	<-entered
+	submit(t, n.h, thread, api.TurnInterrupt{})
+	close(release)
+	until(t, n.h, thread, "turn end", idle)
+
+	evs := events(t, n.h, thread)
+	if got := g.count(provider.Respond{}); got != 1 {
+		t.Fatalf("the agent took %d answers, want 1", got)
+	}
+	stored, err := n.st.Thread(ctx, thread)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count(evs, "request.delivered") != 1 || stored.Requests[0].State != api.RequestDelivered {
+		t.Fatalf("the agent took the answer but the log has %d request.delivered and the request is %v",
+			count(evs, "request.delivered"), stored.Requests[0].State)
+	}
+	assertReplay(t, n.st)
 }

@@ -190,10 +190,11 @@ func (t *Thread) release(run api.ID, to QueueState) error {
 	return nil
 }
 
-// voidRequests invalidates what the run can no longer receive.
+// voidRequests invalidates the questions the run can no longer be answered
+// on. An answer already given is left to its delivery.
 func (t *Thread) voidRequests(run api.ID) error {
 	for _, r := range t.Requests {
-		if r.Run == run && (r.State == api.RequestPending || r.State == api.RequestAnswered) {
+		if r.Run == run && r.State == api.RequestPending {
 			if err := t.setRequest(r.ID, api.RequestInvalidated); err != nil {
 				return err
 			}

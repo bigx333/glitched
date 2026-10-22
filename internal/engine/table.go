@@ -30,9 +30,12 @@ var queueEdges = edges[QueueState]{
 	QueueClaimed: {QueueDispatched, QueueCancelled, QueueUncertain},
 }
 
+// An answer commits with the effect that delivers it, so only that effect
+// settles an answered request: delivered when the agent took it, invalidated
+// when it could not.
 var requestEdges = edges[api.RequestState]{
 	api.RequestPending:  {api.RequestAnswered, api.RequestInvalidated, api.RequestExpired},
-	api.RequestAnswered: {api.RequestDelivered, api.RequestInvalidated, api.RequestExpired},
+	api.RequestAnswered: {api.RequestDelivered, api.RequestInvalidated},
 }
 
 // steerable runs can take a message mid-turn; the agent exists or is about to.
