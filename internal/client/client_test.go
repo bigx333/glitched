@@ -600,6 +600,29 @@ func TestAnAnswerTooLateLeavesNoRow(t *testing.T) {
 	g.until(t, "the refused answer dropped", func() bool { return len(env.Threads[id].Pending) == 0 }, func() string { return describePending(env.Threads[id].Pending) })
 }
 
+// A failed answer stays while the open transcript, behind the thread's
+// view, still shows its request waiting. Closing the thread leaves only
+// the view, which no longer asks, so the row goes.
+func TestClosingAThreadDropsAnAnswerOnlyItsTranscriptAsked(t *testing.T) {
+	request, id := api.NewID(), api.NewID()
+	th := &Thread{
+		View:       api.Thread{ID: id, Requests: []api.Request{{ID: request}}},
+		Transcript: &Transcript{Entries: []Entry{&RequestEntry{Request: request, State: api.RequestPending}}},
+		Pending:    []Pending{{Command: api.NewID(), Body: api.RequestRespond{Request: request}, Err: errNoEngine}},
+		open:       true,
+	}
+	env := &Env{Threads: map[api.ID]*Thread{id: th}}
+	m := &Manager{}
+	m.view(env, api.Thread{ID: id})
+	if len(th.Pending) != 1 {
+		t.Fatalf("with the transcript still asking the rows are %s, want the failed answer", describePending(th.Pending))
+	}
+	m.CloseThread(env, id)
+	if len(th.Pending) != 0 {
+		t.Fatalf("closed, the thread keeps %s, an answer to a request nothing shows", describePending(th.Pending))
+	}
+}
+
 // A thread created before the engine answered fails to reach it. Dismissing
 // its create drops the thread, which no engine has.
 func TestDismissingAFailedCreateDropsItsThread(t *testing.T) {

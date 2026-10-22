@@ -418,7 +418,8 @@ func (m *Manager) OpenThread(e *Env, thread api.ID) {
 }
 
 // CloseThread stops following a thread. Its transcript stays cached for
-// the next OpenThread.
+// the next OpenThread, but no longer keeps the failed answers to requests
+// only it showed waiting.
 func (m *Manager) CloseThread(e *Env, thread api.ID) {
 	th := e.Threads[thread]
 	if th == nil || !th.open {
@@ -427,6 +428,7 @@ func (m *Manager) CloseThread(e *Env, thread api.ID) {
 	th.open = false
 	th.unfollow()
 	th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool { return p.sent })
+	th.dropUnasked()
 }
 
 func (th *Thread) unfollow() {
