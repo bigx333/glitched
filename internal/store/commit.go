@@ -32,7 +32,8 @@ func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.R
 }
 
 // Observe commits what the runtime saw. A nonzero done is the leased effect
-// the observation completes; it is marked done in the same transaction.
+// the observation completes; it is marked done in the same transaction, even
+// when the observation is refused with engine.ErrRefused.
 func (s *Store) Observe(ctx context.Context, thread api.ID, o engine.Observation, now time.Time, done int64) (api.Cursor, error) {
 	return s.commit(ctx, thread, nil, done, func(t engine.Thread) ([]engine.Event, []engine.Effect, error) {
 		return engine.Observe(t, o, now)
@@ -74,6 +75,10 @@ func (s *Store) commit(ctx context.Context, thread api.ID, r *receipt, done int6
 		return api.Cursor{}, err
 	}
 	events, effects, err := decide(old)
+	var refused error
+	if errors.Is(err, engine.ErrRefused) {
+		refused, err = err, nil
+	}
 	if err != nil {
 		return api.Cursor{}, err
 	}
@@ -133,7 +138,7 @@ func (s *Store) commit(ctx context.Context, thread api.ID, r *receipt, done int6
 			h(wire)
 		}
 	}
-	return api.Cursor{Log: s.log, Seq: head}, nil
+	return api.Cursor{Log: s.log, Seq: head}, refused
 }
 
 // Thread returns the stored projection, or a zero Thread if there is none.

@@ -162,8 +162,14 @@ func (h *Host) follow(e api.Event) {
 	}
 }
 
-func (h *Host) observe(thread api.ID, o engine.Observation, done int64) error {
-	_, err := h.store.Observe(h.ctx, thread, o, time.Now(), done)
+// observe commits o with the completion of the effect done. A refused o
+// arrived after the thread moved on: it is logged, and done is complete.
+func (h *Host) observe(ctx context.Context, thread api.ID, o engine.Observation, done int64) error {
+	_, err := h.store.Observe(ctx, thread, o, time.Now(), done)
+	if errors.Is(err, engine.ErrRefused) {
+		slog.Warn("runtime: observation refused", "thread", thread, "err", err)
+		return nil
+	}
 	return err
 }
 
@@ -187,7 +193,7 @@ func (h *Host) boot(ctx context.Context) error {
 				break
 			}
 			if engine.Due(t, b) {
-				err = h.observe(e.Thread, engine.SteerLost{Message: b.Message}, e.ID)
+				err = h.observe(ctx, e.Thread, engine.SteerLost{Message: b.Message}, e.ID)
 			} else {
 				err = h.store.Complete(ctx, e.ID)
 			}
@@ -223,7 +229,7 @@ func (h *Host) boot(ctx context.Context) error {
 			rec = provider.Lost{Reason: err.Error()}
 		}
 		restored, ok := rec.(provider.Restored)
-		if err := h.observe(id, engine.Reconciled{Run: r.ID, Restored: ok}, lease); err != nil {
+		if err := h.observe(ctx, id, engine.Reconciled{Run: r.ID, Restored: ok}, lease); err != nil {
 			return err
 		}
 		if ok {
@@ -375,8 +381,7 @@ func (h *Host) record(thread api.ID, o engine.Observation, done int64) bool {
 		if o == nil {
 			return h.store.Complete(ctx, done)
 		}
-		_, err := h.store.Observe(ctx, thread, o, time.Now(), done)
-		return err
+		return h.observe(ctx, thread, o, done)
 	})
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/engine"
 	"glitched/internal/store"
 )
 
@@ -174,5 +175,47 @@ func TestRestoredDatabaseGetsANewLog(t *testing.T) {
 	s.Close()
 	if s = open(t, path); s.LogID() != restored {
 		t.Fatal("log id changed on a plain reopen")
+	}
+}
+
+func TestARefusedObservationStillCompletesItsEffect(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, filepath.Join(t.TempDir(), "host.db"))
+	thread := api.NewID()
+	submit := func(body api.Intent) api.ID {
+		t.Helper()
+		c := api.Command{ID: api.NewID(), Target: thread, Body: body}
+		if _, err := s.Submit(ctx, c, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		return c.ID
+	}
+	lease := func() int64 {
+		t.Helper()
+		e, ok, err := s.Lease(ctx)
+		if err != nil || !ok {
+			t.Fatalf("lease: %v %v", ok, err)
+		}
+		return e.ID
+	}
+	submit(create(thread).Body)
+	run := submit(api.MessageDispatch{Text: "go", Mode: api.StartNow})
+	if _, err := s.Observe(ctx, thread, engine.Started{Run: run}, time.Now(), lease()); err != nil {
+		t.Fatal(err)
+	}
+	steer := submit(api.MessageDispatch{Text: "hurry", Mode: api.SteerActive})
+	steering := lease()
+	if _, err := s.Observe(ctx, thread, engine.Ended{Run: run, Outcome: api.OutcomeCompleted}, time.Now(), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	before, _ := s.ReadLog(ctx, 0, 0)
+	if _, err := s.Observe(ctx, thread, engine.Steered{Message: steer}, time.Now(), steering); !errors.Is(err, engine.ErrRefused) {
+		t.Fatalf("a steer that landed after its run ended: %v, want engine.ErrRefused", err)
+	}
+	after, _ := s.ReadLog(ctx, 0, 0)
+	leased, err := s.Leased(ctx)
+	if err != nil || len(leased) != 0 || len(after) != len(before) {
+		t.Fatalf("refused observation: %d events added, leased %+v %v; want none and its effect done", len(after)-len(before), leased, err)
 	}
 }

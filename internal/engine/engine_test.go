@@ -1,11 +1,8 @@
 package engine_test
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
-	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
@@ -101,20 +98,13 @@ func TestRestoringARunningRunKeepsItsRevision(t *testing.T) {
 	}
 }
 
-func TestObserveLogsWhatTheTablesRefuse(t *testing.T) {
-	var logs bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-
+func TestObserveReturnsWhatTheTablesRefuse(t *testing.T) {
 	f, run := running(t)
 	steer := f.must(dispatch("hurry", api.SteerActive))
 	f.observe(engine.Ended{Run: run, Outcome: api.OutcomeCompleted})
-	if evs := f.observe(engine.Steered{Message: steer}); len(evs) != 0 {
-		t.Fatalf("a steer that landed after its run ended recorded %v", evs)
-	}
-	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "engine.Steered") {
-		t.Fatalf("the refused steer left no warning, log: %q", logs.String())
+	evs, _, err := engine.Observe(f.th, engine.Steered{Message: steer}, now)
+	if len(evs) != 0 || !errors.Is(err, engine.ErrRefused) {
+		t.Fatalf("a steer that landed after its run ended: %v, %v; want nothing recorded and engine.ErrRefused", evs, err)
 	}
 }
 
