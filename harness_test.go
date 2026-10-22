@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"glitched/internal/daemon"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
+	"glitched/internal/transport"
 )
 
 // posts stands in for the window's Update: the manager posts here, and the
@@ -213,4 +215,33 @@ func texts(es []entry) string {
 		out = append(out, e.key+" "+e.text+e.took+e.note)
 	}
 	return strings.Join(out, "\n")
+}
+
+// newer serves an engine as one a protocol ahead of this app would, on a
+// loopback port that takes any token, and returns its address.
+func newer(t *testing.T) string {
+	t.Helper()
+	d := engine(t, daemon.Config{Dir: tempDir(t)}, fake.New(fake.Turn(false)))
+	tn := transport.Tailnet{Address: "127.0.0.1:0"}
+	ctx, stop := context.WithCancel(context.Background())
+	ln, err := tn.Listen(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		admit := func(*http.Request) (context.Context, error) { return ctx, nil }
+		(&transport.Server{Transport: tn, Endpoint: ahead{d.Endpoint()}, Authorize: admit}).Serve(ctx, ln)
+	}()
+	t.Cleanup(func() { stop(); <-served })
+	return ln.Addr().String()
+}
+
+type ahead struct{ api.Endpoint }
+
+func (e ahead) Info(ctx context.Context) (api.Environment, error) {
+	env, err := e.Endpoint.Info(ctx)
+	env.Protocol++
+	return env, err
 }

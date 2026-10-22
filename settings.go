@@ -309,7 +309,7 @@ func (a *app) servers(c *ui.Context) {
 					ui.Text(c, s.Label).FontWeight(500)
 					ui.Text(c, s.Addr).FontSize(12).Font("monospace").TextColor(palette.muted).SingleLine()
 				})
-				ui.Text(c, status).FontSize(12).TextColor(col).SingleLine().Shrink(1).MaxWidth(280)
+				ui.Text(c, status).FontSize(12).TextColor(col).SingleLine().Shrink(1).MaxWidth(360).Tooltip(status)
 				ui.Button(c.Key("remove"), "Remove").TextColor(palette.red).OnClick(func() {
 					if err := a.backend.RemoveServer(s.Label); err != nil {
 						c.AddToast(ui.Toast{Title: "Couldn't remove " + s.Label, Description: err.Error()})
@@ -359,6 +359,12 @@ func envStatus(e *client.Env) (ui.Color, string) {
 		return palette.red, "Offline: " + s.Err.Error()
 	case client.Refused:
 		return palette.red, "Refused: it has no such token"
+	case client.Incompatible:
+		who := "server"
+		if e.Kind == client.Local {
+			who = "engine"
+		}
+		return palette.red, fmt.Sprintf("Incompatible: %s speaks protocol %d, this app %d", who, s.Theirs, s.Ours)
 	}
 	return palette.amber, "Connecting…"
 }

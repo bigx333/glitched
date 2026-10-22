@@ -181,13 +181,19 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		}
 		d := engine(t, daemon.Config{Dir: rdir, Listen: []string{"127.0.0.1:0"}}, fake.New(fake.Turn(false)))
 		h = start(t, tempDir(t))
-		for _, s := range []client.Server{{Label: "devbox", Addr: d.Addrs()[0].String(), Token: token}, {Label: "stranger", Addr: d.Addrs()[0].String(), Token: "wrong"}} {
+		for _, s := range []client.Server{
+			{Label: "devbox", Addr: d.Addrs()[0].String(), Token: token},
+			{Label: "stranger", Addr: d.Addrs()[0].String(), Token: "wrong"},
+			{Label: "upgraded", Addr: newer(t), Token: "any"},
+		} {
 			if err := h.a.backend.AddServer(s); err != nil {
 				t.Fatal(err)
 			}
 		}
 		h.a.router.Push("/settings/servers")
-		h.until("one online and one refused", func() bool { return h.tt.HasText("Online") && h.tt.HasText("Refused") })
+		h.until("one online, one refused and one incompatible", func() bool {
+			return h.tt.HasText("Online") && h.tt.HasText("Refused") && h.tt.HasText("Incompatible")
+		})
 	case "machines":
 		rdir := tempDir(t)
 		token, err := daemon.Pair(rdir, "gui")

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
+	daemonruntime "glitched/internal/runtime"
 )
 
 // With an empty state directory, the app embeds this machine's engine and
@@ -192,6 +194,19 @@ func TestServers(t *testing.T) {
 	if th := h.a.current(); !th.id().IsZero() || h.tt.HasText("Rotate the API keys") {
 		t.Errorf("devbox's thread still shows after removing it: %q", h.tt.Texts())
 	}
+}
+
+// A server a protocol ahead of this app shows none of its threads, and its
+// row in Settings says why.
+func TestAServerOfAnotherProtocolSaysSo(t *testing.T) {
+	addr := newer(t)
+	h := start(t, tempDir(t))
+	if err := h.a.backend.AddServer(client.Server{Label: "upgraded", Addr: addr, Token: "any"}); err != nil {
+		t.Fatal(err)
+	}
+	h.a.router.Push("/settings/servers")
+	want := fmt.Sprintf("Incompatible: server speaks protocol %d, this app %d", daemonruntime.Protocol+1, daemonruntime.Protocol)
+	h.until("the server's row to say it is incompatible", func() bool { return h.tt.HasText(want) })
 }
 
 func TestSettingsPages(t *testing.T) {
