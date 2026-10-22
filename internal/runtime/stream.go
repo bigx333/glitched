@@ -14,10 +14,6 @@ const (
 	streamBytes  = 8 << 20
 )
 
-// ErrOverflow closes a stream whose reader fell more than 8 MiB behind. The
-// client reopens from the last cursor it received.
-var ErrOverflow = errors.New("runtime: subscriber fell behind")
-
 var errStreamClosed = errors.New("runtime: stream closed")
 
 // Open sends the catch-up (a replay from the client's cursor, or a snapshot
@@ -69,9 +65,9 @@ type stream struct {
 
 	mu    sync.Mutex
 	ready bool
-	tail  []api.Event // committed while the catch-up was read
+	tail  []api.Event // this stream's events committed while the catch-up was read
 	items []api.StreamItem
-	bytes int
+	bytes int    // event payload held in tail and items
 	last  uint64 // highest seq queued; anything at or below it is a duplicate
 	err   error
 }
@@ -79,9 +75,17 @@ type stream struct {
 func (s *stream) start(items []api.StreamItem, fence uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.items, s.last, s.ready = items, fence, true
-	s.push(s.tail)
-	s.tail = nil
+	if s.err != nil {
+		return
+	}
+	tail := s.tail
+	s.tail, s.items, s.bytes, s.last, s.ready = nil, items, 0, fence, true
+	for _, it := range items {
+		if it.Event != nil {
+			s.bytes += len(it.Event.Payload)
+		}
+	}
+	s.push(tail)
 	s.items = append(s.items, api.StreamItem{Kind: api.StreamSynchronized})
 	s.signal()
 }
@@ -92,25 +96,37 @@ func (s *stream) publish(events []api.Event) {
 	if s.err != nil {
 		return
 	}
-	if !s.ready {
-		s.tail = append(s.tail, events...)
-		return
+	if s.ready {
+		s.push(events)
+	} else {
+		for _, e := range events {
+			if s.follows(e) {
+				s.tail = append(s.tail, e)
+				s.bytes += len(e.Payload)
+			}
+		}
+		s.bound()
 	}
-	s.push(events)
 	s.signal()
 }
 
 func (s *stream) push(events []api.Event) {
 	for _, e := range events {
-		if e.Cursor.Seq <= s.last || (!s.thread.IsZero() && e.Thread != s.thread) {
+		if e.Cursor.Seq <= s.last || !s.follows(e) {
 			continue
 		}
 		s.last = e.Cursor.Seq
 		s.items = append(s.items, api.StreamItem{Kind: api.StreamEvent, Event: &e})
 		s.bytes += len(e.Payload)
 	}
+	s.bound()
+}
+
+func (s *stream) follows(e api.Event) bool { return s.thread.IsZero() || e.Thread == s.thread }
+
+func (s *stream) bound() {
 	if s.bytes > streamBytes {
-		s.err, s.items = ErrOverflow, nil
+		s.err, s.items, s.tail = api.ErrOverflow, nil, nil
 	}
 }
 
