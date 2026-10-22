@@ -9,3 +9,10 @@ func SetCallTimeout(d time.Duration) func() {
 	callTimeout = d
 	return func() { callTimeout = old }
 }
+
+// Kill stops h as a killed process stops: from the call on, nothing it took
+// from an agent or the outbox reaches the store, and no agent is closed.
+func (h *Host) Kill() {
+	h.stopDrain()
+	h.Close()
+}

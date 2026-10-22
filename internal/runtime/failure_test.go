@@ -110,7 +110,7 @@ func TestAStartThatNeverReachedTheProviderSurvivesARestart(t *testing.T) {
 	submit(t, n.h, thread, dispatch("go", api.StartNow))
 	exec(t, db, `DROP TRIGGER break`)
 	time.Sleep(50 * time.Millisecond)
-	n.crash()
+	n.stop()
 	repair()
 
 	n = start(t, path, ad)
@@ -170,7 +170,7 @@ func TestCloseCommitsWhatWasTakenFromTheAgent(t *testing.T) {
 			submit(t, n.h, thread, dispatch("go", api.StartNow))
 			<-ad.first
 			time.Sleep(5 * time.Millisecond) // inside the batch window
-			n.crash()
+			n.stop()
 
 			n = start(t, path, ad.Adapter)
 			until(t, n.h, thread, "turn end", idle)

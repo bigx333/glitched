@@ -32,7 +32,7 @@ func crashDuring(t *testing.T, path string, g *gated, a provider.Action, body fu
 	})
 	body(n, thread)
 	<-entered
-	n.crash()
+	n.kill()
 	g.setGate(nil)
 	return thread
 }

@@ -38,13 +38,20 @@ func start(t *testing.T, path string, ad provider.Adapter) node {
 		t.Fatal(err)
 	}
 	n := node{st, h}
-	t.Cleanup(n.crash)
+	t.Cleanup(n.kill)
 	return n
 }
 
-// crash stops the host without letting it record anything, then closes the
-// database, as a killed process would leave it.
-func (n node) crash() {
+// kill stops the host the way a killed process stops, recording nothing
+// more, then closes the database.
+func (n node) kill() {
+	n.h.Kill()
+	n.st.Close()
+}
+
+// stop closes the host gracefully, so what it already took from agents
+// still commits, then closes the database.
+func (n node) stop() {
 	n.h.Close()
 	n.st.Close()
 }
@@ -214,7 +221,7 @@ func TestKillBetweenCommitAndEffect(t *testing.T) {
 		t.Fatalf("admitted %d, started %d, adapter starts %d; want one each", a, s, ad.Starts())
 	}
 
-	n.crash()
+	n.kill()
 	n = start(t, path, ad)
 	submit(t, n.h, thread, dispatch("again", api.StartNow))
 	until(t, n.h, thread, "second turn end", func(th api.Thread) bool { return idle(th) && ad.Starts() == 2 })
@@ -379,7 +386,7 @@ func TestCrashMidTurn(t *testing.T) {
 		thread := newThread(t, n.h)
 		submit(t, n.h, thread, dispatch("go", api.StartNow))
 		seen := until(t, n.h, thread, "approval", waiting)
-		n.crash()
+		n.kill()
 
 		n = start(t, path, ad)
 		req := until(t, n.h, thread, "still waiting", waiting).Requests[0]
@@ -406,7 +413,7 @@ func TestCrashMidTurn(t *testing.T) {
 		thread := newThread(t, n.h)
 		submit(t, n.h, thread, dispatch("go", api.StartNow))
 		until(t, n.h, thread, "approval", waiting)
-		n.crash()
+		n.kill()
 
 		fresh := fake.New(fake.Turn(false))
 		n = start(t, path, fresh)
@@ -436,7 +443,7 @@ func TestCrashMidTurn(t *testing.T) {
 		for ad.Starts() == 0 && time.Now().Before(deadline) {
 			time.Sleep(time.Millisecond)
 		}
-		n.crash()
+		n.kill()
 
 		fresh := fake.New(fake.Turn(false))
 		n = start(t, path, fresh)
@@ -455,7 +462,7 @@ func TestReplayMatchesProjections(t *testing.T) {
 	other := newThread(t, n.h)
 	submit(t, n.h, other, dispatch("go", api.StartNow))
 	until(t, n.h, other, "approval", waiting)
-	n.crash()
+	n.kill()
 	n = start(t, path, fake.New(fake.Turn(false)))
 	until(t, n.h, other, "uncertain", func(th api.Thread) bool { return th.Run == api.RunUncertain })
 	submit(t, n.h, other, api.TurnInterrupt{})
