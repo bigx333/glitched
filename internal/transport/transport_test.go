@@ -565,6 +565,24 @@ func TestUnreadStreamWaitsAlone(t *testing.T) {
 	}
 }
 
+// The server counts an item's bytes as it marshals them and the client acks
+// the bytes it reads; a mismatch would leak or stall the window.
+func TestItemBytesMatchAcrossTheWire(t *testing.T) {
+	ev := api.Event{Type: "message.added", Payload: json.RawMessage(`{"text":"<b>&</b> \u2028 café 😀", "n": 1}`)}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := json.Marshal(response{ID: 1, Item: b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r response
+	if err := json.Unmarshal(frame, &r); err != nil || len(r.Item) != len(b) {
+		t.Fatalf("server counted %d bytes, client reads %d: %v", len(b), len(r.Item), err)
+	}
+}
+
 // bigSnapshot opens every stream as the runtime does for a far-behind cursor:
 // one Snapshot item holding a 9 MiB thread, then Synchronized.
 type bigSnapshot struct{ fakeEndpoint }
