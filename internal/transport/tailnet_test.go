@@ -133,6 +133,23 @@ func route(t *testing.T, ends map[string][2]string) func() map[string]int {
 	}
 }
 
+// interfaces makes the given interfaces this machine's, for Tailnet, each a
+// space-separated list of its addresses.
+func interfaces(t *testing.T, ifaces ...string) {
+	t.Helper()
+	old := interfaceAddrs
+	t.Cleanup(func() { interfaceAddrs = old })
+	var table [][]netip.Addr
+	for _, f := range ifaces {
+		var addrs []netip.Addr
+		for _, a := range strings.Fields(f) {
+			addrs = append(addrs, netip.MustParseAddr(a))
+		}
+		table = append(table, addrs)
+	}
+	interfaceAddrs = func() [][]netip.Addr { return table }
+}
+
 func TestTailnetSendsNoTokenOutsideWireGuard(t *testing.T) {
 	// Tailscale has no peer at 100.101.2.3, so the kernel routes it by the
 	// default route from the LAN address.
@@ -153,7 +170,31 @@ func TestTailnetSendsNoTokenOutsideWireGuard(t *testing.T) {
 	}
 }
 
+func TestTailnetSendsNoTokenFromACarrierGradeNATLink(t *testing.T) {
+	// The ISP gave this machine 100.65.0.5 and Tailscale isn't running, so
+	// both ends are in 100.64.0.0/10 and nothing encrypts the connection. By
+	// hand, `unshare -rnm` with a veth pair at 100.65.0.5/10 and 100.101.2.3/10
+	// reproduces it end to end; CI can't create network namespaces.
+	interfaces(t, "127.0.0.1 ::1", "100.65.0.5")
+	received := route(t, map[string][2]string{
+		"udp": {"100.65.0.5:40000", "100.101.2.3:7465"},
+		"tcp": {"100.65.0.5:40000", "100.101.2.3:7465"},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	c := NewEndpointClient(Tailnet{Address: "100.101.2.3:7465", Token: "secret"}, api.ID{})
+	_, err := c.Info(ctx)
+	c.Close()
+	if err == nil || !strings.Contains(err.Error(), "isn't on the Tailscale interface") {
+		t.Fatalf("a dial from a carrier-grade NAT address: %v, want it isn't on the Tailscale interface", err)
+	}
+	if got := received(); got["tcp"] != 0 || got["udp"] != 0 {
+		t.Fatalf("the far end received %v bytes", got)
+	}
+}
+
 func TestTailnetDialsOnlyBetweenLoopbacksOrTailscaleAddresses(t *testing.T) {
+	interfaces(t, "127.0.0.1 ::1", "192.168.1.5", "100.64.0.9 fd7a:115c:a1e0::9 fe80::9", "100.65.0.5")
 	cases := []struct {
 		name     string
 		udp, tcp [2]string // local, remote
@@ -167,6 +208,7 @@ func TestTailnetDialsOnlyBetweenLoopbacksOrTailscaleAddresses(t *testing.T) {
 		{"IPv4-mapped off the tailnet", [2]string{"[::ffff:192.168.1.5]:1", "[::ffff:192.168.1.10]:7465"}, [2]string{"[::ffff:192.168.1.5]:1", "[::ffff:192.168.1.10]:7465"}, false},
 		{"a route that changed after the probe", [2]string{"100.64.0.9:1", "100.70.0.1:7465"}, [2]string{"192.168.1.5:1", "100.70.0.1:7465"}, false},
 		{"loopback to a Tailscale address", [2]string{"127.0.0.1:1", "100.70.0.1:7465"}, [2]string{"127.0.0.1:1", "100.70.0.1:7465"}, false},
+		{"from a carrier-grade NAT link", [2]string{"100.65.0.5:1", "100.70.0.1:7465"}, [2]string{"100.65.0.5:1", "100.70.0.1:7465"}, false},
 		{"a 4via6 address, which its subnet router forwards as IPv4", [2]string{"[fd7a:115c:a1e0::9]:1", "[fd7a:115c:a1e0:b1a:0:7:a01:110]:7465"}, [2]string{"[fd7a:115c:a1e0::9]:1", "[fd7a:115c:a1e0:b1a:0:7:a01:110]:7465"}, false},
 	}
 	for _, tc := range cases {
@@ -217,6 +259,7 @@ func TestTailnetListenAddressForms(t *testing.T) {
 }
 
 func TestTailnetServesOnlyLoopbackOrTailscalePeers(t *testing.T) {
+	interfaces(t, "127.0.0.1 ::1", "100.64.0.1 fd7a:115c:a1e0::1", "100.65.0.5")
 	at := func(s string) net.Addr { return net.TCPAddrFromAddrPort(netip.MustParseAddrPort(s)) }
 	cases := []struct {
 		local, remote string
@@ -226,6 +269,7 @@ func TestTailnetServesOnlyLoopbackOrTailscalePeers(t *testing.T) {
 		{"100.64.0.1:7465", "100.70.0.2:40000", true},
 		{"100.64.0.1:7465", "192.168.1.5:40000", false},
 		{"100.64.0.1:7465", "127.0.0.1:40000", false},
+		{"100.65.0.5:7465", "100.70.0.2:40000", false},
 		{"[fd7a:115c:a1e0::1]:7465", "[fd7a:115c:a1e0:b1a:0:7:a01:110]:40000", false},
 	}
 	for _, tc := range cases {
@@ -235,6 +279,24 @@ func TestTailnetServesOnlyLoopbackOrTailscalePeers(t *testing.T) {
 		far.Close()
 		if (err == nil) != tc.ok {
 			t.Errorf("a socket from %s to %s: %v, want ok=%v", tc.remote, tc.local, err, tc.ok)
+		}
+	}
+}
+
+func TestTailscaleIPIsOnTheTailscaleInterface(t *testing.T) {
+	cases := []struct {
+		ifaces []string
+		want   string
+	}{
+		{[]string{"127.0.0.1 ::1", "100.65.0.5", "fe80::1 fd7a:115c:a1e0::7 100.100.1.2"}, "100.100.1.2"},
+		{[]string{"127.0.0.1 ::1", "100.65.0.5", "fe80::1 fd7a:115c:a1e0::7"}, "fd7a:115c:a1e0::7"},
+		{[]string{"127.0.0.1 ::1", "100.65.0.5", "192.168.1.5"}, ""},
+	}
+	for _, tc := range cases {
+		interfaces(t, tc.ifaces...)
+		ip, ok := TailscaleIP()
+		if got := ip.String(); !ok && tc.want != "" || ok && got != tc.want {
+			t.Errorf("interfaces %q: %v %v, want %q", tc.ifaces, ip, ok, tc.want)
 		}
 	}
 }

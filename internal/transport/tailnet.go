@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 
 	"glitched/internal/api"
 )
@@ -43,6 +44,25 @@ var (
 func onTailnet(ip netip.Addr) bool {
 	ip = ip.Unmap()
 	return ip.IsLoopback() || tailscale4.Contains(ip) || tailscale6.Contains(ip) && !via6.Contains(ip)
+}
+
+// interfaceAddrs lists each network interface's addresses; a test swaps it
+// for interfaces this machine lacks.
+var interfaceAddrs = func() [][]netip.Addr {
+	ifs, _ := net.Interfaces()
+	all := make([][]netip.Addr, 0, len(ifs))
+	for _, i := range ifs {
+		as, _ := i.Addrs()
+		var ips []netip.Addr
+		for _, a := range as {
+			if n, ok := a.(*net.IPNet); ok {
+				ip, _ := netip.AddrFromSlice(n.IP)
+				ips = append(ips, ip.Unmap())
+			}
+		}
+		all = append(all, ips)
+	}
+	return all
 }
 
 var errNotTailnet = errors.New("is not a loopback or Tailscale address (100.64.0.0/10, or fd7a:115c:a1e0::/48 outside 4via6's fd7a:115c:a1e0:b1a::/64), the only places a token may cross without TLS")
@@ -89,22 +109,43 @@ func (t Tailnet) Dial(ctx context.Context, _ api.ID) (net.Conn, error) {
 
 // route refuses c unless it stays inside WireGuard or on this machine. On
 // Linux, Tailscale routes only its current peers; any other 100.x address
-// leaves by the default route, in cleartext, from a LAN address.
+// leaves by the default route, in cleartext, from a LAN address that may
+// itself be in 100.64.0.0/10 when the ISP uses carrier-grade NAT.
 func (t Tailnet) route(c net.Conn) error {
 	local, remote := ipOf(c.LocalAddr()), ipOf(c.RemoteAddr())
 	switch {
 	case !onTailnet(remote):
 		return fmt.Errorf("%s is %s, which %w", t.Address, remote, errNotTailnet)
 	case !inside(local, remote):
-		return fmt.Errorf("%s: Tailscale doesn't route to %s, so the connection would leave from %s, outside WireGuard; is Tailscale up, and is that machine a peer on this tailnet?", t.Address, remote, local)
+		return fmt.Errorf("%s: Tailscale doesn't route to %s, so the connection would leave from %s, which isn't on the Tailscale interface; is Tailscale up, in kernel mode, and is that machine a peer on this tailnet?", t.Address, remote, local)
 	}
 	return nil
 }
 
-// inside reports whether a connection between a and b stays on loopback or
-// runs between two Tailscale addresses.
-func inside(a, b netip.Addr) bool {
-	return onTailnet(a) && onTailnet(b) && a.IsLoopback() == b.IsLoopback()
+// inside reports whether a connection from local to remote stays on loopback
+// or runs inside WireGuard. A Tailscale-range local address isn't proof of
+// that; it must be on the interface Tailscale runs.
+func inside(local, remote netip.Addr) bool {
+	switch {
+	case !onTailnet(local) || !onTailnet(remote) || local.IsLoopback() != remote.IsLoopback():
+		return false
+	case local.IsLoopback():
+		return true
+	}
+	return slices.Contains(tailscaleAddrs(), local)
+}
+
+// tailscaleAddrs are the addresses of each interface that holds one in
+// fd7a:115c:a1e0::/48. Tailscale gives every node such an address; a
+// carrier-grade NAT link or another overlay in 100.64.0.0/10 has none.
+func tailscaleAddrs() []netip.Addr {
+	var out []netip.Addr
+	for _, addrs := range interfaceAddrs() {
+		if slices.ContainsFunc(addrs, tailscale6.Contains) {
+			out = append(out, addrs...)
+		}
+	}
+	return out
 }
 
 func ipOf(a net.Addr) netip.Addr {
@@ -115,29 +156,20 @@ func ipOf(a net.Addr) netip.Addr {
 func (Tailnet) WhoIs(conn net.Conn) (Peer, error) {
 	local, remote := ipOf(conn.LocalAddr()), ipOf(conn.RemoteAddr())
 	if !inside(local, remote) {
-		return Peer{}, fmt.Errorf("transport: a connection from %s to %s is neither on loopback nor between Tailscale addresses", conn.RemoteAddr(), conn.LocalAddr())
+		return Peer{}, fmt.Errorf("transport: a connection from %s to %s is neither on loopback nor from a Tailscale address to this machine's Tailscale interface", conn.RemoteAddr(), conn.LocalAddr())
 	}
 	return Peer{Name: remote.String()}, nil
 }
 
 // TailscaleIP is this machine's Tailscale address, IPv4 if it has one. It
-// is false when Tailscale isn't up.
+// is false when Tailscale isn't up in kernel mode.
 func TailscaleIP() (netip.Addr, bool) {
-	addrs, _ := net.InterfaceAddrs()
 	var v6 netip.Addr
-	for _, a := range addrs {
-		n, ok := a.(*net.IPNet)
-		if !ok {
-			continue
-		}
-		ip, _ := netip.AddrFromSlice(n.IP)
-		if ip = ip.Unmap(); ip.IsLoopback() || !onTailnet(ip) {
-			continue
-		}
-		if ip.Is4() {
+	for _, ip := range tailscaleAddrs() {
+		switch {
+		case tailscale4.Contains(ip):
 			return ip, true
-		}
-		if !v6.IsValid() {
+		case tailscale6.Contains(ip) && !v6.IsValid():
 			v6 = ip
 		}
 	}
