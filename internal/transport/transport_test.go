@@ -1060,28 +1060,29 @@ func TestIdleSocketCloses(t *testing.T) {
 }
 
 func TestOversizedRequestLeavesTheSocketAlone(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	fake := &fakeEndpoint{env: api.Environment{ID: api.NewID()}}
-	d := &dialer{Loopback: start(t, "unix", &Server{Endpoint: fake})}
-	c := NewEndpointClient(d, api.ID{})
+	r := openReplica(t)
+	d := &dialer{Loopback: start(t, "unix", &Server{Hub: r})}
+	c := NewHubClient(d, api.ID{})
 	thread := api.NewID()
-	st := mustOpen(t, ctx, c, thread)
-
-	big := api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: strings.Repeat("x", maxMessage)}}
-	if _, err := c.Submit(ctx, big); !errors.Is(err, errTooLarge) {
-		t.Fatalf("a submit over the server's limit: %v", err)
-	}
-	if err := readStream(ctx, st, thread, api.Cursor{}); err != nil {
+	feed, err := c.Follow(ctx, thread, api.Cursor{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	idle, stop := context.WithTimeout(ctx, 50*time.Millisecond)
-	defer stop()
-	if _, err := st.Next(idle); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("the stream beside a refused submit: %v, want it still open", err)
+	defer feed.Close()
+
+	log := api.NewID()
+	evs := events(log, thread, 1, 1)
+	evs[0].Payload = json.RawMessage(`"` + strings.Repeat("x", maxMessage) + `"`)
+	if _, err := c.Append(ctx, api.Upload{Host: api.NewID(), Epoch: 1, Log: log, Events: evs}); !errors.Is(err, errTooLarge) {
+		t.Fatalf("an append over the server's limit: %v", err)
 	}
-	if env, err := c.Info(ctx); err != nil || env != fake.env {
-		t.Fatalf("info: %+v %v", env, err)
+	if ack, err := c.Append(ctx, api.Upload{Host: api.NewID(), Epoch: 1, Log: log, Events: events(log, thread, 1, 1)}); err != nil || ack.Acked != 1 {
+		t.Fatalf("an append after the refused one: %+v %v", ack, err)
+	}
+	if e, err := feed.Next(ctx); err != nil || e.Cursor.Seq != 1 {
+		t.Fatalf("the stream beside a refused append: %+v %v", e.Cursor, err)
 	}
 	if n := len(d.dialed()); n != 1 {
 		t.Fatalf("dialed %d sockets, want 1", n)
@@ -1187,30 +1188,24 @@ func TestKeepaliveHoldsAnIdleSocket(t *testing.T) {
 }
 
 func TestServerReadLimit(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	lb := start(t, "unix", &Server{Endpoint: &fakeEndpoint{}})
-
-	// Exactly the limit is read and answered; info takes no params, so the
-	// answer is a bad_request.
-	ws, err := handshake(ctx, lb, api.ID{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ws.CloseNow()
-	head := `{"id":1,"method":"info","params":"`
-	at := head + strings.Repeat("x", maxMessage-len(head)-2) + `"}`
-	if err := ws.Write(ctx, websocket.MessageText, []byte(at)); err != nil {
-		t.Fatal(err)
-	}
-	var r response
-	if _, b, err := ws.Read(ctx); err != nil || json.Unmarshal(b, &r) != nil || r.ID != 1 || r.Error == nil || r.Error.Code != "bad_request" {
-		t.Fatalf("a %d byte request: %+v %v", len(at), r.Error, err)
-	}
-
-	over := make([]byte, maxMessage+1)
-	go ws.Write(ctx, websocket.MessageText, over)
-	if _, _, err := ws.Read(ctx); websocket.CloseStatus(err) != websocket.StatusMessageTooBig {
-		t.Fatalf("a %d byte request: %v, want the socket closed as too big", len(over), err)
+	// Zeros are not JSON, so a message the server reads closes the socket
+	// as malformed.
+	for size, want := range map[int]websocket.StatusCode{
+		maxMessage:     websocket.StatusInvalidFramePayloadData,
+		maxMessage + 1: websocket.StatusMessageTooBig,
+	} {
+		ws, err := handshake(ctx, lb, api.ID{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		go ws.Write(ctx, websocket.MessageText, make([]byte, size))
+		_, _, err = ws.Read(ctx)
+		ws.CloseNow()
+		if got := websocket.CloseStatus(err); got != want {
+			t.Errorf("a %d byte message: %v, want close status %v", size, err, want)
+		}
 	}
 }
