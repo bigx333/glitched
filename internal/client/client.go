@@ -48,9 +48,12 @@ type Manager struct {
 	wg     sync.WaitGroup
 	local  *local
 
-	envs   []*Env
-	saved  saved
-	closed bool
+	envs  []*Env
+	saved saved
+	// saving is whether a goroutine is saving the read marks; unsaved,
+	// whether some are marked that no save has taken.
+	saving, unsaved bool
+	closed          bool
 }
 
 func New(cfg Config) *Manager {
@@ -72,8 +75,8 @@ func (m *Manager) Start() error {
 	return nil
 }
 
-// Close stops every environment and an embedded engine, and returns once
-// their goroutines have.
+// Close stops every environment and an embedded engine, saves the read
+// marks no save has, and returns once their goroutines have.
 func (m *Manager) Close() error {
 	if m.closed {
 		return nil
@@ -81,10 +84,15 @@ func (m *Manager) Close() error {
 	m.closed = true
 	m.cancel()
 	m.wg.Wait()
-	if m.local != nil {
-		return m.local.err
+	// A save that was under way posted whether it failed too late to tell.
+	var err error
+	if m.unsaved || m.saving {
+		_, err = m.edit(func(f *saved) { f.see(m.saved.Seen) })
 	}
-	return nil
+	if m.local != nil {
+		err = errors.Join(err, m.local.err)
+	}
+	return err
 }
 
 // Envs is the local environment, then the remotes. The slice is the

@@ -88,9 +88,7 @@ func TestGUIJSONKeepsServersAndReadMarks(t *testing.T) {
 	if !m.Unread(th) {
 		t.Fatal("a finished turn nobody looked at is read, want unread")
 	}
-	if err := m.MarkRead(th); err != nil {
-		t.Fatal(err)
-	}
+	m.MarkRead(th)
 	if m.Unread(th) {
 		t.Fatal("unread after MarkRead")
 	}
@@ -269,7 +267,7 @@ func TestReconnectingOrRemovingAServerEndsItsGoroutines(t *testing.T) {
 // and a change to the servers shows the ones the other added or removed.
 func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 	dir := stateDir(t)
-	a, _ := manager(t, dir)
+	a, ga := manager(t, dir)
 	b, _ := manager(t, dir)
 	var wg sync.WaitGroup
 	for _, m := range []*Manager{a, b} {
@@ -287,9 +285,11 @@ func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 	}
 
 	read := &Thread{View: api.Thread{ID: api.NewID(), LastTurn: &api.TurnResult{Ended: time.Now()}}}
-	if err := a.MarkRead(read); err != nil {
-		t.Fatal(err)
+	a.MarkRead(read)
+	saved := func(th *Thread) func() bool {
+		return func() bool { s, err := savedIn(dir); return err == nil && !s.Seen[th.View.ID].IsZero() }
 	}
+	ga.until(t, "the read mark saved", saved(read))
 	gone := a.Servers()[0].Label
 	if err := b.RemoveServer(gone); err != nil {
 		t.Fatal(err)
@@ -298,9 +298,9 @@ func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 		t.Fatal("the other GUI's read mark is lost")
 	}
 	env := a.Envs()[1]
-	if err := a.MarkRead(&Thread{View: api.Thread{ID: api.NewID(), LastTurn: &api.TurnResult{Ended: time.Now()}}}); err != nil {
-		t.Fatal(err)
-	}
+	later := &Thread{View: api.Thread{ID: api.NewID(), LastTurn: &api.TurnResult{Ended: time.Now()}}}
+	a.MarkRead(later)
+	ga.until(t, "the later mark saved", saved(later))
 	if a.Envs()[1] != env || a.Servers()[0].Label != gone {
 		t.Fatal("marking a thread read made the envs follow gui.json, want only the read mark saved")
 	}

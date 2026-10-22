@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"fmt"
 	"hash/fnv"
-	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -327,16 +326,10 @@ func failed(t thread) bool {
 // select_ shows the thread in the chat, read.
 func (a *app) select_(t thread) {
 	a.selected = t.id()
-	a.markRead(t)
+	a.backend.MarkRead(t.Thread)
 	a.follow()
 	if a.router.Path() != "/" {
 		a.router.Push("/")
-	}
-}
-
-func (a *app) markRead(t thread) {
-	if err := a.backend.MarkRead(t.Thread); err != nil {
-		log.Printf("glitched: marking %s read: %v", t.id(), err)
 	}
 }
 
@@ -381,7 +374,7 @@ func (a *app) changed() {
 			}
 			t := thread{e, th}
 			if id == a.selected && a.router.Path() == "/" {
-				a.markRead(t)
+				a.backend.MarkRead(t.Thread)
 			}
 			a.notifyFinished(t)
 		}

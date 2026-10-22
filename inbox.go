@@ -396,7 +396,7 @@ func (a *app) rowActions(c *ui.Context, t thread, cat category) {
 			a.snoozeButton(c, t, cat)
 			if iconButton(c, "settle", icCheckCirc, "Settle", false).Padding(3).TextColor(tintSettle).Clicked() {
 				a.backend.SetDisposition(t.env, t.id(), api.Disposition{State: api.Settled})
-				a.markRead(t)
+				a.backend.MarkRead(t.Thread)
 				a.gag(c, t.id(), gagSettle, cat)
 				c.AddToast(ui.Toast{Title: "Settled. Phew.", Description: t.View.Title})
 			}

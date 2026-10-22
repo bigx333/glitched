@@ -2,6 +2,8 @@ package client
 
 import (
 	"errors"
+	"log"
+	"maps"
 	"path/filepath"
 	"slices"
 	"time"
@@ -43,7 +45,9 @@ func (m *Manager) editServers(renew string, change func(*saved)) error {
 	if err != nil {
 		return err
 	}
+	seen := m.saved.Seen
 	m.saved = s
+	m.saved.see(seen)
 	m.sync(renew)
 	return nil
 }
@@ -109,24 +113,51 @@ func (m *Manager) Unread(th *Thread) bool {
 	return last != nil && last.Ended.After(m.saved.Seen[th.View.ID])
 }
 
-// MarkRead records in gui.json that the GUI showed the thread's last turn.
-// It leaves the envs as they are, whatever servers another GUI saved.
-func (m *Manager) MarkRead(th *Thread) error {
+// MarkRead records that the GUI showed the thread's last turn, at once,
+// and saves the mark to gui.json from a goroutine, as the file's lock
+// may wait on another GUI. It leaves the envs as they are, whatever
+// servers another GUI saved.
+func (m *Manager) MarkRead(th *Thread) {
 	if !m.Unread(th) {
-		return nil
+		return
 	}
-	id, ended := th.View.ID, th.View.LastTurn.Ended
-	s, err := m.edit(func(f *saved) {
-		if f.Seen == nil {
-			f.Seen = map[api.ID]time.Time{}
-		}
-		if ended.After(f.Seen[id]) {
-			f.Seen[id] = ended
-		}
+	m.saved.see(map[api.ID]time.Time{th.View.ID: th.View.LastTurn.Ended})
+	m.unsaved = true
+	m.saveSeen()
+}
+
+// saveSeen saves the read marks, unless a save is under way, which saves
+// the marks made meanwhile once it is done. A save that failed is tried
+// again with the next mark, or by Close.
+func (m *Manager) saveSeen() {
+	if m.saving || !m.unsaved {
+		return
+	}
+	m.saving, m.unsaved = true, false
+	seen := maps.Clone(m.saved.Seen)
+	m.wg.Go(func() {
+		s, err := m.edit(func(f *saved) { f.see(seen) })
+		m.post(m.ctx, func() {
+			m.saving = false
+			if err != nil {
+				log.Printf("client: saving read marks: %v", err)
+				m.unsaved = true
+				return
+			}
+			m.saved.see(s.Seen)
+			m.saveSeen()
+		})
 	})
-	if err != nil {
-		return err
+}
+
+// see takes the marks in seen that are later than s's.
+func (s *saved) see(seen map[api.ID]time.Time) {
+	if s.Seen == nil {
+		s.Seen = map[api.ID]time.Time{}
 	}
-	m.saved.Seen = s.Seen
-	return nil
+	for id, at := range seen {
+		if at.After(s.Seen[id]) {
+			s.Seen[id] = at
+		}
+	}
 }
