@@ -149,12 +149,15 @@ type InterruptLost struct{ Run api.ID }
 // SteerLost: the engine died while steering, so nobody knows if it arrived.
 type SteerLost struct{ Message api.ID }
 
-// Reconciled is the verdict on a run the last process left live: boot's,
-// or the store's on a restored database, which never restores a run.
+// Reconciled is boot's verdict on a run the last process left live.
 type Reconciled struct {
 	Run      api.ID
 	Restored bool
 }
+
+// Rewound: the database came back from a backup and lost history. The live
+// run may have ended there, and a ready message may have run after it.
+type Rewound struct{}
 
 func (Started) observed()        {}
 func (Ended) observed()          {}
@@ -169,3 +172,4 @@ func (SteerLost) observed()      {}
 func (InterruptSent) observed()  {}
 func (InterruptLost) observed()  {}
 func (Reconciled) observed()     {}
+func (Rewound) observed()        {}

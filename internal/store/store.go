@@ -58,8 +58,9 @@ func (s *Store) LogID() api.ID { return s.log }
 func (s *Store) HostID() api.ID { return s.host }
 
 // Rewind does what Open does for a restore its fence shows, for a database
-// another party proved is behind what it handed out: a new log id, and every
-// live run uncertain. Call it before a Host runs on the store.
+// another party proved is behind what it handed out: a new log id, every
+// live run uncertain and the messages queued behind it cancelled. Call it
+// before a Host runs on the store.
 func (s *Store) Rewind(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -250,22 +251,23 @@ func (s *Store) migrate() error {
 }
 
 // rewind gives the log a new id, for a database that is behind what its
-// clients saw, and makes every run it left live uncertain: what it holds in
-// flight may already have reached the agent in the history it lost. It
-// returns the new head.
+// clients saw. Every run it left live becomes uncertain and every ready
+// message behind one is cancelled: what it holds in flight may already have
+// reached the agent in the history it lost, and what it holds queued may
+// already have run there. It returns the new head.
 func (s *Store) rewind(ctx context.Context, tx *sql.Tx) (uint64, error) {
 	s.log = api.NewID()
 	if _, err := tx.ExecContext(ctx, `UPDATE meta SET value = ? WHERE key = 'log'`, s.log[:]); err != nil {
 		return 0, err
 	}
-	threads, err := ids(ctx, tx, `SELECT thread FROM runs WHERE state NOT IN ('finished', 'uncertain') ORDER BY thread`)
+	threads, err := ids(ctx, tx, `SELECT thread FROM runs WHERE state <> 'finished' ORDER BY thread`)
 	if err != nil {
 		return 0, err
 	}
 	now := time.Now()
 	for _, id := range threads {
 		if _, _, err := s.write(ctx, tx, id, func(t engine.Thread) ([]engine.Event, []engine.Effect, error) {
-			return engine.Observe(t, engine.Reconciled{Run: t.Live().ID}, now)
+			return engine.Observe(t, engine.Rewound{}, now)
 		}); err != nil {
 			return 0, err
 		}

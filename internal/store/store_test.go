@@ -219,3 +219,60 @@ func TestARefusedObservationStillCompletesItsEffect(t *testing.T) {
 		t.Fatalf("refused observation: %d events added, leased %+v %v; want none and its effect done", len(after)-len(before), leased, err)
 	}
 }
+
+// A message still queued in a restored database may have run in the history
+// the restore lost, so the restore must not leave it to start again. That
+// holds behind a run the restore makes uncertain and behind one that already
+// was.
+func TestRewindCancelsReadyMessagesBehindLiveRuns(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, filepath.Join(t.TempDir(), "host.db"))
+	submit := func(thread api.ID, body api.Intent) api.ID {
+		t.Helper()
+		c := api.Command{ID: api.NewID(), Target: thread, Body: body}
+		if _, err := s.Submit(ctx, c, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		return c.ID
+	}
+	running, unsure := api.NewID(), api.NewID()
+	var ready, held []api.ID
+	for _, thread := range []api.ID{running, unsure} {
+		submit(thread, create(thread).Body)
+		run := submit(thread, api.MessageDispatch{Text: "go", Mode: api.StartNow})
+		e, ok, err := s.Lease(ctx)
+		if err != nil || !ok {
+			t.Fatalf("lease: %v %v", ok, err)
+		}
+		if _, err := s.Observe(ctx, thread, engine.Started{Run: run}, time.Now(), e.ID); err != nil {
+			t.Fatal(err)
+		}
+		if thread == unsure {
+			if _, err := s.Observe(ctx, thread, engine.Reconciled{Run: run}, time.Now(), 0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ready = append(ready, submit(thread, api.MessageDispatch{Text: "delete the old branch", Mode: api.AfterActive}))
+		held = append(held, submit(thread, api.MessageDispatch{Text: "later", Mode: api.Defer}))
+	}
+
+	if err := s.Rewind(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for i, thread := range []api.ID{running, unsure} {
+		th, err := s.Thread(ctx, thread)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m, _ := th.Message(ready[i]); m.State != engine.QueueCancelled {
+			t.Errorf("thread %d: ready message is %s after the rewind, want cancelled", i, m.State)
+		}
+		if m, _ := th.Message(held[i]); m.State != engine.QueueHeld {
+			t.Errorf("thread %d: held message is %s after the rewind, want held", i, m.State)
+		}
+		submit(thread, api.TurnInterrupt{}) // the user moves on from the uncertain run
+	}
+	if e, ok, err := s.Lease(ctx); err != nil || ok {
+		t.Fatalf("abandoning the uncertain runs leased %+v %v, want nothing to start", e.Body, err)
+	}
+}

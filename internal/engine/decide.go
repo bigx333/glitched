@@ -309,6 +309,32 @@ func (d *decision) observe(o Observation) error {
 			return d.emit(api.TurnRestored{Run: o.Run})
 		}
 		return d.emit(api.TurnUncertain{Run: o.Run})
+	case Rewound:
+		return d.rewound()
+	}
+	return nil
+}
+
+func (d *decision) rewound() error {
+	live := d.t.Live()
+	if live == nil {
+		return nil
+	}
+	if live.State != RunUncertain {
+		if err := d.emit(api.TurnUncertain{Run: live.ID}); err != nil {
+			return err
+		}
+	}
+	var ready []api.ID
+	for _, m := range d.t.Queue {
+		if m.State == QueueReady {
+			ready = append(ready, m.ID)
+		}
+	}
+	for _, id := range ready {
+		if err := d.emit(api.MessageCancelled{Message: id, Reason: "the database was restored; send again if it never ran"}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
