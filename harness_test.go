@@ -240,7 +240,7 @@ func texts(es []entry) string {
 }
 
 // newer serves an engine as one a protocol ahead of this app would, on a
-// loopback port that takes any token, and returns its address.
+// loopback port whose one token is "any", and returns its address.
 func newer(t *testing.T) string {
 	t.Helper()
 	d := engine(t, daemon.Config{Dir: tempDir(t)}, fake.New(fake.Turn(false)))
@@ -253,7 +253,13 @@ func newer(t *testing.T) string {
 	served := make(chan struct{})
 	go func() {
 		defer close(served)
-		admit := func(*http.Request) (context.Context, error) { return ctx, nil }
+		key := transport.KeyOf("any")
+		admit := func(_ *http.Request, proved func(transport.Key) bool) (transport.Key, context.Context, error) {
+			if !proved(key) {
+				return transport.Key{}, nil, transport.ErrRefused
+			}
+			return key, ctx, nil
+		}
 		(&transport.Server{Transport: tn, Endpoint: ahead{d.Endpoint()}, Authorize: admit}).Serve(ctx, ln)
 	}()
 	t.Cleanup(func() { stop(); <-served })
