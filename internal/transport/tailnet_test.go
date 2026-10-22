@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -275,5 +276,43 @@ func TestTailnetServerNeedsAuthorize(t *testing.T) {
 		if err == nil {
 			t.Errorf("a %s server without Authorize served", name)
 		}
+	}
+}
+
+func TestServerClosesAConnectionItRefusedOnceIdle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, idle: 100 * time.Millisecond, Authorize: func(*http.Request) (context.Context, error) {
+		return nil, errors.New("unknown token")
+	}}
+	ln, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error)
+	go func() { done <- srv.Serve(ctx, ln) }()
+	defer func() { cancel(); <-done }()
+	nc, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	nc.SetDeadline(time.Now().Add(5 * time.Second))
+	br := bufio.NewReader(nc)
+	const upgrade = "GET /ws HTTP/1.1\r\nHost: glitched\r\n\r\n"
+	io.WriteString(nc, upgrade)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("an upgrade without a token got %d, want 401", resp.StatusCode)
+	}
+	time.Sleep(time.Second)
+	io.WriteString(nc, upgrade)
+	if resp, err := http.ReadResponse(br, nil); err == nil {
+		resp.Body.Close()
+		t.Fatalf("a refused connection idle past the timeout was served again: %d", resp.StatusCode)
 	}
 }

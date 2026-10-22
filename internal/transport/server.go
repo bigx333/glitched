@@ -30,7 +30,8 @@ type Server struct {
 	// when its grant is revoked.
 	Authorize func(*http.Request) (context.Context, error)
 
-	keepalive keepalive // zero means defaultKeepalive
+	keepalive keepalive     // zero means defaultKeepalive
+	idle      time.Duration // zero means defaultIdle
 }
 
 type connKey struct{}
@@ -63,9 +64,16 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		defer sockets.Done()
 		s.serveSocket(ctx, w, r, methods)
 	})
+	idle := s.idle
+	if idle == 0 {
+		idle = defaultIdle
+	}
 	hs := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		// A refused upgrade leaves its connection in keep-alive; nothing else
+		// would close it.
+		IdleTimeout: idle,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			return context.WithValue(ctx, connKey{}, c)
 		},
@@ -232,6 +240,8 @@ func writeMessage(ctx context.Context, ws *websocket.Conn, b []byte) error {
 type keepalive struct{ every, within time.Duration }
 
 var defaultKeepalive = keepalive{every: 15 * time.Second, within: 10 * time.Second}
+
+const defaultIdle = 10 * time.Second
 
 func (k keepalive) run(ctx context.Context, ws *websocket.Conn) {
 	t := time.NewTicker(k.every)
