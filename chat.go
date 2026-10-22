@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"time"
 
@@ -219,6 +220,10 @@ func (a *app) timeline(c *ui.Context, t *thread) {
 	l.FollowEnd = true
 	l.FollowAnimation = &ui.Smooth
 	ui.List(c.Key(t.id), l, len(t.entries), func(i int) {
+		// An action on an entry can cut the thread short mid-frame.
+		if i >= len(t.entries) {
+			return
+		}
 		ui.Row(c).Justify(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, i, t.entries[i]) })
 		})
@@ -261,7 +266,8 @@ func (a *app) entry(c *ui.Context, t *thread, i int, e entry) {
 	key := fmt.Sprintf("%s/%d", t.id, i)
 	switch e.kind {
 	case entryUser:
-		ui.Row(c).Key(key).Transition(riseIn).Children(func() {
+		row := ui.Row(c).Key(key).Transition(riseIn)
+		row.Children(func() {
 			ui.Spacer(c)
 			ui.Column(c).AlignItems(ui.End).Gap(6).MaxWidthPercent(80).Children(func() {
 				if len(e.attachments) > 0 {
@@ -272,17 +278,20 @@ func (a *app) entry(c *ui.Context, t *thread, i int, e entry) {
 						Background(palette.surface).Border(1, palette.border)
 				}
 			})
+			a.messageActions(c, t, i, e, row.Hovered())
 		})
 	case entryAssistant:
-		ui.Column(c).Key(key).LineHeight(1.55).Transition(riseIn).Children(func() {
+		col := ui.Column(c).Key(key).LineHeight(1.55).Transition(riseIn)
+		col.Children(func() {
 			if e.streaming {
 				markdown.Stream(c, e.text, &a.md)
 			} else {
 				markdown.View(c, e.text, &a.md)
 			}
+			a.messageActions(c, t, i, e, col.Hovered() && !e.streaming)
 		})
 	case entryWork:
-		a.workLog(c, key, e, t.pausedFor(i))
+		a.workLog(c, key, t, e, t.pausedFor(i))
 	case entryChanges:
 		a.changes(c, key, e)
 	case entryApproval:
@@ -292,7 +301,7 @@ func (a *app) entry(c *ui.Context, t *thread, i int, e entry) {
 
 // workLog is the agent's steps of a turn, under a head that says how it
 // went: still working, paused for an approval, or how long it took.
-func (a *app) workLog(c *ui.Context, key string, e entry, paused bool) {
+func (a *app) workLog(c *ui.Context, key string, t *thread, e entry, paused bool) {
 	working := strings.HasSuffix(e.took, "…")
 	open := !a.collapsed[key]
 	ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Clip().
@@ -316,28 +325,64 @@ func (a *app) workLog(c *ui.Context, key string, e entry, paused bool) {
 		if !open {
 			return
 		}
-		ui.Column(c).Key("steps").Padding(6, 12, 10).Gap(6).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).
+		ui.Column(c).Key("steps").Padding(6, 8, 10).Gap(2).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).
 			ClipY().Transition(fold).Children(func() {
 			for i, w := range e.work {
 				// Each step the agent takes unfolds below the last.
-				ui.Row(c).Key(i).Gap(8).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
-					icon := icFile
-					switch w.kind {
-					case "command":
-						icon = icTerminal
-					case "edit":
-						icon = icPencil
-					case "search":
-						icon = icSearch
-					}
-					ui.Icon(c, icon).FontSize(12).TextColor(palette.faint)
-					ui.Text(c, w.label).FontSize(12).TextColor(palette.muted).SingleLine().Width(64)
-					ui.Text(c, w.detail).FontSize(12).Font("monospace").SingleLine().Shrink(1)
-					counts(c, w.add, w.del)
-				})
+				a.step(c, t, i, w)
 			}
 		})
 	})
+}
+
+// step is one of the agent's steps. A command that ran shows how it went,
+// and what it printed when it failed. An edit of a file the diff shows
+// opens it there.
+func (a *app) step(c *ui.Context, t *thread, i int, w workItem) {
+	icon := icFile
+	switch w.kind {
+	case "command":
+		icon = icTerminal
+	case "edit":
+		icon = icPencil
+	case "search":
+		icon = icSearch
+	}
+	file := -1
+	if w.kind == "edit" {
+		file = slices.IndexFunc(t.changed(), func(f fileChange) bool { return f.path == w.detail })
+	}
+	var row ui.Element
+	if file >= 0 {
+		row = ghost(c, i, false).Padding(2, 4).Radius(5).Gap(8).ClipY().Transition(fold)
+	} else {
+		row = ui.Row(c).Key(i).Padding(2, 4).Radius(5).Gap(8).AlignItems(ui.Center).ClipY().Transition(fold)
+	}
+	if row.Children(func() {
+		ui.Icon(c, icon).FontSize(12).TextColor(palette.faint)
+		ui.Text(c, w.label).FontSize(12).TextColor(palette.muted).SingleLine().Width(64)
+		ui.Text(c, w.detail).FontSize(12).Font("monospace").SingleLine().Shrink(1).TextColor(palette.text)
+		counts(c, w.add, w.del)
+		ui.Spacer(c)
+		switch {
+		case w.kind == "command" && w.took != "":
+			mark, color := "✓", palette.green
+			if w.exit != 0 {
+				mark, color = "✗", palette.red
+			}
+			ui.Textf(c, "%s %d", mark, w.exit).FontSize(11.5).Font("monospace").TextColor(color)
+			ui.Textf(c, "· %s", w.took).FontSize(11.5).Font("monospace").TextColor(palette.faint)
+		case file >= 0 && row.Hovered():
+			ui.Text(c, "Open in diff").FontSize(11.5).TextColor(palette.muted)
+			ui.Icon(c, icExternal).FontSize(11).TextColor(palette.muted)
+		}
+	}).Clicked() && file >= 0 {
+		a.showDiff, a.showPreview, a.diffFile, a.panelsJump = true, false, file, false
+	}
+	if w.exit != 0 && w.output != "" {
+		ui.Text(c, w.output).Selectable().FontSize(11.5).Font("monospace").LineHeight(1.5).TextColor(palette.muted).
+			Margin(2, 0, 4, 24).Padding(6, 10).Radius(6).Background(palette.bg).Border(1, palette.border)
+	}
 }
 
 func counts(c *ui.Context, add, del int) {
@@ -552,8 +597,12 @@ func (a *app) send(t *thread) {
 	a.listFor(t).ScrollToEnd()
 	t.entries = append(t.entries, entry{kind: entryUser, text: text, attachments: a.attachments})
 	a.attachments = nil
-	// The thread goes to Working while the agent runs, out of the
-	// snoozed and settled ones.
+	a.run(t)
+}
+
+// run has the agent take its turn on the thread as it stands. The thread
+// goes to Working while it does, out of the snoozed and settled ones.
+func (a *app) run(t *thread) {
 	t.status, t.age, t.settled, t.snoozed = statusWorking, "now", false, ""
 	t.stop.Store(false)
 	a.play(t, scripts[replyCount%len(scripts)])

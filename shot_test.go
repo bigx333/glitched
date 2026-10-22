@@ -60,6 +60,15 @@ func TestShot(t *testing.T) {
 	}
 	tt.Frame()
 	tt.Advance(time.Second)
+	if s := os.Getenv("HOVER"); s != "" {
+		// The pointer over that text.
+		r, ok := tt.Find(s)
+		if !ok {
+			t.Fatalf("no %q to point at", s)
+		}
+		tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		tt.Advance(time.Second)
+	}
 	if ms := os.Getenv("HIDE"); ms != "" {
 		// Partway through hiding the sidebar.
 		d, _ := time.ParseDuration(ms)

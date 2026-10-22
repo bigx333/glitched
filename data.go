@@ -82,6 +82,11 @@ type workItem struct {
 	detail string
 	add    int
 	del    int
+	// How a command went, once it has: its exit code, how long it took,
+	// and what it last printed.
+	exit   int
+	took   string
+	output string
 }
 
 type entry struct {
@@ -123,8 +128,8 @@ func mockProjects() []*project {
 				{kind: "read", label: "Read", detail: "apps/web/src/hooks/useThreads.ts"},
 				{kind: "edit", label: "Edited", detail: "apps/web/src/components/Sidebar.tsx", add: 9, del: 2},
 				{kind: "edit", label: "Edited", detail: "apps/web/src/components/ChevronIcon.tsx", add: 14},
-				{kind: "command", label: "Ran", detail: "bun run typecheck"},
-				{kind: "command", label: "Ran", detail: "bun run test -- Sidebar"},
+				{kind: "command", label: "Ran", detail: "bun run typecheck", took: "1.2s"},
+				{kind: "command", label: "Ran", detail: "bun run test -- Sidebar", took: "2.8s"},
 			}},
 			{kind: entryAssistant, text: "Threads are now sorted by `updatedAt`, newest first, and a project's label toggles it open or closed.\n\n" +
 				"**What changed**\n\n" +
@@ -139,6 +144,8 @@ func mockProjects() []*project {
 			{kind: entryUser, text: "Nice. Can you also persist the collapsed state in localStorage?"},
 			{kind: entryWork, took: "Working…", work: []workItem{
 				{kind: "read", label: "Read", detail: "apps/web/src/lib/storage.ts"},
+				{kind: "command", label: "Ran", detail: "bun run test -- Sidebar", exit: 1, took: "3.4s",
+					output: "✗ Sidebar › restores collapsed state (12ms)\n  expected true, received undefined\nTest Files  1 failed (1)"},
 				{kind: "edit", label: "Editing", detail: "apps/web/src/components/Sidebar.tsx", add: 6, del: 1},
 			}},
 		},
@@ -152,7 +159,7 @@ func mockProjects() []*project {
 					{kind: "read", label: "Read", detail: "apps/desktop/src/terminal/resize.ts"},
 					{kind: "read", label: "Read", detail: "apps/desktop/src/terminal/pty.ts"},
 					{kind: "edit", label: "Edited", detail: "apps/desktop/src/terminal/resize.ts", add: 12, del: 4},
-					{kind: "command", label: "Ran", detail: "bun run typecheck"},
+					{kind: "command", label: "Ran", detail: "bun run typecheck", took: "1.2s"},
 				}},
 				{kind: entryApproval, approval: &approval{
 					command: "bun run test --filter=apps/desktop -- resize",
@@ -198,7 +205,7 @@ var scripts = []script{
 			{kind: "search", label: "Searched", detail: "collapsed in apps/web/src"},
 			{kind: "read", label: "Read", detail: "apps/web/src/lib/storage.ts"},
 			{kind: "edit", label: "Edited", detail: "apps/web/src/components/Sidebar.tsx", add: 6, del: 1},
-			{kind: "command", label: "Ran", detail: "bun run typecheck"},
+			{kind: "command", label: "Ran", detail: "bun run typecheck", took: "1.1s"},
 		},
 		reply: "Done. The collapsed projects are kept in `localStorage` under `t3code:sidebar:collapsed`, as a list of project ids.\n\n" +
 			"- `useCollapsedProjects()` reads it once and writes it back on every toggle.\n" +
@@ -208,7 +215,7 @@ var scripts = []script{
 	{
 		steps: []workItem{
 			{kind: "read", label: "Read", detail: "apps/server/src/terminal/pty.ts"},
-			{kind: "command", label: "Ran", detail: "rg -n \"resize\" apps/server/src"},
+			{kind: "command", label: "Ran", detail: "rg -n \"resize\" apps/server/src", took: "0.1s"},
 			{kind: "edit", label: "Edited", detail: "apps/server/src/terminal/pty.ts", add: 11, del: 4},
 		},
 		reply: "The flicker comes from resizing the PTY on every `ResizeObserver` tick. I debounced it to one resize per animation frame:\n\n" +
@@ -221,7 +228,7 @@ var scripts = []script{
 // the command and reports.
 var approved = script{
 	steps: []workItem{
-		{kind: "command", label: "Ran", detail: "bun run test --filter=apps/desktop -- resize"},
+		{kind: "command", label: "Ran", detail: "bun run test --filter=apps/desktop -- resize", took: "4.2s"},
 	},
 	reply: "The resize tests pass, the debounced handler included. The fix holds up on the three resize cases the suite covers: a drag, a maximize, and a DPI change.",
 }
