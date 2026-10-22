@@ -43,16 +43,6 @@ func iconButton(c *ui.Context, key any, icon *ui.SVG, label string, on bool) ui.
 	})
 }
 
-// shortcutHint shows a shortcut's keycaps only while ⌘ is held, as the
-// app's commands are found: out of the way otherwise. They show and go at
-// once, as the key does.
-func shortcutHint(c *ui.Context, keys ...string) {
-	if c.Modifiers()&ui.Cmd == 0 {
-		return
-	}
-	kbd(c, keys...)
-}
-
 // kbd is a key of a shortcut, as a keycap.
 func kbd(c *ui.Context, keys ...string) {
 	ui.Row(c).Gap(3).Children(func() {
@@ -93,7 +83,28 @@ func (a *app) sidebarFrame(c *ui.Context) {
 			}
 			a.sidebar(c)
 		})
+		a.sidebarEdge(c)
 	})
+}
+
+// The sidebar's width, as dragged: enough for a title, never half the
+// window.
+const (
+	minSidebarWidth = 220
+	maxSidebarWidth = 440
+)
+
+// sidebarEdge is the sidebar's right edge, which the pointer drags to
+// resize it. It lights up as it's pointed at.
+func (a *app) sidebarEdge(c *ui.Context) {
+	edge := ui.Box(c).Key("edge").Absolute().Right(0).Top(0).Bottom(0).Width(5).Cursor(ui.CursorResizeEW).
+		Label("Resize sidebar")
+	if dx, _, ok := edge.Dragged(); ok && dx != 0 {
+		a.sidebarWidth = min(max(a.sidebarWidth+dx, minSidebarWidth), maxSidebarWidth)
+	}
+	if edge.Hovered() || edge.Pressed() {
+		edge.Background(palette.accent.Alpha(0.5))
+	}
 }
 
 func (a *app) sidebar(c *ui.Context) {

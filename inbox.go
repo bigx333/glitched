@@ -98,14 +98,14 @@ func (a *app) threadsNav(c *ui.Context) {
 		if ghost(c, "new-thread", false).Padding(7, 8).Children(func() {
 			ui.Icon(c, icSquarePen).FontSize(15)
 			ui.Text(c, "New thread").Grow(1)
-			shortcutHint(c, "⌘", "N")
+			kbd(c, "⌘", "N")
 		}).Clicked() {
 			a.newThread()
 		}
 		if ghost(c, "search", false).Padding(7, 8).Children(func() {
 			ui.Icon(c, icSearch).FontSize(15)
 			ui.Text(c, "Search").Grow(1)
-			shortcutHint(c, "⌘", "K")
+			kbd(c, "⌘", "K")
 		}).Clicked() {
 			a.openCommandPalette()
 		}
@@ -132,11 +132,20 @@ func (a *app) threadsNav(c *ui.Context) {
 			sections(catWorking, catSnoozed, catSettled)
 		})
 	}
-	ui.Column(c).Padding(8).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
+	ui.Column(c).Padding(8).Gap(1).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
+		if ghost(c, "archived", false).Padding(7, 8).Children(func() {
+			ui.Icon(c, icArchive).FontSize(15)
+			ui.Text(c, "Archived").Grow(1)
+			if n := len(a.archived); n > 0 {
+				ui.Textf(c, "%d", n).FontSize(11).TextColor(palette.faint)
+			}
+		}).Clicked() {
+			a.router.Push("/settings/archived")
+		}
 		if ghost(c, "settings", false).Padding(7, 8).Children(func() {
 			ui.Icon(c, icSettings).FontSize(15)
 			ui.Text(c, "Settings").Grow(1)
-			shortcutHint(c, "⌘", ",")
+			kbd(c, "⌘", ",")
 		}).Clicked() {
 			a.router.Push("/settings/general")
 		}
@@ -151,11 +160,12 @@ func projectTile(c *ui.Context, p *project, size float32) ui.Element {
 }
 
 // projectStrip filters the inbox to some of the projects: each project's
-// tile toggles it in or out, All shows them all again, as does choosing
-// every one; then a button adding a project.
+// chip, its tile and name, toggles it in or out, All shows them all
+// again, as does choosing every one; then a button adding a project. The
+// chips wrap, as many as there are.
 func (a *app) projectStrip(c *ui.Context) {
 	filtered := len(a.projectFilter) > 0
-	ui.Row(c).Padding(6, 12, 6, 14).Gap(4).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Wrap().Padding(6, 10, 6, 12).Gap(4).AlignItems(ui.Center).Children(func() {
 		all := ghost(c, "all", !filtered).Padding(4, 8).Tooltip("All projects")
 		if all.Children(func() { ui.Text(c, "All").FontSize(11.5).FontWeight(500) }).Clicked() {
 			clear(a.projectFilter)
@@ -166,15 +176,17 @@ func (a *app) projectStrip(c *ui.Context) {
 			if on {
 				tip = "Hide " + p.name
 			}
-			b := ghost(c, p.id, on).Padding(3).Label(p.name).Tooltip(tip)
+			b := ghost(c, p.id, on).Padding(3, 7, 3, 3).Gap(5).Label(p.name).Tooltip(tip)
 			if filtered && !on {
 				b.Opacity(0.45)
 			}
-			if b.Children(func() { projectTile(c, p, 20) }).Clicked() {
+			if b.Children(func() {
+				projectTile(c, p, 16)
+				ui.Text(c, p.name).FontSize(11.5)
+			}).Clicked() {
 				a.toggleProject(p.id)
 			}
 		}
-		ui.Spacer(c)
 		iconButton(c, "add-project", icPlus, "Add project", false).Padding(4)
 	})
 }
