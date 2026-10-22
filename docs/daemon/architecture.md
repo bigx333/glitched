@@ -1,24 +1,29 @@
 # Glitched daemon architecture
 
-This is the synthesis of two candidate designs, `candidate-hub.md` (one server, thin hosts that dial out, after bb) and `candidate-peer.md` (a self-contained daemon per machine, after t3code and zeron). The traced facts behind both are in `research.md`.
+This is the synthesis of two candidate designs, `decisions/candidate-hub.md` (one server, thin hosts that dial out, after bb) and `decisions/candidate-peer.md` (a self-contained daemon per machine, after t3code and zeron). The traced facts behind both are in `research.md`. The other live documents are listed in `README.md`.
 
 ## Decision
 
-> **Revised in `control-plane.md`.** Central accounts and ephemeral VMs add a hub that holds accounts, machines, grants, thread locations and a read replica of every log. Hosts still own execution and write their own logs first. The hub runs as a role on one host (`hub.md`), and every route is the tailnet (`network.md`). The rest of this document describes the host engine, which is unchanged.
+**Hosts own execution. A hub holds control and a replica.** Every machine runs one `glitched` engine that owns its own SQLite, event log, agents, PTYs and worktrees, and it is the only writer of the threads it owns. One always-on host also runs the hub role, which holds accounts, machines, grants, thread locations and a read replica of every log (`hub.md`). A solo laptop runs the engine and the hub in one process and installs nothing. Every route is the user's tailnet (`network.md`).
 
-**Peer shape.** Every machine runs one `glitched` engine that owns its own SQLite, event log, agents, PTYs and worktrees. The GUI embeds that engine when no service runs, and attaches to N engines at once. A phone or a second Mac reaches an engine directly (LAN, Tailscale, SSH) or through an optional outbound relay.
+This document describes the host engine. The hub, the network, accounts, placement and the client cache each have their own document.
 
-Why peer over hub:
+Why the host writes and the hub doesn't (bb's shape, rejected in `decisions/candidate-hub.md`):
 
-- Glitched is laptop-first and single-user. In the hub shape, closing the laptop lid stops work on every machine, or the server moves to an always-on box and the laptop becomes remote to its own work.
-- The hub needs a second durable log on every host (a spool with its own offsets) because the host is not the owner. bb skips that spool and loses events when a daemon crashes. In the peer shape the process that runs the agent is the process that commits the event, so there is one log and one ordering.
-- PTY keystrokes and approvals take one hop, not two.
+- The process that runs the agent is the process that commits the event. bb's daemon keeps its event queue in memory and loses it on a crash. Here the host commits first and uploads from a durable offset.
+- A laptop keeps running its own threads with no network and uploads later.
+- Commands, keystrokes and approvals take one hop, from the client to the owner host. The hub carries none of them.
 
-What peer costs, accepted on purpose:
+Why there is a hub at all (the pure peer shape in `decisions/candidate-peer.md` was the first decision):
 
-- No global ordering. The inbox across machines is a client-side merge of N shell streams.
-- Each machine is paired, updated and backed up on its own.
-- A thread has one owner host at a time. Moving it is an explicit two-phase handoff, and only new threads are placed automatically. See `placement-and-handoff.md`.
+- Accounts are managed in one place and refreshed by one refresher (`account-pool.md`).
+- Clients pair once.
+- Ephemeral VMs, when they come, need something that outlives them (`ephemeral-vms.md`).
+
+What this costs, accepted on purpose:
+
+- Use across more than one machine needs one always-on host. Solo use does not.
+- A thread has one owner host at a time. Moving it is an explicit handoff that the hub commits, and only new threads are placed automatically (`placement-and-handoff.md`).
 
 ## Grafted from the hub candidate
 
@@ -34,7 +39,7 @@ What peer costs, accepted on purpose:
 - An `Uncertain` run state. After a crash the engine asks the adapter to reconcile the run. It resumes only when the adapter proves it is the same run, otherwise it marks the run Uncertain and the user restarts it. This replaces blind auto-continue.
 - The effective access policy is the intersection of the requested level, the client's grant, the workspace policy and what the adapter can enforce. The UI never promises more than the adapter enforces.
 - Shell access is a separate grant, off by default. An agent's access level never implies the right to type into a terminal.
-- The relay carries end-to-end encrypted streams pinned to the engine's key. It cannot authorize commands or read transcripts.
+- Being on the tailnet is a route, not an authorization. Every caller presents a client grant or a machine key (`network.md`).
 - Offline drafts and queued sends stay on the client until a receipt arrives. Interrupts, approvals and keystrokes are never replayed after a reconnect.
 
 ## Data shapes
@@ -58,7 +63,7 @@ type DispatchMode uint8 // StartNow, AfterActive, SteerActive, RestartActive, De
 type Thread struct {
 	id, workspace ID
 	revision      uint64
-	ownerEpoch    uint64   // bumped by each committed handoff
+	ownerEpoch    uint64   // matches the hub's Location; bumped by each committed handoff
 	residency     residency // sealed: owned | handingOff{transfer, to} | moved{to, epoch}
 	model         ModelRef // provider, model, effort, fast
 	access        Access   // Ask, AutoEdits, Full
@@ -75,7 +80,7 @@ type Request struct { // approval or question
 	state         requestState // pending | answered | delivered | invalidated | expired
 }
 
-type Event struct {
+type Event struct { // one row per item; text deltas are a stream, never rows
 	Cursor  Cursor
 	Entity  Ref
 	Type    string
@@ -83,7 +88,7 @@ type Event struct {
 	Payload json.RawMessage // unknown optional types are skipped, the cursor still advances
 }
 
-type Grant struct { // one paired client
+type Grant struct { // one paired client, issued by the hub and pushed to every host by revision
 	Client    ID
 	PublicKey [32]byte
 	Role      Role // Read, Operate, Admin
@@ -92,6 +97,8 @@ type Grant struct { // one paired client
 	RevokedAt time.Time
 }
 ```
+
+**The log holds items.** A completed message, a tool call's start and end, a request, a turn boundary, a state change and every admitted command are events. Streaming text is not. Each running thread has a transcript stream with byte offsets, in memory on the host, like PTY output. A snapshot carries the in-progress message buffer. The hub replica mirrors the log row for row, so one cursor works against the host and the hub, and the resync gap rule counts items. On a crash the partial text is gone from the log, and the run is Uncertain anyway. The provider's own session file has the text if reconciliation resumes.
 
 State tables live in `internal/engine` next to the types and are the only place a transition is checked.
 
@@ -105,18 +112,18 @@ State tables live in `internal/engine` next to the types and are the only place 
 ## Packages
 
 ```
-cmd/glitched         gui (default) | headless | service install|uninstall|status | pair | update
+cmd/glitched         gui (default) | headless | service install|uninstall|status | pair | enroll | update
 internal/api         wire types and the Endpoint contract; the only public surface
 internal/engine      pure Decide(state, command) -> events, effects; state tables
 internal/store       SQLite WAL, migrations, blobs, Commit() = events + projections + receipt + outbox in one tx
-internal/runtime     effect worker, dispatcher, reconciliation on boot
-internal/provider    Adapter + claude/ codex/ gemini/ grok/
+internal/runtime     effect worker, dispatcher, reconciliation on boot, log upload to the hub
+internal/provider    Adapter + claude/ codex/ gemini/ grok/, and the loopback token proxy
 internal/workspace   worktrees, checkpoint refs, diffs
 internal/pty         engine-owned PTYs, replay, input lease
-internal/auth        pairing, grants, sessions, revocation
+internal/auth        the grant table pushed from the hub, sessions, revocation, local IPC identity
 internal/transport   memory, unix socket, tailnet (installed Tailscale or tsnet); see network.md
-internal/hub         the hub role one host runs; see hub.md
-internal/client      routes, credentials, cursors, offline cache; what the GUI uses
+internal/hub         the hub role; see hub.md
+internal/client      hub and host connections, cursors, the local cache; what the GUI uses
 internal/gui         today's MyGo code; imports api and client only
 ```
 
@@ -125,7 +132,7 @@ type Endpoint interface {
 	Info(ctx context.Context) (Environment, error) // identity, protocol version, capabilities, provider catalog
 	Read(ctx context.Context, q Query) (Snapshot, error)
 	Submit(ctx context.Context, c Command) (Receipt, error) // same ID returns the same receipt; a changed payload conflicts
-	Open(ctx context.Context, s Subscription) (Stream, error) // shell | thread | terminal
+	Open(ctx context.Context, s Subscription) (Stream, error) // shell | thread | transcript | terminal
 }
 
 type Adapter interface {
@@ -148,12 +155,13 @@ type Agent interface {
 **Service and update.** `glitched service install` writes a launchd agent or systemd user unit that points at `~/.glitched/app/current`, with KeepAlive on failure only and a captured login-shell PATH (zeron). An update downloads and verifies a signed runtime and waits until no run or PTY is live. It snapshots the database, starts a trial child that migrates and reports `prepared`, then swaps the symlink. The launcher holds the lock fd throughout, and a failed trial restores the snapshot (t3code, simplified).
 
 **Dispatch.**
-1. The client mints a command ID and submits `message.dispatch{mode}`.
-2. `Decide` checks the access ceiling and writes the queue row. `Commit` stores events, projections, the receipt and a `turn.start` effect in one transaction.
+1. The client mints a command ID and submits `message.dispatch{mode}` to the owner host.
+2. `Decide` checks the access ceiling and writes the queue row. `Commit` stores the `message.queued` event, projections, the receipt and a `turn.start` effect in one transaction. Every admission is an event, so receipts and the queue are projections of the log and travel with it.
 3. The dispatcher, woken by named reasons (queued, turn ended, timer), claims the row with a lease and generation.
-4. The effect worker drives the adapter. Each provider event is normalized, committed and then broadcast. Text deltas batch at 50 ms and flush at once on requests and turn boundaries.
+4. The effect worker asks the hub for a token lease (`account-pool.md`) and drives the adapter. Each provider event that is an item is normalized, committed and then broadcast. Text deltas go to the transcript stream, batched at 50 ms, and flushed at once on requests and turn boundaries.
+5. The upload worker streams committed events to the hub replica from a durable offset (`hub.md`).
 
-**Resync.** A subscription captures a fence, sends the snapshot at the fence, then the buffered tail, then `synchronized` (t3code). A reconnect supplies its cursor. The engine replays from the log if the gap is at most 128 events and 1 MiB, and otherwise sends a fresh snapshot. A changed log id forces a snapshot. Each subscriber is capped at 8 MiB, and overflow closes the stream with a resync cursor. Transcripts travel as deltas from day one (zeron measured 1.13 MB per tick with full frames).
+**Resync.** A subscription captures a fence, sends the snapshot at the fence, then the buffered tail, then `synchronized` (t3code). A reconnect supplies its cursor. The engine replays from the log if the gap is at most 128 events and 1 MiB, and otherwise sends a fresh snapshot. A changed log id forces a snapshot. Each subscriber is capped at 8 MiB, and overflow closes the stream with a resync cursor. Transcripts travel as deltas on their own stream from day one (zeron measured 1.13 MB per tick with full frames), and a subscription to a running thread starts with the in-progress buffer.
 
 **Approvals.** The adapter surfaces a request, which is deduplicated, persisted, and shown in the inbox as NeedsYou. The first `respond` with a matching generation wins, and later ones get `already answered`. Expiry or invalidation interrupts the blocked run. A request that can't be delivered is invalidated, never silently approved. The Full-access hold gesture submits a policy change, and the engine refuses it above the client's ceiling.
 
@@ -161,19 +169,21 @@ type Agent interface {
 
 **Worktrees and checkpoints.** Each thread defaults to a worktree under `~/.glitched/worktrees/<project>/<thread>`. Each turn start writes a hidden ref `refs/glitched/<thread>/<turn>` that includes untracked files under a size limit (t3code). Diffs reference an immutable base and head. Restoring a checkpoint creates a restored worktree for review instead of resetting a dirty directory. Git operations go through an intent journal, because SQLite can't wrap them in its transaction.
 
-**Reach and pairing.** The engine listens on a Unix socket locally and on the tailnet for everything else (`network.md`, which replaces the LAN, SSH and relay routes). A client checks that the route answers with the expected environment id before sending credentials, and never falls back to loopback (t3code). `glitched pair` shows a 5-minute single-use QR holding the engine's fingerprint and a bootstrap secret. Redeeming it binds the client's public key to a grant. Sessions are short-lived, and a WebSocket ticket keeps tokens out of URLs. Revoking a grant closes its sockets, releases its terminal leases and rejects its queued commands at dispatch. Local IPC checks the OS peer identity plus an app credential. Nothing is anonymous, loopback included (unlike bb and zeron).
+**Reach and pairing.** The engine listens on a Unix socket locally and on the tailnet for everything else (`network.md`). Clients pair with the hub (`hub.md`). `glitched pair` shows a 5-minute single-use QR holding the hub's fingerprint and a bootstrap secret, and redeeming it binds the client's public key to a grant. The hub pushes the grant table to every host by revision, and a host checks each client connection against its copy, so one pairing reaches every host. A client checks that a route answers with the expected machine id before sending credentials, and never falls back to loopback (t3code). Sessions are short-lived, and a WebSocket ticket keeps tokens out of URLs. Revoking a grant at the hub bumps the revision. Each host then closes the client's sockets, releases its terminal leases and rejects its queued commands at dispatch. Local IPC checks the OS peer identity plus an app credential. Nothing is anonymous, loopback included (unlike bb and zeron).
 
-**Multi-machine in the GUI.** The GUI keeps one client per environment, each with its own cursor and offline cache keyed by `Ref`. Projects carry a machine badge. The inbox merges the shell streams. Quick-ask and the composer pick a host, or Any, which places the thread by published capacity. Threads move between hosts with `thread.move` (`placement-and-handoff.md`).
+**Multi-machine in the GUI.** The GUI keeps a local cache fed by the hub's shell stream and per-thread streams (`client-cache.md`). It reads a thread from the hub or from its owner with the same cursor, and it sends every command to the owner over the tailnet, or over the memory transport for the embedded engine. Projects carry a machine badge. Quick-ask and the composer pick a host, or Any, which the hub places by capacity. Threads move between hosts with `thread.move` (`placement-and-handoff.md`).
 
-**Notifications and integrations.** A delivery outbox sends local notifications and, opt-in, redacted push through the relay (thread id and kind only). Push is a hint to refetch and can never approve. `/mcp` (stdio or bearer HTTP) maps a small allow-list onto the same `Endpoint` with its own restricted grant. Webhooks are HMAC-signed with a replay window and delivery-id dedup.
+**Notifications and integrations.** A delivery outbox sends local notifications. Push to a phone goes from the hub through a stateless Cloudflare Worker that we host for everyone, because the APNs key can't live in the user's binary (`push.md`). It is opt-in, carries only the thread id and kind, and waits for a phone client. Push is a hint to refetch and can never approve. `/mcp` (stdio or bearer HTTP) maps a small allow-list onto the same `Endpoint` with its own restricted grant. Webhooks are HMAC-signed with a replay window and delivery-id dedup.
 
 ## MVP, each step ending in a check
+
+The hub, accounts, placement, handoff and the client cache have their own build orders in their documents. The hub leaves the solo process at step 5.
 
 1. `engine` + `store` + fake adapter, embedded in the GUI. Check: kill the process between commit and effect, and verify one admission and that replaying the log yields identical projections.
 2. Claude Code adapter, access levels and approvals. Check: a real turn streams into the existing chat, a tool prompt appears in the inbox, and two clients race an answer with exactly one winning.
 3. Codex adapter, queue modes and edits. Check: a crash during a turn ends restored or Uncertain, never as a duplicate start.
 4. Service install and attach, engine PTYs feeding libghostty, worktrees and diffs. Check: close the GUI, reopen it, and the scrollback and diff are intact.
-5. Pairing, Tailscale and SSH routes, N environments, revocation. Check: a second Mac pairs, revoking it cuts its socket, and a restored database fences its old cursor.
+5. The hub on a second, always-on host. Pairing at the hub, the tailnet route, enrollment, revocation. Check: a client paired once reaches both hosts, revoking it cuts its socket on both, and a restored database fences its old cursor.
 6. Signed updates, Gemini and Grok behind capability gates. Check: a failed trial migration leaves the old runtime and data working.
 7. Push, MCP and webhooks. Check: everything still works with push unavailable.
 
@@ -187,4 +197,4 @@ type Agent interface {
 
 ## Not building
 
-Replicated databases or CRDT transcripts, automatic moves of running threads, account-wide trust, a hosted gate as the only remote path, full-trust plugins, credential forwarding between machines, server-side browser tabs, WebRTC previews, port tunnels, and autonomous commit and push.
+Replicated databases or CRDT transcripts, automatic moves of running threads, account-wide trust, a Glitched relay, full-trust plugins, refresh tokens on hosts, server-side browser tabs, WebRTC previews, port tunnels, and autonomous commit and push.

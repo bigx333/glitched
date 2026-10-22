@@ -1,6 +1,6 @@
 # Network: Tailscale first
 
-Decided 2026-10-22. This replaces the relay, the LAN, SSH and the relay routes in `architecture.md`, and the Durable Object relay in `hub-on-cloudflare.md`.
+Decided 2026-10-22. There is no LAN route, no SSH route and no Glitched relay. The rejected relay is in `decisions/hub-on-cloudflare.md`.
 
 ## Decision
 
@@ -8,7 +8,7 @@ Decided 2026-10-22. This replaces the relay, the LAN, SSH and the relay routes i
 
 - **Tailscale installed:** Glitched uses it through its local API (`tailscale.com/client/local`). It reads its tailnet address and peers, listens on the tailnet address, and identifies callers with `WhoIs`. That gives no second device and no extra login.
 - **Tailscale not installed:** the app runs its own node with `tsnet` and becomes a device on the tailnet. The GUI shows "Sign in to Tailscale" using the login URL tsnet reports. This node is in userspace, needs no root, and adds no network interface to the machine.
-- **If Tailscale is installed later,** the embedded node logs out on the next start so the machine isn't listed twice.
+- **If Tailscale is installed later,** the embedded node logs out on the next start so the machine isn't listed twice. Nothing re-enrolls, because the machine's identity is its Glitched key, not its tailnet node.
 - Tailscale's DERP servers carry traffic when two devices can't connect directly. DERP runs over HTTPS on 443, so it also gets through networks that block UDP. That is why no Glitched relay is needed.
 
 ```go
@@ -23,8 +23,10 @@ There are two implementations, one for an installed Tailscale and one for the em
 
 ## Rules
 
-- **Being on the tailnet is the route, not the authorization.** A tailnet can include devices shared by other people. A caller must also present an enrolled Glitched machine key or a client grant, and `WhoIs` is checked against it.
-- **Discovery goes through the hub.** Personal devices aren't tagged, so they can't be found by tag. Each node reports its tailnet address to the hub, and the hub returns the machine list. Probing a fixed port on peers is a fallback.
+- **Identity is the Glitched key. The tailnet is the route.** A host is its enrolled machine key, and a client is its grant (`hub.md`). The tailnet node can change, from tsnet to an installed Tailscale or to a new IP, without touching either.
+- **Being on the tailnet is not authorization.** A tailnet can include devices shared by other people. `WhoIs` confirms that the caller's node belongs to the user's own tailnet login, and the caller must still present a machine key or a grant.
+- **Discovery goes through the hub.** Personal devices aren't tagged, so they can't be found by tag. Each node reports its tailnet address to the hub at session open, and the hub returns the machine list. Probing a fixed port on peers is a fallback.
+- **The hub's address is handed out at enrollment**, as its MagicDNS name and a fixed port. When the hub moves, the old host answers `Moved{address, epoch}` for a grace period (`hub.md`).
 - **Machines join untagged under the user's login.** Untagged devices are unlimited on the free Personal plan. Tags are for VMs only, which are deferred (`ephemeral-vms.md`).
 - **Phones and other GUI-only devices are clients, not nodes.** They reach nodes through the Tailscale app. Without it, the app embeds libtailscale in userspace. That uses no VPN slot, which matters on iOS, where only one VPN can run at a time.
 - **A browser client is out of scope.** A web page can't run tsnet, and that is the one case that would bring a relay back.

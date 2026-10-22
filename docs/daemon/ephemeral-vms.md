@@ -1,6 +1,17 @@
 # Ephemeral VMs (deferred)
 
-Put off on 2026-10-22. These are findings so far, not a design. The VM lifecycle in `control-plane.md` still holds: `Create`, `Remove`, optional `Suspend` and `Resume`, all idempotent by machine key.
+Put off on 2026-10-22. These are findings so far, not a design. The lifecycle below still holds and is the part of the hub that provisions machines (`hub.md`).
+
+## Lifecycle
+
+It follows bb's machine providers.
+
+- A `MachineProvider` interface has `Create(key)`, `Remove(id)`, `RemoveByKey(key)`, and optionally `Suspend` and `Resume`. Every call is idempotent by key, and checkpointed resources make cleanup retryable.
+- Bootstrap installs `glitched` with a one-time enroll key, and the host dials the hub. "Daemon connected" is not "agent ready". Checkout setup and the credential check must pass first (bb makes the same distinction).
+- A VM never writes an access token to disk (`account-pool.md`).
+- **Teardown.** An ephemeral machine is removed when no live or queued thread needs it. Before removal the hub checks two things. Every owned thread's log has been acknowledged to the tail, and the workspace snapshot has been pushed as a hidden ref to the project remote, using the snapshot format from `placement-and-handoff.md`. A thread then becomes "parked at the hub" and resumes on the next host that takes it.
+- Placement treats "create a VM" as a candidate host with a startup cost. It is chosen only when every live host is full.
+- A command for a VM that is paused needs a mailbox at the hub and wake-on-work (bb). Commands go straight to the owner host everywhere else (`hub.md`), so the mailbox arrives with VMs and not before.
 
 ## Providers
 
