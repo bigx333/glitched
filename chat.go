@@ -689,8 +689,8 @@ func (a *app) send(t thread) {
 	id := t.id()
 	if id.IsZero() {
 		title := text
-		if len(title) > 48 {
-			title = title[:48] + "…"
+		if r := []rune(title); len(r) > 48 {
+			title = string(r[:48]) + "…"
 		}
 		id = a.backend.Create(t.env, t.View.Workspace, title, a.modelRef(), accessOf[a.access])
 		a.selected = id

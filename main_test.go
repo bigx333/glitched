@@ -78,6 +78,18 @@ func TestSendStartsAThread(t *testing.T) {
 	})
 }
 
+// A long first message titles its thread by its first 48 characters,
+// whole.
+func TestALongMessageTitlesItsThreadByWholeCharacters(t *testing.T) {
+	h := start(t, tempDir(t))
+	h.a.draft = strings.Repeat("a", 47) + "été est là"
+	h.tt.Frame()
+	h.click("Send")
+	if got, want := h.a.current().View.Title, strings.Repeat("a", 47)+"é…"; got != want {
+		t.Errorf("the thread is titled %q, want %q", got, want)
+	}
+}
+
 // The turn's approval shows as a card; Allow lets the turn finish.
 func TestApprovalCardAllows(t *testing.T) {
 	h := start(t, tempDir(t))
