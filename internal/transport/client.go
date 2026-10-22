@@ -104,7 +104,8 @@ func (s *socket) send(req request) error {
 	// Never the caller's ctx: one that ends mid-write closes the socket for
 	// every other call on it.
 	if err := s.ws.Write(s.ctx, websocket.MessageText, b); err != nil {
-		return fmt.Errorf("transport: %w", err)
+		s.fail(lost(err))
+		return context.Cause(s.ctx)
 	}
 	return nil
 }
@@ -131,9 +132,9 @@ func (s *socket) read() {
 			s.forget(r.ID)
 		}
 	}
-	err = fmt.Errorf("transport: connection lost: %w", err)
-	s.fail(err)
+	s.fail(lost(err))
 	s.ws.CloseNow()
+	err = context.Cause(s.ctx)
 	s.mu.Lock()
 	sinks := s.sinks
 	s.sinks = nil
@@ -141,6 +142,15 @@ func (s *socket) read() {
 	for _, k := range sinks {
 		k.drop(err)
 	}
+}
+
+var errLost = errors.New("transport: connection lost")
+
+// lost is why the calls on a dead socket fail. It keeps err's text but not
+// its chain, which can hold the socket's own context.Canceled or a library
+// timeout that callers would take for their own ctx ending.
+func lost(err error) error {
+	return fmt.Errorf("%w: %v", errLost, err)
 }
 
 type reply struct {

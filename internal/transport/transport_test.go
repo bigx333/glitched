@@ -606,3 +606,78 @@ func TestDroppedSocketEndsStreamsAndRedials(t *testing.T) {
 		t.Fatalf("dialed %d sockets, want 2", n)
 	}
 }
+
+// gated dials connections whose writes it can hold, as a stalled link would.
+type gated struct {
+	Loopback
+	mu   sync.Mutex
+	last *gatedConn
+}
+
+func (g *gated) Dial(ctx context.Context, m api.ID) (net.Conn, error) {
+	c, err := g.Loopback.Dial(ctx, m)
+	if err != nil {
+		return nil, err
+	}
+	gc := &gatedConn{Conn: c, held: make(chan struct{}), release: make(chan struct{}), closed: make(chan struct{})}
+	g.mu.Lock()
+	g.last = gc
+	g.mu.Unlock()
+	return gc, nil
+}
+
+func (g *gated) conn() *gatedConn {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.last
+}
+
+type gatedConn struct {
+	net.Conn
+	hold      atomic.Bool
+	held      chan struct{} // closed once a write is held
+	release   chan struct{}
+	closed    chan struct{}
+	heldOnce  sync.Once
+	closeOnce sync.Once
+}
+
+func (c *gatedConn) Write(p []byte) (int, error) {
+	if c.hold.Load() {
+		c.heldOnce.Do(func() { close(c.held) })
+		select {
+		case <-c.release:
+		case <-c.closed:
+			return 0, net.ErrClosed
+		}
+	}
+	return c.Conn.Write(p)
+}
+
+func (c *gatedConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+func TestDroppedSocketIsNotTheCallersCancel(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	g := &gated{Loopback: start(t, "tcp", &Server{Endpoint: &fakeEndpoint{}})}
+	c := NewEndpointClient(g, api.ID{})
+	if _, err := c.Info(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gc := g.conn()
+	gc.hold.Store(true)
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Submit(ctx, api.Command{ID: api.NewID(), Body: api.TurnInterrupt{}})
+		done <- err
+	}()
+	<-gc.held
+	gc.Conn.(*net.TCPConn).CloseRead()
+	err := <-done
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, errLost) {
+		t.Fatalf("submit on a socket that died under its write: got %v, want a lost connection and no context error", err)
+	}
+}
