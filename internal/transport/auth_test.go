@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -337,7 +336,6 @@ func TestHandshakeAnswersNoCallBeforeTheProof(t *testing.T) {
 	for name, msg := range map[string]any{
 		"a call":                request{ID: 1, Method: "info", Params: json.RawMessage(`{}`)},
 		"a proof with no nonce": hello{MAC: make([]byte, sha256.Size)},
-		"a message over 1 KiB":  hello{Nonce: make([]byte, nonceSize), MAC: []byte(strings.Repeat("x", 2048))},
 		"a short nonce":         hello{Nonce: make([]byte, 8), MAC: make([]byte, sha256.Size)},
 	} {
 		ws := upgrade(t, ctx, addr)
@@ -346,6 +344,19 @@ func TestHandshakeAnswersNoCallBeforeTheProof(t *testing.T) {
 		if _, b, err := ws.Read(ctx); err == nil {
 			t.Errorf("%s instead of a proof was answered: %s", name, b)
 		}
+	}
+}
+
+func TestHandshakeReadsNoMessageOver1KiBBeforeTheProof(t *testing.T) {
+	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, Authorize: admit(nil)}
+	addr := serveTailnet(t, srv)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ws := upgrade(t, ctx, addr)
+	serverNonce(t, ctx, ws)
+	writeJSON(t, ctx, ws, hello{Nonce: make([]byte, 4<<10), MAC: make([]byte, sha256.Size)})
+	if _, _, err := ws.Read(ctx); websocket.CloseStatus(err) != websocket.StatusMessageTooBig {
+		t.Fatalf("a 4 KiB message instead of a proof: %v, want it closed as too big", err)
 	}
 }
 
