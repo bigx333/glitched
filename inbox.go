@@ -154,7 +154,8 @@ func (a *app) threadsNav(c *ui.Context) {
 func (a *app) wakeSnoozed(c *ui.Context) {
 	var next time.Time
 	for _, it := range a.itemsIn(catSnoozed) {
-		if u := disposition(it.t).Until; next.IsZero() || u.Before(next) {
+		// A row still playing its way out of Snoozed has no time.
+		if u := disposition(it.t).Until; !u.IsZero() && (next.IsZero() || u.Before(next)) {
 			next = u
 		}
 	}

@@ -150,6 +150,21 @@ func TestServers(t *testing.T) {
 	if !ok || r.X > h.a.sidebarWidth {
 		t.Errorf("no devbox badge in the sidebar: %q", h.tt.Texts())
 	}
+
+	// A new thread can start on the server, in its home directory.
+	h.click("New thread")
+	h.click("Workspace")
+	if err := h.tt.ChooseMenuItem("~ on devbox"); err != nil {
+		t.Fatalf("%v; the menu has %q", err, h.tt.Menu())
+	}
+	h.a.draft = "Check the certificates"
+	h.tt.Frame()
+	h.click("Send")
+	h.until("the thread on devbox", func() bool {
+		th := h.a.current()
+		return !th.id().IsZero() && th.env.Name == "devbox" && th.View.Workspace == "~" && th.View.Revision > 0
+	})
+
 	h.click(th.View.Title)
 	h.until("its transcript, from the server", func() bool { return h.tt.HasText("Which keys are old?") && h.tt.HasText("Read main.go") })
 	for _, s := range []string{"Open in", "Commit & push", "Toggle terminal  ⌘J", "Toggle diff  ⌘D", "Attach files"} {

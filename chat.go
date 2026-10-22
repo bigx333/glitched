@@ -572,7 +572,7 @@ func (a *app) composer(c *ui.Context, t thread) {
 // when there are several. A draft's is a menu of where it could start.
 func (a *app) workspaceButton(c *ui.Context, t thread) {
 	several := len(a.backend.Envs()) > 1
-	b := ghost(c, "workspace", false).Padding(3, 6).Children(func() {
+	b := ghost(c, "workspace", false).Padding(3, 6).Label("Workspace").Children(func() {
 		ui.Icon(c, icFolder).FontSize(12)
 		ui.Text(c, filepath.Base(t.View.Workspace)).FontSize(11.5)
 		if several && t.env != nil {
@@ -591,7 +591,7 @@ func (a *app) workspaceButton(c *ui.Context, t thread) {
 			if e.Kind == client.Remote {
 				home = "~"
 			}
-			for _, d := range append(a.workspacesOn(e), draft{e, home}) {
+			for _, d := range a.workspacesOn(e, home) {
 				label := filepath.Base(d.workspace)
 				if several {
 					label += " on " + e.Name
@@ -604,12 +604,12 @@ func (a *app) workspaceButton(c *ui.Context, t thread) {
 	})
 }
 
-// workspacesOn are the workspaces of e's threads, where a draft on e could
-// start.
-func (a *app) workspacesOn(e *client.Env) []draft {
-	var ds []draft
+// workspacesOn are where a draft on e could start: the workspaces of e's
+// threads, and home.
+func (a *app) workspacesOn(e *client.Env, home string) []draft {
+	ds := []draft{{e, home}}
 	for _, p := range a.projects {
-		if p.env == e {
+		if p.env == e && p.key.workspace != home {
 			ds = append(ds, draft{e, p.key.workspace})
 		}
 	}
