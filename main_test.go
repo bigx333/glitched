@@ -124,7 +124,7 @@ func TestServers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := engine(t, daemon.Config{Dir: rdir, Listen: []string{"127.0.0.1:0"}}, fake.Turn(false))
+	d := engine(t, daemon.Config{Dir: rdir, Listen: []string{"127.0.0.1:0"}}, fake.New(fake.Turn(false)))
 	seed(t, d, "/srv/api", "Rotate the API keys", "Which keys are old?")
 	addr := d.Addrs()[0].String()
 
@@ -593,7 +593,7 @@ func TestDiffPanel(t *testing.T) {
 // long is a thread of several turns, shown, its transcript in.
 func long(t *testing.T) (*harness, thread) {
 	dir := tempDir(t)
-	d := engine(t, daemon.Config{Dir: dir}, fake.Turn(false))
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
 	seed(t, d, "/work/t3code", "Sort sidebar threads by recent activity",
 		"Where does the sidebar get its threads from?", "And where is a thread's updatedAt set?",
 		"Can the project groups collapse today?", "Sort them by most recent activity.", "Persist the collapsed state.")
@@ -676,7 +676,7 @@ func TestFirstLine(t *testing.T) {
 // the list builds only the rows in view.
 func TestPaletteScrollsToChoice(t *testing.T) {
 	dir := tempDir(t)
-	d := engine(t, daemon.Config{Dir: dir}, fake.Turn(false))
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
 	for i := range 10 {
 		seed(t, d, "/work/t3code", "Thread "+string(rune('A'+i)))
 	}

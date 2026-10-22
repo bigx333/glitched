@@ -142,11 +142,11 @@ func tempDir(t *testing.T) string {
 	return dir
 }
 
-// engine runs an engine whose agent plays script, for the app to attach to
-// or reach.
-func engine(t *testing.T, cfg daemon.Config, script []provider.Event) *daemon.Daemon {
+// engine runs an engine whose agents adapter opens, for the app to attach
+// to or reach.
+func engine(t *testing.T, cfg daemon.Config, adapter provider.Adapter) *daemon.Daemon {
 	t.Helper()
-	cfg.Hub, cfg.Adapter = true, fake.New(script)
+	cfg.Hub, cfg.Adapter = true, adapter
 	d, err := daemon.Start(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -190,13 +190,20 @@ func seed(t *testing.T, d *daemon.Daemon, workspace, title string, messages ...s
 // holds them: some with a finished turn, unread, the others never sent to.
 func inbox(t *testing.T, dir string) *daemon.Daemon {
 	t.Helper()
-	d := engine(t, daemon.Config{Dir: dir}, fake.Turn(false))
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
 	seed(t, d, "/work/t3code", "Fix terminal resize flicker on Windows", "Why does it flicker?")
 	seed(t, d, "/work/t3code", "Add keyboard shortcut for new thread")
 	seed(t, d, "/work/t3code", "Investigate websocket reconnect loop", "Why does it loop?")
 	seed(t, d, "/work/mygo", "Markdown table column alignment")
 	seed(t, d, "/work/agent-phone", "SIP re-INVITE handling")
 	return d
+}
+
+// inboxDir is a state directory whose engine holds inbox's threads.
+func inboxDir(t *testing.T) string {
+	dir := tempDir(t)
+	inbox(t, dir)
+	return dir
 }
 
 // texts is what the timeline shows of a thread's entries, for a failure.
