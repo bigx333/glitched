@@ -24,9 +24,10 @@ type Client interface {
 	Acked(ctx context.Context, log api.ID) (uint64, error)
 }
 
-// ErrRewound stops an uploader whose log the hub holds more of than the host
-// does: the host's database came back from a backup that held its fence too.
-var ErrRewound = errors.New("hub: the hub holds more of this log than the host")
+// ErrRewound stops an uploader whose log the hub holds more of, or other
+// events of, than the host does: the host's database came back from a backup
+// that held its fence too.
+var ErrRewound = errors.New("hub: the host's log went back behind the hub's copy")
 
 type Uploader struct {
 	Host   api.ID
@@ -86,15 +87,19 @@ func (u *Uploader) Run(ctx context.Context) error {
 				}
 				acked, known = n, true
 			}
-			read, err := u.Source.ReadLog(ctx, acked, u.Batch)
-			if err != nil || len(read) == 0 {
+			// The event at the ack leads the upload, so the hub checks that
+			// the log still continues its copy.
+			overlap := min(acked, 1)
+			read, err := u.Source.ReadLog(ctx, acked-overlap, u.Batch+int(overlap))
+			if err != nil || len(read) <= int(overlap) {
 				return false, err
 			}
-			evs, err := fit(read, u.MaxBytes)
+			fresh := read[overlap:]
+			evs, err := fit(fresh, u.MaxBytes)
 			if err != nil {
 				return false, err
 			}
-			ack, err := u.Hub.Append(ctx, api.Upload{Host: u.Host, Epoch: u.Epoch, Log: log, Events: evs})
+			ack, err := u.Hub.Append(ctx, api.Upload{Host: u.Host, Epoch: u.Epoch, Log: log, Events: read[:int(overlap)+len(evs)]})
 			if gap := (*GapError)(nil); errors.As(err, &gap) {
 				acked = gap.Acked
 				return true, nil
@@ -105,7 +110,7 @@ func (u *Uploader) Run(ctx context.Context) error {
 				return false, err
 			}
 			acked = ack.Acked
-			return len(evs) < len(read) || len(read) == u.Batch, nil
+			return len(evs) < len(fresh) || len(fresh) == u.Batch, nil
 		}()
 
 		wait, wake := u.Interval, u.wake
@@ -142,15 +147,16 @@ func (u *Uploader) Run(ctx context.Context) error {
 	}
 }
 
-// Check returns ErrRewound when the hub holds more of the host's current log
-// than the host does.
+// Check returns ErrRewound when the hub holds more of the host's current log,
+// or other events of it, than the host does.
 func (u *Uploader) Check(ctx context.Context) error {
 	_, err := u.acked(ctx, u.Source.LogID())
 	return err
 }
 
 // acked is the hub's ack for log, or ErrRewound when the source no longer
-// holds the event at it.
+// holds the event at it, or holds another one. Sending that event alone has
+// the hub compare it and store nothing.
 func (u *Uploader) acked(ctx context.Context, log api.ID) (uint64, error) {
 	acked, err := u.Hub.Acked(ctx, log)
 	if err != nil || acked == 0 {
@@ -162,6 +168,9 @@ func (u *Uploader) acked(ctx context.Context, log api.ID) (uint64, error) {
 	}
 	if len(last) == 0 {
 		return 0, ErrRewound
+	}
+	if _, err := u.Hub.Append(ctx, api.Upload{Host: u.Host, Epoch: u.Epoch, Log: log, Events: last}); err != nil {
+		return 0, err
 	}
 	return acked, nil
 }

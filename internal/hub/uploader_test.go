@@ -311,3 +311,31 @@ func TestUploaderStopsWhenTheHubHoldsMoreOfItsLog(t *testing.T) {
 		t.Fatalf("Check: %v, want ErrRewound", err)
 	}
 }
+
+// A restore the fence missed, followed by as many commits as it lost, leaves
+// the host holding as much of the log as the hub. Only the content shows that
+// the seqs the hub holds now name other events.
+func TestUploaderStopsWhenARestoredHostRefilledTheLogPastTheAck(t *testing.T) {
+	r := openReplica(t)
+	src := newFakeLog()
+	src.commit(5, api.NewID())
+	u := newTestUploader(src, r)
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- u.Run(ctx) }()
+	waitAcked(t, r, src.LogID(), 5)
+	stop()
+	<-done
+
+	src.truncate(3)
+	src.commit(3, api.NewID())
+	ctx, stop = context.WithTimeout(context.Background(), time.Second)
+	defer stop()
+	if err := u.Check(ctx); !errors.Is(err, ErrRewound) {
+		t.Fatalf("Check: %v, want ErrRewound", err)
+	}
+	if err := NewUploader(u.Host, u.Epoch, src, r).Run(ctx); !errors.Is(err, ErrRewound) {
+		t.Fatalf("uploader of a refilled log returned %v, want ErrRewound", err)
+	}
+	wantReplica(t, r, src.LogID(), 5)
+}

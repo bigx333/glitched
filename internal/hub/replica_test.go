@@ -73,6 +73,10 @@ func TestAppendReplayIsIdempotentAndGapIsRefused(t *testing.T) {
 		t.Fatalf("replayed upload: %v %v", ack, err)
 	}
 
+	if _, err := r.Append(ctx, api.Upload{Host: host, Epoch: 1, Log: log, Events: run(log, 8, 9, api.NewID())}); !errors.Is(err, ErrRewound) {
+		t.Fatalf("upload whose seq 8 is another event: got %v, want ErrRewound", err)
+	}
+
 	_, err = r.Append(ctx, api.Upload{Host: host, Epoch: 1, Log: log, Events: run(log, 10, 12, thread)})
 	var gap *GapError
 	if !errors.As(err, &gap) || gap.Acked != 8 {

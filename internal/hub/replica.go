@@ -72,7 +72,8 @@ func Open(path string) (*Replica, error) {
 func (r *Replica) Close() error { return r.db.Close() }
 
 // Append stores the part of u the replica does not hold yet and returns the
-// new acked offset. A replayed upload changes nothing.
+// new acked offset. A replayed upload changes nothing; one that replays
+// another event at a seq the replica holds is ErrRewound.
 func (r *Replica) Append(ctx context.Context, u api.Upload) (api.UploadAck, error) {
 	for i, e := range u.Events {
 		if e.Cursor.Log != u.Log || (i > 0 && e.Cursor.Seq != u.Events[i-1].Cursor.Seq+1) {
@@ -115,6 +116,9 @@ func (r *Replica) Append(ctx context.Context, u api.Upload) (api.UploadAck, erro
 
 	fresh := u.Events
 	for len(fresh) > 0 && fresh[0].Cursor.Seq <= acked {
+		if err := holds(ctx, tx, fresh[0]); err != nil {
+			return api.UploadAck{}, err
+		}
 		fresh = fresh[1:]
 	}
 	if len(fresh) > 0 && fresh[0].Cursor.Seq != acked+1 {
@@ -141,6 +145,23 @@ func (r *Replica) Append(ctx context.Context, u api.Upload) (api.UploadAck, erro
 		r.mu.Unlock()
 	}
 	return api.UploadAck{Acked: acked}, nil
+}
+
+// holds returns ErrRewound unless the replica holds e at its seq.
+func holds(ctx context.Context, q querier, e api.Event) error {
+	body, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	var held []byte
+	if err := q.QueryRowContext(ctx, `SELECT event FROM events WHERE log = ? AND seq = ?`,
+		e.Cursor.Log[:], e.Cursor.Seq).Scan(&held); err != nil {
+		return err
+	}
+	if !bytes.Equal(body, held) {
+		return fmt.Errorf("hub: seq %d of log %s is not the event the hub holds: %w", e.Cursor.Seq, e.Cursor.Log, ErrRewound)
+	}
+	return nil
 }
 
 // Acked is the highest contiguous seq the replica holds for log, 0 if none,

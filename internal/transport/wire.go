@@ -35,6 +35,7 @@ var sentinels = []struct {
 	{"already_answered", api.ErrAlreadyAnswered, http.StatusConflict},
 	{"overflow", api.ErrOverflow, http.StatusServiceUnavailable},
 	{"foreign_log", hub.ErrForeignLog, http.StatusConflict},
+	{"rewound", hub.ErrRewound, http.StatusConflict},
 }
 
 func toWire(err error) (wireError, int) {
