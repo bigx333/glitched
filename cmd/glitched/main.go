@@ -180,6 +180,9 @@ func run(ctx context.Context, args []string) error {
 	if _, err := ep.Submit(ctx, api.Command{ID: msg, Target: thread, Body: api.MessageDispatch{Text: text, Mode: mode}}); err != nil {
 		return err
 	}
+	// A message starts a run under its own ID unless steering claims it into
+	// the live run; the command streams whichever run carries it.
+	runID := msg
 	in := bufio.NewReader(os.Stdin)
 	for {
 		item, err := stream.Next(ctx)
@@ -194,6 +197,19 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 		switch b := body.(type) {
+		case api.MessageQueued:
+			if b.Message == msg && b.Held {
+				fmt.Println("[held until promoted]")
+				return nil
+			}
+		case api.MessageClaimed:
+			if b.Message == msg {
+				runID = b.Run
+			}
+		case api.MessageCancelled:
+			if b.Message == msg {
+				return fmt.Errorf("the message was cancelled: %s", b.Reason)
+			}
 		case api.AssistantDelta:
 			fmt.Print(b.Text)
 		case api.WorkItem:
@@ -201,7 +217,7 @@ func run(ctx context.Context, args []string) error {
 				fmt.Printf("\n  ✓ %s\n", b.Title)
 			}
 		case api.RequestOpened:
-			if b.Run != msg {
+			if b.Run != runID {
 				continue
 			}
 			allow := *yes
@@ -216,13 +232,13 @@ func run(ctx context.Context, args []string) error {
 				return err
 			}
 		case api.TurnEnded:
-			if b.Run != msg {
+			if b.Run != runID {
 				continue
 			}
 			fmt.Printf("\n[turn ended: %s]\n", outcomes[b.Outcome])
 			return nil
 		case api.TurnUncertain:
-			if b.Run == msg {
+			if b.Run == runID {
 				return errors.New("the run is uncertain after a restart")
 			}
 		}
