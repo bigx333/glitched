@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"glitched/internal/api"
 	"glitched/internal/hub"
 )
@@ -46,12 +48,14 @@ func start(t *testing.T, network string, srv *Server) Loopback {
 
 // fakeEndpoint answers Submit and Open for a target in errs with that error;
 // it is read-only once the server starts. closed, when set, gets the thread
-// of each stream the server closes; pulled counts the items its streams gave
-// the server.
+// of each stream the server closes; reads, when set, gets nil as a Read of
+// blocks begins and its ctx's error as it ends; pulled counts the items its
+// streams gave the server.
 type fakeEndpoint struct {
 	env    api.Environment
 	errs   map[api.ID]error
 	closed chan api.ID
+	reads  chan error
 	pulled atomic.Int64
 }
 
@@ -59,6 +63,10 @@ func (f *fakeEndpoint) Info(context.Context) (api.Environment, error) { return f
 
 func (f *fakeEndpoint) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 	if q.Thread == blocks {
+		if f.reads != nil {
+			f.reads <- nil
+			defer func() { f.reads <- ctx.Err() }()
+		}
 		<-ctx.Done()
 		return api.Snapshot{}, ctx.Err()
 	}
@@ -635,7 +643,7 @@ func mustOpen(t *testing.T, ctx context.Context, c *EndpointClient, thread api.I
 func TestDroppedSocketEndsStreamsAndRedials(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	fake := &fakeEndpoint{env: api.Environment{ID: api.NewID(), Name: "mac", Log: api.NewID()}}
+	fake := &fakeEndpoint{env: api.Environment{ID: api.NewID(), Name: "mac", Log: api.NewID()}, reads: make(chan error, 2)}
 	d := &dialer{Loopback: start(t, "tcp", &Server{Endpoint: fake})}
 	c := NewEndpointClient(d, fake.env.ID)
 
@@ -649,8 +657,7 @@ func TestDroppedSocketEndsStreamsAndRedials(t *testing.T) {
 		_, err := c.Read(ctx, api.Query{Thread: blocks})
 		blocked <- err
 	}()
-	// Let the Read reach the server before the socket goes.
-	time.Sleep(50 * time.Millisecond)
+	<-fake.reads
 	d.dialed()[0].Close()
 
 	for range 4 {
@@ -1082,5 +1089,110 @@ func TestPanickingHandlerAnswersWithAnError(t *testing.T) {
 	}
 	if n := len(d.dialed()); n != 1 {
 		t.Fatalf("dialed %d sockets, want 1", n)
+	}
+}
+
+func TestCancelReachesTheServer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	fake := &fakeEndpoint{env: api.Environment{ID: api.NewID()}, reads: make(chan error, 2), closed: make(chan api.ID, 1)}
+	d := &dialer{Loopback: start(t, "unix", &Server{Endpoint: fake})}
+	c := NewEndpointClient(d, api.ID{})
+
+	read, stop := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Read(read, api.Query{Thread: blocks})
+		done <- err
+	}()
+	<-fake.reads
+	stop()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled read: %v", err)
+	}
+	select {
+	case err := <-fake.reads:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("the server's read ended with %v, want its ctx cancelled", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("the server's read never saw the cancel")
+	}
+
+	thread := api.NewID()
+	st, err := c.Open(ctx, api.Subscription{Thread: thread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	select {
+	case got := <-fake.closed:
+		if got != thread {
+			t.Fatalf("server closed %v", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("the server never closed a stream the client closed")
+	}
+	if env, err := c.Info(ctx); err != nil || env != fake.env {
+		t.Fatalf("info: %+v %v", env, err)
+	}
+	if n := len(d.dialed()); n != 1 {
+		t.Fatalf("dialed %d sockets, want 1: the server saw the socket drop, not the cancels", n)
+	}
+}
+
+func TestKeepaliveHoldsAnIdleSocket(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	fast := keepalive{every: 10 * time.Millisecond, within: 200 * time.Millisecond}
+	fake := &fakeEndpoint{env: api.Environment{ID: api.NewID()}}
+	d := &dialer{Loopback: start(t, "tcp", &Server{Endpoint: fake, keepalive: fast})}
+	c := NewEndpointClient(d, api.ID{})
+	c.c.keepalive = fast
+	thread := api.NewID()
+	st := mustOpen(t, ctx, c, thread)
+	if err := readStream(ctx, st, thread, api.Cursor{}); err != nil {
+		t.Fatal(err)
+	}
+
+	idle, stop := context.WithTimeout(ctx, 400*time.Millisecond)
+	defer stop()
+	if _, err := st.Next(idle); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a stream idle for 40 pings: %v, want it still open", err)
+	}
+	if env, err := c.Info(ctx); err != nil || env != fake.env {
+		t.Fatalf("info: %+v %v", env, err)
+	}
+	if n := len(d.dialed()); n != 1 {
+		t.Fatalf("dialed %d sockets, want 1", n)
+	}
+}
+
+func TestServerReadLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	lb := start(t, "unix", &Server{Endpoint: &fakeEndpoint{}})
+
+	// Exactly the limit is read and answered; info takes no params, so the
+	// answer is a bad_request.
+	ws, err := handshake(ctx, lb, api.ID{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.CloseNow()
+	head := `{"id":1,"method":"info","params":"`
+	at := head + strings.Repeat("x", maxMessage-len(head)-2) + `"}`
+	if err := ws.Write(ctx, websocket.MessageText, []byte(at)); err != nil {
+		t.Fatal(err)
+	}
+	var r response
+	if _, b, err := ws.Read(ctx); err != nil || json.Unmarshal(b, &r) != nil || r.ID != 1 || r.Error == nil || r.Error.Code != "bad_request" {
+		t.Fatalf("a %d byte request: %+v %v", len(at), r.Error, err)
+	}
+
+	over := make([]byte, maxMessage+1)
+	go ws.Write(ctx, websocket.MessageText, over)
+	if _, _, err := ws.Read(ctx); websocket.CloseStatus(err) != websocket.StatusMessageTooBig {
+		t.Fatalf("a %d byte request: %v, want the socket closed as too big", len(over), err)
 	}
 }
