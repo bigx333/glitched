@@ -25,9 +25,9 @@ type Server struct {
 	Transport Transport
 	Endpoint  api.Endpoint
 	Hub       *hub.Replica
-	// Authorize, when set, admits an upgrade or refuses it with 401. A socket
-	// it admits closes once the returned ctx ends, as when its grant is
-	// revoked.
+	// Authorize admits an upgrade or refuses it with 401. A Tailnet server
+	// must have one. A socket it admits closes once the returned ctx ends, as
+	// when its grant is revoked.
 	Authorize func(*http.Request) (context.Context, error)
 
 	keepalive keepalive // zero means defaultKeepalive
@@ -38,6 +38,10 @@ type connKey struct{}
 // Serve answers sockets on ln until ctx ends, then closes them and returns
 // once their calls have.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
+	if _, ok := s.Transport.(credentialed); ok && s.Authorize == nil {
+		ln.Close()
+		return fmt.Errorf("transport: a %T server needs Authorize to check its clients' tokens", s.Transport)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var (

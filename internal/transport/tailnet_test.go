@@ -261,3 +261,19 @@ func TestTailnetPresentsItsTokenByValueOrPointer(t *testing.T) {
 		c.Close()
 	}
 }
+
+func TestTailnetServerNeedsAuthorize(t *testing.T) {
+	for name, tr := range map[string]Transport{"Tailnet": Tailnet{}, "*Tailnet": &Tailnet{}} {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ln, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = (&Server{Transport: tr, Endpoint: &fakeEndpoint{}}).Serve(ctx, ln)
+		cancel()
+		ln.Close()
+		if err == nil {
+			t.Errorf("a %s server without Authorize served", name)
+		}
+	}
+}
