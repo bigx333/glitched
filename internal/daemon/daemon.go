@@ -6,6 +6,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -41,7 +42,8 @@ type Config struct {
 }
 
 // A Daemon is a started engine. It serves until Start's ctx ends, Close is
-// called, or a listener fails.
+// called, a listener fails, or the hub proves the database came back from a
+// backup.
 type Daemon struct {
 	host  *runtime.Host
 	addrs []net.Addr
@@ -166,18 +168,28 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 
 	var serving, background sync.WaitGroup
 	var failed sync.Once
+	fail := func(err error) {
+		failed.Do(func() { d.err = err })
+		stop()
+	}
 	for i, srv := range servers {
 		serving.Go(func() {
 			if err := srv.Serve(ctx, lns[i]); err != nil {
-				failed.Do(func() { d.err = err })
-				stop()
+				fail(err)
 			}
 		})
 	}
 	if up != nil {
 		st.OnCommit(func(store.Commit) { up.Notify() })
 		background.Go(func() {
-			if err := up.Run(ctx); err != nil && ctx.Err() == nil {
+			err := up.Run(ctx)
+			switch {
+			case ctx.Err() != nil:
+			case errors.Is(err, hub.ErrRewound):
+				// The runtime holds the log open, so the rewind waits for the
+				// startup check of the next start.
+				fail(fmt.Errorf("daemon: %w; the database came back from a backup, so restart the engine to start a new log", err))
+			default:
 				slog.Error("uploader stopped", "err", err)
 			}
 		})

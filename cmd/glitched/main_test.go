@@ -5,11 +5,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
+	"glitched/internal/hub"
 	"glitched/internal/transport"
 )
 
@@ -91,19 +93,7 @@ func replicated(t *testing.T, hubc *transport.HubClient, thread api.ID, host []a
 func serving(t *testing.T, dir string, args ...string) (stop func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	served := make(chan error, 1)
-	go func() { served <- serve(ctx, append([]string{"-dir", dir}, args...)) }()
-	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
-	for {
-		if _, err := ep.Info(ctx); err == nil {
-			break
-		}
-		select {
-		case err := <-served:
-			t.Fatalf("serve exited: %v", err)
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
+	served := started(t, ctx, dir, args...)
 	return func() {
 		cancel()
 		if err := <-served; err != nil {
@@ -112,21 +102,37 @@ func serving(t *testing.T, dir string, args ...string) (stop func()) {
 	}
 }
 
-func TestServeRewindsALogTheHubHoldsMoreOf(t *testing.T) {
-	ctx := context.Background()
-	var dirs [3]string
-	for i := range dirs {
-		dir, err := os.MkdirTemp("", "gl")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { os.RemoveAll(dir) })
-		dirs[i] = dir
-	}
-	hubDir, dir, backup := dirs[0], dirs[1], dirs[2]
-	defer serving(t, hubDir)()
-	hubc := transport.NewHubClient(daemon.Socket(hubDir), api.ID{})
+// started runs serve on dir until ctx ends and returns once its socket
+// answers, with the channel serve's result arrives on.
+func started(t *testing.T, ctx context.Context, dir string, args ...string) <-chan error {
+	t.Helper()
+	served := make(chan error, 1)
+	go func() { served <- serve(ctx, append([]string{"-dir", dir}, args...)) }()
 	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
+	defer ep.Close()
+	for {
+		if _, err := ep.Info(ctx); err == nil {
+			return served
+		}
+		select {
+		case err := <-served:
+			t.Fatalf("serve exited: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+// restoreBehindTheHub serves the host under dir, uploading to the hub under
+// hubDir, until the hub holds two events of its log, then brings back a
+// backup of dir taken after the first. It returns that log.
+func restoreBehindTheHub(t *testing.T, hubDir, dir string) api.ID {
+	t.Helper()
+	ctx := context.Background()
+	backup := stateDir(t)
+	hubc := transport.NewHubClient(daemon.Socket(hubDir), api.ID{})
+	defer hubc.Close()
+	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
+	defer ep.Close()
 	host := func() func() { return serving(t, dir, "-hub=false", "-hub-dir", hubDir) }
 	uploaded := func(log api.ID, want uint64) {
 		t.Helper()
@@ -175,12 +181,54 @@ func TestServeRewindsALogTheHubHoldsMoreOf(t *testing.T) {
 	stop()
 
 	copyFiles(backup, dir)
-	defer host()()
-	restored, err := ep.Info(ctx)
+	return env.Log
+}
+
+func TestServeRewindsALogTheHubHoldsMoreOf(t *testing.T) {
+	hubDir, dir := stateDir(t), stateDir(t)
+	defer serving(t, hubDir)()
+	log := restoreBehindTheHub(t, hubDir, dir)
+	defer serving(t, dir, "-hub=false", "-hub-dir", hubDir)()
+	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
+	defer ep.Close()
+	restored, err := ep.Info(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored.Log == env.Log {
-		t.Fatalf("the whole dir came back from a backup and kept log %s, whose seq 2 the hub holds and the database will hand out again", env.Log)
+	if restored.Log == log {
+		t.Fatalf("the whole dir came back from a backup and kept log %s, whose seq 2 the hub holds and the database will hand out again", log)
+	}
+}
+
+func TestServeStopsOnARestoreTheHubProvesAfterStart(t *testing.T) {
+	hubDir, dir := stateDir(t), stateDir(t)
+	stopHub := serving(t, hubDir)
+	log := restoreBehindTheHub(t, hubDir, dir)
+	// The hub is down as the host starts, so the startup check can't see the
+	// restore.
+	stopHub()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	served := started(t, ctx, dir, "-hub=false", "-hub-dir", hubDir)
+	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
+	defer ep.Close()
+	if env, err := ep.Info(ctx); err != nil || env.Log != log {
+		t.Fatalf("the host started on log %s (%v), want the restored %s", env.Log, err, log)
+	}
+
+	defer serving(t, hubDir)()
+	select {
+	case err := <-served:
+		if !errors.Is(err, hub.ErrRewound) || !strings.Contains(err.Error(), "restart") {
+			t.Fatalf("serve: %v, want ErrRewound and to be told to restart", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("the host kept serving a log the hub holds more of")
+	}
+
+	// A service manager restarts it, and the startup check rewinds.
+	defer serving(t, dir, "-hub=false", "-hub-dir", hubDir)()
+	if env, err := ep.Info(ctx); err != nil || env.Log == log {
+		t.Fatalf("after a restart the host serves log %s (%v), want a new one", env.Log, err)
 	}
 }
