@@ -82,9 +82,11 @@ func serve(ctx context.Context, args []string) error {
 	if err := os.MkdirAll(*dir, 0o700); err != nil {
 		return err
 	}
-	if err := lock(filepath.Join(*dir, "engine.lock")); err != nil {
+	lk, err := lock(filepath.Join(*dir, "engine.lock"))
+	if err != nil {
 		return err
 	}
+	defer lk.Close()
 	lb := socket(*dir)
 	// The lock is ours, so a socket file left here is from a dead engine.
 	os.Remove(lb.Address)

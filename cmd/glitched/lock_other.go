@@ -2,4 +2,6 @@
 
 package main
 
-func lock(string) error { return nil }
+import "os"
+
+func lock(string) (*os.File, error) { return nil, nil }
