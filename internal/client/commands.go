@@ -23,12 +23,10 @@ type Pending struct {
 }
 
 // Terminal is true when sending the command again can only fail the same
-// way: the engine refused it, or the request or thread it acts on is gone.
-// Offer Dismiss for it, not Retry.
+// way, as the request or thread it acts on is gone. A rejection is not: the
+// engine may take the same command once the thread's state moves on, as a
+// StartNow does once the live run ends.
 func (p Pending) Terminal() bool {
-	if rejected := (*api.RejectedError)(nil); errors.As(p.Err, &rejected) {
-		return true
-	}
 	switch p.Body.(type) {
 	case api.RequestRespond, api.TurnInterrupt:
 		return errors.Is(p.Err, api.ErrNotFound)

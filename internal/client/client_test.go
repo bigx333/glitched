@@ -551,8 +551,33 @@ func TestATurnRunsFromCreateThroughAnApproval(t *testing.T) {
 	}
 }
 
+// A StartNow is refused while a run is live. The same command lands once
+// the run is over, so its failed row offers a retry.
+func TestARefusedStartNowLandsOnRetryOnceTheRunEnds(t *testing.T) {
+	m, g := manager(t, stateDir(t))
+	env := m.Envs()[0]
+	online(t, g, env)
+	id := m.Create(env, "/work", "busy", fakeModel, api.AccessAsk)
+	m.Send(env, id, "first", api.AfterActive)
+	g.until(t, "the first run waiting on its approval", func() bool {
+		return env.Threads[id].View.Run == api.RunWaiting && len(env.Threads[id].Pending) == 0
+	})
+	now := m.Send(env, id, "second", api.StartNow)
+	g.until(t, "the StartNow refused", func() bool { p := env.Threads[id].Pending; return len(p) == 1 && p[0].Err != nil })
+	if p := env.Threads[id].Pending[0]; !errors.As(p.Err, new(*api.RejectedError)) || p.Terminal() {
+		t.Fatalf("a StartNow on a busy thread failed with %v (terminal %v), want a rejection worth a retry", p.Err, p.Terminal())
+	}
+
+	m.Interrupt(env, id)
+	g.until(t, "the first run over", func() bool {
+		return env.Threads[id].View.Run == api.RunIdle && len(env.Threads[id].Pending) == 1
+	})
+	m.Retry(env, id, now)
+	g.until(t, "the retry landed", func() bool { return len(env.Threads[id].Pending) == 0 }, func() string { return describePending(env.Threads[id].Pending) })
+}
+
 // Interrupting a run voids the request it asked. An answer sent after that
-// is refused for good, and the GUI dismisses the row instead of retrying.
+// is refused, and the GUI dismisses its row.
 func TestAnAnswerTooLateIsDismissed(t *testing.T) {
 	m, g := manager(t, stateDir(t))
 	env := m.Envs()[0]
@@ -576,8 +601,8 @@ func TestAnAnswerTooLateIsDismissed(t *testing.T) {
 	})
 	answer := m.Respond(env, id, req.Request, true)
 	g.until(t, "the answer refused", func() bool { p := env.Threads[id].Pending; return len(p) == 1 && p[0].Err != nil })
-	if p := env.Threads[id].Pending[0]; !p.Terminal() {
-		t.Fatalf("the answer failed with %v and can be retried, want it terminal", p.Err)
+	if p := env.Threads[id].Pending[0]; !errors.As(p.Err, new(*api.RejectedError)) {
+		t.Fatalf("the answer failed with %v, want a rejection", p.Err)
 	}
 	m.Dismiss(env, id, answer)
 	if p := env.Threads[id].Pending; len(p) != 0 {
