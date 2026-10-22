@@ -167,7 +167,6 @@ func (a *app) commandPalette(c *ui.Context) {
 				}
 				if r.Children(func() {
 					if cmd.t != nil {
-						// A thread's state and age, as the sidebar has them.
 						ui.Box(c).Size(14, 14).Center().Shrink(0).Children(func() { statusMark(c, cmd.t.status) })
 					} else {
 						ui.Icon(c, cmd.icon).FontSize(14)
@@ -187,7 +186,6 @@ func (a *app) commandPalette(c *ui.Context) {
 				ui.Text(c, "No results").TextColor(palette.muted).Padding(24).TextAlign(ui.Center)
 			}
 		})
-		// The footer names the keys.
 		ui.Row(c).Gap(14).Padding(7, 16).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
 			hint := func(key, what string) {
 				ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {

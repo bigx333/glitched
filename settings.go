@@ -204,7 +204,6 @@ func (a *app) themeCard(c *ui.Context, i int, name string) {
 					ui.Box(c).Height(5).WidthPercent(70).Radius(3).Background(cols.muted.Alpha(0.4))
 					ui.Box(c).Height(5).WidthPercent(50).Radius(3).Background(cols.muted.Alpha(0.4))
 					ui.Box(c).Height(16).Radius(6).Background(cols.surface).Border(1, cols.border).Margin(4, 0, 0)
-					// The terminal's palette, as a strip of its colors.
 					term := th.terminal()
 					ui.Row(c).Gap(2).Margin(2, 0, 0).Children(func() {
 						for _, col := range term.Palette[1:7] {

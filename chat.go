@@ -166,7 +166,6 @@ func (a *app) header(c *ui.Context, p *project, t *thread) {
 						a.showPreview = false
 					}
 				}
-				// How many files the thread has changed, on the icon.
 				if n := len(t.changed()); n > 0 {
 					ui.Textf(c, "%d", n).Absolute().Top(1).Right(1).FontSize(9).FontWeight(600).LineHeight(1.4).
 						Padding(0, 4).Radius(999).Background(palette.accent).TextColor(ui.Hex("#ffffff")).PassThrough()
@@ -219,17 +218,16 @@ func (a *app) timeline(c *ui.Context, t *thread) {
 	l.Key = func(i int) any { return fmt.Sprintf("%s/%d", t.id, i) }
 	l.FollowEnd = true
 	l.FollowAnimation = &ui.Smooth
-	ui.List(c.Key(t.id), l, len(t.entries), func(i int) {
-		// An action on an entry can cut the thread short mid-frame.
-		if i >= len(t.entries) {
-			return
-		}
+	// The frame shows the entries as they were at its start: an action on
+	// one can cut the thread short while the rest are built.
+	entries := t.entries
+	ui.List(c.Key(t.id), l, len(entries), func(i int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, i, t.entries[i]) })
+			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, i, entries[i]) })
 		})
 	}).Fill().Padding(20, 24, composerRoom, markerColumnW+12).Gap(22).Justify(ui.End).
 		ScrollbarInsets(0, 0, composerRoom-40, 0).Children(func() {
-		if len(t.entries) == 0 {
+		if len(entries) == 0 {
 			ui.Row(c).Justify(ui.Center).Children(func() { a.emptyState(c) })
 		}
 	})
@@ -665,7 +663,6 @@ func (a *app) terminal(c *ui.Context, p *project) {
 	if s != nil {
 		title = s.Title()
 	}
-	// The drawer is the terminal's colors, which are the theme's.
 	th := a.theme.terminal()
 	ui.Column(c).Height(220).Background(th.Background).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
 		ui.Row(c).Padding(4, 8, 4, 12).Gap(6).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {

@@ -67,7 +67,6 @@ func TestShot(t *testing.T) {
 		tt.Frame()
 	}
 	if s := os.Getenv("HOVER"); s != "" {
-		// The pointer over that text.
 		r, ok := tt.Find(s)
 		if !ok {
 			t.Fatalf("no %q to point at", s)

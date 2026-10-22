@@ -63,7 +63,6 @@ func (a *app) approvalCard(c *ui.Context, key string, t *thread, ap *approval) {
 		ui.Row(c).Key("decide").Padding(0, 14, 12).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 			if filled(c, "allow", palette.accent, ui.Hex("#ffffff")).Children(func() {
 				ui.Text(c, "Allow once").FontSize(12.5).FontWeight(500)
-				// A keycap on the button's own color.
 				ui.Text(c, "⌘⏎").FontSize(10.5).TextColor(ui.Hex("#ffffff").Alpha(0.9)).Padding(1, 4).Radius(4).
 					Background(ui.Hex("#ffffff").Alpha(0.2))
 			}).Clicked() {
