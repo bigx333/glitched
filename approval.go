@@ -6,11 +6,9 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// pending is the approval the thread waits on, if any.
+// pending is the approval the thread waits on, if any: the last one
+// nothing has answered.
 func (t *thread) pending() *approval {
-	if t.status != statusApproval {
-		return nil
-	}
 	for i := len(t.entries) - 1; i >= 0; i-- {
 		if ap := t.entries[i].approval; ap != nil && ap.decision == undecided {
 			return ap
@@ -42,6 +40,9 @@ func (a *app) approvalCard(c *ui.Context, key string, t *thread, ap *approval) {
 			case denied:
 				ui.Icon(c, icX).FontSize(13).TextColor(palette.red)
 				ui.Text(c, "Denied").FontSize(13).FontWeight(600)
+			case superseded:
+				ui.Icon(c, icArrowRight).FontSize(13).TextColor(palette.muted)
+				ui.Text(c, "Answered by your message").FontSize(13).FontWeight(600).TextColor(palette.muted)
 			}
 			ui.Spacer(c)
 			if ap.decision == undecided {
@@ -129,16 +130,31 @@ func (a *app) decide(t *thread, d decision) {
 		return
 	}
 	t.status, t.age = statusWorking, "now"
-	t.stop.Store(false)
 	a.listFor(t).ScrollToEnd()
 	a.play(t, approved)
 }
 
-// changed is every file the agent changed in the thread, in order.
+// changed is every file the agent changed in the thread, in order: the
+// files its changes cards list, and the ones its work logs say it
+// edited, each once.
 func (t *thread) changed() []fileChange {
 	var files []fileChange
+	seen := map[string]bool{}
+	add := func(f fileChange) {
+		if !seen[f.path] {
+			seen[f.path] = true
+			files = append(files, f)
+		}
+	}
 	for _, e := range t.entries {
-		files = append(files, e.files...)
+		for _, f := range e.files {
+			add(f)
+		}
+		for _, w := range e.work {
+			if w.kind == "edit" {
+				add(fileChange{w.detail, w.add, w.del})
+			}
+		}
 	}
 	return files
 }

@@ -43,7 +43,7 @@ func (a *app) commands() []command {
 		cmds = append(cmds, command{"Actions", "New thread in " + p.name, "", icSquarePen, func() { a.startThread(p) }, nil})
 	}
 	cmds = append(cmds,
-		command{"Actions", "Switch model", "", icSparkles, func() { a.pickerOpen = true }, nil},
+		command{"Actions", "Switch model", "", icSparkles, a.openModelPicker, nil},
 		command{"Actions", "Toggle diff panel", "⌘D", icDiff, func() { a.showDiff = !a.showDiff }, nil},
 		command{"Actions", "Toggle terminal", "⌘J", icTerminal, func() { a.showTerminal = !a.showTerminal }, nil},
 		command{"Actions", "Toggle preview", "⇧⌘P", icGlobe, a.togglePreview, nil},
@@ -77,6 +77,15 @@ func (a *app) commands() []command {
 		}
 	}
 	return shown
+}
+
+// openModelPicker opens the composer's model picker, from wherever the
+// palette was: the chat, with the composer at its full size, holds it.
+func (a *app) openModelPicker() {
+	if a.router.Path() != "/" {
+		a.router.Push("/")
+	}
+	a.composerOpened, a.pickerOpen = true, true
 }
 
 // ageMinutes reads an age as the sidebar shows it, "now", "12m", "2h",

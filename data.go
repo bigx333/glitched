@@ -30,8 +30,11 @@ type thread struct {
 	unread  bool
 	settled bool
 	snoozed string
-	// stop asks the pretend agent's goroutine to stop.
-	stop atomic.Bool
+	// turn counts the agent's turns. A goroutine playing an older turn,
+	// stopped or replaced, writes nothing more.
+	turn atomic.Uint64
+	// home is the project an archived thread came from.
+	home *project
 }
 
 type project struct {
@@ -62,6 +65,8 @@ const (
 	undecided decision = iota
 	allowed
 	denied
+	// superseded: the user sent a message instead of answering.
+	superseded
 )
 
 // approval is a request from the agent that waits on the user: the

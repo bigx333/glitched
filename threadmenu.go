@@ -50,7 +50,7 @@ func (a *app) threadMenu(c *ui.Context, m *ui.Menu, t *thread, cat category) {
 		if a.settings.confirmDelete {
 			a.deleting, a.deleteOpen = t, true
 		} else {
-			a.deleteThread(t)
+			a.drop(t)
 		}
 	}
 }
@@ -81,19 +81,16 @@ func (a *app) settle(c *ui.Context, t *thread, from category) {
 	c.AddToast(ui.Toast{Title: "Settled. Phew.", Description: t.title})
 }
 
-// archive moves the thread out of its project, to the archived ones.
+// archive moves the thread out of its project, to the archived ones,
+// which remember where it came from.
 func (a *app) archive(t *thread) {
-	a.drop(t)
+	t.home = a.drop(t)
 	a.archived = append([]*thread{t}, a.archived...)
 }
 
-func (a *app) deleteThread(t *thread) {
-	a.drop(t)
-}
-
-// drop takes the thread out of its project. Was it the one open, the
-// first thread left opens, or a new one where none is.
-func (a *app) drop(t *thread) {
+// drop takes the thread out of its project, which it returns. Was it the
+// one open, the first thread left opens, or a new one where none is.
+func (a *app) drop(t *thread) *project {
 	var home *project
 	for _, p := range a.projects {
 		if i := indexOf(p.threads, t); i >= 0 {
@@ -102,15 +99,16 @@ func (a *app) drop(t *thread) {
 		}
 	}
 	if a.selected != t.id {
-		return
+		return home
 	}
 	for _, p := range a.projects {
 		if len(p.threads) > 0 {
 			a.select_(p.threads[0].id)
-			return
+			return home
 		}
 	}
 	a.startThread(home)
+	return home
 }
 
 func indexOf(ts []*thread, t *thread) int {
@@ -130,7 +128,7 @@ func (a *app) deleteAlert(c *ui.Context) {
 	switch ui.AlertDialog(c, &a.deleteOpen, "Delete “"+a.deleting.title+"”?",
 		"The thread and its messages go away. You can't undo this.", "Cancel", "Delete") {
 	case 1:
-		a.deleteThread(a.deleting)
+		a.drop(a.deleting)
 		a.deleting = nil
 	case 0, ui.AlertDismissed:
 		a.deleting = nil

@@ -559,7 +559,7 @@ func (a *app) sendButton(c *ui.Context, t *thread) {
 	if send.Clicked() || !a.cmdkOpen && c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		if working {
 			t.status = statusIdle
-			t.stop.Store(true)
+			t.turn.Add(1)
 		} else {
 			a.send(t)
 		}
@@ -599,16 +599,21 @@ func (a *app) send(t *thread) {
 }
 
 // run has the agent take its turn on the thread as it stands. The thread
-// goes to Working while it does, out of the snoozed and settled ones.
+// goes to Working while it does, out of the snoozed and settled ones. A
+// message sent while an approval waits is the answer instead.
 func (a *app) run(t *thread) {
+	if ap := t.pending(); ap != nil {
+		ap.decision = superseded
+	}
 	t.status, t.age, t.settled, t.snoozed = statusWorking, "now", false, ""
-	t.stop.Store(false)
 	a.play(t, scripts[replyCount%len(scripts)])
 	replyCount++
 }
 
 // play runs a canned turn: the agent's steps arrive one by one, then its
-// reply streams in. There is no agent.
+// reply streams in. There is no agent. The turn is live until the thread
+// moves on to another, or is stopped: after that it writes nothing, as
+// the entries it knew may be cut.
 func (a *app) play(t *thread, s script) {
 	t.entries = append(t.entries, entry{kind: entryWork, took: "Working…"})
 	work := len(t.entries) - 1
@@ -618,18 +623,27 @@ func (a *app) play(t *thread, s script) {
 		t.finish()
 		return
 	}
+	id := t.turn.Add(1)
+	live := func() bool { return t.turn.Load() == id }
 	go func() {
 		started := time.Now()
 		for _, step := range s.steps {
-			if t.stop.Load() {
-				break
-			}
 			time.Sleep(time.Duration(500+rand.IntN(500)) * time.Millisecond)
-			a.win.Update(func() { t.entries[work].work = append(t.entries[work].work, step) })
+			if !live() {
+				return
+			}
+			a.win.Update(func() {
+				if live() {
+					t.entries[work].work = append(t.entries[work].work, step)
+				}
+			})
 		}
 		time.Sleep(400 * time.Millisecond)
 		reply := 0
 		a.win.Update(func() {
+			if !live() {
+				return
+			}
 			t.entries[work].took = fmt.Sprintf("Worked for %ds", int(time.Since(started).Seconds()))
 			t.entries = append(t.entries, entry{kind: entryAssistant, streaming: true})
 			reply = len(t.entries) - 1
@@ -642,17 +656,22 @@ func (a *app) play(t *thread, s script) {
 			i += n
 			chunk := s.reply[:i]
 			time.Sleep(time.Duration(10+rand.IntN(25)) * time.Millisecond)
-			if t.stop.Load() {
-				break
+			if !live() {
+				return
 			}
-			a.win.Update(func() { t.entries[reply].text = chunk })
+			a.win.Update(func() {
+				if live() {
+					t.entries[reply].text = chunk
+				}
+			})
 		}
 		a.win.Update(func() {
-			t.entries[reply].streaming = false
-			if t.status == statusWorking {
-				t.finish()
-				a.notifyFinished(t)
+			if !live() {
+				return
 			}
+			t.entries[reply].streaming = false
+			t.finish()
+			a.notifyFinished(t)
 		})
 	}()
 }
@@ -666,8 +685,8 @@ func (a *app) terminal(c *ui.Context, p *project) {
 	th := a.theme.terminal()
 	ui.Column(c).Height(220).Background(th.Background).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
 		ui.Row(c).Padding(4, 8, 4, 12).Gap(6).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
-			ui.Icon(c, icTerminal).FontSize(12).TextColor(th.Foreground.Alpha(0.6))
-			ui.Text(c, title).FontSize(11.5).TextColor(th.Foreground.Alpha(0.6)).SingleLine().Shrink(1)
+			ui.Icon(c, icTerminal).FontSize(12).TextColor(palette.muted)
+			ui.Text(c, title).FontSize(11.5).TextColor(palette.muted).SingleLine().Shrink(1)
 			ui.Spacer(c)
 			if iconButton(c, "close-terminal", icX, "Close terminal", false).Padding(3).Clicked() {
 				a.showTerminal = false

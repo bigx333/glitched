@@ -356,7 +356,12 @@ func (a *app) archivedThreads(c *ui.Context) {
 				})
 				ui.Button(c.Key("restore"), "Restore").OnClick(func() {
 					a.archived = remove(a.archived, t)
-					a.projects[0].threads = append(a.projects[0].threads, t)
+					// Back where it came from; the mock ones came from nowhere.
+					p := t.home
+					if p == nil {
+						p = a.projects[0]
+					}
+					p.threads = append(p.threads, t)
 					c.AddToast(ui.Toast{Title: "Thread restored", Description: t.title, Type: "info"})
 				})
 				ui.Button(c.Key("delete"), "Delete").TextColor(palette.red).OnClick(func() {

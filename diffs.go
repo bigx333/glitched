@@ -17,7 +17,46 @@ import (
 var fileTexts = map[string][2]string{
 	"apps/web/src/components/Sidebar.tsx":     {sidebarBefore, sidebarAfter},
 	"apps/web/src/components/ChevronIcon.tsx": {"", chevronAfter},
+	"apps/desktop/src/terminal/resize.ts":     {resizeBefore, resizeAfter},
 }
+
+const resizeBefore = `import { pty } from "./pty";
+
+export function watchResize(el: HTMLElement) {
+  const observer = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const { cols, rows } = measure(entry.contentRect);
+      pty.resize(cols, rows);
+    }
+  });
+  observer.observe(el);
+  return () => observer.disconnect();
+}
+`
+
+const resizeAfter = `import { pty } from "./pty";
+import { rafThrottle } from "../lib/raf";
+
+// One resize per frame: the observer fires on every pixel of a drag,
+// and each resize repaints the whole terminal.
+const resize = rafThrottle((cols: number, rows: number) => {
+  pty.resize(cols, rows);
+});
+
+export function watchResize(el: HTMLElement) {
+  const observer = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const { cols, rows } = measure(entry.contentRect);
+      resize(cols, rows);
+    }
+  });
+  observer.observe(el);
+  return () => {
+    observer.disconnect();
+    resize.cancel();
+  };
+}
+`
 
 const sidebarBefore = `import { useState } from "react";
 import { SidebarGroup, SidebarGroupLabel } from "./ui/sidebar";
@@ -204,13 +243,18 @@ func (a *app) layoutSwitch(c *ui.Context) {
 	}
 	ui.Row(c).Radius(7).Border(1, palette.border).Padding(2).Gap(2).Children(func() {
 		segment := func(key, label string, layout editor.DiffLayout, enabled bool) {
-			b := ghost(c, key, a.diffLayout == layout).Padding(3, 9).Disabled(!enabled)
+			// A disabled button shows no tooltip of its own: the box
+			// around it says why it is.
+			box := ui.Box(c).Key(key + "-box")
 			if !enabled {
-				b.Tooltip(fmt.Sprintf("Split needs %d DIPs of room", splitWidth))
+				box.Tooltip(fmt.Sprintf("Split needs %d DIPs of room", splitWidth))
 			}
-			if b.Children(func() { ui.Text(c, label).FontSize(11.5) }).Clicked() {
-				a.diffLayout = layout
-			}
+			box.Children(func() {
+				if ghost(c, key, a.diffLayout == layout).Padding(3, 9).Disabled(!enabled).
+					Children(func() { ui.Text(c, label).FontSize(11.5) }).Clicked() {
+					a.diffLayout = layout
+				}
+			})
 		}
 		segment("unified", "Unified", editor.DiffUnified, true)
 		segment("split", "Split", editor.DiffSplit, fits)
