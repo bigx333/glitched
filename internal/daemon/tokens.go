@@ -117,7 +117,10 @@ func edit(dir string, change func([]Token) ([]Token, error)) error {
 	if err := errors.Join(err, f.Close()); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), filepath.Join(dir, tokensFile))
+	if err := os.Rename(f.Name(), filepath.Join(dir, tokensFile)); err != nil {
+		return err
+	}
+	return syncDir(dir)
 }
 
 // grants admits a socket whose token tokens.json holds. It reads the file on
