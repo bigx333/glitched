@@ -34,6 +34,9 @@ type RuntimeIdentity struct {
 	Generation  uint64
 }
 
+// Adapter opens and finds agents. The ctx given to Open or Reconcile bounds
+// that call only. The agent it returns lives until its Close, so an adapter
+// must not tie the session to that ctx.
 type Adapter interface {
 	Describe(ctx context.Context) (Info, error)
 	Open(ctx context.Context, spec SessionSpec) (Agent, error)
