@@ -5,13 +5,14 @@ import (
 	"errors"
 	"io/fs"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 
 	"glitched/internal/api"
 	"glitched/internal/provider/fake"
@@ -87,13 +88,17 @@ func TestTCPAdmitsOnlyAPairedToken(t *testing.T) {
 	}
 	d := start(t, Config{Dir: dir, Listen: []string{"127.0.0.1:0"}})
 
-	resp, err := http.Get("http://" + d.Addrs()[0].String() + "/ws")
+	ws, _, err := websocket.Dial(context.Background(), "ws://"+d.Addrs()[0].String()+"/ws", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("an upgrade without a token got %d, want 401", resp.StatusCode)
+	defer ws.CloseNow()
+	if _, _, err := ws.Read(context.Background()); err != nil {
+		t.Fatalf("the engine's challenge: %v", err)
+	}
+	ws.Write(context.Background(), websocket.MessageText, []byte(`{"id":1,"method":"info","params":{}}`))
+	if _, b, err := ws.Read(context.Background()); websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
+		t.Fatalf("a call in place of a proof got %s %v, want the socket closed", b, err)
 	}
 	for name, tok := range map[string]string{"no token": "", "a wrong token": token + "x"} {
 		if _, err := remote(t, d, tok).Info(context.Background()); !errors.Is(err, transport.ErrRefused) {

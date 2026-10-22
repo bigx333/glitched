@@ -3,8 +3,6 @@ package daemon
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -20,10 +18,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"glitched/internal/transport"
 )
 
-// A Token is a pairing token as tokens.json keeps it: by its hash, so the
-// file alone lets no one connect.
+// A Token is a pairing token as tokens.json keeps it: by its SHA-256, which
+// is the key a client and the engine prove to each other (transport.KeyOf).
+// The hash is as secret as the token: with it a client connects and a server
+// passes for this engine. So the file is the user's alone, mode 0600.
 type Token struct {
 	Label   string    `json:"label"`
 	Hash    string    `json:"sha256"` // hex SHA-256 of the token
@@ -40,12 +42,12 @@ func Pair(dir, label string) (string, error) {
 	secret := make([]byte, 32)
 	rand.Read(secret)
 	token := base64.RawURLEncoding.EncodeToString(secret)
-	sum := sha256.Sum256([]byte(token))
+	key := transport.KeyOf(token)
 	err := edit(dir, func(ts []Token) ([]Token, error) {
 		if slices.ContainsFunc(ts, func(t Token) bool { return t.Label == label }) {
 			return nil, fmt.Errorf("pair: %s already has a token; revoke it first", label)
 		}
-		return append(ts, Token{Label: label, Hash: hex.EncodeToString(sum[:]), Created: time.Now().UTC()}), nil
+		return append(ts, Token{Label: label, Hash: hex.EncodeToString(key[:]), Created: time.Now().UTC()}), nil
 	})
 	if err != nil {
 		return "", err
@@ -53,7 +55,7 @@ func Pair(dir, label string) (string, error) {
 	return token, nil
 }
 
-// Revoke removes label's token. An engine refuses it on the next upgrade and
+// Revoke removes label's token. An engine refuses it on the next socket and
 // closes the sockets it admitted within a second.
 func Revoke(dir, label string) error {
 	return edit(dir, func(ts []Token) ([]Token, error) {
@@ -124,7 +126,7 @@ func edit(dir string, change func([]Token) ([]Token, error)) error {
 }
 
 // grants admits a socket whose token tokens.json holds. It reads the file on
-// every upgrade, so a revoke from another process applies to the next one,
+// every handshake, so a revoke from another process applies to the next one,
 // and every second, to close the sockets a revoked token holds.
 type grants struct {
 	dir  string
@@ -133,7 +135,7 @@ type grants struct {
 	// mu spans a read of the file through the admission it decides, so a
 	// read from before a revoke never replaces the grants of a later one.
 	mu       sync.Mutex
-	live     map[[sha256.Size]byte]grant
+	live     map[transport.Key]grant
 	failing  string               // the last error reading the file, logged once
 	refusals map[string]time.Time // when each peer's last refusal was logged
 }
@@ -155,9 +157,9 @@ func (g *grants) reload() {
 		g.failing = ""
 		slog.Info("admitting tokens again", "file", filepath.Join(g.dir, tokensFile))
 	}
-	live := map[[sha256.Size]byte]grant{}
+	live := map[transport.Key]grant{}
 	for _, t := range ts {
-		var sum [sha256.Size]byte
+		var sum transport.Key
 		if b, _ := hex.DecodeString(t.Hash); len(b) == len(sum) {
 			copy(sum[:], b)
 		} else {
@@ -195,24 +197,24 @@ func (g *grants) watch(ctx context.Context) {
 
 var errUnknownToken = errors.New("unknown token")
 
-func (g *grants) authorize(r *http.Request) (context.Context, error) {
+func (g *grants) authorize(r *http.Request, proved func(transport.Key) bool) (transport.Key, context.Context, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.reload()
-	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	sum := sha256.Sum256([]byte(token))
+	var key transport.Key
 	var match *grant
-	for s, gr := range g.live {
-		if subtle.ConstantTimeCompare(s[:], sum[:]) == 1 {
-			match = &gr
+	// Every key is tried, so the time taken doesn't say which one matched.
+	for k, gr := range g.live {
+		if proved(k) {
+			key, match = k, &gr
 		}
 	}
-	if !ok || match == nil {
+	if match == nil {
 		g.refused(r.RemoteAddr)
-		return nil, errUnknownToken
+		return transport.Key{}, nil, errUnknownToken
 	}
 	slog.Info("admitted a socket", "token", match.label, "from", r.RemoteAddr)
-	return match.ctx, nil
+	return key, match.ctx, nil
 }
 
 // refused logs a peer's refusal at most once a minute, however often it

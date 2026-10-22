@@ -42,26 +42,19 @@ func TestTailnetListensOnlyOnLoopbackOrTailscale(t *testing.T) {
 	}
 }
 
-func TestAuthorizeRefusesWith401AndClosesARevokedSocket(t *testing.T) {
+func TestAuthorizeRefusesAnUnknownKeyAndClosesARevokedSocket(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	grant, revoke := context.WithCancel(ctx)
 	var revoked atomic.Bool
 	ep := &fakeEndpoint{reads: make(chan error, 2)}
-	srv := &Server{Transport: Tailnet{}, Endpoint: ep, Authorize: func(r *http.Request) (context.Context, error) {
-		if revoked.Load() || r.Header.Get("Authorization") != "Bearer good" {
-			return nil, errors.New("unknown token")
+	admitGood := admit(map[string]context.Context{"good": grant})
+	addr := serveTailnet(t, &Server{Transport: Tailnet{}, Endpoint: ep, Authorize: func(r *http.Request, proved func(Key) bool) (Key, context.Context, error) {
+		if revoked.Load() {
+			return Key{}, nil, errors.New("unknown token")
 		}
-		return grant, nil
-	}}
-	ln, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error)
-	go func() { done <- srv.Serve(ctx, ln) }()
-	defer func() { cancel(); <-done }()
-	addr := ln.Addr().String()
+		return admitGood(r, proved)
+	}})
 
 	bad := NewEndpointClient(Tailnet{Address: addr, Token: "bad"}, api.ID{})
 	defer bad.Close()
@@ -228,7 +221,7 @@ func TestTailnetScansInterfacesAtMostOnceASecond(t *testing.T) {
 	}
 }
 
-func TestTailnetSendsNoTokenOutsideWireGuard(t *testing.T) {
+func TestTailnetSendsNothingOutsideWireGuard(t *testing.T) {
 	// Tailscale has no peer at 100.101.2.3, so the kernel routes it by the
 	// default route from the LAN address.
 	received := route(t, map[string][2]string{
@@ -248,7 +241,7 @@ func TestTailnetSendsNoTokenOutsideWireGuard(t *testing.T) {
 	}
 }
 
-func TestTailnetSendsNoTokenFromACarrierGradeNATLink(t *testing.T) {
+func TestTailnetSendsNothingFromACarrierGradeNATLink(t *testing.T) {
 	// The ISP gave this machine 100.65.0.5 and Tailscale isn't running, so
 	// both ends are in 100.64.0.0/10 and nothing encrypts the connection. By
 	// hand, `unshare -rnm` with a veth pair at 100.65.0.5/10 and 100.101.2.3/10
@@ -382,12 +375,7 @@ func TestTailscaleIPIsOnTheTailscaleInterface(t *testing.T) {
 func TestTailnetPresentsItsTokenByValueOrPointer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, Authorize: func(r *http.Request) (context.Context, error) {
-		if r.Header.Get("Authorization") != "Bearer good" {
-			return nil, errors.New("unknown token")
-		}
-		return context.Background(), nil
-	}}
+	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, Authorize: admit(map[string]context.Context{"good": context.Background()})}
 	ln, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -424,9 +412,7 @@ func TestTailnetServerNeedsAuthorize(t *testing.T) {
 func TestServerClosesAConnectionItRefusedOnceIdle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, idle: 100 * time.Millisecond, Authorize: func(*http.Request) (context.Context, error) {
-		return nil, errors.New("unknown token")
-	}}
+	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, idle: 100 * time.Millisecond, Authorize: admit(nil)}
 	ln, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -448,8 +434,8 @@ func TestServerClosesAConnectionItRefusedOnceIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("an upgrade without a token got %d, want 401", resp.StatusCode)
+	if resp.StatusCode != http.StatusUpgradeRequired {
+		t.Fatalf("a GET that asked for no WebSocket got %d, want 426", resp.StatusCode)
 	}
 	time.Sleep(time.Second)
 	io.WriteString(nc, upgrade)
@@ -462,9 +448,7 @@ func TestServerClosesAConnectionItRefusedOnceIdle(t *testing.T) {
 func TestServerClosesAConnectionWhoseRequestBodyNeverComes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, idle: 100 * time.Millisecond, Authorize: func(*http.Request) (context.Context, error) {
-		return nil, errors.New("unknown token")
-	}}
+	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, idle: 100 * time.Millisecond, Authorize: admit(nil)}
 	ln, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -519,9 +503,7 @@ func (c *countedConn) Close() error {
 func TestServerClosesAConnectionThatNeverReadsItsResponses(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, idle: 100 * time.Millisecond, Authorize: func(*http.Request) (context.Context, error) {
-		return nil, errors.New("unknown token")
-	}}
+	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, idle: 100 * time.Millisecond, Authorize: admit(nil)}
 	inner, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -555,9 +537,7 @@ func TestServerKeepsAnAcceptedSocketPastTheRequestTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	ep := &fakeEndpoint{reads: make(chan error, 2)}
-	srv := &Server{Transport: Tailnet{}, Endpoint: ep, idle: 100 * time.Millisecond, Authorize: func(*http.Request) (context.Context, error) {
-		return context.Background(), nil
-	}}
+	srv := &Server{Transport: Tailnet{}, Endpoint: ep, idle: 100 * time.Millisecond, Authorize: admit(map[string]context.Context{"good": context.Background()})}
 	ln, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
 	if err != nil {
 		t.Fatal(err)

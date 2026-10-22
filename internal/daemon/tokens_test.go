@@ -65,14 +65,18 @@ func logged(t *testing.T) (count func(msg string) int) {
 	}
 }
 
+// provedWith is a client's proof made with token's key.
+func provedWith(token string) func(transport.Key) bool {
+	return func(k transport.Key) bool { return k == transport.KeyOf(token) }
+}
+
 func TestARefusedPeerIsLoggedOnceAMinute(t *testing.T) {
 	count := logged(t)
 	g := &grants{dir: stateDir(t), base: context.Background()}
 	for _, from := range []string{"100.64.0.5:1001", "100.64.0.5:1002", "100.64.0.5:1003", "100.64.0.6:1001", "100.64.0.5:1004"} {
 		r := httptest.NewRequest("GET", "/ws", nil)
 		r.RemoteAddr = from
-		r.Header.Set("Authorization", "Bearer wrong")
-		if _, err := g.authorize(r); err == nil {
+		if _, _, err := g.authorize(r, provedWith("wrong")); err == nil {
 			t.Fatalf("admitted a wrong token from %s", from)
 		}
 	}
@@ -157,7 +161,7 @@ func TestNoUpgradeAfterARevokeReturnsGetsIn(t *testing.T) {
 		for range 64 {
 			bg.Go(func() {
 				for running.Load() {
-					g.authorize(httptest.NewRequest("GET", "/ws", nil))
+					g.authorize(httptest.NewRequest("GET", "/ws", nil), provedWith(""))
 				}
 			})
 		}
@@ -169,9 +173,7 @@ func TestNoUpgradeAfterARevokeReturnsGetsIn(t *testing.T) {
 		var after sync.WaitGroup
 		for range 64 {
 			after.Go(func() {
-				r := httptest.NewRequest("GET", "/ws", nil)
-				r.Header.Set("Authorization", "Bearer "+token)
-				if grant, err := g.authorize(r); err == nil && grant.Err() == nil {
+				if _, grant, err := g.authorize(httptest.NewRequest("GET", "/ws", nil), provedWith(token)); err == nil && grant.Err() == nil {
 					admitted.Add(1)
 				}
 			})

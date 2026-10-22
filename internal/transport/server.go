@@ -25,12 +25,17 @@ type Server struct {
 	Transport Transport
 	Endpoint  api.Endpoint
 	Hub       *hub.Replica
-	// Authorize admits an upgrade or refuses it with 401. A Tailnet server
-	// must have one. A socket it admits closes once the returned ctx ends, as
-	// when its grant is revoked.
-	Authorize func(*http.Request) (context.Context, error)
+	// Authorize admits a socket whose client proved, in the handshake, that
+	// it holds one of the keys Authorize knows. proved reports whether the
+	// proof was made with a key; Authorize asks it of every key it knows,
+	// whatever the answers, so the time taken doesn't say which matched. It
+	// returns that key, for the server's own proof, and a ctx whose end
+	// closes the socket, as when its grant is revoked. A Tailnet server must
+	// have one.
+	Authorize func(r *http.Request, proved func(Key) bool) (Key, context.Context, error)
 
 	keepalive keepalive     // zero means defaultKeepalive
+	handshake time.Duration // how long a client has to prove its key; zero means handshakeWithin
 	idle      time.Duration // each request's read, its response's write and each keep-alive wait; zero means defaultIdle
 }
 
@@ -41,7 +46,7 @@ type connKey struct{}
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	if _, ok := s.Transport.(credentialed); ok && s.Authorize == nil {
 		ln.Close()
-		return fmt.Errorf("transport: a %T server needs Authorize to check its clients' tokens", s.Transport)
+		return fmt.Errorf("transport: a %T server needs Authorize to check its clients' keys", s.Transport)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -101,19 +106,19 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
-	grant := context.Background()
-	if s.Authorize != nil {
-		var err error
-		if grant, err = s.Authorize(r); err != nil {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
-			return
-		}
-	}
 	ws, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return
 	}
 	defer ws.CloseNow()
+	grant := context.Background()
+	if s.Authorize != nil {
+		ws.SetReadLimit(helloLimit)
+		if grant, err = s.challenge(ctx, ws, r); err != nil {
+			ws.Close(websocket.StatusPolicyViolation, "refused")
+			return
+		}
+	}
 	ws.SetReadLimit(maxMessage)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

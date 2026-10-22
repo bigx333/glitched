@@ -36,7 +36,7 @@ type Config struct {
 	Hub   bool
 	HubAt transport.Transport
 	// Listen adds TCP listeners on loopback or Tailscale addresses, where a
-	// socket must present a token from tokens.json. The unix socket in Dir
+	// client must prove it holds a token from tokens.json. The unix socket in Dir
 	// is for this machine's user and needs none.
 	Listen  []string
 	Epoch   uint64 // this host's epoch at the hub

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"net/netip"
 	"slices"
 	"sync"
@@ -15,23 +14,19 @@ import (
 )
 
 // Tailnet is TCP over an installed Tailscale, or over loopback (network.md).
-// Being on the tailnet is the route, not the authorization: a client presents
-// Token on every upgrade, and the server checks it with Server.Authorize.
+// Being on the tailnet is the route, not the authorization: on every socket
+// a client proves it holds Token's key and the server proves it holds the
+// key too, and neither sends it (wire.go). Server.Authorize knows the keys.
 type Tailnet struct {
 	Address string // host:port; a client may name the host, a listener must give its IP
 	Token   string
 }
 
-// credentialed is a Transport whose clients present a token on every
-// upgrade, so its servers must check one.
-type credentialed interface{ header() http.Header }
+// credentialed is a Transport whose clients prove a key on every socket, so
+// its servers must check one.
+type credentialed interface{ key() Key }
 
-func (t Tailnet) header() http.Header {
-	return http.Header{"Authorization": {"Bearer " + t.Token}}
-}
-
-// ErrRefused is a call's error when the server refused the client's token.
-var ErrRefused = errors.New("transport: the server refused the token")
+func (t Tailnet) key() Key { return KeyOf(t.Token) }
 
 var (
 	tailscale4 = netip.MustParsePrefix("100.64.0.0/10")
@@ -41,8 +36,8 @@ var (
 )
 
 // onTailnet reports whether ip is loopback or a Tailscale address. Those are
-// the only places a token may cross, because nothing but WireGuard encrypts
-// it.
+// the only places a socket may run, because nothing but WireGuard encrypts
+// its calls.
 func onTailnet(ip netip.Addr) bool {
 	ip = ip.Unmap()
 	return ip.IsLoopback() || tailscale4.Contains(ip) || tailscale6.Contains(ip) && !via6.Contains(ip)
@@ -58,7 +53,7 @@ var scan struct {
 	addrs []netip.Addr // tailscaleAddrs as of at
 }
 
-var errNotTailnet = errors.New("is not a loopback or Tailscale address (100.64.0.0/10, or fd7a:115c:a1e0::/48 outside 4via6's fd7a:115c:a1e0:b1a::/64), the only places a token may cross without TLS")
+var errNotTailnet = errors.New("is not a loopback or Tailscale address (100.64.0.0/10, or fd7a:115c:a1e0::/48 outside 4via6's fd7a:115c:a1e0:b1a::/64), the only places a socket may run without TLS")
 
 func (t Tailnet) Listen(ctx context.Context) (net.Listener, error) {
 	host, _, err := net.SplitHostPort(t.Address)
@@ -76,7 +71,7 @@ func (t Tailnet) Listen(ctx context.Context) (net.Listener, error) {
 var dialNet = new(net.Dialer).DialContext
 
 // Dial refuses a host that resolved off the tailnet, or that Tailscale
-// doesn't route to, before the token is sent.
+// doesn't route to, before anything is sent.
 func (t Tailnet) Dial(ctx context.Context, _ api.ID) (net.Conn, error) {
 	// A UDP connect picks the route and sends nothing, so an address no peer
 	// holds is refused before a SYN leaves by the default route.
