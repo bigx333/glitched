@@ -77,3 +77,27 @@ func (Tailnet) WhoIs(conn net.Conn) (Peer, error) {
 	}
 	return Peer{Name: a.IP.String()}, nil
 }
+
+// TailscaleIP is this machine's Tailscale address, IPv4 if it has one. It
+// is false when Tailscale isn't up.
+func TailscaleIP() (netip.Addr, bool) {
+	addrs, _ := net.InterfaceAddrs()
+	var v6 netip.Addr
+	for _, a := range addrs {
+		n, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip, _ := netip.AddrFromSlice(n.IP)
+		if ip = ip.Unmap(); ip.IsLoopback() || !onTailnet(ip) {
+			continue
+		}
+		if ip.Is4() {
+			return ip, true
+		}
+		if !v6.IsValid() {
+			v6 = ip
+		}
+	}
+	return v6, v6.IsValid()
+}

@@ -9,11 +9,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
@@ -25,6 +27,7 @@ const exitLocked = 3
 
 var commands = map[string]func(context.Context, []string) error{
 	"serve":   serve,
+	"pair":    pair,
 	"run":     run,
 	"threads": threads,
 	"replica": replica,
@@ -33,6 +36,7 @@ var commands = map[string]func(context.Context, []string) error{
 const usage = `usage: glitched <command> [flags]
 
   serve     run the host engine, and the hub role unless -hub=false
+  pair      mint a token for a client on the tailnet: glitched pair -name LABEL | -list | -revoke LABEL
   run       send a message and stream the turn: glitched run [-thread ID] [-yes] text...
   threads   list this host's threads
   replica   print a thread's events as the hub holds them: glitched replica -thread ID`
@@ -60,12 +64,23 @@ func dirFlag(fs *flag.FlagSet) *string {
 	return fs.String("dir", filepath.Join(home, ".glitched"), "state directory")
 }
 
+type listFlag []string
+
+func (l *listFlag) String() string { return strings.Join(*l, ",") }
+
+func (l *listFlag) Set(v string) error {
+	*l = append(*l, v)
+	return nil
+}
+
 func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	dir := dirFlag(fs)
 	asHub := fs.Bool("hub", true, "run the hub role in this process, unless -hub-dir names another")
 	hubDir := fs.String("hub-dir", "", "upload to the hub of the engine with this state directory, on this machine")
 	epoch := fs.Uint64("epoch", 1, "this host's epoch at the hub")
+	var listen listFlag
+	fs.Var(&listen, "listen", "also serve clients with a token on this loopback or Tailscale address; repeatable")
 	fs.Parse(args)
 
 	var hubAt transport.Transport
@@ -76,6 +91,7 @@ func serve(ctx context.Context, args []string) error {
 		Dir:     *dir,
 		Hub:     *asHub && hubAt == nil,
 		HubAt:   hubAt,
+		Listen:  listen,
 		Epoch:   *epoch,
 		Adapter: fake.New(fake.Turn(true)),
 	})
@@ -83,6 +99,50 @@ func serve(ctx context.Context, args []string) error {
 		return err
 	}
 	return d.Wait()
+}
+
+// port is where pair suggests serving; any port works.
+const port = "7465"
+
+func pair(_ context.Context, args []string) error {
+	fs := flag.NewFlagSet("pair", flag.ExitOnError)
+	dir := dirFlag(fs)
+	name := fs.String("name", "", "mint a token with this label")
+	list := fs.Bool("list", false, "list the tokens")
+	revoke := fs.String("revoke", "", "revoke the token with this label")
+	fs.Parse(args)
+	switch {
+	case *list:
+		ts, err := daemon.Tokens(*dir)
+		if err != nil {
+			return err
+		}
+		for _, t := range ts {
+			fmt.Printf("%s  %s\n", t.Created.Local().Format(time.DateTime), t.Label)
+		}
+		return nil
+	case *revoke != "":
+		if err := daemon.Revoke(*dir, *revoke); err != nil {
+			return err
+		}
+		fmt.Println("revoked", *revoke)
+		return nil
+	case *name == "":
+		return errors.New("pair: give -name, -list or -revoke")
+	}
+	token, err := daemon.Pair(*dir, *name)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Token for %s, shown only this once:\n\n  %s\n\n", *name, token)
+	ip, ok := transport.TailscaleIP()
+	if !ok {
+		fmt.Printf("Tailscale isn't up here. Once it is, serve with -listen <this machine's Tailscale IP>:%s.\n", port)
+		return nil
+	}
+	addr := net.JoinHostPort(ip.String(), port)
+	fmt.Printf("Serve with:\n\n  glitched serve -listen %s\n\nThen on the other machine:\n\n  glitched run -server %s -token %s hello\n", addr, addr, token)
+	return nil
 }
 
 func run(ctx context.Context, args []string) error {

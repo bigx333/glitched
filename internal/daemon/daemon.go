@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -26,23 +27,28 @@ import (
 var ErrLocked = errors.New("another engine holds the lock")
 
 type Config struct {
-	Dir string // the lock, the databases and the socket
+	Dir string // the lock, the databases, the socket and tokens.json
 	// Hub runs the hub role in this engine. Otherwise HubAt, when set, is
 	// the engine whose hub this one uploads its log to.
-	Hub     bool
-	HubAt   transport.Transport
+	Hub   bool
+	HubAt transport.Transport
+	// Listen adds TCP listeners on loopback or Tailscale addresses, where a
+	// socket must present a token from tokens.json. The unix socket in Dir
+	// is for this machine's user and needs none.
+	Listen  []string
 	Epoch   uint64 // this host's epoch at the hub
 	Adapter provider.Adapter
 }
 
 // A Daemon is a started engine. It serves until Start's ctx ends, Close is
-// called, or its socket fails.
+// called, or a listener fails.
 type Daemon struct {
-	host *runtime.Host
-	stop context.CancelFunc
-	done chan struct{}
-	err  error
-	undo []func() error // run in reverse once serving stops
+	host  *runtime.Host
+	addrs []net.Addr
+	stop  context.CancelFunc
+	done  chan struct{}
+	err   error
+	undo  []func() error // run in reverse once serving stops
 }
 
 // Socket is the unix socket an engine with state in dir serves.
@@ -50,7 +56,7 @@ func Socket(dir string) transport.Loopback {
 	return transport.Loopback{Network: "unix", Address: filepath.Join(dir, "engine.sock")}
 }
 
-// Start returns once the socket listens, so a client may dial at once.
+// Start returns once every socket listens, so a client may dial at once.
 func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	if cfg.Hub && cfg.HubAt != nil {
 		return nil, errors.New("daemon: the hub role runs here, so there is no other hub to upload to")
@@ -129,17 +135,45 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	d.undo = append(d.undo, h.Close)
 	d.host = h
 
+	var lns []net.Listener
+	defer func() {
+		if err != nil {
+			for _, ln := range lns {
+				ln.Close()
+			}
+		}
+	}()
 	ln, err := sock.Listen(ctx)
 	if err != nil {
 		return nil, err
 	}
+	lns = append(lns, ln)
 	if err := os.Chmod(sock.Address, 0o600); err != nil {
-		ln.Close()
 		return nil, err
 	}
-	srv := &transport.Server{Transport: sock, Endpoint: h, Hub: rep}
+	servers := []*transport.Server{{Transport: sock, Endpoint: h, Hub: rep}}
+	g := &grants{dir: cfg.Dir, base: ctx}
+	for _, addr := range cfg.Listen {
+		tn := transport.Tailnet{Address: addr}
+		ln, err := tn.Listen(ctx)
+		if err != nil {
+			return nil, err
+		}
+		lns = append(lns, ln)
+		d.addrs = append(d.addrs, ln.Addr())
+		servers = append(servers, &transport.Server{Transport: tn, Endpoint: h, Hub: rep, Authorize: g.authorize})
+	}
 
-	var background sync.WaitGroup
+	var serving, background sync.WaitGroup
+	var failed sync.Once
+	for i, srv := range servers {
+		serving.Go(func() {
+			if err := srv.Serve(ctx, lns[i]); err != nil {
+				failed.Do(func() { d.err = err })
+				stop()
+			}
+		})
+	}
 	if up != nil {
 		st.OnCommit(func(store.Commit) { up.Notify() })
 		background.Go(func() {
@@ -148,8 +182,11 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 			}
 		})
 	}
+	if len(cfg.Listen) > 0 {
+		background.Go(func() { g.watch(ctx) })
+	}
 	go func() {
-		d.err = srv.Serve(ctx, ln)
+		serving.Wait()
 		stop()
 		background.Wait()
 		if err := d.release(); d.err == nil {
@@ -157,7 +194,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		}
 		close(d.done)
 	}()
-	slog.Info("serving", "socket", sock.Address, "host", st.HostID(), "log", st.LogID(), "hub", cfg.Hub)
+	slog.Info("serving", "socket", sock.Address, "listen", d.addrs, "host", st.HostID(), "log", st.LogID(), "hub", cfg.Hub)
 	return d, nil
 }
 
@@ -171,6 +208,9 @@ func (d *Daemon) release() error {
 
 // Endpoint is the engine in this process, for a caller that embeds it.
 func (d *Daemon) Endpoint() api.Endpoint { return d.host }
+
+// Addrs are where the listeners from Config.Listen took their addresses.
+func (d *Daemon) Addrs() []net.Addr { return d.addrs }
 
 // Wait returns once the engine has stopped serving and released its state,
 // with why it stopped: nil when its ctx ended or Close was called.
