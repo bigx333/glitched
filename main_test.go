@@ -71,6 +71,30 @@ func TestSendStartsAThread(t *testing.T) {
 	})
 }
 
+// The turn's approval shows as a card; Allow lets the turn finish.
+func TestApprovalCardAllows(t *testing.T) {
+	h := start(t, tempDir(t))
+	h.a.draft = "Fix the flicker"
+	h.tt.Frame()
+	h.click("Send")
+	h.until("the approval card", func() bool { return h.tt.HasText("Allow edit main.go?") })
+	h.tt.Advance(time.Second) // risen in
+	if _, ok := h.tt.Find("Deny"); !ok {
+		t.Fatalf("no Deny on the card: %q", h.tt.Texts())
+	}
+	h.click("Allow")
+	h.until("the turn to finish", func() bool {
+		v := h.a.current().View
+		return v.LastTurn != nil && !v.Working() && h.tt.HasText("Done.") && h.tt.HasText("Allowed") && h.tt.HasText("Edit main.go")
+	})
+	if o := h.a.current().View.LastTurn.Outcome; o != api.OutcomeCompleted {
+		t.Errorf("the turn ended %v, want completed", o)
+	}
+	if _, ok := h.tt.Find("Allow"); ok {
+		t.Error("the answered card still offers Allow")
+	}
+}
+
 // Stop interrupts the turn, which ends as interrupted.
 func TestStopInterrupts(t *testing.T) {
 	h := start(t, tempDir(t))

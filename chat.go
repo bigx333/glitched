@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"time"
@@ -285,6 +286,8 @@ func (a *app) entry(c *ui.Context, t thread, e entry) {
 		a.workLog(c, key, e)
 	case entryChanges:
 		a.changes(c, key, e)
+	case entryRequest:
+		a.requestCard(c, t, e)
 	}
 }
 
@@ -363,6 +366,81 @@ func counts(c *ui.Context, add, del int) {
 	if del > 0 {
 		ui.Textf(c, "−%d", del).FontSize(11.5).Font("monospace").TextColor(palette.red)
 	}
+}
+
+// requestCard is what the agent asks before it goes on: Allow and Deny
+// while it waits, then what was answered.
+func (a *app) requestCard(c *ui.Context, t thread, e entry) {
+	r := e.request
+	ui.Column(c).Key(e.key).Gap(10).Padding(12, 14).Radius(12).Border(1, palette.amber.Alpha(0.45)).
+		Background(palette.amber.Alpha(0.06)).Transition(riseIn).Children(func() {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, icHand).FontSize(15).TextColor(palette.amber)
+			ui.Text(c, asks(r.Body)).FontWeight(500).Grow(1).Shrink(1)
+		})
+		if r.State != api.RequestPending {
+			ui.Text(c, answered(r)).FontSize(12).TextColor(palette.muted)
+			return
+		}
+		sent, sending := responding(t, r.Request)
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			switch {
+			case sending && sent.Err != nil:
+				ui.Text(c, "Not sent: "+sent.Err.Error()).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
+				if headerButton(c, "retry").Label("Retry").Children(func() { ui.Text(c, "Retry").FontSize(12) }).Clicked() {
+					a.backend.Retry(t.env, t.id(), sent.Command)
+				}
+				return
+			case sending:
+				ui.Text(c, "Sending…").FontSize(12).TextColor(palette.muted)
+			}
+			ui.Spacer(c)
+			if headerButton(c, "deny").Disabled(sending).Children(func() { ui.Text(c, "Deny").FontSize(12.5) }).Clicked() {
+				a.backend.Respond(t.env, t.id(), r.Request, false)
+			}
+			allow := ui.ButtonBase(c.Key("allow")).Padding(5, 14).Radius(999).Background(palette.accent).
+				TextColor(ui.Hex("#ffffff")).Cursor(ui.CursorPointer).Disabled(sending)
+			if allow.Children(func() { ui.Text(c, "Allow").FontSize(12.5).FontWeight(600) }).Clicked() {
+				a.backend.Respond(t.env, t.id(), r.Request, true)
+			}
+		})
+	})
+}
+
+// asks is what a request's body asks for, as {"operation":"edit",
+// "path":"main.go"} asks to edit main.go, or the body itself.
+func asks(body json.RawMessage) string {
+	var b struct{ Operation, Path string }
+	if json.Unmarshal(body, &b) == nil && b.Operation != "" {
+		return strings.TrimSpace("Allow " + b.Operation + " " + b.Path + "?")
+	}
+	return "The agent asks: " + string(body)
+}
+
+func answered(r *client.RequestEntry) string {
+	switch r.State {
+	case api.RequestInvalidated, api.RequestExpired:
+		if r.Reason != "" {
+			return "No longer asked: " + r.Reason
+		}
+		return "No longer asked"
+	}
+	var b struct{ Allow bool }
+	if json.Unmarshal(r.Answer, &b) == nil && b.Allow {
+		return "Allowed"
+	}
+	return "Denied"
+}
+
+// responding is the answer to the request sent from here and not landed,
+// if there is one.
+func responding(t thread, request api.ID) (client.Pending, bool) {
+	for _, p := range t.Pending {
+		if r, ok := p.Body.(api.RequestRespond); ok && r.Request == request {
+			return p, true
+		}
+	}
+	return client.Pending{}, false
 }
 
 func (a *app) changes(c *ui.Context, key string, e entry) {
