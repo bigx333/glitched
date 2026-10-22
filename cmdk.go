@@ -17,19 +17,22 @@ func (a *app) openCommandPalette() {
 	a.cmdkOpen, a.cmdkQuery, a.cmdkIndex = true, "", 0
 }
 
+// toggleLightDark switches to Light from any dark theme, and to Dark from
+// any light one.
+func (a *app) toggleLightDark() {
+	a.settings.theme = 1
+	if !a.theme.dark {
+		a.settings.theme = 2
+	}
+}
+
 func (a *app) commands() []command {
 	cmds := []command{
 		{"Actions", "New thread", "⌘N", icSquarePen, a.newThread},
 		{"Actions", "Toggle diff panel", "⌘D", icDiff, func() { a.showDiff = !a.showDiff }},
 		{"Actions", "Toggle terminal", "⌘J", icTerminal, func() { a.showTerminal = !a.showTerminal }},
 		{"Actions", "Toggle sidebar", "⌘B", icPanelLeft, func() { a.showSidebar = !a.showSidebar }},
-		{"Actions", "Toggle light / dark", "", icPalette, func() {
-			if a.settings.theme == 1 {
-				a.settings.theme = 2
-			} else {
-				a.settings.theme = 1
-			}
-		}},
+		{"Actions", "Toggle light / dark", "⇧⌘L", icPalette, a.toggleLightDark},
 		{"Actions", "Open settings", "⌘,", icSettings, func() { a.router.Push("/settings/general") }},
 	}
 	for _, p := range a.projects {

@@ -24,6 +24,45 @@ type colors struct {
 	accent, green, red, amber, blue                                 ui.Color
 }
 
+// theme is one of the app's looks: its colors, and the terminal's, a
+// theme of Ghostty's where the theme has a matching one.
+type theme struct {
+	name   string
+	dark   bool
+	colors colors
+	term   string
+}
+
+// themes are the looks the settings choose from, after System.
+var themes = []theme{
+	{"Light", false, lightColors, ""},
+	{"Dark", true, darkColors, ""},
+	{"Mocha", true, mochaColors, "Catppuccin Mocha"},
+	{"Dawn", false, dawnColors, "Rose Pine Dawn"},
+}
+
+// themeNames are the settings' choices: the system's appearance, then
+// each theme.
+func themeNames() []string {
+	names := []string{"System"}
+	for _, t := range themes {
+		names = append(names, t.name)
+	}
+	return names
+}
+
+// themeFor is the theme a settings choice names: at 0, the system's
+// appearance, Dark or Light; else themes[i-1].
+func themeFor(i int, systemDark bool) theme {
+	if i > 0 && i <= len(themes) {
+		return themes[i-1]
+	}
+	if systemDark {
+		return themes[1]
+	}
+	return themes[0]
+}
+
 var (
 	darkColors = colors{
 		bg:      ui.Hex("#0c0c0e"),
@@ -34,7 +73,7 @@ var (
 		border:  ui.RGBA(255, 255, 255, 0.08),
 		text:    ui.Hex("#ececf0"),
 		muted:   ui.Hex("#8e8e98"),
-		faint:   ui.Hex("#5c5c66"),
+		faint:   ui.Hex("#7c7c84"),
 		green:   ui.Hex("#4ade80"),
 		red:     ui.Hex("#f87171"),
 		amber:   ui.Hex("#fbbf24"),
@@ -49,11 +88,43 @@ var (
 		border:  ui.RGBA(0, 0, 0, 0.09),
 		text:    ui.Hex("#18181b"),
 		muted:   ui.Hex("#71717a"),
-		faint:   ui.Hex("#a1a1aa"),
+		faint:   ui.Hex("#74747d"),
 		green:   ui.Hex("#16a34a"),
 		red:     ui.Hex("#dc2626"),
 		amber:   ui.Hex("#d97706"),
 		blue:    ui.Hex("#2563eb"),
+	}
+	// mochaColors are Catppuccin Mocha's.
+	mochaColors = colors{
+		bg:      ui.Hex("#1e1e2e"),
+		sidebar: ui.Hex("#181825"),
+		surface: ui.Hex("#262637"),
+		hover:   ui.RGBA(205, 214, 244, 0.06),
+		active:  ui.RGBA(205, 214, 244, 0.1),
+		border:  ui.RGBA(205, 214, 244, 0.1),
+		text:    ui.Hex("#cdd6f4"),
+		muted:   ui.Hex("#a6adc8"),
+		faint:   ui.Hex("#9399b2"),
+		green:   ui.Hex("#a6e3a1"),
+		red:     ui.Hex("#f38ba8"),
+		amber:   ui.Hex("#f9e2af"),
+		blue:    ui.Hex("#89b4fa"),
+	}
+	// dawnColors are Rosé Pine Dawn's.
+	dawnColors = colors{
+		bg:      ui.Hex("#faf4ed"),
+		sidebar: ui.Hex("#f2e9e1"),
+		surface: ui.Hex("#fffaf3"),
+		hover:   ui.RGBA(87, 82, 121, 0.06),
+		active:  ui.RGBA(87, 82, 121, 0.1),
+		border:  ui.RGBA(87, 82, 121, 0.12),
+		text:    ui.Hex("#575279"),
+		muted:   ui.Hex("#605c78"),
+		faint:   ui.Hex("#6e6a86"),
+		green:   ui.Hex("#286983"),
+		red:     ui.Hex("#b4637a"),
+		amber:   ui.Hex("#ea9d34"),
+		blue:    ui.Hex("#56949f"),
 	}
 	accents = []struct {
 		name  string
@@ -72,7 +143,7 @@ var (
 
 // settings is what the settings pages edit. Most of it is only shown.
 type settings struct {
-	theme         int // System, Light, Dark
+	theme         int // 0 is the system's appearance; else 1 + an index into themes
 	accent        int
 	glass         bool
 	vibrancy      float64 // 0 to 1: how much of the sidebar's vibrancy shows through the background
@@ -104,6 +175,8 @@ type app struct {
 	selected string
 	settings settings
 
+	// theme is the frame's look, as the settings and the system choose it.
+	theme        theme
 	showSidebar  bool
 	showDiff     bool
 	showTerminal bool
@@ -265,24 +338,14 @@ func (a *app) select_(id string) {
 }
 
 // applyTheme sets the theme the settings ask for: the system's appearance,
-// which the default theme follows, or light or dark.
+// which the default choice follows, or one of the app's themes.
 func (a *app) applyTheme(c *ui.Context) {
-	dark := c.Theme().Dark
-	switch a.settings.theme {
-	case 1:
-		dark = false
-	case 2:
-		dark = true
-	}
-	if dark {
-		palette = darkColors
-	} else {
-		palette = lightColors
-	}
+	a.theme = themeFor(a.settings.theme, c.Theme().Dark)
+	palette = a.theme.colors
 	palette.accent = accents[a.settings.accent].color
 
 	t := *c.Theme()
-	t.Dark = dark
+	t.Dark = a.theme.dark
 	t.Background = palette.bg
 	t.Surface = palette.surface
 	t.SurfaceHover = palette.surface.Mix(palette.text, 0.06)
@@ -406,6 +469,9 @@ func (a *app) shortcuts(c *ui.Context) {
 	}
 	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyP) {
 		a.togglePreview()
+	}
+	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyL) {
+		a.toggleLightDark()
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyJ) {
 		a.showTerminal, a.panelsJump = !a.showTerminal, true

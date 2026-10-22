@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/png"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,9 @@ func TestShot(t *testing.T) {
 	a.settings.theme = 2
 	if os.Getenv("LIGHT") != "" {
 		a.settings.theme = 1
+	}
+	if name := os.Getenv("THEME"); name != "" {
+		a.settings.theme = slices.Index(themeNames(), name)
 	}
 	if v := os.Getenv("TINT"); v != "" {
 		fmt.Sscan(v, &a.settings.vibrancy)

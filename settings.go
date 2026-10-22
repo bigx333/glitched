@@ -130,7 +130,7 @@ func (a *app) appearance(c *ui.Context) {
 	s := &a.settings
 	card(c, "THEME", func() {
 		ui.Row(c).Padding(16).Gap(12).Children(func() {
-			for i, name := range []string{"System", "Light", "Dark"} {
+			for i, name := range themeNames() {
 				a.themeCard(c, i, name)
 			}
 		})
@@ -177,12 +177,12 @@ func (a *app) appearance(c *ui.Context) {
 	})
 }
 
+// themeCard previews a theme's sidebar and chat, and the terminal's
+// colors under them; System's is half light, half dark.
 func (a *app) themeCard(c *ui.Context, i int, name string) {
 	s := &a.settings
-	cols := darkColors
-	if i == 1 {
-		cols = lightColors
-	}
+	th := themeFor(i, true)
+	cols := th.colors
 	b := ui.ButtonBase(c.Key(name)).Grow(1).Basis(0).Column().AlignItems(ui.Stretch).Gap(8).Cursor(ui.CursorPointer)
 	if b.Children(func() {
 		ui.Box(c).Height(96).Radius(10).Clip().Children(func() {
@@ -193,17 +193,24 @@ func (a *app) themeCard(c *ui.Context, i int, name string) {
 			ui.Row(c).Fill().Border(1, palette.border).Radius(10).Clip().AlignItems(ui.Stretch).Children(func() {
 				side, main := cols.sidebar, cols.bg
 				if i == 0 { // half and half
-					side, main = lightColors.sidebar, darkColors.bg
+					side, main = themeFor(i, false).colors.sidebar, cols.bg
 				}
 				ui.Column(c).Width(44).Background(side).Padding(10, 8).Gap(5).Children(func() {
 					for range 4 {
 						ui.Box(c).Height(4).Radius(2).Background(cols.muted.Alpha(0.35))
 					}
 				})
-				ui.Column(c).Grow(1).Background(main).Padding(12).Gap(6).Justify(ui.End).Children(func() {
+				ui.Column(c).Grow(1).Background(main).Padding(12, 12, 8).Gap(6).Justify(ui.End).Children(func() {
 					ui.Box(c).Height(5).WidthPercent(70).Radius(3).Background(cols.muted.Alpha(0.4))
 					ui.Box(c).Height(5).WidthPercent(50).Radius(3).Background(cols.muted.Alpha(0.4))
 					ui.Box(c).Height(16).Radius(6).Background(cols.surface).Border(1, cols.border).Margin(4, 0, 0)
+					// The terminal's palette, as a strip of its colors.
+					term := th.terminal()
+					ui.Row(c).Gap(2).Margin(2, 0, 0).Children(func() {
+						for _, col := range term.Palette[1:7] {
+							ui.Box(c).Size(6, 4).Radius(1).Background(col)
+						}
+					})
 				})
 			})
 		})

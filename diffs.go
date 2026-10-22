@@ -122,12 +122,12 @@ func reviewButton(c *ui.Context, label string, primary bool) ui.Element {
 		Background(palette.surface).Border(1, palette.border).TextColor(palette.text).
 		Shadow(0, 2, 6, 0, ui.RGBA(0, 0, 0, 0.25)).Transition(hoverFade)
 	if primary {
-		b.Background(darkColors.green.Mix(ui.Hex("#000000"), 0.35)).Border(1, darkColors.green.Alpha(0.6)).TextColor(ui.Hex("#ffffff"))
+		b.Background(palette.green.Mix(ui.Hex("#000000"), 0.35)).Border(1, palette.green.Alpha(0.6)).TextColor(ui.Hex("#ffffff"))
 	}
 	if b.Hovered() {
 		b.Background(palette.surface.Mix(palette.text, 0.1))
 		if primary {
-			b.Background(darkColors.green.Mix(ui.Hex("#000000"), 0.2))
+			b.Background(palette.green.Mix(ui.Hex("#000000"), 0.2))
 		}
 	}
 	return b.Children(func() { ui.Text(c, label).FontSize(11.5).FontWeight(500) })
