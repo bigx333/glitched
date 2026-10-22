@@ -1,6 +1,6 @@
 //go:build unix
 
-package main
+package daemon
 
 import (
 	"errors"
@@ -19,7 +19,7 @@ func lock(path string) (*os.File, error) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, errLocked
+			return nil, ErrLocked
 		}
 		return nil, err
 	}

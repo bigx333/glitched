@@ -9,25 +9,17 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"glitched/internal/api"
-	"glitched/internal/hub"
+	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
-	"glitched/internal/runtime"
-	"glitched/internal/store"
 	"glitched/internal/transport"
 )
-
-// errLocked exits with its own code so a service manager doesn't restart a
-// second engine in a loop.
-var errLocked = errors.New("another engine holds the lock")
 
 const exitLocked = 3
 
@@ -54,7 +46,7 @@ func main() {
 	err := commands[os.Args[1]](ctx, os.Args[2:])
 	stop()
 	switch {
-	case errors.Is(err, errLocked):
+	case errors.Is(err, daemon.ErrLocked):
 		fmt.Fprintln(os.Stderr, "glitched:", err)
 		os.Exit(exitLocked)
 	case err != nil:
@@ -68,98 +60,29 @@ func dirFlag(fs *flag.FlagSet) *string {
 	return fs.String("dir", filepath.Join(home, ".glitched"), "state directory")
 }
 
-func socket(dir string) transport.Loopback {
-	return transport.Loopback{Network: "unix", Address: filepath.Join(dir, "engine.sock")}
-}
-
 func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	dir := dirFlag(fs)
-	asHub := fs.Bool("hub", true, "run the hub role in this process")
-	hubDir := fs.String("hub-dir", "", "state directory of the engine that runs the hub, when -hub=false")
+	asHub := fs.Bool("hub", true, "run the hub role in this process, unless -hub-dir names another")
+	hubDir := fs.String("hub-dir", "", "upload to the hub of the engine with this state directory, on this machine")
 	epoch := fs.Uint64("epoch", 1, "this host's epoch at the hub")
 	fs.Parse(args)
 
-	if err := os.MkdirAll(*dir, 0o700); err != nil {
-		return err
+	var hubAt transport.Transport
+	if *hubDir != "" {
+		hubAt = daemon.Socket(*hubDir)
 	}
-	// Nothing authenticates a caller on the socket yet, so file modes are
-	// the only gate; a dir created earlier may be wider than MkdirAll's mode.
-	if err := os.Chmod(*dir, 0o700); err != nil {
-		return err
-	}
-	lk, err := lock(filepath.Join(*dir, "engine.lock"))
+	d, err := daemon.Start(ctx, daemon.Config{
+		Dir:     *dir,
+		Hub:     *asHub && hubAt == nil,
+		HubAt:   hubAt,
+		Epoch:   *epoch,
+		Adapter: fake.New(fake.Turn(true)),
+	})
 	if err != nil {
 		return err
 	}
-	defer lk.Close()
-	lb := socket(*dir)
-	// The lock is ours, so a socket file left here is from a dead engine.
-	os.Remove(lb.Address)
-
-	st, err := store.Open(filepath.Join(*dir, "engine.db"))
-	if err != nil {
-		return err
-	}
-	defer st.Close()
-
-	var rep *hub.Replica
-	var hubc hub.Client
-	switch {
-	case *asHub:
-		if rep, err = hub.Open(filepath.Join(*dir, "hub.db")); err != nil {
-			return err
-		}
-		defer rep.Close()
-		hubc = rep
-	case *hubDir != "":
-		hubc = transport.NewHubClient(socket(*hubDir), api.ID{})
-	}
-	var up *hub.Uploader
-	if hubc != nil {
-		up = hub.NewUploader(st.HostID(), *epoch, st, hubc)
-		// The hub lives outside a backup of this database, so it sees a
-		// restore that brought the fence back too.
-		check, cancel := context.WithTimeout(ctx, 2*time.Second)
-		err := up.Check(check)
-		cancel()
-		switch {
-		case errors.Is(err, hub.ErrRewound):
-			slog.Warn("the hub holds more of this log than the database, which came back from a backup; starting a new log", "log", st.LogID())
-			if err := st.Rewind(ctx); err != nil {
-				return err
-			}
-		case err != nil:
-			slog.Warn("hub unreachable, so a restore the fence came back with goes unnoticed", "err", err)
-		}
-	}
-
-	h, err := runtime.New(ctx, st, fake.New(fake.Turn(true)))
-	if err != nil {
-		return err
-	}
-	defer h.Close()
-
-	srv := &transport.Server{Transport: lb, Endpoint: h, Hub: rep}
-	if up != nil {
-		st.OnCommit(func(store.Commit) { up.Notify() })
-		go func() {
-			if err := up.Run(ctx); err != nil && ctx.Err() == nil {
-				slog.Error("uploader stopped", "err", err)
-			}
-		}()
-	}
-
-	ln, err := lb.Listen(ctx)
-	if err != nil {
-		return err
-	}
-	if err := os.Chmod(lb.Address, 0o600); err != nil {
-		ln.Close()
-		return err
-	}
-	slog.Info("serving", "socket", lb.Address, "host", st.HostID(), "log", st.LogID(), "hub", *asHub)
-	return srv.Serve(ctx, ln)
+	return d.Wait()
 }
 
 func run(ctx context.Context, args []string) error {
@@ -177,7 +100,8 @@ func run(ctx context.Context, args []string) error {
 	if text == "" {
 		return errors.New("run: no message")
 	}
-	ep := transport.NewEndpointClient(socket(*dir), api.ID{})
+	ep := transport.NewEndpointClient(daemon.Socket(*dir), api.ID{})
+	defer ep.Close()
 
 	var thread api.ID
 	if *threadFlag != "" {
@@ -331,7 +255,9 @@ func threads(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("threads", flag.ExitOnError)
 	dir := dirFlag(fs)
 	fs.Parse(args)
-	snap, err := transport.NewEndpointClient(socket(*dir), api.ID{}).Read(ctx, api.Query{})
+	ep := transport.NewEndpointClient(daemon.Socket(*dir), api.ID{})
+	defer ep.Close()
+	snap, err := ep.Read(ctx, api.Query{})
 	if err != nil {
 		return err
 	}
@@ -350,7 +276,9 @@ func replica(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	evs, err := transport.NewHubClient(socket(*dir), api.ID{}).Events(ctx, thread, api.Cursor{}, 1000)
+	hubc := transport.NewHubClient(daemon.Socket(*dir), api.ID{})
+	defer hubc.Close()
+	evs, err := hubc.Events(ctx, thread, api.Cursor{}, 1000)
 	if err != nil {
 		return err
 	}

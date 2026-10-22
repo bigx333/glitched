@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/daemon"
 	"glitched/internal/transport"
 )
 
@@ -24,7 +25,7 @@ func TestServeRunAndReplicate(t *testing.T) {
 
 	served := make(chan error, 1)
 	go func() { served <- serve(ctx, []string{"-dir", dir}) }()
-	ep := transport.NewEndpointClient(socket(dir), api.ID{})
+	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
 	for {
 		if _, err := ep.Info(ctx); err == nil {
 			break
@@ -35,8 +36,8 @@ func TestServeRunAndReplicate(t *testing.T) {
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	if err := serve(ctx, []string{"-dir", dir}); err != errLocked {
-		t.Fatalf("second engine on the same dir: %v, want errLocked", err)
+	if err := serve(ctx, []string{"-dir", dir}); err != daemon.ErrLocked {
+		t.Fatalf("second engine on the same dir: %v, want daemon.ErrLocked", err)
 	}
 
 	if err := run(ctx, []string{"-dir", dir, "-yes", "hello"}); err != nil {
@@ -52,7 +53,7 @@ func TestServeRunAndReplicate(t *testing.T) {
 		t.Fatalf("host log for the thread: %d events, %v", len(host.Events), err)
 	}
 
-	hubc := transport.NewHubClient(socket(dir), api.ID{})
+	hubc := transport.NewHubClient(daemon.Socket(dir), api.ID{})
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		evs, err := hubc.Events(ctx, thread, api.Cursor{}, 1000)
@@ -87,7 +88,7 @@ func serving(t *testing.T, dir string, args ...string) (stop func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
 	go func() { served <- serve(ctx, append([]string{"-dir", dir}, args...)) }()
-	ep := transport.NewEndpointClient(socket(dir), api.ID{})
+	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
 	for {
 		if _, err := ep.Info(ctx); err == nil {
 			break
@@ -119,8 +120,8 @@ func TestServeRewindsALogTheHubHoldsMoreOf(t *testing.T) {
 	}
 	hubDir, dir, backup := dirs[0], dirs[1], dirs[2]
 	defer serving(t, hubDir)()
-	hubc := transport.NewHubClient(socket(hubDir), api.ID{})
-	ep := transport.NewEndpointClient(socket(dir), api.ID{})
+	hubc := transport.NewHubClient(daemon.Socket(hubDir), api.ID{})
+	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
 	host := func() func() { return serving(t, dir, "-hub=false", "-hub-dir", hubDir) }
 	uploaded := func(log api.ID, want uint64) {
 		t.Helper()
