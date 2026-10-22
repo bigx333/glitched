@@ -11,10 +11,12 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	_ "modernc.org/sqlite"
 
 	"glitched/internal/api"
+	"glitched/internal/engine"
 )
 
 type Store struct {
@@ -211,8 +213,7 @@ func (s *Store) migrate() error {
 		return err
 	}
 	if s.restored(head) {
-		s.log = api.NewID()
-		if _, err := tx.ExecContext(ctx, `UPDATE meta SET value = ? WHERE key = 'log'`, s.log[:]); err != nil {
+		if head, err = s.rewind(ctx, tx); err != nil {
 			return err
 		}
 	}
@@ -220,6 +221,30 @@ func (s *Store) migrate() error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// rewind gives the log a new id, for a database that is behind what its
+// clients saw, and makes every run it left live uncertain: what it holds in
+// flight may already have reached the agent in the history it lost. It
+// returns the new head.
+func (s *Store) rewind(ctx context.Context, tx *sql.Tx) (uint64, error) {
+	s.log = api.NewID()
+	if _, err := tx.ExecContext(ctx, `UPDATE meta SET value = ? WHERE key = 'log'`, s.log[:]); err != nil {
+		return 0, err
+	}
+	threads, err := ids(ctx, tx, `SELECT thread FROM runs WHERE state NOT IN ('finished', 'uncertain') ORDER BY thread`)
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now()
+	for _, id := range threads {
+		if _, _, err := s.write(ctx, tx, id, func(t engine.Thread) ([]engine.Event, []engine.Effect, error) {
+			return engine.Observe(t, engine.Reconciled{Run: t.Live().ID}, now)
+		}); err != nil {
+			return 0, err
+		}
+	}
+	return headSeq(ctx, tx)
 }
 
 // The fence file beside the database holds the log id and the highest seq
@@ -242,8 +267,8 @@ func (s *Store) restored(head uint64) bool {
 
 // writeFence records head as handed out under the log, durably, before the
 // transaction that writes it commits: no reader sees a seq the fence doesn't
-// cover. A transaction that then fails leaves the fence ahead, which costs
-// clients one snapshot after the next open.
+// cover. A transaction that then fails leaves the fence ahead, which the
+// next open takes for a restore.
 func (s *Store) writeFence(head uint64) error {
 	var b [fenceSize]byte
 	copy(b[:], s.log[:])

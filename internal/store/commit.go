@@ -70,54 +70,13 @@ func (s *Store) commit(ctx context.Context, thread api.ID, r *receipt, done int6
 		}
 	}
 
-	old, err := loadThread(ctx, tx, thread)
-	if err != nil {
-		return api.Cursor{}, err
-	}
-	events, effects, err := decide(old)
+	wire, head, err := s.write(ctx, tx, thread, decide)
 	var refused error
 	if errors.Is(err, engine.ErrRefused) {
 		refused, err = err, nil
 	}
 	if err != nil {
 		return api.Cursor{}, err
-	}
-	head, err := headSeq(ctx, tx)
-	if err != nil {
-		return api.Cursor{}, err
-	}
-	t, wire := old, make([]api.Event, 0, len(events))
-	for _, e := range events {
-		head++
-		payload, err := json.Marshal(e.Body)
-		if err != nil {
-			return api.Cursor{}, err
-		}
-		w := api.Event{
-			Cursor: api.Cursor{Log: s.log, Seq: head}, Thread: e.Thread, Type: api.EventType(e.Body),
-			Schema: api.EventSchema, At: e.At, Payload: payload,
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO events (seq, thread, type, schema, at, payload) VALUES (?, ?, ?, ?, ?, ?)`,
-			head, w.Thread[:], w.Type, w.Schema, e.At.UnixNano(), payload); err != nil {
-			return api.Cursor{}, err
-		}
-		t = engine.Apply(t, e)
-		wire = append(wire, w)
-	}
-	if len(events) > 0 {
-		if err := writeThread(ctx, tx, old, t); err != nil {
-			return api.Cursor{}, err
-		}
-	}
-	for _, e := range effects {
-		payload, err := json.Marshal(e)
-		if err != nil {
-			return api.Cursor{}, err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO effects (thread, kind, payload, state) VALUES (?, ?, ?, 'pending')`,
-			thread[:], engine.EffectKind(e), payload); err != nil {
-			return api.Cursor{}, err
-		}
 	}
 	if done != 0 {
 		if err := moveEffect(ctx, tx, done, "leased", "done"); err != nil {
@@ -143,6 +102,59 @@ func (s *Store) commit(ctx context.Context, thread api.ID, r *receipt, done int6
 		}
 	}
 	return api.Cursor{Log: s.log, Seq: head}, refused
+}
+
+// write decides against the thread's stored state and writes what comes of
+// it into tx: events, the projection and effects. It returns the events as
+// clients read them and the head after them, which a refusal leaves as it
+// was.
+func (s *Store) write(ctx context.Context, tx *sql.Tx, thread api.ID, decide decider) ([]api.Event, uint64, error) {
+	old, err := loadThread(ctx, tx, thread)
+	if err != nil {
+		return nil, 0, err
+	}
+	head, err := headSeq(ctx, tx)
+	if err != nil {
+		return nil, 0, err
+	}
+	events, effects, err := decide(old)
+	if err != nil {
+		return nil, head, err
+	}
+	t, wire := old, make([]api.Event, 0, len(events))
+	for _, e := range events {
+		head++
+		payload, err := json.Marshal(e.Body)
+		if err != nil {
+			return nil, 0, err
+		}
+		w := api.Event{
+			Cursor: api.Cursor{Log: s.log, Seq: head}, Thread: e.Thread, Type: api.EventType(e.Body),
+			Schema: api.EventSchema, At: e.At, Payload: payload,
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO events (seq, thread, type, schema, at, payload) VALUES (?, ?, ?, ?, ?, ?)`,
+			head, w.Thread[:], w.Type, w.Schema, e.At.UnixNano(), payload); err != nil {
+			return nil, 0, err
+		}
+		t = engine.Apply(t, e)
+		wire = append(wire, w)
+	}
+	if len(events) > 0 {
+		if err := writeThread(ctx, tx, old, t); err != nil {
+			return nil, 0, err
+		}
+	}
+	for _, e := range effects {
+		payload, err := json.Marshal(e)
+		if err != nil {
+			return nil, 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO effects (thread, kind, payload, state) VALUES (?, ?, ?, 'pending')`,
+			thread[:], engine.EffectKind(e), payload); err != nil {
+			return nil, 0, err
+		}
+	}
+	return wire, head, nil
 }
 
 // Thread returns the stored projection, or a zero Thread if there is none.

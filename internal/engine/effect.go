@@ -142,7 +142,8 @@ type SteerFailed struct {
 // SteerLost: the engine died while steering, so nobody knows if it arrived.
 type SteerLost struct{ Message api.ID }
 
-// Reconciled is boot's verdict on a run the last process left live.
+// Reconciled is the verdict on a run the last process left live: boot's,
+// or the store's on a restored database, which never restores a run.
 type Reconciled struct {
 	Run      api.ID
 	Restored bool
