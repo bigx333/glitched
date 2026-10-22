@@ -1,6 +1,7 @@
 package runtime_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -48,21 +49,32 @@ func TestHungStartBlocksNeitherOtherThreadsNorItsInterrupt(t *testing.T) {
 	assertReplay(t, n.st)
 }
 
-func TestSecondInterruptGivesUpOnARunThatIgnoresTheFirst(t *testing.T) {
-	g := newGated(fake.Turn(true))
-	never := make(chan struct{})
-	g.setGate(func(_ api.ID, a provider.Action) <-chan struct{} {
-		if _, ok := a.(provider.Interrupt); ok {
-			return never
-		}
+// deaf is an adapter whose agents take an interrupt and carry on.
+type deaf struct{ *fake.Adapter }
+
+func (d deaf) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	ag, err := d.Adapter.Open(ctx, spec)
+	return deafAgent{ag}, err
+}
+
+type deafAgent struct{ provider.Agent }
+
+func (a deafAgent) Do(ctx context.Context, act provider.Action) error {
+	if _, ok := act.(provider.Interrupt); ok {
 		return nil
-	})
-	n := start(t, dbPath(t), g)
+	}
+	return a.Agent.Do(ctx, act)
+}
+
+func TestSecondInterruptGivesUpOnARunThatIgnoresTheFirst(t *testing.T) {
+	n := start(t, dbPath(t), deaf{fake.New(fake.Turn(true))})
 	thread := newThread(t, n.h)
 	submit(t, n.h, thread, dispatch("go", api.StartNow))
 	first := until(t, n.h, thread, "approval", waiting).Requests[0].Run
 	submit(t, n.h, thread, api.TurnInterrupt{})
-	until(t, n.h, thread, "stopping", func(th api.Thread) bool { return th.Run == api.RunStopping })
+	until(t, n.h, thread, "the agent took the interrupt", func(api.Thread) bool {
+		return count(events(t, n.h, thread), "turn.signalled") == 1
+	})
 	submit(t, n.h, thread, api.TurnInterrupt{})
 	until(t, n.h, thread, "uncertain", func(th api.Thread) bool { return th.Run == api.RunUncertain })
 
@@ -70,6 +82,34 @@ func TestSecondInterruptGivesUpOnARunThatIgnoresTheFirst(t *testing.T) {
 	until(t, n.h, thread, "the next run asks", func(th api.Thread) bool { return waiting(th) && th.Requests[0].Run != first })
 	if got := outcomes(t, n.h, thread); len(got) != 1 || got[0] != api.OutcomeAbandoned {
 		t.Fatalf("the ignored run ended %v, want abandoned", got)
+	}
+	assertReplay(t, n.st)
+}
+
+func TestASecondInterruptWaitsForTheFirstToReachTheAgent(t *testing.T) {
+	g := newGated(fake.Turn(true))
+	n := start(t, dbPath(t), g)
+	thread := newThread(t, n.h)
+	submit(t, n.h, thread, dispatch("go", api.StartNow))
+	until(t, n.h, thread, "approval", waiting)
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	g.setGate(func(_ api.ID, a provider.Action) <-chan struct{} {
+		if _, ok := a.(provider.Interrupt); ok {
+			entered <- struct{}{}
+			return release
+		}
+		return nil
+	})
+	submit(t, n.h, thread, api.TurnInterrupt{})
+	<-entered
+	submit(t, n.h, thread, api.TurnInterrupt{})
+	if th := until(t, n.h, thread, "read", func(api.Thread) bool { return true }); th.Run != api.RunStopping {
+		t.Fatalf("a second interrupt while the first was still on its way left the run %v, want stopping", th.Run)
+	}
+	close(release)
+	until(t, n.h, thread, "turn end", idle)
+	if got := outcomes(t, n.h, thread); len(got) != 1 || got[0] != api.OutcomeInterrupted {
+		t.Fatalf("run ended %v, want interrupted", got)
 	}
 	assertReplay(t, n.st)
 }

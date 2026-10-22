@@ -180,13 +180,17 @@ func (d *decision) settle() error {
 	return nil
 }
 
-// interrupt is the user's stop. Asked again, the user gives up waiting on a
-// run that ignores its interrupt; nobody can say what that run is doing.
+// interrupt is the user's stop. Asked again once the agent took the first
+// interrupt, the user gives up waiting on a run that ignores it; nobody can
+// say what that run is doing. Asked again before, it changes nothing.
 func (d *decision) interrupt(r Run) error {
-	if r.State == RunStopping {
+	switch {
+	case r.State != RunStopping:
+		return d.stop(r)
+	case r.Signalled:
 		return d.emit(api.TurnUncertain{Run: r.ID})
 	}
-	return d.stop(r)
+	return nil
 }
 
 func (d *decision) stop(r Run) error {
@@ -289,6 +293,10 @@ func (d *decision) observe(o Observation) error {
 		return d.emit(api.MessageCancelled{Message: o.Message, Reason: o.Error})
 	case SteerLost:
 		return d.emit(api.MessageUncertain{Message: o.Message})
+	case InterruptSent:
+		if isLive(o.Run) && live.State == RunStopping {
+			return d.emit(api.TurnSignalled{Run: o.Run})
+		}
 	case Reconciled:
 		if !isLive(o.Run) {
 			return nil

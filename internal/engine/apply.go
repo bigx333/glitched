@@ -82,6 +82,12 @@ func apply(t Thread, e Event) (Thread, error) {
 		if err = t.setRun(b.Run, RunStopping); err == nil {
 			err = t.voidRequests(b.Run)
 		}
+	case api.TurnSignalled:
+		if r := t.Live(); r == nil || r.ID != b.Run || r.State != RunStopping {
+			return t, &TransitionError{"run", "not stopping", "signalled"}
+		}
+		t.Runs = slices.Clone(t.Runs)
+		t.Runs[len(t.Runs)-1].Signalled = true
 	case api.TurnUncertain:
 		if err = t.setRun(b.Run, RunUncertain); err == nil {
 			err = t.release(b.Run, QueueUncertain)

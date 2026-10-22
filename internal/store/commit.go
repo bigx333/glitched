@@ -206,10 +206,10 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 	}
 	t.UpdatedAt = fromNanos(updated)
 
-	err = each(ctx, q, `SELECT id, generation, state, outcome, error FROM runs WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
+	err = each(ctx, q, `SELECT id, generation, state, signalled, outcome, error FROM runs WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
 		var r engine.Run
 		var outcome sql.NullByte
-		if err := rows.Scan(idScan{&r.ID}, &r.Generation, &r.State, &outcome, &r.Error); err != nil {
+		if err := rows.Scan(idScan{&r.ID}, &r.Generation, &r.State, &r.Signalled, &outcome, &r.Error); err != nil {
 			return err
 		}
 		r.Outcome = api.Outcome(outcome.Byte)
@@ -285,9 +285,9 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 		if r.State == engine.RunFinished {
 			outcome = r.Outcome
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO runs (thread, ord, id, generation, state, outcome, error) VALUES (?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (thread, ord) DO UPDATE SET state = excluded.state, outcome = excluded.outcome, error = excluded.error`,
-			t.ID[:], i, r.ID[:], r.Generation, r.State, outcome, r.Error); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO runs (thread, ord, id, generation, state, signalled, outcome, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (thread, ord) DO UPDATE SET state = excluded.state, signalled = excluded.signalled, outcome = excluded.outcome, error = excluded.error`,
+			t.ID[:], i, r.ID[:], r.Generation, r.State, r.Signalled, outcome, r.Error); err != nil {
 			return fmt.Errorf("store: run %s: %w", r.ID, err)
 		}
 	}

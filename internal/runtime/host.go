@@ -363,7 +363,7 @@ func (h *Host) call(e store.Effect, lr *liveRun) (o engine.Observation, ok bool)
 	case engine.InterruptTurn:
 		if err = h.act(b.Run, provider.Interrupt{}); err == nil {
 			// The agent reports its own end through the pump.
-			return nil, true
+			return engine.InterruptSent{Run: b.Run}, true
 		}
 		h.forget(b.Run)
 		o = engine.Ended{Run: b.Run, Outcome: api.OutcomeInterrupted}

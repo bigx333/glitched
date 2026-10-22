@@ -242,16 +242,21 @@ func TestInterruptingAStoppingRunGivesUpOnIt(t *testing.T) {
 	if _, effects, _ := f.submit(api.TurnInterrupt{}); len(effects) != 1 || f.th.Live().State != engine.RunStopping {
 		t.Fatalf("first interrupt: %v with effects %v, want stopping and one interrupt", f.th.Live().State, effects)
 	}
+	if _, effects, _ := f.submit(api.TurnInterrupt{}); len(effects) != 0 || f.th.Live().State != engine.RunStopping {
+		t.Fatalf("second interrupt before the first reached the agent: %v with effects %v, want still stopping and nothing new",
+			f.th.Live().State, effects)
+	}
+	f.observe(engine.InterruptSent{Run: run})
 	f.must(api.TurnInterrupt{})
 	if s := f.th.Live().State; s != engine.RunUncertain {
-		t.Fatalf("second interrupt left the run %v, want uncertain", s)
+		t.Fatalf("interrupt after the agent ignored one left the run %v, want uncertain", s)
 	}
 	if evs := f.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted}); len(evs) != 0 {
 		t.Fatalf("an uncertain run was ended by an observation: %v", evs)
 	}
 	f.must(api.TurnInterrupt{})
 	if f.th.Live() != nil || f.th.Runs[0].Outcome != api.OutcomeAbandoned {
-		t.Fatalf("third interrupt: run %+v, want it abandoned", f.th.Runs[0])
+		t.Fatalf("last interrupt: run %+v, want it abandoned", f.th.Runs[0])
 	}
 }
 

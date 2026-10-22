@@ -156,6 +156,7 @@ CREATE TABLE runs (
 	id         BLOB NOT NULL UNIQUE,
 	generation INTEGER NOT NULL,
 	state      TEXT NOT NULL CHECK (state IN ('starting', 'running', 'waiting', 'stopping', 'uncertain', 'finished')),
+	signalled  INTEGER NOT NULL CHECK (signalled IN (0, 1)),
 	outcome    INTEGER CHECK (outcome BETWEEN 0 AND 3),
 	error      TEXT NOT NULL,
 	PRIMARY KEY (thread, ord),

@@ -84,6 +84,12 @@ type TurnStopping struct {
 	Run ID `json:"run"`
 }
 
+// TurnSignalled: the run's interrupt reached the agent. A run still
+// stopping after it ignores the interrupt.
+type TurnSignalled struct {
+	Run ID `json:"run"`
+}
+
 // TurnEnded finishes the run. Messages it claimed but never delivered are
 // cancelled and its open requests are void.
 type TurnEnded struct {
@@ -154,6 +160,7 @@ func (MessageUncertain) eventType() string    { return "message.uncertain" }
 func (TurnAdmitted) eventType() string        { return "turn.admitted" }
 func (TurnStarted) eventType() string         { return "turn.started" }
 func (TurnStopping) eventType() string        { return "turn.stopping" }
+func (TurnSignalled) eventType() string       { return "turn.signalled" }
 func (TurnEnded) eventType() string           { return "turn.ended" }
 func (TurnRestored) eventType() string        { return "turn.restored" }
 func (TurnUncertain) eventType() string       { return "turn.uncertain" }
@@ -177,6 +184,7 @@ func init() {
 	register[TurnAdmitted]()
 	register[TurnStarted]()
 	register[TurnStopping]()
+	register[TurnSignalled]()
 	register[TurnEnded]()
 	register[TurnRestored]()
 	register[TurnUncertain]()
