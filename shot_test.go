@@ -60,6 +60,11 @@ func TestShot(t *testing.T) {
 	}
 	tt.Frame()
 	tt.Advance(time.Second)
+	if id := os.Getenv("RENAME"); id != "" {
+		// Renaming that thread, after the composer took the first focus.
+		a.renaming, a.renameDraft = id, "Websocket reconnect loop"
+		tt.Frame()
+	}
 	if s := os.Getenv("HOVER"); s != "" {
 		// The pointer over that text.
 		r, ok := tt.Find(s)

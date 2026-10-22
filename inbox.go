@@ -284,6 +284,7 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 		rowGag(r, fx)
 	}
 	hovered := r.Hovered()
+	r.ContextMenu(func(m *ui.Menu) { a.threadMenu(c, m, t, cat) })
 	if r.Children(func() {
 		wrap := ui.Box(c).Children(func() {
 			tile := projectTile(c, it.p, 20)
@@ -300,6 +301,10 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 		})
 		if playing && fx.kind == gagSettle {
 			burstGag(wrap, fx)
+		}
+		if a.renaming == t.id {
+			a.renameInput(c, t)
+			return
 		}
 		title := ui.Text(c, t.title).FontSize(13).SingleLine().Grow(1).Shrink(1)
 		if t.unread {
@@ -362,9 +367,7 @@ func (a *app) rowActions(c *ui.Context, t *thread, cat category) {
 		case catInbox:
 			a.snoozeButton(c, t, cat)
 			if iconButton(c, "settle", icCheckCirc, "Settle", false).Padding(3).TextColor(tintSettle).Clicked() {
-				t.settled, t.unread = true, false
-				a.gag(c, t, gagSettle, cat)
-				c.AddToast(ui.Toast{Title: "Settled. Phew.", Description: t.title})
+				a.settle(c, t, cat)
 			}
 		}
 	})

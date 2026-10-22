@@ -259,6 +259,15 @@ type app struct {
 	composerOpened bool
 	// snoozeFor is the thread whose snooze popover is open.
 	snoozeFor string
+	// renaming is the thread whose title is being edited in its row, and
+	// renameDraft the title as typed; renameFocused once the input has
+	// had the focus, so that losing it ends the edit.
+	renaming      string
+	renameDraft   string
+	renameFocused bool
+	// deleting is the thread the alert asks about deleting.
+	deleting   *thread
+	deleteOpen bool
 	// now is the frame's time, as the view builds it.
 	now      time.Time
 	diffFile int
@@ -437,6 +446,7 @@ func (a *app) view(c *ui.Context) {
 		})
 	})
 	a.commandPalette(c)
+	a.deleteAlert(c)
 	a.toasts(c)
 }
 

@@ -181,6 +181,11 @@ func (a *app) settingsNav(c *ui.Context) {
 
 func (a *app) newThread() {
 	p, _ := a.current()
+	a.startThread(p)
+}
+
+// startThread opens a new, empty thread in the project.
+func (a *app) startThread(p *project) {
 	t := &thread{id: time.Now().Format("150405.000"), title: "New thread", age: "now", branch: "main"}
 	p.threads = append([]*thread{t}, p.threads...)
 	p.open = true
