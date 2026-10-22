@@ -18,53 +18,123 @@ import (
 // conn dials one socket on first use and again after it drops. Calls in
 // flight on a dropped socket fail; nothing is resent.
 type conn struct {
-	hc        *http.Client
+	t         Transport
+	machine   api.ID
 	keepalive keepalive
 
-	mu   sync.Mutex
-	sock *socket
+	mu      sync.Mutex
+	sock    *socket
+	dialing *dialing // nil unless a dial is in flight
+}
+
+// dialing is one dial that every caller needing a socket waits on, each
+// with its own ctx. It is given up once none waits.
+type dialing struct {
+	done    chan struct{}
+	stop    context.CancelFunc
+	waiters int
+	sock    *socket // or err, once done is closed
+	err     error
 }
 
 func dial(t Transport, machine api.ID) *conn {
-	return &conn{
-		hc: &http.Client{Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return t.Dial(ctx, machine) },
-		}},
-		keepalive: defaultKeepalive,
+	return &conn{t: t, machine: machine, keepalive: defaultKeepalive}
+}
+
+func (c *conn) socket(ctx context.Context) (*socket, error) {
+	c.mu.Lock()
+	if s := c.sock; s != nil && s.ctx.Err() == nil {
+		c.mu.Unlock()
+		return s, nil
 	}
+	d := c.dialing
+	if d == nil {
+		dctx, stop := context.WithCancel(context.Background())
+		d = &dialing{done: make(chan struct{}), stop: stop}
+		c.dialing = d
+		go c.dial(dctx, d)
+	}
+	d.waiters++
+	c.mu.Unlock()
+	select {
+	case <-d.done:
+		return d.sock, d.err
+	case <-ctx.Done():
+		c.mu.Lock()
+		if d.waiters--; d.waiters == 0 && c.dialing == d {
+			c.dialing = nil
+			d.stop()
+		}
+		c.mu.Unlock()
+		return nil, ctx.Err()
+	}
+}
+
+func (c *conn) dial(ctx context.Context, d *dialing) {
+	defer close(d.done)
+	defer d.stop()
+	ws, err := handshake(ctx, c.t, c.machine)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.dialing != d {
+		// Every caller gave up, so none reads d.
+		if err == nil {
+			ws.CloseNow()
+		}
+		return
+	}
+	c.dialing = nil
+	if err != nil {
+		d.err = err
+		return
+	}
+	c.sock = newSocket(ws, c.keepalive)
+	d.sock = c.sock
 }
 
 // The host part is never resolved: Transport.Dial picks the connection.
 const origin = "ws://glitched/ws"
 
-func (c *conn) socket(ctx context.Context) (*socket, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.sock != nil && c.sock.ctx.Err() == nil {
-		return c.sock, nil
-	}
-	ws, _, err := websocket.Dial(ctx, origin, &websocket.DialOptions{HTTPClient: c.hc})
+// handshake dials machine and opens a WebSocket on the connection. It dials
+// before net/http does, because net/http detaches its dial from ctx and a
+// dial nobody waits for would go on.
+func handshake(ctx context.Context, t Transport, machine api.ID) (*websocket.Conn, error) {
+	nc, err := t.Dial(ctx, machine)
 	if err != nil {
 		return nil, fmt.Errorf("transport: %w", err)
 	}
-	// An Events page is up to maxPage events of any size; the server is
-	// the one this client chose to trust.
-	ws.SetReadLimit(-1)
-	sctx, fail := context.WithCancelCause(context.Background())
-	c.sock = &socket{ws: ws, ctx: sctx, fail: fail, sinks: map[uint64]sink{}}
-	go c.sock.read()
-	go c.keepalive.run(sctx, ws)
-	return c.sock, nil
+	hc := &http.Client{Transport: &http.Transport{
+		DialContext: func(context.Context, string, string) (net.Conn, error) { return nc, nil },
+	}}
+	ws, _, err := websocket.Dial(ctx, origin, &websocket.DialOptions{HTTPClient: hc})
+	if err != nil {
+		nc.Close()
+		return nil, fmt.Errorf("transport: %w", err)
+	}
+	return ws, nil
 }
 
 type socket struct {
 	ws   *websocket.Conn
 	ctx  context.Context // done once the socket is dead
 	fail context.CancelCauseFunc
+	out  chan []byte // messages for the writer
 
 	mu     sync.Mutex
 	nextID uint64
 	sinks  map[uint64]sink // nil once the socket is dead
+}
+
+func newSocket(ws *websocket.Conn, k keepalive) *socket {
+	// An Events page is up to maxPage events of any size; the server is
+	// the one this client chose to trust.
+	ws.SetReadLimit(-1)
+	ctx, fail := context.WithCancelCause(context.Background())
+	s := &socket{ws: ws, ctx: ctx, fail: fail, out: make(chan []byte), sinks: map[uint64]sink{}}
+	go s.read()
+	go s.write()
+	go k.run(ctx, ws)
+	return s
 }
 
 // A sink takes the messages for one id on the socket's read goroutine, so it
@@ -96,23 +166,50 @@ func (s *socket) forget(id uint64) bool {
 	return ok
 }
 
-func (s *socket) send(req request) error {
-	b, err := json.Marshal(req)
-	if err != nil {
+// send hands b to the writer unless ctx or the socket ends first. A caller
+// whose ctx has already ended sends nothing.
+func (s *socket) send(ctx context.Context, b []byte) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Never the caller's ctx: one that ends mid-write closes the socket for
-	// every other call on it.
-	if err := writeMessage(s.ctx, s.ws, b); err != nil {
-		s.fail(lost(err))
+	select {
+	case s.out <- b:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.ctx.Done():
 		return context.Cause(s.ctx)
 	}
-	return nil
 }
 
-// post sends req without its caller waiting on the write.
+// post sends req whatever its caller's ctx, without waiting on the writer.
 func (s *socket) post(req request) {
-	go s.send(req)
+	b, _ := json.Marshal(req)
+	go s.send(context.Background(), b)
+}
+
+// abandon forgets id and cancels it on the server if it was still live.
+func (s *socket) abandon(id uint64) {
+	if s.forget(id) {
+		s.post(request{ID: id, Cancel: true})
+	}
+}
+
+// write is the socket's only writer. It writes under the socket's ctx, never
+// a caller's: one that ended mid-write would close the socket for every call
+// on it.
+func (s *socket) write() {
+	for {
+		select {
+		case b := <-s.out:
+			if err := writeMessage(s.ctx, s.ws, b); err != nil {
+				s.fail(lost(err))
+				return
+			}
+		case <-s.ctx.Done():
+			return
+		}
+	}
 }
 
 func (s *socket) read() {
@@ -176,22 +273,35 @@ func (c callSink) drop(err error) {
 	}
 }
 
-func (c *conn) call(ctx context.Context, method string, in, out any) error {
+// start sends a request for method, with k taking the messages for its id.
+func (c *conn) start(ctx context.Context, method string, in any, k sink) (*socket, uint64, error) {
 	params, err := json.Marshal(in)
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
 	s, err := c.socket(ctx)
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
-	ch := make(callSink, 1)
-	id, err := s.add(ch)
+	id, err := s.add(k)
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
-	if err := s.send(request{ID: id, Method: method, Params: params}); err != nil {
+	b, err := json.Marshal(request{ID: id, Method: method, Params: params})
+	if err == nil {
+		err = s.send(ctx, b)
+	}
+	if err != nil {
 		s.forget(id)
+		return nil, 0, err
+	}
+	return s, id, nil
+}
+
+func (c *conn) call(ctx context.Context, method string, in, out any) error {
+	ch := make(callSink, 1)
+	s, id, err := c.start(ctx, method, in, ch)
+	if err != nil {
 		return err
 	}
 	select {
@@ -204,9 +314,7 @@ func (c *conn) call(ctx context.Context, method string, in, out any) error {
 		}
 		return json.Unmarshal(rep.r.Result, out)
 	case <-ctx.Done():
-		if s.forget(id) {
-			s.post(request{ID: id, Cancel: true})
-		}
+		s.abandon(id)
 		return ctx.Err()
 	}
 }
@@ -265,20 +373,11 @@ func (st *stream[T]) signal() {
 // open returns once the server has opened the stream or refused it. ctx
 // bounds only that wait; Close ends the stream.
 func open[T any](ctx context.Context, c *conn, method string, in any) (*stream[T], error) {
-	params, err := json.Marshal(in)
-	if err != nil {
-		return nil, err
-	}
-	s, err := c.socket(ctx)
-	if err != nil {
-		return nil, err
-	}
-	st := &stream[T]{s: s, wake: make(chan struct{}, 1)}
-	if st.id, err = s.add(st); err != nil {
-		return nil, err
-	}
-	if err := s.send(request{ID: st.id, Method: method, Params: params}); err != nil {
-		s.forget(st.id)
+	st := &stream[T]{wake: make(chan struct{}, 1)}
+	var err error
+	// The read goroutine may reach st before s and id are set, but take and
+	// drop use neither.
+	if st.s, st.id, err = c.start(ctx, method, in, st); err != nil {
 		return nil, err
 	}
 	for {
@@ -340,9 +439,7 @@ func (st *stream[T]) Next(ctx context.Context) (T, error) {
 var errStreamClosed = errors.New("transport: stream closed")
 
 func (st *stream[T]) Close() error {
-	if st.s.forget(st.id) {
-		st.s.post(request{ID: st.id, Cancel: true})
-	}
+	st.s.abandon(st.id)
 	st.drop(errStreamClosed)
 	return nil
 }

@@ -786,3 +786,170 @@ func TestLongWriteLetsPongsThrough(t *testing.T) {
 		t.Fatalf("append over a slow link: %+v %v", ack, err)
 	}
 }
+
+// hung's dials wait for their ctx, like a peer that never answers.
+type hung struct {
+	Loopback
+	dialing chan struct{} // gets one value per dial begun
+	gave    chan struct{} // gets one value per dial given up
+}
+
+func (h *hung) Dial(ctx context.Context, _ api.ID) (net.Conn, error) {
+	h.dialing <- struct{}{}
+	<-ctx.Done()
+	h.gave <- struct{}{}
+	return nil, ctx.Err()
+}
+
+func TestDialWaitHonorsEachCallersContext(t *testing.T) {
+	h := &hung{dialing: make(chan struct{}, 2), gave: make(chan struct{}, 2)}
+	c := NewEndpointClient(h, api.ID{})
+	first, stopFirst := context.WithCancel(context.Background())
+	defer stopFirst()
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := c.Info(first)
+		firstDone <- err
+	}()
+	<-h.dialing
+
+	second, stopSecond := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer stopSecond()
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := c.Info(second)
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("a 30ms call behind a hung dial: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		stopFirst()
+		t.Fatal("a 30ms call waits on another caller's hung dial")
+	}
+	select {
+	case <-h.gave:
+		t.Fatal("the dial was given up while a caller still waited for it")
+	default:
+	}
+	stopFirst()
+	if err := <-firstDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first caller: %v", err)
+	}
+	select {
+	case <-h.gave:
+	case <-time.After(time.Second):
+		t.Fatal("the dial went on after every caller had left")
+	}
+	if len(h.dialing) != 0 {
+		t.Fatal("the second caller dialed again instead of waiting for the first dial")
+	}
+}
+
+func TestWriteWaitHonorsTheCallersContext(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	g := &gated{Loopback: start(t, "tcp", &Server{Endpoint: &fakeEndpoint{}})}
+	c := NewEndpointClient(g, api.ID{})
+	if _, err := c.Info(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gc := g.conn()
+	gc.hold.Store(true)
+	submit, stop := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Submit(submit, api.Command{ID: api.NewID(), Body: api.TurnInterrupt{}})
+		done <- err
+	}()
+	<-gc.held
+	stop()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("submit: %v, want its own cancel", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a cancelled submit still waits on a held write")
+	}
+	gc.hold.Store(false)
+	close(gc.release)
+	if _, err := c.Info(ctx); err != nil {
+		t.Fatalf("the socket after a cancelled write: %v", err)
+	}
+}
+
+// submits is an Endpoint that reports each command it runs.
+type submits struct {
+	fakeEndpoint
+	ran chan api.ID
+}
+
+func (s *submits) Submit(ctx context.Context, cmd api.Command) (api.Receipt, error) {
+	s.ran <- cmd.ID
+	return s.fakeEndpoint.Submit(ctx, cmd)
+}
+
+func TestCancelledCallSendsNothing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ep := &submits{ran: make(chan api.ID, 2)}
+	c := NewEndpointClient(start(t, "tcp", &Server{Endpoint: ep}), api.ID{})
+	if _, err := c.Info(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gone, stop := context.WithCancel(ctx)
+	stop()
+	if _, err := c.Submit(gone, api.Command{ID: api.NewID(), Body: api.TurnInterrupt{}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("submit with a cancelled ctx: %v", err)
+	}
+	live := api.Command{ID: api.NewID(), Body: api.TurnInterrupt{}}
+	if _, err := c.Submit(ctx, live); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-ep.ran; got != live.ID {
+		t.Fatalf("the server ran %v, which its caller had cancelled before sending", got)
+	}
+	select {
+	case got := <-ep.ran:
+		t.Fatalf("the server also ran %v, which its caller had cancelled before sending", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestCallWaitsBehindAnotherWriteOnlyUntilItsDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ep := &submits{ran: make(chan api.ID, 1)}
+	g := &gated{Loopback: start(t, "unix", &Server{Endpoint: ep})}
+	c := NewEndpointClient(g, api.ID{})
+	if _, err := c.Info(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gc := g.conn()
+	gc.hold.Store(true)
+	first := api.Command{ID: api.NewID(), Body: api.TurnInterrupt{}}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := c.Submit(ctx, first)
+		firstDone <- err
+	}()
+	<-gc.held
+
+	short, stop := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer stop()
+	t0 := time.Now()
+	if _, err := c.Info(short); !errors.Is(err, context.DeadlineExceeded) || time.Since(t0) > 500*time.Millisecond {
+		t.Fatalf("a 100ms call behind a held write: %v after %v", err, time.Since(t0))
+	}
+	gc.hold.Store(false)
+	close(gc.release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("the held submit: %v", err)
+	}
+	if got := <-ep.ran; got != first.ID {
+		t.Fatalf("ran %v", got)
+	}
+}
