@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -39,5 +40,47 @@ func TestCommandJSON(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(`{"type":"nope","body":{}}`), &out); err == nil {
 		t.Fatal("accepted an unknown command type")
+	}
+}
+
+func TestEventDecode(t *testing.T) {
+	bodies := []EventBody{
+		ThreadCreated{Workspace: "w", Title: "t", Model: ModelRef{Provider: "p"}, Access: AccessFull},
+		MessageQueued{Message: NewID(), Text: "hi", Mode: Defer, Pos: -2, Held: true},
+		MessageClaimed{Message: NewID(), Run: NewID()},
+		MessageDispatched{Message: NewID()},
+		MessageCancelled{Message: NewID(), Reason: "r"},
+		MessageUncertain{Message: NewID()},
+		TurnAdmitted{Run: NewID(), Generation: 3},
+		TurnStarted{Run: NewID()},
+		TurnStopping{Run: NewID()},
+		TurnEnded{Run: NewID(), Outcome: OutcomeFailed, Error: "e"},
+		TurnRestored{Run: NewID()},
+		TurnUncertain{Run: NewID()},
+		AssistantDelta{Run: NewID(), Text: "t"},
+		WorkItem{Run: NewID(), Item: "i", Kind: "k", Title: "t", Status: WorkCompleted},
+		RequestOpened{Request: NewID(), Run: NewID(), Generation: 1, Dedup: "d", Kind: "approval", Body: json.RawMessage(`{"a":1}`)},
+		RequestAnswer{Request: NewID(), Answer: json.RawMessage(`true`)},
+		RequestDelivery{Request: NewID()},
+		RequestInvalidation{Request: NewID(), Reason: "r"},
+		DispositionChanged{Disposition: Disposition{State: Snoozed, Until: time.UnixMilli(1000).UTC()}},
+	}
+	seen := map[string]bool{}
+	for _, b := range bodies {
+		payload, err := json.Marshal(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := Event{Type: EventType(b), Payload: payload}.Decode()
+		if err != nil || !reflect.DeepEqual(got, b) {
+			t.Fatalf("%s: decoded %#v %v, want %#v", EventType(b), got, err, b)
+		}
+		seen[EventType(b)] = true
+	}
+	if len(seen) != len(bodies) {
+		t.Fatal("two payloads share a type name")
+	}
+	if got, err := (Event{Type: "from.the.future", Payload: []byte(`{}`)}).Decode(); got != nil || err != nil {
+		t.Fatalf("unknown type: %v %v, want skipped", got, err)
 	}
 }
