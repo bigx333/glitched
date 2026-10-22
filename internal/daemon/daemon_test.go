@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -190,5 +192,79 @@ func TestPairKeepsOnlyTheTokensHash(t *testing.T) {
 	}
 	if err := Revoke(dir, "phone"); err == nil {
 		t.Fatal("revoked a label that has no token")
+	}
+}
+
+// unassigned is a Tailscale address this machine doesn't hold.
+const unassigned = "100.64.0.77:7465"
+
+func TestStartServesWhileATailnetAddressIsUnassigned(t *testing.T) {
+	dir := stateDir(t)
+	token, err := Pair(dir, "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Listen: []string{"127.0.0.1:0", unassigned}, Adapter: fake.New(nil)})
+	if err != nil {
+		t.Fatalf("start with a tailnet address not assigned yet: %v", err)
+	}
+	local := transport.NewEndpointClient(Socket(dir), api.ID{})
+	defer local.Close()
+	if _, err := local.Info(context.Background()); err != nil {
+		t.Fatalf("the unix socket: %v", err)
+	}
+	if _, err := remote(t, d, token).Info(context.Background()); err != nil {
+		t.Fatalf("the loopback listener: %v", err)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- d.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("close waited on the address")
+	}
+}
+
+func TestStartListensOnAnAddressOnceItIsAssigned(t *testing.T) {
+	count := logged(t)
+	dir := stateDir(t)
+	token, err := Pair(dir, "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := listenOn
+	t.Cleanup(func() { listenOn = real })
+	var tries atomic.Int32
+	assigned := make(chan net.Addr, 1)
+	listenOn = func(tn transport.Tailnet, ctx context.Context) (net.Listener, error) {
+		if tries.Add(1) <= 2 {
+			return real(tn, ctx)
+		}
+		ln, err := real(transport.Tailnet{Address: "127.0.0.1:0"}, ctx)
+		if err == nil {
+			assigned <- ln.Addr()
+		}
+		return ln, err
+	}
+	d := start(t, Config{Dir: dir, Listen: []string{unassigned}})
+	var addr net.Addr
+	select {
+	case addr = <-assigned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("never listened once the address was assigned")
+	}
+	c := transport.NewEndpointClient(transport.Tailnet{Address: addr.String(), Token: token}, api.ID{})
+	defer c.Close()
+	if _, err := c.Info(context.Background()); err != nil {
+		t.Fatalf("the listener bound late: %v", err)
+	}
+	if got := d.Addrs(); len(got) != 1 || got[0].String() != addr.String() {
+		t.Fatalf("addrs %v, want %v", got, addr)
+	}
+	if n := count("waiting to listen"); n != 1 {
+		t.Fatalf("2 failed binds with one error logged %d times, want once", n)
 	}
 }

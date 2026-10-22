@@ -11,7 +11,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
+	"syscall"
 	"time"
 
 	"glitched/internal/api"
@@ -45,13 +47,18 @@ type Config struct {
 // called, a listener fails, or the hub proves the database came back from a
 // backup.
 type Daemon struct {
-	host  *runtime.Host
+	host *runtime.Host
+	stop context.CancelFunc
+	done chan struct{}
+	err  error
+	undo []func() error // run in reverse once serving stops
+
+	mu    sync.Mutex
 	addrs []net.Addr
-	stop  context.CancelFunc
-	done  chan struct{}
-	err   error
-	undo  []func() error // run in reverse once serving stops
 }
+
+// listenOn is Tailnet.Listen; a test swaps it to assign an address late.
+var listenOn = transport.Tailnet.Listen
 
 // Socket is the unix socket an engine with state in dir serves.
 func Socket(dir string) transport.Loopback {
@@ -155,15 +162,28 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	}
 	servers := []*transport.Server{{Transport: sock, Endpoint: h, Hub: rep}}
 	g := &grants{dir: cfg.Dir, base: ctx}
+	tailnetServer := func(tn transport.Tailnet) *transport.Server {
+		return &transport.Server{Transport: tn, Endpoint: h, Hub: rep, Authorize: g.authorize}
+	}
+	type unbound struct {
+		tn  transport.Tailnet
+		err error
+	}
+	var later []unbound
 	for _, addr := range cfg.Listen {
 		tn := transport.Tailnet{Address: addr}
-		ln, err := tn.Listen(ctx)
-		if err != nil {
+		ln, err := listenOn(tn, ctx)
+		switch {
+		case errors.Is(err, syscall.EADDRNOTAVAIL):
+			// At boot Tailscale may not have assigned the address yet.
+			later = append(later, unbound{tn, err})
+			continue
+		case err != nil:
 			return nil, err
 		}
 		lns = append(lns, ln)
 		d.addrs = append(d.addrs, ln.Addr())
-		servers = append(servers, &transport.Server{Transport: tn, Endpoint: h, Hub: rep, Authorize: g.authorize})
+		servers = append(servers, tailnetServer(tn))
 	}
 
 	var serving, background sync.WaitGroup
@@ -175,6 +195,17 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	for i, srv := range servers {
 		serving.Go(func() {
 			if err := srv.Serve(ctx, lns[i]); err != nil {
+				fail(err)
+			}
+		})
+	}
+	for _, u := range later {
+		serving.Go(func() {
+			ln := d.listenLater(ctx, u.tn, u.err)
+			if ln == nil {
+				return
+			}
+			if err := tailnetServer(u.tn).Serve(ctx, ln); err != nil {
 				fail(err)
 			}
 		})
@@ -206,8 +237,34 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		}
 		close(d.done)
 	}()
-	slog.Info("serving", "socket", sock.Address, "listen", d.addrs, "host", st.HostID(), "log", st.LogID(), "hub", cfg.Hub)
+	slog.Info("serving", "socket", sock.Address, "listen", d.Addrs(), "host", st.HostID(), "log", st.LogID(), "hub", cfg.Hub)
 	return d, nil
+}
+
+// listenLater retries tn's address until it binds or ctx ends, logging each
+// new error once.
+func (d *Daemon) listenLater(ctx context.Context, tn transport.Tailnet, err error) net.Listener {
+	failing := err.Error()
+	slog.Warn("waiting to listen", "addr", tn.Address, "err", err)
+	for delay := 250 * time.Millisecond; ; delay = min(2*delay, 30*time.Second) {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(delay):
+		}
+		ln, err := listenOn(tn, ctx)
+		if err == nil {
+			d.mu.Lock()
+			d.addrs = append(d.addrs, ln.Addr())
+			d.mu.Unlock()
+			slog.Info("listening", "addr", ln.Addr())
+			return ln
+		}
+		if err.Error() != failing {
+			failing = err.Error()
+			slog.Warn("waiting to listen", "addr", tn.Address, "err", err)
+		}
+	}
 }
 
 func (d *Daemon) release() error {
@@ -221,8 +278,13 @@ func (d *Daemon) release() error {
 // Endpoint is the engine in this process, for a caller that embeds it.
 func (d *Daemon) Endpoint() api.Endpoint { return d.host }
 
-// Addrs are where the listeners from Config.Listen took their addresses.
-func (d *Daemon) Addrs() []net.Addr { return d.addrs }
+// Addrs are where the listeners from Config.Listen took their addresses,
+// once bound.
+func (d *Daemon) Addrs() []net.Addr {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.addrs)
+}
 
 // Wait returns once the engine has stopped serving and released its state,
 // with why it stopped: nil when its ctx ended or Close was called.
