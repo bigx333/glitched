@@ -68,7 +68,6 @@ func dispatch(text string, mode api.DispatchMode) api.MessageDispatch {
 	return api.MessageDispatch{Text: text, Mode: mode}
 }
 
-// running returns a thread whose run has started.
 func running(t *testing.T) (*thread, api.ID) {
 	f := newThread(t)
 	run := f.must(dispatch("go", api.StartNow))
@@ -76,7 +75,6 @@ func running(t *testing.T) (*thread, api.ID) {
 	return f, run
 }
 
-// waiting returns a running thread whose run asked for approval.
 func waiting(t *testing.T) (*thread, api.ID, engine.Request) {
 	f, run := running(t)
 	f.observe(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: "r1", Kind: "approval", Body: json.RawMessage(`{}`)})
@@ -108,7 +106,6 @@ func TestObserveReturnsWhatTheTablesRefuse(t *testing.T) {
 	}
 }
 
-// refuses expects Apply to reject body as an edge its tables don't list.
 func refuses(t *testing.T, th engine.Thread, body api.EventBody) {
 	t.Helper()
 	defer func() {

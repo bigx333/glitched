@@ -29,7 +29,6 @@ func (g *gated) setGate(fn func(thread api.ID, a provider.Action) <-chan struct{
 	g.mu.Unlock()
 }
 
-// took reports how many calls of a's type reached the fake and succeeded.
 func (g *gated) count(a provider.Action) int {
 	g.mu.Lock()
 	defer g.mu.Unlock()

@@ -362,7 +362,6 @@ func (s idScan) Scan(v any) error {
 	return errors.New("store: malformed id column")
 }
 
-// nullID stores the zero ID as NULL.
 func nullID(id api.ID) any {
 	if id.IsZero() {
 		return nil
@@ -370,7 +369,6 @@ func nullID(id api.ID) any {
 	return id[:]
 }
 
-// nullBlob keeps a nil payload NULL rather than an empty blob.
 func nullBlob(b []byte) any {
 	if b == nil {
 		return nil

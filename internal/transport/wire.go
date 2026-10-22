@@ -92,7 +92,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-// readError turns a non-200 response into the error the server sent.
 func readError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var we wireError

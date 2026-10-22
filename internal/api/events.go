@@ -62,7 +62,8 @@ type MessageCancelled struct {
 	Reason  string `json:"reason"`
 }
 
-// MessageUncertain: the engine died while handing the message to the agent.
+// MessageUncertain: handing the message to the agent was cut off, so nobody
+// knows if it arrived.
 type MessageUncertain struct {
 	Message ID `json:"message"`
 }

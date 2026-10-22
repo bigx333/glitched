@@ -243,7 +243,6 @@ func TestAnInterruptThatTimesOutLeavesTheRunUncertain(t *testing.T) {
 	}
 }
 
-// stuckCloser's agents fail to close until unstick.
 type stuckCloser struct {
 	*gated
 	mu    sync.Mutex

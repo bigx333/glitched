@@ -276,7 +276,6 @@ func (h *Host) work() {
 	}
 }
 
-// busyThreads are those with an effect in flight or an agent still closing.
 func (h *Host) busyThreads() []api.ID {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -400,7 +399,6 @@ func (h *Host) record(thread api.ID, o engine.Observation, done int64) bool {
 	})
 }
 
-// retry runs fn until it succeeds or ctx ends, backing off between tries.
 func retry(ctx context.Context, what string, fn func(context.Context) error) bool {
 	for wait := 10 * time.Millisecond; ; wait = min(2*wait, time.Second) {
 		err := fn(ctx)
@@ -502,7 +500,6 @@ func (h *Host) leaveLocked(thread, run api.ID) {
 	h.forgetLocked(run)
 }
 
-// closed lets the thread take effects again once its last agent closed.
 func (h *Host) closed(thread api.ID) {
 	h.mu.Lock()
 	delete(h.closing, thread)

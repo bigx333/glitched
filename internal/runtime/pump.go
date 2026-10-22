@@ -15,14 +15,12 @@ const deltaWindow = 50 * time.Millisecond
 
 // pump commits one agent's events until its turn ends, the log moves past
 // the run, or the host closes. Each event and each text batch is kept until
-// its commit lands, and nothing more is read meanwhile. The agent is closed
+// its commit lands; the reader holds at most one more. The agent is closed
 // when its turn is over for this host, and only then does its thread take
 // effects again; a closing host leaves the agent running.
 func (h *Host) pump(thread api.ID, lr *liveRun) {
 	defer h.wg.Done()
 	run, ag := lr.run, lr.agent
-	// The reader hands every event it pulled to the pump, sets readErr and
-	// closes events once Next fails.
 	events := make(chan provider.Event)
 	var readErr error
 	h.wg.Add(1)

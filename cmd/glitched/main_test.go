@@ -82,7 +82,6 @@ func TestServeRunAndReplicate(t *testing.T) {
 	}
 }
 
-// serving runs serve with args until the returned func stops it.
 func serving(t *testing.T, dir string, args ...string) (stop func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())

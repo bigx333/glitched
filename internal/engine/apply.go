@@ -184,7 +184,6 @@ func (t *Thread) claim(message, run api.ID) error {
 	return nil
 }
 
-// release settles every message the run claimed but never delivered.
 func (t *Thread) release(run api.ID, to QueueState) error {
 	for _, m := range t.Queue {
 		if m.Run == run && m.State == QueueClaimed {
@@ -209,7 +208,6 @@ func (t *Thread) voidRequests(run api.ID) error {
 	return nil
 }
 
-// resume puts a waiting run back to running once it has nothing left to ask.
 func (t *Thread) resume(request api.ID) error {
 	run := t.Requests[t.requestAt(request)].Run
 	if i := t.runAt(run); i >= 0 && t.Runs[i].State == RunWaiting && !t.openRequests(run) {

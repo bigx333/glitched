@@ -93,9 +93,6 @@ func (s *Server) handler() http.Handler {
 func (s *Server) authorize(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn := r.Context().Value(connKey{}).(net.Conn)
-		// Being on the network is the route, not the authorization
-		// (network.md). The enrolled machine key or client grant is checked
-		// against this peer here.
 		if _, err := s.Transport.WhoIs(conn); err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
@@ -144,8 +141,6 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// pump writes each item next returns as an NDJSON frame, flushed at once,
-// until the client goes away or next fails.
 func pump[T any](w http.ResponseWriter, r *http.Request, next func(context.Context) (T, error)) {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.WriteHeader(http.StatusOK)

@@ -106,8 +106,6 @@ func (d *decision) create(c api.ThreadCreate) error {
 	return d.emit(api.ThreadCreated{Workspace: c.Workspace, Title: c.Title, Model: c.Model, Access: c.Access})
 }
 
-// ceiling is the most access the submitting client may use. There are no
-// grants yet, so it is everything; internal/auth will supply the real one.
 func ceiling() api.Access { return api.AccessFull }
 
 func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {

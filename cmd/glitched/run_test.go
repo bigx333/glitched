@@ -17,8 +17,6 @@ import (
 	"glitched/internal/transport"
 )
 
-// engine serves a real host on a unix socket in a fresh state dir and
-// returns the dir with a client of it.
 func engine(t *testing.T, a provider.Adapter) (string, *transport.EndpointClient) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "gl")
@@ -60,7 +58,6 @@ func newThread(t *testing.T, ep *transport.EndpointClient) api.ID {
 	return thread
 }
 
-// waitFor polls the thread's log until it holds an event of type typ.
 func waitFor(t *testing.T, ep *transport.EndpointClient, thread api.ID, typ string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -120,7 +117,6 @@ func TestRunReturnsOnceADeferredMessageIsHeld(t *testing.T) {
 	}
 }
 
-// refusesSteer is the fake adapter whose agents fail every steer.
 type refusesSteer struct{ *fake.Adapter }
 
 func (a refusesSteer) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
@@ -150,7 +146,6 @@ func TestRunEndsWhenItsMessageIsCancelled(t *testing.T) {
 	}
 }
 
-// steerTimesOut is the fake adapter whose agents never confirm a steer.
 type steerTimesOut struct{ *fake.Adapter }
 
 func (a steerTimesOut) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {

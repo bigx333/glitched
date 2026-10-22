@@ -42,15 +42,11 @@ func start(t *testing.T, path string, ad provider.Adapter) node {
 	return n
 }
 
-// kill stops the host the way a killed process stops, recording nothing
-// more, then closes the database.
 func (n node) kill() {
 	n.h.Kill()
 	n.st.Close()
 }
 
-// stop closes the host gracefully, so what it already took from agents
-// still commits, then closes the database.
 func (n node) stop() {
 	n.h.Close()
 	n.st.Close()
@@ -327,7 +323,6 @@ func TestDispatchModes(t *testing.T) {
 	assertReplay(t, n.st)
 }
 
-// driveModes walks one thread through every dispatch mode.
 func driveModes(t *testing.T, ep api.Endpoint) api.ID {
 	t.Helper()
 	thread := newThread(t, ep)
@@ -480,7 +475,6 @@ func next(t *testing.T, s api.Stream) api.StreamItem {
 	return it
 }
 
-// drain reads events up to StreamSynchronized and returns them.
 func drain(t *testing.T, s api.Stream) []api.Event {
 	t.Helper()
 	var evs []api.Event

@@ -34,8 +34,6 @@ func exec(t *testing.T, db *sql.DB, query string) {
 	}
 }
 
-// failEvents makes every commit that writes an event of type typ fail until
-// the returned func drops the trigger.
 func failEvents(t *testing.T, db *sql.DB, typ string) func() {
 	exec(t, db, `CREATE TRIGGER fail BEFORE INSERT ON events WHEN NEW.type = '`+typ+`' BEGIN SELECT RAISE(ABORT, 'injected'); END`)
 	return func() { exec(t, db, `DROP TRIGGER fail`) }

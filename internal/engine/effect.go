@@ -146,7 +146,8 @@ type InterruptSent struct{ Run api.ID }
 // the agent stopped.
 type InterruptLost struct{ Run api.ID }
 
-// SteerLost: the engine died while steering, so nobody knows if it arrived.
+// SteerLost: the steer was cut off (a crash, a timeout or a stop), so
+// nobody knows if it arrived.
 type SteerLost struct{ Message api.ID }
 
 // Reconciled is boot's verdict on a run the last process left live.
