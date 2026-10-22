@@ -125,6 +125,8 @@ type grants struct {
 	dir  string
 	base context.Context
 
+	// mu spans a read of the file through the admission it decides, so a
+	// read from before a revoke never replaces the grants of a later one.
 	mu   sync.Mutex
 	live map[[sha256.Size]byte]grant
 }
@@ -135,11 +137,9 @@ type grant struct {
 	cancel context.CancelFunc
 }
 
-// reload admits no token when the file can't be read.
+// reload admits no token when the file can't be read. g.mu must be held.
 func (g *grants) reload() error {
 	ts, err := Tokens(g.dir)
-	g.mu.Lock()
-	defer g.mu.Unlock()
 	live := map[[sha256.Size]byte]grant{}
 	for _, t := range ts {
 		var sum [sha256.Size]byte
@@ -172,7 +172,9 @@ func (g *grants) watch(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			g.mu.Lock()
 			g.reload()
+			g.mu.Unlock()
 		}
 	}
 }
@@ -180,13 +182,13 @@ func (g *grants) watch(ctx context.Context) {
 var errUnknownToken = errors.New("unknown token")
 
 func (g *grants) authorize(r *http.Request) (context.Context, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	if err := g.reload(); err != nil {
 		slog.Error("admitting no token", "err", err)
 	}
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	sum := sha256.Sum256([]byte(token))
-	g.mu.Lock()
-	defer g.mu.Unlock()
 	var match *grant
 	for s, gr := range g.live {
 		if subtle.ConstantTimeCompare(s[:], sum[:]) == 1 {
