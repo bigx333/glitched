@@ -65,10 +65,8 @@ func (m *Manager) Start() error {
 	}
 	m.saved = s
 	m.local = &local{dir: m.cfg.Dir}
-	m.envs = append(m.envs, m.launch(&Env{Kind: Local, Name: "local"}, m.local))
-	for _, srv := range s.Servers {
-		m.envs = append(m.envs, m.remote(srv))
-	}
+	m.envs = []*Env{m.launch(&Env{Kind: Local, Name: "local"}, m.local)}
+	m.sync("")
 	return nil
 }
 
@@ -131,6 +129,7 @@ type Env struct {
 	stop    context.CancelFunc
 	unlink  context.CancelFunc // ends the link that reaches the engine
 	session *session           // the live shell stream; nil while there is none
+	server  Server             // a remote's entry in gui.json
 }
 
 // session is one shell stream, and where commands go while it lasts.
@@ -166,16 +165,17 @@ func (m *Manager) connect(e *Env, r route) {
 	m.wg.Go(func() { m.link(ctx, e, r) })
 }
 
-// relink reaches e's engine through r from now on. e keeps its threads and
-// the commands pending on them.
-func (m *Manager) relink(e *Env, r route) {
+// redial reaches e's server at s from now on. e keeps its threads and the
+// commands pending on them.
+func (m *Manager) redial(e *Env, s Server) {
 	e.unlink()
 	e.down(Connecting{})
-	m.connect(e, r)
+	e.server = s
+	m.connect(e, dial(s))
 }
 
 func (m *Manager) remote(s Server) *Env {
-	return m.launch(&Env{Kind: Remote, Name: s.Label}, dial(s))
+	return m.launch(&Env{Kind: Remote, Name: s.Label, server: s}, dial(s))
 }
 
 // retire ends e's goroutines; what they still post is dropped.

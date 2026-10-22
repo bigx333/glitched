@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -44,17 +43,40 @@ func load(dir string) (saved, error) {
 	return s, nil
 }
 
-// save replaces gui.json whole, so a crash leaves the old file or the new
-// one. CreateTemp makes it 0600, as the tokens in it need.
-func (m *Manager) save(s saved) error {
+// edit changes gui.json for every GUI on this Dir: under gui.json.lock it
+// reads what the others saved, applies change and replaces the file, so a
+// crash leaves the old file or the new one. The envs then follow the
+// servers the file lists; renew names one to reconnect even if unchanged.
+func (m *Manager) edit(renew string, change func(*saved)) error {
 	if err := os.MkdirAll(m.cfg.Dir, 0o700); err != nil {
 		return err
 	}
+	lk, err := lock(filepath.Join(m.cfg.Dir, savedFile+".lock"))
+	if err != nil {
+		return err
+	}
+	defer lk.Close()
+	s, err := load(m.cfg.Dir)
+	if err != nil {
+		return err
+	}
+	change(&s)
+	if err := replace(m.cfg.Dir, s); err != nil {
+		return err
+	}
+	m.saved = s
+	m.sync(renew)
+	return nil
+}
+
+// replace writes gui.json through a temp file, which CreateTemp makes 0600
+// as the tokens in it need.
+func replace(dir string, s saved) error {
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(m.cfg.Dir, savedFile+".*")
+	f, err := os.CreateTemp(dir, savedFile+".*")
 	if err != nil {
 		return err
 	}
@@ -66,14 +88,38 @@ func (m *Manager) save(s saved) error {
 	if err := errors.Join(err, f.Close()); err != nil {
 		return err
 	}
-	if err := os.Rename(f.Name(), filepath.Join(m.cfg.Dir, savedFile)); err != nil {
+	if err := os.Rename(f.Name(), filepath.Join(dir, savedFile)); err != nil {
 		return err
 	}
-	m.saved = s
-	return nil
+	return syncDir(dir)
 }
 
-// Servers are the remotes gui.json lists, in the order Envs shows them.
+// sync makes the remote envs the servers gui.json lists, in its order. An
+// env whose entry changed, or named renew, reconnects and keeps its threads.
+func (m *Manager) sync(renew string) {
+	envs := []*Env{m.envs[0]}
+	for _, s := range m.saved.Servers {
+		i := m.server(s.Label)
+		if i < 0 {
+			envs = append(envs, m.remote(s))
+			continue
+		}
+		e := m.envs[i]
+		if e.server != s || s.Label == renew {
+			m.redial(e, s)
+		}
+		envs = append(envs, e)
+	}
+	for _, e := range m.envs[1:] {
+		if !slices.Contains(envs, e) {
+			e.retire()
+		}
+	}
+	m.envs = envs
+}
+
+// Servers are the remotes gui.json listed when this manager last read it,
+// in the order Envs shows them.
 func (m *Manager) Servers() []Server { return slices.Clone(m.saved.Servers) }
 
 // AddServer reaches a remote engine and lists it in gui.json. A label
@@ -83,35 +129,19 @@ func (m *Manager) AddServer(s Server) error {
 	if s.Label == "" || s.Addr == "" {
 		return errors.New("client: a server needs a label and an address")
 	}
-	next := m.saved
-	next.Servers = slices.Clone(next.Servers)
-	if i := slices.IndexFunc(next.Servers, func(o Server) bool { return o.Label == s.Label }); i >= 0 {
-		next.Servers[i] = s
-	} else {
-		next.Servers = append(next.Servers, s)
-	}
-	if err := m.save(next); err != nil {
-		return err
-	}
-	if i := m.server(s.Label); i >= 0 {
-		m.relink(m.envs[i], dial(s))
-	} else {
-		m.envs = append(m.envs, m.remote(s))
-	}
-	return nil
+	return m.edit(s.Label, func(f *saved) {
+		if i := slices.IndexFunc(f.Servers, func(o Server) bool { return o.Label == s.Label }); i >= 0 {
+			f.Servers[i] = s
+		} else {
+			f.Servers = append(f.Servers, s)
+		}
+	})
 }
 
 func (m *Manager) RemoveServer(label string) error {
-	next := m.saved
-	next.Servers = slices.DeleteFunc(slices.Clone(next.Servers), func(o Server) bool { return o.Label == label })
-	if err := m.save(next); err != nil {
-		return err
-	}
-	if i := m.server(label); i >= 0 {
-		m.envs[i].retire()
-		m.envs = slices.Delete(m.envs, i, i+1)
-	}
-	return nil
+	return m.edit("", func(f *saved) {
+		f.Servers = slices.DeleteFunc(f.Servers, func(o Server) bool { return o.Label == label })
+	})
 }
 
 func (m *Manager) server(label string) int {
@@ -130,11 +160,13 @@ func (m *Manager) MarkRead(th *Thread) error {
 	if !m.Unread(th) {
 		return nil
 	}
-	next := m.saved
-	next.Seen = maps.Clone(next.Seen)
-	if next.Seen == nil {
-		next.Seen = map[api.ID]time.Time{}
-	}
-	next.Seen[th.View.ID] = th.View.LastTurn.Ended
-	return m.save(next)
+	id, ended := th.View.ID, th.View.LastTurn.Ended
+	return m.edit("", func(f *saved) {
+		if f.Seen == nil {
+			f.Seen = map[api.ID]time.Time{}
+		}
+		if ended.After(f.Seen[id]) {
+			f.Seen[id] = ended
+		}
+	})
 }

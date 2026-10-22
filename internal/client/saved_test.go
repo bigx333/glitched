@@ -1,11 +1,13 @@
 package client
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -226,4 +228,63 @@ func TestReconnectingOrRemovingAServerEndsItsGoroutines(t *testing.T) {
 		t.Fatal(err)
 	}
 	settles(t, g, "after removing the box", idle)
+}
+
+// Two GUIs on one Dir save at once. Each save keeps what the other saved,
+// and shows the servers the other added or removed.
+func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
+	dir := stateDir(t)
+	a, _ := manager(t, dir)
+	b, _ := manager(t, dir)
+	var wg sync.WaitGroup
+	for _, m := range []*Manager{a, b} {
+		wg.Go(func() {
+			for i := range 20 {
+				if err := m.AddServer(Server{Label: fmt.Sprintf("%p-%d", m, i), Addr: "127.0.0.1:1"}); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+	}
+	wg.Wait()
+	if s, err := load(dir); err != nil || len(s.Servers) != 40 {
+		t.Fatalf("gui.json lists %d servers (%v), want the 20 each GUI added", len(s.Servers), err)
+	}
+
+	read := &Thread{View: api.Thread{ID: api.NewID(), LastTurn: &api.TurnResult{Ended: time.Now()}}}
+	if err := a.MarkRead(read); err != nil {
+		t.Fatal(err)
+	}
+	gone := a.Servers()[0].Label
+	if err := b.RemoveServer(gone); err != nil {
+		t.Fatal(err)
+	}
+	if b.Unread(read) {
+		t.Fatal("the other GUI's read mark is lost")
+	}
+	if err := a.MarkRead(&Thread{View: api.Thread{ID: api.NewID(), LastTurn: &api.TurnResult{Ended: time.Now()}}}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var labels []string
+	for _, e := range a.Envs()[1:] {
+		labels = append(labels, e.Name)
+	}
+	if want := serverLabels(s.Servers); !slices.Equal(serverLabels(a.Servers()), want) || !slices.Equal(labels, want) {
+		t.Fatalf("after its next save a GUI lists %v and shows %v, want gui.json's %v", serverLabels(a.Servers()), labels, want)
+	}
+	if slices.Contains(labels, gone) || b.Unread(read) || a.Unread(read) {
+		t.Fatalf("a removed server or a read mark did not carry over")
+	}
+}
+
+func serverLabels(ss []Server) []string {
+	var out []string
+	for _, s := range ss {
+		out = append(out, s.Label)
+	}
+	return out
 }
