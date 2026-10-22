@@ -261,3 +261,18 @@ func TestServeKeepsItsFlagsForTheNextStart(t *testing.T) {
 	serving(t, dir, "-hub", "-listen", "")()
 	keeps(daemon.Config{Hub: true, Epoch: 3})
 }
+
+// A relative -hub-dir is kept as the directory it named where serve ran,
+// for the next start from anywhere else, as the GUI's from /.
+func TestServeKeepsHubDirFromWhereItRan(t *testing.T) {
+	dir, cwd := stateDir(t), t.TempDir()
+	t.Chdir(cwd)
+	serving(t, dir, "-hub-dir", "hub")()
+	cfg, err := daemon.Defaults(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(cwd, "hub"); cfg.HubDir != want {
+		t.Errorf("the next start uploads to the hub under %q, want %q", cfg.HubDir, want)
+	}
+}
