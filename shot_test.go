@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image/png"
 	"os"
@@ -23,7 +24,7 @@ import (
 // TestShot writes a PNG of the window: SHOT=out.png, with SCENE=empty|
 // running|approval|servers|machines for the engines' threads (none
 // started without one), PAGE for a
-// path, DIFF, TERM2, CMDK, LIGHT, PICKER=<effort>, FAST and STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH, TICK=<turn>, TINT=0..1, SCROLLUP, SPLIT, WIDTH=1100, GAG=snooze|settle|undo with AT=350ms for what to show, and HIDE=60ms for
+// path, DIFF, TERM2, CMDK, LIGHT, FAILED, PICKER=<effort>, FAST and STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH, TICK=<turn>, TINT=0..1, SCROLLUP, SPLIT, WIDTH=1100, GAG=snooze|settle|undo with AT=350ms for what to show, and HIDE=60ms for
 // a frame that long into hiding the sidebar.
 func TestShot(t *testing.T) {
 	out := os.Getenv("SHOT")
@@ -131,6 +132,16 @@ func TestShot(t *testing.T) {
 		tt.Frame()
 		d, _ := time.ParseDuration(os.Getenv("AT"))
 		tt.Advance(d)
+	}
+	if os.Getenv("FAILED") != "" {
+		// The shown thread's settle and a message, failed.
+		th := a.current()
+		boom := errors.New("client: not connected to the engine")
+		th.Pending = append(th.Pending,
+			client.Pending{Command: api.NewID(), Body: api.MessageDispatch{Text: "Also check the staging keys."}, Err: boom},
+			client.Pending{Command: api.NewID(), Body: api.InboxSet{Disposition: api.Disposition{State: api.Settled}}, Err: boom})
+		tt.Frame()
+		tt.Advance(time.Second)
 	}
 	if ms := os.Getenv("STRIKE"); ms != "" {
 		// That far into fast mode's lightning strike.

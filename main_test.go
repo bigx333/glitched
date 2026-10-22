@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -96,6 +97,80 @@ func TestApprovalCardAllows(t *testing.T) {
 	if _, ok := h.tt.Find("Allow"); ok {
 		t.Error("the answered card still offers Allow")
 	}
+}
+
+// An answer that failed says why on its card, with Dismiss, and Retry
+// unless sending it again can only fail the same way. Dismissing it brings
+// Allow and Deny back.
+func TestAFailedAnswerOffersDismissAndRetry(t *testing.T) {
+	h := start(t, tempDir(t))
+	h.a.draft = "Fix the flicker"
+	h.tt.Frame()
+	h.click("Send")
+	h.until("the approval card", func() bool { return h.tt.HasText("Allow edit main.go?") })
+	th := h.a.current()
+	request := th.View.Requests[0].ID
+	for _, err := range []error{errors.New("boom"), api.ErrNotFound} {
+		th.Pending = append(th.Pending, client.Pending{Command: api.NewID(), Body: api.RequestRespond{Request: request}, Err: err})
+		h.tt.Frame()
+		h.tt.Advance(time.Second)
+		_, retry := h.tt.Find("Retry")
+		_, allow := h.tt.Find("Allow")
+		if !h.tt.HasText("Not sent: "+err.Error()) || retry == errors.Is(err, api.ErrNotFound) || allow {
+			t.Fatalf("an answer that failed with %v shows %q", err, h.tt.Texts())
+		}
+		h.click("Dismiss")
+		h.tt.Advance(time.Second)
+		if _, ok := h.tt.Find("Allow"); !ok || h.tt.HasText("Not sent") {
+			t.Fatalf("after Dismiss the card shows %q, want Allow and Deny again", h.tt.Texts())
+		}
+	}
+}
+
+// A command that failed shows why, with Dismiss, and Retry unless sending
+// it again can only fail the same way; the sidebar flags its thread.
+func TestFailedCommandsOfferDismissAndRetry(t *testing.T) {
+	dir := tempDir(t)
+	inbox(t, dir)
+	h := start(t, dir)
+	sip := h.thread("SIP re-INVITE handling")
+	h.a.select_(sip)
+	h.tt.Advance(time.Second)
+	fail := func(body api.Intent, err error) {
+		sip.Pending = append(sip.Pending, client.Pending{Command: api.NewID(), Body: body, Err: err})
+		h.tt.Frame()
+		h.tt.Advance(time.Second)
+	}
+	shows := func(text string, retry bool) {
+		t.Helper()
+		_, r := h.tt.Find("Retry")
+		_, d := h.tt.Find("Dismiss")
+		flag, flagged := h.tt.Find("A command failed")
+		if !h.tt.HasText(text) || r != retry || !d || !flagged || flag.X > h.a.sidebarWidth {
+			t.Fatalf("want %q with Dismiss, Retry %v and the thread flagged in the sidebar; the window shows %q", text, retry, h.tt.Texts())
+		}
+	}
+
+	fail(api.TurnInterrupt{}, api.ErrNotFound)
+	shows("Couldn't stop the agent: "+api.ErrNotFound.Error(), false)
+	h.click("Dismiss")
+	h.tt.Advance(time.Second)
+
+	fail(api.MessageDispatch{Text: "never mind", Mode: api.AfterActive}, errors.New("boom"))
+	shows("Not sent: boom", true)
+	h.click("Dismiss")
+	h.tt.Advance(time.Second)
+	if len(sip.Pending) != 0 || h.tt.HasText("never mind") {
+		t.Fatalf("after Dismiss the thread has %d rows and the window shows %q", len(sip.Pending), h.tt.Texts())
+	}
+	if _, ok := h.tt.Find("A command failed"); ok {
+		t.Error("the sidebar still flags the thread once its failures are dismissed")
+	}
+
+	fail(api.InboxSet{Disposition: api.Disposition{State: api.Settled}}, errors.New("boom"))
+	shows("Couldn't settle the thread: boom", true)
+	h.click("Retry")
+	h.until("the settle to land", func() bool { return sip.View.Disposition.State == api.Settled && len(sip.Pending) == 0 })
 }
 
 // Stop interrupts the turn, which ends as interrupted.

@@ -94,6 +94,7 @@ const (
 	entryWork
 	entryChanges
 	entryRequest
+	entryFailed
 )
 
 // An entry is a row of the timeline. Its key stays the same while it
@@ -105,8 +106,9 @@ type entry struct {
 	streaming bool
 	// note is under a message: queued, sending, cancelled.
 	note string
-	// failed is a message whose send failed, which Retry sends again.
-	failed api.ID
+	// failed is the command a failed entry, or a message whose send
+	// failed, stands for.
+	failed client.Pending
 	// A run's work: whether some of it is still going, and for how long it
 	// went.
 	working bool
@@ -124,7 +126,7 @@ type fileChange struct {
 
 // entriesOf is what the timeline lists of a thread: its transcript, the
 // messages waiting their turn, then those sent from here that it doesn't
-// show yet.
+// show yet, and the other commands sent from here that failed.
 func entriesOf(t thread) []entry {
 	var es []entry
 	listed := map[api.ID]bool{}
@@ -155,13 +157,19 @@ func entriesOf(t thread) []entry {
 		}
 	}
 	for _, p := range t.Pending {
+		if what := failedTo(p); what != "" {
+			if p.Err != nil {
+				es = append(es, entry{key: "f/" + p.Command.String(), kind: entryFailed, text: "Couldn't " + what + ": " + p.Err.Error(), failed: p})
+			}
+			continue
+		}
 		m, ok := p.Body.(api.MessageDispatch)
 		if !ok || listed[p.Command] {
 			continue
 		}
 		e := entry{key: "m/" + p.Command.String(), kind: entryUser, text: m.Text, note: "Sending…"}
 		if p.Err != nil {
-			e.note, e.failed = "Not sent: "+p.Err.Error(), p.Command
+			e.note, e.failed = "Not sent: "+p.Err.Error(), p
 		}
 		es = append(es, e)
 	}
@@ -286,6 +294,32 @@ func disposition(t thread) api.Disposition {
 		}
 	}
 	return d
+}
+
+// failedTo is what a command tried, for those the timeline shows as a row
+// of their own when they fail; "" for messages and answers, whose failure
+// shows on the message and on the request's card.
+func failedTo(p client.Pending) string {
+	switch b := p.Body.(type) {
+	case api.ThreadCreate:
+		return "create the thread"
+	case api.TurnInterrupt:
+		return "stop the agent"
+	case api.InboxSet:
+		switch b.Disposition.State {
+		case api.Settled:
+			return "settle the thread"
+		case api.Snoozed:
+			return "snooze the thread"
+		}
+		return "move the thread back to the inbox"
+	}
+	return ""
+}
+
+// failed is whether a command sent from here in the thread failed.
+func failed(t thread) bool {
+	return slices.ContainsFunc(t.Pending, func(p client.Pending) bool { return p.Err != nil })
 }
 
 // select_ shows the thread in the chat, read.

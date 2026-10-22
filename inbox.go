@@ -330,6 +330,8 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 			return
 		}
 		switch {
+		case failed(t):
+			ui.Box(c).Size(7, 7).Radius(4).Background(palette.red).Label("A command failed").Tooltip("A command failed")
 		case cat == catSnoozed:
 			ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, icClock).FontSize(10).TextColor(palette.faint)

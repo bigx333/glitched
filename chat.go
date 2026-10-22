@@ -291,25 +291,45 @@ func (a *app) entry(c *ui.Context, t thread, e entry) {
 		a.changes(c, key, e)
 	case entryRequest:
 		a.requestCard(c, t, e)
+	case entryFailed:
+		ui.Row(c).Key(key).Gap(8).AlignItems(ui.Center).Padding(6, 6, 6, 14).Radius(12).
+			Border(1, palette.red.Alpha(0.35)).Transition(riseIn).Children(func() {
+			ui.Text(c, e.text).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
+			a.failedActions(c, t, e.failed)
+		})
 	}
 }
 
 // messageNote is under a message that hasn't simply been sent: queued,
-// cancelled, or not sent, with Retry.
+// cancelled, or not sent.
 func (a *app) messageNote(c *ui.Context, t thread, e entry) {
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 		col := palette.faint
-		if !e.failed.IsZero() {
+		if e.failed.Err != nil {
 			col = palette.red
 		}
 		ui.Text(c, e.note).FontSize(11.5).TextColor(col)
-		if !e.failed.IsZero() && ghost(c, "retry", false).Padding(2, 8).Children(func() {
-			ui.Icon(c, icRotate).FontSize(12)
-			ui.Text(c, "Retry").FontSize(11.5)
-		}).Clicked() {
-			a.backend.Retry(t.env, t.id(), e.failed)
+		if e.failed.Err != nil {
+			a.failedActions(c, t, e.failed)
 		}
 	})
+}
+
+// failedActions are a failed command's buttons: Retry, unless sending it
+// again can only fail the same way, and Dismiss.
+func (a *app) failedActions(c *ui.Context, t thread, p client.Pending) {
+	if !p.Terminal() && ghost(c, "retry", false).Padding(2, 8).Children(func() {
+		ui.Icon(c, icRotate).FontSize(12)
+		ui.Text(c, "Retry").FontSize(11.5)
+	}).Clicked() {
+		a.backend.Retry(t.env, t.id(), p.Command)
+	}
+	if ghost(c, "dismiss", false).Padding(2, 8).Children(func() {
+		ui.Icon(c, icX).FontSize(12)
+		ui.Text(c, "Dismiss").FontSize(11.5)
+	}).Clicked() {
+		a.backend.Dismiss(t.env, t.id(), p.Command)
+	}
 }
 
 func (a *app) workLog(c *ui.Context, key string, e entry) {
@@ -390,9 +410,7 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 			switch {
 			case sending && sent.Err != nil:
 				ui.Text(c, "Not sent: "+sent.Err.Error()).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
-				if headerButton(c, "retry").Label("Retry").Children(func() { ui.Text(c, "Retry").FontSize(12) }).Clicked() {
-					a.backend.Retry(t.env, t.id(), sent.Command)
-				}
+				a.failedActions(c, t, sent)
 				return
 			case sending:
 				ui.Text(c, "Sending…").FontSize(12).TextColor(palette.muted)
