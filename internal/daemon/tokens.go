@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -127,8 +129,10 @@ type grants struct {
 
 	// mu spans a read of the file through the admission it decides, so a
 	// read from before a revoke never replaces the grants of a later one.
-	mu   sync.Mutex
-	live map[[sha256.Size]byte]grant
+	mu       sync.Mutex
+	live     map[[sha256.Size]byte]grant
+	failing  string               // the last error reading the file, logged once
+	refusals map[string]time.Time // when each peer's last refusal was logged
 }
 
 type grant struct {
@@ -138,8 +142,16 @@ type grant struct {
 }
 
 // reload admits no token when the file can't be read. g.mu must be held.
-func (g *grants) reload() error {
+func (g *grants) reload() {
 	ts, err := Tokens(g.dir)
+	switch {
+	case err != nil && err.Error() != g.failing:
+		g.failing = err.Error()
+		slog.Error("admitting no token", "err", err)
+	case err == nil && g.failing != "":
+		g.failing = ""
+		slog.Info("admitting tokens again", "file", filepath.Join(g.dir, tokensFile))
+	}
 	live := map[[sha256.Size]byte]grant{}
 	for _, t := range ts {
 		var sum [sha256.Size]byte
@@ -161,7 +173,6 @@ func (g *grants) reload() error {
 		gr.cancel()
 	}
 	g.live = live
-	return err
 }
 
 func (g *grants) watch(ctx context.Context) {
@@ -184,9 +195,7 @@ var errUnknownToken = errors.New("unknown token")
 func (g *grants) authorize(r *http.Request) (context.Context, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if err := g.reload(); err != nil {
-		slog.Error("admitting no token", "err", err)
-	}
+	g.reload()
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	sum := sha256.Sum256([]byte(token))
 	var match *grant
@@ -196,9 +205,25 @@ func (g *grants) authorize(r *http.Request) (context.Context, error) {
 		}
 	}
 	if !ok || match == nil {
-		slog.Warn("refused a socket", "from", r.RemoteAddr)
+		g.refused(r.RemoteAddr)
 		return nil, errUnknownToken
 	}
 	slog.Info("admitted a socket", "token", match.label, "from", r.RemoteAddr)
 	return match.ctx, nil
+}
+
+// refused logs a peer's refusal at most once a minute, however often it
+// retries. g.mu must be held.
+func (g *grants) refused(from string) {
+	peer, _, _ := net.SplitHostPort(from)
+	now := time.Now()
+	if now.Sub(g.refusals[peer]) < time.Minute {
+		return
+	}
+	if g.refusals == nil {
+		g.refusals = map[string]time.Time{}
+	}
+	maps.DeleteFunc(g.refusals, func(_ string, at time.Time) bool { return now.Sub(at) >= time.Minute })
+	g.refusals[peer] = now
+	slog.Warn("refused a socket", "from", from)
 }
