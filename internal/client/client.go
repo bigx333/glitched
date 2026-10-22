@@ -21,7 +21,7 @@ import (
 )
 
 type Config struct {
-	// Dir is the local engine's state directory.
+	// Dir is the local engine's state directory, and holds gui.json.
 	Dir string
 	// Post runs fn on the thread that owns the manager's state, in the order
 	// posted, and must not block; the GUI passes its window's Update.
@@ -46,6 +46,7 @@ type Manager struct {
 	local  *local
 
 	envs   []*Env
+	saved  saved
 	closed bool
 }
 
@@ -54,12 +55,21 @@ func New(cfg Config) *Manager {
 	return &Manager{cfg: cfg, ctx: ctx, cancel: cancel}
 }
 
-// Start reaches the local engine: the one serving the socket under Dir, or
-// one embedded here when none answers, which then serves that socket for
-// the CLI until Close.
+// Start reaches the local engine and the servers gui.json in Dir lists.
+// The local engine is the one serving the socket under Dir, or one
+// embedded here when none answers, which then serves that socket for the
+// CLI until Close.
 func (m *Manager) Start() error {
+	s, err := load(m.cfg.Dir)
+	if err != nil {
+		return err
+	}
+	m.saved = s
 	m.local = &local{dir: m.cfg.Dir}
-	m.add(&Env{Kind: Local, Name: "local"}, m.local)
+	m.envs = append(m.envs, m.launch(&Env{Kind: Local, Name: "local"}, m.local))
+	for _, srv := range s.Servers {
+		m.envs = append(m.envs, m.remote(srv))
+	}
 	return nil
 }
 
@@ -111,7 +121,6 @@ func (Online) status()     {}
 func (Offline) status()    {}
 func (Refused) status()    {}
 
-// Env is one engine the GUI reaches.
 type Env struct {
 	ID      api.ID // the host; zero until it first answers
 	Name    string // the host's name for the local engine, the server's label for a remote
@@ -140,17 +149,28 @@ type Thread struct {
 
 	known bool // the engine sent a view; false for a thread created here and not yet confirmed
 	open  bool
-	sub   *sub          // the live thread subscription
+	sub   *sub
 	last  chan struct{} // closed once the thread's latest submit returns
 }
 
 type sub struct{ cancel context.CancelFunc }
 
-func (m *Manager) add(e *Env, r route) {
+func (m *Manager) launch(e *Env, r route) *Env {
 	e.Status, e.Threads = Connecting{}, map[api.ID]*Thread{}
 	e.ctx, e.stop = context.WithCancel(m.ctx)
-	m.envs = append(m.envs, e)
 	m.wg.Go(func() { m.link(e, r) })
+	return e
+}
+
+func (m *Manager) remote(s Server) *Env {
+	c := transport.NewEndpointClient(transport.Tailnet{Address: s.Addr, Token: s.Token}, api.ID{})
+	return m.launch(&Env{Kind: Remote, Name: s.Label, ep: c}, remote{c})
+}
+
+// retire ends e's goroutines; what they still post is dropped.
+func (e *Env) retire() {
+	e.stop()
+	e.gone = true
 }
 
 // post runs fn on the Post thread unless e was removed or the manager
@@ -307,8 +327,6 @@ func (th *Thread) unfollow() {
 	}
 }
 
-// follow subscribes to an open thread the engine knows, while e has a
-// session.
 func (m *Manager) follow(e *Env, th *Thread) {
 	if !th.open || !th.known || th.sub != nil || e.session == nil {
 		return
@@ -424,3 +442,11 @@ func (l *local) close() {
 		l.err = l.embedded.Close()
 	}
 }
+
+// remote reaches a server over the tailnet. Its client redials on use, so
+// a session that failed needs no new one.
+type remote struct{ c *transport.EndpointClient }
+
+func (r remote) endpoint(context.Context) (api.Endpoint, error) { return r.c, nil }
+func (remote) failed()                                          {}
+func (r remote) close()                                         { r.c.Close() }

@@ -173,7 +173,7 @@ func (t *Transcript) last() Entry {
 	return t.Entries[len(t.Entries)-1]
 }
 
-// add appends e. Text before it is done streaming.
+// add appends e. The text before e is done streaming.
 func (t *Transcript) add(e Entry) {
 	if a, ok := t.last().(*AssistantEntry); ok {
 		a.Streaming = false

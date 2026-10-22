@@ -201,11 +201,11 @@ func TestStartAttachesToTheEngineThatAnswers(t *testing.T) {
 	}
 }
 
-func TestATurnRunsFromCreateThroughAnApproval(t *testing.T) {
-	m, g := manager(t, stateDir(t))
-	env := m.Envs()[0]
-	online(t, g, env)
-
+// finishTurn creates a thread, sends it a message and approves the edit
+// the turn asks for, checking what the GUI sees on the way. It returns once
+// the turn is over and the transcript shows all of it.
+func finishTurn(t *testing.T, m *Manager, g *gui, env *Env) api.ID {
+	t.Helper()
 	id := m.Create(env, "/work", "hello", fakeModel, api.AccessAsk)
 	th := env.Threads[id]
 	if th == nil || th.View.Title != "hello" || len(th.Pending) != 1 {
@@ -245,6 +245,14 @@ func TestATurnRunsFromCreateThroughAnApproval(t *testing.T) {
 	if th := env.Threads[id]; th.View.LastTurn.Outcome != api.OutcomeCompleted {
 		t.Fatalf("the turn ended %v, want completed", th.View.LastTurn.Outcome)
 	}
+	return id
+}
+
+func TestATurnRunsFromCreateThroughAnApproval(t *testing.T) {
+	m, g := manager(t, stateDir(t))
+	env := m.Envs()[0]
+	online(t, g, env)
+	id := finishTurn(t, m, g, env)
 
 	until := time.Now().Add(time.Hour).Truncate(time.Second)
 	m.SetDisposition(env, id, api.Disposition{State: api.Snoozed, Until: until})
