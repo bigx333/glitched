@@ -28,7 +28,7 @@ var callTimeout = 30 * time.Second
 
 // closeGrace is how long Close waits for what was already taken from agents
 // to commit.
-const closeGrace = 5 * time.Second
+var closeGrace = 5 * time.Second
 
 type Host struct {
 	store   *store.Store

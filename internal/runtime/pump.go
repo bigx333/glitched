@@ -40,7 +40,7 @@ func (h *Host) pump(thread api.ID, lr *liveRun, closed chan<- struct{}) {
 		}
 	}()
 
-	commit := func(o engine.Observation) { h.record(thread, o, 0) }
+	commit := func(o engine.Observation) bool { return h.record(thread, o, 0) }
 	var text strings.Builder
 	var flush <-chan time.Time
 	flushText := func() {
@@ -74,9 +74,9 @@ func (h *Host) pump(thread api.ID, lr *liveRun, closed chan<- struct{}) {
 				commit(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: ev.ID, Kind: ev.Kind, Body: ev.Body})
 			case provider.TurnEnded:
 				flushText()
-				commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: ev.Error})
-				ended = true
-				h.forget(run)
+				if ended = commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: ev.Error}); ended {
+					h.forget(run)
+				}
 			}
 		}
 	}
@@ -86,7 +86,9 @@ func (h *Host) pump(thread api.ID, lr *liveRun, closed chan<- struct{}) {
 	case h.ctx.Err() != nil:
 		return
 	case lr.ctx.Err() == nil:
-		commit(engine.Ended{Run: run, Outcome: api.OutcomeFailed, Error: readErr.Error()})
+		if !commit(engine.Ended{Run: run, Outcome: api.OutcomeFailed, Error: readErr.Error()}) {
+			return
+		}
 	}
 	h.forget(run)
 	closeAgent(ag)

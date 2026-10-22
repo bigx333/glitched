@@ -3,13 +3,16 @@ package runtime_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
+	"glitched/internal/runtime"
 )
 
 // sideDB is a second connection to a host's database, for injecting faults
@@ -176,6 +179,60 @@ func TestCloseCommitsWhatWasTakenFromTheAgent(t *testing.T) {
 			until(t, n.h, thread, "turn end", idle)
 			if text := transcript(t, events(t, n.h, thread)); text != "Looking at the code. Done." {
 				t.Fatalf("transcript after a restart %q, want everything the agent emitted", text)
+			}
+		})
+	}
+}
+
+// closeCounter counts how many of its agents were closed. With die set,
+// an agent's Next fails as if its process died.
+type closeCounter struct {
+	*fake.Adapter
+	die    bool
+	closes atomic.Int32
+}
+
+func (c *closeCounter) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	ag, err := c.Adapter.Open(ctx, spec)
+	return counted{ag, c}, err
+}
+
+type counted struct {
+	provider.Agent
+	c *closeCounter
+}
+
+func (a counted) Next(ctx context.Context) (provider.Event, error) {
+	if a.c.die {
+		return nil, errors.New("agent died")
+	}
+	return a.Agent.Next(ctx)
+}
+
+func (a counted) Close(ctx context.Context) error {
+	a.c.closes.Add(1)
+	return a.Agent.Close(ctx)
+}
+
+func TestAnEndThatNeverCommittedLeavesTheAgentToTheNextHost(t *testing.T) {
+	t.Cleanup(runtime.SetCloseGrace(50 * time.Millisecond))
+	for name, die := range map[string]bool{"the agent reports its end": false, "the agent dies": true} {
+		t.Run(name, func(t *testing.T) {
+			path, ad := dbPath(t), &closeCounter{Adapter: fake.New(fake.Turn(false)), die: die}
+			n := start(t, path, ad)
+			failEvents(t, sideDB(t, path), "turn.ended")
+			thread := newThread(t, n.h)
+			submit(t, n.h, thread, dispatch("go", api.StartNow))
+			until(t, n.h, thread, "the run starts", func(th api.Thread) bool { return th.Run == api.RunRunning })
+			if !die {
+				until(t, n.h, thread, "everything before the end", func(api.Thread) bool {
+					return transcript(t, events(t, n.h, thread)) == "Looking at the code. Done."
+				})
+			}
+			time.Sleep(50 * time.Millisecond)
+			n.stop()
+			if got := ad.closes.Load(); got != 0 {
+				t.Fatalf("the host closed %d agents whose end it never recorded, so the next host can't reconcile them", got)
 			}
 		})
 	}
