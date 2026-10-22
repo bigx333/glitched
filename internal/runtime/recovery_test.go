@@ -88,11 +88,15 @@ func TestCrashWithALeasedEffect(t *testing.T) {
 			respond(t, n.h, thread, until(t, n.h, thread, "approval", waiting).Requests[0])
 		})
 		n := start(t, path, fake.New(fake.Turn(true)))
-		until(t, n.h, thread, "invalidated", func(th api.Thread) bool {
-			return th.Run == api.RunUncertain && count(events(t, n.h, thread), "request.invalidated") == 1
+		until(t, n.h, thread, "invalidated", func(api.Thread) bool {
+			return count(events(t, n.h, thread), "request.invalidated") == 1
 		})
-		if count(events(t, n.h, thread), "request.delivered") != 0 {
-			t.Fatal("an answer to a lost agent was recorded as delivered")
+		snap, err := n.h.Read(ctx, api.Query{Thread: thread})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snap.Threads[0].Run != api.RunUncertain || count(snap.Events, "request.delivered") != 0 {
+			t.Fatalf("run %v with %d request.delivered, want uncertain and none", snap.Threads[0].Run, count(snap.Events, "request.delivered"))
 		}
 		assertReplay(t, n.st)
 	})

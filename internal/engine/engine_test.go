@@ -293,3 +293,27 @@ func TestDue(t *testing.T) {
 		}
 	}
 }
+
+func TestAFailedDeliveryOnlyStopsARunStillAtWork(t *testing.T) {
+	for name, tc := range map[string]struct {
+		before func(f *thread, run api.ID)
+		want   engine.RunState
+	}{
+		"running":   {func(*thread, api.ID) {}, engine.RunStopping},
+		"stopping":  {func(f *thread, _ api.ID) { f.must(api.TurnInterrupt{}) }, engine.RunStopping},
+		"uncertain": {func(f *thread, run api.ID) { f.observe(engine.Reconciled{Run: run}) }, engine.RunUncertain},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, run, req := waiting(t)
+			f.must(answer(req))
+			tc.before(f, run)
+			f.observe(engine.DeliveryFailed{Request: req.ID, Error: "gone"})
+			if r, _ := f.th.Request(req.ID); r.State != api.RequestInvalidated {
+				t.Fatalf("undeliverable answer left %v, want invalidated", r.State)
+			}
+			if live := f.th.Live(); live == nil || live.State != tc.want {
+				t.Fatalf("run after a failed delivery: %+v, want %v", live, tc.want)
+			}
+		})
+	}
+}

@@ -35,7 +35,7 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 		err = d.dispatch(c.ID, b)
 	case api.TurnInterrupt:
 		if r := d.t.Live(); r != nil {
-			err = d.stop(*r)
+			err = d.interrupt(*r)
 		}
 	case api.RequestRespond:
 		err = d.respond(b)
@@ -178,12 +178,19 @@ func (d *decision) settle() error {
 	return nil
 }
 
+// interrupt is the user's stop. Asked again, the user gives up waiting on a
+// run that ignores its interrupt; nobody can say what that run is doing.
+func (d *decision) interrupt(r Run) error {
+	if r.State == RunStopping {
+		return d.emit(api.TurnUncertain{Run: r.ID})
+	}
+	return d.stop(r)
+}
+
 func (d *decision) stop(r Run) error {
 	switch r.State {
 	case RunStopping:
-		// Asked again, the user gives up waiting on a run that ignores its
-		// interrupt; nobody can say what that run is doing.
-		return d.emit(api.TurnUncertain{Run: r.ID})
+		return nil
 	case RunUncertain:
 		// Ending an uncertain run is the user's explicit decision to move on.
 		return d.emit(api.TurnEnded{Run: r.ID, Outcome: api.OutcomeAbandoned})
@@ -269,8 +276,9 @@ func (d *decision) observe(o Observation) error {
 			return err
 		}
 		// An answer that can't be delivered is never assumed; the run that
-		// waits for it is stopped instead.
-		if r := d.t.Requests[d.t.requestAt(o.Request)]; isLive(r.Run) {
+		// waits for it is stopped instead. Only the user ends an uncertain
+		// run.
+		if r := d.t.Requests[d.t.requestAt(o.Request)]; isLive(r.Run) && live.State != RunUncertain {
 			return d.stop(*d.t.Live())
 		}
 	case Steered:
