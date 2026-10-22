@@ -3,6 +3,8 @@ package engine
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"glitched/internal/api"
@@ -55,7 +57,7 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 }
 
 // Observe records what an agent or the adapter did. An observation the
-// tables refuse arrived after the thread moved on and is dropped.
+// tables refuse arrived after the thread moved on; it is logged and dropped.
 func Observe(t Thread, o Observation, now time.Time) ([]Event, []Effect, error) {
 	if !t.Exists() {
 		return nil, nil, api.ErrNotFound
@@ -66,6 +68,7 @@ func Observe(t Thread, o Observation, now time.Time) ([]Event, []Effect, error) 
 		err = d.settle()
 	}
 	if te := (*TransitionError)(nil); errors.As(err, &te) {
+		slog.Warn("engine: observation refused", "thread", t.ID, "observation", fmt.Sprintf("%T", o), "err", err)
 		return nil, nil, nil
 	}
 	if err != nil {

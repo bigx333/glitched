@@ -377,12 +377,16 @@ func TestCrashMidTurn(t *testing.T) {
 		n := start(t, path, ad)
 		thread := newThread(t, n.h)
 		submit(t, n.h, thread, dispatch("go", api.StartNow))
-		until(t, n.h, thread, "approval", waiting)
+		seen := until(t, n.h, thread, "approval", waiting)
 		n.crash()
 
 		n = start(t, path, ad)
 		req := until(t, n.h, thread, "still waiting", waiting).Requests[0]
-		respond(t, n.h, thread, req)
+		if _, err := n.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Revision: seen.Revision, Body: api.RequestRespond{
+			Request: req.ID, Generation: req.Generation, Answer: json.RawMessage(`{"allow":true}`),
+		}}); err != nil {
+			t.Fatalf("answer at the revision read before the restart: %v", err)
+		}
 		until(t, n.h, thread, "turn end", idle)
 		evs := events(t, n.h, thread)
 		if count(evs, "turn.restored") != 1 || count(evs, "request.opened") != 1 || ad.Starts() != 1 {

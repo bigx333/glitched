@@ -70,10 +70,13 @@ func apply(t Thread, e Event) (Thread, error) {
 			err = t.setMessage(b.Run, QueueDispatched)
 		}
 	case api.TurnRestored:
-		if i := t.runAt(b.Run); i >= 0 && t.Runs[i].State == RunStarting {
-			if err = t.setRun(b.Run, RunRunning); err == nil {
-				err = t.setMessage(b.Run, QueueDispatched)
-			}
+		// A run restored past starting is unchanged, and so is the revision
+		// clients hold.
+		if i := t.runAt(b.Run); i < 0 || t.Runs[i].State != RunStarting {
+			return t, nil
+		}
+		if err = t.setRun(b.Run, RunRunning); err == nil {
+			err = t.setMessage(b.Run, QueueDispatched)
 		}
 	case api.TurnStopping:
 		if err = t.setRun(b.Run, RunStopping); err == nil {
