@@ -30,7 +30,7 @@ type Lease struct { // one per run
 This follows zeron (`research.md`). Runs don't receive credentials. Each host runs a loopback proxy, and the CLI is started with its base URL (`http://127.0.0.1:<port>/claude`, `/codex/v1`) and a random per-process token.
 
 - The proxy injects the chosen account's **access token** per request. Model traffic goes from the host straight to the provider, never through the hub.
-- **Refresh tokens never leave the hub.** The hub refreshes only on demand, when a host asks and the cached access token is expired or near expiry. An unused account is never refreshed. It refreshes single-flight per account and persists the result before replying. Once a refresh is sent it can't be cancelled. Host proxies hold only access tokens. On a 401 or near expiry they ask the hub for a fresh one.
+- **Refresh tokens never leave the hub.** The hub refreshes while it runs, and catches up on anything expired when it comes back after being offline (`hub.md`). It refreshes single-flight per account and persists the result before replying. Once a refresh is sent it can't be cancelled. Host proxies hold only access tokens. On a 401 or near expiry they ask the hub for a fresh one.
 - This removes the one-machine-at-a-time lease for Codex ChatGPT logins and avoids the internal-only `chatgptAuthTokens` mode. Every host can use every account at once because none of them rotates anything.
 - A login that is also the CLI's own live login on some machine is never refreshed by the hub, the same rule zeron uses. Accounts added through Glitched are pool-only.
 - If a provider rejects proxied traffic, the fallback is `claude setup-token` for Claude and API keys elsewhere.

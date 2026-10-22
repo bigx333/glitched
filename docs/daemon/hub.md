@@ -16,10 +16,11 @@ Why not Durable Objects any more:
 - The other reason was refreshing tokens while every machine sleeps. That isn't needed (see below).
 - A hub on a host costs nothing to run, so there's no hosted bill to keep near zero.
 
-## Refresh on demand
+## Refresh while the hub runs, catch up when it returns
 
-- The hub refreshes an account only when a host asks for an access token and the cached one is expired or close to it. An account nobody is using is never refreshed.
-- Refresh tokens last much longer than any gap in use, so the hub doesn't have to be always on. That is an assumption to check per provider.
+- The hub refreshes while it is running: when a host asks for an access token and the cached one is expired or close to it, and on its own schedule for the rest.
+- The hub can be offline. When it's the built-in host in the app and the app is closed or the Mac sleeps, nothing refreshes. When it comes back, it refreshes whatever is expired or near expiry before handing out tokens.
+- Refresh tokens last much longer than those offline gaps, so the hub doesn't have to be always on. That is an assumption to check per provider.
 - The hub is still the only refresher, refreshes one at a time per account, and saves the result before replying (`account-pool.md`). It saves that a refresh is in flight before sending it, so a host that slept mid-request knows to check on wake. The CLIs take the same risk with their own logins.
 
 ## When the hub host is down
@@ -48,5 +49,5 @@ Moving the hub deliberately to another host is the same mechanism without the fa
 
 1. `glitched hub` role over loopback. The host appends its log to the replica, fenced by `{host, epoch, seq}`. A client reads by cursor and gets live events over a WebSocket. Check: kill the host mid-upload, replay the upload, and find no gap or duplicate. An append with a stale epoch is refused.
 2. Serve the same thing over the tailnet (installed Tailscale or `tsnet`). Check: a second machine enrolls and uploads.
-3. Accounts with on-demand refresh and the host proxy (`account-pool.md`). Check: a run on a host with no local login works, and an idle account is never refreshed.
+3. Accounts with on-demand refresh and the host proxy (`account-pool.md`). Check: a run on a host with no local login works, and an account whose access token expired while the hub was offline is refreshed when it starts.
 4. Placement and handoff through the location record.
