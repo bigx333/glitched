@@ -321,7 +321,7 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 			title.FontWeight(600).TextColor(palette.text)
 		}
 		if len(a.backend.Envs()) > 1 {
-			machinePill(c, t.env)
+			a.machineBadge(c, t.env)
 		}
 		// The actions show while it's pointed at, and while its snooze
 		// popover is open, which takes the pointer away from the row.

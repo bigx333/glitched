@@ -284,6 +284,28 @@ func TestAServerOfAnotherProtocolSaysSo(t *testing.T) {
 	h.until("the server's row to say it is incompatible", func() bool { return h.tt.HasText(want) })
 }
 
+// With several machines, each row names its thread's machine in little
+// room, so its title keeps most of the row.
+func TestMachineBadgesLeaveTitlesTheRow(t *testing.T) {
+	h := machines(t)
+	row := h.a.sidebarWidth - 16
+	for _, it := range h.a.itemsIn(catInbox) {
+		title, _ := h.tt.Find(it.t.View.Title)
+		if title.W < row/2 {
+			t.Errorf("%q has %v of its row's %v, want more than half", it.t.View.Title, title.W, row)
+		}
+	}
+}
+
+func TestMachinePrefixes(t *testing.T) {
+	names := []string{"ferrum", "devbox", "desktop", "de"}
+	for name, want := range map[string]string{"ferrum": "fe", "devbox": "dev", "desktop": "des", "de": "de"} {
+		if got := prefix(name, names); got != want {
+			t.Errorf("%s among %v shows as %q, want %q", name, names, got, want)
+		}
+	}
+}
+
 func TestSettingsPages(t *testing.T) {
 	a := offline(t)
 	tt := ui.NewTester(a.view, 1320, 860)

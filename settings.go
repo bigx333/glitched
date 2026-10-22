@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/plugins/glass"
@@ -367,6 +369,34 @@ func envStatus(e *client.Env) (ui.Color, string) {
 		return palette.red, fmt.Sprintf("Incompatible: %s speaks protocol %d, this app %d", who, s.Theirs, s.Ours)
 	}
 	return palette.amber, "Connecting…"
+}
+
+// machineBadge is a row's mark of the machine its thread runs on: a dot of
+// how it's reached and the fewest letters of its name that tell it from
+// the other machines', the whole in a tooltip.
+func (a *app) machineBadge(c *ui.Context, e *client.Env) ui.Element {
+	var names []string
+	for _, o := range a.backend.Envs() {
+		names = append(names, o.Name)
+	}
+	col, status := envStatus(e)
+	return ui.Row(c).Gap(3).AlignItems(ui.Center).Shrink(0).Label(e.Name).Tooltip(e.Name + " · " + status).Children(func() {
+		ui.Box(c).Size(5, 5).Radius(3).Background(col)
+		ui.Text(c, prefix(e.Name, names)).FontSize(10).TextColor(palette.faint).SingleLine()
+	})
+}
+
+// prefix is the shortest start of name, of two letters or more, that none
+// of the other names starts with.
+func prefix(name string, names []string) string {
+	r := []rune(name)
+	for n := min(2, len(r)); n < len(r); n++ {
+		p := string(r[:n])
+		if !slices.ContainsFunc(names, func(o string) bool { return o != name && strings.HasPrefix(o, p) }) {
+			return p
+		}
+	}
+	return name
 }
 
 // machinePill names the machine a thread runs on, after a dot of how it's

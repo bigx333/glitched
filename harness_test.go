@@ -208,6 +208,28 @@ func inboxDir(t *testing.T) string {
 	return dir
 }
 
+// machines is the app on inbox's threads and on a server, devbox, with a
+// thread older than all of those and one newer.
+func machines(t *testing.T) *harness {
+	t.Helper()
+	rdir := tempDir(t)
+	token, err := daemon.Pair(rdir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := engine(t, daemon.Config{Dir: rdir, Listen: []string{"127.0.0.1:0"}}, fake.New(fake.Turn(false)))
+	seed(t, r, "/srv/api", "Rotate the API keys", "Which keys are older than 90 days?")
+	dir := inboxDir(t)
+	seed(t, r, "/srv/billing", "Retry failed invoice webhooks")
+	h := start(t, dir)
+	if err := h.a.backend.AddServer(client.Server{Label: "devbox", Addr: r.Addrs()[0].String(), Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	h.thread("Retry failed invoice webhooks")
+	h.tt.Advance(time.Second)
+	return h
+}
+
 // texts is what the timeline shows of a thread's entries, for a failure.
 func texts(es []entry) string {
 	var out []string

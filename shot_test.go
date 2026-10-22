@@ -206,19 +206,7 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 			return h.tt.HasText("Online") && h.tt.HasText("Refused") && h.tt.HasText("Incompatible")
 		})
 	case "machines":
-		rdir := tempDir(t)
-		token, err := daemon.Pair(rdir, "gui")
-		if err != nil {
-			t.Fatal(err)
-		}
-		r := engine(t, daemon.Config{Dir: rdir, Listen: []string{"127.0.0.1:0"}}, fake.New(fake.Turn(false)))
-		seed(t, r, "/srv/api", "Rotate the API keys", "Which keys are older than 90 days?")
-		seed(t, r, "/srv/billing", "Retry failed invoice webhooks")
-		dir := inboxDir(t)
-		h = start(t, dir)
-		if err := h.a.backend.AddServer(client.Server{Label: "devbox", Addr: r.Addrs()[0].String(), Token: token}); err != nil {
-			t.Fatal(err)
-		}
+		h = machines(t)
 		h.a.select_(h.thread("Rotate the API keys"))
 		h.until("the server's transcript", func() bool { return h.tt.HasText("Which keys are older than 90 days?") })
 	default:
