@@ -118,7 +118,7 @@ func dropRing(c *ui.Context) {
 }
 
 // attachmentChips shows the draft's attachments, each with a button
-// removing it; with remove nil, a sent message's, which stay.
+// removing it.
 func attachmentChips(c *ui.Context, list []attachment, remove func(i int)) {
 	ui.Row(c).Wrap().Gap(6).Children(func() {
 		for i, at := range list {
@@ -141,10 +141,8 @@ func attachmentChips(c *ui.Context, list []attachment, remove func(i int)) {
 						ui.Text(c, at.detail).FontSize(10.5).TextColor(palette.faint).SingleLine()
 					}
 				})
-				if remove != nil {
-					if iconButton(c, "remove", icX, "Remove "+at.name, false).Padding(2).Clicked() {
-						remove(i)
-					}
+				if iconButton(c, "remove", icX, "Remove "+at.name, false).Padding(2).Clicked() {
+					remove(i)
 				}
 			})
 		}

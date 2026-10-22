@@ -328,43 +328,12 @@ func (a *app) keybindings(c *ui.Context) {
 
 // --- Archived
 
+// archivedThreads is empty: the engines don't archive threads yet.
 func (a *app) archivedThreads(c *ui.Context) {
-	if len(a.archived) == 0 {
-		ui.Column(c).Key("empty").Center().Gap(10).Padding(60, 0).Transition(riseIn).Children(func() {
-			ui.Icon(c, icArchive).FontSize(26).TextColor(palette.faint)
-			ui.Text(c, "No archived threads").TextColor(palette.muted)
-		})
-		return
-	}
-	card(c, "", func() {
-		for _, t := range a.archived {
-			ui.Row(c).Key(t.id).Padding(10, 12, 10, 16).Gap(10).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
-				ui.Icon(c, icMessage).FontSize(14).TextColor(palette.faint)
-				ui.Column(c).Grow(1).Gap(2).Children(func() {
-					ui.Text(c, t.title).SingleLine()
-					ui.Text(c, "Archived "+t.age+" ago").FontSize(11.5).TextColor(palette.faint)
-				})
-				ui.Button(c.Key("restore"), "Restore").OnClick(func() {
-					a.archived = remove(a.archived, t)
-					a.projects[0].threads = append(a.projects[0].threads, t)
-					c.AddToast(ui.Toast{Title: "Thread restored", Description: t.title, Type: "info"})
-				})
-				ui.Button(c.Key("delete"), "Delete").TextColor(palette.red).OnClick(func() {
-					a.archived = remove(a.archived, t)
-				})
-			})
-		}
+	ui.Column(c).Key("empty").Center().Gap(10).Padding(60, 0).Transition(riseIn).Children(func() {
+		ui.Icon(c, icArchive).FontSize(26).TextColor(palette.faint)
+		ui.Text(c, "No archived threads").TextColor(palette.muted)
 	})
-}
-
-func remove(ts []*thread, t *thread) []*thread {
-	out := ts[:0:0]
-	for _, x := range ts {
-		if x != t {
-			out = append(out, x)
-		}
-	}
-	return out
 }
 
 // --- About

@@ -1,13 +1,25 @@
 package main
 
 import (
-	"sync/atomic"
+	"cmp"
+	"fmt"
+	"hash/fnv"
+	"log"
+	"os"
+	"path/filepath"
+	"slices"
+	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"glitched/internal/api"
+	"glitched/internal/client"
 )
 
-// Mock data: the prototype has no backend, so every project, thread and
-// message here is canned.
+// The app shows the threads of every engine the client manager reaches:
+// this machine's, embedded when none runs, and the servers in Settings.
+// That state is the manager's, changed only in what it posts to the
+// window; the views read it through the shapes here.
 
 type status int
 
@@ -18,31 +30,60 @@ const (
 	statusApproval
 )
 
+// A thread is one of an env's threads, or the draft New thread opened,
+// which has no ID: no engine has it until its first message creates it.
 type thread struct {
-	id      string
-	title   string
-	age     string
-	status  status
-	branch  string
-	entries []entry
-	// The inbox: unread since the agent last finished; settled, done with;
-	// snoozed, out of the way until when it says.
-	unread  bool
-	settled bool
-	snoozed string
-	// stop asks the pretend agent's goroutine to stop.
-	stop atomic.Bool
+	env *client.Env // nil for a draft while no engine is reached
+	*client.Thread
 }
 
+func (t thread) id() api.ID { return t.View.ID }
+
+// local is whether the thread's workspace is on this machine, where the
+// terminal, the files and the diffs are.
+func (t thread) local() bool { return t.env == nil || t.env.Kind == client.Local }
+
+// A project is a workspace on one machine: the threads the sidebar shows
+// under its tile.
 type project struct {
-	id      string
-	name    string
-	path    string
-	open    bool
-	threads []*thread
-	// Its mark in the sidebar: an icon on a tile of its color.
-	icon  *ui.SVG
-	color ui.Color
+	key     projectKey
+	env     *client.Env
+	threads []thread // the most recently updated first
+}
+
+type projectKey struct {
+	server    string // the server's label; "" on this machine
+	workspace string
+}
+
+func keyOf(e *client.Env, workspace string) projectKey {
+	if e != nil && e.Kind == client.Remote {
+		return projectKey{e.Name, workspace}
+	}
+	return projectKey{workspace: workspace}
+}
+
+func (p *project) name() string { return filepath.Base(p.key.workspace) }
+
+var (
+	projectIcons  = []*ui.SVG{icTerminal, icWind, icPhone, icCode, icGlobe, icSparkles, icZap, icFolder}
+	projectColors = []ui.Color{ui.Hex("#8b5cf6"), ui.Hex("#0ea5e9"), ui.Hex("#22c55e"), ui.Hex("#f97316"), ui.Hex("#ec4899"), ui.Hex("#14b8a6"), ui.Hex("#eab308")}
+)
+
+// mark is the project's icon and color, picked by its name so that it
+// keeps them, and the same workspace on two machines looks the same.
+func (p *project) mark() (*ui.SVG, ui.Color) {
+	h := fnv.New32a()
+	h.Write([]byte(p.name()))
+	n := h.Sum32()
+	return projectIcons[n%uint32(len(projectIcons))], projectColors[n/7%uint32(len(projectColors))]
+}
+
+// draft is where New thread starts the next thread: a machine, and a
+// workspace on it.
+type draft struct {
+	env       *client.Env // nil: this machine's
+	workspace string      // "": the home directory
 }
 
 type entryKind int
@@ -52,25 +93,27 @@ const (
 	entryAssistant
 	entryWork
 	entryChanges
+	entryRequest
 )
 
-type workItem struct {
-	kind   string // "command", "edit", "read", "search"
-	label  string
-	detail string
-	add    int
-	del    int
-}
-
+// An entry is a row of the timeline. Its key stays the same while it
+// changes and as rows come before it.
 type entry struct {
+	key       string
 	kind      entryKind
 	text      string
 	streaming bool
-	took      string
-	work      []workItem
-	files     []fileChange
-	// attachments went with a message of the user's.
-	attachments []attachment
+	// note is under a message: queued, sending, cancelled.
+	note string
+	// failed is a message whose send failed, which Retry sends again.
+	failed api.ID
+	// A run's work: whether some of it is still going, and for how long it
+	// went.
+	working bool
+	took    string
+	work    []client.WorkStep
+	files   []fileChange
+	request *client.RequestEntry
 }
 
 type fileChange struct {
@@ -79,108 +122,280 @@ type fileChange struct {
 	del  int
 }
 
-func mockProjects() []*project {
-	active := &thread{
-		id:     "t1",
-		title:  "Sort sidebar threads by recent activity",
-		age:    "now",
-		status: statusWorking,
-		branch: "t3code/sidebar-sort",
-		entries: []entry{
-			{kind: entryUser, text: "Where does the sidebar get its threads from?"},
-			{kind: entryAssistant, text: "From `useThreads(projectId)` in `apps/web/src/hooks/useThreads.ts`, which subscribes to the thread store and returns that project's threads **in the order they were created**."},
-			{kind: entryUser, text: "And where is a thread's updatedAt set?"},
-			{kind: entryAssistant, text: "On the server, in `ThreadStore.touch()`, whenever a turn starts or ends, or the thread is renamed. The client receives it with every thread event, so it's always current there."},
-			{kind: entryUser, text: "Can the project groups collapse today?"},
-			{kind: entryAssistant, text: "No. `ProjectGroup` holds an `expanded` state that is always true: nothing sets it. The label is plain text."},
-			{kind: entryUser, text: "The sidebar threads are in creation order. Sort them by most recent activity, and let me collapse a project by clicking its name."},
-			{kind: entryWork, took: "Worked for 38s", work: []workItem{
-				{kind: "search", label: "Searched", detail: "useThreads in apps/web/src"},
-				{kind: "read", label: "Read", detail: "apps/web/src/components/Sidebar.tsx"},
-				{kind: "read", label: "Read", detail: "apps/web/src/hooks/useThreads.ts"},
-				{kind: "edit", label: "Edited", detail: "apps/web/src/components/Sidebar.tsx", add: 9, del: 2},
-				{kind: "edit", label: "Edited", detail: "apps/web/src/components/ChevronIcon.tsx", add: 14},
-				{kind: "command", label: "Ran", detail: "bun run typecheck"},
-				{kind: "command", label: "Ran", detail: "bun run test -- Sidebar"},
-			}},
-			{kind: entryAssistant, text: "Threads are now sorted by `updatedAt`, newest first, and a project's label toggles it open or closed.\n\n" +
-				"**What changed**\n\n" +
-				"- `Sidebar.tsx` sorts a copy of the threads inside `useMemo`, so the store's array is no longer mutated in render.\n" +
-				"- The group label is a button with a chevron that rotates when the project is collapsed.\n" +
-				"- Added `ChevronIcon.tsx`, a small wrapper over Lucide's chevron.\n\n" +
-				"`bun run typecheck` and the Sidebar tests pass."},
-			{kind: entryChanges, files: []fileChange{
-				{path: "apps/web/src/components/Sidebar.tsx", add: 9, del: 2},
-				{path: "apps/web/src/components/ChevronIcon.tsx", add: 14},
-			}},
-			{kind: entryUser, text: "Nice. Can you also persist the collapsed state in localStorage?"},
-			{kind: entryWork, took: "Working…", work: []workItem{
-				{kind: "read", label: "Read", detail: "apps/web/src/lib/storage.ts"},
-				{kind: "edit", label: "Editing", detail: "apps/web/src/components/Sidebar.tsx", add: 6, del: 1},
-			}},
-		},
+// entriesOf is what the timeline lists of a thread: its transcript, the
+// messages waiting their turn, then those sent from here that it doesn't
+// show yet.
+func entriesOf(t thread) []entry {
+	var es []entry
+	listed := map[api.ID]bool{}
+	if tr := t.Transcript; tr != nil {
+		// A run's entries of a kind are keyed by their order in it.
+		n := map[string]int{}
+		key := func(kind string, run api.ID) string {
+			k := kind + "/" + run.String()
+			n[k]++
+			return fmt.Sprintf("%s/%d", k, n[k])
+		}
+		for _, e := range tr.Entries {
+			switch e := e.(type) {
+			case *client.UserEntry:
+				listed[e.Message] = true
+				es = append(es, userEntry(e))
+			case *client.AssistantEntry:
+				es = append(es, entry{key: key("a", e.Run), kind: entryAssistant, text: e.Text, streaming: e.Streaming})
+			case *client.WorkEntry:
+				es = append(es, workEntry(key("w", e.Run), e))
+			case *client.RequestEntry:
+				es = append(es, entry{key: "r/" + e.Request.String(), kind: entryRequest, request: e})
+			}
+		}
+		for _, u := range tr.Queue {
+			listed[u.Message] = true
+			es = append(es, userEntry(u))
+		}
 	}
-	return []*project{
-		{id: "p1", name: "t3code", path: "~/Projects/t3code", open: true, icon: icTerminal, color: ui.Hex("#8b5cf6"), threads: []*thread{
-			active,
-			{id: "t2", title: "Fix terminal resize flicker on Windows", age: "2h", status: statusApproval, branch: "main"},
-			{id: "t3", title: "Add keyboard shortcut for new thread", age: "5h", status: statusCompleted, branch: "main", unread: true},
-			{id: "t4", title: "Investigate websocket reconnect loop", age: "1d", branch: "main"},
-			{id: "t5", title: "Bump effect to v4 beta", age: "3d", branch: "main", settled: true},
-		}},
-		{id: "p2", name: "mygo", path: "~/Projects/mygo", open: true, icon: icWind, color: ui.Hex("#0ea5e9"), threads: []*thread{
-			{id: "t6", title: "Prototype T3 Code UI in native Go", age: "12m", status: statusCompleted, branch: "main", unread: true},
-			{id: "t7", title: "Markdown table column alignment", age: "2d", branch: "main", settled: true},
-		}},
-		{id: "p3", name: "agent-phone", path: "~/Projects/agent-phone", icon: icPhone, color: ui.Hex("#22c55e"), threads: []*thread{
-			{id: "t8", title: "SIP re-INVITE handling", age: "1w", branch: "main", snoozed: "Tomorrow"},
-			{id: "t9", title: "RTP jitter buffer underruns", age: "3d", branch: "main", settled: true},
-		}},
+	for _, p := range t.Pending {
+		m, ok := p.Body.(api.MessageDispatch)
+		if !ok || listed[p.Command] {
+			continue
+		}
+		e := entry{key: "m/" + p.Command.String(), kind: entryUser, text: m.Text, note: "Sending…"}
+		if p.Err != nil {
+			e.note, e.failed = "Not sent: "+p.Err.Error(), p.Command
+		}
+		es = append(es, e)
+	}
+	return es
+}
+
+var messageNotes = map[client.MessageState]string{
+	client.Queued:    "Queued",
+	client.Held:      "Held",
+	client.Cancelled: "Cancelled",
+	client.Uncertain: "May not have reached the agent",
+}
+
+func userEntry(u *client.UserEntry) entry {
+	note := messageNotes[u.State]
+	if u.Reason != "" {
+		note += ": " + u.Reason
+	}
+	return entry{key: "m/" + u.Message.String(), kind: entryUser, text: u.Text, note: note}
+}
+
+func workEntry(key string, w *client.WorkEntry) entry {
+	e := entry{key: key, kind: entryWork, work: w.Items, working: w.Ended.IsZero(), took: "Working…"}
+	if !e.working {
+		e.took = "Worked for " + w.Ended.Sub(w.Started).Round(time.Second).String()
+	}
+	return e
+}
+
+// gather groups every env's threads into projects: this machine's first,
+// then each server's, each machine's by name.
+func (a *app) gather() []*project {
+	var all []*project
+	for _, e := range a.backend.Envs() {
+		byKey := map[projectKey]*project{}
+		var ps []*project
+		for _, th := range e.Threads {
+			k := keyOf(e, th.View.Workspace)
+			p := byKey[k]
+			if p == nil {
+				p = &project{key: k, env: e}
+				byKey[k] = p
+				ps = append(ps, p)
+			}
+			p.threads = append(p.threads, thread{e, th})
+		}
+		slices.SortFunc(ps, func(x, y *project) int {
+			return cmp.Or(cmp.Compare(x.name(), y.name()), cmp.Compare(x.key.workspace, y.key.workspace))
+		})
+		for _, p := range ps {
+			slices.SortFunc(p.threads, func(x, y thread) int {
+				return cmp.Or(y.View.UpdatedAt.Compare(x.View.UpdatedAt), cmp.Compare(y.id().String(), x.id().String()))
+			})
+		}
+		all = append(all, ps...)
+	}
+	return all
+}
+
+// find is the thread of that ID on whichever machine has it.
+func (a *app) find(id api.ID) (thread, bool) {
+	if id.IsZero() {
+		return thread{}, false
+	}
+	for _, e := range a.backend.Envs() {
+		if th := e.Threads[id]; th != nil {
+			return thread{e, th}, true
+		}
+	}
+	return thread{}, false
+}
+
+// current is the thread the chat shows: the one selected, or the draft
+// when none is, or it's gone.
+func (a *app) current() thread {
+	if t, ok := a.find(a.selected); ok {
+		return t
+	}
+	envs := a.backend.Envs()
+	d := a.fresh
+	if d.env != nil && !slices.Contains(envs, d.env) {
+		d = draft{} // its server was removed
+	}
+	if d.env == nil && len(envs) > 0 {
+		d.env = envs[0]
+	}
+	if d.workspace == "" {
+		d.workspace = homeDir()
+	}
+	return thread{d.env, &client.Thread{View: api.Thread{Title: "New thread", Workspace: d.workspace}}}
+}
+
+func (a *app) projectOf(t thread) *project {
+	k := keyOf(t.env, t.View.Workspace)
+	for _, p := range a.projects {
+		if p.key == k {
+			return p
+		}
+	}
+	return &project{key: k, env: t.env}
+}
+
+func (a *app) statusOf(t thread) status {
+	v := t.View
+	switch {
+	case len(v.Requests) > 0 || v.Run == api.RunWaiting:
+		return statusApproval
+	case v.Working():
+		return statusWorking
+	case a.backend.Unread(t.Thread):
+		return statusCompleted
+	}
+	return statusIdle
+}
+
+// disposition is the thread's inbox state, as the last change sent from
+// here makes it once it lands.
+func disposition(t thread) api.Disposition {
+	d := t.View.Disposition
+	for _, p := range t.Pending {
+		if s, ok := p.Body.(api.InboxSet); ok && p.Err == nil {
+			d = s.Disposition
+		}
+	}
+	return d
+}
+
+// select_ shows the thread in the chat, read.
+func (a *app) select_(t thread) {
+	a.selected = t.id()
+	a.markRead(t)
+	a.follow()
+	if a.router.Path() != "/" {
+		a.router.Push("/")
 	}
 }
 
-func mockArchived() []*thread {
-	return []*thread{
-		{id: "a1", title: "Try Tauri for the desktop shell", age: "3w", branch: "main"},
-		{id: "a2", title: "Spike: SQLite event store", age: "1mo", branch: "main"},
-		{id: "a3", title: "Rename provider adapters", age: "2mo", branch: "main"},
+func (a *app) markRead(t thread) {
+	if err := a.backend.MarkRead(t.Thread); err != nil {
+		log.Printf("glitched: marking %s read: %v", t.id(), err)
 	}
 }
 
-// script is what the pretend agent does after a message: its steps, then
-// its reply, streamed in.
-type script struct {
-	steps []workItem
-	reply string
+// opened is the thread whose transcript the manager follows.
+type opened struct {
+	env *client.Env
+	id  api.ID
 }
 
-var scripts = []script{
-	{
-		steps: []workItem{
-			{kind: "search", label: "Searched", detail: "collapsed in apps/web/src"},
-			{kind: "read", label: "Read", detail: "apps/web/src/lib/storage.ts"},
-			{kind: "edit", label: "Edited", detail: "apps/web/src/components/Sidebar.tsx", add: 6, del: 1},
-			{kind: "command", label: "Ran", detail: "bun run typecheck"},
-		},
-		reply: "Done. The collapsed projects are kept in `localStorage` under `t3code:sidebar:collapsed`, as a list of project ids.\n\n" +
-			"- `useCollapsedProjects()` reads it once and writes it back on every toggle.\n" +
-			"- A project removed from the list is dropped from the stored set the next time it's written, so it can't grow forever.\n\n" +
-			"> This is a **prototype**: nothing ran. The steps above and this reply are canned, streamed in to show how it would feel.",
-	},
-	{
-		steps: []workItem{
-			{kind: "read", label: "Read", detail: "apps/server/src/terminal/pty.ts"},
-			{kind: "command", label: "Ran", detail: "rg -n \"resize\" apps/server/src"},
-			{kind: "edit", label: "Edited", detail: "apps/server/src/terminal/pty.ts", add: 11, del: 4},
-		},
-		reply: "The flicker comes from resizing the PTY on every `ResizeObserver` tick. I debounced it to one resize per animation frame:\n\n" +
-			"```ts\nconst resize = rafThrottle((cols: number, rows: number) => {\n  pty.resize(cols, rows);\n});\n```\n\n" +
-			"| Before | After |\n|---|---|\n| ~40 resizes per drag | 1 per frame |\n",
-	},
+// follow keeps the shown thread's transcript open, and no other.
+func (a *app) follow() {
+	var want opened
+	if t, ok := a.find(a.selected); ok {
+		want = opened{t.env, t.id()}
+	}
+	if want == a.opened {
+		return
+	}
+	if a.opened.env != nil {
+		a.backend.CloseThread(a.opened.env, a.opened.id)
+	}
+	if want.env != nil {
+		a.backend.OpenThread(want.env, want.id)
+	}
+	a.opened = want
 }
 
-// finish ends the agent's turn: the thread comes back to the inbox,
-// unread until it's opened.
-func (t *thread) finish() {
-	t.status, t.unread = statusCompleted, true
+// changed runs after each change the manager posts: the shown thread's
+// transcript stays open, and each turn that ended since is told of once.
+func (a *app) changed() {
+	a.follow()
+	for _, e := range a.backend.Envs() {
+		for id, th := range e.Threads {
+			var ended time.Time
+			if th.View.LastTurn != nil {
+				ended = th.View.LastTurn.Ended
+			}
+			seen, known := a.ended[id]
+			a.ended[id] = ended
+			if !known || !ended.After(seen) {
+				continue
+			}
+			t := thread{e, th}
+			if id == a.selected && a.router.Path() == "/" {
+				a.markRead(t)
+			}
+			a.notifyFinished(t)
+		}
+	}
+}
+
+// stateDir is the local engine's state directory, the CLI's default:
+// ~/.glitched, or GLITCHED_DIR.
+func stateDir() string {
+	if d := os.Getenv("GLITCHED_DIR"); d != "" {
+		return d
+	}
+	return filepath.Join(homeDir(), ".glitched")
+}
+
+func homeDir() string {
+	home, _ := os.UserHomeDir()
+	return home
+}
+
+// ago is how long before now t was, as the sidebar shows it.
+func ago(t, now time.Time) string {
+	d := now.Sub(t)
+	switch {
+	case d < time.Minute:
+		return "now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dw", int(d.Hours()/24/7))
+	}
+	return fmt.Sprintf("%dmo", int(d.Hours()/24/30))
+}
+
+// snoozeLabel is when a snoozed thread comes back, as its row shows it.
+func snoozeLabel(until, now time.Time) string {
+	y, m, d := now.Date()
+	today := time.Date(y, m, d, 0, 0, 0, 0, now.Location())
+	switch days := int(until.Sub(today).Hours() / 24); {
+	case days < 1:
+		return until.Format("15:04")
+	case days < 2:
+		return "Tomorrow"
+	case days < 7:
+		return until.Format("Mon")
+	}
+	return until.Format("Jan 2")
 }

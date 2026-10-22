@@ -2,9 +2,12 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
+
+	"glitched/internal/api"
 )
 
 // The sidebar is an inbox of threads: those that need you, those the agent
@@ -44,14 +47,16 @@ var (
 const rowHeight = 32
 
 // categoryOf is where a thread goes: working while the agent runs, whatever
-// else it is; then snoozed or settled as the user left it; else the inbox.
-func categoryOf(t *thread) category {
+// else it is; then snoozed until its time or settled, as the user left it;
+// else the inbox.
+func (a *app) categoryOf(t thread) category {
+	d := disposition(t)
 	switch {
-	case t.status == statusWorking:
+	case a.statusOf(t) == statusWorking:
 		return catWorking
-	case t.snoozed != "":
+	case d.State == api.Snoozed && a.now.Before(d.Until):
 		return catSnoozed
-	case t.settled:
+	case d.State == api.Settled:
 		return catSettled
 	}
 	return catInbox
@@ -59,15 +64,15 @@ func categoryOf(t *thread) category {
 
 // shownIn is the section a thread shows in: its own, but for a moment
 // after an action, the one it left, while its joke plays there.
-func (a *app) shownIn(t *thread) category {
-	if fx, ok := a.rowFx[t.id]; ok && a.now.Sub(fx.at) < fx.hold {
+func (a *app) shownIn(t thread) category {
+	if fx, ok := a.rowFx[t.id()]; ok && a.now.Sub(fx.at) < fx.hold {
 		return fx.from
 	}
-	return categoryOf(t)
+	return a.categoryOf(t)
 }
 
 type inboxItem struct {
-	t *thread
+	t thread
 	p *project
 }
 
@@ -75,7 +80,7 @@ type inboxItem struct {
 func (a *app) itemsIn(cat category) []inboxItem {
 	var items []inboxItem
 	for _, p := range a.projects {
-		if len(a.projectFilter) > 0 && !a.projectFilter[p.id] {
+		if len(a.projectFilter) > 0 && !a.projectFilter[p.key] {
 			continue
 		}
 		for _, t := range p.threads {
@@ -126,6 +131,7 @@ func (a *app) threadsNav(c *ui.Context) {
 	ui.Scroll(c).Grow(1).Padding(4, 8, 8).Gap(10).Children(func() {
 		sections(catInbox)
 	})
+	a.wakeSnoozed(c)
 	if len(a.itemsIn(catWorking))+len(a.itemsIn(catSnoozed))+len(a.itemsIn(catSettled)) > 0 {
 		// Settled may hold many: past half the sidebar, they scroll.
 		ui.Scroll(c).Key("bottom").MaxHeightPercent(50).Shrink(0).Padding(6, 8).Gap(6).Children(func() {
@@ -143,11 +149,26 @@ func (a *app) threadsNav(c *ui.Context) {
 	})
 }
 
+// wakeSnoozed asks for a frame when the next snoozed thread's time comes,
+// to bring it back to the inbox.
+func (a *app) wakeSnoozed(c *ui.Context) {
+	var next time.Time
+	for _, it := range a.itemsIn(catSnoozed) {
+		if u := disposition(it.t).Until; next.IsZero() || u.Before(next) {
+			next = u
+		}
+	}
+	if !next.IsZero() {
+		c.After(next.Sub(a.now))
+	}
+}
+
 // projectTile is a project's mark: its icon, white on its color.
 func projectTile(c *ui.Context, p *project, size float32) ui.Element {
+	icon, color := p.mark()
 	return ui.Box(c).Size(size, size).Radius(size * 0.28).Center().Shrink(0).
-		LinearGradient(ui.LinearGradient{From: p.color.Mix(ui.Hex("#ffffff"), 0.1), To: p.color.Mix(ui.Hex("#000000"), 0.2), Angle: 135, Oklab: true}).
-		Children(func() { ui.Icon(c, p.icon).FontSize(size * 0.6).TextColor(ui.Hex("#ffffff")) })
+		LinearGradient(ui.LinearGradient{From: color.Mix(ui.Hex("#ffffff"), 0.1), To: color.Mix(ui.Hex("#000000"), 0.2), Angle: 135, Oklab: true}).
+		Children(func() { ui.Icon(c, icon).FontSize(size * 0.6).TextColor(ui.Hex("#ffffff")) })
 }
 
 // projectStrip filters the inbox to some of the projects: each project's
@@ -161,17 +182,17 @@ func (a *app) projectStrip(c *ui.Context) {
 			clear(a.projectFilter)
 		}
 		for _, p := range a.projects {
-			on := a.projectFilter[p.id]
-			tip := "Show " + p.name
+			on := a.projectFilter[p.key]
+			tip := "Show " + p.name()
 			if on {
-				tip = "Hide " + p.name
+				tip = "Hide " + p.name()
 			}
-			b := ghost(c, p.id, on).Padding(3).Label(p.name).Tooltip(tip)
+			b := ghost(c, p.key, on).Padding(3).Label(p.name()).Tooltip(tip)
 			if filtered && !on {
 				b.Opacity(0.45)
 			}
 			if b.Children(func() { projectTile(c, p, 20) }).Clicked() {
-				a.toggleProject(p.id)
+				a.toggleProject(p.key)
 			}
 		}
 		ui.Spacer(c)
@@ -181,7 +202,7 @@ func (a *app) projectStrip(c *ui.Context) {
 
 // toggleProject puts a project in the sidebar's filter or takes it out;
 // a filter of every project, or of none, is no filter.
-func (a *app) toggleProject(id string) {
+func (a *app) toggleProject(id projectKey) {
 	if a.projectFilter[id] {
 		delete(a.projectFilter, id)
 	} else {
@@ -249,7 +270,7 @@ func (a *app) section(c *ui.Context, cat category, title, empty string, icon *ui
 func (a *app) unreadCount() int {
 	n := 0
 	for _, it := range a.itemsIn(catInbox) {
-		if it.t.unread {
+		if a.backend.Unread(it.t.Thread) {
 			n++
 		}
 	}
@@ -261,11 +282,12 @@ func (a *app) unreadCount() int {
 // the time's place. It folds in and out as it moves between sections.
 func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 	t := it.t
-	selected := t.id == a.selected && a.router.Path() == "/"
-	r := row(c, t.id, selected).Height(rowHeight).Padding(0, 6, 0, 8).Gap(9).Transition(fold)
-	fx, playing := a.rowFx[t.id]
+	selected := t.id() == a.selected && a.router.Path() == "/"
+	unread := a.backend.Unread(t.Thread)
+	r := row(c, t.id(), selected).Height(rowHeight).Padding(0, 6, 0, 8).Gap(9).Transition(fold)
+	fx, playing := a.rowFx[t.id()]
 	if playing && fx.done(c.Now()) {
-		delete(a.rowFx, t.id)
+		delete(a.rowFx, t.id())
 		playing = false
 	}
 	if playing {
@@ -279,7 +301,7 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 				tileGag(tile, fx)
 			}
 			// The thread's state, as a badge on the project's tile.
-			if mark := statusBadge(c, t); mark.Valid() {
+			if mark := statusBadge(c, a.statusOf(t)); mark.Valid() {
 				mark.Absolute().Right(-3).Bottom(-3)
 			}
 			if playing {
@@ -289,13 +311,13 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 		if playing && fx.kind == gagSettle {
 			burstGag(wrap, fx)
 		}
-		title := ui.Text(c, t.title).FontSize(13).SingleLine().Grow(1).Shrink(1)
-		if t.unread {
+		title := ui.Text(c, t.View.Title).FontSize(13).SingleLine().Grow(1).Shrink(1)
+		if unread {
 			title.FontWeight(600).TextColor(palette.text)
 		}
 		// The actions show while it's pointed at, and while its snooze
 		// popover is open, which takes the pointer away from the row.
-		if hovered || a.snoozeFor == t.id {
+		if hovered || a.snoozeFor == t.id() {
 			a.rowActions(c, t, cat)
 			return
 		}
@@ -303,23 +325,22 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 		case cat == catSnoozed:
 			ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, icClock).FontSize(10).TextColor(palette.faint)
-				ui.Text(c, t.snoozed).FontSize(11).TextColor(palette.faint)
+				ui.Text(c, snoozeLabel(disposition(t).Until, a.now)).FontSize(11).TextColor(palette.faint)
 			})
-		case t.unread:
+		case unread:
 			ui.Box(c).Size(7, 7).Radius(4).Background(palette.accent)
 		default:
-			ui.Text(c, t.age).FontSize(11).TextColor(palette.faint)
+			ui.Text(c, ago(t.View.UpdatedAt, a.now)).FontSize(11).TextColor(palette.faint)
 		}
 	}).Clicked() {
-		t.unread = false
-		a.select_(t.id)
+		a.select_(t)
 	}
 }
 
 // statusBadge is a small mark of what a thread is doing, on its project's
 // tile: the agent working, or waiting for an approval.
-func statusBadge(c *ui.Context, t *thread) ui.Element {
-	switch t.status {
+func statusBadge(c *ui.Context, s status) ui.Element {
+	switch s {
 	case statusWorking:
 		return ui.Box(c).Size(11, 11).Radius(6).Center().Background(palette.sidebar).Children(func() {
 			statusMark(c, statusWorking)
@@ -330,29 +351,41 @@ func statusBadge(c *ui.Context, t *thread) ui.Element {
 	return ui.Element{}
 }
 
-var snoozeTimes = []struct{ when, joke, emoji string }{
-	{"Later today", "a power nap", "☕"},
-	{"Tomorrow", "sleep on it", "🌙"},
-	{"Next week", "a long vacation", "🏝"},
+var snoozeTimes = []struct {
+	when, joke, emoji string
+	until             func(now time.Time) time.Time
+}{
+	{"Later today", "a power nap", "☕", func(now time.Time) time.Time { return now.Add(3 * time.Hour).Truncate(time.Minute) }},
+	{"Tomorrow", "sleep on it", "🌙", func(now time.Time) time.Time { return morning(now, 1) }},
+	{"Next week", "a long vacation", "🏝", func(now time.Time) time.Time {
+		return morning(now, 7-(int(now.Weekday())+6)%7) // Monday's
+	}},
+}
+
+// morning is 9:00, days after now's day.
+func morning(now time.Time, days int) time.Time {
+	y, m, d := now.Date()
+	return time.Date(y, m, d+days, 9, 0, 0, 0, now.Location())
 }
 
 // rowActions are a pointed-at thread's actions: snooze it until a time,
 // and settle it; a settled or snoozed thread goes back to the inbox
 // instead.
-func (a *app) rowActions(c *ui.Context, t *thread, cat category) {
+func (a *app) rowActions(c *ui.Context, t thread, cat category) {
 	ui.Row(c).Gap(0).Children(func() {
 		switch cat {
 		case catSettled, catSnoozed:
 			if iconButton(c, "back", icUndo, "Back to inbox", false).Padding(3).TextColor(tintBack).Clicked() {
-				t.settled, t.snoozed = false, ""
-				a.gag(c, t, gagUndo, cat)
+				a.backend.SetDisposition(t.env, t.id(), api.Disposition{})
+				a.gag(c, t.id(), gagUndo, cat)
 			}
 		case catInbox:
 			a.snoozeButton(c, t, cat)
 			if iconButton(c, "settle", icCheckCirc, "Settle", false).Padding(3).TextColor(tintSettle).Clicked() {
-				t.settled, t.unread = true, false
-				a.gag(c, t, gagSettle, cat)
-				c.AddToast(ui.Toast{Title: "Settled. Phew.", Description: t.title})
+				a.backend.SetDisposition(t.env, t.id(), api.Disposition{State: api.Settled})
+				a.markRead(t)
+				a.gag(c, t.id(), gagSettle, cat)
+				c.AddToast(ui.Toast{Title: "Settled. Phew.", Description: t.View.Title})
 			}
 		}
 	})
@@ -371,14 +404,14 @@ func lower(s string) string {
 // snoozeButton opens a popover of when to snooze the thread until, each
 // with a joke; a native menu would take the pointer from the row, which
 // stops building its actions, and lose the choice.
-func (a *app) snoozeButton(c *ui.Context, t *thread, cat category) {
-	open := a.snoozeFor == t.id
+func (a *app) snoozeButton(c *ui.Context, t thread, cat category) {
+	open := a.snoozeFor == t.id()
 	b := iconButton(c, "snooze", icClock, "Snooze", open).Padding(3).TextColor(tintSnooze)
 	if b.Clicked() {
 		if open {
-			a.snoozeFor = ""
+			a.snoozeFor = api.ID{}
 		} else {
-			a.snoozeFor = t.id
+			a.snoozeFor = t.id()
 		}
 		open = !open
 	}
@@ -395,20 +428,20 @@ func (a *app) snoozeButton(c *ui.Context, t *thread, cat category) {
 							ui.Text(c, s.joke).FontSize(11.5).TextColor(palette.muted).Italic()
 						})
 					}).Clicked() {
-						a.snooze(c, t, s.when, cat)
+						a.snooze(c, t, s.when, s.until(a.now), cat)
 					}
 				}
 			})
 		})
 	})
-	if !open && a.snoozeFor == t.id {
-		a.snoozeFor = "" // dismissed
+	if !open && a.snoozeFor == t.id() {
+		a.snoozeFor = api.ID{} // dismissed
 	}
 }
 
-func (a *app) snooze(c *ui.Context, t *thread, when string, from category) {
-	t.snoozed, t.settled = when, false
-	a.snoozeFor = ""
-	a.gag(c, t, gagSnooze, from)
-	c.AddToast(ui.Toast{Title: "Sleeping until " + lower(when) + " 💤", Description: t.title, Type: "info"})
+func (a *app) snooze(c *ui.Context, t thread, when string, until time.Time, from category) {
+	a.backend.SetDisposition(t.env, t.id(), api.Disposition{State: api.Snoozed, Until: until})
+	a.snoozeFor = api.ID{}
+	a.gag(c, t.id(), gagSnooze, from)
+	c.AddToast(ui.Toast{Title: "Sleeping until " + lower(when) + " 💤", Description: t.View.Title, Type: "info"})
 }

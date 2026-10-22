@@ -1,52 +1,98 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
+
+	"glitched/internal/api"
+	"glitched/internal/client"
+	"glitched/internal/daemon"
+	"glitched/internal/provider/fake"
 )
 
-// The prototype builds without a window, and its toggles respond.
-func TestView(t *testing.T) {
-	a := newApp()
-	tt := ui.NewTester(a.view, 1320, 860)
-	if !tt.HasText("Sort sidebar threads by recent activity") {
-		t.Fatalf("texts %q", tt.Texts())
+// With an empty state directory, the app embeds this machine's engine and
+// shows no threads, ready for the first.
+func TestStartsEmptyOnALocalEngine(t *testing.T) {
+	h := start(t, tempDir(t))
+	if envs := h.a.backend.Envs(); len(envs) != 1 || envs[0].Kind != client.Local || len(envs[0].Threads) != 0 {
+		t.Fatalf("envs %+v, want this machine's alone, with no threads", envs)
 	}
-	if err := tt.Click("View diff"); err != nil {
-		t.Fatal(err)
-	}
-	if !a.showDiff || !tt.HasText("Changes") {
-		t.Errorf("diff panel not shown")
-	}
-	if err := tt.Click("Fix terminal resize flicker on Windows"); err != nil {
-		t.Fatal(err)
-	}
-	if a.selected != "t2" {
-		t.Errorf("selected %q", a.selected)
+	h.tt.Advance(time.Second)
+	for _, s := range []string{"What should we build?", "Inbox zero. Nothing needs you.", "New thread"} {
+		if !h.tt.HasText(s) {
+			t.Errorf("no %q in %q", s, h.tt.Texts())
+		}
 	}
 }
 
-func TestSendPlaysCannedTurn(t *testing.T) {
-	a := newApp()
-	a.selected = "t3"
-	tt := ui.NewTester(a.view, 1320, 860)
-	_, th := a.current()
-	a.draft = "Fix the flicker"
-	tt.Frame()
-	if err := tt.Click("Send"); err != nil {
-		t.Fatal(err)
+// The sidebar lists the engine's threads; a click shows one.
+func TestView(t *testing.T) {
+	dir := tempDir(t)
+	inbox(t, dir)
+	h := start(t, dir)
+	fix := h.thread("Fix terminal resize flicker on Windows")
+	h.tt.Advance(time.Second)
+	h.click(fix.View.Title)
+	if h.a.selected != fix.id() {
+		t.Fatalf("selected %s, want %s", h.a.selected, fix.id())
 	}
-	if len(th.entries) != 3 || th.status != statusCompleted {
-		t.Fatalf("entries %d, status %d", len(th.entries), th.status)
+	h.until("its transcript", func() bool { return h.tt.HasText("Why does it flicker?") && h.tt.HasText("Read main.go") })
+	if h.a.backend.Unread(fix.Thread) {
+		t.Error("the thread shown is still unread")
+	}
+	h.click("Toggle diff  ⌘D")
+	if !h.a.showDiff || !h.tt.HasText("No changes in this thread yet.") {
+		t.Errorf("diff panel not shown: %q", h.tt.Texts())
+	}
+}
+
+// Sending in the draft creates the thread on this machine, in its
+// workspace, and its turn streams in until it asks for an approval.
+func TestSendStartsAThread(t *testing.T) {
+	h := start(t, tempDir(t))
+	h.a.draft = "Fix the flicker"
+	h.tt.Frame()
+	h.click("Send")
+	th := h.a.current()
+	if th.id().IsZero() || th.env != h.local() || th.View.Title != "Fix the flicker" || th.View.Workspace != homeDir() {
+		t.Fatalf("after Send the chat shows %+v on %v, want the new thread on this machine", th.View, th.env)
+	}
+	if h.a.draft != "" || !h.tt.HasText("Fix the flicker") {
+		t.Errorf("draft %q, window %q: the message should have left the composer for the timeline", h.a.draft, h.tt.Texts())
+	}
+	h.until("the turn to ask", func() bool {
+		return h.tt.HasText("Looking at the code.") && h.tt.HasText("May I edit it?") && h.tt.HasText("Read main.go") && h.a.statusOf(h.a.current()) == statusApproval
+	})
+}
+
+// Stop interrupts the turn, which ends as interrupted.
+func TestStopInterrupts(t *testing.T) {
+	h := start(t, tempDir(t))
+	h.a.draft = "Fix the flicker"
+	h.tt.Frame()
+	h.click("Send")
+	h.until("the turn to wait on its approval", func() bool { return h.a.current().View.Working() && h.tt.HasText("May I edit it?") })
+	h.click("Stop")
+	h.until("the turn to end", func() bool {
+		v := h.a.current().View
+		return !v.Working() && v.LastTurn != nil
+	})
+	if o := h.a.current().View.LastTurn.Outcome; o != api.OutcomeInterrupted {
+		t.Errorf("the turn ended %v, want interrupted", o)
+	}
+	if _, ok := h.tt.Find("Send"); !ok {
+		t.Error("the stop button didn't go back to Send")
 	}
 }
 
 func TestSettingsPages(t *testing.T) {
-	a := newApp()
+	a := offline(t)
 	tt := ui.NewTester(a.view, 1320, 860)
 	if err := tt.Click("Settings"); err != nil {
 		t.Fatal(err)
@@ -78,23 +124,23 @@ func TestSettingsPages(t *testing.T) {
 }
 
 func TestCommandPalette(t *testing.T) {
-	a := newApp()
-	tt := ui.NewTester(a.view, 1320, 860)
-	if err := tt.Click("Search"); err != nil {
-		t.Fatal(err)
+	dir := tempDir(t)
+	inbox(t, dir)
+	h := start(t, dir)
+	loop := h.thread("Investigate websocket reconnect loop")
+	h.click("Search")
+	h.tt.Type("websocket")
+	if !h.tt.HasText(loop.View.Title) {
+		t.Fatalf("texts %q", h.tt.Texts())
 	}
-	tt.Type("websocket")
-	if !tt.HasText("Investigate websocket reconnect loop") {
-		t.Fatalf("texts %q", tt.Texts())
-	}
-	tt.Key(0, ui.KeyEnter)
-	if a.cmdkOpen || a.selected != "t4" {
-		t.Errorf("open %v, selected %q", a.cmdkOpen, a.selected)
+	h.tt.Key(0, ui.KeyEnter)
+	if h.a.cmdkOpen || h.a.selected != loop.id() {
+		t.Errorf("open %v, selected %s", h.a.cmdkOpen, h.a.selected)
 	}
 }
 
 func TestModelPicker(t *testing.T) {
-	a := newApp()
+	a := offline(t)
 	tt := ui.NewTester(a.view, 1320, 860)
 	if err := tt.Click("Model"); err != nil {
 		t.Fatal(err)
@@ -127,7 +173,7 @@ func TestModelPicker(t *testing.T) {
 
 // The sidebar's shortcuts show only while ⌘ is held.
 func TestShortcutHints(t *testing.T) {
-	a := newApp()
+	a := offline(t)
 	tt := ui.NewTester(a.view, 1320, 860)
 	has := func() bool {
 		for _, s := range tt.Texts() {
@@ -154,7 +200,7 @@ func TestShortcutHints(t *testing.T) {
 // level only near its point, and settles on the level it last locked
 // onto when let go.
 func TestEffortDrag(t *testing.T) {
-	a := newApp()
+	a := offline(t)
 	a.effort = "Low"
 	tt := ui.NewTester(a.view, 1320, 860)
 	if err := tt.Click("Model"); err != nil {
@@ -192,7 +238,7 @@ func TestEffortDrag(t *testing.T) {
 
 // A click on the effort's track, away from a point, picks the nearest level.
 func TestEffortClick(t *testing.T) {
-	a := newApp()
+	a := offline(t)
 	a.effort = "Low"
 	tt := ui.NewTester(a.view, 1320, 860)
 	if err := tt.Click("Model"); err != nil {
@@ -211,7 +257,7 @@ func TestEffortClick(t *testing.T) {
 
 // Full access is granted only by holding it; the other levels by a click.
 func TestAccessLevels(t *testing.T) {
-	a := newApp()
+	a := offline(t)
 	tt := ui.NewTester(a.view, 1320, 860)
 	if err := tt.Click("Access"); err != nil {
 		t.Fatal(err)
@@ -248,7 +294,7 @@ func TestAccessLevels(t *testing.T) {
 // only paint.
 func TestAccessEffectsKeepLayout(t *testing.T) {
 	for _, level := range []string{accessAsk, accessAuto} {
-		a := newApp()
+		a := offline(t)
 		a.access = accessFull
 		tt := ui.NewTester(a.view, 1320, 860)
 		before, _ := tt.Find("High") // the effort, inside the composer
@@ -264,136 +310,148 @@ func TestAccessEffectsKeepLayout(t *testing.T) {
 // Threads move between the inbox's sections as they're settled, sent and
 // finished; the strip filters them to a project.
 func TestInbox(t *testing.T) {
-	a := newApp()
-	tt := ui.NewTester(a.view, 1320, 860)
-	t2 := a.projects[0].threads[1] // pending approval, in the inbox
-	if categoryOf(t2) != catInbox || categoryOf(a.projects[0].threads[0]) != catWorking {
-		t.Fatal("mock threads in the wrong sections")
+	dir := tempDir(t)
+	inbox(t, dir)
+	h := start(t, dir)
+	fix := h.thread("Fix terminal resize flicker on Windows")
+	h.tt.Advance(time.Second)
+	if c := h.a.categoryOf(fix); c != catInbox {
+		t.Fatalf("a finished thread in section %d, want the inbox", c)
 	}
 	// Settle it from its row's actions.
-	r, _ := tt.Find(t2.title)
-	tt.Move(r.X+r.W/2, r.Y+r.H/2)
-	if err := tt.Click("Settle"); err != nil {
-		t.Fatal(err)
+	h.hover(fix.View.Title)
+	h.click("Settle")
+	if c := h.a.categoryOf(fix); c != catSettled {
+		t.Errorf("settled thread in section %d", c)
 	}
-	if categoryOf(t2) != catSettled {
-		t.Errorf("settled thread in section %d", categoryOf(t2))
+	if h.a.backend.Unread(fix.Thread) {
+		t.Error("a settled thread is still unread")
 	}
 	// It stays in the inbox a moment, sighing in its burst of confetti,
 	// then folds away into Settled.
-	if a.shownIn(t2) != catInbox {
+	if h.a.shownIn(fix) != catInbox {
 		t.Error("settled thread left the inbox before its joke played")
 	}
-	tt.Advance(1500 * time.Millisecond)
+	h.until("the engine to settle it", func() bool { return fix.View.Disposition.State == api.Settled && len(fix.Pending) == 0 })
+	h.tt.Advance(1500 * time.Millisecond)
 	// Settled is closed by default; opening it shows the thread. (The
 	// toast shows its title too, at the window's other side.)
 	inSidebar := func(title string) bool {
-		r, ok := tt.Find(title)
-		return ok && r.X < a.sidebarWidth
+		r, ok := h.tt.Find(title)
+		return ok && r.X < h.a.sidebarWidth
 	}
-	if inSidebar(t2.title) {
+	if inSidebar(fix.View.Title) {
 		t.Error("closed Settled section shows its threads")
 	}
-	if err := tt.Click("Settled"); err != nil {
-		t.Fatal(err)
-	}
-	if !inSidebar(t2.title) {
+	h.click("Settled")
+	if !inSidebar(fix.View.Title) {
 		t.Error("opened Settled section hides the settled thread")
 	}
 	// Sending in a settled thread brings it through Working back to the
-	// inbox, unread (the test's agent finishes at once).
-	a.select_(t2.id)
-	a.draft = "and again"
-	a.send(t2)
-	if categoryOf(t2) != catInbox {
-		t.Errorf("thread in section %d after its turn, want the inbox", categoryOf(t2))
-	}
+	// inbox.
+	h.a.select_(fix)
+	h.a.draft = "and again"
+	h.a.send(fix)
+	h.until("its turn to end in the inbox", func() bool {
+		v := fix.View
+		return v.Disposition.State == api.Open && !v.Working() && v.Queued == 0 && h.a.categoryOf(fix) == catInbox &&
+			h.tt.HasText("and again") && strings.Count(strings.Join(h.tt.Texts(), "\n"), "Looking at the code.") == 2
+	})
 	// The strip filters to a project.
-	if err := tt.Click("agent-phone"); err != nil {
-		t.Fatal(err)
-	}
+	h.click("agent-phone")
 	for _, cat := range []category{catInbox, catWorking, catSnoozed, catSettled} {
-		for _, it := range a.itemsIn(cat) {
-			if it.p.name != "agent-phone" {
-				t.Errorf("filter to agent-phone shows %q of %s", it.t.title, it.p.name)
+		for _, it := range h.a.itemsIn(cat) {
+			if it.p.name() != "agent-phone" {
+				t.Errorf("filter to agent-phone shows %q of %s", it.t.View.Title, it.p.name())
 			}
 		}
 	}
-	if items := a.itemsIn(catSnoozed); len(items) != 1 || items[0].t.title != "SIP re-INVITE handling" {
-		t.Errorf("filter to agent-phone: snoozed %v", items)
+	if items := h.a.itemsIn(catInbox); len(items) != 1 || items[0].t.View.Title != "SIP re-INVITE handling" {
+		t.Errorf("filter to agent-phone: inbox %v", items)
 	}
 }
 
 // Pointing at a thread swaps its time for its actions without moving the
 // rows around it.
 func TestInboxHoverKeepsLayout(t *testing.T) {
-	a := newApp()
-	tt := ui.NewTester(a.view, 1320, 860)
-	first := a.projects[0].threads[1].title // the inbox's first row
-	next := a.projects[0].threads[2].title
-	before, _ := tt.Find(next)
-	r, _ := tt.Find(first)
-	tt.Move(r.X+r.W/2, r.Y+r.H/2)
-	tt.Advance(time.Second)
-	if after, _ := tt.Find(next); after.Y != before.Y {
+	dir := tempDir(t)
+	inbox(t, dir)
+	h := start(t, dir)
+	h.thread("SIP re-INVITE handling")
+	h.tt.Advance(time.Second)
+	items := h.a.itemsIn(catInbox)
+	first, next := items[0].t.View.Title, items[1].t.View.Title
+	before, _ := h.tt.Find(next)
+	h.hover(first)
+	h.tt.Advance(time.Second)
+	if after, _ := h.tt.Find(next); after.Y != before.Y {
 		t.Errorf("the next row moved from y %v to %v as the one above was pointed at", before.Y, after.Y)
 	}
 }
 
 // Each of the inbox's jokes plays through without a hitch.
 func TestInboxGags(t *testing.T) {
+	dir := tempDir(t)
+	inbox(t, dir)
+	h := start(t, dir)
+	th := h.thread("SIP re-INVITE handling")
 	for _, kind := range []gagKind{gagSnooze, gagSettle, gagUndo} {
-		a := newApp()
-		tt := ui.NewTester(a.view, 1320, 860)
-		th := a.projects[0].threads[1]
-		a.rowFx[th.id] = rowGagFx{kind: kind, at: tt.Now(), from: catInbox, hold: 500 * time.Millisecond, life: time.Second}
+		h.a.rowFx[th.id()] = rowGagFx{kind: kind, at: h.tt.Now(), from: catInbox, hold: 500 * time.Millisecond, life: time.Second}
 		for range 40 {
-			tt.Advance(80 * time.Millisecond)
+			h.tt.Advance(80 * time.Millisecond)
 		}
-		if _, ok := a.rowFx[th.id]; ok {
+		if _, ok := h.a.rowFx[th.id()]; ok {
 			t.Errorf("joke %d still playing after %v", kind, 40*80*time.Millisecond)
 		}
 	}
 }
 
 // Snoozing from a row's popover: the pointer leaves the row for the
-// popover, and the choice still lands.
+// popover, and the choice still lands; Back to inbox brings it back.
 func TestSnooze(t *testing.T) {
-	a := newApp()
-	tt := ui.NewTester(a.view, 1320, 860)
-	th := a.projects[0].threads[1]
-	r, _ := tt.Find(th.title)
-	tt.Move(r.X+r.W/2, r.Y+r.H/2)
-	if err := tt.Click("Snooze"); err != nil {
-		t.Fatal(err)
-	}
-	if a.snoozeFor != th.id || !tt.HasText("sleep on it") {
-		t.Fatalf("snooze popover not open: %q", a.snoozeFor)
+	dir := tempDir(t)
+	inbox(t, dir)
+	h := start(t, dir)
+	th := h.thread("SIP re-INVITE handling")
+	h.tt.Advance(time.Second)
+	h.hover(th.View.Title)
+	h.click("Snooze")
+	if h.a.snoozeFor != th.id() || !h.tt.HasText("sleep on it") {
+		t.Fatalf("snooze popover not open: %s", h.a.snoozeFor)
 	}
 	// Off the row, onto the popover's choice.
-	tm, _ := tt.Find("Tomorrow")
-	tt.Move(tm.X+tm.W/2, tm.Y+tm.H/2)
-	if err := tt.Click("Tomorrow"); err != nil {
-		t.Fatal(err)
+	h.hover("Tomorrow")
+	h.click("Tomorrow")
+	want := morning(h.tt.Now(), 1)
+	h.until("the engine to snooze it", func() bool {
+		d := th.View.Disposition
+		return d.State == api.Snoozed && d.Until.Equal(want) && len(th.Pending) == 0
+	})
+	h.tt.Advance(2 * time.Second)
+	if h.a.shownIn(th) != catSnoozed {
+		t.Errorf("snoozed thread shown in section %d", h.a.shownIn(th))
 	}
-	if th.snoozed != "Tomorrow" {
-		t.Fatalf("snoozed %q, want Tomorrow", th.snoozed)
-	}
-	tt.Advance(2 * time.Second)
-	if a.shownIn(th) != catSnoozed {
-		t.Errorf("snoozed thread shown in section %d", a.shownIn(th))
+	h.click("Snoozed")
+	h.tt.Advance(time.Second)
+	h.hover(th.View.Title)
+	h.click("Back to inbox")
+	h.until("the engine to bring it back", func() bool { return th.View.Disposition.State == api.Open && len(th.Pending) == 0 })
+	if h.a.categoryOf(th) != catInbox {
+		t.Errorf("thread back in section %d, want the inbox", h.a.categoryOf(th))
 	}
 }
 
 // Snoozing and settling play their jokes before the row moves, and none
 // after; sending back plays after it lands.
 func TestGagTiming(t *testing.T) {
-	a := newApp()
-	tt := ui.NewTester(a.view, 1320, 860)
-	th := a.projects[0].threads[1]
+	dir := tempDir(t)
+	inbox(t, dir)
+	h := start(t, dir)
+	th := h.thread("SIP re-INVITE handling")
+	a, tt := h.a, h.tt
 
-	th.snoozed = "Tomorrow"
-	a.rowFx[th.id] = newGag(gagSnooze, tt.Now(), catInbox)
+	a.backend.SetDisposition(th.env, th.id(), api.Disposition{State: api.Snoozed, Until: morning(tt.Now(), 1)})
+	a.rowFx[th.id()] = newGag(gagSnooze, tt.Now(), catInbox)
 	tt.Advance(snoozeLife / 2)
 	if a.shownIn(th) != catInbox {
 		t.Error("snoozed row moved before its joke ended")
@@ -402,17 +460,17 @@ func TestGagTiming(t *testing.T) {
 	if a.shownIn(th) != catSnoozed {
 		t.Error("snoozed row did not move once its joke ended")
 	}
-	if _, ok := a.rowFx[th.id]; ok {
+	if _, ok := a.rowFx[th.id()]; ok {
 		t.Error("snooze's joke still playing after the row moved")
 	}
 
-	th.snoozed = ""
-	a.rowFx[th.id] = newGag(gagUndo, tt.Now(), catSnoozed)
+	a.backend.SetDisposition(th.env, th.id(), api.Disposition{})
+	a.rowFx[th.id()] = newGag(gagUndo, tt.Now(), catSnoozed)
 	tt.Frame()
 	if a.shownIn(th) != catInbox {
 		t.Error("sent back row waited to move")
 	}
-	if _, ok := a.rowFx[th.id]; !ok {
+	if _, ok := a.rowFx[th.id()]; !ok {
 		t.Error("jk didn't play after the row landed")
 	}
 }
@@ -420,12 +478,12 @@ func TestGagTiming(t *testing.T) {
 // The diff panel shows each file's real diff, unified by default, and
 // accepting a change counts it out.
 func TestDiffPanel(t *testing.T) {
-	a := newApp()
+	a := offline(t)
 	a.showDiff = true
 	tt := ui.NewTester(a.view, 1320, 860)
 	d := a.diffFor("apps/web/src/components/Sidebar.tsx")
-	if d.Layout != editor.DiffUnified || !tt.HasText("Unified") {
-		t.Fatalf("layout %v", d.Layout)
+	if a.diffLayout != editor.DiffUnified || !tt.HasText("Unified") {
+		t.Fatalf("layout %v", a.diffLayout)
 	}
 	n := len(d.Hunks())
 	if n == 0 {
@@ -444,13 +502,26 @@ func TestDiffPanel(t *testing.T) {
 	}
 }
 
+// long is a thread of several turns, shown, its transcript in.
+func long(t *testing.T) (*harness, thread) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.Turn(false))
+	seed(t, d, "/work/t3code", "Sort sidebar threads by recent activity",
+		"Where does the sidebar get its threads from?", "And where is a thread's updatedAt set?",
+		"Can the project groups collapse today?", "Sort them by most recent activity.", "Persist the collapsed state.")
+	h := start(t, dir)
+	th := h.thread("Sort sidebar threads by recent activity")
+	h.a.select_(th)
+	h.until("its transcript", func() bool { return len(entriesOf(th)) == 5*4 })
+	h.tt.Advance(time.Second)
+	return h, th
+}
+
 // The timeline starts at its end; scrolled up, a pill takes it back.
 func TestTimelineFollowsEnd(t *testing.T) {
-	a := newApp()
-	tt := ui.NewTester(a.view, 1320, 860)
-	_, th := a.current()
-	l := a.listFor(th)
-	tt.Advance(time.Second)
+	h, th := long(t)
+	tt := h.tt
+	l := h.a.listFor(th.id())
 	if !l.AtEnd() || tt.HasText("Jump to latest") {
 		t.Fatal("timeline should open at its end, without the pill")
 	}
@@ -469,11 +540,10 @@ func TestTimelineFollowsEnd(t *testing.T) {
 }
 
 // Files dropped or picked become chips over the draft, and go with the
-// message sent; a long paste becomes one too.
+// message sent, as their paths; a long paste becomes one too.
 func TestAttachments(t *testing.T) {
-	a := newApp()
-	a.selected = "t3"
-	tt := ui.NewTester(a.view, 1320, 860)
+	h := start(t, tempDir(t))
+	a, tt := h.a, h.tt
 	a.attachFiles([]string{"go.mod", "resources/icon.png"})
 	tt.Frame()
 	if !tt.HasText("go.mod") || !tt.HasText("icon.png") {
@@ -494,10 +564,11 @@ func TestAttachments(t *testing.T) {
 	if len(a.attachments) != 2 {
 		t.Fatalf("%d attachments after removing one", len(a.attachments))
 	}
-	_, th := a.current()
-	a.send(th)
-	if len(a.attachments) != 0 || len(th.entries[len(th.entries)-3].attachments) != 2 {
-		t.Error("sending should take the attachments with the message")
+	a.draft = "look"
+	a.send(a.current())
+	es := entriesOf(a.current())
+	if len(a.attachments) != 0 || len(es) != 1 || es[0].text != "look\n\n@resources/icon.png\n\n"+strings.Repeat("x\n", longPaste-1)+"x" {
+		t.Errorf("sent %q: the message should take the attachments, the file by its path", texts(es))
 	}
 }
 
@@ -516,8 +587,14 @@ func TestFirstLine(t *testing.T) {
 // The palette's results scroll to the choice the arrows move to, though
 // the list builds only the rows in view.
 func TestPaletteScrollsToChoice(t *testing.T) {
-	a := newApp()
-	tt := ui.NewTester(a.view, 1320, 860)
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.Turn(false))
+	for i := range 10 {
+		seed(t, d, "/work/t3code", "Thread "+string(rune('A'+i)))
+	}
+	h := start(t, dir)
+	h.thread("Thread J")
+	a, tt := h.a, h.tt
 	a.openCommandPalette()
 	tt.Frame()
 	cmds := a.commands()
@@ -537,9 +614,18 @@ func TestPaletteScrollsToChoice(t *testing.T) {
 	}
 }
 
-// @ suggests files and / commands; the keys move and take the choice.
+// @ suggests the workspace's files and / commands; the keys move and take
+// the choice.
 func TestAutocomplete(t *testing.T) {
-	a := newApp()
+	ws := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, "apps/web/src/components"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "apps/web/src/components/Sidebar.tsx"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := offline(t)
+	a.fresh.workspace = ws
 	tt := ui.NewTester(a.view, 1320, 860)
 	a.draft = "look at @Side"
 	tt.Frame()
@@ -566,26 +652,31 @@ func TestAutocomplete(t *testing.T) {
 	}
 }
 
-// Quick ask starts a thread in the chosen project with what was typed,
-// and opens it.
+// Quick ask starts a thread on this machine in the chosen project with
+// what was typed, and opens it.
 func TestQuickAsk(t *testing.T) {
-	a := newApp()
-	tt := ui.NewTester(a.view, 1320, 860)
-	a.quick.project, a.quick.query = 2, "Why does the SIP stack drop calls?"
+	dir := tempDir(t)
+	inbox(t, dir)
+	h := start(t, dir)
+	h.thread("SIP re-INVITE handling")
+	a := h.a
+	for i, p := range a.localProjects() {
+		if p.name() == "agent-phone" {
+			a.quick.project = i
+		}
+	}
+	a.quick.query = "Why does the SIP stack drop calls?"
 	a.startQuickThread()
-	tt.Frame()
-	p, th := a.current()
-	if p.name != "agent-phone" || th.title != "Why does the SIP stack drop calls?" {
-		t.Fatalf("opened %q in %s", th.title, p.name)
+	th := a.current()
+	if th.env != h.local() || th.View.Workspace != "/work/agent-phone" || th.View.Title != "Why does the SIP stack drop calls?" {
+		t.Fatalf("opened %q in %s on %v", th.View.Title, th.View.Workspace, th.env)
 	}
-	if len(th.entries) == 0 || th.entries[0].text != "Why does the SIP stack drop calls?" {
-		t.Error("the question wasn't sent")
-	}
+	h.until("the question in the thread", func() bool { return h.tt.HasText("Why does the SIP stack drop calls?") && h.tt.HasText("Read main.go") })
 }
 
 // The preview pane and the diff share the side of the chat: one at a time.
 func TestPreviewToggle(t *testing.T) {
-	a := newApp()
+	a := offline(t)
 	tt := ui.NewTester(a.view, 1320, 860)
 	if err := tt.Click("Toggle preview  ⇧⌘P"); err != nil {
 		t.Fatal(err)
@@ -603,19 +694,17 @@ func TestPreviewToggle(t *testing.T) {
 
 // A tick for each message sent; clicking one scrolls to it.
 func TestTurnMarkers(t *testing.T) {
-	a := newApp()
-	tt := ui.NewTester(a.view, 1320, 860)
-	tt.Advance(time.Second)
-	_, th := a.current()
-	first := "Go to: " + preview(th.entries[0])
-	if err := tt.Click(first); err != nil {
+	h, th := long(t)
+	es := entriesOf(th)
+	first := "Go to: " + preview(es[0])
+	if err := h.tt.Click(first); err != nil {
 		t.Fatal(err)
 	}
-	tt.Advance(time.Second)
-	if f, _ := a.listFor(th).Visible(); f > 0 {
+	h.tt.Advance(time.Second)
+	if f, _ := h.a.listFor(th.id()).Visible(); f > 0 {
 		t.Errorf("first row in view %d after clicking the first marker, want 0", f)
 	}
-	if !tt.HasText(th.entries[0].text) {
+	if !h.tt.HasText(es[0].text) {
 		t.Error("the first message isn't in view")
 	}
 }
@@ -623,37 +712,33 @@ func TestTurnMarkers(t *testing.T) {
 // The sidebar shows the projects chosen, several at once; choosing every
 // one is showing all.
 func TestProjectFilter(t *testing.T) {
-	a := newApp()
-	tt := ui.NewTester(a.view, 1320, 860)
+	dir := tempDir(t)
+	inbox(t, dir)
+	h := start(t, dir)
+	h.thread("SIP re-INVITE handling")
+	h.tt.Advance(time.Second)
+	a := h.a
 	shown := func() map[string]bool {
 		m := map[string]bool{}
 		for _, cat := range []category{catInbox, catWorking, catSnoozed, catSettled} {
 			for _, it := range a.itemsIn(cat) {
-				m[it.p.name] = true
+				m[it.p.name()] = true
 			}
 		}
 		return m
 	}
 	for _, name := range []string{"t3code", "agent-phone"} {
-		if err := tt.Click(name); err != nil {
-			t.Fatal(err)
-		}
+		h.click(name)
 	}
 	if s := shown(); !s["t3code"] || !s["agent-phone"] || s["mygo"] {
 		t.Errorf("filtered to t3code and agent-phone, the sidebar shows %v", s)
 	}
-	if err := tt.Click("mygo"); err != nil {
-		t.Fatal(err)
-	}
+	h.click("mygo")
 	if len(a.projectFilter) != 0 {
 		t.Errorf("every project chosen should be no filter, got %v", a.projectFilter)
 	}
-	if err := tt.Click("agent-phone"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tt.Click("All"); err != nil {
-		t.Fatal(err)
-	}
+	h.click("agent-phone")
+	h.click("All")
 	if len(a.projectFilter) != 0 {
 		t.Error("All should clear the filter")
 	}
@@ -677,11 +762,9 @@ func TestNormalizeURL(t *testing.T) {
 // Scrolled up from the end, the composer is compact, its controls folded
 // away; a draft, a click or the end of the thread brings it back.
 func TestCompactComposer(t *testing.T) {
-	a := newApp()
-	tt := ui.NewTester(a.view, 1320, 860)
-	_, th := a.current()
-	l := a.listFor(th)
-	tt.Advance(time.Second)
+	h, th := long(t)
+	tt := h.tt
+	l := h.a.listFor(th.id())
 	if !tt.HasText("Approve for me") {
 		t.Fatal("the composer should be full size at the end")
 	}
@@ -691,13 +774,13 @@ func TestCompactComposer(t *testing.T) {
 		t.Error("scrolled up, the composer should fold its controls away")
 	}
 	// Changes from outside the view, as typing's, which a frame shows.
-	a.draft = "a follow-up"
+	h.a.draft = "a follow-up"
 	tt.Frame()
 	tt.Advance(time.Second)
 	if !tt.HasText("Approve for me") {
 		t.Error("with a draft, the composer should be full size")
 	}
-	a.draft = ""
+	h.a.draft = ""
 	tt.Frame()
 	tt.Advance(time.Second)
 	l.ScrollToEnd()

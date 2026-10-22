@@ -4,6 +4,9 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo"
+
+	"glitched/internal/api"
+	"glitched/internal/client"
 )
 
 // notifyFinished tells the user, with a desktop notification, that the
@@ -11,23 +14,25 @@ import (
 // window in the background. Clicking it opens the thread. It needs the
 // Notifications setting on, and an app MyGo packaged (mygo dev and mygo
 // build), as notifications do on macOS. It runs on the main thread.
-func (a *app) notifyFinished(t *thread) {
+func (a *app) notifyFinished(t thread) {
 	if !a.settings.notifications || a.win == nil {
 		return
 	}
-	if a.selected == t.id && a.win.IsFocused() {
+	if a.selected == t.id() && a.win.IsFocused() {
 		return // they're watching it
 	}
 	body := "Done. Your turn."
-	for i := len(t.entries) - 1; i >= 0; i-- {
-		if e := t.entries[i]; e.kind == entryAssistant && e.text != "" {
-			body = firstLine(e.text)
-			break
+	if tr := t.Transcript; tr != nil {
+		for i := len(tr.Entries) - 1; i >= 0; i-- {
+			if e, ok := tr.Entries[i].(*client.AssistantEntry); ok && e.Text != "" {
+				body = firstLine(e.Text)
+				break
+			}
 		}
 	}
 	n := mygo.NewNotification(mygo.NotificationOptions{
-		ID:    "thread:" + t.id, // a later turn's replaces it
-		Title: t.title,
+		ID:    "thread:" + t.id().String(), // a later turn's replaces it
+		Title: t.View.Title,
 		Body:  body,
 		Group: "threads",
 	})
@@ -42,18 +47,14 @@ func (a *app) notifyFinished(t *thread) {
 
 // onNotificationClick opens the thread a notification is about.
 func (a *app) onNotificationClick(id string) {
-	threadID, ok := strings.CutPrefix(id, "thread:")
-	if !ok || a.win == nil {
+	s, ok := strings.CutPrefix(id, "thread:")
+	thread, err := api.ParseID(s)
+	if !ok || err != nil || a.win == nil {
 		return
 	}
 	a.win.Update(func() {
-		for _, p := range a.projects {
-			for _, t := range p.threads {
-				if t.id == threadID {
-					t.unread = false
-					a.select_(t.id)
-				}
-			}
+		if t, ok := a.find(thread); ok {
+			a.select_(t)
 		}
 	})
 	a.win.Show()

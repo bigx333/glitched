@@ -10,6 +10,8 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
+
+	"glitched/internal/api"
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with PAGE for a
@@ -20,7 +22,7 @@ func TestShot(t *testing.T) {
 	if out == "" {
 		t.Skip()
 	}
-	a := newApp()
+	a := newApp(t.TempDir(), func(func()) {})
 	a.showDiff = os.Getenv("DIFF") != ""
 	if os.Getenv("SPLIT") != "" {
 		a.showDiff, a.diffLayout = true, editor.DiffSplit
@@ -59,10 +61,10 @@ func TestShot(t *testing.T) {
 	}
 	if k := os.Getenv("TICK"); k != "" {
 		// The pointer on the turn marker of that index.
-		_, th := a.current()
-		turns := turnsOf(th)
+		es := entriesOf(a.current())
+		turns := turnsOf(es)
 		i := int(k[0] - '0')
-		r, ok := tt.Find("Go to: " + preview(th.entries[turns[i].entry]))
+		r, ok := tt.Find("Go to: " + preview(es[turns[i].entry]))
 		if !ok {
 			t.Fatal("no marker")
 		}
@@ -70,8 +72,7 @@ func TestShot(t *testing.T) {
 		tt.Advance(500 * time.Millisecond)
 	}
 	if os.Getenv("SCROLLUP") != "" {
-		_, th := a.current()
-		a.listFor(th).ScrollTo(0, ui.Start)
+		a.listFor(a.current().id()).ScrollTo(0, ui.Start)
 		tt.Advance(time.Second)
 	}
 	if os.Getenv("ATTACH") != "" {
@@ -106,19 +107,18 @@ func TestShot(t *testing.T) {
 		tt.Frame()
 		tt.Advance(300 * time.Millisecond)
 	}
-	if g := os.Getenv("GAG"); g != "" {
-		// 350ms into an inbox action's joke.
-		t2, t8 := a.projects[0].threads[1], a.projects[2].threads[0]
+	if g := os.Getenv("GAG"); g != "" && len(a.itemsIn(catInbox)) > 0 {
+		// 350ms into an inbox action's joke, on the inbox's first thread.
+		th := a.itemsIn(catInbox)[0].t
 		switch g {
 		case "snooze":
-			t2.snoozed = "Tomorrow"
-			a.rowFx[t2.id] = newGag(gagSnooze, tt.Now(), catInbox)
+			a.backend.SetDisposition(th.env, th.id(), api.Disposition{State: api.Snoozed, Until: morning(tt.Now(), 1)})
+			a.rowFx[th.id()] = newGag(gagSnooze, tt.Now(), catInbox)
 		case "settle":
-			t2.settled = true
-			a.rowFx[t2.id] = newGag(gagSettle, tt.Now(), catInbox)
+			a.backend.SetDisposition(th.env, th.id(), api.Disposition{State: api.Settled})
+			a.rowFx[th.id()] = newGag(gagSettle, tt.Now(), catInbox)
 		case "undo":
-			t8.snoozed = ""
-			a.rowFx[t8.id] = newGag(gagUndo, tt.Now(), catSnoozed)
+			a.rowFx[th.id()] = newGag(gagUndo, tt.Now(), catSnoozed)
 		}
 		tt.Frame()
 		d, _ := time.ParseDuration(os.Getenv("AT"))
