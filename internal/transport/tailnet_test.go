@@ -19,7 +19,7 @@ import (
 
 func TestTailnetListensOnlyOnLoopbackOrTailscale(t *testing.T) {
 	ok := []string{"127.0.0.1:0", "[::1]:0", "100.64.0.1:7465", "100.127.255.254:7465", "[fd7a:115c:a1e0::1]:7465"}
-	refused := []string{"0.0.0.0:7465", "[::]:7465", ":7465", "8.8.8.8:7465", "192.168.1.10:7465", "100.128.0.1:7465", "[fd7a:115c:a1e1::1]:7465", "localhost:7465"}
+	refused := []string{"0.0.0.0:7465", "[::]:7465", ":7465", "8.8.8.8:7465", "192.168.1.10:7465", "100.128.0.1:7465", "[fd7a:115c:a1e1::1]:7465", "[fd7a:115c:a1e0:b1a:0:7:a01:110]:7465", "localhost:7465"}
 	for _, addr := range ok {
 		// This machine may not hold the address, so only the rule's refusal counts.
 		ln, err := Tailnet{Address: addr}.Listen(context.Background())
@@ -167,6 +167,7 @@ func TestTailnetDialsOnlyBetweenLoopbacksOrTailscaleAddresses(t *testing.T) {
 		{"IPv4-mapped off the tailnet", [2]string{"[::ffff:192.168.1.5]:1", "[::ffff:192.168.1.10]:7465"}, [2]string{"[::ffff:192.168.1.5]:1", "[::ffff:192.168.1.10]:7465"}, false},
 		{"a route that changed after the probe", [2]string{"100.64.0.9:1", "100.70.0.1:7465"}, [2]string{"192.168.1.5:1", "100.70.0.1:7465"}, false},
 		{"loopback to a Tailscale address", [2]string{"127.0.0.1:1", "100.70.0.1:7465"}, [2]string{"127.0.0.1:1", "100.70.0.1:7465"}, false},
+		{"a 4via6 address, which its subnet router forwards as IPv4", [2]string{"[fd7a:115c:a1e0::9]:1", "[fd7a:115c:a1e0:b1a:0:7:a01:110]:7465"}, [2]string{"[fd7a:115c:a1e0::9]:1", "[fd7a:115c:a1e0:b1a:0:7:a01:110]:7465"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -225,6 +226,7 @@ func TestTailnetServesOnlyLoopbackOrTailscalePeers(t *testing.T) {
 		{"100.64.0.1:7465", "100.70.0.2:40000", true},
 		{"100.64.0.1:7465", "192.168.1.5:40000", false},
 		{"100.64.0.1:7465", "127.0.0.1:40000", false},
+		{"[fd7a:115c:a1e0::1]:7465", "[fd7a:115c:a1e0:b1a:0:7:a01:110]:40000", false},
 	}
 	for _, tc := range cases {
 		near, far := net.Pipe()

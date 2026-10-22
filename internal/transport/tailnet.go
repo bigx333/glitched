@@ -30,28 +30,22 @@ func (t Tailnet) header() http.Header {
 // ErrRefused is a call's error when the server refused the client's token.
 var ErrRefused = errors.New("transport: the server refused the token")
 
-var tailscale = []netip.Prefix{
-	netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("fd7a:115c:a1e0::/48"),
-}
+var (
+	tailscale4 = netip.MustParsePrefix("100.64.0.0/10")
+	tailscale6 = netip.MustParsePrefix("fd7a:115c:a1e0::/48")
+	// A subnet router forwards a 4via6 address to its LAN as plain IPv4.
+	via6 = netip.MustParsePrefix("fd7a:115c:a1e0:b1a::/64")
+)
 
 // onTailnet reports whether ip is loopback or a Tailscale address. Those are
 // the only places a token may cross, because nothing but WireGuard encrypts
 // it.
 func onTailnet(ip netip.Addr) bool {
 	ip = ip.Unmap()
-	if ip.IsLoopback() {
-		return true
-	}
-	for _, p := range tailscale {
-		if p.Contains(ip) {
-			return true
-		}
-	}
-	return false
+	return ip.IsLoopback() || tailscale4.Contains(ip) || tailscale6.Contains(ip) && !via6.Contains(ip)
 }
 
-var errNotTailnet = errors.New("is not a loopback or Tailscale address (100.64.0.0/10, fd7a:115c:a1e0::/48), the only places a token may cross without TLS")
+var errNotTailnet = errors.New("is not a loopback or Tailscale address (100.64.0.0/10, or fd7a:115c:a1e0::/48 outside 4via6's fd7a:115c:a1e0:b1a::/64), the only places a token may cross without TLS")
 
 func (t Tailnet) Listen(ctx context.Context) (net.Listener, error) {
 	host, _, err := net.SplitHostPort(t.Address)
