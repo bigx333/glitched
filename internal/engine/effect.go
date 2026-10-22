@@ -142,6 +142,10 @@ type SteerFailed struct {
 // InterruptSent: the agent took the run's interrupt.
 type InterruptSent struct{ Run api.ID }
 
+// InterruptLost: the interrupt failed or timed out, so nobody knows whether
+// the agent stopped.
+type InterruptLost struct{ Run api.ID }
+
 // SteerLost: the engine died while steering, so nobody knows if it arrived.
 type SteerLost struct{ Message api.ID }
 
@@ -163,4 +167,5 @@ func (Steered) observed()        {}
 func (SteerFailed) observed()    {}
 func (SteerLost) observed()      {}
 func (InterruptSent) observed()  {}
+func (InterruptLost) observed()  {}
 func (Reconciled) observed()     {}

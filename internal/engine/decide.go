@@ -297,6 +297,10 @@ func (d *decision) observe(o Observation) error {
 		if isLive(o.Run) && live.State == RunStopping {
 			return d.emit(api.TurnSignalled{Run: o.Run})
 		}
+	case InterruptLost:
+		if isLive(o.Run) && live.State == RunStopping {
+			return d.emit(api.TurnUncertain{Run: o.Run})
+		}
 	case Reconciled:
 		if !isLive(o.Run) {
 			return nil

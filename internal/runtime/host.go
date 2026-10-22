@@ -44,10 +44,11 @@ type Host struct {
 	wg        sync.WaitGroup
 	wake      chan struct{}
 
-	mu   sync.Mutex
-	busy map[api.ID]bool     // threads with an effect in flight
-	runs map[api.ID]*liveRun // by run
-	subs map[*stream]struct{}
+	mu      sync.Mutex
+	busy    map[api.ID]bool            // threads with an effect in flight
+	runs    map[api.ID]*liveRun        // by run
+	closing map[api.ID]<-chan struct{} // by thread; closed when its newest agent has closed
+	subs    map[*stream]struct{}
 }
 
 // liveRun is a run this host drives. Cancelling ctx ends the run's provider
@@ -69,10 +70,11 @@ func New(ctx context.Context, st *store.Store, ad provider.Adapter) (*Host, erro
 	name, _ := os.Hostname()
 	h := &Host{
 		store: st, adapter: ad, name: name,
-		wake: make(chan struct{}, 1),
-		busy: map[api.ID]bool{},
-		runs: map[api.ID]*liveRun{},
-		subs: map[*stream]struct{}{},
+		wake:    make(chan struct{}, 1),
+		busy:    map[api.ID]bool{},
+		runs:    map[api.ID]*liveRun{},
+		closing: map[api.ID]<-chan struct{}{},
+		subs:    map[*stream]struct{}{},
 	}
 	h.ctx, h.cancel = context.WithCancel(context.Background())
 	h.drain, h.stopDrain = context.WithCancel(context.Background())
@@ -361,14 +363,16 @@ func (h *Host) call(e store.Effect, lr *liveRun) (o engine.Observation, ok bool)
 		}
 
 	case engine.InterruptTurn:
-		if err = h.act(b.Run, provider.Interrupt{}); err == nil {
+		switch err = h.act(b.Run, provider.Interrupt{}); {
+		case err == nil:
 			// The agent reports its own end through the pump.
 			return engine.InterruptSent{Run: b.Run}, true
-		}
-		h.forget(b.Run)
-		o = engine.Ended{Run: b.Run, Outcome: api.OutcomeInterrupted}
-		if !errors.Is(err, errNoAgent) {
-			o = engine.Ended{Run: b.Run, Outcome: api.OutcomeInterrupted, Error: err.Error()}
+		case errors.Is(err, errNoAgent):
+			// No agent ran the turn on this host, so there is nothing to stop.
+			o = engine.Ended{Run: b.Run, Outcome: api.OutcomeInterrupted}
+		default:
+			slog.Warn("runtime: interrupt failed", "run", b.Run, "err", err)
+			o = engine.InterruptLost{Run: b.Run}
 		}
 
 	case engine.DeliverAnswer:
@@ -414,9 +418,20 @@ func retry(ctx context.Context, what string, fn func(context.Context) error) boo
 	}
 }
 
-// open starts the run's agent. A start that fails while the host is up
-// closes what it opened.
+// open starts the run's agent once the thread's last agent is closed, so two
+// never work in one thread. A start that fails while the host is up closes
+// what it opened.
 func (h *Host) open(ctx context.Context, thread api.ID, b engine.StartTurn) (provider.Agent, error) {
+	h.mu.Lock()
+	closed := h.closing[thread]
+	h.mu.Unlock()
+	if closed != nil {
+		select {
+		case <-closed:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	ag, err := h.adapter.Open(ctx, provider.SessionSpec{
@@ -463,8 +478,12 @@ func (h *Host) track(run api.ID, ag provider.Agent) *liveRun {
 }
 
 func (h *Host) attach(thread api.ID, lr *liveRun) {
+	closed := make(chan struct{})
+	h.mu.Lock()
+	h.closing[thread] = closed
+	h.mu.Unlock()
 	h.wg.Add(1)
-	go h.pump(thread, lr)
+	go h.pump(thread, lr, closed)
 }
 
 // forget stops driving the run. Its pump, if any, closes the agent.

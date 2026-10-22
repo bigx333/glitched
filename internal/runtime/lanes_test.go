@@ -2,6 +2,8 @@ package runtime_test
 
 import (
 	"context"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -166,4 +168,76 @@ func TestStopCancelsSteersAndAnswersInFlight(t *testing.T) {
 		t.Fatalf("run ended %v, want interrupted", got)
 	}
 	assertReplay(t, n.st)
+}
+
+// slowCloser records opens and closes in order; its agents take a while to
+// close, like a CLI that is slow to exit.
+type slowCloser struct {
+	*gated
+	mu  sync.Mutex
+	log []string
+}
+
+func (a *slowCloser) note(s string) {
+	a.mu.Lock()
+	a.log = append(a.log, s)
+	a.mu.Unlock()
+}
+
+func (a *slowCloser) at(s string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Index(a.log, s)
+}
+
+func (a *slowCloser) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	ag, err := a.gated.Open(ctx, spec)
+	a.note("open " + spec.Run.String())
+	return &slowClose{ag, a, spec.Run}, err
+}
+
+type slowClose struct {
+	provider.Agent
+	a   *slowCloser
+	run api.ID
+}
+
+func (s *slowClose) Close(ctx context.Context) error {
+	time.Sleep(200 * time.Millisecond)
+	s.a.note("closed " + s.run.String())
+	return s.Agent.Close(ctx)
+}
+
+func TestAnInterruptThatTimesOutLeavesTheRunUncertain(t *testing.T) {
+	t.Cleanup(runtime.SetCallTimeout(100 * time.Millisecond))
+	ad := &slowCloser{gated: newGated(fake.Turn(true))}
+	n := start(t, dbPath(t), ad)
+	thread := newThread(t, n.h)
+	first, second := api.NewID(), api.NewID()
+	if _, err := n.h.Submit(ctx, api.Command{ID: first, Target: thread, Body: dispatch("first", api.StartNow)}); err != nil {
+		t.Fatal(err)
+	}
+	until(t, n.h, thread, "approval", waiting)
+	never := make(chan struct{})
+	ad.setGate(func(_ api.ID, a provider.Action) <-chan struct{} {
+		if _, ok := a.(provider.Interrupt); ok {
+			return never
+		}
+		return nil
+	})
+	if _, err := n.h.Submit(ctx, api.Command{ID: second, Target: thread, Body: dispatch("second", api.AfterActive)}); err != nil {
+		t.Fatal(err)
+	}
+	submit(t, n.h, thread, api.TurnInterrupt{})
+	until(t, n.h, thread, "the unanswered interrupt leaves the run uncertain", uncertain)
+	if got := outcomes(t, n.h, thread); len(got) != 0 {
+		t.Fatalf("an interrupt that timed out ended the run %v, but nobody knows the agent stopped", got)
+	}
+
+	ad.setGate(nil)
+	submit(t, n.h, thread, api.TurnInterrupt{})
+	until(t, n.h, thread, "the next run asks", func(th api.Thread) bool { return waiting(th) && th.Requests[0].Run == second })
+	if closed, opened := ad.at("closed "+first.String()), ad.at("open "+second.String()); closed < 0 || opened < closed {
+		t.Fatalf("the next agent opened before the last one closed: %v", ad.log)
+	}
 }
