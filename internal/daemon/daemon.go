@@ -19,6 +19,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/hub"
 	"glitched/internal/provider"
+	"glitched/internal/provider/fake"
 	"glitched/internal/runtime"
 	"glitched/internal/store"
 	"glitched/internal/transport"
@@ -41,6 +42,13 @@ type Config struct {
 	Listen  []string
 	Epoch   uint64 // this host's epoch at the hub
 	Adapter provider.Adapter
+}
+
+// Defaults is how an engine with state in dir serves unless told otherwise.
+// `glitched serve` and the GUI's embedded engine both start from it: the
+// hub fences an epoch below the last one it saw, so they must agree on it.
+func Defaults(dir string) Config {
+	return Config{Dir: dir, Hub: true, Epoch: 1, Adapter: fake.New(fake.Turn(true))}
 }
 
 // A Daemon is a started engine. It serves until Start's ctx ends, Close is

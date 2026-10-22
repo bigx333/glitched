@@ -16,7 +16,6 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
-	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
 )
 
@@ -414,7 +413,7 @@ func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 			return c, nil
 		}
 		c.Close()
-		d, err := daemon.Start(ctx, daemon.Config{Dir: l.dir, Hub: true, Adapter: fake.New(fake.Turn(true))})
+		d, err := daemon.Start(ctx, daemon.Defaults(l.dir))
 		if errors.Is(err, daemon.ErrLocked) {
 			continue
 		}

@@ -19,7 +19,6 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
-	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
 )
 
@@ -113,16 +112,16 @@ func (l *listFlag) Set(v string) error {
 func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	dir := dirFlag(fs)
-	asHub := fs.Bool("hub", true, "run the hub role in this process, unless -hub-dir or -hub-server names another")
+	cfg := daemon.Defaults(*dir)
+	fs.BoolVar(&cfg.Hub, "hub", cfg.Hub, "run the hub role in this process, unless -hub-dir or -hub-server names another")
 	hubDir := fs.String("hub-dir", "", "upload to the hub of the engine with this state directory, on this machine")
 	hubServer := fs.String("hub-server", "", "upload to the hub of the engine at this tailnet address")
 	hubToken := fs.String("hub-token", "", "the token -hub-server paired for this engine")
-	epoch := fs.Uint64("epoch", 1, "this host's epoch at the hub")
-	var listen listFlag
-	fs.Var(&listen, "listen", "also serve clients with a token on this loopback or Tailscale address; repeatable")
+	fs.Uint64Var(&cfg.Epoch, "epoch", cfg.Epoch, "this host's epoch at the hub")
+	fs.Var((*listFlag)(&cfg.Listen), "listen", "also serve clients with a token on this loopback or Tailscale address; repeatable")
 	fs.Parse(args)
 
-	var hubAt transport.Transport
+	cfg.Dir = *dir
 	switch {
 	case *hubDir != "" && *hubServer != "":
 		return usageError("serve: -hub-dir and -hub-server both name the hub; give one")
@@ -133,18 +132,12 @@ func serve(ctx context.Context, args []string) error {
 	case *hubServer != "" && *hubToken == "":
 		return usageError("serve: -hub-server needs -hub-token, which glitched pair printed on that engine")
 	case *hubServer != "":
-		hubAt = transport.Tailnet{Address: *hubServer, Token: *hubToken}
+		cfg.HubAt = transport.Tailnet{Address: *hubServer, Token: *hubToken}
 	case *hubDir != "":
-		hubAt = daemon.Socket(*hubDir)
+		cfg.HubAt = daemon.Socket(*hubDir)
 	}
-	d, err := daemon.Start(ctx, daemon.Config{
-		Dir:     *dir,
-		Hub:     *asHub && hubAt == nil,
-		HubAt:   hubAt,
-		Listen:  listen,
-		Epoch:   *epoch,
-		Adapter: fake.New(fake.Turn(true)),
-	})
+	cfg.Hub = cfg.Hub && cfg.HubAt == nil
+	d, err := daemon.Start(ctx, cfg)
 	if err != nil {
 		return err
 	}

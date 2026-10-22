@@ -14,7 +14,6 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
-	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
 )
 
@@ -75,9 +74,11 @@ func stateDir(t *testing.T) string {
 	return dir
 }
 
-func engine(t *testing.T, cfg daemon.Config) *daemon.Daemon {
+// engine serves dir as `glitched serve -listen` would.
+func engine(t *testing.T, dir string, listen ...string) *daemon.Daemon {
 	t.Helper()
-	cfg.Hub, cfg.Adapter = true, fake.New(fake.Turn(true))
+	cfg := daemon.Defaults(dir)
+	cfg.Listen = listen
 	d, err := daemon.Start(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -168,12 +169,12 @@ func TestStartEmbedsAnEngineWhenNoneAnswers(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	// Close released the lock.
-	engine(t, daemon.Config{Dir: dir})
+	engine(t, dir)
 }
 
 func TestStartAttachesToTheEngineThatAnswers(t *testing.T) {
 	dir := stateDir(t)
-	d := engine(t, daemon.Config{Dir: dir})
+	d := engine(t, dir)
 	m, g := manager(t, dir)
 	env := m.Envs()[0]
 	online(t, g, env)
@@ -198,6 +199,54 @@ func TestStartAttachesToTheEngineThatAnswers(t *testing.T) {
 	defer cli.Close()
 	if _, err := cli.Info(timeout(t)); err != nil {
 		t.Fatalf("the engine the manager attached to stopped with it: %v", err)
+	}
+}
+
+// The GUI embeds an engine where `glitched serve` ran before, so the hub
+// already holds this host's epoch and must still take the embedded log.
+func TestAnEmbeddedEngineUploadsToTheHubServeUsed(t *testing.T) {
+	dir := stateDir(t)
+	served := engine(t, dir)
+	if _, err := served.Endpoint().Submit(timeout(t), api.Command{ID: api.NewID(), Target: api.NewID(), Body: api.ThreadCreate{Workspace: "/w", Title: "served", Model: fakeModel}}); err != nil {
+		t.Fatal(err)
+	}
+	waitUploaded(t, dir)
+	served.Close()
+
+	m, g := manager(t, dir)
+	env := m.Envs()[0]
+	online(t, g, env)
+	id := m.Create(env, "/w", "embedded", fakeModel, api.AccessAsk)
+	g.until(t, "the create confirmed", func() bool { th := env.Threads[id]; return th.known && len(th.Pending) == 0 })
+	waitUploaded(t, dir)
+}
+
+// waitUploaded returns once the hub under dir holds the whole log of the
+// engine serving dir.
+func waitUploaded(t *testing.T, dir string) {
+	t.Helper()
+	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
+	defer ep.Close()
+	hc := transport.NewHubClient(daemon.Socket(dir), api.ID{})
+	defer hc.Close()
+	info, err := ep.Info(timeout(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := ep.Read(timeout(t), api.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		n, err := hc.Acked(timeout(t), info.Log)
+		if err == nil && n >= snap.Cursor.Seq {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the hub holds %d of the log's %d events (%v)", n, snap.Cursor.Seq, err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

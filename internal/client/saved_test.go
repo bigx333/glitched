@@ -16,7 +16,7 @@ func TestRemoteServersShowTheirThreadsAndComeBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := engine(t, daemon.Config{Dir: rdir, Listen: []string{"127.0.0.1:0"}})
+	d := engine(t, rdir, "127.0.0.1:0")
 	addr := d.Addrs()[0].String()
 	there := api.NewID()
 	create := api.ThreadCreate{Workspace: "/srv", Title: "on the box", Model: fakeModel}
@@ -58,7 +58,7 @@ func TestRemoteServersShowTheirThreadsAndComeBack(t *testing.T) {
 		_, ok := box.Status.(Offline)
 		return ok
 	}, func() string { return describeStatus(box.Status) })
-	engine(t, daemon.Config{Dir: rdir, Listen: []string{addr}})
+	engine(t, rdir, addr)
 	online(t, g, box)
 	if box.Threads[there] == nil || box.Threads[here] == nil {
 		t.Fatalf("after the box came back it shows %d threads, want both", len(box.Threads))
