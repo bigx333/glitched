@@ -33,17 +33,21 @@ There are two implementations, one for an installed Tailscale and one for the em
 
 This step assumes Tailscale is installed and up on both machines. The engine listens on the machine's tailnet address and calls no Tailscale API yet.
 
-- `glitched serve -listen <addr>` adds a TCP listener beside the unix socket, and may be repeated. The address must be loopback, in `100.64.0.0/10` or in `fd7a:115c:a1e0::/48`. The engine refuses any other, `0.0.0.0` included, because only WireGuard encrypts the traffic. A client also refuses a server name that resolves outside those ranges before it sends a token.
+- `glitched serve -listen <addr>` adds a TCP listener beside the unix socket, and may be repeated. The address must be loopback, in `100.64.0.0/10` or in `fd7a:115c:a1e0::/48`. The engine refuses any other at start, `0.0.0.0` included, because only WireGuard encrypts the traffic. An address in those ranges that the machine doesn't hold yet, as at boot before Tailscale is up, doesn't stop the engine. That listener retries in the background, backing off to 30 seconds, until it binds.
+- A client refuses a server name that resolves outside those ranges before it sends a token. In range is not enough. On Linux, Tailscale routes only its current peers, and any other 100.x address leaves by the default route in cleartext. So the client also requires both ends of the connection to be loopback, or both Tailscale addresses. It checks the route with a UDP connect, which sends nothing, before it dials, and checks the connection's own addresses after. A server applies the same rule to each connection it accepts.
 - Every TCP socket presents a pairing token as `Authorization: Bearer <token>` on the WebSocket upgrade. A missing, wrong or revoked token gets 401, and the client reports that the server refused the token. The unix socket needs no token. Its mode is 0600, in a 0700 directory.
 - `glitched pair -name <label>` mints a random 32-byte token and prints it once with a connect line. `<dir>/tokens.json` keeps only the token's SHA-256, its label and when it was made, with mode 0600. `pair -list` lists the labels, and `pair -revoke <label>` removes one.
-- The engine rereads `tokens.json` on every upgrade and once a second. A revoke refuses new sockets at once and closes the token's live sockets within a second, without a restart.
-- `run`, `threads` and `replica` reach a remote engine with `-server <addr> -token <token>`. A host that doesn't run the hub uploads to one with `serve -hub=false -hub-server <addr> -hub-token <token>`.
-- `internal/daemon` holds the startup that `serve` runs and the GUI will embed. `daemon.Start` takes the lock, opens the store, the runtime and the hub, and binds every socket.
+- The engine rereads `tokens.json` on every upgrade and once a second. One lock spans each read and the admission it decides, so no upgrade that begins after a revoke returns gets in with the revoked token. The revoke also closes the token's live sockets within a second, without a restart. An unreadable `tokens.json` admits no token and is logged once per distinct error.
+- A server closes a connection idle for 10 seconds between requests, so a peer refused with 401 can't hold it open. The engine logs a refused peer at most once a minute.
+- `run`, `threads` and `replica` reach a remote engine with `-server <addr> -token <token>`. A host that doesn't run the hub uploads to one with `serve -hub=false -hub-server <addr> -hub-token <token>`. A token without its server, a server without its token, or `-hub` with another hub named exits 2 before anything dials.
+- When the hub was unreachable at start, the startup check can't see a restore from backup. If the uploader later finds that the hub holds more of the log than the database, the engine stops with that error and says to restart. `serve` exits 1, and the restart's startup check starts a new log.
+- `internal/daemon` holds the startup that `serve` runs and the GUI will embed. `daemon.Start` takes the lock, opens the store, the runtime and the hub, and binds every socket whose address the machine holds.
 
 Deferred:
 
 - The embedded `tsnet` node for machines without Tailscale.
 - Checking `WhoIs` against an enrolled machine key. Until then any tailnet peer with a token gets in. `100.64.0.0/10` is also carrier-grade NAT space, so on a machine that holds such an address without Tailscale, the token is the only gate and nothing encrypts it.
+- Asking Tailscale's LocalAPI whether an address is a peer in the netmap. The range check and the source-address check are not proof of that. On a machine whose ISP gives it a carrier-grade NAT address, a connection from that address to another 100.x address passes both and leaves unencrypted.
 - Scoped grants. A token reaches the whole engine, the hub included.
 - Passing the token some other way than argv.
 
