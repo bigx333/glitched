@@ -1,5 +1,3 @@
-// Package transport carries the Endpoint and hub calls as JSON over HTTP, on
-// whatever network a Transport provides.
 package transport
 
 import (

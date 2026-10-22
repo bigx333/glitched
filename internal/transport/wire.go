@@ -1,15 +1,46 @@
+// Package transport carries the Endpoint and hub calls over one WebSocket per
+// client, on whatever network a Transport provides.
+//
+// A client dials GET /ws and sends text frames, one JSON object each:
+//
+//	{"id":1,"method":"submit","params":{...}}  start a call or a stream
+//	{"id":1,"cancel":true}                    abandon a call, or end a stream
+//
+// The server answers with frames carrying the request's id:
+//
+//	{"id":1,"result":{...}}  a call's answer
+//	{"id":1,"open":true}     a stream is open; its items follow
+//	{"id":1,"item":{...}}    one stream item
+//	{"id":1,"error":{...}}   why a call or an open failed, or why a stream ended
+//
+// Ids are the client's and unique per socket. Calls and streams interleave
+// freely. A stream ends only with an error, because nothing upstream ends
+// cleanly. Each side pings every 15s and drops a socket whose pong is 10s late.
 package transport
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 
 	"glitched/internal/api"
 	"glitched/internal/hub"
 )
+
+type request struct {
+	ID     uint64          `json:"id"`
+	Method string          `json:"method,omitempty"`
+	Params json.RawMessage `json:"params,omitempty"`
+	Cancel bool            `json:"cancel,omitempty"`
+}
+
+type response struct {
+	ID     uint64          `json:"id"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Open   bool            `json:"open,omitempty"`
+	Item   json.RawMessage `json:"item,omitempty"`
+	Error  *wireError      `json:"error,omitempty"`
+}
 
 // wireError is an error as it crosses the wire. Code names the error kind a
 // caller branches on; the other fields carry the typed errors' values.
@@ -23,48 +54,47 @@ type wireError struct {
 }
 
 var sentinels = []struct {
-	code   string
-	err    error
-	status int
+	code string
+	err  error
 }{
-	{"conflict", api.ErrConflict, http.StatusConflict},
-	{"revision", api.ErrRevision, http.StatusConflict},
-	{"expired", api.ErrExpired, http.StatusGone},
-	{"not_found", api.ErrNotFound, http.StatusNotFound},
-	{"stale_epoch", api.ErrStaleEpoch, http.StatusConflict},
-	{"already_answered", api.ErrAlreadyAnswered, http.StatusConflict},
-	{"overflow", api.ErrOverflow, http.StatusServiceUnavailable},
-	{"foreign_log", hub.ErrForeignLog, http.StatusConflict},
-	{"rewound", hub.ErrRewound, http.StatusConflict},
+	{"conflict", api.ErrConflict},
+	{"revision", api.ErrRevision},
+	{"expired", api.ErrExpired},
+	{"not_found", api.ErrNotFound},
+	{"stale_epoch", api.ErrStaleEpoch},
+	{"already_answered", api.ErrAlreadyAnswered},
+	{"overflow", api.ErrOverflow},
+	{"foreign_log", hub.ErrForeignLog},
+	{"rewound", hub.ErrRewound},
 }
 
-func toWire(err error) (wireError, int) {
-	we := wireError{Message: err.Error()}
+func toWire(err error) *wireError {
+	we := &wireError{Message: err.Error()}
 	var moved *api.MovedError
 	var rejected *api.RejectedError
 	var gap *hub.GapError
 	switch {
 	case errors.As(err, &moved):
 		we.Code, we.To, we.Epoch = "moved", moved.To, moved.Epoch
-		return we, http.StatusMisdirectedRequest
+		return we
 	case errors.As(err, &rejected):
 		we.Code, we.Reason = "rejected", rejected.Reason
-		return we, http.StatusUnprocessableEntity
+		return we
 	case errors.As(err, &gap):
 		we.Code, we.Acked = "gap", gap.Acked
-		return we, http.StatusConflict
+		return we
 	}
 	for _, s := range sentinels {
 		if errors.Is(err, s.err) {
 			we.Code = s.code
-			return we, s.status
+			return we
 		}
 	}
 	we.Code = "internal"
-	return we, http.StatusInternalServerError
+	return we
 }
 
-func (we wireError) err() error {
+func (we *wireError) err() error {
 	switch we.Code {
 	case "moved":
 		return &api.MovedError{To: we.To, Epoch: we.Epoch}
@@ -79,30 +109,4 @@ func (we wireError) err() error {
 		}
 	}
 	return fmt.Errorf("transport: remote %s: %s", we.Code, we.Message)
-}
-
-func writeError(w http.ResponseWriter, err error) {
-	we, status := toWire(err)
-	writeJSON(w, status, we)
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
-}
-
-func readError(resp *http.Response) error {
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	var we wireError
-	if json.Unmarshal(body, &we) != nil || we.Code == "" {
-		return fmt.Errorf("transport: %s: %s", resp.Status, body)
-	}
-	return we.err()
-}
-
-// frame is one NDJSON line of a stream: an item, or the error that ended it.
-type frame[T any] struct {
-	Item  *T         `json:"item,omitempty"`
-	Error *wireError `json:"error,omitempty"`
 }
