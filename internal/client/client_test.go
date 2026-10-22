@@ -265,8 +265,8 @@ func TestACommandWaitsForTheNextEngine(t *testing.T) {
 	g.until(t, "offline", func() bool { _, ok := env.Status.(Offline); return ok })
 	msg := m.Send(env, id, "hello", api.AfterActive)
 	g.until(t, "the message failed", func() bool { p := env.Threads[id].Pending; return len(p) == 1 && p[0].Err != nil })
-	if err := env.Threads[id].Pending[0].Err; !errors.Is(err, errNoEngine) {
-		t.Fatalf("with no engine the message failed with %v, want %v", err, errNoEngine)
+	if p := env.Threads[id].Pending[0]; !errors.Is(p.Err, errNoEngine) || p.Terminal() {
+		t.Fatalf("with no engine the message failed with %v, want %v and worth a retry", p.Err, errNoEngine)
 	}
 
 	online(t, g, env)
@@ -350,6 +350,63 @@ func TestATurnRunsFromCreateThroughAnApproval(t *testing.T) {
 		t.Fatalf("right after Retry the row is %+v, want it in flight again", p)
 	}
 	g.until(t, "the retry to fail the same way", failed)
+	if !env.Threads[id].Pending[0].Terminal() {
+		t.Fatal("an answer to an unknown request can succeed on a retry, want it terminal")
+	}
+	m.Dismiss(env, id, answer)
+	if p := env.Threads[id].Pending; len(p) != 0 {
+		t.Fatalf("after Dismiss the rows are %s, want none", describePending(p))
+	}
+}
+
+// Interrupting a run voids the request it asked. An answer sent after that
+// is refused for good, and the GUI dismisses the row instead of retrying.
+func TestAnAnswerTooLateIsDismissed(t *testing.T) {
+	m, g := manager(t, stateDir(t))
+	env := m.Envs()[0]
+	online(t, g, env)
+	id := m.Create(env, "/work", "hello", fakeModel, api.AccessAsk)
+	m.OpenThread(env, id)
+	m.Send(env, id, "hello", api.AfterActive)
+	var req *RequestEntry
+	g.until(t, "the approval", func() bool {
+		for _, e := range env.Threads[id].Transcript.Entries {
+			if r, ok := e.(*RequestEntry); ok && r.State == api.RequestPending {
+				req = r
+			}
+		}
+		return req != nil
+	})
+	m.Interrupt(env, id)
+	g.until(t, "the run over", func() bool {
+		th := env.Threads[id]
+		return th.View.Run == api.RunIdle && th.View.LastTurn != nil && len(th.Pending) == 0
+	})
+	answer := m.Respond(env, id, req.Request, true)
+	g.until(t, "the answer refused", func() bool { p := env.Threads[id].Pending; return len(p) == 1 && p[0].Err != nil })
+	if p := env.Threads[id].Pending[0]; !p.Terminal() {
+		t.Fatalf("the answer failed with %v and can be retried, want it terminal", p.Err)
+	}
+	m.Dismiss(env, id, answer)
+	if p := env.Threads[id].Pending; len(p) != 0 {
+		t.Fatalf("after Dismiss the rows are %s, want none", describePending(p))
+	}
+}
+
+// A thread created before the engine answered fails to reach it. Dismissing
+// its create drops the thread, which no engine has.
+func TestDismissingAFailedCreateDropsItsThread(t *testing.T) {
+	m, _ := manager(t, stateDir(t))
+	env := m.Envs()[0]
+	id := m.Create(env, "/work", "never", fakeModel, api.AccessAsk)
+	p := env.Threads[id].Pending
+	if len(p) != 1 || p[0].Err == nil || p[0].Terminal() {
+		t.Fatalf("with no engine the create is %s, want failed and worth a retry", describePending(p))
+	}
+	m.Dismiss(env, id, p[0].Command)
+	if env.Threads[id] != nil {
+		t.Fatal("the thread whose create was dismissed is still shown")
+	}
 }
 
 func describePending(ps []Pending) string {

@@ -13,12 +13,27 @@ import (
 // Pending is a command sent from here that hasn't landed yet. A message
 // stays pending until its thread's open transcript shows it, so the row
 // never blinks out before the entry replaces it. Err is why the submit
-// failed; Retry sends the command again under the same ID.
+// failed. A failed row stays until Retry sends the command again under the
+// same ID, or Dismiss drops it.
 type Pending struct {
 	Command api.ID
 	Body    api.Intent
 	Err     error
 	sent    bool // committed; waiting for the transcript to show it
+}
+
+// Terminal is true when sending the command again can only fail the same
+// way: the engine refused it, or the request or thread it acts on is gone.
+// Offer Dismiss for it, not Retry.
+func (p Pending) Terminal() bool {
+	if rejected := (*api.RejectedError)(nil); errors.As(p.Err, &rejected) {
+		return true
+	}
+	switch p.Body.(type) {
+	case api.RequestRespond, api.TurnInterrupt:
+		return errors.Is(p.Err, api.ErrNotFound)
+	}
+	return false
 }
 
 var errNoEngine = errors.New("client: not connected to the engine")
@@ -77,6 +92,24 @@ func (m *Manager) Retry(e *Env, thread, command api.ID) {
 	}
 	th.Pending[i].Err = nil
 	m.send(e, th, api.Command{ID: command, Target: thread, Body: th.Pending[i].Body})
+}
+
+// Dismiss drops a failed command's row. Dismissing a failed create also
+// drops its thread, unless the engine has shown it after all.
+func (m *Manager) Dismiss(e *Env, thread, command api.ID) {
+	th := e.Threads[thread]
+	if th == nil {
+		return
+	}
+	i := slices.IndexFunc(th.Pending, func(p Pending) bool { return p.Command == command && p.Err != nil })
+	if i < 0 {
+		return
+	}
+	_, create := th.Pending[i].Body.(api.ThreadCreate)
+	th.Pending = slices.Delete(th.Pending, i, i+1)
+	if create && !th.known {
+		delete(e.Threads, thread)
+	}
 }
 
 func (m *Manager) submit(e *Env, thread api.ID, body api.Intent) api.ID {
