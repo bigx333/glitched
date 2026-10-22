@@ -1,6 +1,6 @@
 # Hosted hub cost
 
-> **Superseded 2026-10-22.** The hub now runs on the user's own host (`hub.md`), so it has no hosted cost. The VM pricing below is still a useful reference (`ephemeral-vms.md`).
+> **Superseded 2026-10-22.** The hub now runs on the user's own host (`hub.md`), so it has no hosted cost.
 
 Goal: offer the hub (`hub-on-cloudflare.md`) to users for free. This estimates the marginal Cloudflare cost per user per month. The model is `cost-model.py`, and the prices come from Cloudflare's pricing pages (read 2026-10-20). The usage figures are assumptions, not measurements.
 
@@ -50,14 +50,6 @@ These bound abuse, since the hub is also a relay.
 - An alert on any object awake for more than an hour.
 
 ## What can't be free
-
-**Ephemeral VMs.** Cloudflare Sandbox and Containers pricing is $0.00002 per vCPU-second (active CPU only), $0.0000025 per GiB-second of memory and $0.00000007 per GB-second of disk (memory and disk are billed for provisioned time).
-
-- A `standard-1` instance (1/2 vCPU, 4 GiB, 8 GB) at 10% CPU costs about $0.042 per hour.
-- 4 h/day comes to about $5 a month.
-- Two VMs at 10 h/day come to about $25 a month.
-
-Memory is most of that, and agents mostly wait on the API. VMs need to be paid by the user, either on their own Cloudflare account or as a paid tier.
 
 **Credentials.** The hub holds credentials it can read, so it can refresh rotating tokens (decided 2026-10-20). Sealing credentials to host keys was rejected because the hub could then never refresh. The hosted tier therefore carries the liability and mitigates it.
 

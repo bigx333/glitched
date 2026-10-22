@@ -49,5 +49,5 @@ Moving the hub deliberately to another host is the same mechanism without the fa
 
 1. `glitched hub` role over loopback. The host appends its log to the replica, fenced by `{host, epoch, seq}`. A client reads by cursor and gets live events over a WebSocket. Check: kill the host mid-upload, replay the upload, and find no gap or duplicate. An append with a stale epoch is refused.
 2. Serve the same thing over the tailnet (installed Tailscale or `tsnet`). Check: a second machine enrolls and uploads.
-3. Accounts with on-demand refresh and the host proxy (`account-pool.md`). Check: a run on a host with no local login works, and an account whose access token expired while the hub was offline is refreshed when it starts.
+3. Accounts with hub refresh and the host proxy (`account-pool.md`). Check: a run on a host with no local login works, and an account whose access token expired while the hub was offline is refreshed when it starts.
 4. Placement and handoff through the location record.

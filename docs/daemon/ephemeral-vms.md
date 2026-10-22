@@ -4,25 +4,13 @@ Put off on 2026-10-22. These are findings so far, not a design. The VM lifecycle
 
 ## Providers
 
-Rates are as each provider published them in 2026 (from comparisons on Fly.io and Northflank, and MarkTechPost's August 2026 tests). Check them again before choosing.
-
-| Provider | CPU | Memory | Billed on | Minimum |
-|---|---|---|---|---|
-| E2B | $0.050/vCPU-hr | $0.016/GiB-hr | reserved, whole run | Hobby $0 + $100 credit; Pro $150/mo |
-| Daytona | $0.050/vCPU-hr | $0.016/GiB-hr | reserved; a stopped sandbox pays for disk only | none, $200 credit |
-| Modal | ~$0.071/vCPU-hr | $0.024/GiB-hr | higher of requested and used | $30/mo credit; Team $250/mo |
-| Cloudflare Sandbox | $0.072/vCPU-hr, active CPU only | $0.009/GiB-hr | memory and disk while running | Workers Paid $5/mo |
-| Vercel Sandbox | $0.128/vCPU-hr, active CPU only | $0.021/GB-hr | active CPU only | Pro $20 credit |
-| Fly Sprites | $0.0385/CPU-hr used | $0.022/GB-hr used | usage; pauses ~30 s after activity stops | none |
-| Fly Machines | from $0.0093/hr (shared-1x, 1 GB) | included | per second | none |
-
-Agents mostly wait on the model, so billing on active CPU or pausing when idle fits better than paying for reserved capacity. E2B is Apache-2.0 and can be self-hosted, but needs KVM. Daytona's open-source repo is archived.
+Candidates are E2B, Daytona, Modal, Cloudflare Sandbox, Vercel Sandbox, Fly Sprites and Fly Machines. Pricing is out of scope for now. E2B is Apache-2.0 and can be self-hosted, but needs KVM. Daytona's open-source repo is archived.
 
 ## How a VM reaches the tailnet
 
 tsnet runs in userspace, so a VM only needs outbound HTTPS. There are four options:
 
-| Option | Tailscale limits | What the VM can reach | Cost to us |
+| Option | Tailscale limits | What the VM can reach | What it needs |
 |---|---|---|---|
 | Tagged ephemeral key | 1,000 min/mo; more than 4 h counts as a tagged resource (50 max) | limited by access rules on the tag | none |
 | Untagged ephemeral key, user-owned | probably a free user device (inferred from the FAQ) | everything the user can reach; access rules can't target it alone | a user API token (90 days at most), since OAuth-minted keys are probably tag-only (unverified) |
