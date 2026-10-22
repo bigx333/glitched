@@ -125,7 +125,7 @@ func serve(ctx context.Context, args []string) error {
 	switch {
 	case *hubDir != "" && *hubServer != "":
 		return usageError("serve: -hub-dir and -hub-server both name the hub; give one")
-	case given(fs)["hub"] && *asHub && (*hubDir != "" || *hubServer != ""):
+	case given(fs)["hub"] && cfg.Hub && (*hubDir != "" || *hubServer != ""):
 		return usageError("serve: -hub runs the hub in this engine, so -hub-dir or -hub-server can't name another")
 	case *hubToken != "" && *hubServer == "":
 		return usageError("serve: -hub-token goes with -hub-server")
