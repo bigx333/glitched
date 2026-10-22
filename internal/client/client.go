@@ -29,6 +29,7 @@ type Config struct {
 
 const (
 	probeTimeout   = 750 * time.Millisecond
+	probeInterval  = 50 * time.Millisecond
 	connectTimeout = 10 * time.Second
 	submitTimeout  = 10 * time.Second
 	minBackoff     = time.Second
@@ -412,8 +413,9 @@ func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 	case l.attached != nil:
 		return l.attached, nil
 	}
-	// An engine that took the lock after the probe answers the probe after.
-	for range 2 {
+	// An engine holds the lock while it starts, and answers once it serves.
+	deadline := time.Now().Add(connectTimeout)
+	for {
 		c := transport.NewEndpointClient(daemon.Socket(l.dir), api.ID{})
 		probe, cancel := context.WithTimeout(ctx, probeTimeout)
 		_, err := c.Info(probe)
@@ -424,16 +426,21 @@ func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 		}
 		c.Close()
 		d, err := daemon.Start(ctx, daemon.Defaults(l.dir))
-		if errors.Is(err, daemon.ErrLocked) {
-			continue
-		}
-		if err != nil {
+		switch {
+		case err == nil:
+			l.embedded = d
+			return d.Endpoint(), nil
+		case !errors.Is(err, daemon.ErrLocked):
 			return nil, err
+		case time.Now().After(deadline):
+			return nil, errors.New("client: another engine holds the lock under " + l.dir + " but does not answer its socket")
 		}
-		l.embedded = d
-		return d.Endpoint(), nil
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(probeInterval):
+		}
 	}
-	return nil, errors.New("client: another engine holds the lock under " + l.dir + " but does not answer its socket")
 }
 
 // failed drops an attached engine, so the next attempt probes again and

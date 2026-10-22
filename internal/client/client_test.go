@@ -172,6 +172,27 @@ func TestStartEmbedsAnEngineWhenNoneAnswers(t *testing.T) {
 	engine(t, dir)
 }
 
+// Two GUIs start on one Dir together. One embeds the engine; the other
+// waits for it to answer instead of showing the engine offline.
+func TestTwoGUIsStartTogether(t *testing.T) {
+	for range 5 {
+		dir := stateDir(t)
+		a, ga := manager(t, dir)
+		b, gb := manager(t, dir)
+		for _, g := range []struct {
+			*gui
+			env *Env
+		}{{ga, a.Envs()[0]}, {gb, b.Envs()[0]}} {
+			g.until(t, "online", func() bool {
+				if o, ok := g.env.Status.(Offline); ok {
+					t.Fatalf("offline on the way: %v", o.Err)
+				}
+				return g.env.Status == Status(Online{})
+			})
+		}
+	}
+}
+
 func TestStartAttachesToTheEngineThatAnswers(t *testing.T) {
 	dir := stateDir(t)
 	d := engine(t, dir)
