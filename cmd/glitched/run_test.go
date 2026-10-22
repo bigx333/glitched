@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -94,26 +93,15 @@ func runAsync(dir string, thread api.ID, mode string) <-chan error {
 
 func TestRunFollowsASteeredMessageIntoTheLiveRun(t *testing.T) {
 	dir, ep := engine(t, fake.New(fake.Turn(true)))
-	ctx := context.Background()
 	thread := newThread(t, ep)
-	if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: "first", Mode: api.StartNow}}); err != nil {
+	if _, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: "first", Mode: api.StartNow}}); err != nil {
 		t.Fatal(err)
 	}
+	// The run asks before the steering command subscribes, so the command
+	// must find the open request itself and answer it with -yes.
 	waitFor(t, ep, thread, "request.opened")
-	snap, err := ep.Read(ctx, api.Query{Thread: thread})
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := snap.Threads[0].Requests[0]
-
-	done := runAsync(dir, thread, "steer")
-	waitFor(t, ep, thread, "message.dispatched")
-	answer := api.RequestRespond{Request: req.ID, Generation: req.Generation, Answer: json.RawMessage(`{"allow":true}`)}
-	if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: answer}); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-done; err != nil {
-		t.Fatalf("run -mode steer: %v, want it to end with the run it was steered into", err)
+	if err := <-runAsync(dir, thread, "steer"); err != nil {
+		t.Fatalf("run -mode steer: %v, want it to answer and end with the run it was steered into", err)
 	}
 }
 
@@ -159,5 +147,35 @@ func TestRunEndsWhenItsMessageIsCancelled(t *testing.T) {
 	err := <-runAsync(dir, thread, "steer")
 	if err == nil || !strings.Contains(err.Error(), "cancelled") {
 		t.Fatalf("run -mode steer refused by the agent: %v, want the cancellation", err)
+	}
+}
+
+// steerTimesOut is the fake adapter whose agents never confirm a steer.
+type steerTimesOut struct{ *fake.Adapter }
+
+func (a steerTimesOut) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	g, err := a.Adapter.Open(ctx, spec)
+	return steerLost{g}, err
+}
+
+type steerLost struct{ provider.Agent }
+
+func (g steerLost) Do(ctx context.Context, act provider.Action) error {
+	if _, ok := act.(provider.Steer); ok {
+		return context.DeadlineExceeded
+	}
+	return g.Agent.Do(ctx, act)
+}
+
+func TestRunReportsASteerThatMayNotHaveArrived(t *testing.T) {
+	dir, ep := engine(t, steerTimesOut{fake.New(fake.Turn(true))})
+	thread := newThread(t, ep)
+	if _, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: "first", Mode: api.StartNow}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, ep, thread, "request.opened")
+	err := <-runAsync(dir, thread, "steer")
+	if err == nil || !strings.Contains(err.Error(), "may or may not") {
+		t.Fatalf("run -mode steer whose delivery is unknown: %v, want an error saying so", err)
 	}
 }

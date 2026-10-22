@@ -193,6 +193,26 @@ func run(ctx context.Context, args []string) error {
 	// the live run; the command streams whichever run carries it.
 	runID := msg
 	in := bufio.NewReader(os.Stdin)
+	asked := map[api.ID]bool{}
+	ask := func(r api.Request) error {
+		if r.Run != runID || asked[r.ID] {
+			return nil
+		}
+		asked[r.ID] = true
+		allow := *yes
+		if !allow {
+			fmt.Printf("\n  ? %s %s [y/N] ", r.Kind, r.Body)
+			line, _ := in.ReadString('\n')
+			allow = strings.HasPrefix(strings.ToLower(line), "y")
+		}
+		answer, _ := json.Marshal(map[string]bool{"allow": allow})
+		respond := api.RequestRespond{Request: r.ID, Generation: r.Generation, Answer: answer}
+		_, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: respond})
+		if errors.Is(err, api.ErrAlreadyAnswered) {
+			return nil
+		}
+		return err
+	}
 	for {
 		item, err := stream.Next(ctx)
 		if err != nil {
@@ -212,32 +232,41 @@ func run(ctx context.Context, args []string) error {
 				return nil
 			}
 		case api.MessageClaimed:
+			if b.Message != msg {
+				continue
+			}
+			runID = b.Run
+			// The run may have asked before this command subscribed.
+			snap, err := ep.Read(ctx, api.Query{Thread: thread})
+			if err != nil {
+				return err
+			}
+			for _, t := range snap.Threads {
+				for _, r := range t.Requests {
+					if err := ask(r); err != nil {
+						return err
+					}
+				}
+			}
+		case api.MessageUncertain:
 			if b.Message == msg {
-				runID = b.Run
+				return errors.New("the message may or may not have reached the agent")
 			}
 		case api.MessageCancelled:
 			if b.Message == msg {
 				return fmt.Errorf("the message was cancelled: %s", b.Reason)
 			}
 		case api.AssistantDelta:
-			fmt.Print(b.Text)
+			if b.Run == runID {
+				fmt.Print(b.Text)
+			}
 		case api.WorkItem:
-			if b.Status == api.WorkCompleted {
+			if b.Run == runID && b.Status == api.WorkCompleted {
 				fmt.Printf("\n  ✓ %s\n", b.Title)
 			}
 		case api.RequestOpened:
-			if b.Run != runID {
-				continue
-			}
-			allow := *yes
-			if !allow {
-				fmt.Printf("\n  ? %s %s [y/N] ", b.Kind, b.Body)
-				line, _ := in.ReadString('\n')
-				allow = strings.HasPrefix(strings.ToLower(line), "y")
-			}
-			answer, _ := json.Marshal(map[string]bool{"allow": allow})
-			respond := api.RequestRespond{Request: b.Request, Generation: b.Generation, Answer: answer}
-			if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: respond}); err != nil {
+			r := api.Request{ID: b.Request, Run: b.Run, Generation: b.Generation, Kind: b.Kind, Body: b.Body}
+			if err := ask(r); err != nil {
 				return err
 			}
 		case api.TurnEnded:
