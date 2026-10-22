@@ -461,6 +461,58 @@ func finishTurn(t *testing.T, m *Manager, g *gui, env *Env) api.ID {
 	return id
 }
 
+// fresh is the transcript the engine at ep holds for the thread, folded anew.
+func fresh(t *testing.T, ep api.Endpoint, thread api.ID) []string {
+	t.Helper()
+	snap, err := ep.Read(timeout(t), api.Query{Thread: thread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := fold(snap)
+	return lines(&tr)
+}
+
+// The second GUI on a Dir attaches to the engine the first embedded. When
+// the first quits, the second embeds one on the same state, and the thread
+// it has open carries on from the transcript it held.
+func TestTheSecondGUIOnADirCarriesOnWhenTheFirstQuits(t *testing.T) {
+	dir := stateDir(t)
+	a, ga := manager(t, dir)
+	online(t, ga, a.Envs()[0])
+	b, g := manager(t, dir)
+	env := b.Envs()[0]
+	online(t, g, env)
+	id := finishTurn(t, b, g, env)
+	host := env.ID
+
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	g.until(t, "offline", func() bool { _, ok := env.Status.(Offline); return ok })
+	online(t, g, env)
+	if env.ID != host {
+		t.Fatalf("after the first GUI quit the env is host %s, want %s on the same state", env.ID, host)
+	}
+	b.Send(env, id, "again", api.AfterActive)
+	var req *RequestEntry
+	g.until(t, "the second approval", func() bool {
+		req = nil
+		for _, e := range env.Threads[id].Transcript.Entries {
+			if r, ok := e.(*RequestEntry); ok && r.State == api.RequestPending {
+				req = r
+			}
+		}
+		return req != nil
+	})
+	b.Respond(env, id, req.Request, true)
+	cli := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
+	defer cli.Close()
+	g.until(t, "the second turn in the transcript as the engine holds it", func() bool {
+		th := env.Threads[id]
+		return th.View.Run == api.RunIdle && len(th.Pending) == 0 && slices.Equal(lines(th.Transcript), fresh(t, cli, id))
+	}, func() string { return strings.Join(lines(env.Threads[id].Transcript), "\n") })
+}
+
 func TestATurnRunsFromCreateThroughAnApproval(t *testing.T) {
 	m, g := manager(t, stateDir(t))
 	env := m.Envs()[0]

@@ -288,3 +288,44 @@ func serverLabels(ss []Server) []string {
 	}
 	return out
 }
+
+// The GUI loses a server while one of its threads is open, and the thread
+// moves on meanwhile. Once the GUI is back, the transcript has what it
+// missed, as a fresh fold of the thread does.
+func TestAnOpenTranscriptResumesAfterAReconnect(t *testing.T) {
+	rdir := stateDir(t)
+	token, err := daemon.Pair(rdir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := engine(t, rdir, "127.0.0.1:0")
+	addr := d.Addrs()[0].String()
+	m, g := manager(t, stateDir(t))
+	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	box := m.Envs()[1]
+	online(t, g, box)
+	id := finishTurn(t, m, g, box)
+
+	if err := daemon.Revoke(rdir, "gui"); err != nil {
+		t.Fatal(err)
+	}
+	g.until(t, "refused", func() bool { return box.Status == Status(Refused{}) })
+	later := api.MessageDispatch{Text: "later", Mode: api.Defer}
+	if _, err := d.Endpoint().Submit(timeout(t), api.Command{ID: api.NewID(), Target: id, Body: later}); err != nil {
+		t.Fatal(err)
+	}
+	if token, err = daemon.Pair(rdir, "gui"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	want := fresh(t, d.Endpoint(), id)
+	if want[len(want)-1] != `user "later" held` {
+		t.Fatalf("the box's transcript ends %q, want the held message", want[len(want)-1])
+	}
+	g.until(t, "the missed message", func() bool { return slices.Equal(lines(box.Threads[id].Transcript), want) },
+		func() string { return strings.Join(lines(box.Threads[id].Transcript), "\n") })
+}
