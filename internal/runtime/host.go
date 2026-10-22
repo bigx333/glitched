@@ -118,12 +118,12 @@ func (h *Host) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
 }
 
 // committed runs inside the store's commit order.
-func (h *Host) committed(events []api.Event) {
+func (h *Host) committed(c store.Commit) {
 	h.mu.Lock()
 	for s := range h.subs {
-		s.publish(events)
+		s.publish(c)
 	}
-	for _, e := range events {
+	for _, e := range c.Events {
 		h.follow(e)
 	}
 	h.mu.Unlock()

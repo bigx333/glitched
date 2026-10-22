@@ -70,7 +70,7 @@ func (s *Store) commit(ctx context.Context, thread api.ID, r *receipt, done int6
 		}
 	}
 
-	wire, head, err := s.write(ctx, tx, thread, decide)
+	c, head, err := s.write(ctx, tx, thread, decide)
 	var refused error
 	if errors.Is(err, engine.ErrRefused) {
 		refused, err = err, nil
@@ -88,7 +88,7 @@ func (s *Store) commit(ctx context.Context, thread api.ID, r *receipt, done int6
 			return api.Cursor{}, err
 		}
 	}
-	if len(wire) > 0 {
+	if len(c.Events) > 0 {
 		if err := s.writeFence(head); err != nil {
 			return api.Cursor{}, err
 		}
@@ -96,37 +96,43 @@ func (s *Store) commit(ctx context.Context, thread api.ID, r *receipt, done int6
 	if err := tx.Commit(); err != nil {
 		return api.Cursor{}, err
 	}
-	if len(wire) > 0 {
+	if len(c.Events) > 0 {
 		for _, h := range s.hooks {
-			h(wire)
+			h(c)
 		}
 	}
 	return api.Cursor{Log: s.log, Seq: head}, refused
 }
 
+// Commit is what one commit wrote, as clients read it: the events, and the
+// threads whose projection they moved, as they are after the commit.
+type Commit struct {
+	Events  []api.Event
+	Threads []api.Thread
+}
+
 // write decides against the thread's stored state and writes what comes of
-// it into tx: events, the projection and effects. It returns the events as
-// clients read them and the head after them, which a refusal leaves as it
-// was.
-func (s *Store) write(ctx context.Context, tx *sql.Tx, thread api.ID, decide decider) ([]api.Event, uint64, error) {
+// it into tx: events, the projection and effects. It returns the commit and
+// the head after it, which a refusal leaves as it was.
+func (s *Store) write(ctx context.Context, tx *sql.Tx, thread api.ID, decide decider) (Commit, uint64, error) {
 	old, err := loadThread(ctx, tx, thread)
 	if err != nil {
-		return nil, 0, err
+		return Commit{}, 0, err
 	}
 	head, err := headSeq(ctx, tx)
 	if err != nil {
-		return nil, 0, err
+		return Commit{}, 0, err
 	}
 	events, effects, err := decide(old)
 	if err != nil {
-		return nil, head, err
+		return Commit{}, head, err
 	}
 	t, wire := old, make([]api.Event, 0, len(events))
 	for _, e := range events {
 		head++
 		payload, err := json.Marshal(e.Body)
 		if err != nil {
-			return nil, 0, err
+			return Commit{}, 0, err
 		}
 		w := api.Event{
 			Cursor: api.Cursor{Log: s.log, Seq: head}, Thread: e.Thread, Type: api.EventType(e.Body),
@@ -134,27 +140,33 @@ func (s *Store) write(ctx context.Context, tx *sql.Tx, thread api.ID, decide dec
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO events (seq, thread, type, schema, at, payload) VALUES (?, ?, ?, ?, ?, ?)`,
 			head, w.Thread[:], w.Type, w.Schema, e.At.UnixNano(), payload); err != nil {
-			return nil, 0, err
+			return Commit{}, 0, err
 		}
 		t = engine.Apply(t, e)
 		wire = append(wire, w)
 	}
 	if len(events) > 0 {
 		if err := writeThread(ctx, tx, old, t); err != nil {
-			return nil, 0, err
+			return Commit{}, 0, err
 		}
 	}
 	for _, e := range effects {
 		payload, err := json.Marshal(e)
 		if err != nil {
-			return nil, 0, err
+			return Commit{}, 0, err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO effects (thread, kind, payload, state) VALUES (?, ?, ?, 'pending')`,
 			thread[:], engine.EffectKind(e), payload); err != nil {
-			return nil, 0, err
+			return Commit{}, 0, err
 		}
 	}
-	return wire, head, nil
+	c := Commit{Events: wire}
+	// Transcript events (text, work items) leave the revision, and so the
+	// projection, where it was.
+	if t.Revision != old.Revision {
+		c.Threads = []api.Thread{engine.View(t)}
+	}
+	return c, head, nil
 }
 
 // Thread returns the stored projection, or a zero Thread if there is none.

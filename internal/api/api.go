@@ -251,7 +251,8 @@ type Snapshot struct {
 	Events  []Event  `json:"events,omitempty"`
 }
 
-// Subscription is a Query that stays open.
+// Subscription is a Query that stays open. One on a thread streams its
+// events; the shell streams thread views instead, after a snapshot.
 type Subscription Query
 
 type StreamKind uint8
@@ -263,12 +264,16 @@ const (
 	StreamSnapshot
 	// StreamSynchronized follows the snapshot and buffered tail.
 	StreamSynchronized
+	// StreamThread replaces one thread of a shell snapshot with its view
+	// after a commit that moved it. A commit sends at most one per thread.
+	StreamThread
 )
 
 type StreamItem struct {
 	Kind     StreamKind `json:"kind"`
 	Event    *Event     `json:"event,omitempty"`
 	Snapshot *Snapshot  `json:"snapshot,omitempty"`
+	Thread   *Thread    `json:"thread,omitempty"`
 }
 
 type Stream interface {
