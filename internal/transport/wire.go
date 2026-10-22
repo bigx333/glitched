@@ -12,11 +12,12 @@
 //
 // Byte fields are base64. The server tries the client's MAC against every
 // key Server.Authorize knows and closes the socket with 1008, policy
-// violation, when none matches; the client reports that as ErrRefused. The
-// client checks the server's MAC before it sends a call, and drops a server
-// whose MAC is wrong with ErrNotTheServer. Each side gives the other 5s, and
-// the server reads no message over 1 KiB until the client has proved its
-// key. A unix socket skips the handshake: its file mode is the gate.
+// violation, when none matches. Any server can send 1008, so the client
+// reports it as ErrRefused, not as a wrong token. The client checks the
+// server's MAC before it sends a call, and drops a server whose MAC is wrong
+// with ErrNotTheServer. Each side gives the other 5s, and the server reads
+// no message over 1 KiB until the client has proved its key. A unix socket
+// skips the handshake: its file mode is the gate.
 //
 // Then the client sends text messages, one JSON object each:
 //

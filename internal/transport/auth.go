@@ -21,9 +21,11 @@ type Key [sha256.Size]byte
 
 func KeyOf(token string) Key { return sha256.Sum256([]byte(token)) }
 
-// ErrRefused is a call's error when the server holds no key the client
-// proved.
-var ErrRefused = errors.New("transport: the server refused the token")
+// ErrRefused is a call's error when the server closed the handshake with
+// 1008, policy violation, instead of proving it holds the client's key. A
+// server that holds no key for the token sends it, and so can a server that
+// isn't the paired engine, so it doesn't mean the token is wrong.
+var ErrRefused = errors.New("transport: the server refused the handshake: it holds no key for this token, or it isn't the paired engine")
 
 // ErrNotTheServer is a call's error when the server failed to prove it holds
 // the client's key, so whatever answered may not be the paired engine. The
