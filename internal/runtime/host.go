@@ -26,6 +26,10 @@ var errNoAgent = errors.New("runtime: the run has no live agent")
 // callTimeout bounds every provider call but Next.
 var callTimeout = 30 * time.Second
 
+// closeGrace is how long Close waits for what was already taken from agents
+// to commit.
+const closeGrace = 5 * time.Second
+
 type Host struct {
 	store   *store.Store
 	adapter provider.Adapter
@@ -33,8 +37,12 @@ type Host struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	wake   chan struct{}
+	// drain outlives ctx by closeGrace, so commits of what was already taken
+	// from an agent still land while the host closes.
+	drain     context.Context
+	stopDrain context.CancelFunc
+	wg        sync.WaitGroup
+	wake      chan struct{}
 
 	mu   sync.Mutex
 	busy map[api.ID]bool     // threads with an effect in flight
@@ -65,6 +73,7 @@ func New(ctx context.Context, st *store.Store, ad provider.Adapter) (*Host, erro
 		subs: map[*stream]struct{}{},
 	}
 	h.ctx, h.cancel = context.WithCancel(context.Background())
+	h.drain, h.stopDrain = context.WithCancel(context.Background())
 	st.OnCommit(h.committed)
 	if err := h.boot(ctx); err != nil {
 		h.Close()
@@ -75,11 +84,15 @@ func New(ctx context.Context, st *store.Store, ad provider.Adapter) (*Host, erro
 	return h, nil
 }
 
-// Close stops the worker and the agent pumps and records nothing on the way
-// out. Agents keep running; the next Host reconciles them.
+// Close stops leasing effects and reading agents, commits what was already
+// taken from them, and records nothing else. Agents keep running; the next
+// Host reconciles them.
 func (h *Host) Close() error {
 	h.cancel()
+	grace := time.AfterFunc(closeGrace, h.stopDrain)
 	h.wg.Wait()
+	grace.Stop()
+	h.stopDrain()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for s := range h.subs {
@@ -214,7 +227,7 @@ func (h *Host) boot(ctx context.Context) error {
 			return err
 		}
 		if ok {
-			h.attach(id, h.track(r.ID), restored.Agent)
+			h.attach(id, h.track(r.ID, restored.Agent))
 		}
 	}
 	for _, lease := range starts {
@@ -258,9 +271,7 @@ func (h *Host) busyThreads() []api.ID {
 
 func (h *Host) lane(e store.Effect) {
 	defer h.wg.Done()
-	if err := h.perform(e); err != nil && h.ctx.Err() == nil {
-		slog.Error("runtime: effect", "kind", engine.EffectKind(e.Body), "err", err)
-	}
+	h.perform(e)
 	h.mu.Lock()
 	delete(h.busy, e.Thread)
 	h.mu.Unlock()
@@ -269,68 +280,76 @@ func (h *Host) lane(e store.Effect) {
 
 // perform checks the effect against the thread as it is now, acts on the
 // agent, then commits what happened together with the effect's completion.
-// When the host is closing it commits nothing, so the lease survives for
-// boot to reconcile.
-func (h *Host) perform(e store.Effect) error {
-	ctx := h.ctx
+// Until a call reaches the agent a failure is retried as if nothing had
+// happened, and a closing host hands the lease back. After the call only the
+// commit is retried, never the call; if the host closes mid-call the lease
+// stays for boot to reconcile.
+func (h *Host) perform(e store.Effect) {
 	var lr *liveRun
 	if b, ok := e.Body.(engine.StartTurn); ok {
 		// Tracked before the check, so a stop that commits after it still
 		// cancels the start.
-		lr = h.track(b.Run)
+		lr = h.track(b.Run, nil)
 	}
-	t, err := h.store.Thread(ctx, e.Thread)
-	due := err == nil && engine.Due(t, e.Body)
-	if !due && lr != nil {
-		h.forget(lr)
-	}
-	if err != nil {
+	var t engine.Thread
+	loaded := retry(h.ctx, "load thread", func(ctx context.Context) (err error) {
+		t, err = h.store.Thread(ctx, e.Thread)
 		return err
+	})
+	if due := loaded && engine.Due(t, e.Body); !due {
+		if lr != nil {
+			h.forget(lr.run)
+		}
+		if !loaded {
+			retry(h.drain, "release effect", func(ctx context.Context) error { return h.store.Release(ctx, e.ID) })
+			return
+		}
+		h.record(e.Thread, nil, e.ID)
+		return
 	}
-	if !due {
-		return h.store.Complete(ctx, e.ID)
+	o, ok := h.call(e, lr)
+	if !ok {
+		return
 	}
-	var o engine.Observation
+	if _, started := o.(engine.Started); h.record(e.Thread, o, e.ID) && started {
+		h.attach(e.Thread, lr)
+	}
+}
+
+// call makes the effect's provider call and returns what to record, nil for
+// nothing but the completion. ok is false when the host closed mid-call.
+func (h *Host) call(e store.Effect, lr *liveRun) (o engine.Observation, ok bool) {
+	var err error
 	switch b := e.Body.(type) {
 	case engine.StartTurn:
-		ag, err := h.open(lr.ctx, e.Thread, b)
-		if h.ctx.Err() != nil {
-			return h.ctx.Err()
+		var ag provider.Agent
+		if ag, err = h.open(lr.ctx, e.Thread, b); err == nil {
+			h.mu.Lock()
+			lr.agent = ag
+			h.mu.Unlock()
+			return engine.Started{Run: b.Run}, true
 		}
-		if err != nil {
-			outcome := api.OutcomeFailed
-			if lr.ctx.Err() != nil {
-				outcome = api.OutcomeInterrupted
-			}
-			h.forget(lr)
-			return h.observe(e.Thread, engine.Ended{Run: b.Run, Outcome: outcome, Error: err.Error()}, e.ID)
+		outcome := api.OutcomeFailed
+		if lr.ctx.Err() != nil && h.ctx.Err() == nil {
+			outcome = api.OutcomeInterrupted
 		}
-		if err := h.observe(e.Thread, engine.Started{Run: b.Run}, e.ID); err != nil {
-			return err
-		}
-		h.attach(e.Thread, lr, ag)
-		return nil
+		h.forget(b.Run)
+		o = engine.Ended{Run: b.Run, Outcome: outcome, Error: err.Error()}
 
 	case engine.SteerTurn:
 		o = engine.Steered{Message: b.Message}
-		if err := h.act(b.Run, provider.Steer{Text: b.Text}); errors.Is(err, context.DeadlineExceeded) {
+		if err = h.act(b.Run, provider.Steer{Text: b.Text}); errors.Is(err, context.DeadlineExceeded) {
 			o = engine.SteerLost{Message: b.Message}
 		} else if err != nil {
 			o = engine.SteerFailed{Message: b.Message, Error: err.Error()}
 		}
 
 	case engine.InterruptTurn:
-		err := h.act(b.Run, provider.Interrupt{})
-		if err == nil {
+		if err = h.act(b.Run, provider.Interrupt{}); err == nil {
 			// The agent reports its own end through the pump.
-			return h.store.Complete(ctx, e.ID)
+			return nil, true
 		}
-		if h.ctx.Err() != nil {
-			return h.ctx.Err()
-		}
-		h.mu.Lock()
-		h.forgetLocked(b.Run)
-		h.mu.Unlock()
+		h.forget(b.Run)
 		o = engine.Ended{Run: b.Run, Outcome: api.OutcomeInterrupted}
 		if !errors.Is(err, errNoAgent) {
 			o = engine.Ended{Run: b.Run, Outcome: api.OutcomeInterrupted, Error: err.Error()}
@@ -338,17 +357,46 @@ func (h *Host) perform(e store.Effect) error {
 
 	case engine.DeliverAnswer:
 		o = engine.Delivered{Request: b.Request}
-		if err := h.act(b.Run, provider.Respond{Request: b.Dedup, Answer: b.Answer}); err != nil {
+		if err = h.act(b.Run, provider.Respond{Request: b.Dedup, Answer: b.Answer}); err != nil {
 			o = engine.DeliveryFailed{Request: b.Request, Error: err.Error()}
 		}
 
 	default:
-		return fmt.Errorf("runtime: unknown effect %T", e.Body)
+		slog.Error("runtime: unknown effect", "type", fmt.Sprintf("%T", e.Body))
+		return nil, false
 	}
-	if ctx.Err() != nil {
-		return ctx.Err()
+	return o, err == nil || h.ctx.Err() == nil
+}
+
+// record commits o, or only the completion of the effect done when o is nil,
+// retrying until it lands or the host's drain ends.
+func (h *Host) record(thread api.ID, o engine.Observation, done int64) bool {
+	return retry(h.drain, "commit", func(ctx context.Context) error {
+		if o == nil {
+			return h.store.Complete(ctx, done)
+		}
+		_, err := h.store.Observe(ctx, thread, o, time.Now(), done)
+		return err
+	})
+}
+
+// retry runs fn until it succeeds or ctx ends, backing off between tries.
+func retry(ctx context.Context, what string, fn func(context.Context) error) bool {
+	for wait := 10 * time.Millisecond; ; wait = min(2*wait, time.Second) {
+		err := fn(ctx)
+		if err == nil {
+			return true
+		}
+		if ctx.Err() != nil {
+			return false
+		}
+		slog.Error("runtime: "+what, "err", err, "retry", wait)
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return false
+		}
 	}
-	return h.observe(e.Thread, o, e.ID)
 }
 
 // open starts the run's agent. A start that fails while the host is up
@@ -385,8 +433,8 @@ func closeAgent(ag provider.Agent) {
 	ag.Close(ctx)
 }
 
-func (h *Host) track(run api.ID) *liveRun {
-	lr := &liveRun{run: run}
+func (h *Host) track(run api.ID, ag provider.Agent) *liveRun {
+	lr := &liveRun{run: run, agent: ag}
 	lr.ctx, lr.cancel = context.WithCancel(h.ctx)
 	h.mu.Lock()
 	h.runs[run] = lr
@@ -394,22 +442,16 @@ func (h *Host) track(run api.ID) *liveRun {
 	return lr
 }
 
-func (h *Host) attach(thread api.ID, lr *liveRun, ag provider.Agent) {
-	h.mu.Lock()
-	lr.agent = ag
-	h.mu.Unlock()
+func (h *Host) attach(thread api.ID, lr *liveRun) {
 	h.wg.Add(1)
 	go h.pump(thread, lr)
 }
 
-// forget stops driving lr. Its pump, if any, closes the agent.
-func (h *Host) forget(lr *liveRun) {
+// forget stops driving the run. Its pump, if any, closes the agent.
+func (h *Host) forget(run api.ID) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	lr.cancel()
-	if h.runs[lr.run] == lr {
-		delete(h.runs, lr.run)
-	}
+	h.forgetLocked(run)
 }
 
 func (h *Host) forgetLocked(run api.ID) {

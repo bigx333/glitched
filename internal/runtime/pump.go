@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"log/slog"
 	"strings"
 	"time"
 
@@ -15,34 +14,31 @@ import (
 const deltaWindow = 50 * time.Millisecond
 
 // pump commits one agent's events until its turn ends, the log moves past
-// the run, or the host closes. Unless the host is closing, it then closes
-// the agent.
+// the run, or the host closes. Each event and each text batch is kept until
+// its commit lands, and nothing more is read meanwhile. The agent is closed
+// when its turn is over for this host; a closing host leaves it running.
 func (h *Host) pump(thread api.ID, lr *liveRun) {
 	defer h.wg.Done()
 	run, ag := lr.run, lr.agent
-	events, failed := make(chan provider.Event), make(chan error, 1)
+	// The reader hands every event it pulled to the pump, sets readErr and
+	// closes events once Next fails.
+	events := make(chan provider.Event)
+	var readErr error
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
+		defer close(events)
 		for {
 			ev, err := ag.Next(lr.ctx)
 			if err != nil {
-				failed <- err
+				readErr = err
 				return
 			}
-			select {
-			case events <- ev:
-			case <-lr.ctx.Done():
-				return
-			}
+			events <- ev
 		}
 	}()
 
-	commit := func(o engine.Observation) {
-		if err := h.observe(thread, o, 0); err != nil && h.ctx.Err() == nil {
-			slog.Error("runtime: agent event", "run", run, "err", err)
-		}
-	}
+	commit := func(o engine.Observation) { h.record(thread, o, 0) }
 	var text strings.Builder
 	var flush <-chan time.Time
 	flushText := func() {
@@ -52,32 +48,16 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 		}
 		flush = nil
 	}
-	end := func(o engine.Observation) {
-		flushText()
-		if o != nil {
-			commit(o)
-		}
-		h.forget(lr)
-		closeAgent(ag)
-	}
-
-	for {
+	ended := false
+	for done := false; !done; {
 		select {
-		case <-lr.ctx.Done():
-			if h.ctx.Err() == nil {
-				end(nil)
-			}
-			return
 		case <-flush:
 			flushText()
-		case err := <-failed:
-			if lr.ctx.Err() == nil {
-				end(engine.Ended{Run: run, Outcome: api.OutcomeFailed, Error: err.Error()})
-			} else if h.ctx.Err() == nil {
-				end(nil)
+		case ev, ok := <-events:
+			if !ok {
+				done = true
+				break
 			}
-			return
-		case ev := <-events:
 			switch ev := ev.(type) {
 			case provider.TextDelta:
 				text.WriteString(ev.Text)
@@ -91,9 +71,21 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				flushText()
 				commit(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: ev.ID, Kind: ev.Kind, Body: ev.Body})
 			case provider.TurnEnded:
-				end(engine.Ended{Run: run, Outcome: ev.Outcome, Error: ev.Error})
-				return
+				flushText()
+				commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: ev.Error})
+				ended = true
+				h.forget(run)
 			}
 		}
 	}
+	flushText()
+	switch {
+	case ended:
+	case h.ctx.Err() != nil:
+		return
+	case lr.ctx.Err() == nil:
+		commit(engine.Ended{Run: run, Outcome: api.OutcomeFailed, Error: readErr.Error()})
+	}
+	h.forget(run)
+	closeAgent(ag)
 }
