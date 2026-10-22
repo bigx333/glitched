@@ -9,7 +9,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"sync"
 
@@ -217,10 +216,10 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.writeFence(head); err != nil {
 		return err
 	}
-	return s.writeFence(head)
+	return tx.Commit()
 }
 
 // The fence file beside the database holds the log id and the highest seq
@@ -241,21 +240,18 @@ func (s *Store) restored(head uint64) bool {
 	return api.ID(b[:len(s.log)]) != s.log || head < binary.BigEndian.Uint64(b[len(s.log):])
 }
 
-// writeFence runs after each commit and before its cursor leaves the store.
-// It skips fsync: losing the write in a power cut only leaves the fence
-// below the head.
+// writeFence records head as handed out under the log, durably, before the
+// transaction that writes it commits: no reader sees a seq the fence doesn't
+// cover. A transaction that then fails leaves the fence ahead, which costs
+// clients one snapshot after the next open.
 func (s *Store) writeFence(head uint64) error {
 	var b [fenceSize]byte
 	copy(b[:], s.log[:])
 	binary.BigEndian.PutUint64(b[len(s.log):], head)
-	_, err := s.fence.WriteAt(b[:], 0)
-	return err
-}
-
-func (s *Store) advanceFence(head uint64) {
-	if err := s.writeFence(head); err != nil {
-		slog.Error("store: fence", "head", head, "err", err)
+	if _, err := s.fence.WriteAt(b[:], 0); err != nil {
+		return fmt.Errorf("store: fence: %w", err)
 	}
+	return s.fence.Sync()
 }
 
 type querier interface {

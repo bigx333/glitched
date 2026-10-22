@@ -129,11 +129,15 @@ func (s *Store) commit(ctx context.Context, thread api.ID, r *receipt, done int6
 			return api.Cursor{}, err
 		}
 	}
+	if len(wire) > 0 {
+		if err := s.writeFence(head); err != nil {
+			return api.Cursor{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return api.Cursor{}, err
 	}
 	if len(wire) > 0 {
-		s.advanceFence(head)
 		for _, h := range s.hooks {
 			h(wire)
 		}
