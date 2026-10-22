@@ -18,16 +18,20 @@ import (
 // conn dials one socket on first use and again after it drops. Calls in
 // flight on a dropped socket fail; nothing is resent.
 type conn struct {
-	hc *http.Client
+	hc        *http.Client
+	keepalive keepalive
 
 	mu   sync.Mutex
 	sock *socket
 }
 
 func dial(t Transport, machine api.ID) *conn {
-	return &conn{hc: &http.Client{Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return t.Dial(ctx, machine) },
-	}}}
+	return &conn{
+		hc: &http.Client{Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return t.Dial(ctx, machine) },
+		}},
+		keepalive: defaultKeepalive,
+	}
 }
 
 // The host part is never resolved: Transport.Dial picks the connection.
@@ -49,7 +53,7 @@ func (c *conn) socket(ctx context.Context) (*socket, error) {
 	sctx, fail := context.WithCancelCause(context.Background())
 	c.sock = &socket{ws: ws, ctx: sctx, fail: fail, sinks: map[uint64]sink{}}
 	go c.sock.read()
-	go keepAlive(sctx, ws)
+	go c.keepalive.run(sctx, ws)
 	return c.sock, nil
 }
 
@@ -63,11 +67,11 @@ type socket struct {
 	sinks  map[uint64]sink // nil once the socket is dead
 }
 
-// A sink takes the frames for one id on the socket's read goroutine, so it
+// A sink takes the messages for one id on the socket's read goroutine, so it
 // must not block.
 type sink interface {
-	// frame reports whether the id is finished.
-	frame(response) bool
+	// take reports whether the id is finished.
+	take(response) bool
 	drop(err error)
 }
 
@@ -99,7 +103,7 @@ func (s *socket) send(req request) error {
 	}
 	// Never the caller's ctx: one that ends mid-write closes the socket for
 	// every other call on it.
-	if err := s.ws.Write(s.ctx, websocket.MessageText, b); err != nil {
+	if err := writeMessage(s.ctx, s.ws, b); err != nil {
 		s.fail(lost(err))
 		return context.Cause(s.ctx)
 	}
@@ -125,7 +129,7 @@ func (s *socket) read() {
 		s.mu.Lock()
 		k := s.sinks[r.ID]
 		s.mu.Unlock()
-		if k != nil && k.frame(r) {
+		if k != nil && k.take(r) {
 			s.forget(r.ID)
 		}
 	}
@@ -157,7 +161,7 @@ type reply struct {
 
 type callSink chan reply
 
-func (c callSink) frame(r response) bool {
+func (c callSink) take(r response) bool {
 	select {
 	case c <- reply{r: r}:
 	default:
@@ -222,7 +226,7 @@ type stream[T any] struct {
 	err   error // ends the stream once items are drained
 }
 
-func (st *stream[T]) frame(r response) bool {
+func (st *stream[T]) take(r response) bool {
 	st.mu.Lock()
 	defer st.signal()
 	defer st.mu.Unlock()

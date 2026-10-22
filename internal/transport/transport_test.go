@@ -746,3 +746,43 @@ func TestDroppedSocketIsNotTheCallersCancel(t *testing.T) {
 		t.Fatalf("submit on a socket that died under its write: got %v, want a lost connection and no context error", err)
 	}
 }
+
+// slowLink carries a client's writes at rate bytes a second.
+type slowLink struct {
+	Loopback
+	rate int
+}
+
+func (l slowLink) Dial(ctx context.Context, m api.ID) (net.Conn, error) {
+	c, err := l.Loopback.Dial(ctx, m)
+	if err != nil {
+		return nil, err
+	}
+	return slowConn{c, l.rate}, nil
+}
+
+type slowConn struct {
+	net.Conn
+	rate int
+}
+
+func (s slowConn) Write(p []byte) (int, error) {
+	time.Sleep(time.Duration(len(p)) * time.Second / time.Duration(s.rate))
+	return s.Conn.Write(p)
+}
+
+func TestLongWriteLetsPongsThrough(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	r := openReplica(t)
+	// A message that takes a second to write, to a server that drops the
+	// socket when a pong is 300ms late.
+	srv := &Server{Hub: r, keepalive: keepalive{every: 20 * time.Millisecond, within: 300 * time.Millisecond}}
+	c := NewHubClient(slowLink{start(t, "unix", srv), 512 << 10}, api.ID{})
+	log := api.NewID()
+	evs := events(log, api.NewID(), 1, 1)
+	evs[0].Payload = json.RawMessage(`"` + strings.Repeat("x", 512<<10) + `"`)
+	if ack, err := c.Append(ctx, api.Upload{Host: api.NewID(), Epoch: 1, Log: log, Events: evs}); err != nil || ack.Acked != 1 {
+		t.Fatalf("append over a slow link: %+v %v", ack, err)
+	}
+}

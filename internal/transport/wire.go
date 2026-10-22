@@ -1,13 +1,13 @@
 // Package transport carries the Endpoint and hub calls over one WebSocket per
 // client, on whatever network a Transport provides.
 //
-// A client dials GET /ws and sends text frames, one JSON object each:
+// A client dials GET /ws and sends text messages, one JSON object each:
 //
 //	{"id":1,"method":"submit","params":{...}}  start a call or a stream
 //	{"id":1,"cancel":true}                    abandon a call, or end a stream
 //	{"id":1,"ack":1048576}                    the reader took this many bytes of items
 //
-// The server answers with frames carrying the request's id:
+// The server answers with messages carrying the request's id:
 //
 //	{"id":1,"result":{...}}  a call's answer
 //	{"id":1,"open":true}     a stream is open; its items follow

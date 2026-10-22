@@ -22,17 +22,14 @@ type Server struct {
 	Transport Transport
 	Endpoint  api.Endpoint
 	Hub       *hub.Replica
+
+	keepalive keepalive // zero means defaultKeepalive
 }
 
 type connKey struct{}
 
 // The uploader caps a batch at 8 MiB; this leaves room for JSON overhead.
 const maxMessage = 64 << 20
-
-const (
-	pingEvery  = 15 * time.Second
-	pongWithin = 10 * time.Second
-)
 
 // Serve answers sockets on ln until ctx ends, then closes them and returns
 // once their calls have.
@@ -92,12 +89,16 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 	ws.SetReadLimit(maxMessage)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go keepAlive(ctx, ws)
+	k := s.keepalive
+	if k == (keepalive{}) {
+		k = defaultKeepalive
+	}
+	go k.run(ctx, ws)
 
 	// A failed write closes ws, which ends the read loop below.
 	send := func(f response) {
 		b, _ := json.Marshal(f)
-		ws.Write(ctx, websocket.MessageText, b)
+		writeMessage(ctx, ws, b)
 	}
 	var (
 		mu    sync.Mutex
@@ -113,7 +114,7 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 		}
 		var req request
 		if json.Unmarshal(data, &req) != nil {
-			ws.Close(websocket.StatusInvalidFramePayloadData, "malformed frame")
+			ws.Close(websocket.StatusInvalidFramePayloadData, "malformed message")
 			return
 		}
 		mu.Lock()
@@ -185,9 +186,32 @@ func (o *op) room(ctx context.Context) error {
 	return nil
 }
 
-// keepAlive drops ws when the peer stops answering pings.
-func keepAlive(ctx context.Context, ws *websocket.Conn) {
-	t := time.NewTicker(pingEvery)
+// writeMessage writes b in frames of at most 32 KiB. The library writes a
+// pong under the same lock as a frame and drops the socket when that takes
+// 5s, so one frame for a large message on a slow link would kill it.
+func writeMessage(ctx context.Context, ws *websocket.Conn, b []byte) error {
+	w, err := ws.Writer(ctx, websocket.MessageText)
+	if err != nil {
+		return err
+	}
+	for len(b) > 0 {
+		n := min(len(b), 32<<10)
+		if _, err := w.Write(b[:n]); err != nil {
+			return err
+		}
+		b = b[n:]
+	}
+	return w.Close()
+}
+
+// keepalive is how often a socket pings its peer and how late a pong may be
+// before the socket is dropped.
+type keepalive struct{ every, within time.Duration }
+
+var defaultKeepalive = keepalive{every: 15 * time.Second, within: 10 * time.Second}
+
+func (k keepalive) run(ctx context.Context, ws *websocket.Conn) {
+	t := time.NewTicker(k.every)
 	defer t.Stop()
 	for {
 		select {
@@ -195,7 +219,7 @@ func keepAlive(ctx context.Context, ws *websocket.Conn) {
 			return
 		case <-t.C:
 		}
-		pctx, cancel := context.WithTimeout(ctx, pongWithin)
+		pctx, cancel := context.WithTimeout(ctx, k.within)
 		err := ws.Ping(pctx)
 		cancel()
 		if err != nil {
@@ -205,7 +229,7 @@ func keepAlive(ctx context.Context, ws *websocket.Conn) {
 	}
 }
 
-// A handler answers one request with every frame for its id.
+// A handler answers one request with every message for its id.
 type handler func(ctx context.Context, params json.RawMessage, o *op)
 
 func (s *Server) methods() map[string]handler {
