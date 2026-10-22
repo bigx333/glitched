@@ -13,6 +13,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
+	"glitched/internal/jsonfile"
 )
 
 func TestRemoteServersShowTheirThreadsAndComeBack(t *testing.T) {
@@ -247,7 +248,7 @@ func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if s, err := load(dir); err != nil || len(s.Servers) != 40 {
+	if s, err := savedIn(dir); err != nil || len(s.Servers) != 40 {
 		t.Fatalf("gui.json lists %d servers (%v), want the 20 each GUI added", len(s.Servers), err)
 	}
 
@@ -265,7 +266,7 @@ func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 	if err := a.MarkRead(&Thread{View: api.Thread{ID: api.NewID(), LastTurn: &api.TurnResult{Ended: time.Now()}}}); err != nil {
 		t.Fatal(err)
 	}
-	s, err := load(dir)
+	s, err := savedIn(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,6 +280,12 @@ func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 	if slices.Contains(labels, gone) || b.Unread(read) || a.Unread(read) {
 		t.Fatalf("a removed server or a read mark did not carry over")
 	}
+}
+
+func savedIn(dir string) (saved, error) {
+	var s saved
+	err := jsonfile.Load(filepath.Join(dir, "gui.json"), &s)
+	return s, err
 }
 
 func serverLabels(ss []Server) []string {

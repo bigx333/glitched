@@ -5,20 +5,19 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"glitched/internal/jsonfile"
 	"glitched/internal/transport"
 )
 
@@ -43,11 +42,12 @@ func Pair(dir, label string) (string, error) {
 	rand.Read(secret)
 	token := base64.RawURLEncoding.EncodeToString(secret)
 	key := transport.KeyOf(token)
-	err := edit(dir, func(ts []Token) ([]Token, error) {
-		if slices.ContainsFunc(ts, func(t Token) bool { return t.Label == label }) {
-			return nil, fmt.Errorf("pair: %s already has a token; revoke it first", label)
+	err := edit(dir, func(ts *[]Token) error {
+		if slices.ContainsFunc(*ts, func(t Token) bool { return t.Label == label }) {
+			return fmt.Errorf("pair: %s already has a token; revoke it first", label)
 		}
-		return append(ts, Token{Label: label, Hash: hex.EncodeToString(key[:]), Created: time.Now().UTC()}), nil
+		*ts = append(*ts, Token{Label: label, Hash: hex.EncodeToString(key[:]), Created: time.Now().UTC()})
+		return nil
 	})
 	if err != nil {
 		return "", err
@@ -58,71 +58,29 @@ func Pair(dir, label string) (string, error) {
 // Revoke removes label's token. An engine refuses it on the next socket and
 // closes the sockets it admitted within a second.
 func Revoke(dir, label string) error {
-	return edit(dir, func(ts []Token) ([]Token, error) {
-		i := slices.IndexFunc(ts, func(t Token) bool { return t.Label == label })
+	return edit(dir, func(ts *[]Token) error {
+		i := slices.IndexFunc(*ts, func(t Token) bool { return t.Label == label })
 		if i < 0 {
-			return nil, fmt.Errorf("pair: no token is labelled %s", label)
+			return fmt.Errorf("pair: no token is labelled %s", label)
 		}
-		return slices.Delete(ts, i, i+1), nil
+		*ts = slices.Delete(*ts, i, i+1)
+		return nil
 	})
 }
 
 func Tokens(dir string) ([]Token, error) {
-	b, err := os.ReadFile(filepath.Join(dir, tokensFile))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
 	var ts []Token
-	if err := json.Unmarshal(b, &ts); err != nil {
-		return nil, fmt.Errorf("%s: %w", tokensFile, err)
+	if err := jsonfile.Load(filepath.Join(dir, tokensFile), &ts); err != nil {
+		return nil, err
 	}
 	return ts, nil
 }
 
-// edit rewrites tokens.json under a lock, so a pair racing a revoke can't
+// edit rewrites tokens.json under its lock, so a pair racing a revoke can't
 // bring the revoked token back.
-func edit(dir string, change func([]Token) ([]Token, error)) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	lk, err := lock(filepath.Join(dir, "tokens.lock"))
-	if errors.Is(err, ErrLocked) {
-		return errors.New("pair: another pair command is changing the tokens")
-	}
-	if err != nil {
-		return err
-	}
-	defer lk.Close()
-	ts, err := Tokens(dir)
-	if err != nil {
-		return err
-	}
-	if ts, err = change(ts); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(ts, "", "  ")
-	if err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(dir, tokensFile+".*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	_, err = f.Write(append(b, '\n'))
-	if err == nil {
-		err = f.Sync()
-	}
-	if err := errors.Join(err, f.Close()); err != nil {
-		return err
-	}
-	if err := os.Rename(f.Name(), filepath.Join(dir, tokensFile)); err != nil {
-		return err
-	}
-	return syncDir(dir)
+func edit(dir string, change func(*[]Token) error) error {
+	_, err := jsonfile.Edit(filepath.Join(dir, tokensFile), change)
+	return err
 }
 
 // grants admits a socket whose token tokens.json holds. It reads the file on

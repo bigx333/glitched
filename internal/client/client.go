@@ -17,6 +17,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
+	"glitched/internal/jsonfile"
 	"glitched/internal/runtime"
 	"glitched/internal/transport"
 )
@@ -62,11 +63,9 @@ func New(cfg Config) *Manager {
 // embedded here when none answers, which then serves that socket for the
 // CLI until Close.
 func (m *Manager) Start() error {
-	s, err := load(m.cfg.Dir)
-	if err != nil {
+	if err := jsonfile.Load(m.savedPath(), &m.saved); err != nil {
 		return err
 	}
-	m.saved = s
 	m.local = &local{dir: m.cfg.Dir}
 	m.envs = []*Env{m.launch(&Env{Kind: Local, Name: "local"}, m.local)}
 	m.sync("")

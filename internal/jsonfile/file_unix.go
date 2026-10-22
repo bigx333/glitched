@@ -1,6 +1,6 @@
 //go:build unix
 
-package client
+package jsonfile
 
 import (
 	"errors"
@@ -22,7 +22,7 @@ func lock(path string) (*os.File, error) {
 	return f, nil
 }
 
-// syncDir makes a rename in dir durable.
+// syncDir makes a rename in dir survive a crash.
 func syncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {

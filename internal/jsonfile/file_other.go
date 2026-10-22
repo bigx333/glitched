@@ -1,6 +1,6 @@
 //go:build !unix
 
-package client
+package jsonfile
 
 import "os"
 

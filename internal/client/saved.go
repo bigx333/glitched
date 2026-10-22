@@ -1,15 +1,13 @@
 package client
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/jsonfile"
 )
 
 // Server is a remote engine reached over the tailnet with a token it
@@ -26,72 +24,23 @@ type saved struct {
 	Seen    map[api.ID]time.Time `json:"seen,omitempty"` // each thread's last turn the GUI showed
 }
 
-const savedFile = "gui.json"
-
-func load(dir string) (saved, error) {
-	b, err := os.ReadFile(filepath.Join(dir, savedFile))
-	if errors.Is(err, os.ErrNotExist) {
-		return saved{}, nil
-	}
-	if err != nil {
-		return saved{}, err
-	}
-	var s saved
-	if err := json.Unmarshal(b, &s); err != nil {
-		return saved{}, fmt.Errorf("%s: %w", savedFile, err)
-	}
-	return s, nil
-}
+func (m *Manager) savedPath() string { return filepath.Join(m.cfg.Dir, "gui.json") }
 
 // edit changes gui.json for every GUI on this Dir: under gui.json.lock it
-// reads what the others saved, applies change and replaces the file, so a
-// crash leaves the old file or the new one. The envs then follow the
-// servers the file lists; renew names one to reconnect even if unchanged.
+// reads what the others saved, applies change and replaces the file. The
+// envs then follow the servers the file lists; renew names one to
+// reconnect even if unchanged.
 func (m *Manager) edit(renew string, change func(*saved)) error {
-	if err := os.MkdirAll(m.cfg.Dir, 0o700); err != nil {
-		return err
-	}
-	lk, err := lock(filepath.Join(m.cfg.Dir, savedFile+".lock"))
+	s, err := jsonfile.Edit(m.savedPath(), func(s *saved) error {
+		change(s)
+		return nil
+	})
 	if err != nil {
-		return err
-	}
-	defer lk.Close()
-	s, err := load(m.cfg.Dir)
-	if err != nil {
-		return err
-	}
-	change(&s)
-	if err := replace(m.cfg.Dir, s); err != nil {
 		return err
 	}
 	m.saved = s
 	m.sync(renew)
 	return nil
-}
-
-// replace writes gui.json through a temp file, which CreateTemp makes 0600
-// as the tokens in it need.
-func replace(dir string, s saved) error {
-	b, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(dir, savedFile+".*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	_, err = f.Write(append(b, '\n'))
-	if err == nil {
-		err = f.Sync()
-	}
-	if err := errors.Join(err, f.Close()); err != nil {
-		return err
-	}
-	if err := os.Rename(f.Name(), filepath.Join(dir, savedFile)); err != nil {
-		return err
-	}
-	return syncDir(dir)
 }
 
 // sync makes the remote envs the servers gui.json lists, in its order. An
