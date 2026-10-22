@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	eng "glitched/internal/engine"
 )
 
 var (
@@ -345,5 +346,123 @@ func TestFoldingTextCostsInProportionToIt(t *testing.T) {
 	small, large := cost(1000), cost(2000)
 	if large > 3*small {
 		t.Fatalf("folding twice the text allocated %d bytes against %d, want about twice", large, small)
+	}
+}
+
+var engineStates = map[eng.QueueState]MessageState{
+	eng.QueueReady: Queued, eng.QueueHeld: Held, eng.QueueClaimed: Claimed,
+	eng.QueueDispatched: Sent, eng.QueueCancelled: Cancelled, eng.QueueUncertain: Uncertain,
+}
+
+// The fold reads events as the engine's Apply does: after every event of a
+// play, each message and request is in the state the engine holds.
+func TestFoldAgreesWithTheEngine(t *testing.T) {
+	a, b, c, req := api.NewID(), api.NewID(), api.NewID(), api.NewID()
+	opened := api.RequestOpened{Request: req, Run: a, Generation: 1, Kind: "approval", Body: json.RawMessage(`{}`)}
+	queued := func(id api.ID, mode api.DispatchMode, pos int64) api.MessageQueued {
+		return api.MessageQueued{Message: id, Text: "x", Mode: mode, Pos: pos, Held: mode == api.Defer}
+	}
+	plays := []struct {
+		name   string
+		events []api.EventBody
+	}{
+		{"normal", slices.Concat(start(a, "one", 0), []api.EventBody{
+			api.AssistantDelta{Run: a, Text: "hi"},
+			opened,
+			api.RequestAnswer{Request: req, Answer: json.RawMessage(`{"allow":true}`)},
+			api.RequestDelivery{Request: req},
+			queued(b, api.AfterActive, 1),
+			api.TurnEnded{Run: a, Outcome: api.OutcomeCompleted},
+			api.TurnAdmitted{Run: b, Generation: 2},
+			api.TurnStarted{Run: b},
+			api.TurnEnded{Run: b, Outcome: api.OutcomeCompleted},
+		})},
+		{"steered", slices.Concat(start(a, "one", 0), []api.EventBody{
+			queued(b, api.SteerActive, 1),
+			api.MessageClaimed{Message: b, Run: a},
+			api.MessageDispatched{Message: b},
+			queued(c, api.SteerActive, 2),
+			api.MessageClaimed{Message: c, Run: a},
+			api.TurnEnded{Run: a, Outcome: api.OutcomeCompleted},
+		})},
+		{"deferred", slices.Concat(start(a, "one", 0), []api.EventBody{
+			queued(b, api.Defer, 1),
+			api.TurnEnded{Run: a, Outcome: api.OutcomeCompleted},
+			api.TurnAdmitted{Run: b, Generation: 2},
+			api.TurnStarted{Run: b},
+			api.TurnEnded{Run: b, Outcome: api.OutcomeCompleted},
+		})},
+		{"cancelled", slices.Concat(start(a, "one", 0), []api.EventBody{
+			queued(b, api.AfterActive, 1),
+			api.MessageCancelled{Message: b, Reason: "the database was restored"},
+			queued(c, api.SteerActive, 2),
+			api.MessageClaimed{Message: c, Run: a},
+			api.MessageCancelled{Message: c, Reason: "the agent refused it"},
+			api.TurnEnded{Run: a, Outcome: api.OutcomeFailed},
+		})},
+		{"interrupted", slices.Concat(start(a, "one", 0), []api.EventBody{
+			opened,
+			queued(b, api.SteerActive, 1),
+			api.MessageClaimed{Message: b, Run: a},
+			api.TurnStopping{Run: a},
+			api.TurnSignalled{Run: a},
+			api.TurnEnded{Run: a, Outcome: api.OutcomeInterrupted},
+		})},
+		{"interrupted while starting", []api.EventBody{
+			queued(a, api.AfterActive, 0),
+			api.TurnAdmitted{Run: a, Generation: 1},
+			api.TurnStopping{Run: a},
+			api.MessageDispatched{Message: a},
+			api.TurnEnded{Run: a, Outcome: api.OutcomeInterrupted},
+		}},
+		{"restored starting", []api.EventBody{
+			queued(a, api.AfterActive, 0),
+			api.TurnAdmitted{Run: a, Generation: 1},
+			api.TurnRestored{Run: a},
+			api.TurnEnded{Run: a, Outcome: api.OutcomeCompleted},
+		}},
+		{"restored running", slices.Concat(start(a, "one", 0), []api.EventBody{
+			api.TurnRestored{Run: a},
+			api.TurnEnded{Run: a, Outcome: api.OutcomeCompleted},
+		})},
+		{"restored stopping", []api.EventBody{
+			queued(a, api.AfterActive, 0),
+			api.TurnAdmitted{Run: a, Generation: 1},
+			api.TurnStopping{Run: a},
+			api.TurnRestored{Run: a},
+			api.TurnEnded{Run: a, Outcome: api.OutcomeInterrupted},
+		}},
+		{"uncertain", slices.Concat(start(a, "one", 0), []api.EventBody{
+			queued(b, api.SteerActive, 1),
+			api.MessageClaimed{Message: b, Run: a},
+			api.MessageUncertain{Message: b},
+			opened,
+			queued(c, api.SteerActive, 2),
+			api.MessageClaimed{Message: c, Run: a},
+			api.TurnUncertain{Run: a},
+			api.TurnEnded{Run: a, Outcome: api.OutcomeAbandoned},
+		})},
+	}
+	for _, p := range plays {
+		t.Run(p.name, func(t *testing.T) {
+			thread := api.NewID()
+			events := append([]api.EventBody{api.ThreadCreated{Workspace: "/w", Title: "t", Model: api.ModelRef{Provider: "fake", Model: "fake"}}}, p.events...)
+			var et eng.Thread
+			tr := &Transcript{}
+			for i, b := range events {
+				et = eng.Apply(et, eng.Event{Thread: thread, At: at(i + 1), Body: b})
+				tr.apply(event(i+1, b))
+				for _, m := range et.Queue {
+					if u := tr.message(m.ID); u == nil || u.State != engineStates[m.State] {
+						t.Fatalf("after event %d, %s, the fold shows message %s as %s, want %s", i, api.EventType(b), m.ID, describe(u), m.State)
+					}
+				}
+				for _, r := range et.Requests {
+					if e := tr.request(r.ID); e == nil || e.State != r.State {
+						t.Fatalf("after event %d, %s, the fold shows request %s as %s, want %s", i, api.EventType(b), r.ID, describe(e), requestStates[r.State])
+					}
+				}
+			}
+		})
 	}
 }

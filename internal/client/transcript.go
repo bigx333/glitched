@@ -15,9 +15,10 @@ import (
 // it runs, is steered in or is given up, so a queued message never splits
 // the turn it waits behind.
 type Transcript struct {
-	Entries []Entry
-	Queue   []*UserEntry
-	Cursor  api.Cursor // the last event folded in
+	Entries  []Entry
+	Queue    []*UserEntry
+	Cursor   api.Cursor // the last event folded in
+	starting api.ID     // the run admitted and not yet started, stopped or ended
 }
 
 // Entry is sealed: *UserEntry, *AssistantEntry, *WorkEntry or *RequestEntry.
@@ -134,10 +135,14 @@ func (t *Transcript) apply(e api.Event) {
 			u.State, u.run = Claimed, b.Run
 			t.join(i)
 		}
+		t.starting = b.Run
 	case api.TurnStarted:
-		t.settle(b.Run, Sent, "")
+		t.started(b.Run)
 	case api.TurnRestored:
-		t.settle(b.Run, Sent, "")
+		// A run restored past starting is unchanged.
+		if b.Run == t.starting {
+			t.started(b.Run)
+		}
 	case api.MessageDispatched:
 		t.settle(b.Message, Sent, "")
 	case api.MessageCancelled:
@@ -168,12 +173,19 @@ func (t *Transcript) apply(e api.Event) {
 			r.State, r.Reason = api.RequestInvalidated, b.Reason
 		}
 	case api.TurnStopping:
+		t.starting = api.ID{}
 		t.void(b.Run)
 	case api.TurnUncertain:
 		t.end(b.Run, Uncertain, e.At)
 	case api.TurnEnded:
 		t.end(b.Run, Cancelled, e.At)
 	}
+}
+
+// started marks the run's own message sent.
+func (t *Transcript) started(run api.ID) {
+	t.starting = api.ID{}
+	t.settle(run, Sent, "")
 }
 
 func (t *Transcript) last() Entry {
@@ -290,6 +302,7 @@ func (t *Transcript) void(run api.ID) {
 // end closes out a run. The messages it claimed and never delivered get
 // released, its open requests are void, and its text and work are over.
 func (t *Transcript) end(run api.ID, released MessageState, at time.Time) {
+	t.starting = api.ID{}
 	for i := 0; i < len(t.Queue); {
 		if u := t.Queue[i]; u.run == run && u.State == Claimed {
 			u.State = released
