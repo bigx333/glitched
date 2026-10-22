@@ -14,7 +14,8 @@ import (
 // stays pending until its thread's open transcript shows it, so the row
 // never blinks out before the entry replaces it. Err is why the submit
 // failed. A failed row stays until Retry sends the command again under the
-// same ID, or Dismiss drops it.
+// same ID, or Dismiss drops it, or, for an answer, its request stops
+// waiting.
 type Pending struct {
 	Command api.ID
 	Body    api.Intent
@@ -197,5 +198,6 @@ func (m *Manager) submitted(e *Env, cmd api.Command, err error) {
 		th.Pending = slices.Delete(th.Pending, i, i+1)
 	default:
 		th.Pending[i].Err = err
+		th.dropUnasked()
 	}
 }

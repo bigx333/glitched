@@ -128,6 +128,37 @@ func TestAFailedAnswerOffersDismissAndRetry(t *testing.T) {
 	}
 }
 
+// A failed answer goes once its request no longer waits: the card says how
+// the request ended, and the sidebar stops flagging the thread. An answer
+// sent after that, too late, leaves nothing either.
+func TestAFailedAnswerGoesWithItsRequest(t *testing.T) {
+	h := start(t, tempDir(t))
+	h.a.draft = "Fix the flicker"
+	h.tt.Frame()
+	h.click("Send")
+	h.until("the approval card", func() bool { return h.tt.HasText("Allow edit main.go?") })
+	th := h.a.current()
+	request := th.View.Requests[0].ID
+	th.Pending = append(th.Pending, client.Pending{Command: api.NewID(), Body: api.RequestRespond{Request: request}, Err: errors.New("boom")})
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if _, flagged := h.tt.Find("A command failed"); !flagged || !h.tt.HasText("Not sent: boom") {
+		t.Fatalf("a failed answer to a waiting request shows %q", h.tt.Texts())
+	}
+	h.click("Stop")
+	h.until("the request no longer asked", func() bool { return h.tt.HasText("No longer asked") && !h.a.current().View.Working() })
+	h.tt.Advance(time.Second)
+	if _, flagged := h.tt.Find("A command failed"); flagged || failed(th) {
+		t.Fatalf("the request is over, yet the thread keeps %d rows and the window shows %q", len(th.Pending), h.tt.Texts())
+	}
+	h.a.backend.Respond(th.env, th.id(), request, true)
+	h.until("the late answer refused", func() bool { return len(th.Pending) == 0 })
+	h.tt.Advance(time.Second)
+	if _, flagged := h.tt.Find("A command failed"); flagged {
+		t.Fatalf("a late answer flags the thread: %q", h.tt.Texts())
+	}
+}
+
 // A command that failed shows why, with Dismiss, and Retry unless sending
 // it again can only fail the same way; the sidebar flags its thread.
 func TestFailedCommandsOfferDismissAndRetry(t *testing.T) {

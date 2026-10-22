@@ -546,24 +546,6 @@ func TestATurnRunsFromCreateThroughAnApproval(t *testing.T) {
 		return th.View.Disposition == (api.Disposition{State: api.Settled}) && len(th.Pending) == 0
 	})
 
-	answer := m.Respond(env, id, api.NewID(), true)
-	failed := func() bool {
-		p := env.Threads[id].Pending
-		return len(p) == 1 && p[0].Command == answer && errors.Is(p[0].Err, api.ErrNotFound)
-	}
-	g.until(t, "an answer to an unknown request to fail", failed)
-	m.Retry(env, id, answer)
-	if p := env.Threads[id].Pending; len(p) != 1 || p[0].Err != nil {
-		t.Fatalf("right after Retry the row is %+v, want it in flight again", p)
-	}
-	g.until(t, "the retry to fail the same way", failed)
-	if !env.Threads[id].Pending[0].Terminal() {
-		t.Fatal("an answer to an unknown request can succeed on a retry, want it terminal")
-	}
-	m.Dismiss(env, id, answer)
-	if p := env.Threads[id].Pending; len(p) != 0 {
-		t.Fatalf("after Dismiss the rows are %s, want none", describePending(p))
-	}
 }
 
 // A StartNow is refused while a run is live. The same command lands once
@@ -592,8 +574,8 @@ func TestARefusedStartNowLandsOnRetryOnceTheRunEnds(t *testing.T) {
 }
 
 // Interrupting a run voids the request it asked. An answer sent after that
-// is refused, and the GUI dismisses its row.
-func TestAnAnswerTooLateIsDismissed(t *testing.T) {
+// is refused, and leaves no row: the request shows how it ended.
+func TestAnAnswerTooLateLeavesNoRow(t *testing.T) {
 	m, g := manager(t, stateDir(t))
 	env := m.Envs()[0]
 	online(t, g, env)
@@ -612,17 +594,10 @@ func TestAnAnswerTooLateIsDismissed(t *testing.T) {
 	m.Interrupt(env, id)
 	g.until(t, "the run over", func() bool {
 		th := env.Threads[id]
-		return th.View.Run == api.RunIdle && th.View.LastTurn != nil && len(th.Pending) == 0
+		return th.View.Run == api.RunIdle && th.View.LastTurn != nil && len(th.Pending) == 0 && th.Transcript.request(req.Request).State != api.RequestPending
 	})
-	answer := m.Respond(env, id, req.Request, true)
-	g.until(t, "the answer refused", func() bool { p := env.Threads[id].Pending; return len(p) == 1 && p[0].Err != nil })
-	if p := env.Threads[id].Pending[0]; !errors.As(p.Err, new(*api.RejectedError)) {
-		t.Fatalf("the answer failed with %v, want a rejection", p.Err)
-	}
-	m.Dismiss(env, id, answer)
-	if p := env.Threads[id].Pending; len(p) != 0 {
-		t.Fatalf("after Dismiss the rows are %s, want none", describePending(p))
-	}
+	m.Respond(env, id, req.Request, true)
+	g.until(t, "the refused answer dropped", func() bool { return len(env.Threads[id].Pending) == 0 }, func() string { return describePending(env.Threads[id].Pending) })
 }
 
 // A thread created before the engine answered fails to reach it. Dismissing

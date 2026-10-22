@@ -317,6 +317,7 @@ func (m *Manager) view(e *Env, v api.Thread) {
 		e.Threads[v.ID] = th
 	}
 	th.View, th.known = v, true
+	th.dropUnasked()
 	m.follow(e, th)
 }
 
@@ -402,6 +403,7 @@ func (m *Manager) watch(ctx context.Context, e *Env, s *sub, ep api.Endpoint, th
 				if th := e.Threads[thread]; th != nil && th.sub == s {
 					take(th.Transcript)
 					th.shown()
+					th.dropUnasked()
 				}
 			})
 		}
@@ -419,6 +421,27 @@ func (th *Thread) shown() {
 		_, message := p.Body.(api.MessageDispatch)
 		return message && th.Transcript.message(p.Command) != nil
 	})
+}
+
+// dropUnasked drops the failed answers to requests the thread no longer
+// asks, as neither its view nor its open transcript, whichever is behind,
+// shows them waiting: none can land, and the request shows how it ended.
+func (th *Thread) dropUnasked() {
+	th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool {
+		r, ok := p.Body.(api.RequestRespond)
+		return ok && p.Err != nil && !th.asks(r.Request)
+	})
+}
+
+func (th *Thread) asks(request api.ID) bool {
+	if slices.ContainsFunc(th.View.Requests, func(r api.Request) bool { return r.ID == request }) {
+		return true
+	}
+	if th.open {
+		r := th.Transcript.request(request)
+		return r != nil && r.State == api.RequestPending
+	}
+	return false
 }
 
 // local attaches to the engine serving the socket under dir, or embeds one
