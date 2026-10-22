@@ -37,6 +37,14 @@ func (l *fakeLog) restore(keep int) {
 	l.events = run(l.id, 1, uint64(keep), l.events[0].Thread)
 }
 
+// truncate is a restore the host's fence missed, because the backup held the
+// fence too: the log keeps its ID with only its first keep events.
+func (l *fakeLog) truncate(keep int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = l.events[:keep]
+}
+
 func (l *fakeLog) LogID() api.ID {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -277,5 +285,29 @@ func TestUploaderStopsWhenItsLogBelongsToAnotherHost(t *testing.T) {
 	defer stop()
 	if err := u.Run(ctx); !errors.Is(err, ErrForeignLog) {
 		t.Fatalf("uploader of a foreign log returned %v, want ErrForeignLog", err)
+	}
+}
+
+func TestUploaderStopsWhenTheHubHoldsMoreOfItsLog(t *testing.T) {
+	r := openReplica(t)
+	src := newFakeLog()
+	src.commit(5, api.NewID())
+	u := newTestUploader(src, r)
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- u.Run(ctx) }()
+	waitAcked(t, r, src.LogID(), 5)
+	stop()
+	<-done
+
+	src.truncate(3)
+	src.commit(1, api.NewID())
+	ctx, stop = context.WithTimeout(context.Background(), time.Second)
+	defer stop()
+	if err := NewUploader(u.Host, u.Epoch, src, r).Run(ctx); !errors.Is(err, ErrRewound) {
+		t.Fatalf("uploader of a log the hub holds more of returned %v, want ErrRewound", err)
+	}
+	if err := u.Check(ctx); !errors.Is(err, ErrRewound) {
+		t.Fatalf("Check: %v, want ErrRewound", err)
 	}
 }

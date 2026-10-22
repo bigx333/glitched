@@ -577,6 +577,27 @@ func TestStreamResync(t *testing.T) {
 	far.Close()
 }
 
+// A cursor past the head under the current log was handed out by a
+// history this database lost, so its seqs are not this log's.
+func TestStreamSnapshotsACursorPastTheHead(t *testing.T) {
+	n := start(t, dbPath(t), fake.New(fake.Turn(false)))
+	thread := newThread(t, n.h)
+	snap, err := n.h.Read(ctx, api.Query{Thread: thread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ahead := snap.Cursor
+	ahead.Seq += 3
+	s, err := n.h.Open(ctx, api.Subscription{Thread: thread, After: ahead})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if it := next(t, s); it.Kind != api.StreamSnapshot {
+		t.Fatalf("cursor %d past head %d: %v, want a snapshot", ahead.Seq, snap.Cursor.Seq, it.Kind)
+	}
+}
+
 func TestInterruptDuringDeliveryLogsWhatTheAgentGot(t *testing.T) {
 	g := newGated(fake.Turn(true))
 	entered, release := make(chan struct{}, 1), make(chan struct{})

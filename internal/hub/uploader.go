@@ -24,6 +24,10 @@ type Client interface {
 	Acked(ctx context.Context, log api.ID) (uint64, error)
 }
 
+// ErrRewound stops an uploader whose log the hub holds more of than the host
+// does: the host's database came back from a backup that held its fence too.
+var ErrRewound = errors.New("hub: the hub holds more of this log than the host")
+
 type Uploader struct {
 	Host   api.ID
 	Epoch  uint64
@@ -59,8 +63,8 @@ func (u *Uploader) Notify() {
 }
 
 // Run uploads until ctx ends or the hub refuses this host for good: a fenced
-// epoch, or a log that belongs to another host. Every other error is retried
-// from the hub's ack.
+// epoch, a log that belongs to another host, or ErrRewound. Every other
+// error is retried from the hub's ack.
 func (u *Uploader) Run(ctx context.Context) error {
 	const minDelay = 100 * time.Millisecond
 	delay := minDelay
@@ -76,7 +80,7 @@ func (u *Uploader) Run(ctx context.Context) error {
 		}
 		again, err := func() (bool, error) {
 			if !known {
-				n, err := u.Hub.Acked(ctx, log)
+				n, err := u.acked(ctx, log)
 				if err != nil {
 					return false, err
 				}
@@ -108,7 +112,7 @@ func (u *Uploader) Run(ctx context.Context) error {
 		switch {
 		case ctx.Err() != nil:
 			return ctx.Err()
-		case errors.Is(err, api.ErrStaleEpoch), errors.Is(err, ErrForeignLog):
+		case errors.Is(err, api.ErrStaleEpoch), errors.Is(err, ErrForeignLog), errors.Is(err, ErrRewound):
 			return err
 		case err != nil:
 			if err.Error() != failing {
@@ -136,6 +140,30 @@ func (u *Uploader) Run(ctx context.Context) error {
 		}
 		t.Stop()
 	}
+}
+
+// Check returns ErrRewound when the hub holds more of the host's current log
+// than the host does.
+func (u *Uploader) Check(ctx context.Context) error {
+	_, err := u.acked(ctx, u.Source.LogID())
+	return err
+}
+
+// acked is the hub's ack for log, or ErrRewound when the source no longer
+// holds the event at it.
+func (u *Uploader) acked(ctx context.Context, log api.ID) (uint64, error) {
+	acked, err := u.Hub.Acked(ctx, log)
+	if err != nil || acked == 0 {
+		return acked, err
+	}
+	last, err := u.Source.ReadLog(ctx, acked-1, 1)
+	if err != nil {
+		return 0, err
+	}
+	if len(last) == 0 {
+		return 0, ErrRewound
+	}
+	return acked, nil
 }
 
 // fit cuts evs to the longest prefix whose encoding fits in max bytes, but

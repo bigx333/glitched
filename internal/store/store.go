@@ -57,6 +57,31 @@ func (s *Store) LogID() api.ID { return s.log }
 
 func (s *Store) HostID() api.ID { return s.host }
 
+// Rewind does what Open does for a restore its fence shows, for a database
+// another party proved is behind what it handed out: a new log id, and every
+// live run uncertain. Call it before a Host runs on the store.
+func (s *Store) Rewind(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	prev := s.log
+	head, err := s.rewind(ctx, tx)
+	if err == nil {
+		err = s.writeFence(head)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		s.log = prev
+	}
+	return err
+}
+
 // OnCommit registers fn to run after every commit that wrote events, in
 // commit order, while the next writer waits. fn must not block or write.
 func (s *Store) OnCommit(fn func([]api.Event)) {

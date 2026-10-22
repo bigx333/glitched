@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/hub"
@@ -101,27 +102,46 @@ func serve(ctx context.Context, args []string) error {
 		return err
 	}
 	defer st.Close()
+
+	var rep *hub.Replica
+	var hubc hub.Client
+	switch {
+	case *asHub:
+		if rep, err = hub.Open(filepath.Join(*dir, "hub.db")); err != nil {
+			return err
+		}
+		defer rep.Close()
+		hubc = rep
+	case *hubDir != "":
+		hubc = transport.NewHubClient(socket(*hubDir), api.ID{})
+	}
+	var up *hub.Uploader
+	if hubc != nil {
+		up = hub.NewUploader(st.HostID(), *epoch, st, hubc)
+		// The hub lives outside a backup of this database, so it sees a
+		// restore that brought the fence back too.
+		check, cancel := context.WithTimeout(ctx, 2*time.Second)
+		err := up.Check(check)
+		cancel()
+		switch {
+		case errors.Is(err, hub.ErrRewound):
+			slog.Warn("the hub holds more of this log than the database, which came back from a backup; starting a new log", "log", st.LogID())
+			if err := st.Rewind(ctx); err != nil {
+				return err
+			}
+		case err != nil:
+			slog.Warn("hub unreachable, so a restore the fence came back with goes unnoticed", "err", err)
+		}
+	}
+
 	h, err := runtime.New(ctx, st, fake.New(fake.Turn(true)))
 	if err != nil {
 		return err
 	}
 	defer h.Close()
 
-	srv := &transport.Server{Transport: lb, Endpoint: h}
-	var hubc hub.Client
-	switch {
-	case *asHub:
-		rep, err := hub.Open(filepath.Join(*dir, "hub.db"))
-		if err != nil {
-			return err
-		}
-		defer rep.Close()
-		srv.Hub, hubc = rep, rep
-	case *hubDir != "":
-		hubc = transport.NewHubClient(socket(*hubDir), api.ID{})
-	}
-	if hubc != nil {
-		up := hub.NewUploader(st.HostID(), *epoch, st, hubc)
+	srv := &transport.Server{Transport: lb, Endpoint: h, Hub: rep}
+	if up != nil {
 		st.OnCommit(func([]api.Event) { up.Notify() })
 		go func() {
 			if err := up.Run(ctx); err != nil && ctx.Err() == nil {
