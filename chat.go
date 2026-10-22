@@ -132,6 +132,9 @@ func (a *app) header(c *ui.Context, t thread) {
 		ui.Text(c, t.View.Title).FontWeight(600).SingleLine().Shrink(1).MinWidth(80)
 		if !narrow {
 			pill(c, filepath.Base(t.View.Workspace)).Shrink(0)
+			if len(a.backend.Envs()) > 1 && t.env != nil {
+				machinePill(c, t.env)
+			}
 		}
 		ui.Spacer(c)
 		if !t.local() {

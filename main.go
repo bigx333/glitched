@@ -113,6 +113,10 @@ type app struct {
 	// the next once.
 	ended    map[api.ID]time.Time
 	settings settings
+	// server is the Servers page's form for adding one, and why the last
+	// add failed.
+	server    client.Server
+	serverErr string
 
 	showSidebar  bool
 	showDiff     bool

@@ -122,4 +122,5 @@ var (
 
 	// The working spinner's arc: Solar has none that turns.
 	icLoader = lucide(`<path d="M21 12a9 9 0 1 1-6.219-8.56"/>`)
+	icServer = lucide(`<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/>`)
 )

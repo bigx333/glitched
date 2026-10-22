@@ -183,9 +183,13 @@ func (a *app) projectStrip(c *ui.Context) {
 		}
 		for _, p := range a.projects {
 			on := a.projectFilter[p.key]
-			tip := "Show " + p.name()
+			name := p.name()
+			if len(a.backend.Envs()) > 1 {
+				name += " on " + p.env.Name
+			}
+			tip := "Show " + name
 			if on {
-				tip = "Hide " + p.name()
+				tip = "Hide " + name
 			}
 			b := ghost(c, p.key, on).Padding(3).Label(p.name()).Tooltip(tip)
 			if filtered && !on {
@@ -314,6 +318,9 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 		title := ui.Text(c, t.View.Title).FontSize(13).SingleLine().Grow(1).Shrink(1)
 		if unread {
 			title.FontWeight(600).TextColor(palette.text)
+		}
+		if len(a.backend.Envs()) > 1 {
+			machinePill(c, t.env)
 		}
 		// The actions show while it's pointed at, and while its snooze
 		// popover is open, which takes the pointer away from the row.

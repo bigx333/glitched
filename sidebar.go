@@ -144,6 +144,7 @@ var settingsSections = []struct {
 	{"general", "General", icSliders, ui.Hex("#94a3b8")},
 	{"appearance", "Appearance", icPalette, ui.Hex("#f472b6")},
 	{"providers", "Providers", icPlug, ui.Hex("#4ade80")},
+	{"servers", "Servers", icServer, ui.Hex("#38bdf8")},
 	{"keybindings", "Keybindings", icKeyboard, ui.Hex("#60a5fa")},
 	{"archived", "Archived threads", icArchive, ui.Hex("#fbbf24")},
 	{"about", "About", icInfo, ui.Hex("#a78bfa")},

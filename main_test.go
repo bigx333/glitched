@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,6 +113,69 @@ func TestStopInterrupts(t *testing.T) {
 	}
 	if _, ok := h.tt.Find("Send"); !ok {
 		t.Error("the stop button didn't go back to Send")
+	}
+}
+
+// A server added in Settings shows its threads beside this machine's,
+// each with its machine; one that refuses the token says so.
+func TestServers(t *testing.T) {
+	rdir := tempDir(t)
+	token, err := daemon.Pair(rdir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := engine(t, daemon.Config{Dir: rdir, Listen: []string{"127.0.0.1:0"}}, fake.Turn(false))
+	seed(t, d, "/srv/api", "Rotate the API keys", "Which keys are old?")
+	addr := d.Addrs()[0].String()
+
+	h := start(t, tempDir(t))
+	h.click("Settings")
+	h.click("Servers")
+	h.a.server = client.Server{Label: "devbox", Addr: addr, Token: token}
+	h.tt.Frame()
+	h.click("Add server")
+	h.until("devbox online", func() bool { return h.tt.HasText("Online") })
+	h.a.server = client.Server{Label: "stranger", Addr: addr, Token: "wrong"}
+	h.tt.Frame()
+	h.click("Add server")
+	h.until("the stranger refused", func() bool { return h.tt.HasText("Refused") })
+
+	h.click("Back to app")
+	th := h.thread("Rotate the API keys")
+	h.tt.Advance(time.Second)
+	if th.local() || th.env.Name != "devbox" {
+		t.Fatalf("the server's thread is on %v, want devbox", th.env)
+	}
+	r, ok := h.tt.Find("devbox")
+	if !ok || r.X > h.a.sidebarWidth {
+		t.Errorf("no devbox badge in the sidebar: %q", h.tt.Texts())
+	}
+	h.click(th.View.Title)
+	h.until("its transcript, from the server", func() bool { return h.tt.HasText("Which keys are old?") && h.tt.HasText("Read main.go") })
+	for _, s := range []string{"Open in", "Commit & push", "Toggle terminal  ⌘J", "Toggle diff  ⌘D", "Attach files"} {
+		if _, ok := h.tt.Find(s); ok {
+			t.Errorf("a server's thread offers %q, which works on this machine's files", s)
+		}
+	}
+	h.a.draft = "Rotate them"
+	h.tt.Frame()
+	h.click("Send")
+	h.until("the server to run the turn", func() bool {
+		snap, err := d.Endpoint().Read(context.Background(), api.Query{Thread: th.id()})
+		return err == nil && snap.Threads[0].Queued == 0 && snap.Threads[0].Run == api.RunIdle && h.tt.HasText("Rotate them") &&
+			strings.Count(strings.Join(h.tt.Texts(), "\n"), "Done.") == 2
+	})
+
+	h.click("Settings")
+	h.click("Servers")
+	h.click("Remove") // devbox's, the first
+	h.tt.Advance(time.Second)
+	if s := h.a.backend.Servers(); len(s) != 1 || s[0].Label != "stranger" || h.tt.HasText("devbox") {
+		t.Errorf("after removing devbox the servers are %+v and the page shows %q", s, h.tt.Texts())
+	}
+	h.click("Back to app")
+	if th := h.a.current(); !th.id().IsZero() || h.tt.HasText("Rotate the API keys") {
+		t.Errorf("devbox's thread still shows after removing it: %q", h.tt.Texts())
 	}
 }
 

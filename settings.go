@@ -6,6 +6,8 @@ import (
 
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
+
+	"glitched/internal/client"
 )
 
 func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
@@ -40,6 +42,9 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 			case r.Match("/providers"):
 				r.Title("Providers")
 				a.page(c, "Providers", "The coding agents Glitched runs, and their models.", a.providers)
+			case r.Match("/servers"):
+				r.Title("Servers")
+				a.page(c, "Servers", "Engines on other machines, reached over the tailnet with a token each paired for this app. Their threads show beside this machine's.", a.servers)
 			case r.Match("/keybindings"):
 				r.Title("Keybindings")
 				a.page(c, "Keybindings", "Shortcuts for the commands you use most.", a.keybindings)
@@ -285,6 +290,90 @@ func (a *app) provider(c *ui.Context, name string, mark *ui.SVG, brand ui.Color,
 			ui.Field(c, "Default model", func() { ui.Select(c, model, models) })
 			ui.Field(c, "Custom models", func() { ui.TokenField(c, custom, nil) }).Description("Model ids to offer in the picker, as the CLI takes them.")
 		})
+	})
+}
+
+// --- Servers
+
+func (a *app) servers(c *ui.Context) {
+	card(c, "", func() {
+		servers := a.backend.Servers()
+		if len(servers) == 0 {
+			ui.Text(c, "No servers yet.").Key("none").TextColor(palette.muted).Padding(16)
+		}
+		for _, s := range servers {
+			ui.Row(c).Key(s.Label).Padding(12, 12, 12, 16).Gap(12).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
+				col, status := envStatus(a.serverEnv(s.Label))
+				ui.Box(c).Size(8, 8).Radius(4).Background(col)
+				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
+					ui.Text(c, s.Label).FontWeight(500)
+					ui.Text(c, s.Addr).FontSize(12).Font("monospace").TextColor(palette.muted).SingleLine()
+				})
+				ui.Text(c, status).FontSize(12).TextColor(col).SingleLine().Shrink(1).MaxWidth(280)
+				ui.Button(c.Key("remove"), "Remove").TextColor(palette.red).OnClick(func() {
+					if err := a.backend.RemoveServer(s.Label); err != nil {
+						c.AddToast(ui.Toast{Title: "Couldn't remove " + s.Label, Description: err.Error()})
+					}
+				})
+			})
+		}
+	})
+	card(c, "ADD A SERVER", func() {
+		ui.Column(c).Padding(16).Gap(14).Children(func() {
+			ui.Field(c, "Label", func() { ui.TextInput(c, &a.server.Label).Placeholder("devbox") }).
+				Description("What the sidebar calls the machine. A label already listed is replaced.")
+			ui.Field(c, "Address", func() { ui.TextInput(c, &a.server.Addr).Placeholder("devbox:7433").Font("monospace") }).
+				Description("Where glitched serve -listen listens on it.")
+			ui.Field(c, "Token", func() { ui.TextInput(c, &a.server.Token).Password().Font("monospace") }).
+				Description("What glitched pair printed on it.")
+			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, a.serverErr).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
+				ui.Button(c.Key("add"), "Add server").Disabled(a.server.Label == "" || a.server.Addr == "").OnClick(func() {
+					a.serverErr = ""
+					if err := a.backend.AddServer(a.server); err != nil {
+						a.serverErr = err.Error()
+						return
+					}
+					a.server = client.Server{}
+				})
+			})
+		})
+	})
+}
+
+func (a *app) serverEnv(label string) *client.Env {
+	for _, e := range a.backend.Envs() {
+		if e.Kind == client.Remote && e.Name == label {
+			return e
+		}
+	}
+	return nil
+}
+
+// envStatus is how a machine's engine is reached, as a color and a word.
+func envStatus(e *client.Env) (ui.Color, string) {
+	if e == nil {
+		return palette.faint, ""
+	}
+	switch s := e.Status.(type) {
+	case client.Online:
+		return palette.green, "Online"
+	case client.Offline:
+		return palette.red, "Offline: " + s.Err.Error()
+	case client.Refused:
+		return palette.red, "Refused: it has no such token"
+	}
+	return palette.amber, "Connecting…"
+}
+
+// machinePill names the machine a thread runs on, after a dot of how it's
+// reached.
+func machinePill(c *ui.Context, e *client.Env) ui.Element {
+	col, status := envStatus(e)
+	return ui.Row(c).Gap(4).AlignItems(ui.Center).Padding(1, 6).Radius(999).Border(1, palette.border).Shrink(0).
+		Tooltip(e.Name + " · " + status).Children(func() {
+		ui.Box(c).Size(5, 5).Radius(3).Background(col)
+		ui.Text(c, e.Name).FontSize(10.5).TextColor(palette.muted).SingleLine()
 	})
 }
 
