@@ -82,6 +82,11 @@ func serve(ctx context.Context, args []string) error {
 	if err := os.MkdirAll(*dir, 0o700); err != nil {
 		return err
 	}
+	// Nothing authenticates a caller on the socket yet, so file modes are
+	// the only gate; a dir created earlier may be wider than MkdirAll's mode.
+	if err := os.Chmod(*dir, 0o700); err != nil {
+		return err
+	}
 	lk, err := lock(filepath.Join(*dir, "engine.lock"))
 	if err != nil {
 		return err
@@ -127,6 +132,10 @@ func serve(ctx context.Context, args []string) error {
 
 	ln, err := lb.Listen(ctx)
 	if err != nil {
+		return err
+	}
+	if err := os.Chmod(lb.Address, 0o600); err != nil {
+		ln.Close()
 		return err
 	}
 	slog.Info("serving", "socket", lb.Address, "host", st.HostID(), "log", st.LogID(), "hub", *asHub)
