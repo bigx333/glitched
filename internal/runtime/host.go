@@ -330,7 +330,7 @@ func (h *Host) call(e store.Effect, lr *liveRun) (o engine.Observation, ok bool)
 			return engine.Started{Run: b.Run}, true
 		}
 		outcome := api.OutcomeFailed
-		if lr.ctx.Err() != nil && h.ctx.Err() == nil {
+		if lr.ctx.Err() != nil {
 			outcome = api.OutcomeInterrupted
 		}
 		h.forget(b.Run)
