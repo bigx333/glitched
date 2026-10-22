@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"time"
 
 	"glitched/internal/api"
@@ -35,6 +36,7 @@ type Uploader struct {
 	MaxBytes int
 	Interval time.Duration // re-read the log this often without a Notify
 	MaxDelay time.Duration // cap on the error backoff
+	Logger   *slog.Logger
 
 	wake chan struct{}
 }
@@ -43,7 +45,8 @@ func NewUploader(host api.ID, epoch uint64, src LogSource, hub Client) *Uploader
 	return &Uploader{
 		Host: host, Epoch: epoch, Source: src, Hub: hub,
 		Batch: 500, MaxBytes: 8 << 20, Interval: 5 * time.Second, MaxDelay: 30 * time.Second,
-		wake: make(chan struct{}, 1),
+		Logger: slog.Default(),
+		wake:   make(chan struct{}, 1),
 	}
 }
 
@@ -63,6 +66,9 @@ func (u *Uploader) Run(ctx context.Context) error {
 	var log api.ID
 	var acked uint64
 	known := false
+	// failing is the last error logged, so a retry loop logs each new error
+	// once instead of every attempt.
+	failing := ""
 	for {
 		if id := u.Source.LogID(); id != log {
 			log, known = id, false
@@ -104,8 +110,16 @@ func (u *Uploader) Run(ctx context.Context) error {
 		case errors.Is(err, api.ErrStaleEpoch):
 			return err
 		case err != nil:
+			if err.Error() != failing {
+				failing = err.Error()
+				u.Logger.Warn("hub upload failing, retrying", "log", log, "acked", acked, "err", err)
+			}
 			wait, wake, delay = delay, nil, min(delay*2, u.MaxDelay)
 		default:
+			if failing != "" {
+				failing = ""
+				u.Logger.Info("hub upload recovered", "log", log, "acked", acked)
+			}
 			delay = minDelay
 			if again {
 				continue

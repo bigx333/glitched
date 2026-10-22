@@ -3,6 +3,8 @@ package hub
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -192,5 +194,69 @@ func TestUploaderStopsWhenFenced(t *testing.T) {
 	defer stop()
 	if err := u.Run(ctx); !errors.Is(err, api.ErrStaleEpoch) {
 		t.Fatalf("fenced uploader returned %v, want ErrStaleEpoch", err)
+	}
+}
+
+// failingHub refuses the first appends with errs, in order.
+type failingHub struct {
+	*Replica
+	mu   sync.Mutex
+	errs []error
+}
+
+func (h *failingHub) Append(ctx context.Context, u api.Upload) (api.UploadAck, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.errs) > 0 {
+		err := h.errs[0]
+		h.errs = h.errs[1:]
+		return api.UploadAck{}, err
+	}
+	return h.Replica.Append(ctx, u)
+}
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func TestUploaderLogsEachNewErrorAndTheRecovery(t *testing.T) {
+	r := openReplica(t)
+	src := newFakeLog()
+	src.commit(6, api.NewID())
+	refused, reset := errors.New("hub refused"), errors.New("connection reset")
+	hub := &failingHub{Replica: r, errs: []error{refused, refused, refused, reset, reset}}
+	var out syncBuffer
+	u := newTestUploader(src, hub)
+	u.Logger = slog.New(slog.NewTextHandler(&out, nil))
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	go u.Run(ctx)
+	waitAcked(t, r, src.LogID(), 6)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(out.String(), "recovered") {
+		if time.Now().After(deadline) {
+			t.Fatalf("no recovery logged:\n%s", out.String())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	logged := out.String()
+	for _, want := range []string{refused.Error(), reset.Error(), "recovered"} {
+		if n := strings.Count(logged, want); n != 1 {
+			t.Fatalf("%q logged %d times, want once:\n%s", want, n, logged)
+		}
 	}
 }
