@@ -146,6 +146,7 @@ type Env struct {
 	stop    context.CancelFunc
 	unlink  context.CancelFunc // ends the link that reaches the engine
 	session *session           // the live shell stream; nil while there is none
+	waiting []chan<- *session  // commands waiting for the next session
 	server  Server             // a remote's entry in gui.json
 }
 
@@ -289,6 +290,10 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 		if e.Kind == Local {
 			e.Name = info.Name
 		}
+		for _, w := range e.waiting {
+			w <- s
+		}
+		e.waiting = nil
 		live := map[api.ID]bool{}
 		for _, v := range it.Snapshot.Threads {
 			live[v.ID] = true

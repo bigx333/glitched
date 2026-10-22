@@ -27,14 +27,19 @@ type saved struct {
 func (m *Manager) savedPath() string { return filepath.Join(m.cfg.Dir, "gui.json") }
 
 // edit changes gui.json for every GUI on this Dir: under gui.json.lock it
-// reads what the others saved, applies change and replaces the file. The
-// envs then follow the servers the file lists; renew names one to
-// reconnect even if unchanged.
-func (m *Manager) edit(renew string, change func(*saved)) error {
-	s, err := jsonfile.Edit(m.savedPath(), func(s *saved) error {
+// reads what the others saved, applies change and replaces the file.
+func (m *Manager) edit(change func(*saved)) (saved, error) {
+	return jsonfile.Edit(m.savedPath(), func(s *saved) error {
 		change(s)
 		return nil
 	})
+}
+
+// editServers saves a change to the servers, then makes the envs follow
+// the servers gui.json lists, which another GUI may have changed too.
+// renew names one to reconnect even if unchanged.
+func (m *Manager) editServers(renew string, change func(*saved)) error {
+	s, err := m.edit(change)
 	if err != nil {
 		return err
 	}
@@ -78,7 +83,7 @@ func (m *Manager) AddServer(s Server) error {
 	if s.Label == "" || s.Addr == "" {
 		return errors.New("client: a server needs a label and an address")
 	}
-	return m.edit(s.Label, func(f *saved) {
+	return m.editServers(s.Label, func(f *saved) {
 		if i := slices.IndexFunc(f.Servers, func(o Server) bool { return o.Label == s.Label }); i >= 0 {
 			f.Servers[i] = s
 		} else {
@@ -88,7 +93,7 @@ func (m *Manager) AddServer(s Server) error {
 }
 
 func (m *Manager) RemoveServer(label string) error {
-	return m.edit("", func(f *saved) {
+	return m.editServers("", func(f *saved) {
 		f.Servers = slices.DeleteFunc(f.Servers, func(o Server) bool { return o.Label == label })
 	})
 }
@@ -105,12 +110,13 @@ func (m *Manager) Unread(th *Thread) bool {
 }
 
 // MarkRead records in gui.json that the GUI showed the thread's last turn.
+// It leaves the envs as they are, whatever servers another GUI saved.
 func (m *Manager) MarkRead(th *Thread) error {
 	if !m.Unread(th) {
 		return nil
 	}
 	id, ended := th.View.ID, th.View.LastTurn.Ended
-	return m.edit("", func(f *saved) {
+	s, err := m.edit(func(f *saved) {
 		if f.Seen == nil {
 			f.Seen = map[api.ID]time.Time{}
 		}
@@ -118,4 +124,9 @@ func (m *Manager) MarkRead(th *Thread) error {
 			f.Seen[id] = ended
 		}
 	})
+	if err != nil {
+		return err
+	}
+	m.saved.Seen = s.Seen
+	return nil
 }

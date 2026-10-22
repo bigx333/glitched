@@ -122,30 +122,62 @@ func (m *Manager) submit(e *Env, thread api.ID, body api.Intent) api.ID {
 }
 
 // send submits cmd once the thread's previous submit has returned, so a
-// message never overtakes the create before it.
+// message never overtakes the create before it. If e's session ends first,
+// as a redial or a re-attach ends it, the command goes out on the next one
+// under the same ID, which the engine applies once.
 func (m *Manager) send(e *Env, th *Thread, cmd api.Command) {
-	if e.session == nil {
+	s := e.session
+	if s == nil {
 		m.submitted(e, cmd, errNoEngine)
 		return
 	}
-	ep := e.session.ep
 	prev, done := th.last, make(chan struct{})
 	th.last = done
-	ctx := e.ctx
+	ectx := e.ctx
 	m.wg.Go(func() {
 		defer close(done)
 		if prev != nil {
 			select {
 			case <-prev:
-			case <-ctx.Done():
+			case <-ectx.Done():
 				return
 			}
 		}
-		sctx, cancel := context.WithTimeout(ctx, submitTimeout)
-		_, err := ep.Submit(sctx, cmd)
-		cancel()
-		m.post(ctx, func() { m.submitted(e, cmd, err) })
+		ctx, cancel := context.WithTimeout(ectx, submitTimeout)
+		defer cancel()
+		var err error
+		for {
+			if s.ctx.Err() != nil {
+				if s = m.next(ctx, e); s == nil {
+					err = errNoEngine
+					break
+				}
+			}
+			if _, err = s.ep.Submit(ctx, cmd); err == nil || s.ctx.Err() == nil {
+				break
+			}
+		}
+		m.post(ectx, func() { m.submitted(e, cmd, err) })
 	})
+}
+
+// next returns e's live session once there is one, or nil if ctx ends
+// first.
+func (m *Manager) next(ctx context.Context, e *Env) *session {
+	got := make(chan *session, 1)
+	m.post(ctx, func() {
+		if e.session != nil && e.session.ctx.Err() == nil {
+			got <- e.session
+		} else {
+			e.waiting = append(e.waiting, got)
+		}
+	})
+	select {
+	case s := <-got:
+		return s
+	case <-ctx.Done():
+		return nil
+	}
 }
 
 func (m *Manager) submitted(e *Env, cmd api.Command, err error) {

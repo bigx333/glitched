@@ -166,6 +166,40 @@ func TestRepairingATokenKeepsTheServersThreads(t *testing.T) {
 	g.until(t, "the retry landed", func() bool { return len(box.Threads[id].Pending) == 0 }, func() string { return describePending(box.Threads[id].Pending) })
 }
 
+// Adding a listed server again reconnects it while commands are on their
+// way. They go out on the new session instead of failing with the old one.
+func TestCommandsInFlightGoOutAfterAReconnect(t *testing.T) {
+	rdir := stateDir(t)
+	token, err := daemon.Pair(rdir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := engine(t, rdir, "127.0.0.1:0").Addrs()[0].String()
+	m, g := manager(t, stateDir(t))
+	box := Server{Label: "box", Addr: addr, Token: token}
+	if err := m.AddServer(box); err != nil {
+		t.Fatal(err)
+	}
+	env := m.Envs()[1]
+	online(t, g, env)
+	id := m.Create(env, "/work", "t", fakeModel, api.AccessAsk)
+	g.until(t, "the create confirmed", func() bool { th := env.Threads[id]; return th.known && len(th.Pending) == 0 })
+
+	for _, d := range []api.DispositionState{api.Settled, api.Open, api.Settled} {
+		m.SetDisposition(env, id, api.Disposition{State: d})
+	}
+	if err := m.AddServer(box); err != nil {
+		t.Fatal(err)
+	}
+	g.until(t, "every command landed", func() bool {
+		th := env.Threads[id]
+		if i := slices.IndexFunc(th.Pending, func(p Pending) bool { return p.Err != nil }); i >= 0 {
+			t.Fatalf("a command failed across the reconnect: %v", th.Pending[i].Err)
+		}
+		return len(th.Pending) == 0 && th.View.Disposition.State == api.Settled
+	})
+}
+
 // managerGoroutines counts the goroutines running the manager's code; the
 // engines these tests serve run in the same process.
 func managerGoroutines() int {
@@ -232,7 +266,7 @@ func TestReconnectingOrRemovingAServerEndsItsGoroutines(t *testing.T) {
 }
 
 // Two GUIs on one Dir save at once. Each save keeps what the other saved,
-// and shows the servers the other added or removed.
+// and a change to the servers shows the ones the other added or removed.
 func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 	dir := stateDir(t)
 	a, _ := manager(t, dir)
@@ -263,7 +297,14 @@ func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 	if b.Unread(read) {
 		t.Fatal("the other GUI's read mark is lost")
 	}
+	env := a.Envs()[1]
 	if err := a.MarkRead(&Thread{View: api.Thread{ID: api.NewID(), LastTurn: &api.TurnResult{Ended: time.Now()}}}); err != nil {
+		t.Fatal(err)
+	}
+	if a.Envs()[1] != env || a.Servers()[0].Label != gone {
+		t.Fatal("marking a thread read made the envs follow gui.json, want only the read mark saved")
+	}
+	if err := a.AddServer(Server{Label: "late", Addr: "127.0.0.1:1"}); err != nil {
 		t.Fatal(err)
 	}
 	s, err := savedIn(dir)
@@ -275,7 +316,7 @@ func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 		labels = append(labels, e.Name)
 	}
 	if want := serverLabels(s.Servers); !slices.Equal(serverLabels(a.Servers()), want) || !slices.Equal(labels, want) {
-		t.Fatalf("after its next save a GUI lists %v and shows %v, want gui.json's %v", serverLabels(a.Servers()), labels, want)
+		t.Fatalf("after a change to its servers a GUI lists %v and shows %v, want gui.json's %v", serverLabels(a.Servers()), labels, want)
 	}
 	if slices.Contains(labels, gone) || b.Unread(read) || a.Unread(read) {
 		t.Fatalf("a removed server or a read mark did not carry over")
