@@ -84,6 +84,26 @@ func TestReturningFromSettingsReadsTheThreadShown(t *testing.T) {
 	}
 }
 
+// A thread selected stays unread until its transcript arrives: until then
+// the chat shows nothing of the turn that ended.
+func TestAThreadIsReadOnceItsTranscriptShows(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	seed(t, d, "/work", "Finished offscreen", "finish this turn")
+	h := start(t, dir)
+	th := h.thread("Finished offscreen")
+	h.until("its turn over, unread", func() bool { return h.a.backend.Unread(th.Thread) })
+	h.a.select_(th)
+	h.tt.Frame()
+	if !h.a.backend.Unread(th.Thread) {
+		t.Fatal("the chat read the thread before its transcript arrived")
+	}
+	h.until("read once its transcript shows", func() bool { return !h.a.backend.Unread(th.Thread) })
+	if !h.tt.HasText("finish this turn") {
+		t.Fatalf("read, the chat shows %q, want the turn", h.tt.Texts())
+	}
+}
+
 // Sending in the draft creates the thread on this machine, in its
 // workspace, and its turn streams in until it asks for an approval.
 func TestSendStartsAThread(t *testing.T) {

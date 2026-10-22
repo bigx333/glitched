@@ -496,6 +496,8 @@ func main() {
 		a.setUpQuickAsk()
 		// The terminals' shells hang up with the window.
 		a.win.OnClosed(a.closeShells)
+		// Coming back to the window reads the thread the chat shows.
+		a.win.OnFocus(a.win.Invalidate)
 		if err := a.backend.Start(); err != nil {
 			log.Print(err)
 		}
