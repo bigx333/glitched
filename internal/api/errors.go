@@ -33,4 +33,6 @@ type MovedError struct {
 	Epoch uint64
 }
 
-func (e *MovedError) Error() string { return fmt.Sprintf("api: moved to %s at epoch %d", e.To, e.Epoch) }
+func (e *MovedError) Error() string {
+	return fmt.Sprintf("api: moved to %s at epoch %d", e.To, e.Epoch)
+}
