@@ -25,9 +25,11 @@ import (
 
 // impostor answers WebSocket upgrades on loopback as a server that doesn't
 // hold the client's key would: it sends a nonce, reads the client's answer
-// and sends a proof made with a key of its own.
+// and sends a proof made with a key of its own, or, if it reflects, the
+// client's own MAC.
 type impostor struct {
 	addr    string
+	reflect bool
 	serving sync.WaitGroup
 
 	mu      sync.Mutex
@@ -35,13 +37,13 @@ type impostor struct {
 	answers []hello
 }
 
-func newImpostor(t *testing.T) *impostor {
+func newImpostor(t *testing.T, reflect bool) *impostor {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	imp := &impostor{addr: ln.Addr().String()}
+	imp := &impostor{addr: ln.Addr().String(), reflect: reflect}
 	hs := &http.Server{Handler: http.HandlerFunc(imp.serve)}
 	go hs.Serve(&recording{Listener: ln, imp: imp})
 	t.Cleanup(func() { hs.Close() })
@@ -70,8 +72,11 @@ func (imp *impostor) serve(w http.ResponseWriter, r *http.Request) {
 	imp.mu.Lock()
 	imp.answers = append(imp.answers, h)
 	imp.mu.Unlock()
-	forged := make([]byte, sha256.Size)
-	rand.Read(forged)
+	forged := h.MAC
+	if !imp.reflect {
+		forged = make([]byte, sha256.Size)
+		rand.Read(forged)
+	}
 	b, _ = json.Marshal(hello{MAC: forged})
 	ws.Write(ctx, websocket.MessageText, b)
 	for {
@@ -189,18 +194,20 @@ func checkSent(t *testing.T, sent [][]byte, token string) {
 const longToken = "Zm9vYmFyYmF6cXV4cXV1eGNvcmdlZ3JhdWx0Z2FycGx5"
 
 func TestClientSendsNeitherTheTokenNorItsKey(t *testing.T) {
-	imp := newImpostor(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	for name, tr := range map[string]Transport{"Tailnet": Tailnet{Address: imp.addr, Token: longToken}, "*Tailnet": &Tailnet{Address: imp.addr, Token: longToken}} {
-		c := NewEndpointClient(tr, api.ID{})
-		_, err := c.Info(ctx)
-		c.Close()
-		if !errors.Is(err, ErrNotTheServer) {
-			t.Errorf("%s against a server that doesn't hold the key: %v, want ErrNotTheServer", name, err)
+	for impostor, reflect := range map[string]bool{"proves with a key of its own": false, "reflects the client's MAC": true} {
+		imp := newImpostor(t, reflect)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for name, tr := range map[string]Transport{"Tailnet": Tailnet{Address: imp.addr, Token: longToken}, "*Tailnet": &Tailnet{Address: imp.addr, Token: longToken}} {
+			c := NewEndpointClient(tr, api.ID{})
+			_, err := c.Info(ctx)
+			c.Close()
+			if !errors.Is(err, ErrNotTheServer) {
+				t.Errorf("%s against a server that %s: %v, want ErrNotTheServer", name, impostor, err)
+			}
 		}
+		checkSent(t, imp.sent(), longToken)
 	}
-	checkSent(t, imp.sent(), longToken)
 }
 
 func TestTailnetSendsNoReusableSecretWhenTheRouteCheckIsWrong(t *testing.T) {
@@ -208,7 +215,7 @@ func TestTailnetSendsNoReusableSecretWhenTheRouteCheckIsWrong(t *testing.T) {
 	// another interface when the route says so: the route check passes, and
 	// the connection reaches a plain listener outside WireGuard.
 	interfaces(t, "127.0.0.1 ::1", "100.64.0.9 fd7a:115c:a1e0::9", "192.168.1.5")
-	imp := newImpostor(t)
+	imp := newImpostor(t, false)
 	at := func(s string) net.Addr { return net.TCPAddrFromAddrPort(netip.MustParseAddrPort(s)) }
 	old := dialNet
 	t.Cleanup(func() { dialNet = old })
