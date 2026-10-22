@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -23,11 +24,15 @@ type Client interface {
 }
 
 type Uploader struct {
-	Host     api.ID
-	Epoch    uint64
-	Source   LogSource
-	Hub      Client
-	Batch    int
+	Host   api.ID
+	Epoch  uint64
+	Source LogSource
+	Hub    Client
+	Batch  int // most events per upload
+	// MaxBytes caps an upload's encoded events, well under the server's body
+	// limit. An event larger than MaxBytes still goes alone; if the server
+	// refuses it, the uploader logs the error and retries it forever.
+	MaxBytes int
 	Interval time.Duration // re-read the log this often without a Notify
 	MaxDelay time.Duration // cap on the error backoff
 
@@ -37,7 +42,7 @@ type Uploader struct {
 func NewUploader(host api.ID, epoch uint64, src LogSource, hub Client) *Uploader {
 	return &Uploader{
 		Host: host, Epoch: epoch, Source: src, Hub: hub,
-		Batch: 500, Interval: 5 * time.Second, MaxDelay: 30 * time.Second,
+		Batch: 500, MaxBytes: 8 << 20, Interval: 5 * time.Second, MaxDelay: 30 * time.Second,
 		wake: make(chan struct{}, 1),
 	}
 }
@@ -70,8 +75,12 @@ func (u *Uploader) Run(ctx context.Context) error {
 				}
 				acked, known = n, true
 			}
-			evs, err := u.Source.ReadLog(ctx, acked, u.Batch)
-			if err != nil || len(evs) == 0 {
+			read, err := u.Source.ReadLog(ctx, acked, u.Batch)
+			if err != nil || len(read) == 0 {
+				return false, err
+			}
+			evs, err := fit(read, u.MaxBytes)
+			if err != nil {
 				return false, err
 			}
 			ack, err := u.Hub.Append(ctx, api.Upload{Host: u.Host, Epoch: u.Epoch, Log: log, Events: evs})
@@ -85,7 +94,7 @@ func (u *Uploader) Run(ctx context.Context) error {
 				return false, err
 			}
 			acked = ack.Acked
-			return len(evs) == u.Batch, nil
+			return len(evs) < len(read) || len(read) == u.Batch, nil
 		}()
 
 		wait, wake := u.Interval, u.wake
@@ -112,4 +121,20 @@ func (u *Uploader) Run(ctx context.Context) error {
 		}
 		t.Stop()
 	}
+}
+
+// fit cuts evs to the longest prefix whose encoding fits in max bytes, but
+// never to nothing.
+func fit(evs []api.Event, max int) ([]api.Event, error) {
+	size := 0
+	for i, e := range evs {
+		b, err := json.Marshal(e)
+		if err != nil {
+			return nil, err
+		}
+		if size += len(b); i > 0 && size > max {
+			return evs[:i], nil
+		}
+	}
+	return evs, nil
 }

@@ -2,11 +2,13 @@ package transport
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -371,5 +373,31 @@ func TestUploadSurvivesAConnectionDroppedAfterCommit(t *testing.T) {
 		if e.Cursor.Seq != uint64(i+1) {
 			t.Fatalf("replica seq %d at %d", e.Cursor.Seq, i)
 		}
+	}
+}
+
+func TestUploaderBatchesFitTheServerBodyLimit(t *testing.T) {
+	r := openReplica(t)
+	src := &fakeLog{id: api.NewID()}
+	src.events = events(src.id, api.NewID(), 1, 80)
+	payload := json.RawMessage(`"` + strings.Repeat("x", 1<<20) + `"`)
+	for i := range src.events {
+		src.events[i].Payload = payload
+	}
+	u := hub.NewUploader(api.NewID(), 1, src, NewHubClient(start(t, "unix", &Server{Hub: r}), api.ID{}))
+	u.MaxDelay = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error)
+	go func() { done <- u.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+
+	// The whole backlog is over the server's body limit; replicating more than
+	// two batches' worth shows the uploader splits it. All 80 is slow under -race.
+	deadline := time.Now().Add(20 * time.Second)
+	for n, _ := r.Acked(ctx, src.id); n < 20; n, _ = r.Acked(ctx, src.id) {
+		if time.Now().After(deadline) {
+			t.Fatalf("acked %d of 80 MiB-sized events: a batch is over the server's body limit", n)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
