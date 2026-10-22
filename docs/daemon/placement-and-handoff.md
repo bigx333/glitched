@@ -72,7 +72,7 @@ client → source  thread.move{to, ticket, transferID}
 source   waits for idle (or interrupts), then commits residency = handingOff
          new commands are still admitted to the thread queue and travel with it
 source   builds the bundle
-source → target  stream bundle (direct route, or relayed through the client if hosts can't reach each other)
+source → target  stream bundle over the tailnet
 target   imports into a staging area, reports prepared(transferID)
 source   COMMITS residency = moved{target, epoch+1}  <- the single commit point
 source   outbox effect: activate(transferID) to target, retried until acknowledged
@@ -101,7 +101,7 @@ target   activates, owner_epoch = epoch+1, starts its queue
 
 ## Host-to-host trust
 
-Hosts don't trust each other by default. Each transfer is authorized by the client, which already holds Operate grants on both hosts. The target mints a ticket that accepts one bundle for one thread and transfer ID. The source presents it. No standing machine-to-machine grant exists, and the relay can carry the bundle end-to-end encrypted to the target's key.
+Hosts don't trust each other by default. Each transfer is authorized by the client, which already holds Operate grants on both hosts. The target mints a ticket that accepts one bundle for one thread and transfer ID. The source presents it. No standing machine-to-machine grant exists.
 
 ## Principles applied
 

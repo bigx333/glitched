@@ -4,7 +4,7 @@ This is the synthesis of two candidate designs, `candidate-hub.md` (one server, 
 
 ## Decision
 
-> **Revised in `control-plane.md`.** Central accounts and ephemeral VMs add a hub that holds accounts, machines, grants, thread locations and a read replica of every log. Hosts still own execution and write their own logs first. The rest of this document describes the host engine, which is unchanged.
+> **Revised in `control-plane.md`.** Central accounts and ephemeral VMs add a hub that holds accounts, machines, grants, thread locations and a read replica of every log. Hosts still own execution and write their own logs first. The hub runs as a role on one host (`hub.md`), and every route is the tailnet (`network.md`). The rest of this document describes the host engine, which is unchanged.
 
 **Peer shape.** Every machine runs one `glitched` engine that owns its own SQLite, event log, agents, PTYs and worktrees. The GUI embeds that engine when no service runs, and attaches to N engines at once. A phone or a second Mac reaches an engine directly (LAN, Tailscale, SSH) or through an optional outbound relay.
 
@@ -114,7 +114,8 @@ internal/provider    Adapter + claude/ codex/ gemini/ grok/
 internal/workspace   worktrees, checkpoint refs, diffs
 internal/pty         engine-owned PTYs, replay, input lease
 internal/auth        pairing, grants, sessions, revocation
-internal/transport   memory, unix socket, WebSocket, relay
+internal/transport   memory, unix socket, tailnet (installed Tailscale or tsnet); see network.md
+internal/hub         the hub role one host runs; see hub.md
 internal/client      routes, credentials, cursors, offline cache; what the GUI uses
 internal/gui         today's MyGo code; imports api and client only
 ```
@@ -160,7 +161,7 @@ type Agent interface {
 
 **Worktrees and checkpoints.** Each thread defaults to a worktree under `~/.glitched/worktrees/<project>/<thread>`. Each turn start writes a hidden ref `refs/glitched/<thread>/<turn>` that includes untracked files under a size limit (t3code). Diffs reference an immutable base and head. Restoring a checkpoint creates a restored worktree for review instead of resetting a dirty directory. Git operations go through an intent journal, because SQLite can't wrap them in its transaction.
 
-**Reach and pairing.** The engine listens on a Unix socket by default. LAN is opt-in with pinned TLS. Tailscale uses `tailscale serve` to the loopback port. SSH forwards to the socket and checks host keys. The relay is last. A client tries routes in order, checks that the route answers with the expected environment id before sending credentials, and never falls back to loopback (t3code). `glitched pair` shows a 5-minute single-use QR holding the engine's fingerprint and a bootstrap secret. Redeeming it binds the client's public key to a grant. Sessions are short-lived, and a WebSocket ticket keeps tokens out of URLs. Revoking a grant closes its sockets, releases its terminal leases and rejects its queued commands at dispatch. Local IPC checks the OS peer identity plus an app credential. Nothing is anonymous, loopback included (unlike bb and zeron).
+**Reach and pairing.** The engine listens on a Unix socket locally and on the tailnet for everything else (`network.md`, which replaces the LAN, SSH and relay routes). A client checks that the route answers with the expected environment id before sending credentials, and never falls back to loopback (t3code). `glitched pair` shows a 5-minute single-use QR holding the engine's fingerprint and a bootstrap secret. Redeeming it binds the client's public key to a grant. Sessions are short-lived, and a WebSocket ticket keeps tokens out of URLs. Revoking a grant closes its sockets, releases its terminal leases and rejects its queued commands at dispatch. Local IPC checks the OS peer identity plus an app credential. Nothing is anonymous, loopback included (unlike bb and zeron).
 
 **Multi-machine in the GUI.** The GUI keeps one client per environment, each with its own cursor and offline cache keyed by `Ref`. Projects carry a machine badge. The inbox merges the shell streams. Quick-ask and the composer pick a host, or Any, which places the thread by published capacity. Threads move between hosts with `thread.move` (`placement-and-handoff.md`).
 
@@ -174,7 +175,7 @@ type Agent interface {
 4. Service install and attach, engine PTYs feeding libghostty, worktrees and diffs. Check: close the GUI, reopen it, and the scrollback and diff are intact.
 5. Pairing, Tailscale and SSH routes, N environments, revocation. Check: a second Mac pairs, revoking it cuts its socket, and a restored database fences its old cursor.
 6. Signed updates, Gemini and Grok behind capability gates. Check: a failed trial migration leaves the old runtime and data working.
-7. Relay, push, MCP and webhooks. Check: everything still works with the relay down.
+7. Push, MCP and webhooks. Check: everything still works with push unavailable.
 
 ## Top risks
 
