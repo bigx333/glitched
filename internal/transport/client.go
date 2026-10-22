@@ -134,9 +134,16 @@ func handshake(ctx context.Context, t Transport, machine api.ID) (*websocket.Con
 	hc := &http.Client{Transport: &http.Transport{
 		DialContext: func(context.Context, string, string) (net.Conn, error) { return nc, nil },
 	}}
-	ws, _, err := websocket.Dial(ctx, origin, &websocket.DialOptions{HTTPClient: hc})
+	opts := &websocket.DialOptions{HTTPClient: hc}
+	if tn, ok := t.(Tailnet); ok {
+		opts.HTTPHeader = http.Header{"Authorization": {"Bearer " + tn.Token}}
+	}
+	ws, resp, err := websocket.Dial(ctx, origin, opts)
 	if err != nil {
 		nc.Close()
+		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
+			return nil, ErrRefused
+		}
 		return nil, fmt.Errorf("transport: %w", err)
 	}
 	return ws, nil

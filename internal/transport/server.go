@@ -25,6 +25,10 @@ type Server struct {
 	Transport Transport
 	Endpoint  api.Endpoint
 	Hub       *hub.Replica
+	// Authorize, when set, admits an upgrade or refuses it with 401. A socket
+	// it admits closes once the returned ctx ends, as when its grant is
+	// revoked.
+	Authorize func(*http.Request) (context.Context, error)
 
 	keepalive keepalive // zero means defaultKeepalive
 }
@@ -81,6 +85,14 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
+	grant := context.Background()
+	if s.Authorize != nil {
+		var err error
+		if grant, err = s.Authorize(r); err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+			return
+		}
+	}
 	ws, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return
@@ -89,6 +101,7 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 	ws.SetReadLimit(maxMessage)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	defer context.AfterFunc(grant, cancel)()
 	k := s.keepalive
 	if k == (keepalive{}) {
 		k = defaultKeepalive
