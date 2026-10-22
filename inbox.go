@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/egoist/mygo/plugins/glass"
@@ -76,7 +77,8 @@ type inboxItem struct {
 	p *project
 }
 
-// itemsIn returns the threads of a category, of the project filtered to.
+// itemsIn returns the threads of a category, of the projects filtered to,
+// every machine's together, the most recently updated first.
 func (a *app) itemsIn(cat category) []inboxItem {
 	var items []inboxItem
 	for _, p := range a.projects {
@@ -89,6 +91,7 @@ func (a *app) itemsIn(cat category) []inboxItem {
 			}
 		}
 	}
+	slices.SortFunc(items, func(x, y inboxItem) int { return newestFirst(x.t, y.t) })
 	return items
 }
 

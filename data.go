@@ -220,13 +220,15 @@ func (a *app) gather() []*project {
 			return cmp.Or(cmp.Compare(x.name(), y.name()), cmp.Compare(x.key.workspace, y.key.workspace))
 		})
 		for _, p := range ps {
-			slices.SortFunc(p.threads, func(x, y thread) int {
-				return cmp.Or(y.View.UpdatedAt.Compare(x.View.UpdatedAt), cmp.Compare(y.id().String(), x.id().String()))
-			})
+			slices.SortFunc(p.threads, newestFirst)
 		}
 		all = append(all, ps...)
 	}
 	return all
+}
+
+func newestFirst(x, y thread) int {
+	return cmp.Or(y.View.UpdatedAt.Compare(x.View.UpdatedAt), cmp.Compare(y.id().String(), x.id().String()))
 }
 
 func (a *app) find(id api.ID) (thread, bool) {

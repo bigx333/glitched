@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -294,6 +295,44 @@ func TestMachineBadgesLeaveTitlesTheRow(t *testing.T) {
 		if title.W < row/2 {
 			t.Errorf("%q has %v of its row's %v, want more than half", it.t.View.Title, title.W, row)
 		}
+	}
+}
+
+// The inbox lists every machine's threads together, the most recently
+// updated first, and the project filter still narrows it.
+func TestInboxMergesMachinesByRecency(t *testing.T) {
+	h := machines(t)
+	want := []string{
+		"Retry failed invoice webhooks",
+		"SIP re-INVITE handling",
+		"Markdown table column alignment",
+		"Investigate websocket reconnect loop",
+		"Add keyboard shortcut for new thread",
+		"Fix terminal resize flicker on Windows",
+		"Rotate the API keys",
+	}
+	var got []string
+	y := float32(-1)
+	for _, it := range h.a.itemsIn(catInbox) {
+		got = append(got, it.t.View.Title)
+		r, ok := h.tt.Find(it.t.View.Title)
+		if !ok || r.Y <= y {
+			t.Errorf("%q isn't shown below the row before it", it.t.View.Title)
+		}
+		y = r.Y
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the inbox lists\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+
+	h.click("api")
+	h.click("billing")
+	got = nil
+	for _, it := range h.a.itemsIn(catInbox) {
+		got = append(got, it.t.View.Title)
+	}
+	if want := []string{"Retry failed invoice webhooks", "Rotate the API keys"}; !slices.Equal(got, want) {
+		t.Fatalf("filtered to devbox's projects the inbox lists %q, want %q", got, want)
 	}
 }
 
