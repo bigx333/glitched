@@ -77,7 +77,10 @@ func stateDir(t *testing.T) string {
 // engine serves dir as `glitched serve -listen` would.
 func engine(t *testing.T, dir string, listen ...string) *daemon.Daemon {
 	t.Helper()
-	cfg := daemon.Defaults(dir)
+	cfg, err := daemon.Defaults(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg.Listen = listen
 	d, err := daemon.Start(context.Background(), cfg)
 	if err != nil {
@@ -223,11 +226,23 @@ func TestStartAttachesToTheEngineThatAnswers(t *testing.T) {
 	}
 }
 
-// The GUI embeds an engine where `glitched serve` ran before, so the hub
-// already holds this host's epoch and must still take the embedded log.
+// The GUI embeds an engine where `glitched serve -epoch 2` ran before. The
+// hub fences an epoch below the last it saw, so it takes the embedded log
+// only at serve's epoch.
 func TestAnEmbeddedEngineUploadsToTheHubServeUsed(t *testing.T) {
 	dir := stateDir(t)
-	served := engine(t, dir)
+	cfg, err := daemon.Defaults(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Epoch = 2
+	served, err := daemon.Start(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := served.Endpoint().Submit(timeout(t), api.Command{ID: api.NewID(), Target: api.NewID(), Body: api.ThreadCreate{Workspace: "/w", Title: "served", Model: fakeModel}}); err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -40,7 +41,8 @@ var commands = map[string]func(context.Context, []string) error{
 
 const usage = `usage: glitched <command> [flags]
 
-  serve     run the host engine, and the hub role unless -hub=false
+  serve     run the host engine, and the hub role unless -hub=false; the next serve
+            on -dir, and the GUI's own engine, run as it did unless a flag says otherwise
   pair      mint a token for a client on the tailnet: glitched pair -name LABEL | -list | -revoke LABEL
   run       send a message and stream the turn: glitched run [-thread ID] [-yes] text...
   threads   list this host's threads
@@ -112,34 +114,46 @@ func (l *listFlag) Set(v string) error {
 func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	dir := dirFlag(fs)
-	cfg := daemon.Defaults(*dir)
-	fs.BoolVar(&cfg.Hub, "hub", cfg.Hub, "run the hub role in this process, unless -hub-dir or -hub-server names another")
+	hub := fs.Bool("hub", true, "run the hub role in this process, unless -hub-dir or -hub-server names another")
 	hubDir := fs.String("hub-dir", "", "upload to the hub of the engine with this state directory, on this machine")
 	hubServer := fs.String("hub-server", "", "upload to the hub of the engine at this tailnet address")
 	hubToken := fs.String("hub-token", "", "the token -hub-server paired for this engine")
-	fs.Uint64Var(&cfg.Epoch, "epoch", cfg.Epoch, "this host's epoch at the hub")
-	fs.Var((*listFlag)(&cfg.Listen), "listen", "also serve clients with a token on this loopback or Tailscale address; repeatable")
+	epoch := fs.Uint64("epoch", 1, "this host's epoch at the hub")
+	var listen listFlag
+	fs.Var(&listen, "listen", "also serve clients with a token on this loopback or Tailscale address; repeatable, and -listen '' serves none")
 	fs.Parse(args)
 
-	cfg.Dir = *dir
+	set := given(fs)
 	switch {
 	case *hubDir != "" && *hubServer != "":
 		return usageError("serve: -hub-dir and -hub-server both name the hub; give one")
-	case given(fs)["hub"] && cfg.Hub && (*hubDir != "" || *hubServer != ""):
+	case set["hub"] && *hub && (*hubDir != "" || *hubServer != ""):
 		return usageError("serve: -hub runs the hub in this engine, so -hub-dir or -hub-server can't name another")
 	case *hubToken != "" && *hubServer == "":
 		return usageError("serve: -hub-token goes with -hub-server")
 	case *hubServer != "" && *hubToken == "":
 		return usageError("serve: -hub-server needs -hub-token, which glitched pair printed on that engine")
-	case *hubServer != "":
-		cfg.HubAt = transport.Tailnet{Address: *hubServer, Token: *hubToken}
-	case *hubDir != "":
-		cfg.HubAt = daemon.Socket(*hubDir)
 	}
-	cfg.Hub = cfg.Hub && cfg.HubAt == nil
+	cfg, err := daemon.Defaults(*dir)
+	if err != nil {
+		return err
+	}
+	if set["hub"] || set["hub-dir"] || set["hub-server"] {
+		cfg.Hub = *hub && *hubDir == "" && *hubServer == ""
+		cfg.HubDir, cfg.HubServer, cfg.HubToken = *hubDir, *hubServer, *hubToken
+	}
+	if set["epoch"] {
+		cfg.Epoch = *epoch
+	}
+	if set["listen"] {
+		cfg.Listen = slices.DeleteFunc(listen, func(addr string) bool { return addr == "" })
+	}
 	d, err := daemon.Start(ctx, cfg)
 	if err != nil {
 		return err
+	}
+	if err := cfg.Save(); err != nil {
+		return errors.Join(err, d.Close())
 	}
 	return d.Wait()
 }

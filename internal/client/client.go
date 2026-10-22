@@ -450,7 +450,11 @@ func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 			return c, nil
 		}
 		c.Close()
-		d, err := daemon.Start(ctx, daemon.Defaults(l.dir))
+		cfg, err := daemon.Defaults(l.dir)
+		if err != nil {
+			return nil, err
+		}
+		d, err := daemon.Start(ctx, cfg)
 		switch {
 		case err == nil:
 			l.embedded = d
