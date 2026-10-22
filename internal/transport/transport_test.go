@@ -45,15 +45,21 @@ func start(t *testing.T, network string, srv *Server) Loopback {
 }
 
 // fakeEndpoint answers Submit and Open for a target in errs with that error;
-// it is read-only once the server starts.
+// it is read-only once the server starts. closed, when set, gets the thread
+// of each stream the server closes.
 type fakeEndpoint struct {
-	env  api.Environment
-	errs map[api.ID]error
+	env    api.Environment
+	errs   map[api.ID]error
+	closed chan api.ID
 }
 
 func (f *fakeEndpoint) Info(context.Context) (api.Environment, error) { return f.env, nil }
 
-func (f *fakeEndpoint) Read(_ context.Context, q api.Query) (api.Snapshot, error) {
+func (f *fakeEndpoint) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
+	if q.Thread == blocks {
+		<-ctx.Done()
+		return api.Snapshot{}, ctx.Err()
+	}
 	return api.Snapshot{Cursor: q.After, Threads: []api.Thread{{ID: q.Thread, Title: "read"}}}, nil
 }
 
@@ -75,18 +81,29 @@ func (f *fakeEndpoint) Open(_ context.Context, s api.Subscription) (api.Stream, 
 		items = append(items, api.StreamItem{Kind: api.StreamEvent, Event: &api.Event{Cursor: api.Cursor{Log: f.env.Log, Seq: seq}, Thread: s.Thread}})
 	}
 	items = append(items, api.StreamItem{Kind: api.StreamSynchronized})
-	st := &fakeStream{items: items}
+	if s.Thread == firehose {
+		payload := json.RawMessage(`"` + strings.Repeat("x", 64<<10) + `"`)
+		items = items[:0]
+		for seq := range uint64(200) {
+			items = append(items, api.StreamItem{Kind: api.StreamEvent, Event: &api.Event{Cursor: api.Cursor{Log: f.env.Log, Seq: seq + 1}, Thread: s.Thread, Payload: payload}})
+		}
+	}
+	st := &fakeStream{items: items, thread: s.Thread, closed: f.closed}
 	if s.Thread == endsBadly {
 		st.end = api.ErrOverflow
 	}
 	return st, nil
 }
 
-var endsBadly = api.NewID()
+// endsBadly's stream fails after its items; firehose's sends 12.5 MiB, more
+// than a client holds for a reader; a Read of blocks waits for its ctx.
+var endsBadly, firehose, blocks = api.NewID(), api.NewID(), api.NewID()
 
 type fakeStream struct {
-	items []api.StreamItem
-	end   error
+	items  []api.StreamItem
+	end    error
+	thread api.ID
+	closed chan api.ID
 }
 
 func (s *fakeStream) Next(ctx context.Context) (api.StreamItem, error) {
@@ -102,7 +119,13 @@ func (s *fakeStream) Next(ctx context.Context) (api.StreamItem, error) {
 	return api.StreamItem{}, ctx.Err()
 }
 
-func (s *fakeStream) Close() error { return nil }
+func (s *fakeStream) Close() error {
+	select {
+	case s.closed <- s.thread:
+	default:
+	}
+	return nil
+}
 
 func TestEndpointRoundTrip(t *testing.T) {
 	moved, rejected, wrapped, opaque := api.NewID(), api.NewID(), api.NewID(), api.NewID()
@@ -405,5 +428,181 @@ func TestUploaderBatchesFitTheServerBodyLimit(t *testing.T) {
 			t.Fatalf("acked %d of 80 MiB-sized events: a batch is over the server's body limit", n)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// dialer counts the sockets a client dials and can cut them.
+type dialer struct {
+	Loopback
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func (d *dialer) Dial(ctx context.Context, m api.ID) (net.Conn, error) {
+	c, err := d.Loopback.Dial(ctx, m)
+	if err == nil {
+		d.mu.Lock()
+		d.conns = append(d.conns, c)
+		d.mu.Unlock()
+	}
+	return c, err
+}
+
+func (d *dialer) dialed() []net.Conn {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]net.Conn(nil), d.conns...)
+}
+
+func readStream(ctx context.Context, st api.Stream, thread api.ID, after api.Cursor) error {
+	want := []api.StreamKind{api.StreamSnapshot, api.StreamEvent, api.StreamEvent, api.StreamEvent, api.StreamSynchronized}
+	for i, k := range want {
+		it, err := st.Next(ctx)
+		if err != nil {
+			return err
+		}
+		if it.Kind != k || (k == api.StreamEvent && (it.Event.Thread != thread || it.Event.Cursor.Seq != after.Seq+uint64(i))) {
+			return fmt.Errorf("item %d: %+v, want kind %d of thread %v", i, it, k, thread)
+		}
+	}
+	return nil
+}
+
+func TestCallsAndStreamsShareOneSocket(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	fake := &fakeEndpoint{env: api.Environment{ID: api.NewID(), Log: api.NewID()}}
+	d := &dialer{Loopback: start(t, "unix", &Server{Endpoint: fake})}
+	c := NewEndpointClient(d, fake.env.ID)
+
+	a, b := api.NewID(), api.NewID()
+	sa, err := c.Open(ctx, api.Subscription{Thread: a, After: api.Cursor{Log: fake.env.Log, Seq: 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sa.Close()
+	sb, err := c.Open(ctx, api.Subscription{Thread: b, After: api.Cursor{Log: fake.env.Log, Seq: 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sb.Close()
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 102)
+	for range 100 {
+		wg.Go(func() {
+			cmd := api.Command{ID: api.NewID(), Target: api.NewID(), Body: api.TurnInterrupt{}}
+			r, err := c.Submit(ctx, cmd)
+			if err == nil && r.Command != cmd.ID {
+				err = fmt.Errorf("submit %v answered for %v", cmd.ID, r.Command)
+			}
+			errs <- err
+		})
+	}
+	wg.Go(func() { errs <- readStream(ctx, sa, a, api.Cursor{Seq: 10}) })
+	wg.Go(func() { errs <- readStream(ctx, sb, b, api.Cursor{Seq: 20}) })
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(d.dialed()); n != 1 {
+		t.Fatalf("dialed %d sockets, want 1", n)
+	}
+}
+
+func TestSlowStreamOverflowsAlone(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	fake := &fakeEndpoint{env: api.Environment{ID: api.NewID(), Name: "mac", Log: api.NewID()}, closed: make(chan api.ID, 4)}
+	d := &dialer{Loopback: start(t, "tcp", &Server{Endpoint: fake})}
+	c := NewEndpointClient(d, fake.env.ID)
+
+	slow, err := c.Open(ctx, api.Subscription{Thread: firehose})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer slow.Close()
+	thread := api.NewID()
+	other, err := c.Open(ctx, api.Subscription{Thread: thread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if err := readStream(ctx, other, thread, api.Cursor{}); err != nil {
+		t.Fatal(err)
+	}
+	if env, err := c.Info(ctx); err != nil || env != fake.env {
+		t.Fatalf("info beside a full stream: %+v %v", env, err)
+	}
+
+	select {
+	case got := <-fake.closed:
+		if got != firehose {
+			t.Fatalf("server closed stream %v, want the firehose", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("the server never closed the overflowed stream")
+	}
+	if _, err := slow.Next(ctx); !errors.Is(err, api.ErrOverflow) {
+		t.Fatalf("slow stream: got %v, want ErrOverflow", err)
+	}
+	if err := readStream(ctx, mustOpen(t, ctx, c, thread), thread, api.Cursor{}); err != nil {
+		t.Fatalf("a stream opened after the overflow: %v", err)
+	}
+	if n := len(d.dialed()); n != 1 {
+		t.Fatalf("dialed %d sockets, want 1", n)
+	}
+}
+
+func mustOpen(t *testing.T, ctx context.Context, c *EndpointClient, thread api.ID) api.Stream {
+	t.Helper()
+	st, err := c.Open(ctx, api.Subscription{Thread: thread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
+}
+
+func TestDroppedSocketEndsStreamsAndRedials(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	fake := &fakeEndpoint{env: api.Environment{ID: api.NewID(), Name: "mac", Log: api.NewID()}}
+	d := &dialer{Loopback: start(t, "tcp", &Server{Endpoint: fake})}
+	c := NewEndpointClient(d, fake.env.ID)
+
+	thread := api.NewID()
+	st := mustOpen(t, ctx, c, thread)
+	if it, err := st.Next(ctx); err != nil || it.Kind != api.StreamSnapshot {
+		t.Fatalf("first item: %+v %v", it, err)
+	}
+	blocked := make(chan error)
+	go func() {
+		_, err := c.Read(ctx, api.Query{Thread: blocks})
+		blocked <- err
+	}()
+	// Let the Read reach the server before the socket goes.
+	time.Sleep(50 * time.Millisecond)
+	d.dialed()[0].Close()
+
+	for range 4 {
+		if _, err := st.Next(ctx); err != nil {
+			break
+		}
+	}
+	if _, err := st.Next(ctx); err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stream on a dropped socket: got %v, want a connection error", err)
+	}
+	if err := <-blocked; err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("call on a dropped socket: got %v, want a connection error", err)
+	}
+	if env, err := c.Info(ctx); err != nil || env != fake.env {
+		t.Fatalf("info after the drop: %+v %v", env, err)
+	}
+	if n := len(d.dialed()); n != 2 {
+		t.Fatalf("dialed %d sockets, want 2", n)
 	}
 }
