@@ -1,8 +1,8 @@
 # Control plane, accounts and caching
 
-> The hub runs as a role on one of the user's hosts, reached over the tailnet (`hub.md`, `network.md`). The Durable Object version in `hub-on-cloudflare.md` is superseded. Ephemeral VMs are deferred (`ephemeral-vms.md`).
+Status: the 2026-10-20 revision that added the hub. Frozen. Its content was split into `../hub.md`, `../account-pool.md`, `../client-cache.md` and `../ephemeral-vms.md` on 2026-10-22, and some of it changed. Credentials now reach CLIs through a proxy, commands never go through the hub, and the hub runs on a dedicated always-on host when there is more than one machine. Read the live documents for the design, and this one for why the hub was added.
 
-This revises the decision in `architecture.md`. Three new requirements change it.
+This revises the decision in `../architecture.md`. Three new requirements change it.
 
 1. Agent accounts are managed in one place and every host receives credentials from there (bb's model).
 2. Ephemeral VMs become hosts later. They are created and destroyed on demand, and their disks don't survive.
@@ -15,7 +15,7 @@ This revises the decision in `architecture.md`. Three new requirements change it
 - The hub (`glitched hub`) holds accounts, machines, client grants, thread locations and a read replica of every thread log. It provisions and tears down ephemeral VMs.
 - Every host runs the engine as designed. It is the only writer of the threads it owns, and it commits to its own SQLite log first. It dials out to the hub (bb) and streams its log upward from a durable offset.
 - Clients pair once with the hub. They read through the hub into a local cache. Commands go through the hub to the owner host, or straight to the owner over the tailnet when the hub is down. Terminals connect directly over the tailnet.
-- The hub is a role one host runs, in the same process as that host's engine (`hub.md`). On a single laptop that is the only host, so a solo user installs nothing extra.
+- The hub is a role one host runs, in the same process as that host's engine (`../hub.md`). On a single laptop that is the only host, so a solo user installs nothing extra.
 
 Why this beats the pure peer shape now:
 
@@ -54,18 +54,18 @@ type Account struct {
 - **Delivery per run, not per machine.** When a host starts a run, it asks the hub for the credential of the account bound to that run. The hub checks that the machine is enrolled and the run exists. The host hands the credential to the CLI through an inherited file descriptor or the process env, never through argv or a file in the repo. Claude Code reads `CLAUDE_CODE_OAUTH_TOKEN`, and the bb bundle also references a `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR` variable (read, not tested). bb passes only `CLAUDE_CODE_OAUTH_TOKEN` and the executable path, with the token minted by `claude setup-token` (read in bb's provider docs).
 - **Ephemeral VMs never write credentials to disk.** Persistent hosts may cache them in the OS keychain for offline work.
 - **The hub must be able to read credentials** so it can refresh them. Sealing them to host keys was rejected for that reason (see `cost.md`).
-- **Refreshable credentials are refreshed only by the hub.** If several hosts share one refresh token and each refreshes it, rotation can invalidate the others (inferred from how rotating refresh tokens work, not observed with Codex). The hub refreshes while it runs and catches up when it comes back from being offline. Refresh tokens outlast those gaps, so the hub needn't be always on (`hub.md`). Long-lived tokens and API keys are preferred where the provider offers them.
+- **Refreshable credentials are refreshed only by the hub.** If several hosts share one refresh token and each refreshes it, rotation can invalidate the others (inferred from how rotating refresh tokens work, not observed with Codex). The hub refreshes while it runs and catches up when it comes back from being offline. Refresh tokens outlast those gaps, so the hub needn't be always on (`../hub.md`). Long-lived tokens and API keys are preferred where the provider offers them.
 - **Revocation.** Removing a machine stops issuance at once. A token already handed to a running CLI can't be recalled. That is why delivery is per run and long-lived tokens are scoped to dedicated accounts where possible.
 - **Accounts become a placement input.** Rate limits are per account. With accounts central, placement can pick a different account as well as a different host when one account is limited. That is the load balancing that actually relieves token limits.
 - Git credentials and project env secrets follow the same path. bb pushes machine env vars encrypted and revisioned, and forwards git credentials (read).
 
 ## Ephemeral VMs
 
-Deferred. Providers, how a VM joins the tailnet and how bb does it are in `ephemeral-vms.md`. The lifecycle below still holds. It follows bb's machine providers.
+Deferred. Providers, how a VM joins the tailnet and how bb does it are in `../ephemeral-vms.md`. The lifecycle below still holds. It follows bb's machine providers.
 
 - A `MachineProvider` interface has `Create(key)`, `Remove(id)`, `RemoveByKey(key)`, and optionally `Suspend` and `Resume`. Every call is idempotent by key, and checkpointed resources make cleanup retryable.
 - Bootstrap installs `glitched` with a one-time enroll key, and the host dials the hub. "Daemon connected" is not "agent ready". Checkout setup and the credential check must pass first (bb makes the same distinction).
-- **Teardown.** An ephemeral machine is removed when no live or queued thread needs it. Before removal the hub checks two things. Every owned thread's log has been acknowledged to the tail, and the workspace snapshot has been pushed as a hidden ref to the project remote, using the snapshot format from `placement-and-handoff.md`. A thread then becomes "parked at the hub" and resumes on the next host that takes it.
+- **Teardown.** An ephemeral machine is removed when no live or queued thread needs it. Before removal the hub checks two things. Every owned thread's log has been acknowledged to the tail, and the workspace snapshot has been pushed as a hidden ref to the project remote, using the snapshot format from `../placement-and-handoff.md`. A thread then becomes "parked at the hub" and resumes on the next host that takes it.
 - Placement treats "create a VM" as a candidate host with a startup cost. It is chosen only when every live host is full.
 
 ## Caching on the client
@@ -92,8 +92,8 @@ It doesn't fit Glitched as the engine, for three reasons.
 
 ## Changes to other docs
 
-- `architecture.md`: the decision is now hub control plus host writers. Pairing and grants move to the hub. Hosts trust the hub through enrollment.
-- `placement-and-handoff.md`: the hub records `Location` authoritatively. A handoff no longer ships the log, which is already replicated. It waits for the source's ack offset to reach the tail, then ships only the workspace snapshot and provider session files. The commit point moves to the hub's location record, which the source requests.
+- `../architecture.md`: the decision is now hub control plus host writers. Pairing and grants move to the hub. Hosts trust the hub through enrollment.
+- `../placement-and-handoff.md`: the hub records `Location` authoritatively. A handoff no longer ships the log, which is already replicated. It waits for the source's ack offset to reach the tail, then ships only the workspace snapshot and provider session files. The commit point moves to the hub's location record, which the source requests.
 
 ## Principles applied
 
@@ -107,5 +107,5 @@ It doesn't fit Glitched as the engine, for three reasons.
 1. Hub and host in one process, with the host log streaming to the hub replica by offset. Check: kill the host mid-stream and see no gap or duplicate in the replica.
 2. Client cache with per-query transcript sync. Check: reopen a thread with the host offline and it renders from cache.
 3. Central accounts with per-run credential delivery for Claude Code. Check: a host with no local login runs a turn, and removing the machine stops the next run.
-4. The hub role served over the tailnet, with a second Mac enrolled (`hub.md`).
+4. The hub role served over the tailnet, with a second Mac enrolled (`../hub.md`).
 5. Ephemeral VM provider with teardown gated on the replica ack and the pushed workspace ref (deferred).

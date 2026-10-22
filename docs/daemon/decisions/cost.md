@@ -1,6 +1,6 @@
 # Hosted hub cost
 
-> **Superseded 2026-10-22.** The hub now runs on the user's own host (`hub.md`), so it has no hosted cost.
+Status: superseded on 2026-10-22. The hub runs on the user's own host (`../hub.md`), so it has no hosted cost. Kept with `cost-model.py` for the usage assumptions and the row-write rules, which still shape what the replica stores.
 
 Goal: offer the hub (`hub-on-cloudflare.md`) to users for free. This estimates the marginal Cloudflare cost per user per month. The model is `cost-model.py`, and the prices come from Cloudflare's pricing pages (read 2026-10-20). The usage figures are assumptions, not measurements.
 

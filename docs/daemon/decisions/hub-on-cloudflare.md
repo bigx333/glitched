@@ -1,6 +1,6 @@
 # Hub on Cloudflare, and where Turso fits
 
-> **Superseded 2026-10-22** by `hub.md` (the hub runs as a role on a host) and `network.md` (Tailscale replaces the relay). Kept for the reasoning and the limits.
+Status: rejected on 2026-10-22 in favor of a hub role on the user's own host (`../hub.md`) and the tailnet instead of a relay (`../network.md`). Kept for the reasoning and the platform limits.
 
 This picks an implementation for the hub described in `control-plane.md`. Three options were compared. One is a Go hub on an always-on box, one runs the hub on Durable Objects (zeron's edge), and one uses Turso for replication.
 
@@ -55,7 +55,7 @@ It would be the right tool for the Go-hub-on-a-box option. There, a self-hosted 
 
 - **Two languages.** The engine and GUI are Go, and the hub is TypeScript. The wire protocol is the contract. It is defined once as JSON schemas and tested from both sides with recorded frames. zeron made the same call for its Rust app and kept its objects in TypeScript (`zeron/docs/research/durable-objects-language.md`).
 - **The hub sees plaintext.** It must hold credentials to hand them out, so end-to-end encryption against the hub buys little. The trust boundary is the user's own Cloudflare account, not a third-party service.
-- **Solo mode stays hubless.** Without a Cloudflare deployment, the GUI embeds a single engine as in `architecture.md`. The host-side upload code is idle, and no Go copy of the hub is built.
+- **Solo mode stays hubless.** Without a Cloudflare deployment, the GUI embeds a single engine as in `../architecture.md`. The host-side upload code is idle, and no Go copy of the hub is built.
 
 ## Principles applied
 

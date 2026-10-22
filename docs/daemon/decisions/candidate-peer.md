@@ -1,3 +1,7 @@
+# Glitched remote daemon: PEER design
+
+Status: one of the two candidates that `../architecture.md` synthesized on 2026-10-20. Frozen. The engine design survives in `../architecture.md`. The per-machine pairing and relay were replaced by the hub and the tailnet (`../hub.md`, `../network.md`).
+
 ## Data shapes first
 
 Go sketches; imports omitted. Domain variants and fields remain private, exposed through validating constructors/read accessors. Wire DTOs are decoded into these types, never used directly as domain state.

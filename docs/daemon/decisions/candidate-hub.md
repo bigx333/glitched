@@ -1,5 +1,7 @@
 # Glitched remote daemon: HUB design
 
+Status: one of the two candidates that `../architecture.md` synthesized on 2026-10-20. Frozen. The hub it describes owns everything, which was rejected; the hub that was built later holds control and a replica while hosts write (`../hub.md`).
+
 One `glitched` binary, three roles: **server** (owns SQLite, ordering, auth, the only thing clients talk to), **host** (one per machine; dials OUT to the server; runs provider CLIs, PTYs and git), **gui** (MyGo app; a client of the server).
 
 ## 1. Data shapes
