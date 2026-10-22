@@ -1,0 +1,315 @@
+package client
+
+import (
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"glitched/internal/api"
+)
+
+var (
+	testLog = api.NewID()
+	t0      = time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+)
+
+// at is when the nth event of a play happened: one second apart.
+func at(n int) time.Time { return t0.Add(time.Duration(n-1) * time.Second) }
+
+func event(seq int, b api.EventBody) api.Event {
+	p, err := json.Marshal(b)
+	if err != nil {
+		panic(err)
+	}
+	return api.Event{Cursor: api.Cursor{Log: testLog, Seq: uint64(seq)}, Type: api.EventType(b), Schema: api.EventSchema, At: at(seq), Payload: p}
+}
+
+func play(bodies ...api.EventBody) *Transcript {
+	t := &Transcript{}
+	for i, b := range bodies {
+		t.apply(event(i+1, b))
+	}
+	return t
+}
+
+var messageStates = map[MessageState]string{Queued: "queued", Held: "held", Claimed: "claimed", Sent: "sent", Cancelled: "cancelled", Uncertain: "uncertain"}
+
+var requestStates = map[api.RequestState]string{
+	api.RequestPending: "pending", api.RequestAnswered: "answered", api.RequestDelivered: "delivered", api.RequestInvalidated: "invalidated", api.RequestExpired: "expired",
+}
+
+var workStates = map[api.WorkStatus]string{api.WorkStarted: "started", api.WorkCompleted: "completed", api.WorkFailed: "failed"}
+
+func describe(e Entry) string {
+	switch e := e.(type) {
+	case *UserEntry:
+		return words("user", fmt.Sprintf("%q", e.Text), messageStates[e.State], e.Reason)
+	case *AssistantEntry:
+		if e.Streaming {
+			return fmt.Sprintf("assistant %q streaming", e.Text)
+		}
+		return fmt.Sprintf("assistant %q", e.Text)
+	case *WorkEntry:
+		var items []string
+		for _, s := range e.Items {
+			items = append(items, s.Item+":"+workStates[s.Status])
+		}
+		if e.Ended.IsZero() {
+			items = append(items, "working")
+		}
+		return "work " + strings.Join(items, " ")
+	case *RequestEntry:
+		return words("request", e.Kind, requestStates[e.State], string(e.Answer), e.Reason)
+	}
+	return fmt.Sprintf("%T", e)
+}
+
+func words(parts ...string) string {
+	return strings.Join(slices.DeleteFunc(parts, func(s string) bool { return s == "" }), " ")
+}
+
+// lines renders the conversation, then the queue after a "--".
+func lines(t *Transcript) []string {
+	var out []string
+	for _, e := range t.Entries {
+		out = append(out, describe(e))
+	}
+	if len(t.Queue) > 0 {
+		out = append(out, "--")
+		for _, u := range t.Queue {
+			out = append(out, describe(u))
+		}
+	}
+	return out
+}
+
+func expect(t *testing.T, tr *Transcript, want ...string) {
+	t.Helper()
+	if got := lines(tr); !slices.Equal(got, want) {
+		t.Fatalf("transcript:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+func work(run api.ID, item string, s api.WorkStatus) api.WorkItem {
+	return api.WorkItem{Run: run, Item: item, Kind: "read", Title: item, Status: s}
+}
+
+func start(msg api.ID, text string, pos int64) []api.EventBody {
+	return []api.EventBody{
+		api.MessageQueued{Message: msg, Text: text, Mode: api.AfterActive, Pos: pos},
+		api.TurnAdmitted{Run: msg, Generation: 1},
+		api.TurnStarted{Run: msg},
+	}
+}
+
+func TestFoldInterleavesTextAndWorkInTheOrderTheyHappened(t *testing.T) {
+	a, req := api.NewID(), api.NewID()
+	evs := slices.Concat(start(a, "hello", 0), []api.EventBody{
+		api.AssistantDelta{Run: a, Text: "Looking "},
+		api.AssistantDelta{Run: a, Text: "at the code."},
+		work(a, "read-1", api.WorkStarted),
+		work(a, "read-1", api.WorkCompleted),
+		api.AssistantDelta{Run: a, Text: " May I edit it?"},
+		api.RequestOpened{Request: req, Run: a, Generation: 1, Dedup: "approve-1", Kind: "approval", Body: json.RawMessage(`{}`)},
+		api.RequestAnswer{Request: req, Answer: json.RawMessage(`{"allow":true}`)},
+		api.RequestDelivery{Request: req},
+		work(a, "edit-1", api.WorkStarted),
+		work(a, "edit-1", api.WorkCompleted),
+		api.AssistantDelta{Run: a, Text: " Done."},
+	})
+	tr := play(evs...)
+	expect(t, tr,
+		`user "hello" sent`,
+		`assistant "Looking at the code."`,
+		`work read-1:completed`,
+		`assistant " May I edit it?"`,
+		`request approval delivered {"allow":true}`,
+		`work edit-1:completed`,
+		`assistant " Done." streaming`,
+	)
+	if w := tr.Entries[2].(*WorkEntry); !w.Started.Equal(at(6)) || !w.Ended.Equal(at(7)) {
+		t.Fatalf("read-1 worked from %v to %v, want from the start event to the completion", w.Started, w.Ended)
+	}
+	tr.apply(event(len(evs)+1, api.TurnEnded{Run: a, Outcome: api.OutcomeCompleted}))
+	if last := describe(tr.last()); last != `assistant " Done."` {
+		t.Fatalf("after the turn ended the last entry is %s, want it done streaming", last)
+	}
+	if tr.Cursor != (api.Cursor{Log: testLog, Seq: uint64(len(evs) + 1)}) {
+		t.Fatalf("cursor %+v, want the last event's", tr.Cursor)
+	}
+}
+
+func TestFoldUpsertsWorkItemsByID(t *testing.T) {
+	a := api.NewID()
+	evs := slices.Concat(start(a, "go", 0), []api.EventBody{
+		work(a, "a", api.WorkStarted),
+		work(a, "b", api.WorkStarted),
+		work(a, "a", api.WorkCompleted),
+	})
+	tr := play(evs...)
+	expect(t, tr, `user "go" sent`, `work a:completed b:started working`)
+
+	evs = append(evs,
+		api.AssistantDelta{Run: a, Text: "meanwhile"},
+		work(a, "b", api.WorkFailed),
+		work(a, "c", api.WorkStarted),
+	)
+	tr = play(evs...)
+	expect(t, tr, `user "go" sent`, `work a:completed b:failed`, `assistant "meanwhile"`, `work c:started working`)
+	if w := tr.Entries[1].(*WorkEntry); !w.Ended.Equal(at(8)) {
+		t.Fatalf("the first work entry ended at %v, want when its last item finished (%v)", w.Ended, at(8))
+	}
+
+	tr.apply(event(len(evs)+1, api.TurnEnded{Run: a, Outcome: api.OutcomeInterrupted}))
+	if w := tr.Entries[3].(*WorkEntry); !w.Ended.Equal(at(len(evs) + 1)) {
+		t.Fatalf("an item still going when the run ended leaves its entry ended at %v, want the run's end", w.Ended)
+	}
+}
+
+func TestFoldKeepsAQueuedMessageOutOfTheTurnItWaitsBehind(t *testing.T) {
+	a, b, r := api.NewID(), api.NewID(), api.NewID()
+	evs := slices.Concat(start(a, "one", 0), []api.EventBody{
+		api.AssistantDelta{Run: a, Text: "first"},
+		api.MessageQueued{Message: b, Text: "two", Mode: api.AfterActive, Pos: 1},
+		api.MessageQueued{Message: r, Text: "redo", Mode: api.RestartActive, Pos: -1},
+		api.AssistantDelta{Run: a, Text: " half"},
+	})
+	tr := play(evs...)
+	expect(t, tr,
+		`user "one" sent`,
+		`assistant "first half" streaming`,
+		"--",
+		`user "redo" queued`,
+		`user "two" queued`,
+	)
+
+	evs = append(evs,
+		api.TurnEnded{Run: a, Outcome: api.OutcomeInterrupted},
+		api.TurnAdmitted{Run: r, Generation: 2},
+		api.TurnStarted{Run: r},
+		api.AssistantDelta{Run: r, Text: "again"},
+	)
+	expect(t, play(evs...),
+		`user "one" sent`,
+		`assistant "first half"`,
+		`user "redo" sent`,
+		`assistant "again" streaming`,
+		"--",
+		`user "two" queued`,
+	)
+}
+
+func TestFoldPlacesASteerWhereItReachedTheRun(t *testing.T) {
+	a, c := api.NewID(), api.NewID()
+	evs := slices.Concat(start(a, "one", 0), []api.EventBody{
+		api.AssistantDelta{Run: a, Text: "first"},
+		api.MessageQueued{Message: c, Text: "faster", Mode: api.SteerActive, Pos: 1},
+		api.MessageClaimed{Message: c, Run: a},
+		api.AssistantDelta{Run: a, Text: " half"},
+	})
+	expect(t, play(evs...),
+		`user "one" sent`,
+		`assistant "first half" streaming`,
+		"--",
+		`user "faster" claimed`,
+	)
+	evs = append(evs,
+		api.MessageDispatched{Message: c},
+		api.AssistantDelta{Run: a, Text: "steered: faster"},
+	)
+	expect(t, play(evs...),
+		`user "one" sent`,
+		`assistant "first half"`,
+		`user "faster" sent`,
+		`assistant "steered: faster" streaming`,
+	)
+}
+
+func TestFoldReleasesHeldBackAndCancelledMessages(t *testing.T) {
+	a, steer, held, gone, never := api.NewID(), api.NewID(), api.NewID(), api.NewID(), api.NewID()
+	evs := slices.Concat(start(a, "one", 0), []api.EventBody{
+		api.MessageQueued{Message: held, Text: "later", Mode: api.Defer, Pos: 1, Held: true},
+		api.MessageQueued{Message: gone, Text: "lost", Mode: api.AfterActive, Pos: 2},
+		api.MessageCancelled{Message: gone, Reason: "the database was restored"},
+		api.MessageQueued{Message: steer, Text: "faster", Mode: api.SteerActive, Pos: 3},
+		api.MessageClaimed{Message: steer, Run: a},
+		api.TurnEnded{Run: a, Outcome: api.OutcomeInterrupted},
+		api.MessageQueued{Message: never, Text: "now", Mode: api.StartNow, Pos: 4},
+		api.TurnAdmitted{Run: never, Generation: 2},
+		api.TurnEnded{Run: never, Outcome: api.OutcomeFailed},
+	})
+	expect(t, play(evs...),
+		`user "one" sent`,
+		`user "lost" cancelled the database was restored`,
+		`user "faster" cancelled`,
+		`user "now" cancelled`,
+		"--",
+		`user "later" held`,
+	)
+}
+
+func TestFoldMarksWhatAnUncertainRunHeldUncertain(t *testing.T) {
+	a, steer, cut, req := api.NewID(), api.NewID(), api.NewID(), api.NewID()
+	evs := slices.Concat(start(a, "one", 0), []api.EventBody{
+		api.MessageQueued{Message: cut, Text: "cut", Mode: api.SteerActive, Pos: 1},
+		api.MessageClaimed{Message: cut, Run: a},
+		api.MessageUncertain{Message: cut},
+		api.RequestOpened{Request: req, Run: a, Generation: 1, Kind: "question", Body: json.RawMessage(`{}`)},
+		api.AssistantDelta{Run: a, Text: "…"},
+		api.MessageQueued{Message: steer, Text: "faster", Mode: api.SteerActive, Pos: 2},
+		api.MessageClaimed{Message: steer, Run: a},
+		api.TurnUncertain{Run: a},
+	})
+	expect(t, play(evs...),
+		`user "one" sent`,
+		`user "cut" uncertain`,
+		`request question invalidated`,
+		`assistant "…"`,
+		`user "faster" uncertain`,
+	)
+}
+
+func TestFoldTracksARequestToItsEnd(t *testing.T) {
+	a, answered, voided, refused := api.NewID(), api.NewID(), api.NewID(), api.NewID()
+	evs := slices.Concat(start(a, "one", 0), []api.EventBody{
+		api.RequestOpened{Request: answered, Run: a, Generation: 1, Kind: "approval", Body: json.RawMessage(`{}`)},
+		api.RequestOpened{Request: voided, Run: a, Generation: 1, Kind: "approval", Body: json.RawMessage(`{}`)},
+		api.RequestOpened{Request: refused, Run: a, Generation: 1, Kind: "approval", Body: json.RawMessage(`{}`)},
+		api.RequestAnswer{Request: answered, Answer: json.RawMessage(`{"allow":false}`)},
+		api.RequestInvalidation{Request: refused, Reason: "the agent went away"},
+	})
+	expect(t, play(evs...),
+		`user "one" sent`,
+		`request approval answered {"allow":false}`,
+		`request approval pending`,
+		`request approval invalidated the agent went away`,
+	)
+	evs = append(evs, api.TurnStopping{Run: a})
+	expect(t, play(evs...),
+		`user "one" sent`,
+		`request approval answered {"allow":false}`,
+		`request approval invalidated`,
+		`request approval invalidated the agent went away`,
+	)
+}
+
+func TestFoldSkipsUnknownAndRepeatedEvents(t *testing.T) {
+	a := api.NewID()
+	tr := play(start(a, "one", 0)...)
+	tr.apply(event(4, api.AssistantDelta{Run: a, Text: "x"}))
+	tr.apply(api.Event{Cursor: api.Cursor{Log: testLog, Seq: 5}, Type: "thread.renamed", Payload: json.RawMessage(`{"title":"new"}`)})
+	tr.apply(api.Event{Cursor: api.Cursor{Log: testLog, Seq: 6}, Type: "assistant.delta", Payload: json.RawMessage(`{"run":7}`)})
+	tr.apply(event(4, api.AssistantDelta{Run: a, Text: "x"}))
+	tr.apply(event(7, api.AssistantDelta{Run: a, Text: "y"}))
+	expect(t, tr, `user "one" sent`, `assistant "xy" streaming`)
+	if tr.Cursor.Seq != 7 {
+		t.Fatalf("cursor at %d, want 7: skipped events still move it", tr.Cursor.Seq)
+	}
+	// A restored database starts a new log, whose events fold even at a
+	// lower seq.
+	tr.apply(api.Event{Cursor: api.Cursor{Log: api.NewID(), Seq: 1}, Type: "assistant.delta", Payload: json.RawMessage(`{"run":"` + a.String() + `","text":"z"}`)})
+	expect(t, tr, `user "one" sent`, `assistant "xyz" streaming`)
+}
