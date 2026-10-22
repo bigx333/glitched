@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
 	"os"
 	"path/filepath"
 	"slices"
@@ -854,6 +856,70 @@ func TestAttachments(t *testing.T) {
 	es := entriesOf(a.current())
 	if len(a.attachments) != 0 || len(es) != 1 || es[0].text != "look\n\n@resources/icon.png\n\n"+strings.Repeat("x\n", longPaste-1)+"x" {
 		t.Errorf("sent %q: the message should take the attachments, the file by its path", texts(es))
+	}
+}
+
+// A file on this machine stays in the composer of a server's thread, which
+// says why, and the message goes without it; back on this machine's
+// thread, it goes.
+func TestAttachmentsAServerCantRead(t *testing.T) {
+	h := machines(t)
+	a := h.a
+	a.attachFiles([]string{"go.mod"})
+	rot := h.thread("Rotate the API keys")
+	a.select_(rot)
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if !h.tt.HasText("Not on devbox") {
+		t.Fatalf("the chip of a local file on devbox's thread shows %q", h.tt.Texts())
+	}
+	a.draft = "look"
+	h.tt.Frame()
+	h.click("Send")
+	es := entriesOf(a.current())
+	if last := es[len(es)-1]; last.kind != entryUser || last.text != "look" || len(a.attachments) != 1 {
+		t.Fatalf("sent %q, keeping %d attachments: the file should stay here", last.text, len(a.attachments))
+	}
+	a.select_(h.thread("SIP re-INVITE handling"))
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if h.tt.HasText("Not on") || a.message(a.current()) != "@go.mod" {
+		t.Errorf("on this machine's thread the file should go: message %q, window %q", a.message(a.current()), h.tt.Texts())
+	}
+}
+
+// A pasted image stays in the composer, which says images aren't sent yet;
+// alone, it leaves Send as it is with nothing to send.
+func TestPastedImagesStay(t *testing.T) {
+	h := start(t, tempDir(t))
+	a := h.a
+	a.settings.wind = false
+	send := func() color.Color {
+		h.tt.Frame()
+		h.tt.Advance(time.Second)
+		r, ok := h.tt.Find("Send")
+		if !ok {
+			t.Fatalf("no Send in %q", h.tt.Texts())
+		}
+		return h.tt.Image().At(int(r.X+3), int(r.Y+r.H/2))
+	}
+	nothing := send()
+	a.attachments = []attachment{{name: "Pasted image 1", thumb: ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 1, 1)))}}
+	if got := send(); got != nothing || !h.tt.HasText("Images aren't sent yet") {
+		t.Fatalf("with an image alone Send is %v, want %v as with nothing to send; the window shows %q", got, nothing, h.tt.Texts())
+	}
+	h.tt.Key(ui.Cmd, ui.KeyEnter)
+	if !a.selected.IsZero() {
+		t.Fatal("an image alone started a thread")
+	}
+	a.draft = "look"
+	if send() == nothing {
+		t.Fatal("with a draft Send still looks like nothing to send")
+	}
+	h.click("Send")
+	es := entriesOf(a.current())
+	if len(es) != 1 || es[0].text != "look" || len(a.attachments) != 1 {
+		t.Errorf("sent %q, keeping %d attachments: the image should stay", texts(es), len(a.attachments))
 	}
 }
 

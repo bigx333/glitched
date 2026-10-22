@@ -22,6 +22,19 @@ type attachment struct {
 	text         string     // pasted text
 }
 
+// held is why the attachment stays when a message in t is sent, "" when
+// it goes with it: no agent takes an image yet, and a server's agent can't
+// read a file on this machine.
+func (at attachment) held(t thread) string {
+	switch {
+	case at.path == "" && at.text == "":
+		return "Images aren't sent yet"
+	case at.path != "" && !t.local():
+		return "Not on " + t.env.Name
+	}
+	return ""
+}
+
 // longPaste is how long a paste is, in characters, before it becomes an
 // attachment rather than text in the box.
 const longPaste = 2000
@@ -118,8 +131,8 @@ func dropRing(c *ui.Context) {
 }
 
 // attachmentChips shows the draft's attachments, each with a button
-// removing it.
-func attachmentChips(c *ui.Context, list []attachment, remove func(i int)) {
+// removing it, and why it stays when a message in t is sent.
+func attachmentChips(c *ui.Context, list []attachment, t thread, remove func(i int)) {
 	ui.Row(c).Wrap().Gap(6).Children(func() {
 		for i, at := range list {
 			ui.Row(c).Key(fmt.Sprintf("%d/%s", i, at.name)).Gap(7).Padding(4, 6, 4, 4).Radius(9).AlignItems(ui.Center).
@@ -137,7 +150,9 @@ func attachmentChips(c *ui.Context, list []attachment, remove func(i int)) {
 				}
 				ui.Column(c).Shrink(1).Gap(1).Children(func() {
 					ui.Text(c, at.name).FontSize(12).FontWeight(500).SingleLine()
-					if at.detail != "" {
+					if why := at.held(t); why != "" {
+						ui.Text(c, why).FontSize(10.5).TextColor(palette.amber).SingleLine()
+					} else if at.detail != "" {
 						ui.Text(c, at.detail).FontSize(10.5).TextColor(palette.faint).SingleLine()
 					}
 				})

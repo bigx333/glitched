@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -546,7 +547,7 @@ func (a *app) composer(c *ui.Context, t thread) {
 				workingGlow(c, card, t.View.Working())
 				if len(a.attachments) > 0 {
 					ui.Column(c).Key("attachments").Padding(12, 12, 0).Children(func() {
-						attachmentChips(c, a.attachments, func(i int) {
+						attachmentChips(c, a.attachments, t, func(i int) {
 							a.attachments = append(a.attachments[:i:i], a.attachments[i+1:]...)
 						})
 					})
@@ -638,7 +639,7 @@ func (a *app) workspacesOn(e *client.Env, home string) []draft {
 // anything to send. While the agent works, it stops it.
 func (a *app) sendButton(c *ui.Context, t thread) {
 	working := t.View.Working()
-	empty := strings.TrimSpace(a.draft) == "" && len(a.attachments) == 0
+	empty := a.message(t) == ""
 	label := "Send"
 	if working {
 		label = "Stop"
@@ -681,7 +682,7 @@ func (a *app) composerControls(c *ui.Context) {
 // send sends the draft in the thread, creating it first when it's the
 // draft. A settled or snoozed thread comes back to the inbox with it.
 func (a *app) send(t thread) {
-	text := a.message()
+	text := a.message(t)
 	if text == "" || t.env == nil {
 		return
 	}
@@ -698,15 +699,20 @@ func (a *app) send(t thread) {
 		a.backend.SetDisposition(t.env, id, api.Disposition{})
 	}
 	a.backend.Send(t.env, id, text, api.AfterActive)
-	a.draft, a.attachments = "", nil
+	a.draft = ""
+	a.attachments = slices.DeleteFunc(a.attachments, func(at attachment) bool { return at.held(t) == "" })
 	a.listFor(id).ScrollToEnd()
 }
 
-// message is the draft and what's attached to it: files as their paths,
-// as the composer's @ puts them, and pasted text after.
-func (a *app) message() string {
+// message is the draft and what's attached to it that goes to t's agent:
+// files as their paths, as the composer's @ puts them, and pasted text
+// after.
+func (a *app) message(t thread) string {
 	parts := []string{strings.TrimSpace(a.draft)}
 	for _, at := range a.attachments {
+		if at.held(t) != "" {
+			continue
+		}
 		switch {
 		case at.path != "":
 			parts = append(parts, "@"+at.path)
