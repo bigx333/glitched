@@ -189,15 +189,12 @@ func (m *Manager) redial(e *Env, s Server) {
 	e.unlink()
 	e.down(Connecting{})
 	e.server = s
-	m.connect(e, dial(s))
+	m.connect(e, newRemote(s))
 }
 
 func (m *Manager) remote(s Server) *Env {
-	return m.launch(&Env{Kind: Remote, Name: s.Label, server: s}, dial(s))
+	return m.launch(&Env{Kind: Remote, Name: s.Label, server: s}, newRemote(s))
 }
-
-// retire ends e's goroutines; what they still post is dropped.
-func (e *Env) retire() { e.stop() }
 
 // post runs fn on the Post thread unless ctx ended by then. Only the Post
 // thread cancels the contexts passed here, so fn never sees a later state
@@ -487,7 +484,7 @@ func (l *local) close() {
 // a session that failed needs no new one.
 type remote struct{ c *transport.EndpointClient }
 
-func dial(s Server) remote {
+func newRemote(s Server) remote {
 	return remote{transport.NewEndpointClient(transport.Tailnet{Address: s.Addr, Token: s.Token}, api.ID{})}
 }
 

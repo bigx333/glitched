@@ -112,7 +112,7 @@ func (m *Manager) sync(renew string) {
 	}
 	for _, e := range m.envs[1:] {
 		if !slices.Contains(envs, e) {
-			e.retire()
+			e.stop()
 		}
 	}
 	m.envs = envs
