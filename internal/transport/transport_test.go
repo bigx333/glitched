@@ -46,11 +46,13 @@ func start(t *testing.T, network string, srv *Server) Loopback {
 
 // fakeEndpoint answers Submit and Open for a target in errs with that error;
 // it is read-only once the server starts. closed, when set, gets the thread
-// of each stream the server closes.
+// of each stream the server closes; pulled counts the items its streams gave
+// the server.
 type fakeEndpoint struct {
 	env    api.Environment
 	errs   map[api.ID]error
 	closed chan api.ID
+	pulled atomic.Int64
 }
 
 func (f *fakeEndpoint) Info(context.Context) (api.Environment, error) { return f.env, nil }
@@ -88,15 +90,15 @@ func (f *fakeEndpoint) Open(_ context.Context, s api.Subscription) (api.Stream, 
 			items = append(items, api.StreamItem{Kind: api.StreamEvent, Event: &api.Event{Cursor: api.Cursor{Log: f.env.Log, Seq: seq + 1}, Thread: s.Thread, Payload: payload}})
 		}
 	}
-	st := &fakeStream{items: items, thread: s.Thread, closed: f.closed}
+	st := &fakeStream{items: items, thread: s.Thread, closed: f.closed, pulled: &f.pulled}
 	if s.Thread == endsBadly {
 		st.end = api.ErrOverflow
 	}
 	return st, nil
 }
 
-// endsBadly's stream fails after its items; firehose's sends 12.5 MiB, more
-// than a client holds for a reader; a Read of blocks waits for its ctx.
+// endsBadly's stream fails after its items; firehose's is 200 items of 64 KiB,
+// three times the stream window; a Read of blocks waits for its ctx.
 var endsBadly, firehose, blocks = api.NewID(), api.NewID(), api.NewID()
 
 type fakeStream struct {
@@ -104,12 +106,16 @@ type fakeStream struct {
 	end    error
 	thread api.ID
 	closed chan api.ID
+	pulled *atomic.Int64
 }
 
 func (s *fakeStream) Next(ctx context.Context) (api.StreamItem, error) {
 	if len(s.items) > 0 {
 		it := s.items[0]
 		s.items = s.items[1:]
+		if s.pulled != nil {
+			s.pulled.Add(1)
+		}
 		return it, nil
 	}
 	if s.end != nil {
@@ -513,10 +519,10 @@ func TestCallsAndStreamsShareOneSocket(t *testing.T) {
 	}
 }
 
-func TestSlowStreamOverflowsAlone(t *testing.T) {
+func TestUnreadStreamWaitsAlone(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	fake := &fakeEndpoint{env: api.Environment{ID: api.NewID(), Name: "mac", Log: api.NewID()}, closed: make(chan api.ID, 4)}
+	fake := &fakeEndpoint{env: api.Environment{ID: api.NewID(), Name: "mac", Log: api.NewID()}}
 	d := &dialer{Loopback: start(t, "tcp", &Server{Endpoint: fake})}
 	c := NewEndpointClient(d, fake.env.ID)
 
@@ -526,34 +532,93 @@ func TestSlowStreamOverflowsAlone(t *testing.T) {
 	}
 	defer slow.Close()
 	thread := api.NewID()
-	other, err := c.Open(ctx, api.Subscription{Thread: thread})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer other.Close()
+	other := mustOpen(t, ctx, c, thread)
 	if err := readStream(ctx, other, thread, api.Cursor{}); err != nil {
 		t.Fatal(err)
 	}
 	if env, err := c.Info(ctx); err != nil || env != fake.env {
-		t.Fatalf("info beside a full stream: %+v %v", env, err)
+		t.Fatalf("info beside an unread stream: %+v %v", env, err)
 	}
 
-	select {
-	case got := <-fake.closed:
-		if got != firehose {
-			t.Fatalf("server closed stream %v, want the firehose", got)
+	// The server sends 64 KiB items until a window's worth is unacked. The
+	// other stream took five.
+	time.Sleep(100 * time.Millisecond)
+	if n, most := fake.pulled.Load()-5, int64(streamWindow/(64<<10)+1); n > most {
+		t.Fatalf("the server pulled %d firehose items for a reader that took none, want at most %d", n, most)
+	}
+	for i := range 200 {
+		it, err := slow.Next(ctx)
+		if err != nil || it.Event.Cursor.Seq != uint64(i+1) {
+			t.Fatalf("firehose item %d: %+v %v", i, it.Event, err)
 		}
-	case <-ctx.Done():
-		t.Fatal("the server never closed the overflowed stream")
-	}
-	if _, err := slow.Next(ctx); !errors.Is(err, api.ErrOverflow) {
-		t.Fatalf("slow stream: got %v, want ErrOverflow", err)
-	}
-	if err := readStream(ctx, mustOpen(t, ctx, c, thread), thread, api.Cursor{}); err != nil {
-		t.Fatalf("a stream opened after the overflow: %v", err)
 	}
 	if n := len(d.dialed()); n != 1 {
 		t.Fatalf("dialed %d sockets, want 1", n)
+	}
+}
+
+// bigSnapshot opens every stream as the runtime does for a far-behind cursor:
+// one Snapshot item holding a 9 MiB thread, then Synchronized.
+type bigSnapshot struct{ fakeEndpoint }
+
+const bigTitle = 9 << 20
+
+func (b *bigSnapshot) Open(context.Context, api.Subscription) (api.Stream, error) {
+	snap := api.Snapshot{Threads: []api.Thread{{ID: api.NewID(), Title: strings.Repeat("x", bigTitle)}}}
+	return &fakeStream{items: []api.StreamItem{
+		{Kind: api.StreamSnapshot, Snapshot: &snap},
+		{Kind: api.StreamSynchronized},
+	}}, nil
+}
+
+func TestStreamDeliversAnItemOverTheWindow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	c := NewEndpointClient(start(t, "unix", &Server{Endpoint: &bigSnapshot{}}), api.ID{})
+	for _, busy := range []time.Duration{200 * time.Millisecond, 0, 0} {
+		st, err := c.Open(ctx, api.Subscription{Thread: api.NewID()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(busy)
+		it, err := st.Next(ctx)
+		if err != nil || it.Kind != api.StreamSnapshot || len(it.Snapshot.Threads[0].Title) != bigTitle {
+			t.Fatalf("reader busy %v: snapshot %v", busy, err)
+		}
+		if it, err := st.Next(ctx); err != nil || it.Kind != api.StreamSynchronized {
+			t.Fatalf("reader busy %v: after the snapshot %+v %v", busy, it, err)
+		}
+		st.Close()
+	}
+}
+
+func TestHubFollowCatchesUpOverTheWire(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	r := openReplica(t)
+	host, log, thread := api.NewID(), api.NewID(), api.NewID()
+	evs := events(log, thread, 1, 20)
+	payload := json.RawMessage(`"` + strings.Repeat("x", 1<<20) + `"`)
+	for i := range evs {
+		evs[i].Payload = payload
+	}
+	for i := 0; i < len(evs); i += 4 {
+		if _, err := r.Append(ctx, api.Upload{Host: host, Epoch: 1, Log: log, Events: evs[i : i+4]}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	c := NewHubClient(start(t, "unix", &Server{Hub: r}), api.ID{})
+	feed, err := c.Follow(ctx, thread, api.Cursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer feed.Close()
+	time.Sleep(200 * time.Millisecond)
+	for i := range 20 {
+		if e, err := feed.Next(ctx); err != nil || e.Cursor.Seq != uint64(i+1) || len(e.Payload) != len(payload) {
+			t.Fatalf("event %d of a 20 MiB catch-up: seq %d, %v", i, e.Cursor.Seq, err)
+		}
 	}
 }
 

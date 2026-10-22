@@ -33,10 +33,6 @@ func dial(t Transport, machine api.ID) *conn {
 // The host part is never resolved: Transport.Dial picks the connection.
 const origin = "ws://glitched/ws"
 
-// streamBytes bounds the items a stream holds for a reader that has fallen
-// behind, as the runtime bounds its subscribers.
-const streamBytes = 8 << 20
-
 func (c *conn) socket(ctx context.Context) (*socket, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -110,8 +106,9 @@ func (s *socket) send(req request) error {
 	return nil
 }
 
-func (s *socket) cancel(id uint64) {
-	go s.send(request{ID: id, Cancel: true})
+// post sends req without its caller waiting on the write.
+func (s *socket) post(req request) {
+	go s.send(req)
 }
 
 func (s *socket) read() {
@@ -204,14 +201,15 @@ func (c *conn) call(ctx context.Context, method string, in, out any) error {
 		return json.Unmarshal(rep.r.Result, out)
 	case <-ctx.Done():
 		if s.forget(id) {
-			s.cancel(id)
+			s.post(request{ID: id, Cancel: true})
 		}
 		return ctx.Err()
 	}
 }
 
 // stream holds the items read for one subscription until Next takes them, so
-// a Next whose ctx ends leaves the stream usable.
+// a Next whose ctx ends leaves the stream usable. The server's window bounds
+// what it holds.
 type stream[T any] struct {
 	s    *socket
 	id   uint64
@@ -220,7 +218,7 @@ type stream[T any] struct {
 	mu    sync.Mutex
 	open  bool
 	items []json.RawMessage
-	bytes int
+	taken int64 // bytes of items Next took and has not acked
 	err   error // ends the stream once items are drained
 }
 
@@ -234,13 +232,8 @@ func (st *stream[T]) frame(r response) bool {
 	case r.Error != nil:
 		st.end(r.Error.err())
 		return true
-	case len(st.items) > 0 && st.bytes+len(r.Item) > streamBytes:
-		st.err, st.items, st.bytes = api.ErrOverflow, nil, 0
-		st.s.cancel(st.id)
-		return true
 	default:
 		st.items = append(st.items, r.Item)
-		st.bytes += len(r.Item)
 	}
 	return false
 }
@@ -309,9 +302,18 @@ func (st *stream[T]) Next(ctx context.Context) (T, error) {
 		st.mu.Lock()
 		if len(st.items) > 0 {
 			raw := st.items[0]
+			st.items[0] = nil
 			st.items = st.items[1:]
-			st.bytes -= len(raw)
+			// Acking a quarter window at a time keeps the server sending
+			// without an ack per item.
+			var ack int64
+			if st.taken += int64(len(raw)); st.taken >= streamWindow/4 {
+				ack, st.taken = st.taken, 0
+			}
 			st.mu.Unlock()
+			if ack > 0 {
+				st.s.post(request{ID: st.id, Ack: ack})
+			}
 			var v T
 			if err := json.Unmarshal(raw, &v); err != nil {
 				return zero, err
@@ -335,7 +337,7 @@ var errStreamClosed = errors.New("transport: stream closed")
 
 func (st *stream[T]) Close() error {
 	if st.s.forget(st.id) {
-		st.s.cancel(st.id)
+		st.s.post(request{ID: st.id, Cancel: true})
 	}
 	st.drop(errStreamClosed)
 	return nil

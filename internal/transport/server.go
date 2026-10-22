@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -100,7 +101,7 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 	}
 	var (
 		mu    sync.Mutex
-		live  = map[uint64]context.CancelFunc{}
+		live  = map[uint64]*op{}
 		calls sync.WaitGroup
 	)
 	defer calls.Wait()
@@ -116,22 +117,33 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 			return
 		}
 		mu.Lock()
-		if req.Cancel {
-			if stop := live[req.ID]; stop != nil {
-				stop()
+		o := live[req.ID]
+		switch {
+		case req.Cancel:
+			if o != nil {
+				o.stop()
+			}
+			mu.Unlock()
+			continue
+		case req.Ack > 0:
+			if o != nil {
+				o.ack(req.Ack)
 			}
 			mu.Unlock()
 			continue
 		}
 		h, known := methods[req.Method]
-		_, dup := live[req.ID]
-		if !known || dup {
+		if !known || o != nil {
 			mu.Unlock()
 			send(response{ID: req.ID, Error: &wireError{Code: "bad_request", Message: "unknown method or id in use: " + req.Method}})
 			continue
 		}
 		callCtx, stop := context.WithCancel(ctx)
-		live[req.ID] = stop
+		o = &op{stop: stop, acked: make(chan struct{}, 1), send: func(f response) {
+			f.ID = req.ID
+			send(f)
+		}}
+		live[req.ID] = o
 		mu.Unlock()
 		calls.Go(func() {
 			defer func() {
@@ -140,12 +152,37 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 				mu.Unlock()
 				stop()
 			}()
-			h(callCtx, req.Params, func(f response) {
-				f.ID = req.ID
-				send(f)
-			})
+			h(callCtx, req.Params, o)
 		})
 	}
+}
+
+// An op is one call or stream in flight on a socket.
+type op struct {
+	stop    context.CancelFunc
+	send    func(response)
+	unacked atomic.Int64 // bytes of stream items sent and not acked
+	acked   chan struct{}
+}
+
+func (o *op) ack(n int64) {
+	o.unacked.Add(-n)
+	select {
+	case o.acked <- struct{}{}:
+	default:
+	}
+}
+
+// room waits until fewer than streamWindow bytes are unacked.
+func (o *op) room(ctx context.Context) error {
+	for o.unacked.Load() >= streamWindow {
+		select {
+		case <-o.acked:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 // keepAlive drops ws when the peer stops answering pings.
@@ -169,7 +206,7 @@ func keepAlive(ctx context.Context, ws *websocket.Conn) {
 }
 
 // A handler answers one request with every frame for its id.
-type handler func(ctx context.Context, params json.RawMessage, send func(response))
+type handler func(ctx context.Context, params json.RawMessage, o *op)
 
 func (s *Server) methods() map[string]handler {
 	m := map[string]handler{}
@@ -219,23 +256,23 @@ type eventsPage struct {
 }
 
 func callHandler[In, Out any](fn func(context.Context, In) (Out, error)) handler {
-	return func(ctx context.Context, params json.RawMessage, send func(response)) {
+	return func(ctx context.Context, params json.RawMessage, o *op) {
 		var in In
 		if err := json.Unmarshal(params, &in); err != nil {
-			send(response{Error: &wireError{Code: "bad_request", Message: err.Error()}})
+			o.send(response{Error: &wireError{Code: "bad_request", Message: err.Error()}})
 			return
 		}
 		out, err := fn(ctx, in)
 		if err != nil {
-			send(response{Error: toWire(err)})
+			o.send(response{Error: toWire(err)})
 			return
 		}
 		b, err := json.Marshal(out)
 		if err != nil {
-			send(response{Error: toWire(err)})
+			o.send(response{Error: toWire(err)})
 			return
 		}
-		send(response{Result: b})
+		o.send(response{Result: b})
 	}
 }
 
@@ -244,36 +281,40 @@ type source[T any] interface {
 }
 
 func streamHandler[In, T any](open func(context.Context, In) (source[T], error)) handler {
-	return func(ctx context.Context, params json.RawMessage, send func(response)) {
+	return func(ctx context.Context, params json.RawMessage, o *op) {
 		var in In
 		if err := json.Unmarshal(params, &in); err != nil {
-			send(response{Error: &wireError{Code: "bad_request", Message: err.Error()}})
+			o.send(response{Error: &wireError{Code: "bad_request", Message: err.Error()}})
 			return
 		}
 		src, err := open(ctx, in)
 		if err != nil {
-			send(response{Error: toWire(err)})
+			o.send(response{Error: toWire(err)})
 			return
 		}
 		if c, ok := src.(io.Closer); ok {
 			defer c.Close()
 		}
-		send(response{Open: true})
+		o.send(response{Open: true})
 		for {
+			if o.room(ctx) != nil {
+				return
+			}
 			item, err := src.Next(ctx)
 			if ctx.Err() != nil {
 				return
 			}
 			if err != nil {
-				send(response{Error: toWire(err)})
+				o.send(response{Error: toWire(err)})
 				return
 			}
 			b, err := json.Marshal(item)
 			if err != nil {
-				send(response{Error: toWire(err)})
+				o.send(response{Error: toWire(err)})
 				return
 			}
-			send(response{Item: b})
+			o.unacked.Add(int64(len(b)))
+			o.send(response{Item: b})
 		}
 	}
 }
