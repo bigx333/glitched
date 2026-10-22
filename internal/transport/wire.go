@@ -20,10 +20,11 @@
 // the client refuses to send one.
 //
 // The server reads a stream's source only while fewer than 4 MiB of the
-// items it sent are unacked, counting each item's JSON, so one item larger
-// than that still goes out alone. A reader that falls behind thus holds its
-// source back, and the source's own bound on a lagging reader applies; the
-// client never drops an item.
+// items it sent are unacked, counting each item's JSON. The next item goes
+// out whatever its size, so a stream holds at most the window plus one item
+// on the client, and an item larger than the window is never stuck. A
+// reader that falls behind thus holds its source back, and the source's own
+// bound on a lagging reader applies; the client never drops an item.
 //
 // Each side pings every 15s and drops a socket whose pong is 10s late.
 package transport
