@@ -51,12 +51,14 @@ type Host struct {
 }
 
 // liveRun is a run this host drives. Cancelling ctx ends the run's provider
-// calls and its pump.
+// calls and its pump; cancelling steering ends only its steers and answers.
 type liveRun struct {
-	run    api.ID
-	ctx    context.Context
-	cancel context.CancelFunc
-	agent  provider.Agent // nil until the start succeeds
+	run          api.ID
+	ctx          context.Context
+	cancel       context.CancelFunc
+	steering     context.Context
+	stopSteering context.CancelFunc
+	agent        provider.Agent // nil until the start succeeds
 }
 
 var _ api.Endpoint = (*Host)(nil)
@@ -139,9 +141,9 @@ var (
 	turnEnded     = api.EventType(api.TurnEnded{})
 )
 
-// follow stops driving a run the log moved past: a stop cancels a start
-// still in flight, and an uncertain or finished run gets no more calls. h.mu
-// is held.
+// follow stops driving a run the log moved past: a stop cancels a start,
+// steer or answer still in flight, and an uncertain or finished run gets no
+// more calls. h.mu is held.
 func (h *Host) follow(e api.Event) {
 	if e.Type != turnStopping && e.Type != turnUncertain && e.Type != turnEnded {
 		return
@@ -152,8 +154,11 @@ func (h *Host) follow(e api.Event) {
 	}
 	switch b := body.(type) {
 	case api.TurnStopping:
-		if lr := h.runs[b.Run]; lr != nil && lr.agent == nil {
-			lr.cancel()
+		if lr := h.runs[b.Run]; lr != nil {
+			lr.stopSteering()
+			if lr.agent == nil {
+				lr.cancel()
+			}
 		}
 	case api.TurnUncertain:
 		h.forgetLocked(b.Run)
@@ -192,7 +197,7 @@ func (h *Host) boot(ctx context.Context) error {
 			if t, err = h.store.Thread(ctx, e.Thread); err != nil {
 				break
 			}
-			if engine.Due(t, b) {
+			if m, _ := t.Message(b.Message); m.State == engine.QueueClaimed {
 				err = h.observe(ctx, e.Thread, engine.SteerLost{Message: b.Message}, e.ID)
 			} else {
 				err = h.store.Complete(ctx, e.ID)
@@ -302,7 +307,12 @@ func (h *Host) perform(e store.Effect) {
 		t, err = h.store.Thread(ctx, e.Thread)
 		return err
 	})
-	if due := loaded && engine.Due(t, e.Body); !due {
+	var due bool
+	var skip engine.Observation
+	if loaded {
+		due, skip = engine.Due(t, e.Body)
+	}
+	if !due {
 		if lr != nil {
 			h.forget(lr.run)
 		}
@@ -310,7 +320,7 @@ func (h *Host) perform(e store.Effect) {
 			retry(h.drain, "release effect", func(ctx context.Context) error { return h.store.Release(ctx, e.ID) })
 			return
 		}
-		h.record(e.Thread, nil, e.ID)
+		h.record(e.Thread, skip, e.ID)
 		return
 	}
 	o, ok := h.call(e, lr)
@@ -344,7 +354,7 @@ func (h *Host) call(e store.Effect, lr *liveRun) (o engine.Observation, ok bool)
 
 	case engine.SteerTurn:
 		o = engine.Steered{Message: b.Message}
-		if err = h.act(b.Run, provider.Steer{Text: b.Text}); errors.Is(err, context.DeadlineExceeded) {
+		if err = h.act(b.Run, provider.Steer{Text: b.Text}); errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			o = engine.SteerLost{Message: b.Message}
 		} else if err != nil {
 			o = engine.SteerFailed{Message: b.Message, Error: err.Error()}
@@ -427,7 +437,11 @@ func (h *Host) act(run api.ID, a provider.Action) error {
 	if lr == nil || lr.agent == nil {
 		return errNoAgent
 	}
-	ctx, cancel := context.WithTimeout(lr.ctx, callTimeout)
+	parent := lr.steering
+	if _, ok := a.(provider.Interrupt); ok {
+		parent = lr.ctx
+	}
+	ctx, cancel := context.WithTimeout(parent, callTimeout)
 	defer cancel()
 	return lr.agent.Do(ctx, a)
 }
@@ -441,6 +455,7 @@ func closeAgent(ag provider.Agent) {
 func (h *Host) track(run api.ID, ag provider.Agent) *liveRun {
 	lr := &liveRun{run: run, agent: ag}
 	lr.ctx, lr.cancel = context.WithCancel(h.ctx)
+	lr.steering, lr.stopSteering = context.WithCancel(lr.ctx)
 	h.mu.Lock()
 	h.runs[run] = lr
 	h.mu.Unlock()

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/engine"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 	"glitched/internal/runtime"
@@ -84,4 +85,45 @@ func TestProviderCallsHaveADeadline(t *testing.T) {
 	if got := outcomes(t, n.h, thread); len(got) != 1 || got[0] != api.OutcomeFailed {
 		t.Fatalf("hung start ended %v, want failed", got)
 	}
+}
+
+// The user steers, approves, then stops while the steer hangs. The stop
+// must not wait behind either, and the approval must not reach the run.
+func TestStopCancelsSteersAndAnswersInFlight(t *testing.T) {
+	g := newGated(fake.Turn(true))
+	n := start(t, dbPath(t), g)
+	thread := newThread(t, n.h)
+	submit(t, n.h, thread, dispatch("go", api.StartNow))
+	req := until(t, n.h, thread, "approval", waiting).Requests[0]
+	entered, never := make(chan struct{}, 1), make(chan struct{})
+	g.setGate(func(_ api.ID, a provider.Action) <-chan struct{} {
+		if _, ok := a.(provider.Steer); ok {
+			entered <- struct{}{}
+			return never
+		}
+		return nil
+	})
+	steer := api.NewID()
+	if _, err := n.h.Submit(ctx, api.Command{ID: steer, Target: thread, Body: dispatch("hurry", api.SteerActive)}); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	respond(t, n.h, thread, req)
+	submit(t, n.h, thread, api.TurnInterrupt{})
+	until(t, n.h, thread, "the stop ends the run while the steer still hangs", idle)
+
+	stored, err := n.st.Thread(ctx, thread)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ := stored.Message(steer)
+	r, _ := stored.Request(req.ID)
+	if g.count(provider.Respond{}) != 0 || r.State != api.RequestInvalidated || m.State != engine.QueueUncertain {
+		t.Fatalf("after the stop: %d answers reached the agent, request %v, steer %v; want none, invalidated and uncertain",
+			g.count(provider.Respond{}), r.State, m.State)
+	}
+	if got := outcomes(t, n.h, thread); len(got) != 1 || got[0] != api.OutcomeInterrupted {
+		t.Fatalf("run ended %v, want interrupted", got)
+	}
+	assertReplay(t, n.st)
 }

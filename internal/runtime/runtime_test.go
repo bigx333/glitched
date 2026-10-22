@@ -583,7 +583,9 @@ func TestInterruptDuringDeliveryLogsWhatTheAgentGot(t *testing.T) {
 	g.setGate(func(_ api.ID, a provider.Action) <-chan struct{} {
 		if _, ok := a.(provider.Respond); ok {
 			entered <- struct{}{}
-			return release
+			// Taken in spite of the stop's cancel, like an answer already
+			// half written to the agent.
+			<-release
 		}
 		return nil
 	})

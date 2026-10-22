@@ -41,23 +41,34 @@ func (DeliverAnswer) effectKind() string { return "request.deliver" }
 func EffectKind(e Effect) string { return e.effectKind() }
 
 // Due reports whether e still has something to do on t. An effect that is
-// not due completes without reaching the agent.
-func Due(t Thread, e Effect) bool {
+// not due completes without reaching the agent, recording skip when it is
+// not nil: a steer or an answer the run can no longer take fails.
+func Due(t Thread, e Effect) (due bool, skip Observation) {
+	r := t.Live()
+	takes := func(run api.ID) bool { return r != nil && r.ID == run && steerable[r.State] }
 	switch e := e.(type) {
 	case StartTurn:
-		r := t.Live()
-		return r != nil && r.ID == e.Run && r.State == RunStarting
+		return r != nil && r.ID == e.Run && r.State == RunStarting, nil
 	case SteerTurn:
-		m, ok := t.Message(e.Message)
-		return ok && m.State == QueueClaimed
+		if m, _ := t.Message(e.Message); m.State != QueueClaimed {
+			return false, nil
+		}
+		if !takes(e.Run) {
+			return false, SteerFailed{Message: e.Message, Error: "the run can no longer be steered"}
+		}
+		return true, nil
 	case InterruptTurn:
-		r := t.Live()
-		return r != nil && r.ID == e.Run && r.State == RunStopping
+		return r != nil && r.ID == e.Run && r.State == RunStopping, nil
 	case DeliverAnswer:
-		r, ok := t.Request(e.Request)
-		return ok && r.State == api.RequestAnswered
+		if q, _ := t.Request(e.Request); q.State != api.RequestAnswered {
+			return false, nil
+		}
+		if !takes(e.Run) {
+			return false, DeliveryFailed{Request: e.Request, Error: "the run can no longer take an answer"}
+		}
+		return true, nil
 	}
-	return false
+	return false, nil
 }
 
 // replaySafe kinds run again when a crash left them leased. The rest may

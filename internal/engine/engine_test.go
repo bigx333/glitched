@@ -261,25 +261,42 @@ func TestDue(t *testing.T) {
 	steer := engine.SteerTurn{Run: run, Message: f.must(dispatch("hurry", api.SteerActive))}
 	deliver := engine.DeliverAnswer{Run: run, Request: req.ID}
 	interrupt := engine.InterruptTurn{Run: run}
+	due := func(e engine.Effect) bool {
+		d, _ := engine.Due(f.th, e)
+		return d
+	}
 	for _, e := range []engine.Effect{start, deliver, interrupt} {
-		if engine.Due(f.th, e) {
+		if due(e) {
 			t.Errorf("%s is due on a waiting run with nothing answered", engine.EffectKind(e))
 		}
 	}
-	if !engine.Due(f.th, steer) {
+	if !due(steer) {
 		t.Error("a claimed steer is not due")
 	}
 	f.must(answer(req))
+	if !due(deliver) {
+		t.Error("an answer is not due on the run that asked")
+	}
 	f.must(api.TurnInterrupt{})
-	for _, e := range []engine.Effect{deliver, interrupt} {
-		if !engine.Due(f.th, e) {
-			t.Errorf("%s is not due on a stopping run with an answer in flight", engine.EffectKind(e))
+	if !due(interrupt) {
+		t.Error("an interrupt is not due on a stopping run")
+	}
+	for _, e := range []engine.Effect{steer, deliver} {
+		d, skip := engine.Due(f.th, e)
+		if d || skip == nil {
+			t.Fatalf("%s on a stopping run: due %v, skip %v; want it skipped as a failure", engine.EffectKind(e), d, skip)
 		}
+		f.observe(skip)
+	}
+	m, _ := f.th.Message(steer.Message)
+	r, _ := f.th.Request(req.ID)
+	if m.State != engine.QueueCancelled || r.State != api.RequestInvalidated {
+		t.Fatalf("skipped on a stopping run: steer %v, answer %v; want cancelled and invalidated", m.State, r.State)
 	}
 	f.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted})
 	for _, e := range []engine.Effect{steer, interrupt} {
-		if engine.Due(f.th, e) {
-			t.Errorf("%s is due after its run ended", engine.EffectKind(e))
+		if d, skip := engine.Due(f.th, e); d || skip != nil {
+			t.Errorf("%s after its run ended: due %v, skip %v; want neither", engine.EffectKind(e), d, skip)
 		}
 	}
 }
