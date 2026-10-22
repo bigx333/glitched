@@ -320,6 +320,22 @@ func (l *longThread) Open(_ context.Context, s api.Subscription) (api.Stream, er
 	return &items{{Kind: api.StreamSnapshot, Snapshot: &l.log}}, nil
 }
 
+// serveOn serves ep on the socket under dir, as the engine there would.
+func serveOn(t *testing.T, dir string, ep api.Endpoint) {
+	sock := daemon.Socket(dir)
+	ln, err := sock.Listen(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		(&transport.Server{Transport: sock, Endpoint: ep}).Serve(ctx, ln)
+	}()
+	t.Cleanup(func() { stop(); <-served })
+}
+
 // items streams its items, then nothing until the stream closes.
 type items []api.StreamItem
 
@@ -355,19 +371,7 @@ func TestOpeningALongThreadLeavesThePostThreadFree(t *testing.T) {
 	folding := allocated() - before
 
 	dir := stateDir(t)
-	sock := daemon.Socket(dir)
-	ln, err := sock.Listen(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, stop := context.WithCancel(context.Background())
-	served := make(chan struct{})
-	go func() {
-		defer close(served)
-		(&transport.Server{Transport: sock, Endpoint: eng}).Serve(ctx, ln)
-	}()
-	t.Cleanup(func() { stop(); <-served })
-
+	serveOn(t, dir, eng)
 	g := &gui{wake: make(chan struct{}, 1)}
 	var worst uint64
 	m := New(Config{Dir: dir, Post: func(fn func()) {
@@ -390,6 +394,23 @@ func TestOpeningALongThreadLeavesThePostThreadFree(t *testing.T) {
 	}
 	if worst > folding/20 {
 		t.Fatalf("a post allocated %d bytes, against %d to fold the log: the fold ran on the GUI's thread", worst, folding)
+	}
+}
+
+type newerEngine struct{ *longThread }
+
+func (newerEngine) Info(context.Context) (api.Environment, error) {
+	return api.Environment{ID: api.NewID(), Name: "newer", Protocol: 2, Log: testLog}, nil
+}
+
+func TestAnEngineOfAnotherProtocolIsNotShown(t *testing.T) {
+	dir := stateDir(t)
+	serveOn(t, dir, newerEngine{&longThread{view: api.Thread{ID: api.NewID(), Title: "newer"}}})
+	m, g := manager(t, dir)
+	env := m.Envs()[0]
+	g.until(t, "an answer", func() bool { return env.Status != Status(Connecting{}) })
+	if s, ok := env.Status.(Incompatible); !ok || s.Theirs != 2 || s.Ours != 1 || len(env.Threads) != 0 {
+		t.Fatalf("an engine of protocol 2 left the env %s with %d threads, want incompatible and none shown", describeStatus(env.Status), len(env.Threads))
 	}
 }
 

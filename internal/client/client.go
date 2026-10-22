@@ -10,12 +10,14 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
+	"glitched/internal/runtime"
 	"glitched/internal/transport"
 )
 
@@ -97,7 +99,7 @@ const (
 	Remote
 )
 
-// Status is sealed: Connecting, Online, Offline or Refused.
+// Status is sealed: Connecting, Online, Offline, Refused or Incompatible.
 type Status interface{ status() }
 
 type Connecting struct{}
@@ -114,10 +116,25 @@ type Offline struct {
 // entry changes.
 type Refused struct{}
 
-func (Connecting) status() {}
-func (Online) status()     {}
-func (Offline) status()    {}
-func (Refused) status()    {}
+// Incompatible: the engine speaks protocol Theirs and this client Ours, so
+// none of its threads show. The next attempt, at RetryAt, may find it
+// upgraded.
+type Incompatible struct {
+	Theirs, Ours int
+	RetryAt      time.Time
+}
+
+func (Connecting) status()   {}
+func (Online) status()       {}
+func (Offline) status()      {}
+func (Refused) status()      {}
+func (Incompatible) status() {}
+
+type protocolError struct{ theirs int }
+
+func (e *protocolError) Error() string {
+	return fmt.Sprintf("client: the engine speaks protocol %d, this client %d", e.theirs, runtime.Protocol)
+}
 
 type Env struct {
 	ID      api.ID // the host; zero until it first answers
@@ -221,7 +238,11 @@ func (m *Manager) link(ctx context.Context, e *Env, r route) {
 		}
 		r.failed()
 		retry := time.Now().Add(wait)
-		m.post(ctx, func() { e.down(Offline{Err: err, RetryAt: retry}) })
+		var s Status = Offline{Err: err, RetryAt: retry}
+		if pe := (*protocolError)(nil); errors.As(err, &pe) {
+			s = Incompatible{Theirs: pe.theirs, Ours: runtime.Protocol, RetryAt: retry}
+		}
+		m.post(ctx, func() { e.down(s) })
 		select {
 		case <-ctx.Done():
 			return
@@ -241,6 +262,9 @@ func (m *Manager) serve(ctx context.Context, e *Env, ep api.Endpoint, online fun
 	defer cancel()
 	dial, undial := context.WithTimeout(s.ctx, connectTimeout)
 	info, err := ep.Info(dial)
+	if err == nil && info.Protocol != runtime.Protocol {
+		err = &protocolError{info.Protocol}
+	}
 	var st api.Stream
 	if err == nil {
 		st, err = ep.Open(dial, api.Subscription{})
