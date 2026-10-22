@@ -45,9 +45,9 @@ type Host struct {
 	wake      chan struct{}
 
 	mu      sync.Mutex
-	busy    map[api.ID]bool            // threads with an effect in flight
-	runs    map[api.ID]*liveRun        // by run
-	closing map[api.ID]<-chan struct{} // by thread; closed when its newest agent has closed
+	busy    map[api.ID]bool     // threads with an effect in flight
+	runs    map[api.ID]*liveRun // by run
+	closing map[api.ID]bool     // threads whose run is over but whose agent is not closed yet
 	subs    map[*stream]struct{}
 }
 
@@ -73,7 +73,7 @@ func New(ctx context.Context, st *store.Store, ad provider.Adapter) (*Host, erro
 		wake:    make(chan struct{}, 1),
 		busy:    map[api.ID]bool{},
 		runs:    map[api.ID]*liveRun{},
-		closing: map[api.ID]<-chan struct{}{},
+		closing: map[api.ID]bool{},
 		subs:    map[*stream]struct{}{},
 	}
 	h.ctx, h.cancel = context.WithCancel(context.Background())
@@ -163,9 +163,9 @@ func (h *Host) follow(e api.Event) {
 			}
 		}
 	case api.TurnUncertain:
-		h.forgetLocked(b.Run)
+		h.leaveLocked(e.Thread, b.Run)
 	case api.TurnEnded:
-		h.forgetLocked(b.Run)
+		h.leaveLocked(e.Thread, b.Run)
 	}
 }
 
@@ -256,7 +256,7 @@ func (h *Host) boot(ctx context.Context) error {
 func (h *Host) work() {
 	defer h.wg.Done()
 	for h.ctx.Err() == nil {
-		e, ok, err := h.store.Lease(h.ctx, h.busyThreads()...)
+		e, ok, err := h.store.Lease(h.ctx, h.busyThreads)
 		if err != nil && h.ctx.Err() == nil {
 			slog.Error("runtime: lease", "err", err)
 		}
@@ -276,10 +276,11 @@ func (h *Host) work() {
 	}
 }
 
+// busyThreads are those with an effect in flight or an agent still closing.
 func (h *Host) busyThreads() []api.ID {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return slices.Collect(maps.Keys(h.busy))
+	return append(slices.Collect(maps.Keys(h.busy)), slices.Collect(maps.Keys(h.closing))...)
 }
 
 func (h *Host) lane(e store.Effect) {
@@ -418,20 +419,9 @@ func retry(ctx context.Context, what string, fn func(context.Context) error) boo
 	}
 }
 
-// open starts the run's agent once the thread's last agent is closed, so two
-// never work in one thread. A start that fails while the host is up closes
-// what it opened.
+// open starts the run's agent. A start that fails while the host is up
+// closes what it opened.
 func (h *Host) open(ctx context.Context, thread api.ID, b engine.StartTurn) (provider.Agent, error) {
-	h.mu.Lock()
-	closed := h.closing[thread]
-	h.mu.Unlock()
-	if closed != nil {
-		select {
-		case <-closed:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	ag, err := h.adapter.Open(ctx, provider.SessionSpec{
@@ -483,12 +473,8 @@ func (h *Host) track(run api.ID, ag provider.Agent) *liveRun {
 }
 
 func (h *Host) attach(thread api.ID, lr *liveRun) {
-	closed := make(chan struct{})
-	h.mu.Lock()
-	h.closing[thread] = closed
-	h.mu.Unlock()
 	h.wg.Add(1)
-	go h.pump(thread, lr, closed)
+	go h.pump(thread, lr)
 }
 
 // forget stops driving the run. Its pump, if any, closes the agent.
@@ -503,4 +489,23 @@ func (h *Host) forgetLocked(run api.ID) {
 		lr.cancel()
 		delete(h.runs, run)
 	}
+}
+
+// leaveLocked forgets a run that is over for this host. A thread whose run
+// leaves an agent behind takes no effect until the pump closes it. Marking
+// that here, in the commit that ends the run, keeps a start the same commit
+// admits from being leased first.
+func (h *Host) leaveLocked(thread, run api.ID) {
+	if lr := h.runs[run]; lr != nil && lr.agent != nil {
+		h.closing[thread] = true
+	}
+	h.forgetLocked(run)
+}
+
+// closed lets the thread take effects again once its last agent closed.
+func (h *Host) closed(thread api.ID) {
+	h.mu.Lock()
+	delete(h.closing, thread)
+	h.mu.Unlock()
+	h.poke()
 }

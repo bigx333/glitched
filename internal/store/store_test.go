@@ -192,7 +192,7 @@ func TestARefusedObservationStillCompletesItsEffect(t *testing.T) {
 	}
 	lease := func() int64 {
 		t.Helper()
-		e, ok, err := s.Lease(ctx)
+		e, ok, err := s.Lease(ctx, nil)
 		if err != nil || !ok {
 			t.Fatalf("lease: %v %v", ok, err)
 		}
@@ -240,7 +240,7 @@ func TestRewindCancelsReadyMessagesBehindLiveRuns(t *testing.T) {
 	for _, thread := range []api.ID{running, unsure} {
 		submit(thread, create(thread).Body)
 		run := submit(thread, api.MessageDispatch{Text: "go", Mode: api.StartNow})
-		e, ok, err := s.Lease(ctx)
+		e, ok, err := s.Lease(ctx, nil)
 		if err != nil || !ok {
 			t.Fatalf("lease: %v %v", ok, err)
 		}
@@ -272,7 +272,7 @@ func TestRewindCancelsReadyMessagesBehindLiveRuns(t *testing.T) {
 		}
 		submit(thread, api.TurnInterrupt{}) // the user moves on from the uncertain run
 	}
-	if e, ok, err := s.Lease(ctx); err != nil || ok {
+	if e, ok, err := s.Lease(ctx, nil); err != nil || ok {
 		t.Fatalf("abandoning the uncertain runs leased %+v %v, want nothing to start", e.Body, err)
 	}
 }

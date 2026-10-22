@@ -321,3 +321,27 @@ func TestAFailedCloseKeepsTheNextAgentFromStarting(t *testing.T) {
 		t.Fatal("the first agent is still open after the next one started")
 	}
 }
+
+// A start that waits for the thread's last agent to close has not reached the
+// provider, so a restart meanwhile leaves it to start, not uncertain.
+func TestAStartWaitingOnTheLastAgentSurvivesARestart(t *testing.T) {
+	t.Cleanup(runtime.SetCallTimeout(100 * time.Millisecond))
+	path := dbPath(t)
+	ad := &stuckCloser{gated: newGated(fake.Turn(true)), stuck: true}
+	n := start(t, path, ad)
+	thread := newThread(t, n.h)
+	first, second := api.NewID(), api.NewID()
+	abandonForNext(t, n, ad, thread, first, second)
+	time.Sleep(50 * time.Millisecond)
+	n.kill()
+
+	fresh := fake.New(fake.Turn(true))
+	n = start(t, path, fresh)
+	th := until(t, n.h, thread, "the next run settles", func(th api.Thread) bool { return uncertain(th) || waiting(th) })
+	if uncertain(th) {
+		t.Fatal("a start that never reached the provider is uncertain after a restart")
+	}
+	if th.Requests[0].Run != second || fresh.Starts() != 1 {
+		t.Fatalf("the new host asks for run %s after %d starts, want %s after 1", th.Requests[0].Run, fresh.Starts(), second)
+	}
+}

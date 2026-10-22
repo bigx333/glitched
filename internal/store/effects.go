@@ -20,9 +20,17 @@ type Effect struct {
 	Body   engine.Effect
 }
 
-// Lease takes the oldest pending effect of a thread not in busy. ok is false
-// when there is none.
-func (s *Store) Lease(ctx context.Context, busy ...api.ID) (e Effect, ok bool, err error) {
+// Lease takes the oldest pending effect of a thread that skip, when not nil,
+// does not name. ok is false when there is none. skip runs in commit order,
+// so it sees what the hooks of every earlier commit did; like a hook, it must
+// not block or call the store.
+func (s *Store) Lease(ctx context.Context, skip func() []api.ID) (e Effect, ok bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var busy []api.ID
+	if skip != nil {
+		busy = skip()
+	}
 	pick := `SELECT id FROM effects WHERE state = 'pending'`
 	args := make([]any, len(busy))
 	if len(busy) > 0 {
@@ -31,8 +39,6 @@ func (s *Store) Lease(ctx context.Context, busy ...api.ID) (e Effect, ok bool, e
 			args[i] = id[:]
 		}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	row := s.db.QueryRowContext(ctx, `UPDATE effects SET state = 'leased'
 		WHERE id = (`+pick+` ORDER BY id LIMIT 1)
 		RETURNING id, thread, kind, payload`, args...)
