@@ -243,6 +243,10 @@ type app struct {
 	// The diff panel: each file's viewer, by path, and their layout.
 	diffs      map[string]*editor.DiffState
 	diffLayout editor.DiffLayout
+	// diffWrap wraps the diff's long lines; reviewed is each file the
+	// user marked reviewed.
+	diffWrap bool
+	reviewed map[string]bool
 	// shells are the terminal drawer's shells, by project.
 	shells map[string]*shell
 	// windDraw paints the wind's field behind the chat, as the frame's
@@ -307,6 +311,8 @@ func newApp() *app {
 		previewURL:    defaultPreviewURL,
 		previewDraft:  defaultPreviewURL,
 		diffLayout:    editor.DiffUnified,
+		diffWrap:      true,
+		reviewed:      map[string]bool{},
 		settings: settings{
 			theme:         0,
 			glass:         true,

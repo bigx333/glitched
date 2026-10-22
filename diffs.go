@@ -151,17 +151,9 @@ func (a *app) diffPanel(c *ui.Context, t *thread) {
 			ui.Text(c, "Changes").FontWeight(600)
 			ui.Textf(c, "%d", len(files)).FontSize(11).TextColor(palette.muted).Padding(0, 6).Radius(999).Background(palette.hover)
 			ui.Spacer(c)
-			// The segments' order, Unified then Split, is not the
-			// layouts' own (DiffSplit is 0).
-			layout := 0
-			if a.diffLayout == editor.DiffSplit {
-				layout = 1
-			}
-			if ui.Segmented(c, &layout, "Unified", "Split").Label("Diff layout").Changed() {
-				a.diffLayout = editor.DiffUnified
-				if layout == 1 {
-					a.diffLayout = editor.DiffSplit
-				}
+			a.layoutSwitch(c)
+			if iconButton(c, "wrap", icWrap, "Wrap long lines", a.diffWrap).Clicked() {
+				a.diffWrap = !a.diffWrap
 			}
 			if iconButton(c, "close-diff", icX, "Close diff", false).Clicked() {
 				a.showDiff = false
@@ -176,14 +168,7 @@ func (a *app) diffPanel(c *ui.Context, t *thread) {
 			a.diffFile = min(a.diffFile, len(files)-1)
 			ui.Column(c).Padding(6).Gap(1).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
 				for i, f := range files {
-					if row(c, f.path, i == a.diffFile).Padding(5, 8).Children(func() {
-						ui.Icon(c, icFile).FontSize(12)
-						ui.Text(c, f.path).FontSize(12).Font("monospace").SingleLine().Grow(1).Shrink(1)
-						add, del := a.diffStats(f.path)
-						counts(c, add, del)
-					}).Clicked() {
-						a.diffFile = i
-					}
+					a.fileRow(c, i, f)
 				}
 			})
 			path := files[a.diffFile].path
@@ -192,17 +177,111 @@ func (a *app) diffPanel(c *ui.Context, t *thread) {
 				return
 			}
 			d := a.diffFor(path)
-			d.Layout = a.diffLayout
+			d.Layout, d.Wrap = a.diffLayout, a.diffWrap
 			a.hunkBar(c, d)
 			editor.DiffView(c.Key(path), d).Grow(1).FillWidth()
 		})
 	})
 }
 
-// hunkBar counts the file's changes, "2 of 5", and steps between them.
+// splitWidth is the least width side by side reads at: two columns of
+// code, each wide enough for a line.
+const splitWidth = 800
+
+// splitFits reports whether there is room for the panel splitWidth wide
+// beside the chat.
+func (a *app) splitFits() bool {
+	return a.roomBeside-minChatWidth >= splitWidth
+}
+
+// layoutSwitch chooses Unified or Split. Split needs the room: short of
+// it, its segment is dimmed and says so, and the layout falls back to
+// Unified.
+func (a *app) layoutSwitch(c *ui.Context) {
+	fits := a.splitFits()
+	if !fits {
+		a.diffLayout = editor.DiffUnified
+	}
+	ui.Row(c).Radius(7).Border(1, palette.border).Padding(2).Gap(2).Children(func() {
+		segment := func(key, label string, layout editor.DiffLayout, enabled bool) {
+			b := ghost(c, key, a.diffLayout == layout).Padding(3, 9).Disabled(!enabled)
+			if !enabled {
+				b.Tooltip(fmt.Sprintf("Split needs %d DIPs of room", splitWidth))
+			}
+			if b.Children(func() { ui.Text(c, label).FontSize(11.5) }).Clicked() {
+				a.diffLayout = layout
+			}
+		}
+		segment("unified", "Unified", editor.DiffUnified, true)
+		segment("split", "Split", editor.DiffSplit, fits)
+	})
+}
+
+// fileRow is a changed file in the panel's list; pointed at, its actions:
+// mark it reviewed, revert it, copy its path, open it in the editor. A
+// reviewed file shows a filled check.
+func (a *app) fileRow(c *ui.Context, i int, f fileChange) {
+	r := row(c, f.path, i == a.diffFile).Padding(3, 4, 3, 8).Height(28).Label("Diff of " + f.path)
+	_, known := fileTexts[f.path]
+	hovered := r.Hovered()
+	if r.Children(func() {
+		icon := icFile
+		if a.reviewed[f.path] {
+			icon = icCheckCirc
+		}
+		ui.Icon(c, icon).FontSize(12)
+		ui.Text(c, f.path).FontSize(12).Font("monospace").SingleLine().Grow(1).Shrink(1)
+		if !hovered {
+			add, del := a.diffStats(f.path)
+			counts(c, add, del)
+			return
+		}
+		ui.Row(c).Gap(0).Children(func() {
+			if iconButton(c, "reviewed", icCheckCirc, "Mark reviewed", a.reviewed[f.path]).Padding(3).Clicked() {
+				a.reviewed[f.path] = !a.reviewed[f.path]
+			}
+			if iconButton(c, "revert", icUndo, "Revert file", false).Padding(3).Disabled(!known).Clicked() {
+				d := a.diffFor(f.path)
+				for len(d.Hunks()) > 0 {
+					d.Revert(0)
+				}
+			}
+			if iconButton(c, "copy-path", icCopy, "Copy path", false).Padding(3).Clicked() {
+				c.WriteClipboard(f.path)
+				c.AddToast(ui.Toast{Title: "Copied", Description: f.path})
+			}
+			if iconButton(c, "open-file", icExternal, "Open in editor", false).Padding(3).Clicked() {
+				c.AddToast(ui.Toast{Title: "Opened in Cursor", Description: f.path})
+			}
+		})
+	}).Clicked() {
+		a.diffFile = i
+	}
+}
+
+// hunkBar counts the file's changes, "2 of 5", steps between them, and
+// keeps the one in view as reviewed. ⌘[ and ⌘] step from the keyboard,
+// and ⇧⌘↩ keeps.
 func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 	n := len(d.Hunks())
 	i, _ := d.CurrentHunk()
+	prev := func() { d.GoToHunk(max(i-1, 0)) }
+	next := func() { d.GoToHunk(min(i+1, n-1)) }
+	keep := func() {
+		if i >= 0 {
+			d.Accept(i)
+		}
+	}
+	if n > 0 {
+		switch {
+		case c.Shortcut(ui.Cmd, ui.KeyBracketLeft):
+			prev()
+		case c.Shortcut(ui.Cmd, ui.KeyBracketRight):
+			next()
+		case c.Shortcut(ui.Cmd|ui.Shift, ui.KeyEnter):
+			keep()
+		}
+	}
 	ui.Row(c).Padding(4, 8, 4, 14).Gap(4).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
 		label := fmt.Sprintf("%d changes", n)
 		switch {
@@ -212,11 +291,18 @@ func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 			label = fmt.Sprintf("%d of %d", i+1, n)
 		}
 		ui.Text(c, label).FontSize(11.5).TextColor(palette.muted).Grow(1)
-		if iconButton(c, "prev-hunk", icChevronUp, "Previous change", false).Padding(3).Disabled(n == 0).Clicked() {
-			d.GoToHunk(max(i-1, 0))
+		if ghost(c, "keep-hunk", false).Padding(3, 6).Disabled(n == 0).Label("Mark change reviewed").Children(func() {
+			ui.Icon(c, icCheck).FontSize(12)
+			ui.Text(c, "Reviewed").FontSize(11.5)
+			kbd(c, "⇧⌘↩")
+		}).Clicked() {
+			keep()
 		}
-		if iconButton(c, "next-hunk", icChevronD, "Next change", false).Padding(3).Disabled(n == 0).Clicked() {
-			d.GoToHunk(min(i+1, n-1))
+		if iconButton(c, "prev-hunk", icChevronUp, "Previous change  ⌘[", false).Padding(3).Disabled(n == 0).Clicked() {
+			prev()
+		}
+		if iconButton(c, "next-hunk", icChevronD, "Next change  ⌘]", false).Padding(3).Disabled(n == 0).Clicked() {
+			next()
 		}
 	})
 }
@@ -228,7 +314,7 @@ func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 func (a *app) diffWidth() float32 {
 	share, lo, hi := float32(0.42), float32(380), float32(520)
 	if a.diffLayout == editor.DiffSplit {
-		share, lo, hi = 0.58, 480, 820
+		share, lo, hi = 0.58, splitWidth, 900
 	}
 	return panelWidth(a.roomBeside, share, lo, hi)
 }

@@ -306,6 +306,8 @@ var keybindings = []struct {
 	{"Send message", []string{"⌘", "↩"}},
 	{"Allow the pending approval", []string{"⌘", "↩"}},
 	{"Deny the pending approval", []string{"⇧", "⌘", "D"}},
+	{"Previous / next change in the diff", []string{"⌘", "[", "]"}},
+	{"Mark the change in view reviewed", []string{"⇧", "⌘", "↩"}},
 	{"Toggle sidebar", []string{"⌘", "B"}},
 	{"Toggle diff panel", []string{"⌘", "D"}},
 	{"Toggle terminal", []string{"⌘", "J"}},
