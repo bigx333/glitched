@@ -19,6 +19,9 @@ var (
 	ErrStaleEpoch = errors.New("api: stale epoch")
 	// ErrAlreadyAnswered: a request was answered by someone else first.
 	ErrAlreadyAnswered = errors.New("api: already answered")
+	// ErrOverflow ends a stream whose subscriber fell too far behind. The
+	// client reopens it from the last cursor it holds.
+	ErrOverflow = errors.New("api: stream overflow")
 )
 
 // RejectedError is a command the engine refused by policy or state.
