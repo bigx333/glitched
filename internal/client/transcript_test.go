@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -312,4 +313,37 @@ func TestFoldSkipsUnknownAndRepeatedEvents(t *testing.T) {
 	// lower seq.
 	tr.apply(api.Event{Cursor: api.Cursor{Log: api.NewID(), Seq: 1}, Type: "assistant.delta", Payload: json.RawMessage(`{"run":"` + a.String() + `","text":"z"}`)})
 	expect(t, tr, `user "one" sent`, `assistant "xyz" streaming`)
+}
+
+// longRun is a turn whose text arrives in n deltas.
+func longRun(n int) []api.EventBody {
+	run := api.NewID()
+	evs := start(run, "go", 0)
+	for range n {
+		evs = append(evs, api.AssistantDelta{Run: run, Text: "twenty bytes of text"})
+	}
+	return evs
+}
+
+func allocated() uint64 {
+	var s runtime.MemStats
+	runtime.ReadMemStats(&s)
+	return s.TotalAlloc
+}
+
+func TestFoldingTextCostsInProportionToIt(t *testing.T) {
+	cost := func(n int) uint64 {
+		evs := longRun(n)
+		before := allocated()
+		tr := play(evs...)
+		after := allocated()
+		if got := len(tr.last().(*AssistantEntry).Text); got != 20*n {
+			t.Fatalf("the text is %d bytes, want %d", got, 20*n)
+		}
+		return after - before
+	}
+	small, large := cost(1000), cost(2000)
+	if large > 3*small {
+		t.Fatalf("folding twice the text allocated %d bytes against %d, want about twice", large, small)
+	}
 }

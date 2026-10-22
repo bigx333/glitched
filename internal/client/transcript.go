@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
 	"glitched/internal/api"
@@ -48,6 +49,14 @@ type AssistantEntry struct {
 	Run       api.ID
 	Text      string
 	Streaming bool // more text may follow
+	text      strings.Builder
+}
+
+// write appends s. Text shares the builder's bytes, so a long run's deltas
+// cost what they hold rather than a copy of all the text before each.
+func (a *AssistantEntry) write(s string) {
+	a.text.WriteString(s)
+	a.Text = a.text.String()
 }
 
 // WorkEntry is a run's tool calls with no text between them. Ended is zero
@@ -136,11 +145,12 @@ func (t *Transcript) apply(e api.Event) {
 	case api.MessageUncertain:
 		t.settle(b.Message, Uncertain, "")
 	case api.AssistantDelta:
-		if a, ok := t.last().(*AssistantEntry); ok && a.Run == b.Run {
-			a.Text += b.Text
-		} else {
-			t.add(&AssistantEntry{Run: b.Run, Text: b.Text, Streaming: true})
+		a, ok := t.last().(*AssistantEntry)
+		if !ok || a.Run != b.Run {
+			a = &AssistantEntry{Run: b.Run, Streaming: true}
+			t.add(a)
 		}
+		a.write(b.Text)
 	case api.WorkItem:
 		t.work(b, e.At)
 	case api.RequestOpened:

@@ -348,7 +348,8 @@ func (m *Manager) follow(e *Env, th *Thread) {
 }
 
 // watch reads one thread's subscription, reopening it from the last cursor
-// it read when it fails, until ctx ends.
+// it read when it fails, until ctx ends. It folds a snapshot itself, as a
+// long thread's takes a while, and posts the transcript.
 func (m *Manager) watch(ctx context.Context, e *Env, s *sub, ep api.Endpoint, thread api.ID, after api.Cursor) {
 	for wait := minBackoff; ; wait = min(2*wait, maxBackoff) {
 		st, err := ep.Open(ctx, api.Subscription{Thread: thread, After: after})
@@ -358,16 +359,23 @@ func (m *Manager) watch(ctx context.Context, e *Env, s *sub, ep api.Endpoint, th
 				st.Close()
 				break
 			}
+			wait = minBackoff
+			var take func(*Transcript)
 			switch it.Kind {
 			case api.StreamSnapshot:
 				after = it.Snapshot.Cursor
+				tr := fold(*it.Snapshot)
+				take = func(t *Transcript) { *t = tr }
 			case api.StreamEvent:
 				after = it.Event.Cursor
+				take = func(t *Transcript) { t.apply(*it.Event) }
+			default:
+				continue
 			}
-			wait = minBackoff
 			m.post(e.ctx, func() {
 				if th := e.Threads[thread]; th != nil && th.sub == s {
-					th.take(it)
+					take(th.Transcript)
+					th.shown()
 				}
 			})
 		}
@@ -379,16 +387,8 @@ func (m *Manager) watch(ctx context.Context, e *Env, s *sub, ep api.Endpoint, th
 	}
 }
 
-func (th *Thread) take(it api.StreamItem) {
-	switch it.Kind {
-	case api.StreamSnapshot:
-		*th.Transcript = fold(*it.Snapshot)
-	case api.StreamEvent:
-		th.Transcript.apply(*it.Event)
-	default:
-		return
-	}
-	// A message shows as pending until the transcript has it.
+// shown drops the rows of the messages the transcript now has.
+func (th *Thread) shown() {
 	th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool {
 		_, message := p.Body.(api.MessageDispatch)
 		return message && th.Transcript.message(p.Command) != nil

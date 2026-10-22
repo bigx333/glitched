@@ -274,6 +274,104 @@ func TestACommandWaitsForTheNextEngine(t *testing.T) {
 	g.until(t, "the retry landed", func() bool { return len(env.Threads[id].Pending) == 0 }, func() string { return describePending(env.Threads[id].Pending) })
 }
 
+// longThread is an engine holding one thread with a long log.
+type longThread struct {
+	view api.Thread
+	log  api.Snapshot
+}
+
+func (l *longThread) Info(context.Context) (api.Environment, error) {
+	return api.Environment{ID: api.NewID(), Name: "long", Protocol: 1, Log: testLog}, nil
+}
+
+func (l *longThread) Read(context.Context, api.Query) (api.Snapshot, error) {
+	return api.Snapshot{}, errors.ErrUnsupported
+}
+
+func (l *longThread) Submit(context.Context, api.Command) (api.Receipt, error) {
+	return api.Receipt{}, errors.ErrUnsupported
+}
+
+func (l *longThread) Open(_ context.Context, s api.Subscription) (api.Stream, error) {
+	if s.Thread.IsZero() {
+		return &items{{Kind: api.StreamSnapshot, Snapshot: &api.Snapshot{Cursor: l.log.Cursor, Threads: []api.Thread{l.view}}}}, nil
+	}
+	return &items{{Kind: api.StreamSnapshot, Snapshot: &l.log}}, nil
+}
+
+// items streams its items, then nothing until the stream closes.
+type items []api.StreamItem
+
+func (s *items) Next(ctx context.Context) (api.StreamItem, error) {
+	if len(*s) == 0 {
+		<-ctx.Done()
+		return api.StreamItem{}, ctx.Err()
+	}
+	it := (*s)[0]
+	*s = (*s)[1:]
+	return it, nil
+}
+
+func (s *items) Close() error { return nil }
+
+// Opening a thread with a long log leaves the GUI's thread free: the fold
+// happens before the post, which only swaps the transcript in.
+func TestOpeningALongThreadLeavesThePostThreadFree(t *testing.T) {
+	var evs []api.Event
+	for turn := range 20 {
+		for _, b := range longRun(500) {
+			if q, ok := b.(api.MessageQueued); ok {
+				q.Pos = int64(turn)
+				b = q
+			}
+			evs = append(evs, event(len(evs)+1, b))
+		}
+	}
+	id := api.NewID()
+	eng := &longThread{view: api.Thread{ID: id, Title: "long"}, log: api.Snapshot{Cursor: evs[len(evs)-1].Cursor, Events: evs}}
+	before := allocated()
+	fold(eng.log)
+	folding := allocated() - before
+
+	dir := stateDir(t)
+	sock := daemon.Socket(dir)
+	ln, err := sock.Listen(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		(&transport.Server{Transport: sock, Endpoint: eng}).Serve(ctx, ln)
+	}()
+	t.Cleanup(func() { stop(); <-served })
+
+	g := &gui{wake: make(chan struct{}, 1)}
+	var worst uint64
+	m := New(Config{Dir: dir, Post: func(fn func()) {
+		g.post(func() {
+			before := allocated()
+			fn()
+			worst = max(worst, allocated()-before)
+		})
+	}})
+	if err := m.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+	env := m.Envs()[0]
+	online(t, g, env)
+	m.OpenThread(env, id)
+	g.until(t, "the transcript", func() bool { return env.Threads[id].Transcript.Cursor == eng.log.Cursor })
+	if len(env.Threads[id].Transcript.Entries) != 40 {
+		t.Fatalf("the transcript has %d entries, want the 20 turns' messages and texts", len(env.Threads[id].Transcript.Entries))
+	}
+	if worst > folding/20 {
+		t.Fatalf("a post allocated %d bytes, against %d to fold the log: the fold ran on the GUI's thread", worst, folding)
+	}
+}
+
 // finishTurn creates a thread, sends it a message and approves the edit
 // the turn asks for, checking what the GUI sees on the way. It returns once
 // the turn is over and the transcript shows all of it.
