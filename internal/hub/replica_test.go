@@ -122,6 +122,25 @@ func TestEpochFencing(t *testing.T) {
 	}
 }
 
+func TestALogBelongsToTheHostThatFirstAppendsIt(t *testing.T) {
+	ctx := context.Background()
+	r := openReplica(t)
+	owner, other, log, thread := api.NewID(), api.NewID(), api.NewID(), api.NewID()
+
+	if _, err := r.Append(ctx, api.Upload{Host: owner, Epoch: 1, Log: log, Events: run(log, 1, 2, thread)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Append(ctx, api.Upload{Host: other, Epoch: 1, Log: log, Events: run(log, 3, 4, thread)}); !errors.Is(err, ErrForeignLog) {
+		t.Fatalf("another host appending the log: got %v, want ErrForeignLog", err)
+	}
+	if n, _ := r.Acked(ctx, log); n != 2 {
+		t.Fatalf("acked %d after the refused append, want 2", n)
+	}
+	if ack, err := r.Append(ctx, api.Upload{Host: owner, Epoch: 1, Log: log, Events: run(log, 3, 4, thread)}); err != nil || ack.Acked != 4 {
+		t.Fatalf("owner continues its log: %v %v", ack, err)
+	}
+}
+
 func TestThreadReadsAcrossLogs(t *testing.T) {
 	ctx := context.Background()
 	r := openReplica(t)

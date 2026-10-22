@@ -3,6 +3,7 @@
 package hub
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -23,6 +24,9 @@ func (e *GapError) Error() string {
 	return fmt.Sprintf("hub: upload leaves a gap after seq %d", e.Acked)
 }
 
+// ErrForeignLog refuses an upload of a log that another host appended first.
+var ErrForeignLog = errors.New("hub: log belongs to another host")
+
 // The acked offset of a log is MAX(seq) of its events: Append only ever
 // inserts a contiguous run, so the events table is the single record of it.
 // n is the hub's own arrival order, which orders reads across a host's logs.
@@ -30,6 +34,10 @@ const schema = `
 CREATE TABLE IF NOT EXISTS hosts (
 	host  BLOB PRIMARY KEY,
 	epoch INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS logs (
+	log  BLOB PRIMARY KEY,
+	host BLOB NOT NULL
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS events (
 	n      INTEGER PRIMARY KEY,
@@ -88,6 +96,17 @@ func (r *Replica) Append(ctx context.Context, u api.Upload) (api.UploadAck, erro
 	if _, err := tx.ExecContext(ctx, `INSERT INTO hosts (host, epoch) VALUES (?, ?)
 		ON CONFLICT (host) DO UPDATE SET epoch = excluded.epoch`, u.Host[:], u.Epoch); err != nil {
 		return api.UploadAck{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO logs (log, host) VALUES (?, ?) ON CONFLICT (log) DO NOTHING`,
+		u.Log[:], u.Host[:]); err != nil {
+		return api.UploadAck{}, err
+	}
+	var owner []byte
+	if err := tx.QueryRowContext(ctx, `SELECT host FROM logs WHERE log = ?`, u.Log[:]).Scan(&owner); err != nil {
+		return api.UploadAck{}, err
+	}
+	if !bytes.Equal(owner, u.Host[:]) {
+		return api.UploadAck{}, ErrForeignLog
 	}
 	acked, err := ackedTx(ctx, tx, u.Log)
 	if err != nil {

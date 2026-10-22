@@ -33,6 +33,7 @@ var sentinels = []struct {
 	{"not_found", api.ErrNotFound, http.StatusNotFound},
 	{"stale_epoch", api.ErrStaleEpoch, http.StatusConflict},
 	{"already_answered", api.ErrAlreadyAnswered, http.StatusConflict},
+	{"foreign_log", hub.ErrForeignLog, http.StatusConflict},
 }
 
 func toWire(err error) (wireError, int) {

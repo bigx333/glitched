@@ -279,6 +279,9 @@ func TestHubOverTheWire(t *testing.T) {
 	if _, err := c.Append(ctx, api.Upload{Host: host, Epoch: 1, Log: log, Events: events(log, a, 7, 7)}); !errors.Is(err, api.ErrStaleEpoch) {
 		t.Fatalf("stale epoch: got %v", err)
 	}
+	if _, err := c.Append(ctx, api.Upload{Host: api.NewID(), Epoch: 2, Log: log, Events: events(log, a, 7, 7)}); !errors.Is(err, hub.ErrForeignLog) {
+		t.Fatalf("another host's append: got %v, want ErrForeignLog", err)
+	}
 	if n, err := c.Acked(ctx, log); err != nil || n != 6 {
 		t.Fatalf("acked: %d %v", n, err)
 	}
