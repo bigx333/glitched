@@ -3,6 +3,8 @@ package store_test
 import (
 	"context"
 	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -117,5 +119,60 @@ func TestReadLogIsDenseAndStable(t *testing.T) {
 	s.Close()
 	if s = open(t, path); s.LogID() != log {
 		t.Fatal("log id changed on reopen")
+	}
+}
+
+// copyDB copies a closed database file by file, the way a user restores a
+// backup.
+func copyDB(t *testing.T, from, to string) {
+	t.Helper()
+	for _, sfx := range []string{"", "-wal", "-shm"} {
+		b, err := os.ReadFile(from + sfx)
+		if errors.Is(err, fs.ErrNotExist) {
+			os.Remove(to + sfx)
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(to+sfx, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRestoredDatabaseGetsANewLog(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path, backup := filepath.Join(dir, "host.db"), filepath.Join(dir, "backup.db")
+	s := open(t, path)
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	copyDB(t, path, backup)
+
+	s = open(t, path)
+	settle := api.Command{ID: api.NewID(), Target: thread, Body: api.InboxSet{Disposition: api.Disposition{State: api.Settled}}}
+	seen, err := s.Submit(ctx, settle, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	copyDB(t, backup, path)
+	s = open(t, path)
+	if s.LogID() == seen.Committed.Log {
+		t.Fatalf("restored database kept log %s, so cursor %+v still looks current", s.LogID(), seen.Committed)
+	}
+	restored := s.LogID()
+	events, err := s.ReadLog(ctx, 0, 0)
+	if err != nil || len(events) != 1 || events[0].Cursor.Log != restored {
+		t.Fatalf("restored log: %+v %v, want the one event under %s", events, err, restored)
+	}
+	s.Close()
+	if s = open(t, path); s.LogID() != restored {
+		t.Fatal("log id changed on a plain reopen")
 	}
 }

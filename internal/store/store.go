@@ -6,8 +6,11 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"sync"
 
 	_ "modernc.org/sqlite"
@@ -16,9 +19,10 @@ import (
 )
 
 type Store struct {
-	db   *sql.DB
-	log  api.ID
-	host api.ID
+	db    *sql.DB
+	fence *os.File
+	log   api.ID
+	host  api.ID
 
 	// mu admits one writer at a time, which makes commit order the order
 	// hooks see events in.
@@ -31,15 +35,20 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{db: db}
-	if err := s.migrate(); err != nil {
+	fence, err := os.OpenFile(path+".fence", os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
 		db.Close()
+		return nil, err
+	}
+	s := &Store{db: db, fence: fence}
+	if err := s.migrate(); err != nil {
+		s.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error { return errors.Join(s.db.Close(), s.fence.Close()) }
 
 // LogID names this log. A restored database gets a new one, which fences
 // cursors taken against the old log.
@@ -198,7 +207,55 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("store: meta %s: %w", key, err)
 		}
 	}
-	return tx.Commit()
+	head, err := headSeq(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if s.restored(head) {
+		s.log = api.NewID()
+		if _, err := tx.ExecContext(ctx, `UPDATE meta SET value = ? WHERE key = 'log'`, s.log[:]); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return s.writeFence(head)
+}
+
+// The fence file beside the database holds the log id and the highest seq
+// handed out under it. A restored copy brings its own meta table back, so
+// only a file outside the database can tell that the copy is behind what
+// clients have seen.
+const fenceSize = len(api.ID{}) + 8
+
+// restored reports whether the database is not the one the fence last saw,
+// or is behind it. A missing or torn fence on a database with events counts
+// as a restore: a new log id costs clients one snapshot, a reused one hands
+// them the wrong events.
+func (s *Store) restored(head uint64) bool {
+	var b [fenceSize]byte
+	if n, _ := s.fence.ReadAt(b[:], 0); n != fenceSize {
+		return head > 0
+	}
+	return api.ID(b[:len(s.log)]) != s.log || head < binary.BigEndian.Uint64(b[len(s.log):])
+}
+
+// writeFence runs after each commit and before its cursor leaves the store.
+// It skips fsync: losing the write in a power cut only leaves the fence
+// below the head.
+func (s *Store) writeFence(head uint64) error {
+	var b [fenceSize]byte
+	copy(b[:], s.log[:])
+	binary.BigEndian.PutUint64(b[len(s.log):], head)
+	_, err := s.fence.WriteAt(b[:], 0)
+	return err
+}
+
+func (s *Store) advanceFence(head uint64) {
+	if err := s.writeFence(head); err != nil {
+		slog.Error("store: fence", "head", head, "err", err)
+	}
 }
 
 type querier interface {
