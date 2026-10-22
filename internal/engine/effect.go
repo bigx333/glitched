@@ -40,6 +40,26 @@ func (DeliverAnswer) effectKind() string { return "request.deliver" }
 
 func EffectKind(e Effect) string { return e.effectKind() }
 
+// Due reports whether e still has something to do on t. An effect that is
+// not due completes without reaching the agent.
+func Due(t Thread, e Effect) bool {
+	switch e := e.(type) {
+	case StartTurn:
+		r := t.Live()
+		return r != nil && r.ID == e.Run && r.State == RunStarting
+	case SteerTurn:
+		m, ok := t.Message(e.Message)
+		return ok && m.State == QueueClaimed
+	case InterruptTurn:
+		r := t.Live()
+		return r != nil && r.ID == e.Run && r.State == RunStopping
+	case DeliverAnswer:
+		r, ok := t.Request(e.Request)
+		return ok && r.State == api.RequestAnswered
+	}
+	return false
+}
+
 // replaySafe kinds run again when a crash left them leased. The rest may
 // already have reached the agent, so boot reconciles them instead. Adapters
 // treat a repeated interrupt or a repeated answer as a no-op.

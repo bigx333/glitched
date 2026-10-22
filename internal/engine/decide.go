@@ -181,7 +181,9 @@ func (d *decision) settle() error {
 func (d *decision) stop(r Run) error {
 	switch r.State {
 	case RunStopping:
-		return nil
+		// Asked again, the user gives up waiting on a run that ignores its
+		// interrupt; nobody can say what that run is doing.
+		return d.emit(api.TurnUncertain{Run: r.ID})
 	case RunUncertain:
 		// Ending an uncertain run is the user's explicit decision to move on.
 		return d.emit(api.TurnEnded{Run: r.ID, Outcome: api.OutcomeAbandoned})
@@ -241,7 +243,8 @@ func (d *decision) observe(o Observation) error {
 		}
 		return d.emit(api.TurnStarted{Run: o.Run})
 	case Ended:
-		if isLive(o.Run) {
+		// Only the user ends an uncertain run.
+		if isLive(o.Run) && live.State != RunUncertain {
 			return d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error})
 		}
 	case Delta:

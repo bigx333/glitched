@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"glitched/internal/api"
 	"glitched/internal/engine"
@@ -19,13 +20,22 @@ type Effect struct {
 	Body   engine.Effect
 }
 
-// Lease takes the oldest pending effect. ok is false when none is pending.
-func (s *Store) Lease(ctx context.Context) (e Effect, ok bool, err error) {
+// Lease takes the oldest pending effect of a thread not in busy. ok is false
+// when there is none.
+func (s *Store) Lease(ctx context.Context, busy ...api.ID) (e Effect, ok bool, err error) {
+	pick := `SELECT id FROM effects WHERE state = 'pending'`
+	args := make([]any, len(busy))
+	if len(busy) > 0 {
+		pick += ` AND thread NOT IN (?` + strings.Repeat(", ?", len(busy)-1) + `)`
+		for i, id := range busy {
+			args[i] = id[:]
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row := s.db.QueryRowContext(ctx, `UPDATE effects SET state = 'leased'
-		WHERE id = (SELECT id FROM effects WHERE state = 'pending' ORDER BY id LIMIT 1)
-		RETURNING id, thread, kind, payload`)
+		WHERE id = (`+pick+` ORDER BY id LIMIT 1)
+		RETURNING id, thread, kind, payload`, args...)
 	e, err = scanEffect(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Effect{}, false, nil

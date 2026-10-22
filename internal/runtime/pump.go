@@ -14,22 +14,25 @@ import (
 // the batch first, so requests and turn ends never overtake text.
 const deltaWindow = 50 * time.Millisecond
 
-// pump commits one agent's events until its turn ends or the host closes.
-func (h *Host) pump(thread, run api.ID, ag provider.Agent) {
+// pump commits one agent's events until its turn ends, the log moves past
+// the run, or the host closes. Unless the host is closing, it then closes
+// the agent.
+func (h *Host) pump(thread api.ID, lr *liveRun) {
 	defer h.wg.Done()
+	run, ag := lr.run, lr.agent
 	events, failed := make(chan provider.Event), make(chan error, 1)
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
 		for {
-			ev, err := ag.Next(h.ctx)
+			ev, err := ag.Next(lr.ctx)
 			if err != nil {
 				failed <- err
 				return
 			}
 			select {
 			case events <- ev:
-			case <-h.ctx.Done():
+			case <-lr.ctx.Done():
 				return
 			}
 		}
@@ -51,21 +54,27 @@ func (h *Host) pump(thread, run api.ID, ag provider.Agent) {
 	}
 	end := func(o engine.Observation) {
 		flushText()
-		commit(o)
-		if ag := h.detach(run); ag != nil {
-			ag.Close(h.ctx)
+		if o != nil {
+			commit(o)
 		}
+		h.forget(lr)
+		closeAgent(ag)
 	}
 
 	for {
 		select {
-		case <-h.ctx.Done():
+		case <-lr.ctx.Done():
+			if h.ctx.Err() == nil {
+				end(nil)
+			}
 			return
 		case <-flush:
 			flushText()
 		case err := <-failed:
-			if h.ctx.Err() == nil {
+			if lr.ctx.Err() == nil {
 				end(engine.Ended{Run: run, Outcome: api.OutcomeFailed, Error: err.Error()})
+			} else if h.ctx.Err() == nil {
+				end(nil)
 			}
 			return
 		case ev := <-events:

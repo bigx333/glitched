@@ -246,3 +246,50 @@ func TestAnAnswerInFlightOutlivesItsRun(t *testing.T) {
 		t.Fatalf("the agent took the answer and the request is %v, want delivered", r.State)
 	}
 }
+
+func TestInterruptingAStoppingRunGivesUpOnIt(t *testing.T) {
+	f, run := running(t)
+	if _, effects, _ := f.submit(api.TurnInterrupt{}); len(effects) != 1 || f.th.Live().State != engine.RunStopping {
+		t.Fatalf("first interrupt: %v with effects %v, want stopping and one interrupt", f.th.Live().State, effects)
+	}
+	f.must(api.TurnInterrupt{})
+	if s := f.th.Live().State; s != engine.RunUncertain {
+		t.Fatalf("second interrupt left the run %v, want uncertain", s)
+	}
+	if evs := f.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted}); len(evs) != 0 {
+		t.Fatalf("an uncertain run was ended by an observation: %v", evs)
+	}
+	f.must(api.TurnInterrupt{})
+	if f.th.Live() != nil || f.th.Runs[0].Outcome != api.OutcomeAbandoned {
+		t.Fatalf("third interrupt: run %+v, want it abandoned", f.th.Runs[0])
+	}
+}
+
+func TestDue(t *testing.T) {
+	f, run, req := waiting(t)
+	start := engine.StartTurn{Run: run}
+	steer := engine.SteerTurn{Run: run, Message: f.must(dispatch("hurry", api.SteerActive))}
+	deliver := engine.DeliverAnswer{Run: run, Request: req.ID}
+	interrupt := engine.InterruptTurn{Run: run}
+	for _, e := range []engine.Effect{start, deliver, interrupt} {
+		if engine.Due(f.th, e) {
+			t.Errorf("%s is due on a waiting run with nothing answered", engine.EffectKind(e))
+		}
+	}
+	if !engine.Due(f.th, steer) {
+		t.Error("a claimed steer is not due")
+	}
+	f.must(answer(req))
+	f.must(api.TurnInterrupt{})
+	for _, e := range []engine.Effect{deliver, interrupt} {
+		if !engine.Due(f.th, e) {
+			t.Errorf("%s is not due on a stopping run with an answer in flight", engine.EffectKind(e))
+		}
+	}
+	f.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted})
+	for _, e := range []engine.Effect{steer, interrupt} {
+		if engine.Due(f.th, e) {
+			t.Errorf("%s is due after its run ended", engine.EffectKind(e))
+		}
+	}
+}
