@@ -56,26 +56,65 @@ func (t Tailnet) Listen(ctx context.Context) (net.Listener, error) {
 	return lc.Listen(ctx, "tcp", t.Address)
 }
 
-// Dial refuses a host that resolved off the tailnet before the token is sent.
+// dialNet is how Tailnet dials; a test swaps it for routes this machine lacks.
+var dialNet = new(net.Dialer).DialContext
+
+// Dial refuses a host that resolved off the tailnet, or that Tailscale
+// doesn't route to, before the token is sent.
 func (t Tailnet) Dial(ctx context.Context, _ api.ID) (net.Conn, error) {
-	var d net.Dialer
-	c, err := d.DialContext(ctx, "tcp", t.Address)
+	// A UDP connect picks the route and sends nothing, so an address no peer
+	// holds is refused before a SYN leaves by the default route.
+	probe, err := dialNet(ctx, "udp", t.Address)
 	if err != nil {
 		return nil, err
 	}
-	if !onTailnet(c.RemoteAddr().(*net.TCPAddr).AddrPort().Addr()) {
+	err = t.route(probe)
+	probe.Close()
+	if err != nil {
+		return nil, err
+	}
+	c, err := dialNet(ctx, "tcp", t.Address)
+	if err != nil {
+		return nil, err
+	}
+	if err := t.route(c); err != nil {
 		c.Close()
-		return nil, fmt.Errorf("%s reached %s, which %w", t.Address, c.RemoteAddr(), errNotTailnet)
+		return nil, err
 	}
 	return c, nil
 }
 
-func (Tailnet) WhoIs(conn net.Conn) (Peer, error) {
-	a, ok := conn.RemoteAddr().(*net.TCPAddr)
-	if !ok || !onTailnet(a.AddrPort().Addr()) {
-		return Peer{}, fmt.Errorf("transport: %s %w", conn.RemoteAddr(), errNotTailnet)
+// route refuses c unless it stays inside WireGuard or on this machine. On
+// Linux, Tailscale routes only its current peers; any other 100.x address
+// leaves by the default route, in cleartext, from a LAN address.
+func (t Tailnet) route(c net.Conn) error {
+	local, remote := ipOf(c.LocalAddr()), ipOf(c.RemoteAddr())
+	switch {
+	case !onTailnet(remote):
+		return fmt.Errorf("%s is %s, which %w", t.Address, remote, errNotTailnet)
+	case !inside(local, remote):
+		return fmt.Errorf("%s: Tailscale doesn't route to %s, so the connection would leave from %s, outside WireGuard; is Tailscale up, and is that machine a peer on this tailnet?", t.Address, remote, local)
 	}
-	return Peer{Name: a.IP.String()}, nil
+	return nil
+}
+
+// inside reports whether a connection between a and b stays on loopback or
+// runs between two Tailscale addresses.
+func inside(a, b netip.Addr) bool {
+	return onTailnet(a) && onTailnet(b) && a.IsLoopback() == b.IsLoopback()
+}
+
+func ipOf(a net.Addr) netip.Addr {
+	ap, _ := netip.ParseAddrPort(a.String())
+	return ap.Addr().Unmap()
+}
+
+func (Tailnet) WhoIs(conn net.Conn) (Peer, error) {
+	local, remote := ipOf(conn.LocalAddr()), ipOf(conn.RemoteAddr())
+	if !inside(local, remote) {
+		return Peer{}, fmt.Errorf("transport: a connection from %s to %s is neither on loopback nor between Tailscale addresses", conn.RemoteAddr(), conn.LocalAddr())
+	}
+	return Peer{Name: remote.String()}, nil
 }
 
 // TailscaleIP is this machine's Tailscale address, IPv4 if it has one. It
