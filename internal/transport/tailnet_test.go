@@ -380,3 +380,60 @@ func TestServerClosesAConnectionItRefusedOnceIdle(t *testing.T) {
 		t.Fatalf("a refused connection idle past the timeout was served again: %d", resp.StatusCode)
 	}
 }
+
+func TestServerClosesAConnectionWhoseRequestBodyNeverComes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, idle: 100 * time.Millisecond, Authorize: func(*http.Request) (context.Context, error) {
+		return nil, errors.New("unknown token")
+	}}
+	ln, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error)
+	go func() { done <- srv.Serve(ctx, ln) }()
+	defer func() { cancel(); <-done }()
+	for _, path := range []string{"/ws", "/elsewhere"} {
+		nc, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		nc.SetDeadline(time.Now().Add(3 * time.Second))
+		io.WriteString(nc, "GET "+path+" HTTP/1.1\r\nHost: glitched\r\nContent-Length: 1\r\n\r\n")
+		_, err = io.Copy(io.Discard, nc)
+		nc.Close()
+		if err != nil {
+			t.Errorf("GET %s whose body never came: %v, want the server to close the connection", path, err)
+		}
+	}
+}
+
+func TestServerKeepsAnAcceptedSocketPastTheRequestTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ep := &fakeEndpoint{reads: make(chan error, 2)}
+	srv := &Server{Transport: Tailnet{}, Endpoint: ep, idle: 100 * time.Millisecond, Authorize: func(*http.Request) (context.Context, error) {
+		return context.Background(), nil
+	}}
+	ln, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error)
+	go func() { done <- srv.Serve(ctx, ln) }()
+	defer func() { cancel(); <-done }()
+	c := NewEndpointClient(Tailnet{Address: ln.Addr().String(), Token: "good"}, api.ID{})
+	defer c.Close()
+	blocked := make(chan error, 1)
+	go func() {
+		_, err := c.Read(ctx, api.Query{Thread: blocks})
+		blocked <- err
+	}()
+	<-ep.reads
+	select {
+	case err := <-blocked:
+		t.Fatalf("a call on an accepted socket ended once the request timeout passed: %v", err)
+	case <-time.After(time.Second):
+	}
+}
