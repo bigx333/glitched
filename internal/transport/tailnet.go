@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/netip"
 	"slices"
+	"sync"
+	"time"
 
 	"glitched/internal/api"
 )
@@ -48,21 +50,12 @@ func onTailnet(ip netip.Addr) bool {
 
 // interfaceAddrs lists each network interface's addresses; a test swaps it
 // for interfaces this machine lacks.
-var interfaceAddrs = func() [][]netip.Addr {
-	ifs, _ := net.Interfaces()
-	all := make([][]netip.Addr, 0, len(ifs))
-	for _, i := range ifs {
-		as, _ := i.Addrs()
-		var ips []netip.Addr
-		for _, a := range as {
-			if n, ok := a.(*net.IPNet); ok {
-				ip, _ := netip.AddrFromSlice(n.IP)
-				ips = append(ips, ip.Unmap())
-			}
-		}
-		all = append(all, ips)
-	}
-	return all
+var interfaceAddrs = scanInterfaces
+
+var scan struct {
+	sync.Mutex
+	at    time.Time
+	addrs []netip.Addr // tailscaleAddrs as of at
 }
 
 var errNotTailnet = errors.New("is not a loopback or Tailscale address (100.64.0.0/10, or fd7a:115c:a1e0::/48 outside 4via6's fd7a:115c:a1e0:b1a::/64), the only places a token may cross without TLS")
@@ -137,15 +130,22 @@ func inside(local, remote netip.Addr) bool {
 
 // tailscaleAddrs are the addresses of each interface that holds one in
 // fd7a:115c:a1e0::/48. Tailscale gives every node such an address; a
-// carrier-grade NAT link or another overlay in 100.64.0.0/10 has none.
+// carrier-grade NAT link or another overlay in 100.64.0.0/10 has none. Every
+// connection a server accepts asks, so the interfaces are scanned at most
+// once a second.
 func tailscaleAddrs() []netip.Addr {
-	var out []netip.Addr
-	for _, addrs := range interfaceAddrs() {
-		if slices.ContainsFunc(addrs, tailscale6.Contains) {
-			out = append(out, addrs...)
+	scan.Lock()
+	defer scan.Unlock()
+	if time.Since(scan.at) >= time.Second {
+		scan.addrs = nil
+		for _, addrs := range interfaceAddrs() {
+			if slices.ContainsFunc(addrs, tailscale6.Contains) {
+				scan.addrs = append(scan.addrs, addrs...)
+			}
 		}
+		scan.at = time.Now()
 	}
-	return out
+	return scan.addrs
 }
 
 func ipOf(a net.Addr) netip.Addr {

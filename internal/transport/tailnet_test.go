@@ -134,21 +134,98 @@ func route(t *testing.T, ends map[string][2]string) func() map[string]int {
 	}
 }
 
-// interfaces makes the given interfaces this machine's, for Tailnet, each a
-// space-separated list of its addresses.
-func interfaces(t *testing.T, ifaces ...string) {
-	t.Helper()
-	old := interfaceAddrs
-	t.Cleanup(func() { interfaceAddrs = old })
+// fakeInterfaces stands in for this machine's interfaces and counts the
+// scans of them.
+type fakeInterfaces struct {
+	mu    sync.Mutex
+	table [][]netip.Addr
+	scans int
+}
+
+// set replaces the interfaces, each a space-separated list of its addresses.
+// Tailnet sees the change once its last scan is a second old.
+func (f *fakeInterfaces) set(ifaces ...string) {
 	var table [][]netip.Addr
-	for _, f := range ifaces {
+	for _, i := range ifaces {
 		var addrs []netip.Addr
-		for _, a := range strings.Fields(f) {
+		for _, a := range strings.Fields(i) {
 			addrs = append(addrs, netip.MustParseAddr(a))
 		}
 		table = append(table, addrs)
 	}
-	interfaceAddrs = func() [][]netip.Addr { return table }
+	f.mu.Lock()
+	f.table = table
+	f.mu.Unlock()
+}
+
+func (f *fakeInterfaces) scanned() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.scans
+}
+
+// interfaces makes the given interfaces this machine's, for Tailnet, each a
+// space-separated list of its addresses.
+func interfaces(t *testing.T, ifaces ...string) *fakeInterfaces {
+	t.Helper()
+	f := &fakeInterfaces{}
+	f.set(ifaces...)
+	old := interfaceAddrs
+	forget := func() {
+		scan.Lock()
+		scan.at = time.Time{}
+		scan.Unlock()
+	}
+	t.Cleanup(func() {
+		interfaceAddrs = old
+		forget()
+	})
+	interfaceAddrs = func() [][]netip.Addr {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.scans++
+		return f.table
+	}
+	forget()
+	return f
+}
+
+func TestTailnetScansInterfacesAtMostOnceASecond(t *testing.T) {
+	ifaces := interfaces(t, "127.0.0.1 ::1", "100.64.0.9 fd7a:115c:a1e0::9")
+	at := func(s string) net.Addr { return net.TCPAddrFromAddrPort(netip.MustParseAddrPort(s)) }
+	whoIs := func() error {
+		near, far := net.Pipe()
+		defer far.Close()
+		defer near.Close()
+		_, err := Tailnet{}.WhoIs(routedConn{near, at("100.64.0.9:7465"), at("100.70.0.2:40000")})
+		return err
+	}
+	received := route(t, map[string][2]string{
+		"udp": {"100.64.0.9:40000", "100.70.0.2:7465"},
+		"tcp": {"100.64.0.9:40000", "100.70.0.2:7465"},
+	})
+	begin := time.Now()
+	for range 1000 {
+		if err := whoIs(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 100 {
+		c, err := Tailnet{Address: "100.70.0.2:7465"}.Dial(context.Background(), api.ID{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Close()
+	}
+	received()
+	if n, took := ifaces.scanned(), time.Since(begin); n > 1+int(took/time.Second) {
+		t.Fatalf("1000 accepted connections and 100 dials in %v scanned the interfaces %d times, want at most once a second", took, n)
+	}
+	ifaces.set("127.0.0.1 ::1", "100.64.0.9")
+	time.Sleep(1100 * time.Millisecond)
+	if err := whoIs(); err == nil {
+		t.Fatal("a server still took 100.64.0.9 for Tailscale's a second after its interface lost its fd7a:115c:a1e0::/48 address")
+	}
 }
 
 func TestTailnetSendsNoTokenOutsideWireGuard(t *testing.T) {
