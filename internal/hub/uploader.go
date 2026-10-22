@@ -58,8 +58,9 @@ func (u *Uploader) Notify() {
 	}
 }
 
-// Run uploads until ctx ends or the hub fences this host's epoch, which is
-// the one error it returns. Every other error is retried from the hub's ack.
+// Run uploads until ctx ends or the hub refuses this host for good: a fenced
+// epoch, or a log that belongs to another host. Every other error is retried
+// from the hub's ack.
 func (u *Uploader) Run(ctx context.Context) error {
 	const minDelay = 100 * time.Millisecond
 	delay := minDelay
@@ -107,7 +108,7 @@ func (u *Uploader) Run(ctx context.Context) error {
 		switch {
 		case ctx.Err() != nil:
 			return ctx.Err()
-		case errors.Is(err, api.ErrStaleEpoch):
+		case errors.Is(err, api.ErrStaleEpoch), errors.Is(err, ErrForeignLog):
 			return err
 		case err != nil:
 			if err.Error() != failing {

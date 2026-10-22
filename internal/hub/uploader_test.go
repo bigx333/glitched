@@ -260,3 +260,22 @@ func TestUploaderLogsEachNewErrorAndTheRecovery(t *testing.T) {
 		}
 	}
 }
+
+func TestUploaderStopsWhenItsLogBelongsToAnotherHost(t *testing.T) {
+	r := openReplica(t)
+	src := newFakeLog()
+	src.commit(2, api.NewID())
+	u := newTestUploader(src, r)
+	first, err := src.ReadLog(context.Background(), 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Append(context.Background(), api.Upload{Host: api.NewID(), Epoch: 1, Log: src.LogID(), Events: first}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	if err := u.Run(ctx); !errors.Is(err, ErrForeignLog) {
+		t.Fatalf("uploader of a foreign log returned %v, want ErrForeignLog", err)
+	}
+}
