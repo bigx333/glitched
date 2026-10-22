@@ -77,7 +77,7 @@ func (f *fakeEndpoint) Open(_ context.Context, s api.Subscription) (api.Stream, 
 	items = append(items, api.StreamItem{Kind: api.StreamSynchronized})
 	st := &fakeStream{items: items}
 	if s.Thread == endsBadly {
-		st.end = api.ErrNotFound
+		st.end = api.ErrOverflow
 	}
 	return st, nil
 }
@@ -107,7 +107,7 @@ func (s *fakeStream) Close() error { return nil }
 func TestEndpointRoundTrip(t *testing.T) {
 	moved, rejected, wrapped, opaque := api.NewID(), api.NewID(), api.NewID(), api.NewID()
 	movedTo := api.NewID()
-	sentinels := []error{api.ErrConflict, api.ErrRevision, api.ErrExpired, api.ErrNotFound, api.ErrStaleEpoch, api.ErrAlreadyAnswered}
+	sentinels := []error{api.ErrConflict, api.ErrRevision, api.ErrExpired, api.ErrNotFound, api.ErrStaleEpoch, api.ErrAlreadyAnswered, api.ErrOverflow}
 	errs := map[api.ID]error{
 		moved:    &api.MovedError{To: movedTo, Epoch: 4},
 		rejected: &api.RejectedError{Reason: "thread is archived"},
@@ -206,8 +206,8 @@ func TestEndpointRoundTrip(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := bad.Next(ctx); !errors.Is(err, api.ErrNotFound) {
-				t.Fatalf("stream end: got %v, want ErrNotFound", err)
+			if _, err := bad.Next(ctx); !errors.Is(err, api.ErrOverflow) {
+				t.Fatalf("stream end: got %v, want ErrOverflow", err)
 			}
 		})
 	}
