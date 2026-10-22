@@ -31,7 +31,7 @@ type Server struct {
 	Authorize func(*http.Request) (context.Context, error)
 
 	keepalive keepalive     // zero means defaultKeepalive
-	idle      time.Duration // each request's read and each keep-alive wait; zero means defaultIdle
+	idle      time.Duration // each request's read, its response's write and each keep-alive wait; zero means defaultIdle
 }
 
 type connKey struct{}
@@ -70,12 +70,14 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	}
 	hs := &http.Server{
 		Handler: mux,
-		// Bound each request, body included, and each wait between them, or
-		// a peer refused with 401 holds its connection: http drains an unread
-		// body before it closes or reuses one. Hijacking clears the deadline,
-		// so an accepted WebSocket isn't bound by it.
-		ReadTimeout: idle,
-		IdleTimeout: idle,
+		// Bound each request, body included, each response and each wait
+		// between them, or a refused peer holds its connection: http drains
+		// an unread body before it closes or reuses one, and a peer that
+		// never reads blocks the response. Hijacking clears both deadlines,
+		// so an accepted WebSocket isn't bound by them.
+		ReadTimeout:  idle,
+		WriteTimeout: idle,
+		IdleTimeout:  idle,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			return context.WithValue(ctx, connKey{}, c)
 		},
