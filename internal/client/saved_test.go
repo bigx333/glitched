@@ -3,8 +3,11 @@ package client
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
@@ -117,4 +120,110 @@ func TestGUIJSONKeepsServersAndReadMarks(t *testing.T) {
 	if m.Unread(env.Threads[id]) {
 		t.Fatal("the turn marked read is unread after a restart")
 	}
+}
+
+// A server that refused the token is fixed by adding it again with a new
+// one. The env stays, with its threads and the commands that failed.
+func TestRepairingATokenKeepsTheServersThreads(t *testing.T) {
+	rdir := stateDir(t)
+	token, err := daemon.Pair(rdir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := engine(t, rdir, "127.0.0.1:0").Addrs()[0].String()
+	m, g := manager(t, stateDir(t))
+	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	box := m.Envs()[1]
+	online(t, g, box)
+	id := m.Create(box, "/work", "draft", fakeModel, api.AccessAsk)
+	g.until(t, "the create confirmed", func() bool { th := box.Threads[id]; return th.known && len(th.Pending) == 0 })
+	if err := daemon.Revoke(rdir, "gui"); err != nil {
+		t.Fatal(err)
+	}
+	g.until(t, "refused", func() bool { return box.Status == Status(Refused{}) })
+	msg := m.Send(box, id, "keep my unsent text", api.AfterActive)
+	g.until(t, "the message failed", func() bool { p := box.Threads[id].Pending; return len(p) == 1 && p[0].Err != nil })
+
+	if token, err = daemon.Pair(rdir, "gui"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	if envs := m.Envs(); len(envs) != 2 || envs[1] != box {
+		t.Fatal("adding the server again replaced its env, and with it the threads the GUI showed")
+	}
+	online(t, g, box)
+	if p := box.Threads[id].Pending; len(p) != 1 || p[0].Command != msg {
+		t.Fatalf("after the repair the thread's rows are %s, want the failed message", describePending(p))
+	}
+	m.Retry(box, id, msg)
+	g.until(t, "the retry landed", func() bool { return len(box.Threads[id].Pending) == 0 }, func() string { return describePending(box.Threads[id].Pending) })
+}
+
+// managerGoroutines counts the goroutines running the manager's code; the
+// engines these tests serve run in the same process.
+func managerGoroutines() int {
+	buf := make([]byte, 1<<16)
+	for {
+		if n := runtime.Stack(buf, true); n < len(buf) {
+			count := 0
+			for _, g := range strings.Split(string(buf[:n]), "\n\n") {
+				if strings.Contains(g, "glitched/internal/client.(*Manager)") {
+					count++
+				}
+			}
+			return count
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
+func settles(t *testing.T, g *gui, what string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for got := managerGoroutines(); got != want; got = managerGoroutines() {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d manager goroutines %s, want %d", got, what, want)
+		}
+		g.until(t, "posts drained", func() bool { return true })
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestReconnectingOrRemovingAServerEndsItsGoroutines(t *testing.T) {
+	rdir := stateDir(t)
+	token, err := daemon.Pair(rdir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := engine(t, rdir, "127.0.0.1:0").Addrs()[0].String()
+	m, g := manager(t, stateDir(t))
+	online(t, g, m.Envs()[0])
+	settles(t, g, "with the local env idle", 1)
+	idle := managerGoroutines()
+
+	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	box := m.Envs()[1]
+	online(t, g, box)
+	id := m.Create(box, "/srv", "x", fakeModel, api.AccessAsk)
+	m.OpenThread(box, id)
+	g.until(t, "the transcript", func() bool { return box.Threads[id].Transcript.Cursor.Seq > 0 })
+	settles(t, g, "with the box's thread open", idle+2)
+
+	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	online(t, g, box)
+	settles(t, g, "after reconnecting the box", idle+2)
+
+	m.Send(box, id, "hello", api.AfterActive)
+	if err := m.RemoveServer("box"); err != nil {
+		t.Fatal(err)
+	}
+	settles(t, g, "after removing the box", idle)
 }

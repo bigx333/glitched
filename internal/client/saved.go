@@ -78,7 +78,7 @@ func (m *Manager) Servers() []Server { return slices.Clone(m.saved.Servers) }
 
 // AddServer reaches a remote engine and lists it in gui.json. A label
 // already listed is replaced and reconnected, which also retries a server
-// that refused the token.
+// that refused the token; its env keeps the threads and pending commands.
 func (m *Manager) AddServer(s Server) error {
 	if s.Label == "" || s.Addr == "" {
 		return errors.New("client: a server needs a label and an address")
@@ -93,12 +93,10 @@ func (m *Manager) AddServer(s Server) error {
 	if err := m.save(next); err != nil {
 		return err
 	}
-	e := m.remote(s)
 	if i := m.server(s.Label); i >= 0 {
-		m.envs[i].retire()
-		m.envs[i] = e
+		m.relink(m.envs[i], dial(s))
 	} else {
-		m.envs = append(m.envs, e)
+		m.envs = append(m.envs, m.remote(s))
 	}
 	return nil
 }

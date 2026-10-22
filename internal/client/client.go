@@ -129,7 +129,8 @@ type Env struct {
 
 	ctx     context.Context // ends when the env is removed or the manager closes
 	stop    context.CancelFunc
-	session *session // the live shell stream; nil while there is none
+	unlink  context.CancelFunc // ends the link that reaches the engine
+	session *session           // the live shell stream; nil while there is none
 }
 
 // session is one shell stream, and where commands go while it lasts.
@@ -155,8 +156,22 @@ type sub struct{ cancel context.CancelFunc }
 func (m *Manager) launch(e *Env, r route) *Env {
 	e.Status, e.Threads = Connecting{}, map[api.ID]*Thread{}
 	e.ctx, e.stop = context.WithCancel(m.ctx)
-	m.wg.Go(func() { m.link(e.ctx, e, r) })
+	m.connect(e, r)
 	return e
+}
+
+func (m *Manager) connect(e *Env, r route) {
+	var ctx context.Context
+	ctx, e.unlink = context.WithCancel(e.ctx)
+	m.wg.Go(func() { m.link(ctx, e, r) })
+}
+
+// relink reaches e's engine through r from now on. e keeps its threads and
+// the commands pending on them.
+func (m *Manager) relink(e *Env, r route) {
+	e.unlink()
+	e.down(Connecting{})
+	m.connect(e, r)
 }
 
 func (m *Manager) remote(s Server) *Env {
