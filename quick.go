@@ -141,14 +141,10 @@ func (a *app) localProjects() []*project {
 // sends it, and brings the window to it.
 func (a *app) startQuickThread() {
 	q := &a.quick
-	d := draft{}
+	a.fresh, a.selected = draft{}, api.ID{}
 	if ps := a.localProjects(); q.project < len(ps) {
-		d.workspace = ps[q.project].key.workspace
+		a.fresh.workspace = ps[q.project].key.workspace
 	}
-	if envs := a.backend.Envs(); len(envs) > 0 {
-		d.env = envs[0]
-	}
-	a.fresh, a.selected = d, api.ID{}
 	if a.router.Path() != "/" {
 		a.router.Push("/")
 	}

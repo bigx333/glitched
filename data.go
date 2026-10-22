@@ -221,7 +221,6 @@ func (a *app) gather() []*project {
 	return all
 }
 
-// find is the thread of that ID on whichever machine has it.
 func (a *app) find(id api.ID) (thread, bool) {
 	if id.IsZero() {
 		return thread{}, false

@@ -352,9 +352,6 @@ func (a *app) serverEnv(label string) *client.Env {
 
 // envStatus is how a machine's engine is reached, as a color and a word.
 func envStatus(e *client.Env) (ui.Color, string) {
-	if e == nil {
-		return palette.faint, ""
-	}
 	switch s := e.Status.(type) {
 	case client.Online:
 		return palette.green, "Online"
