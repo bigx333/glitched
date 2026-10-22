@@ -7,7 +7,9 @@ package main
 
 import (
 	"log"
+	"maps"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"time"
 
@@ -338,6 +340,11 @@ func (a *app) view(c *ui.Context) {
 	// the Liquid Glass setting is on.
 	a.now = c.Now()
 	a.projects = a.gather()
+	// A project gone, as with its server, leaves the filter, lest it hide
+	// every thread left.
+	maps.DeleteFunc(a.projectFilter, func(k projectKey, _ bool) bool {
+		return !slices.ContainsFunc(a.projects, func(p *project) bool { return p.key == k })
+	})
 	if w, _ := c.Size(); w > 0 {
 		a.roomBeside = w - a.sidebarWidth*a.sidebarOpen
 	}

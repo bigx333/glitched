@@ -1095,6 +1095,22 @@ func TestProjectFilter(t *testing.T) {
 	}
 }
 
+// A project that goes, with the server it was on, leaves the filter, which
+// would otherwise hide every thread left.
+func TestProjectFilterForgetsProjectsGone(t *testing.T) {
+	h := machines(t)
+	h.click("api")
+	h.tt.Advance(time.Second)
+	if err := h.a.backend.RemoveServer("devbox"); err != nil {
+		t.Fatal(err)
+	}
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if len(h.a.projectFilter) != 0 || len(h.a.itemsIn(catInbox)) != 5 || h.tt.HasText("Inbox zero") {
+		t.Errorf("with devbox removed the filter is %v and the inbox lists %d threads: %q", h.a.projectFilter, len(h.a.itemsIn(catInbox)), h.tt.Texts())
+	}
+}
+
 func TestNormalizeURL(t *testing.T) {
 	for in, want := range map[string]string{
 		"voip.othos.co.za":       "https://voip.othos.co.za",
