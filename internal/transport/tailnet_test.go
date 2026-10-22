@@ -235,3 +235,29 @@ func TestTailnetServesOnlyLoopbackOrTailscalePeers(t *testing.T) {
 		}
 	}
 }
+
+func TestTailnetPresentsItsTokenByValueOrPointer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, Authorize: func(r *http.Request) (context.Context, error) {
+		if r.Header.Get("Authorization") != "Bearer good" {
+			return nil, errors.New("unknown token")
+		}
+		return context.Background(), nil
+	}}
+	ln, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error)
+	go func() { done <- srv.Serve(ctx, ln) }()
+	defer func() { cancel(); <-done }()
+	tn := Tailnet{Address: ln.Addr().String(), Token: "good"}
+	for name, tr := range map[string]Transport{"Tailnet": tn, "*Tailnet": &tn} {
+		c := NewEndpointClient(tr, api.ID{})
+		if _, err := c.Info(ctx); err != nil {
+			t.Errorf("%s with the right token: %v", name, err)
+		}
+		c.Close()
+	}
+}

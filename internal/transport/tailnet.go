@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/netip"
 
 	"glitched/internal/api"
@@ -16,6 +17,14 @@ import (
 type Tailnet struct {
 	Address string // host:port; a client may name the host, a listener must give its IP
 	Token   string
+}
+
+// credentialed is a Transport whose clients present a token on every
+// upgrade, so its servers must check one.
+type credentialed interface{ header() http.Header }
+
+func (t Tailnet) header() http.Header {
+	return http.Header{"Authorization": {"Bearer " + t.Token}}
 }
 
 // ErrRefused is a call's error when the server refused the client's token.

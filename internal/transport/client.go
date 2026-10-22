@@ -135,8 +135,8 @@ func handshake(ctx context.Context, t Transport, machine api.ID) (*websocket.Con
 		DialContext: func(context.Context, string, string) (net.Conn, error) { return nc, nil },
 	}}
 	opts := &websocket.DialOptions{HTTPClient: hc}
-	if tn, ok := t.(Tailnet); ok {
-		opts.HTTPHeader = http.Header{"Authorization": {"Bearer " + tn.Token}}
+	if c, ok := t.(credentialed); ok {
+		opts.HTTPHeader = c.header()
 	}
 	ws, resp, err := websocket.Dial(ctx, origin, opts)
 	if err != nil {
