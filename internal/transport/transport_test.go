@@ -1033,3 +1033,32 @@ func TestIdleSocketCloses(t *testing.T) {
 		t.Fatal("the call after the idle close did not dial again")
 	}
 }
+
+func TestOversizedRequestLeavesTheSocketAlone(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	fake := &fakeEndpoint{env: api.Environment{ID: api.NewID()}}
+	d := &dialer{Loopback: start(t, "unix", &Server{Endpoint: fake})}
+	c := NewEndpointClient(d, api.ID{})
+	thread := api.NewID()
+	st := mustOpen(t, ctx, c, thread)
+
+	big := api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: strings.Repeat("x", maxMessage)}}
+	if _, err := c.Submit(ctx, big); !errors.Is(err, errTooLarge) {
+		t.Fatalf("a submit over the server's limit: %v", err)
+	}
+	if err := readStream(ctx, st, thread, api.Cursor{}); err != nil {
+		t.Fatal(err)
+	}
+	idle, stop := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer stop()
+	if _, err := st.Next(idle); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the stream beside a refused submit: %v, want it still open", err)
+	}
+	if env, err := c.Info(ctx); err != nil || env != fake.env {
+		t.Fatalf("info: %+v %v", env, err)
+	}
+	if n := len(d.dialed()); n != 1 {
+		t.Fatalf("dialed %d sockets, want 1", n)
+	}
+}

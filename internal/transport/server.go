@@ -28,9 +28,6 @@ type Server struct {
 
 type connKey struct{}
 
-// The uploader caps a batch at 8 MiB; this leaves room for JSON overhead.
-const maxMessage = 64 << 20
-
 // Serve answers sockets on ln until ctx ends, then closes them and returns
 // once their calls have.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {

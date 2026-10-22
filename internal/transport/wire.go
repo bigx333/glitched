@@ -16,7 +16,8 @@
 //
 // Ids are the client's and unique per socket. Calls and streams interleave
 // freely. A stream ends only with an error, because nothing upstream ends
-// cleanly.
+// cleanly. The server closes a socket that sends a message over 64 MiB, so
+// the client refuses to send one.
 //
 // The server reads a stream's source only while fewer than 4 MiB of the
 // items it sent are unacked, counting each item's JSON, so one item larger
@@ -43,6 +44,11 @@ type request struct {
 	Cancel bool            `json:"cancel,omitempty"`
 	Ack    int64           `json:"ack,omitempty"`
 }
+
+// The uploader caps a batch at 8 MiB; this leaves room for JSON overhead.
+const maxMessage = 64 << 20
+
+var errTooLarge = errors.New("transport: request over the server's 64 MiB limit")
 
 // streamWindow is how many bytes of a stream's items the server sends ahead
 // of the client's acks.

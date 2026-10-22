@@ -353,6 +353,9 @@ func (c *conn) start(ctx context.Context, method string, in any, k sink) (*socke
 		return nil, 0, err
 	}
 	b, err := json.Marshal(request{ID: id, Method: method, Params: params})
+	if err == nil && len(b) > maxMessage {
+		err = fmt.Errorf("%w: %s is %d bytes", errTooLarge, method, len(b))
+	}
 	if err == nil {
 		err = s.send(ctx, b)
 	}
