@@ -1,5 +1,7 @@
 # Hub on Cloudflare, and where Turso fits
 
+> **Superseded 2026-10-22** by `hub.md` (the hub runs as a role on a host) and `network.md` (Tailscale replaces the relay). Kept for the reasoning and the limits.
+
 This picks an implementation for the hub described in `control-plane.md`. Three options were compared. One is a Go hub on an always-on box, one runs the hub on Durable Objects (zeron's edge), and one uses Turso for replication.
 
 ## Decision

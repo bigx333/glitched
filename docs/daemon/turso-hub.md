@@ -1,5 +1,7 @@
 # Turso Cloud as the central store
 
+> **Superseded 2026-10-22** by `hub.md`. Neither Turso nor Durable Objects is used.
+
 This is the alternative to the Durable Object hub in `hub-on-cloudflare.md`, written down on 2026-10-21 so the two can be compared.
 
 ## What Turso Cloud can and can't be

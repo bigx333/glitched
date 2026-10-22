@@ -1,6 +1,6 @@
 # Control plane, accounts and caching
 
-> The hub's implementation (Durable Objects in the user's Cloudflare account, no Turso) is chosen in `hub-on-cloudflare.md`.
+> The hub runs as a role on one of the user's hosts, reached over the tailnet (`hub.md`, `network.md`). The Durable Object version in `hub-on-cloudflare.md` is superseded. Ephemeral VMs are deferred (`ephemeral-vms.md`).
 
 This revises the decision in `architecture.md`. Three new requirements change it.
 
@@ -14,8 +14,8 @@ This revises the decision in `architecture.md`. Three new requirements change it
 
 - The hub (`glitched hub`) holds accounts, machines, client grants, thread locations and a read replica of every thread log. It provisions and tears down ephemeral VMs.
 - Every host runs the engine as designed. It is the only writer of the threads it owns, and it commits to its own SQLite log first. It dials out to the hub (bb) and streams its log upward from a durable offset.
-- Clients pair once with the hub. They read through the hub into a local cache. Commands go through the hub to the owner host. Terminals may connect directly when a route exists.
-- On a single laptop the hub and the host run in one process, the same way the GUI already embeds the engine. A solo user installs nothing extra.
+- Clients pair once with the hub. They read through the hub into a local cache. Commands go through the hub to the owner host, or straight to the owner over the tailnet when the hub is down. Terminals connect directly over the tailnet.
+- The hub is a role one host runs, in the same process as that host's engine (`hub.md`). On a single laptop that is the only host, so a solo user installs nothing extra.
 
 Why this beats the pure peer shape now:
 
@@ -54,14 +54,14 @@ type Account struct {
 - **Delivery per run, not per machine.** When a host starts a run, it asks the hub for the credential of the account bound to that run. The hub checks that the machine is enrolled and the run exists. The host hands the credential to the CLI through an inherited file descriptor or the process env, never through argv or a file in the repo. Claude Code reads `CLAUDE_CODE_OAUTH_TOKEN`, and the bb bundle also references a `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR` variable (read, not tested). bb passes only `CLAUDE_CODE_OAUTH_TOKEN` and the executable path, with the token minted by `claude setup-token` (read in bb's provider docs).
 - **Ephemeral VMs never write credentials to disk.** Persistent hosts may cache them in the OS keychain for offline work.
 - **The hub must be able to read credentials** so it can refresh them. Sealing them to host keys was rejected for that reason (see `cost.md`).
-- **Refreshable credentials are refreshed only by the hub.** If several hosts share one refresh token and each refreshes it, rotation can invalidate the others (inferred from how rotating refresh tokens work, not observed with Codex). The hub refreshes and hands out access tokens. Long-lived tokens and API keys are preferred where the provider offers them.
+- **Refreshable credentials are refreshed only by the hub, and only on demand.** If several hosts share one refresh token and each refreshes it, rotation can invalidate the others (inferred from how rotating refresh tokens work, not observed with Codex). The hub refreshes when a host asks for an access token that is expired or near expiry, so an unused account is never refreshed and the hub needn't be always on (`hub.md`). Long-lived tokens and API keys are preferred where the provider offers them.
 - **Revocation.** Removing a machine stops issuance at once. A token already handed to a running CLI can't be recalled. That is why delivery is per run and long-lived tokens are scoped to dedicated accounts where possible.
 - **Accounts become a placement input.** Rate limits are per account. With accounts central, placement can pick a different account as well as a different host when one account is limited. That is the load balancing that actually relieves token limits.
 - Git credentials and project env secrets follow the same path. bb pushes machine env vars encrypted and revisioned, and forwards git credentials (read).
 
 ## Ephemeral VMs
 
-The lifecycle follows bb's machine providers.
+Deferred. Providers, how a VM joins the tailnet and how bb does it are in `ephemeral-vms.md`. The lifecycle below still holds. It follows bb's machine providers.
 
 - A `MachineProvider` interface has `Create(key)`, `Remove(id)`, `RemoveByKey(key)`, and optionally `Suspend` and `Resume`. Every call is idempotent by key, and checkpointed resources make cleanup retryable.
 - Bootstrap installs `glitched` with a one-time enroll key, and the host dials the hub. "Daemon connected" is not "agent ready". Checkout setup and the credential check must pass first (bb makes the same distinction).
@@ -107,5 +107,5 @@ It doesn't fit Glitched as the engine, for three reasons.
 1. Hub and host in one process, with the host log streaming to the hub replica by offset. Check: kill the host mid-stream and see no gap or duplicate in the replica.
 2. Client cache with per-query transcript sync. Check: reopen a thread with the host offline and it renders from cache.
 3. Central accounts with per-run credential delivery for Claude Code. Check: a host with no local login runs a turn, and removing the machine stops the next run.
-4. A separate always-on hub with laptop and second Mac enrolled.
-5. Ephemeral VM provider with teardown gated on the replica ack and the pushed workspace ref.
+4. The hub role served over the tailnet, with a second Mac enrolled (`hub.md`).
+5. Ephemeral VM provider with teardown gated on the replica ack and the pushed workspace ref (deferred).
