@@ -53,26 +53,7 @@ func TestServeRunAndReplicate(t *testing.T) {
 		t.Fatalf("host log for the thread: %d events, %v", len(host.Events), err)
 	}
 
-	hubc := transport.NewHubClient(daemon.Socket(dir), api.ID{})
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		evs, err := hubc.Events(ctx, thread, api.Cursor{}, 1000)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(evs) == len(host.Events) {
-			for i := range evs {
-				if evs[i].Cursor != host.Events[i].Cursor || evs[i].Type != host.Events[i].Type {
-					t.Fatalf("replica event %d is %+v, host has %+v", i, evs[i], host.Events[i])
-				}
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("replica holds %d events, host %d", len(evs), len(host.Events))
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	replicated(t, transport.NewHubClient(daemon.Socket(dir), api.ID{}), thread, host.Events)
 
 	cancel()
 	if err := <-served; err != nil {
@@ -80,6 +61,30 @@ func TestServeRunAndReplicate(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "engine.db")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// replicated waits until the hub holds the host's events for thread.
+func replicated(t *testing.T, hubc *transport.HubClient, thread api.ID, host []api.Event) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		evs, err := hubc.Events(context.Background(), thread, api.Cursor{}, 1000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(evs) == len(host) {
+			for i := range evs {
+				if evs[i].Cursor != host[i].Cursor || evs[i].Type != host[i].Type {
+					t.Fatalf("replica event %d is %+v, host has %+v", i, evs[i], host[i])
+				}
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("replica holds %d events, host %d", len(evs), len(host))
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

@@ -39,7 +39,9 @@ const usage = `usage: glitched <command> [flags]
   pair      mint a token for a client on the tailnet: glitched pair -name LABEL | -list | -revoke LABEL
   run       send a message and stream the turn: glitched run [-thread ID] [-yes] text...
   threads   list this host's threads
-  replica   print a thread's events as the hub holds them: glitched replica -thread ID`
+  replica   print a thread's events as the hub holds them: glitched replica -thread ID
+
+run, threads and replica reach the engine under -dir, or another with -server ADDR -token TOKEN.`
 
 func main() {
 	if len(os.Args) < 2 || commands[os.Args[1]] == nil {
@@ -64,6 +66,20 @@ func dirFlag(fs *flag.FlagSet) *string {
 	return fs.String("dir", filepath.Join(home, ".glitched"), "state directory")
 }
 
+// reach adds the flags that pick the engine a command talks to: the one
+// under -dir, or the one at -server with a token it paired.
+func reach(fs *flag.FlagSet) func() transport.Transport {
+	dir := dirFlag(fs)
+	server := fs.String("server", "", "tailnet address of another engine, instead of the one under -dir")
+	token := fs.String("token", "", "the token -server paired for this client")
+	return func() transport.Transport {
+		if *server == "" {
+			return daemon.Socket(*dir)
+		}
+		return transport.Tailnet{Address: *server, Token: *token}
+	}
+}
+
 type listFlag []string
 
 func (l *listFlag) String() string { return strings.Join(*l, ",") }
@@ -76,15 +92,22 @@ func (l *listFlag) Set(v string) error {
 func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	dir := dirFlag(fs)
-	asHub := fs.Bool("hub", true, "run the hub role in this process, unless -hub-dir names another")
+	asHub := fs.Bool("hub", true, "run the hub role in this process, unless -hub-dir or -hub-server names another")
 	hubDir := fs.String("hub-dir", "", "upload to the hub of the engine with this state directory, on this machine")
+	hubServer := fs.String("hub-server", "", "upload to the hub of the engine at this tailnet address")
+	hubToken := fs.String("hub-token", "", "the token -hub-server paired for this engine")
 	epoch := fs.Uint64("epoch", 1, "this host's epoch at the hub")
 	var listen listFlag
 	fs.Var(&listen, "listen", "also serve clients with a token on this loopback or Tailscale address; repeatable")
 	fs.Parse(args)
 
 	var hubAt transport.Transport
-	if *hubDir != "" {
+	switch {
+	case *hubDir != "" && *hubServer != "":
+		return errors.New("serve: -hub-dir and -hub-server both name the hub")
+	case *hubServer != "":
+		hubAt = transport.Tailnet{Address: *hubServer, Token: *hubToken}
+	case *hubDir != "":
 		hubAt = daemon.Socket(*hubDir)
 	}
 	d, err := daemon.Start(ctx, daemon.Config{
@@ -147,7 +170,7 @@ func pair(_ context.Context, args []string) error {
 
 func run(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	dir := dirFlag(fs)
+	at := reach(fs)
 	threadFlag := fs.String("thread", "", "thread to send to; a new one when empty")
 	yes := fs.Bool("yes", false, "approve every request without asking")
 	modeFlag := fs.String("mode", "after", "now, after, steer, restart or defer; restart also ends an uncertain run")
@@ -160,7 +183,7 @@ func run(ctx context.Context, args []string) error {
 	if text == "" {
 		return errors.New("run: no message")
 	}
-	ep := transport.NewEndpointClient(daemon.Socket(*dir), api.ID{})
+	ep := transport.NewEndpointClient(at(), api.ID{})
 	defer ep.Close()
 
 	var thread api.ID
@@ -313,9 +336,9 @@ var runStates = map[api.RunState]string{
 
 func threads(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("threads", flag.ExitOnError)
-	dir := dirFlag(fs)
+	at := reach(fs)
 	fs.Parse(args)
-	ep := transport.NewEndpointClient(daemon.Socket(*dir), api.ID{})
+	ep := transport.NewEndpointClient(at(), api.ID{})
 	defer ep.Close()
 	snap, err := ep.Read(ctx, api.Query{})
 	if err != nil {
@@ -329,14 +352,14 @@ func threads(ctx context.Context, args []string) error {
 
 func replica(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("replica", flag.ExitOnError)
-	dir := dirFlag(fs)
+	at := reach(fs)
 	threadFlag := fs.String("thread", "", "thread whose replicated events to print")
 	fs.Parse(args)
 	thread, err := api.ParseID(*threadFlag)
 	if err != nil {
 		return err
 	}
-	hubc := transport.NewHubClient(daemon.Socket(*dir), api.ID{})
+	hubc := transport.NewHubClient(at(), api.ID{})
 	defer hubc.Close()
 	evs, err := hubc.Events(ctx, thread, api.Cursor{}, 1000)
 	if err != nil {
