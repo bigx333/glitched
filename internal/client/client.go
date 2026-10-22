@@ -127,15 +127,13 @@ type Env struct {
 	Status  Status
 	Threads map[api.ID]*Thread
 
-	ctx     context.Context
+	ctx     context.Context // ends when the env is removed or the manager closes
 	stop    context.CancelFunc
-	ep      api.Endpoint // where commands go; nil until the local engine answers
-	session *session     // the live shell stream; nil while there is none
-	gone    bool
+	session *session // the live shell stream; nil while there is none
 }
 
-// session is one shell stream. Thread subscriptions run under its ctx, so
-// they end with it.
+// session is one shell stream, and where commands go while it lasts.
+// Thread subscriptions run under its ctx, so they end with it.
 type session struct {
 	ctx context.Context
 	ep  api.Endpoint
@@ -157,26 +155,23 @@ type sub struct{ cancel context.CancelFunc }
 func (m *Manager) launch(e *Env, r route) *Env {
 	e.Status, e.Threads = Connecting{}, map[api.ID]*Thread{}
 	e.ctx, e.stop = context.WithCancel(m.ctx)
-	m.wg.Go(func() { m.link(e, r) })
+	m.wg.Go(func() { m.link(e.ctx, e, r) })
 	return e
 }
 
 func (m *Manager) remote(s Server) *Env {
-	c := transport.NewEndpointClient(transport.Tailnet{Address: s.Addr, Token: s.Token}, api.ID{})
-	return m.launch(&Env{Kind: Remote, Name: s.Label, ep: c}, remote{c})
+	return m.launch(&Env{Kind: Remote, Name: s.Label}, dial(s))
 }
 
 // retire ends e's goroutines; what they still post is dropped.
-func (e *Env) retire() {
-	e.stop()
-	e.gone = true
-}
+func (e *Env) retire() { e.stop() }
 
-// post runs fn on the Post thread unless e was removed or the manager
-// closed by then.
-func (m *Manager) post(e *Env, fn func()) {
+// post runs fn on the Post thread unless ctx ended by then. Only the Post
+// thread cancels the contexts passed here, so fn never sees a later state
+// than the one that ended them.
+func (m *Manager) post(ctx context.Context, fn func()) {
 	m.cfg.Post(func() {
-		if !m.closed && !e.gone {
+		if ctx.Err() == nil {
 			fn()
 		}
 	})
@@ -191,11 +186,10 @@ type route interface {
 	close()
 }
 
-// link keeps e's shell stream open, reconnecting with backoff, until e's
-// ctx ends or the server refuses the token.
-func (m *Manager) link(e *Env, r route) {
+// link keeps e's shell stream open, reconnecting with backoff, until ctx
+// ends or the server refuses the token.
+func (m *Manager) link(ctx context.Context, e *Env, r route) {
 	defer r.close()
-	ctx := e.ctx
 	wait := minBackoff
 	for {
 		ep, err := r.endpoint(ctx)
@@ -206,28 +200,30 @@ func (m *Manager) link(e *Env, r route) {
 			return
 		}
 		if errors.Is(err, transport.ErrRefused) {
-			m.post(e, func() { e.down(Refused{}) })
+			m.post(ctx, func() { e.down(Refused{}) })
 			return
 		}
 		r.failed()
 		retry := time.Now().Add(wait)
-		m.post(e, func() { e.down(Offline{Err: err, RetryAt: retry}) })
+		m.post(ctx, func() { e.down(Offline{Err: err, RetryAt: retry}) })
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(wait):
 		}
 		wait = min(2*wait, maxBackoff)
-		m.post(e, func() { e.Status = Connecting{} })
+		m.post(ctx, func() { e.Status = Connecting{} })
 	}
 }
 
-// serve reads e's shell until it fails, posting what it reads. online runs
-// once the snapshot arrives.
+// serve reads e's shell until it fails, posting what it reads under ctx.
+// online runs once the snapshot arrives.
 func (m *Manager) serve(ctx context.Context, e *Env, ep api.Endpoint, online func()) error {
-	ctx, cancel := context.WithCancel(ctx)
+	s := &session{ep: ep}
+	var cancel context.CancelFunc
+	s.ctx, cancel = context.WithCancel(ctx)
 	defer cancel()
-	dial, undial := context.WithTimeout(ctx, connectTimeout)
+	dial, undial := context.WithTimeout(s.ctx, connectTimeout)
 	info, err := ep.Info(dial)
 	var st api.Stream
 	if err == nil {
@@ -238,23 +234,22 @@ func (m *Manager) serve(ctx context.Context, e *Env, ep api.Endpoint, online fun
 		return err
 	}
 	defer st.Close()
-	s := &session{ctx: ctx, ep: ep}
 	for {
-		it, err := st.Next(ctx)
+		it, err := st.Next(s.ctx)
 		if err != nil {
 			return err
 		}
 		if it.Kind == api.StreamSnapshot {
 			online()
 		}
-		m.post(e, func() { m.shell(e, s, info, it) })
+		m.post(ctx, func() { m.shell(e, s, info, it) })
 	}
 }
 
 func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamItem) {
 	switch it.Kind {
 	case api.StreamSnapshot:
-		e.ID, e.Status, e.session, e.ep = info.ID, Online{}, s, s.ep
+		e.ID, e.Status, e.session = info.ID, Online{}, s
 		if e.Kind == Local {
 			e.Name = info.Name
 		}
@@ -355,7 +350,7 @@ func (m *Manager) watch(ctx context.Context, e *Env, s *sub, ep api.Endpoint, th
 				after = it.Event.Cursor
 			}
 			wait = minBackoff
-			m.post(e, func() {
+			m.post(e.ctx, func() {
 				if th := e.Threads[thread]; th != nil && th.sub == s {
 					th.take(it)
 				}
@@ -445,6 +440,10 @@ func (l *local) close() {
 // remote reaches a server over the tailnet. Its client redials on use, so
 // a session that failed needs no new one.
 type remote struct{ c *transport.EndpointClient }
+
+func dial(s Server) remote {
+	return remote{transport.NewEndpointClient(transport.Tailnet{Address: s.Addr, Token: s.Token}, api.ID{})}
+}
 
 func (r remote) endpoint(context.Context) (api.Endpoint, error) { return r.c, nil }
 func (remote) failed()                                          {}

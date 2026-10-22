@@ -250,6 +250,30 @@ func waitUploaded(t *testing.T, dir string) {
 	}
 }
 
+// The engine the GUI attached to stops. Until the GUI embeds its own, a
+// command has nowhere to go and fails at once; once it has, a retry lands.
+func TestACommandWaitsForTheNextEngine(t *testing.T) {
+	dir := stateDir(t)
+	d := engine(t, dir)
+	m, g := manager(t, dir)
+	env := m.Envs()[0]
+	online(t, g, env)
+	id := m.Create(env, "/work", "hello", fakeModel, api.AccessAsk)
+	g.until(t, "the create confirmed", func() bool { th := env.Threads[id]; return th.known && len(th.Pending) == 0 })
+
+	d.Close()
+	g.until(t, "offline", func() bool { _, ok := env.Status.(Offline); return ok })
+	msg := m.Send(env, id, "hello", api.AfterActive)
+	g.until(t, "the message failed", func() bool { p := env.Threads[id].Pending; return len(p) == 1 && p[0].Err != nil })
+	if err := env.Threads[id].Pending[0].Err; !errors.Is(err, errNoEngine) {
+		t.Fatalf("with no engine the message failed with %v, want %v", err, errNoEngine)
+	}
+
+	online(t, g, env)
+	m.Retry(env, id, msg)
+	g.until(t, "the retry landed", func() bool { return len(env.Threads[id].Pending) == 0 }, func() string { return describePending(env.Threads[id].Pending) })
+}
+
 // finishTurn creates a thread, sends it a message and approves the edit
 // the turn asks for, checking what the GUI sees on the way. It returns once
 // the turn is over and the transcript shows all of it.

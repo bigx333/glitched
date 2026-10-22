@@ -21,7 +21,7 @@ type Pending struct {
 	sent    bool // committed; waiting for the transcript to show it
 }
 
-var errNoEngine = errors.New("client: the engine has not answered yet")
+var errNoEngine = errors.New("client: not connected to the engine")
 
 // Create adds a thread, shown at once with the given fields until the
 // engine's view of it arrives, and returns its ID.
@@ -93,11 +93,11 @@ func (m *Manager) submit(e *Env, thread api.ID, body api.Intent) api.ID {
 // send submits cmd once the thread's previous submit has returned, so a
 // message never overtakes the create before it.
 func (m *Manager) send(e *Env, th *Thread, cmd api.Command) {
-	ep := e.ep
-	if ep == nil {
+	if e.session == nil {
 		m.submitted(e, cmd, errNoEngine)
 		return
 	}
+	ep := e.session.ep
 	prev, done := th.last, make(chan struct{})
 	th.last = done
 	ctx := e.ctx
@@ -113,7 +113,7 @@ func (m *Manager) send(e *Env, th *Thread, cmd api.Command) {
 		sctx, cancel := context.WithTimeout(ctx, submitTimeout)
 		_, err := ep.Submit(sctx, cmd)
 		cancel()
-		m.post(e, func() { m.submitted(e, cmd, err) })
+		m.post(ctx, func() { m.submitted(e, cmd, err) })
 	})
 }
 
