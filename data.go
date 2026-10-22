@@ -51,15 +51,21 @@ type project struct {
 }
 
 type projectKey struct {
-	server    string // the server's label; "" on this machine
+	// server is the server's engine, or its label until it first answers;
+	// "" on this machine. A project keeps its key when another label comes
+	// to show the engine.
+	server    string
 	workspace string
 }
 
 func keyOf(e *client.Env, workspace string) projectKey {
-	if e != nil && e.Kind == client.Remote {
+	switch {
+	case e == nil || e.Kind == client.Local:
+		return projectKey{workspace: workspace}
+	case e.ID.IsZero():
 		return projectKey{e.Name, workspace}
 	}
-	return projectKey{workspace: workspace}
+	return projectKey{e.ID.String(), workspace}
 }
 
 func (p *project) name() string { return filepath.Base(p.key.workspace) }
@@ -250,6 +256,9 @@ func (a *app) current() thread {
 	}
 	envs := a.backend.Envs()
 	d := a.fresh
+	if d.env != nil && d.env.Same != nil {
+		d.env = d.env.Same // another env shows its engine now
+	}
 	if d.env != nil && !slices.Contains(envs, d.env) {
 		d = draft{} // its server was removed
 	}

@@ -394,6 +394,76 @@ func TestOneEngineShowsOnce(t *testing.T) {
 	}
 }
 
+// An engine shown under one label goes on showing under another once the
+// first stops reaching it. What failed under the first comes along: the
+// message that wasn't sent, to retry; the draft; the project filtered to.
+func TestAFailedMessageFollowsItsEngineToAnotherLabel(t *testing.T) {
+	dir := tempDir(t)
+	firstToken, err := daemon.Pair(dir, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondToken, err := daemon.Pair(dir, "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := engine(t, daemon.Config{Dir: dir, Listen: []string{"127.0.0.1:0"}}, fake.New(fake.Turn(false)))
+	seed(t, d, "/srv", "Remote thread")
+	seed(t, d, "/other", "Elsewhere")
+	addr := d.Addrs()[0].String()
+	h := start(t, tempDir(t))
+	b := h.a.backend
+	if err := b.AddServer(client.Server{Label: "first", Addr: addr, Token: "wrong"}); err != nil {
+		t.Fatal(err)
+	}
+	h.until("first refused", func() bool { return b.ServerEnv("first").Status == client.Status(client.Refused{}) })
+	if err := b.AddServer(client.Server{Label: "second", Addr: addr, Token: secondToken}); err != nil {
+		t.Fatal(err)
+	}
+	second := b.ServerEnv("second")
+	h.until("second online", func() bool { return second.Status == client.Status(client.Online{}) })
+	th := h.thread("Remote thread")
+	h.a.select_(th)
+	h.until("its transcript", func() bool { return th.Transcript != nil && th.Transcript.Cursor != (api.Cursor{}) })
+	h.a.toggleProject(h.a.projectOf(th).key)
+	h.a.fresh = draft{second, "/srv"}
+
+	if err := daemon.Revoke(dir, "second"); err != nil {
+		t.Fatal(err)
+	}
+	h.until("second refused", func() bool { return second.Status == client.Status(client.Refused{}) })
+	b.Send(second, th.id(), "do not lose this", api.AfterActive)
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if !h.tt.HasText("do not lose this") || !h.tt.HasText("Retry") {
+		t.Fatalf("the failed message shows %q", h.tt.Texts())
+	}
+
+	if err := b.AddServer(client.Server{Label: "first", Addr: addr, Token: firstToken}); err != nil {
+		t.Fatal(err)
+	}
+	first := b.ServerEnv("first")
+	h.until("first online", func() bool { return first.Status == client.Status(client.Online{}) && first.Threads[th.id()] != nil })
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if envs := b.Envs(); !slices.Contains(envs, first) || slices.Contains(envs, second) {
+		t.Fatal("with second refused and first online, first doesn't show the engine")
+	}
+	if !h.tt.HasText("do not lose this") || !h.tt.HasText("Retry") {
+		t.Fatalf("under first the failed message is gone: %q", h.tt.Texts())
+	}
+	if len(h.a.projectFilter) != 1 {
+		t.Errorf("the filter has %d projects, want the one filtered to under second", len(h.a.projectFilter))
+	}
+	h.click("Retry")
+	h.until("the retry landed", func() bool { return h.tt.HasText("do not lose this") && !h.tt.HasText("Retry") })
+
+	h.a.selected = api.ID{}
+	if d := h.a.current(); d.env != first || d.View.Workspace != "/srv" {
+		t.Fatalf("the draft aimed at second starts on %s in %s, want first in /srv", d.env.Name, d.View.Workspace)
+	}
+}
+
 // row in Settings says why.
 func TestAServerOfAnotherProtocolSaysSo(t *testing.T) {
 	addr := newer(t)

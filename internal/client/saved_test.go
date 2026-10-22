@@ -2,6 +2,8 @@ package client
 
 import (
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -162,6 +164,101 @@ func TestRepairingATokenKeepsTheServersThreads(t *testing.T) {
 	}
 	m.Retry(box, id, msg)
 	g.until(t, "the retry landed", func() bool { return len(box.Threads[id].Pending) == 0 }, func() string { return describePending(box.Threads[id].Pending) })
+}
+
+// relay forwards a port to addr until cut, as a name a server answers to
+// does until its DNS goes.
+type relay struct {
+	ln    net.Listener
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func newRelay(t *testing.T, addr string) *relay {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &relay{ln: ln}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			u, err := net.Dial("tcp", addr)
+			if err != nil {
+				c.Close()
+				continue
+			}
+			r.mu.Lock()
+			r.conns = append(r.conns, c, u)
+			r.mu.Unlock()
+			go func() { io.Copy(u, c); u.Close() }()
+			go func() { io.Copy(c, u); c.Close() }()
+		}
+	}()
+	t.Cleanup(r.cut)
+	return r
+}
+
+func (r *relay) cut() {
+	r.ln.Close()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.conns {
+		c.Close()
+	}
+}
+
+// A server added under two labels shows through the one that still reaches
+// it, with the commands that failed on the other.
+func TestAnEngineShowsThroughTheLabelThatReachesIt(t *testing.T) {
+	rdir := stateDir(t)
+	token, err := daemon.Pair(rdir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := engine(t, rdir, "127.0.0.1:0")
+	addr := d.Addrs()[0].String()
+	there := api.NewID()
+	if _, err := d.Endpoint().Submit(timeout(t), api.Command{ID: api.NewID(), Target: there, Body: api.ThreadCreate{Workspace: "/srv", Title: "on the box", Model: fakeModel}}); err != nil {
+		t.Fatal(err)
+	}
+	dns := newRelay(t, addr)
+	m, g := manager(t, stateDir(t))
+	for _, s := range []Server{{Label: "box", Addr: dns.ln.Addr().String(), Token: token}, {Label: "box-ip", Addr: addr, Token: token}} {
+		if err := m.AddServer(s); err != nil {
+			t.Fatal(err)
+		}
+		online(t, g, m.ServerEnv(s.Label))
+	}
+	box, ip := m.ServerEnv("box"), m.ServerEnv("box-ip")
+	if !slices.Contains(m.Envs(), box) || ip.Same != box {
+		t.Fatalf("the envs are %v, want box showing the engine", envNames(m.Envs()))
+	}
+	failed := api.NewID()
+	box.Threads[there].Pending = append(box.Threads[there].Pending, Pending{Command: failed, Body: api.MessageDispatch{Text: "not sent"}, Err: errNoEngine})
+
+	dns.cut()
+	g.until(t, "box offline", func() bool { _, off := box.Status.(Offline); return off })
+	if envs := m.Envs(); slices.Contains(envs, box) || !slices.Contains(envs, ip) || box.Same != ip {
+		t.Fatalf("with box offline and box-ip online the envs are %v, want box-ip", envNames(envs))
+	}
+	if p := ip.Threads[there].Pending; len(p) != 1 || p[0].Command != failed {
+		t.Fatalf("box-ip's thread has rows %s, want the message that failed on box", describePending(p))
+	}
+	m.Retry(ip, there, failed)
+	m.Send(ip, there, "through box-ip", api.AfterActive)
+	g.until(t, "both landed through box-ip", func() bool { return len(ip.Threads[there].Pending) == 0 }, func() string { return describePending(ip.Threads[there].Pending) })
+}
+
+func envNames(es []*Env) []string {
+	var s []string
+	for _, e := range es {
+		s = append(s, e.Name)
+	}
+	return s
 }
 
 // Adding a listed server again reconnects it while commands are on their

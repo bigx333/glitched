@@ -96,8 +96,8 @@ func (m *Manager) Close() error {
 	return err
 }
 
-// Envs is the local environment, then the remotes, each engine once: an
-// env reaching the engine of one before it is left out. The slice is the
+// Envs is the local environment, then the remotes, each engine once, by
+// the env dedupe picks among those reaching it. The slice is the
 // manager's: read it, don't change it.
 func (m *Manager) Envs() []*Env { return m.shown }
 
@@ -109,18 +109,53 @@ func (m *Manager) ServerEnv(label string) *Env {
 	return nil
 }
 
-// dedupe shows each engine once, by the first env to reach it, as a
-// server that is this machine's engine, or another server's under another
-// label.
+// dedupe shows each engine once, as a server that is this machine's
+// engine, or another server's under another label. The env showing an
+// engine goes on showing it unless it is down while another reaching it is
+// online. The others hand it their commands, which show and retry there.
 func (m *Manager) dedupe() {
+	rank := func(e *Env) int {
+		r := 0
+		if e.Status == Status(Online{}) {
+			r += 2
+		}
+		if slices.Contains(m.shown, e) {
+			r++
+		}
+		return r
+	}
+	best := map[api.ID]*Env{}
+	for _, e := range m.envs {
+		if b := best[e.ID]; !e.ID.IsZero() && (b == nil || rank(e) > rank(b)) {
+			best[e.ID] = e
+		}
+	}
 	m.shown = nil
 	for _, e := range m.envs {
 		e.Same = nil
-		if i := slices.IndexFunc(m.shown, func(o *Env) bool { return !e.ID.IsZero() && o.ID == e.ID }); i >= 0 {
-			e.Same = m.shown[i]
+		if b := best[e.ID]; b != nil && b != e {
+			e.Same = b
+			m.adopt(b, e)
 			continue
 		}
 		m.shown = append(m.shown, e)
+	}
+}
+
+// adopt moves the commands on from's threads to the same threads of e,
+// and from's threads that e lacks.
+func (m *Manager) adopt(e, from *Env) {
+	for id, th := range from.Threads {
+		to := e.Threads[id]
+		if to == nil {
+			th.unfollow()
+			e.Threads[id] = th
+			delete(from.Threads, id)
+			m.follow(e, th)
+			continue
+		}
+		to.Pending = append(to.Pending, th.Pending...)
+		th.Pending = nil
 	}
 }
 
@@ -174,8 +209,8 @@ type Env struct {
 	Kind    Kind
 	Status  Status
 	Threads map[api.ID]*Thread
-	// Same is the env Envs shows for the engine this one reaches too;
-	// nil while Envs shows this one.
+	// Same is the env Envs shows for the engine this one reaches too,
+	// which holds this one's commands; nil while Envs shows this one.
 	Same *Env
 
 	ctx     context.Context // ends when the env is removed or the manager closes
@@ -223,7 +258,7 @@ func (m *Manager) connect(e *Env, r route) {
 // commands pending on them.
 func (m *Manager) redial(e *Env, s Server) {
 	e.unlink()
-	e.down(Connecting{})
+	m.down(e, Connecting{})
 	e.server = s
 	m.connect(e, newRemote(s))
 }
@@ -266,7 +301,7 @@ func (m *Manager) link(ctx context.Context, e *Env, r route) {
 			return
 		}
 		if errors.Is(err, transport.ErrRefused) {
-			m.post(ctx, func() { e.down(Refused{}) })
+			m.post(ctx, func() { m.down(e, Refused{}) })
 			return
 		}
 		r.failed()
@@ -275,14 +310,14 @@ func (m *Manager) link(ctx context.Context, e *Env, r route) {
 		if pe := (*protocolError)(nil); errors.As(err, &pe) {
 			s = Incompatible{Theirs: pe.theirs, Ours: runtime.Protocol, RetryAt: retry}
 		}
-		m.post(ctx, func() { e.down(s) })
+		m.post(ctx, func() { m.down(e, s) })
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(wait):
 		}
 		wait = min(2*wait, maxBackoff)
-		m.post(ctx, func() { e.Status = Connecting{} })
+		m.post(ctx, func() { m.down(e, Connecting{}) })
 	}
 }
 
@@ -358,13 +393,14 @@ func (m *Manager) view(e *Env, v api.Thread) {
 	m.follow(e, th)
 }
 
-// down records why e has no session. The session's ctx already ended its
-// thread subscriptions.
-func (e *Env) down(s Status) {
+// down records why e has no session, which may hand its engine to another
+// env. The session's ctx already ended its thread subscriptions.
+func (m *Manager) down(e *Env, s Status) {
 	e.Status, e.session = s, nil
 	for _, th := range e.Threads {
 		th.sub = nil
 	}
+	m.dedupe()
 }
 
 // OpenThread follows a thread's events into its Transcript until
