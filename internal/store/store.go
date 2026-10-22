@@ -160,8 +160,10 @@ CREATE TABLE runs (
 	signalled  INTEGER NOT NULL CHECK (signalled IN (0, 1)),
 	outcome    INTEGER CHECK (outcome BETWEEN 0 AND 3),
 	error      TEXT NOT NULL,
+	ended      INTEGER,
 	PRIMARY KEY (thread, ord),
-	CHECK ((state = 'finished') = (outcome IS NOT NULL))
+	CHECK ((state = 'finished') = (outcome IS NOT NULL)),
+	CHECK ((state = 'finished') = (ended IS NOT NULL))
 ) STRICT;
 CREATE UNIQUE INDEX runs_one_live ON runs (thread) WHERE state <> 'finished';
 

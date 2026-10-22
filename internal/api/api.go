@@ -205,6 +205,12 @@ type Request struct {
 	State      RequestState    `json:"state"`
 }
 
+// TurnResult is how a turn ended.
+type TurnResult struct {
+	Outcome Outcome   `json:"outcome"`
+	Ended   time.Time `json:"ended"`
+}
+
 // Thread is the projection a client reads. Working is derived from Run and
 // never stored.
 type Thread struct {
@@ -219,6 +225,7 @@ type Thread struct {
 	Requests    []Request   `json:"requests,omitempty"` // pending only
 	Queued      int         `json:"queued"`
 	Disposition Disposition `json:"disposition"`
+	LastTurn    *TurnResult `json:"lastTurn,omitempty"` // the most recent finished turn; nil before one ends
 	UpdatedAt   time.Time   `json:"updatedAt"`
 }
 

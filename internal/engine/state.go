@@ -60,6 +60,7 @@ type Run struct {
 	Signalled  bool        // an interrupt reached the agent
 	Outcome    api.Outcome // set when Finished
 	Error      string
+	Ended      time.Time // set when Finished
 }
 
 type Message struct {
@@ -175,6 +176,12 @@ func View(t Thread) api.Thread {
 		Run:         wireRun[t.slot()],
 		Disposition: t.Disposition,
 		UpdatedAt:   t.UpdatedAt,
+	}
+	for i := len(t.Runs) - 1; i >= 0; i-- {
+		if r := t.Runs[i]; r.State == RunFinished {
+			v.LastTurn = &api.TurnResult{Outcome: r.Outcome, Ended: r.Ended}
+			break
+		}
 	}
 	for _, r := range t.Requests {
 		if r.State == api.RequestPending {
