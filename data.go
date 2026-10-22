@@ -52,7 +52,29 @@ const (
 	entryAssistant
 	entryWork
 	entryChanges
+	entryApproval
 )
+
+// decision is what the user said to an approval: nothing yet, yes, or no.
+type decision int
+
+const (
+	undecided decision = iota
+	allowed
+	denied
+)
+
+// approval is a request from the agent that waits on the user: the
+// command it wants to run, where, and why.
+type approval struct {
+	command string
+	dir     string
+	reason  string
+	waiting string
+	// rule is what Always allow would allow from then on.
+	rule     string
+	decision decision
+}
 
 type workItem struct {
 	kind   string // "command", "edit", "read", "search"
@@ -69,6 +91,7 @@ type entry struct {
 	took      string
 	work      []workItem
 	files     []fileChange
+	approval  *approval
 	// attachments went with a message of the user's.
 	attachments []attachment
 }
@@ -123,7 +146,22 @@ func mockProjects() []*project {
 	return []*project{
 		{id: "p1", name: "t3code", path: "~/Projects/t3code", open: true, icon: icTerminal, color: ui.Hex("#8b5cf6"), threads: []*thread{
 			active,
-			{id: "t2", title: "Fix terminal resize flicker on Windows", age: "2h", status: statusApproval, branch: "main"},
+			{id: "t2", title: "Fix terminal resize flicker on Windows", age: "2h", status: statusApproval, branch: "main", entries: []entry{
+				{kind: entryUser, text: "The terminal flickers when the window is resized on Windows 11. Find the cause and fix it."},
+				{kind: entryWork, took: "Worked for 48s", work: []workItem{
+					{kind: "read", label: "Read", detail: "apps/desktop/src/terminal/resize.ts"},
+					{kind: "read", label: "Read", detail: "apps/desktop/src/terminal/pty.ts"},
+					{kind: "edit", label: "Edited", detail: "apps/desktop/src/terminal/resize.ts", add: 12, del: 4},
+					{kind: "command", label: "Ran", detail: "bun run typecheck"},
+				}},
+				{kind: entryApproval, approval: &approval{
+					command: "bun run test --filter=apps/desktop -- resize",
+					dir:     "apps/desktop",
+					reason:  "Verifies the debounce on the resize handler before the fix is marked done.",
+					waiting: "2 min",
+					rule:    "bun run test",
+				}},
+			}},
 			{id: "t3", title: "Add keyboard shortcut for new thread", age: "5h", status: statusCompleted, branch: "main", unread: true},
 			{id: "t4", title: "Investigate websocket reconnect loop", age: "1d", branch: "main"},
 			{id: "t5", title: "Bump effect to v4 beta", age: "3d", branch: "main", settled: true},
@@ -178,6 +216,18 @@ var scripts = []script{
 			"| Before | After |\n|---|---|\n| ~40 resizes per drag | 1 per frame |\n",
 	},
 }
+
+// approved is what the agent does once its request is allowed: it runs
+// the command and reports.
+var approved = script{
+	steps: []workItem{
+		{kind: "command", label: "Ran", detail: "bun run test --filter=apps/desktop -- resize"},
+	},
+	reply: "The resize tests pass, the debounced handler included. The fix holds up on the three resize cases the suite covers: a drag, a maximize, and a DPI change.",
+}
+
+// refused is the agent's reply to a denied request.
+const refused = "Understood, I won't run it. The debounce change is in place in `resize.ts`; tell me how you'd like it verified instead."
 
 // finish ends the agent's turn: the thread comes back to the inbox,
 // unread until it's opened.

@@ -143,10 +143,7 @@ func (a *app) diffStats(path string) (add, del int) {
 }
 
 func (a *app) diffPanel(c *ui.Context, t *thread) {
-	var files []fileChange
-	for _, e := range t.entries {
-		files = append(files, e.files...)
-	}
+	files := t.changed()
 	ui.Column(c).Width(a.diffWidth()).FillHeight().Children(func() {
 		bar := c.TitleBar()
 		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 14).Gap(8).AlignItems(ui.Center)

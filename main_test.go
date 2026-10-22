@@ -732,3 +732,53 @@ func TestFlowKeepsGoing(t *testing.T) {
 		t.Errorf("speed %.0f, level %.2f: should have eased to Max's", f.speed, f.level)
 	}
 }
+
+// An approval is answered from its card or the keyboard; allowed, the
+// agent goes on, denied, it replies and stops. With a draft, ⌘⏎ sends.
+func TestApproval(t *testing.T) {
+	a := newApp()
+	a.selected = "t2"
+	tt := ui.NewTester(a.view, 1320, 860)
+	_, th := a.current()
+	ap := th.pending()
+	if ap == nil || !tt.HasText("Approval needed") || !tt.HasText("Paused for approval") {
+		t.Fatalf("no pending approval shown; texts %q", tt.Texts())
+	}
+	if err := tt.Click("Allow once"); err != nil {
+		t.Fatal(err)
+	}
+	if ap.decision != allowed || th.status != statusCompleted || !tt.HasText("Allowed") {
+		t.Fatalf("decision %d, status %d", ap.decision, th.status)
+	}
+	if last := th.entries[len(th.entries)-1]; last.kind != entryAssistant || last.text != approved.reply {
+		t.Errorf("the agent didn't go on: last entry %+v", last)
+	}
+
+	a = newApp()
+	a.selected = "t2"
+	tt = ui.NewTester(a.view, 1320, 860)
+	_, th = a.current()
+	ap = th.pending()
+	a.draft = "use the other runner"
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyEnter)
+	if ap.decision != undecided {
+		t.Fatalf("⌘⏎ with a draft decided %d, want it to send", ap.decision)
+	}
+	if th.entries[len(th.entries)-1].text != scripts[(replyCount-1)%len(scripts)].reply {
+		t.Errorf("⌘⏎ with a draft didn't send")
+	}
+
+	a = newApp()
+	a.selected = "t2"
+	tt = ui.NewTester(a.view, 1320, 860)
+	_, th = a.current()
+	ap = th.pending()
+	tt.Key(ui.Cmd|ui.Shift, ui.KeyD)
+	if ap.decision != denied || !tt.HasText("Denied") || th.status != statusCompleted {
+		t.Fatalf("⇧⌘D decided %d, status %d", ap.decision, th.status)
+	}
+	if last := th.entries[len(th.entries)-1]; last.text != refused {
+		t.Errorf("no reply to the denial: %+v", last)
+	}
+}

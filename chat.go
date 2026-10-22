@@ -52,6 +52,7 @@ func (a *app) chatPage(c *ui.Context) {
 					Material(glass.ScrollEdge{Bottom: true, Background: palette.bg})
 				// Over the edge, which would take its clicks.
 				a.jumpToLatest(c, a.listFor(t))
+				a.approvalKeys(c, t)
 				a.composer(c, t)
 			})
 			if a.showTerminal {
@@ -157,12 +158,19 @@ func (a *app) header(c *ui.Context, p *project, t *thread) {
 			if iconButton(c, "terminal", icTerminal, "Toggle terminal  ⌘J", a.showTerminal).Clicked() {
 				a.showTerminal, a.panelsJump = !a.showTerminal, false
 			}
-			if iconButton(c, "diff", icDiff, "Toggle diff  ⌘D", a.showDiff).Clicked() {
-				a.showDiff, a.panelsJump = !a.showDiff, false
-				if a.showDiff {
-					a.showPreview = false
+			ui.Box(c).Children(func() {
+				if iconButton(c, "diff", icDiff, "Toggle diff  ⌘D", a.showDiff).Clicked() {
+					a.showDiff, a.panelsJump = !a.showDiff, false
+					if a.showDiff {
+						a.showPreview = false
+					}
 				}
-			}
+				// How many files the thread has changed, on the icon.
+				if n := len(t.changed()); n > 0 {
+					ui.Textf(c, "%d", n).Absolute().Top(1).Right(1).FontSize(9).FontWeight(600).LineHeight(1.4).
+						Padding(0, 4).Radius(999).Background(palette.accent).TextColor(ui.Hex("#ffffff")).PassThrough()
+				}
+			})
 			if iconButton(c, "preview", icGlobe, "Toggle preview  ⇧⌘P", a.showPreview).Clicked() {
 				a.togglePreview()
 				a.panelsJump = false
@@ -274,24 +282,30 @@ func (a *app) entry(c *ui.Context, t *thread, i int, e entry) {
 			}
 		})
 	case entryWork:
-		a.workLog(c, key, e)
+		a.workLog(c, key, e, t.pausedFor(i))
 	case entryChanges:
 		a.changes(c, key, e)
+	case entryApproval:
+		a.approvalCard(c, key, t, e.approval)
 	}
 }
 
-func (a *app) workLog(c *ui.Context, key string, e entry) {
+// workLog is the agent's steps of a turn, under a head that says how it
+// went: still working, paused for an approval, or how long it took.
+func (a *app) workLog(c *ui.Context, key string, e entry, paused bool) {
 	working := strings.HasSuffix(e.took, "…")
 	open := !a.collapsed[key]
 	ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Clip().
 		Transition(riseIn).Children(func() {
 		if ghost(c, "head", false).Radius(0).Padding(8, 12).Children(func() {
-			if working {
+			switch {
+			case paused:
+				ui.Icon(c, icClock).FontSize(12).TextColor(palette.amber)
+				ui.Text(c, "Paused for approval").FontSize(12).Grow(1)
+			case working:
 				statusMark(c, statusWorking)
-			}
-			if working {
 				shimmerText(c, e.took, 12, palette.muted, palette.text)
-			} else {
+			default:
 				ui.Text(c, e.took).FontSize(12).Grow(1)
 			}
 			ui.Textf(c, "%d steps", len(e.work)).FontSize(11).TextColor(palette.faint)
@@ -429,8 +443,11 @@ func (a *app) composer(c *ui.Context, t *thread) {
 						OnPaste(a.onPaste)
 					return
 				}
-				ui.TextArea(c.Key("draft"), &a.draft).
-					Placeholder("Ask anything, @tag files/folders, or use / to show available commands").
+				placeholder := "Ask anything, @tag files/folders, or use / to show available commands"
+				if t.pending() != nil {
+					placeholder = "Reply to steer, or answer the approval above"
+				}
+				ui.TextArea(c.Key("draft"), &a.draft).Placeholder(placeholder).
 					Lines(2, 10).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).
 					Padding(14, 16, 4).AutoFocus().OnPaste(a.onPaste).OnTextKey(a.suggestKey)
 				ui.Row(c).Key("controls").Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
@@ -539,9 +556,13 @@ func (a *app) send(t *thread) {
 	// snoozed and settled ones.
 	t.status, t.age, t.settled, t.snoozed = statusWorking, "now", false, ""
 	t.stop.Store(false)
-
-	s := scripts[replyCount%len(scripts)]
+	a.play(t, scripts[replyCount%len(scripts)])
 	replyCount++
+}
+
+// play runs a canned turn: the agent's steps arrive one by one, then its
+// reply streams in. There is no agent.
+func (a *app) play(t *thread, s script) {
 	t.entries = append(t.entries, entry{kind: entryWork, took: "Working…"})
 	work := len(t.entries) - 1
 	if a.win == nil { // in tests, all at once

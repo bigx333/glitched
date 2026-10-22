@@ -22,6 +22,13 @@ func TestShot(t *testing.T) {
 		t.Skip()
 	}
 	a := newApp()
+	if id := os.Getenv("THREAD"); id != "" {
+		a.selected = id
+	}
+	if d := os.Getenv("DECIDE"); d != "" {
+		_, th := a.current()
+		a.decide(th, map[string]decision{"allow": allowed, "deny": denied}[d])
+	}
 	a.showDiff = os.Getenv("DIFF") != ""
 	if os.Getenv("SPLIT") != "" {
 		a.showDiff, a.diffLayout = true, editor.DiffSplit
