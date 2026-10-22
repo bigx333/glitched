@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -97,5 +99,67 @@ func TestServeRefusesAListenAddressOffTheTailnet(t *testing.T) {
 	err := serve(context.Background(), []string{"-dir", stateDir(t), "-listen", "0.0.0.0:7465"})
 	if err == nil || !strings.Contains(err.Error(), "Tailscale") {
 		t.Fatalf("serve -listen 0.0.0.0:7465: %v, want the tailnet rule", err)
+	}
+}
+
+func TestRemoteFlagsThatCantWorkAreUsageErrors(t *testing.T) {
+	// Nothing may be dialled or started before the flags are checked.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dir, hubDir := stateDir(t), stateDir(t)
+	thread := api.NewID().String()
+	cases := []struct {
+		name string
+		cmd  func(context.Context, []string) error
+		args []string
+	}{
+		{"run -token without -server", run, []string{"-dir", dir, "-token", "x", "-yes", "hi"}},
+		{"run -server without -token", run, []string{"-dir", dir, "-server", "127.0.0.1:1", "-yes", "hi"}},
+		{"threads -token without -server", threads, []string{"-dir", dir, "-token", "x"}},
+		{"threads -server without -token", threads, []string{"-dir", dir, "-server", "127.0.0.1:1"}},
+		{"replica -token without -server", replica, []string{"-dir", dir, "-token", "x", "-thread", thread}},
+		{"replica -server without -token", replica, []string{"-dir", dir, "-server", "127.0.0.1:1", "-thread", thread}},
+		{"serve -hub-token without -hub-server", serve, []string{"-dir", dir, "-hub-token", "x"}},
+		{"serve -hub-server without -hub-token", serve, []string{"-dir", dir, "-hub=false", "-hub-server", "127.0.0.1:1"}},
+		{"serve -hub-dir and -hub-server", serve, []string{"-dir", dir, "-hub-dir", hubDir, "-hub-server", "127.0.0.1:1", "-hub-token", "x"}},
+		{"serve -hub and -hub-dir", serve, []string{"-dir", dir, "-hub", "-hub-dir", hubDir}},
+		{"serve -hub and -hub-server", serve, []string{"-dir", dir, "-hub=true", "-hub-server", "127.0.0.1:1", "-hub-token", "x"}},
+	}
+	for _, c := range cases {
+		err := c.cmd(ctx, c.args)
+		if !errors.As(err, new(usageError)) {
+			t.Errorf("%s: %v, want a usage error", c.name, err)
+		}
+	}
+}
+
+// stdout is what f printed.
+func stdout(t *testing.T, f func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	f()
+	os.Stdout = old
+	w.Close()
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestPairPrintsAServeLineForItsDir(t *testing.T) {
+	dir := filepath.Join(stateDir(t), "a dir")
+	var err error
+	out := stdout(t, func() { err = pair(context.Background(), []string{"-dir", dir, "-name", "laptop"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "serve -dir '"+dir+"' -listen ") {
+		t.Fatalf("pair -dir %s printed no serve line for that dir:\n%s", dir, out)
 	}
 }

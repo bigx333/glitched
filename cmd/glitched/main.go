@@ -25,6 +25,12 @@ import (
 
 const exitLocked = 3
 
+// usageError is a flag combination that can't work. main exits 2 on it, as
+// flag does on a flag it can't parse.
+type usageError string
+
+func (e usageError) Error() string { return string(e) }
+
 var commands = map[string]func(context.Context, []string) error{
 	"serve":   serve,
 	"pair":    pair,
@@ -55,6 +61,9 @@ func main() {
 	case errors.Is(err, daemon.ErrLocked):
 		fmt.Fprintln(os.Stderr, "glitched:", err)
 		os.Exit(exitLocked)
+	case errors.As(err, new(usageError)):
+		fmt.Fprintln(os.Stderr, "glitched:", err)
+		os.Exit(2)
 	case err != nil:
 		fmt.Fprintln(os.Stderr, "glitched:", err)
 		os.Exit(1)
@@ -68,16 +77,28 @@ func dirFlag(fs *flag.FlagSet) *string {
 
 // reach adds the flags that pick the engine a command talks to: the one
 // under -dir, or the one at -server with a token it paired.
-func reach(fs *flag.FlagSet) func() transport.Transport {
+func reach(fs *flag.FlagSet) func() (transport.Transport, error) {
 	dir := dirFlag(fs)
 	server := fs.String("server", "", "tailnet address of another engine, instead of the one under -dir")
 	token := fs.String("token", "", "the token -server paired for this client")
-	return func() transport.Transport {
-		if *server == "" {
-			return daemon.Socket(*dir)
+	return func() (transport.Transport, error) {
+		switch {
+		case *server == "" && *token != "":
+			return nil, usageError(fs.Name() + ": -token goes with -server; the engine under -dir takes none")
+		case *server == "":
+			return daemon.Socket(*dir), nil
+		case *token == "":
+			return nil, usageError(fs.Name() + ": -server needs -token, which glitched pair printed on that engine")
 		}
-		return transport.Tailnet{Address: *server, Token: *token}
+		return transport.Tailnet{Address: *server, Token: *token}, nil
 	}
+}
+
+// given reports which flags fs's arguments set.
+func given(fs *flag.FlagSet) map[string]bool {
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	return set
 }
 
 type listFlag []string
@@ -104,7 +125,13 @@ func serve(ctx context.Context, args []string) error {
 	var hubAt transport.Transport
 	switch {
 	case *hubDir != "" && *hubServer != "":
-		return errors.New("serve: -hub-dir and -hub-server both name the hub")
+		return usageError("serve: -hub-dir and -hub-server both name the hub; give one")
+	case given(fs)["hub"] && *asHub && (*hubDir != "" || *hubServer != ""):
+		return usageError("serve: -hub runs the hub in this engine, so -hub-dir or -hub-server can't name another")
+	case *hubToken != "" && *hubServer == "":
+		return usageError("serve: -hub-token goes with -hub-server")
+	case *hubServer != "" && *hubToken == "":
+		return usageError("serve: -hub-server needs -hub-token, which glitched pair printed on that engine")
 	case *hubServer != "":
 		hubAt = transport.Tailnet{Address: *hubServer, Token: *hubToken}
 	case *hubDir != "":
@@ -151,21 +178,33 @@ func pair(_ context.Context, args []string) error {
 		fmt.Println("revoked", *revoke)
 		return nil
 	case *name == "":
-		return errors.New("pair: give -name, -list or -revoke")
+		return usageError("pair: give -name, -list or -revoke")
 	}
 	token, err := daemon.Pair(*dir, *name)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("Token for %s, shown only this once:\n\n  %s\n\n", *name, token)
+	cmd := "glitched serve"
+	if given(fs)["dir"] {
+		cmd += " -dir " + shellQuote(*dir)
+	}
 	ip, ok := transport.TailscaleIP()
 	if !ok {
-		fmt.Printf("Tailscale isn't up here. Once it is, serve with -listen <this machine's Tailscale IP>:%s.\n", port)
+		fmt.Printf("Tailscale isn't up here. Once it is, serve with:\n\n  %s -listen <this machine's Tailscale IP>:%s\n", cmd, port)
 		return nil
 	}
 	addr := net.JoinHostPort(ip.String(), port)
-	fmt.Printf("Serve with:\n\n  glitched serve -listen %s\n\nThen on the other machine:\n\n  glitched run -server %s -token %s hello\n", addr, addr, token)
+	fmt.Printf("Serve with:\n\n  %s -listen %s\n\nThen on the other machine:\n\n  glitched run -server %s -token %s hello\n", cmd, addr, addr, token)
 	return nil
+}
+
+// shellQuote quotes s for a POSIX shell, unless it needs none.
+func shellQuote(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./:@%+,") == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func run(ctx context.Context, args []string) error {
@@ -177,13 +216,17 @@ func run(ctx context.Context, args []string) error {
 	fs.Parse(args)
 	mode, ok := modes[*modeFlag]
 	if !ok {
-		return fmt.Errorf("run: unknown mode %q", *modeFlag)
+		return usageError(fmt.Sprintf("run: unknown mode %q", *modeFlag))
 	}
 	text := strings.Join(fs.Args(), " ")
 	if text == "" {
-		return errors.New("run: no message")
+		return usageError("run: no message")
 	}
-	ep := transport.NewEndpointClient(at(), api.ID{})
+	tr, err := at()
+	if err != nil {
+		return err
+	}
+	ep := transport.NewEndpointClient(tr, api.ID{})
 	defer ep.Close()
 
 	var thread api.ID
@@ -338,7 +381,11 @@ func threads(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("threads", flag.ExitOnError)
 	at := reach(fs)
 	fs.Parse(args)
-	ep := transport.NewEndpointClient(at(), api.ID{})
+	tr, err := at()
+	if err != nil {
+		return err
+	}
+	ep := transport.NewEndpointClient(tr, api.ID{})
 	defer ep.Close()
 	snap, err := ep.Read(ctx, api.Query{})
 	if err != nil {
@@ -355,11 +402,15 @@ func replica(ctx context.Context, args []string) error {
 	at := reach(fs)
 	threadFlag := fs.String("thread", "", "thread whose replicated events to print")
 	fs.Parse(args)
+	tr, err := at()
+	if err != nil {
+		return err
+	}
 	thread, err := api.ParseID(*threadFlag)
 	if err != nil {
 		return err
 	}
-	hubc := transport.NewHubClient(at(), api.ID{})
+	hubc := transport.NewHubClient(tr, api.ID{})
 	defer hubc.Close()
 	evs, err := hubc.Events(ctx, thread, api.Cursor{}, 1000)
 	if err != nil {
