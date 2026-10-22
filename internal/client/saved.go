@@ -74,6 +74,7 @@ func (m *Manager) sync(renew string) {
 		}
 	}
 	m.envs = envs
+	m.dedupe()
 }
 
 // Servers are the remotes gui.json listed when this manager last read it,

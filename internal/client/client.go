@@ -49,6 +49,7 @@ type Manager struct {
 	local  *local
 
 	envs  []*Env
+	shown []*Env // envs, each engine once
 	saved saved
 	// saving is whether a goroutine is saving the read marks; unsaved,
 	// whether some are marked that no save has taken.
@@ -95,9 +96,33 @@ func (m *Manager) Close() error {
 	return err
 }
 
-// Envs is the local environment, then the remotes. The slice is the
+// Envs is the local environment, then the remotes, each engine once: an
+// env reaching the engine of one before it is left out. The slice is the
 // manager's: read it, don't change it.
-func (m *Manager) Envs() []*Env { return m.envs }
+func (m *Manager) Envs() []*Env { return m.shown }
+
+// ServerEnv is the env of the server labelled label, shown or not.
+func (m *Manager) ServerEnv(label string) *Env {
+	if i := m.server(label); i >= 0 {
+		return m.envs[i]
+	}
+	return nil
+}
+
+// dedupe shows each engine once, by the first env to reach it, as a
+// server that is this machine's engine, or another server's under another
+// label.
+func (m *Manager) dedupe() {
+	m.shown = nil
+	for _, e := range m.envs {
+		e.Same = nil
+		if i := slices.IndexFunc(m.shown, func(o *Env) bool { return !e.ID.IsZero() && o.ID == e.ID }); i >= 0 {
+			e.Same = m.shown[i]
+			continue
+		}
+		m.shown = append(m.shown, e)
+	}
+}
 
 type Kind uint8
 
@@ -149,6 +174,9 @@ type Env struct {
 	Kind    Kind
 	Status  Status
 	Threads map[api.ID]*Thread
+	// Same is the env Envs shows for the engine this one reaches too;
+	// nil while Envs shows this one.
+	Same *Env
 
 	ctx     context.Context // ends when the env is removed or the manager closes
 	stop    context.CancelFunc
@@ -298,6 +326,7 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 		if e.Kind == Local {
 			e.Name = info.Name
 		}
+		m.dedupe()
 		for _, w := range e.waiting {
 			w <- s
 		}

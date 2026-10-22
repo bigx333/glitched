@@ -318,6 +318,57 @@ func TestServers(t *testing.T) {
 }
 
 // A server a protocol ahead of this app shows none of its threads, and its
+// An engine reached under two names shows once, by the first: a server
+// that is this machine's engine, or another server under another label.
+// Settings says which.
+func TestOneEngineShowsOnce(t *testing.T) {
+	dir := tempDir(t)
+	token, err := daemon.Pair(dir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := engine(t, daemon.Config{Dir: dir, Listen: []string{"127.0.0.1:0"}}, fake.New(fake.Turn(false)))
+	seed(t, d, "/work", "Once")
+	h := start(t, dir)
+	other := tempDir(t)
+	otherToken, err := daemon.Pair(other, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := engine(t, daemon.Config{Dir: other, Listen: []string{"127.0.0.1:0"}}, fake.New(fake.Turn(false)))
+	seed(t, o, "/srv", "Elsewhere")
+	for _, s := range []client.Server{
+		{Label: "self", Addr: d.Addrs()[0].String(), Token: token},
+		{Label: "box", Addr: o.Addrs()[0].String(), Token: otherToken},
+		{Label: "box-again", Addr: o.Addrs()[0].String(), Token: otherToken},
+	} {
+		if err := h.a.backend.AddServer(s); err != nil {
+			t.Fatal(err)
+		}
+		h.until(s.Label+" online", func() bool { return h.a.backend.ServerEnv(s.Label).Status == client.Status(client.Online{}) })
+	}
+	h.tt.Frame()
+	var names []string
+	for _, e := range h.a.backend.Envs() {
+		names = append(names, e.Name)
+	}
+	titles := map[string]int{}
+	for _, p := range h.a.projects {
+		for _, th := range p.threads {
+			titles[th.View.Title]++
+		}
+	}
+	if len(names) != 2 || names[1] != "box" || titles["Once"] != 1 || titles["Elsewhere"] != 1 {
+		t.Fatalf("the machines are %v and the threads %v, want this machine's and box's, each once", names, titles)
+	}
+	h.a.router.Push("/settings/servers")
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if !h.tt.HasText("Same engine as "+names[0]) || !h.tt.HasText("Same engine as box") {
+		t.Errorf("Settings shows %q, want self and box-again as the engines they reach", h.tt.Texts())
+	}
+}
+
 // row in Settings says why.
 func TestAServerOfAnotherProtocolSaysSo(t *testing.T) {
 	addr := newer(t)
