@@ -48,7 +48,9 @@ type Adapter interface {
 // Agent is one run's provider session. Do and Next may be called from
 // different goroutines. A repeated Interrupt, or a repeated Respond to the
 // same request, is a no-op, because the runtime retries them after a crash.
-// A restored agent surfaces its unanswered requests again.
+// A restored agent surfaces its unanswered requests again. The runtime
+// retries a failed Close until it returns nil, so Close on an agent that is
+// already gone returns nil.
 type Agent interface {
 	Do(ctx context.Context, a Action) error
 	Next(ctx context.Context) (Event, error)

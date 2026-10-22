@@ -16,11 +16,10 @@ const deltaWindow = 50 * time.Millisecond
 // pump commits one agent's events until its turn ends, the log moves past
 // the run, or the host closes. Each event and each text batch is kept until
 // its commit lands, and nothing more is read meanwhile. The agent is closed
-// when its turn is over for this host, and closed is closed after it; a
+// when its turn is over for this host, and closed is closed once it has; a
 // closing host leaves the agent running.
 func (h *Host) pump(thread api.ID, lr *liveRun, closed chan<- struct{}) {
 	defer h.wg.Done()
-	defer close(closed)
 	run, ag := lr.run, lr.agent
 	// The reader hands every event it pulled to the pump, sets readErr and
 	// closes events once Next fails.
@@ -91,5 +90,7 @@ func (h *Host) pump(thread api.ID, lr *liveRun, closed chan<- struct{}) {
 		}
 	}
 	h.forget(run)
-	closeAgent(ag)
+	if h.closeAgent(ag) {
+		close(closed)
+	}
 }

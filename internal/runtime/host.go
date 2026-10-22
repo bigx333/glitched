@@ -439,7 +439,7 @@ func (h *Host) open(ctx context.Context, thread api.ID, b engine.StartTurn) (pro
 	})
 	if err == nil {
 		if err = ag.Do(ctx, provider.Start{Text: b.Text}); err != nil && h.ctx.Err() == nil {
-			closeAgent(ag)
+			h.closeAgent(ag)
 		}
 	}
 	return ag, err
@@ -461,10 +461,15 @@ func (h *Host) act(run api.ID, a provider.Action) error {
 	return lr.agent.Do(ctx, a)
 }
 
-func closeAgent(ag provider.Agent) {
-	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
-	defer cancel()
-	ag.Close(ctx)
+// closeAgent retries a failed close until it succeeds or the host closes,
+// and reports whether ag closed. The thread starts no other agent until then,
+// since this one may still be working in its workspace.
+func (h *Host) closeAgent(ag provider.Agent) bool {
+	return retry(h.ctx, "close agent", func(context.Context) error {
+		ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+		defer cancel()
+		return ag.Close(ctx)
+	})
 }
 
 func (h *Host) track(run api.ID, ag provider.Agent) *liveRun {

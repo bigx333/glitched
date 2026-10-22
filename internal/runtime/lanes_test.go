@@ -2,6 +2,7 @@ package runtime_test
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"testing"
@@ -239,5 +240,84 @@ func TestAnInterruptThatTimesOutLeavesTheRunUncertain(t *testing.T) {
 	until(t, n.h, thread, "the next run asks", func(th api.Thread) bool { return waiting(th) && th.Requests[0].Run == second })
 	if closed, opened := ad.at("closed "+first.String()), ad.at("open "+second.String()); closed < 0 || opened < closed {
 		t.Fatalf("the next agent opened before the last one closed: %v", ad.log)
+	}
+}
+
+// stuckCloser's agents fail to close until unstick.
+type stuckCloser struct {
+	*gated
+	mu    sync.Mutex
+	stuck bool
+}
+
+func (a *stuckCloser) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	ag, err := a.gated.Open(ctx, spec)
+	return &stuckClose{ag, a}, err
+}
+
+func (a *stuckCloser) unstick() {
+	a.mu.Lock()
+	a.stuck = false
+	a.mu.Unlock()
+}
+
+type stuckClose struct {
+	provider.Agent
+	a *stuckCloser
+}
+
+func (s *stuckClose) Close(ctx context.Context) error {
+	s.a.mu.Lock()
+	stuck := s.a.stuck
+	s.a.mu.Unlock()
+	if stuck {
+		return errors.New("close failed")
+	}
+	return s.Agent.Close(ctx)
+}
+
+// abandonForNext leaves first uncertain behind an interrupt it never takes,
+// then abandons it, which admits second.
+func abandonForNext(t *testing.T, n node, ad *stuckCloser, thread, first, second api.ID) {
+	t.Helper()
+	if _, err := n.h.Submit(ctx, api.Command{ID: first, Target: thread, Body: dispatch("first", api.StartNow)}); err != nil {
+		t.Fatal(err)
+	}
+	until(t, n.h, thread, "approval", waiting)
+	never := make(chan struct{})
+	ad.setGate(func(_ api.ID, a provider.Action) <-chan struct{} {
+		if _, ok := a.(provider.Interrupt); ok {
+			return never
+		}
+		return nil
+	})
+	if _, err := n.h.Submit(ctx, api.Command{ID: second, Target: thread, Body: dispatch("second", api.AfterActive)}); err != nil {
+		t.Fatal(err)
+	}
+	submit(t, n.h, thread, api.TurnInterrupt{})
+	until(t, n.h, thread, "uncertain", uncertain)
+	ad.setGate(nil)
+	submit(t, n.h, thread, api.TurnInterrupt{})
+	until(t, n.h, thread, "the next run is admitted", func(th api.Thread) bool { return th.Run == api.RunStarting })
+}
+
+func TestAFailedCloseKeepsTheNextAgentFromStarting(t *testing.T) {
+	t.Cleanup(runtime.SetCallTimeout(100 * time.Millisecond))
+	ad := &stuckCloser{gated: newGated(fake.Turn(true)), stuck: true}
+	n := start(t, dbPath(t), ad)
+	thread := newThread(t, n.h)
+	first, second := api.NewID(), api.NewID()
+	abandonForNext(t, n, ad, thread, first, second)
+
+	time.Sleep(300 * time.Millisecond)
+	if got := ad.Starts(); got != 1 {
+		t.Fatalf("%d agents started while the first one failed to close, want 1", got)
+	}
+	ad.unstick()
+	until(t, n.h, thread, "the next run asks", func(th api.Thread) bool { return waiting(th) && th.Requests[0].Run == second })
+	if rec, err := ad.Adapter.Reconcile(ctx, provider.RuntimeIdentity{Thread: thread, Run: first}); err != nil {
+		t.Fatal(err)
+	} else if _, alive := rec.(provider.Restored); alive {
+		t.Fatal("the first agent is still open after the next one started")
 	}
 }
