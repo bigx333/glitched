@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -345,5 +346,35 @@ func TestHandshakeAnswersNoCallBeforeTheProof(t *testing.T) {
 		if _, b, err := ws.Read(ctx); err == nil {
 			t.Errorf("%s instead of a proof was answered: %s", name, b)
 		}
+	}
+}
+
+func TestHandshakeDropsABadProofWithoutWaitingForThePeer(t *testing.T) {
+	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, Authorize: admit(map[string]context.Context{"good": context.Background()})}
+	addr := serveTailnet(t, srv)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var nc net.Conn
+	ws, _, err := websocket.Dial(ctx, "ws://"+addr+"/ws", &websocket.DialOptions{HTTPClient: &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			c, err := new(net.Dialer).DialContext(ctx, network, addr)
+			nc = c
+			return c, err
+		},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.CloseNow()
+	serverNonce(t, ctx, ws)
+	writeJSON(t, ctx, ws, hello{Nonce: make([]byte, nonceSize), MAC: make([]byte, sha256.Size)})
+	// Read the raw socket, so nothing answers the server's close frame.
+	nc.SetReadDeadline(time.Now().Add(2 * time.Second))
+	got, err := io.ReadAll(nc)
+	if err != nil {
+		t.Fatalf("a peer that sent a bad proof and never answered the close: %v, want the server to drop it at once", err)
+	}
+	if want := []byte{0x88, 9, 0x03, 0xf0}; !bytes.HasPrefix(got, want) {
+		t.Fatalf("the server's last bytes %x, want a close frame with 1008 first", got)
 	}
 }

@@ -102,7 +102,8 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 }
 
 func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http.Request, methods map[string]handler) {
-	if _, err := s.Transport.WhoIs(r.Context().Value(connKey{}).(net.Conn)); err != nil {
+	nc := r.Context().Value(connKey{}).(net.Conn)
+	if _, err := s.Transport.WhoIs(nc); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -115,6 +116,9 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 	if s.Authorize != nil {
 		ws.SetReadLimit(helloLimit)
 		if grant, err = s.challenge(ctx, ws, r); err != nil {
+			// Close sends the status, then waits up to 5s for the peer's
+			// close frame. A read deadline already past ends that wait.
+			nc.SetReadDeadline(time.Now())
 			ws.Close(websocket.StatusPolicyViolation, "refused")
 			return
 		}
