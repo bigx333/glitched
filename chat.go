@@ -315,7 +315,7 @@ func (a *app) workLog(c *ui.Context, key string, t *thread, e entry, paused bool
 			default:
 				ui.Text(c, e.took).FontSize(12).Grow(1)
 			}
-			ui.Textf(c, "%d steps", len(e.work)).FontSize(11).TextColor(palette.faint)
+			ui.Text(c, plural(len(e.work), "step")).FontSize(11).TextColor(palette.faint)
 			chevron(c, open)
 		}).Clicked() {
 			a.collapsed[key] = open
@@ -401,7 +401,7 @@ func (a *app) changes(c *ui.Context, key string, e entry) {
 	}
 	ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.surface).Transition(riseIn).Children(func() {
 		ui.Row(c).Padding(8, 8, 8, 12).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
-			ui.Textf(c, "%d files changed", len(e.files)).FontSize(12).FontWeight(500)
+			ui.Text(c, plural(len(e.files), "file")+" changed").FontSize(12).FontWeight(500)
 			counts(c, add, del)
 			ui.Spacer(c)
 			if ghost(c, "view-diff", false).Children(func() {
@@ -556,10 +556,9 @@ func (a *app) sendButton(c *ui.Context, t *thread) {
 			ui.Icon(c, icArrowUp).FontSize(16)
 		}
 	})
-	if send.Clicked() || !a.cmdkOpen && c.Shortcut(ui.Cmd, ui.KeyEnter) {
+	if send.Clicked() || c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		if working {
-			t.status = statusIdle
-			t.turn.Add(1)
+			t.stopTurn()
 		} else {
 			a.send(t)
 		}
@@ -582,7 +581,7 @@ func (a *app) send(t *thread) {
 	if text == "" && len(a.attachments) == 0 {
 		return
 	}
-	if len(t.entries) == 0 {
+	if len(t.entries) == 0 && t.title == untitled {
 		t.title = text
 		if t.title == "" {
 			t.title = a.attachments[0].name
@@ -605,9 +604,18 @@ func (a *app) run(t *thread) {
 	if ap := t.pending(); ap != nil {
 		ap.decision = superseded
 	}
-	t.status, t.age, t.settled, t.snoozed = statusWorking, "now", false, ""
+	t.startTurn()
 	a.play(t, scripts[replyCount%len(scripts)])
 	replyCount++
+}
+
+// turnRunner is how a canned turn runs off the UI thread: sleep waits
+// between its steps, and update posts a change to the UI thread. The
+// window's are time.Sleep and Window.Update; a test supplies its own,
+// or none, for the turn to play at once.
+type turnRunner struct {
+	sleep  func(time.Duration)
+	update func(func())
 }
 
 // play runs a canned turn: the agent's steps arrive one by one, then its
@@ -617,7 +625,7 @@ func (a *app) run(t *thread) {
 func (a *app) play(t *thread, s script) {
 	t.entries = append(t.entries, entry{kind: entryWork, took: "Working…"})
 	work := len(t.entries) - 1
-	if a.win == nil { // in tests, all at once
+	if a.turns == nil {
 		t.entries[work].work, t.entries[work].took = s.steps, "Worked for 3s"
 		t.entries = append(t.entries, entry{kind: entryAssistant, text: s.reply})
 		t.finish()
@@ -625,25 +633,26 @@ func (a *app) play(t *thread, s script) {
 	}
 	id := t.turn.Add(1)
 	live := func() bool { return t.turn.Load() == id }
+	// post runs fn on the UI thread, while the turn is live there.
+	post := func(fn func()) {
+		a.turns.update(func() {
+			if live() {
+				fn()
+			}
+		})
+	}
 	go func() {
 		started := time.Now()
 		for _, step := range s.steps {
-			time.Sleep(time.Duration(500+rand.IntN(500)) * time.Millisecond)
+			a.turns.sleep(time.Duration(500+rand.IntN(500)) * time.Millisecond)
 			if !live() {
 				return
 			}
-			a.win.Update(func() {
-				if live() {
-					t.entries[work].work = append(t.entries[work].work, step)
-				}
-			})
+			post(func() { t.entries[work].work = append(t.entries[work].work, step) })
 		}
-		time.Sleep(400 * time.Millisecond)
+		a.turns.sleep(400 * time.Millisecond)
 		reply := 0
-		a.win.Update(func() {
-			if !live() {
-				return
-			}
+		post(func() {
 			t.entries[work].took = fmt.Sprintf("Worked for %ds", int(time.Since(started).Seconds()))
 			t.entries = append(t.entries, entry{kind: entryAssistant, streaming: true})
 			reply = len(t.entries) - 1
@@ -655,20 +664,13 @@ func (a *app) play(t *thread, s script) {
 			}
 			i += n
 			chunk := s.reply[:i]
-			time.Sleep(time.Duration(10+rand.IntN(25)) * time.Millisecond)
+			a.turns.sleep(time.Duration(10+rand.IntN(25)) * time.Millisecond)
 			if !live() {
 				return
 			}
-			a.win.Update(func() {
-				if live() {
-					t.entries[reply].text = chunk
-				}
-			})
+			post(func() { t.entries[reply].text = chunk })
 		}
-		a.win.Update(func() {
-			if !live() {
-				return
-			}
+		post(func() {
 			t.entries[reply].streaming = false
 			t.finish()
 			a.notifyFinished(t)
@@ -729,4 +731,12 @@ func blink(t float32) float32 {
 		return 1
 	}
 	return 0
+}
+
+// plural counts things: "1 step", "2 steps".
+func plural(n int, what string) string {
+	if n == 1 {
+		return "1 " + what
+	}
+	return fmt.Sprintf("%d %ss", n, what)
 }

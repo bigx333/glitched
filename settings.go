@@ -130,8 +130,8 @@ func (a *app) appearance(c *ui.Context) {
 	s := &a.settings
 	card(c, "THEME", func() {
 		ui.Row(c).Padding(16).Gap(12).Children(func() {
-			for i, name := range themeNames() {
-				a.themeCard(c, i, name)
+			for _, name := range themeNames() {
+				a.themeCard(c, name)
 			}
 		})
 	})
@@ -179,21 +179,21 @@ func (a *app) appearance(c *ui.Context) {
 
 // themeCard previews a theme's sidebar and chat, and the terminal's
 // colors under them; System's is half light, half dark.
-func (a *app) themeCard(c *ui.Context, i int, name string) {
+func (a *app) themeCard(c *ui.Context, name string) {
 	s := &a.settings
-	th := themeFor(i, true)
+	th := themeFor(name, true)
 	cols := th.colors
 	b := ui.ButtonBase(c.Key(name)).Grow(1).Basis(0).Column().AlignItems(ui.Stretch).Gap(8).Cursor(ui.CursorPointer)
 	if b.Children(func() {
 		ui.Box(c).Height(96).Radius(10).Clip().Children(func() {
-			if i == s.theme {
+			if name == s.theme {
 				ui.Box(c).Key("ring").Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(10).Border(2, palette.accent).PassThrough().
 					Transition(indicator(themeMatch{}))
 			}
 			ui.Row(c).Fill().Border(1, palette.border).Radius(10).Clip().AlignItems(ui.Stretch).Children(func() {
 				side, main := cols.sidebar, cols.bg
-				if i == 0 { // half and half
-					side, main = themeFor(i, false).colors.sidebar, cols.bg
+				if name == systemTheme { // half and half
+					side, main = themeFor(name, false).colors.sidebar, cols.bg
 				}
 				ui.Column(c).Width(44).Background(side).Padding(10, 8).Gap(5).Children(func() {
 					for range 4 {
@@ -214,11 +214,11 @@ func (a *app) themeCard(c *ui.Context, i int, name string) {
 			})
 		})
 		t := ui.Text(c, name).FontSize(12).TextAlign(ui.Center)
-		if i != s.theme {
+		if name != s.theme {
 			t.TextColor(palette.muted)
 		}
 	}).Clicked() {
-		s.theme = i
+		s.theme = name
 	}
 }
 
@@ -306,7 +306,7 @@ var keybindings = []struct {
 	{"Allow the pending approval", []string{"⌘", "↩"}},
 	{"Deny the pending approval", []string{"⇧", "⌘", "D"}},
 	{"Previous / next change in the diff", []string{"⌘", "[", "]"}},
-	{"Mark the change in view reviewed", []string{"⇧", "⌘", "↩"}},
+	{"Accept the change in view", []string{"⇧", "⌘", "↩"}},
 	{"Toggle sidebar", []string{"⌘", "B"}},
 	{"Toggle diff panel", []string{"⌘", "D"}},
 	{"Toggle terminal", []string{"⌘", "J"}},
@@ -352,16 +352,15 @@ func (a *app) archivedThreads(c *ui.Context) {
 				ui.Icon(c, icMessage).FontSize(14).TextColor(palette.faint)
 				ui.Column(c).Grow(1).Gap(2).Children(func() {
 					ui.Text(c, t.title).SingleLine()
-					ui.Text(c, "Archived "+t.age+" ago").FontSize(11.5).TextColor(palette.faint)
+					when := "Archived " + t.age + " ago"
+					if t.age == "now" {
+						when = "Archived just now"
+					}
+					ui.Text(c, when).FontSize(11.5).TextColor(palette.faint)
 				})
 				ui.Button(c.Key("restore"), "Restore").OnClick(func() {
 					a.archived = remove(a.archived, t)
-					// Back where it came from; the mock ones came from nowhere.
-					p := t.home
-					if p == nil {
-						p = a.projects[0]
-					}
-					p.threads = append(p.threads, t)
+					t.home.threads = append(t.home.threads, t)
 					c.AddToast(ui.Toast{Title: "Thread restored", Description: t.title, Type: "info"})
 				})
 				ui.Button(c.Key("delete"), "Delete").TextColor(palette.red).OnClick(func() {

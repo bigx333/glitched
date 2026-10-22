@@ -98,18 +98,27 @@ func projectDir(path string) string {
 // it names, else the plugin's dark or light palette on the theme's
 // background and text.
 func (th theme) terminal() *terminal.Theme {
+	if t := terminalThemes[th.name]; t != nil {
+		return t
+	}
+	var t *terminal.Theme
 	if th.term != "" {
-		if t, err := terminal.GhosttyTheme(th.term); err == nil {
-			return t
+		t, _ = terminal.GhosttyTheme(th.term)
+	}
+	if t == nil {
+		t = terminal.LightTheme()
+		if th.dark {
+			t = terminal.DarkTheme()
 		}
+		t.Background, t.Foreground = th.colors.bg, th.colors.text
 	}
-	t := terminal.LightTheme()
-	if th.dark {
-		t = terminal.DarkTheme()
-	}
-	t.Background, t.Foreground = th.colors.bg, th.colors.text
+	terminalThemes[th.name] = t
 	return t
 }
+
+// terminalThemes are the themes' terminal colors, once each is read:
+// a Ghostty theme is a file, not to be read every frame.
+var terminalThemes = map[string]*terminal.Theme{}
 
 // terminalBody is the drawer's body: the project's shell, or the reason
 // it could not start; without a window, the canned output.

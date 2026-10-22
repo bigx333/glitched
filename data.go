@@ -11,11 +11,12 @@ import (
 
 type status int
 
+// The agent's status on a thread. Waiting on an approval is not one: it
+// is the thread's pending approval, which its entries hold.
 const (
 	statusIdle status = iota
 	statusWorking
 	statusCompleted
-	statusApproval
 )
 
 type thread struct {
@@ -158,12 +159,12 @@ func mockProjects() []*project {
 	return []*project{
 		{id: "p1", name: "t3code", path: "~/Projects/t3code", open: true, icon: icTerminal, color: ui.Hex("#8b5cf6"), threads: []*thread{
 			active,
-			{id: "t2", title: "Fix terminal resize flicker on Windows", age: "2h", status: statusApproval, branch: "main", entries: []entry{
+			{id: "t2", title: "Fix terminal resize flicker on Windows", age: "2h", branch: "main", entries: []entry{
 				{kind: entryUser, text: "The terminal flickers when the window is resized on Windows 11. Find the cause and fix it."},
 				{kind: entryWork, took: "Worked for 48s", work: []workItem{
 					{kind: "read", label: "Read", detail: "apps/desktop/src/terminal/resize.ts"},
 					{kind: "read", label: "Read", detail: "apps/desktop/src/terminal/pty.ts"},
-					{kind: "edit", label: "Edited", detail: "apps/desktop/src/terminal/resize.ts", add: 12, del: 4},
+					{kind: "edit", label: "Edited", detail: "apps/desktop/src/terminal/resize.ts", add: 12, del: 2},
 					{kind: "command", label: "Ran", detail: "bun run typecheck", took: "1.2s"},
 				}},
 				{kind: entryApproval, approval: &approval{
@@ -189,11 +190,11 @@ func mockProjects() []*project {
 	}
 }
 
-func mockArchived() []*thread {
+func mockArchived(home *project) []*thread {
 	return []*thread{
-		{id: "a1", title: "Try Tauri for the desktop shell", age: "3w", branch: "main"},
-		{id: "a2", title: "Spike: SQLite event store", age: "1mo", branch: "main"},
-		{id: "a3", title: "Rename provider adapters", age: "2mo", branch: "main"},
+		{id: "a1", title: "Try Tauri for the desktop shell", age: "3w", branch: "main", home: home},
+		{id: "a2", title: "Spike: SQLite event store", age: "1mo", branch: "main", home: home},
+		{id: "a3", title: "Rename provider adapters", age: "2mo", branch: "main", home: home},
 	}
 }
 
@@ -240,6 +241,30 @@ var approved = script{
 
 // refused is the agent's reply to a denied request.
 const refused = "Understood, I won't run it. The debounce change is in place in `resize.ts`; tell me how you'd like it verified instead."
+
+// untitled is a new thread's title, until its first message names it.
+const untitled = "New thread"
+
+// startTurn has the thread go to Working, out of the snoozed and settled
+// ones, as the agent's turn begins.
+func (t *thread) startTurn() {
+	t.status, t.age, t.settled, t.snoozed = statusWorking, "now", false, ""
+}
+
+// stopTurn ends the agent's turn where it is: the thread is the user's
+// again, the work log says it was stopped, and a reply half streamed
+// stands as it is.
+func (t *thread) stopTurn() {
+	t.turn.Add(1)
+	t.status = statusIdle
+	for i := range t.entries {
+		e := &t.entries[i]
+		if e.kind == entryWork && e.took == "Working…" {
+			e.took = "Stopped"
+		}
+		e.streaming = false
+	}
+}
 
 // finish ends the agent's turn: the thread comes back to the inbox,
 // unread until it's opened.

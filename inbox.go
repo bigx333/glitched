@@ -316,16 +316,21 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 			a.rowActions(c, t, cat)
 			return
 		}
+		// The selected row's face is darker: its faint text steps up.
+		dim := palette.faint
+		if selected {
+			dim = palette.muted
+		}
 		switch {
 		case cat == catSnoozed:
 			ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, icClock).FontSize(10).TextColor(palette.faint)
-				ui.Text(c, t.snoozed).FontSize(11).TextColor(palette.faint)
+				ui.Icon(c, icClock).FontSize(10).TextColor(dim)
+				ui.Text(c, t.snoozed).FontSize(11).TextColor(dim)
 			})
 		case t.unread:
 			ui.Box(c).Size(7, 7).Radius(4).Background(palette.accent)
 		default:
-			ui.Text(c, t.age).FontSize(11).TextColor(palette.faint)
+			ui.Text(c, t.age).FontSize(11).TextColor(dim)
 		}
 	}).Clicked() {
 		t.unread = false
@@ -336,12 +341,12 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 // statusBadge is a small mark of what a thread is doing, on its project's
 // tile: the agent working, or waiting for an approval.
 func statusBadge(c *ui.Context, t *thread) ui.Element {
-	switch t.status {
-	case statusWorking:
+	switch {
+	case t.status == statusWorking:
 		return ui.Box(c).Size(11, 11).Radius(6).Center().Background(palette.sidebar).Children(func() {
 			statusMark(c, statusWorking)
 		})
-	case statusApproval:
+	case t.pending() != nil:
 		return ui.Box(c).Size(9, 9).Radius(5).Background(palette.amber).Border(2, palette.sidebar).Tooltip("Pending approval")
 	}
 	return ui.Element{}

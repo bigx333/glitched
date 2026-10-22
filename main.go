@@ -43,22 +43,27 @@ var themes = []theme{
 
 // themeNames are the settings' choices: the system's appearance, then
 // each theme.
+// systemTheme is the choice that follows the system's appearance.
+const systemTheme = "System"
+
 func themeNames() []string {
-	names := []string{"System"}
+	names := []string{systemTheme}
 	for _, t := range themes {
 		names = append(names, t.name)
 	}
 	return names
 }
 
-// themeFor is the theme a settings choice names: at 0, the system's
-// appearance, Dark or Light; else themes[i-1].
-func themeFor(i int, systemDark bool) theme {
-	if i > 0 && i <= len(themes) {
-		return themes[i-1]
+// themeFor is the theme a settings choice names; System, or a name
+// that is no theme's, is the system's appearance, Dark or Light.
+func themeFor(name string, systemDark bool) theme {
+	for _, t := range themes {
+		if t.name == name {
+			return t
+		}
 	}
 	if systemDark {
-		return themes[1]
+		return themeFor("Dark", false)
 	}
 	return themes[0]
 }
@@ -87,7 +92,7 @@ var (
 		active:  ui.RGBA(0, 0, 0, 0.07),
 		border:  ui.RGBA(0, 0, 0, 0.09),
 		text:    ui.Hex("#18181b"),
-		muted:   ui.Hex("#71717a"),
+		muted:   ui.Hex("#64646d"),
 		faint:   ui.Hex("#6f6f78"),
 		green:   ui.Hex("#16a34a"),
 		red:     ui.Hex("#dc2626"),
@@ -143,7 +148,7 @@ var (
 
 // settings is what the settings pages edit. Most of it is only shown.
 type settings struct {
-	theme         int // 0 is the system's appearance; else 1 + an index into themes
+	theme         string // a theme\'s name, or systemTheme
 	accent        int
 	glass         bool
 	vibrancy      float64 // 0 to 1: how much of the sidebar's vibrancy shows through the background
@@ -172,6 +177,8 @@ type app struct {
 	router   *ui.Router
 	projects []*project
 	archived []*thread
+	// turns runs the canned turns off the UI thread; nil plays them at once.
+	turns    *turnRunner
 	selected string
 	settings settings
 
@@ -289,11 +296,12 @@ type app struct {
 }
 
 func newApp() *app {
+	projects := mockProjects()
 	return &app{
 		router:        newRouter(),
 		wind:          wind.New(rand.Uint32(), nil),
-		projects:      mockProjects(),
-		archived:      mockArchived(),
+		projects:      projects,
+		archived:      mockArchived(projects[0]),
 		selected:      "t1",
 		showSidebar:   true,
 		sidebarWidth:  272,
@@ -314,7 +322,7 @@ func newApp() *app {
 		diffWrap:      true,
 		reviewed:      map[string]bool{},
 		settings: settings{
-			theme:         0,
+			theme:         systemTheme,
 			glass:         true,
 			vibrancy:      0.85,
 			wind:          true,
@@ -536,6 +544,7 @@ func main() {
 	mygo.App.WhenReady(func() {
 		a.installMenu()
 		mygo.App.OnNotificationClick(a.onNotificationClick)
+		a.turns = &turnRunner{sleep: time.Sleep, update: func(fn func()) { a.win.Update(fn) }}
 		a.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:     "Glitched",
 			Width:     1320,

@@ -131,18 +131,30 @@ func (a *app) toggleSidebar(keyboard bool) {
 	a.sidebarJump = keyboard
 }
 
-// statusMark shows what a thread is doing, before its title. Only work
-// in progress moves.
+// threadMark shows what a thread is doing, before its title: waiting on
+// an approval, else its status.
+func threadMark(c *ui.Context, t *thread) {
+	if t.pending() != nil {
+		pendingMark(c)
+		return
+	}
+	statusMark(c, t.status)
+}
+
+// statusMark shows a status. Only work in progress moves.
 func statusMark(c *ui.Context, s status) {
 	switch s {
 	case statusWorking:
 		spin := ui.Icon(c, icLoader).FontSize(11).TextColor(palette.blue)
 		spin.Rotate(spin.Loop("spin", 800*time.Millisecond, ui.Linear) * 360)
-	case statusApproval:
-		ui.Box(c).Size(7, 7).Radius(4).Background(palette.amber).Margin(0, 2).Tooltip("Pending approval")
 	case statusCompleted:
 		ui.Box(c).Size(7, 7).Radius(4).Background(palette.green).Margin(0, 2).Tooltip("Completed")
 	}
+}
+
+// pendingMark is the amber dot of a thread waiting on an approval.
+func pendingMark(c *ui.Context) {
+	ui.Box(c).Size(7, 7).Radius(4).Background(palette.amber).Margin(0, 2).Tooltip("Pending approval")
 }
 
 var settingsSections = []struct {
@@ -186,7 +198,7 @@ func (a *app) newThread() {
 
 // startThread opens a new, empty thread in the project.
 func (a *app) startThread(p *project) {
-	t := &thread{id: time.Now().Format("150405.000"), title: "New thread", age: "now", branch: "main"}
+	t := &thread{id: time.Now().Format("150405.000"), title: untitled, age: "now", branch: "main"}
 	p.threads = append([]*thread{t}, p.threads...)
 	p.open = true
 	a.select_(t.id)

@@ -67,13 +67,10 @@ func (a *app) retry(t *thread, i int) {
 	a.run(t)
 }
 
-// cut drops the entries from i on. A thread that was waiting on an
-// approval cut away waits no more.
+// cut drops the entries from i on; an approval among them is no longer
+// waited on, as the thread's pending one is the entries'.
 func (t *thread) cut(i int) {
 	t.entries = t.entries[:i]
-	if t.status == statusApproval && t.pending() == nil {
-		t.status = statusIdle
-	}
 }
 
 // fork starts a thread of the thread's messages up to i, in its project,

@@ -127,7 +127,7 @@ func (a *app) quickView(c *ui.Context) {
 func (a *app) startQuickThread() {
 	q := &a.quick
 	p := a.projects[q.project]
-	t := &thread{id: "q" + strings.ReplaceAll(a.now.Format("150405.000"), ".", ""), title: "New thread", age: "now", branch: "main"}
+	t := &thread{id: "q" + strings.ReplaceAll(a.now.Format("150405.000"), ".", ""), title: untitled, age: "now", branch: "main"}
 	p.threads = append([]*thread{t}, p.threads...)
 	a.select_(t.id)
 	a.draft = q.query

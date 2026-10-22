@@ -26,9 +26,9 @@ func (a *app) openCommandPalette() {
 // toggleLightDark switches to Light from any dark theme, and to Dark from
 // any light one.
 func (a *app) toggleLightDark() {
-	a.settings.theme = 1
+	a.settings.theme = "Light"
 	if !a.theme.dark {
-		a.settings.theme = 2
+		a.settings.theme = "Dark"
 	}
 }
 
@@ -36,19 +36,20 @@ func (a *app) toggleLightDark() {
 // the threads, the most recently active first. A query starting with >
 // keeps to the actions.
 func (a *app) commands() []command {
-	cmds := []command{
-		{"Actions", "New thread", "⌘N", icSquarePen, a.newThread, nil},
+	action := func(label, hint string, icon *ui.SVG, run func()) command {
+		return command{section: "Actions", label: label, hint: hint, icon: icon, run: run}
 	}
+	cmds := []command{action("New thread", "⌘N", icSquarePen, a.newThread)}
 	for _, p := range a.projects {
-		cmds = append(cmds, command{"Actions", "New thread in " + p.name, "", icSquarePen, func() { a.startThread(p) }, nil})
+		cmds = append(cmds, action("New thread in "+p.name, "", icSquarePen, func() { a.startThread(p) }))
 	}
 	cmds = append(cmds,
-		command{"Actions", "Switch model", "", icSparkles, a.openModelPicker, nil},
-		command{"Actions", "Toggle diff panel", "⌘D", icDiff, func() { a.showDiff = !a.showDiff }, nil},
-		command{"Actions", "Toggle terminal", "⌘J", icTerminal, func() { a.showTerminal = !a.showTerminal }, nil},
-		command{"Actions", "Toggle preview", "⇧⌘P", icGlobe, a.togglePreview, nil},
-		command{"Actions", "Toggle sidebar", "⌘B", icPanelLeft, func() { a.showSidebar = !a.showSidebar }, nil},
-		command{"Actions", "Toggle light / dark", "⇧⌘L", icPalette, a.toggleLightDark, nil},
+		action("Switch model", "", icSparkles, a.openModelPicker),
+		action("Toggle diff panel", "⌘D", icDiff, func() { a.showDiff = !a.showDiff }),
+		action("Toggle terminal", "⌘J", icTerminal, func() { a.showTerminal = !a.showTerminal }),
+		action("Toggle preview", "⇧⌘P", icGlobe, a.togglePreview),
+		action("Toggle sidebar", "⌘B", icPanelLeft, func() { a.showSidebar = !a.showSidebar }),
+		action("Toggle light / dark", "⇧⌘L", icPalette, a.toggleLightDark),
 	)
 	for i, s := range settingsSections {
 		hint := ""
@@ -56,7 +57,7 @@ func (a *app) commands() []command {
 			hint = "⌘,"
 		}
 		path := "/settings/" + s.path
-		cmds = append(cmds, command{"Actions", "Settings › " + s.label, hint, s.icon, func() { a.router.Push(path) }, nil})
+		cmds = append(cmds, action("Settings › "+s.label, hint, s.icon, func() { a.router.Push(path) }))
 	}
 	query, actionsOnly := strings.CutPrefix(a.cmdkQuery, ">")
 	query = strings.TrimSpace(query)
@@ -64,7 +65,7 @@ func (a *app) commands() []command {
 		var threads []command
 		for _, p := range a.projects {
 			for _, t := range p.threads {
-				threads = append(threads, command{"Threads", t.title, p.name, nil, func() { a.select_(t.id) }, t})
+				threads = append(threads, command{section: "Threads", label: t.title, hint: p.name, run: func() { a.select_(t.id) }, t: t})
 			}
 		}
 		slices.SortStableFunc(threads, func(x, y command) int { return ageMinutes(x.t.age) - ageMinutes(y.t.age) })
@@ -89,7 +90,8 @@ func (a *app) openModelPicker() {
 }
 
 // ageMinutes reads an age as the sidebar shows it, "now", "12m", "2h",
-// "1d", "1w" or "1mo", in minutes.
+// "1d", "1w" or "1mo", in minutes. The mock threads have no times, only
+// these labels. "mo" goes before "m", or "1mo" would read as a minute.
 func ageMinutes(age string) int {
 	if age == "now" {
 		return 0
@@ -176,7 +178,7 @@ func (a *app) commandPalette(c *ui.Context) {
 				}
 				if r.Children(func() {
 					if cmd.t != nil {
-						ui.Box(c).Size(14, 14).Center().Shrink(0).Children(func() { statusMark(c, cmd.t.status) })
+						ui.Box(c).Size(14, 14).Center().Shrink(0).Children(func() { threadMark(c, cmd.t) })
 					} else {
 						ui.Icon(c, cmd.icon).FontSize(14)
 					}

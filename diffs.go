@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
@@ -18,7 +19,45 @@ var fileTexts = map[string][2]string{
 	"apps/web/src/components/Sidebar.tsx":     {sidebarBefore, sidebarAfter},
 	"apps/web/src/components/ChevronIcon.tsx": {"", chevronAfter},
 	"apps/desktop/src/terminal/resize.ts":     {resizeBefore, resizeAfter},
+	"apps/server/src/terminal/pty.ts":         {ptyBefore, ptyAfter},
 }
+
+const ptyBefore = `import { spawn } from "node-pty";
+
+export class Pty {
+  private proc = spawn(shell(), [], { cols: 80, rows: 24 });
+
+  resize(cols: number, rows: number) {
+    this.proc.resize(cols, rows);
+  }
+
+  write(data: string) {
+    this.proc.write(data);
+  }
+}
+`
+
+const ptyAfter = `import { spawn } from "node-pty";
+
+export class Pty {
+  private proc = spawn(shell(), [], { cols: 80, rows: 24 });
+  private size = { cols: 80, rows: 24 };
+
+  // A resize to the size the PTY already has is a repaint for nothing,
+  // and the observer asks for one on every pixel of a drag.
+  resize(cols: number, rows: number) {
+    if (cols === this.size.cols && rows === this.size.rows) {
+      return;
+    }
+    this.size = { cols, rows };
+    this.proc.resize(cols, rows);
+  }
+
+  write(data: string) {
+    this.proc.write(data);
+  }
+}
+`
 
 const resizeBefore = `import { pty } from "./pty";
 
@@ -161,7 +200,8 @@ func reviewButton(c *ui.Context, label string, primary bool) ui.Element {
 		Background(palette.surface).Border(1, palette.border).TextColor(palette.text).
 		Shadow(0, 2, 6, 0, ui.RGBA(0, 0, 0, 0.25)).Transition(hoverFade)
 	if primary {
-		b.Background(palette.green.Mix(ui.Hex("#000000"), 0.35)).Border(1, palette.green.Alpha(0.6)).TextColor(ui.Hex("#ffffff"))
+		bg := palette.green.Mix(ui.Hex("#000000"), 0.35)
+		b.Background(bg).Border(1, palette.green.Alpha(0.6)).TextColor(onColor(bg))
 	}
 	if b.Hovered() {
 		b.Background(palette.surface.Mix(palette.text, 0.1))
@@ -170,6 +210,22 @@ func reviewButton(c *ui.Context, label string, primary bool) ui.Element {
 		}
 	}
 	return b.Children(func() { ui.Text(c, label).FontSize(11.5).FontWeight(500) })
+}
+
+// onColor is the color of text on bg, white on a dark one and near black
+// on a light one, as a theme's green may be either.
+func onColor(bg ui.Color) ui.Color {
+	lum := func(v uint8) float64 {
+		c := float64(v) / 255
+		if c <= 0.03928 {
+			return c / 12.92
+		}
+		return math.Pow((c+0.055)/1.055, 2.4)
+	}
+	if 0.2126*lum(bg.R)+0.7152*lum(bg.G)+0.0722*lum(bg.B) > 0.3 {
+		return ui.Hex("#111114")
+	}
+	return ui.Hex("#ffffff")
 }
 
 // diffStats counts the lines a file's change adds and deletes, as its diff
@@ -216,7 +272,7 @@ func (a *app) diffPanel(c *ui.Context, t *thread) {
 				return
 			}
 			d := a.diffFor(path)
-			d.Layout, d.Wrap = a.diffLayout, a.diffWrap
+			d.Layout, d.Wrap = a.layout(), a.diffWrap
 			a.hunkBar(c, d)
 			editor.DiffView(c.Key(path), d).Grow(1).FillWidth()
 		})
@@ -233,14 +289,20 @@ func (a *app) splitFits() bool {
 	return a.roomBeside-minChatWidth >= splitWidth
 }
 
-// layoutSwitch chooses Unified or Split. Split needs the room: short of
-// it, its segment is dimmed and says so, and the layout falls back to
-// Unified.
+// layout is the diff's layout as shown: the one chosen, but Unified
+// while Split is short of room. The choice keeps, for when the room is
+// back.
+func (a *app) layout() editor.DiffLayout {
+	if a.diffLayout == editor.DiffSplit && !a.splitFits() {
+		return editor.DiffUnified
+	}
+	return a.diffLayout
+}
+
+// layoutSwitch chooses Unified or Split. Short of room for Split, its
+// segment is dimmed and says so.
 func (a *app) layoutSwitch(c *ui.Context) {
 	fits := a.splitFits()
-	if !fits {
-		a.diffLayout = editor.DiffUnified
-	}
 	ui.Row(c).Radius(7).Border(1, palette.border).Padding(2).Gap(2).Children(func() {
 		segment := func(key, label string, layout editor.DiffLayout, enabled bool) {
 			// A disabled button shows no tooltip of its own: the box
@@ -250,7 +312,7 @@ func (a *app) layoutSwitch(c *ui.Context) {
 				box.Tooltip(fmt.Sprintf("Split needs %d DIPs of room", splitWidth))
 			}
 			box.Children(func() {
-				if ghost(c, key, a.diffLayout == layout).Padding(3, 9).Disabled(!enabled).
+				if ghost(c, key, a.layout() == layout).Padding(3, 9).Disabled(!enabled).
 					Children(func() { ui.Text(c, label).FontSize(11.5) }).Clicked() {
 					a.diffLayout = layout
 				}
@@ -304,8 +366,8 @@ func (a *app) fileRow(c *ui.Context, i int, f fileChange) {
 }
 
 // hunkBar counts the file's changes, "2 of 5", steps between them, and
-// keeps the one in view as reviewed. ⌘[ and ⌘] step from the keyboard,
-// and ⇧⌘↩ keeps.
+// accepts the one in view, as the change's own Accept does. ⌘[ and ⌘]
+// step from the keyboard, and ⇧⌘↩ accepts.
 func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 	n := len(d.Hunks())
 	i, _ := d.CurrentHunk()
@@ -327,7 +389,7 @@ func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 		}
 	}
 	ui.Row(c).Padding(4, 8, 4, 14).Gap(4).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
-		label := fmt.Sprintf("%d changes", n)
+		label := plural(n, "change")
 		switch {
 		case n == 0:
 			label = "All changes reviewed"
@@ -335,9 +397,9 @@ func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 			label = fmt.Sprintf("%d of %d", i+1, n)
 		}
 		ui.Text(c, label).FontSize(11.5).TextColor(palette.muted).Grow(1)
-		if ghost(c, "keep-hunk", false).Padding(3, 6).Disabled(n == 0).Label("Mark change reviewed").Children(func() {
+		if ghost(c, "keep-hunk", false).Padding(3, 6).Disabled(n == 0).Label("Accept change").Children(func() {
 			ui.Icon(c, icCheck).FontSize(12)
-			ui.Text(c, "Reviewed").FontSize(11.5)
+			ui.Text(c, "Accept").FontSize(11.5)
 			kbd(c, "⇧⌘↩")
 		}).Clicked() {
 			keep()
@@ -357,7 +419,7 @@ func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 // minChatWidth.
 func (a *app) diffWidth() float32 {
 	share, lo, hi := float32(0.42), float32(380), float32(520)
-	if a.diffLayout == editor.DiffSplit {
+	if a.layout() == editor.DiffSplit {
 		share, lo, hi = 0.58, splitWidth, 900
 	}
 	return panelWidth(a.roomBeside, share, lo, hi)

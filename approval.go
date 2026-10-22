@@ -32,7 +32,7 @@ func (a *app) approvalCard(c *ui.Context, key string, t *thread, ap *approval) {
 		ui.Row(c).Padding(9, 14).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
 			switch ap.decision {
 			case undecided:
-				statusMark(c, statusApproval)
+				pendingMark(c)
 				ui.Text(c, "Approval needed").FontSize(13).FontWeight(600)
 			case allowed:
 				ui.Icon(c, icCheck).FontSize(13).TextColor(palette.green)
@@ -105,7 +105,7 @@ func filled(c *ui.Context, key any, bg, fg ui.Color) ui.Element {
 // composer holds nothing: ⌘⏎ allows it, as it would send a draft, and ⇧⌘D
 // denies it.
 func (a *app) approvalKeys(c *ui.Context, t *thread) {
-	if t.pending() == nil || a.cmdkOpen || strings.TrimSpace(a.draft) != "" || len(a.attachments) > 0 {
+	if t.pending() == nil || strings.TrimSpace(a.draft) != "" || len(a.attachments) > 0 {
 		return
 	}
 	switch {
@@ -129,7 +129,7 @@ func (a *app) decide(t *thread, d decision) {
 		t.finish()
 		return
 	}
-	t.status, t.age = statusWorking, "now"
+	t.startTurn()
 	a.listFor(t).ScrollToEnd()
 	a.play(t, approved)
 }

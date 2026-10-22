@@ -18,12 +18,12 @@ func (a *app) installMenu() {
 			}
 		}
 	}
-	theme := func(i int) func(*mygo.MenuItem, *mygo.Window) {
-		return do(func() { a.settings.theme = i })
+	theme := func(name string) func(*mygo.MenuItem, *mygo.Window) {
+		return do(func() { a.settings.theme = name })
 	}
 	var appearance []*mygo.MenuItem
-	for i, name := range themeNames() {
-		appearance = append(appearance, &mygo.MenuItem{Label: name, Type: mygo.MenuItemRadio, Checked: a.settings.theme == i, Click: theme(i)})
+	for _, name := range themeNames() {
+		appearance = append(appearance, &mygo.MenuItem{Label: name, Type: mygo.MenuItemRadio, Checked: a.settings.theme == name, Click: theme(name)})
 	}
 	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
 		{Role: mygo.RoleAppMenu},

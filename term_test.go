@@ -16,7 +16,7 @@ func TestRealTerminal(t *testing.T) {
 	if err := terminal.Load(); err != nil {
 		t.Skip("libghostty-vt unavailable:", err)
 	}
-	term, err := terminal.New(terminal.Options{Command: []string{"/bin/sh"}, Dir: projectDir("~/Projects/t3-mygo"), Theme: themes[1].terminal()})
+	term, err := terminal.New(terminal.Options{Command: []string{"/bin/sh"}, Dir: projectDir("~/Projects/t3-mygo"), Theme: themeFor("Dark", true).terminal()})
 	if err != nil {
 		t.Fatal(err)
 	}

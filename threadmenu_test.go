@@ -126,3 +126,12 @@ func TestArchiveRestore(t *testing.T) {
 		t.Error("restored thread is not back in its project")
 	}
 }
+
+func indexOf(ts []*thread, t *thread) int {
+	for i, x := range ts {
+		if x == t {
+			return i
+		}
+	}
+	return -1
+}

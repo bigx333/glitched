@@ -28,6 +28,16 @@ func TestPaletteCommands(t *testing.T) {
 	if a.cmdkOpen || a.selected != "t4" || !a.showDiff {
 		t.Errorf("⌘↩: open %v, selected %q, diff %v", a.cmdkOpen, a.selected, a.showDiff)
 	}
+	// ⌘↩ in the palette is the palette's: it doesn't reach the approval
+	// behind it.
+	a.selected = "t2"
+	a.openCommandPalette()
+	tt.Frame()
+	tt.Type("websocket")
+	tt.Key(ui.Cmd, ui.KeyEnter)
+	if _, th := a.current(); th.id != "t4" || a.projects[0].threads[1].pending() == nil {
+		t.Errorf("⌘↩ in the palette reached the approval behind it")
+	}
 
 	a.openCommandPalette()
 	tt.Frame()

@@ -84,18 +84,22 @@ func (a *app) settle(c *ui.Context, t *thread, from category) {
 // archive moves the thread out of its project, to the archived ones,
 // which remember where it came from.
 func (a *app) archive(t *thread) {
-	t.home = a.drop(t)
+	t.home, t.age = a.drop(t), "now"
 	a.archived = append([]*thread{t}, a.archived...)
 }
 
-// drop takes the thread out of its project, which it returns. Was it the
-// one open, the first thread left opens, or a new one where none is.
+// drop takes the thread out of its project, which it returns, and ends
+// any turn the agent was taking on it. Was it the one open, the first
+// thread left opens, or a new one where none is.
 func (a *app) drop(t *thread) *project {
+	t.turn.Add(1)
 	var home *project
 	for _, p := range a.projects {
-		if i := indexOf(p.threads, t); i >= 0 {
-			p.threads = append(p.threads[:i:i], p.threads[i+1:]...)
-			home = p
+		if n := len(p.threads); n > 0 {
+			p.threads = remove(p.threads, t)
+			if len(p.threads) < n {
+				home = p
+			}
 		}
 	}
 	if a.selected != t.id {
@@ -109,15 +113,6 @@ func (a *app) drop(t *thread) *project {
 	}
 	a.startThread(home)
 	return home
-}
-
-func indexOf(ts []*thread, t *thread) int {
-	for i, x := range ts {
-		if x == t {
-			return i
-		}
-	}
-	return -1
 }
 
 // deleteAlert asks before a thread is deleted, when the settings say to.

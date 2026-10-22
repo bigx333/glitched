@@ -66,8 +66,8 @@ func TestSettingsPages(t *testing.T) {
 	if err := tt.Click("Light"); err != nil {
 		t.Fatal(err)
 	}
-	if a.settings.theme != 1 {
-		t.Errorf("theme %d", a.settings.theme)
+	if a.settings.theme != "Light" {
+		t.Errorf("theme %q", a.settings.theme)
 	}
 	if err := tt.Click("Back to app"); err != nil {
 		t.Fatal(err)
@@ -431,8 +431,13 @@ func TestDiffPanel(t *testing.T) {
 	}
 	tt.SetSize(1320, 860)
 	tt.Frame()
-	if a.diffLayout != editor.DiffUnified {
-		t.Error("the layout stayed split as the room went")
+	if a.layout() != editor.DiffUnified || a.diffLayout != editor.DiffSplit {
+		t.Error("the diff should show unified while the room is short, and keep the Split choice")
+	}
+	tt.SetSize(1600, 900)
+	tt.Frame()
+	if a.layout() != editor.DiffSplit {
+		t.Error("the Split choice didn't come back with the room")
 	}
 }
 
