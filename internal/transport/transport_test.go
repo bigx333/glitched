@@ -953,3 +953,83 @@ func TestCallWaitsBehindAnotherWriteOnlyUntilItsDeadline(t *testing.T) {
 		t.Fatalf("ran %v", got)
 	}
 }
+
+func TestCloseEndsTheClientsCallsAndStreams(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	fake := &fakeEndpoint{env: api.Environment{ID: api.NewID()}, closed: make(chan api.ID, 1)}
+	g := &gated{Loopback: start(t, "tcp", &Server{Endpoint: fake})}
+	c := NewEndpointClient(g, api.ID{})
+	thread := api.NewID()
+	st, err := c.Open(ctx, api.Subscription{Thread: thread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked := make(chan error, 1)
+	go func() {
+		_, err := c.Read(ctx, api.Query{Thread: blocks})
+		blocked <- err
+	}()
+	for range 5 {
+		if _, err := st.Next(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-g.conn().closed:
+	default:
+		t.Fatal("Close returned with the socket still open")
+	}
+	if _, err := st.Next(ctx); !errors.Is(err, errClosed) {
+		t.Fatalf("stream after Close: %v", err)
+	}
+	if err := <-blocked; !errors.Is(err, errClosed) {
+		t.Fatalf("call in flight at Close: %v", err)
+	}
+	if _, err := c.Info(ctx); !errors.Is(err, errClosed) {
+		t.Fatalf("call after Close: %v", err)
+	}
+	select {
+	case got := <-fake.closed:
+		if got != thread {
+			t.Fatalf("server closed %v", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("the server never closed the stream of a closed client")
+	}
+}
+
+func TestIdleSocketCloses(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	g := &gated{Loopback: start(t, "tcp", &Server{Endpoint: &fakeEndpoint{}})}
+	c := NewEndpointClient(g, api.ID{})
+	c.c.idleAfter = 50 * time.Millisecond
+
+	st, err := c.Open(ctx, api.Subscription{Thread: api.NewID()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := g.conn()
+	select {
+	case <-first.closed:
+		t.Fatal("a socket with an open stream was closed as idle")
+	case <-time.After(200 * time.Millisecond):
+	}
+	st.Close()
+	select {
+	case <-first.closed:
+	case <-ctx.Done():
+		t.Fatal("a socket with no calls or streams stayed open")
+	}
+	if _, err := c.Info(ctx); err != nil {
+		t.Fatalf("a call after the idle close: %v", err)
+	}
+	if g.conn() == first {
+		t.Fatal("the call after the idle close did not dial again")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -16,15 +17,19 @@ import (
 )
 
 // conn dials one socket on first use and again after it drops. Calls in
-// flight on a dropped socket fail; nothing is resent.
+// flight on a dropped socket fail; nothing is resent. A socket no call or
+// stream has used for idleAfter is closed, so a client its owner dropped
+// without Close does not hold one forever.
 type conn struct {
 	t         Transport
 	machine   api.ID
 	keepalive keepalive
+	idleAfter time.Duration
 
 	mu      sync.Mutex
 	sock    *socket
 	dialing *dialing // nil unless a dial is in flight
+	closed  bool
 }
 
 // dialing is one dial that every caller needing a socket waits on, each
@@ -38,11 +43,33 @@ type dialing struct {
 }
 
 func dial(t Transport, machine api.ID) *conn {
-	return &conn{t: t, machine: machine, keepalive: defaultKeepalive}
+	return &conn{t: t, machine: machine, keepalive: defaultKeepalive, idleAfter: time.Minute}
+}
+
+var errClosed = errors.New("transport: client closed")
+
+func (c *conn) close() error {
+	c.mu.Lock()
+	c.closed = true
+	s, d := c.sock, c.dialing
+	c.sock, c.dialing = nil, nil
+	c.mu.Unlock()
+	if d != nil {
+		d.stop()
+		<-d.done
+	}
+	if s != nil {
+		s.close(errClosed)
+	}
+	return nil
 }
 
 func (c *conn) socket(ctx context.Context) (*socket, error) {
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, errClosed
+	}
 	if s := c.sock; s != nil && s.ctx.Err() == nil {
 		c.mu.Unlock()
 		return s, nil
@@ -77,10 +104,11 @@ func (c *conn) dial(ctx context.Context, d *dialing) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.dialing != d {
-		// Every caller gave up, so none reads d.
+		// Every caller gave up, or the client closed.
 		if err == nil {
 			ws.CloseNow()
 		}
+		d.err = errClosed
 		return
 	}
 	c.dialing = nil
@@ -88,7 +116,7 @@ func (c *conn) dial(ctx context.Context, d *dialing) {
 		d.err = err
 		return
 	}
-	c.sock = newSocket(ws, c.keepalive)
+	c.sock = newSocket(ws, c.keepalive, c.idleAfter)
 	d.sock = c.sock
 }
 
@@ -115,26 +143,53 @@ func handshake(ctx context.Context, t Transport, machine api.ID) (*websocket.Con
 }
 
 type socket struct {
-	ws   *websocket.Conn
-	ctx  context.Context // done once the socket is dead
-	fail context.CancelCauseFunc
-	out  chan []byte // messages for the writer
+	ws        *websocket.Conn
+	ctx       context.Context // done once the socket is dead
+	fail      context.CancelCauseFunc
+	out       chan []byte // messages for the writer
+	idle      *time.Timer // runs while sinks is empty
+	idleAfter time.Duration
+	running   sync.WaitGroup
 
 	mu     sync.Mutex
 	nextID uint64
 	sinks  map[uint64]sink // nil once the socket is dead
 }
 
-func newSocket(ws *websocket.Conn, k keepalive) *socket {
+func newSocket(ws *websocket.Conn, k keepalive, idleAfter time.Duration) *socket {
 	// An Events page is up to maxPage events of any size; the server is
 	// the one this client chose to trust.
 	ws.SetReadLimit(-1)
 	ctx, fail := context.WithCancelCause(context.Background())
-	s := &socket{ws: ws, ctx: ctx, fail: fail, out: make(chan []byte), sinks: map[uint64]sink{}}
-	go s.read()
-	go s.write()
-	go k.run(ctx, ws)
+	s := &socket{ws: ws, ctx: ctx, fail: fail, out: make(chan []byte), idleAfter: idleAfter, sinks: map[uint64]sink{}}
+	s.idle = time.AfterFunc(idleAfter, s.closeIdle)
+	s.running.Go(s.read)
+	s.running.Go(s.write)
+	s.running.Go(func() { k.run(ctx, ws) })
 	return s
+}
+
+// close ends the socket with cause and returns once its goroutines have.
+func (s *socket) close(cause error) {
+	s.fail(cause)
+	s.ws.CloseNow()
+	s.idle.Stop()
+	s.running.Wait()
+}
+
+var errIdle = errors.New("transport: socket closed while idle")
+
+func (s *socket) closeIdle() {
+	s.mu.Lock()
+	idle := s.sinks != nil && len(s.sinks) == 0
+	if idle {
+		s.sinks = nil
+		s.fail(errIdle)
+	}
+	s.mu.Unlock()
+	if idle {
+		s.ws.CloseNow()
+	}
 }
 
 // A sink takes the messages for one id on the socket's read goroutine, so it
@@ -151,6 +206,7 @@ func (s *socket) add(k sink) (uint64, error) {
 	if s.sinks == nil {
 		return 0, context.Cause(s.ctx)
 	}
+	s.idle.Stop()
 	s.nextID++
 	s.sinks[s.nextID] = k
 	return s.nextID, nil
@@ -163,6 +219,9 @@ func (s *socket) forget(id uint64) bool {
 	defer s.mu.Unlock()
 	_, ok := s.sinks[id]
 	delete(s.sinks, id)
+	if ok && len(s.sinks) == 0 {
+		s.idle.Reset(s.idleAfter)
+	}
 	return ok
 }
 
@@ -279,11 +338,17 @@ func (c *conn) start(ctx context.Context, method string, in any, k sink) (*socke
 	if err != nil {
 		return nil, 0, err
 	}
-	s, err := c.socket(ctx)
-	if err != nil {
-		return nil, 0, err
+	var s *socket
+	var id uint64
+	for {
+		if s, err = c.socket(ctx); err != nil {
+			return nil, 0, err
+		}
+		// A socket that went idle after socket returned it is no failure.
+		if id, err = s.add(k); !errors.Is(err, errIdle) {
+			break
+		}
 	}
-	id, err := s.add(k)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -453,6 +518,9 @@ func NewEndpointClient(t Transport, machine api.ID) *EndpointClient {
 	return &EndpointClient{dial(t, machine)}
 }
 
+// Close ends the client's calls and streams and closes its socket.
+func (e *EndpointClient) Close() error { return e.c.close() }
+
 func (e *EndpointClient) Info(ctx context.Context) (api.Environment, error) {
 	var env api.Environment
 	return env, e.c.call(ctx, "info", struct{}{}, &env)
@@ -481,6 +549,9 @@ var _ hub.Client = (*HubClient)(nil)
 func NewHubClient(t Transport, machine api.ID) *HubClient {
 	return &HubClient{dial(t, machine)}
 }
+
+// Close ends the client's calls and streams and closes its socket.
+func (h *HubClient) Close() error { return h.c.close() }
 
 func (h *HubClient) Append(ctx context.Context, u api.Upload) (api.UploadAck, error) {
 	var ack api.UploadAck
