@@ -1,6 +1,10 @@
 package main
 
 import (
+	"slices"
+	"strconv"
+	"strings"
+
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 )
@@ -11,6 +15,8 @@ type command struct {
 	hint    string
 	icon    *ui.SVG
 	run     func()
+	// t is the thread a Threads command opens, with its diff on ⌘↩.
+	t *thread
 }
 
 func (a *app) openCommandPalette() {
@@ -26,27 +32,70 @@ func (a *app) toggleLightDark() {
 	}
 }
 
+// commands are what the palette offers for the query: the actions, then
+// the threads, the most recently active first. A query starting with >
+// keeps to the actions.
 func (a *app) commands() []command {
 	cmds := []command{
-		{"Actions", "New thread", "⌘N", icSquarePen, a.newThread},
-		{"Actions", "Toggle diff panel", "⌘D", icDiff, func() { a.showDiff = !a.showDiff }},
-		{"Actions", "Toggle terminal", "⌘J", icTerminal, func() { a.showTerminal = !a.showTerminal }},
-		{"Actions", "Toggle sidebar", "⌘B", icPanelLeft, func() { a.showSidebar = !a.showSidebar }},
-		{"Actions", "Toggle light / dark", "⇧⌘L", icPalette, a.toggleLightDark},
-		{"Actions", "Open settings", "⌘,", icSettings, func() { a.router.Push("/settings/general") }},
+		{"Actions", "New thread", "⌘N", icSquarePen, a.newThread, nil},
 	}
 	for _, p := range a.projects {
-		for _, t := range p.threads {
-			cmds = append(cmds, command{"Threads", t.title, p.name, icMessage, func() { a.select_(t.id) }})
+		cmds = append(cmds, command{"Actions", "New thread in " + p.name, "", icSquarePen, func() { a.startThread(p) }, nil})
+	}
+	cmds = append(cmds,
+		command{"Actions", "Switch model", "", icSparkles, func() { a.pickerOpen = true }, nil},
+		command{"Actions", "Toggle diff panel", "⌘D", icDiff, func() { a.showDiff = !a.showDiff }, nil},
+		command{"Actions", "Toggle terminal", "⌘J", icTerminal, func() { a.showTerminal = !a.showTerminal }, nil},
+		command{"Actions", "Toggle preview", "⇧⌘P", icGlobe, a.togglePreview, nil},
+		command{"Actions", "Toggle sidebar", "⌘B", icPanelLeft, func() { a.showSidebar = !a.showSidebar }, nil},
+		command{"Actions", "Toggle light / dark", "⇧⌘L", icPalette, a.toggleLightDark, nil},
+	)
+	for i, s := range settingsSections {
+		hint := ""
+		if i == 0 {
+			hint = "⌘,"
 		}
+		path := "/settings/" + s.path
+		cmds = append(cmds, command{"Actions", "Settings › " + s.label, hint, s.icon, func() { a.router.Push(path) }, nil})
+	}
+	query, actionsOnly := strings.CutPrefix(a.cmdkQuery, ">")
+	query = strings.TrimSpace(query)
+	if !actionsOnly {
+		var threads []command
+		for _, p := range a.projects {
+			for _, t := range p.threads {
+				threads = append(threads, command{"Threads", t.title, p.name, nil, func() { a.select_(t.id) }, t})
+			}
+		}
+		slices.SortStableFunc(threads, func(x, y command) int { return ageMinutes(x.t.age) - ageMinutes(y.t.age) })
+		cmds = append(cmds, threads...)
 	}
 	var shown []command
 	for _, cmd := range cmds {
-		if matches(cmd.label, a.cmdkQuery) || matches(cmd.hint, a.cmdkQuery) {
+		if matches(cmd.label, query) || matches(cmd.hint, query) {
 			shown = append(shown, cmd)
 		}
 	}
 	return shown
+}
+
+// ageMinutes reads an age as the sidebar shows it, "now", "12m", "2h",
+// "1d", "1w" or "1mo", in minutes.
+func ageMinutes(age string) int {
+	if age == "now" {
+		return 0
+	}
+	units := []struct {
+		suffix string
+		mins   int
+	}{{"mo", 30 * 24 * 60}, {"m", 1}, {"h", 60}, {"d", 24 * 60}, {"w", 7 * 24 * 60}}
+	for _, u := range units {
+		if n, ok := strings.CutSuffix(age, u.suffix); ok {
+			v, _ := strconv.Atoi(n)
+			return v * u.mins
+		}
+	}
+	return 0
 }
 
 // commandPalette is a sheet of glass over the blurred window. It's opened
@@ -85,9 +134,17 @@ func (a *app) commandPalette(c *ui.Context) {
 			if in.Changed() {
 				a.cmdkIndex = 0
 			}
-			if in.Submitted() && len(cmds) > 0 {
-				a.cmdkOpen = false
-				cmds[a.cmdkIndex].run()
+			if len(cmds) > 0 {
+				cmd := cmds[a.cmdkIndex]
+				switch {
+				case in.Submitted():
+					a.cmdkOpen = false
+					cmd.run()
+				case cmd.t != nil && c.Shortcut(ui.Cmd, ui.KeyEnter):
+					a.cmdkOpen = false
+					cmd.run()
+					a.showDiff, a.showPreview = true, false
+				}
 			}
 			kbd(c, "esc")
 		})
@@ -109,9 +166,17 @@ func (a *app) commandPalette(c *ui.Context) {
 					a.cmdkIndex = i
 				}
 				if r.Children(func() {
-					ui.Icon(c, cmd.icon).FontSize(14)
+					if cmd.t != nil {
+						// A thread's state and age, as the sidebar has them.
+						ui.Box(c).Size(14, 14).Center().Shrink(0).Children(func() { statusMark(c, cmd.t.status) })
+					} else {
+						ui.Icon(c, cmd.icon).FontSize(14)
+					}
 					ui.Text(c, cmd.label).SingleLine().Grow(1).Shrink(1)
 					ui.Text(c, cmd.hint).FontSize(11.5).TextColor(palette.faint)
+					if cmd.t != nil {
+						ui.Text(c, cmd.t.age).FontSize(11.5).TextColor(palette.faint).MinWidth(28).TextAlign(ui.End)
+					}
 				}).Clicked() {
 					a.cmdkOpen = false
 					cmd.run()
@@ -122,7 +187,24 @@ func (a *app) commandPalette(c *ui.Context) {
 				ui.Text(c, "No results").TextColor(palette.muted).Padding(24).TextAlign(ui.Center)
 			}
 		})
-
+		// The footer names the keys.
+		ui.Row(c).Gap(14).Padding(7, 16).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
+			hint := func(key, what string) {
+				ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+					kbd(c, key)
+					ui.Text(c, what).FontSize(11).TextColor(palette.muted)
+				})
+			}
+			hint("↑↓", "navigate")
+			hint("↩", "open")
+			hint("⌘↩", "open with diff")
+			ui.Spacer(c)
+			ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Type").FontSize(11).TextColor(palette.muted)
+				kbd(c, ">")
+				ui.Text(c, "for actions").FontSize(11).TextColor(palette.muted)
+			})
+		})
 	})
 }
 

@@ -558,7 +558,7 @@ func (a *app) sendButton(c *ui.Context, t *thread) {
 			ui.Icon(c, icArrowUp).FontSize(16)
 		}
 	})
-	if send.Clicked() || c.Shortcut(ui.Cmd, ui.KeyEnter) {
+	if send.Clicked() || !a.cmdkOpen && c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		if working {
 			t.status = statusIdle
 			t.stop.Store(true)

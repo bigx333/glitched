@@ -105,7 +105,7 @@ func filled(c *ui.Context, key any, bg, fg ui.Color) ui.Element {
 // composer holds nothing: ⌘⏎ allows it, as it would send a draft, and ⇧⌘D
 // denies it.
 func (a *app) approvalKeys(c *ui.Context, t *thread) {
-	if t.pending() == nil || strings.TrimSpace(a.draft) != "" || len(a.attachments) > 0 {
+	if t.pending() == nil || a.cmdkOpen || strings.TrimSpace(a.draft) != "" || len(a.attachments) > 0 {
 		return
 	}
 	switch {

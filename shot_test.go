@@ -54,6 +54,7 @@ func TestShot(t *testing.T) {
 	tt := ui.NewTester(a.view, w, 860)
 	if os.Getenv("CMDK") != "" {
 		a.openCommandPalette()
+		a.cmdkQuery = os.Getenv("CMDKQ")
 	}
 	if e := os.Getenv("PICKER"); e != "" {
 		a.pickerOpen, a.effort, a.fast = true, e, os.Getenv("FAST") != ""
