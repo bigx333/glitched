@@ -25,6 +25,8 @@ const (
 
 func (a *app) chatPage(c *ui.Context) {
 	t := a.current()
+	// What the chat shows is read, whenever it comes to show it.
+	a.backend.MarkRead(t.Thread)
 	es := entriesOf(t)
 	// The layout makes room for a panel at once, so the chat rewraps
 	// once; the panel itself slides a little in from its edge as it fades.

@@ -326,7 +326,6 @@ func failed(t thread) bool {
 // select_ shows the thread in the chat, read.
 func (a *app) select_(t thread) {
 	a.selected = t.id()
-	a.backend.MarkRead(t.Thread)
 	a.follow()
 	if a.router.Path() != "/" {
 		a.router.Push("/")
@@ -372,11 +371,7 @@ func (a *app) changed() {
 			if !known || !ended.After(seen) {
 				continue
 			}
-			t := thread{e, th}
-			if id == a.selected && a.router.Path() == "/" {
-				a.backend.MarkRead(t.Thread)
-			}
-			a.notifyFinished(t)
+			a.notifyFinished(thread{e, th})
 		}
 	}
 }

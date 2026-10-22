@@ -59,6 +59,31 @@ func TestView(t *testing.T) {
 	}
 }
 
+// A turn that ends while Settings shows leaves the thread unread until the
+// chat shows it again.
+func TestReturningFromSettingsReadsTheThreadShown(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	id := seed(t, d, "/work", "Shown")
+	h := start(t, dir)
+	th := h.thread("Shown")
+	h.a.select_(th)
+	h.until("its transcript", func() bool { return th.Transcript != nil })
+	h.a.router.Push("/settings/general")
+	h.tt.Frame()
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: "again", Mode: api.AfterActive}}); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the turn over, unread, behind Settings", func() bool {
+		return th.View.LastTurn != nil && !th.View.Working() && h.a.backend.Unread(th.Thread)
+	})
+	h.click("Back to app")
+	h.tt.Advance(time.Second)
+	if h.a.backend.Unread(th.Thread) {
+		t.Fatalf("back from Settings the thread shown is unread: %q", h.tt.Texts())
+	}
+}
+
 // Sending in the draft creates the thread on this machine, in its
 // workspace, and its turn streams in until it asks for an approval.
 func TestSendStartsAThread(t *testing.T) {
