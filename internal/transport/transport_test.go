@@ -1062,3 +1062,25 @@ func TestOversizedRequestLeavesTheSocketAlone(t *testing.T) {
 		t.Fatalf("dialed %d sockets, want 1", n)
 	}
 }
+
+// panics is an Endpoint whose Submit panics.
+type panics struct{ fakeEndpoint }
+
+func (*panics) Submit(context.Context, api.Command) (api.Receipt, error) { panic("submit is broken") }
+
+func TestPanickingHandlerAnswersWithAnError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ep := &panics{fakeEndpoint{env: api.Environment{ID: api.NewID()}}}
+	d := &dialer{Loopback: start(t, "unix", &Server{Endpoint: ep})}
+	c := NewEndpointClient(d, api.ID{})
+	if _, err := c.Submit(ctx, api.Command{ID: api.NewID(), Body: api.TurnInterrupt{}}); err == nil || errors.Is(err, errLost) {
+		t.Fatalf("submit to a panicking handler: %v, want the server's error", err)
+	}
+	if env, err := c.Info(ctx); err != nil || env != ep.env {
+		t.Fatalf("info after the panic: %+v %v", env, err)
+	}
+	if n := len(d.dialed()); n != 1 {
+		t.Fatalf("dialed %d sockets, want 1", n)
+	}
+}

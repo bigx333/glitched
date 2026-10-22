@@ -3,9 +3,12 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -149,6 +152,12 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 				delete(live, req.ID)
 				mu.Unlock()
 				stop()
+			}()
+			defer func() {
+				if p := recover(); p != nil {
+					slog.Error("transport: handler panicked", "method", req.Method, "panic", p, "stack", string(debug.Stack()))
+					o.send(response{Error: &wireError{Code: "internal", Message: fmt.Sprintf("%s panicked: %v", req.Method, p)}})
+				}
 			}()
 			h(callCtx, req.Params, o)
 		})
