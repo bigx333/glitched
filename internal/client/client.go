@@ -88,7 +88,7 @@ func (m *Manager) Close() error {
 	// A save that was under way posted whether it failed too late to tell.
 	var err error
 	if m.unsaved || m.saving {
-		_, err = m.edit(func(f *saved) { f.see(m.saved.Seen) })
+		_, err = m.edit(func(f *saved) error { f.see(m.saved.Seen); return nil })
 	}
 	if m.local != nil {
 		err = errors.Join(err, m.local.err)

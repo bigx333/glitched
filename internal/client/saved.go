@@ -32,18 +32,16 @@ type saved struct {
 func (m *Manager) savedPath() string { return filepath.Join(m.cfg.Dir, "gui.json") }
 
 // edit changes gui.json for every GUI on this Dir: under gui.json.lock it
-// reads what the others saved, applies change and replaces the file.
-func (m *Manager) edit(change func(*saved)) (saved, error) {
-	return jsonfile.Edit(m.savedPath(), func(s *saved) error {
-		change(s)
-		return nil
-	})
+// reads what the others saved, applies change and replaces the file,
+// unless change fails.
+func (m *Manager) edit(change func(*saved) error) (saved, error) {
+	return jsonfile.Edit(m.savedPath(), change)
 }
 
 // editServers saves a change to the servers, then makes the envs follow
 // the servers gui.json lists, which another GUI may have changed too.
 // renew names one to reconnect even if unchanged.
-func (m *Manager) editServers(renew string, change func(*saved)) error {
+func (m *Manager) editServers(renew string, change func(*saved) error) error {
 	s, err := m.edit(change)
 	if err != nil {
 		return err
@@ -118,26 +116,31 @@ func (m *Manager) AddServer(s Server, done func(error)) {
 	})
 }
 
-// list saves s to gui.json, unless another env reaches its engine.
+// list saves s to gui.json, unless another env reaches its engine, or
+// gui.json lists it under another label, as another GUI may have.
 func (m *Manager) list(s Server) error {
-	if h := m.holder(s.Engine); h != nil && (h.Kind == Local || h.Name != s.Label) {
-		if h.Kind == Local {
+	return m.editServers(s.Label, func(f *saved) error {
+		if h := m.holder(s.Engine); h != nil && h.Kind == Local {
 			return fmt.Errorf("client: %s is this machine's engine", s.Label)
+		} else if h != nil && h.Name != s.Label {
+			return fmt.Errorf("client: %s is already listed as %s", s.Label, h.Name)
 		}
-		return fmt.Errorf("client: %s is already listed as %s", s.Label, h.Name)
-	}
-	return m.editServers(s.Label, func(f *saved) {
+		if i := slices.IndexFunc(f.Servers, func(o Server) bool { return !s.Engine.IsZero() && o.Engine == s.Engine && o.Label != s.Label }); i >= 0 {
+			return fmt.Errorf("client: %s is already listed as %s", s.Label, f.Servers[i].Label)
+		}
 		if i := slices.IndexFunc(f.Servers, func(o Server) bool { return o.Label == s.Label }); i >= 0 {
 			f.Servers[i] = s
 		} else {
 			f.Servers = append(f.Servers, s)
 		}
+		return nil
 	})
 }
 
 func (m *Manager) RemoveServer(label string) error {
-	return m.editServers("", func(f *saved) {
+	return m.editServers("", func(f *saved) error {
 		f.Servers = slices.DeleteFunc(f.Servers, func(o Server) bool { return o.Label == label })
+		return nil
 	})
 }
 
@@ -194,7 +197,7 @@ func (m *Manager) saveSeen() {
 	m.saving, m.unsaved = true, false
 	seen := maps.Clone(m.saved.Seen)
 	m.wg.Go(func() {
-		s, err := m.edit(func(f *saved) { f.see(seen) })
+		s, err := m.edit(func(f *saved) error { f.see(seen); return nil })
 		m.post(m.ctx, func() {
 			m.saving = false
 			if err != nil {

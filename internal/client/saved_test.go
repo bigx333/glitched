@@ -172,6 +172,24 @@ func TestAddingAServerListedAlreadyIsRefused(t *testing.T) {
 	online(t, g, m.Envs()[1])
 }
 
+// A GUI that read gui.json before another GUI on its dir listed an engine
+// still refuses to list that engine again.
+func TestAnEngineAnotherGUIListedIsRefused(t *testing.T) {
+	dir := stateDir(t)
+	a, ga := manager(t, dir)
+	b, gb := manager(t, dir)
+	box := paired(t, "gui", "again")
+	if err := add(t, ga, a, box.server("box", "gui")); err != nil {
+		t.Fatal(err)
+	}
+	if err := add(t, gb, b, box.server("box-again", "again")); err == nil || !strings.Contains(err.Error(), "box-again is already listed as box") {
+		t.Errorf("the second GUI adding box-again said %v, want it listed already", err)
+	}
+	if s, err := savedIn(dir); err != nil || !slices.Equal(serverLabels(s.Servers), []string{"box"}) {
+		t.Fatalf("gui.json lists %v (%v), want box alone", serverLabels(s.Servers), err)
+	}
+}
+
 // AddServer returns before the server answers, so the GUI's thread goes on
 // drawing while it waits.
 func TestAddingAServerLeavesThePostThreadFree(t *testing.T) {
