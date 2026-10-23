@@ -190,6 +190,27 @@ func TestAnEngineAnotherGUIListedIsRefused(t *testing.T) {
 	}
 }
 
+// A server removed while it is re-paired stays removed, and the re-pair
+// says so.
+func TestAServerRemovedWhileRepairedStaysRemoved(t *testing.T) {
+	dir := stateDir(t)
+	m, g := manager(t, dir)
+	box := paired(t, "gui", "again")
+	if err := add(t, g, m, box.server("box", "gui")); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	done := false
+	m.AddServer(box.server("box", "again"), func(e error) { err, done = e, true })
+	if err := m.RemoveServer("box"); err != nil {
+		t.Fatal(err)
+	}
+	g.until(t, "the re-pair to answer", func() bool { return done })
+	if s, e := savedIn(dir); e != nil || len(s.Servers) != 0 || len(m.Envs()) != 1 || err == nil {
+		t.Fatalf("after the re-pair said %v gui.json lists %v (%v), want none", err, serverLabels(s.Servers), e)
+	}
+}
+
 // AddServer returns before the server answers, so the GUI's thread goes on
 // drawing while it waits.
 func TestAddingAServerLeavesThePostThreadFree(t *testing.T) {
@@ -555,7 +576,7 @@ func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 	for _, m := range []*Manager{a, b} {
 		wg.Go(func() {
 			for i := range 20 {
-				if err := m.list(Server{Label: fmt.Sprintf("%p-%d", m, i), Addr: "127.0.0.1:1"}); err != nil {
+				if err := m.list(Server{Label: fmt.Sprintf("%p-%d", m, i), Addr: "127.0.0.1:1"}, false); err != nil {
 					t.Error(err)
 				}
 			}
@@ -586,7 +607,7 @@ func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 	if a.Envs()[1] != env || a.Servers()[0].Label != gone {
 		t.Fatal("marking a thread read made the envs follow gui.json, want only the read mark saved")
 	}
-	if err := a.list(Server{Label: "late", Addr: "127.0.0.1:1"}); err != nil {
+	if err := a.list(Server{Label: "late", Addr: "127.0.0.1:1"}, false); err != nil {
 		t.Fatal(err)
 	}
 	s, err := savedIn(dir)
