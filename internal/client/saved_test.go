@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -166,12 +167,11 @@ func TestRepairingATokenKeepsTheServersThreads(t *testing.T) {
 	g.until(t, "the retry landed", func() bool { return len(box.Threads[id].Pending) == 0 }, func() string { return describePending(box.Threads[id].Pending) })
 }
 
-// relay forwards a port to addr until cut, as a name a server answers to
-// does until its DNS goes.
+// relay forwards a port to addr once opened, as a name a server answers to
+// does once its DNS points there.
 type relay struct {
-	ln    net.Listener
-	mu    sync.Mutex
-	conns []net.Conn
+	ln   net.Listener
+	open atomic.Bool
 }
 
 func newRelay(t *testing.T, addr string) *relay {
@@ -186,34 +186,94 @@ func newRelay(t *testing.T, addr string) *relay {
 			if err != nil {
 				return
 			}
+			if !r.open.Load() {
+				c.Close()
+				continue
+			}
 			u, err := net.Dial("tcp", addr)
 			if err != nil {
 				c.Close()
 				continue
 			}
-			r.mu.Lock()
-			r.conns = append(r.conns, c, u)
-			r.mu.Unlock()
 			go func() { io.Copy(u, c); u.Close() }()
 			go func() { io.Copy(c, u); c.Close() }()
 		}
 	}()
-	t.Cleanup(r.cut)
+	t.Cleanup(func() { ln.Close() })
 	return r
 }
 
-func (r *relay) cut() {
-	r.ln.Close()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, c := range r.conns {
-		c.Close()
+// list writes servers to gui.json in dir, as another GUI, or this one
+// before the engines changed, saved them.
+func list(t *testing.T, dir string, servers ...Server) {
+	t.Helper()
+	if _, err := jsonfile.Edit(filepath.Join(dir, "gui.json"), func(s *saved) error {
+		s.Servers = servers
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
-// A server added under two labels shows through the one that still reaches
-// it, with the commands that failed on the other.
-func TestAnEngineShowsThroughTheLabelThatReachesIt(t *testing.T) {
+func env(m *Manager, name string) *Env {
+	i := slices.IndexFunc(m.Envs(), func(e *Env) bool { return e.Name == name })
+	if i < 0 {
+		return nil
+	}
+	return m.Envs()[i]
+}
+
+// One engine listed under several labels, one of them this machine's, shows
+// its threads once, by the env listed first. The others say which env that
+// is, and show none of the threads, until it goes.
+func TestAServerListedTwiceShowsNoneOfItsThreads(t *testing.T) {
+	dir := stateDir(t)
+	self, err := daemon.Pair(dir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	here := engine(t, dir, "127.0.0.1:0")
+	rdir := stateDir(t)
+	token, err := daemon.Pair(rdir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := engine(t, rdir, "127.0.0.1:0")
+	addr := d.Addrs()[0].String()
+	there := api.NewID()
+	if _, err := d.Endpoint().Submit(timeout(t), api.Command{ID: api.NewID(), Target: there, Body: api.ThreadCreate{Workspace: "/srv", Title: "on the box", Model: fakeModel}}); err != nil {
+		t.Fatal(err)
+	}
+	list(t, dir,
+		Server{Label: "self", Addr: here.Addrs()[0].String(), Token: self},
+		Server{Label: "box", Addr: addr, Token: token},
+		Server{Label: "box-again", Addr: addr, Token: token})
+	m, g := manager(t, dir)
+	local, box := m.Envs()[0], env(m, "box")
+	online(t, g, local)
+	online(t, g, box)
+	for name, of := range map[string]string{"self": local.Name, "box-again": "box"} {
+		e := env(m, name)
+		g.until(t, name+" a duplicate", func() bool { return e.Status == Status(Duplicate{Of: of}) }, func() string { return describeStatus(e.Status) })
+		if len(e.Threads) != 0 {
+			t.Fatalf("%s, a duplicate of %s, shows %d threads, want none", name, of, len(e.Threads))
+		}
+	}
+	if box.Threads[there] == nil {
+		t.Fatal("box doesn't show its thread")
+	}
+
+	if err := m.RemoveServer("box"); err != nil {
+		t.Fatal(err)
+	}
+	again := env(m, "box-again")
+	online(t, g, again)
+	g.until(t, "box-again's thread", func() bool { return again.Threads[there] != nil })
+}
+
+// A server listed first that comes to reach the engine of one listed after
+// it takes the engine; the one after shows none of its threads any more.
+func TestTheServerListedFirstKeepsItsEngine(t *testing.T) {
 	rdir := stateDir(t)
 	token, err := daemon.Pair(rdir, "gui")
 	if err != nil {
@@ -226,39 +286,19 @@ func TestAnEngineShowsThroughTheLabelThatReachesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	dns := newRelay(t, addr)
-	m, g := manager(t, stateDir(t))
-	for _, s := range []Server{{Label: "box", Addr: dns.ln.Addr().String(), Token: token}, {Label: "box-ip", Addr: addr, Token: token}} {
-		if err := m.AddServer(s); err != nil {
-			t.Fatal(err)
-		}
-		online(t, g, m.ServerEnv(s.Label))
-	}
-	box, ip := m.ServerEnv("box"), m.ServerEnv("box-ip")
-	if !slices.Contains(m.Envs(), box) || ip.Same != box {
-		t.Fatalf("the envs are %v, want box showing the engine", envNames(m.Envs()))
-	}
-	failed := api.NewID()
-	box.Threads[there].Pending = append(box.Threads[there].Pending, Pending{Command: failed, Body: api.MessageDispatch{Text: "not sent"}, Err: errNoEngine})
+	dir := stateDir(t)
+	list(t, dir, Server{Label: "box", Addr: dns.ln.Addr().String(), Token: token}, Server{Label: "box-ip", Addr: addr, Token: token})
+	m, g := manager(t, dir)
+	box, ip := env(m, "box"), env(m, "box-ip")
+	online(t, g, ip)
+	g.until(t, "box-ip's thread", func() bool { return ip.Threads[there] != nil })
 
-	dns.cut()
-	g.until(t, "box offline", func() bool { _, off := box.Status.(Offline); return off })
-	if envs := m.Envs(); slices.Contains(envs, box) || !slices.Contains(envs, ip) || box.Same != ip {
-		t.Fatalf("with box offline and box-ip online the envs are %v, want box-ip", envNames(envs))
+	dns.open.Store(true)
+	online(t, g, box)
+	g.until(t, "box-ip a duplicate of box", func() bool { return ip.Status == Status(Duplicate{Of: "box"}) }, func() string { return describeStatus(ip.Status) })
+	if len(ip.Threads) != 0 || box.Threads[there] == nil {
+		t.Fatalf("box shows %d threads and box-ip %d, want box the engine's and box-ip none", len(box.Threads), len(ip.Threads))
 	}
-	if p := ip.Threads[there].Pending; len(p) != 1 || p[0].Command != failed {
-		t.Fatalf("box-ip's thread has rows %s, want the message that failed on box", describePending(p))
-	}
-	m.Retry(ip, there, failed)
-	m.Send(ip, there, "through box-ip", api.AfterActive)
-	g.until(t, "both landed through box-ip", func() bool { return len(ip.Threads[there].Pending) == 0 }, func() string { return describePending(ip.Threads[there].Pending) })
-}
-
-func envNames(es []*Env) []string {
-	var s []string
-	for _, e := range es {
-		s = append(s, e.Name)
-	}
-	return s
 }
 
 // Adding a listed server again reconnects it while commands are on their

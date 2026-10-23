@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -228,6 +230,19 @@ func machines(t *testing.T) *harness {
 	h.thread("Retry failed invoice webhooks")
 	h.tt.Advance(time.Second)
 	return h
+}
+
+// listServers writes servers to gui.json in dir, as the app saved them
+// before their engines changed.
+func listServers(t *testing.T, dir string, servers ...client.Server) {
+	t.Helper()
+	b, err := json.Marshal(map[string][]client.Server{"servers": servers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "gui.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // texts is what the timeline shows of a thread's entries, for a failure.

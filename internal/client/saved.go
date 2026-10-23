@@ -53,7 +53,9 @@ func (m *Manager) editServers(renew string, change func(*saved)) error {
 }
 
 // sync makes the remote envs the servers gui.json lists, in its order. An
-// env whose entry changed, or named renew, reconnects and keeps its threads.
+// env whose entry changed, or named renew, reconnects and keeps its threads,
+// as does a duplicate no env listed before it reaches the engine of any
+// more.
 func (m *Manager) sync(renew string) {
 	envs := []*Env{m.envs[0]}
 	for _, s := range m.saved.Servers {
@@ -74,7 +76,11 @@ func (m *Manager) sync(renew string) {
 		}
 	}
 	m.envs = envs
-	m.dedupe()
+	for _, e := range envs[1:] {
+		if _, dup := e.Status.(Duplicate); dup && m.holder(e.ID) == e {
+			m.redial(e, e.server)
+		}
+	}
 }
 
 // Servers are the remotes gui.json listed when this manager last read it,

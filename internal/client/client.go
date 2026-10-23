@@ -49,7 +49,6 @@ type Manager struct {
 	local  *local
 
 	envs  []*Env
-	shown []*Env // envs, each engine once
 	saved saved
 	// saving is whether a goroutine is saving the read marks; unsaved,
 	// whether some are marked that no save has taken.
@@ -96,67 +95,19 @@ func (m *Manager) Close() error {
 	return err
 }
 
-// Envs is the local environment, then the remotes, each engine once, by
-// the env dedupe picks among those reaching it. The slice is the
-// manager's: read it, don't change it.
-func (m *Manager) Envs() []*Env { return m.shown }
+// Envs is the local environment, then the remotes, in gui.json's order.
+// The slice is the manager's: read it, don't change it.
+func (m *Manager) Envs() []*Env { return m.envs }
 
-// ServerEnv is the env of the server labelled label, shown or not.
-func (m *Manager) ServerEnv(label string) *Env {
-	if i := m.server(label); i >= 0 {
+// holder is the first env listed that reaches engine id, which shows it.
+func (m *Manager) holder(id api.ID) *Env {
+	if id.IsZero() {
+		return nil
+	}
+	if i := slices.IndexFunc(m.envs, func(e *Env) bool { return e.ID == id }); i >= 0 {
 		return m.envs[i]
 	}
 	return nil
-}
-
-// dedupe shows each engine once, as a server that is this machine's
-// engine, or another server's under another label. The env showing an
-// engine goes on showing it unless it is down while another reaching it is
-// online. The others hand it their commands, which show and retry there.
-func (m *Manager) dedupe() {
-	rank := func(e *Env) int {
-		r := 0
-		if e.Status == Status(Online{}) {
-			r += 2
-		}
-		if slices.Contains(m.shown, e) {
-			r++
-		}
-		return r
-	}
-	best := map[api.ID]*Env{}
-	for _, e := range m.envs {
-		if b := best[e.ID]; !e.ID.IsZero() && (b == nil || rank(e) > rank(b)) {
-			best[e.ID] = e
-		}
-	}
-	m.shown = nil
-	for _, e := range m.envs {
-		e.Same = nil
-		if b := best[e.ID]; b != nil && b != e {
-			e.Same = b
-			m.adopt(b, e)
-			continue
-		}
-		m.shown = append(m.shown, e)
-	}
-}
-
-// adopt moves the commands on from's threads to the same threads of e,
-// and from's threads that e lacks.
-func (m *Manager) adopt(e, from *Env) {
-	for id, th := range from.Threads {
-		to := e.Threads[id]
-		if to == nil {
-			th.unfollow()
-			e.Threads[id] = th
-			delete(from.Threads, id)
-			m.follow(e, th)
-			continue
-		}
-		to.Pending = append(to.Pending, th.Pending...)
-		th.Pending = nil
-	}
 }
 
 type Kind uint8
@@ -166,7 +117,8 @@ const (
 	Remote
 )
 
-// Status is sealed: Connecting, Online, Offline, Refused or Incompatible.
+// Status is sealed: Connecting, Online, Offline, Refused, Incompatible or
+// Duplicate.
 type Status interface{ status() }
 
 type Connecting struct{}
@@ -191,11 +143,17 @@ type Incompatible struct {
 	RetryAt      time.Time
 }
 
+// Duplicate: the engine is the one an env listed before this one reaches,
+// named Of, which shows it. None of this one's threads show. Later attempts
+// may find it another engine.
+type Duplicate struct{ Of string }
+
 func (Connecting) status()   {}
 func (Online) status()       {}
 func (Offline) status()      {}
 func (Refused) status()      {}
 func (Incompatible) status() {}
+func (Duplicate) status()    {}
 
 type protocolError struct{ theirs int }
 
@@ -203,15 +161,16 @@ func (e *protocolError) Error() string {
 	return fmt.Sprintf("client: the engine speaks protocol %d, this client %d", e.theirs, runtime.Protocol)
 }
 
+type duplicateError struct{ of string }
+
+func (e *duplicateError) Error() string { return "client: the engine is listed already, as " + e.of }
+
 type Env struct {
-	ID      api.ID // the host; zero until it first answers
+	ID      api.ID // the engine it last reached; zero until it first answers
 	Name    string // the host's name for the local engine, the server's label for a remote
 	Kind    Kind
 	Status  Status
 	Threads map[api.ID]*Thread
-	// Same is the env Envs shows for the engine this one reaches too,
-	// which holds this one's commands; nil while Envs shows this one.
-	Same *Env
 
 	ctx     context.Context // ends when the env is removed or the manager closes
 	stop    context.CancelFunc
@@ -310,6 +269,9 @@ func (m *Manager) link(ctx context.Context, e *Env, r route) {
 		if pe := (*protocolError)(nil); errors.As(err, &pe) {
 			s = Incompatible{Theirs: pe.theirs, Ours: runtime.Protocol, RetryAt: retry}
 		}
+		if de := (*duplicateError)(nil); errors.As(err, &de) {
+			s = Duplicate{Of: de.of}
+		}
 		m.post(ctx, func() { m.down(e, s) })
 		select {
 		case <-ctx.Done():
@@ -332,6 +294,9 @@ func (m *Manager) serve(ctx context.Context, e *Env, ep api.Endpoint, online fun
 	info, err := ep.Info(dial)
 	if err == nil && info.Protocol != runtime.Protocol {
 		err = &protocolError{info.Protocol}
+	}
+	if err == nil {
+		err = m.claim(dial, e, info.ID)
 	}
 	var st api.Stream
 	if err == nil {
@@ -361,7 +326,6 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 		if e.Kind == Local {
 			e.Name = info.Name
 		}
-		m.dedupe()
 		for _, w := range e.waiting {
 			w <- s
 		}
@@ -393,14 +357,45 @@ func (m *Manager) view(e *Env, v api.Thread) {
 	m.follow(e, th)
 }
 
-// down records why e has no session, which may hand its engine to another
-// env. The session's ctx already ended its thread subscriptions.
+// claim records that e reaches engine id, and fails if an env listed
+// before e reaches it too. An env listed after e that reaches it becomes
+// the duplicate.
+func (m *Manager) claim(ctx context.Context, e *Env, id api.ID) error {
+	got := make(chan error, 1)
+	m.post(ctx, func() {
+		e.ID = id
+		if h := m.holder(id); h != e {
+			got <- &duplicateError{h.Name}
+			return
+		}
+		for _, o := range m.envs[slices.Index(m.envs, e)+1:] {
+			if _, dup := o.Status.(Duplicate); o.ID == id && !dup {
+				o.unlink()
+				m.down(o, Duplicate{Of: e.Name})
+				m.connect(o, newRemote(o.server))
+			}
+		}
+		got <- nil
+	})
+	select {
+	case err := <-got:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// down records why e has no session. The session's ctx already ended its
+// thread subscriptions. A duplicate drops its threads, which the env
+// listed first shows.
 func (m *Manager) down(e *Env, s Status) {
 	e.Status, e.session = s, nil
 	for _, th := range e.Threads {
 		th.sub = nil
 	}
-	m.dedupe()
+	if _, dup := s.(Duplicate); dup {
+		clear(e.Threads)
+	}
 }
 
 // OpenThread follows a thread's events into its Transcript until

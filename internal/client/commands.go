@@ -182,9 +182,6 @@ func (m *Manager) next(ctx context.Context, e *Env) *session {
 }
 
 func (m *Manager) submitted(e *Env, cmd api.Command, err error) {
-	if e.Same != nil {
-		e = e.Same
-	}
 	th := e.Threads[cmd.Target]
 	if th == nil {
 		return

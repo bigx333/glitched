@@ -51,21 +51,15 @@ type project struct {
 }
 
 type projectKey struct {
-	// server is the server's engine, or its label until it first answers;
-	// "" on this machine. A project keeps its key when another label comes
-	// to show the engine.
-	server    string
+	server    string // the server's label; "" on this machine
 	workspace string
 }
 
 func keyOf(e *client.Env, workspace string) projectKey {
-	switch {
-	case e == nil || e.Kind == client.Local:
-		return projectKey{workspace: workspace}
-	case e.ID.IsZero():
+	if e != nil && e.Kind == client.Remote {
 		return projectKey{e.Name, workspace}
 	}
-	return projectKey{e.ID.String(), workspace}
+	return projectKey{workspace: workspace}
 }
 
 func (p *project) name() string { return filepath.Base(p.key.workspace) }
@@ -256,11 +250,8 @@ func (a *app) current() thread {
 	}
 	envs := a.backend.Envs()
 	d := a.fresh
-	if d.env != nil && d.env.Same != nil {
-		d.env = d.env.Same // another env shows its engine now
-	}
-	if d.env != nil && !slices.Contains(envs, d.env) {
-		d = draft{} // its server was removed
+	if d.env != nil && (!slices.Contains(envs, d.env) || duplicate(d.env)) {
+		d = draft{} // its server was removed, or shows another's engine
 	}
 	if d.env == nil && len(envs) > 0 {
 		d.env = envs[0]
@@ -269,6 +260,13 @@ func (a *app) current() thread {
 		d.workspace = homeDir()
 	}
 	return thread{d.env, &client.Thread{View: api.Thread{Title: "New thread", Workspace: d.workspace}}}
+}
+
+// duplicate is whether e reaches the engine an env listed before it shows,
+// so nothing starts on it.
+func duplicate(e *client.Env) bool {
+	_, dup := e.Status.(client.Duplicate)
+	return dup
 }
 
 func (a *app) projectOf(t thread) *project {

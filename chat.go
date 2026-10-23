@@ -614,6 +614,9 @@ func (a *app) workspaceButton(c *ui.Context, t thread) {
 	}
 	b.Menu(func(m *ui.Menu) {
 		for _, e := range a.backend.Envs() {
+			if duplicate(e) {
+				continue
+			}
 			home := homeDir()
 			if e.Kind == client.Remote {
 				home = "~"

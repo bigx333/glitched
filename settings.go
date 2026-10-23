@@ -305,7 +305,7 @@ func (a *app) servers(c *ui.Context) {
 		}
 		for _, s := range servers {
 			ui.Row(c).Key(s.Label).Padding(12, 12, 12, 16).Gap(12).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
-				col, status := envStatus(a.backend.ServerEnv(s.Label))
+				col, status := envStatus(a.serverEnv(s.Label))
 				ui.Box(c).Size(8, 8).Radius(4).Background(col)
 				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
 					ui.Text(c, s.Label).FontWeight(500)
@@ -343,11 +343,17 @@ func (a *app) servers(c *ui.Context) {
 	})
 }
 
+func (a *app) serverEnv(label string) *client.Env {
+	for _, e := range a.backend.Envs() {
+		if e.Kind == client.Remote && e.Name == label {
+			return e
+		}
+	}
+	return nil
+}
+
 // envStatus is how a machine's engine is reached, as a color and a word.
 func envStatus(e *client.Env) (ui.Color, string) {
-	if e.Same != nil {
-		return palette.muted, "Same engine as " + e.Same.Name
-	}
 	switch s := e.Status.(type) {
 	case client.Online:
 		return palette.green, "Online"
@@ -361,6 +367,8 @@ func envStatus(e *client.Env) (ui.Color, string) {
 			who = "engine"
 		}
 		return palette.red, fmt.Sprintf("Incompatible: %s speaks protocol %d, this app %d", who, s.Theirs, s.Ours)
+	case client.Duplicate:
+		return palette.red, "Same engine as " + s.Of + " — remove one"
 	}
 	return palette.amber, "Connecting…"
 }
