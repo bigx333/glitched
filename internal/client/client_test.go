@@ -429,6 +429,25 @@ func TestAnEngineOfAnotherProtocolIsNotShown(t *testing.T) {
 	}
 }
 
+type unnamedEngine struct{ *longThread }
+
+func (unnamedEngine) Info(context.Context) (api.Environment, error) {
+	return api.Environment{Name: "unnamed", Protocol: 1, Log: testLog}, nil
+}
+
+// An engine that reports no ID claims none, and shows its threads.
+func TestAnEngineWithNoIDShowsItsThreads(t *testing.T) {
+	dir := stateDir(t)
+	id := api.NewID()
+	serveOn(t, dir, unnamedEngine{&longThread{view: api.Thread{ID: id, Title: "unnamed"}}})
+	m, g := manager(t, dir)
+	env := m.Envs()[0]
+	online(t, g, env)
+	if env.Threads[id] == nil {
+		t.Fatalf("an engine with no ID shows %d threads, want its one", len(env.Threads))
+	}
+}
+
 // finishTurn creates a thread, sends it a message and approves the edit
 // the turn asks for, checking what the GUI sees on the way. It returns once
 // the turn is over and the transcript shows all of it.

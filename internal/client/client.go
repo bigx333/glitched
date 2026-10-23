@@ -371,11 +371,15 @@ func (m *Manager) view(e *Env, v api.Thread) {
 
 // claim records that e reaches engine id, and fails if an env listed
 // before e reaches it too. An env listed after e that reaches it becomes
-// the duplicate.
+// the duplicate. A zero ID claims nothing.
 func (m *Manager) claim(ctx context.Context, e *Env, id api.ID) error {
 	got := make(chan error, 1)
 	m.post(ctx, func() {
 		e.ID = id
+		if id.IsZero() {
+			got <- nil
+			return
+		}
 		if h := m.holder(id); h != e {
 			got <- &duplicateError{h.Name}
 			return
