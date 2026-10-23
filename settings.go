@@ -158,17 +158,24 @@ func (a *app) appearance(c *ui.Context) {
 			ui.Switch(c, &s.glass).Label("Liquid Glass")
 		})
 		// The setting is the app's tint over the glass, not how
-		// transparent the glass is: at Clear, the glass is macOS's own
-		// material, which it frosts and tints itself.
-		settingRow(c, "Glass tint", "How much the app's background tints the glass: the sidebar and headers, and the floating panels when they take it. At Clear, the glass is macOS's own, as Apple draws it.", func() {
+		// transparent the glass is: at Clear the app adds none, and the
+		// bars are the system's material, which it frosts itself.
+		// Where the window shows no vibrancy, the tint reaches only the
+		// panels, and only once they take it: the slider says so, and
+		// waits for them.
+		tintDesc := "How much the app's background tints the glass: the sidebar and headers over the window's vibrancy, and the floating panels when they take it. At Clear, the app adds no tint: the bars are the system's material, the panels plain glass."
+		if !a.vibrant {
+			tintDesc = "How much the app's background tints the floating panels, once they take it. This window's sidebar shows no vibrancy, so it is a solid color."
+		}
+		settingRow(c, "Glass tint", tintDesc, func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Tinted").FontSize(11.5).TextColor(palette.faint)
-				ui.Slider(c, &s.vibrancy, 0, 1).Width(160).Label("Glass tint").Disabled(!s.glass)
+				ui.Slider(c, &s.vibrancy, 0, 1).Width(160).Label("Glass tint").Disabled(!s.glass || !a.vibrant && !s.tintPanels)
 				ui.Text(c, "Clear").FontSize(11.5).TextColor(palette.faint)
 			})
 		})
-		settingRow(c, "Tint panels", "The panels over the chat take the tint too: the composer, the command palette, the pickers and the toasts. Off, they are plain glass, as the system's menus are.", func() {
-			ui.Switch(c, &s.tintPanels).Label("Tint panels").Disabled(!s.glass || s.vibrancy == 1)
+		settingRow(c, "Tint panels", "The app's own panes of glass take the tint too: the composer, the jump-to-latest pill, the command palette, the popovers, the toasts and the pane below. Off, they are plain glass, as the system's menus are.", func() {
+			ui.Switch(c, &s.tintPanels).Label("Tint the panels").Disabled(!s.glass)
 		})
 		a.glassDemo(c)
 		settingRow(c, "Wind background", "Characters lit by a passing wind behind the chat. Move the pointer to warm the air, click to blow a ripple.", func() {
