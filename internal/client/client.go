@@ -132,7 +132,8 @@ type Offline struct {
 	RetryAt time.Time
 }
 
-// Refused: the server refused the token. Nothing retries until the server
+// Refused: the server refused the handshake. It holds no key for this
+// token, or it isn't the paired engine. Nothing retries until the server
 // entry changes.
 type Refused struct{}
 
@@ -248,7 +249,7 @@ type route interface {
 }
 
 // link keeps e's shell stream open, reconnecting with backoff, until ctx
-// ends or the server refuses the token.
+// ends or the server refuses the handshake.
 func (m *Manager) link(ctx context.Context, e *Env, r route) {
 	defer r.close()
 	wait := minBackoff

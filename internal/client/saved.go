@@ -92,10 +92,10 @@ func (m *Manager) Servers() []Server { return slices.Clone(m.saved.Servers) }
 
 // AddServer reaches a remote engine from a goroutine, then on the Post
 // thread lists it in gui.json and calls done with nil, or calls done with
-// why it didn't: the server didn't answer or refused the token, or its
+// why it didn't: the server didn't answer or refused the handshake, or its
 // engine is listed already, as this machine's or another server's. Adding
 // a label listed already re-pairs it, which also retries a server that
-// refused the token; its env keeps the threads and pending commands.
+// refused the handshake; its env keeps the threads and pending commands.
 func (m *Manager) AddServer(s Server, done func(error)) {
 	if s.Label == "" || s.Addr == "" {
 		done(errors.New("client: a server needs a label and an address"))

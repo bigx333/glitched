@@ -369,7 +369,7 @@ func envStatus(e *client.Env) (ui.Color, string) {
 	case client.Offline:
 		return palette.red, "Offline: " + s.Err.Error()
 	case client.Refused:
-		return palette.red, "Refused: it has no such token"
+		return palette.red, "Refused: no key for this token, or not the paired engine"
 	case client.Incompatible:
 		who := "server"
 		if e.Kind == client.Local {
