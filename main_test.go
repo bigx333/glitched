@@ -353,7 +353,7 @@ func TestServers(t *testing.T) {
 		if _, ok := h.tt.Find("Adding…"); !ok {
 			t.Errorf("adding %s shows %q, want the button waiting", s.Label, h.tt.Texts())
 		}
-		h.until(s.Label+" refused", func() bool { return h.tt.HasText("refused the token") || h.tt.HasText("already listed as devbox") })
+		h.until(s.Label+" refused", func() bool { return h.tt.HasText("refused the handshake") || h.tt.HasText("already listed as devbox") })
 		if len(h.a.backend.Servers()) != 1 {
 			t.Fatalf("after adding %s the servers are %+v", s.Label, h.a.backend.Servers())
 		}
