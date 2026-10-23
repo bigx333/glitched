@@ -158,6 +158,7 @@ type settings struct {
 	accent        int
 	glass         bool
 	vibrancy      float64 // 0 to 1: how much of the sidebar's vibrancy shows through the background
+	tintPanels    bool    // the floating panels take the glass tint too, not only the window's bars
 	wind          bool    // the wind's field of glyphs behind the chat
 	fontSize      float64
 	timeFormat    string
@@ -332,7 +333,7 @@ func newApp() *app {
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,
-			vibrancy:      0.85,
+			vibrancy:      1, // untinted: Liquid Glass has no color of its own
 			wind:          true,
 			fontSize:      13,
 			timeFormat:    "Relative",
@@ -400,13 +401,14 @@ func (a *app) applyTheme(c *ui.Context) {
 // pane is the material of a floating panel: Liquid Glass, or a plain
 // surface when the glass is turned off in the settings.
 //
-// Every pane of glass takes the one tint the Glass tint setting sets, as
-// the window's vibrancy does in the sidebar and the headers: two kinds of
-// glass, macOS's showing the desktop and MyGo's what the app draws under
-// it, which read as one material by one setting.
+// The glass is plain, as macOS draws its own, unless the Tint panels
+// setting is on: then every pane takes the one tint the Glass tint
+// setting sets, as the window's vibrancy does in the sidebar and the
+// headers, and the two kinds of glass, macOS's showing the desktop and
+// MyGo's what the app draws under it, read as one material.
 func (a *app) pane(e ui.Element, g glass.Glass) ui.Element {
 	if a.settings.glass {
-		if g.Tint == (ui.Color{}) {
+		if g.Tint == (ui.Color{}) && a.settings.tintPanels {
 			g.Tint = a.glassTint()
 		}
 		return e.Material(g)
@@ -612,8 +614,9 @@ func (a *app) contentCard(e ui.Element) ui.Element {
 		Margin(0, -1, -1, left).Clip()
 }
 
-// glassTint is the tint over every glass, the app's background by as much
-// as the Glass tint setting leaves: clear at Clear.
+// glassTint is the tint over the window's bars, and the panels when they
+// take it: the app's background by as much as the Glass tint setting
+// leaves, clear at Clear.
 func (a *app) glassTint() ui.Color {
 	return palette.bg.Alpha(float32(1 - a.settings.vibrancy))
 }

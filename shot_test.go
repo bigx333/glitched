@@ -43,6 +43,7 @@ func TestShot(t *testing.T) {
 	if v := os.Getenv("TINT"); v != "" {
 		fmt.Sscan(v, &a.settings.vibrancy)
 	}
+	a.settings.tintPanels = os.Getenv("PANELS") != ""
 	if p := os.Getenv("PAGE"); p != "" {
 		a.router.Push(p)
 	}
