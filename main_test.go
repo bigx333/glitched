@@ -78,10 +78,7 @@ func TestReturningFromSettingsReadsTheThreadShown(t *testing.T) {
 		return th.View.LastTurn != nil && !th.View.Working() && h.a.backend.Unread(th.Thread)
 	})
 	h.click("Back to app")
-	h.tt.Advance(time.Second)
-	if h.a.backend.Unread(th.Thread) {
-		t.Fatalf("back from Settings the thread shown is unread: %q", h.tt.Texts())
-	}
+	h.until("the thread shown read, back from Settings", func() bool { return !h.a.backend.Unread(th.Thread) })
 }
 
 // A thread selected stays unread until its transcript arrives: until then
