@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"image"
 	"testing"
 	"time"
 
@@ -33,38 +32,30 @@ func TestGlassUntintedByDefault(t *testing.T) {
 	}
 }
 
-// The command palette, a pane of glass over the chat, takes the tint only
-// once the panels are opted in.
+// The command palette, a pane of glass, takes the tint only once the
+// panels are opted in. It opens over the General settings, where no other
+// pane of glass is in the frame: the frames then differ by the palette
+// alone.
 func TestPanelsTintOnlyWhenAsked(t *testing.T) {
-	shot := func(tint float64, panels bool) (*image.RGBA, ui.Rect) {
+	shot := func(tint float64, panels bool) []byte {
 		a := newApp()
-		a.settings.vibrancy, a.settings.tintPanels, a.settings.wind = tint, panels, false
+		a.settings.vibrancy, a.settings.tintPanels = tint, panels
+		a.router.Push("/settings/general")
 		// A small window and one frame, the palette just opened: the glass
 		// is slow to draw by hand.
 		tt := ui.NewTester(a.view, 640, 400)
 		a.openCommandPalette()
 		tt.Frame()
-		r, ok := tt.Find("New thread in t3code")
-		if !ok || r.W == 0 {
-			t.Fatalf("no palette row to look at: %v", r)
+		if _, ok := tt.Find("New thread in t3code"); !ok {
+			t.Fatal("no palette")
 		}
-		return tt.Image(), r
+		return tt.Image().Pix
 	}
-	// A palette row, the glass around its text: the composer, a pane of
-	// its own under the palette, takes no part in it.
-	row := func(img *image.RGBA, r ui.Rect) []byte {
-		x0, x1 := int(r.X), int(r.X+r.W)
-		var b []byte
-		for y := int(r.Y) - 6; y < int(r.Y+r.H)+6; y++ {
-			b = append(b, img.Pix[img.PixOffset(x0, y):img.PixOffset(x1, y)]...)
-		}
-		return b
+	clear := shot(1, false)
+	if !bytes.Equal(clear, shot(0.85, false)) {
+		t.Fatal("the tint reached the palette with the panels opted out")
 	}
-	clear, at := shot(1, false)
-	if out, _ := shot(0.85, false); !bytes.Equal(clear.Pix, out.Pix) {
-		t.Fatal("the tint reached the window with the panels opted out")
-	}
-	if in, r := shot(0.85, true); bytes.Equal(row(clear, at), row(in, r)) {
+	if bytes.Equal(clear, shot(0.85, true)) {
 		t.Fatal("the tint did not reach the palette with the panels opted in")
 	}
 }

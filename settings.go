@@ -162,9 +162,9 @@ func (a *app) appearance(c *ui.Context) {
 		// bars are the system's material, which it frosts itself.
 		// Where the window shows no vibrancy, the tint reaches only the
 		// panels, and only once they take it: the slider says so, and
-		// waits for them.
+		// waits for them. With the glass off, both wait for it instead.
 		tintDesc := "How much the app's background tints the glass: the sidebar and headers over the window's vibrancy, and the floating panels when they take it. At Clear, the app adds no tint: the bars are the system's material, the panels plain glass."
-		if !a.vibrant {
+		if s.glass && !a.vibrant {
 			tintDesc = "How much the app's background tints the floating panels, once they take it. This window's sidebar shows no vibrancy, so it is a solid color."
 		}
 		settingRow(c, "Glass tint", tintDesc, func() {
@@ -174,7 +174,7 @@ func (a *app) appearance(c *ui.Context) {
 				ui.Text(c, "Clear").FontSize(11.5).TextColor(palette.faint)
 			})
 		})
-		settingRow(c, "Tint panels", "The app's own panes of glass take the tint too: the composer, the jump-to-latest pill, the command palette, the popovers, the toasts and the pane below. Off, they are plain glass, as the system's menus are.", func() {
+		settingRow(c, "Tint panels", "The app's own panes of glass take the tint the slider sets: the composer, the jump-to-latest pill, the command palette, the popovers, the toasts and the pane below. Off, they are plain glass, as the system's menus are.", func() {
 			ui.Switch(c, &s.tintPanels).Label("Tint the panels").Disabled(!s.glass)
 		})
 		a.glassDemo(c)
