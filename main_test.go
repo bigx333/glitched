@@ -104,6 +104,47 @@ func TestAThreadIsReadOnceItsTranscriptShows(t *testing.T) {
 	}
 }
 
+// A thread shown again from a transcript cached on an earlier visit stays
+// unread while that transcript lacks the turn that made it so, as when its
+// server can't be reached.
+func TestACachedTranscriptDoesntReadAnUnseenTurn(t *testing.T) {
+	rdir := tempDir(t)
+	token, err := daemon.Pair(rdir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := engine(t, daemon.Config{Dir: rdir, Listen: []string{"127.0.0.1:0"}}, fake.New(fake.Turn(false)))
+	id := seed(t, r, "/srv", "Remote", "first")
+	seed(t, r, "/srv", "Other", "x")
+	h := start(t, tempDir(t))
+	if err := h.addServer(client.Server{Label: "box", Addr: r.Addrs()[0].String(), Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	th, other := h.thread("Remote"), h.thread("Other")
+	h.a.select_(th)
+	h.until("read with its transcript", func() bool { return h.tt.HasText("first") && !h.a.backend.Unread(th.Thread) })
+	h.a.select_(other)
+	h.until("the other thread's transcript", func() bool { return other.Transcript != nil && other.Transcript.Cursor != (api.Cursor{}) })
+
+	if _, err := r.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: "unseen turn", Mode: api.AfterActive}}); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the new turn over, unread", func() bool {
+		return th.View.LastTurn != nil && !th.View.Working() && h.a.backend.Unread(th.Thread)
+	})
+	if err := daemon.Revoke(rdir, "gui"); err != nil {
+		t.Fatal(err)
+	}
+	h.until("box refused", func() bool { return th.env.Status == client.Status(client.Refused{}) })
+
+	h.a.select_(th)
+	h.tt.Frame()
+	h.tt.Advance(2 * time.Second)
+	if h.tt.HasText("unseen turn") || !h.a.backend.Unread(th.Thread) {
+		t.Fatalf("shown from its cache, the thread is unread %v and the chat shows %q, want it unread without the turn", h.a.backend.Unread(th.Thread), h.tt.Texts())
+	}
+}
+
 // Sending in the draft creates the thread on this machine, in its
 // workspace, and its turn streams in until it asks for an approval.
 func TestSendStartsAThread(t *testing.T) {

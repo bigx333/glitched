@@ -157,10 +157,29 @@ func (m *Manager) Unread(th *Thread) bool {
 // may wait on another GUI. It leaves the envs as they are, whatever
 // servers another GUI saved.
 func (m *Manager) MarkRead(th *Thread) {
-	if !m.Unread(th) {
+	if m.Unread(th) {
+		m.read(th.View.ID, th.View.LastTurn.Ended)
+	}
+}
+
+// MarkShown records that the GUI showed the thread's transcript, read up
+// to the last turn it has, which may be behind the view's: one cached
+// from an earlier visit, or still catching up.
+func (m *Manager) MarkShown(th *Thread) {
+	if tr := th.Transcript; tr != nil && m.Unread(th) {
+		at := th.View.LastTurn.Ended
+		if tr.Ended.Before(at) {
+			at = tr.Ended
+		}
+		m.read(th.View.ID, at)
+	}
+}
+
+func (m *Manager) read(thread api.ID, at time.Time) {
+	if !at.After(m.saved.Seen[thread]) {
 		return
 	}
-	m.saved.see(map[api.ID]time.Time{th.View.ID: th.View.LastTurn.Ended})
+	m.saved.see(map[api.ID]time.Time{thread: at})
 	m.unsaved = true
 	m.saveSeen()
 }

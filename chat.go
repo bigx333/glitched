@@ -28,10 +28,10 @@ func (a *app) focused() bool { return a.win == nil || a.win.IsFocused() }
 
 func (a *app) chatPage(c *ui.Context) {
 	t := a.current()
-	// What the chat shows is read once its transcript arrived, while the
-	// window has focus.
-	if tr := t.Transcript; tr != nil && tr.Cursor != (api.Cursor{}) && a.focused() {
-		a.backend.MarkRead(t.Thread)
+	// What the chat shows is read, up to the last turn its transcript
+	// has, while the window has focus.
+	if a.focused() {
+		a.backend.MarkShown(t.Thread)
 	}
 	es := entriesOf(t)
 	// The layout makes room for a panel at once, so the chat rewraps
