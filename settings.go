@@ -323,20 +323,29 @@ func (a *app) servers(c *ui.Context) {
 	card(c, "ADD A SERVER", func() {
 		ui.Column(c).Padding(16).Gap(14).Children(func() {
 			ui.Field(c, "Label", func() { ui.TextInput(c, &a.server.Label).Placeholder("devbox") }).
-				Description("What the sidebar calls the machine. A label already listed is replaced.")
+				Description("What the sidebar calls the machine. Adding a label already listed pairs it again.")
 			ui.Field(c, "Address", func() { ui.TextInput(c, &a.server.Addr).Placeholder("devbox:7433").Font("monospace") }).
-				Description("Where glitched serve -listen listens on it.")
+				Description("Where glitched serve -listen listens on it. It's listed once it answers, unless it's a machine listed already.")
 			ui.Field(c, "Token", func() { ui.TextInput(c, &a.server.Token).Password().Font("monospace") }).
 				Description("What glitched pair printed on it.")
 			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, a.serverErr).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
-				ui.Button(c.Key("add"), "Add server").Disabled(a.server.Label == "" || a.server.Addr == "").OnClick(func() {
-					a.serverErr = ""
-					if err := a.backend.AddServer(a.server); err != nil {
-						a.serverErr = err.Error()
-						return
-					}
-					a.server = client.Server{}
+				add := "Add server"
+				if a.adding {
+					add = "Adding…"
+				}
+				ui.Button(c.Key("add"), add).Disabled(a.adding || a.server.Label == "" || a.server.Addr == "").OnClick(func() {
+					s := a.server
+					a.serverErr, a.adding = "", true
+					a.backend.AddServer(s, func(err error) {
+						a.adding = false
+						switch {
+						case err != nil:
+							a.serverErr = err.Error()
+						case a.server == s:
+							a.server = client.Server{} // unless edited meanwhile
+						}
+					})
 				})
 			})
 		})

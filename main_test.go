@@ -285,7 +285,8 @@ func TestStopInterrupts(t *testing.T) {
 }
 
 // A server added in Settings shows its threads beside this machine's,
-// each with its machine; one that refuses the token says so.
+// each with its machine. One that refuses the token, or whose engine is
+// listed already, isn't added, and the form says why.
 func TestServers(t *testing.T) {
 	rdir := tempDir(t)
 	token, err := daemon.Pair(rdir, "gui")
@@ -303,10 +304,22 @@ func TestServers(t *testing.T) {
 	h.tt.Frame()
 	h.click("Add server")
 	h.until("devbox online", func() bool { return h.tt.HasText("Online") })
-	h.a.server = client.Server{Label: "stranger", Addr: addr, Token: "wrong"}
-	h.tt.Frame()
-	h.click("Add server")
-	h.until("the stranger refused", func() bool { return h.tt.HasText("Refused") })
+	for _, s := range []client.Server{{Label: "stranger", Addr: addr, Token: "wrong"}, {Label: "devbox-again", Addr: addr, Token: token}} {
+		h.a.server = s
+		h.tt.Frame()
+		h.click("Add server")
+		h.tt.Frame()
+		if _, ok := h.tt.Find("Adding…"); !ok {
+			t.Errorf("adding %s shows %q, want the button waiting", s.Label, h.tt.Texts())
+		}
+		h.until(s.Label+" refused", func() bool { return h.tt.HasText("refused the token") || h.tt.HasText("already listed as devbox") })
+		if len(h.a.backend.Servers()) != 1 {
+			t.Fatalf("after adding %s the servers are %+v", s.Label, h.a.backend.Servers())
+		}
+	}
+	if !h.tt.HasText("client: devbox-again is already listed as devbox") || h.a.server.Label != "devbox-again" {
+		t.Errorf("the form shows %q and holds %+v, want why devbox-again wasn't added, and it to edit", h.tt.Texts(), h.a.server)
+	}
 
 	h.click("Back to app")
 	th := h.thread("Rotate the API keys")
@@ -353,7 +366,7 @@ func TestServers(t *testing.T) {
 	h.click("Servers")
 	h.click("Remove") // devbox's, the first
 	h.tt.Advance(time.Second)
-	if s := h.a.backend.Servers(); len(s) != 1 || s[0].Label != "stranger" || h.tt.HasText("devbox") {
+	if s := h.a.backend.Servers(); len(s) != 0 || !h.tt.HasText("No servers yet.") {
 		t.Errorf("after removing devbox the servers are %+v and the page shows %q", s, h.tt.Texts())
 	}
 	h.click("Back to app")
@@ -410,7 +423,7 @@ func TestAServerListedTwiceShowsNoneOfItsThreads(t *testing.T) {
 func TestAServerOfAnotherProtocolSaysSo(t *testing.T) {
 	addr := newer(t)
 	h := start(t, tempDir(t))
-	if err := h.a.backend.AddServer(client.Server{Label: "upgraded", Addr: addr, Token: "any"}); err != nil {
+	if err := h.addServer(client.Server{Label: "upgraded", Addr: addr, Token: "any"}); err != nil {
 		t.Fatal(err)
 	}
 	h.a.router.Push("/settings/servers")

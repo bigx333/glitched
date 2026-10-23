@@ -34,6 +34,7 @@ const (
 	probeTimeout   = 750 * time.Millisecond
 	probeInterval  = 50 * time.Millisecond
 	connectTimeout = 10 * time.Second
+	addTimeout     = 5 * time.Second
 	submitTimeout  = 10 * time.Second
 	minBackoff     = time.Second
 	maxBackoff     = 30 * time.Second
@@ -223,7 +224,7 @@ func (m *Manager) redial(e *Env, s Server) {
 }
 
 func (m *Manager) remote(s Server) *Env {
-	return m.launch(&Env{Kind: Remote, Name: s.Label, server: s}, newRemote(s))
+	return m.launch(&Env{ID: s.Engine, Kind: Remote, Name: s.Label, server: s}, newRemote(s))
 }
 
 // post runs fn on the Post thread unless ctx ended by then. Only the Post

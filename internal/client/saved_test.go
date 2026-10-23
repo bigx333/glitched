@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/daemon"
 	"glitched/internal/jsonfile"
+	"glitched/internal/transport"
 )
 
 func TestRemoteServersShowTheirThreadsAndComeBack(t *testing.T) {
@@ -35,7 +37,7 @@ func TestRemoteServersShowTheirThreadsAndComeBack(t *testing.T) {
 	host, _ := d.Endpoint().Info(timeout(t))
 
 	m, g := manager(t, stateDir(t))
-	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+	if err := add(t, g, m, Server{Label: "box", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	box := m.Envs()[1]
@@ -56,12 +58,6 @@ func TestRemoteServersShowTheirThreadsAndComeBack(t *testing.T) {
 		t.Fatalf("the box doesn't hold the thread created through the manager: %v", err)
 	}
 
-	if err := m.AddServer(Server{Label: "stranger", Addr: addr, Token: "wrong"}); err != nil {
-		t.Fatal(err)
-	}
-	stranger := m.Envs()[2]
-	g.until(t, "the stranger refused", func() bool { return stranger.Status == Status(Refused{}) }, func() string { return describeStatus(stranger.Status) })
-
 	d.Close()
 	g.until(t, "the box offline", func() bool {
 		_, ok := box.Status.(Offline)
@@ -72,12 +68,124 @@ func TestRemoteServersShowTheirThreadsAndComeBack(t *testing.T) {
 	if box.Threads[there] == nil || box.Threads[here] == nil {
 		t.Fatalf("after the box came back it shows %d threads, want both", len(box.Threads))
 	}
+}
 
-	if err := m.RemoveServer("stranger"); err != nil {
+// add adds s as Settings does, and returns what AddServer said.
+func add(t *testing.T, g *gui, m *Manager, s Server) error {
+	t.Helper()
+	var err error
+	done := false
+	m.AddServer(s, func(e error) { err, done = e, true })
+	g.until(t, "adding "+s.Label, func() bool { return done })
+	return err
+}
+
+// remoteEngine is an engine serving over TCP, with a token paired under
+// each of its names.
+type remoteEngine struct {
+	addr   string
+	id     api.ID
+	tokens map[string]string
+}
+
+func paired(t *testing.T, names ...string) remoteEngine {
+	t.Helper()
+	dir := stateDir(t)
+	r := remoteEngine{tokens: map[string]string{}}
+	for _, n := range names {
+		token, err := daemon.Pair(dir, n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.tokens[n] = token
+	}
+	d := engine(t, dir, "127.0.0.1:0")
+	info, err := d.Endpoint().Info(timeout(t))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if envs := m.Envs(); len(envs) != 2 || envs[1] != box {
-		t.Fatalf("after removing the stranger the envs are %d, want local and the box", len(envs))
+	r.addr, r.id = d.Addrs()[0].String(), info.ID
+	return r
+}
+
+func (r remoteEngine) server(label, token string) Server {
+	return Server{Label: label, Addr: r.addr, Token: r.tokens[token]}
+}
+
+// A server is listed only once it answers with the token. One that
+// doesn't is left out of gui.json, and the error says why.
+func TestAServerThatDoesntAnswerIsNotSaved(t *testing.T) {
+	dir := stateDir(t)
+	m, g := manager(t, dir)
+	box := paired(t, "gui")
+	gone, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone.Close()
+	for _, s := range []Server{{Label: "gone", Addr: gone.Addr().String()}, {Label: "stranger", Addr: box.addr, Token: "wrong"}} {
+		err := add(t, g, m, s)
+		if err == nil || !strings.Contains(err.Error(), s.Addr) {
+			t.Fatalf("adding %s said %v, want why %s didn't answer", s.Label, err, s.Addr)
+		}
+		if s.Label == "stranger" && !errors.Is(err, transport.ErrRefused) {
+			t.Fatalf("adding the stranger said %v, want the token refused", err)
+		}
+	}
+	if saved, err := savedIn(dir); err != nil || len(saved.Servers) != 0 || len(m.Servers()) != 0 || len(m.Envs()) != 1 {
+		t.Fatalf("gui.json lists %+v (%v) and the manager %+v, want no servers", saved.Servers, err, m.Servers())
+	}
+}
+
+// Adding an engine listed already, as another server or as this machine's,
+// is refused; re-pairing a listed server to the same engine is not.
+func TestAddingAServerListedAlreadyIsRefused(t *testing.T) {
+	dir := stateDir(t)
+	self, err := daemon.Pair(dir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	here := engine(t, dir, "127.0.0.1:0")
+	m, g := manager(t, dir)
+	online(t, g, m.Envs()[0])
+	box := paired(t, "gui", "again")
+	if err := add(t, g, m, box.server("box", "gui")); err != nil {
+		t.Fatal(err)
+	}
+	for s, want := range map[Server]string{
+		box.server("box-again", "again"):                                       "box-again is already listed as box",
+		{Label: "self", Addr: here.Addrs()[0].String(), Token: self}:           "self is this machine's engine",
+		{Label: m.Envs()[0].Name, Addr: here.Addrs()[0].String(), Token: self}: "is this machine's engine",
+	} {
+		if err := add(t, g, m, s); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("adding %s said %v, want %q", s.Label, err, want)
+		}
+	}
+	if err := add(t, g, m, box.server("box", "again")); err != nil {
+		t.Fatalf("re-pairing box with another token of its engine: %v", err)
+	}
+	want := box.server("box", "again")
+	want.Engine = box.id
+	if saved, err := savedIn(dir); err != nil || !slices.Equal(saved.Servers, []Server{want}) {
+		t.Fatalf("gui.json lists %+v (%v), want box re-paired", saved.Servers, err)
+	}
+	online(t, g, m.Envs()[1])
+}
+
+// AddServer returns before the server answers, so the GUI's thread goes on
+// drawing while it waits.
+func TestAddingAServerLeavesThePostThreadFree(t *testing.T) {
+	silent, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { silent.Close() })
+	m, _ := manager(t, stateDir(t))
+	start := time.Now()
+	called := false
+	m.AddServer(Server{Label: "silent", Addr: silent.Addr().String(), Token: "t"}, func(error) { called = true })
+	if took := time.Since(start); took > time.Second || called {
+		t.Fatalf("AddServer took %v and answered %v before the server did", took, called)
 	}
 }
 
@@ -95,8 +203,9 @@ func TestGUIJSONKeepsServersAndReadMarks(t *testing.T) {
 	if m.Unread(th) {
 		t.Fatal("unread after MarkRead")
 	}
-	for _, s := range []Server{{"a", "127.0.0.1:1", "ta"}, {"b", "127.0.0.1:1", "tb"}, {"a", "127.0.0.1:1", "ta2"}} {
-		if err := m.AddServer(s); err != nil {
+	a, b := paired(t, "ta", "ta2"), paired(t, "tb")
+	for _, s := range []Server{a.server("a", "ta"), b.server("b", "tb"), a.server("a", "ta2")} {
+		if err := add(t, g, m, s); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -112,7 +221,8 @@ func TestGUIJSONKeepsServersAndReadMarks(t *testing.T) {
 	}
 
 	m, g = manager(t, dir)
-	want := []Server{{"a", "127.0.0.1:1", "ta2"}}
+	want := []Server{a.server("a", "ta2")}
+	want[0].Engine = a.id
 	if got := m.Servers(); !slices.Equal(got, want) {
 		t.Fatalf("servers after a restart: %+v, want %+v", got, want)
 	}
@@ -136,7 +246,7 @@ func TestRepairingATokenKeepsTheServersThreads(t *testing.T) {
 	}
 	addr := engine(t, rdir, "127.0.0.1:0").Addrs()[0].String()
 	m, g := manager(t, stateDir(t))
-	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+	if err := add(t, g, m, Server{Label: "box", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	box := m.Envs()[1]
@@ -153,7 +263,7 @@ func TestRepairingATokenKeepsTheServersThreads(t *testing.T) {
 	if token, err = daemon.Pair(rdir, "gui"); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+	if err := add(t, g, m, Server{Label: "box", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	if envs := m.Envs(); len(envs) != 2 || envs[1] != box {
@@ -312,7 +422,7 @@ func TestCommandsInFlightGoOutAfterAReconnect(t *testing.T) {
 	addr := engine(t, rdir, "127.0.0.1:0").Addrs()[0].String()
 	m, g := manager(t, stateDir(t))
 	box := Server{Label: "box", Addr: addr, Token: token}
-	if err := m.AddServer(box); err != nil {
+	if err := add(t, g, m, box); err != nil {
 		t.Fatal(err)
 	}
 	env := m.Envs()[1]
@@ -323,7 +433,7 @@ func TestCommandsInFlightGoOutAfterAReconnect(t *testing.T) {
 	for _, d := range []api.DispositionState{api.Settled, api.Open, api.Settled} {
 		m.SetDisposition(env, id, api.Disposition{State: d})
 	}
-	if err := m.AddServer(box); err != nil {
+	if err := add(t, g, m, box); err != nil {
 		t.Fatal(err)
 	}
 	g.until(t, "every command landed", func() bool {
@@ -377,7 +487,7 @@ func TestReconnectingOrRemovingAServerEndsItsGoroutines(t *testing.T) {
 	settles(t, g, "with the local env idle", 1)
 	idle := managerGoroutines()
 
-	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+	if err := add(t, g, m, Server{Label: "box", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	box := m.Envs()[1]
@@ -387,7 +497,7 @@ func TestReconnectingOrRemovingAServerEndsItsGoroutines(t *testing.T) {
 	g.until(t, "the transcript", func() bool { return box.Threads[id].Transcript.Cursor.Seq > 0 })
 	settles(t, g, "with the box's thread open", idle+2)
 
-	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+	if err := add(t, g, m, Server{Label: "box", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	online(t, g, box)
@@ -410,7 +520,7 @@ func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 	for _, m := range []*Manager{a, b} {
 		wg.Go(func() {
 			for i := range 20 {
-				if err := m.AddServer(Server{Label: fmt.Sprintf("%p-%d", m, i), Addr: "127.0.0.1:1"}); err != nil {
+				if err := m.list(Server{Label: fmt.Sprintf("%p-%d", m, i), Addr: "127.0.0.1:1"}); err != nil {
 					t.Error(err)
 				}
 			}
@@ -441,7 +551,7 @@ func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 	if a.Envs()[1] != env || a.Servers()[0].Label != gone {
 		t.Fatal("marking a thread read made the envs follow gui.json, want only the read mark saved")
 	}
-	if err := a.AddServer(Server{Label: "late", Addr: "127.0.0.1:1"}); err != nil {
+	if err := a.list(Server{Label: "late", Addr: "127.0.0.1:1"}); err != nil {
 		t.Fatal(err)
 	}
 	s, err := savedIn(dir)
@@ -486,7 +596,7 @@ func TestAnOpenTranscriptResumesAfterAReconnect(t *testing.T) {
 	d := engine(t, rdir, "127.0.0.1:0")
 	addr := d.Addrs()[0].String()
 	m, g := manager(t, stateDir(t))
-	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+	if err := add(t, g, m, Server{Label: "box", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	box := m.Envs()[1]
@@ -504,7 +614,7 @@ func TestAnOpenTranscriptResumesAfterAReconnect(t *testing.T) {
 	if token, err = daemon.Pair(rdir, "gui"); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+	if err := add(t, g, m, Server{Label: "box", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	want := fresh(t, d.Endpoint(), id)

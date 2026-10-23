@@ -191,20 +191,24 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 			t.Fatal(err)
 		}
 		d := engine(t, daemon.Config{Dir: rdir, Listen: []string{"127.0.0.1:0"}}, fake.New(fake.Turn(false)))
-		h = start(t, tempDir(t))
-		for _, s := range []client.Server{
-			{Label: "devbox", Addr: d.Addrs()[0].String(), Token: token},
-			{Label: "stranger", Addr: d.Addrs()[0].String(), Token: "wrong"},
-			{Label: "upgraded", Addr: newer(t), Token: "any"},
-		} {
-			if err := h.a.backend.AddServer(s); err != nil {
-				t.Fatal(err)
-			}
-		}
+		addr := d.Addrs()[0].String()
+		dir := tempDir(t)
+		// Saved as they were when added: the token since revoked, the
+		// address since pointed at devbox.
+		listServers(t, dir,
+			client.Server{Label: "devbox", Addr: addr, Token: token},
+			client.Server{Label: "stranger", Addr: addr, Token: "wrong"},
+			client.Server{Label: "devbox-dns", Addr: addr, Token: token},
+			client.Server{Label: "upgraded", Addr: newer(t), Token: "any"})
+		h = start(t, dir)
 		h.a.router.Push("/settings/servers")
-		h.until("one online, one refused and one incompatible", func() bool {
-			return h.tt.HasText("Online") && h.tt.HasText("Refused") && h.tt.HasText("Incompatible")
+		h.until("one online, one refused, one a duplicate and one incompatible", func() bool {
+			return h.tt.HasText("Online") && h.tt.HasText("Refused") && h.tt.HasText("Same engine as devbox — remove one") && h.tt.HasText("Incompatible")
 		})
+		h.a.server = client.Server{Label: "devbox-ip", Addr: addr, Token: token}
+		h.tt.Frame()
+		h.click("Add server")
+		h.until("why devbox-ip wasn't added", func() bool { return h.tt.HasText("already listed as devbox") })
 	case "machines":
 		h = machines(t)
 		h.a.select_(h.thread("Rotate the API keys"))

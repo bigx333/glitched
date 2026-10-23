@@ -1,7 +1,9 @@
 package client
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"log"
 	"maps"
 	"path/filepath"
@@ -15,9 +17,10 @@ import (
 // Server is a remote engine reached over the tailnet with a token it
 // paired for this GUI.
 type Server struct {
-	Label string `json:"label"`
-	Addr  string `json:"addr"`
-	Token string `json:"token"`
+	Label  string `json:"label"`
+	Addr   string `json:"addr"`
+	Token  string `json:"token"`
+	Engine api.ID `json:"engine,omitzero"` // the engine it reached when added
 }
 
 // saved is what gui.json holds, tokens included.
@@ -87,12 +90,41 @@ func (m *Manager) sync(renew string) {
 // in the order Envs shows them.
 func (m *Manager) Servers() []Server { return slices.Clone(m.saved.Servers) }
 
-// AddServer reaches a remote engine and lists it in gui.json. A label
-// already listed is replaced and reconnected, which also retries a server
-// that refused the token; its env keeps the threads and pending commands.
-func (m *Manager) AddServer(s Server) error {
+// AddServer reaches a remote engine from a goroutine, then on the Post
+// thread lists it in gui.json and calls done with nil, or calls done with
+// why it didn't: the server didn't answer or refused the token, or its
+// engine is listed already, as this machine's or another server's. Adding
+// a label listed already re-pairs it, which also retries a server that
+// refused the token; its env keeps the threads and pending commands.
+func (m *Manager) AddServer(s Server, done func(error)) {
 	if s.Label == "" || s.Addr == "" {
-		return errors.New("client: a server needs a label and an address")
+		done(errors.New("client: a server needs a label and an address"))
+		return
+	}
+	m.wg.Go(func() {
+		r := newRemote(s)
+		ctx, cancel := context.WithTimeout(m.ctx, addTimeout)
+		info, err := r.c.Info(ctx)
+		cancel()
+		r.close()
+		m.post(m.ctx, func() {
+			if err != nil {
+				done(fmt.Errorf("client: reaching %s: %w", s.Addr, err))
+				return
+			}
+			s.Engine = info.ID
+			done(m.list(s))
+		})
+	})
+}
+
+// list saves s to gui.json, unless another env reaches its engine.
+func (m *Manager) list(s Server) error {
+	if h := m.holder(s.Engine); h != nil && (h.Kind == Local || h.Name != s.Label) {
+		if h.Kind == Local {
+			return fmt.Errorf("client: %s is this machine's engine", s.Label)
+		}
+		return fmt.Errorf("client: %s is already listed as %s", s.Label, h.Name)
 	}
 	return m.editServers(s.Label, func(f *saved) {
 		if i := slices.IndexFunc(f.Servers, func(o Server) bool { return o.Label == s.Label }); i >= 0 {

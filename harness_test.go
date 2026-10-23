@@ -98,6 +98,16 @@ func (h *harness) until(what string, ok func() bool) {
 	}
 }
 
+// addServer adds s as Settings does, and returns what AddServer said.
+func (h *harness) addServer(s client.Server) error {
+	h.t.Helper()
+	var err error
+	done := false
+	h.a.backend.AddServer(s, func(e error) { err, done = e, true })
+	h.until("adding "+s.Label, func() bool { return done })
+	return err
+}
+
 func (h *harness) local() *client.Env { return h.a.backend.Envs()[0] }
 
 // thread is the thread titled title, on whichever machine.
@@ -224,7 +234,7 @@ func machines(t *testing.T) *harness {
 	dir := inboxDir(t)
 	seed(t, r, "/srv/billing", "Retry failed invoice webhooks")
 	h := start(t, dir)
-	if err := h.a.backend.AddServer(client.Server{Label: "devbox", Addr: r.Addrs()[0].String(), Token: token}); err != nil {
+	if err := h.addServer(client.Server{Label: "devbox", Addr: r.Addrs()[0].String(), Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	h.thread("Retry failed invoice webhooks")
