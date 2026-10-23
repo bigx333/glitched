@@ -142,7 +142,7 @@ func (a *app) header(c *ui.Context, t thread) {
 		if !narrow {
 			pill(c, filepath.Base(t.View.Workspace)).Shrink(0)
 			if len(a.backend.Envs()) > 1 && t.env != nil {
-				machinePill(c, t.env)
+				a.machinePill(c, t.env)
 			}
 		}
 		ui.Spacer(c)
@@ -614,7 +614,7 @@ func (a *app) workspaceButton(c *ui.Context, t thread) {
 	}
 	b.Menu(func(m *ui.Menu) {
 		for _, e := range a.backend.Envs() {
-			if duplicate(e) {
+			if a.duplicate(e) {
 				continue
 			}
 			home := homeDir()
@@ -703,7 +703,9 @@ func (a *app) send(t thread) {
 		if r := []rune(title); len(r) > 48 {
 			title = string(r[:48]) + "…"
 		}
-		id = a.backend.Create(t.env, t.View.Workspace, title, a.modelRef(), accessOf[a.access])
+		if id = a.backend.Create(t.env, t.View.Workspace, title, a.modelRef(), accessOf[a.access]); id.IsZero() {
+			return
+		}
 		a.selected = id
 		a.follow()
 	} else if t.View.Disposition.State != api.Open {

@@ -381,6 +381,23 @@ func TestAServerListedTwiceShowsNoneOfItsThreads(t *testing.T) {
 	g.until(t, "box-again's thread", func() bool { return again.Threads[there] != nil })
 }
 
+// A duplicate stays one between its retries, so nothing starts on it that
+// its next claim would drop.
+func TestNothingStartsOnADuplicateBetweenRetries(t *testing.T) {
+	box := paired(t, "gui")
+	dir := stateDir(t)
+	list(t, dir, box.server("box", "gui"), box.server("box-again", "gui"))
+	m, g := manager(t, dir)
+	again := env(m, "box-again")
+	online(t, g, env(m, "box"))
+	isDup := func() bool { _, ok := again.Status.(Duplicate); return ok }
+	g.until(t, "box-again a duplicate", isDup, func() string { return describeStatus(again.Status) })
+	g.until(t, "box-again retrying", func() bool { return !isDup() }, func() string { return describeStatus(again.Status) })
+	if id := m.Create(again, "/srv", "started on the duplicate", fakeModel, api.AccessAsk); !id.IsZero() || len(again.Threads) != 0 {
+		t.Fatalf("a thread started on box-again while it was %s", describeStatus(again.Status))
+	}
+}
+
 // A server listed first that comes to reach the engine of one listed after
 // it takes the engine; the one after shows none of its threads any more.
 func TestTheServerListedFirstKeepsItsEngine(t *testing.T) {

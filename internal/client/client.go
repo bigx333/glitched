@@ -111,6 +111,16 @@ func (m *Manager) holder(id api.ID) *Env {
 	return nil
 }
 
+// ShownBy is the env that shows the engine e reaches: the first listed that
+// reaches it, which may be e, or e while its engine is unknown. An env
+// another shows is a duplicate, whatever its status says between retries.
+func (m *Manager) ShownBy(e *Env) *Env {
+	if h := m.holder(e.ID); h != nil {
+		return h
+	}
+	return e
+}
+
 type Kind uint8
 
 const (

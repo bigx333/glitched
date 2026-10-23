@@ -459,6 +459,33 @@ func TestAServerListedTwiceShowsNoneOfItsThreads(t *testing.T) {
 	}
 }
 
+// A duplicate's row says which server shows its engine between its retries
+// too, and no draft starts on it.
+func TestADuplicateSaysSoBetweenRetries(t *testing.T) {
+	other := tempDir(t)
+	token, err := daemon.Pair(other, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := engine(t, daemon.Config{Dir: other, Listen: []string{"127.0.0.1:0"}}, fake.New(fake.Turn(false)))
+	dir := tempDir(t)
+	listServers(t, dir,
+		client.Server{Label: "box", Addr: o.Addrs()[0].String(), Token: token},
+		client.Server{Label: "box-again", Addr: o.Addrs()[0].String(), Token: token})
+	h := start(t, dir)
+	again := h.a.backend.Envs()[2]
+	h.a.router.Push("/settings/servers")
+	h.until("box-again a duplicate", func() bool { return h.tt.HasText("Same engine as box — remove one") })
+	h.until("box-again retrying", func() bool {
+		_, dup := again.Status.(client.Duplicate)
+		return !dup
+	})
+	h.tt.Frame()
+	if !h.tt.HasText("Same engine as box — remove one") || !h.a.duplicate(again) {
+		t.Fatalf("between retries box-again's row says %q", h.tt.Texts())
+	}
+}
+
 // A server a protocol ahead of this app shows none of its threads, and its
 // row in Settings says why.
 func TestAServerOfAnotherProtocolSaysSo(t *testing.T) {

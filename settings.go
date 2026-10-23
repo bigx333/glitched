@@ -305,7 +305,7 @@ func (a *app) servers(c *ui.Context) {
 		}
 		for _, s := range servers {
 			ui.Row(c).Key(s.Label).Padding(12, 12, 12, 16).Gap(12).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
-				col, status := envStatus(a.serverEnv(s.Label))
+				col, status := a.envStatus(a.serverEnv(s.Label))
 				ui.Box(c).Size(8, 8).Radius(4).Background(col)
 				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
 					ui.Text(c, s.Label).FontWeight(500)
@@ -362,7 +362,10 @@ func (a *app) serverEnv(label string) *client.Env {
 }
 
 // envStatus is how a machine's engine is reached, as a color and a word.
-func envStatus(e *client.Env) (ui.Color, string) {
+func (a *app) envStatus(e *client.Env) (ui.Color, string) {
+	if o := a.backend.ShownBy(e); o != e {
+		return palette.red, "Same engine as " + o.Name + " — remove one"
+	}
 	switch s := e.Status.(type) {
 	case client.Online:
 		return palette.green, "Online"
@@ -376,8 +379,6 @@ func envStatus(e *client.Env) (ui.Color, string) {
 			who = "engine"
 		}
 		return palette.red, fmt.Sprintf("Incompatible: %s speaks protocol %d, this app %d", who, s.Theirs, s.Ours)
-	case client.Duplicate:
-		return palette.red, "Same engine as " + s.Of + " — remove one"
 	}
 	return palette.amber, "Connecting…"
 }
@@ -390,7 +391,7 @@ func (a *app) machineBadge(c *ui.Context, e *client.Env) ui.Element {
 	for _, o := range a.backend.Envs() {
 		names = append(names, o.Name)
 	}
-	col, status := envStatus(e)
+	col, status := a.envStatus(e)
 	return ui.Row(c).Gap(3).AlignItems(ui.Center).Shrink(0).Label(e.Name).Tooltip(e.Name + " · " + status).Children(func() {
 		ui.Box(c).Size(5, 5).Radius(3).Background(col)
 		ui.Text(c, prefix(e.Name, names)).FontSize(10).TextColor(palette.faint).SingleLine()
@@ -412,8 +413,8 @@ func prefix(name string, names []string) string {
 
 // machinePill names the machine a thread runs on, after a dot of how it's
 // reached.
-func machinePill(c *ui.Context, e *client.Env) ui.Element {
-	col, status := envStatus(e)
+func (a *app) machinePill(c *ui.Context, e *client.Env) ui.Element {
+	col, status := a.envStatus(e)
 	return ui.Row(c).Gap(4).AlignItems(ui.Center).Padding(1, 6).Radius(999).Border(1, palette.border).Shrink(0).
 		Tooltip(e.Name + " · " + status).Children(func() {
 		ui.Box(c).Size(5, 5).Radius(3).Background(col)

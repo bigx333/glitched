@@ -250,7 +250,7 @@ func (a *app) current() thread {
 	}
 	envs := a.backend.Envs()
 	d := a.fresh
-	if d.env != nil && (!slices.Contains(envs, d.env) || duplicate(d.env)) {
+	if d.env != nil && (!slices.Contains(envs, d.env) || a.duplicate(d.env)) {
 		d = draft{} // its server was removed, or shows another's engine
 	}
 	if d.env == nil && len(envs) > 0 {
@@ -264,10 +264,7 @@ func (a *app) current() thread {
 
 // duplicate is whether e reaches the engine an env listed before it shows,
 // so nothing starts on it.
-func duplicate(e *client.Env) bool {
-	_, dup := e.Status.(client.Duplicate)
-	return dup
-}
+func (a *app) duplicate(e *client.Env) bool { return a.backend.ShownBy(e) != e }
 
 func (a *app) projectOf(t thread) *project {
 	k := keyOf(t.env, t.View.Workspace)
