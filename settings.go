@@ -160,11 +160,14 @@ func (a *app) appearance(c *ui.Context) {
 		// The setting is the app's tint over the glass, not how
 		// transparent the glass is: at Clear the app adds none, and the
 		// bars are the system's material, which it frosts itself.
-		// Where the window shows no vibrancy, the tint reaches only the
-		// panels, and only once they take it: the slider says so, and
-		// waits for them. With the glass off, both wait for it instead.
+		// What the slider reaches depends on the window: the bars only
+		// where it shows vibrancy, the panels once they take it, and
+		// nothing while the glass is off. The slider says which.
 		tintDesc := "How much the app's background tints the glass: the sidebar and headers over the window's vibrancy, and the floating panels when they take it. At Clear, the app adds no tint: the bars are the system's material, the panels plain glass."
-		if s.glass && !a.vibrant {
+		switch {
+		case !s.glass:
+			tintDesc = "How much the app's background tints the glass, once Liquid Glass is on."
+		case !a.vibrant:
 			tintDesc = "How much the app's background tints the floating panels, once they take it. This window's sidebar shows no vibrancy, so it is a solid color."
 		}
 		settingRow(c, "Glass tint", tintDesc, func() {
