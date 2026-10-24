@@ -1,12 +1,15 @@
-// Glitched: T3 Code, rebuilt in MyGo's native UI as a clickable prototype: the
-// projects and threads sidebar, the chat with its work log, the composer,
-// the diff panel, a command palette and the settings. Everything is mock
-// data; replies are canned and streamed in to show the motion.
+// Glitched: T3 Code, rebuilt in MyGo's native UI: the projects and threads
+// sidebar, the chat with its work log, the composer, the diff panel, a
+// command palette and the settings. Its threads are those of the engine on
+// this machine, which it embeds when none runs, and of the servers it is
+// paired with.
 package main
 
 import (
 	"log"
+	"maps"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,6 +19,8 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 	"github.com/egoist/mygo/ui/markdown"
 
+	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/wind"
 )
 
@@ -97,12 +102,24 @@ type settings struct {
 }
 
 type app struct {
-	win      *mygo.Window
-	router   *ui.Router
+	win     *mygo.Window
+	router  *ui.Router
+	backend *client.Manager
+	// projects are the backend's threads by project, as the frame being
+	// built shows them.
 	projects []*project
-	archived []*thread
-	selected string
+	selected api.ID // zero: the draft
+	fresh    draft
+	opened   opened
+	// ended is each thread's last turn's end, as last seen, to tell of
+	// the next once.
+	ended    map[api.ID]time.Time
 	settings settings
+	// server is the Servers page's form for adding one, why the last add
+	// failed, and whether one is waiting for its server to answer.
+	server    client.Server
+	serverErr string
+	adding    bool
 
 	showSidebar  bool
 	showDiff     bool
@@ -139,10 +156,10 @@ type app struct {
 	accessAt                    time.Time // when the level last changed, for its effect
 	collapsed                   map[string]bool
 	// The inbox: the project it's filtered to, and its closed sections.
-	projectFilter map[string]bool // the projects the sidebar shows; none is all
+	projectFilter map[projectKey]bool // the projects the sidebar shows; none is all
 	sectionClosed map[category]bool
 	// rowFx is the joke playing on a thread's row, by thread.
-	rowFx map[string]rowGagFx
+	rowFx map[api.ID]rowGagFx
 	// attachments go with the next message; pastes counts pasted images,
 	// to name them.
 	attachments []attachment
@@ -166,11 +183,11 @@ type app struct {
 	// quick is the quick-ask panel over every app.
 	quick quickAsk
 	// lists are the threads' timelines, by thread.
-	lists map[string]*ui.ListState
+	lists map[api.ID]*ui.ListState
 	// The diff panel: each file's viewer, by path, and their layout.
 	diffs      map[string]*editor.DiffState
 	diffLayout editor.DiffLayout
-	// shells are the terminal drawer's shells, by project.
+	// shells are the terminal drawer's shells, by workspace.
 	shells map[string]*shell
 	// windDraw paints the wind's field behind the chat, as the frame's
 	// pane has it.
@@ -185,7 +202,7 @@ type app struct {
 	// click while compact, until the end of the thread shows again.
 	composerOpened bool
 	// snoozeFor is the thread whose snooze popover is open.
-	snoozeFor string
+	snoozeFor api.ID
 	// now is the frame's time, as the view builds it.
 	now      time.Time
 	diffFile int
@@ -202,13 +219,14 @@ type app struct {
 	md markdown.Options
 }
 
-func newApp() *app {
-	return &app{
+// newApp is the app on the engines its state directory dir names. The
+// manager posts its changes through post, which runs them on the thread
+// that builds the views.
+func newApp(dir string, post func(func())) *app {
+	a := &app{
 		router:        newRouter(),
 		wind:          wind.New(rand.Uint32(), nil),
-		projects:      mockProjects(),
-		archived:      mockArchived(),
-		selected:      "t1",
+		ended:         map[api.ID]time.Time{},
 		showSidebar:   true,
 		sidebarWidth:  272,
 		model:         "Claude Opus 5.5",
@@ -216,11 +234,11 @@ func newApp() *app {
 		access:        accessAuto,
 		collapsed:     map[string]bool{},
 		sectionClosed: map[category]bool{catWorking: true, catSnoozed: true, catSettled: true},
-		projectFilter: map[string]bool{},
-		rowFx:         map[string]rowGagFx{},
+		projectFilter: map[projectKey]bool{},
+		rowFx:         map[api.ID]rowGagFx{},
 		shells:        map[string]*shell{},
 		diffs:         map[string]*editor.DiffState{},
-		lists:         map[string]*ui.ListState{},
+		lists:         map[api.ID]*ui.ListState{},
 		files:         map[string][]string{},
 		previewURL:    defaultPreviewURL,
 		previewDraft:  defaultPreviewURL,
@@ -244,24 +262,13 @@ func newApp() *app {
 			codexModel:    "GPT-5.5 Codex",
 		},
 	}
-}
-
-func (a *app) current() (*project, *thread) {
-	for _, p := range a.projects {
-		for _, t := range p.threads {
-			if t.id == a.selected {
-				return p, t
-			}
-		}
-	}
-	return a.projects[0], a.projects[0].threads[0]
-}
-
-func (a *app) select_(id string) {
-	a.selected = id
-	if a.router.Path() != "/" {
-		a.router.Push("/")
-	}
+	a.backend = client.New(client.Config{Dir: dir, Post: func(fn func()) {
+		post(func() {
+			fn()
+			a.changed()
+		})
+	}})
+	return a
 }
 
 // applyTheme sets the theme the settings ask for: the system's appearance,
@@ -333,6 +340,12 @@ func (a *app) view(c *ui.Context) {
 	// appearance: the sidebar shows it while the app's theme matches, and
 	// the Liquid Glass setting is on.
 	a.now = c.Now()
+	a.projects = a.gather()
+	// A project gone, as with its server, leaves the filter, lest it hide
+	// every thread left.
+	maps.DeleteFunc(a.projectFilter, func(k projectKey, _ bool) bool {
+		return !slices.ContainsFunc(a.projects, func(p *project) bool { return p.key == k })
+	})
 	if w, _ := c.Size(); w > 0 {
 		a.roomBeside = w - a.sidebarWidth*a.sidebarOpen
 	}
@@ -450,7 +463,16 @@ func (a *app) toasts(c *ui.Context) {
 }
 
 func main() {
-	a := newApp()
+	var a *app
+	a = newApp(stateDir(), func(fn func()) {
+		a.win.Update(func() {
+			fn()
+			// The quick ask panel shows the projects too.
+			if a.quick.panel != nil {
+				a.quick.panel.Invalidate()
+			}
+		})
+	})
 	mygo.App.WhenReady(func() {
 		a.installMenu()
 		mygo.App.OnNotificationClick(a.onNotificationClick)
@@ -475,6 +497,18 @@ func main() {
 		a.setUpQuickAsk()
 		// The terminals' shells hang up with the window.
 		a.win.OnClosed(a.closeShells)
+		// Coming back to the window reads the thread the chat shows.
+		a.win.OnFocus(a.win.Invalidate)
+		if err := a.backend.Start(); err != nil {
+			log.Print(err)
+		}
+	})
+	// An engine embedded here stops with the app, which lets the CLI's
+	// next one take the state directory.
+	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		if err := a.backend.Close(); err != nil {
+			log.Print(err)
+		}
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)

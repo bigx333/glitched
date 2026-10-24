@@ -34,7 +34,7 @@ func (a *app) commands() []command {
 	}
 	for _, p := range a.projects {
 		for _, t := range p.threads {
-			cmds = append(cmds, command{"Threads", t.title, p.name, icMessage, func() { a.select_(t.id) }})
+			cmds = append(cmds, command{"Threads", t.View.Title, p.name(), icMessage, func() { a.select_(t) }})
 		}
 	}
 	var shown []command

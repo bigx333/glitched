@@ -47,10 +47,13 @@ func (a *app) suggestionsFor(draft string) []suggestion {
 	tok, at := token(draft)
 	switch {
 	case strings.HasPrefix(tok, "@"):
-		p, _ := a.current()
+		t := a.current()
+		if !t.local() {
+			return nil // its files are on the server
+		}
 		q := strings.ToLower(tok[1:])
 		var out []suggestion
-		for _, f := range a.projectFiles(p) {
+		for _, f := range a.projectFiles(t.View.Workspace) {
 			if q == "" || strings.Contains(strings.ToLower(f), q) {
 				out = append(out, suggestion{insert: "@" + f + " ", label: filepath.Base(f), detail: filepath.Dir(f), icon: icFile})
 			}
@@ -71,14 +74,13 @@ func (a *app) suggestionsFor(draft string) []suggestion {
 	return nil
 }
 
-// projectFiles lists a project's files, relative to it: the ones on disk,
-// read once, when its directory exists, else those the agent changed.
-func (a *app) projectFiles(p *project) []string {
-	if files, ok := a.files[p.id]; ok {
+// projectFiles lists a workspace's files, relative to it, read once.
+func (a *app) projectFiles(workspace string) []string {
+	if files, ok := a.files[workspace]; ok {
 		return files
 	}
 	var files []string
-	dir := projectDir(p.path)
+	dir := projectDir(workspace)
 	home, _ := os.UserHomeDir()
 	if dir != home {
 		filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -96,13 +98,8 @@ func (a *app) projectFiles(p *project) []string {
 			return nil
 		})
 	}
-	if len(files) == 0 {
-		for path := range fileTexts {
-			files = append(files, path)
-		}
-	}
 	sort.Strings(files)
-	a.files[p.id] = files
+	a.files[workspace] = files
 	return files
 }
 

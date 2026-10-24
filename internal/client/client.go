@@ -34,6 +34,7 @@ const (
 	probeTimeout   = 750 * time.Millisecond
 	probeInterval  = 50 * time.Millisecond
 	connectTimeout = 10 * time.Second
+	addTimeout     = 5 * time.Second
 	submitTimeout  = 10 * time.Second
 	minBackoff     = time.Second
 	maxBackoff     = 30 * time.Second
@@ -48,9 +49,12 @@ type Manager struct {
 	wg     sync.WaitGroup
 	local  *local
 
-	envs   []*Env
-	saved  saved
-	closed bool
+	envs  []*Env
+	saved saved
+	// saving is whether a goroutine is saving the read marks; unsaved,
+	// whether some are marked that no save has taken.
+	saving, unsaved bool
+	closed          bool
 }
 
 func New(cfg Config) *Manager {
@@ -72,8 +76,8 @@ func (m *Manager) Start() error {
 	return nil
 }
 
-// Close stops every environment and an embedded engine, and returns once
-// their goroutines have.
+// Close stops every environment and an embedded engine, saves the read
+// marks no save has, and returns once their goroutines have.
 func (m *Manager) Close() error {
 	if m.closed {
 		return nil
@@ -81,15 +85,41 @@ func (m *Manager) Close() error {
 	m.closed = true
 	m.cancel()
 	m.wg.Wait()
+	// A save that was under way posted whether it failed too late to tell.
+	var err error
+	if m.unsaved || m.saving {
+		_, err = m.edit(func(f *saved) error { f.see(m.saved.Seen); return nil })
+	}
 	if m.local != nil {
-		return m.local.err
+		err = errors.Join(err, m.local.err)
+	}
+	return err
+}
+
+// Envs is the local environment, then the remotes, in gui.json's order.
+// The slice is the manager's: read it, don't change it.
+func (m *Manager) Envs() []*Env { return m.envs }
+
+// holder is the first env listed that reaches engine id, which shows it.
+func (m *Manager) holder(id api.ID) *Env {
+	if id.IsZero() {
+		return nil
+	}
+	if i := slices.IndexFunc(m.envs, func(e *Env) bool { return e.ID == id }); i >= 0 {
+		return m.envs[i]
 	}
 	return nil
 }
 
-// Envs is the local environment, then the remotes. The slice is the
-// manager's: read it, don't change it.
-func (m *Manager) Envs() []*Env { return m.envs }
+// ShownBy is the env that shows the engine e reaches: the first listed that
+// reaches it, which may be e, or e while its engine is unknown. An env
+// another shows is a duplicate, whatever its status says between retries.
+func (m *Manager) ShownBy(e *Env) *Env {
+	if h := m.holder(e.ID); h != nil {
+		return h
+	}
+	return e
+}
 
 type Kind uint8
 
@@ -98,7 +128,8 @@ const (
 	Remote
 )
 
-// Status is sealed: Connecting, Online, Offline, Refused or Incompatible.
+// Status is sealed: Connecting, Online, Offline, Refused, Incompatible or
+// Duplicate.
 type Status interface{ status() }
 
 type Connecting struct{}
@@ -111,7 +142,8 @@ type Offline struct {
 	RetryAt time.Time
 }
 
-// Refused: the server refused the token. Nothing retries until the server
+// Refused: the server refused the handshake. It holds no key for this
+// token, or it isn't the paired engine. Nothing retries until the server
 // entry changes.
 type Refused struct{}
 
@@ -123,11 +155,17 @@ type Incompatible struct {
 	RetryAt      time.Time
 }
 
+// Duplicate: the engine is the one an env listed before this one reaches,
+// named Of, which shows it. None of this one's threads show. Later attempts
+// may find it another engine.
+type Duplicate struct{ Of string }
+
 func (Connecting) status()   {}
 func (Online) status()       {}
 func (Offline) status()      {}
 func (Refused) status()      {}
 func (Incompatible) status() {}
+func (Duplicate) status()    {}
 
 type protocolError struct{ theirs int }
 
@@ -135,8 +173,12 @@ func (e *protocolError) Error() string {
 	return fmt.Sprintf("client: the engine speaks protocol %d, this client %d", e.theirs, runtime.Protocol)
 }
 
+type duplicateError struct{ of string }
+
+func (e *duplicateError) Error() string { return "client: the engine is listed already, as " + e.of }
+
 type Env struct {
-	ID      api.ID // the host; zero until it first answers
+	ID      api.ID // the engine it last reached; zero until it first answers
 	Name    string // the host's name for the local engine, the server's label for a remote
 	Kind    Kind
 	Status  Status
@@ -187,13 +229,13 @@ func (m *Manager) connect(e *Env, r route) {
 // commands pending on them.
 func (m *Manager) redial(e *Env, s Server) {
 	e.unlink()
-	e.down(Connecting{})
+	m.down(e, Connecting{})
 	e.server = s
 	m.connect(e, newRemote(s))
 }
 
 func (m *Manager) remote(s Server) *Env {
-	return m.launch(&Env{Kind: Remote, Name: s.Label, server: s}, newRemote(s))
+	return m.launch(&Env{ID: s.Engine, Kind: Remote, Name: s.Label, server: s}, newRemote(s))
 }
 
 // post runs fn on the Post thread unless ctx ended by then. Only the Post
@@ -217,7 +259,7 @@ type route interface {
 }
 
 // link keeps e's shell stream open, reconnecting with backoff, until ctx
-// ends or the server refuses the token.
+// ends or the server refuses the handshake.
 func (m *Manager) link(ctx context.Context, e *Env, r route) {
 	defer r.close()
 	wait := minBackoff
@@ -230,7 +272,7 @@ func (m *Manager) link(ctx context.Context, e *Env, r route) {
 			return
 		}
 		if errors.Is(err, transport.ErrRefused) {
-			m.post(ctx, func() { e.down(Refused{}) })
+			m.post(ctx, func() { m.down(e, Refused{}) })
 			return
 		}
 		r.failed()
@@ -239,14 +281,17 @@ func (m *Manager) link(ctx context.Context, e *Env, r route) {
 		if pe := (*protocolError)(nil); errors.As(err, &pe) {
 			s = Incompatible{Theirs: pe.theirs, Ours: runtime.Protocol, RetryAt: retry}
 		}
-		m.post(ctx, func() { e.down(s) })
+		if de := (*duplicateError)(nil); errors.As(err, &de) {
+			s = Duplicate{Of: de.of}
+		}
+		m.post(ctx, func() { m.down(e, s) })
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(wait):
 		}
 		wait = min(2*wait, maxBackoff)
-		m.post(ctx, func() { e.Status = Connecting{} })
+		m.post(ctx, func() { m.down(e, Connecting{}) })
 	}
 }
 
@@ -261,6 +306,9 @@ func (m *Manager) serve(ctx context.Context, e *Env, ep api.Endpoint, online fun
 	info, err := ep.Info(dial)
 	if err == nil && info.Protocol != runtime.Protocol {
 		err = &protocolError{info.Protocol}
+	}
+	if err == nil {
+		err = m.claim(dial, e, info.ID)
 	}
 	var st api.Stream
 	if err == nil {
@@ -317,15 +365,52 @@ func (m *Manager) view(e *Env, v api.Thread) {
 		e.Threads[v.ID] = th
 	}
 	th.View, th.known = v, true
+	th.dropUnasked()
 	m.follow(e, th)
 }
 
+// claim records that e reaches engine id, and fails if an env listed
+// before e reaches it too. An env listed after e that reaches it becomes
+// the duplicate. A zero ID claims nothing.
+func (m *Manager) claim(ctx context.Context, e *Env, id api.ID) error {
+	got := make(chan error, 1)
+	m.post(ctx, func() {
+		e.ID = id
+		if id.IsZero() {
+			got <- nil
+			return
+		}
+		if h := m.holder(id); h != e {
+			got <- &duplicateError{h.Name}
+			return
+		}
+		for _, o := range m.envs[slices.Index(m.envs, e)+1:] {
+			if _, dup := o.Status.(Duplicate); o.ID == id && !dup {
+				o.unlink()
+				m.down(o, Duplicate{Of: e.Name})
+				m.connect(o, newRemote(o.server))
+			}
+		}
+		got <- nil
+	})
+	select {
+	case err := <-got:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // down records why e has no session. The session's ctx already ended its
-// thread subscriptions.
-func (e *Env) down(s Status) {
+// thread subscriptions. A duplicate drops its threads, which the env
+// listed first shows.
+func (m *Manager) down(e *Env, s Status) {
 	e.Status, e.session = s, nil
 	for _, th := range e.Threads {
 		th.sub = nil
+	}
+	if _, dup := s.(Duplicate); dup {
+		clear(e.Threads)
 	}
 }
 
@@ -344,7 +429,8 @@ func (m *Manager) OpenThread(e *Env, thread api.ID) {
 }
 
 // CloseThread stops following a thread. Its transcript stays cached for
-// the next OpenThread.
+// the next OpenThread, but no longer keeps the failed answers to requests
+// only it showed waiting.
 func (m *Manager) CloseThread(e *Env, thread api.ID) {
 	th := e.Threads[thread]
 	if th == nil || !th.open {
@@ -353,6 +439,7 @@ func (m *Manager) CloseThread(e *Env, thread api.ID) {
 	th.open = false
 	th.unfollow()
 	th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool { return p.sent })
+	th.dropUnasked()
 }
 
 func (th *Thread) unfollow() {
@@ -402,6 +489,7 @@ func (m *Manager) watch(ctx context.Context, e *Env, s *sub, ep api.Endpoint, th
 				if th := e.Threads[thread]; th != nil && th.sub == s {
 					take(th.Transcript)
 					th.shown()
+					th.dropUnasked()
 				}
 			})
 		}
@@ -419,6 +507,27 @@ func (th *Thread) shown() {
 		_, message := p.Body.(api.MessageDispatch)
 		return message && th.Transcript.message(p.Command) != nil
 	})
+}
+
+// dropUnasked drops the failed answers to requests the thread no longer
+// asks, as neither its view nor its open transcript, whichever is behind,
+// shows them waiting: none can land, and the request shows how it ended.
+func (th *Thread) dropUnasked() {
+	th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool {
+		r, ok := p.Body.(api.RequestRespond)
+		return ok && p.Err != nil && !th.asks(r.Request)
+	})
+}
+
+func (th *Thread) asks(request api.ID) bool {
+	if slices.ContainsFunc(th.View.Requests, func(r api.Request) bool { return r.ID == request }) {
+		return true
+	}
+	if th.open {
+		r := th.Transcript.request(request)
+		return r != nil && r.State == api.RequestPending
+	}
+	return false
 }
 
 // local attaches to the engine serving the socket under dir, or embeds one

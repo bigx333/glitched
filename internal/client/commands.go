@@ -14,7 +14,8 @@ import (
 // stays pending until its thread's open transcript shows it, so the row
 // never blinks out before the entry replaces it. Err is why the submit
 // failed. A failed row stays until Retry sends the command again under the
-// same ID, or Dismiss drops it.
+// same ID, or Dismiss drops it, or, for an answer, its request stops
+// waiting.
 type Pending struct {
 	Command api.ID
 	Body    api.Intent
@@ -37,8 +38,12 @@ func (p Pending) Terminal() bool {
 var errNoEngine = errors.New("client: not connected to the engine")
 
 // Create adds a thread, shown at once with the given fields until the
-// engine's view of it arrives, and returns its ID.
+// engine's view of it arrives, and returns its ID. It returns the zero ID
+// on a duplicate, which shows no threads.
 func (m *Manager) Create(e *Env, workspace, title string, model api.ModelRef, access api.Access) api.ID {
+	if m.ShownBy(e) != e {
+		return api.ID{}
+	}
 	id := api.NewID()
 	e.Threads[id] = &Thread{View: api.Thread{ID: id, Workspace: workspace, Title: title, Model: model, Access: access, UpdatedAt: time.Now()}}
 	m.submit(e, id, api.ThreadCreate{Workspace: workspace, Title: title, Model: model, Access: access})
@@ -112,7 +117,7 @@ func (m *Manager) Dismiss(e *Env, thread, command api.ID) {
 
 func (m *Manager) submit(e *Env, thread api.ID, body api.Intent) api.ID {
 	th := e.Threads[thread]
-	if th == nil {
+	if th == nil || m.ShownBy(e) != e {
 		return api.ID{}
 	}
 	cmd := api.Command{ID: api.NewID(), Target: thread, Body: body}
@@ -197,5 +202,6 @@ func (m *Manager) submitted(e *Env, cmd api.Command, err error) {
 		th.Pending = slices.Delete(th.Pending, i, i+1)
 	default:
 		th.Pending[i].Err = err
+		th.dropUnasked()
 	}
 }

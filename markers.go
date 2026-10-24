@@ -30,11 +30,11 @@ type turnInfo struct {
 	steps int
 }
 
-// turnsOf is the thread's turns: each message the user sent, with the
+// turnsOf is a thread's turns: each message the user sent, with the
 // first reply after it and the steps the agent took for it.
-func turnsOf(t *thread) []turnInfo {
+func turnsOf(es []entry) []turnInfo {
 	var turns []turnInfo
-	for i, e := range t.entries {
+	for i, e := range es {
 		switch {
 		case e.kind == entryUser:
 			turns = append(turns, turnInfo{entry: i})
@@ -50,8 +50,8 @@ func turnsOf(t *thread) []turnInfo {
 
 // turnMarkers draws the thread's markers over the chat's left edge, for
 // its list l. With fewer than two turns, there's nothing to navigate.
-func (a *app) turnMarkers(c *ui.Context, t *thread, l *ui.ListState) {
-	turns := turnsOf(t)
+func (a *app) turnMarkers(c *ui.Context, es []entry, l *ui.ListState) {
+	turns := turnsOf(es)
 	if len(turns) < 2 {
 		return
 	}
@@ -78,8 +78,8 @@ func (a *app) turnMarkers(c *ui.Context, t *thread, l *ui.ListState) {
 		pointed, pointedY := -1, float32(0)
 		nearest := float32(math.MaxFloat32)
 		for k, tr := range turns {
-			b := ui.ButtonBase(c.Key(tr.entry)).Padding(3, 6).Cursor(ui.CursorPointer).
-				Label("Go to: " + preview(t.entries[tr.entry]))
+			b := ui.ButtonBase(c.Key(es[tr.entry].key)).Padding(3, 6).Cursor(ui.CursorPointer).
+				Label("Go to: " + preview(es[tr.entry]))
 			box := b.Bounds()
 			cy := box.Y + box.H/2 - colBox.Y // the tick's middle, in the column
 			w := float32(markerW)
@@ -108,7 +108,7 @@ func (a *app) turnMarkers(c *ui.Context, t *thread, l *ui.ListState) {
 			}
 		}
 		if over && pointed >= 0 {
-			a.turnCard(c, t, turns, pointed, pointedY)
+			a.turnCard(c, es, turns, pointed, pointedY)
 		}
 	})
 }
@@ -116,7 +116,7 @@ func (a *app) turnMarkers(c *ui.Context, t *thread, l *ui.ListState) {
 // turnCard previews a turn beside its tick, as Zeron's does: the message,
 // the start of its reply, and where it is among the turns. It follows the
 // pointer from tick to tick, sliding, and comes and goes as a popover.
-func (a *app) turnCard(c *ui.Context, t *thread, turns []turnInfo, k int, tickY float32) {
+func (a *app) turnCard(c *ui.Context, es []entry, turns []turnInfo, k int, tickY float32) {
 	tr := turns[k]
 	card := ui.Column(c).Key("card").Absolute().Left(markerColumnW+6).Top(tickY-34).Width(markerCardW).
 		Padding(14, 16).Gap(8).Radius(16).Background(palette.surface).Border(1, palette.border).
@@ -129,12 +129,7 @@ func (a *app) turnCard(c *ui.Context, t *thread, turns []turnInfo, k int, tickY 
 			Exit:  &ui.Motion{Scale: 0.97, X: -4},
 		})
 	card.Children(func() {
-		e := t.entries[tr.entry]
-		msg := e.text
-		if msg == "" {
-			msg = preview(e)
-		}
-		ui.Text(c, msg).FontSize(13.5).FontWeight(500).LineHeight(1.4).MaxLines(3).TextColor(palette.text)
+		ui.Text(c, es[tr.entry].text).FontSize(13.5).FontWeight(500).LineHeight(1.4).MaxLines(3).TextColor(palette.text)
 		if tr.reply != "" {
 			ui.Text(c, tr.reply).FontSize(12.5).LineHeight(1.45).MaxLines(4).TextColor(palette.muted)
 		}
@@ -146,13 +141,10 @@ func (a *app) turnCard(c *ui.Context, t *thread, turns []turnInfo, k int, tickY 
 	})
 }
 
-// preview is a message's first line, or its attachments'.
+// preview is a message's first line.
 func preview(e entry) string {
 	if s := firstLine(e.text); s != "" {
 		return s
-	}
-	if len(e.attachments) > 0 {
-		return e.attachments[0].name
 	}
 	return "Message"
 }

@@ -1,19 +1,24 @@
 package client
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
 	"glitched/internal/jsonfile"
+	"glitched/internal/transport"
 )
 
 func TestRemoteServersShowTheirThreadsAndComeBack(t *testing.T) {
@@ -32,7 +37,7 @@ func TestRemoteServersShowTheirThreadsAndComeBack(t *testing.T) {
 	host, _ := d.Endpoint().Info(timeout(t))
 
 	m, g := manager(t, stateDir(t))
-	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+	if err := add(t, g, m, Server{Label: "box", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	box := m.Envs()[1]
@@ -53,12 +58,6 @@ func TestRemoteServersShowTheirThreadsAndComeBack(t *testing.T) {
 		t.Fatalf("the box doesn't hold the thread created through the manager: %v", err)
 	}
 
-	if err := m.AddServer(Server{Label: "stranger", Addr: addr, Token: "wrong"}); err != nil {
-		t.Fatal(err)
-	}
-	stranger := m.Envs()[2]
-	g.until(t, "the stranger refused", func() bool { return stranger.Status == Status(Refused{}) }, func() string { return describeStatus(stranger.Status) })
-
 	d.Close()
 	g.until(t, "the box offline", func() bool {
 		_, ok := box.Status.(Offline)
@@ -69,12 +68,163 @@ func TestRemoteServersShowTheirThreadsAndComeBack(t *testing.T) {
 	if box.Threads[there] == nil || box.Threads[here] == nil {
 		t.Fatalf("after the box came back it shows %d threads, want both", len(box.Threads))
 	}
+}
 
-	if err := m.RemoveServer("stranger"); err != nil {
+// add adds s as Settings does, and returns what AddServer said.
+func add(t *testing.T, g *gui, m *Manager, s Server) error {
+	t.Helper()
+	var err error
+	done := false
+	m.AddServer(s, func(e error) { err, done = e, true })
+	g.until(t, "adding "+s.Label, func() bool { return done })
+	return err
+}
+
+// remoteEngine is an engine serving over TCP, with a token paired under
+// each of its names.
+type remoteEngine struct {
+	addr   string
+	id     api.ID
+	tokens map[string]string
+}
+
+func paired(t *testing.T, names ...string) remoteEngine {
+	t.Helper()
+	dir := stateDir(t)
+	r := remoteEngine{tokens: map[string]string{}}
+	for _, n := range names {
+		token, err := daemon.Pair(dir, n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.tokens[n] = token
+	}
+	d := engine(t, dir, "127.0.0.1:0")
+	info, err := d.Endpoint().Info(timeout(t))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if envs := m.Envs(); len(envs) != 2 || envs[1] != box {
-		t.Fatalf("after removing the stranger the envs are %d, want local and the box", len(envs))
+	r.addr, r.id = d.Addrs()[0].String(), info.ID
+	return r
+}
+
+func (r remoteEngine) server(label, token string) Server {
+	return Server{Label: label, Addr: r.addr, Token: r.tokens[token]}
+}
+
+// A server is listed only once it answers with the token. One that
+// doesn't is left out of gui.json, and the error says why.
+func TestAServerThatDoesntAnswerIsNotSaved(t *testing.T) {
+	dir := stateDir(t)
+	m, g := manager(t, dir)
+	box := paired(t, "gui")
+	gone, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone.Close()
+	for _, s := range []Server{{Label: "gone", Addr: gone.Addr().String()}, {Label: "stranger", Addr: box.addr, Token: "wrong"}} {
+		err := add(t, g, m, s)
+		if err == nil || !strings.Contains(err.Error(), s.Addr) {
+			t.Fatalf("adding %s said %v, want why %s didn't answer", s.Label, err, s.Addr)
+		}
+		if s.Label == "stranger" && !errors.Is(err, transport.ErrRefused) {
+			t.Fatalf("adding the stranger said %v, want the token refused", err)
+		}
+	}
+	if saved, err := savedIn(dir); err != nil || len(saved.Servers) != 0 || len(m.Servers()) != 0 || len(m.Envs()) != 1 {
+		t.Fatalf("gui.json lists %+v (%v) and the manager %+v, want no servers", saved.Servers, err, m.Servers())
+	}
+}
+
+// Adding an engine listed already, as another server or as this machine's,
+// is refused; re-pairing a listed server to the same engine is not.
+func TestAddingAServerListedAlreadyIsRefused(t *testing.T) {
+	dir := stateDir(t)
+	self, err := daemon.Pair(dir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	here := engine(t, dir, "127.0.0.1:0")
+	m, g := manager(t, dir)
+	online(t, g, m.Envs()[0])
+	box := paired(t, "gui", "again")
+	if err := add(t, g, m, box.server("box", "gui")); err != nil {
+		t.Fatal(err)
+	}
+	for s, want := range map[Server]string{
+		box.server("box-again", "again"):                                       "box-again is already listed as box",
+		{Label: "self", Addr: here.Addrs()[0].String(), Token: self}:           "self is this machine's engine",
+		{Label: m.Envs()[0].Name, Addr: here.Addrs()[0].String(), Token: self}: "is this machine's engine",
+	} {
+		if err := add(t, g, m, s); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("adding %s said %v, want %q", s.Label, err, want)
+		}
+	}
+	if err := add(t, g, m, box.server("box", "again")); err != nil {
+		t.Fatalf("re-pairing box with another token of its engine: %v", err)
+	}
+	want := box.server("box", "again")
+	want.Engine = box.id
+	if saved, err := savedIn(dir); err != nil || !slices.Equal(saved.Servers, []Server{want}) {
+		t.Fatalf("gui.json lists %+v (%v), want box re-paired", saved.Servers, err)
+	}
+	online(t, g, m.Envs()[1])
+}
+
+// A GUI that read gui.json before another GUI on its dir listed an engine
+// still refuses to list that engine again.
+func TestAnEngineAnotherGUIListedIsRefused(t *testing.T) {
+	dir := stateDir(t)
+	a, ga := manager(t, dir)
+	b, gb := manager(t, dir)
+	box := paired(t, "gui", "again")
+	if err := add(t, ga, a, box.server("box", "gui")); err != nil {
+		t.Fatal(err)
+	}
+	if err := add(t, gb, b, box.server("box-again", "again")); err == nil || !strings.Contains(err.Error(), "box-again is already listed as box") {
+		t.Errorf("the second GUI adding box-again said %v, want it listed already", err)
+	}
+	if s, err := savedIn(dir); err != nil || !slices.Equal(serverLabels(s.Servers), []string{"box"}) {
+		t.Fatalf("gui.json lists %v (%v), want box alone", serverLabels(s.Servers), err)
+	}
+}
+
+// A server removed while it is re-paired stays removed, and the re-pair
+// says so.
+func TestAServerRemovedWhileRepairedStaysRemoved(t *testing.T) {
+	dir := stateDir(t)
+	m, g := manager(t, dir)
+	box := paired(t, "gui", "again")
+	if err := add(t, g, m, box.server("box", "gui")); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	done := false
+	m.AddServer(box.server("box", "again"), func(e error) { err, done = e, true })
+	if err := m.RemoveServer("box"); err != nil {
+		t.Fatal(err)
+	}
+	g.until(t, "the re-pair to answer", func() bool { return done })
+	if s, e := savedIn(dir); e != nil || len(s.Servers) != 0 || len(m.Envs()) != 1 || err == nil {
+		t.Fatalf("after the re-pair said %v gui.json lists %v (%v), want none", err, serverLabels(s.Servers), e)
+	}
+}
+
+// AddServer returns before the server answers, so the GUI's thread goes on
+// drawing while it waits.
+func TestAddingAServerLeavesThePostThreadFree(t *testing.T) {
+	silent, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { silent.Close() })
+	m, _ := manager(t, stateDir(t))
+	start := time.Now()
+	called := false
+	m.AddServer(Server{Label: "silent", Addr: silent.Addr().String(), Token: "t"}, func(error) { called = true })
+	if took := time.Since(start); took > time.Second || called {
+		t.Fatalf("AddServer took %v and answered %v before the server did", took, called)
 	}
 }
 
@@ -88,14 +238,13 @@ func TestGUIJSONKeepsServersAndReadMarks(t *testing.T) {
 	if !m.Unread(th) {
 		t.Fatal("a finished turn nobody looked at is read, want unread")
 	}
-	if err := m.MarkRead(th); err != nil {
-		t.Fatal(err)
-	}
+	m.MarkRead(th)
 	if m.Unread(th) {
 		t.Fatal("unread after MarkRead")
 	}
-	for _, s := range []Server{{"a", "127.0.0.1:1", "ta"}, {"b", "127.0.0.1:1", "tb"}, {"a", "127.0.0.1:1", "ta2"}} {
-		if err := m.AddServer(s); err != nil {
+	a, b := paired(t, "ta", "ta2"), paired(t, "tb")
+	for _, s := range []Server{a.server("a", "ta"), b.server("b", "tb"), a.server("a", "ta2")} {
+		if err := add(t, g, m, s); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -111,7 +260,8 @@ func TestGUIJSONKeepsServersAndReadMarks(t *testing.T) {
 	}
 
 	m, g = manager(t, dir)
-	want := []Server{{"a", "127.0.0.1:1", "ta2"}}
+	want := []Server{a.server("a", "ta2")}
+	want[0].Engine = a.id
 	if got := m.Servers(); !slices.Equal(got, want) {
 		t.Fatalf("servers after a restart: %+v, want %+v", got, want)
 	}
@@ -135,7 +285,7 @@ func TestRepairingATokenKeepsTheServersThreads(t *testing.T) {
 	}
 	addr := engine(t, rdir, "127.0.0.1:0").Addrs()[0].String()
 	m, g := manager(t, stateDir(t))
-	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+	if err := add(t, g, m, Server{Label: "box", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	box := m.Envs()[1]
@@ -152,7 +302,7 @@ func TestRepairingATokenKeepsTheServersThreads(t *testing.T) {
 	if token, err = daemon.Pair(rdir, "gui"); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+	if err := add(t, g, m, Server{Label: "box", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	if envs := m.Envs(); len(envs) != 2 || envs[1] != box {
@@ -166,6 +316,157 @@ func TestRepairingATokenKeepsTheServersThreads(t *testing.T) {
 	g.until(t, "the retry landed", func() bool { return len(box.Threads[id].Pending) == 0 }, func() string { return describePending(box.Threads[id].Pending) })
 }
 
+// relay forwards a port to addr once opened, as a name a server answers to
+// does once its DNS points there.
+type relay struct {
+	ln   net.Listener
+	open atomic.Bool
+}
+
+func newRelay(t *testing.T, addr string) *relay {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &relay{ln: ln}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			if !r.open.Load() {
+				c.Close()
+				continue
+			}
+			u, err := net.Dial("tcp", addr)
+			if err != nil {
+				c.Close()
+				continue
+			}
+			go func() { io.Copy(u, c); u.Close() }()
+			go func() { io.Copy(c, u); c.Close() }()
+		}
+	}()
+	t.Cleanup(func() { ln.Close() })
+	return r
+}
+
+// list writes servers to gui.json in dir, as another GUI, or this one
+// before the engines changed, saved them.
+func list(t *testing.T, dir string, servers ...Server) {
+	t.Helper()
+	if _, err := jsonfile.Edit(filepath.Join(dir, "gui.json"), func(s *saved) error {
+		s.Servers = servers
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func env(m *Manager, name string) *Env {
+	i := slices.IndexFunc(m.Envs(), func(e *Env) bool { return e.Name == name })
+	if i < 0 {
+		return nil
+	}
+	return m.Envs()[i]
+}
+
+// One engine listed under several labels, one of them this machine's, shows
+// its threads once, by the env listed first. The others say which env that
+// is, and show none of the threads, until it goes.
+func TestAServerListedTwiceShowsNoneOfItsThreads(t *testing.T) {
+	dir := stateDir(t)
+	self, err := daemon.Pair(dir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	here := engine(t, dir, "127.0.0.1:0")
+	rdir := stateDir(t)
+	token, err := daemon.Pair(rdir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := engine(t, rdir, "127.0.0.1:0")
+	addr := d.Addrs()[0].String()
+	there := api.NewID()
+	if _, err := d.Endpoint().Submit(timeout(t), api.Command{ID: api.NewID(), Target: there, Body: api.ThreadCreate{Workspace: "/srv", Title: "on the box", Model: fakeModel}}); err != nil {
+		t.Fatal(err)
+	}
+	list(t, dir,
+		Server{Label: "self", Addr: here.Addrs()[0].String(), Token: self},
+		Server{Label: "box", Addr: addr, Token: token},
+		Server{Label: "box-again", Addr: addr, Token: token})
+	m, g := manager(t, dir)
+	local, box := m.Envs()[0], env(m, "box")
+	online(t, g, local)
+	online(t, g, box)
+	for name, of := range map[string]string{"self": local.Name, "box-again": "box"} {
+		e := env(m, name)
+		g.until(t, name+" a duplicate", func() bool { return e.Status == Status(Duplicate{Of: of}) }, func() string { return describeStatus(e.Status) })
+		if len(e.Threads) != 0 {
+			t.Fatalf("%s, a duplicate of %s, shows %d threads, want none", name, of, len(e.Threads))
+		}
+	}
+	if box.Threads[there] == nil {
+		t.Fatal("box doesn't show its thread")
+	}
+
+	if err := m.RemoveServer("box"); err != nil {
+		t.Fatal(err)
+	}
+	again := env(m, "box-again")
+	online(t, g, again)
+	g.until(t, "box-again's thread", func() bool { return again.Threads[there] != nil })
+}
+
+// A duplicate stays one between its retries, so nothing starts on it that
+// its next claim would drop.
+func TestNothingStartsOnADuplicateBetweenRetries(t *testing.T) {
+	box := paired(t, "gui")
+	dir := stateDir(t)
+	list(t, dir, box.server("box", "gui"), box.server("box-again", "gui"))
+	m, g := manager(t, dir)
+	again := env(m, "box-again")
+	online(t, g, env(m, "box"))
+	isDup := func() bool { _, ok := again.Status.(Duplicate); return ok }
+	g.until(t, "box-again a duplicate", isDup, func() string { return describeStatus(again.Status) })
+	g.until(t, "box-again retrying", func() bool { return !isDup() }, func() string { return describeStatus(again.Status) })
+	if id := m.Create(again, "/srv", "started on the duplicate", fakeModel, api.AccessAsk); !id.IsZero() || len(again.Threads) != 0 {
+		t.Fatalf("a thread started on box-again while it was %s", describeStatus(again.Status))
+	}
+}
+
+// A server listed first that comes to reach the engine of one listed after
+// it takes the engine; the one after shows none of its threads any more.
+func TestTheServerListedFirstKeepsItsEngine(t *testing.T) {
+	rdir := stateDir(t)
+	token, err := daemon.Pair(rdir, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := engine(t, rdir, "127.0.0.1:0")
+	addr := d.Addrs()[0].String()
+	there := api.NewID()
+	if _, err := d.Endpoint().Submit(timeout(t), api.Command{ID: api.NewID(), Target: there, Body: api.ThreadCreate{Workspace: "/srv", Title: "on the box", Model: fakeModel}}); err != nil {
+		t.Fatal(err)
+	}
+	dns := newRelay(t, addr)
+	dir := stateDir(t)
+	list(t, dir, Server{Label: "box", Addr: dns.ln.Addr().String(), Token: token}, Server{Label: "box-ip", Addr: addr, Token: token})
+	m, g := manager(t, dir)
+	box, ip := env(m, "box"), env(m, "box-ip")
+	online(t, g, ip)
+	g.until(t, "box-ip's thread", func() bool { return ip.Threads[there] != nil })
+
+	dns.open.Store(true)
+	online(t, g, box)
+	g.until(t, "box-ip a duplicate of box", func() bool { return ip.Status == Status(Duplicate{Of: "box"}) }, func() string { return describeStatus(ip.Status) })
+	if len(ip.Threads) != 0 || box.Threads[there] == nil {
+		t.Fatalf("box shows %d threads and box-ip %d, want box the engine's and box-ip none", len(box.Threads), len(ip.Threads))
+	}
+}
+
 // Adding a listed server again reconnects it while commands are on their
 // way. They go out on the new session instead of failing with the old one.
 func TestCommandsInFlightGoOutAfterAReconnect(t *testing.T) {
@@ -177,7 +478,7 @@ func TestCommandsInFlightGoOutAfterAReconnect(t *testing.T) {
 	addr := engine(t, rdir, "127.0.0.1:0").Addrs()[0].String()
 	m, g := manager(t, stateDir(t))
 	box := Server{Label: "box", Addr: addr, Token: token}
-	if err := m.AddServer(box); err != nil {
+	if err := add(t, g, m, box); err != nil {
 		t.Fatal(err)
 	}
 	env := m.Envs()[1]
@@ -188,7 +489,7 @@ func TestCommandsInFlightGoOutAfterAReconnect(t *testing.T) {
 	for _, d := range []api.DispositionState{api.Settled, api.Open, api.Settled} {
 		m.SetDisposition(env, id, api.Disposition{State: d})
 	}
-	if err := m.AddServer(box); err != nil {
+	if err := add(t, g, m, box); err != nil {
 		t.Fatal(err)
 	}
 	g.until(t, "every command landed", func() bool {
@@ -242,7 +543,7 @@ func TestReconnectingOrRemovingAServerEndsItsGoroutines(t *testing.T) {
 	settles(t, g, "with the local env idle", 1)
 	idle := managerGoroutines()
 
-	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+	if err := add(t, g, m, Server{Label: "box", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	box := m.Envs()[1]
@@ -252,7 +553,7 @@ func TestReconnectingOrRemovingAServerEndsItsGoroutines(t *testing.T) {
 	g.until(t, "the transcript", func() bool { return box.Threads[id].Transcript.Cursor.Seq > 0 })
 	settles(t, g, "with the box's thread open", idle+2)
 
-	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+	if err := add(t, g, m, Server{Label: "box", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	online(t, g, box)
@@ -269,13 +570,13 @@ func TestReconnectingOrRemovingAServerEndsItsGoroutines(t *testing.T) {
 // and a change to the servers shows the ones the other added or removed.
 func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 	dir := stateDir(t)
-	a, _ := manager(t, dir)
+	a, ga := manager(t, dir)
 	b, _ := manager(t, dir)
 	var wg sync.WaitGroup
 	for _, m := range []*Manager{a, b} {
 		wg.Go(func() {
 			for i := range 20 {
-				if err := m.AddServer(Server{Label: fmt.Sprintf("%p-%d", m, i), Addr: "127.0.0.1:1"}); err != nil {
+				if err := m.list(Server{Label: fmt.Sprintf("%p-%d", m, i), Addr: "127.0.0.1:1"}, false); err != nil {
 					t.Error(err)
 				}
 			}
@@ -287,9 +588,11 @@ func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 	}
 
 	read := &Thread{View: api.Thread{ID: api.NewID(), LastTurn: &api.TurnResult{Ended: time.Now()}}}
-	if err := a.MarkRead(read); err != nil {
-		t.Fatal(err)
+	a.MarkRead(read)
+	saved := func(th *Thread) func() bool {
+		return func() bool { s, err := savedIn(dir); return err == nil && !s.Seen[th.View.ID].IsZero() }
 	}
+	ga.until(t, "the read mark saved", saved(read))
 	gone := a.Servers()[0].Label
 	if err := b.RemoveServer(gone); err != nil {
 		t.Fatal(err)
@@ -298,13 +601,13 @@ func TestGUIsOnOneDirKeepEachOthersChanges(t *testing.T) {
 		t.Fatal("the other GUI's read mark is lost")
 	}
 	env := a.Envs()[1]
-	if err := a.MarkRead(&Thread{View: api.Thread{ID: api.NewID(), LastTurn: &api.TurnResult{Ended: time.Now()}}}); err != nil {
-		t.Fatal(err)
-	}
+	later := &Thread{View: api.Thread{ID: api.NewID(), LastTurn: &api.TurnResult{Ended: time.Now()}}}
+	a.MarkRead(later)
+	ga.until(t, "the later mark saved", saved(later))
 	if a.Envs()[1] != env || a.Servers()[0].Label != gone {
 		t.Fatal("marking a thread read made the envs follow gui.json, want only the read mark saved")
 	}
-	if err := a.AddServer(Server{Label: "late", Addr: "127.0.0.1:1"}); err != nil {
+	if err := a.list(Server{Label: "late", Addr: "127.0.0.1:1"}, false); err != nil {
 		t.Fatal(err)
 	}
 	s, err := savedIn(dir)
@@ -349,7 +652,7 @@ func TestAnOpenTranscriptResumesAfterAReconnect(t *testing.T) {
 	d := engine(t, rdir, "127.0.0.1:0")
 	addr := d.Addrs()[0].String()
 	m, g := manager(t, stateDir(t))
-	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+	if err := add(t, g, m, Server{Label: "box", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	box := m.Envs()[1]
@@ -367,7 +670,7 @@ func TestAnOpenTranscriptResumesAfterAReconnect(t *testing.T) {
 	if token, err = daemon.Pair(rdir, "gui"); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.AddServer(Server{Label: "box", Addr: addr, Token: token}); err != nil {
+	if err := add(t, g, m, Server{Label: "box", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	want := fresh(t, d.Endpoint(), id)

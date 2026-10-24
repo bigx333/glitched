@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"glitched/internal/api"
 )
 
 // The inbox's actions play a little joke on the thread's row: snoozed, it
@@ -46,12 +48,12 @@ const (
 
 var confetti = []ui.Color{ui.Hex("#4ade80"), ui.Hex("#facc15"), ui.Hex("#f472b6"), ui.Hex("#60a5fa"), ui.Hex("#ffffff")}
 
-// gag plays kind on t's row; from is the section it leaves.
-func (a *app) gag(c *ui.Context, t *thread, kind gagKind, from category) {
+// gag plays kind on the thread's row; from is the section it leaves.
+func (a *app) gag(c *ui.Context, thread api.ID, kind gagKind, from category) {
 	if c.Preferences().ReduceMotion {
 		return
 	}
-	a.rowFx[t.id] = newGag(kind, c.Now(), from)
+	a.rowFx[thread] = newGag(kind, c.Now(), from)
 	if kind == gagSettle {
 		hapticBump()
 	}

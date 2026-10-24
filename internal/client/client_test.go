@@ -429,6 +429,25 @@ func TestAnEngineOfAnotherProtocolIsNotShown(t *testing.T) {
 	}
 }
 
+type unnamedEngine struct{ *longThread }
+
+func (unnamedEngine) Info(context.Context) (api.Environment, error) {
+	return api.Environment{Name: "unnamed", Protocol: 1, Log: testLog}, nil
+}
+
+// An engine that reports no ID claims none, and shows its threads.
+func TestAnEngineWithNoIDShowsItsThreads(t *testing.T) {
+	dir := stateDir(t)
+	id := api.NewID()
+	serveOn(t, dir, unnamedEngine{&longThread{view: api.Thread{ID: id, Title: "unnamed"}}})
+	m, g := manager(t, dir)
+	env := m.Envs()[0]
+	online(t, g, env)
+	if env.Threads[id] == nil {
+		t.Fatalf("an engine with no ID shows %d threads, want its one", len(env.Threads))
+	}
+}
+
 // finishTurn creates a thread, sends it a message and approves the edit
 // the turn asks for, checking what the GUI sees on the way. It returns once
 // the turn is over and the transcript shows all of it.
@@ -546,24 +565,6 @@ func TestATurnRunsFromCreateThroughAnApproval(t *testing.T) {
 		return th.View.Disposition == (api.Disposition{State: api.Settled}) && len(th.Pending) == 0
 	})
 
-	answer := m.Respond(env, id, api.NewID(), true)
-	failed := func() bool {
-		p := env.Threads[id].Pending
-		return len(p) == 1 && p[0].Command == answer && errors.Is(p[0].Err, api.ErrNotFound)
-	}
-	g.until(t, "an answer to an unknown request to fail", failed)
-	m.Retry(env, id, answer)
-	if p := env.Threads[id].Pending; len(p) != 1 || p[0].Err != nil {
-		t.Fatalf("right after Retry the row is %+v, want it in flight again", p)
-	}
-	g.until(t, "the retry to fail the same way", failed)
-	if !env.Threads[id].Pending[0].Terminal() {
-		t.Fatal("an answer to an unknown request can succeed on a retry, want it terminal")
-	}
-	m.Dismiss(env, id, answer)
-	if p := env.Threads[id].Pending; len(p) != 0 {
-		t.Fatalf("after Dismiss the rows are %s, want none", describePending(p))
-	}
 }
 
 // A StartNow is refused while a run is live. The same command lands once
@@ -592,8 +593,8 @@ func TestARefusedStartNowLandsOnRetryOnceTheRunEnds(t *testing.T) {
 }
 
 // Interrupting a run voids the request it asked. An answer sent after that
-// is refused, and the GUI dismisses its row.
-func TestAnAnswerTooLateIsDismissed(t *testing.T) {
+// is refused, and leaves no row: the request shows how it ended.
+func TestAnAnswerTooLateLeavesNoRow(t *testing.T) {
 	m, g := manager(t, stateDir(t))
 	env := m.Envs()[0]
 	online(t, g, env)
@@ -612,16 +613,32 @@ func TestAnAnswerTooLateIsDismissed(t *testing.T) {
 	m.Interrupt(env, id)
 	g.until(t, "the run over", func() bool {
 		th := env.Threads[id]
-		return th.View.Run == api.RunIdle && th.View.LastTurn != nil && len(th.Pending) == 0
+		return th.View.Run == api.RunIdle && th.View.LastTurn != nil && len(th.Pending) == 0 && th.Transcript.request(req.Request).State != api.RequestPending
 	})
-	answer := m.Respond(env, id, req.Request, true)
-	g.until(t, "the answer refused", func() bool { p := env.Threads[id].Pending; return len(p) == 1 && p[0].Err != nil })
-	if p := env.Threads[id].Pending[0]; !errors.As(p.Err, new(*api.RejectedError)) {
-		t.Fatalf("the answer failed with %v, want a rejection", p.Err)
+	m.Respond(env, id, req.Request, true)
+	g.until(t, "the refused answer dropped", func() bool { return len(env.Threads[id].Pending) == 0 }, func() string { return describePending(env.Threads[id].Pending) })
+}
+
+// A failed answer stays while the open transcript, behind the thread's
+// view, still shows its request waiting. Closing the thread leaves only
+// the view, which no longer asks, so the row goes.
+func TestClosingAThreadDropsAnAnswerOnlyItsTranscriptAsked(t *testing.T) {
+	request, id := api.NewID(), api.NewID()
+	th := &Thread{
+		View:       api.Thread{ID: id, Requests: []api.Request{{ID: request}}},
+		Transcript: &Transcript{Entries: []Entry{&RequestEntry{Request: request, State: api.RequestPending}}},
+		Pending:    []Pending{{Command: api.NewID(), Body: api.RequestRespond{Request: request}, Err: errNoEngine}},
+		open:       true,
 	}
-	m.Dismiss(env, id, answer)
-	if p := env.Threads[id].Pending; len(p) != 0 {
-		t.Fatalf("after Dismiss the rows are %s, want none", describePending(p))
+	env := &Env{Threads: map[api.ID]*Thread{id: th}}
+	m := &Manager{}
+	m.view(env, api.Thread{ID: id})
+	if len(th.Pending) != 1 {
+		t.Fatalf("with the transcript still asking the rows are %s, want the failed answer", describePending(th.Pending))
+	}
+	m.CloseThread(env, id)
+	if len(th.Pending) != 0 {
+		t.Fatalf("closed, the thread keeps %s, an answer to a request nothing shows", describePending(th.Pending))
 	}
 }
 

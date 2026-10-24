@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"glitched/internal/api"
 )
 
 // ghost is a borderless button that only shows a face while hovered, or
@@ -142,6 +144,7 @@ var settingsSections = []struct {
 	{"general", "General", icSliders, ui.Hex("#94a3b8")},
 	{"appearance", "Appearance", icPalette, ui.Hex("#f472b6")},
 	{"providers", "Providers", icPlug, ui.Hex("#4ade80")},
+	{"servers", "Servers", icServer, ui.Hex("#38bdf8")},
 	{"keybindings", "Keybindings", icKeyboard, ui.Hex("#60a5fa")},
 	{"archived", "Archived threads", icArchive, ui.Hex("#fbbf24")},
 	{"about", "About", icInfo, ui.Hex("#a78bfa")},
@@ -168,10 +171,13 @@ func (a *app) settingsNav(c *ui.Context) {
 	})
 }
 
+// newThread shows the draft, in the shown thread's workspace.
 func (a *app) newThread() {
-	p, _ := a.current()
-	t := &thread{id: time.Now().Format("150405.000"), title: "New thread", age: "now", branch: "main"}
-	p.threads = append([]*thread{t}, p.threads...)
-	p.open = true
-	a.select_(t.id)
+	t := a.current()
+	a.fresh = draft{t.env, t.View.Workspace}
+	a.selected = api.ID{}
+	a.follow()
+	if a.router.Path() != "/" {
+		a.router.Push("/")
+	}
 }
