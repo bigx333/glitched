@@ -91,9 +91,15 @@ type Event interface{ event() }
 
 type TextDelta struct{ Text string }
 
+// Work is a step of the agent's. Path is the file an edit or read
+// touched; Exit and Output are how a finished command went, its exit code
+// and what it printed, where the provider says.
 type Work struct {
 	Item, Kind, Title string
 	Status            api.WorkStatus
+	Path              string
+	Exit              *int
+	Output            string
 }
 
 type RequestOpened struct {

@@ -112,7 +112,7 @@ func TestHubFollowCatchesUpOverTheWire(t *testing.T) {
 		evs[i].Payload = payload
 	}
 	for i := 0; i < len(evs); i += 4 {
-		if _, err := r.Append(ctx, api.Upload{Host: host, Epoch: 1, Log: log, Events: evs[i : i+4]}); err != nil {
+		if _, err := r.Append(ctx, api.Upload{Protocol: api.Protocol, Host: host, Epoch: 1, Log: log, Events: evs[i : i+4]}); err != nil {
 			t.Fatal(err)
 		}
 	}

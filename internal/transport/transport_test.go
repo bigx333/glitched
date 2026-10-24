@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 
 	"glitched/internal/api"
 	"glitched/internal/hub"
@@ -154,7 +157,7 @@ func TestEndpointRoundTrip(t *testing.T) {
 		targets[s] = api.NewID()
 		errs[targets[s]] = s
 	}
-	fake := &fakeEndpoint{env: api.Environment{ID: api.NewID(), Name: "mac", Protocol: 1, Log: api.NewID()}, errs: errs}
+	fake := &fakeEndpoint{env: api.Environment{ID: api.NewID(), Name: "mac", Protocol: api.Protocol, Log: api.NewID()}, errs: errs}
 
 	for _, network := range []string{"unix", "tcp"} {
 		t.Run(network, func(t *testing.T) {
@@ -291,13 +294,13 @@ func TestHubOverTheWire(t *testing.T) {
 	}
 	defer feed.Close()
 
-	if ack, err := c.Append(ctx, api.Upload{Host: host, Epoch: 2, Log: log, Events: events(log, a, 1, 3)}); err != nil || ack.Acked != 3 {
+	if ack, err := c.Append(ctx, api.Upload{Protocol: api.Protocol, Host: host, Epoch: 2, Log: log, Events: events(log, a, 1, 3)}); err != nil || ack.Acked != 3 {
 		t.Fatalf("append: %v %v", ack, err)
 	}
-	if ack, err := c.Append(ctx, api.Upload{Host: host, Epoch: 2, Log: log, Events: events(log, b, 4, 5)}); err != nil || ack.Acked != 5 {
+	if ack, err := c.Append(ctx, api.Upload{Protocol: api.Protocol, Host: host, Epoch: 2, Log: log, Events: events(log, b, 4, 5)}); err != nil || ack.Acked != 5 {
 		t.Fatalf("append: %v %v", ack, err)
 	}
-	if ack, err := c.Append(ctx, api.Upload{Host: host, Epoch: 2, Log: log, Events: events(log, a, 6, 6)}); err != nil || ack.Acked != 6 {
+	if ack, err := c.Append(ctx, api.Upload{Protocol: api.Protocol, Host: host, Epoch: 2, Log: log, Events: events(log, a, 6, 6)}); err != nil || ack.Acked != 6 {
 		t.Fatalf("append: %v %v", ack, err)
 	}
 	for _, want := range []uint64{1, 2, 3, 6} {
@@ -308,16 +311,16 @@ func TestHubOverTheWire(t *testing.T) {
 	}
 
 	var gap *hub.GapError
-	if _, err := c.Append(ctx, api.Upload{Host: host, Epoch: 2, Log: log, Events: events(log, a, 9, 9)}); !errors.As(err, &gap) || gap.Acked != 6 {
+	if _, err := c.Append(ctx, api.Upload{Protocol: api.Protocol, Host: host, Epoch: 2, Log: log, Events: events(log, a, 9, 9)}); !errors.As(err, &gap) || gap.Acked != 6 {
 		t.Fatalf("gap: got %v, want GapError{6}", err)
 	}
-	if _, err := c.Append(ctx, api.Upload{Host: host, Epoch: 1, Log: log, Events: events(log, a, 7, 7)}); !errors.Is(err, api.ErrStaleEpoch) {
+	if _, err := c.Append(ctx, api.Upload{Protocol: api.Protocol, Host: host, Epoch: 1, Log: log, Events: events(log, a, 7, 7)}); !errors.Is(err, api.ErrStaleEpoch) {
 		t.Fatalf("stale epoch: got %v", err)
 	}
-	if _, err := c.Append(ctx, api.Upload{Host: api.NewID(), Epoch: 2, Log: log, Events: events(log, a, 7, 7)}); !errors.Is(err, hub.ErrForeignLog) {
+	if _, err := c.Append(ctx, api.Upload{Protocol: api.Protocol, Host: api.NewID(), Epoch: 2, Log: log, Events: events(log, a, 7, 7)}); !errors.Is(err, hub.ErrForeignLog) {
 		t.Fatalf("another host's append: got %v, want ErrForeignLog", err)
 	}
-	if _, err := c.Append(ctx, api.Upload{Host: host, Epoch: 2, Log: log, Events: events(log, b, 6, 7)}); !errors.Is(err, hub.ErrRewound) {
+	if _, err := c.Append(ctx, api.Upload{Protocol: api.Protocol, Host: host, Epoch: 2, Log: log, Events: events(log, b, 6, 7)}); !errors.Is(err, hub.ErrRewound) {
 		t.Fatalf("append whose seq 6 is another event: got %v, want ErrRewound", err)
 	}
 	if n, err := c.Acked(ctx, log); err != nil || n != 6 {
@@ -509,5 +512,43 @@ func TestPanickingHandlerAnswersWithAnError(t *testing.T) {
 	}
 	if n := len(d.dialed()); n != 1 {
 		t.Fatalf("dialed %d sockets, want 1", n)
+	}
+}
+
+// A hub of protocol 1 acks with no protocol, and would keep a deleted
+// thread readable: the hub client refuses it.
+func TestAHubOfAnotherProtocolIsRefused(t *testing.T) {
+	ln, err := Loopback{Network: "unix", Address: filepath.Join(t.TempDir(), "g.sock")}.Listen(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.CloseNow()
+		for {
+			_, b, err := ws.Read(r.Context())
+			if err != nil {
+				return
+			}
+			var req request
+			json.Unmarshal(b, &req)
+			b, _ = json.Marshal(response{ID: req.ID, Result: json.RawMessage(`{"acked":3}`)})
+			ws.Write(r.Context(), websocket.MessageText, b)
+		}
+	})}
+	go old.Serve(ln)
+	t.Cleanup(func() { old.Close() })
+	c := NewHubClient(Loopback{Network: "unix", Address: ln.Addr().String()}, api.ID{})
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := c.Acked(ctx, api.NewID()); !errors.Is(err, api.ErrProtocol) {
+		t.Fatalf("acked by a protocol 1 hub: %v, want api.ErrProtocol", err)
+	}
+	if _, err := c.Append(ctx, api.Upload{Protocol: api.Protocol, Host: api.NewID(), Log: api.NewID()}); !errors.Is(err, api.ErrProtocol) {
+		t.Fatalf("appended to a protocol 1 hub: %v, want api.ErrProtocol", err)
 	}
 }

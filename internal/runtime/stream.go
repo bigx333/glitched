@@ -19,9 +19,10 @@ var errStreamClosed = errors.New("runtime: stream closed")
 
 // Open sends the catch-up (a replay from the client's cursor, or a snapshot
 // at a fence), then whatever committed meanwhile, then StreamSynchronized,
-// then live items. A thread subscription gets the thread's events. The shell
-// gets one StreamThread per thread a commit moved, and always catches up
-// from a snapshot: it holds no events to replay.
+// then live items. A thread subscription gets the thread's events, and ends
+// with api.ErrNotFound after its tombstone; opening one on a deleted thread
+// is api.ErrNotFound. The shell gets one StreamThread per thread a commit
+// moved, and always catches up from a snapshot: it holds no events to replay.
 func (h *Host) Open(ctx context.Context, sub api.Subscription) (api.Stream, error) {
 	s := &stream{h: h, thread: sub.Thread, wake: make(chan struct{}, 1)}
 	h.mu.Lock()
@@ -72,6 +73,7 @@ type stream struct {
 	items []api.StreamItem
 	bytes int    // held in tail and items
 	last  uint64 // head of the last commit queued; a commit at or below it is a duplicate
+	over  bool   // the thread's tombstone is queued: nothing follows the items
 	err   error
 }
 
@@ -89,10 +91,8 @@ func (s *stream) start(items []api.StreamItem, fence uint64) {
 		return
 	}
 	tail := s.tail
-	s.tail, s.items, s.bytes, s.last, s.ready = nil, items, 0, fence, true
-	for _, it := range items {
-		s.bytes += size(it)
-	}
+	s.tail, s.items, s.bytes, s.last, s.ready = nil, nil, 0, fence, true
+	s.queue(items)
 	for _, b := range tail {
 		s.push(b)
 	}
@@ -143,11 +143,18 @@ func (s *stream) push(b batch) {
 		return
 	}
 	s.last = b.head
-	s.items = append(s.items, b.items...)
-	for _, it := range b.items {
-		s.bytes += size(it)
-	}
+	s.queue(b.items)
 	s.bound()
+}
+
+func (s *stream) queue(items []api.StreamItem) {
+	s.items = append(s.items, items...)
+	for _, it := range items {
+		s.bytes += size(it)
+		if it.Event != nil && it.Event.Type == api.EventType(api.ThreadDeleted{}) {
+			s.over = true
+		}
+	}
 }
 
 // viewOverhead stands in for a view's fixed-size fields; its strings and
@@ -185,6 +192,9 @@ func (s *stream) Next(ctx context.Context) (api.StreamItem, error) {
 			return it, nil
 		}
 		err := s.err
+		if err == nil && s.over {
+			err = api.ErrNotFound
+		}
 		s.mu.Unlock()
 		if err != nil {
 			return api.StreamItem{}, err

@@ -39,6 +39,13 @@ func apply(t Thread, e Event) (Thread, error) {
 		t = Thread{ID: e.Thread, Workspace: b.Workspace, Title: b.Title, Model: b.Model, Access: b.Access, OwnerEpoch: 1}
 	case api.DispositionChanged:
 		t.Disposition = b.Disposition
+	case api.ThreadRenamed:
+		t.Title = b.Title
+	case api.ThreadDeleted:
+		if t.Live() != nil {
+			return t, &TransitionError{"thread", "running", "deleted"}
+		}
+		t.Deleted = true
 	case api.MessageQueued:
 		state := QueueReady
 		if b.Held {

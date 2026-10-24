@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -297,4 +298,195 @@ func (e ahead) Info(ctx context.Context) (api.Environment, error) {
 	env, err := e.Endpoint.Info(ctx)
 	env.Protocol++
 	return env, err
+}
+
+// runTests is a turn that asks to run a command, then runs it.
+var runTests = []provider.Event{
+	provider.TextDelta{Text: "I'll run the sidebar's tests."},
+	provider.Work{Item: "read-1", Kind: "read", Title: "Read package.json", Status: api.WorkCompleted, Path: "package.json"},
+	provider.RequestOpened{ID: "run-1", Kind: "approval", Body: json.RawMessage(`{"operation":"run","command":"bun run test -- Sidebar","cwd":"/work/t3code","reason":"Runs the sidebar's tests to check the new sort."}`)},
+	provider.Work{Item: "cmd-1", Kind: "command", Title: "bun run test -- Sidebar", Status: api.WorkCompleted},
+	provider.TextDelta{Text: " The tests pass."},
+}
+
+// asking is the app on an engine whose turns are script, with a thread
+// sent a message and waiting on the request the script opens.
+func asking(t *testing.T, script []provider.Event) (*harness, thread) {
+	t.Helper()
+	dir := tempDir(t)
+	engine(t, daemon.Config{Dir: dir}, fake.New(script))
+	h := start(t, dir)
+	h.a.draft = "Run the sidebar tests."
+	h.tt.Frame()
+	h.click("Send")
+	h.until("the approval card", func() bool { return h.tt.HasText("Approval needed") })
+	h.tt.Advance(time.Second)
+	return h, h.a.current()
+}
+
+// checks is a turn whose commands pass and fail, and an edit.
+var checks = []provider.Event{
+	provider.TextDelta{Text: "Checking the build."},
+	provider.Work{Item: "tc", Kind: "command", Title: "bun run typecheck", Status: api.WorkStarted},
+	provider.Work{Item: "tc", Kind: "command", Title: "bun run typecheck", Status: api.WorkCompleted, Exit: new(0)},
+	provider.Work{Item: "t", Kind: "command", Title: "bun run test", Status: api.WorkStarted},
+	provider.Work{Item: "t", Kind: "command", Title: "bun run test", Status: api.WorkFailed, Exit: new(1), Output: " FAIL  Sidebar > sorts threads by updatedAt\n Test Files  1 failed (1)"},
+	provider.Work{Item: "e", Kind: "edit", Title: "Edit " + sidebarPath, Status: api.WorkCompleted, Path: sidebarPath},
+	provider.TextDelta{Text: " One test fails."},
+}
+
+// sidebarPath is the file the checks turn edits.
+const sidebarPath = "apps/web/src/components/Sidebar.tsx"
+
+const sidebarBefore = `import { useState } from "react";
+import { SidebarGroup, SidebarGroupLabel } from "./ui/sidebar";
+import { ThreadRow } from "./ThreadRow";
+import { useThreads } from "../hooks/useThreads";
+
+export function Sidebar({ projects }: SidebarProps) {
+  return projects.map((project) => <ProjectGroup key={project.id} project={project} />);
+}
+
+function ProjectGroup({ project }: { project: Project }) {
+  const threads = useThreads(project.id);
+  const [expanded, setExpanded] = useState(true);
+  const sorted = threads.sort((a, b) => b.updatedAt - a.updatedAt);
+
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel>{project.name}</SidebarGroupLabel>
+      {expanded && sorted.map((t) => (
+        <ThreadRow key={t.id} thread={t} />
+      ))}
+    </SidebarGroup>
+  );
+}
+`
+
+const sidebarAfter = `import { useMemo, useState } from "react";
+import { SidebarGroup, SidebarGroupLabel } from "./ui/sidebar";
+import { ThreadRow } from "./ThreadRow";
+import { ChevronIcon } from "./ChevronIcon";
+import { useThreads } from "../hooks/useThreads";
+
+export function Sidebar({ projects }: SidebarProps) {
+  return projects.map((project) => <ProjectGroup key={project.id} project={project} />);
+}
+
+function ProjectGroup({ project }: { project: Project }) {
+  const threads = useThreads(project.id);
+  const [expanded, setExpanded] = useState(true);
+  const sorted = useMemo(
+    () => [...threads].sort((a, b) => b.updatedAt - a.updatedAt),
+    [threads],
+  );
+
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel onClick={() => setExpanded(!expanded)}>
+        <ChevronIcon open={expanded} />
+        {project.name}
+      </SidebarGroupLabel>
+      {expanded && sorted.map((t) => (
+        <ThreadRow key={t.id} thread={t} />
+      ))}
+    </SidebarGroup>
+  );
+}
+`
+
+// gitWorkspace is a repository, t3code, whose HEAD holds sidebarBefore at
+// sidebarPath and whose working tree holds sidebarAfter there: the edit
+// the checks turn names, made as an agent makes it.
+func gitWorkspace(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	ws := filepath.Join(t.TempDir(), "t3code")
+	file := filepath.Join(ws, sidebarPath)
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(sidebarBefore), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "sidebar"}} {
+		if out, err := exec.Command("git", append([]string{"-C", ws}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(file, []byte(sidebarAfter), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return ws
+}
+
+// checked is the app showing a thread that took the checks turn in a
+// gitWorkspace, which it returns.
+func checked(t *testing.T) (*harness, thread) {
+	t.Helper()
+	ws := gitWorkspace(t)
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(checks))
+	seed(t, d, ws, "Sort sidebar threads by recent activity", "Sort them by most recent activity.")
+	h := start(t, dir)
+	th := h.thread("Sort sidebar threads by recent activity")
+	h.a.select_(th)
+	h.until("its transcript", func() bool { return h.tt.HasText("One test fails.") })
+	h.tt.Advance(time.Second)
+	return h, th
+}
+
+// uncertainDir is a state directory whose engine holds a thread, Stuck,
+// whose run it lost: the engine stopped while the agent waited on a
+// request, and the next found no agent to take the run back.
+func uncertainDir(t *testing.T) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(true)))
+	id := api.NewID()
+	for _, b := range []api.Intent{api.ThreadCreate{Workspace: "/work/t3code", Title: "Stuck", Model: fakeModel}, api.MessageDispatch{Text: "Edit main.go.", Mode: api.StartNow}} {
+		if _, err := d.Endpoint().Submit(ctx, api.Command{ID: api.NewID(), Target: id, Body: b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runIs := func(d *daemon.Daemon, want api.RunState) {
+		for {
+			if snap, err := d.Endpoint().Read(ctx, api.Query{Thread: id}); err == nil && snap.Threads[0].Run == want {
+				return
+			}
+			if ctx.Err() != nil {
+				t.Fatalf("the run never got to %v", want)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	runIs(d, api.RunWaiting)
+	d.Close()
+	runIs(engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(true))), api.RunUncertain)
+	return dir
+}
+
+// diffsRead waits for the diffs the window asks for to be read, and shows
+// them.
+func (h *harness) diffsRead() {
+	h.t.Helper()
+	h.tt.Frame()
+	h.until("the diffs read", func() bool { return len(h.a.reading) == 0 })
+	h.tt.Advance(time.Second)
+}
+
+// diffOf is the viewer of a file of the thread's diff, once read.
+func (h *harness) diffOf(th thread, path string) *fileDiff {
+	h.t.Helper()
+	for _, f := range changedFiles(entriesOf(th)) {
+		if f.path == path {
+			return readNow(h.t, h.a, h.p, th, f)
+		}
+	}
+	h.t.Fatalf("no diff of %s", path)
+	return nil
 }

@@ -201,9 +201,9 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 	var model []byte
 	var until sql.NullInt64
 	var updated int64
-	err := q.QueryRowContext(ctx, `SELECT workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at
+	err := q.QueryRowContext(ctx, `SELECT workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted
 		FROM threads WHERE id = ?`, id[:]).Scan(&t.Workspace, &t.Title, &model, &t.Access, &t.Revision, &t.OwnerEpoch,
-		&t.Generation, &t.Disposition.State, &until, &updated)
+		&t.Generation, &t.Disposition.State, &until, &updated, &t.Deleted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return engine.Thread{}, nil
 	}
@@ -284,13 +284,13 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 	if !t.Disposition.Until.IsZero() {
 		until = t.Disposition.Until.UnixNano()
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO threads (id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO threads (id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET workspace = excluded.workspace, title = excluded.title, model = excluded.model,
 			access = excluded.access, revision = excluded.revision, owner_epoch = excluded.owner_epoch, generation = excluded.generation,
-			disposition = excluded.disposition, until = excluded.until, updated_at = excluded.updated_at`,
+			disposition = excluded.disposition, until = excluded.until, updated_at = excluded.updated_at, deleted = excluded.deleted`,
 		t.ID[:], t.Workspace, t.Title, string(model), t.Access, t.Revision, t.OwnerEpoch, t.Generation, t.Disposition.State, until,
-		t.UpdatedAt.UnixNano()); err != nil {
+		t.UpdatedAt.UnixNano(), t.Deleted); err != nil {
 		return err
 	}
 	for i, r := range t.Runs {

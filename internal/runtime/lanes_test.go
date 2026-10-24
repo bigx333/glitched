@@ -344,3 +344,33 @@ func TestAStartWaitingOnTheLastAgentSurvivesARestart(t *testing.T) {
 		t.Fatalf("the new host asks for run %s after %d starts, want %s after 1", th.Requests[0].Run, fresh.Starts(), second)
 	}
 }
+
+// A steer sent while the stop is still on its way to the agent is refused,
+// so no second turn starts once the run ends.
+func TestASteerDuringAStopIsRefused(t *testing.T) {
+	g := newGated(fake.Turn(true))
+	n := start(t, dbPath(t), g)
+	thread := newThread(t, n.h)
+	submit(t, n.h, thread, dispatch("go", api.StartNow))
+	until(t, n.h, thread, "approval", waiting)
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	g.setGate(func(_ api.ID, a provider.Action) <-chan struct{} {
+		if _, ok := a.(provider.Interrupt); ok {
+			entered <- struct{}{}
+			return release
+		}
+		return nil
+	})
+	submit(t, n.h, thread, api.TurnInterrupt{})
+	<-entered
+	_, err := n.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: dispatch("hurry", api.SteerActive)})
+	if rej := (*api.RejectedError)(nil); !errors.As(err, &rej) {
+		t.Fatalf("a steer while the stop is in flight: %v, want rejected", err)
+	}
+	close(release)
+	th := until(t, n.h, thread, "the stop ends the run", idle)
+	if got := outcomes(t, n.h, thread); th.Queued != 0 || len(got) != 1 {
+		t.Fatalf("after the stop: %d queued, runs ended %v; want none queued and one run", th.Queued, got)
+	}
+	assertReplay(t, n.st)
+}

@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -290,7 +291,7 @@ func serveTailnet(t *testing.T, srv *Server) string {
 // upgrade opens a WebSocket to addr that has done none of the handshake.
 func upgrade(t *testing.T, ctx context.Context, addr string) *websocket.Conn {
 	t.Helper()
-	ws, _, err := websocket.Dial(ctx, "ws://"+addr+"/ws", nil)
+	ws, _, err := websocket.Dial(ctx, "ws://"+addr+"/ws", &websocket.DialOptions{HTTPHeader: http.Header{protocolHeader: {strconv.Itoa(api.Protocol)}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,7 +380,7 @@ func TestHandshakeDropsABadProofWithoutWaitingForThePeer(t *testing.T) {
 			nc = c
 			return c, err
 		},
-	}}})
+	}}, HTTPHeader: http.Header{protocolHeader: {strconv.Itoa(api.Protocol)}}})
 	if err != nil {
 		t.Fatal(err)
 	}

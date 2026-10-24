@@ -22,7 +22,19 @@ var (
 	// ErrOverflow ends a stream whose subscriber fell too far behind. The
 	// client reopens it from the last cursor it holds.
 	ErrOverflow = errors.New("api: stream overflow")
+	// ErrProtocol refuses a peer that speaks another Protocol.
+	ErrProtocol = errors.New("api: the peer speaks another protocol")
 )
+
+// ProtocolError refuses a peer that speaks protocol Theirs, not this
+// one's. It is ErrProtocol.
+type ProtocolError struct{ Theirs int }
+
+func (e *ProtocolError) Error() string {
+	return fmt.Sprintf("api: the peer speaks protocol %d and this one %d; update the older one", e.Theirs, Protocol)
+}
+
+func (e *ProtocolError) Is(err error) bool { return err == ErrProtocol }
 
 // RejectedError is a command the engine refused by policy or state.
 type RejectedError struct{ Reason string }

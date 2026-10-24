@@ -1,6 +1,7 @@
 package client
 
 import (
+	"cmp"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -19,6 +20,7 @@ type Transcript struct {
 	Queue    []*UserEntry
 	Cursor   api.Cursor // the last event folded in
 	Ended    time.Time  // when the last turn folded in ended
+	Deleted  bool       // the thread's tombstone is folded in; nothing follows it
 	starting api.ID     // the run admitted and not yet started, stopped or ended
 }
 
@@ -70,11 +72,19 @@ type WorkEntry struct {
 	Ended   time.Time
 }
 
+// WorkStep is one of a run's steps. Started is when the transcript first
+// saw it and Ended when it last left WorkStarted; Exit and Output are a
+// command's, when the provider says.
 type WorkStep struct {
-	Item   string
-	Kind   string
-	Title  string
-	Status api.WorkStatus
+	Item    string
+	Kind    string
+	Title   string
+	Status  api.WorkStatus
+	Path    string
+	Exit    *int
+	Output  string
+	Started time.Time
+	Ended   time.Time
 }
 
 type RequestEntry struct {
@@ -85,7 +95,8 @@ type RequestEntry struct {
 	Body       json.RawMessage
 	State      api.RequestState
 	Answer     json.RawMessage
-	Reason     string // why it was invalidated, when the engine said
+	Reason     string    // why it was invalidated, when the engine said
+	Opened     time.Time // when the agent asked
 }
 
 func (*UserEntry) entry()      {}
@@ -160,7 +171,7 @@ func (t *Transcript) apply(e api.Event) {
 	case api.WorkItem:
 		t.work(b, e.At)
 	case api.RequestOpened:
-		t.add(&RequestEntry{Run: b.Run, Request: b.Request, Generation: b.Generation, Kind: b.Kind, Body: b.Body, State: api.RequestPending})
+		t.add(&RequestEntry{Run: b.Run, Request: b.Request, Generation: b.Generation, Kind: b.Kind, Body: b.Body, State: api.RequestPending, Opened: e.At})
 	case api.RequestAnswer:
 		if r := t.request(b.Request); r != nil {
 			r.State, r.Answer = api.RequestAnswered, b.Answer
@@ -181,6 +192,8 @@ func (t *Transcript) apply(e api.Event) {
 	case api.TurnEnded:
 		t.end(b.Run, Cancelled, e.At)
 		t.Ended = e.At
+	case api.ThreadDeleted:
+		t.Deleted = true
 	}
 }
 
@@ -263,14 +276,24 @@ func (t *Transcript) since(run api.ID) []Entry {
 }
 
 // work upserts an item: in the entry that already holds it, else in the
-// newest entry when that is the run's work, else in a new one.
+// newest entry when that is the run's work, else in a new one. A field the
+// later event leaves out keeps what the earlier one said.
 func (t *Transcript) work(w api.WorkItem, at time.Time) {
-	step := WorkStep{Item: w.Item, Kind: w.Kind, Title: w.Title, Status: w.Status}
+	step := WorkStep{Item: w.Item, Kind: w.Kind, Title: w.Title, Status: w.Status, Path: w.Path, Exit: w.Exit, Output: w.Output, Started: at}
+	if w.Status != api.WorkStarted {
+		step.Ended = at
+	}
 	var into *WorkEntry
 	for _, e := range t.since(w.Run) {
 		if we, ok := e.(*WorkEntry); ok && we.Run == w.Run {
 			if i := slices.IndexFunc(we.Items, func(s WorkStep) bool { return s.Item == w.Item }); i >= 0 {
 				into = we
+				was := we.Items[i]
+				step.Started = was.Started
+				step.Kind, step.Title, step.Path, step.Output = cmp.Or(step.Kind, was.Kind), cmp.Or(step.Title, was.Title), cmp.Or(step.Path, was.Path), cmp.Or(step.Output, was.Output)
+				if step.Exit == nil {
+					step.Exit = was.Exit
+				}
 				we.Items[i] = step
 				break
 			}

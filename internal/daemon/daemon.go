@@ -165,6 +165,8 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 			if err := st.Rewind(ctx); err != nil {
 				return nil, err
 			}
+		case errors.Is(err, api.ErrProtocol):
+			slog.Warn("the hub speaks another protocol, so nothing is uploaded to it until one of the two is updated", "err", err)
 		case err != nil:
 			slog.Warn("hub unreachable, so a restore the fence came back with goes unnoticed", "err", err)
 		}

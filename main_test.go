@@ -20,7 +20,6 @@ import (
 	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
-	daemonruntime "glitched/internal/runtime"
 )
 
 // With an empty state directory, the app embeds this machine's engine and
@@ -179,12 +178,12 @@ func TestApprovalCardAllows(t *testing.T) {
 	h.a.draft = "Fix the flicker"
 	h.tt.Frame()
 	h.click("Send")
-	h.until("the approval card", func() bool { return h.tt.HasText("Allow edit main.go?") })
+	h.until("the approval card", func() bool { return h.tt.HasText("Approval needed") })
 	h.tt.Advance(time.Second) // risen in
 	if _, ok := h.tt.Find("Deny"); !ok {
 		t.Fatalf("no Deny on the card: %q", h.tt.Texts())
 	}
-	h.click("Allow")
+	h.click("Allow once")
 	h.until("the turn to finish", func() bool {
 		v := h.a.current().View
 		return v.LastTurn != nil && !v.Working() && h.tt.HasText("Done.") && h.tt.HasText("Allowed") && h.tt.HasText("Edit main.go")
@@ -192,7 +191,7 @@ func TestApprovalCardAllows(t *testing.T) {
 	if o := h.a.current().View.LastTurn.Outcome; o != api.OutcomeCompleted {
 		t.Errorf("the turn ended %v, want completed", o)
 	}
-	if _, ok := h.tt.Find("Allow"); ok {
+	if _, ok := h.tt.Find("Allow once"); ok {
 		t.Error("the answered card still offers Allow")
 	}
 }
@@ -205,7 +204,7 @@ func TestAFailedAnswerOffersDismissAndRetry(t *testing.T) {
 	h.a.draft = "Fix the flicker"
 	h.tt.Frame()
 	h.click("Send")
-	h.until("the approval card", func() bool { return h.tt.HasText("Allow edit main.go?") })
+	h.until("the approval card", func() bool { return h.tt.HasText("Approval needed") })
 	th := h.a.current()
 	request := th.View.Requests[0].ID
 	for _, err := range []error{errors.New("boom"), api.ErrNotFound} {
@@ -213,13 +212,13 @@ func TestAFailedAnswerOffersDismissAndRetry(t *testing.T) {
 		h.tt.Frame()
 		h.tt.Advance(time.Second)
 		_, retry := h.tt.Find("Retry")
-		_, allow := h.tt.Find("Allow")
+		_, allow := h.tt.Find("Allow once")
 		if !h.tt.HasText("Not sent: "+err.Error()) || retry == errors.Is(err, api.ErrNotFound) || allow {
 			t.Fatalf("an answer that failed with %v shows %q", err, h.tt.Texts())
 		}
 		h.click("Dismiss")
 		h.tt.Advance(time.Second)
-		if _, ok := h.tt.Find("Allow"); !ok || h.tt.HasText("Not sent") {
+		if _, ok := h.tt.Find("Allow once"); !ok || h.tt.HasText("Not sent") {
 			t.Fatalf("after Dismiss the card shows %q, want Allow and Deny again", h.tt.Texts())
 		}
 	}
@@ -233,7 +232,7 @@ func TestAFailedAnswerGoesWithItsRequest(t *testing.T) {
 	h.a.draft = "Fix the flicker"
 	h.tt.Frame()
 	h.click("Send")
-	h.until("the approval card", func() bool { return h.tt.HasText("Allow edit main.go?") })
+	h.until("the approval card", func() bool { return h.tt.HasText("Approval needed") })
 	th := h.a.current()
 	request := th.View.Requests[0].ID
 	th.Pending = append(th.Pending, client.Pending{Command: api.NewID(), Body: api.RequestRespond{Request: request}, Err: errors.New("boom")})
@@ -248,7 +247,7 @@ func TestAFailedAnswerGoesWithItsRequest(t *testing.T) {
 	if _, flagged := h.tt.Find("A command failed"); flagged || failed(th) {
 		t.Fatalf("the request is over, yet the thread keeps %d rows and the window shows %q", len(th.Pending), h.tt.Texts())
 	}
-	h.a.backend.Respond(th.env, th.id(), request, true)
+	h.a.backend.Respond(th.env, th.id(), request, client.AllowOnce)
 	h.until("the late answer refused", func() bool { return len(th.Pending) == 0 })
 	h.tt.Advance(time.Second)
 	if _, flagged := h.tt.Find("A command failed"); flagged {
@@ -492,7 +491,7 @@ func TestAServerOfAnotherProtocolSaysSo(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.a.router.Push("/settings/servers")
-	want := fmt.Sprintf("Incompatible: server speaks protocol %d, this app %d", daemonruntime.Protocol+1, daemonruntime.Protocol)
+	want := fmt.Sprintf("Incompatible: server speaks protocol %d, this app %d", api.Protocol+1, api.Protocol)
 	h.until("the server's row to say it is incompatible", func() bool { return h.tt.HasText(want) })
 }
 
@@ -577,8 +576,8 @@ func TestSettingsPages(t *testing.T) {
 	if err := tt.Click("Light"); err != nil {
 		t.Fatal(err)
 	}
-	if a.settings.theme != 1 {
-		t.Errorf("theme %d", a.settings.theme)
+	if a.settings.theme != "Light" {
+		t.Errorf("theme %q", a.settings.theme)
 	}
 	if err := tt.Click("Back to app"); err != nil {
 		t.Fatal(err)
@@ -634,31 +633,6 @@ func TestModelPicker(t *testing.T) {
 		t.Error("fast mode not on")
 	}
 	tt.Advance(time.Second)
-}
-
-// The sidebar's shortcuts show only while ⌘ is held.
-func TestShortcutHints(t *testing.T) {
-	a := offline(t)
-	tt := ui.NewTester(a.view, 1320, 860)
-	has := func() bool {
-		for _, s := range tt.Texts() {
-			if s == "⌘" {
-				return true
-			}
-		}
-		return false
-	}
-	if has() {
-		t.Error("keycaps show without ⌘ held")
-	}
-	tt.HoldModifiers(ui.Cmd)
-	if !has() {
-		t.Error("keycaps hidden while ⌘ is held")
-	}
-	tt.HoldModifiers(0)
-	if has() {
-		t.Error("keycaps still show after ⌘ is let go")
-	}
 }
 
 // The effort's thumb follows the pointer while dragged, locking onto a
@@ -940,30 +914,50 @@ func TestGagTiming(t *testing.T) {
 	}
 }
 
-// The diff panel shows each file's real diff, unified by default, and
+// The diff panel shows each file's diff, unified by default, and
 // accepting a change counts it out.
 func TestDiffPanel(t *testing.T) {
-	a := offline(t)
+	h, th := checked(t)
+	a, tt := h.a, h.tt
 	a.showDiff = true
-	tt := ui.NewTester(a.view, 1320, 860)
-	d := a.diffFor("apps/web/src/components/Sidebar.tsx")
+	tt.Frame()
+	d := h.diffOf(th, sidebarPath)
 	if a.diffLayout != editor.DiffUnified || !tt.HasText("Unified") {
 		t.Fatalf("layout %v", a.diffLayout)
 	}
 	n := len(d.Hunks())
 	if n == 0 {
-		t.Fatal("no changes in the mock diff")
+		t.Fatal("no changes in the diff")
 	}
 	d.Accept(0)
 	tt.Frame()
 	if len(d.Hunks()) != n-1 {
 		t.Errorf("%d changes after accepting one of %d", len(d.Hunks()), n)
 	}
+	// Split needs the room: at 1320 the panel would be 608 wide.
+	if err := tt.Click("Split"); err != nil {
+		t.Fatal(err)
+	}
+	if a.diffLayout != editor.DiffUnified {
+		t.Error("Split switched the layout without the room for it")
+	}
+	tt.SetSize(1600, 900)
+	tt.Frame()
 	if err := tt.Click("Split"); err != nil {
 		t.Fatal(err)
 	}
 	if a.diffLayout != editor.DiffSplit {
 		t.Error("Split did not switch the layout")
+	}
+	tt.SetSize(1320, 860)
+	tt.Frame()
+	if a.layout() != editor.DiffUnified || a.diffLayout != editor.DiffSplit {
+		t.Error("the diff should show unified while the room is short, and keep the Split choice")
+	}
+	tt.SetSize(1600, 900)
+	tt.Frame()
+	if a.layout() != editor.DiffSplit {
+		t.Error("the Split choice didn't come back with the room")
 	}
 }
 

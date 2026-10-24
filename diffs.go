@@ -1,152 +1,333 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"maps"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
+
+	"glitched/internal/api"
 )
 
 // The diff panel is MyGo's diff viewer (ui/editor), as its code-editor
-// example uses it: each file the agent changed, its text before and
-// after, unified or side by side, with the words changed highlighted and
-// Accept and Reject on the change under the pointer, as an agent's
-// changes are reviewed one at a time.
+// example uses it: each file the agent's edits name, as the workspace's
+// git HEAD has it and as its working tree does, unified or side by side,
+// with the words changed highlighted. The diff is the workspace's
+// uncommitted change to the file, whoever made it. The panel only reads:
+// marking a change or a file reviewed is the review's own state. A thread
+// on a server has its files there, so the panel shows none.
 
-// fileTexts is each mock file's text before and after the agent's turn.
-var fileTexts = map[string][2]string{
-	"apps/web/src/components/Sidebar.tsx":     {sidebarBefore, sidebarAfter},
-	"apps/web/src/components/ChevronIcon.tsx": {"", chevronAfter},
+// diffKey is a file of a thread's diff.
+type diffKey struct {
+	thread api.ID
+	path   string
 }
 
-const sidebarBefore = `import { useState } from "react";
-import { SidebarGroup, SidebarGroupLabel } from "./ui/sidebar";
-import { ThreadRow } from "./ThreadRow";
-import { useThreads } from "../hooks/useThreads";
-
-export function Sidebar({ projects }: SidebarProps) {
-  return projects.map((project) => <ProjectGroup key={project.id} project={project} />);
+// fileDiff is the viewer over one file, read when the edits naming it
+// last changed. reviewed is the user's mark, which an edit after it
+// clears, as the file it was for has changed.
+type fileDiff struct {
+	*editor.DiffState // nil when the file isn't shown: see unshown
+	stamp             time.Time
+	// unshown is why the panel shows no diff of the file, and noHead why
+	// it shows the working file alone, without HEAD's side; "" when it
+	// does.
+	unshown, noHead string
+	reviewed        bool
 }
 
-function ProjectGroup({ project }: { project: Project }) {
-  const threads = useThreads(project.id);
-  const [expanded, setExpanded] = useState(true);
-  const sorted = threads.sort((a, b) => b.updatedAt - a.updatedAt);
-
-  return (
-    <SidebarGroup>
-      <SidebarGroupLabel>{project.name}</SidebarGroupLabel>
-      {expanded && sorted.map((t) => (
-        <ThreadRow key={t.id} thread={t} />
-      ))}
-    </SidebarGroup>
-  );
-}
-`
-
-const sidebarAfter = `import { useMemo, useState } from "react";
-import { SidebarGroup, SidebarGroupLabel } from "./ui/sidebar";
-import { ThreadRow } from "./ThreadRow";
-import { ChevronIcon } from "./ChevronIcon";
-import { useThreads } from "../hooks/useThreads";
-
-export function Sidebar({ projects }: SidebarProps) {
-  return projects.map((project) => <ProjectGroup key={project.id} project={project} />);
+// diffRead is a read of a file under way, for the edits' stamp. A newer
+// read of the file, or its thread going, supersedes it, and what it read
+// is dropped.
+type diffRead struct {
+	stamp time.Time
+	gen   uint64
 }
 
-function ProjectGroup({ project }: { project: Project }) {
-  const threads = useThreads(project.id);
-  const [expanded, setExpanded] = useState(true);
-  const sorted = useMemo(
-    () => [...threads].sort((a, b) => b.updatedAt - a.updatedAt),
-    [threads],
-  );
+// diffSlots caps the files read and diffed at once.
+var diffSlots = make(chan struct{}, 4)
 
-  return (
-    <SidebarGroup>
-      <SidebarGroupLabel onClick={() => setExpanded(!expanded)}>
-        <ChevronIcon open={expanded} />
-        {project.name}
-      </SidebarGroupLabel>
-      {expanded && sorted.map((t) => (
-        <ThreadRow key={t.id} thread={t} />
-      ))}
-    </SidebarGroup>
-  );
+// maxDiffBytes is the most of either side of a file the panel reads.
+const maxDiffBytes = 1 << 20
+
+var errTooLarge = errors.New("the file is over 1 MB")
+
+// readWorking reads a working file, a missing one as empty. It reads only
+// a regular file, and opening one swapped for a FIFO since it was located
+// neither blocks nor follows a link.
+func readWorking(file string) ([]byte, error) {
+	f, err := os.OpenFile(file, os.O_RDONLY|openFlags, 0)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return nil, errors.New("it isn't a regular file")
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxDiffBytes+1))
+	switch {
+	case err != nil:
+		return nil, err
+	case len(b) > maxDiffBytes:
+		return nil, errTooLarge
+	}
+	return b, nil
 }
-`
 
-const chevronAfter = `import { ChevronRight } from "lucide-react";
-import { cn } from "../lib/utils";
-
-export function ChevronIcon({ open }: { open: boolean }) {
-  return (
-    <ChevronRight
-      className={cn(
-        "size-3 text-muted-foreground transition-transform",
-        open && "rotate-90",
-      )}
-    />
-  );
+// diffFor returns the viewer of a file of the thread's: nil until the
+// file is first read, and for a thread on a server. Reading and diffing
+// it runs off the UI thread, again once the agent edits it again, while
+// the last read shows.
+func (a *app) diffFor(t thread, f fileChange) *fileDiff {
+	if !t.local() {
+		return nil
+	}
+	k := diffKey{t.id(), f.path}
+	d := a.diffs[k]
+	r, busy := a.reading[k]
+	if (d == nil || !d.stamp.Equal(f.stamp)) && (!busy || !r.stamp.Equal(f.stamp)) {
+		a.readGen++
+		r = diffRead{f.stamp, a.readGen}
+		a.reading[k] = r
+		ws := t.View.Workspace
+		go func() {
+			diffSlots <- struct{}{}
+			read := readDiff(ws, f.path, f.stamp)
+			<-diffSlots
+			a.post(func() {
+				if a.reading[k].gen != r.gen {
+					return
+				}
+				delete(a.reading, k)
+				a.diffs[k] = read
+			})
+		}()
+	}
+	return d
 }
-`
 
-// diffFor returns the viewer's state of a file, made once: the buffers of
-// its text before and after, highlighted as its language.
-func (a *app) diffFor(path string) *editor.DiffState {
-	if d := a.diffs[path]; d != nil {
+// pruneDiffs forgets the diffs of threads gone, as with their server.
+func (a *app) pruneDiffs() {
+	gone := func(id api.ID) bool { _, ok := a.find(id); return !ok }
+	maps.DeleteFunc(a.diffs, func(k diffKey, _ *fileDiff) bool { return gone(k.thread) })
+	maps.DeleteFunc(a.reading, func(k diffKey, _ diffRead) bool { return gone(k.thread) })
+	maps.DeleteFunc(a.diffFile, func(id api.ID, _ string) bool { return gone(id) })
+}
+
+// readDiff reads the file an edit names in the workspace, and diffs it
+// with HEAD's.
+func readDiff(workspace, path string, stamp time.Time) *fileDiff {
+	d := &fileDiff{stamp: stamp}
+	file, err := locate(workspace, path)
+	if err != nil {
+		d.unshown = err.Error()
 		return d
 	}
-	texts := fileTexts[path]
+	disk, err := readWorking(file)
+	if err != nil {
+		d.unshown = err.Error()
+		return d
+	}
+	head, err := headOf(file)
+	switch {
+	case errors.Is(err, errTooLarge):
+		d.unshown = err.Error()
+		return d
+	case err != nil:
+		d.noHead, head = err.Error(), string(disk)
+	}
+	if binary(disk) || binary([]byte(head)) {
+		d.unshown = "the file is binary"
+		return d
+	}
 	lang := editor.LanguageFor(path)
-	before, after := editor.NewBuffer(texts[0]), editor.NewBuffer(texts[1])
+	before, after := editor.NewBuffer(head), editor.NewBuffer(string(disk))
 	before.SetLanguage(lang)
 	after.SetLanguage(lang)
-	d := &editor.DiffState{Old: before, New: after, Editable: true, HunkActions: true}
+	d.DiffState = &editor.DiffState{Old: before, New: after, HunkActions: d.noHead == "", ExpandUnchanged: d.noHead != ""}
 	d.RenderHunkActions = func(c *ui.Context, bar ui.Element, h *editor.DiffHunkActions) {
-		bar.Gap(4).Children(func() {
-			if reviewButton(c, "Reject", false).Label("Reject change").Clicked() {
-				h.Revert()
-			}
-			if reviewButton(c, "Accept", true).Label("Accept change").Clicked() {
+		bar.Children(func() {
+			if reviewButton(c, "Mark reviewed").Label("Mark change reviewed").Clicked() {
 				h.Keep()
 			}
 		})
 	}
-	a.diffs[path] = d
+	// The diff is made here, not on the frame that first counts it.
+	d.Stats()
 	return d
 }
 
-func reviewButton(c *ui.Context, label string, primary bool) ui.Element {
+// binary is whether text is a binary file's, as git tells: a NUL in its
+// first 8000 bytes.
+func binary(text []byte) bool {
+	return bytes.IndexByte(text[:min(len(text), 8000)], 0) >= 0
+}
+
+// workingFile is where a file an edit names is: the path itself when it
+// is absolute, else the path in the workspace.
+func workingFile(workspace, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(expandHome(workspace), path)
+}
+
+// locate is where the file an edit names is, its folders' links resolved,
+// or why the panel won't read it. An agent's path can be absolute, climb
+// out with .., or pass through a link, and the panel reads only regular
+// files in the workspace.
+func locate(workspace, path string) (string, error) {
+	file := workingFile(workspace, path)
+	ws, err := filepath.EvalSymlinks(workingFile(workspace, "."))
+	if err != nil {
+		return "", errors.New("the workspace can't be found")
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Dir(file))
+	if err != nil {
+		return "", errors.New("its folder can't be found")
+	}
+	file = filepath.Join(dir, filepath.Base(file))
+	if rel, err := filepath.Rel(ws, file); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", errors.New("the file is outside the workspace")
+	}
+	switch fi, err := os.Lstat(file); {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return "", err
+	case fi.Mode()&fs.ModeSymlink != 0:
+		return "", errors.New("the file is a symbolic link")
+	case !fi.Mode().IsRegular():
+		return "", errors.New("it isn't a regular file")
+	}
+	return file, nil
+}
+
+// gitTimeout is how long reading HEAD's side of a file may take.
+var gitTimeout = 5 * time.Second
+
+// headOf is file as git's HEAD has it, "" when HEAD lacks it, or why
+// that's unknown.
+func headOf(file string) (string, error) {
+	if _, err := exec.LookPath("git"); err != nil {
+		return "", errors.New("git isn't installed")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer cancel()
+	text, err := headIn(ctx, file)
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("git took over %v", gitTimeout)
+	}
+	return text, err
+}
+
+func headIn(ctx context.Context, file string) (string, error) {
+	// As ./name, the name can't be read as an option, and ls-tree takes
+	// it literally rather than as a pattern.
+	name := "./" + filepath.Base(file)
+	git := func(args ...string) (string, error) {
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", filepath.Dir(file), "-c", "core.fsmonitor="}, args...)...)
+		cmd.Env = gitEnv()
+		// A child git leaves holding its output doesn't hold the read.
+		cmd.WaitDelay = time.Second
+		out, err := cmd.Output()
+		return string(out), err
+	}
+	if out, err := git("rev-parse", "--is-inside-work-tree"); err != nil || strings.TrimSpace(out) != "true" {
+		return "", errors.New("the file isn't in a git work tree")
+	}
+	if _, err := git("rev-parse", "--verify", "--quiet", "HEAD^{commit}"); err != nil {
+		return "", errors.New("the repository has no commits yet")
+	}
+	out, err := git("--literal-pathspecs", "ls-tree", "--long", "HEAD", "--", name)
+	if err != nil {
+		return "", errors.New("git couldn't list HEAD")
+	}
+	if out == "" {
+		return "", nil
+	}
+	// <mode> SP <type> SP <object> SP+ <size> TAB <name>
+	meta, _, _ := strings.Cut(out, "\t")
+	fields := strings.Fields(meta)
+	if len(fields) != 4 || fields[1] != "blob" || fields[0] == "120000" {
+		return "", errors.New("HEAD has it as something other than a file")
+	}
+	// A partial clone that lacks the blob lists its size as BAD.
+	size, err := strconv.Atoi(fields[3])
+	if err != nil {
+		return "", errors.New("this clone doesn't have HEAD's copy of the file")
+	}
+	if size > maxDiffBytes {
+		return "", errTooLarge
+	}
+	text, err := git("cat-file", "blob", fields[2])
+	if err != nil {
+		return "", errors.New("git couldn't read HEAD's file")
+	}
+	return text, nil
+}
+
+// gitEnv is this process's environment but for git's own variables, which
+// an app launched from a git hook or a shell inherits, and which can
+// point git at another repository, index or config than the file's. A
+// partial clone would fetch a HEAD blob it lacks, so reading a diff would
+// reach the network and write to .git; GIT_NO_LAZY_FETCH stops that.
+func gitEnv() []string {
+	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		return strings.HasPrefix(strings.ToUpper(kv), "GIT_")
+	})
+	return append(env, "GIT_NO_LAZY_FETCH=1")
+}
+
+func reviewButton(c *ui.Context, label string) ui.Element {
 	b := ui.ButtonBase(c.Key(label)).Padding(3, 9).Radius(6).Cursor(ui.CursorPointer).
-		Background(palette.surface).Border(1, palette.border).TextColor(palette.text).
 		Shadow(0, 2, 6, 0, ui.RGBA(0, 0, 0, 0.25)).Transition(hoverFade)
-	if primary {
-		b.Background(darkColors.green.Mix(ui.Hex("#000000"), 0.35)).Border(1, darkColors.green.Alpha(0.6)).TextColor(ui.Hex("#ffffff"))
-	}
+	shade := float32(0.35)
 	if b.Hovered() {
-		b.Background(palette.surface.Mix(palette.text, 0.1))
-		if primary {
-			b.Background(darkColors.green.Mix(ui.Hex("#000000"), 0.2))
-		}
+		shade = 0.2
 	}
+	bg := palette.green.Mix(ui.Hex("#000000"), shade)
+	b.Background(bg).Border(1, palette.green.Alpha(0.6)).TextColor(onColor(bg))
 	return b.Children(func() { ui.Text(c, label).FontSize(11.5).FontWeight(500) })
 }
 
-// diffStats counts the lines a file's change adds and deletes, as its diff
-// has them now: accepting or rejecting changes counts down.
-func (a *app) diffStats(path string) (add, del int) {
-	if _, ok := fileTexts[path]; !ok {
-		return 0, 0
+// onColor is the color of text on bg: white or near black, whichever
+// contrasts more, as a theme's green may be dark or light.
+func onColor(bg ui.Color) ui.Color {
+	white, black := ui.Hex("#ffffff"), ui.Hex("#111114")
+	if contrast(white, bg) >= contrast(black, bg) {
+		return white
 	}
-	return a.diffFor(path).Stats()
+	return black
 }
 
-func (a *app) diffPanel(c *ui.Context, es []entry) {
-	var files []fileChange
-	for _, e := range es {
-		files = append(files, e.files...)
+// diffStats counts the lines a file's change adds and deletes, as its diff
+// has them now: marking changes reviewed counts down. With HEAD's side
+// unknown there is no change to count.
+func (a *app) diffStats(t thread, f fileChange) (add, del int) {
+	if d := a.diffFor(t, f); d != nil && d.DiffState != nil && d.noHead == "" {
+		return d.Stats()
 	}
+	return 0, 0
+}
+
+func (a *app) diffPanel(c *ui.Context, t thread, es []entry) {
+	files := changedFiles(es)
 	ui.Column(c).Width(a.diffWidth()).FillHeight().Children(func() {
 		bar := c.TitleBar()
 		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 14).Gap(8).AlignItems(ui.Center)
@@ -154,17 +335,9 @@ func (a *app) diffPanel(c *ui.Context, es []entry) {
 			ui.Text(c, "Changes").FontWeight(600)
 			ui.Textf(c, "%d", len(files)).FontSize(11).TextColor(palette.muted).Padding(0, 6).Radius(999).Background(palette.hover)
 			ui.Spacer(c)
-			// The segments' order, Unified then Split, is not the
-			// layouts' own (DiffSplit is 0).
-			layout := 0
-			if a.diffLayout == editor.DiffSplit {
-				layout = 1
-			}
-			if ui.Segmented(c, &layout, "Unified", "Split").Label("Diff layout").Changed() {
-				a.diffLayout = editor.DiffUnified
-				if layout == 1 {
-					a.diffLayout = editor.DiffSplit
-				}
+			a.layoutSwitch(c)
+			if iconButton(c, "wrap", icWrap, "Wrap long lines", a.diffWrap).Clicked() {
+				a.diffWrap = !a.diffWrap
 			}
 			if iconButton(c, "close-diff", icX, "Close diff", false).Clicked() {
 				a.showDiff = false
@@ -176,38 +349,152 @@ func (a *app) diffPanel(c *ui.Context, es []entry) {
 				ui.Text(c, "No changes in this thread yet.").TextColor(palette.muted).Margin(ui.Auto)
 				return
 			}
-			a.diffFile = min(a.diffFile, len(files)-1)
+			shown := max(slices.IndexFunc(files, func(f fileChange) bool { return f.path == a.diffFile[t.id()] }), 0)
 			ui.Column(c).Padding(6).Gap(1).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
 				for i, f := range files {
-					if row(c, f.path, i == a.diffFile).Padding(5, 8).Children(func() {
-						ui.Icon(c, icFile).FontSize(12)
-						ui.Text(c, f.path).FontSize(12).Font("monospace").SingleLine().Grow(1).Shrink(1)
-						add, del := a.diffStats(f.path)
-						counts(c, add, del)
-					}).Clicked() {
-						a.diffFile = i
-					}
+					a.fileRow(c, t, f, i == shown)
 				}
 			})
-			path := files[a.diffFile].path
-			if _, ok := fileTexts[path]; !ok {
-				ui.Text(c, "No preview for this file.").TextColor(palette.muted).Margin(ui.Auto)
+			f := files[shown]
+			if !t.local() {
+				ui.Text(c, "The files are on "+t.env.Name+".").TextColor(palette.muted).Margin(ui.Auto)
 				return
 			}
-			d := a.diffFor(path)
-			d.Layout = a.diffLayout
-			a.hunkBar(c, d)
-			editor.DiffView(c.Key(path), d).Grow(1).FillWidth()
+			d := a.diffFor(t, f)
+			switch {
+			case d == nil:
+				ui.Text(c, "Reading "+filepath.Base(f.path)+"…").TextColor(palette.muted).Margin(ui.Auto)
+				return
+			case d.DiffState == nil:
+				ui.Text(c, "Not shown: "+d.unshown+".").TextColor(palette.muted).Margin(ui.Auto)
+				return
+			}
+			d.Layout, d.Wrap = a.layout(), a.diffWrap
+			if d.noHead != "" {
+				// Both sides are the working file: show it once.
+				d.Layout = editor.DiffUnified
+				notice(c, "HEAD's side is unknown: "+d.noHead+".")
+			} else {
+				a.hunkBar(c, d.DiffState)
+			}
+			editor.DiffView(c.Key(f.path), d.DiffState).Grow(1).FillWidth()
 		})
 	})
 }
 
-// hunkBar counts the file's changes, "2 of 5", and steps between them.
+// splitWidth is the least width side by side reads at: two columns of
+// code, each wide enough for a line.
+const splitWidth = 800
+
+// splitFits reports whether there is room for the panel splitWidth wide
+// beside the chat.
+func (a *app) splitFits() bool {
+	return a.roomBeside-minChatWidth >= splitWidth
+}
+
+// layout is the diff's layout as shown: the one chosen, but Unified
+// while Split is short of room. The choice keeps, for when the room is
+// back.
+func (a *app) layout() editor.DiffLayout {
+	if a.diffLayout == editor.DiffSplit && !a.splitFits() {
+		return editor.DiffUnified
+	}
+	return a.diffLayout
+}
+
+// layoutSwitch chooses Unified or Split. Short of room for Split, its
+// segment is dimmed and says so.
+func (a *app) layoutSwitch(c *ui.Context) {
+	fits := a.splitFits()
+	ui.Row(c).Radius(7).Border(1, palette.border).Padding(2).Gap(2).Children(func() {
+		segment := func(key, label string, layout editor.DiffLayout, enabled bool) {
+			// A disabled button shows no tooltip of its own: the box
+			// around it says why it is.
+			box := ui.Box(c).Key(key + "-box")
+			if !enabled {
+				box.Tooltip(fmt.Sprintf("Split needs %d DIPs of room", splitWidth))
+			}
+			box.Children(func() {
+				if ghost(c, key, a.layout() == layout).Padding(3, 9).Disabled(!enabled).
+					Children(func() { ui.Text(c, label).FontSize(11.5) }).Clicked() {
+					a.diffLayout = layout
+				}
+			})
+		}
+		segment("unified", "Unified", editor.DiffUnified, true)
+		segment("split", "Split", editor.DiffSplit, fits)
+	})
+}
+
+// fileRow is a changed file in the panel's list; pointed at, its actions:
+// mark it reviewed, copy its path, open it in the editor. A reviewed file shows a filled check.
+func (a *app) fileRow(c *ui.Context, t thread, f fileChange, shown bool) {
+	r := row(c, f.path, shown).Padding(3, 4, 3, 8).Height(28).Label("Diff of " + f.path)
+	d := a.diffFor(t, f)
+	hovered := r.Hovered()
+	if r.Children(func() {
+		icon := icFile
+		if d != nil && d.reviewed {
+			icon = icCheckCirc
+		}
+		ui.Icon(c, icon).FontSize(12)
+		ui.Text(c, f.path).FontSize(12).Font("monospace").SingleLine().Grow(1).Shrink(1)
+		if !hovered {
+			add, del := a.diffStats(t, f)
+			counts(c, add, del)
+			return
+		}
+		ui.Row(c).Gap(0).Children(func() {
+			if iconButton(c, "reviewed", icCheckCirc, "Mark reviewed", d != nil && d.reviewed).Padding(3).Disabled(d == nil).Clicked() {
+				d.reviewed = !d.reviewed
+			}
+			if iconButton(c, "copy-path", icCopy, "Copy path", false).Padding(3).Clicked() {
+				c.WriteClipboard(f.path)
+				c.AddToast(ui.Toast{Title: "Copied", Description: f.path})
+			}
+			if ed := editorCLI(); ed != "" && t.local() && iconButton(c, "open-file", icExternal, "Open in editor", false).Padding(3).Clicked() {
+				a.openInEditor(c, ed, workingFile(t.View.Workspace, f.path))
+			}
+		})
+	}).Clicked() {
+		a.diffFile[t.id()] = f.path
+	}
+}
+
+// notice is a line across the panel saying why it does less than usual.
+func notice(c *ui.Context, text string) {
+	ui.Row(c).Padding(6, 8, 6, 14).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).
+		Background(palette.amber.Alpha(0.08)).Children(func() {
+		ui.Icon(c, icShieldAlert).FontSize(13).TextColor(palette.amber)
+		ui.Text(c, text).FontSize(11.5).TextColor(palette.muted).Grow(1).Shrink(1)
+	})
+}
+
+// hunkBar counts the file's changes, "2 of 5", steps between them, and
+// marks the one in view reviewed, as the change's own button does. ⌘[
+// and ⌘] step from the keyboard, and ⇧⌘↩ marks.
 func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 	n := len(d.Hunks())
 	i, _ := d.CurrentHunk()
+	prev := func() { d.GoToHunk(max(i-1, 0)) }
+	next := func() { d.GoToHunk(min(i+1, n-1)) }
+	mark := func() {
+		if i >= 0 {
+			d.Accept(i)
+		}
+	}
+	if n > 0 {
+		switch {
+		case c.Shortcut(ui.Cmd, ui.KeyBracketLeft):
+			prev()
+		case c.Shortcut(ui.Cmd, ui.KeyBracketRight):
+			next()
+		case c.Shortcut(ui.Cmd|ui.Shift, ui.KeyEnter):
+			mark()
+		}
+	}
 	ui.Row(c).Padding(4, 8, 4, 14).Gap(4).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
-		label := fmt.Sprintf("%d changes", n)
+		label := plural(n, "change")
 		switch {
 		case n == 0:
 			label = "All changes reviewed"
@@ -215,23 +502,29 @@ func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 			label = fmt.Sprintf("%d of %d", i+1, n)
 		}
 		ui.Text(c, label).FontSize(11.5).TextColor(palette.muted).Grow(1)
-		if iconButton(c, "prev-hunk", icChevronUp, "Previous change", false).Padding(3).Disabled(n == 0).Clicked() {
-			d.GoToHunk(max(i-1, 0))
+		if ghost(c, "mark-hunk", false).Padding(3, 6).Disabled(n == 0).Label("Mark change reviewed").Children(func() {
+			ui.Icon(c, icCheck).FontSize(12)
+			ui.Text(c, "Mark reviewed").FontSize(11.5)
+			kbd(c, "⇧⌘↩")
+		}).Clicked() {
+			mark()
 		}
-		if iconButton(c, "next-hunk", icChevronD, "Next change", false).Padding(3).Disabled(n == 0).Clicked() {
-			d.GoToHunk(min(i+1, n-1))
+		if iconButton(c, "prev-hunk", icChevronUp, "Previous change  ⌘[", false).Padding(3).Disabled(n == 0).Clicked() {
+			prev()
+		}
+		if iconButton(c, "next-hunk", icChevronD, "Next change  ⌘]", false).Padding(3).Disabled(n == 0).Clicked() {
+			next()
 		}
 	})
 }
 
-// diffWidth is the panel's width: wider side by side.
 // diffWidth is the panel's width: a share of the room beside the sidebar,
 // wider side by side, and never so wide the chat has less than
 // minChatWidth.
 func (a *app) diffWidth() float32 {
 	share, lo, hi := float32(0.42), float32(380), float32(520)
-	if a.diffLayout == editor.DiffSplit {
-		share, lo, hi = 0.58, 480, 820
+	if a.layout() == editor.DiffSplit {
+		share, lo, hi = 0.58, splitWidth, 900
 	}
 	return panelWidth(a.roomBeside, share, lo, hi)
 }

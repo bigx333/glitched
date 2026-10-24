@@ -26,18 +26,25 @@ func TestIDRoundTrip(t *testing.T) {
 }
 
 func TestCommandJSON(t *testing.T) {
-	in := Command{ID: NewID(), Target: NewID(), Revision: 3, Body: MessageDispatch{Text: "hi", Mode: SteerActive}}
-	b, err := json.Marshal(in)
-	if err != nil {
-		t.Fatal(err)
+	for _, body := range []Intent{
+		MessageDispatch{Text: "hi", Mode: SteerActive},
+		ThreadRename{Title: "Websocket loop"},
+		ThreadDelete{},
+	} {
+		in := Command{ID: NewID(), Target: NewID(), Revision: 3, Body: body}
+		b, err := json.Marshal(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out Command
+		if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.ID != in.ID || out.Target != in.Target || out.Revision != 3 || out.Body != in.Body {
+			t.Fatalf("got %+v from %s", out, b)
+		}
 	}
 	var out Command
-	if err := json.Unmarshal(b, &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.ID != in.ID || out.Target != in.Target || out.Revision != 3 || out.Body != in.Body {
-		t.Fatalf("got %+v from %s", out, b)
-	}
 	if err := json.Unmarshal([]byte(`{"type":"nope","body":{}}`), &out); err == nil {
 		t.Fatal("accepted an unknown command type")
 	}
@@ -58,12 +65,14 @@ func TestEventDecode(t *testing.T) {
 		TurnRestored{Run: NewID()},
 		TurnUncertain{Run: NewID()},
 		AssistantDelta{Run: NewID(), Text: "t"},
-		WorkItem{Run: NewID(), Item: "i", Kind: "k", Title: "t", Status: WorkCompleted},
+		WorkItem{Run: NewID(), Item: "c", Kind: "command", Title: "bun test", Status: WorkFailed, Path: "p", Exit: new(1), Output: "1 failed"},
 		RequestOpened{Request: NewID(), Run: NewID(), Generation: 1, Dedup: "d", Kind: "approval", Body: json.RawMessage(`{"a":1}`)},
 		RequestAnswer{Request: NewID(), Answer: json.RawMessage(`true`)},
 		RequestDelivery{Request: NewID()},
 		RequestInvalidation{Request: NewID(), Reason: "r"},
 		DispositionChanged{Disposition: Disposition{State: Snoozed, Until: time.UnixMilli(1000).UTC()}},
+		ThreadRenamed{Title: "t"},
+		ThreadDeleted{},
 	}
 	seen := map[string]bool{}
 	for _, b := range bodies {

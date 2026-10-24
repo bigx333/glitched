@@ -47,6 +47,7 @@ type Thread struct {
 	OwnerEpoch  uint64
 	Generation  uint64 // of the latest run
 	Disposition api.Disposition
+	Deleted     bool // the tombstone: nothing reaches the thread again
 	UpdatedAt   time.Time
 	Runs        []Run
 	Queue       []Message
@@ -176,6 +177,7 @@ func View(t Thread) api.Thread {
 		Run:         wireRun[t.slot()],
 		Disposition: t.Disposition,
 		UpdatedAt:   t.UpdatedAt,
+		Deleted:     t.Deleted,
 	}
 	for i := len(t.Runs) - 1; i >= 0; i-- {
 		if r := t.Runs[i]; r.State == RunFinished {

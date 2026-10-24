@@ -175,3 +175,39 @@ func TestRunReportsASteerThatMayNotHaveArrived(t *testing.T) {
 		t.Fatalf("run -mode steer whose delivery is unknown: %v, want an error saying so", err)
 	}
 }
+
+// olderEngine answers Info as an engine of protocol 1 does, and nothing
+// else.
+type olderEngine struct{ api.Endpoint }
+
+func (olderEngine) Info(context.Context) (api.Environment, error) {
+	return api.Environment{ID: api.NewID(), Name: "older", Protocol: 1}, nil
+}
+
+// The CLI refuses an engine of another protocol before it reads or sends
+// anything.
+func TestTheCLIRefusesAnEngineOfAnotherProtocol(t *testing.T) {
+	dir, err := os.MkdirTemp("", "gl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	lb := daemon.Socket(dir)
+	ln, err := lb.Listen(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- (&transport.Server{Transport: lb, Endpoint: olderEngine{}}).Serve(ctx, ln) }()
+	t.Cleanup(func() {
+		cancel()
+		<-served
+		os.RemoveAll(dir)
+	})
+	if err := threads(ctx, []string{"-dir", dir}); !errors.Is(err, api.ErrProtocol) {
+		t.Errorf("threads on a protocol 1 engine: %v, want api.ErrProtocol", err)
+	}
+	if err := run(ctx, []string{"-dir", dir, "hello"}); !errors.Is(err, api.ErrProtocol) {
+		t.Errorf("run on a protocol 1 engine: %v, want api.ErrProtocol", err)
+	}
+}

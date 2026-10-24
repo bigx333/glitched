@@ -239,7 +239,10 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	ep := transport.NewEndpointClient(tr, api.ID{})
+	ep, err := dialEngine(ctx, tr)
+	if err != nil {
+		return err
+	}
 	defer ep.Close()
 
 	var thread api.ID
@@ -390,6 +393,21 @@ var runStates = map[api.RunState]string{
 	api.RunUncertain: "uncertain",
 }
 
+// dialEngine reaches the engine at tr, refusing one of another protocol,
+// whose threads this build would misread.
+func dialEngine(ctx context.Context, tr transport.Transport) (*transport.EndpointClient, error) {
+	ep := transport.NewEndpointClient(tr, api.ID{})
+	info, err := ep.Info(ctx)
+	if err == nil && info.Protocol != api.Protocol {
+		err = &api.ProtocolError{Theirs: info.Protocol}
+	}
+	if err != nil {
+		ep.Close()
+		return nil, err
+	}
+	return ep, nil
+}
+
 func threads(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("threads", flag.ExitOnError)
 	at := reach(fs)
@@ -398,7 +416,10 @@ func threads(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	ep := transport.NewEndpointClient(tr, api.ID{})
+	ep, err := dialEngine(ctx, tr)
+	if err != nil {
+		return err
+	}
 	defer ep.Close()
 	snap, err := ep.Read(ctx, api.Query{})
 	if err != nil {

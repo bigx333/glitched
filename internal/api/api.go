@@ -88,11 +88,23 @@ type InboxSet struct {
 	Disposition Disposition `json:"disposition"`
 }
 
+// ThreadDelete deletes the thread. Its events stay in the log, but no
+// command or read reaches it again.
+type ThreadDelete struct{}
+
+// ThreadRename retitles the thread. The engine trims the title and refuses
+// an empty one.
+type ThreadRename struct {
+	Title string `json:"title"`
+}
+
 func (ThreadCreate) intentType() string    { return "thread.create" }
 func (MessageDispatch) intentType() string { return "message.dispatch" }
 func (TurnInterrupt) intentType() string   { return "turn.interrupt" }
 func (RequestRespond) intentType() string  { return "request.respond" }
 func (InboxSet) intentType() string        { return "inbox.set" }
+func (ThreadRename) intentType() string    { return "thread.rename" }
+func (ThreadDelete) intentType() string    { return "thread.delete" }
 
 var intents = map[string]func() Intent{
 	"thread.create":    func() Intent { return new(ThreadCreate) },
@@ -100,6 +112,8 @@ var intents = map[string]func() Intent{
 	"turn.interrupt":   func() Intent { return new(TurnInterrupt) },
 	"request.respond":  func() Intent { return new(RequestRespond) },
 	"inbox.set":        func() Intent { return new(InboxSet) },
+	"thread.rename":    func() Intent { return new(ThreadRename) },
+	"thread.delete":    func() Intent { return new(ThreadDelete) },
 }
 
 func IntentType(i Intent) string { return i.intentType() }
@@ -149,6 +163,10 @@ func (c *Command) UnmarshalJSON(b []byte) error {
 		c.Body = *v
 	case *InboxSet:
 		c.Body = *v
+	case *ThreadRename:
+		c.Body = *v
+	case *ThreadDelete:
+		c.Body = *v
 	}
 	c.ID, c.Target, c.Revision, c.Expires = w.ID, w.Target, w.Revision, w.Expires
 	return nil
@@ -166,10 +184,14 @@ const (
 	Open DispositionState = iota
 	Snoozed
 	Settled
+	// Archived is out of the inbox altogether, kept until the user brings
+	// it back as Open.
+	Archived
 )
 
 // Disposition is the user's inbox state, separate from run state, so
-// settled-and-snoozed can't be represented. Until is set only when Snoozed.
+// settled-and-snoozed, or archived-and-snoozed, can't be represented.
+// Until is set only when Snoozed.
 type Disposition struct {
 	State DispositionState `json:"state"`
 	Until time.Time        `json:"until,omitzero"`
@@ -227,9 +249,23 @@ type Thread struct {
 	Disposition Disposition `json:"disposition"`
 	LastTurn    *TurnResult `json:"lastTurn,omitempty"` // the most recent finished turn; nil before one ends
 	UpdatedAt   time.Time   `json:"updatedAt"`
+	// Deleted is the tombstone: the last view a deleted thread has, which
+	// the shell stream sends once so that clients drop it. No read returns
+	// one.
+	Deleted bool `json:"deleted,omitempty"`
 }
 
 func (t Thread) Working() bool { return t.Run != RunIdle && t.Run != RunUncertain }
+
+// Live is whether the thread has a run, an uncertain one too. The engine
+// deletes no live thread, and only an interrupt ends an uncertain run.
+func (t Thread) Live() bool { return t.Run != RunIdle }
+
+// Protocol is the version of what crosses between engines, clients and
+// hubs. A peer of another protocol is refused, not half understood:
+// version 2 added the Archived disposition and the thread.deleted
+// tombstone, which a version 1 peer would show as an open thread.
+const Protocol = 2
 
 type Environment struct {
 	ID       ID     `json:"id"` // the host
@@ -292,12 +328,14 @@ type Endpoint interface {
 // Events[0].Cursor.Seq may be at or below the acked offset; the hub skips
 // what it already has, so a replayed upload is harmless.
 type Upload struct {
-	Host   ID      `json:"host"`
-	Epoch  uint64  `json:"epoch"`
-	Log    ID      `json:"log"`
-	Events []Event `json:"events"`
+	Protocol int     `json:"protocol"`
+	Host     ID      `json:"host"`
+	Epoch    uint64  `json:"epoch"`
+	Log      ID      `json:"log"`
+	Events   []Event `json:"events"`
 }
 
 type UploadAck struct {
-	Acked uint64 `json:"acked"` // highest contiguous seq the hub holds for this log
+	Acked    uint64 `json:"acked"`    // highest contiguous seq the hub holds for this log
+	Protocol int    `json:"protocol"` // the hub's
 }

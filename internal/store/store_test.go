@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io/fs"
 	"os"
@@ -274,5 +275,101 @@ func TestRewindCancelsReadyMessagesBehindLiveRuns(t *testing.T) {
 	}
 	if e, ok, err := s.Lease(ctx, nil); err != nil || ok {
 		t.Fatalf("abandoning the uncertain runs leased %+v %v, want nothing to start", e.Body, err)
+	}
+}
+
+// A rename is in the projection that a reopened store reads.
+func TestRenameIsKept(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	for _, body := range []api.Intent{create(thread).Body, api.ThreadRename{Title: "Websocket loop"}} {
+		if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: body}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	s = open(t, path)
+	snap, err := s.Read(ctx, api.Query{})
+	if err != nil || len(snap.Threads) != 1 || snap.Threads[0].Title != "Websocket loop" {
+		t.Fatalf("after reopen: %+v %v", snap.Threads, err)
+	}
+}
+
+// A database from before archiving, its threads table checking
+// disposition 0 to 2, upgrades on open: its threads, runs and messages
+// stay, and a thread can then be archived.
+func TestAnOlderDatabaseUpgradesToArchive(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	for _, body := range []api.Intent{create(thread).Body, api.MessageDispatch{Text: "go", Mode: api.StartNow}} {
+		if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: body}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;
+		CREATE TABLE threads_v1 (
+			id BLOB PRIMARY KEY, workspace TEXT NOT NULL, title TEXT NOT NULL, model TEXT NOT NULL,
+			access INTEGER NOT NULL CHECK (access BETWEEN 0 AND 2), revision INTEGER NOT NULL,
+			owner_epoch INTEGER NOT NULL CHECK (owner_epoch > 0), generation INTEGER NOT NULL,
+			disposition INTEGER NOT NULL CHECK (disposition BETWEEN 0 AND 2), until INTEGER,
+			updated_at INTEGER NOT NULL, CHECK ((disposition = 1) = (until IS NOT NULL))) STRICT;
+		INSERT INTO threads_v1 SELECT id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at FROM threads;
+		DROP TABLE threads;
+		ALTER TABLE threads_v1 RENAME TO threads;
+		PRAGMA user_version = 1;`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	s = open(t, path)
+	archive := api.Command{ID: api.NewID(), Target: thread, Body: api.InboxSet{Disposition: api.Disposition{State: api.Archived}}}
+	if _, err := s.Submit(ctx, archive, time.Now()); err != nil {
+		t.Fatalf("archive after the upgrade: %v", err)
+	}
+	snap, err := s.Read(ctx, api.Query{Thread: thread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := snap.Threads[0]; v.Disposition.State != api.Archived || v.Run != api.RunStarting {
+		t.Fatalf("after the upgrade: disposition %v, run %v; want archived, its run still starting", v.Disposition.State, v.Run)
+	}
+}
+
+// A deleted thread is in no read, after a reopen too, and refuses what
+// is sent to it.
+func TestADeletedThreadIsGone(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	gone, kept := api.NewID(), api.NewID()
+	for _, c := range []api.Command{create(gone), create(kept), {ID: api.NewID(), Target: gone, Body: api.ThreadDelete{}}} {
+		if _, err := s.Submit(ctx, c, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	s = open(t, path)
+	snap, err := s.Read(ctx, api.Query{})
+	if err != nil || len(snap.Threads) != 1 || snap.Threads[0].ID != kept {
+		t.Fatalf("the shell after deleting one of two: %+v %v", snap.Threads, err)
+	}
+	if _, err := s.Read(ctx, api.Query{Thread: gone}); !errors.Is(err, api.ErrNotFound) {
+		t.Fatalf("reading the deleted thread: %v, want ErrNotFound", err)
+	}
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: gone, Body: api.ThreadRename{Title: "x"}}, time.Now()); !errors.Is(err, api.ErrNotFound) {
+		t.Fatalf("renaming the deleted thread: %v, want ErrNotFound", err)
+	}
+	events, _ := s.ReadLog(ctx, 0, 0)
+	if last := events[len(events)-1]; last.Thread != gone || last.Type != "thread.deleted" {
+		t.Fatalf("the log ends %s on %v, want the tombstone", last.Type, last.Thread)
 	}
 }

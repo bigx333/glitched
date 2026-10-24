@@ -8,6 +8,7 @@ package main
 import (
 	"log"
 	"maps"
+	"math"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -29,6 +30,56 @@ type colors struct {
 	accent, green, red, amber, blue                                 ui.Color
 }
 
+// theme is one of the app's looks: its colors, and the terminal's, a
+// theme of Ghostty's where the theme has a matching one.
+type theme struct {
+	name   string
+	dark   bool
+	colors colors
+	term   string
+}
+
+// The two looks the system's appearance picks between.
+var (
+	lightTheme = theme{"Light", false, lightColors, ""}
+	darkTheme  = theme{"Dark", true, darkColors, ""}
+)
+
+// themes are the looks the settings choose from, after System.
+var themes = []theme{
+	lightTheme,
+	darkTheme,
+	{"Mocha", true, mochaColors, "Catppuccin Mocha"},
+	{"Dawn", false, dawnColors, "Rose Pine Dawn"},
+}
+
+// systemTheme is the choice that follows the system's appearance.
+const systemTheme = "System"
+
+// themeNames are the settings' choices: the system's appearance, then
+// each theme.
+func themeNames() []string {
+	names := []string{systemTheme}
+	for _, t := range themes {
+		names = append(names, t.name)
+	}
+	return names
+}
+
+// themeFor is the theme a settings choice names; System, or a name
+// that is no theme's, is the system's appearance, Dark or Light.
+func themeFor(name string, systemDark bool) theme {
+	for _, t := range themes {
+		if t.name == name {
+			return t
+		}
+	}
+	if systemDark {
+		return darkTheme
+	}
+	return lightTheme
+}
+
 var (
 	darkColors = colors{
 		bg:      ui.Hex("#0c0c0e"),
@@ -39,7 +90,7 @@ var (
 		border:  ui.RGBA(255, 255, 255, 0.08),
 		text:    ui.Hex("#ececf0"),
 		muted:   ui.Hex("#8e8e98"),
-		faint:   ui.Hex("#5c5c66"),
+		faint:   ui.Hex("#85858d"),
 		green:   ui.Hex("#4ade80"),
 		red:     ui.Hex("#f87171"),
 		amber:   ui.Hex("#fbbf24"),
@@ -53,12 +104,44 @@ var (
 		active:  ui.RGBA(0, 0, 0, 0.07),
 		border:  ui.RGBA(0, 0, 0, 0.09),
 		text:    ui.Hex("#18181b"),
-		muted:   ui.Hex("#71717a"),
-		faint:   ui.Hex("#a1a1aa"),
+		muted:   ui.Hex("#64646d"),
+		faint:   ui.Hex("#6f6f78"),
 		green:   ui.Hex("#16a34a"),
 		red:     ui.Hex("#dc2626"),
 		amber:   ui.Hex("#d97706"),
 		blue:    ui.Hex("#2563eb"),
+	}
+	// mochaColors are Catppuccin Mocha's.
+	mochaColors = colors{
+		bg:      ui.Hex("#1e1e2e"),
+		sidebar: ui.Hex("#181825"),
+		surface: ui.Hex("#262637"),
+		hover:   ui.RGBA(205, 214, 244, 0.06),
+		active:  ui.RGBA(205, 214, 244, 0.1),
+		border:  ui.RGBA(205, 214, 244, 0.1),
+		text:    ui.Hex("#cdd6f4"),
+		muted:   ui.Hex("#a6adc8"),
+		faint:   ui.Hex("#9399b2"),
+		green:   ui.Hex("#a6e3a1"),
+		red:     ui.Hex("#f38ba8"),
+		amber:   ui.Hex("#f9e2af"),
+		blue:    ui.Hex("#89b4fa"),
+	}
+	// dawnColors are Rosé Pine Dawn's.
+	dawnColors = colors{
+		bg:      ui.Hex("#faf4ed"),
+		sidebar: ui.Hex("#f2e9e1"),
+		surface: ui.Hex("#fffaf3"),
+		hover:   ui.RGBA(87, 82, 121, 0.06),
+		active:  ui.RGBA(87, 82, 121, 0.1),
+		border:  ui.RGBA(87, 82, 121, 0.12),
+		text:    ui.Hex("#575279"),
+		muted:   ui.Hex("#605c78"),
+		faint:   ui.Hex("#66627e"),
+		green:   ui.Hex("#286983"),
+		red:     ui.Hex("#b4637a"),
+		amber:   ui.Hex("#ea9d34"),
+		blue:    ui.Hex("#56949f"),
 	}
 	accents = []struct {
 		name  string
@@ -77,10 +160,11 @@ var (
 
 // settings is what the settings pages edit. Most of it is only shown.
 type settings struct {
-	theme         int // System, Light, Dark
+	theme         string // a theme's name, or systemTheme
 	accent        int
 	glass         bool
 	vibrancy      float64 // 0 to 1: how much of the sidebar's vibrancy shows through the background
+	tintPanels    bool    // the floating panels take the glass tint too, not only the window's bars
 	wind          bool    // the wind's field of glyphs behind the chat
 	fontSize      float64
 	timeFormat    string
@@ -102,6 +186,9 @@ type settings struct {
 }
 
 type app struct {
+	// post runs a func on the thread that builds the views, as the
+	// manager's changes do.
+	post    func(func())
 	win     *mygo.Window
 	router  *ui.Router
 	backend *client.Manager
@@ -115,6 +202,8 @@ type app struct {
 	// the next once.
 	ended    map[api.ID]time.Time
 	settings settings
+	// theme is the frame's look, as the settings and the system choose it.
+	theme theme
 	// server is the Servers page's form for adding one, why the last add
 	// failed, and whether one is waiting for its server to answer.
 	server    client.Server
@@ -184,9 +273,16 @@ type app struct {
 	quick quickAsk
 	// lists are the threads' timelines, by thread.
 	lists map[api.ID]*ui.ListState
-	// The diff panel: each file's viewer, by path, and their layout.
-	diffs      map[string]*editor.DiffState
+	// The diff panel: each file's viewer, by thread and path, and their
+	// layout.
+	diffs      map[diffKey]*fileDiff
+	reading    map[diffKey]diffRead // files being read for diffs
+	readGen    uint64
 	diffLayout editor.DiffLayout
+	// diffWrap wraps the diff's long lines.
+	diffWrap bool
+	// diffFile is the file each thread's diff shows, by path.
+	diffFile map[api.ID]string
 	// shells are the terminal drawer's shells, by workspace.
 	shells map[string]*shell
 	// windDraw paints the wind's field behind the chat, as the frame's
@@ -201,11 +297,22 @@ type app struct {
 	// composerOpened is the composer brought back to its full size by a
 	// click while compact, until the end of the thread shows again.
 	composerOpened bool
+	// steers are the messages sent from the composer, until each lands
+	// or fails, by command.
+	steers map[api.ID]steer
 	// snoozeFor is the thread whose snooze popover is open.
 	snoozeFor api.ID
+	// renaming is the thread whose title is being edited in its row, and
+	// renameDraft the title as typed; renameFocused once the input has
+	// had the focus, so that losing it ends the edit.
+	renaming      api.ID
+	renameDraft   string
+	renameFocused bool
+	// deleting is the thread the alert asks about deleting.
+	deleting   thread
+	deleteOpen bool
 	// now is the frame's time, as the view builds it.
-	now      time.Time
-	diffFile int
+	now time.Time
 
 	cmdkOpen  bool
 	cmdkQuery string
@@ -237,16 +344,21 @@ func newApp(dir string, post func(func())) *app {
 		projectFilter: map[projectKey]bool{},
 		rowFx:         map[api.ID]rowGagFx{},
 		shells:        map[string]*shell{},
-		diffs:         map[string]*editor.DiffState{},
+		diffs:         map[diffKey]*fileDiff{},
+		reading:       map[diffKey]diffRead{},
+		steers:        map[api.ID]steer{},
+		post:          post,
 		lists:         map[api.ID]*ui.ListState{},
 		files:         map[string][]string{},
 		previewURL:    defaultPreviewURL,
 		previewDraft:  defaultPreviewURL,
 		diffLayout:    editor.DiffUnified,
+		diffWrap:      true,
+		diffFile:      map[api.ID]string{},
 		settings: settings{
-			theme:         0,
+			theme:         systemTheme,
 			glass:         true,
-			vibrancy:      0.85,
+			vibrancy:      1, // untinted: Liquid Glass has no color of its own
 			wind:          true,
 			fontSize:      13,
 			timeFormat:    "Relative",
@@ -272,24 +384,14 @@ func newApp(dir string, post func(func())) *app {
 }
 
 // applyTheme sets the theme the settings ask for: the system's appearance,
-// which the default theme follows, or light or dark.
+// which the default choice follows, or one of the app's themes.
 func (a *app) applyTheme(c *ui.Context) {
-	dark := c.Theme().Dark
-	switch a.settings.theme {
-	case 1:
-		dark = false
-	case 2:
-		dark = true
-	}
-	if dark {
-		palette = darkColors
-	} else {
-		palette = lightColors
-	}
+	a.theme = themeFor(a.settings.theme, c.Theme().Dark)
+	palette = a.theme.colors
 	palette.accent = accents[a.settings.accent].color
 
 	t := *c.Theme()
-	t.Dark = dark
+	t.Dark = a.theme.dark
 	t.Background = palette.bg
 	t.Surface = palette.surface
 	t.SurfaceHover = palette.surface.Mix(palette.text, 0.06)
@@ -313,13 +415,14 @@ func (a *app) applyTheme(c *ui.Context) {
 // pane is the material of a floating panel: Liquid Glass, or a plain
 // surface when the glass is turned off in the settings.
 //
-// Every pane of glass takes the one tint the Glass tint setting sets, as
-// the window's vibrancy does in the sidebar and the headers: two kinds of
-// glass, macOS's showing the desktop and MyGo's what the app draws under
-// it, which read as one material by one setting.
+// The glass is plain, as macOS draws its own, unless the Tint panels
+// setting is on: then every pane takes the one tint the Glass tint
+// setting sets, as the window's vibrancy does in the sidebar and the
+// headers, and the two kinds of glass, macOS's showing the desktop and
+// MyGo's what the app draws under it, read as one material.
 func (a *app) pane(e ui.Element, g glass.Glass) ui.Element {
 	if a.settings.glass {
-		if g.Tint == (ui.Color{}) {
+		if g.Tint == (ui.Color{}) && a.settings.tintPanels {
 			g.Tint = a.glassTint()
 		}
 		return e.Material(g)
@@ -346,6 +449,9 @@ func (a *app) view(c *ui.Context) {
 	maps.DeleteFunc(a.projectFilter, func(k projectKey, _ bool) bool {
 		return !slices.ContainsFunc(a.projects, func(p *project) bool { return p.key == k })
 	})
+	a.pruneDiffs()
+	// A steer to a server removed since never lands.
+	maps.DeleteFunc(a.steers, func(_ api.ID, s steer) bool { return !slices.Contains(a.backend.Envs(), s.env) })
 	if w, _ := c.Size(); w > 0 {
 		a.roomBeside = w - a.sidebarWidth*a.sidebarOpen
 	}
@@ -387,6 +493,7 @@ func (a *app) view(c *ui.Context) {
 		})
 	})
 	a.commandPalette(c)
+	a.deleteAlert(c)
 	a.toasts(c)
 }
 
@@ -420,11 +527,43 @@ func (a *app) shortcuts(c *ui.Context) {
 	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyP) {
 		a.togglePreview()
 	}
+	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyL) {
+		a.toggleLightDark()
+	}
 	if c.Shortcut(ui.Cmd, ui.KeyJ) {
 		a.showTerminal, a.panelsJump = !a.showTerminal, true
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyComma) {
 		a.router.Push("/settings/general")
+	}
+}
+
+// contrast is the WCAG contrast ratio of two colors.
+func contrast(a, b ui.Color) float64 {
+	la, lb := luminance(a), luminance(b)
+	if la < lb {
+		la, lb = lb, la
+	}
+	return (la + 0.05) / (lb + 0.05)
+}
+
+func luminance(c ui.Color) float64 {
+	lin := func(v uint8) float64 {
+		s := float64(v) / 255
+		if s <= 0.03928 {
+			return s / 12.92
+		}
+		return math.Pow((s+0.055)/1.055, 2.4)
+	}
+	return 0.2126*lin(c.R) + 0.7152*lin(c.G) + 0.0722*lin(c.B)
+}
+
+// toggleLightDark switches to Light from any dark theme, and to Dark from
+// any light one.
+func (a *app) toggleLightDark() {
+	a.settings.theme = lightTheme.name
+	if !a.theme.dark {
+		a.settings.theme = darkTheme.name
 	}
 }
 
@@ -547,8 +686,9 @@ func (a *app) contentCard(e ui.Element) ui.Element {
 		Margin(0, -1, -1, left).Clip()
 }
 
-// glassTint is the tint over every glass, the app's background by as much
-// as the Glass tint setting leaves: clear at Clear.
+// glassTint is the tint over the window's bars, and the panels when they
+// take it: the app's background by as much as the Glass tint setting
+// leaves, clear at Clear.
 func (a *app) glassTint() ui.Color {
 	return palette.bg.Alpha(float32(1 - a.settings.vibrancy))
 }

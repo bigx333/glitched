@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image/png"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -21,11 +22,21 @@ import (
 	"glitched/internal/provider/fake"
 )
 
-// TestShot writes a PNG of the window: SHOT=out.png, with SCENE=empty|
-// running|approval|servers|machines for the engines' threads (none
-// started without one), PAGE for a
-// path, DIFF, TERM2, CMDK, LIGHT, FAILED, PICKER=<effort>, FAST and STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH, TICK=<turn>, TINT=0..1, SCROLLUP, SPLIT, WIDTH=1100, GAG=snooze|settle|undo with AT=350ms for what to show, and HIDE=60ms for
-// a frame that long into hiding the sidebar.
+// TestShot writes a PNG of the window: SHOT=out.png, with
+// SCENE=empty|running|approval|servers|machines|inbox|checks|refused|plain|stuck
+// for the engines' threads (none started without one; ARCHIVE=<title>
+// archives one of inbox's first; refused is an archived thread whose
+// delete the engine refused; plain is an edit in a workspace with no
+// git; stuck is a run left uncertain, with STEER for a
+// steer it refused over a draft and DRAFT=<text> for the composer's), PAGE
+// for a path, and for what to show: DIFF,
+// SPLIT, TERM2, CMDK with CMDKQ=<query>, LIGHT, THEME=<name>,
+// RENAME=<title>, ALERT=<title>, MENU=<title> (its items to
+// SHOT.menu.txt), HOVER=<text>, FAILED, PICKER=<effort>, FAST and
+// STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH,
+// TICK=<turn>, TINT=0..1, PANELS, SCROLLUP, WIDTH=1100,
+// GAG=snooze|settle|undo with AT=350ms, and HIDE=60ms for a frame that
+// long into hiding the sidebar.
 func TestShot(t *testing.T) {
 	out := os.Getenv("SHOT")
 	if out == "" {
@@ -37,13 +48,17 @@ func TestShot(t *testing.T) {
 		a.showDiff, a.diffLayout = true, editor.DiffSplit
 	}
 	a.showTerminal = os.Getenv("TERM2") != ""
-	a.settings.theme = 2
+	a.settings.theme = darkTheme.name
 	if os.Getenv("LIGHT") != "" {
-		a.settings.theme = 1
+		a.settings.theme = lightTheme.name
+	}
+	if name := os.Getenv("THEME"); name != "" {
+		a.settings.theme = name
 	}
 	if v := os.Getenv("TINT"); v != "" {
 		fmt.Sscan(v, &a.settings.vibrancy)
 	}
+	a.settings.tintPanels = os.Getenv("PANELS") != ""
 	if p := os.Getenv("PAGE"); p != "" {
 		a.router.Push(p)
 	}
@@ -54,12 +69,48 @@ func TestShot(t *testing.T) {
 	}
 	if os.Getenv("CMDK") != "" {
 		a.openCommandPalette()
+		a.cmdkQuery = os.Getenv("CMDKQ")
 	}
 	if e := os.Getenv("PICKER"); e != "" {
 		a.pickerOpen, a.effort, a.fast = true, e, os.Getenv("FAST") != ""
 	}
 	tt.Frame()
 	tt.Advance(time.Second)
+	if title := os.Getenv("RENAME"); title != "" {
+		// Renaming that thread, after the composer took the first focus.
+		for _, it := range a.itemsIn(catInbox) {
+			if it.t.View.Title == title {
+				a.renaming, a.renameDraft = it.t.id(), "Websocket reconnect loop"
+			}
+		}
+		tt.Frame()
+	}
+	if title := os.Getenv("ALERT"); title != "" {
+		// Asking to delete that thread.
+		for _, it := range a.itemsIn(catInbox) {
+			if it.t.View.Title == title {
+				a.askDelete(it.t)
+			}
+		}
+		tt.Frame()
+		tt.Advance(time.Second)
+	}
+	if title := os.Getenv("MENU"); title != "" {
+		// The native menu draws outside the window: its items go beside
+		// the picture.
+		if err := tt.RightClick(title); err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(out+".menu.txt", []byte(strings.Join(tt.Menu(), "\n")+"\n"), 0o644)
+	}
+	if s := os.Getenv("HOVER"); s != "" {
+		r, ok := tt.Find(s)
+		if !ok {
+			t.Fatalf("no %q to point at", s)
+		}
+		tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		tt.Advance(time.Second)
+	}
 	if ms := os.Getenv("HIDE"); ms != "" {
 		// Partway through hiding the sidebar.
 		d, _ := time.ParseDuration(ms)
@@ -179,11 +230,7 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		h.a.select_(h.thread("Sort sidebar threads by recent activity"))
 		h.until("the turn mid-edit", func() bool { return h.tt.HasText("Edit apps/web/src/components/Sidebar.tsx") })
 	case "approval":
-		h = start(t, tempDir(t))
-		h.a.draft = "Fix the flicker when the terminal resizes on Windows."
-		h.tt.Frame()
-		h.click("Send")
-		h.until("the approval card", func() bool { return h.tt.HasText("Allow edit main.go?") })
+		h, _ = asking(t, runTests)
 	case "servers":
 		rdir := tempDir(t)
 		token, err := daemon.Pair(rdir, "gui")
@@ -209,6 +256,66 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		h.tt.Frame()
 		h.click("Add server")
 		h.until("why devbox-ip wasn't added", func() bool { return h.tt.HasText("already listed as devbox") })
+	case "inbox":
+		h = start(t, inboxDir(t))
+		h.thread("SIP re-INVITE handling")
+		if title := os.Getenv("ARCHIVE"); title != "" {
+			th := h.thread(title)
+			h.a.backend.SetDisposition(th.env, th.id(), api.Disposition{State: api.Archived})
+			h.until("the archive", func() bool { return th.View.Disposition.State == api.Archived })
+		}
+		h.tt.Advance(time.Second)
+	case "refused":
+		var th thread
+		h, th = asking(t, runTests)
+		h.a.backend.SetDisposition(th.env, th.id(), api.Disposition{State: api.Archived})
+		h.until("the archive", func() bool { return th.View.Disposition.State == api.Archived && len(th.Pending) == 0 })
+		h.a.delete(th)
+		h.until("the refusal", func() bool { return len(th.Pending) == 1 && th.Pending[0].Err != nil })
+	case "checks":
+		h, _ = checked(t)
+		if os.Getenv("DIFF") != "" {
+			h.click("Edit " + sidebarPath)
+			h.diffsRead()
+		}
+	case "plain":
+		// An edit in a workspace with no git, whose HEAD is unknown.
+		ws := filepath.Join(t.TempDir(), "notes")
+		if err := os.MkdirAll(ws, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(ws, "plan.md"), []byte("# Plan\n\nShip the sidebar sort.\nThen the README.\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		dir := tempDir(t)
+		d := engine(t, daemon.Config{Dir: dir}, fake.New([]provider.Event{
+			provider.Work{Item: "e", Kind: "edit", Title: "Edit plan.md", Status: api.WorkCompleted, Path: "plan.md"},
+			provider.TextDelta{Text: "Added the README to the plan."},
+		}))
+		seed(t, d, ws, "Plan the week", "Add the README to the plan.")
+		h = start(t, dir)
+		h.a.select_(h.thread("Plan the week"))
+		h.until("its transcript", func() bool { return h.tt.HasText("Added the README to the plan.") })
+		h.tt.Advance(time.Second)
+		h.click("Edit plan.md")
+		h.diffsRead()
+	case "stuck":
+		// A run left uncertain, which refuses a steer.
+		h = start(t, uncertainDir(t))
+		th := h.thread("Stuck")
+		h.a.select_(th)
+		h.until("its transcript", func() bool { return h.tt.HasText("May I edit it?") })
+		if os.Getenv("STEER") != "" {
+			h.a.draft = "Keep going."
+			h.a.send(th)
+			h.a.draft = "And then the README."
+			h.until("the refusal", func() bool { h.tt.Frame(); return len(th.Pending) == 1 && th.Pending[0].Err != nil })
+		}
+		if d := os.Getenv("DRAFT"); d != "" {
+			h.a.draft = d
+		}
+		h.tt.Frame()
+		h.tt.Advance(time.Second)
 	case "machines":
 		h = machines(t)
 		h.a.select_(h.thread("Rotate the API keys"))

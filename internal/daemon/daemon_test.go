@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,7 +93,9 @@ func TestTCPAdmitsOnlyAPairedToken(t *testing.T) {
 	}
 	d := start(t, Config{Dir: dir, Listen: []string{"127.0.0.1:0"}})
 
-	ws, _, err := websocket.Dial(context.Background(), "ws://"+d.Addrs()[0].String()+"/ws", nil)
+	ws, _, err := websocket.Dial(context.Background(), "ws://"+d.Addrs()[0].String()+"/ws", &websocket.DialOptions{
+		HTTPHeader: http.Header{"Glitched-Protocol": {fmt.Sprint(api.Protocol)}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,4 +296,46 @@ func TestStartListensOnAnAddressOnceItIsAssigned(t *testing.T) {
 	if n := count("waiting to listen"); n != 1 {
 		t.Fatalf("2 failed binds with one error logged %d times, want once", n)
 	}
+}
+
+// An engine whose hub speaks another protocol says so in its log, not that
+// the hub is unreachable.
+func TestAHubOfAnotherProtocolIsNamedInTheLog(t *testing.T) {
+	hubDir := stateDir(t)
+	ln, err := Socket(hubDir).Listen(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A protocol 1 engine, which announces no protocol.
+	older := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ws, err := websocket.Accept(w, r, nil); err == nil {
+			ws.Read(context.Background())
+			ws.CloseNow()
+		}
+	})}
+	go older.Serve(ln)
+	t.Cleanup(func() { older.Close() })
+	var logged strings.Builder
+	was := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&syncWriter{w: &logged}, nil)))
+	t.Cleanup(func() { slog.SetDefault(was) })
+	d, err := Start(context.Background(), Config{Dir: stateDir(t), HubDir: hubDir, Adapter: fake.New(fake.Turn(false))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+	if s := logged.String(); !strings.Contains(s, "the hub speaks another protocol") || strings.Contains(s, "hub unreachable") {
+		t.Fatalf("the log: %s", s)
+	}
+}
+
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }

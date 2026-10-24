@@ -10,7 +10,6 @@ package client
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -18,7 +17,6 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/daemon"
 	"glitched/internal/jsonfile"
-	"glitched/internal/runtime"
 	"glitched/internal/transport"
 )
 
@@ -167,12 +165,6 @@ func (Refused) status()      {}
 func (Incompatible) status() {}
 func (Duplicate) status()    {}
 
-type protocolError struct{ theirs int }
-
-func (e *protocolError) Error() string {
-	return fmt.Sprintf("client: the engine speaks protocol %d, this client %d", e.theirs, runtime.Protocol)
-}
-
 type duplicateError struct{ of string }
 
 func (e *duplicateError) Error() string { return "client: the engine is listed already, as " + e.of }
@@ -278,8 +270,8 @@ func (m *Manager) link(ctx context.Context, e *Env, r route) {
 		r.failed()
 		retry := time.Now().Add(wait)
 		var s Status = Offline{Err: err, RetryAt: retry}
-		if pe := (*protocolError)(nil); errors.As(err, &pe) {
-			s = Incompatible{Theirs: pe.theirs, Ours: runtime.Protocol, RetryAt: retry}
+		if pe := (*api.ProtocolError)(nil); errors.As(err, &pe) {
+			s = Incompatible{Theirs: pe.Theirs, Ours: api.Protocol, RetryAt: retry}
 		}
 		if de := (*duplicateError)(nil); errors.As(err, &de) {
 			s = Duplicate{Of: de.of}
@@ -304,8 +296,8 @@ func (m *Manager) serve(ctx context.Context, e *Env, ep api.Endpoint, online fun
 	defer cancel()
 	dial, undial := context.WithTimeout(s.ctx, connectTimeout)
 	info, err := ep.Info(dial)
-	if err == nil && info.Protocol != runtime.Protocol {
-		err = &protocolError{info.Protocol}
+	if err == nil && info.Protocol != api.Protocol {
+		err = &api.ProtocolError{Theirs: info.Protocol}
 	}
 	if err == nil {
 		err = m.claim(dial, e, info.ID)
@@ -360,6 +352,13 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 
 func (m *Manager) view(e *Env, v api.Thread) {
 	th := e.Threads[v.ID]
+	if v.Deleted {
+		if th != nil {
+			th.unfollow()
+			delete(e.Threads, v.ID)
+		}
+		return
+	}
 	if th == nil {
 		th = &Thread{}
 		e.Threads[v.ID] = th
@@ -461,9 +460,11 @@ func (m *Manager) follow(e *Env, th *Thread) {
 }
 
 // watch reads one thread's subscription, reopening it from the last cursor
-// it read when it fails, until ctx ends. It folds a snapshot itself, as a
+// it read when it fails, until ctx ends or the thread is gone: past its
+// tombstone the engine finds it no more. It folds a snapshot itself, as a
 // long thread's takes a while, and posts the transcript.
 func (m *Manager) watch(ctx context.Context, e *Env, s *sub, ep api.Endpoint, thread api.ID, after api.Cursor) {
+	deleted := false
 	for wait := minBackoff; ; wait = min(2*wait, maxBackoff) {
 		st, err := ep.Open(ctx, api.Subscription{Thread: thread, After: after})
 		for err == nil {
@@ -478,9 +479,11 @@ func (m *Manager) watch(ctx context.Context, e *Env, s *sub, ep api.Endpoint, th
 			case api.StreamSnapshot:
 				after = it.Snapshot.Cursor
 				tr := fold(*it.Snapshot)
+				deleted = tr.Deleted
 				take = func(t *Transcript) { *t = tr }
 			case api.StreamEvent:
 				after = it.Event.Cursor
+				deleted = deleted || it.Event.Type == api.EventType(api.ThreadDeleted{})
 				take = func(t *Transcript) { t.apply(*it.Event) }
 			default:
 				continue
@@ -492,6 +495,9 @@ func (m *Manager) watch(ctx context.Context, e *Env, s *sub, ep api.Endpoint, th
 					th.dropUnasked()
 				}
 			})
+		}
+		if deleted && errors.Is(err, api.ErrNotFound) {
+			return
 		}
 		select {
 		case <-ctx.Done():

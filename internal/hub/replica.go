@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS events (
 	UNIQUE (log, seq)
 );
 CREATE INDEX IF NOT EXISTS events_thread ON events (thread, n);
+CREATE TABLE IF NOT EXISTS tombstones (
+	log    BLOB NOT NULL,
+	thread BLOB NOT NULL,
+	PRIMARY KEY (log, thread)
+) WITHOUT ROWID;
 `
 
 type Replica struct {
@@ -75,6 +80,9 @@ func (r *Replica) Close() error { return r.db.Close() }
 // new acked offset. A replayed upload changes nothing; one that replays
 // another event at a seq the replica holds is ErrRewound.
 func (r *Replica) Append(ctx context.Context, u api.Upload) (api.UploadAck, error) {
+	if u.Protocol != api.Protocol {
+		return api.UploadAck{}, fmt.Errorf("%w: the host speaks protocol %d, this hub %d", api.ErrProtocol, u.Protocol, api.Protocol)
+	}
 	for i, e := range u.Events {
 		if e.Cursor.Log != u.Log || (i > 0 && e.Cursor.Seq != u.Events[i-1].Cursor.Seq+1) {
 			return api.UploadAck{}, fmt.Errorf("hub: upload is not one contiguous run of log %s", u.Log)
@@ -133,6 +141,11 @@ func (r *Replica) Append(ctx context.Context, u api.Upload) (api.UploadAck, erro
 			u.Log[:], e.Cursor.Seq, e.Thread[:], body); err != nil {
 			return api.UploadAck{}, err
 		}
+		if e.Type == api.EventType(api.ThreadDeleted{}) {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO tombstones (log, thread) VALUES (?, ?) ON CONFLICT DO NOTHING`, u.Log[:], e.Thread[:]); err != nil {
+				return api.UploadAck{}, err
+			}
+		}
 		acked = e.Cursor.Seq
 	}
 	if err := tx.Commit(); err != nil {
@@ -144,7 +157,7 @@ func (r *Replica) Append(ctx context.Context, u api.Upload) (api.UploadAck, erro
 		r.changed = make(chan struct{})
 		r.mu.Unlock()
 	}
-	return api.UploadAck{Acked: acked}, nil
+	return api.UploadAck{Acked: acked, Protocol: api.Protocol}, nil
 }
 
 // holds returns ErrRewound unless the replica holds e at its seq.
@@ -182,9 +195,10 @@ func ackedTx(ctx context.Context, q querier, log api.ID) (uint64, error) {
 
 // Events returns up to limit events after the cursor, in the order the hub
 // received them: one thread's, or every thread's when thread is zero. A zero
-// cursor starts at the beginning.
+// cursor starts at the beginning, or for a thread at the start of the last
+// log that holds its events.
 func (r *Replica) Events(ctx context.Context, thread api.ID, after api.Cursor, limit int) ([]api.Event, error) {
-	n, err := r.position(ctx, after)
+	n, err := r.start(ctx, thread, after)
 	if err != nil {
 		return nil, err
 	}
@@ -211,6 +225,38 @@ func (r *Replica) position(ctx context.Context, c api.Cursor) (int64, error) {
 	return n.Int64, nil
 }
 
+// start places a read of thread, or of every thread, after the cursor. A
+// thread read that starts once the cursor's log holds the thread's
+// tombstone is ErrNotFound, as the host's is; a Feed open before then reads
+// on to the tombstone and ends. The whole log still holds the thread's
+// events, which it must to stay the host's copy. The tombstone is the log's:
+// a restored host's new log may hold the thread again.
+func (r *Replica) start(ctx context.Context, thread api.ID, after api.Cursor) (int64, error) {
+	if !thread.IsZero() && after == (api.Cursor{}) {
+		var log []byte
+		switch err := r.db.QueryRowContext(ctx, `SELECT log FROM events WHERE thread = ? ORDER BY n DESC LIMIT 1`, thread[:]).Scan(&log); {
+		case errors.Is(err, sql.ErrNoRows):
+			return 0, nil
+		case err != nil:
+			return 0, err
+		}
+		after.Log = api.ID(log)
+	}
+	n, err := r.position(ctx, after)
+	if err != nil || thread.IsZero() {
+		return n, err
+	}
+	var gone int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tombstones WHERE log = ? AND thread = ?`, after.Log[:], thread[:]).Scan(&gone); err != nil {
+		return 0, err
+	}
+	if gone > 0 {
+		return 0, api.ErrNotFound
+	}
+	return n, nil
+}
+
+// eventsAfter reads the replica in arrival order.
 func (r *Replica) eventsAfter(ctx context.Context, thread api.ID, n int64, limit int) ([]api.Event, int64, error) {
 	q, args := `SELECT n, event FROM events WHERE n > ? ORDER BY n LIMIT ?`, []any{n, limit}
 	if !thread.IsZero() {
@@ -243,12 +289,14 @@ type Feed struct {
 	thread api.ID
 	n      int64
 	buf    []api.Event
+	over   bool // the thread's tombstone was read: nothing follows it
 }
 
 // Follow returns the events after the cursor, then each later append as it
-// commits. thread and after mean what they mean for Events.
+// commits. thread and after mean what they mean for Events. A thread's
+// feed ends with ErrNotFound after the thread's tombstone.
 func (r *Replica) Follow(ctx context.Context, thread api.ID, after api.Cursor) (*Feed, error) {
-	n, err := r.position(ctx, after)
+	n, err := r.start(ctx, thread, after)
 	if err != nil {
 		return nil, err
 	}
@@ -256,6 +304,9 @@ func (r *Replica) Follow(ctx context.Context, thread api.ID, after api.Cursor) (
 }
 
 func (f *Feed) Next(ctx context.Context) (api.Event, error) {
+	if f.over {
+		return api.Event{}, api.ErrNotFound
+	}
 	for len(f.buf) == 0 {
 		f.r.mu.Lock()
 		changed := f.r.changed
@@ -276,5 +327,8 @@ func (f *Feed) Next(ctx context.Context) (api.Event, error) {
 	}
 	e := f.buf[0]
 	f.buf = f.buf[1:]
+	if !f.thread.IsZero() && e.Type == api.EventType(api.ThreadDeleted{}) {
+		f.over, f.buf = true, nil
+	}
 	return e, nil
 }

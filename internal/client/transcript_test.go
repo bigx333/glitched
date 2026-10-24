@@ -316,6 +316,15 @@ func TestFoldSkipsUnknownAndRepeatedEvents(t *testing.T) {
 	expect(t, tr, `user "one" sent`, `assistant "xyz" streaming`)
 }
 
+func TestFoldMarksADeletedThread(t *testing.T) {
+	a := api.NewID()
+	tr := play(append(start(a, "one", 0), api.TurnEnded{Run: a}, api.ThreadDeleted{})...)
+	if !tr.Deleted {
+		t.Fatal("the tombstone folded in, and the transcript is not marked deleted")
+	}
+	expect(t, tr, `user "one" sent`)
+}
+
 // longRun is a turn whose text arrives in n deltas.
 func longRun(n int) []api.EventBody {
 	run := api.NewID()
@@ -464,5 +473,43 @@ func TestFoldAgreesWithTheEngine(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A step keeps when it started across its updates and when it ended, and
+// a command's exit code and output.
+func TestFoldTimesEachStepAndKeepsHowACommandWent(t *testing.T) {
+	a := api.NewID()
+	cmd := api.WorkItem{Run: a, Item: "c", Kind: "command", Title: "bun test", Status: api.WorkStarted}
+	done := cmd
+	done.Status, done.Exit, done.Output = api.WorkFailed, new(1), "1 failed"
+	evs := slices.Concat(start(a, "go", 0), []api.EventBody{cmd, api.AssistantDelta{Run: a, Text: "…"}, done})
+	tr := play(evs...)
+	s := tr.Entries[1].(*WorkEntry).Items[0]
+	if first := len(evs) - 2; !s.Started.Equal(at(first)) || !s.Ended.Equal(at(len(evs))) {
+		t.Errorf("step from %v to %v, want %v to %v", s.Started, s.Ended, at(first), at(len(evs)))
+	}
+	if s.Exit == nil || *s.Exit != 1 || s.Output != "1 failed" || s.Status != api.WorkFailed {
+		t.Errorf("step %+v, want failed with exit 1 and its output", s)
+	}
+}
+
+// A later event for a step that leaves a field out keeps what the earlier
+// one said: an edit's path, a command's exit code and output.
+func TestFoldKeepsWhatALaterStepEventLeavesOut(t *testing.T) {
+	a := api.NewID()
+	edit := api.WorkItem{Run: a, Item: "e", Kind: "edit", Title: "Edit main.go", Status: api.WorkStarted, Path: "main.go"}
+	cmd := api.WorkItem{Run: a, Item: "c", Kind: "command", Title: "bun test", Status: api.WorkFailed, Exit: new(1), Output: "1 failed"}
+	tr := play(slices.Concat(start(a, "go", 0), []api.EventBody{
+		edit, cmd,
+		api.WorkItem{Run: a, Item: "e", Status: api.WorkCompleted},
+		api.WorkItem{Run: a, Item: "c", Status: api.WorkFailed},
+	})...)
+	steps := tr.Entries[1].(*WorkEntry).Items
+	if e := steps[0]; e.Path != "main.go" || e.Kind != "edit" || e.Title != "Edit main.go" || e.Status != api.WorkCompleted {
+		t.Errorf("edit step %+v, want its path, kind and title kept, completed", e)
+	}
+	if c := steps[1]; c.Exit == nil || *c.Exit != 1 || c.Output != "1 failed" {
+		t.Errorf("command step %+v, want its exit code and output kept", c)
 	}
 }

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"slices"
+	"strings"
+
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 )
@@ -11,39 +14,74 @@ type command struct {
 	hint    string
 	icon    *ui.SVG
 	run     func()
+	// t is the thread a Threads command opens, with its diff on ⌘↩.
+	t *thread
 }
 
 func (a *app) openCommandPalette() {
 	a.cmdkOpen, a.cmdkQuery, a.cmdkIndex = true, "", 0
 }
 
+// commands are what the palette offers for the query: the actions, then
+// the threads, the most recently active first. A query starting with >
+// keeps to the actions.
 func (a *app) commands() []command {
-	cmds := []command{
-		{"Actions", "New thread", "⌘N", icSquarePen, a.newThread},
-		{"Actions", "Toggle diff panel", "⌘D", icDiff, func() { a.showDiff = !a.showDiff }},
-		{"Actions", "Toggle terminal", "⌘J", icTerminal, func() { a.showTerminal = !a.showTerminal }},
-		{"Actions", "Toggle sidebar", "⌘B", icPanelLeft, func() { a.showSidebar = !a.showSidebar }},
-		{"Actions", "Toggle light / dark", "", icPalette, func() {
-			if a.settings.theme == 1 {
-				a.settings.theme = 2
-			} else {
-				a.settings.theme = 1
-			}
-		}},
-		{"Actions", "Open settings", "⌘,", icSettings, func() { a.router.Push("/settings/general") }},
+	action := func(label, hint string, icon *ui.SVG, run func()) command {
+		return command{section: "Actions", label: label, hint: hint, icon: icon, run: run}
 	}
+	several := len(a.backend.Envs()) > 1
+	cmds := []command{action("New thread", "⌘N", icSquarePen, a.newThread)}
 	for _, p := range a.projects {
-		for _, t := range p.threads {
-			cmds = append(cmds, command{"Threads", t.View.Title, p.name(), icMessage, func() { a.select_(t) }})
+		name := p.name()
+		if several {
+			name += " on " + p.env.Name
 		}
+		cmds = append(cmds, action("New thread in "+name, "", icSquarePen, func() { a.startThread(p) }))
+	}
+	cmds = append(cmds,
+		action("Switch model", "", icSparkles, a.openModelPicker),
+		action("Toggle diff panel", "⌘D", icDiff, func() { a.showDiff = !a.showDiff }),
+		action("Toggle terminal", "⌘J", icTerminal, func() { a.showTerminal = !a.showTerminal }),
+		action("Toggle preview", "⇧⌘P", icGlobe, a.togglePreview),
+		action("Toggle sidebar", "⌘B", icPanelLeft, func() { a.showSidebar = !a.showSidebar }),
+		action("Toggle light / dark", "⇧⌘L", icPalette, a.toggleLightDark),
+	)
+	for i, s := range settingsSections {
+		hint := ""
+		if i == 0 {
+			hint = "⌘,"
+		}
+		path := "/settings/" + s.path
+		cmds = append(cmds, action("Settings › "+s.label, hint, s.icon, func() { a.router.Push(path) }))
+	}
+	query, actionsOnly := strings.CutPrefix(a.cmdkQuery, ">")
+	query = strings.TrimSpace(query)
+	if !actionsOnly {
+		var threads []command
+		for _, p := range a.projects {
+			for _, t := range p.threads {
+				threads = append(threads, command{section: "Threads", label: title(t), hint: p.name(), run: func() { a.select_(t) }, t: &t})
+			}
+		}
+		slices.SortStableFunc(threads, func(x, y command) int { return newestFirst(*x.t, *y.t) })
+		cmds = append(cmds, threads...)
 	}
 	var shown []command
 	for _, cmd := range cmds {
-		if matches(cmd.label, a.cmdkQuery) || matches(cmd.hint, a.cmdkQuery) {
+		if matches(cmd.label, query) || matches(cmd.hint, query) {
 			shown = append(shown, cmd)
 		}
 	}
 	return shown
+}
+
+// openModelPicker opens the composer's model picker, from wherever the
+// palette was: the chat, with the composer at its full size, holds it.
+func (a *app) openModelPicker() {
+	if a.router.Path() != "/" {
+		a.router.Push("/")
+	}
+	a.composerOpened, a.pickerOpen = true, true
 }
 
 // commandPalette is a sheet of glass over the blurred window. It's opened
@@ -82,9 +120,17 @@ func (a *app) commandPalette(c *ui.Context) {
 			if in.Changed() {
 				a.cmdkIndex = 0
 			}
-			if in.Submitted() && len(cmds) > 0 {
-				a.cmdkOpen = false
-				cmds[a.cmdkIndex].run()
+			if len(cmds) > 0 {
+				cmd := cmds[a.cmdkIndex]
+				switch {
+				case in.Submitted():
+					a.cmdkOpen = false
+					cmd.run()
+				case cmd.t != nil && c.Shortcut(ui.Cmd, ui.KeyEnter):
+					a.cmdkOpen = false
+					cmd.run()
+					a.showDiff, a.showPreview = true, false
+				}
 			}
 			kbd(c, "esc")
 		})
@@ -94,7 +140,12 @@ func (a *app) commandPalette(c *ui.Context) {
 		// Enter and clicks move: the list's selection would paint its
 		// accent on the section headers too.
 		l := &a.cmdkList
-		l.Key = func(i int) any { return cmds[i].section + "/" + cmds[i].label }
+		l.Key = func(i int) any {
+			if t := cmds[i].t; t != nil {
+				return t.id()
+			}
+			return cmds[i].section + "/" + cmds[i].label
+		}
 		ui.List(c.Key("results"), l, len(cmds), func(i int) {
 			cmd := cmds[i]
 			ui.Column(c).Children(func() {
@@ -106,9 +157,16 @@ func (a *app) commandPalette(c *ui.Context) {
 					a.cmdkIndex = i
 				}
 				if r.Children(func() {
-					ui.Icon(c, cmd.icon).FontSize(14)
+					if cmd.t != nil {
+						ui.Box(c).Size(14, 14).Center().Shrink(0).Children(func() { statusMark(c, a.statusOf(*cmd.t)) })
+					} else {
+						ui.Icon(c, cmd.icon).FontSize(14)
+					}
 					ui.Text(c, cmd.label).SingleLine().Grow(1).Shrink(1)
 					ui.Text(c, cmd.hint).FontSize(11.5).TextColor(palette.faint)
+					if cmd.t != nil {
+						ui.Text(c, ago(cmd.t.View.UpdatedAt, a.now)).FontSize(11.5).TextColor(palette.faint).MinWidth(28).TextAlign(ui.End)
+					}
 				}).Clicked() {
 					a.cmdkOpen = false
 					cmd.run()
@@ -119,7 +177,23 @@ func (a *app) commandPalette(c *ui.Context) {
 				ui.Text(c, "No results").TextColor(palette.muted).Padding(24).TextAlign(ui.Center)
 			}
 		})
-
+		ui.Row(c).Gap(14).Padding(7, 16).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
+			hint := func(key, what string) {
+				ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+					kbd(c, key)
+					ui.Text(c, what).FontSize(11).TextColor(palette.muted)
+				})
+			}
+			hint("↑↓", "navigate")
+			hint("↩", "open")
+			hint("⌘↩", "open with diff")
+			ui.Spacer(c)
+			ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Type").FontSize(11).TextColor(palette.muted)
+				kbd(c, ">")
+				ui.Text(c, "for actions").FontSize(11).TextColor(palette.muted)
+			})
+		})
 	})
 }
 

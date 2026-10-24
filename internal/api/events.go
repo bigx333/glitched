@@ -116,14 +116,22 @@ type AssistantDelta struct {
 }
 
 // WorkItem reports a tool call or similar step; a later event with the same
-// Item updates it.
+// Item updates it. Path, Exit and Output are as provider.Work has them;
+// Output is at most the last OutputLimit bytes.
 type WorkItem struct {
 	Run    ID         `json:"run"`
 	Item   string     `json:"item"`
 	Kind   string     `json:"kind"`
 	Title  string     `json:"title"`
 	Status WorkStatus `json:"status"`
+	Path   string     `json:"path,omitempty"`
+	Exit   *int       `json:"exit,omitempty"`
+	Output string     `json:"output,omitempty"`
 }
+
+// OutputLimit caps a work item's output in the log: its tail says how a
+// command failed, and every subscriber of the thread replays it.
+const OutputLimit = 8 << 10
 
 type RequestOpened struct {
 	Request    ID              `json:"request"`
@@ -147,6 +155,13 @@ type RequestInvalidation struct {
 	Request ID     `json:"request"`
 	Reason  string `json:"reason"`
 }
+
+type ThreadRenamed struct {
+	Title string `json:"title"`
+}
+
+// ThreadDeleted is a thread's tombstone, its last event.
+type ThreadDeleted struct{}
 
 type DispositionChanged struct {
 	Disposition Disposition `json:"disposition"`
@@ -172,6 +187,8 @@ func (RequestAnswer) eventType() string       { return "request.answered" }
 func (RequestDelivery) eventType() string     { return "request.delivered" }
 func (RequestInvalidation) eventType() string { return "request.invalidated" }
 func (DispositionChanged) eventType() string  { return "disposition.changed" }
+func (ThreadRenamed) eventType() string       { return "thread.renamed" }
+func (ThreadDeleted) eventType() string       { return "thread.deleted" }
 
 var eventBodies = map[string]func([]byte) (EventBody, error){}
 
@@ -196,6 +213,8 @@ func init() {
 	register[RequestDelivery]()
 	register[RequestInvalidation]()
 	register[DispositionChanged]()
+	register[ThreadRenamed]()
+	register[ThreadDeleted]()
 }
 
 func register[B EventBody]() {

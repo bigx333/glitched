@@ -19,8 +19,6 @@ import (
 	"glitched/internal/store"
 )
 
-const Protocol = 1
-
 var errNoAgent = errors.New("runtime: the run has no live agent")
 
 // callTimeout bounds every provider call but Next.
@@ -106,7 +104,7 @@ func (h *Host) Close() error {
 }
 
 func (h *Host) Info(context.Context) (api.Environment, error) {
-	return api.Environment{ID: h.store.HostID(), Name: h.name, Protocol: Protocol, Log: h.store.LogID()}, nil
+	return api.Environment{ID: h.store.HostID(), Name: h.name, Protocol: api.Protocol, Log: h.store.LogID()}, nil
 }
 
 func (h *Host) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {

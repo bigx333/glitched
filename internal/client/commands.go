@@ -60,8 +60,17 @@ func (m *Manager) Interrupt(e *Env, thread api.ID) api.ID {
 	return m.submit(e, thread, api.TurnInterrupt{})
 }
 
-// Respond answers a request with {"allow":allow}, as the CLI does.
-func (m *Manager) Respond(e *Env, thread, request api.ID, allow bool) api.ID {
+// Answer is how the user answers an approval.
+type Answer uint8
+
+const (
+	Deny Answer = iota
+	AllowOnce
+)
+
+// Respond answers a request with {"allow":true} or {"allow":false}, as the
+// CLI does.
+func (m *Manager) Respond(e *Env, thread, request api.ID, a Answer) api.ID {
 	th := e.Threads[thread]
 	if th == nil {
 		return api.ID{}
@@ -74,12 +83,21 @@ func (m *Manager) Respond(e *Env, thread, request api.ID, allow bool) api.ID {
 			gen = r.Generation
 		}
 	}
-	answer, _ := json.Marshal(map[string]bool{"allow": allow})
+	answer, _ := json.Marshal(map[string]bool{"allow": a == AllowOnce})
 	return m.submit(e, thread, api.RequestRespond{Request: request, Generation: gen, Answer: answer})
 }
 
 func (m *Manager) SetDisposition(e *Env, thread api.ID, d api.Disposition) api.ID {
 	return m.submit(e, thread, api.InboxSet{Disposition: d})
+}
+
+func (m *Manager) Rename(e *Env, thread api.ID, title string) api.ID {
+	return m.submit(e, thread, api.ThreadRename{Title: title})
+}
+
+// Delete deletes the thread. The engine refuses while its agent works.
+func (m *Manager) Delete(e *Env, thread api.ID) api.ID {
+	return m.submit(e, thread, api.ThreadDelete{})
 }
 
 // Retry sends a failed command again under its ID, so one that did land

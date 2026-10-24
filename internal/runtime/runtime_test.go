@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -626,4 +627,78 @@ func TestInterruptDuringDeliveryLogsWhatTheAgentGot(t *testing.T) {
 			count(evs, "request.delivered"), stored.Requests[0].State)
 	}
 	assertReplay(t, n.st)
+}
+
+// A failed command's exit code and its output's tail reach the log, the
+// output cut to api.OutputLimit. A passing command's output does not.
+func TestAStepsOutputIsCutToItsTail(t *testing.T) {
+	long := strings.Repeat("x", api.OutputLimit) + "the last line"
+	ad := fake.New([]provider.Event{
+		provider.Work{Item: "ok", Kind: "command", Title: "make lint", Status: api.WorkCompleted, Exit: new(0), Output: "all clean"},
+		provider.Work{Item: "c", Kind: "command", Title: "make", Status: api.WorkFailed, Exit: new(2), Output: long},
+	})
+	n := start(t, dbPath(t), ad)
+	thread := newThread(t, n.h)
+	submit(t, n.h, thread, dispatch("build", api.StartNow))
+	until(t, n.h, thread, "turn end", idle)
+	for _, e := range events(t, n.h, thread) {
+		if e.Type != "work.item" {
+			continue
+		}
+		b, _ := e.Decode()
+		w := b.(api.WorkItem)
+		if w.Item == "ok" {
+			if w.Output != "" {
+				t.Fatalf("a passing command's output reached the log: %q", w.Output)
+			}
+			continue
+		}
+		if w.Exit == nil || *w.Exit != 2 || len(w.Output) != api.OutputLimit || !strings.HasSuffix(w.Output, "the last line") {
+			t.Fatalf("work item exit %v, output of %d bytes ending %q", w.Exit, len(w.Output), w.Output[max(0, len(w.Output)-20):])
+		}
+		return
+	}
+	t.Fatal("no work item in the log")
+}
+
+// A stream open when a thread is deleted gets the tombstone and then ends;
+// one opened after, from any cursor, is refused, so a deleted thread never
+// replays.
+func TestADeletedThreadsStreamEndsAtItsTombstone(t *testing.T) {
+	n := start(t, dbPath(t), fake.New(fake.Turn(false)))
+	thread := newThread(t, n.h)
+	created := events(t, n.h, thread)[0].Cursor
+	for i := range 130 {
+		submit(t, n.h, thread, api.ThreadRename{Title: fmt.Sprint("title ", i)})
+	}
+	s, err := n.h.Open(ctx, api.Subscription{Thread: thread, After: events(t, n.h, thread)[130].Cursor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if evs := drain(t, s); len(evs) != 0 {
+		t.Fatalf("caught up at the head: %d events", len(evs))
+	}
+	submit(t, n.h, thread, api.ThreadRename{Title: "last"})
+	submit(t, n.h, thread, api.ThreadDelete{})
+	for _, want := range []string{"thread.renamed", "thread.deleted"} {
+		if it := next(t, s); it.Kind != api.StreamEvent || it.Event.Type != want {
+			t.Fatalf("live: %+v, want %s", it, want)
+		}
+	}
+	c, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, err := s.Next(c); !errors.Is(err, api.ErrNotFound) {
+		t.Fatalf("after the tombstone: %v, want ErrNotFound", err)
+	}
+
+	for name, after := range map[string]api.Cursor{
+		"from the log's start":            {Log: n.st.LogID()},
+		"from a cursor 130 events behind": created,
+		"from another log":                {Log: api.NewID(), Seq: 1},
+	} {
+		if _, err := n.h.Open(ctx, api.Subscription{Thread: thread, After: after}); !errors.Is(err, api.ErrNotFound) {
+			t.Fatalf("opening the deleted thread %s: %v, want ErrNotFound", name, err)
+		}
+	}
 }

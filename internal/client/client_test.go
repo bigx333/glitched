@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -317,7 +318,7 @@ type longThread struct {
 }
 
 func (l *longThread) Info(context.Context) (api.Environment, error) {
-	return api.Environment{ID: api.NewID(), Name: "long", Protocol: 1, Log: testLog}, nil
+	return api.Environment{ID: api.NewID(), Name: "long", Protocol: api.Protocol, Log: testLog}, nil
 }
 
 func (l *longThread) Read(context.Context, api.Query) (api.Snapshot, error) {
@@ -412,27 +413,29 @@ func TestOpeningALongThreadLeavesThePostThreadFree(t *testing.T) {
 	}
 }
 
-type newerEngine struct{ *longThread }
+// olderEngine speaks protocol 1, which has no archived or deleted
+// threads.
+type olderEngine struct{ *longThread }
 
-func (newerEngine) Info(context.Context) (api.Environment, error) {
-	return api.Environment{ID: api.NewID(), Name: "newer", Protocol: 2, Log: testLog}, nil
+func (olderEngine) Info(context.Context) (api.Environment, error) {
+	return api.Environment{ID: api.NewID(), Name: "older", Protocol: 1, Log: testLog}, nil
 }
 
 func TestAnEngineOfAnotherProtocolIsNotShown(t *testing.T) {
 	dir := stateDir(t)
-	serveOn(t, dir, newerEngine{&longThread{view: api.Thread{ID: api.NewID(), Title: "newer"}}})
+	serveOn(t, dir, olderEngine{&longThread{view: api.Thread{ID: api.NewID(), Title: "older"}}})
 	m, g := manager(t, dir)
 	env := m.Envs()[0]
 	g.until(t, "an answer", func() bool { return env.Status != Status(Connecting{}) })
-	if s, ok := env.Status.(Incompatible); !ok || s.Theirs != 2 || s.Ours != 1 || len(env.Threads) != 0 {
-		t.Fatalf("an engine of protocol 2 left the env %s with %d threads, want incompatible and none shown", describeStatus(env.Status), len(env.Threads))
+	if s, ok := env.Status.(Incompatible); !ok || s.Theirs != 1 || s.Ours != 2 || len(env.Threads) != 0 {
+		t.Fatalf("an engine of protocol 1 left the env %s with %d threads, want incompatible and none shown", describeStatus(env.Status), len(env.Threads))
 	}
 }
 
 type unnamedEngine struct{ *longThread }
 
 func (unnamedEngine) Info(context.Context) (api.Environment, error) {
-	return api.Environment{Name: "unnamed", Protocol: 1, Log: testLog}, nil
+	return api.Environment{Name: "unnamed", Protocol: api.Protocol, Log: testLog}, nil
 }
 
 // An engine that reports no ID claims none, and shows its threads.
@@ -474,7 +477,7 @@ func finishTurn(t *testing.T, m *Manager, g *gui, env *Env) api.ID {
 		}
 		return req != nil
 	}, transcript)
-	m.Respond(env, id, req.Request, true)
+	m.Respond(env, id, req.Request, AllowOnce)
 
 	want := []string{
 		`user "hello" sent`,
@@ -538,7 +541,7 @@ func TestTheSecondGUIOnADirCarriesOnWhenTheFirstQuits(t *testing.T) {
 		}
 		return req != nil
 	})
-	b.Respond(env, id, req.Request, true)
+	b.Respond(env, id, req.Request, AllowOnce)
 	cli := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
 	defer cli.Close()
 	g.until(t, "the second turn in the transcript as the engine holds it", func() bool {
@@ -564,6 +567,19 @@ func TestATurnRunsFromCreateThroughAnApproval(t *testing.T) {
 		th := env.Threads[id]
 		return th.View.Disposition == (api.Disposition{State: api.Settled}) && len(th.Pending) == 0
 	})
+	m.Rename(env, id, "Websocket loop")
+	g.until(t, "the rename", func() bool {
+		th := env.Threads[id]
+		return th.View.Title == "Websocket loop" && len(th.Pending) == 0
+	})
+	m.SetDisposition(env, id, api.Disposition{State: api.Archived})
+	g.until(t, "the archive", func() bool {
+		th := env.Threads[id]
+		return th.View.Disposition.State == api.Archived && len(th.Pending) == 0
+	})
+	m.Delete(env, id) // while its transcript is open
+
+	g.until(t, "the delete", func() bool { return env.Threads[id] == nil })
 
 }
 
@@ -615,7 +631,7 @@ func TestAnAnswerTooLateLeavesNoRow(t *testing.T) {
 		th := env.Threads[id]
 		return th.View.Run == api.RunIdle && th.View.LastTurn != nil && len(th.Pending) == 0 && th.Transcript.request(req.Request).State != api.RequestPending
 	})
-	m.Respond(env, id, req.Request, true)
+	m.Respond(env, id, req.Request, AllowOnce)
 	g.until(t, "the refused answer dropped", func() bool { return len(env.Threads[id].Pending) == 0 }, func() string { return describePending(env.Threads[id].Pending) })
 }
 
@@ -671,4 +687,53 @@ func errString(err error) string {
 		return "in flight"
 	}
 	return err.Error()
+}
+
+// tombstoned is an engine whose one thread was deleted: its log ends at
+// the tombstone, and every open of it after that finds it no more.
+type tombstoned struct {
+	*longThread
+	opens atomic.Int64
+}
+
+func (e *tombstoned) Open(ctx context.Context, s api.Subscription) (api.Stream, error) {
+	if s.Thread.IsZero() {
+		return e.longThread.Open(ctx, s)
+	}
+	if e.opens.Add(1) > 1 {
+		return nil, api.ErrNotFound
+	}
+	return &ending{items{{Kind: api.StreamSnapshot, Snapshot: &e.log}}, api.ErrNotFound}, nil
+}
+
+// ending streams its items, then fails with err.
+type ending struct {
+	items
+	err error
+}
+
+func (s *ending) Next(ctx context.Context) (api.StreamItem, error) {
+	if len(s.items) == 0 {
+		return api.StreamItem{}, s.err
+	}
+	return s.items.Next(ctx)
+}
+
+// Past a thread's tombstone its stream ends for good: the manager doesn't
+// reopen it on backoff.
+func TestADeletedThreadsStreamIsNotReopened(t *testing.T) {
+	id, a := api.NewID(), api.NewID()
+	evs := []api.Event{event(1, api.ThreadCreated{}), event(2, api.TurnEnded{Run: a}), event(3, api.ThreadDeleted{})}
+	eng := &tombstoned{longThread: &longThread{view: api.Thread{ID: id, Title: "gone"}, log: api.Snapshot{Cursor: evs[2].Cursor, Events: evs}}}
+	dir := stateDir(t)
+	serveOn(t, dir, eng)
+	m, g := manager(t, dir)
+	env := m.Envs()[0]
+	online(t, g, env)
+	m.OpenThread(env, id)
+	g.until(t, "the tombstone", func() bool { return env.Threads[id].Transcript.Deleted })
+	time.Sleep(3 * minBackoff)
+	if n := eng.opens.Load(); n != 1 {
+		t.Fatalf("the deleted thread's stream was opened %d times, want once", n)
+	}
 }

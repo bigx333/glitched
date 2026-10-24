@@ -1,6 +1,13 @@
 // Package transport carries the Endpoint and hub calls over one WebSocket per
 // client, on whatever network a Transport provides.
 //
+// The upgrade's request and response each carry Glitched-Protocol, the
+// side's api.Protocol; a side that sends none speaks protocol 1. The server
+// closes the socket of a client of another protocol at once with 4001 and a
+// reason that says so. The client refuses a server of another protocol with
+// an api.ProtocolError before it sends a call: at that close, or once the
+// server has proved its key, if it must.
+//
 // On a Tailnet socket the client and server first prove to each other that
 // they hold the key, the SHA-256 of the client's pairing token, without
 // sending it or the token. The upgrade carries no credential. Then, with
@@ -51,10 +58,31 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"strconv"
+
+	"github.com/coder/websocket"
 
 	"glitched/internal/api"
 	"glitched/internal/hub"
 )
+
+const protocolHeader = "Glitched-Protocol"
+
+const statusProtocol websocket.StatusCode = 4001
+
+// protocolOf is the protocol a peer's upgrade announces.
+func protocolOf(h http.Header) int {
+	v := h.Get(protocolHeader)
+	if v == "" {
+		return 1
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0
+	}
+	return n
+}
 
 type request struct {
 	ID     uint64          `json:"id"`
@@ -103,6 +131,7 @@ var sentinels = []struct {
 	{"stale_epoch", api.ErrStaleEpoch},
 	{"already_answered", api.ErrAlreadyAnswered},
 	{"overflow", api.ErrOverflow},
+	{"protocol", api.ErrProtocol},
 	{"foreign_log", hub.ErrForeignLog},
 	{"rewound", hub.ErrRewound},
 }

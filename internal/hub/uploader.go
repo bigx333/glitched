@@ -41,7 +41,10 @@ type Uploader struct {
 	MaxBytes int
 	Interval time.Duration // re-read the log this often without a Notify
 	MaxDelay time.Duration // cap on the error backoff
-	Logger   *slog.Logger
+	// ProtocolDelay is the wait before trying a hub of another protocol
+	// again, which only an update of the hub or of this engine changes.
+	ProtocolDelay time.Duration
+	Logger        *slog.Logger
 
 	wake chan struct{}
 }
@@ -49,7 +52,7 @@ type Uploader struct {
 func NewUploader(host api.ID, epoch uint64, src LogSource, hub Client) *Uploader {
 	return &Uploader{
 		Host: host, Epoch: epoch, Source: src, Hub: hub,
-		Batch: 500, MaxBytes: 8 << 20, Interval: 5 * time.Second, MaxDelay: 30 * time.Second,
+		Batch: 500, MaxBytes: 8 << 20, Interval: 5 * time.Second, MaxDelay: 30 * time.Second, ProtocolDelay: 5 * time.Minute,
 		Logger: slog.Default(),
 		wake:   make(chan struct{}, 1),
 	}
@@ -65,7 +68,8 @@ func (u *Uploader) Notify() {
 
 // Run uploads until ctx ends or the hub refuses this host for good: a fenced
 // epoch, a log that belongs to another host, or ErrRewound. Every other
-// error is retried from the hub's ack.
+// error is retried from the hub's ack, a hub of another protocol every
+// ProtocolDelay.
 func (u *Uploader) Run(ctx context.Context) error {
 	const minDelay = 100 * time.Millisecond
 	delay := minDelay
@@ -99,7 +103,7 @@ func (u *Uploader) Run(ctx context.Context) error {
 			if err != nil {
 				return false, err
 			}
-			ack, err := u.Hub.Append(ctx, api.Upload{Host: u.Host, Epoch: u.Epoch, Log: log, Events: read[:int(overlap)+len(evs)]})
+			ack, err := u.Hub.Append(ctx, api.Upload{Protocol: api.Protocol, Host: u.Host, Epoch: u.Epoch, Log: log, Events: read[:int(overlap)+len(evs)]})
 			if gap := (*GapError)(nil); errors.As(err, &gap) {
 				acked = gap.Acked
 				return true, nil
@@ -125,6 +129,9 @@ func (u *Uploader) Run(ctx context.Context) error {
 				u.Logger.Warn("hub upload failing, retrying", "log", log, "acked", acked, "err", err)
 			}
 			wait, wake, delay = delay, nil, min(delay*2, u.MaxDelay)
+			if errors.Is(err, api.ErrProtocol) {
+				wait = u.ProtocolDelay
+			}
 		default:
 			if failing != "" {
 				failing = ""
@@ -169,7 +176,7 @@ func (u *Uploader) acked(ctx context.Context, log api.ID) (uint64, error) {
 	if len(last) == 0 {
 		return 0, ErrRewound
 	}
-	if _, err := u.Hub.Append(ctx, api.Upload{Host: u.Host, Epoch: u.Epoch, Log: log, Events: last}); err != nil {
+	if _, err := u.Hub.Append(ctx, api.Upload{Protocol: api.Protocol, Host: u.Host, Epoch: u.Epoch, Log: log, Events: last}); err != nil {
 		return 0, err
 	}
 	return acked, nil

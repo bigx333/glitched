@@ -3,6 +3,7 @@ package runtime
 import (
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"glitched/internal/api"
 	"glitched/internal/engine"
@@ -65,7 +66,14 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				}
 			case provider.Work:
 				flushText()
-				commit(engine.Work{Item: api.WorkItem{Run: run, Item: ev.Item, Kind: ev.Kind, Title: ev.Title, Status: ev.Status}})
+				// Only a failed step's output is shown, and a passing
+				// command's would fill a catch-up's budget for nothing.
+				var output string
+				if ev.Status == api.WorkFailed || ev.Exit != nil && *ev.Exit != 0 {
+					output = tail(ev.Output, api.OutputLimit)
+				}
+				commit(engine.Work{Item: api.WorkItem{Run: run, Item: ev.Item, Kind: ev.Kind, Title: ev.Title, Status: ev.Status,
+					Path: ev.Path, Exit: ev.Exit, Output: output}})
 			case provider.RequestOpened:
 				flushText()
 				commit(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: ev.ID, Kind: ev.Kind, Body: ev.Body})
@@ -91,4 +99,16 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 	if h.closeAgent(ag) {
 		h.closed(thread)
 	}
+}
+
+// tail is the last n bytes of s, from the start of a UTF-8 character.
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	s = s[len(s)-n:]
+	for len(s) > 0 && !utf8.RuneStart(s[0]) {
+		s = s[1:]
+	}
+	return s
 }

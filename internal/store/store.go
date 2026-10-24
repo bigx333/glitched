@@ -99,13 +99,25 @@ func (s *Store) ReadLog(ctx context.Context, after uint64, limit int) ([]api.Eve
 }
 
 // Since returns up to limit events with Seq > after for one thread, or for
-// every thread when thread is zero, and the log head they were read at.
+// every thread when thread is zero, and the log head they were read at. A
+// deleted thread's read is ErrNotFound, wherever after is: only a stream
+// that was open when the tombstone committed sees it.
 func (s *Store) Since(ctx context.Context, thread api.ID, after uint64, limit int) ([]api.Event, uint64, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, 0, err
 	}
 	defer tx.Rollback()
+	if !thread.IsZero() {
+		var gone bool
+		switch err := tx.QueryRowContext(ctx, `SELECT deleted FROM threads WHERE id = ?`, thread[:]).Scan(&gone); {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return nil, 0, err
+		case gone:
+			return nil, 0, api.ErrNotFound
+		}
+	}
 	head, err := headSeq(ctx, tx)
 	if err != nil {
 		return nil, 0, err
@@ -145,9 +157,10 @@ CREATE TABLE threads (
 	revision    INTEGER NOT NULL,
 	owner_epoch INTEGER NOT NULL CHECK (owner_epoch > 0),
 	generation  INTEGER NOT NULL,
-	disposition INTEGER NOT NULL CHECK (disposition BETWEEN 0 AND 2),
+	disposition INTEGER NOT NULL CHECK (disposition BETWEEN 0 AND 3),
 	until       INTEGER,
 	updated_at  INTEGER NOT NULL,
+	deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
 	CHECK ((disposition = 1) = (until IS NOT NULL))
 ) STRICT;
 
@@ -206,8 +219,41 @@ CREATE TABLE effects (
 CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 `
 
+// schemaVersion is the user_version of a database this build created or
+// upgraded; upgrades[v] takes one at version v to v+1.
+const schemaVersion = 3
+
+var upgrades = map[int]string{
+	// Archived threads: disposition 3. SQLite changes a CHECK only by
+	// rebuilding the table.
+	1: `
+CREATE TABLE threads_v2 (
+	id          BLOB PRIMARY KEY,
+	workspace   TEXT NOT NULL,
+	title       TEXT NOT NULL,
+	model       TEXT NOT NULL,
+	access      INTEGER NOT NULL CHECK (access BETWEEN 0 AND 2),
+	revision    INTEGER NOT NULL,
+	owner_epoch INTEGER NOT NULL CHECK (owner_epoch > 0),
+	generation  INTEGER NOT NULL,
+	disposition INTEGER NOT NULL CHECK (disposition BETWEEN 0 AND 3),
+	until       INTEGER,
+	updated_at  INTEGER NOT NULL,
+	CHECK ((disposition = 1) = (until IS NOT NULL))
+) STRICT;
+INSERT INTO threads_v2 SELECT * FROM threads;
+DROP TABLE threads;
+ALTER TABLE threads_v2 RENAME TO threads;
+`,
+	// Deleted threads: the tombstone.
+	2: `ALTER TABLE threads ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1));`,
+}
+
 func (s *Store) migrate() error {
 	ctx := context.Background()
+	if err := s.upgrade(ctx); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -219,7 +265,7 @@ func (s *Store) migrate() error {
 	}
 	switch version {
 	case 0:
-		if _, err := tx.ExecContext(ctx, schema+`PRAGMA user_version = 1;`); err != nil {
+		if _, err := tx.ExecContext(ctx, schema+fmt.Sprintf(`PRAGMA user_version = %d;`, schemaVersion)); err != nil {
 			return fmt.Errorf("store: create schema: %w", err)
 		}
 		for _, key := range []string{"log", "host"} {
@@ -228,7 +274,7 @@ func (s *Store) migrate() error {
 				return err
 			}
 		}
-	case 1:
+	case schemaVersion:
 	default:
 		return fmt.Errorf("store: schema version %d is newer than this build", version)
 	}
@@ -248,6 +294,56 @@ func (s *Store) migrate() error {
 	}
 	if err := s.writeFence(head); err != nil {
 		return err
+	}
+	return tx.Commit()
+}
+
+// upgrade brings a database an older build created to schemaVersion, one
+// transaction per version. It runs with foreign keys off on its own
+// connection, as SQLite's way to rebuild a table that others reference
+// asks, and checks them before each commit.
+func (s *Store) upgrade(ctx context.Context) error {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	var version int
+	if err := conn.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
+		return err
+	}
+	if version == 0 || version >= schemaVersion {
+		return nil
+	}
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	defer conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+	for ; version < schemaVersion; version++ {
+		if err := upgradeOnce(ctx, conn, version); err != nil {
+			return fmt.Errorf("store: upgrade from version %d: %w", version, err)
+		}
+	}
+	return nil
+}
+
+func upgradeOnce(ctx context.Context, conn *sql.Conn, version int) error {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, upgrades[version]+fmt.Sprintf(`PRAGMA user_version = %d;`, version+1)); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return err
+	}
+	broken := rows.Next()
+	rows.Close()
+	if broken {
+		return errors.New("a foreign key no longer holds")
 	}
 	return tx.Commit()
 }

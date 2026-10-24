@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"glitched/internal/api"
@@ -18,6 +19,9 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 	}
 	if !c.Expires.IsZero() && now.After(c.Expires) {
 		return nil, nil, api.ErrExpired
+	}
+	if t.Deleted {
+		return nil, nil, api.ErrNotFound
 	}
 	if _, creating := c.Body.(api.ThreadCreate); !creating && !t.Exists() {
 		return nil, nil, api.ErrNotFound
@@ -40,6 +44,13 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 		err = d.respond(b)
 	case api.InboxSet:
 		err = d.inbox(b)
+	case api.ThreadRename:
+		err = d.rename(b)
+	case api.ThreadDelete:
+		if d.t.Live() != nil {
+			return nil, nil, rejected("stop the agent before deleting the thread")
+		}
+		err = d.emit(api.ThreadDeleted{})
 	default:
 		err = rejected("unknown intent")
 	}
@@ -64,6 +75,11 @@ var ErrRefused = errors.New("engine: observation refused")
 func Observe(t Thread, o Observation, now time.Time) ([]Event, []Effect, error) {
 	if !t.Exists() {
 		return nil, nil, api.ErrNotFound
+	}
+	if t.Deleted {
+		// What the agent did after, as an effect's leftover, records
+		// nothing on a thread no one can read.
+		return nil, nil, fmt.Errorf("%w: %T: the thread was deleted", ErrRefused, o)
 	}
 	d := &decision{t: t, thread: t.ID, at: now.UTC().Round(0)}
 	err := d.observe(o)
@@ -115,6 +131,11 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	if d.t.Access > ceiling() {
 		return rejected("thread access is above the client's ceiling")
 	}
+	// A steer never waits its turn: one the live run can't take now would
+	// start a turn of its own once the run ends, after the user moved on.
+	if live := d.t.Live(); m.Mode == api.SteerActive && live != nil && !steerable[live.State] {
+		return rejected(fmt.Sprintf("the agent is %s and can't take a message; send it once the run ends", live.State))
+	}
 	q := api.MessageQueued{Message: id, Text: m.Text, Mode: m.Mode, Pos: d.t.pos(false), Held: m.Mode == api.Defer}
 	if m.Mode == api.RestartActive {
 		q.Pos = d.t.pos(true)
@@ -135,7 +156,8 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 		return d.stop(*live)
 	}
 	// AfterActive, and steering a thread with nothing to steer, wait for
-	// settle; a Defer message is held until something promotes it.
+	// settle, which starts the latter at once; a Defer message is held
+	// until something promotes it.
 	return nil
 }
 
@@ -231,13 +253,24 @@ func (d *decision) respond(b api.RequestRespond) error {
 func (d *decision) inbox(b api.InboxSet) error {
 	v := b.Disposition
 	v.Until = v.Until.UTC().Round(0)
-	if v.State > api.Settled || (v.State == api.Snoozed) == v.Until.IsZero() {
+	if v.State > api.Archived || (v.State == api.Snoozed) == v.Until.IsZero() {
 		return rejected("only a snoozed thread has an until, and it must")
 	}
 	if v.State == d.t.Disposition.State && v.Until.Equal(d.t.Disposition.Until) {
 		return nil
 	}
 	return d.emit(api.DispositionChanged{Disposition: v})
+}
+
+func (d *decision) rename(b api.ThreadRename) error {
+	title := strings.TrimSpace(b.Title)
+	if title == "" {
+		return rejected("a thread needs a title")
+	}
+	if title == d.t.Title {
+		return nil
+	}
+	return d.emit(api.ThreadRenamed{Title: title})
 }
 
 func (d *decision) observe(o Observation) error {

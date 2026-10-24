@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -135,16 +136,26 @@ func handshake(ctx context.Context, t Transport, machine api.ID) (*websocket.Con
 	hc := &http.Client{Transport: &http.Transport{
 		DialContext: func(context.Context, string, string) (net.Conn, error) { return nc, nil },
 	}}
-	ws, _, err := websocket.Dial(ctx, origin, &websocket.DialOptions{HTTPClient: hc})
+	ws, resp, err := websocket.Dial(ctx, origin, &websocket.DialOptions{HTTPClient: hc, HTTPHeader: http.Header{protocolHeader: {strconv.Itoa(api.Protocol)}}})
 	if err != nil {
 		nc.Close()
 		return nil, fmt.Errorf("transport: %w", err)
 	}
+	// A server of another protocol closes the socket with statusProtocol
+	// before the proof. One of this protocol is trusted to announce its
+	// own only once it has proved the key.
 	if c, ok := t.(credentialed); ok {
 		if err := prove(ctx, ws, c.key()); err != nil {
 			ws.CloseNow()
+			if websocket.CloseStatus(err) == statusProtocol {
+				return nil, &api.ProtocolError{Theirs: protocolOf(resp.Header)}
+			}
 			return nil, err
 		}
+	}
+	if theirs := protocolOf(resp.Header); theirs != api.Protocol {
+		ws.CloseNow()
+		return nil, &api.ProtocolError{Theirs: theirs}
 	}
 	return ws, nil
 }
@@ -565,13 +576,29 @@ func (h *HubClient) Close() error { return h.c.close() }
 
 func (h *HubClient) Append(ctx context.Context, u api.Upload) (api.UploadAck, error) {
 	var ack api.UploadAck
-	return ack, h.c.call(ctx, "hub.append", u, &ack)
+	err := h.c.call(ctx, "hub.append", u, &ack)
+	if err == nil {
+		err = sameProtocol(ack)
+	}
+	return ack, err
 }
 
 func (h *HubClient) Acked(ctx context.Context, log api.ID) (uint64, error) {
 	var ack api.UploadAck
 	err := h.c.call(ctx, "hub.acked", ackedQuery{Log: log}, &ack)
+	if err == nil {
+		err = sameProtocol(ack)
+	}
 	return ack.Acked, err
+}
+
+// sameProtocol refuses a hub of another protocol by its ack. One older
+// than the field acks with none, and would keep a deleted thread readable.
+func sameProtocol(ack api.UploadAck) error {
+	if ack.Protocol != api.Protocol {
+		return fmt.Errorf("%w: the hub speaks protocol %d, this engine %d", api.ErrProtocol, ack.Protocol, api.Protocol)
+	}
+	return nil
 }
 
 // Events reads one page of the replica; see hub.Replica.Events.

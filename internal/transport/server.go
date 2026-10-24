@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -107,11 +108,21 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
+	theirs := protocolOf(r.Header)
+	w.Header().Set(protocolHeader, strconv.Itoa(api.Protocol))
 	ws, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return
 	}
 	defer ws.CloseNow()
+	if theirs != api.Protocol {
+		// A WebSocket close, not an HTTP status, whose reason an older
+		// client shows; Close waits for the client's own close frame, as
+		// the client reads the reason only after its first call is out.
+		slog.Warn("refused a socket of another protocol", "protocol", theirs, "from", r.RemoteAddr)
+		ws.Close(statusProtocol, fmt.Sprintf("this engine speaks protocol %d and the client %d; update the older one", api.Protocol, theirs))
+		return
+	}
 	grant := context.Background()
 	if s.Authorize != nil {
 		ws.SetReadLimit(helloLimit)
@@ -292,7 +303,7 @@ func (s *Server) methods() map[string]handler {
 		m["hub.append"] = callHandler(h.Append)
 		m["hub.acked"] = callHandler(func(ctx context.Context, q ackedQuery) (api.UploadAck, error) {
 			n, err := h.Acked(ctx, q.Log)
-			return api.UploadAck{Acked: n}, err
+			return api.UploadAck{Acked: n, Protocol: api.Protocol}, err
 		})
 		m["hub.events"] = callHandler(func(ctx context.Context, q eventsQuery) (eventsPage, error) {
 			if q.Limit <= 0 || q.Limit > maxPage {

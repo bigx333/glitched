@@ -49,7 +49,7 @@ func TestLongWriteLetsPongsThrough(t *testing.T) {
 	log := api.NewID()
 	evs := events(log, api.NewID(), 1, 1)
 	evs[0].Payload = json.RawMessage(`"` + strings.Repeat("x", 512<<10) + `"`)
-	if ack, err := c.Append(ctx, api.Upload{Host: api.NewID(), Epoch: 1, Log: log, Events: evs}); err != nil || ack.Acked != 1 {
+	if ack, err := c.Append(ctx, api.Upload{Protocol: api.Protocol, Host: api.NewID(), Epoch: 1, Log: log, Events: evs}); err != nil || ack.Acked != 1 {
 		t.Fatalf("append over a slow link: %+v %v", ack, err)
 	}
 }
@@ -70,10 +70,10 @@ func TestOversizedRequestLeavesTheSocketAlone(t *testing.T) {
 	log := api.NewID()
 	evs := events(log, thread, 1, 1)
 	evs[0].Payload = json.RawMessage(`"` + strings.Repeat("x", maxMessage) + `"`)
-	if _, err := c.Append(ctx, api.Upload{Host: api.NewID(), Epoch: 1, Log: log, Events: evs}); !errors.Is(err, errTooLarge) {
+	if _, err := c.Append(ctx, api.Upload{Protocol: api.Protocol, Host: api.NewID(), Epoch: 1, Log: log, Events: evs}); !errors.Is(err, errTooLarge) {
 		t.Fatalf("an append over the server's limit: %v", err)
 	}
-	if ack, err := c.Append(ctx, api.Upload{Host: api.NewID(), Epoch: 1, Log: log, Events: events(log, thread, 1, 1)}); err != nil || ack.Acked != 1 {
+	if ack, err := c.Append(ctx, api.Upload{Protocol: api.Protocol, Host: api.NewID(), Epoch: 1, Log: log, Events: events(log, thread, 1, 1)}); err != nil || ack.Acked != 1 {
 		t.Fatalf("an append after the refused one: %+v %v", ack, err)
 	}
 	if e, err := feed.Next(ctx); err != nil || e.Cursor.Seq != 1 {

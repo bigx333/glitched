@@ -326,3 +326,85 @@ func TestAFailedDeliveryOnlyStopsARunStillAtWork(t *testing.T) {
 		})
 	}
 }
+
+// A rename trims the title and moves the revision, an unchanged one
+// records nothing, and an empty one is refused.
+func TestRename(t *testing.T) {
+	f := newThread(t)
+	rev := f.th.Revision
+	f.must(api.ThreadRename{Title: "  Websocket loop "})
+	if v := engine.View(f.th); v.Title != "Websocket loop" || v.Revision != rev+1 {
+		t.Fatalf("after rename: title %q, revision %d, want %q at %d", v.Title, v.Revision, "Websocket loop", rev+1)
+	}
+	evs, _, err := engine.Decide(f.th, api.Command{ID: api.NewID(), Target: f.th.ID, Body: api.ThreadRename{Title: "Websocket loop"}}, now)
+	if err != nil || len(evs) != 0 {
+		t.Fatalf("the same title: %d events, %v; want none", len(evs), err)
+	}
+	if _, _, err := f.submit(api.ThreadRename{Title: "  "}); !errors.As(err, new(*api.RejectedError)) {
+		t.Fatalf("an empty title: %v, want a rejection", err)
+	}
+}
+
+// Archived is an inbox state of its own, which Open brings back; like
+// Settled, it has no until.
+func TestArchive(t *testing.T) {
+	f := newThread(t)
+	f.must(api.InboxSet{Disposition: api.Disposition{State: api.Archived}})
+	if d := engine.View(f.th).Disposition; d.State != api.Archived {
+		t.Fatalf("disposition %v, want archived", d.State)
+	}
+	if _, _, err := f.submit(api.InboxSet{Disposition: api.Disposition{State: api.Archived, Until: now.Add(time.Hour)}}); !errors.As(err, new(*api.RejectedError)) {
+		t.Fatalf("archived with an until: %v, want a rejection", err)
+	}
+	f.must(api.InboxSet{Disposition: api.Disposition{}})
+	if d := engine.View(f.th).Disposition; d.State != api.Open {
+		t.Fatalf("disposition %v after restoring, want open", d.State)
+	}
+	if _, _, err := f.submit(api.InboxSet{Disposition: api.Disposition{State: api.Archived + 1}}); !errors.As(err, new(*api.RejectedError)) {
+		t.Fatalf("an unknown state: %v, want a rejection", err)
+	}
+}
+
+// A deleted thread refuses every command, a create under its ID too, and
+// every observation. It can't be deleted while its agent works.
+func TestDelete(t *testing.T) {
+	f, run := running(t)
+	if _, _, err := f.submit(api.ThreadDelete{}); !errors.As(err, new(*api.RejectedError)) {
+		t.Fatalf("delete while running: %v, want a rejection", err)
+	}
+	f.observe(engine.Ended{Run: run, Outcome: api.OutcomeCompleted})
+	f.must(api.ThreadDelete{})
+	if v := engine.View(f.th); !v.Deleted {
+		t.Fatal("the view is no tombstone")
+	}
+	for _, body := range []api.Intent{dispatch("again", api.StartNow), api.ThreadRename{Title: "x"}, api.ThreadDelete{}, api.ThreadCreate{Title: "t"}} {
+		if _, _, err := f.submit(body); !errors.Is(err, api.ErrNotFound) {
+			t.Errorf("%s on a deleted thread: %v, want ErrNotFound", api.IntentType(body), err)
+		}
+	}
+	if _, _, err := engine.Observe(f.th, engine.Started{Run: run}, now); !errors.Is(err, engine.ErrRefused) {
+		t.Errorf("an observation on a deleted thread: %v, want ErrRefused", err)
+	}
+}
+
+// A steer reaches the live run or starts a turn on an idle thread; one the
+// run can't take, stopping or uncertain, is refused rather than queued.
+func TestASteerIsNeverQueued(t *testing.T) {
+	stopping, _ := running(t)
+	stopping.must(api.TurnInterrupt{})
+	uncertain, run := running(t)
+	uncertain.observe(engine.Reconciled{Run: run})
+	for name, f := range map[string]*thread{"stopping": stopping, "uncertain": uncertain} {
+		queued := len(f.th.Queue)
+		_, _, err := f.submit(dispatch("hurry", api.SteerActive))
+		if rej := (*api.RejectedError)(nil); !errors.As(err, &rej) || len(f.th.Queue) != queued {
+			t.Fatalf("a steer while the run is %s: %v, %d messages more; want rejected and none queued", name, err, len(f.th.Queue)-queued)
+		}
+	}
+
+	idle := newThread(t)
+	id, effects, err := idle.submit(dispatch("go", api.SteerActive))
+	if err != nil || len(effects) != 1 || idle.th.Live() == nil || idle.th.Live().ID != id {
+		t.Fatalf("a steer to an idle thread: %v, %v; want its turn started", effects, err)
+	}
+}

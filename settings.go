@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/api"
 	"glitched/internal/client"
 )
 
@@ -52,7 +54,7 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 				a.page(c, "Keybindings", "Shortcuts for the commands you use most.", a.keybindings)
 			case r.Match("/archived"):
 				r.Title("Archived threads")
-				a.page(c, "Archived threads", "Threads you archived. Restore one to bring it back to its project.", a.archivedThreads)
+				a.page(c, "Archived threads", "Threads you archived. Restore one to bring it back to the inbox.", a.archivedThreads)
 			default:
 				r.Title("About")
 				a.page(c, "About", "", a.about)
@@ -137,8 +139,8 @@ func (a *app) appearance(c *ui.Context) {
 	s := &a.settings
 	card(c, "THEME", func() {
 		ui.Row(c).Padding(16).Gap(12).Children(func() {
-			for i, name := range []string{"System", "Light", "Dark"} {
-				a.themeCard(c, i, name)
+			for _, name := range themeNames() {
+				a.themeCard(c, name)
 			}
 		})
 	})
@@ -165,14 +167,27 @@ func (a *app) appearance(c *ui.Context) {
 			ui.Switch(c, &s.glass).Label("Liquid Glass")
 		})
 		// The setting is the app's tint over the glass, not how
-		// transparent the glass is: at Clear, the glass is macOS's own
-		// material, which it frosts and tints itself.
-		settingRow(c, "Glass tint", "How much the app tints all its glass: the sidebar and headers, and the panels over the chat. At Clear, the glass is untinted.", func() {
+		// transparent the glass is: at Clear the app adds none, and the
+		// bars are the system's material, which it frosts itself.
+		// What the slider reaches depends on the window: the bars only
+		// where it shows vibrancy, the panels once they take it, and
+		// nothing while the glass is off. The slider says which.
+		tintDesc := "How much the app's background tints the glass: the sidebar and headers over the window's vibrancy, and the floating panels when they take it. At Clear, the app adds no tint: the bars are the system's material, the panels plain glass."
+		switch {
+		case !s.glass:
+			tintDesc = "How much the app's background tints the glass, once Liquid Glass is on."
+		case !a.vibrant:
+			tintDesc = "How much the app's background tints the floating panels, once they take it. This window's sidebar shows no vibrancy, so it is a solid color."
+		}
+		settingRow(c, "Glass tint", tintDesc, func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Tinted").FontSize(11.5).TextColor(palette.faint)
-				ui.Slider(c, &s.vibrancy, 0, 1).Width(160).Label("Glass tint").Disabled(!s.glass)
+				ui.Slider(c, &s.vibrancy, 0, 1).Width(160).Label("Glass tint").Disabled(!s.glass || !a.vibrant && !s.tintPanels)
 				ui.Text(c, "Clear").FontSize(11.5).TextColor(palette.faint)
 			})
+		})
+		settingRow(c, "Tint panels", "The app's own panes of glass take the tint the slider sets: the composer, the jump-to-latest pill, the command palette, the popovers, the toasts and the pane below. Off, they are plain glass, as the system's menus are.", func() {
+			ui.Switch(c, &s.tintPanels).Label("Tint the panels").Disabled(!s.glass)
 		})
 		a.glassDemo(c)
 		settingRow(c, "Wind background", "Characters lit by a passing wind behind the chat. Move the pointer to warm the air, click to blow a ripple.", func() {
@@ -184,42 +199,47 @@ func (a *app) appearance(c *ui.Context) {
 	})
 }
 
-func (a *app) themeCard(c *ui.Context, i int, name string) {
+// themeCard previews a theme's sidebar and chat, and the terminal's
+// colors under them; System's is half light, half dark.
+func (a *app) themeCard(c *ui.Context, name string) {
 	s := &a.settings
-	cols := darkColors
-	if i == 1 {
-		cols = lightColors
-	}
+	th := themeFor(name, true)
+	cols := th.colors
 	b := ui.ButtonBase(c.Key(name)).Grow(1).Basis(0).Column().AlignItems(ui.Stretch).Gap(8).Cursor(ui.CursorPointer)
 	if b.Children(func() {
 		ui.Box(c).Height(96).Radius(10).Clip().Children(func() {
-			if i == s.theme {
+			if name == s.theme {
 				ui.Box(c).Key("ring").Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(10).Border(2, palette.accent).PassThrough().
 					Transition(indicator(themeMatch{}))
 			}
 			ui.Row(c).Fill().Border(1, palette.border).Radius(10).Clip().AlignItems(ui.Stretch).Children(func() {
 				side, main := cols.sidebar, cols.bg
-				if i == 0 { // half and half
-					side, main = lightColors.sidebar, darkColors.bg
+				if name == systemTheme { // half and half
+					side, main = themeFor(name, false).colors.sidebar, cols.bg
 				}
 				ui.Column(c).Width(44).Background(side).Padding(10, 8).Gap(5).Children(func() {
 					for range 4 {
 						ui.Box(c).Height(4).Radius(2).Background(cols.muted.Alpha(0.35))
 					}
 				})
-				ui.Column(c).Grow(1).Background(main).Padding(12).Gap(6).Justify(ui.End).Children(func() {
+				ui.Column(c).Grow(1).Background(main).Padding(12, 12, 8).Gap(6).Justify(ui.End).Children(func() {
 					ui.Box(c).Height(5).WidthPercent(70).Radius(3).Background(cols.muted.Alpha(0.4))
 					ui.Box(c).Height(5).WidthPercent(50).Radius(3).Background(cols.muted.Alpha(0.4))
 					ui.Box(c).Height(16).Radius(6).Background(cols.surface).Border(1, cols.border).Margin(4, 0, 0)
+					ui.Row(c).Gap(2).Margin(2, 0, 0).Children(func() {
+						for _, col := range th.terminal().Palette[1:7] {
+							ui.Box(c).Size(6, 4).Radius(1).Background(col)
+						}
+					})
 				})
 			})
 		})
 		t := ui.Text(c, name).FontSize(12).TextAlign(ui.Center)
-		if i != s.theme {
+		if name != s.theme {
 			t.TextColor(palette.muted)
 		}
 	}).Clicked() {
-		s.theme = i
+		s.theme = name
 	}
 }
 
@@ -246,7 +266,7 @@ func (a *app) glassDemo(c *ui.Context) {
 			lift.Scale = 1.03
 		}
 		pane.AnimatePose(lift, press)
-		// The tint the slider sets, as every glass has it.
+		// The tint the slider sets, when the panels take it.
 		a.pane(pane, glass.Glass{}).Children(func() {
 			ui.Icon(c, icSparkles).FontSize(16)
 			ui.Text(c, "Drag me").FontWeight(600)
@@ -431,6 +451,10 @@ var keybindings = []struct {
 	{"New thread", []string{"⌘", "N"}},
 	{"Search threads and commands", []string{"⌘", "K"}},
 	{"Send message", []string{"⌘", "↩"}},
+	{"Allow the pending approval", []string{"⌘", "↩"}},
+	{"Deny the pending approval", []string{"⇧", "⌘", "D"}},
+	{"Previous / next change in the diff", []string{"⌘", "[", "]"}},
+	{"Mark the change in view reviewed", []string{"⇧", "⌘", "↩"}},
 	{"Toggle sidebar", []string{"⌘", "B"}},
 	{"Toggle diff panel", []string{"⌘", "D"}},
 	{"Toggle terminal", []string{"⌘", "J"}},
@@ -462,11 +486,60 @@ func (a *app) keybindings(c *ui.Context) {
 
 // --- Archived
 
-// archivedThreads is empty: the engines don't archive threads yet.
+// archivedThreads lists every machine's archived threads, each with when
+// it was last changed, which archiving it was unless something came
+// after: Restore brings one back to the inbox, Delete deletes it. A row
+// says while its delete is on its way, and shows the commands sent from
+// it that failed, as the timeline does. Delete waits while a run is live,
+// as the engine refuses it then, and the row says so and offers Stop.
 func (a *app) archivedThreads(c *ui.Context) {
-	ui.Column(c).Key("empty").Center().Gap(10).Padding(60, 0).Transition(riseIn).Children(func() {
-		ui.Icon(c, icArchive).FontSize(26).TextColor(palette.faint)
-		ui.Text(c, "No archived threads").TextColor(palette.muted)
+	ts := a.archived()
+	if len(ts) == 0 {
+		ui.Column(c).Key("empty").Center().Gap(10).Padding(60, 0).Transition(riseIn).Children(func() {
+			ui.Icon(c, icArchive).FontSize(26).TextColor(palette.faint)
+			ui.Text(c, "No archived threads").TextColor(palette.muted)
+		})
+		return
+	}
+	several := len(a.backend.Envs()) > 1
+	card(c, "", func() {
+		for _, t := range ts {
+			gone := deleting(t)
+			ui.Row(c).Key(t.id()).Padding(11, 16).Gap(12).AlignItems(ui.Center).Transition(fold).Children(func() {
+				projectTile(c, a.projectOf(t), 20)
+				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
+					ui.Text(c, title(t)).SingleLine()
+					where := filepath.Base(t.View.Workspace)
+					if several && t.env != nil {
+						where += " on " + t.env.Name
+					}
+					ui.Text(c, where+" · archived "+ago(t.View.UpdatedAt, a.now)).FontSize(11.5).TextColor(palette.faint)
+					if gone {
+						ui.Text(c, "Deleting…").FontSize(11.5).TextColor(palette.faint)
+					} else if t.View.Live() {
+						ui.Row(c).Key("live").Gap(8).AlignItems(ui.Center).Children(func() {
+							ui.Text(c, "Its agent is still running: stop it to delete the thread.").FontSize(11.5).TextColor(palette.muted).Shrink(1)
+							if ghost(c, "stop", false).Padding(2, 8).Children(func() { ui.Text(c, "Stop").FontSize(11.5) }).Clicked() {
+								a.backend.Interrupt(t.env, t.id())
+							}
+						})
+					}
+					for _, p := range t.Pending {
+						if failedTo(p) != "" && p.Err != nil {
+							ui.Row(c).Key(p.Command.String()).Gap(8).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, failure(p)).FontSize(11.5).TextColor(palette.red).Shrink(1)
+								a.failedActions(c, t, p)
+							})
+						}
+					}
+				})
+				ui.Button(c.Key("restore"), "Restore").Disabled(gone).OnClick(func() {
+					a.backend.SetDisposition(t.env, t.id(), api.Disposition{})
+					c.AddToast(ui.Toast{Title: "Thread restored", Description: title(t), Type: "info"})
+				})
+				ui.Button(c.Key("delete"), "Delete").TextColor(palette.red).Disabled(gone || t.View.Live()).OnClick(func() { a.askDelete(t) })
+			})
+		}
 	})
 }
 

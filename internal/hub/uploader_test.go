@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -195,7 +196,7 @@ func TestUploaderStopsWhenFenced(t *testing.T) {
 	src := newFakeLog()
 	src.commit(2, api.NewID())
 	u := newTestUploader(src, r)
-	if _, err := r.Append(context.Background(), api.Upload{Host: u.Host, Epoch: u.Epoch + 1, Log: api.NewID()}); err != nil {
+	if _, err := r.Append(context.Background(), api.Upload{Protocol: api.Protocol, Host: u.Host, Epoch: u.Epoch + 1, Log: api.NewID()}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
@@ -278,7 +279,7 @@ func TestUploaderStopsWhenItsLogBelongsToAnotherHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Append(context.Background(), api.Upload{Host: api.NewID(), Epoch: 1, Log: src.LogID(), Events: first}); err != nil {
+	if _, err := r.Append(context.Background(), api.Upload{Protocol: api.Protocol, Host: api.NewID(), Epoch: 1, Log: src.LogID(), Events: first}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
@@ -338,4 +339,50 @@ func TestUploaderStopsWhenARestoredHostRefilledTheLogPastTheAck(t *testing.T) {
 		t.Fatalf("uploader of a refilled log returned %v, want ErrRewound", err)
 	}
 	wantReplica(t, r, src.LogID(), 5)
+}
+
+// olderHub refuses every upload as a hub of another protocol does.
+// upgradingHub speaks another protocol until it is upgraded, and counts
+// the calls it refused.
+type upgradingHub struct {
+	*Replica
+	upgraded atomic.Bool
+	refused  atomic.Int64
+}
+
+func (h *upgradingHub) Acked(ctx context.Context, log api.ID) (uint64, error) {
+	if !h.upgraded.Load() {
+		h.refused.Add(1)
+		return 0, &api.ProtocolError{Theirs: 1}
+	}
+	return h.Replica.Acked(ctx, log)
+}
+
+// An uploader to a hub of another protocol tries it again, slowly, and
+// says so once, so that upgrading the hub resumes the uploads without a
+// restart of the engine.
+func TestUploaderResumesOnceTheHubIsUpgraded(t *testing.T) {
+	r := openReplica(t)
+	src := newFakeLog()
+	src.commit(4, api.NewID())
+	hub := &upgradingHub{Replica: r}
+	var out syncBuffer
+	u := newTestUploader(src, hub)
+	u.ProtocolDelay = 20 * time.Millisecond
+	u.Logger = slog.New(slog.NewTextHandler(&out, nil))
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	go u.Run(ctx)
+	deadline := time.Now().Add(5 * time.Second)
+	for hub.refused.Load() < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the uploader tried the hub %d times, want it to keep trying", hub.refused.Load())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := strings.Count(out.String(), "protocol 1"); n != 1 {
+		t.Fatalf("the hub's protocol logged %d times over %d tries, want once:\n%s", n, hub.refused.Load(), out.String())
+	}
+	hub.upgraded.Store(true)
+	waitAcked(t, r, src.LogID(), 4)
 }

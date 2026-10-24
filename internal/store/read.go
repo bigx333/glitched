@@ -22,7 +22,7 @@ func (s *Store) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 	}
 	snap := api.Snapshot{Cursor: api.Cursor{Log: s.log, Seq: head}, Threads: []api.Thread{}}
 	if q.Thread.IsZero() {
-		threads, err := ids(ctx, tx, `SELECT id FROM threads ORDER BY updated_at DESC, id`)
+		threads, err := ids(ctx, tx, `SELECT id FROM threads WHERE deleted = 0 ORDER BY updated_at DESC, id`)
 		if err != nil {
 			return api.Snapshot{}, err
 		}
@@ -39,7 +39,7 @@ func (s *Store) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 	if err != nil {
 		return api.Snapshot{}, err
 	}
-	if !t.Exists() {
+	if !t.Exists() || t.Deleted {
 		return api.Snapshot{}, api.ErrNotFound
 	}
 	snap.Threads = append(snap.Threads, engine.View(t))

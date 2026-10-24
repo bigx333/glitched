@@ -1,7 +1,8 @@
 package main
 
 import (
-	"encoding/json"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -28,6 +29,7 @@ func (a *app) focused() bool { return a.win == nil || a.win.IsFocused() }
 
 func (a *app) chatPage(c *ui.Context) {
 	t := a.current()
+	a.takeBack(c, t)
 	// What the chat shows is read, up to the last turn its transcript
 	// has, while the window has focus.
 	if a.focused() {
@@ -49,7 +51,7 @@ func (a *app) chatPage(c *ui.Context) {
 			// The header is glass, the window's vibrancy as the sidebar's;
 			// the chat is below it, on the background, and doesn't scroll
 			// under it.
-			a.header(c, t)
+			a.header(c, t, es)
 			pane := a.contentCard(ui.Box(c).Grow(1))
 			a.windBackground(c, pane)
 			pane.Children(func() {
@@ -63,16 +65,19 @@ func (a *app) chatPage(c *ui.Context) {
 					Material(glass.ScrollEdge{Bottom: true, Background: palette.bg})
 				// Over the edge, which would take its clicks.
 				a.jumpToLatest(c, a.listFor(t.id()))
-				a.composer(c, t)
+				// Before the composer, whose ⌘⏎ would send or stop.
+				a.approvalKeys(c, t, es)
+				a.composer(c, t, es)
 			})
-			// A server's workspace isn't here, for a shell or its changes.
+			// A server's workspace isn't here for a shell. The diff panel,
+			// opened from an edit, says its files are there.
 			if a.showTerminal && t.local() {
 				ui.Column(c).Key("terminal").Height(220).Transition(panel(0, 16)).Children(func() { a.terminal(c, t.View.Workspace) })
 			}
 		})
 		switch {
-		case a.showDiff && t.local():
-			ui.Column(c).Key("diff").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.diffPanel(c, es) })
+		case a.showDiff:
+			ui.Column(c).Key("diff").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.diffPanel(c, t, es) })
 		case a.showPreview:
 			ui.Column(c).Key("preview").Width(a.previewWidth()).Transition(panel(16, 0)).Children(func() { a.previewPanel(c) })
 		}
@@ -123,7 +128,7 @@ func (a *app) ambient(c *ui.Context) {
 	})
 }
 
-func (a *app) header(c *ui.Context, t thread) {
+func (a *app) header(c *ui.Context, t thread, es []entry) {
 	bar := c.TitleBar()
 	// Clear of the traffic lights as the sidebar slides away from them.
 	left := 16 + bar.Left*(1-a.sidebarOpen)
@@ -138,7 +143,7 @@ func (a *app) header(c *ui.Context, t thread) {
 				a.toggleSidebar(false)
 			}
 		}
-		ui.Text(c, t.View.Title).FontWeight(600).SingleLine().Shrink(1).MinWidth(80)
+		ui.Text(c, title(t)).FontWeight(600).SingleLine().Shrink(1).MinWidth(80)
 		if !narrow {
 			pill(c, filepath.Base(t.View.Workspace)).Shrink(0)
 			if len(a.backend.Envs()) > 1 && t.env != nil {
@@ -176,12 +181,19 @@ func (a *app) header(c *ui.Context, t thread) {
 			if iconButton(c, "terminal", icTerminal, "Toggle terminal  ⌘J", a.showTerminal).Clicked() {
 				a.showTerminal, a.panelsJump = !a.showTerminal, false
 			}
-			if iconButton(c, "diff", icDiff, "Toggle diff  ⌘D", a.showDiff).Clicked() {
-				a.showDiff, a.panelsJump = !a.showDiff, false
-				if a.showDiff {
-					a.showPreview = false
+			// The diff's button counts the files the agent changed.
+			ui.Box(c).Children(func() {
+				if iconButton(c, "diff", icDiff, "Toggle diff  ⌘D", a.showDiff).Clicked() {
+					a.showDiff, a.panelsJump = !a.showDiff, false
+					if a.showDiff {
+						a.showPreview = false
+					}
 				}
-			}
+				if n := len(changedFiles(es)); n > 0 {
+					ui.Textf(c, "%d", n).Absolute().Top(1).Right(1).FontSize(9).FontWeight(600).LineHeight(1.4).
+						Padding(0, 4).Radius(999).Background(palette.accent).TextColor(ui.Hex("#ffffff")).PassThrough()
+				}
+			})
 			a.previewButton(c)
 		})
 	})
@@ -235,7 +247,7 @@ func (a *app) timeline(c *ui.Context, t thread, es []entry) {
 	l.FollowAnimation = &ui.Smooth
 	ui.List(c.Key(t.id()), l, len(es), func(i int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, es[i]) })
+			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, es, i) })
 		})
 	}).Fill().Padding(20, 24, composerRoom, markerColumnW+12).Gap(22).Justify(ui.End).
 		ScrollbarInsets(0, 0, composerRoom-40, 0).Children(func() {
@@ -272,11 +284,13 @@ func (a *app) emptyState(c *ui.Context) {
 	})
 }
 
-func (a *app) entry(c *ui.Context, t thread, e entry) {
+func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
+	e := es[i]
 	key := e.key
 	switch e.kind {
 	case entryUser:
-		ui.Row(c).Key(key).Transition(riseIn).Children(func() {
+		r := ui.Row(c).Key(key).Transition(riseIn)
+		r.Children(func() {
 			ui.Spacer(c)
 			ui.Column(c).AlignItems(ui.End).Gap(6).MaxWidthPercent(80).Children(func() {
 				ui.Text(c, e.text).Selectable().LineHeight(1.5).Padding(10, 14).Radius(16, 16, 4, 16).
@@ -285,19 +299,22 @@ func (a *app) entry(c *ui.Context, t thread, e entry) {
 					a.messageNote(c, t, e)
 				}
 			})
+			if e.failed.Err == nil && !t.id().IsZero() {
+				a.messageActions(c, t, es, i, r.Hovered())
+			}
 		})
 	case entryAssistant:
-		ui.Column(c).Key(key).LineHeight(1.55).Transition(riseIn).Children(func() {
+		col := ui.Column(c).Key(key).LineHeight(1.55).Transition(riseIn)
+		col.Children(func() {
 			if e.streaming {
 				markdown.Stream(c, e.text, &a.md)
 			} else {
 				markdown.View(c, e.text, &a.md)
 			}
+			a.messageActions(c, t, es, i, col.Hovered() && !e.streaming)
 		})
 	case entryWork:
-		a.workLog(c, key, e)
-	case entryChanges:
-		a.changes(c, key, e)
+		a.workLog(c, t, key, e, changedFiles(es))
 	case entryRequest:
 		a.requestCard(c, t, e)
 	case entryFailed:
@@ -325,9 +342,11 @@ func (a *app) messageNote(c *ui.Context, t thread, e entry) {
 }
 
 // failedActions are a failed command's buttons: Retry, unless sending it
-// again can only fail the same way, and Dismiss.
+// again can only fail the same way, and Dismiss. Retry waits while what
+// refused the command holds, as a live run does a delete.
 func (a *app) failedActions(c *ui.Context, t thread, p client.Pending) {
-	if !p.Terminal() && ghost(c, "retry", false).Padding(2, 8).Children(func() {
+	_, del := p.Body.(api.ThreadDelete)
+	if !p.Terminal() && ghost(c, "retry", false).Padding(2, 8).Disabled(del && t.View.Live()).Children(func() {
 		ui.Icon(c, icRotate).FontSize(12)
 		ui.Text(c, "Retry").FontSize(11.5)
 	}).Clicked() {
@@ -341,21 +360,23 @@ func (a *app) failedActions(c *ui.Context, t thread, p client.Pending) {
 	}
 }
 
-func (a *app) workLog(c *ui.Context, key string, e entry) {
+func (a *app) workLog(c *ui.Context, t thread, key string, e entry, files []fileChange) {
 	working := e.working
 	open := !a.collapsed[key]
 	ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Clip().
 		Transition(riseIn).Children(func() {
 		if ghost(c, "head", false).Radius(0).Padding(8, 12).Children(func() {
-			if working {
+			switch {
+			case e.paused:
+				ui.Icon(c, icClock).FontSize(12).TextColor(palette.amber)
+				ui.Text(c, "Paused for approval").FontSize(12).Grow(1)
+			case working:
 				statusMark(c, statusWorking)
-			}
-			if working {
 				shimmerText(c, e.took, 12, palette.muted, palette.text)
-			} else {
+			default:
 				ui.Text(c, e.took).FontSize(12).Grow(1)
 			}
-			ui.Textf(c, "%d steps", len(e.work)).FontSize(11).TextColor(palette.faint)
+			ui.Text(c, plural(len(e.work), "step")).FontSize(11).TextColor(palette.faint)
 			chevron(c, open)
 		}).Clicked() {
 			a.collapsed[key] = open
@@ -363,32 +384,84 @@ func (a *app) workLog(c *ui.Context, key string, e entry) {
 		if !open {
 			return
 		}
-		ui.Column(c).Key("steps").Padding(6, 12, 10).Gap(6).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).
+		ui.Column(c).Key("steps").Padding(6, 8, 10).Gap(2).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).
 			ClipY().Transition(fold).Children(func() {
 			for _, w := range e.work {
 				// Each step the agent takes unfolds below the last.
-				ui.Row(c).Key(w.Item).Gap(8).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
-					icon := icFile
-					switch w.Kind {
-					case "command":
-						icon = icTerminal
-					case "edit":
-						icon = icPencil
-					case "search":
-						icon = icSearch
-					}
-					ui.Icon(c, icon).FontSize(12).TextColor(palette.faint)
-					ui.Text(c, w.Title).FontSize(12).SingleLine().Shrink(1)
-					switch w.Status {
-					case api.WorkStarted:
-						statusMark(c, statusWorking)
-					case api.WorkFailed:
-						ui.Icon(c, icX).FontSize(12).TextColor(palette.red).Tooltip("Failed")
-					}
-				})
+				a.step(c, t, files, w)
 			}
 		})
 	})
+}
+
+// step is one of the agent's steps. A command that finished shows its
+// exit code and how long it took, and what it printed when it failed. An
+// edit of a file the diff lists opens it there.
+func (a *app) step(c *ui.Context, t thread, files []fileChange, w client.WorkStep) {
+	icon := icFile
+	switch w.Kind {
+	case "command":
+		icon = icTerminal
+	case "edit":
+		icon = icPencil
+	case "search":
+		icon = icSearch
+	}
+	file := -1
+	if w.Kind == "edit" && w.Path != "" {
+		file = slices.IndexFunc(files, func(f fileChange) bool { return f.path == w.Path })
+	}
+	var r ui.Element
+	if file >= 0 {
+		r = ghost(c, w.Item, false).Padding(2, 4).Radius(5).Gap(8).ClipY().Transition(fold)
+	} else {
+		r = ui.Row(c).Key(w.Item).Padding(2, 4).Radius(5).Gap(8).AlignItems(ui.Center).ClipY().Transition(fold)
+	}
+	if r.Children(func() {
+		ui.Icon(c, icon).FontSize(12).TextColor(palette.faint)
+		ui.Text(c, w.Title).FontSize(12).SingleLine().Shrink(1).TextColor(palette.text)
+		if file >= 0 {
+			add, del := a.diffStats(t, files[file])
+			counts(c, add, del)
+		}
+		ui.Spacer(c)
+		switch {
+		case w.Status == api.WorkStarted:
+			statusMark(c, statusWorking)
+		case w.Exit != nil:
+			mark, color := "✓", palette.green
+			if *w.Exit != 0 {
+				mark, color = "✗", palette.red
+			}
+			ui.Textf(c, "%s %d", mark, *w.Exit).FontSize(11.5).Font("monospace").TextColor(color)
+			ui.Text(c, "· "+tookFor(w.Ended.Sub(w.Started))).FontSize(11.5).Font("monospace").TextColor(palette.faint)
+		case w.Status == api.WorkFailed:
+			ui.Icon(c, icX).FontSize(12).TextColor(palette.red).Tooltip("Failed")
+		case file >= 0 && r.Hovered():
+			ui.Text(c, "Open in diff").FontSize(11.5).TextColor(palette.muted)
+			ui.Icon(c, icExternal).FontSize(11).TextColor(palette.muted)
+		}
+	}).Clicked() && file >= 0 {
+		a.showDiff, a.showPreview, a.panelsJump = true, false, false
+		a.diffFile[t.id()] = w.Path
+	}
+	if w.Output != "" && (w.Status == api.WorkFailed || w.Exit != nil && *w.Exit != 0) {
+		ui.Text(c, w.Output).Key(w.Item+"/output").Selectable().FontSize(11.5).Font("monospace").LineHeight(1.5).TextColor(palette.muted).
+			Margin(2, 0, 4, 24).Padding(6, 10).Radius(6).Background(palette.bg).Border(1, palette.border)
+	}
+}
+
+// tookFor is how long a step took, to a tenth of a second.
+func tookFor(d time.Duration) string {
+	return max(d, 0).Round(100 * time.Millisecond).String()
+}
+
+// plural counts things: "1 step", "2 steps".
+func plural(n int, what string) string {
+	if n == 1 {
+		return "1 " + what
+	}
+	return fmt.Sprintf("%d %ss", n, what)
 }
 
 func counts(c *ui.Context, add, del int) {
@@ -398,113 +471,6 @@ func counts(c *ui.Context, add, del int) {
 	if del > 0 {
 		ui.Textf(c, "−%d", del).FontSize(11.5).Font("monospace").TextColor(palette.red)
 	}
-}
-
-// requestCard is what the agent asks before it goes on: Allow and Deny
-// while it waits, then what was answered.
-func (a *app) requestCard(c *ui.Context, t thread, e entry) {
-	r := e.request
-	ui.Column(c).Key(e.key).Gap(10).Padding(12, 14).Radius(12).Border(1, palette.amber.Alpha(0.45)).
-		Background(palette.amber.Alpha(0.06)).Transition(riseIn).Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Icon(c, icHand).FontSize(15).TextColor(palette.amber)
-			ui.Text(c, asks(r.Body)).FontWeight(500).Grow(1).Shrink(1)
-		})
-		if r.State != api.RequestPending {
-			ui.Text(c, answered(r)).FontSize(12).TextColor(palette.muted)
-			return
-		}
-		sent, sending := responding(t, r.Request)
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			switch {
-			case sending && sent.Err != nil:
-				ui.Text(c, "Not sent: "+sent.Err.Error()).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
-				a.failedActions(c, t, sent)
-				return
-			case sending:
-				ui.Text(c, "Sending…").FontSize(12).TextColor(palette.muted)
-			}
-			ui.Spacer(c)
-			if headerButton(c, "deny").Disabled(sending).Children(func() { ui.Text(c, "Deny").FontSize(12.5) }).Clicked() {
-				a.backend.Respond(t.env, t.id(), r.Request, false)
-			}
-			allow := ui.ButtonBase(c.Key("allow")).Padding(5, 14).Radius(999).Background(palette.accent).
-				TextColor(ui.Hex("#ffffff")).Cursor(ui.CursorPointer).Disabled(sending)
-			if allow.Children(func() { ui.Text(c, "Allow").FontSize(12.5).FontWeight(600) }).Clicked() {
-				a.backend.Respond(t.env, t.id(), r.Request, true)
-			}
-		})
-	})
-}
-
-// asks is what a request's body asks for, as {"operation":"edit",
-// "path":"main.go"} asks to edit main.go, or the body itself.
-func asks(body json.RawMessage) string {
-	var b struct{ Operation, Path string }
-	if json.Unmarshal(body, &b) == nil && b.Operation != "" {
-		return strings.TrimSpace("Allow " + b.Operation + " " + b.Path + "?")
-	}
-	return "The agent asks: " + string(body)
-}
-
-func answered(r *client.RequestEntry) string {
-	switch r.State {
-	case api.RequestInvalidated, api.RequestExpired:
-		if r.Reason != "" {
-			return "No longer asked: " + r.Reason
-		}
-		return "No longer asked"
-	}
-	var b struct{ Allow bool }
-	if json.Unmarshal(r.Answer, &b) == nil && b.Allow {
-		return "Allowed"
-	}
-	return "Denied"
-}
-
-// responding is the answer to the request sent from here and not landed,
-// if there is one.
-func responding(t thread, request api.ID) (client.Pending, bool) {
-	for _, p := range t.Pending {
-		if r, ok := p.Body.(api.RequestRespond); ok && r.Request == request {
-			return p, true
-		}
-	}
-	return client.Pending{}, false
-}
-
-func (a *app) changes(c *ui.Context, key string, e entry) {
-	// The counts are the diff's, as it stands after any review.
-	add, del := 0, 0
-	for _, f := range e.files {
-		fa, fd := a.diffStats(f.path)
-		add, del = add+fa, del+fd
-	}
-	ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.surface).Transition(riseIn).Children(func() {
-		ui.Row(c).Padding(8, 8, 8, 12).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
-			ui.Textf(c, "%d files changed", len(e.files)).FontSize(12).FontWeight(500)
-			counts(c, add, del)
-			ui.Spacer(c)
-			if ghost(c, "view-diff", false).Children(func() {
-				ui.Icon(c, icEye).FontSize(13)
-				ui.Text(c, "View diff").FontSize(12)
-			}).Clicked() {
-				a.showDiff = true
-			}
-		})
-		ui.Column(c).Padding(4).Children(func() {
-			for i, f := range e.files {
-				if ghost(c, f.path, false).Padding(5, 8).Children(func() {
-					ui.Icon(c, icFile).FontSize(12).TextColor(palette.faint)
-					ui.Text(c, f.path).FontSize(12).Font("monospace").SingleLine().Grow(1).Shrink(1).TextColor(palette.text)
-					fa, fd := a.diffStats(f.path)
-					counts(c, fa, fd)
-				}).Clicked() {
-					a.showDiff, a.diffFile = true, i
-				}
-			}
-		})
-	})
 }
 
 // composerResize is how the composer grows and shrinks, compact while the
@@ -524,7 +490,7 @@ func (a *app) composerCompact(t thread) bool {
 // compactWidth is the composer's width while compact.
 const compactWidth = 520
 
-func (a *app) composer(c *ui.Context, t thread) {
+func (a *app) composer(c *ui.Context, t thread, es []entry) {
 	// While the user reads back up the thread, the composer steps out of
 	// the way: narrower, one line, its controls folded away. It comes back
 	// to its full size at the end of the thread, as it's clicked, and
@@ -569,8 +535,11 @@ func (a *app) composer(c *ui.Context, t thread) {
 						OnPaste(a.onPaste)
 					return
 				}
-				ui.TextArea(c.Key("draft"), &a.draft).
-					Placeholder("Ask anything, @tag files/folders, or use / to show available commands").
+				placeholder := "Ask anything, @tag files/folders, or use / to show available commands"
+				if waitingRequest(t, es) != nil {
+					placeholder = "Reply to steer, or answer the approval above"
+				}
+				ui.TextArea(c.Key("draft"), &a.draft).Placeholder(placeholder).
 					Lines(2, 10).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).
 					Padding(14, 16, 4).AutoFocus().OnPaste(a.onPaste).OnTextKey(a.suggestKey)
 				ui.Row(c).Key("controls").Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
@@ -647,10 +616,24 @@ func (a *app) workspacesOn(e *client.Env, home string) []draft {
 }
 
 // sendButton presses in as it's pressed; its color says whether there is
-// anything to send. While the agent works, it stops it.
+// anything to send. While the agent works, a message steers it, and with
+// none the button stops it, as it ends a run left uncertain. Holding a
+// message, the composer keeps a Stop of its own beside it, so a draft
+// never hides the only way to stop a run.
 func (a *app) sendButton(c *ui.Context, t thread) {
-	working := t.View.Working()
 	empty := a.message(t) == ""
+	live := t.View.Live()
+	working := live && empty
+	if live && !empty {
+		stop := ui.ButtonBase(c.Key("stop")).Label("Stop").Tooltip("Stop the agent").Size(30, 30).Radius(15).Center().
+			Cursor(ui.CursorPointer).Border(1, palette.border).Margin(0, 4, 0, 0)
+		if stop.Hovered() {
+			stop.Background(palette.hover)
+		}
+		if stop.Children(func() { ui.Box(c).Size(10, 10).Radius(2).Background(palette.text) }).Clicked() {
+			a.backend.Interrupt(t.env, t.id())
+		}
+	}
 	label := "Send"
 	if working {
 		label = "Stop"
@@ -711,10 +694,49 @@ func (a *app) send(t thread) {
 	} else if t.View.Disposition.State != api.Open {
 		a.backend.SetDisposition(t.env, id, api.Disposition{})
 	}
-	a.backend.Send(t.env, id, text, api.AfterActive)
+	// Steer only: a message reaches a working agent now, rather than
+	// waiting its turn.
+	cmd := a.backend.Send(t.env, id, text, api.SteerActive)
+	if cmd.IsZero() {
+		return
+	}
+	a.steers[cmd] = steer{t.env, id}
 	a.draft = ""
 	a.attachments = slices.DeleteFunc(a.attachments, func(at attachment) bool { return at.held(t) == "" })
 	a.listFor(id).ScrollToEnd()
+}
+
+// steer is where a message sent from the composer went.
+type steer struct {
+	env    *client.Env
+	thread api.ID
+}
+
+// takeBack puts a message the engine refused to steer in, as it does while
+// the agent stops, back in the composer, and says why; but only in its own
+// thread's composer, shown and empty, as the composer is one. Otherwise it
+// stays in the timeline, not sent, with Retry and Dismiss. Sending it once
+// the run ends is the user's call.
+func (a *app) takeBack(c *ui.Context, t thread) {
+	for cmd, s := range a.steers {
+		var p client.Pending
+		if th := s.env.Threads[s.thread]; th != nil {
+			if i := slices.IndexFunc(th.Pending, func(p client.Pending) bool { return p.Command == cmd }); i >= 0 {
+				p = th.Pending[i]
+			}
+		}
+		if !p.Command.IsZero() && p.Err == nil {
+			continue // on its way
+		}
+		delete(a.steers, cmd)
+		var rej *api.RejectedError
+		if !errors.As(p.Err, &rej) || s.env != t.env || s.thread != t.id() || a.message(t) != "" {
+			continue // landed, or kept in the timeline
+		}
+		a.backend.Dismiss(s.env, s.thread, cmd)
+		a.draft = p.Body.(api.MessageDispatch).Text
+		c.AddToast(ui.Toast{Title: "Not sent", Description: rej.Reason, Type: "info"})
+	}
 }
 
 // message is the draft and what's attached to it that goes to t's agent:
@@ -750,10 +772,12 @@ func (a *app) terminal(c *ui.Context, workspace string) {
 	if s != nil {
 		title = s.Title()
 	}
-	ui.Column(c).Height(220).Background(ui.Hex("#08080a")).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
-		ui.Row(c).Padding(4, 8, 4, 12).Gap(6).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(ui.RGBA(255, 255, 255, 0.08)).Children(func() {
-			ui.Icon(c, icTerminal).FontSize(12).TextColor(darkColors.muted)
-			ui.Text(c, title).FontSize(11.5).TextColor(darkColors.muted).SingleLine().Shrink(1)
+	// The drawer is the terminal's colors, which are the theme's.
+	th := a.theme.terminal()
+	ui.Column(c).Height(220).Background(th.Background).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
+		ui.Row(c).Padding(4, 8, 4, 12).Gap(6).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
+			ui.Icon(c, icTerminal).FontSize(12).TextColor(palette.muted)
+			ui.Text(c, title).FontSize(11.5).TextColor(palette.muted).SingleLine().Shrink(1)
 			ui.Spacer(c)
 			if iconButton(c, "close-terminal", icX, "Close terminal", false).Padding(3).Clicked() {
 				a.showTerminal = false
@@ -763,27 +787,30 @@ func (a *app) terminal(c *ui.Context, workspace string) {
 	})
 }
 
-// cannedTerminal is the drawer's output where no shell runs, as in tests.
+// cannedTerminal is the drawer's output where no shell runs, as in tests,
+// in the terminal's colors: its text, its dim text and its green.
 func (a *app) cannedTerminal(c *ui.Context) {
+	th := a.theme.terminal()
+	text, dim, green := th.Foreground, th.Foreground.Alpha(0.6), th.Palette[2]
 	ui.Scroll(c).Grow(1).Padding(8, 12).Gap(2).Font("monospace").FontSize(12).Children(func() {
 		for _, l := range []struct {
 			text string
 			col  ui.Color
 		}{
-			{"~/Projects/t3code (t3code/sidebar-sort) $ bun run typecheck", darkColors.text},
-			{"$ tsc --noEmit -p apps/web", darkColors.muted},
-			{"✓ No type errors", darkColors.green},
-			{"~/Projects/t3code (t3code/sidebar-sort) $ bun run test -- Sidebar", darkColors.text},
-			{" ✓ Sidebar > sorts threads by updatedAt (4ms)", darkColors.green},
-			{" ✓ Sidebar > collapses a project (2ms)", darkColors.green},
-			{" Test Files  1 passed (1)", darkColors.muted},
+			{"~/Projects/t3code (t3code/sidebar-sort) $ bun run typecheck", text},
+			{"$ tsc --noEmit -p apps/web", dim},
+			{"✓ No type errors", green},
+			{"~/Projects/t3code (t3code/sidebar-sort) $ bun run test -- Sidebar", text},
+			{" ✓ Sidebar > sorts threads by updatedAt (4ms)", green},
+			{" ✓ Sidebar > collapses a project (2ms)", green},
+			{" Test Files  1 passed (1)", dim},
 		} {
 			ui.Text(c, l.text).TextColor(l.col).NoWrap()
 		}
 		ui.Row(c).Children(func() {
-			ui.Text(c, "~/Projects/t3code (t3code/sidebar-sort) $ ").TextColor(darkColors.text).NoWrap()
+			ui.Text(c, "~/Projects/t3code (t3code/sidebar-sort) $ ").TextColor(text).NoWrap()
 			caret := ui.Box(c).Size(7, 14)
-			caret.Background(darkColors.text).Opacity(caret.Loop("blink", time.Second, blink))
+			caret.Background(text).Opacity(caret.Loop("blink", time.Second, blink))
 		})
 	})
 }
