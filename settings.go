@@ -130,8 +130,8 @@ func (a *app) appearance(c *ui.Context) {
 	s := &a.settings
 	card(c, "THEME", func() {
 		ui.Row(c).Padding(16).Gap(12).Children(func() {
-			for i, name := range []string{"System", "Light", "Dark"} {
-				a.themeCard(c, i, name)
+			for _, name := range themeNames() {
+				a.themeCard(c, name)
 			}
 		})
 	})
@@ -158,14 +158,27 @@ func (a *app) appearance(c *ui.Context) {
 			ui.Switch(c, &s.glass).Label("Liquid Glass")
 		})
 		// The setting is the app's tint over the glass, not how
-		// transparent the glass is: at Clear, the glass is macOS's own
-		// material, which it frosts and tints itself.
-		settingRow(c, "Glass tint", "How much the app tints all its glass: the sidebar and headers, and the panels over the chat. At Clear, the glass is untinted.", func() {
+		// transparent the glass is: at Clear the app adds none, and the
+		// bars are the system's material, which it frosts itself.
+		// What the slider reaches depends on the window: the bars only
+		// where it shows vibrancy, the panels once they take it, and
+		// nothing while the glass is off. The slider says which.
+		tintDesc := "How much the app's background tints the glass: the sidebar and headers over the window's vibrancy, and the floating panels when they take it. At Clear, the app adds no tint: the bars are the system's material, the panels plain glass."
+		switch {
+		case !s.glass:
+			tintDesc = "How much the app's background tints the glass, once Liquid Glass is on."
+		case !a.vibrant:
+			tintDesc = "How much the app's background tints the floating panels, once they take it. This window's sidebar shows no vibrancy, so it is a solid color."
+		}
+		settingRow(c, "Glass tint", tintDesc, func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Tinted").FontSize(11.5).TextColor(palette.faint)
-				ui.Slider(c, &s.vibrancy, 0, 1).Width(160).Label("Glass tint").Disabled(!s.glass)
+				ui.Slider(c, &s.vibrancy, 0, 1).Width(160).Label("Glass tint").Disabled(!s.glass || !a.vibrant && !s.tintPanels)
 				ui.Text(c, "Clear").FontSize(11.5).TextColor(palette.faint)
 			})
+		})
+		settingRow(c, "Tint panels", "The app's own panes of glass take the tint the slider sets: the composer, the jump-to-latest pill, the command palette, the popovers, the toasts and the pane below. Off, they are plain glass, as the system's menus are.", func() {
+			ui.Switch(c, &s.tintPanels).Label("Tint the panels").Disabled(!s.glass)
 		})
 		a.glassDemo(c)
 		settingRow(c, "Wind background", "Characters lit by a passing wind behind the chat. Move the pointer to warm the air, click to blow a ripple.", func() {
@@ -177,42 +190,48 @@ func (a *app) appearance(c *ui.Context) {
 	})
 }
 
-func (a *app) themeCard(c *ui.Context, i int, name string) {
+// themeCard previews a theme's sidebar and chat, and the terminal's
+// colors under them; System's is half light, half dark.
+func (a *app) themeCard(c *ui.Context, name string) {
 	s := &a.settings
-	cols := darkColors
-	if i == 1 {
-		cols = lightColors
-	}
+	th := themeFor(name, true)
+	cols := th.colors
 	b := ui.ButtonBase(c.Key(name)).Grow(1).Basis(0).Column().AlignItems(ui.Stretch).Gap(8).Cursor(ui.CursorPointer)
 	if b.Children(func() {
 		ui.Box(c).Height(96).Radius(10).Clip().Children(func() {
-			if i == s.theme {
+			if name == s.theme {
 				ui.Box(c).Key("ring").Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(10).Border(2, palette.accent).PassThrough().
 					Transition(indicator(themeMatch{}))
 			}
 			ui.Row(c).Fill().Border(1, palette.border).Radius(10).Clip().AlignItems(ui.Stretch).Children(func() {
 				side, main := cols.sidebar, cols.bg
-				if i == 0 { // half and half
-					side, main = lightColors.sidebar, darkColors.bg
+				if name == systemTheme { // half and half
+					side, main = themeFor(name, false).colors.sidebar, cols.bg
 				}
 				ui.Column(c).Width(44).Background(side).Padding(10, 8).Gap(5).Children(func() {
 					for range 4 {
 						ui.Box(c).Height(4).Radius(2).Background(cols.muted.Alpha(0.35))
 					}
 				})
-				ui.Column(c).Grow(1).Background(main).Padding(12).Gap(6).Justify(ui.End).Children(func() {
+				ui.Column(c).Grow(1).Background(main).Padding(12, 12, 8).Gap(6).Justify(ui.End).Children(func() {
 					ui.Box(c).Height(5).WidthPercent(70).Radius(3).Background(cols.muted.Alpha(0.4))
 					ui.Box(c).Height(5).WidthPercent(50).Radius(3).Background(cols.muted.Alpha(0.4))
 					ui.Box(c).Height(16).Radius(6).Background(cols.surface).Border(1, cols.border).Margin(4, 0, 0)
+					term := th.terminal()
+					ui.Row(c).Gap(2).Margin(2, 0, 0).Children(func() {
+						for _, col := range term.Palette[1:7] {
+							ui.Box(c).Size(6, 4).Radius(1).Background(col)
+						}
+					})
 				})
 			})
 		})
 		t := ui.Text(c, name).FontSize(12).TextAlign(ui.Center)
-		if i != s.theme {
+		if name != s.theme {
 			t.TextColor(palette.muted)
 		}
 	}).Clicked() {
-		s.theme = i
+		s.theme = name
 	}
 }
 
@@ -239,7 +258,7 @@ func (a *app) glassDemo(c *ui.Context) {
 			lift.Scale = 1.03
 		}
 		pane.AnimatePose(lift, press)
-		// The tint the slider sets, as every glass has it.
+		// The tint the slider sets, when the panels take it.
 		a.pane(pane, glass.Glass{}).Children(func() {
 			ui.Icon(c, icSparkles).FontSize(16)
 			ui.Text(c, "Drag me").FontWeight(600)
@@ -297,6 +316,10 @@ var keybindings = []struct {
 	{"New thread", []string{"⌘", "N"}},
 	{"Search threads and commands", []string{"⌘", "K"}},
 	{"Send message", []string{"⌘", "↩"}},
+	{"Allow the pending approval", []string{"⌘", "↩"}},
+	{"Deny the pending approval", []string{"⇧", "⌘", "D"}},
+	{"Previous / next change in the diff", []string{"⌘", "[", "]"}},
+	{"Accept the change in view", []string{"⇧", "⌘", "↩"}},
 	{"Toggle sidebar", []string{"⌘", "B"}},
 	{"Toggle diff panel", []string{"⌘", "D"}},
 	{"Toggle terminal", []string{"⌘", "J"}},
@@ -342,11 +365,15 @@ func (a *app) archivedThreads(c *ui.Context) {
 				ui.Icon(c, icMessage).FontSize(14).TextColor(palette.faint)
 				ui.Column(c).Grow(1).Gap(2).Children(func() {
 					ui.Text(c, t.title).SingleLine()
-					ui.Text(c, "Archived "+t.age+" ago").FontSize(11.5).TextColor(palette.faint)
+					when := "Archived " + t.archivedAge + " ago"
+					if t.archivedAge == "now" {
+						when = "Archived just now"
+					}
+					ui.Text(c, when).FontSize(11.5).TextColor(palette.faint)
 				})
 				ui.Button(c.Key("restore"), "Restore").OnClick(func() {
 					a.archived = remove(a.archived, t)
-					a.projects[0].threads = append(a.projects[0].threads, t)
+					t.home.threads = append(t.home.threads, t)
 					c.AddToast(ui.Toast{Title: "Thread restored", Description: t.title, Type: "info"})
 				})
 				ui.Button(c.Key("delete"), "Delete").TextColor(palette.red).OnClick(func() {

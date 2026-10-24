@@ -43,16 +43,6 @@ func iconButton(c *ui.Context, key any, icon *ui.SVG, label string, on bool) ui.
 	})
 }
 
-// shortcutHint shows a shortcut's keycaps only while ⌘ is held, as the
-// app's commands are found: out of the way otherwise. They show and go at
-// once, as the key does.
-func shortcutHint(c *ui.Context, keys ...string) {
-	if c.Modifiers()&ui.Cmd == 0 {
-		return
-	}
-	kbd(c, keys...)
-}
-
 // kbd is a key of a shortcut, as a keycap.
 func kbd(c *ui.Context, keys ...string) {
 	ui.Row(c).Gap(3).Children(func() {
@@ -93,7 +83,28 @@ func (a *app) sidebarFrame(c *ui.Context) {
 			}
 			a.sidebar(c)
 		})
+		a.sidebarEdge(c)
 	})
+}
+
+// The sidebar's width, as dragged: enough for a title, never half the
+// window.
+const (
+	minSidebarWidth = 220
+	maxSidebarWidth = 440
+)
+
+// sidebarEdge is the sidebar's right edge, which the pointer drags to
+// resize it. It lights up as it's pointed at.
+func (a *app) sidebarEdge(c *ui.Context) {
+	edge := ui.Box(c).Key("edge").Absolute().Right(0).Top(0).Bottom(0).Width(5).Cursor(ui.CursorResizeEW).
+		Label("Resize sidebar")
+	if dx, _, ok := edge.Dragged(); ok && dx != 0 {
+		a.sidebarWidth = min(max(a.sidebarWidth+dx, minSidebarWidth), maxSidebarWidth)
+	}
+	if edge.Hovered() || edge.Pressed() {
+		edge.Background(palette.accent.Alpha(0.5))
+	}
 }
 
 func (a *app) sidebar(c *ui.Context) {
@@ -120,18 +131,30 @@ func (a *app) toggleSidebar(keyboard bool) {
 	a.sidebarJump = keyboard
 }
 
-// statusMark shows what a thread is doing, before its title. Only work
-// in progress moves.
+// threadMark shows what a thread is doing, before its title: waiting on
+// an approval, else its status.
+func threadMark(c *ui.Context, t *thread) {
+	if t.pending() != nil {
+		pendingMark(c)
+		return
+	}
+	statusMark(c, t.status)
+}
+
+// statusMark shows a status. Only work in progress moves.
 func statusMark(c *ui.Context, s status) {
 	switch s {
 	case statusWorking:
 		spin := ui.Icon(c, icLoader).FontSize(11).TextColor(palette.blue)
 		spin.Rotate(spin.Loop("spin", 800*time.Millisecond, ui.Linear) * 360)
-	case statusApproval:
-		ui.Box(c).Size(7, 7).Radius(4).Background(palette.amber).Margin(0, 2).Tooltip("Pending approval")
 	case statusCompleted:
 		ui.Box(c).Size(7, 7).Radius(4).Background(palette.green).Margin(0, 2).Tooltip("Completed")
 	}
+}
+
+// pendingMark is the amber dot of a thread waiting on an approval.
+func pendingMark(c *ui.Context) {
+	ui.Box(c).Size(7, 7).Radius(4).Background(palette.amber).Margin(0, 2).Tooltip("Pending approval")
 }
 
 var settingsSections = []struct {
@@ -170,7 +193,12 @@ func (a *app) settingsNav(c *ui.Context) {
 
 func (a *app) newThread() {
 	p, _ := a.current()
-	t := &thread{id: time.Now().Format("150405.000"), title: "New thread", age: "now", branch: "main"}
+	a.startThread(p)
+}
+
+// startThread opens a new, empty thread in the project.
+func (a *app) startThread(p *project) {
+	t := &thread{id: time.Now().Format("150405.000"), title: untitled, age: "now", branch: "main"}
 	p.threads = append([]*thread{t}, p.threads...)
 	p.open = true
 	a.select_(t.id)

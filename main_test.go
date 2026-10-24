@@ -66,8 +66,8 @@ func TestSettingsPages(t *testing.T) {
 	if err := tt.Click("Light"); err != nil {
 		t.Fatal(err)
 	}
-	if a.settings.theme != 1 {
-		t.Errorf("theme %d", a.settings.theme)
+	if a.settings.theme != "Light" {
+		t.Errorf("theme %q", a.settings.theme)
 	}
 	if err := tt.Click("Back to app"); err != nil {
 		t.Fatal(err)
@@ -123,31 +123,6 @@ func TestModelPicker(t *testing.T) {
 		t.Error("fast mode not on")
 	}
 	tt.Advance(time.Second)
-}
-
-// The sidebar's shortcuts show only while ⌘ is held.
-func TestShortcutHints(t *testing.T) {
-	a := newApp()
-	tt := ui.NewTester(a.view, 1320, 860)
-	has := func() bool {
-		for _, s := range tt.Texts() {
-			if s == "⌘" {
-				return true
-			}
-		}
-		return false
-	}
-	if has() {
-		t.Error("keycaps show without ⌘ held")
-	}
-	tt.HoldModifiers(ui.Cmd)
-	if !has() {
-		t.Error("keycaps hidden while ⌘ is held")
-	}
-	tt.HoldModifiers(0)
-	if has() {
-		t.Error("keycaps still show after ⌘ is let go")
-	}
 }
 
 // The effort's thumb follows the pointer while dragged, locking onto a
@@ -436,11 +411,33 @@ func TestDiffPanel(t *testing.T) {
 	if len(d.Hunks()) != n-1 {
 		t.Errorf("%d changes after accepting one of %d", len(d.Hunks()), n)
 	}
+	if !d.Wrap {
+		t.Error("long lines don't wrap by default")
+	}
+	// Split needs the room: at 1320 the panel would be 608 wide.
+	if err := tt.Click("Split"); err != nil {
+		t.Fatal(err)
+	}
+	if a.diffLayout != editor.DiffUnified {
+		t.Error("Split switched the layout without the room for it")
+	}
+	tt.SetSize(1600, 900)
+	tt.Frame()
 	if err := tt.Click("Split"); err != nil {
 		t.Fatal(err)
 	}
 	if a.diffLayout != editor.DiffSplit {
 		t.Error("Split did not switch the layout")
+	}
+	tt.SetSize(1320, 860)
+	tt.Frame()
+	if a.layout() != editor.DiffUnified || a.diffLayout != editor.DiffSplit {
+		t.Error("the diff should show unified while the room is short, and keep the Split choice")
+	}
+	tt.SetSize(1600, 900)
+	tt.Frame()
+	if a.layout() != editor.DiffSplit {
+		t.Error("the Split choice didn't come back with the room")
 	}
 }
 

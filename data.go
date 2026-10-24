@@ -11,11 +11,12 @@ import (
 
 type status int
 
+// The agent's status on a thread. Waiting on an approval is not one: it
+// is the thread's pending approval, which its entries hold.
 const (
 	statusIdle status = iota
 	statusWorking
 	statusCompleted
-	statusApproval
 )
 
 type thread struct {
@@ -30,8 +31,13 @@ type thread struct {
 	unread  bool
 	settled bool
 	snoozed string
-	// stop asks the pretend agent's goroutine to stop.
-	stop atomic.Bool
+	// turn counts the agent's turns. A goroutine playing an older turn,
+	// stopped or replaced, writes nothing more.
+	turn atomic.Uint64
+	// home is the project an archived thread came from, and archivedAge
+	// how long ago.
+	home        *project
+	archivedAge string
 }
 
 type project struct {
@@ -52,7 +58,31 @@ const (
 	entryAssistant
 	entryWork
 	entryChanges
+	entryApproval
 )
+
+// decision is what the user said to an approval: nothing yet, yes, or no.
+type decision int
+
+const (
+	undecided decision = iota
+	allowed
+	denied
+	// superseded: the user sent a message instead of answering.
+	superseded
+)
+
+// approval is a request from the agent that waits on the user: the
+// command it wants to run, where, and why.
+type approval struct {
+	command string
+	dir     string
+	reason  string
+	waiting string
+	// rule is what Always allow would allow from then on.
+	rule     string
+	decision decision
+}
 
 type workItem struct {
 	kind   string // "command", "edit", "read", "search"
@@ -60,15 +90,25 @@ type workItem struct {
 	detail string
 	add    int
 	del    int
+	// How a command went, once it has: its exit code, how long it took,
+	// and what it last printed.
+	exit   int
+	took   string
+	output string
 }
+
+// working is a work log's label while the agent is at it.
+const working = "Working…"
 
 type entry struct {
 	kind      entryKind
 	text      string
 	streaming bool
-	took      string
-	work      []workItem
-	files     []fileChange
+	// took is a work log's label: working, or how long it took.
+	took     string
+	work     []workItem
+	files    []fileChange
+	approval *approval
 	// attachments went with a message of the user's.
 	attachments []attachment
 }
@@ -100,8 +140,8 @@ func mockProjects() []*project {
 				{kind: "read", label: "Read", detail: "apps/web/src/hooks/useThreads.ts"},
 				{kind: "edit", label: "Edited", detail: "apps/web/src/components/Sidebar.tsx", add: 9, del: 2},
 				{kind: "edit", label: "Edited", detail: "apps/web/src/components/ChevronIcon.tsx", add: 14},
-				{kind: "command", label: "Ran", detail: "bun run typecheck"},
-				{kind: "command", label: "Ran", detail: "bun run test -- Sidebar"},
+				{kind: "command", label: "Ran", detail: "bun run typecheck", took: "1.2s"},
+				{kind: "command", label: "Ran", detail: "bun run test -- Sidebar", took: "2.8s"},
 			}},
 			{kind: entryAssistant, text: "Threads are now sorted by `updatedAt`, newest first, and a project's label toggles it open or closed.\n\n" +
 				"**What changed**\n\n" +
@@ -114,8 +154,10 @@ func mockProjects() []*project {
 				{path: "apps/web/src/components/ChevronIcon.tsx", add: 14},
 			}},
 			{kind: entryUser, text: "Nice. Can you also persist the collapsed state in localStorage?"},
-			{kind: entryWork, took: "Working…", work: []workItem{
+			{kind: entryWork, took: working, work: []workItem{
 				{kind: "read", label: "Read", detail: "apps/web/src/lib/storage.ts"},
+				{kind: "command", label: "Ran", detail: "bun run test -- Sidebar", exit: 1, took: "3.4s",
+					output: "✗ Sidebar › restores collapsed state (12ms)\n  expected true, received undefined\nTest Files  1 failed (1)"},
 				{kind: "edit", label: "Editing", detail: "apps/web/src/components/Sidebar.tsx", add: 6, del: 1},
 			}},
 		},
@@ -123,7 +165,22 @@ func mockProjects() []*project {
 	return []*project{
 		{id: "p1", name: "t3code", path: "~/Projects/t3code", open: true, icon: icTerminal, color: ui.Hex("#8b5cf6"), threads: []*thread{
 			active,
-			{id: "t2", title: "Fix terminal resize flicker on Windows", age: "2h", status: statusApproval, branch: "main"},
+			{id: "t2", title: "Fix terminal resize flicker on Windows", age: "2h", branch: "main", entries: []entry{
+				{kind: entryUser, text: "The terminal flickers when the window is resized on Windows 11. Find the cause and fix it."},
+				{kind: entryWork, took: "Worked for 48s", work: []workItem{
+					{kind: "read", label: "Read", detail: "apps/desktop/src/terminal/resize.ts"},
+					{kind: "read", label: "Read", detail: "apps/desktop/src/terminal/pty.ts"},
+					{kind: "edit", label: "Edited", detail: "apps/desktop/src/terminal/resize.ts", add: 12, del: 2},
+					{kind: "command", label: "Ran", detail: "bun run typecheck", took: "1.2s"},
+				}},
+				{kind: entryApproval, approval: &approval{
+					command: "bun run test --filter=apps/desktop -- resize",
+					dir:     "apps/desktop",
+					reason:  "Verifies the debounce on the resize handler before the fix is marked done.",
+					waiting: "2 min",
+					rule:    "bun run test",
+				}},
+			}},
 			{id: "t3", title: "Add keyboard shortcut for new thread", age: "5h", status: statusCompleted, branch: "main", unread: true},
 			{id: "t4", title: "Investigate websocket reconnect loop", age: "1d", branch: "main"},
 			{id: "t5", title: "Bump effect to v4 beta", age: "3d", branch: "main", settled: true},
@@ -139,11 +196,11 @@ func mockProjects() []*project {
 	}
 }
 
-func mockArchived() []*thread {
+func mockArchived(home *project) []*thread {
 	return []*thread{
-		{id: "a1", title: "Try Tauri for the desktop shell", age: "3w", branch: "main"},
-		{id: "a2", title: "Spike: SQLite event store", age: "1mo", branch: "main"},
-		{id: "a3", title: "Rename provider adapters", age: "2mo", branch: "main"},
+		{id: "a1", title: "Try Tauri for the desktop shell", age: "3w", archivedAge: "3w", branch: "main", home: home},
+		{id: "a2", title: "Spike: SQLite event store", age: "1mo", archivedAge: "1mo", branch: "main", home: home},
+		{id: "a3", title: "Rename provider adapters", age: "2mo", archivedAge: "2mo", branch: "main", home: home},
 	}
 }
 
@@ -160,7 +217,7 @@ var scripts = []script{
 			{kind: "search", label: "Searched", detail: "collapsed in apps/web/src"},
 			{kind: "read", label: "Read", detail: "apps/web/src/lib/storage.ts"},
 			{kind: "edit", label: "Edited", detail: "apps/web/src/components/Sidebar.tsx", add: 6, del: 1},
-			{kind: "command", label: "Ran", detail: "bun run typecheck"},
+			{kind: "command", label: "Ran", detail: "bun run typecheck", took: "1.1s"},
 		},
 		reply: "Done. The collapsed projects are kept in `localStorage` under `t3code:sidebar:collapsed`, as a list of project ids.\n\n" +
 			"- `useCollapsedProjects()` reads it once and writes it back on every toggle.\n" +
@@ -170,13 +227,49 @@ var scripts = []script{
 	{
 		steps: []workItem{
 			{kind: "read", label: "Read", detail: "apps/server/src/terminal/pty.ts"},
-			{kind: "command", label: "Ran", detail: "rg -n \"resize\" apps/server/src"},
+			{kind: "command", label: "Ran", detail: "rg -n \"resize\" apps/server/src", took: "0.1s"},
 			{kind: "edit", label: "Edited", detail: "apps/server/src/terminal/pty.ts", add: 11, del: 4},
 		},
 		reply: "The flicker comes from resizing the PTY on every `ResizeObserver` tick. I debounced it to one resize per animation frame:\n\n" +
 			"```ts\nconst resize = rafThrottle((cols: number, rows: number) => {\n  pty.resize(cols, rows);\n});\n```\n\n" +
 			"| Before | After |\n|---|---|\n| ~40 resizes per drag | 1 per frame |\n",
 	},
+}
+
+// approved is what the agent does once its request is allowed: it runs
+// the command and reports.
+var approved = script{
+	steps: []workItem{
+		{kind: "command", label: "Ran", detail: "bun run test --filter=apps/desktop -- resize", took: "4.2s"},
+	},
+	reply: "The resize tests pass, the debounced handler included. The fix holds up on the three resize cases the suite covers: a drag, a maximize, and a DPI change.",
+}
+
+// refused is the agent's reply to a denied request.
+const refused = "Understood, I won't run it. The debounce change is in place in `resize.ts`; tell me how you'd like it verified instead."
+
+// untitled is a new thread's title, until its first message names it.
+const untitled = "New thread"
+
+// startTurn has the thread go to Working, out of the snoozed and settled
+// ones, as the agent's turn begins.
+func (t *thread) startTurn() {
+	t.status, t.age, t.settled, t.snoozed = statusWorking, "now", false, ""
+}
+
+// stopTurn ends the agent's turn where it is: the thread is the user's
+// again, the work log says it was stopped, and a reply half streamed
+// stands as it is.
+func (t *thread) stopTurn() {
+	t.turn.Add(1)
+	t.status = statusIdle
+	for i := range t.entries {
+		e := &t.entries[i]
+		if e.kind == entryWork && e.took == working {
+			e.took = "Stopped"
+		}
+		e.streaming = false
+	}
 }
 
 // finish ends the agent's turn: the thread comes back to the inbox,

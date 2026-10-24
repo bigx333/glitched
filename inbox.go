@@ -98,14 +98,14 @@ func (a *app) threadsNav(c *ui.Context) {
 		if ghost(c, "new-thread", false).Padding(7, 8).Children(func() {
 			ui.Icon(c, icSquarePen).FontSize(15)
 			ui.Text(c, "New thread").Grow(1)
-			shortcutHint(c, "⌘", "N")
+			kbd(c, "⌘", "N")
 		}).Clicked() {
 			a.newThread()
 		}
 		if ghost(c, "search", false).Padding(7, 8).Children(func() {
 			ui.Icon(c, icSearch).FontSize(15)
 			ui.Text(c, "Search").Grow(1)
-			shortcutHint(c, "⌘", "K")
+			kbd(c, "⌘", "K")
 		}).Clicked() {
 			a.openCommandPalette()
 		}
@@ -132,11 +132,20 @@ func (a *app) threadsNav(c *ui.Context) {
 			sections(catWorking, catSnoozed, catSettled)
 		})
 	}
-	ui.Column(c).Padding(8).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
+	ui.Column(c).Padding(8).Gap(1).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
+		if ghost(c, "archived", false).Padding(7, 8).Children(func() {
+			ui.Icon(c, icArchive).FontSize(15)
+			ui.Text(c, "Archived").Grow(1)
+			if n := len(a.archived); n > 0 {
+				ui.Textf(c, "%d", n).FontSize(11).TextColor(palette.faint)
+			}
+		}).Clicked() {
+			a.router.Push("/settings/archived")
+		}
 		if ghost(c, "settings", false).Padding(7, 8).Children(func() {
 			ui.Icon(c, icSettings).FontSize(15)
 			ui.Text(c, "Settings").Grow(1)
-			shortcutHint(c, "⌘", ",")
+			kbd(c, "⌘", ",")
 		}).Clicked() {
 			a.router.Push("/settings/general")
 		}
@@ -151,11 +160,12 @@ func projectTile(c *ui.Context, p *project, size float32) ui.Element {
 }
 
 // projectStrip filters the inbox to some of the projects: each project's
-// tile toggles it in or out, All shows them all again, as does choosing
-// every one; then a button adding a project.
+// chip, its tile and name, toggles it in or out, All shows them all
+// again, as does choosing every one; then a button adding a project. The
+// chips wrap, as many as there are.
 func (a *app) projectStrip(c *ui.Context) {
 	filtered := len(a.projectFilter) > 0
-	ui.Row(c).Padding(6, 12, 6, 14).Gap(4).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Wrap().Padding(6, 10, 6, 12).Gap(4).AlignItems(ui.Center).Children(func() {
 		all := ghost(c, "all", !filtered).Padding(4, 8).Tooltip("All projects")
 		if all.Children(func() { ui.Text(c, "All").FontSize(11.5).FontWeight(500) }).Clicked() {
 			clear(a.projectFilter)
@@ -166,15 +176,17 @@ func (a *app) projectStrip(c *ui.Context) {
 			if on {
 				tip = "Hide " + p.name
 			}
-			b := ghost(c, p.id, on).Padding(3).Label(p.name).Tooltip(tip)
+			b := ghost(c, p.id, on).Padding(3, 7, 3, 3).Gap(5).Label(p.name).Tooltip(tip)
 			if filtered && !on {
 				b.Opacity(0.45)
 			}
-			if b.Children(func() { projectTile(c, p, 20) }).Clicked() {
+			if b.Children(func() {
+				projectTile(c, p, 16)
+				ui.Text(c, p.name).FontSize(11.5)
+			}).Clicked() {
 				a.toggleProject(p.id)
 			}
 		}
-		ui.Spacer(c)
 		iconButton(c, "add-project", icPlus, "Add project", false).Padding(4)
 	})
 }
@@ -272,6 +284,7 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 		rowGag(r, fx)
 	}
 	hovered := r.Hovered()
+	r.ContextMenu(func(m *ui.Menu) { a.threadMenu(c, m, t, cat) })
 	if r.Children(func() {
 		wrap := ui.Box(c).Children(func() {
 			tile := projectTile(c, it.p, 20)
@@ -289,6 +302,10 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 		if playing && fx.kind == gagSettle {
 			burstGag(wrap, fx)
 		}
+		if a.renaming == t.id {
+			a.renameInput(c, t)
+			return
+		}
 		title := ui.Text(c, t.title).FontSize(13).SingleLine().Grow(1).Shrink(1)
 		if t.unread {
 			title.FontWeight(600).TextColor(palette.text)
@@ -299,16 +316,21 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 			a.rowActions(c, t, cat)
 			return
 		}
+		// The selected row's face is darker: its faint text steps up.
+		dim := palette.faint
+		if selected {
+			dim = palette.muted
+		}
 		switch {
 		case cat == catSnoozed:
 			ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, icClock).FontSize(10).TextColor(palette.faint)
-				ui.Text(c, t.snoozed).FontSize(11).TextColor(palette.faint)
+				ui.Icon(c, icClock).FontSize(10).TextColor(dim)
+				ui.Text(c, t.snoozed).FontSize(11).TextColor(dim)
 			})
 		case t.unread:
 			ui.Box(c).Size(7, 7).Radius(4).Background(palette.accent)
 		default:
-			ui.Text(c, t.age).FontSize(11).TextColor(palette.faint)
+			ui.Text(c, t.age).FontSize(11).TextColor(dim)
 		}
 	}).Clicked() {
 		t.unread = false
@@ -319,12 +341,12 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 // statusBadge is a small mark of what a thread is doing, on its project's
 // tile: the agent working, or waiting for an approval.
 func statusBadge(c *ui.Context, t *thread) ui.Element {
-	switch t.status {
-	case statusWorking:
+	switch {
+	case t.status == statusWorking:
 		return ui.Box(c).Size(11, 11).Radius(6).Center().Background(palette.sidebar).Children(func() {
 			statusMark(c, statusWorking)
 		})
-	case statusApproval:
+	case t.pending() != nil:
 		return ui.Box(c).Size(9, 9).Radius(5).Background(palette.amber).Border(2, palette.sidebar).Tooltip("Pending approval")
 	}
 	return ui.Element{}
@@ -350,9 +372,7 @@ func (a *app) rowActions(c *ui.Context, t *thread, cat category) {
 		case catInbox:
 			a.snoozeButton(c, t, cat)
 			if iconButton(c, "settle", icCheckCirc, "Settle", false).Padding(3).TextColor(tintSettle).Clicked() {
-				t.settled, t.unread = true, false
-				a.gag(c, t, gagSettle, cat)
-				c.AddToast(ui.Toast{Title: "Settled. Phew.", Description: t.title})
+				a.settle(c, t, cat)
 			}
 		}
 	})

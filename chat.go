@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"time"
 
@@ -52,6 +53,7 @@ func (a *app) chatPage(c *ui.Context) {
 					Material(glass.ScrollEdge{Bottom: true, Background: palette.bg})
 				// Over the edge, which would take its clicks.
 				a.jumpToLatest(c, a.listFor(t))
+				a.approvalKeys(c, t)
 				a.composer(c, t)
 			})
 			if a.showTerminal {
@@ -157,12 +159,18 @@ func (a *app) header(c *ui.Context, p *project, t *thread) {
 			if iconButton(c, "terminal", icTerminal, "Toggle terminal  ⌘J", a.showTerminal).Clicked() {
 				a.showTerminal, a.panelsJump = !a.showTerminal, false
 			}
-			if iconButton(c, "diff", icDiff, "Toggle diff  ⌘D", a.showDiff).Clicked() {
-				a.showDiff, a.panelsJump = !a.showDiff, false
-				if a.showDiff {
-					a.showPreview = false
+			ui.Box(c).Children(func() {
+				if iconButton(c, "diff", icDiff, "Toggle diff  ⌘D", a.showDiff).Clicked() {
+					a.showDiff, a.panelsJump = !a.showDiff, false
+					if a.showDiff {
+						a.showPreview = false
+					}
 				}
-			}
+				if n := len(t.changed()); n > 0 {
+					ui.Textf(c, "%d", n).Absolute().Top(1).Right(1).FontSize(9).FontWeight(600).LineHeight(1.4).
+						Padding(0, 4).Radius(999).Background(palette.accent).TextColor(ui.Hex("#ffffff")).PassThrough()
+				}
+			})
 			if iconButton(c, "preview", icGlobe, "Toggle preview  ⇧⌘P", a.showPreview).Clicked() {
 				a.togglePreview()
 				a.panelsJump = false
@@ -210,13 +218,16 @@ func (a *app) timeline(c *ui.Context, t *thread) {
 	l.Key = func(i int) any { return fmt.Sprintf("%s/%d", t.id, i) }
 	l.FollowEnd = true
 	l.FollowAnimation = &ui.Smooth
-	ui.List(c.Key(t.id), l, len(t.entries), func(i int) {
+	// The frame shows the entries as they were at its start: an action on
+	// one can cut the thread short while the rest are built.
+	entries := t.entries
+	ui.List(c.Key(t.id), l, len(entries), func(i int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, i, t.entries[i]) })
+			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, i, entries[i]) })
 		})
 	}).Fill().Padding(20, 24, composerRoom, markerColumnW+12).Gap(22).Justify(ui.End).
 		ScrollbarInsets(0, 0, composerRoom-40, 0).Children(func() {
-		if len(t.entries) == 0 {
+		if len(entries) == 0 {
 			ui.Row(c).Justify(ui.Center).Children(func() { a.emptyState(c) })
 		}
 	})
@@ -253,7 +264,8 @@ func (a *app) entry(c *ui.Context, t *thread, i int, e entry) {
 	key := fmt.Sprintf("%s/%d", t.id, i)
 	switch e.kind {
 	case entryUser:
-		ui.Row(c).Key(key).Transition(riseIn).Children(func() {
+		row := ui.Row(c).Key(key).Transition(riseIn)
+		row.Children(func() {
 			ui.Spacer(c)
 			ui.Column(c).AlignItems(ui.End).Gap(6).MaxWidthPercent(80).Children(func() {
 				if len(e.attachments) > 0 {
@@ -264,37 +276,46 @@ func (a *app) entry(c *ui.Context, t *thread, i int, e entry) {
 						Background(palette.surface).Border(1, palette.border)
 				}
 			})
+			a.messageActions(c, t, i, e, row.Hovered())
 		})
 	case entryAssistant:
-		ui.Column(c).Key(key).LineHeight(1.55).Transition(riseIn).Children(func() {
+		col := ui.Column(c).Key(key).LineHeight(1.55).Transition(riseIn)
+		col.Children(func() {
 			if e.streaming {
 				markdown.Stream(c, e.text, &a.md)
 			} else {
 				markdown.View(c, e.text, &a.md)
 			}
+			a.messageActions(c, t, i, e, col.Hovered() && !e.streaming)
 		})
 	case entryWork:
-		a.workLog(c, key, e)
+		a.workLog(c, key, t, e, t.pausedFor(i))
 	case entryChanges:
 		a.changes(c, key, e)
+	case entryApproval:
+		a.approvalCard(c, key, t, e.approval)
 	}
 }
 
-func (a *app) workLog(c *ui.Context, key string, e entry) {
-	working := strings.HasSuffix(e.took, "…")
+// workLog is the agent's steps of a turn, under a head that says how it
+// went: still working, paused for an approval, or how long it took.
+func (a *app) workLog(c *ui.Context, key string, t *thread, e entry, paused bool) {
+	working := e.took == working
 	open := !a.collapsed[key]
 	ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Clip().
 		Transition(riseIn).Children(func() {
 		if ghost(c, "head", false).Radius(0).Padding(8, 12).Children(func() {
-			if working {
+			switch {
+			case paused:
+				ui.Icon(c, icClock).FontSize(12).TextColor(palette.amber)
+				ui.Text(c, "Paused for approval").FontSize(12).Grow(1)
+			case working:
 				statusMark(c, statusWorking)
-			}
-			if working {
 				shimmerText(c, e.took, 12, palette.muted, palette.text)
-			} else {
+			default:
 				ui.Text(c, e.took).FontSize(12).Grow(1)
 			}
-			ui.Textf(c, "%d steps", len(e.work)).FontSize(11).TextColor(palette.faint)
+			ui.Text(c, plural(len(e.work), "step")).FontSize(11).TextColor(palette.faint)
 			chevron(c, open)
 		}).Clicked() {
 			a.collapsed[key] = open
@@ -302,28 +323,69 @@ func (a *app) workLog(c *ui.Context, key string, e entry) {
 		if !open {
 			return
 		}
-		ui.Column(c).Key("steps").Padding(6, 12, 10).Gap(6).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).
+		ui.Column(c).Key("steps").Padding(6, 8, 10).Gap(2).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).
 			ClipY().Transition(fold).Children(func() {
 			for i, w := range e.work {
 				// Each step the agent takes unfolds below the last.
-				ui.Row(c).Key(i).Gap(8).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
-					icon := icFile
-					switch w.kind {
-					case "command":
-						icon = icTerminal
-					case "edit":
-						icon = icPencil
-					case "search":
-						icon = icSearch
-					}
-					ui.Icon(c, icon).FontSize(12).TextColor(palette.faint)
-					ui.Text(c, w.label).FontSize(12).TextColor(palette.muted).SingleLine().Width(64)
-					ui.Text(c, w.detail).FontSize(12).Font("monospace").SingleLine().Shrink(1)
-					counts(c, w.add, w.del)
-				})
+				a.step(c, t, i, w)
 			}
 		})
 	})
+}
+
+// step is one of the agent's steps. A command that ran shows how it went,
+// and what it printed when it failed. An edit of a file the diff shows
+// opens it there.
+func (a *app) step(c *ui.Context, t *thread, i int, w workItem) {
+	icon := icFile
+	switch w.kind {
+	case "command":
+		icon = icTerminal
+	case "edit":
+		icon = icPencil
+	case "search":
+		icon = icSearch
+	}
+	file := -1
+	add, del := w.add, w.del
+	if w.kind == "edit" {
+		file = slices.IndexFunc(t.changed(), func(f fileChange) bool { return f.path == w.detail })
+		if _, known := fileTexts[w.detail]; known {
+			// The counts are the diff's own, where there is one.
+			add, del = a.diffStats(w.detail)
+		}
+	}
+	var row ui.Element
+	if file >= 0 {
+		row = ghost(c, i, false).Padding(2, 4).Radius(5).Gap(8).ClipY().Transition(fold)
+	} else {
+		row = ui.Row(c).Key(i).Padding(2, 4).Radius(5).Gap(8).AlignItems(ui.Center).ClipY().Transition(fold)
+	}
+	if row.Children(func() {
+		ui.Icon(c, icon).FontSize(12).TextColor(palette.faint)
+		ui.Text(c, w.label).FontSize(12).TextColor(palette.muted).SingleLine().Width(64)
+		ui.Text(c, w.detail).FontSize(12).Font("monospace").SingleLine().Shrink(1).TextColor(palette.text)
+		counts(c, add, del)
+		ui.Spacer(c)
+		switch {
+		case w.kind == "command" && w.took != "":
+			mark, color := "✓", palette.green
+			if w.exit != 0 {
+				mark, color = "✗", palette.red
+			}
+			ui.Textf(c, "%s %d", mark, w.exit).FontSize(11.5).Font("monospace").TextColor(color)
+			ui.Textf(c, "· %s", w.took).FontSize(11.5).Font("monospace").TextColor(palette.faint)
+		case file >= 0 && row.Hovered():
+			ui.Text(c, "Open in diff").FontSize(11.5).TextColor(palette.muted)
+			ui.Icon(c, icExternal).FontSize(11).TextColor(palette.muted)
+		}
+	}).Clicked() && file >= 0 {
+		a.showDiff, a.showPreview, a.diffFile, a.panelsJump = true, false, file, false
+	}
+	if w.exit != 0 && w.output != "" {
+		ui.Text(c, w.output).Selectable().FontSize(11.5).Font("monospace").LineHeight(1.5).TextColor(palette.muted).
+			Margin(2, 0, 4, 24).Padding(6, 10).Radius(6).Background(palette.bg).Border(1, palette.border)
+	}
 }
 
 func counts(c *ui.Context, add, del int) {
@@ -344,7 +406,7 @@ func (a *app) changes(c *ui.Context, key string, e entry) {
 	}
 	ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.surface).Transition(riseIn).Children(func() {
 		ui.Row(c).Padding(8, 8, 8, 12).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
-			ui.Textf(c, "%d files changed", len(e.files)).FontSize(12).FontWeight(500)
+			ui.Text(c, plural(len(e.files), "file")+" changed").FontSize(12).FontWeight(500)
 			counts(c, add, del)
 			ui.Spacer(c)
 			if ghost(c, "view-diff", false).Children(func() {
@@ -429,8 +491,11 @@ func (a *app) composer(c *ui.Context, t *thread) {
 						OnPaste(a.onPaste)
 					return
 				}
-				ui.TextArea(c.Key("draft"), &a.draft).
-					Placeholder("Ask anything, @tag files/folders, or use / to show available commands").
+				placeholder := "Ask anything, @tag files/folders, or use / to show available commands"
+				if t.pending() != nil {
+					placeholder = "Reply to steer, or answer the approval above"
+				}
+				ui.TextArea(c.Key("draft"), &a.draft).Placeholder(placeholder).
 					Lines(2, 10).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).
 					Padding(14, 16, 4).AutoFocus().OnPaste(a.onPaste).OnTextKey(a.suggestKey)
 				ui.Row(c).Key("controls").Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
@@ -498,8 +563,7 @@ func (a *app) sendButton(c *ui.Context, t *thread) {
 	})
 	if send.Clicked() || c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		if working {
-			t.status = statusIdle
-			t.stop.Store(true)
+			t.stopTurn()
 		} else {
 			a.send(t)
 		}
@@ -522,7 +586,7 @@ func (a *app) send(t *thread) {
 	if text == "" && len(a.attachments) == 0 {
 		return
 	}
-	if len(t.entries) == 0 {
+	if len(t.entries) == 0 && t.title == untitled {
 		t.title = text
 		if t.title == "" {
 			t.title = a.attachments[0].name
@@ -535,33 +599,67 @@ func (a *app) send(t *thread) {
 	a.listFor(t).ScrollToEnd()
 	t.entries = append(t.entries, entry{kind: entryUser, text: text, attachments: a.attachments})
 	a.attachments = nil
-	// The thread goes to Working while the agent runs, out of the
-	// snoozed and settled ones.
-	t.status, t.age, t.settled, t.snoozed = statusWorking, "now", false, ""
-	t.stop.Store(false)
+	a.run(t)
+}
 
-	s := scripts[replyCount%len(scripts)]
-	replyCount++
-	t.entries = append(t.entries, entry{kind: entryWork, took: "Working…"})
-	work := len(t.entries) - 1
-	if a.win == nil { // in tests, all at once
-		t.entries[work].work, t.entries[work].took = s.steps, "Worked for 3s"
-		t.entries = append(t.entries, entry{kind: entryAssistant, text: s.reply})
-		t.finish()
-		return
+// run has the agent take its turn on the thread as it stands. The thread
+// goes to Working while it does, out of the snoozed and settled ones. A
+// message sent while an approval waits is the answer instead.
+func (a *app) run(t *thread) {
+	if ap := t.pending(); ap != nil {
+		ap.decision = superseded
 	}
-	go func() {
+	t.startTurn()
+	a.play(t, scripts[replyCount%len(scripts)])
+	replyCount++
+}
+
+// turnRunner is how a canned turn runs: start runs it, sleep waits
+// between its steps, and update posts a change to the UI thread. The
+// window's are a goroutine, time.Sleep and Window.Update. The tests'
+// run the turn inline, on the UI thread, in no time.
+type turnRunner struct {
+	start  func(func())
+	sleep  func(time.Duration)
+	update func(func())
+}
+
+// inlineTurns plays a turn at once, where it's started.
+var inlineTurns = &turnRunner{
+	start:  func(fn func()) { fn() },
+	sleep:  func(time.Duration) {},
+	update: func(fn func()) { fn() },
+}
+
+// play runs a canned turn: the agent's steps arrive one by one, then its
+// reply streams in. There is no agent. The turn is live until the thread
+// moves on to another, or is stopped: after that it writes nothing, as
+// the entries it knew may be cut.
+func (a *app) play(t *thread, s script) {
+	t.entries = append(t.entries, entry{kind: entryWork, took: working})
+	work := len(t.entries) - 1
+	id := t.turn.Add(1)
+	live := func() bool { return t.turn.Load() == id }
+	// post runs fn on the UI thread, while the turn is live there.
+	post := func(fn func()) {
+		a.turns.update(func() {
+			if live() {
+				fn()
+			}
+		})
+	}
+	a.turns.start(func() {
 		started := time.Now()
 		for _, step := range s.steps {
-			if t.stop.Load() {
-				break
+			a.turns.sleep(time.Duration(500+rand.IntN(500)) * time.Millisecond)
+			if !live() {
+				return
 			}
-			time.Sleep(time.Duration(500+rand.IntN(500)) * time.Millisecond)
-			a.win.Update(func() { t.entries[work].work = append(t.entries[work].work, step) })
+			post(func() { t.entries[work].work = append(t.entries[work].work, step) })
 		}
-		time.Sleep(400 * time.Millisecond)
+		a.turns.sleep(400 * time.Millisecond)
 		reply := 0
-		a.win.Update(func() {
+		post(func() {
 			t.entries[work].took = fmt.Sprintf("Worked for %ds", int(time.Since(started).Seconds()))
 			t.entries = append(t.entries, entry{kind: entryAssistant, streaming: true})
 			reply = len(t.entries) - 1
@@ -573,20 +671,18 @@ func (a *app) send(t *thread) {
 			}
 			i += n
 			chunk := s.reply[:i]
-			time.Sleep(time.Duration(10+rand.IntN(25)) * time.Millisecond)
-			if t.stop.Load() {
-				break
+			a.turns.sleep(time.Duration(10+rand.IntN(25)) * time.Millisecond)
+			if !live() {
+				return
 			}
-			a.win.Update(func() { t.entries[reply].text = chunk })
+			post(func() { t.entries[reply].text = chunk })
 		}
-		a.win.Update(func() {
+		post(func() {
 			t.entries[reply].streaming = false
-			if t.status == statusWorking {
-				t.finish()
-				a.notifyFinished(t)
-			}
+			t.finish()
+			a.notifyFinished(t)
 		})
-	}()
+	})
 }
 
 func (a *app) terminal(c *ui.Context, p *project) {
@@ -595,10 +691,11 @@ func (a *app) terminal(c *ui.Context, p *project) {
 	if s != nil {
 		title = s.Title()
 	}
-	ui.Column(c).Height(220).Background(ui.Hex("#08080a")).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
-		ui.Row(c).Padding(4, 8, 4, 12).Gap(6).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(ui.RGBA(255, 255, 255, 0.08)).Children(func() {
-			ui.Icon(c, icTerminal).FontSize(12).TextColor(darkColors.muted)
-			ui.Text(c, title).FontSize(11.5).TextColor(darkColors.muted).SingleLine().Shrink(1)
+	th := a.theme.terminal()
+	ui.Column(c).Height(220).Background(th.Background).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
+		ui.Row(c).Padding(4, 8, 4, 12).Gap(6).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
+			ui.Icon(c, icTerminal).FontSize(12).TextColor(palette.muted)
+			ui.Text(c, title).FontSize(11.5).TextColor(palette.muted).SingleLine().Shrink(1)
 			ui.Spacer(c)
 			if iconButton(c, "close-terminal", icX, "Close terminal", false).Padding(3).Clicked() {
 				a.showTerminal = false
@@ -608,27 +705,30 @@ func (a *app) terminal(c *ui.Context, p *project) {
 	})
 }
 
-// cannedTerminal is the drawer's output where no shell runs, as in tests.
+// cannedTerminal is the drawer's output where no shell runs, as in tests,
+// in the terminal's colors: its text, its dim text and its green.
 func (a *app) cannedTerminal(c *ui.Context) {
+	th := a.theme.terminal()
+	text, dim, green := th.Foreground, th.Foreground.Alpha(0.6), th.Palette[2]
 	ui.Scroll(c).Grow(1).Padding(8, 12).Gap(2).Font("monospace").FontSize(12).Children(func() {
 		for _, l := range []struct {
 			text string
 			col  ui.Color
 		}{
-			{"~/Projects/t3code (t3code/sidebar-sort) $ bun run typecheck", darkColors.text},
-			{"$ tsc --noEmit -p apps/web", darkColors.muted},
-			{"✓ No type errors", darkColors.green},
-			{"~/Projects/t3code (t3code/sidebar-sort) $ bun run test -- Sidebar", darkColors.text},
-			{" ✓ Sidebar > sorts threads by updatedAt (4ms)", darkColors.green},
-			{" ✓ Sidebar > collapses a project (2ms)", darkColors.green},
-			{" Test Files  1 passed (1)", darkColors.muted},
+			{"~/Projects/t3code (t3code/sidebar-sort) $ bun run typecheck", text},
+			{"$ tsc --noEmit -p apps/web", dim},
+			{"✓ No type errors", green},
+			{"~/Projects/t3code (t3code/sidebar-sort) $ bun run test -- Sidebar", text},
+			{" ✓ Sidebar > sorts threads by updatedAt (4ms)", green},
+			{" ✓ Sidebar > collapses a project (2ms)", green},
+			{" Test Files  1 passed (1)", dim},
 		} {
 			ui.Text(c, l.text).TextColor(l.col).NoWrap()
 		}
 		ui.Row(c).Children(func() {
-			ui.Text(c, "~/Projects/t3code (t3code/sidebar-sort) $ ").TextColor(darkColors.text).NoWrap()
+			ui.Text(c, "~/Projects/t3code (t3code/sidebar-sort) $ ").TextColor(text).NoWrap()
 			caret := ui.Box(c).Size(7, 14)
-			caret.Background(darkColors.text).Opacity(caret.Loop("blink", time.Second, blink))
+			caret.Background(text).Opacity(caret.Loop("blink", time.Second, blink))
 		})
 	})
 }
@@ -638,4 +738,12 @@ func blink(t float32) float32 {
 		return 1
 	}
 	return 0
+}
+
+// plural counts things: "1 step", "2 steps".
+func plural(n int, what string) string {
+	if n == 1 {
+		return "1 " + what
+	}
+	return fmt.Sprintf("%d %ss", n, what)
 }

@@ -21,18 +21,29 @@ func TestShot(t *testing.T) {
 		t.Skip()
 	}
 	a := newApp()
+	if id := os.Getenv("THREAD"); id != "" {
+		a.selected = id
+	}
+	if d := os.Getenv("DECIDE"); d != "" {
+		_, th := a.current()
+		a.decide(th, map[string]decision{"allow": allowed, "deny": denied}[d])
+	}
 	a.showDiff = os.Getenv("DIFF") != ""
 	if os.Getenv("SPLIT") != "" {
 		a.showDiff, a.diffLayout = true, editor.DiffSplit
 	}
 	a.showTerminal = os.Getenv("TERM2") != ""
-	a.settings.theme = 2
+	a.settings.theme = "Dark"
 	if os.Getenv("LIGHT") != "" {
-		a.settings.theme = 1
+		a.settings.theme = "Light"
+	}
+	if name := os.Getenv("THEME"); name != "" {
+		a.settings.theme = name
 	}
 	if v := os.Getenv("TINT"); v != "" {
 		fmt.Sscan(v, &a.settings.vibrancy)
 	}
+	a.settings.tintPanels = os.Getenv("PANELS") != ""
 	if p := os.Getenv("PAGE"); p != "" {
 		a.router.Push(p)
 	}
@@ -43,12 +54,26 @@ func TestShot(t *testing.T) {
 	tt := ui.NewTester(a.view, w, 860)
 	if os.Getenv("CMDK") != "" {
 		a.openCommandPalette()
+		a.cmdkQuery = os.Getenv("CMDKQ")
 	}
 	if e := os.Getenv("PICKER"); e != "" {
 		a.pickerOpen, a.effort, a.fast = true, e, os.Getenv("FAST") != ""
 	}
 	tt.Frame()
 	tt.Advance(time.Second)
+	if id := os.Getenv("RENAME"); id != "" {
+		// Renaming that thread, after the composer took the first focus.
+		a.renaming, a.renameDraft = id, "Websocket reconnect loop"
+		tt.Frame()
+	}
+	if s := os.Getenv("HOVER"); s != "" {
+		r, ok := tt.Find(s)
+		if !ok {
+			t.Fatalf("no %q to point at", s)
+		}
+		tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		tt.Advance(time.Second)
+	}
 	if ms := os.Getenv("HIDE"); ms != "" {
 		// Partway through hiding the sidebar.
 		d, _ := time.ParseDuration(ms)

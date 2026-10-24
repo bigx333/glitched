@@ -18,8 +18,12 @@ func (a *app) installMenu() {
 			}
 		}
 	}
-	theme := func(i int) func(*mygo.MenuItem, *mygo.Window) {
-		return do(func() { a.settings.theme = i })
+	theme := func(name string) func(*mygo.MenuItem, *mygo.Window) {
+		return do(func() { a.settings.theme = name })
+	}
+	var appearance []*mygo.MenuItem
+	for _, name := range themeNames() {
+		appearance = append(appearance, &mygo.MenuItem{Label: name, Type: mygo.MenuItemRadio, Checked: a.settings.theme == name, Click: theme(name)})
 	}
 	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
 		{Role: mygo.RoleAppMenu},
@@ -41,11 +45,7 @@ func (a *app) installMenu() {
 			{Label: "Toggle Diff", Accelerator: "CmdOrCtrl+D", Click: do(func() { a.showDiff, a.panelsJump = !a.showDiff, true })},
 			{Label: "Toggle Preview", Accelerator: "CmdOrCtrl+Shift+P", Click: do(func() { a.togglePreview(); a.panelsJump = true })},
 			mygo.Separator(),
-			{Label: "Appearance", Submenu: []*mygo.MenuItem{
-				{Label: "System", Type: mygo.MenuItemRadio, Checked: a.settings.theme == 0, Click: theme(0)},
-				{Label: "Light", Type: mygo.MenuItemRadio, Checked: a.settings.theme == 1, Click: theme(1)},
-				{Label: "Dark", Type: mygo.MenuItemRadio, Checked: a.settings.theme == 2, Click: theme(2)},
-			}},
+			{Label: "Appearance", Submenu: appearance},
 			mygo.Separator(),
 			{Role: mygo.RoleToggleFullScreen},
 		}},

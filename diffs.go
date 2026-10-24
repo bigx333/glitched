@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
@@ -17,7 +18,84 @@ import (
 var fileTexts = map[string][2]string{
 	"apps/web/src/components/Sidebar.tsx":     {sidebarBefore, sidebarAfter},
 	"apps/web/src/components/ChevronIcon.tsx": {"", chevronAfter},
+	"apps/desktop/src/terminal/resize.ts":     {resizeBefore, resizeAfter},
+	"apps/server/src/terminal/pty.ts":         {ptyBefore, ptyAfter},
 }
+
+const ptyBefore = `import { spawn } from "node-pty";
+
+export class Pty {
+  private proc = spawn(shell(), [], { cols: 80, rows: 24 });
+
+  resize(cols: number, rows: number) {
+    this.proc.resize(cols, rows);
+  }
+
+  write(data: string) {
+    this.proc.write(data);
+  }
+}
+`
+
+const ptyAfter = `import { spawn } from "node-pty";
+import { rafThrottle } from "../lib/raf";
+
+export class Pty {
+  private proc = spawn(shell(), [], { cols: 80, rows: 24 });
+
+  // One resize per animation frame: the observer asks for one on every
+  // pixel of a drag, and each resize repaints the whole terminal.
+  private readonly resizeNow = rafThrottle((cols: number, rows: number) => {
+    this.proc.resize(cols, rows);
+  });
+
+  resize(cols: number, rows: number) {
+    this.resizeNow(cols, rows);
+  }
+
+  write(data: string) {
+    this.proc.write(data);
+  }
+}
+`
+
+const resizeBefore = `import { pty } from "./pty";
+
+export function watchResize(el: HTMLElement) {
+  const observer = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const { cols, rows } = measure(entry.contentRect);
+      pty.resize(cols, rows);
+    }
+  });
+  observer.observe(el);
+  return () => observer.disconnect();
+}
+`
+
+const resizeAfter = `import { pty } from "./pty";
+import { rafThrottle } from "../lib/raf";
+
+// One resize per frame: the observer fires on every pixel of a drag,
+// and each resize repaints the whole terminal.
+const resize = rafThrottle((cols: number, rows: number) => {
+  pty.resize(cols, rows);
+});
+
+export function watchResize(el: HTMLElement) {
+  const observer = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const { cols, rows } = measure(entry.contentRect);
+      resize(cols, rows);
+    }
+  });
+  observer.observe(el);
+  return () => {
+    observer.disconnect();
+    resize.cancel();
+  };
+}
+`
 
 const sidebarBefore = `import { useState } from "react";
 import { SidebarGroup, SidebarGroupLabel } from "./ui/sidebar";
@@ -122,15 +200,46 @@ func reviewButton(c *ui.Context, label string, primary bool) ui.Element {
 		Background(palette.surface).Border(1, palette.border).TextColor(palette.text).
 		Shadow(0, 2, 6, 0, ui.RGBA(0, 0, 0, 0.25)).Transition(hoverFade)
 	if primary {
-		b.Background(darkColors.green.Mix(ui.Hex("#000000"), 0.35)).Border(1, darkColors.green.Alpha(0.6)).TextColor(ui.Hex("#ffffff"))
-	}
-	if b.Hovered() {
-		b.Background(palette.surface.Mix(palette.text, 0.1))
-		if primary {
-			b.Background(darkColors.green.Mix(ui.Hex("#000000"), 0.2))
+		shade := float32(0.35)
+		if b.Hovered() {
+			shade = 0.2
 		}
+		bg := palette.green.Mix(ui.Hex("#000000"), shade)
+		b.Background(bg).Border(1, palette.green.Alpha(0.6)).TextColor(onColor(bg))
+	} else if b.Hovered() {
+		b.Background(palette.surface.Mix(palette.text, 0.1))
 	}
 	return b.Children(func() { ui.Text(c, label).FontSize(11.5).FontWeight(500) })
+}
+
+// onColor is the color of text on bg: white or near black, whichever
+// contrasts more, as a theme's green may be dark or light.
+func onColor(bg ui.Color) ui.Color {
+	white, black := ui.Hex("#ffffff"), ui.Hex("#111114")
+	if contrast(white, bg) >= contrast(black, bg) {
+		return white
+	}
+	return black
+}
+
+// contrast is the WCAG contrast ratio of two colors.
+func contrast(a, b ui.Color) float64 {
+	la, lb := luminance(a), luminance(b)
+	if la < lb {
+		la, lb = lb, la
+	}
+	return (la + 0.05) / (lb + 0.05)
+}
+
+func luminance(c ui.Color) float64 {
+	lin := func(v uint8) float64 {
+		s := float64(v) / 255
+		if s <= 0.03928 {
+			return s / 12.92
+		}
+		return math.Pow((s+0.055)/1.055, 2.4)
+	}
+	return 0.2126*lin(c.R) + 0.7152*lin(c.G) + 0.0722*lin(c.B)
 }
 
 // diffStats counts the lines a file's change adds and deletes, as its diff
@@ -143,10 +252,7 @@ func (a *app) diffStats(path string) (add, del int) {
 }
 
 func (a *app) diffPanel(c *ui.Context, t *thread) {
-	var files []fileChange
-	for _, e := range t.entries {
-		files = append(files, e.files...)
-	}
+	files := t.changed()
 	ui.Column(c).Width(a.diffWidth()).FillHeight().Children(func() {
 		bar := c.TitleBar()
 		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 14).Gap(8).AlignItems(ui.Center)
@@ -154,17 +260,9 @@ func (a *app) diffPanel(c *ui.Context, t *thread) {
 			ui.Text(c, "Changes").FontWeight(600)
 			ui.Textf(c, "%d", len(files)).FontSize(11).TextColor(palette.muted).Padding(0, 6).Radius(999).Background(palette.hover)
 			ui.Spacer(c)
-			// The segments' order, Unified then Split, is not the
-			// layouts' own (DiffSplit is 0).
-			layout := 0
-			if a.diffLayout == editor.DiffSplit {
-				layout = 1
-			}
-			if ui.Segmented(c, &layout, "Unified", "Split").Label("Diff layout").Changed() {
-				a.diffLayout = editor.DiffUnified
-				if layout == 1 {
-					a.diffLayout = editor.DiffSplit
-				}
+			a.layoutSwitch(c)
+			if iconButton(c, "wrap", icWrap, "Wrap long lines", a.diffWrap).Clicked() {
+				a.diffWrap = !a.diffWrap
 			}
 			if iconButton(c, "close-diff", icX, "Close diff", false).Clicked() {
 				a.showDiff = false
@@ -179,14 +277,7 @@ func (a *app) diffPanel(c *ui.Context, t *thread) {
 			a.diffFile = min(a.diffFile, len(files)-1)
 			ui.Column(c).Padding(6).Gap(1).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
 				for i, f := range files {
-					if row(c, f.path, i == a.diffFile).Padding(5, 8).Children(func() {
-						ui.Icon(c, icFile).FontSize(12)
-						ui.Text(c, f.path).FontSize(12).Font("monospace").SingleLine().Grow(1).Shrink(1)
-						add, del := a.diffStats(f.path)
-						counts(c, add, del)
-					}).Clicked() {
-						a.diffFile = i
-					}
+					a.fileRow(c, i, f)
 				}
 			})
 			path := files[a.diffFile].path
@@ -195,19 +286,124 @@ func (a *app) diffPanel(c *ui.Context, t *thread) {
 				return
 			}
 			d := a.diffFor(path)
-			d.Layout = a.diffLayout
+			d.Layout, d.Wrap = a.layout(), a.diffWrap
 			a.hunkBar(c, d)
 			editor.DiffView(c.Key(path), d).Grow(1).FillWidth()
 		})
 	})
 }
 
-// hunkBar counts the file's changes, "2 of 5", and steps between them.
+// splitWidth is the least width side by side reads at: two columns of
+// code, each wide enough for a line.
+const splitWidth = 800
+
+// splitFits reports whether there is room for the panel splitWidth wide
+// beside the chat.
+func (a *app) splitFits() bool {
+	return a.roomBeside-minChatWidth >= splitWidth
+}
+
+// layout is the diff's layout as shown: the one chosen, but Unified
+// while Split is short of room. The choice keeps, for when the room is
+// back.
+func (a *app) layout() editor.DiffLayout {
+	if a.diffLayout == editor.DiffSplit && !a.splitFits() {
+		return editor.DiffUnified
+	}
+	return a.diffLayout
+}
+
+// layoutSwitch chooses Unified or Split. Short of room for Split, its
+// segment is dimmed and says so.
+func (a *app) layoutSwitch(c *ui.Context) {
+	fits := a.splitFits()
+	ui.Row(c).Radius(7).Border(1, palette.border).Padding(2).Gap(2).Children(func() {
+		segment := func(key, label string, layout editor.DiffLayout, enabled bool) {
+			// A disabled button shows no tooltip of its own: the box
+			// around it says why it is.
+			box := ui.Box(c).Key(key + "-box")
+			if !enabled {
+				box.Tooltip(fmt.Sprintf("Split needs %d DIPs of room", splitWidth))
+			}
+			box.Children(func() {
+				if ghost(c, key, a.layout() == layout).Padding(3, 9).Disabled(!enabled).
+					Children(func() { ui.Text(c, label).FontSize(11.5) }).Clicked() {
+					a.diffLayout = layout
+				}
+			})
+		}
+		segment("unified", "Unified", editor.DiffUnified, true)
+		segment("split", "Split", editor.DiffSplit, fits)
+	})
+}
+
+// fileRow is a changed file in the panel's list; pointed at, its actions:
+// mark it reviewed, revert it, copy its path, open it in the editor. A
+// reviewed file shows a filled check.
+func (a *app) fileRow(c *ui.Context, i int, f fileChange) {
+	r := row(c, f.path, i == a.diffFile).Padding(3, 4, 3, 8).Height(28).Label("Diff of " + f.path)
+	_, known := fileTexts[f.path]
+	hovered := r.Hovered()
+	if r.Children(func() {
+		icon := icFile
+		if a.reviewed[f.path] {
+			icon = icCheckCirc
+		}
+		ui.Icon(c, icon).FontSize(12)
+		ui.Text(c, f.path).FontSize(12).Font("monospace").SingleLine().Grow(1).Shrink(1)
+		if !hovered {
+			add, del := a.diffStats(f.path)
+			counts(c, add, del)
+			return
+		}
+		ui.Row(c).Gap(0).Children(func() {
+			if iconButton(c, "reviewed", icCheckCirc, "Mark reviewed", a.reviewed[f.path]).Padding(3).Clicked() {
+				a.reviewed[f.path] = !a.reviewed[f.path]
+			}
+			if iconButton(c, "revert", icUndo, "Revert file", false).Padding(3).Disabled(!known).Clicked() {
+				d := a.diffFor(f.path)
+				for len(d.Hunks()) > 0 {
+					d.Revert(0)
+				}
+			}
+			if iconButton(c, "copy-path", icCopy, "Copy path", false).Padding(3).Clicked() {
+				c.WriteClipboard(f.path)
+				c.AddToast(ui.Toast{Title: "Copied", Description: f.path})
+			}
+			if iconButton(c, "open-file", icExternal, "Open in editor", false).Padding(3).Clicked() {
+				c.AddToast(ui.Toast{Title: "Opened in Cursor", Description: f.path})
+			}
+		})
+	}).Clicked() {
+		a.diffFile = i
+	}
+}
+
+// hunkBar counts the file's changes, "2 of 5", steps between them, and
+// accepts the one in view, as the change's own Accept does. ⌘[ and ⌘]
+// step from the keyboard, and ⇧⌘↩ accepts.
 func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 	n := len(d.Hunks())
 	i, _ := d.CurrentHunk()
+	prev := func() { d.GoToHunk(max(i-1, 0)) }
+	next := func() { d.GoToHunk(min(i+1, n-1)) }
+	keep := func() {
+		if i >= 0 {
+			d.Accept(i)
+		}
+	}
+	if n > 0 {
+		switch {
+		case c.Shortcut(ui.Cmd, ui.KeyBracketLeft):
+			prev()
+		case c.Shortcut(ui.Cmd, ui.KeyBracketRight):
+			next()
+		case c.Shortcut(ui.Cmd|ui.Shift, ui.KeyEnter):
+			keep()
+		}
+	}
 	ui.Row(c).Padding(4, 8, 4, 14).Gap(4).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
-		label := fmt.Sprintf("%d changes", n)
+		label := plural(n, "change")
 		switch {
 		case n == 0:
 			label = "All changes reviewed"
@@ -215,11 +411,18 @@ func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 			label = fmt.Sprintf("%d of %d", i+1, n)
 		}
 		ui.Text(c, label).FontSize(11.5).TextColor(palette.muted).Grow(1)
-		if iconButton(c, "prev-hunk", icChevronUp, "Previous change", false).Padding(3).Disabled(n == 0).Clicked() {
-			d.GoToHunk(max(i-1, 0))
+		if ghost(c, "keep-hunk", false).Padding(3, 6).Disabled(n == 0).Label("Accept change").Children(func() {
+			ui.Icon(c, icCheck).FontSize(12)
+			ui.Text(c, "Accept").FontSize(11.5)
+			kbd(c, "⇧⌘↩")
+		}).Clicked() {
+			keep()
 		}
-		if iconButton(c, "next-hunk", icChevronD, "Next change", false).Padding(3).Disabled(n == 0).Clicked() {
-			d.GoToHunk(min(i+1, n-1))
+		if iconButton(c, "prev-hunk", icChevronUp, "Previous change  ⌘[", false).Padding(3).Disabled(n == 0).Clicked() {
+			prev()
+		}
+		if iconButton(c, "next-hunk", icChevronD, "Next change  ⌘]", false).Padding(3).Disabled(n == 0).Clicked() {
+			next()
 		}
 	})
 }
@@ -230,8 +433,8 @@ func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 // minChatWidth.
 func (a *app) diffWidth() float32 {
 	share, lo, hi := float32(0.42), float32(380), float32(520)
-	if a.diffLayout == editor.DiffSplit {
-		share, lo, hi = 0.58, 480, 820
+	if a.layout() == editor.DiffSplit {
+		share, lo, hi = 0.58, splitWidth, 900
 	}
 	return panelWidth(a.roomBeside, share, lo, hi)
 }
