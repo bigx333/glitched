@@ -18,6 +18,7 @@ type Transcript struct {
 	Entries  []Entry
 	Queue    []*UserEntry
 	Cursor   api.Cursor // the last event folded in
+	Ended    time.Time  // when the last turn folded in ended
 	starting api.ID     // the run admitted and not yet started, stopped or ended
 }
 
@@ -179,6 +180,7 @@ func (t *Transcript) apply(e api.Event) {
 		t.end(b.Run, Uncertain, e.At)
 	case api.TurnEnded:
 		t.end(b.Run, Cancelled, e.At)
+		t.Ended = e.At
 	}
 }
 

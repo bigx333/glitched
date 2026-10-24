@@ -30,14 +30,14 @@ func (s *shell) Title() string {
 	return s.title
 }
 
-// shellFor returns the project's shell, starting it if it has none or its
-// last one exited. It returns nil where there is no window, as in tests,
-// which keep to the drawer's canned output rather than start shells.
-func (a *app) shellFor(p *project) (*shell, error) {
+// shellFor returns the workspace's shell, starting it if it has none or
+// its last one exited. It returns nil where there is no window, as in
+// tests, which keep to the drawer's canned output rather than start shells.
+func (a *app) shellFor(workspace string) (*shell, error) {
 	if a.win == nil {
 		return nil, nil
 	}
-	if s := a.shells[p.id]; s != nil {
+	if s := a.shells[workspace]; s != nil {
 		select {
 		case <-s.term.Done():
 			s.term.Close() // exited: start another
@@ -45,9 +45,9 @@ func (a *app) shellFor(p *project) (*shell, error) {
 			return s, nil
 		}
 	}
-	s := &shell{title: p.name}
+	s := &shell{title: filepath.Base(workspace)}
 	term, err := terminal.New(terminal.Options{
-		Dir:  projectDir(p.path),
+		Dir:  projectDir(workspace),
 		Font: terminal.Font{Family: "ui-monospace, Menlo, monospace", Size: 12},
 		// The drawer is dark whatever the theme, as T3 Code's is.
 		Theme: drawerTheme(),
@@ -63,7 +63,7 @@ func (a *app) shellFor(p *project) (*shell, error) {
 		return nil, err
 	}
 	s.term = term
-	a.shells[p.id] = s
+	a.shells[workspace] = s
 	return s, nil
 }
 
@@ -75,8 +75,8 @@ func (a *app) closeShells() {
 	}
 }
 
-// projectDir expands a project's path, as "~/Projects/x"; one that does not
-// exist, as the mock projects' may not, is the home directory instead.
+// projectDir expands a workspace's path, as "~/Projects/x"; one that does
+// not exist here is the home directory instead.
 func projectDir(path string) string {
 	home, _ := os.UserHomeDir()
 	if rest, ok := strings.CutPrefix(path, "~/"); ok {

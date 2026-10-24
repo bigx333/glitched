@@ -6,13 +6,15 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+
+	"glitched/internal/api"
 )
 
 // Quick ask is a panel over every app, full-screen ones included, as
 // MyGo's launcher example shows one: a global shortcut opens it from
-// anywhere, without the window; Enter starts a thread in the chosen
-// project with what was typed, and brings the window to it; Escape, or
-// going elsewhere, hides it.
+// anywhere, without the window; Enter starts a thread with what was typed
+// in the chosen project on this machine, or in the home directory, and
+// brings the window to it; Escape, or going elsewhere, hides it.
 
 // quickShortcuts are tried in turn: the first one free is the app's.
 var quickShortcuts = []string{"Alt+Shift+T", "CmdOrCtrl+Alt+Shift+T"}
@@ -73,9 +75,10 @@ func (a *app) toggleQuickAsk() {
 	w, h := q.panel.Size()
 	q.panel.SetPosition(d.WorkArea.X+(d.WorkArea.Width-w)/2, d.WorkArea.Y+(d.WorkArea.Height-h)/3)
 	q.query = ""
-	p, _ := a.current()
-	for i, pr := range a.projects {
-		if pr == p {
+	q.project = 0
+	k := a.projectOf(a.current()).key
+	for i, p := range a.localProjects() {
+		if p.key == k {
 			q.project = i
 		}
 	}
@@ -103,15 +106,15 @@ func (a *app) quickView(c *ui.Context) {
 		})
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			// The project the thread starts in: a click chooses another.
-			for i, p := range a.projects {
+			for i, p := range a.localProjects() {
 				on := i == q.project
-				b := ghost(c, p.id, on).Padding(3, 8, 3, 3).Gap(6).Label(p.name)
+				b := ghost(c, p.key, on).Padding(3, 8, 3, 3).Gap(6).Label(p.name())
 				if !on {
 					b.Opacity(0.6)
 				}
 				if b.Children(func() {
 					projectTile(c, p, 18)
-					ui.Text(c, p.name).FontSize(12)
+					ui.Text(c, p.name()).FontSize(12)
 				}).Clicked() {
 					q.project = i
 				}
@@ -122,16 +125,31 @@ func (a *app) quickView(c *ui.Context) {
 	})
 }
 
+// localProjects are this machine's projects, where quick ask starts its
+// threads.
+func (a *app) localProjects() []*project {
+	var ps []*project
+	for _, p := range a.gather() {
+		if p.key.server == "" {
+			ps = append(ps, p)
+		}
+	}
+	return ps
+}
+
 // startQuickThread starts a thread in the chosen project with the query,
 // sends it, and brings the window to it.
 func (a *app) startQuickThread() {
 	q := &a.quick
-	p := a.projects[q.project]
-	t := &thread{id: "q" + strings.ReplaceAll(a.now.Format("150405.000"), ".", ""), title: "New thread", age: "now", branch: "main"}
-	p.threads = append([]*thread{t}, p.threads...)
-	a.select_(t.id)
+	a.fresh, a.selected = draft{}, api.ID{}
+	if ps := a.localProjects(); q.project < len(ps) {
+		a.fresh.workspace = ps[q.project].key.workspace
+	}
+	if a.router.Path() != "/" {
+		a.router.Push("/")
+	}
 	a.draft = q.query
-	a.send(t)
+	a.send(a.current())
 	q.query = ""
 	if q.panel != nil {
 		q.panel.Hide()

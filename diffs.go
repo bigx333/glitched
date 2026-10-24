@@ -142,9 +142,9 @@ func (a *app) diffStats(path string) (add, del int) {
 	return a.diffFor(path).Stats()
 }
 
-func (a *app) diffPanel(c *ui.Context, t *thread) {
+func (a *app) diffPanel(c *ui.Context, es []entry) {
 	var files []fileChange
-	for _, e := range t.entries {
+	for _, e := range es {
 		files = append(files, e.files...)
 	}
 	ui.Column(c).Width(a.diffWidth()).FillHeight().Children(func() {

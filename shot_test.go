@@ -1,26 +1,37 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"image/png"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
+
+	"glitched/internal/api"
+	"glitched/internal/client"
+	"glitched/internal/daemon"
+	"glitched/internal/provider"
+	"glitched/internal/provider/fake"
 )
 
-// TestShot writes a PNG of the window: SHOT=out.png, with PAGE for a
-// path, DIFF, TERM2, CMDK, LIGHT, PICKER=<effort>, FAST and STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH, TICK=<turn>, TINT=0..1, SCROLLUP, SPLIT, WIDTH=1100, GAG=snooze|settle|undo with AT=350ms for what to show, and HIDE=60ms for
+// TestShot writes a PNG of the window: SHOT=out.png, with SCENE=empty|
+// running|approval|servers|machines for the engines' threads (none
+// started without one), PAGE for a
+// path, DIFF, TERM2, CMDK, LIGHT, FAILED, PICKER=<effort>, FAST and STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH, TICK=<turn>, TINT=0..1, SCROLLUP, SPLIT, WIDTH=1100, GAG=snooze|settle|undo with AT=350ms for what to show, and HIDE=60ms for
 // a frame that long into hiding the sidebar.
 func TestShot(t *testing.T) {
 	out := os.Getenv("SHOT")
 	if out == "" {
 		t.Skip()
 	}
-	a := newApp()
+	a, tt := scene(t, os.Getenv("SCENE"))
 	a.showDiff = os.Getenv("DIFF") != ""
 	if os.Getenv("SPLIT") != "" {
 		a.showDiff, a.diffLayout = true, editor.DiffSplit
@@ -36,11 +47,11 @@ func TestShot(t *testing.T) {
 	if p := os.Getenv("PAGE"); p != "" {
 		a.router.Push(p)
 	}
-	w := 1320
 	if v := os.Getenv("WIDTH"); v != "" {
+		w := 1320
 		fmt.Sscan(v, &w)
+		tt.SetSize(w, 860)
 	}
-	tt := ui.NewTester(a.view, w, 860)
 	if os.Getenv("CMDK") != "" {
 		a.openCommandPalette()
 	}
@@ -59,10 +70,10 @@ func TestShot(t *testing.T) {
 	}
 	if k := os.Getenv("TICK"); k != "" {
 		// The pointer on the turn marker of that index.
-		_, th := a.current()
-		turns := turnsOf(th)
+		es := entriesOf(a.current())
+		turns := turnsOf(es)
 		i := int(k[0] - '0')
-		r, ok := tt.Find("Go to: " + preview(th.entries[turns[i].entry]))
+		r, ok := tt.Find("Go to: " + preview(es[turns[i].entry]))
 		if !ok {
 			t.Fatal("no marker")
 		}
@@ -70,8 +81,7 @@ func TestShot(t *testing.T) {
 		tt.Advance(500 * time.Millisecond)
 	}
 	if os.Getenv("SCROLLUP") != "" {
-		_, th := a.current()
-		a.listFor(th).ScrollTo(0, ui.Start)
+		a.listFor(a.current().id()).ScrollTo(0, ui.Start)
 		tt.Advance(time.Second)
 	}
 	if os.Getenv("ATTACH") != "" {
@@ -106,23 +116,32 @@ func TestShot(t *testing.T) {
 		tt.Frame()
 		tt.Advance(300 * time.Millisecond)
 	}
-	if g := os.Getenv("GAG"); g != "" {
-		// 350ms into an inbox action's joke.
-		t2, t8 := a.projects[0].threads[1], a.projects[2].threads[0]
+	if g := os.Getenv("GAG"); g != "" && len(a.itemsIn(catInbox)) > 0 {
+		// 350ms into an inbox action's joke, on the inbox's first thread.
+		th := a.itemsIn(catInbox)[0].t
 		switch g {
 		case "snooze":
-			t2.snoozed = "Tomorrow"
-			a.rowFx[t2.id] = newGag(gagSnooze, tt.Now(), catInbox)
+			a.backend.SetDisposition(th.env, th.id(), api.Disposition{State: api.Snoozed, Until: morning(tt.Now(), 1)})
+			a.rowFx[th.id()] = newGag(gagSnooze, tt.Now(), catInbox)
 		case "settle":
-			t2.settled = true
-			a.rowFx[t2.id] = newGag(gagSettle, tt.Now(), catInbox)
+			a.backend.SetDisposition(th.env, th.id(), api.Disposition{State: api.Settled})
+			a.rowFx[th.id()] = newGag(gagSettle, tt.Now(), catInbox)
 		case "undo":
-			t8.snoozed = ""
-			a.rowFx[t8.id] = newGag(gagUndo, tt.Now(), catSnoozed)
+			a.rowFx[th.id()] = newGag(gagUndo, tt.Now(), catSnoozed)
 		}
 		tt.Frame()
 		d, _ := time.ParseDuration(os.Getenv("AT"))
 		tt.Advance(d)
+	}
+	if os.Getenv("FAILED") != "" {
+		// The shown thread's settle and a message, failed.
+		th := a.current()
+		boom := errors.New("client: not connected to the engine")
+		th.Pending = append(th.Pending,
+			client.Pending{Command: api.NewID(), Body: api.MessageDispatch{Text: "Also check the staging keys."}, Err: boom},
+			client.Pending{Command: api.NewID(), Body: api.InboxSet{Disposition: api.Disposition{State: api.Settled}}, Err: boom})
+		tt.Frame()
+		tt.Advance(time.Second)
 	}
 	if ms := os.Getenv("STRIKE"); ms != "" {
 		// That far into fast mode's lightning strike.
@@ -134,4 +153,116 @@ func TestShot(t *testing.T) {
 	f, _ := os.Create(out)
 	defer f.Close()
 	png.Encode(f, tt.Image())
+}
+
+// scene is the app showing what SCENE names, from engines the test runs.
+func scene(t *testing.T, name string) (*app, *ui.Tester) {
+	if name == "" {
+		a := newApp(t.TempDir(), func(func()) {})
+		return a, ui.NewTester(a.view, 1320, 860)
+	}
+	var h *harness
+	switch name {
+	case "empty":
+		h = start(t, tempDir(t))
+	case "running":
+		dir := tempDir(t)
+		d := engine(t, daemon.Config{Dir: dir}, stalled{fake.New(midTurn), len(midTurn)})
+		seed(t, d, "/work/mygo", "Markdown table column alignment")
+		seed(t, d, "/work/agent-phone", "SIP re-INVITE handling")
+		id := seed(t, d, "/work/t3code", "Sort sidebar threads by recent activity")
+		if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id,
+			Body: api.MessageDispatch{Text: "Sort the sidebar's threads by recent activity, newest first."}}); err != nil {
+			t.Fatal(err)
+		}
+		h = start(t, dir)
+		h.a.select_(h.thread("Sort sidebar threads by recent activity"))
+		h.until("the turn mid-edit", func() bool { return h.tt.HasText("Edit apps/web/src/components/Sidebar.tsx") })
+	case "approval":
+		h = start(t, tempDir(t))
+		h.a.draft = "Fix the flicker when the terminal resizes on Windows."
+		h.tt.Frame()
+		h.click("Send")
+		h.until("the approval card", func() bool { return h.tt.HasText("Allow edit main.go?") })
+	case "servers":
+		rdir := tempDir(t)
+		token, err := daemon.Pair(rdir, "gui")
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := engine(t, daemon.Config{Dir: rdir, Listen: []string{"127.0.0.1:0"}}, fake.New(fake.Turn(false)))
+		addr := d.Addrs()[0].String()
+		dir := tempDir(t)
+		// Saved as they were when added: the token since revoked, the
+		// address since pointed at devbox.
+		listServers(t, dir,
+			client.Server{Label: "devbox", Addr: addr, Token: token},
+			client.Server{Label: "stranger", Addr: addr, Token: "wrong"},
+			client.Server{Label: "devbox-dns", Addr: addr, Token: token},
+			client.Server{Label: "upgraded", Addr: newer(t), Token: "any"})
+		h = start(t, dir)
+		h.a.router.Push("/settings/servers")
+		h.until("one online, one refused, one a duplicate and one incompatible", func() bool {
+			return h.tt.HasText("Online") && h.tt.HasText("Refused") && h.tt.HasText("Same engine as devbox — remove one") && h.tt.HasText("Incompatible")
+		})
+		h.a.server = client.Server{Label: "devbox-ip", Addr: addr, Token: token}
+		h.tt.Frame()
+		h.click("Add server")
+		h.until("why devbox-ip wasn't added", func() bool { return h.tt.HasText("already listed as devbox") })
+	case "machines":
+		h = machines(t)
+		h.a.select_(h.thread("Rotate the API keys"))
+		h.until("the server's transcript", func() bool { return h.tt.HasText("Which keys are older than 90 days?") })
+	default:
+		t.Fatalf("no scene %q", name)
+	}
+	return h.a, h.tt
+}
+
+// midTurn is a turn that stops mid-edit, as stalled holds it.
+var midTurn = []provider.Event{
+	provider.TextDelta{Text: "The threads come from `useThreads(projectId)`, in the order they were created. "},
+	provider.TextDelta{Text: "I'll sort a copy by `updatedAt` inside `useMemo`, so the store's array isn't mutated in render."},
+	provider.Work{Item: "search-1", Kind: "search", Title: "Searched useThreads in apps/web/src", Status: api.WorkCompleted},
+	provider.Work{Item: "read-1", Kind: "read", Title: "Read apps/web/src/hooks/useThreads.ts", Status: api.WorkCompleted},
+	provider.Work{Item: "edit-1", Kind: "edit", Title: "Edit apps/web/src/components/Sidebar.tsx", Status: api.WorkStarted},
+}
+
+// stalled opens the fake's agents, which play the first n events of a
+// turn and then work on until interrupted.
+type stalled struct {
+	*fake.Adapter
+	n int
+}
+
+func (s stalled) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	g, err := s.Adapter.Open(ctx, spec)
+	return &stalledAgent{Agent: g, left: s.n, stop: make(chan struct{})}, err
+}
+
+type stalledAgent struct {
+	provider.Agent
+	left int // events still to play; only Next's reader counts them
+	once sync.Once
+	stop chan struct{}
+}
+
+func (g *stalledAgent) Next(ctx context.Context) (provider.Event, error) {
+	if g.left == 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-g.stop:
+		}
+	} else {
+		g.left--
+	}
+	return g.Agent.Next(ctx)
+}
+
+func (g *stalledAgent) Do(ctx context.Context, act provider.Action) error {
+	if _, ok := act.(provider.Interrupt); ok {
+		g.once.Do(func() { close(g.stop) })
+	}
+	return g.Agent.Do(ctx, act)
 }

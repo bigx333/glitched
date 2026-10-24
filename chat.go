@@ -1,14 +1,18 @@
 package main
 
 import (
-	"fmt"
-	"math/rand/v2"
+	"encoding/json"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
+
+	"glitched/internal/api"
+	"glitched/internal/client"
 )
 
 const (
@@ -19,10 +23,17 @@ const (
 	composerRoom = 200
 )
 
+// focused is whether the window has the keyboard, as the Tester's does.
+func (a *app) focused() bool { return a.win == nil || a.win.IsFocused() }
+
 func (a *app) chatPage(c *ui.Context) {
-	p, t := a.current()
-	// The thread open is read, as its reply comes in.
-	t.unread = false
+	t := a.current()
+	// What the chat shows is read, up to the last turn its transcript
+	// has, while the window has focus.
+	if a.focused() {
+		a.backend.MarkShown(t.Thread)
+	}
+	es := entriesOf(t)
 	// The layout makes room for a panel at once, so the chat rewraps
 	// once; the panel itself slides a little in from its edge as it fades.
 	panel := func(x, y float32) ui.ElementTransition {
@@ -38,7 +49,7 @@ func (a *app) chatPage(c *ui.Context) {
 			// The header is glass, the window's vibrancy as the sidebar's;
 			// the chat is below it, on the background, and doesn't scroll
 			// under it.
-			a.header(c, p, t)
+			a.header(c, t)
 			pane := a.contentCard(ui.Box(c).Grow(1))
 			a.windBackground(c, pane)
 			pane.Children(func() {
@@ -46,21 +57,22 @@ func (a *app) chatPage(c *ui.Context) {
 					ui.Box(c).Key("wind").Absolute().Top(0).Left(0).Right(0).Bottom(0).PassThrough().Draw(a.windDraw)
 				}
 				a.ambient(c)
-				a.timeline(c, t)
+				a.timeline(c, t, es)
 				// What scrolls fades out under the composer.
 				ui.Box(c).Absolute().Bottom(0).Left(0).Right(0).Height(composerRoom - 40).PassThrough().
 					Material(glass.ScrollEdge{Bottom: true, Background: palette.bg})
 				// Over the edge, which would take its clicks.
-				a.jumpToLatest(c, a.listFor(t))
+				a.jumpToLatest(c, a.listFor(t.id()))
 				a.composer(c, t)
 			})
-			if a.showTerminal {
-				ui.Column(c).Key("terminal").Height(220).Transition(panel(0, 16)).Children(func() { a.terminal(c, p) })
+			// A server's workspace isn't here, for a shell or its changes.
+			if a.showTerminal && t.local() {
+				ui.Column(c).Key("terminal").Height(220).Transition(panel(0, 16)).Children(func() { a.terminal(c, t.View.Workspace) })
 			}
 		})
 		switch {
-		case a.showDiff:
-			ui.Column(c).Key("diff").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.diffPanel(c, t) })
+		case a.showDiff && t.local():
+			ui.Column(c).Key("diff").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.diffPanel(c, es) })
 		case a.showPreview:
 			ui.Column(c).Key("preview").Width(a.previewWidth()).Transition(panel(16, 0)).Children(func() { a.previewPanel(c) })
 		}
@@ -111,7 +123,7 @@ func (a *app) ambient(c *ui.Context) {
 	})
 }
 
-func (a *app) header(c *ui.Context, p *project, t *thread) {
+func (a *app) header(c *ui.Context, t thread) {
 	bar := c.TitleBar()
 	// Clear of the traffic lights as the sidebar slides away from them.
 	left := 16 + bar.Left*(1-a.sidebarOpen)
@@ -126,11 +138,18 @@ func (a *app) header(c *ui.Context, p *project, t *thread) {
 				a.toggleSidebar(false)
 			}
 		}
-		ui.Text(c, t.title).FontWeight(600).SingleLine().Shrink(1).MinWidth(80)
+		ui.Text(c, t.View.Title).FontWeight(600).SingleLine().Shrink(1).MinWidth(80)
 		if !narrow {
-			pill(c, p.name).Shrink(0)
+			pill(c, filepath.Base(t.View.Workspace)).Shrink(0)
+			if len(a.backend.Envs()) > 1 && t.env != nil {
+				a.machinePill(c, t.env)
+			}
 		}
 		ui.Spacer(c)
+		if !t.local() {
+			a.previewButton(c)
+			return
+		}
 
 		headerButton(c, "open").Shrink(0).Label("Open in").Tooltip("Open in").Children(func() {
 			ui.Icon(c, icCode).FontSize(14)
@@ -151,7 +170,7 @@ func (a *app) header(c *ui.Context, p *project, t *thread) {
 				ui.Text(c, "Commit & push").SingleLine()
 			}
 		}).Clicked() {
-			c.AddToast(ui.Toast{Title: "Pushed to origin", Description: t.branch + " · 2 files, +23 −2"})
+			c.AddToast(ui.Toast{Title: "Pushed to origin", Description: filepath.Base(t.View.Workspace) + " · 2 files, +23 −2"})
 		}
 		ui.Row(c).Padding(2).Gap(2).Radius(10).Shrink(0).Children(func() {
 			if iconButton(c, "terminal", icTerminal, "Toggle terminal  ⌘J", a.showTerminal).Clicked() {
@@ -163,12 +182,16 @@ func (a *app) header(c *ui.Context, p *project, t *thread) {
 					a.showPreview = false
 				}
 			}
-			if iconButton(c, "preview", icGlobe, "Toggle preview  ⇧⌘P", a.showPreview).Clicked() {
-				a.togglePreview()
-				a.panelsJump = false
-			}
+			a.previewButton(c)
 		})
 	})
+}
+
+func (a *app) previewButton(c *ui.Context) {
+	if iconButton(c, "preview", icGlobe, "Toggle preview  ⇧⌘P", a.showPreview).Clicked() {
+		a.togglePreview()
+		a.panelsJump = false
+	}
 }
 
 // headerButton is a button of the header's glass bar: a hairline pill,
@@ -191,11 +214,11 @@ func pill(c *ui.Context, label string) ui.Element {
 
 // listFor is the thread's list of entries, kept per thread so that each
 // keeps where it was scrolled to.
-func (a *app) listFor(t *thread) *ui.ListState {
-	l := a.lists[t.id]
+func (a *app) listFor(id api.ID) *ui.ListState {
+	l := a.lists[id]
 	if l == nil {
 		l = &ui.ListState{}
-		a.lists[t.id] = l
+		a.lists[id] = l
 	}
 	return l
 }
@@ -205,22 +228,22 @@ func (a *app) listFor(t *thread) *ui.ListState {
 // reply streams in, gliding, until the user scrolls up; scrolling back to
 // the end follows it again. Each entry is in the middle of a row as wide
 // as the pane, so that the wheel scrolls it wherever the pointer is.
-func (a *app) timeline(c *ui.Context, t *thread) {
-	l := a.listFor(t)
-	l.Key = func(i int) any { return fmt.Sprintf("%s/%d", t.id, i) }
+func (a *app) timeline(c *ui.Context, t thread, es []entry) {
+	l := a.listFor(t.id())
+	l.Key = func(i int) any { return es[i].key }
 	l.FollowEnd = true
 	l.FollowAnimation = &ui.Smooth
-	ui.List(c.Key(t.id), l, len(t.entries), func(i int) {
+	ui.List(c.Key(t.id()), l, len(es), func(i int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, i, t.entries[i]) })
+			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, es[i]) })
 		})
 	}).Fill().Padding(20, 24, composerRoom, markerColumnW+12).Gap(22).Justify(ui.End).
 		ScrollbarInsets(0, 0, composerRoom-40, 0).Children(func() {
-		if len(t.entries) == 0 {
+		if len(es) == 0 {
 			ui.Row(c).Justify(ui.Center).Children(func() { a.emptyState(c) })
 		}
 	})
-	a.turnMarkers(c, t, l)
+	a.turnMarkers(c, es, l)
 }
 
 // jumpToLatest floats a pill over the composer while the user has
@@ -249,19 +272,17 @@ func (a *app) emptyState(c *ui.Context) {
 	})
 }
 
-func (a *app) entry(c *ui.Context, t *thread, i int, e entry) {
-	key := fmt.Sprintf("%s/%d", t.id, i)
+func (a *app) entry(c *ui.Context, t thread, e entry) {
+	key := e.key
 	switch e.kind {
 	case entryUser:
 		ui.Row(c).Key(key).Transition(riseIn).Children(func() {
 			ui.Spacer(c)
 			ui.Column(c).AlignItems(ui.End).Gap(6).MaxWidthPercent(80).Children(func() {
-				if len(e.attachments) > 0 {
-					attachmentChips(c, e.attachments, nil)
-				}
-				if e.text != "" {
-					ui.Text(c, e.text).Selectable().LineHeight(1.5).Padding(10, 14).Radius(16, 16, 4, 16).
-						Background(palette.surface).Border(1, palette.border)
+				ui.Text(c, e.text).Selectable().LineHeight(1.5).Padding(10, 14).Radius(16, 16, 4, 16).
+					Background(palette.surface).Border(1, palette.border)
+				if e.note != "" {
+					a.messageNote(c, t, e)
 				}
 			})
 		})
@@ -277,11 +298,51 @@ func (a *app) entry(c *ui.Context, t *thread, i int, e entry) {
 		a.workLog(c, key, e)
 	case entryChanges:
 		a.changes(c, key, e)
+	case entryRequest:
+		a.requestCard(c, t, e)
+	case entryFailed:
+		ui.Row(c).Key(key).Gap(8).AlignItems(ui.Center).Padding(6, 6, 6, 14).Radius(12).
+			Border(1, palette.red.Alpha(0.35)).Transition(riseIn).Children(func() {
+			ui.Text(c, e.text).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
+			a.failedActions(c, t, e.failed)
+		})
+	}
+}
+
+// messageNote is under a message that hasn't simply been sent: queued,
+// cancelled, or not sent.
+func (a *app) messageNote(c *ui.Context, t thread, e entry) {
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		col := palette.faint
+		if e.failed.Err != nil {
+			col = palette.red
+		}
+		ui.Text(c, e.note).FontSize(11.5).TextColor(col)
+		if e.failed.Err != nil {
+			a.failedActions(c, t, e.failed)
+		}
+	})
+}
+
+// failedActions are a failed command's buttons: Retry, unless sending it
+// again can only fail the same way, and Dismiss.
+func (a *app) failedActions(c *ui.Context, t thread, p client.Pending) {
+	if !p.Terminal() && ghost(c, "retry", false).Padding(2, 8).Children(func() {
+		ui.Icon(c, icRotate).FontSize(12)
+		ui.Text(c, "Retry").FontSize(11.5)
+	}).Clicked() {
+		a.backend.Retry(t.env, t.id(), p.Command)
+	}
+	if ghost(c, "dismiss", false).Padding(2, 8).Children(func() {
+		ui.Icon(c, icX).FontSize(12)
+		ui.Text(c, "Dismiss").FontSize(11.5)
+	}).Clicked() {
+		a.backend.Dismiss(t.env, t.id(), p.Command)
 	}
 }
 
 func (a *app) workLog(c *ui.Context, key string, e entry) {
-	working := strings.HasSuffix(e.took, "…")
+	working := e.working
 	open := !a.collapsed[key]
 	ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Clip().
 		Transition(riseIn).Children(func() {
@@ -304,11 +365,11 @@ func (a *app) workLog(c *ui.Context, key string, e entry) {
 		}
 		ui.Column(c).Key("steps").Padding(6, 12, 10).Gap(6).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).
 			ClipY().Transition(fold).Children(func() {
-			for i, w := range e.work {
+			for _, w := range e.work {
 				// Each step the agent takes unfolds below the last.
-				ui.Row(c).Key(i).Gap(8).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
+				ui.Row(c).Key(w.Item).Gap(8).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
 					icon := icFile
-					switch w.kind {
+					switch w.Kind {
 					case "command":
 						icon = icTerminal
 					case "edit":
@@ -317,9 +378,13 @@ func (a *app) workLog(c *ui.Context, key string, e entry) {
 						icon = icSearch
 					}
 					ui.Icon(c, icon).FontSize(12).TextColor(palette.faint)
-					ui.Text(c, w.label).FontSize(12).TextColor(palette.muted).SingleLine().Width(64)
-					ui.Text(c, w.detail).FontSize(12).Font("monospace").SingleLine().Shrink(1)
-					counts(c, w.add, w.del)
+					ui.Text(c, w.Title).FontSize(12).SingleLine().Shrink(1)
+					switch w.Status {
+					case api.WorkStarted:
+						statusMark(c, statusWorking)
+					case api.WorkFailed:
+						ui.Icon(c, icX).FontSize(12).TextColor(palette.red).Tooltip("Failed")
+					}
 				})
 			}
 		})
@@ -333,6 +398,79 @@ func counts(c *ui.Context, add, del int) {
 	if del > 0 {
 		ui.Textf(c, "−%d", del).FontSize(11.5).Font("monospace").TextColor(palette.red)
 	}
+}
+
+// requestCard is what the agent asks before it goes on: Allow and Deny
+// while it waits, then what was answered.
+func (a *app) requestCard(c *ui.Context, t thread, e entry) {
+	r := e.request
+	ui.Column(c).Key(e.key).Gap(10).Padding(12, 14).Radius(12).Border(1, palette.amber.Alpha(0.45)).
+		Background(palette.amber.Alpha(0.06)).Transition(riseIn).Children(func() {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, icHand).FontSize(15).TextColor(palette.amber)
+			ui.Text(c, asks(r.Body)).FontWeight(500).Grow(1).Shrink(1)
+		})
+		if r.State != api.RequestPending {
+			ui.Text(c, answered(r)).FontSize(12).TextColor(palette.muted)
+			return
+		}
+		sent, sending := responding(t, r.Request)
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			switch {
+			case sending && sent.Err != nil:
+				ui.Text(c, "Not sent: "+sent.Err.Error()).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
+				a.failedActions(c, t, sent)
+				return
+			case sending:
+				ui.Text(c, "Sending…").FontSize(12).TextColor(palette.muted)
+			}
+			ui.Spacer(c)
+			if headerButton(c, "deny").Disabled(sending).Children(func() { ui.Text(c, "Deny").FontSize(12.5) }).Clicked() {
+				a.backend.Respond(t.env, t.id(), r.Request, false)
+			}
+			allow := ui.ButtonBase(c.Key("allow")).Padding(5, 14).Radius(999).Background(palette.accent).
+				TextColor(ui.Hex("#ffffff")).Cursor(ui.CursorPointer).Disabled(sending)
+			if allow.Children(func() { ui.Text(c, "Allow").FontSize(12.5).FontWeight(600) }).Clicked() {
+				a.backend.Respond(t.env, t.id(), r.Request, true)
+			}
+		})
+	})
+}
+
+// asks is what a request's body asks for, as {"operation":"edit",
+// "path":"main.go"} asks to edit main.go, or the body itself.
+func asks(body json.RawMessage) string {
+	var b struct{ Operation, Path string }
+	if json.Unmarshal(body, &b) == nil && b.Operation != "" {
+		return strings.TrimSpace("Allow " + b.Operation + " " + b.Path + "?")
+	}
+	return "The agent asks: " + string(body)
+}
+
+func answered(r *client.RequestEntry) string {
+	switch r.State {
+	case api.RequestInvalidated, api.RequestExpired:
+		if r.Reason != "" {
+			return "No longer asked: " + r.Reason
+		}
+		return "No longer asked"
+	}
+	var b struct{ Allow bool }
+	if json.Unmarshal(r.Answer, &b) == nil && b.Allow {
+		return "Allowed"
+	}
+	return "Denied"
+}
+
+// responding is the answer to the request sent from here and not landed,
+// if there is one.
+func responding(t thread, request api.ID) (client.Pending, bool) {
+	for _, p := range t.Pending {
+		if r, ok := p.Body.(api.RequestRespond); ok && r.Request == request {
+			return p, true
+		}
+	}
+	return client.Pending{}, false
 }
 
 func (a *app) changes(c *ui.Context, key string, e entry) {
@@ -375,8 +513,8 @@ var composerResize = ui.ElementTransition{Size: true, Duration: 250 * time.Milli
 
 // composerCompact reports whether the composer is compact: away from the
 // end of the thread, not clicked open, holding nothing.
-func (a *app) composerCompact(t *thread) bool {
-	if a.listFor(t).AtEnd() {
+func (a *app) composerCompact(t thread) bool {
+	if a.listFor(t.id()).AtEnd() {
 		a.composerOpened = false
 		return false
 	}
@@ -386,7 +524,7 @@ func (a *app) composerCompact(t *thread) bool {
 // compactWidth is the composer's width while compact.
 const compactWidth = 520
 
-func (a *app) composer(c *ui.Context, t *thread) {
+func (a *app) composer(c *ui.Context, t thread) {
 	// While the user reads back up the thread, the composer steps out of
 	// the way: narrower, one line, its controls folded away. It comes back
 	// to its full size at the end of the thread, as it's clicked, and
@@ -409,13 +547,15 @@ func (a *app) composer(c *ui.Context, t *thread) {
 			}
 			a.accessEffects(card)
 			a.autocomplete(c, card)
-			dragOver := a.dropZone(card)
+			// Files go to the agent as their paths, which a server's
+			// agent can't read.
+			dragOver := t.local() && a.dropZone(card)
 			a.pane(card, glass.Glass{}).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.28)).Clip().
 				Transition(composerResize).Children(func() {
-				workingGlow(c, card, t.status == statusWorking)
+				workingGlow(c, card, t.View.Working())
 				if len(a.attachments) > 0 {
 					ui.Column(c).Key("attachments").Padding(12, 12, 0).Children(func() {
-						attachmentChips(c, a.attachments, func(i int) {
+						attachmentChips(c, a.attachments, t, func(i int) {
 							a.attachments = append(a.attachments[:i:i], a.attachments[i+1:]...)
 						})
 					})
@@ -436,7 +576,7 @@ func (a *app) composer(c *ui.Context, t *thread) {
 				ui.Row(c).Key("controls").Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
 					a.composerControls(c)
 					ui.Spacer(c)
-					if iconButton(c, "attach", icPaperclip, "Attach files", false).Clicked() {
+					if t.local() && iconButton(c, "attach", icPaperclip, "Attach files", false).Clicked() {
 						a.pickFiles()
 					}
 					a.sendButton(c, t)
@@ -449,35 +589,73 @@ func (a *app) composer(c *ui.Context, t *thread) {
 				return
 			}
 			ui.Row(c).Key("env-row").Gap(4).AlignItems(ui.Center).Padding(0, 6).ClipY().Transition(fold).Children(func() {
-				ghost(c, "env", false).Padding(3, 6).Children(func() {
-					ui.Icon(c, icFolder).FontSize(12)
-					ui.Text(c, "Local").FontSize(11.5)
-					ui.Icon(c, icChevronD).FontSize(10)
-				}).Menu(func(m *ui.Menu) {
-					m.Item("Local").Checked(true)
-					m.Item("New worktree")
-				})
-				ui.Spacer(c)
-				ghost(c, "branch", false).Padding(3, 6).Children(func() {
-					ui.Icon(c, icBranch).FontSize(12)
-					ui.Text(c, t.branch).FontSize(11.5).Font("monospace")
-					ui.Icon(c, icChevronD).FontSize(10)
-				}).Menu(func(m *ui.Menu) {
-					for _, b := range []string{t.branch, "main", "dev"} {
-						m.Item(b).Checked(b == t.branch)
-					}
-				})
+				a.workspaceButton(c, t)
 			})
 		})
 	})
 }
 
+// workspaceButton is where the thread runs: its workspace, and its machine
+// when there are several. A draft's is a menu of where it could start.
+func (a *app) workspaceButton(c *ui.Context, t thread) {
+	several := len(a.backend.Envs()) > 1
+	b := ghost(c, "workspace", false).Padding(3, 6).Label("Workspace").Children(func() {
+		ui.Icon(c, icFolder).FontSize(12)
+		ui.Text(c, filepath.Base(t.View.Workspace)).FontSize(11.5)
+		if several && t.env != nil {
+			ui.Text(c, "on "+t.env.Name).FontSize(11.5).TextColor(palette.faint)
+		}
+		if t.id().IsZero() {
+			ui.Icon(c, icChevronD).FontSize(10)
+		}
+	})
+	if !t.id().IsZero() {
+		return
+	}
+	b.Menu(func(m *ui.Menu) {
+		for _, e := range a.backend.Envs() {
+			if a.duplicate(e) {
+				continue
+			}
+			home := homeDir()
+			if e.Kind == client.Remote {
+				home = "~"
+			}
+			for _, d := range a.workspacesOn(e, home) {
+				label := filepath.Base(d.workspace)
+				if several {
+					label += " on " + e.Name
+				}
+				if m.Item(label).Checked(t.env == e && t.View.Workspace == d.workspace).Chosen() {
+					a.fresh = d
+				}
+			}
+		}
+	})
+}
+
+// workspacesOn are where a draft on e could start: the workspaces of e's
+// threads, and home.
+func (a *app) workspacesOn(e *client.Env, home string) []draft {
+	ds := []draft{{e, home}}
+	for _, p := range a.projects {
+		if p.env == e && p.key.workspace != home {
+			ds = append(ds, draft{e, p.key.workspace})
+		}
+	}
+	return ds
+}
+
 // sendButton presses in as it's pressed; its color says whether there is
 // anything to send. While the agent works, it stops it.
-func (a *app) sendButton(c *ui.Context, t *thread) {
-	working := t.status == statusWorking
-	empty := strings.TrimSpace(a.draft) == "" && len(a.attachments) == 0
-	send := ui.ButtonBase(c.Key("send")).Label("Send").Size(30, 30).Radius(15).Center().
+func (a *app) sendButton(c *ui.Context, t thread) {
+	working := t.View.Working()
+	empty := a.message(t) == ""
+	label := "Send"
+	if working {
+		label = "Stop"
+	}
+	send := ui.ButtonBase(c.Key("send")).Label(label).Size(30, 30).Radius(15).Center().
 		Cursor(ui.CursorPointer).Disabled(empty && !working)
 	bg := palette.text
 	if empty && !working {
@@ -498,8 +676,7 @@ func (a *app) sendButton(c *ui.Context, t *thread) {
 	})
 	if send.Clicked() || c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		if working {
-			t.status = statusIdle
-			t.stop.Store(true)
+			a.backend.Interrupt(t.env, t.id())
 		} else {
 			a.send(t)
 		}
@@ -513,84 +690,62 @@ func (a *app) composerControls(c *ui.Context) {
 	a.accessPicker(c)
 }
 
-var replyCount int
-
-// send appends the draft, then plays a canned turn: the agent's steps
-// arrive one by one, then its reply streams in. There is no agent.
-func (a *app) send(t *thread) {
-	text := strings.TrimSpace(a.draft)
-	if text == "" && len(a.attachments) == 0 {
+// send sends the draft in the thread, creating it first when it's the
+// draft. A settled or snoozed thread comes back to the inbox with it.
+func (a *app) send(t thread) {
+	text := a.message(t)
+	if text == "" || t.env == nil {
 		return
 	}
-	if len(t.entries) == 0 {
-		t.title = text
-		if t.title == "" {
-			t.title = a.attachments[0].name
+	id := t.id()
+	if id.IsZero() {
+		title := text
+		if r := []rune(title); len(r) > 48 {
+			title = string(r[:48]) + "…"
 		}
-		if len(t.title) > 48 {
-			t.title = t.title[:48] + "…"
+		if id = a.backend.Create(t.env, t.View.Workspace, title, a.modelRef(), accessOf[a.access]); id.IsZero() {
+			return
 		}
+		a.selected = id
+		a.follow()
+	} else if t.View.Disposition.State != api.Open {
+		a.backend.SetDisposition(t.env, id, api.Disposition{})
 	}
+	a.backend.Send(t.env, id, text, api.AfterActive)
 	a.draft = ""
-	a.listFor(t).ScrollToEnd()
-	t.entries = append(t.entries, entry{kind: entryUser, text: text, attachments: a.attachments})
-	a.attachments = nil
-	// The thread goes to Working while the agent runs, out of the
-	// snoozed and settled ones.
-	t.status, t.age, t.settled, t.snoozed = statusWorking, "now", false, ""
-	t.stop.Store(false)
-
-	s := scripts[replyCount%len(scripts)]
-	replyCount++
-	t.entries = append(t.entries, entry{kind: entryWork, took: "Working…"})
-	work := len(t.entries) - 1
-	if a.win == nil { // in tests, all at once
-		t.entries[work].work, t.entries[work].took = s.steps, "Worked for 3s"
-		t.entries = append(t.entries, entry{kind: entryAssistant, text: s.reply})
-		t.finish()
-		return
-	}
-	go func() {
-		started := time.Now()
-		for _, step := range s.steps {
-			if t.stop.Load() {
-				break
-			}
-			time.Sleep(time.Duration(500+rand.IntN(500)) * time.Millisecond)
-			a.win.Update(func() { t.entries[work].work = append(t.entries[work].work, step) })
-		}
-		time.Sleep(400 * time.Millisecond)
-		reply := 0
-		a.win.Update(func() {
-			t.entries[work].took = fmt.Sprintf("Worked for %ds", int(time.Since(started).Seconds()))
-			t.entries = append(t.entries, entry{kind: entryAssistant, streaming: true})
-			reply = len(t.entries) - 1
-		})
-		for i := 0; i < len(s.reply); {
-			n := min(len(s.reply)-i, 2+rand.IntN(6))
-			for n < len(s.reply)-i && s.reply[i+n]&0xC0 == 0x80 {
-				n++
-			}
-			i += n
-			chunk := s.reply[:i]
-			time.Sleep(time.Duration(10+rand.IntN(25)) * time.Millisecond)
-			if t.stop.Load() {
-				break
-			}
-			a.win.Update(func() { t.entries[reply].text = chunk })
-		}
-		a.win.Update(func() {
-			t.entries[reply].streaming = false
-			if t.status == statusWorking {
-				t.finish()
-				a.notifyFinished(t)
-			}
-		})
-	}()
+	a.attachments = slices.DeleteFunc(a.attachments, func(at attachment) bool { return at.held(t) == "" })
+	a.listFor(id).ScrollToEnd()
 }
 
-func (a *app) terminal(c *ui.Context, p *project) {
-	s, err := a.shellFor(p)
+// message is the draft and what's attached to it that goes to t's agent:
+// files as their paths, as the composer's @ puts them, and pasted text
+// after.
+func (a *app) message(t thread) string {
+	parts := []string{strings.TrimSpace(a.draft)}
+	for _, at := range a.attachments {
+		if at.held(t) != "" {
+			continue
+		}
+		switch {
+		case at.path != "":
+			parts = append(parts, "@"+at.path)
+		case at.text != "":
+			parts = append(parts, at.text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+}
+
+// modelRef is the model the pickers chose, for a new thread.
+func (a *app) modelRef() api.ModelRef {
+	m := modelByName(a.model)
+	return api.ModelRef{Provider: strings.ToLower(m.provider), Model: m.name, Effort: strings.ToLower(a.effort), Fast: a.fast}
+}
+
+var accessOf = map[string]api.Access{accessAsk: api.AccessAsk, accessAuto: api.AccessAutoEdits, accessFull: api.AccessFull}
+
+func (a *app) terminal(c *ui.Context, workspace string) {
+	s, err := a.shellFor(workspace)
 	title := "zsh"
 	if s != nil {
 		title = s.Title()

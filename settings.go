@@ -2,10 +2,14 @@ package main
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
+
+	"glitched/internal/client"
 )
 
 func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
@@ -40,6 +44,9 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 			case r.Match("/providers"):
 				r.Title("Providers")
 				a.page(c, "Providers", "The coding agents Glitched runs, and their models.", a.providers)
+			case r.Match("/servers"):
+				r.Title("Servers")
+				a.page(c, "Servers", "Engines on other machines, reached over the tailnet with a token each paired for this app. Their threads show beside this machine's.", a.servers)
 			case r.Match("/keybindings"):
 				r.Title("Keybindings")
 				a.page(c, "Keybindings", "Shortcuts for the commands you use most.", a.keybindings)
@@ -288,6 +295,133 @@ func (a *app) provider(c *ui.Context, name string, mark *ui.SVG, brand ui.Color,
 	})
 }
 
+// --- Servers
+
+func (a *app) servers(c *ui.Context) {
+	card(c, "", func() {
+		servers := a.backend.Servers()
+		if len(servers) == 0 {
+			ui.Text(c, "No servers yet.").Key("none").TextColor(palette.muted).Padding(16)
+		}
+		for _, s := range servers {
+			ui.Row(c).Key(s.Label).Padding(12, 12, 12, 16).Gap(12).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
+				col, status := a.envStatus(a.serverEnv(s.Label))
+				ui.Box(c).Size(8, 8).Radius(4).Background(col)
+				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
+					ui.Text(c, s.Label).FontWeight(500)
+					ui.Text(c, s.Addr).FontSize(12).Font("monospace").TextColor(palette.muted).SingleLine()
+				})
+				ui.Text(c, status).FontSize(12).TextColor(col).SingleLine().Shrink(1).MaxWidth(360).Tooltip(status)
+				ui.Button(c.Key("remove"), "Remove").TextColor(palette.red).OnClick(func() {
+					if err := a.backend.RemoveServer(s.Label); err != nil {
+						c.AddToast(ui.Toast{Title: "Couldn't remove " + s.Label, Description: err.Error()})
+					}
+				})
+			})
+		}
+	})
+	card(c, "ADD A SERVER", func() {
+		ui.Column(c).Padding(16).Gap(14).Children(func() {
+			ui.Field(c, "Label", func() { ui.TextInput(c, &a.server.Label).Placeholder("devbox") }).
+				Description("What the sidebar calls the machine. Adding a label already listed pairs it again.")
+			ui.Field(c, "Address", func() { ui.TextInput(c, &a.server.Addr).Placeholder("devbox:7433").Font("monospace") }).
+				Description("Where glitched serve -listen listens on it. It's listed once it answers, unless it's a machine listed already.")
+			ui.Field(c, "Token", func() { ui.TextInput(c, &a.server.Token).Password().Font("monospace") }).
+				Description("What glitched pair printed on it.")
+			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, a.serverErr).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
+				add := "Add server"
+				if a.adding {
+					add = "Adding…"
+				}
+				ui.Button(c.Key("add"), add).Disabled(a.adding || a.server.Label == "" || a.server.Addr == "").OnClick(func() {
+					s := a.server
+					a.serverErr, a.adding = "", true
+					a.backend.AddServer(s, func(err error) {
+						a.adding = false
+						switch {
+						case err != nil:
+							a.serverErr = err.Error()
+						case a.server == s:
+							a.server = client.Server{} // unless edited meanwhile
+						}
+					})
+				})
+			})
+		})
+	})
+}
+
+func (a *app) serverEnv(label string) *client.Env {
+	for _, e := range a.backend.Envs() {
+		if e.Kind == client.Remote && e.Name == label {
+			return e
+		}
+	}
+	return nil
+}
+
+// envStatus is how a machine's engine is reached, as a color and a word.
+func (a *app) envStatus(e *client.Env) (ui.Color, string) {
+	if o := a.backend.ShownBy(e); o != e {
+		return palette.red, "Same engine as " + o.Name + " — remove one"
+	}
+	switch s := e.Status.(type) {
+	case client.Online:
+		return palette.green, "Online"
+	case client.Offline:
+		return palette.red, "Offline: " + s.Err.Error()
+	case client.Refused:
+		return palette.red, "Refused: no key for this token, or not the paired engine"
+	case client.Incompatible:
+		who := "server"
+		if e.Kind == client.Local {
+			who = "engine"
+		}
+		return palette.red, fmt.Sprintf("Incompatible: %s speaks protocol %d, this app %d", who, s.Theirs, s.Ours)
+	}
+	return palette.amber, "Connecting…"
+}
+
+// machineBadge is a row's mark of the machine its thread runs on: a dot of
+// how it's reached and the fewest letters of its name that tell it from
+// the other machines', the whole in a tooltip.
+func (a *app) machineBadge(c *ui.Context, e *client.Env) ui.Element {
+	var names []string
+	for _, o := range a.backend.Envs() {
+		names = append(names, o.Name)
+	}
+	col, status := a.envStatus(e)
+	return ui.Row(c).Gap(3).AlignItems(ui.Center).Shrink(0).Label(e.Name).Tooltip(e.Name + " · " + status).Children(func() {
+		ui.Box(c).Size(5, 5).Radius(3).Background(col)
+		ui.Text(c, prefix(e.Name, names)).FontSize(10).TextColor(palette.faint).SingleLine()
+	})
+}
+
+// prefix is the shortest start of name, of two letters or more, that none
+// of the other names starts with.
+func prefix(name string, names []string) string {
+	r := []rune(name)
+	for n := min(2, len(r)); n < len(r); n++ {
+		p := string(r[:n])
+		if !slices.ContainsFunc(names, func(o string) bool { return o != name && strings.HasPrefix(o, p) }) {
+			return p
+		}
+	}
+	return name
+}
+
+// machinePill names the machine a thread runs on, after a dot of how it's
+// reached.
+func (a *app) machinePill(c *ui.Context, e *client.Env) ui.Element {
+	col, status := a.envStatus(e)
+	return ui.Row(c).Gap(4).AlignItems(ui.Center).Padding(1, 6).Radius(999).Border(1, palette.border).Shrink(0).
+		Tooltip(e.Name + " · " + status).Children(func() {
+		ui.Box(c).Size(5, 5).Radius(3).Background(col)
+		ui.Text(c, e.Name).FontSize(10.5).TextColor(palette.muted).SingleLine()
+	})
+}
+
 // --- Keybindings
 
 var keybindings = []struct {
@@ -328,43 +462,12 @@ func (a *app) keybindings(c *ui.Context) {
 
 // --- Archived
 
+// archivedThreads is empty: the engines don't archive threads yet.
 func (a *app) archivedThreads(c *ui.Context) {
-	if len(a.archived) == 0 {
-		ui.Column(c).Key("empty").Center().Gap(10).Padding(60, 0).Transition(riseIn).Children(func() {
-			ui.Icon(c, icArchive).FontSize(26).TextColor(palette.faint)
-			ui.Text(c, "No archived threads").TextColor(palette.muted)
-		})
-		return
-	}
-	card(c, "", func() {
-		for _, t := range a.archived {
-			ui.Row(c).Key(t.id).Padding(10, 12, 10, 16).Gap(10).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
-				ui.Icon(c, icMessage).FontSize(14).TextColor(palette.faint)
-				ui.Column(c).Grow(1).Gap(2).Children(func() {
-					ui.Text(c, t.title).SingleLine()
-					ui.Text(c, "Archived "+t.age+" ago").FontSize(11.5).TextColor(palette.faint)
-				})
-				ui.Button(c.Key("restore"), "Restore").OnClick(func() {
-					a.archived = remove(a.archived, t)
-					a.projects[0].threads = append(a.projects[0].threads, t)
-					c.AddToast(ui.Toast{Title: "Thread restored", Description: t.title, Type: "info"})
-				})
-				ui.Button(c.Key("delete"), "Delete").TextColor(palette.red).OnClick(func() {
-					a.archived = remove(a.archived, t)
-				})
-			})
-		}
+	ui.Column(c).Key("empty").Center().Gap(10).Padding(60, 0).Transition(riseIn).Children(func() {
+		ui.Icon(c, icArchive).FontSize(26).TextColor(palette.faint)
+		ui.Text(c, "No archived threads").TextColor(palette.muted)
 	})
-}
-
-func remove(ts []*thread, t *thread) []*thread {
-	out := ts[:0:0]
-	for _, x := range ts {
-		if x != t {
-			out = append(out, x)
-		}
-	}
-	return out
 }
 
 // --- About

@@ -138,6 +138,12 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	// Kept for the next start, which may run from elsewhere.
+	if *hubDir != "" {
+		if *hubDir, err = filepath.Abs(*hubDir); err != nil {
+			return err
+		}
+	}
 	if set["hub"] || set["hub-dir"] || set["hub-server"] {
 		cfg.Hub = *hub && *hubDir == "" && *hubServer == ""
 		cfg.HubDir, cfg.HubServer, cfg.HubToken = *hubDir, *hubServer, *hubToken
