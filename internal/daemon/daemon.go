@@ -18,7 +18,9 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/hub"
+	"glitched/internal/jsonfile"
 	"glitched/internal/provider"
+	"glitched/internal/provider/fake"
 	"glitched/internal/runtime"
 	"glitched/internal/store"
 	"glitched/internal/transport"
@@ -29,18 +31,43 @@ import (
 // engine in a loop.
 var ErrLocked = errors.New("another engine holds the lock")
 
+// Config is how an engine serves. engine.json under Dir keeps all but Dir
+// and Adapter.
 type Config struct {
-	Dir string // the lock, the databases, the socket and tokens.json
-	// Hub runs the hub role in this engine. Otherwise HubAt, when set, is
-	// the engine whose hub this one uploads its log to.
-	Hub   bool
-	HubAt transport.Transport
+	Dir string `json:"-"` // the lock, the databases, the socket, tokens.json and engine.json
+	// Hub runs the hub role in this engine. Otherwise the engine uploads its
+	// log to the hub of the one with state in HubDir on this machine, or of
+	// the one at HubServer on the tailnet with the token HubToken it paired.
+	Hub       bool   `json:"hub"`
+	HubDir    string `json:"hub_dir,omitempty"`
+	HubServer string `json:"hub_server,omitempty"`
+	HubToken  string `json:"hub_token,omitempty"`
 	// Listen adds TCP listeners on loopback or Tailscale addresses, where a
 	// client must prove it holds a token from tokens.json. The unix socket in Dir
 	// is for this machine's user and needs none.
-	Listen  []string
-	Epoch   uint64 // this host's epoch at the hub
-	Adapter provider.Adapter
+	Listen  []string         `json:"listen,omitempty"`
+	Epoch   uint64           `json:"epoch"` // this host's epoch at the hub
+	Adapter provider.Adapter `json:"-"`
+}
+
+const configFile = "engine.json"
+
+// Defaults is how an engine with state in dir serves unless told otherwise:
+// as Save last recorded there, else as its own hub at epoch 1. `glitched
+// serve` and the GUI's embedded engine both start from it, as the hub
+// fences an epoch below the last one it saw and other machines reach the
+// engine where serve listened.
+func Defaults(dir string) (Config, error) {
+	cfg := Config{Dir: dir, Hub: true, Epoch: 1, Adapter: fake.New(fake.Turn(true))}
+	if err := jsonfile.Load(filepath.Join(dir, configFile), &cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// Save records cfg in engine.json under its Dir, for Defaults.
+func (cfg Config) Save() error {
+	return jsonfile.Write(filepath.Join(cfg.Dir, configFile), cfg)
 }
 
 // A Daemon is a started engine. It serves until Start's ctx ends, Close is
@@ -67,8 +94,14 @@ func Socket(dir string) transport.Loopback {
 
 // Start returns once every socket listens, so a client may dial at once.
 func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
-	if cfg.Hub && cfg.HubAt != nil {
-		return nil, errors.New("daemon: the hub role runs here, so there is no other hub to upload to")
+	var hubAt transport.Transport
+	switch {
+	case cfg.HubDir != "" && cfg.HubServer != "", cfg.Hub && (cfg.HubDir != "" || cfg.HubServer != ""):
+		return nil, errors.New("daemon: give one hub: this engine's, HubDir's or HubServer's")
+	case cfg.HubServer != "":
+		hubAt = transport.Tailnet{Address: cfg.HubServer, Token: cfg.HubToken}
+	case cfg.HubDir != "":
+		hubAt = Socket(cfg.HubDir)
 	}
 	ctx, stop := context.WithCancel(ctx)
 	d := &Daemon{stop: stop, done: make(chan struct{})}
@@ -113,8 +146,8 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		}
 		d.undo = append(d.undo, rep.Close)
 		hubc = rep
-	case cfg.HubAt != nil:
-		c := transport.NewHubClient(cfg.HubAt, api.ID{})
+	case hubAt != nil:
+		c := transport.NewHubClient(hubAt, api.ID{})
 		d.undo = append(d.undo, c.Close)
 		hubc = c
 	}

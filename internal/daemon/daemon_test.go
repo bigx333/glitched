@@ -3,11 +3,13 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -197,6 +199,23 @@ func TestPairKeepsOnlyTheTokensHash(t *testing.T) {
 	}
 	if err := Revoke(dir, "phone"); err == nil {
 		t.Fatal("revoked a label that has no token")
+	}
+}
+
+// Pairs run at once each wait for the others, so every token lands.
+func TestPairsAtOnceAllLand(t *testing.T) {
+	dir := stateDir(t)
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Go(func() {
+			if _, err := Pair(dir, fmt.Sprint("device", i)); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	if ts, err := Tokens(dir); err != nil || len(ts) != 16 {
+		t.Fatalf("tokens.json holds %d tokens (%v), want the 16 paired", len(ts), err)
 	}
 }
 
