@@ -9,7 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -18,21 +18,22 @@ import (
 	"time"
 
 	"glitched/internal/api"
-	"glitched/internal/hub"
+	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
-	"glitched/internal/runtime"
-	"glitched/internal/store"
 	"glitched/internal/transport"
 )
 
-// errLocked exits with its own code so a service manager doesn't restart a
-// second engine in a loop.
-var errLocked = errors.New("another engine holds the lock")
-
 const exitLocked = 3
+
+// usageError is a flag combination that can't work. main exits 2 on it, as
+// flag does on a flag it can't parse.
+type usageError string
+
+func (e usageError) Error() string { return string(e) }
 
 var commands = map[string]func(context.Context, []string) error{
 	"serve":   serve,
+	"pair":    pair,
 	"run":     run,
 	"threads": threads,
 	"replica": replica,
@@ -41,9 +42,12 @@ var commands = map[string]func(context.Context, []string) error{
 const usage = `usage: glitched <command> [flags]
 
   serve     run the host engine, and the hub role unless -hub=false
+  pair      mint a token for a client on the tailnet: glitched pair -name LABEL | -list | -revoke LABEL
   run       send a message and stream the turn: glitched run [-thread ID] [-yes] text...
   threads   list this host's threads
-  replica   print a thread's events as the hub holds them: glitched replica -thread ID`
+  replica   print a thread's events as the hub holds them: glitched replica -thread ID
+
+run, threads and replica reach the engine under -dir, or another with -server ADDR -token TOKEN.`
 
 func main() {
 	if len(os.Args) < 2 || commands[os.Args[1]] == nil {
@@ -54,9 +58,12 @@ func main() {
 	err := commands[os.Args[1]](ctx, os.Args[2:])
 	stop()
 	switch {
-	case errors.Is(err, errLocked):
+	case errors.Is(err, daemon.ErrLocked):
 		fmt.Fprintln(os.Stderr, "glitched:", err)
 		os.Exit(exitLocked)
+	case errors.As(err, new(usageError)):
+		fmt.Fprintln(os.Stderr, "glitched:", err)
+		os.Exit(2)
 	case err != nil:
 		fmt.Fprintln(os.Stderr, "glitched:", err)
 		os.Exit(1)
@@ -68,116 +75,159 @@ func dirFlag(fs *flag.FlagSet) *string {
 	return fs.String("dir", filepath.Join(home, ".glitched"), "state directory")
 }
 
-func socket(dir string) transport.Loopback {
-	return transport.Loopback{Network: "unix", Address: filepath.Join(dir, "engine.sock")}
+// reach adds the flags that pick the engine a command talks to: the one
+// under -dir, or the one at -server with a token it paired.
+func reach(fs *flag.FlagSet) func() (transport.Transport, error) {
+	dir := dirFlag(fs)
+	server := fs.String("server", "", "tailnet address of another engine, instead of the one under -dir")
+	token := fs.String("token", "", "the token -server paired for this client")
+	return func() (transport.Transport, error) {
+		switch {
+		case *server == "" && *token != "":
+			return nil, usageError(fs.Name() + ": -token goes with -server; the engine under -dir takes none")
+		case *server == "":
+			return daemon.Socket(*dir), nil
+		case *token == "":
+			return nil, usageError(fs.Name() + ": -server needs -token, which glitched pair printed on that engine")
+		}
+		return transport.Tailnet{Address: *server, Token: *token}, nil
+	}
+}
+
+// given reports which flags fs's arguments set.
+func given(fs *flag.FlagSet) map[string]bool {
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	return set
+}
+
+type listFlag []string
+
+func (l *listFlag) String() string { return strings.Join(*l, ",") }
+
+func (l *listFlag) Set(v string) error {
+	*l = append(*l, v)
+	return nil
 }
 
 func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	dir := dirFlag(fs)
-	asHub := fs.Bool("hub", true, "run the hub role in this process")
-	hubDir := fs.String("hub-dir", "", "state directory of the engine that runs the hub, when -hub=false")
+	asHub := fs.Bool("hub", true, "run the hub role in this process, unless -hub-dir or -hub-server names another")
+	hubDir := fs.String("hub-dir", "", "upload to the hub of the engine with this state directory, on this machine")
+	hubServer := fs.String("hub-server", "", "upload to the hub of the engine at this tailnet address")
+	hubToken := fs.String("hub-token", "", "the token -hub-server paired for this engine")
 	epoch := fs.Uint64("epoch", 1, "this host's epoch at the hub")
+	var listen listFlag
+	fs.Var(&listen, "listen", "also serve clients with a token on this loopback or Tailscale address; repeatable")
 	fs.Parse(args)
 
-	if err := os.MkdirAll(*dir, 0o700); err != nil {
-		return err
-	}
-	// Nothing authenticates a caller on the socket yet, so file modes are
-	// the only gate; a dir created earlier may be wider than MkdirAll's mode.
-	if err := os.Chmod(*dir, 0o700); err != nil {
-		return err
-	}
-	lk, err := lock(filepath.Join(*dir, "engine.lock"))
-	if err != nil {
-		return err
-	}
-	defer lk.Close()
-	lb := socket(*dir)
-	// The lock is ours, so a socket file left here is from a dead engine.
-	os.Remove(lb.Address)
-
-	st, err := store.Open(filepath.Join(*dir, "engine.db"))
-	if err != nil {
-		return err
-	}
-	defer st.Close()
-
-	var rep *hub.Replica
-	var hubc hub.Client
+	var hubAt transport.Transport
 	switch {
-	case *asHub:
-		if rep, err = hub.Open(filepath.Join(*dir, "hub.db")); err != nil {
+	case *hubDir != "" && *hubServer != "":
+		return usageError("serve: -hub-dir and -hub-server both name the hub; give one")
+	case given(fs)["hub"] && *asHub && (*hubDir != "" || *hubServer != ""):
+		return usageError("serve: -hub runs the hub in this engine, so -hub-dir or -hub-server can't name another")
+	case *hubToken != "" && *hubServer == "":
+		return usageError("serve: -hub-token goes with -hub-server")
+	case *hubServer != "" && *hubToken == "":
+		return usageError("serve: -hub-server needs -hub-token, which glitched pair printed on that engine")
+	case *hubServer != "":
+		hubAt = transport.Tailnet{Address: *hubServer, Token: *hubToken}
+	case *hubDir != "":
+		hubAt = daemon.Socket(*hubDir)
+	}
+	d, err := daemon.Start(ctx, daemon.Config{
+		Dir:     *dir,
+		Hub:     *asHub && hubAt == nil,
+		HubAt:   hubAt,
+		Listen:  listen,
+		Epoch:   *epoch,
+		Adapter: fake.New(fake.Turn(true)),
+	})
+	if err != nil {
+		return err
+	}
+	return d.Wait()
+}
+
+// port is where pair suggests serving; any port works.
+const port = "7465"
+
+func pair(_ context.Context, args []string) error {
+	fs := flag.NewFlagSet("pair", flag.ExitOnError)
+	dir := dirFlag(fs)
+	name := fs.String("name", "", "mint a token with this label")
+	list := fs.Bool("list", false, "list the tokens")
+	revoke := fs.String("revoke", "", "revoke the token with this label")
+	fs.Parse(args)
+	switch {
+	case *list:
+		ts, err := daemon.Tokens(*dir)
+		if err != nil {
 			return err
 		}
-		defer rep.Close()
-		hubc = rep
-	case *hubDir != "":
-		hubc = transport.NewHubClient(socket(*hubDir), api.ID{})
-	}
-	var up *hub.Uploader
-	if hubc != nil {
-		up = hub.NewUploader(st.HostID(), *epoch, st, hubc)
-		// The hub lives outside a backup of this database, so it sees a
-		// restore that brought the fence back too.
-		check, cancel := context.WithTimeout(ctx, 2*time.Second)
-		err := up.Check(check)
-		cancel()
-		switch {
-		case errors.Is(err, hub.ErrRewound):
-			slog.Warn("the hub holds more of this log than the database, which came back from a backup; starting a new log", "log", st.LogID())
-			if err := st.Rewind(ctx); err != nil {
-				return err
-			}
-		case err != nil:
-			slog.Warn("hub unreachable, so a restore the fence came back with goes unnoticed", "err", err)
+		for _, t := range ts {
+			fmt.Printf("%s  %s\n", t.Created.Local().Format(time.DateTime), t.Label)
 		}
+		return nil
+	case *revoke != "":
+		if err := daemon.Revoke(*dir, *revoke); err != nil {
+			return err
+		}
+		fmt.Println("revoked", *revoke)
+		return nil
+	case *name == "":
+		return usageError("pair: give -name, -list or -revoke")
 	}
-
-	h, err := runtime.New(ctx, st, fake.New(fake.Turn(true)))
+	token, err := daemon.Pair(*dir, *name)
 	if err != nil {
 		return err
 	}
-	defer h.Close()
+	fmt.Printf("Token for %s, shown only this once:\n\n  %s\n\n", *name, token)
+	cmd := "glitched serve"
+	if given(fs)["dir"] {
+		cmd += " -dir " + shellQuote(*dir)
+	}
+	ip, ok := transport.TailscaleIP()
+	if !ok {
+		fmt.Printf("Tailscale isn't up here. Once it is, serve with:\n\n  %s -listen <this machine's Tailscale IP>:%s\n", cmd, port)
+		return nil
+	}
+	addr := net.JoinHostPort(ip.String(), port)
+	fmt.Printf("Serve with:\n\n  %s -listen %s\n\nThen on the other machine:\n\n  glitched run -server %s -token %s hello\n", cmd, addr, addr, token)
+	return nil
+}
 
-	srv := &transport.Server{Transport: lb, Endpoint: h, Hub: rep}
-	if up != nil {
-		st.OnCommit(func(store.Commit) { up.Notify() })
-		go func() {
-			if err := up.Run(ctx); err != nil && ctx.Err() == nil {
-				slog.Error("uploader stopped", "err", err)
-			}
-		}()
+// shellQuote quotes s for a POSIX shell, unless it needs none.
+func shellQuote(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./:@%+,") == "" {
+		return s
 	}
-
-	ln, err := lb.Listen(ctx)
-	if err != nil {
-		return err
-	}
-	if err := os.Chmod(lb.Address, 0o600); err != nil {
-		ln.Close()
-		return err
-	}
-	slog.Info("serving", "socket", lb.Address, "host", st.HostID(), "log", st.LogID(), "hub", *asHub)
-	return srv.Serve(ctx, ln)
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func run(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	dir := dirFlag(fs)
+	at := reach(fs)
 	threadFlag := fs.String("thread", "", "thread to send to; a new one when empty")
 	yes := fs.Bool("yes", false, "approve every request without asking")
 	modeFlag := fs.String("mode", "after", "now, after, steer, restart or defer; restart also ends an uncertain run")
 	fs.Parse(args)
 	mode, ok := modes[*modeFlag]
 	if !ok {
-		return fmt.Errorf("run: unknown mode %q", *modeFlag)
+		return usageError(fmt.Sprintf("run: unknown mode %q", *modeFlag))
 	}
 	text := strings.Join(fs.Args(), " ")
 	if text == "" {
-		return errors.New("run: no message")
+		return usageError("run: no message")
 	}
-	ep := transport.NewEndpointClient(socket(*dir), api.ID{})
+	tr, err := at()
+	if err != nil {
+		return err
+	}
+	ep := transport.NewEndpointClient(tr, api.ID{})
+	defer ep.Close()
 
 	var thread api.ID
 	if *threadFlag != "" {
@@ -329,9 +379,15 @@ var runStates = map[api.RunState]string{
 
 func threads(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("threads", flag.ExitOnError)
-	dir := dirFlag(fs)
+	at := reach(fs)
 	fs.Parse(args)
-	snap, err := transport.NewEndpointClient(socket(*dir), api.ID{}).Read(ctx, api.Query{})
+	tr, err := at()
+	if err != nil {
+		return err
+	}
+	ep := transport.NewEndpointClient(tr, api.ID{})
+	defer ep.Close()
+	snap, err := ep.Read(ctx, api.Query{})
 	if err != nil {
 		return err
 	}
@@ -343,14 +399,20 @@ func threads(ctx context.Context, args []string) error {
 
 func replica(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("replica", flag.ExitOnError)
-	dir := dirFlag(fs)
+	at := reach(fs)
 	threadFlag := fs.String("thread", "", "thread whose replicated events to print")
 	fs.Parse(args)
+	tr, err := at()
+	if err != nil {
+		return err
+	}
 	thread, err := api.ParseID(*threadFlag)
 	if err != nil {
 		return err
 	}
-	evs, err := transport.NewHubClient(socket(*dir), api.ID{}).Events(ctx, thread, api.Cursor{}, 1000)
+	hubc := transport.NewHubClient(tr, api.ID{})
+	defer hubc.Close()
+	evs, err := hubc.Events(ctx, thread, api.Cursor{}, 1000)
 	if err != nil {
 		return err
 	}

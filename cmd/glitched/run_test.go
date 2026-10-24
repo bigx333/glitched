@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/daemon"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 	daemonruntime "glitched/internal/runtime"
@@ -32,7 +33,7 @@ func engine(t *testing.T, a provider.Adapter) (string, *transport.EndpointClient
 	if err != nil {
 		t.Fatal(err)
 	}
-	lb := socket(dir)
+	lb := daemon.Socket(dir)
 	ln, err := lb.Listen(ctx)
 	if err != nil {
 		t.Fatal(err)

@@ -1,6 +1,6 @@
 //go:build unix
 
-package main
+package daemon
 
 import (
 	"errors"
@@ -19,9 +19,18 @@ func lock(path string) (*os.File, error) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, errLocked
+			return nil, ErrLocked
 		}
 		return nil, err
 	}
 	return f, nil
+}
+
+// syncDir makes a rename in dir survive a crash.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	return errors.Join(d.Sync(), d.Close())
 }

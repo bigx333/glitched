@@ -25,8 +25,18 @@ type Server struct {
 	Transport Transport
 	Endpoint  api.Endpoint
 	Hub       *hub.Replica
+	// Authorize admits a socket whose client proved, in the handshake, that
+	// it holds one of the keys Authorize knows. proved reports whether the
+	// proof was made with a key; Authorize asks it of every key it knows,
+	// whatever the answers, so the time taken doesn't say which matched. It
+	// returns that key, for the server's own proof, and a ctx whose end
+	// closes the socket, as when its grant is revoked. A Tailnet server must
+	// have one.
+	Authorize func(r *http.Request, proved func(Key) bool) (Key, context.Context, error)
 
-	keepalive keepalive // zero means defaultKeepalive
+	keepalive keepalive     // zero means defaultKeepalive
+	handshake time.Duration // how long a client has to prove its key; zero means handshakeWithin
+	idle      time.Duration // each request's read, its response's write and each keep-alive wait; zero means defaultIdle
 }
 
 type connKey struct{}
@@ -34,6 +44,10 @@ type connKey struct{}
 // Serve answers sockets on ln until ctx ends, then closes them and returns
 // once their calls have.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
+	if _, ok := s.Transport.(credentialed); ok && s.Authorize == nil {
+		ln.Close()
+		return fmt.Errorf("transport: a %T server needs Authorize to check its clients' keys", s.Transport)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var (
@@ -55,9 +69,20 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		defer sockets.Done()
 		s.serveSocket(ctx, w, r, methods)
 	})
+	idle := s.idle
+	if idle == 0 {
+		idle = defaultIdle
+	}
 	hs := &http.Server{
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
+		Handler: mux,
+		// Bound each request, body included, each response and each wait
+		// between them, or a refused peer holds its connection: http drains
+		// an unread body before it closes or reuses one, and a peer that
+		// never reads blocks the response. Hijacking clears both deadlines,
+		// so an accepted WebSocket isn't bound by them.
+		ReadTimeout:  idle,
+		WriteTimeout: idle,
+		IdleTimeout:  idle,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			return context.WithValue(ctx, connKey{}, c)
 		},
@@ -77,7 +102,8 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 }
 
 func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http.Request, methods map[string]handler) {
-	if _, err := s.Transport.WhoIs(r.Context().Value(connKey{}).(net.Conn)); err != nil {
+	nc := r.Context().Value(connKey{}).(net.Conn)
+	if _, err := s.Transport.WhoIs(nc); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -86,9 +112,21 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 		return
 	}
 	defer ws.CloseNow()
+	grant := context.Background()
+	if s.Authorize != nil {
+		ws.SetReadLimit(helloLimit)
+		if grant, err = s.challenge(ctx, ws, r); err != nil {
+			// Close sends the status, then waits up to 5s for the peer's
+			// close frame. A read deadline already past ends that wait.
+			nc.SetReadDeadline(time.Now())
+			ws.Close(websocket.StatusPolicyViolation, "refused")
+			return
+		}
+	}
 	ws.SetReadLimit(maxMessage)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	defer context.AfterFunc(grant, cancel)()
 	k := s.keepalive
 	if k == (keepalive{}) {
 		k = defaultKeepalive
@@ -215,6 +253,8 @@ func writeMessage(ctx context.Context, ws *websocket.Conn, b []byte) error {
 type keepalive struct{ every, within time.Duration }
 
 var defaultKeepalive = keepalive{every: 15 * time.Second, within: 10 * time.Second}
+
+const defaultIdle = 10 * time.Second
 
 func (k keepalive) run(ctx context.Context, ws *websocket.Conn) {
 	t := time.NewTicker(k.every)

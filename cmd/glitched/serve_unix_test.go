@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/daemon"
 	"glitched/internal/transport"
 )
 
@@ -26,7 +27,7 @@ func TestServeKeepsTheStateDirAndSocketPrivate(t *testing.T) {
 	served := make(chan error, 1)
 	go func() { served <- serve(ctx, []string{"-dir", dir}) }()
 	defer func() { cancel(); <-served }()
-	ep := transport.NewEndpointClient(socket(dir), api.ID{})
+	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
 	for {
 		if _, err := ep.Info(ctx); err == nil {
 			break
@@ -38,7 +39,7 @@ func TestServeKeepsTheStateDirAndSocketPrivate(t *testing.T) {
 		}
 	}
 
-	for path, want := range map[string]fs.FileMode{dir: 0o700, socket(dir).Address: 0o600} {
+	for path, want := range map[string]fs.FileMode{dir: 0o700, daemon.Socket(dir).Address: 0o600} {
 		fi, err := os.Stat(path)
 		if err != nil {
 			t.Fatal(err)
