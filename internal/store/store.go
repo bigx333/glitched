@@ -28,7 +28,7 @@ type Store struct {
 	// mu admits one writer at a time, which makes commit order the order
 	// hooks see events in.
 	mu    sync.Mutex
-	hooks []func([]api.Event)
+	hooks []func(Commit)
 }
 
 func Open(path string) (*Store, error) {
@@ -85,7 +85,7 @@ func (s *Store) Rewind(ctx context.Context) error {
 
 // OnCommit registers fn to run after every commit that wrote events, in
 // commit order, while the next writer waits. fn must not block or write.
-func (s *Store) OnCommit(fn func([]api.Event)) {
+func (s *Store) OnCommit(fn func(Commit)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.hooks = append(s.hooks, fn)
@@ -160,8 +160,10 @@ CREATE TABLE runs (
 	signalled  INTEGER NOT NULL CHECK (signalled IN (0, 1)),
 	outcome    INTEGER CHECK (outcome BETWEEN 0 AND 3),
 	error      TEXT NOT NULL,
+	ended      INTEGER,
 	PRIMARY KEY (thread, ord),
-	CHECK ((state = 'finished') = (outcome IS NOT NULL))
+	CHECK ((state = 'finished') = (outcome IS NOT NULL)),
+	CHECK ((state = 'finished') = (ended IS NOT NULL))
 ) STRICT;
 CREATE UNIQUE INDEX runs_one_live ON runs (thread) WHERE state <> 'finished';
 

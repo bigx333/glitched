@@ -98,7 +98,7 @@ func apply(t Thread, e Event) (Thread, error) {
 	case api.TurnEnded:
 		if err = t.setRun(b.Run, RunFinished); err == nil {
 			i := t.runAt(b.Run)
-			t.Runs[i].Outcome, t.Runs[i].Error = b.Outcome, b.Error
+			t.Runs[i].Outcome, t.Runs[i].Error, t.Runs[i].Ended = b.Outcome, b.Error, e.At
 			err = t.release(b.Run, QueueCancelled)
 		}
 		if err == nil {

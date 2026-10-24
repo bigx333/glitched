@@ -142,7 +142,7 @@ func serve(ctx context.Context, args []string) error {
 
 	srv := &transport.Server{Transport: lb, Endpoint: h, Hub: rep}
 	if up != nil {
-		st.OnCommit(func([]api.Event) { up.Notify() })
+		st.OnCommit(func(store.Commit) { up.Notify() })
 		go func() {
 			if err := up.Run(ctx); err != nil && ctx.Err() == nil {
 				slog.Error("uploader stopped", "err", err)

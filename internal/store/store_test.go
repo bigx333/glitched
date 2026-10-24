@@ -99,7 +99,7 @@ func TestReadLogIsDenseAndStable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "host.db")
 	s := open(t, path)
 	var woke int
-	s.OnCommit(func(events []api.Event) { woke += len(events) })
+	s.OnCommit(func(c store.Commit) { woke += len(c.Events) })
 	for range 3 {
 		if _, err := s.Submit(ctx, create(api.NewID()), time.Now()); err != nil {
 			t.Fatal(err)
