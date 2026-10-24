@@ -21,7 +21,7 @@ func TestACommitTheFenceCannotCoverFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	hooked := 0
-	s.OnCommit(func(evs []api.Event) { hooked += len(evs) })
+	s.OnCommit(func(c Commit) { hooked += len(c.Events) })
 	s.fence.Close()
 
 	settle := api.Command{ID: api.NewID(), Target: thread, Body: api.InboxSet{Disposition: api.Disposition{State: api.Settled}}}

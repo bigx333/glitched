@@ -205,6 +205,12 @@ type Request struct {
 	State      RequestState    `json:"state"`
 }
 
+// TurnResult is how a turn ended.
+type TurnResult struct {
+	Outcome Outcome   `json:"outcome"`
+	Ended   time.Time `json:"ended"`
+}
+
 // Thread is the projection a client reads. Working is derived from Run and
 // never stored.
 type Thread struct {
@@ -219,6 +225,7 @@ type Thread struct {
 	Requests    []Request   `json:"requests,omitempty"` // pending only
 	Queued      int         `json:"queued"`
 	Disposition Disposition `json:"disposition"`
+	LastTurn    *TurnResult `json:"lastTurn,omitempty"` // the most recent finished turn; nil before one ends
 	UpdatedAt   time.Time   `json:"updatedAt"`
 }
 
@@ -244,7 +251,8 @@ type Snapshot struct {
 	Events  []Event  `json:"events,omitempty"`
 }
 
-// Subscription is a Query that stays open.
+// Subscription is a Query that stays open. One on a thread streams its
+// events; the shell streams thread views instead, after a snapshot.
 type Subscription Query
 
 type StreamKind uint8
@@ -256,12 +264,16 @@ const (
 	StreamSnapshot
 	// StreamSynchronized follows the snapshot and buffered tail.
 	StreamSynchronized
+	// StreamThread replaces one thread of a shell snapshot with its view
+	// after a commit that moved it. A commit sends at most one per thread.
+	StreamThread
 )
 
 type StreamItem struct {
 	Kind     StreamKind `json:"kind"`
 	Event    *Event     `json:"event,omitempty"`
 	Snapshot *Snapshot  `json:"snapshot,omitempty"`
+	Thread   *Thread    `json:"thread,omitempty"`
 }
 
 type Stream interface {

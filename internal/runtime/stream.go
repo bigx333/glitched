@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"glitched/internal/api"
+	"glitched/internal/store"
 )
 
 const (
@@ -18,7 +19,9 @@ var errStreamClosed = errors.New("runtime: stream closed")
 
 // Open sends the catch-up (a replay from the client's cursor, or a snapshot
 // at a fence), then whatever committed meanwhile, then StreamSynchronized,
-// then live events.
+// then live items. A thread subscription gets the thread's events. The shell
+// gets one StreamThread per thread a commit moved, and always catches up
+// from a snapshot: it holds no events to replay.
 func (h *Host) Open(ctx context.Context, sub api.Subscription) (api.Stream, error) {
 	s := &stream{h: h, thread: sub.Thread, wake: make(chan struct{}, 1)}
 	h.mu.Lock()
@@ -34,7 +37,7 @@ func (h *Host) Open(ctx context.Context, sub api.Subscription) (api.Stream, erro
 }
 
 func (h *Host) catchUp(ctx context.Context, q api.Query) ([]api.StreamItem, uint64, error) {
-	if q.After.Log == h.store.LogID() {
+	if !q.Thread.IsZero() && q.After.Log == h.store.LogID() {
 		events, head, err := h.store.Since(ctx, q.Thread, q.After.Seq, replayEvents+1)
 		if err != nil {
 			return nil, 0, err
@@ -60,16 +63,23 @@ func (h *Host) catchUp(ctx context.Context, q api.Query) ([]api.StreamItem, uint
 
 type stream struct {
 	h      *Host
-	thread api.ID // zero follows every thread
+	thread api.ID // zero is the shell
 	wake   chan struct{}
 
 	mu    sync.Mutex
 	ready bool
-	tail  []api.Event // this stream's events committed while the catch-up was read
+	tail  []batch // this stream's part of what committed while the catch-up was read
 	items []api.StreamItem
-	bytes int    // event payload held in tail and items
-	last  uint64 // highest seq queued; anything at or below it is a duplicate
+	bytes int    // held in tail and items
+	last  uint64 // head of the last commit queued; a commit at or below it is a duplicate
 	err   error
+}
+
+// batch is one commit's items for a stream. A commit lands whole on either
+// side of a catch-up's fence, so its head alone tells a duplicate.
+type batch struct {
+	head  uint64
+	items []api.StreamItem
 }
 
 func (s *stream) start(items []api.StreamItem, fence uint64) {
@@ -81,48 +91,82 @@ func (s *stream) start(items []api.StreamItem, fence uint64) {
 	tail := s.tail
 	s.tail, s.items, s.bytes, s.last, s.ready = nil, items, 0, fence, true
 	for _, it := range items {
-		if it.Event != nil {
-			s.bytes += len(it.Event.Payload)
-		}
+		s.bytes += size(it)
 	}
-	s.push(tail)
+	for _, b := range tail {
+		s.push(b)
+	}
 	s.items = append(s.items, api.StreamItem{Kind: api.StreamSynchronized})
 	s.signal()
 }
 
-func (s *stream) publish(events []api.Event) {
+func (s *stream) publish(c store.Commit) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
 		return
 	}
+	b := s.batchOf(c)
+	if len(b.items) == 0 {
+		return
+	}
 	if s.ready {
-		s.push(events)
+		s.push(b)
 	} else {
-		for _, e := range events {
-			if s.follows(e) {
-				s.tail = append(s.tail, e)
-				s.bytes += len(e.Payload)
-			}
+		s.tail = append(s.tail, b)
+		for _, it := range b.items {
+			s.bytes += size(it)
 		}
 		s.bound()
 	}
 	s.signal()
 }
 
-func (s *stream) push(events []api.Event) {
-	for _, e := range events {
-		if e.Cursor.Seq <= s.last || !s.follows(e) {
-			continue
+func (s *stream) batchOf(c store.Commit) batch {
+	b := batch{head: c.Events[len(c.Events)-1].Cursor.Seq}
+	if s.thread.IsZero() {
+		for i := range c.Threads {
+			b.items = append(b.items, api.StreamItem{Kind: api.StreamThread, Thread: &c.Threads[i]})
 		}
-		s.last = e.Cursor.Seq
-		s.items = append(s.items, api.StreamItem{Kind: api.StreamEvent, Event: &e})
-		s.bytes += len(e.Payload)
+		return b
+	}
+	for i := range c.Events {
+		if c.Events[i].Thread == s.thread {
+			b.items = append(b.items, api.StreamItem{Kind: api.StreamEvent, Event: &c.Events[i]})
+		}
+	}
+	return b
+}
+
+func (s *stream) push(b batch) {
+	if b.head <= s.last {
+		return
+	}
+	s.last = b.head
+	s.items = append(s.items, b.items...)
+	for _, it := range b.items {
+		s.bytes += size(it)
 	}
 	s.bound()
 }
 
-func (s *stream) follows(e api.Event) bool { return s.thread.IsZero() || e.Thread == s.thread }
+// viewOverhead stands in for a view's fixed-size fields; its strings and
+// request bodies are counted as they are.
+const viewOverhead = 256
+
+func size(it api.StreamItem) int {
+	switch {
+	case it.Event != nil:
+		return len(it.Event.Payload)
+	case it.Thread != nil:
+		n := viewOverhead + len(it.Thread.Title) + len(it.Thread.Workspace)
+		for _, r := range it.Thread.Requests {
+			n += len(r.Body)
+		}
+		return n
+	}
+	return 0
+}
 
 func (s *stream) bound() {
 	if s.bytes > streamBytes {
@@ -136,9 +180,7 @@ func (s *stream) Next(ctx context.Context) (api.StreamItem, error) {
 		if s.err == nil && len(s.items) > 0 {
 			it := s.items[0]
 			s.items = s.items[1:]
-			if it.Event != nil {
-				s.bytes -= len(it.Event.Payload)
-			}
+			s.bytes -= size(it)
 			s.mu.Unlock()
 			return it, nil
 		}
