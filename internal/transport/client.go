@@ -123,9 +123,10 @@ func (c *conn) dial(ctx context.Context, d *dialing) {
 // The host part is never resolved: Transport.Dial picks the connection.
 const origin = "ws://glitched/ws"
 
-// handshake dials machine and opens a WebSocket on the connection. It dials
-// before net/http does, because net/http detaches its dial from ctx and a
-// dial nobody waits for would go on.
+// handshake dials machine, opens a WebSocket on the connection and, on a
+// credentialed Transport, proves the client's key. It dials before net/http
+// does, because net/http detaches its dial from ctx and a dial nobody waits
+// for would go on.
 func handshake(ctx context.Context, t Transport, machine api.ID) (*websocket.Conn, error) {
 	nc, err := t.Dial(ctx, machine)
 	if err != nil {
@@ -138,6 +139,12 @@ func handshake(ctx context.Context, t Transport, machine api.ID) (*websocket.Con
 	if err != nil {
 		nc.Close()
 		return nil, fmt.Errorf("transport: %w", err)
+	}
+	if c, ok := t.(credentialed); ok {
+		if err := prove(ctx, ws, c.key()); err != nil {
+			ws.CloseNow()
+			return nil, err
+		}
 	}
 	return ws, nil
 }
@@ -158,7 +165,7 @@ type socket struct {
 
 func newSocket(ws *websocket.Conn, k keepalive, idleAfter time.Duration) *socket {
 	// An Events page is up to maxPage events of any size; the server is
-	// the one this client chose to trust.
+	// the one this client chose to trust, and proved it.
 	ws.SetReadLimit(-1)
 	ctx, fail := context.WithCancelCause(context.Background())
 	s := &socket{ws: ws, ctx: ctx, fail: fail, out: make(chan []byte), idleAfter: idleAfter, sinks: map[uint64]sink{}}

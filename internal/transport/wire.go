@@ -1,7 +1,25 @@
 // Package transport carries the Endpoint and hub calls over one WebSocket per
 // client, on whatever network a Transport provides.
 //
-// A client dials GET /ws and sends text messages, one JSON object each:
+// On a Tailnet socket the client and server first prove to each other that
+// they hold the key, the SHA-256 of the client's pairing token, without
+// sending it or the token. The upgrade carries no credential. Then, with
+// nonces of 32 random bytes and HMAC-SHA256 under the key:
+//
+//	server: {"nonce":nS}
+//	client: {"nonce":nC,"mac":HMAC("glitched-client\x00" || nS || nC)}
+//	server: {"mac":HMAC("glitched-server\x00" || nC || nS)}
+//
+// Byte fields are base64. The server tries the client's MAC against every
+// key Server.Authorize knows and closes the socket with 1008, policy
+// violation, when none matches. Any server can send 1008, so the client
+// reports it as ErrRefused, not as a wrong token. The client checks the
+// server's MAC before it sends a call, and drops a server whose MAC is wrong
+// with ErrNotTheServer. Each side gives the other 5s, and the server reads
+// no message over 1 KiB until the client has proved its key. A unix socket
+// skips the handshake: its file mode is the gate.
+//
+// Then the client sends text messages, one JSON object each:
 //
 //	{"id":1,"method":"submit","params":{...}}  start a call or a stream
 //	{"id":1,"cancel":true}                    abandon a call, or end a stream

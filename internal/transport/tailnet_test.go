@@ -1,0 +1,506 @@
+package transport
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"glitched/internal/api"
+)
+
+func TestTailnetListensOnlyOnLoopbackOrTailscale(t *testing.T) {
+	ok := []string{"127.0.0.1:0", "[::1]:0", "100.64.0.1:7465", "100.127.255.254:7465", "[fd7a:115c:a1e0::1]:7465"}
+	refused := []string{"0.0.0.0:7465", "[::]:7465", ":7465", "8.8.8.8:7465", "192.168.1.10:7465", "100.128.0.1:7465", "[fd7a:115c:a1e1::1]:7465", "[fd7a:115c:a1e0:b1a:0:7:a01:110]:7465", "localhost:7465"}
+	for _, addr := range ok {
+		// This machine may not hold the address, so only the rule's refusal counts.
+		ln, err := Tailnet{Address: addr}.Listen(context.Background())
+		if errors.Is(err, errNotTailnet) {
+			t.Errorf("%s refused: %v", addr, err)
+		}
+		if ln != nil {
+			ln.Close()
+		}
+	}
+	for _, addr := range refused {
+		ln, err := Tailnet{Address: addr}.Listen(context.Background())
+		if !errors.Is(err, errNotTailnet) {
+			t.Errorf("%s: %v, want the tailnet rule's refusal", addr, err)
+		}
+		if ln != nil {
+			ln.Close()
+		}
+	}
+}
+
+func TestAuthorizeRefusesAnUnknownKeyAndClosesARevokedSocket(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	grant, revoke := context.WithCancel(ctx)
+	var revoked atomic.Bool
+	ep := &fakeEndpoint{reads: make(chan error, 2)}
+	admitGood := admit(map[string]context.Context{"good": grant})
+	addr := serveTailnet(t, &Server{Transport: Tailnet{}, Endpoint: ep, Authorize: func(r *http.Request, proved func(Key) bool) (Key, context.Context, error) {
+		if revoked.Load() {
+			return Key{}, nil, errors.New("unknown token")
+		}
+		return admitGood(r, proved)
+	}})
+
+	bad := NewEndpointClient(Tailnet{Address: addr, Token: "bad"}, api.ID{})
+	defer bad.Close()
+	if _, err := bad.Info(ctx); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a wrong token: %v, want ErrRefused", err)
+	}
+	good := NewEndpointClient(Tailnet{Address: addr, Token: "good"}, api.ID{})
+	defer good.Close()
+	if _, err := good.Info(ctx); err != nil {
+		t.Fatal(err)
+	}
+	blocked := make(chan error, 1)
+	go func() {
+		_, err := good.Read(ctx, api.Query{Thread: blocks})
+		blocked <- err
+	}()
+	<-ep.reads
+	revoked.Store(true)
+	revoke()
+	if err := <-blocked; !errors.Is(err, errLost) {
+		t.Fatalf("a call on a socket whose grant ended: %v, want the connection lost", err)
+	}
+	if _, err := good.Info(ctx); !errors.Is(err, ErrRefused) {
+		t.Fatalf("redialling with a revoked token: %v, want ErrRefused", err)
+	}
+}
+
+type routedConn struct {
+	net.Conn
+	local, remote net.Addr
+}
+
+func (c routedConn) LocalAddr() net.Addr  { return c.local }
+func (c routedConn) RemoteAddr() net.Addr { return c.remote }
+
+// route makes Tailnet's dials, per network, return a pipe whose ends claim
+// the given local and remote addresses, as a route this machine lacks would.
+// It returns what the far ends received, by network, once Tailnet closed
+// them.
+func route(t *testing.T, ends map[string][2]string) func() map[string]int {
+	t.Helper()
+	old := dialNet
+	t.Cleanup(func() { dialNet = old })
+	var (
+		mu       sync.Mutex
+		received = map[string]int{}
+		far      sync.WaitGroup
+	)
+	dialNet = func(_ context.Context, network, _ string) (net.Conn, error) {
+		e, ok := ends[network]
+		if !ok {
+			t.Errorf("dialled %s", network)
+			return nil, errors.New("no route")
+		}
+		near, end := net.Pipe()
+		far.Go(func() {
+			n, _ := io.Copy(io.Discard, end)
+			mu.Lock()
+			received[network] += int(n)
+			mu.Unlock()
+		})
+		at := func(s string) net.Addr { return net.TCPAddrFromAddrPort(netip.MustParseAddrPort(s)) }
+		return routedConn{near, at(e[0]), at(e[1])}, nil
+	}
+	return func() map[string]int {
+		far.Wait()
+		mu.Lock()
+		defer mu.Unlock()
+		return received
+	}
+}
+
+// fakeInterfaces stands in for this machine's interfaces and counts the
+// scans of them.
+type fakeInterfaces struct {
+	mu    sync.Mutex
+	table [][]netip.Addr
+	scans int
+}
+
+// set replaces the interfaces, each a space-separated list of its addresses.
+// Tailnet sees the change once its last scan is a second old.
+func (f *fakeInterfaces) set(ifaces ...string) {
+	var table [][]netip.Addr
+	for _, i := range ifaces {
+		var addrs []netip.Addr
+		for _, a := range strings.Fields(i) {
+			addrs = append(addrs, netip.MustParseAddr(a))
+		}
+		table = append(table, addrs)
+	}
+	f.mu.Lock()
+	f.table = table
+	f.mu.Unlock()
+}
+
+func (f *fakeInterfaces) scanned() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.scans
+}
+
+// interfaces makes the given interfaces this machine's, for Tailnet, each a
+// space-separated list of its addresses.
+func interfaces(t *testing.T, ifaces ...string) *fakeInterfaces {
+	t.Helper()
+	f := &fakeInterfaces{}
+	f.set(ifaces...)
+	old := interfaceAddrs
+	forget := func() {
+		scan.Lock()
+		scan.at = time.Time{}
+		scan.Unlock()
+	}
+	t.Cleanup(func() {
+		interfaceAddrs = old
+		forget()
+	})
+	interfaceAddrs = func() [][]netip.Addr {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.scans++
+		return f.table
+	}
+	forget()
+	return f
+}
+
+func TestTailnetScansInterfacesAtMostOnceASecond(t *testing.T) {
+	ifaces := interfaces(t, "127.0.0.1 ::1", "100.64.0.9 fd7a:115c:a1e0::9")
+	at := func(s string) net.Addr { return net.TCPAddrFromAddrPort(netip.MustParseAddrPort(s)) }
+	whoIs := func() error {
+		near, far := net.Pipe()
+		defer far.Close()
+		defer near.Close()
+		_, err := Tailnet{}.WhoIs(routedConn{near, at("100.64.0.9:7465"), at("100.70.0.2:40000")})
+		return err
+	}
+	received := route(t, map[string][2]string{
+		"udp": {"100.64.0.9:40000", "100.70.0.2:7465"},
+		"tcp": {"100.64.0.9:40000", "100.70.0.2:7465"},
+	})
+	begin := time.Now()
+	for range 1000 {
+		if err := whoIs(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 100 {
+		c, err := Tailnet{Address: "100.70.0.2:7465"}.Dial(context.Background(), api.ID{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Close()
+	}
+	received()
+	if n, took := ifaces.scanned(), time.Since(begin); n > 1+int(took/time.Second) {
+		t.Fatalf("1000 accepted connections and 100 dials in %v scanned the interfaces %d times, want at most once a second", took, n)
+	}
+	ifaces.set("127.0.0.1 ::1", "100.64.0.9")
+	time.Sleep(1100 * time.Millisecond)
+	if err := whoIs(); err == nil {
+		t.Fatal("a server still took 100.64.0.9 for Tailscale's a second after its interface lost its fd7a:115c:a1e0::/48 address")
+	}
+}
+
+func TestTailnetSendsNothingOutsideWireGuard(t *testing.T) {
+	// Tailscale has no peer at 100.101.2.3, so the kernel routes it by the
+	// default route from the LAN address.
+	received := route(t, map[string][2]string{
+		"udp": {"192.168.1.5:40000", "100.101.2.3:7465"},
+		"tcp": {"192.168.1.5:40000", "100.101.2.3:7465"},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	c := NewEndpointClient(Tailnet{Address: "100.101.2.3:7465", Token: "secret"}, api.ID{})
+	_, err := c.Info(ctx)
+	c.Close()
+	if err == nil || !strings.Contains(err.Error(), "Tailscale doesn't route to 100.101.2.3") {
+		t.Fatalf("a dial that left by the LAN: %v, want Tailscale doesn't route there", err)
+	}
+	if got := received(); got["tcp"] != 0 || got["udp"] != 0 {
+		t.Fatalf("the far end received %v bytes", got)
+	}
+}
+
+func TestTailnetSendsNothingFromACarrierGradeNATLink(t *testing.T) {
+	// The ISP gave this machine 100.65.0.5 and Tailscale isn't running, so
+	// both ends are in 100.64.0.0/10 and nothing encrypts the connection. By
+	// hand, `unshare -rnm` with a veth pair at 100.65.0.5/10 and 100.101.2.3/10
+	// reproduces it end to end; CI can't create network namespaces.
+	interfaces(t, "127.0.0.1 ::1", "100.65.0.5")
+	received := route(t, map[string][2]string{
+		"udp": {"100.65.0.5:40000", "100.101.2.3:7465"},
+		"tcp": {"100.65.0.5:40000", "100.101.2.3:7465"},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	c := NewEndpointClient(Tailnet{Address: "100.101.2.3:7465", Token: "secret"}, api.ID{})
+	_, err := c.Info(ctx)
+	c.Close()
+	if err == nil || !strings.Contains(err.Error(), "isn't on the Tailscale interface") {
+		t.Fatalf("a dial from a carrier-grade NAT address: %v, want it isn't on the Tailscale interface", err)
+	}
+	if got := received(); got["tcp"] != 0 || got["udp"] != 0 {
+		t.Fatalf("the far end received %v bytes", got)
+	}
+}
+
+func TestTailnetDialsOnlyBetweenLoopbacksOrTailscaleAddresses(t *testing.T) {
+	interfaces(t, "127.0.0.1 ::1", "192.168.1.5", "100.64.0.9 fd7a:115c:a1e0::9 fe80::9", "100.65.0.5")
+	cases := []struct {
+		name     string
+		udp, tcp [2]string // local, remote
+		ok       bool
+	}{
+		{"loopback", [2]string{"127.0.0.1:1", "127.0.0.1:7465"}, [2]string{"127.0.0.1:1", "127.0.0.1:7465"}, true},
+		{"a peer", [2]string{"100.64.0.9:1", "100.70.0.1:7465"}, [2]string{"100.64.0.9:1", "100.70.0.1:7465"}, true},
+		{"a peer over IPv6", [2]string{"[fd7a:115c:a1e0::9]:1", "[fd7a:115c:a1e0::1]:7465"}, [2]string{"[fd7a:115c:a1e0::9]:1", "[fd7a:115c:a1e0::1]:7465"}, true},
+		{"a peer as IPv4-mapped", [2]string{"[::ffff:100.64.0.9]:1", "[::ffff:100.70.0.1]:7465"}, [2]string{"[::ffff:100.64.0.9]:1", "[::ffff:100.70.0.1]:7465"}, true},
+		{"a name that resolved off the tailnet", [2]string{"192.168.1.5:1", "192.168.1.10:7465"}, [2]string{"192.168.1.5:1", "192.168.1.10:7465"}, false},
+		{"IPv4-mapped off the tailnet", [2]string{"[::ffff:192.168.1.5]:1", "[::ffff:192.168.1.10]:7465"}, [2]string{"[::ffff:192.168.1.5]:1", "[::ffff:192.168.1.10]:7465"}, false},
+		{"a route that changed after the probe", [2]string{"100.64.0.9:1", "100.70.0.1:7465"}, [2]string{"192.168.1.5:1", "100.70.0.1:7465"}, false},
+		{"loopback to a Tailscale address", [2]string{"127.0.0.1:1", "100.70.0.1:7465"}, [2]string{"127.0.0.1:1", "100.70.0.1:7465"}, false},
+		{"from a carrier-grade NAT link", [2]string{"100.65.0.5:1", "100.70.0.1:7465"}, [2]string{"100.65.0.5:1", "100.70.0.1:7465"}, false},
+		{"a 4via6 address, which its subnet router forwards as IPv4", [2]string{"[fd7a:115c:a1e0::9]:1", "[fd7a:115c:a1e0:b1a:0:7:a01:110]:7465"}, [2]string{"[fd7a:115c:a1e0::9]:1", "[fd7a:115c:a1e0:b1a:0:7:a01:110]:7465"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			received := route(t, map[string][2]string{"udp": tc.udp, "tcp": tc.tcp})
+			c, err := Tailnet{Address: tc.tcp[1], Token: "secret"}.Dial(context.Background(), api.ID{})
+			if c != nil {
+				c.Close()
+			}
+			if (err == nil) != tc.ok {
+				t.Fatalf("dial %s from %s: %v, want ok=%v", tc.tcp[1], tc.tcp[0], err, tc.ok)
+			}
+			received()
+		})
+	}
+}
+
+func TestTailnetRefusesAnAddressNoPeerHoldsBeforeConnecting(t *testing.T) {
+	received := route(t, map[string][2]string{"udp": {"192.168.1.5:40000", "100.101.2.3:7465"}})
+	_, err := Tailnet{Address: "100.101.2.3:7465", Token: "secret"}.Dial(context.Background(), api.ID{})
+	if err == nil {
+		t.Fatal("dialled an address Tailscale doesn't route")
+	}
+	received()
+}
+
+func TestTailnetListenAddressForms(t *testing.T) {
+	ok := []string{"[::ffff:100.64.0.1]:7465", "[::ffff:127.0.0.1]:0"}
+	refused := []string{"[::ffff:8.8.8.8]:7465", "[::ffff:0.0.0.0]:7465", "[fe80::1%eth0]:7465", "[fd7a:115c:a1e0::1%tailscale0]:7465", "[fe80::1%lo]:7465"}
+	for _, addr := range ok {
+		ln, err := Tailnet{Address: addr}.Listen(context.Background())
+		if errors.Is(err, errNotTailnet) {
+			t.Errorf("%s refused: %v", addr, err)
+		}
+		if ln != nil {
+			ln.Close()
+		}
+	}
+	for _, addr := range refused {
+		ln, err := Tailnet{Address: addr}.Listen(context.Background())
+		if !errors.Is(err, errNotTailnet) {
+			t.Errorf("%s: %v, want the tailnet rule's refusal", addr, err)
+		}
+		if ln != nil {
+			ln.Close()
+		}
+	}
+}
+
+func TestTailnetServesOnlyLoopbackOrTailscalePeers(t *testing.T) {
+	interfaces(t, "127.0.0.1 ::1", "100.64.0.1 fd7a:115c:a1e0::1", "100.65.0.5")
+	at := func(s string) net.Addr { return net.TCPAddrFromAddrPort(netip.MustParseAddrPort(s)) }
+	cases := []struct {
+		local, remote string
+		ok            bool
+	}{
+		{"127.0.0.1:7465", "127.0.0.1:40000", true},
+		{"100.64.0.1:7465", "100.70.0.2:40000", true},
+		{"100.64.0.1:7465", "192.168.1.5:40000", false},
+		{"100.64.0.1:7465", "127.0.0.1:40000", false},
+		{"100.65.0.5:7465", "100.70.0.2:40000", false},
+		{"[fd7a:115c:a1e0::1]:7465", "[fd7a:115c:a1e0:b1a:0:7:a01:110]:40000", false},
+	}
+	for _, tc := range cases {
+		near, far := net.Pipe()
+		_, err := Tailnet{}.WhoIs(routedConn{near, at(tc.local), at(tc.remote)})
+		near.Close()
+		far.Close()
+		if (err == nil) != tc.ok {
+			t.Errorf("a socket from %s to %s: %v, want ok=%v", tc.remote, tc.local, err, tc.ok)
+		}
+	}
+}
+
+func TestTailscaleIPIsOnTheTailscaleInterface(t *testing.T) {
+	cases := []struct {
+		ifaces []string
+		want   string
+	}{
+		{[]string{"127.0.0.1 ::1", "100.65.0.5", "fe80::1 fd7a:115c:a1e0::7 100.100.1.2"}, "100.100.1.2"},
+		{[]string{"127.0.0.1 ::1", "100.65.0.5", "fe80::1 fd7a:115c:a1e0::7"}, "fd7a:115c:a1e0::7"},
+		{[]string{"127.0.0.1 ::1", "100.65.0.5", "192.168.1.5"}, ""},
+	}
+	for _, tc := range cases {
+		interfaces(t, tc.ifaces...)
+		ip, ok := TailscaleIP()
+		if got := ip.String(); !ok && tc.want != "" || ok && got != tc.want {
+			t.Errorf("interfaces %q: %v %v, want %q", tc.ifaces, ip, ok, tc.want)
+		}
+	}
+}
+
+func TestTailnetPresentsItsTokenByValueOrPointer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, Authorize: admit(map[string]context.Context{"good": context.Background()})}
+	ln, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error)
+	go func() { done <- srv.Serve(ctx, ln) }()
+	defer func() { cancel(); <-done }()
+	tn := Tailnet{Address: ln.Addr().String(), Token: "good"}
+	for name, tr := range map[string]Transport{"Tailnet": tn, "*Tailnet": &tn} {
+		c := NewEndpointClient(tr, api.ID{})
+		if _, err := c.Info(ctx); err != nil {
+			t.Errorf("%s with the right token: %v", name, err)
+		}
+		c.Close()
+	}
+}
+
+func TestTailnetServerNeedsAuthorize(t *testing.T) {
+	for name, tr := range map[string]Transport{"Tailnet": Tailnet{}, "*Tailnet": &Tailnet{}} {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ln, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = (&Server{Transport: tr, Endpoint: &fakeEndpoint{}}).Serve(ctx, ln)
+		cancel()
+		ln.Close()
+		if err == nil {
+			t.Errorf("a %s server without Authorize served", name)
+		}
+	}
+}
+
+func TestServerClosesAConnectionItRefusedOnceIdle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, idle: 100 * time.Millisecond, Authorize: admit(nil)}
+	ln, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error)
+	go func() { done <- srv.Serve(ctx, ln) }()
+	defer func() { cancel(); <-done }()
+	nc, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	nc.SetDeadline(time.Now().Add(5 * time.Second))
+	br := bufio.NewReader(nc)
+	const upgrade = "GET /ws HTTP/1.1\r\nHost: glitched\r\n\r\n"
+	io.WriteString(nc, upgrade)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUpgradeRequired {
+		t.Fatalf("a GET that asked for no WebSocket got %d, want 426", resp.StatusCode)
+	}
+	time.Sleep(time.Second)
+	io.WriteString(nc, upgrade)
+	if resp, err := http.ReadResponse(br, nil); err == nil {
+		resp.Body.Close()
+		t.Fatalf("a refused connection idle past the timeout was served again: %d", resp.StatusCode)
+	}
+}
+
+func TestServerClosesAConnectionWhoseRequestBodyNeverComes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv := &Server{Transport: Tailnet{}, Endpoint: &fakeEndpoint{}, idle: 100 * time.Millisecond, Authorize: admit(nil)}
+	ln, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error)
+	go func() { done <- srv.Serve(ctx, ln) }()
+	defer func() { cancel(); <-done }()
+	for _, path := range []string{"/ws", "/elsewhere"} {
+		nc, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		nc.SetDeadline(time.Now().Add(3 * time.Second))
+		io.WriteString(nc, "GET "+path+" HTTP/1.1\r\nHost: glitched\r\nContent-Length: 1\r\n\r\n")
+		_, err = io.Copy(io.Discard, nc)
+		nc.Close()
+		if err != nil {
+			t.Errorf("GET %s whose body never came: %v, want the server to close the connection", path, err)
+		}
+	}
+}
+
+func TestServerKeepsAnAcceptedSocketPastTheRequestTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ep := &fakeEndpoint{reads: make(chan error, 2)}
+	srv := &Server{Transport: Tailnet{}, Endpoint: ep, idle: 100 * time.Millisecond, Authorize: admit(map[string]context.Context{"good": context.Background()})}
+	ln, err := Tailnet{Address: "127.0.0.1:0"}.Listen(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error)
+	go func() { done <- srv.Serve(ctx, ln) }()
+	defer func() { cancel(); <-done }()
+	c := NewEndpointClient(Tailnet{Address: ln.Addr().String(), Token: "good"}, api.ID{})
+	defer c.Close()
+	blocked := make(chan error, 1)
+	go func() {
+		_, err := c.Read(ctx, api.Query{Thread: blocks})
+		blocked <- err
+	}()
+	<-ep.reads
+	select {
+	case err := <-blocked:
+		t.Fatalf("a call on an accepted socket ended once the request timeout passed: %v", err)
+	case <-time.After(time.Second):
+	}
+	if _, err := c.Info(ctx); err != nil {
+		t.Fatalf("an answer on an accepted socket once the response timeout passed: %v", err)
+	}
+	select {
+	case err := <-blocked:
+		t.Fatalf("a call on an accepted socket ended once the server wrote past the response timeout: %v", err)
+	default:
+	}
+}
