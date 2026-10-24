@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -231,4 +232,32 @@ func TestServeStopsOnARestoreTheHubProvesAfterStart(t *testing.T) {
 	if env, err := ep.Info(ctx); err != nil || env.Log == log {
 		t.Fatalf("after a restart the host serves log %s (%v), want a new one", env.Log, err)
 	}
+}
+
+// serve keeps how it ran, so the next serve on the dir, and the engine the
+// GUI embeds there, run the same way unless a flag says otherwise.
+func TestServeKeepsItsFlagsForTheNextStart(t *testing.T) {
+	dir := stateDir(t)
+	keeps := func(want daemon.Config) {
+		t.Helper()
+		cfg, err := daemon.Defaults(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.Dir, cfg.Adapter = "", nil
+		if !reflect.DeepEqual(cfg, want) {
+			t.Fatalf("the next start runs as %+v, want %+v", cfg, want)
+		}
+	}
+	serving(t, dir, "-hub-server", "127.0.0.1:1", "-hub-token", "secret", "-epoch", "2", "-listen", "127.0.0.1:0")()
+	keeps(daemon.Config{HubServer: "127.0.0.1:1", HubToken: "secret", Epoch: 2, Listen: []string{"127.0.0.1:0"}})
+	if fi, err := os.Stat(filepath.Join(dir, "engine.json")); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("engine.json: %v, want mode 0600: it holds the hub's token", err)
+	}
+
+	serving(t, dir, "-epoch", "3")()
+	keeps(daemon.Config{HubServer: "127.0.0.1:1", HubToken: "secret", Epoch: 3, Listen: []string{"127.0.0.1:0"}})
+
+	serving(t, dir, "-hub", "-listen", "")()
+	keeps(daemon.Config{Hub: true, Epoch: 3})
 }
