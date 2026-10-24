@@ -45,15 +45,29 @@ func start(t *testing.T, network string, srv *Server) Loopback {
 }
 
 // fakeEndpoint answers Submit and Open for a target in errs with that error;
-// it is read-only once the server starts.
+// it is read-only once the server starts. closed, when set, gets the thread
+// of each stream the server closes; reads, when set, gets nil as a Read of
+// blocks begins and its ctx's error as it ends; pulled counts the items its
+// streams gave the server.
 type fakeEndpoint struct {
-	env  api.Environment
-	errs map[api.ID]error
+	env    api.Environment
+	errs   map[api.ID]error
+	closed chan api.ID
+	reads  chan error
+	pulled atomic.Int64
 }
 
 func (f *fakeEndpoint) Info(context.Context) (api.Environment, error) { return f.env, nil }
 
-func (f *fakeEndpoint) Read(_ context.Context, q api.Query) (api.Snapshot, error) {
+func (f *fakeEndpoint) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
+	if q.Thread == blocks {
+		if f.reads != nil {
+			f.reads <- nil
+			defer func() { f.reads <- ctx.Err() }()
+		}
+		<-ctx.Done()
+		return api.Snapshot{}, ctx.Err()
+	}
 	return api.Snapshot{Cursor: q.After, Threads: []api.Thread{{ID: q.Thread, Title: "read"}}}, nil
 }
 
@@ -75,24 +89,39 @@ func (f *fakeEndpoint) Open(_ context.Context, s api.Subscription) (api.Stream, 
 		items = append(items, api.StreamItem{Kind: api.StreamEvent, Event: &api.Event{Cursor: api.Cursor{Log: f.env.Log, Seq: seq}, Thread: s.Thread}})
 	}
 	items = append(items, api.StreamItem{Kind: api.StreamSynchronized})
-	st := &fakeStream{items: items}
+	if s.Thread == firehose {
+		payload := json.RawMessage(`"` + strings.Repeat("x", 64<<10) + `"`)
+		items = items[:0]
+		for seq := range uint64(200) {
+			items = append(items, api.StreamItem{Kind: api.StreamEvent, Event: &api.Event{Cursor: api.Cursor{Log: f.env.Log, Seq: seq + 1}, Thread: s.Thread, Payload: payload}})
+		}
+	}
+	st := &fakeStream{items: items, thread: s.Thread, closed: f.closed, pulled: &f.pulled}
 	if s.Thread == endsBadly {
 		st.end = api.ErrOverflow
 	}
 	return st, nil
 }
 
-var endsBadly = api.NewID()
+// endsBadly's stream fails after its items; firehose's is 200 items of 64 KiB,
+// three times the stream window; a Read of blocks waits for its ctx.
+var endsBadly, firehose, blocks = api.NewID(), api.NewID(), api.NewID()
 
 type fakeStream struct {
-	items []api.StreamItem
-	end   error
+	items  []api.StreamItem
+	end    error
+	thread api.ID
+	closed chan api.ID
+	pulled *atomic.Int64
 }
 
 func (s *fakeStream) Next(ctx context.Context) (api.StreamItem, error) {
 	if len(s.items) > 0 {
 		it := s.items[0]
 		s.items = s.items[1:]
+		if s.pulled != nil {
+			s.pulled.Add(1)
+		}
 		return it, nil
 	}
 	if s.end != nil {
@@ -102,7 +131,13 @@ func (s *fakeStream) Next(ctx context.Context) (api.StreamItem, error) {
 	return api.StreamItem{}, ctx.Err()
 }
 
-func (s *fakeStream) Close() error { return nil }
+func (s *fakeStream) Close() error {
+	select {
+	case s.closed <- s.thread:
+	default:
+	}
+	return nil
+}
 
 func TestEndpointRoundTrip(t *testing.T) {
 	moved, rejected, wrapped, opaque := api.NewID(), api.NewID(), api.NewID(), api.NewID()
@@ -405,5 +440,74 @@ func TestUploaderBatchesFitTheServerBodyLimit(t *testing.T) {
 			t.Fatalf("acked %d of 80 MiB-sized events: a batch is over the server's body limit", n)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// dialer counts the sockets a client dials and can cut them.
+type dialer struct {
+	Loopback
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func (d *dialer) Dial(ctx context.Context, m api.ID) (net.Conn, error) {
+	c, err := d.Loopback.Dial(ctx, m)
+	if err == nil {
+		d.mu.Lock()
+		d.conns = append(d.conns, c)
+		d.mu.Unlock()
+	}
+	return c, err
+}
+
+func (d *dialer) dialed() []net.Conn {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]net.Conn(nil), d.conns...)
+}
+
+func readStream(ctx context.Context, st api.Stream, thread api.ID, after api.Cursor) error {
+	want := []api.StreamKind{api.StreamSnapshot, api.StreamEvent, api.StreamEvent, api.StreamEvent, api.StreamSynchronized}
+	for i, k := range want {
+		it, err := st.Next(ctx)
+		if err != nil {
+			return err
+		}
+		if it.Kind != k || (k == api.StreamEvent && (it.Event.Thread != thread || it.Event.Cursor.Seq != after.Seq+uint64(i))) {
+			return fmt.Errorf("item %d: %+v, want kind %d of thread %v", i, it, k, thread)
+		}
+	}
+	return nil
+}
+
+func mustOpen(t *testing.T, ctx context.Context, c *EndpointClient, thread api.ID) api.Stream {
+	t.Helper()
+	st, err := c.Open(ctx, api.Subscription{Thread: thread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
+}
+
+// panics is an Endpoint whose Submit panics.
+type panics struct{ fakeEndpoint }
+
+func (*panics) Submit(context.Context, api.Command) (api.Receipt, error) { panic("submit is broken") }
+
+func TestPanickingHandlerAnswersWithAnError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ep := &panics{fakeEndpoint{env: api.Environment{ID: api.NewID()}}}
+	d := &dialer{Loopback: start(t, "unix", &Server{Endpoint: ep})}
+	c := NewEndpointClient(d, api.ID{})
+	if _, err := c.Submit(ctx, api.Command{ID: api.NewID(), Body: api.TurnInterrupt{}}); err == nil || errors.Is(err, errLost) {
+		t.Fatalf("submit to a panicking handler: %v, want the server's error", err)
+	}
+	if env, err := c.Info(ctx); err != nil || env != ep.env {
+		t.Fatalf("info after the panic: %+v %v", env, err)
+	}
+	if n := len(d.dialed()); n != 1 {
+		t.Fatalf("dialed %d sockets, want 1", n)
 	}
 }
