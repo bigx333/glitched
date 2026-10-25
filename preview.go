@@ -108,7 +108,7 @@ func (a *app) previewPanel(c *ui.Context) {
 	v := a.previewView()
 	ui.Column(c).Width(a.previewWidth()).FillHeight().Children(func() {
 		bar := c.TitleBar()
-		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 10).Gap(4).AlignItems(ui.Center)
+		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8+bar.Right, 0, 10).Gap(4).AlignItems(ui.Center)
 		head.DragWindow().Children(func() {
 			back := iconButton(c, "back", icArrowLeft, "Back", false).Padding(5)
 			fwd := iconButton(c, "forward", icArrowRight, "Forward", false).Padding(5)

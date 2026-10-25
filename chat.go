@@ -135,8 +135,14 @@ func (a *app) header(c *ui.Context, t thread, es []entry) {
 	// Narrow, beside a panel, the header keeps to icons, and never draws
 	// past the chat's edge.
 	narrow := a.chatWidth < 700
+	// Clear of the window buttons on the right (Windows, Linux) unless a
+	// panel takes that edge.
+	right := float32(12)
+	if !a.showDiff && !a.showPreview {
+		right += bar.Right
+	}
 	head := ui.Row(c).Height(max(bar.Height, headerHeight)).Shrink(0).
-		Padding(0, 12, 0, left).Gap(8).AlignItems(ui.Center).ClipX()
+		Padding(0, right, 0, left).Gap(8).AlignItems(ui.Center).ClipX()
 	head.DragWindow().Children(func() {
 		if !a.showSidebar {
 			if iconButton(c, "show-sidebar", icPanelLeft, "Show sidebar  ⌘B", false).Clicked() {
