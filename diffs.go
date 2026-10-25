@@ -330,7 +330,7 @@ func (a *app) diffPanel(c *ui.Context, t thread, es []entry) {
 	files := changedFiles(es)
 	ui.Column(c).Width(a.diffWidth()).FillHeight().Children(func() {
 		bar := c.TitleBar()
-		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8, 0, 14).Gap(8).AlignItems(ui.Center)
+		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8+bar.Right, 0, 14).Gap(8).AlignItems(ui.Center)
 		head.DragWindow().Children(func() {
 			ui.Text(c, "Changes").FontWeight(600)
 			ui.Textf(c, "%d", len(files)).FontSize(11).TextColor(palette.muted).Padding(0, 6).Radius(999).Background(palette.hover)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,9 @@ func TestRealTerminal(t *testing.T) {
 	}
 	if err := terminal.Load(); err != nil {
 		t.Skip("libghostty-vt unavailable:", err)
+	}
+	if _, err := exec.LookPath("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh, as on Windows:", err)
 	}
 	term, err := terminal.New(terminal.Options{Command: []string{"/bin/sh"}, Dir: projectDir("~/Projects/t3-mygo"), Theme: darkTheme.terminal()})
 	if err != nil {
