@@ -193,42 +193,62 @@ type stopped struct {
 	at    time.Time
 }
 
-// deleteTree deletes t and every thread under it, the deepest first and t
-// last, so that none is left standing on its own on the way. The engine
+// deleteTree deletes t and every thread under it, each after the threads
+// under it, so that none is left standing on its own on the way. The engine
 // deletes no thread whose agent works: those are stopped and deleted once
-// they have, and what's over them waits for them.
+// they have, and each thread over one waits only for its own children still
+// to go; one with none left goes at once.
 func (a *app) deleteTree(t thread) {
-	tree := append([]node{{t, 0}}, a.below(t)...)
-	var waiting []api.ID
 	now := time.Now() // the whole tree's, so its grace ends at once
-	for i := len(tree) - 1; i >= 0; i-- {
-		d := tree[i]
-		if d.t.View.Live() {
-			a.backend.Interrupt(d.t.env, d.t.id())
+	seen := map[api.ID]bool{}
+	// held deletes x after its children, and reports whether x is held,
+	// waiting on its own stop or on a child's.
+	var held func(x thread, depth int) bool
+	held = func(x thread, depth int) bool {
+		seen[x.id()] = true
+		var waits []api.ID
+		if depth <= maxDepth {
+			for _, k := range a.kids[x.id()] {
+				if !seen[k.id()] && held(k, depth+1) {
+					waits = append(waits, k.id())
+				}
+			}
 		}
-		if !d.t.View.Live() && len(waiting) == 0 {
-			a.delete(d.t)
-			continue
+		live := x.View.Live()
+		if live {
+			a.backend.Interrupt(x.env, x.id())
 		}
-		a.afterStop[d.t.id()] = stopped{after: slices.Clone(waiting), at: now}
-		waiting = append(waiting, d.t.id())
+		if !live && len(waits) == 0 {
+			a.delete(x)
+			return false
+		}
+		a.afterStop[x.id()] = stopped{after: waits, at: now}
+		return true
 	}
+	held(t, 0)
 }
 
 // settleStopped deletes the threads a cascade stopped, once their agents
 // have, after each change the manager posts, as the stops land. It gives
-// up on one whose stop didn't land within stopGrace, and on what was to go
-// after it, which would be left standing on its own.
+// up on one whose stop didn't land within stopGrace, and on every thread
+// over it waiting for it, which would be left standing on its own.
 func (a *app) settleStopped() {
-	var expired []api.ID
+	dropped := map[api.ID]bool{}
 	for id, s := range a.afterStop {
 		if time.Since(s.at) > stopGrace {
-			expired = append(expired, id)
+			dropped[id] = true
 		}
 	}
-	maps.DeleteFunc(a.afterStop, func(id api.ID, s stopped) bool {
-		return slices.Contains(expired, id) || slices.ContainsFunc(s.after, func(x api.ID) bool { return slices.Contains(expired, x) })
-	})
+	// Up the lines: a thread waits on its children, which wait on theirs.
+	for grew := len(dropped) > 0; grew; {
+		grew = false
+		for id, s := range a.afterStop {
+			if !dropped[id] && slices.ContainsFunc(s.after, func(x api.ID) bool { return dropped[x] }) {
+				dropped[id], grew = true, true
+			}
+		}
+	}
+	maps.DeleteFunc(a.afterStop, func(id api.ID, _ stopped) bool { return dropped[id] })
 	for id, s := range a.afterStop {
 		t, ok := a.find(id)
 		switch {

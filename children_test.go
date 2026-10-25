@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -304,4 +305,80 @@ func TestCmdEnterStopsFromTheCompactComposer(t *testing.T) {
 	}
 	h.tt.Key(ui.Cmd, ui.KeyEnter)
 	h.until("the stop", func() bool { return !th.View.Live() })
+}
+
+// Deleting a tree waits only where it must: a parent waits on its working
+// child, and an idle branch beside it, its own child with it, goes at once,
+// whichever of the two branches comes first. Should the working child's
+// stop never land, the parent is given up on with it, and the idle branch
+// is gone all the same.
+func TestDeleteWaitsOnlyOnItsOwnLine(t *testing.T) {
+	for _, idleFirst := range []bool{false, true} {
+		t.Run(fmt.Sprint("idle branch first: ", idleFirst), func(t *testing.T) {
+			dir := tempDir(t)
+			d := engine(t, daemon.Config{Dir: dir}, stalled{fake.New(midTurn), 1})
+			top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+			live := seedChild(t, d, top, "Write the tests")
+			idle := seedChild(t, d, top, "Update the docs")
+			leaf := seedChild(t, d, idle, "Fix the typo")
+			submit := func(id api.ID, b api.Intent) {
+				if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: b}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			submit(live, api.MessageDispatch{Text: "go"})
+			h := start(t, dir)
+			h.until("the child working", func() bool { th, _ := h.a.find(live); return th.View.Working() })
+			// The newest child comes first in the walk.
+			if idleFirst {
+				submit(idle, api.ThreadRename{Title: "Update the docs again"})
+				h.until("the rename", func() bool { th, _ := h.a.find(idle); return th.View.Title == "Update the docs again" })
+			}
+			h.tt.Frame()
+			kids := h.a.kids[top]
+			if first := kids[0].id() == idle; first != idleFirst {
+				t.Fatalf("the idle branch first: %v, want %v", first, idleFirst)
+			}
+			th, _ := h.a.find(top)
+			h.a.deleteTree(th)
+			for _, id := range []api.ID{idle, leaf} {
+				if x, _ := h.a.find(id); !deleting(x) {
+					t.Errorf("%q waits, though nothing under it works", x.View.Title)
+				}
+			}
+			if len(h.a.afterStop) != 2 || !slices.Equal(h.a.afterStop[top].after, []api.ID{live}) {
+				t.Fatalf("held: %v; want the working child, and its parent waiting on it alone", h.a.afterStop)
+			}
+			// Its stop never lands: the line is given up on together.
+			s := h.a.afterStop[live]
+			s.at = time.Now().Add(-2 * stopGrace)
+			h.a.afterStop[live] = s
+			h.a.settleStopped()
+			if len(h.a.afterStop) != 0 {
+				t.Errorf("still held: %v", h.a.afterStop)
+			}
+			if x, _ := h.a.find(top); deleting(x) {
+				t.Error("the parent was deleted though its child's stop never landed")
+			}
+		})
+	}
+}
+
+// Giving up on a thread gives up on every thread over it, up the line, not
+// only its parent.
+func TestGivingUpGoesUpTheLine(t *testing.T) {
+	h := tree3(t)
+	top, mid, leaf := h.thread("Ship the sidebar sort"), h.thread("Write the tests"), h.thread("Run them")
+	h.a.afterStop[leaf.id()] = stopped{at: time.Now().Add(-2 * stopGrace)}
+	h.a.afterStop[mid.id()] = stopped{after: []api.ID{leaf.id()}, at: time.Now()}
+	h.a.afterStop[top.id()] = stopped{after: []api.ID{mid.id()}, at: time.Now()}
+	h.a.settleStopped()
+	if len(h.a.afterStop) != 0 {
+		t.Fatalf("still held: %v", h.a.afterStop)
+	}
+	for _, x := range []thread{top, mid} {
+		if deleting(x) {
+			t.Errorf("%q was deleted though the line under it was given up on", x.View.Title)
+		}
+	}
 }
