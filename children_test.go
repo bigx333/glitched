@@ -256,3 +256,49 @@ func TestDeleteWaitsForAWorkingChild(t *testing.T) {
 		return !p && !k
 	})
 }
+
+// A cascade gives up on a line whose child's stop didn't land in time:
+// the parent waiting for it isn't deleted on its own later.
+func TestACascadeGivesUpOnALineTogether(t *testing.T) {
+	h := tree3(t)
+	top, kid := h.thread("Ship the sidebar sort"), h.thread("Write the tests")
+	old := time.Now().Add(-2 * stopGrace)
+	h.a.afterStop[kid.id()] = stopped{at: old}
+	h.a.afterStop[top.id()] = stopped{after: []api.ID{kid.id()}, at: time.Now()}
+	h.a.settleStopped()
+	if len(h.a.afterStop) != 0 {
+		t.Fatalf("left waiting: %v", h.a.afterStop)
+	}
+	h.tt.Advance(time.Second)
+	if _, ok := h.a.find(top.id()); !ok || deleting(top) {
+		t.Error("the parent was deleted though its child's stop never landed")
+	}
+}
+
+// Scrolled up, the composer compact, ⌘⏎ still stops the working agent, as
+// the full composer's Send does.
+func TestCmdEnterStopsFromTheCompactComposer(t *testing.T) {
+	var script []provider.Event
+	for i := range 30 {
+		script = append(script, provider.Work{Item: fmt.Sprint("r", i), Kind: "read", Title: fmt.Sprintf("Read file%d.go", i), Status: api.WorkCompleted})
+	}
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, stalled{fake.New(script), len(script)})
+	id := seed(t, d, "/work/t3code", "Read everything")
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: "Read them all."}}); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, dir)
+	th := h.thread("Read everything")
+	h.a.select_(th)
+	h.until("the reads", func() bool { return h.tt.HasText("Read file29.go") && th.View.Working() })
+	h.tt.Advance(time.Second)
+	h.a.listFor(th.id()).ScrollTo(0, ui.Start)
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if h.a.composerK != 0 {
+		t.Fatalf("scrolled up: composer at %v, want compact", h.a.composerK)
+	}
+	h.tt.Key(ui.Cmd, ui.KeyEnter)
+	h.until("the stop", func() bool { return !th.View.Live() })
+}

@@ -200,6 +200,7 @@ type stopped struct {
 func (a *app) deleteTree(t thread) {
 	tree := append([]node{{t, 0}}, a.below(t)...)
 	var waiting []api.ID
+	now := time.Now() // the whole tree's, so its grace ends at once
 	for i := len(tree) - 1; i >= 0; i-- {
 		d := tree[i]
 		if d.t.View.Live() {
@@ -209,19 +210,29 @@ func (a *app) deleteTree(t thread) {
 			a.delete(d.t)
 			continue
 		}
-		a.afterStop[d.t.id()] = stopped{after: slices.Clone(waiting), at: time.Now()}
+		a.afterStop[d.t.id()] = stopped{after: slices.Clone(waiting), at: now}
 		waiting = append(waiting, d.t.id())
 	}
 }
 
 // settleStopped deletes the threads a cascade stopped, once their agents
-// have, after each change the manager posts, as the stops land; it gives
-// up on one whose stop didn't land within stopGrace.
+// have, after each change the manager posts, as the stops land. It gives
+// up on one whose stop didn't land within stopGrace, and on what was to go
+// after it, which would be left standing on its own.
 func (a *app) settleStopped() {
+	var expired []api.ID
+	for id, s := range a.afterStop {
+		if time.Since(s.at) > stopGrace {
+			expired = append(expired, id)
+		}
+	}
+	maps.DeleteFunc(a.afterStop, func(id api.ID, s stopped) bool {
+		return slices.Contains(expired, id) || slices.ContainsFunc(s.after, func(x api.ID) bool { return slices.Contains(expired, x) })
+	})
 	for id, s := range a.afterStop {
 		t, ok := a.find(id)
 		switch {
-		case !ok || deleting(t) || time.Since(s.at) > stopGrace:
+		case !ok || deleting(t):
 			delete(a.afterStop, id)
 		case t.View.Live():
 		case !slices.ContainsFunc(s.after, func(x api.ID) bool { _, waits := a.afterStop[x]; return waits }):
