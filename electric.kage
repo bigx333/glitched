@@ -1,0 +1,186 @@
+
+// Fast mode's electricity: a charged hairline around a rounded rectangle,
+// a hot white core in a narrow sheath of light that wanders a little, the
+// current crawling along it, beads of charge running around it and now
+// and then a spark. Electric.go works out the line's shape, how lit it is
+// and its sparks each frame; this measures how far a pixel is from them
+// and lights it.
+
+// Inset is how far in, in DIPs, the rectangle the line runs around lies
+// from the one drawn, Radius its corners and Gap how far out of it the
+// line runs.
+var Inset float
+var Radius float
+var Gap float
+
+// Width is the core's, Glow the sheath's, in DIPs.
+var Width float
+var Glow float
+
+// Count is how many of Points go around the rectangle: at each, how far
+// out the line strays from it, the same blurred, the path of its glow,
+// and how lit the current is there.
+var Count int
+var Points [128]vec4
+
+// Beads is how far around the beads of charge have run, from 0 to 1, and
+// Intensity how lit all of it is; Ink, from 0 to 1, how much the light
+// paints over what is under it rather than adds to it, as it must on a
+// light background.
+var Beads float
+var Intensity float
+var Ink float
+
+// Sparks: where around each starts, how long it is and how far it has
+// grown (x, y, z); SparkLife how lit it is and how hot (x, y); SparkWalk
+// its wander sideways, 8 points along it, 2 vec4s each.
+var SparkAt [5]vec4
+var SparkLife [5]vec4
+var SparkWalk [10]vec4
+
+// Tint is the sheath's color, Hot the core's and Cool a spark's as it
+// cools.
+var Tint vec3
+var Hot vec3
+var Cool vec3
+
+func gauss(x, w float) float {
+	return exp(-(x * x) / max(w*w, 1e-6))
+}
+
+// line is how lit a pixel dist DIPs from a line of current is: its core,
+// w wide, and around it a narrow sheath gr wide with a faint tail.
+func line(dist, w, gr float) vec2 {
+	o := dist / gr
+	halo := 0.35/(1+o*o)*(1-smoothstep(gr*2.5, gr*5, dist)) + 0.65*gauss(dist, gr*0.6)
+	return vec2(gauss(dist, w), halo)
+}
+
+// lateral is dv, the distance across a path from a to b over step,
+// corrected for its slope near it, so a steep kink stays a thin line, but
+// not far from it, where the glow would streak along the kink.
+func lateral(dv, a, b, step float) float {
+	s := (b - a) / step
+	k := inversesqrt(1 + min(s*s, 3))
+	return dv * mix(k, 1, smoothstep(1.5, 8, abs(dv)))
+}
+
+// sdRRect is the distance from q to the edge of a rectangle half wide and
+// tall around its center, its corners rounded by r: negative inside.
+func sdRRect(q, half vec2, r float) float {
+	d := abs(q) - (half - r)
+	return length(max(d, 0)) + min(max(d.x, d.y), 0) - r
+}
+
+// perimeter returns how far around the rounded rectangle q lies, and how
+// far it is around all of it.
+func perimeter(q, half vec2, r float) vec2 {
+	b := half - r
+	a := abs(q)
+	lq := b.y + r*1.5707963 + b.x
+	s := 0.0
+	if a.x > b.x && a.y > b.y {
+		s = b.y + r*atan2(a.y-b.y, a.x-b.x)
+	} else if a.x-b.x > a.y-b.y {
+		s = min(a.y, b.y)
+	} else {
+		s = b.y + r*1.5707963 + (b.x - min(a.x, b.x))
+	}
+	o := 0.0
+	if q.x >= 0 && q.y >= 0 {
+		o = s
+	} else if q.x < 0 && q.y >= 0 {
+		o = 2*lq - s
+	} else if q.x < 0 {
+		o = 2*lq + s
+	} else {
+		o = 4*lq - s
+	}
+	return vec2(o, 4*lq)
+}
+
+// walk is spark j's wander at its point i.
+func walk(j, i int) float {
+	v := SparkWalk[j*2+i/4]
+	k := i % 4
+	if k == 0 {
+		return v.x
+	}
+	if k == 1 {
+		return v.y
+	}
+	if k == 2 {
+		return v.z
+	}
+	return v.w
+}
+
+func Fragment(dst vec4, pos vec2) vec4 {
+	size := rectSize()
+	half := size/2 - Inset
+	q := pos - size/2
+	r := min(Radius, min(half.x, half.y))
+	pr := perimeter(q, half, r)
+	s := pr.x
+	total := pr.y
+	off := sdRRect(q, half, r) - Gap
+	w := max(Width, 0.7/pixelScale())
+
+	fi := s / total * float(Count)
+	i0 := int(floor(fi)) % Count
+	i1 := (i0 + 1) % Count
+	f := fi - floor(fi)
+	step := total / float(Count)
+	p0 := Points[i0]
+	p1 := Points[i1]
+	crawl := mix(p0.z, p1.z, f)
+
+	// The line, its glow along its path and, more, along its blur.
+	dd := abs(lateral(off-mix(p0.x, p1.x, f), p0.x, p1.x, step))
+	dh := abs(off - mix(p0.y, p1.y, f))
+	b := line(dd, w, Glow)
+	core := b.x * crawl
+	halo := (0.4*line(dh, w, Glow).y + 0.6*line(dd, w, Glow*0.3).y) * crawl
+
+	// Three beads of charge running one way around.
+	bu := fract(s/total - Beads)
+	for k := 0; k < 3; k++ {
+		x := fract(bu-float(k)/3+0.5) - 0.5
+		bead := gauss(x*total, 18)
+		halo += bead * gauss(off, Glow*0.8) * 0.9
+		core += bead * gauss(off, w*1.5) * 0.6
+	}
+
+	// The sparks, white hot as they shoot out, cooling to the tint and on
+	// to violet.
+	sparks := vec3(0)
+	for j := 0; j < 5; j++ {
+		at := SparkAt[j]
+		life := SparkLife[j]
+		if life.x > 0 {
+			ds := s - at.x
+			ds -= total * floor(ds/total+0.5)
+			ln := at.y
+			u := off / ln
+			uc := clamp(u, 0, at.z)
+			fj := uc * 7
+			j0 := min(int(fj), 6)
+			s0 := walk(j, j0)
+			s1 := walk(j, j0+1)
+			fd := length(vec2((u-uc)*ln, lateral(ds-mix(s0, s1, fj-float(j0)), s0, s1, ln/7)))
+			taper := 1 - 0.7*uc
+			fb := line(fd, w*0.6*taper, Glow*0.55)
+			col := mix(mix(Cool, Tint, smoothstep(0, 0.5, life.y)), Hot, smoothstep(0.6, 1, life.y))
+			sparks += col * (fb.x*1.1 + fb.y*0.45) * life.x * taper
+		}
+	}
+
+	rgb := (Hot*core*1.3 + Tint*halo*0.75 + sparks) * Intensity
+	a := (core*0.7 + halo*0.12 + dot(sparks, vec3(0.2126, 0.7152, 0.0722))*0.5) * Intensity
+	// Light adds to what is under it (more color than coverage), burning
+	// to white where it's brightest; ink covers it, keeping its hue.
+	m := max(rgb.r, max(rgb.g, rgb.b))
+	rgb = mix(min(rgb, vec3(1)), rgb/max(m, 1), Ink)
+	a = mix(a, min(m, 1), Ink)
+	return vec4(rgb, min(a, 1))
+}

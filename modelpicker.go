@@ -108,7 +108,7 @@ func (a *app) effortLevel() int {
 // modelPicker is the composer's model button, and the popover it opens:
 // the families of models beside the models of the one pointed at, as a
 // submenu, and the effort slider. High effort lights a glow around the
-// button, and fast mode runs electricity around it.
+// button, and fast mode runs electricity around it in the glow's place.
 func (a *app) modelPicker(c *ui.Context) {
 	m := modelByName(a.model)
 	level := a.effortLevel()
@@ -171,10 +171,12 @@ func modelTile(c *ui.Context, icon *ui.SVG, color ui.Color, size float32) {
 
 // pickerGlow is a soft glow around the model button, in the effort's
 // colors from High up: borders of a gradient, a
-// sharp one and blurred ones stacked. At Max it slowly turns.
+// sharp one and blurred ones stacked. At Max it slowly turns. Fast mode's
+// electricity takes its place.
 func (a *app) pickerGlow(c *ui.Context, b ui.Element, level int) {
 	on := float32(0)
 	switch {
+	case a.fast:
 	case level >= 3:
 		on = 1
 	case level == 2:
@@ -444,23 +446,29 @@ func (a *app) zapIcon(c *ui.Context, key string, size float32) {
 	})
 }
 
-// electricBorder runs electricity around the model button while fast mode
-// is on, struck brighter for a moment as it comes on. Where the desktop
-// asks for less motion, it's a still blue outline.
+// electricBorder runs a charged line around the model button while fast
+// mode is on, flashing brighter as the zap strikes it on. Where the
+// desktop asks for less motion, or the window draws without a GPU, the
+// line holds still.
 func (a *app) electricBorder(c *ui.Context) {
 	at := a.fastAt
 	reduce := c.Preferences().ReduceMotion
-	ui.Box(c).Absolute().Top(-1).Left(-1).Right(-1).Bottom(-1).PassThrough().Draw(func(p *ui.Painter, r ui.Rect) {
-		if reduce {
-			p.Stroke(r, electric.Alpha(0.6), 7, 1)
-			return
+	dark := a.theme.dark
+	m := float32(elMargin - 1)
+	ui.Box(c).Absolute().Top(-m).Left(-m).Right(-m).Bottom(-m).PassThrough().Draw(func(p *ui.Painter, r ui.Rect) {
+		still := reduce || !p.Accelerated()
+		since := p.Now().Sub(at)
+		if at.IsZero() {
+			since = p.Now().Sub(electricStart)
 		}
-		a := float32(0.85)
-		if since := p.Now().Sub(at); !at.IsZero() && since < strikeTime {
-			a = 0.6 + 0.4*strobe(float32(since)/float32(strikeTime))
+		k := float32(1)
+		if !at.IsZero() && since < strikeTime {
+			k += 0.6 * strobe(float32(since)/float32(strikeTime))
 		}
-		drawElectricBorder(p, r, 7, float64(p.Now().UnixMilli()%1_000_000)/1000, a)
-		p.AnimationFrame()
+		drawElectricity(p, r, 7, since.Seconds(), still, k, dark)
+		if !still {
+			p.AnimationFrame()
+		}
 	})
 }
 
