@@ -119,7 +119,7 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 				ui.Text(c, r.Reason).FontSize(12).TextColor(palette.faint)
 			}
 		})
-		if waiting {
+		if waiting || a.zapping(r) {
 			a.requestAnswers(c, t, r)
 		}
 	})
@@ -127,38 +127,91 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 
 // requestAnswers are a waiting request's answers, Allow once and Deny; or
 // the answer on its way, or why it wasn't sent. No provider yet lets a
-// rule through without asking again, so there is no Always allow.
+// rule through without asking again, so there is no Always allow. Just
+// answered, they break up (zap.go).
 func (a *app) requestAnswers(c *ui.Context, t thread, r *client.RequestEntry) {
 	sent, sending := responding(t, r.Request)
-	ui.Row(c).Key("decide").Padding(0, 14, 12).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-		switch {
-		case sending && sent.Err != nil:
+	if a.zapping(r) {
+		if !sending || sent.Err == nil {
+			a.zapRow(c)
+			return
+		}
+		a.zap = approvalZap{} // not sent: the row says why
+	}
+	switch {
+	case sending && sent.Err != nil:
+		ui.Row(c).Key("decide").Padding(0, 14, 12).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 			ui.Text(c, "Not sent: "+sent.Err.Error()).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
 			a.failedActions(c, t, sent)
-			return
-		case sending:
+		})
+		return
+	case sending:
+		ui.Row(c).Key("decide").Padding(0, 14, 12).Children(func() {
 			ui.Text(c, "Sending…").FontSize(12).TextColor(palette.muted)
-			return
+		})
+		return
+	}
+	allow, deny, row, labels := a.answerButtons(c, t, r)
+	a.answerAt = answerRow{r.Request, row.Bounds(), allow.Bounds(), deny.Bounds(), labels()}
+	if allow.Clicked() {
+		a.answer(c, t, r, client.AllowOnce)
+	}
+	if deny.Clicked() {
+		a.answer(c, t, r, client.Deny)
+	}
+}
+
+// answerButtons lays out the row of a request's answers, and returns its
+// buttons, the row, and its labels as they were laid out in the last
+// frame, for a zap to paint as it breaks the row up.
+func (a *app) answerButtons(c *ui.Context, t thread, r *client.RequestEntry) (allow, deny, row ui.Element, labels func() []zapLabel) {
+	type label struct {
+		e ui.Element
+		l zapLabel
+	}
+	var ls []label
+	text := func(s string, size float32, weight int, col ui.Color) ui.Element {
+		e := ui.Text(c, s).FontSize(size).TextColor(col)
+		if weight != 0 {
+			e.FontWeight(weight)
 		}
-		if filled(c, "allow", palette.accent, ui.Hex("#ffffff")).Children(func() {
-			ui.Text(c, "Allow once").FontSize(12.5).FontWeight(500)
-			ui.Text(c, "⌘⏎").FontSize(10.5).TextColor(ui.Hex("#ffffff").Alpha(0.9)).Padding(1, 4).Radius(4).
-				Background(ui.Hex("#ffffff").Alpha(0.2))
-		}).Clicked() {
-			a.backend.Respond(t.env, t.id(), r.Request, client.AllowOnce)
+		ls = append(ls, label{e, zapLabel{span: ui.Span{Text: s, Size: size, Weight: weight, Color: col}}})
+		return e
+	}
+	// A key's chip, as kbd draws one.
+	chip := func(s string, col, bg, border ui.Color) ui.Element {
+		e := text(s, 10.5, 0, col).Padding(1, 4).Radius(4).Background(bg)
+		if border != (ui.Color{}) {
+			e.Border(1, border)
 		}
-		if ghost(c, "deny", false).TextColor(palette.red).Padding(5, 10).Children(func() {
-			ui.Text(c, "Deny").FontSize(12.5)
-			kbd(c, "⇧⌘D")
-		}).Clicked() {
-			a.backend.Respond(t.env, t.id(), r.Request, client.Deny)
-		}
+		l := &ls[len(ls)-1].l
+		l.pad, l.bg, l.border = 4, bg, border
+		return e
+	}
+	row = ui.Row(c).Key("decide").Padding(0, 14, 12).Gap(8).AlignItems(ui.Center).Wrap()
+	row.Children(func() {
+		allow = filled(c, "allow", palette.accent, ui.Hex("#ffffff")).Children(func() {
+			text("Allow once", 12.5, 500, ui.Hex("#ffffff"))
+			chip("⌘⏎", ui.Hex("#ffffff").Alpha(0.9), ui.Hex("#ffffff").Alpha(0.2), ui.Color{})
+		})
+		deny = ghost(c, "deny", false).TextColor(palette.red).Padding(5, 10).Children(func() {
+			text("Deny", 12.5, 0, palette.red)
+			chip("⇧⌘D", palette.muted, palette.hover, palette.border).MinWidth(18).TextAlign(ui.Center)
+		})
 		ui.Spacer(c)
 		ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, icHand).FontSize(12).TextColor(palette.faint)
-			ui.Text(c, accessLabel(t.View.Access)).FontSize(11.5).TextColor(palette.faint)
+			text(accessLabel(t.View.Access), 11.5, 0, palette.faint)
 		})
 	})
+	return allow, deny, row, func() []zapLabel {
+		out := make([]zapLabel, len(ls))
+		for i, l := range ls {
+			l.l.r = l.e.Bounds()
+			out[i] = l.l
+		}
+		return out
+	}
 }
 
 // filled is a button with a face of its own color.
@@ -195,9 +248,9 @@ func (a *app) approvalKeys(c *ui.Context, t thread, es []entry) {
 	}
 	switch {
 	case c.Shortcut(ui.Cmd, ui.KeyEnter):
-		a.backend.Respond(t.env, t.id(), r.Request, client.AllowOnce)
+		a.answer(c, t, r, client.AllowOnce)
 	case c.Shortcut(ui.Cmd|ui.Shift, ui.KeyD):
-		a.backend.Respond(t.env, t.id(), r.Request, client.Deny)
+		a.answer(c, t, r, client.Deny)
 	}
 }
 

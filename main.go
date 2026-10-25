@@ -291,6 +291,10 @@ type app struct {
 	// terminalFocused is set while the terminal drawer has the keyboard,
 	// as the last frame built it; it keeps the browser's keys then.
 	terminalFocused bool
+	// zap is a request's answers just answered, breaking up as they go;
+	// answerAt where the waiting request's answers were last laid out.
+	zap      approvalZap
+	answerAt answerRow
 	// quick is the quick-ask panel over every app.
 	quick quickAsk
 	// quitting is set as a quit starts, for the windows that hide rather
