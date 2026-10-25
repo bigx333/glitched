@@ -392,6 +392,7 @@ func TestServers(t *testing.T) {
 	}
 	h.a.draft = "Rotate them"
 	h.tt.Frame()
+	h.tt.Advance(time.Second) // the composer opens to hold it
 	h.click("Send")
 	h.until("the server to run the turn", func() bool {
 		snap, err := d.Endpoint().Read(context.Background(), api.Query{Thread: th.id()})
