@@ -155,31 +155,48 @@ func (m *Manager) server(label string) int {
 	return slices.IndexFunc(m.envs, func(e *Env) bool { return e.Kind == Remote && e.Name == label })
 }
 
-// Unread is true when the thread's last turn ended after the one MarkRead
-// last saw.
-func (m *Manager) Unread(th *Thread) bool {
-	last := th.View.LastTurn
-	return last != nil && last.Ended.After(m.saved.Seen[th.View.ID])
+// news is when the thread last had something to read: its last turn's end,
+// or a child's report after it.
+func news(v api.Thread) time.Time {
+	var at time.Time
+	if v.LastTurn != nil {
+		at = v.LastTurn.Ended
+	}
+	if v.Reported.After(at) {
+		at = v.Reported
+	}
+	return at
 }
 
-// MarkRead records that the GUI showed the thread's last turn, at once,
-// and saves the mark to gui.json from a goroutine, as the file's lock
-// may wait on another GUI. It leaves the envs as they are, whatever
+// Unread is true when the thread's last turn ended, or a child reported to
+// it, after what MarkRead last saw.
+func (m *Manager) Unread(th *Thread) bool {
+	at := news(th.View)
+	return !at.IsZero() && at.After(m.saved.Seen[th.View.ID])
+}
+
+// MarkRead records that the GUI showed the thread's last turn and reports,
+// at once, and saves the mark to gui.json from a goroutine, as the file's
+// lock may wait on another GUI. It leaves the envs as they are, whatever
 // servers another GUI saved.
 func (m *Manager) MarkRead(th *Thread) {
 	if m.Unread(th) {
-		m.read(th.View.ID, th.View.LastTurn.Ended)
+		m.read(th.View.ID, news(th.View))
 	}
 }
 
 // MarkShown records that the GUI showed the thread's transcript, read up
-// to the last turn it has, which may be behind the view's: one cached
-// from an earlier visit, or still catching up.
+// to the last turn or report it has, which may be behind the view's: one
+// cached from an earlier visit, or still catching up.
 func (m *Manager) MarkShown(th *Thread) {
 	if tr := th.Transcript; tr != nil && m.Unread(th) {
-		at := th.View.LastTurn.Ended
-		if tr.Ended.Before(at) {
-			at = tr.Ended
+		at := news(th.View)
+		shown := tr.Ended
+		if tr.Reported.After(shown) {
+			shown = tr.Reported
+		}
+		if shown.Before(at) {
+			at = shown
 		}
 		m.read(th.View.ID, at)
 	}

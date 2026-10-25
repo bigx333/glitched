@@ -65,6 +65,9 @@ type Thread struct {
 	run           run      // sealed: idle | starting | running | waiting{requests} | stopping | uncertain
 	disposition   disposition // sealed: open | snoozed{until} | settled
 	readThrough   Cursor
+	parent        ID       // zero for a thread of the user's; depth is walked, never stored (cap 4)
+	tokens        int64    // this thread's own; a parent's total is rolled up at read time
+	reported      time.Time // a child's last report, which wakes the thread as a turn's end does
 }
 
 type Request struct { // approval or question
@@ -156,6 +159,16 @@ type Agent interface {
 **Resync.** A subscription captures a fence, sends the snapshot at the fence, then the buffered tail, then `synchronized` (t3code). A reconnect supplies its cursor. The engine replays from the log if the gap is at most 128 events and 1 MiB, and otherwise sends a fresh snapshot. A changed log id forces a snapshot. Each subscriber is capped at 8 MiB, and overflow closes the stream with a resync cursor. Transcripts travel as deltas from day one (zeron measured 1.13 MB per tick with full frames).
 
 **Approvals.** The adapter surfaces a request, which is deduplicated, persisted, and shown in the inbox as NeedsYou. The first `respond` with a matching generation wins, and later ones get `already answered`. Expiry or invalidation interrupts the blocked run. A request that can't be delivered is invalidated, never silently approved. The Full-access hold gesture submits a policy change, and the engine refuses it above the client's ceiling.
+
+**Child threads.** A thread can start child threads on its own engine (the user's "New child thread"; an agent's `create_chat` tool later). The tree is a `parent` on each thread, as bb's `parent_thread_id`; depth is found by walking up, capped at 4, and the walk is bounded so a corrupt cycle can't hang it. A parent deleted leaves its children standing as threads of their own.
+
+- *State.* Run state and NeedsYou stay apart: a run blocked on a request is `waiting`, still a run, and the thread shows NeedsYou beside it. bb folds both into one status, so a blocked child reads as idle.
+- *Push-back.* When a child's run completes, fails or blocks on a request, `Observe` puts a `child.report` effect in the outbox in the same transaction as the run's event. The runtime reads what came of it, a line or two of the run's last reply, the failure, or the request, and commits it in the parent's log as `child.reported` with the effect's completion; that wakes the parent as a turn's end does: unread, and back in the inbox from snoozed or settled. bb keeps its notices in memory and loses them on a crash; here they are outbox rows, replayed on boot. A run the user stopped reports nothing.
+- *Guardrails.* The engine refuses a child wider than its parent, so access only narrows down the tree; the client's grant ceiling still applies on top.
+- *Cascades.* Stop, delete and archive of a thread take its whole subtree, after a confirm that states the count and how many are still working; the GUI sends each thread its own command, so a child the engine refuses (deleting one still working) says why on its own row.
+- *Usage.* Each thread stores the tokens its turns used; a parent's total is its own plus its descendants', summed when read, so a moved or deleted child never leaves a stale total.
+
+Protocol 3 adds the parent, the tokens and the reports; a protocol 2 peer would show children as threads of the user's with nothing reported, so it is refused.
 
 **Terminals.** The engine owns PTYs per workspace. They survive the GUI detaching but not an engine restart. Output carries byte offsets with 4 MiB of replay and pause/resume flow control at 1 MiB and 512 KiB (bb). One client holds an expiring input lease while others watch. The libghostty view needs a bytes-in, input-out mode instead of owning its PTY.
 

@@ -41,12 +41,19 @@ var errNoEngine = errors.New("client: not connected to the engine")
 // engine's view of it arrives, and returns its ID. It returns the zero ID
 // on a duplicate, which shows no threads.
 func (m *Manager) Create(e *Env, workspace, title string, model api.ModelRef, access api.Access) api.ID {
+	return m.CreateUnder(e, api.ID{}, workspace, title, model, access)
+}
+
+// CreateUnder adds a child thread of parent on e, as Create adds a thread;
+// a zero parent makes it a thread of the user's. The engine refuses a
+// child below api.MaxDepth or wider than its parent.
+func (m *Manager) CreateUnder(e *Env, parent api.ID, workspace, title string, model api.ModelRef, access api.Access) api.ID {
 	if m.ShownBy(e) != e {
 		return api.ID{}
 	}
 	id := api.NewID()
-	e.Threads[id] = &Thread{View: api.Thread{ID: id, Workspace: workspace, Title: title, Model: model, Access: access, UpdatedAt: time.Now()}}
-	m.submit(e, id, api.ThreadCreate{Workspace: workspace, Title: title, Model: model, Access: access})
+	e.Threads[id] = &Thread{View: api.Thread{ID: id, Workspace: workspace, Title: title, Model: model, Access: access, Parent: parent, UpdatedAt: time.Now()}}
+	m.submit(e, id, api.ThreadCreate{Workspace: workspace, Title: title, Model: model, Access: access, Parent: parent})
 	return id
 }
 
