@@ -60,11 +60,13 @@ func (a *app) chatPage(c *ui.Context) {
 				}
 				a.ambient(c)
 				a.timeline(c, t, es)
+				// After the timeline, which says whether the end shows.
+				a.composerMorph(pane, t)
 				// What scrolls fades out under the composer.
 				ui.Box(c).Absolute().Bottom(0).Left(0).Right(0).Height(composerRoom - 40).PassThrough().
 					Material(glass.ScrollEdge{Bottom: true, Background: palette.bg})
 				// Over the edge, which would take its clicks.
-				a.jumpToLatest(c, a.listFor(t.id()))
+				a.jumpToLatest(c, t)
 				// Before the composer, whose ⌘⏎ would send or stop.
 				a.approvalKeys(c, t, es)
 				a.composer(c, t, es)
@@ -270,14 +272,22 @@ func (a *app) timeline(c *ui.Context, t thread, es []entry) {
 }
 
 // jumpToLatest floats a pill over the composer while the user has
-// scrolled up from the end, which takes them back.
-func (a *app) jumpToLatest(c *ui.Context, l *ui.ListState) {
-	if l.AtEnd() {
+// scrolled up from the end, which takes them back. It fades and rises in
+// as the composer folds, and goes as it opens, riding the composer's top
+// edge as it moves.
+func (a *app) jumpToLatest(c *ui.Context, t thread) {
+	j := a.jumpK
+	if j == 0 {
 		return
 	}
-	// Just over the composer, compact as it is while scrolled up.
-	ui.Row(c).Absolute().Left(0).Right(0).Bottom(80).Justify(ui.Center).PassThrough().Children(func() {
-		b := a.glassButton(c, "jump").Padding(5, 12).Transition(riseIn)
+	l := a.listFor(t.id())
+	// Over the composer as it is in this frame, which is laid out after.
+	bottom := composerBarBottom + a.composerHeight(c) + 26
+	ui.Row(c).Absolute().Left(0).Right(0).Bottom(bottom).Justify(ui.Center).PassThrough().Children(func() {
+		b := faded(a.glassButton(c, "jump").Padding(5, 12).Translate(0, 8*(1-j)), j)
+		if j <= 0.001 {
+			b.Invisible()
+		}
 		if b.Children(func() {
 			ui.Icon(c, icArrowDown).FontSize(13)
 			ui.Text(c, "Jump to latest").FontSize(12)
@@ -486,29 +496,65 @@ func counts(c *ui.Context, add, del int) {
 	}
 }
 
-// composerResize is how the composer grows and shrinks, compact while the
-// user reads back up the thread.
-var composerResize = ui.ElementTransition{Size: true, Duration: 250 * time.Millisecond, Ease: easeOut}
-
-// composerTransition is composerResize, and foldTransition fold, but while
-// an edge beside the chat is dragged, which the composer and its controls
-// follow as it moves rather than ease after it.
-func (a *app) composerTransition() ui.ElementTransition {
-	if a.sidebarHeld || a.previewHeld {
-		// Colors alone: none set would animate everything.
-		return ui.ElementTransition{Colors: true}
+// composerMorph moves the composer on its way between compact and full,
+// on host, for the frame: getting to the end of the thread opens it,
+// scrolling up folds it, and either, mid-way, turns it round from where it
+// is. Jump to latest comes and goes with the end. With less motion asked
+// for, both are there at once (AnimateTo).
+func (a *app) composerMorph(host ui.Element, t thread) {
+	id := t.id()
+	// A thread's list starts at its end, which it only knows once laid
+	// out: until then the composer is full, rather than folding at first.
+	if !a.composerSeen[id] {
+		a.composerSeen[id] = true
+		a.composerRest, a.composerK, a.jumpK = false, 1, 0
+		return
 	}
-	return composerResize
+	target, anim := float32(1), composerOpen
+	if a.composerCompact(t) {
+		target, anim = 0, composerClose
+	}
+	// Held to [0, 1]: turned round near an end, the spring carries on past
+	// it for a moment before it comes back.
+	k := clamp01(host.AnimateTo("composer:"+id.String(), target, anim))
+	a.composerRest, a.composerK = k == a.composerK && (k == 0 || k == 1), k
+	target, anim = 0, composerClose
+	if !a.listFor(id).AtEnd() {
+		target, anim = 1, composerOpen
+	}
+	a.jumpK = clamp01(host.AnimateTo("jump:"+id.String(), target, anim))
 }
 
-func (a *app) foldTransition() ui.ElementTransition {
-	if a.sidebarHeld || a.previewHeld {
-		f := fold
-		f.Size = false
-		return f
-	}
-	return fold
+// fadeIn is the progress through [from, from+span] of k, held to [0, 1].
+func fadeIn(k, from, span float32) float32 { return clamp01((k - from) / span) }
+
+// shownAt is the opacity from which what fades in and out with the
+// composer's morph takes presses: below it, mostly gone, it lets them be.
+const shownAt = 0.5
+
+// disabledOpacity is how much of its opacity MyGo paints a disabled
+// element at (ui/paint.go).
+const disabledOpacity = 0.5
+
+// faded shows e x of the way in and, below shownAt, disables it: MyGo has
+// no other way to keep the presses off a whole subtree that still shows.
+// It sets the opacity that, with the dimming of what's disabled, paints e
+// at x either side of shownAt, rather than at half that below it.
+func faded(e ui.Element, x float32) ui.Element {
+	o, off := fadedOpacity(x)
+	return e.Opacity(o).Disabled(off)
 }
+
+// fadedOpacity is the opacity faded sets for x, and whether it disables.
+func fadedOpacity(x float32) (opacity float32, disabled bool) {
+	if x < shownAt {
+		return min(1, x/disabledOpacity), true
+	}
+	return x, false
+}
+
+// clamp01 holds v to [0, 1].
+func clamp01(v float32) float32 { return min(1, max(0, v)) }
 
 // composerCompact reports whether the composer is compact: away from the
 // end of the thread, not clicked open, holding nothing.
@@ -523,21 +569,108 @@ func (a *app) composerCompact(t thread) bool {
 // compactWidth is the composer's width while compact.
 const compactWidth = 520
 
-func (a *app) composer(c *ui.Context, t thread, es []entry) {
-	// While the user reads back up the thread, the composer steps out of
-	// the way: narrower, one line, its controls folded away. It comes back
-	// to its full size at the end of the thread, as it's clicked, and
-	// whenever it holds a draft or attachments, so it never hides work.
-	compact := a.composerCompact(t)
-	width := float32(contentWidth)
-	if compact {
-		width = compactWidth
+// composerBarBottom is the room the composer leaves under it.
+const composerBarBottom = 14
+
+// cardLook is what the composer card's heights hang on: the font size and
+// the pane's border.
+type cardLook struct {
+	fontSize float64
+	border   float32
+}
+
+func (a *app) cardLook() cardLook { return cardLook{a.settings.fontSize, a.paneBorder()} }
+
+// cardHeights are the composer card's heights, compact and full, as last
+// measured under the settings in force, or a guess before: compact, a line
+// of text measured in the font size, its padding and the card's border,
+// which the first frame of a fold takes before it's measured. A change of
+// font size or of Liquid Glass drops the compact height measured under the
+// old ones; the full one, which the font size doesn't change, it keeps, but
+// for the border Liquid Glass takes away or gives back.
+func (a *app) cardHeights(c *ui.Context) (compactH, fullH float32) {
+	if l := a.cardLook(); l != a.cardFor {
+		if a.cardFullH != 0 {
+			a.cardFullH += 2 * (l.border - a.cardFor.border)
+		}
+		a.cardFor, a.cardCompactH = l, 0
 	}
-	// The frame lets the pointer through, but for the composer in it, to
+	compactH, fullH = a.cardCompactH, a.cardFullH
+	if compactH == 0 {
+		// The line, a line of text high, in 11 above and below.
+		_, lineH := c.MeasureText(0, ui.Span{Text: "Ask a follow-up…"})
+		compactH = 22 + lineH + 2*a.paneBorder()
+	}
+	if fullH == 0 {
+		// Two lines of text area and the controls, in the border.
+		fullH = 124 + 2*a.paneBorder()
+	}
+	return compactH, fullH
+}
+
+// composerHeight is the height of the composer, the card with what's under
+// it, as it is in this frame: k of the way from compact to full, as
+// composer lays it out, rather than as it was laid out last frame.
+func (a *app) composerHeight(c *ui.Context) float32 {
+	k := a.composerK
+	compactH, fullH := a.cardHeights(c)
+	return compactH + (fullH-compactH)*k + a.envH*k
+}
+
+// composer is the card the user writes in, over the end of the chat.
+//
+// While the user reads back up the thread, it steps out of the way:
+// narrower, one line, its controls folded away. It comes back to its full
+// size at the end of the thread, as it's clicked, and whenever it holds a
+// draft or attachments, so it never hides work.
+//
+// It morphs between the two on a spring, k of the way from compact to
+// full, turning round mid-way from where it is: the card eases its width,
+// height and radius from the one line's to the full composer's, the line's
+// placeholder giving way to the text area's, then the controls and the row
+// below, which fade and slide in after it, going first as it folds.
+// Mid-way, what isn't in the card's flow is held to its top, the card
+// clipping it.
+func (a *app) composer(c *ui.Context, t thread, es []entry) {
+	compact := a.composerCompact(t)
+	k := a.composerK
+	morphing := k > 0 && k < 1
+	lerp := func(from, to float32) float32 { return from + (to-from)*k }
+	compactH, fullH := a.cardHeights(c)
+	// The bar lets the pointer through, but for the composer in it, to
 	// what is around it, as the pill taking the user to the end.
-	ui.Column(c).Absolute().Bottom(0).Left(0).Right(0).AlignItems(ui.Center).Padding(0, 24, 14).PassThrough().Children(func() {
-		ui.Column(c).Key("composer-frame").WidthPercent(100).MaxWidth(width).Gap(8).PassThrough().Transition(a.composerTransition()).Children(func() {
-			card := ui.Column(c).Key("composer").Radius(20)
+	// barPadX is the room it leaves either side of the composer.
+	const barPadX = 24
+	bar := ui.Column(c).Key("composer-bar").Absolute().Bottom(0).Left(0).Right(0).AlignItems(ui.Center).
+		Padding(0, barPadX, composerBarBottom).PassThrough()
+	// The full composer's width at rest, as the last frame had room for:
+	// the full card's, in its border, or 0 before there's been a frame.
+	var fullW float32
+	if w := bar.Bounds().W - 2*barPadX; w > 0 {
+		fullW = max(0, min(w, contentWidth)-2*a.paneBorder())
+	}
+	bar.Children(func() {
+		frame := ui.Column(c).Key("composer-frame").WidthPercent(100).MaxWidth(lerp(compactWidth, contentWidth)).PassThrough()
+		frame.Children(func() {
+			// What the last frame measured was laid out under the settings
+			// in force, or it isn't to be taken.
+			fresh := a.cardLaid == a.cardFor
+			a.cardLaid = a.cardFor
+			card := ui.Column(c).Key("composer").Radius(lerp(min(20, compactH/2), 20))
+			if morphing {
+				a.cardH = lerp(compactH, fullH)
+				card.Height(a.cardH)
+			} else if a.composerRest && fresh {
+				if h := card.Bounds().H; h > 0 && k == 0 {
+					a.cardCompactH = h
+				} else if h > 0 {
+					a.cardFullH = h
+				}
+			} else if a.composerRest {
+				// Laid out under other settings: measured in the next
+				// frame, which nothing else may ask for.
+				c.AnimationFrame()
+			}
 			if compact && card.Clicked() {
 				a.composerOpened = true
 			}
@@ -549,50 +682,129 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 			// Files go to the agent as their paths, which a server's
 			// agent can't read.
 			dragOver := t.local() && a.dropZone(card)
-			a.pane(card, glass.Glass{}).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.28)).Clip().
-				Transition(a.composerTransition()).Children(func() {
+			a.pane(card, glass.Glass{}).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.28)).Clip().Children(func() {
 				workingGlow(c, card, t.View.Working())
-				if len(a.attachments) > 0 {
-					ui.Column(c).Key("attachments").Padding(12, 12, 0).Children(func() {
-						attachmentChips(c, a.attachments, t, func(i int) {
-							a.attachments = append(a.attachments[:i:i], a.attachments[i+1:]...)
-						})
-					})
-				}
-				if compact {
+				if k < 1 {
 					// A line to type a follow-up into, which a text area,
 					// at least two lines high, can't be; the first key
 					// typed brings the full composer back, its text with it.
-					ui.TextInput(c.Key("draft-compact"), &a.draft).Placeholder("Ask a follow-up…").
-						Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).Padding(11, 18).
-						OnPaste(a.onPaste)
+					line := ui.Column(c).Key("line")
+					if morphing {
+						line.Absolute().Top(0).Left(0).Right(0).Opacity(1 - fadeIn(k, 0, 0.3))
+						// The compact card is as high as the line in its
+						// border: before it's been at rest, the line says
+						// how high.
+						if h := line.Bounds().H; h > 0 && a.cardCompactH == 0 && fresh {
+							a.cardCompactH = h + 2*a.paneBorder()
+						}
+					}
+					line.Children(func() {
+						ui.TextInput(c.Key("draft-compact"), &a.draft).Placeholder("Ask a follow-up…").
+							Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).Padding(11, 18).
+							OnPaste(a.onPaste)
+					})
+				}
+				// Compact but holding something now, typed, pasted or
+				// dropped in this frame, the composer opens from the next:
+				// laid out unseen in this one, the full composer is measured
+				// before the first frame of the morph, rather than in it.
+				// Invisible, it takes neither the pointer nor the focus, and
+				// isn't there to assistive technology.
+				ahead := k == 0 && (a.composerOpened || strings.TrimSpace(a.draft) != "" || len(a.attachments) > 0)
+				if k == 0 && !ahead {
 					return
 				}
-				placeholder := "Ask anything, @tag files/folders, or use / to show available commands"
-				if waitingRequest(t, es) != nil {
-					placeholder = "Reply to steer, or answer the approval above"
-				}
-				ui.TextArea(c.Key("draft"), &a.draft).Placeholder(placeholder).
-					Lines(2, 10).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).
-					Padding(14, 16, 4).AutoFocus().OnPaste(a.onPaste).OnTextKey(a.suggestKey)
-				ui.Row(c).Key("controls").Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).ClipY().Transition(a.foldTransition()).Children(func() {
-					a.composerControls(c)
-					ui.Spacer(c)
-					if t.local() && iconButton(c, "attach", icPaperclip, "Attach files", false).Clicked() {
-						a.pickFiles()
+				full := ui.Column(c).Key("full")
+				if morphing || ahead {
+					// Out of the card's flow, it's as wide as it is at rest,
+					// rather than the card's width on its way there, the
+					// card clipping it: its text wraps as it will, never
+					// reflowing as the card widens. So it's as high as it
+					// is at rest, and the full card is that in its border.
+					full.Absolute().Top(0).Left(0)
+					if fullW > 0 {
+						full.Width(fullW)
+					} else {
+						full.Right(0)
 					}
-					a.sendButton(c, t)
+					if ahead {
+						full.Invisible()
+					}
+					if h := full.Bounds().H; h > 0 && fresh {
+						a.cardFullH = h + 2*a.paneBorder()
+					}
+					// The card takes the heights as just updated, from the
+					// last frame's layout, the unseen pass's included,
+					// rather than as they were before this frame took them.
+					if morphing {
+						compactH, fullH = a.cardHeights(c)
+						a.cardH = lerp(compactH, fullH)
+						card.Height(a.cardH)
+					}
+				}
+				full.Children(func() {
+					in := fadeIn(k, 0.25, 0.5)
+					if len(a.attachments) > 0 {
+						faded(ui.Column(c).Key("attachments").Padding(12, 12, 0), in).Children(func() {
+							attachmentChips(c, a.attachments, t, func(i int) {
+								a.attachments = append(a.attachments[:i:i], a.attachments[i+1:]...)
+							})
+						})
+					}
+					placeholder := "Ask anything, @tag files/folders, or use / to show available commands"
+					if waitingRequest(t, es) != nil {
+						placeholder = "Reply to steer, or answer the approval above"
+					}
+					// Unseen, the text area is one of its own, which never
+					// takes the focus: the one that shows is new as it shows,
+					// taking the focus from the line with the caret at the
+					// end of the draft, rather than where it was left as the
+					// unseen one was laid out, what the line took since
+					// having gone in after it.
+					key := "draft"
+					if ahead {
+						key = "draft-ahead"
+					}
+					area := ui.TextArea(c.Key(key), &a.draft).Placeholder(placeholder).
+						Lines(2, 10).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).
+						Padding(14, 16, 4).OnPaste(a.onPaste).OnTextKey(a.suggestKey).Opacity(in)
+					if !ahead {
+						area.AutoFocus().Bind(&a.draftArea)
+					}
+					in = fadeIn(k, 0.35, 0.5)
+					faded(ui.Row(c).Key("controls").Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).
+						Translate(0, 6*(1-in)), in).Children(func() {
+						a.composerControls(c)
+						ui.Spacer(c)
+						if t.local() && iconButton(c, "attach", icPaperclip, "Attach files", false).Clicked() {
+							a.pickFiles()
+						}
+						a.sendButton(c, t, !ahead)
+					})
 				})
 				if dragOver {
 					dropRing(c)
 				}
 			})
-			if compact {
+			if k == 0 {
 				return
 			}
-			ui.Row(c).Key("env-row").Gap(4).AlignItems(ui.Center).Padding(0, 6).ClipY().Transition(a.foldTransition()).Children(func() {
-				a.workspaceButton(c, t)
-				a.accessCapNote(c, t)
+			// The row below the card, which rises up under it as it folds.
+			e := fadeIn(k, 0.45, 0.55)
+			below := ui.Column(c).Key("below").PassThrough()
+			if morphing {
+				below.Height(a.envH * k).ClipY()
+			}
+			below.Children(func() {
+				env := faded(ui.Row(c).Key("env-row").Gap(4).AlignItems(ui.Center).Padding(8, 6, 0).Shrink(0).
+					Translate(0, -6*(1-e)), e)
+				if h := env.Bounds().H; h > 0 {
+					a.envH = h
+				}
+				env.Children(func() {
+					a.workspaceButton(c, t)
+					a.accessCapNote(c, t)
+				})
 			})
 		})
 	})
@@ -654,8 +866,9 @@ func (a *app) workspacesOn(e *client.Env, home string) []draft {
 // anything to send. While the agent works, a message steers it, and with
 // none the button stops it, as it ends a run left uncertain. Holding a
 // message, the composer keeps a Stop of its own beside it, so a draft
-// never hides the only way to stop a run.
-func (a *app) sendButton(c *ui.Context, t thread) {
+// never hides the only way to stop a run. Without keys, it takes no ⌘⏎:
+// laid out unseen, it's no more there to the keyboard than to the pointer.
+func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 	empty := a.message(t) == ""
 	live := t.View.Live()
 	working := live && empty
@@ -692,7 +905,7 @@ func (a *app) sendButton(c *ui.Context, t thread) {
 			ui.Icon(c, icArrowUp).FontSize(16)
 		}
 	})
-	if send.Clicked() || c.Shortcut(ui.Cmd, ui.KeyEnter) {
+	if send.Clicked() || keys && c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		if working {
 			a.stop(c, t)
 		} else {
