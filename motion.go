@@ -56,6 +56,14 @@ var (
 	turn = ui.Animation{Duration: 200 * time.Millisecond, Ease: easeOut}
 	// sidebarSlide opens and closes the sidebar.
 	sidebarSlide = ui.Animation{Duration: 250 * time.Millisecond, Ease: easeDrawer}
+	// composerOpen morphs the compact composer into the full one as the
+	// user gets back to the end; composerClose folds it back, quicker.
+	// Scrolling turns it round often, mid-way: springs, without bounce, keep
+	// its velocity as it does, where a curve would start over from rest.
+	// Most of the way there in about 150 and 125 ms, settled in about 350
+	// and 300.
+	composerOpen  = ui.Animation{Spring: ui.SpringOptions{Duration: 240 * time.Millisecond}}
+	composerClose = ui.Animation{Spring: ui.SpringOptions{Duration: 200 * time.Millisecond}}
 )
 
 // indicator glides a selection indicator between the options of a small
