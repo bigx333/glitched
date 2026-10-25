@@ -628,8 +628,10 @@ func main() {
 			TitleBarStyle:        mygo.TitleBarHiddenInset,
 			TitleBarHeight:       headerHeight,
 			TrafficLightPosition: &mygo.Point{X: 20, Y: (headerHeight - 12) / 2},
-			Vibrancy:             mygo.VibrancySidebar,
-			Content:              ui.View(a.view),
+			// The menu's material, not the sidebar's: about half as much
+			// again of the desktop shows through it.
+			Vibrancy: mygo.VibrancyMenu,
+			Content:  ui.View(a.view),
 		})
 		// The wind's glyph atlases are drawn between the window's frames.
 		a.wind.SetLater(a.win.Update)
