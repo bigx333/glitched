@@ -18,9 +18,14 @@ import (
 // Where the desktop asks for less motion, or there's no GPU, the row
 // fades and closes.
 
-// zapTime is how long the answers take to break up: as long as fast
-// mode's strike.
-const zapTime = strikeTime
+// zapTime is how long the answers take to break up, the room they took
+// closing on the composer's spring once they have: twice fast mode's
+// strike, slow enough to see. zapFade is how long the row fades instead,
+// with less motion asked for or no GPU. Tune them here.
+const (
+	zapTime = 900 * time.Millisecond
+	zapFade = 450 * time.Millisecond
+)
 
 // approvalZap is a request's answers as they were answered, kept to break
 // up.
@@ -91,16 +96,17 @@ func (a *app) answer(c *ui.Context, t thread, r *client.RequestEntry, ans client
 func (a *app) zapping(r *client.RequestEntry) bool { return a.zap.request == r.Request }
 
 // zapRow is r's answers breaking up, in the room they took, which closes
-// once they're half gone. It's all painted: the buttons are gone.
+// once they're gone. It's all painted: the buttons are gone.
 func (a *app) zapRow(c *ui.Context) {
 	z := a.zap
 	since := c.Now().Sub(z.at)
-	k := min(1, float32(since)/float32(zapTime))
 	still := c.Preferences().ReduceMotion || !gpu
-	hold := zapTime / 2
+	// The room closes once the answers are gone, pixels or fade.
+	hold := zapTime
 	if still {
-		hold = zapTime
+		hold = zapFade
 	}
+	k := min(1, float32(since)/float32(hold))
 	target := float32(1)
 	if since >= hold {
 		target = 0
@@ -108,7 +114,7 @@ func (a *app) zapRow(c *ui.Context) {
 	slot := ui.Box(c).Key("decide-zap")
 	room := slot.AnimateTo("room", target, composerClose)
 	// Done, or long done where it wasn't shown, as the card scrolled away.
-	if k >= 1 && room < 0.01 || since > 2*zapTime+time.Second {
+	if k >= 1 && room < 0.01 || since > 2*hold+time.Second {
 		a.zap = approvalZap{}
 		return
 	}
@@ -116,7 +122,7 @@ func (a *app) zapRow(c *ui.Context) {
 	slot.Height(z.h * room).Shrink(0).ClipY().PassThrough().Children(func() {
 		ui.Box(c).Key("zap").Absolute().Top(0).Left(0).Right(0).Height(z.h).PassThrough().
 			Draw(func(p *ui.Painter, rect ui.Rect) {
-				k := min(1, float32(p.Now().Sub(z.at))/float32(zapTime))
+				k := min(1, float32(p.Now().Sub(z.at))/float32(hold))
 				// The row as it was, fading as its pixels take its place.
 				fade := 1 - smoothstep(0, 0.18, k)
 				if still {
