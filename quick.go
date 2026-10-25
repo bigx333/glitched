@@ -44,12 +44,8 @@ func (a *app) setUpQuickAsk() {
 		DisableResize: true,
 		Content:       ui.View(a.quickView),
 	})
-	// Hidden rather than closed, to show again at once; quitting destroys
-	// it.
-	q.panel.OnClose(func(e *mygo.CloseEvent) {
-		e.PreventDefault()
-		q.panel.Hide()
-	})
+	// Hidden rather than closed, to show again at once; a quit closes it.
+	q.panel.OnClose(a.hideUnlessQuitting(q.panel.Hide))
 	q.panel.OnBlur(q.panel.Hide)
 	for _, s := range quickShortcuts {
 		if err := mygo.GlobalShortcut.Register(s, a.toggleQuickAsk); err == nil {
@@ -155,6 +151,7 @@ func (a *app) startQuickThread() {
 		q.panel.Hide()
 	}
 	if a.win != nil {
+		a.cancelHide()
 		a.win.Show()
 		a.win.Focus()
 		a.win.Invalidate()

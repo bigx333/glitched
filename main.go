@@ -293,6 +293,14 @@ type app struct {
 	terminalFocused bool
 	// quick is the quick-ask panel over every app.
 	quick quickAsk
+	// quitting is set as a quit starts, for the windows that hide rather
+	// than close to let it close them.
+	quitting bool
+	// nextTurn runs a func on the main loop's next turn; nil in tests.
+	nextTurn func(func())
+	// leavingFullScreen, while the window leaves full screen to hide on
+	// macOS, drops that hide: its listener off, its fallback disarmed.
+	leavingFullScreen func()
 	// lists are the threads' timelines, by thread.
 	lists map[api.ID]*ui.ListState
 	// The diff panel: each file's viewer, by thread and path, and their
@@ -642,6 +650,10 @@ func main() {
 			}
 		})
 	})
+	// Off the main thread, RunOnMain queues, to run once the main thread's
+	// done with what it's on.
+	a.nextTurn = func(f func()) { go mygo.RunOnMain(f) }
+	mygo.App.OnBeforeQuit(a.beforeQuit)
 	mygo.App.WhenReady(func() {
 		a.installMenu()
 		mygo.App.OnNotificationClick(a.onNotificationClick)
@@ -668,7 +680,8 @@ func main() {
 		// The browser's pages are the system's web views of the window.
 		a.browser.open = sysweb.Opener(a.win)
 		a.setUpQuickAsk()
-		// The terminals' shells hang up with the window.
+		// The terminals' shells hang up as the window closes, not as it
+		// hides (macOS).
 		a.win.OnClosed(a.closeShells)
 		a.setUpWindowClose()
 		// Coming back to the window reads the thread the chat shows.
