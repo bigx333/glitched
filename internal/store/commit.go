@@ -41,12 +41,14 @@ func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.R
 }
 
 // lineOf is the thread and those above it, it first, as far up as
-// api.MaxDepth+1 threads, so a cycle can't hang the walk.
+// api.MaxDepth+1 threads, so a cycle can't hang the walk. A deleted
+// ancestor ends the line: its children stand on their own. The thread
+// itself is kept deleted, for CheckChild to refuse.
 func lineOf(ctx context.Context, q querier, id api.ID) ([]engine.Thread, error) {
 	var line []engine.Thread
 	for !id.IsZero() && len(line) <= api.MaxDepth {
 		t, err := loadThread(ctx, q, id)
-		if err != nil || !t.Exists() {
+		if err != nil || !t.Exists() || t.Deleted && len(line) > 0 {
 			return line, err
 		}
 		line = append(line, t)

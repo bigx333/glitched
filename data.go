@@ -465,7 +465,7 @@ func (a *app) follow() {
 // deleted, and each turn that ended since is told of once.
 func (a *app) changed() {
 	a.follow()
-	a.deleteStopped()
+	a.settleStopped()
 	for _, e := range a.backend.Envs() {
 		for id, th := range e.Threads {
 			var ended time.Time

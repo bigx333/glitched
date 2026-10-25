@@ -307,13 +307,16 @@ func (d *decision) observe(o Observation) error {
 	case Ended:
 		// Only the user ends an uncertain run.
 		if isLive(o.Run) && live.State != RunUncertain {
+			stopped := live.State == RunStopping
 			if err := d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error, Tokens: o.Tokens}); err != nil {
 				return err
 			}
-			switch o.Outcome {
-			case api.OutcomeCompleted:
+			// A run being stopped reports nothing, however it ends.
+			switch {
+			case stopped:
+			case o.Outcome == api.OutcomeCompleted:
 				d.report(o.Run, api.ReportDone, "", nil)
-			case api.OutcomeFailed:
+			case o.Outcome == api.OutcomeFailed:
 				d.report(o.Run, api.ReportFailed, o.Error, nil)
 			}
 		}

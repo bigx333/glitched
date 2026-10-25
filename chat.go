@@ -944,7 +944,7 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 			stop.Background(palette.hover)
 		}
 		if stop.Children(func() { ui.Box(c).Size(10, 10).Radius(2).Background(palette.text) }).Clicked() {
-			a.stop(c, t)
+			a.backend.Interrupt(t.env, t.id())
 		}
 	}
 	label := "Send"
@@ -972,7 +972,7 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 	})
 	if send.Clicked() || keys && c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		if working {
-			a.stop(c, t)
+			a.backend.Interrupt(t.env, t.id())
 		} else {
 			a.send(t)
 		}
@@ -1024,14 +1024,6 @@ func (a *app) send(t thread) {
 	a.draft = ""
 	a.attachments = slices.DeleteFunc(a.attachments, func(at attachment) bool { return at.held(t) == "" })
 	a.listFor(id).ScrollToEnd()
-}
-
-// stop stops t's agent, and every agent working under it, which says how
-// many of those it stopped.
-func (a *app) stop(c *ui.Context, t thread) {
-	if n := a.stopTree(t); n > 0 {
-		c.AddToast(ui.Toast{Title: "Stopped", Description: title(t) + " and " + plural(n, "child thread"), Type: "info"})
-	}
 }
 
 // steer is where a message sent from the composer went.

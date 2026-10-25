@@ -207,7 +207,7 @@ type app struct {
 	childrenOpen map[api.ID]bool
 	// afterStop the threads a cascade deletes once their agents have
 	// stopped.
-	afterStop map[api.ID]bool
+	afterStop map[api.ID]stopped
 	// ended is each thread's last turn's end, as last seen, to tell of
 	// the next once.
 	ended    map[api.ID]time.Time
@@ -428,7 +428,7 @@ func newApp(dir string, post func(func())) *app {
 		composerSeen:  map[api.ID]bool{},
 		agentsOpen:    map[api.ID]bool{},
 		agentsAll:     map[api.ID]bool{},
-		afterStop:     map[api.ID]bool{},
+		afterStop:     map[api.ID]stopped{},
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,
@@ -534,6 +534,7 @@ func (a *app) view(c *ui.Context) {
 		return !slices.ContainsFunc(a.projects, func(p *project) bool { return p.key == k })
 	})
 	a.pruneDiffs()
+	a.pruneThreadState()
 	// A steer to a server removed since never lands.
 	maps.DeleteFunc(a.steers, func(_ api.ID, s steer) bool { return !slices.Contains(a.backend.Envs(), s.env) })
 	if w, _ := c.Size(); w > 0 {
