@@ -87,9 +87,9 @@ func askLine(body json.RawMessage) string {
 		case b.Command != "":
 			return clip("Wants to run "+oneLine(b.Command), outcomeLimit)
 		case b.Operation != "" && b.Path != "":
-			return clip("Wants to "+b.Operation+" "+b.Path, outcomeLimit)
+			return clip(oneLine("Wants to "+b.Operation+" "+b.Path), outcomeLimit)
 		case b.Operation != "":
-			return clip("Wants to "+b.Operation, outcomeLimit)
+			return clip(oneLine("Wants to "+b.Operation), outcomeLimit)
 		}
 	}
 	return "Waits on your answer"

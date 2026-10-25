@@ -137,3 +137,27 @@ func TestAChildDraftIsDocked(t *testing.T) {
 		t.Errorf("a child's draft: dock %v, the hero's heading %v", h.a.dockK, h.tt.HasText("Send a message to start the thread."))
 	}
 }
+
+// The hero is in the middle of the pane, with or without the sidebar:
+// the turn markers' room comes in only as the transcript does.
+func TestTheHeroIsCentred(t *testing.T) {
+	h := start(t, inboxDir(t))
+	for _, sidebar := range []bool{true, false} {
+		if h.a.showSidebar != sidebar {
+			h.a.toggleSidebar(false)
+		}
+		h.a.newThread()
+		h.tt.Advance(time.Second)
+		model, ok1 := h.tt.Find("Model")
+		send, ok2 := h.tt.Find("Send")
+		if !ok1 || !ok2 {
+			t.Fatalf("no hero composer: %q", h.tt.Texts())
+		}
+		paneL := h.a.sidebarWidth * h.a.sidebarOpen
+		paneMid := paneL + (1320-paneL)/2
+		cardMid := (model.X - 8 + send.X + send.W + 8) / 2
+		if d := cardMid - paneMid; d < -1.5 || d > 1.5 {
+			t.Errorf("sidebar %v: the hero's card is %.1f DIPs off the pane's middle", sidebar, d)
+		}
+	}
+}
