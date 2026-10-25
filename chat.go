@@ -53,6 +53,8 @@ func (a *app) chatPage(c *ui.Context) {
 			// under it.
 			a.header(c, t, es)
 			pane := a.contentCard(ui.Box(c).Grow(1))
+			// Before the timeline, which leaves the strip's room as it moves.
+			a.agentsMorph(pane, t)
 			a.windBackground(c, pane)
 			pane.Children(func() {
 				if a.windDraw != nil && a.settings.wind {
@@ -258,12 +260,14 @@ func (a *app) timeline(c *ui.Context, t thread, es []entry) {
 	l.Key = func(i int) any { return es[i].key }
 	l.FollowEnd = true
 	l.FollowAnimation = &ui.Smooth
+	// The agents strip sits over the composer: the end clears it too.
+	room := composerRoom + a.agentsRoom(t)
 	ui.List(c.Key(t.id()), l, len(es), func(i int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, es, i) })
 		})
-	}).Fill().Padding(20, 24, composerRoom, markerColumnW+12).Gap(22).Justify(ui.End).
-		ScrollbarInsets(0, 0, composerRoom-40, 0).Children(func() {
+	}).Fill().Padding(20, 24, room, markerColumnW+12).Gap(22).Justify(ui.End).
+		ScrollbarInsets(0, 0, room-40, 0).Children(func() {
 		if len(es) == 0 {
 			ui.Row(c).Justify(ui.Center).Children(func() { a.emptyState(c) })
 		}
@@ -282,10 +286,18 @@ func (a *app) jumpToLatest(c *ui.Context, t thread) {
 	}
 	l := a.listFor(t.id())
 	// Over the composer as it is in this frame, which is laid out after.
-	bottom := composerBarBottom + a.composerHeight(c) + 26
+	bottom := composerBarBottom + a.composerHeight(c, t) + 26
+	// The open Agents panel floats over where it is, as it fades in with
+	// the composer: it gives way to the panel as that comes, taking no
+	// presses once mostly gone, and none of the pointer once gone, where
+	// it shows past a panel lower than it.
+	o := j
+	if len(a.shown(t)) > 0 {
+		o *= 1 - a.agentsK*fadeIn(a.composerK, 0.45, 0.55)
+	}
 	ui.Row(c).Absolute().Left(0).Right(0).Bottom(bottom).Justify(ui.Center).PassThrough().Children(func() {
-		b := faded(a.glassButton(c, "jump").Padding(5, 12).Translate(0, 8*(1-j)), j)
-		if j <= 0.001 {
+		b := faded(a.glassButton(c, "jump").Padding(5, 12).Translate(0, 8*(1-j)), o)
+		if o <= 0.001 {
 			b.Invisible()
 		}
 		if b.Children(func() {
@@ -608,13 +620,17 @@ func (a *app) cardHeights(c *ui.Context) (compactH, fullH float32) {
 	return compactH, fullH
 }
 
-// composerHeight is the height of the composer, the card with what's under
-// it, as it is in this frame: k of the way from compact to full, as
-// composer lays it out, rather than as it was laid out last frame.
-func (a *app) composerHeight(c *ui.Context) float32 {
+// composerHeight is the height of the composer, the card with what's over
+// and under it, as it is in this frame: k of the way from compact to full,
+// as composer lays it out, rather than as it was laid out last frame.
+func (a *app) composerHeight(c *ui.Context, t thread) float32 {
 	k := a.composerK
 	compactH, fullH := a.cardHeights(c)
-	return compactH + (fullH-compactH)*k + a.envH*k
+	h := compactH + (fullH-compactH)*k
+	if len(a.shown(t)) > 0 {
+		h += a.aboveH * k
+	}
+	return h + a.envH*k
 }
 
 // composer is the card the user writes in, over the end of the chat.
@@ -627,8 +643,9 @@ func (a *app) composerHeight(c *ui.Context) float32 {
 // It morphs between the two on a spring, k of the way from compact to
 // full, turning round mid-way from where it is: the card eases its width,
 // height and radius from the one line's to the full composer's, the line's
-// placeholder giving way to the text area's, then the controls and the row
-// below, which fade and slide in after it, going first as it folds.
+// placeholder giving way to the text area's, then the controls, the row
+// below and the agents strip above, which fade and slide in after it,
+// going first as it folds.
 // Mid-way, what isn't in the card's flow is held to its top, the card
 // clipping it.
 func (a *app) composer(c *ui.Context, t thread, es []entry) {
@@ -652,6 +669,23 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 	bar.Children(func() {
 		frame := ui.Column(c).Key("composer-frame").WidthPercent(100).MaxWidth(lerp(compactWidth, contentWidth)).PassThrough()
 		frame.Children(func() {
+			// The agents strip sits over the card, the room it takes going
+			// with it as it slides down into it.
+			if k > 0 && len(a.shown(t)) > 0 {
+				s := fadeIn(k, 0.45, 0.55)
+				above := ui.Column(c).Key("above").Justify(ui.End).PassThrough()
+				if morphing {
+					above.Height(a.aboveH * k).ClipY()
+				}
+				above.Children(func() {
+					in := faded(ui.Column(c).Key("in").Padding(0, 0, 8).Shrink(0).PassThrough().
+						Translate(0, 8*(1-s)), s)
+					if h := in.Bounds().H; h > 0 {
+						a.aboveH = h
+					}
+					in.Children(func() { a.agents(c, t, frame.Bounds().W, s) })
+				})
+			}
 			// What the last frame measured was laid out under the settings
 			// in force, or it isn't to be taken.
 			fresh := a.cardLaid == a.cardFor
@@ -683,7 +717,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 			// agent can't read.
 			dragOver := t.local() && a.dropZone(card)
 			a.pane(card, glass.Glass{}).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.28)).Clip().Children(func() {
-				workingGlow(c, card, t.View.Working())
+				workingGlow(c, card, t.View.Working(), 20)
 				if k < 1 {
 					// A line to type a follow-up into, which a text area,
 					// at least two lines high, can't be; the first key
