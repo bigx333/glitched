@@ -380,24 +380,33 @@ func (a *app) usagePill(c *ui.Context, t thread) {
 	pill(c, label).Shrink(0).Tooltip(tip)
 }
 
+// waitsOn is whether t's run still waits on a request of the user's.
+func waitsOn(t thread, run api.ID) bool {
+	return slices.ContainsFunc(t.View.Requests, func(r api.Request) bool { return r.Run == run })
+}
+
 // reportCard is the children's reports in the parent's timeline: each
 // one's state, a line or two of what came of it, and a way into it.
 func (a *app) reportCard(c *ui.Context, t thread, key string, e entry) {
 	ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Padding(4).Gap(2).
 		Transition(riseIn).Children(func() {
 		for i, n := range e.reports {
-			icon, col, state := icCheckCirc, palette.green, "Done"
-			switch n.Kind {
-			case api.ReportFailed:
-				icon, col, state = icX, palette.red, "Failed"
-			case api.ReportBlocked:
-				icon, col, state = icHand, palette.amber, "Needs you"
-			}
 			child, found := thread{}, false
 			if t.env != nil {
 				if th := t.env.Threads[n.Child]; th != nil && !deleting(thread{t.env, th}) {
 					child, found = thread{t.env, th}, true
 				}
+			}
+			icon, col, state := icCheckCirc, palette.green, "Done"
+			switch {
+			case n.Kind == api.ReportFailed:
+				icon, col, state = icX, palette.red, "Failed"
+			case n.Kind == api.ReportBlocked && found && waitsOn(child, n.Run):
+				icon, col, state = icHand, palette.amber, "Needs you"
+			case n.Kind == api.ReportBlocked:
+				// A report is never updated: once the request is answered or
+				// the run stopped, it only says what the child waited on.
+				icon, col, state = icHand, palette.faint, "Was waiting"
 			}
 			r := ghost(c, i, false).Padding(7, 10).Gap(10).AlignItems(ui.Start).Label(n.Title).Disabled(!found)
 			if r.Children(func() {
