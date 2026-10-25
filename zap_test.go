@@ -87,11 +87,13 @@ func TestZapStrip(t *testing.T) {
 	if err := tt.Click(button); err != nil {
 		t.Fatal(err)
 	}
-	for ms := 0; ms <= 720; ms += 40 {
-		if ms > 0 {
-			tt.Advance(40 * time.Millisecond)
+	// Every 60 ms, through the zap and the room closing after it.
+	const step = 60 * time.Millisecond
+	for d := time.Duration(0); d <= zapTime+360*time.Millisecond; d += step {
+		if d > 0 {
+			tt.Advance(step)
 		}
-		shot(fmt.Sprintf("%03d-zap-%04dms", ms/40+1, ms))
+		shot(fmt.Sprintf("%03d-zap-%04dms", int(d/step)+1, d.Milliseconds()))
 	}
 	h.until("the answer", func() bool { return h.tt.HasText("Allowed") || h.tt.HasText("Denied") })
 	tt.Advance(time.Second)
@@ -107,4 +109,27 @@ func TestZapStrip(t *testing.T) {
 	}
 	defer f.Close()
 	png.Encode(f, strip)
+}
+
+// The zap takes its time, zapTime, and the room it took closes only after:
+// four fifths through, the card's head is where it was, the list being held
+// to its end; once the room has closed, it has come down.
+func TestTheZapTakesItsTime(t *testing.T) {
+	h, _ := asking(t, runTests)
+	h.tt = ui.NewTester(func(c *ui.Context) { gpu = true; h.a.view(c) }, 1320, 860)
+	h.tt.Advance(time.Second)
+	head, _ := h.tt.Find("Approval needed")
+	h.click("Allow once")
+	h.tt.Advance(zapTime * 4 / 5)
+	if h.a.zap.request.IsZero() {
+		t.Fatal("the zap was over before its end")
+	}
+	if now, ok := h.tt.Find("Approval needed"); !ok || now.Y-head.Y > 1 || head.Y-now.Y > 1 {
+		t.Errorf("four fifths through the zap, the card's head moved from %v to %v: its room is closing", head.Y, now.Y)
+	}
+	h.until("the answer", func() bool { return h.tt.HasText("Allowed") })
+	h.tt.Advance(zapTime + 2*time.Second)
+	if !h.a.zap.request.IsZero() {
+		t.Error("the zap is held long after it ended")
+	}
 }
