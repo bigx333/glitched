@@ -34,6 +34,7 @@ import (
 // SHOT.menu.txt), HOVER=<text>, FAILED, PICKER=<effort>, FAST and
 // STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH,
 // TICK=<turn>, TINT=0..1, PANELS, SCROLLUP, WIDTH=1100, AGENTS, HERO and DOCK,
+// SNOOZE=<title> for a row's snooze popover, SIDEBAR=<width>,
 // GAG=snooze|settle|undo with AT=350ms, and HIDE=60ms for a frame that
 // long into hiding the sidebar.
 func TestShot(t *testing.T) {
@@ -65,6 +66,9 @@ func TestShot(t *testing.T) {
 		w := 1320
 		fmt.Sscan(v, &w)
 		tt.SetSize(w, 860)
+	}
+	if v := os.Getenv("SIDEBAR"); v != "" {
+		fmt.Sscan(v, &a.sidebarWidth)
 	}
 	if os.Getenv("CMDK") != "" {
 		a.openCommandPalette()
@@ -212,6 +216,19 @@ func TestShot(t *testing.T) {
 			tt.Frame()
 			tt.Advance(d)
 		}
+	}
+	if title := os.Getenv("SNOOZE"); title != "" {
+		// That thread's snooze popover open, from its row's clock.
+		r, ok := tt.Find(title)
+		if !ok {
+			t.Fatalf("no %q", title)
+		}
+		tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		tt.Advance(time.Second)
+		if err := tt.Click("Snooze"); err != nil {
+			t.Fatal(err)
+		}
+		tt.Advance(time.Second)
 	}
 	if os.Getenv("AGENTS") != "" {
 		// The Agents panel open over the composer.

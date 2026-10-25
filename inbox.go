@@ -449,7 +449,10 @@ func (a *app) snoozeButton(c *ui.Context, t thread, cat category) {
 		open = !open
 	}
 	ui.PopoverBase(c, b, &open, func(panel ui.Element) {
-		panel.AttachTo(b, ui.AnchorTopEnd, ui.AnchorBottomEnd).Margin(0, 0, 6, 0).Width(220).Radius(12).Clip()
+		// Under the button, from its left edge: above it, the panel ran
+		// left over the sidebar's header and the traffic lights. Near the
+		// window's bottom, AttachTo puts it above instead.
+		panel.AttachTo(b, ui.AnchorBottomStart, ui.AnchorTopStart).Margin(6, 0, 0, 0).Width(220).Radius(12).Clip()
 		a.pane(panel, glass.Glass{}).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.35)).Children(func() {
 			ui.Column(c).Padding(5).Gap(1).Children(func() {
 				ui.Text(c, "Snooze until…").FontSize(11).FontWeight(600).TextColor(palette.faint).Padding(4, 8, 3)
