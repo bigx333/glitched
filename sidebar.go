@@ -197,18 +197,21 @@ func (a *app) settingsNav(c *ui.Context) {
 	})
 }
 
-// newThread shows the draft, in the shown thread's workspace.
+// newThread shows the draft, in the shown thread's workspace, as the hero,
+// its text area taking the focus from wherever the press left it.
 func (a *app) newThread() {
 	t := a.current()
 	a.startIn(draft{t.env, t.View.Workspace})
+	a.draftArea.Focus()
 }
 
 // startThread shows the draft, in the project's workspace.
 func (a *app) startThread(p *project) { a.startIn(draft{p.env, p.key.workspace}) }
 
 func (a *app) startIn(d draft) {
+	a.leaveFor()
 	a.fresh, a.freshParent = d, api.ID{}
-	a.selected = api.ID{}
+	a.selected, a.dockJump = api.ID{}, false
 	a.follow()
 	if a.router.Path() != "/" {
 		a.router.Push("/")

@@ -341,6 +341,18 @@ type app struct {
 	// composerSeen the threads it has been shown over.
 	composerRest bool
 	composerSeen map[api.ID]bool
+	// The hero (hero.go): dockK is how far the composer is from the hero
+	// (0) to its dock (1) in this frame, dockJump makes it jump there, for
+	// ⌘N, and paneH is the chat pane's height, as last laid out; leaving
+	// is the thread last left for a hero, whose transcript fades out as
+	// the composer lifts, and arrived the last to leave the hero, at
+	// arrivedAt, whose row slides into the sidebar.
+	dockK     float32
+	dockJump  bool
+	paneH     float32
+	leaving   api.ID
+	arrived   api.ID
+	arrivedAt time.Time
 	// aboveH is the height of what's over the composer card, the agents
 	// strip, as last measured.
 	aboveH float32
@@ -589,6 +601,7 @@ func (a *app) shortcuts(c *ui.Context) {
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyN) {
 		a.newThread()
+		a.dockJump = true // keyboard actions don't animate
 	}
 	// Keyboard actions don't animate.
 	if c.Shortcut(ui.Cmd, ui.KeyB) {

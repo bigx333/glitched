@@ -28,7 +28,7 @@ func (a *app) installMenu() {
 	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
 		{Role: mygo.RoleAppMenu},
 		{Label: "Thread", Submenu: []*mygo.MenuItem{
-			{Label: "New Thread", Accelerator: "CmdOrCtrl+N", Click: do(a.newThread)},
+			{Label: "New Thread", Accelerator: "CmdOrCtrl+N", Click: do(func() { a.newThread(); a.dockJump = true })},
 			{Label: "Search…", Accelerator: "CmdOrCtrl+K", Click: do(a.openCommandPalette)},
 			// The panel's shortcut is global, not the menu's: as both, a
 			// press while the app is active would toggle it twice.

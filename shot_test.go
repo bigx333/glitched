@@ -33,7 +33,7 @@ import (
 // RENAME=<title>, ALERT=<title>, MENU=<title> (its items to
 // SHOT.menu.txt), HOVER=<text>, FAILED, PICKER=<effort>, FAST and
 // STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH,
-// TICK=<turn>, TINT=0..1, PANELS, SCROLLUP, WIDTH=1100, AGENTS,
+// TICK=<turn>, TINT=0..1, PANELS, SCROLLUP, WIDTH=1100, AGENTS, HERO and DOCK,
 // GAG=snooze|settle|undo with AT=350ms, and HIDE=60ms for a frame that
 // long into hiding the sidebar.
 func TestShot(t *testing.T) {
@@ -192,6 +192,26 @@ func TestShot(t *testing.T) {
 			client.Pending{Command: api.NewID(), Body: api.InboxSet{Disposition: api.Disposition{State: api.Settled}}, Err: boom})
 		tt.Frame()
 		tt.Advance(time.Second)
+	}
+	if v, ok := os.LookupEnv("HERO"); ok {
+		// A new thread's hero; HERO=<d> is that far into it lifting from
+		// the thread shown, and DOCK=<d> that far into docking after its
+		// first message.
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			d = time.Second
+		}
+		a.newThread()
+		tt.Frame()
+		tt.Advance(d)
+		if v := os.Getenv("DOCK"); v != "" {
+			d, _ := time.ParseDuration(v)
+			tt.Advance(time.Second)
+			a.draft = "Add a hero to new threads"
+			a.send(a.current())
+			tt.Frame()
+			tt.Advance(d)
+		}
 	}
 	if os.Getenv("AGENTS") != "" {
 		// The Agents panel open over the composer.
