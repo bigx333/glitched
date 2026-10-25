@@ -24,7 +24,7 @@ Written 2026-10-25 for review, with PR #2. This is what the branch builds, not a
 
 `store.Submit` (`internal/store/commit.go`) runs them for a `ThreadCreate` with a parent, on a thread that doesn't exist yet, in the create's own transaction:
 
-- `lineOf` loads the parent, then its parent, up to `api.MaxDepth+1` threads, so a corrupt cycle can't hang it.
+- `lineOf` loads the parent, then its parent, up to `api.MaxDepth+1` threads, so a corrupt cycle can't hang it. A deleted ancestor above the parent ends the line, as the GUI's does: its children stand on their own.
 - `engine.CheckChild` (`internal/engine/decide.go`) refuses, as `*api.RejectedError`:
   - "the parent thread is gone": no parent on this engine, or a deleted one. A parent on another engine is "gone" too: children are same-engine only.
   - "a child thread can be at most 4 below a thread of yours": the line is longer than `MaxDepth`.
@@ -41,7 +41,7 @@ When:
 | ends Completed | `ReportDone` | `Ended` |
 | ends Failed, a failed start included | `ReportFailed`, with the error | `Ended` |
 | opens a request (approval or question) | `ReportBlocked`, with the request's body | `Surfaced` |
-| ends Interrupted or Abandoned | none: the user stopped it | |
+| ends Interrupted or Abandoned, or ends any way while stopping | none: the user stopped it | |
 | becomes Uncertain | none | |
 
 A thread with no parent never reports.
@@ -49,7 +49,7 @@ A thread with no parent never reports.
 How:
 
 1. `decision.report` adds an `engine.ReportToParent` effect (`internal/engine/effect.go`, kind `child.report`): parent, child, run, kind, the child's title, and the error or the request body. The store writes it to `effects` in the same transaction as the child's `turn.ended` or `request.opened`. Its row is the child's, so it runs in the child's lane, in order with the child's other effects.
-2. The runtime's `perform` hands it to `Host.report` (`internal/runtime/report.go`). That reads what came of the run: for a block, a line from the request body ("Wants to run …", "Wants to edit main.go"); for a failure, the error; otherwise the last paragraph of the run's assistant deltas, read from the child's log. It's one line, cut to 280 characters.
+2. The runtime's `perform` hands it to `Host.report` (`internal/runtime/report.go`). That reads what came of the run: for a block, a line from the request body ("Wants to run …", "Wants to edit main.go"); for a failure, the error; otherwise the last paragraph of the run's assistant deltas, which `store.RunText` reads with one query on the child's log (`internal/store/read.go`). It's one line, cut to 280 characters.
 3. It commits `engine.Reported` on the **parent** with the effect's completion, in one transaction (`store.Observe` with `done`). `Observe` emits `api.ChildReported{Child, Run, Kind, Title, Outcome}` (`child.reported`) into the parent's log. `apply` sets `Thread.Reported` and bumps the revision.
 4. In the same commit, a parent that was Snoozed or Settled goes back to Open. An Archived parent stays archived.
 
@@ -69,12 +69,12 @@ Reading it:
 
 All in the GUI (`children.go`), one command per thread through the existing intents. The engine knows nothing of trees here.
 
-- **Stop**: `stopTree` sends `turn.interrupt` to the thread, if live, and to every live thread under it, archived ones too. The composer's Stop and ⌘↩ use it and say how many children they stopped. A stopped child reports nothing (see the table).
-- **Archive**: with children showing, an alert first names the count and how many are working. Then `archiveTree` stops the tree and sends `inbox.set Archived` to the thread and each child that shows. **Restore** in Archived threads sends `inbox.set Open` to the thread and every archived thread under it.
-- **Delete**: the alert counts the children, archived ones included, and the working ones. `deleteTree` stops the tree, deletes the threads that aren't live at once, and keeps the live ones in `afterStop`. After each change the manager posts, `deleteStopped` deletes those whose runs have ended.
-- **Order**: the thread first, then its children depth first. Each command is independent; they're not one transaction.
-- **Partial failure**: a refused or unsent command shows on its own thread as main's failed commands do, with Retry and Dismiss. The rest go through.
-- `afterStop` is in memory. If the GUI quits before a stop lands, that child is stopped but not deleted.
+- **Stop**: the composer's Stop and ⌘↩ stop only the thread's own agent, as on main. The Agents panel's Stop all sends `turn.interrupt` to every live thread under it that shows (`stopAll`) and says how many. A stopped child reports nothing (see the table).
+- **Archive**: with children showing, an alert first names the count and how many are working. Then `archiveTree` sends `inbox.set Archived` to the thread and each child that shows that isn't live. A live one is interrupted and kept in `afterStop`, and archived once its run has ended: archived, it would vanish while its agent still works. **Restore** in Archived threads sends `inbox.set Open` to the thread and every archived thread under it.
+- **Delete**: the alert counts the children, archived ones included, and the working ones. `deleteTree` goes deepest first and the thread last, so no child stands on its own on the way. It deletes what isn't live and has nothing waiting under it; it interrupts the live ones and keeps them, and what's over them, in `afterStop`.
+- `settleStopped` runs after each change the manager posts. It archives or deletes a kept thread once its run has ended, a delete waiting for the threads under it to go first. A thread whose stop hasn't landed within a minute (`stopGrace`) is given up on, so it isn't archived or deleted later, unseen, after the user went back to it.
+- **Partial failure**: each command is independent; they're not one transaction. A refused or unsent command shows on its own thread as main's failed commands do, with Retry and Dismiss. The rest go through.
+- `afterStop` is in memory. If the GUI quits before a stop lands, that thread is stopped but not archived or deleted.
 - A deleted parent leaves its children as threads of their own: `parentOf` finds no parent, and they show at the top level.
 
 ## Usage
@@ -101,7 +101,8 @@ All in the GUI (`children.go`), one command per thread through the existing inte
 
 1. Cascades as engine commands (one intent, the engine fanning out, atomic per engine), or keep them in the GUI as now?
 2. Should the outcome line be built in the engine, as now, or should the event carry less and the GUI read the child's transcript?
-3. Is "a stopped run reports nothing" right once agents start children themselves, when an agent rather than the user stops one?
+3. Is "a stopped run reports nothing" right once agents start children themselves, when an agent rather than the user stops one? Runs the engine stops itself (an answer it couldn't deliver) report nothing today either.
 4. Should a child be held to its parent's workspace? Nothing checks it; the GUI only ever creates one there.
 5. What should `Tokens` count across providers: input plus output, cached or not?
-6. Restoring an archived child alone leaves it on its own while its parent stays archived. Fine, or restore the line?
+6. Restoring an archived child alone leaves it on its own while its parent stays archived. Fine, or restore the line? And restoring a parent also restores a child the user had archived on its own before.
+7. A child shows only under its parent, so a working child under a Settled parent isn't in Working. Should working children also show there?
