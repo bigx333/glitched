@@ -33,7 +33,7 @@ import (
 // RENAME=<title>, ALERT=<title>, MENU=<title> (its items to
 // SHOT.menu.txt), HOVER=<text>, FAILED, PICKER=<effort>, FAST and
 // STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH,
-// TICK=<turn>, TINT=0..1, PANELS, SCROLLUP, WIDTH=1100,
+// TICK=<turn>, TINT=0..1, PANELS, SCROLLUP, WIDTH=1100, AGENTS,
 // GAG=snooze|settle|undo with AT=350ms, and HIDE=60ms for a frame that
 // long into hiding the sidebar.
 func TestShot(t *testing.T) {
@@ -191,6 +191,11 @@ func TestShot(t *testing.T) {
 			client.Pending{Command: api.NewID(), Body: api.MessageDispatch{Text: "Also check the staging keys."}, Err: boom},
 			client.Pending{Command: api.NewID(), Body: api.InboxSet{Disposition: api.Disposition{State: api.Settled}}, Err: boom})
 		tt.Frame()
+		tt.Advance(time.Second)
+	}
+	if os.Getenv("AGENTS") != "" {
+		// The Agents panel open over the composer.
+		a.agentsOpen[a.current().id()] = true
 		tt.Advance(time.Second)
 	}
 	if ms := os.Getenv("STRIKE"); ms != "" {
