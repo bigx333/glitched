@@ -22,6 +22,11 @@ const (
 	// composerRoom is the room left under the timeline for the composer
 	// floating over it.
 	composerRoom = 200
+	// columnLeft and columnRight are the room the chat's column leaves
+	// either side of it, the turn markers' on the left: the transcript and
+	// the composer over it share them, and so their edges.
+	columnLeft  = markerColumnW + 12
+	columnRight = 24
 )
 
 // focused is whether the window has the keyboard, as the Tester's does.
@@ -278,7 +283,7 @@ func (a *app) timeline(c *ui.Context, t thread, es []entry) {
 	if leaving {
 		list.Translate(0, -32*(1-tr)).PassThrough()
 	}
-	list.Fill().Padding(20, 24, room, markerColumnW+12).Gap(22).Justify(ui.End).
+	list.Fill().Padding(20, columnRight, room, columnLeft).Gap(22).Justify(ui.End).
 		ScrollbarInsets(0, 0, room-40, 0).Opacity(tr).Children(func() {
 		// The hero has its own greeting, over its composer.
 		if len(es) == 0 && !hero(t) {
@@ -311,7 +316,7 @@ func (a *app) jumpToLatest(c *ui.Context, t thread) {
 	if len(a.shown(t)) > 0 {
 		o *= 1 - a.agentsK*fadeIn(a.composerK, 0.45, 0.55)
 	}
-	ui.Row(c).Absolute().Left(0).Right(0).Bottom(bottom).Justify(ui.Center).PassThrough().Children(func() {
+	ui.Row(c).Absolute().Left(columnLeft).Right(columnRight).Bottom(bottom).Justify(ui.Center).PassThrough().Children(func() {
 		b := faded(a.glassButton(c, "jump").Padding(5, 12).Translate(0, 8*(1-j)), o)
 		if o <= 0.001 {
 			b.Invisible()
@@ -672,16 +677,15 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 	compactH, fullH := a.cardHeights(c)
 	// The bar lets the pointer through, but for the composer in it, to
 	// what is around it, as the pill taking the user to the end.
-	// barPadX is the room it leaves either side of the composer.
-	const barPadX = 24
+	// It's in the transcript's column, its edges the column's.
 	// d is how far it is from the hero to its dock (hero.go).
 	d := a.dockK
 	bar := ui.Column(c).Key("composer-bar").Absolute().Bottom(a.heroLift()*(1-d)).Left(0).Right(0).AlignItems(ui.Center).
-		Padding(0, barPadX, composerBarBottom).PassThrough()
+		Padding(0, columnRight, composerBarBottom, columnLeft).PassThrough()
 	// The full composer's width at rest, as the last frame had room for:
 	// the full card's, in its border, or 0 before there's been a frame.
 	var fullW float32
-	if w := bar.Bounds().W - 2*barPadX; w > 0 {
+	if w := bar.Bounds().W - columnLeft - columnRight; w > 0 {
 		fullW = max(0, min(w, contentWidth)-2*a.paneBorder())
 	}
 	bar.Children(func() {
