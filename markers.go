@@ -69,7 +69,7 @@ func (a *app) turnMarkers(c *ui.Context, es []entry, l *ui.ListState) {
 	}
 
 	col := ui.Column(c).Key("markers").Absolute().Left(markerLeft).Top(0).Bottom(composerRoom - 40).
-		Width(markerColumnW).Justify(ui.Center).AlignItems(ui.Start).Gap(markerGap)
+		Width(markerColumnW).Justify(ui.Center).AlignItems(ui.Start).Gap(markerGap).Opacity(transcriptK(a.dockK))
 	// Where the pointer is along the column, if over it: the ticks rise
 	// toward it.
 	_, py, over := col.PointerPosition()

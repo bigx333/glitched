@@ -53,6 +53,9 @@ func (a *app) chatPage(c *ui.Context) {
 			// under it.
 			a.header(c, t, es)
 			pane := a.contentCard(ui.Box(c).Grow(1))
+			a.paneH = pane.Bounds().H
+			// Before the timeline and the composer, which it stages.
+			a.dockMorph(pane, t)
 			// Before the timeline, which leaves the strip's room as it moves.
 			a.agentsMorph(pane, t)
 			a.windBackground(c, pane)
@@ -254,21 +257,33 @@ func (a *app) listFor(id api.ID) *ui.ListState {
 // list builds only those in view, starts at the end and follows it as a
 // reply streams in, gliding, until the user scrolls up; scrolling back to
 // the end follows it again. Each entry is in the middle of a row as wide
-// as the pane, so that the wheel scrolls it wherever the pointer is.
+// as the pane, so that the wheel scrolls it wherever the pointer is. It
+// fades in as the composer docks from the hero; into a hero, the thread
+// left fades out, sliding up, out of the pointer's way.
 func (a *app) timeline(c *ui.Context, t thread, es []entry) {
+	tr := transcriptK(a.dockK)
+	from, leaving := a.departing(t)
+	if leaving {
+		t, es = from, entriesOf(from)
+	}
 	l := a.listFor(t.id())
 	l.Key = func(i int) any { return es[i].key }
 	l.FollowEnd = true
 	l.FollowAnimation = &ui.Smooth
 	// The agents strip sits over the composer: the end clears it too.
 	room := composerRoom + a.agentsRoom(t)
-	ui.List(c.Key(t.id()), l, len(es), func(i int) {
+	list := ui.List(c.Key(t.id()), l, len(es), func(i int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, es, i) })
 		})
-	}).Fill().Padding(20, 24, room, markerColumnW+12).Gap(22).Justify(ui.End).
-		ScrollbarInsets(0, 0, room-40, 0).Children(func() {
-		if len(es) == 0 {
+	})
+	if leaving {
+		list.Translate(0, -32*(1-tr)).PassThrough()
+	}
+	list.Fill().Padding(20, 24, room, markerColumnW+12).Gap(22).Justify(ui.End).
+		ScrollbarInsets(0, 0, room-40, 0).Opacity(tr).Children(func() {
+		// The hero has its own greeting, over its composer.
+		if len(es) == 0 && !hero(t) {
 			ui.Row(c).Justify(ui.Center).Children(func() { a.emptyState(c) })
 		}
 	})
@@ -287,6 +302,9 @@ func (a *app) jumpToLatest(c *ui.Context, t thread) {
 	l := a.listFor(t.id())
 	// Over the composer as it is in this frame, which is laid out after.
 	bottom := composerBarBottom + a.composerHeight(c, t) + 26
+	if hero(t) {
+		return // nothing to jump to
+	}
 	// The open Agents panel floats over where it is, as it fades in with
 	// the composer: it gives way to the panel as that comes, taking no
 	// presses once mostly gone, and none of the pointer once gone, where
@@ -658,7 +676,9 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 	// what is around it, as the pill taking the user to the end.
 	// barPadX is the room it leaves either side of the composer.
 	const barPadX = 24
-	bar := ui.Column(c).Key("composer-bar").Absolute().Bottom(0).Left(0).Right(0).AlignItems(ui.Center).
+	// d is how far it is from the hero to its dock (hero.go).
+	d := a.dockK
+	bar := ui.Column(c).Key("composer-bar").Absolute().Bottom(a.heroLift()*(1-d)).Left(0).Right(0).AlignItems(ui.Center).
 		Padding(0, barPadX, composerBarBottom).PassThrough()
 	// The full composer's width at rest, as the last frame had room for:
 	// the full card's, in its border, or 0 before there's been a frame.
@@ -669,6 +689,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 	bar.Children(func() {
 		frame := ui.Column(c).Key("composer-frame").WidthPercent(100).MaxWidth(lerp(compactWidth, contentWidth)).PassThrough()
 		frame.Children(func() {
+			a.heroHeading(c, d)
 			// The agents strip sits over the card, the room it takes going
 			// with it as it slides down into it.
 			if k > 0 && len(a.shown(t)) > 0 {
@@ -694,6 +715,10 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 			if morphing {
 				a.cardH = lerp(compactH, fullH)
 				card.Height(a.cardH)
+			} else if d < 1 {
+				// The hero's card is larger, settling to its own height as
+				// it docks; it isn't the full card's height to measure.
+				card.MinHeight(heroCardH * (1 - d))
 			} else if a.composerRest && fresh {
 				if h := card.Bounds().H; h > 0 && k == 0 {
 					a.cardCompactH = h
@@ -749,6 +774,11 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 					return
 				}
 				full := ui.Column(c).Key("full")
+				// In the hero's larger card, the text area takes the room.
+				large := d < 1 && !morphing && !ahead
+				if large {
+					full.Grow(1)
+				}
 				if morphing || ahead {
 					// Out of the card's flow, it's as wide as it is at rest,
 					// rather than the card's width on its way there, the
@@ -804,6 +834,9 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 						Padding(14, 16, 4).OnPaste(a.onPaste).OnTextKey(a.suggestKey).Opacity(in)
 					if !ahead {
 						area.AutoFocus().Bind(&a.draftArea)
+					}
+					if large {
+						area.Grow(1)
 					}
 					in = fadeIn(k, 0.35, 0.5)
 					faded(ui.Row(c).Key("controls").Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).
@@ -974,6 +1007,9 @@ func (a *app) send(t thread) {
 		}
 		if id = a.backend.CreateUnder(t.env, t.View.Parent, t.View.Workspace, title, a.modelRef(), access); id.IsZero() {
 			return
+		}
+		if hero(t) {
+			a.sentFromHero(id)
 		}
 		a.selected, a.freshParent = id, api.ID{}
 		a.follow()

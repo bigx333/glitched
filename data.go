@@ -429,7 +429,7 @@ func failed(t thread) bool {
 
 // select_ shows the thread in the chat, read.
 func (a *app) select_(t thread) {
-	a.selected = t.id()
+	a.selected, a.dockJump = t.id(), false
 	a.follow()
 	if a.router.Path() != "/" {
 		a.router.Push("/")
