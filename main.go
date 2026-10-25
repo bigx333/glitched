@@ -326,6 +326,23 @@ type app struct {
 	// composerOpened is the composer brought back to its full size by a
 	// click while compact, until the end of the thread shows again.
 	composerOpened bool
+	// The composer's morph in this frame, for the open thread: how far
+	// from compact (0) to full (1), and how far Jump to latest has come
+	// in; and, as the last frames measured them, the card's compact and
+	// full heights, and the row below it.
+	composerK, jumpK              float32
+	cardCompactH, cardFullH, envH float32
+	// cardH is the card's height as the last frame of a morph set it.
+	cardH float32
+	// cardFor is the look the card's heights were measured in, cardLaid
+	// the one it was laid out in the frame before.
+	cardFor, cardLaid cardLook
+	// composerRest is the composer at rest, as it was the frame before;
+	// composerSeen the threads it has been shown over.
+	composerRest bool
+	composerSeen map[api.ID]bool
+	// draftArea is the full composer's text area.
+	draftArea ui.Handle
 	// steers are the messages sent from the composer, until each lands
 	// or fails, by command.
 	steers map[api.ID]steer
@@ -385,6 +402,7 @@ func newApp(dir string, post func(func())) *app {
 		diffWrap:      true,
 		diffFile:      map[api.ID]string{},
 		childrenOpen:  map[api.ID]bool{},
+		composerSeen:  map[api.ID]bool{},
 		afterStop:     map[api.ID]bool{},
 		settings: settings{
 			theme:         systemTheme,
@@ -458,7 +476,16 @@ func (a *app) pane(e ui.Element, g glass.Glass) ui.Element {
 		}
 		return e.Material(g)
 	}
-	return e.Background(palette.surface).Border(1, palette.border)
+	return e.Background(palette.surface).Border(a.paneBorder(), palette.border)
+}
+
+// paneBorder is the width of the border pane gives a panel: the plain
+// surface's hairline, or none for the glass.
+func (a *app) paneBorder() float32 {
+	if a.settings.glass {
+		return 0
+	}
+	return 1
 }
 
 // newRouter shows pages at once: settings sections are tabs, and their
