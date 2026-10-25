@@ -106,14 +106,14 @@ func (a *app) threadsNav(c *ui.Context) {
 		if ghost(c, "new-thread", false).Padding(7, 8).Children(func() {
 			ui.Icon(c, icSquarePen).FontSize(15)
 			ui.Text(c, "New thread").Grow(1)
-			kbd(c, "⌘", "N")
+			shortcutHint(c, "⌘", "N")
 		}).Clicked() {
 			a.newThread()
 		}
 		if ghost(c, "search", false).Padding(7, 8).Children(func() {
 			ui.Icon(c, icSearch).FontSize(15)
 			ui.Text(c, "Search").Grow(1)
-			kbd(c, "⌘", "K")
+			shortcutHint(c, "⌘", "K")
 		}).Clicked() {
 			a.openCommandPalette()
 		}
@@ -154,7 +154,7 @@ func (a *app) threadsNav(c *ui.Context) {
 		if ghost(c, "settings", false).Padding(7, 8).Children(func() {
 			ui.Icon(c, icSettings).FontSize(15)
 			ui.Text(c, "Settings").Grow(1)
-			kbd(c, "⌘", ",")
+			shortcutHint(c, "⌘", ",")
 		}).Clicked() {
 			a.router.Push("/settings/general")
 		}

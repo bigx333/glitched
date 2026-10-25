@@ -6,12 +6,24 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// The sidebar's commands show their keycaps, so the shortcuts are found.
-func TestKeycaps(t *testing.T) {
+// The sidebar's keycaps show only while ⌘ is held.
+func TestShortcutHints(t *testing.T) {
 	a := offline(t)
 	tt := ui.NewTester(a.view, 1320, 860)
-	if r, ok := tt.Find("⌘"); !ok || r.X > a.sidebarWidth {
-		t.Errorf("no keycap in the sidebar (found %v at %v)", ok, r)
+	inSidebar := func() bool {
+		r, ok := tt.Find("⌘")
+		return ok && r.X < a.sidebarWidth
+	}
+	if inSidebar() {
+		t.Error("keycaps show without ⌘ held")
+	}
+	tt.HoldModifiers(ui.Cmd)
+	if !inSidebar() {
+		t.Error("keycaps hidden while ⌘ is held")
+	}
+	tt.HoldModifiers(0)
+	if inSidebar() {
+		t.Error("keycaps still show after ⌘ is let go")
 	}
 }
 
