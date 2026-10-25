@@ -79,7 +79,7 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				commit(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: ev.ID, Kind: ev.Kind, Body: ev.Body})
 			case provider.TurnEnded:
 				flushText()
-				if ended = commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: ev.Error}); ended {
+				if ended = commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: ev.Error, Tokens: ev.Tokens}); ended {
 					h.forget(run)
 				}
 			}

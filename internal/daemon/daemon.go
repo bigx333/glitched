@@ -65,7 +65,9 @@ const configFile = "engine.json"
 // fences an epoch below the last one it saw and other machines reach the
 // engine where serve listened.
 func Defaults(dir string) (Config, error) {
-	cfg := Config{Dir: dir, Hub: true, Epoch: 1, Adapter: fake.New(fake.Turn(true))}
+	ad := fake.New(fake.Turn(true))
+	ad.Tokens = 1800 // a turn's usage, for the GUI to show
+	cfg := Config{Dir: dir, Hub: true, Epoch: 1, Adapter: ad}
 	if err := jsonfile.Load(filepath.Join(dir, configFile), &cfg); err != nil {
 		return Config{}, err
 	}

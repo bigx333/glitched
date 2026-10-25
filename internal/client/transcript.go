@@ -20,11 +20,13 @@ type Transcript struct {
 	Queue    []*UserEntry
 	Cursor   api.Cursor // the last event folded in
 	Ended    time.Time  // when the last turn folded in ended
+	Reported time.Time  // when the last child's report folded in came
 	Deleted  bool       // the thread's tombstone is folded in; nothing follows it
 	starting api.ID     // the run admitted and not yet started, stopped or ended
 }
 
-// Entry is sealed: *UserEntry, *AssistantEntry, *WorkEntry or *RequestEntry.
+// Entry is sealed: *UserEntry, *AssistantEntry, *WorkEntry, *RequestEntry
+// or *ReportEntry.
 type Entry interface{ entry() }
 
 type MessageState uint8
@@ -99,6 +101,14 @@ type RequestEntry struct {
 	Opened     time.Time // when the agent asked
 }
 
+// ReportEntry is a child thread's report: its run done, failed or blocked
+// on the user, and what came of it.
+type ReportEntry struct {
+	api.ChildReported
+	At time.Time
+}
+
+func (*ReportEntry) entry()    {}
 func (*UserEntry) entry()      {}
 func (*AssistantEntry) entry() {}
 func (*WorkEntry) entry()      {}
@@ -194,6 +204,9 @@ func (t *Transcript) apply(e api.Event) {
 		t.Ended = e.At
 	case api.ThreadDeleted:
 		t.Deleted = true
+	case api.ChildReported:
+		t.add(&ReportEntry{ChildReported: b, At: e.At})
+		t.Reported = e.At
 	}
 }
 

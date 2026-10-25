@@ -161,6 +161,9 @@ CREATE TABLE threads (
 	until       INTEGER,
 	updated_at  INTEGER NOT NULL,
 	deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+	parent      BLOB,
+	tokens      INTEGER NOT NULL DEFAULT 0,
+	reported    INTEGER,
 	CHECK ((disposition = 1) = (until IS NOT NULL))
 ) STRICT;
 
@@ -221,7 +224,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 4
+const schemaVersion = 5
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -268,6 +271,12 @@ INSERT INTO threads_v4 SELECT id, workspace, title, model, access, revision, own
 	CASE disposition WHEN 3 THEN 2 ELSE disposition END, until, updated_at, deleted FROM threads;
 DROP TABLE threads;
 ALTER TABLE threads_v4 RENAME TO threads;
+`,
+	// Child threads: the parent, the tokens used, the last report.
+	4: `
+ALTER TABLE threads ADD COLUMN parent BLOB;
+ALTER TABLE threads ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE threads ADD COLUMN reported INTEGER;
 `,
 }
 
@@ -386,7 +395,7 @@ func (s *Store) rewind(ctx context.Context, tx *sql.Tx) (uint64, error) {
 	}
 	now := time.Now()
 	for _, id := range threads {
-		if _, _, err := s.write(ctx, tx, id, func(t engine.Thread) ([]engine.Event, []engine.Effect, error) {
+		if _, _, err := s.write(ctx, tx, id, func(_ querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
 			return engine.Observe(t, engine.Rewound{}, now)
 		}); err != nil {
 			return 0, err

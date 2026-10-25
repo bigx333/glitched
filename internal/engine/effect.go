@@ -33,10 +33,21 @@ type DeliverAnswer struct {
 	Answer       json.RawMessage
 }
 
-func (StartTurn) effectKind() string     { return "turn.start" }
-func (SteerTurn) effectKind() string     { return "turn.steer" }
-func (InterruptTurn) effectKind() string { return "turn.interrupt" }
-func (DeliverAnswer) effectKind() string { return "request.deliver" }
+// ReportToParent posts a child's report in its parent's log: Title is the
+// child's, Kind how its run went; Error is a failed run's, Ask the body of
+// the request a blocked one waits on.
+type ReportToParent struct {
+	Parent, Child, Run api.ID
+	Kind               api.ReportKind
+	Title, Error       string
+	Ask                json.RawMessage
+}
+
+func (StartTurn) effectKind() string      { return "turn.start" }
+func (ReportToParent) effectKind() string { return "child.report" }
+func (SteerTurn) effectKind() string      { return "turn.steer" }
+func (InterruptTurn) effectKind() string  { return "turn.interrupt" }
+func (DeliverAnswer) effectKind() string  { return "request.deliver" }
 
 func EffectKind(e Effect) string { return e.effectKind() }
 
@@ -59,6 +70,10 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 		return true, nil
 	case InterruptTurn:
 		return r != nil && r.ID == e.Run && r.State == RunStopping, nil
+	case ReportToParent:
+		// The parent decides, as it observes the report, whether it can
+		// still take it.
+		return true, nil
 	case DeliverAnswer:
 		if q, _ := t.Request(e.Request); q.State != api.RequestAnswered {
 			return false, nil
@@ -74,7 +89,8 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 // replaySafe kinds run again when a crash left them leased. The rest may
 // already have reached the agent, so boot reconciles them instead. Adapters
 // treat a repeated interrupt or a repeated answer as a no-op.
-var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true}
+// A report commits with its completion, so one left leased never landed.
+var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true}
 
 func ReplaySafe(e Effect) bool { return replaySafe[e.effectKind()] }
 
@@ -83,6 +99,7 @@ var effects = map[string]func([]byte) (Effect, error){
 	"turn.steer":      decodeAs[SteerTurn],
 	"turn.interrupt":  decodeAs[InterruptTurn],
 	"request.deliver": decodeAs[DeliverAnswer],
+	"child.report":    decodeAs[ReportToParent],
 }
 
 func decodeAs[E Effect](b []byte) (Effect, error) {
@@ -108,6 +125,7 @@ type Ended struct {
 	Run     api.ID
 	Outcome api.Outcome
 	Error   string
+	Tokens  int64
 }
 
 type Delta struct {
@@ -160,6 +178,10 @@ type Reconciled struct {
 // run may have ended there, and a ready message may have run after it.
 type Rewound struct{}
 
+// Reported is a child's report, observed on its parent: what the runtime
+// made of a ReportToParent.
+type Reported struct{ Report api.ChildReported }
+
 func (Started) observed()        {}
 func (Ended) observed()          {}
 func (Delta) observed()          {}
@@ -174,3 +196,4 @@ func (InterruptSent) observed()  {}
 func (InterruptLost) observed()  {}
 func (Reconciled) observed()     {}
 func (Rewound) observed()        {}
+func (Reported) observed()       {}

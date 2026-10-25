@@ -35,6 +35,7 @@ type ThreadCreated struct {
 	Title     string   `json:"title"`
 	Model     ModelRef `json:"model"`
 	Access    Access   `json:"access"`
+	Parent    ID       `json:"parent,omitzero"`
 }
 
 // MessageQueued records a dispatched message. The ready message with the
@@ -97,6 +98,7 @@ type TurnEnded struct {
 	Run     ID      `json:"run"`
 	Outcome Outcome `json:"outcome"`
 	Error   string  `json:"error,omitempty"`
+	Tokens  int64   `json:"tokens,omitempty"` // what the run used, where the agent said
 }
 
 // TurnRestored: after a restart the adapter proved the agent is the same run.
@@ -163,6 +165,27 @@ type ThreadRenamed struct {
 // ThreadDeleted is a thread's tombstone, its last event.
 type ThreadDeleted struct{}
 
+// ReportKind is how a child's run went, as it reports to its parent.
+type ReportKind uint8
+
+const (
+	ReportDone ReportKind = iota
+	ReportFailed
+	// ReportBlocked: the child waits on the user, as on an approval.
+	ReportBlocked
+)
+
+// ChildReported is a child's report in its parent's log: its run finished,
+// failed or blocked on the user, and what came of it, in a line or two.
+// A run the user stopped reports nothing: they asked for it.
+type ChildReported struct {
+	Child   ID         `json:"child"`
+	Run     ID         `json:"run"`
+	Kind    ReportKind `json:"kind"`
+	Title   string     `json:"title"`
+	Outcome string     `json:"outcome,omitempty"`
+}
+
 type DispositionChanged struct {
 	Disposition Disposition `json:"disposition"`
 }
@@ -189,6 +212,7 @@ func (RequestInvalidation) eventType() string { return "request.invalidated" }
 func (DispositionChanged) eventType() string  { return "disposition.changed" }
 func (ThreadRenamed) eventType() string       { return "thread.renamed" }
 func (ThreadDeleted) eventType() string       { return "thread.deleted" }
+func (ChildReported) eventType() string       { return "child.reported" }
 
 var eventBodies = map[string]func([]byte) (EventBody, error){}
 
@@ -215,6 +239,7 @@ func init() {
 	register[DispositionChanged]()
 	register[ThreadRenamed]()
 	register[ThreadDeleted]()
+	register[ChildReported]()
 }
 
 func register[B EventBody]() {

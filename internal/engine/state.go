@@ -49,6 +49,9 @@ type Thread struct {
 	Disposition api.Disposition
 	Deleted     bool // the tombstone: nothing reaches the thread again
 	UpdatedAt   time.Time
+	Parent      api.ID    // the thread that started this one; zero for the user's
+	Tokens      int64     // what the thread's own turns used
+	Reported    time.Time // when a child last reported back
 	Runs        []Run
 	Queue       []Message
 	Requests    []Request
@@ -178,6 +181,9 @@ func View(t Thread) api.Thread {
 		Disposition: t.Disposition,
 		UpdatedAt:   t.UpdatedAt,
 		Deleted:     t.Deleted,
+		Parent:      t.Parent,
+		Tokens:      t.Tokens,
+		Reported:    t.Reported,
 	}
 	for i := len(t.Runs) - 1; i >= 0; i-- {
 		if r := t.Runs[i]; r.State == RunFinished {

@@ -65,12 +65,20 @@ type Command struct {
 // Intent is sealed: only the types in intents below implement it.
 type Intent interface{ intentType() string }
 
+// ThreadCreate creates a thread; with a Parent, a child of that thread on
+// the same engine, at most MaxDepth below a thread of the user's, and at
+// its parent's access or less.
 type ThreadCreate struct {
 	Workspace string   `json:"workspace"`
 	Title     string   `json:"title"`
 	Model     ModelRef `json:"model"`
 	Access    Access   `json:"access"`
+	Parent    ID       `json:"parent,omitzero"`
 }
+
+// MaxDepth is how far below a thread of the user's a child may be: a
+// thread that deep starts no more.
+const MaxDepth = 4
 
 type MessageDispatch struct {
 	Text string       `json:"text"`
@@ -247,6 +255,15 @@ type Thread struct {
 	Disposition Disposition `json:"disposition"`
 	LastTurn    *TurnResult `json:"lastTurn,omitempty"` // the most recent finished turn; nil before one ends
 	UpdatedAt   time.Time   `json:"updatedAt"`
+	// Parent is the thread that started this one, zero for a thread of the
+	// user's. A parent deleted leaves its children standing on their own.
+	Parent ID `json:"parent,omitzero"`
+	// Tokens is what the thread's own turns used, as their agents told;
+	// a parent's total with its children's is summed when read.
+	Tokens int64 `json:"tokens,omitempty"`
+	// Reported is when a child last reported back to the thread, which
+	// wakes it as a finished turn does.
+	Reported time.Time `json:"reported,omitzero"`
 	// Deleted is the tombstone: the last view a deleted thread has, which
 	// the shell stream sends once so that clients drop it. No read returns
 	// one.
@@ -263,8 +280,10 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // hubs. A peer of another protocol is refused, not half understood:
 // version 2 added the thread.deleted tombstone, which a version 1 peer
 // would show as an open thread, and an archived disposition, which version
-// 3 dropped for Settled and a version 2 peer may still send.
-const Protocol = 3
+// 3 dropped for Settled and a version 2 peer may still send; version 4
+// child threads and their reports, which a version 3 peer would show as
+// threads of the user's with nothing reported.
+const Protocol = 4
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host
