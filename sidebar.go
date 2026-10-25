@@ -45,6 +45,16 @@ func iconButton(c *ui.Context, key any, icon *ui.SVG, label string, on bool) ui.
 	})
 }
 
+// shortcutHint shows a shortcut's keycaps only while ⌘ is held, as the
+// app's commands are found: out of the way otherwise. They show and go at
+// once, as the key does.
+func shortcutHint(c *ui.Context, keys ...string) {
+	if c.Modifiers()&ui.Cmd == 0 {
+		return
+	}
+	kbd(c, keys...)
+}
+
 // kbd is a key of a shortcut, as a keycap.
 func kbd(c *ui.Context, keys ...string) {
 	ui.Row(c).Gap(3).Children(func() {
