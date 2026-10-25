@@ -57,6 +57,9 @@ func (a *app) onNotificationClick(id string) {
 			a.select_(t)
 		}
 	})
+	// The click is on the main thread: a hide waiting on full screen goes
+	// now, not in the update above, which would run after the show.
+	a.cancelHide()
 	a.win.Show()
 	a.win.Focus()
 }
