@@ -341,6 +341,17 @@ type app struct {
 	// composerSeen the threads it has been shown over.
 	composerRest bool
 	composerSeen map[api.ID]bool
+	// aboveH is the height of what's over the composer card, the agents
+	// strip, as last measured.
+	aboveH float32
+	// The agents strip: over whose composer the panel is open, and showing
+	// all its rows past five; in this frame, how far from pill (0) to panel
+	// (1), the panel's height as it heads for its rows', and the pill's
+	// width as its label last measured; and the thread it was last shown
+	// for, moving to another closing it.
+	agentsOpen, agentsAll         map[api.ID]bool
+	agentsK, agentsH, agentsPillW float32
+	agentsFor                     api.ID
 	// draftArea is the full composer's text area.
 	draftArea ui.Handle
 	// steers are the messages sent from the composer, until each lands
@@ -403,6 +414,8 @@ func newApp(dir string, post func(func())) *app {
 		diffFile:      map[api.ID]string{},
 		childrenOpen:  map[api.ID]bool{},
 		composerSeen:  map[api.ID]bool{},
+		agentsOpen:    map[api.ID]bool{},
+		agentsAll:     map[api.ID]bool{},
 		afterStop:     map[api.ID]bool{},
 		settings: settings{
 			theme:         systemTheme,

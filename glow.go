@@ -64,12 +64,17 @@ func noteGPU(root ui.Element) {
 	root.Draw(func(p *ui.Painter, _ ui.Rect) { gpu = p.Accelerated() })
 }
 
+// glowTurn is how long the glow takes to turn once.
+const glowTurn = 5 * time.Second
+
 // workingGlow glows around the composer card while the agent works,
 // fading in and out with it; it holds still where the desktop asks for
-// less motion.
-func workingGlow(c *ui.Context, card ui.Element, working bool) {
+// less motion. It's the edge of the Agents panel over the card too, of
+// radius r, which turns with it as one: how far is the window's clock, not
+// each pane's own. It returns how far in it is.
+func workingGlow(c *ui.Context, card ui.Element, working bool, r float32) float32 {
 	if !gpu {
-		return
+		return 0
 	}
 	target := float32(0)
 	if working {
@@ -77,15 +82,17 @@ func workingGlow(c *ui.Context, card ui.Element, working bool) {
 	}
 	k := card.AnimateTo("working-glow", target, ui.Animation{Duration: 400 * time.Millisecond, Ease: ease})
 	if k < 0.01 {
-		return
+		return 0
 	}
 	angle := float32(0)
 	if !c.Preferences().ReduceMotion {
-		angle = card.Loop("glow-turn", 5*time.Second, ui.Linear) * 360
+		angle = float32(c.Now().Sub(shimmerStart)%glowTurn) / float32(glowTurn) * 360
+		c.AnimationFrame()
 	}
 	g := ui.ConicGradient{Stops: glowStops, Angle: angle, Oklab: true}
 	for _, l := range glowLayers {
-		ui.Box(c).Absolute().Top(-1).Left(-1).Right(-1).Bottom(-1).PassThrough().Radius(21).
+		ui.Box(c).Absolute().Top(-1).Left(-1).Right(-1).Bottom(-1).PassThrough().Radius(r+1).
 			Border(l.width, ui.Color{}).BorderConicGradient(g).Blur(l.blur).Opacity(k * l.alpha)
 	}
+	return k
 }
