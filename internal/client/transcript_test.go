@@ -537,7 +537,7 @@ func TestAReportIsAnEntry(t *testing.T) {
 // A report after the last read turn makes the thread unread, as a turn's
 // end does; marking it shown reads it.
 func TestAReportIsNews(t *testing.T) {
-	m := New(Config{Dir: t.TempDir(), Post: func(fn func()) { fn() }})
+	m, _ := manager(t, stateDir(t)) // closed at the end, its saves with it
 	th := &Thread{View: api.Thread{ID: api.NewID(), LastTurn: &api.TurnResult{Ended: at(1)}}}
 	m.MarkRead(th)
 	if m.Unread(th) {
