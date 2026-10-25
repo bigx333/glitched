@@ -3,10 +3,32 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 
 	"glitched/internal/api"
 	"glitched/internal/engine"
 )
+
+// RunText is what a run's agent said in the thread's log: its text deltas,
+// in order, read without decoding the thread's other events.
+func (s *Store) RunText(ctx context.Context, thread, run api.ID) (string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT json_extract(payload, '$.text') FROM events
+		WHERE thread = ? AND type = ? AND json_extract(payload, '$.run') = ? ORDER BY seq`,
+		thread[:], api.EventType(api.AssistantDelta{}), run.String())
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var b strings.Builder
+	for rows.Next() {
+		var text sql.NullString
+		if err := rows.Scan(&text); err != nil {
+			return "", err
+		}
+		b.WriteString(text.String)
+	}
+	return b.String(), rows.Err()
+}
 
 // Read answers q from one read transaction, so the projection and the
 // events agree with the snapshot's cursor.

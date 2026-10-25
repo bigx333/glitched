@@ -204,8 +204,9 @@ func TestDeleteTakesTheTree(t *testing.T) {
 	})
 }
 
-// Stopping a parent stops what works under it, and says so.
-func TestStopTakesTheTree(t *testing.T) {
+// Stopping a thread stops only its own agent; Stop all in the Agents panel
+// stops what works under it, and says so.
+func TestStopAllInTheAgentsPanel(t *testing.T) {
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, stalled{fake.New(midTurn), 1})
 	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
@@ -221,8 +222,15 @@ func TestStopTakesTheTree(t *testing.T) {
 	h.a.select_(parent)
 	h.tt.Advance(time.Second)
 	h.tt.Key(ui.Cmd, ui.KeyEnter)
-	h.until("both stopped", func() bool { return !parent.View.Live() && !child.View.Live() })
-	if !h.tt.HasText("Ship the sidebar sort and 1 child thread") {
+	h.until("the parent stopped", func() bool { return !parent.View.Live() })
+	if !child.View.Live() {
+		t.Fatal("stopping the parent stopped its child")
+	}
+	h.click("Agents")
+	h.tt.Advance(time.Second)
+	h.click("Stop all agents")
+	h.until("the child stopped", func() bool { return !child.View.Live() })
+	if !h.tt.HasText("1 child thread") {
 		t.Errorf("no word of the child stopped: %q", strings.Join(h.tt.Texts(), " | "))
 	}
 }

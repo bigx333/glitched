@@ -97,3 +97,24 @@ func TestAnOrphansReportGoesNowhere(t *testing.T) {
 		})
 	}
 }
+
+// A deleted ancestor ends a child's line: under a thread whose grandparent
+// was deleted, a child is as deep as the GUI shows it, and is created.
+func TestADeletedAncestorEndsTheLine(t *testing.T) {
+	n := start(t, dbPath(t), fake.New(fake.Turn(false)))
+	line := []api.ID{newThread(t, n.h)}
+	for range api.MaxDepth {
+		c, err := newChild(t, n.h, line[len(line)-1], api.AccessAsk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		line = append(line, c)
+	}
+	submit(t, n.h, line[1], api.ThreadDelete{})
+	if _, err := newChild(t, n.h, line[len(line)-1], api.AccessAsk); err != nil {
+		t.Errorf("a child under a line cut by a deleted thread: %v", err)
+	}
+	if _, err := newChild(t, n.h, line[1], api.AccessAsk); err == nil {
+		t.Error("a child of a deleted thread was created")
+	}
+}

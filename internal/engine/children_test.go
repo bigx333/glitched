@@ -142,3 +142,21 @@ func TestTokensAddUp(t *testing.T) {
 		t.Errorf("tokens %d after two runs of 1200, want 2400", v.Tokens)
 	}
 }
+
+// A run being stopped reports nothing, even one that completes as the stop
+// reaches it.
+func TestAStoppedRunReportsNothing(t *testing.T) {
+	c := child(t, newThread(t).th)
+	run := c.must(dispatch("go", api.StartNow))
+	c.observe(engine.Started{Run: run})
+	c.must(api.TurnInterrupt{})
+	_, effects, err := engine.Observe(c.th, engine.Ended{Run: run, Outcome: api.OutcomeCompleted}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range effects {
+		if _, ok := e.(engine.ReportToParent); ok {
+			t.Error("a run being stopped reported")
+		}
+	}
+}

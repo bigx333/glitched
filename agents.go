@@ -183,6 +183,17 @@ func (a *app) agents(c *ui.Context, t thread, frameW, fade float32) {
 				ui.Row(c).Key("head").Height(agentsHeadH).Padding(0, 0, 0, agentsInset).AlignItems(ui.Center).
 					Opacity(h).Translate(0, 6*(1-h)).Children(func() {
 					ui.Text(c, "Agents").FontSize(12).TextColor(palette.muted).Grow(1)
+					// Stopping the thread stops only its own agent: these
+					// stop here, all at once.
+					if n := working(tree); n > 0 {
+						if ghost(c, "stop-all", false).Padding(2, 8).Label("Stop all agents").Children(func() {
+							ui.Box(c).Size(8, 8).Radius(2).Background(palette.text)
+							ui.Text(c, "Stop all").FontSize(11.5)
+						}).Clicked() {
+							a.stopAll(tree)
+							c.AddToast(ui.Toast{Title: "Stopped", Description: plural(n, "child thread"), Type: "info"})
+						}
+					}
 					if iconButton(c, "close", icX, "Close agents", false).Padding(4).Clicked() {
 						a.agentsOpen[id], a.agentsAll[id] = false, false
 					}
@@ -252,7 +263,7 @@ func (a *app) agentRow(c *ui.Context, n node, s float32) {
 			ui.Text(c, ago(k.View.UpdatedAt, a.now)).FontSize(11).TextColor(palette.faint).Shrink(0)
 			return
 		}
-		if a.depth(k) < maxDepth {
+		if a.depth(k) < maxDepth && !a.duplicate(k.env) {
 			if iconButton(c, "new-child", icPlus, "New child thread", false).Padding(3).Clicked() {
 				a.startChild(k)
 			}
