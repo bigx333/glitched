@@ -192,6 +192,7 @@ func TestRetryWaitsWhileTheRunIsLive(t *testing.T) {
 	th := h.thread("Stuck")
 	h.a.select_(th)
 	h.until("its transcript", func() bool { return h.tt.HasText("May I edit it?") })
+	h.tt.Advance(time.Second) // the composer docked from the hero the app opened on
 	h.hover("Looking at the code.")
 	h.tt.Advance(time.Second)
 	h.click("Retry")
