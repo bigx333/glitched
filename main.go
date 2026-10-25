@@ -526,7 +526,6 @@ func (a *app) view(c *ui.Context) {
 	// appearance: the sidebar shows it while the app's theme matches, and
 	// the Liquid Glass setting is on.
 	a.now = c.Now()
-	a.deleteStopped()
 	a.projects = a.gather()
 	a.kids = a.kidsOf()
 	// A project gone, as with its server, leaves the filter, lest it hide

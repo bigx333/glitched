@@ -187,7 +187,7 @@ func (a *app) deleteTree(t thread) {
 }
 
 // deleteStopped deletes the threads deleteTree stopped, once their agents
-// have: each frame, before the view reads them.
+// have: after each change the manager posts, as the stops land.
 func (a *app) deleteStopped() {
 	for id := range a.afterStop {
 		t, ok := a.find(id)
