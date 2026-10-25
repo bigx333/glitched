@@ -151,12 +151,15 @@ func (a *app) header(c *ui.Context, t thread, es []entry) {
 				a.toggleSidebar(false)
 			}
 		}
+		// A child's way back up, before its title.
+		a.breadcrumb(c, t, narrow)
 		ui.Text(c, title(t)).FontWeight(600).SingleLine().Shrink(1).MinWidth(80)
 		if !narrow {
 			pill(c, filepath.Base(t.View.Workspace)).Shrink(0)
 			if len(a.backend.Envs()) > 1 && t.env != nil {
 				a.machinePill(c, t.env)
 			}
+			a.usagePill(c, t)
 		}
 		ui.Spacer(c)
 		if !t.local() {
@@ -325,6 +328,8 @@ func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
 		a.workLog(c, t, key, e, changedFiles(es))
 	case entryRequest:
 		a.requestCard(c, t, e)
+	case entryReport:
+		a.reportCard(c, t, key, e)
 	case entryFailed:
 		ui.Row(c).Key(key).Gap(8).AlignItems(ui.Center).Padding(6, 6, 6, 14).Radius(12).
 			Border(1, palette.red.Alpha(0.35)).Transition(riseIn).Children(func() {
@@ -587,6 +592,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 			}
 			ui.Row(c).Key("env-row").Gap(4).AlignItems(ui.Center).Padding(0, 6).ClipY().Transition(a.foldTransition()).Children(func() {
 				a.workspaceButton(c, t)
+				a.accessCapNote(c, t)
 			})
 		})
 	})
@@ -602,11 +608,12 @@ func (a *app) workspaceButton(c *ui.Context, t thread) {
 		if several && t.env != nil {
 			ui.Text(c, "on "+t.env.Name).FontSize(11.5).TextColor(palette.faint)
 		}
-		if t.id().IsZero() {
+		if t.id().IsZero() && t.View.Parent.IsZero() {
 			ui.Icon(c, icChevronD).FontSize(10)
 		}
 	})
-	if !t.id().IsZero() {
+	// A child's runs where its parent does.
+	if !t.id().IsZero() || !t.View.Parent.IsZero() {
 		return
 	}
 	b.Menu(func(m *ui.Menu) {
@@ -659,7 +666,7 @@ func (a *app) sendButton(c *ui.Context, t thread) {
 			stop.Background(palette.hover)
 		}
 		if stop.Children(func() { ui.Box(c).Size(10, 10).Radius(2).Background(palette.text) }).Clicked() {
-			a.backend.Interrupt(t.env, t.id())
+			a.stop(c, t)
 		}
 	}
 	label := "Send"
@@ -687,7 +694,7 @@ func (a *app) sendButton(c *ui.Context, t thread) {
 	})
 	if send.Clicked() || c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		if working {
-			a.backend.Interrupt(t.env, t.id())
+			a.stop(c, t)
 		} else {
 			a.send(t)
 		}
@@ -714,10 +721,14 @@ func (a *app) send(t thread) {
 		if r := []rune(title); len(r) > 48 {
 			title = string(r[:48]) + "…"
 		}
-		if id = a.backend.Create(t.env, t.View.Workspace, title, a.modelRef(), accessOf[a.access]); id.IsZero() {
+		access := accessOf[a.access]
+		if p, ok := a.draftParent(); ok {
+			access = accessUnder(access, p)
+		}
+		if id = a.backend.CreateUnder(t.env, t.View.Parent, t.View.Workspace, title, a.modelRef(), access); id.IsZero() {
 			return
 		}
-		a.selected = id
+		a.selected, a.freshParent = id, api.ID{}
 		a.follow()
 	} else if t.View.Disposition.State != api.Open {
 		a.backend.SetDisposition(t.env, id, api.Disposition{})
@@ -732,6 +743,14 @@ func (a *app) send(t thread) {
 	a.draft = ""
 	a.attachments = slices.DeleteFunc(a.attachments, func(at attachment) bool { return at.held(t) == "" })
 	a.listFor(id).ScrollToEnd()
+}
+
+// stop stops t's agent, and every agent working under it, which says how
+// many of those it stopped.
+func (a *app) stop(c *ui.Context, t thread) {
+	if n := a.stopTree(t); n > 0 {
+		c.AddToast(ui.Toast{Title: "Stopped", Description: title(t) + " and " + plural(n, "child thread"), Type: "info"})
+	}
 }
 
 // steer is where a message sent from the composer went.

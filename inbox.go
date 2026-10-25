@@ -86,7 +86,8 @@ func (a *app) itemsIn(cat category) []inboxItem {
 			continue
 		}
 		for _, t := range p.threads {
-			if a.shownIn(t) == cat {
+			// A child shows under its parent.
+			if a.shownIn(t) == cat && !a.nested(t) {
 				items = append(items, inboxItem{t, p})
 			}
 		}
@@ -273,6 +274,7 @@ func (a *app) section(c *ui.Context, cat category, title, empty string, icon *ui
 			}
 			for _, it := range items {
 				a.inboxRow(c, it, cat)
+				a.childRows(c, it.t, 1)
 			}
 		})
 	})
@@ -333,6 +335,11 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 		}
 		if len(a.backend.Envs()) > 1 {
 			a.machineBadge(c, t.env)
+		}
+		// Its children's toggle, at the row's end, where pointing at the
+		// row doesn't move it.
+		if len(a.shown(t)) > 0 {
+			defer a.childToggle(c, t)
 		}
 		// The actions show while it's pointed at, and while its snooze
 		// popover is open, which takes the pointer away from the row.

@@ -95,6 +95,7 @@ const (
 	entryWork
 	entryRequest
 	entryFailed
+	entryReport
 )
 
 // An entry is a row of the timeline. Its key stays the same while it
@@ -118,6 +119,8 @@ type entry struct {
 	work    []client.WorkStep
 	request *client.RequestEntry
 	run     api.ID // a work entry's
+	// reports are a run of children's reports, one card's.
+	reports []client.ReportEntry
 }
 
 // fileChange is a file the agent's edits name, and when they last moved.
@@ -151,6 +154,13 @@ func entriesOf(t thread) []entry {
 				es = append(es, workEntry(key("w", e.Run), e))
 			case *client.RequestEntry:
 				es = append(es, entry{key: "r/" + e.Request.String(), kind: entryRequest, request: e})
+			case *client.ReportEntry:
+				// One after another, they're one card, keyed by its first.
+				if n := len(es); n > 0 && es[n-1].kind == entryReport {
+					es[n-1].reports = addReport(es[n-1].reports, *e)
+					break
+				}
+				es = append(es, entry{key: "c/" + e.Child.String() + "/" + e.Run.String(), kind: entryReport, reports: []client.ReportEntry{*e}})
 			}
 		}
 		markPaused(es)
@@ -306,6 +316,10 @@ func (a *app) current() thread {
 	}
 	if d.workspace == "" {
 		d.workspace = homeDir()
+	}
+	// A child's draft is on its parent's machine, in its workspace.
+	if p, ok := a.draftParent(); ok {
+		return thread{p.env, &client.Thread{View: api.Thread{Title: "New child thread", Workspace: p.View.Workspace, Parent: p.id()}}}
 	}
 	return thread{d.env, &client.Thread{View: api.Thread{Title: "New thread", Workspace: d.workspace}}}
 }
