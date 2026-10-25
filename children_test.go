@@ -382,3 +382,26 @@ func TestGivingUpGoesUpTheLine(t *testing.T) {
 		}
 	}
 }
+
+// A blocked child's report says Needs you only while the child still waits
+// on its request: once its run is stopped, the same card says it was
+// waiting, with what it waited on.
+func TestABlockedReportStopsNeedingYou(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(true)))
+	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	kid := seedChild(t, d, top, "Write the tests")
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: "go"}}); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, dir)
+	h.a.select_(h.thread("Ship the sidebar sort"))
+	h.until("the blocked report", func() bool { return h.tt.HasText("Needs you") && h.tt.HasText("Wants to edit main.go") })
+	child := h.thread("Write the tests")
+	h.a.backend.Interrupt(child.env, child.id())
+	h.until("the stop", func() bool { return !child.View.Live() })
+	h.tt.Advance(time.Second)
+	if h.tt.HasText("Needs you") || !h.tt.HasText("Was waiting") || !h.tt.HasText("Wants to edit main.go") {
+		t.Errorf("after the stop, the card shows %q", h.tt.Texts())
+	}
+}
