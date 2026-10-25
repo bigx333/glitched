@@ -36,11 +36,13 @@ func apply(t Thread, e Event) (Thread, error) {
 		if t.Exists() {
 			return t, &TransitionError{"thread", "created", "created"}
 		}
-		t = Thread{ID: e.Thread, Workspace: b.Workspace, Title: b.Title, Model: b.Model, Access: b.Access, OwnerEpoch: 1}
+		t = Thread{ID: e.Thread, Workspace: b.Workspace, Title: b.Title, Model: b.Model, Access: b.Access, OwnerEpoch: 1, Parent: b.Parent}
 	case api.DispositionChanged:
 		t.Disposition = b.Disposition
 	case api.ThreadRenamed:
 		t.Title = b.Title
+	case api.ChildReported:
+		t.Reported = e.At
 	case api.ThreadDeleted:
 		if t.Live() != nil {
 			return t, &TransitionError{"thread", "running", "deleted"}
@@ -106,6 +108,7 @@ func apply(t Thread, e Event) (Thread, error) {
 		if err = t.setRun(b.Run, RunFinished); err == nil {
 			i := t.runAt(b.Run)
 			t.Runs[i].Outcome, t.Runs[i].Error, t.Runs[i].Ended = b.Outcome, b.Error, e.At
+			t.Tokens += b.Tokens
 			err = t.release(b.Run, QueueCancelled)
 		}
 		if err == nil {

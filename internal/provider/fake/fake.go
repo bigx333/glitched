@@ -40,6 +40,8 @@ type Adapter struct {
 	// HoldStart makes Start block until its context ends, like a CLI that
 	// hangs while the engine dies.
 	HoldStart bool
+	// Tokens is what each turn that completes says it used.
+	Tokens int64
 
 	mu     sync.Mutex
 	agents map[api.ID]*Agent
@@ -188,7 +190,7 @@ func (g *Agent) step() (provider.Event, error) {
 		return nil, nil
 	case len(g.script) == 0:
 		g.phase = ended
-		return provider.TurnEnded{Outcome: api.OutcomeCompleted}, nil
+		return provider.TurnEnded{Outcome: api.OutcomeCompleted, Tokens: g.a.Tokens}, nil
 	}
 	e := g.script[0]
 	g.script = g.script[1:]

@@ -513,3 +513,43 @@ func TestFoldKeepsWhatALaterStepEventLeavesOut(t *testing.T) {
 		t.Errorf("command step %+v, want its exit code and output kept", c)
 	}
 }
+
+// A child's report folds in as an entry of its own, after the text before
+// it, which it ends, and marks when the last report came.
+func TestAReportIsAnEntry(t *testing.T) {
+	run, child := api.NewID(), api.NewID()
+	tr := play(
+		api.AssistantDelta{Run: run, Text: "Started a child."},
+		api.ChildReported{Child: child, Run: api.NewID(), Kind: api.ReportFailed, Title: "Fix it", Outcome: "boom"},
+	)
+	if len(tr.Entries) != 2 {
+		t.Fatalf("%d entries, want the text and the report", len(tr.Entries))
+	}
+	if a := tr.Entries[0].(*AssistantEntry); a.Streaming {
+		t.Error("the text before the report still streams")
+	}
+	r, ok := tr.Entries[1].(*ReportEntry)
+	if !ok || r.Child != child || r.Kind != api.ReportFailed || r.Outcome != "boom" || !r.At.Equal(at(2)) || !tr.Reported.Equal(at(2)) {
+		t.Errorf("the report: %+v, reported %v", tr.Entries[1], tr.Reported)
+	}
+}
+
+// A report after the last read turn makes the thread unread, as a turn's
+// end does; marking it shown reads it.
+func TestAReportIsNews(t *testing.T) {
+	m := New(Config{Dir: t.TempDir(), Post: func(fn func()) { fn() }})
+	th := &Thread{View: api.Thread{ID: api.NewID(), LastTurn: &api.TurnResult{Ended: at(1)}}}
+	m.MarkRead(th)
+	if m.Unread(th) {
+		t.Fatal("unread once read")
+	}
+	th.View.Reported = at(2)
+	if !m.Unread(th) {
+		t.Fatal("a report after the read turn left the thread read")
+	}
+	th.Transcript = &Transcript{Ended: at(1), Reported: at(2)}
+	m.MarkShown(th)
+	if m.Unread(th) {
+		t.Error("shown with its report, the thread is still unread")
+	}
+}

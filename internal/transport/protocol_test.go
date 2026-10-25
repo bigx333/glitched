@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -21,7 +22,7 @@ import (
 // and a reason an older client shows, and no call is answered.
 func TestServerRefusesAClientOfAnotherProtocol(t *testing.T) {
 	lb := start(t, "unix", &Server{Endpoint: &fakeEndpoint{}, Hub: openReplica(t)})
-	next := fmt.Sprint(api.Protocol + 1)
+	next := strconv.Itoa(api.Protocol + 1)
 	for announce, theirs := range map[string]string{"": "1", "1": "1", next: next} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -89,11 +90,12 @@ func otherProtocol(t *testing.T, announce string, refuse bool) (Loopback, *atomi
 func TestClientRefusesAServerOfAnotherProtocol(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	next := strconv.Itoa(api.Protocol + 1)
 	for _, tc := range []struct {
 		announce string
 		tailnet  bool
 		theirs   int
-	}{{"", false, 1}, {fmt.Sprint(api.Protocol + 1), false, api.Protocol + 1}, {fmt.Sprint(api.Protocol + 1), true, api.Protocol + 1}} {
+	}{{"", false, 1}, {next, false, api.Protocol + 1}, {next, true, api.Protocol + 1}} {
 		announce, theirs := tc.announce, tc.theirs
 		lb, got := otherProtocol(t, announce, tc.tailnet)
 		var tr Transport = lb

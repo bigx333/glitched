@@ -111,6 +111,7 @@ type RequestOpened struct {
 type TurnEnded struct {
 	Outcome api.Outcome
 	Error   string
+	Tokens  int64 // what the turn used, where the provider says
 }
 
 func (TextDelta) event()     {}

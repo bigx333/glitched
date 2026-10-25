@@ -296,6 +296,11 @@ func (h *Host) lane(e store.Effect) {
 // commit is retried, never the call; if the host closes mid-call the lease
 // stays for boot to reconcile.
 func (h *Host) perform(e store.Effect) {
+	// A report reaches no agent: it goes to the parent's log.
+	if b, ok := e.Body.(engine.ReportToParent); ok {
+		h.report(e, b)
+		return
+	}
 	var lr *liveRun
 	if b, ok := e.Body.(engine.StartTurn); ok {
 		// Tracked before the check, so a stop that commits after it still

@@ -119,7 +119,25 @@ func (d *decision) create(c api.ThreadCreate) error {
 	if c.Access > api.AccessFull {
 		return rejected("unknown access level")
 	}
-	return d.emit(api.ThreadCreated{Workspace: c.Workspace, Title: c.Title, Model: c.Model, Access: c.Access})
+	return d.emit(api.ThreadCreated{Workspace: c.Workspace, Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent})
+}
+
+// CheckChild checks a child's create against its parent's line, the
+// parent first and its top last, as far up as MaxDepth+1 threads: the
+// parent is there, the child no deeper than MaxDepth, and its access no
+// wider than its parent's, which is no wider than its own parent's. A
+// line that runs past MaxDepth is too deep, cycle or not.
+func CheckChild(line []Thread, c api.ThreadCreate) error {
+	if len(line) == 0 || !line[0].Exists() || line[0].Deleted {
+		return rejected("the parent thread is gone")
+	}
+	if len(line) > api.MaxDepth {
+		return rejected(fmt.Sprintf("a child thread can be at most %d below a thread of yours", api.MaxDepth))
+	}
+	if c.Access > line[0].Access {
+		return rejected("a child thread's access can't be wider than its parent's")
+	}
+	return nil
 }
 
 func ceiling() api.Access { return api.AccessFull }
@@ -289,7 +307,15 @@ func (d *decision) observe(o Observation) error {
 	case Ended:
 		// Only the user ends an uncertain run.
 		if isLive(o.Run) && live.State != RunUncertain {
-			return d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error})
+			if err := d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error, Tokens: o.Tokens}); err != nil {
+				return err
+			}
+			switch o.Outcome {
+			case api.OutcomeCompleted:
+				d.report(o.Run, api.ReportDone, "", nil)
+			case api.OutcomeFailed:
+				d.report(o.Run, api.ReportFailed, o.Error, nil)
+			}
 		}
 	case Delta:
 		if isLive(o.Run) {
@@ -302,9 +328,12 @@ func (d *decision) observe(o Observation) error {
 	case Surfaced:
 		dup := index(d.t.Requests, func(r Request) bool { return r.Run == o.Run && r.Dedup == o.Dedup }) >= 0
 		if isLive(o.Run) && !dup {
-			return d.emit(api.RequestOpened{
+			if err := d.emit(api.RequestOpened{
 				Request: o.Request, Run: o.Run, Generation: live.Generation, Dedup: o.Dedup, Kind: o.Kind, Body: o.Body,
-			})
+			}); err != nil {
+				return err
+			}
+			d.report(o.Run, api.ReportBlocked, "", o.Body)
 		}
 	case Delivered:
 		return d.emit(api.RequestDelivery{Request: o.Request})
@@ -342,8 +371,28 @@ func (d *decision) observe(o Observation) error {
 		return d.emit(api.TurnUncertain{Run: o.Run})
 	case Rewound:
 		return d.rewound()
+	case Reported:
+		if err := d.emit(o.Report); err != nil {
+			return err
+		}
+		// A report wakes its parent, as a finished turn does: back in the
+		// inbox, from snoozed or settled.
+		if s := d.t.Disposition.State; s == api.Snoozed || s == api.Settled {
+			return d.emit(api.DispositionChanged{Disposition: api.Disposition{}})
+		}
 	}
 	return nil
+}
+
+// report has a child's run report to its parent, after the commit, as how
+// it went. A run the user stopped reports nothing: they asked for it.
+func (d *decision) report(run api.ID, kind api.ReportKind, failure string, ask json.RawMessage) {
+	if d.t.Parent.IsZero() {
+		return
+	}
+	d.effects = append(d.effects, ReportToParent{
+		Parent: d.t.Parent, Child: d.t.ID, Run: run, Kind: kind, Title: d.t.Title, Error: failure, Ask: ask,
+	})
 }
 
 func (d *decision) rewound() error {

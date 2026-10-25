@@ -25,17 +25,41 @@ func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.R
 		return api.Receipt{}, &api.RejectedError{Reason: err.Error()}
 	}
 	hash := sha256.Sum256(body)
-	at, err := s.commit(ctx, c.Target, &receipt{c.ID, hash[:]}, 0, func(t engine.Thread) ([]engine.Event, []engine.Effect, error) {
+	at, err := s.commit(ctx, c.Target, &receipt{c.ID, hash[:]}, 0, func(q querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
+		if b, ok := c.Body.(api.ThreadCreate); ok && !b.Parent.IsZero() && !t.Exists() {
+			line, err := lineOf(ctx, q, b.Parent)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := engine.CheckChild(line, b); err != nil {
+				return nil, nil, err
+			}
+		}
 		return engine.Decide(t, c, now)
 	})
 	return api.Receipt{Command: c.ID, Committed: at}, err
+}
+
+// lineOf is the thread and those above it, it first, as far up as
+// api.MaxDepth+1 threads, so a cycle can't hang the walk.
+func lineOf(ctx context.Context, q querier, id api.ID) ([]engine.Thread, error) {
+	var line []engine.Thread
+	for !id.IsZero() && len(line) <= api.MaxDepth {
+		t, err := loadThread(ctx, q, id)
+		if err != nil || !t.Exists() {
+			return line, err
+		}
+		line = append(line, t)
+		id = t.Parent
+	}
+	return line, nil
 }
 
 // Observe commits what the runtime saw. A nonzero done is the leased effect
 // the observation completes; it is marked done in the same transaction, even
 // when the observation is refused with engine.ErrRefused.
 func (s *Store) Observe(ctx context.Context, thread api.ID, o engine.Observation, now time.Time, done int64) (api.Cursor, error) {
-	return s.commit(ctx, thread, nil, done, func(t engine.Thread) ([]engine.Event, []engine.Effect, error) {
+	return s.commit(ctx, thread, nil, done, func(_ querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
 		return engine.Observe(t, o, now)
 	})
 }
@@ -45,7 +69,9 @@ type receipt struct {
 	hash []byte
 }
 
-type decider func(engine.Thread) ([]engine.Event, []engine.Effect, error)
+// decider decides against the thread, reading what else it needs through
+// q, the transaction's.
+type decider func(q querier, t engine.Thread) ([]engine.Event, []engine.Effect, error)
 
 func (s *Store) commit(ctx context.Context, thread api.ID, r *receipt, done int64, decide decider) (api.Cursor, error) {
 	s.mu.Lock()
@@ -123,7 +149,7 @@ func (s *Store) write(ctx context.Context, tx *sql.Tx, thread api.ID, decide dec
 	if err != nil {
 		return Commit{}, 0, err
 	}
-	events, effects, err := decide(old)
+	events, effects, err := decide(tx, old)
 	if err != nil {
 		return Commit{}, head, err
 	}
@@ -199,11 +225,12 @@ func ids(ctx context.Context, q querier, query string) ([]api.ID, error) {
 func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error) {
 	t := engine.Thread{ID: id}
 	var model []byte
-	var until sql.NullInt64
+	var until, reported sql.NullInt64
 	var updated int64
-	err := q.QueryRowContext(ctx, `SELECT workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted
+	err := q.QueryRowContext(ctx, `SELECT workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
+			parent, tokens, reported
 		FROM threads WHERE id = ?`, id[:]).Scan(&t.Workspace, &t.Title, &model, &t.Access, &t.Revision, &t.OwnerEpoch,
-		&t.Generation, &t.Disposition.State, &until, &updated, &t.Deleted)
+		&t.Generation, &t.Disposition.State, &until, &updated, &t.Deleted, idScan{&t.Parent}, &t.Tokens, &reported)
 	if errors.Is(err, sql.ErrNoRows) {
 		return engine.Thread{}, nil
 	}
@@ -217,6 +244,9 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 		t.Disposition.Until = fromNanos(until.Int64)
 	}
 	t.UpdatedAt = fromNanos(updated)
+	if reported.Valid {
+		t.Reported = fromNanos(reported.Int64)
+	}
 
 	err = each(ctx, q, `SELECT id, generation, state, signalled, outcome, error, ended FROM runs WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
 		var r engine.Run
@@ -280,17 +310,22 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 	if err != nil {
 		return err
 	}
-	var until any
+	var until, reported any
 	if !t.Disposition.Until.IsZero() {
 		until = t.Disposition.Until.UnixNano()
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO threads (id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	if !t.Reported.IsZero() {
+		reported = t.Reported.UnixNano()
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO threads (id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
+			parent, tokens, reported)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET workspace = excluded.workspace, title = excluded.title, model = excluded.model,
 			access = excluded.access, revision = excluded.revision, owner_epoch = excluded.owner_epoch, generation = excluded.generation,
-			disposition = excluded.disposition, until = excluded.until, updated_at = excluded.updated_at, deleted = excluded.deleted`,
+			disposition = excluded.disposition, until = excluded.until, updated_at = excluded.updated_at, deleted = excluded.deleted,
+			parent = excluded.parent, tokens = excluded.tokens, reported = excluded.reported`,
 		t.ID[:], t.Workspace, t.Title, string(model), t.Access, t.Revision, t.OwnerEpoch, t.Generation, t.Disposition.State, until,
-		t.UpdatedAt.UnixNano(), t.Deleted); err != nil {
+		t.UpdatedAt.UnixNano(), t.Deleted, nullID(t.Parent), t.Tokens, reported); err != nil {
 		return err
 	}
 	for i, r := range t.Runs {

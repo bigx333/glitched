@@ -366,7 +366,8 @@ func TestAnArchivedThreadUpgradesSettled(t *testing.T) {
 			disposition INTEGER NOT NULL CHECK (disposition BETWEEN 0 AND 3), until INTEGER,
 			updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
 			CHECK ((disposition = 1) = (until IS NOT NULL))) STRICT;
-		INSERT INTO threads_v3 SELECT * FROM threads;
+		INSERT INTO threads_v3 SELECT id, workspace, title, model, access, revision, owner_epoch, generation,
+			disposition, until, updated_at, deleted FROM threads;
 		DROP TABLE threads;
 		ALTER TABLE threads_v3 RENAME TO threads;
 		UPDATE threads SET disposition = 3;
