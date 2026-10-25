@@ -677,15 +677,18 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 	compactH, fullH := a.cardHeights(c)
 	// The bar lets the pointer through, but for the composer in it, to
 	// what is around it, as the pill taking the user to the end.
-	// It's in the transcript's column, its edges the column's.
-	// d is how far it is from the hero to its dock (hero.go).
+	// d is how far it is from the hero to its dock (hero.go). Docked, it's
+	// in the transcript's column, its edges the column's; the hero, with
+	// no transcript nor turn markers, is in the middle of the pane, the
+	// marker column's room coming in as the transcript does.
 	d := a.dockK
+	left := columnRight + (columnLeft-columnRight)*transcriptK(d)
 	bar := ui.Column(c).Key("composer-bar").Absolute().Bottom(a.heroLift()*(1-d)).Left(0).Right(0).AlignItems(ui.Center).
-		Padding(0, columnRight, composerBarBottom, columnLeft).PassThrough()
+		Padding(0, columnRight, composerBarBottom, left).PassThrough()
 	// The full composer's width at rest, as the last frame had room for:
 	// the full card's, in its border, or 0 before there's been a frame.
 	var fullW float32
-	if w := bar.Bounds().W - columnLeft - columnRight; w > 0 {
+	if w := bar.Bounds().W - left - columnRight; w > 0 {
 		fullW = max(0, min(w, contentWidth)-2*a.paneBorder())
 	}
 	bar.Children(func() {
@@ -773,6 +776,11 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 				// isn't there to assistive technology.
 				ahead := k == 0 && (a.composerOpened || strings.TrimSpace(a.draft) != "" || len(a.attachments) > 0)
 				if k == 0 && !ahead {
+					// Compact, there's no Send to stop the agent with: ⌘⏎
+					// still does, as it does from the full composer.
+					if t.View.Live() && a.message(t) == "" && c.Shortcut(ui.Cmd, ui.KeyEnter) {
+						a.backend.Interrupt(t.env, t.id())
+					}
 					return
 				}
 				full := ui.Column(c).Key("full")

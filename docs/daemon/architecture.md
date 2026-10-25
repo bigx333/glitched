@@ -164,7 +164,7 @@ type Agent interface {
 
 - *State.* Run state and NeedsYou stay apart: a run blocked on a request is `waiting`, still a run, and the thread shows NeedsYou beside it. bb folds both into one status, so a blocked child reads as idle.
 - *Push-back.* When a child's run completes, fails or blocks on a request, `Observe` puts a `child.report` effect in the outbox in the same transaction as the run's event. The runtime reads what came of it, a line or two of the run's last reply, the failure, or the request, and commits it in the parent's log as `child.reported` with the effect's completion; that wakes the parent as a turn's end does: unread, and back in the inbox from snoozed or settled. bb keeps its notices in memory and loses them on a crash; here they are outbox rows, replayed on boot. A run the user stopped reports nothing.
-- *Guardrails.* The engine refuses a child wider than its parent, so access only narrows down the tree; the client's grant ceiling still applies on top.
+- *Guardrails.* The engine refuses a child wider than its parent, so access only narrows down the tree. The client's grant ceiling would apply on top; today `engine.ceiling()` is Full, so it narrows nothing.
 - *Cascades.* Delete and archive of a thread take its whole subtree, after a confirm that states the count and how many are still working, which are stopped first and archived or deleted once they have; the Agents panel's Stop all stops what works under a thread. The GUI sends each thread its own command, so a refused one says why on its own row.
 - *Usage.* Each thread stores the tokens its turns used; a parent's total is its own plus its descendants', summed when read, so a moved or deleted child never leaves a stale total.
 
