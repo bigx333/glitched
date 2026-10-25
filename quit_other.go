@@ -14,3 +14,6 @@ func (a *app) setUpWindowClose() {
 		}
 	})
 }
+
+// cancelHide does nothing: only macOS hides the window rather than close it.
+func (a *app) cancelHide() {}
