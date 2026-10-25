@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
@@ -403,5 +404,24 @@ func TestABlockedReportStopsNeedingYou(t *testing.T) {
 	h.tt.Advance(time.Second)
 	if h.tt.HasText("Needs you") || !h.tt.HasText("Was waiting") || !h.tt.HasText("Wants to edit main.go") {
 		t.Errorf("after the stop, the card shows %q", h.tt.Texts())
+	}
+}
+
+// A run that asked twice reported twice: only its last report, of the
+// request still waiting, needs the user; the first was answered.
+func TestOnlyTheLastBlockedReportNeedsYou(t *testing.T) {
+	run, kid := api.NewID(), api.NewID()
+	at := time.Now()
+	first := client.ReportEntry{ChildReported: api.ChildReported{Child: kid, Run: run, Kind: api.ReportBlocked}, At: at}
+	second := first
+	second.At = at.Add(time.Second)
+	parent := thread{Thread: &client.Thread{Transcript: &client.Transcript{Entries: []client.Entry{&first, &client.AssistantEntry{Text: "ok"}, &second}}}}
+	child := thread{Thread: &client.Thread{View: api.Thread{ID: kid, Requests: []api.Request{{ID: api.NewID(), Run: run}}}}}
+	if stillBlocked(parent, child, first) || !stillBlocked(parent, child, second) {
+		t.Errorf("first %v, second %v; want only the second to stand", stillBlocked(parent, child, first), stillBlocked(parent, child, second))
+	}
+	child.View.Requests = nil
+	if stillBlocked(parent, child, second) {
+		t.Error("a report stands with nothing waiting")
 	}
 }
