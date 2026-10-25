@@ -23,7 +23,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|servers|engine (on the tailnet)|machines|inbox|checks|refused|plain|stuck
+// SCENE=empty|running|approval|servers|engine (on the tailnet)|machines|inbox|checks|refused|plain|stuck|children
 // for the engines' threads (none started without one; refused is a
 // thread whose delete the engine refused; plain is an edit in a workspace with no
 // git; stuck is a run left uncertain, with STEER for a
@@ -332,6 +332,16 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 			h.a.draft = d
 		}
 		h.tt.Frame()
+		h.tt.Advance(time.Second)
+	case "children":
+		// A thread with a child and a grandchild, each reported back,
+		// opened in the sidebar and shown.
+		h = tree3(t)
+		top := h.thread("Ship the sidebar sort")
+		h.a.childrenOpen[top.id()] = true
+		h.a.childrenOpen[h.thread("Write the tests").id()] = true
+		h.a.select_(top)
+		h.until("its report", func() bool { return h.tt.HasText("Done") })
 		h.tt.Advance(time.Second)
 	case "machines":
 		h = machines(t)

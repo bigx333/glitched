@@ -207,7 +207,7 @@ func (a *app) newThread() {
 func (a *app) startThread(p *project) { a.startIn(draft{p.env, p.key.workspace}) }
 
 func (a *app) startIn(d draft) {
-	a.fresh = d
+	a.fresh, a.freshParent = d, api.ID{}
 	a.selected = api.ID{}
 	a.follow()
 	if a.router.Path() != "/" {

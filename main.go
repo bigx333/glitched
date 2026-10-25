@@ -197,7 +197,17 @@ type app struct {
 	projects []*project
 	selected api.ID // zero: the draft
 	fresh    draft
-	opened   opened
+	// freshParent is the thread the draft is a child of; zero for a
+	// thread of the user's.
+	freshParent api.ID
+	opened      opened
+	// kids are the threads by parent, as the frame being built shows them;
+	// childrenOpen the threads whose children the sidebar shows.
+	kids         map[api.ID][]thread
+	childrenOpen map[api.ID]bool
+	// afterStop the threads a cascade deletes once their agents have
+	// stopped.
+	afterStop map[api.ID]bool
 	// ended is each thread's last turn's end, as last seen, to tell of
 	// the next once.
 	ended    map[api.ID]time.Time
@@ -374,6 +384,8 @@ func newApp(dir string, post func(func())) *app {
 		diffLayout:    editor.DiffUnified,
 		diffWrap:      true,
 		diffFile:      map[api.ID]string{},
+		childrenOpen:  map[api.ID]bool{},
+		afterStop:     map[api.ID]bool{},
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,
@@ -462,7 +474,9 @@ func (a *app) view(c *ui.Context) {
 	// appearance: the sidebar shows it while the app's theme matches, and
 	// the Liquid Glass setting is on.
 	a.now = c.Now()
+	a.deleteStopped()
 	a.projects = a.gather()
+	a.kids = a.kidsOf()
 	// A project gone, as with its server, leaves the filter, lest it hide
 	// every thread left.
 	maps.DeleteFunc(a.projectFilter, func(k projectKey, _ bool) bool {

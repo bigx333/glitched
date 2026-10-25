@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"sync"
@@ -19,6 +20,11 @@ import (
 func (a *app) threadMenu(c *ui.Context, m *ui.Menu, t thread, cat category) {
 	if m.Item("Rename").Chosen() {
 		a.renaming, a.renameDraft, a.renameFocused = t.id(), title(t), false
+	}
+	// A child thread starts on the thread's engine, so not on a duplicate's,
+	// and no deeper than maxDepth.
+	if m.Item("New child thread").Disabled(a.depth(t) >= maxDepth || t.env == nil || a.duplicate(t.env)).Chosen() {
+		a.startChild(t)
 	}
 	working := t.View.Working()
 	switch cat {
@@ -87,13 +93,14 @@ func (a *app) settle(c *ui.Context, t thread, from category) {
 	c.AddToast(ui.Toast{Title: "Settled. Phew.", Description: title(t)})
 }
 
-// askDelete deletes the thread, asking first while the settings say to.
+// askDelete deletes the thread and the threads under it, asking first
+// while the settings say to.
 func (a *app) askDelete(t thread) {
 	if a.settings.confirmDelete {
 		a.deleting, a.deleteOpen = t, true
 		return
 	}
-	a.delete(t)
+	a.deleteTree(t)
 }
 
 // delete deletes the thread. The chat shows it until the delete lands, so
@@ -102,7 +109,7 @@ func (a *app) askDelete(t thread) {
 func (a *app) delete(t thread) {
 	a.backend.Delete(t.env, t.id())
 	if a.selected == t.id() {
-		a.fresh = draft{t.env, t.View.Workspace}
+		a.fresh, a.freshParent = draft{t.env, t.View.Workspace}, api.ID{}
 	}
 }
 
@@ -112,10 +119,19 @@ func (a *app) deleteAlert(c *ui.Context) {
 	if a.deleting.Thread == nil {
 		return
 	}
-	switch ui.AlertDialog(c, &a.deleteOpen, "Delete “"+title(a.deleting)+"”?",
-		"The thread is removed from every list and can't be brought back. Its history, messages included, stays in the engine's log.", "Cancel", "Delete") {
+	head, body := "Delete “"+title(a.deleting)+"”?",
+		"The thread is removed from every list and can't be brought back. Its history, messages included, stays in the engine's log."
+	// Its children go with it; those working stop first.
+	if tree := a.below(a.deleting); len(tree) > 0 {
+		head = "Delete “" + title(a.deleting) + "” and its " + plural(len(tree), "child thread") + "?"
+		body = "They're removed from every list and can't be brought back. Their history stays in the engine's log."
+		if n := working(tree); n > 0 {
+			body = fmt.Sprintf("%d of them %s still working and will be stopped first. ", n, isAre(n)) + body
+		}
+	}
+	switch ui.AlertDialog(c, &a.deleteOpen, head, body, "Cancel", "Delete") {
 	case 1:
-		a.delete(a.deleting)
+		a.deleteTree(a.deleting)
 		a.deleting = thread{}
 	case 0, ui.AlertDismissed:
 		a.deleting = thread{}
