@@ -47,28 +47,12 @@ func (h *Host) outcome(ctx context.Context, child api.ID, b engine.ReportToParen
 	case b.Kind == api.ReportFailed && b.Error != "":
 		return clip(oneLine(b.Error), outcomeLimit), nil
 	}
-	events, _, err := h.store.Since(ctx, child, 0, 0)
-	if errors.Is(err, api.ErrNotFound) {
-		return "", nil // deleted since: nothing to say of it
-	}
+	text, err := h.store.RunText(ctx, child, b.Run)
 	if err != nil {
 		return "", err
 	}
-	var text strings.Builder
-	for _, ev := range events {
-		if ev.Type != assistantDelta {
-			continue
-		}
-		if body, err := ev.Decode(); err == nil {
-			if d, ok := body.(api.AssistantDelta); ok && d.Run == b.Run {
-				text.WriteString(d.Text)
-			}
-		}
-	}
-	return summary(text.String()), nil
+	return summary(text), nil
 }
-
-var assistantDelta = api.EventType(api.AssistantDelta{})
 
 // summary is the last paragraph of a reply, on one line, cut to
 // outcomeLimit: where an agent says what it did.

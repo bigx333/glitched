@@ -3,4 +3,7 @@
 mygo_windows_*.syso
 /t3-mygo
 .audit/
+
+# Binaries go build leaves in the module root.
 /glitched
+/glitched.exe

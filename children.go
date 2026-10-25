@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"slices"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -148,6 +150,17 @@ func (a *app) startChild(t thread) {
 	}
 }
 
+// pruneThreadState drops what the app keeps by thread for threads no
+// longer there: the sidebar's open children and the composers seen.
+func (a *app) pruneThreadState() {
+	gone := func(id api.ID, _ bool) bool {
+		_, ok := a.find(id)
+		return !id.IsZero() && !ok
+	}
+	maps.DeleteFunc(a.childrenOpen, gone)
+	maps.DeleteFunc(a.composerSeen, gone)
+}
+
 // accessUnder is the widest access a child of parent may have: its
 // parent's.
 func accessUnder(want api.Access, parent thread) api.Access {
@@ -156,13 +169,10 @@ func accessUnder(want api.Access, parent thread) api.Access {
 
 // --- Stopping and deleting trees
 
-// stopTree stops t's run and every live run under it; it returns how many it stopped under t.
-func (a *app) stopTree(t thread) int {
-	if t.View.Live() {
-		a.backend.Interrupt(t.env, t.id())
-	}
+// stopAll stops every live thread of ns; it returns how many.
+func (a *app) stopAll(ns []node) int {
 	n := 0
-	for _, d := range a.below(t) {
+	for _, d := range ns {
 		if d.t.View.Live() {
 			a.backend.Interrupt(d.t.env, d.t.id())
 			n++
@@ -171,30 +181,50 @@ func (a *app) stopTree(t thread) int {
 	return n
 }
 
-// deleteTree deletes t and every thread under it. The
-// engine deletes no thread whose agent works: those are stopped, and
-// deleted once they have.
+// stopGrace is how long a cascade waits on a thread's stop before giving
+// up on it: one whose stop never lands isn't deleted later, unseen, after
+// the user went back to it.
+const stopGrace = time.Minute
+
+// stopped is a thread a cascade stopped, deleted once its agent has and the
+// threads in after, under it, are gone first; queued at at.
+type stopped struct {
+	after []api.ID
+	at    time.Time
+}
+
+// deleteTree deletes t and every thread under it, the deepest first and t
+// last, so that none is left standing on its own on the way. The engine
+// deletes no thread whose agent works: those are stopped and deleted once
+// they have, and what's over them waits for them.
 func (a *app) deleteTree(t thread) {
 	tree := append([]node{{t, 0}}, a.below(t)...)
-	a.stopTree(t)
-	for _, d := range tree {
+	var waiting []api.ID
+	for i := len(tree) - 1; i >= 0; i-- {
+		d := tree[i]
 		if d.t.View.Live() {
-			a.afterStop[d.t.id()] = true
+			a.backend.Interrupt(d.t.env, d.t.id())
+		}
+		if !d.t.View.Live() && len(waiting) == 0 {
+			a.delete(d.t)
 			continue
 		}
-		a.delete(d.t)
+		a.afterStop[d.t.id()] = stopped{after: slices.Clone(waiting), at: time.Now()}
+		waiting = append(waiting, d.t.id())
 	}
 }
 
-// deleteStopped deletes the threads deleteTree stopped, once their agents
-// have: after each change the manager posts, as the stops land.
-func (a *app) deleteStopped() {
-	for id := range a.afterStop {
+// settleStopped deletes the threads a cascade stopped, once their agents
+// have, after each change the manager posts, as the stops land; it gives
+// up on one whose stop didn't land within stopGrace.
+func (a *app) settleStopped() {
+	for id, s := range a.afterStop {
 		t, ok := a.find(id)
 		switch {
-		case !ok || deleting(t):
+		case !ok || deleting(t) || time.Since(s.at) > stopGrace:
 			delete(a.afterStop, id)
-		case !t.View.Live():
+		case t.View.Live():
+		case !slices.ContainsFunc(s.after, func(x api.ID) bool { _, waits := a.afterStop[x]; return waits }):
 			a.delete(t)
 			delete(a.afterStop, id)
 		}
