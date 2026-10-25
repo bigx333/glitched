@@ -298,6 +298,9 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 	selected := t.id() == a.selected && a.router.Path() == "/"
 	unread := a.backend.Unread(t.Thread)
 	r := row(c, t.id(), selected).Height(rowHeight).Padding(0, 6, 0, 8).Gap(9).Transition(fold)
+	if a.arriving(t) {
+		r.Transition(arrive) // just sent from the hero, sliding in
+	}
 	fx, playing := a.rowFx[t.id()]
 	if playing && fx.done(c.Now()) {
 		delete(a.rowFx, t.id())
