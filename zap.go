@@ -23,8 +23,8 @@ import (
 // strike, slow enough to see. zapFade is how long the row fades instead,
 // with less motion asked for or no GPU. Tune them here.
 const (
-	zapTime = 900 * time.Millisecond
-	zapFade = 450 * time.Millisecond
+	zapTime = 2 * strikeTime
+	zapFade = strikeTime
 )
 
 // approvalZap is a request's answers as they were answered, kept to break

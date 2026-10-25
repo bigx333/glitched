@@ -207,7 +207,7 @@ func (a *app) deleteTree(t thread) {
 	held = func(x thread, depth int) bool {
 		seen[x.id()] = true
 		var waits []api.ID
-		if depth <= maxDepth {
+		if depth < maxDepth {
 			for _, k := range a.kids[x.id()] {
 				if !seen[k.id()] && held(k, depth+1) {
 					waits = append(waits, k.id())
@@ -380,9 +380,20 @@ func (a *app) usagePill(c *ui.Context, t thread) {
 	pill(c, label).Shrink(0).Tooltip(tip)
 }
 
-// waitsOn is whether t's run still waits on a request of the user's.
-func waitsOn(t thread, run api.ID) bool {
-	return slices.ContainsFunc(t.View.Requests, func(r api.Request) bool { return r.Run == run })
+// stillBlocked is whether a blocked report of child's, in t's transcript,
+// still stands: the child's run waits on a request, and the report is the
+// last the run made of one. A run that asked twice made two; the first was
+// answered.
+func stillBlocked(t, child thread, r client.ReportEntry) bool {
+	if !slices.ContainsFunc(child.View.Requests, func(q api.Request) bool { return q.Run == r.Run }) || t.Transcript == nil {
+		return false
+	}
+	for i := len(t.Transcript.Entries) - 1; i >= 0; i-- {
+		if e, ok := t.Transcript.Entries[i].(*client.ReportEntry); ok && e.Child == r.Child && e.Run == r.Run && e.Kind == api.ReportBlocked {
+			return e.At.Equal(r.At)
+		}
+	}
+	return false
 }
 
 // reportCard is the children's reports in the parent's timeline: each
@@ -401,7 +412,7 @@ func (a *app) reportCard(c *ui.Context, t thread, key string, e entry) {
 			switch {
 			case n.Kind == api.ReportFailed:
 				icon, col, state = icX, palette.red, "Failed"
-			case n.Kind == api.ReportBlocked && found && waitsOn(child, n.Run):
+			case n.Kind == api.ReportBlocked && found && stillBlocked(t, child, n):
 				icon, col, state = icHand, palette.amber, "Needs you"
 			case n.Kind == api.ReportBlocked:
 				// A report is never updated: once the request is answered or

@@ -63,7 +63,7 @@ Replay and failure:
 Reading it:
 
 - `client.Transcript` folds `child.reported` into a `*ReportEntry` and records `Transcript.Reported` (`internal/client/transcript.go`).
-- A report is never updated. The card shows a blocked report as Needs you only while the child's run still has a pending request; once it's answered or the run stopped, the same card says Was waiting, with what it waited on. No event is added for it.
+- A report is never updated. The card shows a blocked report as Needs you only while the child's run still has a pending request and the report is the run's last blocked one (a run that asks twice reports twice); once it's answered or the run stopped, the same card says Was waiting, with what it waited on. No event is added for it.
 - `Manager.Unread` treats a report after the read mark as news, as a turn's end is; `MarkRead` and `MarkShown` read up to it (`internal/client/saved.go`).
 
 ## Cascades
