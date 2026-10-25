@@ -545,7 +545,6 @@ func (a *app) view(c *ui.Context) {
 	a.previewHeld = a.previewHeld && a.previewPressed
 	a.sidebarPressed, a.previewPressed = false, false
 	a.browser.letGo(a.showPreview)
-	a.deleteStopped()
 	a.projects = a.gather()
 	a.kids = a.kidsOf()
 	// A project gone, as with its server, leaves the filter, lest it hide

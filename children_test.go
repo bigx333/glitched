@@ -226,3 +226,25 @@ func TestStopTakesTheTree(t *testing.T) {
 		t.Errorf("no word of the child stopped: %q", strings.Join(h.tt.Texts(), " | "))
 	}
 }
+
+// Deleting a parent whose child works stops the child, then deletes it once
+// its agent has stopped, as the engine deletes no thread at work.
+func TestDeleteWaitsForAWorkingChild(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, stalled{fake.New(midTurn), 1})
+	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	kid := seedChild(t, d, top, "Write the tests")
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: "go"}}); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, dir)
+	child := h.thread("Write the tests")
+	h.until("the child working", func() bool { return child.View.Working() })
+	h.a.settings.confirmDelete = false
+	h.a.askDelete(h.thread("Ship the sidebar sort"))
+	h.until("both deleted", func() bool {
+		_, p := h.a.find(top)
+		_, k := h.a.find(kid)
+		return !p && !k
+	})
+}

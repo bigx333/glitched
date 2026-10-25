@@ -152,7 +152,7 @@ func (a *app) requestAnswers(c *ui.Context, t thread, r *client.RequestEntry) {
 		return
 	}
 	allow, deny, row, labels := a.answerButtons(c, t, r)
-	a.answerAt = answerRow{r.Request, row.Bounds(), allow.Bounds(), deny.Bounds(), labels()}
+	a.answerAt = answerRow{r.Request, row.Bounds(), allow.Bounds(), deny.Bounds(), labels}
 	if allow.Clicked() {
 		a.answer(c, t, r, client.AllowOnce)
 	}
@@ -164,18 +164,14 @@ func (a *app) requestAnswers(c *ui.Context, t thread, r *client.RequestEntry) {
 // answerButtons lays out the row of a request's answers, and returns its
 // buttons, the row, and its labels as they were laid out in the last
 // frame, for a zap to paint as it breaks the row up.
-func (a *app) answerButtons(c *ui.Context, t thread, r *client.RequestEntry) (allow, deny, row ui.Element, labels func() []zapLabel) {
-	type label struct {
-		e ui.Element
-		l zapLabel
-	}
-	var ls []label
+func (a *app) answerButtons(c *ui.Context, t thread, r *client.RequestEntry) (allow, deny, row ui.Element, labels []zapLabel) {
+	// Each label where the last frame laid it out, read as it's built.
 	text := func(s string, size float32, weight int, col ui.Color) ui.Element {
 		e := ui.Text(c, s).FontSize(size).TextColor(col)
 		if weight != 0 {
 			e.FontWeight(weight)
 		}
-		ls = append(ls, label{e, zapLabel{span: ui.Span{Text: s, Size: size, Weight: weight, Color: col}}})
+		labels = append(labels, zapLabel{r: e.Bounds(), span: ui.Span{Text: s, Size: size, Weight: weight, Color: col}})
 		return e
 	}
 	// A key's chip, as kbd draws one.
@@ -184,7 +180,7 @@ func (a *app) answerButtons(c *ui.Context, t thread, r *client.RequestEntry) (al
 		if border != (ui.Color{}) {
 			e.Border(1, border)
 		}
-		l := &ls[len(ls)-1].l
+		l := &labels[len(labels)-1]
 		l.pad, l.bg, l.border = 4, bg, border
 		return e
 	}
@@ -204,14 +200,7 @@ func (a *app) answerButtons(c *ui.Context, t thread, r *client.RequestEntry) (al
 			text(accessLabel(t.View.Access), 11.5, 0, palette.faint)
 		})
 	})
-	return allow, deny, row, func() []zapLabel {
-		out := make([]zapLabel, len(ls))
-		for i, l := range ls {
-			l.l.r = l.e.Bounds()
-			out[i] = l.l
-		}
-		return out
-	}
+	return allow, deny, row, labels
 }
 
 // filled is a button with a face of its own color.

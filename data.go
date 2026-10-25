@@ -461,9 +461,11 @@ func (a *app) follow() {
 }
 
 // changed runs after each change the manager posts: the shown thread's
-// transcript stays open, and each turn that ended since is told of once.
+// transcript stays open, a cascade's thread whose agent has stopped is
+// deleted, and each turn that ended since is told of once.
 func (a *app) changed() {
 	a.follow()
+	a.deleteStopped()
 	for _, e := range a.backend.Envs() {
 		for id, th := range e.Threads {
 			var ended time.Time
