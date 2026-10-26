@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -289,5 +290,41 @@ func TestBrowserKeysLeaveTheTerminal(t *testing.T) {
 	}
 	if len(a.browser.tabs) != 2 || !a.browser.focusAddress {
 		t.Errorf("out of the terminal: %d tabs, address %v", len(a.browser.tabs), a.browser.focusAddress)
+	}
+}
+
+// A tab whose page the engine couldn't make says why, and tries again
+// as it reloads, or as an address is typed.
+func TestBrowserRetriesThePage(t *testing.T) {
+	a, tt, made := browsing(t)
+	fail := true
+	open := a.browser.open
+	a.browser.open = func(url string, ev browse.Events) (browse.Page, error) {
+		if fail {
+			return nil, errors.New("no WebView2 runtime")
+		}
+		return open(url, ev)
+	}
+	click(t, tt, "Toggle preview  ⇧⌘P")
+	tab := a.browser.current()
+	if tab.err == "" || !tt.HasText("The preview could not start: no WebView2 runtime") {
+		t.Fatalf("err %q: the tab doesn't say why it has no page", tab.err)
+	}
+	fail = false
+	click(t, tt, "Reload  ⌘R")
+	if tab.page == nil || tab.err != "" || len(*made) != 1 {
+		t.Fatalf("reload left the tab without a page: err %q", tab.err)
+	}
+	// Typed, an address tries again too.
+	tab2 := a.browser.add("", 1)
+	fail = true
+	a.goTo(tab2, "example.com")
+	if tab2.err == "" {
+		t.Fatal("the engine failing left no error")
+	}
+	fail = false
+	a.goTo(tab2, "example.org")
+	if tab2.page == nil || tab2.err != "" {
+		t.Errorf("a new address didn't try again: err %q", tab2.err)
 	}
 }

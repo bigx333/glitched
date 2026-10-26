@@ -56,6 +56,13 @@ func cancelled(code int) bool {
 	return code == -999 || code == 102
 }
 
+// reloads reports whether a page whose process went, for reason, loads
+// again: one that crashed or was ended, not one only unresponsive, which
+// may come back with its state. MyGo v0.5.5 reports a WebView2 frame's
+// process failing (kind 3) as the page's crash, which reloads it too
+// (docs/browser.md).
+func reloads(reason string) bool { return reason != "unresponsive" }
+
 func open(win *mygo.Window, url string, ev browse.Events) (browse.Page, error) {
 	v, err := win.NewWebView(mygo.WebViewOptions{URL: url, BackgroundColor: Background})
 	if err != nil {
@@ -109,7 +116,10 @@ func open(win *mygo.Window, url string, ev browse.Events) (browse.Page, error) {
 		}
 		return nil
 	})
-	p.OnRenderProcessGone(func(string) {
+	p.OnRenderProcessGone(func(reason string) {
+		if !reloads(reason) {
+			return
+		}
 		on(func() {
 			if !*closed {
 				p.Reload()
