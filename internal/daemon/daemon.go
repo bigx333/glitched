@@ -146,6 +146,28 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	}
 	d.undo = append(d.undo, st.Close)
 
+	// The engine runs its own node when it needs the tailnet, to serve it
+	// or to reach a hub on it, and Tailscale isn't installed.
+	var installed bool
+	if cfg.Tailnet || cfg.HubServer != "" {
+		probe, cancel := context.WithTimeout(ctx, time.Second)
+		_, err := detect(probe)
+		cancel()
+		// A missing Tailscale fails at once; one slow to answer is there.
+		installed = err == nil || errors.Is(err, context.DeadlineExceeded)
+		if !installed {
+			node, err := tailnet.Start(filepath.Join(cfg.Dir, nodeDir), hostname(), cfg.Control)
+			if err != nil {
+				return nil, err
+			}
+			d.node = node
+			d.undo = append(d.undo, node.Close)
+			if cfg.HubServer != "" {
+				hubAt = transport.Embedded{Node: node, Address: cfg.HubServer, Token: cfg.HubToken}
+			}
+		}
+	}
+
 	var rep *hub.Replica
 	var hubc hub.Client
 	switch {
@@ -230,26 +252,14 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		servers = append(servers, tailnetServer(tn))
 	}
 
-	var installed bool
-	if cfg.Tailnet {
-		probe, cancel := context.WithTimeout(ctx, time.Second)
-		_, installed = detect(probe)
-		cancel()
-		if !installed {
-			node, err := tailnet.Start(filepath.Join(cfg.Dir, nodeDir), hostname(), cfg.Control)
-			if err != nil {
-				return nil, err
-			}
-			d.node = node
-			d.undo = append(d.undo, node.Close)
-			tn := transport.Embedded{Node: node, Address: ":" + Port}
-			ln, err := tn.Listen(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("daemon: listen on the embedded node: %w", err)
-			}
-			lns = append(lns, ln)
-			servers = append(servers, tailnetServer(tn))
+	if cfg.Tailnet && d.node != nil {
+		tn := transport.Embedded{Node: d.node, Address: ":" + Port}
+		ln, err := tn.Listen(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("daemon: listen on the embedded node: %w", err)
 		}
+		lns = append(lns, ln)
+		servers = append(servers, tailnetServer(tn))
 	}
 
 	var serving, background sync.WaitGroup
@@ -291,12 +301,14 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 			}
 		})
 	}
-	if installed {
+	if installed && cfg.Tailnet {
 		serving.Go(func() {
-			if err := d.serveInstalled(ctx, tailnetServer); err != nil {
+			if err := d.serveInstalled(ctx, cfg.Listen, tailnetServer); err != nil {
 				fail(err)
 			}
 		})
+	}
+	if installed {
 		background.Go(func() { retire(ctx, filepath.Join(cfg.Dir, nodeDir), cfg.Control) })
 	}
 	if len(cfg.Listen) > 0 || cfg.Tailnet {
