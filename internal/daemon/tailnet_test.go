@@ -135,6 +135,13 @@ func TestAnEngineWithoutTailscaleServesOnItsOwnNode(t *testing.T) {
 	if host.Node() == nil {
 		t.Fatal("the uploading engine runs no node of its own")
 	}
+	until(t, "the uploading engine's node on the tailnet", func() bool {
+		env, err := host.Endpoint().Info(context.Background())
+		return err == nil && env.Tailnet.Running()
+	})
+	if env, _ := host.Endpoint().Info(ctx); env.Tailnet.Serving != "" {
+		t.Errorf("an engine that only uploads says it serves at %q, where nothing listens", env.Tailnet.Serving)
+	}
 	thread := api.NewID()
 	create := api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{Workspace: "/w", Title: "up", Model: api.ModelRef{Provider: "fake", Model: "fake"}}}
 	if _, err := host.Endpoint().Submit(ctx, create); err != nil {
