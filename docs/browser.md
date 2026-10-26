@@ -18,6 +18,16 @@ project's dev server, `http://localhost:5173`; other tabs browse anywhere.
   loading or not. While the terminal has the keyboard it keeps them (on
   Windows and Linux they are Ctrl+T, L and R, the shell's); while a page
   has it, its web view takes the keys first.
+- **Width:** the pane's edge against the chat drags it wider and narrower
+  (the resize cursor, and the accent as it's pointed at), both sides
+  reflowing as it moves: the page follows its bounds each frame, and the
+  chat, composer included, lays out as a window that narrow would,
+  without easing after the edge. The pane is 360 DIPs at least and the
+  chat 420; where the window has room for neither, the pane gives way
+  first. A double click on the edge gives the pane back its own width
+  (45% of the room, 400 to 640). Where a drag ends it stays, across
+  launches, in `layout.json` in the state directory. The edge is Nelson's
+  sidebar edge (`dragEdge`), which both use.
 - **Pages:** each tab has a page of its own, made the first time the tab
   shows and kept while another shows, so a tab comes back where it was. A
   page that fails to load says why, in the app's colors (for the dev
