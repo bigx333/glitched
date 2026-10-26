@@ -97,7 +97,7 @@ func (a *app) commandPalette(c *ui.Context) {
 			backdrop.Background(ui.RGBA(0, 0, 0, 0.35))
 		}
 		panel.Width(600).Radius(18).Clip()
-		a.pane(panel, glass.Glass{}).Shadow(0, 24, 64, 0, ui.RGBA(0, 0, 0, 0.4))
+		a.frosted(c, panel).Shadow(0, 24, 64, 0, ui.RGBA(0, 0, 0, 0.4))
 
 		cmds := a.commands()
 		a.cmdkIndex = max(0, min(a.cmdkIndex, len(cmds)-1))

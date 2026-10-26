@@ -4,7 +4,6 @@ import (
 	"math"
 	"time"
 
-	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -134,7 +133,7 @@ func (a *app) modelPicker(c *ui.Context) {
 	}
 	a.popover(c, b, &a.pickerOpen, func(panel ui.Element) {
 		panel.AttachTo(b, ui.AnchorTopStart, ui.AnchorBottomStart).Margin(0, 0, 10, -4).Width(420).Radius(16).Clip()
-		a.pane(panel, glass.Glass{}).Shadow(0, 16, 40, 0, ui.RGBA(0, 0, 0, 0.35)).Children(func() {
+		a.frosted(c, panel).Shadow(0, 16, 40, 0, ui.RGBA(0, 0, 0, 0.35)).Children(func() {
 			ui.Row(c).AlignItems(ui.Stretch).Children(func() {
 				a.pickerFamilies(c)
 				ui.Box(c).Width(1).Background(palette.border)

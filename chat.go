@@ -755,7 +755,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 			// Files go to the agent as their paths, which a server's
 			// agent can't read.
 			dragOver := t.local() && a.dropZone(card)
-			a.pane(card, glass.Glass{}).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.28)).Clip().Children(func() {
+			a.frosted(c, card).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.28)).Clip().Children(func() {
 				workingGlow(c, card, t.View.Working(), 20)
 				if k < 1 {
 					// A line to type a follow-up into, which a text area,

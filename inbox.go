@@ -5,7 +5,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
@@ -487,7 +486,7 @@ func (a *app) snoozeButton(c *ui.Context, t thread, cat category) {
 		// left over the sidebar's header and the traffic lights. Near the
 		// window's bottom, AttachTo puts it above instead.
 		panel.AttachTo(b, ui.AnchorBottomStart, ui.AnchorTopStart).Margin(6, 0, 0, 0).Width(220).Radius(12).Clip()
-		a.pane(panel, glass.Glass{}).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.35)).Children(func() {
+		a.frosted(c, panel).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.35)).Children(func() {
 			ui.Column(c).Padding(5).Gap(1).Children(func() {
 				ui.Text(c, "Snooze until…").FontSize(11).FontWeight(600).TextColor(palette.faint).Padding(4, 8, 3)
 				for _, s := range snoozeTimes {

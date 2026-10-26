@@ -575,6 +575,18 @@ func (a *app) paneBorder() float32 {
 	return 1
 }
 
+// frosted is the material of what floats over the chat: the composer, the
+// popovers, the palette and the toasts. In the dark it's frosted and
+// untinted, as the glass would lift black behind it to a 15% grey, with a
+// hairline for its rim, a shadow that takes no room. In the light it's a
+// pane.
+func (a *app) frosted(c *ui.Context, e ui.Element) ui.Element {
+	if c.Theme().Dark && a.settings.glass {
+		return e.Material(glass.Blur{Radius: 18}).Shadow(0, 0, 0, 1, palette.border)
+	}
+	return a.pane(e, glass.Glass{})
+}
+
 // newRouter shows pages at once: settings sections are tabs, and their
 // content should not slide.
 func newRouter() *ui.Router {
@@ -730,13 +742,13 @@ func (a *app) toggleLightDark() {
 	}
 }
 
-// toasts draws the window's toasts on glass, in the bottom right corner.
+// toasts draws the window's toasts, frosted, in the bottom right corner.
 func (a *app) toasts(c *ui.Context) {
 	ui.ToastViewportBase(c, func(viewport ui.Element, toasts []ui.Toast) {
 		viewport.Padding(20).AlignItems(ui.End).Justify(ui.End).Gap(8)
 		for i, t := range toasts {
 			toast := a.toast(c, i, t)
-			a.pane(toast.Root.Row().Gap(10).Padding(10, 10, 10, 14).Radius(14).MinWidth(260).AlignItems(ui.Center), glass.Glass{})
+			a.frosted(c, toast.Root.Row().Gap(10).Padding(10, 10, 10, 14).Radius(14).MinWidth(260).AlignItems(ui.Center))
 			// In and out the same way, from below, as Sonner's.
 			toast.Root.Transition(ui.ElementTransition{
 				Duration: 400 * time.Millisecond,
