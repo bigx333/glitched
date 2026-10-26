@@ -275,6 +275,11 @@ type app struct {
 	// why its web views could not start (see browser.go).
 	showPreview bool
 	browser     browser
+	// previewDragged is the preview's width as its edge was dragged, 0
+	// until it is, and again after a double click on it.
+	previewDragged float32
+	// dir is the state directory, which holds the layout (layout.go).
+	dir string
 	// terminalFocused is set while the terminal drawer has the keyboard,
 	// as the last frame built it; it keeps the browser's keys then.
 	terminalFocused bool
@@ -340,6 +345,7 @@ type app struct {
 // that builds the views.
 func newApp(dir string, post func(func())) *app {
 	a := &app{
+		dir:           dir,
 		router:        newRouter(),
 		wind:          wind.New(rand.Uint32(), nil),
 		ended:         map[api.ID]time.Time{},
@@ -381,6 +387,7 @@ func newApp(dir string, post func(func())) *app {
 			codexModel:    "GPT-5.5 Codex",
 		},
 	}
+	a.loadLayout()
 	a.backend = client.New(client.Config{Dir: dir, Post: func(fn func()) {
 		post(func() {
 			fn()
