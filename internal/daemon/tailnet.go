@@ -1,0 +1,133 @@
+package daemon
+
+import (
+	"context"
+	"net"
+	"os"
+	"strings"
+	"time"
+
+	"log/slog"
+
+	"glitched/internal/api"
+	"glitched/internal/runtime"
+	"glitched/internal/tailnet"
+	"glitched/internal/transport"
+)
+
+// Port is where an engine serves the tailnet; any port works with
+// -listen.
+const Port = "7465"
+
+// nodeDir, under the engine's, keeps its own tailnet node's identity.
+const nodeDir = "tailscale"
+
+// detect is tailnet.Detect; a test swaps it to pretend Tailscale isn't
+// installed.
+var detect = tailnet.Detect
+
+// endpoint is the engine, whose Info also says how its machine is on the
+// tailnet.
+type endpoint struct {
+	*runtime.Host
+	d *Daemon
+}
+
+func (e endpoint) Info(ctx context.Context) (api.Environment, error) {
+	env, err := e.Host.Info(ctx)
+	if err == nil {
+		env.Tailnet = e.d.tailnet(ctx)
+	}
+	return env, err
+}
+
+// tailnet is how this machine is on the tailnet: through the engine's own
+// node, else an installed Tailscale, else not at all.
+func (d *Daemon) tailnet(ctx context.Context) api.Tailnet {
+	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	if d.node != nil {
+		t, err := d.node.Status(ctx)
+		if err == nil && t.Running() {
+			host := t.Name
+			if host == "" {
+				host = t.IP.String()
+			}
+			t.Serving = net.JoinHostPort(host, Port)
+		}
+		return t
+	}
+	t, _ := detect(ctx)
+	d.mu.Lock()
+	t.Serving = d.tailnetAt
+	d.mu.Unlock()
+	return t
+}
+
+// serveInstalled serves on the installed Tailscale's address at Port once
+// it has one, until ctx ends.
+func (d *Daemon) serveInstalled(ctx context.Context, server func(transport.Transport) *transport.Server) error {
+	failing := ""
+	for delay := 250 * time.Millisecond; ; delay = min(2*delay, 30*time.Second) {
+		probe, cancel := context.WithTimeout(ctx, time.Second)
+		t, ok := detect(probe)
+		cancel()
+		why := "Tailscale isn't running"
+		if ok && t.Running() && t.IP.IsValid() {
+			tn := transport.Tailnet{Address: net.JoinHostPort(t.IP.String(), Port)}
+			ln, err := listenOn(tn, ctx)
+			if err == nil {
+				d.mu.Lock()
+				d.addrs = append(d.addrs, ln.Addr())
+				d.tailnetAt = tn.Address
+				if t.Name != "" {
+					d.tailnetAt = net.JoinHostPort(t.Name, Port)
+				}
+				d.mu.Unlock()
+				slog.Info("serving the tailnet", "addr", tn.Address, "name", t.Name)
+				return server(tn).Serve(ctx, ln)
+			}
+			why = err.Error()
+		}
+		if why != failing {
+			failing = why
+			slog.Warn("waiting to serve the tailnet", "why", why)
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(delay):
+		}
+	}
+}
+
+// retire signs out the node an engine ran before Tailscale was installed,
+// so the tailnet doesn't list the machine twice, and forgets it.
+func retire(ctx context.Context, dir string) {
+	if _, err := os.Stat(dir); err != nil {
+		return
+	}
+	node, err := tailnet.Start(dir, hostname(), "")
+	if err == nil {
+		out, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err = node.Logout(out)
+		cancel()
+		node.Close()
+	}
+	if err != nil {
+		slog.Warn("couldn't sign out the engine's own tailnet node; remove it in the admin console", "err", err)
+	}
+	if ctx.Err() == nil {
+		os.RemoveAll(dir)
+	}
+}
+
+// hostname is the name the engine's own node asks the tailnet for.
+func hostname() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return "glitched"
+	}
+	h, _, _ = strings.Cut(h, ".")
+	return strings.ToLower(h)
+}

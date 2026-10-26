@@ -3,27 +3,26 @@ package daemon
 import (
 	"context"
 	"net"
-	"net/netip"
 	"sync"
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/tailnet"
 	"glitched/internal/transport"
 )
 
-// Port is where an engine serves the tailnet unless told otherwise; any
-// port works.
-const Port = "7465"
-
 // Status is an engine's state directory as seen from outside the engine:
-// what engine.json asks of it, whether an engine answers its socket,
-// whether each tailnet listener accepts, and the tokens clients hold.
+// what engine.json asks of it, whether an engine answers its socket, how
+// the machine is on the tailnet, whether each listener accepts, and the
+// tokens clients hold.
 type Status struct {
 	Config    Config
 	Engine    *api.Environment // nil when nothing answers the socket
 	EngineErr error            // why nothing answers
 	Listeners []Listener       // Config.Listen, in its order
-	Tailscale netip.Addr       // invalid unless Tailscale is up in kernel mode
+	// Tailnet is as the engine says, or as an installed Tailscale does
+	// when no engine answers.
+	Tailnet api.Tailnet
 	Tokens    []Token
 }
 
@@ -49,8 +48,6 @@ func Inspect(ctx context.Context, dir string) (Status, error) {
 		return Status{}, err
 	}
 	st := Status{Config: cfg, Tokens: tokens, Listeners: make([]Listener, len(cfg.Listen))}
-	st.Tailscale, _ = transport.TailscaleIP()
-
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -67,15 +64,11 @@ func Inspect(ctx context.Context, dir string) (Status, error) {
 	info, err := c.Info(ctx)
 	c.Close()
 	if err == nil {
-		st.Engine = &info
+		st.Engine, st.Tailnet = &info, info.Tailnet
 	} else {
 		st.EngineErr = err
+		st.Tailnet, _ = tailnet.Detect(ctx)
 	}
 	wg.Wait()
 	return st, nil
-}
-
-// Serve is the Listen that serves the tailnet at ip, on Port.
-func Serve(ip netip.Addr) []string {
-	return []string{net.JoinHostPort(ip.String(), Port)}
 }

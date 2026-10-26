@@ -58,7 +58,7 @@ func TestThisMachineServesAndPairs(t *testing.T) {
 	// serves. The posts wait for the test to run them, so the engine
 	// reporting in waits too.
 	first, addr := freeAddr(t), freeAddr(t)
-	if err := h.a.backend.SetListen([]string{first}); err != nil {
+	if err := h.a.backend.Configure(func(c *daemon.Config) { c.Listen = []string{first} }); err != nil {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(10 * time.Second); ; {
@@ -75,7 +75,7 @@ func TestThisMachineServesAndPairs(t *testing.T) {
 	if h.a.backend.Machine().Embedded {
 		t.Log("the restarted engine reported in before the second change; this run doesn't cover a change mid-restart")
 	}
-	if err := h.a.backend.SetListen([]string{addr}); err != nil {
+	if err := h.a.backend.Configure(func(c *daemon.Config) { c.Listen = []string{addr} }); err != nil {
 		t.Fatal(err)
 	}
 	h.until("the restarted engine to accept on "+addr, func() bool {

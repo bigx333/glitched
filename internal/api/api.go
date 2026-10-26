@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"time"
 )
 
@@ -266,11 +267,39 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 const Protocol = 3
 
 type Environment struct {
-	ID       ID     `json:"id"` // the host
-	Name     string `json:"name"`
-	Protocol int    `json:"protocol"`
-	Log      ID     `json:"log"`
+	ID       ID      `json:"id"` // the host
+	Name     string  `json:"name"`
+	Protocol int     `json:"protocol"`
+	Log      ID      `json:"log"`
+	Tailnet  Tailnet `json:"tailnet,omitzero"`
 }
+
+type TailnetMode string
+
+const (
+	TailnetNone      TailnetMode = ""          // no Tailscale here, and no node of the engine's own
+	TailnetInstalled TailnetMode = "installed" // the Tailscale app or tailscaled on this machine
+	TailnetEmbedded  TailnetMode = "embedded"  // the engine's own tsnet node
+)
+
+// Tailnet is how the engine's machine is on the tailnet.
+type Tailnet struct {
+	Mode TailnetMode `json:"mode,omitempty"`
+	// State is Tailscale's backend state: Running, NeedsLogin,
+	// NeedsMachineAuth, Stopped, Starting or NoState.
+	State   string     `json:"state,omitempty"`
+	AuthURL string     `json:"auth_url,omitempty"` // where to sign in while it needs login
+	Name    string     `json:"name,omitempty"`     // the MagicDNS name, without its final dot
+	IP      netip.Addr `json:"ip,omitzero"`        // IPv4 if it has one
+	Tailnet string     `json:"tailnet,omitempty"`
+	User    string     `json:"user,omitempty"`    // the login it's signed in as
+	Control string     `json:"control,omitempty"` // the embedded node's control server; "" for Tailscale's
+	// Serving is where clients with a token reach the engine on the
+	// tailnet, once it listens there.
+	Serving string `json:"serving,omitempty"`
+}
+
+func (t Tailnet) Running() bool { return t.State == "Running" }
 
 // Query reads one thread when Thread is set, otherwise the shell (every
 // thread, no events). Events are those after After.

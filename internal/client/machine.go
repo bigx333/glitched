@@ -2,6 +2,7 @@ package client
 
 import (
 	"log/slog"
+	"reflect"
 	"slices"
 	"time"
 
@@ -46,25 +47,27 @@ func (m *Manager) Inspect() {
 	})
 }
 
-// SetListen records where the engine serves the tailnet in engine.json,
-// and restarts the engine embedded here to apply it. An engine another
-// process runs applies it when it next starts.
-func (m *Manager) SetListen(addrs []string) error {
+// Configure changes engine.json, and restarts the engine embedded here to
+// apply the change. An engine another process runs applies it when it
+// next starts.
+func (m *Manager) Configure(change func(*daemon.Config)) error {
 	cfg, err := daemon.Defaults(m.cfg.Dir)
 	if err != nil {
 		return err
 	}
-	if slices.Equal(cfg.Listen, addrs) {
+	was := cfg
+	was.Listen = slices.Clone(cfg.Listen)
+	change(&cfg)
+	if reflect.DeepEqual(cfg, was) {
 		return nil
 	}
-	cfg.Listen = addrs
 	if err := cfg.Save(); err != nil {
 		return err
 	}
 	m.changes++
-	m.machine.Config.Listen = addrs
+	m.machine.Config = cfg
 	m.machine.Listeners = nil
-	for _, a := range addrs {
+	for _, a := range cfg.Listen {
 		m.machine.Listeners = append(m.machine.Listeners, daemon.Listener{Addr: a})
 	}
 	m.Restart()
@@ -107,6 +110,7 @@ func (m *Manager) Restart() {
 	}
 	e, old := m.envs[0], m.local
 	m.machine.Embedded, m.restarting = false, true
+	m.node.Store(nil)
 	e.unlink()
 	m.down(e, Connecting{})
 	m.local = m.newLocal()
@@ -121,10 +125,16 @@ func (m *Manager) Restart() {
 
 func (m *Manager) newLocal() *local {
 	l := &local{dir: m.cfg.Dir, done: make(chan struct{})}
-	l.hosted = func(embedded bool) {
+	l.hosted = func(d *daemon.Daemon) {
 		m.post(m.ctx, func() {
 			if m.local != l {
 				return
+			}
+			embedded := d != nil
+			if embedded && d.Node() != nil {
+				m.node.Store(&node{d.Node()})
+			} else {
+				m.node.Store(nil)
 			}
 			m.machine.Embedded = embedded
 			again := m.restarting && m.again && embedded
