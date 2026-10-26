@@ -27,16 +27,21 @@ const nodeDir = "tailscale"
 var detect = tailnet.Detect
 
 // endpoint is the engine, whose Info also says how its machine is on the
-// tailnet.
+// tailnet. A remote one leaves out the login URL: whoever opens it can
+// sign this machine in to their own account.
 type endpoint struct {
 	*runtime.Host
-	d *Daemon
+	d      *Daemon
+	remote bool
 }
 
 func (e endpoint) Info(ctx context.Context) (api.Environment, error) {
 	env, err := e.Host.Info(ctx)
 	if err == nil {
 		env.Tailnet = e.d.tailnet(ctx)
+		if e.remote {
+			env.Tailnet.AuthURL = ""
+		}
 	}
 	return env, err
 }
@@ -102,12 +107,13 @@ func (d *Daemon) serveInstalled(ctx context.Context, server func(transport.Trans
 }
 
 // retire signs out the node an engine ran before Tailscale was installed,
-// so the tailnet doesn't list the machine twice, and forgets it.
-func retire(ctx context.Context, dir string) {
+// at control, so the tailnet doesn't list the machine twice, and forgets
+// it. One that fails is kept for the next start to retry.
+func retire(ctx context.Context, dir, control string) {
 	if _, err := os.Stat(dir); err != nil {
 		return
 	}
-	node, err := tailnet.Start(dir, hostname(), "")
+	node, err := tailnet.Start(dir, hostname(), control)
 	if err == nil {
 		out, cancel := context.WithTimeout(ctx, 10*time.Second)
 		err = node.Logout(out)
@@ -115,11 +121,10 @@ func retire(ctx context.Context, dir string) {
 		node.Close()
 	}
 	if err != nil {
-		slog.Warn("couldn't sign out the engine's own tailnet node; remove it in the admin console", "err", err)
+		slog.Warn("couldn't sign out the engine's own tailnet node; the next start tries again", "err", err)
+		return
 	}
-	if ctx.Err() == nil {
-		os.RemoveAll(dir)
-	}
+	os.RemoveAll(dir)
 }
 
 // hostname is the name the engine's own node asks the tailnet for.
