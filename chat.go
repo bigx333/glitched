@@ -71,8 +71,11 @@ func (a *app) chatPage(c *ui.Context) {
 			})
 			// A server's workspace isn't here for a shell. The diff panel,
 			// opened from an edit, says its files are there.
+			a.terminalFocused = false
 			if a.showTerminal && t.local() {
-				ui.Column(c).Key("terminal").Height(220).Transition(panel(0, 16)).Children(func() { a.terminal(c, t.View.Workspace) })
+				drawer := ui.Column(c).Key("terminal").Height(220).Transition(panel(0, 16))
+				drawer.Children(func() { a.terminal(c, t.View.Workspace) })
+				a.terminalFocused = drawer.FocusWithin()
 			}
 		})
 		switch {
