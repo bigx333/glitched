@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"html"
+	"net"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -61,16 +62,25 @@ func isLocal(url string) bool {
 	if i := strings.IndexAny(host, "/?#"); i >= 0 {
 		host = host[:i]
 	}
+	if i := strings.LastIndex(host, "@"); i >= 0 {
+		host = host[i+1:] // past a user
+	}
 	if i := strings.LastIndex(host, ":"); i >= 0 && !strings.Contains(host[i:], "]") {
 		host = host[:i]
 	}
-	switch {
-	case host == "localhost", strings.HasSuffix(host, ".localhost"), strings.HasSuffix(host, ".local"),
-		host == "0.0.0.0", host == "[::1]", strings.HasPrefix(host, "127."),
-		strings.HasPrefix(host, "10."), strings.HasPrefix(host, "192.168."):
+	// Names in any case, and fully qualified, with their dot.
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
 		return true
 	}
-	return false
+	// An address, not a name as 10.com: loopback, the private ranges and
+	// link-local, which a dev server listens on.
+	host = strings.Trim(host, "[]")
+	if i := strings.Index(host, "%"); i >= 0 {
+		host = host[:i] // an IPv6 address's zone, as fe80::1%25eth0
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified())
 }
 
 // previewWidth is the preview's width: as the unified diff's, a little
