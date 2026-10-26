@@ -515,8 +515,8 @@ func (a *app) about(c *ui.Context) {
 				s.checking, a.checkUntil = true, c.Now().Add(1500*time.Millisecond)
 			}
 		})
-		settingRow(c, "Source", "github.com/pingdotgg/t3code", func() {
-			ui.Link(c, "Open on GitHub", "https://github.com/pingdotgg/t3code")
+		settingRow(c, "Source", "github.com/bigx333/glitched", func() {
+			ui.Link(c, "Open on GitHub", "https://github.com/bigx333/glitched")
 		})
 	})
 }
