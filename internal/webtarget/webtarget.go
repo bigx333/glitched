@@ -135,8 +135,12 @@ func ParseRef(ref string) (epoch uint64, n int, err error) {
 	if m == nil {
 		return 0, 0, fmt.Errorf("webtarget: %q is not a ref: refs look like s12e3", ref)
 	}
-	epoch, _ = strconv.ParseUint(m[1], 10, 64)
-	n, _ = strconv.Atoi(m[2])
+	if epoch, err = strconv.ParseUint(m[1], 10, 64); err != nil {
+		return 0, 0, fmt.Errorf("webtarget: %q is not a ref: its snapshot's number is too large", ref)
+	}
+	if n, err = strconv.Atoi(m[2]); err != nil {
+		return 0, 0, fmt.Errorf("webtarget: %q is not a ref: its element's number is too large", ref)
+	}
 	return epoch, n, nil
 }
 

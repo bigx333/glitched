@@ -6,11 +6,13 @@
 // ref}, prepended by Go.
 //
 // Its state is private to the functions installed under args.key, a name
-// random to each run of the app, frozen. That keeps a page from planting a
-// fake before the first snapshot or replacing it after, but it runs in the
-// page's own world: a page that changed the built-ins it uses, or calls it
-// itself, can still mislead it. Isolated worlds will close that before
-// agents act on pages (docs/browser.md).
+// random to each run of the app, frozen, and the built-ins resolving and
+// describing a ref go through are the ones it found as it was installed.
+// That keeps a page from planting a fake before the first snapshot,
+// replacing it after, or patching a built-in after it to redirect a ref.
+// It still runs in the page's own world, which a page could have changed
+// before the first snapshot, and where it can call it itself; isolated
+// worlds will close that before agents act (docs/browser.md).
 const api = window[args.key] || install(args.key);
 if (args.op === "snapshot") return api.snapshot(args);
 if (args.op === "describe") return api.describe(args.ref);
@@ -19,6 +21,28 @@ throw new Error(`webtarget: unknown op ${args.op}`);
 function install(key) {
   let epoch = 0;
   let refs = [];
+
+  // The built-ins as they are now, which the page patching later can't
+  // change for the script.
+  const apply = Reflect.apply;
+  const WR = WeakRef;
+  const proto = (o, k) => o.prototype[k];
+  const B = {
+    deref: proto(WeakRef, "deref"),
+    attr: proto(Element, "getAttribute"),
+    hasAttr: proto(Element, "hasAttribute"),
+    matches: proto(Element, "matches"),
+    rect: proto(Element, "getBoundingClientRect"),
+    connected: Object.getOwnPropertyDescriptor(Node.prototype, "isConnected").get,
+    style: window.getComputedStyle,
+  };
+  const deref = (w) => apply(B.deref, w, []);
+  const attr = (el, n) => apply(B.attr, el, [n]);
+  const hasAttr = (el, n) => apply(B.hasAttr, el, [n]);
+  const matches = (el, q) => apply(B.matches, el, [q]);
+  const rect = (el) => apply(B.rect, el, []);
+  const connected = (el) => apply(B.connected, el, []);
+  const styleOf = (el) => apply(B.style, window, [el]);
 
   const INTERACTIVE = new Set([
     "button", "link", "textbox", "searchbox", "checkbox", "radio", "switch",
@@ -34,7 +58,7 @@ function install(key) {
   const LANDMARK = { NAV: "navigation", MAIN: "main", ASIDE: "complementary", FORM: "form", DIALOG: "dialog", TABLE: "table", UL: "list", OL: "list", LI: "listitem" };
 
   function role(el) {
-    const explicit = el.getAttribute("role");
+    const explicit = attr(el, "role");
     if (explicit) {
       const r = explicit.trim().split(/\s+/)[0];
       return r === "presentation" || r === "none" ? null : r;
@@ -42,12 +66,12 @@ function install(key) {
     // SVG's tag names are lower case.
     const tag = el.tagName.toUpperCase();
     switch (tag) {
-      case "A": return el.hasAttribute("href") || el.hasAttribute("xlink:href") ? "link" : null;
+      case "A": return hasAttr(el, "href") || hasAttr(el, "xlink:href") ? "link" : null;
       case "BUTTON": case "SUMMARY": return "button";
       case "TEXTAREA": return "textbox";
       case "SELECT": return el.multiple || el.size > 1 ? "listbox" : "combobox";
       case "OPTION": return "option";
-      case "IMG": return el.getAttribute("alt") ? "img" : null;
+      case "IMG": return attr(el, "alt") ? "img" : null;
       case "H1": case "H2": case "H3": case "H4": case "H5": case "H6": return "heading";
       case "INPUT":
         switch ((el.type || "text").toLowerCase()) {
@@ -71,7 +95,7 @@ function install(key) {
   }
 
   function name(el, r) {
-    const by = el.getAttribute("aria-labelledby");
+    const by = attr(el, "aria-labelledby");
     if (by) {
       // Ids are scoped to the shadow root the element is in.
       const root = el.getRootNode();
@@ -79,11 +103,11 @@ function install(key) {
       const s = by.split(/\s+/).map((id) => find(id)?.textContent || "").join(" ");
       if (clean(s)) return clean(s);
     }
-    const label = el.getAttribute("aria-label");
+    const label = attr(el, "aria-label");
     if (clean(label)) return clean(label);
     if (el.labels && el.labels.length) return clean([...el.labels].map((l) => l.textContent).join(" "));
     const tag = el.tagName.toUpperCase();
-    if (tag === "IMG" || (tag === "INPUT" && el.type === "image")) return clean(el.getAttribute("alt"));
+    if (tag === "IMG" || (tag === "INPUT" && el.type === "image")) return clean(attr(el, "alt"));
     if (tag === "INPUT" && /^(button|submit|reset)$/i.test(el.type)) return clean(el.value || el.type);
     if (FROM_CONTENT.has(r)) {
       const nests = r === "treeitem" || r === "listitem" || r.startsWith("menuitem");
@@ -91,10 +115,10 @@ function install(key) {
       if (s) return s;
       // An icon's: an image's alt text, or a label inside.
       const inner = el.querySelector("img[alt], [aria-label], svg title");
-      const t = inner && clean(inner.getAttribute("alt") || inner.getAttribute("aria-label") || inner.textContent);
+      const t = inner && clean(attr(inner, "alt") || attr(inner, "aria-label") || inner.textContent);
       if (t) return t;
     }
-    return clean(el.getAttribute("title") || el.getAttribute("placeholder"));
+    return clean(attr(el, "title") || attr(el, "placeholder"));
   }
 
   // shown says how an element shows: GONE, with nothing in it; THROUGH,
@@ -103,7 +127,7 @@ function install(key) {
   // content, light DOM no slot takes, content-visibility: hidden.
   const GONE = 0, THROUGH = 1, SHOWN = 2;
   function shown(el, style, inSelect) {
-    if (el.hidden || el.getAttribute("aria-hidden") === "true") return GONE;
+    if (el.hidden || attr(el, "aria-hidden") === "true") return GONE;
     // A dropdown's options have no box until it opens.
     if (inSelect) return SHOWN;
     if (style.display === "contents") return THROUGH;
@@ -127,16 +151,16 @@ function install(key) {
   }
   function level(el) {
     const m = /^H([1-6])$/.exec(el.tagName.toUpperCase());
-    return el.getAttribute("aria-level") || (m ? m[1] : "2");
+    return attr(el, "aria-level") || (m ? m[1] : "2");
   }
 
   function attrs(el, r) {
     const out = [];
-    if (r === "heading") out.push(`level=${level(el)}`);
-    if (el.getAttribute("aria-disabled") === "true" || el.matches(":disabled")) out.push("disabled");
-    if (el.checked || el.getAttribute("aria-checked") === "true") out.push("checked");
-    if (el.getAttribute("aria-expanded") === "true") out.push("expanded");
-    if (el.getAttribute("aria-selected") === "true" || (el.tagName.toUpperCase() === "OPTION" && el.selected)) out.push("selected");
+    if (r === "heading") out[out.length] = `level=${level(el)}`;
+    if (attr(el, "aria-disabled") === "true" || matches(el, ":disabled")) out[out.length] = "disabled";
+    if (el.checked || attr(el, "aria-checked") === "true") out[out.length] = "checked";
+    if (attr(el, "aria-expanded") === "true") out[out.length] = "expanded";
+    if (attr(el, "aria-selected") === "true" || (el.tagName.toUpperCase() === "OPTION" && el.selected)) out[out.length] = "selected";
     return out.map((a) => ` [${a}]`).join("");
   }
 
@@ -150,7 +174,7 @@ function install(key) {
       truncated = `- … truncated at ${args.maxChars} characters; snapshot a smaller part of the page`;
     };
     const emit = (depth, line) => {
-      lines.push("  ".repeat(depth) + line);
+      lines[lines.length] = "  ".repeat(depth) + line;
       chars += 2 * depth + line.length + 1;
     };
     // inSelect is set inside a dropdown, whose options show without refs:
@@ -159,7 +183,7 @@ function install(key) {
     const walk = (node, depth, inSelect) => {
       for (let el = node.firstElementChild; el && !truncated; el = el.nextElementSibling) {
         if (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|HEAD)$/i.test(el.tagName)) continue;
-        const style = getComputedStyle(el);
+        const style = styleOf(el);
         const how = shown(el, style, inSelect);
         if (how === GONE) continue;
         // Hidden by visibility, an element may show what's in it.
@@ -171,7 +195,7 @@ function install(key) {
           const n = name(el, r);
           if (n) line += ` ${JSON.stringify(n)}`;
           // A link with no name says where it goes.
-          else if (r === "link") line += ` [url=${clean(el.getAttribute("href") || el.getAttribute("xlink:href"), 120)}]`;
+          else if (r === "link") line += ` [url=${JSON.stringify(clean(attr(el, "href") || attr(el, "xlink:href"), 120))}]`;
           line += attrs(el, r);
           if (acts) {
             if (refs.length >= args.maxRefs) {
@@ -182,16 +206,24 @@ function install(key) {
           }
           if (!fits(depth, line)) return cut();
           if (acts) {
-            refs.push(new WeakRef(el));
-            elements.push({ ref: `s${epoch}e${refs.length}`, role: r, name: n });
+            refs[refs.length] = new WR(el);
+            elements[elements.length] = { ref: `s${epoch}e${refs.length}`, role: r, name: n };
           }
           emit(depth, line);
           if (!args.interactive || inSelect) d = depth + 1;
         }
         if (el.tagName.toUpperCase() === "IFRAME") {
+          // A frame shows its page once it is there: not while hidden by
+          // visibility, nor while its first page loads, at about:blank.
+          if (style.visibility !== "visible") continue;
           let doc = null, reached = true;
           try { doc = el.contentDocument; } catch { reached = false; }
-          if (doc?.body) walk(doc.body, d, false);
+          // Still at about:blank, a frame with an address of its own is on its
+          // way; one with none is a page a script fills, as an editor's.
+          const src = attr(el, "src");
+          const coming = doc?.URL === "about:blank" && src && src !== "about:blank";
+          const loaded = doc?.body && doc.readyState !== "loading" && !coming;
+          if (loaded) walk(doc.body, d, false);
           else {
             const line = reached && doc ? "- iframe [loading]" : "- iframe [cross-origin, not reached]";
             if (!fits(d, line)) return cut();
@@ -206,7 +238,7 @@ function install(key) {
       }
     };
     walk(document.body || document.documentElement, 0, false);
-    if (truncated) lines.push(truncated);
+    if (truncated) lines[lines.length] = truncated;
     return { epoch, url: location.href, title: document.title, refs: refs.length, truncated: !!truncated, text: lines.join("\n"), elements };
   }
 
@@ -216,8 +248,9 @@ function install(key) {
     if (!m) throw new Error(`${ref} is not a ref: refs look like s12e3`);
     if (!epoch) throw new Error(`${ref} is from before the page navigated or reloaded; take a new snapshot`);
     if (+m[1] !== epoch) throw new Error(`${ref} is from snapshot s${m[1]}, not the latest, s${epoch}; take a new snapshot`);
-    const el = refs[+m[2] - 1]?.deref();
-    if (!el || !el.isConnected) throw new Error(`${ref} is gone: the page re-rendered it; take a new snapshot`);
+    const w = refs[+m[2] - 1];
+    const el = w && deref(w);
+    if (!el || !connected(el)) throw new Error(`${ref} is gone: the page re-rendered it; take a new snapshot`);
     return el;
   }
 
@@ -226,10 +259,10 @@ function install(key) {
   function describe(ref) {
     const el = resolve(ref);
     const r = role(el);
-    const b = el.getBoundingClientRect();
+    const b = rect(el);
     let x = b.x, y = b.y;
     for (let w = el.ownerDocument.defaultView; w && w !== window && w.frameElement; w = w.frameElement.ownerDocument.defaultView) {
-      const f = w.frameElement, fb = f.getBoundingClientRect(), s = getComputedStyle(f);
+      const f = w.frameElement, fb = rect(f), s = styleOf(f);
       x += fb.x + f.clientLeft + parseFloat(s.paddingLeft);
       y += fb.y + f.clientTop + parseFloat(s.paddingTop);
     }

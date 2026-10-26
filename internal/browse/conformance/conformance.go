@@ -96,7 +96,7 @@ func (s *suite) until(what string, cond func() bool) {
 func (s *suite) framed(p browse.Page) {
 	s.t.Helper()
 	s.until("the frame", func() bool {
-		v, err := p.EvalContext(context.Background(), `return !!document.querySelector("iframe").contentDocument?.querySelector("button")`)
+		v, err := p.EvalContext(context.Background(), `return ["framed", "hidden-frame"].every((id) => !!document.getElementById(id).contentDocument?.querySelector("button"))`)
 		return err == nil && v == true
 	})
 }
@@ -149,6 +149,7 @@ func (s *suite) eval(p browse.Page, js string) any {
 func Run(t *testing.T, h Harness) {
 	s := &suite{t: t, h: h, srv: httptest.NewServer(fixtures())}
 	defer s.srv.Close()
+	defer s.srv.CloseClientConnections() // the slow page's
 	for _, c := range []struct {
 		name string
 		test func(*testing.T)
@@ -321,6 +322,8 @@ func (s *suite) evaluation(t *testing.T) {
 func (s *suite) snapshot(t *testing.T) {
 	s.t = t
 	p, _ := s.open("/snap")
+	// A frame still loading: its page never comes.
+	s.eval(p, `const slow = document.createElement("iframe"); slow.src = "/slow"; document.body.append(slow); return 1`)
 	snap, err := webtarget.Take(context.Background(), p, webtarget.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -341,7 +344,9 @@ func (s *suite) snapshot(t *testing.T) {
 		`- link "svg link"` + ref,
 		`- textbox "Shadow label"` + ref,
 		`- button "In frame"` + ref,
-		`- link [url=/b]` + ref,
+		`- link [url="/b"]` + ref,
+		"- iframe [loading]",
+		`- button "Scripted frame"` + ref,
 	} {
 		if !strings.Contains(snap.Text, want) {
 			t.Errorf("no %q", want)
@@ -351,7 +356,7 @@ func (s *suite) snapshot(t *testing.T) {
 	if strings.Contains(snap.Text, `- option "One" [ref`) {
 		t.Error("a closed dropdown's option has a ref")
 	}
-	for _, hidden := range []string{"Invisible", "Hidden attr", "ARIA hidden", "Not displayed", "In details"} {
+	for _, hidden := range []string{"Invisible", "Hidden attr", "ARIA hidden", "Not displayed", "In details", "Hidden frame"} {
 		if strings.Contains(snap.Text, hidden) {
 			t.Errorf("%q, hidden, is in the snapshot", hidden)
 		}
@@ -446,9 +451,11 @@ func (s *suite) refs(t *testing.T) {
 	}
 }
 
-// A page can't plant or replace the script's state, which is all this
-// guards; a page that changed the built-ins the script uses still can
-// mislead it, until it runs in an isolated world (docs/browser.md).
+// A page can't plant or replace the script's state, nor redirect a ref
+// by patching the built-ins resolving it goes through after the script
+// is installed. That is all this guards; a page that changed them before
+// the first snapshot, or that calls the script itself, still can mislead
+// it, until it runs in an isolated world (docs/browser.md).
 func (s *suite) tampering(t *testing.T) {
 	s.t = t
 	p, _ := s.open("/snap")
@@ -464,13 +471,43 @@ func (s *suite) tampering(t *testing.T) {
 		try { delete window[k]; } catch {}
 		try { window[k].describe = () => ({ role: "button", name: "Fake" }); } catch {}
 	}
+	// Without the key: every ref finds the page's own element, named Fake.
+	const fake = document.createElement("button");
+	fake.textContent = "Fake";
+	document.body.append(fake);
+	WeakRef.prototype.deref = () => fake;
+	const attr = Element.prototype.getAttribute;
+	Element.prototype.getAttribute = function (n) { return n === "aria-label" ? "Fake" : attr.call(this, n); };
+	Element.prototype.getBoundingClientRect = () => new DOMRect(1, 2, 3, 4);
 	return 1`)
 	e, err := webtarget.Describe(ctx, p, ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := snap.Verify(ref, e); err != nil || e.Name == "Fake" {
+	if err := snap.Verify(ref, e); err != nil || e.Name == "Fake" || e.Box.X == 1 {
 		t.Errorf("after the page tampered: %+v, %v", e, err)
+	}
+	// Patched between snapshots, WeakRef and the arrays the next one fills
+	// change nothing either.
+	s.eval(p, `const fake = document.querySelector("button:last-of-type");
+	window.WeakRef = class { constructor() {} deref() { return fake; } };
+	Array.prototype.push = function () { return 0; };
+	return 1`)
+	next, err := webtarget.Take(ctx, p, webtarget.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contents string
+	for _, n := range next.Elements {
+		if n.Name == "Inside contents" {
+			contents = n.Ref
+		}
+	}
+	if contents == "" {
+		t.Fatalf("the next snapshot lost its refs:\n%s", next.Text)
+	}
+	if e, err := webtarget.Describe(ctx, p, contents); err != nil || e.Name != "Inside contents" {
+		t.Errorf("after the page patched WeakRef: %+v, %v", e, err)
 	}
 }
 
@@ -487,6 +524,13 @@ func fixtures() http.Handler {
 	mux.Handle("/b", page(`<!doctype html><title>Page B</title><a href="/a">to a</a>`))
 	mux.Handle("/c", page(`<!doctype html><title>Page C</title>`))
 	mux.Handle("/snap", page(snapFixture))
+	// A page that doesn't come, as a frame still loading shows.
+	mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(30 * time.Second):
+		}
+	})
 	return mux
 }
 
@@ -513,9 +557,13 @@ const snapFixture = `<!doctype html><meta charset="utf-8"><title>Snap</title>
 <svg width="80" height="20"><a href="/b"><text x="0" y="15">svg link</text></a></svg>
 <a href="/b"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt=""></a>
 <div id="host"></div>
-<iframe style="position:absolute;left:300px;top:200px;width:300px;height:120px;border:7px solid #888;padding:5px"
+<iframe id="framed" style="position:absolute;left:300px;top:200px;width:300px;height:120px;border:7px solid #888;padding:5px"
   srcdoc="<button style='margin:10px'>In frame</button>"></iframe>
+<iframe id="hidden-frame" style="visibility:hidden" srcdoc="<button>Hidden frame</button>"></iframe>
+<iframe id="scripted"></iframe>
 <script>
 const root = document.getElementById("host").attachShadow({ mode: "open" });
 root.innerHTML = '<span id="lbl">Shadow label</span><input aria-labelledby="lbl">';
+// A frame with no address that a script fills, as an editor's.
+document.getElementById("scripted").contentDocument.body.innerHTML = "<button>Scripted frame</button>";
 </script>`
