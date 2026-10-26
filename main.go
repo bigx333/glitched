@@ -755,6 +755,7 @@ func main() {
 		// hides (macOS).
 		a.win.OnClosed(a.closeShells)
 		a.setUpWindowClose()
+		a.setUpCaption()
 		// Coming back to the window reads the thread the chat shows.
 		a.win.OnFocus(a.win.Invalidate)
 		if err := a.backend.Start(); err != nil {
