@@ -119,11 +119,18 @@ It passes on WebView2 (Windows 11); the log is in
 `U:\glitched-proof\browser\conformance-windows.log`. On macOS the same
 command runs it on WKWebView.
 
-sysweb's one known failure is on Windows: MyGo v0.5.5 takes WebView2's
-`HOST_NAME_NOT_RESOLVED` (13) for `OPERATION_CANCELED` (14) and drops it,
-so a mistyped host fails with no event there (the tab keeps its old page). sysweb itself takes 14 as cancelled, so a load given up for
-another doesn't show as failed. The fix is upstream, in MyGo's
-`internal/windows/webview.go`.
+MyGo v0.5.5 has two WebView2 bugs sysweb works around where it can; both
+are for upstream, in MyGo's `internal/windows/webview.go` (not filed):
+
+- It takes `HOST_NAME_NOT_RESOLVED` (13) for `OPERATION_CANCELED` (14) and
+  drops it, so a mistyped host fails with no event on Windows (the tab
+  keeps its old page): sysweb's one known failure of the suite. sysweb
+  takes 14 as cancelled itself, so a load given up for another doesn't
+  show as failed.
+- It reports a frame's process failing (`ProcessFailed` kind 3) as the
+  page's crash, so sysweb reloads the page for it, as for a real crash.
+  sysweb doesn't reload a page that is only unresponsive (kind 2), which
+  may come back with its state.
 
 ### Adding an engine (CEF)
 
@@ -156,7 +163,7 @@ that picks it. Nothing above the seam changes.
   - heading "Go (programming language)" [level=1]
   - button "64 languages" [ref=s67075e8]
   - link "Talk" [ref=s67075e10]
-  - link [url=/wiki/Main_Page] [ref=s67075e3]
+  - link [url="/wiki/Main_Page"] [ref=s67075e3]
   ```
 
   By default it lists the elements to act on (buttons, links, text boxes,
@@ -170,9 +177,13 @@ that picks it. Nothing above the seam changes.
   DOM no slot takes, `content-visibility: hidden`), `hidden` and
   `aria-hidden`, and `visibility: hidden` but for what shows inside;
   `display: contents` shows what is in it. It goes into open shadow roots
-  and same-origin frames, marks cross-origin frames as not reached and
+  and same-origin frames once they show (not hidden by `visibility`) and
+  their page is there (past `loading`; a frame still at `about:blank` with
+  an address of its own is on its way, one with none is a page a script
+  fills, as an editor's), marks cross-origin frames as not reached and
   frames still loading as such, and stops at 2000 refs or 50 000
-  characters, saying so.
+  characters, saying so. A link with no name says where it goes, quoted:
+  `[url="/wiki/Main_Page"]`.
 - **Refs** are `s<epoch>e<n>`: the snapshot's epoch, then the element's
   number in it. Epochs count up from a random start in each run of the
   app. Only the page's latest snapshot resolves: a ref from an earlier one,
@@ -184,15 +195,32 @@ that picks it. Nothing above the seam changes.
   named, as an action will before it acts.
 - **What a page can do to refs:** the script keeps its state private to
   functions it installs, frozen, under a property named at random in each
-  run of the app (`__glitched_<random>`), so a page can neither plant a
-  fake before the first snapshot nor replace it after. That is all it
-  guards. It runs in the page's own world, so a page that changed the
-  built-ins it uses (`Object.defineProperty`, `WeakRef`) before the first
-  snapshot, or that finds the property and calls it itself, can still send
-  a ref to an element of its choosing, and `Verify` can't tell, as the page
-  answers both. Before agents act on pages, the script must run in an
-  isolated world: WKWebView's content worlds, and DevTools'
-  `Page.createIsolatedWorld` on WebView2 and CEF.
+  run of the app (`__glitched_<random>`). Resolving and describing a ref
+  go through the built-ins as the script found them when it was installed
+  (`WeakRef` and its `deref`, `getAttribute`, `hasAttribute`, `matches`,
+  `getBoundingClientRect`, `isConnected`, `getComputedStyle`, through a
+  captured `Reflect.apply`). So a page can't plant a fake before the first
+  snapshot, replace it after, or patch those built-ins after it, nor the
+  arrays a later snapshot fills (it writes them by index), to send a ref
+  elsewhere. That is all it guards. It still runs in the page's own
+  world, so a page can still:
+  - change any built-in before the first snapshot in it (the script
+    captures what it finds), `Reflect.apply` included;
+  - change what the script reads without capturing: `textContent`,
+    `innerText`, `labels`, `getRootNode`, `getElementById`, `querySelector`
+    and the like, which names come from, and `JSON.stringify`, which MyGo's
+    eval wrapper (`internal/bridge`) returns results through;
+  - find the property and call the script itself, as a snapshot of its
+    own that moves the refs.
+  Each can make a ref find an element of the page's choosing and `Verify`
+  pass, as the page answers both. Before agents act on pages, the script,
+  and the wrapper `EvalContext` runs it in, must run in an isolated world:
+  WKWebView's content worlds, and DevTools' `Page.createIsolatedWorld` on
+  WebView2 and CEF (Next, 3).
+- **Single-page routes:** a ref survives `history.pushState`,
+  `replaceState` and fragment changes, which aren't navigations: a node a
+  framework reuses on the new route, with the same role and name, still
+  passes `Verify` (Next, 4).
 
 ### What came from the automation engine
 
@@ -230,10 +258,13 @@ bridge and its process model. Its CEF host is the model for a CEF adapter.
    `wait_for` text or a ref by polling in the page. An adapter with trusted
    input (WebView2 and CEF through DevTools) may click and type that way
    instead; the conformance suite gains action tests both paths pass.
-3. **Isolation** of the script in its own world, as above: required before
-   agents act.
-4. **Single-page apps:** MyGo reports no `history.pushState` or fragment
-   navigation, so the address goes stale in a Vite app moving between
-   routes; a script reporting them, or MyGo events, would fix it.
+3. **Isolation** of the script and of the wrapper `EvalContext` runs it in,
+   in a world of their own, as above: required before agents act. MyGo
+   needs a hook for it (WKWebView's content worlds, WebView2's DevTools).
+4. **Single-page apps:** MyGo reports no `history.pushState`,
+   `replaceState` or fragment navigation, so the address goes stale in a
+   Vite app moving between routes, and refs survive them (above). A
+   document-start script reporting them, or MyGo events, fixes both: the
+   tab hears of the route, and the page script drops its refs.
 5. **Cross-origin frames**, through the engine's frame tree where it has
    one.
