@@ -345,23 +345,20 @@ func TestRename(t *testing.T) {
 	}
 }
 
-// Archived is an inbox state of its own, which Open brings back; like
-// Settled, it has no until.
-func TestArchive(t *testing.T) {
+// Open, Snoozed and Settled are the only inbox states. The archived state
+// protocol 2 had is refused, and Open brings a settled thread back.
+func TestInboxStates(t *testing.T) {
 	f := newThread(t)
-	f.must(api.InboxSet{Disposition: api.Disposition{State: api.Archived}})
-	if d := engine.View(f.th).Disposition; d.State != api.Archived {
-		t.Fatalf("disposition %v, want archived", d.State)
+	f.must(api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+	if _, _, err := f.submit(api.InboxSet{Disposition: api.Disposition{State: api.Settled, Until: now.Add(time.Hour)}}); !errors.As(err, new(*api.RejectedError)) {
+		t.Fatalf("settled with an until: %v, want a rejection", err)
 	}
-	if _, _, err := f.submit(api.InboxSet{Disposition: api.Disposition{State: api.Archived, Until: now.Add(time.Hour)}}); !errors.As(err, new(*api.RejectedError)) {
-		t.Fatalf("archived with an until: %v, want a rejection", err)
+	if _, _, err := f.submit(api.InboxSet{Disposition: api.Disposition{State: api.Settled + 1}}); !errors.As(err, new(*api.RejectedError)) {
+		t.Fatalf("the archived state: %v, want a rejection", err)
 	}
 	f.must(api.InboxSet{Disposition: api.Disposition{}})
 	if d := engine.View(f.th).Disposition; d.State != api.Open {
-		t.Fatalf("disposition %v after restoring, want open", d.State)
-	}
-	if _, _, err := f.submit(api.InboxSet{Disposition: api.Disposition{State: api.Archived + 1}}); !errors.As(err, new(*api.RejectedError)) {
-		t.Fatalf("an unknown state: %v, want a rejection", err)
+		t.Fatalf("disposition %v after reopening, want open", d.State)
 	}
 }
 

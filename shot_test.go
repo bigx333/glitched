@@ -25,9 +25,8 @@ import (
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
 // SCENE=empty|running|approval|servers|engine|machines|inbox|checks|refused|plain|stuck
-// for the engines' threads (none started without one; ARCHIVE=<title>
-// archives one of inbox's first; refused is an archived thread whose
-// delete the engine refused; plain is an edit in a workspace with no
+// for the engines' threads (none started without one; refused is a
+// thread whose delete the engine refused; plain is an edit in a workspace with no
 // git; stuck is a run left uncertain, with STEER for a
 // steer it refused over a draft and DRAFT=<text> for the composer's), PAGE
 // for a path, and for what to show: DIFF,
@@ -289,17 +288,10 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 	case "inbox":
 		h = start(t, inboxDir(t))
 		h.thread("SIP re-INVITE handling")
-		if title := os.Getenv("ARCHIVE"); title != "" {
-			th := h.thread(title)
-			h.a.backend.SetDisposition(th.env, th.id(), api.Disposition{State: api.Archived})
-			h.until("the archive", func() bool { return th.View.Disposition.State == api.Archived })
-		}
 		h.tt.Advance(time.Second)
 	case "refused":
 		var th thread
 		h, th = asking(t, runTests)
-		h.a.backend.SetDisposition(th.env, th.id(), api.Disposition{State: api.Archived})
-		h.until("the archive", func() bool { return th.View.Disposition.State == api.Archived && len(th.Pending) == 0 })
 		h.a.delete(th)
 		h.until("the refusal", func() bool { return len(th.Pending) == 1 && th.Pending[0].Err != nil })
 	case "checks":

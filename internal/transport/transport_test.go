@@ -148,7 +148,7 @@ func TestEndpointRoundTrip(t *testing.T) {
 	sentinels := []error{api.ErrConflict, api.ErrRevision, api.ErrExpired, api.ErrNotFound, api.ErrStaleEpoch, api.ErrAlreadyAnswered, api.ErrOverflow}
 	errs := map[api.ID]error{
 		moved:    &api.MovedError{To: movedTo, Epoch: 4},
-		rejected: &api.RejectedError{Reason: "thread is archived"},
+		rejected: &api.RejectedError{Reason: "thread is deleted"},
 		wrapped:  fmt.Errorf("engine: %w", api.ErrRevision),
 		opaque:   errors.New("disk on fire"),
 	}
@@ -200,7 +200,7 @@ func TestEndpointRoundTrip(t *testing.T) {
 				t.Errorf("sent MovedError, got %v", err)
 			}
 			var re *api.RejectedError
-			if err := submit(rejected); !errors.As(err, &re) || re.Reason != "thread is archived" {
+			if err := submit(rejected); !errors.As(err, &re) || re.Reason != "thread is deleted" {
 				t.Errorf("sent RejectedError, got %v", err)
 			}
 			if err := submit(opaque); err == nil || errors.As(err, &me) || errors.As(err, &re) || errors.Is(err, api.ErrNotFound) {

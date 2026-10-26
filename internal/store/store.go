@@ -157,7 +157,7 @@ CREATE TABLE threads (
 	revision    INTEGER NOT NULL,
 	owner_epoch INTEGER NOT NULL CHECK (owner_epoch > 0),
 	generation  INTEGER NOT NULL,
-	disposition INTEGER NOT NULL CHECK (disposition BETWEEN 0 AND 3),
+	disposition INTEGER NOT NULL CHECK (disposition BETWEEN 0 AND 2),
 	until       INTEGER,
 	updated_at  INTEGER NOT NULL,
 	deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
@@ -221,11 +221,11 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 3
+const schemaVersion = 4
 
 var upgrades = map[int]string{
-	// Archived threads: disposition 3. SQLite changes a CHECK only by
-	// rebuilding the table.
+	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
+	// changes a CHECK only by rebuilding the table.
 	1: `
 CREATE TABLE threads_v2 (
 	id          BLOB PRIMARY KEY,
@@ -247,6 +247,28 @@ ALTER TABLE threads_v2 RENAME TO threads;
 `,
 	// Deleted threads: the tombstone.
 	2: `ALTER TABLE threads ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1));`,
+	// No more archived threads: those there were are settled.
+	3: `
+CREATE TABLE threads_v4 (
+	id          BLOB PRIMARY KEY,
+	workspace   TEXT NOT NULL,
+	title       TEXT NOT NULL,
+	model       TEXT NOT NULL,
+	access      INTEGER NOT NULL CHECK (access BETWEEN 0 AND 2),
+	revision    INTEGER NOT NULL,
+	owner_epoch INTEGER NOT NULL CHECK (owner_epoch > 0),
+	generation  INTEGER NOT NULL,
+	disposition INTEGER NOT NULL CHECK (disposition BETWEEN 0 AND 2),
+	until       INTEGER,
+	updated_at  INTEGER NOT NULL,
+	deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+	CHECK ((disposition = 1) = (until IS NOT NULL))
+) STRICT;
+INSERT INTO threads_v4 SELECT id, workspace, title, model, access, revision, owner_epoch, generation,
+	CASE disposition WHEN 3 THEN 2 ELSE disposition END, until, updated_at, deleted FROM threads;
+DROP TABLE threads;
+ALTER TABLE threads_v4 RENAME TO threads;
+`,
 }
 
 func (s *Store) migrate() error {

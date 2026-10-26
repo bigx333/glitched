@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -20,7 +21,8 @@ import (
 // and a reason an older client shows, and no call is answered.
 func TestServerRefusesAClientOfAnotherProtocol(t *testing.T) {
 	lb := start(t, "unix", &Server{Endpoint: &fakeEndpoint{}, Hub: openReplica(t)})
-	for announce, theirs := range map[string]string{"": "1", "1": "1", "3": "3"} {
+	next := fmt.Sprint(api.Protocol + 1)
+	for announce, theirs := range map[string]string{"": "1", "1": "1", next: next} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		nc, err := lb.Dial(ctx, api.ID{})
@@ -38,7 +40,7 @@ func TestServerRefusesAClientOfAnotherProtocol(t *testing.T) {
 		}
 		ws.Write(ctx, websocket.MessageText, []byte(`{"id":1,"method":"info"}`))
 		_, b, err := ws.Read(ctx)
-		if websocket.CloseStatus(err) != statusProtocol || !strings.Contains(err.Error(), "this engine speaks protocol 2 and the client "+theirs) {
+		if websocket.CloseStatus(err) != statusProtocol || !strings.Contains(err.Error(), fmt.Sprintf("this engine speaks protocol %d and the client %s", api.Protocol, theirs)) {
 			t.Errorf("a client announcing %q: read %s, %v; want the socket closed as of protocol %s", announce, b, err, theirs)
 		}
 		ws.CloseNow()
@@ -91,7 +93,7 @@ func TestClientRefusesAServerOfAnotherProtocol(t *testing.T) {
 		announce string
 		tailnet  bool
 		theirs   int
-	}{{"", false, 1}, {"3", false, 3}, {"3", true, 3}} {
+	}{{"", false, 1}, {fmt.Sprint(api.Protocol + 1), false, api.Protocol + 1}, {fmt.Sprint(api.Protocol + 1), true, api.Protocol + 1}} {
 		announce, theirs := tc.announce, tc.theirs
 		lb, got := otherProtocol(t, announce, tc.tailnet)
 		var tr Transport = lb

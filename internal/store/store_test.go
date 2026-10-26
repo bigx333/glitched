@@ -297,10 +297,9 @@ func TestRenameIsKept(t *testing.T) {
 	}
 }
 
-// A database from before archiving, its threads table checking
-// disposition 0 to 2, upgrades on open: its threads, runs and messages
-// stay, and a thread can then be archived.
-func TestAnOlderDatabaseUpgradesToArchive(t *testing.T) {
+// A database from before the tombstone upgrades on open: its threads,
+// runs and messages stay.
+func TestAnOlderDatabaseUpgrades(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "host.db")
 	s := open(t, path)
@@ -331,16 +330,58 @@ func TestAnOlderDatabaseUpgradesToArchive(t *testing.T) {
 	db.Close()
 
 	s = open(t, path)
-	archive := api.Command{ID: api.NewID(), Target: thread, Body: api.InboxSet{Disposition: api.Disposition{State: api.Archived}}}
-	if _, err := s.Submit(ctx, archive, time.Now()); err != nil {
-		t.Fatalf("archive after the upgrade: %v", err)
+	settle := api.Command{ID: api.NewID(), Target: thread, Body: api.InboxSet{Disposition: api.Disposition{State: api.Settled}}}
+	if _, err := s.Submit(ctx, settle, time.Now()); err != nil {
+		t.Fatalf("settle after the upgrade: %v", err)
 	}
 	snap, err := s.Read(ctx, api.Query{Thread: thread})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := snap.Threads[0]; v.Disposition.State != api.Archived || v.Run != api.RunStarting {
-		t.Fatalf("after the upgrade: disposition %v, run %v; want archived, its run still starting", v.Disposition.State, v.Run)
+	if v := snap.Threads[0]; v.Disposition.State != api.Settled || v.Run != api.RunStarting {
+		t.Fatalf("after the upgrade: disposition %v, run %v; want settled, its run still starting", v.Disposition.State, v.Run)
+	}
+}
+
+// A database from when threads could be archived upgrades on open with
+// its archived threads settled.
+func TestAnArchivedThreadUpgradesSettled(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;
+		CREATE TABLE threads_v3 (
+			id BLOB PRIMARY KEY, workspace TEXT NOT NULL, title TEXT NOT NULL, model TEXT NOT NULL,
+			access INTEGER NOT NULL CHECK (access BETWEEN 0 AND 2), revision INTEGER NOT NULL,
+			owner_epoch INTEGER NOT NULL CHECK (owner_epoch > 0), generation INTEGER NOT NULL,
+			disposition INTEGER NOT NULL CHECK (disposition BETWEEN 0 AND 3), until INTEGER,
+			updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+			CHECK ((disposition = 1) = (until IS NOT NULL))) STRICT;
+		INSERT INTO threads_v3 SELECT * FROM threads;
+		DROP TABLE threads;
+		ALTER TABLE threads_v3 RENAME TO threads;
+		UPDATE threads SET disposition = 3;
+		PRAGMA user_version = 3;`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	s = open(t, path)
+	snap, err := s.Read(ctx, api.Query{Thread: thread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := snap.Threads[0]; v.Disposition.State != api.Settled {
+		t.Fatalf("an archived thread upgraded %v, want settled", v.Disposition.State)
 	}
 }
 
