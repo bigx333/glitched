@@ -56,9 +56,12 @@ type Manager struct {
 
 	machine    Machine
 	inspecting bool
-	// changes counts the changes made to engine.json here, so a read begun
-	// before one is dropped for a new one.
+	// changes counts the changes made here to engine.json and tokens.json,
+	// so a read begun before one is dropped for a new one.
 	changes int
+	// restarting: Restart stopped the embedded engine and no new one has
+	// reported in; again, whether Restart was called meanwhile.
+	restarting, again bool
 }
 
 func New(cfg Config) *Manager {

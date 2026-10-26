@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/netip"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -210,7 +211,8 @@ func (a *app) pairedRow(c *ui.Context, m client.Machine) {
 	p := a.paired
 	addr := ""
 	for _, l := range m.Listeners {
-		if l.Accepting {
+		// Another machine can't reach this one's loopback.
+		if ap, err := netip.ParseAddrPort(l.Addr); l.Accepting && err == nil && !ap.Addr().IsLoopback() {
 			addr = l.Addr
 			break
 		}

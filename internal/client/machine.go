@@ -75,6 +75,7 @@ func (m *Manager) SetListen(addrs []string) error {
 // Pair mints a token for a client labelled label, returned only this once.
 func (m *Manager) Pair(label string) (string, error) {
 	token, err := daemon.Pair(m.cfg.Dir, label)
+	m.changes++
 	m.Inspect()
 	return token, err
 }
@@ -83,20 +84,29 @@ func (m *Manager) Pair(label string) (string, error) {
 // within a second.
 func (m *Manager) Revoke(label string) error {
 	err := daemon.Revoke(m.cfg.Dir, label)
+	m.changes++
 	m.Inspect()
 	return err
 }
 
 // Restart stops the engine embedded here and starts it again from
 // engine.json. The local env keeps its threads, and reconnects once the
-// old engine has released the directory. It does nothing to an engine
-// another process runs.
+// old engine has released the directory. Called again before the new
+// engine starts, it restarts that one too, as it may have read
+// engine.json before a change. It does nothing to an engine another
+// process runs.
 func (m *Manager) Restart() {
-	if !m.machine.Embedded || m.closed {
+	switch {
+	case m.closed:
+		return
+	case m.restarting:
+		m.again = true
+		return
+	case !m.machine.Embedded:
 		return
 	}
 	e, old := m.envs[0], m.local
-	m.machine.Embedded = false
+	m.machine.Embedded, m.restarting = false, true
 	e.unlink()
 	m.down(e, Connecting{})
 	m.local = m.newLocal()
@@ -113,8 +123,14 @@ func (m *Manager) newLocal() *local {
 	l := &local{dir: m.cfg.Dir, done: make(chan struct{})}
 	l.hosted = func(embedded bool) {
 		m.post(m.ctx, func() {
-			if m.local == l {
-				m.machine.Embedded = embedded
+			if m.local != l {
+				return
+			}
+			m.machine.Embedded = embedded
+			again := m.restarting && m.again && embedded
+			m.restarting, m.again = false, false
+			if again {
+				m.Restart()
 			}
 		})
 	}

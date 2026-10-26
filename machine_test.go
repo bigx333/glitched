@@ -53,7 +53,28 @@ func TestThisMachineServesAndPairs(t *testing.T) {
 		t.Errorf("the page shows %q, want no tokens", h.tt.Texts())
 	}
 
-	addr := freeAddr(t)
+	// The second change comes once the engine restarted for the first has
+	// read engine.json, before it reports in, and must still be the one it
+	// serves. The posts wait for the test to run them, so the engine
+	// reporting in waits too.
+	first, addr := freeAddr(t), freeAddr(t)
+	if err := h.a.backend.SetListen([]string{first}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		if c, err := net.Dial("tcp", first); err == nil {
+			c.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the engine never served %s", first)
+		}
+		h.p.run()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if h.a.backend.Machine().Embedded {
+		t.Log("the restarted engine reported in before the second change; this run doesn't cover a change mid-restart")
+	}
 	if err := h.a.backend.SetListen([]string{addr}); err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +90,10 @@ func TestThisMachineServesAndPairs(t *testing.T) {
 	if !h.tt.HasText("Accepting connections") || !h.tt.HasText(addr) {
 		t.Errorf("the page shows %q, want %s accepting", h.tt.Texts(), addr)
 	}
+	if c, err := net.Dial("tcp", first); err == nil {
+		c.Close()
+		t.Errorf("the engine still serves %s, which the second change replaced", first)
+	}
 
 	h.a.pairLabel = "laptop"
 	h.tt.Frame()
@@ -79,10 +104,13 @@ func TestThisMachineServesAndPairs(t *testing.T) {
 	if !h.tt.HasText(token) {
 		t.Fatalf("the page shows %q, want the token", h.tt.Texts())
 	}
-	h.click("Copy CLI command")
+	if h.tt.HasText("Copy CLI command") {
+		t.Errorf("the page offers a command for %s, which another machine can't reach", addr)
+	}
+	h.click("Copy token")
 	h.tt.Frame()
-	if want := "glitched run -server " + addr + " -token " + token + " hello"; h.tt.Clipboard() != want {
-		t.Errorf("copied %q, want %q", h.tt.Clipboard(), want)
+	if h.tt.Clipboard() != token {
+		t.Errorf("copied %q, want the token", h.tt.Clipboard())
 	}
 	h.click("Done")
 	h.tt.Frame()
