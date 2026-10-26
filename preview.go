@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"html"
 	"strings"
+
+	"github.com/egoist/mygo/ui"
 )
 
 // The preview pane shows the project's dev server beside the chat, in a
@@ -72,8 +74,46 @@ func isLocal(url string) bool {
 }
 
 // previewWidth is the preview's width: as the unified diff's, a little
-// wider.
-func (a *app) previewWidth() float32 { return panelWidth(a.roomBeside, 0.45, 400, 640) }
+// wider, until its edge is dragged; then as dragged, within the room the
+// window leaves (previewSpan).
+func (a *app) previewWidth() float32 {
+	if a.previewDragged == 0 {
+		return panelWidth(a.roomBeside, 0.45, 400, 640)
+	}
+	lo, hi := previewSpan(a.roomBeside)
+	return min(max(a.previewDragged, lo), hi)
+}
+
+// minPreviewWidth is the narrowest the preview drags to: a page's phone
+// layout, and its bar.
+const minPreviewWidth = 360
+
+// previewSpan is how narrow and how wide the preview drags in room beside
+// the sidebar: the chat keeps its least width, and where room is short the
+// preview gives way first, as the diff does.
+func previewSpan(room float32) (lo, hi float32) {
+	hi = max(room-minChatWidth, 0)
+	return min(minPreviewWidth, hi), hi
+}
+
+// previewEdge is the preview's left edge, against the chat, which the
+// pointer drags to resize it, both reflowing as it moves. A double click
+// gives it back its own width; where a drag ends, it stays, across
+// launches (layout.go).
+func (a *app) previewEdge(c *ui.Context) {
+	edge := dragEdge(c, "preview-edge", "Resize preview").Left(-2)
+	if dx, _, ok := edge.Dragged(); ok && dx != 0 {
+		lo, hi := previewSpan(a.roomBeside)
+		a.previewDragged = min(max(a.previewWidth()-dx, lo), hi)
+	}
+	if _, _, ok := edge.DragEnded(); ok {
+		a.saveLayout()
+	}
+	if edge.DoubleClicked() {
+		a.previewDragged = 0
+		a.saveLayout()
+	}
+}
 
 func (a *app) togglePreview() {
 	a.showPreview = !a.showPreview

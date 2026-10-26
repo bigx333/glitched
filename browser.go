@@ -277,6 +277,8 @@ func (a *app) previewPanel(c *ui.Context) {
 				ui.Text(c, "The preview shows here, in the app's window.").TextColor(palette.muted).Margin(ui.Auto)
 			}
 		})
+		// Over the page, which would take its pointer.
+		a.previewEdge(c)
 	})
 }
 
