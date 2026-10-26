@@ -243,6 +243,16 @@ GPL lineage, so no code was copied. Glitched takes its design:
 Not taken: recording and code generation (left out, as asked), the TCP
 bridge and its process model. Its CEF host is the model for a CEF adapter.
 
+## Known issues
+
+- **`isLocal` (Nelson's, `preview.go`), older than the browser and not
+  ours to fix:** it tells local addresses by their prefixes, so names
+  such as `10.com` and `192.168.com` count as local (loaded over http, and
+  shown the dev server's "Nothing running" page when they fail), while
+  `172.16.0.0/12` and link-local addresses don't, and it doesn't
+  normalise a host's case or trailing dot. For Nelson; the browser leaves
+  it as it is.
+
 ## Next: agents driving the browser
 
 1. **Tools**, by tab id: `browser_tabs` (list, new, select, close),
