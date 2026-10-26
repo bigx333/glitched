@@ -795,9 +795,10 @@ func main() {
 			TitleBarStyle:        mygo.TitleBarHiddenInset,
 			TitleBarHeight:       headerHeight,
 			TrafficLightPosition: &mygo.Point{X: 20, Y: (headerHeight - 12) / 2},
-			// The menu's material, not the sidebar's: about half as much
-			// again of the desktop shows through it.
-			Vibrancy: mygo.VibrancyMenu,
+			// The full-screen UI's material, two steps clearer than the
+			// menu's: about half the desktop shows through it in dark, 40%
+			// in light.
+			Vibrancy: mygo.VibrancyFullScreenUI,
 			Content:  ui.View(a.view),
 		})
 		a.notify = showNotification
