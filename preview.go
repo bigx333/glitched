@@ -105,8 +105,10 @@ func (a *app) previewEdge(c *ui.Context) {
 	if dx, _, ok := edge.Dragged(); ok && dx != 0 {
 		lo, hi := previewSpan(a.roomBeside)
 		a.previewDragged = min(max(a.previewWidth()-dx, lo), hi)
+		a.previewHeld = true
 	}
 	if _, _, ok := edge.DragEnded(); ok {
+		a.previewHeld = false
 		a.saveLayout()
 	}
 	if edge.DoubleClicked() {

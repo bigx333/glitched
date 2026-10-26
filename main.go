@@ -278,6 +278,10 @@ type app struct {
 	// previewDragged is the preview's width as its edge was dragged, 0
 	// until it is, and again after a double click on it.
 	previewDragged float32
+	// sidebarHeld and previewHeld are set while the sidebar's or the
+	// preview's edge is dragged, from its first move until it is let go:
+	// the chat follows it without easing.
+	sidebarHeld, previewHeld bool
 	// dir is the state directory, which holds the layout (layout.go).
 	dir string
 	// terminalFocused is set while the terminal drawer has the keyboard,
