@@ -40,11 +40,11 @@ func statusOf(mode api.TailnetMode, st *ipnstate.Status) api.Tailnet {
 	return s
 }
 
-// Detect reads an installed Tailscale's status. It is false when none
-// answers its local API.
+// Detect reads an installed Tailscale's status. It fails at once when none
+// is installed, and with ctx's error when one doesn't answer in time.
 // It returns by ctx's deadline even when finding the local API stalls,
 // as on macOS it runs lsof, which no context bounds.
-func Detect(ctx context.Context) (api.Tailnet, bool) {
+func Detect(ctx context.Context) (api.Tailnet, error) {
 	type answer struct {
 		st  *ipnstate.Status
 		err error
@@ -57,12 +57,15 @@ func Detect(ctx context.Context) (api.Tailnet, bool) {
 	}()
 	select {
 	case a := <-got:
-		if a.err != nil {
-			return api.Tailnet{}, false
+		switch {
+		case ctx.Err() != nil:
+			return api.Tailnet{}, ctx.Err()
+		case a.err != nil:
+			return api.Tailnet{}, a.err
 		}
-		return statusOf(api.TailnetInstalled, a.st), true
+		return statusOf(api.TailnetInstalled, a.st), nil
 	case <-ctx.Done():
-		return api.Tailnet{}, false
+		return api.Tailnet{}, ctx.Err()
 	}
 }
 

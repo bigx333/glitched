@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -69,27 +70,41 @@ func (d *Daemon) tailnet(ctx context.Context) api.Tailnet {
 	return t
 }
 
+// servingTailnet records that the engine serves the tailnet at addr, which
+// clients reach by the MagicDNS name when it has one.
+func (d *Daemon) servingTailnet(addr, name string) {
+	at := addr
+	if name != "" {
+		at = net.JoinHostPort(name, Port)
+	}
+	d.mu.Lock()
+	d.tailnetAt = at
+	d.mu.Unlock()
+	slog.Info("serving the tailnet", "addr", addr, "name", name)
+}
+
 // serveInstalled serves on the installed Tailscale's address at Port once
-// it has one, until ctx ends.
-func (d *Daemon) serveInstalled(ctx context.Context, server func(transport.Transport) *transport.Server) error {
+// it has one, until ctx ends, unless an address in listen serves it.
+func (d *Daemon) serveInstalled(ctx context.Context, listen []string, server func(transport.Transport) *transport.Server) error {
 	failing := ""
 	for delay := 250 * time.Millisecond; ; delay = min(2*delay, 30*time.Second) {
 		probe, cancel := context.WithTimeout(ctx, time.Second)
-		t, ok := detect(probe)
+		t, err := detect(probe)
 		cancel()
 		why := "Tailscale isn't running"
-		if ok && t.Running() && t.IP.IsValid() {
+		if err == nil && t.Running() && t.IP.IsValid() {
 			tn := transport.Tailnet{Address: net.JoinHostPort(t.IP.String(), Port)}
+			if slices.Contains(listen, tn.Address) {
+				// Listen serves it already.
+				d.servingTailnet(tn.Address, t.Name)
+				return nil
+			}
 			ln, err := listenOn(tn, ctx)
 			if err == nil {
 				d.mu.Lock()
 				d.addrs = append(d.addrs, ln.Addr())
-				d.tailnetAt = tn.Address
-				if t.Name != "" {
-					d.tailnetAt = net.JoinHostPort(t.Name, Port)
-				}
 				d.mu.Unlock()
-				slog.Info("serving the tailnet", "addr", tn.Address, "name", t.Name)
+				d.servingTailnet(tn.Address, t.Name)
 				return server(tn).Serve(ctx, ln)
 			}
 			why = err.Error()

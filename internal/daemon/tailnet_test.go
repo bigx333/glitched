@@ -42,7 +42,7 @@ func control(t *testing.T) string {
 // notInstalled pretends this machine has no Tailscale.
 func notInstalled(t *testing.T) {
 	was := detect
-	detect = func(context.Context) (api.Tailnet, bool) { return api.Tailnet{}, false }
+	detect = func(context.Context) (api.Tailnet, error) { return api.Tailnet{}, errors.New("no tailscaled") }
 	t.Cleanup(func() { detect = was })
 }
 
@@ -123,14 +123,53 @@ func TestAnEngineWithoutTailscaleServesOnItsOwnNode(t *testing.T) {
 	if _, err := wrong.Info(ctx); !errors.Is(err, transport.ErrRefused) {
 		t.Fatalf("a wrong token: %v, want ErrRefused", err)
 	}
+
+	// An engine without Tailscale that uploads to the hub on the tailnet
+	// reaches it through a node of its own.
+	hostDir := stateDir(t)
+	host, err := Start(context.Background(), Config{Dir: hostDir, Epoch: 1, HubServer: addr, HubToken: token, Control: url, Adapter: fake.New(fake.Turn(true))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { host.Close() })
+	if host.Node() == nil {
+		t.Fatal("the uploading engine runs no node of its own")
+	}
+	thread := api.NewID()
+	create := api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{Workspace: "/w", Title: "up", Model: api.ModelRef{Provider: "fake", Model: "fake"}}}
+	if _, err := host.Endpoint().Submit(ctx, create); err != nil {
+		t.Fatal(err)
+	}
+	hubc := transport.NewHubClient(Socket(dir), api.ID{})
+	defer hubc.Close()
+	until(t, "the thread on the hub", func() bool {
+		evs, err := hubc.Events(ctx, thread, api.Cursor{}, 10)
+		return err == nil && len(evs) > 0
+	})
+}
+
+// A Tailscale slow to answer at start is there: the engine waits for it
+// rather than running a node of its own beside it.
+func TestASlowTailscaleIsNotMissing(t *testing.T) {
+	was := detect
+	detect = func(ctx context.Context) (api.Tailnet, error) { <-ctx.Done(); return api.Tailnet{}, ctx.Err() }
+	t.Cleanup(func() { detect = was })
+	d, err := Start(context.Background(), Config{Dir: stateDir(t), Hub: true, Epoch: 1, Tailnet: true, Adapter: fake.New(fake.Turn(true))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	if d.Node() != nil {
+		t.Fatal("the engine started a node of its own beside a Tailscale slow to answer")
+	}
 }
 
 // Only this machine learns the login URL: whoever opens it can sign the
 // machine in to their own account.
 func TestOnlyThisMachineSeesTheLoginURL(t *testing.T) {
 	was := detect
-	detect = func(context.Context) (api.Tailnet, bool) {
-		return api.Tailnet{Mode: api.TailnetInstalled, State: "NeedsLogin", AuthURL: "https://login.example/a"}, true
+	detect = func(context.Context) (api.Tailnet, error) {
+		return api.Tailnet{Mode: api.TailnetInstalled, State: "NeedsLogin", AuthURL: "https://login.example/a"}, nil
 	}
 	t.Cleanup(func() { detect = was })
 	d, err := Start(context.Background(), Config{Dir: stateDir(t), Hub: true, Epoch: 1, Adapter: fake.New(fake.Turn(true))})

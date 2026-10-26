@@ -294,7 +294,7 @@ func pair(_ context.Context, args []string) error {
 	}
 	host := "<this machine's tailnet name>"
 	probe, cancel := context.WithTimeout(context.Background(), time.Second)
-	if t, ok := tailnet.Detect(probe); ok && t.Name != "" {
+	if t, err := tailnet.Detect(probe); err == nil && t.Name != "" {
 		host = t.Name
 	}
 	cancel()
