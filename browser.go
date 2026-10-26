@@ -168,7 +168,7 @@ func (a *app) goTo(t *browserTab, typed string) {
 	if u == "" {
 		return
 	}
-	t.url, t.draft, t.failed = u, u, false
+	t.url, t.draft, t.failed, t.err = u, u, false, ""
 	// A tab's first page loads the address it's made with.
 	made := t.page != nil
 	if p := a.tabPage(t); p != nil && made {
@@ -177,10 +177,15 @@ func (a *app) goTo(t *browserTab, typed string) {
 }
 
 // reload loads the tab's page again, loading or not. A page that failed
-// loads its address, as a server started since answers it.
+// loads its address, as a server started since answers it; one the engine
+// couldn't make, it tries to make again.
 func (a *app) reload(t *browserTab) {
+	if t.page == nil {
+		t.err = ""
+		a.tabPage(t)
+		return
+	}
 	switch p := t.page; {
-	case p == nil:
 	case t.failed:
 		p.LoadURL(t.url)
 	default:
@@ -220,7 +225,7 @@ func (a *app) previewPanel(c *ui.Context) {
 			}
 			back.Disabled(p == nil || !p.CanGoBack())
 			fwd.Disabled(p == nil || !p.CanGoForward())
-			reload.Disabled(p == nil)
+			reload.Disabled(p == nil && t.err == "")
 			if p != nil {
 				if back.Clicked() {
 					p.GoBack()
