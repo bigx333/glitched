@@ -23,6 +23,19 @@ var accessLevels = []struct {
 	{accessFull, "Unrestricted access to the internet and any file on your computer", icShieldAlert},
 }
 
+// accessColor is the level's color on the button and its row: blue to
+// ask, green to approve, the theme's own so they read in light and dark.
+// Full access keeps its hazard colors.
+func accessColor(level string) ui.Color {
+	switch level {
+	case accessAsk:
+		return palette.blue
+	case accessAuto:
+		return palette.green
+	}
+	return danger
+}
+
 // narrowComposer is the chat's width under which the composer's access
 // button shows only its icon, for the send button to keep its room.
 const narrowComposer = 600
@@ -169,7 +182,7 @@ func (a *app) accessPicker(c *ui.Context) {
 			icon = l.icon
 		}
 	}
-	b := a.tip(c, ghost(c, "access", a.accessOpen).Label("Access"), "How freely the agent acts")
+	b := a.tip(c, ghost(c, "access", a.accessOpen).Label("Access").TextColor(accessColor(a.access)), "How freely the agent acts")
 	if full {
 		b.TextColor(danger)
 		// Hazard tape, and a slow warning pulse: it's on.
@@ -211,7 +224,7 @@ func (a *app) accessPicker(c *ui.Context) {
 func (a *app) accessRow(c *ui.Context, name, desc string, icon *ui.SVG, title, sub ui.Color) ui.Element {
 	selected := a.access == name
 	return row(c, name, false).Padding(9, 10).Gap(12).Children(func() {
-		ui.Icon(c, icon).FontSize(17).TextColor(title)
+		ui.Icon(c, icon).FontSize(17).TextColor(accessColor(name))
 		ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
 			ui.Text(c, name).FontSize(13.5).FontWeight(500).TextColor(title)
 			ui.Text(c, desc).FontSize(12).TextColor(sub)
