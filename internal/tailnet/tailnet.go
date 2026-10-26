@@ -42,13 +42,28 @@ func statusOf(mode api.TailnetMode, st *ipnstate.Status) api.Tailnet {
 
 // Detect reads an installed Tailscale's status. It is false when none
 // answers its local API.
+// It returns by ctx's deadline even when finding the local API stalls,
+// as on macOS it runs lsof, which no context bounds.
 func Detect(ctx context.Context) (api.Tailnet, bool) {
-	lc := local.Client{Transport: &http.Transport{DisableKeepAlives: true, DialContext: dialInstalled}}
-	st, err := lc.StatusWithoutPeers(ctx)
-	if err != nil {
+	type answer struct {
+		st  *ipnstate.Status
+		err error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		lc := local.Client{Transport: &http.Transport{DisableKeepAlives: true, DialContext: dialInstalled}}
+		st, err := lc.StatusWithoutPeers(ctx)
+		got <- answer{st, err}
+	}()
+	select {
+	case a := <-got:
+		if a.err != nil {
+			return api.Tailnet{}, false
+		}
+		return statusOf(api.TailnetInstalled, a.st), true
+	case <-ctx.Done():
 		return api.Tailnet{}, false
 	}
-	return statusOf(api.TailnetInstalled, st), true
 }
 
 // dialInstalled reaches an installed Tailscale's local API as local.Client

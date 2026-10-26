@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,9 +106,42 @@ func TestAnEngineWithoutTailscaleServesOnItsOwnNode(t *testing.T) {
 		t.Errorf("over the tailnet the engine says it serves at %q, want %q", env.Tailnet.Serving, tn.Serving)
 	}
 
+	// An address no peer holds would be reached outside WireGuard.
+	plain, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plain.Close()
+	off := transport.NewEndpointClient(transport.Embedded{Node: laptop, Address: plain.Addr().String(), Token: token}, api.ID{})
+	defer off.Close()
+	if _, err := off.Info(ctx); err == nil || !strings.Contains(err.Error(), "isn't a peer on the tailnet") {
+		t.Fatalf("dialing %s, off the tailnet: %v, want it refused", plain.Addr(), err)
+	}
+
 	wrong := transport.NewEndpointClient(transport.Embedded{Node: laptop, Address: addr, Token: "wrong"}, api.ID{})
 	defer wrong.Close()
 	if _, err := wrong.Info(ctx); !errors.Is(err, transport.ErrRefused) {
 		t.Fatalf("a wrong token: %v, want ErrRefused", err)
+	}
+}
+
+// Only this machine learns the login URL: whoever opens it can sign the
+// machine in to their own account.
+func TestOnlyThisMachineSeesTheLoginURL(t *testing.T) {
+	was := detect
+	detect = func(context.Context) (api.Tailnet, bool) {
+		return api.Tailnet{Mode: api.TailnetInstalled, State: "NeedsLogin", AuthURL: "https://login.example/a"}, true
+	}
+	t.Cleanup(func() { detect = was })
+	d, err := Start(context.Background(), Config{Dir: stateDir(t), Hub: true, Epoch: 1, Adapter: fake.New(fake.Turn(true))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	ctx := context.Background()
+	local, _ := d.Endpoint().Info(ctx)
+	remote, _ := endpoint{d.host, d, true}.Info(ctx)
+	if local.Tailnet.AuthURL == "" || remote.Tailnet.AuthURL != "" || remote.Tailnet.State != "NeedsLogin" {
+		t.Fatalf("this machine sees %+v and a remote peer %+v; want the URL only here", local.Tailnet, remote.Tailnet)
 	}
 }

@@ -204,11 +204,10 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	if err := os.Chmod(sock.Address, 0o600); err != nil {
 		return nil, err
 	}
-	ep := endpoint{h, d}
-	servers := []*transport.Server{{Transport: sock, Endpoint: ep, Hub: rep}}
+	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep}}
 	g := &grants{dir: cfg.Dir, base: ctx}
 	tailnetServer := func(tn transport.Transport) *transport.Server {
-		return &transport.Server{Transport: tn, Endpoint: ep, Hub: rep, Authorize: g.authorize}
+		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Authorize: g.authorize}
 	}
 	type unbound struct {
 		tn  transport.Tailnet
@@ -298,7 +297,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 				fail(err)
 			}
 		})
-		background.Go(func() { retire(ctx, filepath.Join(cfg.Dir, nodeDir)) })
+		background.Go(func() { retire(ctx, filepath.Join(cfg.Dir, nodeDir), cfg.Control) })
 	}
 	if len(cfg.Listen) > 0 || cfg.Tailnet {
 		background.Go(func() { g.watch(ctx) })
@@ -351,7 +350,7 @@ func (d *Daemon) release() error {
 }
 
 // Endpoint is the engine in this process, for a caller that embeds it.
-func (d *Daemon) Endpoint() api.Endpoint { return endpoint{d.host, d} }
+func (d *Daemon) Endpoint() api.Endpoint { return endpoint{d.host, d, false} }
 
 // Node is the engine's own tailnet node, which reaches other machines'
 // engines when Tailscale isn't installed; nil when it runs none.
