@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# glv launches, checks, drives and tears down one isolated Glitched instance
+# built from this checkout. See ../SKILL.md. Usage: glv <command> [args...]
+set -euo pipefail
+
+SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$SCRIPTS/../../../.." && pwd)"
+# One run per checkout by default; GLV_RUN names another. Kept short: the
+# engine's unix socket path must stay under ~100 bytes.
+RUN="${GLV_RUN:-$(printf %s "$REPO" | cksum | cut -c1-6)}"
+RUNDIR="/tmp/glv-$RUN"
+STATE="$RUNDIR/state"
+BIN="$RUNDIR/bin"
+PIDFILE="$RUNDIR/pid"
+LOG="$RUNDIR/app.log"
+EVIDENCE="${GLV_EVIDENCE:-$REPO/.verify/$RUN}"
+
+die() { echo "glv: $*" >&2; exit 1; }
+
+pid() { [[ -f $PIDFILE ]] && cat "$PIDFILE"; }
+
+# ours reports whether the pid file names a live process running our binary.
+ours() {
+  local p; p="$(pid)" || return 1
+  [[ -n $p ]] && [[ "$(ps -o comm= -p "$p" 2>/dev/null)" == "$BIN/glitched-gui" ]]
+}
+
+# others lists Glitched processes that are not this run's: the user's app, a
+# mygo dev build, another checkout's run, or a stray from an earlier attempt.
+# A second instance on screen breaks readiness and driving; glv never kills
+# them, since only their owner knows whether they're in use.
+others() {
+  ps -axo pid=,comm= | awk -v me="$(pid 2>/dev/null || echo 0)" '$1 != me && /glitched-gui|Glitched/ {print}'
+}
+
+ax() { ours || die "no instance of run $RUN; glv launch first"; osascript -l JavaScript "$SCRIPTS/ax.js" "$(pid)" "$@"; }
+
+build_id() { (cd "$REPO" && echo "$(git rev-parse HEAD) $( (git diff HEAD; git ls-files --others --exclude-standard -- '*.go' '*.kage') | shasum | cut -c1-12)"); }
+
+cmd_launch() {
+  ours && die "run $RUN is already up (pid $(pid)); glv doctor, or glv stop first"
+  if [[ -n "$(others)" ]]; then
+    echo "warning: other Glitched instances are running; stop the ones you started (glv stop with their GLV_RUN, or kill their pid):" >&2
+    others >&2
+  fi
+  rm -rf "$RUNDIR"
+  mkdir -p "$BIN" "$STATE" "$EVIDENCE"
+  echo "building $(build_id) into $BIN"
+  (cd "$REPO" && go build -o "$BIN/glitched-gui" . && go build -o "$BIN/glitched-cli" ./cmd/glitched)
+  swiftc -O -o "$BIN/native" "$SCRIPTS/native.swift" 2>/dev/null || die "swiftc failed to build native.swift"
+  build_id > "$RUNDIR/build"
+  GLITCHED_DIR="$STATE" nohup "$BIN/glitched-gui" > "$LOG" 2>&1 &
+  echo $! > "$PIDFILE"
+  disown
+  local i
+  for ((i = 0; i < 60; i++)); do
+    ours || { cat "$LOG" >&2; die "the app exited during launch"; }
+    if grep -q "serving socket=$STATE/engine.sock" "$LOG" &&
+      "$BIN/glitched-cli" threads -dir "$STATE" > /dev/null 2>&1 &&
+      "$BIN/native" winid "$(pid)" > /dev/null 2>&1 &&
+      ax has "What should we build?" > /dev/null 2>&1; then
+      echo "ready: run $RUN, pid $(pid), state $STATE, evidence $EVIDENCE"
+      return
+    fi
+    sleep 0.5
+  done
+  cat "$LOG" >&2
+  die "not ready after 30s; glv stop cleans up"
+}
+
+cmd_doctor() {
+  local bad=0
+  check() { if (eval "$2") > /dev/null 2>&1; then echo "ok    $1"; else echo "FAIL  $1"; bad=1; fi; }
+  echo "run $RUN  dir $RUNDIR  evidence $EVIDENCE"
+  check "process $(pid 2>/dev/null || echo '?') is alive and runs $BIN/glitched-gui" ours
+  check "engine answers on $STATE/engine.sock" '"$BIN/glitched-cli" threads -dir "$STATE"'
+  check "window is on screen" '"$BIN/native" winid "$(pid)"'
+  check "accessibility reaches the window (needs Accessibility permission for this terminal)" 'ax find "New thread"'
+  check "no other Glitched instance is running" '[[ -z "$(others)" ]]'
+  others | sed 's/^/      /'
+  check "build matches the checkout ($(cat "$RUNDIR/build" 2>/dev/null || echo none))" '[[ "$(cat "$RUNDIR/build")" == "$(build_id)" ]]'
+  return $bad
+}
+
+cmd_wait() {
+  local text="$1" secs="${2:-15}" i
+  for ((i = 0; i < secs * 4; i++)); do
+    ax has "$text" > /dev/null 2>&1 && { echo "saw $text"; return; }
+    sleep 0.25
+  done
+  die "no \"$text\" after ${secs}s"
+}
+
+# center prints the global center of the first element matching text.
+center() {
+  local frame; frame="$(ax find "$1" | awk -F' \\| ' '{print $3}')"
+  IFS=, read -r x y w h <<< "$frame"
+  echo "$((x + w / 2)) $((y + h / 2))"
+}
+
+cmd_shot() {
+  ours || die "no instance of run $RUN"
+  mkdir -p "$EVIDENCE"
+  local out
+  # The accessibility tree changes before the frame that paints it, and rows
+  # fold and fade in: let transitions settle so the picture shows the state.
+  sleep "${GLV_SETTLE:-1.5}"
+  out="$EVIDENCE/$(date +%Y%m%d-%H%M%S)-${1:-shot}.png"
+  screencapture -x -o -l "$("$BIN/native" winid "$(pid)")" "$out"
+  echo "$out"
+}
+
+cmd_stop() {
+  if ours; then
+    local p; p="$(pid)"
+    kill -TERM "$p"
+    for _ in $(seq 20); do kill -0 "$p" 2> /dev/null || break; sleep 0.25; done
+    kill -0 "$p" 2> /dev/null && kill -KILL "$p" && sleep 0.5
+    kill -0 "$p" 2> /dev/null && die "pid $p survived SIGKILL; $RUNDIR left in place"
+    echo "stopped pid $p"
+  elif [[ -n "$(pid 2>/dev/null)" ]]; then
+    echo "pid $(pid) is not our binary any more; not killing it"
+  fi
+  if [[ -d $RUNDIR ]]; then
+    mkdir -p "$EVIDENCE"
+    [[ -f $LOG ]] && cp "$LOG" "$EVIDENCE/$(date +%Y%m%d-%H%M%S)-app.log"
+    rm -rf "$RUNDIR"
+  fi
+  echo "evidence kept in $EVIDENCE"
+}
+
+c="${1:-}"
+shift || true
+case "$c" in
+  launch) cmd_launch ;;
+  doctor) cmd_doctor ;;
+  stop) cmd_stop ;;
+  tree | find | press | set | value | has | menu | key | front) ax "$c" "$@" ;;
+  type) ax set AXTextArea "$1" ;;
+  wait) cmd_wait "$@" ;;
+  click) ax find "$1" > /dev/null && ax front > /dev/null && "$BIN/native" click "$(pid)" $(center "$1") ;;
+  rightclick) ax find "$1" > /dev/null && ax front > /dev/null && "$BIN/native" click "$(pid)" $(center "$1") right ;;
+  hover) ax find "$1" > /dev/null && ax front > /dev/null && "$BIN/native" move "$(pid)" $(center "$1") ;;
+  shot) cmd_shot "${1:-}" ;;
+  cli)
+    sub="$1"; shift
+    "$BIN/glitched-cli" "$sub" -dir "$STATE" "$@" ;;
+  log) cat "$LOG" ;;
+  env) echo "RUN=$RUN RUNDIR=$RUNDIR STATE=$STATE PID=$(pid 2>/dev/null || true) EVIDENCE=$EVIDENCE" ;;
+  *)
+    die "usage: glv launch|doctor|tree|find|press|set|type|value|has|wait|menu|key|click|rightclick|hover|shot|cli|log|env|stop"
+    ;;
+esac
