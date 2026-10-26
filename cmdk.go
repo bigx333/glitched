@@ -43,6 +43,7 @@ func (a *app) commands() []command {
 		action("Toggle diff panel", "⌘D", icDiff, func() { a.showDiff = !a.showDiff }),
 		action("Toggle terminal", "⌘J", icTerminal, func() { a.showTerminal = !a.showTerminal }),
 		action("Toggle preview", "⇧⌘P", icGlobe, a.togglePreview),
+		action("New browser tab", "⌘T", icPlus, func() { a.newTab("") }),
 		action("Toggle sidebar", "⌘B", icPanelLeft, func() { a.showSidebar = !a.showSidebar }),
 		action("Toggle light / dark", "⇧⌘L", icPalette, a.toggleLightDark),
 	)

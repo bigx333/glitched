@@ -21,6 +21,7 @@ import (
 	"github.com/egoist/mygo/ui/markdown"
 
 	"glitched/internal/api"
+	"glitched/internal/browse/sysweb"
 	"glitched/internal/client"
 	"glitched/wind"
 )
@@ -270,12 +271,13 @@ type app struct {
 	suggestFly       *mygo.Window
 	suggestBox       [5]int // the flyout's anchor and height, as last set
 	files            map[string][]string
-	// The preview pane: shown, its web view, its address and the one
-	// being typed, and why it could not start.
-	showPreview              bool
-	preview                  *mygo.WebView
-	previewURL, previewDraft string
-	previewErr               string
+	// The preview pane, a browser: shown, its tabs and the one shown, and
+	// why its web views could not start (see browser.go).
+	showPreview bool
+	browser     browser
+	// terminalFocused is set while the terminal drawer has the keyboard,
+	// as the last frame built it; it keeps the browser's keys then.
+	terminalFocused bool
 	// quick is the quick-ask panel over every app.
 	quick quickAsk
 	// lists are the threads' timelines, by thread.
@@ -357,8 +359,6 @@ func newApp(dir string, post func(func())) *app {
 		post:          post,
 		lists:         map[api.ID]*ui.ListState{},
 		files:         map[string][]string{},
-		previewURL:    defaultPreviewURL,
-		previewDraft:  defaultPreviewURL,
 		diffLayout:    editor.DiffUnified,
 		diffWrap:      true,
 		diffFile:      map[api.ID]string{},
@@ -543,6 +543,7 @@ func (a *app) shortcuts(c *ui.Context) {
 	if c.Shortcut(ui.Cmd, ui.KeyComma) {
 		a.router.Push("/settings/general")
 	}
+	a.browserShortcuts(c)
 }
 
 // contrast is the WCAG contrast ratio of two colors.
@@ -642,6 +643,8 @@ func main() {
 		})
 		// The wind's glyph atlases are drawn between the window's frames.
 		a.wind.SetLater(a.win.Update)
+		// The browser's pages are the system's web views of the window.
+		a.browser.open = sysweb.Opener(a.win)
 		a.setUpQuickAsk()
 		// The terminals' shells hang up with the window.
 		a.win.OnClosed(a.closeShells)
