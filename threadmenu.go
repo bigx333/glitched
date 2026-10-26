@@ -54,15 +54,8 @@ func (a *app) threadMenu(c *ui.Context, m *ui.Menu, t thread, cat category) {
 		}
 	}
 	m.Separator()
-	// The engine archives a live thread, but it would vanish while the
-	// agent still needs it, or while an uncertain run waits to be stopped;
-	// it deletes none.
-	live := t.View.Live()
-	if m.Item("Archive").Disabled(live).Chosen() {
-		a.backend.SetDisposition(t.env, t.id(), api.Disposition{State: api.Archived})
-		c.AddToast(ui.Toast{Title: "Archived", Description: title(t)})
-	}
-	if m.Item("Delete…").Disabled(live).Chosen() {
+	// The engine deletes no live thread, an uncertain run's neither.
+	if m.Item("Delete…").Disabled(t.View.Live()).Chosen() {
 		a.askDelete(t)
 	}
 }

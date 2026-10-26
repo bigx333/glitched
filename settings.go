@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -10,7 +9,6 @@ import (
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 
-	"glitched/internal/api"
 	"glitched/internal/client"
 )
 
@@ -55,9 +53,6 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 			case r.Match("/keybindings"):
 				r.Title("Keybindings")
 				a.page(c, "Keybindings", "Shortcuts for the commands you use most.", a.keybindings)
-			case r.Match("/archived"):
-				r.Title("Archived threads")
-				a.page(c, "Archived threads", "Threads you archived. Restore one to bring it back to the inbox.", a.archivedThreads)
 			default:
 				r.Title("About")
 				a.page(c, "About", "", a.about)
@@ -483,65 +478,6 @@ func (a *app) keybindings(c *ui.Context) {
 		}
 		if shown == 0 {
 			ui.Text(c, "No keybindings match.").Key("none").TextColor(palette.muted).Padding(16)
-		}
-	})
-}
-
-// --- Archived
-
-// archivedThreads lists every machine's archived threads, each with when
-// it was last changed, which archiving it was unless something came
-// after: Restore brings one back to the inbox, Delete deletes it. A row
-// says while its delete is on its way, and shows the commands sent from
-// it that failed, as the timeline does. Delete waits while a run is live,
-// as the engine refuses it then, and the row says so and offers Stop.
-func (a *app) archivedThreads(c *ui.Context) {
-	ts := a.archived()
-	if len(ts) == 0 {
-		ui.Column(c).Key("empty").Center().Gap(10).Padding(60, 0).Transition(riseIn).Children(func() {
-			ui.Icon(c, icArchive).FontSize(26).TextColor(palette.faint)
-			ui.Text(c, "No archived threads").TextColor(palette.muted)
-		})
-		return
-	}
-	several := len(a.backend.Envs()) > 1
-	card(c, "", func() {
-		for _, t := range ts {
-			gone := deleting(t)
-			ui.Row(c).Key(t.id()).Padding(11, 16).Gap(12).AlignItems(ui.Center).Transition(fold).Children(func() {
-				projectTile(c, a.projectOf(t), 20)
-				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
-					ui.Text(c, title(t)).SingleLine()
-					where := filepath.Base(t.View.Workspace)
-					if several && t.env != nil {
-						where += " on " + t.env.Name
-					}
-					ui.Text(c, where+" · archived "+ago(t.View.UpdatedAt, a.now)).FontSize(11.5).TextColor(palette.faint)
-					if gone {
-						ui.Text(c, "Deleting…").FontSize(11.5).TextColor(palette.faint)
-					} else if t.View.Live() {
-						ui.Row(c).Key("live").Gap(8).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, "Its agent is still running: stop it to delete the thread.").FontSize(11.5).TextColor(palette.muted).Shrink(1)
-							if ghost(c, "stop", false).Padding(2, 8).Children(func() { ui.Text(c, "Stop").FontSize(11.5) }).Clicked() {
-								a.backend.Interrupt(t.env, t.id())
-							}
-						})
-					}
-					for _, p := range t.Pending {
-						if failedTo(p) != "" && p.Err != nil {
-							ui.Row(c).Key(p.Command.String()).Gap(8).AlignItems(ui.Center).Children(func() {
-								ui.Text(c, failure(p)).FontSize(11.5).TextColor(palette.red).Shrink(1)
-								a.failedActions(c, t, p)
-							})
-						}
-					}
-				})
-				ui.Button(c.Key("restore"), "Restore").Disabled(gone).OnClick(func() {
-					a.backend.SetDisposition(t.env, t.id(), api.Disposition{})
-					c.AddToast(ui.Toast{Title: "Thread restored", Description: title(t), Type: "info"})
-				})
-				ui.Button(c.Key("delete"), "Delete").TextColor(palette.red).Disabled(gone || t.View.Live()).OnClick(func() { a.askDelete(t) })
-			})
 		}
 	})
 }

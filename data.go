@@ -251,7 +251,7 @@ func (a *app) gather() []*project {
 		byKey := map[projectKey]*project{}
 		var ps []*project
 		for _, th := range e.Threads {
-			if shelved(thread{e, th}) {
+			if deleting(thread{e, th}) {
 				continue
 			}
 			k := keyOf(e, th.View.Workspace)
@@ -370,25 +370,6 @@ func deleting(t thread) bool {
 	})
 }
 
-// shelved is whether the thread is out of the sidebar and the palette:
-// archived, or being deleted.
-func shelved(t thread) bool { return disposition(t).State == api.Archived || deleting(t) }
-
-// archived are every machine's archived threads, those being deleted too,
-// the most recently updated first.
-func (a *app) archived() []thread {
-	var ts []thread
-	for _, e := range a.backend.Envs() {
-		for _, th := range e.Threads {
-			if t := (thread{e, th}); disposition(t).State == api.Archived {
-				ts = append(ts, t)
-			}
-		}
-	}
-	slices.SortFunc(ts, newestFirst)
-	return ts
-}
-
 // failedTo is what a command tried, for those the timeline shows as a row
 // of their own when they fail; "" for messages and answers, whose failure
 // shows on the message and on the request's card.
@@ -404,8 +385,6 @@ func failedTo(p client.Pending) string {
 			return "settle the thread"
 		case api.Snoozed:
 			return "snooze the thread"
-		case api.Archived:
-			return "archive the thread"
 		}
 		return "move the thread back to the inbox"
 	case api.ThreadRename:

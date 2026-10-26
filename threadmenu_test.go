@@ -13,7 +13,8 @@ import (
 )
 
 // A thread row's context menu renames the thread in place, snoozes it,
-// archives it, and deletes it, asking first while the setting says to.
+// and deletes it, asking first while the setting says to. It offers no
+// archive: a thread done with is settled.
 func TestThreadMenu(t *testing.T) {
 	h := start(t, inboxDir(t))
 	const loop = "Investigate websocket reconnect loop"
@@ -50,24 +51,10 @@ func TestThreadMenu(t *testing.T) {
 	if err := h.tt.RightClick("Websocket loop"); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.tt.ChooseMenuItem("Archive"); err != nil {
-		t.Fatal(err)
+	if err := h.tt.ChooseMenuItem("Archive"); err == nil {
+		t.Fatal("the menu offers Archive")
 	}
-	h.until("the archive", func() bool { return th.View.Disposition.State == api.Archived })
-	h.tt.Advance(10 * time.Second)
-	if h.tt.HasText("Websocket loop") {
-		t.Fatalf("the archived thread is still in the sidebar: %q", h.tt.Texts())
-	}
-
-	// Archived lists it; Restore brings it back to the inbox.
-	h.click("Archived")
-	h.tt.Advance(time.Second)
-	if h.a.router.Path() != "/settings/archived" || !h.tt.HasText("Websocket loop") {
-		t.Fatalf("Archived opened %q showing %q", h.a.router.Path(), h.tt.Texts())
-	}
-	h.click("Restore")
-	h.until("the restore", func() bool { return th.View.Disposition.State == api.Open })
-	h.click("Back to app")
+	h.tt.CloseMenu()
 	h.tt.Advance(time.Second)
 
 	// Deleting asks; deleting the thread shown shows a new one instead.
@@ -160,21 +147,19 @@ func TestThreadMenuOnAServer(t *testing.T) {
 	}
 }
 
-// A run left uncertain keeps the thread from being archived or deleted, as
+// A run left uncertain keeps the thread from being deleted, as
 // the engine refuses to delete it, and Stop ends it.
 func TestAnUncertainRunIsStoppedBeforeTheThreadGoes(t *testing.T) {
 	h := start(t, uncertainDir(t))
 	th := h.thread("Stuck")
 	h.tt.Advance(time.Second)
-	for _, item := range []string{"Archive", "Delete…"} {
-		if err := h.tt.RightClick("Stuck"); err != nil {
-			t.Fatal(err)
-		}
-		if err := h.tt.ChooseMenuItem(item); err == nil {
-			t.Fatalf("%s was offered while the run is uncertain", item)
-		}
-		h.tt.CloseMenu()
+	if err := h.tt.RightClick("Stuck"); err != nil {
+		t.Fatal(err)
 	}
+	if err := h.tt.ChooseMenuItem("Delete…"); err == nil {
+		t.Fatal("Delete… was offered while the run is uncertain")
+	}
+	h.tt.CloseMenu()
 	h.a.select_(th)
 	h.tt.Advance(time.Second)
 	h.click("Stop")
@@ -197,47 +182,6 @@ func TestARefusedDeleteKeepsTheThreadShown(t *testing.T) {
 	h.tt.Advance(time.Second)
 	if h.a.current().id() != th.id() || !h.tt.HasText("Couldn't delete the thread: stop the agent before deleting the thread") || h.tt.HasText("api: rejected") {
 		t.Fatalf("after a refused delete the chat shows %q: %q", h.a.current().View.Title, h.tt.Texts())
-	}
-}
-
-// An archived row shows a command sent from it that failed, with Retry
-// and Dismiss. While the run is live it holds Delete, and Retry of a
-// refused delete, says why and offers Stop.
-func TestAnArchivedRowShowsAFailedCommand(t *testing.T) {
-	h, th := asking(t, fake.Turn(true))
-	h.a.backend.SetDisposition(th.env, th.id(), api.Disposition{State: api.Archived})
-	h.until("the archive", func() bool { return th.View.Disposition.State == api.Archived && len(th.Pending) == 0 })
-	h.a.router.Push("/settings/archived")
-	h.tt.Advance(time.Second)
-	h.click("Delete")
-	h.tt.Advance(time.Second)
-	if len(th.Pending) != 0 || h.tt.HasText("Delete “"+title(th)+"”?") {
-		t.Fatal("Delete was offered while the run is live")
-	}
-	if !h.tt.HasText("Its agent is still running: stop it to delete the thread.") {
-		t.Errorf("the archived row doesn't say why Delete waits: %q", h.tt.Texts())
-	}
-	h.a.delete(th)
-	h.until("the refusal", func() bool { return len(th.Pending) == 1 && th.Pending[0].Err != nil })
-	h.tt.Advance(time.Second)
-	if !h.tt.HasText("Couldn't delete the thread: stop the agent before deleting the thread") || !h.tt.HasText("Retry") {
-		t.Fatalf("the archived row after a refused delete: %q", h.tt.Texts())
-	}
-	h.click("Retry")
-	h.tt.Advance(time.Second)
-	if len(th.Pending) != 1 || th.Pending[0].Err == nil {
-		t.Fatal("Retry sent the delete again while the run is live")
-	}
-	h.click("Stop")
-	h.until("the run's end", func() bool { h.tt.Frame(); return !th.View.Live() })
-	h.tt.Advance(time.Second)
-	if h.tt.HasText("Its agent is still running") {
-		t.Error("the row still says the agent runs")
-	}
-	h.click("Dismiss")
-	h.tt.Advance(time.Second)
-	if len(th.Pending) != 0 || h.tt.HasText("Couldn't delete the thread") {
-		t.Fatalf("Dismiss left %d pending, texts %q", len(th.Pending), h.tt.Texts())
 	}
 }
 

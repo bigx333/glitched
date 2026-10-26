@@ -184,13 +184,10 @@ const (
 	Open DispositionState = iota
 	Snoozed
 	Settled
-	// Archived is out of the inbox altogether, kept until the user brings
-	// it back as Open.
-	Archived
 )
 
 // Disposition is the user's inbox state, separate from run state, so
-// settled-and-snoozed, or archived-and-snoozed, can't be represented.
+// settled-and-snoozed can't be represented.
 // Until is set only when Snoozed.
 type Disposition struct {
 	State DispositionState `json:"state"`
@@ -263,9 +260,10 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 
 // Protocol is the version of what crosses between engines, clients and
 // hubs. A peer of another protocol is refused, not half understood:
-// version 2 added the Archived disposition and the thread.deleted
-// tombstone, which a version 1 peer would show as an open thread.
-const Protocol = 2
+// version 2 added the thread.deleted tombstone, which a version 1 peer
+// would show as an open thread, and an archived disposition, which version
+// 3 dropped for Settled and a version 2 peer may still send.
+const Protocol = 3
 
 type Environment struct {
 	ID       ID     `json:"id"` // the host

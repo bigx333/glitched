@@ -253,7 +253,7 @@ func (d *decision) respond(b api.RequestRespond) error {
 func (d *decision) inbox(b api.InboxSet) error {
 	v := b.Disposition
 	v.Until = v.Until.UTC().Round(0)
-	if v.State > api.Archived || (v.State == api.Snoozed) == v.Until.IsZero() {
+	if v.State > api.Settled || (v.State == api.Snoozed) == v.Until.IsZero() {
 		return rejected("only a snoozed thread has an until, and it must")
 	}
 	if v.State == d.t.Disposition.State && v.Until.Equal(d.t.Disposition.Until) {

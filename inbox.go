@@ -142,15 +142,6 @@ func (a *app) threadsNav(c *ui.Context) {
 		})
 	}
 	ui.Column(c).Padding(8).Gap(1).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
-		if ghost(c, "archived", false).Padding(7, 8).Children(func() {
-			ui.Icon(c, icArchive).FontSize(15)
-			ui.Text(c, "Archived").Grow(1)
-			if n := len(a.archived()); n > 0 {
-				ui.Textf(c, "%d", n).FontSize(11).TextColor(palette.faint)
-			}
-		}).Clicked() {
-			a.router.Push("/settings/archived")
-		}
 		if ghost(c, "settings", false).Padding(7, 8).Children(func() {
 			ui.Icon(c, icSettings).FontSize(15)
 			ui.Text(c, "Settings").Grow(1)

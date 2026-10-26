@@ -413,8 +413,7 @@ func TestOpeningALongThreadLeavesThePostThreadFree(t *testing.T) {
 	}
 }
 
-// olderEngine speaks protocol 1, which has no archived or deleted
-// threads.
+// olderEngine speaks protocol 1, which has no deleted threads.
 type olderEngine struct{ *longThread }
 
 func (olderEngine) Info(context.Context) (api.Environment, error) {
@@ -427,7 +426,7 @@ func TestAnEngineOfAnotherProtocolIsNotShown(t *testing.T) {
 	m, g := manager(t, dir)
 	env := m.Envs()[0]
 	g.until(t, "an answer", func() bool { return env.Status != Status(Connecting{}) })
-	if s, ok := env.Status.(Incompatible); !ok || s.Theirs != 1 || s.Ours != 2 || len(env.Threads) != 0 {
+	if s, ok := env.Status.(Incompatible); !ok || s.Theirs != 1 || s.Ours != api.Protocol || len(env.Threads) != 0 {
 		t.Fatalf("an engine of protocol 1 left the env %s with %d threads, want incompatible and none shown", describeStatus(env.Status), len(env.Threads))
 	}
 }
@@ -571,11 +570,6 @@ func TestATurnRunsFromCreateThroughAnApproval(t *testing.T) {
 	g.until(t, "the rename", func() bool {
 		th := env.Threads[id]
 		return th.View.Title == "Websocket loop" && len(th.Pending) == 0
-	})
-	m.SetDisposition(env, id, api.Disposition{State: api.Archived})
-	g.until(t, "the archive", func() bool {
-		th := env.Threads[id]
-		return th.View.Disposition.State == api.Archived && len(th.Pending) == 0
 	})
 	m.Delete(env, id) // while its transcript is open
 
