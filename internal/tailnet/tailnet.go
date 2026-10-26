@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn/ipnstate"
@@ -40,30 +42,58 @@ func statusOf(mode api.TailnetMode, st *ipnstate.Status) api.Tailnet {
 	return s
 }
 
+// A lookup reads an installed Tailscale's status once, for every Detect
+// that asks while it runs.
+type lookup struct {
+	done chan struct{}
+	st   *ipnstate.Status
+	err  error
+}
+
+// pending is the lookup under way. On macOS finding the local API runs
+// lsof, which no context bounds, so a stalled one is waited on, not
+// joined by another per call.
+var pending struct {
+	sync.Mutex
+	l *lookup
+}
+
+// installedStatus asks the installed Tailscale's local API for its status;
+// a test swaps it for one that stalls.
+var installedStatus = func(ctx context.Context) (*ipnstate.Status, error) {
+	lc := local.Client{Transport: &http.Transport{DisableKeepAlives: true, DialContext: dialInstalled}}
+	return lc.StatusWithoutPeers(ctx)
+}
+
+// lookupTimeout bounds a lookup's call to the local API, once found.
+const lookupTimeout = 5 * time.Second
+
 // Detect reads an installed Tailscale's status. It fails at once when none
-// is installed, and with ctx's error when one doesn't answer in time.
-// It returns by ctx's deadline even when finding the local API stalls,
-// as on macOS it runs lsof, which no context bounds.
+// is installed, and with ctx's error when one doesn't answer in time,
+// even while finding the local API stalls.
 func Detect(ctx context.Context) (api.Tailnet, error) {
-	type answer struct {
-		st  *ipnstate.Status
-		err error
+	pending.Lock()
+	l := pending.l
+	if l == nil {
+		l = &lookup{done: make(chan struct{})}
+		pending.l = l
+		go func() {
+			call, cancel := context.WithTimeout(context.Background(), lookupTimeout)
+			l.st, l.err = installedStatus(call)
+			cancel()
+			pending.Lock()
+			pending.l = nil
+			pending.Unlock()
+			close(l.done)
+		}()
 	}
-	got := make(chan answer, 1)
-	go func() {
-		lc := local.Client{Transport: &http.Transport{DisableKeepAlives: true, DialContext: dialInstalled}}
-		st, err := lc.StatusWithoutPeers(ctx)
-		got <- answer{st, err}
-	}()
+	pending.Unlock()
 	select {
-	case a := <-got:
-		switch {
-		case ctx.Err() != nil:
-			return api.Tailnet{}, ctx.Err()
-		case a.err != nil:
-			return api.Tailnet{}, a.err
+	case <-l.done:
+		if l.err != nil {
+			return api.Tailnet{}, l.err
 		}
-		return statusOf(api.TailnetInstalled, a.st), nil
+		return statusOf(api.TailnetInstalled, l.st), nil
 	case <-ctx.Done():
 		return api.Tailnet{}, ctx.Err()
 	}

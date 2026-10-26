@@ -82,7 +82,10 @@ func (cfg Config) Save() error {
 // backup.
 type Daemon struct {
 	host *runtime.Host
-	node *tailnet.Node // the engine's own, when Tailnet is on and Tailscale isn't installed
+	node *tailnet.Node // the engine's own, when it needs the tailnet and Tailscale isn't installed
+	// nodeServes: the engine listens on its own node, as it does when
+	// Tailnet is on, not only to reach a hub.
+	nodeServes bool
 	stop context.CancelFunc
 	done chan struct{}
 	err  error
@@ -260,6 +263,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		}
 		lns = append(lns, ln)
 		servers = append(servers, tailnetServer(tn))
+		d.nodeServes = true
 	}
 
 	var serving, background sync.WaitGroup

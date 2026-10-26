@@ -54,7 +54,7 @@ func (d *Daemon) tailnet(ctx context.Context) api.Tailnet {
 	defer cancel()
 	if d.node != nil {
 		t, err := d.node.Status(ctx)
-		if err == nil && t.Running() {
+		if err == nil && t.Running() && d.nodeServes {
 			host := t.Name
 			if host == "" {
 				host = t.IP.String()
