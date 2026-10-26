@@ -9,7 +9,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -33,6 +32,7 @@ func (e usageError) Error() string { return string(e) }
 
 var commands = map[string]func(context.Context, []string) error{
 	"serve":   serve,
+	"status":  status,
 	"pair":    pair,
 	"run":     run,
 	"threads": threads,
@@ -43,6 +43,7 @@ const usage = `usage: glitched <command> [flags]
 
   serve     run the host engine, and the hub role unless -hub=false; the next serve
             on -dir, and the GUI's own engine, run as it did unless a flag says otherwise
+  status    whether an engine serves -dir, its hub, its tailnet listeners and its tokens
   pair      mint a token for a client on the tailnet: glitched pair -name LABEL | -list | -revoke LABEL
   run       send a message and stream the turn: glitched run [-thread ID] [-yes] text...
   threads   list this host's threads
@@ -164,8 +165,53 @@ func serve(ctx context.Context, args []string) error {
 	return d.Wait()
 }
 
-// port is where pair suggests serving; any port works.
-const port = "7465"
+func status(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	dir := dirFlag(fs)
+	fs.Parse(args)
+	st, err := daemon.Inspect(ctx, *dir)
+	if err != nil {
+		return err
+	}
+	row := func(k, v string) { fmt.Printf("%-10s %s\n", k, v) }
+	if e := st.Engine; e != nil {
+		row("engine", fmt.Sprintf("serving as %s (host %s, protocol %d)", e.Name, e.ID, e.Protocol))
+	} else {
+		row("engine", "not running: "+st.EngineErr.Error())
+	}
+	switch cfg := st.Config; {
+	case cfg.HubServer != "":
+		row("hub", "uploads to "+cfg.HubServer)
+	case cfg.HubDir != "":
+		row("hub", "uploads to the engine under "+cfg.HubDir)
+	case cfg.Hub:
+		row("hub", "this engine")
+	default:
+		row("hub", "none")
+	}
+	if st.Tailscale.IsValid() {
+		row("tailscale", st.Tailscale.String())
+	} else {
+		row("tailscale", "not up in kernel mode")
+	}
+	if len(st.Listeners) == 0 {
+		row("listen", "none; serve -listen <tailscale ip>:"+daemon.Port+" to reach this engine from other machines")
+	}
+	for _, l := range st.Listeners {
+		state := "accepting"
+		if !l.Accepting {
+			state = "not accepting"
+		}
+		row("listen", l.Addr+"  "+state)
+	}
+	if len(st.Tokens) == 0 {
+		row("tokens", "none; glitched pair -name LABEL mints one")
+	}
+	for _, t := range st.Tokens {
+		row("token", t.Label+"  "+t.Created.Local().Format(time.DateTime))
+	}
+	return nil
+}
 
 func pair(_ context.Context, args []string) error {
 	fs := flag.NewFlagSet("pair", flag.ExitOnError)
@@ -204,10 +250,10 @@ func pair(_ context.Context, args []string) error {
 	}
 	ip, ok := transport.TailscaleIP()
 	if !ok {
-		fmt.Printf("Tailscale isn't up here. Once it is, serve with:\n\n  %s -listen <this machine's Tailscale IP>:%s\n", cmd, port)
+		fmt.Printf("Tailscale isn't up here. Once it is, serve with:\n\n  %s -listen <this machine's Tailscale IP>:%s\n", cmd, daemon.Port)
 		return nil
 	}
-	addr := net.JoinHostPort(ip.String(), port)
+	addr := daemon.Serve(ip)[0]
 	fmt.Printf("Serve with:\n\n  %s -listen %s\n\nThen on the other machine:\n\n  glitched run -server %s -token %s hello\n", cmd, addr, addr, token)
 	return nil
 }

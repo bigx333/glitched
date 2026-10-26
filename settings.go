@@ -46,6 +46,9 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 			case r.Match("/providers"):
 				r.Title("Providers")
 				a.page(c, "Providers", "The coding agents Glitched runs, and their models.", a.providers)
+			case r.Match("/machine"):
+				r.Title("This machine")
+				a.page(c, "This machine", "The engine on this machine: whether it runs, where it serves the tailnet, and the tokens other machines reach it with.", a.machine)
 			case r.Match("/servers"):
 				r.Title("Servers")
 				a.page(c, "Servers", "Engines on other machines, reached over the tailnet with a token each paired for this app. Their threads show beside this machine's.", a.servers)

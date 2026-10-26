@@ -53,6 +53,12 @@ type Manager struct {
 	// whether some are marked that no save has taken.
 	saving, unsaved bool
 	closed          bool
+
+	machine    Machine
+	inspecting bool
+	// changes counts the changes made to engine.json here, so a read begun
+	// before one is dropped for a new one.
+	changes int
 }
 
 func New(cfg Config) *Manager {
@@ -68,7 +74,7 @@ func (m *Manager) Start() error {
 	if err := jsonfile.Load(m.savedPath(), &m.saved); err != nil {
 		return err
 	}
-	m.local = &local{dir: m.cfg.Dir}
+	m.local = m.newLocal()
 	m.envs = []*Env{m.launch(&Env{Kind: Local, Name: "local"}, m.local)}
 	m.sync("")
 	return nil
@@ -541,9 +547,11 @@ func (th *Thread) asks(request api.ID) bool {
 // so a run it drives outlives a dropped shell stream.
 type local struct {
 	dir      string
+	hosted   func(embedded bool) // posts whether the engine reached is embedded
 	attached *transport.EndpointClient
 	embedded *daemon.Daemon
-	err      error // from closing the embedded engine
+	err      error         // from closing the embedded engine
+	done     chan struct{} // closed once close returns
 }
 
 func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
@@ -562,6 +570,7 @@ func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 		cancel()
 		if err == nil {
 			l.attached = c
+			l.hosted(false)
 			return c, nil
 		}
 		c.Close()
@@ -573,6 +582,7 @@ func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 		switch {
 		case err == nil:
 			l.embedded = d
+			l.hosted(true)
 			return d.Endpoint(), nil
 		case !errors.Is(err, daemon.ErrLocked):
 			return nil, err
@@ -601,6 +611,7 @@ func (l *local) close() {
 	if l.embedded != nil {
 		l.err = l.embedded.Close()
 	}
+	close(l.done)
 }
 
 // remote reaches a server over the tailnet. Its client redials on use, so

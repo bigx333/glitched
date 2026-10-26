@@ -209,6 +209,11 @@ type app struct {
 	server    client.Server
 	serverErr string
 	adding    bool
+	// pairLabel is the This machine page's label for the next token;
+	// paired, the token it minted last, shown until dismissed.
+	pairLabel  string
+	paired     pairing
+	machineErr string
 
 	showSidebar  bool
 	showDiff     bool
