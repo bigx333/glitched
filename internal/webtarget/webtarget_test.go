@@ -23,7 +23,7 @@ func TestParseRef(t *testing.T) {
 	if e, n, err := ParseRef("s41e7"); err != nil || e != 41 || n != 7 {
 		t.Errorf("ParseRef(s41e7) = %d, %d, %v", e, n, err)
 	}
-	for _, bad := range []string{"e7", "s41", "s41e", "ref=s41e7", "S41E7", ""} {
+	for _, bad := range []string{"e7", "s41", "s41e", "ref=s41e7", "S41E7", "", "s99999999999999999999999e1", "s1e99999999999999999999999"} {
 		if _, _, err := ParseRef(bad); err == nil {
 			t.Errorf("ParseRef(%q) took it", bad)
 		}
