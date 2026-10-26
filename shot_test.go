@@ -20,10 +20,11 @@ import (
 	"glitched/internal/daemon"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
+	"glitched/internal/transport"
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|servers|machines|inbox|checks|refused|plain|stuck
+// SCENE=empty|running|approval|servers|engine|machines|inbox|checks|refused|plain|stuck
 // for the engines' threads (none started without one; ARCHIVE=<title>
 // archives one of inbox's first; refused is an archived thread whose
 // delete the engine refused; plain is an edit in a workspace with no
@@ -256,6 +257,35 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		h.tt.Frame()
 		h.click("Add server")
 		h.until("why devbox-ip wasn't added", func() bool { return h.tt.HasText("already listed as devbox") })
+	case "engine":
+		dir := tempDir(t)
+		if _, err := daemon.Pair(dir, "laptop"); err != nil {
+			t.Fatal(err)
+		}
+		h = start(t, dir)
+		ticking(t, h)
+		addr := freeAddr(t)
+		if ip, ok := transport.TailscaleIP(); ok {
+			addr = daemon.Serve(ip)[0]
+		}
+		if err := h.a.backend.SetListen([]string{addr}); err != nil {
+			t.Fatal(err)
+		}
+		h.a.router.Push("/settings/machine")
+		h.until("the engine to serve "+addr, func() bool {
+			m := h.a.backend.Machine()
+			if time.Since(m.Read) >= inspectEvery {
+				h.a.backend.Inspect()
+			}
+			return m.Embedded && len(m.Listeners) == 1 && m.Listeners[0].Accepting && len(m.Tokens) == 1
+		})
+		token, err := h.a.backend.Pair("phone")
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.a.paired = pairing{"phone", token}
+		h.until("phone's token listed", func() bool { return len(h.a.backend.Machine().Tokens) == 2 })
+		h.tt.Advance(time.Second)
 	case "inbox":
 		h = start(t, inboxDir(t))
 		h.thread("SIP re-INVITE handling")
