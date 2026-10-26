@@ -23,6 +23,7 @@ import (
 	"glitched/internal/provider/fake"
 	"glitched/internal/runtime"
 	"glitched/internal/store"
+	"glitched/internal/tailnet"
 	"glitched/internal/transport"
 )
 
@@ -45,7 +46,13 @@ type Config struct {
 	// Listen adds TCP listeners on loopback or Tailscale addresses, where a
 	// client must prove it holds a token from tokens.json. The unix socket in Dir
 	// is for this machine's user and needs none.
-	Listen  []string         `json:"listen,omitempty"`
+	Listen []string `json:"listen,omitempty"`
+	// Tailnet serves clients with a token on the tailnet at Port: on an
+	// installed Tailscale's address once it has one, else on the engine's
+	// own tsnet node, signed in to Control, a control server such as
+	// Headscale's, or Tailscale's when it's "".
+	Tailnet bool             `json:"tailnet,omitempty"`
+	Control string           `json:"control,omitempty"`
 	Epoch   uint64           `json:"epoch"` // this host's epoch at the hub
 	Adapter provider.Adapter `json:"-"`
 }
@@ -75,13 +82,15 @@ func (cfg Config) Save() error {
 // backup.
 type Daemon struct {
 	host *runtime.Host
+	node *tailnet.Node // the engine's own, when Tailnet is on and Tailscale isn't installed
 	stop context.CancelFunc
 	done chan struct{}
 	err  error
 	undo []func() error // run in reverse once serving stops
 
-	mu    sync.Mutex
-	addrs []net.Addr
+	mu        sync.Mutex
+	addrs     []net.Addr
+	tailnetAt string // where it serves an installed Tailscale's tailnet, once it does
 }
 
 // listenOn is Tailnet.Listen; a test swaps it to assign an address late.
@@ -195,10 +204,11 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	if err := os.Chmod(sock.Address, 0o600); err != nil {
 		return nil, err
 	}
-	servers := []*transport.Server{{Transport: sock, Endpoint: h, Hub: rep}}
+	ep := endpoint{h, d}
+	servers := []*transport.Server{{Transport: sock, Endpoint: ep, Hub: rep}}
 	g := &grants{dir: cfg.Dir, base: ctx}
-	tailnetServer := func(tn transport.Tailnet) *transport.Server {
-		return &transport.Server{Transport: tn, Endpoint: h, Hub: rep, Authorize: g.authorize}
+	tailnetServer := func(tn transport.Transport) *transport.Server {
+		return &transport.Server{Transport: tn, Endpoint: ep, Hub: rep, Authorize: g.authorize}
 	}
 	type unbound struct {
 		tn  transport.Tailnet
@@ -219,6 +229,28 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		lns = append(lns, ln)
 		d.addrs = append(d.addrs, ln.Addr())
 		servers = append(servers, tailnetServer(tn))
+	}
+
+	var installed bool
+	if cfg.Tailnet {
+		probe, cancel := context.WithTimeout(ctx, time.Second)
+		_, installed = detect(probe)
+		cancel()
+		if !installed {
+			node, err := tailnet.Start(filepath.Join(cfg.Dir, nodeDir), hostname(), cfg.Control)
+			if err != nil {
+				return nil, err
+			}
+			d.node = node
+			d.undo = append(d.undo, node.Close)
+			tn := transport.Embedded{Node: node, Address: ":" + Port}
+			ln, err := tn.Listen(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("daemon: listen on the embedded node: %w", err)
+			}
+			lns = append(lns, ln)
+			servers = append(servers, tailnetServer(tn))
+		}
 	}
 
 	var serving, background sync.WaitGroup
@@ -260,7 +292,15 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 			}
 		})
 	}
-	if len(cfg.Listen) > 0 {
+	if installed {
+		serving.Go(func() {
+			if err := d.serveInstalled(ctx, tailnetServer); err != nil {
+				fail(err)
+			}
+		})
+		background.Go(func() { retire(ctx, filepath.Join(cfg.Dir, nodeDir)) })
+	}
+	if len(cfg.Listen) > 0 || cfg.Tailnet {
 		background.Go(func() { g.watch(ctx) })
 	}
 	go func() {
@@ -311,7 +351,16 @@ func (d *Daemon) release() error {
 }
 
 // Endpoint is the engine in this process, for a caller that embeds it.
-func (d *Daemon) Endpoint() api.Endpoint { return d.host }
+func (d *Daemon) Endpoint() api.Endpoint { return endpoint{d.host, d} }
+
+// Node is the engine's own tailnet node, which reaches other machines'
+// engines when Tailscale isn't installed; nil when it runs none.
+func (d *Daemon) Node() transport.Node {
+	if d.node == nil {
+		return nil
+	}
+	return d.node
+}
 
 // Addrs are where the listeners from Config.Listen took their addresses,
 // once bound.

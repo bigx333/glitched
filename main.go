@@ -214,6 +214,8 @@ type app struct {
 	pairLabel  string
 	paired     pairing
 	machineErr string
+	// control is the This machine page's draft of the control server.
+	control string
 
 	showSidebar  bool
 	showDiff     bool

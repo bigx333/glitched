@@ -2,10 +2,12 @@ package main
 
 import (
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
 )
@@ -80,9 +82,9 @@ func (a *app) engineCard(c *ui.Context, m client.Machine) {
 				}
 			}
 		})
-		if e := m.Engine; e != nil {
+		if name := m.Tailnet.Name; name != "" {
 			settingRow(c, "Host", "", func() {
-				ui.Text(c, e.ID.String()).FontSize(12).Font("monospace").TextColor(palette.muted).Selectable()
+				ui.Text(c, name).FontSize(12).Font("monospace").TextColor(palette.muted).Selectable()
 			})
 		}
 		cfg := m.Config
@@ -104,38 +106,64 @@ func (a *app) engineCard(c *ui.Context, m client.Machine) {
 
 func (a *app) tailnetCard(c *ui.Context, m client.Machine) {
 	card(c, "TAILNET", func() {
-		ts := m.Tailscale
-		if ts.IsValid() {
-			statusRow(c, "tailscale", palette.green, "Tailscale is up", "This machine is "+ts.String()+" on the tailnet.", func() {
-				ui.Button(c.Key("copy-ip"), "Copy").OnClick(func() { a.copy(c, ts.String()) })
-			})
-		} else {
-			statusRow(c, "tailscale", palette.amber, "Tailscale isn't up",
-				"Other machines reach this engine only once Tailscale runs here in kernel mode, with its own interface.", nil)
+		tn := m.Tailnet
+		col, title, desc := palette.amber, "Tailscale isn't installed", "Serving on the tailnet runs Glitched's own Tailscale node, which you sign in to here."
+		switch {
+		case tn.Mode == api.TailnetEmbedded && tn.AuthURL != "":
+			col, title, desc = palette.amber, "Sign in to Tailscale", "Glitched's own node joins your tailnet once you sign in."
+		case tn.Running():
+			col, title = palette.green, "On the tailnet"
+			desc = "As " + tn.Name
+			if tn.Name == "" {
+				desc = "As " + tn.IP.String()
+			}
+			if tn.User != "" {
+				desc += ", signed in as " + tn.User
+			}
+			if tn.Tailnet != "" {
+				desc += " to " + tn.Tailnet
+			}
+			desc += "."
+		case tn.Mode != api.TailnetNone:
+			title, desc = "Tailscale is "+strings.ToLower(tn.State), "Start Tailscale or sign in to it for other machines to reach this one."
 		}
-		on := len(m.Config.Listen) > 0
-		desc := "Lets other machines reach this engine with a token from below."
+		via := map[api.TailnetMode]string{
+			api.TailnetInstalled: "Through the Tailscale installed on this machine.",
+			api.TailnetEmbedded:  "Through Glitched's own Tailscale node, in this engine.",
+		}[tn.Mode]
+		if via != "" {
+			desc += " " + via
+		}
+		statusRow(c, "tailscale", col, title, desc, func() {
+			switch {
+			case tn.AuthURL != "":
+				ui.Link(c, "Sign in", tn.AuthURL)
+			case tn.Name != "":
+				ui.Button(c.Key("copy-name"), "Copy name").OnClick(func() { a.copy(c, tn.Name) })
+			}
+		})
+
+		on := m.Config.Tailnet
+		desc = "Lets other machines reach this engine with a token from below."
 		busy := m.Embedded && a.localRuns() > 0
 		switch {
 		case busy:
 			desc = stopFirst
 		case !m.Embedded && m.Engine != nil:
 			desc = "glitched serve applies a change here when it next starts."
+		case tn.Serving != "":
+			desc = "Other machines reach this engine at " + tn.Serving + " with a token from below."
+		case on:
+			desc = "Waiting for Tailscale to be up before serving."
 		}
 		settingRow(c, "Serve on the tailnet", desc, func() {
-			sw := ui.Switch(c, &on).Label("Serve on the tailnet").Disabled(busy || !on && !ts.IsValid())
-			if !sw.Changed() {
-				return
-			}
-			var addrs []string
-			if on {
-				addrs = daemon.Serve(ts)
-			}
-			a.machineErr = ""
-			if err := a.backend.SetListen(addrs); err != nil {
-				a.machineErr = "Couldn't save engine.json: " + err.Error()
+			if ui.Switch(c, &on).Label("Serve on the tailnet").Disabled(busy).Changed() {
+				a.configure(func(cfg *daemon.Config) { cfg.Tailnet = on })
 			}
 		})
+		if tn.Mode != api.TailnetInstalled {
+			a.controlRow(c, m, busy)
+		}
 		for _, l := range m.Listeners {
 			col, title := palette.green, "Accepting connections"
 			why := ""
@@ -148,6 +176,30 @@ func (a *app) tailnetCard(c *ui.Context, m client.Machine) {
 			})
 		}
 	})
+}
+
+// controlRow picks the control server Glitched's own node signs in to:
+// Tailscale's, or one such as Headscale's.
+func (a *app) controlRow(c *ui.Context, m client.Machine, busy bool) {
+	current := m.Config.Control
+	desc := "Tailscale's. Give a Headscale server's URL to use it instead."
+	if current != "" {
+		desc = current + ". Clear it to use Tailscale's."
+	}
+	settingRow(c, "Control server", desc, func() {
+		ui.TextInput(c, &a.control).Placeholder("https://headscale.example.com").Font("monospace").Width(260)
+		ui.Button(c.Key("use-control"), "Use").Disabled(busy || a.control == current).OnClick(func() {
+			url := strings.TrimSpace(a.control)
+			a.configure(func(cfg *daemon.Config) { cfg.Control = url })
+		})
+	})
+}
+
+func (a *app) configure(change func(*daemon.Config)) {
+	a.machineErr = ""
+	if err := a.backend.Configure(change); err != nil {
+		a.machineErr = "Couldn't save engine.json: " + err.Error()
+	}
 }
 
 // stopFirst is why the engine can't restart while agents run here.
@@ -209,8 +261,11 @@ func (a *app) tokensCard(c *ui.Context, m client.Machine) {
 // needs to reach this one.
 func (a *app) pairedRow(c *ui.Context, m client.Machine) {
 	p := a.paired
-	addr := ""
+	addr := m.Tailnet.Serving
 	for _, l := range m.Listeners {
+		if addr != "" {
+			break
+		}
 		// Another machine can't reach this one's loopback.
 		if ap, err := netip.ParseAddrPort(l.Addr); l.Accepting && err == nil && !ap.Addr().IsLoopback() {
 			addr = l.Addr

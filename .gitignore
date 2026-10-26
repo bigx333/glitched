@@ -3,3 +3,4 @@
 mygo_windows_*.syso
 /t3-mygo
 .audit/
+/glitched

@@ -20,11 +20,10 @@ import (
 	"glitched/internal/daemon"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
-	"glitched/internal/transport"
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|servers|engine|machines|inbox|checks|refused|plain|stuck
+// SCENE=empty|running|approval|servers|engine (on the tailnet)|machines|inbox|checks|refused|plain|stuck
 // for the engines' threads (none started without one; refused is a
 // thread whose delete the engine refused; plain is an edit in a workspace with no
 // git; stuck is a run left uncertain, with STEER for a
@@ -263,20 +262,16 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		}
 		h = start(t, dir)
 		ticking(t, h)
-		addr := freeAddr(t)
-		if ip, ok := transport.TailscaleIP(); ok {
-			addr = daemon.Serve(ip)[0]
-		}
-		if err := h.a.backend.SetListen([]string{addr}); err != nil {
+		if err := h.a.backend.Configure(func(c *daemon.Config) { c.Tailnet = true }); err != nil {
 			t.Fatal(err)
 		}
 		h.a.router.Push("/settings/machine")
-		h.until("the engine to serve "+addr, func() bool {
+		h.until("the engine on the tailnet", func() bool {
 			m := h.a.backend.Machine()
 			if time.Since(m.Read) >= inspectEvery {
 				h.a.backend.Inspect()
 			}
-			return m.Embedded && len(m.Listeners) == 1 && m.Listeners[0].Accepting && len(m.Tokens) == 1
+			return m.Embedded && len(m.Tokens) == 1 && (m.Tailnet.Serving != "" || m.Tailnet.AuthURL != "")
 		})
 		token, err := h.a.backend.Pair("phone")
 		if err != nil {

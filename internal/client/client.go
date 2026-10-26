@@ -12,6 +12,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"glitched/internal/api"
@@ -59,6 +60,9 @@ type Manager struct {
 	// changes counts the changes made here to engine.json and tokens.json,
 	// so a read begun before one is dropped for a new one.
 	changes int
+	// node is the embedded engine's own tailnet node, which remotes dial
+	// through while it runs; the link goroutines read it, so it's atomic.
+	node atomic.Pointer[node]
 	// restarting: Restart stopped the embedded engine and no new one has
 	// reported in; again, whether Restart was called meanwhile.
 	restarting, again bool
@@ -232,11 +236,11 @@ func (m *Manager) redial(e *Env, s Server) {
 	e.unlink()
 	m.down(e, Connecting{})
 	e.server = s
-	m.connect(e, newRemote(s))
+	m.connect(e, m.newRemote(s))
 }
 
 func (m *Manager) remote(s Server) *Env {
-	return m.launch(&Env{ID: s.Engine, Kind: Remote, Name: s.Label, server: s}, newRemote(s))
+	return m.launch(&Env{ID: s.Engine, Kind: Remote, Name: s.Label, server: s}, m.newRemote(s))
 }
 
 // post runs fn on the Post thread unless ctx ended by then. Only the Post
@@ -396,7 +400,7 @@ func (m *Manager) claim(ctx context.Context, e *Env, id api.ID) error {
 			if _, dup := o.Status.(Duplicate); o.ID == id && !dup {
 				o.unlink()
 				m.down(o, Duplicate{Of: e.Name})
-				m.connect(o, newRemote(o.server))
+				m.connect(o, m.newRemote(o.server))
 			}
 		}
 		got <- nil
@@ -550,7 +554,7 @@ func (th *Thread) asks(request api.ID) bool {
 // so a run it drives outlives a dropped shell stream.
 type local struct {
 	dir      string
-	hosted   func(embedded bool) // posts whether the engine reached is embedded
+	hosted   func(embedded *daemon.Daemon) // reports the engine embedded, nil for one attached
 	attached *transport.EndpointClient
 	embedded *daemon.Daemon
 	err      error         // from closing the embedded engine
@@ -573,7 +577,7 @@ func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 		cancel()
 		if err == nil {
 			l.attached = c
-			l.hosted(false)
+			l.hosted(nil)
 			return c, nil
 		}
 		c.Close()
@@ -585,7 +589,7 @@ func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 		switch {
 		case err == nil:
 			l.embedded = d
-			l.hosted(true)
+			l.hosted(d)
 			return d.Endpoint(), nil
 		case !errors.Is(err, daemon.ErrLocked):
 			return nil, err
@@ -617,14 +621,38 @@ func (l *local) close() {
 	close(l.done)
 }
 
-// remote reaches a server over the tailnet. Its client redials on use, so
-// a session that failed needs no new one.
-type remote struct{ c *transport.EndpointClient }
+// node wraps a tailnet node for an atomic.Pointer.
+type node struct{ transport.Node }
 
-func newRemote(s Server) remote {
-	return remote{transport.NewEndpointClient(transport.Tailnet{Address: s.Addr, Token: s.Token}, api.ID{})}
+// remote reaches a server over the tailnet: through the embedded engine's
+// own node while it runs one, else through the installed Tailscale. Its
+// client redials on use, so a session that failed needs no new one.
+type remote struct {
+	s   Server
+	via *atomic.Pointer[node]
+	c   *transport.EndpointClient
+	on  *node // the node c dials through; nil for the installed Tailscale
 }
 
-func (r remote) endpoint(context.Context) (api.Endpoint, error) { return r.c, nil }
-func (remote) failed()                                          {}
-func (r remote) close()                                         { r.c.Close() }
+func (m *Manager) newRemote(s Server) *remote { return &remote{s: s, via: &m.node} }
+
+func (r *remote) endpoint(context.Context) (api.Endpoint, error) {
+	if n := r.via.Load(); r.c == nil || n != r.on {
+		r.close()
+		r.on = n
+		var tr transport.Transport = transport.Tailnet{Address: r.s.Addr, Token: r.s.Token}
+		if n != nil {
+			tr = transport.Embedded{Node: n.Node, Address: r.s.Addr, Token: r.s.Token}
+		}
+		r.c = transport.NewEndpointClient(tr, api.ID{})
+	}
+	return r.c, nil
+}
+
+func (*remote) failed() {}
+
+func (r *remote) close() {
+	if r.c != nil {
+		r.c.Close()
+	}
+}

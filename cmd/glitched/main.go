@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
+	"glitched/internal/tailnet"
 	"glitched/internal/transport"
 )
 
@@ -122,6 +124,8 @@ func serve(ctx context.Context, args []string) error {
 	epoch := fs.Uint64("epoch", 1, "this host's epoch at the hub")
 	var listen listFlag
 	fs.Var(&listen, "listen", "also serve clients with a token on this loopback or Tailscale address; repeatable, and -listen '' serves none")
+	tailnetOn := fs.Bool("tailnet", false, "serve clients with a token on the tailnet at port "+daemon.Port+": on an installed Tailscale, else on the engine's own node")
+	control := fs.String("control", "", "the control server the engine's own node signs in to, such as Headscale's; Tailscale's when empty")
 	fs.Parse(args)
 
 	set := given(fs)
@@ -154,6 +158,12 @@ func serve(ctx context.Context, args []string) error {
 	}
 	if set["listen"] {
 		cfg.Listen = slices.DeleteFunc(listen, func(addr string) bool { return addr == "" })
+	}
+	if set["tailnet"] {
+		cfg.Tailnet = *tailnetOn
+	}
+	if set["control"] {
+		cfg.Control = *control
 	}
 	d, err := daemon.Start(ctx, cfg)
 	if err != nil {
@@ -189,13 +199,29 @@ func status(ctx context.Context, args []string) error {
 	default:
 		row("hub", "none")
 	}
-	if st.Tailscale.IsValid() {
-		row("tailscale", st.Tailscale.String())
-	} else {
-		row("tailscale", "not up in kernel mode")
+	tn := st.Tailnet
+	switch tn.Mode {
+	case api.TailnetInstalled:
+		row("tailscale", "installed, "+tailnetState(tn))
+	case api.TailnetEmbedded:
+		via := "Tailscale"
+		if tn.Control != "" {
+			via = tn.Control
+		}
+		row("tailscale", "the engine's own node, on "+via+", "+tailnetState(tn))
+	default:
+		row("tailscale", "not installed; serve -tailnet runs the engine's own node")
 	}
-	if len(st.Listeners) == 0 {
-		row("listen", "none; serve -listen <tailscale ip>:"+daemon.Port+" to reach this engine from other machines")
+	if tn.AuthURL != "" {
+		row("sign in", tn.AuthURL)
+	}
+	switch {
+	case tn.Serving != "":
+		row("tailnet", "serving at "+tn.Serving)
+	case st.Config.Tailnet:
+		row("tailnet", "waiting to serve")
+	default:
+		row("tailnet", "not serving; serve -tailnet to reach this engine from other machines")
 	}
 	for _, l := range st.Listeners {
 		state := "accepting"
@@ -211,6 +237,24 @@ func status(ctx context.Context, args []string) error {
 		row("token", t.Label+"  "+t.Created.Local().Format(time.DateTime))
 	}
 	return nil
+}
+
+// tailnetState is how a machine is on the tailnet, in a few words.
+func tailnetState(t api.Tailnet) string {
+	if !t.Running() {
+		return strings.ToLower(t.State)
+	}
+	s := "up as " + t.Name
+	if t.Name == "" {
+		s = "up"
+	}
+	if t.IP.IsValid() {
+		s += " (" + t.IP.String() + ")"
+	}
+	if t.User != "" {
+		s += ", signed in as " + t.User
+	}
+	return s
 }
 
 func pair(_ context.Context, args []string) error {
@@ -248,13 +292,14 @@ func pair(_ context.Context, args []string) error {
 	if given(fs)["dir"] {
 		cmd += " -dir " + shellQuote(*dir)
 	}
-	ip, ok := transport.TailscaleIP()
-	if !ok {
-		fmt.Printf("Tailscale isn't up here. Once it is, serve with:\n\n  %s -listen <this machine's Tailscale IP>:%s\n", cmd, daemon.Port)
-		return nil
+	host := "<this machine's tailnet name>"
+	probe, cancel := context.WithTimeout(context.Background(), time.Second)
+	if t, ok := tailnet.Detect(probe); ok && t.Name != "" {
+		host = t.Name
 	}
-	addr := daemon.Serve(ip)[0]
-	fmt.Printf("Serve with:\n\n  %s -listen %s\n\nThen on the other machine:\n\n  glitched run -server %s -token %s hello\n", cmd, addr, addr, token)
+	cancel()
+	addr := net.JoinHostPort(host, daemon.Port)
+	fmt.Printf("Serve on the tailnet with:\n\n  %s -tailnet\n\nThen on the other machine:\n\n  glitched run -server %s -token %s hello\n", cmd, addr, token)
 	return nil
 }
 

@@ -102,9 +102,10 @@ func (m *Manager) AddServer(s Server, done func(error)) {
 	}
 	repair := slices.ContainsFunc(m.saved.Servers, func(o Server) bool { return o.Label == s.Label })
 	m.wg.Go(func() {
-		r := newRemote(s)
+		r := m.newRemote(s)
 		ctx, cancel := context.WithTimeout(m.ctx, addTimeout)
-		info, err := r.c.Info(ctx)
+		ep, _ := r.endpoint(ctx)
+		info, err := ep.Info(ctx)
 		cancel()
 		r.close()
 		m.post(m.ctx, func() {

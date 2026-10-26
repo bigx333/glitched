@@ -159,7 +159,7 @@ func TestPairPrintsAServeLineForItsDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "serve -dir '"+dir+"' -listen ") {
+	if !strings.Contains(out, "serve -dir '"+dir+"' -tailnet") {
 		t.Fatalf("pair -dir %s printed no serve line for that dir:\n%s", dir, out)
 	}
 }
