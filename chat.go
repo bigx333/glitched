@@ -480,6 +480,26 @@ func counts(c *ui.Context, add, del int) {
 // user reads back up the thread.
 var composerResize = ui.ElementTransition{Size: true, Duration: 250 * time.Millisecond, Ease: easeOut}
 
+// composerTransition is composerResize, and foldTransition fold, but while
+// an edge beside the chat is dragged, which the composer and its controls
+// follow as it moves rather than ease after it.
+func (a *app) composerTransition() ui.ElementTransition {
+	if a.sidebarHeld || a.previewHeld {
+		// Colors alone: none set would animate everything.
+		return ui.ElementTransition{Colors: true}
+	}
+	return composerResize
+}
+
+func (a *app) foldTransition() ui.ElementTransition {
+	if a.sidebarHeld || a.previewHeld {
+		f := fold
+		f.Size = false
+		return f
+	}
+	return fold
+}
+
 // composerCompact reports whether the composer is compact: away from the
 // end of the thread, not clicked open, holding nothing.
 func (a *app) composerCompact(t thread) bool {
@@ -506,7 +526,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 	// The frame lets the pointer through, but for the composer in it, to
 	// what is around it, as the pill taking the user to the end.
 	ui.Column(c).Absolute().Bottom(0).Left(0).Right(0).AlignItems(ui.Center).Padding(0, 24, 14).PassThrough().Children(func() {
-		ui.Column(c).Key("composer-frame").WidthPercent(100).MaxWidth(width).Gap(8).PassThrough().Transition(composerResize).Children(func() {
+		ui.Column(c).Key("composer-frame").WidthPercent(100).MaxWidth(width).Gap(8).PassThrough().Transition(a.composerTransition()).Children(func() {
 			card := ui.Column(c).Key("composer").Radius(20)
 			if compact && card.Clicked() {
 				a.composerOpened = true
@@ -520,7 +540,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 			// agent can't read.
 			dragOver := t.local() && a.dropZone(card)
 			a.pane(card, glass.Glass{}).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.28)).Clip().
-				Transition(composerResize).Children(func() {
+				Transition(a.composerTransition()).Children(func() {
 				workingGlow(c, card, t.View.Working())
 				if len(a.attachments) > 0 {
 					ui.Column(c).Key("attachments").Padding(12, 12, 0).Children(func() {
@@ -545,7 +565,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 				ui.TextArea(c.Key("draft"), &a.draft).Placeholder(placeholder).
 					Lines(2, 10).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).
 					Padding(14, 16, 4).AutoFocus().OnPaste(a.onPaste).OnTextKey(a.suggestKey)
-				ui.Row(c).Key("controls").Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
+				ui.Row(c).Key("controls").Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).ClipY().Transition(a.foldTransition()).Children(func() {
 					a.composerControls(c)
 					ui.Spacer(c)
 					if t.local() && iconButton(c, "attach", icPaperclip, "Attach files", false).Clicked() {
@@ -560,7 +580,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 			if compact {
 				return
 			}
-			ui.Row(c).Key("env-row").Gap(4).AlignItems(ui.Center).Padding(0, 6).ClipY().Transition(fold).Children(func() {
+			ui.Row(c).Key("env-row").Gap(4).AlignItems(ui.Center).Padding(0, 6).ClipY().Transition(a.foldTransition()).Children(func() {
 				a.workspaceButton(c, t)
 			})
 		})

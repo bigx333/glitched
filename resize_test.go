@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image/png"
 	"math"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/browse"
 	"glitched/internal/jsonfile"
 )
 
@@ -152,4 +154,76 @@ func TestChatColumnBesidePreview(t *testing.T) {
 		}
 	}
 	tt.SetSize(1320, 860)
+}
+
+// While the edge is held and moves, every frame lays both sides out
+// anew: the preview at the pointer, the chat in the rest, its column
+// against the composer as it stands at rest. GLITCHED_STRIP_OUT names a
+// directory for the frames, as PNGs, the page a box where the web view
+// would show. The composer follows the edge as it moves: it doesn't ease
+// into the width it's given, under the preview meanwhile.
+func TestPreviewDragsLive(t *testing.T) {
+	h, _ := long(t)
+	a, tt := h.a, h.tt
+	a.browser.open = func(url string, ev browse.Events) (browse.Page, error) { return &paintedPage{}, nil }
+	a.showPreview = true
+	tt.Advance(time.Second)
+	column := func() (left, right float32) {
+		reply, _ := tt.Find("Looking at the code.")
+		bubble, _ := tt.Find("Persist the collapsed state.")
+		model, _ := tt.Find("Model")
+		send, ok := tt.Find("Send")
+		if !ok {
+			t.Fatal("no send button")
+		}
+		if pane := 1320 - a.previewWidth(); send.X+send.W+8 > pane+1 {
+			t.Errorf("the composer ends at %v, under the preview from %v", send.X+send.W+8, pane)
+		}
+		return reply.X - (model.X - 8), bubble.X + bubble.W - (send.X + send.W + 8)
+	}
+	restL, restR := column()
+	out := os.Getenv("GLITCHED_STRIP_OUT")
+	if out != "" {
+		os.MkdirAll(out, 0o755)
+	}
+	r, ok := tt.Find("Resize preview")
+	if !ok {
+		t.Fatal("no edge")
+	}
+	x, y := r.X+r.W/2, r.Y+r.H/2
+	tt.Press(x, y)
+	const steps = 12
+	for i := 1; i <= steps; i++ {
+		to := x - float32(i)*12
+		tt.Move(to, y)
+		tt.Advance(16 * time.Millisecond) // a frame's time, as the window's
+		edge, _ := tt.Find("Resize preview")
+		if !near(edge.X+edge.W/2, to) {
+			t.Errorf("step %d: the edge is at %v, the pointer at %v", i, edge.X+edge.W/2, to)
+		}
+		if !near(a.chatWidth+a.previewWidth(), a.roomBeside) {
+			t.Errorf("step %d: chat %v and preview %v in %v", i, a.chatWidth, a.previewWidth(), a.roomBeside)
+		}
+		if l, r := column(); !near(l, restL) || !near(r, restR) {
+			t.Errorf("step %d: the column stands %v, %v from the composer, %v, %v at rest", i, l, r, restL, restR)
+		}
+		if out != "" {
+			f, _ := os.Create(filepath.Join(out, fmt.Sprintf("frame-%02d.png", i)))
+			png.Encode(f, tt.Image())
+			f.Close()
+		}
+	}
+	tt.Release(x-steps*12, y)
+	if !near(a.previewDragged, panelWidth(1320-272, 0.45, 400, 640)+steps*12) {
+		t.Errorf("preview %v wide after the drag", a.previewDragged)
+	}
+}
+
+// paintedPage is a page that paints a box where the web view would show.
+type paintedPage struct{ fakePage }
+
+func (p *paintedPage) Show(c *ui.Context) ui.Element {
+	return ui.Box(c).Background(ui.Hex("#0a7ea4")).Children(func() {
+		ui.Text(c, "page").Margin(ui.Auto).TextColor(ui.Hex("#ffffff"))
+	})
 }

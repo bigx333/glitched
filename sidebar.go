@@ -112,6 +112,10 @@ func (a *app) sidebarEdge(c *ui.Context) {
 	edge := dragEdge(c, "edge", "Resize sidebar").Right(0)
 	if dx, _, ok := edge.Dragged(); ok && dx != 0 {
 		a.sidebarWidth = min(max(a.sidebarWidth+dx, minSidebarWidth), maxSidebarWidth)
+		a.sidebarHeld = true
+	}
+	if _, _, ok := edge.DragEnded(); ok {
+		a.sidebarHeld = false
 	}
 }
 
