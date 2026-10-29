@@ -155,6 +155,44 @@ func TestAnEngineWithoutTailscaleServesOnItsOwnNode(t *testing.T) {
 	})
 }
 
+// A hub on loopback is on this machine, so an engine without Tailscale
+// uploads to it directly, with no node of its own.
+func TestALoopbackHubNeedsNoNode(t *testing.T) {
+	notInstalled(t)
+	hubDir := stateDir(t)
+	token, err := Pair(hubDir, "host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hubEngine, err := Start(context.Background(), Config{Dir: hubDir, Hub: true, Epoch: 1, Listen: []string{"127.0.0.1:0"}, Adapter: fake.New(fake.Turn(true))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { hubEngine.Close() })
+
+	host, err := Start(context.Background(), Config{Dir: stateDir(t), Epoch: 1, HubServer: hubEngine.Addrs()[0].String(), HubToken: token, Adapter: fake.New(fake.Turn(true))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { host.Close() })
+	if host.Node() != nil {
+		t.Fatal("the engine started a node of its own to reach a hub on loopback")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	thread := api.NewID()
+	create := api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{Workspace: "/w", Title: "up", Model: api.ModelRef{Provider: "fake", Model: "fake"}}}
+	if _, err := host.Endpoint().Submit(ctx, create); err != nil {
+		t.Fatal(err)
+	}
+	hubc := transport.NewHubClient(Socket(hubDir), api.ID{})
+	defer hubc.Close()
+	until(t, "the thread on the hub", func() bool {
+		evs, err := hubc.Events(ctx, thread, api.Cursor{}, 10)
+		return err == nil && len(evs) > 0
+	})
+}
+
 // A Tailscale slow to answer at start is there: the engine waits for it
 // rather than running a node of its own beside it.
 func TestASlowTailscaleIsNotMissing(t *testing.T) {

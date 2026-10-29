@@ -151,3 +151,9 @@ func hostname() string {
 	h, _, _ = strings.Cut(h, ".")
 	return strings.ToLower(h)
 }
+
+// loopback reports whether addr, a host:port, is a loopback IP.
+func loopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	return err == nil && net.ParseIP(host).IsLoopback()
+}
