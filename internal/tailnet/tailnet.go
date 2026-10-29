@@ -99,15 +99,24 @@ func Detect(ctx context.Context) (api.Tailnet, error) {
 	}
 }
 
+// tailscaledSocket is where tailscaled listens; a test points it where
+// nothing does.
+var tailscaledSocket = paths.DefaultTailscaledSocket()
+
 // dialInstalled reaches an installed Tailscale's local API as local.Client
 // does by default: the macOS app's TCP port, else tailscaled's socket. Its
 // client keeps no connection alive past a call, as Detect runs often and
 // none should outlive the engine.
+//
+// It dials the socket itself: safesocket.ConnectContext retries a missing
+// one for the first seconds of the process, in case tailscaled is starting
+// beside it, so an engine's first Detect would time out, which reads as a
+// slow Tailscale, where there is none.
 func dialInstalled(ctx context.Context, _, _ string) (net.Conn, error) {
 	if port, _, err := safesocket.LocalTCPPortAndToken(); err == nil {
 		return new(net.Dialer).DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	}
-	return safesocket.ConnectContext(ctx, paths.DefaultTailscaledSocket())
+	return new(net.Dialer).DialContext(ctx, "unix", tailscaledSocket)
 }
 
 // Node is Glitched's own tsnet node: a device on the tailnet in userspace,
