@@ -42,10 +42,7 @@ jobs:
       # root package's UI tests click on a fallback layout and fail.
       - name: Install Pango
         run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libpangocairo-1.0-0
-      # Skipped until daemon.Start stops taking tailnet.Detect's deadline
-      # for an installed Tailscale (internal/daemon/daemon.go:159-160);
-      # on a runner without Tailscale its outcome is a race.
-      - run: go test -timeout 20m -skip '^TestServeUploadsToARemoteHubWithAToken$' ./...
+      - run: go test -timeout 20m ./...
 
   race:
     runs-on: [self-hosted, ferrum, garm]
