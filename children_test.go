@@ -262,6 +262,9 @@ func TestDeleteWaitsForAWorkingChild(t *testing.T) {
 func TestACascadeGivesUpOnALineTogether(t *testing.T) {
 	h := tree3(t)
 	top, kid := h.thread("Ship the sidebar sort"), h.thread("Write the tests")
+	// deleteTree stamps a cascade once, but settleStopped reads the clock
+	// per entry, so a child can pass the grace a moment before its parent:
+	// here, by a lot, to make that moment.
 	old := time.Now().Add(-2 * stopGrace)
 	h.a.afterStop[kid.id()] = stopped{at: old}
 	h.a.afterStop[top.id()] = stopped{after: []api.ID{kid.id()}, at: time.Now()}
