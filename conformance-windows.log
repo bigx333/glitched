@@ -1,0 +1,47 @@
+﻿=== RUN   TestReloads
+--- PASS: TestReloads (0.00s)
+=== RUN   TestConformance
+=== RUN   TestConformance/Navigation
+=== RUN   TestConformance/AppPages
+=== RUN   TestConformance/Failures
+=== RUN   TestConformance/UnresolvedHost
+    conformance.go:171: known: MyGo v0.5.5 takes WebView2's HOST_NAME_NOT_RESOLVED (13) for a cancelled load and drops it
+=== RUN   TestConformance/Windows
+=== RUN   TestConformance/Closed
+=== RUN   TestConformance/Eval
+=== RUN   TestConformance/Snapshot
+    conformance.go:331: snapshot of http://127.0.0.1:56965/snap:
+        - heading "Fixture" [level=1]
+        - heading "Untagged heading" [level=2]
+        - button "Inside contents" [ref=s475232e1]
+        - treeitem "Parent" [ref=s475232e2]
+        - treeitem "Child item" [ref=s475232e3]
+        - combobox [ref=s475232e4]
+        - option "One"
+        - option "Two" [selected]
+        - button "Fenced" [disabled] [ref=s475232e5]
+        - button "More" [ref=s475232e6]
+        - button "Peeking" [ref=s475232e7]
+        - link "svg link" [ref=s475232e8]
+        - link [url="/b"] [ref=s475232e9]
+        - textbox "Shadow label" [ref=s475232e10]
+        - button "In frame" [ref=s475232e11]
+        - button "Scripted frame" [ref=s475232e12]
+        - iframe [loading]
+=== RUN   TestConformance/Limits
+=== RUN   TestConformance/Refs
+=== RUN   TestConformance/Tampering
+--- PASS: TestConformance (3.24s)
+    --- PASS: TestConformance/Navigation (0.44s)
+    --- PASS: TestConformance/AppPages (0.40s)
+    --- PASS: TestConformance/Failures (0.22s)
+    --- SKIP: TestConformance/UnresolvedHost (0.00s)
+    --- PASS: TestConformance/Windows (0.12s)
+    --- PASS: TestConformance/Closed (1.00s)
+    --- PASS: TestConformance/Eval (0.35s)
+    --- PASS: TestConformance/Snapshot (0.19s)
+    --- PASS: TestConformance/Limits (0.15s)
+    --- PASS: TestConformance/Refs (0.20s)
+    --- PASS: TestConformance/Tampering (0.17s)
+PASS
+ok  	glitched/internal/browse/sysweb	4.809s
