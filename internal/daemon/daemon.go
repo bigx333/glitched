@@ -150,9 +150,11 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	d.undo = append(d.undo, st.Close)
 
 	// The engine runs its own node when it needs the tailnet, to serve it
-	// or to reach a hub on it, and Tailscale isn't installed.
+	// or to reach a hub on it, and Tailscale isn't installed. A hub on
+	// loopback is on this machine, which no node reaches.
+	hubOnTailnet := cfg.HubServer != "" && !loopback(cfg.HubServer)
 	var installed bool
-	if cfg.Tailnet || cfg.HubServer != "" {
+	if cfg.Tailnet || hubOnTailnet {
 		probe, cancel := context.WithTimeout(ctx, time.Second)
 		_, err := detect(probe)
 		cancel()
@@ -165,7 +167,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 			}
 			d.node = node
 			d.undo = append(d.undo, node.Close)
-			if cfg.HubServer != "" {
+			if hubOnTailnet {
 				hubAt = transport.Embedded{Node: node, Address: cfg.HubServer, Token: cfg.HubToken}
 			}
 		}
