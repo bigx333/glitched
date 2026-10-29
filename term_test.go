@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -11,8 +12,12 @@ import (
 
 // The drawer's terminal runs a real shell through libghostty-vt: typed
 // commands run, and what they print shows. Skipped where the library
-// can't load (offline, before its first download).
+// can't load (offline, before its first download), or where the project
+// it opens isn't checked out.
 func TestRealTerminal(t *testing.T) {
+	if fi, err := os.Stat(expandHome("~/Projects/t3-mygo")); err != nil || !fi.IsDir() {
+		t.Skip("~/Projects/t3-mygo not checked out")
+	}
 	if err := terminal.Load(); err != nil {
 		t.Skip("libghostty-vt unavailable:", err)
 	}
