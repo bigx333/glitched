@@ -218,10 +218,14 @@ func (a *app) previewPanel(c *ui.Context) {
 		head.DragWindow().Children(func() {
 			back := iconButton(c, "back", icArrowLeft, "Back", false).Padding(5)
 			fwd := iconButton(c, "forward", icArrowRight, "Forward", false).Padding(5)
+			// One button, which stops a page loading and reloads one that
+			// isn't: each call of iconButton builds one.
 			loading := p != nil && p.IsLoading()
-			reload := iconButton(c, "reload", icRotate, "Reload  ⌘R", false).Padding(5)
+			var reload ui.Element
 			if loading {
 				reload = iconButton(c, "stop", icX, "Stop", false).Padding(5)
+			} else {
+				reload = iconButton(c, "reload", icRotate, "Reload  ⌘R", false).Padding(5)
 			}
 			back.Disabled(p == nil || !p.CanGoBack())
 			fwd.Disabled(p == nil || !p.CanGoForward())
