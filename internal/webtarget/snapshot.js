@@ -3,16 +3,19 @@
 // on with a ref ("s<epoch>e<n>") that resolve finds again while the
 // snapshot is the page's latest. Evaluated as the body of an async
 // function, with args, {key, op, epoch, interactive, maxRefs, maxChars,
-// ref}, prepended by Go.
+// maxTitle, maxURL, ref}, prepended by Go.
 //
 // Its state is private to the functions installed under args.key, a name
 // random to each run of the app, frozen, and the built-ins resolving and
 // describing a ref go through are the ones it found as it was installed.
-// That keeps a page from planting a fake before the first snapshot,
-// replacing it after, or patching a built-in after it to redirect a ref.
-// It still runs in the page's own world, which a page could have changed
-// before the first snapshot, and where it can call it itself; isolated
-// worlds will close that before agents act (docs/browser.md).
+// That keeps a page from replacing it after the first snapshot, or
+// patching a built-in after it to redirect a ref. The name is no secret
+// from a page that looks (Object.getOwnPropertyNames(window) lists it),
+// and lasts the run, so a page that learned it can plant a fake in a later
+// document before that document's first snapshot. It runs in the page's
+// own world, which a page could have changed before the first snapshot,
+// and where it can call it itself; isolated worlds will close that before
+// agents act (docs/browser.md).
 const api = window[args.key] || install(args.key);
 if (args.op === "snapshot") return api.snapshot(args);
 if (args.op === "describe") return api.describe(args.ref);
@@ -60,7 +63,8 @@ function install(key) {
   function role(el) {
     const explicit = attr(el, "role");
     if (explicit) {
-      const r = explicit.trim().split(/\s+/)[0];
+      // Clipped, as Go takes no longer role (webtarget.go).
+      const r = explicit.trim().split(/\s+/)[0].slice(0, 80);
       return r === "presentation" || r === "none" ? null : r;
     }
     // SVG's tag names are lower case.
@@ -239,7 +243,11 @@ function install(key) {
     };
     walk(document.body || document.documentElement, 0, false);
     if (truncated) lines[lines.length] = truncated;
-    return { epoch, url: location.href, title: document.title, refs: refs.length, truncated: !!truncated, text: lines.join("\n"), elements };
+    // The title and the URL are clipped beside the budget of characters,
+    // which counts the lines alone.
+    const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+    const url = clip(location.href, args.maxURL), title = clip(document.title, args.maxTitle);
+    return { epoch, url, title, refs: refs.length, truncated: !!truncated, text: lines.join("\n"), elements };
   }
 
   // resolve finds a ref's element, or says why it can't, as the engine does.
