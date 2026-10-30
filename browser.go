@@ -143,14 +143,28 @@ func (a *app) tabPage(t *browserTab) tabPage {
 // which a page says, the windows it opens, which open as tabs, and its
 // loads starting and ending.
 func (a *app) tabEvents(t *browserTab) browse.Events {
+	// A tab closed hears nothing more, whatever its page still tells, as
+	// adapters promise (browse.Page.Close).
+	open := func() bool { return slices.Contains(a.browser.tabs, t) }
 	return browse.Events{
 		// Nothing to note: the event comes through the window's Update,
 		// which builds the view again, where the bar's stop turns back to
 		// reload and the tab's spinner stops as the load ends.
-		Changed:   func() {},
-		Navigated: func(url string) { a.tabNavigated(t, url) },
-		Titled:    func(title string) { t.title = title },
+		Changed: func() {},
+		Navigated: func(url string) {
+			if open() {
+				a.tabNavigated(t, url)
+			}
+		},
+		Titled: func(title string) {
+			if open() {
+				t.title = title
+			}
+		},
 		Failed: func(url, why string) {
+			if !open() {
+				return
+			}
 			if url != "" {
 				t.url = url
 			}
@@ -160,6 +174,9 @@ func (a *app) tabEvents(t *browserTab) browse.Events {
 			}
 		},
 		Opened: func(url string) {
+			if !open() {
+				return
+			}
 			if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
 				a.openFrom(t, url)
 			}
