@@ -91,12 +91,16 @@ func (b *browser) add(url string, at int) *browserTab {
 	return t
 }
 
-// newTab opens a tab after the one shown and shows the pane: at url, or
-// for none at an empty address, which takes the keyboard.
+// newTab opens a tab after the one shown, or the first, and shows the
+// pane: at url, or for none at an empty address, which takes the
+// keyboard.
 func (a *app) newTab(url string) {
 	b := &a.browser
-	b.current()
-	b.add(url, b.active+1)
+	at := 0
+	if len(b.tabs) > 0 {
+		at = b.active + 1
+	}
+	b.add(url, at)
 	if url == "" {
 		b.focusAddress = true
 	}

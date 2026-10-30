@@ -113,6 +113,7 @@ func TestBrowserNewTab(t *testing.T) {
 // again on the dev server.
 func TestBrowserTabs(t *testing.T) {
 	a, tt, _ := browsing(t)
+	a.browser.current() // the dev server's
 	a.newTab("https://go.dev")
 	a.newTab("https://example.com")
 	tt.Frame()
@@ -303,6 +304,20 @@ func TestBrowserKeysLeaveTheTerminal(t *testing.T) {
 	}
 	if len(a.browser.tabs) != 2 || !a.browser.focusAddress {
 		t.Errorf("out of the terminal: %d tabs, address %v", len(a.browser.tabs), a.browser.focusAddress)
+	}
+}
+
+// ⌘T with no tab open opens the new tab alone, not the dev server's too.
+func TestBrowserNewTabWithNoneOpen(t *testing.T) {
+	a, tt, made := browsing(t)
+	tt.Key(ui.Cmd, ui.KeyT)
+	tt.Frame()
+	b := &a.browser
+	if len(b.tabs) != 1 || b.tabs[0].url != "" || b.active != 0 || !a.showPreview || len(*made) != 0 {
+		t.Fatalf("%d tabs, the first at %q, pane %v, pages made at %q: want one new, empty tab", len(b.tabs), b.tabs[0].url, a.showPreview, *made)
+	}
+	if !tt.Focused("Address") {
+		t.Error("the new tab's address doesn't have the keyboard")
 	}
 }
 
