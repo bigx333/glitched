@@ -254,13 +254,26 @@ func TestBrowserPageEvents(t *testing.T) {
 		t.Errorf("failed %v, named %q after loading", tab.failed, tabLabel(tab))
 	}
 	p.events.Opened("javascript:alert(1)")
-	a.newTab("https://example.com/")
-	p.events.Opened("https://go.dev/")
-	tt.Frame()
-	// The tab opens after the page's, not after the one shown.
 	b := &a.browser
-	if len(b.tabs) != 3 || b.active != 1 || b.current().url != "https://go.dev/" || (*made)[len(*made)-1] != "https://go.dev/" {
-		t.Fatalf("%d tabs, showing %d at %q after the page opened windows", len(b.tabs), b.active, b.current().url)
+	if len(b.tabs) != 1 {
+		t.Fatalf("%d tabs after a page asked for a javascript: window", len(b.tabs))
+	}
+	// Opened by the tab shown, the tab shows.
+	p.events.Opened("https://example.com/")
+	tt.Frame()
+	if len(b.tabs) != 2 || b.active != 1 || b.current().url != "https://example.com/" || (*made)[len(*made)-1] != "https://example.com/" {
+		t.Fatalf("%d tabs, showing %d at %q after the page shown opened a window", len(b.tabs), b.active, b.current().url)
+	}
+	// Opened by a tab in the background, the tab opens after it, and the
+	// one shown stays, with the keyboard it was given (⌘L).
+	b.focusAddress = true
+	p.events.Opened("https://go.dev/")
+	if len(b.tabs) != 3 || b.tabs[1].url != "https://go.dev/" || b.active != 2 || b.current().url != "https://example.com/" || !b.focusAddress {
+		t.Fatalf("%d tabs, showing %d at %q, address %v after a page in the background opened a window", len(b.tabs), b.active, b.current().url, b.focusAddress)
+	}
+	tt.Frame()
+	if (*made)[len(*made)-1] != "https://example.com/" {
+		t.Errorf("pages made at %q: the tab in the background made one before it shows", *made)
 	}
 	a.closeTab(0)
 	if !p.closed {
@@ -371,5 +384,58 @@ func TestBrowserRedrawsAsALoadEnds(t *testing.T) {
 	deliver(tt, p.events.Changed)
 	if _, ok := tt.Find("Reload  ⌘R"); !ok {
 		t.Error("the load ended and the bar still shows stop")
+	}
+}
+
+// A page opens at most openBurst tabs within openWindow, and has at most
+// maxOpenedTabs of those it opened open at once: a page opening windows in
+// a loop opens no more.
+func TestBrowserCapsTabsAPageOpens(t *testing.T) {
+	a, tt, _ := browsing(t)
+	click(t, tt, "Toggle preview  ⇧⌘P")
+	b := &a.browser
+	from := b.current()
+	p := pageOf(from)
+	opened := func() (n int) {
+		for _, t := range b.tabs {
+			if t.opener == from.id {
+				n++
+			}
+		}
+		return n
+	}
+	for range 2 * openBurst {
+		p.events.Opened("https://example.com/")
+	}
+	if n := opened(); n != openBurst {
+		t.Fatalf("%d tabs opened by a burst of %d, want %d", n, 2*openBurst, openBurst)
+	}
+	// Each window later, as many again, up to the cap.
+	for range 2 * maxOpenedTabs / openBurst {
+		tt.Advance(openWindow)
+		tt.Frame()
+		for range openBurst {
+			p.events.Opened("https://example.com/")
+		}
+	}
+	if n := opened(); n != maxOpenedTabs {
+		t.Fatalf("%d tabs opened, want the cap, %d", n, maxOpenedTabs)
+	}
+	// A tab it opened closing makes room for one.
+	a.closeTab(slices.IndexFunc(b.tabs, func(t *browserTab) bool { return t.opener == from.id }))
+	tt.Advance(openWindow)
+	tt.Frame()
+	p.events.Opened("https://go.dev/")
+	p.events.Opened("https://go.dev/")
+	if n := opened(); n != maxOpenedTabs {
+		t.Errorf("%d tabs opened after one closed, want %d", n, maxOpenedTabs)
+	}
+	// Another page opens its own.
+	other := b.tabs[len(b.tabs)-1]
+	b.active = len(b.tabs) - 1
+	tt.Frame()
+	pageOf(other).events.Opened("https://go.dev/")
+	if len(b.tabs) != 1+maxOpenedTabs+1 {
+		t.Errorf("%d tabs: another page couldn't open one", len(b.tabs))
 	}
 }
