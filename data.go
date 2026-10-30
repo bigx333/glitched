@@ -427,9 +427,14 @@ func failed(t thread) bool {
 	return slices.ContainsFunc(t.Pending, func(p client.Pending) bool { return p.Err != nil })
 }
 
-// select_ shows the thread in the chat, read.
+// select_ shows the thread in the chat, read. Another thread than the
+// draft leaves a child's draft behind: the draft shown next, should this
+// one go, is the user's, not under a parent picked before.
 func (a *app) select_(t thread) {
 	a.selected, a.dockJump = t.id(), false
+	if !t.id().IsZero() {
+		a.freshParent = api.ID{}
+	}
 	a.follow()
 	if a.router.Path() != "/" {
 		a.router.Push("/")
