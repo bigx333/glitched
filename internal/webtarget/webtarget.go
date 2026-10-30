@@ -8,8 +8,9 @@
 // and to take a new snapshot.
 //
 // The page's side is a script it evaluates (snapshot.js), as the web view
-// gives no accessibility tree of its own; refs and their epochs follow
-// the automation engine's browser MCP (docs/browser.md).
+// gives no accessibility tree of its own; the snapshot's format and the
+// refs' epochs follow a prior internal automation engine's design
+// (docs/browser.md).
 package webtarget
 
 import (

@@ -120,9 +120,9 @@ MyGo window, so it runs on a desktop only:
 GLITCHED_ENGINE_TESTS=1 go test -v ./internal/browse/sysweb
 ```
 
-It passes on WebView2 (Windows 11); the log is in
-`U:\glitched-proof\browser\conformance-windows.log`. On macOS the same
-command runs it on WKWebView.
+It passes on WebView2 (Windows 11):
+[the log](https://github.com/bigx333/glitched/blob/media/browser/conformance-windows.log).
+On macOS the same command runs it on WKWebView.
 
 MyGo v0.5.5 has two WebView2 bugs sysweb works around where it can; both
 are for upstream, in MyGo's `internal/windows/webview.go` (not filed):
@@ -240,11 +240,11 @@ that picks it. Nothing above the seam changes.
   framework reuses on the new route, with the same role and name, still
   passes `Verify` (Next, 4).
 
-### What came from the automation engine
+### Where the design comes from
 
-Cahil's automation engine (`U:\engine-temp`, the ChaosPickle browser MCP)
-is Rust driving CEF over DevTools, and several of its files note code of
-GPL lineage, so no code was copied. Glitched takes its design:
+The targeting, and the tools to come, follow the design of a prior
+internal browser automation engine, which drives CEF over DevTools. No
+code was copied from it. What Glitched takes:
 
 - The snapshot format: role, quoted name, `[level=N]` and state flags,
   `[ref=…]`, the interactive mode by default with a full mode, the budget
