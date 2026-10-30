@@ -328,3 +328,20 @@ func TestBrowserRetriesThePage(t *testing.T) {
 		t.Errorf("a new address didn't try again: err %q", tab2.err)
 	}
 }
+
+// The bar has one of reload and stop: stop while the page loads, reload
+// otherwise.
+func TestBrowserReloadOrStop(t *testing.T) {
+	a, tt, _ := browsing(t)
+	click(t, tt, "Toggle preview  ⇧⌘P")
+	p := pageOf(a.browser.current())
+	for _, loading := range []bool{false, true, false} {
+		p.loading = loading
+		tt.Frame()
+		_, reload := tt.Find("Reload  ⌘R")
+		_, stop := tt.Find("Stop")
+		if reload == loading || stop != loading {
+			t.Errorf("loading %v: reload shown %v, stop shown %v", loading, reload, stop)
+		}
+	}
+}
