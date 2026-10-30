@@ -121,9 +121,14 @@ func (a *app) tabPage(t *browserTab) tabPage {
 }
 
 // tabEvents follow a tab's page: where it goes, its title, its failures,
-// which a page says, and the windows it opens, which open as tabs.
+// which a page says, the windows it opens, which open as tabs, and its
+// loads starting and ending.
 func (a *app) tabEvents(t *browserTab) browse.Events {
 	return browse.Events{
+		// Nothing to note: the event comes through the window's Update,
+		// which builds the view again, where the bar's stop turns back to
+		// reload and the tab's spinner stops as the load ends.
+		Changed:   func() {},
 		Navigated: func(url string) { a.tabNavigated(t, url) },
 		Titled:    func(title string) { t.title = title },
 		Failed: func(url, why string) {
