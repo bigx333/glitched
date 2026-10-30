@@ -467,7 +467,8 @@ func (a *app) follow() {
 
 // changed runs after each change the manager posts: the shown thread's
 // transcript stays open, a cascade's thread whose agent has stopped is
-// deleted, and each turn that ended since is told of once.
+// deleted, and each turn that ended since is told of once, as is each
+// report a child made since.
 func (a *app) changed() {
 	a.follow()
 	a.settleStopped()
@@ -477,6 +478,10 @@ func (a *app) changed() {
 			if th.View.LastTurn != nil {
 				ended = th.View.LastTurn.Ended
 			}
+			if at, known := a.reported[id]; known && th.View.Reported.After(at) {
+				a.notifyReported(thread{e, th})
+			}
+			a.reported[id] = th.View.Reported
 			seen, known := a.ended[id]
 			a.ended[id] = ended
 			if !known || !ended.After(seen) {

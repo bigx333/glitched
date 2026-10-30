@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
@@ -521,5 +522,58 @@ func TestTheDeleteConfirmCountsOnlyWhatsUnder(t *testing.T) {
 	want := "Delete “Ship the sidebar sort” and the thread under it?"
 	if !h.tt.HasText(want) {
 		t.Fatalf("the confirm: %q; want %q", strings.Join(h.tt.Texts(), " | "), want)
+	}
+}
+
+// A child's report is told of, with the window in the background, once:
+// on its parent, saying how the child went.
+func TestAChildsReportNotifies(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		ask    bool
+		opened bool // the parent's transcript open, the chat showing it
+		want   string
+	}{
+		{"blocked", true, false, "Write the tests: Needs you"},
+		{"done", false, false, "Write the tests: Done"},
+		{"blocked, the parent shown", true, true, "Write the tests: Needs you"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := tempDir(t)
+			d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(tc.ask)))
+			top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+			kid := seedChild(t, d, top, "Write the tests")
+			h := start(t, dir)
+			var got []mygo.NotificationOptions
+			h.a.notify = func(o mygo.NotificationOptions) { got = append(got, o) }
+			parent := h.thread("Ship the sidebar sort")
+			h.thread("Write the tests")
+			if tc.opened {
+				h.a.select_(parent)
+				h.until("the parent's transcript", func() bool { return parent.Transcript != nil })
+			}
+			h.tt.Frame()
+			if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: "go"}}); err != nil {
+				t.Fatal(err)
+			}
+			reports := func() []mygo.NotificationOptions {
+				var rs []mygo.NotificationOptions
+				for _, o := range got {
+					if o.ID == "thread:"+top.String() {
+						rs = append(rs, o)
+					}
+				}
+				return rs
+			}
+			h.until("the report's notification", func() bool { return len(reports()) > 0 })
+			for range 5 {
+				h.p.run()
+				h.tt.Advance(100 * time.Millisecond)
+			}
+			rs := reports()
+			if len(rs) != 1 || rs[0].Title != "Ship the sidebar sort" || rs[0].Body != tc.want {
+				t.Fatalf("notifications on the parent: %+v; want one, %q", rs, tc.want)
+			}
+		})
 	}
 }

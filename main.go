@@ -210,8 +210,11 @@ type app struct {
 	// stopped.
 	afterStop map[api.ID]stopped
 	// ended is each thread's last turn's end, as last seen, to tell of
-	// the next once.
+	// the next once; reported, its children's last report, likewise.
 	ended    map[api.ID]time.Time
+	reported map[api.ID]time.Time
+	// notify shows a desktop notification: nil until the window is.
+	notify   func(mygo.NotificationOptions)
 	settings settings
 	// theme is the frame's look, as the settings and the system choose it.
 	theme theme
@@ -419,6 +422,7 @@ func newApp(dir string, post func(func())) *app {
 		router:        newRouter(),
 		wind:          wind.New(rand.Uint32(), nil),
 		ended:         map[api.ID]time.Time{},
+		reported:      map[api.ID]time.Time{},
 		showSidebar:   true,
 		sidebarWidth:  272,
 		model:         "Claude Opus 5.5",
@@ -746,6 +750,7 @@ func main() {
 			Vibrancy: mygo.VibrancyMenu,
 			Content:  ui.View(a.view),
 		})
+		a.notify = showNotification
 		// The wind's glyph atlases are drawn between the window's frames.
 		a.wind.SetLater(a.win.Update)
 		// The browser's pages are the system's web views of the window.
