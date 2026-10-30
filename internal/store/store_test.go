@@ -4,9 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -413,5 +416,206 @@ func TestADeletedThreadIsGone(t *testing.T) {
 	events, _ := s.ReadLog(ctx, 0, 0)
 	if last := events[len(events)-1]; last.Thread != gone || last.Type != "thread.deleted" {
 		t.Fatalf("the log ends %s on %v, want the tombstone", last.Type, last.Thread)
+	}
+}
+
+// threadsTable is the threads table's shape as SQLite has it: its columns
+// as table_info lists them, its CHECKs, whitespace aside, and whether it's
+// STRICT.
+type threadsTable struct {
+	columns []string
+	checks  []string
+	strict  bool
+}
+
+func threadsOf(t *testing.T, path string) threadsTable {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var tt threadsTable
+	rows, err := db.Query(`SELECT cid, name, type, "notnull", dflt_value, pk FROM pragma_table_info('threads') ORDER BY cid`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			t.Fatal(err)
+		}
+		tt.columns = append(tt.columns, fmt.Sprintf("%d %s %s notnull=%d default=%v pk=%d", cid, name, typ, notnull, dflt, pk))
+	}
+	rows.Close()
+	var ddl string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'threads'`).Scan(&ddl); err != nil {
+		t.Fatal(err)
+	}
+	for rest := ddl; ; {
+		i := strings.Index(rest, "CHECK")
+		if i < 0 {
+			break
+		}
+		rest = rest[i:]
+		open := strings.IndexByte(rest, '(')
+		depth, end := 0, -1
+		for j := open; j < len(rest) && end < 0; j++ {
+			switch rest[j] {
+			case '(':
+				depth++
+			case ')':
+				if depth--; depth == 0 {
+					end = j + 1
+				}
+			}
+		}
+		if open < 0 || end < 0 {
+			t.Fatalf("an unbalanced CHECK in %s", ddl)
+		}
+		tt.checks = append(tt.checks, strings.Join(strings.Fields(rest[:end]), " "))
+		rest = rest[end:]
+	}
+	slices.Sort(tt.checks)
+	if err := db.QueryRow(`SELECT strict FROM pragma_table_list WHERE name = 'threads' AND schema = 'main'`).Scan(&tt.strict); err != nil {
+		t.Fatal(err)
+	}
+	return tt
+}
+
+// downgrade rewrites a database this build created into an older build's:
+// sql rebuilds its threads table, and the version is set to version.
+func downgrade(t *testing.T, path, sqlText string, version int) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The threads table of version 3, archived threads and all.
+const threadsV3 = `
+	CREATE TABLE threads_v3 (
+		id BLOB PRIMARY KEY, workspace TEXT NOT NULL, title TEXT NOT NULL, model TEXT NOT NULL,
+		access INTEGER NOT NULL CHECK (access BETWEEN 0 AND 2), revision INTEGER NOT NULL,
+		owner_epoch INTEGER NOT NULL CHECK (owner_epoch > 0), generation INTEGER NOT NULL,
+		disposition INTEGER NOT NULL CHECK (disposition BETWEEN 0 AND 3), until INTEGER,
+		updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+		CHECK ((disposition = 1) = (until IS NOT NULL))) STRICT;
+	INSERT INTO threads_v3 SELECT id, workspace, title, model, access, revision, owner_epoch, generation,
+		disposition, until, updated_at, deleted FROM threads;
+	DROP TABLE threads;
+	ALTER TABLE threads_v3 RENAME TO threads;
+`
+
+// The threads table of version 4, main's before child threads.
+const threadsV4 = `
+	CREATE TABLE threads_v4 (
+		id BLOB PRIMARY KEY, workspace TEXT NOT NULL, title TEXT NOT NULL, model TEXT NOT NULL,
+		access INTEGER NOT NULL CHECK (access BETWEEN 0 AND 2), revision INTEGER NOT NULL,
+		owner_epoch INTEGER NOT NULL CHECK (owner_epoch > 0), generation INTEGER NOT NULL,
+		disposition INTEGER NOT NULL CHECK (disposition BETWEEN 0 AND 2), until INTEGER,
+		updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+		CHECK ((disposition = 1) = (until IS NOT NULL))) STRICT;
+	INSERT INTO threads_v4 SELECT id, workspace, title, model, access, revision, owner_epoch, generation,
+		disposition, until, updated_at, deleted FROM threads;
+	DROP TABLE threads;
+	ALTER TABLE threads_v4 RENAME TO threads;
+`
+
+// A database upgraded from version 3, from when threads could be archived,
+// or from main's version 4 ends with the threads table a new one has.
+func TestAnUpgradedThreadsTableIsANewOnes(t *testing.T) {
+	fresh := filepath.Join(t.TempDir(), "host.db")
+	open(t, fresh).Close()
+	want := threadsOf(t, fresh)
+	if !want.strict || len(want.checks) == 0 {
+		t.Fatalf("a new threads table: %+v", want)
+	}
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		version int
+	}{{"version 3", threadsV3, 3}, {"version 4", threadsV4, 4}} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "host.db")
+			open(t, path).Close()
+			downgrade(t, path, tc.sql, tc.version)
+			open(t, path).Close()
+			got := threadsOf(t, path)
+			if !slices.Equal(got.columns, want.columns) {
+				t.Errorf("columns\n%s\nwant a new table's\n%s", strings.Join(got.columns, "\n"), strings.Join(want.columns, "\n"))
+			}
+			if !slices.Equal(got.checks, want.checks) {
+				t.Errorf("checks %q, want %q", got.checks, want.checks)
+			}
+			if got.strict != want.strict {
+				t.Errorf("strict %v, want %v", got.strict, want.strict)
+			}
+		})
+	}
+}
+
+// After an upgrade from version 3, a child thread can be created, its turn's
+// tokens kept and its report recorded on its parent, and they read back.
+func TestAChildThreadAfterTheUpgradeFromVersion3(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	parent := api.NewID()
+	if _, err := s.Submit(ctx, create(parent), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	downgrade(t, path, threadsV3, 3)
+
+	s = open(t, path)
+	child := api.NewID()
+	submit := func(body api.Intent) api.ID {
+		t.Helper()
+		c := api.Command{ID: api.NewID(), Target: child, Body: body}
+		if _, err := s.Submit(ctx, c, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		return c.ID
+	}
+	submit(api.ThreadCreate{Workspace: "w", Title: "child", Model: api.ModelRef{Provider: "fake"}, Parent: parent})
+	run := submit(api.MessageDispatch{Text: "go", Mode: api.StartNow})
+	e, ok, err := s.Lease(ctx, nil)
+	if err != nil || !ok {
+		t.Fatalf("lease: %v %v", ok, err)
+	}
+	if _, err := s.Observe(ctx, child, engine.Started{Run: run}, time.Now(), e.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, child, engine.Ended{Run: run, Outcome: api.OutcomeCompleted, Tokens: 1200}, time.Now(), 0); err != nil {
+		t.Fatal(err)
+	}
+	report := api.ChildReported{Child: child, Run: run, Kind: api.ReportDone, Title: "child", Outcome: "done"}
+	if _, err := s.Observe(ctx, parent, engine.Reported{Report: report}, time.Now(), 0); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	s = open(t, path)
+	read := func(id api.ID) api.Thread {
+		t.Helper()
+		snap, err := s.Read(ctx, api.Query{Thread: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return snap.Threads[0]
+	}
+	if v := read(child); v.Parent != parent || v.Tokens != 1200 {
+		t.Errorf("the child after a reopen: parent %v, tokens %d; want %v, 1200", v.Parent, v.Tokens, parent)
+	}
+	if v := read(parent); v.Reported.IsZero() || !v.Parent.IsZero() {
+		t.Errorf("the parent after a reopen: reported %v, parent %v; want its report's time, and no parent", v.Reported, v.Parent)
 	}
 }
