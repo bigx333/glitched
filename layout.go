@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"math"
 	"path/filepath"
 
 	"glitched/internal/jsonfile"
@@ -21,6 +22,12 @@ func (a *app) loadLayout() {
 	var l layout
 	if err := jsonfile.Load(a.layoutPath(), &l); err != nil {
 		log.Printf("glitched: layout: %v", err)
+	}
+	// A width no drag gives, as a file edited by hand may hold, is none:
+	// the preview has its own.
+	if w := float64(l.PreviewWidth); math.IsNaN(w) || math.IsInf(w, 0) || w < 0 {
+		log.Printf("glitched: layout: preview width %v, not a width", w)
+		l.PreviewWidth = 0
 	}
 	a.previewDragged = l.PreviewWidth
 }
