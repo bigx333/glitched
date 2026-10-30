@@ -301,3 +301,22 @@ func TestPreviewEdgeClickKeepsTheLayout(t *testing.T) {
 		t.Errorf("held %v, dragged %v after a click", a.previewHeld, a.previewDragged)
 	}
 }
+
+// A layout.json holding a width no drag gives, as one edited by hand, is
+// none: the preview has its own width.
+func TestLayoutRefusesWidthsThatArent(t *testing.T) {
+	for _, held := range []string{"-50", "1e39", "-1e39", `"wide"`, "480"} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "layout.json"), []byte(`{"previewWidth": `+held+"}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		a := newApp(dir, func(func()) {})
+		want := float32(0)
+		if held == "480" {
+			want = 480
+		}
+		if a.previewDragged != want {
+			t.Errorf("layout.json holding %s: preview dragged to %v, want %v", held, a.previewDragged, want)
+		}
+	}
+}
