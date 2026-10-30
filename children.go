@@ -15,9 +15,10 @@ import (
 // Child threads: a thread can start others on its engine, which nest under
 // it in the sidebar and show over its composer as Cursor's agents do. A
 // child reports back to its parent as it finishes, fails or blocks on the
-// user, as a card in the parent's timeline (the engine posts it); stopping
-// or deleting a thread does as much to everything under it; settling one
-// leaves its children as they are, nested under it wherever it shows; a
+// user, as a card in the parent's timeline (the engine posts it). Only
+// deleting a thread takes everything under it, and the agents panel's
+// Stop all stops what works under it; stopping or settling a thread
+// leaves its children as they are, nested under it wherever it shows. A
 // child runs at its parent's access or less, and its tokens count in its
 // parent's total.
 
@@ -103,8 +104,8 @@ func (a *app) below(t thread) []node {
 	return out
 }
 
-// shown are the threads under t that show, in the sidebar and the agents
-// panel: all of them.
+// shown is what the sidebar and the agents panel list under t, which is
+// every thread below it.
 func (a *app) shown(t thread) []node { return a.below(t) }
 
 func needsYou(ns []node) bool {

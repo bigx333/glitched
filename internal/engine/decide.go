@@ -378,8 +378,9 @@ func (d *decision) observe(o Observation) error {
 		if err := d.emit(o.Report); err != nil {
 			return err
 		}
-		// A report wakes its parent, as a finished turn does: back in the
-		// inbox, from snoozed or settled.
+		// A report wakes its parent, and only its parent: back in the inbox,
+		// from snoozed or settled. Nothing here moves a tree; settling a
+		// thread never settles its children, nor does waking one wake them.
 		if s := d.t.Disposition.State; s == api.Snoozed || s == api.Settled {
 			return d.emit(api.DispositionChanged{Disposition: api.Disposition{}})
 		}
