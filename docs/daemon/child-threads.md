@@ -9,7 +9,7 @@ Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, aft
 - The tree is one field on the thread. Depth is never stored; it's walked, bounded.
 - The engine refuses a child deeper than 4 below a thread of the user's, or wider than its parent's access.
 - A child's run that completes, fails, or blocks on a request reports to its parent as a `child.reported` event. The report is an outbox effect, committed with the child's event, so a crash replays it rather than losing it.
-- Stop and delete of a tree are one command per thread, sent by the GUI. There's no engine-side cascade. Settling a thread is the user's word on that thread alone: its children stay as they are, nested under it wherever it shows.
+- Stop and delete of a tree are one command per thread, sent by the GUI. There's no engine-side cascade. Settling a thread is the user's word on that thread alone: its children stay as they are, nested under it wherever it shows, but for one whose agent works, which also shows in Working (see Settle below).
 - Each thread stores the tokens its own turns used. The GUI adds up a tree's.
 - The protocol goes from 3 to 4, and the store schema from 4 to 5.
 
@@ -71,7 +71,7 @@ Reading it:
 All in the GUI (`children.go`), one command per thread through the existing intents. The engine knows nothing of trees here.
 
 - **Stop**: the composer's Stop and ⌘↩ stop only the thread's own agent, as on main. The Agents panel's Stop all sends `turn.interrupt` to every live thread under it that shows (`stopAll`) and says how many. A stopped child reports nothing (see the table).
-- **Settle**: main's Settle, on one thread. Its children don't move: they show under it in Settled, and a report from one brings it back to the inbox.
+- **Settle**: main's Settle, on one thread. Its children don't move: they show under it in Settled, and a report from one brings it back to the inbox. A child whose agent works (`categoryOf` is Working) while the thread at the top of its line is Snoozed or Settled also shows in Working on its own, with "under <its parent's title>" beneath its title (`lifted` in `inbox.go`). Once it stops, or that thread is back in the inbox, it shows only nested again.
 - **Delete**: the alert counts the children and the working ones. `deleteTree` walks the tree in post-order, each thread after its own children, so no child stands on its own on the way. A thread that isn't live and has no child still waiting is deleted at once; a live one is interrupted and kept in `afterStop`, and a thread over one is kept waiting on its own children still kept, not on anything else in the tree. So an idle branch beside a working one goes at once.
 - `settleStopped` runs after each change the manager posts. It deletes a kept thread once its run has ended, waiting for the threads under it to go first. A thread whose stop hasn't landed within a minute (`stopGrace`) is given up on, so it isn't deleted later, unseen, after the user went back to it, and so is every thread over it up the line, which would otherwise be left standing on its own. A cascade's threads share one timestamp.
 - **Partial failure**: each command is independent; they're not one transaction. A refused or unsent command shows on its own thread as main's failed commands do, with Retry and Dismiss. The rest go through.
@@ -106,4 +106,4 @@ All in the GUI (`children.go`), one command per thread through the existing inte
 4. Should a child be held to its parent's workspace? Nothing checks it; the GUI only ever creates one there.
 5. What should `Tokens` count across providers: input plus output, cached or not?
 6. Settling a parent leaves its children as they are. Should Settle offer to settle the tree, as Delete takes it?
-7. A child shows only under its parent, so a working child under a Settled parent isn't in Working. Should working children also show there?
+7. A working child under a Snoozed or Settled thread now also shows in Working, with the way to its parent, and nests again once it stops or the thread is back in the inbox; it still shows under its parent too. Should it show only in Working meanwhile, its parent's count leaving it out?
