@@ -306,6 +306,20 @@ func TestBrowserKeysLeaveTheTerminal(t *testing.T) {
 	}
 }
 
+// Leaving the chat with the terminal focused, which then doesn't build,
+// gives the browser its keys back.
+func TestBrowserKeysOutOfTheChat(t *testing.T) {
+	a, tt, _ := browsing(t)
+	a.terminalFocused = true
+	a.router.Push("/settings/general")
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyT)
+	tt.Frame()
+	if len(a.browser.tabs) == 0 || !a.showPreview {
+		t.Errorf("⌘T on the settings page, the terminal focused before: %d tabs, pane %v", len(a.browser.tabs), a.showPreview)
+	}
+}
+
 // A tab whose page the engine couldn't make says why, and tries again
 // as it reloads, or as an address is typed.
 func TestBrowserRetriesThePage(t *testing.T) {
