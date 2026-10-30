@@ -345,9 +345,13 @@ func (a *app) previewPanel(c *ui.Context) {
 // button.
 func (a *app) tabStrip(c *ui.Context) {
 	b := &a.browser
-	// A tab closes once the row is built, which goes through the tabs.
-	closing := -1
+	// A tab shows or closes once the row is built, which goes through the
+	// tabs, each drawn as the one shown or not as the row began.
+	picked, closing := -1, -1
 	defer func() {
+		if picked >= 0 {
+			b.active = picked
+		}
 		if closing >= 0 {
 			a.closeTab(closing)
 		}
@@ -380,7 +384,7 @@ func (a *app) tabStrip(c *ui.Context) {
 					}
 				})
 				if pick.Clicked() {
-					b.active = i
+					picked = i
 				}
 				if ghost(c, tabKey{t.id, "close"}, false).Padding(4).Label("Close tab").Tooltip("Close tab").Children(func() {
 					ui.Icon(c, icX).FontSize(11)
