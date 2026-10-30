@@ -490,6 +490,9 @@ func (a *app) view(c *ui.Context) {
 	systemDark := c.Theme().Dark
 	a.applyTheme(c)
 	a.shortcuts(c)
+	// The drawer sets it again as it builds with the keyboard (chat.go);
+	// a frame without it, as on another page, leaves the keys the browser's.
+	a.terminalFocused = false
 	a.vibrant = c.Vibrancy() && a.settings.glass && c.Theme().Dark == systemDark
 	if c.Vibrancy() {
 		// The material shows wherever nothing paints over it.
