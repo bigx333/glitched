@@ -280,8 +280,12 @@ type app struct {
 	previewDragged float32
 	// sidebarHeld and previewHeld are set while the sidebar's or the
 	// preview's edge is dragged, from its first move until it is let go:
-	// the chat follows it without easing.
-	sidebarHeld, previewHeld bool
+	// the chat follows it without easing. sidebarPressed and
+	// previewPressed are set while the edge is pressed, as the last frame
+	// built it: an edge not built, as its pane closed mid-drag, ends no
+	// drag, and holds nothing in the next frame (view).
+	sidebarHeld, previewHeld       bool
+	sidebarPressed, previewPressed bool
 	// dir is the state directory, which holds the layout (layout.go).
 	dir string
 	// terminalFocused is set while the terminal drawer has the keyboard,
@@ -461,6 +465,9 @@ func (a *app) view(c *ui.Context) {
 	// appearance: the sidebar shows it while the app's theme matches, and
 	// the Liquid Glass setting is on.
 	a.now = c.Now()
+	a.sidebarHeld = a.sidebarHeld && a.sidebarPressed
+	a.previewHeld = a.previewHeld && a.previewPressed
+	a.sidebarPressed, a.previewPressed = false, false
 	a.projects = a.gather()
 	// A project gone, as with its server, leaves the filter, lest it hide
 	// every thread left.

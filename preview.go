@@ -99,15 +99,19 @@ func previewSpan(room float32) (lo, hi float32) {
 // previewEdge is the preview's left edge, against the chat, which the
 // pointer drags to resize it, both reflowing as it moves. A double click
 // gives it back its own width; where a drag ends, it stays, across
-// launches (layout.go).
+// launches (layout.go); a click, which moves nothing, keeps what was.
 func (a *app) previewEdge(c *ui.Context) {
-	edge := dragEdge(c, "preview-edge", "Resize preview").Left(-2)
-	if dx, _, ok := edge.Dragged(); ok && dx != 0 {
+	// Wholly over the chat: the page's web view, a native view, takes the
+	// pointer over its bounds, whatever is built over it.
+	edge := dragEdge(c, "preview-edge", "Resize preview").Left(-5)
+	dx, _, ok := edge.Dragged()
+	a.previewPressed = ok
+	if ok && dx != 0 {
 		lo, hi := previewSpan(a.roomBeside)
 		a.previewDragged = min(max(a.previewWidth()-dx, lo), hi)
 		a.previewHeld = true
 	}
-	if _, _, ok := edge.DragEnded(); ok {
+	if _, _, ok := edge.DragEnded(); ok && a.previewHeld {
 		a.previewHeld = false
 		a.saveLayout()
 	}
