@@ -178,7 +178,7 @@ func TestNoChildBelowTheDeepest(t *testing.T) {
 }
 
 // Deleting a parent deletes what's under it too, after a confirm that
-// counts them.
+// counts them: here a child and its own child, two threads under it.
 func TestDeleteTakesTheTree(t *testing.T) {
 	h := tree3(t)
 	if err := h.tt.RightClick("Ship the sidebar sort"); err != nil {
@@ -188,7 +188,7 @@ func TestDeleteTakesTheTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.tt.Advance(time.Second)
-	if !h.tt.HasText("Delete “Ship the sidebar sort” and its 2 child threads?") {
+	if !h.tt.HasText("Delete “Ship the sidebar sort” and the 2 threads under it?") {
 		t.Fatalf("no confirm: %q", h.tt.Texts())
 	}
 	h.click("Delete")
@@ -503,5 +503,23 @@ func TestAWorkingChildOfASettledThreadShowsInWorking(t *testing.T) {
 	h.until("the child stopped", func() bool { return !child.View.Live() })
 	if inWorking() {
 		t.Error("a stopped child stays in Working")
+	}
+}
+
+// The delete confirm counts the threads under the one deleted, not it:
+// one child is the thread under it.
+func TestTheDeleteConfirmCountsOnlyWhatsUnder(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	seedChild(t, d, top, "Write the tests")
+	h := start(t, dir)
+	h.thread("Write the tests")
+	h.a.askDelete(h.thread("Ship the sidebar sort"))
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	want := "Delete “Ship the sidebar sort” and the thread under it?"
+	if !h.tt.HasText(want) {
+		t.Fatalf("the confirm: %q; want %q", strings.Join(h.tt.Texts(), " | "), want)
 	}
 }
