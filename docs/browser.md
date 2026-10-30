@@ -207,11 +207,21 @@ that picks it. Nothing above the seam changes.
   go through the built-ins as the script found them when it was installed
   (`WeakRef` and its `deref`, `getAttribute`, `hasAttribute`, `matches`,
   `getBoundingClientRect`, `isConnected`, `getComputedStyle`, through a
-  captured `Reflect.apply`). So a page can't plant a fake before the first
-  snapshot, replace it after, or patch those built-ins after it, nor the
+  captured `Reflect.apply`). So once the script is installed in a
+  document, a page can't replace it, or patch those built-ins, nor the
   arrays a later snapshot fills (it writes them by index), to send a ref
-  elsewhere. That is all it guards. It still runs in the page's own
-  world, so a page can still:
+  elsewhere. Go checks what comes back (`Take`, `Describe`): a snapshot of
+  another epoch than the one asked for, refs other than that epoch's
+  `s<epoch>e1`, `e2`, … in order, or more than the budgets (refs, the
+  text's characters, a title of 300 characters and a URL of 2048, which
+  the script clips to, a role of 80 and a name of 120) fails, saying why.
+  That bounds what a fake can answer, not whether it lies. That is all it
+  guards. It still runs in the page's own world, so a page can still:
+  - learn the property's name, which hides from `for…in` and
+    `Object.keys` but not `Object.getOwnPropertyNames(window)`, and, as
+    the name lasts the run, plant a fake under it in a later document (one
+    it navigates to, or another tab's at a site it controls) before that
+    document's first snapshot;
   - change any built-in before the first snapshot in it (the script
     captures what it finds), `Reflect.apply` included;
   - change what the script reads without capturing: `textContent`,

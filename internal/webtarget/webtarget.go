@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strconv"
 	"sync/atomic"
+	"unicode/utf8"
 )
 
 //go:embed snapshot.js
@@ -95,8 +96,26 @@ type Element struct {
 var epochs atomic.Uint64
 
 // key names where the page script keeps its state in a page, random to
-// each run, which a page can't guess to fake it.
+// each run of the app. It hides nothing from a page that looks: the
+// property isn't enumerable, but Object.getOwnPropertyNames(window) lists
+// it. As it lasts the run, a page that learns it can plant a fake under it
+// in a later document, one it navigates to or another tab's at a site it
+// controls, before that document's first snapshot. The checks of Take and
+// Describe bound what a fake returns, not what it says; isolating the
+// script from the page is the fix (docs/browser.md, Next 3).
 var key = "__glitched_" + cryptorand.Text()
+
+// What a page's answer may hold, beside the snapshot's own budgets: its
+// title and URL, which the script clips to these too (snapshot.js), an
+// element's role and name, and the line saying where a snapshot was cut,
+// past its budget of characters.
+const (
+	maxTitle  = 300
+	maxURL    = 2048
+	maxRole   = 80
+	maxName   = 120
+	maxMarker = 200
+)
 
 func init() { epochs.Store(uint64(rand.IntN(1 << 20))) }
 
@@ -109,11 +128,62 @@ func Take(ctx context.Context, p Page, o Options) (Snapshot, error) {
 		o.MaxChars = 50000
 	}
 	var s Snapshot
+	epoch := epochs.Add(1)
 	err := run(ctx, p, map[string]any{
-		"op": "snapshot", "epoch": epochs.Add(1), "interactive": !o.Full,
+		"op": "snapshot", "epoch": epoch, "interactive": !o.Full,
 		"maxRefs": o.MaxRefs, "maxChars": o.MaxChars,
+		"maxTitle": maxTitle, "maxURL": maxURL,
 	}, &s)
-	return s, err
+	if err == nil {
+		err = s.check(epoch, o)
+	}
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return s, nil
+}
+
+// check reports whether a page's snapshot is one the script would have
+// taken as asked: of the epoch asked for, its refs that epoch's, in
+// order, and within its budgets.
+func (s Snapshot) check(epoch uint64, o Options) error {
+	bad := func(format string, a ...any) error {
+		return fmt.Errorf("webtarget: the page's snapshot is not the script's: "+format, a...)
+	}
+	switch {
+	case s.Epoch != epoch:
+		return bad("it is s%d, asked for as s%d", s.Epoch, epoch)
+	case len(s.Elements) > o.MaxRefs:
+		return bad("it has %d refs, past the %d asked for", len(s.Elements), o.MaxRefs)
+	case s.Refs != len(s.Elements):
+		return bad("it counts %d refs and lists %d", s.Refs, len(s.Elements))
+	case utf8.RuneCountInString(s.Text) > o.MaxChars+maxMarker:
+		return bad("its text is %d characters, past the %d asked for", utf8.RuneCountInString(s.Text), o.MaxChars)
+	case utf8.RuneCountInString(s.Title) > maxTitle:
+		return bad("its title is %d characters, past %d", utf8.RuneCountInString(s.Title), maxTitle)
+	case utf8.RuneCountInString(s.URL) > maxURL:
+		return bad("its URL is %d characters, past %d", utf8.RuneCountInString(s.URL), maxURL)
+	}
+	for i, n := range s.Elements {
+		if want := fmt.Sprintf("s%de%d", epoch, i+1); n.Ref != want {
+			return bad("its ref %d is %q, not %s", i+1, n.Ref, want)
+		}
+		if err := sizes(n.Role, n.Name); err != nil {
+			return bad("%s %v", n.Ref, err)
+		}
+	}
+	return nil
+}
+
+// sizes reports a role or a name longer than the script makes them.
+func sizes(role, name string) error {
+	if n := utf8.RuneCountInString(role); n > maxRole {
+		return fmt.Errorf("has a role of %d characters, past %d", n, maxRole)
+	}
+	if n := utf8.RuneCountInString(name); n > maxName {
+		return fmt.Errorf("has a name of %d characters, past %d", n, maxName)
+	}
+	return nil
 }
 
 // Describe finds a ref's element in the page: what it is and where.
@@ -122,8 +192,13 @@ func Describe(ctx context.Context, p Page, ref string) (Element, error) {
 	if _, _, err := ParseRef(ref); err != nil {
 		return e, err
 	}
-	err := run(ctx, p, map[string]any{"op": "describe", "ref": ref}, &e)
-	return e, err
+	if err := run(ctx, p, map[string]any{"op": "describe", "ref": ref}, &e); err != nil {
+		return Element{}, err
+	}
+	if err := sizes(e.Role, e.Name); err != nil {
+		return Element{}, fmt.Errorf("webtarget: the page's answer for %s is not the script's: it %v", ref, err)
+	}
+	return e, nil
 }
 
 var refPattern = regexp.MustCompile(`^s(\d+)e(\d+)$`)
