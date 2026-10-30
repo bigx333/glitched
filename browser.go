@@ -48,7 +48,20 @@ type browserTab struct {
 	failed bool
 	// err is why the engine could not make the tab's page.
 	err string
+	// opener is the id of the tab whose page opened this one, 0 for none;
+	// opens are when this tab's page opened tabs, within openWindow.
+	opener int
+	opens  []time.Time
 }
+
+// What a page may open, as tabs: at most maxOpenedTabs of those it opened
+// open at once, and openBurst within openWindow. More, as a page opening
+// windows in a loop asks for, open nothing.
+const (
+	maxOpenedTabs = 10
+	openBurst     = 5
+	openWindow    = 10 * time.Second
+)
 
 // tabPage is a tab's page, in whichever engine shows it.
 type tabPage = browse.Page
@@ -84,7 +97,9 @@ func (a *app) newTab(url string) {
 	b := &a.browser
 	b.current()
 	b.add(url, b.active+1)
-	b.focusAddress = url == ""
+	if url == "" {
+		b.focusAddress = true
+	}
 	a.showPreview, a.showDiff = true, false
 }
 
@@ -148,13 +163,41 @@ func (a *app) tabEvents(t *browserTab) browse.Events {
 	}
 }
 
-// openFrom opens a tab at url, as the page of tab from asked, after it.
+// openFrom opens a tab at url, as the page of tab from asked, after it,
+// within what a page may open (maxOpenedTabs). The tab shows if from was
+// the tab shown; one opened from a tab in the background stays there.
 func (a *app) openFrom(from *browserTab, url string) {
 	b := &a.browser
-	if i := slices.Index(b.tabs, from); i >= 0 {
-		b.active = i
+	i := slices.Index(b.tabs, from)
+	if i < 0 || !b.mayOpen(from, a.now) {
+		return
 	}
-	a.newTab(url)
+	from.opens = append(from.opens, a.now)
+	was := b.active
+	b.add(url, i+1).opener = from.id
+	if was != i {
+		if was > i {
+			was++
+		}
+		b.active = was
+		return
+	}
+	a.showPreview, a.showDiff = true, false
+}
+
+// mayOpen reports whether the page of tab from may open another tab now.
+func (b *browser) mayOpen(from *browserTab, now time.Time) bool {
+	from.opens = slices.DeleteFunc(from.opens, func(at time.Time) bool { return now.Sub(at) >= openWindow })
+	if len(from.opens) >= openBurst {
+		return false
+	}
+	n := 0
+	for _, t := range b.tabs {
+		if t.opener == from.id {
+			n++
+		}
+	}
+	return n < maxOpenedTabs
 }
 
 // tabNavigated notes that the tab's page went to url: its address, unless
