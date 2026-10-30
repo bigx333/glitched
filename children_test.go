@@ -425,3 +425,33 @@ func TestOnlyTheLastBlockedReportNeedsYou(t *testing.T) {
 		t.Error("a report stands with nothing waiting")
 	}
 }
+
+// A child's draft is left behind when another thread is selected: should
+// that thread go, the draft shown in its place is a thread of the user's,
+// and sends as one, not under the parent it was once started under.
+func TestSelectingAnotherThreadDropsTheChildDraft(t *testing.T) {
+	h := tree3(t)
+	top := h.thread("Ship the sidebar sort")
+	h.a.startChild(top)
+	if v := h.a.current().View; v.Parent != top.id() {
+		t.Fatalf("the child's draft is under %v, want %v", v.Parent, top.id())
+	}
+	other := h.thread("Run them")
+	h.a.select_(other)
+	h.a.backend.Delete(other.env, other.id()) // as another GUI would
+	h.until("the other thread gone", func() bool { _, ok := h.a.find(other.id()); return !ok })
+	if v := h.a.current().View; !v.ID.IsZero() || !v.Parent.IsZero() {
+		t.Fatalf("with the selected thread gone the chat shows %q under %v; want a draft of the user's", v.Title, v.Parent)
+	}
+	h.tt.Frame()
+	h.a.draft = "Check the docs."
+	h.tt.Frame()
+	h.click("Send")
+	h.until("the new thread", func() bool {
+		v := h.a.current().View
+		return !v.ID.IsZero() && v.Revision > 0
+	})
+	if v := h.a.current().View; !v.Parent.IsZero() {
+		t.Errorf("the new thread is under %v, want a thread of the user's", v.Parent)
+	}
+}
