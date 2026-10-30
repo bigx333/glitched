@@ -14,10 +14,11 @@ project's dev server, `http://localhost:5173`; other tabs browse anywhere.
   a close button. Closing the last closes the pane. Links opening windows
   (`target="_blank"`, `window.open`) open as tabs after their page's; only
   http and https. The tab shows if its page's did; one opened from a tab in
-  the background stays there. A page opens at most 5 tabs within 10
-  seconds, and has at most 10 of those it opened open at once (closing one
-  makes room); what it asks for beyond that opens nothing, as a page
-  opening windows in a loop would (`openBurst`, `openWindow`,
+  the background stays there. The pages opened from one of the user's
+  tabs, and those they open in turn, are one line: it opens at most 5 tabs
+  within 10 seconds, and has at most 10 open at once (closing one makes
+  room); what it asks for beyond that opens nothing, as a page opening
+  windows, or itself, in a loop would (`openBurst`, `openWindow`,
   `maxOpenedTabs` in `browser.go`).
 - **Keys while the pane shows:** ⌘L takes the address, ⌘R reloads, a page
   loading or not. While the terminal has the keyboard it keeps them (on
