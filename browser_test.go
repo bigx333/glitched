@@ -345,3 +345,31 @@ func TestBrowserReloadOrStop(t *testing.T) {
 		}
 	}
 }
+
+// deliver tells the page's event as an adapter does: through the window's
+// Update, which builds a frame after it (sysweb), or not at all, where the
+// tab doesn't follow the event.
+func deliver(tt *ui.Tester, event func()) {
+	if event != nil {
+		event()
+		tt.Frame()
+	}
+}
+
+// A load ending shows as it ends: the bar's stop turns back to reload with
+// no input after it.
+func TestBrowserRedrawsAsALoadEnds(t *testing.T) {
+	a, tt, _ := browsing(t)
+	click(t, tt, "Toggle preview  ⇧⌘P")
+	p := pageOf(a.browser.current())
+	p.loading = true
+	tt.Frame()
+	if _, ok := tt.Find("Stop"); !ok {
+		t.Fatal("no stop while the page loads")
+	}
+	p.loading = false
+	deliver(tt, p.events.Changed)
+	if _, ok := tt.Find("Reload  ⌘R"); !ok {
+		t.Error("the load ended and the bar still shows stop")
+	}
+}
