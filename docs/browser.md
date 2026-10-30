@@ -135,7 +135,10 @@ are for upstream, in MyGo's `internal/windows/webview.go` (not filed):
 - It reports a frame's process failing (`ProcessFailed` kind 3) as the
   page's crash, so sysweb reloads the page for it, as for a real crash.
   sysweb doesn't reload a page that is only unresponsive (kind 2), which
-  may come back with its state.
+  may come back with its state. A crashed page reloads once for each
+  navigation: crashing again before another (the app's `LoadURL`,
+  `Reload`, back or forward, or the page going to another address), it
+  shows the page saying it failed (`Failed`) instead of reloading again.
 
 ### Adding an engine (CEF)
 
