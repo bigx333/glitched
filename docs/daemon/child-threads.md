@@ -65,6 +65,7 @@ Reading it:
 - `client.Transcript` folds `child.reported` into a `*ReportEntry` and records `Transcript.Reported` (`internal/client/transcript.go`).
 - A report is never updated. The card shows a blocked report as Needs you only while the child's run still has a pending request and the report is the run's last blocked one (a run that asks twice reports twice); once it's answered or the run stopped, the same card says Was waiting, with what it waited on. No event is added for it.
 - `Manager.Unread` treats a report after the read mark as news, as a turn's end is; `MarkRead` and `MarkShown` read up to it (`internal/client/saved.go`).
+- A report is told of as a turn's end is, by a desktop notification on the parent (`notifyReported` in `notify.go`), once per report, unless the user is watching the parent or the child: "Write the tests: Needs you", Done or Failed. The parent's transcript says which child and how, while it's open and caught up; else it's the child changed last of those waiting on the user or ended by the report. A done or failed child's own turn end still notifies on the child too.
 
 ## Cascades
 
