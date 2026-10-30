@@ -227,3 +227,77 @@ func (p *paintedPage) Show(c *ui.Context) ui.Element {
 		ui.Text(c, "page").Margin(ui.Auto).TextColor(ui.Hex("#ffffff"))
 	})
 }
+
+// The preview's edge stands wholly over the chat, beside the page, whose
+// web view would take the pointer over its own bounds.
+func TestPreviewEdgeBesideThePage(t *testing.T) {
+	_, tt, _ := browsing(t)
+	click(t, tt, "Toggle preview  ⇧⌘P")
+	tt.Frame()
+	edge, ok1 := tt.Find("Resize preview")
+	page, ok2 := tt.Find("Page")
+	if !ok1 || !ok2 {
+		t.Fatal("no edge or no page")
+	}
+	// The pane starts at its border, left of the page.
+	if pane := page.X - 1; edge.X+edge.W > pane+0.5 {
+		t.Errorf("the edge spans %v to %v, over the pane from %v", edge.X, edge.X+edge.W, pane)
+	}
+}
+
+// An edge holds the chat only while it's pressed: closing its pane mid-drag
+// (⇧⌘P), which ends no drag, lets it go.
+func TestPreviewEdgeLetGoAsThePaneCloses(t *testing.T) {
+	a, tt, _ := browsing(t)
+	click(t, tt, "Toggle preview  ⇧⌘P")
+	tt.Frame()
+	r, _ := tt.Find("Resize preview")
+	x, y := r.X+r.W/2, r.Y+r.H/2
+	tt.Press(x, y)
+	tt.Move(x-30, y)
+	tt.Frame()
+	if !a.previewHeld {
+		t.Fatal("the edge dragged isn't held")
+	}
+	tt.Key(ui.Cmd|ui.Shift, ui.KeyP)
+	tt.Frame()
+	tt.Frame()
+	if a.showPreview || a.previewHeld {
+		t.Errorf("pane %v, held %v after it closed mid-drag", a.showPreview, a.previewHeld)
+	}
+	tt.Release(x-30, y)
+	// The sidebar's edge, dragged and let go, holds nothing either.
+	s, _ := tt.Find("Resize sidebar")
+	x, y = s.X+s.W/2, s.Y+s.H/2
+	tt.Press(x, y)
+	tt.Move(x+20, y)
+	tt.Frame()
+	if !a.sidebarHeld {
+		t.Fatal("the sidebar's edge dragged isn't held")
+	}
+	tt.Release(x+20, y)
+	tt.Frame()
+	if a.sidebarHeld {
+		t.Error("the sidebar's edge let go is still held")
+	}
+}
+
+// A click on the edge, which moves nothing, keeps the layout as it was,
+// unwritten: one wobbling along the edge too, which MyGo ends as a drag.
+func TestPreviewEdgeClickKeepsTheLayout(t *testing.T) {
+	a, tt, _ := browsing(t)
+	click(t, tt, "Toggle preview  ⇧⌘P")
+	tt.Frame()
+	r, _ := tt.Find("Resize preview")
+	x, y := r.X+r.W/2, r.Y+r.H/2
+	tt.Press(x, y)
+	tt.Move(x, y+3)
+	tt.Release(x, y+3)
+	tt.Frame()
+	if _, err := os.Stat(filepath.Join(a.dir, "layout.json")); !os.IsNotExist(err) {
+		t.Errorf("a click on the edge wrote layout.json (%v)", err)
+	}
+	if a.previewHeld || a.previewDragged != 0 {
+		t.Errorf("held %v, dragged %v after a click", a.previewHeld, a.previewDragged)
+	}
+}
