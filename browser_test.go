@@ -338,7 +338,7 @@ func TestBrowserNewTabWithNoneOpen(t *testing.T) {
 	tt.Frame()
 	b := &a.browser
 	if len(b.tabs) != 1 || b.tabs[0].url != "" || b.active != 0 || !a.showPreview || len(*made) != 0 {
-		t.Fatalf("%d tabs, the first at %q, pane %v, pages made at %q: want one new, empty tab", len(b.tabs), b.tabs[0].url, a.showPreview, *made)
+		t.Fatalf("%d tabs %v, pane %v, pages made at %q: want one new, empty tab", len(b.tabs), urls(b.tabs), a.showPreview, *made)
 	}
 	if !tt.Focused("Address") {
 		t.Error("the new tab's address doesn't have the keyboard")
@@ -483,12 +483,46 @@ func TestBrowserCapsTabsAPageOpens(t *testing.T) {
 	if n := opened(); n != maxOpenedTabs {
 		t.Errorf("%d tabs opened after one closed, want %d", n, maxOpenedTabs)
 	}
-	// Another page opens its own.
+	// A page it opened is in its line, and opens nothing past the cap.
 	other := b.tabs[len(b.tabs)-1]
 	b.active = len(b.tabs) - 1
+	tt.Advance(openWindow)
 	tt.Frame()
 	pageOf(other).events.Opened("https://go.dev/")
-	if len(b.tabs) != 1+maxOpenedTabs+1 {
-		t.Errorf("%d tabs: another page couldn't open one", len(b.tabs))
+	if len(b.tabs) != 1+maxOpenedTabs {
+		t.Errorf("%d tabs: a page the line opened opened one past its cap", len(b.tabs))
 	}
+	// A tab of the user's opens its own.
+	a.newTab("https://go.dev/")
+	tt.Frame()
+	mine := b.current()
+	pageOf(mine).events.Opened("https://go.dev/doc/")
+	if len(b.tabs) != 1+maxOpenedTabs+2 {
+		t.Errorf("%d tabs: the user's own tab couldn't open one", len(b.tabs))
+	}
+}
+
+// A page that opens itself as it loads, each copy shown in turn, is one
+// line: it stops at the burst, as one page opening many would.
+func TestBrowserCapsALineOfPagesOpeningThemselves(t *testing.T) {
+	a, tt, _ := browsing(t)
+	click(t, tt, "Toggle preview  ⇧⌘P")
+	b := &a.browser
+	for range 3 * openBurst {
+		from := b.current()
+		pageOf(from).events.Opened("https://example.com/")
+		tt.Frame()
+	}
+	if n := len(b.tabs); n != 1+openBurst {
+		t.Fatalf("%d tabs after a page opened itself in a loop, want %d", n, 1+openBurst)
+	}
+}
+
+// urls are the tabs' addresses, for a failure's message.
+func urls(ts []*browserTab) []string {
+	var out []string
+	for _, t := range ts {
+		out = append(out, t.url)
+	}
+	return out
 }

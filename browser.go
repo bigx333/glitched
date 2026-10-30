@@ -33,6 +33,10 @@ type browser struct {
 	// open makes a tab's page: the engine's, which the app gives it once it
 	// has a window; a test's; nil, where there is no window.
 	open browse.Opener
+	// opens are when each line of pages opened tabs, within openWindow, by
+	// the id of the user's tab at its head; kept as that tab closes, so a
+	// line can't start over by closing it.
+	opens map[int][]time.Time
 }
 
 // browserTab is a tab: its page, made as it first shows, and what its bar
@@ -48,15 +52,16 @@ type browserTab struct {
 	failed bool
 	// err is why the engine could not make the tab's page.
 	err string
-	// opener is the id of the tab whose page opened this one, 0 for none;
-	// opens are when this tab's page opened tabs, within openWindow.
+	// opener is the id of the user's tab at the head of the line of pages
+	// that opened this one, 0 for a tab of the user's: a page opening
+	// itself in a loop is one line, within one budget.
 	opener int
-	opens  []time.Time
 }
 
-// What a page may open, as tabs: at most maxOpenedTabs of those it opened
-// open at once, and openBurst within openWindow. More, as a page opening
-// windows in a loop asks for, open nothing.
+// What pages may open, as tabs, counted by the line of pages that opened
+// them from one of the user's tabs: at most maxOpenedTabs open at once, and
+// openBurst within openWindow. More, as a page opening windows in a loop,
+// or itself, asks for, open nothing.
 const (
 	maxOpenedTabs = 10
 	openBurst     = 5
@@ -193,9 +198,10 @@ func (a *app) openFrom(from *browserTab, url string) {
 	if i < 0 || !b.mayOpen(from, a.now) {
 		return
 	}
-	from.opens = append(from.opens, a.now)
+	line := lineOf(from)
+	b.opens[line] = append(b.opens[line], a.now)
 	was := b.active
-	b.add(url, i+1).opener = from.id
+	b.add(url, i+1).opener = line
 	if was != i {
 		if was > i {
 			was++
@@ -206,15 +212,31 @@ func (a *app) openFrom(from *browserTab, url string) {
 	a.showPreview, a.showDiff = true, false
 }
 
-// mayOpen reports whether the page of tab from may open another tab now.
+// lineOf is the id of the user's tab at the head of t's line of pages.
+func lineOf(t *browserTab) int {
+	if t.opener != 0 {
+		return t.opener
+	}
+	return t.id
+}
+
+// mayOpen reports whether the page of tab from may open another tab now,
+// within its line's budget.
 func (b *browser) mayOpen(from *browserTab, now time.Time) bool {
-	from.opens = slices.DeleteFunc(from.opens, func(at time.Time) bool { return now.Sub(at) >= openWindow })
-	if len(from.opens) >= openBurst {
+	if b.opens == nil {
+		b.opens = map[int][]time.Time{}
+	}
+	line := lineOf(from)
+	b.opens[line] = slices.DeleteFunc(b.opens[line], func(at time.Time) bool { return now.Sub(at) >= openWindow })
+	if len(b.opens[line]) == 0 {
+		delete(b.opens, line)
+	}
+	if len(b.opens[line]) >= openBurst {
 		return false
 	}
 	n := 0
 	for _, t := range b.tabs {
-		if t.opener == from.id {
+		if t.opener == line {
 			n++
 		}
 	}
