@@ -281,7 +281,7 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // version 2 added the thread.deleted tombstone, which a version 1 peer
 // would show as an open thread, and an archived disposition, which version
 // 3 dropped for Settled and a version 2 peer may still send; version 4
-// child threads and their reports, which a version 3 peer would show as
+// added child threads and their reports, which a version 3 peer would show as
 // threads of the user's with nothing reported.
 const Protocol = 4
 
