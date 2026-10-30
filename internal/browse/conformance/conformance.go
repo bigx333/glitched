@@ -259,25 +259,28 @@ func (s *suite) unresolved(t *testing.T) {
 	s.until("the failure", func() bool { return r.count(&r.failed) > 0 })
 }
 
-// A page closed tells nothing more, not even what it was doing.
+// A page closed tells nothing more, not even what it was doing: a page
+// loading, one failing to, and one asking for a window as it loads.
 func (s *suite) closed(t *testing.T) {
 	s.t = t
-	r := &recorder{}
-	var p browse.Page
-	var err error
-	s.h.Do(func() {
-		if p, err = s.h.Open(s.url("/a"), r.events()); err == nil {
-			p.Close()
+	for _, u := range []string{s.url("/a"), closedURL(), s.url("/opens")} {
+		r := &recorder{}
+		var p browse.Page
+		var err error
+		s.h.Do(func() {
+			if p, err = s.h.Open(u, r.events()); err == nil {
+				p.Close()
+			}
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(time.Second)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.navigated)+len(r.titles)+r.changed > 0 {
-		t.Errorf("a closed page told %v, %v, %d changes", r.navigated, r.titles, r.changed)
+		time.Sleep(time.Second)
+		r.mu.Lock()
+		if len(r.navigated)+len(r.titles)+len(r.failed)+len(r.opened)+r.changed > 0 {
+			t.Errorf("%s, closed, told %v, %v, failed %v, opened %v, %d changes", u, r.navigated, r.titles, r.failed, r.opened, r.changed)
+		}
+		r.mu.Unlock()
 	}
 }
 
@@ -523,6 +526,7 @@ func fixtures() http.Handler {
 	mux.Handle("/a", page(`<!doctype html><title>Page A</title><a href="/b">to b</a> <a id="blank" href="/c" target="_blank">new window</a>`))
 	mux.Handle("/b", page(`<!doctype html><title>Page B</title><a href="/a">to a</a>`))
 	mux.Handle("/c", page(`<!doctype html><title>Page C</title>`))
+	mux.Handle("/opens", page(`<!doctype html><title>Opens</title><script>window.open("/b")</script>`))
 	mux.Handle("/snap", page(snapFixture))
 	// A page that doesn't come, as a frame still loading shows.
 	mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {

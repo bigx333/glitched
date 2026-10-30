@@ -282,6 +282,30 @@ func TestBrowserPageEvents(t *testing.T) {
 	}
 }
 
+// A tab closed hears nothing its page still tells: no failure page, no
+// address, no tab opened.
+func TestBrowserClosedTabHearsNothing(t *testing.T) {
+	a, tt, _ := browsing(t)
+	click(t, tt, "Toggle preview  ⇧⌘P")
+	tab := a.browser.current()
+	p := pageOf(tab)
+	a.newTab("https://example.com/")
+	tt.Frame()
+	a.closeTab(0)
+	p.events.Failed("http://localhost:5173/missing", "Connection refused")
+	p.events.Opened("https://go.dev/")
+	p.events.Navigated("http://localhost:5173/about")
+	p.events.Titled("Vite App")
+	deliver(tt, p.events.Changed)
+	b := &a.browser
+	if len(b.tabs) != 1 || b.current().url != "https://example.com/" {
+		t.Errorf("%d tabs, showing %q: a closed tab's page opened one", len(b.tabs), b.current().url)
+	}
+	if p.html != "" || tab.failed || tab.url != defaultPreviewURL || tab.title != "" {
+		t.Errorf("a closed tab heard its page: failed %v at %q, title %q, page %q", tab.failed, tab.url, tab.title, p.html)
+	}
+}
+
 // The terminal keeps Ctrl+T, L and R while it has the keyboard, where
 // they are the browser's ⌘ keys (Windows, Linux). The drawer notes its
 // focus as it builds (chat.go); here the keys meet the flag alone.
