@@ -455,3 +455,53 @@ func TestSelectingAnotherThreadDropsTheChildDraft(t *testing.T) {
 		t.Errorf("the new thread is under %v, want a thread of the user's", v.Parent)
 	}
 }
+
+// A child whose agent works shows in Working, the way to its parent under
+// its title, while its parent is snoozed or settled, out of sight; it nests
+// again once its parent is back in the inbox, or it stops.
+func TestAWorkingChildOfASettledThreadShowsInWorking(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, stalled{fake.New(midTurn), 1})
+	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	kid := seedChild(t, d, top, "Write the tests")
+	submit := func(id api.ID, b api.Intent) {
+		t.Helper()
+		if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	submit(top, api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+	submit(kid, api.MessageDispatch{Text: "go"})
+	h := start(t, dir)
+	parent, child := h.thread("Ship the sidebar sort"), h.thread("Write the tests")
+	h.until("the child working under its settled parent", func() bool {
+		return child.View.Working() && parent.View.Disposition.State == api.Settled
+	})
+	inWorking := func() bool {
+		h.tt.Frame()
+		return slices.ContainsFunc(h.a.itemsIn(catWorking), func(it inboxItem) bool { return it.t.id() == kid })
+	}
+	if !inWorking() {
+		t.Fatal("a working child of a settled thread isn't in Working")
+	}
+	h.click("Working")
+	h.tt.Advance(time.Second)
+	if _, ok := h.tt.Find("under Ship the sidebar sort"); !ok {
+		t.Errorf("the child's row doesn't lead to its parent: %q", strings.Join(h.tt.Texts(), " | "))
+	}
+	h.a.backend.SetDisposition(parent.env, top, api.Disposition{})
+	h.until("the parent back in the inbox", func() bool { return parent.View.Disposition.State == api.Open })
+	if inWorking() {
+		t.Error("the child stays in Working with its parent back in the inbox")
+	}
+	h.a.backend.SetDisposition(parent.env, top, api.Disposition{State: api.Snoozed, Until: time.Now().Add(time.Hour)})
+	h.until("the parent snoozed", func() bool { return parent.View.Disposition.State == api.Snoozed })
+	if !inWorking() {
+		t.Fatal("a working child of a snoozed thread isn't in Working")
+	}
+	h.a.backend.Interrupt(child.env, kid)
+	h.until("the child stopped", func() bool { return !child.View.Live() })
+	if inWorking() {
+		t.Error("a stopped child stays in Working")
+	}
+}

@@ -86,14 +86,34 @@ func (a *app) itemsIn(cat category) []inboxItem {
 			continue
 		}
 		for _, t := range p.threads {
-			// A child shows under its parent.
-			if a.shownIn(t) == cat && !a.nested(t) {
+			// A child shows under its parent, but for one lifted into
+			// Working.
+			if a.shownIn(t) == cat && (!a.nested(t) || a.lifted(t)) {
 				items = append(items, inboxItem{t, p})
 			}
 		}
 	}
 	slices.SortFunc(items, func(x, y inboxItem) int { return newestFirst(x.t, y.t) })
 	return items
+}
+
+// lifted is whether t, a child, shows in Working on its own, as well as
+// under its parent: its agent works while the thread at the top of its
+// line is snoozed or settled, where the child would be out of sight. It
+// nests again once it stops or that thread is back in the inbox.
+func (a *app) lifted(t thread) bool {
+	if a.categoryOf(t) != catWorking {
+		return false
+	}
+	up := a.ancestors(t)
+	if len(up) == 0 {
+		return false
+	}
+	switch a.shownIn(up[0]) {
+	case catSnoozed, catSettled:
+		return true
+	}
+	return false
 }
 
 func (a *app) threadsNav(c *ui.Context) {
@@ -332,7 +352,17 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 			a.renameInput(c, t)
 			return
 		}
-		name := ui.Text(c, title(t)).FontSize(13).SingleLine().Grow(1).Shrink(1)
+		var name ui.Element
+		if p, ok := a.parentOf(t); ok {
+			// A child lifted into Working: the way to its parent, under its
+			// title.
+			ui.Column(c).Grow(1).Shrink(1).Children(func() {
+				name = ui.Text(c, title(t)).FontSize(13).SingleLine()
+				ui.Text(c, "under "+title(p)).FontSize(10.5).TextColor(palette.faint).SingleLine()
+			})
+		} else {
+			name = ui.Text(c, title(t)).FontSize(13).SingleLine().Grow(1).Shrink(1)
+		}
 		if unread {
 			name.FontWeight(600).TextColor(palette.text)
 		}
