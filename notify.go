@@ -42,30 +42,30 @@ func (a *app) watching(t thread) bool {
 }
 
 // notifyReported tells the user, as notifyFinished does, that a child of
-// t reported to it: done, failed, or needing them. Clicking it opens t,
-// where the report is. Neither t nor the child is one they're watching.
+// t needs them: its report says it waits on a request, which ends no turn,
+// so nothing else tells of it. A child done or failed ended its turn, which
+// notifyFinished told of already. Clicking it opens t, where the report
+// is. Neither t nor the child is one they're watching.
 func (a *app) notifyReported(t thread) {
 	if !a.settings.notifications || a.notify == nil || a.watching(t) {
 		return
 	}
-	child, kind, ok := a.lastReport(t)
+	child, ok := a.blockedReport(t)
 	if !ok || a.watching(child) {
 		return
 	}
-	state := map[api.ReportKind]string{api.ReportDone: "Done", api.ReportFailed: "Failed", api.ReportBlocked: "Needs you"}[kind]
 	a.notify(mygo.NotificationOptions{
 		ID:    "thread:" + t.id().String(),
 		Title: t.View.Title,
-		Body:  title(child) + ": " + state,
+		Body:  title(child) + ": Needs you",
 		Group: "threads",
 	})
 }
 
-// lastReport is the child of t that reported to it last, and how. The
-// transcript says, when it's open and caught up; else it's the child
-// changed last of those that could have reported: one waiting on the user,
-// or one whose turn ended by the report.
-func (a *app) lastReport(t thread) (thread, api.ReportKind, bool) {
+// blockedReport is the child of t whose report to it, the last, says it
+// waits on the user. The transcript says, when it's open and caught up;
+// else it's the child changed last of those with a request pending.
+func (a *app) blockedReport(t thread) (thread, bool) {
 	if tr := t.Transcript; tr != nil {
 		for i := len(tr.Entries) - 1; i >= 0; i-- {
 			if r, ok := tr.Entries[i].(*client.ReportEntry); ok {
@@ -73,30 +73,20 @@ func (a *app) lastReport(t thread) (thread, api.ReportKind, bool) {
 					break // the transcript is behind the view
 				}
 				th := t.env.Threads[r.Child]
-				if th == nil {
-					return thread{}, 0, false
+				if th == nil || r.Kind != api.ReportBlocked {
+					return thread{}, false
 				}
-				return thread{t.env, th}, r.Kind, true
+				return thread{t.env, th}, true
 			}
 		}
 	}
 	var last thread
 	for _, k := range a.kidsOf()[t.id()] {
-		v := k.View
-		could := len(v.Requests) > 0 || (!v.Live() && v.LastTurn != nil && !v.LastTurn.Ended.After(t.View.Reported))
-		if could && (last.Thread == nil || v.UpdatedAt.After(last.View.UpdatedAt)) {
+		if len(k.View.Requests) > 0 && (last.Thread == nil || k.View.UpdatedAt.After(last.View.UpdatedAt)) {
 			last = k
 		}
 	}
-	switch {
-	case last.Thread == nil:
-		return thread{}, 0, false
-	case len(last.View.Requests) > 0:
-		return last, api.ReportBlocked, true
-	case last.View.LastTurn.Outcome == api.OutcomeFailed:
-		return last, api.ReportFailed, true
-	}
-	return last, api.ReportDone, true
+	return last, last.Thread != nil
 }
 
 // showNotification shows a desktop notification. Showing may wait on the

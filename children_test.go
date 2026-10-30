@@ -527,6 +527,35 @@ func TestTheDeleteConfirmCountsOnlyWhatsUnder(t *testing.T) {
 
 // A child's report is told of, with the window in the background, once:
 // on its parent, saying how the child went.
+// Under a settled thread, a working child's working child shows in that
+// child's rows, not in Working a second time on its own.
+func TestALiftedChildsChildIsntLiftedToo(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, stalled{fake.New(midTurn), 1})
+	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	kid := seedChild(t, d, top, "Write the tests")
+	leaf := seedChild(t, d, kid, "Run them")
+	for _, c := range []struct {
+		id api.ID
+		b  api.Intent
+	}{{top, api.InboxSet{Disposition: api.Disposition{State: api.Settled}}}, {kid, api.MessageDispatch{Text: "go"}}, {leaf, api.MessageDispatch{Text: "go"}}} {
+		if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: c.id, Body: c.b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := start(t, dir)
+	child, grand := h.thread("Write the tests"), h.thread("Run them")
+	h.until("both working", func() bool { return child.View.Working() && grand.View.Working() })
+	h.tt.Frame()
+	var ids []api.ID
+	for _, it := range h.a.itemsIn(catWorking) {
+		ids = append(ids, it.t.id())
+	}
+	if !slices.Contains(ids, kid) || slices.Contains(ids, leaf) {
+		t.Fatalf("Working lists %v; want the child %v and not its child %v", ids, kid, leaf)
+	}
+}
+
 func TestAChildsReportNotifies(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -535,7 +564,7 @@ func TestAChildsReportNotifies(t *testing.T) {
 		want   string
 	}{
 		{"blocked", true, false, "Write the tests: Needs you"},
-		{"done", false, false, "Write the tests: Done"},
+		{"done", false, false, ""}, // its turn's end tells of it
 		{"blocked, the parent shown", true, true, "Write the tests: Needs you"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -565,12 +594,24 @@ func TestAChildsReportNotifies(t *testing.T) {
 				}
 				return rs
 			}
-			h.until("the report's notification", func() bool { return len(reports()) > 0 })
+			if tc.want == "" {
+				h.until("the child's turn's end", func() bool {
+					return slices.ContainsFunc(got, func(o mygo.NotificationOptions) bool { return o.ID == "thread:"+kid.String() })
+				})
+			} else {
+				h.until("the report's notification", func() bool { return len(reports()) > 0 })
+			}
 			for range 5 {
 				h.p.run()
 				h.tt.Advance(100 * time.Millisecond)
 			}
 			rs := reports()
+			if tc.want == "" {
+				if len(rs) != 0 {
+					t.Fatalf("notifications on the parent: %+v; want none", rs)
+				}
+				return
+			}
 			if len(rs) != 1 || rs[0].Title != "Ship the sidebar sort" || rs[0].Body != tc.want {
 				t.Fatalf("notifications on the parent: %+v; want one, %q", rs, tc.want)
 			}

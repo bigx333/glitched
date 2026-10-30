@@ -100,7 +100,8 @@ func (a *app) itemsIn(cat category) []inboxItem {
 // lifted is whether t, a child, shows in Working on its own, as well as
 // under its parent: its agent works while the thread at the top of its
 // line is snoozed or settled, where the child would be out of sight. It
-// nests again once it stops or that thread is back in the inbox.
+// nests again once it stops or that thread is back in the inbox. Under a
+// working thread lifted already, it shows in that one's rows instead.
 func (a *app) lifted(t thread) bool {
 	if a.categoryOf(t) != catWorking {
 		return false
@@ -108,6 +109,12 @@ func (a *app) lifted(t thread) bool {
 	up := a.ancestors(t)
 	if len(up) == 0 {
 		return false
+	}
+	// A working thread between them is lifted itself, with t in its rows.
+	for _, x := range up[1:] {
+		if a.categoryOf(x) == catWorking {
+			return false
+		}
 	}
 	switch a.shownIn(up[0]) {
 	case catSnoozed, catSettled:
