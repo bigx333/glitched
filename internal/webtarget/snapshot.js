@@ -467,7 +467,11 @@ function install(key) {
     for (let i = 0; i < rec.chain.length; i++) {
       const f = deref(rec.chain[i].frame), d = deref(rec.chain[i].doc);
       if (!f || !connected(f) || get(B.ownerDocument, f) !== doc) throw gone(ref);
-      if (!d || get(B.contentDocument, f) !== d) {
+      // A frame gone to another origin's page throws as its document is
+      // read: it navigated too.
+      let now = null;
+      try { now = get(B.contentDocument, f); } catch {}
+      if (!d || now !== d) {
         throw new Err(`${ref} is from before its frame navigated or reloaded; take a new snapshot`);
       }
       doc = d;
