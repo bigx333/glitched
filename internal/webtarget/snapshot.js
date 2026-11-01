@@ -39,6 +39,7 @@ function install(key) {
   const apply = Reflect.apply;
   const create = Object.create;
   const defineProperty = Object.defineProperty;
+  const setPrototypeOf = Object.setPrototypeOf;
   const ownDescriptor = Object.getOwnPropertyDescriptor;
   const freeze = Object.freeze;
   const Err = Error;
@@ -335,7 +336,10 @@ function install(key) {
     epoch = args.epoch;
     refs = create(null);
     count = 0;
-    const lines = [], elements = [];
+    // elements, which it answers with, has no prototype either, so the
+    // wrapper's JSON.stringify finds no toJSON on Array.prototype; it is
+    // an array still, which JSON.stringify writes as one.
+    const lines = [], elements = setPrototypeOf([], null);
     let chars = 0, truncated = "";
     const fits = (depth, line) => chars + 2 * depth + line.length + 1 <= args.maxChars;
     const cut = () => {
