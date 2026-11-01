@@ -217,6 +217,44 @@ func TestBrowserNavigation(t *testing.T) {
 	}
 }
 
+// The pane closing while the address has the keyboard lets go of what
+// was typed: opened again, the bar shows the tab's address, the one reload
+// and "Open in browser" use, and a page navigating sets it.
+func TestBrowserAddressLetGoAsThePaneCloses(t *testing.T) {
+	for _, how := range []string{"click", "keys"} {
+		a, tt, _ := browsing(t)
+		click(t, tt, "Toggle preview  ⇧⌘P")
+		tt.Key(ui.Cmd, ui.KeyL)
+		tt.Frame()
+		if !tt.Focused("Address") {
+			t.Fatalf("%s: ⌘L didn't give the address the keyboard", how)
+		}
+		tt.Key(ui.Cmd, ui.KeyA)
+		tt.Type("exa")
+		tt.Frame()
+		tab := a.browser.current()
+		if tab.draft != "exa" || !a.browser.typing {
+			t.Fatalf("%s: address %q, typing %v", how, tab.draft, a.browser.typing)
+		}
+		if how == "click" {
+			click(t, tt, "Close preview")
+		} else {
+			tt.Key(ui.Cmd|ui.Shift, ui.KeyP)
+		}
+		tt.Frame()
+		tt.Frame()
+		if a.showPreview || a.browser.typing || tab.draft != defaultPreviewURL {
+			t.Errorf("%s: pane %v, typing %v, address %q after it closed", how, a.showPreview, a.browser.typing, tab.draft)
+		}
+		a.tabNavigated(tab, "http://localhost:5173/about")
+		click(t, tt, "Toggle preview  ⇧⌘P")
+		tt.Frame()
+		if tab.draft != "http://localhost:5173/about" || a.browser.typing {
+			t.Errorf("%s: opened again, address %q, typing %v", how, tab.draft, a.browser.typing)
+		}
+	}
+}
+
 func TestTabLabel(t *testing.T) {
 	for _, tc := range []struct {
 		tab  browserTab

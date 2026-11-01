@@ -30,6 +30,9 @@ type browser struct {
 	// navigating then doesn't type over; focusAddress gives it the
 	// keyboard in the next frame, as ⌘L and a new tab do.
 	typing, focusAddress bool
+	// barBuilt is set as the bar builds: a frame after one that didn't
+	// build it, as the pane closed, lets go of the address (letGo).
+	barBuilt bool
 	// open makes a tab's page: the engine's, which the app gives it once it
 	// has a window; a test's; nil, where there is no window.
 	open browse.Opener
@@ -243,6 +246,23 @@ func (b *browser) mayOpen(from *browserTab, now time.Time) bool {
 	return n < maxOpenedTabs
 }
 
+// letGo lets go of the address once its bar went unbuilt, as the pane
+// closed while it had the keyboard, or with a draft not entered: what was
+// typed goes, and the address is the tab's again, which reload and "Open
+// in browser" use. Called as each frame begins (view).
+func (b *browser) letGo() {
+	built := b.barBuilt
+	b.barBuilt = false
+	if built {
+		return
+	}
+	b.typing = false
+	if len(b.tabs) > 0 {
+		t := b.tabs[b.active]
+		t.draft = t.url
+	}
+}
+
 // tabNavigated notes that the tab's page went to url: its address, unless
 // it is being typed in.
 func (a *app) tabNavigated(t *browserTab, url string) {
@@ -344,7 +364,7 @@ func (a *app) previewPanel(c *ui.Context) {
 				in.Focus()
 				b.focusAddress = false
 			}
-			b.typing = in.Focused()
+			b.typing, b.barBuilt = in.Focused(), true
 			if in.Submitted() && strings.TrimSpace(t.draft) != "" {
 				a.goTo(t, t.draft)
 			}
