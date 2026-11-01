@@ -97,7 +97,9 @@ func (s *suite) until(what string, cond func() bool) {
 func (s *suite) framed(p browse.Page) {
 	s.t.Helper()
 	s.until("the frame", func() bool {
-		v, err := p.EvalContext(context.Background(), `return ["framed", "hidden-frame"].every((id) => !!document.getElementById(id).contentDocument?.querySelector("button"))`)
+		v, err := p.EvalContext(context.Background(), `return ["framed", "hidden-frame"].every((id) => !!document.getElementById(id).contentDocument?.querySelector("button")) &&
+			document.getElementById("editable").contentDocument?.readyState === "complete" &&
+			document.getElementById("editable").contentDocument.body?.hasAttribute("contenteditable") === true`)
 		return err == nil && v == true
 	})
 }
@@ -351,6 +353,8 @@ func (s *suite) snapshot(t *testing.T) {
 		`- link [url="/b"]` + ref,
 		"- iframe [loading]",
 		`- button "Scripted frame"` + ref,
+		`- textbox "Editable body"` + ref,
+		`- textbox "Design mode"` + ref,
 	} {
 		if !strings.Contains(snap.Text, want) {
 			t.Errorf("no %q", want)
@@ -669,9 +673,16 @@ const snapFixture = `<!doctype html><meta charset="utf-8"><title>Snap</title>
   srcdoc="<button style='margin:10px'>In frame</button>"></iframe>
 <iframe id="hidden-frame" style="visibility:hidden" srcdoc="<button>Hidden frame</button>"></iframe>
 <iframe id="scripted"></iframe>
+<iframe id="editable" srcdoc="<body contenteditable aria-label='Editable body'><p>Draft</p></body>"></iframe>
+<iframe id="designed"></iframe>
 <script>
 const root = document.getElementById("host").attachShadow({ mode: "open" });
 root.innerHTML = '<span id="lbl">Shadow label</span><input aria-labelledby="lbl">';
 // A frame with no address that a script fills, as an editor's.
 document.getElementById("scripted").contentDocument.body.innerHTML = "<button>Scripted frame</button>";
+// An editor's frame, its body edited whole: by contenteditable, and in
+// design mode.
+const designed = document.getElementById("designed").contentDocument;
+designed.body.setAttribute("aria-label", "Design mode");
+designed.designMode = "on";
 </script>`
