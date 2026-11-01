@@ -468,7 +468,7 @@ func (a *app) view(c *ui.Context) {
 	a.sidebarHeld = a.sidebarHeld && a.sidebarPressed
 	a.previewHeld = a.previewHeld && a.previewPressed
 	a.sidebarPressed, a.previewPressed = false, false
-	a.browser.letGo()
+	a.browser.letGo(a.showPreview)
 	a.projects = a.gather()
 	// A project gone, as with its server, leaves the filter, lest it hide
 	// every thread left.
