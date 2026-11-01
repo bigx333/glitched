@@ -12,6 +12,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -454,65 +455,151 @@ func (s *suite) refs(t *testing.T) {
 	}
 }
 
-// A page can't plant or replace the script's state, nor redirect a ref
-// by patching the built-ins resolving it goes through after the script
-// is installed. That is all this guards; a page that changed them before
-// the first snapshot, or that calls the script itself, still can mislead
-// it, until it runs in an isolated world (docs/browser.md).
+// A page can't plant or replace the script's state, nor redirect a ref or
+// change what one finds by patching, after the script is installed,
+// anything resolving and describing go through: the built-ins it calls
+// and the getters it reads, a regular expression's exec, an index setter
+// on Array.prototype catching what it stores. Each way is tried on a page
+// of its own, on refs taken before it and on a snapshot taken after. That
+// is all this guards; a page that changed them before the first snapshot,
+// or that calls the script itself, still can mislead it, until it runs in
+// an isolated world (docs/browser.md).
 func (s *suite) tampering(t *testing.T) {
 	s.t = t
-	p, _ := s.open("/snap")
 	ctx := context.Background()
-	snap, err := webtarget.Take(ctx, p, webtarget.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ref := snap.Elements[0].Ref
-	s.eval(p, `for (const k of Object.getOwnPropertyNames(window)) {
-		if (!k.startsWith("__glitched_")) continue;
-		try { window[k] = { describe: () => ({ role: "button", name: "Fake" }) }; } catch {}
-		try { delete window[k]; } catch {}
-		try { window[k].describe = () => ({ role: "button", name: "Fake" }); } catch {}
-	}
-	// Without the key: every ref finds the page's own element, named Fake.
-	const fake = document.createElement("button");
-	fake.textContent = "Fake";
-	document.body.append(fake);
-	WeakRef.prototype.deref = () => fake;
-	const attr = Element.prototype.getAttribute;
-	Element.prototype.getAttribute = function (n) { return n === "aria-label" ? "Fake" : attr.call(this, n); };
-	Element.prototype.getBoundingClientRect = () => new DOMRect(1, 2, 3, 4);
-	return 1`)
-	e, err := webtarget.Describe(ctx, p, ref)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := snap.Verify(ref, e); err != nil || e.Name == "Fake" || e.Box.X == 1 {
-		t.Errorf("after the page tampered: %+v, %v", e, err)
-	}
-	// Patched between snapshots, WeakRef and the arrays the next one fills
-	// change nothing either.
-	s.eval(p, `const fake = document.querySelector("button:last-of-type");
-	window.WeakRef = class { constructor() {} deref() { return fake; } };
-	Array.prototype.push = function () { return 0; };
-	return 1`)
-	next, err := webtarget.Take(ctx, p, webtarget.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var contents string
-	for _, n := range next.Elements {
-		if n.Name == "Inside contents" {
-			contents = n.Ref
+	names := []string{"Inside contents", "Twin", "In frame", "Shadow label"}
+	for _, c := range []struct{ how, js string }{
+		{"replacing the script's state and patching DOM methods", tamperState},
+		{"patching RegExp's exec to move a ref to its twin", tamperExec},
+		{"an index setter on Array.prototype", tamperIndex},
+		{"patching the getters and methods names and boxes come from", tamperGetters},
+	} {
+		p, _ := s.open("/snap")
+		snap, err := webtarget.Take(ctx, p, webtarget.Options{})
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	if contents == "" {
-		t.Fatalf("the next snapshot lost its refs:\n%s", next.Text)
-	}
-	if e, err := webtarget.Describe(ctx, p, contents); err != nil || e.Name != "Inside contents" {
-		t.Errorf("after the page patched WeakRef: %+v, %v", e, err)
+		was := map[string]webtarget.Element{}
+		for _, n := range names {
+			if was[n], err = webtarget.Describe(ctx, p, refNamed(snap, n, 0)); err != nil {
+				t.Fatalf("%s: %v", n, err)
+			}
+		}
+		_, first, _ := webtarget.ParseRef(refNamed(snap, "Twin", 0))
+		_, second, _ := webtarget.ParseRef(refNamed(snap, "Twin", 1))
+		s.eval(p, strings.NewReplacer("FIRST", strconv.Itoa(first), "SECOND", strconv.Itoa(second)).Replace(c.js)+"\nreturn 1")
+		same := func(snap webtarget.Snapshot, when string) {
+			for _, n := range names {
+				ref := refNamed(snap, n, 0)
+				if ref == "" {
+					t.Errorf("%s, %s: no ref named %q:\n%s", c.how, when, n, snap.Text)
+					continue
+				}
+				e, err := webtarget.Describe(ctx, p, ref)
+				if err == nil {
+					err = snap.Verify(ref, e)
+				}
+				if err != nil || e != was[n] {
+					t.Errorf("%s, %s: %s (%s) found %+v, was %+v (%v)", c.how, when, ref, n, e, was[n], err)
+				}
+			}
+		}
+		same(snap, "a ref from before")
+		next, err := webtarget.Take(ctx, p, webtarget.Options{})
+		if err != nil {
+			t.Errorf("%s: the next snapshot: %v", c.how, err)
+			continue
+		}
+		if want := strings.ReplaceAll(snap.Text, fmt.Sprintf("s%de", snap.Epoch), fmt.Sprintf("s%de", next.Epoch)); next.Text != want {
+			t.Errorf("%s: the next snapshot says\n%s\nnot\n%s", c.how, next.Text, want)
+		}
+		same(next, "a ref from after")
 	}
 }
+
+// refNamed is the ref of the i-th element named name in a snapshot, or "".
+func refNamed(snap webtarget.Snapshot, name string, i int) string {
+	for _, e := range snap.Elements {
+		if e.Name == name {
+			if i == 0 {
+				return e.Ref
+			}
+			i--
+		}
+	}
+	return ""
+}
+
+// The ways a page tampers, in the tampering test. FIRST and SECOND are
+// the numbers of the two buttons named Twin.
+const (
+	// Its state replaced or deleted, and without the key, every ref finds
+	// the page's own element, named Fake, in the WeakRef and arrays a
+	// snapshot fills.
+	tamperState = `for (const k of Object.getOwnPropertyNames(window)) {
+	if (!k.startsWith("__glitched_")) continue;
+	try { window[k] = { describe: () => ({ role: "button", name: "Fake" }) }; } catch {}
+	try { delete window[k]; } catch {}
+	try { window[k].describe = () => ({ role: "button", name: "Fake" }); } catch {}
+}
+const fake = document.createElement("button");
+fake.textContent = "Fake";
+document.querySelector("[hidden]").append(fake);
+WeakRef.prototype.deref = () => fake;
+const attr = Element.prototype.getAttribute;
+Element.prototype.getAttribute = function (n) { return n === "aria-label" ? "Fake" : attr.call(this, n); };
+Element.prototype.getBoundingClientRect = () => new DOMRect(1, 2, 3, 4);
+window.WeakRef = class { constructor() {} deref() { return fake; } };
+Array.prototype.push = function () { return 0; };`
+	// A ref parsed names the other twin, which Verify passes: both are a
+	// button "Twin".
+	tamperExec = `const exec = RegExp.prototype.exec;
+RegExp.prototype.exec = function (s) {
+	const m = exec.call(this, s);
+	if (m && m[2] === "FIRST") m[2] = "SECOND";
+	return m;
+};`
+	// The WeakRefs a snapshot stores are caught, and reading them back
+	// finds another button.
+	tamperIndex = `const decoy = new WeakRef([...document.querySelectorAll("button")].find((b) => b.textContent === "Fenced"));
+const caught = new WeakMap();
+for (let i = 0; i < 64; i++) {
+	Object.defineProperty(Array.prototype, i, {
+		configurable: true,
+		get() { return caught.get(this)?.has(i) ? decoy : undefined; },
+		set(v) {
+			if (Object.prototype.toString.call(v) === "[object WeakRef]") {
+				if (!caught.has(this)) caught.set(this, new Set());
+				caught.get(this).add(i);
+				return;
+			}
+			Object.defineProperty(this, i, { value: v, writable: true, enumerable: true, configurable: true });
+		},
+	});
+}`
+	// What roles, names, boxes and frames are read through, and the then
+	// a promise resolved with an answer would look up.
+	tamperGetters = `const fake = (C, k, get) => Object.defineProperty(C.prototype, k, { configurable: true, get });
+Set.prototype.has = () => true;
+Map.prototype.get = () => undefined;
+String.prototype.toUpperCase = () => "BUTTON";
+String.prototype.slice = () => "Fake";
+String.prototype.trim = () => "Fake";
+String.prototype.split = () => ["Fake"];
+String.prototype.replace = () => "Fake";
+Array.prototype.join = () => "Fake";
+Array.prototype.map = () => ["Fake"];
+fake(Node, "textContent", () => "Fake");
+fake(HTMLElement, "innerText", () => "Fake");
+fake(Element, "tagName", () => "BUTTON");
+fake(Node, "isConnected", () => true);
+fake(DOMRectReadOnly, "x", () => 1);
+fake(DOMRect, "x", () => 1);
+fake(HTMLIFrameElement, "contentDocument", () => null);
+fake(Object, "then", function () {
+	return this && this.box ? (done) => done({ role: this.role, name: "Fake", box: { x: 1, y: 2, width: 3, height: 4 } }) : undefined;
+});`
+)
 
 // fixtures are the suite's pages.
 func fixtures() http.Handler {
@@ -550,6 +637,7 @@ const snapFixture = `<!doctype html><meta charset="utf-8"><title>Snap</title>
 <h1>Fixture</h1>
 <div role="heading">Untagged heading</div>
 <div style="display:contents"><button id="contents">Inside contents</button></div>
+<button>Twin</button><button>Twin</button>
 <ul role="tree"><li role="treeitem">Parent<ul role="group"><li role="treeitem">Child item</li></ul></li></ul>
 <select><option>One</option><option selected>Two</option></select>
 <fieldset disabled><button>Fenced</button></fieldset>
