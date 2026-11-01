@@ -155,12 +155,14 @@ func entriesOf(t thread) []entry {
 			case *client.RequestEntry:
 				es = append(es, entry{key: "r/" + e.Request.String(), kind: entryRequest, request: e})
 			case *client.ReportEntry:
-				// One after another, they're one card, keyed by its first.
+				// One after another, they're one card, keyed by its first and
+				// its order among the cards a run's report starts: a run that
+				// asked twice can start two, the parent's text between them.
 				if n := len(es); n > 0 && es[n-1].kind == entryReport {
 					es[n-1].reports = addReport(es[n-1].reports, *e)
 					break
 				}
-				es = append(es, entry{key: "c/" + e.Child.String() + "/" + e.Run.String(), kind: entryReport, reports: []client.ReportEntry{*e}})
+				es = append(es, entry{key: key("c/"+e.Child.String(), e.Run), kind: entryReport, reports: []client.ReportEntry{*e}})
 			}
 		}
 		markPaused(es)

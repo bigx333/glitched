@@ -58,7 +58,7 @@ Replay and failure:
 - `child.report` is in `replaySafe`. A report left leased by a crash is released at boot and performed again. Because the parent's event and the effect's completion commit together, a crash leaves both or neither: the report lands once.
 - Reading the child's log retries until the host closes, then the lease is released for the next host.
 - A parent deleted since: `Observe` refuses the observation (`ErrRefused`), which still completes the effect. A parent that isn't on this engine at all: `ErrNotFound`, and `report` completes the effect itself; the create's check makes that unreachable today, so no test covers it. Either way the child's lane moves on; `TestAnOrphansReportGoesNowhere` covers the deleted parent.
-- There's no batching. Each report is its own event. The GUI shows a run of reports one after another as one card, a child's later report replacing its earlier one in that card (`addReport` in `children.go`). The prototype batched for 2 s in memory; that's dropped.
+- There's no batching. Each report is its own event. The GUI shows a run of reports one after another as one card, a child's later report replacing its earlier one in that card (`addReport` in `children.go`). A card is keyed by its first report's child and run and by its order among that run's cards (`entriesOf` in `data.go`): a run that asks twice can start two cards, the parent's text between them, and each keeps its own pointer, focus and scroll state. The prototype batched for 2 s in memory; that's dropped.
 
 Reading it:
 
