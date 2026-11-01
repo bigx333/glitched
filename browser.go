@@ -249,8 +249,9 @@ func (b *browser) mayOpen(from *browserTab, now time.Time) bool {
 // letGo lets go of the address as the pane closes, once, as the frame
 // after begins (view): what was typed and not entered goes, and the
 // address is the tab's again, which reload and "Open in browser" use. The
-// pane only out of sight, as the diff takes its place or a screen without
-// the chat shows, keeps the draft for its return.
+// pane only out of sight, as the diff covers it (⌘D, Toggle Diff) or a
+// screen without the chat shows, keeps the draft for its return; "Open in
+// diff" and the palette close the pane, which lets go of it.
 func (b *browser) letGo(open bool) {
 	closed := b.shown && !open
 	b.shown = open
