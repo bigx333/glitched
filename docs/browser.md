@@ -198,8 +198,12 @@ that picks it. Nothing above the seam changes.
   fills, as an editor's), marks cross-origin frames as not reached and
   frames still loading as such, and stops at 2000 refs or 50 000
   characters, saying so. A body edited whole, as an editor's frame's in
-  design mode or `contenteditable`, is a text box, with a ref. A link with no name says where it goes, quoted:
-  `[url="/wiki/Main_Page"]`.
+  design mode or `contenteditable`, is a text box, with a ref. A link with
+  no name says where it goes, quoted: `[url="/wiki/Main_Page"]`.
+- The top document's body is visited as an element, as a frame's is, not
+  only walked: a `<body hidden>` or `<body aria-hidden="true">` gives an
+  empty snapshot, and a `<body role=…>` is a line of its own in `Full`,
+  with all else indented a level under it.
 - **Refs** are `s<epoch>e<n>`: the snapshot's epoch, then the element's
   number in it. Epochs count up from a random start in each run of the
   app. Only the page's latest snapshot resolves: a ref from an earlier one,
@@ -229,7 +233,9 @@ that picks it. Nothing above the seam changes.
   arrays with the `Object.defineProperty` it found, so a setter on
   `Array.prototype` sees nothing; it keeps its refs and tables in objects
   with no prototype; and it answers with objects with none, so the
-  promise its answer resolves looks up no `then`. So a page can't replace
+  promise its answer resolves looks up no `then`, and its list of
+  elements is an array with no prototype either, so `JSON.stringify`
+  finds no `toJSON` on `Array.prototype`. So a page can't replace
   it, or patch any of those, to send a ref elsewhere or change what it
   says of one. Go checks what comes back (`Take`, `Describe`): a snapshot of
   another epoch than the one asked for, refs other than that epoch's
@@ -247,7 +253,11 @@ that picks it. Nothing above the seam changes.
     captures what it finds), `Reflect.apply` included;
   - change what MyGo's eval wrapper (`evalBody`, in its `bridge.go`), which
     runs around the script, goes through: `JSON.stringify`, which it
-    returns the answer through, and the `toJSON` that looks up;
+    returns the answer through, and the `toJSON` that looks up on the
+    answer's outer object; its `await`, which a page changing
+    `Promise.prototype.then` or `Promise.prototype.constructor` can make
+    resolve to another answer; and, on its catch path, the global
+    `String` it turns an error's message into a string with;
   - find the property and call the script itself, as a snapshot of its
     own that moves the refs.
   Each can make a ref find an element of the page's choosing and `Verify`
