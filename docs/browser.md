@@ -255,7 +255,7 @@ that picks it. Nothing above the seam changes.
     runs around the script, goes through: `JSON.stringify`, which it
     returns the answer through, and the `toJSON` that looks up on the
     answer's outer object; its `await`, which a page changing
-    `Promise.prototype.then` or `Promise.prototype.constructor` can make
+    `Promise.prototype.constructor`, with a `then` of its own, can make
     resolve to another answer; and, on its catch path, the global
     `String` it turns an error's message into a string with;
   - find the property and call the script itself, as a snapshot of its

@@ -428,7 +428,7 @@ function install(key) {
     // The title and the URL are clipped beside the budget of characters,
     // which counts the lines alone.
     const clip = (s, n) => (s.length > n ? slice(s, 0, n - 1) + "…" : s);
-    const url = clip(location.href, args.maxURL), title = clip(get(B.title, document), args.maxTitle);
+    const url = clip(get(B.url, document), args.maxURL), title = clip(get(B.title, document), args.maxTitle);
     // With no prototype, so the promise it resolves looks up no then.
     return { __proto__: null, epoch, url, title, refs: count, truncated: !!truncated, text: apply(B.join, lines, ["\n"]), elements };
   }
@@ -467,8 +467,8 @@ function install(key) {
     for (let i = 0; i < rec.chain.length; i++) {
       const f = deref(rec.chain[i].frame), d = deref(rec.chain[i].doc);
       if (!f || !connected(f) || get(B.ownerDocument, f) !== doc) throw gone(ref);
-      // A frame gone to another origin's page throws as its document is
-      // read: it navigated too.
+      // A frame gone to another origin's page has no document to read
+      // (null, or a throw in an engine that does): it navigated too.
       let now = null;
       try { now = get(B.contentDocument, f); } catch {}
       if (!d || now !== d) {
