@@ -261,7 +261,8 @@ func TestDeleteWaitsForAWorkingChild(t *testing.T) {
 	})
 }
 
-// counting counts the agents its adapter opens, one a turn.
+// counting counts the agents its adapter opens, one a turn: it assumes the
+// runtime reuses no agent across turns.
 type counting struct {
 	provider.Adapter
 	opens *atomic.Int32
@@ -289,6 +290,30 @@ func TestDeleteTreeWithAQueuedFollowUp(t *testing.T) {
 	h := start(t, dir)
 	child := h.thread("Write the tests")
 	h.until("the child working, its follow-up queued", func() bool { return child.View.Working() && child.View.Queued == 1 })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st, err := d.Endpoint().Open(ctx, api.Subscription{Thread: kid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cancelled := make(chan string, 8)
+	go func() {
+		for {
+			it, err := st.Next(ctx)
+			if err != nil {
+				return
+			}
+			if it.Event == nil {
+				continue
+			}
+			if b, err := it.Event.Decode(); err == nil {
+				if c, ok := b.(api.MessageCancelled); ok {
+					cancelled <- c.Reason
+				}
+			}
+		}
+	}()
 	before := opens.Load()
 	h.a.settings.confirmDelete = false
 	h.a.askDelete(h.thread("Ship the sidebar sort"))
@@ -297,6 +322,14 @@ func TestDeleteTreeWithAQueuedFollowUp(t *testing.T) {
 		_, k := h.a.find(kid)
 		return !p && !k
 	})
+	select {
+	case r := <-cancelled:
+		if r != "the thread is being deleted" {
+			t.Errorf("the follow-up was cancelled for %q, want the delete", r)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("the follow-up was never cancelled")
+	}
 	if n := opens.Load() - before; n != 0 {
 		t.Errorf("%d turns started after the delete, want none", n)
 	}
