@@ -255,6 +255,40 @@ func TestBrowserAddressLetGoAsThePaneCloses(t *testing.T) {
 	}
 }
 
+// The pane only out of sight, as the diff takes its place, keeps a draft
+// not entered: the diff closed, the bar shows what was typed.
+func TestBrowserAddressKeptBehindTheDiff(t *testing.T) {
+	a, tt, _ := browsing(t)
+	click(t, tt, "Toggle preview  ⇧⌘P")
+	tt.Key(ui.Cmd, ui.KeyL)
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("exa")
+	tt.Frame()
+	tab := a.browser.current()
+	if tab.draft != "exa" {
+		t.Fatalf("address %q, want what was typed", tab.draft)
+	}
+	// As the menu's Toggle Diff, the diff takes the pane's place.
+	a.showDiff = true
+	tt.Frame()
+	tt.Frame()
+	if !a.showPreview || tab.draft != "exa" {
+		t.Fatalf("behind the diff: pane %v, address %q", a.showPreview, tab.draft)
+	}
+	a.showDiff = false
+	tt.Frame()
+	if tab.draft != "exa" || tab.url != defaultPreviewURL {
+		t.Errorf("the diff closed: address %q at %q, want the draft kept", tab.draft, tab.url)
+	}
+	tt.Key(ui.Cmd|ui.Shift, ui.KeyP)
+	tt.Frame()
+	tt.Frame()
+	if a.showPreview || tab.draft != defaultPreviewURL {
+		t.Errorf("the pane closed: pane %v, address %q, want the tab's", a.showPreview, tab.draft)
+	}
+}
+
 func TestTabLabel(t *testing.T) {
 	for _, tc := range []struct {
 		tab  browserTab

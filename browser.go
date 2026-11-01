@@ -30,9 +30,9 @@ type browser struct {
 	// navigating then doesn't type over; focusAddress gives it the
 	// keyboard in the next frame, as ⌘L and a new tab do.
 	typing, focusAddress bool
-	// barBuilt is set as the bar builds: a frame after one that didn't
-	// build it, as the pane closed, lets go of the address (letGo).
-	barBuilt bool
+	// shown is whether the pane was open as the last frame began: its
+	// closing lets go of the address (letGo).
+	shown bool
 	// open makes a tab's page: the engine's, which the app gives it once it
 	// has a window; a test's; nil, where there is no window.
 	open browse.Opener
@@ -246,14 +246,15 @@ func (b *browser) mayOpen(from *browserTab, now time.Time) bool {
 	return n < maxOpenedTabs
 }
 
-// letGo lets go of the address once its bar went unbuilt, as the pane
-// closed while it had the keyboard, or with a draft not entered: what was
-// typed goes, and the address is the tab's again, which reload and "Open
-// in browser" use. Called as each frame begins (view).
-func (b *browser) letGo() {
-	built := b.barBuilt
-	b.barBuilt = false
-	if built {
+// letGo lets go of the address as the pane closes, once, as the frame
+// after begins (view): what was typed and not entered goes, and the
+// address is the tab's again, which reload and "Open in browser" use. The
+// pane only out of sight, as the diff takes its place or a screen without
+// the chat shows, keeps the draft for its return.
+func (b *browser) letGo(open bool) {
+	closed := b.shown && !open
+	b.shown = open
+	if !closed {
 		return
 	}
 	b.typing = false
@@ -364,7 +365,7 @@ func (a *app) previewPanel(c *ui.Context) {
 				in.Focus()
 				b.focusAddress = false
 			}
-			b.typing, b.barBuilt = in.Focused(), true
+			b.typing = in.Focused()
 			if in.Submitted() && strings.TrimSpace(t.draft) != "" {
 				a.goTo(t, t.draft)
 			}
