@@ -88,6 +88,7 @@ function install(key) {
     documentElement: getter(Document, "documentElement"),
     url: getter(Document, "URL"),
     readyState: getter(Document, "readyState"),
+    designMode: getter(Document, "designMode"),
     title: getter(Document, "title"),
     docById: fn(Document, "getElementById"),
     fragmentById: fn(DocumentFragment, "getElementById"),
@@ -211,6 +212,9 @@ function install(key) {
           default: return "textbox";
         }
     }
+    // A document's body edited whole, as an editor's frame's in design
+    // mode, or contenteditable, is a text box itself.
+    if (html && tag === "BODY" && (opt(B.editable, el) || opt(B.designMode, get(B.ownerDocument, el)) === "on")) return "textbox";
     if (html && opt(B.editable, el)) {
       const p = get(B.parent, el);
       if (!(p && isHTML(p) && opt(B.editable, p))) return "textbox";
@@ -400,7 +404,7 @@ function install(key) {
           const inner = [];
           for (let i = 0; i < chain.length; i++) put(inner, chain[i]);
           put(inner, { __proto__: null, frame: new WR(el), doc: new WR(doc) });
-          walk(body, d, false, inner);
+          visit(body, d, false, inner);
         } else {
           const line = reached && doc ? "- iframe [loading]" : "- iframe [cross-origin, not reached]";
           if (!fits(d, line)) return cut();
@@ -414,7 +418,8 @@ function install(key) {
       // What's in an element to act on, as a tree's or a menu's items.
       walk(el, d, select, chain);
     };
-    walk(get(B.body, document) || get(B.documentElement, document), 0, false, []);
+    // A document's body is visited as an element, which an editable one is.
+    visit(get(B.body, document) || get(B.documentElement, document), 0, false, []);
     if (truncated) put(lines, truncated);
     // The title and the URL are clipped beside the budget of characters,
     // which counts the lines alone.

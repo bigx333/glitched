@@ -103,7 +103,8 @@ real engine, with pages served by the test:
   level, a disabled fieldset, `visibility: hidden` around a visible
   button, `hidden`, `aria-hidden` and `display: none`, an SVG link, an
   image link with no name, a label in a shadow root, a button in a
-  bordered, padded iframe.
+  bordered, padded iframe, an iframe's body made editable by
+  `contenteditable` and one in design mode.
 - **Limits:** the ref and character budgets, and every ref shown counted.
 - **Refs:** a ref resolves to its element, at its place in the top
   viewport through frames; a newer snapshot, the element removed, its
@@ -196,7 +197,8 @@ that picks it. Nothing above the seam changes.
   an address of its own is on its way, one with none is a page a script
   fills, as an editor's), marks cross-origin frames as not reached and
   frames still loading as such, and stops at 2000 refs or 50 000
-  characters, saying so. A link with no name says where it goes, quoted:
+  characters, saying so. A body edited whole, as an editor's frame's in
+  design mode or `contenteditable`, is a text box, with a ref. A link with no name says where it goes, quoted:
   `[url="/wiki/Main_Page"]`.
 - **Refs** are `s<epoch>e<n>`: the snapshot's epoch, then the element's
   number in it. Epochs count up from a random start in each run of the
