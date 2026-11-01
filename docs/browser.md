@@ -108,8 +108,13 @@ real engine, with pages served by the test:
 - **Refs:** a ref resolves to its element, at its place in the top
   viewport through frames; a newer snapshot, the element removed, or a
   reload make it fail, saying which.
-- **Tampering:** a page replacing or deleting the script's state changes
-  nothing refs find (what this guards, and what not, is below).
+- **Tampering:** each on a page of its own, a page replacing or deleting
+  the script's state, or patching after it is installed what it goes
+  through (DOM methods and getters, `WeakRef`, `RegExp.prototype.exec`, an
+  index setter on `Array.prototype`, `Set`, `Map`, `String` and `Array`
+  methods, `then` on `Object.prototype`), changes nothing refs find or
+  what they say, from a snapshot taken before or after (what this guards,
+  and what not, is below).
 
 An adapter runs it from a test with a `Harness`: its `Opener`, a `Do` that
 runs a func where the view builds, a `Show` for engines that load only
@@ -204,14 +209,24 @@ that picks it. Nothing above the seam changes.
   named, as an action will before it acts.
 - **What a page can do to refs:** the script keeps its state private to
   functions it installs, frozen, under a property named at random in each
-  run of the app (`__glitched_<random>`). Resolving and describing a ref
-  go through the built-ins as the script found them when it was installed
-  (`WeakRef` and its `deref`, `getAttribute`, `hasAttribute`, `matches`,
-  `getBoundingClientRect`, `isConnected`, `getComputedStyle`, through a
-  captured `Reflect.apply`). So once the script is installed in a
-  document, a page can't replace it, or patch those built-ins, nor the
-  arrays a later snapshot fills (it writes them by index), to send a ref
-  elsewhere. Go checks what comes back (`Take`, `Describe`): a snapshot of
+  run of the app (`__glitched_<random>`). Once installed in a document, it
+  calls no built-in, and reads no prototype, that the page can change:
+  every function and getter it uses is the one it found as it was
+  installed, called through the `Reflect.apply` it found. That is the
+  DOM's (`getAttribute`, `matches`, `querySelector`, `getRootNode`,
+  `getElementById`, `textContent`, `innerText`, `tagName`, `labels`,
+  `isConnected`, `childNodes`, `contentDocument`, `getBoundingClientRect`
+  and a rect's `x`, `y`, `width` and `height`, and the like),
+  `getComputedStyle` and `getPropertyValue`, `WeakRef` and its `deref`,
+  `String`'s `slice`, `toUpperCase`, `toLowerCase` and `repeat`, `Array`'s
+  `join`, `JSON.stringify` and `parseFloat`. It parses refs, and splits
+  and collapses white space, with no regular expression; it writes its
+  arrays with the `Object.defineProperty` it found, so a setter on
+  `Array.prototype` sees nothing; it keeps its refs and tables in objects
+  with no prototype; and it answers with objects with none, so the
+  promise its answer resolves looks up no `then`. So a page can't replace
+  it, or patch any of those, to send a ref elsewhere or change what it
+  says of one. Go checks what comes back (`Take`, `Describe`): a snapshot of
   another epoch than the one asked for, refs other than that epoch's
   `s<epoch>e1`, `e2`, … in order, or more than the budgets (refs, the
   text's characters, a title of 300 characters and a URL of 2048, which
@@ -225,10 +240,9 @@ that picks it. Nothing above the seam changes.
     document's first snapshot;
   - change any built-in before the first snapshot in it (the script
     captures what it finds), `Reflect.apply` included;
-  - change what the script reads without capturing: `textContent`,
-    `innerText`, `labels`, `getRootNode`, `getElementById`, `querySelector`
-    and the like, which names come from, and `JSON.stringify`, which MyGo's
-    eval wrapper (`internal/bridge`) returns results through;
+  - change what MyGo's eval wrapper (`evalBody`, in its `bridge.go`), which
+    runs around the script, goes through: `JSON.stringify`, which it
+    returns the answer through, and the `toJSON` that looks up;
   - find the property and call the script itself, as a snapshot of its
     own that moves the refs.
   Each can make a ref find an element of the page's choosing and `Verify`
