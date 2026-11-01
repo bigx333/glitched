@@ -85,7 +85,12 @@ type MessageDispatch struct {
 	Mode DispatchMode `json:"mode"`
 }
 
-type TurnInterrupt struct{}
+// TurnInterrupt stops the live run. With Drop, it also cancels the
+// messages waiting their turn, held ones too, so no turn starts once the
+// run ends: what a delete that waits on the stop sends.
+type TurnInterrupt struct {
+	Drop bool `json:"drop,omitzero"`
+}
 
 type RequestRespond struct {
 	Request    ID              `json:"request"`

@@ -37,7 +37,10 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 	case api.MessageDispatch:
 		err = d.dispatch(c.ID, b)
 	case api.TurnInterrupt:
-		if r := d.t.Live(); r != nil {
+		if b.Drop {
+			err = d.drop("the thread is being deleted")
+		}
+		if r := d.t.Live(); r != nil && err == nil {
 			err = d.interrupt(*r)
 		}
 	case api.RequestRespond:
@@ -243,6 +246,23 @@ func (d *decision) stop(r Run) error {
 		return err
 	}
 	d.effects = append(d.effects, InterruptTurn{Run: r.ID})
+	return nil
+}
+
+// drop cancels the messages waiting their turn, held or ready, so settle
+// starts none of them. One the live run claimed, a steer, goes with it.
+func (d *decision) drop(reason string) error {
+	var waiting []api.ID
+	for _, m := range d.t.Queue {
+		if m.State == QueueReady || m.State == QueueHeld {
+			waiting = append(waiting, m.ID)
+		}
+	}
+	for _, id := range waiting {
+		if err := d.emit(api.MessageCancelled{Message: id, Reason: reason}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -196,9 +196,10 @@ type stopped struct {
 
 // deleteTree deletes t and every thread under it, each after the threads
 // under it, so that none is left standing on its own on the way. The engine
-// deletes no thread whose agent works: those are stopped and deleted once
-// they have, and each thread over one waits only for its own children still
-// to go; one with none left goes at once.
+// deletes no thread whose agent works: those are halted, stopped with what
+// waits its turn cancelled, and deleted once they have, and each thread over
+// one waits only for its own children still to go; one with none left goes
+// at once.
 func (a *app) deleteTree(t thread) {
 	now := time.Now() // the whole tree's, so its grace ends at once
 	seen := map[api.ID]bool{}
@@ -217,7 +218,9 @@ func (a *app) deleteTree(t thread) {
 		}
 		live := x.View.Live()
 		if live {
-			a.backend.Interrupt(x.env, x.id())
+			// Halted, not only interrupted: a follow-up queued on x would
+			// start its turn as the run ends, and x would never go.
+			a.backend.Halt(x.env, x.id())
 		}
 		if !live && len(waits) == 0 {
 			a.delete(x)
