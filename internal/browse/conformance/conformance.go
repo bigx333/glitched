@@ -401,7 +401,8 @@ func (s *suite) limits(t *testing.T) {
 }
 
 // Refs find their elements, where they show through frames; a newer
-// snapshot, a reload or the element going makes them fail, saying why.
+// snapshot, a reload, the element going or its frame navigating makes
+// them fail, saying why.
 func (s *suite) refs(t *testing.T) {
 	s.t = t
 	p, _ := s.open("/snap")
@@ -443,6 +444,21 @@ func (s *suite) refs(t *testing.T) {
 	s.eval(p, "document.getElementById('contents').remove(); return 1")
 	if _, err := webtarget.Describe(ctx, p, contents); err == nil || !strings.Contains(err.Error(), "is gone") {
 		t.Errorf("a removed element's ref: %v", err)
+	}
+	// A frame that navigated shows another document: a ref into the one it
+	// left fails, though its element still reads as connected there.
+	inFrames, err := webtarget.Take(ctx, p, webtarget.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	left := find(inFrames, "In frame")
+	s.eval(p, `document.getElementById("framed").srcdoc = "<button>Moved on</button>"; return 1`)
+	s.until("the frame's next page", func() bool {
+		v, err := p.EvalContext(ctx, `return document.getElementById("framed").contentDocument?.body?.textContent`)
+		return err == nil && v == "Moved on"
+	})
+	if e, err := webtarget.Describe(ctx, p, left); err == nil || !strings.Contains(err.Error(), "its frame navigated") {
+		t.Errorf("a ref into a frame's page it left: %+v, %v", e, err)
 	}
 	s.h.Do(p.Reload)
 	s.until("the reload", func() bool {
