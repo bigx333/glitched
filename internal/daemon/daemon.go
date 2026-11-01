@@ -88,10 +88,10 @@ type Daemon struct {
 	// nodeServes: the engine listens on its own node, as it does when
 	// Tailnet is on, not only to reach a hub.
 	nodeServes bool
-	stop context.CancelFunc
-	done chan struct{}
-	err  error
-	undo []func() error // run in reverse once serving stops
+	stop       context.CancelFunc
+	done       chan struct{}
+	err        error
+	undo       []func() error // run in reverse once serving stops
 
 	mu        sync.Mutex
 	addrs     []net.Addr
