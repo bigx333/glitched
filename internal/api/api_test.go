@@ -30,6 +30,7 @@ func TestCommandJSON(t *testing.T) {
 		MessageDispatch{Text: "hi", Mode: SteerActive},
 		ThreadRename{Title: "Websocket loop"},
 		ThreadDelete{},
+		TurnInterrupt{Drop: true},
 	} {
 		in := Command{ID: NewID(), Target: NewID(), Revision: 3, Body: body}
 		b, err := json.Marshal(in)
