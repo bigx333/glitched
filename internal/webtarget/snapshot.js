@@ -29,7 +29,8 @@ throw new Error(`webtarget: unknown op ${args.op}`);
 function install(key) {
   let epoch = 0;
   // refs are the latest snapshot's, by number from 0: each its element,
-  // and the frames it is in, from the top (snapshot); count is how many.
+  // and the frames it is in, from the top, each with the document it
+  // showed (snapshot); count is how many.
   let refs = null, count = 0;
 
   // The built-ins as they are now, which the page patching later can't
@@ -341,7 +342,8 @@ function install(key) {
       chars += 2 * depth + line.length + 1;
     };
     // walk visits what is in node, an element or a shadow root, in the
-    // frames of chain, the iframes from the top it is in.
+    // frames of chain, the iframes from the top it is in, each with the
+    // document it shows.
     const walk = (node, depth, inSelect, chain) => {
       const first = get(B.nodeType, node) === 11 ? B.fragmentFirstChild : B.firstChild;
       for (let el = get(first, node); el && !truncated; el = get(B.nextSibling, el)) visit(el, depth, inSelect, chain);
@@ -397,7 +399,7 @@ function install(key) {
         if (body && get(B.readyState, doc) !== "loading" && !coming) {
           const inner = [];
           for (let i = 0; i < chain.length; i++) put(inner, chain[i]);
-          put(inner, new WR(el));
+          put(inner, { __proto__: null, frame: new WR(el), doc: new WR(doc) });
           walk(body, d, false, inner);
         } else {
           const line = reached && doc ? "- iframe [loading]" : "- iframe [cross-origin, not reached]";
@@ -441,15 +443,28 @@ function install(key) {
   const gone = (ref) => new Err(`${ref} is gone: the page re-rendered it; take a new snapshot`);
 
   // resolve finds a ref's element, and the frames it is in, or says why it
-  // can't, as the engine does.
+  // can't, as the engine does. Each frame must still show the document it
+  // showed, and the element be in the innermost's: an element of a
+  // document its frame navigated away from still reads as connected, in
+  // that document.
   function resolve(ref) {
     const p = parse(ref);
     if (!p) throw new Err(`${ref} is not a ref: refs look like s12e3`);
     if (!epoch) throw new Err(`${ref} is from before the page navigated or reloaded; take a new snapshot`);
     if (+p.epoch !== epoch) throw new Err(`${ref} is from snapshot s${p.epoch}, not the latest, s${epoch}; take a new snapshot`);
     const rec = p.n >= 1 && p.n <= count ? refs[p.n - 1] : null;
-    const el = rec && deref(rec.el);
-    if (!el || !connected(el)) throw gone(ref);
+    if (!rec) throw gone(ref);
+    let doc = document;
+    for (let i = 0; i < rec.chain.length; i++) {
+      const f = deref(rec.chain[i].frame), d = deref(rec.chain[i].doc);
+      if (!f || !connected(f) || get(B.ownerDocument, f) !== doc) throw gone(ref);
+      if (!d || get(B.contentDocument, f) !== d) {
+        throw new Err(`${ref} is from before its frame navigated or reloaded; take a new snapshot`);
+      }
+      doc = d;
+    }
+    const el = deref(rec.el);
+    if (!el || !connected(el) || get(B.ownerDocument, el) !== doc) throw gone(ref);
     return { __proto__: null, el, chain: rec.chain };
   }
 
@@ -461,7 +476,7 @@ function install(key) {
     const b = rect(el);
     let x = get(B.x, b), y = get(B.y, b);
     for (let i = 0; i < chain.length; i++) {
-      const f = deref(chain[i]);
+      const f = deref(chain[i].frame);
       if (!f) throw gone(ref);
       const fb = rect(f), s = styleOf(f);
       x += get(B.x, fb) + get(B.clientLeft, f) + num(prop(s, "padding-left"));

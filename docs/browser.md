@@ -106,8 +106,8 @@ real engine, with pages served by the test:
   bordered, padded iframe.
 - **Limits:** the ref and character budgets, and every ref shown counted.
 - **Refs:** a ref resolves to its element, at its place in the top
-  viewport through frames; a newer snapshot, the element removed, or a
-  reload make it fail, saying which.
+  viewport through frames; a newer snapshot, the element removed, its
+  frame navigated, or a reload make it fail, saying which.
 - **Tampering:** each on a page of its own, a page replacing or deleting
   the script's state, or patching after it is installed what it goes
   through (DOM methods and getters, `WeakRef`, `RegExp.prototype.exec`, an
@@ -201,8 +201,11 @@ that picks it. Nothing above the seam changes.
 - **Refs** are `s<epoch>e<n>`: the snapshot's epoch, then the element's
   number in it. Epochs count up from a random start in each run of the
   app. Only the page's latest snapshot resolves: a ref from an earlier one,
-  from before the page navigated or reloaded, or whose element the page
-  removed fails, saying which, and to take a new snapshot.
+  from before the page or the frame it is in navigated or reloaded, or
+  whose element the page removed fails, saying which, and to take a new
+  snapshot. A ref holds the frames it is in, each with the document it
+  showed, and resolves while each still shows it: an element of a
+  document its frame left still reads as connected, in that document.
 - `webtarget.Describe(ctx, page, ref)` resolves a ref to its element's
   role, name and box in the top frame's viewport, through the frames it is
   in. `Snapshot.Verify(ref, element)` checks it is still what the snapshot
