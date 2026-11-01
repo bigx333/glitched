@@ -265,12 +265,15 @@ bridge and its process model. Its CEF host is the model for a CEF adapter.
 ## Known issues
 
 - **`isLocal` (Nelson's, `preview.go`), older than the browser and not
-  ours to fix:** it tells local addresses by their prefixes, so names
-  such as `10.com` and `192.168.com` count as local (loaded over http, and
-  shown the dev server's "Nothing running" page when they fail), while
-  `172.16.0.0/12` and link-local addresses don't, and it doesn't
-  normalise a host's case or trailing dot. For Nelson; the browser leaves
-  it as it is.
+  ours to fix:** it tells local addresses by their prefixes, and reads the
+  host without taking a userinfo off it, so public hosts count as local:
+  names such as `10.com`, `192.168.com` and `127.evil.example`, and an
+  address such as `127.0.0.1@example.com`, whose host is `example.com`.
+  Typed without a scheme, each loads over plain http, to a public host
+  (and shows the dev server's "Nothing running" page when it fails).
+  Meanwhile `172.16.0.0/12` and link-local addresses don't count, and it
+  doesn't normalise a host's case or trailing dot. For Nelson; the browser
+  leaves it as it is.
 
 ## Next: agents driving the browser
 
