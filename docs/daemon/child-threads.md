@@ -69,11 +69,11 @@ Reading it:
 
 ## Cascades
 
-All in the GUI (`children.go`), one command per thread through the existing intents. The engine knows nothing of trees here.
+All in the GUI (`children.go`), one command per thread through the existing intents, `turn.interrupt` taking a `Drop` for Delete. The engine knows nothing of trees here.
 
 - **Stop**: the composer's Stop and ⌘↩ stop only the thread's own agent, as on main. The Agents panel's Stop all sends `turn.interrupt` to every live thread under it that shows (`stopAll`) and says how many. A stopped child reports nothing (see the table).
 - **Settle**: main's Settle, on one thread. Its children don't move: they show under it in Settled, and a report from one brings it back to the inbox. A child whose agent works (`categoryOf` is Working) while the thread at the top of its line is Snoozed or Settled also shows in Working on its own, with "under <its parent's title>" beneath its title (`lifted` in `inbox.go`). Once it stops, or that thread is back in the inbox, it shows only nested again. A working thread under a lifted one shows in that one's rows, not lifted a second time.
-- **Delete**: the alert counts the threads under it, its children's children too ("and the 2 threads under it"), and the working ones. `deleteTree` walks the tree in post-order, each thread after its own children, so no child stands on its own on the way. A thread that isn't live and has no child still waiting is deleted at once; a live one is interrupted and kept in `afterStop`, and a thread over one is kept waiting on its own children still kept, not on anything else in the tree. So an idle branch beside a working one goes at once.
+- **Delete**: the alert counts the threads under it, its children's children too ("and the 2 threads under it"), and the working ones. `deleteTree` walks the tree in post-order, each thread after its own children, so no child stands on its own on the way. A thread that isn't live and has no child still waiting is deleted at once; a live one is halted (`Manager.Halt`: `turn.interrupt` with `Drop`, which also cancels the messages waiting their turn, held ones too, "the thread is being deleted") and kept in `afterStop`, and a thread over one is kept waiting on its own children still kept, not on anything else in the tree. So an idle branch beside a working one goes at once. A plain interrupt would leave a queued follow-up to start its turn as the stop landed, and the engine refuses to delete a live thread, so the thread and every one over it would stay; `TestDeleteTreeWithAQueuedFollowUp` and the engine's `TestAHaltStartsNothingAfter` cover it.
 - `settleStopped` runs after each change the manager posts. It deletes a kept thread once its run has ended, waiting for the threads under it to go first. A thread whose stop hasn't landed within a minute (`stopGrace`) is given up on, so it isn't deleted later, unseen, after the user went back to it, and so is every thread over it up the line, which would otherwise be left standing on its own. A cascade's threads share one timestamp.
 - **Partial failure**: each command is independent; they're not one transaction. A refused or unsent command shows on its own thread as main's failed commands do, with Retry and Dismiss. The rest go through.
 - `afterStop` is in memory. If the GUI quits before a stop lands, that thread is stopped but not deleted.
@@ -87,6 +87,7 @@ All in the GUI (`children.go`), one command per thread through the existing inte
 
 ## Protocol 4
 
+- `turn.interrupt` gains `drop` (omitted when false). An engine of this protocol cancels what waits its turn on it; Stop and Stop all never send it.
 - `api.Protocol` is 4. The transport already refuses a peer of another protocol in both directions, so a protocol 3 GUI shows a protocol 4 engine as Incompatible, and the reverse. A protocol 3 hub refuses the uploads.
 - Why refuse rather than stay at 3: a protocol 3 client would list children as threads of the user's and drop the reports (unknown event types are skipped), which looks like lost work.
 

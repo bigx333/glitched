@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -258,6 +259,50 @@ func TestDeleteWaitsForAWorkingChild(t *testing.T) {
 		_, k := h.a.find(kid)
 		return !p && !k
 	})
+}
+
+// counting counts the agents its adapter opens, one a turn.
+type counting struct {
+	provider.Adapter
+	opens *atomic.Int32
+}
+
+func (c counting) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	c.opens.Add(1)
+	return c.Adapter.Open(ctx, spec)
+}
+
+// Deleting a tree whose child works with a follow-up queued halts the
+// child: the follow-up is cancelled, not started as the stop lands, and
+// both threads go.
+func TestDeleteTreeWithAQueuedFollowUp(t *testing.T) {
+	dir := tempDir(t)
+	var opens atomic.Int32
+	d := engine(t, daemon.Config{Dir: dir}, counting{stalled{fake.New(midTurn), 1}, &opens})
+	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	kid := seedChild(t, d, top, "Write the tests")
+	for _, m := range []string{"go", "then this"} {
+		if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: m, Mode: api.AfterActive}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := start(t, dir)
+	child := h.thread("Write the tests")
+	h.until("the child working, its follow-up queued", func() bool { return child.View.Working() && child.View.Queued == 1 })
+	before := opens.Load()
+	h.a.settings.confirmDelete = false
+	h.a.askDelete(h.thread("Ship the sidebar sort"))
+	h.until("both deleted", func() bool {
+		_, p := h.a.find(top)
+		_, k := h.a.find(kid)
+		return !p && !k
+	})
+	if n := opens.Load() - before; n != 0 {
+		t.Errorf("%d turns started after the delete, want none", n)
+	}
+	if len(h.a.afterStop) != 0 {
+		t.Errorf("deletions left waiting: %v", h.a.afterStop)
+	}
 }
 
 // A cascade gives up on a line whose child's stop didn't land in time:

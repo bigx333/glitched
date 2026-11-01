@@ -405,3 +405,33 @@ func TestASteerIsNeverQueued(t *testing.T) {
 		t.Fatalf("a steer to an idle thread: %v, %v; want its turn started", effects, err)
 	}
 }
+
+// A halt stops the run and cancels what waits its turn, a held message
+// too, so no turn starts once the run ends, and the thread can be deleted.
+// A plain interrupt leaves the queue to start once the run ends.
+func TestAHaltStartsNothingAfter(t *testing.T) {
+	f, run := running(t)
+	next := f.must(dispatch("next", api.AfterActive))
+	later := f.must(dispatch("later", api.Defer))
+	if _, effects, err := f.submit(api.TurnInterrupt{Drop: true}); err != nil || len(effects) != 1 || f.th.Live().State != engine.RunStopping {
+		t.Fatalf("halt: %v with effects %v, want stopping and one interrupt", err, effects)
+	}
+	for _, id := range []api.ID{next, later} {
+		if m, _ := f.th.Message(id); m.State != engine.QueueCancelled {
+			t.Fatalf("a queued message is %v after the halt, want cancelled", m.State)
+		}
+	}
+	f.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted})
+	if r := f.th.Live(); r != nil {
+		t.Fatalf("a turn started after the halt: %+v", *r)
+	}
+	f.must(api.ThreadDelete{})
+
+	g, run := running(t)
+	next = g.must(dispatch("next", api.AfterActive))
+	g.must(api.TurnInterrupt{})
+	g.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted})
+	if r := g.th.Live(); r == nil || r.ID != next {
+		t.Fatalf("after a plain interrupt the live run is %+v, want the queued message's", r)
+	}
+}
