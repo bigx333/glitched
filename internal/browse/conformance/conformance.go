@@ -479,11 +479,12 @@ func (s *suite) refs(t *testing.T) {
 // change what one finds by patching, after the script is installed,
 // anything resolving and describing go through: the built-ins it calls
 // and the getters it reads, a regular expression's exec, an index setter
-// on Array.prototype catching what it stores. Each way is tried on a page
-// of its own, on refs taken before it and on a snapshot taken after. That
-// is all this guards; a page that changed them before the first snapshot,
-// or that calls the script itself, still can mislead it, until it runs in
-// an isolated world (docs/browser.md).
+// on Array.prototype catching what it stores, a toJSON on Array.prototype
+// rewriting what it answers. Each way is tried on a page of its own, on
+// refs taken before it and on a snapshot taken after. That is all this
+// guards; a page that changed them before the first snapshot, or that
+// calls the script itself, still can mislead it, until it runs in an
+// isolated world (docs/browser.md).
 func (s *suite) tampering(t *testing.T) {
 	s.t = t
 	ctx := context.Background()
@@ -493,6 +494,7 @@ func (s *suite) tampering(t *testing.T) {
 		{"patching RegExp's exec to move a ref to its twin", tamperExec},
 		{"an index setter on Array.prototype", tamperIndex},
 		{"patching the getters and methods names and boxes come from", tamperGetters},
+		{"a toJSON on Array.prototype", tamperToJSON},
 	} {
 		p, _ := s.open("/snap")
 		snap, err := webtarget.Take(ctx, p, webtarget.Options{})
@@ -619,6 +621,9 @@ fake(HTMLIFrameElement, "contentDocument", () => null);
 fake(Object, "then", function () {
 	return this && this.box ? (done) => done({ role: this.role, name: "Fake", box: { x: 1, y: 2, width: 3, height: 4 } }) : undefined;
 });`
+	// A toJSON on Array.prototype, which the wrapper's JSON.stringify
+	// would call on the elements a snapshot answers with.
+	tamperToJSON = `Array.prototype.toJSON = () => [{ ref: "s1e1", role: "button", name: "Fake" }];`
 )
 
 // fixtures are the suite's pages.
