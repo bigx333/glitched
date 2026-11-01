@@ -453,6 +453,33 @@ func TestABlockedReportStopsNeedingYou(t *testing.T) {
 	}
 }
 
+// A run that asked twice reported twice, the parent's text between: two
+// cards, each keyed apart, and the same way each frame.
+func TestTwoReportsOfARunAreKeyedApart(t *testing.T) {
+	run, kid := api.NewID(), api.NewID()
+	at := time.Now()
+	first := client.ReportEntry{ChildReported: api.ChildReported{Child: kid, Run: run, Kind: api.ReportBlocked}, At: at}
+	second := first
+	second.At = at.Add(time.Second)
+	parent := thread{Thread: &client.Thread{Transcript: &client.Transcript{Entries: []client.Entry{&first, &client.AssistantEntry{Run: api.NewID(), Text: "ok"}, &second}}}}
+	cards := func() []string {
+		var keys []string
+		for _, e := range entriesOf(parent) {
+			if e.kind == entryReport {
+				keys = append(keys, e.key)
+			}
+		}
+		return keys
+	}
+	keys := cards()
+	if len(keys) != 2 || keys[0] == keys[1] {
+		t.Fatalf("report cards keyed %q, want two keys apart", keys)
+	}
+	if again := cards(); !slices.Equal(again, keys) {
+		t.Errorf("keyed %q, then %q: want the same each frame", keys, again)
+	}
+}
+
 // A run that asked twice reported twice: only its last report, of the
 // request still waiting, needs the user; the first was answered.
 func TestOnlyTheLastBlockedReportNeedsYou(t *testing.T) {
