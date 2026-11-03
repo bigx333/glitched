@@ -38,7 +38,7 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 		err = d.dispatch(c.ID, b)
 	case api.TurnInterrupt:
 		if b.Drop {
-			err = d.drop("the thread is being deleted")
+			err = d.drop("the thread was settled or deleted")
 		}
 		if r := d.t.Live(); r != nil && err == nil {
 			err = d.interrupt(*r)

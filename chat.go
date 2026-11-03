@@ -894,12 +894,11 @@ func (a *app) workspaceButton(c *ui.Context, t thread) {
 		if several && t.env != nil {
 			ui.Text(c, "on "+t.env.Name).FontSize(11.5).TextColor(palette.faint)
 		}
-		if t.id().IsZero() && t.View.Parent.IsZero() {
+		if t.id().IsZero() {
 			ui.Icon(c, icChevronD).FontSize(10)
 		}
 	})
-	// A child's runs where its parent does.
-	if !t.id().IsZero() || !t.View.Parent.IsZero() {
+	if !t.id().IsZero() {
 		return
 	}
 	b.Menu(func(m *ui.Menu) {
