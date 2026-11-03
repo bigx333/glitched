@@ -880,10 +880,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 				if h := env.Bounds().H; h > 0 {
 					a.envH = h
 				}
-				env.Children(func() {
-					a.workspaceButton(c, t)
-					a.accessCapNote(c, t)
-				})
+				env.Children(func() { a.workspaceButton(c, t) })
 			})
 		})
 	})
@@ -1013,17 +1010,13 @@ func (a *app) send(t thread) {
 		if r := []rune(title); len(r) > 48 {
 			title = string(r[:48]) + "…"
 		}
-		access := accessOf[a.access]
-		if p, ok := a.draftParent(); ok {
-			access = accessUnder(access, p)
-		}
-		if id = a.backend.CreateUnder(t.env, t.View.Parent, t.View.Workspace, title, a.modelRef(), access); id.IsZero() {
+		if id = a.backend.Create(t.env, t.View.Workspace, title, a.modelRef(), accessOf[a.access]); id.IsZero() {
 			return
 		}
 		if hero(t) {
 			a.sentFromHero(id)
 		}
-		a.selected, a.freshParent = id, api.ID{}
+		a.selected = id
 		a.follow()
 	} else if t.View.Disposition.State != api.Open {
 		a.backend.SetDisposition(t.env, id, api.Disposition{})

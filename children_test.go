@@ -118,67 +118,6 @@ func TestAChildReportsInItsParent(t *testing.T) {
 	}
 }
 
-// New child thread opens a draft under the thread, which sends as its
-// child, no wider than it: the composer's Full access runs at the parent's
-// Ask.
-func TestNewChildThread(t *testing.T) {
-	h := tree3(t)
-	h.a.access = accessFull
-	if err := h.tt.RightClick("Ship the sidebar sort"); err != nil {
-		t.Fatal(err)
-	}
-	if m := h.tt.Menu(); len(m) < 2 || m[1] != "New child thread" {
-		t.Fatalf("menu %q", m)
-	}
-	if err := h.tt.ChooseMenuItem("New child thread"); err != nil {
-		t.Fatal(err)
-	}
-	h.tt.Advance(time.Second)
-	if !h.tt.HasText("New child thread") || !h.tt.HasText("Runs at “Ask for approval”, as its parent does") {
-		t.Fatalf("the child's draft: %q", h.tt.Texts())
-	}
-	h.a.draft = "Check the docs."
-	h.tt.Frame()
-	h.click("Send")
-	h.until("the child", func() bool {
-		v := h.a.current().View
-		return !v.ID.IsZero() && v.Revision > 0
-	})
-	v := h.a.current().View
-	if top := h.thread("Ship the sidebar sort"); v.Parent != top.id() || v.Access != api.AccessAsk {
-		t.Errorf("the new thread: parent %v, access %v; want the parent's child at Ask", v.Parent, v.Access)
-	}
-}
-
-// A thread at the deepest level starts no more: the menu's item is off.
-func TestNoChildBelowTheDeepest(t *testing.T) {
-	dir := tempDir(t)
-	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
-	at := seed(t, d, "/work/t3code", "Level 0")
-	for i := 1; i <= maxDepth; i++ {
-		at = seedChild(t, d, at, fmt.Sprintf("Level %d", i))
-	}
-	h := start(t, dir)
-	for i := range maxDepth {
-		h.a.childrenOpen[h.thread(fmt.Sprintf("Level %d", i)).id()] = true
-	}
-	h.thread(fmt.Sprintf("Level %d", maxDepth))
-	h.tt.Advance(time.Second)
-	for _, tc := range []struct {
-		row string
-		ok  bool
-	}{{fmt.Sprintf("Level %d", maxDepth-1), true}, {fmt.Sprintf("Level %d", maxDepth), false}} {
-		if err := h.tt.RightClick(tc.row); err != nil {
-			t.Fatal(err)
-		}
-		err := h.tt.ChooseMenuItem("New child thread")
-		if (err == nil) != tc.ok {
-			t.Errorf("New child thread on %s: %v; want it on %v", tc.row, err, tc.ok)
-		}
-		h.tt.CloseMenu()
-	}
-}
-
 // Deleting a parent deletes what's under it too, after a confirm that
 // counts them: here a child and its own child, two threads under it.
 func TestDeleteTakesTheTree(t *testing.T) {
@@ -532,33 +471,33 @@ func TestOnlyTheLastBlockedReportNeedsYou(t *testing.T) {
 	}
 }
 
-// A child's draft is left behind when another thread is selected: should
-// that thread go, the draft shown in its place is a thread of the user's,
-// and sends as one, not under the parent it was once started under.
-func TestSelectingAnotherThreadDropsTheChildDraft(t *testing.T) {
+// No user path starts a child: an agent does. The thread menu and the
+// agents panel offer none.
+func TestNoUserPathStartsAChild(t *testing.T) {
 	h := tree3(t)
-	top := h.thread("Ship the sidebar sort")
-	h.a.startChild(top)
-	if v := h.a.current().View; v.Parent != top.id() {
-		t.Fatalf("the child's draft is under %v, want %v", v.Parent, top.id())
+	if err := h.tt.RightClick("Ship the sidebar sort"); err != nil {
+		t.Fatal(err)
 	}
-	other := h.thread("Run them")
-	h.a.select_(other)
-	h.a.backend.Delete(other.env, other.id()) // as another GUI would
-	h.until("the other thread gone", func() bool { _, ok := h.a.find(other.id()); return !ok })
-	if v := h.a.current().View; !v.ID.IsZero() || !v.Parent.IsZero() {
-		t.Fatalf("with the selected thread gone the chat shows %q under %v; want a draft of the user's", v.Title, v.Parent)
+	if m := h.tt.Menu(); slices.Contains(m, "New child thread") {
+		t.Errorf("the thread menu offers a child: %q", m)
 	}
-	h.tt.Frame()
-	h.a.draft = "Check the docs."
-	h.tt.Frame()
-	h.click("Send")
-	h.until("the new thread", func() bool {
-		v := h.a.current().View
-		return !v.ID.IsZero() && v.Revision > 0
-	})
-	if v := h.a.current().View; !v.Parent.IsZero() {
-		t.Errorf("the new thread is under %v, want a thread of the user's", v.Parent)
+	h.tt.CloseMenu()
+	h.a.select_(h.thread("Ship the sidebar sort"))
+	h.until("its report", func() bool { return h.tt.HasText("Done") })
+	h.a.agentsOpen[h.a.current().id()] = true
+	clear(h.a.childrenOpen)
+	h.tt.Advance(time.Second)
+	r, ok := h.tt.Find("Run them")
+	if !ok {
+		t.Fatalf("no agents panel: %q", h.tt.Texts())
+	}
+	h.tt.Move(r.X+r.W/2, r.Y+r.H/2)
+	h.tt.Advance(time.Second)
+	if _, ok := h.tt.Find("Thread actions"); !ok {
+		t.Fatalf("the panel's row isn't pointed at: %q", h.tt.Texts())
+	}
+	if _, ok := h.tt.Find("New child thread"); ok {
+		t.Error("the agents panel offers a child")
 	}
 }
 

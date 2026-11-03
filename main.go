@@ -198,10 +198,7 @@ type app struct {
 	projects []*project
 	selected api.ID // zero: the draft
 	fresh    draft
-	// freshParent is the thread the draft is a child of; zero for a
-	// thread of the user's.
-	freshParent api.ID
-	opened      opened
+	opened   opened
 	// kids are the threads by parent, as the frame being built shows them;
 	// childrenOpen the threads whose children the sidebar shows.
 	kids         map[api.ID][]thread

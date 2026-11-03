@@ -319,10 +319,6 @@ func (a *app) current() thread {
 	if d.workspace == "" {
 		d.workspace = homeDir()
 	}
-	// A child's draft is on its parent's machine, in its workspace.
-	if p, ok := a.draftParent(); ok {
-		return thread{p.env, &client.Thread{View: api.Thread{Title: "New child thread", Workspace: p.View.Workspace, Parent: p.id()}}}
-	}
 	return thread{d.env, &client.Thread{View: api.Thread{Title: "New thread", Workspace: d.workspace}}}
 }
 
@@ -429,14 +425,9 @@ func failed(t thread) bool {
 	return slices.ContainsFunc(t.Pending, func(p client.Pending) bool { return p.Err != nil })
 }
 
-// select_ shows the thread in the chat, read. Another thread than the
-// draft leaves a child's draft behind: the draft shown next, should this
-// one go, is the user's, not under a parent picked before.
+// select_ shows the thread in the chat, read.
 func (a *app) select_(t thread) {
 	a.selected, a.dockJump = t.id(), false
-	if !t.id().IsZero() {
-		a.freshParent = api.ID{}
-	}
 	a.follow()
 	if a.router.Path() != "/" {
 		a.router.Push("/")

@@ -247,8 +247,8 @@ func (a *app) agents(c *ui.Context, t thread, frameW, fade float32) {
 }
 
 // agentRow is a thread in the agents panel, s of the way into its place:
-// what it's doing, its title, and how long ago it changed; pointed at, +
-// for a child of its own, while it may have one, and … for its menu.
+// what it's doing, its title, and how long ago it changed; pointed at, …
+// for its menu.
 func (a *app) agentRow(c *ui.Context, n node, s float32) {
 	k := n.t
 	r := row(c, k.id(), false).Height(agentsRowH).Padding(0, 4, 0, agentsInset+float32(n.depth-1)*14).Gap(8).
@@ -262,11 +262,6 @@ func (a *app) agentRow(c *ui.Context, n node, s float32) {
 		if !hovered {
 			ui.Text(c, ago(k.View.UpdatedAt, a.now)).FontSize(11).TextColor(palette.faint).Shrink(0)
 			return
-		}
-		if a.depth(k) < maxDepth && !a.duplicate(k.env) {
-			if iconButton(c, "new-child", icPlus, "New child thread", false).Padding(3).Clicked() {
-				a.startChild(k)
-			}
 		}
 		iconButton(c, "menu", icDots, "Thread actions", false).Padding(3).
 			Menu(func(m *ui.Menu) { a.threadMenu(c, m, k, a.categoryOf(k)) })
