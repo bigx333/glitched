@@ -16,10 +16,9 @@ import (
 // user never does), which nest under it in the sidebar and show over its
 // composer as Cursor's agents do. A child reports back to its parent as it
 // finishes, fails or blocks on the user, as a card in the parent's
-// timeline (the engine posts it). Only deleting a thread takes everything
-// under it, and the agents panel's Stop all stops what works under it;
-// stopping or settling a thread leaves its children as they are, nested
-// under it wherever it shows.
+// timeline (the engine posts it). Deleting or settling a thread takes
+// everything under it, and the agents panel's Stop all stops what works
+// under it; stopping or snoozing a thread leaves its children as they are.
 // A child runs at its parent's access or less, and its tokens count in its
 // parent's total.
 
@@ -162,6 +161,19 @@ func (a *app) stopAll(ns []node) int {
 		}
 	}
 	return n
+}
+
+// settleTree settles t and every thread under it, so nothing under a
+// settled thread works: each working one is halted, as a delete halts it,
+// so that a follow-up it had queued doesn't start. The engine settles a
+// live thread, so unlike a delete nothing waits for a stop to land.
+func (a *app) settleTree(t thread) {
+	for _, n := range append(a.below(t), node{t, 0}) {
+		if n.t.View.Live() {
+			a.backend.Halt(n.t.env, n.t.id())
+		}
+		a.backend.SetDisposition(n.t.env, n.t.id(), api.Disposition{State: api.Settled})
+	}
 }
 
 // stopGrace is how long a cascade waits on a thread's stop before giving

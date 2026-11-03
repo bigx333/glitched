@@ -55,6 +55,24 @@ func TestAChildReportsBackToItsParent(t *testing.T) {
 	}
 }
 
+// A run that ends under a settled parent, as one stopping can before its
+// stop lands, still reports, but the parent stays settled and starts
+// nothing.
+func TestALateReportLeavesASettledParent(t *testing.T) {
+	n := start(t, dbPath(t), fake.New(fake.Turn(false)))
+	parent := newThread(t, n.h)
+	c, err := newChild(t, n.h, parent, api.AccessAsk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submit(t, n.h, parent, api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+	submit(t, n.h, c, dispatch("fix it", api.StartNow))
+	v := until(t, n.h, parent, "the report", func(th api.Thread) bool { return !th.Reported.IsZero() })
+	if v.Disposition.State != api.Settled || v.Run != api.RunIdle || v.LastTurn != nil {
+		t.Errorf("the parent after a late report: %v, run %v, last turn %v; want settled, idle, no turn", v.Disposition.State, v.Run, v.LastTurn)
+	}
+}
+
 // The engine refuses a child wider than its parent, deeper than MaxDepth,
 // or under a parent it doesn't have.
 func TestTheEngineKeepsChildrenInBounds(t *testing.T) {

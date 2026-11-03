@@ -471,6 +471,98 @@ func TestOnlyTheLastBlockedReportNeedsYou(t *testing.T) {
 	}
 }
 
+// A child whose agent works shows in Working, the way to its parent under
+// its title, while its parent is snoozed, out of sight; it nests again once
+// its parent is back in the inbox, or it stops. Under a settled parent it
+// isn't lifted: settling from here halts it.
+func TestAWorkingChildOfASnoozedThreadShowsInWorking(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, stalled{fake.New(midTurn), 1})
+	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	kid := seedChild(t, d, top, "Write the tests")
+	submit := func(id api.ID, b api.Intent) {
+		t.Helper()
+		if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	submit(top, api.InboxSet{Disposition: api.Disposition{State: api.Snoozed, Until: time.Now().Add(time.Hour)}})
+	submit(kid, api.MessageDispatch{Text: "go"})
+	h := start(t, dir)
+	parent, child := h.thread("Ship the sidebar sort"), h.thread("Write the tests")
+	h.until("the child working under its snoozed parent", func() bool {
+		return child.View.Working() && parent.View.Disposition.State == api.Snoozed
+	})
+	inWorking := func() bool {
+		h.tt.Frame()
+		return slices.ContainsFunc(h.a.itemsIn(catWorking), func(it inboxItem) bool { return it.t.id() == kid })
+	}
+	if !inWorking() {
+		t.Fatal("a working child of a snoozed thread isn't in Working")
+	}
+	h.click("Working")
+	h.tt.Advance(time.Second)
+	if _, ok := h.tt.Find("under Ship the sidebar sort"); !ok {
+		t.Errorf("the child's row doesn't lead to its parent: %q", strings.Join(h.tt.Texts(), " | "))
+	}
+	h.a.backend.SetDisposition(parent.env, top, api.Disposition{})
+	h.until("the parent back in the inbox", func() bool { return parent.View.Disposition.State == api.Open })
+	if inWorking() {
+		t.Error("the child stays in Working with its parent back in the inbox")
+	}
+	// As another GUI might leave it: settled, the child still working.
+	h.a.backend.SetDisposition(parent.env, top, api.Disposition{State: api.Settled})
+	h.until("the parent settled", func() bool { return parent.View.Disposition.State == api.Settled })
+	if inWorking() {
+		t.Error("a working child of a settled thread is lifted into Working")
+	}
+	h.a.backend.SetDisposition(parent.env, top, api.Disposition{State: api.Snoozed, Until: time.Now().Add(time.Hour)})
+	h.until("the parent snoozed", func() bool { return parent.View.Disposition.State == api.Snoozed })
+	h.a.backend.Interrupt(child.env, kid)
+	h.until("the child stopped", func() bool { return !child.View.Live() })
+	if inWorking() {
+		t.Error("a stopped child stays in Working")
+	}
+}
+
+// Settling a thread settles every thread under it and halts those
+// working, its children's children too: nothing under a settled thread
+// works.
+func TestSettlingStopsTheTree(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, stalled{fake.New(midTurn), 1})
+	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	kid := seedChild(t, d, top, "Write the tests")
+	leaf := seedChild(t, d, kid, "Run them")
+	for _, id := range []api.ID{kid, leaf} {
+		if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: "go"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := start(t, dir)
+	child, grand := h.thread("Write the tests"), h.thread("Run them")
+	h.until("both working", func() bool { return child.View.Working() && grand.View.Working() })
+	h.tt.Advance(time.Second)
+	if err := h.tt.RightClick("Ship the sidebar sort"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.tt.ChooseMenuItem("Mark settled"); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the tree stopped and settled", func() bool {
+		for _, title := range []string{"Ship the sidebar sort", "Write the tests", "Run them"} {
+			if v := h.thread(title).View; v.Live() || v.Disposition.State != api.Settled {
+				return false
+			}
+		}
+		return true
+	})
+	h.tt.Frame()
+	if n := len(h.a.itemsIn(catWorking)); n != 0 {
+		t.Errorf("Working lists %d threads under a settled tree", n)
+	}
+}
+
 // No user path starts a child: an agent does. The thread menu and the
 // agents panel offer none.
 func TestNoUserPathStartsAChild(t *testing.T) {
@@ -501,56 +593,6 @@ func TestNoUserPathStartsAChild(t *testing.T) {
 	}
 }
 
-// A child whose agent works shows in Working, the way to its parent under
-// its title, while its parent is snoozed or settled, out of sight; it nests
-// again once its parent is back in the inbox, or it stops.
-func TestAWorkingChildOfASettledThreadShowsInWorking(t *testing.T) {
-	dir := tempDir(t)
-	d := engine(t, daemon.Config{Dir: dir}, stalled{fake.New(midTurn), 1})
-	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
-	kid := seedChild(t, d, top, "Write the tests")
-	submit := func(id api.ID, b api.Intent) {
-		t.Helper()
-		if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: b}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	submit(top, api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
-	submit(kid, api.MessageDispatch{Text: "go"})
-	h := start(t, dir)
-	parent, child := h.thread("Ship the sidebar sort"), h.thread("Write the tests")
-	h.until("the child working under its settled parent", func() bool {
-		return child.View.Working() && parent.View.Disposition.State == api.Settled
-	})
-	inWorking := func() bool {
-		h.tt.Frame()
-		return slices.ContainsFunc(h.a.itemsIn(catWorking), func(it inboxItem) bool { return it.t.id() == kid })
-	}
-	if !inWorking() {
-		t.Fatal("a working child of a settled thread isn't in Working")
-	}
-	h.click("Working")
-	h.tt.Advance(time.Second)
-	if _, ok := h.tt.Find("under Ship the sidebar sort"); !ok {
-		t.Errorf("the child's row doesn't lead to its parent: %q", strings.Join(h.tt.Texts(), " | "))
-	}
-	h.a.backend.SetDisposition(parent.env, top, api.Disposition{})
-	h.until("the parent back in the inbox", func() bool { return parent.View.Disposition.State == api.Open })
-	if inWorking() {
-		t.Error("the child stays in Working with its parent back in the inbox")
-	}
-	h.a.backend.SetDisposition(parent.env, top, api.Disposition{State: api.Snoozed, Until: time.Now().Add(time.Hour)})
-	h.until("the parent snoozed", func() bool { return parent.View.Disposition.State == api.Snoozed })
-	if !inWorking() {
-		t.Fatal("a working child of a snoozed thread isn't in Working")
-	}
-	h.a.backend.Interrupt(child.env, kid)
-	h.until("the child stopped", func() bool { return !child.View.Live() })
-	if inWorking() {
-		t.Error("a stopped child stays in Working")
-	}
-}
-
 // The delete confirm counts the threads under the one deleted, not it:
 // one child is the thread under it.
 func TestTheDeleteConfirmCountsOnlyWhatsUnder(t *testing.T) {
@@ -571,7 +613,7 @@ func TestTheDeleteConfirmCountsOnlyWhatsUnder(t *testing.T) {
 
 // A child's report is told of, with the window in the background, once:
 // on its parent, saying how the child went.
-// Under a settled thread, a working child's working child shows in that
+// Under a snoozed thread, a working child's working child shows in that
 // child's rows, not in Working a second time on its own.
 func TestALiftedChildsChildIsntLiftedToo(t *testing.T) {
 	dir := tempDir(t)
@@ -582,7 +624,7 @@ func TestALiftedChildsChildIsntLiftedToo(t *testing.T) {
 	for _, c := range []struct {
 		id api.ID
 		b  api.Intent
-	}{{top, api.InboxSet{Disposition: api.Disposition{State: api.Settled}}}, {kid, api.MessageDispatch{Text: "go"}}, {leaf, api.MessageDispatch{Text: "go"}}} {
+	}{{top, api.InboxSet{Disposition: api.Disposition{State: api.Snoozed, Until: time.Now().Add(time.Hour)}}}, {kid, api.MessageDispatch{Text: "go"}}, {leaf, api.MessageDispatch{Text: "go"}}} {
 		if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: c.id, Body: c.b}); err != nil {
 			t.Fatal(err)
 		}
