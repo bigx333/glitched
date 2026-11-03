@@ -99,9 +99,10 @@ func (a *app) itemsIn(cat category) []inboxItem {
 
 // lifted is whether t, a child, shows in Working on its own, as well as
 // under its parent: its agent works while the thread at the top of its
-// line is snoozed or settled, where the child would be out of sight. It
-// nests again once it stops or that thread is back in the inbox. Under a
-// working thread lifted already, it shows in that one's rows instead.
+// line is snoozed, where the child would be out of sight. It nests again
+// once it stops or that thread is back in the inbox. Under a working
+// thread lifted already, it shows in that one's rows instead. Settling a
+// thread halts what works under it, so none is lifted out of Settled.
 func (a *app) lifted(t thread) bool {
 	if a.categoryOf(t) != catWorking {
 		return false
@@ -116,11 +117,7 @@ func (a *app) lifted(t thread) bool {
 			return false
 		}
 	}
-	switch a.shownIn(up[0]) {
-	case catSnoozed, catSettled:
-		return true
-	}
-	return false
+	return a.shownIn(up[0]) == catSnoozed
 }
 
 func (a *app) threadsNav(c *ui.Context) {

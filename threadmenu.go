@@ -80,9 +80,10 @@ func (a *app) renameInput(c *ui.Context, t thread) {
 	}
 }
 
-// settle puts the thread with the settled ones, done with.
+// settle puts the thread with the settled ones, done with, and every
+// thread under it too: those working are halted.
 func (a *app) settle(c *ui.Context, t thread, from category) {
-	a.backend.SetDisposition(t.env, t.id(), api.Disposition{State: api.Settled})
+	a.settleTree(t)
 	a.backend.MarkRead(t.Thread)
 	a.gag(c, t.id(), gagSettle, from)
 	c.AddToast(ui.Toast{Title: "Settled. Phew.", Description: title(t)})
