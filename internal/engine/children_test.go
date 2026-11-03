@@ -110,8 +110,9 @@ func TestAChildReportsToItsParent(t *testing.T) {
 	}
 }
 
-// A report lands in the parent's log, marks when, and brings a settled or
-// snoozed parent back to the inbox.
+// A report lands in the parent's log and marks when. It brings a snoozed
+// parent back to the inbox; a settled one stays settled, its tree done
+// with.
 func TestAReportWakesItsParent(t *testing.T) {
 	for _, state := range []api.DispositionState{api.Settled, api.Snoozed} {
 		p := newThread(t)
@@ -123,6 +124,9 @@ func TestAReportWakesItsParent(t *testing.T) {
 		rev := p.th.Revision
 		p.observe(engine.Reported{Report: api.ChildReported{Child: api.NewID(), Run: api.NewID(), Kind: api.ReportDone, Title: "c"}})
 		want := api.Open
+		if state == api.Settled {
+			want = api.Settled
+		}
 		if got := p.th.Disposition.State; got != want || !p.th.Reported.Equal(now) || p.th.Revision == rev {
 			t.Errorf("a report to a parent %v: disposition %v, reported %v, revision %d→%d; want %v, now, moved",
 				state, got, p.th.Reported, rev, p.th.Revision, want)
