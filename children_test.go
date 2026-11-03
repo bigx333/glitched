@@ -263,7 +263,7 @@ func TestDeleteTreeWithAQueuedFollowUp(t *testing.T) {
 	})
 	select {
 	case r := <-cancelled:
-		if r != "the thread is being deleted" {
+		if r != "the thread was settled or deleted" {
 			t.Errorf("the follow-up was cancelled for %q, want the delete", r)
 		}
 	case <-time.After(5 * time.Second):
