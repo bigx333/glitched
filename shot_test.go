@@ -106,6 +106,13 @@ func TestShot(t *testing.T) {
 		}
 		os.WriteFile(out+".menu.txt", []byte(strings.Join(tt.Menu(), "\n")+"\n"), 0o644)
 	}
+	if os.Getenv("AGENTS") != "" {
+		// The Agents panel open over the composer, the sidebar's children
+		// closed so that HOVER finds the panel's rows.
+		a.agentsOpen[a.current().id()] = true
+		clear(a.childrenOpen)
+		tt.Advance(time.Second)
+	}
 	if s := os.Getenv("HOVER"); s != "" {
 		r, ok := tt.Find(s)
 		if !ok {
@@ -228,11 +235,6 @@ func TestShot(t *testing.T) {
 		if err := tt.Click("Snooze"); err != nil {
 			t.Fatal(err)
 		}
-		tt.Advance(time.Second)
-	}
-	if os.Getenv("AGENTS") != "" {
-		// The Agents panel open over the composer.
-		a.agentsOpen[a.current().id()] = true
 		tt.Advance(time.Second)
 	}
 	if ms := os.Getenv("STRIKE"); ms != "" {
