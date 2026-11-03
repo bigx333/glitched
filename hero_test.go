@@ -128,16 +128,6 @@ func TestHeroEnters(t *testing.T) {
 	}
 }
 
-// A child's draft is no hero: it's docked, under its parent's line.
-func TestAChildDraftIsDocked(t *testing.T) {
-	h := tree3(t)
-	h.a.startChild(h.thread("Ship the sidebar sort"))
-	h.tt.Advance(time.Second)
-	if h.a.dockK != 1 || h.tt.HasText("Send a message to start the thread.") {
-		t.Errorf("a child's draft: dock %v, the hero's heading %v", h.a.dockK, h.tt.HasText("Send a message to start the thread."))
-	}
-}
-
 // The hero is in the middle of the pane, with or without the sidebar:
 // the turn markers' room comes in only as the transcript does.
 func TestTheHeroIsCentred(t *testing.T) {

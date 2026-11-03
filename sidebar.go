@@ -210,7 +210,7 @@ func (a *app) startThread(p *project) { a.startIn(draft{p.env, p.key.workspace})
 
 func (a *app) startIn(d draft) {
 	a.leaveFor()
-	a.fresh, a.freshParent = d, api.ID{}
+	a.fresh = d
 	a.selected, a.dockJump = api.ID{}, false
 	a.follow()
 	if a.router.Path() != "/" {

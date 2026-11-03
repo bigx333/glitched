@@ -16,8 +16,7 @@ import (
 // sidebar. Opening a new thread from an established one by the pointer is
 // the same way back (⌘N jumps, as keyboard actions don't animate): the
 // thread left fades and slides out as the composer lifts into the middle,
-// growing, and the heading comes in as it gets there. A child's draft is
-// no hero: it docks at once, under its parent's line.
+// growing, and the heading comes in as it gets there.
 //
 // The pane's one value, dockK, is how far the composer is from the hero
 // (0) to its dock (1): any thread but the draft is docked. It moves on the
@@ -59,9 +58,8 @@ func stage(k, from, to float32) float32 {
 func heroHeadingK(d float32) float32 { return 1 - stage(d, 0, 0.3) }
 func transcriptK(d float32) float32  { return stage(d, 0.6, 1) }
 
-// hero is whether t is shown as the hero: the draft of a new thread of the
-// user's.
-func hero(t thread) bool { return t.id().IsZero() && t.View.Parent.IsZero() }
+// hero is whether t is shown as the hero: the draft of a new thread.
+func hero(t thread) bool { return t.id().IsZero() }
 
 // dockMorph moves the composer between the hero and its dock, on host, for
 // the frame. The keyboard's ⌘N jumps, as keyboard actions don't animate.
