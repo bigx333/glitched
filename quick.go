@@ -137,7 +137,7 @@ func (a *app) localProjects() []*project {
 // sends it, and brings the window to it.
 func (a *app) startQuickThread() {
 	q := &a.quick
-	a.fresh, a.freshParent, a.selected = draft{}, api.ID{}, api.ID{}
+	a.fresh, a.selected = draft{}, api.ID{}
 	if ps := a.localProjects(); q.project < len(ps) {
 		a.fresh.workspace = ps[q.project].key.workspace
 	}

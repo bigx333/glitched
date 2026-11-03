@@ -21,11 +21,6 @@ func (a *app) threadMenu(c *ui.Context, m *ui.Menu, t thread, cat category) {
 	if m.Item("Rename").Chosen() {
 		a.renaming, a.renameDraft, a.renameFocused = t.id(), title(t), false
 	}
-	// A child thread starts on the thread's engine, so not on a duplicate's,
-	// and no deeper than maxDepth.
-	if m.Item("New child thread").Disabled(a.depth(t) >= maxDepth || t.env == nil || a.duplicate(t.env)).Chosen() {
-		a.startChild(t)
-	}
 	working := t.View.Working()
 	switch cat {
 	case catInbox, catWorking:
@@ -109,7 +104,7 @@ func (a *app) askDelete(t thread) {
 func (a *app) delete(t thread) {
 	a.backend.Delete(t.env, t.id())
 	if a.selected == t.id() {
-		a.fresh, a.freshParent = draft{t.env, t.View.Workspace}, api.ID{}
+		a.fresh = draft{t.env, t.View.Workspace}
 	}
 }
 

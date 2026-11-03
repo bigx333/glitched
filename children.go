@@ -12,14 +12,15 @@ import (
 	"glitched/internal/client"
 )
 
-// Child threads: a thread can start others on its engine, which nest under
-// it in the sidebar and show over its composer as Cursor's agents do. A
-// child reports back to its parent as it finishes, fails or blocks on the
-// user, as a card in the parent's timeline (the engine posts it). Only
-// deleting a thread takes everything under it, and the agents panel's
-// Stop all stops what works under it; stopping or settling a thread
-// leaves its children as they are, nested under it wherever it shows. A
-// child runs at its parent's access or less, and its tokens count in its
+// Child threads: an agent's thread can start others on its engine (the
+// user never does), which nest under it in the sidebar and show over its
+// composer as Cursor's agents do. A child reports back to its parent as it
+// finishes, fails or blocks on the user, as a card in the parent's
+// timeline (the engine posts it). Only deleting a thread takes everything
+// under it, and the agents panel's Stop all stops what works under it;
+// stopping or settling a thread leaves its children as they are, nested
+// under it wherever it shows.
+// A child runs at its parent's access or less, and its tokens count in its
 // parent's total.
 
 const maxDepth = api.MaxDepth
@@ -138,19 +139,6 @@ func fmtTokens(n int64) string {
 	return fmt.Sprintf("%.1fk", float64(n)/1000)
 }
 
-// startChild opens a draft of a child of t, on its machine and in its
-// workspace, its line opened in the sidebar to show it once sent.
-func (a *app) startChild(t thread) {
-	if a.depth(t) >= maxDepth || t.id().IsZero() {
-		return
-	}
-	a.startIn(draft{t.env, t.View.Workspace})
-	a.freshParent = t.id()
-	for _, x := range append(a.ancestors(t), t) {
-		a.childrenOpen[x.id()] = true
-	}
-}
-
 // pruneThreadState drops what the app keeps by thread for threads no
 // longer there: the sidebar's open children and the composers seen.
 func (a *app) pruneThreadState() {
@@ -160,12 +148,6 @@ func (a *app) pruneThreadState() {
 	}
 	maps.DeleteFunc(a.childrenOpen, gone)
 	maps.DeleteFunc(a.composerSeen, gone)
-}
-
-// accessUnder is the widest access a child of parent may have: its
-// parent's.
-func accessUnder(want api.Access, parent thread) api.Access {
-	return min(want, parent.View.Access)
 }
 
 // --- Stopping and deleting trees
@@ -340,9 +322,6 @@ func (a *app) childRow(c *ui.Context, k thread, depth int) {
 // the furthest first; narrow, only its parent.
 func (a *app) breadcrumb(c *ui.Context, t thread, narrow bool) {
 	up := a.ancestors(t)
-	if p, ok := a.draftParent(); ok && t.id().IsZero() {
-		up = append(a.ancestors(p), p)
-	}
 	if narrow && len(up) > 1 {
 		up = up[len(up)-1:]
 	}
@@ -355,18 +334,6 @@ func (a *app) breadcrumb(c *ui.Context, t thread, narrow bool) {
 		}
 		ui.Icon(c, icChevronR).FontSize(11).TextColor(palette.faint).Shrink(0)
 	}
-}
-
-// draftParent is the thread the draft is a child of, while it's there.
-func (a *app) draftParent() (thread, bool) {
-	if a.freshParent.IsZero() {
-		return thread{}, false
-	}
-	p, ok := a.find(a.freshParent)
-	if !ok || deleting(p) {
-		return thread{}, false
-	}
-	return p, true
 }
 
 // usagePill is the thread's tokens, and with children, everything under it
@@ -455,14 +422,4 @@ func addReport(rs []client.ReportEntry, r client.ReportEntry) []client.ReportEnt
 		return rs
 	}
 	return append(rs, r)
-}
-
-// accessCapNote says, under a child's draft, when its parent's access is
-// narrower than the composer's: the child runs at its parent's.
-func (a *app) accessCapNote(c *ui.Context, t thread) {
-	p, ok := a.draftParent()
-	if !ok || !t.id().IsZero() || accessOf[a.access] <= p.View.Access {
-		return
-	}
-	ui.Text(c, "Runs at “"+accessLabel(p.View.Access)+"”, as its parent does").FontSize(11.5).TextColor(palette.faint)
 }
