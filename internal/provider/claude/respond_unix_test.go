@@ -112,8 +112,12 @@ func TestAPromptBecomesTheCardsAsk(t *testing.T) {
 		"edit": {write(1), `{"operation":"edit","path":"big.txt"}`},
 		"fetch": {map[string]any{"tool_name": "WebFetch", "input": map[string]any{"url": "https://go.dev", "prompt": "summarize"}},
 			`{"operation":"read","path":"https://go.dev"}`},
-		"other tool": {map[string]any{"tool_name": "mcp__docs__lookup", "input": map[string]any{"q": "x"}},
-			`{"operation":"use mcp__docs__lookup"}`},
+		"other tool": {map[string]any{"tool_name": "mcp__db__exec", "input": map[string]any{"sql": "DROP TABLE users", "params": []int{1}}},
+			`{"operation":"use mcp__db__exec","args":"params: [1]\nsql: DROP TABLE users"}`},
+		"subagent": {map[string]any{"tool_name": "Task", "input": map[string]any{"description": "Tidy up", "prompt": "Delete every file\nunder ~", "subagent_type": "general-purpose"}},
+			`{"operation":"use Task","args":"description: Tidy up\nprompt:\n  Delete every file\n  under ~\nsubagent_type: general-purpose"}`},
+		"unsandboxed": {map[string]any{"tool_name": "Bash", "input": map[string]any{"command": "ls", "dangerouslyDisableSandbox": true}},
+			`{"command":"ls","cwd":"$WORKSPACE","unsandboxed":true}`},
 		"why it asks": {map[string]any{"tool_name": "Bash", "input": map[string]any{"command": "rm -rf build"},
 			"decision_reason": "\x1b[1mDangerous rm\x1b[0m operation not ruled out"},
 			`{"command":"rm -rf build","cwd":"$WORKSPACE","reason":"Dangerous rm operation not ruled out"}`},
@@ -133,6 +137,54 @@ func TestAPromptBecomesTheCardsAsk(t *testing.T) {
 			r := nextRequest(t, ag)
 			if want := strings.ReplaceAll(tc.want, "$WORKSPACE", ws); r.Kind != "approval" || string(r.Body) != want {
 				t.Errorf("request %s %s, want approval %s", r.Kind, r.Body, want)
+			}
+		})
+	}
+}
+
+// An answer that reaches the adapter once Claude Code stopped waiting on
+// its prompt goes nowhere, and says so.
+func TestAnAnswerClaudeCodeNoLongerWaitsOnFails(t *testing.T) {
+	for name, stopped := range map[string]string{
+		"cancelled":  `{"recv":{"type":"control_cancel_request","request_id":"ask"}}`,
+		"turn ended": `{"recv":{"type":"result","subtype":"success"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			asks(t, write(1), true)
+			tape := os.Getenv(envFake)
+			lines := strings.Split(string(must(os.ReadFile(tape))), "\n")
+			lines = append(lines[:len(lines)-1], stopped, `{"hang":true}`)
+			if err := os.WriteFile(tape, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			replies := stdin(t)
+			ag := open(t)
+			if err := ag.Do(ctx, provider.Start{Text: "write big.txt"}); err != nil {
+				t.Fatal(err)
+			}
+			r := nextRequest(t, ag)
+			waitCtx, cancel := context.WithTimeout(ctx, turnWait)
+			defer cancel()
+			for {
+				e, err := ag.Next(waitCtx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, ok := e.(provider.RequestWithdrawn); ok {
+					break
+				}
+				if _, ok := e.(provider.TurnEnded); ok {
+					break
+				}
+			}
+			if err := ag.Do(ctx, provider.Respond{Request: r.ID, Answer: json.RawMessage(`{"allow":true}`)}); err == nil {
+				t.Error("an answer Claude Code no longer waited on went through")
+			}
+			closeCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+			defer cancel()
+			ag.Close(closeCtx)
+			if got := replies(); len(got) != 0 {
+				t.Errorf("Claude Code got %+v, want nothing", got)
 			}
 		})
 	}
