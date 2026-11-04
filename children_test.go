@@ -238,7 +238,7 @@ func TestDeleteTreeWithAQueuedFollowUp(t *testing.T) {
 		_, k := h.a.find(kid)
 		return !p && !k
 	})
-	h.pump(time.Second)
+	h.settle(func() bool { return false })
 	if n := opens.Load() - before; n != 0 {
 		t.Errorf("%d turns started after the delete, want none", n)
 	}
@@ -621,11 +621,19 @@ func (g *slowAgent) Do(ctx context.Context, act provider.Action) error {
 	return g.Agent.Do(ctx, act)
 }
 
-// pump runs what the manager posts, a frame at a time, for d.
-func (h *harness) pump(d time.Duration) {
-	for end := time.Now().Add(d); time.Now().Before(end); {
-		h.p.run()
-		h.tt.Advance(100 * time.Millisecond)
+// settle runs what the manager posts, a frame after each batch, until ok
+// holds or 5 s pass, then for a moment longer, so a turn started after
+// would show.
+func (h *harness) settle(ok func() bool) {
+	for end := time.Now().Add(5 * time.Second); !ok() && time.Now().Before(end); {
+		if h.p.run() {
+			h.tt.Frame()
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if h.p.run() {
+		h.tt.Frame()
 	}
 }
 
@@ -663,7 +671,7 @@ func TestStopAllThenSettleLeavesNothingLive(t *testing.T) {
 	h.a.settleTree(parent)
 	h.until("the child settled", func() bool { return child.View.Disposition.State == api.Settled })
 	close(release)
-	h.pump(5 * time.Second)
+	h.settle(func() bool { v, _ := viewOn(t, d, kid); return !v.Live() })
 	if v, _ := viewOn(t, d, kid); v.Live() || v.Disposition.State != api.Settled {
 		t.Errorf("the child in a settled tree: run %v, settled %v; want idle and settled", v.Run, v.Disposition.State == api.Settled)
 	}
@@ -687,9 +695,9 @@ func TestStopThenDeleteALoneThread(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	h.a.settings.confirmDelete = false
 	h.a.askDelete(th)
-	h.pump(time.Second)
+	h.settle(func() bool { _, there := viewOn(t, d, id); return !there })
 	close(release)
-	h.pump(5 * time.Second)
+	h.settle(func() bool { _, there := viewOn(t, d, id); return !there })
 	if v, there := viewOn(t, d, id); there {
 		t.Errorf("the thread is still there: run %v", v.Run)
 	}
@@ -720,7 +728,7 @@ func TestDeleteAChildStartedBeforeTheGUIHeard(t *testing.T) {
 	}
 	h.a.settings.confirmDelete = false
 	h.a.askDelete(parent)
-	h.pump(5 * time.Second)
+	h.settle(func() bool { _, p := viewOn(t, d, top); _, k := viewOn(t, d, kid); return !p && !k })
 	_, p := viewOn(t, d, top)
 	v, k := viewOn(t, d, kid)
 	if p || k {
@@ -757,7 +765,7 @@ func TestAFollowUpQueuedDuringADeleteKeepsNothing(t *testing.T) {
 	}
 	d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: "then this", Mode: api.AfterActive}})
 	close(release)
-	h.pump(5 * time.Second)
+	h.settle(func() bool { _, p := viewOn(t, d, top); _, k := viewOn(t, d, kid); return !p && !k })
 	_, p := viewOn(t, d, top)
 	v, k := viewOn(t, d, kid)
 	if n := opens.Load() - before; p || k || n != 0 {
