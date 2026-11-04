@@ -397,7 +397,10 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 
 	case engine.DeliverAnswer:
 		o = engine.Delivered{Request: b.Request}
-		if err = h.act(b.Run, provider.Respond{Request: b.Dedup, Answer: b.Answer}); err != nil {
+		switch err = h.act(b.Run, provider.Respond{Request: b.Dedup, Answer: b.Answer}); {
+		case errors.Is(err, provider.ErrWithdrawn):
+			o, err = engine.Unheard{Request: b.Request, Reason: err.Error()}, nil
+		case err != nil:
 			o = engine.DeliveryFailed{Request: b.Request, Error: err.Error()}
 		}
 

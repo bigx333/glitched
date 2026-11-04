@@ -165,6 +165,13 @@ type Withdrawn struct {
 
 type Delivered struct{ Request api.ID }
 
+// Unheard is an answer the agent stopped waiting for before it arrived,
+// as when the user's own hook decided first. The run goes on without it.
+type Unheard struct {
+	Request api.ID
+	Reason  string
+}
+
 type DeliveryFailed struct {
 	Request api.ID
 	Error   string
@@ -209,6 +216,7 @@ func (Work) observed()           {}
 func (Surfaced) observed()       {}
 func (Withdrawn) observed()      {}
 func (Delivered) observed()      {}
+func (Unheard) observed()        {}
 func (DeliveryFailed) observed() {}
 func (Steered) observed()        {}
 func (SteerFailed) observed()    {}

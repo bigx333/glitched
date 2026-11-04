@@ -259,6 +259,22 @@ func TestAWithdrawnRequestIsVoid(t *testing.T) {
 	}
 }
 
+// An answer that lost the race to the agent's withdrawal, so the agent
+// never heard it, voids the request and leaves the run at work: unlike a
+// failed delivery, it stops nothing.
+func TestAnUnheardAnswerLeavesTheRunGoing(t *testing.T) {
+	f, run, req := waiting(t)
+	f.must(answer(req))
+	f.observe(engine.Withdrawn{Run: run, Dedup: req.Dedup})
+	f.observe(engine.Unheard{Request: req.ID, Reason: "the agent stopped waiting"})
+	if r, _ := f.th.Request(req.ID); r.State != api.RequestInvalidated {
+		t.Fatalf("the unheard answer left %v, want invalidated", r.State)
+	}
+	if live := f.th.Live(); live == nil || live.State != engine.RunRunning {
+		t.Fatalf("run after an unheard answer: %+v, want running", live)
+	}
+}
+
 func TestInterruptingAStoppingRunGivesUpOnIt(t *testing.T) {
 	f, run := running(t)
 	if _, effects, _ := f.submit(api.TurnInterrupt{}); len(effects) != 1 || f.th.Live().State != engine.RunStopping {
