@@ -172,7 +172,9 @@ func modelTile(c *ui.Context, icon *ui.SVG, color ui.Color, size float32) {
 // pickerGlow is a soft glow around the model button, in the effort's
 // colors from High up: borders of a gradient, a
 // sharp one and blurred ones stacked. At Max it slowly turns. Fast mode's
-// electricity takes its place.
+// electricity takes its place. Without a GPU only the sharp one shows: a
+// blurred layer is drawn anew every frame, and the glass composer under it
+// with it.
 func (a *app) pickerGlow(c *ui.Context, b ui.Element, level int) {
 	on := float32(0)
 	switch {
@@ -198,7 +200,11 @@ func (a *app) pickerGlow(c *ui.Context, b ui.Element, level int) {
 		angle = b.Loop("turn", 4*time.Second, ui.Linear) * 360
 	}
 	g := ui.ConicGradient{Stops: stops, Angle: angle, Oklab: true}
-	for _, l := range []struct{ width, blur, alpha float32 }{{1, 0, 0.9}, {2.5, 3, 0.6}, {5, 9, 0.45}} {
+	layers := []struct{ width, blur, alpha float32 }{{1, 0, 0.9}, {2.5, 3, 0.6}, {5, 9, 0.45}}
+	if !gpu {
+		layers = layers[:1]
+	}
+	for _, l := range layers {
 		ui.Box(c).Absolute().Top(-1).Left(-1).Right(-1).Bottom(-1).PassThrough().Radius(7).
 			Border(l.width, ui.Color{}).BorderConicGradient(g).Blur(l.blur).Opacity(k * l.alpha)
 	}
