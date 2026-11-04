@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -114,8 +116,12 @@ func TestLiveStopSteerAndCrash(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(ws, "steer-ran")); err == nil {
 			t.Error("claude ran the steer's tool after the stopped turn ended")
 		}
-		if after := afterStop(t, tape+".jsonl"); len(after) > 0 {
-			t.Errorf("claude went on after the stopped turn's result: %q", after)
+		steerID, queued := steerOf(t, tape+".jsonl")
+		if len(queued) > 0 {
+			t.Errorf("the interrupt left %q queued", queued)
+		}
+		if after := afterInterrupt(t, sessionFile(t, ws, thread), steerID, "touch steer-ran"); len(after) > 0 {
+			t.Errorf("claude went on after the interrupt:\n%s", strings.Join(after, "\n"))
 		}
 	})
 
@@ -163,32 +169,80 @@ func dispatched(t *testing.T, h *runtime.Host, thread, message api.ID) bool {
 	return false
 }
 
-// afterStop is the model output and tool results in the transcript at
-// tape after the result that followed the interrupt.
-func afterStop(t *testing.T, tape string) []string {
+// steerOf is, from the transcript at tape, the uuid of the second user
+// message sent, the steer, and what the interrupt's receipt left queued.
+func steerOf(t *testing.T, tape string) (steer string, queued []string) {
 	t.Helper()
-	var said []string
-	stopped, ended := false, false
+	users := 0
 	for _, l := range strings.Split(strings.TrimSpace(string(must(os.ReadFile(tape)))), "\n") {
 		var e struct {
-			Sent, Recv *struct {
-				Type    string
-				Request struct{ Subtype string }
+			Sent *struct{ Type, UUID string }
+			Recv *struct {
+				Type     string
+				Response struct {
+					RequestID string `json:"request_id"`
+					Response  struct {
+						StillQueued []string `json:"still_queued"`
+					}
+				}
 			}
 		}
 		json.Unmarshal([]byte(l), &e)
 		switch {
-		case e.Sent != nil && e.Sent.Request.Subtype == "interrupt":
-			stopped = true
-		case e.Recv == nil:
-		case ended && (e.Recv.Type == "assistant" || e.Recv.Type == "stream_event" || e.Recv.Type == "user"):
-			said = append(said, l)
-		case stopped && e.Recv.Type == "result":
-			ended = true
+		case e.Sent != nil && e.Sent.Type == "user":
+			if users++; users == 2 {
+				steer = e.Sent.UUID
+			}
+		case e.Recv != nil && e.Recv.Type == "control_response" && e.Recv.Response.RequestID == "glitched-interrupt":
+			queued = e.Recv.Response.Response.StillQueued
 		}
 	}
-	if !ended {
-		t.Errorf("the transcript at %s holds no result after the interrupt", tape)
+	if steer == "" {
+		t.Fatalf("the transcript at %s holds no steer", tape)
 	}
-	return said
+	return steer, queued
+}
+
+// sessionFile is where Claude Code keeps the session of a thread run in
+// workspace ws.
+func sessionFile(t *testing.T, ws string, thread api.ID) string {
+	t.Helper()
+	dir := os.Getenv("CLAUDE_CONFIG_DIR")
+	if dir == "" {
+		dir = filepath.Join(must(os.UserHomeDir()), ".claude")
+	}
+	slug := regexp.MustCompile(`[^A-Za-z0-9]`).ReplaceAllString(ws, "-")
+	return filepath.Join(dir, "projects", slug, claude.SessionOf(thread)+".jsonl")
+}
+
+// afterInterrupt is what the session file at path says Claude Code did
+// after it wrote the interrupt: took a queued message, called the model,
+// or kept the steer, by its uuid or its text, on the session.
+func afterInterrupt(t *testing.T, path, steer, text string) []string {
+	t.Helper()
+	var did []string
+	stopped := false
+	for _, l := range strings.Split(strings.TrimSpace(string(must(os.ReadFile(path)))), "\n") {
+		var e struct {
+			Type, Operation, UUID string
+			UserMessageUUIDs      []string `json:"user_message_uuids"`
+			Message               struct{ Content json.RawMessage }
+		}
+		json.Unmarshal([]byte(l), &e)
+		content := string(e.Message.Content)
+		switch {
+		case e.Type == "user" && strings.Contains(content, "[Request interrupted by user"):
+			stopped = true
+		case !stopped:
+		case e.Type == "queue-operation" && e.Operation == "dequeue",
+			e.Type == "api-request",
+			e.Type == "user" && (e.UUID == steer || strings.Contains(content, text)),
+			e.Type == "system" && slices.Contains(e.UserMessageUUIDs, steer):
+			did = append(did, e.Type+" "+e.Operation+" "+e.UUID)
+		}
+	}
+	if !stopped {
+		t.Errorf("the session at %s holds no interrupt", path)
+	}
+	return did
 }
