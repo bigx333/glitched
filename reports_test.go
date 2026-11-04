@@ -348,9 +348,16 @@ func TestAskAnswerAskThenDoneTellsEachAskOnce(t *testing.T) {
 	h.thread("Grandchild")
 	got := told(h, parent.ID)
 	for range 2 {
+		kid.Requests = nil
+		asks(&kid)
+		s.show(kid)
 		s.report(&parent, kid.ID, api.ReportBlocked)
 	}
+	kid.Requests = nil
+	s.show(kid)
 	s.report(&parent, kid.ID, api.ReportDone)
+	asks(&grand)
+	s.show(grand)
 	s.report(&kid, grand.ID, api.ReportBlocked)
 	shown(h, parent)
 	shown(h, kid)
@@ -396,6 +403,10 @@ func TestReportsAtOneTimeAreEachToldOf(t *testing.T) {
 	s, h := play(t, parent, a, b)
 	h.thread("B")
 	got := told(h, parent.ID)
+	asks(&a)
+	s.show(a)
+	asks(&b)
+	s.show(b)
 	at := time.Unix(1001, 0)
 	s.commit(&parent, a.ID, api.ReportBlocked, at)
 	s.show(parent)
@@ -414,6 +425,8 @@ func TestADoneReportAtABlockedOnesTimeHidesNothing(t *testing.T) {
 	s, h := play(t, parent, a, b)
 	h.thread("Finisher")
 	got := told(h, parent.ID)
+	asks(&a)
+	s.show(a)
 	at := time.Unix(1001, 0)
 	s.commit(&parent, a.ID, api.ReportBlocked, at)
 	s.show(parent)
@@ -433,6 +446,10 @@ func TestAReportStampedBeforeTheOneAheadIsToldOf(t *testing.T) {
 	s, h := play(t, parent, a, b)
 	h.thread("B")
 	got := told(h, parent.ID)
+	asks(&a)
+	s.show(a)
+	asks(&b)
+	s.show(b)
 	s.commit(&parent, a.ID, api.ReportBlocked, time.Unix(1002, 0))
 	s.show(parent)
 	h.until("A's notification", func() bool { return len(*got) == 1 })
@@ -615,16 +632,21 @@ func TestARestoredLogTellsOnlyReportsMadeAfter(t *testing.T) {
 	s, h := play(t, parent, a, b)
 	h.thread("B")
 	got := told(h, parent.ID)
+	asks(&a)
+	s.show(a)
 	s.report(&parent, a.ID, api.ReportBlocked)
 	h.until("A's notification", func() bool { return len(*got) == 1 })
 	copied := parent
+	asks(&b)
 	s.commit(&copied, b.ID, api.ReportBlocked, time.Unix(1002, 0))
-	s.restore(copied)
+	s.restore(copied, b)
 	reconnect(h, s)
 	shown(h, copied)
 	if want := []string{"A: Needs you"}; !slices.Equal(*got, want) {
 		t.Fatalf("after the restore: %q; want %q", *got, want)
 	}
+	asks(&b)
+	s.show(b)
 	s.report(&copied, b.ID, api.ReportBlocked)
 	h.until("B's notification", func() bool { return len(*got) == 2 })
 	if want := []string{"A: Needs you", "B: Needs you"}; !slices.Equal(*got, want) {
@@ -840,9 +862,8 @@ func TestAReportOfAChildCreatedWhileTheShellLagsIsToldOf(t *testing.T) {
 	}
 }
 
-// notifyReported tells only of a Blocked report, with notifications on,
-// of a child the app holds.
-func TestOnlyABlockedReportOfAHeldChildNotifies(t *testing.T) {
+// notifyAsked tells, with notifications on, only of a child the app holds.
+func TestOnlyAnAskOfAHeldChildNotifies(t *testing.T) {
 	p := view("Parent", api.ID{})
 	a := view("A", p.ID)
 	_, h := play(t, p, a)
@@ -850,15 +871,13 @@ func TestOnlyABlockedReportOfAHeldChildNotifies(t *testing.T) {
 	got := told(h, p.ID)
 	e := h.local()
 	h.a.settings.notifications = false
-	h.a.notifyReported(e, p.ID, api.Report{Child: a.ID, Kind: api.ReportBlocked})
+	h.a.notifyAsked(e, p.ID, a.ID)
 	h.a.settings.notifications = true
-	h.a.notifyReported(e, p.ID, api.Report{Child: a.ID, Kind: api.ReportDone})
-	h.a.notifyReported(e, p.ID, api.Report{Child: a.ID, Kind: api.ReportFailed})
-	h.a.notifyReported(e, p.ID, api.Report{Child: api.NewID(), Kind: api.ReportBlocked})
+	h.a.notifyAsked(e, p.ID, api.NewID())
 	if len(*got) != 0 {
 		t.Fatalf("notifications: %q; want none", *got)
 	}
-	h.a.notifyReported(e, p.ID, api.Report{Child: a.ID, Kind: api.ReportBlocked})
+	h.a.notifyAsked(e, p.ID, a.ID)
 	if want := []string{"A: Needs you"}; !slices.Equal(*got, want) {
 		t.Fatalf("notifications: %q; want %q", *got, want)
 	}

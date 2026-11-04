@@ -41,23 +41,22 @@ func (a *app) watching(t thread) bool {
 	return a.selected == t.id() && a.win != nil && a.win.IsFocused()
 }
 
-// notifyReported tells the user, as notifyFinished does, that the child
-// of parent that made r needs them: r says it waits on a request, which
-// ends no turn, so nothing else tells of it. A child done or failed ended
-// its turn, which notifyFinished told of already. Clicking it opens the
-// parent, where the report is. Neither is a thread they're watching.
-func (a *app) notifyReported(e *client.Env, parent api.ID, r api.Report) {
-	p, child := e.Threads[parent], e.Threads[r.Child]
-	if r.Kind != api.ReportBlocked || p == nil || child == nil || !a.settings.notifications || a.notify == nil {
+// notifyAsked tells the user, as notifyFinished does, that child of
+// parent waits on them for a request: that ends no turn, so nothing else
+// tells of it. Clicking it opens the parent, where the child's report is.
+// Neither is a thread they're watching.
+func (a *app) notifyAsked(e *client.Env, parent, child api.ID) {
+	p, c := e.Threads[parent], e.Threads[child]
+	if p == nil || c == nil || !a.settings.notifications || a.notify == nil {
 		return
 	}
-	if a.watching(thread{e, p}) || a.watching(thread{e, child}) {
+	if a.watching(thread{e, p}) || a.watching(thread{e, c}) {
 		return
 	}
 	a.notify(mygo.NotificationOptions{
 		ID:    "thread:" + parent.String(),
 		Title: p.View.Title,
-		Body:  title(thread{e, child}) + ": Needs you",
+		Body:  title(thread{e, c}) + ": Needs you",
 		Group: "threads",
 	})
 }
