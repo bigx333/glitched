@@ -563,7 +563,8 @@ func TestEachThreadReviewsItsOwnDiff(t *testing.T) {
 	h.a.draft = "Edit both again."
 	h.tt.Frame()
 	h.click("Send")
-	h.until("the second turn", func() bool { return strings.Count(strings.Join(h.tt.Texts(), "\n"), "Edited both.") == 2 })
+	h.until("the second turn", func() bool { return strings.Count(texts(entriesOf(first)), "Edited both.") == 2 })
+	h.tt.Advance(time.Second)
 	if h.diffOf(first, sidebarPath).reviewed {
 		t.Error("the mark stayed after the agent edited the file again")
 	}
