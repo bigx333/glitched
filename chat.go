@@ -58,7 +58,7 @@ func (a *app) chatPage(c *ui.Context) {
 			// under it.
 			a.header(c, t, es)
 			pane := a.contentCard(ui.Box(c).Grow(1))
-			a.paneH = pane.Bounds().H
+			a.paneAt = pane.Bounds()
 			// Before the timeline and the composer, which it stages.
 			a.dockMorph(pane, t)
 			// Before the timeline, which leaves the strip's room as it moves.
@@ -272,6 +272,7 @@ func (a *app) timeline(c *ui.Context, t thread, es []entry) {
 	if leaving {
 		t, es = from, entriesOf(from)
 	}
+	a.drew, a.drawn = a.drawn, map[api.ID]sight{}
 	l := a.listFor(t.id())
 	l.Key = func(i int) any { return es[i].key }
 	l.FollowEnd = true
