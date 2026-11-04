@@ -772,3 +772,32 @@ func TestAFollowUpQueuedDuringADeleteKeepsNothing(t *testing.T) {
 		t.Errorf("starts=%d parent_exists=%v child_exists=%v child_live=%v", n, p, k, v.Live())
 	}
 }
+
+// A follow-up sent from the composer to a thread another client settled
+// brings it back to the inbox and runs, whether this GUI had heard of the
+// settle or not.
+func TestAFollowUpBringsBackASettledThread(t *testing.T) {
+	for _, heard := range []bool{false, true} {
+		t.Run(fmt.Sprintf("heard %v", heard), func(t *testing.T) {
+			dir := tempDir(t)
+			ad := fake.New(fake.Turn(false))
+			d := engine(t, daemon.Config{Dir: dir}, ad)
+			id := seed(t, d, "/work/t3code", "Review follow-up")
+			h := start(t, dir)
+			th := h.thread("Review follow-up")
+			h.a.select_(th)
+			if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.InboxSet{Disposition: api.Disposition{State: api.Settled}}}); err != nil {
+				t.Fatal(err)
+			}
+			if heard {
+				h.until("the settle", func() bool { return th.View.Disposition.State == api.Settled })
+			}
+			h.a.draft = "Please continue."
+			h.a.send(th)
+			h.until("the follow-up's turn over", func() bool { return ad.Starts() == 1 && len(th.Pending) == 0 && !th.View.Live() })
+			if v, _ := viewOn(t, d, id); v.Disposition.State != api.Open {
+				t.Errorf("the thread is %v after the follow-up, want back in the inbox", v.Disposition.State)
+			}
+		})
+	}
+}

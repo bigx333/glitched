@@ -103,6 +103,25 @@ func TestRunFollowsASteeredMessageIntoTheLiveRun(t *testing.T) {
 	}
 }
 
+// glitched run on a settled thread brings it back to the inbox and runs
+// the message, as the GUI's composer does.
+func TestRunOnASettledThreadBringsItBack(t *testing.T) {
+	ad := fake.New(fake.Turn(false))
+	dir, ep := engine(t, ad)
+	thread := newThread(t, ep)
+	if _, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: thread, Body: api.InboxSet{Disposition: api.Disposition{State: api.Settled}}}); err != nil {
+		t.Fatal(err)
+	}
+	err := <-runAsync(dir, thread, "after")
+	snap, readErr := ep.Read(context.Background(), api.Query{Thread: thread})
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if th := snap.Threads[0]; err != nil || th.Disposition.State != api.Open || ad.Starts() != 1 {
+		t.Fatalf("run: %v; the thread is %v after %d starts, want it back in the inbox after one", err, th.Disposition.State, ad.Starts())
+	}
+}
+
 func TestRunReturnsOnceADeferredMessageIsHeld(t *testing.T) {
 	dir, ep := engine(t, fake.New(fake.Turn(false)))
 	thread := newThread(t, ep)

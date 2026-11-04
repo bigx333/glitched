@@ -474,12 +474,11 @@ func TestASettledThreadStartsNothing(t *testing.T) {
 		t.Fatalf("a turn started on a settled thread: %+v", *r)
 	}
 	later := f.must(dispatch("later", api.StartNow))
-	if r := f.th.Live(); r != nil {
-		t.Fatalf("a message sent to a settled thread started its turn: %+v", *r)
-	}
-	f.must(api.InboxSet{Disposition: api.Disposition{}})
 	if r := f.th.Live(); r == nil || r.ID != later {
-		t.Fatalf("back in the inbox, the live run is %+v, want the waiting message's", r)
+		t.Fatalf("the live run after a message to the settled thread is %+v, want the message's", r)
+	}
+	if m, _ := f.th.Message(next); m.State != engine.QueueCancelled {
+		t.Errorf("the follow-up from before the settle is %v, want still cancelled", m.State)
 	}
 
 	g, run := running(t)
@@ -514,6 +513,33 @@ func TestDeletingALiveThreadEndsItsRun(t *testing.T) {
 		}
 		if got := f.th.Runs[len(f.th.Runs)-1].Outcome; got != api.OutcomeAbandoned {
 			t.Errorf("delete while %s ended the run %v, want abandoned", name, got)
+		}
+	}
+}
+
+// A message sent to a settled thread, in any mode and from any client, is
+// new work: in the same commit the thread comes back to the inbox and the
+// message starts, or waits held if it was deferred.
+func TestAMessageBringsASettledThreadBack(t *testing.T) {
+	for _, mode := range []api.DispatchMode{api.AfterActive, api.SteerActive, api.StartNow, api.RestartActive, api.Defer} {
+		f := newThread(t)
+		f.must(api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+		msg, effects, err := f.submit(dispatch("again", mode))
+		if err != nil {
+			t.Fatalf("mode %v: %v", mode, err)
+		}
+		if f.th.Disposition.State != api.Open {
+			t.Errorf("mode %v: the thread is %v after the message, want back in the inbox", mode, f.th.Disposition.State)
+		}
+		r := f.th.Live()
+		if mode == api.Defer {
+			if m, _ := f.th.Message(msg); r != nil || m.State != engine.QueueHeld {
+				t.Errorf("deferred: run %+v, message %v; want no run and the message held", r, m.State)
+			}
+			continue
+		}
+		if r == nil || r.ID != msg || len(effects) != 1 {
+			t.Errorf("mode %v: run %+v with effects %v, want the message started", mode, r, effects)
 		}
 	}
 }

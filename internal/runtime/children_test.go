@@ -1,7 +1,9 @@
 package runtime_test
 
 import (
+	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -189,5 +191,108 @@ func TestDeletingAWorkingThreadClosesItsAgent(t *testing.T) {
 			t.Fatalf("the deleted thread's agent still runs: %T %v", rec, err)
 		}
 		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// unreachable wraps the fake so its agents' Close fails while fail is
+// set, as a CLI the host can't reach for a moment; tried says one failed.
+type unreachable struct {
+	*fake.Adapter
+	fail  atomic.Bool
+	tried chan struct{}
+}
+
+type unreachableAgent struct {
+	provider.Agent
+	u *unreachable
+}
+
+func (u *unreachable) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	ag, err := u.Adapter.Open(ctx, spec)
+	return &unreachableAgent{ag, u}, err
+}
+
+func (u *unreachable) Reconcile(ctx context.Context, id provider.RuntimeIdentity) (provider.Recovery, error) {
+	rec, err := u.Adapter.Reconcile(ctx, id)
+	if r, ok := rec.(provider.Restored); ok {
+		rec = provider.Restored{Agent: &unreachableAgent{r.Agent, u}}
+	}
+	return rec, err
+}
+
+func (a *unreachableAgent) Close(ctx context.Context) error {
+	if a.u.fail.Load() {
+		select {
+		case a.u.tried <- struct{}{}:
+		default:
+		}
+		return errors.New("unreachable")
+	}
+	return a.Agent.Close(ctx)
+}
+
+// gone waits for the run's agent to be closed or lost.
+func gone(t *testing.T, ad provider.Adapter, thread, run api.ID) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		rec, err := ad.Reconcile(ctx, provider.RuntimeIdentity{Thread: thread, Run: run})
+		if _, lost := rec.(provider.Lost); lost && err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the agent still runs after the restart: %T %v", rec, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// A host that crashes or shuts down after a delete or a settle commits,
+// before it stopped the agent, leaves the stop to the next host: nothing
+// of a deleted or settled thread runs on after the restart.
+func TestADeletedOrSettledThreadsAgentStopsAcrossARestart(t *testing.T) {
+	ends := map[string]func(node){"crash": node.kill, "shutdown": node.stop}
+	for how, end := range ends {
+		t.Run("delete, then a "+how, func(t *testing.T) {
+			ad := &unreachable{Adapter: fake.New(fake.Turn(true)), tried: make(chan struct{}, 1)}
+			path := dbPath(t)
+			n := start(t, path, ad)
+			thread := newThread(t, n.h)
+			run := submit(t, n.h, thread, dispatch("go", api.StartNow)).Command
+			until(t, n.h, thread, "the approval", waiting)
+			ad.fail.Store(true)
+			submit(t, n.h, thread, api.ThreadDelete{})
+			<-ad.tried
+			end(n)
+			ad.fail.Store(false)
+			start(t, path, ad)
+			gone(t, ad, thread, run)
+		})
+		t.Run("settle, then a "+how, func(t *testing.T) {
+			g := newGated(fake.Turn(true))
+			path := dbPath(t)
+			n := start(t, path, g)
+			thread := newThread(t, n.h)
+			run := submit(t, n.h, thread, dispatch("go", api.StartNow)).Command
+			until(t, n.h, thread, "the approval", waiting)
+			entered, never := make(chan struct{}, 1), make(chan struct{})
+			g.setGate(func(_ api.ID, a provider.Action) <-chan struct{} {
+				if _, ok := a.(provider.Interrupt); ok {
+					entered <- struct{}{}
+					return never
+				}
+				return nil
+			})
+			submit(t, n.h, thread, api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+			<-entered
+			end(n)
+			g.setGate(nil)
+			n = start(t, path, g)
+			v := until(t, n.h, thread, "the settled thread idle", idle)
+			if v.Disposition.State != api.Settled {
+				t.Errorf("the thread is %v after the restart, want settled", v.Disposition.State)
+			}
+			gone(t, g, thread, run)
+		})
 	}
 }
