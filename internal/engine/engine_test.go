@@ -236,6 +236,29 @@ func TestAnAnswerInFlightOutlivesItsRun(t *testing.T) {
 	}
 }
 
+// A request the agent withdrew, as when the user's own hook decided it, is
+// void and lets the run go on; one already answered keeps its answer.
+func TestAWithdrawnRequestIsVoid(t *testing.T) {
+	f, run, req := waiting(t)
+	f.observe(engine.Withdrawn{Run: run, Dedup: req.Dedup, Reason: "a hook decided"})
+	if r, _ := f.th.Request(req.ID); r.State != api.RequestInvalidated {
+		t.Fatalf("the withdrawn request is %v, want invalidated", r.State)
+	}
+	if live := f.th.Live(); live == nil || live.State != engine.RunRunning {
+		t.Fatalf("run after its only request was withdrawn: %+v, want running", live)
+	}
+	if _, _, err := f.submit(answer(req)); err == nil {
+		t.Error("answering a withdrawn request succeeded")
+	}
+
+	f, run, req = waiting(t)
+	f.must(answer(req))
+	f.observe(engine.Withdrawn{Run: run, Dedup: req.Dedup})
+	if r, _ := f.th.Request(req.ID); r.State != api.RequestAnswered {
+		t.Fatalf("a withdrawal after the answer left %v, want answered", r.State)
+	}
+}
+
 func TestInterruptingAStoppingRunGivesUpOnIt(t *testing.T) {
 	f, run := running(t)
 	if _, effects, _ := f.submit(api.TurnInterrupt{}); len(effects) != 1 || f.th.Live().State != engine.RunStopping {

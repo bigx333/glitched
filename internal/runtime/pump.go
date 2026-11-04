@@ -77,6 +77,9 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 			case provider.RequestOpened:
 				flushText()
 				commit(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: ev.ID, Kind: ev.Kind, Body: ev.Body})
+			case provider.RequestWithdrawn:
+				flushText()
+				commit(engine.Withdrawn{Run: run, Dedup: ev.ID, Reason: ev.Reason})
 			case provider.TurnEnded:
 				flushText()
 				if ended = commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: ev.Error, Tokens: ev.Tokens}); ended {

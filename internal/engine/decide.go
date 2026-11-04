@@ -404,6 +404,12 @@ func (d *decision) observe(o Observation) error {
 			}
 			d.report(o.Run, api.ReportBlocked, "", o.Body)
 		}
+	case Withdrawn:
+		// An answer already given is left to its delivery.
+		i := index(d.t.Requests, func(r Request) bool { return r.Run == o.Run && r.Dedup == o.Dedup })
+		if i >= 0 && d.t.Requests[i].State == api.RequestPending {
+			return d.emit(api.RequestInvalidation{Request: d.t.Requests[i].ID, Reason: o.Reason})
+		}
 	case Delivered:
 		return d.emit(api.RequestDelivery{Request: o.Request})
 	case DeliveryFailed:

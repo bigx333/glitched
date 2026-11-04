@@ -110,13 +110,21 @@ type RequestOpened struct {
 	Body json.RawMessage
 }
 
+// RequestWithdrawn is a request the provider stopped waiting on before
+// anyone answered it, as when one of the user's own hooks decided it.
+type RequestWithdrawn struct {
+	ID     string // RequestOpened.ID
+	Reason string
+}
+
 type TurnEnded struct {
 	Outcome api.Outcome
 	Error   string
 	Tokens  int64 // what the turn used, where the provider says
 }
 
-func (TextDelta) event()     {}
-func (Work) event()          {}
-func (RequestOpened) event() {}
-func (TurnEnded) event()     {}
+func (TextDelta) event()        {}
+func (Work) event()             {}
+func (RequestOpened) event()    {}
+func (RequestWithdrawn) event() {}
+func (TurnEnded) event()        {}
