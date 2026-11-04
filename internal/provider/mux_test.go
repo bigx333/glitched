@@ -35,8 +35,7 @@ func TestMuxRoutesByProviderName(t *testing.T) {
 	if _, err := m.Open(ctx, spec); !errors.Is(err, provider.ErrNoAdapter) {
 		t.Errorf("Open on an unknown provider: %v, want ErrNoAdapter", err)
 	}
-	rec, err := m.Reconcile(ctx, provider.RuntimeIdentity{Thread: spec.Thread, Run: spec.Run, Provider: "nope"})
-	if _, lost := rec.(provider.Lost); !lost || err != nil {
-		t.Errorf("Reconcile on an unknown provider: %#v, %v; want Lost and no error, which the host would retry", rec, err)
+	if _, err := m.Reconcile(ctx, provider.RuntimeIdentity{Thread: spec.Thread, Run: spec.Run, Provider: "nope"}); !errors.Is(err, provider.ErrNoAdapter) {
+		t.Errorf("Reconcile on an unknown provider: %v, want ErrNoAdapter, since its agent may still run", err)
 	}
 }
