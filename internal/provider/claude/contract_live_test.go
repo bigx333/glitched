@@ -57,7 +57,7 @@ func TestContract(t *testing.T) {
 			waitExit(t, tape+".jsonl")
 
 			s.check(t, got)
-			checkReplies(t, got, replies())
+			checkReplies(t, got, replies(), tape+".jsonl")
 			checkTape(t, tape+".jsonl", s)
 			for file, want := range s.files {
 				if _, err := os.Stat(filepath.Join(ws, file)); (err == nil) != want {

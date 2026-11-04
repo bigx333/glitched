@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -102,10 +103,11 @@ var (
 )
 
 type promptLog struct {
-	text     string
-	work     []api.WorkItem
-	requests []requestLog
-	ended    api.TurnEnded
+	workspace string
+	text      string
+	work      []api.WorkItem
+	requests  []requestLog
+	ended     api.TurnEnded
 }
 
 type requestLog struct {
@@ -202,6 +204,11 @@ func readLog(t *testing.T, h *runtime.Host, thread, run api.ID) (l promptLog, ov
 	snap, err := h.Read(ctx, api.Query{Thread: thread})
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, th := range snap.Threads {
+		if th.ID == thread {
+			l.workspace = th.Workspace
+		}
 	}
 	at := map[api.ID]int{}
 	for _, e := range snap.Events {
@@ -302,7 +309,9 @@ func stdin(t *testing.T) func() map[string][]reply {
 				}
 			}
 			if json.Unmarshal(l, &m) == nil && m.Type == "control_response" {
-				got[m.Response.RequestID] = append(got[m.Response.RequestID], m.Response.Response)
+				r := m.Response.Response
+				r.subtype = m.Response.Subtype
+				got[m.Response.RequestID] = append(got[m.Response.RequestID], r)
 			}
 		}
 		return got
@@ -310,6 +319,7 @@ func stdin(t *testing.T) func() map[string][]reply {
 }
 
 type reply struct {
+	subtype      string // the control_response's
 	Behavior     string
 	UpdatedInput json.RawMessage
 	Message      string
@@ -317,9 +327,11 @@ type reply struct {
 
 // checkReplies fails unless Claude Code got one reply to each request the
 // thread answered, in the shape it takes, saying what the winner said;
-// and none to a request nobody answered.
-func checkReplies(t *testing.T, l promptLog, got map[string][]reply) {
+// and none to a request nobody answered. An allow gives back the input
+// of the request in the transcript at tape.
+func checkReplies(t *testing.T, l promptLog, got map[string][]reply, tape string) {
 	t.Helper()
+	asked := inputs(tape, l.workspace)
 	for _, r := range l.requests {
 		replies := got[r.opened.Dedup]
 		if r.answer == nil {
@@ -335,12 +347,43 @@ func checkReplies(t *testing.T, l promptLog, got map[string][]reply) {
 		var a struct{ Allow bool }
 		json.Unmarshal(r.answer, &a)
 		switch p := replies[0]; {
-		case a.Allow && (p.Behavior != "allow" || !json.Valid(p.UpdatedInput) || p.UpdatedInput[0] != '{'):
-			t.Errorf("an allow went to Claude Code as %+v, want behavior allow with the tool's input", p)
+		case p.subtype != "success":
+			t.Errorf("a reply went to Claude Code as a %q control_response, want success", p.subtype)
+		case a.Allow && (p.Behavior != "allow" || !sameJSON(p.UpdatedInput, asked[r.opened.Dedup])):
+			t.Errorf("an allow went to Claude Code as %+v, want behavior allow with the tool's input %s", p, asked[r.opened.Dedup])
 		case !a.Allow && (p.Behavior != "deny" || p.Message == ""):
 			t.Errorf("a deny went to Claude Code as %+v, want behavior deny with a reason", p)
 		}
 	}
+}
+
+// inputs are the tool inputs of the can_use_tool requests in the
+// transcript at tape, by request id, in workspace.
+func inputs(tape, workspace string) map[string]json.RawMessage {
+	in := map[string]json.RawMessage{}
+	for _, l := range strings.Split(string(must(os.ReadFile(tape))), "\n") {
+		var e struct {
+			Recv *struct {
+				Type      string
+				RequestID string `json:"request_id"`
+				Request   *struct {
+					Subtype string
+					Input   json.RawMessage
+				}
+			}
+		}
+		json.Unmarshal([]byte(strings.ReplaceAll(l, "$WORKSPACE", workspace)), &e)
+		if m := e.Recv; m != nil && m.Type == "control_request" && m.Request != nil && m.Request.Subtype == "can_use_tool" {
+			in[m.RequestID] = m.Request.Input
+		}
+	}
+	return in
+}
+
+// sameJSON is whether a and b hold the same JSON value.
+func sameJSON(a, b json.RawMessage) bool {
+	var x, y any
+	return json.Unmarshal(a, &x) == nil && json.Unmarshal(b, &y) == nil && reflect.DeepEqual(x, y)
 }
 
 // checkTape pins what the transcript shows of the protocol: the CLI
@@ -412,9 +455,10 @@ func replayed(t *testing.T, s promptScenario) {
 	replies := stdin(t)
 	h := host(t, nil)
 	got := s.play(t, h, s.workspace(t, t.TempDir()))
+	tape := filepath.Join("testdata", s.name+".jsonl")
 	s.check(t, got)
-	checkReplies(t, got, replies())
-	checkTape(t, filepath.Join("testdata", s.name+".jsonl"), s)
+	checkReplies(t, got, replies(), tape)
+	checkTape(t, tape, s)
 }
 
 func TestEightClientsRaceAndClaudeGetsOneReply(t *testing.T) { replayed(t, approve) }
@@ -432,7 +476,7 @@ func TestClaudeGetsTheWinningAnswer(t *testing.T) {
 		race(t, h, thread, r.opened, func(i int) bool { return i%2 == 0 })
 		return false
 	})
-	checkReplies(t, got, replies())
+	checkReplies(t, got, replies(), filepath.Join("testdata", approve.name+".jsonl"))
 }
 
 func TestStoppingATurnVoidsItsPrompt(t *testing.T) {
