@@ -20,6 +20,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
+	"glitched/internal/plain"
 	"glitched/internal/provider/claude"
 	"glitched/internal/tailnet"
 	"glitched/internal/transport"
@@ -384,7 +385,12 @@ func run(ctx context.Context, args []string) error {
 		asked[r.ID] = true
 		allow := *yes
 		if !allow {
-			fmt.Printf("\n  ? %s %s [y/N] ", r.Kind, r.Body)
+			kind, k := plain.Text(r.Kind, false)
+			body, b := plain.Text(string(r.Body), false)
+			if k || b {
+				fmt.Print("\n  ! Contains text outside printable ASCII, shown as \\u{...}")
+			}
+			fmt.Printf("\n  ? %s %s [y/N] ", kind, body)
 			line, _ := in.ReadString('\n')
 			allow = strings.HasPrefix(strings.ToLower(line), "y")
 		}

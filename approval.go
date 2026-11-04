@@ -2,14 +2,13 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
-	"unicode"
 
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
 	"glitched/internal/client"
+	"glitched/internal/plain"
 )
 
 // ask is what a request's body asks, in the words the providers use:
@@ -29,23 +28,6 @@ type ask struct {
 func askOf(body json.RawMessage) (ask, bool) {
 	var b ask
 	return b, json.Unmarshal(body, &b) == nil && (b.Operation != "" || b.Command != "")
-}
-
-// shown is a string from the agent as the card shows it. Each control or
-// format character, and each line or paragraph separator, is an escape
-// such as \u{202E}: drawn as it is, it can reorder a line or end it, so
-// the card would show one thing while an allow approves another. A line
-// break stays one in a field of lines.
-func shown(s string, lines bool) string {
-	var b strings.Builder
-	for _, r := range s {
-		if (r != '\n' || !lines) && (unicode.In(r, unicode.Cc, unicode.Cf) || r == '\u2028' || r == '\u2029') {
-			fmt.Fprintf(&b, `\u{%X}`, r)
-		} else {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
 }
 
 // agentNames are the providers' agents as the card names them.
@@ -87,6 +69,14 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 	r := e.request
 	b, known := askOf(r.Body)
 	waiting := r.State == api.RequestPending
+	// Each string from the agent as the card shows it, and whether any of
+	// them has text the card shows as escapes.
+	escaped := false
+	shown := func(s string, lines bool) string {
+		s, e := plain.Text(s, lines)
+		escaped = escaped || e
+		return s
+	}
 	ui.Column(c).Key(e.key).Radius(12).Border(1, palette.border).Background(palette.surface).Clip().
 		Transition(riseIn).Children(func() {
 		ui.Row(c).Padding(9, 14).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
@@ -140,7 +130,7 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 					}
 				})
 				if b.Args != "" {
-					a.requestArgs(c, r.Request, b.Args)
+					a.requestArgs(c, r.Request, shown(b.Args, true))
 				}
 			}
 			if b.Reason != "" {
@@ -148,6 +138,12 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 			}
 			if r.Reason != "" && !waiting {
 				ui.Text(c, shown(r.Reason, true)).FontSize(12).TextColor(palette.faint)
+			}
+			if escaped {
+				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+					ui.Icon(c, icShieldAlert).FontSize(13).TextColor(palette.amber)
+					ui.Text(c, `Contains text outside printable ASCII, shown as \u{…}`).FontSize(12.5).FontWeight(500).TextColor(palette.amber)
+				})
 			}
 		})
 		if waiting || a.zapping(r) {
@@ -160,10 +156,10 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 // for all of them.
 const argsLines, argsChars = 8, 600
 
-// requestArgs are the arguments an allow approves, cut to their first
-// lines with a toggle to show all and how much more that is.
+// requestArgs are the arguments an allow approves, as the card shows
+// them, cut to their first lines with a toggle to show all and how much
+// more that is.
 func (a *app) requestArgs(c *ui.Context, request api.ID, args string) {
-	args = shown(args, true)
 	open := a.argsOpen[request]
 	text, cut := args, false
 	if !open {
