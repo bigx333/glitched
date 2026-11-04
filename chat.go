@@ -129,7 +129,9 @@ func (a *app) windBackground(c *ui.Context, pane ui.Element) {
 }
 
 // ambient is a faint glow of the accent at the top of the window, which
-// the glass of the sidebar and the composer frost and bend.
+// the glass of the sidebar and the composer frost and bend. It mixes in
+// sRGB: one color fading out looks the same in Oklab, which costs a power
+// per pixel each time the hero composer's glow repaints over it.
 func (a *app) ambient(c *ui.Context) {
 	ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(420).PassThrough().LinearGradient(ui.LinearGradient{
 		Stops: []ui.GradientStop{
@@ -138,7 +140,6 @@ func (a *app) ambient(c *ui.Context) {
 			{Color: palette.accent.Alpha(0), At: 1},
 		},
 		Angle: 180,
-		Oklab: true,
 	})
 }
 
