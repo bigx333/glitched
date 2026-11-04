@@ -71,7 +71,11 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 // claude whose pipes died with the engine that started it. The run is
 // Lost, and the thread's next turn resumes its Claude session.
 func (a *Adapter) Reconcile(ctx context.Context, id provider.RuntimeIdentity) (provider.Recovery, error) {
-	if stopRun(ctx, id.Run.String()) {
+	found, err := stopRun(ctx, id.Run.String())
+	switch {
+	case err != nil:
+		return nil, err
+	case found:
 		return provider.Lost{Reason: "Claude Code was stopped: the engine that ran it is gone."}, nil
 	}
 	return provider.Lost{Reason: "Claude Code no longer runs."}, nil

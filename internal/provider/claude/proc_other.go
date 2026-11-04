@@ -11,4 +11,4 @@ func sysProcAttr() *syscall.SysProcAttr { return nil }
 
 // stopRun finds no process: only Linux lets the engine read another
 // process's environment without help.
-func stopRun(context.Context, string) bool { return false }
+func stopRun(context.Context, string) (bool, error) { return false, nil }
