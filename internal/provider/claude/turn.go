@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"glitched/internal/api"
@@ -97,13 +98,13 @@ var tools = map[string]tool{
 // stands for them.
 type turn struct {
 	workspace string
-	steps     map[string]provider.Work // tool uses still open, by id
-	texted    bool                     // a text block already streamed
-	signedOut string                   // what Claude Code said when the API refused its login
+	steps     []provider.Work // tool uses still open, in the order they opened
+	texted    bool            // a text block already streamed
+	signedOut string          // what Claude Code said when the API refused its login
 }
 
 func newTurn(workspace string) *turn {
-	return &turn{workspace: workspace, steps: map[string]provider.Work{}}
+	return &turn{workspace: workspace}
 }
 
 func (t *turn) read(m message) []provider.Event {
@@ -124,7 +125,7 @@ func (t *turn) read(m message) []provider.Event {
 		for _, b := range m.content() {
 			if b.Type == "tool_use" {
 				w := t.open(b)
-				t.steps[b.ID] = w
+				t.steps = append(t.steps, w)
 				evs = append(evs, w)
 			}
 		}
@@ -132,11 +133,12 @@ func (t *turn) read(m message) []provider.Event {
 	case "user":
 		var evs []provider.Event
 		for _, b := range m.content() {
-			w, ok := t.steps[b.ToolUseID]
-			if b.Type != "tool_result" || !ok {
+			i := slices.IndexFunc(t.steps, func(w provider.Work) bool { return w.Item == b.ToolUseID })
+			if b.Type != "tool_result" || i < 0 {
 				continue
 			}
-			delete(t.steps, b.ToolUseID)
+			w := t.steps[i]
+			t.steps = slices.Delete(t.steps, i, i+1)
 			w.Status, w.Output = api.WorkCompleted, b.text()
 			if b.IsError {
 				w.Status = api.WorkFailed
@@ -145,9 +147,21 @@ func (t *turn) read(m message) []provider.Event {
 		}
 		return evs
 	case "result":
-		return []provider.Event{t.end(m)}
+		return append(t.unfinished(), t.end(m))
 	}
 	return nil
+}
+
+// unfinished fails the steps still open, for a turn that ends without
+// their results.
+func (t *turn) unfinished() []provider.Event {
+	evs := make([]provider.Event, len(t.steps))
+	for i, w := range t.steps {
+		w.Status = api.WorkFailed
+		evs[i] = w
+	}
+	t.steps = nil
+	return evs
 }
 
 func (t *turn) stream(e *streamEvent) []provider.Event {

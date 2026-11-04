@@ -207,6 +207,9 @@ func (g *Agent) Next(ctx context.Context) (provider.Event, error) {
 		select {
 		case line, ok := <-g.lines:
 			if !ok {
+				if g.pending = g.turn.unfinished(); len(g.pending) > 0 {
+					continue
+				}
 				return nil, g.exited()
 			}
 			var m message
