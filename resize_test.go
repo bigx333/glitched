@@ -282,6 +282,42 @@ func TestPreviewEdgeLetGoAsThePaneCloses(t *testing.T) {
 	}
 }
 
+// The width dragged to stays, across launches, when the pane closes
+// mid-drag (⇧⌘P) or the diff covers it (⌘D): its edge goes, ending the
+// drag without the release that would save it.
+func TestPreviewWidthPersistsAsThePaneClosesMidDrag(t *testing.T) {
+	for _, close := range []struct {
+		name string
+		key  ui.Key
+		mods ui.Modifiers
+	}{{"⇧⌘P", ui.KeyP, ui.Cmd | ui.Shift}, {"⌘D", ui.KeyD, ui.Cmd}} {
+		t.Run(close.name, func(t *testing.T) {
+			a, tt, _ := browsing(t)
+			click(t, tt, "Toggle preview  ⇧⌘P")
+			tt.Frame()
+			r, _ := tt.Find("Resize preview")
+			x, y := r.X+r.W/2, r.Y+r.H/2
+			tt.Press(x, y)
+			tt.Move(x-40, y)
+			tt.Frame()
+			want := a.previewDragged
+			if want == 0 {
+				t.Fatal("the edge dragged moved nothing")
+			}
+			tt.Key(close.mods, close.key)
+			tt.Frame()
+			if _, ok := tt.Find("Resize preview"); ok {
+				t.Fatalf("the edge stays after %s", close.name)
+			}
+			tt.Release(x-40, y)
+			tt.Frame()
+			if again := newApp(a.dir, func(func()) {}); again.previewDragged != want {
+				t.Errorf("relaunched with the preview dragged to %v, want %v", again.previewDragged, want)
+			}
+		})
+	}
+}
+
 // A click on the edge, which moves nothing, keeps the layout as it was,
 // unwritten: one wobbling along the edge too, which MyGo ends as a drag.
 func TestPreviewEdgeClickKeepsTheLayout(t *testing.T) {
