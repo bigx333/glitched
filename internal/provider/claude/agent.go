@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -20,8 +21,13 @@ import (
 var errSessionInUse = errors.New("claude: the session is in use")
 
 // closeGrace is how long Close lets Claude Code end on its own once stdin
-// closes, before it kills the process.
+// closes, before it asks the process to stop.
 var closeGrace = 2 * time.Second
+
+// drainGrace is how long, once claude has exited, its output may stay
+// quiet before the adapter stops reading it: a process claude left behind
+// can hold the pipes open for good.
+const drainGrace = 250 * time.Millisecond
 
 const initRequest = "glitched-init"
 
@@ -29,18 +35,19 @@ const initRequest = "glitched-init"
 // lines; Next alone translates them, so the turn needs no lock.
 type Agent struct {
 	cmd     *exec.Cmd
+	stop    context.CancelFunc // asks claude to stop, as Command says
 	stderr  *tail
-	lines   chan []byte   // stdout, closed once the process is gone
-	gone    chan struct{} // closed once the process is gone
-	exitErr error         // set before gone closes
+	lines   chan []byte   // stdout, closed once the process is gone and its output read
+	reaped  chan struct{} // closed once the process is reaped
+	exitErr error         // set before reaped closes
 	done    chan struct{} // closed by Close
 	close   sync.Once
 
 	turn    *turn
 	pending []provider.Event
 
-	mu      sync.Mutex
-	stdin   io.WriteCloser
+	mu      sync.Mutex // one write to stdin at a time
+	stdin   *os.File
 	started bool
 }
 
@@ -50,27 +57,40 @@ var _ provider.Agent = (*Agent)(nil)
 // it gives only after it has checked the session flag.
 func start(ctx context.Context, bin string, spec provider.SessionSpec, args []string) (*Agent, error) {
 	// Open's ctx bounds only the start; the process lives until Close.
-	cmd := Command(context.Background(), bin, args...)
+	life, stop := context.WithCancel(context.Background())
+	cmd := Command(life, bin, args...)
 	cmd.Dir = spec.Workspace
-	cmd.WaitDelay = time.Second
 	g := &Agent{
-		cmd: cmd, stderr: &tail{},
-		lines: make(chan []byte), gone: make(chan struct{}), done: make(chan struct{}),
+		cmd: cmd, stop: stop, stderr: &tail{},
+		lines: make(chan []byte), reaped: make(chan struct{}), done: make(chan struct{}),
 		turn: newTurn(spec.Workspace),
 	}
-	cmd.Stderr = g.stderr
-	var err error
-	if g.stdin, err = cmd.StdinPipe(); err != nil {
+	// The adapter's own pipes, unlike exec's, leave Wait nothing to wait
+	// for once claude exits, whoever else still holds them.
+	inR, inW, err1 := os.Pipe()
+	outR, outW, err2 := os.Pipe()
+	errR, errW, err3 := os.Pipe()
+	if err := errors.Join(err1, err2, err3); err != nil {
+		for _, f := range []*os.File{inR, inW, outR, outW, errR, errW} {
+			f.Close()
+		}
+		stop()
 		return nil, err
 	}
-	stdout, err := cmd.StdoutPipe()
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = inR, outW, errW
+	err := cmd.Start()
+	inR.Close()
+	outW.Close()
+	errW.Close()
 	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
+		inW.Close()
+		outR.Close()
+		errR.Close()
+		stop()
 		return nil, fmt.Errorf("start Claude Code: %w", err)
 	}
-	go g.read(stdout)
+	g.stdin = inW
+	go g.watch(outR, errR)
 	if err := g.handshake(ctx); err != nil {
 		g.Close(context.Background())
 		return nil, err
@@ -78,8 +98,23 @@ func start(ctx context.Context, bin string, spec provider.SessionSpec, args []st
 	return g, nil
 }
 
-func (g *Agent) read(stdout io.Reader) {
-	r := bufio.NewReader(stdout)
+// watch reaps claude as it exits, and reads its output until it ends or
+// has been quiet for drainGrace since claude exited.
+func (g *Agent) watch(stdout, stderr *os.File) {
+	go func() {
+		g.exitErr = g.cmd.Wait()
+		g.stop()
+		close(g.reaped)
+		stdout.SetReadDeadline(time.Now().Add(drainGrace))
+		stderr.SetReadDeadline(time.Now().Add(drainGrace))
+	}()
+	stderrRead := make(chan struct{})
+	go func() {
+		io.Copy(g.stderr, drain{stderr, g.reaped})
+		stderr.Close()
+		close(stderrRead)
+	}()
+	r := bufio.NewReader(drain{stdout, g.reaped})
 	for {
 		line, err := r.ReadBytes('\n')
 		if len(bytes.TrimSpace(line)) > 0 {
@@ -92,14 +127,31 @@ func (g *Agent) read(stdout io.Reader) {
 			break
 		}
 	}
-	g.exitErr = g.cmd.Wait()
-	close(g.gone)
+	stdout.Close()
+	<-g.reaped
+	<-stderrRead
 	close(g.lines)
+}
+
+// drain reads a pipe of claude's. Once claude has exited, each read gives
+// up after drainGrace with nothing to read.
+type drain struct {
+	f      *os.File
+	reaped <-chan struct{}
+}
+
+func (d drain) Read(p []byte) (int, error) {
+	select {
+	case <-d.reaped:
+		d.f.SetReadDeadline(time.Now().Add(drainGrace))
+	default:
+	}
+	return d.f.Read(p)
 }
 
 func (g *Agent) handshake(ctx context.Context) error {
 	// A process that already failed refuses the write; its exit says why.
-	g.send(map[string]any{"type": "control_request", "request_id": initRequest, "request": map[string]string{"subtype": "initialize"}})
+	g.send(ctx, map[string]any{"type": "control_request", "request_id": initRequest, "request": map[string]string{"subtype": "initialize"}})
 	for {
 		select {
 		case line, ok := <-g.lines:
@@ -132,7 +184,7 @@ func (g *Agent) exited() error {
 	return fmt.Errorf("Claude Code exited: %s", cmp.Or(said, "no reason given"))
 }
 
-func (g *Agent) Do(_ context.Context, act provider.Action) error {
+func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 	s, ok := act.(provider.Start)
 	if !ok {
 		return provider.ErrUnsupported
@@ -143,7 +195,7 @@ func (g *Agent) Do(_ context.Context, act provider.Action) error {
 		return errors.New("claude: the run already started")
 	}
 	g.started = true
-	return g.sendLocked(map[string]any{"type": "user", "session_id": "", "parent_tool_use_id": nil,
+	return g.sendLocked(ctx, map[string]any{"type": "user", "session_id": "", "parent_tool_use_id": nil,
 		"message": map[string]string{"role": "user", "content": s.Text}})
 }
 
@@ -170,42 +222,55 @@ func (g *Agent) Next(ctx context.Context) (provider.Event, error) {
 	return e, nil
 }
 
-// Close ends stdin, which ends Claude Code once it is idle, and kills a
-// process that is still busy after closeGrace.
+// Close ends stdin, which ends Claude Code once it is idle, and asks a
+// process still busy after closeGrace, or when ctx ends first, to stop.
 func (g *Agent) Close(ctx context.Context) error {
 	g.close.Do(func() {
 		close(g.done)
-		g.mu.Lock()
 		g.stdin.Close()
-		g.mu.Unlock()
 	})
 	select {
-	case <-g.gone:
+	case <-g.reaped:
 		return nil
 	case <-time.After(closeGrace):
 	case <-ctx.Done():
 	}
-	g.cmd.Process.Kill()
+	g.stop()
 	select {
-	case <-g.gone:
+	case <-g.reaped:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
-func (g *Agent) send(v any) error {
+func (g *Agent) send(ctx context.Context, v any) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.sendLocked(v)
+	return g.sendLocked(ctx, v)
 }
 
-func (g *Agent) sendLocked(v any) error {
+// sendLocked writes v as a line to claude's stdin, and gives up when ctx
+// ends. A line cut short stays cut: the deadline stays, and fails every
+// later write.
+func (g *Agent) sendLocked(ctx context.Context, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
+	expired := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		g.stdin.SetWriteDeadline(time.Now())
+		close(expired)
+	})
 	_, err = g.stdin.Write(append(b, '\n'))
+	if !stop() && err == nil {
+		<-expired
+		g.stdin.SetWriteDeadline(time.Time{})
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return ctx.Err()
+	}
 	return err
 }
 

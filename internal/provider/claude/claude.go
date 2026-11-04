@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
@@ -74,6 +76,10 @@ func (a *Adapter) Reconcile(context.Context, provider.RuntimeIdentity) (provider
 // Command is how glitched runs claude: with the environment it has, less
 // any entrypoint it inherited, plus its own. Under a test without the
 // claudelive tag, it panics for any claude but the test binary.
+//
+// Once ctx ends, claude gets SIGTERM, and SIGKILL killGrace later. Claude
+// Code runs each tool call in a shell of its own session, which no signal
+// to claude or its process group reaches; on SIGTERM claude stops it.
 func Command(ctx context.Context, bin string, args ...string) *exec.Cmd {
 	guard(bin)
 	cmd := exec.CommandContext(ctx, bin, args...)
@@ -81,8 +87,14 @@ func Command(ctx context.Context, bin string, args ...string) *exec.Cmd {
 		k, _, _ := strings.Cut(kv, "=")
 		return strings.EqualFold(k, "CLAUDE_CODE_ENTRYPOINT")
 	}), "CLAUDE_CODE_ENTRYPOINT=glitched")
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = killGrace
 	return cmd
 }
+
+// killGrace is how long claude has to stop, once asked, before it is
+// killed.
+const killGrace = 2 * time.Second
 
 func (a *Adapter) binary() (string, error) {
 	if a.Path != "" {
