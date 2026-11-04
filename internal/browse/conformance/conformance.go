@@ -170,6 +170,7 @@ func Run(t *testing.T, h Harness) {
 		{"Refs", s.refs},
 		{"PageCache", s.pageCache},
 		{"ScaledFrames", s.scaledFrames},
+		{"FractionalFrames", s.fractionalFrames},
 		{"Tampering", s.tampering},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -606,6 +607,58 @@ func (s *suite) scaledFrames(t *testing.T) {
 	}
 }
 
+// A ref's box through a frame whose layout size is a fraction of a pixel:
+// a frame no transform scales gives the box it would with no scale to
+// apply, exactly, and a scaled one the box a click at whose centre lands on
+// a button half a pixel wide.
+func (s *suite) fractionalFrames(t *testing.T) {
+	s.t = t
+	p, _ := s.open("/fractional")
+	s.until("the fractional frames", func() bool {
+		v, err := p.EvalContext(context.Background(), `return ["fraction", "percent", "scaled"].every(id => document.getElementById(id)?.contentDocument?.querySelector("button"))`)
+		return err == nil && v == true
+	})
+	ctx := context.Background()
+	snap, err := webtarget.Take(ctx, p, webtarget.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each button is in a frame with no border or padding, half a pixel
+	// wide, at its left and top in it. The frame fraction is 400.4 wide at
+	// 40, 300; percent, 33.33% of a box 300 wide at 480, 300; scaled, 10.4
+	// by 4 at 40, 380, scaled by 50.
+	for _, c := range []struct {
+		name, step string
+		exact      bool
+		x, y, w, h float64
+	}{
+		{"Fraction", "Unscaled", true, 40 + 399, 300 + 10, 0.5, 40},
+		{"Percent", "UnscaledPercent", true, 480 + 99, 300 + 10, 0.5, 40},
+		{"Scaled fraction", "Scaled", false, 40 + 50*9, 380 + 50*1, 50 * 0.5, 50 * 1},
+	} {
+		t.Run(c.step, func(t *testing.T) {
+			ref := refNamed(snap, c.name, 0)
+			if ref == "" {
+				t.Fatalf("no ref named %q:\n%s", c.name, snap.Text)
+			}
+			e, err := webtarget.Describe(ctx, p, ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b := e.Box
+			if c.exact && (b.X != c.x || b.Y != c.y || b.Width != c.w || b.Height != c.h) {
+				t.Errorf("%s is at %+v, want exactly {X:%g Y:%g Width:%g Height:%g} in the top viewport", c.name, b, c.x, c.y, c.w, c.h)
+			}
+			if math.Abs(b.X-c.x) > 1 || math.Abs(b.Y-c.y) > 1 || math.Abs(b.Width-c.w) > 1 || math.Abs(b.Height-c.h) > 1 {
+				t.Errorf("%s is at %+v, want {X:%g Y:%g Width:%g Height:%g} in the top viewport", c.name, b, c.x, c.y, c.w, c.h)
+			}
+			if cx, cy := b.X+b.Width/2, b.Y+b.Height/2; cx < c.x || cx > c.x+c.w || cy < c.y || cy > c.y+c.h {
+				t.Errorf("a click at %s's centre, %g, %g, misses it", c.name, cx, cy)
+			}
+		})
+	}
+}
+
 // A page can't plant or replace the script's state, nor redirect a ref or
 // change what one finds by patching, after the script is installed,
 // anything resolving and describing go through: the built-ins it calls
@@ -775,6 +828,10 @@ func fixtures() http.Handler {
 	mux.Handle("/scaled/outer", page(scaledPage("Scaled", `<iframe id="nested" style="left:100px;top:100px;width:200px;height:120px;border:2px solid #888;padding:3px;transform:scale(0.5)" src="/scaled/nested"></iframe>`)))
 	mux.Handle("/scaled/nested", page(scaledPage("Nested", "")))
 	mux.Handle("/scaled/grown", page(scaledPage("Grown", "")))
+	mux.Handle("/fractional", page(fractionalFixture))
+	mux.Handle("/fractional/fraction", page(thinPage("Fraction", "left:399px;top:10px;width:.5px;height:40px")))
+	mux.Handle("/fractional/percent", page(thinPage("Percent", "left:99px;top:10px;width:.5px;height:40px")))
+	mux.Handle("/fractional/scaled", page(thinPage("Scaled fraction", "left:9px;top:1px;width:.5px;height:1px")))
 	mux.HandleFunc("/xhtml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xhtml+xml; charset=utf-8")
 		fmt.Fprint(w, xhtmlFixture)
@@ -842,6 +899,20 @@ const scaledFixture = `<!doctype html><meta charset="utf-8"><title>Scaled</title
 func scaledPage(name, more string) string {
 	return `<!doctype html><meta charset="utf-8"><style>body { margin: 0 } button { margin: 10px; width: 80px; height: 40px; padding: 0 } iframe { position: absolute; transform-origin: 0 0 }</style>
 <button>` + name + `</button>` + more
+}
+
+// fractionalFixture places frames whose layout sizes are fractions of a
+// pixel, two unscaled and one scaled from its top left corner.
+const fractionalFixture = `<!doctype html><meta charset="utf-8"><title>Fractional</title>
+<style>body { margin: 0 } iframe, div { position: absolute; border: 0; padding: 0; transform-origin: 0 0 } div iframe { position: static; display: block }</style>
+<iframe id="fraction" style="left:40px;top:300px;width:400.4px;height:60px" src="/fractional/fraction"></iframe>
+<div style="left:480px;top:300px;width:300px"><iframe id="percent" style="width:33.33%;height:60px" src="/fractional/percent"></iframe></div>
+<iframe id="scaled" style="left:40px;top:380px;width:10.4px;height:4px;transform:scale(50)" src="/fractional/scaled"></iframe>`
+
+// thinPage is a fractional frame's page: a button named name, where at
+// places it, with no text to show.
+func thinPage(name, at string) string {
+	return `<!doctype html><html style="overflow:hidden"><meta charset="utf-8"><body style="margin:0"><button style="position:absolute;border:0;padding:0;font-size:0;` + at + `">` + name + `</button>`
 }
 
 // In XHTML a name keeps its case: of these, only input, button and
