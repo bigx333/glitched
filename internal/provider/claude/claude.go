@@ -72,8 +72,10 @@ func (a *Adapter) Reconcile(context.Context, provider.RuntimeIdentity) (provider
 }
 
 // Command is how glitched runs claude: with the environment it has, less
-// any entrypoint it inherited, plus its own.
+// any entrypoint it inherited, plus its own. Under a test without the
+// claudelive tag, it panics for any claude but the test binary.
 func Command(ctx context.Context, bin string, args ...string) *exec.Cmd {
+	guard(bin)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		k, _, _ := strings.Cut(kv, "=")
@@ -83,14 +85,6 @@ func Command(ctx context.Context, bin string, args ...string) *exec.Cmd {
 }
 
 func (a *Adapter) binary() (string, error) {
-	bin, err := a.find()
-	if err == nil {
-		guard(bin)
-	}
-	return bin, err
-}
-
-func (a *Adapter) find() (string, error) {
 	if a.Path != "" {
 		if isExecutable(a.Path) {
 			return a.Path, nil
