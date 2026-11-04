@@ -4,6 +4,9 @@ Newest first. Each entry has the date, who decided, and the decision.
 
 ## 2026-11-04
 
+- **Nelson.** The engine deletes a live thread: Delete ends the run as `abandoned` and closes its agent in the same commit. This reverses main's rule "the engine deletes no live thread". The thread menu still hides Delete while the thread's own agent works.
+- **Nelson.** Without a GPU, the model picker's glow draws no blur halo, for CI speed (root package about 1000 s down to about 210 s). GPU windows are unchanged. The halo comes back later with a MyGo v0.7 upgrade (its `Cache` API) in its own PR.
+- **PM (Claude).** Fix round 1 rules on #22, all in the engine, with no api or schema change: a halt on a stopping run sends no second interrupt (fixes #15); Settle cancels the queue and stops the run in one commit, and a Settled thread starts nothing until moved back to the inbox; Delete ends a live run in its own commit (fixes #16).
 - **PM (Claude).** Opus's finding (Stop, then Settle or Delete, leaves the run uncertain and the tree in place) blocks landing #2. Opus rated it medium, but for a lone thread it is a regression of main, which the merge rule treats as high. The same engine cause produces #15.
 - **Nelson.** "Never open a child" means never create one. The user may view a child (report card click, sidebar row) and may send it messages like any thread. Sol's finding 3 on #2 is dismissed for this reason.
 - **PM (Claude).** Sol's findings 1 (Delete leaves a child running when the GUI's cached state is stale) and 2 (a follow-up queued between Halt and Settle starts a turn on a Settled child) are high and block landing #2. Both reproduce at 9ab4757 (PM reran them). The fixes go on `land/pr-2`.
