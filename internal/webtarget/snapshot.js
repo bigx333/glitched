@@ -60,7 +60,7 @@ function install(key) {
     rect: fn(Element, "getBoundingClientRect"),
     query: fn(Element, "querySelector"),
     checkVisibility: fn(Element, "checkVisibility"),
-    tagName: getter(Element, "tagName"),
+    localName: getter(Element, "localName"),
     namespace: getter(Element, "namespaceURI"),
     shadowRoot: getter(Element, "shadowRoot"),
     firstChild: getter(Element, "firstElementChild"),
@@ -131,7 +131,14 @@ function install(key) {
   const prop = (style, k) => apply(B.prop, style, [k]);
   const text = (n) => get(B.text, n);
   const isHTML = (el) => get(B.namespace, el) === "http://www.w3.org/1999/xhtml";
-  const tagOf = (el) => apply(B.upper, get(B.tagName, el), []);
+  // tagOf is an element's local name, upper case, as the tables are keyed.
+  // An HTML element's interface follows its local name, case and all: an
+  // XHTML <Input/> is no input, and none of its getters work on it, so
+  // its tag is "" unless it is the lower case of the tag.
+  const tagOf = (el) => {
+    const n = get(B.localName, el), tag = apply(B.upper, n, []);
+    return isHTML(el) && lower(tag) !== n ? "" : tag;
+  };
   const slice = (s, a, b) => apply(B.slice, s, [a, b]);
   const lower = (s) => apply(B.lower, s, []);
   const quote = (s) => apply(stringify, json, [s]);
