@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -163,101 +162,34 @@ func (a *app) stopAll(ns []node) int {
 	return n
 }
 
-// settleTree settles t and every thread in its tree, so nothing there
-// works: each is halted, as a delete halts it, so that a follow-up it had
-// queued doesn't start. Each, not each seen working: a turn another client
-// just started isn't here yet, and on an idle thread a halt does nothing.
-// The engine settles a live thread, so unlike a delete nothing waits for a
-// stop to land.
+// settleTree settles t and every thread in its tree. The engine stops a
+// thread's run and cancels what waits its turn as it settles it, and
+// starts nothing on a settled thread, so nothing in the tree works on.
 func (a *app) settleTree(t thread) {
 	for _, n := range append(a.below(t), node{t, 0}) {
-		a.backend.Halt(n.t.env, n.t.id())
 		a.backend.SetDisposition(n.t.env, n.t.id(), api.Disposition{State: api.Settled})
 	}
 }
 
-// stopGrace is how long a cascade waits on a thread's stop before giving
-// up on it: one whose stop never lands isn't deleted later, unseen, after
-// the user went back to it.
-const stopGrace = time.Minute
-
-// stopped is a thread a cascade stopped, deleted once its agent has and the
-// threads in after, under it, are gone first; queued at at.
-type stopped struct {
-	after []api.ID
-	at    time.Time
-}
-
 // deleteTree deletes t and every thread under it, each after the threads
-// under it, so that none is left standing on its own on the way. The engine
-// deletes no thread whose agent works: those are halted, stopped with what
-// waits its turn cancelled, and deleted once they have, and each thread over
-// one waits only for its own children still to go; one with none left goes
-// at once.
+// under it, so that none is left standing on its own on the way. The
+// engine ends a deleted thread's run with it, so none waits on a stop,
+// whatever this GUI last saw of the thread.
 func (a *app) deleteTree(t thread) {
-	now := time.Now() // the whole tree's, so its grace ends at once
 	seen := map[api.ID]bool{}
-	// held deletes x after its children, and reports whether x is held,
-	// waiting on its own stop or on a child's.
-	var held func(x thread, depth int) bool
-	held = func(x thread, depth int) bool {
+	var del func(x thread, depth int)
+	del = func(x thread, depth int) {
 		seen[x.id()] = true
-		var waits []api.ID
 		if depth < maxDepth {
 			for _, k := range a.kids[x.id()] {
-				if !seen[k.id()] && held(k, depth+1) {
-					waits = append(waits, k.id())
+				if !seen[k.id()] {
+					del(k, depth+1)
 				}
 			}
 		}
-		live := x.View.Live()
-		if live {
-			// Halted, not only interrupted: a follow-up queued on x would
-			// start its turn as the run ends, and x would never go.
-			a.backend.Halt(x.env, x.id())
-		}
-		if !live && len(waits) == 0 {
-			a.delete(x)
-			return false
-		}
-		a.afterStop[x.id()] = stopped{after: waits, at: now}
-		return true
+		a.delete(x)
 	}
-	held(t, 0)
-}
-
-// settleStopped deletes the threads a cascade stopped, once their agents
-// have, after each change the manager posts, as the stops land. It gives
-// up on one whose stop didn't land within stopGrace, and on every thread
-// over it waiting for it, which would be left standing on its own.
-func (a *app) settleStopped() {
-	dropped := map[api.ID]bool{}
-	for id, s := range a.afterStop {
-		if time.Since(s.at) > stopGrace {
-			dropped[id] = true
-		}
-	}
-	// Up the lines: a thread waits on its children, which wait on theirs.
-	for grew := len(dropped) > 0; grew; {
-		grew = false
-		for id, s := range a.afterStop {
-			if !dropped[id] && slices.ContainsFunc(s.after, func(x api.ID) bool { return dropped[x] }) {
-				dropped[id], grew = true, true
-			}
-		}
-	}
-	maps.DeleteFunc(a.afterStop, func(id api.ID, _ stopped) bool { return dropped[id] })
-	for id, s := range a.afterStop {
-		t, ok := a.find(id)
-		switch {
-		case !ok || deleting(t):
-			delete(a.afterStop, id)
-		case t.View.Live():
-		case !slices.ContainsFunc(s.after, func(x api.ID) bool { _, waits := a.afterStop[x]; return waits }):
-			a.delete(t)
-			delete(a.afterStop, id)
-		}
-	}
+	del(t, 0)
 }
 
 func isAre(n int) string {

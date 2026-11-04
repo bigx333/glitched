@@ -55,7 +55,8 @@ func (a *app) threadMenu(c *ui.Context, m *ui.Menu, t thread, cat category) {
 		}
 	}
 	m.Separator()
-	// The engine deletes no live thread, an uncertain run's neither.
+	// The user stops a thread's own agent before deleting it, an uncertain
+	// run too, as on main; the engine would end it unasked.
 	if m.Item("Delete…").Disabled(t.View.Live()).Chosen() {
 		a.askDelete(t)
 	}
@@ -81,7 +82,7 @@ func (a *app) renameInput(c *ui.Context, t thread) {
 }
 
 // settle puts the thread with the settled ones, done with, and every
-// thread under it too: those working are halted.
+// thread under it too: the engine stops those working.
 func (a *app) settle(c *ui.Context, t thread, from category) {
 	a.settleTree(t)
 	a.backend.MarkRead(t.Thread)
@@ -127,7 +128,7 @@ func (a *app) deleteAlert(c *ui.Context) {
 		head = "Delete “" + title(a.deleting) + "” and " + under + "?"
 		body = "They're removed from every list and can't be brought back. Their history stays in the engine's log."
 		if n := working(tree); n > 0 {
-			body = fmt.Sprintf("%d of them %s still working and will be stopped first. ", n, isAre(n)) + body
+			body = fmt.Sprintf("%d of them %s still working and will be stopped. ", n, isAre(n)) + body
 		}
 	}
 	switch ui.AlertDialog(c, &a.deleteOpen, head, body, "Cancel", "Delete") {

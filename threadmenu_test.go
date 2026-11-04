@@ -8,6 +8,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
 )
@@ -147,8 +148,8 @@ func TestThreadMenuOnAServer(t *testing.T) {
 	}
 }
 
-// A run left uncertain keeps the thread from being deleted, as
-// the engine refuses to delete it, and Stop ends it.
+// A run left uncertain keeps the thread from being deleted until the user
+// ends it, as a working one does, and Stop ends it.
 func TestAnUncertainRunIsStoppedBeforeTheThreadGoes(t *testing.T) {
 	h := start(t, uncertainDir(t))
 	th := h.thread("Stuck")
@@ -173,15 +174,22 @@ func TestAnUncertainRunIsStoppedBeforeTheThreadGoes(t *testing.T) {
 	}
 }
 
-// The chat shows a thread until its delete lands: one the engine refuses
-// stays, with why.
-func TestARefusedDeleteKeepsTheThreadShown(t *testing.T) {
-	h, th := asking(t, fake.Turn(true))
+// The chat shows a thread until its delete lands: one that doesn't reach
+// the engine stays, with why.
+func TestAFailedDeleteKeepsTheThreadShown(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	h := start(t, dir)
+	th := h.thread("Ship the sidebar sort")
+	h.a.select_(th)
+	d.Close()
+	h.until("the engine gone", func() bool { return h.local().Status != client.Status(client.Online{}) })
 	h.a.delete(th)
-	h.until("the refusal", func() bool { return len(th.Pending) == 1 && th.Pending[0].Err != nil })
+	h.until("the failure", func() bool { return len(th.Pending) == 1 && th.Pending[0].Err != nil })
 	h.tt.Advance(time.Second)
-	if h.a.current().id() != th.id() || !h.tt.HasText("Couldn't delete the thread: stop the agent before deleting the thread") || h.tt.HasText("api: rejected") {
-		t.Fatalf("after a refused delete the chat shows %q: %q", h.a.current().View.Title, h.tt.Texts())
+	if h.a.current().id() != th.id() || !h.tt.HasText("Couldn't delete the thread: client: not connected to the engine") {
+		t.Fatalf("after a failed delete the chat shows %q: %q", h.a.current().View.Title, h.tt.Texts())
 	}
 }
 
