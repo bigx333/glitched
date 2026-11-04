@@ -36,12 +36,12 @@ func (m Mux) Open(ctx context.Context, spec SessionSpec) (Agent, error) {
 	return a.Open(ctx, spec)
 }
 
-// Reconcile answers Lost for a provider with no adapter: no agent of it can
-// be found, and an error would only be retried.
+// Reconcile fails for a provider with no adapter rather than answer Lost: its
+// agent may still run, and a later engine that has the adapter can close it.
 func (m Mux) Reconcile(ctx context.Context, id RuntimeIdentity) (Recovery, error) {
 	a, err := m.adapter(id.Provider)
 	if err != nil {
-		return Lost{Reason: err.Error()}, nil
+		return nil, err
 	}
 	return a.Reconcile(ctx, id)
 }
