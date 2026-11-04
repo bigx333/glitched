@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"glitched/internal/api"
-	"glitched/internal/engine"
 )
 
 // RunText is what a run's agent said in the thread's log: its text deltas,
@@ -53,7 +52,7 @@ func (s *Store) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 			if err != nil {
 				return api.Snapshot{}, err
 			}
-			snap.Threads = append(snap.Threads, engine.View(t))
+			snap.Threads = append(snap.Threads, s.view(t))
 		}
 		return snap, nil
 	}
@@ -64,7 +63,7 @@ func (s *Store) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 	if !t.Exists() || t.Deleted {
 		return api.Snapshot{}, api.ErrNotFound
 	}
-	snap.Threads = append(snap.Threads, engine.View(t))
+	snap.Threads = append(snap.Threads, s.view(t))
 	var after uint64
 	if q.After.Log == s.log {
 		after = q.After.Seq

@@ -269,10 +269,20 @@ type Thread struct {
 	// Reported is when a child last reported back to the thread, which
 	// wakes it as a finished turn does.
 	Reported time.Time `json:"reported,omitzero"`
+	// LastReport is the last child.reported in the thread's log, committed
+	// with that event, so the shell stream orders it with every view.
+	LastReport *Report `json:"lastReport,omitempty"`
 	// Deleted is the tombstone: the last view a deleted thread has, which
 	// the shell stream sends once so that clients drop it. No read returns
 	// one.
 	Deleted bool `json:"deleted,omitempty"`
+}
+
+// Report is a child's report as its parent's view carries it.
+type Report struct {
+	Child  ID         `json:"child"`
+	Kind   ReportKind `json:"kind"`
+	Cursor Cursor     `json:"cursor"` // the child.reported event in the log
 }
 
 func (t Thread) Working() bool { return t.Run != RunIdle && t.Run != RunUncertain }
@@ -287,8 +297,10 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // would show as an open thread, and an archived disposition, which version
 // 3 dropped for Settled and a version 2 peer may still send; version 4
 // added child threads and their reports, which a version 3 peer would show as
-// threads of the user's with nothing reported.
-const Protocol = 4
+// threads of the user's with nothing reported; version 5 added a parent's
+// last report to its view, which a version 4 peer would drop, and with it
+// the notification of a child that waits on the user.
+const Protocol = 5
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host

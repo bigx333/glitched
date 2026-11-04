@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -617,5 +618,68 @@ func TestAChildThreadAfterTheUpgradeFromVersion3(t *testing.T) {
 	}
 	if v := read(parent); v.Reported.IsZero() || !v.Parent.IsZero() {
 		t.Errorf("the parent after a reopen: reported %v, parent %v; want its report's time, and no parent", v.Reported, v.Parent)
+	}
+}
+
+// testdata/v5.db is a database main's store wrote at version 5: a parent
+// with three reports from two children, the last Blocked, and a thread
+// with none. Opening it upgrades it to the projection its log folds to,
+// the parent's last report filled in from its log, and the threads table
+// a new database has.
+func TestAVersion5DatabaseUpgradesWithEachLastReport(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	for _, name := range []string{"v5.db", "v5.db.fence"} {
+		b, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path+strings.TrimPrefix(name, "v5.db"), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := open(t, path)
+	log, err := s.ReadLog(ctx, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	folded := map[api.ID]engine.Thread{}
+	var last api.Event
+	for _, e := range log {
+		body, err := e.Decode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		folded[e.Thread] = engine.Apply(folded[e.Thread], engine.Event{Thread: e.Thread, Seq: e.Cursor.Seq, At: e.At, Body: body})
+		if _, ok := body.(api.ChildReported); ok {
+			last = e
+		}
+	}
+	if len(folded) != 4 || last.Cursor.Seq == 0 {
+		t.Fatalf("the fixture's log holds %d threads, last report at %d; want 4 threads and a report", len(folded), last.Cursor.Seq)
+	}
+	for id, want := range folded {
+		got, err := s.Thread(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("thread %s upgraded to\n%+v\nwant its log's fold\n%+v", want.Title, got, want)
+		}
+	}
+	snap, err := s.Read(ctx, api.Query{Thread: last.Thread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := last.Decode()
+	want := api.Report{Child: body.(api.ChildReported).Child, Kind: api.ReportBlocked, Cursor: api.Cursor{Log: s.LogID(), Seq: last.Cursor.Seq}}
+	if got := snap.Threads[0].LastReport; got == nil || *got != want {
+		t.Errorf("the parent's last report %+v, want %+v", got, want)
+	}
+	s.Close()
+	fresh := filepath.Join(t.TempDir(), "host.db")
+	open(t, fresh).Close()
+	if got, want := threadsOf(t, path), threadsOf(t, fresh); !slices.Equal(got.columns, want.columns) {
+		t.Errorf("columns\n%s\nwant a new table's\n%s", strings.Join(got.columns, "\n"), strings.Join(want.columns, "\n"))
 	}
 }

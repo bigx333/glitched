@@ -10,6 +10,7 @@ import (
 
 type Event struct {
 	Thread api.ID
+	Seq    uint64 // its place in the log; zero while Decide drafts it
 	At     time.Time
 	Body   api.EventBody
 }
@@ -43,6 +44,7 @@ func apply(t Thread, e Event) (Thread, error) {
 		t.Title = b.Title
 	case api.ChildReported:
 		t.Reported = e.At
+		t.LastReport = &api.Report{Child: b.Child, Kind: b.Kind, Cursor: api.Cursor{Seq: e.Seq}}
 	case api.ThreadDeleted:
 		if t.Live() != nil {
 			return t, &TransitionError{"thread", "running", "deleted"}
