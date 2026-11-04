@@ -740,36 +740,44 @@ func TestDeleteAChildStartedBeforeTheGUIHeard(t *testing.T) {
 	}
 }
 
-// A follow-up another client queues on a child while its tree is being
-// deleted starts no turn, and the tree goes all the same.
-func TestAFollowUpQueuedDuringADeleteKeepsNothing(t *testing.T) {
+// The delete wins over another client's follow-ups: one waiting its turn
+// behind the child's live run when the delete lands never starts, and one
+// sent after is refused. The tree goes, and nothing of it runs on.
+func TestADeleteWinsOverAnotherClientsFollowUps(t *testing.T) {
 	dir := tempDir(t)
-	release := make(chan struct{})
 	var opens atomic.Int32
-	d := engine(t, daemon.Config{Dir: dir}, counting{slowStop{fake.New(midTurn), release}, &opens})
+	ad := fake.New(midTurn)
+	d := engine(t, daemon.Config{Dir: dir}, counting{stalled{ad, 1}, &opens})
 	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
 	kid := seedChild(t, d, top, "Write the tests")
-	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: "go"}}); err != nil {
+	send := func(text string, mode api.DispatchMode) (api.Receipt, error) {
+		return d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: text, Mode: mode}})
+	}
+	run, err := send("go", api.StartNow)
+	if err != nil {
 		t.Fatal(err)
 	}
 	h := start(t, dir)
 	child := h.thread("Write the tests")
 	h.until("the child working", func() bool { return child.View.Working() })
-	h.tt.Frame()
+	if _, err := send("then this", api.AfterActive); err != nil {
+		t.Fatal(err)
+	}
 	before := opens.Load()
 	h.a.settings.confirmDelete = false
 	h.a.askDelete(h.thread("Ship the sidebar sort"))
-	for v, there := viewOn(t, d, kid); there && v.Run != api.RunStopping; v, there = viewOn(t, d, kid) {
-		h.p.run()
-		time.Sleep(5 * time.Millisecond)
-	}
-	d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: "then this", Mode: api.AfterActive}})
-	close(release)
 	h.settle(func() bool { _, p := viewOn(t, d, top); _, k := viewOn(t, d, kid); return !p && !k })
+	if _, err := send("too late", api.StartNow); !errors.Is(err, api.ErrNotFound) {
+		t.Errorf("a follow-up to the deleted child: %v, want %v", err, api.ErrNotFound)
+	}
 	_, p := viewOn(t, d, top)
-	v, k := viewOn(t, d, kid)
+	_, k := viewOn(t, d, kid)
 	if n := opens.Load() - before; p || k || n != 0 {
-		t.Errorf("starts=%d parent_exists=%v child_exists=%v child_live=%v", n, p, k, v.Live())
+		t.Errorf("starts=%d parent_exists=%v child_exists=%v", n, p, k)
+	}
+	rec, err := ad.Reconcile(context.Background(), provider.RuntimeIdentity{Thread: kid, Run: run.Command})
+	if _, lost := rec.(provider.Lost); !lost || err != nil {
+		t.Errorf("Delete left the child agent running: %T %v", rec, err)
 	}
 }
 
