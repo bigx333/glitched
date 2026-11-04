@@ -60,6 +60,20 @@ func TestLiveStopSteerAndCrash(t *testing.T) {
 		checkStopped(t, got, run)
 	})
 
+	t.Run("stop at a prompt", func(t *testing.T) {
+		ws := scratch(t)
+		h := host(t, &claude.Adapter{})
+		thread := api.NewID()
+		submit(t, h, thread, api.ThreadCreate{Workspace: ws, Title: "ask", Access: api.AccessAsk, Model: api.ModelRef{Provider: "claude", Model: "haiku"}})
+		got := playOn(t, h, thread, "Use the Write tool to create x.txt containing x. Then reply done.", func(requestLog) bool { return true })
+		if got.ended.Outcome != api.OutcomeInterrupted || len(got.requests) != 1 || got.requests[0].state != api.RequestInvalidated {
+			t.Errorf("the turn ended %+v with requests %+v, want it interrupted and its prompt void", got.ended, got.requests)
+		}
+		if _, err := os.Stat(filepath.Join(ws, "x.txt")); err == nil {
+			t.Error("x.txt exists, though the turn stopped at its prompt")
+		}
+	})
+
 	t.Run("steer", func(t *testing.T) {
 		t.Setenv(transcript.EnvReal, real)
 		t.Setenv(transcript.EnvOut, filepath.Join(tapes, "steer"))
