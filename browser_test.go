@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -571,6 +572,22 @@ func TestBrowserCapsTabsAPageOpens(t *testing.T) {
 	pageOf(mine).events.Opened("https://go.dev/doc/")
 	if len(b.tabs) != 1+maxOpenedTabs+2 {
 		t.Errorf("%d tabs: the user's own tab couldn't open one", len(b.tabs))
+	}
+}
+
+// The burst holds after the app sits idle, with no frame drawn for a
+// while, as the page's windows come through the window's Update.
+func TestBrowserCapsABurstAfterIdle(t *testing.T) {
+	a, tt, _ := browsing(t)
+	click(t, tt, "Toggle preview  ⇧⌘P")
+	b := &a.browser
+	p := pageOf(b.current())
+	tt.Advance(time.Minute)
+	for range 2 * openBurst {
+		deliver(tt, func() { p.events.Opened("https://example.com/") })
+	}
+	if n := len(b.tabs) - 1; n != openBurst {
+		t.Errorf("%d tabs opened by a burst of %d after idle, want %d", n, 2*openBurst, openBurst)
 	}
 }
 
