@@ -49,7 +49,8 @@ func TestATestCannotRunClaudeThroughCommand(t *testing.T) {
 	claude.Command(ctx, bin, "--version").Run()
 }
 
-// A program a test starts is not under go test, so the test tells it.
+// A program a test starts is not under go test, so the test tells it. The
+// program, a daemon say, fails that turn and keeps running.
 func TestAProgramATestRunsCannotRunARealClaude(t *testing.T) {
 	gobin, err := exec.LookPath("go")
 	if err != nil {
@@ -64,7 +65,13 @@ func TestAProgramATestRunsCannotRunARealClaude(t *testing.T) {
 	if _, statErr := os.Stat(ran); statErr == nil {
 		t.Errorf("a program the test ran ran %s", bin)
 	}
-	if err == nil || !strings.Contains(string(out), "claudelive") {
-		t.Errorf("the helper exited %v with %q, want the guard's panic", err, out)
+	if err != nil {
+		t.Errorf("the helper exited %v with %q, want it to carry on", err, out)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	for i, step := range []string{"open: ", "command: "} {
+		if i >= len(lines) || !strings.HasPrefix(lines[i], step) || !strings.Contains(lines[i], "claudelive") {
+			t.Errorf("the helper said %q, want %sto fail with the guard's error", out, step)
+		}
 	}
 }
