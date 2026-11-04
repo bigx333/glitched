@@ -541,6 +541,71 @@ func TestAsksMadeWhileAwayAreEachToldOfAfterASiblingsDone(t *testing.T) {
 	}
 }
 
+// A child whose ask the app saw just before the shell was cut, with its
+// report made while it was away, is told of once on the reconnect.
+func TestAnAskSeenBeforeACutIsToldOfOnTheReconnect(t *testing.T) {
+	parent := view("Parent", api.ID{})
+	kid := view("Asker", parent.ID)
+	s, h := play(t, parent, kid)
+	h.thread("Asker")
+	got := told(h, parent.ID)
+	asks(&kid)
+	s.change(&kid)
+	s.show(kid)
+	shown(h, kid)
+	back := s.away(h)
+	s.commit(&parent, kid.ID, api.ReportBlocked, time.Unix(1001, 0))
+	back()
+	h.until("the reconnect's notification", func() bool { return len(*got) > 0 })
+	reconnect(h, s)
+	shown(h, parent)
+	if want := []string{"Asker: Needs you"}; !slices.Equal(*got, want) {
+		t.Fatalf("notifications on the parent: %q; want %q", *got, want)
+	}
+}
+
+// A child that asks twice while the shell is cut off is told of once on
+// the reconnect, and its two reports after tell of it no more.
+func TestTwoAsksOfAChildMadeWhileAwayAreToldOfOnce(t *testing.T) {
+	parent := view("Parent", api.ID{})
+	kid := view("Asker", parent.ID)
+	s, h := play(t, parent, kid)
+	h.thread("Asker")
+	got := told(h, parent.ID)
+	back := s.away(h)
+	asks(&kid)
+	asks(&kid)
+	s.change(&kid)
+	back()
+	h.until("the reconnect's notification", func() bool { return len(*got) > 0 })
+	s.report(&parent, kid.ID, api.ReportBlocked)
+	s.report(&parent, kid.ID, api.ReportBlocked)
+	shown(h, parent)
+	if want := []string{"Asker: Needs you"}; !slices.Equal(*got, want) {
+		t.Fatalf("notifications on the parent: %q; want %q", *got, want)
+	}
+}
+
+// A child that asked before the app started, with its report made while
+// the shell was cut off, is told of once on the reconnect.
+func TestAnAskFromBeforeTheAppStartedIsToldOfByAReportMadeWhileAway(t *testing.T) {
+	parent := view("Parent", api.ID{})
+	kid := view("Asker", parent.ID)
+	asks(&kid)
+	s, h := play(t, parent, kid)
+	h.thread("Asker")
+	got := told(h, parent.ID)
+	back := s.away(h)
+	s.commit(&parent, kid.ID, api.ReportBlocked, time.Unix(1001, 0))
+	back()
+	h.until("the reconnect's notification", func() bool { return len(*got) > 0 })
+	reconnect(h, s)
+	shown(h, parent)
+	if want := []string{"Asker: Needs you"}; !slices.Equal(*got, want) {
+		t.Fatalf("notifications on the parent: %q; want %q", *got, want)
+	}
+}
+
 // A database put back from a copy comes with a new log: what its views
 // report is not told of, as the app can't tell it from what it told
 // already. The next report on the new log is.
