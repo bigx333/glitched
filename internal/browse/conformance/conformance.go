@@ -168,6 +168,7 @@ func Run(t *testing.T, h Harness) {
 		{"MixedCase", s.mixedCase},
 		{"Limits", s.limits},
 		{"Refs", s.refs},
+		{"PageCache", s.pageCache},
 		{"Tampering", s.tampering},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -520,14 +521,22 @@ func (s *suite) refs(t *testing.T) {
 	if _, err := webtarget.Describe(ctx, p, find(newer, "Fenced")); err == nil || !strings.Contains(err.Error(), "navigated or reloaded") {
 		t.Errorf("a ref from before a reload: %v", err)
 	}
-	// A page gone back to from the back/forward cache is the document it
-	// was, script state and all, yet it navigated: its refs fail too.
+}
+
+// A page gone back to from the back/forward cache is the document it was,
+// script state and all, yet it navigated: its refs fail, as a reload's do.
+func (s *suite) pageCache(t *testing.T) {
+	s.t = t
+	ctx := context.Background()
 	cached, r := s.open("/a")
 	before, err := webtarget.Take(ctx, cached, webtarget.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	toB := find(before, "to b")
+	toB := refNamed(before, "to b", 0)
+	if toB == "" {
+		t.Fatalf("no ref named \"to b\":\n%s", before.Text)
+	}
 	s.eval(cached, "window.cached = true; return 1")
 	s.h.Do(func() { cached.LoadURL(s.url("/b")) })
 	s.until("/b", func() bool { return r.last(&r.navigated) == s.url("/b") })
@@ -538,7 +547,9 @@ func (s *suite) refs(t *testing.T) {
 	s.h.Do(cached.GoBack)
 	s.until("back at /a", func() bool { return r.last(&r.navigated) == s.url("/a") })
 	s.ready(cached)
-	t.Logf("back at /a from the back/forward cache: %v", s.eval(cached, "return window.cached === true"))
+	if s.eval(cached, "return window.cached === true") != true {
+		t.Skip("the engine loaded /a again, not from its back/forward cache: nothing to check")
+	}
 	if e, err := webtarget.Describe(ctx, cached, toB); err == nil || !strings.Contains(err.Error(), "navigated or reloaded") {
 		t.Errorf("a ref from before the page went to /b and back: %+v, %v", e, err)
 	}
