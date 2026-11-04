@@ -998,7 +998,8 @@ func (a *app) composerControls(c *ui.Context) {
 }
 
 // send sends the draft in the thread, creating it first when it's the
-// draft. A settled or snoozed thread comes back to the inbox with it.
+// draft. A snoozed thread comes back to the inbox with it, as the engine
+// brings a settled one back with any message.
 func (a *app) send(t thread) {
 	text := a.message(t)
 	if text == "" || t.env == nil {
@@ -1018,7 +1019,7 @@ func (a *app) send(t thread) {
 		}
 		a.selected = id
 		a.follow()
-	} else if t.View.Disposition.State != api.Open {
+	} else if t.View.Disposition.State == api.Snoozed {
 		a.backend.SetDisposition(t.env, id, api.Disposition{})
 	}
 	// Steer only: a message reaches a working agent now, rather than
