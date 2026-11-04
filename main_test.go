@@ -408,9 +408,13 @@ func TestServers(t *testing.T) {
 	h.click("Send")
 	h.until("the server to run the turn", func() bool {
 		snap, err := d.Endpoint().Read(context.Background(), api.Query{Thread: th.id()})
-		return err == nil && snap.Threads[0].Queued == 0 && snap.Threads[0].Run == api.RunIdle && h.tt.HasText("Rotate them") &&
-			strings.Count(strings.Join(h.tt.Texts(), "\n"), "Done.") == 2
+		return err == nil && snap.Threads[0].Queued == 0 && snap.Threads[0].Run == api.RunIdle &&
+			strings.Count(texts(entriesOf(th)), "Done.") == 2
 	})
+	h.tt.Advance(time.Second)
+	if !h.tt.HasText("Rotate them") || strings.Count(strings.Join(h.tt.Texts(), "\n"), "Done.") != 2 {
+		t.Errorf("the server's second turn shows %q", h.tt.Texts())
+	}
 
 	h.click("Settings")
 	h.click("Servers")
@@ -807,8 +811,12 @@ func TestInbox(t *testing.T) {
 	h.until("its turn to end in the inbox", func() bool {
 		v := fix.View
 		return v.Disposition.State == api.Open && !v.Working() && v.Queued == 0 && h.a.categoryOf(fix) == catInbox &&
-			h.tt.HasText("and again") && strings.Count(strings.Join(h.tt.Texts(), "\n"), "Looking at the code.") == 2
+			strings.Count(texts(entriesOf(fix)), "Looking at the code.") == 2
 	})
+	h.tt.Advance(time.Second)
+	if !h.tt.HasText("and again") || strings.Count(strings.Join(h.tt.Texts(), "\n"), "Looking at the code.") != 2 {
+		t.Errorf("the second turn shows %q", h.tt.Texts())
+	}
 	// The strip filters to a project.
 	h.click("agent-phone")
 	for _, cat := range []category{catInbox, catWorking, catSnoozed, catSettled} {
