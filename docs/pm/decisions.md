@@ -4,6 +4,8 @@ Newest first. Each entry has the date, who decided, and the decision.
 
 ## 2026-11-04
 
+- **PM (Claude).** Merged #42 (adapter slice 2): CI green on GARM, round 2 found no high finding, and the real-app run passed 5 of 5. The `GLITCHED_TEST_CLAUDE` crash (medium) and the stale write deadline go into slice 3. Windows stop and deadlines are #44.
+- **PM (Claude). Security note for Nelson.** The #42 real-app run printed this host's T3 harness `ANTHROPIC_AUTH_TOKEN` into its local session transcript. It is not in any evidence file or on GitHub. Suggest rotating that token.
 - **Nelson (Q6, Protocol 5).** All six choices follow the recommendations in `/tmp/glitched-plans/askuserquestion.html`:
   1. AskUserQuestion answers go by position: `Answers[i]` answers `Questions[i]`.
   2. Dismiss sends a deny with "The user dismissed the questions without answering."
