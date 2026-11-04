@@ -2,7 +2,19 @@
 
 Newest first. Answer under each question, or in the PM thread.
 
-No open questions. Answered questions stay below for the record.
+## Q5 (2026-11-04, open). Claude Code adapter plan: five decisions
+
+The plan is `/tmp/glitched-plans/claude-adapter.packed.html` (local file, not committed). Each decision sits on the claim it changes. The PM's recommendation is first in each.
+
+1. **Channel for tool prompts and interrupt.** `claude -p` with stream-json both ways and the SDK control protocol (probed, one pipe, but the `stdio` prompt-tool value is not in the CLI docs). Or an MCP prompt tool the engine serves. Or the TypeScript SDK in a Node sidecar.
+2. **"Approve for me" mode.** `acceptEdits`, with new picker text. Or `auto` (a classifier decides; matches today's text).
+3. **User's Claude configuration.** Load all of it, as `claude` in a terminal does, so the user's rules and hooks apply. Or `--safe-mode`.
+4. **AskUserQuestion.** Turn the tool off for now (no Protocol bump). Or support it now (`api.Protocol` 5, a question card, a new answer shape).
+5. **Reconcile after a crash.** Stop the leftover process and answer Lost (the run becomes Uncertain). Or a per-run shim so Reconcile can reattach. Or Lost without stopping the process.
+
+With 1, 2, 3 and 5 as recommended, there is no Protocol bump and no schema change.
+
+Answered questions stay below for the record.
 
 ## Q4 (2026-11-04, answered: spawn tool in core). Is the spawn tool the first plugin, or does it land in core first?
 
