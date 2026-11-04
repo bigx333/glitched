@@ -127,6 +127,8 @@ func TestAPromptBecomesTheCardsAsk(t *testing.T) {
 			`{"operation":"use mcp__x__set","args":"null"}`},
 		"line break in a key": {map[string]any{"tool_name": "mcp__db__exec", "input": map[string]any{"sql: SELECT 1\nx": "y", "sql": "DROP TABLE users"}},
 			`{"operation":"use mcp__db__exec","args":"sql: DROP TABLE users\nsql: SELECT 1\\u{A}x: y"}`},
+		"escape in a key": {map[string]any{"tool_name": "mcp__db__exec", "input": map[string]any{`sql: SELECT 1\u{A}x`: "y", "sql": "DROP TABLE users"}},
+			`{"operation":"use mcp__db__exec","args":"sql: DROP TABLE users\nsql: SELECT 1\\\\u{A}x: y"}`},
 		"unsandboxed": {map[string]any{"tool_name": "Bash", "input": map[string]any{"command": "ls", "dangerouslyDisableSandbox": true}},
 			`{"command":"ls","cwd":"$WORKSPACE","unsandboxed":true}`},
 		"why it asks": {map[string]any{"tool_name": "Bash", "input": map[string]any{"command": "rm -rf build"},
