@@ -467,6 +467,23 @@ func (s *suite) refs(t *testing.T) {
 	if math.Abs(e.Box.X-330) > 1 || math.Abs(e.Box.Y-230) > 1 || e.Box.Width < 10 {
 		t.Errorf("the framed button is at %+v, want 330, 230 in the top viewport", e.Box)
 	}
+	// Only the engine's pagehide, as the page leaves, drops the refs: a
+	// page firing its own doesn't.
+	for _, c := range []struct{ how, js string }{
+		{"an Event on window", `dispatchEvent(new Event("pagehide"))`},
+		{"a PageTransitionEvent on window", `dispatchEvent(new PageTransitionEvent("pagehide", {persisted: true}))`},
+		{"an Event bubbling from the body", `document.body.dispatchEvent(new Event("pagehide", {bubbles: true}))`},
+		{"a CustomEvent on an element", `document.getElementById("contents").dispatchEvent(new CustomEvent("pagehide"))`},
+	} {
+		fired, err := webtarget.Take(ctx, p, webtarget.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.eval(p, c.js+"; return 1")
+		if _, err := webtarget.Describe(ctx, p, find(fired, "In frame")); err != nil {
+			t.Errorf("a ref after the page fired pagehide, %s: %v", c.how, err)
+		}
+	}
 	newer, err := webtarget.Take(ctx, p, webtarget.Options{})
 	if err != nil {
 		t.Fatal(err)
