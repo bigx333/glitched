@@ -76,6 +76,8 @@ function install(key) {
     text: getter(Node, "textContent"),
     rootNode: fn(Node, "getRootNode"),
     hidden: getter(HTMLElement, "hidden"),
+    offsetWidth: getter(HTMLElement, "offsetWidth"),
+    offsetHeight: getter(HTMLElement, "offsetHeight"),
     editable: getter(HTMLElement, "isContentEditable"),
     innerText: getter(HTMLElement, "innerText"),
     inputType: getter(HTMLInputElement, "type"),
@@ -489,20 +491,28 @@ function install(key) {
   }
 
   // describe says what a ref's element is, and where it shows in the top
-  // frame's viewport, through the frames it is in.
+  // frame's viewport, through the frames it is in, from the innermost out:
+  // past each frame's border and padding, at the scale its box shows at
+  // against its layout size, which its transforms and its ancestors' give
+  // it. A frame turned, skewed or flipped is not mapped: its scale comes
+  // from its bounding box, so the box is off (docs/browser.md).
   function describe(ref) {
     const found = resolve(ref), el = found.el, chain = found.chain;
     const r = role(el);
     const b = rect(el);
-    let x = get(B.x, b), y = get(B.y, b);
-    for (let i = 0; i < chain.length; i++) {
+    let x = get(B.x, b), y = get(B.y, b), width = get(B.width, b), height = get(B.height, b);
+    for (let i = chain.length - 1; i >= 0; i--) {
       const f = deref(chain[i].frame);
       if (!f) throw gone(ref);
       const fb = rect(f), s = styleOf(f);
-      x += get(B.x, fb) + get(B.clientLeft, f) + num(prop(s, "padding-left"));
-      y += get(B.y, fb) + get(B.clientTop, f) + num(prop(s, "padding-top"));
+      const w = get(B.offsetWidth, f), h = get(B.offsetHeight, f);
+      const sx = w ? get(B.width, fb) / w : 0, sy = h ? get(B.height, fb) / h : 0;
+      x = get(B.x, fb) + sx * (get(B.clientLeft, f) + num(prop(s, "padding-left")) + x);
+      y = get(B.y, fb) + sy * (get(B.clientTop, f) + num(prop(s, "padding-top")) + y);
+      width *= sx;
+      height *= sy;
     }
-    const box = { __proto__: null, x, y, width: get(B.width, b), height: get(B.height, b) };
+    const box = { __proto__: null, x, y, width, height };
     return { __proto__: null, role: r || "", name: name(el, r), box };
   }
 
