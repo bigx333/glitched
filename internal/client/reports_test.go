@@ -69,7 +69,18 @@ func (sh *shelled) create(title string) api.ID {
 // logs its Blocked report to parent, as the runtime does.
 func (sh *shelled) ask(parent api.ID, at time.Time) api.ID {
 	sh.t.Helper()
-	ctx, child := context.Background(), api.NewID()
+	child, report := sh.asking(parent, at)
+	report()
+	return child
+}
+
+// asking starts a turn on a new child of parent's that asks the user.
+// report logs its Blocked report to parent, which the runtime does in a
+// later commit.
+func (sh *shelled) asking(parent api.ID, at time.Time) (child api.ID, report func()) {
+	sh.t.Helper()
+	ctx := context.Background()
+	child = api.NewID()
 	submit := func(body api.Intent) api.ID {
 		sh.t.Helper()
 		c := api.Command{ID: api.NewID(), Target: child, Body: body}
@@ -96,11 +107,29 @@ func (sh *shelled) ask(parent api.ID, at time.Time) api.ID {
 		}
 		e.ID = 0
 	}
-	o := eng.Reported{Report: api.ChildReported{Child: child, Run: run, Kind: api.ReportBlocked}}
-	if _, err := sh.st.Observe(ctx, parent, o, at, 0); err != nil {
+	return child, func() {
+		sh.t.Helper()
+		sh.reported(parent, child, run, api.ReportBlocked, at)
+	}
+}
+
+// finish creates a child of parent's that logs a Done report to it.
+func (sh *shelled) finish(parent api.ID, at time.Time) {
+	sh.t.Helper()
+	child := api.NewID()
+	c := api.Command{ID: api.NewID(), Target: child, Body: api.ThreadCreate{Workspace: "w", Title: "sibling", Model: api.ModelRef{Provider: "fake"}, Parent: parent}}
+	if _, err := sh.st.Submit(context.Background(), c, at); err != nil {
 		sh.t.Fatal(err)
 	}
-	return child
+	sh.reported(parent, child, api.NewID(), api.ReportDone, at)
+}
+
+func (sh *shelled) reported(parent, child, run api.ID, kind api.ReportKind, at time.Time) {
+	sh.t.Helper()
+	o := eng.Reported{Report: api.ChildReported{Child: child, Run: run, Kind: kind}}
+	if _, err := sh.st.Observe(context.Background(), parent, o, at, 0); err != nil {
+		sh.t.Fatal(err)
+	}
 }
 
 func (sh *shelled) want(children ...api.ID) {
@@ -163,4 +192,40 @@ func TestTheFirstReportAfterARestoreIsToldOf(t *testing.T) {
 	b := sh.ask(p, time.Unix(1002, 0))
 	sh.send()
 	sh.want(a, b)
+}
+
+// A child that asks before the first snapshot and reports after it, while
+// the shell is cut, is told of on the reconnect, though a sibling's Done
+// report came after its own.
+func TestAnAskFromBeforeTheFirstSnapshotIsToldOfThoughASiblingReportedAfter(t *testing.T) {
+	sh := newShelled(t)
+	p := sh.create("Parent")
+	at := time.Unix(1001, 0)
+	a, report := sh.asking(p, at)
+	sh.connect()
+	report()
+	sh.finish(p, at)
+	sh.connect()
+	sh.want(a)
+	sh.connect()
+	sh.want(a)
+}
+
+// A duplicate that comes back starts over as on a first snapshot, and is
+// told of an ask it saw then, which reports with a sibling's Done after.
+func TestAnAskSeenByAReturningDuplicateIsToldOfThoughASiblingReportedAfter(t *testing.T) {
+	sh := newShelled(t)
+	p := sh.create("Parent")
+	sh.connect()
+	at := time.Unix(1001, 0)
+	a, report := sh.asking(p, at)
+	sh.send()
+	sh.m.down(sh.e, Duplicate{Of: "other"})
+	sh.connect()
+	report()
+	sh.finish(p, at)
+	sh.connect()
+	sh.want(a)
+	sh.connect()
+	sh.want(a)
 }
