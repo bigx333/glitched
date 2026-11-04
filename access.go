@@ -19,7 +19,7 @@ var accessLevels = []struct {
 	icon       *ui.SVG
 }{
 	{accessAsk, "Always ask to edit external files and use the internet", icHand},
-	{accessAuto, "Only ask for actions detected as potentially unsafe", icShieldTerminal},
+	{accessAuto, "Approve file edits in the workspace, and ask before commands and the internet", icShieldTerminal},
 	{accessFull, "Unrestricted access to the internet and any file on your computer", icShieldAlert},
 }
 
