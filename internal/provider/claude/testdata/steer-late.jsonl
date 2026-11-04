@@ -1,0 +1,13 @@
+{"sent":{"request":{"subtype":"initialize"},"type":"control_request"}}
+{"recv":{"type":"control_response","response":{"subtype":"success","request_id":"glitched-init","response":{}}}}
+{"sent":{"type":"user","uuid":"uuid-of-the-first-message"}}
+{"recv":{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"bash","name":"Bash","input":{"command":"./slow.sh"}}]}}}
+{"sent":{"type":"user","uuid":"uuid-of-the-steer"}}
+{"recv":{"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"bash","content":"one"}]}}}
+{"recv":{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_start","content_block":{"type":"text"}}}}
+{"recv":{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"It printed one."}}}}
+{"recv":{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":3,"output_tokens":4},"user_message_uuids":["uuid-of-the-first-message"]}}
+{"recv":{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_start","content_block":{"type":"text"}}}}
+{"recv":{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"BANANA"}}}}
+{"recv":{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":5,"output_tokens":6},"user_message_uuids":["uuid-of-the-steer"]}}
+{"eof":true}

@@ -22,14 +22,16 @@ type message struct {
 	Message         *struct {
 		Content blocks `json:"content"`
 	} `json:"message"` // assistant, user
-	Error     string    `json:"error"` // assistant: why a synthetic reply stands in for the model's
-	IsError   bool      `json:"is_error"`
-	Result    string    `json:"result"`
-	Errors    []string  `json:"errors"`
-	Usage     usage     `json:"usage"`
-	Response  *response `json:"response"`   // control_response
-	RequestID string    `json:"request_id"` // control_request, control_cancel_request
-	Request   *struct {
+	Error   string   `json:"error"` // assistant: why a synthetic reply stands in for the model's
+	IsError bool     `json:"is_error"`
+	Result  string   `json:"result"`
+	Errors  []string `json:"errors"`
+	Usage   usage    `json:"usage"`
+	// UserMessageUUIDs is, on a result, the user messages it finished.
+	UserMessageUUIDs []string  `json:"user_message_uuids"`
+	Response         *response `json:"response"`   // control_response
+	RequestID        string    `json:"request_id"` // control_request, control_cancel_request
+	Request          *struct {
 		Subtype string `json:"subtype"`
 		canUseTool
 	} `json:"request"` // control_request
@@ -73,6 +75,8 @@ type usage struct {
 	Output        int64 `json:"output_tokens"`
 }
 
+func (u usage) total() int64 { return u.Input + u.CacheCreation + u.CacheRead + u.Output }
+
 type response struct {
 	Subtype   string `json:"subtype"`
 	RequestID string `json:"request_id"`
@@ -102,10 +106,12 @@ var tools = map[string]tool{
 // carry a parent tool use and stay out of the thread: their Task step
 // stands for them.
 type turn struct {
-	workspace string
-	steps     []provider.Work // tool uses still open, in the order they opened
-	texted    bool            // a text block already streamed
-	signedOut string          // what Claude Code said when the API refused its login
+	workspace   string
+	steps       []provider.Work // tool uses still open, in the order they opened
+	texted      bool            // a text block already streamed
+	signedOut   string          // what Claude Code said when the API refused its login
+	tokens      int64           // what the results before the last one used
+	interrupted bool            // the user stopped the turn
 }
 
 func newTurn(workspace string) *turn {
@@ -208,9 +214,18 @@ func (t *turn) rel(path string) string {
 	return path
 }
 
+// tally counts a result that did not end the turn, as when a message sent
+// mid-turn came too late for it and Claude Code took it after.
+func (t *turn) tally(m message) {
+	t.tokens += m.Usage.total()
+}
+
 func (t *turn) end(m message) provider.TurnEnded {
-	u := m.Usage
-	e := provider.TurnEnded{Outcome: api.OutcomeCompleted, Tokens: u.Input + u.CacheCreation + u.CacheRead + u.Output}
+	e := provider.TurnEnded{Outcome: api.OutcomeCompleted, Tokens: t.tokens + m.Usage.total()}
+	if t.interrupted {
+		e.Outcome = api.OutcomeInterrupted
+		return e
+	}
 	if !m.IsError {
 		return e
 	}

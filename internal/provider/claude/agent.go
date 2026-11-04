@@ -12,10 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"glitched/internal/api"
 	"glitched/internal/provider"
 )
 
@@ -30,7 +32,14 @@ var closeGrace = 2 * time.Second
 // can hold the pipes open for good.
 const drainGrace = 250 * time.Millisecond
 
-const initRequest = "glitched-init"
+const (
+	initRequest      = "glitched-init"
+	interruptRequest = "glitched-interrupt"
+)
+
+// interruptGrace is how long Claude Code has to end the turn once asked to
+// interrupt it, before it is stopped.
+var interruptGrace = 10 * time.Second
 
 // Agent is one run's claude process. One goroutine reads its stdout into
 // lines; Next alone translates them, so the turn needs no lock.
@@ -48,10 +57,14 @@ type Agent struct {
 	turn    *turn
 	pending []provider.Event
 
-	mu      sync.Mutex // one write to stdin at a time
-	stdin   *os.File
-	cut     error // set once a line went out cut short, which fails every later write
-	started bool
+	mu          sync.Mutex // one write to stdin at a time, and the turn's messages
+	stdin       *os.File
+	cut         error           // set once a line went out cut short, which fails every later write
+	started     bool            // the turn's first message went out
+	outstanding map[string]bool // messages sent, by uuid, that no result has finished yet
+	interrupted bool            // an interrupt went out
+	ended       bool            // the turn's end was read
+	deadline    *time.Timer     // stops claude if an interrupt does not end the turn
 
 	pmu     sync.Mutex
 	prompts map[string]*prompt // by Claude Code's request id
@@ -66,11 +79,12 @@ func start(ctx context.Context, bin string, spec provider.SessionSpec, args []st
 	life, stop := context.WithCancel(context.Background())
 	cmd := Command(life, bin, args...)
 	cmd.Dir = spec.Workspace
-	cmd.Env = append(cmd.Env, runEnv+"="+spec.Run.String())
+	cmd.Env = append(slices.DeleteFunc(cmd.Env, func(kv string) bool { return strings.HasPrefix(kv, runEnv+"=") }),
+		runEnv+"="+spec.Run.String())
 	g := &Agent{
 		cmd: cmd, run: spec.Run.String(), stop: stop, stderr: &tail{},
 		lines: make(chan []byte), reaped: make(chan struct{}), done: make(chan struct{}),
-		turn: newTurn(spec.Workspace), prompts: map[string]*prompt{},
+		turn: newTurn(spec.Workspace), prompts: map[string]*prompt{}, outstanding: map[string]bool{},
 	}
 	// The adapter's own pipes, unlike exec's, leave Wait nothing to wait
 	// for once claude exits, whoever else still holds them.
@@ -216,12 +230,72 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 			return errors.New("claude: the run already started")
 		}
 		g.started = true
-		return g.sendLocked(ctx, map[string]any{"type": "user", "session_id": "", "parent_tool_use_id": nil,
-			"message": map[string]string{"role": "user", "content": a.Text}})
+		return g.userLocked(ctx, a.Text)
+	case provider.Steer:
+		switch {
+		case !g.started:
+			return errors.New("claude: the run has not started")
+		case g.ended || g.interrupted:
+			return errors.New("claude: the turn is over")
+		}
+		return g.userLocked(ctx, a.Text)
+	case provider.Interrupt:
+		if g.interrupted || g.ended {
+			return nil
+		}
+		err := g.sendLocked(ctx, map[string]any{"type": "control_request", "request_id": interruptRequest,
+			"request": map[string]string{"subtype": "interrupt"}})
+		if err == nil {
+			g.interrupted = true
+			g.deadline = time.AfterFunc(interruptGrace, g.stop)
+		}
+		return err
 	case provider.Respond:
 		return g.respondLocked(ctx, a)
 	}
 	return provider.ErrUnsupported
+}
+
+// userLocked sends a user message. Claude Code takes one sent mid-turn at
+// its next model call, and lists each message a result finishes by uuid.
+func (g *Agent) userLocked(ctx context.Context, text string) error {
+	id := uuidOf(api.NewID())
+	g.outstanding[id] = true
+	err := g.sendLocked(ctx, map[string]any{"type": "user", "uuid": id, "session_id": "", "parent_tool_use_id": nil,
+		"message": map[string]string{"role": "user", "content": text}})
+	if err != nil {
+		delete(g.outstanding, id)
+	}
+	return err
+}
+
+// over reads a result into the turn's messages, and reports whether it
+// ends the turn: it finished every message sent, or an interrupt went out.
+// A result that lists no messages finishes them all.
+func (g *Agent) over(m message) (over, interrupted bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if m.UserMessageUUIDs == nil {
+		clear(g.outstanding)
+	}
+	for _, id := range m.UserMessageUUIDs {
+		delete(g.outstanding, id)
+	}
+	g.ended = g.interrupted || len(g.outstanding) == 0
+	if g.ended && g.deadline != nil {
+		g.deadline.Stop()
+	}
+	return g.ended, g.interrupted
+}
+
+// cutOff is whether an interrupt went out on a turn that has not ended,
+// which it now has.
+func (g *Agent) cutOff() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	cut := g.interrupted && !g.ended
+	g.ended = true
+	return cut
 }
 
 // respondLocked sends the one reply a prompt gets. A prompt already
@@ -265,6 +339,10 @@ func (g *Agent) Next(ctx context.Context) (provider.Event, error) {
 		case line, ok := <-g.lines:
 			if !ok {
 				if g.pending = g.turn.unfinished(); len(g.pending) > 0 {
+					continue
+				}
+				if g.cutOff() {
+					g.pending = []provider.Event{provider.TurnEnded{Outcome: api.OutcomeInterrupted}}
 					continue
 				}
 				return nil, g.exited()
@@ -318,6 +396,12 @@ func (g *Agent) read(ctx context.Context, m message) []provider.Event {
 			}
 		}
 		g.pmu.Unlock()
+		over, interrupted := g.over(m)
+		if !over {
+			g.turn.tally(m)
+			return nil
+		}
+		g.turn.interrupted = interrupted
 	}
 	return g.turn.read(m)
 }
