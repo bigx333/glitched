@@ -244,7 +244,7 @@ func TestServeKeepsItsFlagsForTheNextStart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		cfg.Dir, cfg.Adapter = "", nil
+		cfg.Dir, cfg.Providers = "", nil
 		if !reflect.DeepEqual(cfg, want) {
 			t.Fatalf("the next start runs as %+v, want %+v", cfg, want)
 		}

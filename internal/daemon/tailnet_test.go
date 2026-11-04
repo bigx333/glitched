@@ -16,6 +16,7 @@ import (
 	"tailscale.com/types/logger"
 
 	"glitched/internal/api"
+	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 	"glitched/internal/tailnet"
 	"glitched/internal/transport"
@@ -67,7 +68,7 @@ func TestAnEngineWithoutTailscaleServesOnItsOwnNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Epoch: 1, Tailnet: true, Control: url, Adapter: fake.New(fake.Turn(true))})
+	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Epoch: 1, Tailnet: true, Control: url, Providers: provider.Mux{"fake": fake.New(fake.Turn(true))}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +128,7 @@ func TestAnEngineWithoutTailscaleServesOnItsOwnNode(t *testing.T) {
 	// An engine without Tailscale that uploads to the hub on the tailnet
 	// reaches it through a node of its own.
 	hostDir := stateDir(t)
-	host, err := Start(context.Background(), Config{Dir: hostDir, Epoch: 1, HubServer: addr, HubToken: token, Control: url, Adapter: fake.New(fake.Turn(true))})
+	host, err := Start(context.Background(), Config{Dir: hostDir, Epoch: 1, HubServer: addr, HubToken: token, Control: url, Providers: provider.Mux{"fake": fake.New(fake.Turn(true))}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,13 +165,13 @@ func TestALoopbackHubNeedsNoNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hubEngine, err := Start(context.Background(), Config{Dir: hubDir, Hub: true, Epoch: 1, Listen: []string{"127.0.0.1:0"}, Adapter: fake.New(fake.Turn(true))})
+	hubEngine, err := Start(context.Background(), Config{Dir: hubDir, Hub: true, Epoch: 1, Listen: []string{"127.0.0.1:0"}, Providers: provider.Mux{"fake": fake.New(fake.Turn(true))}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { hubEngine.Close() })
 
-	host, err := Start(context.Background(), Config{Dir: stateDir(t), Epoch: 1, HubServer: hubEngine.Addrs()[0].String(), HubToken: token, Adapter: fake.New(fake.Turn(true))})
+	host, err := Start(context.Background(), Config{Dir: stateDir(t), Epoch: 1, HubServer: hubEngine.Addrs()[0].String(), HubToken: token, Providers: provider.Mux{"fake": fake.New(fake.Turn(true))}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +200,7 @@ func TestASlowTailscaleIsNotMissing(t *testing.T) {
 	was := detect
 	detect = func(ctx context.Context) (api.Tailnet, error) { <-ctx.Done(); return api.Tailnet{}, ctx.Err() }
 	t.Cleanup(func() { detect = was })
-	d, err := Start(context.Background(), Config{Dir: stateDir(t), Hub: true, Epoch: 1, Tailnet: true, Adapter: fake.New(fake.Turn(true))})
+	d, err := Start(context.Background(), Config{Dir: stateDir(t), Hub: true, Epoch: 1, Tailnet: true, Providers: provider.Mux{"fake": fake.New(fake.Turn(true))}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +218,7 @@ func TestOnlyThisMachineSeesTheLoginURL(t *testing.T) {
 		return api.Tailnet{Mode: api.TailnetInstalled, State: "NeedsLogin", AuthURL: "https://login.example/a"}, nil
 	}
 	t.Cleanup(func() { detect = was })
-	d, err := Start(context.Background(), Config{Dir: stateDir(t), Hub: true, Epoch: 1, Adapter: fake.New(fake.Turn(true))})
+	d, err := Start(context.Background(), Config{Dir: stateDir(t), Hub: true, Epoch: 1, Providers: provider.Mux{"fake": fake.New(fake.Turn(true))}})
 	if err != nil {
 		t.Fatal(err)
 	}

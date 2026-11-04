@@ -29,9 +29,11 @@ type SessionSpec struct {
 
 // RuntimeIdentity is what the engine persisted about a run. The adapter tags
 // the provider process with it so Reconcile can find it after a restart.
+// Provider is the thread's, which picks the adapter.
 type RuntimeIdentity struct {
 	Thread, Run api.ID
 	Generation  uint64
+	Provider    string
 }
 
 // Adapter opens and finds agents. The ctx given to Open or Reconcile bounds

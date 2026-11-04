@@ -1,5 +1,5 @@
-// Package runtime wires the store, the engine and a provider adapter into a
-// Host that serves api.Endpoint.
+// Package runtime wires the store, the engine and the provider adapters into
+// a Host that serves api.Endpoint.
 package runtime
 
 import (
@@ -29,9 +29,9 @@ var callTimeout = 30 * time.Second
 var closeGrace = 5 * time.Second
 
 type Host struct {
-	store   *store.Store
-	adapter provider.Adapter
-	name    string
+	store     *store.Store
+	providers provider.Mux
+	name      string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -64,10 +64,10 @@ var _ api.Endpoint = (*Host)(nil)
 
 // New reconciles what the last process left in flight, then starts the
 // effect worker. The caller keeps owning st.
-func New(ctx context.Context, st *store.Store, ad provider.Adapter) (*Host, error) {
+func New(ctx context.Context, st *store.Store, providers provider.Mux) (*Host, error) {
 	name, _ := os.Hostname()
 	h := &Host{
-		store: st, adapter: ad, name: name,
+		store: st, providers: providers, name: name,
 		wake:    make(chan struct{}, 1),
 		busy:    map[api.ID]bool{},
 		runs:    map[api.ID]*liveRun{},
@@ -228,7 +228,7 @@ func (h *Host) boot(ctx context.Context) error {
 		}
 		delete(starts, r.ID)
 		rctx, cancel := context.WithTimeout(ctx, callTimeout)
-		rec, err := h.adapter.Reconcile(rctx, provider.RuntimeIdentity{Thread: id, Run: r.ID, Generation: r.Generation})
+		rec, err := h.providers.Reconcile(rctx, provider.RuntimeIdentity{Thread: id, Run: r.ID, Generation: r.Generation, Provider: t.Model.Provider})
 		cancel()
 		if err != nil {
 			rec = provider.Lost{Reason: err.Error()}
@@ -328,7 +328,7 @@ func (h *Host) perform(e store.Effect) {
 		h.record(e.Thread, skip, e.ID)
 		return
 	}
-	o, ok := h.call(e, lr)
+	o, ok := h.call(e, t, lr)
 	if !ok {
 		return
 	}
@@ -339,7 +339,7 @@ func (h *Host) perform(e store.Effect) {
 
 // call makes the effect's provider call and returns what to record, nil for
 // nothing but the completion. ok is false when the host closed mid-call.
-func (h *Host) call(e store.Effect, lr *liveRun) (o engine.Observation, ok bool) {
+func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Observation, ok bool) {
 	var err error
 	switch b := e.Body.(type) {
 	case engine.StartTurn:
@@ -385,7 +385,7 @@ func (h *Host) call(e store.Effect, lr *liveRun) (o engine.Observation, ok bool)
 		if !retry(h.ctx, "find agent", func(ctx context.Context) (err error) {
 			ctx, cancel := context.WithTimeout(ctx, callTimeout)
 			defer cancel()
-			rec, err = h.adapter.Reconcile(ctx, provider.RuntimeIdentity{Thread: e.Thread, Run: b.Run, Generation: b.Generation})
+			rec, err = h.providers.Reconcile(ctx, provider.RuntimeIdentity{Thread: e.Thread, Run: b.Run, Generation: b.Generation, Provider: t.Model.Provider})
 			return err
 		}) {
 			return nil, false
@@ -442,7 +442,7 @@ func retry(ctx context.Context, what string, fn func(context.Context) error) boo
 func (h *Host) open(ctx context.Context, thread api.ID, b engine.StartTurn) (provider.Agent, error) {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
-	ag, err := h.adapter.Open(ctx, provider.SessionSpec{
+	ag, err := h.providers.Open(ctx, provider.SessionSpec{
 		Thread: thread, Run: b.Run, Generation: b.Generation, Workspace: b.Workspace, Model: b.Model, Access: b.Access,
 	})
 	if err == nil {

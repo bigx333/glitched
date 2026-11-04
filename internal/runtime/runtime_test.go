@@ -29,11 +29,17 @@ type node struct {
 
 func start(t *testing.T, path string, ad provider.Adapter) node {
 	t.Helper()
+	return serve(t, path, provider.Mux{"fake": ad})
+}
+
+// serve starts a host on the database at path with these providers.
+func serve(t *testing.T, path string, providers provider.Mux) node {
+	t.Helper()
 	st, err := store.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := runtime.New(ctx, st, ad)
+	h, err := runtime.New(ctx, st, providers)
 	if err != nil {
 		st.Close()
 		t.Fatal(err)
