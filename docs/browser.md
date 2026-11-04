@@ -108,7 +108,8 @@ real engine, with pages served by the test:
 - **Limits:** the ref and character budgets, and every ref shown counted.
 - **Refs:** a ref resolves to its element, at its place in the top
   viewport through frames; a newer snapshot, the element removed, its
-  frame navigated, or a reload make it fail, saying which.
+  frame navigated, a reload, or going back to a page the back/forward
+  cache restores make it fail, saying which.
 - **Tampering:** each on a page of its own, a page replacing or deleting
   the script's state, or patching after it is installed what it goes
   through (DOM methods and getters, `WeakRef`, `RegExp.prototype.exec`, an
@@ -209,9 +210,11 @@ that picks it. Nothing above the seam changes.
   app. Only the page's latest snapshot resolves: a ref from an earlier one,
   from before the page or the frame it is in navigated or reloaded, or
   whose element the page removed fails, saying which, and to take a new
-  snapshot. A ref holds the frames it is in, each with the document it
-  showed, and resolves while each still shows it: an element of a
-  document its frame left still reads as connected, in that document.
+  snapshot. A page that leaves drops its refs, so a page the back/forward
+  cache brings back has none until its next snapshot. A ref holds the
+  frames it is in, each with the document it showed, and resolves while
+  each still shows it: an element of a document its frame left still
+  reads as connected, in that document.
 - `webtarget.Describe(ctx, page, ref)` resolves a ref to its element's
   role, name and box in the top frame's viewport, through the frames it is
   in. `Snapshot.Verify(ref, element)` checks it is still what the snapshot
@@ -223,9 +226,10 @@ that picks it. Nothing above the seam changes.
   every function and getter it uses is the one it found as it was
   installed, called through the `Reflect.apply` it found. That is the
   DOM's (`getAttribute`, `matches`, `querySelector`, `getRootNode`,
-  `getElementById`, `textContent`, `innerText`, `localName`, `labels`,
-  `isConnected`, `childNodes`, `contentDocument`, `getBoundingClientRect`
-  and a rect's `x`, `y`, `width` and `height`, and the like),
+  `getElementById`, `addEventListener`, `textContent`, `innerText`,
+  `localName`, `labels`, `isConnected`, `childNodes`, `contentDocument`,
+  `getBoundingClientRect` and a rect's `x`, `y`, `width` and `height`,
+  and the like),
   `getComputedStyle` and `getPropertyValue`, `WeakRef` and its `deref`,
   `String`'s `slice`, `toUpperCase`, `toLowerCase` and `repeat`, `Array`'s
   `join`, `JSON.stringify` and `parseFloat`. It parses refs, and splits

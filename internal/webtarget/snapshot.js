@@ -506,6 +506,15 @@ function install(key) {
     return { __proto__: null, role: r || "", name: name(el, r), box };
   }
 
+  // A page leaving drops its refs: the back/forward cache can bring this
+  // document back, state and all, after a snapshot of another. Capturing,
+  // so a listener the page adds later can't stop it.
+  apply(fn(EventTarget, "addEventListener"), window, ["pagehide", () => {
+    epoch = 0;
+    refs = null;
+    count = 0;
+  }, true]);
+
   const api = freeze({ __proto__: null, snapshot, describe });
   defineProperty(window, key, { __proto__: null, value: api, writable: false, configurable: false, enumerable: false });
   return api;
