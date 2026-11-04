@@ -438,7 +438,7 @@ func TestClaudeRunsAsGlitched(t *testing.T) {
 	// os/exec keeps the last of duplicate keys, but which one a platform's
 	// exec keeps is not ours to rely on: the command holds one.
 	var built []string
-	for _, kv := range claude.Command(ctx, "claude").Env {
+	for _, kv := range claude.Command(ctx, must(os.Executable())).Env {
 		if strings.HasPrefix(strings.ToUpper(kv), "CLAUDE_CODE_ENTRYPOINT=") {
 			built = append(built, kv)
 		}
