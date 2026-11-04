@@ -4,6 +4,7 @@ Newest first. Each entry has the date, who decided, and the decision.
 
 ## 2026-11-04
 
+- **PM (Claude).** Merged #43 (#14, Protocol 5, schema 6). CI is green on GARM, and the final Opus and Sol reviews found no high or medium. The Duplicate re-tell low is filed as #48, since main behaves the same.
 - **PM (Claude).** Merged #45 under Nelson's rule (a high still open after the final fix round means land as is, with an issue). Its two remaining highs are a tall command hiding its first line and assistant text concealing the CLI prompt. Both use only ASCII, both were present before round 3, and both are in #47, which blocks slice 5. Until slice 5, Claude prompts are reachable only through `glitched serve`.
 - **Nelson.** Agent text on the approval card and in the CLI `[y/N]` prompt uses an **ASCII allowlist**. Printable ASCII and newlines show as they are, every other character shows as `\u{…}`, and a "contains non-ASCII text" flag appears. #45 gets one final fix round. If a high is still open after it, #45 lands as is with an issue. The reason: round 3 found two ways past the denylist escaper. One is implicit right-to-left text (a Hebrew letter flips the line). The other is invisible characters outside Cc and Cf (`./check` + U+FE0F draws pixel-identical to `./check`).
 - **PM (Claude).** AskUserQuestion PR B renders option labels and Other text, so it must use the same allowlist function.

@@ -26,17 +26,19 @@ A PR merges to main by rebase-merge only when all of these hold at its current h
 | 5 | HTML plan for the Claude Code adapter (in core) | Done. Nelson answered Q5 on 2026-11-04. | Done. |
 | 6 | Claude Code adapter, 5 slices | Slices 1 (#36), 2 (#42) and 3 (#45) are merged. Slice 4 (stop, steer, crash, resume) is running on `feat/claude-stop-steer`. #47 (approval surface security) is running and **blocks slice 5**. AskUserQuestion PR A waits for #43, and PR B waits for PR A. | Each slice's done-when is in `/tmp/glitched-pm/adapter-context.md`. |
 | 7 | Agent spawn tool, in core | Waiting on task 6 | To be set by its plan. |
-| 8 | Child-thread bugs #14, #23 | #23 merged (#27). #14 moved to the Protocol 5 PR (`feat/thread-last-report`) after #33's three client-side designs failed review. | #14 closes with the Protocol 5 PR. |
+| 8 | Child-thread bugs #14, #23 | **Done.** #23 is in #27. #14 is in #43, with Protocol 5 and schema 6, merged 2026-11-04. | Done. |
 | 9 | Browser bugs #17 to #20 | **Done.** #26 (#17), #29 (#18), #40 (#19, the rebase of #30), #28 (#20), all merged 2026-11-04. | Done. |
 | 12 | Doc nit on Mark settled for a waiting thread | Filed as #25 | The doc matches the menu. |
 | 14 | Follow-ups filed 2026-11-04: #31 (layout fsync on UI thread), #32 (settled-thread message edges), #34 (transport test flaky under load), #35 (script at document start) | Open | Triage after the adapter. |
 | 15 | Windows: stopping claude, and pipe deadlines (#44) | Open | Before slice 5 ships Claude in the GUI on Windows. |
+| 16 | Follow-ups filed after #43 and #45: #46 (Write/Edit card content; lost answer race), #47 (approval surface security, blocks slice 5, being fixed), #48 (Duplicate re-tell, low) | Open | #47 before slice 5. |
 | 13 | Refuse an unknown effect kind before leasing it | Filed as #24 (design note) | A build boots cleanly on a store with an unknown kind. |
 | 11 | MyGo v0.5.5 to v0.7 upgrade, restore the CPU glow halo with `Cache` | After task 4 | TestShot renders match the pre-#22 glow, CI time stays near 210 s. |
 | 10 | Modules and plugin HTML plan | Waiting on tasks 6 and 7 | Nelson has answered the plan. |
 
 ## Landed
 
+- 2026-11-04: #43 (#14 fixed with `api.Thread.LastReport`, Protocol 5, schema 6). It took 3 fix rounds, and the final review found no high or medium.
 - 2026-11-04: #45 (adapter slice 3: tool prompts answered from the inbox, ASCII-only approval text). It landed under Nelson's rule with #47 open.
 - 2026-11-04: #42 (adapter slice 2: a Claude Code turn streams through `glitched serve`).
 - 2026-11-04: #27 (#23), #26 (#17), #28 (#20), #29 (#18), #36 (adapter slice 1), #40 (#19).
