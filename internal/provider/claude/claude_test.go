@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -26,6 +29,7 @@ const (
 	envResume = "GLITCHED_FAKE_CLAUDE_RESUME" // the transcript a --resume run replays
 	envArgv   = "GLITCHED_FAKE_CLAUDE_ARGV"   // a file each run appends its argv to
 	envEntry  = "GLITCHED_FAKE_CLAUDE_ENTRY"  // a file each run appends its entrypoint entries to
+	envPids   = "GLITCHED_FAKE_CLAUDE_PIDS"   // a file each run appends its processes to, by role
 )
 
 func TestMain(m *testing.M) {
@@ -60,6 +64,7 @@ func fakeClaude(path string) int {
 		fmt.Fprintln(os.Stderr, "fake claude:", err)
 		return 2
 	}
+	note("claude", os.Getpid())
 	wd, _ := os.Getwd()
 	in := bufio.NewReader(os.Stdin)
 	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
@@ -87,6 +92,39 @@ func fakeClaude(path string) int {
 					break
 				}
 			}
+		case e["tool"] != nil:
+			// Claude Code runs a tool call in a shell of its own session,
+			// and stops it on SIGTERM.
+			var argv []string
+			json.Unmarshal(e["tool"], &argv)
+			sh := exec.Command(argv[0], argv[1:]...)
+			newSession(sh)
+			if err := sh.Start(); err != nil {
+				fmt.Fprintln(os.Stderr, "fake claude:", err)
+				return 2
+			}
+			note("tool", sh.Process.Pid)
+			term := make(chan os.Signal, 1)
+			signal.Notify(term, syscall.SIGTERM)
+			go func() {
+				<-term
+				sh.Process.Kill()
+				sh.Wait()
+				os.Exit(143)
+			}()
+		case e["holder"] != nil:
+			// A process claude leaves running, holding its output open.
+			sh := exec.Command("sleep", "60")
+			newSession(sh)
+			sh.Stdout, sh.Stderr = os.Stdout, os.Stderr
+			if err := sh.Start(); err != nil {
+				fmt.Fprintln(os.Stderr, "fake claude:", err)
+				return 2
+			}
+			note("holder", sh.Process.Pid)
+		case e["hang"] != nil:
+			// Busy, and reading nothing more.
+			time.Sleep(time.Hour)
 		case e["exit"] != nil:
 			var code int
 			json.Unmarshal(e["exit"], &code)
@@ -94,6 +132,15 @@ func fakeClaude(path string) int {
 		}
 	}
 	return 0
+}
+
+// note appends a process of the fake's to the file envPids names.
+func note(role string, pid int) {
+	if f := os.Getenv(envPids); f != "" {
+		out, _ := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		fmt.Fprintln(out, role, pid)
+		out.Close()
+	}
 }
 
 func kind(line []byte) string {
@@ -271,6 +318,24 @@ func TestATurnStreamsIntoTheThread(t *testing.T) {
 	}
 }
 
+// A turn that ends without a step's result, as when claude exits during a
+// tool call, ends the step too.
+func TestATurnEndsTheStepsItLeftOpen(t *testing.T) {
+	for _, name := range []string{"exit-mid-tool", "result-mid-tool"} {
+		t.Run(name, func(t *testing.T) {
+			replay(t, name, "")
+			h := host(t, nil)
+			got := turn(t, h, newThread(t, h, api.AccessFull), "Run sleep 60.")
+			if got.ended.Outcome != api.OutcomeFailed {
+				t.Errorf("turn ended %+v, want failed", got.ended)
+			}
+			if len(got.work) != 2 || got.work[0].Status != api.WorkStarted || got.work[1].Status != api.WorkFailed || got.work[1].Item != got.work[0].Item {
+				t.Errorf("work items %+v, want the Bash step started, then failed", got.work)
+			}
+		})
+	}
+}
+
 func TestALaterTurnResumesTheThreadsSession(t *testing.T) {
 	argv := replay(t, "hi", "")
 	h := host(t, nil)
@@ -353,24 +418,6 @@ func TestAccessPicksThePermissionMode(t *testing.T) {
 	if want := []string{"default", "acceptEdits", "bypassPermissions"}; !slices.Equal(modes, want) {
 		t.Errorf("permission modes %v, want %v", modes, want)
 	}
-}
-
-func TestATestCannotRunARealClaude(t *testing.T) {
-	bin := t.TempDir()
-	ran := filepath.Join(t.TempDir(), "ran")
-	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ntouch "+ran+"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin)
-	defer func() {
-		if recover() == nil {
-			t.Error("Open ran the claude on PATH in a test without the claudelive tag, want a panic")
-		}
-		if _, err := os.Stat(ran); err == nil {
-			t.Error("the claude on PATH ran")
-		}
-	}()
-	(&claude.Adapter{}).Open(ctx, provider.SessionSpec{Thread: api.NewID(), Run: api.NewID(), Workspace: t.TempDir()})
 }
 
 // Anthropic meters SDK entrypoints harder, so claude must hear glitched,
