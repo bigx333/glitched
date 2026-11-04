@@ -151,6 +151,11 @@ func fakeClaude(path string) int {
 				return 2
 			}
 			note("holder", sh.Process.Pid)
+		case e["sleep"] != nil:
+			// A model call, which takes Claude Code a while.
+			var d string
+			json.Unmarshal(e["sleep"], &d)
+			time.Sleep(must(time.ParseDuration(d)))
 		case e["hang"] != nil:
 			// Busy, and reading nothing more.
 			time.Sleep(time.Hour)

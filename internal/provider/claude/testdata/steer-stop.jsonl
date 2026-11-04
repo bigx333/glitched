@@ -1,0 +1,13 @@
+{"sent":{"request":{"subtype":"initialize"},"type":"control_request"}}
+{"recv":{"type":"control_response","response":{"subtype":"success","request_id":"glitched-init","response":{}}}}
+{"sent":{"type":"user","uuid":"uuid-of-the-first-message"}}
+{"recv":{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"bash","name":"Bash","input":{"command":"./busy.sh"}}]}}}
+{"sent":{"type":"user","uuid":"uuid-of-the-steer"}}
+{"sent":{"request":{"subtype":"interrupt"},"type":"control_request"}}
+{"recv":{"type":"control_response","response":{"subtype":"success","request_id":"glitched-interrupt","response":{"still_queued":[]}}}}
+{"recv":{"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"bash","is_error":true,"content":"[Request interrupted by user for tool use]"}]}}}
+{"recv":{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_tools","usage":{"input_tokens":3,"output_tokens":4},"user_message_uuids":["uuid-of-the-first-message"]}}
+{"sleep":"1s"}
+{"recv":{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"steer","name":"Bash","input":{"command":"touch steer-ran"}}]}}}
+{"tool":["touch","steer-ran"]}
+{"hang":true}
