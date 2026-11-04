@@ -107,9 +107,12 @@ real engine, with pages served by the test:
   `contenteditable` and one in design mode.
 - **Limits:** the ref and character budgets, and every ref shown counted.
 - **Refs:** a ref resolves to its element, at its place in the top
-  viewport through frames; a newer snapshot, the element removed, its
-  frame navigated, a reload, or going back to a page the back/forward
-  cache restores make it fail, saying which.
+  viewport through frames, and still does after the page fires a
+  `pagehide` of its own; a newer snapshot, the element removed, its frame
+  navigated, or a reload make it fail, saying which.
+- **PageCache:** going back to a page the back/forward cache restores
+  makes a ref from before it left fail too. On an engine that loads the
+  page again instead, it is skipped, saying so.
 - **Tampering:** each on a page of its own, a page replacing or deleting
   the script's state, or patching after it is installed what it goes
   through (DOM methods and getters, `WeakRef`, `RegExp.prototype.exec`, an
@@ -210,7 +213,8 @@ that picks it. Nothing above the seam changes.
   app. Only the page's latest snapshot resolves: a ref from an earlier one,
   from before the page or the frame it is in navigated or reloaded, or
   whose element the page removed fails, saying which, and to take a new
-  snapshot. A page that leaves drops its refs, so a page the back/forward
+  snapshot. A page that leaves drops its refs, on the `pagehide` the
+  engine fires, not one the page fires itself, so a page the back/forward
   cache brings back has none until its next snapshot. A ref holds the
   frames it is in, each with the document it showed, and resolves while
   each still shows it: an element of a document its frame left still
@@ -255,6 +259,11 @@ that picks it. Nothing above the seam changes.
     document's first snapshot;
   - change any built-in before the first snapshot in it (the script
     captures what it finds), `Reflect.apply` included;
+  - add a capturing `pagehide` listener on `window` before the first
+    snapshot in it, which runs before the script's and can call
+    `stopImmediatePropagation()`: the page then keeps its refs when the
+    back/forward cache brings it back, each finding the element it did, in
+    the same document ([#35](https://github.com/bigx333/glitched/issues/35));
   - change what MyGo's eval wrapper (`evalBody`, in its `bridge.go`), which
     runs around the script, goes through: `JSON.stringify`, which it
     returns the answer through, and the `toJSON` that looks up on the
@@ -264,8 +273,8 @@ that picks it. Nothing above the seam changes.
     `String` it turns an error's message into a string with;
   - find the property and call the script itself, as a snapshot of its
     own that moves the refs.
-  Each can make a ref find an element of the page's choosing and `Verify`
-  pass, as the page answers both. Before agents act on pages, the script,
+  Each but the `pagehide` listener can make a ref find an element of the
+  page's choosing and `Verify` pass, as the page answers both. Before agents act on pages, the script,
   and the wrapper `EvalContext` runs it in, must run in an isolated world:
   WKWebView's content worlds, and DevTools' `Page.createIsolatedWorld` on
   WebView2 and CEF (Next, 3).
