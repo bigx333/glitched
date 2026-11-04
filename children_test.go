@@ -575,6 +575,81 @@ func TestAChildsReportNotifies(t *testing.T) {
 	}
 }
 
+// With the parent's transcript closed, a child's report says Needs you only
+// when that child asks: a sibling asked earlier, and was told of then, is
+// not told of again when another child is done.
+func TestAReportTellsOnlyOfItsChild(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ask  bool // the second child asks too
+		want []string
+	}{
+		{"done", false, []string{"Write the tests: Needs you"}},
+		{"blocked", true, []string{"Write the tests: Needs you", "Run the linter: Needs you"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := tempDir(t)
+			ad := split{fake.New(fake.Turn(false)), fake.New(fake.Turn(true)), map[api.ID]bool{}}
+			d := engine(t, daemon.Config{Dir: dir}, ad)
+			top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+			first := seedChild(t, d, top, "Write the tests")
+			second := seedChild(t, d, top, "Run the linter")
+			ad.askers[first], ad.askers[second] = true, tc.ask
+			h := start(t, dir)
+			var got []mygo.NotificationOptions
+			h.a.notify = func(o mygo.NotificationOptions) { got = append(got, o) }
+			parent := h.thread("Ship the sidebar sort")
+			h.thread("Write the tests")
+			h.thread("Run the linter")
+			h.tt.Frame()
+			reports := func() []string {
+				var rs []string
+				for _, o := range got {
+					if o.ID == "thread:"+top.String() {
+						rs = append(rs, o.Body)
+					}
+				}
+				return rs
+			}
+			go_ := func(id api.ID) {
+				if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: "go"}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			go_(first)
+			h.until("the first child's report", func() bool { return len(reports()) == 1 })
+			at := parent.View.Reported
+			go_(second)
+			h.until("the second child's report", func() bool { return parent.View.Reported.After(at) })
+			for range 5 {
+				h.p.run()
+				h.tt.Advance(100 * time.Millisecond)
+			}
+			if parent.Transcript != nil {
+				t.Fatal("the parent's transcript is open; this test needs it closed")
+			}
+			if rs := reports(); !slices.Equal(rs, tc.want) {
+				t.Fatalf("notifications on the parent: %q; want %q", rs, tc.want)
+			}
+		})
+	}
+}
+
+// split opens the threads in askers on an adapter whose turns ask, the
+// others on one whose turns don't.
+type split struct {
+	*fake.Adapter
+	asks   *fake.Adapter
+	askers map[api.ID]bool
+}
+
+func (a split) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	if a.askers[spec.Thread] {
+		return a.asks.Open(ctx, spec)
+	}
+	return a.Adapter.Open(ctx, spec)
+}
+
 // slowStop opens the fake's agents, which play the first event of a turn
 // and work on until interrupted; the interrupted turn ends only once
 // release closes, so a stop lands late.

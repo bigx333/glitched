@@ -27,6 +27,10 @@ type Config struct {
 	// Post runs fn on the thread that owns the manager's state, in the order
 	// posted, and must not block; the GUI passes its window's Update.
 	Post func(fn func())
+	// Reported, when set, runs on the Post thread once for each report a
+	// child made to thread while the env was there to see it, after the
+	// views the stream sent with it.
+	Reported func(e *Env, thread api.ID, r api.Report)
 }
 
 const (
@@ -193,6 +197,7 @@ type Env struct {
 	stop    context.CancelFunc
 	unlink  context.CancelFunc // ends the link that reaches the engine
 	session *session           // the live shell stream; nil while there is none
+	log     api.ID             // the log of the last shell snapshot; zero before one
 	waiting []chan<- *session  // commands waiting for the next session
 	server  Server             // a remote's entry in gui.json
 }
@@ -347,10 +352,18 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 			w <- s
 		}
 		e.waiting = nil
+		// A snapshot of another log than the views held, as on the first
+		// connect or from a restored database, tells of no report: what
+		// it carries came before, or the views held say nothing of it.
+		fenced := it.Snapshot.Cursor.Log != e.log
+		e.log = it.Snapshot.Cursor.Log
 		live := map[api.ID]bool{}
+		var reports []api.Thread
 		for _, v := range it.Snapshot.Threads {
 			live[v.ID] = true
-			m.view(e, v)
+			if m.view(e, v) && !fenced {
+				reports = append(reports, v)
+			}
 		}
 		for id, th := range e.Threads {
 			if th.known && !live[id] {
@@ -358,27 +371,44 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 				delete(e.Threads, id)
 			}
 		}
+		for _, v := range reports {
+			m.reported(e, v)
+		}
 	case api.StreamThread:
-		m.view(e, *it.Thread)
+		if m.view(e, *it.Thread) {
+			m.reported(e, *it.Thread)
+		}
 	}
 }
 
-func (m *Manager) view(e *Env, v api.Thread) {
+// view takes v in place of the thread's view, and is whether v carries a
+// report the view held did not. The shell stream is in commit order, so
+// the view of the child that made the report came before it.
+func (m *Manager) view(e *Env, v api.Thread) bool {
 	th := e.Threads[v.ID]
 	if v.Deleted {
 		if th != nil {
 			th.unfollow()
 			delete(e.Threads, v.ID)
 		}
-		return
+		return false
 	}
 	if th == nil {
 		th = &Thread{}
 		e.Threads[v.ID] = th
 	}
+	was, seen := th.View.LastReport, th.known
 	th.View, th.known = v, true
 	th.dropUnasked()
 	m.follow(e, th)
+	r := v.LastReport
+	return seen && r != nil && (was == nil || *was != *r)
+}
+
+func (m *Manager) reported(e *Env, v api.Thread) {
+	if m.cfg.Reported != nil {
+		m.cfg.Reported(e, v.ID, *v.LastReport)
+	}
 }
 
 // claim records that e reaches engine id, and fails if an env listed
