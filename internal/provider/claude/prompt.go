@@ -38,10 +38,6 @@ const (
 
 var errNoPrompt = errors.New("claude: Claude Code made no such request")
 
-// errGone is why an answer to a prompt Claude Code stopped waiting on
-// never went, as the card shows it.
-var errGone = errors.New("Claude Code stopped waiting before the answer reached it.")
-
 // deniedReason is what Claude Code hears when the user denies a tool call.
 const deniedReason = "The user denied this tool call in glitched."
 
@@ -91,8 +87,9 @@ func (t *turn) ask(id string, r canUseTool) (provider.RequestOpened, *prompt) {
 }
 
 // argsText is a tool's input as text: a line per field in Claude Code's
-// order, a string as it reads and any other value as JSON. Input that is
-// no object shows as it came.
+// order, a string as it reads and any other value as JSON. A field's lines
+// after its first are indented, and a key keeps to its one line, so no
+// field can pass for another. Input that is no object shows as it came.
 func argsText(input json.RawMessage) string {
 	d := json.NewDecoder(bytes.NewReader(input))
 	if tok, err := d.Token(); err != nil || tok != json.Delim('{') {
@@ -106,7 +103,7 @@ func argsText(input json.RawMessage) string {
 			return strings.TrimSpace(string(input))
 		}
 		var s string
-		if json.Unmarshal(v, &s) != nil {
+		if v[0] != '"' || json.Unmarshal(v, &s) != nil {
 			var c bytes.Buffer
 			json.Compact(&c, v)
 			s = c.String()
@@ -116,7 +113,7 @@ func argsText(input json.RawMessage) string {
 		} else {
 			s = " " + s
 		}
-		lines = append(lines, fmt.Sprint(k, ":", s))
+		lines = append(lines, strings.ReplaceAll(k.(string), "\n", `\u{A}`)+":"+s)
 	}
 	return strings.Join(lines, "\n")
 }
