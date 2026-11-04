@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"strings"
 
-	"glitched/internal/plain"
 	"glitched/internal/provider"
 )
 
@@ -87,11 +86,13 @@ func (t *turn) ask(id string, r canUseTool) (provider.RequestOpened, *prompt) {
 	return provider.RequestOpened{ID: id, Kind: "approval", Body: body}, &prompt{kind: "approval", input: r.Input}
 }
 
-// argsText is a tool's input as text: a line per field in Claude Code's
-// order, a string as it reads and any other value as JSON. A field's lines
-// after its first are indented, and a key shows in plain text on its one
-// line, so no field can pass for another, and the card flags the escape.
-// Input that is no object shows as it came.
+// argsText is a tool's input as text, a line per field in Claude Code's
+// order: its key, then its value as JSON, so that a string shows apart
+// from the number, bool, null or array it spells. A string of more than
+// one line shows as a block under "|", each of its lines indented. A key
+// shows bare when it holds only letters, digits, "_", "." and "-", and as
+// JSON otherwise, so no key passes for a key and a value. Input that is no
+// object shows as it came.
 func argsText(input json.RawMessage) string {
 	d := json.NewDecoder(bytes.NewReader(input))
 	if tok, err := d.Token(); err != nil || tok != json.Delim('{') {
@@ -104,21 +105,35 @@ func argsText(input json.RawMessage) string {
 		if err != nil || d.Decode(&v) != nil {
 			return strings.TrimSpace(string(input))
 		}
+		key := k.(string)
+		if !bareKey.MatchString(key) {
+			key = jsonText(key)
+		}
 		var s string
-		if v[0] != '"' || json.Unmarshal(v, &s) != nil {
+		switch {
+		case v[0] == '"' && json.Unmarshal(v, &s) == nil && strings.Contains(s, "\n"):
+			s = " |\n  " + strings.ReplaceAll(s, "\n", "\n  ")
+		case v[0] == '"':
+			s = " " + jsonText(s)
+		default:
 			var c bytes.Buffer
 			json.Compact(&c, v)
-			s = c.String()
+			s = " " + c.String()
 		}
-		if strings.Contains(s, "\n") {
-			s = "\n  " + strings.ReplaceAll(s, "\n", "\n  ")
-		} else {
-			s = " " + s
-		}
-		key, _ := plain.Text(k.(string), false)
 		lines = append(lines, key+":"+s)
 	}
 	return strings.Join(lines, "\n")
+}
+
+var bareKey = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+// jsonText is s as a JSON string, its <, > and & as they are.
+func jsonText(s string) string {
+	var b strings.Builder
+	e := json.NewEncoder(&b)
+	e.SetEscapeHTML(false)
+	e.Encode(s)
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)

@@ -301,6 +301,11 @@ type app struct {
 	// answerAt where the waiting request's answers were last laid out.
 	zap      approvalZap
 	answerAt answerRow
+	// drawn is where the last frame drew each waiting card this frame's
+	// timeline built, and drew the same for the frame before; keyed is the
+	// request ⌘⏎ and ⇧⌘D answer, as the last frame found it.
+	drawn, drew map[api.ID]sight
+	keyed       api.ID
 	// quick is the quick-ask panel over every app.
 	quick quickAsk
 	// quitting is set as a quit starts, for the windows that hide rather
@@ -354,13 +359,13 @@ type app struct {
 	composerSeen map[api.ID]bool
 	// The hero (hero.go): dockK is how far the composer is from the hero
 	// (0) to its dock (1) in this frame, dockJump makes it jump there, for
-	// ⌘N, and paneH is the chat pane's height, as last laid out; leaving
+	// ⌘N, and paneAt is the chat pane, as last laid out; leaving
 	// is the thread last left for a hero, whose transcript fades out as
 	// the composer lifts, and arrived the last to leave the hero, at
 	// arrivedAt, whose row slides into the sidebar.
 	dockK     float32
 	dockJump  bool
-	paneH     float32
+	paneAt    ui.Rect
 	leaving   api.ID
 	arrived   api.ID
 	arrivedAt time.Time
@@ -441,6 +446,7 @@ func newApp(dir string, post func(func())) *app {
 		agentsOpen:    map[api.ID]bool{},
 		agentsAll:     map[api.ID]bool{},
 		shownAll:      map[cardText]bool{},
+		drawn:         map[api.ID]sight{},
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,

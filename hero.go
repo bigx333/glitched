@@ -80,7 +80,7 @@ func (a *app) dockMorph(host ui.Element, t thread) {
 // heroLift is how far above its dock the hero composer's bar sits: the
 // card in the middle of the pane, as the last frame laid the pane out.
 func (a *app) heroLift() float32 {
-	return max(0, a.paneH/2-composerBarBottom-heroCardH/2)
+	return max(0, a.paneAt.H/2-composerBarBottom-heroCardH/2)
 }
 
 // departing is the thread whose transcript the pane shows over the hero's
