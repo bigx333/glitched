@@ -49,7 +49,9 @@ func browsing(t *testing.T) (*app, *ui.Tester, *[]string) {
 		made = append(made, url)
 		return p, nil
 	}
-	return a, ui.NewTester(a.view, 1320, 860), &made
+	tt := ui.NewTester(a.view, 1320, 860)
+	a.browser.clock = tt.Now
+	return a, tt, &made
 }
 
 // pageOf is a tab's page, made by the test.

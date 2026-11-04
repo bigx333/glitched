@@ -40,6 +40,10 @@ type browser struct {
 	// the id of the user's tab at its head; kept as that tab closes, so a
 	// line can't start over by closing it.
 	opens map[int][]time.Time
+	// clock tells the time as a page opens a window, which comes before
+	// the frame it asks for, so the frame's time can be long past;
+	// time.Now if nil, a test's otherwise.
+	clock func() time.Time
 }
 
 // browserTab is a tab: its page, made as it first shows, and what its bar
@@ -198,11 +202,15 @@ func (a *app) tabEvents(t *browserTab) browse.Events {
 func (a *app) openFrom(from *browserTab, url string) {
 	b := &a.browser
 	i := slices.Index(b.tabs, from)
-	if i < 0 || !b.mayOpen(from, a.now) {
+	now := time.Now()
+	if b.clock != nil {
+		now = b.clock()
+	}
+	if i < 0 || !b.mayOpen(from, now) {
 		return
 	}
 	line := lineOf(from)
-	b.opens[line] = append(b.opens[line], a.now)
+	b.opens[line] = append(b.opens[line], now)
 	was := b.active
 	b.add(url, i+1).opener = line
 	if was != i {
