@@ -463,14 +463,22 @@ func (a *app) follow() {
 // as is each report a child made since.
 func (a *app) changed() {
 	a.follow()
+	var kids map[api.ID][]thread
 	for _, e := range a.backend.Envs() {
 		for id, th := range e.Threads {
 			var ended time.Time
 			if th.View.LastTurn != nil {
 				ended = th.View.LastTurn.Ended
 			}
-			if at, known := a.reported[id]; known && th.View.Reported.After(at) {
-				a.notifyReported(thread{e, th})
+			if at, known := a.reported[id]; !known || th.View.Reported.After(at) {
+				if kids == nil {
+					kids = a.kidsOf()
+				}
+				asked := a.asked[id]
+				a.asked[id] = pending(kids[id])
+				if known {
+					a.notifyReported(thread{e, th}, kids[id], asked)
+				}
 			}
 			a.reported[id] = th.View.Reported
 			seen, known := a.ended[id]

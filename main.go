@@ -204,9 +204,11 @@ type app struct {
 	kids         map[api.ID][]thread
 	childrenOpen map[api.ID]bool
 	// ended is each thread's last turn's end, as last seen, to tell of
-	// the next once; reported, its children's last report, likewise.
+	// the next once; reported, its children's last report, likewise;
+	// asked, the requests its children had pending at that report.
 	ended    map[api.ID]time.Time
 	reported map[api.ID]time.Time
+	asked    map[api.ID]map[api.ID]bool
 	// notify shows a desktop notification: nil until the window is.
 	notify   func(mygo.NotificationOptions)
 	settings settings
@@ -417,6 +419,7 @@ func newApp(dir string, post func(func())) *app {
 		wind:          wind.New(rand.Uint32(), nil),
 		ended:         map[api.ID]time.Time{},
 		reported:      map[api.ID]time.Time{},
+		asked:         map[api.ID]map[api.ID]bool{},
 		showSidebar:   true,
 		sidebarWidth:  272,
 		model:         "Claude Opus 5.5",

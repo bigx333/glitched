@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -45,12 +46,13 @@ func (a *app) watching(t thread) bool {
 // t needs them: its report says it waits on a request, which ends no turn,
 // so nothing else tells of it. A child done or failed ended its turn, which
 // notifyFinished told of already. Clicking it opens t, where the report
-// is. Neither t nor the child is one they're watching.
-func (a *app) notifyReported(t thread) {
+// is. Neither t nor the child is one they're watching. kids are t's
+// children; asked, the requests they had pending at t's report before.
+func (a *app) notifyReported(t thread, kids []thread, asked map[api.ID]bool) {
 	if !a.settings.notifications || a.notify == nil || a.watching(t) {
 		return
 	}
-	child, ok := a.blockedReport(t)
+	child, ok := blockedReport(t, kids, asked)
 	if !ok || a.watching(child) {
 		return
 	}
@@ -63,9 +65,10 @@ func (a *app) notifyReported(t thread) {
 }
 
 // blockedReport is the child of t whose report to it, the last, says it
-// waits on the user. The transcript says, when it's open and caught up;
-// else it's the child changed last of those with a request pending.
-func (a *app) blockedReport(t thread) (thread, bool) {
+// waits on the user. The transcript says, when it's open and caught up.
+// Else it's the child changed last of those with a request that wasn't
+// pending at t's report before: a report of done or failed brings none.
+func blockedReport(t thread, kids []thread, asked map[api.ID]bool) (thread, bool) {
 	if tr := t.Transcript; tr != nil {
 		for i := len(tr.Entries) - 1; i >= 0; i-- {
 			if r, ok := tr.Entries[i].(*client.ReportEntry); ok {
@@ -81,12 +84,27 @@ func (a *app) blockedReport(t thread) (thread, bool) {
 		}
 	}
 	var last thread
-	for _, k := range a.kidsOf()[t.id()] {
-		if len(k.View.Requests) > 0 && (last.Thread == nil || k.View.UpdatedAt.After(last.View.UpdatedAt)) {
+	for _, k := range kids {
+		fresh := slices.ContainsFunc(k.View.Requests, func(r api.Request) bool { return !asked[r.ID] })
+		if fresh && (last.Thread == nil || k.View.UpdatedAt.After(last.View.UpdatedAt)) {
 			last = k
 		}
 	}
 	return last, last.Thread != nil
+}
+
+// pending is the requests kids have pending.
+func pending(kids []thread) map[api.ID]bool {
+	var ids map[api.ID]bool
+	for _, k := range kids {
+		for _, r := range k.View.Requests {
+			if ids == nil {
+				ids = map[api.ID]bool{}
+			}
+			ids[r.ID] = true
+		}
+	}
+	return ids
 }
 
 // showNotification shows a desktop notification. Showing may wait on the
