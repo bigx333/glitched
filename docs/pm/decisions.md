@@ -4,6 +4,7 @@ Newest first. Each entry has the date, who decided, and the decision.
 
 ## 2026-11-04
 
+- **PM (Claude).** A new message to a Settled thread, from any client, moves it back to the inbox and runs, in one engine commit. The GUI composer already behaves this way. Work queued before the settle stays cancelled. This follows Nelson's rule that the user may message any thread.
 - **Nelson.** The engine deletes a live thread: Delete ends the run as `abandoned` and closes its agent in the same commit. This reverses main's rule "the engine deletes no live thread". The thread menu still hides Delete while the thread's own agent works.
 - **Nelson.** Without a GPU, the model picker's glow draws no blur halo, for CI speed (root package about 1000 s down to about 210 s). GPU windows are unchanged. The halo comes back later with a MyGo v0.7 upgrade (its `Cache` API) in its own PR.
 - **PM (Claude).** Fix round 1 rules on #22, all in the engine, with no api or schema change: a halt on a stopping run sends no second interrupt (fixes #15); Settle cancels the queue and stops the run in one commit, and a Settled thread starts nothing until moved back to the inbox; Delete ends a live run in its own commit (fixes #16).
