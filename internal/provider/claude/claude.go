@@ -67,16 +67,20 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	return g, nil
 }
 
-// Reconcile finds no run: a Claude Code process does not outlive the engine
-// that started it in a way this adapter can reattach to.
-func (a *Adapter) Reconcile(context.Context, provider.RuntimeIdentity) (provider.Recovery, error) {
-	return provider.Lost{Reason: "Claude Code runs end with the engine that started them"}, nil
+// Reconcile stops what is left of the run: nothing can reattach to a
+// claude whose pipes died with the engine that started it. The run is
+// Lost, and the thread's next turn resumes its Claude session.
+func (a *Adapter) Reconcile(ctx context.Context, id provider.RuntimeIdentity) (provider.Recovery, error) {
+	if stopRun(ctx, id.Run.String()) {
+		return provider.Lost{Reason: "Claude Code was stopped: the engine that ran it is gone."}, nil
+	}
+	return provider.Lost{Reason: "Claude Code no longer runs."}, nil
 }
 
 // Command is how glitched runs claude: with the environment it has, less
-// any entrypoint it inherited, plus its own. Under a test without the
-// claudelive tag, it panics for any claude but the test binary; in a
-// program a test started, the command fails to start instead.
+// any entrypoint or run it inherited, plus its own entrypoint. Under a test
+// without the claudelive tag, it panics for any claude but the test binary;
+// in a program a test started, the command fails to start instead.
 //
 // Once ctx ends, claude gets SIGTERM, and SIGKILL killGrace later. Claude
 // Code runs each tool call in a shell of its own session, which no signal
@@ -86,8 +90,9 @@ func Command(ctx context.Context, bin string, args ...string) *exec.Cmd {
 	cmd.Err = guard(bin)
 	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		k, _, _ := strings.Cut(kv, "=")
-		return strings.EqualFold(k, "CLAUDE_CODE_ENTRYPOINT")
+		return strings.EqualFold(k, "CLAUDE_CODE_ENTRYPOINT") || k == runEnv
 	}), "CLAUDE_CODE_ENTRYPOINT=glitched")
+	cmd.SysProcAttr = sysProcAttr()
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = killGrace
 	return cmd
@@ -96,6 +101,12 @@ func Command(ctx context.Context, bin string, args ...string) *exec.Cmd {
 // killGrace is how long claude has to stop, once asked, before it is
 // killed.
 const killGrace = 2 * time.Second
+
+// runEnv names, in the environment of a run's claude, the run. Every process
+// claude starts inherits it, so the engine can find them all, tool shells
+// in sessions of their own included, after the engine that started them is
+// gone.
+const runEnv = "GLITCHED_CLAUDE_RUN"
 
 func (a *Adapter) binary() (string, error) {
 	if a.Path != "" {
