@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
 	"glitched/internal/client"
+	"glitched/internal/plain"
 )
 
 // Child threads: an agent's thread can start others on its engine (the
@@ -342,8 +344,15 @@ func (a *app) reportCard(c *ui.Context, t thread, key string, e entry) {
 						ui.Text(c, n.Title).FontSize(12.5).FontWeight(600).TextColor(palette.text).SingleLine().Shrink(1)
 						ui.Text(c, state).FontSize(11).FontWeight(500).TextColor(col).Shrink(0)
 					})
-					if n.Outcome != "" {
-						ui.Text(c, n.Outcome).FontSize(12).TextColor(palette.muted).LineHeight(1.4)
+					outcome, escaped := n.Outcome, false
+					if n.Kind == api.ReportBlocked {
+						outcome, escaped = askedLine(n.Outcome)
+					}
+					if outcome != "" {
+						ui.Text(c, outcome).FontSize(12).TextColor(palette.muted).LineHeight(1.4)
+					}
+					if escaped {
+						asciiNotice(c)
 					}
 				})
 				if found {
@@ -356,6 +365,18 @@ func (a *app) reportCard(c *ui.Context, t thread, key string, e entry) {
 			}
 		}
 	})
+}
+
+// askedLine is a blocked report's line, what the child asks, as its card
+// shows it: printable ASCII, and whether it escaped any. The ellipsis of
+// a line the engine cut is the app's, not the agent's.
+func askedLine(s string) (string, bool) {
+	s, cut := strings.CutSuffix(s, "…")
+	s, escaped := plain.Text(s, false)
+	if cut {
+		s += "…"
+	}
+	return s, escaped
 }
 
 // addReport joins a report to a run of them, one card's, a child's later report
