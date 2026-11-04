@@ -24,10 +24,10 @@ A PR merges to main by rebase-merge only when all of these hold at its current h
 | 3 | Fix verified high-severity findings on `land/pr-2` | Done in 2 fix rounds. Round 3: no high (Opus 1 low, Sol 2 medium: one filed as #23, one dismissed and filed as design note #24). Real-app runs passed 6/6 at 20dfea6 and at 2cc7903. | Done. |
 | 4 | Land the copy, close #2 with a link | **Done 2026-11-04 05:38Z.** #22 rebase-merged at 2cc7903; main is 604b182, linear. #2 closed with a link. #15 and #16 closed by the merge. Main CI green at 604b182 (run 41780484873: vet, test, race). | The copy is merged on main by rebase-merge, main's CI is green, #2 is closed with a link. |
 | 5 | HTML plan for the Claude Code adapter (in core) | Done. Nelson answered Q5 on 2026-11-04. | Done. |
-| 6 | Claude Code adapter, 5 slices | Slice 1 (provider mux, `feat/provider-mux`) running. Slices 2 to 5 follow in order. | Each slice's done-when from `/tmp/glitched-pm/adapter-context.md`. |
+| 6 | Claude Code adapter, 5 slices | Slice 1 merged (#36). Slice 2 (#42) is in fix round 1. AskUserQuestion: the plan is answered (Q6), PR A is being built, PR B comes after slice 3. | Each slice's done-when in `/tmp/glitched-pm/adapter-context.md`. |
 | 7 | Agent spawn tool, in core | Waiting on task 6 | To be set by its plan. |
-| 8 | Child-thread bugs #14 (PR #33), #23 (PR #27) | #27 reviewed, no high, waits on CI. #33 in review. | Each merges under the rule. |
-| 9 | Browser bugs #17 (PR #26), #18 (PR #29), #19 (PR #30), #20 (PR #28) | #26 and #28 reviewed, no high, wait on CI. #29 in fix round 1. #30 in review. | Same as task 8. |
+| 8 | Child-thread bugs #14, #23 | #23 merged (#27). #14 moved to the Protocol 5 PR (`feat/thread-last-report`) after #33's three client-side designs failed review. | #14 closes with the Protocol 5 PR. |
+| 9 | Browser bugs #17 to #20 | **Done.** #26 (#17), #29 (#18), #40 (#19, the rebase of #30), #28 (#20), all merged 2026-11-04. | Done. |
 | 12 | Doc nit on Mark settled for a waiting thread | Filed as #25 | The doc matches the menu. |
 | 14 | Follow-ups filed 2026-11-04: #31 (layout fsync on UI thread), #32 (settled-thread message edges), #34 (transport test flaky under load), #35 (script at document start) | Open | Triage after the adapter. |
 | 13 | Refuse an unknown effect kind before leasing it | Filed as #24 (design note) | A build boots cleanly on a store with an unknown kind. |
@@ -36,4 +36,5 @@ A PR merges to main by rebase-merge only when all of these hold at its current h
 
 ## Landed
 
+- 2026-11-04: #27 (#23), #26 (#17), #28 (#20), #29 (#18), #36 (adapter slice 1), #40 (#19).
 - 2026-11-04: #22 (linear copy of Cahil's #2) at 2cc7903. api.Protocol 4, schema 5. Reviews: https://github.com/bigx333/glitched/pull/2#issuecomment-6620473978, https://github.com/bigx333/glitched/pull/22#issuecomment-6622283563, https://github.com/bigx333/glitched/pull/22#issuecomment-6623521211
