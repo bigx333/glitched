@@ -156,6 +156,13 @@ type Surfaced struct {
 	Body         json.RawMessage
 }
 
+// Withdrawn is a request the agent stopped waiting on, by the provider's id.
+type Withdrawn struct {
+	Run    api.ID
+	Dedup  string
+	Reason string
+}
+
 type Delivered struct{ Request api.ID }
 
 type DeliveryFailed struct {
@@ -200,6 +207,7 @@ func (Ended) observed()          {}
 func (Delta) observed()          {}
 func (Work) observed()           {}
 func (Surfaced) observed()       {}
+func (Withdrawn) observed()      {}
 func (Delivered) observed()      {}
 func (DeliveryFailed) observed() {}
 func (Steered) observed()        {}
