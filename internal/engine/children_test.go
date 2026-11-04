@@ -164,3 +164,14 @@ func TestAStoppedRunReportsNothing(t *testing.T) {
 		}
 	}
 }
+
+// A settled thread takes no child: settling stopped its agent, and
+// nothing in a settled tree starts.
+func TestASettledParentTakesNoChild(t *testing.T) {
+	parent := newThread(t)
+	parent.must(api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+	var rej *api.RejectedError
+	if err := engine.CheckChild([]engine.Thread{parent.th}, api.ThreadCreate{Parent: parent.th.ID}); !errors.As(err, &rej) {
+		t.Errorf("a child of a settled thread: %v, want a rejection", err)
+	}
+}

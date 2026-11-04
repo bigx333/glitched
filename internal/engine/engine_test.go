@@ -435,3 +435,88 @@ func TestAHaltStartsNothingAfter(t *testing.T) {
 		t.Fatalf("after a plain interrupt the live run is %+v, want the queued message's", r)
 	}
 }
+
+// A halt on a run already stopping, its interrupt taken by the agent,
+// cancels what waits its turn and asks nothing more of the run: the
+// agent's end still ends it. Only a plain interrupt, asked again, gives up
+// on the run.
+func TestAHaltOnAStoppingRunLetsItEnd(t *testing.T) {
+	f, run := running(t)
+	f.must(api.TurnInterrupt{})
+	f.observe(engine.InterruptSent{Run: run})
+	next := f.must(dispatch("next", api.AfterActive))
+	if _, effects, err := f.submit(api.TurnInterrupt{Drop: true}); err != nil || len(effects) != 0 {
+		t.Fatalf("halt on a stopping run: %v with effects %v, want nothing new", err, effects)
+	}
+	if m, _ := f.th.Message(next); m.State != engine.QueueCancelled {
+		t.Errorf("the follow-up is %v after the halt, want cancelled", m.State)
+	}
+	f.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted})
+	if r := f.th.Live(); r != nil {
+		t.Errorf("run is %v, want ended", r.State)
+	}
+}
+
+// Settling a thread stops its run and cancels what waits its turn, in the
+// settle's own commit. A settled thread starts no turn: a message sent to
+// it waits until the thread is back in the inbox.
+func TestASettledThreadStartsNothing(t *testing.T) {
+	f, run := running(t)
+	next := f.must(dispatch("next", api.AfterActive))
+	if _, effects, err := f.submit(api.InboxSet{Disposition: api.Disposition{State: api.Settled}}); err != nil || len(effects) != 1 {
+		t.Fatalf("settle: %v with effects %v, want one interrupt", err, effects)
+	}
+	if r := f.th.Live(); r == nil || r.State != engine.RunStopping {
+		t.Fatalf("the run after the settle: %+v, want stopping", r)
+	}
+	if m, _ := f.th.Message(next); m.State != engine.QueueCancelled {
+		t.Errorf("the follow-up is %v after the settle, want cancelled", m.State)
+	}
+	f.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted})
+	if r := f.th.Live(); r != nil {
+		t.Fatalf("a turn started on a settled thread: %+v", *r)
+	}
+	later := f.must(dispatch("later", api.StartNow))
+	if r := f.th.Live(); r != nil {
+		t.Fatalf("a message sent to a settled thread started its turn: %+v", *r)
+	}
+	f.must(api.InboxSet{Disposition: api.Disposition{}})
+	if r := f.th.Live(); r == nil || r.ID != later {
+		t.Fatalf("back in the inbox, the live run is %+v, want the waiting message's", r)
+	}
+
+	g, run := running(t)
+	g.must(api.TurnInterrupt{})
+	g.observe(engine.InterruptSent{Run: run})
+	if _, effects, err := g.submit(api.InboxSet{Disposition: api.Disposition{State: api.Settled}}); err != nil || len(effects) != 0 {
+		t.Fatalf("settling a stopping run: %v with effects %v, want nothing new", err, effects)
+	}
+	g.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted})
+	if r := g.th.Live(); r != nil {
+		t.Errorf("a stopped run settled is %v, want ended", r.State)
+	}
+}
+
+// Deleting a live thread ends its run in the delete's commit, abandoned,
+// whatever state it was in, so no run outlives its thread.
+func TestDeletingALiveThreadEndsItsRun(t *testing.T) {
+	plain, _ := running(t)
+	plain.must(dispatch("next", api.AfterActive))
+	stopping, run := running(t)
+	stopping.must(api.TurnInterrupt{})
+	stopping.observe(engine.InterruptSent{Run: run})
+	uncertain, run := running(t)
+	uncertain.observe(engine.Reconciled{Run: run})
+	asking, _, _ := waiting(t)
+	for name, f := range map[string]*thread{"running": plain, "stopping": stopping, "uncertain": uncertain, "waiting": asking} {
+		if _, effects, err := f.submit(api.ThreadDelete{}); err != nil || len(effects) != 0 {
+			t.Fatalf("delete while %s: %v with effects %v, want deleted", name, err, effects)
+		}
+		if !f.th.Deleted || f.th.Live() != nil {
+			t.Fatalf("delete while %s: deleted %v, live %+v; want deleted with no run", name, f.th.Deleted, f.th.Live())
+		}
+		if got := f.th.Runs[len(f.th.Runs)-1].Outcome; got != api.OutcomeAbandoned {
+			t.Errorf("delete while %s ended the run %v, want abandoned", name, got)
+		}
+	}
+}

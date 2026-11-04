@@ -3,6 +3,7 @@ package runtime_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
@@ -134,5 +135,59 @@ func TestADeletedAncestorEndsTheLine(t *testing.T) {
 	}
 	if _, err := newChild(t, n.h, line[1], api.AccessAsk); err == nil {
 		t.Error("a child of a deleted thread was created")
+	}
+}
+
+// A follow-up another client queues while a thread is being stopped, just
+// before it's settled, never starts: the settled thread is done with.
+func TestASettledThreadStartsNothingQueuedBeforeIt(t *testing.T) {
+	g := newGated(fake.Turn(true))
+	release := make(chan struct{})
+	g.setGate(func(_ api.ID, a provider.Action) <-chan struct{} {
+		if _, ok := a.(provider.Interrupt); ok {
+			return release
+		}
+		return nil
+	})
+	n := start(t, dbPath(t), g)
+	parent := newThread(t, n.h)
+	c, err := newChild(t, n.h, parent, api.AccessAsk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submit(t, n.h, c, dispatch("go", api.StartNow))
+	until(t, n.h, c, "the approval", waiting)
+	submit(t, n.h, c, api.TurnInterrupt{Drop: true})
+	submit(t, n.h, c, dispatch("then this", api.AfterActive))
+	submit(t, n.h, c, api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+	close(release)
+	until(t, n.h, c, "the stop", func(api.Thread) bool { return count(events(t, n.h, c), "turn.ended") == 1 })
+	time.Sleep(200 * time.Millisecond)
+	v := until(t, n.h, c, "the child", func(api.Thread) bool { return true })
+	if admitted := count(events(t, n.h, c), "turn.admitted"); admitted != 1 || v.Run != api.RunIdle || v.Disposition.State != api.Settled {
+		t.Fatalf("child settled=%v, run %v, admitted turns=%d; want settled, idle, one turn",
+			v.Disposition.State == api.Settled, v.Run, admitted)
+	}
+}
+
+// Deleting a thread whose agent works ends the run and closes the agent:
+// nothing of the thread is left running.
+func TestDeletingAWorkingThreadClosesItsAgent(t *testing.T) {
+	ad := fake.New(fake.Turn(true))
+	n := start(t, dbPath(t), ad)
+	thread := newThread(t, n.h)
+	run := submit(t, n.h, thread, dispatch("go", api.StartNow)).Command
+	until(t, n.h, thread, "the approval", waiting)
+	submit(t, n.h, thread, api.ThreadDelete{})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		rec, err := ad.Reconcile(ctx, provider.RuntimeIdentity{Thread: thread, Run: run})
+		if _, lost := rec.(provider.Lost); lost && err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the deleted thread's agent still runs: %T %v", rec, err)
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }
