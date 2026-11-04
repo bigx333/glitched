@@ -48,6 +48,21 @@ func TestRunAsksEachQuestion(t *testing.T) {
 	}
 }
 
+// A line that answers nothing, only commas, asks the question again
+// rather than send what the engine refuses, which would end run.
+func TestRunAsksAgainOnALineThatAnswersNothing(t *testing.T) {
+	for _, in := range []string{",\n1\n2\n", "1\n , ,\n2\n"} {
+		var out strings.Builder
+		got := askQuestions(bufio.NewReader(strings.NewReader(in)), &out, storeAndTests)
+		if want := (api.Answers{Answers: []api.Answer{{Picked: []string{"SQLite"}}, {Picked: []string{"Race"}}}}); !reflect.DeepEqual(got, want) {
+			t.Errorf("%q answered %+v, want %+v", in, got, want)
+		}
+		if !strings.Contains(out.String(), "That answers nothing.") {
+			t.Errorf("%q: the prompt didn't ask again:\n%s", in, out.String())
+		}
+	}
+}
+
 // With -yes, run dismisses the questions, and the turn goes on.
 func TestRunYesDismissesQuestions(t *testing.T) {
 	dir, ep := engine(t, fake.New(fake.Asking()))
