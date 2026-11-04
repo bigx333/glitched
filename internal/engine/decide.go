@@ -147,6 +147,12 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	if d.t.Access > ceiling() {
 		return rejected("thread access is above the client's ceiling")
 	}
+	// A run left on a settled thread is the one the settle stopped. A
+	// message there steers nothing and can't start before that run ends, so
+	// it waits for it.
+	if d.t.settled() && d.t.Live() != nil && (m.Mode == api.SteerActive || m.Mode == api.StartNow) {
+		m.Mode = api.AfterActive
+	}
 	// A steer never waits its turn: one the live run can't take now would
 	// start a turn of its own once the run ends, after the user moved on.
 	if live := d.t.Live(); m.Mode == api.SteerActive && live != nil && !steerable[live.State] {
