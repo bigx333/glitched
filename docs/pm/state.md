@@ -18,7 +18,7 @@ A PR merges to main by rebase-merge only when all of these hold at its current h
 
 | # | Task | Status | Done when |
 |---|---|---|---|
-| 1 | Review #2 at 9ab4757 (round 1, whole change) | Sol done: 2 high verified, 1 medium dismissed by Nelson. Opus still running. | Both reports are in, verified, and posted as PR comments. |
+| 1 | Review #2 at 9ab4757 (round 1, whole change) | Done. Sol: 2 high verified, 1 dismissed. Opus: 1 cause (Halt on a signalled run goes uncertain), blocking as a regression of main. Posted on #2. | Both reports are in, verified, and posted as PR comments. |
 | 2a | Make the root test package fit CI's 20-minute limit | Waiting on task 2. CI failed on 9ab4757: root package timed out at 1200 s (main: 799 s). | CI `test` is green on `land/pr-2` with margin, TestShot renders unchanged. |
 | 2 | Linear copy of #2 on `land/pr-2`, opened as a new PR | Running. Worker started 2026-11-04. | `git diff 9ab4757 origin/land/pr-2` is empty, GitHub reports `rebaseable: true`, local vet, test and race pass. |
 | 3 | Fix verified high-severity findings on `land/pr-2` | Waiting on tasks 1 and 2 | A fresh review of the fix diff has no high-severity finding. At most three fix rounds. |
