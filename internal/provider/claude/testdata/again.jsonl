@@ -1,0 +1,4 @@
+{"argv":["-p","--verbose","--input-format","stream-json","--output-format","stream-json","--include-partial-messages","--permission-mode","default","--disallowedTools","AskUserQuestion","--model","haiku","--session-id","01a1a6d1-5d91-8b7b-b877-d6626ccc0835"]}
+{"sent":{"request":{"subtype":"initialize"},"request_id":"glitched-init","type":"control_request"}}
+{"stderr":"Error: Session ID 01a1a6d1-5d91-8b7b-b877-d6626ccc0835 is already in use."}
+{"exit":1}
