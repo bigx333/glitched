@@ -22,12 +22,17 @@ type message struct {
 	Message         *struct {
 		Content blocks `json:"content"`
 	} `json:"message"` // assistant, user
-	Error    string    `json:"error"` // assistant: why a synthetic reply stands in for the model's
-	IsError  bool      `json:"is_error"`
-	Result   string    `json:"result"`
-	Errors   []string  `json:"errors"`
-	Usage    usage     `json:"usage"`
-	Response *response `json:"response"` // control_response
+	Error     string    `json:"error"` // assistant: why a synthetic reply stands in for the model's
+	IsError   bool      `json:"is_error"`
+	Result    string    `json:"result"`
+	Errors    []string  `json:"errors"`
+	Usage     usage     `json:"usage"`
+	Response  *response `json:"response"`   // control_response
+	RequestID string    `json:"request_id"` // control_request, control_cancel_request
+	Request   *struct {
+		Subtype string `json:"subtype"`
+		canUseTool
+	} `json:"request"` // control_request
 }
 
 type streamEvent struct {

@@ -18,6 +18,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/provider"
 	"glitched/internal/provider/claude"
+	"glitched/internal/provider/claude/transcript"
 	"glitched/internal/runtime"
 	"glitched/internal/store"
 )
@@ -33,6 +34,9 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	if code, teeing := transcript.Tee(); teeing {
+		os.Exit(code)
+	}
 	if path := os.Getenv(envFake); path != "" {
 		os.Exit(fakeClaude(path))
 	}
@@ -76,6 +80,7 @@ func fakeClaude(path string) int {
 			if err != nil {
 				return 0
 			}
+			transcript.Got(got)
 			if want := kind(e["sent"]); kind(got) != want {
 				fmt.Fprintf(os.Stderr, "fake claude: got %s on stdin, want %s\n", kind(got), want)
 				return 3
@@ -88,9 +93,12 @@ func fakeClaude(path string) int {
 			fmt.Fprintln(os.Stderr, s)
 		case e["eof"] != nil:
 			for {
-				if _, err := in.ReadBytes('\n'); err != nil {
+				got, err := in.ReadBytes('\n')
+				if err != nil {
 					break
 				}
+				transcript.Got(got)
+				fmt.Fprintf(os.Stderr, "fake claude: got %s on stdin, want its end\n", kind(got))
 			}
 		case e["tool"] != nil:
 			// Claude Code runs a tool call in a shell of its own session,
@@ -217,47 +225,11 @@ func submit(t *testing.T, h *runtime.Host, thread api.ID, body api.Intent) {
 	}
 }
 
-// turn sends text and returns what the thread's log holds of the run that
-// took it, once the turn ended.
-type turnLog struct {
-	text  string
-	work  []api.WorkItem
-	ended api.TurnEnded
-}
-
-func turn(t *testing.T, h *runtime.Host, thread api.ID, text string) turnLog {
+// turn sends text and returns what the thread's log holds of the run
+// that took it, once the turn ended. Nobody answers its requests.
+func turn(t *testing.T, h *runtime.Host, thread api.ID, text string) promptLog {
 	t.Helper()
-	msg := api.NewID()
-	if _, err := h.Submit(ctx, api.Command{ID: msg, Target: thread, Body: api.MessageDispatch{Text: text, Mode: api.StartNow}}); err != nil {
-		t.Fatal(err)
-	}
-	for deadline := time.Now().Add(turnWait); ; time.Sleep(5 * time.Millisecond) {
-		snap, err := h.Read(ctx, api.Query{Thread: thread})
-		if err != nil {
-			t.Fatal(err)
-		}
-		var l turnLog
-		for _, e := range snap.Events {
-			switch b := must(e.Decode()).(type) {
-			case api.AssistantDelta:
-				if b.Run == msg {
-					l.text += b.Text
-				}
-			case api.WorkItem:
-				if b.Run == msg {
-					l.work = append(l.work, b)
-				}
-			case api.TurnEnded:
-				if b.Run == msg {
-					l.ended = b
-					return l
-				}
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the turn did not end: %+v", l)
-		}
-	}
+	return playOn(t, h, thread, text, func(requestLog) bool { return false })
 }
 
 // streamed is the text a transcript's one text block streamed.
@@ -288,7 +260,10 @@ func TestATurnStreamsIntoTheThread(t *testing.T) {
 	h := host(t, nil)
 	thread := newThread(t, h, api.AccessAsk)
 
-	got := turn(t, h, thread, "Read hello.txt. Then use the Write tool to create out.txt containing ok. Then reply done.")
+	got := playOn(t, h, thread, "Read hello.txt. Then use the Write tool to create out.txt containing ok. Then reply done.", func(r requestLog) bool {
+		race(t, h, thread, r.opened, func(int) bool { return false })
+		return false
+	})
 
 	if got.ended.Outcome != api.OutcomeCompleted || got.ended.Tokens == 0 {
 		t.Errorf("turn ended %+v, want completed with the tokens it used", got.ended)
@@ -303,7 +278,7 @@ func TestATurnStreamsIntoTheThread(t *testing.T) {
 		{Item: "write", Kind: "edit", Title: "Write out.txt", Status: api.WorkFailed, Path: "out.txt"},
 	}
 	if len(got.work) != len(want) {
-		t.Fatalf("work items %+v, want %d: the read, and the write Ask mode denied", got.work, len(want))
+		t.Fatalf("work items %+v, want %d: the read, and the write the user denied", got.work, len(want))
 	}
 	for i, w := range got.work {
 		if w.Kind != want[i].Kind || w.Title != want[i].Title || w.Status != want[i].Status || w.Path != want[i].Path {
@@ -313,8 +288,8 @@ func TestATurnStreamsIntoTheThread(t *testing.T) {
 	if got.work[0].Item != got.work[1].Item || got.work[2].Item != got.work[3].Item || got.work[0].Item == got.work[2].Item {
 		t.Errorf("work items %+v, want each tool use's start and end on one item", got.work)
 	}
-	if !strings.Contains(got.work[3].Output, "haven't granted it yet") {
-		t.Errorf("the denied write shows %q, want Claude Code's reason", got.work[3].Output)
+	if !strings.Contains(got.work[3].Output, "denied this tool call") {
+		t.Errorf("the denied write shows %q, want the reason glitched gave", got.work[3].Output)
 	}
 }
 
@@ -413,6 +388,10 @@ func TestAccessPicksThePermissionMode(t *testing.T) {
 		json.Unmarshal([]byte(l), &args)
 		if i := slices.Index(args, "--permission-mode"); i >= 0 {
 			modes = append(modes, args[i+1])
+		}
+		// Whatever the mode leaves undecided comes to glitched to ask.
+		if i := slices.Index(args, "--permission-prompt-tool"); i < 0 || args[i+1] != "stdio" {
+			t.Errorf("claude ran with %q, want its prompts on stdio", args)
 		}
 	}
 	if want := []string{"default", "acceptEdits", "bypassPermissions"}; !slices.Equal(modes, want) {
