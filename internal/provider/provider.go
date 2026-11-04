@@ -13,6 +13,11 @@ import (
 // ErrUnsupported is what Do returns for an action the provider can't take.
 var ErrUnsupported = errors.New("provider: unsupported action")
 
+// ErrWithdrawn is what Do returns for a Respond to a request the agent
+// stopped waiting on before the answer reached it, as when the user's own
+// hook decided first. The answer went nowhere, and the run goes on.
+var ErrWithdrawn = errors.New("The agent stopped waiting before the answer reached it.")
+
 type Info struct {
 	Name    string
 	Version string

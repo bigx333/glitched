@@ -5,6 +5,7 @@ package claude_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -187,8 +188,8 @@ func TestAnAnswerClaudeCodeNoLongerWaitsOnFails(t *testing.T) {
 					break
 				}
 			}
-			if err := ag.Do(ctx, provider.Respond{Request: r.ID, Answer: json.RawMessage(`{"allow":true}`)}); err == nil {
-				t.Error("an answer Claude Code no longer waited on went through")
+			if err := ag.Do(ctx, provider.Respond{Request: r.ID, Answer: json.RawMessage(`{"allow":true}`)}); !errors.Is(err, provider.ErrWithdrawn) {
+				t.Errorf("an answer Claude Code no longer waited on returned %v, want ErrWithdrawn", err)
 			}
 			closeCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 			defer cancel()

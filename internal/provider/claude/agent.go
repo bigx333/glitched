@@ -222,7 +222,7 @@ func (g *Agent) respondLocked(ctx context.Context, a provider.Respond) error {
 	case state == answered:
 		return nil
 	case state == gone:
-		return errGone
+		return provider.ErrWithdrawn
 	}
 	reply, err := p.reply(a.Request, a.Answer)
 	if err != nil {
