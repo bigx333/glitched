@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -74,15 +75,19 @@ func ParseQuestions(body json.RawMessage) (Questions, error) {
 }
 
 // ParseAnswers reads an answer to a question request, and refuses
-// anything else, such as an approval's {"allow":true}.
+// anything else, such as an approval's {"allow":true}, or null, which
+// would read as no answers and so dismiss them.
 func ParseAnswers(raw json.RawMessage) (Answers, error) {
-	var a Answers
+	var a *Answers
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	if err := d.Decode(&a); err != nil {
 		return Answers{}, fmt.Errorf("answers: %w", err)
 	}
-	return a, nil
+	if a == nil {
+		return Answers{}, errors.New("answers: null")
+	}
+	return *a, nil
 }
 
 // Fit is nil when a answers q: no answers, a dismissal, or one per
