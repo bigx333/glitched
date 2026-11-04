@@ -3,6 +3,7 @@ package engine_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -548,5 +549,45 @@ func TestAMessageBringsASettledThreadBack(t *testing.T) {
 		if r == nil || r.ID != msg || len(effects) != 1 {
 			t.Errorf("mode %v: run %+v with effects %v, want the message started", mode, r, effects)
 		}
+	}
+}
+
+// A message sent before the settle's stop lands brings the thread back in
+// any mode. It waits for the stopped run to end and then starts, or stays
+// held if deferred; what waited before the settle stays cancelled.
+func TestAMessageAfterSettleWaitsForTheStoppedRun(t *testing.T) {
+	for _, mode := range []api.DispatchMode{api.AfterActive, api.SteerActive, api.StartNow, api.RestartActive, api.Defer} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			f, run := running(t)
+			old := f.must(dispatch("before settle", api.AfterActive))
+			f.must(api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+			f.observe(engine.InterruptSent{Run: run})
+			msg, effects, err := f.submit(dispatch("after settle", mode))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.th.Disposition.State != api.Open || len(effects) != 0 {
+				t.Errorf("the thread is %v with effects %v, want back in the inbox and nothing sent to the stopping run", f.th.Disposition.State, effects)
+			}
+			evs, effects, err := engine.Observe(f.th, engine.Ended{Run: run, Outcome: api.OutcomeInterrupted}, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.fold(evs)
+			if m, _ := f.th.Message(old); m.State != engine.QueueCancelled {
+				t.Errorf("the message from before the settle is %v, want cancelled", m.State)
+			}
+			r := f.th.Live()
+			if mode == api.Defer {
+				if m, _ := f.th.Message(msg); r != nil || m.State != engine.QueueHeld {
+					t.Errorf("deferred: run %+v, message %v; want no run and the message held", r, m.State)
+				}
+				return
+			}
+			want := []engine.Effect{engine.StartTurn{Run: msg, Generation: 2, Text: "after settle", Workspace: f.th.Workspace, Model: f.th.Model, Access: f.th.Access}}
+			if r == nil || r.ID != msg || !reflect.DeepEqual(effects, want) {
+				t.Errorf("once the stop landed, run %+v with effects %v; want the message started", r, effects)
+			}
+		})
 	}
 }
