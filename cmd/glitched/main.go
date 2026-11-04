@@ -438,8 +438,8 @@ func run(ctx context.Context, args []string) error {
 				fmt.Print(b.Text)
 			}
 		case api.WorkItem:
-			if b.Run == runID && b.Status == api.WorkCompleted {
-				fmt.Printf("\n  ✓ %s\n", b.Title)
+			if b.Run == runID && b.Status != api.WorkStarted {
+				fmt.Printf("\n  %s %s\n", marks[b.Status], b.Title)
 			}
 		case api.RequestOpened:
 			r := api.Request{ID: b.Request, Run: b.Run, Generation: b.Generation, Kind: b.Kind, Body: b.Body}
@@ -449,6 +449,9 @@ func run(ctx context.Context, args []string) error {
 		case api.TurnEnded:
 			if b.Run != runID {
 				continue
+			}
+			if b.Error != "" {
+				fmt.Printf("\n✗ %s\n", strings.ReplaceAll(b.Error, "\n", "\n  "))
 			}
 			fmt.Printf("\n[turn ended: %s]\n", outcomes[b.Outcome])
 			return nil
@@ -466,6 +469,11 @@ var modes = map[string]api.DispatchMode{
 	"steer":   api.SteerActive,
 	"restart": api.RestartActive,
 	"defer":   api.Defer,
+}
+
+var marks = map[api.WorkStatus]string{
+	api.WorkCompleted: "✓",
+	api.WorkFailed:    "✗",
 }
 
 var outcomes = map[api.Outcome]string{
