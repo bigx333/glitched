@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -76,27 +77,44 @@ func (a *app) notifyAsked(e *client.Env, parent, child api.ID) {
 }
 
 // askBody is what a request asks, in a notification's line, its agent's
-// words as printable ASCII: "Claude asks: …", or what it wants to do.
+// words as printable ASCII: "Claude asks: …", or what it wants to do. It
+// says how many lines it leaves out, and under the card's flag when it
+// escaped any.
 func askBody(agent string, r api.Request) string {
+	escaped := false
 	line := func(s string) string {
-		s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
-		if r := []rune(s); len(r) > 120 {
-			s = string(r[:117]) + "..."
+		first, rest, cut := strings.Cut(strings.TrimSpace(s), "\n")
+		if r := []rune(first); len(r) > 120 {
+			first = string(r[:117]) + "..."
 		}
-		s, _ = plain.Text(s, false)
-		return s
+		first, e := plain.Text(first, false)
+		escaped = escaped || e
+		switch n := strings.Count(rest, "\n") + 1; {
+		case !cut:
+		case n == 1:
+			first += " ... (1 more line)"
+		default:
+			first += fmt.Sprintf(" ... (%d more lines)", n)
+		}
+		return first
 	}
-	if q, err := api.ParseQuestions(r.Body); err == nil {
-		return agent + " asks: " + line(q.Questions[0].Text)
-	}
+	var body string
+	q, err := api.ParseQuestions(r.Body)
 	b, ok := askOf(r.Body)
 	switch {
+	case err == nil:
+		body = agent + " asks: " + line(q.Questions[0].Text)
 	case !ok:
-		return agent + " needs you"
+		body = agent + " needs you"
 	case b.Command != "":
-		return agent + " wants to run " + line(b.Command)
+		body = agent + " wants to run " + line(b.Command)
+	default:
+		body = strings.TrimSpace(agent + " wants to " + line(b.Operation) + " " + line(b.Path))
 	}
-	return strings.TrimSpace(agent + " wants to " + line(b.Operation) + " " + line(b.Path))
+	if escaped {
+		return escapes + "\n" + body
+	}
+	return body
 }
 
 // showNotification shows a desktop notification. Showing may wait on the

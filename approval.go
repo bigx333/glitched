@@ -223,7 +223,8 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 	})
 }
 
-// escapes is the card's flag on a request with text it shows as escapes.
+// escapes is the flag on a request with text its card, and its
+// notification, show as escapes.
 const escapes = `Shown with escapes: \u{…} is text outside printable ASCII, \\u{ a literal \u{`
 
 // asciiNotice says a card shows some of the agent's text as escapes.
