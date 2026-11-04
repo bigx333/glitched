@@ -2,6 +2,7 @@ package claude_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -193,5 +194,64 @@ func TestReconcileStopsAToolShellItsClaudeLeftBehind(t *testing.T) {
 	}
 	if !exits(tool, 0) {
 		t.Error("the tool shell still runs after the next engine reconciled its run")
+	}
+}
+
+// stalled is the fake claude whose Reconcile hangs until its host closes.
+type stalled struct {
+	*claude.Adapter
+	entered chan struct{}
+}
+
+func (a stalled) Reconcile(ctx context.Context, _ provider.RuntimeIdentity) (provider.Recovery, error) {
+	close(a.entered)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A thread deleted while a dead engine was starting its run may have left
+// a tool running. However many engines die before one finishes the close,
+// the one that does stops it.
+func TestADeletedRunsToolIsStoppedAfterTwoRestarts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "host.db")
+	ws := t.TempDir()
+	thread, run := queue(t, path, ws, "Run sleep 60.")
+	replay(t, "orphan-tool", "")
+	pid := processes(t)
+	ad := &claude.Adapter{Path: must(os.Executable())}
+
+	st := must(store.Open(path))
+	if _, ok, err := st.Lease(ctx, func() []api.ID { return nil }); !ok || err != nil {
+		t.Fatalf("lease the start: %v %v", ok, err)
+	}
+	ag := must(ad.Open(ctx, provider.SessionSpec{Thread: thread, Run: run, Workspace: ws}))
+	defer ag.Close(ctx)
+	if err := ag.Do(ctx, provider.Start{Text: "Run sleep 60."}); err != nil {
+		t.Fatal(err)
+	}
+	tool := waitFor(t, pid, "tool")
+	if _, err := st.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadDelete{}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	syscall.Kill(pid("claude"), syscall.SIGKILL)
+	if !exits(pid("claude"), 3*time.Second) || exits(tool, 200*time.Millisecond) {
+		t.Fatal("want claude gone and its tool shell still running")
+	}
+
+	st = must(store.Open(path))
+	second := stalled{Adapter: ad, entered: make(chan struct{})}
+	h := must(runtime.New(ctx, st, provider.Mux{"claude": second}))
+	select {
+	case <-second.entered:
+	case <-time.After(turnWait):
+		t.Fatal("the second engine never looked for the deleted run's agent")
+	}
+	h.Close()
+	st.Close()
+
+	hostAt(t, path, ad)
+	if !exits(tool, 6*time.Second) {
+		t.Error("the deleted run's tool shell still runs after the third engine closed it")
 	}
 }
