@@ -2,7 +2,9 @@
 
 Newest first. Answer under each question, or in the PM thread.
 
-## Q5 (2026-11-04, open). Claude Code adapter plan: five decisions
+No open questions.
+
+## Q5 (2026-11-04, answered; see decisions.md). Claude Code adapter plan: five decisions
 
 The plan is `/tmp/glitched-plans/claude-adapter.packed.html` (local file, not committed). Each decision sits on the claim it changes. The PM's recommendation is first in each.
 

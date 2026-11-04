@@ -4,6 +4,16 @@ Newest first. Each entry has the date, who decided, and the decision.
 
 ## 2026-11-04
 
+- **Nelson (Q5, adapter).**
+  1. Transport: `claude -p` with stream-json both ways and the SDK control protocol. Add a contract test that pins the undocumented `--permission-prompt-tool stdio` behaviour against the CLI version we ship with.
+  2. "Approve for me" runs `acceptEdits`, with new picker text.
+  3. Load the user's full Claude config, as terminal `claude` does.
+  4. Support AskUserQuestion now. Approved: `api.Protocol` 5, a question card and a new answer shape.
+  5. After a crash, kill the leftover process and answer Lost (the run becomes Uncertain). A Lost run stays resumable through its Claude session id (`--resume`). Consider a process group plus `Pdeathsig`.
+  - Ask first for any schema change beyond what this needs. Start the adapter now, and keep the bug PRs going in parallel. Same merge rule.
+- **PM (Claude).** The adapter lands as the plan's five slices, one PR each, in order, each from a fresh origin/main. AskUserQuestion may become its own PR between slices 3 and 4. Shared worker context is in `/tmp/glitched-pm/adapter-context.md`.
+- **PM (Claude).** On #29, Sol's high (a page's capturing `pagehide` listener, registered before install, stops ref invalidation) is downgraded to medium. Reason: it needs a page acting before the first snapshot, and the revived ref still names the same element in the same restored document. The proper fix (document-start injection or isolated worlds) is #35. Opus's F1 (a synthetic `pagehide` clears refs, a regression) is fixed in a round 1 fix.
+- **PM (Claude).** Merged-on-green queue: #26, #27 and #28 have reviews with no high finding. Mediums and lows went to issues #31, #32 and #34.
 - **Nelson.** Start bug issues #14, #17 to #20 and #23 now, in parallel, while the adapter plan waits on his Q5 answers. Same merge rule. Do not start the adapter yet.
 - **PM (Claude).** One worker and one PR per issue. Shared rules are in `/tmp/glitched-pm/bug-worker-rules.md`. A PR that stops being rebaseable is redone on a `-v2` branch, never by force-push or by merging main into it.
 - **PM (Claude).** Merged #22 by rebase-merge at 2cc7903 under Nelson's merge rule: CI green on Ferrum GARM (run 41777447443), round 3 Opus+Sol had no high finding, and Nelson approved Protocol 4 and schema 5. Sol's round 3 medium (#23) does not block, because main already refuses a steer to a stopping run. The downgrade finding (#24) is dismissed for this PR, because main refuses schema 5 and no user runs the PR's earlier heads.
