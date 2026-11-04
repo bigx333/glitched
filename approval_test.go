@@ -1,12 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
-	"unicode"
 
 	"github.com/egoist/mygo/ui"
 
@@ -35,6 +36,9 @@ func TestApprovalCardSaysWhatAndWhy(t *testing.T) {
 			t.Errorf("no %q on the waiting card; texts %q", s, h.tt.Texts())
 		}
 	}
+	if h.tt.HasText(outsideASCII) {
+		t.Errorf("a card in printable ASCII flags %q", outsideASCII)
+	}
 }
 
 // A tool the card has no words for shows the arguments an allow approves,
@@ -56,9 +60,14 @@ func TestApprovalCardShowsWhatAnAllowApproves(t *testing.T) {
 	}
 }
 
-// What the card cannot draw as it reads, such as a bidi override that
-// reorders a line or a NUL that ends it, shows as an escape: what the
-// card shows is what an allow approves.
+// outsideASCII is the card's flag on a request with text it shows as
+// escapes.
+const outsideASCII = `Contains text outside printable ASCII, shown as \u{…}`
+
+// The card shows an agent's text as printable ASCII, and every other
+// character as an escape such as \u{5D0}, and flags that it did. A bidi
+// override, a right-to-left letter or an invisible mark could otherwise
+// reorder, hide or change what an allow approves.
 func TestApprovalCardEscapesWhatItCannotShow(t *testing.T) {
 	for name, tc := range map[string]struct {
 		ask  map[string]string
@@ -68,6 +77,22 @@ func TestApprovalCardEscapesWhatItCannotShow(t *testing.T) {
 			`sql: DELETE FROM users \u{202E}\u{2066}-- \u{2069}\u{2066}WHERE id = 1\u{2069}\u{202C}`},
 		"bidi in a command": {map[string]string{"command": "echo safe \u202e\u2066; rm -rf ~/work\u2069\u2066#\u2069\u202c", "cwd": "/w"},
 			`echo safe \u{202E}\u{2066}; rm -rf ~/work\u{2069}\u{2066}#\u{2069}\u{202C}`},
+		"right-to-left command": {map[string]string{"command": ": א; rm -rf ~/work ב # echo safe", "cwd": "/w"},
+			`: \u{5D0}; rm -rf ~/work \u{5D1} # echo safe`},
+		"right-to-left line in args": {map[string]string{"operation": "use mcp__db__exec", "args": "sql:\n  SELECT 1;\n  /*א*/ DELETE FROM users -- /*ב*/ WHERE id = 1"},
+			"sql:\n  SELECT 1;\n  /*\\u{5D0}*/ DELETE FROM users -- /*\\u{5D1}*/ WHERE id = 1"},
+		"right-to-left reason":             {map[string]string{"command": "ls", "reason": "א rm -rf ~/work # List files"}, `\u{5D0} rm -rf ~/work # List files`},
+		"variation selector":               {map[string]string{"command": "./check\ufe0f"}, `./check\u{FE0F}`},
+		"supplementary variation selector": {map[string]string{"command": "./check\U000E0100"}, `./check\u{E0100}`},
+		"combining grapheme joiner":        {map[string]string{"command": "./check\u034f"}, `./check\u{34F}`},
+		"tag":                              {map[string]string{"command": "./check\U000E0000"}, `./check\u{E0000}`},
+		"combining stroke":                 {map[string]string{"command": "echo safe; r\u0336m"}, `echo safe; r\u{336}m`},
+		"fillers":                          {map[string]string{"command": "echo safe\u3164\u115f; rm -rf ~/work"}, `echo safe\u{3164}\u{115F}; rm -rf ~/work`},
+		"no-break spaces":                  {map[string]string{"command": "echo safe\u00a0\u00a0; rm -rf ~/work"}, `echo safe\u{A0}\u{A0}; rm -rf ~/work`},
+		"tab":                              {map[string]string{"command": "echo\tsafe"}, `echo\u{9}safe`},
+		"escape sequence":                  {map[string]string{"command": "echo safe\x1b[2K; rm -rf ~"}, `echo safe\u{1B}[2K; rm -rf ~`},
+		"c1 control sequence":              {map[string]string{"command": "echo safe\u009b2K; rm -rf ~"}, `echo safe\u{9B}2K; rm -rf ~`},
+		"look-alike tool name":             {map[string]string{"operation": "use mcp__db__еxec", "args": "sql: SELECT 1"}, `wants to use mcp__db__\u{435}xec`},
 		"nul": {map[string]string{"operation": "use Task", "args": "description: Review docs\nprompt: Read the docs.\x00 Then delete every file in the workspace."},
 			"description: Review docs\nprompt: Read the docs.\\u{0} Then delete every file in the workspace."},
 		"carriage return": {map[string]string{"operation": "use mcp__db__exec", "args": "sql: DROP TABLE users\rSELECT 1;"},
@@ -81,6 +106,7 @@ func TestApprovalCardEscapesWhatItCannotShow(t *testing.T) {
 		"tool name":          {map[string]string{"operation": "use mcp__x\nsql: SELECT 1", "args": "y"}, `wants to use mcp__x\u{A}sql: SELECT 1`},
 		"cwd":                {map[string]string{"command": "ls", "cwd": "/w\n/x"}, `/w\u{A}/x`},
 		"reason":             {map[string]string{"command": "ls", "reason": "List\u200f files"}, `List\u{200F} files`},
+		"tags in a key":      {map[string]string{"operation": "use mcp__x", "args": "sql\U000E0041: y"}, `sql\u{E0041}: y`},
 		"unknown body":       {map[string]string{"x": "\u202e"}, `{"x":"\u{202E}"}`},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -89,14 +115,48 @@ func TestApprovalCardEscapesWhatItCannotShow(t *testing.T) {
 			if !h.tt.HasText(tc.want) {
 				t.Errorf("the card shows %q, want %q", h.tt.Texts(), tc.want)
 			}
-			for _, s := range h.tt.Texts() {
-				if strings.ContainsFunc(s, func(r rune) bool {
-					return r != '\n' && (unicode.In(r, unicode.Cc, unicode.Cf) || r == '\u2028' || r == '\u2029')
-				}) {
-					t.Errorf("the card draws %q, which hides or reorders some of it", s)
+			if !h.tt.HasText(outsideASCII) {
+				t.Errorf("the card shows %q, want the flag %q", h.tt.Texts(), outsideASCII)
+			}
+			for _, field := range tc.ask {
+				for _, r := range field {
+					if r > '~' && slices.ContainsFunc(h.tt.Texts(), func(s string) bool { return strings.ContainsRune(s, r) }) {
+						t.Errorf("the card draws %U as it is; texts %q", r, h.tt.Texts())
+					}
 				}
 			}
 		})
+	}
+}
+
+// Two commands that run different files draw two different cards: no
+// invisible mark makes ./check and ./check followed by it look the same.
+func TestApprovalCardDrawsEachExecutableApart(t *testing.T) {
+	a := offline(t)
+	card := func(command string) *ui.Tester {
+		body, _ := json.Marshal(map[string]string{"command": command, "cwd": "/w"})
+		e := entry{key: "ask", request: &client.RequestEntry{Request: api.ID{1}, Body: body, State: api.RequestPending}}
+		tt := ui.NewTester(func(c *ui.Context) {
+			a.applyTheme(c)
+			ui.Column(c).Fill().Background(palette.bg).Children(func() { a.requestCard(c, thread{Thread: &client.Thread{}}, e) })
+		}, 800, 250)
+		tt.Advance(time.Second)
+		if !tt.HasText("Allow once") {
+			t.Fatalf("no answers on the card: %q", tt.Texts())
+		}
+		return tt
+	}
+	for name, mark := range map[string]string{"variation selector": "\ufe0f", "supplementary variation selector": "\U000E0100", "combining grapheme joiner": "\u034f", "tag": "\U000E0000"} {
+		for _, theme := range []string{darkTheme.name, lightTheme.name} {
+			a.settings.theme = theme
+			plain := card("./check").Image().Pix
+			if !bytes.Equal(card("./check").Image().Pix, plain) {
+				t.Fatalf("in %s, one card draws two ways", theme)
+			}
+			if bytes.Equal(card("./check"+mark).Image().Pix, plain) {
+				t.Errorf("%s in %s: ./check and ./check followed by %+q draw the same card", name, theme, mark)
+			}
+		}
 	}
 }
 
