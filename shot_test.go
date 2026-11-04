@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image/png"
@@ -23,7 +24,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|servers|engine (on the tailnet)|machines|inbox|checks|refused|plain|stuck|children
+// SCENE=empty|running|approval|asked (ASK=<request body>)|servers|engine (on the tailnet)|machines|inbox|checks|refused|plain|stuck|children
 // for the engines' threads (none started without one; refused is a
 // thread whose delete the engine refused; plain is an edit in a workspace with no
 // git; stuck is a run left uncertain, with STEER for a
@@ -274,6 +275,9 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		h.until("the turn mid-edit", func() bool { return h.tt.HasText("Edit apps/web/src/components/Sidebar.tsx") })
 	case "approval":
 		h, _ = asking(t, runTests)
+	case "asked":
+		// An approval whose body is ASK, as a provider's adapter gives it.
+		h, _ = asking(t, []provider.Event{provider.RequestOpened{ID: "ask-1", Kind: "approval", Body: json.RawMessage(os.Getenv("ASK"))}})
 	case "servers":
 		rdir := tempDir(t)
 		token, err := daemon.Pair(rdir, "gui")
