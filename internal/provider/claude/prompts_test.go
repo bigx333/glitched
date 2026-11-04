@@ -488,6 +488,9 @@ func TestStoppingATurnVoidsItsPrompt(t *testing.T) {
 	if len(got.requests) != 1 || got.requests[0].state != api.RequestInvalidated {
 		t.Errorf("requests %+v, want the one open when the turn stopped void", got.requests)
 	}
+	if got.ended.Outcome != api.OutcomeInterrupted {
+		t.Errorf("the turn ended %+v, want interrupted", got.ended)
+	}
 	if r := replies(); len(r) != 0 {
 		t.Errorf("Claude Code got %+v after the turn stopped, want nothing", r)
 	}
