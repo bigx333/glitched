@@ -1,10 +1,13 @@
 package claude_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -54,25 +57,76 @@ func waitFor(t *testing.T, pid func(string) int, role string) int {
 	}
 }
 
-// queue commits a claude thread and its first message to a new store at
-// path, which no engine serves yet.
-func queue(t *testing.T, path, text string) api.ID {
+// queue commits a claude thread in ws and its first message to a new
+// store at path, which no engine serves yet. The run takes the message's id.
+func queue(t *testing.T, path, ws, text string) (thread, run api.ID) {
 	t.Helper()
 	st, err := store.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	thread := api.NewID()
-	for _, b := range []api.Intent{
-		api.ThreadCreate{Workspace: t.TempDir(), Title: "crash", Access: api.AccessFull, Model: api.ModelRef{Provider: "claude", Model: "haiku"}},
-		api.MessageDispatch{Text: text, Mode: api.StartNow},
+	thread, run = api.NewID(), api.NewID()
+	for _, c := range []api.Command{
+		{ID: api.NewID(), Body: api.ThreadCreate{Workspace: ws, Title: "crash", Access: api.AccessFull, Model: api.ModelRef{Provider: "claude", Model: "haiku"}}},
+		{ID: run, Body: api.MessageDispatch{Text: text, Mode: api.StartNow}},
 	} {
-		if _, err := st.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: b}, time.Now()); err != nil {
+		c.Target = thread
+		if _, err := st.Submit(ctx, c, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return thread
+	return thread, run
+}
+
+// marked is the processes that carry run as theirs: its claude, and all
+// that claude started.
+func marked(run api.ID) []int {
+	want := []byte("GLITCHED_CLAUDE_RUN=" + run.String())
+	var pids []int
+	dirs, _ := os.ReadDir("/proc")
+	for _, d := range dirs {
+		pid, err := strconv.Atoi(d.Name())
+		if err != nil {
+			continue
+		}
+		env, _ := os.ReadFile(filepath.Join("/proc", d.Name(), "environ"))
+		if slices.ContainsFunc(bytes.Split(env, []byte{0}), func(kv []byte) bool { return bytes.Equal(kv, want) }) {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+// noneLeft waits up to d for run's processes to be gone.
+func noneLeft(run api.ID, d time.Duration) bool {
+	for deadline := time.Now().Add(d); ; time.Sleep(20 * time.Millisecond) {
+		if len(marked(run)) == 0 {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+	}
+}
+
+// killedEngine serves the store at path in a process of its own until
+// ready says the run is far enough along, then kills that process.
+func killedEngine(t *testing.T, path string, ready func() bool) {
+	t.Helper()
+	eng := exec.Command(must(os.Executable()), "-test.run=^$")
+	eng.Env = append(os.Environ(), envEngine+"="+path)
+	if err := eng.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { eng.Process.Kill(); eng.Wait() })
+	for deadline := time.Now().Add(turnWait); !ready(); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the run never got going")
+		}
+	}
+	eng.Process.Kill()
+	eng.Wait()
 }
 
 // The plan's check: an engine killed mid-tool-call leaves no claude and no
@@ -80,19 +134,11 @@ func queue(t *testing.T, path, text string) api.ID {
 // thread's next turn resumes its Claude session.
 func TestAKilledEngineLeavesNoProcessAndTheNextTurnResumes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "host.db")
-	thread := queue(t, path, "Run sleep 60.")
+	thread, run := queue(t, path, t.TempDir(), "Run sleep 60.")
 	argv := replay(t, "busy-tool", "")
 	pid := processes(t)
-	eng := exec.Command(must(os.Executable()), "-test.run=^$")
-	eng.Env = append(os.Environ(), envEngine+"="+path)
-	if err := eng.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { eng.Process.Kill(); eng.Wait() })
-	waitFor(t, pid, "tool")
-	eng.Process.Kill()
-	eng.Wait()
-	if !exits(pid("claude"), 6*time.Second) || !exits(pid("tool"), 6*time.Second) {
+	killedEngine(t, path, func() bool { return pid("tool") > 0 })
+	if !exits(pid("claude"), 6*time.Second) || !exits(pid("tool"), 6*time.Second) || !noneLeft(run, 0) {
 		t.Fatal("claude or its tool shell outlived the engine that started them")
 	}
 
@@ -122,7 +168,7 @@ func TestAKilledEngineLeavesNoProcessAndTheNextTurnResumes(t *testing.T) {
 // dies without stopping it. The next engine finds and stops it.
 func TestReconcileStopsAToolShellItsClaudeLeftBehind(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "host.db")
-	thread := queue(t, path, "Run sleep 60.")
+	thread, _ := queue(t, path, t.TempDir(), "Run sleep 60.")
 	replay(t, "orphan-tool", "")
 	pid := processes(t)
 	st, err := store.Open(path)

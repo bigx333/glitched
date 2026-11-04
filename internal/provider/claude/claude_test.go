@@ -74,10 +74,13 @@ func fakeClaude(path string) int {
 	}
 	note("claude", os.Getpid())
 	wd, _ := os.Getwd()
+	// The uuids the transcript's messages had stand for those the adapter
+	// sent in their place.
+	uuids := []string{"$WORKSPACE", wd}
 	in := bufio.NewReader(os.Stdin)
 	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		var e map[string]json.RawMessage
-		json.Unmarshal([]byte(strings.ReplaceAll(l, "$WORKSPACE", wd)), &e)
+		json.Unmarshal([]byte(strings.NewReplacer(uuids...).Replace(l)), &e)
 		switch {
 		case e["sent"] != nil:
 			got, err := in.ReadBytes('\n')
@@ -88,6 +91,9 @@ func fakeClaude(path string) int {
 			if want := kind(e["sent"]); kind(got) != want {
 				fmt.Fprintf(os.Stderr, "fake claude: got %s on stdin, want %s\n", kind(got), want)
 				return 3
+			}
+			if was, is := uuidIn(e["sent"]), uuidIn(got); was != "" && is != "" {
+				uuids = append(uuids, was, is)
 			}
 		case e["recv"] != nil:
 			os.Stdout.Write(append(e["recv"], '\n'))
@@ -157,8 +163,8 @@ func fakeClaude(path string) int {
 	return 0
 }
 
-// engine serves the store at path, with the fake claude, until it is
-// killed.
+// engine serves the store at path until it is killed, with the fake
+// claude when a transcript is set, else the claude on PATH.
 func engine(path string) int {
 	os.Unsetenv(envEngine)
 	st, err := store.Open(path)
@@ -166,7 +172,11 @@ func engine(path string) int {
 		fmt.Fprintln(os.Stderr, "engine:", err)
 		return 2
 	}
-	if _, err := runtime.New(ctx, st, provider.Mux{"claude": &claude.Adapter{Path: must(os.Executable())}}); err != nil {
+	ad := &claude.Adapter{}
+	if os.Getenv(envFake) != "" {
+		ad.Path = must(os.Executable())
+	}
+	if _, err := runtime.New(ctx, st, provider.Mux{"claude": ad}); err != nil {
 		fmt.Fprintln(os.Stderr, "engine:", err)
 		return 2
 	}
@@ -181,6 +191,12 @@ func note(role string, pid int) {
 		fmt.Fprintln(out, role, pid)
 		out.Close()
 	}
+}
+
+func uuidIn(line []byte) string {
+	var m struct{ UUID string }
+	json.Unmarshal(line, &m)
+	return m.UUID
 }
 
 func kind(line []byte) string {

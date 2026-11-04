@@ -56,7 +56,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	if err != nil {
 		return nil, err
 	}
-	session := sessionOf(spec.Thread)
+	session := uuidOf(spec.Thread)
 	g, err := start(ctx, bin, spec, argv(spec, "--session-id", session))
 	if errors.Is(err, errSessionInUse) {
 		g, err = start(ctx, bin, spec, argv(spec, "--resume", session))
@@ -78,9 +78,9 @@ func (a *Adapter) Reconcile(ctx context.Context, id provider.RuntimeIdentity) (p
 }
 
 // Command is how glitched runs claude: with the environment it has, less
-// any entrypoint or run it inherited, plus its own entrypoint. Under a test
-// without the claudelive tag, it panics for any claude but the test binary;
-// in a program a test started, the command fails to start instead.
+// any entrypoint it inherited, plus its own. Under a test without the
+// claudelive tag, it panics for any claude but the test binary; in a
+// program a test started, the command fails to start instead.
 //
 // Once ctx ends, claude gets SIGTERM, and SIGKILL killGrace later. Claude
 // Code runs each tool call in a shell of its own session, which no signal
@@ -90,7 +90,7 @@ func Command(ctx context.Context, bin string, args ...string) *exec.Cmd {
 	cmd.Err = guard(bin)
 	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		k, _, _ := strings.Cut(kv, "=")
-		return strings.EqualFold(k, "CLAUDE_CODE_ENTRYPOINT") || k == runEnv
+		return strings.EqualFold(k, "CLAUDE_CODE_ENTRYPOINT")
 	}), "CLAUDE_CODE_ENTRYPOINT=glitched")
 	cmd.SysProcAttr = sysProcAttr()
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
@@ -165,10 +165,10 @@ func modelOf(name string) string {
 	return strings.NewReplacer(" ", "-", ".", "-").Replace(strings.ToLower(name))
 }
 
-// sessionOf is the Claude session of a thread: the thread's 16 bytes as a
-// UUID, with the version and variant bits of a UUIDv8.
-func sessionOf(thread api.ID) string {
-	b := thread
+// uuidOf is id's 16 bytes as a UUID, with the version and variant bits of
+// a UUIDv8. A thread's is its Claude session.
+func uuidOf(id api.ID) string {
+	b := id
 	b[6] = b[6]&0x0f | 0x80
 	b[8] = b[8]&0x3f | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
