@@ -203,9 +203,6 @@ type app struct {
 	// childrenOpen the threads whose children the sidebar shows.
 	kids         map[api.ID][]thread
 	childrenOpen map[api.ID]bool
-	// afterStop the threads a cascade deletes once their agents have
-	// stopped.
-	afterStop map[api.ID]stopped
 	// ended is each thread's last turn's end, as last seen, to tell of
 	// the next once; reported, its children's last report, likewise.
 	ended    map[api.ID]time.Time
@@ -443,7 +440,6 @@ func newApp(dir string, post func(func())) *app {
 		composerSeen:  map[api.ID]bool{},
 		agentsOpen:    map[api.ID]bool{},
 		agentsAll:     map[api.ID]bool{},
-		afterStop:     map[api.ID]stopped{},
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,

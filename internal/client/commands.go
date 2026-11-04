@@ -67,13 +67,6 @@ func (m *Manager) Interrupt(e *Env, thread api.ID) api.ID {
 	return m.submit(e, thread, api.TurnInterrupt{})
 }
 
-// Halt stops the thread's agent as Interrupt does and cancels the messages
-// waiting their turn, so no turn starts once the run ends: what a delete
-// waiting on the stop sends.
-func (m *Manager) Halt(e *Env, thread api.ID) api.ID {
-	return m.submit(e, thread, api.TurnInterrupt{Drop: true})
-}
-
 // Answer is how the user answers an approval.
 type Answer uint8
 
@@ -109,7 +102,7 @@ func (m *Manager) Rename(e *Env, thread api.ID, title string) api.ID {
 	return m.submit(e, thread, api.ThreadRename{Title: title})
 }
 
-// Delete deletes the thread. The engine refuses while its agent works.
+// Delete deletes the thread. The engine ends its run with it.
 func (m *Manager) Delete(e *Env, thread api.ID) api.ID {
 	return m.submit(e, thread, api.ThreadDelete{})
 }

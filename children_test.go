@@ -180,9 +180,9 @@ func TestStopAllInTheAgentsPanel(t *testing.T) {
 	}
 }
 
-// Deleting a parent whose child works stops the child, then deletes it once
-// its agent has stopped, as the engine deletes no thread at work.
-func TestDeleteWaitsForAWorkingChild(t *testing.T) {
+// Deleting a parent whose child works deletes both: the engine ends the
+// child's run as it deletes it.
+func TestDeleteTakesAWorkingChild(t *testing.T) {
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, stalled{fake.New(midTurn), 1})
 	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
@@ -214,9 +214,8 @@ func (c counting) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	return c.Adapter.Open(ctx, spec)
 }
 
-// Deleting a tree whose child works with a follow-up queued halts the
-// child: the follow-up is cancelled, not started as the stop lands, and
-// both threads go.
+// Deleting a tree whose child works with a follow-up queued starts no
+// turn of the follow-up's, and both threads go.
 func TestDeleteTreeWithAQueuedFollowUp(t *testing.T) {
 	dir := tempDir(t)
 	var opens atomic.Int32
@@ -231,30 +230,6 @@ func TestDeleteTreeWithAQueuedFollowUp(t *testing.T) {
 	h := start(t, dir)
 	child := h.thread("Write the tests")
 	h.until("the child working, its follow-up queued", func() bool { return child.View.Working() && child.View.Queued == 1 })
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	st, err := d.Endpoint().Open(ctx, api.Subscription{Thread: kid})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	cancelled := make(chan string, 8)
-	go func() {
-		for {
-			it, err := st.Next(ctx)
-			if err != nil {
-				return
-			}
-			if it.Event == nil {
-				continue
-			}
-			if b, err := it.Event.Decode(); err == nil {
-				if c, ok := b.(api.MessageCancelled); ok {
-					cancelled <- c.Reason
-				}
-			}
-		}
-	}()
 	before := opens.Load()
 	h.a.settings.confirmDelete = false
 	h.a.askDelete(h.thread("Ship the sidebar sort"))
@@ -263,40 +238,9 @@ func TestDeleteTreeWithAQueuedFollowUp(t *testing.T) {
 		_, k := h.a.find(kid)
 		return !p && !k
 	})
-	select {
-	case r := <-cancelled:
-		if r != "the thread was settled or deleted" {
-			t.Errorf("the follow-up was cancelled for %q, want the delete", r)
-		}
-	case <-time.After(5 * time.Second):
-		t.Error("the follow-up was never cancelled")
-	}
+	h.pump(time.Second)
 	if n := opens.Load() - before; n != 0 {
 		t.Errorf("%d turns started after the delete, want none", n)
-	}
-	if len(h.a.afterStop) != 0 {
-		t.Errorf("deletions left waiting: %v", h.a.afterStop)
-	}
-}
-
-// A cascade gives up on a line whose child's stop didn't land in time:
-// the parent waiting for it isn't deleted on its own later.
-func TestACascadeGivesUpOnALineTogether(t *testing.T) {
-	h := tree3(t)
-	top, kid := h.thread("Ship the sidebar sort"), h.thread("Write the tests")
-	// deleteTree stamps a cascade once, but settleStopped reads the clock
-	// per entry, so a child can pass the grace a moment before its parent:
-	// here, by a lot, to make that moment.
-	old := time.Now().Add(-2 * stopGrace)
-	h.a.afterStop[kid.id()] = stopped{at: old}
-	h.a.afterStop[top.id()] = stopped{after: []api.ID{kid.id()}, at: time.Now()}
-	h.a.settleStopped()
-	if len(h.a.afterStop) != 0 {
-		t.Fatalf("left waiting: %v", h.a.afterStop)
-	}
-	h.tt.Advance(time.Second)
-	if _, ok := h.a.find(top.id()); !ok || deleting(top) {
-		t.Error("the parent was deleted though its child's stop never landed")
 	}
 }
 
@@ -326,82 +270,6 @@ func TestCmdEnterStopsFromTheCompactComposer(t *testing.T) {
 	}
 	h.tt.Key(ui.Cmd, ui.KeyEnter)
 	h.until("the stop", func() bool { return !th.View.Live() })
-}
-
-// Deleting a tree waits only where it must: a parent waits on its working
-// child, and an idle branch beside it, its own child with it, goes at once,
-// whichever of the two branches comes first. Should the working child's
-// stop never land, the parent is given up on with it, and the idle branch
-// is gone all the same.
-func TestDeleteWaitsOnlyOnItsOwnLine(t *testing.T) {
-	for _, idleFirst := range []bool{false, true} {
-		t.Run(fmt.Sprint("idle branch first: ", idleFirst), func(t *testing.T) {
-			dir := tempDir(t)
-			d := engine(t, daemon.Config{Dir: dir}, stalled{fake.New(midTurn), 1})
-			top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
-			live := seedChild(t, d, top, "Write the tests")
-			idle := seedChild(t, d, top, "Update the docs")
-			leaf := seedChild(t, d, idle, "Fix the typo")
-			submit := func(id api.ID, b api.Intent) {
-				if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: b}); err != nil {
-					t.Fatal(err)
-				}
-			}
-			submit(live, api.MessageDispatch{Text: "go"})
-			h := start(t, dir)
-			h.until("the child working", func() bool { th, _ := h.a.find(live); return th.View.Working() })
-			// The newest child comes first in the walk.
-			if idleFirst {
-				submit(idle, api.ThreadRename{Title: "Update the docs again"})
-				h.until("the rename", func() bool { th, _ := h.a.find(idle); return th.View.Title == "Update the docs again" })
-			}
-			h.tt.Frame()
-			kids := h.a.kids[top]
-			if first := kids[0].id() == idle; first != idleFirst {
-				t.Fatalf("the idle branch first: %v, want %v", first, idleFirst)
-			}
-			th, _ := h.a.find(top)
-			h.a.deleteTree(th)
-			for _, id := range []api.ID{idle, leaf} {
-				if x, _ := h.a.find(id); !deleting(x) {
-					t.Errorf("%q waits, though nothing under it works", x.View.Title)
-				}
-			}
-			if len(h.a.afterStop) != 2 || !slices.Equal(h.a.afterStop[top].after, []api.ID{live}) {
-				t.Fatalf("held: %v; want the working child, and its parent waiting on it alone", h.a.afterStop)
-			}
-			// Its stop never lands: the line is given up on together.
-			s := h.a.afterStop[live]
-			s.at = time.Now().Add(-2 * stopGrace)
-			h.a.afterStop[live] = s
-			h.a.settleStopped()
-			if len(h.a.afterStop) != 0 {
-				t.Errorf("still held: %v", h.a.afterStop)
-			}
-			if x, _ := h.a.find(top); deleting(x) {
-				t.Error("the parent was deleted though its child's stop never landed")
-			}
-		})
-	}
-}
-
-// Giving up on a thread gives up on every thread over it, up the line, not
-// only its parent.
-func TestGivingUpGoesUpTheLine(t *testing.T) {
-	h := tree3(t)
-	top, mid, leaf := h.thread("Ship the sidebar sort"), h.thread("Write the tests"), h.thread("Run them")
-	h.a.afterStop[leaf.id()] = stopped{at: time.Now().Add(-2 * stopGrace)}
-	h.a.afterStop[mid.id()] = stopped{after: []api.ID{leaf.id()}, at: time.Now()}
-	h.a.afterStop[top.id()] = stopped{after: []api.ID{mid.id()}, at: time.Now()}
-	h.a.settleStopped()
-	if len(h.a.afterStop) != 0 {
-		t.Fatalf("still held: %v", h.a.afterStop)
-	}
-	for _, x := range []thread{top, mid} {
-		if deleting(x) {
-			t.Errorf("%q was deleted though the line under it was given up on", x.View.Title)
-		}
-	}
 }
 
 // A blocked child's report says Needs you only while the child still waits
