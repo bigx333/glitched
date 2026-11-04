@@ -1,0 +1,6 @@
+{"sent":{"request":{"subtype":"initialize"},"type":"control_request"}}
+{"recv":{"type":"control_response","response":{"subtype":"success","request_id":"glitched-init","response":{}}}}
+{"sent":{"type":"user"}}
+{"recv":{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"bash","name":"Bash","input":{"command":"sleep 60"}}]}}}
+{"stderr":"fatal: something broke"}
+{"exit":1}

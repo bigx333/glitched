@@ -1,0 +1,3 @@
+{"sent":{"request":{"subtype":"initialize"},"type":"control_request"}}
+{"recv":{"type":"control_response","response":{"subtype":"success","request_id":"glitched-init","response":{}}}}
+{"hang":true}
