@@ -24,9 +24,10 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|asked (ASK=<request body>)|question|servers|engine (on the tailnet)|machines|inbox|checks|refused|plain|stuck|children
+// SCENE=empty|running|approval|asked (ASK=<request body>)|question|servers|engine (on the tailnet)|machines|inbox|checks|refused|plain|stuck|children|blocked
 // for the engines' threads (none started without one; question takes
 // ASK=<request body>, PICK=<label>,… and QUESTION=answer|dismiss|stop;
+// blocked is a parent whose child asks ASK;
 // refused is a thread whose delete the engine refused; plain is an edit in a workspace with no
 // git; stuck is a run left uncertain, with STEER for a
 // steer it refused over a draft and DRAFT=<text> for the composer's), PAGE
@@ -413,6 +414,22 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 			h.a.draft = d
 		}
 		h.tt.Frame()
+		h.tt.Advance(time.Second)
+	case "blocked":
+		// A thread whose child asks ASK, a question request's body or an
+		// approval's, shown.
+		kind := api.KindApproval
+		if _, err := api.ParseQuestions(json.RawMessage(os.Getenv("ASK"))); err == nil {
+			kind = api.KindQuestion
+		}
+		dir := tempDir(t)
+		d := engine(t, daemon.Config{Dir: dir}, fake.New([]provider.Event{provider.RequestOpened{ID: "ask-1", Kind: kind, Body: json.RawMessage(os.Getenv("ASK"))}}))
+		top := seed(t, d, "/work/t3code", "Ship the cache")
+		kid := seedChild(t, d, top, "Pick a store")
+		h = start(t, dir)
+		h.a.select_(h.thread("Ship the cache"))
+		dispatch(t, d, kid)
+		h.until("its report", func() bool { return h.tt.HasText("Needs you") })
 		h.tt.Advance(time.Second)
 	case "children":
 		// A thread with a child and a grandchild, each reported back,
