@@ -78,7 +78,11 @@ type Request struct { // approval or question
 	body          requestBody // approval{operation, scope} | question{schema, choices}
 	state         requestState // pending | answered | delivered | invalidated | expired
 }
+```
 
+A question request is kind `question`, with an `api.Questions` body: 1 to 4 questions, each with 2 to 4 options, and a `multi` flag for a multi-select one (`internal/api/question.go`). Its answer is `api.Answers`, matched to the questions by position: `answers[i]` answers `questions[i]`, with the labels picked and the user's own words (`other`). No answers is a dismissal. The engine checks the answer fits the questions before the request's race (`fits` in `internal/engine/decide.go`), so a misfit, such as an approval's `{"allow":true}`, is refused and never wins. An approval takes any JSON, as before.
+
+```go
 type Event struct {
 	Cursor  Cursor
 	Entity  Ref
