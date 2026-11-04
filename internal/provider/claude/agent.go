@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,7 @@ const initRequest = "glitched-init"
 // lines; Next alone translates them, so the turn needs no lock.
 type Agent struct {
 	cmd     *exec.Cmd
+	run     string             // the run's id, its processes' marker
 	stop    context.CancelFunc // asks claude to stop, as Command says
 	stderr  *tail
 	lines   chan []byte   // stdout, closed once the process is gone and its output read
@@ -64,8 +66,9 @@ func start(ctx context.Context, bin string, spec provider.SessionSpec, args []st
 	life, stop := context.WithCancel(context.Background())
 	cmd := Command(life, bin, args...)
 	cmd.Dir = spec.Workspace
+	cmd.Env = append(cmd.Env, runEnv+"="+spec.Run.String())
 	g := &Agent{
-		cmd: cmd, stop: stop, stderr: &tail{},
+		cmd: cmd, run: spec.Run.String(), stop: stop, stderr: &tail{},
 		lines: make(chan []byte), reaped: make(chan struct{}), done: make(chan struct{}),
 		turn: newTurn(spec.Workspace), prompts: map[string]*prompt{},
 	}
@@ -82,7 +85,9 @@ func start(ctx context.Context, bin string, spec provider.SessionSpec, args []st
 		return nil, err
 	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = inR, outW, errW
-	err := cmd.Start()
+	started := make(chan error)
+	go g.supervise(started)
+	err := <-started
 	inR.Close()
 	outW.Close()
 	errW.Close()
@@ -102,13 +107,27 @@ func start(ctx context.Context, bin string, spec provider.SessionSpec, args []st
 	return g, nil
 }
 
-// watch reaps claude as it exits, and reads its output until it ends or
-// has been quiet for drainGrace since claude exited.
+// supervise starts claude, says how that went, and reaps it, all on one OS
+// thread: Linux sends claude its parent-death signal when the thread that
+// started it exits, which must be when the engine does.
+func (g *Agent) supervise(started chan<- error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	err := g.cmd.Start()
+	started <- err
+	if err != nil {
+		return
+	}
+	g.exitErr = g.cmd.Wait()
+	g.stop()
+	close(g.reaped)
+}
+
+// watch reads claude's output until it ends or has been quiet for
+// drainGrace since claude exited.
 func (g *Agent) watch(stdout, stderr *os.File) {
 	go func() {
-		g.exitErr = g.cmd.Wait()
-		g.stop()
-		close(g.reaped)
+		<-g.reaped
 		stdout.SetReadDeadline(time.Now().Add(drainGrace))
 		stderr.SetReadDeadline(time.Now().Add(drainGrace))
 	}()
@@ -305,6 +324,7 @@ func (g *Agent) read(ctx context.Context, m message) []provider.Event {
 
 // Close ends stdin, which ends Claude Code once it is idle, and asks a
 // process still busy after closeGrace, or when ctx ends first, to stop.
+// Once claude is reaped, whatever it left running is stopped too.
 func (g *Agent) Close(ctx context.Context) error {
 	g.close.Do(func() {
 		close(g.done)
@@ -312,6 +332,7 @@ func (g *Agent) Close(ctx context.Context) error {
 	})
 	select {
 	case <-g.reaped:
+		stopRun(ctx, g.run)
 		return nil
 	case <-time.After(closeGrace):
 	case <-ctx.Done():
@@ -319,6 +340,7 @@ func (g *Agent) Close(ctx context.Context) error {
 	g.stop()
 	select {
 	case <-g.reaped:
+		stopRun(ctx, g.run)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

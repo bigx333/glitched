@@ -31,11 +31,15 @@ const (
 	envArgv   = "GLITCHED_FAKE_CLAUDE_ARGV"   // a file each run appends its argv to
 	envEntry  = "GLITCHED_FAKE_CLAUDE_ENTRY"  // a file each run appends its entrypoint entries to
 	envPids   = "GLITCHED_FAKE_CLAUDE_PIDS"   // a file each run appends its processes to, by role
+	envEngine = "GLITCHED_FAKE_ENGINE"        // the store a test binary serves, as an engine a test can kill
 )
 
 func TestMain(m *testing.M) {
 	if code, teeing := transcript.Tee(); teeing {
 		os.Exit(code)
+	}
+	if path := os.Getenv(envEngine); path != "" {
+		os.Exit(engine(path))
 	}
 	if path := os.Getenv(envFake); path != "" {
 		os.Exit(fakeClaude(path))
@@ -120,6 +124,17 @@ func fakeClaude(path string) int {
 				sh.Wait()
 				os.Exit(143)
 			}()
+		case e["orphan"] != nil:
+			// A tool shell this claude leaves running when it dies.
+			var argv []string
+			json.Unmarshal(e["orphan"], &argv)
+			sh := exec.Command(argv[0], argv[1:]...)
+			newSession(sh)
+			if err := sh.Start(); err != nil {
+				fmt.Fprintln(os.Stderr, "fake claude:", err)
+				return 2
+			}
+			note("tool", sh.Process.Pid)
 		case e["holder"] != nil:
 			// A process claude leaves running, holding its output open.
 			sh := exec.Command("sleep", "60")
@@ -139,6 +154,23 @@ func fakeClaude(path string) int {
 			return code
 		}
 	}
+	return 0
+}
+
+// engine serves the store at path, with the fake claude, until it is
+// killed.
+func engine(path string) int {
+	os.Unsetenv(envEngine)
+	st, err := store.Open(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "engine:", err)
+		return 2
+	}
+	if _, err := runtime.New(ctx, st, provider.Mux{"claude": &claude.Adapter{Path: must(os.Executable())}}); err != nil {
+		fmt.Fprintln(os.Stderr, "engine:", err)
+		return 2
+	}
+	time.Sleep(time.Hour)
 	return 0
 }
 
@@ -191,7 +223,13 @@ var turnWait = 10 * time.Second
 // host is a real engine on ad, the fake claude when nil.
 func host(t *testing.T, ad *claude.Adapter) *runtime.Host {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "host.db"))
+	return hostAt(t, filepath.Join(t.TempDir(), "host.db"), ad)
+}
+
+// hostAt is host on the store at path.
+func hostAt(t *testing.T, path string, ad *claude.Adapter) *runtime.Host {
+	t.Helper()
+	st, err := store.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
