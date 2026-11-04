@@ -423,16 +423,16 @@ func (g *Agent) Close(ctx context.Context) error {
 	})
 	select {
 	case <-g.reaped:
-		stopRun(ctx, g.run)
-		return nil
+		_, err := stopRun(ctx, g.run)
+		return err
 	case <-time.After(closeGrace):
 	case <-ctx.Done():
 	}
 	g.stop()
 	select {
 	case <-g.reaped:
-		stopRun(ctx, g.run)
-		return nil
+		_, err := stopRun(ctx, g.run)
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}

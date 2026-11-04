@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,33 +24,40 @@ func sysProcAttr() *syscall.SysProcAttr {
 // stopRun stops every process that carries run's marker: claude, and what
 // it started, tool shells in sessions of their own included. They get
 // SIGTERM, on which claude stops its shells itself, then SIGKILL once
-// killGrace passes or ctx ends. It reports whether any process was found.
-func stopRun(ctx context.Context, run string) bool {
-	ps := marked(run)
-	if len(ps) == 0 {
-		return false
+// killGrace passes or ctx ends. It reports whether any process was found,
+// and fails while one is left.
+func stopRun(ctx context.Context, run string) (bool, error) {
+	if len(scan(run)) == 0 {
+		return false, nil
 	}
-	signal(ps, syscall.SIGTERM)
-	if !settled(ctx, run, 0) {
-		settled(context.Background(), run, syscall.SIGKILL)
+	err := signal(marked(run), syscall.SIGTERM)
+	if settled(ctx, run, 0) == nil {
+		return true, nil
 	}
-	return true
+	if left := settled(context.Background(), run, syscall.SIGKILL); left != nil {
+		return true, errors.Join(left, err)
+	}
+	return true, nil
 }
 
 // settled waits up to killGrace, or until ctx ends, for run's processes to
-// exit, and reports whether they did. Each time it finds some left, it
-// sends them sig, unless sig is 0.
-func settled(ctx context.Context, run string, sig syscall.Signal) bool {
+// exit. Each time it finds some left, it sends them sig, unless sig is 0.
+// It fails with the processes left, and why a signal to them failed.
+func settled(ctx context.Context, run string, sig syscall.Signal) error {
 	deadline := time.Now().Add(killGrace)
+	var failed error
 	for {
-		if len(scan(run)) == 0 {
-			return true
+		left := scan(run)
+		if len(left) == 0 {
+			return nil
 		}
 		if ctx.Err() != nil || time.Now().After(deadline) {
-			return false
+			return errors.Join(fmt.Errorf("claude: processes %v of the run still run", left), failed)
 		}
 		if sig != 0 {
-			signal(marked(run), sig)
+			if err := signal(marked(run), sig); err != nil {
+				failed = err
+			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -65,19 +73,20 @@ type proc struct {
 
 // marked is run's processes, each held by a pidfd opened before its marker
 // is read again, so the marker read is that process's own. Where the
-// kernel gives no pidfd, as Linux before 5.3 does, a process is held by
-// its PID alone, and a process that takes the PID before the signal gets
-// it.
+// kernel has no pidfds, as Linux before 5.3, a process is held by its PID
+// alone, and a process that takes the PID before the signal gets it. A
+// process the kernel gives no pidfd for any other reason is left to a
+// later scan.
 func marked(run string) []proc {
 	want := marker(run)
 	var ps []proc
 	for _, pid := range scan(run) {
 		fd, err := unix.PidfdOpen(pid, 0)
 		switch {
-		case errors.Is(err, unix.ESRCH):
-			continue
-		case err != nil:
+		case errors.Is(err, unix.ENOSYS):
 			fd = -1
+		case err != nil:
+			continue
 		}
 		if !carries(pid, want) {
 			if fd >= 0 {
@@ -90,16 +99,23 @@ func marked(run string) []proc {
 	return ps
 }
 
-// signal sends sig to ps, and lets go of their pidfds.
-func signal(ps []proc, sig syscall.Signal) {
+// signal sends sig to ps, lets go of their pidfds, and fails with what
+// kept a process that is still there from getting sig.
+func signal(ps []proc, sig syscall.Signal) error {
+	var errs []error
 	for _, p := range ps {
+		var err error
 		if p.fd < 0 {
-			syscall.Kill(p.pid, sig)
-			continue
+			err = syscall.Kill(p.pid, sig)
+		} else {
+			err = unix.PidfdSendSignal(p.fd, sig, nil, 0)
+			unix.Close(p.fd)
 		}
-		unix.PidfdSendSignal(p.fd, sig, nil, 0)
-		unix.Close(p.fd)
+		if err != nil && !errors.Is(err, unix.ESRCH) {
+			errs = append(errs, fmt.Errorf("signal process %d: %w", p.pid, err))
+		}
 	}
+	return errors.Join(errs...)
 }
 
 func marker(run string) []byte { return []byte(runEnv + "=" + run) }
