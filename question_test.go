@@ -524,7 +524,7 @@ func TestAnAskOfAThreadOfTheUsersIsToldOfOnce(t *testing.T) {
 	s.show(top)
 	shown(h, top)
 	settle(h)
-	if want := []string{`The agent asks: Which store \u{202E}should\u{202C} the cache use?`}; !slices.Equal(*got, want) {
+	if want := []string{outsideASCII + "\n" + `The agent asks: Which store \u{202E}should\u{202C} the cache use?`}; !slices.Equal(*got, want) {
 		t.Fatalf("notifications: %q; want %q", *got, want)
 	}
 }

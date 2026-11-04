@@ -153,11 +153,15 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 	})
 }
 
+// asciiWarning says some of the agent's text shows as escapes, on its
+// card and in its notification.
+const asciiWarning = `Contains text outside printable ASCII, shown as \u{…}`
+
 // asciiNotice says a card shows some of the agent's text as escapes.
 func asciiNotice(c *ui.Context) {
 	ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 		ui.Icon(c, icShieldAlert).FontSize(13).TextColor(palette.amber)
-		ui.Text(c, `Contains text outside printable ASCII, shown as \u{…}`).FontSize(12.5).FontWeight(500).TextColor(palette.amber)
+		ui.Text(c, asciiWarning).FontSize(12.5).FontWeight(500).TextColor(palette.amber)
 	})
 }
 
