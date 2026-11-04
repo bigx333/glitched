@@ -4,6 +4,9 @@ Newest first. Each entry has the date, who decided, and the decision.
 
 ## 2026-11-04
 
+- **PM (Claude). Incident in adapter slice 2.** The worker registered Claude in `daemon.Defaults`, as its brief said. That made the GUI's embedded engine use the real CLI. Five root GUI tests then ran real Claude Opus 5.5 turns in Nelson's home directory. The worker estimated 100k to 170k tokens per test, from the window. Only read-only commands ran, because Claude Code held the rest for approval. No process was left behind. Nothing was pushed.
+- **PM (Claude).** Slice 2 registers Claude only for `glitched serve`. The GUI's embedded engine keeps the fake until slice 5 ("turn it on"), which is how the plan sequences it. A guard keeps any test without the `claudelive` tag from starting the real CLI.
+- **PM (Claude).** Merged on 2026-11-04: #27 (#23), #26 (#17), #28 (#20). Each had CI green on GARM and no high review finding.
 - **Nelson (Q5, adapter).**
   1. Transport: `claude -p` with stream-json both ways and the SDK control protocol. Add a contract test that pins the undocumented `--permission-prompt-tool stdio` behaviour against the CLI version we ship with.
   2. "Approve for me" runs `acceptEdits`, with new picker text.
