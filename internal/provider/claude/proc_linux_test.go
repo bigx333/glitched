@@ -2,12 +2,20 @@ package claude
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
+
+	"glitched/internal/api"
+	"glitched/internal/provider"
+
+	"golang.org/x/sys/unix"
 )
 
 // inPIDNamespace runs the calling test again as PID 1 of a PID namespace
@@ -30,48 +38,119 @@ func inPIDNamespace(t *testing.T) bool {
 	return false
 }
 
+// sleeper starts a process that sleeps with env as its environment, and
+// waits until it has exec'd: until then, it has this process's environment.
+func sleeper(t *testing.T, env ...string) *exec.Cmd {
+	t.Helper()
+	c := exec.Command("/bin/sleep", "60")
+	c.Env = env
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// By PID: a test may deny this thread pidfd signals, which Kill uses.
+	t.Cleanup(func() { syscall.Kill(c.Process.Pid, syscall.SIGKILL); c.Wait() })
+	cmdline := "/proc/" + strconv.Itoa(c.Process.Pid) + "/cmdline"
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		if cmd, _ := os.ReadFile(cmdline); bytes.Equal(cmd, []byte("/bin/sleep\x0060\x00")) {
+			return c
+		}
+	}
+	t.Fatal("the process never exec'd")
+	return nil
+}
+
+// reuse ends old and starts in its PID a process that sleeps with env.
+func reuse(t *testing.T, old *exec.Cmd, env ...string) *exec.Cmd {
+	t.Helper()
+	syscall.Kill(old.Process.Pid, syscall.SIGKILL)
+	old.Wait()
+	if err := os.WriteFile("/proc/sys/kernel/ns_last_pid", []byte(strconv.Itoa(old.Process.Pid-1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other := sleeper(t, env...)
+	if other.Process.Pid != old.Process.Pid {
+		t.Fatalf("the new process got PID %d, want %d again", other.Process.Pid, old.Process.Pid)
+	}
+	return other
+}
+
+// signalled is whether c ends within 100 ms.
+func signalled(c *exec.Cmd) bool {
+	exited := make(chan struct{})
+	go func() { c.Wait(); close(exited) }()
+	select {
+	case <-exited:
+		return true
+	case <-time.After(100 * time.Millisecond):
+		return false
+	}
+}
+
+// deny has the syscall nr fail with errno on this test's OS thread, which
+// it never gives back: the thread ends with the test.
+func deny(t *testing.T, nr uintptr, errno syscall.Errno) {
+	t.Helper()
+	runtime.LockOSThread()
+	filter := []unix.SockFilter{
+		{Code: unix.BPF_LD | unix.BPF_W | unix.BPF_ABS, K: 0},
+		{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, K: uint32(nr), Jf: 1},
+		{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ERRNO | uint32(errno)},
+		{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ALLOW},
+	}
+	prog := unix.SockFprog{Len: uint16(len(filter)), Filter: &filter[0]}
+	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Prctl(unix.PR_SET_SECCOMP, unix.SECCOMP_MODE_FILTER, uintptr(unsafe.Pointer(&prog)), 0, 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A process found with the run's marker can exit before it is signalled,
 // and its PID go to another process. That one is not signalled.
 func TestAReusedPIDIsNotSignalled(t *testing.T) {
 	if !inPIDNamespace(t) {
 		return
 	}
-	sleep := func(env ...string) *exec.Cmd {
-		c := exec.Command("/bin/sleep", "60")
-		c.Env = env
-		if err := c.Start(); err != nil {
-			t.Fatal(err)
-		}
-		return c
-	}
-	old := sleep(runEnv + "=run")
-	// Until it execs, the child has this process's environment.
-	environ := "/proc/" + strconv.Itoa(old.Process.Pid) + "/environ"
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
-		if env, _ := os.ReadFile(environ); bytes.Contains(env, []byte(runEnv)) {
-			break
-		}
-	}
+	old := sleeper(t, runEnv+"=run")
 	found := marked("run")
 	if len(found) != 1 {
 		t.Fatalf("found %d marked processes, want the one", len(found))
 	}
-	old.Process.Kill()
-	old.Wait()
-	if err := os.WriteFile("/proc/sys/kernel/ns_last_pid", []byte(strconv.Itoa(old.Process.Pid-1)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	other := sleep()
-	defer other.Process.Kill()
-	if other.Process.Pid != old.Process.Pid {
-		t.Fatalf("the new process got PID %d, want %d again", other.Process.Pid, old.Process.Pid)
-	}
+	other := reuse(t, old)
 	signal(found, syscall.SIGTERM)
-	exited := make(chan struct{})
-	go func() { other.Wait(); close(exited) }()
-	select {
-	case <-exited:
+	if signalled(other) {
 		t.Error("a process that took a marked process's PID was signalled")
-	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// A kernel that has pidfds but will not give one now leaves the process
+// to a later scan, rather than to a signal by PID, which can reach another
+// process that took the PID since.
+func TestAProcessWithoutAPidfdIsNotSignalledByPID(t *testing.T) {
+	if !inPIDNamespace(t) {
+		return
+	}
+	old := sleeper(t, runEnv+"=run")
+	deny(t, unix.SYS_PIDFD_OPEN, unix.EPERM)
+	found := marked("run")
+	other := reuse(t, old)
+	signal(found, syscall.SIGTERM)
+	if signalled(other) {
+		t.Error("a process that took a marked process's PID was signalled")
+	}
+}
+
+// Reconcile fails while a process of the run is left, so it is retried.
+func TestReconcileFailsWhileAProcessOfTheRunIsLeft(t *testing.T) {
+	if !inPIDNamespace(t) {
+		return
+	}
+	run := api.NewID()
+	tool := sleeper(t, runEnv+"="+run.String())
+	deny(t, unix.SYS_PIDFD_SEND_SIGNAL, unix.EPERM)
+	_, err := (&Adapter{}).Reconcile(context.Background(), provider.RuntimeIdentity{Run: run})
+	if left := carries(tool.Process.Pid, marker(run.String())); left && err == nil {
+		t.Error("Reconcile succeeded with a process of the run still running")
 	}
 }

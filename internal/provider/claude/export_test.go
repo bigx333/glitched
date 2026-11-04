@@ -3,6 +3,8 @@ package claude
 import (
 	"testing"
 	"time"
+
+	"glitched/internal/api"
 )
 
 // SetInterruptGrace sets how long an interrupt has to end the turn, for
@@ -12,3 +14,6 @@ func SetInterruptGrace(t *testing.T, d time.Duration) {
 	interruptGrace = d
 	t.Cleanup(func() { interruptGrace = old })
 }
+
+// SessionOf is the Claude session of thread.
+func SessionOf(thread api.ID) string { return uuidOf(thread) }

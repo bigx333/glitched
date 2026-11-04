@@ -181,9 +181,10 @@ func turnEnded(e provider.Event) bool {
 	return ok
 }
 
-// Claude Code ends a stopped turn at the interrupt's result, then takes a
-// steer it had not got to as a turn of its own. Nothing of that turn may
-// run: the user stopped it.
+// Claude Code ends a stopped turn at the interrupt's result, and 18 ms
+// later takes a steer still queued as a turn of its own, writing it to the
+// session the next turn resumes. Nothing of that turn may run: the user
+// stopped it.
 func TestNothingRunsAfterAStoppedTurnEnds(t *testing.T) {
 	replay(t, "steer-stop", "")
 	ws := t.TempDir()
@@ -204,8 +205,8 @@ func TestNothingRunsAfterAStoppedTurnEnds(t *testing.T) {
 	if err := ag.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(ws, "steer-ran")); err == nil {
-		t.Error("claude ran the steer's tool after the stopped turn ended")
+	if _, err := os.Stat(filepath.Join(ws, "steer-taken")); err == nil {
+		t.Error("claude took the steer after the stopped turn ended")
 	}
 }
 

@@ -77,10 +77,18 @@ func fakeClaude(path string) int {
 	// The uuids the transcript's messages had stand for those the adapter
 	// sent in their place.
 	uuids := []string{"$WORKSPACE", wd}
+	// An entry with "if" plays only when a request so far set that field,
+	// and one with "unless" only when none did.
+	set := map[string]bool{}
 	in := bufio.NewReader(os.Stdin)
 	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		var e map[string]json.RawMessage
 		json.Unmarshal([]byte(strings.NewReplacer(uuids...).Replace(l)), &e)
+		var when struct{ If, Unless string }
+		json.Unmarshal([]byte(l), &when)
+		if when.If != "" && !set[when.If] || when.Unless != "" && set[when.Unless] {
+			continue
+		}
 		switch {
 		case e["sent"] != nil:
 			got, err := in.ReadBytes('\n')
@@ -95,6 +103,31 @@ func fakeClaude(path string) int {
 			if was, is := uuidIn(e["sent"]), uuidIn(got); was != "" && is != "" {
 				uuids = append(uuids, was, is)
 			}
+			var req struct{ Request map[string]any }
+			json.Unmarshal(got, &req)
+			for k, v := range req.Request {
+				if v == true {
+					set[k] = true
+				}
+			}
+		case e["take"] != nil:
+			// Claude Code takes a queued message as a turn of its own, and
+			// writes it to the session: here, a file of that name.
+			var name string
+			json.Unmarshal(e["take"], &name)
+			os.WriteFile(name, nil, 0o644)
+		case e["graceful"] != nil:
+			// Claude Code takes a while to exit on SIGTERM, and goes on
+			// with its work meanwhile.
+			var d string
+			json.Unmarshal(e["graceful"], &d)
+			term := make(chan os.Signal, 1)
+			signal.Notify(term, syscall.SIGTERM)
+			go func() {
+				<-term
+				time.Sleep(must(time.ParseDuration(d)))
+				os.Exit(143)
+			}()
 		case e["recv"] != nil:
 			os.Stdout.Write(append(e["recv"], '\n'))
 		case e["stderr"] != nil:
