@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -38,8 +40,12 @@ func TestCmdEnterAllows(t *testing.T) {
 	h, th := asking(t, runTests)
 	h.tt.Key(ui.Cmd, ui.KeyEnter)
 	h.until("the turn to finish", func() bool {
-		return h.tt.HasText("The tests pass.") && h.tt.HasText("Allowed") && !h.a.current().View.Working()
+		return strings.Contains(texts(entriesOf(th)), "The tests pass.") && !h.a.current().View.Working()
 	})
+	h.tt.Advance(time.Second)
+	if !h.tt.HasText("The tests pass.") || !h.tt.HasText("Allowed") {
+		t.Errorf("the finished turn shows %q", h.tt.Texts())
+	}
 	if a := answerOf(lastRequest(th).Answer); a != client.AllowOnce {
 		t.Errorf("⌘⏎ answered %v, want allow once", a)
 	}

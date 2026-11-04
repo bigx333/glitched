@@ -156,8 +156,14 @@ func TestSendStartsAThread(t *testing.T) {
 		t.Errorf("draft %q, window %q: the message should have left the composer for the timeline", h.a.draft, h.tt.Texts())
 	}
 	h.until("the turn to ask", func() bool {
-		return h.tt.HasText("Looking at the code.") && h.tt.HasText("May I edit it?") && h.tt.HasText("Read main.go") && h.a.statusOf(h.a.current()) == statusApproval
+		return strings.Contains(texts(entriesOf(h.a.current())), "May I edit it?") && h.a.statusOf(h.a.current()) == statusApproval
 	})
+	h.tt.Advance(time.Second)
+	for _, s := range []string{"Looking at the code.", "May I edit it?", "Read main.go"} {
+		if !h.tt.HasText(s) {
+			t.Errorf("no %q in %q", s, h.tt.Texts())
+		}
+	}
 }
 
 // A long first message titles its thread by its first 48 characters,
@@ -186,8 +192,14 @@ func TestApprovalCardAllows(t *testing.T) {
 	h.click("Allow once")
 	h.until("the turn to finish", func() bool {
 		v := h.a.current().View
-		return v.LastTurn != nil && !v.Working() && h.tt.HasText("Done.") && h.tt.HasText("Allowed") && h.tt.HasText("Edit main.go")
+		return v.LastTurn != nil && !v.Working() && strings.Contains(texts(entriesOf(h.a.current())), "Done.")
 	})
+	h.tt.Advance(time.Second)
+	for _, s := range []string{"Done.", "Allowed", "Edit main.go"} {
+		if !h.tt.HasText(s) {
+			t.Errorf("no %q in %q", s, h.tt.Texts())
+		}
+	}
 	if o := h.a.current().View.LastTurn.Outcome; o != api.OutcomeCompleted {
 		t.Errorf("the turn ended %v, want completed", o)
 	}
@@ -204,7 +216,7 @@ func TestAFailedAnswerOffersDismissAndRetry(t *testing.T) {
 	h.a.draft = "Fix the flicker"
 	h.tt.Frame()
 	h.click("Send")
-	h.until("the approval card", func() bool { return h.tt.HasText("Approval needed") })
+	h.until("the approval card", func() bool { return h.tt.HasText("Approval needed") && len(h.a.current().View.Requests) == 1 })
 	th := h.a.current()
 	request := th.View.Requests[0].ID
 	for _, err := range []error{errors.New("boom"), api.ErrNotFound} {
@@ -232,7 +244,7 @@ func TestAFailedAnswerGoesWithItsRequest(t *testing.T) {
 	h.a.draft = "Fix the flicker"
 	h.tt.Frame()
 	h.click("Send")
-	h.until("the approval card", func() bool { return h.tt.HasText("Approval needed") })
+	h.until("the approval card", func() bool { return h.tt.HasText("Approval needed") && len(h.a.current().View.Requests) == 1 })
 	th := h.a.current()
 	request := th.View.Requests[0].ID
 	th.Pending = append(th.Pending, client.Pending{Command: api.NewID(), Body: api.RequestRespond{Request: request}, Err: errors.New("boom")})
@@ -307,7 +319,7 @@ func TestStopInterrupts(t *testing.T) {
 	h.a.draft = "Fix the flicker"
 	h.tt.Frame()
 	h.click("Send")
-	h.until("the turn to wait on its approval", func() bool { return h.a.current().View.Working() && h.tt.HasText("May I edit it?") })
+	h.until("the turn to wait on its approval", func() bool { return h.a.current().View.Run == api.RunWaiting })
 	h.click("Stop")
 	h.until("the turn to end", func() bool {
 		v := h.a.current().View
