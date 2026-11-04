@@ -32,12 +32,9 @@ func (s *shell) Title() string {
 }
 
 // shellFor returns the workspace's shell, starting it if it has none or
-// its last one exited. It returns nil where there is no window, as in
-// tests, which keep to the drawer's canned output rather than start shells.
+// its last one exited. It starts none where there is no window, as in
+// tests, which keep to the drawer's canned output unless they hold one.
 func (a *app) shellFor(workspace string) (*shell, error) {
-	if a.win == nil {
-		return nil, nil
-	}
 	if s := a.shells[workspace]; s != nil {
 		select {
 		case <-s.term.Done():
@@ -50,6 +47,9 @@ func (a *app) shellFor(workspace string) (*shell, error) {
 			}
 			return s, nil
 		}
+	}
+	if a.win == nil {
+		return nil, nil
 	}
 	s := &shell{title: filepath.Base(workspace), themed: a.theme.name}
 	term, err := terminal.New(terminal.Options{

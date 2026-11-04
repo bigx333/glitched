@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
@@ -179,6 +181,53 @@ func TestTypingInOtherAndEscapeInIt(t *testing.T) {
 	}
 	if r := lastRequest(th); r.State != api.RequestPending || len(h.a.current().Pending) != 0 {
 		t.Fatalf("Escape in Other: request %v, %d sent; want it waiting", r.State, len(h.a.current().Pending))
+	}
+}
+
+// With the terminal drawer's shell focused, the keys it takes are the
+// shell's: Escape reaches a program such as vim or less, which `cat -v`
+// echoes as ^[, and dismisses nothing. Where ⌘ is Control, so are ⇧⌘D
+// and ⌘1. Skipped where libghostty-vt can't load.
+func TestKeysInTheTerminalAreTheShells(t *testing.T) {
+	if err := terminal.Load(); err != nil {
+		t.Skip("libghostty-vt unavailable:", err)
+	}
+	h, th := questioning(t, fake.Asking())
+	term, err := terminal.New(terminal.Options{Command: []string{"/bin/sh"}, Dir: t.TempDir(), Theme: h.a.theme.terminal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { term.Close() })
+	h.a.shells[th.View.Workspace] = &shell{term: term, themed: h.a.theme.name}
+	h.a.showTerminal = true
+	h.until("the shell focused", func() bool { h.tt.Advance(100 * time.Millisecond); return h.a.terminalFocused })
+	h.tt.Type("cat -v")
+	h.tt.Key(0, ui.KeyEnter)
+	time.Sleep(300 * time.Millisecond)
+	h.tt.Type("A")
+	h.tt.Key(0, ui.KeyEscape)
+	if runtime.GOOS != "darwin" {
+		h.tt.Key(ui.Cmd|ui.Shift, ui.KeyD)
+		h.tt.Key(ui.Cmd, ui.Key1)
+	}
+	h.tt.Type("B")
+	h.tt.Key(0, ui.KeyEnter)
+	h.until("the echo", func() bool {
+		h.tt.Advance(100 * time.Millisecond)
+		return strings.Count(term.Text(), "B") == 2 // the line typed, and cat's
+	})
+	if !strings.Contains(term.Text(), "A^[") {
+		t.Errorf("the shell got no Escape; it shows %q", term.Text())
+	}
+	for range 3 {
+		h.p.run()
+		h.tt.Advance(100 * time.Millisecond)
+	}
+	if r := lastRequest(th); r.State != api.RequestPending || len(h.a.current().Pending) != 0 {
+		t.Errorf("keys in the shell: request %v, %d sent; want it waiting", r.State, len(h.a.current().Pending))
+	}
+	if f := h.a.questions[lastRequest(th).Request]; f != nil && len(f.picked[0]) > 0 {
+		t.Errorf("a key in the shell picked %q", f.picked[0])
 	}
 }
 
