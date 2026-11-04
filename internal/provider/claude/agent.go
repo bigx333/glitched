@@ -243,8 +243,11 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 		if g.interrupted || g.ended {
 			return nil
 		}
+		// Claude Code takes a message the stopped turn did not get to as a
+		// turn of its own, 18 ms after the turn's result, unless the
+		// interrupt cancels it.
 		err := g.sendLocked(ctx, map[string]any{"type": "control_request", "request_id": interruptRequest,
-			"request": map[string]string{"subtype": "interrupt"}})
+			"request": map[string]any{"subtype": "interrupt", "cancel_queued": true}})
 		if err == nil {
 			g.interrupted = true
 			g.deadline = time.AfterFunc(interruptGrace, g.stop)
@@ -273,9 +276,6 @@ func (g *Agent) userLocked(ctx context.Context, text string) error {
 // ends the turn: it finished every message sent, or an interrupt went out.
 // A result that lists no messages finishes them all. The interrupt cut
 // the turn short unless Claude Code says it completed the turn first.
-//
-// Claude Code takes a message the stopped turn did not get to as a turn of
-// its own, so claude is stopped before it can start one.
 func (g *Agent) over(m message) (over, interrupted bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -288,9 +288,6 @@ func (g *Agent) over(m message) (over, interrupted bool) {
 	g.ended = g.interrupted || len(g.outstanding) == 0
 	if g.ended && g.deadline != nil {
 		g.deadline.Stop()
-	}
-	if g.ended && len(g.outstanding) > 0 {
-		g.stop()
 	}
 	return g.ended, g.interrupted && m.IsError
 }
