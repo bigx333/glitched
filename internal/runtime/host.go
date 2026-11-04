@@ -42,10 +42,6 @@ type Host struct {
 	wg        sync.WaitGroup
 	wake      chan struct{}
 
-	// attempted is the runs whose start a dead host leased but whose thread
-	// no longer has them live. Boot fills it before any effect runs.
-	attempted map[api.ID]bool
-
 	mu      sync.Mutex
 	busy    map[api.ID]bool     // threads with an effect in flight
 	runs    map[api.ID]*liveRun // by run
@@ -72,12 +68,11 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux) (*Host, e
 	name, _ := os.Hostname()
 	h := &Host{
 		store: st, providers: providers, name: name,
-		wake:      make(chan struct{}, 1),
-		attempted: map[api.ID]bool{},
-		busy:      map[api.ID]bool{},
-		runs:      map[api.ID]*liveRun{},
-		closing:   map[api.ID]bool{},
-		subs:      map[*stream]struct{}{},
+		wake:    make(chan struct{}, 1),
+		busy:    map[api.ID]bool{},
+		runs:    map[api.ID]*liveRun{},
+		closing: map[api.ID]bool{},
+		subs:    map[*stream]struct{}{},
 	}
 	h.ctx, h.cancel = context.WithCancel(context.Background())
 	h.drain, h.stopDrain = context.WithCancel(context.Background())
@@ -187,6 +182,8 @@ func (h *Host) observe(ctx context.Context, thread api.ID, o engine.Observation,
 // reached the agent: replay-safe kinds run again, a start is settled by
 // reconciling its run, and a steer still due becomes uncertain. Every other
 // live run is reconciled too, except one whose start was never attempted.
+// The lease of a start whose run is no longer live stays, as the store's
+// record that an agent may run, until the run's close reconciles it.
 func (h *Host) boot(ctx context.Context) error {
 	leased, err := h.store.Leased(ctx)
 	if err != nil {
@@ -231,7 +228,6 @@ func (h *Host) boot(ctx context.Context) error {
 		if r.State == engine.RunUncertain || (r.State == engine.RunStarting && !attempted) {
 			continue
 		}
-		delete(starts, r.ID)
 		rctx, cancel := context.WithTimeout(ctx, callTimeout)
 		rec, err := h.providers.Reconcile(rctx, provider.RuntimeIdentity{Thread: id, Run: r.ID, Generation: r.Generation, Provider: t.Model.Provider})
 		cancel()
@@ -244,12 +240,6 @@ func (h *Host) boot(ctx context.Context) error {
 		}
 		if ok {
 			h.attach(id, h.track(r.ID, restored.Agent))
-		}
-	}
-	for run, lease := range starts {
-		h.attempted[run] = true
-		if err := h.store.Complete(ctx, lease); err != nil {
-			return err
 		}
 	}
 	return nil
@@ -385,9 +375,16 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 		}
 
 	case engine.CloseAgent:
+		var start int64
+		if !retry(h.ctx, "find start", func(ctx context.Context) (err error) {
+			start, err = h.startLease(ctx, b.Run)
+			return err
+		}) {
+			return nil, false
+		}
 		// A run whose start never ran has no agent, as boot's rule says: its
-		// message was never dispatched, and no host leased its start.
-		if m, _ := t.Message(b.Run); m.State == engine.QueueCancelled && !h.attempted[b.Run] {
+		// message was never dispatched, and no dead host left its start leased.
+		if m, _ := t.Message(b.Run); m.State == engine.QueueCancelled && start == 0 {
 			return nil, true
 		}
 		// This host's pump closed the agent it held before the thread took
@@ -402,6 +399,9 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 			return nil, false
 		}
 		if r, found := rec.(provider.Restored); found && !h.closeAgent(r.Agent) {
+			return nil, false
+		}
+		if start != 0 && !retry(h.ctx, "complete start", func(ctx context.Context) error { return h.store.Complete(ctx, start) }) {
 			return nil, false
 		}
 		return nil, true
@@ -473,6 +473,21 @@ func (h *Host) open(ctx context.Context, thread api.ID, b engine.StartTurn) (pro
 		}
 	}
 	return ag, err
+}
+
+// startLease is the effect id of run's start when a dead host left it
+// leased, or 0.
+func (h *Host) startLease(ctx context.Context, run api.ID) (int64, error) {
+	leased, err := h.store.Leased(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, e := range leased {
+		if b, ok := e.Body.(engine.StartTurn); ok && b.Run == run {
+			return e.ID, nil
+		}
+	}
+	return 0, nil
 }
 
 func (h *Host) act(run api.ID, a provider.Action) error {
