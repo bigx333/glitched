@@ -18,7 +18,7 @@ A PR merges to main by rebase-merge only when all of these hold at its current h
 
 | # | Task | Status | Done when |
 |---|---|---|---|
-| 1 | Review #2 at 9ab4757 (round 1, whole change) | Running. Opus and Sol reviewers started 2026-11-04. | Both reports are in, verified, and posted as PR comments. |
+| 1 | Review #2 at 9ab4757 (round 1, whole change) | Sol done: 2 high verified, 1 medium dismissed by Nelson. Opus still running. | Both reports are in, verified, and posted as PR comments. |
 | 2 | Linear copy of #2 on `land/pr-2`, opened as a new PR | Running. Worker started 2026-11-04. | `git diff 9ab4757 origin/land/pr-2` is empty, GitHub reports `rebaseable: true`, local vet, test and race pass. |
 | 3 | Fix verified high-severity findings on `land/pr-2` | Waiting on tasks 1 and 2 | A fresh review of the fix diff has no high-severity finding. At most three fix rounds. |
 | 4 | Land the copy, close #2 with a link | Waiting on tasks 1 to 3 | The copy is merged on main by rebase-merge, main's CI is green, #2 is closed with a link. |
