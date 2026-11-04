@@ -376,6 +376,8 @@ type app struct {
 	agentsOpen, agentsAll         map[api.ID]bool
 	agentsK, agentsH, agentsPillW float32
 	agentsFor                     api.ID
+	// argsOpen are the requests whose cards show all their arguments.
+	argsOpen map[api.ID]bool
 	// draftArea is the full composer's text area.
 	draftArea ui.Handle
 	// steers are the messages sent from the composer, until each lands
@@ -440,6 +442,7 @@ func newApp(dir string, post func(func())) *app {
 		composerSeen:  map[api.ID]bool{},
 		agentsOpen:    map[api.ID]bool{},
 		agentsAll:     map[api.ID]bool{},
+		argsOpen:      map[api.ID]bool{},
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,

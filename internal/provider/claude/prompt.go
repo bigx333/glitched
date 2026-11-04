@@ -1,10 +1,12 @@
 package claude
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"glitched/internal/provider"
 )
@@ -47,14 +49,17 @@ const deniedReason = "The user denied this tool call in glitched."
 const withdrawnReason = "Claude Code no longer asks: a rule or hook of yours decided."
 
 // ask is the request a can_use_tool becomes, in the ask body the card
-// reads: a command to run where and why, or an operation on a path.
+// reads: a command to run where and why, or an operation on a path. A
+// tool the card has no words for shows every argument an allow approves.
 func (t *turn) ask(id string, r canUseTool) (provider.RequestOpened, *prompt) {
 	var b struct {
-		Operation string `json:"operation,omitempty"`
-		Path      string `json:"path,omitempty"`
-		Command   string `json:"command,omitempty"`
-		Cwd       string `json:"cwd,omitempty"`
-		Reason    string `json:"reason,omitempty"`
+		Operation   string `json:"operation,omitempty"`
+		Path        string `json:"path,omitempty"`
+		Command     string `json:"command,omitempty"`
+		Cwd         string `json:"cwd,omitempty"`
+		Reason      string `json:"reason,omitempty"`
+		Args        string `json:"args,omitempty"`
+		Unsandboxed bool   `json:"unsandboxed,omitempty"`
 	}
 	var input map[string]any
 	json.Unmarshal(r.Input, &input)
@@ -67,12 +72,13 @@ func (t *turn) ask(id string, r canUseTool) (provider.RequestOpened, *prompt) {
 	case "command":
 		b.Command, b.Cwd = arg, t.workspace
 		b.Reason, _ = input["description"].(string)
+		b.Unsandboxed, _ = input["dangerouslyDisableSandbox"].(bool)
 	case "edit", "read":
 		b.Operation, b.Path = tl.kind, t.rel(arg)
 	case "search":
 		b.Operation, b.Path = "search for", arg
 	default:
-		b.Operation = "use " + r.ToolName
+		b.Operation, b.Args = "use "+r.ToolName, argsText(r.Input)
 	}
 	if why := ansi.ReplaceAllString(r.DecisionReason, ""); why != "" {
 		b.Reason = why
@@ -82,6 +88,37 @@ func (t *turn) ask(id string, r canUseTool) (provider.RequestOpened, *prompt) {
 	}
 	body, _ := json.Marshal(b)
 	return provider.RequestOpened{ID: id, Kind: "approval", Body: body}, &prompt{kind: "approval", input: r.Input}
+}
+
+// argsText is a tool's input as text: a line per field in Claude Code's
+// order, a string as it reads and any other value as JSON. Input that is
+// no object shows as it came.
+func argsText(input json.RawMessage) string {
+	d := json.NewDecoder(bytes.NewReader(input))
+	if tok, err := d.Token(); err != nil || tok != json.Delim('{') {
+		return strings.TrimSpace(string(input))
+	}
+	var lines []string
+	for d.More() {
+		k, err := d.Token()
+		var v json.RawMessage
+		if err != nil || d.Decode(&v) != nil {
+			return strings.TrimSpace(string(input))
+		}
+		var s string
+		if json.Unmarshal(v, &s) != nil {
+			var c bytes.Buffer
+			json.Compact(&c, v)
+			s = c.String()
+		}
+		if strings.Contains(s, "\n") {
+			s = "\n  " + strings.ReplaceAll(s, "\n", "\n  ")
+		} else {
+			s = " " + s
+		}
+		lines = append(lines, fmt.Sprint(k, ":", s))
+	}
+	return strings.Join(lines, "\n")
 }
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)

@@ -12,13 +12,16 @@ import (
 
 // ask is what a request's body asks, in the words the providers use:
 // {"operation":"edit","path":"main.go"}, or a command to run where, and
-// why.
+// why. Args are what an allow approves of a tool the provider has no
+// words for, and Unsandboxed a command that runs outside the sandbox.
 type ask struct {
-	Operation string `json:"operation"`
-	Path      string `json:"path"`
-	Command   string `json:"command"`
-	Cwd       string `json:"cwd"`
-	Reason    string `json:"reason"`
+	Operation   string `json:"operation"`
+	Path        string `json:"path"`
+	Command     string `json:"command"`
+	Cwd         string `json:"cwd"`
+	Reason      string `json:"reason"`
+	Args        string `json:"args"`
+	Unsandboxed bool   `json:"unsandboxed"`
 }
 
 func askOf(body json.RawMessage) (ask, bool) {
@@ -104,6 +107,12 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 				})
 				ui.Text(c, b.Command).Selectable().FontSize(12.5).Font("monospace").Padding(8, 10).Radius(6).
 					Background(palette.bg).Border(1, palette.border)
+				if b.Unsandboxed {
+					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+						ui.Icon(c, icShieldAlert).FontSize(13).TextColor(palette.amber)
+						ui.Text(c, "Runs outside the sandbox").FontSize(12.5).FontWeight(500).TextColor(palette.amber)
+					})
+				}
 			default:
 				ui.Row(c).Gap(5).AlignItems(ui.Center).Wrap().Children(func() {
 					ui.Text(c, agentName(t)+" wants to "+b.Operation).FontSize(12.5).TextColor(palette.muted)
@@ -111,6 +120,9 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 						ui.Text(c, b.Path).FontSize(12).Font("monospace")
 					}
 				})
+				if b.Args != "" {
+					a.requestArgs(c, r.Request, b.Args)
+				}
 			}
 			if b.Reason != "" {
 				ui.Text(c, b.Reason).FontSize(12.5).TextColor(palette.muted).LineHeight(1.45)
@@ -123,6 +135,51 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 			a.requestAnswers(c, t, r)
 		}
 	})
+}
+
+// argsLines and argsChars bound the arguments a card shows until asked
+// for all of them.
+const argsLines, argsChars = 8, 600
+
+// requestArgs are the arguments an allow approves, cut to their first
+// lines with a toggle to show all.
+func (a *app) requestArgs(c *ui.Context, request api.ID, args string) {
+	open := a.argsOpen[request]
+	shown, cut := args, false
+	if !open {
+		shown, cut = clipped(args, argsLines, argsChars)
+	}
+	ui.Text(c, shown).Selectable().FontSize(12).Font("monospace").LineHeight(1.45).Padding(8, 10).Radius(6).
+		Background(palette.bg).Border(1, palette.border)
+	if !cut && !open {
+		return
+	}
+	label, icon := "Show all", icChevronD
+	if open {
+		label, icon = "Show less", icChevronUp
+	}
+	if ghost(c, "args", false).Padding(2, 6).Children(func() {
+		ui.Icon(c, icon).FontSize(12)
+		ui.Text(c, label).FontSize(12)
+	}).Clicked() {
+		a.argsOpen[request] = !open
+	}
+}
+
+// clipped is s cut to its first lines lines and chars characters, and
+// whether that cut anything.
+func clipped(s string, lines, chars int) (string, bool) {
+	out := s
+	if ls := strings.SplitN(s, "\n", lines+1); len(ls) > lines {
+		out = strings.Join(ls[:lines], "\n")
+	}
+	if r := []rune(out); len(r) > chars {
+		out = string(r[:chars])
+	}
+	if out == s {
+		return s, false
+	}
+	return out + "…", true
 }
 
 // requestAnswers are a waiting request's answers, Allow once and Deny; or
