@@ -740,7 +740,8 @@ func (a *app) keyedRequest(t thread, es []entry) *client.RequestEntry {
 // composer holds nothing: ⌘⏎ allows it once, as it would send a draft,
 // and ⇧⌘D denies it, as press says, and its answers show the keys. With a
 // draft, ⌘⏎ sends it, which steers the agent. They keep when ⌘ went down.
-func (a *app) approvalKeys(c *ui.Context, t thread, es []entry) {
+// Questions take keys of in, the chat's pane, as questionKeys says.
+func (a *app) approvalKeys(c *ui.Context, in ui.Element, t thread, es []entry) {
 	switch {
 	case c.Modifiers()&ui.Cmd == 0:
 		a.chord = time.Time{}
@@ -756,7 +757,7 @@ func (a *app) approvalKeys(c *ui.Context, t thread, es []entry) {
 		return
 	}
 	if r.Kind == api.KindQuestion {
-		a.questionKeys(c, t, r)
+		a.questionKeys(c, in, t, r)
 		return
 	}
 	answer := client.AllowOnce
