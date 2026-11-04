@@ -29,7 +29,9 @@ type Config struct {
 	Post func(fn func())
 	// Reported, when set, runs on the Post thread once for each report a
 	// child made to thread while the env was there to see it, after the
-	// views the stream sent with it.
+	// views the stream sent with it. A reconnect's snapshot instead tells,
+	// as a Blocked report, of each child of a thread held before that
+	// asks something it did not ask then.
 	Reported func(e *Env, thread api.ID, r api.Report)
 }
 
@@ -215,9 +217,12 @@ type Thread struct {
 	Pending    []Pending
 
 	known bool // the engine sent a view; false for a thread created here and not yet confirmed
-	open  bool
-	sub   *sub
-	last  chan struct{} // closed once the thread's latest submit returns
+	// told is the requests a reconnect told of, before the report that
+	// asks them may have come: that report tells of them no more.
+	told []api.ID
+	open bool
+	sub  *sub
+	last chan struct{} // closed once the thread's latest submit returns
 }
 
 type sub struct{ cancel context.CancelFunc }
@@ -353,17 +358,19 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 		}
 		e.waiting = nil
 		// A snapshot of another log than the views held, as on the first
-		// connect or from a restored database, tells of no report: what
-		// it carries came before, or the views held say nothing of it.
-		fenced := it.Snapshot.Cursor.Log != e.log
+		// connect or from a restored database, tells of nothing: what it
+		// carries came before, or the views held say nothing of it. One
+		// of the same log tells of the asks made while away, not of the
+		// last report: that one may be a sibling's, or its ask over.
+		var asked []api.Thread
+		if it.Snapshot.Cursor.Log == e.log {
+			asked = e.askedSince(it.Snapshot.Threads)
+		}
 		e.log = it.Snapshot.Cursor.Log
 		live := map[api.ID]bool{}
-		var reports []api.Thread
 		for _, v := range it.Snapshot.Threads {
 			live[v.ID] = true
-			if m.view(e, v) && !fenced {
-				reports = append(reports, v)
-			}
+			m.view(e, v)
 		}
 		for id, th := range e.Threads {
 			if th.known && !live[id] {
@@ -371,14 +378,52 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 				delete(e.Threads, id)
 			}
 		}
-		for _, v := range reports {
-			m.reported(e, v)
+		for _, v := range asked {
+			th := e.Threads[v.ID]
+			th.told = nil
+			for _, r := range v.Requests {
+				th.told = append(th.told, r.ID)
+			}
+			m.reported(e, v.Parent, api.Report{Child: v.ID, Kind: api.ReportBlocked})
 		}
 	case api.StreamThread:
-		if m.view(e, *it.Thread) {
-			m.reported(e, *it.Thread)
+		if m.view(e, *it.Thread) && !e.toldBefore(*it.Thread.LastReport) {
+			m.reported(e, it.Thread.ID, *it.Thread.LastReport)
 		}
 	}
+}
+
+// toldBefore is whether r is the next report of a child a reconnect told
+// of, and asks nothing that reconnect did not tell of.
+func (e *Env) toldBefore(r api.Report) bool {
+	th := e.Threads[r.Child]
+	if th == nil || th.told == nil {
+		return false
+	}
+	told := th.told
+	th.told = nil
+	return !slices.ContainsFunc(th.View.Requests, func(q api.Request) bool { return !slices.Contains(told, q.ID) })
+}
+
+// askedSince is the views of children of threads e holds that ask
+// something the views e holds do not.
+func (e *Env) askedSince(views []api.Thread) []api.Thread {
+	var asked []api.Thread
+	for _, v := range views {
+		if p := e.Threads[v.Parent]; p == nil || !p.known {
+			continue
+		}
+		var held []api.Request
+		if th := e.Threads[v.ID]; th != nil {
+			held = th.View.Requests
+		}
+		if slices.ContainsFunc(v.Requests, func(r api.Request) bool {
+			return !slices.ContainsFunc(held, func(h api.Request) bool { return h.ID == r.ID })
+		}) {
+			asked = append(asked, v)
+		}
+	}
+	return asked
 }
 
 // view takes v in place of the thread's view, and is whether v carries a
@@ -405,9 +450,9 @@ func (m *Manager) view(e *Env, v api.Thread) bool {
 	return seen && r != nil && (was == nil || *was != *r)
 }
 
-func (m *Manager) reported(e *Env, v api.Thread) {
+func (m *Manager) reported(e *Env, parent api.ID, r api.Report) {
 	if m.cfg.Reported != nil {
-		m.cfg.Reported(e, v.ID, *v.LastReport)
+		m.cfg.Reported(e, parent, r)
 	}
 }
 
