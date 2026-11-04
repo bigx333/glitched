@@ -42,6 +42,8 @@ func TestAnswersFit(t *testing.T) {
 	}{
 		{`{"answers":[]}`, true}, // a dismissal
 		{`{}`, true},
+		{`{"answers":null}`, true}, // the GUI's dismissal, as Go marshals it
+		{`null`, false},            // no answer at all, not a dismissal
 		{`{"answers":[{"picked":["SQLite"]},{"picked":["Unit","Race"]}]}`, true},
 		{`{"answers":[{"other":"Postgres"},{"picked":["GUI"],"other":"Fuzz"}]}`, true},
 		{`{"answers":[{"picked":["SQLite"]}]}`, false},                                        // one answer to two questions
