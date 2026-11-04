@@ -3,6 +3,7 @@ package engine_test
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -496,17 +497,23 @@ func TestASettledThreadStartsNothing(t *testing.T) {
 // Deleting a live thread ends its run in the delete's commit, abandoned,
 // whatever state it was in, so no run outlives its thread.
 func TestDeletingALiveThreadEndsItsRun(t *testing.T) {
-	plain, _ := running(t)
+	plain, planned := running(t)
 	plain.must(dispatch("next", api.AfterActive))
-	stopping, run := running(t)
+	stopping, stopped := running(t)
 	stopping.must(api.TurnInterrupt{})
-	stopping.observe(engine.InterruptSent{Run: run})
-	uncertain, run := running(t)
-	uncertain.observe(engine.Reconciled{Run: run})
-	asking, _, _ := waiting(t)
-	for name, f := range map[string]*thread{"running": plain, "stopping": stopping, "uncertain": uncertain, "waiting": asking} {
-		if _, effects, err := f.submit(api.ThreadDelete{}); err != nil || len(effects) != 0 {
-			t.Fatalf("delete while %s: %v with effects %v, want deleted", name, err, effects)
+	stopping.observe(engine.InterruptSent{Run: stopped})
+	uncertain, lost := running(t)
+	uncertain.observe(engine.Reconciled{Run: lost})
+	asking, asked, _ := waiting(t)
+	type live struct {
+		f   *thread
+		run api.ID
+	}
+	for name, l := range map[string]live{"running": {plain, planned}, "stopping": {stopping, stopped}, "uncertain": {uncertain, lost}, "waiting": {asking, asked}} {
+		f := l.f
+		want := []engine.Effect{engine.CloseAgent{Run: l.run, Generation: 1}}
+		if _, effects, err := f.submit(api.ThreadDelete{}); err != nil || !reflect.DeepEqual(effects, want) {
+			t.Fatalf("delete while %s: %v with effects %v, want deleted, closing its agent", name, err, effects)
 		}
 		if !f.th.Deleted || f.th.Live() != nil {
 			t.Fatalf("delete while %s: deleted %v, live %+v; want deleted with no run", name, f.th.Deleted, f.th.Live())

@@ -378,6 +378,23 @@ func (h *Host) call(e store.Effect, lr *liveRun) (o engine.Observation, ok bool)
 			o = engine.InterruptLost{Run: b.Run}
 		}
 
+	case engine.CloseAgent:
+		// This host's pump closed the agent it held before the thread took
+		// this effect, so an agent found now outlived an earlier host.
+		var rec provider.Recovery
+		if !retry(h.ctx, "find agent", func(ctx context.Context) (err error) {
+			ctx, cancel := context.WithTimeout(ctx, callTimeout)
+			defer cancel()
+			rec, err = h.adapter.Reconcile(ctx, provider.RuntimeIdentity{Thread: e.Thread, Run: b.Run, Generation: b.Generation})
+			return err
+		}) {
+			return nil, false
+		}
+		if r, found := rec.(provider.Restored); found && !h.closeAgent(r.Agent) {
+			return nil, false
+		}
+		return nil, true
+
 	case engine.DeliverAnswer:
 		o = engine.Delivered{Request: b.Request}
 		if err = h.act(b.Run, provider.Respond{Request: b.Dedup, Answer: b.Answer}); err != nil {

@@ -27,6 +27,14 @@ type SteerTurn struct {
 
 type InterruptTurn struct{ Run api.ID }
 
+// CloseAgent closes the agent of a run that ended in the log while it may
+// still be running: a deleted thread's. It sits in the outbox until done,
+// so a crash or a shutdown before the close leaves it for the next host.
+type CloseAgent struct {
+	Run        api.ID
+	Generation uint64
+}
+
 type DeliverAnswer struct {
 	Run, Request api.ID
 	Dedup        string
@@ -47,6 +55,7 @@ func (StartTurn) effectKind() string      { return "turn.start" }
 func (ReportToParent) effectKind() string { return "child.report" }
 func (SteerTurn) effectKind() string      { return "turn.steer" }
 func (InterruptTurn) effectKind() string  { return "turn.interrupt" }
+func (CloseAgent) effectKind() string     { return "agent.close" }
 func (DeliverAnswer) effectKind() string  { return "request.deliver" }
 
 func EffectKind(e Effect) string { return e.effectKind() }
@@ -70,6 +79,8 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 		return true, nil
 	case InterruptTurn:
 		return r != nil && r.ID == e.Run && r.State == RunStopping, nil
+	case CloseAgent:
+		return true, nil
 	case ReportToParent:
 		// The parent decides, as it observes the report, whether it can
 		// still take it.
@@ -90,7 +101,8 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 // already have reached the agent, so boot reconciles them instead. Adapters
 // treat a repeated interrupt or a repeated answer as a no-op.
 // A report commits with its completion, so one left leased never landed.
-var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true}
+// Closing an agent that is gone does nothing.
+var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true}
 
 func ReplaySafe(e Effect) bool { return replaySafe[e.effectKind()] }
 
@@ -98,6 +110,7 @@ var effects = map[string]func([]byte) (Effect, error){
 	"turn.start":      decodeAs[StartTurn],
 	"turn.steer":      decodeAs[SteerTurn],
 	"turn.interrupt":  decodeAs[InterruptTurn],
+	"agent.close":     decodeAs[CloseAgent],
 	"request.deliver": decodeAs[DeliverAnswer],
 	"child.report":    decodeAs[ReportToParent],
 }
