@@ -206,6 +206,8 @@ type app struct {
 	// ended is each thread's last turn's end, as last seen, to tell of
 	// the next once.
 	ended map[api.ID]time.Time
+	// questions are the picks on the question cards that wait.
+	questions map[api.ID]*questionForm
 	// notify shows a desktop notification: nil until the window is.
 	notify   func(mygo.NotificationOptions)
 	settings settings
@@ -417,6 +419,7 @@ func newApp(dir string, post func(func())) *app {
 		router:        newRouter(),
 		wind:          wind.New(rand.Uint32(), nil),
 		ended:         map[api.ID]time.Time{},
+		questions:     map[api.ID]*questionForm{},
 		showSidebar:   true,
 		sidebarWidth:  272,
 		model:         "Claude Opus 5.5",

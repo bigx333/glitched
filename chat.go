@@ -426,9 +426,9 @@ func (a *app) workLog(c *ui.Context, t thread, key string, e entry, files []file
 		Transition(riseIn).Children(func() {
 		if ghost(c, "head", false).Radius(0).Padding(8, 12).Children(func() {
 			switch {
-			case e.paused:
+			case e.paused != "":
 				ui.Icon(c, icClock).FontSize(12).TextColor(palette.amber)
-				ui.Text(c, "Paused for approval").FontSize(12).Grow(1)
+				ui.Text(c, e.paused).FontSize(12).Grow(1)
 			case working:
 				statusMark(c, statusWorking)
 				shimmerText(c, e.took, 12, palette.muted, palette.text)
@@ -829,7 +829,10 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 						})
 					}
 					placeholder := "Ask anything, @tag files/folders, or use / to show available commands"
-					if waitingRequest(t, es) != nil {
+					switch r := waitingRequest(t, es); {
+					case r != nil && r.Kind == api.KindQuestion:
+						placeholder = "Reply to steer, or answer the questions above"
+					case r != nil:
 						placeholder = "Reply to steer, or answer the approval above"
 					}
 					// Unseen, the text area is one of its own, which never

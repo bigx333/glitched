@@ -75,9 +75,20 @@ const (
 	AllowOnce
 )
 
-// Respond answers a request with {"allow":true} or {"allow":false}, as the
-// CLI does.
+// Respond answers an approval with {"allow":true} or {"allow":false}, as
+// the CLI does.
 func (m *Manager) Respond(e *Env, thread, request api.ID, a Answer) api.ID {
+	answer, _ := json.Marshal(map[string]bool{"allow": a == AllowOnce})
+	return m.respond(e, thread, request, answer)
+}
+
+// AnswerQuestions answers a question request; no answers dismisses it.
+func (m *Manager) AnswerQuestions(e *Env, thread, request api.ID, a api.Answers) api.ID {
+	answer, _ := json.Marshal(a)
+	return m.respond(e, thread, request, answer)
+}
+
+func (m *Manager) respond(e *Env, thread, request api.ID, answer json.RawMessage) api.ID {
 	th := e.Threads[thread]
 	if th == nil {
 		return api.ID{}
@@ -90,7 +101,6 @@ func (m *Manager) Respond(e *Env, thread, request api.ID, a Answer) api.ID {
 			gen = r.Generation
 		}
 	}
-	answer, _ := json.Marshal(map[string]bool{"allow": a == AllowOnce})
 	return m.submit(e, thread, api.RequestRespond{Request: request, Generation: gen, Answer: answer})
 }
 

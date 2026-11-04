@@ -416,7 +416,7 @@ func statusBadge(c *ui.Context, s status) ui.Element {
 			statusMark(c, statusWorking)
 		})
 	case statusApproval:
-		return ui.Box(c).Size(9, 9).Radius(5).Background(palette.amber).Border(2, palette.sidebar).Tooltip("Pending approval")
+		return ui.Box(c).Size(9, 9).Radius(5).Background(palette.amber).Border(2, palette.sidebar).Tooltip("Waits on you")
 	}
 	return ui.Element{}
 }

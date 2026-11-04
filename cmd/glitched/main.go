@@ -9,11 +9,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -320,7 +322,7 @@ func run(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	at := reach(fs)
 	threadFlag := fs.String("thread", "", "thread to send to; a new one when empty")
-	yes := fs.Bool("yes", false, "approve every request without asking")
+	yes := fs.Bool("yes", false, "approve every request, and dismiss every question, without asking")
 	modeFlag := fs.String("mode", "after", "now, after, steer, restart or defer; restart also ends an uncertain run")
 	providerFlag := fs.String("provider", "fake", "the agent a new thread runs: fake or claude")
 	modelFlag := fs.String("model", "", "the model a new thread runs, such as haiku; empty is the provider's default")
@@ -383,18 +385,27 @@ func run(ctx context.Context, args []string) error {
 			return nil
 		}
 		asked[r.ID] = true
-		allow := *yes
-		if !allow {
-			kind, k := plain.Text(r.Kind, false)
-			body, b := plain.Text(string(r.Body), false)
-			if k || b {
-				fmt.Print("\n  ! Contains text outside printable ASCII, shown as \\u{...}")
+		var answer []byte
+		if r.Kind == api.KindQuestion {
+			var a api.Answers // -yes, or questions it can't show, dismiss
+			if q, err := api.ParseQuestions(r.Body); err == nil && !*yes {
+				a = askQuestions(in, os.Stdout, q)
 			}
-			fmt.Printf("\n  ? %s %s [y/N] ", kind, body)
-			line, _ := in.ReadString('\n')
-			allow = strings.HasPrefix(strings.ToLower(line), "y")
+			answer, _ = json.Marshal(a)
+		} else {
+			allow := *yes
+			if !allow {
+				kind, k := plain.Text(r.Kind, false)
+				body, b := plain.Text(string(r.Body), false)
+				if k || b {
+					fmt.Print("\n  ! Contains text outside printable ASCII, shown as \\u{...}")
+				}
+				fmt.Printf("\n  ? %s %s [y/N] ", kind, body)
+				line, _ := in.ReadString('\n')
+				allow = strings.HasPrefix(strings.ToLower(line), "y")
+			}
+			answer, _ = json.Marshal(map[string]bool{"allow": allow})
 		}
-		answer, _ := json.Marshal(map[string]bool{"allow": allow})
 		respond := api.RequestRespond{Request: r.ID, Generation: r.Generation, Answer: answer}
 		_, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: respond})
 		if errors.Is(err, api.ErrAlreadyAnswered) {
@@ -565,4 +576,72 @@ func replica(ctx context.Context, args []string) error {
 		fmt.Printf("%d  %s\n", e.Cursor.Seq, e.Type)
 	}
 	return nil
+}
+
+// askQuestions asks each question on out and reads its answer from in: an
+// option's number, numbers apart by commas in a multi question, or the
+// user's own words. An empty line dismisses them all. The agent's text
+// shows as printable ASCII, as the [y/N] prompt's does.
+func askQuestions(in *bufio.Reader, out io.Writer, q api.Questions) api.Answers {
+	var as api.Answers
+	for _, x := range q.Questions {
+		escaped := false
+		shown := func(s string) string {
+			s, e := plain.Text(s, false)
+			escaped = escaped || e
+			return s
+		}
+		var b strings.Builder
+		fmt.Fprint(&b, "  ? ")
+		if x.Header != "" {
+			fmt.Fprintf(&b, "%s: ", shown(x.Header))
+		}
+		fmt.Fprint(&b, shown(x.Text))
+		if x.Multi {
+			fmt.Fprint(&b, " (any: 1,3)")
+		}
+		fmt.Fprintln(&b)
+		for i, o := range x.Options {
+			fmt.Fprintf(&b, "    %d) %s", i+1, shown(o.Label))
+			if o.About != "" {
+				fmt.Fprintf(&b, "   %s", shown(o.About))
+			}
+			fmt.Fprintln(&b)
+		}
+		fmt.Fprintln(out)
+		if escaped {
+			fmt.Fprintln(out, "  ! Contains text outside printable ASCII, shown as \\u{...}")
+		}
+		fmt.Fprint(out, b.String(), "    Type a number, your own answer, or Enter to dismiss.\n  > ")
+		line, _ := in.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if line == "" {
+			fmt.Fprintln(out, "  dismissed")
+			return api.Answers{}
+		}
+		as.Answers = append(as.Answers, answerOf(x, line))
+	}
+	fmt.Fprintln(out, "  answered")
+	return as
+}
+
+// answerOf is what a line answers x: the options its numbers name, and
+// in a multi question its other words beside them; a line that is not
+// all numbers, in another, is the user's own words.
+func answerOf(x api.Question, line string) api.Answer {
+	var a api.Answer
+	var words []string
+	for f := range strings.SplitSeq(line, ",") {
+		f = strings.TrimSpace(f)
+		if n, err := strconv.Atoi(f); err == nil && n >= 1 && n <= len(x.Options) && !slices.Contains(a.Picked, x.Options[n-1].Label) {
+			a.Picked = append(a.Picked, x.Options[n-1].Label)
+		} else if f != "" {
+			words = append(words, f)
+		}
+	}
+	if !x.Multi && (len(words) > 0 || len(a.Picked) > 1) {
+		return api.Answer{Other: line}
+	}
+	a.Other = strings.Join(words, ", ")
+	return a
 }

@@ -113,8 +113,9 @@ type entry struct {
 	// A run's work: whether some of it is still going, and for how long it
 	// went.
 	working bool
-	// paused is a run's last work while the run waits on a request.
-	paused  bool
+	// paused is what a run's last work says while the run waits on a
+	// request.
+	paused  string
 	took    string
 	work    []client.WorkStep
 	request *client.RequestEntry
@@ -191,17 +192,21 @@ func entriesOf(t thread) []entry {
 	return es
 }
 
+// pausedFor is what paused work says, by whether its run waits on
+// questions.
+var pausedFor = map[bool]string{false: "Paused for approval", true: "Paused for your answer"}
+
 // markPaused marks each run's last work entry paused while a request of
 // the run waits.
 func markPaused(es []entry) {
-	asking := map[api.ID]bool{}
+	asking := map[api.ID]string{}
 	for i := len(es) - 1; i >= 0; i-- {
 		e := &es[i]
 		switch {
 		case e.request != nil && e.request.State == api.RequestPending:
-			asking[e.request.Run] = true
-		case e.kind == entryWork && asking[e.run]:
-			e.paused = true
+			asking[e.request.Run] = pausedFor[e.request.Kind == api.KindQuestion]
+		case e.kind == entryWork && asking[e.run] != "":
+			e.paused = asking[e.run]
 			delete(asking, e.run)
 		}
 	}

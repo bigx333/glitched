@@ -7,6 +7,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/client"
+	"glitched/internal/plain"
 )
 
 // notifyFinished tells the user, with a desktop notification, that the
@@ -41,16 +42,29 @@ func (a *app) watching(t thread) bool {
 	return a.selected == t.id() && a.win != nil && a.win.IsFocused()
 }
 
-// notifyAsked tells the user, as notifyFinished does, that child of
-// parent waits on them for a request: that ends no turn, so nothing else
-// tells of it. Clicking it opens the parent, where the child's report is.
-// Neither is a thread they're watching.
+// notifyAsked tells the user, as notifyFinished does, that child waits on
+// them for a request: that ends no turn, so nothing else tells of it. A
+// child of a parent is told of on the parent, where its report is, as
+// Needs you; a thread of the user's, a zero parent, on itself, with what
+// it asks. Clicking it opens that thread. None is one they're watching.
 func (a *app) notifyAsked(e *client.Env, parent, child api.ID) {
-	p, c := e.Threads[parent], e.Threads[child]
-	if p == nil || c == nil || !a.settings.notifications || a.notify == nil {
+	c := e.Threads[child]
+	if c == nil || !a.settings.notifications || a.notify == nil || a.watching(thread{e, c}) {
 		return
 	}
-	if a.watching(thread{e, p}) || a.watching(thread{e, c}) {
+	if parent.IsZero() {
+		if n := len(c.View.Requests); n > 0 {
+			a.notify(mygo.NotificationOptions{
+				ID:    "thread:" + child.String(),
+				Title: c.View.Title,
+				Body:  askBody(agentName(thread{e, c}), c.View.Requests[n-1]),
+				Group: "threads",
+			})
+		}
+		return
+	}
+	p := e.Threads[parent]
+	if p == nil || a.watching(thread{e, p}) {
 		return
 	}
 	a.notify(mygo.NotificationOptions{
@@ -59,6 +73,30 @@ func (a *app) notifyAsked(e *client.Env, parent, child api.ID) {
 		Body:  title(thread{e, c}) + ": Needs you",
 		Group: "threads",
 	})
+}
+
+// askBody is what a request asks, in a notification's line, its agent's
+// words as printable ASCII: "Claude asks: …", or what it wants to do.
+func askBody(agent string, r api.Request) string {
+	line := func(s string) string {
+		s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
+		if r := []rune(s); len(r) > 120 {
+			s = string(r[:117]) + "..."
+		}
+		s, _ = plain.Text(s, false)
+		return s
+	}
+	if q, err := api.ParseQuestions(r.Body); err == nil {
+		return agent + " asks: " + line(q.Questions[0].Text)
+	}
+	b, ok := askOf(r.Body)
+	switch {
+	case !ok:
+		return agent + " needs you"
+	case b.Command != "":
+		return agent + " wants to run " + line(b.Command)
+	}
+	return strings.TrimSpace(agent + " wants to " + line(b.Operation) + " " + line(b.Path))
 }
 
 // showNotification shows a desktop notification. Showing may wait on the

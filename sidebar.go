@@ -171,7 +171,7 @@ func statusMark(c *ui.Context, s status) {
 
 // pendingMark is the amber dot of a thread waiting on an approval.
 func pendingMark(c *ui.Context) {
-	ui.Box(c).Size(7, 7).Radius(4).Background(palette.amber).Margin(0, 2).Tooltip("Pending approval")
+	ui.Box(c).Size(7, 7).Radius(4).Background(palette.amber).Margin(0, 2).Tooltip("Waits on you")
 }
 
 var settingsSections = []struct {

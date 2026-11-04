@@ -67,6 +67,10 @@ var answerTitles = map[client.Answer]string{client.Deny: "Denied", client.AllowO
 // it keeps the answer; voided, it says so.
 func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 	r := e.request
+	if r.Kind == api.KindQuestion {
+		a.questionCard(c, t, e)
+		return
+	}
 	b, known := askOf(r.Body)
 	waiting := r.State == api.RequestPending
 	// Each string from the agent as the card shows it, and whether any of
@@ -140,15 +144,20 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 				ui.Text(c, shown(r.Reason, true)).FontSize(12).TextColor(palette.faint)
 			}
 			if escaped {
-				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Icon(c, icShieldAlert).FontSize(13).TextColor(palette.amber)
-					ui.Text(c, `Contains text outside printable ASCII, shown as \u{…}`).FontSize(12.5).FontWeight(500).TextColor(palette.amber)
-				})
+				asciiNotice(c)
 			}
 		})
 		if waiting || a.zapping(r) {
 			a.requestAnswers(c, t, r)
 		}
+	})
+}
+
+// asciiNotice says a card shows some of the agent's text as escapes.
+func asciiNotice(c *ui.Context) {
+	ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Icon(c, icShieldAlert).FontSize(13).TextColor(palette.amber)
+		ui.Text(c, `Contains text outside printable ASCII, shown as \u{…}`).FontSize(12.5).FontWeight(500).TextColor(palette.amber)
 	})
 }
 
@@ -315,6 +324,10 @@ func waitingRequest(t thread, es []entry) *client.RequestEntry {
 func (a *app) approvalKeys(c *ui.Context, t thread, es []entry) {
 	r := waitingRequest(t, es)
 	if r == nil || strings.TrimSpace(a.draft) != "" || len(a.attachments) > 0 {
+		return
+	}
+	if r.Kind == api.KindQuestion {
+		a.questionKeys(c, t, r)
 		return
 	}
 	switch {
