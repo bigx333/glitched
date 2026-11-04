@@ -507,9 +507,13 @@ function install(key) {
   }
 
   // A page leaving drops its refs: the back/forward cache can bring this
-  // document back, state and all, after a snapshot of another. Capturing,
-  // so a listener the page adds later can't stop it.
-  apply(fn(EventTarget, "addEventListener"), window, ["pagehide", () => {
+  // document back, state and all, after a snapshot of another. Capturing
+  // on window, it runs before any listener the page adds after it, so
+  // none of those can stop it; a capturing one the page added before the
+  // first snapshot can (#35). isTrusted is each event's own unforgeable
+  // property, so a pagehide the page fires itself drops nothing.
+  apply(fn(EventTarget, "addEventListener"), window, ["pagehide", (e) => {
+    if (!e.isTrusted) return;
     epoch = 0;
     refs = null;
     count = 0;
