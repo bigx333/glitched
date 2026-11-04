@@ -32,7 +32,8 @@ type Config struct {
 	// asks the user something the user has not heard of: on the child's
 	// Blocked report, or on a reconnect that finds the ask, whichever the
 	// env sees first. Nothing it asks at its first snapshot of a log is
-	// told of but by a report after.
+	// told of but by a report after, or a reconnect that finds its parent
+	// reported to while away.
 	Asked func(e *Env, parent, child api.ID)
 }
 
@@ -231,7 +232,7 @@ const (
 	unheard heard = iota
 	// before was pending at the env's first snapshot of the log. Its
 	// report may have come before the env did, so only a report after
-	// tells of it, not a reconnect.
+	// tells of it: one the env sees, or one to its parent while away.
 	before
 	notified
 )
@@ -374,12 +375,10 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 		same := it.Snapshot.Cursor.Log == e.log
 		e.log = it.Snapshot.Cursor.Log
 		live := map[api.ID]bool{}
-		var reports []api.Report
+		moved := map[api.ID]bool{} // parents reported to while away
 		for _, v := range it.Snapshot.Threads {
 			live[v.ID] = true
-			if m.view(e, v) && same {
-				reports = append(reports, *v.LastReport)
-			}
+			moved[v.ID] = m.view(e, v) && same
 		}
 		for id, th := range e.Threads {
 			if th.known && !live[id] {
@@ -398,10 +397,13 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 				}
 				continue
 			}
-			m.tell(e, th, before)
-		}
-		for _, r := range reports {
-			m.reported(e, r)
+			// A report while away may be the child's own, hidden by a
+			// sibling's after it, so it tells of all the child asks.
+			enough := before
+			if moved[v.Parent] {
+				enough = notified
+			}
+			m.tell(e, th, enough)
 		}
 	case api.StreamThread:
 		if m.view(e, *it.Thread) {
