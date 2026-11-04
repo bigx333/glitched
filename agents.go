@@ -284,7 +284,7 @@ func statusDot(c *ui.Context, s status, failed bool) ui.Element {
 	case s == statusWorking:
 		col, tip = palette.blue, "Working"
 	case s == statusApproval:
-		col, tip = palette.amber, "Pending approval"
+		col, tip = palette.amber, "Waits on you"
 	case failed:
 		col, tip = palette.red, "Failed"
 	case s == statusCompleted:

@@ -28,12 +28,15 @@ type Config struct {
 	// Post runs fn on the thread that owns the manager's state, in the order
 	// posted, and must not block; the GUI passes its window's Update.
 	Post func(fn func())
-	// Asked, when set, runs on the Post thread once for each child that
-	// asks the user something the user has not heard of: on the child's
-	// Blocked report, or on a reconnect that finds the ask, whichever the
-	// env sees first. Nothing it asks at its first snapshot of a log is
-	// told of but by a report after, or a reconnect that finds its parent
-	// reported to while away.
+	// Asked, when set, runs on the Post thread once for each thread that
+	// asks the user something the user has not heard of. A child is told
+	// of on its Blocked report, or on a reconnect that finds the ask,
+	// whichever the env sees first; nothing it asks at its first snapshot
+	// of a log is told of but by a report after, or a reconnect that finds
+	// its parent reported to while away. A thread of the user's, whose
+	// parent is zero, is told of on the view that first asks it, or on a
+	// reconnect that finds the ask; not for what it asks at the first
+	// snapshot of a log.
 	Asked func(e *Env, parent, child api.ID)
 }
 
@@ -388,9 +391,6 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 		}
 		for _, v := range it.Snapshot.Threads {
 			th := e.Threads[v.ID]
-			if v.Parent.IsZero() {
-				continue
-			}
 			if !same {
 				for _, r := range v.Requests {
 					th.told[r.ID] = max(th.told[r.ID], before)
@@ -400,7 +400,7 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 			// A report while away may be the child's own, hidden by a
 			// sibling's after it, so it tells of all the child asks.
 			enough := before
-			if moved[v.Parent] {
+			if !v.Parent.IsZero() && moved[v.Parent] {
 				enough = notified
 			}
 			m.tell(e, th, enough)
@@ -408,6 +408,9 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 	case api.StreamThread:
 		if m.view(e, *it.Thread) {
 			m.reported(e, *it.Thread.LastReport)
+		}
+		if th := e.Threads[it.Thread.ID]; th != nil && it.Thread.Parent.IsZero() {
+			m.tell(e, th, before)
 		}
 	}
 }
@@ -420,8 +423,8 @@ func (m *Manager) reported(e *Env, r api.Report) {
 	}
 }
 
-// tell tells of child th if it asks a request the user heard less of
-// than enough, and marks all it asks as told of.
+// tell tells of th if it asks a request the user heard less of than
+// enough, and marks all it asks as told of.
 func (m *Manager) tell(e *Env, th *Thread, enough heard) {
 	if !slices.ContainsFunc(th.View.Requests, func(r api.Request) bool { return th.told[r.ID] < enough }) {
 		return
