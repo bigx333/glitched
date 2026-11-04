@@ -78,7 +78,7 @@ func (a *app) chatPage(c *ui.Context) {
 				// Over the edge, which would take its clicks.
 				a.jumpToLatest(c, t)
 				// Before the composer, whose ⌘⏎ would send or stop.
-				a.approvalKeys(c, t, es)
+				a.approvalKeys(c, pane, t, es)
 				a.composer(c, t, es)
 			})
 			// A server's workspace isn't here for a shell. The diff panel,

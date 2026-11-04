@@ -321,13 +321,14 @@ func waitingRequest(t thread, es []entry) *client.RequestEntry {
 // approvalKeys answer the waiting request from the keyboard while the
 // composer holds nothing: ⌘⏎ allows it once, as it would send a draft,
 // and ⇧⌘D denies it. With a draft, ⌘⏎ sends it, which steers the agent.
-func (a *app) approvalKeys(c *ui.Context, t thread, es []entry) {
+// Questions take keys of in, the chat's pane, as questionKeys says.
+func (a *app) approvalKeys(c *ui.Context, in ui.Element, t thread, es []entry) {
 	r := waitingRequest(t, es)
 	if r == nil || strings.TrimSpace(a.draft) != "" || len(a.attachments) > 0 {
 		return
 	}
 	if r.Kind == api.KindQuestion {
-		a.questionKeys(c, t, r)
+		a.questionKeys(c, in, t, r)
 		return
 	}
 	switch {
