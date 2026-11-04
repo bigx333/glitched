@@ -33,7 +33,7 @@ import (
 var ErrLocked = errors.New("another engine holds the lock")
 
 // Config is how an engine serves. engine.json under Dir keeps all but Dir
-// and Adapter.
+// and Providers.
 type Config struct {
 	Dir string `json:"-"` // the lock, the databases, the socket, tokens.json and engine.json
 	// Hub runs the hub role in this engine. Otherwise the engine uploads its
@@ -51,10 +51,10 @@ type Config struct {
 	// installed Tailscale's address once it has one, else on the engine's
 	// own tsnet node, signed in to Control, a control server such as
 	// Headscale's, or Tailscale's when it's "".
-	Tailnet bool             `json:"tailnet,omitempty"`
-	Control string           `json:"control,omitempty"`
-	Epoch   uint64           `json:"epoch"` // this host's epoch at the hub
-	Adapter provider.Adapter `json:"-"`
+	Tailnet   bool         `json:"tailnet,omitempty"`
+	Control   string       `json:"control,omitempty"`
+	Epoch     uint64       `json:"epoch"` // this host's epoch at the hub
+	Providers provider.Mux `json:"-"`
 }
 
 const configFile = "engine.json"
@@ -67,11 +67,21 @@ const configFile = "engine.json"
 func Defaults(dir string) (Config, error) {
 	ad := fake.New(fake.Turn(true))
 	ad.Tokens = 1800 // a turn's usage, for the GUI to show
-	cfg := Config{Dir: dir, Hub: true, Epoch: 1, Adapter: ad}
+	cfg := Config{Dir: dir, Hub: true, Epoch: 1, Providers: FakeProviders(ad)}
 	if err := jsonfile.Load(filepath.Join(dir, configFile), &cfg); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// FakeProviders has ad play fake and every provider the GUI offers, until
+// each has an adapter of its own.
+func FakeProviders(ad provider.Adapter) provider.Mux {
+	m := provider.Mux{}
+	for _, name := range []string{"fake", "claude", "codex", "gemini", "grok"} {
+		m[name] = ad
+	}
+	return m
 }
 
 // Save records cfg in engine.json under its Dir, for Defaults.
@@ -210,7 +220,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		}
 	}
 
-	h, err := runtime.New(ctx, st, cfg.Adapter)
+	h, err := runtime.New(ctx, st, cfg.Providers)
 	if err != nil {
 		return nil, err
 	}

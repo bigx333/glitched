@@ -29,7 +29,7 @@ func engine(t *testing.T, a provider.Adapter) (string, *transport.EndpointClient
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := daemonruntime.New(ctx, st, a)
+	h, err := daemonruntime.New(ctx, st, provider.Mux{"fake": a})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func engine(t *testing.T, a provider.Adapter) (string, *transport.EndpointClient
 func newThread(t *testing.T, ep *transport.EndpointClient) api.ID {
 	t.Helper()
 	thread := api.NewID()
-	if _, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{}}); err != nil {
+	if _, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{Model: api.ModelRef{Provider: "fake"}}}); err != nil {
 		t.Fatal(err)
 	}
 	return thread

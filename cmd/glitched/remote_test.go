@@ -13,6 +13,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
+	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
 )
@@ -36,7 +37,7 @@ func remoteEngine(t *testing.T) (addr, token string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := daemon.Start(context.Background(), daemon.Config{Dir: dir, Hub: true, Listen: []string{"127.0.0.1:0"}, Adapter: fake.New(fake.Turn(true))})
+	d, err := daemon.Start(context.Background(), daemon.Config{Dir: dir, Hub: true, Listen: []string{"127.0.0.1:0"}, Providers: provider.Mux{"fake": fake.New(fake.Turn(true))}})
 	if err != nil {
 		t.Fatal(err)
 	}

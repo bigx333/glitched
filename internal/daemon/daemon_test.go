@@ -20,6 +20,7 @@ import (
 	"github.com/coder/websocket"
 
 	"glitched/internal/api"
+	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
 )
@@ -38,7 +39,7 @@ func stateDir(t *testing.T) string {
 func start(t *testing.T, cfg Config) *Daemon {
 	t.Helper()
 	cfg.Hub = true
-	cfg.Adapter = fake.New(fake.Turn(true))
+	cfg.Providers = provider.Mux{"fake": fake.New(fake.Turn(true))}
 	d, err := Start(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -60,11 +61,11 @@ func remote(t *testing.T, d *Daemon, token string) *transport.EndpointClient {
 
 func TestStartTwiceOnOneDirIsLocked(t *testing.T) {
 	dir := stateDir(t)
-	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Adapter: fake.New(nil)})
+	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Providers: provider.Mux{"fake": fake.New(nil)}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Start(context.Background(), Config{Dir: dir, Hub: true, Adapter: fake.New(nil)}); !errors.Is(err, ErrLocked) {
+	if _, err := Start(context.Background(), Config{Dir: dir, Hub: true, Providers: provider.Mux{"fake": fake.New(nil)}}); !errors.Is(err, ErrLocked) {
 		t.Fatalf("a second engine on the dir: %v, want ErrLocked", err)
 	}
 	if err := d.Close(); err != nil {
@@ -76,7 +77,7 @@ func TestStartTwiceOnOneDirIsLocked(t *testing.T) {
 func TestStartRefusesAListenAddressOffTheTailnet(t *testing.T) {
 	dir := stateDir(t)
 	for _, addr := range []string{"0.0.0.0:7465", "8.8.8.8:7465"} {
-		_, err := Start(context.Background(), Config{Dir: dir, Hub: true, Listen: []string{addr}, Adapter: fake.New(nil)})
+		_, err := Start(context.Background(), Config{Dir: dir, Hub: true, Listen: []string{addr}, Providers: provider.Mux{"fake": fake.New(nil)}})
 		if err == nil || !strings.Contains(err.Error(), "Tailscale") {
 			t.Fatalf("listen on %s: %v, want the tailnet rule", addr, err)
 		}
@@ -233,7 +234,7 @@ func TestStartServesWhileATailnetAddressIsUnassigned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Listen: []string{"127.0.0.1:0", unassigned}, Adapter: fake.New(nil)})
+	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Listen: []string{"127.0.0.1:0", unassigned}, Providers: provider.Mux{"fake": fake.New(nil)}})
 	if err != nil {
 		t.Fatalf("start with a tailnet address not assigned yet: %v", err)
 	}
@@ -319,7 +320,7 @@ func TestAHubOfAnotherProtocolIsNamedInTheLog(t *testing.T) {
 	was := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&syncWriter{w: &logged}, nil)))
 	t.Cleanup(func() { slog.SetDefault(was) })
-	d, err := Start(context.Background(), Config{Dir: stateDir(t), HubDir: hubDir, Adapter: fake.New(fake.Turn(false))})
+	d, err := Start(context.Background(), Config{Dir: stateDir(t), HubDir: hubDir, Providers: provider.Mux{"fake": fake.New(fake.Turn(false))}})
 	if err != nil {
 		t.Fatal(err)
 	}
