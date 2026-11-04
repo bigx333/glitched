@@ -116,6 +116,8 @@ real engine, with pages served by the test:
   methods, `then` on `Object.prototype`), changes nothing refs find or
   what they say, from a snapshot taken before or after (what this guards,
   and what not, is below).
+- **Scaled frames:** a ref's box through a frame its transform scales,
+  each axis on its own, one in it, and one an ancestor's transform scales.
 
 An adapter runs it from a test with a `Harness`: its `Opener`, a `Do` that
 runs a func where the view builds, a `Show` for engines that load only
@@ -214,8 +216,13 @@ that picks it. Nothing above the seam changes.
   document its frame left still reads as connected, in that document.
 - `webtarget.Describe(ctx, page, ref)` resolves a ref to its element's
   role, name and box in the top frame's viewport, through the frames it is
-  in. `Snapshot.Verify(ref, element)` checks it is still what the snapshot
-  named, as an action will before it acts.
+  in: past each frame's border and padding, at the scale it shows at, which
+  its transforms and its ancestors' give it (`transform: scale()`,
+  `scale`), each axis on its own. A frame turned, skewed or flipped
+  (`rotate`, `skew`, a negative scale) is not mapped: Describe scales it
+  to its bounding box, so the box is off, and a click at its centre can
+  miss. `Snapshot.Verify(ref, element)` checks it is still what the
+  snapshot named, as an action will before it acts.
 - **What a page can do to refs:** the script keeps its state private to
   functions it installs, frozen, under a property named at random in each
   run of the app (`__glitched_<random>`). Once installed in a document, it
@@ -224,8 +231,9 @@ that picks it. Nothing above the seam changes.
   installed, called through the `Reflect.apply` it found. That is the
   DOM's (`getAttribute`, `matches`, `querySelector`, `getRootNode`,
   `getElementById`, `textContent`, `innerText`, `localName`, `labels`,
-  `isConnected`, `childNodes`, `contentDocument`, `getBoundingClientRect`
-  and a rect's `x`, `y`, `width` and `height`, and the like),
+  `isConnected`, `childNodes`, `contentDocument`, `offsetWidth`,
+  `offsetHeight`, `getBoundingClientRect` and a rect's `x`, `y`, `width`
+  and `height`, and the like),
   `getComputedStyle` and `getPropertyValue`, `WeakRef` and its `deref`,
   `String`'s `slice`, `toUpperCase`, `toLowerCase` and `repeat`, `Array`'s
   `join`, `JSON.stringify` and `parseFloat`. It parses refs, and splits
