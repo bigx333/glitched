@@ -79,8 +79,11 @@ func clip(s string, n int) string {
 }
 
 // askLine is what a blocked child waits on, from its request's body: a
-// command to run, or an operation on a path.
+// command to run, an operation on a path, or its first question.
 func askLine(body json.RawMessage) string {
+	if q, err := api.ParseQuestions(body); err == nil {
+		return clip(oneLine("Asks: "+q.Questions[0].Text), outcomeLimit)
+	}
 	var b struct{ Operation, Path, Command string }
 	if json.Unmarshal(body, &b) == nil {
 		switch {
