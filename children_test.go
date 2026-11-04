@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -702,5 +704,195 @@ func TestAChildsReportNotifies(t *testing.T) {
 				t.Fatalf("notifications on the parent: %+v; want one, %q", rs, tc.want)
 			}
 		})
+	}
+}
+
+// slowStop opens the fake's agents, which play the first event of a turn
+// and work on until interrupted; the interrupted turn ends only once
+// release closes, so a stop lands late.
+type slowStop struct {
+	*fake.Adapter
+	release chan struct{}
+}
+
+func (s slowStop) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	g, err := s.Adapter.Open(ctx, spec)
+	return &slowAgent{Agent: g, release: s.release, stop: make(chan struct{}), left: 1}, err
+}
+
+type slowAgent struct {
+	provider.Agent
+	release chan struct{}
+	left    int
+	once    sync.Once
+	stop    chan struct{}
+}
+
+func (g *slowAgent) Next(ctx context.Context) (provider.Event, error) {
+	if g.left == 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-g.stop:
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-g.release:
+		}
+	} else {
+		g.left--
+	}
+	return g.Agent.Next(ctx)
+}
+
+func (g *slowAgent) Do(ctx context.Context, act provider.Action) error {
+	if _, ok := act.(provider.Interrupt); ok {
+		g.once.Do(func() { close(g.stop) })
+	}
+	return g.Agent.Do(ctx, act)
+}
+
+// pump runs what the manager posts, a frame at a time, for d.
+func (h *harness) pump(d time.Duration) {
+	for end := time.Now().Add(d); time.Now().Before(end); {
+		h.p.run()
+		h.tt.Advance(100 * time.Millisecond)
+	}
+}
+
+// viewOn is the engine's view of a thread, and whether it's still there.
+func viewOn(t *testing.T, d *daemon.Daemon, id api.ID) (api.Thread, bool) {
+	t.Helper()
+	snap, err := d.Endpoint().Read(context.Background(), api.Query{Thread: id})
+	if errors.Is(err, api.ErrNotFound) {
+		return api.Thread{}, false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snap.Threads[0], true
+}
+
+// Stop all, then Settle before the stops land: each child ends as its
+// agent does, and the settled tree has nothing live.
+func TestStopAllThenSettleLeavesNothingLive(t *testing.T) {
+	dir := tempDir(t)
+	release := make(chan struct{})
+	d := engine(t, daemon.Config{Dir: dir}, slowStop{fake.New(midTurn), release})
+	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	kid := seedChild(t, d, top, "Write the tests")
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: "go"}}); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, dir)
+	parent, child := h.thread("Ship the sidebar sort"), h.thread("Write the tests")
+	h.until("the child working", func() bool { return child.View.Working() })
+	h.tt.Frame()
+	h.a.stopAll(h.a.shown(parent))
+	h.until("the child stopping", func() bool { return child.View.Run == api.RunStopping })
+	time.Sleep(300 * time.Millisecond)
+	h.a.settleTree(parent)
+	h.until("the child settled", func() bool { return child.View.Disposition.State == api.Settled })
+	close(release)
+	h.pump(5 * time.Second)
+	if v, _ := viewOn(t, d, kid); v.Live() || v.Disposition.State != api.Settled {
+		t.Errorf("the child in a settled tree: run %v, settled %v; want idle and settled", v.Run, v.Disposition.State == api.Settled)
+	}
+}
+
+// Stop a lone thread, then delete it before the stop lands: it goes once
+// its agent has stopped.
+func TestStopThenDeleteALoneThread(t *testing.T) {
+	dir := tempDir(t)
+	release := make(chan struct{})
+	d := engine(t, daemon.Config{Dir: dir}, slowStop{fake.New(midTurn), release})
+	id := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: "go"}}); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, dir)
+	th := h.thread("Ship the sidebar sort")
+	h.until("working", func() bool { return th.View.Working() })
+	h.a.backend.Interrupt(th.env, th.id())
+	h.until("stopping", func() bool { return th.View.Run == api.RunStopping })
+	time.Sleep(300 * time.Millisecond)
+	h.a.settings.confirmDelete = false
+	h.a.askDelete(th)
+	h.pump(time.Second)
+	close(release)
+	h.pump(5 * time.Second)
+	if v, there := viewOn(t, d, id); there {
+		t.Errorf("the thread is still there: run %v", v.Run)
+	}
+}
+
+// Deleting a tree deletes a child another client set to work after this
+// GUI last heard of it: the GUI's view of the child is idle, the engine's
+// is not, and neither thread is left, nor anything running.
+func TestDeleteAChildStartedBeforeTheGUIHeard(t *testing.T) {
+	dir := tempDir(t)
+	var opens atomic.Int32
+	ad := fake.New(midTurn)
+	d := engine(t, daemon.Config{Dir: dir}, counting{stalled{ad, 1}, &opens})
+	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	kid := seedChild(t, d, top, "Write the tests")
+	h := start(t, dir)
+	parent, child := h.thread("Ship the sidebar sort"), h.thread("Write the tests")
+	h.tt.Frame()
+	if child.View.Live() {
+		t.Fatal("the child works already")
+	}
+	run, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: "go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for v, _ := viewOn(t, d, kid); v.Run != api.RunRunning; v, _ = viewOn(t, d, kid) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	h.a.settings.confirmDelete = false
+	h.a.askDelete(parent)
+	h.pump(5 * time.Second)
+	_, p := viewOn(t, d, top)
+	v, k := viewOn(t, d, kid)
+	if p || k {
+		t.Errorf("parent there=%v; child there=%v, live=%v", p, k, v.Live())
+	}
+	rec, err := ad.Reconcile(context.Background(), provider.RuntimeIdentity{Thread: kid, Run: run.Command})
+	if _, lost := rec.(provider.Lost); !lost || err != nil {
+		t.Errorf("Delete left the child agent running: %T %v", rec, err)
+	}
+}
+
+// A follow-up another client queues on a child while its tree is being
+// deleted starts no turn, and the tree goes all the same.
+func TestAFollowUpQueuedDuringADeleteKeepsNothing(t *testing.T) {
+	dir := tempDir(t)
+	release := make(chan struct{})
+	var opens atomic.Int32
+	d := engine(t, daemon.Config{Dir: dir}, counting{slowStop{fake.New(midTurn), release}, &opens})
+	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	kid := seedChild(t, d, top, "Write the tests")
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: "go"}}); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, dir)
+	child := h.thread("Write the tests")
+	h.until("the child working", func() bool { return child.View.Working() })
+	h.tt.Frame()
+	before := opens.Load()
+	h.a.settings.confirmDelete = false
+	h.a.askDelete(h.thread("Ship the sidebar sort"))
+	for v, there := viewOn(t, d, kid); there && v.Run != api.RunStopping; v, there = viewOn(t, d, kid) {
+		h.p.run()
+		time.Sleep(5 * time.Millisecond)
+	}
+	d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: "then this", Mode: api.AfterActive}})
+	close(release)
+	h.pump(5 * time.Second)
+	_, p := viewOn(t, d, top)
+	v, k := viewOn(t, d, kid)
+	if n := opens.Load() - before; p || k || n != 0 {
+		t.Errorf("starts=%d parent_exists=%v child_exists=%v child_live=%v", n, p, k, v.Live())
 	}
 }
