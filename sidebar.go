@@ -107,16 +107,28 @@ const (
 )
 
 // sidebarEdge is the sidebar's right edge, which the pointer drags to
-// resize it. It lights up as it's pointed at.
+// resize it.
 func (a *app) sidebarEdge(c *ui.Context) {
-	edge := ui.Box(c).Key("edge").Absolute().Right(0).Top(0).Bottom(0).Width(5).Cursor(ui.CursorResizeEW).
-		Label("Resize sidebar")
-	if dx, _, ok := edge.Dragged(); ok && dx != 0 {
+	edge := dragEdge(c, "edge", "Resize sidebar").Right(0)
+	dx, _, ok := edge.Dragged()
+	a.sidebarPressed = ok
+	if ok && dx != 0 {
 		a.sidebarWidth = min(max(a.sidebarWidth+dx, minSidebarWidth), maxSidebarWidth)
+		a.sidebarHeld = true
 	}
+	if _, _, ok := edge.DragEnded(); ok {
+		a.sidebarHeld = false
+	}
+}
+
+// dragEdge is a pane's edge, along its height, which the pointer drags to
+// resize it, with the resize cursor. It lights up as it's pointed at.
+func dragEdge(c *ui.Context, key, label string) ui.Element {
+	edge := ui.Box(c).Key(key).Absolute().Top(0).Bottom(0).Width(5).Cursor(ui.CursorResizeEW).Label(label)
 	if edge.Hovered() || edge.Pressed() {
 		edge.Background(palette.accent.Alpha(0.5))
 	}
+	return edge
 }
 
 func (a *app) sidebar(c *ui.Context) {

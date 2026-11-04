@@ -21,6 +21,7 @@ import (
 	"github.com/egoist/mygo/ui/markdown"
 
 	"glitched/internal/api"
+	"glitched/internal/browse/sysweb"
 	"glitched/internal/client"
 	"glitched/wind"
 )
@@ -280,12 +281,26 @@ type app struct {
 	suggestFly       *mygo.Window
 	suggestBox       [5]int // the flyout's anchor and height, as last set
 	files            map[string][]string
-	// The preview pane: shown, its web view, its address and the one
-	// being typed, and why it could not start.
-	showPreview              bool
-	preview                  *mygo.WebView
-	previewURL, previewDraft string
-	previewErr               string
+	// The preview pane, a browser: shown, its tabs and the one shown, and
+	// why its web views could not start (see browser.go).
+	showPreview bool
+	browser     browser
+	// previewDragged is the preview's width as its edge was dragged, 0
+	// until it is, and again after a double click on it.
+	previewDragged float32
+	// sidebarHeld and previewHeld are set while the sidebar's or the
+	// preview's edge is dragged, from its first move until it is let go:
+	// the chat follows it without easing. sidebarPressed and
+	// previewPressed are set while the edge is pressed, as the last frame
+	// built it: an edge not built, as its pane closed mid-drag, ends no
+	// drag, and holds nothing in the next frame (view).
+	sidebarHeld, previewHeld       bool
+	sidebarPressed, previewPressed bool
+	// dir is the state directory, which holds the layout (layout.go).
+	dir string
+	// terminalFocused is set while the terminal drawer has the keyboard,
+	// as the last frame built it; it keeps the browser's keys then.
+	terminalFocused bool
 	// zap is a request's answers just answered, breaking up as they go;
 	// answerAt where the waiting request's answers were last laid out.
 	zap      approvalZap
@@ -400,6 +415,7 @@ type app struct {
 // that builds the views.
 func newApp(dir string, post func(func())) *app {
 	a := &app{
+		dir:           dir,
 		router:        newRouter(),
 		wind:          wind.New(rand.Uint32(), nil),
 		ended:         map[api.ID]time.Time{},
@@ -420,8 +436,6 @@ func newApp(dir string, post func(func())) *app {
 		post:          post,
 		lists:         map[api.ID]*ui.ListState{},
 		files:         map[string][]string{},
-		previewURL:    defaultPreviewURL,
-		previewDraft:  defaultPreviewURL,
 		diffLayout:    editor.DiffUnified,
 		diffWrap:      true,
 		diffFile:      map[api.ID]string{},
@@ -449,6 +463,7 @@ func newApp(dir string, post func(func())) *app {
 			codexModel:    "GPT-5.5 Codex",
 		},
 	}
+	a.loadLayout()
 	a.backend = client.New(client.Config{Dir: dir, Post: func(fn func()) {
 		post(func() {
 			fn()
@@ -527,6 +542,10 @@ func (a *app) view(c *ui.Context) {
 	// appearance: the sidebar shows it while the app's theme matches, and
 	// the Liquid Glass setting is on.
 	a.now = c.Now()
+	a.sidebarHeld = a.sidebarHeld && a.sidebarPressed
+	a.previewHeld = a.previewHeld && a.previewPressed
+	a.sidebarPressed, a.previewPressed = false, false
+	a.browser.letGo(a.showPreview)
 	a.projects = a.gather()
 	a.kids = a.kidsOf()
 	// A project gone, as with its server, leaves the filter, lest it hide
@@ -551,6 +570,9 @@ func (a *app) view(c *ui.Context) {
 	systemDark := c.Theme().Dark
 	a.applyTheme(c)
 	a.shortcuts(c)
+	// The drawer sets it again as it builds with the keyboard (chat.go);
+	// a frame without it, as on another page, leaves the keys the browser's.
+	a.terminalFocused = false
 	a.vibrant = c.Vibrancy() && a.settings.glass && c.Theme().Dark == systemDark
 	if c.Vibrancy() {
 		// The material shows wherever nothing paints over it.
@@ -623,6 +645,7 @@ func (a *app) shortcuts(c *ui.Context) {
 	if c.Shortcut(ui.Cmd, ui.KeyComma) {
 		a.router.Push("/settings/general")
 	}
+	a.browserShortcuts(c)
 }
 
 // contrast is the WCAG contrast ratio of two colors.
@@ -727,6 +750,8 @@ func main() {
 		a.notify = showNotification
 		// The wind's glyph atlases are drawn between the window's frames.
 		a.wind.SetLater(a.win.Update)
+		// The browser's pages are the system's web views of the window.
+		a.browser.open = sysweb.Opener(a.win)
 		a.setUpQuickAsk()
 		// The terminals' shells hang up as the window closes, not as it
 		// hides (macOS).

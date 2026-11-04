@@ -1,6 +1,10 @@
 package main
 
-import "github.com/egoist/mygo"
+import (
+	"runtime"
+
+	"github.com/egoist/mygo"
+)
 
 // installMenu gives the app the menu bar of a Mac app, as MyGo's native
 // example has one: the app menu, Thread with the app's commands, the Edit
@@ -44,6 +48,7 @@ func (a *app) installMenu() {
 			{Label: "Toggle Terminal", Accelerator: "CmdOrCtrl+J", Click: do(func() { a.showTerminal, a.panelsJump = !a.showTerminal, true })},
 			{Label: "Toggle Diff", Accelerator: "CmdOrCtrl+D", Click: do(func() { a.showDiff, a.panelsJump = !a.showDiff, true })},
 			{Label: "Toggle Preview", Accelerator: "CmdOrCtrl+Shift+P", Click: do(func() { a.togglePreview(); a.panelsJump = true })},
+			{Label: "New Browser Tab", Accelerator: newTabKey(), Click: do(func() { a.newTab(""); a.panelsJump = true })},
 			mygo.Separator(),
 			{Label: "Appearance", Submenu: appearance},
 			mygo.Separator(),
@@ -51,4 +56,14 @@ func (a *app) installMenu() {
 		}},
 		{Role: mygo.RoleWindowMenu},
 	}))
+}
+
+// newTabKey is the menu's key for a browser tab: ⌘T on macOS. Elsewhere
+// the view's Ctrl+T serves, which leaves it to the terminal while it has
+// the keyboard; a menu's would take it from the shell first (GTK).
+func newTabKey() string {
+	if runtime.GOOS == "darwin" {
+		return "CmdOrCtrl+T"
+	}
+	return ""
 }

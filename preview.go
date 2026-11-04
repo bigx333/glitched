@@ -5,48 +5,17 @@ import (
 	"html"
 	"strings"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
 // The preview pane shows the project's dev server beside the chat, in a
 // web view under the native UI, as MyGo's embed-webview example shows its
 // pages: an address bar with back, forward and reload, and the page, so
-// the agent's changes show as they land. Where nothing answers at the
-// address, a page says so, in the app's colors.
+// the agent's changes show as they land; other tabs browse (browser.go).
+// Where nothing answers at the address, a page says so, in the app's
+// colors.
 
 const defaultPreviewURL = "http://localhost:5173"
-
-// previewView returns the pane's web view, made the first time it shows;
-// nil where there is no window, as in tests.
-func (a *app) previewView() *mygo.WebView {
-	if a.preview != nil || a.win == nil {
-		return a.preview
-	}
-	v, err := a.win.NewWebView(mygo.WebViewOptions{URL: a.previewURL, BackgroundColor: "#0c0c0e"})
-	if err != nil {
-		a.previewErr = err.Error()
-		return nil
-	}
-	page := v.Page()
-	page.OnDidNavigate(func(url string) {
-		// The page saying nothing answers is the address's still.
-		if strings.HasPrefix(url, "about:") || strings.HasPrefix(url, "data:") {
-			return
-		}
-		a.win.Update(func() { a.previewURL, a.previewDraft = url, url })
-	})
-	page.OnDidFailLoad(func(e *mygo.LoadError) {
-		// A load given up for another, as one typed over it, isn't a
-		// failure (NSURLErrorCancelled; WebKit's frame load interrupted).
-		if e.Code == -999 || e.Code == 102 {
-			return
-		}
-		a.win.Update(func() { page.LoadHTML(failedPage(a.previewURL, e.Description), "") })
-	})
-	a.preview = v
-	return v
-}
 
 // failedPage is what the pane shows where a page couldn't load: for the
 // project's own server, that it isn't running; for another, why.
@@ -104,62 +73,53 @@ func isLocal(url string) bool {
 	return false
 }
 
-func (a *app) previewPanel(c *ui.Context) {
-	v := a.previewView()
-	ui.Column(c).Width(a.previewWidth()).FillHeight().Children(func() {
-		bar := c.TitleBar()
-		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8+bar.Right, 0, 10).Gap(4).AlignItems(ui.Center)
-		head.DragWindow().Children(func() {
-			back := iconButton(c, "back", icArrowLeft, "Back", false).Padding(5)
-			fwd := iconButton(c, "forward", icArrowRight, "Forward", false).Padding(5)
-			reload := iconButton(c, "reload", icRotate, "Reload", false).Padding(5)
-			if v != nil {
-				page := v.Page()
-				back.Disabled(!page.CanGoBack())
-				fwd.Disabled(!page.CanGoForward())
-				if back.Clicked() {
-					page.GoBack()
-				}
-				if fwd.Clicked() {
-					page.GoForward()
-				}
-				if reload.Clicked() {
-					page.LoadURL(a.previewURL)
-				}
-			}
-			// The address: Enter goes there; one without a scheme is
-			// https, or http on this machine and the local network.
-			in := ui.TextInput(c.Key("url"), &a.previewDraft).Grow(1).FontSize(12).Font("monospace").
-				Padding(5, 10).Radius(8).Label("Address")
-			if in.Submitted() && v != nil && strings.TrimSpace(a.previewDraft) != "" {
-				url := normalizeURL(a.previewDraft)
-				a.previewURL, a.previewDraft = url, url
-				v.Page().LoadURL(url)
-			}
-			if iconButton(c, "external", icExternal, "Open in browser", false).Padding(5).Clicked() {
-				c.OpenURL(a.previewURL)
-			}
-			if iconButton(c, "close-preview", icX, "Close preview", false).Padding(5).Clicked() {
-				a.showPreview = false
-			}
-		})
-		// Below its glass header, the panel on the sidebar's color.
-		ui.Column(c).Grow(1).Background(palette.sidebar).BorderWidth(1, 0, 0, 1).BorderColor(palette.border).Children(func() {
-			switch {
-			case v != nil:
-				ui.WebView(c, v).Grow(1)
-			case a.previewErr != "":
-				ui.Text(c, "The preview could not start: "+a.previewErr).TextColor(palette.muted).Margin(ui.Auto).Padding(24)
-			default:
-				ui.Text(c, "The preview shows here, in the app's window.").TextColor(palette.muted).Margin(ui.Auto)
-			}
-		})
-	})
+// previewWidth is the preview's width: as the unified diff's, a little
+// wider, until its edge is dragged; then as dragged, within the room the
+// window leaves (previewSpan).
+func (a *app) previewWidth() float32 {
+	if a.previewDragged == 0 {
+		return panelWidth(a.roomBeside, 0.45, 400, 640)
+	}
+	lo, hi := previewSpan(a.roomBeside)
+	return min(max(a.previewDragged, lo), hi)
 }
 
-// previewWidth is the preview's width: as the unified diff's, a little
-// wider.
-func (a *app) previewWidth() float32 { return panelWidth(a.roomBeside, 0.45, 400, 640) }
+// minPreviewWidth is the narrowest the preview drags to: a page's phone
+// layout, and its bar.
+const minPreviewWidth = 360
+
+// previewSpan is how narrow and how wide the preview drags in room beside
+// the sidebar: the chat keeps its least width, and where room is short the
+// preview gives way first, as the diff does.
+func previewSpan(room float32) (lo, hi float32) {
+	hi = max(room-minChatWidth, 0)
+	return min(minPreviewWidth, hi), hi
+}
+
+// previewEdge is the preview's left edge, against the chat, which the
+// pointer drags to resize it, both reflowing as it moves. A double click
+// gives it back its own width; where a drag ends, it stays, across
+// launches (layout.go); a click, which moves nothing, keeps what was.
+func (a *app) previewEdge(c *ui.Context) {
+	// Wholly over the chat: the page's web view, a native view, takes the
+	// pointer over its bounds, whatever is built over it.
+	edge := dragEdge(c, "preview-edge", "Resize preview").Left(-5)
+	dx, _, ok := edge.Dragged()
+	a.previewPressed = ok
+	if ok && dx != 0 {
+		lo, hi := previewSpan(a.roomBeside)
+		a.previewDragged = min(max(a.previewWidth()-dx, lo), hi)
+		a.previewHeld = true
+	}
+	if _, _, ok := edge.DragEnded(); ok && a.previewHeld {
+		a.previewHeld = false
+		a.saveLayout()
+	}
+	if edge.DoubleClicked() {
+		a.previewDragged = 0
+		a.saveLayout()
+	}
+}
 
 func (a *app) togglePreview() {
 	a.showPreview = !a.showPreview
