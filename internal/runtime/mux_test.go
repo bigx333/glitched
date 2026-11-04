@@ -3,6 +3,7 @@ package runtime_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
@@ -130,4 +131,50 @@ func TestARestartReconcilesEachRunWithItsProvider(t *testing.T) {
 		serve(t, path, provider.Mux{"a": a, "b": b})
 		gone(t, b, thread, run)
 	})
+}
+
+// A deleted thread's close waits for its provider to be registered again,
+// and holds up neither other threads nor the host's shutdown.
+func TestACloseWaitingOnAMissingProviderBlocksNothingElse(t *testing.T) {
+	path := dbPath(t)
+	b := &unreachable{Adapter: fake.New(fake.Turn(true)), tried: make(chan struct{}, 1)}
+	n := serve(t, path, provider.Mux{"b": b})
+	deleted := threadOn(t, n.h, "b")
+	submit(t, n.h, deleted, dispatch("go", api.StartNow))
+	until(t, n.h, deleted, "the approval", waiting)
+	b.fail.Store(true)
+	submit(t, n.h, deleted, api.ThreadDelete{})
+	<-b.tried
+	n.kill()
+
+	n = serve(t, path, provider.Mux{"a": fake.New(fake.Turn(false))})
+	db := sideDB(t, path)
+	closeState := func() (state string) {
+		t.Helper()
+		if err := db.QueryRow("SELECT state FROM effects WHERE kind = 'agent.close'").Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	for deadline := time.Now().Add(5 * time.Second); closeState() == "pending"; time.Sleep(2 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the close was never taken up")
+		}
+	}
+
+	other := threadOn(t, n.h, "a")
+	submit(t, n.h, other, dispatch("go", api.StartNow))
+	until(t, n.h, other, "a's turn", idle)
+	if end := lastEnd(t, n.h, other); end.Outcome != api.OutcomeCompleted {
+		t.Fatalf("another thread's turn ended %v, want completed", end.Outcome)
+	}
+
+	began := time.Now()
+	n.h.Close()
+	if took := time.Since(began); took > time.Second {
+		t.Errorf("Close took %v with a close waiting on a missing provider", took)
+	}
+	if state := closeState(); state == "done" {
+		t.Error("the close is done though no adapter closed the agent")
+	}
 }
