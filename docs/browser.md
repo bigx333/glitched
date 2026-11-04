@@ -118,6 +118,10 @@ real engine, with pages served by the test:
   and what not, is below).
 - **Scaled frames:** a ref's box through a frame its transform scales,
   each axis on its own, one in it, and one an ancestor's transform scales.
+- **Fractional frames:** a ref's box through frames whose layout size is
+  a fraction of a pixel: the same box as with no scale for frames no
+  transform scales, and one whose centre is on its element for one that
+  is scaled.
 
 An adapter runs it from a test with a `Harness`: its `Opener`, a `Do` that
 runs a func where the view builds, a `Show` for engines that load only
@@ -231,9 +235,8 @@ that picks it. Nothing above the seam changes.
   installed, called through the `Reflect.apply` it found. That is the
   DOM's (`getAttribute`, `matches`, `querySelector`, `getRootNode`,
   `getElementById`, `textContent`, `innerText`, `localName`, `labels`,
-  `isConnected`, `childNodes`, `contentDocument`, `offsetWidth`,
-  `offsetHeight`, `getBoundingClientRect` and a rect's `x`, `y`, `width`
-  and `height`, and the like),
+  `isConnected`, `childNodes`, `contentDocument`, `getBoundingClientRect`
+  and a rect's `x`, `y`, `width` and `height`, and the like),
   `getComputedStyle` and `getPropertyValue`, `WeakRef` and its `deref`,
   `String`'s `slice`, `toUpperCase`, `toLowerCase` and `repeat`, `Array`'s
   `join`, `JSON.stringify` and `parseFloat`. It parses refs, and splits

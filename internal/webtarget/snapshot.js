@@ -76,8 +76,6 @@ function install(key) {
     text: getter(Node, "textContent"),
     rootNode: fn(Node, "getRootNode"),
     hidden: getter(HTMLElement, "hidden"),
-    offsetWidth: getter(HTMLElement, "offsetWidth"),
-    offsetHeight: getter(HTMLElement, "offsetHeight"),
     editable: getter(HTMLElement, "isContentEditable"),
     innerText: getter(HTMLElement, "innerText"),
     inputType: getter(HTMLInputElement, "type"),
@@ -490,6 +488,20 @@ function install(key) {
     return { __proto__: null, el, chain: rec.chain };
   }
 
+  // scale is the scale a frame shows at on one axis: its box on screen,
+  // shown, against its layout size, from its computed style s, which
+  // keeps the fractions of a pixel offsetWidth rounds off. An engine gives
+  // that size to six significant figures, so a scale that near 1 is 1.
+  function scale(shown, s, size, start, end) {
+    let laid = num(prop(s, size));
+    if (prop(s, "box-sizing") !== "border-box")
+      laid +=
+        num(prop(s, "padding-" + start)) + num(prop(s, "padding-" + end)) +
+        num(prop(s, "border-" + start + "-width")) + num(prop(s, "border-" + end + "-width"));
+    const k = laid ? shown / laid : 0;
+    return k > 0.99999 && k < 1.00001 ? 1 : k;
+  }
+
   // describe says what a ref's element is, and where it shows in the top
   // frame's viewport, through the frames it is in, from the innermost out:
   // past each frame's border and padding, at the scale its box shows at
@@ -505,8 +517,8 @@ function install(key) {
       const f = deref(chain[i].frame);
       if (!f) throw gone(ref);
       const fb = rect(f), s = styleOf(f);
-      const w = get(B.offsetWidth, f), h = get(B.offsetHeight, f);
-      const sx = w ? get(B.width, fb) / w : 0, sy = h ? get(B.height, fb) / h : 0;
+      const sx = scale(get(B.width, fb), s, "width", "left", "right");
+      const sy = scale(get(B.height, fb), s, "height", "top", "bottom");
       x = get(B.x, fb) + sx * (get(B.clientLeft, f) + num(prop(s, "padding-left")) + x);
       y = get(B.y, fb) + sy * (get(B.clientTop, f) + num(prop(s, "padding-top")) + y);
       width *= sx;
