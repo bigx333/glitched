@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"glitched/internal/plain"
 	"glitched/internal/provider"
 )
 
@@ -88,8 +89,9 @@ func (t *turn) ask(id string, r canUseTool) (provider.RequestOpened, *prompt) {
 
 // argsText is a tool's input as text: a line per field in Claude Code's
 // order, a string as it reads and any other value as JSON. A field's lines
-// after its first are indented, and a key keeps to its one line, so no
-// field can pass for another. Input that is no object shows as it came.
+// after its first are indented, and a key shows in plain text on its one
+// line, so no field can pass for another, and the card flags the escape.
+// Input that is no object shows as it came.
 func argsText(input json.RawMessage) string {
 	d := json.NewDecoder(bytes.NewReader(input))
 	if tok, err := d.Token(); err != nil || tok != json.Delim('{') {
@@ -113,7 +115,8 @@ func argsText(input json.RawMessage) string {
 		} else {
 			s = " " + s
 		}
-		lines = append(lines, strings.ReplaceAll(k.(string), "\n", `\u{A}`)+":"+s)
+		key, _ := plain.Text(k.(string), false)
+		lines = append(lines, key+":"+s)
 	}
 	return strings.Join(lines, "\n")
 }

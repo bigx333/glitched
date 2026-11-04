@@ -387,8 +387,9 @@ func run(ctx context.Context, args []string) error {
 		if !allow {
 			kind, k := plain.Text(r.Kind, false)
 			body, b := plain.Text(string(r.Body), false)
+			fmt.Print("\n" + asks)
 			if k || b {
-				fmt.Print("\n  ! Contains text outside printable ASCII, shown as \\u{...}")
+				fmt.Print("\n  ! " + escapes)
 			}
 			fmt.Printf("\n  ? %s %s [y/N] ", kind, body)
 			line, _ := in.ReadString('\n')
@@ -447,11 +448,11 @@ func run(ctx context.Context, args []string) error {
 			}
 		case api.AssistantDelta:
 			if b.Run == runID {
-				fmt.Print(b.Text)
+				fmt.Print(shown(b.Text))
 			}
 		case api.WorkItem:
 			if b.Run == runID && b.Status != api.WorkStarted {
-				fmt.Printf("\n  %s %s\n", marks[b.Status], b.Title)
+				fmt.Printf("\n  %s %s\n", marks[b.Status], shown(b.Title))
 			}
 		case api.RequestOpened:
 			r := api.Request{ID: b.Request, Run: b.Run, Generation: b.Generation, Kind: b.Kind, Body: b.Body}
@@ -463,7 +464,7 @@ func run(ctx context.Context, args []string) error {
 				continue
 			}
 			if b.Error != "" {
-				fmt.Printf("\n✗ %s\n", strings.ReplaceAll(b.Error, "\n", "\n  "))
+				fmt.Printf("\n✗ %s\n", strings.ReplaceAll(shown(b.Error), "\n", "\n  "))
 			}
 			fmt.Printf("\n[turn ended: %s]\n", outcomes[b.Outcome])
 			return nil
@@ -474,6 +475,20 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 }
+
+// shown is the agent's text as glitched run prints it: in printable
+// ASCII, so that no escape sequence can hide or redraw a [y/N] prompt.
+func shown(s string) string {
+	s, _ = plain.Text(s, true)
+	return s
+}
+
+// asks heads each [y/N] prompt with a line that the agent's text, printed
+// in ASCII, can't print.
+var asks = strings.Repeat("─", 3) + " glitched asks " + strings.Repeat("─", 40)
+
+// escapes says what the [y/N] prompt shows as escapes.
+const escapes = `Shown with escapes: \u{...} is text outside printable ASCII, \\u{ a literal \u{`
 
 var modes = map[string]api.DispatchMode{
 	"now":     api.StartNow,
