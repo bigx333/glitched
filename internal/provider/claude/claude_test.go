@@ -25,6 +25,7 @@ const (
 	envFake   = "GLITCHED_FAKE_CLAUDE"        // the transcript a --session-id run replays
 	envResume = "GLITCHED_FAKE_CLAUDE_RESUME" // the transcript a --resume run replays
 	envArgv   = "GLITCHED_FAKE_CLAUDE_ARGV"   // a file each run appends its argv to
+	envEntry  = "GLITCHED_FAKE_CLAUDE_ENTRY"  // a file each run appends its entrypoint entries to
 )
 
 func TestMain(m *testing.M) {
@@ -43,6 +44,16 @@ func fakeClaude(path string) int {
 		out, _ := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		out.Write(append(b, '\n'))
 		out.Close()
+	}
+	if f := os.Getenv(envEntry); f != "" {
+		var entries []string
+		for _, kv := range os.Environ() {
+			if k, _, _ := strings.Cut(kv, "="); strings.EqualFold(k, "CLAUDE_CODE_ENTRYPOINT") {
+				entries = append(entries, kv)
+			}
+		}
+		b, _ := json.Marshal(entries)
+		os.WriteFile(f, b, 0o644)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -360,4 +371,32 @@ func TestATestCannotRunARealClaude(t *testing.T) {
 		}
 	}()
 	(&claude.Adapter{}).Open(ctx, provider.SessionSpec{Thread: api.NewID(), Run: api.NewID(), Workspace: t.TempDir()})
+}
+
+// Anthropic meters SDK entrypoints harder, so claude must hear glitched,
+// once, whatever the engine inherited.
+func TestClaudeRunsAsGlitched(t *testing.T) {
+	replay(t, "hi", "")
+	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "sdk-cli")
+	entry := filepath.Join(t.TempDir(), "entry")
+	t.Setenv(envEntry, entry)
+	h := host(t, nil)
+	turn(t, h, newThread(t, h, api.AccessAsk), "Say hi in three words.")
+	var got []string
+	json.Unmarshal(must(os.ReadFile(entry)), &got)
+	want := []string{"CLAUDE_CODE_ENTRYPOINT=glitched"}
+	if !slices.Equal(got, want) {
+		t.Errorf("claude ran with %q, want only %q", got, want)
+	}
+	// os/exec keeps the last of duplicate keys, but which one a platform's
+	// exec keeps is not ours to rely on: the command holds one.
+	var built []string
+	for _, kv := range claude.Command(ctx, "claude").Env {
+		if strings.HasPrefix(strings.ToUpper(kv), "CLAUDE_CODE_ENTRYPOINT=") {
+			built = append(built, kv)
+		}
+	}
+	if !slices.Equal(built, want) {
+		t.Errorf("the claude command's env has %q, want only %q", built, want)
+	}
 }

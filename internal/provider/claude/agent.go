@@ -49,7 +49,8 @@ var _ provider.Agent = (*Agent)(nil)
 // start runs claude with args and waits for its answer to initialize, which
 // it gives only after it has checked the session flag.
 func start(ctx context.Context, bin string, spec provider.SessionSpec, args []string) (*Agent, error) {
-	cmd := exec.Command(bin, args...)
+	// Open's ctx bounds only the start; the process lives until Close.
+	cmd := Command(context.Background(), bin, args...)
 	cmd.Dir = spec.Workspace
 	cmd.WaitDelay = time.Second
 	g := &Agent{

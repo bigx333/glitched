@@ -60,7 +60,7 @@ func record(out string) error {
 	if err != nil {
 		return err
 	}
-	version, _ := exec.Command(real, "--version").Output()
+	version, _ := claude.Command(context.Background(), real, "--version").Output()
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
@@ -179,7 +179,7 @@ func tee(real, out string, args []string) int {
 	w := &transcript{f: f, scrub: strings.NewReplacer(wd, "$WORKSPACE", home, "$HOME")}
 	w.note("argv", args)
 
-	cmd := exec.Command(real, args...)
+	cmd := claude.Command(context.Background(), real, args...)
 	stdin, _ := cmd.StdinPipe()
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
