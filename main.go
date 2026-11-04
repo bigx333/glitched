@@ -290,7 +290,7 @@ type app struct {
 	// the chat follows it without easing. sidebarPressed and
 	// previewPressed are set while the edge is pressed, as the last frame
 	// built it: an edge not built, as its pane closed mid-drag, ends no
-	// drag, and holds nothing in the next frame (view).
+	// drag, so the next frame ends it (view), and holds nothing.
 	sidebarHeld, previewHeld       bool
 	sidebarPressed, previewPressed bool
 	// dir is the state directory, which holds the layout (layout.go).
@@ -539,7 +539,9 @@ func (a *app) view(c *ui.Context) {
 	// the Liquid Glass setting is on.
 	a.now = c.Now()
 	a.sidebarHeld = a.sidebarHeld && a.sidebarPressed
-	a.previewHeld = a.previewHeld && a.previewPressed
+	if a.previewHeld && !a.previewPressed {
+		a.endPreviewDrag()
+	}
 	a.sidebarPressed, a.previewPressed = false, false
 	a.browser.letGo(a.showPreview)
 	a.projects = a.gather()

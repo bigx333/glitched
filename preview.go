@@ -112,13 +112,19 @@ func (a *app) previewEdge(c *ui.Context) {
 		a.previewHeld = true
 	}
 	if _, _, ok := edge.DragEnded(); ok && a.previewHeld {
-		a.previewHeld = false
-		a.saveLayout()
+		a.endPreviewDrag()
 	}
 	if edge.DoubleClicked() {
 		a.previewDragged = 0
 		a.saveLayout()
 	}
+}
+
+// endPreviewDrag ends the edge's drag, let go or gone with its pane: the
+// width it was dragged to stays, across launches.
+func (a *app) endPreviewDrag() {
+	a.previewHeld = false
+	a.saveLayout()
 }
 
 func (a *app) togglePreview() {
