@@ -152,6 +152,14 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	if live := d.t.Live(); m.Mode == api.SteerActive && live != nil && !steerable[live.State] {
 		return rejected(fmt.Sprintf("the agent is %s and can't take a message; send it once the run ends", live.State))
 	}
+	// A message is new work: a settled thread comes back to the inbox with
+	// it, whichever client sent it. What waited before the settle stays
+	// cancelled.
+	if d.t.settled() {
+		if err := d.emit(api.DispositionChanged{Disposition: api.Disposition{}}); err != nil {
+			return err
+		}
+	}
 	q := api.MessageQueued{Message: id, Text: m.Text, Mode: m.Mode, Pos: d.t.pos(false), Held: m.Mode == api.Defer}
 	if m.Mode == api.RestartActive {
 		q.Pos = d.t.pos(true)
@@ -161,7 +169,7 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	}
 	live := d.t.Live()
 	switch {
-	case m.Mode == api.StartNow && !d.t.settled():
+	case m.Mode == api.StartNow:
 		return d.admit(id)
 	case m.Mode == api.SteerActive && live != nil && steerable[live.State]:
 		if err := d.emit(api.MessageClaimed{Message: id, Run: live.ID}); err != nil {
