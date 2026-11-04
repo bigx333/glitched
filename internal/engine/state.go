@@ -98,6 +98,8 @@ func (t Thread) Live() *Run {
 	return nil
 }
 
+func (t Thread) settled() bool { return t.Disposition.State == api.Settled }
+
 func (t Thread) slot() RunState {
 	if r := t.Live(); r != nil {
 		return r.State
