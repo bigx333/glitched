@@ -3,6 +3,7 @@
 package claude_test
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/provider/claude"
 	"glitched/internal/provider/claude/transcript"
+	"glitched/internal/runtime"
 )
 
 // script writes an executable shell script to dir, since Claude Code's
@@ -87,6 +89,36 @@ func TestLiveStopSteerAndCrash(t *testing.T) {
 		checkSteered(t, got)
 	})
 
+	t.Run("stop with a steer queued", func(t *testing.T) {
+		tape := filepath.Join(t.TempDir(), "steer-stop")
+		t.Setenv(transcript.EnvReal, real)
+		t.Setenv(transcript.EnvOut, tape)
+		ws := scratch(t)
+		script(t, ws, "busy.sh", "sleep 30\necho finished")
+		h := host(t, nil)
+		thread := threadIn(t, h, ws)
+		steer := api.NewID()
+		got, run := during(t, h, thread, "Run ./busy.sh with the Bash tool.", toolRunning, func() {
+			if _, err := h.Submit(ctx, api.Command{ID: steer, Target: thread,
+				Body: api.MessageDispatch{Text: "After that, run this exact Bash command: touch steer-ran", Mode: api.SteerActive}}); err != nil {
+				t.Fatal(err)
+			}
+			for !dispatched(t, h, thread, steer) {
+				time.Sleep(5 * time.Millisecond)
+			}
+			time.Sleep(time.Second)
+			submit(t, h, thread, api.TurnInterrupt{})
+		})
+		checkStopped(t, got, run)
+		time.Sleep(5 * time.Second)
+		if _, err := os.Stat(filepath.Join(ws, "steer-ran")); err == nil {
+			t.Error("claude ran the steer's tool after the stopped turn ended")
+		}
+		if after := afterStop(t, tape+".jsonl"); len(after) > 0 {
+			t.Errorf("claude went on after the stopped turn's result: %q", after)
+		}
+	})
+
 	t.Run("crash", func(t *testing.T) {
 		ws := scratch(t)
 		script(t, ws, "busy.sh", "sleep 60\necho finished")
@@ -117,4 +149,46 @@ func running(run api.ID, name string) bool {
 		}
 	}
 	return false
+}
+
+// dispatched is whether the thread's log holds message as handed to claude.
+func dispatched(t *testing.T, h *runtime.Host, thread, message api.ID) bool {
+	t.Helper()
+	snap := must(h.Read(ctx, api.Query{Thread: thread}))
+	for _, e := range snap.Events {
+		if d, ok := must(e.Decode()).(api.MessageDispatched); ok && d.Message == message {
+			return true
+		}
+	}
+	return false
+}
+
+// afterStop is the model output and tool results in the transcript at
+// tape after the result that followed the interrupt.
+func afterStop(t *testing.T, tape string) []string {
+	t.Helper()
+	var said []string
+	stopped, ended := false, false
+	for _, l := range strings.Split(strings.TrimSpace(string(must(os.ReadFile(tape)))), "\n") {
+		var e struct {
+			Sent, Recv *struct {
+				Type    string
+				Request struct{ Subtype string }
+			}
+		}
+		json.Unmarshal([]byte(l), &e)
+		switch {
+		case e.Sent != nil && e.Sent.Request.Subtype == "interrupt":
+			stopped = true
+		case e.Recv == nil:
+		case ended && (e.Recv.Type == "assistant" || e.Recv.Type == "stream_event" || e.Recv.Type == "user"):
+			said = append(said, l)
+		case stopped && e.Recv.Type == "result":
+			ended = true
+		}
+	}
+	if !ended {
+		t.Errorf("the transcript at %s holds no result after the interrupt", tape)
+	}
+	return said
 }
