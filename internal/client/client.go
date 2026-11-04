@@ -454,6 +454,38 @@ func (m *Manager) CloseThread(e *Env, thread api.ID) {
 	th.dropUnasked()
 }
 
+// Report reads the report a child made to thread at at, and passes it to
+// done on the Post thread. It passes nothing when e has no session, the
+// read fails or no report is at at. The read starts past the transcript
+// cached for thread, which holds the reports before.
+func (m *Manager) Report(e *Env, thread api.ID, at time.Time, done func(api.ChildReported)) {
+	th := e.Threads[thread]
+	if th == nil || e.session == nil {
+		return
+	}
+	s := e.session
+	var after api.Cursor
+	if th.Transcript != nil {
+		after = th.Transcript.Cursor
+	}
+	m.wg.Go(func() {
+		snap, err := s.ep.Read(s.ctx, api.Query{Thread: thread, After: after})
+		if err != nil {
+			return
+		}
+		for _, ev := range slices.Backward(snap.Events) {
+			if ev.Type != api.EventType(api.ChildReported{}) || !ev.At.Equal(at) {
+				continue
+			}
+			if b, err := ev.Decode(); err == nil {
+				r := b.(api.ChildReported)
+				m.post(e.ctx, func() { done(r) })
+			}
+			return
+		}
+	})
+}
+
 func (th *Thread) unfollow() {
 	if th.sub != nil {
 		th.sub.cancel()

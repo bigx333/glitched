@@ -3,6 +3,7 @@ package main
 import (
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo"
 
@@ -42,18 +43,29 @@ func (a *app) watching(t thread) bool {
 	return a.selected == t.id() && a.win != nil && a.win.IsFocused()
 }
 
-// notifyReported tells the user, as notifyFinished does, that a child of
-// t needs them: its report says it waits on a request, which ends no turn,
-// so nothing else tells of it. A child done or failed ended its turn, which
-// notifyFinished told of already. Clicking it opens t, where the report
-// is. Neither t nor the child is one they're watching. kids are t's
-// children; asked, the requests they had pending at t's report before.
-func (a *app) notifyReported(t thread, kids []thread, asked map[api.ID]bool) {
+// notifyReported tells the user, as notifyFinished does, of t's last
+// report, when it says a child waits on them: a request ends no turn, so
+// nothing else tells of it. A child done or failed ended its turn, which
+// notifyFinished told of already. t's transcript holds the report when it
+// has caught up; else the manager reads it.
+func (a *app) notifyReported(t thread) {
 	if !a.settings.notifications || a.notify == nil || a.watching(t) {
 		return
 	}
-	child, ok := blockedReport(t, kids, asked)
-	if !ok || a.watching(child) {
+	at := t.View.Reported
+	if r, ok := reportAt(t.Transcript, at); ok {
+		a.notifyBlocked(t, r)
+		return
+	}
+	a.backend.Report(t.env, t.id(), at, func(r api.ChildReported) { a.notifyBlocked(t, r) })
+}
+
+// notifyBlocked tells of r, a report to t, when it says its child waits on
+// the user. Clicking it opens t, where the report is. Neither t nor the
+// child is one they're watching.
+func (a *app) notifyBlocked(t thread, r api.ChildReported) {
+	child := thread{t.env, t.env.Threads[r.Child]}
+	if r.Kind != api.ReportBlocked || child.Thread == nil || !a.settings.notifications || a.notify == nil || a.watching(t) || a.watching(child) {
 		return
 	}
 	a.notify(mygo.NotificationOptions{
@@ -64,47 +76,16 @@ func (a *app) notifyReported(t thread, kids []thread, asked map[api.ID]bool) {
 	})
 }
 
-// blockedReport is the child of t whose report to it, the last, says it
-// waits on the user. The transcript says, when it's open and caught up.
-// Else it's the child changed last of those with a request that wasn't
-// pending at t's report before: a report of done or failed brings none.
-func blockedReport(t thread, kids []thread, asked map[api.ID]bool) (thread, bool) {
-	if tr := t.Transcript; tr != nil {
-		for i := len(tr.Entries) - 1; i >= 0; i-- {
-			if r, ok := tr.Entries[i].(*client.ReportEntry); ok {
-				if !r.At.Equal(t.View.Reported) {
-					break // the transcript is behind the view
-				}
-				th := t.env.Threads[r.Child]
-				if th == nil || r.Kind != api.ReportBlocked {
-					return thread{}, false
-				}
-				return thread{t.env, th}, true
+// reportAt is the report at at in tr, when tr holds it.
+func reportAt(tr *client.Transcript, at time.Time) (api.ChildReported, bool) {
+	if tr != nil {
+		for _, e := range slices.Backward(tr.Entries) {
+			if r, ok := e.(*client.ReportEntry); ok && !r.At.After(at) {
+				return r.ChildReported, r.At.Equal(at)
 			}
 		}
 	}
-	var last thread
-	for _, k := range kids {
-		fresh := slices.ContainsFunc(k.View.Requests, func(r api.Request) bool { return !asked[r.ID] })
-		if fresh && (last.Thread == nil || k.View.UpdatedAt.After(last.View.UpdatedAt)) {
-			last = k
-		}
-	}
-	return last, last.Thread != nil
-}
-
-// pending is the requests kids have pending.
-func pending(kids []thread) map[api.ID]bool {
-	var ids map[api.ID]bool
-	for _, k := range kids {
-		for _, r := range k.View.Requests {
-			if ids == nil {
-				ids = map[api.ID]bool{}
-			}
-			ids[r.ID] = true
-		}
-	}
-	return ids
+	return api.ChildReported{}, false
 }
 
 // showNotification shows a desktop notification. Showing may wait on the
