@@ -300,6 +300,9 @@ func (d *decision) respond(b api.RequestRespond) error {
 	if !json.Valid(b.Answer) {
 		return rejected("the answer is not JSON")
 	}
+	if err := fits(r, b.Answer); err != nil {
+		return rejected(err.Error())
+	}
 	if err := d.emit(api.RequestAnswer{Request: r.ID, Answer: b.Answer}); err != nil {
 		if r.State == api.RequestAnswered || r.State == api.RequestDelivered {
 			return api.ErrAlreadyAnswered
@@ -308,6 +311,21 @@ func (d *decision) respond(b api.RequestRespond) error {
 	}
 	d.effects = append(d.effects, DeliverAnswer{Run: r.Run, Request: r.ID, Dedup: r.Dedup, Answer: b.Answer})
 	return nil
+}
+
+// fits is nil when answer answers r. A question takes its answers or a
+// dismissal, and refuses a misfit before the race for the request, which
+// it would win; an approval takes any JSON.
+func fits(r Request, answer json.RawMessage) error {
+	if r.Kind != api.KindQuestion {
+		return nil
+	}
+	a, err := api.ParseAnswers(answer)
+	if err != nil {
+		return err
+	}
+	q, _ := api.ParseQuestions(r.Body) // a body no card can show takes only a dismissal
+	return a.Fit(q)
 }
 
 // inbox sets the user's disposition. Settled is done with, as archived

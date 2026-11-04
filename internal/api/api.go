@@ -299,7 +299,9 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // added child threads and their reports, which a version 3 peer would show as
 // threads of the user's with nothing reported; version 5 added a parent's
 // last report to its view, which a version 4 peer would drop, and with it
-// the notification of a child that waits on the user.
+// the notification of a child that waits on the user, and question
+// requests, which a version 4 peer would show as raw JSON and answer with
+// an Allow the engine refuses.
 const Protocol = 5
 
 type Environment struct {

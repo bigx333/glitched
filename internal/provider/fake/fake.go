@@ -26,13 +26,30 @@ func Turn(ask bool) []provider.Event {
 		provider.Work{Item: "read-1", Kind: "read", Title: "Read main.go", Status: api.WorkCompleted},
 	}
 	if ask {
-		s = append(s, provider.TextDelta{Text: " May I edit it?"}, provider.RequestOpened{ID: "approve-1", Kind: "approval", Body: json.RawMessage(`{"operation":"edit","path":"main.go"}`)})
+		s = append(s, provider.TextDelta{Text: " May I edit it?"}, provider.RequestOpened{ID: "approve-1", Kind: api.KindApproval, Body: json.RawMessage(`{"operation":"edit","path":"main.go"}`)})
 	}
 	return append(s,
 		provider.Work{Item: "edit-1", Kind: "edit", Title: "Edit main.go", Status: api.WorkStarted},
 		provider.Work{Item: "edit-1", Kind: "edit", Title: "Edit main.go", Status: api.WorkCompleted},
 		provider.TextDelta{Text: " Done."},
 	)
+}
+
+// Asking is a script with one question request of two questions, the
+// second multi-select. The agent says the answer it got, which a test
+// reads in the transcript.
+func Asking() []provider.Event {
+	body, _ := json.Marshal(api.Questions{Questions: []api.Question{
+		{Text: "Which store should the cache use?", Header: "Store", Options: []api.Option{
+			{Label: "SQLite", About: "One file next to the log"}, {Label: "Memory", About: "Lost on restart"}}},
+		{Text: "Which suites gate the merge?", Header: "Tests", Multi: true, Options: []api.Option{
+			{Label: "Unit"}, {Label: "Race"}, {Label: "GUI", About: "4 to 8 minutes"}}},
+	}})
+	return []provider.Event{
+		provider.TextDelta{Text: "Two things first."},
+		provider.RequestOpened{ID: "ask-1", Kind: api.KindQuestion, Body: body},
+		provider.TextDelta{Text: " Thanks."},
+	}
 }
 
 type Adapter struct {
@@ -146,6 +163,9 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 		}
 		if g.asking == nil || g.asking.ID != act.Request {
 			return fmt.Errorf("fake: no open request %q", act.Request)
+		}
+		if g.asking.Kind == api.KindQuestion {
+			g.out = append(g.out, provider.TextDelta{Text: " got: " + string(act.Answer)})
 		}
 		g.answered[act.Request], g.asking = true, nil
 	}
