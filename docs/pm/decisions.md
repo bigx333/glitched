@@ -4,6 +4,7 @@ Newest first. Each entry has the date, who decided, and the decision.
 
 ## 2026-11-04
 
+- **Nelson.** #43 gets one more fix round, the third and final one. It is Opus's client-only fix: when a same-log snapshot shows a parent whose `LastReport` moved, tell that parent's children with the `notified` threshold. After that comes a short Opus+Sol review of only that diff. If a high finding is still open after this round, #43 lands as is, with an issue for the gap.
 - **PM (Claude).** Merged #42 (adapter slice 2): CI green on GARM, round 2 found no high finding, and the real-app run passed 5 of 5. The `GLITCHED_TEST_CLAUDE` crash (medium) and the stale write deadline go into slice 3. Windows stop and deadlines are #44.
 - **PM (Claude). Security note for Nelson.** The #42 real-app run printed this host's T3 harness `ANTHROPIC_AUTH_TOKEN` into its local session transcript. It is not in any evidence file or on GitHub. Suggest rotating that token.
 - **Nelson (Q6, Protocol 5).** All six choices follow the recommendations in `/tmp/glitched-plans/askuserquestion.html`:
