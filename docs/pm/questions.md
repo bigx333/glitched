@@ -2,7 +2,16 @@
 
 Newest first. Answer under each question, or in the PM thread.
 
-No open questions.
+## Q6 (2026-11-04, open). AskUserQuestion and #14 under Protocol 5: six decisions
+
+The plan is `/tmp/glitched-plans/askuserquestion.packed.html`. It is a local file and is not committed. Each decision lists the PM's recommendation first.
+
+1. **Answer shape.** Answers match questions by position (`Answers[i]` answers `Questions[i]`). The alternatives are keying by question text, or by an id the adapter makes.
+2. **Dismiss.** Send a deny with "The user dismissed the questions without answering." The alternatives are an allow with no answers, or no Dismiss button.
+3. **Notifications.** Both questions and approvals send one. Today a waiting request on a top-level thread sends nothing. The alternatives are questions only, or no notifications.
+4. **AskUserQuestion PRs.** Two PRs. The first holds the api, engine, GUI and fake, and can start from main now. The second holds the adapter, after slice 3. The alternatives are one PR between slices 3 and 4, or doing it inside slice 3.
+5. **Schema for #14.** A store upgrade from 5 to 6: `ALTER TABLE threads ADD COLUMN report TEXT`, filled from each thread's last `child.reported` event. The alternatives are a column without the backfill, or no column and a log read at each load. **This is a schema migration, which needs Nelson's yes.**
+6. **The #14 PR.** Its own PR, landed first, carrying the Protocol 5 bump. The question PR then adds to the same protocol version, and no release goes out between the two. The alternative is to put #14 inside the question PR.
 
 ## Q5 (2026-11-04, answered; see decisions.md). Claude Code adapter plan: five decisions
 
