@@ -4,6 +4,13 @@ Newest first. Each entry has the date, who decided, and the decision.
 
 ## 2026-11-04
 
+- **Nelson (Q6, Protocol 5).** All six choices follow the recommendations in `/tmp/glitched-plans/askuserquestion.html`:
+  1. AskUserQuestion answers go by position: `Answers[i]` answers `Questions[i]`.
+  2. Dismiss sends a deny with "The user dismissed the questions without answering."
+  3. Both questions and approvals send a notification.
+  4. AskUserQuestion lands as two PRs. PR A carries the api, engine, GUI card and fake, and starts from main now. PR B carries the adapter mapping, after slice 3.
+  5. **Schema 5→6 approved.** `ALTER TABLE threads ADD COLUMN report TEXT`, backfilled from each thread's last `child.reported` event. The PR adds an upgrade test under the app's SQLite driver.
+  6. The #14 fix gets its own PR and lands first, carrying the Protocol 5 bump. PR A adds to the same version. No release goes out between the two.
 - **Nelson.** Issue #14 gets an api fix. The thread's shell view (`api.Thread`) carries the parent's latest report (child, kind, log cursor), committed with the `child.reported` event. It ships in the same Protocol 5 bump as AskUserQuestion, so peers are broken once, not twice. PR #33 is closed. Its three client-side designs each failed review on the same premise, joining two unordered streams (Attack the Premise). Its tests carry over as acceptance tests.
 - **PM (Claude).** The AskUserQuestion addendum plan now covers the #14 field too. It goes to Nelson before anything is built.
 - **PM (Claude).** Verified on #42 (slice 2): Claude Code runs Bash tool shells in their own session, so SIGKILL to claude and a process-group kill leave them running after a Delete. SIGTERM stops them. Close must send SIGTERM first. This is recorded in the shared adapter context for slice 4.

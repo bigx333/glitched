@@ -2,7 +2,7 @@
 
 Newest first. Answer under each question, or in the PM thread.
 
-## Q6 (2026-11-04, open). AskUserQuestion and #14 under Protocol 5: six decisions
+## Q6 (2026-11-04, answered: all as recommended; see decisions.md). AskUserQuestion and #14 under Protocol 5: six decisions
 
 The plan is `/tmp/glitched-plans/askuserquestion.packed.html`. It is a local file and is not committed. Each decision lists the PM's recommendation first.
 
