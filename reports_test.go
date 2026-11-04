@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -925,5 +927,47 @@ func TestOnlyAnAskOfAHeldChildNotifies(t *testing.T) {
 	h.a.notifyAsked(e, p.ID, a.ID)
 	if want := []string{"A: Needs you"}; !slices.Equal(*got, want) {
 		t.Fatalf("notifications: %q; want %q", *got, want)
+	}
+}
+
+// A blocked child's report line in its parent is what it asks, as
+// printable ASCII under the card's flag when it escaped any, as the
+// child's own card shows it. The engine's mark of a cut line is the
+// app's, not the agent's: it flags nothing.
+func TestABlockedReportLineShowsWhatItAsksInASCII(t *testing.T) {
+	long := "Keep " + strings.Repeat("the cache ", 30) + "?"
+	for _, tc := range []struct {
+		name string
+		ask  provider.RequestOpened
+		line string
+		flag bool
+	}{
+		{"questions", provider.RequestOpened{ID: "ask-1", Kind: api.KindQuestion,
+			Body: questionsOf(api.Question{Text: "Delete ‮atad‬?\nrm -rf ~", Options: options("Yes", "No")})},
+			`Asks: Delete \u{202E}atad\u{202C}? rm -rf ~`, true},
+		{"an approval", provider.RequestOpened{ID: "run-1", Kind: api.KindApproval,
+			Body: json.RawMessage(`{"operation":"run","command":"rm -rf ./‮data"}`)},
+			`Wants to run rm -rf ./\u{202E}data`, true},
+		{"a long question", provider.RequestOpened{ID: "ask-1", Kind: api.KindQuestion,
+			Body: questionsOf(api.Question{Text: long, Options: options("Yes", "No")})},
+			("Asks: " + long)[:279] + "…", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := tempDir(t)
+			d := engine(t, daemon.Config{Dir: dir}, fake.New([]provider.Event{tc.ask}))
+			top := seed(t, d, "/work/t3code", "Top")
+			kid := seedChild(t, d, top, "Kid")
+			h := start(t, dir)
+			h.a.select_(h.thread("Top"))
+			dispatch(t, d, kid)
+			h.until("the report", func() bool { return h.tt.HasText("Needs you") })
+			h.tt.Advance(time.Second)
+			if !h.tt.HasText(tc.line) {
+				t.Errorf("the parent shows %q, want the line %q", h.tt.Texts(), tc.line)
+			}
+			if h.tt.HasText(outsideASCII) != tc.flag {
+				t.Errorf("the parent shows %q, want the flag %v", h.tt.Texts(), tc.flag)
+			}
+		})
 	}
 }
