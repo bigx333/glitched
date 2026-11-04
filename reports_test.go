@@ -27,6 +27,7 @@ type script struct {
 	cut   chan struct{} // a send ends the shell stream open then
 
 	mu    sync.Mutex
+	held  chan struct{} // non-nil: a new shell stream waits for it to close
 	log   api.ID
 	host  api.ID
 	shell []api.Thread
@@ -106,6 +107,15 @@ func (s *script) commit(parent *api.Thread, child api.ID, kind api.ReportKind, a
 	s.keep(*parent)
 }
 
+// change makes v, a revision on, the shell snapshot's view of its thread,
+// as a commit the shell stream never sent would.
+func (s *script) change(v *api.Thread) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v.Revision++
+	s.keep(*v)
+}
+
 // keep makes v the shell snapshot's view of its thread.
 func (s *script) keep(v api.Thread) {
 	for i := range s.shell {
@@ -149,6 +159,12 @@ func (s *script) Submit(context.Context, api.Command) (api.Receipt, error) {
 func (s *script) Open(_ context.Context, sub api.Subscription) (api.Stream, error) {
 	if !sub.Thread.IsZero() {
 		return idle{}, nil
+	}
+	s.mu.Lock()
+	held := s.held
+	s.mu.Unlock()
+	if held != nil {
+		<-held
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -223,6 +239,37 @@ func reconnect(h *harness, s *script) {
 	h.until("the shell's reconnect", func() bool {
 		return s.streams() > n && h.local().Status == client.Status(client.Online{})
 	})
+}
+
+// away cuts the shell stream and holds the next one until back is called,
+// which waits for the app to be back on it, with its snapshot taken in.
+func (s *script) away(h *harness) (back func()) {
+	h.t.Helper()
+	held := make(chan struct{})
+	s.mu.Lock()
+	s.held = held
+	s.mu.Unlock()
+	n := s.streams()
+	s.cut <- struct{}{}
+	h.until("the disconnect", func() bool {
+		_, off := h.local().Status.(client.Offline)
+		return off
+	})
+	return func() {
+		h.t.Helper()
+		s.mu.Lock()
+		s.held = nil
+		s.mu.Unlock()
+		close(held)
+		h.until("the shell's reconnect", func() bool {
+			return s.streams() > n && h.local().Status == client.Status(client.Online{})
+		})
+	}
+}
+
+// asks gives v a new pending request.
+func asks(v *api.Thread) {
+	v.Requests = append(v.Requests, api.Request{ID: api.NewID(), Kind: "approval"})
 }
 
 // A child that asked before the app started still has its Blocked report
@@ -397,27 +444,99 @@ func TestAReportStampedBeforeTheOneAheadIsToldOf(t *testing.T) {
 	}
 }
 
-// A report made while the shell was cut off is told of once it reconnects,
-// from the snapshot alone, and a later reconnect does not tell it again.
-func TestAReportMadeWhileDisconnectedIsToldOfOnReconnect(t *testing.T) {
+// A child that asks while the shell is cut off is told of once it
+// reconnects, from the snapshot alone, and a later reconnect does not tell
+// it again.
+func TestAnAskMadeWhileAwayIsToldOfOnReconnect(t *testing.T) {
 	parent := view("Parent", api.ID{})
 	kid := view("Asker", parent.ID)
 	s, h := play(t, parent, kid)
 	h.thread("Asker")
 	got := told(h, parent.ID)
-	n := s.streams()
-	s.cut <- struct{}{}
-	h.until("the disconnect", func() bool {
-		_, off := h.local().Status.(client.Offline)
-		return off
-	})
+	back := s.away(h)
+	asks(&kid)
+	s.change(&kid)
 	s.commit(&parent, kid.ID, api.ReportBlocked, time.Unix(1001, 0))
+	back()
 	h.until("the reconnect's notification", func() bool { return len(*got) > 0 })
-	if s.streams() != n+1 {
-		t.Fatalf("%d shell streams opened since the cut; want 1", s.streams()-n)
-	}
 	reconnect(h, s)
+	shown(h, parent)
 	if want := []string{"Asker: Needs you"}; !slices.Equal(*got, want) {
+		t.Fatalf("notifications on the parent: %q; want %q", *got, want)
+	}
+}
+
+// A child that asks while the shell is cut off, with its report made only
+// after the reconnect, is told of once: the snapshot tells of the ask, and
+// the report after tells it again only for an ask the snapshot did not.
+func TestAnAskToldOfOnReconnectIsNotToldAgainByItsReport(t *testing.T) {
+	parent := view("Parent", api.ID{})
+	kid := view("Asker", parent.ID)
+	s, h := play(t, parent, kid)
+	h.thread("Asker")
+	got := told(h, parent.ID)
+	back := s.away(h)
+	asks(&kid)
+	s.change(&kid)
+	back()
+	h.until("the reconnect's notification", func() bool { return len(*got) > 0 })
+	s.report(&parent, kid.ID, api.ReportBlocked)
+	shown(h, parent)
+	if want := []string{"Asker: Needs you"}; !slices.Equal(*got, want) {
+		t.Fatalf("notifications on the parent: %q; want %q", *got, want)
+	}
+	asks(&kid)
+	s.show(kid)
+	s.report(&parent, kid.ID, api.ReportBlocked)
+	h.until("the next ask's notification", func() bool { return len(*got) > 1 })
+	if want := []string{"Asker: Needs you", "Asker: Needs you"}; !slices.Equal(*got, want) {
+		t.Fatalf("notifications on the parent: %q; want %q", *got, want)
+	}
+}
+
+// A child that asks and is stopped while the shell is cut off tells
+// nothing on the reconnect: its Blocked report is still the parent's last,
+// but nothing waits on the user.
+func TestAnAskStoppedWhileAwayTellsNothingOnReconnect(t *testing.T) {
+	parent := view("Parent", api.ID{})
+	kid := view("Asker", parent.ID)
+	s, h := play(t, parent, kid)
+	h.thread("Asker")
+	got := told(h, parent.ID)
+	back := s.away(h)
+	asks(&kid)
+	s.change(&kid)
+	s.commit(&parent, kid.ID, api.ReportBlocked, time.Unix(1001, 0))
+	kid.Requests = nil
+	s.change(&kid)
+	back()
+	shown(h, parent)
+	shown(h, kid)
+	h.settle(func() bool { return len(*got) > 0 })
+	if len(*got) != 0 {
+		t.Fatalf("notifications on the parent: %q; want none, as nothing waits", *got)
+	}
+}
+
+// Children that ask while the shell is cut off are each told of on the
+// reconnect, though a sibling's Done report came after theirs.
+func TestAsksMadeWhileAwayAreEachToldOfAfterASiblingsDone(t *testing.T) {
+	parent := view("Parent", api.ID{})
+	a, b, c := view("Write the tests", parent.ID), view("Run the linter", parent.ID), view("Fix the build", parent.ID)
+	s, h := play(t, parent, a, b, c)
+	h.thread("Fix the build")
+	got := told(h, parent.ID)
+	back := s.away(h)
+	for _, kid := range []*api.Thread{&a, &b} {
+		asks(kid)
+		s.change(kid)
+		s.commit(&parent, kid.ID, api.ReportBlocked, time.Unix(1001, 0))
+	}
+	s.commit(&parent, c.ID, api.ReportDone, time.Unix(1002, 0))
+	back()
+	h.until("the reconnect's notifications", func() bool { return len(*got) >= 2 })
+	h.settle(func() bool { return len(*got) > 2 })
+	if want := []string{"Write the tests: Needs you", "Run the linter: Needs you"}; !slices.Equal(*got, want) {
 		t.Fatalf("notifications on the parent: %q; want %q", *got, want)
 	}
 }
@@ -456,16 +575,16 @@ func TestAReportToAParentDeletedMeanwhileTellsNothing(t *testing.T) {
 	s, h := play(t, parent, kid)
 	h.thread("Asker")
 	got := told(h, parent.ID)
-	s.cut <- struct{}{}
-	h.until("the disconnect", func() bool {
-		_, off := h.local().Status.(client.Offline)
-		return off
-	})
+	back := s.away(h)
+	asks(&kid)
+	s.change(&kid)
 	s.commit(&parent, kid.ID, api.ReportBlocked, time.Unix(1001, 0))
 	s.mu.Lock()
 	s.shell = slices.DeleteFunc(s.shell, func(v api.Thread) bool { return v.ID == parent.ID })
 	s.mu.Unlock()
+	back()
 	h.until("the reconnect without the parent", func() bool { return h.local().Threads[parent.ID] == nil })
+	h.settle(func() bool { return len(*got) > 0 })
 	if len(*got) != 0 {
 		t.Fatalf("notifications on the deleted parent: %q; want none", *got)
 	}
@@ -493,15 +612,15 @@ func TestAChildOfADeletedParentAskingTellsNothing(t *testing.T) {
 	}
 }
 
-// Pairs of children of a real engine that ask at once are each told of,
-// whatever times the engine stamps their reports with.
+// Pairs of children of a real engine that ask at once each name both of
+// their own children, whatever times the engine stamps their reports with.
 func TestPairsOfChildrenAskingAtOnceAreEachToldOf(t *testing.T) {
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, fake.New([]provider.Event{provider.RequestOpened{ID: "ask", Kind: "approval"}}))
 	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
 	pairs := make([][2]api.ID, 30)
 	for i := range pairs {
-		pairs[i] = [2]api.ID{seedChild(t, d, top, "Write the tests"), seedChild(t, d, top, "Run the linter")}
+		pairs[i] = [2]api.ID{seedChild(t, d, top, fmt.Sprint("Write test ", i)), seedChild(t, d, top, fmt.Sprint("Run lint ", i))}
 	}
 	h := start(t, dir)
 	h.thread("Ship the sidebar sort")
@@ -513,7 +632,12 @@ func TestPairsOfChildrenAskingAtOnceAreEachToldOf(t *testing.T) {
 		}
 		wg.Wait()
 		h.until(fmt.Sprint("pair ", i, "'s notifications"), func() bool { return len(*got) >= 2*(i+1) })
+		told := slices.Sorted(slices.Values((*got)[2*i : 2*i+2]))
+		if want := []string{fmt.Sprint("Run lint ", i, ": Needs you"), fmt.Sprint("Write test ", i, ": Needs you")}; !slices.Equal(told, want) {
+			t.Fatalf("pair %d told %q; want %q", i, told, want)
+		}
 	}
+	h.settle(func() bool { return len(*got) > 2*len(pairs) })
 	if len(*got) != 2*len(pairs) {
 		t.Fatalf("%d notifications on the parent; want %d, one for each child", len(*got), 2*len(pairs))
 	}

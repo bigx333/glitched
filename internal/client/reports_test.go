@@ -76,6 +76,41 @@ func (sh *shelled) report(parent api.ID, at time.Time) api.ID {
 	return child
 }
 
+// ask starts a turn on a new child of parent's that asks the user, and
+// logs its Blocked report to parent, as the runtime does.
+func (sh *shelled) ask(parent api.ID, at time.Time) api.ID {
+	sh.t.Helper()
+	ctx, child := context.Background(), api.NewID()
+	submit := func(body api.Intent) api.ID {
+		sh.t.Helper()
+		c := api.Command{ID: api.NewID(), Target: child, Body: body}
+		if _, err := sh.st.Submit(ctx, c, at); err != nil {
+			sh.t.Fatal(err)
+		}
+		return c.ID
+	}
+	submit(api.ThreadCreate{Workspace: "w", Title: "child", Model: api.ModelRef{Provider: "fake"}, Parent: parent})
+	run := submit(api.MessageDispatch{Text: "go", Mode: api.StartNow})
+	e, ok, err := sh.st.Lease(ctx, func() []api.ID { return nil })
+	if err != nil || !ok || e.Thread != child {
+		sh.t.Fatalf("lease: %+v %v %v", e, ok, err)
+	}
+	for _, o := range []eng.Observation{
+		eng.Started{Run: run},
+		eng.Surfaced{Run: run, Request: api.NewID(), Dedup: "ask", Kind: "approval", Body: []byte(`{}`)},
+	} {
+		if _, err := sh.st.Observe(ctx, child, o, at, e.ID); err != nil {
+			sh.t.Fatal(err)
+		}
+		e.ID = 0
+	}
+	o := eng.Reported{Report: api.ChildReported{Child: child, Run: run, Kind: api.ReportBlocked}}
+	if _, err := sh.st.Observe(ctx, parent, o, at, 0); err != nil {
+		sh.t.Fatal(err)
+	}
+	return child
+}
+
 func (sh *shelled) want(children ...api.ID) {
 	sh.t.Helper()
 	if len(sh.told) != len(children) {
@@ -98,7 +133,8 @@ func TestTheFirstSnapshotTellsOfNoReport(t *testing.T) {
 }
 
 // Two reports at one time are each told of once, and a reconnect to the
-// same log tells of neither again, but of one made while it was away.
+// same log tells of neither again, but of a child that asked while it was
+// away.
 func TestReportsAreToldOfOnceAcrossAReconnect(t *testing.T) {
 	sh := newShelled(t)
 	p := sh.create("Parent")
@@ -110,7 +146,10 @@ func TestReportsAreToldOfOnceAcrossAReconnect(t *testing.T) {
 	sh.want(a, b)
 	sh.connect()
 	sh.want(a, b)
-	c := sh.report(p, at)
+	c := sh.ask(p, at)
+	sh.report(p, at)
+	sh.connect()
+	sh.want(a, b, c)
 	sh.connect()
 	sh.want(a, b, c)
 }
