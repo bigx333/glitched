@@ -4,6 +4,7 @@ Newest first. Each entry has the date, who decided, and the decision.
 
 ## 2026-11-04
 
+- **PM (Claude).** Merged #45 under Nelson's rule (a high still open after the final fix round means land as is, with an issue). Its two remaining highs are a tall command hiding its first line and assistant text concealing the CLI prompt. Both use only ASCII, both were present before round 3, and both are in #47, which blocks slice 5. Until slice 5, Claude prompts are reachable only through `glitched serve`.
 - **Nelson.** Agent text on the approval card and in the CLI `[y/N]` prompt uses an **ASCII allowlist**. Printable ASCII and newlines show as they are, every other character shows as `\u{…}`, and a "contains non-ASCII text" flag appears. #45 gets one final fix round. If a high is still open after it, #45 lands as is with an issue. The reason: round 3 found two ways past the denylist escaper. One is implicit right-to-left text (a Hebrew letter flips the line). The other is invisible characters outside Cc and Cf (`./check` + U+FE0F draws pixel-identical to `./check`).
 - **PM (Claude).** AskUserQuestion PR B renders option labels and Other text, so it must use the same allowlist function.
 - **Nelson.** #43 gets one more fix round, the third and final one. It is Opus's client-only fix: when a same-log snapshot shows a parent whose `LastReport` moved, tell that parent's children with the `notified` threshold. After that comes a short Opus+Sol review of only that diff. If a high finding is still open after this round, #43 lands as is, with an issue for the gap.

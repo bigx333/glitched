@@ -24,7 +24,7 @@ A PR merges to main by rebase-merge only when all of these hold at its current h
 | 3 | Fix verified high-severity findings on `land/pr-2` | Done in 2 fix rounds. Round 3: no high (Opus 1 low, Sol 2 medium: one filed as #23, one dismissed and filed as design note #24). Real-app runs passed 6/6 at 20dfea6 and at 2cc7903. | Done. |
 | 4 | Land the copy, close #2 with a link | **Done 2026-11-04 05:38Z.** #22 rebase-merged at 2cc7903; main is 604b182, linear. #2 closed with a link. #15 and #16 closed by the merge. Main CI green at 604b182 (run 41780484873: vet, test, race). | The copy is merged on main by rebase-merge, main's CI is green, #2 is closed with a link. |
 | 5 | HTML plan for the Claude Code adapter (in core) | Done. Nelson answered Q5 on 2026-11-04. | Done. |
-| 6 | Claude Code adapter, 5 slices | Slices 1 (#36) and 2 (#42) merged. Slice 3 (tool prompts, stdio contract test) running on `feat/claude-prompts`. AskUserQuestion: PR A built and waiting for #43; PR B comes after slice 3. | Each slice's done-when is in `/tmp/glitched-pm/adapter-context.md`. |
+| 6 | Claude Code adapter, 5 slices | Slices 1 (#36), 2 (#42) and 3 (#45) are merged. Slice 4 (stop, steer, crash, resume) is running on `feat/claude-stop-steer`. #47 (approval surface security) is running and **blocks slice 5**. AskUserQuestion PR A waits for #43, and PR B waits for PR A. | Each slice's done-when is in `/tmp/glitched-pm/adapter-context.md`. |
 | 7 | Agent spawn tool, in core | Waiting on task 6 | To be set by its plan. |
 | 8 | Child-thread bugs #14, #23 | #23 merged (#27). #14 moved to the Protocol 5 PR (`feat/thread-last-report`) after #33's three client-side designs failed review. | #14 closes with the Protocol 5 PR. |
 | 9 | Browser bugs #17 to #20 | **Done.** #26 (#17), #29 (#18), #40 (#19, the rebase of #30), #28 (#20), all merged 2026-11-04. | Done. |
@@ -37,6 +37,7 @@ A PR merges to main by rebase-merge only when all of these hold at its current h
 
 ## Landed
 
+- 2026-11-04: #45 (adapter slice 3: tool prompts answered from the inbox, ASCII-only approval text). It landed under Nelson's rule with #47 open.
 - 2026-11-04: #42 (adapter slice 2: a Claude Code turn streams through `glitched serve`).
 - 2026-11-04: #27 (#23), #26 (#17), #28 (#20), #29 (#18), #36 (adapter slice 1), #40 (#19).
 - 2026-11-04: #22 (linear copy of Cahil's #2) at 2cc7903. api.Protocol 4, schema 5. Reviews: https://github.com/bigx333/glitched/pull/2#issuecomment-6620473978, https://github.com/bigx333/glitched/pull/22#issuecomment-6622283563, https://github.com/bigx333/glitched/pull/22#issuecomment-6623521211
