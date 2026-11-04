@@ -4,6 +4,7 @@ Newest first. Each entry has the date, who decided, and the decision.
 
 ## 2026-11-04
 
+- **PM (Claude).** Merged #22 by rebase-merge at 2cc7903 under Nelson's merge rule: CI green on Ferrum GARM (run 41777447443), round 3 Opus+Sol had no high finding, and Nelson approved Protocol 4 and schema 5. Sol's round 3 medium (#23) does not block, because main already refuses a steer to a stopping run. The downgrade finding (#24) is dismissed for this PR, because main refuses schema 5 and no user runs the PR's earlier heads.
 - **PM (Claude).** A new message to a Settled thread, from any client, moves it back to the inbox and runs, in one engine commit. The GUI composer already behaves this way. Work queued before the settle stays cancelled. This follows Nelson's rule that the user may message any thread.
 - **Nelson.** The engine deletes a live thread: Delete ends the run as `abandoned` and closes its agent in the same commit. This reverses main's rule "the engine deletes no live thread". The thread menu still hides Delete while the thread's own agent works.
 - **Nelson.** Without a GPU, the model picker's glow draws no blur halo, for CI speed (root package about 1000 s down to about 210 s). GPU windows are unchanged. The halo comes back later with a MyGo v0.7 upgrade (its `Cache` API) in its own PR.
