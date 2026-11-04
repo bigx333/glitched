@@ -12,7 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"glitched/internal/api"
 	"glitched/internal/provider"
+	"glitched/internal/provider/claude"
+	"glitched/internal/runtime"
+	"glitched/internal/store"
 )
 
 // nextRequest reads ag's events up to its next request, or nil once its
@@ -116,6 +120,12 @@ func TestAPromptBecomesTheCardsAsk(t *testing.T) {
 			`{"operation":"use mcp__db__exec","args":"params: [1]\nsql: DROP TABLE users"}`},
 		"subagent": {map[string]any{"tool_name": "Task", "input": map[string]any{"description": "Tidy up", "prompt": "Delete every file\nunder ~", "subagent_type": "general-purpose"}},
 			`{"operation":"use Task","args":"description: Tidy up\nprompt:\n  Delete every file\n  under ~\nsubagent_type: general-purpose"}`},
+		"null": {map[string]any{"tool_name": "mcp__x__set", "input": map[string]any{"policy": nil}},
+			`{"operation":"use mcp__x__set","args":"policy: null"}`},
+		"null input": {map[string]any{"tool_name": "mcp__x__set", "input": nil},
+			`{"operation":"use mcp__x__set","args":"null"}`},
+		"line break in a key": {map[string]any{"tool_name": "mcp__db__exec", "input": map[string]any{"sql: SELECT 1\nx": "y", "sql": "DROP TABLE users"}},
+			`{"operation":"use mcp__db__exec","args":"sql: DROP TABLE users\nsql: SELECT 1\\u{A}x: y"}`},
 		"unsandboxed": {map[string]any{"tool_name": "Bash", "input": map[string]any{"command": "ls", "dangerouslyDisableSandbox": true}},
 			`{"command":"ls","cwd":"$WORKSPACE","unsandboxed":true}`},
 		"why it asks": {map[string]any{"tool_name": "Bash", "input": map[string]any{"command": "rm -rf build"},
@@ -244,5 +254,91 @@ func TestAReplyThatNeverStartedLeavesTheStreamWhole(t *testing.T) {
 	ag.Close(ctx)
 	if got := replies()[r.ID]; len(got) != 1 {
 		t.Errorf("Claude Code got replies %+v, want the one that went", got)
+	}
+}
+
+// lateAdapter holds back each withdrawal its agents read until an answer
+// went to them, so the answer loses the race to Claude Code's cancel.
+type lateAdapter struct {
+	*claude.Adapter
+	answered chan struct{}
+}
+
+func (a lateAdapter) Open(ctx context.Context, s provider.SessionSpec) (provider.Agent, error) {
+	ag, err := a.Adapter.Open(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+	return lateAgent{ag, a.answered}, nil
+}
+
+type lateAgent struct {
+	provider.Agent
+	answered chan struct{}
+}
+
+func (g lateAgent) Next(ctx context.Context) (provider.Event, error) {
+	e, err := g.Agent.Next(ctx)
+	if _, ok := e.(provider.RequestWithdrawn); ok {
+		select {
+		case <-g.answered:
+		case <-ctx.Done():
+		}
+	}
+	return e, err
+}
+
+func (g lateAgent) Do(ctx context.Context, a provider.Action) error {
+	err := g.Agent.Do(ctx, a)
+	if _, ok := a.(provider.Respond); ok {
+		close(g.answered)
+	}
+	return err
+}
+
+// An answer that loses the race to Claude Code's cancel, as when the
+// user's own hook decided first, voids the request and leaves the run at
+// work: Claude Code goes on with the tool.
+func TestAnAnswerThatLosesToACancelLeavesTheRunGoing(t *testing.T) {
+	asks(t, write(1), true)
+	tape := os.Getenv(envFake)
+	lines := strings.Split(string(must(os.ReadFile(tape))), "\n")
+	lines = append(lines[:len(lines)-1], `{"recv":{"type":"control_cancel_request","request_id":"ask"}}`, `{"hang":true}`)
+	if err := os.WriteFile(tape, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	processes(t)
+	st, err := store.Open(filepath.Join(t.TempDir(), "host.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	h, err := runtime.New(ctx, st, provider.Mux{"claude": lateAdapter{&claude.Adapter{Path: must(os.Executable())}, make(chan struct{})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	thread, run := newThread(t, h, api.AccessAsk), api.NewID()
+	if _, err := h.Submit(ctx, api.Command{ID: run, Target: thread, Body: api.MessageDispatch{Text: "write big.txt", Mode: api.StartNow}}); err != nil {
+		t.Fatal(err)
+	}
+	await := func(what string, done func(promptLog) bool) promptLog {
+		t.Helper()
+		for deadline := time.Now().Add(turnWait); ; time.Sleep(5 * time.Millisecond) {
+			if l, _ := readLog(t, h, thread, run); done(l) {
+				return l
+			}
+			if time.Now().After(deadline) {
+				t.Fatal(what)
+			}
+		}
+	}
+	r := await("Claude Code's prompt never reached the thread", func(l promptLog) bool { return len(l.requests) > 0 }).requests[0].opened
+	submit(t, h, thread, api.RequestRespond{Request: r.Request, Generation: r.Generation, Answer: json.RawMessage(`{"allow":true}`)})
+	await("the answer Claude Code no longer waited on never voided its request", func(l promptLog) bool {
+		return l.requests[0].state == api.RequestInvalidated
+	})
+	if th := must(h.Read(ctx, api.Query{Thread: thread})).Threads[0]; th.Run != api.RunRunning {
+		t.Fatalf("the run is %v after a late answer, want running: Claude Code is still at work", th.Run)
 	}
 }
