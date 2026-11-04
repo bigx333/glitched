@@ -223,7 +223,7 @@ that picks it. Nothing above the seam changes.
   every function and getter it uses is the one it found as it was
   installed, called through the `Reflect.apply` it found. That is the
   DOM's (`getAttribute`, `matches`, `querySelector`, `getRootNode`,
-  `getElementById`, `textContent`, `innerText`, `tagName`, `labels`,
+  `getElementById`, `textContent`, `innerText`, `localName`, `labels`,
   `isConnected`, `childNodes`, `contentDocument`, `getBoundingClientRect`
   and a rect's `x`, `y`, `width` and `height`, and the like),
   `getComputedStyle` and `getPropertyValue`, `WeakRef` and its `deref`,

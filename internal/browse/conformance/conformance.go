@@ -165,6 +165,7 @@ func Run(t *testing.T, h Harness) {
 		{"Closed", s.closed},
 		{"Eval", s.evaluation},
 		{"Snapshot", s.snapshot},
+		{"MixedCase", s.mixedCase},
 		{"Limits", s.limits},
 		{"Refs", s.refs},
 		{"Tampering", s.tampering},
@@ -379,6 +380,35 @@ func (s *suite) snapshot(t *testing.T) {
 	for _, want := range []string{"- tree\n", "  - treeitem \"Parent\" [ref=", "    - group\n", "      - treeitem \"Child item\" [ref="} {
 		if !strings.Contains(full.Text, want) {
 			t.Errorf("full snapshot has no %q:\n%s", want, full.Text)
+		}
+	}
+}
+
+// An HTML element named in mixed case, as XHTML keeps <Input/>, is no
+// input but an unknown element: the page still has a snapshot, and the
+// element only the role its attributes give it.
+func (s *suite) mixedCase(t *testing.T) {
+	s.t = t
+	p, _ := s.open("/xhtml")
+	snap, err := webtarget.Take(context.Background(), p, webtarget.Options{Full: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("snapshot of %s:\n%s", snap.URL, snap.Text)
+	ref := fmt.Sprintf(" [ref=s%de", snap.Epoch)
+	for _, want := range []string{
+		`- textbox "Real input"` + ref,
+		`- button "Real button"` + ref,
+		`- combobox` + ref,
+		`- button "Mixed role"` + ref,
+	} {
+		if !strings.Contains(snap.Text, want) {
+			t.Errorf("no %q", want)
+		}
+	}
+	for _, generic := range []string{"Mixed input", "Mixed button", "Mixed option", "Shouted"} {
+		if strings.Contains(snap.Text, generic) {
+			t.Errorf("%q, an unknown element, has a role", generic)
 		}
 	}
 }
@@ -640,6 +670,10 @@ func fixtures() http.Handler {
 	mux.Handle("/c", page(`<!doctype html><title>Page C</title>`))
 	mux.Handle("/opens", page(`<!doctype html><title>Opens</title><script>window.open("/b")</script>`))
 	mux.Handle("/snap", page(snapFixture))
+	mux.HandleFunc("/xhtml", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xhtml+xml; charset=utf-8")
+		fmt.Fprint(w, xhtmlFixture)
+	})
 	// A page that doesn't come, as a frame still loading shows.
 	mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -691,3 +725,18 @@ const designed = document.getElementById("designed").contentDocument;
 designed.body.setAttribute("aria-label", "Design mode");
 designed.designMode = "on";
 </script>`
+
+// In XHTML a name keeps its case: of these, only input, button and
+// select, with its option, are form controls.
+const xhtmlFixture = `<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>XHTML</title></head><body>
+<input aria-label="Real input"/>
+<button>Real button</button>
+<select><option>Real option</option></select>
+<Input aria-label="Mixed input"/>
+<Input role="button" aria-label="Mixed role"/>
+<Button>Mixed button</Button>
+<SELECT aria-label="Shouted select"><OPTION>Shouted option</OPTION></SELECT>
+<Option>Mixed option</Option>
+<TEXTAREA aria-label="Shouted area"></TEXTAREA>
+</body></html>`
