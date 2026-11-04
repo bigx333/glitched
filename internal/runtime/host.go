@@ -42,6 +42,10 @@ type Host struct {
 	wg        sync.WaitGroup
 	wake      chan struct{}
 
+	// attempted is the runs whose start a dead host leased but whose thread
+	// no longer has them live. Boot fills it before any effect runs.
+	attempted map[api.ID]bool
+
 	mu      sync.Mutex
 	busy    map[api.ID]bool     // threads with an effect in flight
 	runs    map[api.ID]*liveRun // by run
@@ -68,11 +72,12 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux) (*Host, e
 	name, _ := os.Hostname()
 	h := &Host{
 		store: st, providers: providers, name: name,
-		wake:    make(chan struct{}, 1),
-		busy:    map[api.ID]bool{},
-		runs:    map[api.ID]*liveRun{},
-		closing: map[api.ID]bool{},
-		subs:    map[*stream]struct{}{},
+		wake:      make(chan struct{}, 1),
+		attempted: map[api.ID]bool{},
+		busy:      map[api.ID]bool{},
+		runs:      map[api.ID]*liveRun{},
+		closing:   map[api.ID]bool{},
+		subs:      map[*stream]struct{}{},
 	}
 	h.ctx, h.cancel = context.WithCancel(context.Background())
 	h.drain, h.stopDrain = context.WithCancel(context.Background())
@@ -241,7 +246,8 @@ func (h *Host) boot(ctx context.Context) error {
 			h.attach(id, h.track(r.ID, restored.Agent))
 		}
 	}
-	for _, lease := range starts {
+	for run, lease := range starts {
+		h.attempted[run] = true
 		if err := h.store.Complete(ctx, lease); err != nil {
 			return err
 		}
@@ -379,6 +385,11 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 		}
 
 	case engine.CloseAgent:
+		// A run whose start never ran has no agent, as boot's rule says: its
+		// message was never dispatched, and no host leased its start.
+		if m, _ := t.Message(b.Run); m.State == engine.QueueCancelled && !h.attempted[b.Run] {
+			return nil, true
+		}
 		// This host's pump closed the agent it held before the thread took
 		// this effect, so an agent found now outlived an earlier host.
 		var rec provider.Recovery
@@ -422,7 +433,12 @@ func (h *Host) record(thread api.ID, o engine.Observation, done int64) bool {
 	})
 }
 
+// retryLogEvery is how often retry logs an error that has not changed.
+var retryLogEvery = 10 * time.Minute
+
 func retry(ctx context.Context, what string, fn func(context.Context) error) bool {
+	var said string
+	var saidAt time.Time
 	for wait := 10 * time.Millisecond; ; wait = min(2*wait, time.Second) {
 		err := fn(ctx)
 		if err == nil {
@@ -431,7 +447,10 @@ func retry(ctx context.Context, what string, fn func(context.Context) error) boo
 		if ctx.Err() != nil {
 			return false
 		}
-		slog.Error("runtime: "+what, "err", err, "retry", wait)
+		if msg := err.Error(); msg != said || time.Since(saidAt) >= retryLogEvery {
+			slog.Error("runtime: "+what, "err", err, "retry", wait)
+			said, saidAt = msg, time.Now()
+		}
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
