@@ -67,6 +67,14 @@ func (a *Adapter) Reconcile(context.Context, provider.RuntimeIdentity) (provider
 }
 
 func (a *Adapter) binary() (string, error) {
+	bin, err := a.find()
+	if err == nil {
+		guard(bin)
+	}
+	return bin, err
+}
+
+func (a *Adapter) find() (string, error) {
 	if a.Path != "" {
 		if isExecutable(a.Path) {
 			return a.Path, nil

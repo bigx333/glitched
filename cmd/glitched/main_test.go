@@ -276,3 +276,56 @@ func TestServeKeepsHubDirFromWhereItRan(t *testing.T) {
 		t.Errorf("the next start uploads to the hub under %q, want %q", cfg.HubDir, want)
 	}
 }
+
+// A claude thread on a standalone engine runs Claude Code, found where
+// engine.json's claude_path says. Here nothing is there to run.
+func TestServeRunsClaudeThreadsOnClaudeCode(t *testing.T) {
+	dir, err := os.MkdirTemp("", "gl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	if err := os.WriteFile(filepath.Join(dir, "engine.json"), []byte(`{"hub":true,"epoch":1,"claude_path":"/nonexistent/claude"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	served := make(chan error, 1)
+	go func() { served <- serve(ctx, []string{"-dir", dir}) }()
+	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
+	for {
+		if _, err := ep.Info(ctx); err == nil {
+			break
+		}
+		select {
+		case err := <-served:
+			t.Fatalf("serve exited: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	if err := run(ctx, []string{"-dir", dir, "-provider", "claude", "say hi"}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := ep.Read(ctx, api.Query{})
+	if err != nil || len(snap.Threads) != 1 {
+		t.Fatalf("threads after the turn: %+v %v", snap.Threads, err)
+	}
+	host, err := ep.Read(ctx, api.Query{Thread: snap.Threads[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ended *api.TurnEnded
+	for _, e := range host.Events {
+		if b, err := e.Decode(); err == nil {
+			if te, ok := b.(api.TurnEnded); ok {
+				ended = &te
+			}
+		}
+	}
+	if want := "Claude Code is not installed.\nInstall it, or set claude_path in engine.json."; ended == nil || ended.Outcome != api.OutcomeFailed || ended.Error != want {
+		t.Errorf("the claude turn ended %+v, want it failed with\n%s", ended, want)
+	}
+	cancel()
+	<-served
+}
