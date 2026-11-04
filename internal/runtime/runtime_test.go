@@ -155,7 +155,7 @@ func assertReplay(t *testing.T, st *store.Store) {
 		if err != nil || body == nil {
 			t.Fatalf("decode %s: %v", e.Type, err)
 		}
-		folded[e.Thread] = engine.Apply(folded[e.Thread], engine.Event{Thread: e.Thread, At: e.At, Body: body})
+		folded[e.Thread] = engine.Apply(folded[e.Thread], engine.Event{Thread: e.Thread, Seq: e.Cursor.Seq, At: e.At, Body: body})
 	}
 	if len(folded) == 0 {
 		t.Fatal("empty log")

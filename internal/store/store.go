@@ -164,6 +164,7 @@ CREATE TABLE threads (
 	parent      BLOB,
 	tokens      INTEGER NOT NULL DEFAULT 0,
 	reported    INTEGER,
+	report      TEXT,
 	CHECK ((disposition = 1) = (until IS NOT NULL))
 ) STRICT;
 
@@ -224,7 +225,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 5
+const schemaVersion = 6
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -277,6 +278,16 @@ ALTER TABLE threads_v4 RENAME TO threads;
 ALTER TABLE threads ADD COLUMN parent BLOB;
 ALTER TABLE threads ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE threads ADD COLUMN reported INTEGER;
+`,
+	// A parent's last report, as its log's last child.reported has it.
+	5: `
+ALTER TABLE threads ADD COLUMN report TEXT;
+UPDATE threads SET report = (
+	SELECT json_object('child', json_extract(CAST(e.payload AS TEXT), '$.child'),
+		'kind', json_extract(CAST(e.payload AS TEXT), '$.kind'), 'seq', e.seq)
+	FROM events e
+	WHERE e.thread = threads.id AND e.type = 'child.reported'
+	ORDER BY e.seq DESC LIMIT 1);
 `,
 }
 

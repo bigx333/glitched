@@ -170,6 +170,7 @@ func (s *Store) write(ctx context.Context, tx *sql.Tx, thread api.ID, decide dec
 			head, w.Thread[:], w.Type, w.Schema, e.At.UnixNano(), payload); err != nil {
 			return Commit{}, 0, err
 		}
+		e.Seq = head
 		t = engine.Apply(t, e)
 		wire = append(wire, w)
 	}
@@ -192,9 +193,26 @@ func (s *Store) write(ctx context.Context, tx *sql.Tx, thread api.ID, decide dec
 	// Transcript events (text, work items) leave the revision, and so the
 	// projection, where it was.
 	if t.Revision != old.Revision {
-		c.Threads = []api.Thread{engine.View(t)}
+		c.Threads = []api.Thread{s.view(t)}
 	}
 	return c, head, nil
+}
+
+// view is t as clients read it, its report's cursor on this log.
+func (s *Store) view(t engine.Thread) api.Thread {
+	v := engine.View(t)
+	if v.LastReport != nil {
+		v.LastReport.Cursor.Log = s.log
+	}
+	return v
+}
+
+// storedReport is a thread's last report as its row holds it, in the JSON
+// the upgrade to version 6 writes.
+type storedReport struct {
+	Child api.ID         `json:"child"`
+	Kind  api.ReportKind `json:"kind"`
+	Seq   uint64         `json:"seq"`
 }
 
 // Thread returns the stored projection, or a zero Thread if there is none.
@@ -228,11 +246,12 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 	t := engine.Thread{ID: id}
 	var model []byte
 	var until, reported sql.NullInt64
+	var report sql.NullString
 	var updated int64
 	err := q.QueryRowContext(ctx, `SELECT workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
-			parent, tokens, reported
+			parent, tokens, reported, report
 		FROM threads WHERE id = ?`, id[:]).Scan(&t.Workspace, &t.Title, &model, &t.Access, &t.Revision, &t.OwnerEpoch,
-		&t.Generation, &t.Disposition.State, &until, &updated, &t.Deleted, idScan{&t.Parent}, &t.Tokens, &reported)
+		&t.Generation, &t.Disposition.State, &until, &updated, &t.Deleted, idScan{&t.Parent}, &t.Tokens, &reported, &report)
 	if errors.Is(err, sql.ErrNoRows) {
 		return engine.Thread{}, nil
 	}
@@ -248,6 +267,13 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 	t.UpdatedAt = fromNanos(updated)
 	if reported.Valid {
 		t.Reported = fromNanos(reported.Int64)
+	}
+	if report.Valid {
+		var r storedReport
+		if err := json.Unmarshal([]byte(report.String), &r); err != nil {
+			return t, err
+		}
+		t.LastReport = &api.Report{Child: r.Child, Kind: r.Kind, Cursor: api.Cursor{Seq: r.Seq}}
 	}
 
 	err = each(ctx, q, `SELECT id, generation, state, signalled, outcome, error, ended FROM runs WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
@@ -312,22 +338,30 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 	if err != nil {
 		return err
 	}
-	var until, reported any
+	var until, reported, report any
 	if !t.Disposition.Until.IsZero() {
 		until = t.Disposition.Until.UnixNano()
 	}
 	if !t.Reported.IsZero() {
 		reported = t.Reported.UnixNano()
 	}
+	if r := t.LastReport; r != nil {
+		b, err := json.Marshal(storedReport{Child: r.Child, Kind: r.Kind, Seq: r.Cursor.Seq})
+		if err != nil {
+			return err
+		}
+		report = string(b)
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO threads (id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
-			parent, tokens, reported)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			parent, tokens, reported, report)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET workspace = excluded.workspace, title = excluded.title, model = excluded.model,
 			access = excluded.access, revision = excluded.revision, owner_epoch = excluded.owner_epoch, generation = excluded.generation,
 			disposition = excluded.disposition, until = excluded.until, updated_at = excluded.updated_at, deleted = excluded.deleted,
-			parent = excluded.parent, tokens = excluded.tokens, reported = excluded.reported`,
+			parent = excluded.parent, tokens = excluded.tokens, reported = excluded.reported,
+			report = excluded.report`,
 		t.ID[:], t.Workspace, t.Title, string(model), t.Access, t.Revision, t.OwnerEpoch, t.Generation, t.Disposition.State, until,
-		t.UpdatedAt.UnixNano(), t.Deleted, nullID(t.Parent), t.Tokens, reported); err != nil {
+		t.UpdatedAt.UnixNano(), t.Deleted, nullID(t.Parent), t.Tokens, reported, report); err != nil {
 		return err
 	}
 	for i, r := range t.Runs {
