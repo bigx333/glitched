@@ -101,21 +101,31 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 				ui.Text(c, "waiting "+ago(r.Opened, a.now)).FontSize(11.5).TextColor(palette.faint)
 			}
 		})
-		ui.Column(c).Padding(12, 14, 12).Gap(8).Children(func() {
+		texts := ui.Column(c)
+		if waiting {
+			texts = a.inView(c, t)
+		}
+		texts.Padding(12, 14, 12).Gap(8).Children(func() {
 			switch {
 			case !known:
 				ui.Text(c, agentName(t)+" asks:").FontSize(12.5).TextColor(palette.muted)
-				ui.Text(c, shown(string(r.Body), false)).Selectable().FontSize(12).Font("monospace")
+				body, more := a.cut(r.Request, "body", shown(string(r.Body), false), cutChars)
+				ui.Text(c, body).Selectable().FontSize(12).Font("monospace")
+				more(c)
 			case b.Command != "":
+				cwd, moreCwd := a.cut(r.Request, "cwd", shown(b.Cwd, false), cutPathChars)
 				ui.Row(c).Gap(5).AlignItems(ui.Center).Wrap().Children(func() {
 					ui.Text(c, agentName(t)+" wants to run a command").FontSize(12.5).TextColor(palette.muted)
 					if b.Cwd != "" {
 						ui.Text(c, "in").FontSize(12.5).TextColor(palette.muted)
-						ui.Text(c, shown(b.Cwd, false)).FontSize(12).Font("monospace")
+						ui.Text(c, cwd).FontSize(12).Font("monospace").Shrink(1).MinWidth(0)
 					}
 				})
-				ui.Text(c, shown(b.Command, true)).Selectable().FontSize(12.5).Font("monospace").Padding(8, 10).Radius(6).
+				moreCwd(c)
+				command, more := a.cut(r.Request, "command", shown(b.Command, true), cutChars)
+				ui.Text(c, command).Selectable().FontSize(12.5).Font("monospace").Padding(8, 10).Radius(6).
 					Background(palette.bg).Border(1, palette.border)
+				more(c)
 				if b.Unsandboxed {
 					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 						ui.Icon(c, icShieldAlert).FontSize(13).TextColor(palette.amber)
@@ -123,18 +133,25 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 					})
 				}
 			default:
+				path, morePath := a.cut(r.Request, "path", shown(b.Path, false), cutPathChars)
 				ui.Row(c).Gap(5).AlignItems(ui.Center).Wrap().Children(func() {
 					ui.Text(c, agentName(t)+" wants to "+shown(b.Operation, false)).FontSize(12.5).TextColor(palette.muted)
 					if b.Path != "" {
-						ui.Text(c, shown(b.Path, false)).FontSize(12).Font("monospace")
+						ui.Text(c, path).FontSize(12).Font("monospace").Shrink(1).MinWidth(0)
 					}
 				})
+				morePath(c)
 				if b.Args != "" {
-					a.requestArgs(c, r.Request, shown(b.Args, true))
+					args, more := a.cut(r.Request, "args", shown(b.Args, true), cutChars)
+					ui.Text(c, args).Selectable().FontSize(12).Font("monospace").LineHeight(1.45).Padding(8, 10).Radius(6).
+						Background(palette.bg).Border(1, palette.border)
+					more(c)
 				}
 			}
 			if b.Reason != "" {
-				ui.Text(c, shown(b.Reason, true)).FontSize(12.5).TextColor(palette.muted).LineHeight(1.45)
+				reason, more := a.cut(r.Request, "reason", shown(b.Reason, true), cutChars)
+				ui.Text(c, reason).FontSize(12.5).TextColor(palette.muted).LineHeight(1.45)
+				more(c)
 			}
 			if r.Reason != "" && !waiting {
 				ui.Text(c, shown(r.Reason, true)).FontSize(12).TextColor(palette.faint)
@@ -142,7 +159,7 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 			if escaped {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 					ui.Icon(c, icShieldAlert).FontSize(13).TextColor(palette.amber)
-					ui.Text(c, `Contains text outside printable ASCII, shown as \u{…}`).FontSize(12.5).FontWeight(500).TextColor(palette.amber)
+					ui.Text(c, escapes).FontSize(12.5).FontWeight(500).TextColor(palette.amber)
 				})
 			}
 		})
@@ -152,33 +169,64 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 	})
 }
 
-// argsLines and argsChars bound the arguments a card shows until asked
-// for all of them.
-const argsLines, argsChars = 8, 600
+// escapes is the card's flag on a request with text it shows as escapes.
+const escapes = `Shown with escapes: \u{…} is text outside printable ASCII, \\u{ a literal \u{`
 
-// requestArgs are the arguments an allow approves, as the card shows
-// them, cut to their first lines with a toggle to show all and how much
-// more that is.
-func (a *app) requestArgs(c *ui.Context, request api.ID, args string) {
-	open := a.argsOpen[request]
-	text, cut := args, false
+// cutLines and cutChars bound each text from the agent a card shows until
+// asked for all of it. The timeline keeps to its end, so a taller card
+// would push its top, and what an allow approves first, out of view above
+// Allow once. A path in the card's first sentence gets cutPathChars, so
+// the command under it stays in view.
+const cutLines, cutChars, cutPathChars = 8, 600, 100
+
+// cardRoom is what a waiting card's texts leave of the timeline's pane
+// besides the composer's room: the timeline's top padding, and the card's
+// header and answers. cardTextsMin is the least the texts get.
+const cardRoom, cardTextsMin = 100, 64
+
+// inView holds a waiting card's texts, which scroll in it once they are
+// taller than the timeline leaves them: the timeline keeps to its end, so
+// in a short window even cut texts could push the card's top out of view
+// above Allow once.
+func (a *app) inView(c *ui.Context, t thread) ui.Element {
+	texts := ui.Scroll(c).Key("texts")
+	if a.paneH > 0 {
+		texts.MaxHeight(max(cardTextsMin, a.paneH-composerRoom-a.agentsRoom(t)-cardRoom))
+	}
+	return texts
+}
+
+// cardText is a text on a request's card, by the field it shows.
+type cardText struct {
+	request api.ID
+	field   string
+}
+
+// cut is a text on a request's card as the card shows it: its first lines
+// and chars characters unless asked for all of it, and the toggle between
+// the two, which says how much more all is and draws nothing when there
+// is no more.
+func (a *app) cut(request api.ID, field, text string, chars int) (string, func(*ui.Context)) {
+	key := cardText{request, field}
+	open := a.shownAll[key]
+	shown, cut := text, false
 	if !open {
-		text, cut = clipped(args, argsLines, argsChars)
+		shown, cut = clipped(text, cutLines, chars)
 	}
-	ui.Text(c, text).Selectable().FontSize(12).Font("monospace").LineHeight(1.45).Padding(8, 10).Radius(6).
-		Background(palette.bg).Border(1, palette.border)
-	if !cut && !open {
-		return
-	}
-	label, icon := "Show less", icChevronUp
-	if !open {
-		label, icon = "Show all · "+more(args, text), icChevronD
-	}
-	if ghost(c, "args", false).Padding(2, 6).Children(func() {
-		ui.Icon(c, icon).FontSize(12)
-		ui.Text(c, label).FontSize(12)
-	}).Clicked() {
-		a.argsOpen[request] = !open
+	return shown, func(c *ui.Context) {
+		if !cut && !open {
+			return
+		}
+		label, icon := "Show less", icChevronUp
+		if !open {
+			label, icon = "Show all · "+more(text, shown), icChevronD
+		}
+		if ghost(c, field, false).Padding(2, 6).Children(func() {
+			ui.Icon(c, icon).FontSize(12)
+			ui.Text(c, label).FontSize(12)
+		}).Clicked() {
+			a.shownAll[key] = !open
+		}
 	}
 }
 

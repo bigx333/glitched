@@ -140,7 +140,7 @@ func TestApprovalCardWrapsALongPath(t *testing.T) {
 
 // outsideASCII is the card's flag on a request with text it shows as
 // escapes.
-const outsideASCII = `Contains text outside printable ASCII, shown as \u{…}`
+const outsideASCII = `Shown with escapes: \u{…} is text outside printable ASCII, \\u{ a literal \u{`
 
 // The card shows an agent's text as printable ASCII, and every other
 // character as an escape such as \u{5D0}, and flags that it did. A bidi
