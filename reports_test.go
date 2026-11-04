@@ -623,6 +623,51 @@ func TestAnAskFromBeforeTheAppStartedIsToldOfByAReportMadeWhileAway(t *testing.T
 	}
 }
 
+// The same, with a sibling's Done report made after it while away: the
+// reconnect's last report is the sibling's, and the ask is still told of.
+func TestAnAskFromBeforeTheAppStartedIsToldOfThoughASiblingReportedAfter(t *testing.T) {
+	parent := view("Parent", api.ID{})
+	kid, sibling := view("Asker", parent.ID), view("Finisher", parent.ID)
+	asks(&kid)
+	s, h := play(t, parent, kid, sibling)
+	h.thread("Asker")
+	got := told(h, parent.ID)
+	back := s.away(h)
+	s.commit(&parent, kid.ID, api.ReportBlocked, time.Unix(1001, 0))
+	s.commit(&parent, sibling.ID, api.ReportDone, time.Unix(1002, 0))
+	back()
+	h.until("the reconnect's notification", func() bool { return len(*got) > 0 })
+	reconnect(h, s)
+	shown(h, parent)
+	if want := []string{"Asker: Needs you"}; !slices.Equal(*got, want) {
+		t.Fatalf("notifications on the parent: %q; want %q", *got, want)
+	}
+}
+
+// An ask pending in a restored database, with its report and a sibling's
+// Done made after while away, is told of on the reconnect.
+func TestAnAskOnARestoredLogIsToldOfThoughASiblingReportedAfter(t *testing.T) {
+	parent := view("Parent", api.ID{})
+	kid, sibling := view("Asker", parent.ID), view("Finisher", parent.ID)
+	s, h := play(t, parent, kid, sibling)
+	h.thread("Asker")
+	got := told(h, parent.ID)
+	restored := s.away(h)
+	asks(&kid)
+	s.restore(parent, kid, sibling)
+	restored()
+	back := s.away(h)
+	s.commit(&parent, kid.ID, api.ReportBlocked, time.Unix(1001, 0))
+	s.commit(&parent, sibling.ID, api.ReportDone, time.Unix(1002, 0))
+	back()
+	h.until("the reconnect's notification", func() bool { return len(*got) > 0 })
+	reconnect(h, s)
+	shown(h, parent)
+	if want := []string{"Asker: Needs you"}; !slices.Equal(*got, want) {
+		t.Fatalf("notifications on the parent: %q; want %q", *got, want)
+	}
+}
+
 // A database put back from a copy comes with a new log: what its views
 // report is not told of, as the app can't tell it from what it told
 // already. The next report on the new log is.
