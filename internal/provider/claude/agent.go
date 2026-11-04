@@ -206,7 +206,8 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 }
 
 // respondLocked sends the one reply a prompt gets. A prompt already
-// answered, or one Claude Code stopped waiting on, takes nothing more.
+// answered takes nothing more, and one Claude Code stopped waiting on
+// takes no answer.
 func (g *Agent) respondLocked(ctx context.Context, a provider.Respond) error {
 	g.pmu.Lock()
 	p, ok := g.prompts[a.Request]
@@ -218,8 +219,10 @@ func (g *Agent) respondLocked(ctx context.Context, a provider.Respond) error {
 	switch {
 	case !ok:
 		return errNoPrompt
-	case state != asking:
+	case state == answered:
 		return nil
+	case state == gone:
+		return errGone
 	}
 	reply, err := p.reply(a.Request, a.Answer)
 	if err != nil {
@@ -278,7 +281,7 @@ func (g *Agent) read(ctx context.Context, m message) []provider.Event {
 			return nil
 		}
 		e, p := g.turn.ask(m.RequestID, m.Request.canUseTool)
-		g.prompts[m.RequestID] = &p
+		g.prompts[m.RequestID] = p
 		return []provider.Event{e}
 	case "control_cancel_request":
 		g.pmu.Lock()

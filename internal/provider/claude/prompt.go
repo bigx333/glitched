@@ -36,6 +36,10 @@ const (
 
 var errNoPrompt = errors.New("claude: Claude Code made no such request")
 
+// errGone is why an answer to a prompt Claude Code stopped waiting on
+// never went, as the card shows it.
+var errGone = errors.New("Claude Code stopped waiting before the answer reached it.")
+
 // deniedReason is what Claude Code hears when the user denies a tool call.
 const deniedReason = "The user denied this tool call in glitched."
 
@@ -44,7 +48,7 @@ const withdrawnReason = "Claude Code no longer asks: a rule or hook of yours dec
 
 // ask is the request a can_use_tool becomes, in the ask body the card
 // reads: a command to run where and why, or an operation on a path.
-func (t *turn) ask(id string, r canUseTool) (provider.RequestOpened, prompt) {
+func (t *turn) ask(id string, r canUseTool) (provider.RequestOpened, *prompt) {
 	var b struct {
 		Operation string `json:"operation,omitempty"`
 		Path      string `json:"path,omitempty"`
@@ -77,13 +81,13 @@ func (t *turn) ask(id string, r canUseTool) (provider.RequestOpened, prompt) {
 		b.Path = t.rel(r.BlockedPath)
 	}
 	body, _ := json.Marshal(b)
-	return provider.RequestOpened{ID: id, Kind: "approval", Body: body}, prompt{kind: "approval", input: r.Input}
+	return provider.RequestOpened{ID: id, Kind: "approval", Body: body}, &prompt{kind: "approval", input: r.Input}
 }
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 // reply is the control_response that carries answer to the prompt.
-func (p prompt) reply(id string, answer json.RawMessage) (map[string]any, error) {
+func (p *prompt) reply(id string, answer json.RawMessage) (map[string]any, error) {
 	var decision map[string]any
 	switch p.kind {
 	case "approval":
