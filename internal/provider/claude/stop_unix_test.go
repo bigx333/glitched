@@ -59,9 +59,15 @@ func exits(pid int, d time.Duration) bool {
 
 func open(t *testing.T) provider.Agent {
 	t.Helper()
+	return openIn(t, t.TempDir())
+}
+
+// openIn opens a run of the fake claude in workspace ws.
+func openIn(t *testing.T, ws string) provider.Agent {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	ag, err := (&claude.Adapter{Path: must(os.Executable())}).Open(ctx, provider.SessionSpec{Thread: api.NewID(), Run: api.NewID(), Workspace: t.TempDir()})
+	ag, err := (&claude.Adapter{Path: must(os.Executable())}).Open(ctx, provider.SessionSpec{Thread: api.NewID(), Run: api.NewID(), Workspace: ws})
 	if err != nil {
 		t.Fatal(err)
 	}

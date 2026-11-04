@@ -120,14 +120,14 @@ func isExecutable(path string) bool {
 	return err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0
 }
 
-// argv is how a run starts Claude Code. Tool permission prompts are left
-// to Claude Code's own rules until the engine can answer them: a call its
-// mode does not allow comes back to the model as denied.
+// argv is how a run starts Claude Code. A tool call that the user's own
+// rules, hooks and the run's mode leave undecided comes to the run as a
+// can_use_tool control request on stdout.
 func argv(spec provider.SessionSpec, sessionFlag, session string) []string {
 	a := []string{"-p", "--verbose",
 		"--input-format", "stream-json", "--output-format", "stream-json",
 		"--include-partial-messages",
-		"--permission-mode", modes[spec.Access],
+		"--permission-mode", modes[spec.Access], "--permission-prompt-tool", "stdio",
 		"--disallowedTools", "AskUserQuestion",
 	}
 	if m := modelOf(spec.Model.Model); m != "" {

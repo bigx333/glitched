@@ -48,7 +48,11 @@ type Agent struct {
 
 	mu      sync.Mutex // one write to stdin at a time
 	stdin   *os.File
+	cut     error // set once a line went out cut short, which fails every later write
 	started bool
+
+	pmu     sync.Mutex
+	prompts map[string]*prompt // by Claude Code's request id
 }
 
 var _ provider.Agent = (*Agent)(nil)
@@ -63,7 +67,7 @@ func start(ctx context.Context, bin string, spec provider.SessionSpec, args []st
 	g := &Agent{
 		cmd: cmd, stop: stop, stderr: &tail{},
 		lines: make(chan []byte), reaped: make(chan struct{}), done: make(chan struct{}),
-		turn: newTurn(spec.Workspace),
+		turn: newTurn(spec.Workspace), prompts: map[string]*prompt{},
 	}
 	// The adapter's own pipes, unlike exec's, leave Wait nothing to wait
 	// for once claude exits, whoever else still holds them.
@@ -185,18 +189,49 @@ func (g *Agent) exited() error {
 }
 
 func (g *Agent) Do(ctx context.Context, act provider.Action) error {
-	s, ok := act.(provider.Start)
-	if !ok {
-		return provider.ErrUnsupported
-	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.started {
-		return errors.New("claude: the run already started")
+	switch a := act.(type) {
+	case provider.Start:
+		if g.started {
+			return errors.New("claude: the run already started")
+		}
+		g.started = true
+		return g.sendLocked(ctx, map[string]any{"type": "user", "session_id": "", "parent_tool_use_id": nil,
+			"message": map[string]string{"role": "user", "content": a.Text}})
+	case provider.Respond:
+		return g.respondLocked(ctx, a)
 	}
-	g.started = true
-	return g.sendLocked(ctx, map[string]any{"type": "user", "session_id": "", "parent_tool_use_id": nil,
-		"message": map[string]string{"role": "user", "content": s.Text}})
+	return provider.ErrUnsupported
+}
+
+// respondLocked sends the one reply a prompt gets. A prompt already
+// answered, or one Claude Code stopped waiting on, takes nothing more.
+func (g *Agent) respondLocked(ctx context.Context, a provider.Respond) error {
+	g.pmu.Lock()
+	p, ok := g.prompts[a.Request]
+	state := asking
+	if ok {
+		state = p.state
+	}
+	g.pmu.Unlock()
+	switch {
+	case !ok:
+		return errNoPrompt
+	case state != asking:
+		return nil
+	}
+	reply, err := p.reply(a.Request, a.Answer)
+	if err != nil {
+		return err
+	}
+	if err := g.sendLocked(ctx, reply); err != nil {
+		return err
+	}
+	g.pmu.Lock()
+	p.state = answered
+	g.pmu.Unlock()
+	return nil
 }
 
 func (g *Agent) Next(ctx context.Context) (provider.Event, error) {
@@ -214,7 +249,7 @@ func (g *Agent) Next(ctx context.Context) (provider.Event, error) {
 			}
 			var m message
 			if json.Unmarshal(line, &m) == nil {
-				g.pending = g.turn.read(m)
+				g.pending = g.read(ctx, m)
 			}
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -223,6 +258,46 @@ func (g *Agent) Next(ctx context.Context) (provider.Event, error) {
 	e := g.pending[0]
 	g.pending = g.pending[1:]
 	return e, nil
+}
+
+// read is what a message means for the run: the control messages that
+// open and close prompts, and the turn's own.
+func (g *Agent) read(ctx context.Context, m message) []provider.Event {
+	switch m.Type {
+	case "control_request":
+		if m.Request == nil {
+			return nil
+		}
+		if m.Request.Subtype != "can_use_tool" {
+			g.send(ctx, refusal(m.RequestID, m.Request.Subtype))
+			return nil
+		}
+		g.pmu.Lock()
+		defer g.pmu.Unlock()
+		if _, seen := g.prompts[m.RequestID]; seen {
+			return nil
+		}
+		e, p := g.turn.ask(m.RequestID, m.Request.canUseTool)
+		g.prompts[m.RequestID] = &p
+		return []provider.Event{e}
+	case "control_cancel_request":
+		g.pmu.Lock()
+		defer g.pmu.Unlock()
+		if p := g.prompts[m.RequestID]; p != nil && p.state == asking {
+			p.state = gone
+			return []provider.Event{provider.RequestWithdrawn{ID: m.RequestID, Reason: withdrawnReason}}
+		}
+		return nil
+	case "result":
+		g.pmu.Lock()
+		for _, p := range g.prompts {
+			if p.state == asking {
+				p.state = gone
+			}
+		}
+		g.pmu.Unlock()
+	}
+	return g.turn.read(m)
 }
 
 // Close ends stdin, which ends Claude Code once it is idle, and asks a
@@ -254,25 +329,38 @@ func (g *Agent) send(ctx context.Context, v any) error {
 }
 
 // sendLocked writes v as a line to claude's stdin, and gives up when ctx
-// ends. A line cut short stays cut: the deadline stays, and fails every
-// later write.
+// ends. A line cut short leaves the stream broken, so every later write
+// fails too.
 func (g *Agent) sendLocked(ctx context.Context, v any) error {
+	if g.cut != nil {
+		return g.cut
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
+	line := append(b, '\n')
 	expired := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() {
 		g.stdin.SetWriteDeadline(time.Now())
 		close(expired)
 	})
-	_, err = g.stdin.Write(append(b, '\n'))
-	if !stop() && err == nil {
+	n, err := g.stdin.Write(line)
+	if !stop() {
 		<-expired
-		g.stdin.SetWriteDeadline(time.Time{})
+	}
+	g.stdin.SetWriteDeadline(time.Time{})
+	if err == nil {
+		return nil
 	}
 	if errors.Is(err, os.ErrDeadlineExceeded) {
-		return ctx.Err()
+		err = cmp.Or(ctx.Err(), err)
+	}
+	if n > 0 {
+		g.cut = fmt.Errorf("claude: a line to Claude Code was cut short: %w", err)
 	}
 	return err
 }
