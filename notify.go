@@ -1,9 +1,7 @@
 package main
 
 import (
-	"slices"
 	"strings"
-	"time"
 
 	"github.com/egoist/mygo"
 
@@ -43,49 +41,25 @@ func (a *app) watching(t thread) bool {
 	return a.selected == t.id() && a.win != nil && a.win.IsFocused()
 }
 
-// notifyReported tells the user, as notifyFinished does, of t's last
-// report, when it says a child waits on them: a request ends no turn, so
+// notifyReported tells the user, as notifyFinished does, of each report to
+// the thread that says its child waits on them: a request ends no turn, so
 // nothing else tells of it. A child done or failed ended its turn, which
-// notifyFinished told of already. t's transcript holds the report when it
-// has caught up; else the manager reads it.
-func (a *app) notifyReported(t thread) {
-	if !a.settings.notifications || a.notify == nil || a.watching(t) {
-		return
-	}
-	at := t.View.Reported
-	if r, ok := reportAt(t.Transcript, at); ok {
-		a.notifyBlocked(t, r)
-		return
-	}
-	a.backend.Report(t.env, t.id(), at, func(r api.ChildReported) { a.notifyBlocked(t, r) })
-}
-
-// notifyBlocked tells of r, a report to t, when it says its child waits on
-// the user. Clicking it opens t, where the report is. Neither t nor the
-// child is one they're watching.
-func (a *app) notifyBlocked(t thread, r api.ChildReported) {
-	child := thread{t.env, t.env.Threads[r.Child]}
-	if r.Kind != api.ReportBlocked || child.Thread == nil || !a.settings.notifications || a.notify == nil || a.watching(t) || a.watching(child) {
-		return
-	}
-	a.notify(mygo.NotificationOptions{
-		ID:    "thread:" + t.id().String(),
-		Title: t.View.Title,
-		Body:  title(child) + ": Needs you",
-		Group: "threads",
-	})
-}
-
-// reportAt is the report at at in tr, when tr holds it.
-func reportAt(tr *client.Transcript, at time.Time) (api.ChildReported, bool) {
-	if tr != nil {
-		for _, e := range slices.Backward(tr.Entries) {
-			if r, ok := e.(*client.ReportEntry); ok && !r.At.After(at) {
-				return r.ChildReported, r.At.Equal(at)
-			}
+// notifyFinished told of already. Clicking it opens the thread, where the
+// report is. Neither the thread nor the child is one they're watching.
+func (a *app) notifyReported(e *client.Env, id api.ID, reports []api.ChildReported) {
+	t := thread{e, e.Threads[id]}
+	for _, r := range reports {
+		child := thread{e, e.Threads[r.Child]}
+		if r.Kind != api.ReportBlocked || child.Thread == nil || !a.settings.notifications || a.notify == nil || a.watching(t) || a.watching(child) {
+			continue
 		}
+		a.notify(mygo.NotificationOptions{
+			ID:    "thread:" + t.id().String(),
+			Title: t.View.Title,
+			Body:  title(child) + ": Needs you",
+			Group: "threads",
+		})
 	}
-	return api.ChildReported{}, false
 }
 
 // showNotification shows a desktop notification. Showing may wait on the

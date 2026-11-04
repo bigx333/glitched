@@ -27,6 +27,10 @@ type Config struct {
 	// Post runs fn on the thread that owns the manager's state, in the order
 	// posted, and must not block; the GUI passes its window's Update.
 	Post func(fn func())
+	// Reported, when set, runs on the Post thread with the reports children
+	// made to a thread since the manager first saw it, each once, in the
+	// order of its log.
+	Reported func(e *Env, thread api.ID, reports []api.ChildReported)
 }
 
 const (
@@ -202,6 +206,9 @@ type Env struct {
 type session struct {
 	ctx context.Context
 	ep  api.Endpoint
+	// fence is where in the log the shell's snapshot was taken: the views
+	// it holds show what was logged up to there.
+	fence api.Cursor
 }
 
 type Thread struct {
@@ -209,10 +216,21 @@ type Thread struct {
 	Transcript *Transcript // nil until opened
 	Pending    []Pending
 
-	known bool // the engine sent a view; false for a thread created here and not yet confirmed
-	open  bool
-	sub   *sub
-	last  chan struct{} // closed once the thread's latest submit returns
+	known   bool // the engine sent a view; false for a thread created here and not yet confirmed
+	open    bool
+	sub     *sub
+	last    chan struct{} // closed once the thread's latest submit returns
+	reports reports
+}
+
+// reports is how far the thread's log was read for its children's reports:
+// those up to after were passed to Reported. stale: its view's Reported
+// moved since, so the log may hold more; reading: a read is in flight;
+// wait: how long to wait before reading again after the next failure.
+type reports struct {
+	after          api.Cursor
+	stale, reading bool
+	wait           time.Duration
 }
 
 type sub struct{ cancel context.CancelFunc }
@@ -340,6 +358,7 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 	switch it.Kind {
 	case api.StreamSnapshot:
 		e.ID, e.Status, e.session = info.ID, Online{}, s
+		s.fence = it.Snapshot.Cursor
 		if e.Kind == Local {
 			e.Name = info.Name
 		}
@@ -350,7 +369,7 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 		live := map[api.ID]bool{}
 		for _, v := range it.Snapshot.Threads {
 			live[v.ID] = true
-			m.view(e, v)
+			m.view(e, s, v)
 		}
 		for id, th := range e.Threads {
 			if th.known && !live[id] {
@@ -359,11 +378,13 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 			}
 		}
 	case api.StreamThread:
-		m.view(e, *it.Thread)
+		m.view(e, s, *it.Thread)
 	}
 }
 
-func (m *Manager) view(e *Env, v api.Thread) {
+// view takes v from s's shell. A thread first seen has its reports read
+// from s's fence on, as v shows those before.
+func (m *Manager) view(e *Env, s *session, v api.Thread) {
 	th := e.Threads[v.ID]
 	if v.Deleted {
 		if th != nil {
@@ -376,9 +397,16 @@ func (m *Manager) view(e *Env, v api.Thread) {
 		th = &Thread{}
 		e.Threads[v.ID] = th
 	}
+	switch {
+	case !th.known:
+		th.reports.after = s.fence
+	case !v.Reported.Equal(th.View.Reported):
+		th.reports.stale = true
+	}
 	th.View, th.known = v, true
 	th.dropUnasked()
 	m.follow(e, th)
+	m.readReports(e, th)
 }
 
 // claim records that e reaches engine id, and fails if an env listed
@@ -454,36 +482,67 @@ func (m *Manager) CloseThread(e *Env, thread api.ID) {
 	th.dropUnasked()
 }
 
-// Report reads the report a child made to thread at at, and passes it to
-// done on the Post thread. It passes nothing when e has no session, the
-// read fails or no report is at at. The read starts past the transcript
-// cached for thread, which holds the reports before.
-func (m *Manager) Report(e *Env, thread api.ID, at time.Time, done func(api.ChildReported)) {
-	th := e.Threads[thread]
-	if th == nil || e.session == nil {
+// readReports reads th's log past where its reports were last read, when
+// they may have moved since, on e's live session. One read runs at a time:
+// a move meanwhile reads again once it returns.
+func (m *Manager) readReports(e *Env, th *Thread) {
+	r, s := &th.reports, e.session
+	if !r.stale || r.reading || s == nil || s.ctx.Err() != nil || e.Threads[th.View.ID] != th {
 		return
 	}
-	s := e.session
-	var after api.Cursor
-	if th.Transcript != nil {
-		after = th.Transcript.Cursor
-	}
+	r.stale, r.reading = false, true
+	q := api.Query{Thread: th.View.ID, After: r.after}
 	m.wg.Go(func() {
-		snap, err := s.ep.Read(s.ctx, api.Query{Thread: thread, After: after})
-		if err != nil {
+		snap, err := s.ep.Read(s.ctx, q)
+		m.post(e.ctx, func() { m.reportsRead(e, th, s, snap, err) })
+	})
+}
+
+// reportsRead passes on the reports a read of th's log on s found, unless
+// th is gone. A failed read is read again: after a wait while s lasts, else
+// on the session after it.
+func (m *Manager) reportsRead(e *Env, th *Thread, s *session, snap api.Snapshot, err error) {
+	r := &th.reports
+	r.reading = false
+	if e.Threads[th.View.ID] != th {
+		return
+	}
+	if err != nil {
+		r.stale = true
+		if s.ctx.Err() != nil {
+			m.readReports(e, th)
 			return
 		}
-		for _, ev := range slices.Backward(snap.Events) {
-			if ev.Type != api.EventType(api.ChildReported{}) || !ev.At.Equal(at) {
+		wait := max(r.wait, minBackoff)
+		r.wait = min(2*wait, maxBackoff)
+		m.wg.Go(func() {
+			select {
+			case <-s.ctx.Done():
+			case <-time.After(wait):
+				m.post(e.ctx, func() { m.readReports(e, th) })
+			}
+		})
+		return
+	}
+	r.wait = 0
+	// A read from another log, one restored since, holds the reports
+	// passed on already.
+	if snap.Cursor.Log == r.after.Log && m.cfg.Reported != nil {
+		var found []api.ChildReported
+		for _, ev := range snap.Events {
+			if ev.Type != api.EventType(api.ChildReported{}) {
 				continue
 			}
 			if b, err := ev.Decode(); err == nil {
-				r := b.(api.ChildReported)
-				m.post(e.ctx, func() { done(r) })
+				found = append(found, b.(api.ChildReported))
 			}
-			return
 		}
-	})
+		if len(found) > 0 {
+			m.cfg.Reported(e, th.View.ID, found)
+		}
+	}
+	r.after = snap.Cursor
+	m.readReports(e, th)
 }
 
 func (th *Thread) unfollow() {

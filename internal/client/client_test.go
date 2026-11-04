@@ -642,7 +642,7 @@ func TestClosingAThreadDropsAnAnswerOnlyItsTranscriptAsked(t *testing.T) {
 	}
 	env := &Env{Threads: map[api.ID]*Thread{id: th}}
 	m := &Manager{}
-	m.view(env, api.Thread{ID: id})
+	m.view(env, &session{}, api.Thread{ID: id})
 	if len(th.Pending) != 1 {
 		t.Fatalf("with the transcript still asking the rows are %s, want the failed answer", describePending(th.Pending))
 	}
