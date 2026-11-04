@@ -10,6 +10,7 @@ package client
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -27,12 +28,12 @@ type Config struct {
 	// Post runs fn on the thread that owns the manager's state, in the order
 	// posted, and must not block; the GUI passes its window's Update.
 	Post func(fn func())
-	// Reported, when set, runs on the Post thread once for each report a
-	// child made to thread while the env was there to see it, after the
-	// views the stream sent with it. A reconnect's snapshot instead tells,
-	// as a Blocked report, of each child of a thread held before that
-	// asks something it did not ask then.
-	Reported func(e *Env, thread api.ID, r api.Report)
+	// Asked, when set, runs on the Post thread once for each child that
+	// asks the user something the user has not heard of: on the child's
+	// Blocked report, or on a reconnect that finds the ask, whichever the
+	// env sees first. Nothing it asks at its first snapshot of a log is
+	// told of but by a report after.
+	Asked func(e *Env, parent, child api.ID)
 }
 
 const (
@@ -216,14 +217,24 @@ type Thread struct {
 	Transcript *Transcript // nil until opened
 	Pending    []Pending
 
-	known bool // the engine sent a view; false for a thread created here and not yet confirmed
-	// told is the requests a reconnect told of, before the report that
-	// asks them may have come: that report tells of them no more.
-	told []api.ID
-	open bool
-	sub  *sub
-	last chan struct{} // closed once the thread's latest submit returns
+	known bool             // the engine sent a view; false for a thread created here and not yet confirmed
+	told  map[api.ID]heard // what the user heard of each request the view asks
+	open  bool
+	sub   *sub
+	last  chan struct{} // closed once the thread's latest submit returns
 }
+
+// heard is what the user heard of a request a child asks.
+type heard uint8
+
+const (
+	unheard heard = iota
+	// before was pending at the env's first snapshot of the log. Its
+	// report may have come before the env did, so only a report after
+	// tells of it, not a reconnect.
+	before
+	notified
+)
 
 type sub struct{ cancel context.CancelFunc }
 
@@ -358,19 +369,17 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 		}
 		e.waiting = nil
 		// A snapshot of another log than the views held, as on the first
-		// connect or from a restored database, tells of nothing: what it
-		// carries came before, or the views held say nothing of it. One
-		// of the same log tells of the asks made while away, not of the
-		// last report: that one may be a sibling's, or its ask over.
-		var asked []api.Thread
-		if it.Snapshot.Cursor.Log == e.log {
-			asked = e.askedSince(it.Snapshot.Threads)
-		}
+		// connect or from a restored database, tells of nothing: its
+		// reports came before, or the views held say nothing of them.
+		same := it.Snapshot.Cursor.Log == e.log
 		e.log = it.Snapshot.Cursor.Log
 		live := map[api.ID]bool{}
+		var reports []api.Report
 		for _, v := range it.Snapshot.Threads {
 			live[v.ID] = true
-			m.view(e, v)
+			if m.view(e, v) && same {
+				reports = append(reports, *v.LastReport)
+			}
 		}
 		for id, th := range e.Threads {
 			if th.known && !live[id] {
@@ -378,52 +387,49 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 				delete(e.Threads, id)
 			}
 		}
-		for _, v := range asked {
+		for _, v := range it.Snapshot.Threads {
 			th := e.Threads[v.ID]
-			th.told = nil
-			for _, r := range v.Requests {
-				th.told = append(th.told, r.ID)
+			if v.Parent.IsZero() {
+				continue
 			}
-			m.reported(e, v.Parent, api.Report{Child: v.ID, Kind: api.ReportBlocked})
+			if !same {
+				for _, r := range v.Requests {
+					th.told[r.ID] = max(th.told[r.ID], before)
+				}
+				continue
+			}
+			m.tell(e, th, before)
+		}
+		for _, r := range reports {
+			m.reported(e, r)
 		}
 	case api.StreamThread:
-		if m.view(e, *it.Thread) && !e.toldBefore(*it.Thread.LastReport) {
-			m.reported(e, it.Thread.ID, *it.Thread.LastReport)
+		if m.view(e, *it.Thread) {
+			m.reported(e, *it.Thread.LastReport)
 		}
 	}
 }
 
-// toldBefore is whether r is the next report of a child a reconnect told
-// of, and asks nothing that reconnect did not tell of.
-func (e *Env) toldBefore(r api.Report) bool {
-	th := e.Threads[r.Child]
-	if th == nil || th.told == nil {
-		return false
+// reported tells of the child that made r if r says it waits on the user
+// for something the user has not been told of.
+func (m *Manager) reported(e *Env, r api.Report) {
+	if th := e.Threads[r.Child]; th != nil && r.Kind == api.ReportBlocked {
+		m.tell(e, th, notified)
 	}
-	told := th.told
-	th.told = nil
-	return !slices.ContainsFunc(th.View.Requests, func(q api.Request) bool { return !slices.Contains(told, q.ID) })
 }
 
-// askedSince is the views of children of threads e holds that ask
-// something the views e holds do not.
-func (e *Env) askedSince(views []api.Thread) []api.Thread {
-	var asked []api.Thread
-	for _, v := range views {
-		if p := e.Threads[v.Parent]; p == nil || !p.known {
-			continue
-		}
-		var held []api.Request
-		if th := e.Threads[v.ID]; th != nil {
-			held = th.View.Requests
-		}
-		if slices.ContainsFunc(v.Requests, func(r api.Request) bool {
-			return !slices.ContainsFunc(held, func(h api.Request) bool { return h.ID == r.ID })
-		}) {
-			asked = append(asked, v)
-		}
+// tell tells of child th if it asks a request the user heard less of
+// than enough, and marks all it asks as told of.
+func (m *Manager) tell(e *Env, th *Thread, enough heard) {
+	if !slices.ContainsFunc(th.View.Requests, func(r api.Request) bool { return th.told[r.ID] < enough }) {
+		return
 	}
-	return asked
+	for _, r := range th.View.Requests {
+		th.told[r.ID] = notified
+	}
+	if m.cfg.Asked != nil {
+		m.cfg.Asked(e, th.View.Parent, th.View.ID)
+	}
 }
 
 // view takes v in place of the thread's view, and is whether v carries a
@@ -444,16 +450,16 @@ func (m *Manager) view(e *Env, v api.Thread) bool {
 	}
 	was, seen := th.View.LastReport, th.known
 	th.View, th.known = v, true
+	if th.told == nil {
+		th.told = map[api.ID]heard{}
+	}
+	maps.DeleteFunc(th.told, func(id api.ID, _ heard) bool {
+		return !slices.ContainsFunc(v.Requests, func(r api.Request) bool { return r.ID == id })
+	})
 	th.dropUnasked()
 	m.follow(e, th)
 	r := v.LastReport
 	return seen && r != nil && (was == nil || *was != *r)
-}
-
-func (m *Manager) reported(e *Env, parent api.ID, r api.Report) {
-	if m.cfg.Reported != nil {
-		m.cfg.Reported(e, parent, r)
-	}
 }
 
 // claim records that e reaches engine id, and fails if an env listed
@@ -498,6 +504,7 @@ func (m *Manager) down(e *Env, s Status) {
 	}
 	if _, dup := s.(Duplicate); dup {
 		clear(e.Threads)
+		e.log = api.ID{}
 	}
 }
 

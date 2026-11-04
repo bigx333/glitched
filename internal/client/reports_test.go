@@ -19,7 +19,7 @@ type shelled struct {
 	m     *Manager
 	e     *Env
 	views []api.Thread // committed, not yet sent
-	told  []api.Report
+	told  []api.ID     // the children Asked named
 }
 
 func newShelled(t *testing.T) *shelled {
@@ -29,7 +29,7 @@ func newShelled(t *testing.T) *shelled {
 	}
 	t.Cleanup(func() { st.Close() })
 	sh := &shelled{t: t, st: st}
-	sh.m = New(Config{Post: func(fn func()) { fn() }, Reported: func(_ *Env, _ api.ID, r api.Report) { sh.told = append(sh.told, r) }})
+	sh.m = New(Config{Post: func(fn func()) { fn() }, Asked: func(_ *Env, _, child api.ID) { sh.told = append(sh.told, child) }})
 	t.Cleanup(func() { sh.m.Close() })
 	sh.e = &Env{ctx: sh.m.ctx, Threads: map[api.ID]*Thread{}}
 	st.OnCommit(func(c store.Commit) { sh.views = append(sh.views, c.Threads...) })
@@ -65,17 +65,6 @@ func (sh *shelled) create(title string) api.ID {
 	return id
 }
 
-// report logs a Blocked report of a new child's to parent at at.
-func (sh *shelled) report(parent api.ID, at time.Time) api.ID {
-	sh.t.Helper()
-	child := api.NewID()
-	o := eng.Reported{Report: api.ChildReported{Child: child, Run: api.NewID(), Kind: api.ReportBlocked}}
-	if _, err := sh.st.Observe(context.Background(), parent, o, at, 0); err != nil {
-		sh.t.Fatal(err)
-	}
-	return child
-}
-
 // ask starts a turn on a new child of parent's that asks the user, and
 // logs its Blocked report to parent, as the runtime does.
 func (sh *shelled) ask(parent api.ID, at time.Time) api.ID {
@@ -92,7 +81,10 @@ func (sh *shelled) ask(parent api.ID, at time.Time) api.ID {
 	submit(api.ThreadCreate{Workspace: "w", Title: "child", Model: api.ModelRef{Provider: "fake"}, Parent: parent})
 	run := submit(api.MessageDispatch{Text: "go", Mode: api.StartNow})
 	e, ok, err := sh.st.Lease(ctx, func() []api.ID { return nil })
-	if err != nil || !ok || e.Thread != child {
+	for err == nil && ok && e.Thread != child { // another child's report
+		e, ok, err = sh.st.Lease(ctx, func() []api.ID { return nil })
+	}
+	if err != nil || !ok {
 		sh.t.Fatalf("lease: %+v %v %v", e, ok, err)
 	}
 	for _, o := range []eng.Observation{
@@ -114,20 +106,22 @@ func (sh *shelled) ask(parent api.ID, at time.Time) api.ID {
 func (sh *shelled) want(children ...api.ID) {
 	sh.t.Helper()
 	if len(sh.told) != len(children) {
-		sh.t.Fatalf("told of %d reports, %+v; want %d", len(sh.told), sh.told, len(children))
+		sh.t.Fatalf("told of %d children, %v; want %d", len(sh.told), sh.told, len(children))
 	}
 	for i, c := range children {
-		if r := sh.told[i]; r.Child != c || r.Kind != api.ReportBlocked {
-			sh.t.Fatalf("report %d told of %+v; want child %v blocked", i, r, c)
+		if sh.told[i] != c {
+			sh.t.Fatalf("ask %d told of %v; want %v", i, sh.told[i], c)
 		}
 	}
 }
 
-// The first snapshot tells of no report: they came before the app did.
-func TestTheFirstSnapshotTellsOfNoReport(t *testing.T) {
+// The first snapshot tells of no ask, nor a reconnect after it: their
+// reports came before the app did.
+func TestTheFirstSnapshotTellsOfNoAsk(t *testing.T) {
 	sh := newShelled(t)
 	p := sh.create("Parent")
-	sh.report(p, time.Unix(1001, 0))
+	sh.ask(p, time.Unix(1001, 0))
+	sh.connect()
 	sh.connect()
 	sh.want()
 }
@@ -140,14 +134,13 @@ func TestReportsAreToldOfOnceAcrossAReconnect(t *testing.T) {
 	p := sh.create("Parent")
 	sh.connect()
 	at := time.Unix(1001, 0)
-	a := sh.report(p, at)
-	b := sh.report(p, at)
+	a := sh.ask(p, at)
+	b := sh.ask(p, at)
 	sh.send()
 	sh.want(a, b)
 	sh.connect()
 	sh.want(a, b)
 	c := sh.ask(p, at)
-	sh.report(p, at)
 	sh.connect()
 	sh.want(a, b, c)
 	sh.connect()
@@ -160,14 +153,14 @@ func TestTheFirstReportAfterARestoreIsToldOf(t *testing.T) {
 	sh := newShelled(t)
 	p := sh.create("Parent")
 	sh.connect()
-	a := sh.report(p, time.Unix(1001, 0))
+	a := sh.ask(p, time.Unix(1001, 0))
 	sh.send()
 	if err := sh.st.Rewind(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	sh.connect()
 	sh.want(a)
-	b := sh.report(p, time.Unix(1002, 0))
+	b := sh.ask(p, time.Unix(1002, 0))
 	sh.send()
 	sh.want(a, b)
 }

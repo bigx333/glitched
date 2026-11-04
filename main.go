@@ -463,7 +463,7 @@ func newApp(dir string, post func(func())) *app {
 			fn()
 			a.changed()
 		})
-	}, Reported: a.notifyReported})
+	}, Asked: a.notifyAsked})
 	return a
 }
 
