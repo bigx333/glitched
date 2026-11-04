@@ -37,12 +37,7 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 	case api.MessageDispatch:
 		err = d.dispatch(c.ID, b)
 	case api.TurnInterrupt:
-		if b.Drop {
-			err = d.drop("the thread was settled or deleted")
-		}
-		if r := d.t.Live(); r != nil && err == nil {
-			err = d.interrupt(*r)
-		}
+		err = d.interrupt(b.Drop)
 	case api.RequestRespond:
 		err = d.respond(b)
 	case api.InboxSet:
@@ -50,10 +45,7 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 	case api.ThreadRename:
 		err = d.rename(b)
 	case api.ThreadDelete:
-		if d.t.Live() != nil {
-			return nil, nil, rejected("stop the agent before deleting the thread")
-		}
-		err = d.emit(api.ThreadDeleted{})
+		err = d.delete()
 	default:
 		err = rejected("unknown intent")
 	}
@@ -134,6 +126,9 @@ func CheckChild(line []Thread, c api.ThreadCreate) error {
 	if len(line) == 0 || !line[0].Exists() || line[0].Deleted {
 		return rejected("the parent thread is gone")
 	}
+	if line[0].settled() {
+		return rejected("the parent thread is settled")
+	}
 	if len(line) > api.MaxDepth {
 		return rejected(fmt.Sprintf("a child thread can be at most %d below a thread of yours", api.MaxDepth))
 	}
@@ -166,7 +161,7 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	}
 	live := d.t.Live()
 	switch {
-	case m.Mode == api.StartNow:
+	case m.Mode == api.StartNow && !d.t.settled():
 		return d.admit(id)
 	case m.Mode == api.SteerActive && live != nil && steerable[live.State]:
 		if err := d.emit(api.MessageClaimed{Message: id, Run: live.ID}); err != nil {
@@ -210,9 +205,10 @@ func (d *decision) admit(message api.ID) error {
 }
 
 // settle starts the next ready message whenever the thread is idle, so
-// admission happens in the same commit as whatever freed the thread.
+// admission happens in the same commit as whatever freed the thread. A
+// settled or deleted thread starts nothing.
 func (d *decision) settle() error {
-	if d.t.Live() != nil {
+	if d.t.Live() != nil || d.t.settled() || d.t.Deleted {
 		return nil
 	}
 	if m := d.t.next(); m != nil {
@@ -224,10 +220,22 @@ func (d *decision) settle() error {
 // interrupt is the user's stop. Asked again once the agent took the first
 // interrupt, the user gives up waiting on a run that ignores it; nobody can
 // say what that run is doing. Asked again before, it changes nothing.
-func (d *decision) interrupt(r Run) error {
+//
+// A halt, with drop, cancels what waits its turn and stops the run. It is
+// not the user giving up on a run: on one already stopping it waits for
+// the run's end, as the first stop does. Settling a thread halts it.
+func (d *decision) interrupt(drop bool) error {
+	if drop {
+		if err := d.drop("the thread was settled or deleted"); err != nil {
+			return err
+		}
+	}
+	r := d.t.Live()
 	switch {
-	case r.State != RunStopping:
-		return d.stop(r)
+	case r == nil:
+		return nil
+	case drop || r.State != RunStopping:
+		return d.stop(*r)
 	case r.Signalled:
 		return d.emit(api.TurnUncertain{Run: r.ID})
 	}
@@ -288,6 +296,10 @@ func (d *decision) respond(b api.RequestRespond) error {
 	return nil
 }
 
+// inbox sets the user's disposition. Settled is done with, as archived
+// was: in the same commit, what waits its turn is cancelled and the live
+// run is stopped, and settle starts nothing on the thread until it's back
+// in the inbox.
 func (d *decision) inbox(b api.InboxSet) error {
 	v := b.Disposition
 	v.Until = v.Until.UTC().Round(0)
@@ -297,7 +309,25 @@ func (d *decision) inbox(b api.InboxSet) error {
 	if v.State == d.t.Disposition.State && v.Until.Equal(d.t.Disposition.Until) {
 		return nil
 	}
-	return d.emit(api.DispositionChanged{Disposition: v})
+	if err := d.emit(api.DispositionChanged{Disposition: v}); err != nil {
+		return err
+	}
+	if v.State != api.Settled {
+		return nil
+	}
+	return d.interrupt(true)
+}
+
+// delete tombstones the thread. A live run ends with it, abandoned, in the
+// same commit, and the host closes its agent as the run ends: whatever a
+// client last saw of the thread, nothing of it is left running.
+func (d *decision) delete() error {
+	if r := d.t.Live(); r != nil {
+		if err := d.emit(api.TurnEnded{Run: r.ID, Outcome: api.OutcomeAbandoned}); err != nil {
+			return err
+		}
+	}
+	return d.emit(api.ThreadDeleted{})
 }
 
 func (d *decision) rename(b api.ThreadRename) error {

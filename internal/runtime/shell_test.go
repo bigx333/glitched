@@ -124,6 +124,7 @@ func TestShellStreamsOneViewPerCommit(t *testing.T) {
 		t.Fatalf("disposition view %+v", v[0].Disposition)
 	}
 
+	submit(t, n.h, a, api.InboxSet{})
 	submit(t, n.h, a, dispatch("again", api.StartNow))
 	viewsUntil(t, shell, a, "the second request", waiting)
 	submit(t, n.h, a, api.TurnInterrupt{})

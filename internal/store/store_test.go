@@ -341,8 +341,8 @@ func TestAnOlderDatabaseUpgrades(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := snap.Threads[0]; v.Disposition.State != api.Settled || v.Run != api.RunStarting {
-		t.Fatalf("after the upgrade: disposition %v, run %v; want settled, its run still starting", v.Disposition.State, v.Run)
+	if v := snap.Threads[0]; v.Disposition.State != api.Settled || v.Run != api.RunStopping {
+		t.Fatalf("after the upgrade: disposition %v, run %v; want settled, its run stopping", v.Disposition.State, v.Run)
 	}
 }
 

@@ -277,8 +277,8 @@ type Thread struct {
 
 func (t Thread) Working() bool { return t.Run != RunIdle && t.Run != RunUncertain }
 
-// Live is whether the thread has a run, an uncertain one too. The engine
-// deletes no live thread, and only an interrupt ends an uncertain run.
+// Live is whether the thread has a run, an uncertain one too. Only an
+// interrupt, a settle or a delete ends an uncertain run.
 func (t Thread) Live() bool { return t.Run != RunIdle }
 
 // Protocol is the version of what crosses between engines, clients and

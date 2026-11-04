@@ -363,12 +363,9 @@ func TestInboxStates(t *testing.T) {
 }
 
 // A deleted thread refuses every command, a create under its ID too, and
-// every observation. It can't be deleted while its agent works.
+// every observation.
 func TestDelete(t *testing.T) {
 	f, run := running(t)
-	if _, _, err := f.submit(api.ThreadDelete{}); !errors.As(err, new(*api.RejectedError)) {
-		t.Fatalf("delete while running: %v, want a rejection", err)
-	}
 	f.observe(engine.Ended{Run: run, Outcome: api.OutcomeCompleted})
 	f.must(api.ThreadDelete{})
 	if v := engine.View(f.th); !v.Deleted {
