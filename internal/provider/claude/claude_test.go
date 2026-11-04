@@ -343,3 +343,21 @@ func TestAccessPicksThePermissionMode(t *testing.T) {
 		t.Errorf("permission modes %v, want %v", modes, want)
 	}
 }
+
+func TestATestCannotRunARealClaude(t *testing.T) {
+	bin := t.TempDir()
+	ran := filepath.Join(t.TempDir(), "ran")
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ntouch "+ran+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	defer func() {
+		if recover() == nil {
+			t.Error("Open ran the claude on PATH in a test without the claudelive tag, want a panic")
+		}
+		if _, err := os.Stat(ran); err == nil {
+			t.Error("the claude on PATH ran")
+		}
+	}()
+	(&claude.Adapter{}).Open(ctx, provider.SessionSpec{Thread: api.NewID(), Run: api.NewID(), Workspace: t.TempDir()})
+}

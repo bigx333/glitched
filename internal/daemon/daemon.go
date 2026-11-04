@@ -55,6 +55,9 @@ type Config struct {
 	Control   string       `json:"control,omitempty"`
 	Epoch     uint64       `json:"epoch"` // this host's epoch at the hub
 	Providers provider.Mux `json:"-"`
+	// ClaudePath is the claude binary `glitched serve` runs Claude Code
+	// threads with, when it is not on PATH or in ~/.local/bin.
+	ClaudePath string `json:"claude_path,omitempty"`
 }
 
 const configFile = "engine.json"

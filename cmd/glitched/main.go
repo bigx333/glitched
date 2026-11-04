@@ -20,6 +20,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
+	"glitched/internal/provider/claude"
 	"glitched/internal/tailnet"
 	"glitched/internal/transport"
 )
@@ -47,7 +48,7 @@ const usage = `usage: glitched <command> [flags]
             on -dir, and the GUI's own engine, run as it did unless a flag says otherwise
   status    whether an engine serves -dir, its hub, its tailnet listeners and its tokens
   pair      mint a token for a client on the tailnet: glitched pair -name LABEL | -list | -revoke LABEL
-  run       send a message and stream the turn: glitched run [-thread ID] [-yes] text...
+  run       send a message and stream the turn: glitched run [-thread ID] [-provider claude] [-yes] text...
   threads   list this host's threads
   replica   print a thread's events as the hub holds them: glitched replica -thread ID
 
@@ -165,6 +166,9 @@ func serve(ctx context.Context, args []string) error {
 	if set["control"] {
 		cfg.Control = *control
 	}
+	// Only a standalone engine runs Claude Code yet; the GUI's own engine
+	// keeps the fake until it can show what Claude Code asks.
+	cfg.Providers["claude"] = &claude.Adapter{Path: cfg.ClaudePath}
 	d, err := daemon.Start(ctx, cfg)
 	if err != nil {
 		return err
@@ -317,6 +321,8 @@ func run(ctx context.Context, args []string) error {
 	threadFlag := fs.String("thread", "", "thread to send to; a new one when empty")
 	yes := fs.Bool("yes", false, "approve every request without asking")
 	modeFlag := fs.String("mode", "after", "now, after, steer, restart or defer; restart also ends an uncertain run")
+	providerFlag := fs.String("provider", "fake", "the agent a new thread runs: fake or claude")
+	modelFlag := fs.String("model", "", "the model a new thread runs, such as haiku; empty is the provider's default")
 	fs.Parse(args)
 	mode, ok := modes[*modeFlag]
 	if !ok {
@@ -345,7 +351,7 @@ func run(ctx context.Context, args []string) error {
 	} else {
 		thread = api.NewID()
 		wd, _ := os.Getwd()
-		create := api.ThreadCreate{Workspace: wd, Title: text, Model: api.ModelRef{Provider: "fake", Model: "scripted"}}
+		create := api.ThreadCreate{Workspace: wd, Title: text, Model: api.ModelRef{Provider: *providerFlag, Model: *modelFlag}}
 		if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: create}); err != nil {
 			return err
 		}
