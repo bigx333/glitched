@@ -22,19 +22,21 @@ func init() {
 
 // guard stops a test from running the user's real, signed-in claude.
 // Without the claudelive tag, a test and what it starts may run only the
-// test binary playing claude.
-func guard(bin string) {
+// test binary playing claude. A test binary panics; any other program
+// gets the error, so it fails the turn and not the whole daemon.
+func guard(bin string) error {
 	if live {
-		return
+		return nil
 	}
 	allowed, underTest := os.LookupEnv(testClaude)
-	if !underTest && !testing.Testing() {
-		return
+	if !underTest && !testing.Testing() || sameFile(bin, allowed) {
+		return nil
 	}
-	if sameFile(bin, allowed) {
-		return
+	err := fmt.Errorf("claude: a test without the claudelive tag tried to run %s; replay a transcript instead", bin)
+	if testing.Testing() {
+		panic(err.Error())
 	}
-	panic(fmt.Sprintf("claude: a test without the claudelive tag tried to run %s; replay a transcript instead", bin))
+	return err
 }
 
 func sameFile(a, b string) bool {
