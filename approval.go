@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/egoist/mygo/ui"
 
@@ -27,6 +29,23 @@ type ask struct {
 func askOf(body json.RawMessage) (ask, bool) {
 	var b ask
 	return b, json.Unmarshal(body, &b) == nil && (b.Operation != "" || b.Command != "")
+}
+
+// shown is a string from the agent as the card shows it. Each control or
+// format character, and each line or paragraph separator, is an escape
+// such as \u{202E}: drawn as it is, it can reorder a line or end it, so
+// the card would show one thing while an allow approves another. A line
+// break stays one in a field of lines.
+func shown(s string, lines bool) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r != '\n' || !lines) && (unicode.In(r, unicode.Cc, unicode.Cf) || r == '\u2028' || r == '\u2029') {
+			fmt.Fprintf(&b, `\u{%X}`, r)
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // agentNames are the providers' agents as the card names them.
@@ -96,16 +115,16 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 			switch {
 			case !known:
 				ui.Text(c, agentName(t)+" asks:").FontSize(12.5).TextColor(palette.muted)
-				ui.Text(c, string(r.Body)).Selectable().FontSize(12).Font("monospace")
+				ui.Text(c, shown(string(r.Body), false)).Selectable().FontSize(12).Font("monospace")
 			case b.Command != "":
 				ui.Row(c).Gap(5).AlignItems(ui.Center).Wrap().Children(func() {
 					ui.Text(c, agentName(t)+" wants to run a command").FontSize(12.5).TextColor(palette.muted)
 					if b.Cwd != "" {
 						ui.Text(c, "in").FontSize(12.5).TextColor(palette.muted)
-						ui.Text(c, b.Cwd).FontSize(12).Font("monospace")
+						ui.Text(c, shown(b.Cwd, false)).FontSize(12).Font("monospace")
 					}
 				})
-				ui.Text(c, b.Command).Selectable().FontSize(12.5).Font("monospace").Padding(8, 10).Radius(6).
+				ui.Text(c, shown(b.Command, true)).Selectable().FontSize(12.5).Font("monospace").Padding(8, 10).Radius(6).
 					Background(palette.bg).Border(1, palette.border)
 				if b.Unsandboxed {
 					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
@@ -115,9 +134,9 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 				}
 			default:
 				ui.Row(c).Gap(5).AlignItems(ui.Center).Wrap().Children(func() {
-					ui.Text(c, agentName(t)+" wants to "+b.Operation).FontSize(12.5).TextColor(palette.muted)
+					ui.Text(c, agentName(t)+" wants to "+shown(b.Operation, false)).FontSize(12.5).TextColor(palette.muted)
 					if b.Path != "" {
-						ui.Text(c, b.Path).FontSize(12).Font("monospace")
+						ui.Text(c, shown(b.Path, false)).FontSize(12).Font("monospace")
 					}
 				})
 				if b.Args != "" {
@@ -125,10 +144,10 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 				}
 			}
 			if b.Reason != "" {
-				ui.Text(c, b.Reason).FontSize(12.5).TextColor(palette.muted).LineHeight(1.45)
+				ui.Text(c, shown(b.Reason, true)).FontSize(12.5).TextColor(palette.muted).LineHeight(1.45)
 			}
 			if r.Reason != "" && !waiting {
-				ui.Text(c, r.Reason).FontSize(12).TextColor(palette.faint)
+				ui.Text(c, shown(r.Reason, true)).FontSize(12).TextColor(palette.faint)
 			}
 		})
 		if waiting || a.zapping(r) {
@@ -142,21 +161,22 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 const argsLines, argsChars = 8, 600
 
 // requestArgs are the arguments an allow approves, cut to their first
-// lines with a toggle to show all.
+// lines with a toggle to show all and how much more that is.
 func (a *app) requestArgs(c *ui.Context, request api.ID, args string) {
+	args = shown(args, true)
 	open := a.argsOpen[request]
-	shown, cut := args, false
+	text, cut := args, false
 	if !open {
-		shown, cut = clipped(args, argsLines, argsChars)
+		text, cut = clipped(args, argsLines, argsChars)
 	}
-	ui.Text(c, shown).Selectable().FontSize(12).Font("monospace").LineHeight(1.45).Padding(8, 10).Radius(6).
+	ui.Text(c, text).Selectable().FontSize(12).Font("monospace").LineHeight(1.45).Padding(8, 10).Radius(6).
 		Background(palette.bg).Border(1, palette.border)
 	if !cut && !open {
 		return
 	}
-	label, icon := "Show all", icChevronD
-	if open {
-		label, icon = "Show less", icChevronUp
+	label, icon := "Show less", icChevronUp
+	if !open {
+		label, icon = "Show all · "+more(args, text), icChevronD
 	}
 	if ghost(c, "args", false).Padding(2, 6).Children(func() {
 		ui.Icon(c, icon).FontSize(12)
@@ -180,6 +200,15 @@ func clipped(s string, lines, chars int) (string, bool) {
 		return s, false
 	}
 	return out + "…", true
+}
+
+// more is how much of all a cut of it leaves out: the lines it hides, or
+// the characters where it cuts into the last line it shows.
+func more(all, cut string) string {
+	if n := strings.Count(all, "\n") - strings.Count(cut, "\n"); n > 0 {
+		return plural(n, "more line")
+	}
+	return plural(len([]rune(all))-len([]rune(cut))+1, "more character")
 }
 
 // requestAnswers are a waiting request's answers, Allow once and Deny; or
