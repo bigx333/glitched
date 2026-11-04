@@ -24,10 +24,10 @@ A PR merges to main by rebase-merge only when all of these hold at its current h
 | 3 | Fix verified high-severity findings on `land/pr-2` | Done in 2 fix rounds. Round 3: no high (Opus 1 low, Sol 2 medium: one filed as #23, one dismissed and filed as design note #24). Real-app runs passed 6/6 at 20dfea6 and at 2cc7903. | Done. |
 | 4 | Land the copy, close #2 with a link | **Done 2026-11-04 05:38Z.** #22 rebase-merged at 2cc7903; main is 604b182, linear. #2 closed with a link. #15 and #16 closed by the merge. Main CI green at 604b182 (run 41780484873: vet, test, race). | The copy is merged on main by rebase-merge, main's CI is green, #2 is closed with a link. |
 | 5 | HTML plan for the Claude Code adapter (in core) | Plan written, waiting on Nelson (Q5). | The plan passes the html-plan linter and Nelson has answered its decisions. |
-| 6 | Claude Code adapter, in slices from the plan | Waiting on task 5 | Each slice's done-when check from the plan. |
+| 6 | Claude Code adapter, in slices from the plan | Waiting on task 5. Not started, per Nelson. | Each slice's done-when check from the plan. |
 | 7 | Agent spawn tool, in core | Waiting on task 6 | To be set by its plan. |
-| 8 | Child-thread bugs #14, #23 (#15, #16 fixed in #22) | Held behind the adapter, per Nelson's order | Each fix has a test that fails without it, and its PR merges under the rule. |
-| 9 | Browser bugs #17 to #20 | Held behind the adapter, per Nelson's order | Same as task 8. |
+| 8 | Child-thread bugs #14, #23 (#15, #16 fixed in #22) | Running since 2026-11-04: one worker per issue (branches `fix/14-...`, `fix/23-...`). | Each fix has a test that fails without it, and its PR merges under the rule. |
+| 9 | Browser bugs #17 to #20 | Running since 2026-11-04: one worker per issue (branches `fix/17-...` to `fix/20-...`). | Same as task 8. |
 | 12 | Doc nit on Mark settled for a waiting thread | Filed as #25 | The doc matches the menu. |
 | 13 | Refuse an unknown effect kind before leasing it | Filed as #24 (design note) | A build boots cleanly on a store with an unknown kind. |
 | 11 | MyGo v0.5.5 to v0.7 upgrade, restore the CPU glow halo with `Cache` | After task 4 | TestShot renders match the pre-#22 glow, CI time stays near 210 s. |
