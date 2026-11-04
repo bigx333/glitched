@@ -1,5 +1,9 @@
 // Package claude runs Claude Code turns: one `claude -p` process per run,
 // speaking stream-json on stdin and stdout.
+//
+// Every claude glitched starts names glitched as its entrypoint, because
+// Anthropic meters the SDK entrypoints, sdk-cli and sdk-ts, harder against
+// the 5-hour usage window.
 package claude
 
 import (
@@ -9,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"glitched/internal/api"
@@ -33,7 +38,7 @@ func (a *Adapter) Describe(ctx context.Context) (provider.Info, error) {
 	if err != nil {
 		return provider.Info{}, err
 	}
-	out, err := exec.CommandContext(ctx, bin, "--version").Output()
+	out, err := Command(ctx, bin, "--version").Output()
 	if err != nil {
 		return provider.Info{}, fmt.Errorf("claude --version: %w", err)
 	}
@@ -64,6 +69,17 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 // that started it in a way this adapter can reattach to.
 func (a *Adapter) Reconcile(context.Context, provider.RuntimeIdentity) (provider.Recovery, error) {
 	return provider.Lost{Reason: "Claude Code runs end with the engine that started them"}, nil
+}
+
+// Command is how glitched runs claude: with the environment it has, less
+// any entrypoint it inherited, plus its own.
+func Command(ctx context.Context, bin string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		k, _, _ := strings.Cut(kv, "=")
+		return strings.EqualFold(k, "CLAUDE_CODE_ENTRYPOINT")
+	}), "CLAUDE_CODE_ENTRYPOINT=glitched")
+	return cmd
 }
 
 func (a *Adapter) binary() (string, error) {
