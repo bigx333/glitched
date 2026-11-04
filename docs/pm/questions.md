@@ -2,6 +2,10 @@
 
 Newest first. Answer under each question, or in the PM thread.
 
+## Q7 (2026-11-04, open, FYI). The capy-ai review bot is out of credits
+
+capy-ai commented on #49 that it could not review because Nelson's workspace is out of credits (https://github.com/bigx333/glitched/pull/49#issuecomment-6643920589). Capy is not part of the merge gate, which is the Opus and Sol interrogate review plus GARM CI, so nothing is blocked. Adding credits or turning on auto-reload costs money, so it is Nelson's call. The PM has done nothing.
+
 ## Q6 (2026-11-04, answered: all as recommended; see decisions.md). AskUserQuestion and #14 under Protocol 5: six decisions
 
 The plan is `/tmp/glitched-plans/askuserquestion.packed.html`. It is a local file and is not committed. Each decision lists the PM's recommendation first.
