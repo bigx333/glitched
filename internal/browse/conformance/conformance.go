@@ -168,6 +168,7 @@ func Run(t *testing.T, h Harness) {
 		{"MixedCase", s.mixedCase},
 		{"Limits", s.limits},
 		{"Refs", s.refs},
+		{"ScaledFrames", s.scaledFrames},
 		{"Tampering", s.tampering},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -505,6 +506,56 @@ func (s *suite) refs(t *testing.T) {
 	}
 }
 
+// A ref's box is where its element shows in the top viewport through
+// frames that transforms scale, the frame's or an ancestor's, each axis on
+// its own, and frames in them: the box a click at whose centre lands on
+// the element.
+func (s *suite) scaledFrames(t *testing.T) {
+	s.t = t
+	p, _ := s.open("/scaled")
+	s.until("the scaled frames", func() bool {
+		v, err := p.EvalContext(context.Background(), `const doc = (id, d = document) => d.getElementById(id)?.contentDocument;
+			return !!doc("outer")?.querySelector("button") && !!doc("nested", doc("outer"))?.querySelector("button") && !!doc("grown")?.querySelector("button")`)
+		return err == nil && v == true
+	})
+	ctx := context.Background()
+	snap, err := webtarget.Take(ctx, p, webtarget.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each button is 80 by 40 with a margin of 10 in a page with none. The
+	// frame outer is at 40, 30 with a border of 4 and padding of 6, scaled
+	// by 0.5 and 0.75; the frame nested, in it, at 100, 100 with a border
+	// of 2 and padding of 3, scaled by 0.5; the frame grown, with a border
+	// of 2 and padding of 3, is in a box at 300, 30 scaled by 2.
+	for _, c := range []struct {
+		name       string
+		x, y, w, h float64
+	}{
+		{"Scaled", 40 + 0.5*(10+10), 30 + 0.75*(10+10), 80 * 0.5, 40 * 0.75},
+		{"Nested", 40 + 0.5*(10+100+0.5*(5+10)), 30 + 0.75*(10+100+0.5*(5+10)), 80 * 0.25, 40 * 0.375},
+		{"Grown", 300 + 2*(5+10), 30 + 2*(5+10), 80 * 2, 40 * 2},
+	} {
+		ref := refNamed(snap, c.name, 0)
+		if ref == "" {
+			t.Errorf("no ref named %q:\n%s", c.name, snap.Text)
+			continue
+		}
+		e, err := webtarget.Describe(ctx, p, ref)
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		b := e.Box
+		if math.Abs(b.X-c.x) > 1 || math.Abs(b.Y-c.y) > 1 || math.Abs(b.Width-c.w) > 1 || math.Abs(b.Height-c.h) > 1 {
+			t.Errorf("%s is at %+v, want {X:%g Y:%g Width:%g Height:%g} in the top viewport", c.name, b, c.x, c.y, c.w, c.h)
+		}
+		if cx, cy := b.X+b.Width/2, b.Y+b.Height/2; cx < c.x || cx > c.x+c.w || cy < c.y || cy > c.y+c.h {
+			t.Errorf("a click at %s's centre, %g, %g, misses it", c.name, cx, cy)
+		}
+	}
+}
+
 // A page can't plant or replace the script's state, nor redirect a ref or
 // change what one finds by patching, after the script is installed,
 // anything resolving and describing go through: the built-ins it calls
@@ -670,6 +721,10 @@ func fixtures() http.Handler {
 	mux.Handle("/c", page(`<!doctype html><title>Page C</title>`))
 	mux.Handle("/opens", page(`<!doctype html><title>Opens</title><script>window.open("/b")</script>`))
 	mux.Handle("/snap", page(snapFixture))
+	mux.Handle("/scaled", page(scaledFixture))
+	mux.Handle("/scaled/outer", page(scaledPage("Scaled", `<iframe id="nested" style="left:100px;top:100px;width:200px;height:120px;border:2px solid #888;padding:3px;transform:scale(0.5)" src="/scaled/nested"></iframe>`)))
+	mux.Handle("/scaled/nested", page(scaledPage("Nested", "")))
+	mux.Handle("/scaled/grown", page(scaledPage("Grown", "")))
 	mux.HandleFunc("/xhtml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xhtml+xml; charset=utf-8")
 		fmt.Fprint(w, xhtmlFixture)
@@ -725,6 +780,19 @@ const designed = document.getElementById("designed").contentDocument;
 designed.body.setAttribute("aria-label", "Design mode");
 designed.designMode = "on";
 </script>`
+
+// scaledFixture places frames scaled by their own transforms and by an
+// ancestor's, from their top left corners.
+const scaledFixture = `<!doctype html><meta charset="utf-8"><title>Scaled</title>
+<style>body { margin: 0 } iframe, div { position: absolute; transform-origin: 0 0 } div iframe { position: static; display: block }</style>
+<iframe id="outer" style="left:40px;top:30px;width:400px;height:300px;border:4px solid #888;padding:6px;transform:scale(0.5, 0.75)" src="/scaled/outer"></iframe>
+<div style="left:300px;top:30px;transform:scale(2)"><iframe id="grown" style="width:100px;height:60px;border:2px solid #888;padding:3px" src="/scaled/grown"></iframe></div>`
+
+// scaledPage is a scaled frame's page: a button named name, then more.
+func scaledPage(name, more string) string {
+	return `<!doctype html><meta charset="utf-8"><style>body { margin: 0 } button { margin: 10px; width: 80px; height: 40px; padding: 0 } iframe { position: absolute; transform-origin: 0 0 }</style>
+<button>` + name + `</button>` + more
+}
 
 // In XHTML a name keeps its case: of these, only input, button and
 // select, with its option, are form controls.
