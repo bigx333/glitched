@@ -41,52 +41,25 @@ func (a *app) watching(t thread) bool {
 	return a.selected == t.id() && a.win != nil && a.win.IsFocused()
 }
 
-// notifyReported tells the user, as notifyFinished does, that a child of
-// t needs them: its report says it waits on a request, which ends no turn,
-// so nothing else tells of it. A child done or failed ended its turn, which
-// notifyFinished told of already. Clicking it opens t, where the report
-// is. Neither t nor the child is one they're watching.
-func (a *app) notifyReported(t thread) {
-	if !a.settings.notifications || a.notify == nil || a.watching(t) {
+// notifyReported tells the user, as notifyFinished does, that the child
+// of parent that made r needs them: r says it waits on a request, which
+// ends no turn, so nothing else tells of it. A child done or failed ended
+// its turn, which notifyFinished told of already. Clicking it opens the
+// parent, where the report is. Neither is a thread they're watching.
+func (a *app) notifyReported(e *client.Env, parent api.ID, r api.Report) {
+	p, child := e.Threads[parent], e.Threads[r.Child]
+	if r.Kind != api.ReportBlocked || p == nil || child == nil || !a.settings.notifications || a.notify == nil {
 		return
 	}
-	child, ok := a.blockedReport(t)
-	if !ok || a.watching(child) {
+	if a.watching(thread{e, p}) || a.watching(thread{e, child}) {
 		return
 	}
 	a.notify(mygo.NotificationOptions{
-		ID:    "thread:" + t.id().String(),
-		Title: t.View.Title,
-		Body:  title(child) + ": Needs you",
+		ID:    "thread:" + parent.String(),
+		Title: p.View.Title,
+		Body:  title(thread{e, child}) + ": Needs you",
 		Group: "threads",
 	})
-}
-
-// blockedReport is the child of t whose report to it, the last, says it
-// waits on the user. The transcript says, when it's open and caught up;
-// else it's the child changed last of those with a request pending.
-func (a *app) blockedReport(t thread) (thread, bool) {
-	if tr := t.Transcript; tr != nil {
-		for i := len(tr.Entries) - 1; i >= 0; i-- {
-			if r, ok := tr.Entries[i].(*client.ReportEntry); ok {
-				if !r.At.Equal(t.View.Reported) {
-					break // the transcript is behind the view
-				}
-				th := t.env.Threads[r.Child]
-				if th == nil || r.Kind != api.ReportBlocked {
-					return thread{}, false
-				}
-				return thread{t.env, th}, true
-			}
-		}
-	}
-	var last thread
-	for _, k := range a.kidsOf()[t.id()] {
-		if len(k.View.Requests) > 0 && (last.Thread == nil || k.View.UpdatedAt.After(last.View.UpdatedAt)) {
-			last = k
-		}
-	}
-	return last, last.Thread != nil
 }
 
 // showNotification shows a desktop notification. Showing may wait on the

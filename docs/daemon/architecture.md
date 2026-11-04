@@ -68,6 +68,7 @@ type Thread struct {
 	parent        ID       // zero for a thread of the user's; depth is walked, never stored (cap 4)
 	tokens        int64    // this thread's own; a parent's total is rolled up at read time
 	reported      time.Time // a child's last report, which wakes the thread as a turn's end does
+	lastReport    *Report   // that report's child, kind and cursor, committed with it
 }
 
 type Request struct { // approval or question
@@ -168,7 +169,7 @@ type Agent interface {
 - *Cascades.* Delete of a thread takes its whole subtree, after a confirm that states the count and how many are still working; the engine ends a deleted thread's run in the delete's commit, with an outbox effect that closes its agent, so a crash before the close leaves it to the next host. Settling a thread settles its whole subtree; the engine stops a settled thread's run, cancels what waits on it, and starts nothing on it until a message, which brings the thread back to the inbox. The Agents panel's Stop all stops what works under a thread. The GUI sends each thread its own command, so a refused one says why on its own row.
 - *Usage.* Each thread stores the tokens its turns used; a parent's total is its own plus its descendants', summed when read, so a moved or deleted child never leaves a stale total.
 
-Protocol 4 adds the parent, the tokens and the reports; a protocol 3 peer would show children as threads of the user's with nothing reported, so it is refused.
+Protocol 4 adds the parent, the tokens and the reports; a protocol 3 peer would show children as threads of the user's with nothing reported, so it is refused. Protocol 5 adds the parent's last report to its view, so a client tells of each report from the shell stream alone.
 
 **Terminals.** The engine owns PTYs per workspace. They survive the GUI detaching but not an engine restart. Output carries byte offsets with 4 MiB of replay and pause/resume flow control at 1 MiB and 512 KiB (bb). One client holds an expiring input lease while others watch. The libghostty view needs a bytes-in, input-out mode instead of owning its PTY.
 

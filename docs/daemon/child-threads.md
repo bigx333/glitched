@@ -12,12 +12,12 @@ Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, aft
 - Only an agent starts a child; the user can't (decided 2026-11-03). No provider has a tool for it yet, so today only tests create one, through the engine or `Manager.CreateUnder`. The spawn tool is a follow-up PR.
 - Stop, settle and delete of a tree are one command per thread, sent by the GUI. There's no engine-side cascade. Each command is atomic on its thread: settling stops the thread's run and cancels what waits, and deleting ends its run. A settled tree has nothing running, and a deleted one leaves nothing behind.
 - Each thread stores the tokens its own turns used. The GUI adds up a tree's.
-- The protocol goes from 3 to 4, and the store schema from 4 to 5.
+- The protocol goes from 3 to 4, and the store schema from 4 to 5. Protocol 5 and schema 6 add the parent's last report (see Reading it).
 
 ## The parent
 
 - `api.ThreadCreate.Parent` (`internal/api/api.go`) names the parent; zero is a thread of the user's. It's carried into `api.ThreadCreated.Parent` (`internal/api/events.go`), folded into `engine.Thread.Parent` by `apply` (`internal/engine/apply.go`), and shown as `api.Thread.Parent` by `engine.View`.
-- The store keeps it in `threads.parent`, a nullable BLOB (`internal/store/store.go`). Upgrade 4 adds it with `tokens` and `reported`, after main's upgrade 3 settles the archived threads; `schemaVersion` is 5. An older build refuses a version 5 database ("newer than this build").
+- The store keeps it in `threads.parent`, a nullable BLOB (`internal/store/store.go`). Upgrade 4 adds it with `tokens` and `reported`, after main's upgrade 3 settles the archived threads. Upgrade 5 adds `report` (see Reading it); `schemaVersion` is 6. An older build refuses a newer database ("newer than this build").
 - The parent never changes after create. There's no intent to move a thread.
 - The client sends it with `Manager.CreateUnder` (`internal/client/commands.go`); `Create` is `CreateUnder` with no parent.
 
@@ -51,7 +51,7 @@ How:
 
 1. `decision.report` adds an `engine.ReportToParent` effect (`internal/engine/effect.go`, kind `child.report`): parent, child, run, kind, the child's title, and the error or the request body. The store writes it to `effects` in the same transaction as the child's `turn.ended` or `request.opened`. Its row is the child's, so it runs in the child's lane, in order with the child's other effects.
 2. The runtime's `perform` hands it to `Host.report` (`internal/runtime/report.go`). That reads what came of the run: for a block, a line from the request body ("Wants to run …", "Wants to edit main.go"); for a failure, the error; otherwise the last paragraph of the run's assistant deltas, which `store.RunText` reads with one query on the child's log (`internal/store/read.go`). It's one line, cut to 280 characters.
-3. It commits `engine.Reported` on the **parent** with the effect's completion, in one transaction (`store.Observe` with `done`). `Observe` emits `api.ChildReported{Child, Run, Kind, Title, Outcome}` (`child.reported`) into the parent's log. `apply` sets `Thread.Reported` and bumps the revision.
+3. It commits `engine.Reported` on the **parent** with the effect's completion, in one transaction (`store.Observe` with `done`). `Observe` emits `api.ChildReported{Child, Run, Kind, Title, Outcome}` (`child.reported`) into the parent's log. `apply` sets `Thread.Reported` and `Thread.LastReport` (the child, the kind, and the event's seq, which `Store.write` sets on `engine.Event.Seq` before it applies the event), and bumps the revision.
 4. In the same commit, a parent that was Snoozed goes back to Open. A Settled parent stays Settled: settling halted its tree, so a report into it comes from a run that ended before its stop landed. The report is still logged and counts as unread, but it moves no thread and starts no turn. A Settled thread comes back only by the user's hand (Back to inbox, or a message sent to it).
 
 Replay and failure:
@@ -66,7 +66,8 @@ Reading it:
 - `client.Transcript` folds `child.reported` into a `*ReportEntry` and records `Transcript.Reported` (`internal/client/transcript.go`).
 - A report is never updated. The card shows a blocked report as Needs you only while the child's run still has a pending request and the report is the run's last blocked one (a run that asks twice reports twice); once it's answered or the run stopped, the same card says Was waiting, with what it waited on. No event is added for it.
 - `Manager.Unread` treats a report after the read mark as news, as a turn's end is; `MarkRead` and `MarkShown` read up to it (`internal/client/saved.go`).
-- A blocked report is told of by a desktop notification on the parent (`notifyReported` in `notify.go`), once per report, unless the user is watching the parent or the child: "Write the tests: Needs you". A request ends no turn, so nothing else would tell of it; a done or failed child's turn end already notifies on the child, so its report adds none. The parent's transcript says which child, while it's open and caught up; else it's the child with a request pending that changed last.
+- The parent's view carries its last report, `api.Thread.LastReport`: the child, the kind, and the event's cursor. It's committed with the event, so the shell stream sends it in commit order with every other view; the child's own view always comes first. The store keeps it in `threads.report`, JSON `{child, kind, seq}`, and stamps the cursor's log when it builds a view. Upgrade 5 fills it in from each thread's last `child.reported`, so a stored row still equals its log's fold.
+- A blocked report is told of by a desktop notification on the parent (`notifyReported` in `notify.go`), once per report, unless the user is watching the parent or the child: "Write the tests: Needs you". A request ends no turn, so nothing else would tell of it; a done or failed child's turn end already notifies on the child, so its report adds none. `Manager.view` calls `Config.Reported` when a view's `LastReport` differs from the view it held (`internal/client/client.go`). A shell snapshot of another log than the views held, the first connect or a restored database, tells of none: what it carries came before. A reconnect to the same log tells of the last report made while it was away, and only that one (issue #14, fixed 2026-11-04).
 
 ## Cascades
 
@@ -90,6 +91,10 @@ All in the GUI (`children.go`), one command per thread through the existing inte
 - `turn.interrupt` gains `drop` (omitted when false). An engine of this protocol cancels what waits its turn on it and stops the run; on a run already stopping it adds no second interrupt, so the run ends as its agent does rather than going uncertain. No GUI path sends it since settle and delete stop runs themselves (2026-11-04); it stays in the protocol. `drop` is new inside protocol 4 and an engine built from this branch before f62ba50 ignores it (protocol 4 is unreleased, so no bump).
 - `api.Protocol` is 4. The transport already refuses a peer of another protocol in both directions, so a protocol 3 GUI shows a protocol 4 engine as Incompatible, and the reverse. A protocol 3 hub refuses the uploads.
 - Why refuse rather than stay at 3: a protocol 3 client would list children as threads of the user's and drop the reports (unknown event types are skipped), which looks like lost work.
+
+## Protocol 5
+
+- `api.Thread.LastReport` is new. `api.Protocol` is 5: a protocol 4 GUI would drop the field and tell of reports from `Reported` and the children's requests, which is issue #14, so it is refused.
 
 ## Not done
 
