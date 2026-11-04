@@ -628,13 +628,20 @@ func askQuestions(in *bufio.Reader, out io.Writer, q api.Questions) api.Answers 
 			fmt.Fprintln(out, "  ! "+escapes)
 		}
 		fmt.Fprint(out, b.String(), "    Type a number, your own answer, or Enter to dismiss.\n  > ")
-		line, _ := in.ReadString('\n')
-		line = strings.TrimSpace(line)
-		if line == "" {
-			fmt.Fprintln(out, "  dismissed")
-			return api.Answers{}
+		for {
+			line, _ := in.ReadString('\n')
+			line = strings.TrimSpace(line)
+			if line == "" {
+				fmt.Fprintln(out, "  dismissed")
+				return api.Answers{}
+			}
+			a := answerOf(x, line)
+			if (api.Answers{Answers: []api.Answer{a}}).Fit(api.Questions{Questions: []api.Question{x}}) == nil {
+				as.Answers = append(as.Answers, a)
+				break
+			}
+			fmt.Fprint(out, "  That answers nothing. Type a number, your own answer, or Enter to dismiss.\n  > ")
 		}
-		as.Answers = append(as.Answers, answerOf(x, line))
 	}
 	fmt.Fprintln(out, "  answered")
 	return as
