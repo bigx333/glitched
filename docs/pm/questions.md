@@ -2,7 +2,9 @@
 
 Newest first. Answer under each question, or in the PM thread.
 
-## Q4 (2026-11-04). Is the spawn tool the first plugin, or does it land in core first?
+No open questions. Answered questions stay below for the record.
+
+## Q4 (2026-11-04, answered: spawn tool in core). Is the spawn tool the first plugin, or does it land in core first?
 
 **Recommendation: neither comes first. Make the Claude Code adapter the first plugin, and the spawn tool the second.**
 
@@ -13,7 +15,7 @@ Newest first. Answer under each question, or in the PM thread.
 
 Other options: spawn tool as the first plugin (tests the plugin API sooner, but only against the fake provider), or spawn tool in core now and plugins later (fastest to a feature, but it moves twice).
 
-## Q3 (2026-11-04). Order of work after #2 lands
+## Q3 (2026-11-04, answered: Claude Code adapter first, in core, before plugin work). Order of work after #2 lands
 
 **Proposal.**
 
@@ -25,11 +27,11 @@ Other options: spawn tool as the first plugin (tests the plugin API sooner, but 
 
 Bugs go first because the plugin work moves the code they live in. Fixing them first keeps each fix small and gives the refactor tests to hold it.
 
-## Q2 (2026-11-04). Do you approve #2's protocol bump and schema migration?
+## Q2 (2026-11-04, answered: approved). Do you approve #2's protocol bump and schema migration?
 
 #2 bumps `api.Protocol` from 3 to 4 and the store schema from 4 to 5. The migration is forward only. It adds three columns to `threads`: `parent`, `tokens` and `reported`. Every paired peer must update together, because a version 3 peer is refused. The reviewers are checking the migration against an existing version 4 database.
 
-## Q1 (2026-11-04). #2 cannot be rebase-merged as it stands. How should it land?
+## Q1 (2026-11-04, answered: linear copy PR). #2 cannot be rebase-merged as it stands. How should it land?
 
 GitHub reports `rebaseable: false` for #2. The cause is merge commit 9ab4757, which merged main's #12 into the branch to resolve conflicts. A rebase-merge replays the 44 commits without that merge, and they conflict again.
 
