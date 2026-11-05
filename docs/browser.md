@@ -1,7 +1,7 @@
 # The browser
 
 The preview pane (⇧⌘P, the globe in the chat's header) is a browser beside
-the chat, for the user and, next, for agents. Its first tab is the
+the chat, for the user and for agents (Agents, below). Its first tab is the
 project's dev server, `http://localhost:5173`; other tabs browse anywhere.
 
 - **Bar:** back, forward, reload (stop while a page loads), the address,
@@ -44,7 +44,7 @@ project's dev server, `http://localhost:5173`; other tabs browse anywhere.
 ```
  browser.go           tabs, bar, keys               ┐
  internal/webtarget   page script: snapshot, refs   │ the same on every engine
- (agent tools, next)                                ┘
+ agentbrowser.go      agents' tools                 ┘
  ──────────────── internal/browse: Opener, Page, Events ────────────────
  internal/browse/sysweb   WebView2 · WKWebView · WebKitGTK (through MyGo)
  (internal/browse/cef)    Chromium, if one is added
@@ -285,14 +285,15 @@ that picks it. Nothing above the seam changes.
   - find the property and call the script itself, as a snapshot of its
     own that moves the refs.
   Each but the `pagehide` listener can make a ref find an element of the
-  page's choosing and `Verify` pass, as the page answers both. Before agents act on pages, the script,
-  and the wrapper `EvalContext` runs it in, must run in an isolated world:
-  WKWebView's content worlds, and DevTools' `Page.createIsolatedWorld` on
-  WebView2 and CEF (Next, 3).
+  page's choosing and `Verify` pass, as the page answers both. The script,
+  and the wrapper `EvalContext` runs it in, should run in an isolated
+  world: WKWebView's content worlds, and DevTools'
+  `Page.createIsolatedWorld` on WebView2 and CEF (Next, 2; agents act
+  before it, Agents).
 - **Single-page routes:** a ref survives `history.pushState`,
   `replaceState` and fragment changes, which aren't navigations: a node a
   framework reuses on the new route, with the same role and name, still
-  passes `Verify` (Next, 4).
+  passes `Verify` (Next, 3).
 
 ### Where the design comes from
 
@@ -328,28 +329,67 @@ bridge and its process model. Its CEF host is the model for a CEF adapter.
   doesn't normalise a host's case or trailing dot. For Nelson; the browser
   leaves it as it is.
 
-## Next: agents driving the browser
+## Agents
 
-1. **Tools**, by tab id: `browser_tabs` (list, new, select, close),
-   `browser_navigate`/`back`/`forward`/`reload`, `browser_snapshot`,
-   `browser_click`, `browser_type`, `browser_select`, `browser_scroll`,
-   `browser_wait_for`, `browser_screenshot`. They act on the user's tabs,
-   so the user sees what the agent does, and go through the thread's
-   approval policy.
-2. **Actions** in the page script, the same on every engine: resolve the
-   ref, `Verify` it, check it is visible and enabled, scroll it into view,
-   then act with DOM events (click; type with the native value setter, so
-   frameworks see it; select an option of a dropdown; scroll), and
-   `wait_for` text or a ref by polling in the page. An adapter with trusted
-   input (WebView2 and CEF through DevTools) may click and type that way
-   instead; the conformance suite gains action tests both paths pass.
-3. **Isolation** of the script and of the wrapper `EvalContext` runs it in,
-   in a world of their own, as above: required before agents act. MyGo
-   needs a hook for it (WKWebView's content worlds, WebView2's DevTools).
-4. **Single-page apps:** MyGo reports no `history.pushState`,
+Claude Code runs in threads get the browser as an MCP server named
+`glitched`, all in Go:
+
+```
+ claude ──stdio MCP──▶ glitched browser-mcp -dir D ──browser.sock──▶ the app (agentbrowser.go)
+ (started by the engine,                (internal/browsermcp)          tabs, pages, webtarget
+  --mcp-config, one per run)
+```
+
+- **The engine** (`glitched serve`) gives each run
+  `--mcp-config {"mcpServers":{"glitched":{"type":"stdio","command":"<this
+  program>","args":["browser-mcp","-dir","<its state directory>"]}}}`,
+  beside the user's own servers (`claude.Adapter.Browser`).
+- **`glitched browser-mcp`** speaks MCP on stdio (initialize, tools/list,
+  tools/call, ping) and passes each call to the app on the state
+  directory's `browser.sock`, a line of JSON each way. It knows nothing of
+  tabs. With no app open the tools are still listed, and each says the
+  app isn't open.
+- **The app** listens on `browser.sock` as its window opens; nothing
+  authenticates a caller, so the state directory's mode (0700) is the
+  gate, as for `engine.sock`. A socket a dead app left is replaced; one
+  another app answers on is left alone.
+- **Tools:** `browser_tabs` (list, new, select, close),
+  `browser_navigate` (an http or https address, or back, forward,
+  reload), `browser_snapshot` (`full` for structure), `browser_click` and
+  `browser_type` (`submit` presses Enter) by ref. A ref names its tab by
+  its snapshot's epoch, so the act tools take no tab. Each tool that loads
+  or acts shows the pane and its tab, so the user sees what the agent
+  does, waits for the page to load (15 seconds at most), and answers with
+  the page's next snapshot. They go through Claude Code's permissions, as
+  `mcp__glitched__browser_*`: in Ask mode, the thread's approval card.
+- **Actions** run in the page script (`act`), the same on every engine:
+  it resolves the ref, checks the element is still the role and name the
+  snapshot gave it, shown and enabled, scrolls it into view, then clicks
+  (pointer and mouse events, down, up, click, at its centre) or types (the
+  prototype's value setter, then `input` and `change`, so frameworks
+  tracking the value on the element, as React does, see it; an editor
+  through `insertText`). Enter is a `keydown` and `keyup`; unless the page
+  takes the `keydown`, the field's form submits once the script has
+  answered. Its events are the script's: `isTrusted` is false.
+- **Not yet isolated** (Next, 2): the script runs in the page's world, so a
+  page that set out to can still move where an action lands, within
+  itself. What it can't do is reach past itself, as each action acts on
+  the page's own elements; and what a page says reaches the agent as a
+  tool result, which can be text written to steer it.
+
+## Next
+
+1. **More tools:** `browser_select`, `browser_scroll`, `browser_wait_for`,
+   `browser_screenshot`; a tab leased to the thread that opened it, as
+   T3 Code's preview automation pins a session to its host; trusted input
+   on WebView2 and CEF through DevTools.
+2. **Isolation** of the script and of the wrapper `EvalContext` runs it in,
+   in a world of their own, as above, which agents act without for now.
+   MyGo needs a hook for it (WKWebView's content worlds, WebView2's DevTools).
+3. **Single-page apps:** MyGo reports no `history.pushState`,
    `replaceState` or fragment navigation, so the address goes stale in a
    Vite app moving between routes, and refs survive them (above). A
    document-start script reporting them, or MyGo events, fixes both: the
    tab hears of the route, and the page script drops its refs.
-5. **Cross-origin frames**, through the engine's frame tree where it has
+4. **Cross-origin frames**, through the engine's frame tree where it has
    one.
