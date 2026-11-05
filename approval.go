@@ -278,11 +278,12 @@ type shownText struct {
 
 // reading is what the window showed of a waiting request's card: each of
 // its texts, with which of their runes a frame drew in full and in view
-// since its texts' box took its size; when the card first showed; when a
-// frame last drew it moved, grown, scrolled or saying something else since
-// the frame before; and what the last frame drew. next and last are where
-// the last frame drew the first and the last line no frame drew so, and
-// below is how many lines it drew below the texts' box.
+// since its texts' box took its size and the card said what it says; when
+// a frame first drew the card's start in view (seen), zero until one did;
+// when a frame last drew it moved, grown, scrolled or saying something
+// else since the frame before; and what the last frame drew. next and
+// last are where the last frame drew the first and the last line no frame
+// drew so, and below is how many lines it drew below the texts' box.
 type reading struct {
 	texts       map[string]*readText
 	born, moved time.Time
@@ -321,22 +322,33 @@ func (rd *reading) unread() bool {
 func (a *app) read(t thread, request api.ID, s sight, texts []shownText) {
 	rd := a.reads[request]
 	if rd == nil {
-		rd = &reading{texts: map[string]*readText{}, born: a.now, moved: a.now}
+		rd = &reading{texts: map[string]*readText{}}
 		a.reads[request] = rd
 	}
-	if abs32(s.texts.W-rd.was.texts.W) >= 0.5 || abs32(s.texts.H-rd.was.texts.H) >= 0.5 {
-		// A box of another size shows the texts otherwise: they are read
-		// anew in it.
+	full := a.inFull(t)
+	if rd.born.IsZero() && s.start(full) {
+		rd.born, rd.moved = a.now, a.now
+	}
+	var says strings.Builder
+	for _, tx := range texts {
+		says.WriteString(tx.key + "\x00" + tx.text + "\x00")
+	}
+	anew := says.String() != rd.was.says
+	if anew || abs32(s.texts.W-rd.was.texts.W) >= 0.5 || abs32(s.texts.H-rd.was.texts.H) >= 0.5 {
+		// A card that says something else, or a box of another size that
+		// shows its texts otherwise, is read anew.
 		rd.texts = map[string]*readText{}
 	}
-	view := meet(s.texts, a.inFull(t))
-	var says strings.Builder
+	view := meet(s.texts, full)
+	if anew {
+		// The last frame drew what the card said before, where it was then.
+		view = ui.Rect{}
+	}
 	shown := map[string]*readText{}
 	rd.next, rd.last, rd.below = ui.Rect{}, ui.Rect{}, 0
 	for _, tx := range texts {
-		says.WriteString(tx.key + "\x00" + tx.text + "\x00")
 		r := rd.texts[tx.key]
-		if r == nil || r.text != tx.text {
+		if r == nil {
 			n := utf8.RuneCountInString(tx.text) + 1
 			r = &readText{text: tx.text, drawn: make([]bool, n), left: n}
 		}
@@ -400,10 +412,11 @@ func meet(r, v ui.Rect) ui.Rect {
 const dwell = 300 * time.Millisecond
 
 // press is a press of an answer to the waiting request that began at
-// began, by key or on a button. It answers only a card that stood still
-// since dwell before the press began, and a key only one that showed
-// before ⌘ went down, so that a key held, repeating, answers no card that
-// came after the one it answered. Deny on its button answers then, as the
+// began, by key or on a button. It brings a card whose start no frame
+// drew in view into view. It answers only a card that stood still since
+// dwell before the press began, and a key only one that showed before ⌘
+// went down, so that a key held, repeating, answers no card that came
+// after the one it answered. Deny on its button answers then, as the
 // user looks at it; else it answers a card that drew every line it holds,
 // and whose start the window draws. A card with a line no frame drew
 // scrolls that line into view; one whose start is out of view brings it
@@ -411,7 +424,10 @@ const dwell = 300 * time.Millisecond
 func (a *app) press(c *ui.Context, t thread, es []entry, r *client.RequestEntry, answer client.Answer, began time.Time, key bool) {
 	rd := a.reads[r.Request]
 	switch {
-	case rd == nil || began.Before(rd.moved.Add(dwell)):
+	case rd == nil:
+	case rd.born.IsZero():
+		a.reveal(t, es, r.Request)
+	case began.Before(rd.moved.Add(dwell)):
 	case key && !a.chord.After(rd.born):
 	case !key && answer == client.Deny:
 		a.answer(c, t, r, answer)
@@ -444,10 +460,14 @@ func (a *app) readOn(t thread, es []entry, request api.ID) {
 const textsPad = 12
 
 // inFull is the part of the chat's pane the timeline shows in full: above
-// the composer and the edge it fades out under.
+// the edge it fades out under, and above the composer, which a draft
+// grows over it. Before the composer is laid out, it is none of it.
 func (a *app) inFull(t thread) ui.Rect {
 	v := a.paneAt
-	v.H -= composerRoom + a.agentsRoom(t)
+	if a.composerAt.H <= 0 {
+		return ui.Rect{}
+	}
+	v.H = min(v.H-composerRoom-a.agentsRoom(t), a.composerAt.Y-v.Y)
 	return v
 }
 
@@ -457,8 +477,13 @@ func (a *app) inFull(t thread) ui.Rect {
 // what the user never read.
 func (a *app) seen(t thread, request api.ID) bool {
 	s, ok := a.drawn[request]
-	v := a.inFull(t)
-	return ok && within(s.header, v) && within(s.lead, v) && within(s.lead, s.texts)
+	return ok && s.start(a.inFull(t))
+}
+
+// start is whether a card drawn where s says shows its start in v: its
+// header, and the first line of what runs, unscrolled out of its box.
+func (s sight) start(v ui.Rect) bool {
+	return within(s.header, v) && within(s.lead, v) && within(s.lead, s.texts)
 }
 
 // reveal brings the start of the waiting request's card into view: its
