@@ -125,6 +125,7 @@ function install(key) {
     collectionLength: getter(HTMLCollection, "length"),
     collectionItem: fn(HTMLCollection, "item"),
     requestSubmit: fn(window.HTMLFormElement, "requestSubmit"),
+    click: fn(window.HTMLElement, "click"),
     getSelection: fn(Document, "getSelection"),
     selectAllChildren: fn(window.Selection, "selectAllChildren"),
     execCommand: fn(Document, "execCommand"),
@@ -590,11 +591,10 @@ function install(key) {
   };
 
   // press clicks a form's default button as implicit submission does: a
-  // click at its top left corner, which an image button sends as 0, 0.
+  // click with no place, which an image button sends as 0, 0. A click
+  // made at its corner is not: WebKit takes the page's scroll off it.
   function press(button) {
-    const b = rect(button);
-    apply(B.dispatch, button, [new EV.Mouse("click", { __proto__: null, bubbles: true, cancelable: true, composed: true,
-      button: 0, detail: 1, clientX: get(B.x, b), clientY: get(B.y, b) })]);
+    apply(B.click, button, []);
   }
 
   // implicit is how Enter in one of form's fields submits it, or null: a
