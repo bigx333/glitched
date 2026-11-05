@@ -365,9 +365,16 @@ func (g *burstAgent) Close(context.Context) error { return nil }
 // a thread sent a message and a card waiting.
 func askedAll(t *testing.T, events ...provider.Event) *harness {
 	t.Helper()
+	return askedIn(t, 1320, 860, events...)
+}
+
+// askedIn is askedAll in a window w by ht DIPs from the start.
+func askedIn(t *testing.T, w, ht int, events ...provider.Event) *harness {
+	t.Helper()
 	dir := tempDir(t)
 	engine(t, daemon.Config{Dir: dir}, burst{events})
 	h := start(t, dir)
+	h.tt.SetSize(w, ht)
 	h.a.draft = "Go."
 	h.tt.Frame()
 	h.click("Send")
@@ -667,4 +674,243 @@ func TestApprovalCardCopiesTheCommandAsTyped(t *testing.T) {
 	if got := tt.Clipboard(); got != command {
 		t.Errorf("Copy gives %q, want %q", got, command)
 	}
+}
+
+// drawnNow reports whether the last frame draws needle, in field of r's
+// body: whether the window looks any different with needle spelled
+// otherwise.
+func drawnNow(h *harness, r *client.RequestEntry, field, needle string) bool {
+	var b map[string]any
+	json.Unmarshal(r.Body, &b)
+	before := bytes.Clone(h.tt.Image().Pix)
+	body := r.Body
+	b[field] = strings.Replace(b[field].(string), needle, strings.Repeat("X", len(needle)), 1)
+	r.Body, _ = json.Marshal(b)
+	h.tt.Frame()
+	changed := !bytes.Equal(before, h.tt.Image().Pix)
+	r.Body = body
+	h.tt.Frame()
+	return changed
+}
+
+// belowMark is the card's mark that lines of it are out of view below,
+// if the window shows one.
+func belowMark(tt *ui.Tester) string {
+	for _, s := range tt.Texts() {
+		if strings.Contains(s, "more line") && strings.HasSuffix(s, "below") {
+			return s
+		}
+	}
+	return ""
+}
+
+// scrollTexts scrolls the waiting card's texts by dy, under its header.
+func scrollTexts(h *harness, dy float32) {
+	header, _ := h.tt.Find("Approval needed")
+	h.tt.Scroll(header.X+60, header.Y+header.H+40, 0, dy)
+	h.tt.Advance(time.Second)
+}
+
+// No answer approves a line of the card the window never drew. A card
+// too tall for the window shows what fits and how many lines are below,
+// and neither ⌘⏎, ⇧⌘D nor Allow once answers it until every line was
+// drawn: a line after the first, a later field of a tool's input, and a
+// line Show all shows each stay out of view at first.
+func TestAnAnswerNeedsEveryLineDrawn(t *testing.T) {
+	args := "note: \"list\"\nlimit: 10\nschema: \"public\"\nmode: \"rw\"\ntimeout: 30\nretry: false\nlabel: \"x\"\nsql: \"DROP TABLE users\""
+	for name, tc := range map[string]struct {
+		ask           map[string]string
+		field, needle string
+		then          func(h *harness)
+	}{
+		"a later command line": {map[string]string{"command": "ls" + strings.Repeat("\n", 7) + curl, "cwd": "/w", "reason": "List files"}, "command", curl, nil},
+		"a later args field":   {map[string]string{"operation": "use mcp__db__exec", "args": args}, "args", `sql: "DROP TABLE users"`, nil},
+		"a line Show all shows": {map[string]string{"command": "ls" + strings.Repeat("\nls", 11) + "\n" + curl, "cwd": "/w"}, "command", curl, func(h *harness) {
+			scrollTexts(h, 10000)
+			h.click("Show all · 5 more lines")
+			h.tt.Advance(time.Second)
+			scrollTexts(h, -10000)
+		}},
+	} {
+		for _, size := range [][2]int{{1320, 480}, {760, 480}} {
+			for how, answer := range map[string]func(h *harness){
+				"⌘⏎":         func(h *harness) { h.tt.Key(ui.Cmd, ui.KeyEnter) },
+				"⇧⌘D":        func(h *harness) { h.tt.Key(ui.Cmd|ui.Shift, ui.KeyD) },
+				"Allow once": func(h *harness) { h.click("Allow once") },
+			} {
+				t.Run(fmt.Sprintf("%s/%dx%d/%s", name, size[0], size[1], how), func(t *testing.T) {
+					body, _ := json.Marshal(tc.ask)
+					h := askedIn(t, size[0], size[1], provider.RequestOpened{ID: "ask", Kind: "approval", Body: body})
+					first, _, _ := strings.Cut(tc.ask[tc.field], "\n")
+					if tc.then != nil {
+						tc.then(h)
+					}
+					r := lastRequest(h.a.current())
+					if drawnNow(h, r, tc.field, tc.needle) {
+						t.Fatalf("the window draws %q at first; texts %q", tc.needle, h.tt.Texts())
+					}
+					if belowMark(h.tt) == "" {
+						t.Errorf("the card shows %q, want a mark that lines are below", h.tt.Texts())
+					}
+					answer(h)
+					h.tt.Frame()
+					if answering(h, r) {
+						t.Fatalf("%s answered with %q never drawn", how, tc.needle)
+					}
+					drawn := false
+					for range 30 {
+						scrollTexts(h, 25)
+						drawn = drawn || drawnNow(h, r, tc.field, tc.needle)
+					}
+					if !drawn {
+						t.Fatalf("scrolling the card never drew %q; texts %q", tc.needle, h.tt.Texts())
+					}
+					if belowMark(h.tt) != "" {
+						t.Errorf("scrolled to its end, the card still shows %q", belowMark(h.tt))
+					}
+					for range 4 {
+						h.tt.Advance(time.Second)
+						shown := onScreen(h.tt, "Approval needed") && drawnNow(h, r, tc.field, first)
+						answer(h)
+						h.tt.Frame()
+						if answering(h, r) {
+							if !shown {
+								t.Errorf("%s answered while the window did not draw the card's start", how)
+							}
+							return
+						}
+					}
+					t.Errorf("every line drawn, four presses of %s never answered; texts %q", how, h.tt.Texts())
+				})
+			}
+		}
+	}
+}
+
+// chain is a provider whose turn asks a, and asks b as soon as a is
+// answered, as Claude Code asks for its next tool.
+type chain struct{ a, b provider.Event }
+
+func (c chain) Describe(context.Context) (provider.Info, error) {
+	return provider.Info{Name: "fake", Version: "1", Models: []string{"fake"}}, nil
+}
+
+func (c chain) Open(context.Context, provider.SessionSpec) (provider.Agent, error) {
+	return &chainAgent{c: c, out: make(chan provider.Event, 8)}, nil
+}
+
+func (c chain) Reconcile(context.Context, provider.RuntimeIdentity) (provider.Recovery, error) {
+	return provider.Lost{Reason: "gone"}, nil
+}
+
+type chainAgent struct {
+	c   chain
+	out chan provider.Event
+}
+
+func (g *chainAgent) Do(_ context.Context, a provider.Action) error {
+	switch a.(type) {
+	case provider.Start:
+		g.out <- g.c.a
+	case provider.Respond:
+		g.out <- g.c.b
+	case provider.Interrupt:
+		g.out <- provider.TurnEnded{Outcome: api.OutcomeInterrupted}
+	}
+	return nil
+}
+
+func (g *chainAgent) Next(ctx context.Context) (provider.Event, error) {
+	select {
+	case e := <-g.out:
+		return e, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (g *chainAgent) Close(context.Context) error { return nil }
+
+// A card answers only a press that began once it stood still: a second
+// ⌘⏎ or click, as the next card lands where the last one was, answers
+// nothing, and nor does ⌘⏎ while the ⌘ that answered the last card is
+// still held, as a key held down repeats.
+func TestAnAnswerNeedsACardThatStoodStill(t *testing.T) {
+	for how, answer := range map[string]func(h *harness){
+		"⌘⏎":         func(h *harness) { h.tt.Key(ui.Cmd, ui.KeyEnter) },
+		"Allow once": func(h *harness) { h.click("Allow once") },
+	} {
+		t.Run(how, func(t *testing.T) {
+			dir := tempDir(t)
+			engine(t, daemon.Config{Dir: dir}, chain{commandAsk("a", "ls"), commandAsk("b", curl)})
+			h := start(t, dir)
+			h.a.draft = "Go."
+			h.tt.Frame()
+			h.click("Send")
+			h.until("the first card", func() bool { return h.tt.HasText("Approval needed") })
+			h.tt.Advance(time.Second)
+			answer(h)
+			h.tt.Frame()
+			var b *client.RequestEntry
+			h.until("the next card", func() bool {
+				for _, e := range entriesOf(h.a.current()) {
+					if e.request != nil && e.request.State == api.RequestPending {
+						if _, sending := responding(h.a.current(), e.request.Request); !sending {
+							b = e.request
+						}
+					}
+				}
+				return b != nil
+			})
+			for i := range 20 {
+				answer(h)
+				h.tt.Frame()
+				if answering(h, b) {
+					t.Fatalf("%s answered the next card %d presses after it landed", how, i+1)
+				}
+				h.tt.Advance(8 * time.Millisecond)
+			}
+			if how == "⌘⏎" {
+				h.tt.Advance(time.Second)
+				answer(h)
+				h.tt.Frame()
+				if answering(h, b) {
+					t.Fatalf("⌘⏎ answered the next card with the ⌘ held since it answered the last")
+				}
+				h.tt.HoldModifiers(0)
+				h.tt.Frame()
+			}
+			h.tt.Advance(time.Second)
+			answer(h)
+			h.tt.Frame()
+			if !answering(h, b) {
+				t.Errorf("%s, pressed anew with the card still, did not answer it; texts %q", how, h.tt.Texts())
+			}
+		})
+	}
+}
+
+// In the smallest window, a tool with a name too long for a line still
+// shows the first line of what an allow passes it under the card's start,
+// so the card can be allowed: the name is cut, with Show all.
+func TestApprovalCardCutsALongToolName(t *testing.T) {
+	const first = `sql: "DROP TABLE users"`
+	body, _ := json.Marshal(map[string]string{"operation": "use mcp__" + strings.Repeat("x", 100) + "__execute_statement", "args": first})
+	h := askedAll(t, provider.RequestOpened{ID: "ask", Kind: "approval", Body: body})
+	h.tt.SetSize(760, 480)
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if !slices.ContainsFunc(h.tt.Texts(), func(s string) bool { return strings.HasPrefix(s, "Show all · ") }) {
+		t.Errorf("the card shows %q, want the tool's name cut", h.tt.Texts())
+	}
+	r := lastRequest(h.a.current())
+	for range 3 {
+		h.tt.Key(ui.Cmd, ui.KeyEnter)
+		h.tt.Frame()
+		if answering(h, r) {
+			return
+		}
+		h.tt.Advance(time.Second)
+	}
+	t.Errorf("three presses of ⌘⏎ never allowed the card at 760×480; texts %q", h.tt.Texts())
 }
