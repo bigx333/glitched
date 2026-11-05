@@ -24,6 +24,7 @@
 const api = window[args.key] || install(args.key);
 if (args.op === "snapshot") return api.snapshot(args);
 if (args.op === "describe") return api.describe(args.ref);
+if (args.op === "act") return api.act(args);
 throw new Error(`webtarget: unknown op ${args.op}`);
 
 function install(key) {
@@ -50,6 +51,10 @@ function install(key) {
   const getter = (o, k) => {
     const d = o && ownDescriptor(o.prototype, k);
     return d && d.get;
+  };
+  const setter = (o, k) => {
+    const d = o && ownDescriptor(o.prototype, k);
+    return d && d.set;
   };
   const B = {
     __proto__: null,
@@ -106,6 +111,27 @@ function install(key) {
     upper: fn(String, "toUpperCase"),
     lower: fn(String, "toLowerCase"),
     repeat: fn(String, "repeat"),
+    // What an agent's actions go through (act).
+    dispatch: fn(EventTarget, "dispatchEvent"),
+    defaultPrevented: getter(Event, "defaultPrevented"),
+    focus: fn(HTMLElement, "focus"),
+    scrollIntoView: fn(Element, "scrollIntoView"),
+    defaultView: getter(Document, "defaultView"),
+    setInputValue: setter(HTMLInputElement, "value"),
+    setTextareaValue: setter(HTMLTextAreaElement, "value"),
+    inputForm: getter(HTMLInputElement, "form"),
+    requestSubmit: fn(window.HTMLFormElement, "requestSubmit"),
+    getSelection: fn(Document, "getSelection"),
+    selectAllChildren: fn(window.Selection, "selectAllChildren"),
+    execCommand: fn(Document, "execCommand"),
+    later: window.setTimeout,
+  };
+  // The events actions fire, made with the constructors found as the
+  // script was installed.
+  const EV = {
+    __proto__: null,
+    Event, Mouse: MouseEvent, Keyboard: KeyboardEvent,
+    Input: window.InputEvent || Event, Pointer: window.PointerEvent || null,
   };
   // Where each labelable element keeps its labels.
   const LABELS = {
@@ -528,6 +554,79 @@ function install(key) {
     return { __proto__: null, role: r || "", name: name(el, r), box };
   }
 
+  // What act may type into: text boxes, and editors.
+  const TYPEABLE = { __proto__: null, textbox: true, searchbox: true, spinbutton: true, combobox: true };
+
+  // act does what an agent asks of a ref's element (args.action): "click"
+  // clicks it; "type" replaces its text with args.text and, with
+  // args.submit, presses Enter, which submits its form unless the page
+  // takes the key. It acts only once the element is still what the
+  // snapshot named (args.role, args.name), shows and is enabled, scrolled
+  // into view. Its events are the script's, not the user's: a page sees
+  // isTrusted false on each.
+  function act(args) {
+    const ref = args.ref, found = resolve(ref), el = found.el;
+    const r = role(el) || "", n = name(el, r);
+    if (r !== args.role || n !== args.name)
+      throw new Err(`${ref} was ${args.role} ${quote(args.name)}, now ${r} ${quote(n)}; take a new snapshot`);
+    if (attr(el, "aria-disabled") === "true" || matches(el, ":disabled")) throw new Err(`${ref} is disabled`);
+    if (shown(el, styleOf(el), false) !== SHOWN) throw new Err(`${ref} is not shown`);
+    const doc = get(B.ownerDocument, el), view = get(B.defaultView, doc), html = isHTML(el);
+    apply(B.scrollIntoView, el, [{ __proto__: null, block: "center", inline: "center" }]);
+    const b = rect(el);
+    const x = get(B.x, b) + get(B.width, b) / 2, y = get(B.y, b) + get(B.height, b) / 2;
+    const fire = (e) => apply(B.dispatch, el, [e]);
+    const focus = () => { if (html) apply(B.focus, el, []); };
+    if (args.action === "click") {
+      const at = (buttons) => ({ __proto__: null, bubbles: true, cancelable: true, composed: true, view,
+        clientX: x, clientY: y, button: 0, buttons, detail: 1 });
+      const pointer = (type, buttons) => {
+        if (!EV.Pointer) return;
+        const init = at(buttons);
+        define(init, "pointerId", 1);
+        define(init, "pointerType", "mouse");
+        define(init, "isPrimary", true);
+        fire(new EV.Pointer(type, init));
+      };
+      pointer("pointerdown", 1);
+      fire(new EV.Mouse("mousedown", at(1)));
+      focus();
+      pointer("pointerup", 0);
+      fire(new EV.Mouse("mouseup", at(0)));
+      fire(new EV.Mouse("click", at(0)));
+      return { __proto__: null, done: true };
+    }
+    if (args.action !== "type") throw new Err(`webtarget: unknown action ${args.action}`);
+    const tag = tagOf(el);
+    const field = html && (tag === "INPUT" || tag === "TEXTAREA");
+    const editor = html && !field && (opt(B.editable, el) || (tag === "BODY" && opt(B.designMode, doc) === "on"));
+    if (TYPEABLE[r] !== true || !(field || editor)) throw new Err(`${ref} is a ${r || "element"}, not a text box`);
+    focus();
+    if (field) {
+      apply(tag === "INPUT" ? B.setInputValue : B.setTextareaValue, el, [args.text]);
+      fire(new EV.Input("input", { __proto__: null, bubbles: true, composed: true, inputType: "insertText", data: args.text }));
+      fire(new EV.Event("change", { __proto__: null, bubbles: true }));
+    } else {
+      apply(B.selectAllChildren, apply(B.getSelection, doc, []), [el]);
+      apply(B.execCommand, doc, ["insertText", false, args.text]);
+    }
+    if (args.submit) {
+      const key = (type) => {
+        const e = new EV.Keyboard(type, { __proto__: null, bubbles: true, cancelable: true, composed: true, view,
+          key: "Enter", code: "Enter", keyCode: 13, which: 13 });
+        fire(e);
+        return get(B.defaultPrevented, e);
+      };
+      const taken = key("keydown");
+      key("keyup");
+      // The form submits once the script has answered: a page leaving
+      // as it runs would take its answer with it.
+      const form = !taken && tag === "INPUT" ? get(B.inputForm, el) : null;
+      if (form && B.requestSubmit) apply(B.later, window, [() => apply(B.requestSubmit, form, []), 0]);
+    }
+    return { __proto__: null, done: true };
+  }
+
   // A page leaving drops its refs: the back/forward cache can bring this
   // document back, state and all, after a snapshot of another. Capturing
   // on window, it runs before any listener the page adds after it, so
@@ -541,7 +640,7 @@ function install(key) {
     count = 0;
   }, true]);
 
-  const api = freeze({ __proto__: null, snapshot, describe });
+  const api = freeze({ __proto__: null, snapshot, describe, act });
   defineProperty(window, key, { __proto__: null, value: api, writable: false, configurable: false, enumerable: false });
   return api;
 }
