@@ -50,12 +50,12 @@ func end(run string) {
 var jobs = struct {
 	sync.Mutex
 	of       map[string][]windows.Handle
-	stopping map[string]*stop // a stop of the run under way
-}{of: map[string][]windows.Handle{}, stopping: map[string]*stop{}}
+	stopping map[string]*halt // a stop of the run under way
+}{of: map[string][]windows.Handle{}, stopping: map[string]*halt{}}
 
-// stop is one stop of a run, which a stop of it at the same time waits for
+// halt is one stop of a run, which a stop of it at the same time waits for
 // and reports.
-type stop struct {
+type halt struct {
 	done  chan struct{}
 	found bool
 	err   error
@@ -175,7 +175,7 @@ func stopRun(ctx context.Context, run string) (bool, error) {
 		jobs.Unlock()
 		return false, nil
 	}
-	s := &stop{done: make(chan struct{})}
+	s := &halt{done: make(chan struct{})}
 	jobs.stopping[run] = s
 	jobs.Unlock()
 	s.found, s.err = stopJobs(ctx, run, held)
