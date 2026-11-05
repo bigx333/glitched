@@ -38,21 +38,37 @@ func inPIDNamespace(t *testing.T) bool {
 	return false
 }
 
+// child is a started process. Only its own goroutine waits for it, and
+// closes exited once it is reaped.
+type child struct {
+	*exec.Cmd
+	exited chan struct{}
+}
+
 // sleeper starts a process that sleeps with env as its environment, and
 // waits until it has exec'd: until then, it has this process's environment.
-func sleeper(t *testing.T, env ...string) *exec.Cmd {
+func sleeper(t *testing.T, env ...string) *child {
 	t.Helper()
 	c := exec.Command("/bin/sleep", "60")
 	c.Env = env
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
 	}
-	// By PID: a test may deny this thread pidfd signals, which Kill uses.
-	t.Cleanup(func() { syscall.Kill(c.Process.Pid, syscall.SIGKILL); c.Wait() })
+	p := &child{Cmd: c, exited: make(chan struct{})}
+	go func() { c.Wait(); close(p.exited) }()
+	t.Cleanup(func() {
+		select {
+		case <-p.exited:
+		default:
+			// By PID: a test may deny this thread pidfd signals, which Kill uses.
+			syscall.Kill(c.Process.Pid, syscall.SIGKILL)
+			<-p.exited
+		}
+	})
 	cmdline := "/proc/" + strconv.Itoa(c.Process.Pid) + "/cmdline"
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
 		if cmd, _ := os.ReadFile(cmdline); bytes.Equal(cmd, []byte("/bin/sleep\x0060\x00")) {
-			return c
+			return p
 		}
 	}
 	t.Fatal("the process never exec'd")
@@ -60,10 +76,10 @@ func sleeper(t *testing.T, env ...string) *exec.Cmd {
 }
 
 // reuse ends old and starts in its PID a process that sleeps with env.
-func reuse(t *testing.T, old *exec.Cmd, env ...string) *exec.Cmd {
+func reuse(t *testing.T, old *child, env ...string) *child {
 	t.Helper()
 	syscall.Kill(old.Process.Pid, syscall.SIGKILL)
-	old.Wait()
+	<-old.exited
 	if err := os.WriteFile("/proc/sys/kernel/ns_last_pid", []byte(strconv.Itoa(old.Process.Pid-1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -74,12 +90,10 @@ func reuse(t *testing.T, old *exec.Cmd, env ...string) *exec.Cmd {
 	return other
 }
 
-// signalled is whether c ends within 100 ms.
-func signalled(c *exec.Cmd) bool {
-	exited := make(chan struct{})
-	go func() { c.Wait(); close(exited) }()
+// signalled is whether p ends within 100 ms.
+func signalled(p *child) bool {
 	select {
-	case <-exited:
+	case <-p.exited:
 		return true
 	case <-time.After(100 * time.Millisecond):
 		return false
