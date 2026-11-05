@@ -44,7 +44,7 @@ func (a *app) verbatim(c *ui.Context, key any, s string, size float32, col ui.Co
 		return transfer.TextData(strings.Join(out, "\n"))
 	}).Children(func() {
 		ui.RichText(c, verbatimSpans(s, cols, ui.Span{Font: "monospace", Size: size, Color: col},
-			ui.Span{Font: "monospace", Size: size, Color: palette.faint})...)
+			ui.Span{Font: "monospace", Size: size, Color: palette.muted})...)
 	})
 	return box, line
 }
