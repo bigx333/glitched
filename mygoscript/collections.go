@@ -44,15 +44,18 @@ func spans(pr *props) []ui.Span {
 			Underline: s.Underline, WavyUnderline: s.WavyUnderline, Strikethrough: s.Strikethrough,
 			DecorationThickness: s.DecorationThickness, Radius: s.Radius,
 		}
-		for name, dst := range map[string]*ui.Color{s.Color: &span.Color, s.Background: &span.Background, s.DecorationColor: &span.DecorationColor} {
-			if name == "" {
+		for _, f := range []struct {
+			hex string
+			dst *ui.Color
+		}{{s.Color, &span.Color}, {s.Background, &span.Background}, {s.DecorationColor, &span.DecorationColor}} {
+			if f.hex == "" {
 				continue
 			}
-			c, err := parseColor(name)
+			c, err := parseColor(f.hex)
 			if err != nil {
 				pr.fail("spans", err)
 			}
-			*dst = c
+			*f.dst = c
 		}
 		out = append(out, span)
 	}
@@ -175,8 +178,8 @@ func rowIDs(ns []node, id string) []string {
 func listWidget(d *drawer, c *ui.Context, n node, pr *props, id string) (ui.Element, func()) {
 	b := bind(d, pr, id, "bind", "value", "onChange", selectedCodec)
 	s := handle(d.p, id, func() *ui.ListState { return &ui.ListState{} })
-	s.Selected = &b.V
 	ids := rowIDs(n.Children, id)
+	s.Selected, s.Key = &b.V, func(i int) any { return ids[i] }
 	e := ui.List(c, s, len(n.Children), func(i int) { d.draw(c, n.Children[i], ids[i]) })
 	b.commit(d)
 	return e, nil
@@ -225,8 +228,8 @@ func tableWidget(d *drawer, c *ui.Context, n node, pr *props, id string) (ui.Ele
 func gridViewWidget(d *drawer, c *ui.Context, n node, pr *props, id string) (ui.Element, func()) {
 	b := bind(d, pr, id, "bind", "value", "onChange", selectedCodec)
 	s := handle(d.p, id, func() *ui.GridState { return &ui.GridState{} })
-	s.Selected = &b.V
 	ids := rowIDs(n.Children, id)
+	s.Selected, s.Key = &b.V, func(i int) any { return ids[i] }
 	e := ui.GridView(c, s, len(n.Children), pr.f32("minWidth", 120), pr.f32("itemHeight", 120), func(i int) {
 		d.draw(c, n.Children[i], ids[i])
 	})
