@@ -81,6 +81,8 @@ type Manager struct {
 	// restarting: Restart stopped the embedded engine and no new one has
 	// reported in; again, whether Restart was called meanwhile.
 	restarting, again bool
+	// embedded is the engine embedded here, once it reported in.
+	embedded *daemon.Daemon
 }
 
 func New(cfg Config) *Manager {

@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
 
+	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
+	"glitched/internal/transport"
 )
 
 func freeAddr(t *testing.T) string {
@@ -150,4 +154,49 @@ func TestThisMachineAttachesToAnotherProcess(t *testing.T) {
 	if h.a.backend.Machine().Embedded || h.tt.HasText("Restart") {
 		t.Errorf("an attached engine offers a restart: %q", h.tt.Texts())
 	}
+}
+
+// The Agents card's limits are saved in engine.json, and the engine
+// embedded here applies one at once, with no restart: a parent at the new
+// limit of one child at work starts no second.
+func TestTheAgentsCardAppliesALimitAtOnce(t *testing.T) {
+	dir := tempDir(t)
+	ad := fake.New(fake.Turn(true))
+	h := startWith(t, dir, func(c *daemon.Config) { c.Providers = daemon.FakeProviders(ad) })
+	ticking(t, h)
+	h.click("Settings")
+	h.click("This machine")
+	h.until("the Agents card", func() bool { return h.tt.HasText("At work at once") && h.a.backend.Machine().Embedded })
+	for range 4 { // the first Decrease is At work at once's, from 5
+		h.click("Decrease")
+	}
+	h.tt.Frame()
+	cfg, err := daemon.Defaults(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Children.Working != 1 || !h.a.backend.Machine().Embedded {
+		t.Fatalf("engine.json's limits %+v, embedded %v; want 1 at work, and the engine not restarted", cfg.Children, h.a.backend.Machine().Embedded)
+	}
+
+	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
+	t.Cleanup(func() { ep.Close() })
+	ad.Spawns(ep, "split", fake.Child{Title: "one", Task: "go"}, fake.Child{Title: "two", Task: "go"})
+	parent, run := api.NewID(), api.NewID()
+	for _, c := range []api.Command{
+		{ID: api.NewID(), Target: parent, Body: api.ThreadCreate{Workspace: "/work/t3code", Title: "Split it", Model: fakeModel}},
+		{ID: run, Target: parent, Body: api.MessageDispatch{Text: "split", Mode: api.StartNow}},
+	} {
+		if _, err := ep.Submit(context.Background(), c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var rej *api.RejectedError
+	h.until("the second child's refusal", func() bool {
+		answered, err := ad.Spawned(fake.ChildOf(run, 1))
+		if answered && !errors.As(err, &rej) {
+			t.Fatalf("the second child at work under a limit of 1: %v, want refused", err)
+		}
+		return answered
+	})
 }

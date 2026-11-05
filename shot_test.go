@@ -24,7 +24,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|asked (ASK=<request body>)|question|both|servers|engine (on the tailnet)|machines|inbox|checks|refused|plain|stuck|children|blocked
+// SCENE=empty|running|approval|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|refused|plain|stuck|children|blocked
 // for the engines' threads (none started without one; question takes
 // ASK=<request body>, PICK=<label>,… and QUESTION=answer|dismiss|stop;
 // both is an approval and questions waiting at once, the questions first
@@ -341,6 +341,15 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		h.tt.Frame()
 		h.click("Add server")
 		h.until("why devbox-ip wasn't added", func() bool { return h.tt.HasText("already listed as devbox") })
+	case "machine":
+		h = start(t, tempDir(t))
+		h.tt.SetSize(1320, 1200)
+		ticking(t, h)
+		h.a.router.Push("/settings/machine")
+		h.until("the engine's status", func() bool {
+			m := h.a.backend.Machine()
+			return m.Embedded && !m.Read.IsZero()
+		})
 	case "engine":
 		dir := tempDir(t)
 		if _, err := daemon.Pair(dir, "laptop"); err != nil {
