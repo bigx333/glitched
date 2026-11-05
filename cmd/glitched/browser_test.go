@@ -14,8 +14,9 @@ import (
 	"glitched/internal/browsermcp"
 )
 
-// The engine gives each Claude Code run this program's browser-mcp, on
-// its own state directory, which reaches the app on that directory.
+// The engine gives each Claude Code run a config that runs this program's
+// browser-mcp on its own state directory, which reaches the app on that
+// directory.
 func TestBrowserMCPReachesTheAppOnTheDir(t *testing.T) {
 	dir, err := os.MkdirTemp("", "gl")
 	if err != nil {
@@ -23,10 +24,23 @@ func TestBrowserMCPReachesTheAppOnTheDir(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	t.Chdir(filepath.Dir(dir))
-	cmd := browserCommand(filepath.Base(dir))
+	path := browserConfig(filepath.Base(dir))
+	var cfg struct {
+		MCPServers map[string]struct {
+			Type    string   `json:"type"`
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(b, &cfg) != nil {
+		t.Fatalf("the browser's MCP config at %q: %v %s", path, err, b)
+	}
+	server := cfg.MCPServers["glitched"]
 	self, _ := os.Executable()
-	if want := []string{self, "browser-mcp", "-dir", dir}; !slices.Equal(cmd, want) {
-		t.Errorf("the browser's command is %q, want %q", cmd, want)
+	cmd := append([]string{server.Command}, server.Args...)
+	if want := []string{self, "browser-mcp", "-dir", dir}; len(cfg.MCPServers) != 1 || server.Type != "stdio" || !slices.Equal(cmd, want) {
+		t.Errorf("the browser's MCP config is %s, want it to run %q", b, want)
 	}
 	if commands[cmd[1]] == nil {
 		t.Fatalf("no %s command", cmd[1])
