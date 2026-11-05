@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/browsermcp"
 	"glitched/internal/daemon"
 	eng "glitched/internal/engine"
 	"glitched/internal/mcp"
@@ -38,13 +39,14 @@ type usageError string
 func (e usageError) Error() string { return string(e) }
 
 var commands = map[string]func(context.Context, []string) error{
-	"serve":   serve,
-	"status":  status,
-	"pair":    pair,
-	"run":     run,
-	"threads": threads,
-	"replica": replica,
-	"mcp":     serveMCP,
+	"serve":       serve,
+	"status":      status,
+	"pair":        pair,
+	"run":         run,
+	"threads":     threads,
+	"replica":     replica,
+	"mcp":         serveMCP,
+	"browser-mcp": browserMCP,
 }
 
 const usage = `usage: glitched <command> [flags]
@@ -57,6 +59,9 @@ const usage = `usage: glitched <command> [flags]
   threads   list this host's threads
   replica   print a thread's events as the hub holds them: glitched replica -thread ID
   mcp       serve MCP on stdin and stdout for the agent the engine started it for
+  browser-mcp
+            serve the browser of the app on -dir to an agent, as an MCP server on stdio;
+            the engine gives it to each Claude Code run
 
 run, threads and replica reach the engine under -dir, or another with -server ADDR -token TOKEN.`
 
@@ -203,6 +208,31 @@ func serve(ctx context.Context, args []string) error {
 		return errors.Join(err, d.Close())
 	}
 	return d.Wait()
+}
+
+// browserCommand is how a run's Claude Code starts the MCP server of the
+// browser of the app on the state directory dir: this program, on that
+// directory. Nil, and no browser, where this program can't be found.
+func browserCommand(dir string) []string {
+	self, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	if dir, err = filepath.Abs(dir); err != nil {
+		return nil
+	}
+	return []string{self, "browser-mcp", "-dir", dir}
+}
+
+// browserMCP serves the app's browser to an agent on stdio.
+func browserMCP(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("browser-mcp", flag.ExitOnError)
+	dir := dirFlag(fs)
+	fs.Parse(args)
+	if fs.NArg() > 0 {
+		return usageError("browser-mcp takes no arguments")
+	}
+	return browsermcp.Serve(ctx, os.Stdin, os.Stdout, browsermcp.Dial(*dir))
 }
 
 func status(ctx context.Context, args []string) error {
