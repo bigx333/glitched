@@ -124,7 +124,7 @@ func (m *Manager) Restart() {
 }
 
 func (m *Manager) newLocal() *local {
-	l := &local{dir: m.cfg.Dir, done: make(chan struct{})}
+	l := &local{dir: m.cfg.Dir, engine: m.cfg.Engine, done: make(chan struct{})}
 	l.hosted = func(d *daemon.Daemon) {
 		m.post(m.ctx, func() {
 			if m.local != l {
