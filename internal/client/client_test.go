@@ -768,3 +768,96 @@ func TestADeletedThreadsStreamIsNotReopened(t *testing.T) {
 		t.Fatalf("the deleted thread's stream was opened %d times, want once", n)
 	}
 }
+
+// scripted is an engine whose shell streams what the test sends it, and
+// which takes and counts every command.
+type scripted struct {
+	shell chan api.StreamItem
+	mu    sync.Mutex
+	got   map[api.ID]int // commands by target
+}
+
+func (s *scripted) Info(context.Context) (api.Environment, error) {
+	return api.Environment{ID: api.NewID(), Name: "scripted", Protocol: api.Protocol, Log: testLog}, nil
+}
+
+func (s *scripted) Read(context.Context, api.Query) (api.Snapshot, error) {
+	return api.Snapshot{}, errors.ErrUnsupported
+}
+
+func (s *scripted) Submit(_ context.Context, c api.Command) (api.Receipt, error) {
+	s.mu.Lock()
+	s.got[c.Target]++
+	s.mu.Unlock()
+	return api.Receipt{Command: c.ID}, nil
+}
+
+func (s *scripted) Open(_ context.Context, sub api.Subscription) (api.Stream, error) {
+	if !sub.Thread.IsZero() {
+		return &items{}, nil
+	}
+	return fed(s.shell), nil
+}
+
+func (s *scripted) count(id api.ID) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.got[id]
+}
+
+// fed streams what comes on its channel.
+type fed chan api.StreamItem
+
+func (f fed) Next(ctx context.Context) (api.StreamItem, error) {
+	select {
+	case it := <-f:
+		return it, nil
+	case <-ctx.Done():
+		return api.StreamItem{}, ctx.Err()
+	}
+}
+
+func (fed) Close() error { return nil }
+
+// A tree's settle reaches a child the shell shows only after it was sent,
+// and every thread gets it once, the child whose settle landed before its
+// parent's too. Once the top's settle landed, a new child gets none.
+func TestASettledTreeTakesALateChildOnce(t *testing.T) {
+	eng := &scripted{shell: make(chan api.StreamItem, 16), got: map[api.ID]int{}}
+	dir := stateDir(t)
+	serveOn(t, dir, eng)
+	m, g := manager(t, dir)
+	env := m.Envs()[0]
+	top, kid, late, after := api.NewID(), api.NewID(), api.NewID(), api.NewID()
+	view := func(id, parent api.ID, settled bool) api.StreamItem {
+		v := api.Thread{ID: id, Parent: parent, Title: "t"}
+		if settled {
+			v.Disposition.State = api.Settled
+		}
+		return api.StreamItem{Kind: api.StreamThread, Thread: &v}
+	}
+	eng.shell <- api.StreamItem{Kind: api.StreamSnapshot, Snapshot: &api.Snapshot{Cursor: api.Cursor{Log: testLog, Seq: 1},
+		Threads: []api.Thread{{ID: top, Title: "top"}, {ID: kid, Parent: top, Title: "kid"}}}}
+	online(t, g, env)
+	g.until(t, "the tree", func() bool { return env.Threads[kid] != nil })
+
+	m.SettleTree(env, top)
+	counts := func() string {
+		return fmt.Sprintf("top %d, kid %d, late %d, after %d", eng.count(top), eng.count(kid), eng.count(late), eng.count(after))
+	}
+	g.until(t, "the tree's settles", func() bool { return eng.count(top) == 1 && eng.count(kid) == 1 }, counts)
+	for _, it := range []api.StreamItem{view(late, top, false), view(kid, top, true), view(late, top, true)} {
+		eng.shell <- it
+	}
+	g.until(t, "the late child's settle", func() bool {
+		return eng.count(late) == 1 && env.Threads[late] != nil && env.Threads[late].View.Disposition.State == api.Settled
+	}, counts)
+	eng.shell <- view(top, api.ID{}, true)
+	eng.shell <- view(after, top, false)
+	g.until(t, "the child started after, and every command back", func() bool {
+		return env.Threads[after] != nil && !slices.ContainsFunc([]api.ID{top, kid, late, after}, func(id api.ID) bool { return len(env.Threads[id].Pending) > 0 })
+	}, counts)
+	if eng.count(top) != 1 || eng.count(kid) != 1 || eng.count(late) != 1 || eng.count(after) != 0 {
+		t.Fatalf("settles sent: %s; want one each, none after", counts())
+	}
+}

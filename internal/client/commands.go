@@ -112,6 +112,90 @@ func (m *Manager) Delete(e *Env, thread api.ID) api.ID {
 	return m.submit(e, thread, api.ThreadDelete{})
 }
 
+// SettleTree settles thread and every thread under it.
+func (m *Manager) SettleTree(e *Env, thread api.ID) {
+	m.tree(e, thread, api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+}
+
+// DeleteTree deletes thread and every thread under it, each after the
+// threads under it, so none stands on its own on the way.
+func (m *Manager) DeleteTree(e *Env, thread api.ID) {
+	m.tree(e, thread, api.ThreadDelete{})
+}
+
+// tree sends body to top and every thread under it that isn't being
+// deleted, each after the threads under it. The engine may have started
+// a child under one of them that the shell hasn't shown yet, so until
+// the engine's view shows a thread settled or gone, a thread the shell
+// shows under it gets body too (spread). The shell is in commit order,
+// so that view comes after every child started before body landed, and
+// the engine starts none under a settled or deleted thread.
+func (m *Manager) tree(e *Env, top api.ID, body api.Intent) {
+	kids := map[api.ID][]api.ID{}
+	for id, th := range e.Threads {
+		if p := th.View.Parent; !p.IsZero() && !th.deleting() {
+			kids[p] = append(kids[p], id)
+		}
+	}
+	seen := map[api.ID]bool{}
+	var walk func(id api.ID, depth int)
+	walk = func(id api.ID, depth int) {
+		seen[id] = true
+		if depth < api.MaxDepth {
+			for _, k := range kids[id] {
+				if !seen[k] {
+					walk(k, depth+1)
+				}
+			}
+		}
+		m.cascade(e, id, body)
+	}
+	walk(top, 0)
+}
+
+func (m *Manager) cascade(e *Env, thread api.ID, body api.Intent) {
+	if m.submit(e, thread, body).IsZero() {
+		return
+	}
+	if e.cascades == nil {
+		e.cascades = map[api.ID]api.Intent{}
+	}
+	e.cascades[thread] = body
+}
+
+// spread carries each cascade to the threads the shell now shows under
+// it, theirs too. A cascade ends on a thread once its view shows it
+// landed and none goes on above it, so a thread whose command landed
+// before its parent's never gets it twice.
+func (m *Manager) spread(e *Env) {
+	for more := len(e.cascades) > 0; more; {
+		more = false
+		for id, th := range e.Threads {
+			body, under := e.cascades[th.View.Parent]
+			if _, has := e.cascades[id]; th.known && under && !has {
+				m.cascade(e, id, body)
+				more = true
+			}
+		}
+	}
+	for more := true; more; {
+		more = false
+		for id, body := range e.cascades {
+			th := e.Threads[id]
+			if th == nil {
+				delete(e.cascades, id)
+				more = true
+				continue
+			}
+			_, above := e.cascades[th.View.Parent]
+			if _, settle := body.(api.InboxSet); !above && settle && th.known && th.View.Disposition.State == api.Settled {
+				delete(e.cascades, id)
+				more = true
+			}
+		}
+	}
+}
+
 // Retry sends a failed command again under its ID, so one that did land
 // before the failure is not applied twice.
 func (m *Manager) Retry(e *Env, thread, command api.ID) {
@@ -237,5 +321,16 @@ func (m *Manager) submitted(e *Env, cmd api.Command, err error) {
 	default:
 		th.Pending[i].Err = err
 		th.dropUnasked()
+		if e.cascades[cmd.Target] == cmd.Body {
+			delete(e.cascades, cmd.Target)
+		}
 	}
+}
+
+// deleting is whether a delete of the thread is on its way.
+func (th *Thread) deleting() bool {
+	return slices.ContainsFunc(th.Pending, func(p Pending) bool {
+		_, del := p.Body.(api.ThreadDelete)
+		return del && p.Err == nil
+	})
 }
