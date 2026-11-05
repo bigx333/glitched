@@ -12,6 +12,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
+	eng "glitched/internal/engine"
 	"glitched/internal/hub"
 	"glitched/internal/transport"
 )
@@ -260,6 +261,33 @@ func TestServeKeepsItsFlagsForTheNextStart(t *testing.T) {
 
 	serving(t, dir, "-hub", "-listen", "")()
 	keeps(daemon.Config{Hub: true, Epoch: 3})
+}
+
+// serve keeps the child limits its flags set, and a later serve without
+// them keeps those; a limit out of range is a usage error.
+func TestServeKeepsTheChildLimits(t *testing.T) {
+	dir := stateDir(t)
+	limits := func() eng.Limits {
+		t.Helper()
+		cfg, err := daemon.Defaults(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg.Children
+	}
+	serving(t, dir, "-max-working", "2", "-max-children", "7", "-max-depth", "3")()
+	if got, want := limits(), (eng.Limits{Working: 2, All: 7, Depth: 3}); got != want {
+		t.Fatalf("after serve with the flags: %+v, want %+v", got, want)
+	}
+	serving(t, dir, "-max-depth", "1")()
+	if got, want := limits(), (eng.Limits{Working: 2, All: 7, Depth: 1}); got != want {
+		t.Fatalf("after serve with -max-depth alone: %+v, want %+v", got, want)
+	}
+	for _, args := range [][]string{{"-max-depth", "5"}, {"-max-depth", "0"}, {"-max-working", "0"}, {"-max-children", "-1"}} {
+		if err := serve(context.Background(), append([]string{"-dir", dir}, args...)); !errors.As(err, new(usageError)) {
+			t.Errorf("serve %v: %v, want a usage error", args, err)
+		}
+	}
 }
 
 // A relative -hub-dir is kept as the directory it named where serve ran,

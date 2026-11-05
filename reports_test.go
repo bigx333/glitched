@@ -16,6 +16,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
+	eng "glitched/internal/engine"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
@@ -750,7 +751,7 @@ func TestAChildOfADeletedParentAskingTellsNothing(t *testing.T) {
 // their own children, whatever times the engine stamps their reports with.
 func TestPairsOfChildrenAskingAtOnceAreEachToldOf(t *testing.T) {
 	dir := tempDir(t)
-	d := engine(t, daemon.Config{Dir: dir}, fake.New([]provider.Event{provider.RequestOpened{ID: "ask", Kind: "approval"}}))
+	d := engine(t, daemon.Config{Dir: dir, Children: eng.Limits{Working: 60, All: 60}}, fake.New([]provider.Event{provider.RequestOpened{ID: "ask", Kind: "approval"}}))
 	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
 	pairs := make([][2]api.ID, 30)
 	for i := range pairs {
@@ -889,9 +890,13 @@ func TestAReportOfAChildCreatedWhileTheShellLagsIsToldOf(t *testing.T) {
 	ep := &paused{Endpoint: d.Endpoint(), parent: p, resume: make(chan struct{})}
 	h := serveApp(t, ep)
 	h.thread("A")
-	got := told(h, p)
+	all := told(h, p)
+	// The turns that start B and C end, and tell of that too.
+	asked := func() []string {
+		return slices.DeleteFunc(slices.Clone(*all), func(s string) bool { return !strings.HasSuffix(s, ": Needs you") })
+	}
 	dispatch(t, d, a)
-	h.until("A's notification", func() bool { return len(*got) == 1 })
+	h.until("A's notification", func() bool { return len(asked()) == 1 })
 	b := seedChild(t, d, p, "B")
 	dispatch(t, d, b)
 	awaitReports(t, d, p, 2)
@@ -899,13 +904,13 @@ func TestAReportOfAChildCreatedWhileTheShellLagsIsToldOf(t *testing.T) {
 		t.Fatal("the app holds B's view; this test needs the shell behind the log")
 	}
 	close(ep.resume)
-	h.until("B's notification", func() bool { return len(*got) == 2 })
+	h.until("B's notification", func() bool { return len(asked()) == 2 })
 	c := seedChild(t, d, p, "C")
 	h.thread("C")
 	dispatch(t, d, c)
-	h.until("C's notification", func() bool { return len(*got) == 3 })
-	if want := []string{"A: Needs you", "B: Needs you", "C: Needs you"}; !slices.Equal(*got, want) {
-		t.Fatalf("notifications on the parent: %q; want %q", *got, want)
+	h.until("C's notification", func() bool { return len(asked()) == 3 })
+	if want := []string{"A: Needs you", "B: Needs you", "C: Needs you"}; !slices.Equal(asked(), want) {
+		t.Fatalf("notifications on the parent: %q; want %q", *all, want)
 	}
 }
 

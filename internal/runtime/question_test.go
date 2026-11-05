@@ -74,9 +74,10 @@ func TestQuestionRaceHasOneWinner(t *testing.T) {
 
 // A child blocked on questions reports its first question to its parent.
 func TestABlockedChildReportsItsFirstQuestion(t *testing.T) {
-	n := start(t, dbPath(t), fake.New(fake.Asking()))
+	ad := fake.New(fake.Asking())
+	n := start(t, dbPath(t), ad)
 	parent := newThread(t, n.h)
-	c, err := newChild(t, n.h, parent, api.AccessAsk)
+	c, err := newChild(t, n.h, ad, parent, api.AccessAsk)
 	if err != nil {
 		t.Fatal(err)
 	}

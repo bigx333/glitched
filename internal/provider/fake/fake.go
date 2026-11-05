@@ -6,11 +6,14 @@ package fake
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"sync"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
@@ -63,6 +66,50 @@ type Adapter struct {
 	mu     sync.Mutex
 	agents map[api.ID]*Agent
 	starts int
+	engine api.Endpoint
+	spawns map[string][]Child
+	made   map[api.ID]error // each kid's create, by its thread, once answered
+}
+
+// A Child is an agent a turn starts on the engine, as a call to glitched
+// mcp's delegate_task does: a create with the parent's live run and Task as
+// the first message. The turn sends the call Tries times, at least once, as
+// a client resends one whose reply it lost; each try is the same command.
+type Child struct {
+	Title, Task string
+	Access      api.Access // ignored unless Wider; else the parent's
+	Wider       bool
+	Tries       int
+}
+
+// Spawns has every turn whose message is text start kids on ep, in order,
+// and end, as an agent that hands its work out does: it plays no script
+// and uses no tokens. Each kid shows as a step, failed with the engine's
+// refusal when it has one.
+func (a *Adapter) Spawns(ep api.Endpoint, text string, kids ...Child) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.spawns == nil {
+		a.spawns = map[string][]Child{}
+	}
+	a.engine, a.spawns[text] = ep, kids
+}
+
+// Spawned is how the create of the kid that starts child went, once the
+// engine answered it.
+func (a *Adapter) Spawned(child api.ID) (answered bool, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	err, answered = a.made[child]
+	return answered, err
+}
+
+// ChildOf is the thread the nth Child of run's turn starts, from 0.
+func ChildOf(run api.ID, n int) api.ID { return derive(run, "child", n) }
+
+func derive(run api.ID, what string, n int) api.ID {
+	sum := sha256.Sum256([]byte(run.String() + "/" + what + "/" + strconv.Itoa(n)))
+	return api.ID(sum[:16])
 }
 
 func New(script []provider.Event) *Adapter {
@@ -81,7 +128,7 @@ func (a *Adapter) Describe(context.Context) (provider.Info, error) {
 }
 
 func (a *Adapter) Open(_ context.Context, spec provider.SessionSpec) (provider.Agent, error) {
-	g := &Agent{a: a, run: spec.Run, wake: make(chan struct{}, 1), answered: map[string]bool{}}
+	g := &Agent{a: a, run: spec.Run, spec: spec, wake: make(chan struct{}, 1), answered: map[string]bool{}}
 	a.mu.Lock()
 	a.agents[spec.Run] = g
 	a.mu.Unlock()
@@ -119,6 +166,7 @@ var errClosed = errors.New("fake: agent closed")
 type Agent struct {
 	a    *Adapter
 	run  api.ID
+	spec provider.SessionSpec
 	wake chan struct{}
 
 	mu        sync.Mutex
@@ -128,6 +176,10 @@ type Agent struct {
 	asking    *provider.RequestOpened
 	answered  map[string]bool
 	resurface bool
+	tokens    int64   // what the turn says it used
+	kids      []Child // still to start
+	spawned   int     // kids started or refused
+	spawning  bool    // a kid's create is in flight
 }
 
 func (g *Agent) Do(ctx context.Context, act provider.Action) error {
@@ -145,7 +197,12 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 			return errors.New("fake: already started")
 		}
 		g.a.countStart()
-		g.phase, g.script = running, slices.Clone(g.a.script)
+		g.phase, g.script, g.tokens = running, slices.Clone(g.a.script), g.a.Tokens
+		g.a.mu.Lock()
+		if kids, ok := g.a.spawns[act.Text]; ok {
+			g.script, g.tokens, g.kids = nil, 0, slices.Clone(kids)
+		}
+		g.a.mu.Unlock()
 	case provider.Steer:
 		if g.phase != running {
 			return errors.New("fake: nothing to steer")
@@ -155,7 +212,7 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 		if g.phase != running {
 			return nil
 		}
-		g.phase, g.script, g.asking = stopping, nil, nil
+		g.phase, g.script, g.asking, g.kids = stopping, nil, nil, nil
 		g.out = append(g.out, provider.TurnEnded{Outcome: api.OutcomeInterrupted})
 	case provider.Respond:
 		if g.answered[act.Request] {
@@ -206,11 +263,13 @@ func (g *Agent) step() (provider.Event, error) {
 	case g.asking != nil && g.resurface:
 		g.resurface = false
 		return *g.asking, nil
-	case g.phase != running || g.asking != nil:
+	case g.phase != running || g.asking != nil || g.spawning:
 		return nil, nil
+	case len(g.kids) > 0:
+		return g.spawn(), nil
 	case len(g.script) == 0:
 		g.phase = ended
-		return provider.TurnEnded{Outcome: api.OutcomeCompleted, Tokens: g.a.Tokens}, nil
+		return provider.TurnEnded{Outcome: api.OutcomeCompleted, Tokens: g.tokens}, nil
 	}
 	e := g.script[0]
 	g.script = g.script[1:]
@@ -218,6 +277,52 @@ func (g *Agent) step() (provider.Event, error) {
 		g.asking = &r
 	}
 	return e, nil
+}
+
+// spawn sends the next kid's create and returns its step. The create runs
+// apart from the agent, as an MCP server's call does, and the step ends
+// once the engine answers.
+func (g *Agent) spawn() provider.Event {
+	k, n := g.kids[0], g.spawned
+	g.kids, g.spawned, g.spawning = g.kids[1:], n+1, true
+	access := g.spec.Access
+	if k.Wider {
+		access = k.Access
+	}
+	c := api.Command{ID: derive(g.run, "call", n), Target: ChildOf(g.run, n), Body: api.ThreadCreate{
+		Workspace: g.spec.Workspace, Title: k.Title, Model: g.spec.Model, Access: access,
+		Parent: g.spec.Thread, Run: g.run, Text: k.Task,
+	}}
+	g.a.mu.Lock()
+	ep := g.a.engine
+	g.a.mu.Unlock()
+	item := "spawn-" + strconv.Itoa(n)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		var err error
+		for range max(k.Tries, 1) {
+			_, err = ep.Submit(ctx, c)
+		}
+		g.a.mu.Lock()
+		if g.a.made == nil {
+			g.a.made = map[api.ID]error{}
+		}
+		g.a.made[c.Target] = err
+		g.a.mu.Unlock()
+		w := provider.Work{Item: item, Kind: "tool", Title: "Started agent " + k.Title, Status: api.WorkCompleted}
+		if err != nil {
+			w.Status, w.Output = api.WorkFailed, err.Error()
+		}
+		g.mu.Lock()
+		if g.phase == running {
+			g.out = append(g.out, w)
+		}
+		g.spawning = false
+		g.mu.Unlock()
+		g.signal()
+	}()
+	return provider.Work{Item: item, Kind: "tool", Title: "Started agent " + k.Title, Status: api.WorkStarted}
 }
 
 func (g *Agent) restore() bool {
