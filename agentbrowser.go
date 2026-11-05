@@ -93,15 +93,21 @@ func (ab *agentBrowser) call(ctx context.Context, tool string, raw json.RawMessa
 	case "browser_snapshot":
 		var t *browserTab
 		var p browse.Page
+		made := false
 		err := ab.view(ctx, func() error {
 			var err error
 			if t, err = ab.tab(args.Tab); err == nil {
+				made = t.page == nil
 				p, err = ab.page(t)
 			}
 			return err
 		})
 		if err != nil {
 			return "", err
+		}
+		// A tab never shown has just made its page, which is loading.
+		if made {
+			return ab.loaded(ctx, t, p)
 		}
 		return ab.snapshot(ctx, t, p, args.Full)
 	case "browser_click", "browser_type":
@@ -113,12 +119,34 @@ func (ab *agentBrowser) call(ctx context.Context, tool string, raw json.RawMessa
 // view runs fn on the view's thread, and returns what it did.
 func (ab *agentBrowser) view(ctx context.Context, fn func() error) error {
 	done := make(chan error, 1)
-	ab.onView(func() { done <- fn() })
+	ab.onView(func() {
+		// A call the agent gave up on, or that timed out, does nothing
+		// more, as its tab opening late would surprise the user.
+		if ctx.Err() != nil {
+			done <- ctx.Err()
+			return
+		}
+		done <- fn()
+	})
 	select {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		return errors.New("The Glitched app didn't answer in time.")
+		return errGaveUp
+	}
+}
+
+// errGaveUp is why a call ends that the agent cancelled or ran out of
+// time.
+var errGaveUp = errors.New("The browser didn't finish in time, or the call was cancelled.")
+
+// wait waits d, or until ctx ends.
+func wait(ctx context.Context, d time.Duration) error {
+	select {
+	case <-time.After(d):
+		return nil
+	case <-ctx.Done():
+		return errGaveUp
 	}
 }
 
@@ -267,6 +295,8 @@ func (ab *agentBrowser) navigate(ctx context.Context, args toolArgs) (string, er
 		}
 	case args.Action == "":
 		return "", errors.New("browser_navigate needs a url, or an action: back, forward or reload.")
+	case args.Action != "back" && args.Action != "forward" && args.Action != "reload":
+		return "", fmt.Errorf("browser_navigate's action is back, forward or reload, not %q.", args.Action)
 	}
 	var t *browserTab
 	var p browse.Page
@@ -285,11 +315,12 @@ func (ab *agentBrowser) navigate(ctx context.Context, args toolArgs) (string, er
 				return err
 			}
 		}
-		ab.show(t)
-		if u != "" {
+		switch {
+		case u != "":
 			ab.a.goTo(t, u)
-			p, err = ab.page(t)
-			return err
+		case args.Action == "reload":
+			// Reload tries again a page that could not start.
+			ab.a.reload(t)
 		}
 		if p, err = ab.page(t); err != nil {
 			return err
@@ -305,11 +336,8 @@ func (ab *agentBrowser) navigate(ctx context.Context, args toolArgs) (string, er
 				return fmt.Errorf("Tab %d has no page to go forward to.", t.id)
 			}
 			p.GoForward()
-		case "reload":
-			ab.a.reload(t)
-		default:
-			return fmt.Errorf("browser_navigate's action is back, forward or reload, not %q.", args.Action)
 		}
+		ab.show(t)
 		return nil
 	})
 	if err != nil {
@@ -362,10 +390,8 @@ func (ab *agentBrowser) act(ctx context.Context, tool string, args toolArgs) (st
 // loaded waits for t's page to show what an action started loading, and
 // then to load, for a while, and snapshots it.
 func (ab *agentBrowser) loaded(ctx context.Context, t *browserTab, p browse.Page) (string, error) {
-	select {
-	case <-time.After(ab.settle):
-	case <-ctx.Done():
-		return "", ctx.Err()
+	if err := wait(ctx, ab.settle); err != nil {
+		return "", err
 	}
 	deadline := time.Now().Add(ab.load)
 	var loading, failed bool
@@ -384,10 +410,8 @@ func (ab *agentBrowser) loaded(ctx context.Context, t *browserTab, p browse.Page
 		if !loading || time.Now().After(deadline) {
 			break
 		}
-		select {
-		case <-time.After(100 * time.Millisecond):
-		case <-ctx.Done():
-			return "", ctx.Err()
+		if err := wait(ctx, 100*time.Millisecond); err != nil {
+			return "", err
 		}
 	}
 	if failed {
