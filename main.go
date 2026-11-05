@@ -444,8 +444,8 @@ type app struct {
 
 	md markdown.Options
 
-	// counter is the scripted counter on the Scripts settings page.
-	counter *mygoscript.Plugin
+	// counter and widgetTour are the scripts on the Scripts settings page.
+	counter, widgetTour *mygoscript.Plugin
 }
 
 // newApp is the app on the engines its state directory dir names. The

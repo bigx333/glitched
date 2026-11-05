@@ -6,10 +6,10 @@ return {
 
 	view = function(state)
 		return ui.column({ key = "counter", gap = 12 }, {
-			ui.text("Count: " .. state.count, { key = "count", size = 28 }),
+			ui.text("Count: " .. state.count, { key = "count", fontSize = 28 }),
 			ui.row({ gap = 8 }, {
-				ui.button("Increment", { key = "inc", on = "increment" }),
-				ui.button("Reset", { key = "reset", on = "reset" }),
+				ui.button("Increment", { key = "inc", onClick = "increment" }),
+				ui.button("Reset", { key = "reset", onClick = "reset" }),
 			}),
 		})
 	end,
