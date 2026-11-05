@@ -2,7 +2,7 @@
 
 Newest first. Answer under each question, or in the PM thread.
 
-## Q10 (2026-11-05, open). #64 (#52 cgroup containment): Claude's work sent to the user's own tmux server
+## Q10 (2026-11-05, answered: accept the limit and document it). #64 (#52 cgroup containment): Claude's work sent to the user's own tmux server
 
 Sol's High: a tool runs an ordinary `tmux new-window` against a tmux server that was already running before the run. The window outlives Close and Reconcile. No cgroup design can stop this, because the server is the user's own process. Opus judges it out of reach, and #52 already named it. Opus also found a Low: tmux 3.5a puts each pane into its own `tmux-spawn-*.scope`, so a pane that drops the marker and ignores SIGHUP survives. Review: https://github.com/bigx333/glitched/pull/64#issuecomment-6654372975
 

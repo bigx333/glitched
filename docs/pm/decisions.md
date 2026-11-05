@@ -2,6 +2,13 @@
 
 Newest first. Each entry has the date, who decided, and the decision.
 
+## 2026-11-05. #64: work sent to the user's own tmux is a known limit (Nelson, Q10)
+
+Sol's round 1 High on #64 was that a tool can send work to a tmux server the user already runs, and that work outlives Close. No cgroup can contain it, because the server is the user's own process. Nelson accepted it as a documented limit, so it does not block slice 5. Fix round 1 on #64 does three things:
+- falls back to the marker scan when `systemd-run` fails, instead of aborting the turn (Sol's Medium);
+- corrects the "cannot leave its cgroup unasked" comment, because tmux moves its panes into scopes of their own (Opus's Low);
+- documents the tmux limit.
+
 ## 2026-11-05. #62 merged; a root-package flake is traced to #61 (PM)
 
 - **#62 (AskUserQuestion PR B) was rebase-merged at 4da7072.** In round 1, Opus and Sol both found a lock-order deadlock between a misfit deny and `Do(Respond)`, and the PM reproduced it. Fix round 1 sends the deny after `pmu` is released and writes down the lock order. The re-check found no High. Opus's Low is #63.
