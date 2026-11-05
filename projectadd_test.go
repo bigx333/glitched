@@ -46,7 +46,11 @@ func TestAddProjectCancelled(t *testing.T) {
 	h.a.select_(th)
 	h.tt.Advance(time.Second)
 	h.click("Add project")
-	<-picked
+	select {
+	case <-picked:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Add project opened no picker")
+	}
 	h.until("the picker closed", func() bool { return !h.a.picking })
 	h.tt.Advance(time.Second)
 	if h.a.current().id() != th.id() {
@@ -69,11 +73,11 @@ func TestAddProjectOpensOnePicker(t *testing.T) {
 		time.Sleep(time.Millisecond) // the picker opening, off the main thread
 	}
 	h.a.addProject()
-	time.Sleep(100 * time.Millisecond) // time for a second picker to open
-	n := opened.Load()
 	close(release)
 	h.until("the picker closed", func() bool { return !h.a.picking })
-	if n != 1 {
+	time.Sleep(100 * time.Millisecond) // time for a second picker to open
+	h.until("the picker closed", func() bool { return !h.a.picking })
+	if n := opened.Load(); n != 1 {
 		t.Fatalf("%d pickers opened", n)
 	}
 }
