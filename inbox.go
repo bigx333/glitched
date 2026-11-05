@@ -482,7 +482,7 @@ func (a *app) snoozeButton(c *ui.Context, t thread, cat category) {
 		}
 		open = !open
 	}
-	ui.PopoverBase(c, b, &open, func(panel ui.Element) {
+	a.popover(c, b, &open, func(panel ui.Element) {
 		// Under the button, from its left edge: above it, the panel ran
 		// left over the sidebar's header and the traffic lights. Near the
 		// window's bottom, AttachTo puts it above instead.

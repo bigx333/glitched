@@ -299,6 +299,9 @@ type app struct {
 	// terminalFocused is set while the terminal drawer has the keyboard,
 	// as the last frame built it; it keeps the browser's keys then.
 	terminalFocused bool
+	// covered is whether the last pass showed one of the app's overlays,
+	// which covering notes as this one builds them (overlay.go).
+	covered, covering bool
 	// zap is a request's answers just answered, breaking up as they go;
 	// answerAt where the waiting request's answers were last laid out.
 	zap      approvalZap
@@ -594,6 +597,7 @@ func (a *app) view(c *ui.Context) {
 	// The drawer sets it again as it builds with the keyboard (chat.go);
 	// a frame without it, as on another page, leaves the keys the browser's.
 	a.terminalFocused = false
+	a.covered, a.covering = a.covering, false
 	a.vibrant = c.Vibrancy() && a.settings.glass && c.Theme().Dark == systemDark
 	if c.Vibrancy() {
 		// The material shows wherever nothing paints over it.
