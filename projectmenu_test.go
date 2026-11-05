@@ -261,3 +261,40 @@ func TestRemoveProjectResetsADraftOnAServer(t *testing.T) {
 		t.Fatalf("the draft is %+v, want devbox's home", h.a.fresh)
 	}
 }
+
+// A live thread under another of the project's, by way of another
+// workspace, doesn't keep the project from being removed: it stops as its
+// tree goes, as with a thread's Delete….
+func TestRemoveProjectStopsALiveThreadUnderItsOwn(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	mid := seedChildIn(t, d, "/work/mygo", top, "Patch the table")
+	seedChildIn(t, d, "/work/t3code", mid, "Check the sort")
+	h := start(t, dir)
+	h.thread("Check the sort").View.Run = api.RunUncertain // as a lost run leaves it
+	h.tt.Frame()
+	if p := h.a.projectOf(h.thread("Ship the sidebar sort")); h.a.projectLive(p) {
+		t.Fatal("a live thread under the project's own keeps it from being removed")
+	}
+}
+
+// Two projects of one name on the machine are told apart by their folders.
+func TestProjectsOfOneNameAreToldApart(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	seed(t, d, "/a/web", "Fix the header")
+	seed(t, d, "/b/web", "Fix the footer")
+	h := start(t, dir)
+	h.thread("Fix the footer")
+	h.a.openCommandPalette()
+	h.tt.Frame()
+	h.tt.Type("remove project")
+	var got []string
+	for _, cmd := range h.a.commands() {
+		got = append(got, cmd.label)
+	}
+	if want := []string{"Remove project /a/web…", "Remove project /b/web…"}; !slices.Equal(got, want) {
+		t.Fatalf("palette lists %q, want %q", got, want)
+	}
+}

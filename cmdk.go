@@ -31,14 +31,9 @@ func (a *app) commands() []command {
 	action := func(label, hint string, icon *ui.SVG, run func()) command {
 		return command{section: "Actions", label: label, hint: hint, icon: icon, run: run}
 	}
-	several := len(a.backend.Envs()) > 1
 	cmds := []command{action("New thread", "⌘N", icSquarePen, a.newThread)}
 	for _, p := range a.projects {
-		name := p.name()
-		if several {
-			name += " on " + p.env.Name
-		}
-		cmds = append(cmds, action("New thread in "+name, "", icSquarePen, func() { a.startThread(p) }))
+		cmds = append(cmds, action("New thread in "+a.projectLabel(p), "", icSquarePen, func() { a.startThread(p) }))
 	}
 	if !a.picking {
 		add := action("Add project…", "", icFolderOpen, a.addProject)
@@ -46,7 +41,7 @@ func (a *app) commands() []command {
 		cmds = append(cmds, add)
 	}
 	for _, p := range a.projects {
-		if projectLive(p) {
+		if a.projectLive(p) {
 			continue // stopped first, as the chip's menu has it
 		}
 		rm := action("Remove project "+a.projectLabel(p)+"…", "", icFolder, func() { a.askRemove(p) })
