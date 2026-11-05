@@ -56,3 +56,6 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - run: go test -race -timeout 10m ./internal/client ./internal/daemon ./internal/transport
+      # Verbose, so the log says whether this runner has the user systemd
+      # manager these tests need, or skips them.
+      - run: go test -race -v -run 'MarkerBehind|WithoutScopes' ./internal/provider/claude

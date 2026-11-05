@@ -32,11 +32,15 @@ const (
 	envEntry  = "GLITCHED_FAKE_CLAUDE_ENTRY"  // a file each run appends its entrypoint entries to
 	envPids   = "GLITCHED_FAKE_CLAUDE_PIDS"   // a file each run appends its processes to, by role
 	envEngine = "GLITCHED_FAKE_ENGINE"        // the store a test binary serves, as an engine a test can kill
+	envHide   = "GLITCHED_FAKE_HIDE"          // a file a test binary writes its PID to, as a tool that hides its environment
 )
 
 func TestMain(m *testing.M) {
 	if code, teeing := transcript.Tee(); teeing {
 		os.Exit(code)
+	}
+	if path := os.Getenv(envHide); path != "" {
+		os.Exit(hidden(path))
 	}
 	if path := os.Getenv(envEngine); path != "" {
 		os.Exit(engine(path))
