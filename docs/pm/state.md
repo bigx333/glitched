@@ -24,7 +24,7 @@ A PR merges to main by rebase-merge only when all of these hold at its current h
 | 3 | Fix verified high-severity findings on `land/pr-2` | Done in 2 fix rounds. Round 3: no high (Opus 1 low, Sol 2 medium: one filed as #23, one dismissed and filed as design note #24). Real-app runs passed 6/6 at 20dfea6 and at 2cc7903. | Done. |
 | 4 | Land the copy, close #2 with a link | **Done 2026-11-04 05:38Z.** #22 rebase-merged at 2cc7903; main is 604b182, linear. #2 closed with a link. #15 and #16 closed by the merge. Main CI green at 604b182 (run 41780484873: vet, test, race). | The copy is merged on main by rebase-merge, main's CI is green, #2 is closed with a link. |
 | 5 | HTML plan for the Claude Code adapter (in core) | Done. Nelson answered Q5 on 2026-11-04. | Done. |
-| 6 | Claude Code adapter, 5 slices | Slices 1 (#36), 2 (#42) and 3 (#45) are merged. Slice 4 (stop, steer, crash, resume) is running on `feat/claude-stop-steer`. #47 (approval surface security) is running and **blocks slice 5**. AskUserQuestion PR A waits for #43, and PR B waits for PR A. | Each slice's done-when is in `/tmp/glitched-pm/adapter-context.md`. |
+| 6 | Claude Code adapter, 5 slices | Slices 1 (#36), 2 (#42), 3 (#45) and 4 (#49) are merged. Slice 5 (turn it on in the GUI) is gated on #47 (PR #51), #52 (cgroup containment) and #44 (Windows). AskUserQuestion PR A (#50) is in fix round 2. PR B comes after #50. | Each slice's done-when is in `/tmp/glitched-pm/adapter-context.md`. |
 | 7 | Agent spawn tool, in core | Waiting on task 6 | To be set by its plan. |
 | 8 | Child-thread bugs #14, #23 | **Done.** #23 is in #27. #14 is in #43, with Protocol 5 and schema 6, merged 2026-11-04. | Done. |
 | 9 | Browser bugs #17 to #20 | **Done.** #26 (#17), #29 (#18), #40 (#19, the rebase of #30), #28 (#20), all merged 2026-11-04. | Done. |
@@ -38,6 +38,7 @@ A PR merges to main by rebase-merge only when all of these hold at its current h
 
 ## Landed
 
+- 2026-11-05: #49 (adapter slice 4: stop, steer, crash and resume). It took 3 fix rounds, and the final Opus and Sol reviews found no high or medium.
 - 2026-11-04: #43 (#14 fixed with `api.Thread.LastReport`, Protocol 5, schema 6). It took 3 fix rounds, and the final review found no high or medium.
 - 2026-11-04: #45 (adapter slice 3: tool prompts answered from the inbox, ASCII-only approval text). It landed under Nelson's rule with #47 open.
 - 2026-11-04: #42 (adapter slice 2: a Claude Code turn streams through `glitched serve`).
