@@ -49,6 +49,8 @@ func describe(e Entry) string {
 	switch e := e.(type) {
 	case *UserEntry:
 		return words("user", fmt.Sprintf("%q", e.Text), messageStates[e.State], e.Reason)
+	case *ErrorEntry:
+		return "error " + fmt.Sprintf("%q", e.Error)
 	case *AssistantEntry:
 		if e.Streaming {
 			return fmt.Sprintf("assistant %q streaming", e.Text)
@@ -250,6 +252,32 @@ func TestFoldReleasesHeldBackAndCancelledMessages(t *testing.T) {
 		`user "now" cancelled`,
 		"--",
 		`user "later" held`,
+	)
+}
+
+// A failed turn shows why it failed, whether its agent never started or
+// started and then failed; a turn that ended any other way shows no error.
+func TestFoldShowsWhyATurnFailed(t *testing.T) {
+	a, b, c := api.NewID(), api.NewID(), api.NewID()
+	evs := slices.Concat(start(a, "one", 0), []api.EventBody{
+		api.AssistantDelta{Run: a, Text: "Hi"},
+		api.TurnEnded{Run: a, Outcome: api.OutcomeFailed, Error: "Claude Code is not signed in."},
+		api.MessageQueued{Message: b, Text: "two", Mode: api.StartNow, Pos: 1},
+		api.TurnAdmitted{Run: b, Generation: 2},
+		api.MessageClaimed{Message: b, Run: b},
+		api.TurnEnded{Run: b, Outcome: api.OutcomeFailed, Error: "Claude Code is not installed."},
+		api.MessageQueued{Message: c, Text: "three", Mode: api.StartNow, Pos: 2},
+		api.TurnAdmitted{Run: c, Generation: 3},
+		api.MessageClaimed{Message: c, Run: c},
+		api.TurnEnded{Run: c, Outcome: api.OutcomeInterrupted, Error: "stopped"},
+	})
+	expect(t, play(evs...),
+		`user "one" sent`,
+		`assistant "Hi"`,
+		`error "Claude Code is not signed in."`,
+		`user "two" cancelled`,
+		`error "Claude Code is not installed."`,
+		`user "three" cancelled`,
 	)
 }
 

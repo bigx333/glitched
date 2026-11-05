@@ -23,6 +23,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/browse/sysweb"
 	"glitched/internal/client"
+	"glitched/internal/daemon"
 	"glitched/mygoscript"
 	"glitched/wind"
 )
@@ -449,8 +450,9 @@ type app struct {
 
 // newApp is the app on the engines its state directory dir names. The
 // manager posts its changes through post, which runs them on the thread
-// that builds the views.
-func newApp(dir string, post func(func())) *app {
+// that builds the views. An engine it embeds serves as engine has it, or
+// with the fake for every provider when engine is nil, as in a test.
+func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 	a := &app{
 		dir:           dir,
 		router:        newRouter(),
@@ -509,7 +511,7 @@ func newApp(dir string, post func(func())) *app {
 			fn()
 			a.changed()
 		})
-	}, Asked: a.notifyAsked})
+	}, Asked: a.notifyAsked, Engine: engine})
 	return a
 }
 
@@ -760,7 +762,7 @@ func (a *app) toasts(c *ui.Context) {
 
 func main() {
 	var a *app
-	a = newApp(stateDir(), func(fn func()) {
+	a = newApp(stateDir(), (*daemon.Config).WithClaude, func(fn func()) {
 		a.win.Update(func() {
 			fn()
 			// The quick ask panel shows the projects too.

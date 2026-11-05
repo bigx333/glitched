@@ -23,7 +23,6 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/daemon"
 	"glitched/internal/plain"
-	"glitched/internal/provider/claude"
 	"glitched/internal/tailnet"
 	"glitched/internal/transport"
 )
@@ -169,9 +168,7 @@ func serve(ctx context.Context, args []string) error {
 	if set["control"] {
 		cfg.Control = *control
 	}
-	// Only a standalone engine runs Claude Code yet; the GUI's own engine
-	// keeps the fake until it can show what Claude Code asks.
-	cfg.Providers["claude"] = &claude.Adapter{Path: cfg.ClaudePath}
+	cfg.WithClaude()
 	d, err := daemon.Start(ctx, cfg)
 	if err != nil {
 		return err

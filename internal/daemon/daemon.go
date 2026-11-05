@@ -20,6 +20,7 @@ import (
 	"glitched/internal/hub"
 	"glitched/internal/jsonfile"
 	"glitched/internal/provider"
+	"glitched/internal/provider/claude"
 	"glitched/internal/provider/fake"
 	"glitched/internal/runtime"
 	"glitched/internal/store"
@@ -55,8 +56,8 @@ type Config struct {
 	Control   string       `json:"control,omitempty"`
 	Epoch     uint64       `json:"epoch"` // this host's epoch at the hub
 	Providers provider.Mux `json:"-"`
-	// ClaudePath is the claude binary `glitched serve` runs Claude Code
-	// threads with, when it is not on PATH or in ~/.local/bin.
+	// ClaudePath is the claude binary an engine with WithClaude runs Claude
+	// Code threads with, when it is not on PATH or in ~/.local/bin.
 	ClaudePath string `json:"claude_path,omitempty"`
 }
 
@@ -85,6 +86,13 @@ func FakeProviders(ad provider.Adapter) provider.Mux {
 		m[name] = ad
 	}
 	return m
+}
+
+// WithClaude has the engine run Claude Code threads with the real claude,
+// as `glitched serve` and the GUI's own engine do. An engine a test starts
+// keeps the fake, as Defaults gives it.
+func (cfg *Config) WithClaude() {
+	cfg.Providers["claude"] = &claude.Adapter{Path: cfg.ClaudePath}
 }
 
 // Save records cfg in engine.json under its Dir, for Defaults.
