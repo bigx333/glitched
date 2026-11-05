@@ -12,7 +12,9 @@ import (
 
 // Pending is a command sent from here that hasn't landed yet. A message
 // stays pending until its thread's open transcript shows it, so the row
-// never blinks out before the entry replaces it. Err is why the submit
+// never blinks out before the entry replaces it, and an answer the engine
+// took until its request stops waiting, so the request never shows
+// waiting again in between. Err is why the submit
 // failed. A failed row stays until Retry sends the command again under the
 // same ID, or Dismiss drops it, or, for an answer, its request stops
 // waiting.
@@ -20,7 +22,7 @@ type Pending struct {
 	Command api.ID
 	Body    api.Intent
 	Err     error
-	sent    bool // committed; waiting for the transcript to show it
+	sent    bool // committed; waiting for the thread to show it
 }
 
 // Terminal is true when sending the command again can only fail the same
@@ -230,10 +232,14 @@ func (m *Manager) submitted(e *Env, cmd api.Command, err error) {
 		return
 	}
 	_, message := cmd.Body.(api.MessageDispatch)
+	r, answer := cmd.Body.(api.RequestRespond)
+	taken := err == nil || errors.Is(err, api.ErrAlreadyAnswered)
 	switch {
 	case err == nil && message && th.open && th.Transcript.message(cmd.ID) == nil:
 		th.Pending[i].sent = true
-	case err == nil, errors.Is(err, api.ErrAlreadyAnswered):
+	case taken && answer && th.asks(r.Request):
+		th.Pending[i].sent = true
+	case taken:
 		th.Pending = slices.Delete(th.Pending, i, i+1)
 	default:
 		th.Pending[i].Err = err

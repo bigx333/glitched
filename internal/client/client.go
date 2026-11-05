@@ -528,8 +528,8 @@ func (m *Manager) OpenThread(e *Env, thread api.ID) {
 }
 
 // CloseThread stops following a thread. Its transcript stays cached for
-// the next OpenThread, but no longer keeps the failed answers to requests
-// only it showed waiting.
+// the next OpenThread, but no longer keeps the answers, failed or taken,
+// to requests only it showed waiting.
 func (m *Manager) CloseThread(e *Env, thread api.ID) {
 	th := e.Threads[thread]
 	if th == nil || !th.open {
@@ -537,7 +537,10 @@ func (m *Manager) CloseThread(e *Env, thread api.ID) {
 	}
 	th.open = false
 	th.unfollow()
-	th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool { return p.sent })
+	th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool {
+		_, message := p.Body.(api.MessageDispatch)
+		return message && p.sent
+	})
 	th.dropUnasked()
 }
 
@@ -615,13 +618,14 @@ func (th *Thread) shown() {
 	})
 }
 
-// dropUnasked drops the failed answers to requests the thread no longer
-// asks, as neither its view nor its open transcript, whichever is behind,
-// shows them waiting: none can land, and the request shows how it ended.
+// dropUnasked drops the answers, failed or taken, to requests the thread
+// no longer asks, as neither its view nor its open transcript, whichever
+// is behind, shows them waiting: a failed one can land no more, and the
+// request shows how it ended.
 func (th *Thread) dropUnasked() {
 	th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool {
 		r, ok := p.Body.(api.RequestRespond)
-		return ok && p.Err != nil && !th.asks(r.Request)
+		return ok && (p.Err != nil || p.sent) && !th.asks(r.Request)
 	})
 }
 
