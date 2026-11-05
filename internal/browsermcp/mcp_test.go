@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,7 +141,15 @@ func TestTheBridgeReachesTheApp(t *testing.T) {
 	}
 	// A socket an app left as it died is no app either, and the next
 	// app's listen takes its place.
-	os.WriteFile(Socket(dir), nil, 0o600)
+	dead, err := net.Listen("unix", Socket(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead.(*net.UnixListener).SetUnlinkOnClose(false)
+	dead.Close()
+	if _, err := os.Stat(Socket(dir)); err != nil {
+		t.Fatal(err)
+	}
 	ln, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -180,5 +189,68 @@ func TestTheBridgeReachesTheApp(t *testing.T) {
 	}
 	if filepath.Base(Socket(dir)) != "browser.sock" {
 		t.Error(Socket(dir))
+	}
+}
+
+// A call the client cancels, as the user stops the turn, ends in the app,
+// and so do the calls still running as the client goes.
+func TestServeEndsCallsTheClientLeaves(t *testing.T) {
+	started := make(chan string, 2)
+	ended := make(chan string, 2)
+	inR, inW := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(context.Background(), inR, io.Discard, func(ctx context.Context, tool string, args json.RawMessage) (string, error) {
+			started <- string(args)
+			<-ctx.Done()
+			ended <- string(args)
+			return "", ctx.Err()
+		})
+	}()
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"browser_navigate","arguments":{"url":"a"}}}`+"\n"+
+		`{"jsonrpc":"2.0","id":"8","method":"tools/call","params":{"name":"browser_navigate","arguments":{"url":"b"}}}`+"\n")
+	<-started
+	<-started
+	io.WriteString(inW, `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7,"reason":"the user stopped"}}`+"\n")
+	select {
+	case got := <-ended:
+		if got != `{"url":"a"}` {
+			t.Errorf("cancelling call 7 ended %s", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a cancelled call went on")
+	}
+	inW.Close()
+	select {
+	case got := <-ended:
+		if got != `{"url":"b"}` {
+			t.Errorf("the client going ended %s", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a call went on after the client went")
+	}
+	if err := <-done; err != nil {
+		t.Error(err)
+	}
+}
+
+// A caller that sends no request is hung up on.
+func TestTheBridgeHangsUpOnASilentCaller(t *testing.T) {
+	old := requestTime.Swap(int64(50 * time.Millisecond))
+	t.Cleanup(func() { requestTime.Store(old) })
+	ln, err := Listen(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go Accept(ln, func(context.Context, string, json.RawMessage) (string, error) { return "", nil })
+	conn, err := net.Dial("unix", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Errorf("a silent caller's read: %v, want the app to hang up", err)
 	}
 }

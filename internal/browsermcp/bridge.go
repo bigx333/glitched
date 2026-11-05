@@ -9,7 +9,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
+
+	"glitched/internal/jsonfile"
 )
 
 // The bridge is how the server reaches the app: a unix socket in the
@@ -20,6 +23,17 @@ import (
 // Socket is the path of the app's browser socket in the state directory
 // dir.
 func Socket(dir string) string { return filepath.Join(dir, "browser.sock") }
+
+// WriteConfig writes the Claude Code MCP config (--mcp-config) that runs
+// command as the browser's server, named "glitched", to a file in the
+// state directory dir, and returns its path.
+func WriteConfig(dir string, command []string) (string, error) {
+	path := filepath.Join(dir, "browser-mcp.json")
+	err := jsonfile.Write(path, map[string]any{"mcpServers": map[string]any{
+		"glitched": map[string]any{"type": "stdio", "command": command[0], "args": command[1:]},
+	}})
+	return path, err
+}
 
 // ErrNoApp is why a tool fails while the app isn't open.
 var ErrNoApp = errors.New("The Glitched app isn't open on this machine, so its browser can't be reached. Ask the user to open Glitched, then try again.")
@@ -91,14 +105,21 @@ func Accept(ln net.Listener, call Call) error {
 	}
 }
 
+// requestTime is how long a caller has to send its request.
+var requestTime atomic.Int64
+
+func init() { requestTime.Store(int64(10 * time.Second)) }
+
 func answer(conn net.Conn, call Call) {
 	defer conn.Close()
 	var req bridgeRequest
 	rd := bufio.NewReaderSize(conn, 64<<10)
+	conn.SetReadDeadline(time.Now().Add(time.Duration(requestTime.Load())))
 	line, err := readLine(rd, maxMessage)
 	if err != nil || json.Unmarshal(line, &req) != nil {
 		return
 	}
+	conn.SetReadDeadline(time.Time{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// The caller sends nothing more: a read ending is it hanging up.

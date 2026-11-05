@@ -47,7 +47,7 @@ var Tools = []Tool{
 			"url": {"type": "string", "description": "For new: the address to open."},
 			"tab": {"type": "integer", "description": "For select and close: the tab's id."}
 		}, "required": ["action"]}`),
-		Annotations: Annotations{OpenWorld: true},
+		Annotations: Annotations{Destructive: true, OpenWorld: true}, // close closes the user's tab
 	},
 	{
 		Name: "browser_navigate",
@@ -136,10 +136,15 @@ const maxMessage = 4 << 20
 // its own, as a client may send the next before the last is answered.
 func Serve(ctx context.Context, in io.Reader, out io.Writer, call Call) error {
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	// As in ends, the calls still running end too: the agent is gone.
 	defer wg.Wait()
+	defer cancel()
+	// running are the calls not yet answered, by id, which the client
+	// may cancel.
+	var calls sync.Mutex
+	running := map[string]context.CancelFunc{}
 	enc := json.NewEncoder(out)
 	send := func(r response) {
 		r.JSONRPC = "2.0"
@@ -156,7 +161,20 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, call Call) error {
 			continue
 		}
 		if len(req.ID) == 0 || string(req.ID) == "null" {
-			continue // a notification, as notifications/initialized: none needs an answer
+			// A notification: none needs an answer, and only a call
+			// cancelled, as the user stops the turn, needs anything done.
+			if req.Method == "notifications/cancelled" {
+				var p struct {
+					RequestID json.RawMessage `json:"requestId"`
+				}
+				json.Unmarshal(req.Params, &p)
+				calls.Lock()
+				if stop := running[string(p.RequestID)]; stop != nil {
+					stop()
+				}
+				calls.Unlock()
+			}
+			continue
 		}
 		switch req.Method {
 		case "initialize":
@@ -195,10 +213,18 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, call Call) error {
 			if len(p.Arguments) == 0 {
 				p.Arguments = json.RawMessage("{}")
 			}
+			callCtx, stop := context.WithCancel(ctx)
+			calls.Lock()
+			running[string(req.ID)] = stop
+			calls.Unlock()
 			wg.Add(1)
 			go func(id json.RawMessage) {
 				defer wg.Done()
-				text, err := call(ctx, p.Name, p.Arguments)
+				text, err := call(callCtx, p.Name, p.Arguments)
+				calls.Lock()
+				delete(running, string(id))
+				calls.Unlock()
+				stop()
 				r := callResult{Content: []content{{"text", text}}}
 				if err != nil {
 					r = callResult{Content: []content{{"text", err.Error()}}, IsError: true}
