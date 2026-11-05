@@ -273,6 +273,7 @@ func (a *app) timeline(c *ui.Context, t thread, es []entry) {
 		t, es = from, entriesOf(from)
 	}
 	a.drew, a.drawn = a.drawn, map[api.ID]sight{}
+	a.laidAt, a.builtAt = a.builtAt, a.now
 	l := a.listFor(t.id())
 	l.Key = func(i int) any { return es[i].key }
 	l.FollowEnd = true

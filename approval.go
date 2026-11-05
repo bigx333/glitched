@@ -2,7 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 
@@ -77,13 +80,26 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 		escaped = escaped || e
 		return s
 	}
+	// Each text the card shows, with where the last frame drew its lines.
+	var read []shownText
 	// agent draws a text from the agent, and boxed one that runs, in a
 	// box; each returns where the last frame drew its first line.
-	agent := func(key, s string, size float32, col ui.Color) (first ui.Rect) {
-		box, line := a.verbatim(c, key, s, size, col)
-		first = box.Bounds()
-		first.H = min(first.H, line)
-		return first
+	agent := func(key, s string, size float32, col ui.Color) ui.Rect {
+		lines := a.verbatim(c, key, s, size, col)
+		read = append(read, shownText{key, s, lines})
+		if len(lines) == 0 {
+			return ui.Rect{}
+		}
+		return lines[0].at
+	}
+	// flag says in a line of the card's own what the agent's texts don't.
+	flag := func(key, s string, col ui.Color) {
+		row := ui.Row(c).Gap(6).AlignItems(ui.Center)
+		row.Children(func() {
+			ui.Icon(c, icShieldAlert).FontSize(13).TextColor(col)
+			ui.Text(c, s).FontSize(12.5).FontWeight(500).TextColor(col)
+		})
+		read = append(read, shownText{key, s, []textLine{{row.Bounds(), 0, len([]rune(s))}}})
 	}
 	boxed := func(key, s string, size float32) (first ui.Rect) {
 		ui.Box(c).Padding(8, 10).Radius(6).Background(palette.bg).Border(1, palette.border).Children(func() {
@@ -123,6 +139,9 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 				ui.Text(c, answerTitles[answer]).FontSize(13).FontWeight(600)
 			}
 			ui.Spacer(c)
+			if rd := a.reads[r.Request]; waiting && rd != nil && rd.below > 0 {
+				markBelow(c, rd.below)
+			}
 			if waiting && !r.Opened.IsZero() {
 				ui.Text(c, "waiting "+ago(r.Opened, a.now)).FontSize(11.5).TextColor(palette.faint)
 			}
@@ -133,26 +152,22 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 			texts, seen.scroll = a.inView(c, t, r.Request)
 			seen.texts = texts.Bounds()
 		}
-		// lead is what the card shows first, from its label to the first
-		// line of what runs: an allow needs it drawn.
-		lead := func(label, first ui.Rect) { seen.lead = union(label, first) }
-		texts.Padding(12, 14, 12).Gap(8).Children(func() {
+		// lead is the first line of what runs: an answer needs it drawn.
+		lead := func(first ui.Rect) { seen.lead = first }
+		texts.Padding(textsPad, 14, 12).Gap(8).Children(func() {
 			switch {
 			case !known:
-				label := ui.Text(c, agentName(t)+" asks:").FontSize(12.5).TextColor(palette.muted)
+				ui.Text(c, agentName(t)+" asks:").FontSize(12.5).TextColor(palette.muted)
 				body, more := a.cut(r.Request, "body", shown(string(r.Body), false), cutChars)
-				lead(label.Bounds(), boxed("body", body, 12))
+				lead(boxed("body", body, 12))
 				more(c)
 			case b.Command != "":
-				label := ui.Text(c, agentName(t)+" wants to run a command").FontSize(12.5).TextColor(palette.muted)
+				ui.Text(c, agentName(t)+" wants to run a command").FontSize(12.5).TextColor(palette.muted)
 				command, more := a.cut(r.Request, "command", shown(b.Command, true), cutChars)
-				lead(label.Bounds(), boxed("command", command, 12.5))
+				lead(boxed("command", command, 12.5))
 				more(c)
 				if b.Unsandboxed {
-					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-						ui.Icon(c, icShieldAlert).FontSize(13).TextColor(palette.amber)
-						ui.Text(c, "Runs outside the sandbox").FontSize(12.5).FontWeight(500).TextColor(palette.amber)
-					})
+					flag("unsandboxed", "Runs outside the sandbox", palette.amber)
 				}
 				if b.Cwd != "" {
 					cwd, more := a.cut(r.Request, "cwd", shown(b.Cwd, false), cutPathChars)
@@ -160,22 +175,24 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 					more(c)
 				}
 			default:
-				label := beside(agentName(t)+" wants to", "operation", shown(b.Operation, false), 12.5)
+				operation, moreOperation := a.cut(r.Request, "operation", shown(b.Operation, false), cutNameChars)
+				label := beside(agentName(t)+" wants to", "operation", operation, 12.5)
+				moreOperation(c)
 				path, morePath := a.cut(r.Request, "path", shown(b.Path, false), cutPathChars)
 				switch {
 				case b.Args != "":
 					args, more := a.cut(r.Request, "args", shown(b.Args, true), cutChars)
-					lead(label, boxed("args", args, 12))
+					lead(boxed("args", args, 12))
 					more(c)
 					if b.Path != "" {
 						beside("on", "path", path, 12)
 						morePath(c)
 					}
 				case b.Path != "":
-					lead(label, agent("path", path, 12, palette.text))
+					lead(agent("path", path, 12, palette.text))
 					morePath(c)
 				default:
-					lead(label, label)
+					lead(label)
 				}
 			}
 			if b.Reason != "" {
@@ -187,14 +204,14 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 				agent("why", shown(r.Reason, true), 12, palette.faint)
 			}
 			if escaped {
-				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Icon(c, icShieldAlert).FontSize(13).TextColor(palette.amber)
-					ui.Text(c, escapes).FontSize(12.5).FontWeight(500).TextColor(palette.amber)
-				})
+				flag("escapes", escapes, palette.amber)
 			}
 		})
 		if waiting {
+			a.read(t, r.Request, seen, read)
 			a.drawn[r.Request] = seen
+		} else {
+			delete(a.reads, r.Request)
 		}
 		if waiting || a.zapping(r) {
 			a.requestAnswers(c, t, r)
@@ -208,9 +225,10 @@ const escapes = `Shown with escapes: \u{…} is text outside printable ASCII, \\
 // cutLines and cutChars bound each text from the agent a card shows until
 // asked for all of it. The timeline keeps to its end, so a taller card
 // would push its top, and what an allow approves first, out of view above
-// Allow once. A path in the card's first sentence gets cutPathChars, so
-// the command under it stays in view.
-const cutLines, cutChars, cutPathChars = 8, 600, 100
+// Allow once. A path in the card's first sentence gets cutPathChars, and a
+// tool's name cutNameChars, so the command or input under it stays in
+// view in the smallest window.
+const cutLines, cutChars, cutPathChars, cutNameChars = 8, 600, 100, 60
 
 // cardRoom is what a waiting card's texts leave of the timeline's pane
 // besides the composer's room: the timeline's top padding, and the card's
@@ -233,13 +251,197 @@ func (a *app) inView(c *ui.Context, t thread, request api.ID) (ui.Element, *ui.S
 	return texts, st
 }
 
+// markBelow says, in a waiting card's header, how many lines of its texts
+// their box hides below: in the card's own words and font, where no text
+// from the agent shows, so that none passes for it.
+func markBelow(c *ui.Context, below int) {
+	ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+		ui.Icon(c, icArrowDown).FontSize(12).TextColor(palette.accent)
+		ui.Text(c, plural(below, "more line")+" below").FontSize(11.5).FontWeight(500).TextColor(palette.accent)
+	})
+}
+
 // sight is where the last frame drew a waiting card: its header, the card,
-// what it shows first (requestCard's lead), and its texts' box, which
-// clips that once scrolled, with where they are scrolled.
+// the first line of what runs (requestCard's lead), and its texts' box,
+// which clips that once scrolled, with where they are scrolled.
 type sight struct {
 	header, card, lead, texts ui.Rect
 	scroll                    *ui.ScrollState
 }
+
+// shownText is a text a waiting card shows, by its key, and where the last
+// frame drew its lines.
+type shownText struct {
+	key, text string
+	lines     []textLine
+}
+
+// reading is what the window showed of a waiting request's card: each of
+// its texts, with which of their runes a frame drew in full and in view
+// since its texts' box took its size; when the card first showed; when a
+// frame last drew it moved, grown, scrolled or saying something else since
+// the frame before; and what the last frame drew. next and last are where
+// the last frame drew the first and the last line no frame drew so, and
+// below is how many lines it drew below the texts' box.
+type reading struct {
+	texts       map[string]*readText
+	born, moved time.Time
+	was         cardState
+	next, last  ui.Rect
+	below       int
+}
+
+// readText is a text of a card, and which of its runes, and of the place
+// after the last, a frame drew in full; left is how many no frame did.
+type readText struct {
+	text  string
+	drawn []bool
+	left  int
+}
+
+// cardState is a card's place and what it says, as a frame drew it.
+type cardState struct {
+	header, card, lead, texts ui.Rect
+	y                         float32
+	says                      string
+}
+
+// unread is whether the card holds a line no frame drew in full in view.
+func (rd *reading) unread() bool {
+	for _, t := range rd.texts {
+		if t.left > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// read keeps what the last frame showed of the waiting request's card,
+// drawn where s says with texts.
+func (a *app) read(t thread, request api.ID, s sight, texts []shownText) {
+	rd := a.reads[request]
+	if rd == nil {
+		rd = &reading{texts: map[string]*readText{}, born: a.now, moved: a.now}
+		a.reads[request] = rd
+	}
+	if abs32(s.texts.W-rd.was.texts.W) >= 0.5 || abs32(s.texts.H-rd.was.texts.H) >= 0.5 {
+		// A box of another size shows the texts otherwise: they are read
+		// anew in it.
+		rd.texts = map[string]*readText{}
+	}
+	view := meet(s.texts, a.inFull(t))
+	var says strings.Builder
+	shown := map[string]*readText{}
+	rd.next, rd.last, rd.below = ui.Rect{}, ui.Rect{}, 0
+	for _, tx := range texts {
+		says.WriteString(tx.key + "\x00" + tx.text + "\x00")
+		r := rd.texts[tx.key]
+		if r == nil || r.text != tx.text {
+			n := utf8.RuneCountInString(tx.text) + 1
+			r = &readText{text: tx.text, drawn: make([]bool, n), left: n}
+		}
+		shown[tx.key] = r
+		for _, l := range tx.lines {
+			if l.at.Y+l.at.H > s.texts.Y+s.texts.H+0.5 {
+				rd.below++
+			}
+			if within(l.at, view) {
+				for i := l.from; i <= l.to && i < len(r.drawn); i++ {
+					if !r.drawn[i] {
+						r.drawn[i] = true
+						r.left--
+					}
+				}
+			}
+			if slices.Contains(r.drawn[l.from:min(l.to+1, len(r.drawn))], false) {
+				if rd.next.H == 0 {
+					rd.next = l.at
+				}
+				rd.last = l.at
+			}
+		}
+	}
+	rd.texts = shown
+	var y float32
+	if s.scroll != nil {
+		y = s.scroll.Y
+	}
+	now := cardState{s.header, s.card, s.lead, s.texts, y, says.String()}
+	if !now.like(rd.was) && a.laidAt.After(rd.moved) {
+		rd.moved = a.laidAt
+	}
+	rd.was = now
+}
+
+// like is whether a card in state s looks as it did in state w, a frame
+// before: the same texts, and every place within half a DIP of where it
+// was, as a card does that stopped, or creeps to where it stops.
+func (s cardState) like(w cardState) bool {
+	near := func(a, b ui.Rect) bool {
+		return abs32(a.X-b.X) < 0.5 && abs32(a.Y-b.Y) < 0.5 && abs32(a.W-b.W) < 0.5 && abs32(a.H-b.H) < 0.5
+	}
+	return s.says == w.says && abs32(s.y-w.y) < 0.5 && near(s.header, w.header) && near(s.card, w.card) &&
+		near(s.lead, w.lead) && near(s.texts, w.texts)
+}
+
+// meet is the part of r inside v.
+func meet(r, v ui.Rect) ui.Rect {
+	x, y := max(r.X, v.X), max(r.Y, v.Y)
+	w, h := min(r.X+r.W, v.X+v.W)-x, min(r.Y+r.H, v.Y+v.H)-y
+	if w <= 0 || h <= 0 {
+		return ui.Rect{}
+	}
+	return ui.Rect{X: x, Y: y, W: w, H: h}
+}
+
+// dwell is how long a waiting card stands still, its place, size, scroll
+// and texts as they were, before a press answers it: a press as a card
+// lands or moves answers what the user had no time to read.
+const dwell = 300 * time.Millisecond
+
+// press is a press of an answer to the waiting request that began at
+// began, by key or on a button. It answers only a card that stood still
+// since dwell before the press began, and a key only one that showed
+// before ⌘ went down, so that a key held, repeating, answers no card that
+// came after the one it answered. Deny on its button answers then, as the
+// user looks at it; else it answers a card that drew every line it holds,
+// and whose start the window draws. A card with a line no frame drew
+// scrolls that line into view; one whose start is out of view brings it
+// into view.
+func (a *app) press(c *ui.Context, t thread, es []entry, r *client.RequestEntry, answer client.Answer, began time.Time, key bool) {
+	rd := a.reads[r.Request]
+	switch {
+	case rd == nil || began.Before(rd.moved.Add(dwell)):
+	case key && !a.chord.After(rd.born):
+	case !key && answer == client.Deny:
+		a.answer(c, t, r, answer)
+	case rd.unread():
+		a.readOn(t, es, r.Request)
+	case !a.seen(t, r.Request):
+		a.reveal(t, es, r.Request)
+	default:
+		a.answer(c, t, r, answer)
+	}
+}
+
+// readOn scrolls the waiting request's texts as little as shows the lines
+// no frame drew in full, from the first, or brings the card into view
+// when its texts are not.
+func (a *app) readOn(t thread, es []entry, request api.ID) {
+	s, rd := a.drawn[request], a.reads[request]
+	if s.scroll == nil || rd.next.H == 0 || !within(s.texts, a.inFull(t)) {
+		a.reveal(t, es, request)
+		return
+	}
+	top := rd.next.Y - s.texts.Y - textsPad
+	if top > 0 {
+		top = min(top, rd.last.Y+rd.last.H-(s.texts.Y+s.texts.H)+textsPad)
+	}
+	s.scroll.Y = max(0, s.scroll.Y+top)
+}
+
+// textsPad is the room around a card's texts in their box.
+const textsPad = 12
 
 // inFull is the part of the chat's pane the timeline shows in full: above
 // the composer and the edge it fades out under.
@@ -250,9 +452,9 @@ func (a *app) inFull(t thread) ui.Rect {
 }
 
 // seen is whether the last frame drew the card of the waiting request in
-// full where it starts: its header, and its texts from their label to the
-// first line of what runs, unscrolled out of their box. An answer to an
-// unseen card would approve what the user never read.
+// full where it starts: its header, and the first line of what runs,
+// unscrolled out of its box. An answer to an unseen card would approve
+// what the user never read.
 func (a *app) seen(t thread, request api.ID) bool {
 	s, ok := a.drawn[request]
 	v := a.inFull(t)
@@ -282,15 +484,6 @@ func within(r, v ui.Rect) bool {
 	const slack = 0.5
 	return r.W > 0 && r.H > 0 && r.X >= v.X-slack && r.Y >= v.Y-slack &&
 		r.X+r.W <= v.X+v.W+slack && r.Y+r.H <= v.Y+v.H+slack
-}
-
-// union is the least rect that holds r and q.
-func union(r, q ui.Rect) ui.Rect {
-	if r.W <= 0 || r.H <= 0 || q.W <= 0 || q.H <= 0 {
-		return ui.Rect{}
-	}
-	x, y := min(r.X, q.X), min(r.Y, q.Y)
-	return ui.Rect{X: x, Y: y, W: max(r.X+r.W, q.X+q.W) - x, H: max(r.Y+r.H, q.Y+q.H) - y}
 }
 
 // cardText is a text on a request's card, by the field it shows.
@@ -380,16 +573,37 @@ func (a *app) requestAnswers(c *ui.Context, t thread, r *client.RequestEntry) {
 	}
 	allow, deny, row, labels := a.answerButtons(c, t, r)
 	a.answerAt = answerRow{r.Request, row.Bounds(), allow.Bounds(), deny.Bounds(), labels}
+	began := a.pressBegan(r.Request, allow.Pressed() || deny.Pressed())
 	if allow.Clicked() {
-		if a.seen(t, r.Request) {
-			a.answer(c, t, r, client.AllowOnce)
-		} else {
-			a.reveal(t, entriesOf(t), r.Request)
-		}
+		a.press(c, t, entriesOf(t), r, client.AllowOnce, began, false)
 	}
 	if deny.Clicked() {
-		a.answer(c, t, r, client.Deny)
+		a.press(c, t, entriesOf(t), r, client.Deny, began, false)
 	}
+}
+
+// pressBegan is when the pointer began to press the request's answers,
+// one of which pressed says it presses now, as the frames saw it: now for
+// a press that began and ended between two frames, and for a key's.
+func (a *app) pressBegan(request api.ID, pressed bool) time.Time {
+	at := a.pressing
+	switch {
+	case pressed && at.request != request:
+		a.pressing = pressAt{request, a.now}
+		return a.now
+	case pressed:
+		return at.at
+	case at.request == request:
+		a.pressing = pressAt{}
+		return at.at
+	}
+	return a.now
+}
+
+// pressAt is when the pointer began to press a request's answers.
+type pressAt struct {
+	request api.ID
+	at      time.Time
 }
 
 // answerButtons lays out the row of a request's answers, and returns its
@@ -464,9 +678,8 @@ func waitingRequest(t thread, es []entry) *client.RequestEntry {
 
 // keyedRequest is the waiting request ⌘⏎ and ⇧⌘D answer, with no answer
 // from here on its way: the last one the window draws in full, and else
-// the last one, which they bring into view; and whether the window draws
-// it.
-func (a *app) keyedRequest(t thread, es []entry) (*client.RequestEntry, bool) {
+// the last one, which they bring into view.
+func (a *app) keyedRequest(t thread, es []entry) *client.RequestEntry {
 	var last *client.RequestEntry
 	for i := len(es) - 1; i >= 0; i-- {
 		r := es[i].request
@@ -477,22 +690,27 @@ func (a *app) keyedRequest(t thread, es []entry) (*client.RequestEntry, bool) {
 			continue
 		}
 		if a.seen(t, r.Request) {
-			return r, true
+			return r
 		}
 		if last == nil {
 			last = r
 		}
 	}
-	return last, false
+	return last
 }
 
 // approvalKeys answer a waiting request from the keyboard while the
 // composer holds nothing: ⌘⏎ allows it once, as it would send a draft,
-// and ⇧⌘D denies it. Each answers only a card the window draws in full,
-// and its answers show the keys; else they bring the card into view. With
-// a draft, ⌘⏎ sends it, which steers the agent.
+// and ⇧⌘D denies it, as press says, and its answers show the keys. With a
+// draft, ⌘⏎ sends it, which steers the agent. They keep when ⌘ went down.
 func (a *app) approvalKeys(c *ui.Context, t thread, es []entry) {
-	r, seen := a.keyedRequest(t, es)
+	switch {
+	case c.Modifiers()&ui.Cmd == 0:
+		a.chord = time.Time{}
+	case a.chord.IsZero():
+		a.chord = a.now
+	}
+	r := a.keyedRequest(t, es)
 	a.keyed = api.ID{}
 	if r != nil {
 		a.keyed = r.Request
@@ -508,11 +726,7 @@ func (a *app) approvalKeys(c *ui.Context, t thread, es []entry) {
 	default:
 		return
 	}
-	if seen {
-		a.answer(c, t, r, answer)
-	} else {
-		a.reveal(t, es, r.Request)
-	}
+	a.press(c, t, es, r, answer, a.now, true)
 }
 
 // responding is the answer to the request sent from here and not landed,
