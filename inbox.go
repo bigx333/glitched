@@ -222,6 +222,7 @@ func (a *app) projectStrip(c *ui.Context) {
 				tip = "Hide " + name
 			}
 			b := a.tip(c, ghost(c, p.key, on).Padding(3, 7, 3, 3).Gap(5).Label(p.name()), tip)
+			b.ContextMenu(func(m *ui.Menu) { a.projectMenu(c, m, p) })
 			if filtered && !on {
 				b.Opacity(0.45)
 			}
