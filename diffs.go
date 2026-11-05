@@ -336,10 +336,10 @@ func (a *app) diffPanel(c *ui.Context, t thread, es []entry) {
 			ui.Textf(c, "%d", len(files)).FontSize(11).TextColor(palette.muted).Padding(0, 6).Radius(999).Background(palette.hover)
 			ui.Spacer(c)
 			a.layoutSwitch(c)
-			if iconButton(c, "wrap", icWrap, "Wrap long lines", a.diffWrap).Clicked() {
+			if a.iconButton(c, "wrap", icWrap, "Wrap long lines", a.diffWrap).Clicked() {
 				a.diffWrap = !a.diffWrap
 			}
-			if iconButton(c, "close-diff", icX, "Close diff", false).Clicked() {
+			if a.iconButton(c, "close-diff", icX, "Close diff", false).Clicked() {
 				a.showDiff = false
 			}
 		})
@@ -412,7 +412,7 @@ func (a *app) layoutSwitch(c *ui.Context) {
 			// around it says why it is.
 			box := ui.Box(c).Key(key + "-box")
 			if !enabled {
-				box.Tooltip(fmt.Sprintf("Split needs %d DIPs of room", splitWidth))
+				a.tip(c, box, fmt.Sprintf("Split needs %d DIPs of room", splitWidth))
 			}
 			box.Children(func() {
 				if ghost(c, key, a.layout() == layout).Padding(3, 9).Disabled(!enabled).
@@ -445,14 +445,14 @@ func (a *app) fileRow(c *ui.Context, t thread, f fileChange, shown bool) {
 			return
 		}
 		ui.Row(c).Gap(0).Children(func() {
-			if iconButton(c, "reviewed", icCheckCirc, "Mark reviewed", d != nil && d.reviewed).Padding(3).Disabled(d == nil).Clicked() {
+			if a.iconButton(c, "reviewed", icCheckCirc, "Mark reviewed", d != nil && d.reviewed).Padding(3).Disabled(d == nil).Clicked() {
 				d.reviewed = !d.reviewed
 			}
-			if iconButton(c, "copy-path", icCopy, "Copy path", false).Padding(3).Clicked() {
+			if a.iconButton(c, "copy-path", icCopy, "Copy path", false).Padding(3).Clicked() {
 				c.WriteClipboard(f.path)
 				c.AddToast(ui.Toast{Title: "Copied", Description: f.path})
 			}
-			if ed := editorCLI(); ed != "" && t.local() && iconButton(c, "open-file", icExternal, "Open in editor", false).Padding(3).Clicked() {
+			if ed := editorCLI(); ed != "" && t.local() && a.iconButton(c, "open-file", icExternal, "Open in editor", false).Padding(3).Clicked() {
 				a.openInEditor(c, ed, workingFile(t.View.Workspace, f.path))
 			}
 		})
@@ -509,10 +509,10 @@ func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 		}).Clicked() {
 			mark()
 		}
-		if iconButton(c, "prev-hunk", icChevronUp, "Previous change  ⌘[", false).Padding(3).Disabled(n == 0).Clicked() {
+		if a.iconButton(c, "prev-hunk", icChevronUp, "Previous change  ⌘[", false).Padding(3).Disabled(n == 0).Clicked() {
 			prev()
 		}
-		if iconButton(c, "next-hunk", icChevronD, "Next change  ⌘]", false).Padding(3).Disabled(n == 0).Clicked() {
+		if a.iconButton(c, "next-hunk", icChevronD, "Next change  ⌘]", false).Padding(3).Disabled(n == 0).Clicked() {
 			next()
 		}
 	})

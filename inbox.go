@@ -207,7 +207,7 @@ func projectTile(c *ui.Context, p *project, size float32) ui.Element {
 func (a *app) projectStrip(c *ui.Context) {
 	filtered := len(a.projectFilter) > 0
 	ui.Row(c).Wrap().Padding(6, 10, 6, 12).Gap(4).AlignItems(ui.Center).Children(func() {
-		all := ghost(c, "all", !filtered).Padding(4, 8).Tooltip("All projects")
+		all := a.tip(c, ghost(c, "all", !filtered).Padding(4, 8), "All projects")
 		if all.Children(func() { ui.Text(c, "All").FontSize(11.5).FontWeight(500) }).Clicked() {
 			clear(a.projectFilter)
 		}
@@ -221,7 +221,7 @@ func (a *app) projectStrip(c *ui.Context) {
 			if on {
 				tip = "Hide " + name
 			}
-			b := ghost(c, p.key, on).Padding(3, 7, 3, 3).Gap(5).Label(p.name()).Tooltip(tip)
+			b := a.tip(c, ghost(c, p.key, on).Padding(3, 7, 3, 3).Gap(5).Label(p.name()), tip)
 			if filtered && !on {
 				b.Opacity(0.45)
 			}
@@ -232,7 +232,7 @@ func (a *app) projectStrip(c *ui.Context) {
 				a.toggleProject(p.key)
 			}
 		}
-		iconButton(c, "add-project", icPlus, "Add project", false).Padding(4)
+		a.iconButton(c, "add-project", icPlus, "Add project", false).Padding(4)
 	})
 }
 
@@ -342,7 +342,7 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 				tileGag(tile, fx)
 			}
 			// The thread's state, as a badge on the project's tile.
-			if mark := statusBadge(c, a.statusOf(t)); mark.Valid() {
+			if mark := a.statusBadge(c, a.statusOf(t)); mark.Valid() {
 				mark.Absolute().Right(-3).Bottom(-3)
 			}
 			if playing {
@@ -391,7 +391,7 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 		}
 		switch {
 		case failed(t):
-			ui.Box(c).Size(7, 7).Radius(4).Background(palette.red).Label("A command failed").Tooltip("A command failed")
+			a.tip(c, ui.Box(c).Size(7, 7).Radius(4).Background(palette.red).Label("A command failed"), "A command failed")
 		case cat == catSnoozed:
 			ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, icClock).FontSize(10).TextColor(dim)
@@ -409,14 +409,14 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 
 // statusBadge is a small mark of what a thread is doing, on its project's
 // tile: the agent working, or waiting for an approval.
-func statusBadge(c *ui.Context, s status) ui.Element {
+func (a *app) statusBadge(c *ui.Context, s status) ui.Element {
 	switch s {
 	case statusWorking:
 		return ui.Box(c).Size(11, 11).Radius(6).Center().Background(palette.sidebar).Children(func() {
-			statusMark(c, statusWorking)
+			a.statusMark(c, statusWorking)
 		})
 	case statusApproval:
-		return ui.Box(c).Size(9, 9).Radius(5).Background(palette.amber).Border(2, palette.sidebar).Tooltip("Waits on you")
+		return a.tip(c, ui.Box(c).Size(9, 9).Radius(5).Background(palette.amber).Border(2, palette.sidebar), "Waits on you")
 	}
 	return ui.Element{}
 }
@@ -445,13 +445,13 @@ func (a *app) rowActions(c *ui.Context, t thread, cat category) {
 	ui.Row(c).Gap(0).Children(func() {
 		switch cat {
 		case catSettled, catSnoozed:
-			if iconButton(c, "back", icUndo, "Back to inbox", false).Padding(3).TextColor(tintBack).Clicked() {
+			if a.iconButton(c, "back", icUndo, "Back to inbox", false).Padding(3).TextColor(tintBack).Clicked() {
 				a.backend.SetDisposition(t.env, t.id(), api.Disposition{})
 				a.gag(c, t.id(), gagUndo, cat)
 			}
 		case catInbox:
 			a.snoozeButton(c, t, cat)
-			if iconButton(c, "settle", icCheckCirc, "Settle", false).Padding(3).TextColor(tintSettle).Clicked() {
+			if a.iconButton(c, "settle", icCheckCirc, "Settle", false).Padding(3).TextColor(tintSettle).Clicked() {
 				a.settle(c, t, cat)
 			}
 		}
@@ -473,7 +473,7 @@ func lower(s string) string {
 // stops building its actions, and lose the choice.
 func (a *app) snoozeButton(c *ui.Context, t thread, cat category) {
 	open := a.snoozeFor == t.id()
-	b := iconButton(c, "snooze", icClock, "Snooze", open).Padding(3).TextColor(tintSnooze)
+	b := a.iconButton(c, "snooze", icClock, "Snooze", open).Padding(3).TextColor(tintSnooze)
 	if b.Clicked() {
 		if open {
 			a.snoozeFor = api.ID{}

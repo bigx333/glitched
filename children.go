@@ -210,7 +210,7 @@ func (a *app) childToggle(c *ui.Context, t thread) {
 	tree := a.shown(t)
 	open := a.childrenOpen[t.id()]
 	label := plural(len(tree), "child thread")
-	b := ghost(c, "children", open).Padding(2, 5).Gap(3).Shrink(0).Label(label).Tooltip(label)
+	b := a.tip(c, ghost(c, "children", open).Padding(2, 5).Gap(3).Shrink(0).Label(label), label)
 	if b.Children(func() {
 		if needsYou(tree) {
 			ui.Box(c).Size(6, 6).Radius(3).Background(palette.amber)
@@ -251,7 +251,7 @@ func (a *app) childRow(c *ui.Context, k thread, depth int) {
 		if a.backend.Unread(k.Thread) {
 			name.FontWeight(600).TextColor(palette.text)
 		}
-		statusMark(c, a.statusOf(k))
+		a.statusMark(c, a.statusOf(k))
 		if len(a.shown(k)) > 0 {
 			a.childToggle(c, k)
 		} else {
@@ -272,7 +272,7 @@ func (a *app) breadcrumb(c *ui.Context, t thread, narrow bool) {
 		up = up[len(up)-1:]
 	}
 	for _, x := range up {
-		b := ghost(c, "crumb:"+x.id().String(), false).Padding(3, 6).Shrink(1).MinWidth(40).Label("Back to " + title(x)).Tooltip(title(x))
+		b := a.tip(c, ghost(c, "crumb:"+x.id().String(), false).Padding(3, 6).Shrink(1).MinWidth(40).Label("Back to "+title(x)), title(x))
 		if b.Children(func() {
 			ui.Text(c, title(x)).FontSize(12.5).SingleLine().MaxWidth(180)
 		}).Clicked() {
@@ -294,7 +294,7 @@ func (a *app) usagePill(c *ui.Context, t thread) {
 		label = fmtTokens(own) + " · " + fmtTokens(total) + " with children"
 		tip = fmt.Sprintf("This thread %s, its child threads %s", fmtTokens(own), fmtTokens(total-own))
 	}
-	pill(c, label).Shrink(0).Tooltip(tip)
+	a.tip(c, pill(c, label).Shrink(0), tip)
 }
 
 // stillBlocked is whether a blocked report of child's, in t's transcript,

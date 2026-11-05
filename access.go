@@ -169,7 +169,7 @@ func (a *app) accessPicker(c *ui.Context) {
 			icon = l.icon
 		}
 	}
-	b := ghost(c, "access", a.accessOpen).Label("Access").Tooltip("How freely the agent acts")
+	b := a.tip(c, ghost(c, "access", a.accessOpen).Label("Access"), "How freely the agent acts")
 	if full {
 		b.TextColor(danger)
 		// Hazard tape, and a slow warning pulse: it's on.

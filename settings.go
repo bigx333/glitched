@@ -19,7 +19,7 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Shrink(0).Padding(0, 12+bar.Right, 0, left).Gap(8).AlignItems(ui.Center)
 		head.DragWindow().Children(func() {
 			if !a.showSidebar {
-				if iconButton(c, "show-sidebar", icPanelLeft, "Show sidebar  ⌘B", false).Clicked() {
+				if a.iconButton(c, "show-sidebar", icPanelLeft, "Show sidebar  ⌘B", false).Clicked() {
 					a.toggleSidebar(false)
 				}
 			}
@@ -146,7 +146,7 @@ func (a *app) appearance(c *ui.Context) {
 		settingRow(c, "Accent color", accents[s.accent].name, func() {
 			ui.Row(c).Gap(10).Children(func() {
 				for i, acc := range accents {
-					sw := ui.ButtonBase(c.Key(acc.name)).Size(24, 24).Radius(12).Center().Label(acc.name).Tooltip(acc.name).Cursor(ui.CursorPointer)
+					sw := a.tip(c, ui.ButtonBase(c.Key(acc.name)).Size(24, 24).Radius(12).Center().Label(acc.name), acc.name).Cursor(ui.CursorPointer)
 					if sw.Children(func() {
 						if i == s.accent {
 							ui.Box(c).Key("ring").Absolute().Top(-4).Left(-4).Right(-4).Bottom(-4).Radius(16).Border(2, acc.color).PassThrough().
@@ -329,7 +329,7 @@ func (a *app) servers(c *ui.Context) {
 					ui.Text(c, s.Label).FontWeight(500)
 					ui.Text(c, s.Addr).FontSize(12).Font("monospace").TextColor(palette.muted).SingleLine()
 				})
-				ui.Text(c, status).FontSize(12).TextColor(col).SingleLine().Shrink(1).MaxWidth(360).Tooltip(status)
+				a.tip(c, ui.Text(c, status).FontSize(12).TextColor(col).SingleLine().Shrink(1).MaxWidth(360), status)
 				ui.Button(c.Key("remove"), "Remove").TextColor(palette.red).OnClick(func() {
 					if err := a.backend.RemoveServer(s.Label); err != nil {
 						c.AddToast(ui.Toast{Title: "Couldn't remove " + s.Label, Description: err.Error()})
@@ -410,7 +410,7 @@ func (a *app) machineBadge(c *ui.Context, e *client.Env) ui.Element {
 		names = append(names, o.Name)
 	}
 	col, status := a.envStatus(e)
-	return ui.Row(c).Gap(3).AlignItems(ui.Center).Shrink(0).Label(e.Name).Tooltip(e.Name + " · " + status).Children(func() {
+	return a.tip(c, ui.Row(c).Gap(3).AlignItems(ui.Center).Shrink(0).Label(e.Name), e.Name+" · "+status).Children(func() {
 		ui.Box(c).Size(5, 5).Radius(3).Background(col)
 		ui.Text(c, prefix(e.Name, names)).FontSize(10).TextColor(palette.faint).SingleLine()
 	})
@@ -433,8 +433,8 @@ func prefix(name string, names []string) string {
 // reached.
 func (a *app) machinePill(c *ui.Context, e *client.Env) ui.Element {
 	col, status := a.envStatus(e)
-	return ui.Row(c).Gap(4).AlignItems(ui.Center).Padding(1, 6).Radius(999).Border(1, palette.border).Shrink(0).
-		Tooltip(e.Name + " · " + status).Children(func() {
+	pill := ui.Row(c).Gap(4).AlignItems(ui.Center).Padding(1, 6).Radius(999).Border(1, palette.border).Shrink(0)
+	return a.tip(c, pill, e.Name+" · "+status).Children(func() {
 		ui.Box(c).Size(5, 5).Radius(3).Background(col)
 		ui.Text(c, e.Name).FontSize(10.5).TextColor(palette.muted).SingleLine()
 	})

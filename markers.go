@@ -128,6 +128,7 @@ func (a *app) turnCard(c *ui.Context, es []entry, turns []turnInfo, k int, tickY
 			Enter: &ui.Motion{Scale: 0.97, X: -4},
 			Exit:  &ui.Motion{Scale: 0.97, X: -4},
 		})
+	a.cover(coverKey{kind: "turn"}, card)
 	card.Children(func() {
 		ui.Text(c, es[tr.entry].text).FontSize(13.5).FontWeight(500).LineHeight(1.4).MaxLines(3).TextColor(palette.text)
 		if tr.reply != "" {

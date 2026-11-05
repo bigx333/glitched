@@ -112,7 +112,7 @@ func (a *app) effortLevel() int {
 func (a *app) modelPicker(c *ui.Context) {
 	m := modelByName(a.model)
 	level := a.effortLevel()
-	b := ghost(c, "model", a.pickerOpen).Padding(4, 8, 4, 4).Gap(6).Label("Model").Tooltip("Model and effort")
+	b := a.tip(c, ghost(c, "model", a.pickerOpen).Padding(4, 8, 4, 4).Gap(6).Label("Model"), "Model and effort")
 	if b.Children(func() {
 		a.pickerGlow(c, b, level)
 		if a.fast {
@@ -153,7 +153,7 @@ func (a *app) fastButton(c *ui.Context) {
 	if a.fast {
 		label = "Fast mode: on"
 	}
-	b := ghost(c, "fast", false).Padding(6).Role(ui.RoleSwitch).Checked(a.fast).Label("Fast mode").Tooltip(label)
+	b := a.tip(c, ghost(c, "fast", false).Padding(6).Role(ui.RoleSwitch).Checked(a.fast).Label("Fast mode"), label)
 	if b.Children(func() { a.zapIcon(c, "fast-zap", 14) }).Clicked() {
 		a.fast = !a.fast
 		if a.fast {

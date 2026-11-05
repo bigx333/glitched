@@ -337,16 +337,16 @@ func (a *app) previewPanel(c *ui.Context) {
 		// Clear of the window's buttons on Windows and Linux, at its right.
 		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8+bar.Right, 0, 10).Gap(4).AlignItems(ui.Center)
 		head.DragWindow().Children(func() {
-			back := iconButton(c, "back", icArrowLeft, "Back", false).Padding(5)
-			fwd := iconButton(c, "forward", icArrowRight, "Forward", false).Padding(5)
+			back := a.iconButton(c, "back", icArrowLeft, "Back", false).Padding(5)
+			fwd := a.iconButton(c, "forward", icArrowRight, "Forward", false).Padding(5)
 			// One button, which stops a page loading and reloads one that
 			// isn't: each call of iconButton builds one.
 			loading := p != nil && p.IsLoading()
 			var reload ui.Element
 			if loading {
-				reload = iconButton(c, "stop", icX, "Stop", false).Padding(5)
+				reload = a.iconButton(c, "stop", icX, "Stop", false).Padding(5)
 			} else {
-				reload = iconButton(c, "reload", icRotate, "Reload  ⌘R", false).Padding(5)
+				reload = a.iconButton(c, "reload", icRotate, "Reload  ⌘R", false).Padding(5)
 			}
 			back.Disabled(p == nil || !p.CanGoBack())
 			fwd.Disabled(p == nil || !p.CanGoForward())
@@ -378,13 +378,13 @@ func (a *app) previewPanel(c *ui.Context) {
 			if in.Submitted() && strings.TrimSpace(t.draft) != "" {
 				a.goTo(t, t.draft)
 			}
-			if iconButton(c, "new-tab", icPlus, "New tab  ⌘T", false).Padding(5).Clicked() {
+			if a.iconButton(c, "new-tab", icPlus, "New tab  ⌘T", false).Padding(5).Clicked() {
 				a.newTab("")
 			}
-			if iconButton(c, "external", icExternal, "Open in browser", false).Padding(5).Disabled(t.url == "").Clicked() {
+			if a.iconButton(c, "external", icExternal, "Open in browser", false).Padding(5).Disabled(t.url == "").Clicked() {
 				c.OpenURL(t.url)
 			}
-			if iconButton(c, "close-preview", icX, "Close preview", false).Padding(5).Clicked() {
+			if a.iconButton(c, "close-preview", icX, "Close preview", false).Padding(5).Clicked() {
 				a.showPreview = false
 			}
 		})
@@ -442,8 +442,8 @@ func (a *app) tabStrip(c *ui.Context) {
 				cell.Background(palette.hover)
 			}
 			cell.Children(func() {
-				pick := ui.ButtonBase(c.Key(tabKey{t.id, "pick"})).Grow(1).Shrink(1).MinWidth(0).FillHeight().
-					Gap(6).Padding(0, 4, 0, 10).AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(label).Tooltip(label)
+				pick := a.tip(c, ui.ButtonBase(c.Key(tabKey{t.id, "pick"})).Grow(1).Shrink(1).MinWidth(0).FillHeight().
+					Gap(6).Padding(0, 4, 0, 10).AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(label), label)
 				pick.Children(func() {
 					if t.page != nil && t.page.IsLoading() {
 						spin := ui.Icon(c, icLoader).FontSize(11).TextColor(palette.blue)
@@ -459,7 +459,7 @@ func (a *app) tabStrip(c *ui.Context) {
 				if pick.Clicked() {
 					picked = i
 				}
-				if ghost(c, tabKey{t.id, "close"}, false).Padding(4).Label("Close tab").Tooltip("Close tab").Children(func() {
+				if a.tip(c, ghost(c, tabKey{t.id, "close"}, false).Padding(4).Label("Close tab"), "Close tab").Children(func() {
 					ui.Icon(c, icX).FontSize(11)
 				}).Clicked() {
 					closing = i
