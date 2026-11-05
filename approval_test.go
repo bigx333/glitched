@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -675,9 +676,26 @@ func TestApprovalCardCopiesTheCommandAsTyped(t *testing.T) {
 // otherwise. The frames it draws to find out leave what the card read of
 // itself as it was, as no user saw them.
 func drawnNow(h *harness, r *client.RequestEntry, field, needle string) bool {
+	most, _ := change(h, r, field, needle)
+	return most > 0
+}
+
+// legibleNow reports whether the last frame draws needle so that it can be
+// read: as drawnNow, but over half a line of it high, and more than the
+// faint change of color a glass over it blurs it to.
+func legibleNow(h *harness, r *client.RequestEntry, field, needle string) bool {
+	_, rows := change(h, r, field, needle)
+	return rows > 8
+}
+
+// change is how the window changes with needle, in field of r's body,
+// spelled otherwise: the most any color channel changes, and in how many
+// rows of pixels one changes by more than 40.
+func change(h *harness, r *client.RequestEntry, field, needle string) (most, rows int) {
 	var b map[string]any
 	json.Unmarshal(r.Body, &b)
-	before := bytes.Clone(h.tt.Image().Pix)
+	before := h.tt.Image()
+	pix := bytes.Clone(before.Pix)
 	body := r.Body
 	read := h.a.reads[r.Request]
 	var kept reading
@@ -691,13 +709,20 @@ func drawnNow(h *harness, r *client.RequestEntry, field, needle string) bool {
 	b[field] = strings.Replace(b[field].(string), needle, strings.Repeat("X", len(needle)), 1)
 	r.Body, _ = json.Marshal(b)
 	h.tt.Frame()
-	changed := !bytes.Equal(before, h.tt.Image().Pix)
+	row := -1
+	for i, v := range h.tt.Image().Pix {
+		d := max(int(v)-int(pix[i]), int(pix[i])-int(v))
+		most = max(most, d)
+		if y := i / before.Stride; d > 40 && y != row {
+			row, rows = y, rows+1
+		}
+	}
 	r.Body = body
 	h.tt.Frame()
 	if read != nil {
 		*read = kept
 	}
-	return changed
+	return most, rows
 }
 
 // belowMark is the card's mark that lines of it are out of view below,
@@ -920,4 +945,174 @@ func TestApprovalCardCutsALongToolName(t *testing.T) {
 		h.tt.Advance(time.Second)
 	}
 	t.Errorf("three presses of ⌘⏎ never allowed the card at 760×480; texts %q", h.tt.Texts())
+}
+
+// pressUntil presses answer up to four times, a second apart, and reports
+// whether one answered r.
+func pressUntil(h *harness, r *client.RequestEntry, answer func(*harness)) bool {
+	for range 4 {
+		h.tt.Advance(time.Second)
+		answer(h)
+		h.tt.Frame()
+		if answering(h, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// A draft grows the composer over the timeline, and a line of the card
+// under its glass is not read: the user who scrolls the card's texts to their
+// end and back while writing a tall draft never saw the last args line,
+// and once the draft is gone, no answer passes it until it is drawn.
+func TestAnAnswerNeedsLinesTheComposerLeaves(t *testing.T) {
+	const needle = `sql: "DROP TABLE users"`
+	args := "note: \"list\"\nlimit: 10\nschema: \"public\"\nmode: \"rw\"\ntimeout: 30\nretry: false\nlabel: \"x\"\n" + needle
+	body, _ := json.Marshal(map[string]string{"operation": "use mcp__db__exec", "args": args})
+	for _, size := range [][2]int{{1320, 480}, {760, 480}} {
+		for how, answer := range map[string]func(h *harness){
+			"⌘⏎":         func(h *harness) { h.tt.Key(ui.Cmd, ui.KeyEnter) },
+			"Allow once": func(h *harness) { h.click("Allow once") },
+		} {
+			t.Run(fmt.Sprintf("%dx%d/%s", size[0], size[1], how), func(t *testing.T) {
+				h := askedIn(t, size[0], size[1], provider.RequestOpened{ID: "ask", Kind: "approval", Body: body})
+				r := lastRequest(h.a.current())
+				h.a.draft = strings.Repeat("steer line\n", 9) + "steer line"
+				h.tt.Frame()
+				h.tt.Advance(time.Second)
+				drawn := legibleNow(h, r, "args", needle)
+				scrollTexts(h, 10000)
+				drawn = drawn || legibleNow(h, r, "args", needle)
+				scrollTexts(h, -10000)
+				h.a.draft = ""
+				h.tt.Frame()
+				h.tt.Advance(time.Second)
+				h.tt.Frame()
+				if drawn = drawn || legibleNow(h, r, "args", needle); drawn {
+					t.Fatalf("the window drew %q with the tall draft; texts %q", needle, h.tt.Texts())
+				}
+				answer(h)
+				h.tt.Frame()
+				if answering(h, r) {
+					t.Fatalf("%s answered with %q never drawn", how, needle)
+				}
+				if !pressUntil(h, r, answer) {
+					t.Errorf("%s, pressed again as the card read on, never answered; texts %q", how, h.tt.Texts())
+				}
+			})
+		}
+	}
+}
+
+// ⌘ held down answers no card the window had not shown before it went
+// down: of five cards that land at once, one the timeline skips over as
+// it scrolls from the last to the first is shown first as the held ⌘
+// reads on to it, and waits for ⌘ pressed anew.
+func TestHeldCmdAnswersNoCardItCameBefore(t *testing.T) {
+	dir := tempDir(t)
+	var asks []provider.Event
+	for _, id := range []string{"A", "B", "C", "D", "E"} {
+		asks = append(asks, commandAsk(id, "echo "+id))
+	}
+	engine(t, daemon.Config{Dir: dir}, burst{asks})
+	h := start(t, dir)
+	h.tt.SetSize(1320, 480)
+	h.a.draft = "Go."
+	h.tt.Frame()
+	h.click("Send")
+	// The cards land, and all the engine says with them, before the
+	// window draws a frame: the timeline shows them first at its end.
+	deadline := time.After(30 * time.Second)
+	for h.p.run(); len(h.a.current().View.Requests) < 5; h.p.run() {
+		select {
+		case <-h.p.wake:
+		case <-deadline:
+			t.Fatalf("five cards never landed; the window shows %q", h.tt.Texts())
+		}
+	}
+	for quiet := false; !quiet; h.p.run() {
+		select {
+		case <-h.p.wake:
+		case <-time.After(300 * time.Millisecond):
+			quiet = true
+		}
+	}
+	cards := map[api.ID]string{}
+	shown := map[api.ID]bool{}
+	// watch notes, each frame for a second, the cards the window shows.
+	watch := func() {
+		for range 60 {
+			h.tt.Advance(time.Second / 60)
+			for _, e := range entriesOf(h.a.current()) {
+				if r := e.request; r != nil {
+					var b map[string]string
+					json.Unmarshal(r.Body, &b)
+					cards[r.Request] = b["command"]
+					shown[r.Request] = shown[r.Request] || legibleNow(h, r, "command", b["command"])
+				}
+			}
+		}
+	}
+	h.tt.Frame()
+	watch()
+	h.tt.Scroll(1250, 150, 0, -10000)
+	watch()
+	if !slices.Contains(slices.Collect(maps.Values(shown)), false) {
+		t.Fatalf("the window showed every card before ⌘ went down; texts %q", h.tt.Texts())
+	}
+	h.tt.HoldModifiers(ui.Cmd)
+	h.tt.Frame()
+	h.tt.Advance(10 * time.Millisecond)
+	answered := false
+	for range 20 {
+		h.tt.Key(ui.Cmd, ui.KeyEnter)
+		h.tt.Frame()
+		for _, e := range entriesOf(h.a.current()) {
+			if r := e.request; r != nil && answering(h, r) {
+				answered = true
+				if !shown[r.Request] {
+					t.Fatalf("⌘ held since before %q showed answered it", cards[r.Request])
+				}
+			}
+		}
+		h.tt.Advance(time.Second)
+	}
+	if !answered {
+		t.Errorf("⌘⏎ held answered none of the cards it came after; texts %q", h.tt.Texts())
+	}
+}
+
+// Show all on one text of a card reads the whole card anew: the reason
+// the user read before the command grew moves down out of view, and no
+// answer passes it until it is drawn again.
+func TestShowAllReadsTheCardAnew(t *testing.T) {
+	const reason = "Clean the build cache"
+	command := "ls" + strings.Repeat("\nls", 11)
+	body, _ := json.Marshal(map[string]string{"command": command, "cwd": "/w", "reason": reason})
+	h := askedIn(t, 1320, 480, provider.RequestOpened{ID: "ask", Kind: "approval", Body: body})
+	r := lastRequest(h.a.current())
+	read := false
+	for range 30 {
+		scrollTexts(h, 12)
+		read = read || legibleNow(h, r, "reason", reason)
+	}
+	if !read {
+		t.Fatalf("scrolling the card never drew %q; texts %q", reason, h.tt.Texts())
+	}
+	h.click("Show all · 4 more lines")
+	h.tt.Advance(time.Second)
+	drawn := false
+	for range 6 {
+		drawn = drawn || legibleNow(h, r, "reason", reason)
+		h.tt.Key(ui.Cmd, ui.KeyEnter)
+		h.tt.Frame()
+		if answering(h, r) {
+			if !drawn {
+				t.Fatalf("⌘⏎ answered with %q not drawn since Show all", reason)
+			}
+			return
+		}
+		h.tt.Advance(time.Second)
+	}
+	t.Errorf("six presses of ⌘⏎ never answered after Show all; texts %q", h.tt.Texts())
 }
