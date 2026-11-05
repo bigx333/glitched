@@ -243,9 +243,10 @@ func bind[T any](d *drawer, pr *props, id, bindProp, valueProp, onChange string,
 		v, ok = initial, true
 	}
 	b.V = cd.def()
+	converted := false
 	if ok {
 		if t, good := cd.from(v); good {
-			b.V = t
+			b.V, converted = t, true
 		} else if key != "" {
 			pr.fail(bindProp, fmt.Errorf("state %q holds %v, which this widget cannot show", key, v))
 		} else {
@@ -254,8 +255,10 @@ func bind[T any](d *drawer, pr *props, id, bindProp, valueProp, onChange string,
 	}
 	b.start = cd.to(b.V)
 	// An unbound widget's seed is its value from the first pass on, as an
-	// edit would be, so a later seed does not reset it.
-	if seeding {
+	// edit would be, so a later seed does not reset it. A seed that does not
+	// convert is not stored: storing the default would hide its error after
+	// one pass and draw the widget as if it had been given that default.
+	if seeding && converted {
 		d.p.set("", b.id, b.start)
 	}
 	return b
