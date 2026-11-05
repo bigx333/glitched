@@ -2,6 +2,10 @@
 
 Newest first. Each entry has the date, who decided, and the decision.
 
+## 2026-11-05. A stopped parent holds its children's reports (Nelson, plan claim 3.1)
+
+If the user stops a parent by hand while its children work, a child's report does not restart the parent. The report waits in the parent and is delivered with the user's next message, as in Zeron. A Stop stays a stop. This applies to spawn tool PR 3 (the report wakes the parent).
+
 ## 2026-11-05. Spawn tool decisions (Nelson, Q11)
 
 1. **The tool works the way Zeron's does.** A `glitched mcp` stdio subcommand is the MCP server.
