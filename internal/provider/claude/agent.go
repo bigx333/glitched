@@ -98,9 +98,9 @@ func start(ctx context.Context, bin string, spec provider.SessionSpec, args []st
 	}
 	// The adapter's own pipes, unlike exec's, leave Wait nothing to wait
 	// for once claude exits, whoever else still holds them.
-	inR, inW, err1 := os.Pipe()
-	outR, outW, err2 := os.Pipe()
-	errR, errW, err3 := os.Pipe()
+	inR, inW, err1 := pipe(true)
+	outW, outR, err2 := pipe(false)
+	errW, errR, err3 := pipe(false)
 	if err := errors.Join(err1, err2, err3); err != nil {
 		for _, f := range []*os.File{inR, inW, outR, outW, errR, errW} {
 			f.Close()
