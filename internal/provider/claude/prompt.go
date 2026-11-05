@@ -11,6 +11,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"glitched/internal/api"
 	"glitched/internal/provider"
 )
 
@@ -26,9 +27,10 @@ type canUseTool struct {
 // prompt is a request Claude Code waits on. It gets one reply: the first
 // answer, or nothing once Claude Code stops waiting.
 type prompt struct {
-	kind  string          // approval; a question is another kind
-	input json.RawMessage // what an allow sends back as the tool's input
-	state promptState
+	kind      string          // api.KindApproval or api.KindQuestion
+	input     json.RawMessage // the tool's input, which an allow sends back
+	questions api.Questions   // a question's, by position, as the card shows them
+	state     promptState
 }
 
 type promptState int
@@ -86,7 +88,7 @@ func (t *turn) ask(id string, r canUseTool) (provider.RequestOpened, *prompt) {
 		b.Path = t.rel(r.BlockedPath)
 	}
 	body, _ := json.Marshal(b)
-	return provider.RequestOpened{ID: id, Kind: "approval", Body: body}, &prompt{kind: "approval", input: r.Input}
+	return provider.RequestOpened{ID: id, Kind: api.KindApproval, Body: body}, &prompt{kind: api.KindApproval, input: r.Input}
 }
 
 // argsText is a tool's input as text, a line per field in Claude Code's
@@ -213,20 +215,26 @@ var ansi = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 // reply is the control_response that carries answer to the prompt.
 func (p *prompt) reply(id string, answer json.RawMessage) (map[string]any, error) {
-	var decision map[string]any
-	switch p.kind {
-	case "approval":
-		var a struct{ Allow bool }
-		json.Unmarshal(answer, &a)
-		decision = map[string]any{"behavior": "deny", "message": deniedReason}
-		if a.Allow {
-			decision = map[string]any{"behavior": "allow", "updatedInput": p.input}
+	if p.kind == api.KindQuestion {
+		decision, err := p.answered(answer)
+		if err != nil {
+			return nil, err
 		}
-	default:
-		return nil, fmt.Errorf("claude: no answer for a %s", p.kind)
+		return decided(id, decision), nil
 	}
+	var a struct{ Allow bool }
+	json.Unmarshal(answer, &a)
+	if a.Allow {
+		return decided(id, map[string]any{"behavior": "allow", "updatedInput": p.input}), nil
+	}
+	return decided(id, map[string]any{"behavior": "deny", "message": deniedReason}), nil
+}
+
+// decided is the control_response that gives Claude Code a decision on
+// its can_use_tool request id.
+func decided(id string, decision map[string]any) map[string]any {
 	return map[string]any{"type": "control_response",
-		"response": map[string]any{"subtype": "success", "request_id": id, "response": decision}}, nil
+		"response": map[string]any{"subtype": "success", "request_id": id, "response": decision}}
 }
 
 // refusal answers a control request this adapter does not serve, so

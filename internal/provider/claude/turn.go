@@ -136,9 +136,10 @@ func (t *turn) read(m message) []provider.Event {
 				t.signedOut += b.text()
 			}
 		}
+		// AskUserQuestion shows as its question card, not as a step.
 		var evs []provider.Event
 		for _, b := range m.content() {
-			if b.Type == "tool_use" {
+			if b.Type == "tool_use" && b.Name != askTool {
 				w := t.open(b)
 				t.steps = append(t.steps, w)
 				evs = append(evs, w)

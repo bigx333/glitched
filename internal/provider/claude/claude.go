@@ -143,7 +143,6 @@ func argv(spec provider.SessionSpec, sessionFlag, session string) []string {
 		"--input-format", "stream-json", "--output-format", "stream-json",
 		"--include-partial-messages",
 		"--permission-mode", modes[spec.Access], "--permission-prompt-tool", "stdio",
-		"--disallowedTools", "AskUserQuestion",
 	}
 	if m := modelOf(spec.Model.Model); m != "" {
 		a = append(a, "--model", m)

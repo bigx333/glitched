@@ -402,7 +402,19 @@ func (g *Agent) read(ctx context.Context, m message) []provider.Event {
 		if _, seen := g.prompts[m.RequestID]; seen {
 			return nil
 		}
-		e, p := g.turn.ask(m.RequestID, m.Request.canUseTool)
+		if m.Request.ToolName != askTool {
+			e, p := g.turn.ask(m.RequestID, m.Request.canUseTool)
+			g.prompts[m.RequestID] = p
+			return []provider.Event{e}
+		}
+		e, p, err := question(m.RequestID, m.Request.Input)
+		if err != nil {
+			// Questions the card can't show would hang the turn; Claude
+			// Code hears why instead, and the user sees nothing to answer.
+			g.prompts[m.RequestID] = &prompt{kind: api.KindQuestion, state: answered}
+			g.send(ctx, misfit(m.RequestID, err))
+			return nil
+		}
 		g.prompts[m.RequestID] = p
 		return []provider.Event{e}
 	case "control_cancel_request":
