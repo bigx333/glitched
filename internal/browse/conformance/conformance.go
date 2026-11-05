@@ -800,6 +800,15 @@ func (s *suite) actions(t *testing.T) {
 		}
 		clicked(c.name, `return window.`+c.js+` === 1`)
 	}
+	// What a user can't click, the agent can't either.
+	for name, why := range map[string]string{"Inert": "inert", "Unpointed": "takes no clicks"} {
+		if err := webtarget.Click(ctx, p, snap, ref(name)); err == nil || !strings.Contains(err.Error(), why) {
+			t.Errorf("clicking %s: %v", name, err)
+		}
+	}
+	if err := webtarget.Type(ctx, p, snap, ref("Hue"), "#ff0000", false); err == nil || !strings.Contains(err.Error(), "color field") {
+		t.Errorf("typing into a colour picker: %v", err)
+	}
 	if err := webtarget.Type(ctx, p, snap, ref("When"), "tomorrow", false); err == nil || !strings.Contains(err.Error(), `took "", not "tomorrow"`) {
 		t.Errorf("typing what a date field can't take: %v", err)
 	}
@@ -906,6 +915,18 @@ func (s *suite) actions(t *testing.T) {
 	}
 	want = s.url("/act/sent?o=o&first.x=0&first.y=0")
 	s.until("the first button's page", func() bool { return r.last(&r.navigated) == want })
+	// Behind a modal dialog, only the dialog takes clicks.
+	p, _ = s.open("/act/modal")
+	if snap, err = webtarget.Take(ctx, p, webtarget.Options{Full: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := webtarget.Click(ctx, p, snap, ref("Behind")); err == nil || !strings.Contains(err.Error(), "behind a modal dialog") {
+		t.Errorf("clicking behind a modal dialog: %v", err)
+	}
+	if err := webtarget.Click(ctx, p, snap, ref("Inside")); err != nil {
+		t.Fatal(err)
+	}
+	clicked("the dialog's button", `return window.inside === 1`)
 	// A page scrolling smoothly is scrolled at once, so the click lands
 	// where the element is, not where it was.
 	p, _ = s.open("/act/smooth")
@@ -1021,6 +1042,8 @@ func fixtures() http.Handler {
 	mux.Handle("/snap", page(snapFixture))
 	mux.Handle("/act", page(actFixture))
 	mux.Handle("/act/sent", page(`<!doctype html><title>Sent</title>`))
+	mux.Handle("/act/modal", page(`<!doctype html><title>Modal</title><button onclick="window.behind = 1">Behind</button>
+<dialog id="d"><button onclick="window.inside = 1">Inside</button></dialog><script>d.showModal()</script>`))
 	mux.Handle("/act/smooth", page(`<!doctype html><title>Smooth</title><style>html{scroll-behavior:smooth}</style>
 <div style="height:3000px"></div><button onclick="window.far = 1">Far</button><div style="height:3000px"></div>
 <footer style="position:fixed;bottom:0;left:0;right:0;height:80px;background:#333">Footer</footer>`))
@@ -1074,6 +1097,9 @@ const actFixture = `<!doctype html><meta charset="utf-8"><title>Act</title>
 <label style="position:relative;display:inline-block"><input type="checkbox" id="styled" aria-label="Styled" style="position:absolute;left:0;top:0;margin:0;opacity:0"><span style="position:relative;display:inline-block;width:20px;height:20px;background:#888"></span></label>
 <p style="width:120px">Some words before <a href="#wrapped" onclick="window.wrapped = 1; return false">a link that wraps onto the next line</a> and after.</p>
 <a href="#icon" onclick="window.icon = 1; return false" aria-label="Icon" style="position:relative;display:inline-block;width:0;height:0"><span style="position:absolute;left:30px;top:0;width:16px;height:16px;background:#888"></span></a>
+<section inert><button onclick="window.inert = 1">Inert</button></section>
+<a href="#off" style="pointer-events:none" onclick="window.unpointed = 1">Unpointed</a>
+<input type="color" aria-label="Hue">
 <form action="/act/sent" id="order"><input name="o" aria-label="Ordered"><input type="image" name="first" alt="First" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><button name="later">Later</button></form>
 <form action="/act/sent"><input name="i" aria-label="Imaged"><input type="image" name="img" alt="Send" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></form>
 <form action="/act/sent"><input id="taken" name="t" aria-label="Taken"></form>
