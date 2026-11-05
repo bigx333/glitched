@@ -27,6 +27,7 @@ func TestCall(t *testing.T) {
 		{"print('hi')", "", "attempt to call a nil value"},
 		{"return type(io) .. type(os) .. type(require) .. type(debug) .. type(loadstring) .. type(getfenv)", "nilnilnilnilnilnil", ""},
 		{"string.upper = nil", "", "readonly"},
+		{"return " + strings.Repeat("1+", 200000) + "1", "", "larger than 256 KiB"},
 		{"return 'still alive'", "still alive", ""},
 	}
 	for _, c := range cases {

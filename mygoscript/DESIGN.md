@@ -102,8 +102,8 @@ call a prelude function with a compiled chunk. Each call returns a string.
 - Luau raises errors as C++ exceptions. Every Lua call in the shim runs under
   `lua_pcall`, and Luau never calls back into Go. The two `extern "C"` entry
   points also catch any exception that escapes, such as an allocation failure
-  outside a pcall. That error closes the VM, so no exception unwinds through
-  Go frames.
+  outside a pcall. They report it and the VM is closed, so no exception
+  unwinds through Go frames.
 
 ### Build requirements
 
@@ -140,8 +140,13 @@ Luau's own hooks provide the sandbox. There is no process or wasm boundary.
   `loadstring`, `newproxy`, `gcinfo` and `collectgarbage` are removed. No
   remaining function reaches files, the network, the environment or
   processes. No grants exist in this spike.
-- `luaL_sandbox` freezes the globals and the builtin metatables. Each call
-  runs in a fresh `luaL_sandboxthread`, so writes to globals do not persist.
+- `luaL_sandbox` freezes the shared globals and the builtin metatables.
+  Each call compiles its chunk in a fresh `luaL_sandboxthread`. A global
+  that the script writes lands in the script's own environment, not in
+  the shared globals. That environment lives as long as the VM, because
+  the stored `view` and `actions` closures keep it. Restart clears it.
+- The compiler allocates outside the Luau heap and has no interrupt, so
+  sources over 256 KiB are refused before compiling.
 - Limits per VM: a 32 MiB heap through a counting allocator. Limits per call:
   2,000,000 interrupt safepoints and 250 ms of wall-clock time. Both are
   checked in `lua_callbacks()->interrupt`. A spent budget stays spent, so

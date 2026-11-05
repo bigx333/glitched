@@ -71,8 +71,17 @@ static char* copy(const char* s, size_t n)
     return out;
 }
 
+// The compiler allocates outside the Luau heap and has no interrupt, so the
+// source size is what bounds its time and memory.
+static const size_t maxSource = 256 << 10;
+
 static int load(lua_State* L, const char* name, const char* src, size_t len)
 {
+    if (len > maxSource)
+    {
+        lua_pushliteral(L, "script is larger than 256 KiB");
+        return LUA_ERRSYNTAX;
+    }
     lua_CompileOptions opts = {};
     opts.optimizationLevel = 1;
     size_t size = 0;
@@ -134,14 +143,13 @@ static int openlibs(lua_State* L)
     return 0;
 }
 
-static mg_vm* newVM(const char* prelude, size_t len, mg_limits limits, char** err)
+static mg_vm* newVM(mg_vm* vm, const char* prelude, size_t len, mg_limits limits, char** err)
 {
-    mg_vm* vm = new mg_vm;
     vm->limits = limits;
     vm->L = lua_newstate(limitedAlloc, vm);
     if (!vm->L)
     {
-        delete vm;
+        mg_close(vm);
         *err = copy("cannot create a Luau state", 26);
         return nullptr;
     }
@@ -201,12 +209,14 @@ static int call(mg_vm* vm, const char* fn, const char* chunkname, const char* sr
 // half-updated after one, so the caller closes it.
 extern "C" mg_vm* mg_new(const char* prelude, size_t len, mg_limits limits, char** err)
 {
+    mg_vm* vm = new mg_vm;
     try
     {
-        return newVM(prelude, len, limits, err);
+        return newVM(vm, prelude, len, limits, err);
     }
     catch (...)
     {
+        mg_close(vm);
         *err = copy("luau: internal error while starting", 35);
         return nullptr;
     }
