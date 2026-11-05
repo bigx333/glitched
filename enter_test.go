@@ -122,3 +122,21 @@ func TestKeybindingsSayEnterSends(t *testing.T) {
 		t.Errorf("missing keybindings: %v", want)
 	}
 }
+
+// An Enter that sends nothing leaves the text area as it was: what was
+// undone can still be redone.
+func TestEnterSendingNothingKeepsRedo(t *testing.T) {
+	h := enterReady(t, fake.New(fake.Turn(false)))
+	h.tt.Type("   ")
+	h.tt.Key(ui.Cmd, ui.KeyZ)
+	h.tt.Frame()
+	if h.a.draft != "" {
+		t.Fatalf("undone: draft %q", h.a.draft)
+	}
+	h.tt.Key(0, ui.KeyEnter)
+	h.tt.Key(ui.Cmd|ui.Shift, ui.KeyZ)
+	h.tt.Frame()
+	if h.a.draft != "   " {
+		t.Errorf("redone after an Enter that sent nothing: draft %q; want %q", h.a.draft, "   ")
+	}
+}

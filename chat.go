@@ -1007,13 +1007,13 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 }
 
 // draftKey takes the draft's keys before the text area does, as T3 Code's
-// composer does: the suggestions' first, then Enter sends; with Shift it
-// breaks the line, and with Alt it doesn't send either. An empty draft sends nothing, nor breaks
-// the line, and never stops the agent as ⌘⏎ does. An input method's
-// keys are its own, so the Enter that commits what it composes sends
-// nothing. Like OnTextKey, it runs between frames: it sends what was
-// typed, which may be ahead of the draft, and leaves the text area what
-// the send left, the draft kept when it doesn't go.
+// composer does: the suggestions' first, then Enter sends what Send
+// would, the attachments with the draft; with Shift it breaks the line,
+// and with Alt it doesn't send either. With nothing to send, Enter breaks
+// no line and never stops the agent as ⌘⏎ does. An input method's keys
+// are its own, so the Enter that commits what it composes sends nothing.
+// Like OnTextKey, it runs between frames: it sends what was typed, which
+// may be ahead of the draft, and clears the text area only once it went.
 func (a *app) draftKey(t thread) func(ui.TextKey) bool {
 	return func(k ui.TextKey) bool {
 		if a.suggestKey(k) {
@@ -1022,9 +1022,13 @@ func (a *app) draftKey(t thread) func(ui.TextKey) bool {
 		if k.Key != ui.KeyEnter || k.Mods&(ui.Shift|ui.Alt) != 0 {
 			return false
 		}
-		a.draft = k.Text()
-		a.send(t)
-		k.SetText(a.draft)
+		text := k.Text()
+		a.draft = text
+		if a.send(t); a.draft != text {
+			// Sent: the text area clears with the draft. Unsent, it's
+			// left as it is, its selection and its redo with it.
+			k.SetText(a.draft)
+		}
 		return true
 	}
 }
