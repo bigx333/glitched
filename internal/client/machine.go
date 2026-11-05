@@ -48,8 +48,9 @@ func (m *Manager) Inspect() {
 }
 
 // Configure changes engine.json, and restarts the engine embedded here to
-// apply the change. An engine another process runs applies it when it
-// next starts.
+// apply the change, except a change to the child limits alone, which it
+// applies at once. An engine another process runs applies it when it next
+// starts.
 func (m *Manager) Configure(change func(*daemon.Config)) error {
 	cfg, err := daemon.Defaults(m.cfg.Dir)
 	if err != nil {
@@ -70,7 +71,12 @@ func (m *Manager) Configure(change func(*daemon.Config)) error {
 	for _, a := range cfg.Listen {
 		m.machine.Listeners = append(m.machine.Listeners, daemon.Listener{Addr: a})
 	}
-	m.Restart()
+	was.Children = cfg.Children
+	if reflect.DeepEqual(cfg, was) && m.embedded != nil {
+		m.embedded.SetLimits(cfg.Children)
+	} else {
+		m.Restart()
+	}
 	m.Inspect()
 	return nil
 }
@@ -109,7 +115,7 @@ func (m *Manager) Restart() {
 		return
 	}
 	e, old := m.envs[0], m.local
-	m.machine.Embedded, m.restarting = false, true
+	m.machine.Embedded, m.restarting, m.embedded = false, true, nil
 	m.node.Store(nil)
 	e.unlink()
 	m.down(e, Connecting{})
@@ -131,6 +137,7 @@ func (m *Manager) newLocal() *local {
 				return
 			}
 			embedded := d != nil
+			m.embedded = d
 			if embedded && d.Node() != nil {
 				m.node.Store(&node{d.Node()})
 			} else {

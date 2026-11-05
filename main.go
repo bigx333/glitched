@@ -24,6 +24,7 @@ import (
 	"glitched/internal/browse/sysweb"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
+	eng "glitched/internal/engine"
 	"glitched/mygoscript"
 	"glitched/wind"
 )
@@ -227,6 +228,9 @@ type app struct {
 	machineErr string
 	// control is the This machine page's draft of the control server.
 	control string
+	// limits are the Agents card's inputs, as read from limitsOf.
+	limits   [3]float64
+	limitsOf eng.Limits
 
 	showSidebar  bool
 	showDiff     bool
