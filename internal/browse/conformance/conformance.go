@@ -772,6 +772,24 @@ func (s *suite) actions(t *testing.T) {
 		t.Fatal(err)
 	}
 	clicked("the button in the frame", `return window.framed === 1`)
+	// A page taking mousedown keeps the focus, here the editor's, as
+	// typing into it left it.
+	if err := webtarget.Type(ctx, p, snap, ref("Editor"), "old", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := webtarget.Click(ctx, p, snap, ref("Bold")); err != nil {
+		t.Fatal(err)
+	}
+	clicked("the toolbar's button", `return window.bold === "ed"`)
+	// What shows over an element takes a click there: the agent hears
+	// so. A label over its own field is the field's.
+	if err := webtarget.Click(ctx, p, snap, ref("Covered")); err == nil || !strings.Contains(err.Error(), `covered by dialog "Banner"`) {
+		t.Errorf("clicking a covered button: %v", err)
+	}
+	if err := webtarget.Click(ctx, p, snap, ref("Styled")); err != nil {
+		t.Fatal(err)
+	}
+	clicked("the styled checkbox", `return document.getElementById("styled").checked`)
 	if err := webtarget.Type(ctx, p, snap, ref("When"), "tomorrow", false); err == nil || !strings.Contains(err.Error(), `took "", not "tomorrow"`) {
 		t.Errorf("typing what a date field can't take: %v", err)
 	}
@@ -857,6 +875,17 @@ func (s *suite) actions(t *testing.T) {
 	}
 	want = s.url("/act/sent?from=link")
 	s.until("the link's page", func() bool { return r.last(&r.navigated) == want })
+	// Enter submits by an image button too, which isn't among a form's
+	// elements.
+	p, r = s.open("/act")
+	if snap, err = webtarget.Take(ctx, p, webtarget.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := webtarget.Type(ctx, p, snap, ref("Imaged"), "pic", true); err != nil {
+		t.Fatal(err)
+	}
+	want = s.url("/act/sent?i=pic&img.x=0&img.y=0")
+	s.until("the image button's page", func() bool { return r.last(&r.navigated) == want })
 }
 
 // refNamed is the ref of the i-th element named name in a snapshot, or "".
@@ -1007,6 +1036,10 @@ const actFixture = `<!doctype html><meta charset="utf-8"><title>Act</title>
 <input type="date" aria-label="When">
 <select aria-label="Size"><option>S</option><option>L</option></select>
 <a href="/act/sent?from=link">Next</a>
+<button onmousedown="event.preventDefault()" onclick="window.bold = document.activeElement.id">Bold</button>
+<div style="position:relative;display:inline-block"><button>Covered</button><div style="position:absolute;inset:0" aria-label="Banner" role="dialog"></div></div>
+<label style="position:relative;display:inline-block"><input type="checkbox" id="styled" aria-label="Styled" style="position:absolute;left:0;top:0;margin:0;opacity:0"><span style="position:relative;display:inline-block;width:20px;height:20px;background:#888"></span></label>
+<form action="/act/sent"><input name="i" aria-label="Imaged"><input type="image" name="img" alt="Send" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></form>
 <form action="/act/sent"><input id="taken" name="t" aria-label="Taken"></form>
 <textarea aria-label="Notes"></textarea>
 <div id="ed" contenteditable="true" aria-label="Editor">old</div>
