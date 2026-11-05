@@ -24,9 +24,11 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|asked (ASK=<request body>)|question|servers|engine (on the tailnet)|machines|inbox|checks|refused|plain|stuck|children|blocked
+// SCENE=empty|running|approval|asked (ASK=<request body>)|question|both|servers|engine (on the tailnet)|machines|inbox|checks|refused|plain|stuck|children|blocked
 // for the engines' threads (none started without one; question takes
 // ASK=<request body>, PICK=<label>,… and QUESTION=answer|dismiss|stop;
+// both is an approval and questions waiting at once, the questions first
+// with QFIRST, and takes PICK;
 // blocked is a parent whose child asks ASK;
 // refused is a thread whose delete the engine refused; plain is an edit in a workspace with no
 // git; stuck is a run left uncertain, with STEER for a
@@ -303,6 +305,15 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		case "stop":
 			h.a.backend.Interrupt(th.env, th.id())
 			h.until("the stop", func() bool { return !h.a.current().View.Live() })
+		}
+		h.tt.Advance(time.Second)
+	case "both":
+		h, _, _ = bothAsk(t, os.Getenv("QFIRST") != "")
+		for _, s := range strings.Split(os.Getenv("PICK"), ",") {
+			if s != "" {
+				h.click(s)
+				h.tt.Frame()
+			}
 		}
 		h.tt.Advance(time.Second)
 	case "servers":
