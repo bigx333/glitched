@@ -155,3 +155,30 @@ func TestCloseReapsClaudeWhileAnotherProcessHoldsItsOutput(t *testing.T) {
 		t.Error("Close returned with claude not reaped")
 	}
 }
+
+func TestNextSeesClaudeExitWhileAnotherProcessHoldsItsOutput(t *testing.T) {
+	replay(t, "holder-exit", "")
+	processes(t)
+	ag := open(t)
+	defer ag.Close(ctx)
+	nextCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	err := within(t, 6*time.Second, "Next", func() error { _, err := ag.Next(nextCtx); return err })
+	if err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Next returned %v, want claude's exit", err)
+	}
+}
+
+// Windows has no SIGTERM, and a claude that cannot get one must not wait
+// out killGrace before it is stopped.
+func TestClaudeStopsSoonOnceCloseRunsOutOfTime(t *testing.T) {
+	replay(t, "deaf", "")
+	pid := processes(t)
+	ag := open(t)
+	closeCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	within(t, time.Second, "Close", func() error { return ag.Close(closeCtx) })
+	if !exits(pid("claude"), time.Second) {
+		t.Error("claude still runs a second after its Close ran out of time")
+	}
+}
