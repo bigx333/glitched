@@ -73,6 +73,8 @@ type Agent struct {
 	ended       bool            // the turn's end was read
 	deadline    *time.Timer     // stops claude if an interrupt does not end the turn
 
+	// pmu is taken after mu, never before: a path that holds pmu sends
+	// nothing, as a send takes mu.
 	pmu     sync.Mutex
 	prompts map[string]*prompt // by Claude Code's request id
 }
@@ -397,26 +399,11 @@ func (g *Agent) read(ctx context.Context, m message) []provider.Event {
 			g.send(ctx, refusal(m.RequestID, m.Request.Subtype))
 			return nil
 		}
-		g.pmu.Lock()
-		defer g.pmu.Unlock()
-		if _, seen := g.prompts[m.RequestID]; seen {
-			return nil
+		events, deny := g.open(m.RequestID, m.Request.canUseTool)
+		if deny != nil {
+			g.send(ctx, deny)
 		}
-		if m.Request.ToolName != askTool {
-			e, p := g.turn.ask(m.RequestID, m.Request.canUseTool)
-			g.prompts[m.RequestID] = p
-			return []provider.Event{e}
-		}
-		e, p, err := question(m.RequestID, m.Request.Input)
-		if err != nil {
-			// Questions the card can't show would hang the turn; Claude
-			// Code hears why instead, and the user sees nothing to answer.
-			g.prompts[m.RequestID] = &prompt{kind: api.KindQuestion, state: answered}
-			g.send(ctx, misfit(m.RequestID, err))
-			return nil
-		}
-		g.prompts[m.RequestID] = p
-		return []provider.Event{e}
+		return events
 	case "control_cancel_request":
 		g.pmu.Lock()
 		defer g.pmu.Unlock()
@@ -445,6 +432,31 @@ func (g *Agent) read(ctx context.Context, m message) []provider.Event {
 		}
 	}
 	return g.turn.read(m)
+}
+
+// open records the prompt a can_use_tool opens, and is the request the
+// user sees, or the deny Claude Code gets instead. A request seen before
+// opens nothing.
+func (g *Agent) open(id string, r canUseTool) ([]provider.Event, map[string]any) {
+	g.pmu.Lock()
+	defer g.pmu.Unlock()
+	if _, seen := g.prompts[id]; seen {
+		return nil, nil
+	}
+	if r.ToolName != askTool {
+		e, p := g.turn.ask(id, r)
+		g.prompts[id] = p
+		return []provider.Event{e}, nil
+	}
+	e, p, err := question(id, r.Input)
+	if err != nil {
+		// Questions the card can't show would hang the turn; Claude Code
+		// hears why instead, and the user sees nothing to answer.
+		g.prompts[id] = &prompt{kind: api.KindQuestion, state: answered}
+		return nil, misfit(id, err)
+	}
+	g.prompts[id] = p
+	return []provider.Event{e}, nil
 }
 
 // Close ends stdin, which ends Claude Code once it is idle, and asks a
