@@ -66,6 +66,9 @@ func Dial(dir string) Call {
 		stop := context.AfterFunc(ctx, func() { conn.SetDeadline(time.Now()) })
 		defer stop()
 		if err := json.NewEncoder(conn).Encode(bridgeRequest{tool, args}); err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
 			return "", fmt.Errorf("browser: %w", err)
 		}
 		var r bridgeReply
