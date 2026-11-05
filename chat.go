@@ -859,7 +859,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 					}
 					area := ui.TextArea(c.Key(key), &a.draft).Placeholder(placeholder).
 						Lines(2, 10).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).
-						Padding(14, 16, 4).OnPaste(a.onPaste).OnTextKey(a.suggestKey).Opacity(in)
+						Padding(14, 16, 4).OnPaste(a.onPaste).OnTextKey(a.draftKey(t)).Opacity(in)
 					if !ahead {
 						area.AutoFocus().Bind(&a.draftArea)
 					}
@@ -1003,6 +1003,29 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 		} else {
 			a.send(t)
 		}
+	}
+}
+
+// draftKey takes the draft's keys before the text area does, as T3 Code's
+// composer does: the suggestions' first, then Enter sends; with Shift it
+// breaks the line, and with Alt it doesn't send either. An empty draft sends nothing, nor breaks
+// the line, and never stops the agent as ⌘⏎ does. An input method's
+// keys are its own, so the Enter that commits what it composes sends
+// nothing. Like OnTextKey, it runs between frames: it sends what was
+// typed, which may be ahead of the draft, and leaves the text area what
+// the send left, the draft kept when it doesn't go.
+func (a *app) draftKey(t thread) func(ui.TextKey) bool {
+	return func(k ui.TextKey) bool {
+		if a.suggestKey(k) {
+			return true
+		}
+		if k.Key != ui.KeyEnter || k.Mods&(ui.Shift|ui.Alt) != 0 {
+			return false
+		}
+		a.draft = k.Text()
+		a.send(t)
+		k.SetText(a.draft)
+		return true
 	}
 }
 
