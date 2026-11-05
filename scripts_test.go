@@ -29,3 +29,20 @@ func TestScriptedCounter(t *testing.T) {
 		t.Fatalf("after reset: %q", tt.Texts())
 	}
 }
+
+func TestScriptedWidgetTour(t *testing.T) {
+	a := offline(t)
+	tt := ui.NewTester(a.view, 1320, 1400)
+	a.router.Push("/settings/scripts")
+	tt.Frame()
+	if !tt.HasText("Ada · Pro · 3 seats · volume 60% · notifications on · tags go, luau") {
+		t.Fatalf("the tour did not render: %q", tt.Texts())
+	}
+	if err := tt.Click("Preferences"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.widgetTour.Value("tab") != 1.0 || !tt.HasText("Volume") {
+		t.Fatalf("tab %v, texts %q", a.widgetTour.Value("tab"), tt.Texts())
+	}
+}

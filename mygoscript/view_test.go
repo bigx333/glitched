@@ -13,8 +13,8 @@ return {
 	view = function(state)
 		return ui.column({ key = "counter" }, {
 			ui.text("Count: " .. state.count),
-			ui.button("Increment", { on = "increment" }),
-			ui.button("Break", { on = "explode" }),
+			ui.button("Increment", { onClick = "increment" }),
+			ui.button("Break", { onClick = "explode" }),
 		})
 	end,
 	actions = {
