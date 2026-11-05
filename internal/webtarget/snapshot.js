@@ -129,12 +129,31 @@ function install(key) {
     selectAllChildren: fn(window.Selection, "selectAllChildren"),
     execCommand: fn(Document, "execCommand"),
     later: window.setTimeout,
+    port1: getter(window.MessageChannel, "port1"),
+    port2: getter(window.MessageChannel, "port2"),
+    onmessage: setter(window.MessagePort, "onmessage"),
+    postMessage: fn(window.MessagePort, "postMessage"),
+    clientRects: fn(Element, "getClientRects"),
+    rectsLength: getter(window.DOMRectList, "length"),
+    rectsItem: fn(window.DOMRectList, "item"),
+    clientWidth: getter(Element, "clientWidth"),
+    clientHeight: getter(Element, "clientHeight"),
+    position: fn(Node, "compareDocumentPosition"),
     elementFromPoint: fn(Document, "elementFromPoint"),
     shadowFromPoint: fn(window.ShadowRoot, "elementFromPoint"),
     shadowHost: getter(window.ShadowRoot, "host"),
   };
   // The events actions fire, made with the constructors found as the
   // script was installed.
+  const MC = window.MessageChannel;
+  // soon runs f once the script has answered, as a message, which a page
+  // out of sight doesn't hold back as it does its timers.
+  const soon = (f) => {
+    if (!MC || !B.onmessage) return apply(B.later, window, [f, 0]);
+    const ch = new MC();
+    apply(B.onmessage, get(B.port1, ch), [() => f()]);
+    apply(B.postMessage, get(B.port2, ch), [0]);
+  };
   const EV = {
     __proto__: null,
     Event, Mouse: MouseEvent, Keyboard: KeyboardEvent,
@@ -584,24 +603,61 @@ function install(key) {
   // whose Enter would submit it (HTML's implicit submission).
   function implicit(form) {
     const els = get(B.formElements, form);
-    let fields = 0;
+    let fields = 0, button = null;
     for (let i = 0, n = get(B.collectionLength, els); i < n; i++) {
       const c = apply(B.collectionItem, els, [i]), t = tagOf(c);
       const type = t === "INPUT" ? lower(get(B.inputType, c)) : t === "BUTTON" ? lower(get(B.buttonType, c)) : "";
-      if ((t === "BUTTON" && type === "submit") || (t === "INPUT" && (type === "submit" || type === "image"))) {
-        if (matches(c, ":disabled")) return null;
-        return () => press(c);
-      }
+      if (!button && ((t === "BUTTON" && type === "submit") || (t === "INPUT" && (type === "submit" || type === "image")))) button = c;
       if (t === "INPUT" && BLOCKS_IMPLICIT[type] === true) fields++;
     }
     // An image button isn't among a form's elements, but is its default
-    // button where it comes first: a form with one submits by it.
+    // button where it comes first.
     const image = apply(B.query, form, ["input[type=image i]"]);
-    if (image) {
-      if (matches(image, ":disabled")) return null;
-      return () => press(image);
+    if (image && (!button || (apply(B.position, button, [image]) & 2) !== 0)) button = image;
+    if (button) {
+      if (matches(button, ":disabled")) return null;
+      return () => press(button);
     }
     return fields === 1 && B.requestSubmit ? () => apply(B.requestSubmit, form, []) : null;
+  }
+
+  // reveal scrolls el into the middle of the view, at once: a page
+  // scrolling smoothly would leave it where it was as act reads it.
+  function reveal(el) {
+    try {
+      apply(B.scrollIntoView, el, [{ __proto__: null, block: "center", inline: "center", behavior: "instant" }]);
+    } catch {
+      apply(B.scrollIntoView, el, [{ __proto__: null, block: "center", inline: "center" }]);
+    }
+  }
+
+  // point is where to click el, in its document's viewport: the centre of
+  // its first box in view, as a link wrapping onto two lines has two, and
+  // the box's middle can be between them.
+  function point(el, doc) {
+    const root = get(B.documentElement, doc);
+    const w = root ? get(B.clientWidth, root) : 0, h = root ? get(B.clientHeight, root) : 0;
+    const rs = apply(B.clientRects, el, []);
+    let first = null;
+    for (let i = 0, n = rs ? get(B.rectsLength, rs) : 0; i < n; i++) {
+      const r = apply(B.rectsItem, rs, [i]);
+      const x = get(B.x, r), y = get(B.y, r), rw = get(B.width, r), rh = get(B.height, r);
+      if (rw <= 0 || rh <= 0) continue;
+      const at = { __proto__: null, x: x + rw / 2, y: y + rh / 2 };
+      if (!first) first = at;
+      if (at.x >= 0 && at.y >= 0 && (!w || at.x <= w) && (!h || at.y <= h)) return at;
+    }
+    if (first) return first;
+    const b = rect(el);
+    return { __proto__: null, x: get(B.x, b) + get(B.width, b) / 2, y: get(B.y, b) + get(B.height, b) / 2 };
+  }
+
+  // up is n's parent, through a shadow root to its host.
+  function up(n) {
+    const p = get(B.parent, n);
+    if (p) return p;
+    const root = apply(B.rootNode, n, []);
+    return root && get(B.nodeType, root) === 11 ? get(B.shadowHost, root) : null;
   }
 
   // cover is what shows over el at x, y of its document, which a click
@@ -617,14 +673,13 @@ function install(key) {
     }
     if (!hit) return null;
     const labels = isHTML(el) && LABELS[tagOf(el)] ? get(LABELS[tagOf(el)], el) : null;
-    for (let n = hit, i = 0; n && i < 4096; i++) {
+    for (let n = hit, i = 0; n && i < 4096; i++, n = up(n)) {
       if (n === el) return null;
       if (labels) for (let j = 0, k = listLength(labels); j < k; j++) if (item(labels, j) === n) return null;
-      const up = get(B.parent, n);
-      if (up) { n = up; continue; }
-      const root = apply(B.rootNode, n, []);
-      n = root && get(B.nodeType, root) === 11 ? get(B.shadowHost, root) : null;
     }
+    // What contains el, at a point of el's box that isn't el's own, as a
+    // ring's hole or a child placed elsewhere, covers nothing.
+    for (let n = up(el), i = 0; n && i < 4096; i++, n = up(n)) if (n === hit) return null;
     return hit;
   }
 
@@ -643,14 +698,16 @@ function install(key) {
     if (attr(el, "aria-disabled") === "true" || matches(el, ":disabled")) throw new Err(`${ref} is disabled`);
     if (shown(el, styleOf(el), false) !== SHOWN) throw new Err(`${ref} is not shown`);
     const doc = get(B.ownerDocument, el), view = get(B.defaultView, doc), html = isHTML(el);
-    apply(B.scrollIntoView, el, [{ __proto__: null, block: "center", inline: "center" }]);
-    const b = rect(el);
-    const x = get(B.x, b) + get(B.width, b) / 2, y = get(B.y, b) + get(B.height, b) / 2;
     const fire = (e) => apply(B.dispatch, el, [e]);
     const focus = () => { if (html) apply(B.focus, el, []); };
     if (args.action === "click") {
+      reveal(el);
+      const at0 = point(el, doc), x = at0.x, y = at0.y;
       const over = cover(el, doc, x, y);
-      if (over) throw new Err(`${ref} is covered by ${role(over) || lower(tagOf(over)) || "an element"} ${quote(name(over, role(over)))}, which a click there would hit`);
+      if (over) {
+        const or = role(over), on = name(over, or);
+        throw new Err(`${ref} is covered by ${or || lower(tagOf(over)) || "an element"}${on ? " " + quote(on) : ""}, which a click there would hit`);
+      }
       const at = (buttons) => ({ __proto__: null, bubbles: true, cancelable: true, composed: true, view,
         clientX: x, clientY: y, button: 0, buttons, detail: 1 });
       const pointer = (type, buttons) => {
@@ -664,7 +721,7 @@ function install(key) {
       // The click comes once the script has answered: what it sets off,
       // a page leaving or a dialog holding the page, would take the
       // answer with it.
-      apply(B.later, window, [() => {
+      soon(() => {
         pointer("pointerdown", 1);
         // A page taking mousedown keeps the focus where it is, as a
         // toolbar's button keeps the editor's selection.
@@ -674,7 +731,7 @@ function install(key) {
         pointer("pointerup", 0);
         fire(new EV.Mouse("mouseup", at(0)));
         fire(new EV.Mouse("click", at(0)));
-      }, 0]);
+      });
       return { __proto__: null, done: true };
     }
     if (args.action !== "type") throw new Err(`webtarget: unknown action ${args.action}`);
@@ -685,6 +742,7 @@ function install(key) {
     if (tag === "SELECT") throw new Err(`${ref} is a dropdown, which the browser's tools can't pick from yet`);
     if (TYPEABLE[r] !== true || !(field || editor)) throw new Err(`${ref} is a ${r || "element"}, not a text box`);
     if (attr(el, "aria-readonly") === "true" || matches(el, ":read-only")) throw new Err(`${ref} is read-only`);
+    reveal(el);
     focus();
     if (field) {
       apply(tag === "INPUT" ? B.setInputValue : B.setTextareaValue, el, [args.text]);
@@ -713,7 +771,7 @@ function install(key) {
       // The form submits once the script has answered: a page leaving
       // as it runs would take its answer with it.
       const submit = form && implicit(form);
-      if (submit) apply(B.later, window, [submit, 0]);
+      if (submit) soon(submit);
     }
     return { __proto__: null, done: true };
   }
