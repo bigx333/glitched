@@ -652,6 +652,43 @@ func TestClosingAThreadDropsAnAnswerOnlyItsTranscriptAsked(t *testing.T) {
 	}
 }
 
+// An answer the engine took stays a row while the thread still shows its
+// request waiting, as the view or the transcript that says it was
+// answered comes after the command lands: the request never shows waiting
+// again in between. The view that no longer asks drops it, as does the
+// transcript of an open thread.
+func TestATakenAnswerStaysUntilItsRequestStopsWaiting(t *testing.T) {
+	for _, open := range []bool{false, true} {
+		request, id, cmd := api.NewID(), api.NewID(), api.NewID()
+		body := api.RequestRespond{Request: request}
+		th := &Thread{
+			View:    api.Thread{ID: id, Requests: []api.Request{{ID: request}}},
+			Pending: []Pending{{Command: cmd, Body: body}},
+			open:    open,
+		}
+		if open {
+			th.Transcript = &Transcript{Entries: []Entry{&RequestEntry{Request: request, State: api.RequestPending}}}
+		}
+		env := &Env{Threads: map[api.ID]*Thread{id: th}}
+		m := &Manager{}
+		m.submitted(env, api.Command{ID: cmd, Target: id, Body: body}, nil)
+		if len(th.Pending) != 1 {
+			t.Fatalf("open %v: taken, with its request still waiting, the rows are %s; want the answer", open, describePending(th.Pending))
+		}
+		m.view(env, api.Thread{ID: id})
+		if open {
+			if len(th.Pending) != 1 {
+				t.Fatalf("with the transcript still asking the rows are %s, want the answer", describePending(th.Pending))
+			}
+			th.Transcript.request(request).State = api.RequestAnswered
+			th.dropUnasked()
+		}
+		if len(th.Pending) != 0 {
+			t.Fatalf("open %v: with its request no longer waiting the thread keeps %s", open, describePending(th.Pending))
+		}
+	}
+}
+
 // A thread created before the engine answered fails to reach it. Dismissing
 // its create drops the thread, which no engine has.
 func TestDismissingAFailedCreateDropsItsThread(t *testing.T) {

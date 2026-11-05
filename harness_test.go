@@ -40,6 +40,20 @@ func (p *posts) post(fn func()) {
 	}
 }
 
+// step runs the first thing posted, and reports whether there was one.
+func (p *posts) step() bool {
+	p.mu.Lock()
+	if len(p.q) == 0 {
+		p.mu.Unlock()
+		return false
+	}
+	fn := p.q[0]
+	p.q = p.q[1:]
+	p.mu.Unlock()
+	fn()
+	return true
+}
+
 // run runs what was posted, and reports whether there was any.
 func (p *posts) run() bool {
 	p.mu.Lock()
