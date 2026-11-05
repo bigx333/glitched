@@ -617,3 +617,46 @@ func TestClaudeRunsAsGlitched(t *testing.T) {
 		t.Errorf("the claude command's env has %q, want only %q", built, want)
 	}
 }
+
+// A run gets the app's browser as an MCP server named glitched, beside the
+// user's own, when the engine has one; none otherwise.
+func TestARunGetsTheBrowser(t *testing.T) {
+	argv := replay(t, "hi", "")
+	browser := []string{"/opt/glitched bin/glitched", "browser-mcp", "-dir", "/home/u/.glitched"}
+	for _, ad := range []*claude.Adapter{{Path: must(os.Executable()), Browser: browser}, nil} {
+		h := host(t, ad)
+		turn(t, h, newThread(t, h, api.AccessAsk), "Say hi in three words.")
+	}
+	lines := strings.Split(strings.TrimSpace(string(must(os.ReadFile(argv)))), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("claude ran %d times, want 2", len(lines))
+	}
+	var with, without []string
+	json.Unmarshal([]byte(lines[0]), &with)
+	json.Unmarshal([]byte(lines[1]), &without)
+	if slices.Contains(without, "--mcp-config") {
+		t.Errorf("claude ran with %q, want no MCP config without a browser", without)
+	}
+	i := slices.Index(with, "--mcp-config")
+	if i < 0 || i+2 >= len(with) {
+		t.Fatalf("claude ran with %q, want the browser's MCP config", with)
+	}
+	// --mcp-config takes every value up to the next flag.
+	if !strings.HasPrefix(with[i+2], "--") {
+		t.Errorf("--mcp-config is followed by %q, not a flag", with[i+2])
+	}
+	var cfg struct {
+		MCPServers map[string]struct {
+			Type    string   `json:"type"`
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(with[i+1]), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	s := cfg.MCPServers["glitched"]
+	if len(cfg.MCPServers) != 1 || s.Type != "stdio" || s.Command != browser[0] || !slices.Equal(s.Args, browser[1:]) {
+		t.Errorf("the MCP config is %s", with[i+1])
+	}
+}
