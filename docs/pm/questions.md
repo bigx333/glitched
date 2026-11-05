@@ -2,6 +2,14 @@
 
 Newest first. Answer under each question, or in the PM thread.
 
+## Q10 (2026-11-05, open). #64 (#52 cgroup containment): Claude's work sent to the user's own tmux server
+
+Sol's High: a tool runs an ordinary `tmux new-window` against a tmux server that was already running before the run. The window outlives Close and Reconcile. No cgroup design can stop this, because the server is the user's own process. Opus judges it out of reach, and #52 already named it. Opus also found a Low: tmux 3.5a puts each pane into its own `tmux-spawn-*.scope`, so a pane that drops the marker and ignores SIGHUP survives. Review: https://github.com/bigx333/glitched/pull/64#issuecomment-6654372975
+
+1. **Accept the limit and document it (PM recommends).** Fix Sol's Medium (fall back when `systemd-run` fails) and correct the code comment. Work Claude hands to the user's own tmux server is the user's. Slice 5 is not blocked on it.
+2. **Isolate tmux per run.** Give each run its own `TMUX_TMPDIR` and clear `TMUX`, so a plain `tmux` starts a run-owned server inside the scope. Claude then cannot drive your own tmux sessions. An explicit `-S /path` still escapes.
+3. **Sandbox tool execution later** (namespaces, bubblewrap). This is a separate, larger plan. #64 lands with option 1 now.
+
 ## Q9 (2026-11-05, answered: land, follow-up #59 gates slice 5). #51 has two new Highs after round 4
 
 CI is green at 2ad59ed. Round 4 fixed what it claimed. The PM reproduced both new Highs on a clean checkout (summary: https://github.com/bigx333/glitched/pull/51#issuecomment-6649814716).
