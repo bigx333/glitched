@@ -725,22 +725,23 @@ func TestAReportToAParentDeletedMeanwhileTellsNothing(t *testing.T) {
 	}
 }
 
-// The real engine reports nothing to a deleted parent, so its child asking
-// tells nothing on it.
+// Deleting a parent on the real engine deletes its child with it, so the
+// child asks nothing after and nothing is told of on the parent.
 func TestAChildOfADeletedParentAskingTellsNothing(t *testing.T) {
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, fake.New([]provider.Event{provider.RequestOpened{ID: "ask", Kind: "approval"}}))
 	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
 	kid := seedChild(t, d, top, "Write the tests")
 	h := start(t, dir)
-	child := h.thread("Write the tests")
+	h.thread("Write the tests")
 	got := told(h, top)
 	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: top, Body: api.ThreadDelete{}}); err != nil {
 		t.Fatal(err)
 	}
-	h.until("the parent's delete", func() bool { return h.local().Threads[top] == nil })
-	dispatch(t, d, kid)
-	h.until("the child's ask", func() bool { return len(child.View.Requests) == 1 })
+	h.until("the tree's delete", func() bool { return h.local().Threads[top] == nil && h.local().Threads[kid] == nil })
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: "go"}}); !errors.Is(err, api.ErrNotFound) {
+		t.Fatalf("a message to the deleted child: %v, want not found", err)
+	}
 	h.settle(func() bool { return len(*got) > 0 })
 	if len(*got) != 0 {
 		t.Fatalf("notifications on the deleted parent: %q; want none", *got)

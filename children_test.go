@@ -265,7 +265,8 @@ func TestAChildReportsInItsParent(t *testing.T) {
 }
 
 // Deleting a parent deletes what's under it too, after a confirm that
-// counts them: here a child and its own child, two threads under it.
+// counts them: here a child and its own child, two threads under it. The
+// GUI sends one delete, and none of the tree shows while it's on its way.
 func TestDeleteTakesTheTree(t *testing.T) {
 	h := tree3(t)
 	if err := h.tt.RightClick("Ship the sidebar sort"); err != nil {
@@ -279,6 +280,11 @@ func TestDeleteTakesTheTree(t *testing.T) {
 		t.Fatalf("no confirm: %q", h.tt.Texts())
 	}
 	h.click("Delete")
+	for _, p := range h.a.gather() {
+		for _, th := range p.threads {
+			t.Errorf("%q shows while the delete of the tree is on its way", th.View.Title)
+		}
+	}
 	h.until("the tree deleted", func() bool {
 		for _, title := range []string{"Ship the sidebar sort", "Write the tests", "Run them"} {
 			for _, e := range h.a.backend.Envs() {

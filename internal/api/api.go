@@ -305,8 +305,11 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // last report to its view, which a version 4 peer would drop, and with it
 // the notification of a child that waits on the user, and question
 // requests, which a version 4 peer would show as raw JSON and answer with
-// an Allow the engine refuses.
-const Protocol = 5
+// an Allow the engine refuses; version 6 settles and deletes a thread's
+// tree with it, so a version 5 GUI would send a command per thread the
+// engine already took, and a version 5 engine would leave a child of a
+// settled or deleted thread at work.
+const Protocol = 6
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host

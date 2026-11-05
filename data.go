@@ -381,13 +381,24 @@ func title(t thread) string {
 	return s
 }
 
-// deleting is whether a delete sent from here is on its way: the thread
-// shows nowhere meanwhile, and comes back if the delete fails.
+// deleting is whether a delete sent from here is on its way, of the
+// thread or of one above it, as the engine deletes a thread's tree with
+// it: the thread shows nowhere meanwhile, and comes back if the delete
+// fails.
 func deleting(t thread) bool {
-	return slices.ContainsFunc(t.Pending, func(p client.Pending) bool {
-		_, del := p.Body.(api.ThreadDelete)
-		return del && p.Err == nil
-	})
+	for range maxDepth + 1 {
+		if slices.ContainsFunc(t.Pending, func(p client.Pending) bool {
+			_, del := p.Body.(api.ThreadDelete)
+			return del && p.Err == nil
+		}) {
+			return true
+		}
+		if t.env == nil || t.env.Threads[t.View.Parent] == nil {
+			return false
+		}
+		t.Thread = t.env.Threads[t.View.Parent]
+	}
+	return false
 }
 
 // failedTo is what a command tried, for those the timeline shows as a row

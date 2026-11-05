@@ -1,18 +1,18 @@
 # Child threads
 
-Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, after archiving went (Settled is where a thread done with goes) and protocol 3 was taken by that change; changed on 2026-11-03 so that only an agent starts a child and Settle takes the tree. This is what the branch builds, not a plan, except where a line says planned.
+Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, after archiving went (Settled is where a thread done with goes) and protocol 3 was taken by that change; changed on 2026-11-03 so that only an agent starts a child and Settle takes the tree; changed on 2026-11-05 so that the engine settles and deletes a tree in one commit (open question 1). This is what the branch builds, not a plan, except where a line says planned.
 
 ## Decision
 
-**A child thread is an ordinary thread on the same engine with a `Parent`. The engine checks the line at create and posts each child's report into its parent's log through the outbox. The GUI does the cascades and the usage roll-up.**
+**A child thread is an ordinary thread on the same engine with a `Parent`. The engine checks the line at create, posts each child's report into its parent's log through the outbox, and settles or deletes a thread's tree with it in one commit. The GUI does Stop all and the usage roll-up.**
 
 - The tree is one field on the thread. Depth is never stored; it's walked, bounded.
 - The engine refuses a child deeper than 4 below a thread of the user's, or wider than its parent's access, and a child past the configured limits (see Limits).
 - A child's run that completes, fails, or blocks on a request reports to its parent as a `child.reported` event. The report is an outbox effect, committed with the child's event, so a crash replays it rather than losing it.
 - Only an agent starts a child; the user can't (decided 2026-11-03). A create names the parent's live run in `ThreadCreate.Run`, and the engine refuses one that doesn't. No provider has a tool for it yet: the fake provider spawns for tests (`fake.Adapter.Spawns`), and `glitched mcp` is the next PR of the spawn tool.
-- Stop, settle and delete of a tree are one command per thread, sent by the GUI. There's no engine-side cascade. Each command is atomic on its thread: settling stops the thread's run and cancels what waits, and deleting ends its run. A settled tree has nothing running, and a deleted one leaves nothing behind.
+- Settle and delete of a tree are one command, on the thread the user acts on. The engine applies it to that thread and every thread under it in the same commit, a child started a moment before included: settling stops each run and cancels what waits, and deleting ends each run and closes its agent. A settled tree has nothing running, and a deleted one leaves nothing behind. Stop all stays one `turn.interrupt` per thread, sent by the GUI.
 - Each thread stores the tokens its own turns used. The GUI adds up a tree's.
-- The protocol goes from 3 to 4, and the store schema from 4 to 5. Protocol 5 and schema 6 add the parent's last report (see Reading it).
+- The protocol goes from 3 to 4, and the store schema from 4 to 5. Protocol 5 and schema 6 add the parent's last report (see Reading it). Protocol 6 has settle and delete take the tree, with no schema change (see Protocol 6).
 
 ## The parent
 
@@ -26,7 +26,7 @@ Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, aft
 
 `store.Submit` (`internal/store/commit.go`) runs them for a `ThreadCreate` with a parent, on a thread that doesn't exist yet, in the create's own transaction:
 
-- `lineOf` loads the parent, then its parent, up to `api.MaxDepth+1` threads, so a corrupt cycle can't hang it. A deleted ancestor above the parent ends the line, as the GUI's does: its children stand on their own.
+- `lineOf` loads the parent, then its parent, up to `api.MaxDepth+1` threads, so a corrupt cycle can't hang it. A deleted ancestor above the parent ends the line, as the GUI's does: its children stand on their own. Since protocol 6 a delete takes the tree, so only a thread deleted before it leaves children like that.
 - `engine.CheckChild` (`internal/engine/decide.go`) refuses, as `*api.RejectedError`:
   - "the parent thread is gone": no parent on this engine, or a deleted one. A parent on another engine is "gone" too: children are same-engine only.
   - "only the parent's live run can start a child thread, and not once it is stopping": `Run` is not the parent's live run, or that run is stopping or uncertain.
@@ -65,7 +65,7 @@ Replay and failure:
 
 - `child.report` is in `replaySafe`. A report left leased by a crash is released at boot and performed again. Because the parent's event and the effect's completion commit together, a crash leaves both or neither: the report lands once.
 - Reading the child's log retries until the host closes, then the lease is released for the next host.
-- A parent deleted since: `Observe` refuses the observation (`ErrRefused`), which still completes the effect. A parent that isn't on this engine at all: `ErrNotFound`, and `report` completes the effect itself; the create's check makes that unreachable today, so no test covers it. Either way the child's lane moves on; `TestAnOrphansReportGoesNowhere` covers the deleted parent.
+- A parent deleted since, as when a report is still in the child's lane when the tree's delete commits: `Observe` refuses the observation (`ErrRefused`), which still completes the effect. A parent that isn't on this engine at all: `ErrNotFound`, and `report` completes the effect itself; the create's check makes that unreachable today. Either way the child's lane moves on. `TestDelete` in `internal/engine` covers the refusal on a deleted thread; since the delete takes the child too (protocol 6), no runtime test drives a report into a deleted parent.
 - There's no batching. Each report is its own event. The GUI shows a run of reports one after another as one card, a child's later report replacing its earlier one in that card (`addReport` in `children.go`). A card is keyed by its first report's child and run and by its order among that run's cards (`entriesOf` in `data.go`): a run that asks twice can start two cards, the parent's text between them, and each keeps its own pointer, focus and scroll state. The prototype batched for 2 s in memory; that's dropped.
 
 Reading it:
@@ -78,16 +78,17 @@ Reading it:
 
 ## Cascades
 
-All in the client (`children.go`, and `SettleTree` and `DeleteTree` in `internal/client/commands.go`), one command per thread through the existing intents, `turn.interrupt` taking a `Drop` for Delete. The engine knows nothing of trees here.
+Settle and Delete are engine-side (decided 2026-11-05, open question 1). The GUI sends one `inbox.set` or `thread.delete`, to the thread the user acts on. `store.Submit` (`internal/store/commit.go`) decides a command that `engine.TakesTree` names on every thread under its target too, in the same transaction: `treeOf` walks the threads that aren't deleted, as far down as `api.MaxDepth`, each before the thread above it, and each is decided with the same body through `engine.Decide`, so it means on each what it means on one thread. Each thread's effects go in its own lane. The commit's views go out together on the shell stream, so a client sees the whole tree change at once.
 
-- **A child the GUI hasn't seen** (fixed 2026-11-05, PR 71 round 1): an agent can start a child just before the user settles or deletes its tree, and the shell may not have shown it yet. `client.Manager` keeps each tree's command on every thread it sent it to until that thread's view shows it landed (Settled, or gone), and sends it to each thread the shell shows under one of them meanwhile (`spread`). The shell is in commit order, so the view that ends it comes after every child started before the command landed, and the engine starts no child under a settled or deleted thread (`CheckChild`), or from a stopping run. A cascade still ends if the GUI quits mid-way.
+- **A child no GUI has seen**: an agent can start a child just before the user settles or deletes its tree. The child's create and the settle or delete commit one after the other under the store's lock, so the settle or delete finds the child in the table and takes it. A create after finds a settled or deleted parent and is refused (`CheckChild`). Nothing depends on what a GUI last saw, and nothing is left for a GUI to send after: a failed command that is retried takes the tree as it is then, and one dismissed leaves nothing behind (fixed 2026-11-05, PR 74 round 2, replacing the client's marks of round 1).
+- **All or none**: the tree is one transaction, so a crash or a failed write part way leaves none of it, and a retry under the same ID takes all of it (`TestATreeCommitIsAllOrNothing`).
 
 - **Stop**: the composer's Stop and ⌘↩ stop only the thread's own agent, as on main. The Agents panel's Stop all sends `turn.interrupt` to every live thread under it that shows (`stopAll`) and says how many. A stopped child reports nothing (see the table).
-- **Settle** (open question 6, decided 2026-11-03): settling a thread settles it and every thread under it, its children's children too (`settleTree`), one `inbox.set` each. The engine makes Settled mean done with (fixed 2026-11-04): in the settle's own commit it cancels the queued and held messages ("the thread was settled or deleted") and stops the live run, and it admits no turn on a settled thread. A message sent to one after is new work: in the message's own commit the engine moves the thread back to the inbox and runs it, whichever client sent it, in any mode (fixed 2026-11-04, round 2). So a follow-up another client queued just before the settle never starts, one sent after does, and a stop already under way is left to land. The engine also refuses a child under a settled parent. A thread whose agent works offers no Settle, as on main; one waiting on an approval, or left uncertain, does, and settling it stops its own run too. Back to inbox brings back that thread alone, not its tree.
+- **Settle** (open question 6, decided 2026-11-03): settling a thread settles it and every thread under it, its children's children too, in the settle's commit (`settleTree` sends the one `inbox.set`). The engine makes Settled mean done with (fixed 2026-11-04): in the settle's own commit it cancels the queued and held messages ("the thread was settled or deleted") and stops the live run, and it admits no turn on a settled thread. A message sent to one after is new work: in the message's own commit the engine moves the thread back to the inbox and runs it, whichever client sent it, in any mode (fixed 2026-11-04, round 2). So a follow-up another client queued just before the settle never starts, one sent after does, and a stop already under way is left to land. The engine also refuses a child under a settled parent. A thread whose agent works offers no Settle, as on main; one waiting on an approval, or left uncertain, does, and settling it stops its own run too. Back to inbox brings back that thread alone, not its tree.
 - **Snooze** is unchanged: it's the user's word on that thread alone, and a report from a child brings a snoozed parent back to the inbox. A child whose agent works (`categoryOf` is Working) while the thread at the top of its line is Snoozed also shows in Working on its own, with "under <its parent's title>" beneath its title (`lifted` in `inbox.go`). Once it stops, or that thread is back in the inbox, it shows only nested again. A working thread under a lifted one shows in that one's rows, not lifted a second time. Nothing is lifted out of Settled: a working child under a settled thread can only be one another GUI left, or one the user sent a message to, and it shows nested there.
-- **Delete**: the alert counts the threads under it, its children's children too ("and the 2 threads under it"), and the working ones. `deleteTree` sends `thread.delete` to each thread in post-order, each after its own children, so no child stands on its own on the way. The engine ends a deleted thread's live run in the delete's commit, as `turn.ended` with `abandoned`, with an `agent.close` effect (`engine.CloseAgent`) in the outbox (fixed 2026-11-04). The host's pump closes the agent it holds; the effect then finds the run's agent through `Reconcile` and closes what it finds, so a crash or a shutdown before the pump's close leaves the close to the next host. It is replay-safe: closing an agent that is gone does nothing. So the delete doesn't depend on what this GUI last saw of a thread's run: a child another client just set to work goes too, a follow-up waiting its turn on a thread when its delete lands never starts, and one sent after finds no thread. Nothing waits on a stop, and there's no `afterStop`. The thread menu still offers no Delete on a thread whose own agent works, as on main.
-- **Partial failure**: each command is independent; they're not one transaction. A command that fails to reach the engine shows on its own thread as main's failed commands do, with Retry and Dismiss. The rest go through.
-- A deleted parent leaves its children as threads of their own: `parentOf` finds no parent, and they show at the top level.
+- **Delete**: the alert counts the threads under it, its children's children too ("and the 2 threads under it"), and the working ones. `deleteTree` sends one `thread.delete`, and the engine deletes every thread under it in the same commit. While it's on its way, the GUI shows none of the tree (`deleting` in `data.go` looks up the line), and a failed delete shows it all again. The engine ends each deleted thread's live run in the delete's commit, as `turn.ended` with `abandoned`, with an `agent.close` effect (`engine.CloseAgent`) in the outbox (fixed 2026-11-04). The host's pump closes the agent it holds; the effect then finds the run's agent through `Reconcile` and closes what it finds, so a crash or a shutdown before the pump's close leaves the close to the next host. It is replay-safe: closing an agent that is gone does nothing. So the delete doesn't depend on what this GUI last saw of a thread's run: a child another client just set to work goes too, a follow-up waiting its turn on a thread when its delete lands never starts, and one sent after finds no thread. Nothing waits on a stop, and there's no `afterStop`. The thread menu still offers no Delete on a thread whose own agent works, as on main.
+- **Failure**: a settle or delete that fails to reach the engine shows on the thread the user acted on, as main's failed commands do, with Retry and Dismiss. Its tree is untouched until a retry lands.
+- A thread whose parent was deleted before protocol 6 stands on its own: `parentOf` finds no parent, it shows at the top level, and `treeOf` stops at a deleted thread, as `lineOf` does.
 
 ## Usage
 
@@ -105,18 +106,23 @@ All in the client (`children.go`, and `SettleTree` and `DeleteTree` in `internal
 
 - `api.Thread.LastReport` is new. `api.Protocol` is 5: a protocol 4 GUI would drop the field and tell of reports from `Reported` and the children's requests, which is issue #14, so it is refused.
 
+## Protocol 6
+
+- A settle or a delete takes the thread's tree in its commit. `api.Protocol` is 6: a protocol 5 GUI sends a command per thread, which an engine of 6 has already taken, and a protocol 5 engine would leave a child of a settled or deleted thread at work behind a protocol 6 GUI's one command. So each refuses the other. No store schema change.
+- Spawn PR 3 adds `MessageQueued.Report` within protocol 6. No release goes out in between.
+
 ## Not done
 
 - An agent starting a child (bb's `create_chat` tool): the follow-up PR, likely the first plugin. Until then no path in the app creates a child. The user's "New child thread", the Agents panel's +, and the child's draft were removed on 2026-11-03: a child is always an agent's.
 - Children on another engine than their parent, and moving a thread to another parent.
-- Engine-side cascades, or cascades that survive the GUI quitting.
+- An engine-side Stop all.
 - Narrowing a tree after create, as access can't change after create on main.
 - Indexing parents in the hub replica.
 - Real token counts from Claude or Codex.
 
 ## Open questions for Nelson
 
-1. Cascades as engine commands (one intent, the engine fanning out, atomic per engine), or keep them in the GUI as now?
+1. Answered 2026-11-05: the engine does Settle and Delete of a tree, in the command's own commit, on the existing intents (see Cascades and Protocol 6). Stop all stays in the GUI.
 2. Should the outcome line be built in the engine, as now, or should the event carry less and the GUI read the child's transcript?
 3. Is "a stopped run reports nothing" right once agents start children themselves, when an agent rather than the user stops one? Runs the engine stops itself (an answer it couldn't deliver) report nothing today either.
 4. Should a child be held to its parent's workspace? Nothing checks it; the spawn tool will decide where one starts.
