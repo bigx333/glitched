@@ -8,7 +8,6 @@ package claude
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -32,10 +31,11 @@ type Adapter struct {
 	// Path is the claude binary. Empty looks on PATH, then in ~/.local/bin,
 	// where Claude Code's installer puts it.
 	Path string
-	// Browser is the command line of the MCP server that gives each run
-	// the app's browser as tools (glitched browser-mcp), or empty for
-	// none. It joins the user's own MCP servers, as "glitched".
-	Browser []string
+	// MCPConfig is a file of MCP servers each run gets beside the user's
+	// own, as the app's browser (browsermcp.WriteConfig), or empty for
+	// none. A file, not JSON on the command line, which a claude.cmd shim
+	// on Windows would hand to cmd.exe to unquote.
+	MCPConfig string
 }
 
 var _ provider.Adapter = (*Adapter)(nil)
@@ -155,20 +155,12 @@ func (ad *Adapter) argv(spec provider.SessionSpec, sessionFlag, session string) 
 	if e := spec.Model.Effort; e != "" {
 		a = append(a, "--effort", e)
 	}
-	if len(ad.Browser) > 0 {
-		a = append(a, "--mcp-config", mcpConfig(ad.Browser))
+	// --mcp-config takes every value after it until the next flag,
+	// which follows here.
+	if ad.MCPConfig != "" {
+		a = append(a, "--mcp-config", ad.MCPConfig)
 	}
 	return append(a, sessionFlag, session)
-}
-
-// mcpConfig is the --mcp-config of the browser's MCP server, run as
-// command. --mcp-config takes JSON as well as files, and every value
-// after it until the next flag, which argv puts after it.
-func mcpConfig(command []string) string {
-	b, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
-		"glitched": map[string]any{"type": "stdio", "command": command[0], "args": command[1:]},
-	}})
-	return string(b)
 }
 
 var modes = map[api.Access]string{
