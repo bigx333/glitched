@@ -340,14 +340,19 @@ Claude Code runs in threads get the browser as an MCP server named
   --mcp-config, one per run)
 ```
 
-- **The engine** (`glitched serve`) gives each run
-  `--mcp-config {"mcpServers":{"glitched":{"type":"stdio","command":"<this
-  program>","args":["browser-mcp","-dir","<its state directory>"]}}}`,
-  beside the user's own servers (`claude.Adapter.Browser`).
+- **The engine** (`glitched serve`) writes `browser-mcp.json` in its
+  state directory as it starts, `{"mcpServers":{"glitched":{"type":"stdio",
+  "command":"<this program>","args":["browser-mcp","-dir","<the
+  directory>"]}}}`, and gives each run `--mcp-config` that file, beside the
+  user's own servers (`claude.Adapter.MCPConfig`). A file, not JSON on the
+  command line, which a `claude.cmd` shim on Windows would hand to cmd.exe
+  to unquote.
 - **`glitched browser-mcp`** speaks MCP on stdio (initialize, tools/list,
   tools/call, ping) and passes each call to the app on the state
   directory's `browser.sock`, a line of JSON each way. It knows nothing of
-  tabs. With no app open the tools are still listed, and each says the
+  tabs. A call the client cancels (`notifications/cancelled`), or one
+  still running as the client goes, ends in the app too, and a call the
+  view hasn't run yet does nothing. With no app open the tools are still listed, and each says the
   app isn't open.
 - **The app** listens on `browser.sock` as its window opens; nothing
   authenticates a caller, so the state directory's mode (0700) is the
@@ -368,9 +373,11 @@ Claude Code runs in threads get the browser as an MCP server named
   (pointer and mouse events, down, up, click, at its centre) or types (the
   prototype's value setter, then `input` and `change`, so frameworks
   tracking the value on the element, as React does, see it; an editor
-  through `insertText`). Enter is a `keydown` and `keyup`; unless the page
-  takes the `keydown`, the field's form submits once the script has
-  answered. Its events are the script's: `isTrusted` is false.
+  through `insertText`). Enter is `keydown`, `keypress` and `keyup`;
+  unless the page takes one of the first two, the field's form submits
+  as a browser's would, once the script has answered: its default button
+  clicked, or with none, the form submitted if the field is its only one
+  Enter submits from. A field that is read-only takes nothing. Its events are the script's: `isTrusted` is false.
 - **Not yet isolated** (Next, 2): the script runs in the page's world, so a
   page that set out to can still move where an action lands, within
   itself. What it can't do is reach past itself, as each action acts on
