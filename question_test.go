@@ -588,6 +588,54 @@ func TestQuestionCardDrawsEachLabelApart(t *testing.T) {
 	}
 }
 
+// An invisible mark and a literal escape that spells it are two labels,
+// which the engine takes as two answers, so they draw two cards: swapped,
+// the options draw apart, and the user sees which is which.
+func TestQuestionCardDrawsAnEscapeApartFromWhatItSpells(t *testing.T) {
+	marked, literal := "Keep\u200b", `Keep\u{200B}`
+	a := offline(t)
+	card := func(labels ...string) *ui.Tester {
+		body := questionsOf(api.Question{Text: "Which?", Options: options(labels...)})
+		e := entry{key: "ask", request: &client.RequestEntry{Request: api.ID{1}, Kind: api.KindQuestion, Body: body, State: api.RequestPending}}
+		tt := ui.NewTester(func(c *ui.Context) {
+			a.applyTheme(c)
+			ui.Column(c).Fill().Background(palette.bg).Children(func() { a.requestCard(c, thread{Thread: &client.Thread{}}, e) })
+		}, 1000, 600)
+		tt.Advance(time.Second)
+		return tt
+	}
+	q := api.Questions{Questions: []api.Question{{Text: "Which?", Options: options(marked, literal)}}}
+	for _, label := range []string{marked, literal} {
+		if err := (api.Answers{Answers: []api.Answer{{Picked: []string{label}}}}).Fit(q); err != nil {
+			t.Fatalf("the engine refuses %q: %v", label, err)
+		}
+	}
+	for _, theme := range []string{lightTheme.name, darkTheme.name} {
+		a.settings.theme = theme
+		first := card(marked, literal)
+		if !first.HasText(`Keep\u{200B}`) || !first.HasText(`Keep\\u{200B}`) {
+			t.Errorf("in %s, the card shows %q; want each label as its own text", theme, first.Texts())
+		}
+		if bytes.Equal(first.Image().Pix, card(literal, marked).Image().Pix) {
+			t.Errorf("in %s, %q and %q swap places and the card draws the same", theme, marked, literal)
+		}
+	}
+}
+
+// ⌘1 and ⌘2 send the option each picks, of two that escape alike but for
+// the escape's own backslash.
+func TestQuestionKeysSendEachOfTwoLabelsThatEscapeAlike(t *testing.T) {
+	labels := []string{"Keep\u200b", `Keep\u{200B}`}
+	for i, key := range []ui.Key{ui.Key1, ui.Key2} {
+		h, th := questioning(t, []provider.Event{provider.RequestOpened{ID: "q", Kind: "question", Body: questionsOf(api.Question{Text: "Which?", Options: options(labels...)})}})
+		h.tt.Key(ui.Cmd, key)
+		got := answered(t, h, th, "Answered")
+		if want := (api.Answers{Answers: []api.Answer{{Picked: []string{labels[i]}}}}); !reflect.DeepEqual(got, want) {
+			t.Errorf("⌘%d sent %+v, want %+v", i+1, got, want)
+		}
+	}
+}
+
 // question is a question request of one question, as a view carries it.
 func question(text string) api.Request {
 	return api.Request{ID: api.NewID(), Kind: api.KindQuestion, Body: questionsOf(api.Question{Text: text, Options: options("Yes", "No")})}
