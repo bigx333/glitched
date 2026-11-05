@@ -1,8 +1,10 @@
 # mygoscript
 
 `glitched/mygoscript` lets a Luau script describe native UI that the Go host
-draws with MyGo's public `ui` package. This is a spike. It proves the loop
-with one scripted counter on the Settings › Scripts page.
+draws with MyGo's public `ui` package. Every `ui` widget that a sandboxed
+script can drive is exposed. The Settings › Scripts page runs two scripts: a
+counter (`scripts/counter.luau`) and a tour of the widgets
+(`scripts/widgets.luau`).
 
 ```mermaid
 sequenceDiagram
@@ -11,13 +13,14 @@ sequenceDiagram
     participant L as Luau VM (native, cgo)
     V->>P: first View starts the VM (about 1.5 ms)
     P->>L: mount(script) → initial state
-    P->>L: render(state) → widget tree (JSON)
-    V->>V: draw tree with ui.Column/Row/Text/Button
-    V->>P: Button.OnClick → act("increment")
-    P->>L: act(name, state) → state patch
-    P->>P: merge patch into host state
+    P->>L: render(state) → widget tree (JSON) + handler ids
+    V->>V: draw each node with its ui constructor
+    V->>P: a bound widget's edit → set state, queue onChange
+    V->>P: OnClick or a queued event → fire(handler id, value)
+    P->>L: act(id, state, value) → state patch
+    P->>P: merge the patch into host state
     P->>L: render(state) → new tree
-    V->>V: rebuild draws the new tree
+    V->>V: Invalidate; the next pass draws the new tree
 ```
 
 ## Script describes, host draws
@@ -26,40 +29,148 @@ A script returns a table:
 
 ```lua
 return {
-	state = { count = 0 },
+	state = { count = 0, name = "" },
 	view = function(state)
 		return ui.column({ gap = 12 }, {
-			ui.text("Count: " .. state.count, { size = 28 }),
-			ui.button("Increment", { on = "increment" }),
+			ui.text("Count: " .. state.count, { fontSize = 28 }),
+			ui.button("Increment", { onClick = function(s) return { count = s.count + 1 } end }),
+			ui.button("Reset", { onClick = "reset" }),
+			ui.textInput({ bind = "name", placeholder = "Name" }),
 		})
 	end,
 	actions = {
-		increment = function(state) return { count = state.count + 1 } end,
+		reset = function() return { count = 0 } end,
 	},
 }
 ```
 
-`view` is a pure function of state. It returns plain tables that `ui.*`
-helpers build. The prelude (`prelude.luau`) checks the tree and encodes it as
-JSON. Go decodes it and draws each node with the matching MyGo widget. The
-script never holds a MyGo element, a `ui.Context` or a callback into Go.
+`view` is a pure function of state. It returns plain tables that the `ui.*`
+constructors build. The prelude (`prelude.luau`) checks the tree and encodes
+it as JSON. Go decodes it and draws each node with the matching MyGo widget
+(`widgets.go`, `collections.go`). The script never holds a MyGo element, a
+`ui.Context` or a Go value.
+
+### The script API
+
+Every widget has one constructor, `ui.<kind>(...)`. It takes these
+arguments, in any order:
+
+- A string or a number sets the kind's leading prop: a text's `text`, a
+  button's `label`, a field's `label`, an icon's `svg`. The table below
+  shows it in quotes, as `"label"`.
+- A table of props. Its list items are children, and so is its `children`
+  field.
+- A widget, or a list of widgets, adds children.
+
+A node is `{ kind, key, children, ...props }`. A prop holds a string, a
+number, a boolean, a widget (a popover's `anchor`), a function (a handler),
+or a list or table of these (a table's `rows`, a menu's `items`). The Go
+registry is the one list of kinds: the host puts it in front of the prelude,
+so `ui.<kind>` exists exactly for the kinds Go can draw. Any other name
+raises a script error.
+
+- **Element props.** Every widget takes MyGo's `Element` setters that have
+  plain arguments: layout, flex, grid, text, color, border, effects and
+  accessibility. Examples are `padding = { 8, 12 }`, `gap`, `width`,
+  `grow`, `alignItems = "center"`, `columnTracks = { "1fr", "120" }`,
+  `fontSize`, `bold`, `textColor = "#336699"`,
+  `border = { width = 1, color = "#0002" }`, `shadow = {...}`, `radius`,
+  `tooltip`, `label`, `placeholder`, `disabled` and `password`. `style.go`
+  holds the full list. Colors are `#rgb`, `#rrggbb` or `#rrggbbaa`.
+- **State styles.** `hovered`, `pressed`, `focused` and `highlighted` each
+  hold a table of element props, which applies while the element is in that
+  state. The `*Base` widgets need them to be styled from a script.
+- **Events.** `onClick` and `onSubmit` work on any widget. `onChange` fires
+  when a bound value changes. `onChoose` fires for a menu item, an alert
+  button or a combobox option. The extra binds have `onChangeHigh`,
+  `onOpenChange` and `onCurrentChange`. A handler is a function
+  `(state, value) -> patch`, or the name of a function in `actions`.
+- **Menus.** `menu` and `contextMenu` work on any widget, and `items` on
+  `menuButton`. Each takes a list of entries:
+  `{ label, checked, disabled, onChoose }`, `{ separator = true }`,
+  `{ editItems = true }`, or `{ label, items }` for a submenu.
+
+### Widgets
+
+All 98 kinds, grouped. Each kind uses MyGo's `ui.<Kind>` constructor. A
+widget marked "bind" edits a value. With `bind = "key"` the value lives in
+host state. Without it, the host keeps the value per widget, and the
+`value` prop seeds it.
+
+| Group | Kinds | Props beyond element props |
+| --- | --- | --- |
+| Layout | `box`, `column`, `row`, `grid`, `scroll`, `scrollBoth`, `scrollHorizontal`, `spacer`, `divider`, `overlay` | children |
+| Splits | `split`, `splitPercent`, `splitVertical`, `splitVerticalPercent` | bind (size); exactly 2 children |
+| Text | `text` ("text"), `richText` (`spans`, text children), `link` ("label", `onClick`), `badge` ("text"), `icon` and `image` ("svg" markup), `avatar` ("name") | |
+| Indicators | `spinner`, `progress` ("value"), `meter` ("value", `min`, `max`, `warning`, `critical`) | |
+| Buttons | `button`, `primaryButton` ("label"), `buttonBase` (children), `menuButton` ("label", `items`) | |
+| Text input | `textInput`, `textInputBase`, `textArea`, `textAreaBase`, `searchField`, `editableText`, `autocomplete` (`suggestions`), `textInputBuffer`, `textInputBufferBase`, `textAreaBuffer`, `textAreaBufferBase` | bind (string) |
+| Tokens | `tokenField` (`suggestions`) | bind (list of strings) |
+| Numbers | `slider`, `sliderBase`, `stepSlider`, `stepper`, `numberInput` (`min`, `max`, `step`); `rangeSlider` (`bind` and `bindHigh`); `rating` (`max`) | bind (number) |
+| On or off | `checkbox` ("label"), `checkboxBase`, `checkboxGroup` ("label", children), `switch`, `switchBase`, `toggle` ("label"), `toggleBase`, `toggleGroup` | bind (boolean) |
+| One of many | `radioGroup` with `radio` ("label", `value`) or `radioBase` children; `segmented` and `tabs` (`labels`); `segmentedBase` and `tabsBase` (a child per segment or tab); `select` and `combobox` (`options`); `selectBase` (`trigger`, `panel`, `option` children); `comboboxBase` (`panel`, `option` children, `onChoose`); `breadcrumbs` (`items`) | bind (string or index) |
+| Color and date | `colorPicker` and `colorWell` (a hex string); `calendar`, `dateInput` and `timeInput` (`2006-01-02`, `15:04` or RFC 3339) | bind |
+| Forms | `form`, `field` ("label"), `fieldset` ("legend") | children |
+| Disclosure | `accordion`, `accordionItem` ("title"), `collapsible` ("label"), `collapsibleBase` (`trigger`), `tree`, `treeItem` ("label") | bind (open) |
+| Overlays | `modal`, `dialogBase` (`backdrop`), `popover` and `popoverBase` (`anchor`), `tooltipBase` (`anchor`), `alertDialog` ("title", `message`, `buttons`, `onChoose`), `findBar` (bind the query; `bindOpen`, `matches`, `bindCurrent`) | bind (open) |
+| Navigation | `toolbar`, `sidebar` (bind the chosen item's id), `sidebarSection` ("title", bind open), `sidebarItem` ("label", `id`, `icon` svg, children) | |
+| Collections | `list` and `gridView` (`minWidth`, `itemHeight`), with a child per row or item; `table` (`columns`, `rows` of cells); `outline` and `outlineTable` (`items = { { id, label, row, cells, children } }`) | bind (selected index, -1 for none) |
+
+`option` is the one kind that is not a MyGo constructor. It is an option of
+`selectBase` or `comboboxBase`, drawn with `SelectParts.Item` or
+`ComboboxParts.Item`.
+
+### Not exposed, and why
+
+| `ui` API | Why |
+| --- | --- |
+| `WebView` | A web view is out of scope for native script UI. It also needs a `NativeWebView` that the host creates. |
+| `BackButton`, `ForwardButton` | They drive a `*ui.Router`. A plugin gets no handle on the app's navigation. |
+| `ToastBase`, `ToastViewportBase` | They draw the window's toast queue, which the app owns. Showing a toast is an effect that a grant would add, not a widget. |
+| `Textf` | It is `Text` with `fmt.Sprintf`. Scripts use `string.format` with `ui.text`. |
+| `Link`'s `url`; `Image` and `Avatar` with a `*Bitmap` | Opening a URL launches the browser, and bitmaps come from files or the network. Both need grants that scripts do not have. `link` takes `onClick`. `image`, `icon` and `sidebarItem` take SVG markup. |
+| Element methods that take Go callbacks | `Draw`, `DrawOver`, `HandleInput`, `HandleTextInput`, `Access`, drag and drop, `OnPaste`, `OnTextKey` and the animations (`Animate*`, `Spring`, `Keyframes`, `Timeline`, `Transition`) run Go code per frame or per event. The script runs only per render, so it cannot back them. |
+| Sorting and multi-select in tables, lists and outlines | `ListState.Sort` and `Selection` need Go comparators and key sets. Tables, lists and grids bind one selected index. Outlines keep their open items in the host but expose no selection. |
+| Menu item shortcuts, `OnShortcut` | Keyboard shortcuts reach outside the plugin's subtree. |
 
 ## Host-owned, keyed state
 
-The `Plugin` owns the state map. The script reads a frozen copy and returns
-a patch from an action. The host merges the patch and renders again.
-Consequences:
+The `Plugin` owns all state. The script reads a frozen copy, and a handler
+returns a patch that the host merges before it renders again.
 
-- A script error does not lose state. A restarted VM draws the same count.
+- A widget with `bind = "key"` edits the state at that key. MyGo writes the
+  edit into a Go value as the widget's constructor returns. The host stores
+  the edit, renders the view again and runs `onChange(state, value)`.
+- A widget without `bind` keeps its value in the host too, under its key
+  path. Its `value` prop seeds it, and the value survives renders and VM
+  restarts.
+- Go-side widget state also lives in the plugin, by key path: a list's
+  `ListState` (scroll and selection), an outline's open items, a text
+  buffer, and parsed SVGs.
+- A script error does not lose state. A restarted VM draws the same values.
 - The script's `state` table only seeds keys the host does not have yet.
-- State holds strings, finite numbers and booleans. Nested data is future
-  work.
+- State holds strings, finite numbers, booleans and lists of strings. Colors
+  are hex strings, and dates are RFC 3339 strings.
 
 Widget identity is a key path. Each node uses its script `key`, or its kind
-and index among siblings when it has none. A duplicate key falls back to
-the index, with a suffix until it is unique. Strings must be valid UTF-8. The path goes through `c.Key` before each constructor, so a rerun
-of `view` keeps MyGo's per-widget state (focus, hover, press) on the same
-widgets.
+and index among siblings when it has none. A duplicate key falls back to the
+index, with a suffix until it is unique. The path goes through `c.Key`
+before each constructor. A rerun of `view` therefore keeps MyGo's per-widget
+state (focus, hover, press) and the host's values on the same widgets.
+
+Handlers are Luau functions. The prelude registers each one under
+`<render>:<n>` and puts that id in the tree. An event from a tree that an
+older render drew is dropped, so a handler never runs for the wrong node.
+
+### Errors in place
+
+- A script error shows over the last good tree, with a Restart button.
+  Script errors are syntax and runtime errors, a spent budget, a bad tree,
+  an unknown `ui.<kind>` and a failing handler.
+- A widget the host cannot draw shows its error in red where it would be,
+  and the rest of the tree still draws. Examples are an unknown prop, a bad
+  color, a radio outside a radio group, a split without two children and a
+  `url`.
 
 ## Why Luau, why not HTML
 
@@ -77,9 +188,9 @@ this package does not use it.
 
 The package imports only `github.com/egoist/mygo/ui`. It follows MyGo's
 lifetime rules: no stored elements or Context, keyed identity through
-`c.Key`, `OnClick` for actions. A build pass runs the script only once, at
-the first `View`. After that it draws the cached tree, and only actions and
-restarts run the script. MyGo upgrades stay ordinary
+`c.Key`, `OnClick` and bound Go values for input. A build pass runs the script only at
+the first `View`, or after a bound edit. Otherwise it draws the cached tree.
+Handlers run after the pass is built. MyGo upgrades stay ordinary
 dependency bumps. All library code lives under `mygoscript/`. The app only
 imports it (`scripts.go`).
 
@@ -166,19 +277,21 @@ Luau's own hooks provide the sandbox. There is no process or wasm boundary.
   end. The heap cap bounds how much data such a call can touch.
 - The sandbox is in-process. A bug in the Luau VM is a bug in the app. wasm
   isolated that; native does not.
+- A bound edit renders the view again on the UI thread, so typing in a bound
+  text input runs `view` once per keystroke. That is cheap for a form, but a
+  heavy `view` would lag typing.
 - Chunks are compiled for every call. They are tiny (a state literal), and
   the script compiles once per VM, so a bytecode cache does not help yet.
   Add one if large scripts or hot reload make compile time visible.
 
 ## Future
 
-Not built in the spike:
+Not built yet:
 
-- v1 widgets: column/row and text get styling props. Add button variants,
-  text input, checkbox, slider and scroll/list. Inputs bind to host state
-  keys so edits stay host-owned.
 - File watch plus `Invalidate`: reload a script from disk on change, keep
   host state, and redraw with `c.Services().Invalidate`.
-- Richer state (nested tables, lists) with a defined encoding.
+- Grants for effects that a script may ask for (toasts, opening URLs,
+  bitmaps), each off by default.
+- Nested state (tables of tables) with a defined encoding.
 - Extract `glitched/mygoscript` into its own repository once the API settles.
   The package has no imports from the app, so the move is a path change.
