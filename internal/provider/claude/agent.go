@@ -525,10 +525,11 @@ func (g *Agent) sendLocked(ctx context.Context, v any) error {
 	if err == nil {
 		return nil
 	}
+	cut := n > 0 || mayBeCut(err)
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		err = cmp.Or(ctx.Err(), err)
 	}
-	if n > 0 {
+	if cut {
 		g.cut = fmt.Errorf("claude: a line to Claude Code was cut short: %w", err)
 	}
 	return err
