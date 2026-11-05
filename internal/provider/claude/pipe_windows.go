@@ -1,14 +1,11 @@
 package claude
 
 import (
+	"crypto/rand"
 	"os"
-	"strconv"
-	"sync/atomic"
 
 	"golang.org/x/sys/windows"
 )
-
-var pipes atomic.Uint64
 
 // pipe is a pipe claude reads from, when in, or writes to. An anonymous
 // pipe's handles cannot be polled, so its deadlines fail. The adapter's
@@ -16,14 +13,16 @@ var pipes atomic.Uint64
 // work; claude's end is synchronous, as a program expects of its standard
 // handles.
 func pipe(in bool) (child, ours *os.File, err error) {
-	name := `\\.\pipe\glitched-claude-` + strconv.Itoa(os.Getpid()) + "-" + strconv.FormatUint(pipes.Add(1), 10)
+	// A random name keeps another program from taking it first, or
+	// connecting before claude's end does.
+	name := `\\.\pipe\glitched-claude-` + rand.Text()
 	path, err := windows.UTF16PtrFromString(name)
 	if err != nil {
 		return nil, nil, err
 	}
 	access, mode := uint32(windows.PIPE_ACCESS_INBOUND), uint32(windows.GENERIC_WRITE)
 	if in {
-		access, mode = windows.PIPE_ACCESS_OUTBOUND, windows.GENERIC_READ
+		access, mode = windows.PIPE_ACCESS_OUTBOUND, windows.GENERIC_READ|windows.FILE_WRITE_ATTRIBUTES
 	}
 	server, err := windows.CreateNamedPipe(path,
 		access|windows.FILE_FLAG_OVERLAPPED|windows.FILE_FLAG_FIRST_PIPE_INSTANCE,
