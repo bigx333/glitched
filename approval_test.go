@@ -690,12 +690,13 @@ func legibleNow(h *harness, r *client.RequestEntry, field, needle string) bool {
 
 // change is how the window changes with needle, in field of r's body,
 // spelled otherwise: the most any color channel changes, and in how many
-// rows of pixels one changes by more than 40.
+// rows of pixels one changes by more than 40. It sets a frame of the
+// window settled as it is, which draws what a frame late draws, as the
+// card's mark of the lines below, beside one with needle spelled
+// otherwise, so that nothing but needle tells them apart.
 func change(h *harness, r *client.RequestEntry, field, needle string) (most, rows int) {
 	var b map[string]any
 	json.Unmarshal(r.Body, &b)
-	before := h.tt.Image()
-	pix := bytes.Clone(before.Pix)
 	body := r.Body
 	read := h.a.reads[r.Request]
 	var kept reading
@@ -705,6 +706,16 @@ func change(h *harness, r *client.RequestEntry, field, needle string) (most, row
 		for k, t := range read.texts {
 			kept.texts[k] = &readText{t.text, slices.Clone(t.drawn), t.left}
 		}
+	}
+	h.tt.Frame()
+	before := h.tt.Image()
+	pix := bytes.Clone(before.Pix)
+	for range 4 {
+		h.tt.Frame()
+		if bytes.Equal(pix, h.tt.Image().Pix) {
+			break
+		}
+		pix = bytes.Clone(h.tt.Image().Pix)
 	}
 	b[field] = strings.Replace(b[field].(string), needle, strings.Repeat("X", len(needle)), 1)
 	r.Body, _ = json.Marshal(b)
@@ -1116,3 +1127,4 @@ func TestShowAllReadsTheCardAnew(t *testing.T) {
 	}
 	t.Errorf("six presses of ⌘⏎ never answered after Show all; texts %q", h.tt.Texts())
 }
+
