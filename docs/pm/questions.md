@@ -2,6 +2,18 @@
 
 Newest first. Answer under each question, or in the PM thread.
 
+## Q9 (2026-11-05, open). #51 has two new Highs after round 4
+
+CI is green at 2ad59ed. Round 4 fixed what it claimed. The PM reproduced both new Highs on a clean checkout (summary: https://github.com/bigx333/glitched/pull/51#issuecomment-6649814716).
+- **Sol:** the composer's position lags one frame behind the card's. A draft that grows while the card scrolls marks a covered line read, and the request gets approved.
+- **Opus:** the open agents panel covers card lines that still count as read. This gap was already there in round 3.
+
+Both are the same class of bug: something covers the card, and the read gate does not know it. Each round has found another such cover.
+
+1. **Land #51 now, and fix both Highs in a follow-up PR that gates slice 5 (PM recommends).** #51 is strictly safer than main. Claude is not on in the GUI until slice 5, so only the fake provider reaches these cards. The follow-up builds one rule for covers: read geometry and every cover from the same frame. Landing also unblocks #50.
+2. **Fix round 5 on #51.** The same structural fix, made before landing. #50 stays blocked.
+3. **A stricter, simpler rule.** Answer only while the whole card is in the clear view, with no overlay open and no draft. That means less geometry to get wrong, but more refused presses.
+
 ## Q8 (2026-11-05, answered: one more fix round). #51 (#47 security gate) has one High left after its third fix round
 
 Opus found the High in round 3, and the PM reproduced it at 7dc7eeb: when a 10-line draft makes the composer taller than the fixed `composerRoom`, card lines under the composer count as read, so ⌘⏎ or Allow once can approve a line the user never saw. Sol found no High. The round 3 summary is at https://github.com/bigx333/glitched/pull/51#issuecomment-6648612505. Poteto's default allows three fix rounds, and the "land with an issue" rule from #43 and #45 was not extended to #51 because #51 is the security gate. So the PM asks.
