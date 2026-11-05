@@ -372,13 +372,15 @@ Claude Code runs in threads get the browser as an MCP server named
   snapshot gave it, shown and enabled, scrolls it into view, then clicks
   (pointer and mouse events, down, up, click, at its centre, once the
   script has answered, so a page leaving or a dialog doesn't take the
-  answer with it) or types (the
+  answer with it; refused where something else shows over its centre,
+  as a banner or a dialog's backdrop, but its own label; the focus left
+  where it is if the page takes `mousedown`) or types (the
   prototype's value setter, then `input` and `change`, so frameworks
   tracking the value on the element, as React does, see it; an editor
   through `insertText`). Enter is `keydown`, `keypress` and `keyup`;
   unless the page takes one of the first two, the field's form submits
   as a browser's would, once the script has answered: its default button
-  clicked, or with none, the form submitted if the field is its only one
+  clicked (an image button too), or with none, the form submitted if the field is its only one
   Enter submits from. A field that is read-only takes nothing; one that keeps
   only some values, as a date's, says what it took; dropdowns and file
   fields say the tools can't fill them yet. A page that stops answering,
