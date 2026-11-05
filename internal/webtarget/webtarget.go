@@ -243,6 +243,8 @@ func act(ctx context.Context, p Page, s Snapshot, ref string, args map[string]an
 	if err := run(ctx, p, args, &out); err != nil {
 		return err
 	}
+	// That catches a page answering with nothing, not one that fakes
+	// the script under its key (key), which isolation will close.
 	if !out.Done {
 		return fmt.Errorf("webtarget: the page's answer for %s is not the script's", ref)
 	}

@@ -120,6 +120,10 @@ function install(key) {
     setInputValue: setter(HTMLInputElement, "value"),
     setTextareaValue: setter(HTMLTextAreaElement, "value"),
     inputForm: getter(HTMLInputElement, "form"),
+    buttonType: getter(HTMLButtonElement, "type"),
+    formElements: getter(window.HTMLFormElement, "elements"),
+    collectionLength: getter(HTMLCollection, "length"),
+    collectionItem: fn(HTMLCollection, "item"),
     requestSubmit: fn(window.HTMLFormElement, "requestSubmit"),
     getSelection: fn(Document, "getSelection"),
     selectAllChildren: fn(window.Selection, "selectAllChildren"),
@@ -557,10 +561,35 @@ function install(key) {
   // What act may type into: text boxes, and editors.
   const TYPEABLE = { __proto__: null, textbox: true, searchbox: true, spinbutton: true, combobox: true };
 
+  // Fields whose Enter submits their form (HTML's implicit submission).
+  const BLOCKS_IMPLICIT = {
+    __proto__: null, text: true, search: true, url: true, tel: true, email: true, password: true,
+    date: true, month: true, week: true, time: true, "datetime-local": true, number: true,
+  };
+
+  // implicit is how Enter in one of form's fields submits it, or null: a
+  // click on its default button, the first that submits, unless that is
+  // disabled; with none, the form submitted, if it has no other field
+  // whose Enter would submit it (HTML's implicit submission).
+  function implicit(form) {
+    const els = get(B.formElements, form);
+    let fields = 0;
+    for (let i = 0, n = get(B.collectionLength, els); i < n; i++) {
+      const c = apply(B.collectionItem, els, [i]), t = tagOf(c);
+      const type = t === "INPUT" ? lower(get(B.inputType, c)) : t === "BUTTON" ? lower(get(B.buttonType, c)) : "";
+      if ((t === "BUTTON" && type === "submit") || (t === "INPUT" && (type === "submit" || type === "image"))) {
+        if (matches(c, ":disabled")) return null;
+        return () => apply(B.dispatch, c, [new EV.Mouse("click", { __proto__: null, bubbles: true, cancelable: true, composed: true, button: 0, detail: 1 })]);
+      }
+      if (t === "INPUT" && BLOCKS_IMPLICIT[type] === true) fields++;
+    }
+    return fields === 1 && B.requestSubmit ? () => apply(B.requestSubmit, form, []) : null;
+  }
+
   // act does what an agent asks of a ref's element (args.action): "click"
   // clicks it; "type" replaces its text with args.text and, with
-  // args.submit, presses Enter, which submits its form unless the page
-  // takes the key. It acts only once the element is still what the
+  // args.submit, presses Enter, which submits its form as a browser
+  // would, unless the page takes the key. It acts only once the element is still what the
   // snapshot named (args.role, args.name), shows and is enabled, scrolled
   // into view. Its events are the script's, not the user's: a page sees
   // isTrusted false on each.
@@ -601,6 +630,7 @@ function install(key) {
     const field = html && (tag === "INPUT" || tag === "TEXTAREA");
     const editor = html && !field && (opt(B.editable, el) || (tag === "BODY" && opt(B.designMode, doc) === "on"));
     if (TYPEABLE[r] !== true || !(field || editor)) throw new Err(`${ref} is a ${r || "element"}, not a text box`);
+    if (attr(el, "aria-readonly") === "true" || matches(el, ":read-only")) throw new Err(`${ref} is read-only`);
     focus();
     if (field) {
       apply(tag === "INPUT" ? B.setInputValue : B.setTextareaValue, el, [args.text]);
@@ -613,16 +643,19 @@ function install(key) {
     if (args.submit) {
       const key = (type) => {
         const e = new EV.Keyboard(type, { __proto__: null, bubbles: true, cancelable: true, composed: true, view,
-          key: "Enter", code: "Enter", keyCode: 13, which: 13 });
+          key: "Enter", code: "Enter", keyCode: 13, which: 13, charCode: type === "keypress" ? 13 : 0 });
         fire(e);
         return get(B.defaultPrevented, e);
       };
-      const taken = key("keydown");
+      // As a browser does: keydown, then keypress unless the keydown was
+      // taken, implicit submission unless either was, then keyup.
+      const taken = key("keydown") || key("keypress");
+      const form = !taken && tag === "INPUT" ? get(B.inputForm, el) : null;
       key("keyup");
       // The form submits once the script has answered: a page leaving
       // as it runs would take its answer with it.
-      const form = !taken && tag === "INPUT" ? get(B.inputForm, el) : null;
-      if (form && B.requestSubmit) apply(B.later, window, [() => apply(B.requestSubmit, form, []), 0]);
+      const submit = form && implicit(form);
+      if (submit) apply(B.later, window, [submit, 0]);
     }
     return { __proto__: null, done: true };
   }
