@@ -86,7 +86,11 @@ var scopeFlags = []string{"--user", "--scope", "--quiet", "--collect", "--slice=
 
 // contain has cmd start claude in a new scope of run's. Each process gets
 // a scope of its own: systemd may not have let go of the last one's name.
+// A command that cannot start, as one the guard refused, probes nothing.
 func contain(cmd *exec.Cmd, run string) {
+	if cmd.Err != nil {
+		return
+	}
 	s := scopes()
 	if s.dir == "" {
 		return
