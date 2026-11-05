@@ -167,6 +167,7 @@ var settingsSections = []struct {
 	{"providers", "Providers", icPlug, ui.Hex("#4ade80")},
 	{"keybindings", "Keybindings", icKeyboard, ui.Hex("#60a5fa")},
 	{"archived", "Archived threads", icArchive, ui.Hex("#fbbf24")},
+	{"scripts", "Scripts", icCode, ui.Hex("#22d3ee")},
 	{"about", "About", icInfo, ui.Hex("#a78bfa")},
 }
 

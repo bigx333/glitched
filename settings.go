@@ -46,6 +46,9 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 			case r.Match("/archived"):
 				r.Title("Archived threads")
 				a.page(c, "Archived threads", "Threads you archived. Restore one to bring it back to its project.", a.archivedThreads)
+			case r.Match("/scripts"):
+				r.Title("Scripts")
+				a.page(c, "Scripts", "Native UI that a sandboxed Luau script describes. A mygoscript spike.", a.scripts)
 			default:
 				r.Title("About")
 				a.page(c, "About", "", a.about)

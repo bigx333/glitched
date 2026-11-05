@@ -16,6 +16,7 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 	"github.com/egoist/mygo/ui/markdown"
 
+	"glitched/mygoscript"
 	"glitched/wind"
 )
 
@@ -301,6 +302,9 @@ type app struct {
 	checkUntil  time.Time
 
 	md markdown.Options
+
+	// counter is the scripted counter on the Scripts settings page.
+	counter *mygoscript.Plugin
 }
 
 func newApp() *app {
