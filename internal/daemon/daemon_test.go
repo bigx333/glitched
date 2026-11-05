@@ -20,6 +20,7 @@ import (
 	"github.com/coder/websocket"
 
 	"glitched/internal/api"
+	"glitched/internal/engine"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
@@ -339,4 +340,66 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.w.Write(p)
+}
+
+// The child limits engine.json keeps are those the engine starts with, and
+// SetLimits changes them at once, as the GUI's own engine does.
+func TestTheChildLimitsRoundTripThroughEngineJSON(t *testing.T) {
+	dir := stateDir(t)
+	want := engine.Limits{Working: 2, All: 3, Depth: 1}
+	if err := (Config{Dir: dir, Hub: true, Epoch: 1, Children: want}).Save(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Defaults(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Children != want {
+		t.Fatalf("engine.json's limits: %+v, want %+v", cfg.Children, want)
+	}
+	ad := fake.New(fake.Turn(false))
+	cfg.Providers = provider.Mux{"fake": ad}
+	d, err := Start(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	ep := d.Endpoint()
+	ctx := context.Background()
+	submit := func(target api.ID, body api.Intent) api.ID {
+		t.Helper()
+		c := api.Command{ID: api.NewID(), Target: target, Body: body}
+		if _, err := ep.Submit(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+		return c.ID
+	}
+	spawned := func(run api.ID) error {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(2 * time.Millisecond) {
+			if answered, err := ad.Spawned(fake.ChildOf(run, 0)); answered {
+				return err
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the spawn was never answered")
+			}
+		}
+	}
+	ad.Spawns(ep, "split", fake.Child{Title: "kid"})
+	ad.Spawns(ep, "nest", fake.Child{Title: "grandkid"})
+	parent := api.NewID()
+	submit(parent, api.ThreadCreate{Workspace: "/src", Title: "top", Model: api.ModelRef{Provider: "fake", Model: "fake"}})
+	split := submit(parent, api.MessageDispatch{Text: "split", Mode: api.StartNow})
+	if err := spawned(split); err != nil {
+		t.Fatal(err)
+	}
+	kid := fake.ChildOf(split, 0)
+	var rej *api.RejectedError
+	if err := spawned(submit(kid, api.MessageDispatch{Text: "nest", Mode: api.AfterActive})); !errors.As(err, &rej) {
+		t.Fatalf("a grandchild at depth 2 under engine.json's depth 1: %v, want refused", err)
+	}
+	d.SetLimits(engine.Limits{Depth: 2})
+	if err := spawned(submit(kid, api.MessageDispatch{Text: "nest", Mode: api.AfterActive})); err != nil {
+		t.Fatalf("a grandchild after SetLimits raised the depth to 2: %v", err)
+	}
 }

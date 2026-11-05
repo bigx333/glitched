@@ -67,13 +67,17 @@ type Intent interface{ intentType() string }
 
 // ThreadCreate creates a thread; with a Parent, a child of that thread on
 // the same engine, at most MaxDepth below a thread of the user's, and at
-// its parent's access or less.
+// its parent's access or less. Only an agent starts a child: Run is the
+// parent's live run that asks. Text, when given, is the thread's first
+// message, which starts its first turn in the create's commit.
 type ThreadCreate struct {
 	Workspace string   `json:"workspace"`
 	Title     string   `json:"title"`
 	Model     ModelRef `json:"model"`
 	Access    Access   `json:"access"`
 	Parent    ID       `json:"parent,omitzero"`
+	Run       ID       `json:"run,omitzero"`
+	Text      string   `json:"text,omitempty"`
 }
 
 // MaxDepth is how far below a thread of the user's a child may be: a

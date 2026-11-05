@@ -21,33 +21,131 @@ import (
 	"glitched/internal/provider/fake"
 )
 
-// seedChild creates a child of parent on the engine, at Ask, and sends it
-// messages, returning once every turn they started has ended.
+// seedChild has parent start a child on the engine, as an agent's
+// delegate_task call does, with messages for the child, and returns once
+// every turn they started has ended. A parent at work starts it from its
+// live run; an idle one gets a turn that starts it and ends.
 func seedChild(t *testing.T, d *daemon.Daemon, parent api.ID, title string, messages ...string) api.ID {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	ep, id := d.Endpoint(), api.NewID()
-	bodies := []api.Intent{api.ThreadCreate{Workspace: "/work/t3code", Title: title, Model: fakeModel, Parent: parent}}
-	for _, m := range messages {
-		bodies = append(bodies, api.MessageDispatch{Text: m, Mode: api.AfterActive})
+	sd, _ := seeders.Load(d)
+	ep, spawner := d.Endpoint(), sd.(*seeding).spawner
+	var task string
+	if len(messages) > 0 {
+		task, messages = messages[0], messages[1:]
 	}
-	for _, b := range bodies {
-		if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: id, Body: b}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for len(messages) > 0 {
+	read := func(id api.ID) api.Snapshot {
 		snap, err := ep.Read(ctx, api.Query{Thread: id})
 		if err != nil {
 			t.Fatal(err)
 		}
+		return snap
+	}
+	var id api.ID
+	if snap := read(parent); snap.Threads[0].Run != api.RunIdle {
+		id = api.NewID()
+		c := api.Command{ID: api.NewID(), Target: id, Body: api.ThreadCreate{Workspace: snap.Threads[0].Workspace, Title: title,
+			Model: snap.Threads[0].Model, Access: snap.Threads[0].Access, Parent: parent, Run: liveRun(t, snap.Events), Text: task}}
+		if _, err := ep.Submit(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		run, text := api.NewID(), "Start an agent to "+title
+		spawner.Spawns(ep, text, fake.Child{Title: title, Task: task})
+		sd.(*seeding).route(run)
+		if _, err := ep.Submit(ctx, api.Command{ID: run, Target: parent, Body: api.MessageDispatch{Text: text, Mode: api.AfterActive}}); err != nil {
+			t.Fatal(err)
+		}
+		id = fake.ChildOf(run, 0)
+		for {
+			if answered, err := spawner.Spawned(id); answered {
+				if err != nil {
+					t.Fatal(err)
+				}
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		settled(t, ep, parent)
+	}
+	for _, m := range messages {
+		if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: m, Mode: api.AfterActive}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if task != "" {
+		settled(t, ep, id)
+	}
+	return id
+}
+
+// settled waits for thread's turns to end.
+func settled(t *testing.T, ep api.Endpoint, thread api.ID) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		snap, err := ep.Read(context.Background(), api.Query{Thread: thread})
+		if err != nil {
+			t.Fatal(err)
+		}
 		if v := snap.Threads[0]; v.LastTurn != nil && v.Run == api.RunIdle && v.Queued == 0 {
-			break
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("thread %v's turns never ended", thread)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	return id
+}
+
+// liveRun is the run a thread's log last admitted.
+func liveRun(t *testing.T, evs []api.Event) api.ID {
+	t.Helper()
+	for i := len(evs) - 1; i >= 0; i-- {
+		if b, err := evs[i].Decode(); err == nil {
+			if a, ok := b.(api.TurnAdmitted); ok {
+				return a.Run
+			}
+		}
+	}
+	t.Fatal("no run was admitted")
+	return api.ID{}
+}
+
+// seeding is an engine's adapter with the turns seedChild starts routed
+// to a fake that spawns, so a test's own adapter plays every other turn.
+type seeding struct {
+	provider.Adapter
+	spawner *fake.Adapter
+	mu      sync.Mutex
+	runs    map[api.ID]bool
+}
+
+// seeders is each engine's seeding, by its daemon.
+var seeders sync.Map
+
+func (s *seeding) route(run api.ID) {
+	s.mu.Lock()
+	s.runs[run] = true
+	s.mu.Unlock()
+}
+
+func (s *seeding) of(run api.ID) provider.Adapter {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runs[run] {
+		return s.spawner
+	}
+	return s.Adapter
+}
+
+func (s *seeding) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	return s.of(spec.Run).Open(ctx, spec)
+}
+
+func (s *seeding) Reconcile(ctx context.Context, id provider.RuntimeIdentity) (provider.Recovery, error) {
+	return s.of(id.Run).Reconcile(ctx, id)
 }
 
 // tree3 is the app on an engine holding a thread, Ship the sidebar sort,

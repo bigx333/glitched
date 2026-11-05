@@ -3,6 +3,7 @@ package runtime_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,13 +13,55 @@ import (
 	"glitched/internal/provider/fake"
 )
 
-func newChild(t *testing.T, ep api.Endpoint, parent api.ID, access api.Access) (api.ID, error) {
+// spawner is a fake whose turns can start children.
+type spawner interface {
+	Spawns(ep api.Endpoint, text string, kids ...fake.Child)
+	Spawned(child api.ID) (bool, error)
+}
+
+var spawnTexts atomic.Int64
+
+// newChild has a turn of parent's start a child at access, as an agent's
+// delegate_task call does, and returns it once that turn ended, with the
+// engine's refusal if it refused.
+func newChild(t *testing.T, ep api.Endpoint, ad spawner, parent api.ID, access api.Access, kids ...fake.Child) (api.ID, error) {
 	t.Helper()
-	id := api.NewID()
-	_, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: id, Body: api.ThreadCreate{
-		Workspace: "/src/app", Title: "child", Model: api.ModelRef{Provider: "fake", Model: "fake"}, Access: access, Parent: parent,
+	text := fmt.Sprint("start child ", spawnTexts.Add(1))
+	if len(kids) == 0 {
+		kids = []fake.Child{{Title: "child", Access: access, Wider: true}}
+	}
+	ad.Spawns(ep, text, kids...)
+	run := submit(t, ep, parent, dispatch(text, api.AfterActive)).Command
+	until(t, ep, parent, "the spawning turn", func(th api.Thread) bool {
+		return th.Run == api.RunIdle && th.Queued == 0 && ended(t, ep, parent, run)
+	})
+	child := fake.ChildOf(run, 0)
+	answered, err := ad.Spawned(child)
+	if !answered {
+		t.Fatalf("the spawning turn ended before the engine answered its create")
+	}
+	return child, err
+}
+
+// ended is whether run's turn on thread ended.
+func ended(t *testing.T, ep api.Endpoint, thread, run api.ID) bool {
+	t.Helper()
+	for _, e := range events(t, ep, thread) {
+		if b, err := e.Decode(); err == nil {
+			if te, ok := b.(api.TurnEnded); ok && te.Run == run {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// createUnder submits a child's create as a client that names run would.
+func createUnder(ep api.Endpoint, parent, run api.ID) error {
+	_, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: api.NewID(), Body: api.ThreadCreate{
+		Workspace: "/src/app", Title: "child", Model: api.ModelRef{Provider: "fake", Model: "fake"}, Parent: parent, Run: run,
 	}})
-	return id, err
+	return err
 }
 
 // A child's finished run lands in its parent's log as a report: done, with
@@ -32,7 +75,7 @@ func TestAChildReportsBackToItsParent(t *testing.T) {
 	ad.Tokens = 1500
 	n := start(t, dbPath(t), ad)
 	parent := newThread(t, n.h)
-	c, err := newChild(t, n.h, parent, api.AccessAsk)
+	c, err := newChild(t, n.h, ad, parent, api.AccessAsk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,41 +105,43 @@ func TestAChildReportsBackToItsParent(t *testing.T) {
 // stop lands, still reports, but the parent stays settled and starts
 // nothing.
 func TestALateReportLeavesASettledParent(t *testing.T) {
-	n := start(t, dbPath(t), fake.New(fake.Turn(false)))
+	ad := fake.New(fake.Turn(false))
+	n := start(t, dbPath(t), ad)
 	parent := newThread(t, n.h)
-	c, err := newChild(t, n.h, parent, api.AccessAsk)
+	c, err := newChild(t, n.h, ad, parent, api.AccessAsk)
 	if err != nil {
 		t.Fatal(err)
 	}
 	submit(t, n.h, parent, api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
 	submit(t, n.h, c, dispatch("fix it", api.StartNow))
 	v := until(t, n.h, parent, "the report", func(th api.Thread) bool { return !th.Reported.IsZero() })
-	if v.Disposition.State != api.Settled || v.Run != api.RunIdle || v.LastTurn != nil {
-		t.Errorf("the parent after a late report: %v, run %v, last turn %v; want settled, idle, no turn", v.Disposition.State, v.Run, v.LastTurn)
+	if turns := count(events(t, n.h, parent), "turn.admitted"); v.Disposition.State != api.Settled || v.Run != api.RunIdle || turns != 1 {
+		t.Errorf("the parent after a late report: %v, run %v, %d turns; want settled, idle, only the turn that started the child", v.Disposition.State, v.Run, turns)
 	}
 }
 
 // The engine refuses a child wider than its parent, deeper than MaxDepth,
 // or under a parent it doesn't have.
 func TestTheEngineKeepsChildrenInBounds(t *testing.T) {
-	n := start(t, dbPath(t), fake.New(fake.Turn(false)))
+	ad := fake.New(fake.Turn(false))
+	n := start(t, dbPath(t), ad)
 	parent := newThread(t, n.h) // Ask
 	var rej *api.RejectedError
-	if _, err := newChild(t, n.h, parent, api.AccessFull); !errors.As(err, &rej) {
+	if _, err := newChild(t, n.h, ad, parent, api.AccessFull); !errors.As(err, &rej) {
 		t.Errorf("a child wider than its parent: %v, want refused", err)
 	}
-	if _, err := newChild(t, n.h, api.NewID(), api.AccessAsk); !errors.As(err, &rej) {
+	if err := createUnder(n.h, api.NewID(), api.NewID()); !errors.As(err, &rej) {
 		t.Errorf("a child of no thread: %v, want refused", err)
 	}
 	at := parent
 	for depth := 1; depth <= api.MaxDepth; depth++ {
-		next, err := newChild(t, n.h, at, api.AccessAsk)
+		next, err := newChild(t, n.h, ad, at, api.AccessAsk)
 		if err != nil {
 			t.Fatalf("a child at depth %d: %v", depth, err)
 		}
 		at = next
 	}
-	if _, err := newChild(t, n.h, at, api.AccessAsk); !errors.As(err, &rej) {
+	if _, err := newChild(t, n.h, ad, at, api.AccessAsk); !errors.As(err, &rej) {
 		t.Errorf("a child below depth %d: %v, want refused", api.MaxDepth, err)
 	}
 }
@@ -104,9 +149,10 @@ func TestTheEngineKeepsChildrenInBounds(t *testing.T) {
 // A child whose parent was deleted reports to no one, and its thread goes
 // on: its next turn runs.
 func TestAnOrphansReportGoesNowhere(t *testing.T) {
-	n := start(t, dbPath(t), fake.New(fake.Turn(false)))
+	ad := fake.New(fake.Turn(false))
+	n := start(t, dbPath(t), ad)
 	parent := newThread(t, n.h)
-	c, err := newChild(t, n.h, parent, api.AccessAsk)
+	c, err := newChild(t, n.h, ad, parent, api.AccessAsk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,20 +168,21 @@ func TestAnOrphansReportGoesNowhere(t *testing.T) {
 // A deleted ancestor ends a child's line: under a thread whose grandparent
 // was deleted, a child is as deep as the GUI shows it, and is created.
 func TestADeletedAncestorEndsTheLine(t *testing.T) {
-	n := start(t, dbPath(t), fake.New(fake.Turn(false)))
+	ad := fake.New(fake.Turn(false))
+	n := start(t, dbPath(t), ad)
 	line := []api.ID{newThread(t, n.h)}
 	for range api.MaxDepth {
-		c, err := newChild(t, n.h, line[len(line)-1], api.AccessAsk)
+		c, err := newChild(t, n.h, ad, line[len(line)-1], api.AccessAsk)
 		if err != nil {
 			t.Fatal(err)
 		}
 		line = append(line, c)
 	}
 	submit(t, n.h, line[1], api.ThreadDelete{})
-	if _, err := newChild(t, n.h, line[len(line)-1], api.AccessAsk); err != nil {
+	if _, err := newChild(t, n.h, ad, line[len(line)-1], api.AccessAsk); err != nil {
 		t.Errorf("a child under a line cut by a deleted thread: %v", err)
 	}
-	if _, err := newChild(t, n.h, line[1], api.AccessAsk); err == nil {
+	if err := createUnder(n.h, line[1], api.NewID()); err == nil {
 		t.Error("a child of a deleted thread was created")
 	}
 }
@@ -153,7 +200,7 @@ func TestASettledThreadStartsNothingQueuedBeforeIt(t *testing.T) {
 	})
 	n := start(t, dbPath(t), g)
 	parent := newThread(t, n.h)
-	c, err := newChild(t, n.h, parent, api.AccessAsk)
+	c, err := newChild(t, n.h, g, parent, api.AccessAsk)
 	if err != nil {
 		t.Fatal(err)
 	}

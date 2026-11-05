@@ -33,7 +33,7 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 	var err error
 	switch b := c.Body.(type) {
 	case api.ThreadCreate:
-		err = d.create(b)
+		err = d.create(c.ID, b)
 	case api.MessageDispatch:
 		err = d.dispatch(c.ID, b)
 	case api.TurnInterrupt:
@@ -110,30 +110,88 @@ func (d *decision) emit(b api.EventBody) error {
 
 func rejected(reason string) error { return &api.RejectedError{Reason: reason} }
 
-func (d *decision) create(c api.ThreadCreate) error {
+// create makes the thread, and with a text, queues it as the first
+// message and starts its turn in the same commit, under the command's ID,
+// so a crash leaves both or neither.
+func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 	if c.Access > api.AccessFull {
 		return rejected("unknown access level")
 	}
-	return d.emit(api.ThreadCreated{Workspace: c.Workspace, Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent})
+	if !c.Run.IsZero() && c.Parent.IsZero() {
+		return rejected("a run starts only a child thread")
+	}
+	if err := d.emit(api.ThreadCreated{Workspace: c.Workspace, Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent}); err != nil {
+		return err
+	}
+	if c.Text == "" {
+		return nil
+	}
+	if err := d.emit(api.MessageQueued{Message: id, Text: c.Text, Mode: api.StartNow}); err != nil {
+		return err
+	}
+	return d.admit(id)
 }
 
+// Limits cap the children agents start: Working at work at once under one
+// thread, All under it in all, deleted ones too, and Depth below a thread
+// of the user's. A field of zero or less takes DefaultLimits', and Depth is
+// at most api.MaxDepth.
+type Limits struct {
+	Working int `json:"working,omitempty"`
+	All     int `json:"all,omitempty"`
+	Depth   int `json:"depth,omitempty"`
+}
+
+var DefaultLimits = Limits{Working: 5, All: 20, Depth: api.MaxDepth}
+
+// Effective is l as the engine applies it.
+func (l Limits) Effective() Limits {
+	or := func(v, def int) int {
+		if v <= 0 {
+			return def
+		}
+		return v
+	}
+	return Limits{
+		Working: or(l.Working, DefaultLimits.Working),
+		All:     or(l.All, DefaultLimits.All),
+		Depth:   min(or(l.Depth, DefaultLimits.Depth), api.MaxDepth),
+	}
+}
+
+// Kids counts a thread's children: those with a live run, and all of them,
+// deleted ones too.
+type Kids struct{ Working, All int }
+
 // CheckChild checks a child's create against its parent's line, the
-// parent first and its top last, as far up as MaxDepth+1 threads: the
-// parent is there, the child no deeper than MaxDepth, and its access no
-// wider than its parent's, which is no wider than its own parent's. A
-// line that runs past MaxDepth is too deep, cycle or not.
-func CheckChild(line []Thread, c api.ThreadCreate) error {
+// parent first and its top last, as far up as MaxDepth+1 threads, and the
+// parent's children: the parent is there, its live run asks and can still
+// take work, the child is no deeper than lim's Depth, its access no wider
+// than its parent's, which is no wider than its own parent's, and the
+// parent is under lim's counts. A line that runs past MaxDepth is too
+// deep, cycle or not.
+func CheckChild(line []Thread, kids Kids, lim Limits, c api.ThreadCreate) error {
+	lim = lim.Effective()
 	if len(line) == 0 || !line[0].Exists() || line[0].Deleted {
 		return rejected("the parent thread is gone")
 	}
 	if line[0].settled() {
 		return rejected("the parent thread is settled")
 	}
-	if len(line) > api.MaxDepth {
-		return rejected(fmt.Sprintf("a child thread can be at most %d below a thread of yours", api.MaxDepth))
+	if live := line[0].Live(); live == nil || live.ID != c.Run || !steerable[live.State] {
+		return rejected("only the parent's live run can start a child thread, and not once it is stopping")
+	}
+	if len(line) > lim.Depth {
+		return rejected(fmt.Sprintf("a child thread can be at most %d below a thread of yours", lim.Depth))
 	}
 	if c.Access > line[0].Access {
 		return rejected("a child thread's access can't be wider than its parent's")
+	}
+	if kids.Working >= lim.Working {
+		return rejected(fmt.Sprintf("%d child threads of this thread are at work, the most at once; wait for one to finish", lim.Working))
+	}
+	if kids.All >= lim.All {
+		return rejected(fmt.Sprintf("this thread has started %d child threads, the most it may", lim.All))
 	}
 	return nil
 }

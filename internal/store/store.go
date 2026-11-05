@@ -27,8 +27,9 @@ type Store struct {
 
 	// mu admits one writer at a time, which makes commit order the order
 	// hooks see events in.
-	mu    sync.Mutex
-	hooks []func(Commit)
+	mu     sync.Mutex
+	hooks  []func(Commit)
+	limits engine.Limits
 }
 
 func Open(path string) (*Store, error) {
