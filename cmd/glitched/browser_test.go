@@ -32,6 +32,9 @@ func TestBrowserMCPReachesTheAppOnTheDir(t *testing.T) {
 			Args    []string `json:"args"`
 		} `json:"mcpServers"`
 	}
+	if !filepath.IsAbs(path) {
+		t.Errorf("the config is at %q, which claude, in the thread's workspace, won't find", path)
+	}
 	b, err := os.ReadFile(path)
 	if err != nil || json.Unmarshal(b, &cfg) != nil {
 		t.Fatalf("the browser's MCP config at %q: %v %s", path, err, b)
