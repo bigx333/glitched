@@ -80,9 +80,8 @@ func TestEnterOnEmptyDraftDoesNothing(t *testing.T) {
 	h.tt.Key(0, ui.KeyEnter)
 	h.tt.Type("   ")
 	h.tt.Key(0, ui.KeyEnter)
-	for range 5 {
-		h.tt.Advance(100 * time.Millisecond)
-	}
+	// Long enough for a stop to land, were one sent.
+	h.settle(func() bool { return !h.a.current().View.Live() })
 	if !h.a.current().View.Live() {
 		t.Error("Enter on an empty draft stopped the agent")
 	}
