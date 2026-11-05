@@ -185,3 +185,8 @@ func running(held []windows.Handle) int {
 	}
 	return n
 }
+
+// terminate kills claude: Windows has no SIGTERM for it, and a signal it
+// cannot send would leave claude running for killGrace. stopRun then ends
+// what claude started.
+func terminate(p *os.Process) error { return p.Kill() }

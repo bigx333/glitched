@@ -4,6 +4,7 @@ package claude
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -17,3 +18,5 @@ func contain(*exec.Cmd, string) {}
 func stopRun(context.Context, string) (bool, error) { return false, nil }
 
 func confine(*exec.Cmd, string) error { return nil }
+
+func terminate(p *os.Process) error { return p.Signal(syscall.SIGTERM) }
