@@ -522,7 +522,8 @@ func TestShiftCmdDDeniesOnlyWhatTheWindowDraws(t *testing.T) {
 
 // With several requests waiting, ⌘⏎ answers one the window draws, never
 // one out of view, and its Allow once is the one that shows ⌘⏎. Each card
-// takes a press or two to show, and one to show what its box hides.
+// takes a press or two to show, and one to show what its box hides. ⌘ is
+// let go between presses, as a chord held answers one card.
 func TestCmdEnterAnswersACardTheWindowDraws(t *testing.T) {
 	h := askedAll(t, commandAsk("a", "ls"), commandAsk("b", "ls -a"), commandAsk("c", curl))
 	h.until("three cards", func() bool { return len(h.a.current().View.Requests) == 3 })
@@ -551,6 +552,7 @@ func TestCmdEnterAnswersACardTheWindowDraws(t *testing.T) {
 			return
 		}
 		h.tt.Key(ui.Cmd, ui.KeyEnter)
+		h.tt.HoldModifiers(0)
 		h.tt.Frame()
 		for _, r := range open {
 			if answering(h, r) && !drawn[r] {
@@ -1126,5 +1128,78 @@ func TestShowAllReadsTheCardAnew(t *testing.T) {
 		h.tt.Advance(time.Second)
 	}
 	t.Errorf("six presses of ⌘⏎ never answered after Show all; texts %q", h.tt.Texts())
+}
+
+// One ⌘⏎ held, its ⏎ repeating, answers at most the card that showed ⌘⏎
+// when ⌘ went down: not the next approval, nor questions filled in and
+// not sent, that the keys move to once it is answered. ⌘ let go and
+// pressed again answers the next one.
+func TestAHeldChordAnswersOneCard(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ask  func(t *testing.T) (h *harness, first, next *client.RequestEntry)
+	}{
+		{"two approvals", func(t *testing.T) (*harness, *client.RequestEntry, *client.RequestEntry) {
+			h := askedIn(t, 1320, 1200, commandAsk("p1", "rm -rf build"), commandAsk("p2", "ls"))
+			h.until("both cards", func() bool { return len(h.a.current().View.Requests) == 2 })
+			h.tt.Advance(time.Second)
+			es := entriesOf(h.a.current())
+			first := h.a.keyedRequest(h.a.current(), es)
+			for _, e := range es {
+				if r := e.request; r != nil && r.Request != first.Request {
+					return h, first, r
+				}
+			}
+			t.Fatalf("one approval waits; want two")
+			return nil, nil, nil
+		}},
+		{"questions then the approval", func(t *testing.T) (*harness, *client.RequestEntry, *client.RequestEntry) {
+			h, approval, question := bothAsk(t, false)
+			fillIn(h)
+			return h, question, approval
+		}},
+		{"the approval then questions", func(t *testing.T) (*harness, *client.RequestEntry, *client.RequestEntry) {
+			h, approval, question := bothAsk(t, true)
+			fillIn(h)
+			return h, approval, question
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, first, next := tc.ask(t)
+			if h.a.keyed != first.Request {
+				t.Fatalf("the keys are on another card than the first")
+			}
+			h.tt.HoldModifiers(ui.Cmd)
+			h.tt.Frame()
+			h.tt.Advance(100 * time.Millisecond)
+			for range 60 {
+				h.tt.Key(ui.Cmd, ui.KeyEnter)
+				h.tt.Frame()
+				h.tt.Advance(33 * time.Millisecond)
+			}
+			if !answering(h, first) {
+				t.Fatalf("the held ⌘⏎ did not answer the card that showed it")
+			}
+			if answering(h, next) {
+				t.Fatalf("the ⌘⏎ held for one card answered the next, which showed ⌘⏎ only after ⌘ went down")
+			}
+			h.tt.HoldModifiers(0)
+			h.tt.Advance(time.Second)
+			h.tt.Key(ui.Cmd, ui.KeyEnter)
+			h.tt.HoldModifiers(0)
+			h.tt.Frame()
+			if !answering(h, next) {
+				t.Errorf("⌘⏎ pressed anew did not answer the next card")
+			}
+		})
+	}
+}
+
+// fillIn picks an answer to each of fake.Asking's questions.
+func fillIn(h *harness) {
+	h.click("SQLite")
+	h.tt.Frame()
+	h.click("Unit")
+	h.tt.Advance(time.Second)
 }
 
