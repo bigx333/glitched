@@ -641,33 +641,40 @@ function install(key) {
     const root = get(B.documentElement, doc);
     const w = root ? get(B.clientWidth, root) : 0, h = root ? get(B.clientHeight, root) : 0;
     const inView = [], outside = [];
-    const add = (n) => {
+    const add = (n, edges) => {
       // An engine without DOMRectList (an old WebKitGTK's ClientRectList)
       // has the element's one box.
       const rs = B.rectsLength && B.rectsItem ? apply(B.clientRects, n, []) : null;
       const count = rs ? get(B.rectsLength, rs) : 1;
-      for (let i = 0; i < count && inView.length + outside.length < 40; i++) {
+      for (let i = 0; i < count && inView.length + outside.length < 60; i++) {
         const r = rs ? apply(B.rectsItem, rs, [i]) : rect(n);
         const x = get(B.x, r), y = get(B.y, r), rw = get(B.width, r), rh = get(B.height, r);
         if (rw <= 0 || rh <= 0) continue;
         const at = (fx, fy) => ({ __proto__: null, x: x + rw * fx, y: y + rh * fy });
         const mid = at(0.5, 0.5);
         const list = mid.x >= 0 && mid.y >= 0 && (!w || mid.x <= w) && (!h || mid.y <= h) ? inView : outside;
-        put(list, mid);
-        put(list, at(0.25, 0.25));
-        put(list, at(0.75, 0.25));
-        put(list, at(0.25, 0.75));
-        put(list, at(0.75, 0.75));
+        const lo = edges ? 0.05 : 0.25, hi = edges ? 0.95 : 0.75;
+        if (!edges) put(list, mid);
+        put(list, at(lo, lo));
+        put(list, at(hi, lo));
+        put(list, at(lo, hi));
+        put(list, at(hi, hi));
       }
     };
-    add(el);
+    add(el, false);
     // Breadth first through what is in el, for its first box.
     const queue = [];
     for (let c = get(B.firstChild, el); c; c = get(B.nextSibling, c)) put(queue, c);
     for (let q = 0; !inView.length && !outside.length && q < queue.length && q < 256; q++) {
-      add(queue[q]);
+      add(queue[q], false);
       for (let c = get(B.firstChild, queue[q]); c; c = get(B.nextSibling, c)) put(queue, c);
     }
+    // Then its labels, as a field hidden for a styled one (sr-only) is
+    // clicked through its label; then near the edges of its boxes, as
+    // one mostly clipped shows only there.
+    const labels = isHTML(el) && LABELS[tagOf(el)] ? get(LABELS[tagOf(el)], el) : null;
+    for (let j = 0, k = labels ? listLength(labels) : 0; j < k; j++) add(item(labels, j), false);
+    add(el, true);
     for (let i = 0; i < outside.length; i++) put(inView, outside[i]);
     return inView;
   }
