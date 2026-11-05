@@ -6,6 +6,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/client"
 )
 
 // A project is the threads in one workspace, so removing it deletes them,
@@ -124,7 +125,11 @@ func (a *app) removeProject(p *project) {
 		e = envs[0]
 	}
 	if keyOf(e, a.fresh.workspace) == p.key {
-		a.fresh = draft{env: e}
+		home := homeDir()
+		if e != nil && e.Kind == client.Remote {
+			home = "~" // a server's, as the workspace menu has it
+		}
+		a.fresh = draft{e, home}
 	}
 }
 
@@ -150,6 +155,12 @@ func (a *app) removeAlert(c *ui.Context) {
 	if len(all) > 1 {
 		head = fmt.Sprintf("Remove “%s” and its %d threads?", p.name(), len(all))
 		body = "They're removed from every list and can't be brought back. Their history stays in the engine's log."
+		// A thread under one of the project's goes with it, though its
+		// workspace, and so its project, is another.
+		if n := len(all) - len(p.threads); n > 0 {
+			head = fmt.Sprintf("Remove “%s” and %d threads?", p.name(), len(all))
+			body = fmt.Sprintf("%d of them %s under its threads, in other workspaces. ", n, isAre(n)) + body
+		}
 		if n := working(all); n > 0 {
 			body = fmt.Sprintf("%d of them %s still working and will be stopped. ", n, isAre(n)) + body
 		}
