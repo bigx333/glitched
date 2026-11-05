@@ -76,7 +76,8 @@ func lone(q api.Questions) bool { return len(q.Questions) == 1 && !q.Questions[0
 // their options and an Other field, while it waits; what was answered once
 // it is; or that it is no longer asked. A body no card can show is shown as
 // it came, with Dismiss only, as the engine takes nothing else for it.
-// The agent's text shows as printable ASCII, as an approval's does.
+// The agent's text shows as printable ASCII, as an approval's does. Its
+// keys show while they are the card's, as keyedRequest says.
 func (a *app) questionCard(c *ui.Context, t thread, e entry) {
 	r := e.request
 	q, _ := api.ParseQuestions(r.Body)
@@ -88,9 +89,12 @@ func (a *app) questionCard(c *ui.Context, t thread, e entry) {
 		escaped = escaped || e
 		return s
 	}
-	ui.Column(c).Key(e.key).Radius(12).Border(1, palette.border).Background(palette.surface).Clip().
-		Transition(riseIn).Children(func() {
-		ui.Row(c).Padding(9, 14).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
+	keyed := a.keyed == r.Request
+	card := ui.Column(c).Key(e.key).Radius(12).Border(1, palette.border).Background(palette.surface).Clip().
+		Transition(riseIn)
+	card.Children(func() {
+		header := ui.Row(c).Padding(9, 14).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border)
+		header.Children(func() {
 			answer, _ := api.ParseAnswers(r.Answer)
 			switch {
 			case waiting || r.State == api.RequestAnswered:
@@ -111,16 +115,20 @@ func (a *app) questionCard(c *ui.Context, t thread, e entry) {
 				ui.Text(c, "waiting "+ago(r.Opened, a.now)).FontSize(11.5).TextColor(palette.faint)
 			}
 		})
+		var lead ui.Rect
 		switch {
 		case len(q.Questions) == 0:
 			ui.Column(c).Padding(12, 14, 12).Gap(8).Children(func() {
-				ui.Text(c, agentName(t)+" asks:").FontSize(12.5).TextColor(palette.muted)
+				lead = ui.Text(c, agentName(t)+" asks:").FontSize(12.5).TextColor(palette.muted).Bounds()
 				ui.Text(c, shown(string(r.Body), false)).Selectable().FontSize(12).Font("monospace")
 			})
 		case waiting:
-			a.questionForm(c, t, r, q, !sending, shown)
+			lead = a.questionForm(c, t, r, q, keyed, !sending, shown)
 		default:
 			questionSummary(c, r, q, shown)
+		}
+		if waiting {
+			a.drawn[r.Request] = sight{header: header.Bounds(), card: card.Bounds(), lead: lead, texts: card.Bounds()}
 		}
 		if escaped {
 			ui.Box(c).Key("ascii").Padding(0, 14, 12).Children(func() { asciiNotice(c) })
@@ -136,20 +144,26 @@ func (a *app) questionCard(c *ui.Context, t thread, e entry) {
 			case sending:
 				ui.Text(c, "Sending…").FontSize(12).TextColor(palette.muted)
 			default:
-				a.questionButtons(c, t, r, q)
+				a.questionButtons(c, t, r, q, keyed)
 			}
 		})
 	})
 }
 
 // questionForm lays out the questions of a waiting card, which take the
-// user's picks while open, the agent's text as shown shows it.
-func (a *app) questionForm(c *ui.Context, t thread, r *client.RequestEntry, q api.Questions, open bool, shown func(string, bool) string) {
+// user's picks while open, the agent's text as shown shows it, with ⌘1 to
+// ⌘4 on the options the keys pick while keyed. It returns where the last
+// frame drew the first question's line.
+func (a *app) questionForm(c *ui.Context, t thread, r *client.RequestEntry, q api.Questions, keyed, open bool, shown func(string, bool) string) (lead ui.Rect) {
 	f := a.form(r, q)
 	ui.Column(c).Padding(12, 14, 12).Gap(14).Children(func() {
 		for i, x := range q.Questions {
 			ui.Column(c).Key(i).Gap(4).Children(func() {
-				ui.Row(c).Gap(7).AlignItems(ui.Center).Wrap().Padding(0, 0, 3).Children(func() {
+				line := ui.Row(c).Gap(7).AlignItems(ui.Center).Wrap().Padding(0, 0, 3)
+				if i == 0 {
+					lead = line.Bounds()
+				}
+				line.Children(func() {
 					if x.Header != "" {
 						ui.Text(c, shown(x.Header, false)).FontSize(11).FontWeight(600).TextColor(palette.accent).
 							Padding(1, 6).Radius(4).Background(palette.accent.Alpha(0.14))
@@ -168,7 +182,7 @@ func (a *app) questionForm(c *ui.Context, t thread, r *client.RequestEntry, q ap
 							ui.Text(c, shown(o.About, true)).FontSize(11.5).TextColor(palette.faint).Shrink(1)
 						}
 						ui.Spacer(c)
-						if i == f.at && j < len(pickKeys) {
+						if keyed && i == f.at && j < len(pickKeys) {
 							kbd(c, fmt.Sprintf("⌘%d", j+1))
 						}
 					})
@@ -193,6 +207,7 @@ func (a *app) questionForm(c *ui.Context, t thread, r *client.RequestEntry, q ap
 			})
 		}
 	})
+	return lead
 }
 
 func optionMark(multi, on bool) string {
@@ -209,13 +224,16 @@ func optionMark(multi, on bool) string {
 
 // questionButtons are a waiting card's Answer, once each question has an
 // answer, and Dismiss; Dismiss only, for questions the card can't show.
-func (a *app) questionButtons(c *ui.Context, t thread, r *client.RequestEntry, q api.Questions) {
+// Their keys show while keyed.
+func (a *app) questionButtons(c *ui.Context, t thread, r *client.RequestEntry, q api.Questions, keyed bool) {
 	f := a.form(r, q)
 	var answer ui.Element
 	if len(q.Questions) > 0 {
 		answer = filled(c, "answer", palette.accent, ui.Hex("#ffffff")).Disabled(!f.done()).Children(func() {
 			ui.Text(c, "Answer").FontSize(12.5).FontWeight(500)
-			ui.Text(c, "⌘⏎").FontSize(10.5).Padding(1, 4).Radius(4).Background(ui.Hex("#ffffff").Alpha(0.2))
+			if keyed {
+				ui.Text(c, "⌘⏎").FontSize(10.5).Padding(1, 4).Radius(4).Background(ui.Hex("#ffffff").Alpha(0.2))
+			}
 		})
 		if !f.done() {
 			answer.Opacity(0.5)
@@ -223,7 +241,9 @@ func (a *app) questionButtons(c *ui.Context, t thread, r *client.RequestEntry, q
 	}
 	dismiss := ghost(c, "dismiss", false).Padding(5, 10).Children(func() {
 		ui.Text(c, "Dismiss").FontSize(12.5)
-		kbd(c, "⇧⌘D")
+		if keyed {
+			kbd(c, "⇧⌘D")
+		}
 	})
 	ui.Spacer(c)
 	ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {

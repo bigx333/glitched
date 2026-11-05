@@ -275,8 +275,9 @@ func markBelow(c *ui.Context, below int) {
 }
 
 // sight is where the last frame drew a waiting card: its header, the card,
-// the first line of what runs (requestCard's lead), and its texts' box,
-// which clips that once scrolled, with where they are scrolled.
+// the first line of what runs (requestCard's lead) or of the questions,
+// and its texts' box, which clips that once scrolled, with where they are
+// scrolled. A question card's texts are the card, which scrolls nothing.
 type sight struct {
 	header, card, lead, texts ui.Rect
 	scroll                    *ui.ScrollState
