@@ -98,7 +98,7 @@ func (a *app) questionCard(c *ui.Context, t thread, e entry) {
 			answer, _ := api.ParseAnswers(r.Answer)
 			switch {
 			case waiting || r.State == api.RequestAnswered:
-				pendingMark(c)
+				a.pendingMark(c)
 				ui.Text(c, agentName(t)+" asks").FontSize(13).FontWeight(600)
 			case r.State == api.RequestDelivered && len(answer.Answers) == 0:
 				ui.Icon(c, icX).FontSize(13).TextColor(palette.muted)

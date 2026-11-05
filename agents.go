@@ -133,7 +133,7 @@ func (a *app) agents(c *ui.Context, t thread, frameW, fade float32) {
 		// Closed, or folding, it's the pill: a press opens it, or turns it
 		// back round.
 		if !open {
-			box.Label("Agents").Tooltip(plural(len(tree), "child thread")).Cursor(ui.CursorPointer)
+			a.tip(c, box.Label("Agents"), plural(len(tree), "child thread")).Cursor(ui.CursorPointer)
 			if k == 0 && box.Hovered() {
 				box.Shadow(0, 0, 0, 1, palette.text.Alpha(0.12))
 			}
@@ -194,7 +194,7 @@ func (a *app) agents(c *ui.Context, t thread, frameW, fade float32) {
 							c.AddToast(ui.Toast{Title: "Stopped", Description: plural(n, "child thread"), Type: "info"})
 						}
 					}
-					if iconButton(c, "close", icX, "Close agents", false).Padding(4).Clicked() {
+					if a.iconButton(c, "close", icX, "Close agents", false).Padding(4).Clicked() {
 						a.agentsOpen[id], a.agentsAll[id] = false, false
 					}
 				})
@@ -228,7 +228,7 @@ func (a *app) agents(c *ui.Context, t thread, frameW, fade float32) {
 			return
 		}
 		a.overlay(c, open, func() {
-			box := ui.Column(c).Key("agents").AttachTo(place, ui.AnchorBottomStart, ui.AnchorBottomStart)
+			box := a.cover(coverKey{kind: "agents"}, ui.Column(c).Key("agents").AttachTo(place, ui.AnchorBottomStart, ui.AnchorBottomStart))
 			// As the strip it grew from: the overlay escapes the strip's
 			// fade and clip, so it takes them itself; before it's built,
 			// for what's in it. Not its slide, which its place, as
@@ -256,14 +256,14 @@ func (a *app) agentRow(c *ui.Context, n node, s float32) {
 	r.ContextMenu(func(m *ui.Menu) { a.threadMenu(c, m, k, a.categoryOf(k)) })
 	hovered := r.Hovered()
 	if r.Children(func() {
-		statusDot(c, a.statusOf(k), failedLast(k))
+		a.statusDot(c, a.statusOf(k), failedLast(k))
 		ui.Text(c, title(k)).FontSize(12.5).TextColor(palette.text).SingleLine().Shrink(1)
 		ui.Spacer(c)
 		if !hovered {
 			ui.Text(c, ago(k.View.UpdatedAt, a.now)).FontSize(11).TextColor(palette.faint).Shrink(0)
 			return
 		}
-		iconButton(c, "menu", icDots, "Thread actions", false).Padding(3).
+		a.iconButton(c, "menu", icDots, "Thread actions", false).Padding(3).
 			Menu(func(m *ui.Menu) { a.threadMenu(c, m, k, a.categoryOf(k)) })
 	}).Clicked() {
 		a.select_(k)
@@ -278,7 +278,7 @@ func failedLast(t thread) bool {
 // statusDot is a thread's run as a dot: blue and breathing while it works,
 // amber waiting on an approval, red failed, green done and unread, grey
 // idle.
-func statusDot(c *ui.Context, s status, failed bool) ui.Element {
+func (a *app) statusDot(c *ui.Context, s status, failed bool) ui.Element {
 	col, tip := palette.faint, "Idle"
 	switch {
 	case s == statusWorking:
@@ -290,7 +290,7 @@ func statusDot(c *ui.Context, s status, failed bool) ui.Element {
 	case s == statusCompleted:
 		col, tip = palette.green, "Done"
 	}
-	d := ui.Box(c).Size(7, 7).Radius(4).Background(col).Shrink(0).Tooltip(tip)
+	d := a.tip(c, ui.Box(c).Size(7, 7).Radius(4).Background(col).Shrink(0), tip)
 	if s == statusWorking {
 		d.Opacity(0.4 + 0.6*d.Loop("breathe", 1400*time.Millisecond, pingPong))
 	}

@@ -78,7 +78,7 @@ func (a *app) engineCard(c *ui.Context, m client.Machine) {
 			if m.Embedded {
 				b := ui.Button(c.Key("restart"), "Restart").Disabled(a.localRuns() > 0).OnClick(func() { a.backend.Restart() })
 				if a.localRuns() > 0 {
-					b.Tooltip(stopFirst)
+					a.tip(c, b, stopFirst)
 				}
 			}
 		})

@@ -130,6 +130,9 @@ func (a *app) autocomplete(c *ui.Context, card ui.Element) {
 	}
 	a.suggestIndex = min(a.suggestIndex, n-1)
 	a.showSuggest(card.Bounds(), n)
+	// A window of its own over the timeline, which the frame on screen
+	// does not place.
+	a.blinding = a.blinding || a.suggestFly != nil
 }
 
 const suggestRow = 34

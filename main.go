@@ -302,6 +302,15 @@ type app struct {
 	// covered is whether the last pass showed one of the app's overlays,
 	// which covering notes as this one builds them (overlay.go).
 	covered, covering bool
+	// covers are what the app draws over the timeline, by key, and coverN
+	// how many this pass bound; over is where the frame on screen drew
+	// them; and blind is whether the last pass showed one at a place the
+	// app does not know, which blinding notes as this one builds them
+	// (overlay.go).
+	covers          map[coverKey]*ui.Handle
+	coverN          int
+	over            []ui.Rect
+	blind, blinding bool
 	// zap is a request's answers just answered, breaking up as they go;
 	// answerAt where the waiting request's answers were last laid out.
 	zap      approvalZap
@@ -386,8 +395,10 @@ type app struct {
 	// aboveH is the height of what's over the composer card, the agents
 	// strip, as last measured.
 	aboveH float32
-	// composerAt is the composer's frame, the card with what's over and
-	// under it, as last laid out: a draft grows it over the timeline.
+	// composerH is the composer's frame, the card with what's over and
+	// under it, which a draft grows over the timeline; composerAt is where
+	// the frame on screen drew it (lookOver).
+	composerH  ui.Handle
 	composerAt ui.Rect
 	// The agents strip: over whose composer the panel is open, and showing
 	// all its rows past five; in this frame, how far from pill (0) to panel
@@ -466,6 +477,7 @@ func newApp(dir string, post func(func())) *app {
 		shownAll:      map[cardText]bool{},
 		drawn:         map[api.ID]sight{},
 		reads:         map[api.ID]*reading{},
+		covers:        map[coverKey]*ui.Handle{},
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,
@@ -598,6 +610,10 @@ func (a *app) view(c *ui.Context) {
 	// a frame without it, as on another page, leaves the keys the browser's.
 	a.terminalFocused = false
 	a.covered, a.covering = a.covering, false
+	a.blind, a.blinding = a.blinding, false
+	a.coverN = 0
+	// Before anything this pass builds binds its cover anew.
+	a.lookOver(c)
 	a.vibrant = c.Vibrancy() && a.settings.glass && c.Theme().Dark == systemDark
 	if c.Vibrancy() {
 		// The material shows wherever nothing paints over it.
@@ -706,8 +722,8 @@ func (a *app) toggleLightDark() {
 func (a *app) toasts(c *ui.Context) {
 	ui.ToastViewportBase(c, func(viewport ui.Element, toasts []ui.Toast) {
 		viewport.Padding(20).AlignItems(ui.End).Justify(ui.End).Gap(8)
-		for _, t := range toasts {
-			toast := ui.ToastBase(c, t)
+		for i, t := range toasts {
+			toast := a.toast(c, i, t)
 			a.pane(toast.Root.Row().Gap(10).Padding(10, 10, 10, 14).Radius(14).MinWidth(260).AlignItems(ui.Center), glass.Glass{})
 			// In and out the same way, from below, as Sonner's.
 			toast.Root.Transition(ui.ElementTransition{

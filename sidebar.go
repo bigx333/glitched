@@ -39,8 +39,8 @@ func row(c *ui.Context, key any, selected bool) ui.Element {
 }
 
 // iconButton is a square ghost button showing only an icon.
-func iconButton(c *ui.Context, key any, icon *ui.SVG, label string, on bool) ui.Element {
-	return ghost(c, key, on).Padding(6).Label(label).Tooltip(label).Children(func() {
+func (a *app) iconButton(c *ui.Context, key any, icon *ui.SVG, label string, on bool) ui.Element {
+	return a.tip(c, ghost(c, key, on).Padding(6).Label(label), label).Children(func() {
 		ui.Icon(c, icon).FontSize(15)
 	})
 }
@@ -139,7 +139,7 @@ func (a *app) sidebar(c *ui.Context) {
 	ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 10, 0, max(bar.Left, 12)).
 		AlignItems(ui.Center).Gap(6).DragWindow().Children(func() {
 		ui.Spacer(c)
-		if iconButton(c, "hide-sidebar", icPanelLeft, "Hide sidebar  ⌘B", false).Clicked() {
+		if a.iconButton(c, "hide-sidebar", icPanelLeft, "Hide sidebar  ⌘B", false).Clicked() {
 			a.toggleSidebar(false)
 		}
 	})
@@ -157,21 +157,21 @@ func (a *app) toggleSidebar(keyboard bool) {
 
 // statusMark shows what a thread is doing, before its title. Only work
 // in progress moves.
-func statusMark(c *ui.Context, s status) {
+func (a *app) statusMark(c *ui.Context, s status) {
 	switch s {
 	case statusWorking:
 		spin := ui.Icon(c, icLoader).FontSize(11).TextColor(palette.blue)
 		spin.Rotate(spin.Loop("spin", 800*time.Millisecond, ui.Linear) * 360)
 	case statusApproval:
-		pendingMark(c)
+		a.pendingMark(c)
 	case statusCompleted:
-		ui.Box(c).Size(7, 7).Radius(4).Background(palette.green).Margin(0, 2).Tooltip("Completed")
+		a.tip(c, ui.Box(c).Size(7, 7).Radius(4).Background(palette.green).Margin(0, 2), "Completed")
 	}
 }
 
 // pendingMark is the amber dot of a thread waiting on an approval.
-func pendingMark(c *ui.Context) {
-	ui.Box(c).Size(7, 7).Radius(4).Background(palette.amber).Margin(0, 2).Tooltip("Waits on you")
+func (a *app) pendingMark(c *ui.Context) {
+	a.tip(c, ui.Box(c).Size(7, 7).Radius(4).Background(palette.amber).Margin(0, 2), "Waits on you")
 }
 
 var settingsSections = []struct {

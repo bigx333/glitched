@@ -132,7 +132,7 @@ func dropRing(c *ui.Context) {
 
 // attachmentChips shows the draft's attachments, each with a button
 // removing it, and why it stays when a message in t is sent.
-func attachmentChips(c *ui.Context, list []attachment, t thread, remove func(i int)) {
+func (a *app) attachmentChips(c *ui.Context, list []attachment, t thread, remove func(i int)) {
 	ui.Row(c).Wrap().Gap(6).Children(func() {
 		for i, at := range list {
 			ui.Row(c).Key(fmt.Sprintf("%d/%s", i, at.name)).Gap(7).Padding(4, 6, 4, 4).Radius(9).AlignItems(ui.Center).
@@ -156,7 +156,7 @@ func attachmentChips(c *ui.Context, list []attachment, t thread, remove func(i i
 						ui.Text(c, at.detail).FontSize(10.5).TextColor(palette.faint).SingleLine()
 					}
 				})
-				if iconButton(c, "remove", icX, "Remove "+at.name, false).Padding(2).Clicked() {
+				if a.iconButton(c, "remove", icX, "Remove "+at.name, false).Padding(2).Clicked() {
 					remove(i)
 				}
 			})

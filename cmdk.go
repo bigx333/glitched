@@ -159,7 +159,7 @@ func (a *app) commandPalette(c *ui.Context) {
 				}
 				if r.Children(func() {
 					if cmd.t != nil {
-						ui.Box(c).Size(14, 14).Center().Shrink(0).Children(func() { statusMark(c, a.statusOf(*cmd.t)) })
+						ui.Box(c).Size(14, 14).Center().Shrink(0).Children(func() { a.statusMark(c, a.statusOf(*cmd.t)) })
 					} else {
 						ui.Icon(c, cmd.icon).FontSize(14)
 					}

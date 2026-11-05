@@ -160,7 +160,7 @@ func (a *app) header(c *ui.Context, t thread, es []entry) {
 		Padding(0, right, 0, left).Gap(8).AlignItems(ui.Center).ClipX()
 	head.DragWindow().Children(func() {
 		if !a.showSidebar {
-			if iconButton(c, "show-sidebar", icPanelLeft, "Show sidebar  ⌘B", false).Clicked() {
+			if a.iconButton(c, "show-sidebar", icPanelLeft, "Show sidebar  ⌘B", false).Clicked() {
 				a.toggleSidebar(false)
 			}
 		}
@@ -180,7 +180,7 @@ func (a *app) header(c *ui.Context, t thread, es []entry) {
 			return
 		}
 
-		headerButton(c, "open").Shrink(0).Label("Open in").Tooltip("Open in").Children(func() {
+		a.tip(c, headerButton(c, "open").Shrink(0).Label("Open in"), "Open in").Children(func() {
 			ui.Icon(c, icCode).FontSize(14)
 			if !narrow {
 				ui.Text(c, "Open").SingleLine()
@@ -193,7 +193,7 @@ func (a *app) header(c *ui.Context, t thread, es []entry) {
 			m.Separator()
 			m.Item("Finder")
 		})
-		if headerButton(c, "commit").Shrink(0).Label("Commit & push").Tooltip("Commit & push").Children(func() {
+		if a.tip(c, headerButton(c, "commit").Shrink(0).Label("Commit & push"), "Commit & push").Children(func() {
 			ui.Icon(c, icUpload).FontSize(14)
 			if !narrow {
 				ui.Text(c, "Commit & push").SingleLine()
@@ -202,12 +202,12 @@ func (a *app) header(c *ui.Context, t thread, es []entry) {
 			c.AddToast(ui.Toast{Title: "Pushed to origin", Description: filepath.Base(t.View.Workspace) + " · 2 files, +23 −2"})
 		}
 		ui.Row(c).Padding(2).Gap(2).Radius(10).Shrink(0).Children(func() {
-			if iconButton(c, "terminal", icTerminal, "Toggle terminal  ⌘J", a.showTerminal).Clicked() {
+			if a.iconButton(c, "terminal", icTerminal, "Toggle terminal  ⌘J", a.showTerminal).Clicked() {
 				a.showTerminal, a.panelsJump = !a.showTerminal, false
 			}
 			// The diff's button counts the files the agent changed.
 			ui.Box(c).Children(func() {
-				if iconButton(c, "diff", icDiff, "Toggle diff  ⌘D", a.showDiff).Clicked() {
+				if a.iconButton(c, "diff", icDiff, "Toggle diff  ⌘D", a.showDiff).Clicked() {
 					a.showDiff, a.panelsJump = !a.showDiff, false
 					if a.showDiff {
 						a.showPreview = false
@@ -224,7 +224,7 @@ func (a *app) header(c *ui.Context, t thread, es []entry) {
 }
 
 func (a *app) previewButton(c *ui.Context) {
-	if iconButton(c, "preview", icGlobe, "Toggle preview  ⇧⌘P", a.showPreview).Clicked() {
+	if a.iconButton(c, "preview", icGlobe, "Toggle preview  ⇧⌘P", a.showPreview).Clicked() {
 		a.togglePreview()
 		a.panelsJump = false
 	}
@@ -323,6 +323,7 @@ func (a *app) jumpToLatest(c *ui.Context, t thread) {
 	}
 	ui.Row(c).Absolute().Left(columnLeft).Right(columnRight).Bottom(bottom).Justify(ui.Center).PassThrough().Children(func() {
 		b := faded(a.glassButton(c, "jump").Padding(5, 12).Translate(0, 8*(1-j)), o)
+		a.cover(coverKey{kind: "jump"}, b)
 		if o <= 0.001 {
 			b.Invisible()
 		}
@@ -432,7 +433,7 @@ func (a *app) workLog(c *ui.Context, t thread, key string, e entry, files []file
 				ui.Icon(c, icClock).FontSize(12).TextColor(palette.amber)
 				ui.Text(c, e.paused).FontSize(12).Grow(1)
 			case working:
-				statusMark(c, statusWorking)
+				a.statusMark(c, statusWorking)
 				shimmerText(c, e.took, 12, palette.muted, palette.text)
 			default:
 				ui.Text(c, e.took).FontSize(12).Grow(1)
@@ -488,7 +489,7 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, w client.WorkSte
 		ui.Spacer(c)
 		switch {
 		case w.Status == api.WorkStarted:
-			statusMark(c, statusWorking)
+			a.statusMark(c, statusWorking)
 		case w.Exit != nil:
 			mark, color := "✓", palette.green
 			if *w.Exit != 0 {
@@ -497,7 +498,7 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, w client.WorkSte
 			ui.Textf(c, "%s %d", mark, *w.Exit).FontSize(11.5).Font("monospace").TextColor(color)
 			ui.Text(c, "· "+tookFor(w.Ended.Sub(w.Started))).FontSize(11.5).Font("monospace").TextColor(palette.faint)
 		case w.Status == api.WorkFailed:
-			ui.Icon(c, icX).FontSize(12).TextColor(palette.red).Tooltip("Failed")
+			a.tip(c, ui.Icon(c, icX).FontSize(12).TextColor(palette.red), "Failed")
 		case file >= 0 && r.Hovered():
 			ui.Text(c, "Open in diff").FontSize(11.5).TextColor(palette.muted)
 			ui.Icon(c, icExternal).FontSize(11).TextColor(palette.muted)
@@ -697,8 +698,8 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 		fullW = max(0, min(w, contentWidth)-2*a.paneBorder())
 	}
 	bar.Children(func() {
-		frame := ui.Column(c).Key("composer-frame").WidthPercent(100).MaxWidth(lerp(compactWidth, contentWidth)).PassThrough()
-		a.composerAt = frame.Bounds()
+		frame := ui.Column(c).Key("composer-frame").WidthPercent(100).MaxWidth(lerp(compactWidth, contentWidth)).PassThrough().
+			Bind(&a.composerH)
 		frame.Children(func() {
 			a.heroHeading(c, d)
 			// The agents strip sits over the card, the room it takes going
@@ -826,7 +827,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 					in := fadeIn(k, 0.25, 0.5)
 					if len(a.attachments) > 0 {
 						faded(ui.Column(c).Key("attachments").Padding(12, 12, 0), in).Children(func() {
-							attachmentChips(c, a.attachments, t, func(i int) {
+							a.attachmentChips(c, a.attachments, t, func(i int) {
 								a.attachments = append(a.attachments[:i:i], a.attachments[i+1:]...)
 							})
 						})
@@ -862,7 +863,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 						Translate(0, 6*(1-in)), in).Children(func() {
 						a.composerControls(c)
 						ui.Spacer(c)
-						if t.local() && iconButton(c, "attach", icPaperclip, "Attach files", false).Clicked() {
+						if t.local() && a.iconButton(c, "attach", icPaperclip, "Attach files", false).Clicked() {
 							a.pickFiles()
 						}
 						a.sendButton(c, t, !ahead)
@@ -955,7 +956,7 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 	live := t.View.Live()
 	working := live && empty
 	if live && !empty {
-		stop := ui.ButtonBase(c.Key("stop")).Label("Stop").Tooltip("Stop the agent").Size(30, 30).Radius(15).Center().
+		stop := a.tip(c, ui.ButtonBase(c.Key("stop")).Label("Stop"), "Stop the agent").Size(30, 30).Radius(15).Center().
 			Cursor(ui.CursorPointer).Border(1, palette.border).Margin(0, 4, 0, 0)
 		if stop.Hovered() {
 			stop.Background(palette.hover)
@@ -1113,7 +1114,7 @@ func (a *app) terminal(c *ui.Context, workspace string) {
 			ui.Icon(c, icTerminal).FontSize(12).TextColor(palette.muted)
 			ui.Text(c, title).FontSize(11.5).TextColor(palette.muted).SingleLine().Shrink(1)
 			ui.Spacer(c)
-			if iconButton(c, "close-terminal", icX, "Close terminal", false).Padding(3).Clicked() {
+			if a.iconButton(c, "close-terminal", icX, "Close terminal", false).Padding(3).Clicked() {
 				a.showTerminal = false
 			}
 		})

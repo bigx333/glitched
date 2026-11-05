@@ -128,7 +128,7 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 		header.Children(func() {
 			switch r.State {
 			case api.RequestPending:
-				pendingMark(c)
+				a.pendingMark(c)
 				ui.Text(c, "Approval needed").FontSize(13).FontWeight(600)
 			case api.RequestInvalidated, api.RequestExpired:
 				ui.Icon(c, icArrowRight).FontSize(13).TextColor(palette.muted)
@@ -314,11 +314,13 @@ type readText struct {
 	left  int
 }
 
-// cardState is a card's place and what it says, as a frame drew it.
+// cardState is a card's place, what it says, and what covers it, as a
+// frame drew it.
 type cardState struct {
 	header, card, lead, texts ui.Rect
 	y                         float32
 	says                      string
+	over                      []ui.Rect
 }
 
 // unread is whether the card holds a line no frame drew in full in view.
@@ -340,7 +342,7 @@ func (a *app) read(t thread, request api.ID, s sight, texts []shownText) {
 		a.reads[request] = rd
 	}
 	full := a.inFull(t)
-	if rd.born.IsZero() && s.start(full) {
+	if rd.born.IsZero() && a.shows(s, full) {
 		rd.born, rd.moved = a.now, a.now
 	}
 	var says strings.Builder
@@ -371,7 +373,7 @@ func (a *app) read(t thread, request api.ID, s sight, texts []shownText) {
 			if l.at.Y+l.at.H > s.texts.Y+s.texts.H+0.5 {
 				rd.below++
 			}
-			if within(l.at, view) {
+			if within(l.at, view) && !a.hidden(l.at) {
 				for i := l.from; i <= l.to && i < len(r.drawn); i++ {
 					if !r.drawn[i] {
 						r.drawn[i] = true
@@ -392,7 +394,7 @@ func (a *app) read(t thread, request api.ID, s sight, texts []shownText) {
 	if s.scroll != nil {
 		y = s.scroll.Y
 	}
-	now := cardState{s.header, s.card, s.lead, s.texts, y, says.String()}
+	now := cardState{s.header, s.card, s.lead, s.texts, y, says.String(), a.coversOf(s.card)}
 	if !now.like(rd.was) && a.laidAt.After(rd.moved) {
 		rd.moved = a.laidAt
 	}
@@ -400,14 +402,15 @@ func (a *app) read(t thread, request api.ID, s sight, texts []shownText) {
 }
 
 // like is whether a card in state s looks as it did in state w, a frame
-// before: the same texts, and every place within half a DIP of where it
-// was, as a card does that stopped, or creeps to where it stops.
+// before: the same texts, under the same covers, and every place within
+// half a DIP of where it was, as a card does that stopped, or creeps to
+// where it stops.
 func (s cardState) like(w cardState) bool {
 	near := func(a, b ui.Rect) bool {
 		return abs32(a.X-b.X) < 0.5 && abs32(a.Y-b.Y) < 0.5 && abs32(a.W-b.W) < 0.5 && abs32(a.H-b.H) < 0.5
 	}
 	return s.says == w.says && abs32(s.y-w.y) < 0.5 && near(s.header, w.header) && near(s.card, w.card) &&
-		near(s.lead, w.lead) && near(s.texts, w.texts)
+		near(s.lead, w.lead) && near(s.texts, w.texts) && slices.EqualFunc(s.over, w.over, near)
 }
 
 // meet is the part of r inside v.
@@ -420,9 +423,10 @@ func meet(r, v ui.Rect) ui.Rect {
 	return ui.Rect{X: x, Y: y, W: w, H: h}
 }
 
-// dwell is how long a waiting card stands still, its place, size, scroll
-// and texts as they were, before a press answers it: a press as a card
-// lands or moves answers what the user had no time to read.
+// dwell is how long a waiting card stands still, its place, size, scroll,
+// texts and what covers it as they were, before a press answers it: a
+// press as a card lands, moves or comes out from under a cover answers
+// what the user had no time to read.
 const dwell = 300 * time.Millisecond
 
 // press is a press of an answer to the waiting request that began at
@@ -473,12 +477,14 @@ func (a *app) readOn(t thread, es []entry, request api.ID) {
 // textsPad is the room around a card's texts in their box.
 const textsPad = 12
 
-// inFull is the part of the chat's pane the timeline shows in full: above
-// the edge it fades out under, and above the composer, which a draft
-// grows over it. Before the composer is laid out, it is none of it.
+// inFull is the part of the chat's pane the timeline shows in full, as the
+// frame on screen drew it: above the edge it fades out under, and above
+// the composer, which a draft grows over it. Before the composer is laid
+// out, or while a cover at a place the app does not know shows, it is
+// none of it. Other covers hide what they lie over in it (hidden).
 func (a *app) inFull(t thread) ui.Rect {
 	v := a.paneAt
-	if a.composerAt.H <= 0 {
+	if a.composerAt.H <= 0 || a.blind {
 		return ui.Rect{}
 	}
 	v.H = min(v.H-composerRoom-a.agentsRoom(t), a.composerAt.Y-v.Y)
@@ -486,12 +492,18 @@ func (a *app) inFull(t thread) ui.Rect {
 }
 
 // seen is whether the last frame drew the card of the waiting request in
-// full where it starts: its header, and the first line of what runs,
-// unscrolled out of its box. An answer to an unseen card would approve
-// what the user never read.
+// full where it starts, uncovered: its header, and the first line of what
+// runs, unscrolled out of its box. An answer to an unseen card would
+// approve what the user never read.
 func (a *app) seen(t thread, request api.ID) bool {
 	s, ok := a.drawn[request]
-	return ok && s.start(a.inFull(t))
+	return ok && a.shows(s, a.inFull(t))
+}
+
+// shows is whether a card drawn where s says shows its start in v, and no
+// cover lies over it.
+func (a *app) shows(s sight, v ui.Rect) bool {
+	return s.start(v) && !a.hidden(s.header) && !a.hidden(s.lead)
 }
 
 // start is whether a card drawn where s says shows its start in v: its
@@ -508,7 +520,7 @@ func (a *app) reveal(t thread, es []entry, request api.ID) {
 	if ok && s.scroll != nil {
 		s.scroll.Y = 0
 	}
-	if ok && within(s.card, a.inFull(t)) {
+	if ok && within(s.card, a.inFull(t)) && !a.hidden(s.card) {
 		return
 	}
 	for i, e := range es {
