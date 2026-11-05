@@ -23,6 +23,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/daemon"
 	eng "glitched/internal/engine"
+	"glitched/internal/mcp"
 	"glitched/internal/plain"
 	"glitched/internal/tailnet"
 	"glitched/internal/transport"
@@ -43,6 +44,7 @@ var commands = map[string]func(context.Context, []string) error{
 	"run":     run,
 	"threads": threads,
 	"replica": replica,
+	"mcp":     serveMCP,
 }
 
 const usage = `usage: glitched <command> [flags]
@@ -54,6 +56,7 @@ const usage = `usage: glitched <command> [flags]
   run       send a message and stream the turn: glitched run [-thread ID] [-provider claude] [-yes] text...
   threads   list this host's threads
   replica   print a thread's events as the hub holds them: glitched replica -thread ID
+  mcp       serve MCP on stdin and stdout for the agent the engine started it for
 
 run, threads and replica reach the engine under -dir, or another with -server ADDR -token TOKEN.`
 
@@ -76,6 +79,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "glitched:", err)
 		os.Exit(1)
 	}
+}
+
+// serveMCP is glitched mcp, which each agent the engine runs starts.
+func serveMCP(ctx context.Context, _ []string) error {
+	return mcp.Main(ctx, os.Stdin, os.Stdout)
 }
 
 func dirFlag(fs *flag.FlagSet) *string {
