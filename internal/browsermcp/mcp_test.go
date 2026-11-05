@@ -198,9 +198,18 @@ func TestServeEndsCallsTheClientLeaves(t *testing.T) {
 	started := make(chan string, 2)
 	ended := make(chan string, 2)
 	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	answers := make(chan string, 4)
+	go func() {
+		lines := bufio.NewScanner(outR)
+		for lines.Scan() {
+			answers <- lines.Text()
+		}
+	}()
 	done := make(chan error, 1)
 	go func() {
-		done <- Serve(context.Background(), inR, io.Discard, func(ctx context.Context, tool string, args json.RawMessage) (string, error) {
+		defer outW.Close()
+		done <- Serve(context.Background(), inR, outW, func(ctx context.Context, tool string, args json.RawMessage) (string, error) {
 			started <- string(args)
 			<-ctx.Done()
 			ended <- string(args)
@@ -219,6 +228,12 @@ func TestServeEndsCallsTheClientLeaves(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("a cancelled call went on")
+	}
+	// A cancelled call gets no answer.
+	select {
+	case a := <-answers:
+		t.Errorf("a cancelled call was answered: %s", a)
+	case <-time.After(100 * time.Millisecond):
 	}
 	inW.Close()
 	select {

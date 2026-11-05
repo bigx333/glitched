@@ -170,6 +170,7 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, call Call) error {
 				json.Unmarshal(req.Params, &p)
 				calls.Lock()
 				if stop := running[string(p.RequestID)]; stop != nil {
+					delete(running, string(p.RequestID))
 					stop()
 				}
 				calls.Unlock()
@@ -222,9 +223,15 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, call Call) error {
 				defer wg.Done()
 				text, err := call(callCtx, p.Name, p.Arguments)
 				calls.Lock()
+				_, open := running[string(id)]
 				delete(running, string(id))
 				calls.Unlock()
 				stop()
+				// A call the client cancelled gets no answer (MCP's
+				// cancellation).
+				if !open {
+					return
+				}
 				r := callResult{Content: []content{{"text", text}}}
 				if err != nil {
 					r = callResult{Content: []content{{"text", err.Error()}}, IsError: true}
