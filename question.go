@@ -305,8 +305,15 @@ var pickKeys = []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4}
 // answer, and ⇧⌘D or Escape dismisses. All but ⌘⏎ are in's keys the
 // focused element leaves: a shell in the terminal drawer keeps Escape, and
 // Control's chords, which ⌘ is on Linux and Windows. Escape in an Other
-// field is the field's.
+// field is the field's. Under an overlay of the app, they all wait, and
+// Escape is the overlay's.
 func (a *app) questionKeys(c *ui.Context, in ui.Element, t thread, r *client.RequestEntry) {
+	// Taken even while a question has no answer, from the shell, and under
+	// an overlay: the composer's would stop the turn.
+	enter := c.Shortcut(ui.Cmd, ui.KeyEnter)
+	if a.covered {
+		return
+	}
 	q, _ := api.ParseQuestions(r.Body) // none, for a body the card can't show
 	f := a.form(r, q)
 	typing := slices.ContainsFunc(f.fields, func(h ui.Handle) bool { return h.Focused(c) })
@@ -317,9 +324,6 @@ func (a *app) questionKeys(c *ui.Context, in ui.Element, t thread, r *client.Req
 			return
 		}
 	}
-	// Taken even while a question has no answer, and from the shell: the
-	// composer's would stop the turn.
-	enter := c.Shortcut(ui.Cmd, ui.KeyEnter)
 	switch {
 	case enter && len(q.Questions) > 0 && f.done():
 		a.answerQuestions(t, r, f.answers())
