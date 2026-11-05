@@ -370,14 +370,20 @@ Claude Code runs in threads get the browser as an MCP server named
 - **Actions** run in the page script (`act`), the same on every engine:
   it resolves the ref, checks the element is still the role and name the
   snapshot gave it, shown and enabled, scrolls it into view, then clicks
-  (pointer and mouse events, down, up, click, at its centre) or types (the
+  (pointer and mouse events, down, up, click, at its centre, once the
+  script has answered, so a page leaving or a dialog doesn't take the
+  answer with it) or types (the
   prototype's value setter, then `input` and `change`, so frameworks
   tracking the value on the element, as React does, see it; an editor
   through `insertText`). Enter is `keydown`, `keypress` and `keyup`;
   unless the page takes one of the first two, the field's form submits
   as a browser's would, once the script has answered: its default button
   clicked, or with none, the form submitted if the field is its only one
-  Enter submits from. A field that is read-only takes nothing. Its events are the script's: `isTrusted` is false.
+  Enter submits from. A field that is read-only takes nothing; one that keeps
+  only some values, as a date's, says what it took; dropdowns and file
+  fields say the tools can't fill them yet. A page that stops answering,
+  as one showing `alert` or `confirm`, is said to be maybe showing a
+  dialog, and the tabs a page opens as it acts are named in the answer. Its events are the script's: `isTrusted` is false.
 - **Not yet isolated** (Next, 2): the script runs in the page's world, so a
   page that set out to can still move where an action lands, within
   itself. What it can't do is reach past itself, as each action acts on
