@@ -54,6 +54,7 @@ func Dial(dir string) Call {
 		var d net.Dialer
 		conn, err := d.DialContext(ctx, "unix", Socket(dir))
 		switch {
+		case err == nil:
 		case ctx.Err() != nil:
 			return "", ctx.Err()
 		case errors.Is(err, os.ErrPermission):
