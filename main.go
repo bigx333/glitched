@@ -319,10 +319,12 @@ type app struct {
 	// timeline built, and drew the same for the frame before; laidAt is
 	// when the last frame drew, as this frame's timeline found it, and
 	// builtAt when this frame's timeline was built; keyed is the request
-	// ⌘⏎ and ⇧⌘D answer, as the last frame found it.
+	// ⌘⏎ and ⇧⌘D answer, as the last frame found it, and keyedSince when
+	// a frame first showed it so, zero until one did.
 	drawn, drew     map[api.ID]sight
 	laidAt, builtAt time.Time
 	keyed           api.ID
+	keyedSince      time.Time
 	// reads are what the window showed of each waiting card; chord is
 	// when ⌘ went down, zero while it is up; and pressing is the press of
 	// a request's answers the pointer holds.

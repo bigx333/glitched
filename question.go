@@ -326,7 +326,8 @@ var pickKeys = []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4}
 // focused element leaves: a shell in the terminal drawer keeps Escape, and
 // Control's chords, which ⌘ is on Linux and Windows. Escape in an Other
 // field is the field's. Under an overlay of the app, they all wait, and
-// Escape is the overlay's.
+// Escape is the overlay's. ⌘'s act only once ⌘ went down after a frame
+// showed the card with its keys, as approvalKeys' do.
 func (a *app) questionKeys(c *ui.Context, in ui.Element, t thread, r *client.RequestEntry) {
 	// Taken even while a question has no answer, from the shell, and under
 	// an overlay: the composer's would stop the turn.
@@ -334,18 +335,19 @@ func (a *app) questionKeys(c *ui.Context, in ui.Element, t thread, r *client.Req
 	if a.covered {
 		return
 	}
+	shown := a.keyedShown()
 	q, _ := api.ParseQuestions(r.Body) // none, for a body the card can't show
 	f := a.form(r, q)
 	typing := slices.ContainsFunc(f.fields, func(h ui.Handle) bool { return h.Focused(c) })
-	dismiss := in.OverlayShortcut(ui.Cmd|ui.Shift, ui.KeyD) || !typing && in.OverlayShortcut(0, ui.KeyEscape)
+	dismiss := in.OverlayShortcut(ui.Cmd|ui.Shift, ui.KeyD) && shown || !typing && in.OverlayShortcut(0, ui.KeyEscape)
 	for j, k := range pickKeys {
-		if in.OverlayShortcut(ui.Cmd, k) && f.at < len(q.Questions) && j < len(q.Questions[f.at].Options) {
+		if in.OverlayShortcut(ui.Cmd, k) && shown && f.at < len(q.Questions) && j < len(q.Questions[f.at].Options) {
 			a.pickOption(t, r, q, f, f.at, q.Questions[f.at].Options[j].Label)
 			return
 		}
 	}
 	switch {
-	case enter && len(q.Questions) > 0 && f.done():
+	case enter && shown && len(q.Questions) > 0 && f.done():
 		a.answerQuestions(t, r, f.answers())
 	case dismiss:
 		a.answerQuestions(t, r, api.Answers{})
