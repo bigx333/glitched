@@ -18,7 +18,9 @@ import (
 // writes at once.
 type counted struct {
 	net.Listener
-	open atomic.Int64
+	// accepted counts every connection, and open those not yet closed: a
+	// server can close one before a poll of open ever sees it.
+	accepted, open atomic.Int64
 }
 
 func (l *counted) Accept() (net.Conn, error) {
@@ -27,6 +29,7 @@ func (l *counted) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	c.(*net.TCPConn).SetWriteBuffer(1024)
+	l.accepted.Add(1)
 	l.open.Add(1)
 	return &countedConn{Conn: c, ln: l}, nil
 }
@@ -64,7 +67,10 @@ func TestServerClosesAConnectionThatNeverReadsItsResponses(t *testing.T) {
 	defer nc.Close()
 	go nc.Write([]byte(strings.Repeat("GET /ws HTTP/1.1\r\nHost: glitched\r\n\r\n", 200000)))
 	deadline := time.Now().Add(3 * time.Second)
-	for ln.open.Load() == 0 {
+	for ln.accepted.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the server never accepted the connection")
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	for ln.open.Load() != 0 {
