@@ -2,7 +2,7 @@
 
 Newest first. Answer under each question, or in the PM thread.
 
-## Q11 (2026-11-05, open). Agent spawn tool plan: five decisions
+## Q11 (2026-11-05, answered: as Zeron does it; report wakes the parent; Protocol 6 approved; 5/20 limits, never ask, configurable). Agent spawn tool plan: five decisions
 
 The plan is at `/tmp/glitched-plans/spawn-tool.html`, with an offline copy at `spawn-tool.packed.html`. Both are local files and are not committed. Main finding: today a child's report never reaches the parent's agent.
 

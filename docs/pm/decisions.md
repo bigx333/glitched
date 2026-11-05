@@ -2,6 +2,17 @@
 
 Newest first. Each entry has the date, who decided, and the decision.
 
+## 2026-11-05. Spawn tool decisions (Nelson, Q11)
+
+1. **The tool works the way Zeron's does.** A `glitched mcp` stdio subcommand is the MCP server.
+   - The engine passes it to each agent with an inline `--mcp-config`, beside the user's own servers, without `--strict-mcp-config`.
+   - Environment variables carry the calling thread. A nested engine strips them.
+   - The server forwards each tool call to the engine over its socket.
+   - It works for any provider. This matches Zeron's `zeron mcp` and its inline `--mcp-config` (zeronsh/zeron, `crates/mcp`, `crates/harness/src/claude/mod.rs`, `crates/harness/src/orchestration.rs`).
+2. **A child's done or failed report wakes the parent.** The report queues the parent's next turn. There is no blocking wait tool for now.
+3. **`api.Protocol` 5→6 is approved** for `MessageQueued.Report`. There is no schema change.
+4. **Limits.** By default a parent may have 5 children working at once and 20 in all, and depth is 4. A spawn never asks the user. These limits are configurable.
+
 ## 2026-11-05. Slice 5 ships on every platform; Windows' gap is a follow-up (Nelson)
 
 #64 merged, which left #44 (Windows) as the last gate. Nelson chose to turn Claude on everywhere now. On Windows, claude's pipes cannot time out, and Stop or Delete can leave a running tool command behind. The follow-up is #68, which tags Cahil (@SchizzY) because it needs a Windows host. #44 links to it.
