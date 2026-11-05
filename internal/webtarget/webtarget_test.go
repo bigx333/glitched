@@ -174,3 +174,40 @@ func TestDescribeRefusesWhatTheScriptWouldNotAnswer(t *testing.T) {
 		t.Errorf("described %+v (%v)", e, err)
 	}
 }
+
+// An action names its element as the snapshot did, for the page script to
+// check before it acts, and takes only that snapshot's refs.
+func TestActionsActAsTheSnapshotNamed(t *testing.T) {
+	s := Snapshot{Epoch: 9, Elements: []Named{{Ref: "s9e1", Role: "link", Name: "Docs"}, {Ref: "s9e2", Role: "textbox", Name: "Search"}}}
+	r := &recorder{answer: map[string]any{"done": true}}
+	ctx := context.Background()
+	if err := Click(ctx, r, s, "s9e1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Type(ctx, r, s, "s9e2", "go", true); err != nil {
+		t.Fatal(err)
+	}
+	click, typed := argsOf(t, r.scripts[0]), argsOf(t, r.scripts[1])
+	if click["op"] != "act" || click["action"] != "click" || click["ref"] != "s9e1" || click["role"] != "link" || click["name"] != "Docs" {
+		t.Errorf("a click ran with %v", click)
+	}
+	if typed["action"] != "type" || typed["text"] != "go" || typed["submit"] != true || typed["role"] != "textbox" || typed["name"] != "Search" {
+		t.Errorf("typing ran with %v", typed)
+	}
+	for _, err := range []error{
+		Click(ctx, r, s, "s8e1"),
+		Click(ctx, r, s, "s9e3"),
+		Type(ctx, r, s, "s9e2", strings.Repeat("é", MaxTyped+1), false),
+	} {
+		if err == nil {
+			t.Error("an action the snapshot doesn't allow ran")
+		}
+	}
+	if len(r.scripts) != 2 {
+		t.Errorf("%d scripts ran, want 2", len(r.scripts))
+	}
+	// A page answering for the script, without it, fails.
+	if err := Click(ctx, &recorder{answer: map[string]any{}}, s, "s9e1"); err == nil {
+		t.Error("an answer not the script's passed")
+	}
+}
