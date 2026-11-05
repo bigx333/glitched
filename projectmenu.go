@@ -22,7 +22,7 @@ func (a *app) projectMenu(m *ui.Menu, p *project) {
 	m.Separator()
 	// As a thread is stopped before it's deleted, so is every thread at the
 	// top of the project's trees; those under them stop as they go.
-	if m.Item("Remove project…").Disabled(projectLive(p)).Chosen() {
+	if m.Item("Remove project…").Disabled(a.projectLive(p)).Chosen() {
 		a.askRemove(p)
 	}
 }
@@ -39,7 +39,7 @@ func (a *app) workspaceItems(m *ui.Menu) {
 	}
 	m.Submenu("Remove project", func(m *ui.Menu) {
 		for _, p := range a.projects {
-			if m.Item(a.projectLabel(p) + "…").Disabled(projectLive(p)).Chosen() {
+			if m.Item(a.projectLabel(p) + "…").Disabled(a.projectLive(p)).Chosen() {
 				a.askRemove(p)
 			}
 		}
@@ -47,12 +47,19 @@ func (a *app) workspaceItems(m *ui.Menu) {
 }
 
 // projectLabel is the project's name, and its machine's when there are
-// several.
+// several; its folder when another of the machine's has the same name.
 func (a *app) projectLabel(p *project) string {
-	if len(a.backend.Envs()) > 1 {
-		return p.name() + " on " + p.env.Name
+	name := p.name()
+	for _, x := range a.projects {
+		if x != p && x.env == p.env && x.name() == name {
+			name = p.key.workspace
+			break
+		}
 	}
-	return p.name()
+	if len(a.backend.Envs()) > 1 {
+		name += " on " + p.env.Name
+	}
+	return name
 }
 
 // askRemove opens the alert asking before p is removed.
@@ -74,9 +81,11 @@ func (p *project) roots() []thread {
 }
 
 // projectLive is whether a thread at the top of the project's trees has a
-// run, an uncertain one too, which the user stops first.
-func projectLive(p *project) bool {
-	for _, t := range p.roots() {
+// run, an uncertain one too, which the user stops first. One under another
+// of them, by way of another workspace, stops as its tree goes.
+func (a *app) projectLive(p *project) bool {
+	tops, _ := a.projectTrees(p)
+	for _, t := range tops {
 		if t.View.Live() {
 			return true
 		}
@@ -170,7 +179,7 @@ func (a *app) removeAlert(c *ui.Context) {
 	case 1:
 		// A thread at the top that started a run since is stopped first,
 		// as the menus have it.
-		if projectLive(p) {
+		if a.projectLive(p) {
 			c.AddToast(ui.Toast{Title: "Not removed", Description: "Stop the agent working in " + p.name() + " first.", Type: "info"})
 		} else {
 			a.removeProject(p)
