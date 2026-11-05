@@ -129,6 +129,9 @@ function install(key) {
     selectAllChildren: fn(window.Selection, "selectAllChildren"),
     execCommand: fn(Document, "execCommand"),
     later: window.setTimeout,
+    elementFromPoint: fn(Document, "elementFromPoint"),
+    shadowFromPoint: fn(window.ShadowRoot, "elementFromPoint"),
+    shadowHost: getter(window.ShadowRoot, "host"),
   };
   // The events actions fire, made with the constructors found as the
   // script was installed.
@@ -567,6 +570,14 @@ function install(key) {
     date: true, month: true, week: true, time: true, "datetime-local": true, number: true,
   };
 
+  // press clicks a form's default button as implicit submission does: a
+  // click at its top left corner, which an image button sends as 0, 0.
+  function press(button) {
+    const b = rect(button);
+    apply(B.dispatch, button, [new EV.Mouse("click", { __proto__: null, bubbles: true, cancelable: true, composed: true,
+      button: 0, detail: 1, clientX: get(B.x, b), clientY: get(B.y, b) })]);
+  }
+
   // implicit is how Enter in one of form's fields submits it, or null: a
   // click on its default button, the first that submits, unless that is
   // disabled; with none, the form submitted, if it has no other field
@@ -579,11 +590,42 @@ function install(key) {
       const type = t === "INPUT" ? lower(get(B.inputType, c)) : t === "BUTTON" ? lower(get(B.buttonType, c)) : "";
       if ((t === "BUTTON" && type === "submit") || (t === "INPUT" && (type === "submit" || type === "image"))) {
         if (matches(c, ":disabled")) return null;
-        return () => apply(B.dispatch, c, [new EV.Mouse("click", { __proto__: null, bubbles: true, cancelable: true, composed: true, button: 0, detail: 1 })]);
+        return () => press(c);
       }
       if (t === "INPUT" && BLOCKS_IMPLICIT[type] === true) fields++;
     }
+    // An image button isn't among a form's elements, but is its default
+    // button where it comes first: a form with one submits by it.
+    const image = apply(B.query, form, ["input[type=image i]"]);
+    if (image) {
+      if (matches(image, ":disabled")) return null;
+      return () => press(image);
+    }
     return fields === 1 && B.requestSubmit ? () => apply(B.requestSubmit, form, []) : null;
+  }
+
+  // cover is what shows over el at x, y of its document, which a click
+  // there would hit instead of it, or null: an element inside el, through
+  // shadow roots, or in one of its labels, is el's own.
+  function cover(el, doc, x, y) {
+    let hit = apply(B.elementFromPoint, doc, [x, y]);
+    for (let i = 0; hit && i < 32; i++) {
+      const sr = get(B.shadowRoot, hit);
+      const inner = sr && B.shadowFromPoint ? apply(B.shadowFromPoint, sr, [x, y]) : null;
+      if (!inner || inner === hit) break;
+      hit = inner;
+    }
+    if (!hit) return null;
+    const labels = isHTML(el) && LABELS[tagOf(el)] ? get(LABELS[tagOf(el)], el) : null;
+    for (let n = hit, i = 0; n && i < 4096; i++) {
+      if (n === el) return null;
+      if (labels) for (let j = 0, k = listLength(labels); j < k; j++) if (item(labels, j) === n) return null;
+      const up = get(B.parent, n);
+      if (up) { n = up; continue; }
+      const root = apply(B.rootNode, n, []);
+      n = root && get(B.nodeType, root) === 11 ? get(B.shadowHost, root) : null;
+    }
+    return hit;
   }
 
   // act does what an agent asks of a ref's element (args.action): "click"
@@ -607,6 +649,8 @@ function install(key) {
     const fire = (e) => apply(B.dispatch, el, [e]);
     const focus = () => { if (html) apply(B.focus, el, []); };
     if (args.action === "click") {
+      const over = cover(el, doc, x, y);
+      if (over) throw new Err(`${ref} is covered by ${role(over) || lower(tagOf(over)) || "an element"} ${quote(name(over, role(over)))}, which a click there would hit`);
       const at = (buttons) => ({ __proto__: null, bubbles: true, cancelable: true, composed: true, view,
         clientX: x, clientY: y, button: 0, buttons, detail: 1 });
       const pointer = (type, buttons) => {
@@ -622,8 +666,11 @@ function install(key) {
       // answer with it.
       apply(B.later, window, [() => {
         pointer("pointerdown", 1);
-        fire(new EV.Mouse("mousedown", at(1)));
-        focus();
+        // A page taking mousedown keeps the focus where it is, as a
+        // toolbar's button keeps the editor's selection.
+        const down = new EV.Mouse("mousedown", at(1));
+        fire(down);
+        if (!get(B.defaultPrevented, down)) focus();
         pointer("pointerup", 0);
         fire(new EV.Mouse("mouseup", at(0)));
         fire(new EV.Mouse("click", at(0)));
