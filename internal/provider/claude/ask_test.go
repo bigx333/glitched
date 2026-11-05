@@ -256,6 +256,8 @@ func TestQuestionsTheCardCantShowAreRefused(t *testing.T) {
 		{"a repeated label", []any{q("1?", options("A", "A"))}, "question 1 has a blank or repeated option"},
 		{"a repeated question", []any{q("1?", ab), q("1?", ab)}, "question 2 repeats an earlier question"},
 		{"a text question", []any{map[string]any{"question": "1?", "header": "H", "kind": "text"}}, "question 1 asks for text, not a choice"},
+		{"a comma in a multi-select label", []any{q("1?", ab), map[string]any{"question": "2?", "header": "H", "multiSelect": true, "options": options("A,B", "C")}},
+			`question 2 takes more than one answer, and Claude Code joins those with commas, so its label "A,B" can't have one`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			tape := rewrite(t, dismissed.name, func(m map[string]any) []map[string]any {

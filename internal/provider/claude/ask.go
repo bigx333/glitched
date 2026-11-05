@@ -42,8 +42,9 @@ type claudeQuestions struct {
 
 // question is the request an AskUserQuestion becomes, or the reason the
 // card can't show it: more than 4 questions or options, fewer than 2
-// options, a question that is not a choice, or a blank or repeated text
-// or label.
+// options, a question that is not a choice, a blank or repeated text or
+// label, or a comma in a label of a Multi question, whose answers Claude
+// Code joins with commas.
 func question(id string, input json.RawMessage) (provider.RequestOpened, *prompt, error) {
 	var in claudeQuestions
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -59,6 +60,9 @@ func question(id string, input json.RawMessage) (provider.RequestOpened, *prompt
 		}
 		n := api.Question{Text: x.Question, Header: x.Header, Multi: x.MultiSelect}
 		for _, o := range x.Options {
+			if x.MultiSelect && strings.Contains(o.Label, ",") {
+				return provider.RequestOpened{}, nil, fmt.Errorf("question %d takes more than one answer, and Claude Code joins those with commas, so its label %q can't have one", i+1, o.Label)
+			}
 			n.Options = append(n.Options, api.Option{Label: o.Label, About: o.Description})
 		}
 		q.Questions = append(q.Questions, n)
