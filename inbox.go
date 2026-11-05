@@ -223,7 +223,7 @@ func (a *app) projectStrip(c *ui.Context) {
 				tip = "Hide " + name
 			}
 			b := a.tip(c, ghost(c, p.key, on).Padding(3, 7, 3, 3).Gap(5).Label(p.name()), tip)
-			b.ContextMenu(func(m *ui.Menu) { a.projectMenu(c, m, p) })
+			b.ContextMenu(func(m *ui.Menu) { a.projectMenu(m, p) })
 			if filtered && !on {
 				b.Opacity(0.45)
 			}
@@ -234,7 +234,7 @@ func (a *app) projectStrip(c *ui.Context) {
 				a.toggleProject(p.key)
 			}
 		}
-		if a.iconButton(c, "add-project", icPlus, "Add project", false).Padding(4).Clicked() {
+		if a.iconButton(c, "add-project", icPlus, "Add project", false).Padding(4).Disabled(a.picking).Clicked() {
 			a.addProject()
 		}
 	})

@@ -14,8 +14,8 @@ import (
 // in it again brings the project back.
 
 // projectMenu is a project chip's context menu.
-func (a *app) projectMenu(c *ui.Context, m *ui.Menu, p *project) {
-	if m.Item("New thread").Disabled(a.duplicate(p.env)).Chosen() {
+func (a *app) projectMenu(m *ui.Menu, p *project) {
+	if m.Item("New thread").Chosen() {
 		a.startThread(p)
 	}
 	m.Separator()
@@ -28,9 +28,9 @@ func (a *app) projectMenu(c *ui.Context, m *ui.Menu, p *project) {
 
 // workspaceItems end the draft's workspace menu: adding a project, and
 // removing one, each stopped first as the chip's menu has it.
-func (a *app) workspaceItems(m *ui.Menu, several bool) {
+func (a *app) workspaceItems(m *ui.Menu) {
 	m.Separator()
-	if m.Item("Add project…").Chosen() {
+	if m.Item("Add project…").Disabled(a.picking).Chosen() {
 		a.addProject()
 	}
 	if len(a.projects) == 0 {
@@ -38,22 +38,26 @@ func (a *app) workspaceItems(m *ui.Menu, several bool) {
 	}
 	m.Submenu("Remove project", func(m *ui.Menu) {
 		for _, p := range a.projects {
-			name := p.name()
-			if several {
-				name += " on " + p.env.Name
-			}
-			if m.Item(name + "…").Disabled(projectLive(p)).Chosen() {
+			if m.Item(a.projectLabel(p) + "…").Disabled(projectLive(p)).Chosen() {
 				a.askRemove(p)
 			}
 		}
 	})
 }
 
+// projectLabel is the project's name, and its machine's when there are
+// several.
+func (a *app) projectLabel(p *project) string {
+	if len(a.backend.Envs()) > 1 {
+		return p.name() + " on " + p.env.Name
+	}
+	return p.name()
+}
+
 // askRemove opens the alert asking before p is removed.
 func (a *app) askRemove(p *project) { a.removing, a.removeOpen = p.key, true }
 
-// roots are the project's threads that no other thread of it is under:
-// deleting each with its tree deletes every thread of the project.
+// roots are the project's threads that no other thread of it is under.
 func (p *project) roots() []thread {
 	in := map[api.ID]bool{}
 	for _, t := range p.threads {
@@ -79,17 +83,48 @@ func projectLive(p *project) bool {
 	return false
 }
 
+// projectTrees are what removing p deletes: the tops, the roots under no
+// other root, each with its tree, and every thread of those trees once,
+// one in another workspace too.
+func (a *app) projectTrees(p *project) (tops []thread, all []node) {
+	roots := p.roots()
+	under := map[api.ID]bool{}
+	for _, t := range roots {
+		for _, n := range a.below(t) {
+			under[n.t.id()] = true
+		}
+	}
+	seen := map[api.ID]bool{}
+	for _, t := range roots {
+		if under[t.id()] {
+			continue // deleted with the root above it
+		}
+		tops = append(tops, t)
+		for _, n := range append([]node{{t, 0}}, a.below(t)...) {
+			if !seen[n.t.id()] {
+				seen[n.t.id()] = true
+				all = append(all, n)
+			}
+		}
+	}
+	return tops, all
+}
+
 // removeProject deletes every thread of the project, and with them the
-// threads under them, then forgets the project in the sidebar's filter.
-// A draft in its workspace starts over in the home folder, so that the
-// project doesn't come back with the next thread.
+// threads under them. A draft in its workspace starts over in the home
+// folder, so that the project doesn't come back with the next thread.
 func (a *app) removeProject(p *project) {
-	for _, t := range p.roots() {
+	tops, _ := a.projectTrees(p)
+	for _, t := range tops {
 		a.deleteTree(t)
 	}
-	delete(a.projectFilter, p.key)
-	if a.fresh.env == p.env && a.fresh.workspace == p.key.workspace {
-		a.fresh = draft{env: p.env}
+	// A draft with no machine is on the first, as current() has it.
+	e := a.fresh.env
+	if envs := a.backend.Envs(); e == nil && len(envs) > 0 {
+		e = envs[0]
+	}
+	if keyOf(e, a.fresh.workspace) == p.key {
+		a.fresh = draft{env: e}
 	}
 }
 
@@ -109,35 +144,26 @@ func (a *app) removeAlert(c *ui.Context) {
 		a.removeOpen, a.removing = false, projectKey{}
 		return
 	}
-	// Every thread under the project's goes with it, one in another
-	// workspace too; those working stop first.
-	n, stopping := 0, 0
-	seen := map[api.ID]bool{}
-	for _, t := range p.roots() {
-		for _, d := range append(a.below(t), node{t, 0}) {
-			if seen[d.t.id()] {
-				continue
-			}
-			seen[d.t.id()] = true
-			n++
-			if d.t.View.Working() {
-				stopping++
-			}
-		}
-	}
+	_, all := a.projectTrees(p)
 	head := "Remove “" + p.name() + "” and its thread?"
 	body := "It's removed from every list and can't be brought back. Its history stays in the engine's log."
-	if n > 1 {
-		head = fmt.Sprintf("Remove “%s” and its %d threads?", p.name(), n)
+	if len(all) > 1 {
+		head = fmt.Sprintf("Remove “%s” and its %d threads?", p.name(), len(all))
 		body = "They're removed from every list and can't be brought back. Their history stays in the engine's log."
-	}
-	if stopping > 0 {
-		body = fmt.Sprintf("%d of them %s still working and will be stopped. ", stopping, isAre(stopping)) + body
+		if n := working(all); n > 0 {
+			body = fmt.Sprintf("%d of them %s still working and will be stopped. ", n, isAre(n)) + body
+		}
 	}
 	body += " The folder, " + p.key.workspace + ", isn't touched."
 	switch a.alert(c, &a.removeOpen, head, body, "Cancel", "Remove") {
 	case 1:
-		a.removeProject(p)
+		// A thread at the top that started a run since is stopped first,
+		// as the menus have it.
+		if projectLive(p) {
+			c.AddToast(ui.Toast{Title: "Not removed", Description: "Stop the agent working in " + p.name() + " first.", Type: "info"})
+		} else {
+			a.removeProject(p)
+		}
 		a.removing = projectKey{}
 	case 0, ui.AlertDismissed:
 		a.removing = projectKey{}

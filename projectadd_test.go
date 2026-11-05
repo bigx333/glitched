@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -46,8 +47,33 @@ func TestAddProjectCancelled(t *testing.T) {
 	h.tt.Advance(time.Second)
 	h.click("Add project")
 	<-picked
+	h.until("the picker closed", func() bool { return !h.a.picking })
 	h.tt.Advance(time.Second)
 	if h.a.current().id() != th.id() {
 		t.Fatalf("after a cancelled pick the chat shows %q", h.a.current().View.Title)
+	}
+}
+
+// While the picker is open, Add project opens no second one.
+func TestAddProjectOpensOnePicker(t *testing.T) {
+	was := chooseFolder
+	var opened atomic.Int32
+	release := make(chan struct{})
+	chooseFolder = func(*app) string { opened.Add(1); <-release; return "" }
+	t.Cleanup(func() { chooseFolder = was })
+	h := start(t, inboxDir(t))
+	h.thread("SIP re-INVITE handling")
+	h.tt.Advance(time.Second)
+	h.a.addProject()
+	for opened.Load() == 0 {
+		time.Sleep(time.Millisecond) // the picker opening, off the main thread
+	}
+	h.a.addProject()
+	time.Sleep(100 * time.Millisecond) // time for a second picker to open
+	n := opened.Load()
+	close(release)
+	h.until("the picker closed", func() bool { return !h.a.picking })
+	if n != 1 {
+		t.Fatalf("%d pickers opened", n)
 	}
 }
