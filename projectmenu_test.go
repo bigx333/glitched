@@ -1,8 +1,11 @@
 package main
 
 import (
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo/ui"
 )
 
 // A project chip's Remove project… asks, always, then deletes every thread
@@ -135,4 +138,29 @@ func TestWorkspaceMenuAddsAndRemoves(t *testing.T) {
 		t.Fatalf("%v; the menu has %q", err, h.tt.Menu())
 	}
 	h.until("the draft in the folder", func() bool { return h.a.current().View.Workspace == dir })
+}
+
+// The palette finds Add project… and each Remove project by "workspace"
+// too, and runs them.
+func TestPaletteAddsAndRemovesProjects(t *testing.T) {
+	h := start(t, inboxDir(t))
+	h.thread("SIP re-INVITE handling")
+	h.a.openCommandPalette()
+	h.tt.Frame()
+	h.tt.Type("workspace")
+	var got []string
+	for _, cmd := range h.a.commands() {
+		got = append(got, cmd.label)
+	}
+	want := []string{"Add project…", "Remove project agent-phone…", "Remove project mygo…", "Remove project t3code…"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("palette lists %q for workspace, want %q", got, want)
+	}
+	h.tt.Key(ui.Cmd, ui.KeyA)
+	h.tt.Type("remove project mygo")
+	h.tt.Key(0, ui.KeyEnter)
+	h.tt.Frame()
+	if !h.tt.HasText("Remove “mygo” and its thread?") {
+		t.Fatalf("no alert; texts %q", h.tt.Texts())
+	}
 }
