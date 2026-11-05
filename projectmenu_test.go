@@ -62,7 +62,8 @@ func TestRemoveProject(t *testing.T) {
 	}
 }
 
-// Removing a project deletes the threads under its threads as well.
+// Removing a project deletes the threads under its threads as well, and
+// counts them in the alert.
 func TestRemoveProjectTakesItsTrees(t *testing.T) {
 	h := tree3(t)
 	if err := h.tt.RightClick("t3code"); err != nil {
@@ -232,12 +233,17 @@ func seedChildIn(t *testing.T, d *daemon.Daemon, workspace string, parent api.ID
 // An alert left open while a thread at the top starts a run removes
 // nothing: the run is stopped first, as the menus have it.
 func TestRemoveProjectRechecksForALiveRun(t *testing.T) {
-	h := start(t, uncertainDir(t))
-	th := h.thread("Stuck")
+	h := start(t, inboxDir(t))
+	th := h.thread("Markdown table column alignment")
 	h.tt.Advance(time.Second)
 	h.a.askRemove(h.a.projectOf(th))
 	h.tt.Frame()
-	if !h.tt.HasText("An agent is working in t3code: stop it first, and nothing is removed until then.") {
+	if !h.tt.HasText("Remove “mygo” and its thread?") {
+		t.Fatalf("no alert; texts %q", h.tt.Texts())
+	}
+	th.View.Run = api.RunUncertain // a run starting while the alert is open
+	h.tt.Frame()
+	if !h.tt.HasText("An agent is working in mygo: stop it first, and nothing is removed until then. The folder, /work/mygo, isn't touched.") {
 		t.Fatalf("the alert doesn't say the agent is stopped first: %q", h.tt.Texts())
 	}
 	h.click("Remove")
@@ -269,8 +275,8 @@ func TestRemoveProjectResetsADraftOnAServer(t *testing.T) {
 }
 
 // A live thread under another of the project's, by way of another
-// workspace, doesn't keep the project from being removed: it stops as its
-// tree goes, as with a thread's Delete….
+// workspace, counts as working but doesn't keep the project from being
+// removed, as a live child doesn't keep a thread from its Delete….
 func TestRemoveProjectStopsALiveThreadUnderItsOwn(t *testing.T) {
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
@@ -339,5 +345,29 @@ func TestPaletteListsRemoveWhileWorking(t *testing.T) {
 	h.tt.Frame()
 	if !h.tt.HasText("An agent is working in t3code: stop it first, and nothing is removed until then. The folder, /work/t3code, isn't touched.") {
 		t.Fatalf("no alert; texts %q", h.tt.Texts())
+	}
+}
+
+// The palette's unshown words find a command only whole: part of one
+// doesn't put an action ahead of the thread the query names.
+func TestPaletteFindsByWholeWordsOnly(t *testing.T) {
+	h := start(t, inboxDir(t))
+	h.thread("SIP re-INVITE handling")
+	h.a.openCommandPalette()
+	h.tt.Frame()
+	h.tt.Type("old")
+	for _, cmd := range h.a.commands() {
+		if cmd.section == "Actions" {
+			t.Errorf("%q listed for old", cmd.label)
+		}
+	}
+	h.tt.Key(ui.Cmd, ui.KeyA)
+	h.tt.Type("remove workspace mygo")
+	var got []string
+	for _, cmd := range h.a.commands() {
+		got = append(got, cmd.label)
+	}
+	if want := []string{"Remove project mygo…"}; !slices.Equal(got, want) {
+		t.Fatalf("palette lists %q, want %q", got, want)
 	}
 }
