@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"glitched/internal/provider"
 )
@@ -91,8 +94,10 @@ func (t *turn) ask(id string, r canUseTool) (provider.RequestOpened, *prompt) {
 // from the number, bool, null or array it spells. A string of more than
 // one line shows as a block under "|", each of its lines indented. A key
 // shows bare when it holds only letters, digits, "_", "." and "-", and as
-// JSON otherwise, so no key passes for a key and a value. Input that is no
-// object shows as it came.
+// JSON otherwise, so no key passes for a key and a value. A key or a
+// string with a lone surrogate, which Go decodes as U+FFFD, shows as JSON,
+// with the surrogate as the escape that spells it. Input that is no object
+// shows as it came.
 func argsText(input json.RawMessage) string {
 	d := json.NewDecoder(bytes.NewReader(input))
 	if tok, err := d.Token(); err != nil || tok != json.Delim('{') {
@@ -100,17 +105,27 @@ func argsText(input json.RawMessage) string {
 	}
 	var lines []string
 	for d.More() {
+		from := d.InputOffset()
 		k, err := d.Token()
+		rawKey := bytes.TrimLeft(input[from:d.InputOffset()], ", \t\r\n")
 		var v json.RawMessage
 		if err != nil || d.Decode(&v) != nil {
 			return strings.TrimSpace(string(input))
 		}
 		key := k.(string)
-		if !bareKey.MatchString(key) {
+		if q, lone := loneQuoted(rawKey); lone {
+			key = q
+		} else if !bareKey.MatchString(key) {
 			key = jsonText(key)
 		}
 		var s string
+		q, lone := "", false
+		if v[0] == '"' {
+			q, lone = loneQuoted(v)
+		}
 		switch {
+		case lone:
+			s = " " + q
 		case v[0] == '"' && json.Unmarshal(v, &s) == nil && strings.Contains(s, "\n"):
 			s = " |\n  " + strings.ReplaceAll(s, "\n", "\n  ")
 		case v[0] == '"':
@@ -126,6 +141,64 @@ func argsText(input json.RawMessage) string {
 }
 
 var bareKey = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+// loneQuoted is the JSON string raw as jsonText shows it, but with each
+// lone surrogate in it as the escape \uXXXX that spells it, and whether
+// it has any. A tool reads a lone surrogate apart from U+FFFD, which
+// shows as \u{FFFD}, and from the text \uXXXX, whose backslash shows
+// doubled.
+func loneQuoted(raw []byte) (string, bool) {
+	if len(raw) < 2 || raw[0] != '"' || !bytes.Contains(raw, []byte(`\u`)) {
+		return "", false
+	}
+	var b, run strings.Builder
+	lone := false
+	flush := func() {
+		q := jsonText(run.String())
+		b.WriteString(q[1 : len(q)-1])
+		run.Reset()
+	}
+	s := string(raw[1 : len(raw)-1])
+	for i := 0; i < len(s); {
+		if s[i] != '\\' {
+			r, n := utf8.DecodeRuneInString(s[i:])
+			run.WriteRune(r)
+			i += n
+			continue
+		}
+		if s[i+1] != 'u' {
+			var r string
+			json.Unmarshal([]byte(`"`+s[i:i+2]+`"`), &r)
+			run.WriteString(r)
+			i += 2
+			continue
+		}
+		u := unit(s[i+2 : i+6])
+		i += 6
+		switch {
+		case !utf16.IsSurrogate(u):
+			run.WriteRune(u)
+		case u < 0xDC00 && strings.HasPrefix(s[i:], `\u`) && unit(s[i+2:i+6]) >= 0xDC00 && unit(s[i+2:i+6]) < 0xE000:
+			run.WriteRune(utf16.DecodeRune(u, unit(s[i+2:i+6])))
+			i += 6
+		default:
+			flush()
+			fmt.Fprintf(&b, `\u%04X`, u)
+			lone = true
+		}
+	}
+	if !lone {
+		return "", false
+	}
+	flush()
+	return `"` + b.String() + `"`, true
+}
+
+// unit is the UTF-16 unit four hex digits spell.
+func unit(hex string) rune {
+	n, _ := strconv.ParseUint(hex, 16, 16)
+	return rune(n)
+}
 
 // jsonText is s as a JSON string, its <, > and & as they are.
 func jsonText(s string) string {
