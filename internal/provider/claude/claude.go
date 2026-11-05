@@ -8,6 +8,7 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -31,6 +32,10 @@ type Adapter struct {
 	// Path is the claude binary. Empty looks on PATH, then in ~/.local/bin,
 	// where Claude Code's installer puts it.
 	Path string
+	// Browser is the command line of the MCP server that gives each run
+	// the app's browser as tools (glitched browser-mcp), or empty for
+	// none. It joins the user's own MCP servers, as "glitched".
+	Browser []string
 }
 
 var _ provider.Adapter = (*Adapter)(nil)
@@ -57,9 +62,9 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		return nil, err
 	}
 	session := uuidOf(spec.Thread)
-	g, err := start(ctx, bin, spec, argv(spec, "--session-id", session))
+	g, err := start(ctx, bin, spec, a.argv(spec, "--session-id", session))
 	if errors.Is(err, errSessionInUse) {
-		g, err = start(ctx, bin, spec, argv(spec, "--resume", session))
+		g, err = start(ctx, bin, spec, a.argv(spec, "--resume", session))
 	}
 	if err != nil {
 		return nil, err
@@ -138,7 +143,7 @@ func isExecutable(path string) bool {
 // argv is how a run starts Claude Code. A tool call that the user's own
 // rules, hooks and the run's mode leave undecided comes to the run as a
 // can_use_tool control request on stdout.
-func argv(spec provider.SessionSpec, sessionFlag, session string) []string {
+func (ad *Adapter) argv(spec provider.SessionSpec, sessionFlag, session string) []string {
 	a := []string{"-p", "--verbose",
 		"--input-format", "stream-json", "--output-format", "stream-json",
 		"--include-partial-messages",
@@ -150,7 +155,20 @@ func argv(spec provider.SessionSpec, sessionFlag, session string) []string {
 	if e := spec.Model.Effort; e != "" {
 		a = append(a, "--effort", e)
 	}
+	if len(ad.Browser) > 0 {
+		a = append(a, "--mcp-config", mcpConfig(ad.Browser))
+	}
 	return append(a, sessionFlag, session)
+}
+
+// mcpConfig is the --mcp-config of the browser's MCP server, run as
+// command. --mcp-config takes JSON as well as files, and every value
+// after it until the next flag, which argv puts after it.
+func mcpConfig(command []string) string {
+	b, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
+		"glitched": map[string]any{"type": "stdio", "command": command[0], "args": command[1:]},
+	}})
+	return string(b)
 }
 
 var modes = map[api.Access]string{
