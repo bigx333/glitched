@@ -172,6 +172,7 @@ func Run(t *testing.T, h Harness) {
 		{"ScaledFrames", s.scaledFrames},
 		{"FractionalFrames", s.fractionalFrames},
 		{"Tampering", s.tampering},
+		{"Actions", s.actions},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if why, ok := h.Known[c.name]; ok {
@@ -723,6 +724,99 @@ func (s *suite) tampering(t *testing.T) {
 	}
 }
 
+// Actions: a ref's element clicked, with the events a mouse fires, in a
+// frame too; text typed into a field, a text area and an editor, as
+// frameworks hear it; Enter submitting a form unless the page takes it;
+// and what an action refuses: a disabled element, typing into a button,
+// an element no longer what the snapshot named, and an older snapshot's
+// ref.
+func (s *suite) actions(t *testing.T) {
+	s.t = t
+	p, r := s.open("/act")
+	s.until("the frame", func() bool {
+		v, err := p.EvalContext(context.Background(), `return !!document.getElementById("fr").contentDocument?.querySelector("button")`)
+		return err == nil && v == true
+	})
+	ctx := context.Background()
+	snap, err := webtarget.Take(ctx, p, webtarget.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := func(name string) string {
+		t.Helper()
+		r := refNamed(snap, name, 0)
+		if r == "" {
+			t.Fatalf("no ref named %q in\n%s", name, snap.Text)
+		}
+		return r
+	}
+	if err := webtarget.Click(ctx, p, snap, ref("Press")); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.eval(p, `return seen.join(" ")`); got != "pointerdown mousedown pointerup mouseup click" {
+		t.Errorf("a click fired %q", got)
+	}
+	if err := webtarget.Click(ctx, p, snap, ref("Agree")); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.eval(p, `return document.getElementById("c").checked`); got != true {
+		t.Errorf("a clicked checkbox is checked: %v", got)
+	}
+	if err := webtarget.Click(ctx, p, snap, ref("Framed press")); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.eval(p, `return window.framed === 1`); got != true {
+		t.Error("the button in the frame wasn't clicked")
+	}
+	if err := webtarget.Click(ctx, p, snap, ref("Off")); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Errorf("clicking a disabled button: %v", err)
+	}
+	if err := webtarget.Type(ctx, p, snap, ref("Notes"), "hello\nthere", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.eval(p, `return document.querySelector("textarea").value + "|" + notes`); got != "hello\nthere|hello\nthere" {
+		t.Errorf("typing into a text area: %q", got)
+	}
+	if err := webtarget.Type(ctx, p, snap, ref("Editor"), "new text", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.eval(p, `return document.getElementById("ed").textContent`); got != "new text" {
+		t.Errorf("typing into an editor: %q", got)
+	}
+	if err := webtarget.Type(ctx, p, snap, ref("Press"), "x", false); err == nil || !strings.Contains(err.Error(), "not a text box") {
+		t.Errorf("typing into a button: %v", err)
+	}
+	if err := webtarget.Type(ctx, p, snap, ref("Taken"), "kept", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.eval(p, `return location.pathname + " " + window.enter`); got != "/act true" {
+		t.Errorf("Enter the page took: %q", got)
+	}
+	s.eval(p, `document.getElementById("b").textContent = "Renamed"; return 1`)
+	if err := webtarget.Click(ctx, p, snap, ref("Press")); err == nil || !strings.Contains(err.Error(), "now button") {
+		t.Errorf("clicking an element renamed since: %v", err)
+	}
+	newer, err := webtarget.Take(ctx, p, webtarget.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := webtarget.Click(ctx, p, snap, ref("Agree")); err == nil || !strings.Contains(err.Error(), "not the latest") {
+		t.Errorf("clicking an older snapshot's ref: %v", err)
+	}
+	snap = newer
+	if err := webtarget.Type(ctx, p, snap, ref("Query"), "glitched", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.eval(p, `return inputs`); got != float64(1) {
+		t.Errorf("the field heard %v inputs, want 1", got)
+	}
+	if err := webtarget.Type(ctx, p, snap, ref("Query"), "glitched", true); err != nil {
+		t.Fatal(err)
+	}
+	want := s.url("/act/sent?q=glitched")
+	s.until("the form's page", func() bool { return r.last(&r.navigated) == want })
+}
+
 // refNamed is the ref of the i-th element named name in a snapshot, or "".
 func refNamed(snap webtarget.Snapshot, name string, i int) string {
 	for _, e := range snap.Elements {
@@ -824,6 +918,8 @@ func fixtures() http.Handler {
 	mux.Handle("/c", page(`<!doctype html><title>Page C</title>`))
 	mux.Handle("/opens", page(`<!doctype html><title>Opens</title><script>window.open("/b")</script>`))
 	mux.Handle("/snap", page(snapFixture))
+	mux.Handle("/act", page(actFixture))
+	mux.Handle("/act/sent", page(`<!doctype html><title>Sent</title>`))
 	mux.Handle("/scaled", page(scaledFixture))
 	mux.Handle("/scaled/outer", page(scaledPage("Scaled", `<iframe id="nested" style="left:100px;top:100px;width:200px;height:120px;border:2px solid #888;padding:3px;transform:scale(0.5)" src="/scaled/nested"></iframe>`)))
 	mux.Handle("/scaled/nested", page(scaledPage("Nested", "")))
@@ -853,6 +949,35 @@ func closedURL() string {
 	srv.Close()
 	return u
 }
+
+// actFixture is the page actions act on. The query field notes its input
+// events as React does, through the value setter of its own instance,
+// which a value set on the element instead of through the prototype's
+// setter goes past.
+const actFixture = `<!doctype html><meta charset="utf-8"><title>Act</title>
+<button id="b">Press</button>
+<button disabled>Off</button>
+<input type="checkbox" id="c" aria-label="Agree">
+<form action="/act/sent"><input name="q" aria-label="Query"></form>
+<form action="/act/sent"><input id="taken" name="t" aria-label="Taken"></form>
+<textarea aria-label="Notes"></textarea>
+<div id="ed" contenteditable="true" aria-label="Editor">old</div>
+<iframe id="fr" srcdoc="<button onclick='parent.framed = 1'>Framed press</button>"></iframe>
+<script>
+window.seen = [];
+for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"])
+  b.addEventListener(type, () => seen.push(type));
+const q = document.querySelector("[name=q]");
+let tracked = "";
+Object.defineProperty(q, "value", {
+  get() { return Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").get.call(this); },
+  set(v) { tracked = v; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(this, v); },
+});
+window.inputs = 0;
+q.addEventListener("input", () => { if (q.value !== tracked) inputs++; });
+document.querySelector("textarea").addEventListener("input", (e) => { window.notes = e.target.value; });
+taken.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); window.enter = true; } });
+</script>`
 
 const snapFixture = `<!doctype html><meta charset="utf-8"><title>Snap</title>
 <h1>Fixture</h1>
