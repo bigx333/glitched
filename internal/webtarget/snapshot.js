@@ -631,27 +631,45 @@ function install(key) {
     }
   }
 
-  // point is where to click el, in its document's viewport: the centre of
-  // its first box in view, as a link wrapping onto two lines has two, and
-  // the box's middle can be between them.
-  function point(el, doc) {
+  // points are where a click on el may land, in its document's viewport:
+  // the middle and the quarters of each of its boxes, those in view
+  // first, as a link wrapping onto two lines has two boxes, whose middle
+  // can be between them, and a ring has a hole. An element with no box of
+  // its own, as a link around a block placed elsewhere, lands on what is
+  // in it.
+  function points(el, doc) {
     const root = get(B.documentElement, doc);
     const w = root ? get(B.clientWidth, root) : 0, h = root ? get(B.clientHeight, root) : 0;
-    // An engine without DOMRectList (an old WebKitGTK's ClientRectList)
-    // clicks the middle of the element's box.
-    const rs = B.rectsLength && B.rectsItem ? apply(B.clientRects, el, []) : null;
-    let first = null;
-    for (let i = 0, n = rs ? get(B.rectsLength, rs) : 0; i < n; i++) {
-      const r = apply(B.rectsItem, rs, [i]);
-      const x = get(B.x, r), y = get(B.y, r), rw = get(B.width, r), rh = get(B.height, r);
-      if (rw <= 0 || rh <= 0) continue;
-      const at = { __proto__: null, x: x + rw / 2, y: y + rh / 2 };
-      if (!first) first = at;
-      if (at.x >= 0 && at.y >= 0 && (!w || at.x <= w) && (!h || at.y <= h)) return at;
+    const inView = [], outside = [];
+    const add = (n) => {
+      // An engine without DOMRectList (an old WebKitGTK's ClientRectList)
+      // has the element's one box.
+      const rs = B.rectsLength && B.rectsItem ? apply(B.clientRects, n, []) : null;
+      const count = rs ? get(B.rectsLength, rs) : 1;
+      for (let i = 0; i < count && inView.length + outside.length < 40; i++) {
+        const r = rs ? apply(B.rectsItem, rs, [i]) : rect(n);
+        const x = get(B.x, r), y = get(B.y, r), rw = get(B.width, r), rh = get(B.height, r);
+        if (rw <= 0 || rh <= 0) continue;
+        const at = (fx, fy) => ({ __proto__: null, x: x + rw * fx, y: y + rh * fy });
+        const mid = at(0.5, 0.5);
+        const list = mid.x >= 0 && mid.y >= 0 && (!w || mid.x <= w) && (!h || mid.y <= h) ? inView : outside;
+        put(list, mid);
+        put(list, at(0.25, 0.25));
+        put(list, at(0.75, 0.25));
+        put(list, at(0.25, 0.75));
+        put(list, at(0.75, 0.75));
+      }
+    };
+    add(el);
+    // Breadth first through what is in el, for its first box.
+    const queue = [];
+    for (let c = get(B.firstChild, el); c; c = get(B.nextSibling, c)) put(queue, c);
+    for (let q = 0; !inView.length && !outside.length && q < queue.length && q < 256; q++) {
+      add(queue[q]);
+      for (let c = get(B.firstChild, queue[q]); c; c = get(B.nextSibling, c)) put(queue, c);
     }
-    if (first) return first;
-    const b = rect(el);
-    return { __proto__: null, x: get(B.x, b) + get(B.width, b) / 2, y: get(B.y, b) + get(B.height, b) / 2 };
+    for (let i = 0; i < outside.length; i++) put(inView, outside[i]);
+    return inView;
   }
 
   // up is n's parent, through a shadow root to its host.
@@ -662,10 +680,8 @@ function install(key) {
     return root && get(B.nodeType, root) === 11 ? get(B.shadowHost, root) : null;
   }
 
-  // cover is what shows over el at x, y of its document, which a click
-  // there would hit instead of it, or null: an element inside el, through
-  // shadow roots, or in one of its labels, is el's own.
-  function cover(el, doc, x, y) {
+  // hitAt is what a click at x, y of doc would hit, through shadow roots.
+  function hitAt(doc, x, y) {
     let hit = apply(B.elementFromPoint, doc, [x, y]);
     for (let i = 0; hit && i < 32; i++) {
       const sr = get(B.shadowRoot, hit);
@@ -673,16 +689,45 @@ function install(key) {
       if (!inner || inner === hit) break;
       hit = inner;
     }
-    if (!hit) return null;
+    return hit;
+  }
+
+  // own reports whether a click hitting hit is a click on el: hit is el,
+  // in it, through shadow roots, or in one of its labels.
+  function own(el, hit) {
     const labels = isHTML(el) && LABELS[tagOf(el)] ? get(LABELS[tagOf(el)], el) : null;
     for (let n = hit, i = 0; n && i < 4096; i++, n = up(n)) {
-      if (n === el) return null;
-      if (labels) for (let j = 0, k = listLength(labels); j < k; j++) if (item(labels, j) === n) return null;
+      if (n === el) return true;
+      if (labels) for (let j = 0, k = listLength(labels); j < k; j++) if (item(labels, j) === n) return true;
     }
-    // What contains el, at a point of el's box that isn't el's own, as a
-    // ring's hole or a child placed elsewhere, covers nothing.
-    for (let n = up(el), i = 0; n && i < 4096; i++, n = up(n)) if (n === hit) return null;
-    return hit;
+    return false;
+  }
+
+  // aim is where a click on el lands, and what it hits there: the first
+  // of its points where what shows is el's own. Where none is, it says
+  // what shows instead; where nothing shows at any, as no point is in
+  // view, el at its first.
+  function aim(ref, el, doc) {
+    const ps = points(el, doc);
+    let other = null;
+    for (let i = 0; i < ps.length; i++) {
+      const hit = hitAt(doc, ps[i].x, ps[i].y);
+      if (!hit) continue;
+      if (own(el, hit)) return { __proto__: null, x: ps[i].x, y: ps[i].y, target: hit };
+      if (!other) other = hit;
+    }
+    if (!other) {
+      const b = rect(el);
+      const at = ps.length ? ps[0] : { __proto__: null, x: get(B.x, b) + get(B.width, b) / 2, y: get(B.y, b) + get(B.height, b) / 2 };
+      return { __proto__: null, x: at.x, y: at.y, target: el };
+    }
+    // What contains el showing where el is: el takes no pointer there, as
+    // under pointer-events: none, or a box of its ancestor's own covers it.
+    for (let n = up(el), i = 0; n && i < 4096; i++, n = up(n)) {
+      if (n === other) throw new Err(`${ref} takes no clicks where it shows`);
+    }
+    const or = role(other), on = name(other, or);
+    throw new Err(`${ref} is covered by ${or || lower(tagOf(other)) || "an element"}${on ? " " + quote(on) : ""}, which a click there would hit`);
   }
 
   // act does what an agent asks of a ref's element (args.action): "click"
@@ -704,22 +749,22 @@ function install(key) {
     const focus = () => { if (html) apply(B.focus, el, []); };
     if (args.action === "click") {
       // What a user can't click, the agent doesn't either: an element
-      // that takes no pointer, one inert, or one behind a modal dialog.
-      if (prop(styleOf(el), "pointer-events") === "none") throw new Err(`${ref} takes no clicks`);
-      let modal = null;
-      try { modal = apply(B.query, get(B.documentElement, doc), ["dialog:modal"]); } catch {}
+      // inert, or behind a modal dialog. A modal dialog escapes the
+      // inertness around it.
+      const modalAt = (n) => { try { return matches(n, "dialog:modal"); } catch { return false; } };
+      let inModal = false;
       for (let n = el, i = 0; n && i < 4096; i++, n = up(n)) {
+        if (modalAt(n)) { inModal = true; break; }
         if (hasAttr(n, "inert")) throw new Err(`${ref} is inert: the page lets nothing use it now`);
-        if (n === modal) modal = null;
       }
+      let modal = null;
+      if (!inModal) try { modal = apply(B.query, get(B.documentElement, doc), ["dialog:modal"]); } catch {}
       if (modal) throw new Err(`${ref} is behind a modal dialog`);
       reveal(el);
-      const at0 = point(el, doc), x = at0.x, y = at0.y;
-      const over = cover(el, doc, x, y);
-      if (over) {
-        const or = role(over), on = name(over, or);
-        throw new Err(`${ref} is covered by ${or || lower(tagOf(over)) || "an element"}${on ? " " + quote(on) : ""}, which a click there would hit`);
-      }
+      // The events go to what the click hits, el or what is in it, or
+      // its label, as a user's would.
+      const aimed = aim(ref, el, doc), x = aimed.x, y = aimed.y, target = aimed.target;
+      const send = (e) => apply(B.dispatch, target, [e]);
       const at = (buttons) => ({ __proto__: null, bubbles: true, cancelable: true, composed: true, view,
         clientX: x, clientY: y, button: 0, buttons, detail: 1 });
       const pointer = (type, buttons) => {
@@ -728,7 +773,7 @@ function install(key) {
         define(init, "pointerId", 1);
         define(init, "pointerType", "mouse");
         define(init, "isPrimary", true);
-        fire(new EV.Pointer(type, init));
+        send(new EV.Pointer(type, init));
       };
       // The click comes once the script has answered: what it sets off,
       // a page leaving or a dialog holding the page, would take the
@@ -738,11 +783,11 @@ function install(key) {
         // A page taking mousedown keeps the focus where it is, as a
         // toolbar's button keeps the editor's selection.
         const down = new EV.Mouse("mousedown", at(1));
-        fire(down);
+        send(down);
         if (!get(B.defaultPrevented, down)) focus();
         pointer("pointerup", 0);
-        fire(new EV.Mouse("mouseup", at(0)));
-        fire(new EV.Mouse("click", at(0)));
+        send(new EV.Mouse("mouseup", at(0)));
+        send(new EV.Mouse("click", at(0)));
       });
       return { __proto__: null, done: true };
     }
