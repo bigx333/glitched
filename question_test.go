@@ -18,6 +18,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
+	"glitched/internal/plain"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 )
@@ -622,16 +623,23 @@ func TestQuestionCardDrawsAnEscapeApartFromWhatItSpells(t *testing.T) {
 	}
 }
 
-// ⌘1 and ⌘2 send the option each picks, of two that escape alike but for
-// the escape's own backslash.
+// Of two options that escape alike but for the escape's own backslash,
+// the key the card shows beside each label as it reads sends that option.
 func TestQuestionKeysSendEachOfTwoLabelsThatEscapeAlike(t *testing.T) {
 	labels := []string{"Keep\u200b", `Keep\u{200B}`}
-	for i, key := range []ui.Key{ui.Key1, ui.Key2} {
+	for _, label := range labels {
 		h, th := questioning(t, []provider.Event{provider.RequestOpened{ID: "q", Kind: "question", Body: questionsOf(api.Question{Text: "Which?", Options: options(labels...)})}})
-		h.tt.Key(ui.Cmd, key)
+		reads, _ := plain.Text(label, false)
+		ts := h.tt.Texts()
+		at := slices.Index(ts, reads)
+		if at < 0 || at+1 >= len(ts) || !strings.HasPrefix(ts[at+1], "⌘") {
+			t.Fatalf("no key beside %q; the card shows %q", reads, ts)
+		}
+		key := ts[at+1]
+		h.tt.Key(ui.Cmd, pickKeys[key[len(key)-1]-'1'])
 		got := answered(t, h, th, "Answered")
-		if want := (api.Answers{Answers: []api.Answer{{Picked: []string{labels[i]}}}}); !reflect.DeepEqual(got, want) {
-			t.Errorf("⌘%d sent %+v, want %+v", i+1, got, want)
+		if want := (api.Answers{Answers: []api.Answer{{Picked: []string{label}}}}); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s, shown beside %q, sent %+v, want %+v", key, reads, got, want)
 		}
 	}
 }
@@ -694,5 +702,109 @@ func TestAnAskOfAThreadOfTheUsersMadeWhileAwayIsToldOfOnReconnect(t *testing.T) 
 	settle(h)
 	if want := []string{"The agent asks: Which suites?"}; !slices.Equal(*got, want) {
 		t.Fatalf("notifications: %q; want %q", *got, want)
+	}
+}
+
+// bothAsk is the app on an engine whose turn asks for an approval to run
+// rm -rf build and fake.Asking's questions at once, in order, in a window
+// that draws both cards in full; it returns the two requests.
+func bothAsk(t *testing.T, questionFirst bool) (h *harness, approval, question *client.RequestEntry) {
+	t.Helper()
+	ask := commandAsk("perm", "rm -rf build")
+	var questions provider.Event
+	for _, e := range fake.Asking() {
+		if r, ok := e.(provider.RequestOpened); ok {
+			questions = r
+		}
+	}
+	events := []provider.Event{ask, questions}
+	if questionFirst {
+		events = []provider.Event{questions, ask}
+	}
+	h = askedIn(t, 1320, 1200, events...)
+	h.until("both cards", func() bool { return len(h.a.current().View.Requests) == 2 && h.tt.HasText("Claude asks") })
+	h.tt.Advance(time.Second)
+	h.tt.Frame()
+	for _, e := range entriesOf(h.a.current()) {
+		switch r := e.request; {
+		case r == nil:
+		case r.Kind == api.KindQuestion:
+			question = r
+		default:
+			approval = r
+		}
+	}
+	if !onScreen(h.tt, "Approval needed") || !onScreen(h.tt, "Which suites gate the merge?") {
+		t.Fatalf("want both cards drawn in full; the window shows %q", h.tt.Texts())
+	}
+	return h, approval, question
+}
+
+// chipAfter is whether the last frame draws chip right after the text
+// label, as a button shows its key.
+func chipAfter(h *harness, label, chip string) bool {
+	ts := h.tt.Texts()
+	i := slices.Index(ts, label)
+	return i >= 0 && i+1 < len(ts) && ts[i+1] == chip
+}
+
+// With an approval and questions waiting at once, the keys are one
+// card's, the last the window draws in full, and only that card shows
+// them: ⌘1, ⌘⏎ under a filled-in form and ⇧⌘D act on the card that shows
+// them, and on the other one, which shows none, they do nothing. ⌘⏎ under
+// the questions never allows the command. The approval takes its keys as
+// it always does, once its start is seen.
+func TestKeysAnswerOnlyTheCardThatShowsThem(t *testing.T) {
+	keys := []struct {
+		name  string
+		mods  ui.Modifiers
+		key   ui.Key
+		picks bool
+	}{
+		{"⌘1", ui.Cmd, ui.Key1, true},
+		{"⌘⏎", ui.Cmd, ui.KeyEnter, false},
+		{"⇧⌘D", ui.Cmd | ui.Shift, ui.KeyD, false},
+	}
+	for _, questionFirst := range []bool{false, true} {
+		for _, k := range keys {
+			order, last := "approval then questions", "questions"
+			if questionFirst {
+				order, last = "questions then approval", "approval"
+			}
+			t.Run(order+", "+k.name, func(t *testing.T) {
+				h, approval, question := bothAsk(t, questionFirst)
+				onApproval := chipAfter(h, "Allow once", "⌘⏎") || chipAfter(h, "Deny", "⇧⌘D")
+				onQuestions := chipAfter(h, "Answer", "⌘⏎") || chipAfter(h, "Dismiss", "⇧⌘D") || h.tt.HasText("⌘1")
+				if onApproval == onQuestions || onQuestions == questionFirst {
+					t.Errorf("want the keys shown on the last card only, the %s; the window shows %q", last, h.tt.Texts())
+				}
+				h.click("SQLite")
+				h.tt.Frame()
+				h.click("Unit")
+				h.tt.Advance(time.Second)
+				f := h.a.questions[question.Request]
+				picked := slices.Clone(f.picked)
+				press := func() { h.tt.Key(k.mods, k.key) }
+				if questionFirst && !k.picks {
+					answerAsSeen(t, h, approval, press)
+				} else {
+					press()
+				}
+				h.tt.Frame()
+				h.tt.Advance(time.Second)
+				switch {
+				case !questionFirst && answering(h, approval):
+					t.Errorf("%s, shown on the questions, answered the approval to run rm -rf build", k.name)
+				case questionFirst && answering(h, question):
+					t.Errorf("%s, shown on the approval, answered the questions", k.name)
+				case k.picks && slices.EqualFunc(picked, f.picked, slices.Equal) != questionFirst:
+					t.Errorf("⌘1 left the picks %q as %q; want them changed only where it shows", picked, f.picked)
+				case k.picks && (answering(h, approval) || answering(h, question)):
+					t.Errorf("⌘1 answered a card")
+				case !k.picks && !questionFirst && !answering(h, question):
+					t.Errorf("%s left the questions that show it waiting", k.name)
+				}
+			})
+		}
 	}
 }
