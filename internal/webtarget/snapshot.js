@@ -617,23 +617,34 @@ function install(key) {
         define(init, "isPrimary", true);
         fire(new EV.Pointer(type, init));
       };
-      pointer("pointerdown", 1);
-      fire(new EV.Mouse("mousedown", at(1)));
-      focus();
-      pointer("pointerup", 0);
-      fire(new EV.Mouse("mouseup", at(0)));
-      fire(new EV.Mouse("click", at(0)));
+      // The click comes once the script has answered: what it sets off,
+      // a page leaving or a dialog holding the page, would take the
+      // answer with it.
+      apply(B.later, window, [() => {
+        pointer("pointerdown", 1);
+        fire(new EV.Mouse("mousedown", at(1)));
+        focus();
+        pointer("pointerup", 0);
+        fire(new EV.Mouse("mouseup", at(0)));
+        fire(new EV.Mouse("click", at(0)));
+      }, 0]);
       return { __proto__: null, done: true };
     }
     if (args.action !== "type") throw new Err(`webtarget: unknown action ${args.action}`);
     const tag = tagOf(el);
     const field = html && (tag === "INPUT" || tag === "TEXTAREA");
     const editor = html && !field && (opt(B.editable, el) || (tag === "BODY" && opt(B.designMode, doc) === "on"));
+    if (tag === "INPUT" && html && lower(get(B.inputType, el)) === "file") throw new Err(`${ref} is a file field, which the browser's tools can't fill`);
+    if (tag === "SELECT") throw new Err(`${ref} is a dropdown, which the browser's tools can't pick from yet`);
     if (TYPEABLE[r] !== true || !(field || editor)) throw new Err(`${ref} is a ${r || "element"}, not a text box`);
     if (attr(el, "aria-readonly") === "true" || matches(el, ":read-only")) throw new Err(`${ref} is read-only`);
     focus();
     if (field) {
       apply(tag === "INPUT" ? B.setInputValue : B.setTextareaValue, el, [args.text]);
+      // A field that takes only some values, as a date's, keeps none
+      // other: the agent hears what it took.
+      const took = tag === "INPUT" ? get(B.inputValue, el) : args.text;
+      if (took !== args.text) throw new Err(`${ref} took ${quote(took)}, not ${quote(args.text)}`);
       fire(new EV.Input("input", { __proto__: null, bubbles: true, composed: true, inputType: "insertText", data: args.text }));
       fire(new EV.Event("change", { __proto__: null, bubbles: true }));
     } else {

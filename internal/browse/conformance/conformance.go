@@ -752,23 +752,34 @@ func (s *suite) actions(t *testing.T) {
 		}
 		return r
 	}
+	// A click comes once the script has answered.
+	clicked := func(what, js string) {
+		t.Helper()
+		s.until(what, func() bool {
+			v, err := p.EvalContext(ctx, js)
+			return err == nil && v == true
+		})
+	}
 	if err := webtarget.Click(ctx, p, snap, ref("Press")); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.eval(p, `return seen.join(" ")`); got != "pointerdown mousedown pointerup mouseup click" {
-		t.Errorf("a click fired %q", got)
-	}
+	clicked("the click's events", `return seen.join(" ") === "pointerdown mousedown pointerup mouseup click"`)
 	if err := webtarget.Click(ctx, p, snap, ref("Agree")); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.eval(p, `return document.getElementById("c").checked`); got != true {
-		t.Errorf("a clicked checkbox is checked: %v", got)
-	}
+	clicked("the checkbox checked", `return document.getElementById("c").checked`)
 	if err := webtarget.Click(ctx, p, snap, ref("Framed press")); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.eval(p, `return window.framed === 1`); got != true {
-		t.Error("the button in the frame wasn't clicked")
+	clicked("the button in the frame", `return window.framed === 1`)
+	if err := webtarget.Type(ctx, p, snap, ref("When"), "tomorrow", false); err == nil || !strings.Contains(err.Error(), `took "", not "tomorrow"`) {
+		t.Errorf("typing what a date field can't take: %v", err)
+	}
+	if err := webtarget.Type(ctx, p, snap, ref("When"), "2026-11-05", false); err != nil {
+		t.Errorf("typing a date: %v", err)
+	}
+	if err := webtarget.Type(ctx, p, snap, ref("Size"), "L", false); err == nil || !strings.Contains(err.Error(), "dropdown") {
+		t.Errorf("typing into a dropdown: %v", err)
 	}
 	if err := webtarget.Click(ctx, p, snap, ref("Off")); err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Errorf("clicking a disabled button: %v", err)
@@ -836,6 +847,16 @@ func (s *suite) actions(t *testing.T) {
 	// Enter clicks the form's default button, which is sent with it.
 	want := s.url("/act/sent?q=glitched&go=1")
 	s.until("the form's page", func() bool { return r.last(&r.navigated) == want })
+	// A link clicked goes where it links.
+	p, r = s.open("/act")
+	if snap, err = webtarget.Take(ctx, p, webtarget.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := webtarget.Click(ctx, p, snap, ref("Next")); err != nil {
+		t.Fatal(err)
+	}
+	want = s.url("/act/sent?from=link")
+	s.until("the link's page", func() bool { return r.last(&r.navigated) == want })
 }
 
 // refNamed is the ref of the i-th element named name in a snapshot, or "".
@@ -983,6 +1004,9 @@ const actFixture = `<!doctype html><meta charset="utf-8"><title>Act</title>
 <form action="/act/sent"><input name="x" aria-label="First of two"><input name="y" aria-label="Second of two"></form>
 <form action="/act/sent"><input name="k" aria-label="Pressed" onkeypress="if (event.key === 'Enter') { event.preventDefault(); window.pressed = true }"></form>
 <input aria-label="Fixed" readonly value="fixed">
+<input type="date" aria-label="When">
+<select aria-label="Size"><option>S</option><option>L</option></select>
+<a href="/act/sent?from=link">Next</a>
 <form action="/act/sent"><input id="taken" name="t" aria-label="Taken"></form>
 <textarea aria-label="Notes"></textarea>
 <div id="ed" contenteditable="true" aria-label="Editor">old</div>
