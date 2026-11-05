@@ -442,6 +442,10 @@ type app struct {
 	// deleting is the thread the alert asks about deleting.
 	deleting   thread
 	deleteOpen bool
+	// removing is the project the alert asks about removing, by key, so
+	// that it removes the threads the project has as it's confirmed.
+	removing   projectKey
+	removeOpen bool
 	// now is the frame's time, as the view builds it.
 	now time.Time
 
@@ -730,6 +734,7 @@ func (a *app) view(c *ui.Context) {
 	})
 	a.commandPalette(c)
 	a.deleteAlert(c)
+	a.removeAlert(c)
 	for _, fn := range a.pluginLater {
 		fn(c)
 	}
