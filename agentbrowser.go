@@ -258,7 +258,11 @@ func (ab *agentBrowser) tabs(ctx context.Context, args toolArgs) (string, error)
 		out = ab.list()
 		return nil
 	})
-	return out, err
+	// Only a view that ran has written out.
+	if err != nil {
+		return "", err
+	}
+	return out, nil
 }
 
 // need is the tab of id, which the action needs. On the view's thread.
@@ -405,7 +409,7 @@ func (ab *agentBrowser) act(ctx context.Context, tool string, args toolArgs) (st
 	// The page may have opened tabs, which the agent hears of, as it
 	// reads only the page it acted on.
 	var opened strings.Builder
-	ab.view(ctx, func() error {
+	err = ab.view(ctx, func() error {
 		for _, o := range ab.a.browser.tabs {
 			if !slices.Contains(before, o) {
 				fmt.Fprintf(&opened, "The page opened tab %d at %s.\n", o.id, o.url)
@@ -413,6 +417,10 @@ func (ab *agentBrowser) act(ctx context.Context, tool string, args toolArgs) (st
 		}
 		return nil
 	})
+	// Only a view that ran has written opened.
+	if err != nil {
+		return out, nil
+	}
 	return opened.String() + out, nil
 }
 
