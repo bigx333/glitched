@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/browsermcp"
 	"glitched/internal/engine"
 	"glitched/internal/hub"
 	"glitched/internal/jsonfile"
@@ -99,8 +100,37 @@ func FakeProviders(ad provider.Adapter) provider.Mux {
 // WithClaude has the engine run Claude Code threads with the real claude,
 // as `glitched serve` and the GUI's own engine do. An engine a test starts
 // keeps the fake, as Defaults gives it.
+//
+// Each run gets the browser of the app on the engine's state directory
+// as an MCP server (package browsermcp), as this program's browser-mcp.
 func (cfg *Config) WithClaude() {
-	cfg.Providers["claude"] = &claude.Adapter{Path: cfg.ClaudePath}
+	cfg.Providers["claude"] = &claude.Adapter{Path: cfg.ClaudePath, MCPConfig: cfg.browserConfig()}
+}
+
+// browserConfig writes the MCP config that has each run's Claude Code
+// start the browser's server, and returns its path; "", and no browser,
+// where it can't.
+func (cfg *Config) browserConfig() string {
+	// Claude Code runs in the thread's workspace, where a relative path
+	// finds nothing.
+	dir, err := filepath.Abs(cfg.Dir)
+	if err != nil {
+		return ""
+	}
+	cmd := browsermcp.Command(dir)
+	if cmd == nil {
+		return ""
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		slog.Warn("browser: no MCP config", "err", err)
+		return ""
+	}
+	path, err := browsermcp.WriteConfig(dir, cmd)
+	if err != nil {
+		slog.Warn("browser: no MCP config", "err", err)
+		return ""
+	}
+	return path
 }
 
 // Save records cfg in engine.json under its Dir, for Defaults.
