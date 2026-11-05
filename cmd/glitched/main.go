@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -210,9 +211,29 @@ func serve(ctx context.Context, args []string) error {
 	return d.Wait()
 }
 
-// browserCommand is how a run's Claude Code starts the MCP server of the
-// browser of the app on the state directory dir: this program, on that
-// directory. Nil, and no browser, where this program can't be found.
+// browserConfig writes the MCP config by which each run's Claude Code
+// starts the server of the browser of the app on the state directory
+// dir: this program's browser-mcp, on that directory. It returns the
+// config's path, or "", and no browser, where it can't.
+func browserConfig(dir string) string {
+	cmd := browserCommand(dir)
+	if cmd == nil {
+		return ""
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		log.Print(err)
+		return ""
+	}
+	path, err := browsermcp.WriteConfig(dir, cmd)
+	if err != nil {
+		log.Print(err)
+		return ""
+	}
+	return path
+}
+
+// browserCommand is this program's browser-mcp on the state directory
+// dir; nil where this program can't be found.
 func browserCommand(dir string) []string {
 	self, err := os.Executable()
 	if err != nil {
