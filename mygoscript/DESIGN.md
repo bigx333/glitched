@@ -113,8 +113,12 @@ call a prelude function with a compiled chunk. Each call returns a string.
 - A cold build compiles Luau in about 20 s. The Go build cache keeps the
   result, so later builds do not recompile it.
 - Cross-compiling needs a C++ cross toolchain for the target.
-- The repo's `CGO_ENABLED=0 go test ./...` habit no longer covers the app
-  package or `mygoscript`. Run them with cgo, which also enables `-race`.
+- Run `go test ./...` with cgo on. A `CGO_ENABLED=0` run does not build the
+  app package or `mygoscript`.
+- CI (`.github/workflows/ci.yml`) installs `g++` on the runners. The `vet`,
+  `test` and `race` jobs run with `CGO_ENABLED=1`, and `race` covers
+  `./mygoscript/...`. A `nocgo` job vets every other package with
+  `CGO_ENABLED=0`, so the engine and the CLI stay cgo-free.
 
 ### Why wasm was dropped
 
