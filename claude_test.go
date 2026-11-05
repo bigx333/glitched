@@ -46,7 +46,9 @@ func TestTheGUIsTestsNeverRunClaude(t *testing.T) {
 	sendNew(h, "Say hi.")
 	h.until("the fake's ask, or a claude run", func() bool {
 		_, err := os.Stat(ran)
-		return err == nil || h.tt.HasText("Looking at the code.") && h.tt.HasText("Allow once")
+		// The ask's card, not the turn's text: the text reveals over
+		// frames and may still show only its first word.
+		return err == nil || h.tt.HasText("Allow once")
 	})
 	if p := h.a.current().View.Model.Provider; p != "claude" {
 		t.Fatalf("the turn ran on %q; the test means to send to Claude Code", p)
