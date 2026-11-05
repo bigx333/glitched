@@ -15,6 +15,7 @@ import (
 // the host cannot draw shows its error where it would be.
 func View(c *ui.Context, p *Plugin) ui.Element {
 	p.mu.Lock()
+	p.services = c.Services()
 	if !p.started {
 		p.start()
 	} else if p.dirty && p.vm != nil {
@@ -46,6 +47,9 @@ type drawer struct {
 	radio *string
 	// faults are the widget errors the pass showed in place.
 	faults []string
+	// held, while a checkbox group is built, collects its checkboxes'
+	// commits: the group edits their values after they are built.
+	held *[]func()
 }
 
 type event struct {
@@ -193,6 +197,14 @@ type cell[T any] struct {
 
 // commit stores the widget's edit and queues its onChange handler.
 func (b *cell[T]) commit(d *drawer) {
+	if d.held != nil {
+		*d.held = append(*d.held, func() { b.store(d) })
+		return
+	}
+	b.store(d)
+}
+
+func (b *cell[T]) store(d *drawer) {
 	v := b.to(b.V)
 	if reflect.DeepEqual(v, b.start) {
 		return
@@ -226,7 +238,8 @@ func bind[T any](d *drawer, pr *props, id, bindProp, valueProp, onChange string,
 		}
 	}
 	v, ok := d.p.get(key, b.id)
-	if !ok && key == "" && hasInitial {
+	seeding := !ok && key == "" && hasInitial
+	if seeding {
 		v, ok = initial, true
 	}
 	b.V = cd.def()
@@ -240,6 +253,11 @@ func bind[T any](d *drawer, pr *props, id, bindProp, valueProp, onChange string,
 		}
 	}
 	b.start = cd.to(b.V)
+	// An unbound widget's seed is its value from the first pass on, as an
+	// edit would be, so a later seed does not reset it.
+	if seeding {
+		d.p.set("", b.id, b.start)
+	}
 	return b
 }
 

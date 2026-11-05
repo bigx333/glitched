@@ -18,9 +18,8 @@ sequenceDiagram
     V->>P: a bound widget's edit → set state, queue onChange
     V->>P: OnClick or a queued event → fire(handler id, value)
     P->>L: act(id, state, value) → state patch
-    P->>P: merge the patch into host state
-    P->>L: render(state) → new tree
-    V->>V: Invalidate; the next pass draws the new tree
+    P->>P: merge the patch into host state, Invalidate
+    V->>L: next pass: render(state) → new tree, then draw it
 ```
 
 ## Script describes, host draws
@@ -159,8 +158,16 @@ before each constructor. A rerun of `view` therefore keeps MyGo's per-widget
 state (focus, hover, press) and the host's values on the same widgets.
 
 Handlers are Luau functions. The prelude registers each one under
-`<render>:<n>` and puts that id in the tree. An event from a tree that an
-older render drew is dropped, so a handler never runs for the wrong node.
+`<render>:<n>` and puts that id in the tree. A handler's patch is merged at
+once, but the view renders again only at the next pass. Every handler that
+one input fires (a checkbox's `onChange` and `onClick`) therefore runs
+against the same tree. An event from a tree that an older render drew is
+dropped, so a handler never runs for the wrong node.
+
+A checkbox group edits its checkboxes after they are built, so their edits
+are stored once the group returns. Lists and grids give MyGo each row's
+key path as its key, so a row keeps its focus and state when rows are
+inserted before it.
 
 ### Errors in place
 

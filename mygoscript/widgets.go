@@ -189,9 +189,16 @@ func init() {
 			return ui.Checkbox(c, v, pr.str("label", ""))
 		}),
 		"checkboxBase": bound("", boolCodec, func(d *drawer, c *ui.Context, pr *props, v *bool) ui.Element { return ui.CheckboxBase(c, v) }),
-		"checkboxGroup": group("label", func(c *ui.Context, pr *props, kids func()) ui.Element {
-			return ui.CheckboxGroup(c, pr.str("label", ""), kids)
-		}),
+		"checkboxGroup": {lead: "label", build: func(d *drawer, c *ui.Context, n node, pr *props, id string) (ui.Element, func()) {
+			outer, held := d.held, []func(){}
+			d.held = &held
+			e := ui.CheckboxGroup(c, pr.str("label", ""), d.kids(c, n, id))
+			d.held = outer
+			for _, commit := range held {
+				commit()
+			}
+			return e, nil
+		}},
 		"switch":     bound("", boolCodec, func(d *drawer, c *ui.Context, pr *props, v *bool) ui.Element { return ui.Switch(c, v) }),
 		"switchBase": bound("", boolCodec, func(d *drawer, c *ui.Context, pr *props, v *bool) ui.Element { return ui.SwitchBase(c, v) }),
 		"toggle": bound("label", boolCodec, func(d *drawer, c *ui.Context, pr *props, v *bool) ui.Element {
