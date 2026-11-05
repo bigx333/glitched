@@ -10,6 +10,7 @@ import (
 	"maps"
 	"math"
 	"math/rand/v2"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -780,6 +781,14 @@ func (a *app) toasts(c *ui.Context) {
 }
 
 func main() {
+	// Claude Code runs the app itself as its browser's MCP server
+	// (daemon.Config.WithClaude), with no window.
+	if served, err := serveBrowserMCP(os.Args[1:], os.Stdin, os.Stdout); served {
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	var a *app
 	a = newApp(stateDir(), (*daemon.Config).WithClaude, func(fn func()) {
 		a.win.Update(func() {
