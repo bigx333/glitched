@@ -367,29 +367,40 @@ Claude Code runs in threads get the browser as an MCP server named
   does, waits for the page to load (15 seconds at most), and answers with
   the page's next snapshot. They go through Claude Code's permissions, as
   `mcp__glitched__browser_*`: in Ask mode, the thread's approval card.
-- **Actions** run in the page script (`act`), the same on every engine:
-  it resolves the ref, checks the element is still the role and name the
-  snapshot gave it, shown and enabled, scrolls it into view, then clicks
-  (pointer and mouse events, down, up, click, at the centre of its first
-  box in view, as a link wrapping onto two lines has two, scrolled there
-  at once on a page that scrolls smoothly; once the script has answered,
-  as a message a page out of sight doesn't hold back as it does timers,
-  so a page leaving or a dialog doesn't take the answer with it; refused where something else shows over its centre,
-  as a banner or a dialog's backdrop, but its own label; the focus left
-  where it is if the page takes `mousedown`; refused too for what a user
-  couldn't click: `pointer-events: none`, `inert`, or behind a modal
-  `<dialog>`) or types (the
-  prototype's value setter, then `input` and `change`, so frameworks
-  tracking the value on the element, as React does, see it; an editor
-  through `insertText`). Enter is `keydown`, `keypress` and `keyup`;
-  unless the page takes one of the first two, the field's form submits
-  as a browser's would, once the script has answered: its default
-  button, the first, image or not, clicked, or with none, the form
-  submitted if the field is its only one Enter submits from. A field that is read-only takes nothing; one that keeps
-  only some values, as a date's, says what it took; dropdowns, file,
-  colour and other pickers say the tools can't fill them yet. A page that stops answering,
-  as one showing `alert` or `confirm`, is said to be maybe showing a
-  dialog, and the tabs a page opens as it acts are named in the answer. Its events are the script's: `isTrusted` is false.
+- **Actions** run in the page script (`act`), the same on every engine.
+  It resolves the ref and checks the element is still the role and name
+  the snapshot gave it, shown and enabled, then:
+  - **Click:** refused for what a user couldn't click: an `inert`
+    element, one behind a modal `<dialog>` (the topmost modal escapes the
+    inertness around it). It scrolls the element to the middle of the
+    view at once, smooth scrolling or not, and aims at the middle, then
+    the quarters, of each of its boxes, those in view first (a link
+    wrapping onto two lines has two, a ring a hole; an element with no box
+    of its own, what is in it). The first point where what shows is the
+    element, what is in it, or its label, takes the pointer and mouse
+    events (down, up, click), sent to what shows there, as a user's
+    would be. Where none is, it says what covers it (a banner, a dialog's
+    backdrop), or that it takes no clicks where it shows
+    (`pointer-events: none`, an ancestor's overlay). The focus stays where
+    it is if the page takes `mousedown`. The events come once the script
+    has answered, as a message, which a page out of sight doesn't hold
+    back as it does timers, so a page leaving or a dialog doesn't take the
+    answer with it.
+  - **Type:** the prototype's value setter, then `input` and `change`, so
+    frameworks tracking the value on the element, as React does, see it;
+    an editor through `insertText`. A read-only field takes nothing; one
+    that keeps only some values, as a date's, says what it took;
+    dropdowns, file, colour and other pickers say the tools can't fill
+    them yet.
+  - **Enter** (`submit`): `keydown`, `keypress` and `keyup`; unless the
+    page takes one of the first two, the form submits as a browser's
+    would, once the script has answered: its first default button, image
+    or not, clicked, or with none, the form submitted if the field is its
+    only one Enter submits from.
+  Its events are the script's: `isTrusted` is false. A page that stops
+  answering, as one showing `alert` or `confirm`, is said to be maybe
+  showing a dialog, and the tabs a page opens as it acts are named in the
+  answer.
 - **Not yet isolated** (Next, 2): the script runs in the page's world, so a
   page that set out to can still move where an action lands, within
   itself. What it can't do is reach past itself, as each action acts on
