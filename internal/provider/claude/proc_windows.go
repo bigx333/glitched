@@ -54,7 +54,10 @@ var jobs = struct {
 
 // confine puts claude, which contain had start suspended, in a job of
 // run's, then lets it run. Where Windows gives no job, claude runs
-// without one, and Stop and Delete reach claude alone.
+// without one, and Stop and Delete reach claude alone. An engine that dies
+// between the start and the resume leaves claude suspended, in no job:
+// Go cannot start a process in a job, as PROC_THREAD_ATTRIBUTE_JOB_LIST
+// would.
 func confine(cmd *exec.Cmd, run string) error {
 	if cmd.SysProcAttr == nil || cmd.SysProcAttr.CreationFlags&windows.CREATE_SUSPENDED == 0 {
 		return nil
