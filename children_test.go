@@ -23,8 +23,8 @@ import (
 
 // seedChild has parent start a child on the engine, as an agent's
 // delegate_task call does, with messages for the child, and returns once
-// every turn they started has ended. A parent at work starts it from its
-// live run; an idle one gets a turn that starts it and ends.
+// every turn they started has ended and reported. A parent at work starts
+// it from its live run; an idle one gets a turn that starts it and ends.
 func seedChild(t *testing.T, d *daemon.Daemon, parent api.ID, title string, messages ...string) api.ID {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -68,6 +68,7 @@ func seedChild(t *testing.T, d *daemon.Daemon, parent api.ID, title string, mess
 			time.Sleep(5 * time.Millisecond)
 		}
 		settled(t, ep, parent)
+		reportedAll(t, ep, parent)
 	}
 	for _, m := range messages {
 		if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: m, Mode: api.AfterActive}}); err != nil {
@@ -76,8 +77,53 @@ func seedChild(t *testing.T, d *daemon.Daemon, parent api.ID, title string, mess
 	}
 	if task != "" {
 		settled(t, ep, id)
+		reportedAll(t, ep, id)
 	}
 	return id
+}
+
+// reportedAll waits for every turn of thread's that ended done or failed
+// to have its report in its parent's log, so a report delivered late
+// can't wake the parent after a caller snoozes it.
+func reportedAll(t *testing.T, ep api.Endpoint, thread api.ID) {
+	t.Helper()
+	read := func(id api.ID) api.Snapshot {
+		snap, err := ep.Read(context.Background(), api.Query{Thread: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return snap
+	}
+	snap := read(thread)
+	parent := snap.Threads[0].Parent
+	if parent.IsZero() {
+		return
+	}
+	want := map[api.ID]bool{}
+	for _, e := range snap.Events {
+		if b, err := e.Decode(); err == nil {
+			if te, ok := b.(api.TurnEnded); ok && (te.Outcome == api.OutcomeCompleted || te.Outcome == api.OutcomeFailed) {
+				want[te.Run] = true
+			}
+		}
+	}
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		got := 0
+		for _, e := range read(parent).Events {
+			if b, err := e.Decode(); err == nil {
+				if r, ok := b.(api.ChildReported); ok && r.Child == thread && want[r.Run] {
+					got++
+				}
+			}
+		}
+		if got == len(want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d of thread %v's %d turns reported to its parent", got, thread, len(want))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // settled waits for thread's turns to end.
