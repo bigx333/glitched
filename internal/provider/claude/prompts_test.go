@@ -34,10 +34,18 @@ type promptScenario struct {
 	// takes no allow rule from .claude/settings.json in a folder the
 	// user never trusted, but takes them from this file outside git.
 	settings string
-	// allow is the answer to a prompt with this ask body, or false and
-	// false to leave the prompt to Claude Code's own rules and hooks.
-	allow func(body ask) (allow, answer bool)
-	check func(t *testing.T, got promptLog)
+	// access is the thread's.
+	access api.Access
+	// answer is what the clients answer the request with, or nil to leave
+	// it to Claude Code's own rules and hooks.
+	answer func(r requestLog) json.RawMessage
+	// replied is, for a question the clients answer, the decision Claude
+	// Code must get, less the questions an allow gives back as they came.
+	replied string
+	check   func(t *testing.T, got promptLog)
+	// pin checks what the transcript at tape shows beyond what every
+	// scenario's shows.
+	pin   func(t *testing.T, tape string)
 	files map[string]bool // which files a live run leaves in the workspace
 }
 
@@ -49,7 +57,7 @@ var (
 	approve = promptScenario{
 		name:   "prompt-approve",
 		prompt: "Use the Write tool to create yes.txt containing y. Then use the Write tool to create no.txt containing n. If a tool call is denied, do not try it again. Then reply done.",
-		allow:  func(b ask) (bool, bool) { return b.Path == "yes.txt", true },
+		answer: func(r requestLog) json.RawMessage { return allowed(r.ask.Path == "yes.txt") },
 		files:  map[string]bool{"yes.txt": true, "no.txt": false},
 		check: func(t *testing.T, got promptLog) {
 			if len(got.requests) < 2 {
@@ -80,7 +88,7 @@ var (
 		name:     "prompt-settled",
 		prompt:   "Use the Write tool to create ruled.txt containing r. Then use the Write tool to create hooked.txt containing h. Then reply done.",
 		settings: `{"permissions":{"allow":["Edit(./ruled.txt)"]},"hooks":{"PermissionRequest":[{"matcher":"Write","hooks":[{"type":"command","command":"sleep 1; echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\"}}}'"}]}]}}`,
-		allow:    func(ask) (bool, bool) { return false, false },
+		answer:   func(requestLog) json.RawMessage { return nil },
 		files:    map[string]bool{"ruled.txt": true, "hooked.txt": true},
 		check: func(t *testing.T, got promptLog) {
 			if len(got.requests) != 1 || got.requests[0].ask.Path != "hooked.txt" {
@@ -157,12 +165,11 @@ func (s promptScenario) workspace(t *testing.T, dir string) string {
 func (s promptScenario) play(t *testing.T, h *runtime.Host, ws string) promptLog {
 	t.Helper()
 	thread := api.NewID()
-	submit(t, h, thread, api.ThreadCreate{Workspace: ws, Title: s.name, Access: api.AccessAsk,
+	submit(t, h, thread, api.ThreadCreate{Workspace: ws, Title: s.name, Access: s.access,
 		Model: api.ModelRef{Provider: "claude", Model: "haiku"}})
 	return playOn(t, h, thread, s.prompt, func(r requestLog) bool {
-		allow, answer := s.allow(r.ask)
-		if answer {
-			race(t, h, thread, r.opened, func(int) bool { return allow })
+		if answer := s.answer(r); answer != nil {
+			race(t, h, thread, r.opened, func(int) json.RawMessage { return answer })
 		}
 		return false
 	})
@@ -259,19 +266,25 @@ func readLog(t *testing.T, h *runtime.Host, thread, run api.ID) (l promptLog, ov
 	return l, over
 }
 
-// race has clients answer r at once, client i with allow(i), and fails
+// allowed is an approval's answer.
+func allowed(allow bool) json.RawMessage {
+	b, _ := json.Marshal(map[string]bool{"allow": allow})
+	return b
+}
+
+// race has clients answer r at once, client i with answer(i), and fails
 // unless exactly one wins.
-func race(t *testing.T, h *runtime.Host, thread api.ID, r api.RequestOpened, allow func(i int) bool) {
+func race(t *testing.T, h *runtime.Host, thread api.ID, r api.RequestOpened, answer func(i int) json.RawMessage) {
 	t.Helper()
 	errs := make([]error, clients)
 	gate := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := range clients {
 		wg.Go(func() {
-			answer, _ := json.Marshal(map[string]bool{"allow": allow(i)})
+			a := answer(i)
 			<-gate
 			_, errs[i] = h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread,
-				Body: api.RequestRespond{Request: r.Request, Generation: r.Generation, Answer: answer}})
+				Body: api.RequestRespond{Request: r.Request, Generation: r.Generation, Answer: a}})
 		})
 	}
 	close(gate)
@@ -328,8 +341,9 @@ type reply struct {
 // checkReplies fails unless Claude Code got one reply to each request the
 // thread answered, in the shape it takes, saying what the winner said;
 // and none to a request nobody answered. An allow gives back the input
-// of the request in the transcript at tape.
-func checkReplies(t *testing.T, l promptLog, got map[string][]reply, tape string) {
+// of the request in the transcript at tape, which for a question gains
+// the answers s replied.
+func checkReplies(t *testing.T, s promptScenario, l promptLog, got map[string][]reply, tape string) {
 	t.Helper()
 	asked := inputs(tape, l.workspace)
 	for _, r := range l.requests {
@@ -342,6 +356,10 @@ func checkReplies(t *testing.T, l promptLog, got map[string][]reply, tape string
 		}
 		if len(replies) != 1 {
 			t.Errorf("Claude Code got %d replies to %s, want 1", len(replies), r.opened.Dedup)
+			continue
+		}
+		if r.opened.Kind == api.KindQuestion {
+			checkAnswered(t, s, replies[0], asked[r.opened.Dedup])
 			continue
 		}
 		var a struct{ Allow bool }
@@ -405,6 +423,8 @@ func checkTape(t *testing.T, path string, s promptScenario) {
 					ToolName  string          `json:"tool_name"`
 					Input     json.RawMessage `json:"input"`
 					ToolUseID string          `json:"tool_use_id"`
+					// RequiresUserInteraction is set on every AskUserQuestion.
+					RequiresUserInteraction bool `json:"requires_user_interaction"`
 				}
 				Response *struct {
 					RequestID string `json:"request_id"`
@@ -422,6 +442,9 @@ func checkTape(t *testing.T, path string, s promptScenario) {
 			r := m.Request
 			if m.RequestID == "" || r.ToolName == "" || r.ToolUseID == "" || !json.Valid(r.Input) || r.Input[0] != '{' {
 				t.Errorf("can_use_tool %s is %+v, want a request id, tool name, tool use id and input object", m.RequestID, r)
+			}
+			if r.ToolName == "AskUserQuestion" && (!r.RequiresUserInteraction || !askShaped(r.Input)) {
+				t.Errorf("AskUserQuestion %s is %+v, want it to require the user, and questions with a question, header, multiSelect and labelled options", m.RequestID, r)
 			}
 			asked[m.RequestID] = r.ToolName
 		case m.Type == "control_cancel_request":
@@ -447,6 +470,9 @@ func checkTape(t *testing.T, path string, s promptScenario) {
 			t.Errorf("Claude Code cancelled %v of %v, want the write the hook decided", cancelled, asked)
 		}
 	}
+	if s.pin != nil {
+		s.pin(t, path)
+	}
 }
 
 // replayed plays a scenario's recorded transcript.
@@ -457,7 +483,7 @@ func replayed(t *testing.T, s promptScenario) {
 	got := s.play(t, h, s.workspace(t, t.TempDir()))
 	tape := filepath.Join("testdata", s.name+".jsonl")
 	s.check(t, got)
-	checkReplies(t, got, replies(), tape)
+	checkReplies(t, s, got, replies(), tape)
 	checkTape(t, tape, s)
 }
 
@@ -473,10 +499,10 @@ func TestClaudeGetsTheWinningAnswer(t *testing.T) {
 	h := host(t, nil)
 	thread := newThread(t, h, api.AccessAsk)
 	got := playOn(t, h, thread, approve.prompt, func(r requestLog) bool {
-		race(t, h, thread, r.opened, func(i int) bool { return i%2 == 0 })
+		race(t, h, thread, r.opened, func(i int) json.RawMessage { return allowed(i%2 == 0) })
 		return false
 	})
-	checkReplies(t, got, replies(), filepath.Join("testdata", approve.name+".jsonl"))
+	checkReplies(t, approve, got, replies(), filepath.Join("testdata", approve.name+".jsonl"))
 }
 
 func TestStoppingATurnVoidsItsPrompt(t *testing.T) {

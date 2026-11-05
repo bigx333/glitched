@@ -353,7 +353,7 @@ func TestATurnStreamsIntoTheThread(t *testing.T) {
 	thread := newThread(t, h, api.AccessAsk)
 
 	got := playOn(t, h, thread, "Read hello.txt. Then use the Write tool to create out.txt containing ok. Then reply done.", func(r requestLog) bool {
-		race(t, h, thread, r.opened, func(int) bool { return false })
+		race(t, h, thread, r.opened, func(int) json.RawMessage { return allowed(false) })
 		return false
 	})
 
@@ -484,6 +484,10 @@ func TestAccessPicksThePermissionMode(t *testing.T) {
 		// Whatever the mode leaves undecided comes to glitched to ask.
 		if i := slices.Index(args, "--permission-prompt-tool"); i < 0 || args[i+1] != "stdio" {
 			t.Errorf("claude ran with %q, want its prompts on stdio", args)
+		}
+		// AskUserQuestion's questions come as a prompt too.
+		if slices.Contains(args, "--disallowedTools") {
+			t.Errorf("claude ran with %q, want every tool allowed to ask", args)
 		}
 	}
 	if want := []string{"default", "acceptEdits", "bypassPermissions"}; !slices.Equal(modes, want) {

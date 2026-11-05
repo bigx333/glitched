@@ -42,7 +42,7 @@ func TestContract(t *testing.T) {
 		tapes = must(filepath.Abs("testdata"))
 	}
 	t.Setenv(transcript.EnvReal, real)
-	for _, s := range []promptScenario{approve, settled} {
+	for _, s := range []promptScenario{approve, settled, answered, dismissed} {
 		t.Run(s.name, func(t *testing.T) {
 			ws := must(os.MkdirTemp("/tmp", "glitched-contract-"))
 			t.Cleanup(func() { os.RemoveAll(ws) })
@@ -57,7 +57,7 @@ func TestContract(t *testing.T) {
 			waitExit(t, tape+".jsonl")
 
 			s.check(t, got)
-			checkReplies(t, got, replies(), tape+".jsonl")
+			checkReplies(t, s, got, replies(), tape+".jsonl")
 			checkTape(t, tape+".jsonl", s)
 			for file, want := range s.files {
 				if _, err := os.Stat(filepath.Join(ws, file)); (err == nil) != want {
