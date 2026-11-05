@@ -208,6 +208,12 @@ func serve(ctx context.Context, args []string) error {
 // dir: this program's browser-mcp, on that directory. It returns the
 // config's path, or "", and no browser, where it can't.
 func browserConfig(dir string) string {
+	// Claude Code runs in the thread's workspace, where a relative path
+	// finds nothing.
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
 	cmd := browserCommand(dir)
 	if cmd == nil {
 		return ""
