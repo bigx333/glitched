@@ -2,6 +2,11 @@
 
 Newest first. Each entry has the date, who decided, and the decision.
 
+## 2026-11-05. #62 merged; a root-package flake is traced to #61 (PM)
+
+- **#62 (AskUserQuestion PR B) was rebase-merged at 4da7072.** In round 1, Opus and Sol both found a lock-order deadlock between a misfit deny and `Do(Respond)`, and the PM reproduced it. Fix round 1 sends the deny after `pmu` is released and writes down the lock order. The re-check found no High. Opus's Low is #63.
+- **A flaky root test.** CI on #62 failed once in `TestAnAnswerNeedsACardThatStoodStill/⌘⏎`, with "⌘⏎ answered the next card 1 presses after it landed". #62 does not touch the root package, so the PM reran the failed job, and it passed. The PM treats the flake as a timing-dependent face of #61, a held chord carrying over to the next card. The approval-gate worker must make the test deterministic and prove it under CPU load.
+
 ## 2026-11-05. #60 merged; #61 gates slice 5; the approval-gate issues go in one PR (PM)
 
 - **#60 (AskUserQuestion PR A) was rebase-merged at 6f49cad.** Its rebase check found one High, which fix round 1 fixed: the question card's keys answered an approval waiting at the same time. The re-check found no High. Sol had no findings, and Opus had one Medium and one Low.
