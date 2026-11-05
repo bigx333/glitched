@@ -1,0 +1,131 @@
+package browsermcp
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// The bridge is how the server reaches the app: a unix socket in the
+// state directory both share, one call a connection, a line of JSON each
+// way. Nothing authenticates a caller on it, so the directory's mode is
+// its gate, as for the engine's socket (daemon.Start makes it 0700).
+
+// Socket is the path of the app's browser socket in the state directory
+// dir.
+func Socket(dir string) string { return filepath.Join(dir, "browser.sock") }
+
+// ErrNoApp is why a tool fails while the app isn't open.
+var ErrNoApp = errors.New("The Glitched app isn't open on this machine, so its browser can't be reached. Ask the user to open Glitched, then try again.")
+
+type bridgeRequest struct {
+	Tool string          `json:"tool"`
+	Args json.RawMessage `json:"args"`
+}
+
+type bridgeReply struct {
+	Text  string `json:"text,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// Dial is a Call through the socket of the app on the state directory dir.
+func Dial(dir string) Call {
+	return func(ctx context.Context, tool string, args json.RawMessage) (string, error) {
+		var d net.Dialer
+		conn, err := d.DialContext(ctx, "unix", Socket(dir))
+		if err != nil {
+			return "", ErrNoApp
+		}
+		defer conn.Close()
+		stop := context.AfterFunc(ctx, func() { conn.SetDeadline(time.Now()) })
+		defer stop()
+		if err := json.NewEncoder(conn).Encode(bridgeRequest{tool, args}); err != nil {
+			return "", fmt.Errorf("browser: %w", err)
+		}
+		var r bridgeReply
+		dec := json.NewDecoder(bufio.NewReaderSize(conn, 64<<10))
+		if err := dec.Decode(&r); err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return "", errors.New("The Glitched app closed before it answered.")
+		}
+		if r.Error != "" {
+			return "", errors.New(r.Error)
+		}
+		return r.Text, nil
+	}
+}
+
+// Listen listens on the browser socket of the state directory dir. A
+// socket file an app left as it died is removed; one another app still
+// answers on is an error.
+func Listen(dir string) (net.Listener, error) {
+	path := Socket(dir)
+	if conn, err := net.DialTimeout("unix", path, time.Second); err == nil {
+		conn.Close()
+		return nil, fmt.Errorf("browser: another Glitched app serves its browser at %s", path)
+	}
+	os.Remove(path)
+	return net.Listen("unix", path)
+}
+
+// Accept answers calls on ln with call until ln closes, each connection
+// on its own. A call's ctx ends as the connection's caller hangs up.
+func Accept(ln net.Listener, call Call) error {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return err
+		}
+		go answer(conn, call)
+	}
+}
+
+func answer(conn net.Conn, call Call) {
+	defer conn.Close()
+	var req bridgeRequest
+	rd := bufio.NewReaderSize(conn, 64<<10)
+	line, err := readLine(rd, maxMessage)
+	if err != nil || json.Unmarshal(line, &req) != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The caller sends nothing more: a read ending is it hanging up.
+	go func() {
+		var b [1]byte
+		rd.Read(b[:])
+		cancel()
+	}()
+	text, err := call(ctx, req.Tool, req.Args)
+	r := bridgeReply{Text: text}
+	if err != nil {
+		r = bridgeReply{Error: err.Error()}
+	}
+	json.NewEncoder(conn).Encode(r)
+}
+
+// readLine reads a line of at most n bytes from r.
+func readLine(r *bufio.Reader, n int) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := r.ReadSlice('\n')
+		line = append(line, chunk...)
+		if len(line) > n {
+			return nil, errors.New("browser: request too long")
+		}
+		if err != bufio.ErrBufferFull {
+			return line, err
+		}
+	}
+}
