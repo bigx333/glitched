@@ -49,8 +49,17 @@ func end(run string) {
 // jobs end with the engine that made them.
 var jobs = struct {
 	sync.Mutex
-	of map[string][]windows.Handle
-}{of: map[string][]windows.Handle{}}
+	of       map[string][]windows.Handle
+	stopping map[string]*stop // a stop of the run under way
+}{of: map[string][]windows.Handle{}, stopping: map[string]*stop{}}
+
+// stop is one stop of a run, which a stop of it at the same time waits for
+// and reports.
+type stop struct {
+	done  chan struct{}
+	found bool
+	err   error
+}
 
 // confine puts claude, which contain had start suspended, in a job of
 // run's, then lets it run. Where Windows gives no job, claude runs
@@ -90,6 +99,8 @@ func jobFor(pid uint32) (windows.Handle, error) {
 		return 0, os.NewSyscallError("CreateJobObject", err)
 	}
 	limits := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
+	// No breakaway: a process claude starts cannot leave the job, as one
+	// cannot leave its scope on Linux, and one that asks to fails.
 	limits.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
 		uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits))); err != nil {
@@ -147,14 +158,37 @@ func resume(pid uint32) error {
 // any process was found, and fails while one is left.
 func stopRun(ctx context.Context, run string) (bool, error) {
 	// The jobs leave the map while they are stopped, so a stop of the run
-	// at the same time finds none to close again.
+	// at the same time finds none to close again, and waits for this one.
 	jobs.Lock()
+	if s := jobs.stopping[run]; s != nil {
+		jobs.Unlock()
+		select {
+		case <-s.done:
+			return s.found, s.err
+		case <-ctx.Done():
+			return true, ctx.Err()
+		}
+	}
 	held := jobs.of[run]
 	delete(jobs.of, run)
-	jobs.Unlock()
 	if len(held) == 0 {
+		jobs.Unlock()
 		return false, nil
 	}
+	s := &stop{done: make(chan struct{})}
+	jobs.stopping[run] = s
+	jobs.Unlock()
+	s.found, s.err = stopJobs(ctx, run, held)
+	jobs.Lock()
+	delete(jobs.stopping, run)
+	jobs.Unlock()
+	close(s.done)
+	return s.found, s.err
+}
+
+// stopJobs kills every process in held, run's jobs, and closes them once
+// they are empty. Jobs left with processes go back for a later stop.
+func stopJobs(ctx context.Context, run string, held []windows.Handle) (bool, error) {
 	found := running(held) > 0
 	var errs []error
 	for _, job := range held {
