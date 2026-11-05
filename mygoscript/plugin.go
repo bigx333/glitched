@@ -58,6 +58,8 @@ type Plugin struct {
 	handles map[string]any
 	svgs    map[string]*ui.SVG
 	tree    *node
+	// services redraws the window showing the plugin after a handler.
+	services ui.Services
 	// faults are the widget errors the last pass showed in place.
 	faults []string
 	dirty  bool
@@ -136,7 +138,10 @@ func (p *Plugin) render() error {
 }
 
 // fire runs the handler f, from the tree that named it, with the event's
-// value, merges the patch it returns into the state and renders it.
+// value, and merges the patch it returns into the state. The next View
+// renders it: rendering here would retire the tree's other handlers, which
+// the same input may still fire, as a checkbox's onClick after its
+// onChange.
 func (p *Plugin) fire(f *fnRef, value any) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -150,10 +155,13 @@ func (p *Plugin) fire(f *fnRef, value any) {
 			for k, v := range patch {
 				p.state[k] = v
 			}
-			err = p.render()
+			p.dirty = true
 		}
 	}
-	p.fail(err)
+	if err != nil {
+		p.fail(err)
+	}
+	p.services.Invalidate()
 }
 
 // get reads a widget's value: the state at key, or its own at path id.

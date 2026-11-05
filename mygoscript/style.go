@@ -73,6 +73,10 @@ func object[T any](p *props, name string) (T, bool) {
 	if !ok {
 		return v, false
 	}
+	// Luau has one empty table, which the prelude encodes as [].
+	if string(raw) == "[]" {
+		return v, true
+	}
 	if err := json.Unmarshal(raw, &v); err != nil {
 		p.fail(name, fmt.Errorf("bad table: %s", raw))
 		return v, false
