@@ -1,7 +1,9 @@
 package main
 
 import (
+	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
@@ -22,10 +24,11 @@ const verbatimFirstW = 240
 // ending a line shown as spaceMark. Left to wrap a line itself, the text
 // engine breaks it where it likes: on Linux, it hyphenates a long word, a
 // wrap draws as a line break, and a space where it wraps draws as none.
-// Copy copies the text as typed. It returns the text's box, as the last
-// frame laid it out, and the height of its lines.
-func (a *app) verbatim(c *ui.Context, key any, s string, size float32, col ui.Color) (ui.Element, float32) {
+// Each line is as tall as any other. Copy copies the text as typed. It
+// returns where the last frame drew each of its lines.
+func (a *app) verbatim(c *ui.Context, key any, s string, size float32, col ui.Color) []textLine {
 	box := ui.Box(c.Key(verbatimKey{key})).MinWidth(0).Selectable()
+	var text ui.Element
 	cell, line := c.MeasureText(0, ui.Span{Text: strings.Repeat("0", 64), Font: "monospace", Size: size})
 	mark, _ := c.MeasureText(0, ui.Span{Text: string(wrapMark), Font: "monospace", Size: size})
 	w := box.Bounds().W
@@ -43,10 +46,50 @@ func (a *app) verbatim(c *ui.Context, key any, s string, size float32, col ui.Co
 		}
 		return transfer.TextData(strings.Join(out, "\n"))
 	}).Children(func() {
-		ui.RichText(c, verbatimSpans(s, cols, ui.Span{Font: "monospace", Size: size, Color: col},
-			ui.Span{Font: "monospace", Size: size, Color: palette.muted})...)
+		text = ui.RichText(c, verbatimSpans(s, cols, ui.Span{Font: "monospace", Size: size, Color: col},
+			ui.Span{Font: "monospace", Size: size, Color: palette.muted})...).FixedLineHeight(line)
 	})
-	return box, line
+	return textLines(text.Bounds(), line, wraps(s, cols))
+}
+
+// textLine is a line of a text where the last frame drew it, and the runes
+// of the text it shows, from from to to, to being where it ends: the
+// break after it, or the end of the text.
+type textLine struct {
+	at       ui.Rect
+	from, to int
+}
+
+// textLines are the lines of a text the last frame drew at, each high,
+// that shows the runes ws; none when the last frame did not draw it as
+// that many lines.
+func textLines(at ui.Rect, high float32, ws [][2]int) []textLine {
+	if at.H <= 0 || math.Abs(float64(at.H-high*float32(len(ws)))) > 0.5 {
+		return nil
+	}
+	lines := make([]textLine, len(ws))
+	for i, w := range ws {
+		lines[i] = textLine{ui.Rect{X: at.X, Y: at.Y + high*float32(i), W: at.W, H: high}, w[0], w[1]}
+	}
+	return lines
+}
+
+// wraps are the runes of s each line of it shows, cut to cols cells as
+// verbatimSpans cuts it: from, and to, where the line ends.
+func wraps(s string, cols int) [][2]int {
+	var ws [][2]int
+	start := 0
+	for _, l := range strings.Split(s, "\n") {
+		n := utf8.RuneCountInString(l)
+		for j := 0; ; j += cols {
+			ws = append(ws, [2]int{start + j, start + min(j+cols, n)})
+			if j+cols >= n {
+				break
+			}
+		}
+		start += n + 1
+	}
+	return ws
 }
 
 // verbatimKey keys a verbatim text apart from its field's other elements.

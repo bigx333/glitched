@@ -302,10 +302,19 @@ type app struct {
 	zap      approvalZap
 	answerAt answerRow
 	// drawn is where the last frame drew each waiting card this frame's
-	// timeline built, and drew the same for the frame before; keyed is the
-	// request ⌘⏎ and ⇧⌘D answer, as the last frame found it.
-	drawn, drew map[api.ID]sight
-	keyed       api.ID
+	// timeline built, and drew the same for the frame before; laidAt is
+	// when the last frame drew, as this frame's timeline found it, and
+	// builtAt when this frame's timeline was built; keyed is the request
+	// ⌘⏎ and ⇧⌘D answer, as the last frame found it.
+	drawn, drew     map[api.ID]sight
+	laidAt, builtAt time.Time
+	keyed           api.ID
+	// reads are what the window showed of each waiting card; chord is
+	// when ⌘ went down, zero while it is up; and pressing is the press of
+	// a request's answers the pointer holds.
+	reads    map[api.ID]*reading
+	chord    time.Time
+	pressing pressAt
 	// quick is the quick-ask panel over every app.
 	quick quickAsk
 	// quitting is set as a quit starts, for the windows that hide rather
@@ -447,6 +456,7 @@ func newApp(dir string, post func(func())) *app {
 		agentsAll:     map[api.ID]bool{},
 		shownAll:      map[cardText]bool{},
 		drawn:         map[api.ID]sight{},
+		reads:         map[api.ID]*reading{},
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,

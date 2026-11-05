@@ -399,15 +399,7 @@ func draws(h *harness, r *client.RequestEntry) bool {
 	var b map[string]string
 	json.Unmarshal(r.Body, &b)
 	first, _, _ := strings.Cut(b["command"], "\n")
-	before := bytes.Clone(h.tt.Image().Pix)
-	body := r.Body
-	b["command"] = strings.Repeat("X", len(first)) + strings.TrimPrefix(b["command"], first)
-	r.Body, _ = json.Marshal(b)
-	h.tt.Frame()
-	changed := !bytes.Equal(before, h.tt.Image().Pix)
-	r.Body = body
-	h.tt.Frame()
-	return changed
+	return drawnNow(h, r, "command", first)
 }
 
 // answering is whether an answer to r is on its way or landed.
@@ -416,12 +408,13 @@ func answering(h *harness, r *client.RequestEntry) bool {
 	return sending || r.State != api.RequestPending
 }
 
-// answerAsSeen presses answer until it answers r, at most three times,
+// answerAsSeen presses answer until it answers r, at most four times,
 // and fails if it answers r while the last frame did not draw the card's
-// header and the first line of its command, or if it never does.
+// header and the first line of its command, or if it never does. A press
+// shows the card's start, or a line of it no frame drew.
 func answerAsSeen(t *testing.T, h *harness, r *client.RequestEntry, answer func()) {
 	t.Helper()
-	for range 3 {
+	for range 4 {
 		h.tt.Advance(time.Second)
 		seen := onScreen(h.tt, "Approval needed") && draws(h, r)
 		answer()
@@ -433,7 +426,7 @@ func answerAsSeen(t *testing.T, h *harness, r *client.RequestEntry, answer func(
 			return
 		}
 	}
-	t.Errorf("three presses never answered the request; texts %q", h.tt.Texts())
+	t.Errorf("four presses never answered the request; texts %q", h.tt.Texts())
 }
 
 func cmdEnter(h *harness) func() { return func() { h.tt.Key(ui.Cmd, ui.KeyEnter) } }
@@ -527,7 +520,8 @@ func TestShiftCmdDDeniesOnlyWhatTheWindowDraws(t *testing.T) {
 }
 
 // With several requests waiting, ⌘⏎ answers one the window draws, never
-// one out of view, and its Allow once is the one that shows ⌘⏎.
+// one out of view, and its Allow once is the one that shows ⌘⏎. Each card
+// takes a press or two to show, and one to show what its box hides.
 func TestCmdEnterAnswersACardTheWindowDraws(t *testing.T) {
 	h := askedAll(t, commandAsk("a", "ls"), commandAsk("b", "ls -a"), commandAsk("c", curl))
 	h.until("three cards", func() bool { return len(h.a.current().View.Requests) == 3 })
@@ -542,7 +536,7 @@ func TestCmdEnterAnswersACardTheWindowDraws(t *testing.T) {
 			waiting = append(waiting, e.request)
 		}
 	}
-	for range 6 {
+	for range 12 {
 		h.tt.Advance(time.Second)
 		drawn := map[*client.RequestEntry]bool{}
 		var open []*client.RequestEntry
@@ -567,7 +561,7 @@ func TestCmdEnterAnswersACardTheWindowDraws(t *testing.T) {
 	}
 	for _, r := range waiting {
 		if !answering(h, r) {
-			t.Errorf("six presses of ⌘⏎ left a request waiting; texts %q", h.tt.Texts())
+			t.Errorf("twelve presses of ⌘⏎ left a request waiting; texts %q", h.tt.Texts())
 			return
 		}
 	}
@@ -678,18 +672,31 @@ func TestApprovalCardCopiesTheCommandAsTyped(t *testing.T) {
 
 // drawnNow reports whether the last frame draws needle, in field of r's
 // body: whether the window looks any different with needle spelled
-// otherwise.
+// otherwise. The frames it draws to find out leave what the card read of
+// itself as it was, as no user saw them.
 func drawnNow(h *harness, r *client.RequestEntry, field, needle string) bool {
 	var b map[string]any
 	json.Unmarshal(r.Body, &b)
 	before := bytes.Clone(h.tt.Image().Pix)
 	body := r.Body
+	read := h.a.reads[r.Request]
+	var kept reading
+	if read != nil {
+		kept = *read
+		kept.texts = map[string]*readText{}
+		for k, t := range read.texts {
+			kept.texts[k] = &readText{t.text, slices.Clone(t.drawn), t.left}
+		}
+	}
 	b[field] = strings.Replace(b[field].(string), needle, strings.Repeat("X", len(needle)), 1)
 	r.Body, _ = json.Marshal(b)
 	h.tt.Frame()
 	changed := !bytes.Equal(before, h.tt.Image().Pix)
 	r.Body = body
 	h.tt.Frame()
+	if read != nil {
+		*read = kept
+	}
 	return changed
 }
 
