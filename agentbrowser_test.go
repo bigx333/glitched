@@ -250,3 +250,79 @@ func TestAnAgentWaitsForTheLoad(t *testing.T) {
 		t.Errorf("a page that failed: %v", err)
 	}
 }
+
+// What an agent asks that fails shows nothing: the pane stays as the user
+// left it.
+func TestAnAgentsFailedNavigationShowsNothing(t *testing.T) {
+	a, ab, made := agents(t)
+	callTool(t, ab, "browser_navigate", `{"url":"go.dev"}`)
+	a.showPreview = false
+	for _, args := range []string{`{"action":"zoom"}`, `{"action":"back"}`, `{"action":"forward"}`, `{"url":"go.dev","action":"back"}`} {
+		if _, err := callTool(t, ab, "browser_navigate", args); err == nil {
+			t.Errorf("%s went", args)
+		}
+		if a.showPreview {
+			t.Errorf("%s showed the pane", args)
+		}
+	}
+	if calls := (*made)[0].calls; len(calls) != 0 {
+		t.Errorf("the page was asked %v", calls)
+	}
+}
+
+// Reload tries again a tab whose page could not start, as the bar's does.
+func TestAnAgentsReloadRetriesAPageThatCouldNotStart(t *testing.T) {
+	a, ab, _ := agents(t)
+	open := a.browser.open
+	a.browser.open = func(string, browse.Events) (browse.Page, error) { return nil, fmt.Errorf("no web view") }
+	if _, err := callTool(t, ab, "browser_navigate", `{"url":"go.dev"}`); err == nil || !strings.Contains(err.Error(), "no web view") {
+		t.Fatalf("a page that can't start: %v", err)
+	}
+	a.browser.open = open
+	if out, err := callTool(t, ab, "browser_navigate", `{"action":"reload"}`); err != nil || !strings.Contains(out, "Tab 1") {
+		t.Errorf("reload of a page that couldn't start: %q, %v", out, err)
+	}
+}
+
+// A call the agent gives up on before the view runs it does nothing.
+func TestAnAgentsCallGivenUpOnDoesNothing(t *testing.T) {
+	a, ab, made := agents(t)
+	var later []func()
+	ab.onView = func(fn func()) { later = append(later, fn) }
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+	if _, err := ab.call(ctx, "browser_tabs", json.RawMessage(`{"action":"new","url":"go.dev"}`)); err != errGaveUp {
+		t.Errorf("a call given up on: %v", err)
+	}
+	for _, fn := range later {
+		fn()
+	}
+	if len(a.browser.tabs) != 0 || len(*made) != 0 || a.showPreview {
+		t.Errorf("a call given up on opened %d tabs", len(a.browser.tabs))
+	}
+}
+
+// A snapshot of a tab that never showed waits for the page it makes to
+// load.
+func TestAnAgentsSnapshotWaitsForANewPage(t *testing.T) {
+	a, ab, made := agents(t)
+	a.browser.add("https://go.dev", 0)
+	open := a.browser.open
+	a.browser.open = func(u string, ev browse.Events) (browse.Page, error) {
+		p, err := open(u, ev)
+		p.(*agentPage).loading = true
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			ab.onView(func() { p.(*agentPage).loading = false })
+		}()
+		return p, err
+	}
+	start := time.Now()
+	out, err := callTool(t, ab, "browser_snapshot", `{}`)
+	if err != nil || time.Since(start) < 200*time.Millisecond || strings.Contains(out, "still loading") {
+		t.Errorf("a new page's snapshot after %v: %q, %v", time.Since(start), out, err)
+	}
+	if len(*made) != 1 {
+		t.Errorf("%d pages made", len(*made))
+	}
+}
