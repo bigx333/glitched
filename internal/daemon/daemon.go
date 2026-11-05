@@ -240,10 +240,13 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	}
 
 	var opts []runtime.Option
-	if exe, err := os.Executable(); err == nil {
-		opts = append(opts, runtime.WithMCP(mcp.Launcher{Command: exe, Engine: sock.Address}))
+	// The agent's glitched mcp runs in the agent's workspace, not ours, so it
+	// gets the socket's absolute path.
+	engineAt, absErr := filepath.Abs(sock.Address)
+	if exe, err := os.Executable(); err == nil && absErr == nil {
+		opts = append(opts, runtime.WithMCP(mcp.Launcher{Command: exe, Engine: engineAt}))
 	} else {
-		slog.Warn("agents run without glitched mcp, so they start no child threads", "err", err)
+		slog.Warn("agents run without glitched mcp, so they start no child threads", "err", errors.Join(err, absErr))
 	}
 	h, err := runtime.New(ctx, st, cfg.Providers, opts...)
 	if err != nil {
