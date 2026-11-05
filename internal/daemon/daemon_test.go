@@ -403,3 +403,54 @@ func TestTheChildLimitsRoundTripThroughEngineJSON(t *testing.T) {
 		t.Fatalf("a grandchild after SetLimits raised the depth to 2: %v", err)
 	}
 }
+
+// specs records the session each run opened with, on top of the fake.
+type specs struct {
+	*fake.Adapter
+	mu   sync.Mutex
+	seen []provider.SessionSpec
+}
+
+func (s *specs) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	s.mu.Lock()
+	s.seen = append(s.seen, spec)
+	s.mu.Unlock()
+	return s.Adapter.Open(ctx, spec)
+}
+
+// Each run gets glitched mcp from the binary the engine runs in, the CLI's
+// or the GUI's, for its thread and run, dialing the engine's own socket.
+func TestEachRunGetsGlitchedMCPOnTheEnginesSocket(t *testing.T) {
+	dir := stateDir(t)
+	ad := &specs{Adapter: fake.New(fake.Turn(false))}
+	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Providers: provider.Mux{"fake": ad}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	ep := transport.NewEndpointClient(Socket(dir), api.ID{})
+	defer ep.Close()
+	ctx := context.Background()
+	thread, run := api.NewID(), api.NewID()
+	if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{Workspace: "/src/app", Title: "t", Model: api.ModelRef{Provider: "fake", Model: "fake"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ep.Submit(ctx, api.Command{ID: run, Target: thread, Body: api.MessageDispatch{Text: "hi", Mode: api.StartNow}}); err != nil {
+		t.Fatal(err)
+	}
+	var seen []provider.SessionSpec
+	for deadline := time.Now().Add(5 * time.Second); len(seen) == 0; time.Sleep(5 * time.Millisecond) {
+		ad.mu.Lock()
+		seen = append([]provider.SessionSpec(nil), ad.seen...)
+		ad.mu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("the run never opened")
+		}
+	}
+	exe, _ := os.Executable()
+	s := seen[0].MCP
+	want := map[string]string{"GLITCHED_THREAD": thread.String(), "GLITCHED_RUN": run.String(), "GLITCHED_ENGINE": Socket(dir).Address}
+	if s == nil || s.Name != "glitched" || s.Command != exe || len(s.Args) != 1 || s.Args[0] != "mcp" || fmt.Sprint(s.Env) != fmt.Sprint(want) || s.Instructions == "" {
+		t.Errorf("the run's MCP server %+v, want glitched mcp from %s with %v", s, exe, want)
+	}
+}
