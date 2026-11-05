@@ -106,3 +106,33 @@ func TestRemoveProjectWaitsForALiveRun(t *testing.T) {
 		t.Fatal("Remove project… was offered while a run is live")
 	}
 }
+
+// The draft's workspace menu adds a project and removes one, as the
+// sidebar does.
+func TestWorkspaceMenuAddsAndRemoves(t *testing.T) {
+	dir := t.TempDir()
+	was := chooseFolder
+	chooseFolder = func(*app) string { return dir }
+	t.Cleanup(func() { chooseFolder = was })
+	h := start(t, inboxDir(t))
+	h.thread("SIP re-INVITE handling")
+	h.tt.Advance(time.Second)
+	h.click("New thread")
+	h.click("Workspace")
+	if err := h.tt.ChooseMenuItem("Remove project", "mygo…"); err != nil {
+		t.Fatalf("%v; the menu has %q", err, h.tt.Menu())
+	}
+	h.tt.Frame()
+	if !h.tt.HasText("Remove “mygo” and its thread?") {
+		t.Fatalf("no alert; texts %q", h.tt.Texts())
+	}
+	h.click("Remove")
+	h.until("mygo gone", func() bool { h.tt.Frame(); return len(h.a.projects) == 2 })
+
+	h.tt.Advance(time.Second)
+	h.click("Workspace")
+	if err := h.tt.ChooseMenuItem("Add project…"); err != nil {
+		t.Fatalf("%v; the menu has %q", err, h.tt.Menu())
+	}
+	h.until("the draft in the folder", func() bool { return h.a.current().View.Workspace == dir })
+}

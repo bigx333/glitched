@@ -22,9 +22,35 @@ func (a *app) projectMenu(c *ui.Context, m *ui.Menu, p *project) {
 	// As a thread is stopped before it's deleted, so is every thread at the
 	// top of the project's trees; those under them stop as they go.
 	if m.Item("Remove project…").Disabled(projectLive(p)).Chosen() {
-		a.removing, a.removeOpen = p.key, true
+		a.askRemove(p)
 	}
 }
+
+// workspaceItems end the draft's workspace menu: adding a project, and
+// removing one, each stopped first as the chip's menu has it.
+func (a *app) workspaceItems(m *ui.Menu, several bool) {
+	m.Separator()
+	if m.Item("Add project…").Chosen() {
+		a.addProject()
+	}
+	if len(a.projects) == 0 {
+		return
+	}
+	m.Submenu("Remove project", func(m *ui.Menu) {
+		for _, p := range a.projects {
+			name := p.name()
+			if several {
+				name += " on " + p.env.Name
+			}
+			if m.Item(name + "…").Disabled(projectLive(p)).Chosen() {
+				a.askRemove(p)
+			}
+		}
+	})
+}
+
+// askRemove opens the alert asking before p is removed.
+func (a *app) askRemove(p *project) { a.removing, a.removeOpen = p.key, true }
 
 // roots are the project's threads that no other thread of it is under:
 // deleting each with its tree deletes every thread of the project.
