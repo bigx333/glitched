@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package claude
 
@@ -15,3 +15,5 @@ func contain(*exec.Cmd, string) {}
 // stopRun finds no process: only Linux lets the engine read another
 // process's environment without help.
 func stopRun(context.Context, string) (bool, error) { return false, nil }
+
+func confine(*exec.Cmd, string) error { return nil }

@@ -100,6 +100,10 @@ func contain(cmd *exec.Cmd, run string) {
 	cmd.Path = s.systemdRun
 }
 
+// confine has nothing left to do once claude starts: its scope holds it
+// from the start.
+func confine(*exec.Cmd, string) error { return nil }
+
 func scopePrefix(run string) string { return "glitched-run-" + run + "-" }
 
 // scopesOf is the cgroups of run's scopes.

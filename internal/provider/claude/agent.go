@@ -138,6 +138,12 @@ func (g *Agent) supervise(started chan<- error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	err := g.cmd.Start()
+	if err == nil {
+		if err = confine(g.cmd, g.run); err != nil {
+			g.cmd.Process.Kill()
+			g.cmd.Wait()
+		}
+	}
 	started <- err
 	if err != nil {
 		return
