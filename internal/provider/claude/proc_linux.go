@@ -288,3 +288,6 @@ func carries(pid int, want []byte) bool {
 	}
 	return false
 }
+
+// terminate asks claude to stop: on SIGTERM it stops its tool shells.
+func terminate(p *os.Process) error { return p.Signal(syscall.SIGTERM) }
