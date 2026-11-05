@@ -414,3 +414,16 @@ func (p *fullPage) EvalContext(ctx context.Context, code string) (any, error) {
 	}
 	return p.agentPage.EvalContext(ctx, code)
 }
+
+// A call that times out as the view runs it reads nothing the view is
+// still writing (go test -race).
+func TestAnAgentsCallTimingOutReadsNothingHalfWritten(t *testing.T) {
+	_, ab, _ := agents(t)
+	callTool(t, ab, "browser_navigate", `{"url":"go.dev"}`)
+	ab.onView = func(fn func()) { go fn() }
+	for i := range 200 {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(i%20)*time.Microsecond)
+		ab.call(ctx, "browser_tabs", json.RawMessage(`{"action":"list"}`))
+		cancel()
+	}
+}
