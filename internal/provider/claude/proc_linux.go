@@ -32,9 +32,11 @@ func sysProcAttr() *syscall.SysProcAttr {
 const cgroupRoot = "/sys/fs/cgroup"
 
 // slice is where each claude a run starts gets a systemd scope of its own:
-// a cgroup that holds it and all it starts, as a process can drop its
-// environment but cannot leave its cgroup unasked. The scope outlives the
-// engine, and its name, from the run, finds it after a restart.
+// a cgroup that holds it and all it starts, even a process that drops its
+// environment. It covers what claude starts, not work handed to other
+// programs, as a tmux server that puts its panes in scopes of its own. The
+// scope outlives the engine, and its name, from the run, finds it after a
+// restart.
 type slice struct {
 	dir        string // the slice's cgroup; "" where runs get no scope
 	systemdRun string
@@ -71,8 +73,16 @@ func userSlice() (slice, error) {
 	if _, err := os.Stat(filepath.Join(manager, "cgroup.kill")); err != nil {
 		return slice{}, fmt.Errorf("no cgroup.kill under the user systemd manager: %w", err)
 	}
+	// systemd-run can still be refused a scope, as by polkit, and claude
+	// then never starts.
+	probe := exec.CommandContext(ctx, run, append(scopeFlags, "--", "true")...)
+	if out, err := probe.CombinedOutput(); err != nil {
+		return slice{}, fmt.Errorf("systemd-run cannot start a scope: %w: %s", err, bytes.TrimSpace(out))
+	}
 	return slice{dir: filepath.Join(manager, "app.slice"), systemdRun: run}, nil
 }
+
+var scopeFlags = []string{"--user", "--scope", "--quiet", "--collect", "--slice=app.slice"}
 
 // contain has cmd start claude in a new scope of run's. Each process gets
 // a scope of its own: systemd may not have let go of the last one's name.
@@ -82,8 +92,7 @@ func contain(cmd *exec.Cmd, run string) {
 		return
 	}
 	unit := scopePrefix(run) + api.NewID().String() + ".scope"
-	cmd.Args = append([]string{s.systemdRun, "--user", "--scope", "--quiet", "--collect",
-		"--slice=app.slice", "--unit=" + unit, "--", cmd.Path}, cmd.Args[1:]...)
+	cmd.Args = slices.Concat([]string{s.systemdRun}, scopeFlags, []string{"--unit=" + unit, "--", cmd.Path}, cmd.Args[1:])
 	cmd.Path = s.systemdRun
 }
 
