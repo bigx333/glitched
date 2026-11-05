@@ -14,7 +14,8 @@ type command struct {
 	hint    string
 	icon    *ui.SVG
 	run     func()
-	// also are words the query finds the command by, not shown.
+	// also are words the query finds the command by, not shown: each
+	// word of the query is in the label, or is one of them whole.
 	also string
 	// t is the thread a Threads command opens, with its diff on ⌘↩.
 	t *thread
@@ -78,7 +79,7 @@ func (a *app) commands() []command {
 	}
 	var shown []command
 	for _, cmd := range cmds {
-		if matches(cmd.label+" "+cmd.also, query) || matches(cmd.hint, query) {
+		if matches(cmd.label, query) || matches(cmd.hint, query) || alsoMatches(cmd, query) {
 			shown = append(shown, cmd)
 		}
 	}
@@ -221,4 +222,21 @@ func paletteHeight(cmds []command) float32 {
 		h += 34
 	}
 	return min(h, 380)
+}
+
+// alsoMatches is whether each word of the query is in the command's label
+// or is one of its unshown words, whole, so that those don't put actions
+// ahead of the threads a part of a word finds.
+func alsoMatches(cmd command, query string) bool {
+	words := strings.Fields(strings.ToLower(query))
+	if cmd.also == "" || len(words) == 0 {
+		return false
+	}
+	also := strings.Fields(cmd.also)
+	for _, w := range words {
+		if !slices.Contains(also, w) && !matches(cmd.label, w) {
+			return false
+		}
+	}
+	return true
 }
