@@ -40,10 +40,9 @@ func (a *app) commands() []command {
 		add.also = "workspace folder"
 		cmds = append(cmds, add)
 	}
+	// Each is listed while an agent works in it too, lest the rows shift
+	// under the one chosen as a run starts; its alert says to stop it.
 	for _, p := range a.projects {
-		if a.projectLive(p) {
-			continue // stopped first, as the chip's menu has it
-		}
 		rm := action("Remove project "+a.projectLabel(p)+"…", "", icFolder, func() { a.askRemove(p) })
 		rm.also = "workspace delete"
 		cmds = append(cmds, rm)

@@ -69,7 +69,10 @@ func TestAddProjectOpensOnePicker(t *testing.T) {
 	h.thread("SIP re-INVITE handling")
 	h.tt.Advance(time.Second)
 	h.a.addProject()
-	for opened.Load() == 0 {
+	for deadline := time.Now().Add(10 * time.Second); opened.Load() == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("Add project opened no picker")
+		}
 		time.Sleep(time.Millisecond) // the picker opening, off the main thread
 	}
 	h.a.addProject()
