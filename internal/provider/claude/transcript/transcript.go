@@ -183,7 +183,7 @@ func slim(m map[string]any) bool {
 		case "init":
 			for k := range m {
 				switch k {
-				case "type", "subtype", "cwd", "session_id", "model", "permissionMode", "claude_code_version", "uuid":
+				case "type", "subtype", "cwd", "session_id", "model", "permissionMode", "claude_code_version", "uuid", "capabilities":
 				default:
 					delete(m, k)
 				}
