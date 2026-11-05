@@ -5,13 +5,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"glitched/internal/api"
 )
 
 // sysProcAttr puts claude in a process group of its own, out of reach of a
@@ -21,11 +29,92 @@ func sysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGTERM}
 }
 
-// stopRun stops every process that carries run's marker: claude, and what
-// it started, tool shells in sessions of their own included. They get
-// SIGTERM, on which claude stops its shells itself, then SIGKILL once
-// killGrace passes or ctx ends. It reports whether any process was found,
-// and fails while one is left.
+const cgroupRoot = "/sys/fs/cgroup"
+
+// slice is where each claude a run starts gets a systemd scope of its own:
+// a cgroup that holds it and all it starts, as a process can drop its
+// environment but cannot leave its cgroup unasked. The scope outlives the
+// engine, and its name, from the run, finds it after a restart.
+type slice struct {
+	dir        string // the slice's cgroup; "" where runs get no scope
+	systemdRun string
+}
+
+// scopes is the user systemd manager's app.slice, where there is one on a
+// cgroup v2 hierarchy. Elsewhere a run's processes are found by their
+// marker alone, which one that drops it escapes.
+var scopes = sync.OnceValue(func() slice {
+	s, err := userSlice()
+	if err != nil {
+		slog.Warn("claude: no user systemd scope for a run, so a process a run starts that drops its environment outlives the run", "err", err)
+	}
+	return s
+})
+
+func userSlice() (slice, error) {
+	var st unix.Statfs_t
+	if err := unix.Statfs(cgroupRoot, &st); err != nil || st.Type != unix.CGROUP2_SUPER_MAGIC {
+		return slice{}, fmt.Errorf("no cgroup v2 hierarchy at %s", cgroupRoot)
+	}
+	run, err := exec.LookPath("systemd-run")
+	if err != nil {
+		return slice{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "systemctl", "--user", "show", "--property=ControlGroup", "--value").Output()
+	if err != nil {
+		return slice{}, fmt.Errorf("no user systemd manager: %w", err)
+	}
+	manager := filepath.Join(cgroupRoot, strings.TrimSpace(string(out)))
+	// cgroup.kill, from Linux 5.14, kills a cgroup's processes as they fork.
+	if _, err := os.Stat(filepath.Join(manager, "cgroup.kill")); err != nil {
+		return slice{}, fmt.Errorf("no cgroup.kill under the user systemd manager: %w", err)
+	}
+	return slice{dir: filepath.Join(manager, "app.slice"), systemdRun: run}, nil
+}
+
+// contain has cmd start claude in a new scope of run's. Each process gets
+// a scope of its own: systemd may not have let go of the last one's name.
+func contain(cmd *exec.Cmd, run string) {
+	s := scopes()
+	if s.dir == "" {
+		return
+	}
+	unit := scopePrefix(run) + api.NewID().String() + ".scope"
+	cmd.Args = append([]string{s.systemdRun, "--user", "--scope", "--quiet", "--collect",
+		"--slice=app.slice", "--unit=" + unit, "--", cmd.Path}, cmd.Args[1:]...)
+	cmd.Path = s.systemdRun
+}
+
+func scopePrefix(run string) string { return "glitched-run-" + run + "-" }
+
+// scopesOf is the cgroups of run's scopes.
+func scopesOf(run string) []string {
+	dir := scopes().dir
+	if dir == "" {
+		return nil
+	}
+	found, _ := filepath.Glob(filepath.Join(dir, scopePrefix(run)+"*.scope"))
+	return found
+}
+
+// kill has the kernel kill every process in run's scopes.
+func kill(run string) error {
+	var errs []error
+	for _, dir := range scopesOf(run) {
+		if err := os.WriteFile(filepath.Join(dir, "cgroup.kill"), []byte("1"), 0); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// stopRun stops every process of run's: claude, and what it started, tool
+// shells in sessions of their own included. They get SIGTERM, on which
+// claude stops its shells itself, then SIGKILL once killGrace passes or ctx
+// ends. It reports whether any process was found, and fails while one is
+// left.
 func stopRun(ctx context.Context, run string) (bool, error) {
 	if len(scan(run)) == 0 {
 		return false, nil
@@ -54,6 +143,11 @@ func settled(ctx context.Context, run string, sig syscall.Signal) error {
 		if ctx.Err() != nil || time.Now().After(deadline) {
 			return errors.Join(fmt.Errorf("claude: processes %v of the run still run", left), failed)
 		}
+		if sig == syscall.SIGKILL {
+			if err := kill(run); err != nil {
+				failed = err
+			}
+		}
 		if sig != 0 {
 			if err := signal(marked(run), sig); err != nil {
 				failed = err
@@ -63,7 +157,7 @@ func settled(ctx context.Context, run string, sig syscall.Signal) error {
 	}
 }
 
-// proc is a process that carried a run's marker. Its pidfd names that
+// proc is a process that was a run's. Its pidfd names that
 // process even once it has exited, so a signal sent through it never
 // reaches another process that took its PID since.
 type proc struct {
@@ -71,14 +165,13 @@ type proc struct {
 	fd  int // -1 when the kernel gave no pidfd
 }
 
-// marked is run's processes, each held by a pidfd opened before its marker
-// is read again, so the marker read is that process's own. Where the
+// marked is run's processes, each held by a pidfd opened before it is
+// found the run's again, so what was read is that process's own. Where the
 // kernel has no pidfds, as Linux before 5.3, a process is held by its PID
 // alone, and a process that takes the PID before the signal gets it. A
 // process the kernel gives no pidfd for any other reason is left to a
 // later scan.
 func marked(run string) []proc {
-	want := marker(run)
 	var ps []proc
 	for _, pid := range scan(run) {
 		fd, err := unix.PidfdOpen(pid, 0)
@@ -88,7 +181,7 @@ func marked(run string) []proc {
 		case err != nil:
 			continue
 		}
-		if !carries(pid, want) {
+		if !belongs(pid, run) {
 			if fd >= 0 {
 				unix.Close(fd)
 			}
@@ -120,15 +213,30 @@ func signal(ps []proc, sig syscall.Signal) error {
 
 func marker(run string) []byte { return []byte(runEnv + "=" + run) }
 
-// scan is the PIDs of the processes whose environment names run as theirs.
-// A process that has exited has none, so its zombie does not count.
+// scan is the PIDs of run's processes: those in its scopes, and those whose
+// environment names run as theirs. A process that has exited is in no
+// cgroup and has no environment, so its zombie does not count.
 func scan(run string) []int {
+	var pids []int
+	for _, dir := range scopesOf(run) {
+		filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || !d.IsDir() {
+				return nil
+			}
+			procs, _ := os.ReadFile(filepath.Join(path, "cgroup.procs"))
+			for f := range strings.FieldsSeq(string(procs)) {
+				if pid, err := strconv.Atoi(f); err == nil && !slices.Contains(pids, pid) {
+					pids = append(pids, pid)
+				}
+			}
+			return nil
+		})
+	}
 	want := marker(run)
 	dirs, _ := os.ReadDir("/proc")
-	var pids []int
 	for _, d := range dirs {
 		pid, err := strconv.Atoi(d.Name())
-		if err != nil || pid == os.Getpid() {
+		if err != nil || pid == os.Getpid() || slices.Contains(pids, pid) {
 			continue
 		}
 		if carries(pid, want) {
@@ -136,6 +244,18 @@ func scan(run string) []int {
 		}
 	}
 	return pids
+}
+
+// belongs is whether pid is in one of run's scopes or carries its marker.
+func belongs(pid int, run string) bool {
+	if dir := scopes().dir; dir != "" {
+		cg, _ := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cgroup"))
+		rel := strings.TrimPrefix(dir, cgroupRoot) + "/" + scopePrefix(run)
+		if strings.Contains(string(cg), "0::"+rel) {
+			return true
+		}
+	}
+	return carries(pid, marker(run))
 }
 
 // carries is whether pid's environment holds the entry want.

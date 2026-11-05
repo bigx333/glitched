@@ -90,6 +90,7 @@ func start(ctx context.Context, bin string, spec provider.SessionSpec, args []st
 	cmd.Dir = spec.Workspace
 	cmd.Env = append(slices.DeleteFunc(cmd.Env, func(kv string) bool { return strings.HasPrefix(kv, runEnv+"=") }),
 		runEnv+"="+spec.Run.String())
+	contain(cmd, spec.Run.String())
 	g := &Agent{
 		cmd: cmd, run: spec.Run.String(), stop: stop, stderr: &tail{},
 		lines: make(chan []byte), reaped: make(chan struct{}), done: make(chan struct{}),
