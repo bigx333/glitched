@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"glitched/internal/api"
+	"glitched/internal/daemon"
+	"glitched/internal/provider/fake"
 )
 
 // A project chip's Remove project… asks, always, then deletes every thread
@@ -162,5 +167,74 @@ func TestPaletteAddsAndRemovesProjects(t *testing.T) {
 	h.tt.Frame()
 	if !h.tt.HasText("Remove “mygo” and its thread?") {
 		t.Fatalf("no alert; texts %q", h.tt.Texts())
+	}
+}
+
+// A draft left in the project's workspace, with no machine named, starts
+// over in the home folder once the project is removed, while another
+// thread is shown.
+func TestRemoveProjectResetsItsDraft(t *testing.T) {
+	h := start(t, inboxDir(t))
+	sip := h.thread("SIP re-INVITE handling")
+	h.a.fresh = draft{nil, "/work/t3code"}
+	h.a.select_(sip)
+	h.tt.Advance(time.Second)
+	h.a.askRemove(h.a.projectOf(h.thread("Add keyboard shortcut for new thread")))
+	h.tt.Frame()
+	h.click("Remove")
+	h.until("t3code gone", func() bool { h.tt.Frame(); return len(h.a.projects) == 2 })
+	if h.a.fresh.workspace == "/work/t3code" {
+		t.Fatalf("the draft is still in the removed workspace: %+v", h.a.fresh)
+	}
+}
+
+// A project whose thread is under another root of the same project, by way
+// of a thread in another workspace, has each thread deleted once.
+func TestRemoveProjectDeletesEachThreadOnce(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	mid := seedChildIn(t, d, "/work/mygo", top, "Patch the table")
+	seedChildIn(t, d, "/work/t3code", mid, "Check the sort")
+	h := start(t, dir)
+	h.thread("Check the sort")
+	h.tt.Advance(time.Second)
+	h.a.askRemove(h.a.projectOf(h.thread("Ship the sidebar sort")))
+	h.tt.Frame()
+	if !h.tt.HasText("Remove “t3code” and its 3 threads?") {
+		t.Fatalf("no alert; texts %q", h.tt.Texts())
+	}
+	h.click("Remove")
+	for _, th := range h.local().Threads {
+		if n := len(th.Pending); n > 1 {
+			t.Errorf("%q was sent %d deletes", th.View.Title, n)
+		}
+	}
+	h.until("every thread gone", func() bool { return len(h.local().Threads) == 0 })
+}
+
+// seedChildIn creates a child of parent in workspace on the engine.
+func seedChildIn(t *testing.T, d *daemon.Daemon, workspace string, parent api.ID, title string) api.ID {
+	t.Helper()
+	id := api.NewID()
+	body := api.ThreadCreate{Workspace: workspace, Title: title, Model: fakeModel, Parent: parent}
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: body}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// An alert left open while a thread at the top starts a run removes
+// nothing: the run is stopped first, as the menus have it.
+func TestRemoveProjectRechecksForALiveRun(t *testing.T) {
+	h := start(t, uncertainDir(t))
+	th := h.thread("Stuck")
+	h.tt.Advance(time.Second)
+	h.a.askRemove(h.a.projectOf(th))
+	h.tt.Frame()
+	h.click("Remove")
+	h.tt.Frame()
+	if len(th.Pending) != 0 || !h.tt.HasText("Not removed") {
+		t.Fatalf("a live project was removed: %d pending, texts %q", len(th.Pending), h.tt.Texts())
 	}
 }

@@ -26,15 +26,19 @@ var chooseFolder = func(a *app) string {
 }
 
 // addProject asks for a folder, off the main thread, which the picker
-// would block, and shows a new thread in it.
+// would block, and shows a new thread in it. One picker opens at a time.
 func (a *app) addProject() {
+	if a.picking {
+		return
+	}
+	a.picking = true
 	go func() {
 		dir := chooseFolder(a)
-		if dir == "" {
-			return
-		}
 		a.post(func() {
-			if e := a.localEnv(); e != nil {
+			a.picking = false
+			// This machine's engine is always listed first, so never one
+			// shown by another's.
+			if e := a.localEnv(); dir != "" && e != nil {
 				a.startIn(draft{e, dir})
 				a.draftArea.Focus()
 			}

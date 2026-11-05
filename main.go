@@ -446,6 +446,8 @@ type app struct {
 	// that it removes the threads the project has as it's confirmed.
 	removing   projectKey
 	removeOpen bool
+	// picking is while the folder picker of Add project is open.
+	picking bool
 	// now is the frame's time, as the view builds it.
 	now time.Time
 
