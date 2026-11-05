@@ -107,7 +107,7 @@ func (ab *agentBrowser) call(ctx context.Context, tool string, raw json.RawMessa
 		}
 		// A tab never shown has just made its page, which is loading.
 		if made {
-			return ab.loaded(ctx, t, p)
+			return ab.loaded(ctx, t, p, args.Full)
 		}
 		return ab.snapshot(ctx, t, p, args.Full)
 	case "browser_click", "browser_type":
@@ -214,9 +214,15 @@ func (ab *agentBrowser) tabs(ctx context.Context, args toolArgs) (string, error)
 			if err != nil {
 				return err
 			}
+			shown, active := ab.a.showPreview, b.active
 			ab.a.newTab(u)
 			opened = b.tabs[b.active]
-			p, err = ab.page(opened)
+			if p, err = ab.page(opened); err != nil {
+				// A tab whose page can't start goes, and the pane is as
+				// it was.
+				ab.a.closeTab(b.active)
+				ab.a.showPreview, b.active = shown, min(active, max(len(b.tabs)-1, 0))
+			}
 			return err
 		case "select":
 			t, err := ab.need(args.Tab, "select")
@@ -242,7 +248,7 @@ func (ab *agentBrowser) tabs(ctx context.Context, args toolArgs) (string, error)
 		return "", err
 	}
 	if opened != nil {
-		return ab.loaded(ctx, opened, p)
+		return ab.loaded(ctx, opened, p, false)
 	}
 	var out string
 	err = ab.view(ctx, func() error {
@@ -343,7 +349,7 @@ func (ab *agentBrowser) navigate(ctx context.Context, args toolArgs) (string, er
 	if err != nil {
 		return "", err
 	}
-	return ab.loaded(ctx, t, p)
+	return ab.loaded(ctx, t, p, false)
 }
 
 func (ab *agentBrowser) act(ctx context.Context, tool string, args toolArgs) (string, error) {
@@ -364,12 +370,13 @@ func (ab *agentBrowser) act(ctx context.Context, tool string, args toolArgs) (st
 	}
 	var t *browserTab
 	var p browse.Page
+	var before []*browserTab
 	err = ab.view(ctx, func() error {
 		var err error
 		if t, err = ab.tab(&id); err != nil {
 			return err
 		}
-		ab.show(t)
+		before = slices.Clone(ab.a.browser.tabs)
 		p, err = ab.page(t)
 		return err
 	})
@@ -382,14 +389,47 @@ func (ab *agentBrowser) act(ctx context.Context, tool string, args toolArgs) (st
 		err = webtarget.Type(ctx, p, snap, args.Ref, args.Text, args.Submit)
 	}
 	if err != nil {
-		return "", errors.New(strings.TrimPrefix(err.Error(), "webtarget: "))
+		return "", agentError(err)
 	}
-	return ab.loaded(ctx, t, p)
+	// Shown once it acted, so a refusal leaves the pane as it was.
+	if err := ab.view(ctx, func() error { ab.show(t); return nil }); err != nil {
+		return "", err
+	}
+	out, err := ab.loaded(ctx, t, p, false)
+	if err != nil {
+		return "", err
+	}
+	// The page may have opened tabs, which the agent hears of, as it
+	// reads only the page it acted on.
+	var opened strings.Builder
+	ab.view(ctx, func() error {
+		for _, o := range ab.a.browser.tabs {
+			if !slices.Contains(before, o) {
+				fmt.Fprintf(&opened, "The page opened tab %d at %s.\n", o.id, o.url)
+			}
+		}
+		return nil
+	})
+	return opened.String() + out, nil
+}
+
+// agentError is err as an agent reads it: the page's own words, without
+// the engine's and the package's prefixes, and a page that stopped
+// answering, as one showing a dialog does, said so.
+func agentError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return errors.New("The page didn't answer in time. It may be showing a dialog (alert, confirm) the user must answer in the browser pane.")
+	}
+	msg := err.Error()
+	for _, prefix := range []string{"mygo: javascript error: ", "Error: ", "webtarget: "} {
+		msg = strings.TrimPrefix(msg, prefix)
+	}
+	return errors.New(msg)
 }
 
 // loaded waits for t's page to show what an action started loading, and
 // then to load, for a while, and snapshots it.
-func (ab *agentBrowser) loaded(ctx context.Context, t *browserTab, p browse.Page) (string, error) {
+func (ab *agentBrowser) loaded(ctx context.Context, t *browserTab, p browse.Page, full bool) (string, error) {
 	if err := wait(ctx, ab.settle); err != nil {
 		return "", err
 	}
@@ -417,7 +457,7 @@ func (ab *agentBrowser) loaded(ctx context.Context, t *browserTab, p browse.Page
 	if failed {
 		return "", fmt.Errorf("Tab %d couldn't load %s; the tab says why.", t.id, why)
 	}
-	out, err := ab.snapshot(ctx, t, p, false)
+	out, err := ab.snapshot(ctx, t, p, full)
 	if loading && err == nil {
 		out = "The page is still loading.\n" + out
 	}
@@ -428,7 +468,7 @@ func (ab *agentBrowser) loaded(ctx context.Context, t *browserTab, p browse.Page
 func (ab *agentBrowser) snapshot(ctx context.Context, t *browserTab, p browse.Page, full bool) (string, error) {
 	s, err := webtarget.Take(ctx, p, webtarget.Options{Full: full})
 	if err != nil {
-		return "", fmt.Errorf("Tab %d's page couldn't be read: %s", t.id, strings.TrimPrefix(err.Error(), "webtarget: "))
+		return "", fmt.Errorf("Tab %d's page couldn't be read: %w", t.id, agentError(err))
 	}
 	ab.mu.Lock()
 	ab.snaps[t.id] = s
