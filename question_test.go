@@ -23,16 +23,21 @@ import (
 )
 
 // questioning is the app on an engine whose turns are script, with a
-// thread sent a message and waiting on the questions the script asks.
-func questioning(t *testing.T, script []provider.Event) (*harness, thread) {
+// thread sent a message and waiting on the questions the script asks, and
+// a child under it of each title in kids.
+func questioning(t *testing.T, script []provider.Event, kids ...string) (*harness, thread) {
 	t.Helper()
 	dir := tempDir(t)
-	engine(t, daemon.Config{Dir: dir}, fake.New(script))
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(script))
 	h := start(t, dir)
 	h.a.draft = "Add a cache."
 	h.tt.Frame()
 	h.click("Send")
 	h.until("the question card", func() bool { return h.tt.HasText("Claude asks") && len(h.a.current().View.Requests) == 1 })
+	for _, k := range kids {
+		seedChild(t, d, h.a.current().id(), k)
+	}
+	h.until("its children", func() bool { return len(h.a.kids[h.a.current().id()]) == len(kids) })
 	h.tt.Advance(time.Second)
 	return h, h.a.current()
 }
@@ -228,6 +233,94 @@ func TestKeysInTheTerminalAreTheShells(t *testing.T) {
 	}
 	if f := h.a.questions[lastRequest(th).Request]; f != nil && len(f.picked[0]) > 0 {
 		t.Errorf("a key in the shell picked %q", f.picked[0])
+	}
+}
+
+// An overlay over the app has the keyboard, as a dialog has the window's
+// shortcuts: under each of the app's, the card's keys wait, and Escape
+// closes the overlay, not the questions. Closed, the keys are the card's.
+func TestQuestionKeysWaitUnderEveryOverlay(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		kids  []string
+		open  func(h *harness, th thread)
+		shown func(a *app) bool
+	}{
+		{"the command palette", nil,
+			func(h *harness, _ thread) { h.a.openCommandPalette(); h.a.cmdkQuery = "no such command" },
+			func(a *app) bool { return a.cmdkOpen }},
+		{"the delete alert", nil,
+			func(h *harness, th thread) { h.a.deleting, h.a.deleteOpen = th, true },
+			func(a *app) bool { return a.deleteOpen }},
+		{"the snooze popover", nil,
+			func(h *harness, th thread) { h.hover(title(th)); h.click("Snooze") },
+			func(a *app) bool { return a.snoozeFor != api.ID{} }},
+		{"the access popover", nil,
+			func(h *harness, _ thread) { h.a.composerOpened, h.a.accessOpen = true, true },
+			func(a *app) bool { return a.accessOpen }},
+		{"the model picker", nil,
+			func(h *harness, _ thread) { h.a.openModelPicker() },
+			func(a *app) bool { return a.pickerOpen }},
+		{"the agents panel", []string{"Write the tests"},
+			func(h *harness, _ thread) { h.click("Agents") },
+			func(a *app) bool { return a.agentsOpen[a.current().id()] }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, th := questioning(t, fake.Asking(), tc.kids...)
+			h.click("SQLite")
+			h.tt.Frame()
+			h.click("Unit")
+			h.tt.Frame()
+			press := func(mods ui.Modifiers, k ui.Key) {
+				h.tt.Key(mods, k)
+				for range 3 {
+					h.p.run()
+					h.tt.Advance(100 * time.Millisecond)
+				}
+			}
+			waiting := func(after string) {
+				t.Helper()
+				if r := lastRequest(th); r.State != api.RequestPending || len(h.a.current().Pending) != 0 {
+					t.Fatalf("%s over %s: request %v, %d sent; want it waiting", after, tc.name, r.State, len(h.a.current().Pending))
+				}
+			}
+			// Opened from the test, not a frame's input as in the app: the
+			// frame that builds it comes before the keys.
+			open := func() {
+				t.Helper()
+				tc.open(h, th)
+				h.tt.Frame()
+				h.tt.Advance(time.Second)
+				if !tc.shown(h.a) {
+					t.Fatalf("%s didn't open", tc.name)
+				}
+			}
+			open()
+			press(0, ui.KeyEscape)
+			waiting("Escape")
+			if tc.shown(h.a) {
+				t.Errorf("Escape left %s open", tc.name)
+			}
+			h.tt.Advance(time.Second)
+			open()
+			for _, k := range []struct {
+				name string
+				mods ui.Modifiers
+				key  ui.Key
+			}{{"⌘2", ui.Cmd, ui.Key2}, {"⌘3", ui.Cmd, ui.Key3}, {"⇧⌘D", ui.Cmd | ui.Shift, ui.KeyD}, {"⌘⏎", ui.Cmd, ui.KeyEnter}} {
+				press(k.mods, k.key)
+				waiting(k.name)
+			}
+			if !tc.shown(h.a) {
+				t.Errorf("the card's keys closed %s", tc.name)
+			}
+			press(0, ui.KeyEscape)
+			h.tt.Advance(time.Second)
+			press(ui.Cmd, ui.KeyEnter)
+			if got, want := answered(t, h, th, "Answered"), (api.Answers{Answers: []api.Answer{picks("SQLite"), picks("Unit")}}); !reflect.DeepEqual(got, want) {
+				t.Errorf("sent %+v, want %+v: a key under %s picked", got, want, tc.name)
+			}
+		})
 	}
 }
 
