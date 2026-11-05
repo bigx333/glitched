@@ -588,6 +588,9 @@ func (a *app) view(c *ui.Context) {
 	// appearance: the sidebar shows it while the app's theme matches, and
 	// the Liquid Glass setting is on.
 	a.now = c.Now()
+	if !a.arrived.IsZero() && a.arrivedAt.IsZero() {
+		a.arrivedAt = a.now // sentFromHero
+	}
 	a.sidebarHeld = a.sidebarHeld && a.sidebarPressed
 	if a.previewHeld && !a.previewPressed {
 		a.endPreviewDrag()

@@ -119,14 +119,16 @@ func (a *app) leaveFor() {
 }
 
 // arriving is whether t's row is sliding into the sidebar, just sent from
-// the hero.
+// the hero, or about to.
 func (a *app) arriving(t thread) bool {
-	return t.id() == a.arrived && a.now.Sub(a.arrivedAt) < arriveFor
+	return t.id() == a.arrived && (a.arrivedAt.IsZero() || a.now.Sub(a.arrivedAt) < arriveFor)
 }
 
 // sentFromHero lets the thread id, just created from the hero, slide into
-// the sidebar.
+// the sidebar. Its slide starts with the next frame built (view), not at
+// now: sent with Enter, between frames, now is the last frame's, which
+// may be long past.
 func (a *app) sentFromHero(id api.ID) {
 	a.dockJump = false
-	a.arrived, a.arrivedAt = id, a.now
+	a.arrived, a.arrivedAt = id, time.Time{}
 }
