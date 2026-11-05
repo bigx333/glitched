@@ -790,6 +790,16 @@ func (s *suite) actions(t *testing.T) {
 		t.Fatal(err)
 	}
 	clicked("the styled checkbox", `return document.getElementById("styled").checked`)
+	// A link wrapping onto two lines is clicked on a line of its own,
+	// not between them; what contains a link, where the link's box isn't
+	// its own, covers nothing.
+	for _, c := range []struct{ name, js string }{{"a link that wraps onto the next line", "wrapped"}, {"Icon", "icon"}} {
+		if err := webtarget.Click(ctx, p, snap, ref(c.name)); err != nil {
+			t.Errorf("clicking %s: %v", c.name, err)
+			continue
+		}
+		clicked(c.name, `return window.`+c.js+` === 1`)
+	}
 	if err := webtarget.Type(ctx, p, snap, ref("When"), "tomorrow", false); err == nil || !strings.Contains(err.Error(), `took "", not "tomorrow"`) {
 		t.Errorf("typing what a date field can't take: %v", err)
 	}
@@ -886,6 +896,26 @@ func (s *suite) actions(t *testing.T) {
 	}
 	want = s.url("/act/sent?i=pic&img.x=0&img.y=0")
 	s.until("the image button's page", func() bool { return r.last(&r.navigated) == want })
+	// The default button is the first, image or not.
+	p, r = s.open("/act")
+	if snap, err = webtarget.Take(ctx, p, webtarget.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := webtarget.Type(ctx, p, snap, ref("Ordered"), "o", true); err != nil {
+		t.Fatal(err)
+	}
+	want = s.url("/act/sent?o=o&first.x=0&first.y=0")
+	s.until("the first button's page", func() bool { return r.last(&r.navigated) == want })
+	// A page scrolling smoothly is scrolled at once, so the click lands
+	// where the element is, not where it was.
+	p, _ = s.open("/act/smooth")
+	if snap, err = webtarget.Take(ctx, p, webtarget.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := webtarget.Click(ctx, p, snap, ref("Far")); err != nil {
+		t.Fatal(err)
+	}
+	clicked("the far button", `return window.far === 1`)
 }
 
 // refNamed is the ref of the i-th element named name in a snapshot, or "".
@@ -991,6 +1021,9 @@ func fixtures() http.Handler {
 	mux.Handle("/snap", page(snapFixture))
 	mux.Handle("/act", page(actFixture))
 	mux.Handle("/act/sent", page(`<!doctype html><title>Sent</title>`))
+	mux.Handle("/act/smooth", page(`<!doctype html><title>Smooth</title><style>html{scroll-behavior:smooth}</style>
+<div style="height:3000px"></div><button onclick="window.far = 1">Far</button><div style="height:3000px"></div>
+<footer style="position:fixed;bottom:0;left:0;right:0;height:80px;background:#333">Footer</footer>`))
 	mux.Handle("/scaled", page(scaledFixture))
 	mux.Handle("/scaled/outer", page(scaledPage("Scaled", `<iframe id="nested" style="left:100px;top:100px;width:200px;height:120px;border:2px solid #888;padding:3px;transform:scale(0.5)" src="/scaled/nested"></iframe>`)))
 	mux.Handle("/scaled/nested", page(scaledPage("Nested", "")))
@@ -1039,6 +1072,9 @@ const actFixture = `<!doctype html><meta charset="utf-8"><title>Act</title>
 <button onmousedown="event.preventDefault()" onclick="window.bold = document.activeElement.id">Bold</button>
 <div style="position:relative;display:inline-block"><button>Covered</button><div style="position:absolute;inset:0" aria-label="Banner" role="dialog"></div></div>
 <label style="position:relative;display:inline-block"><input type="checkbox" id="styled" aria-label="Styled" style="position:absolute;left:0;top:0;margin:0;opacity:0"><span style="position:relative;display:inline-block;width:20px;height:20px;background:#888"></span></label>
+<p style="width:120px">Some words before <a href="#wrapped" onclick="window.wrapped = 1; return false">a link that wraps onto the next line</a> and after.</p>
+<a href="#icon" onclick="window.icon = 1; return false" aria-label="Icon" style="position:relative;display:inline-block;width:0;height:0"><span style="position:absolute;left:30px;top:0;width:16px;height:16px;background:#888"></span></a>
+<form action="/act/sent" id="order"><input name="o" aria-label="Ordered"><input type="image" name="first" alt="First" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><button name="later">Later</button></form>
 <form action="/act/sent"><input name="i" aria-label="Imaged"><input type="image" name="img" alt="Send" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></form>
 <form action="/act/sent"><input id="taken" name="t" aria-label="Taken"></form>
 <textarea aria-label="Notes"></textarea>
