@@ -938,6 +938,7 @@ func (a *app) workspaceButton(c *ui.Context, t thread) {
 				}
 			}
 		}
+		a.workspaceItems(m, several)
 	})
 }
 
