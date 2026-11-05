@@ -726,9 +726,11 @@ func (s *suite) tampering(t *testing.T) {
 
 // Actions: a ref's element clicked, with the events a mouse fires, in a
 // frame too; text typed into a field, a text area and an editor, as
-// frameworks hear it; Enter submitting a form unless the page takes it;
+// frameworks hear it; Enter submitting a form as a browser does, through
+// its default button, unless the page takes it;
 // and what an action refuses: a disabled element, typing into a button,
-// an element no longer what the snapshot named, and an older snapshot's
+// a read-only field, an element no longer what the snapshot named, and an
+// older snapshot's
 // ref.
 func (s *suite) actions(t *testing.T) {
 	s.t = t
@@ -792,6 +794,24 @@ func (s *suite) actions(t *testing.T) {
 	if got := s.eval(p, `return location.pathname + " " + window.enter`); got != "/act true" {
 		t.Errorf("Enter the page took: %q", got)
 	}
+	// A form with two fields and no button to submit it doesn't submit
+	// on Enter, nor one whose keypress the page takes.
+	if err := webtarget.Type(ctx, p, snap, ref("First of two"), "x", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := webtarget.Type(ctx, p, snap, ref("Pressed"), "k", true); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := s.eval(p, `return location.pathname + " " + window.pressed`); got != "/act true" {
+		t.Errorf("Enter where no form submits: %q", got)
+	}
+	if err := webtarget.Type(ctx, p, snap, ref("Fixed"), "x", false); err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Errorf("typing into a read-only field: %v", err)
+	}
+	if got := s.eval(p, `return document.querySelector("[readonly]").value`); got != "fixed" {
+		t.Errorf("a read-only field took %q", got)
+	}
 	s.eval(p, `document.getElementById("b").textContent = "Renamed"; return 1`)
 	if err := webtarget.Click(ctx, p, snap, ref("Press")); err == nil || !strings.Contains(err.Error(), "now button") {
 		t.Errorf("clicking an element renamed since: %v", err)
@@ -813,7 +833,8 @@ func (s *suite) actions(t *testing.T) {
 	if err := webtarget.Type(ctx, p, snap, ref("Query"), "glitched", true); err != nil {
 		t.Fatal(err)
 	}
-	want := s.url("/act/sent?q=glitched")
+	// Enter clicks the form's default button, which is sent with it.
+	want := s.url("/act/sent?q=glitched&go=1")
 	s.until("the form's page", func() bool { return r.last(&r.navigated) == want })
 }
 
@@ -958,7 +979,10 @@ const actFixture = `<!doctype html><meta charset="utf-8"><title>Act</title>
 <button id="b">Press</button>
 <button disabled>Off</button>
 <input type="checkbox" id="c" aria-label="Agree">
-<form action="/act/sent"><input name="q" aria-label="Query"></form>
+<form action="/act/sent"><input name="q" aria-label="Query"><button name="go" value="1" onclick="window.went = 1">Go</button></form>
+<form action="/act/sent"><input name="x" aria-label="First of two"><input name="y" aria-label="Second of two"></form>
+<form action="/act/sent"><input name="k" aria-label="Pressed" onkeypress="if (event.key === 'Enter') { event.preventDefault(); window.pressed = true }"></form>
+<input aria-label="Fixed" readonly value="fixed">
 <form action="/act/sent"><input id="taken" name="t" aria-label="Taken"></form>
 <textarea aria-label="Notes"></textarea>
 <div id="ed" contenteditable="true" aria-label="Editor">old</div>
