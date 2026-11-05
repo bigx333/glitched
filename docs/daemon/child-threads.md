@@ -7,9 +7,9 @@ Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, aft
 **A child thread is an ordinary thread on the same engine with a `Parent`. The engine checks the line at create and posts each child's report into its parent's log through the outbox. The GUI does the cascades and the usage roll-up.**
 
 - The tree is one field on the thread. Depth is never stored; it's walked, bounded.
-- The engine refuses a child deeper than 4 below a thread of the user's, or wider than its parent's access.
+- The engine refuses a child deeper than 4 below a thread of the user's, or wider than its parent's access, and a child past the configured limits (see Limits).
 - A child's run that completes, fails, or blocks on a request reports to its parent as a `child.reported` event. The report is an outbox effect, committed with the child's event, so a crash replays it rather than losing it.
-- Only an agent starts a child; the user can't (decided 2026-11-03). No provider has a tool for it yet, so today only tests create one, through the engine or `Manager.CreateUnder`. The spawn tool is a follow-up PR.
+- Only an agent starts a child; the user can't (decided 2026-11-03). A create names the parent's live run in `ThreadCreate.Run`, and the engine refuses one that doesn't. No provider has a tool for it yet: the fake provider spawns for tests (`fake.Adapter.Spawns`), and `glitched mcp` is the next PR of the spawn tool.
 - Stop, settle and delete of a tree are one command per thread, sent by the GUI. There's no engine-side cascade. Each command is atomic on its thread: settling stops the thread's run and cancels what waits, and deleting ends its run. A settled tree has nothing running, and a deleted one leaves nothing behind.
 - Each thread stores the tokens its own turns used. The GUI adds up a tree's.
 - The protocol goes from 3 to 4, and the store schema from 4 to 5. Protocol 5 and schema 6 add the parent's last report (see Reading it).
@@ -19,7 +19,8 @@ Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, aft
 - `api.ThreadCreate.Parent` (`internal/api/api.go`) names the parent; zero is a thread of the user's. It's carried into `api.ThreadCreated.Parent` (`internal/api/events.go`), folded into `engine.Thread.Parent` by `apply` (`internal/engine/apply.go`), and shown as `api.Thread.Parent` by `engine.View`.
 - The store keeps it in `threads.parent`, a nullable BLOB (`internal/store/store.go`). Upgrade 4 adds it with `tokens` and `reported`, after main's upgrade 3 settles the archived threads. Upgrade 5 adds `report` (see Reading it); `schemaVersion` is 6. An older build refuses a newer database ("newer than this build").
 - The parent never changes after create. There's no intent to move a thread.
-- The client sends it with `Manager.CreateUnder` (`internal/client/commands.go`); `Create` is `CreateUnder` with no parent.
+- No client sends one: `Manager.Create` (`internal/client/commands.go`) makes a thread of the user's. An agent's run asks for a child with `Parent`, `Run` (the parent's live run) and `Text` (the child's first message).
+- A create with `Text` queues it and admits the child's first turn in the create's own commit, under the command's ID, with the `turn.start` effect in the outbox. A crash leaves both or neither, and a retry of the same command returns the stored receipt, so one call makes one child.
 
 ## Checks at create
 
@@ -28,9 +29,15 @@ Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, aft
 - `lineOf` loads the parent, then its parent, up to `api.MaxDepth+1` threads, so a corrupt cycle can't hang it. A deleted ancestor above the parent ends the line, as the GUI's does: its children stand on their own.
 - `engine.CheckChild` (`internal/engine/decide.go`) refuses, as `*api.RejectedError`:
   - "the parent thread is gone": no parent on this engine, or a deleted one. A parent on another engine is "gone" too: children are same-engine only.
-  - "a child thread can be at most 4 below a thread of yours": the line is longer than `MaxDepth`.
+  - "only the parent's live run can start a child thread, and not once it is stopping": `Run` is not the parent's live run, or that run is stopping or uncertain.
+  - "a child thread can be at most N below a thread of yours": the line is longer than the limits' depth, which is at most `MaxDepth`.
   - "a child thread's access can't be wider than its parent's": `Access` above the parent's. The parent's is no wider than its own parent's, so the check at one level holds for the line.
+  - "N child threads of this thread are at work, the most at once", and "this thread has started N child threads, the most it may": the parent is at a limit. `kidsOf` counts its children, deleted ones too, and those with a live run.
 - A replayed create with the same command ID returns its stored receipt before any of this runs, as every command does.
+
+## Limits
+
+`engine.Limits` caps what agents start: 5 children of one thread at work at once, 20 in all, and depth 4, the defaults for a field of zero. Depth is at most `api.MaxDepth`. They live in `daemon.Config.Children`, saved in `engine.json` with no store schema change. `glitched serve -max-working -max-children -max-depth` sets them for the next start, and the Agents card on Settings, This machine sets them too. The engine embedded in the GUI applies a change at once through `Daemon.SetLimits`; an engine another process runs applies it when it next starts.
 - Access is fixed at create on main (there's no access-change intent), so narrowing after create isn't a case yet.
 
 ## Reports
