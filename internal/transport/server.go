@@ -38,6 +38,7 @@ type Server struct {
 	keepalive keepalive     // zero means defaultKeepalive
 	handshake time.Duration // how long a client has to prove its key; zero means handshakeWithin
 	idle      time.Duration // each request's read, its response's write and each keep-alive wait; zero means defaultIdle
+	limit     int64         // most bytes one message may hold; zero means maxMessage
 }
 
 type connKey struct{}
@@ -134,7 +135,11 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 			return
 		}
 	}
-	ws.SetReadLimit(maxMessage)
+	limit := s.limit
+	if limit == 0 {
+		limit = maxMessage
+	}
+	ws.SetReadLimit(limit)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(grant, cancel)()
