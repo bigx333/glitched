@@ -92,7 +92,7 @@ func TestPreviewWidthPersists(t *testing.T) {
 	if err := jsonfile.Load(filepath.Join(a.dir, "layout.json"), &saved); err != nil || want == 0 || saved.PreviewWidth != want {
 		t.Fatalf("layout.json holds %v (%v), want %v", saved.PreviewWidth, err, want)
 	}
-	again := newApp(a.dir, func(func()) {})
+	again := newApp(a.dir, nil, func(func()) {})
 	if again.previewDragged != want {
 		t.Errorf("relaunched with the preview %v wide, want %v", again.previewDragged, want)
 	}
@@ -311,7 +311,7 @@ func TestPreviewWidthPersistsAsThePaneClosesMidDrag(t *testing.T) {
 			}
 			tt.Release(x-40, y)
 			tt.Frame()
-			if again := newApp(a.dir, func(func()) {}); again.previewDragged != want {
+			if again := newApp(a.dir, nil, func(func()) {}); again.previewDragged != want {
 				t.Errorf("relaunched with the preview dragged to %v, want %v", again.previewDragged, want)
 			}
 		})
@@ -346,7 +346,7 @@ func TestLayoutRefusesWidthsThatArent(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "layout.json"), []byte(`{"previewWidth": `+held+"}"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		a := newApp(dir, func(func()) {})
+		a := newApp(dir, nil, func(func()) {})
 		want := float32(0)
 		if held == "480" {
 			want = 480

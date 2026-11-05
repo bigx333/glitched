@@ -38,6 +38,10 @@ type Config struct {
 	// reconnect that finds the ask; not for what it asks at the first
 	// snapshot of a log.
 	Asked func(e *Env, parent, child api.ID)
+	// Engine, when set, changes how an engine embedded here serves, after
+	// engine.json: the GUI has it run the real Claude Code. Left nil, as a
+	// test leaves it, the engine plays every provider with the fake.
+	Engine func(*daemon.Config)
 }
 
 const (
@@ -646,6 +650,7 @@ func (th *Thread) asks(request api.ID) bool {
 type local struct {
 	dir      string
 	hosted   func(embedded *daemon.Daemon) // reports the engine embedded, nil for one attached
+	engine   func(*daemon.Config)          // Config.Engine
 	attached *transport.EndpointClient
 	embedded *daemon.Daemon
 	err      error         // from closing the embedded engine
@@ -675,6 +680,9 @@ func (l *local) endpoint(ctx context.Context) (api.Endpoint, error) {
 		cfg, err := daemon.Defaults(l.dir)
 		if err != nil {
 			return nil, err
+		}
+		if l.engine != nil {
+			l.engine(&cfg)
 		}
 		d, err := daemon.Start(ctx, cfg)
 		switch {

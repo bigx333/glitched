@@ -68,7 +68,7 @@ func (p *posts) run() bool {
 
 // offline is the app before its manager starts: no machines, no threads.
 func offline(t *testing.T) *app {
-	return newApp(t.TempDir(), func(func()) {})
+	return newApp(t.TempDir(), nil, func(func()) {})
 }
 
 // harness is the app on the engines its state directory reaches, with its
@@ -82,8 +82,15 @@ type harness struct {
 
 func start(t *testing.T, dir string) *harness {
 	t.Helper()
+	return startWith(t, dir, nil)
+}
+
+// startWith is start, with an engine embedded here serving as engine has
+// it.
+func startWith(t *testing.T, dir string, engine func(*daemon.Config)) *harness {
+	t.Helper()
 	p := &posts{wake: make(chan struct{}, 1)}
-	a := newApp(dir, p.post)
+	a := newApp(dir, engine, p.post)
 	if err := a.backend.Start(); err != nil {
 		t.Fatal(err)
 	}
