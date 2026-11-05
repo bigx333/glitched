@@ -135,3 +135,35 @@ func TestReconcileStopsAProcessThatLeftTheMarkerBehind(t *testing.T) {
 	}
 }
 
+// Without a user systemd manager, claude starts in no scope, and the
+// marker still finds a tool that keeps it, after the engine is gone.
+func TestWithoutScopesReconcileStopsAMarkedTool(t *testing.T) {
+	claude.WithoutScopes(t)
+	ws := t.TempDir()
+	replay(t, "orphan-tool", "")
+	fake := processes(t)
+	run := api.NewID()
+	ag, err := (&claude.Adapter{Path: must(os.Executable())}).Open(ctx, provider.SessionSpec{Thread: api.NewID(), Run: run, Workspace: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ag.Close(ctx)
+	if err := ag.Do(ctx, provider.Start{Text: "Run sleep 60."}); err != nil {
+		t.Fatal(err)
+	}
+	tool := waitFor(t, fake, "tool")
+	cg, _ := os.ReadFile("/proc/" + strconv.Itoa(fake("claude")) + "/cgroup")
+	if strings.Contains(string(cg), "glitched-run-") {
+		t.Errorf("claude started in a scope: %s", cg)
+	}
+	syscall.Kill(fake("claude"), syscall.SIGKILL)
+	if !exits(fake("claude"), 3*time.Second) || exits(tool, 0) {
+		t.Fatal("want claude gone and its tool still running")
+	}
+	if _, err := (&claude.Adapter{}).Reconcile(ctx, provider.RuntimeIdentity{Run: run}); err != nil {
+		t.Errorf("Reconcile: %v", err)
+	}
+	if !exits(tool, 0) {
+		t.Error("the tool still runs after Reconcile")
+	}
+}
