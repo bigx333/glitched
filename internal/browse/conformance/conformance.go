@@ -793,7 +793,9 @@ func (s *suite) actions(t *testing.T) {
 	// A link wrapping onto two lines is clicked on a line of its own,
 	// not between them; what contains a link, where the link's box isn't
 	// its own, covers nothing.
-	for _, c := range []struct{ name, js string }{{"a link that wraps onto the next line", "wrapped"}, {"Icon", "icon"}} {
+	// A label over its field, hidden as a toggle button's, takes its
+	// click; a child taking the pointer where its parent doesn't, its.
+	for _, c := range []struct{ name, js string }{{"a link that wraps onto the next line", "wrapped"}, {"Icon", "icon"}, {"Through", "through"}} {
 		if err := webtarget.Click(ctx, p, snap, ref(c.name)); err != nil {
 			t.Errorf("clicking %s: %v", c.name, err)
 			continue
@@ -801,7 +803,11 @@ func (s *suite) actions(t *testing.T) {
 		clicked(c.name, `return window.`+c.js+` === 1`)
 	}
 	// What a user can't click, the agent can't either.
-	for name, why := range map[string]string{"Inert": "inert", "Unpointed": "takes no clicks"} {
+	if err := webtarget.Click(ctx, p, snap, ref("Toggle")); err != nil {
+		t.Fatal(err)
+	}
+	clicked("the toggle", `return document.getElementById("toggle").checked`)
+	for name, why := range map[string]string{"Inert": "inert", "Unpointed": "takes no clicks", "Loading": "takes no clicks"} {
 		if err := webtarget.Click(ctx, p, snap, ref(name)); err == nil || !strings.Contains(err.Error(), why) {
 			t.Errorf("clicking %s: %v", name, err)
 		}
@@ -923,10 +929,15 @@ func (s *suite) actions(t *testing.T) {
 	if err := webtarget.Click(ctx, p, snap, ref("Behind")); err == nil || !strings.Contains(err.Error(), "behind a modal dialog") {
 		t.Errorf("clicking behind a modal dialog: %v", err)
 	}
-	if err := webtarget.Click(ctx, p, snap, ref("Inside")); err != nil {
+	// The topmost of stacked dialogs takes clicks, inert around it or
+	// not; one under it, only behind its backdrop, doesn't.
+	if err := webtarget.Click(ctx, p, snap, ref("Escaped")); err != nil {
 		t.Fatal(err)
 	}
-	clicked("the dialog's button", `return window.inside === 1`)
+	clicked("the topmost dialog's button", `return window.escaped === 1`)
+	if err := webtarget.Click(ctx, p, snap, ref("Inside")); err == nil || !strings.Contains(err.Error(), "covered") {
+		t.Errorf("clicking a dialog under another: %v", err)
+	}
 	// A page scrolling smoothly is scrolled at once, so the click lands
 	// where the element is, not where it was.
 	p, _ = s.open("/act/smooth")
@@ -1043,9 +1054,13 @@ func fixtures() http.Handler {
 	mux.Handle("/act", page(actFixture))
 	mux.Handle("/act/sent", page(`<!doctype html><title>Sent</title>`))
 	mux.Handle("/act/modal", page(`<!doctype html><title>Modal</title><button onclick="window.behind = 1">Behind</button>
-<dialog id="d"><button onclick="window.inside = 1">Inside</button></dialog><script>d.showModal()</script>`))
+<dialog id="d"><button onclick="window.inside = 1">Inside</button></dialog>
+<dialog id="e"><button onclick="window.between = 1">Between</button></dialog>
+<main inert><dialog id="f"><button onclick="window.escaped = 1">Escaped</button></dialog></main>
+<script>d.showModal(); e.showModal(); f.showModal()</script>`))
 	mux.Handle("/act/smooth", page(`<!doctype html><title>Smooth</title><style>html{scroll-behavior:smooth}</style>
-<div style="height:3000px"></div><button onclick="window.far = 1">Far</button><div style="height:3000px"></div>
+<script>window.within = (e, el) => [...el.getClientRects()].some((r) => e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) ? 1 : 0;</script>
+<div style="height:3000px"></div><button onclick="window.far = within(event, this)">Far</button><div style="height:3000px"></div>
 <footer style="position:fixed;bottom:0;left:0;right:0;height:80px;background:#333">Footer</footer>`))
 	mux.Handle("/scaled", page(scaledFixture))
 	mux.Handle("/scaled/outer", page(scaledPage("Scaled", `<iframe id="nested" style="left:100px;top:100px;width:200px;height:120px;border:2px solid #888;padding:3px;transform:scale(0.5)" src="/scaled/nested"></iframe>`)))
@@ -1095,10 +1110,14 @@ const actFixture = `<!doctype html><meta charset="utf-8"><title>Act</title>
 <button onmousedown="event.preventDefault()" onclick="window.bold = document.activeElement.id">Bold</button>
 <div style="position:relative;display:inline-block"><button>Covered</button><div style="position:absolute;inset:0" aria-label="Banner" role="dialog"></div></div>
 <label style="position:relative;display:inline-block"><input type="checkbox" id="styled" aria-label="Styled" style="position:absolute;left:0;top:0;margin:0;opacity:0"><span style="position:relative;display:inline-block;width:20px;height:20px;background:#888"></span></label>
-<p style="width:120px">Some words before <a href="#wrapped" onclick="window.wrapped = 1; return false">a link that wraps onto the next line</a> and after.</p>
+<p style="width:120px">Some words before <a href="#wrapped" onclick="window.wrapped = within(event, this); return false">a link that wraps onto the next line</a> and after.</p>
 <a href="#icon" onclick="window.icon = 1; return false" aria-label="Icon" style="position:relative;display:inline-block;width:0;height:0"><span style="position:absolute;left:30px;top:0;width:16px;height:16px;background:#888"></span></a>
 <section inert><button onclick="window.inert = 1">Inert</button></section>
 <a href="#off" style="pointer-events:none" onclick="window.unpointed = 1">Unpointed</a>
+<a href="#through" style="pointer-events:none" onclick="window.through = 1; return false"><span style="pointer-events:auto">Through</span></a>
+<span style="position:relative;display:inline-block"><input type="checkbox" id="toggle" aria-label="Toggle" style="position:absolute;clip:rect(0,0,0,0);pointer-events:none"><label for="toggle" style="display:inline-block;padding:4px">Toggle</label></span>
+<style>.loading::after { content: ""; position: absolute; inset: 0 }</style>
+<div class="loading" style="position:relative;display:inline-block"><button onclick="window.loading = 1">Loading</button></div>
 <input type="color" aria-label="Hue">
 <form action="/act/sent" id="order"><input name="o" aria-label="Ordered"><input type="image" name="first" alt="First" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><button name="later">Later</button></form>
 <form action="/act/sent"><input name="i" aria-label="Imaged"><input type="image" name="img" alt="Send" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></form>
@@ -1107,6 +1126,7 @@ const actFixture = `<!doctype html><meta charset="utf-8"><title>Act</title>
 <div id="ed" contenteditable="true" aria-label="Editor">old</div>
 <iframe id="fr" srcdoc="<button onclick='parent.framed = 1'>Framed press</button>"></iframe>
 <script>
+window.within = (e, el) => [...el.getClientRects()].some((r) => e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) ? 1 : 0;
 window.seen = [];
 for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"])
   b.addEventListener(type, () => seen.push(type));
