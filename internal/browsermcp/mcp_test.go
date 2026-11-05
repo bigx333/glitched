@@ -48,6 +48,18 @@ func session(t *testing.T, call Call) func(msg string) map[string]any {
 	}
 }
 
+// socketDir is a directory for a socket: t.TempDir is too long a path
+// for one on macOS, whose socket paths end at 104 bytes.
+func socketDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "gl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
 func TestServeSpeaksMCP(t *testing.T) {
 	var got []string
 	send := session(t, func(_ context.Context, tool string, args json.RawMessage) (string, error) {
@@ -134,7 +146,7 @@ func TestServeAnswersCallsAsTheyEnd(t *testing.T) {
 }
 
 func TestTheBridgeReachesTheApp(t *testing.T) {
-	dir := t.TempDir()
+	dir := socketDir(t)
 	call := Dial(dir)
 	if _, err := call(context.Background(), "browser_tabs", json.RawMessage(`{}`)); !errors.Is(err, ErrNoApp) {
 		t.Fatalf("with no app: %v", err)
@@ -253,7 +265,7 @@ func TestServeEndsCallsTheClientLeaves(t *testing.T) {
 func TestTheBridgeHangsUpOnASilentCaller(t *testing.T) {
 	old := requestTime.Swap(int64(50 * time.Millisecond))
 	t.Cleanup(func() { requestTime.Store(old) })
-	ln, err := Listen(t.TempDir())
+	ln, err := Listen(socketDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +285,7 @@ func TestTheBridgeHangsUpOnASilentCaller(t *testing.T) {
 // A call the agent gave up on says so, and a socket the server may not
 // use says why, rather than that the app isn't open.
 func TestTheBridgeSaysWhyItCantReachTheApp(t *testing.T) {
-	dir := t.TempDir()
+	dir := socketDir(t)
 	ln, err := Listen(dir)
 	if err != nil {
 		t.Fatal(err)
