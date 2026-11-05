@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"glitched/internal/provider"
 )
@@ -63,6 +66,71 @@ func TestAnswersRacingACancel(t *testing.T) {
 		}
 		if replies > 1 || (went > 0) != (replies == 1) {
 			t.Fatalf("%d answers said they went and Claude Code got %d replies", went, replies)
+		}
+	}
+}
+
+// A client answers a prompt while Claude Code asks questions the card
+// can't show: the answer and the deny that refuses the questions both
+// reach Claude Code, and neither waits on the other for good.
+func TestAnsweringAPromptWhileQuestionsAreRefusedDoesNotHang(t *testing.T) {
+	ctx := context.Background()
+	ws := t.TempDir()
+	var misfit message
+	if err := json.Unmarshal([]byte(`{"type":"control_request","request_id":"questions","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[]}}}`), &misfit); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2000 {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		sent := make(chan []byte)
+		go func() {
+			b, _ := io.ReadAll(r)
+			r.Close()
+			sent <- b
+		}()
+		g := &Agent{stdin: w, turn: newTurn(ws), prompts: map[string]*prompt{}, lines: make(chan []byte, 1)}
+		g.lines <- []byte(`{"type":"control_request","request_id":"ask","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
+		if _, err := g.Next(ctx); err != nil {
+			t.Fatal(err)
+		}
+		gate := make(chan struct{})
+		var answer error
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			<-gate
+			answer = g.Do(ctx, provider.Respond{Request: "ask", Answer: json.RawMessage(`{"allow":true}`)})
+		})
+		wg.Go(func() {
+			<-gate
+			g.read(ctx, misfit)
+		})
+		close(gate)
+		finished := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(finished)
+		}()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			b := make([]byte, 1<<20)
+			b = b[:runtime.Stack(b, true)]
+			var stuck []string
+			for _, s := range strings.Split(string(b), "\n\n") {
+				if strings.Contains(s, "claude.(*Agent)") {
+					stuck = append(stuck, s)
+				}
+			}
+			t.Fatalf("iteration %d: the answer and the deny still wait on each other\n%s", i, strings.Join(stuck, "\n\n"))
+		}
+		w.Close()
+		got := <-sent
+		if answer != nil || bytes.Count(got, []byte(`"control_response"`)) != 2 ||
+			!bytes.Contains(got, []byte(`"behavior":"allow"`)) || !bytes.Contains(got, []byte(`"behavior":"deny"`)) {
+			t.Fatalf("iteration %d: the answer said %v and Claude Code got %s, want the allow and the deny", i, answer, got)
 		}
 	}
 }
