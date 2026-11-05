@@ -182,12 +182,17 @@ func tempDir(t *testing.T) string {
 // to or reach.
 func engine(t *testing.T, cfg daemon.Config, adapter provider.Adapter) *daemon.Daemon {
 	t.Helper()
-	cfg.Hub, cfg.Providers = true, daemon.FakeProviders(adapter)
+	sd := &seeding{Adapter: adapter, spawner: fake.New(nil), runs: map[api.ID]bool{}}
+	cfg.Hub, cfg.Providers = true, daemon.FakeProviders(sd)
 	d, err := daemon.Start(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	seeders.Store(d, sd)
+	t.Cleanup(func() {
+		d.Close()
+		seeders.Delete(d)
+	})
 	return d
 }
 

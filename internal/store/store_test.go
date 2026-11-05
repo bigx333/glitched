@@ -586,9 +586,16 @@ func TestAChildThreadAfterTheUpgradeFromVersion3(t *testing.T) {
 		}
 		return c.ID
 	}
-	submit(api.ThreadCreate{Workspace: "w", Title: "child", Model: api.ModelRef{Provider: "fake"}, Parent: parent})
+	spawner := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{ID: spawner, Target: parent, Body: api.MessageDispatch{Text: "split it", Mode: api.StartNow}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	submit(api.ThreadCreate{Workspace: "w", Title: "child", Model: api.ModelRef{Provider: "fake"}, Parent: parent, Run: spawner})
+	if _, err := s.Observe(ctx, parent, engine.Ended{Run: spawner, Outcome: api.OutcomeCompleted}, time.Now(), 0); err != nil {
+		t.Fatal(err)
+	}
 	run := submit(api.MessageDispatch{Text: "go", Mode: api.StartNow})
-	e, ok, err := s.Lease(ctx, nil)
+	e, ok, err := s.Lease(ctx, func() []api.ID { return []api.ID{parent} })
 	if err != nil || !ok {
 		t.Fatalf("lease: %v %v", ok, err)
 	}

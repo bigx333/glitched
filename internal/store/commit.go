@@ -31,7 +31,11 @@ func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.R
 			if err != nil {
 				return nil, nil, err
 			}
-			if err := engine.CheckChild(line, b); err != nil {
+			kids, err := kidsOf(ctx, q, b.Parent)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := engine.CheckChild(line, kids, s.limits, b); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -55,6 +59,21 @@ func lineOf(ctx context.Context, q querier, id api.ID) ([]engine.Thread, error) 
 		id = t.Parent
 	}
 	return line, nil
+}
+
+// kidsOf counts parent's children.
+func kidsOf(ctx context.Context, q querier, parent api.ID) (engine.Kids, error) {
+	var k engine.Kids
+	err := q.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(EXISTS (SELECT 1 FROM runs WHERE runs.thread = threads.id AND runs.state <> 'finished')), 0)
+		FROM threads WHERE parent = ?`, parent[:]).Scan(&k.All, &k.Working)
+	return k, err
+}
+
+// SetLimits caps the children agents start from the next Submit on.
+func (s *Store) SetLimits(l engine.Limits) {
+	s.mu.Lock()
+	s.limits = l
+	s.mu.Unlock()
 }
 
 // Observe commits what the runtime saw. A nonzero done is the leased effect

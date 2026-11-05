@@ -89,7 +89,7 @@ func (sh *shelled) asking(parent api.ID, at time.Time) (child api.ID, report fun
 		}
 		return c.ID
 	}
-	submit(api.ThreadCreate{Workspace: "w", Title: "child", Model: api.ModelRef{Provider: "fake"}, Parent: parent})
+	sh.spawn(parent, at, api.Command{ID: api.NewID(), Target: child, Body: api.ThreadCreate{Workspace: "w", Title: "child", Model: api.ModelRef{Provider: "fake"}, Parent: parent}})
 	run := submit(api.MessageDispatch{Text: "go", Mode: api.StartNow})
 	e, ok, err := sh.st.Lease(ctx, func() []api.ID { return nil })
 	for err == nil && ok && e.Thread != child { // another child's report
@@ -117,11 +117,28 @@ func (sh *shelled) asking(parent api.ID, at time.Time) (child api.ID, report fun
 func (sh *shelled) finish(parent api.ID, at time.Time) {
 	sh.t.Helper()
 	child := api.NewID()
-	c := api.Command{ID: api.NewID(), Target: child, Body: api.ThreadCreate{Workspace: "w", Title: "sibling", Model: api.ModelRef{Provider: "fake"}, Parent: parent}}
-	if _, err := sh.st.Submit(context.Background(), c, at); err != nil {
+	sh.spawn(parent, at, api.Command{ID: api.NewID(), Target: child, Body: api.ThreadCreate{Workspace: "w", Title: "sibling", Model: api.ModelRef{Provider: "fake"}, Parent: parent}})
+	sh.reported(parent, child, api.NewID(), api.ReportDone, at)
+}
+
+// spawn submits c, a child's create, from a turn of parent's that ends
+// once it did, as only a parent's live run starts a child.
+func (sh *shelled) spawn(parent api.ID, at time.Time, c api.Command) {
+	sh.t.Helper()
+	ctx := context.Background()
+	run := api.NewID()
+	if _, err := sh.st.Submit(ctx, api.Command{ID: run, Target: parent, Body: api.MessageDispatch{Text: "split it", Mode: api.StartNow}}, at); err != nil {
 		sh.t.Fatal(err)
 	}
-	sh.reported(parent, child, api.NewID(), api.ReportDone, at)
+	b := c.Body.(api.ThreadCreate)
+	b.Run = run
+	c.Body = b
+	if _, err := sh.st.Submit(ctx, c, at); err != nil {
+		sh.t.Fatal(err)
+	}
+	if _, err := sh.st.Observe(ctx, parent, eng.Ended{Run: run, Outcome: api.OutcomeCompleted}, at, 0); err != nil {
+		sh.t.Fatal(err)
+	}
 }
 
 func (sh *shelled) reported(parent, child, run api.ID, kind api.ReportKind, at time.Time) {

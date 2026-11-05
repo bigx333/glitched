@@ -22,6 +22,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
+	eng "glitched/internal/engine"
 	"glitched/internal/plain"
 	"glitched/internal/tailnet"
 	"glitched/internal/transport"
@@ -129,6 +130,10 @@ func serve(ctx context.Context, args []string) error {
 	fs.Var(&listen, "listen", "also serve clients with a token on this loopback or Tailscale address; repeatable, and -listen '' serves none")
 	tailnetOn := fs.Bool("tailnet", false, "serve clients with a token on the tailnet at port "+daemon.Port+": on an installed Tailscale, else on the engine's own node")
 	control := fs.String("control", "", "the control server the engine's own node signs in to, such as Headscale's; Tailscale's when empty")
+	def := eng.DefaultLimits
+	maxWorking := fs.Int("max-working", def.Working, "the most child threads agents run under one thread at once")
+	maxChildren := fs.Int("max-children", def.All, "the most child threads agents start under one thread, deleted ones too")
+	maxDepth := fs.Int("max-depth", def.Depth, fmt.Sprintf("how far below a thread of yours agents start child threads, 1 to %d", api.MaxDepth))
 	fs.Parse(args)
 
 	set := given(fs)
@@ -141,6 +146,10 @@ func serve(ctx context.Context, args []string) error {
 		return usageError("serve: -hub-token goes with -hub-server")
 	case *hubServer != "" && *hubToken == "":
 		return usageError("serve: -hub-server needs -hub-token, which glitched pair printed on that engine")
+	case *maxWorking < 1 || *maxChildren < 1:
+		return usageError("serve: -max-working and -max-children are at least 1")
+	case *maxDepth < 1 || *maxDepth > api.MaxDepth:
+		return usageError(fmt.Sprintf("serve: -max-depth is 1 to %d", api.MaxDepth))
 	}
 	cfg, err := daemon.Defaults(*dir)
 	if err != nil {
@@ -167,6 +176,15 @@ func serve(ctx context.Context, args []string) error {
 	}
 	if set["control"] {
 		cfg.Control = *control
+	}
+	if set["max-working"] {
+		cfg.Children.Working = *maxWorking
+	}
+	if set["max-children"] {
+		cfg.Children.All = *maxChildren
+	}
+	if set["max-depth"] {
+		cfg.Children.Depth = *maxDepth
 	}
 	cfg.WithClaude()
 	d, err := daemon.Start(ctx, cfg)

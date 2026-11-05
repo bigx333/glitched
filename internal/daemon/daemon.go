@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/engine"
 	"glitched/internal/hub"
 	"glitched/internal/jsonfile"
 	"glitched/internal/provider"
@@ -59,6 +60,9 @@ type Config struct {
 	// ClaudePath is the claude binary an engine with WithClaude runs Claude
 	// Code threads with, when it is not on PATH or in ~/.local/bin.
 	ClaudePath string `json:"claude_path,omitempty"`
+	// Children caps the child threads agents start. Its zero fields take
+	// engine.DefaultLimits'.
+	Children engine.Limits `json:"children,omitzero"`
 }
 
 const configFile = "engine.json"
@@ -104,8 +108,9 @@ func (cfg Config) Save() error {
 // called, a listener fails, or the hub proves the database came back from a
 // backup.
 type Daemon struct {
-	host *runtime.Host
-	node *tailnet.Node // the engine's own, when it needs the tailnet and Tailscale isn't installed
+	host  *runtime.Host
+	store *store.Store
+	node  *tailnet.Node // the engine's own, when it needs the tailnet and Tailscale isn't installed
 	// nodeServes: the engine listens on its own node, as it does when
 	// Tailnet is on, not only to reach a hub.
 	nodeServes bool
@@ -171,6 +176,8 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		return nil, err
 	}
 	d.undo = append(d.undo, st.Close)
+	st.SetLimits(cfg.Children)
+	d.store = st
 
 	// The engine runs its own node when it needs the tailnet, to serve it
 	// or to reach a hub on it, and Tailscale isn't installed. A hub on
@@ -392,6 +399,10 @@ func (d *Daemon) release() error {
 
 // Endpoint is the engine in this process, for a caller that embeds it.
 func (d *Daemon) Endpoint() api.Endpoint { return endpoint{d.host, d, false} }
+
+// SetLimits applies new child limits at once, as engine.json's Children
+// does at the next start.
+func (d *Daemon) SetLimits(l engine.Limits) { d.store.SetLimits(l) }
 
 // Node is the engine's own tailnet node, which reaches other machines'
 // engines when Tailscale isn't installed; nil when it runs none.

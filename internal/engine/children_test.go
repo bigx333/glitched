@@ -22,35 +22,85 @@ func child(t *testing.T, parent engine.Thread) *thread {
 	return f
 }
 
-// A child is created under a parent that's there, no deeper than MaxDepth
-// below a thread of the user's, and no wider than its parent.
+// A child is created by its parent's live run, under a parent that's
+// there, no deeper than the limits' depth below a thread of the user's,
+// no wider than its parent, and within the limits' counts.
 func TestCheckChild(t *testing.T) {
+	run := api.NewID()
 	top := newThread(t).th
 	top.Access = api.AccessAutoEdits
+	top.Runs = []engine.Run{{ID: run, State: engine.RunRunning}}
 	line := []engine.Thread{top}
-	if err := engine.CheckChild(line, api.ThreadCreate{Parent: top.ID, Access: api.AccessAsk}); err != nil {
+	none, lim := engine.Kids{}, engine.Limits{}
+	if err := engine.CheckChild(line, none, lim, api.ThreadCreate{Parent: top.ID, Run: run, Access: api.AccessAsk}); err != nil {
 		t.Errorf("a narrower child: %v", err)
 	}
-	refused := func(what string, line []engine.Thread, c api.ThreadCreate) {
+	refused := func(what string, line []engine.Thread, kids engine.Kids, lim engine.Limits, c api.ThreadCreate) {
 		t.Helper()
 		var rej *api.RejectedError
-		if err := engine.CheckChild(line, c); !errors.As(err, &rej) {
+		if err := engine.CheckChild(line, kids, lim, c); !errors.As(err, &rej) {
 			t.Errorf("%s: %v, want a rejection", what, err)
 		}
 	}
-	refused("a wider child", line, api.ThreadCreate{Parent: top.ID, Access: api.AccessFull})
-	refused("no parent", nil, api.ThreadCreate{Parent: api.NewID()})
+	refused("a wider child", line, none, lim, api.ThreadCreate{Parent: top.ID, Run: run, Access: api.AccessFull})
+	refused("no parent", nil, none, lim, api.ThreadCreate{Parent: api.NewID(), Run: run})
+	refused("no run", line, none, lim, api.ThreadCreate{Parent: top.ID})
+	refused("another run", line, none, lim, api.ThreadCreate{Parent: top.ID, Run: api.NewID()})
+	stopping := top
+	stopping.Runs = []engine.Run{{ID: run, State: engine.RunStopping}}
+	refused("a stopping run", []engine.Thread{stopping}, none, lim, api.ThreadCreate{Parent: top.ID, Run: run})
 	gone := top
 	gone.Deleted = true
-	refused("a deleted parent", []engine.Thread{gone}, api.ThreadCreate{Parent: top.ID})
+	refused("a deleted parent", []engine.Thread{gone}, none, lim, api.ThreadCreate{Parent: top.ID, Run: run})
 	deep := make([]engine.Thread, api.MaxDepth+1)
 	for i := range deep {
 		deep[i] = top
 	}
-	if err := engine.CheckChild(deep[:api.MaxDepth], api.ThreadCreate{Parent: top.ID}); err != nil {
+	if err := engine.CheckChild(deep[:api.MaxDepth], none, lim, api.ThreadCreate{Parent: top.ID, Run: run}); err != nil {
 		t.Errorf("a child at depth %d: %v", api.MaxDepth, err)
 	}
-	refused("a child below MaxDepth", deep, api.ThreadCreate{Parent: top.ID})
+	refused("a child below MaxDepth", deep, none, lim, api.ThreadCreate{Parent: top.ID, Run: run})
+	refused("a child below MaxDepth, past a deeper limit", deep, none, engine.Limits{Depth: 9}, api.ThreadCreate{Parent: top.ID, Run: run})
+	refused("a child below the limit's depth", deep[:2], none, engine.Limits{Depth: 1}, api.ThreadCreate{Parent: top.ID, Run: run})
+	refused("a sixth at work", line, engine.Kids{Working: 5, All: 5}, lim, api.ThreadCreate{Parent: top.ID, Run: run})
+	refused("a twenty-first", line, engine.Kids{All: 20}, lim, api.ThreadCreate{Parent: top.ID, Run: run})
+	if err := engine.CheckChild(line, engine.Kids{Working: 5, All: 19}, engine.Limits{Working: 6}, api.ThreadCreate{Parent: top.ID, Run: run}); err != nil {
+		t.Errorf("a sixth at work under a limit of 6: %v", err)
+	}
+}
+
+// Limits take their defaults where unset, and depth no deeper than
+// MaxDepth.
+func TestLimitsDefault(t *testing.T) {
+	for _, c := range []struct{ in, want engine.Limits }{
+		{engine.Limits{}, engine.Limits{Working: 5, All: 20, Depth: 4}},
+		{engine.Limits{Working: 2, All: -1, Depth: 9}, engine.Limits{Working: 2, All: 20, Depth: api.MaxDepth}},
+		{engine.Limits{Working: 1, All: 3, Depth: 2}, engine.Limits{Working: 1, All: 3, Depth: 2}},
+	} {
+		if got := c.in.Effective(); got != c.want {
+			t.Errorf("%+v: %+v, want %+v", c.in, got, c.want)
+		}
+	}
+}
+
+// A create with a text queues it and starts the thread's turn in the
+// same commit, under the command's ID.
+func TestACreateWithATextStartsItsTurn(t *testing.T) {
+	c := api.Command{ID: api.NewID(), Target: api.NewID(), Body: api.ThreadCreate{Title: "child", Parent: api.NewID(), Run: api.NewID(), Text: "write the tests"}}
+	evs, effects, err := engine.Decide(engine.Thread{}, c, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 3 || len(effects) != 1 {
+		t.Fatalf("%d events, %d effects; want the create, the message and the admission, and its start", len(evs), len(effects))
+	}
+	if s, ok := effects[0].(engine.StartTurn); !ok || s.Run != c.ID || s.Text != "write the tests" {
+		t.Errorf("the effect: %+v", effects[0])
+	}
+	var rej *api.RejectedError
+	if _, _, err := engine.Decide(engine.Thread{}, api.Command{ID: api.NewID(), Target: api.NewID(), Body: api.ThreadCreate{Run: api.NewID()}}, now); !errors.As(err, &rej) {
+		t.Errorf("a run's create of a thread of the user's: %v, want refused", err)
+	}
 }
 
 // A child's run reports to its parent as it completes, fails or blocks on
@@ -171,7 +221,7 @@ func TestASettledParentTakesNoChild(t *testing.T) {
 	parent := newThread(t)
 	parent.must(api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
 	var rej *api.RejectedError
-	if err := engine.CheckChild([]engine.Thread{parent.th}, api.ThreadCreate{Parent: parent.th.ID}); !errors.As(err, &rej) {
+	if err := engine.CheckChild([]engine.Thread{parent.th}, engine.Kids{}, engine.Limits{}, api.ThreadCreate{Parent: parent.th.ID}); !errors.As(err, &rej) {
 		t.Errorf("a child of a settled thread: %v, want a rejection", err)
 	}
 }
