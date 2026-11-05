@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,8 +111,11 @@ func TestRemoveProjectWaitsForALiveRun(t *testing.T) {
 	if err := h.tt.RightClick("t3code"); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.tt.ChooseMenuItem("Remove project…"); err == nil {
-		t.Fatal("Remove project… was offered while a run is live")
+	if m := h.tt.Menu(); !slices.Contains(m, "Remove project…") {
+		t.Fatalf("the chip's menu %q has no Remove project…", m)
+	}
+	if err := h.tt.ChooseMenuItem("Remove project…"); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("Remove project… while a run is live: %v", err)
 	}
 }
 
@@ -201,7 +205,7 @@ func TestRemoveProjectDeletesEachThreadOnce(t *testing.T) {
 	h.tt.Advance(time.Second)
 	h.a.askRemove(h.a.projectOf(h.thread("Ship the sidebar sort")))
 	h.tt.Frame()
-	if !h.tt.HasText("Remove “t3code” and its 3 threads?") {
+	if !h.tt.HasText("Remove “t3code” and 3 threads?") || !h.tt.HasText("1 of them is under its threads, in other workspaces. They're removed from every list and can't be brought back. Their history stays in the engine's log. The folder, /work/t3code, isn't touched.") {
 		t.Fatalf("no alert; texts %q", h.tt.Texts())
 	}
 	h.click("Remove")
@@ -236,5 +240,24 @@ func TestRemoveProjectRechecksForALiveRun(t *testing.T) {
 	h.tt.Frame()
 	if len(th.Pending) != 0 || !h.tt.HasText("Not removed") {
 		t.Fatalf("a live project was removed: %d pending, texts %q", len(th.Pending), h.tt.Texts())
+	}
+}
+
+// A draft left in a server's project starts over in the server's home,
+// not this machine's, once the project is removed.
+func TestRemoveProjectResetsADraftOnAServer(t *testing.T) {
+	h := machines(t)
+	devbox := h.thread("Retry failed invoice webhooks").env
+	h.a.fresh = draft{devbox, "/srv/billing"}
+	h.a.askRemove(h.a.projectOf(h.thread("Retry failed invoice webhooks")))
+	h.tt.Frame()
+	h.click("Remove")
+	h.until("billing gone", func() bool {
+		_, ok := h.a.find(h.thread("Rotate the API keys").id())
+		h.tt.Frame()
+		return ok && h.a.fresh.workspace != "/srv/billing"
+	})
+	if h.a.fresh != (draft{devbox, "~"}) {
+		t.Fatalf("the draft is %+v, want devbox's home", h.a.fresh)
 	}
 }
