@@ -139,6 +139,27 @@ func TestReconcileStopsAProcessThatLeftTheMarkerBehind(t *testing.T) {
 // marker still finds a tool that keeps it, after the engine is gone.
 func TestWithoutScopesReconcileStopsAMarkedTool(t *testing.T) {
 	claude.WithoutScopes(t)
+	unscoped(t)
+}
+
+// Where systemd-run is refused a scope, as by polkit, claude starts
+// without one, as where there is no user systemd manager.
+func TestARefusedScopeLeavesTheRunToItsMarker(t *testing.T) {
+	userScopes(t)
+	bin := t.TempDir()
+	refuse := "#!/bin/sh\necho 'Failed to start transient scope unit: Access denied' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "systemd-run"), []byte(refuse), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	claude.RedetectScopes(t)
+	unscoped(t)
+}
+
+// unscoped starts a run whose tool keeps the marker, checks claude is in
+// no scope, and has Reconcile stop the tool once claude is gone.
+func unscoped(t *testing.T) {
+	t.Helper()
 	ws := t.TempDir()
 	replay(t, "orphan-tool", "")
 	fake := processes(t)
