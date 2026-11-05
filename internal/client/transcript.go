@@ -25,8 +25,8 @@ type Transcript struct {
 	starting api.ID     // the run admitted and not yet started, stopped or ended
 }
 
-// Entry is sealed: *UserEntry, *AssistantEntry, *WorkEntry, *RequestEntry
-// or *ReportEntry.
+// Entry is sealed: *UserEntry, *AssistantEntry, *WorkEntry, *RequestEntry,
+// *ReportEntry or *ErrorEntry.
 type Entry interface{ entry() }
 
 type MessageState uint8
@@ -108,6 +108,14 @@ type ReportEntry struct {
 	At time.Time
 }
 
+// ErrorEntry is why a run failed, as the engine or its agent said: that
+// Claude Code is not installed or not signed in, say.
+type ErrorEntry struct {
+	Run   api.ID
+	Error string
+}
+
+func (*ErrorEntry) entry()     {}
 func (*ReportEntry) entry()    {}
 func (*UserEntry) entry()      {}
 func (*AssistantEntry) entry() {}
@@ -202,6 +210,9 @@ func (t *Transcript) apply(e api.Event) {
 	case api.TurnEnded:
 		t.end(b.Run, Cancelled, e.At)
 		t.Ended = e.At
+		if b.Outcome == api.OutcomeFailed && b.Error != "" {
+			t.add(&ErrorEntry{Run: b.Run, Error: b.Error})
+		}
 	case api.ThreadDeleted:
 		t.Deleted = true
 	case api.ChildReported:

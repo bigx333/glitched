@@ -96,6 +96,7 @@ const (
 	entryRequest
 	entryFailed
 	entryReport
+	entryError // why a run failed
 )
 
 // An entry is a row of the timeline. Its key stays the same while it
@@ -155,6 +156,8 @@ func entriesOf(t thread) []entry {
 				es = append(es, workEntry(key("w", e.Run), e))
 			case *client.RequestEntry:
 				es = append(es, entry{key: "r/" + e.Request.String(), kind: entryRequest, request: e})
+			case *client.ErrorEntry:
+				es = append(es, entry{key: key("e", e.Run), kind: entryError, text: e.Error})
 			case *client.ReportEntry:
 				// One after another, they're one card, keyed by its first and
 				// its order among the cards a run's report starts: a run that
