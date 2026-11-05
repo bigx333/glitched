@@ -2,6 +2,7 @@ package claude
 
 import (
 	"crypto/rand"
+	"errors"
 	"os"
 
 	"golang.org/x/sys/windows"
@@ -38,3 +39,8 @@ func pipe(in bool) (child, ours *os.File, err error) {
 	}
 	return os.NewFile(uintptr(client), name), os.NewFile(uintptr(server), name), nil
 }
+
+// mayBeCut is whether a write that failed with err, reporting no bytes
+// written, may still have sent some. A named pipe's write that ran out of
+// time reports none, however much claude had read.
+func mayBeCut(err error) bool { return errors.Is(err, os.ErrDeadlineExceeded) }

@@ -12,3 +12,7 @@ func pipe(in bool) (child, ours *os.File, err error) {
 	}
 	return w, r, err
 }
+
+// mayBeCut is whether a write that failed with err, reporting no bytes
+// written, may still have sent some: a pipe here reports what it sent.
+func mayBeCut(error) bool { return false }
