@@ -19,15 +19,12 @@ type node struct {
 }
 
 // View draws the plugin's widget tree with native widgets. The first View
-// of a plugin starts its VM in the background and shows a placeholder until
-// the script has rendered. A script error shows in place, over the last
+// of a plugin starts its VM. A script error shows in place, over the last
 // tree the script rendered, with a button that restarts the VM.
 func View(c *ui.Context, p *Plugin) ui.Element {
 	p.mu.Lock()
 	if !p.started {
-		p.started = true
-		p.invalidate = c.Services().Invalidate
-		p.launch()
+		p.start()
 	}
 	tree, err := p.tree, p.err
 	p.mu.Unlock()
@@ -36,11 +33,8 @@ func View(c *ui.Context, p *Plugin) ui.Element {
 		if err != nil {
 			errorView(c, p, err)
 		}
-		switch {
-		case tree != nil:
+		if tree != nil {
 			draw(c, p, *tree, p.name)
-		case err == nil:
-			ui.Text(c, "Starting "+p.name+"…").TextColor(c.Theme().TextMuted)
 		}
 	})
 }

@@ -3,7 +3,6 @@ package mygoscript
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -24,16 +23,11 @@ return {
 	},
 }`
 
-// waitFor frames tt until text shows: the VM starts off the UI thread.
-func waitFor(t *testing.T, tt *ui.Tester, text string) {
+// shows fails unless tt's current frame has text.
+func shows(t *testing.T, tt *ui.Tester, text string) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	for !tt.HasText(text) {
-		if time.Now().After(deadline) {
-			t.Fatalf("%q never showed; texts %q", text, tt.Texts())
-		}
-		time.Sleep(10 * time.Millisecond)
-		tt.Frame()
+	if !tt.HasText(text) {
+		t.Fatalf("%q not shown; texts %q", text, tt.Texts())
 	}
 }
 
@@ -41,7 +35,7 @@ func TestCounter(t *testing.T) {
 	p := New("counter.luau", counter)
 	defer p.Close()
 	tt := ui.NewTester(func(c *ui.Context) { View(c, p) }, 400, 300)
-	waitFor(t, tt, "Count: 0")
+	shows(t, tt, "Count: 0")
 
 	for range 3 {
 		if err := tt.Click("Increment"); err != nil {
@@ -66,7 +60,7 @@ func TestCounter(t *testing.T) {
 	if err := tt.Click("Restart script"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, tt, "Count: 3")
+	shows(t, tt, "Count: 3")
 	if tt.HasText("Script error in counter.luau") {
 		t.Fatalf("error still shown after restart: %q", tt.Texts())
 	}
@@ -91,7 +85,7 @@ func TestScriptErrorsShowInPlace(t *testing.T) {
 			p := New(name, src)
 			defer p.Close()
 			tt := ui.NewTester(func(c *ui.Context) { View(c, p) }, 400, 300)
-			waitFor(t, tt, "Script error in "+name)
+			shows(t, tt, "Script error in "+name)
 		})
 	}
 }
@@ -103,7 +97,7 @@ func TestKeysStayUnique(t *testing.T) {
 	p := New("keys", src)
 	defer p.Close()
 	tt := ui.NewTester(func(c *ui.Context) { View(c, p) }, 400, 300)
-	waitFor(t, tt, "D")
+	shows(t, tt, "D")
 }
 
 func TestLuaString(t *testing.T) {
@@ -112,5 +106,5 @@ func TestLuaString(t *testing.T) {
 	defer p.Close()
 	p.state["s"] = in
 	tt := ui.NewTester(func(c *ui.Context) { View(c, p) }, 400, 300)
-	waitFor(t, tt, in)
+	shows(t, tt, in)
 }

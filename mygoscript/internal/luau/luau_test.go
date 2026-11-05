@@ -23,6 +23,8 @@ func TestCall(t *testing.T) {
 		{"while true do end", "", "step budget"},
 		{"while true do pcall(function() while true do end end) end", "", "step budget"},
 		{"local t = {} for i = 1, 1e9 do t[i] = string.rep('x', 8 * 1048576) .. i end", "", "memory"},
+		{"while true do local s = string.rep('x', 1e5) end", "", "time budget"},
+		{"print('hi')", "", "attempt to call a nil value"},
 		{"return type(io) .. type(os) .. type(require) .. type(debug) .. type(loadstring) .. type(getfenv)", "nilnilnilnilnilnil", ""},
 		{"string.upper = nil", "", "readonly"},
 		{"return 'still alive'", "still alive", ""},

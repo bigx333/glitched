@@ -28,16 +28,10 @@ type Plugin struct {
 
 	mu      sync.Mutex
 	started bool
-	// boot counts VM starts and stops; a start that finds it moved on
-	// throws its VM away.
-	boot  int
-	vm    *luau.VM
-	state map[string]any
-	tree  *node
-	err   error
-	// invalidate redraws the windows showing the plugin, once a VM that
-	// started off the UI thread is ready.
-	invalidate func()
+	vm      *luau.VM
+	state   map[string]any
+	tree    *node
+	err     error
 }
 
 // New returns a plugin that runs source. name labels it in error messages.
@@ -52,7 +46,6 @@ func (p *Plugin) Close() {
 	defer p.mu.Unlock()
 	p.stop()
 	p.started = false
-	p.boot++
 }
 
 // Value is the state value at key, as the script's actions left it.
@@ -62,26 +55,16 @@ func (p *Plugin) Value(key string) any {
 	return p.state[key]
 }
 
-// start boots the VM and mounts the script. It runs off the UI thread:
-// compiling the VM's module the first time takes a moment.
-func (p *Plugin) start(boot int) {
+// start boots a VM and mounts the script, on the UI thread: both take well
+// under a millisecond. The caller holds mu.
+func (p *Plugin) start() {
+	p.started = true
 	vm, err := luau.New(prelude)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.boot != boot {
-		if vm != nil {
-			vm.Close()
-		}
-		return
-	}
 	if err == nil {
 		p.vm = vm
 		err = p.mount()
 	}
 	p.fail(err)
-	if p.invalidate != nil {
-		p.invalidate()
-	}
 }
 
 func (p *Plugin) mount() error {
@@ -142,14 +125,7 @@ func (p *Plugin) reload() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.stop()
-	p.err = nil
-	p.launch()
-}
-
-// launch starts a VM in the background. The caller holds mu.
-func (p *Plugin) launch() {
-	p.boot++
-	go p.start(p.boot)
+	p.start()
 }
 
 // fail records err for the view to show. A script error keeps the VM; any

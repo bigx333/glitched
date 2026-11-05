@@ -8,8 +8,8 @@ with one scripted counter on the Settings › Scripts page.
 sequenceDiagram
     participant V as mygoscript.View (UI thread)
     participant P as Plugin (host state)
-    participant L as Luau VM (wazero)
-    V->>P: first View starts the VM (background)
+    participant L as Luau VM (native, cgo)
+    V->>P: first View starts the VM (about 1.5 ms)
     P->>L: mount(script) → initial state
     P->>L: render(state) → widget tree (JSON)
     V->>V: draw tree with ui.Column/Row/Text/Button
@@ -76,51 +76,90 @@ this package does not use it.
 ## A library on public `ui`, not a MyGo fork
 
 The package imports only `github.com/egoist/mygo/ui`. It follows MyGo's
-lifetime rules: no stored elements or Context, `c.Services()` for the
-background redraw, `OnClick` for actions. MyGo upgrades stay ordinary
+lifetime rules: no stored elements or Context, keyed identity through
+`c.Key`, `OnClick` for actions. A build pass runs the script only once, at
+the first `View`. After that it draws the cached tree, and only actions and
+restarts run the script. MyGo upgrades stay ordinary
 dependency bumps. All library code lives under `mygoscript/`. The app only
 imports it (`scripts.go`).
 
-## Embedding: real Luau on wazero
+## Embedding: official Luau, linked natively
 
-`internal/luau` runs Luau 0.745 (VM and compiler) compiled to WebAssembly.
-wazero, a pure-Go runtime, runs it. The app stays cgo-free, and the same
-binary works on every platform MyGo targets.
+`internal/luau` compiles the official Luau 0.745 compiler and VM into the
+binary with cgo. A thin C++ shim (`shim.cpp`, `shim.h`) is the only code that
+touches a `lua_State`. Go sees two calls: start a VM with the prelude, and
+call a prelude function with a compiled chunk. Each call returns a string.
 
-- `internal/luau/wasm/build.sh` downloads wasi-sdk 34 and the Luau tag. It
-  builds `shim.cpp` and the Luau sources into `internal/luau/luau.wasm`
-  (about 0.9 MB). The repo commits the output, so `go build` needs no C++
-  toolchain.
-- Luau raises errors with C++ exceptions. The build uses `-fwasm-exceptions`
-  with the exnref encoding, and wazero runs it with
-  `experimental.CoreFeaturesExceptionHandling` (new in wazero 1.12).
+- `update.sh` vendors `Common`, `Ast`, `Bytecode`, `Compiler` and `VM` from a
+  Luau release tag into `upstream/` (about 2.7 MB, with Luau's licenses).
+  It writes one one-line `luau_<Dir>_<file>.cpp` wrapper per source file.
+  cgo builds only C++ files in the package directory, and Luau's VM sources
+  do not build as a single unit, because two files define the same static
+  function.
+- The flags are `-std=c++17 -O2 -DNDEBUG`. Luau's `LUAU_ASSERT` is live
+  unless `NDEBUG` is set. In a measured 1e6-iteration loop, asserts cost
+  about 25% (13 ms against 10 ms).
+- Luau raises errors as C++ exceptions. Every Lua call in the shim runs under
+  `lua_pcall`, and Luau never calls back into Go. The two `extern "C"` entry
+  points also catch any exception that escapes, such as an allocation failure
+  outside a pcall. That error closes the VM, so no exception unwinds through
+  Go frames.
+
+### Build requirements
+
+- cgo (`CGO_ENABLED=1`) and a C++17 compiler: GCC or Clang on Linux, Xcode's
+  Clang on macOS. `CGO_ENABLED=0 go build .` now fails ("build constraints
+  exclude all Go files" in `internal/luau`).
+- A cold build compiles Luau in about 20 s. The Go build cache keeps the
+  result, so later builds do not recompile it.
+- Cross-compiling needs a C++ cross toolchain for the target.
+- The repo's `CGO_ENABLED=0 go test ./...` habit no longer covers the app
+  package or `mygoscript`. Run them with cgo, which also enables `-race`.
+
+### Why wasm was dropped
+
+The first version of the spike ran Luau compiled to WASI wasm inside wazero.
+That kept the build cgo-free and gave a hard memory sandbox. These scripts
+drive the UI, though, and wasm slowed them down:
+
+| measured on ferrum                  | wazero | native |
+| ----------------------------------- | ------ | ------ |
+| 1e6-iteration Luau loop             | ~60 ms | ~10 ms |
+| first View (compile module + mount) | ~0.8 s | ~1.5 ms |
+
+The wasm path also depended on wazero's experimental exception handling. It
+is gone: no `luau.wasm`, no wazero dependency and no wasi-sdk build. The VM
+now starts on the UI thread at the first `View`, with no placeholder frame.
 
 ### Sandbox
 
-- WASI module config with no preopened directories, no environment, no
-  arguments and discarded stdout and stderr. No socket APIs are wired, so
-  the script has no filesystem, network or process access.
+Luau's own hooks provide the sandbox. There is no process or wasm boundary.
+
 - Libraries: base, table, string, math, utf8, bit32, buffer. There is no `os`,
-  `io`, `debug`, `require` or `coroutine`. `getfenv`, `setfenv`,
-  `loadstring`, `newproxy`, `gcinfo` and `collectgarbage` are removed.
-  `luaL_sandbox` freezes the globals, and each call runs in a fresh
-  `luaL_sandboxthread`.
-- Limits: 2,000,000 interrupt safepoints per call, a 32 MiB Luau heap,
-  64 MiB of wasm memory and a 2 s wall-clock timeout per call. A spent
-  step budget stays spent, so `pcall` cannot swallow it. A trap or timeout
-  closes the VM. The view shows the error and a Restart button.
+  `io`, `debug`, `require` or `coroutine`. `print`, `getfenv`, `setfenv`,
+  `loadstring`, `newproxy`, `gcinfo` and `collectgarbage` are removed. No
+  remaining function reaches files, the network, the environment or
+  processes. No grants exist in this spike.
+- `luaL_sandbox` freezes the globals and the builtin metatables. Each call
+  runs in a fresh `luaL_sandboxthread`, so writes to globals do not persist.
+- Limits per VM: a 32 MiB heap through a counting allocator. Limits per call:
+  2,000,000 interrupt safepoints and 250 ms of wall-clock time. Both are
+  checked in `lua_callbacks()->interrupt`. A spent budget stays spent, so
+  `pcall` cannot swallow it. These errors are ordinary script errors, and
+  the VM stays usable.
 
-### Caveats found in the spike
+### Caveats
 
-- Compiling the module takes about 0.8 s on first use, so the first `View`
-  starts the VM off the UI thread and shows "Starting…". wazero's
-  compilation cache could persist this across runs.
-- Calls after startup run on the UI thread. They are sub-millisecond for
-  the counter. The 2 s timeout is the worst case before the VM closes.
-- `WithCloseOnContextDone` makes wasm loops check the context, at a large
-  cost on long loops (measured: a 1e6-iteration Luau loop takes about 60 ms).
-  That is fine for view code. Revisit it before heavy scripts.
-- Wasm exception handling is experimental in wazero.
+- Script calls run on the UI thread. A click (act plus render) measured about
+  120 µs, and most of that is the forced full GC after each call.
+- The time budget is checked only at safepoints. A single long C library call
+  (a large `string.rep`, a pathological `string.find` pattern) runs to the
+  end. The heap cap bounds how much data such a call can touch.
+- The sandbox is in-process. A bug in the Luau VM is a bug in the app. wasm
+  isolated that; native does not.
+- Chunks are compiled for every call. They are tiny (a state literal), and
+  the script compiles once per VM, so a bytecode cache does not help yet.
+  Add one if large scripts or hot reload make compile time visible.
 
 ## Future
 
@@ -130,7 +169,7 @@ Not built in the spike:
   text input, checkbox, slider and scroll/list. Inputs bind to host state
   keys so edits stay host-owned.
 - File watch plus `Invalidate`: reload a script from disk on change, keep
-  host state, and redraw with the captured `Services`.
+  host state, and redraw with `c.Services().Invalidate`.
 - Richer state (nested tables, lists) with a defined encoding.
 - Extract `glitched/mygoscript` into its own repository once the API settles.
   The package has no imports from the app, so the move is a path change.
