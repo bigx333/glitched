@@ -269,3 +269,27 @@ func TestTheBridgeHangsUpOnASilentCaller(t *testing.T) {
 		t.Errorf("a silent caller's read: %v, want the app to hang up", err)
 	}
 }
+
+// A call the agent gave up on says so, and a socket the server may not
+// use says why, rather than that the app isn't open.
+func TestTheBridgeSaysWhyItCantReachTheApp(t *testing.T) {
+	dir := t.TempDir()
+	ln, err := Listen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go Accept(ln, func(context.Context, string, json.RawMessage) (string, error) { return "ok", nil })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Dial(dir)(ctx, "browser_tabs", json.RawMessage(`{}`)); !errors.Is(err, context.Canceled) {
+		t.Errorf("a call given up on: %v", err)
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root reaches a socket whatever its mode")
+	}
+	os.Chmod(Socket(dir), 0)
+	if _, err := Dial(dir)(context.Background(), "browser_tabs", json.RawMessage(`{}`)); err == nil || errors.Is(err, ErrNoApp) || !strings.Contains(err.Error(), "can't be reached") {
+		t.Errorf("a socket the server may not use: %v", err)
+	}
+}
