@@ -2,6 +2,7 @@
 {"recv":{"type":"control_response","response":{"subtype":"success","request_id":"glitched-init","response":{}}}}
 {"graceful":"500ms"}
 {"sent":{"type":"user","uuid":"uuid-of-the-first-message"}}
+{"recv":{"type":"system","subtype":"init","capabilities":["interrupt_receipt_v1","interrupt_cancel_queued_v1"]}}
 {"recv":{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"bash","name":"Bash","input":{"command":"./busy.sh"}}]}}}
 {"sent":{"type":"user","uuid":"uuid-of-the-steer"}}
 {"sent":{"request":{"subtype":"interrupt"},"type":"control_request"}}

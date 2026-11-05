@@ -186,7 +186,13 @@ func turnEnded(e provider.Event) bool {
 // session the next turn resumes. Nothing of that turn may run: the user
 // stopped it.
 func TestNothingRunsAfterAStoppedTurnEnds(t *testing.T) {
-	replay(t, "steer-stop", "")
+	t.Run("interrupt_cancel_queued_v1", func(t *testing.T) { nothingRunsAfterAStop(t, "steer-stop") })
+	// A Claude Code without the capability ignores cancel_queued.
+	t.Run("without it", func(t *testing.T) { nothingRunsAfterAStop(t, "steer-stop-uncancellable") })
+}
+
+func nothingRunsAfterAStop(t *testing.T, tape string) {
+	replay(t, tape, "")
 	ws := t.TempDir()
 	ag := openIn(t, ws)
 	if err := ag.Do(ctx, provider.Start{Text: "Run ./busy.sh with the Bash tool."}); err != nil {
