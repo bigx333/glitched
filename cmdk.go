@@ -40,18 +40,16 @@ func (a *app) commands() []command {
 		}
 		cmds = append(cmds, action("New thread in "+name, "", icSquarePen, func() { a.startThread(p) }))
 	}
-	add := action("Add project…", "", icFolderOpen, a.addProject)
-	add.also = "workspace folder"
-	cmds = append(cmds, add)
+	if !a.picking {
+		add := action("Add project…", "", icFolderOpen, a.addProject)
+		add.also = "workspace folder"
+		cmds = append(cmds, add)
+	}
 	for _, p := range a.projects {
 		if projectLive(p) {
 			continue // stopped first, as the chip's menu has it
 		}
-		name := p.name()
-		if several {
-			name += " on " + p.env.Name
-		}
-		rm := action("Remove project "+name+"…", "", icFolder, func() { a.askRemove(p) })
+		rm := action("Remove project "+a.projectLabel(p)+"…", "", icFolder, func() { a.askRemove(p) })
 		rm.also = "workspace delete"
 		cmds = append(cmds, rm)
 	}
