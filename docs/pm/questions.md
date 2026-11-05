@@ -2,7 +2,7 @@
 
 Newest first. Answer under each question, or in the PM thread.
 
-## Q9 (2026-11-05, open). #51 has two new Highs after round 4
+## Q9 (2026-11-05, answered: land, follow-up #59 gates slice 5). #51 has two new Highs after round 4
 
 CI is green at 2ad59ed. Round 4 fixed what it claimed. The PM reproduced both new Highs on a clean checkout (summary: https://github.com/bigx333/glitched/pull/51#issuecomment-6649814716).
 - **Sol:** the composer's position lags one frame behind the card's. A draft that grows while the card scrolls marks a covered line read, and the request gets approved.

@@ -2,6 +2,14 @@
 
 Newest first. Each entry has the date, who decided, and the decision.
 
+## 2026-11-05. #51 landed with two Highs tracked in #59 (Nelson, Q9)
+
+Round 4 (2ad59ed) fixed what it claimed, and CI was green. Opus and Sol each found a new High, and the PM reproduced both:
+- Sol: the composer's position lags one frame behind the card's.
+- Opus: the open agents panel hides card lines that still count as read.
+
+Both are covers over the card that the read gate does not know about. Nelson chose to land #51, because it is strictly safer than main and only the fake provider reaches these cards before slice 5. #51 was rebase-merged at 24b7090. #59 tracks both Highs and the Lows. **#59 gates adapter slice 5.** Its fix reads the card geometry and every cover from the same frame. #47 is closed.
+
 ## 2026-11-05. #51 gets a fourth fix round (Nelson, Q8)
 
 Opus's round 3 review found one High, and the PM reproduced it at 7dc7eeb. A composer taller than `composerRoom` hides card lines, but those lines still count as read. Nelson chose one more fix round. In that round, the read gate measures from the composer's real top, Opus's repro becomes a regression test, and Sol's two mediums are folded in. Opus and Sol then re-check only the round 4 diff. #51 stays the security gate, so "land with an issue" does not apply to it.
