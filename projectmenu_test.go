@@ -236,6 +236,9 @@ func TestRemoveProjectRechecksForALiveRun(t *testing.T) {
 	h.tt.Advance(time.Second)
 	h.a.askRemove(h.a.projectOf(th))
 	h.tt.Frame()
+	if !h.tt.HasText("An agent is working in t3code: stop it first, and nothing is removed until then.") {
+		t.Fatalf("the alert doesn't say the agent is stopped first: %q", h.tt.Texts())
+	}
 	h.click("Remove")
 	h.tt.Frame()
 	if len(th.Pending) != 0 || !h.tt.HasText("Not removed") {
@@ -251,6 +254,9 @@ func TestRemoveProjectResetsADraftOnAServer(t *testing.T) {
 	h.a.fresh = draft{devbox, "/srv/billing"}
 	h.a.askRemove(h.a.projectOf(h.thread("Retry failed invoice webhooks")))
 	h.tt.Frame()
+	if !h.tt.HasText("Remove “billing on devbox” and its thread?") {
+		t.Fatalf("the alert doesn't name the machine: %q", h.tt.Texts())
+	}
 	h.click("Remove")
 	h.until("billing gone", func() bool {
 		_, ok := h.a.find(h.thread("Rotate the API keys").id())
