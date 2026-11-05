@@ -210,6 +210,9 @@ func (ab *agentBrowser) tabs(ctx context.Context, args toolArgs) (string, error)
 		switch args.Action {
 		case "list":
 		case "new":
+			if args.URL == "" {
+				return errors.New("browser_tabs new needs a url.")
+			}
 			u, err := agentURL(args.URL)
 			if err != nil {
 				return err
