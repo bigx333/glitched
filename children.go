@@ -168,30 +168,21 @@ func (a *app) stopAll(ns []node) int {
 // thread's run and cancels what waits its turn as it settles it, and
 // starts nothing on a settled thread, so nothing in the tree works on.
 func (a *app) settleTree(t thread) {
-	for _, n := range append(a.below(t), node{t, 0}) {
-		a.backend.SetDisposition(n.t.env, n.t.id(), api.Disposition{State: api.Settled})
-	}
+	a.backend.SettleTree(t.env, t.id())
 }
 
-// deleteTree deletes t and every thread under it, each after the threads
-// under it, so that none is left standing on its own on the way. The
-// engine ends a deleted thread's run with it, so none waits on a stop,
-// whatever this GUI last saw of the thread.
+// deleteTree deletes t and every thread under it. The engine ends a
+// deleted thread's run with it, so none waits on a stop, whatever this
+// GUI last saw of the thread. The chat shows a deleted thread until the
+// delete lands, so a refused one leaves it shown with why, and then shows
+// a new thread in its workspace.
 func (a *app) deleteTree(t thread) {
-	seen := map[api.ID]bool{}
-	var del func(x thread, depth int)
-	del = func(x thread, depth int) {
-		seen[x.id()] = true
-		if depth < maxDepth {
-			for _, k := range a.kids[x.id()] {
-				if !seen[k.id()] {
-					del(k, depth+1)
-				}
-			}
+	for _, n := range append(a.below(t), node{t, 0}) {
+		if a.selected == n.t.id() {
+			a.fresh = draft{n.t.env, n.t.View.Workspace}
 		}
-		a.delete(x)
 	}
-	del(t, 0)
+	a.backend.DeleteTree(t.env, t.id())
 }
 
 func isAre(n int) string {

@@ -1028,3 +1028,61 @@ func TestAFollowUpBringsBackASettledThread(t *testing.T) {
 		})
 	}
 }
+
+// Settle and Delete take a child the engine started just before, which
+// the shell hasn't shown this GUI yet: nothing in the tree is left at
+// work, on the engine or in the provider.
+func TestATreeActionTakesAChildTheGUIHasntSeen(t *testing.T) {
+	for _, action := range []string{"settle", "delete"} {
+		t.Run(action, func(t *testing.T) {
+			dir := tempDir(t)
+			ad := fake.New(fake.Turn(true))
+			d := engine(t, daemon.Config{Dir: dir}, ad)
+			parentID := seed(t, d, "/work/t3code", "Parent")
+			h := start(t, dir)
+			parent := h.thread("Parent")
+			h.tt.Frame()
+			ep := d.Endpoint()
+			ad.Spawns(ep, "split", fake.Child{Title: "Child", Task: "work"})
+			run := api.NewID()
+			if _, err := ep.Submit(context.Background(), api.Command{ID: run, Target: parentID, Body: api.MessageDispatch{Text: "split", Mode: api.StartNow}}); err != nil {
+				t.Fatal(err)
+			}
+			childID := fake.ChildOf(run, 0)
+			for deadline := time.Now().Add(10 * time.Second); ; {
+				kid, exists := viewOn(t, d, childID)
+				p, _ := viewOn(t, d, parentID)
+				if exists && kid.Run == api.RunWaiting && p.Run == api.RunIdle && p.LastTurn != nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("the spawn never finished")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if _, known := h.a.find(childID); known {
+				t.Fatal("the GUI saw the child; this needs its shell update still on the way")
+			}
+			if action == "settle" {
+				h.a.settleTree(parent)
+			} else {
+				h.a.settings.confirmDelete = false
+				h.a.askDelete(parent)
+			}
+			done := func() bool {
+				kid, exists := viewOn(t, d, childID)
+				return !exists || kid.Disposition.State == api.Settled && !kid.Live()
+			}
+			h.until("the child "+action+"d", done)
+			if snap, err := ep.Read(context.Background(), api.Query{Thread: childID}); err == nil {
+				rec, err := ad.Reconcile(context.Background(), provider.RuntimeIdentity{Thread: childID, Run: liveRun(t, snap.Events)})
+				if _, running := rec.(provider.Restored); running || err != nil {
+					t.Fatalf("after %s the child's agent: %T, %v; want gone", action, rec, err)
+				}
+			}
+			if _, exists := viewOn(t, d, childID); exists == (action == "delete") {
+				t.Errorf("after %s the child exists: %v", action, exists)
+			}
+		})
+	}
+}

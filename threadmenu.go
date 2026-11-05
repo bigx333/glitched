@@ -100,16 +100,6 @@ func (a *app) askDelete(t thread) {
 	a.deleteTree(t)
 }
 
-// delete deletes the thread. The chat shows it until the delete lands, so
-// a refused one leaves it shown with why, and then shows a new thread in
-// its workspace.
-func (a *app) delete(t thread) {
-	a.backend.Delete(t.env, t.id())
-	if a.selected == t.id() {
-		a.fresh = draft{t.env, t.View.Workspace}
-	}
-}
-
 // deleteAlert asks before a thread is deleted, when the settings say to.
 // Deleting leaves a tombstone, not erasure, so it promises no more.
 func (a *app) deleteAlert(c *ui.Context) {

@@ -213,6 +213,8 @@ type Env struct {
 	log     api.ID             // the log of the last shell snapshot; zero before one
 	waiting []chan<- *session  // commands waiting for the next session
 	server  Server             // a remote's entry in gui.json
+
+	cascades map[api.ID]api.Intent // a tree's settle or delete, by thread, until its view shows it landed
 }
 
 // session is one shell stream, and where commands go while it lasts.
@@ -419,6 +421,7 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 			m.tell(e, th, before)
 		}
 	}
+	m.spread(e)
 }
 
 // reported tells of the child that made r if r says it waits on the user
