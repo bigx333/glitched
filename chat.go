@@ -379,11 +379,13 @@ func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
 		a.requestCard(c, t, e)
 	case entryReport:
 		a.reportCard(c, t, key, e)
-	case entryFailed:
+	case entryFailed, entryError:
 		ui.Row(c).Key(key).Gap(8).AlignItems(ui.Center).Padding(6, 6, 6, 14).Radius(12).
 			Border(1, palette.red.Alpha(0.35)).Transition(riseIn).Children(func() {
 			ui.Text(c, e.text).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
-			a.failedActions(c, t, e.failed)
+			if e.kind == entryFailed {
+				a.failedActions(c, t, e.failed)
+			}
 		})
 	}
 }
