@@ -807,6 +807,16 @@ func (s *suite) actions(t *testing.T) {
 		t.Fatal(err)
 	}
 	clicked("the toggle", `return document.getElementById("toggle").checked`)
+	// A field hidden for a styled one is clicked through its label, even
+	// apart from it; one clipped but for its edge, at its edge.
+	if err := webtarget.Click(ctx, p, snap, ref("Hidden")); err != nil {
+		t.Fatal(err)
+	}
+	clicked("the hidden checkbox", `return document.getElementById("hidden").checked`)
+	if err := webtarget.Click(ctx, p, snap, ref("Clipped")); err != nil {
+		t.Fatal(err)
+	}
+	clicked("the clipped button", `return window.clipped === 1`)
 	for name, why := range map[string]string{"Inert": "inert", "Unpointed": "takes no clicks", "Loading": "takes no clicks"} {
 		if err := webtarget.Click(ctx, p, snap, ref(name)); err == nil || !strings.Contains(err.Error(), why) {
 			t.Errorf("clicking %s: %v", name, err)
@@ -1116,6 +1126,8 @@ const actFixture = `<!doctype html><meta charset="utf-8"><title>Act</title>
 <a href="#off" style="pointer-events:none" onclick="window.unpointed = 1">Unpointed</a>
 <a href="#through" style="pointer-events:none" onclick="window.through = 1; return false"><span style="pointer-events:auto">Through</span></a>
 <span style="position:relative;display:inline-block"><input type="checkbox" id="toggle" aria-label="Toggle" style="position:absolute;clip:rect(0,0,0,0);pointer-events:none"><label for="toggle" style="display:inline-block;padding:4px">Toggle</label></span>
+<div><input type="checkbox" id="hidden" aria-label="Hidden" style="position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0,0,0,0)"><br><label for="hidden" style="margin:8px">Hidden</label></div>
+<div style="width:60px;height:30px;overflow:clip"><button onclick="window.clipped = 1" style="margin-left:40px;width:200px;height:30px">Clipped</button></div>
 <style>.loading::after { content: ""; position: absolute; inset: 0 }</style>
 <div class="loading" style="position:relative;display:inline-block"><button onclick="window.loading = 1">Loading</button></div>
 <input type="color" aria-label="Hue">
