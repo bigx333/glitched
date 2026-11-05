@@ -114,7 +114,7 @@ var limitRows = []struct {
 	set              func(*eng.Limits, int)
 }{
 	{"limit-working", "At work at once", "Children of one thread that run together.", 100, func(l *eng.Limits, v int) { l.Working = v }},
-	{"limit-all", "Children in all", "Each thread, deleted ones too.", 1000, func(l *eng.Limits, v int) { l.All = v }},
+	{"limit-all", "Children in all", "Each thread, not counting deleted ones.", 1000, func(l *eng.Limits, v int) { l.All = v }},
 	{"limit-depth", "Depth", fmt.Sprintf("1 to %d below a thread of yours.", api.MaxDepth), api.MaxDepth, func(l *eng.Limits, v int) { l.Depth = v }},
 }
 

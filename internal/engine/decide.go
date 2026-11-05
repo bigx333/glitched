@@ -133,7 +133,7 @@ func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 }
 
 // Limits cap the children agents start: Working at work at once under one
-// thread, All under it in all, deleted ones too, and Depth below a thread
+// thread, All under it that aren't deleted, and Depth below a thread
 // of the user's. A field of zero or less takes DefaultLimits', and Depth is
 // at most api.MaxDepth.
 type Limits struct {
@@ -159,8 +159,9 @@ func (l Limits) Effective() Limits {
 	}
 }
 
-// Kids counts a thread's children: those with a live run, and all of them,
-// deleted ones too.
+// Kids counts a thread's children that aren't deleted: those whose agent
+// works, with a live run that isn't uncertain, and all of them. An
+// uncertain run has no agent at work; only the user ends it.
 type Kids struct{ Working, All int }
 
 // CheckChild checks a child's create against its parent's line, the
@@ -188,10 +189,10 @@ func CheckChild(line []Thread, kids Kids, lim Limits, c api.ThreadCreate) error 
 		return rejected("a child thread's access can't be wider than its parent's")
 	}
 	if kids.Working >= lim.Working {
-		return rejected(fmt.Sprintf("%d child threads of this thread are at work, the most at once; wait for one to finish", lim.Working))
+		return rejected(fmt.Sprintf("%d child threads of this thread are at work, the most at once; start another once one of them stops", lim.Working))
 	}
 	if kids.All >= lim.All {
-		return rejected(fmt.Sprintf("this thread has started %d child threads, the most it may", lim.All))
+		return rejected(fmt.Sprintf("this thread has %d child threads, the most it may; start another once one is deleted", lim.All))
 	}
 	return nil
 }
