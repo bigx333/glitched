@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/plain"
+	"glitched/internal/runtime"
 )
 
 // Child threads: an agent's thread can start others on its engine (the
@@ -371,7 +371,7 @@ func (a *app) reportCard(c *ui.Context, t thread, key string, e entry) {
 // shows it: printable ASCII, and whether it escaped any. The ellipsis of
 // a line the engine cut is the app's, not the agent's.
 func askedLine(s string) (string, bool) {
-	s, cut := strings.CutSuffix(s, "…")
+	s, cut := runtime.Cut(s)
 	s, escaped := plain.Text(s, false)
 	if cut {
 		s += "…"
