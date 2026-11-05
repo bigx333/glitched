@@ -81,3 +81,27 @@ func TestTheCardShowsNoTwoToolInputsAlike(t *testing.T) {
 		seen[shown] = in
 	}
 }
+
+// A lone surrogate in a tool's input, which Go's decoder reads as U+FFFD,
+// shows apart from U+FFFD and from text that spells its escape out: the
+// tool reads the three differently. A pair shows as the character it
+// spells.
+func TestTheCardShowsALoneSurrogateApart(t *testing.T) {
+	for _, p := range [][2]string{
+		{`{"sql":"\udc00"}`, `{"sql":"�"}`},
+		{`{"sql":"\udc00"}`, `{"sql":"\\udc00"}`},
+		{`{"sql":"\ud800x"}`, `{"sql":"�x"}`},
+		{`{"sql":"\ud800\ud800"}`, `{"sql":"��"}`},
+		{`{"\udc00":1}`, `{"�":1}`},
+		{`{"\udc00":1}`, `{"\\udc00":1}`},
+		{`{"sql":"a\udc00\nb"}`, `{"sql":"a�\nb"}`},
+		{`{"sql":"a\udc00\nb"}`, `{"sql":"a\\udc00\nb"}`},
+	} {
+		if a, b := argsCard(t, p[0]), argsCard(t, p[1]); a == b {
+			t.Errorf("%s and %s both show as %q", p[0], p[1], a)
+		}
+	}
+	if pair, char := argsCard(t, `{"sql":"😀"}`), argsCard(t, `{"sql":"😀"}`); pair != char {
+		t.Errorf("a surrogate pair shows as %q, want %q as its character does", pair, char)
+	}
+}
