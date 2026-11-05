@@ -2,6 +2,15 @@
 
 Newest first. Each entry has the date, who decided, and the decision.
 
+## 2026-11-05. Review severity is judged by realistic user impact (Nelson)
+
+Nelson called the #64 tmux High "nitpicking": nobody uses tmux for this, and it is part of how Claude Code works. From now on:
+- Reviewers rate severity by what a normal user hits in normal use.
+- Exotic setups, deliberate escapes and behavior that comes from how Claude Code works are rated Low.
+- The PM downgrades such findings itself and does not ask Nelson.
+
+`/tmp/glitched-pm/reviewer-brief.md` carries this rule. The same day, #65 was merged with no High (it closed #59, #61 and #57), and #66 (a non-regression Medium) was filed without gating slice 5.
+
 ## 2026-11-05. #64: work sent to the user's own tmux is a known limit (Nelson, Q10)
 
 Sol's round 1 High on #64 was that a tool can send work to a tmux server the user already runs, and that work outlives Close. No cgroup can contain it, because the server is the user's own process. Nelson accepted it as a documented limit, so it does not block slice 5. Fix round 1 on #64 does three things:
