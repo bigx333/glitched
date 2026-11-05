@@ -159,15 +159,16 @@ func (a *app) removeAlert(c *ui.Context) {
 		return
 	}
 	_, all := a.projectTrees(p)
-	head := "Remove “" + p.name() + "” and its thread?"
+	name := a.projectLabel(p)
+	head := "Remove “" + name + "” and its thread?"
 	body := "It's removed from every list and can't be brought back. Its history stays in the engine's log."
 	if len(all) > 1 {
-		head = fmt.Sprintf("Remove “%s” and its %d threads?", p.name(), len(all))
+		head = fmt.Sprintf("Remove “%s” and its %d threads?", name, len(all))
 		body = "They're removed from every list and can't be brought back. Their history stays in the engine's log."
 		// A thread under one of the project's goes with it, though its
 		// workspace, and so its project, is another.
 		if n := len(all) - len(p.threads); n > 0 {
-			head = fmt.Sprintf("Remove “%s” and %d threads?", p.name(), len(all))
+			head = fmt.Sprintf("Remove “%s” and %d threads?", name, len(all))
 			body = fmt.Sprintf("%d of them %s under its threads, in other workspaces. ", n, isAre(n)) + body
 		}
 		if n := working(all); n > 0 {
@@ -175,12 +176,17 @@ func (a *app) removeAlert(c *ui.Context) {
 		}
 	}
 	body += " The folder, " + p.key.workspace + ", isn't touched."
+	// A thread at the top that started a run since the alert opened is
+	// stopped first, as the menus have it: the alert says so, not that it
+	// will be stopped.
+	live := a.projectLive(p)
+	if live {
+		body = "An agent is working in " + name + ": stop it first, and nothing is removed until then."
+	}
 	switch a.alert(c, &a.removeOpen, head, body, "Cancel", "Remove") {
 	case 1:
-		// A thread at the top that started a run since is stopped first,
-		// as the menus have it.
-		if a.projectLive(p) {
-			c.AddToast(ui.Toast{Title: "Not removed", Description: "Stop the agent working in " + p.name() + " first.", Type: "info"})
+		if live {
+			c.AddToast(ui.Toast{Title: "Not removed", Description: "Stop the agent working in " + name + " first.", Type: "info"})
 		} else {
 			a.removeProject(p)
 		}
