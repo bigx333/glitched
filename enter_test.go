@@ -139,3 +139,18 @@ func TestEnterSendingNothingKeepsRedo(t *testing.T) {
 		t.Errorf("redone after an Enter that sent nothing: draft %q; want %q", h.a.draft, "   ")
 	}
 }
+
+// A thread started from the hero with Enter slides into the sidebar, as
+// one sent with Send does, however long the draft sat before the Enter.
+func TestEnterFromTheHeroSlidesIn(t *testing.T) {
+	h := start(t, inboxDir(t))
+	h.click("New thread")
+	h.tt.Advance(time.Second)
+	h.tt.Type("Build the hero")
+	h.tt.Advance(time.Minute) // a long think, the caret long done blinking
+	h.tt.Key(0, ui.KeyEnter)
+	if hero(h.a.current()) || !h.a.inSidebar("Build the hero") || !h.a.arriving(h.a.current()) {
+		t.Fatalf("sent with Enter: hero %v, in the sidebar %v, arriving %v",
+			hero(h.a.current()), h.a.inSidebar("Build the hero"), h.a.arriving(h.a.current()))
+	}
+}
