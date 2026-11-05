@@ -71,15 +71,24 @@ type Named struct {
 // as an agent's action checks before it acts: a page that changed an
 // element since, or tampered with the refs, fails.
 func (s Snapshot) Verify(ref string, e Element) error {
+	n, err := s.named(ref)
+	if err != nil {
+		return err
+	}
+	if n.Role != e.Role || n.Name != e.Name {
+		return fmt.Errorf("webtarget: %s was %s %q, now %s %q; take a new snapshot", ref, n.Role, n.Name, e.Role, e.Name)
+	}
+	return nil
+}
+
+// named is what the snapshot named ref.
+func (s Snapshot) named(ref string) (Named, error) {
 	for _, n := range s.Elements {
 		if n.Ref == ref {
-			if n.Role != e.Role || n.Name != e.Name {
-				return fmt.Errorf("webtarget: %s was %s %q, now %s %q; take a new snapshot", ref, n.Role, n.Name, e.Role, e.Name)
-			}
-			return nil
+			return n, nil
 		}
 	}
-	return fmt.Errorf("webtarget: %s is not a ref of snapshot s%d", ref, s.Epoch)
+	return Named{}, fmt.Errorf("webtarget: %s is not a ref of snapshot s%d", ref, s.Epoch)
 }
 
 // Element is what a ref finds: its role, its name, and where it shows in
@@ -200,6 +209,44 @@ func Describe(ctx context.Context, p Page, ref string) (Element, error) {
 		return Element{}, fmt.Errorf("webtarget: the page's answer for %s is not the script's: it %v", ref, err)
 	}
 	return e, nil
+}
+
+// MaxTyped is the most an agent may type in one action, in characters.
+const MaxTyped = 10000
+
+// Click clicks ref's element, a ref of s, the page's latest snapshot.
+func Click(ctx context.Context, p Page, s Snapshot, ref string) error {
+	return act(ctx, p, s, ref, map[string]any{"action": "click"})
+}
+
+// Type replaces the text of ref's element, a text box or an editor named
+// by s, the page's latest snapshot, with text, and with submit presses
+// Enter, which submits its form unless the page takes the key.
+func Type(ctx context.Context, p Page, s Snapshot, ref, text string, submit bool) error {
+	if n := utf8.RuneCountInString(text); n > MaxTyped {
+		return fmt.Errorf("webtarget: %d characters is more than %d to type at once", n, MaxTyped)
+	}
+	return act(ctx, p, s, ref, map[string]any{"action": "type", "text": text, "submit": submit})
+}
+
+// act does what args ask of ref's element, in the page's script, which
+// first checks it is still what s named it, shows and is enabled.
+func act(ctx context.Context, p Page, s Snapshot, ref string, args map[string]any) error {
+	n, err := s.named(ref)
+	if err != nil {
+		return err
+	}
+	args["op"], args["ref"], args["role"], args["name"] = "act", ref, n.Role, n.Name
+	var out struct {
+		Done bool `json:"done"`
+	}
+	if err := run(ctx, p, args, &out); err != nil {
+		return err
+	}
+	if !out.Done {
+		return fmt.Errorf("webtarget: the page's answer for %s is not the script's", ref)
+	}
+	return nil
 }
 
 var refPattern = regexp.MustCompile(`^s(\d+)e(\d+)$`)
