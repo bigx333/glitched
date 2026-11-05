@@ -53,7 +53,12 @@ func Dial(dir string) Call {
 	return func(ctx context.Context, tool string, args json.RawMessage) (string, error) {
 		var d net.Dialer
 		conn, err := d.DialContext(ctx, "unix", Socket(dir))
-		if err != nil {
+		switch {
+		case ctx.Err() != nil:
+			return "", ctx.Err()
+		case errors.Is(err, os.ErrPermission):
+			return "", fmt.Errorf("The Glitched app's browser can't be reached: %w", err)
+		case err != nil:
 			return "", ErrNoApp
 		}
 		defer conn.Close()
