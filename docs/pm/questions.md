@@ -2,6 +2,14 @@
 
 Newest first. Answer under each question, or in the PM thread.
 
+## Q8 (2026-11-05, open). #51 (#47 security gate) has one High left after its third fix round
+
+Opus found the High in round 3, and the PM reproduced it at 7dc7eeb: when a 10-line draft makes the composer taller than the fixed `composerRoom`, card lines under the composer count as read, so ⌘⏎ or Allow once can approve a line the user never saw. Sol found no High. The round 3 summary is at https://github.com/bigx333/glitched/pull/51#issuecomment-6648612505. Poteto's default allows three fix rounds, and the "land with an issue" rule from #43 and #45 was not extended to #51 because #51 is the security gate. So the PM asks.
+
+1. **One more fix round (PM recommends).** Measure `inFull` and the texts box from the composer's real top, add Opus's repro as a test, and fold in Sol's two mediums. Opus and Sol then re-check only that diff.
+2. **Land now and file an issue.** Claude is not on in the GUI until slice 5, and that issue then joins the slice 5 gates.
+3. **Cap the composer at `composerRoom`.** This is a smaller fix, but it limits the draft's height.
+
 ## Q7 (2026-11-04, open, FYI). The capy-ai review bot is out of credits
 
 capy-ai commented on #49 that it could not review because Nelson's workspace is out of credits (https://github.com/bigx333/glitched/pull/49#issuecomment-6643920589). Capy is not part of the merge gate, which is the Opus and Sol interrogate review plus GARM CI, so nothing is blocked. Adding credits or turning on auto-reload costs money, so it is Nelson's call. The PM has done nothing.
