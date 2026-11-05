@@ -237,35 +237,42 @@ func TestKeysInTheTerminalAreTheShells(t *testing.T) {
 	}
 }
 
+// appOverlay is one of the app's overlays: how to open it over a thread
+// with kids for children, and whether it shows.
+type appOverlay struct {
+	name  string
+	kids  []string
+	open  func(h *harness, th thread)
+	shown func(a *app) bool
+}
+
+// appOverlays are the app's overlays a card's keys must wait under.
+var appOverlays = []appOverlay{
+	{"the command palette", nil,
+		func(h *harness, _ thread) { h.a.openCommandPalette(); h.a.cmdkQuery = "no such command" },
+		func(a *app) bool { return a.cmdkOpen }},
+	{"the delete alert", nil,
+		func(h *harness, th thread) { h.a.deleting, h.a.deleteOpen = th, true },
+		func(a *app) bool { return a.deleteOpen }},
+	{"the snooze popover", nil,
+		func(h *harness, th thread) { h.hover(title(th)); h.click("Snooze") },
+		func(a *app) bool { return a.snoozeFor != api.ID{} }},
+	{"the access popover", nil,
+		func(h *harness, _ thread) { h.a.composerOpened, h.a.accessOpen = true, true },
+		func(a *app) bool { return a.accessOpen }},
+	{"the model picker", nil,
+		func(h *harness, _ thread) { h.a.openModelPicker() },
+		func(a *app) bool { return a.pickerOpen }},
+	{"the agents panel", []string{"Write the tests"},
+		func(h *harness, _ thread) { h.click("Agents") },
+		func(a *app) bool { return a.agentsOpen[a.current().id()] }},
+}
+
 // An overlay over the app has the keyboard, as a dialog has the window's
 // shortcuts: under each of the app's, the card's keys wait, and Escape
 // closes the overlay, not the questions. Closed, the keys are the card's.
 func TestQuestionKeysWaitUnderEveryOverlay(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		kids  []string
-		open  func(h *harness, th thread)
-		shown func(a *app) bool
-	}{
-		{"the command palette", nil,
-			func(h *harness, _ thread) { h.a.openCommandPalette(); h.a.cmdkQuery = "no such command" },
-			func(a *app) bool { return a.cmdkOpen }},
-		{"the delete alert", nil,
-			func(h *harness, th thread) { h.a.deleting, h.a.deleteOpen = th, true },
-			func(a *app) bool { return a.deleteOpen }},
-		{"the snooze popover", nil,
-			func(h *harness, th thread) { h.hover(title(th)); h.click("Snooze") },
-			func(a *app) bool { return a.snoozeFor != api.ID{} }},
-		{"the access popover", nil,
-			func(h *harness, _ thread) { h.a.composerOpened, h.a.accessOpen = true, true },
-			func(a *app) bool { return a.accessOpen }},
-		{"the model picker", nil,
-			func(h *harness, _ thread) { h.a.openModelPicker() },
-			func(a *app) bool { return a.pickerOpen }},
-		{"the agents panel", []string{"Write the tests"},
-			func(h *harness, _ thread) { h.click("Agents") },
-			func(a *app) bool { return a.agentsOpen[a.current().id()] }},
-	} {
+	for _, tc := range appOverlays {
 		t.Run(tc.name, func(t *testing.T) {
 			h, th := questioning(t, fake.Asking(), tc.kids...)
 			h.click("SQLite")

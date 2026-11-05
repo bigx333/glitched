@@ -1203,3 +1203,69 @@ func fillIn(h *harness) {
 	h.tt.Advance(time.Second)
 }
 
+// approving is the app on an engine whose turn asks to run a command, with
+// a thread sent a message, kids for children, and the card drawn in full.
+func approving(t *testing.T, kids ...string) (*harness, thread) {
+	t.Helper()
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, burst{[]provider.Event{commandAsk("ask", "rm -rf build")}})
+	h := start(t, dir)
+	h.tt.SetSize(1320, 860)
+	h.a.draft = "Go."
+	h.tt.Frame()
+	h.click("Send")
+	h.until("the approval card", func() bool { return h.tt.HasText("Approval needed") })
+	for _, k := range kids {
+		seedChild(t, d, h.a.current().id(), k)
+	}
+	h.until("its children", func() bool { return len(h.a.kids[h.a.current().id()]) == len(kids) })
+	h.tt.Advance(time.Second)
+	return h, h.a.current()
+}
+
+// ⌘⏎ and ⇧⌘D wait under each of the app's overlays, whose keys they would
+// be, as the question card's do; closed, ⌘⏎ is the card's.
+func TestApprovalKeysWaitUnderEveryOverlay(t *testing.T) {
+	for _, tc := range appOverlays {
+		t.Run(tc.name, func(t *testing.T) {
+			h, th := approving(t, tc.kids...)
+			press := func(mods ui.Modifiers, k ui.Key) {
+				h.tt.Key(mods, k)
+				h.tt.HoldModifiers(0)
+				for range 3 {
+					h.p.run()
+					h.tt.Advance(100 * time.Millisecond)
+				}
+			}
+			tc.open(h, th)
+			h.tt.Frame()
+			h.tt.Advance(time.Second)
+			if !tc.shown(h.a) {
+				t.Fatalf("%s didn't open", tc.name)
+			}
+			for _, k := range []struct {
+				name string
+				mods ui.Modifiers
+				key  ui.Key
+			}{{"⌘⏎", ui.Cmd, ui.KeyEnter}, {"⇧⌘D", ui.Cmd | ui.Shift, ui.KeyD}} {
+				press(k.mods, k.key)
+				if r := lastRequest(th); r.State != api.RequestPending || len(h.a.current().Pending) != 0 {
+					t.Fatalf("%s over %s: request %v, %d sent; want it waiting", k.name, tc.name, r.State, len(h.a.current().Pending))
+				}
+			}
+			if !tc.shown(h.a) {
+				t.Errorf("the card's keys closed %s", tc.name)
+			}
+			press(0, ui.KeyEscape)
+			h.tt.Advance(time.Second)
+			if tc.shown(h.a) {
+				t.Fatalf("Escape left %s open", tc.name)
+			}
+			press(ui.Cmd, ui.KeyEnter)
+			h.until("the allow", func() bool { return answering(h, lastRequest(th)) })
+			if a := answerOf(lastRequest(th).Answer); lastRequest(th).State != api.RequestPending && a != client.AllowOnce {
+				t.Errorf("⌘⏎ answered %v, want allow once", a)
+			}
+		})
+	}
+}
