@@ -14,6 +14,8 @@ type command struct {
 	hint    string
 	icon    *ui.SVG
 	run     func()
+	// also are words the query finds the command by, not shown.
+	also string
 	// t is the thread a Threads command opens, with its diff on ⌘↩.
 	t *thread
 }
@@ -37,6 +39,21 @@ func (a *app) commands() []command {
 			name += " on " + p.env.Name
 		}
 		cmds = append(cmds, action("New thread in "+name, "", icSquarePen, func() { a.startThread(p) }))
+	}
+	add := action("Add project…", "", icFolderOpen, a.addProject)
+	add.also = "workspace folder"
+	cmds = append(cmds, add)
+	for _, p := range a.projects {
+		if projectLive(p) {
+			continue // stopped first, as the chip's menu has it
+		}
+		name := p.name()
+		if several {
+			name += " on " + p.env.Name
+		}
+		rm := action("Remove project "+name+"…", "", icFolder, func() { a.askRemove(p) })
+		rm.also = "workspace delete"
+		cmds = append(cmds, rm)
 	}
 	cmds = append(cmds,
 		action("Switch model", "", icSparkles, a.openModelPicker),
@@ -70,7 +87,7 @@ func (a *app) commands() []command {
 	}
 	var shown []command
 	for _, cmd := range cmds {
-		if matches(cmd.label, query) || matches(cmd.hint, query) {
+		if matches(cmd.label+" "+cmd.also, query) || matches(cmd.hint, query) {
 			shown = append(shown, cmd)
 		}
 	}
