@@ -25,10 +25,17 @@ const (
 	EnvOut   = "GLITCHED_RECORD_OUT"   // the transcript the tee writes, without .jsonl
 	EnvDupe  = "GLITCHED_RECORD_DUPE"  // set: the tee follows each answer with a contrary one
 	EnvStdin = "GLITCHED_CLAUDE_STDIN" // a file the tee, or the fake, appends each line claude got to
+
+	envMCPReal = "GLITCHED_RECORD_MCP_REAL" // the real MCP server, set when a program runs as its tee
+	envMCPOut  = "GLITCHED_RECORD_MCP_OUT"  // the transcript, with .jsonl, its tee adds to
 )
 
-// Tee runs as the tee when EnvReal says so, and returns its exit code.
+// Tee runs as the tee when EnvReal says so, or as the tee of an MCP server
+// the tee's claude started, and returns its exit code.
 func Tee() (code int, teeing bool) {
+	if real := os.Getenv(envMCPReal); real != "" {
+		return mcpTee(real, os.Getenv(envMCPOut), os.Args[1:]), true
+	}
 	real := os.Getenv(EnvReal)
 	if real == "" {
 		return 0, false
@@ -42,15 +49,15 @@ func tee(real, out string, args []string) int {
 	if slices.Contains(args, "--resume") {
 		out += "-resume"
 	}
-	f, err := os.Create(out + ".jsonl")
+	// The MCP servers' tees add to the same file, each line in one write.
+	f, err := os.OpenFile(out+".jsonl", os.O_CREATE|os.O_TRUNC|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer f.Close()
-	wd, _ := os.Getwd()
-	home, _ := os.UserHomeDir()
-	w := &writer{f: f, scrub: strings.NewReplacer(wd, "$WORKSPACE", home, "$HOME")}
+	w := newWriter(f)
 	w.note("argv", args)
+	args = teeMCP(args, out+".jsonl")
 
 	cmd := claude.Command(context.Background(), real, args...)
 	stdin, _ := cmd.StdinPipe()
@@ -96,6 +103,75 @@ func tee(real, out string, args []string) int {
 	}
 	w.note("exit", code)
 	return code
+}
+
+// teeMCP has each server of an --mcp-config in args start through this
+// program, as its tee into the transcript at path.
+func teeMCP(args []string, path string) []string {
+	i := slices.Index(args, "--mcp-config")
+	if i < 0 || i+1 == len(args) {
+		return args
+	}
+	var cfg struct {
+		MCPServers map[string]map[string]any `json:"mcpServers"`
+	}
+	if json.Unmarshal([]byte(args[i+1]), &cfg) != nil {
+		return args
+	}
+	self, err := os.Executable()
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, s := range cfg.MCPServers {
+		env, _ := s["env"].(map[string]any)
+		if env == nil {
+			env = map[string]any{}
+		}
+		env[envMCPReal], env[envMCPOut] = s["command"], path
+		s["env"], s["command"] = env, self
+	}
+	b, _ := json.Marshal(cfg)
+	args = slices.Clone(args)
+	args[i+1] = string(b)
+	return args
+}
+
+// mcpTee runs the real MCP server with args and adds what crosses its
+// pipes to the transcript at path, as mcp-sent and mcp-recv.
+func mcpTee(real, path string, args []string) int {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+	w := newWriter(f)
+	cmd := exec.Command(real, args...)
+	cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		k, _, _ := strings.Cut(kv, "=")
+		return k == envMCPReal || k == envMCPOut || k == EnvReal
+	})
+	cmd.Stderr = os.Stderr
+	stdin, _ := cmd.StdinPipe()
+	stdout, _ := cmd.StdoutPipe()
+	if err := cmd.Start(); err != nil {
+		log.Fatal(err)
+	}
+	go func() {
+		lines(os.Stdin, func(l []byte) {
+			w.line("mcp-sent", l)
+			stdin.Write(l)
+		})
+		stdin.Close()
+	}()
+	lines(stdout, func(l []byte) {
+		w.line("mcp-recv", l)
+		os.Stdout.Write(l)
+	})
+	var exit *exec.ExitError
+	if err := cmd.Wait(); errors.As(err, &exit) {
+		return exit.ExitCode()
+	}
+	return 0
 }
 
 // Got appends a line claude got on stdin to the file EnvStdin names.
@@ -148,6 +224,12 @@ type writer struct {
 	scrub *strings.Replacer
 }
 
+func newWriter(f *os.File) *writer {
+	wd, _ := os.Getwd()
+	home, _ := os.UserHomeDir()
+	return &writer{f: f, scrub: strings.NewReplacer(wd, "$WORKSPACE", home, "$HOME")}
+}
+
 func (t *writer) note(kind string, v any) {
 	b, _ := json.Marshal(map[string]any{kind: v})
 	t.write(b)
@@ -184,6 +266,8 @@ func slim(m map[string]any) bool {
 			for k := range m {
 				switch k {
 				case "type", "subtype", "cwd", "session_id", "model", "permissionMode", "claude_code_version", "uuid", "capabilities":
+				case "tools", "mcp_servers":
+					m[k] = glitchedOnly(m[k])
 				default:
 					delete(m, k)
 				}
@@ -197,4 +281,21 @@ func slim(m map[string]any) bool {
 		}
 	}
 	return true
+}
+
+// glitchedOnly is the tools or MCP servers in v that are glitched's or a
+// test's, named glitched or mcp__glitched, less the user's own.
+func glitchedOnly(v any) []any {
+	list, _ := v.([]any)
+	var out []any
+	for _, e := range list {
+		name, _ := e.(string)
+		if m, ok := e.(map[string]any); ok {
+			name, _ = m["name"].(string)
+		}
+		if strings.HasPrefix(name, "glitched") || strings.HasPrefix(name, "mcp__glitched") {
+			out = append(out, e)
+		}
+	}
+	return out
 }

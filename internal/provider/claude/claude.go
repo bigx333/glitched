@@ -8,6 +8,7 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/mcp"
 	"glitched/internal/provider"
 )
 
@@ -82,9 +84,11 @@ func (a *Adapter) Reconcile(ctx context.Context, id provider.RuntimeIdentity) (p
 }
 
 // Command is how glitched runs claude: with the environment it has, less
-// any entrypoint it inherited, plus its own. Under a test without the
-// claudelive tag, it panics for any claude but the test binary; in a
-// program a test started, the command fails to start instead.
+// any entrypoint it inherited, plus its own. It drops the variables that
+// name a glitched mcp caller too, which only a run's own --mcp-config
+// sets, so claude never speaks for a thread an outer engine runs. Under a
+// test without the claudelive tag, it panics for any claude but the test
+// binary; in a program a test started, the command fails to start instead.
 //
 // Once ctx ends, claude gets SIGTERM, and SIGKILL killGrace later. Claude
 // Code runs each tool call in a shell of its own session, which no signal
@@ -94,7 +98,7 @@ func Command(ctx context.Context, bin string, args ...string) *exec.Cmd {
 	cmd.Err = guard(bin)
 	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		k, _, _ := strings.Cut(kv, "=")
-		return strings.EqualFold(k, "CLAUDE_CODE_ENTRYPOINT")
+		return strings.EqualFold(k, "CLAUDE_CODE_ENTRYPOINT") || mcp.Routing(k)
 	}), "CLAUDE_CODE_ENTRYPOINT=glitched")
 	cmd.SysProcAttr = sysProcAttr()
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
@@ -138,11 +142,19 @@ func isExecutable(path string) bool {
 // argv is how a run starts Claude Code. A tool call that the user's own
 // rules, hooks and the run's mode leave undecided comes to the run as a
 // can_use_tool control request on stdout.
+//
+// The run's MCP server goes beside the user's own, which an inline
+// --mcp-config without --strict-mcp-config merges with, and its tools
+// never ask.
 func argv(spec provider.SessionSpec, sessionFlag, session string) []string {
 	a := []string{"-p", "--verbose",
 		"--input-format", "stream-json", "--output-format", "stream-json",
 		"--include-partial-messages",
 		"--permission-mode", modes[spec.Access], "--permission-prompt-tool", "stdio",
+	}
+	if s := spec.MCP; s != nil {
+		a = append(a, "--mcp-config", mcpConfig(s), "--allowedTools", "mcp__"+s.Name+"__*",
+			"--append-system-prompt", s.Instructions)
 	}
 	if m := modelOf(spec.Model.Model); m != "" {
 		a = append(a, "--model", m)
@@ -151,6 +163,14 @@ func argv(spec provider.SessionSpec, sessionFlag, session string) []string {
 		a = append(a, "--effort", e)
 	}
 	return append(a, sessionFlag, session)
+}
+
+// mcpConfig is s as Claude Code reads an --mcp-config.
+func mcpConfig(s *provider.MCPServer) string {
+	b, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
+		s.Name: map[string]any{"type": "stdio", "command": s.Command, "args": s.Args, "env": s.Env},
+	}})
+	return string(b)
 }
 
 var modes = map[api.Access]string{

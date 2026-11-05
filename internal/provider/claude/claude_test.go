@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/mcp"
 	"glitched/internal/provider"
 	"glitched/internal/provider/claude"
 	"glitched/internal/provider/claude/transcript"
@@ -36,8 +39,22 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	// A project's own MCP server, which claude starts with the tee's
+	// environment.
+	if len(os.Args) > 1 && os.Args[1] == "mcp-toolless" {
+		os.Exit(toollessMCP())
+	}
 	if code, teeing := transcript.Tee(); teeing {
 		os.Exit(code)
+	}
+	// The test binary plays glitched mcp too, for the runs of a host
+	// WithMCP gave it.
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		if err := mcp.Main(context.Background(), os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "glitched mcp:", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}
 	if path := os.Getenv(envHide); path != "" {
 		os.Exit(hidden(path))
@@ -64,7 +81,7 @@ func fakeClaude(path string) int {
 	if f := os.Getenv(envEntry); f != "" {
 		var entries []string
 		for _, kv := range os.Environ() {
-			if k, _, _ := strings.Cut(kv, "="); strings.EqualFold(k, "CLAUDE_CODE_ENTRYPOINT") {
+			if k, _, _ := strings.Cut(kv, "="); strings.EqualFold(k, "CLAUDE_CODE_ENTRYPOINT") || mcp.Routing(k) {
 				entries = append(entries, kv)
 			}
 		}
@@ -85,6 +102,12 @@ func fakeClaude(path string) int {
 	// and one with "unless" only when none did.
 	set := map[string]bool{}
 	in := bufio.NewReader(os.Stdin)
+	var server *mcpServer
+	defer func() {
+		if server != nil {
+			server.close()
+		}
+	}()
 	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		var e map[string]json.RawMessage
 		json.Unmarshal([]byte(strings.NewReplacer(uuids...).Replace(l)), &e)
@@ -132,6 +155,21 @@ func fakeClaude(path string) int {
 				time.Sleep(must(time.ParseDuration(d)))
 				os.Exit(143)
 			}()
+		case e["mcp-sent"] != nil:
+			// What Claude Code sent the run's MCP server: the server the
+			// run's --mcp-config names gets it too.
+			if server == nil {
+				if server, err = startMCP(); err != nil {
+					fmt.Fprintln(os.Stderr, "fake claude:", err)
+					return 2
+				}
+			}
+			server.in.Write(append(e["mcp-sent"], '\n'))
+		case e["mcp-recv"] != nil:
+			if _, err := server.out.ReadBytes('\n'); err != nil {
+				fmt.Fprintln(os.Stderr, "fake claude: the MCP server said nothing more:", err)
+				return 3
+			}
 		case e["recv"] != nil:
 			os.Stdout.Write(append(e["recv"], '\n'))
 		case e["stderr"] != nil:
@@ -203,6 +241,54 @@ func fakeClaude(path string) int {
 		}
 	}
 	return 0
+}
+
+// mcpServer is the run's MCP server as the fake claude started it.
+type mcpServer struct {
+	cmd *exec.Cmd
+	in  io.WriteCloser
+	out *bufio.Reader
+}
+
+// startMCP starts the server of the --mcp-config the fake claude was
+// given, as Claude Code does: its command and args, with its env added to
+// claude's own.
+func startMCP() (*mcpServer, error) {
+	i := slices.Index(os.Args, "--mcp-config")
+	if i < 0 || i+1 == len(os.Args) {
+		return nil, errors.New("the transcript has MCP traffic, but the run has no --mcp-config")
+	}
+	var cfg struct {
+		MCPServers map[string]struct {
+			Command string
+			Args    []string
+			Env     map[string]string
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(os.Args[i+1]), &cfg); err != nil {
+		return nil, err
+	}
+	s, ok := cfg.MCPServers["glitched"]
+	if !ok {
+		return nil, fmt.Errorf("--mcp-config %s has no glitched server", os.Args[i+1])
+	}
+	cmd := exec.Command(s.Command, s.Args...)
+	cmd.Env = os.Environ()
+	for k, v := range s.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	cmd.Stderr = os.Stderr
+	in, err1 := cmd.StdinPipe()
+	out, err2 := cmd.StdoutPipe()
+	if err := errors.Join(err1, err2, cmd.Start()); err != nil {
+		return nil, err
+	}
+	return &mcpServer{cmd: cmd, in: in, out: bufio.NewReader(out)}, nil
+}
+
+func (s *mcpServer) close() {
+	s.in.Close()
+	s.cmd.Wait()
 }
 
 // engine serves the store at path until it is killed, with the fake
