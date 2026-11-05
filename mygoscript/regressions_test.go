@@ -1,8 +1,11 @@
 package mygoscript
 
 import (
-	"github.com/egoist/mygo/ui"
+	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func regressionPlugin(t *testing.T, src string) (*Plugin, *ui.Tester) {
@@ -147,5 +150,74 @@ func TestRegressionEmptyPropTable(t *testing.T) {
 	t.Logf("faults=%v", p.faults)
 	if len(p.faults) > 0 {
 		t.Fail()
+	}
+}
+
+// A wrong-type seed on an unbound widget keeps its error on every pass and
+// stores nothing, instead of showing the error once and then drawing the
+// widget with its default value.
+func TestRegressionInvalidSeedKeepsItsError(t *testing.T) {
+	for kind, view := range map[string]string{
+		"checkbox": `ui.checkbox("Check", { key = "check", value = "true" })`,
+		"slider":   `ui.slider({ key = "check", value = "loud", min = 0, max = 1 })`,
+		"input":    `ui.textInput({ key = "check", value = 42 })`,
+	} {
+		t.Run(kind, func(t *testing.T) {
+			p := New("seed", `return { view = function() return ui.column({ `+view+` }) end }`)
+			defer p.Close()
+			tt := ui.NewTester(func(c *ui.Context) { View(c, p) }, 600, 400)
+			for pass := range 3 {
+				tt.Frame()
+				p.mu.Lock()
+				faults, local := strings.Join(p.faults, "\n"), len(p.local)
+				p.mu.Unlock()
+				if !strings.Contains(faults, "does not suit this widget") {
+					t.Fatalf("pass %d: the bad seed's error is gone: faults %q", pass, faults)
+				}
+				if local != 0 {
+					t.Fatalf("pass %d: a bad seed was stored: %v", pass, p.local)
+				}
+			}
+		})
+	}
+}
+
+// A valid seed of each value type is stored on the first pass and keeps the
+// widget's value when the script later seeds it differently.
+func TestRegressionValidSeedsAreStored(t *testing.T) {
+	for kind, c := range map[string]struct {
+		widget string
+		want   any
+	}{
+		"checkbox": {`ui.checkbox("Check", { key = "w", value = s.seed == 0 })`, true},
+		"slider":   {`ui.slider({ key = "w", value = 0.25 + s.seed, min = 0, max = 2 })`, 0.25},
+		"input":    {`ui.textInput({ key = "w", value = "first" .. s.seed })`, "first0"},
+		"tokens":   {`ui.tokenField({ key = "w", value = { "a" .. s.seed } })`, []any{"a0"}},
+		"color":    {`ui.colorWell({ key = "w", value = if s.seed == 0 then "#ff0000ff" else "#00ff00ff" })`, "#ff0000ff"},
+	} {
+		t.Run(kind, func(t *testing.T) {
+			src := `return { state = { seed = 0 }, view = function(s) return ui.column({ ` + c.widget + `, ui.button("Reseed", { onClick = function() return { seed = 1 } end }) }) end }`
+			p := New("seed", src)
+			defer p.Close()
+			tt := ui.NewTester(func(c *ui.Context) { View(c, p) }, 600, 400)
+			tt.Frame()
+			if err := tt.Click("Reseed"); err != nil {
+				t.Fatal(err)
+			}
+			tt.Frame()
+			tt.Frame()
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if len(p.faults) > 0 || p.err != nil {
+				t.Fatalf("faults %q, error %v", p.faults, p.err)
+			}
+			if p.state["seed"] != 1.0 {
+				t.Fatalf("the reseed did not run: %v", p.state)
+			}
+			got := p.local["seed/w@bind"]
+			if !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("stored %#v, want the first seed %#v (local %v)", got, c.want, p.local)
+			}
+		})
 	}
 }
