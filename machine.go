@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/netip"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
+	eng "glitched/internal/engine"
 )
 
 // pairing is a token the This machine page minted, shown until dismissed:
@@ -39,6 +41,7 @@ func (a *app) machine(c *ui.Context) {
 	a.engineCard(c, m)
 	a.tailnetCard(c, m)
 	a.tokensCard(c, m)
+	a.agentsCard(c, m)
 	if a.machineErr != "" {
 		ui.Text(c, a.machineErr).Key("action-err").FontSize(12).TextColor(palette.red)
 	}
@@ -101,6 +104,39 @@ func (a *app) engineCard(c *ui.Context, m client.Machine) {
 		settingRow(c, "State directory", "", func() {
 			ui.Text(c, cfg.Dir).FontSize(12).Font("monospace").TextColor(palette.muted).Selectable()
 		})
+	})
+}
+
+// limitRows are the Agents card's rows, in a.limits' order.
+var limitRows = []struct {
+	key, title, desc string
+	hi               float64
+	set              func(*eng.Limits, int)
+}{
+	{"limit-working", "At work at once", "Children of one thread that run together.", 100, func(l *eng.Limits, v int) { l.Working = v }},
+	{"limit-all", "Children in all", "Each thread, deleted ones too.", 1000, func(l *eng.Limits, v int) { l.All = v }},
+	{"limit-depth", "Depth", fmt.Sprintf("1 to %d below a thread of yours.", api.MaxDepth), api.MaxDepth, func(l *eng.Limits, v int) { l.Depth = v }},
+}
+
+// agentsCard caps the child threads agents start. The engine embedded
+// here applies a change at once.
+func (a *app) agentsCard(c *ui.Context, m client.Machine) {
+	if lim := m.Config.Children.Effective(); a.limitsOf != lim {
+		a.limitsOf = lim
+		a.limits = [3]float64{float64(lim.Working), float64(lim.All), float64(lim.Depth)}
+	}
+	card(c, "AGENTS", func() {
+		for i, r := range limitRows {
+			settingRow(c, r.title, r.desc, func() {
+				if ui.NumberInput(c.Key(r.key), &a.limits[i], 1, r.hi, 1).Label(r.title).Width(150).Changed() {
+					v := int(a.limits[i])
+					a.configure(func(cfg *daemon.Config) { r.set(&cfg.Children, v) })
+				}
+			})
+		}
+		if !m.Embedded && m.Engine != nil {
+			ui.Text(c, "glitched serve applies a change here when it next starts.").Key("limits-later").Padding(14, 16).FontSize(12).TextColor(palette.muted)
+		}
 	})
 }
 
