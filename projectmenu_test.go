@@ -10,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
 )
@@ -259,9 +260,8 @@ func TestRemoveProjectResetsADraftOnAServer(t *testing.T) {
 	}
 	h.click("Remove")
 	h.until("billing gone", func() bool {
-		_, ok := h.a.find(h.thread("Rotate the API keys").id())
 		h.tt.Frame()
-		return ok && h.a.fresh.workspace != "/srv/billing"
+		return !slices.ContainsFunc(h.a.projects, func(p *project) bool { return p.key.workspace == "/srv/billing" })
 	})
 	if h.a.fresh != (draft{devbox, "~"}) {
 		t.Fatalf("the draft is %+v, want devbox's home", h.a.fresh)
@@ -280,7 +280,11 @@ func TestRemoveProjectStopsALiveThreadUnderItsOwn(t *testing.T) {
 	h := start(t, dir)
 	h.thread("Check the sort").View.Run = api.RunUncertain // as a lost run leaves it
 	h.tt.Frame()
-	if p := h.a.projectOf(h.thread("Ship the sidebar sort")); h.a.projectLive(p) {
+	p := h.a.projectOf(h.thread("Ship the sidebar sort"))
+	if _, all := h.a.projectTrees(p); working(all) != 1 {
+		t.Fatalf("%d of the project's threads live, want the one made so", working(all))
+	}
+	if h.a.projectLive(p) {
 		t.Fatal("a live thread under the project's own keeps it from being removed")
 	}
 }
@@ -302,5 +306,38 @@ func TestProjectsOfOneNameAreToldApart(t *testing.T) {
 	}
 	if want := []string{"Remove project /a/web…", "Remove project /b/web…"}; !slices.Equal(got, want) {
 		t.Fatalf("palette lists %q, want %q", got, want)
+	}
+}
+
+// A remove whose deletes fail as they're sent, with no engine, keeps the
+// draft where it was, in the project still there.
+func TestAFailedRemoveKeepsTheDraft(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	h := start(t, dir)
+	th := h.thread("Ship the sidebar sort")
+	h.a.fresh = draft{h.local(), "/work/t3code"}
+	d.Close()
+	h.until("the engine gone", func() bool { return h.local().Status != client.Status(client.Online{}) })
+	h.a.removeProject(h.a.projectOf(th))
+	h.until("the failure", func() bool { return len(th.Pending) == 1 && th.Pending[0].Err != nil })
+	if h.a.fresh.workspace != "/work/t3code" {
+		t.Fatalf("after a failed remove the draft is in %q", h.a.fresh.workspace)
+	}
+}
+
+// The palette lists Remove for a project an agent works in, so the rows
+// don't shift as a run starts; its alert says to stop the agent first.
+func TestPaletteListsRemoveWhileWorking(t *testing.T) {
+	h := start(t, uncertainDir(t))
+	h.thread("Stuck")
+	h.a.openCommandPalette()
+	h.tt.Frame()
+	h.tt.Type("remove project t3code")
+	h.tt.Key(0, ui.KeyEnter)
+	h.tt.Frame()
+	if !h.tt.HasText("An agent is working in t3code: stop it first, and nothing is removed until then. The folder, /work/t3code, isn't touched.") {
+		t.Fatalf("no alert; texts %q", h.tt.Texts())
 	}
 }
