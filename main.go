@@ -497,6 +497,9 @@ type app struct {
 	// settingDrafts are text settings as typed, by plugin and setting,
 	// until saved.
 	settingDrafts map[string]string
+
+	// stopAgents stops serving agents the browser (serveAgents).
+	stopAgents func() error
 }
 
 // newApp is the app on the engines its state directory dir names. The
@@ -921,10 +924,16 @@ func main() {
 		a.plugins.Start()
 		// A plugin reloads as its files are saved, keeping its pages' state.
 		a.stopWatch = a.plugins.Watch(time.Second)
+		// Agents' runs reach the browser on its socket in the state
+		// directory.
+		a.serveAgents()
 	})
 	// An engine embedded here stops with the app, which lets the CLI's
 	// next one take the state directory.
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		if a.stopAgents != nil {
+			a.stopAgents()
+		}
 		if err := a.backend.Close(); err != nil {
 			log.Print(err)
 		}
