@@ -20,6 +20,7 @@ import (
 	"glitched/internal/engine"
 	"glitched/internal/hub"
 	"glitched/internal/jsonfile"
+	"glitched/internal/mcp"
 	"glitched/internal/provider"
 	"glitched/internal/provider/claude"
 	"glitched/internal/provider/fake"
@@ -238,7 +239,13 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		}
 	}
 
-	h, err := runtime.New(ctx, st, cfg.Providers)
+	var opts []runtime.Option
+	if exe, err := os.Executable(); err == nil {
+		opts = append(opts, runtime.WithMCP(mcp.Launcher{Command: exe, Engine: sock.Address}))
+	} else {
+		slog.Warn("agents run without glitched mcp, so they start no child threads", "err", err)
+	}
+	h, err := runtime.New(ctx, st, cfg.Providers, opts...)
 	if err != nil {
 		return nil, err
 	}

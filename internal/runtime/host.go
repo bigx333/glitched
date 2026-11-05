@@ -15,6 +15,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/engine"
+	"glitched/internal/mcp"
 	"glitched/internal/provider"
 	"glitched/internal/store"
 )
@@ -32,6 +33,7 @@ type Host struct {
 	store     *store.Store
 	providers provider.Mux
 	name      string
+	mcp       *mcp.Launcher // how each run's agent starts glitched mcp; nil runs it without
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -62,9 +64,15 @@ type liveRun struct {
 
 var _ api.Endpoint = (*Host)(nil)
 
+// An Option changes how New's host runs.
+type Option func(*Host)
+
+// WithMCP gives each run's agent glitched mcp, started as l says.
+func WithMCP(l mcp.Launcher) Option { return func(h *Host) { h.mcp = &l } }
+
 // New reconciles what the last process left in flight, then starts the
 // effect worker. The caller keeps owning st.
-func New(ctx context.Context, st *store.Store, providers provider.Mux) (*Host, error) {
+func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...Option) (*Host, error) {
 	name, _ := os.Hostname()
 	h := &Host{
 		store: st, providers: providers, name: name,
@@ -73,6 +81,9 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux) (*Host, e
 		runs:    map[api.ID]*liveRun{},
 		closing: map[api.ID]bool{},
 		subs:    map[*stream]struct{}{},
+	}
+	for _, o := range opts {
+		o(h)
 	}
 	h.ctx, h.cancel = context.WithCancel(context.Background())
 	h.drain, h.stopDrain = context.WithCancel(context.Background())
@@ -468,9 +479,13 @@ func retry(ctx context.Context, what string, fn func(context.Context) error) boo
 func (h *Host) open(ctx context.Context, thread api.ID, b engine.StartTurn) (provider.Agent, error) {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
-	ag, err := h.providers.Open(ctx, provider.SessionSpec{
+	spec := provider.SessionSpec{
 		Thread: thread, Run: b.Run, Generation: b.Generation, Workspace: b.Workspace, Model: b.Model, Access: b.Access,
-	})
+	}
+	if h.mcp != nil {
+		spec.MCP = h.mcp.For(thread, b.Run)
+	}
+	ag, err := h.providers.Open(ctx, spec)
 	if err == nil {
 		if err = ag.Do(ctx, provider.Start{Text: b.Text}); err != nil && h.ctx.Err() == nil {
 			h.closeAgent(ag)
