@@ -36,6 +36,7 @@ const (
 	envPids   = "GLITCHED_FAKE_CLAUDE_PIDS"   // a file each run appends its processes to, by role
 	envEngine = "GLITCHED_FAKE_ENGINE"        // the store a test binary serves, as an engine a test can kill
 	envHide   = "GLITCHED_FAKE_HIDE"          // a file a test binary writes its PID to, as a tool that hides its environment
+	envSleep  = "GLITCHED_FAKE_SLEEP"         // how long a test binary sleeps, as sleep where there is none
 )
 
 func TestMain(m *testing.M) {
@@ -54,6 +55,10 @@ func TestMain(m *testing.M) {
 			fmt.Fprintln(os.Stderr, "glitched mcp:", err)
 			os.Exit(1)
 		}
+		os.Exit(0)
+	}
+	if d := os.Getenv(envSleep); d != "" {
+		time.Sleep(must(time.ParseDuration(d)))
 		os.Exit(0)
 	}
 	if path := os.Getenv(envHide); path != "" {
@@ -190,8 +195,7 @@ func fakeClaude(path string) int {
 			// and stops it on SIGTERM.
 			var argv []string
 			json.Unmarshal(e["tool"], &argv)
-			sh := exec.Command(argv[0], argv[1:]...)
-			newSession(sh)
+			sh := command(argv)
 			if err := sh.Start(); err != nil {
 				fmt.Fprintln(os.Stderr, "fake claude:", err)
 				return 2
@@ -209,8 +213,7 @@ func fakeClaude(path string) int {
 			// A tool shell this claude leaves running when it dies.
 			var argv []string
 			json.Unmarshal(e["orphan"], &argv)
-			sh := exec.Command(argv[0], argv[1:]...)
-			newSession(sh)
+			sh := command(argv)
 			if err := sh.Start(); err != nil {
 				fmt.Fprintln(os.Stderr, "fake claude:", err)
 				return 2
@@ -218,8 +221,7 @@ func fakeClaude(path string) int {
 			note("tool", sh.Process.Pid)
 		case e["holder"] != nil:
 			// A process claude leaves running, holding its output open.
-			sh := exec.Command("sleep", "60")
-			newSession(sh)
+			sh := command([]string{"sleep", "60"})
 			sh.Stdout, sh.Stderr = os.Stdout, os.Stderr
 			if err := sh.Start(); err != nil {
 				fmt.Fprintln(os.Stderr, "fake claude:", err)
