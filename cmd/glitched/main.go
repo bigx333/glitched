@@ -10,7 +10,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -211,55 +210,9 @@ func serve(ctx context.Context, args []string) error {
 	return d.Wait()
 }
 
-// browserConfig writes the MCP config by which each run's Claude Code
-// starts the server of the browser of the app on the state directory
-// dir: this program's browser-mcp, on that directory. It returns the
-// config's path, or "", and no browser, where it can't.
-func browserConfig(dir string) string {
-	// Claude Code runs in the thread's workspace, where a relative path
-	// finds nothing.
-	dir, err := filepath.Abs(dir)
-	if err != nil {
-		return ""
-	}
-	cmd := browserCommand(dir)
-	if cmd == nil {
-		return ""
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		log.Print(err)
-		return ""
-	}
-	path, err := browsermcp.WriteConfig(dir, cmd)
-	if err != nil {
-		log.Print(err)
-		return ""
-	}
-	return path
-}
-
-// browserCommand is this program's browser-mcp on the state directory
-// dir; nil where this program can't be found.
-func browserCommand(dir string) []string {
-	self, err := os.Executable()
-	if err != nil {
-		return nil
-	}
-	if dir, err = filepath.Abs(dir); err != nil {
-		return nil
-	}
-	return []string{self, "browser-mcp", "-dir", dir}
-}
-
 // browserMCP serves the app's browser to an agent on stdio.
 func browserMCP(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("browser-mcp", flag.ExitOnError)
-	dir := dirFlag(fs)
-	fs.Parse(args)
-	if fs.NArg() > 0 {
-		return usageError("browser-mcp takes no arguments")
-	}
-	return browsermcp.Serve(ctx, os.Stdin, os.Stdout, browsermcp.Dial(*dir))
+	return browsermcp.Main(ctx, args, os.Stdin, os.Stdout)
 }
 
 func status(ctx context.Context, args []string) error {

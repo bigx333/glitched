@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,8 +22,10 @@ import (
 	"github.com/coder/websocket"
 
 	"glitched/internal/api"
+	"glitched/internal/browsermcp"
 	"glitched/internal/engine"
 	"glitched/internal/provider"
+	"glitched/internal/provider/claude"
 	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
 )
@@ -488,5 +492,41 @@ func TestARelativeDirGivesGlitchedMCPAnAbsoluteSocket(t *testing.T) {
 	want := filepath.Join(root, "state", "engine.sock")
 	if s := seen[0].MCP; s == nil || s.Env["GLITCHED_ENGINE"] != want {
 		t.Errorf("the run's MCP server %+v, want GLITCHED_ENGINE %s", s, want)
+	}
+}
+
+// An engine running Claude Code gives each run the browser of the app on
+// its state directory, through a config at an absolute path: claude runs
+// in the thread's workspace.
+func TestWithClaudeGivesRunsTheBrowser(t *testing.T) {
+	base := t.TempDir()
+	t.Chdir(base)
+	cfg, err := Defaults("state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.WithClaude()
+	ad, ok := cfg.Providers["claude"].(*claude.Adapter)
+	if !ok {
+		t.Fatalf("claude's adapter is %T", cfg.Providers["claude"])
+	}
+	if !filepath.IsAbs(ad.MCPConfig) {
+		t.Fatalf("the MCP config is at %q, which claude, in the thread's workspace, won't find", ad.MCPConfig)
+	}
+	var mcp struct {
+		MCPServers map[string]struct {
+			Type    string   `json:"type"`
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	b, err := os.ReadFile(ad.MCPConfig)
+	if err != nil || json.Unmarshal(b, &mcp) != nil {
+		t.Fatalf("the MCP config: %v %s", err, b)
+	}
+	s := mcp.MCPServers["glitched"]
+	got := append([]string{s.Command}, s.Args...)
+	if want := browsermcp.Command(filepath.Join(base, "state")); s.Type != "stdio" || !slices.Equal(got, want) {
+		t.Errorf("the MCP config runs %q, want %q", got, want)
 	}
 }

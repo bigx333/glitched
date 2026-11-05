@@ -1,16 +1,20 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"glitched/internal/browse"
+	"glitched/internal/browsermcp"
 )
 
 // agentPage is a tab's page that answers the page script as it would: a
@@ -425,5 +429,45 @@ func TestAnAgentsCallTimingOutReadsNothingHalfWritten(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(i%20)*time.Microsecond)
 		ab.call(ctx, "browser_tabs", json.RawMessage(`{"action":"list"}`))
 		cancel()
+	}
+}
+
+// The app runs as browser-mcp when Claude Code starts it so, and as the
+// app otherwise.
+func TestTheAppServesBrowserMCP(t *testing.T) {
+	if served, err := serveBrowserMCP(nil, nil, nil); served || err != nil {
+		t.Errorf("with no arguments the app served browser-mcp: %v", err)
+	}
+	dir, err := os.MkdirTemp("", "gl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	ln, err := browsermcp.Listen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go browsermcp.Accept(ln, func(_ context.Context, tool string, _ json.RawMessage) (string, error) {
+		return "the app's " + tool, nil
+	})
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	type result struct {
+		served bool
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		served, err := serveBrowserMCP([]string{"browser-mcp", "-dir", dir}, inR, outW)
+		done <- result{served, err}
+		outW.Close()
+	}()
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_tabs","arguments":{"action":"list"}}}`+"\n")
+	line, _ := bufio.NewReader(outR).ReadString('\n')
+	inW.Close()
+	r := <-done
+	if !r.served || r.err != nil || !strings.Contains(line, `"text":"the app's browser_tabs"`) {
+		t.Errorf("browser-mcp served %v, %v:\n%s", r.served, r.err, line)
 	}
 }

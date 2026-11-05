@@ -859,6 +859,14 @@ func main() {
 		}
 		return
 	}
+	// Claude Code runs the app itself as its browser's MCP server
+	// (daemon.Config.WithClaude), with no window.
+	if served, err := serveBrowserMCP(os.Args[1:], os.Stdin, os.Stdout); served {
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	var a *app
 	// What's posted before the window exists, as a plugin's timer can,
 	// waits for it.

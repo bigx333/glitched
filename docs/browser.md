@@ -340,13 +340,15 @@ Claude Code runs in threads get the browser as an MCP server named
   --mcp-config, one per run)
 ```
 
-- **The engine** (`glitched serve`) writes `browser-mcp.json` in its
-  state directory as it starts, `{"mcpServers":{"glitched":{"type":"stdio",
-  "command":"<this program>","args":["browser-mcp","-dir","<the
-  directory>"]}}}`, and gives each run `--mcp-config` that file, beside the
-  user's own servers (`claude.Adapter.MCPConfig`). A file, not JSON on the
-  command line, which a `claude.cmd` shim on Windows would hand to cmd.exe
-  to unquote.
+- **The engine**, `glitched serve` or the app's own, running Claude Code
+  (`daemon.Config.WithClaude`), writes `browser-mcp.json` in its state
+  directory as it starts, `{"mcpServers":{"glitched":{"type":"stdio",
+  "command":"<the program running>","args":["browser-mcp","-dir","<the
+  directory>"]}}}`, and gives each run `--mcp-config` that file, beside
+  the user's own servers (`claude.Adapter.MCPConfig`). A file, not JSON on
+  the command line, which a `claude.cmd` shim on Windows would hand to
+  cmd.exe to unquote. Both the CLI and the app answer `browser-mcp`; the
+  app does so with no window.
 - **`glitched browser-mcp`** speaks MCP on stdio (initialize, tools/list,
   tools/call, ping) and passes each call to the app on the state
   directory's `browser.sock`, a line of JSON each way. It knows nothing of
