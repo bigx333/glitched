@@ -131,7 +131,7 @@ func (a *app) deleteAlert(c *ui.Context) {
 			body = fmt.Sprintf("%d of them %s still working and will be stopped. ", n, isAre(n)) + body
 		}
 	}
-	switch ui.AlertDialog(c, &a.deleteOpen, head, body, "Cancel", "Delete") {
+	switch a.alert(c, &a.deleteOpen, head, body, "Cancel", "Delete") {
 	case 1:
 		a.deleteTree(a.deleting)
 		a.deleting = thread{}

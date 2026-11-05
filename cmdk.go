@@ -89,7 +89,7 @@ func (a *app) openModelPicker() {
 // from the keyboard many times a day, so it shows and hides at once, and
 // its selection moves at once with the arrows.
 func (a *app) commandPalette(c *ui.Context) {
-	ui.DialogBase(c, &a.cmdkOpen, func(backdrop, panel ui.Element) {
+	a.dialog(c, &a.cmdkOpen, func(backdrop, panel ui.Element) {
 		backdrop.Justify(ui.Start).Padding(96, 0, 0)
 		if a.settings.glass {
 			backdrop.Material(glass.Blur{Radius: 3})

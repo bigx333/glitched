@@ -227,7 +227,7 @@ func (a *app) agents(c *ui.Context, t thread, frameW, fade float32) {
 			// show, nor to keep the pointer from the chat under it.
 			return
 		}
-		ui.Overlay(c, func() {
+		a.overlay(c, open, func() {
 			box := ui.Column(c).Key("agents").AttachTo(place, ui.AnchorBottomStart, ui.AnchorBottomStart)
 			// As the strip it grew from: the overlay escapes the strip's
 			// fade and clip, so it takes them itself; before it's built,

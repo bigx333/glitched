@@ -187,7 +187,7 @@ func (a *app) accessPicker(c *ui.Context) {
 	}).Clicked() {
 		a.accessOpen = !a.accessOpen
 	}
-	ui.PopoverBase(c, b, &a.accessOpen, func(panel ui.Element) {
+	a.popover(c, b, &a.accessOpen, func(panel ui.Element) {
 		panel.AttachTo(b, ui.AnchorTopStart, ui.AnchorBottomStart).Margin(0, 0, 10, -4).Width(420).Radius(16).Clip()
 		a.pane(panel, glass.Glass{}).Shadow(0, 16, 40, 0, ui.RGBA(0, 0, 0, 0.35)).Children(func() {
 			ui.Column(c).Padding(6).Gap(1).Children(func() {
