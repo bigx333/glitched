@@ -30,6 +30,22 @@ func hidden(pidfile string) int {
 	return 0
 }
 
+// stopped is whether pid, which the engine has killed, exits soon. It
+// may not be reaped: a process whose parent is gone is init's to reap,
+// and init takes its time or never does.
+func stopped(pid int) bool {
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+		_, state, _ := strings.Cut(string(stat), ") ")
+		if err != nil || strings.HasPrefix(state, "Z") {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+	}
+}
+
 // userScopes skips t where the engine has no user systemd manager on a
 // cgroup v2 hierarchy to put a run's processes in a scope of their own.
 func userScopes(t *testing.T) {
@@ -107,7 +123,7 @@ func TestCloseStopsAProcessThatLeftTheMarkerBehind(t *testing.T) {
 			if err := ag.Close(ctx); err != nil {
 				t.Errorf("Close: %v", err)
 			}
-			if !exits(pid, 0) {
+			if !stopped(pid) {
 				t.Error("the tool's process still runs after Close")
 			}
 		})
@@ -128,7 +144,7 @@ func TestReconcileStopsAProcessThatLeftTheMarkerBehind(t *testing.T) {
 			if _, err := (&claude.Adapter{}).Reconcile(ctx, provider.RuntimeIdentity{Run: run}); err != nil {
 				t.Errorf("Reconcile: %v", err)
 			}
-			if !exits(pid, 0) {
+			if !stopped(pid) {
 				t.Error("the tool's process still runs after Reconcile")
 			}
 		})
@@ -184,7 +200,7 @@ func unscoped(t *testing.T) {
 	if _, err := (&claude.Adapter{}).Reconcile(ctx, provider.RuntimeIdentity{Run: run}); err != nil {
 		t.Errorf("Reconcile: %v", err)
 	}
-	if !exits(tool, 0) {
+	if !stopped(tool) {
 		t.Error("the tool still runs after Reconcile")
 	}
 }
