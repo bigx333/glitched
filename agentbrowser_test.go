@@ -209,6 +209,9 @@ func TestAnAgentListsShowsAndClosesTabs(t *testing.T) {
 	if _, err := callTool(t, ab, "browser_tabs", `{"action":"select","tab":9}`); err == nil {
 		t.Error("selected a tab that isn't open")
 	}
+	if _, err := callTool(t, ab, "browser_tabs", `{"action":"new"}`); err == nil || err.Error() != "browser_tabs new needs a url." {
+		t.Errorf("a new tab at no address: %v", err)
+	}
 	if _, err := callTool(t, ab, "browser_tabs", `{"action":"close"}`); err == nil {
 		t.Error("closed no tab")
 	}
