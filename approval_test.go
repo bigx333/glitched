@@ -876,6 +876,42 @@ func (g *chainAgent) Next(ctx context.Context) (provider.Event, error) {
 
 func (g *chainAgent) Close(context.Context) error { return nil }
 
+// An answer on its way keeps its card answered until the engine says how
+// the request ended: no frame between the command landing and the
+// request's next state shows it waiting again, with its answers and keys,
+// for a press meant for the next card to answer.
+func TestAnAnsweredCardNeverShowsWaitingAgain(t *testing.T) {
+	for how, answer := range map[string]func(h *harness){
+		"⌘⏎":         func(h *harness) { h.tt.Key(ui.Cmd, ui.KeyEnter); h.tt.HoldModifiers(0) },
+		"Allow once": func(h *harness) { h.click("Allow once") },
+	} {
+		t.Run(how, func(t *testing.T) {
+			h := askedAll(t, commandAsk("a", "ls"))
+			answer(h)
+			h.tt.Frame()
+			if !answering(h, lastRequest(h.a.current())) {
+				t.Fatalf("%s did not answer the card", how)
+			}
+			deadline := time.After(30 * time.Second)
+			// One thing the engine posts at a time, each its own frame.
+			for lastRequest(h.a.current()).State == api.RequestPending {
+				if !h.p.step() {
+					select {
+					case <-h.p.wake:
+					case <-deadline:
+						t.Fatalf("the request never stopped waiting")
+					}
+					continue
+				}
+				h.tt.Frame()
+				if !answering(h, lastRequest(h.a.current())) {
+					t.Fatalf("answered, the card shows its request waiting again; texts %q", h.tt.Texts())
+				}
+			}
+		})
+	}
+}
+
 // A card answers only a press that began once it stood still: a second
 // ⌘⏎ or click, as the next card lands where the last one was, answers
 // nothing, and nor does ⌘⏎ while the ⌘ that answered the last card is
