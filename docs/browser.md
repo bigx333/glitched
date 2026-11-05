@@ -353,7 +353,7 @@ Claude Code runs in threads get the browser as an MCP server named
   tabs. A call the client cancels (`notifications/cancelled`), or one
   still running as the client goes, ends in the app too, and a call the
   view hasn't run yet does nothing. With no app open the tools are still listed, and each says the
-  app isn't open.
+  app isn't open; a socket it may not use says so instead.
 - **The app** listens on `browser.sock` as its window opens; nothing
   authenticates a caller, so the state directory's mode (0700) is the
   gate, as for `engine.sock`. A socket a dead app left is replaced; one
@@ -376,7 +376,9 @@ Claude Code runs in threads get the browser as an MCP server named
   as a message a page out of sight doesn't hold back as it does timers,
   so a page leaving or a dialog doesn't take the answer with it; refused where something else shows over its centre,
   as a banner or a dialog's backdrop, but its own label; the focus left
-  where it is if the page takes `mousedown`) or types (the
+  where it is if the page takes `mousedown`; refused too for what a user
+  couldn't click: `pointer-events: none`, `inert`, or behind a modal
+  `<dialog>`) or types (the
   prototype's value setter, then `input` and `change`, so frameworks
   tracking the value on the element, as React does, see it; an editor
   through `insertText`). Enter is `keydown`, `keypress` and `keyup`;
@@ -384,8 +386,8 @@ Claude Code runs in threads get the browser as an MCP server named
   as a browser's would, once the script has answered: its default
   button, the first, image or not, clicked, or with none, the form
   submitted if the field is its only one Enter submits from. A field that is read-only takes nothing; one that keeps
-  only some values, as a date's, says what it took; dropdowns and file
-  fields say the tools can't fill them yet. A page that stops answering,
+  only some values, as a date's, says what it took; dropdowns, file,
+  colour and other pickers say the tools can't fill them yet. A page that stops answering,
   as one showing `alert` or `confirm`, is said to be maybe showing a
   dialog, and the tabs a page opens as it acts are named in the answer. Its events are the script's: `isTrusted` is false.
 - **Not yet isolated** (Next, 2): the script runs in the page's world, so a
