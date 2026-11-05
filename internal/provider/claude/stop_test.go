@@ -204,3 +204,26 @@ func TestAToolStopsWithClaudeOnceCloseRunsOutOfTime(t *testing.T) {
 		t.Error("the tool still runs after Close stopped claude")
 	}
 }
+
+// A line cut short leaves the stream broken, however much of it claude
+// read, so the next send fails at once rather than land after the half
+// line.
+func TestASendAfterOneGaveUpFailsAtOnce(t *testing.T) {
+	replay(t, "deaf", "")
+	processes(t)
+	ag := open(t)
+	defer ag.Close(ctx)
+	sendCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	within(t, 2*time.Second, "a send claude never reads", func() error {
+		return ag.Do(sendCtx, provider.Start{Text: strings.Repeat("x", 1<<20)})
+	})
+	steerCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	err := within(t, time.Second, "the send after it", func() error {
+		return ag.Do(steerCtx, provider.Steer{Text: "next"})
+	})
+	if err == nil || !strings.Contains(err.Error(), "cut short") {
+		t.Errorf("Do returned %v, want the stream broken", err)
+	}
+}
