@@ -182,8 +182,10 @@ func (h *Host) observe(ctx context.Context, thread api.ID, o engine.Observation,
 // reached the agent: replay-safe kinds run again, a start is settled by
 // reconciling its run, and a steer still due becomes uncertain. Every other
 // live run is reconciled too, except one whose start was never attempted.
-// The lease of a start whose run is no longer live stays, as the store's
-// record that an agent may run, until the run's close reconciles it.
+// A reconcile that fails leaves the run uncertain with a close that retries
+// it. The lease of a start whose run is no longer live, or whose reconcile
+// failed, stays as the store's record that an agent may run, until the run's
+// close reconciles it.
 func (h *Host) boot(ctx context.Context) error {
 	leased, err := h.store.Leased(ctx)
 	if err != nil {
@@ -231,11 +233,13 @@ func (h *Host) boot(ctx context.Context) error {
 		rctx, cancel := context.WithTimeout(ctx, callTimeout)
 		rec, err := h.providers.Reconcile(rctx, provider.RuntimeIdentity{Thread: id, Run: r.ID, Generation: r.Generation, Provider: t.Model.Provider})
 		cancel()
-		if err != nil {
-			rec = provider.Lost{Reason: err.Error()}
+		failed := err != nil
+		if failed {
+			// The run's close retries the reconcile, and completes the lease.
+			lease = 0
 		}
 		restored, ok := rec.(provider.Restored)
-		if err := h.observe(ctx, id, engine.Reconciled{Run: r.ID, Restored: ok}, lease); err != nil {
+		if err := h.observe(ctx, id, engine.Reconciled{Run: r.ID, Restored: ok, Failed: failed}, lease); err != nil {
 			return err
 		}
 		if ok {

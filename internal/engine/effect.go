@@ -27,9 +27,10 @@ type SteerTurn struct {
 
 type InterruptTurn struct{ Run api.ID }
 
-// CloseAgent closes the agent of a run that ended in the log while it may
-// still be running: a deleted thread's. It sits in the outbox until done,
-// so a crash or a shutdown before the close leaves it for the next host.
+// CloseAgent closes the agent of a run that may still be running: a deleted
+// thread's, or one boot could not reconcile. It sits in the outbox until
+// done, so a crash or a shutdown before the close leaves it for the next
+// host, and the thread's later effects wait for it.
 type CloseAgent struct {
 	Run        api.ID
 	Generation uint64
@@ -195,10 +196,12 @@ type InterruptLost struct{ Run api.ID }
 // nobody knows if it arrived.
 type SteerLost struct{ Message api.ID }
 
-// Reconciled is boot's verdict on a run the last process left live.
+// Reconciled is boot's verdict on a run the last process left live. Failed
+// is a reconcile that errored, so the run's agent may still be running.
 type Reconciled struct {
 	Run      api.ID
 	Restored bool
+	Failed   bool
 }
 
 // Rewound: the database came back from a backup and lost history. The live
