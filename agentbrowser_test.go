@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -19,6 +20,8 @@ type agentPage struct {
 	mu    sync.Mutex
 	acts  []map[string]any // the actions asked, with their args
 	title string
+	// onAct, if set, is what the page does as it acts, or why it won't.
+	onAct func() error
 }
 
 func (p *agentPage) EvalContext(_ context.Context, code string) (any, error) {
@@ -41,6 +44,11 @@ func (p *agentPage) EvalContext(_ context.Context, code string) (any, error) {
 			}}, nil
 	case "act":
 		p.acts = append(p.acts, args)
+		if p.onAct != nil {
+			if err := p.onAct(); err != nil {
+				return nil, err
+			}
+		}
 		return map[string]any{"done": true}, nil
 	}
 	return nil, fmt.Errorf("op %v", args["op"])
@@ -325,4 +333,81 @@ func TestAnAgentsSnapshotWaitsForANewPage(t *testing.T) {
 	if len(*made) != 1 {
 		t.Errorf("%d pages made", len(*made))
 	}
+}
+
+// An action the page refuses leaves the pane as it was, and the agent
+// reads why in the page's words.
+func TestAnAgentsRefusedActionShowsNothing(t *testing.T) {
+	a, ab, made := agents(t)
+	first, _ := callTool(t, ab, "browser_navigate", `{"url":"go.dev"}`)
+	callTool(t, ab, "browser_tabs", `{"action":"new","url":"example.com"}`)
+	(*made)[0].onAct = func() error { return errors.New("mygo: javascript error: Error: s1e2 is disabled") }
+	_, err := callTool(t, ab, "browser_click", `{"ref":"`+refIn(t, first, "Docs")+`"}`)
+	if err == nil || err.Error() != "s1e2 is disabled" {
+		t.Errorf("a refused click: %v", err)
+	}
+	if a.browser.active != 1 {
+		t.Errorf("a refused click showed tab %d", a.browser.tabs[a.browser.active].id)
+	}
+	// A page that stops answering, as one showing a dialog does, says so.
+	(*made)[0].onAct = func() error { return context.DeadlineExceeded }
+	if _, err := callTool(t, ab, "browser_click", `{"ref":"`+refIn(t, first, "Docs")+`"}`); err == nil || !strings.Contains(err.Error(), "dialog") {
+		t.Errorf("a page that stopped answering: %v", err)
+	}
+}
+
+// A tab whose page can't start closes again, leaving the pane as it was.
+func TestAnAgentsTabThatCannotStartGoes(t *testing.T) {
+	a, ab, _ := agents(t)
+	callTool(t, ab, "browser_navigate", `{"url":"go.dev"}`)
+	a.showPreview = false
+	a.browser.open = func(string, browse.Events) (browse.Page, error) { return nil, errors.New("no web view") }
+	if _, err := callTool(t, ab, "browser_tabs", `{"action":"new","url":"example.com"}`); err == nil {
+		t.Fatal("a tab whose page can't start opened")
+	}
+	if len(a.browser.tabs) != 1 || a.browser.active != 0 || a.showPreview {
+		t.Errorf("after a tab that couldn't start: %d tabs, tab %d shown, pane %v", len(a.browser.tabs), a.browser.active, a.showPreview)
+	}
+}
+
+// A tab a page opens as it acts, the agent hears of.
+func TestAnAgentHearsOfTabsAPageOpens(t *testing.T) {
+	a, ab, made := agents(t)
+	first, _ := callTool(t, ab, "browser_navigate", `{"url":"go.dev"}`)
+	(*made)[0].onAct = func() error {
+		ab.onView(func() { (*made)[0].events.Opened("https://go.dev/play") })
+		return nil
+	}
+	out, err := callTool(t, ab, "browser_click", `{"ref":"`+refIn(t, first, "Docs")+`"}`)
+	if err != nil || !strings.HasPrefix(out, "The page opened tab 2 at https://go.dev/play.\n") || len(a.browser.tabs) != 2 {
+		t.Errorf("a click opening a tab answered %q, %v", out, err)
+	}
+}
+
+// A full snapshot of a tab that never showed is full.
+func TestAnAgentsFullSnapshotOfANewPage(t *testing.T) {
+	a, ab, _ := agents(t)
+	a.browser.add("https://go.dev", 0)
+	var asked bool
+	open := a.browser.open
+	a.browser.open = func(u string, ev browse.Events) (browse.Page, error) {
+		pg, err := open(u, ev)
+		return &fullPage{pg.(*agentPage), &asked}, err
+	}
+	if _, err := callTool(t, ab, "browser_snapshot", `{"full":true}`); err != nil || !asked {
+		t.Errorf("a new page's full snapshot: full %v, %v", asked, err)
+	}
+}
+
+// fullPage notes whether a snapshot asked for the page's structure.
+type fullPage struct {
+	*agentPage
+	full *bool
+}
+
+func (p *fullPage) EvalContext(ctx context.Context, code string) (any, error) {
+	if strings.Contains(code, `"interactive":false`) {
+		*p.full = true
+	}
+	return p.agentPage.EvalContext(ctx, code)
 }
