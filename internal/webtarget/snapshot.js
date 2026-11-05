@@ -637,7 +637,9 @@ function install(key) {
   function point(el, doc) {
     const root = get(B.documentElement, doc);
     const w = root ? get(B.clientWidth, root) : 0, h = root ? get(B.clientHeight, root) : 0;
-    const rs = apply(B.clientRects, el, []);
+    // An engine without DOMRectList (an old WebKitGTK's ClientRectList)
+    // clicks the middle of the element's box.
+    const rs = B.rectsLength && B.rectsItem ? apply(B.clientRects, el, []) : null;
     let first = null;
     for (let i = 0, n = rs ? get(B.rectsLength, rs) : 0; i < n; i++) {
       const r = apply(B.rectsItem, rs, [i]);
@@ -701,6 +703,16 @@ function install(key) {
     const fire = (e) => apply(B.dispatch, el, [e]);
     const focus = () => { if (html) apply(B.focus, el, []); };
     if (args.action === "click") {
+      // What a user can't click, the agent doesn't either: an element
+      // that takes no pointer, one inert, or one behind a modal dialog.
+      if (prop(styleOf(el), "pointer-events") === "none") throw new Err(`${ref} takes no clicks`);
+      let modal = null;
+      try { modal = apply(B.query, get(B.documentElement, doc), ["dialog:modal"]); } catch {}
+      for (let n = el, i = 0; n && i < 4096; i++, n = up(n)) {
+        if (hasAttr(n, "inert")) throw new Err(`${ref} is inert: the page lets nothing use it now`);
+        if (n === modal) modal = null;
+      }
+      if (modal) throw new Err(`${ref} is behind a modal dialog`);
       reveal(el);
       const at0 = point(el, doc), x = at0.x, y = at0.y;
       const over = cover(el, doc, x, y);
@@ -741,6 +753,9 @@ function install(key) {
     if (tag === "INPUT" && html && lower(get(B.inputType, el)) === "file") throw new Err(`${ref} is a file field, which the browser's tools can't fill`);
     if (tag === "SELECT") throw new Err(`${ref} is a dropdown, which the browser's tools can't pick from yet`);
     if (TYPEABLE[r] !== true || !(field || editor)) throw new Err(`${ref} is a ${r || "element"}, not a text box`);
+    const kind = tag === "INPUT" && html ? lower(get(B.inputType, el)) : "";
+    if (tag === "INPUT" && BLOCKS_IMPLICIT[kind] !== true && kind !== "")
+      throw new Err(`${ref} is a ${kind} field, which the browser's tools can't fill`);
     if (attr(el, "aria-readonly") === "true" || matches(el, ":read-only")) throw new Err(`${ref} is read-only`);
     reveal(el);
     focus();
