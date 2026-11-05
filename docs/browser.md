@@ -370,18 +370,20 @@ Claude Code runs in threads get the browser as an MCP server named
 - **Actions** run in the page script (`act`), the same on every engine:
   it resolves the ref, checks the element is still the role and name the
   snapshot gave it, shown and enabled, scrolls it into view, then clicks
-  (pointer and mouse events, down, up, click, at its centre, once the
-  script has answered, so a page leaving or a dialog doesn't take the
-  answer with it; refused where something else shows over its centre,
+  (pointer and mouse events, down, up, click, at the centre of its first
+  box in view, as a link wrapping onto two lines has two, scrolled there
+  at once on a page that scrolls smoothly; once the script has answered,
+  as a message a page out of sight doesn't hold back as it does timers,
+  so a page leaving or a dialog doesn't take the answer with it; refused where something else shows over its centre,
   as a banner or a dialog's backdrop, but its own label; the focus left
   where it is if the page takes `mousedown`) or types (the
   prototype's value setter, then `input` and `change`, so frameworks
   tracking the value on the element, as React does, see it; an editor
   through `insertText`). Enter is `keydown`, `keypress` and `keyup`;
   unless the page takes one of the first two, the field's form submits
-  as a browser's would, once the script has answered: its default button
-  clicked (an image button too), or with none, the form submitted if the field is its only one
-  Enter submits from. A field that is read-only takes nothing; one that keeps
+  as a browser's would, once the script has answered: its default
+  button, the first, image or not, clicked, or with none, the form
+  submitted if the field is its only one Enter submits from. A field that is read-only takes nothing; one that keeps
   only some values, as a date's, says what it took; dropdowns and file
   fields say the tools can't fill them yet. A page that stops answering,
   as one showing `alert` or `confirm`, is said to be maybe showing a
