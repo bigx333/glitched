@@ -13,8 +13,18 @@ import (
 )
 
 // outcomeLimit is how long a report's outcome may be, in characters: a line
-// or two of the parent's timeline.
+// or two of the parent's timeline. Only an outcome clip cut is this long.
 const outcomeLimit = 280
+
+// Cut is a report's outcome without the ellipsis the engine ended it with
+// as it cut it, and whether it did: an ellipsis of the agent's is the
+// agent's text.
+func Cut(outcome string) (string, bool) {
+	if utf8.RuneCountInString(outcome) != outcomeLimit {
+		return outcome, false
+	}
+	return strings.CutSuffix(outcome, "…")
+}
 
 // report posts a child's report in its parent's log, with the completion of
 // the effect that asked for it. A parent that was deleted, or never reached
@@ -68,10 +78,10 @@ func summary(s string) string {
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-// clip is s cut to at most n characters, an ellipsis ending one that was
-// cut, on a character's boundary.
+// clip is s cut to n characters, the last an ellipsis, on a character's
+// boundary, when it has n or more: one n long was cut.
 func clip(s string, n int) string {
-	if utf8.RuneCountInString(s) <= n {
+	if utf8.RuneCountInString(s) < n {
 		return s
 	}
 	r := []rune(s)
