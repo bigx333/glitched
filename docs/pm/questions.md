@@ -2,6 +2,16 @@
 
 Newest first. Answer under each question, or in the PM thread.
 
+## Q11 (2026-11-05, open). Agent spawn tool plan: five decisions
+
+The plan is at `/tmp/glitched-plans/spawn-tool.html`, with an offline copy at `spawn-tool.packed.html`. Both are local files and are not committed. Main finding: today a child's report never reaches the parent's agent.
+
+1. **How Claude reaches the tool.** An MCP server inside the existing control pipe. This was probed on 2.1.318.
+2. **Limits.** 5 children working at once, 20 in all per parent, and depth 4.
+3. **Approval.** A spawn never asks the user, because a child can do no more than its parent.
+4. **How the parent learns a child is done.** The report starts the parent's next turn.
+5. **Protocol.** A bump to 6 for `MessageQueued.Report`. There is no schema change. **This bump needs Nelson's yes.**
+
 ## Q10 (2026-11-05, answered: accept the limit and document it). #64 (#52 cgroup containment): Claude's work sent to the user's own tmux server
 
 Sol's High: a tool runs an ordinary `tmux new-window` against a tmux server that was already running before the run. The window outlives Close and Reconcile. No cgroup design can stop this, because the server is the user's own process. Opus judges it out of reach, and #52 already named it. Opus also found a Low: tmux 3.5a puts each pane into its own `tmux-spawn-*.scope`, so a pane that drops the marker and ignores SIGHUP survives. Review: https://github.com/bigx333/glitched/pull/64#issuecomment-6654372975
