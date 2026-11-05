@@ -1,0 +1,137 @@
+package claude_test
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
+
+	"glitched/internal/api"
+	"glitched/internal/provider"
+	"glitched/internal/provider/claude"
+)
+
+// hidden hides this process's environment from other processes, writes
+// its PID to pidfile, and sleeps.
+func hidden(pidfile string) int {
+	if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
+		return 2
+	}
+	os.WriteFile(pidfile, []byte(strconv.Itoa(os.Getpid())), 0o644)
+	time.Sleep(time.Hour)
+	return 0
+}
+
+// userScopes skips t where the engine has no user systemd manager on a
+// cgroup v2 hierarchy to put a run's processes in a scope of their own.
+func userScopes(t *testing.T) {
+	t.Helper()
+	var fs unix.Statfs_t
+	if err := unix.Statfs("/sys/fs/cgroup", &fs); err != nil || fs.Type != unix.CGROUP2_SUPER_MAGIC {
+		t.Skip("no cgroup v2 hierarchy at /sys/fs/cgroup, so a run's processes are found by their marker alone")
+	}
+	out, err := exec.Command("systemctl", "--user", "show", "--property=ControlGroup", "--value").Output()
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		t.Skipf("no user systemd manager (%v), so a run's processes are found by their marker alone", err)
+	}
+}
+
+// escapes is each way a tool can leave the run's marker behind: each
+// writes to $PIDFILE the PID of a process that sleeps without it.
+var escapes = map[string]func(pidfile string) []string{
+	"unset": func(f string) []string {
+		return []string{"env", "-u", "GLITCHED_CLAUDE_RUN", "sh", "-c", "echo $$ > '" + f + "'; exec sleep 60"}
+	},
+	"changed": func(f string) []string {
+		return []string{"env", "GLITCHED_CLAUDE_RUN=another", "sh", "-c", "echo $$ > '" + f + "'; exec sleep 60"}
+	},
+	"cleared, in a new session, forked twice": func(f string) []string {
+		return []string{"sh", "-c", "env -i setsid sh -c 'echo $$ > \"" + f + "\"; exec sleep 60' &"}
+	},
+	"undumpable": func(f string) []string {
+		return []string{"env", envHide + "=" + f, must(os.Executable())}
+	},
+}
+
+// escaped starts a run whose tool leaves the marker behind as escape says,
+// and returns the agent, the run, its fake claude, and the escaped process.
+func escaped(t *testing.T, escape func(string) []string) (ag provider.Agent, run api.ID, claudePID, pid int) {
+	t.Helper()
+	ws := t.TempDir()
+	pidfile := filepath.Join(ws, "pid")
+	tool, _ := json.Marshal(map[string]any{"orphan": escape(pidfile)})
+	tape := filepath.Join(ws, "escape.jsonl")
+	head := must(os.ReadFile(filepath.Join("testdata", "orphan-tool.jsonl")))
+	lines := strings.Split(strings.TrimSpace(string(head)), "\n")
+	data := strings.Join(lines[:4], "\n") + "\n" + string(tool) + "\n{\"hang\":true}\n"
+	if err := os.WriteFile(tape, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envFake, tape)
+	fake := processes(t)
+	run = api.NewID()
+	ag, err := (&claude.Adapter{Path: must(os.Executable())}).Open(ctx, provider.SessionSpec{Thread: api.NewID(), Run: run, Workspace: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ag.Close(context.Background()) })
+	if err := ag.Do(ctx, provider.Start{Text: "Run sleep 60."}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(turnWait); pid == 0; time.Sleep(5 * time.Millisecond) {
+		b, _ := os.ReadFile(pidfile)
+		pid, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+		if time.Now().After(deadline) {
+			t.Fatal("the tool never started its process")
+		}
+	}
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	return ag, run, fake("claude"), pid
+}
+
+// A tool's process that drops or changes the run's marker, or hides it, is
+// still the run's: Close stops it.
+func TestCloseStopsAProcessThatLeftTheMarkerBehind(t *testing.T) {
+	userScopes(t)
+	for name, escape := range escapes {
+		t.Run(name, func(t *testing.T) {
+			ag, _, _, pid := escaped(t, escape)
+			if err := ag.Close(ctx); err != nil {
+				t.Errorf("Close: %v", err)
+			}
+			if !exits(pid, 0) {
+				t.Error("the tool's process still runs after Close")
+			}
+		})
+	}
+}
+
+// The same process outlives a claude that died with its engine. The next
+// engine's Reconcile stops it, knowing nothing but the run.
+func TestReconcileStopsAProcessThatLeftTheMarkerBehind(t *testing.T) {
+	userScopes(t)
+	for name, escape := range escapes {
+		t.Run(name, func(t *testing.T) {
+			_, run, claudePID, pid := escaped(t, escape)
+			syscall.Kill(claudePID, syscall.SIGKILL)
+			if !exits(claudePID, 3*time.Second) || exits(pid, 0) {
+				t.Fatal("want claude gone and the tool's process still running")
+			}
+			if _, err := (&claude.Adapter{}).Reconcile(ctx, provider.RuntimeIdentity{Run: run}); err != nil {
+				t.Errorf("Reconcile: %v", err)
+			}
+			if !exits(pid, 0) {
+				t.Error("the tool's process still runs after Reconcile")
+			}
+		})
+	}
+}
+
