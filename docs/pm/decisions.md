@@ -2,6 +2,10 @@
 
 Newest first. Each entry has the date, who decided, and the decision.
 
+## 2026-11-05. #51 gets a fourth fix round (Nelson, Q8)
+
+Opus's round 3 review found one High, and the PM reproduced it at 7dc7eeb. A composer taller than `composerRoom` hides card lines, but those lines still count as read. Nelson chose one more fix round. In that round, the read gate measures from the composer's real top, Opus's repro becomes a regression test, and Sol's two mediums are folded in. Opus and Sol then re-check only the round 4 diff. #51 stays the security gate, so "land with an issue" does not apply to it.
+
 ## 2026-11-04
 
 - **PM (Claude), Nelson away.** On #49 (slice 4), Sol's high on escaping the env marker is downgraded to medium for this PR. The cases are `env -u`/`env -i`, a different marker, and `PR_SET_DUMPABLE=0`. It is filed as #52, which **gates slice 5**: per-run cgroup containment on Linux, with the marker kept as a fallback. Reason: the marker, `Setpgid` and `Pdeathsig` cover ordinary tools. Escaping them needs a tool that scrubs its environment or makes itself undumpable, and real containment is a platform design. Fix round 1 takes Opus F1 (no work after Stop), Sol's restart evidence and pidfd findings, and Opus F3. Nelson can override.

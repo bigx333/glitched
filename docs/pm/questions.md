@@ -2,7 +2,7 @@
 
 Newest first. Answer under each question, or in the PM thread.
 
-## Q8 (2026-11-05, open). #51 (#47 security gate) has one High left after its third fix round
+## Q8 (2026-11-05, answered: one more fix round). #51 (#47 security gate) has one High left after its third fix round
 
 Opus found the High in round 3, and the PM reproduced it at 7dc7eeb: when a 10-line draft makes the composer taller than the fixed `composerRoom`, card lines under the composer count as read, so ⌘⏎ or Allow once can approve a line the user never saw. Sol found no High. The round 3 summary is at https://github.com/bigx333/glitched/pull/51#issuecomment-6648612505. Poteto's default allows three fix rounds, and the "land with an issue" rule from #43 and #45 was not extended to #51 because #51 is the security gate. So the PM asks.
 
