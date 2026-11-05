@@ -29,8 +29,9 @@ type message struct {
 	Usage   usage    `json:"usage"`
 	// UserMessageUUIDs is, on a result, the user messages it finished.
 	UserMessageUUIDs []string  `json:"user_message_uuids"`
-	Response         *response `json:"response"`   // control_response
-	RequestID        string    `json:"request_id"` // control_request, control_cancel_request
+	Capabilities     []string  `json:"capabilities"` // system init
+	Response         *response `json:"response"`     // control_response
+	RequestID        string    `json:"request_id"`   // control_request, control_cancel_request
 	Request          *struct {
 		Subtype string `json:"subtype"`
 		canUseTool
@@ -81,6 +82,9 @@ type response struct {
 	Subtype   string `json:"subtype"`
 	RequestID string `json:"request_id"`
 	Error     string `json:"error"`
+	Response  struct {
+		Capabilities []string `json:"capabilities"`
+	} `json:"response"`
 }
 
 // tool is how a Claude Code tool shows as a step: its kind, and the input

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"runtime"
@@ -37,6 +38,11 @@ const (
 	interruptRequest = "glitched-interrupt"
 )
 
+// cancelQueued is the capability of an interrupt that cancels the messages
+// Claude Code queued. Claude Code 2.1.317 lists it in its system init, not
+// in its answer to initialize.
+const cancelQueued = "interrupt_cancel_queued_v1"
+
 // interruptGrace is how long Claude Code has to end the turn once asked to
 // interrupt it, before it is stopped.
 var interruptGrace = 10 * time.Second
@@ -61,8 +67,9 @@ type Agent struct {
 	stdin       *os.File
 	cut         error           // set once a line went out cut short, which fails every later write
 	started     bool            // the turn's first message went out
-	outstanding map[string]bool // messages sent, by uuid, that no result has finished yet
-	interrupted bool            // an interrupt went out
+	outstanding map[string]bool // messages sent, by uuid, that no result has finished yet, true for a steer
+	cancels     bool            // an interrupt can cancel the queued messages
+	interrupted bool            // an interrupt went out, or claude was stopped in its place
 	ended       bool            // the turn's end was read
 	deadline    *time.Timer     // stops claude if an interrupt does not end the turn
 
@@ -202,6 +209,7 @@ func (g *Agent) handshake(ctx context.Context) error {
 			if m.Response.Subtype != "success" {
 				return fmt.Errorf("Claude Code refused to start: %s", m.Response.Error)
 			}
+			g.learn(m.Response.Response.Capabilities)
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -230,7 +238,7 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 			return errors.New("claude: the run already started")
 		}
 		g.started = true
-		return g.userLocked(ctx, a.Text)
+		return g.userLocked(ctx, a.Text, false)
 	case provider.Steer:
 		switch {
 		case !g.started:
@@ -238,14 +246,19 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 		case g.ended || g.interrupted:
 			return errors.New("claude: the turn is over")
 		}
-		return g.userLocked(ctx, a.Text)
+		return g.userLocked(ctx, a.Text, true)
 	case provider.Interrupt:
 		if g.interrupted || g.ended {
 			return nil
 		}
 		// Claude Code takes a message the stopped turn did not get to as a
 		// turn of its own, 18 ms after the turn's result, unless the
-		// interrupt cancels it.
+		// interrupt cancels it. One that can't cancel it is stopped instead.
+		if !g.cancels && slices.Contains(slices.Collect(maps.Values(g.outstanding)), true) {
+			g.interrupted = true
+			g.stop()
+			return nil
+		}
 		err := g.sendLocked(ctx, map[string]any{"type": "control_request", "request_id": interruptRequest,
 			"request": map[string]any{"subtype": "interrupt", "cancel_queued": true}})
 		if err == nil {
@@ -261,15 +274,23 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 
 // userLocked sends a user message. Claude Code takes one sent mid-turn at
 // its next model call, and lists each message a result finishes by uuid.
-func (g *Agent) userLocked(ctx context.Context, text string) error {
+func (g *Agent) userLocked(ctx context.Context, text string, steer bool) error {
 	id := uuidOf(api.NewID())
-	g.outstanding[id] = true
+	g.outstanding[id] = steer
 	err := g.sendLocked(ctx, map[string]any{"type": "user", "uuid": id, "session_id": "", "parent_tool_use_id": nil,
 		"message": map[string]string{"role": "user", "content": text}})
 	if err != nil {
 		delete(g.outstanding, id)
 	}
 	return err
+}
+
+func (g *Agent) learn(capabilities []string) {
+	if slices.Contains(capabilities, cancelQueued) {
+		g.mu.Lock()
+		g.cancels = true
+		g.mu.Unlock()
+	}
 }
 
 // over reads a result into the turn's messages, and reports whether it
@@ -406,6 +427,10 @@ func (g *Agent) read(ctx context.Context, m message) []provider.Event {
 			return nil
 		}
 		g.turn.interrupted = interrupted
+	case "system":
+		if m.Subtype == "init" {
+			g.learn(m.Capabilities)
+		}
 	}
 	return g.turn.read(m)
 }
