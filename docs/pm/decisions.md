@@ -2,6 +2,10 @@
 
 Newest first. Each entry has the date, who decided, and the decision.
 
+## 2026-11-05. Slice 5 ships on every platform; Windows' gap is a follow-up (Nelson)
+
+#64 merged, which left #44 (Windows) as the last gate. Nelson chose to turn Claude on everywhere now. On Windows, claude's pipes cannot time out, and Stop or Delete can leave a running tool command behind. The follow-up is #68, which tags Cahil (@SchizzY) because it needs a Windows host. #44 links to it.
+
 ## 2026-11-05. Review severity is judged by realistic user impact (Nelson)
 
 Nelson called the #64 tmux High "nitpicking": nobody uses tmux for this, and it is part of how Claude Code works. From now on:
