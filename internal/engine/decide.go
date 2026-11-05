@@ -445,6 +445,9 @@ func (d *decision) observe(o Observation) error {
 		if o.Restored {
 			return d.emit(api.TurnRestored{Run: o.Run})
 		}
+		if o.Failed {
+			d.effects = append(d.effects, CloseAgent{Run: o.Run, Generation: live.Generation})
+		}
 		return d.emit(api.TurnUncertain{Run: o.Run})
 	case Rewound:
 		return d.rewound()
