@@ -30,6 +30,19 @@ type SessionSpec struct {
 	Workspace   string
 	Model       api.ModelRef
 	Access      api.Access
+	// MCP is glitched's own MCP server for the run, which each adapter
+	// hands its agent its own way; nil runs the agent without it.
+	MCP *MCPServer
+}
+
+// MCPServer is a stdio MCP server an agent starts for itself: Command with
+// Args and Env. Instructions tell the agent what the server is for.
+type MCPServer struct {
+	Name         string
+	Command      string
+	Args         []string
+	Env          map[string]string
+	Instructions string
 }
 
 // RuntimeIdentity is what the engine persisted about a run. The adapter tags

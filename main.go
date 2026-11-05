@@ -6,10 +6,13 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"maps"
 	"math"
 	"math/rand/v2"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -25,6 +28,7 @@ import (
 	"glitched/internal/client"
 	"glitched/internal/daemon"
 	eng "glitched/internal/engine"
+	"glitched/internal/mcp"
 	"glitched/mygoscript"
 	"glitched/wind"
 )
@@ -777,6 +781,14 @@ func (a *app) toasts(c *ui.Context) {
 }
 
 func main() {
+	// The agents of the GUI's own engine start this binary as glitched mcp.
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		if err := mcp.Main(context.Background(), os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "glitched:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	var a *app
 	a = newApp(stateDir(), (*daemon.Config).WithClaude, func(fn func()) {
 		a.win.Update(func() {
