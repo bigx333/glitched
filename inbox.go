@@ -233,7 +233,9 @@ func (a *app) projectStrip(c *ui.Context) {
 				a.toggleProject(p.key)
 			}
 		}
-		a.iconButton(c, "add-project", icPlus, "Add project", false).Padding(4)
+		if a.iconButton(c, "add-project", icPlus, "Add project", false).Padding(4).Clicked() {
+			a.addProject()
+		}
 	})
 }
 
