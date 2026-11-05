@@ -73,7 +73,7 @@ func TestASpawnPastALimitIsRefused(t *testing.T) {
 		want   string
 	}{
 		{"at work at once", fake.Turn(true), engine.Limits{Working: 1}, "1 child threads of this thread are at work"},
-		{"in all", fake.Turn(false), engine.Limits{All: 1}, "has started 1 child threads"},
+		{"in all", fake.Turn(false), engine.Limits{All: 1}, "has 1 child threads"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,4 +229,92 @@ func TestASpawnSurvivesACrash(t *testing.T) {
 		}
 		assertReplay(t, n.st)
 	})
+}
+
+// A child left uncertain, as every live one is after an engine restart
+// under Claude, has no agent at work, so it takes no place under the
+// limit at once: the resumed parent starts another.
+func TestAnUncertainChildIsntAtWork(t *testing.T) {
+	path := dbPath(t)
+	ad := fake.New(fake.Turn(true))
+	n := start(t, path, ad)
+	n.st.SetLimits(engine.Limits{Working: 1})
+	parent := newThread(t, n.h)
+	kid, err := newChild(t, n.h, ad, parent, api.AccessAsk, fake.Child{Title: "first", Task: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	until(t, n.h, kid, "the child at work", waiting)
+	n.kill()
+
+	ad = fake.New(fake.Turn(true))
+	n = start(t, path, ad)
+	n.st.SetLimits(engine.Limits{Working: 1})
+	until(t, n.h, kid, "the child, uncertain", func(th api.Thread) bool { return th.Run == api.RunUncertain })
+	second, err := newChild(t, n.h, ad, parent, api.AccessAsk, fake.Child{Title: "second", Task: "go"})
+	if err != nil {
+		t.Fatalf("a parent whose only child is uncertain: %v; want a second child", err)
+	}
+	until(t, n.h, second, "the second child at work", waiting)
+	var rej *api.RejectedError
+	if _, err := newChild(t, n.h, ad, parent, api.AccessAsk, fake.Child{Title: "third", Task: "go"}); !errors.As(err, &rej) || !strings.Contains(rej.Reason, "1 child threads of this thread are at work") {
+		t.Fatalf("a third child while the second works: %v; want refused", err)
+	}
+}
+
+// A deleted child no longer counts against the limit in all, so a thread
+// that lives long can go on starting children as the user deletes them.
+func TestADeletedChildFreesItsPlaceInAll(t *testing.T) {
+	ad := fake.New(fake.Turn(false))
+	n := start(t, dbPath(t), ad)
+	n.st.SetLimits(engine.Limits{All: 1})
+	parent := newThread(t, n.h)
+	first, err := newChild(t, n.h, ad, parent, api.AccessAsk, fake.Child{Title: "first", Task: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	until(t, n.h, first, "the first child's turn", func(th api.Thread) bool { return th.Run == api.RunIdle && th.LastTurn != nil })
+	submit(t, n.h, first, api.ThreadDelete{})
+	if _, err := newChild(t, n.h, ad, parent, api.AccessAsk, fake.Child{Title: "second", Task: "go"}); err != nil {
+		t.Fatalf("a child after the only one was deleted: %v; want it started", err)
+	}
+	var rej *api.RejectedError
+	if _, err := newChild(t, n.h, ad, parent, api.AccessAsk, fake.Child{Title: "third", Task: "go"}); !errors.As(err, &rej) || !strings.Contains(rej.Reason, "has 1 child threads") {
+		t.Fatalf("a third child beside the second: %v; want refused", err)
+	}
+}
+
+// Once a parent's settle or delete commits, its run starts no child,
+// even with its stop still in flight: a cascade that follows the commit
+// meets every child the parent has.
+func TestASettledOrDeletedParentStartsNoChild(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body api.Intent
+		want string
+	}{
+		{"settled", api.InboxSet{Disposition: api.Disposition{State: api.Settled}}, "settled"},
+		{"deleted", api.ThreadDelete{}, "gone"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newGated(fake.Turn(true))
+			release := make(chan struct{})
+			defer close(release)
+			g.setGate(func(_ api.ID, a provider.Action) <-chan struct{} {
+				if _, ok := a.(provider.Interrupt); ok {
+					return release
+				}
+				return nil
+			})
+			n := start(t, dbPath(t), g)
+			parent := newThread(t, n.h)
+			run := submit(t, n.h, parent, dispatch("go", api.StartNow)).Command
+			until(t, n.h, parent, "the approval", waiting)
+			submit(t, n.h, parent, tc.body)
+			var rej *api.RejectedError
+			if err := createUnder(n.h, parent, run); !errors.As(err, &rej) || !strings.Contains(rej.Reason, tc.want) {
+				t.Fatalf("a create from the run of a %s parent: %v; want refused with %q", tc.name, err, tc.want)
+			}
+		})
+	}
 }

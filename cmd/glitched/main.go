@@ -132,7 +132,7 @@ func serve(ctx context.Context, args []string) error {
 	control := fs.String("control", "", "the control server the engine's own node signs in to, such as Headscale's; Tailscale's when empty")
 	def := eng.DefaultLimits
 	maxWorking := fs.Int("max-working", def.Working, "the most child threads agents run under one thread at once")
-	maxChildren := fs.Int("max-children", def.All, "the most child threads agents start under one thread, deleted ones too")
+	maxChildren := fs.Int("max-children", def.All, "the most child threads one thread has, not counting deleted ones")
 	maxDepth := fs.Int("max-depth", def.Depth, fmt.Sprintf("how far below a thread of yours agents start child threads, 1 to %d", api.MaxDepth))
 	fs.Parse(args)
 

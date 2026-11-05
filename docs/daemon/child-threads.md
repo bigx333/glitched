@@ -32,12 +32,12 @@ Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, aft
   - "only the parent's live run can start a child thread, and not once it is stopping": `Run` is not the parent's live run, or that run is stopping or uncertain.
   - "a child thread can be at most N below a thread of yours": the line is longer than the limits' depth, which is at most `MaxDepth`.
   - "a child thread's access can't be wider than its parent's": `Access` above the parent's. The parent's is no wider than its own parent's, so the check at one level holds for the line.
-  - "N child threads of this thread are at work, the most at once", and "this thread has started N child threads, the most it may": the parent is at a limit. `kidsOf` counts its children, deleted ones too, and those with a live run.
+  - "N child threads of this thread are at work, the most at once; start another once one of them stops", and "this thread has N child threads, the most it may; start another once one is deleted": the parent is at a limit. `kidsOf` counts its children that aren't deleted, and those of them whose agent works: a live run that isn't uncertain. An uncertain child, as every live one is after an engine restart under Claude, has no agent at work and waits on the user, so it takes no place at once.
 - A replayed create with the same command ID returns its stored receipt before any of this runs, as every command does.
 
 ## Limits
 
-`engine.Limits` caps what agents start: 5 children of one thread at work at once, 20 in all, and depth 4, the defaults for a field of zero. Depth is at most `api.MaxDepth`. They live in `daemon.Config.Children`, saved in `engine.json` with no store schema change. `glitched serve -max-working -max-children -max-depth` sets them for the next start, and the Agents card on Settings, This machine sets them too. The engine embedded in the GUI applies a change at once through `Daemon.SetLimits`; an engine another process runs applies it when it next starts.
+`engine.Limits` caps what agents start: 5 children of one thread at work at once, 20 in all not counting deleted ones, and depth 4, the defaults for a field of zero. Depth is at most `api.MaxDepth`. They live in `daemon.Config.Children`, saved in `engine.json` with no store schema change. `glitched serve -max-working -max-children -max-depth` sets them for the next start, and the Agents card on Settings, This machine sets them too. The engine embedded in the GUI applies a change at once through `Daemon.SetLimits`; an engine another process runs applies it when it next starts.
 - Access is fixed at create on main (there's no access-change intent), so narrowing after create isn't a case yet.
 
 ## Reports

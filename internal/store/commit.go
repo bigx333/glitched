@@ -61,11 +61,11 @@ func lineOf(ctx context.Context, q querier, id api.ID) ([]engine.Thread, error) 
 	return line, nil
 }
 
-// kidsOf counts parent's children.
+// kidsOf counts parent's children that aren't deleted.
 func kidsOf(ctx context.Context, q querier, parent api.ID) (engine.Kids, error) {
 	var k engine.Kids
-	err := q.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(EXISTS (SELECT 1 FROM runs WHERE runs.thread = threads.id AND runs.state <> 'finished')), 0)
-		FROM threads WHERE parent = ?`, parent[:]).Scan(&k.All, &k.Working)
+	err := q.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(EXISTS (SELECT 1 FROM runs WHERE runs.thread = threads.id AND runs.state NOT IN ('finished', 'uncertain'))), 0)
+		FROM threads WHERE parent = ? AND deleted = 0`, parent[:]).Scan(&k.All, &k.Working)
 	return k, err
 }
 
