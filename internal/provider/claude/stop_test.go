@@ -182,3 +182,25 @@ func TestClaudeStopsSoonOnceCloseRunsOutOfTime(t *testing.T) {
 		t.Error("claude still runs a second after its Close ran out of time")
 	}
 }
+
+// A Close that runs out of time stops claude without waiting for it, and
+// what claude started must not run on until the next Close.
+func TestAToolStopsWithClaudeOnceCloseRunsOutOfTime(t *testing.T) {
+	replay(t, "busy-tool", "")
+	pid := processes(t)
+	ag := open(t)
+	if err := ag.Do(ctx, provider.Start{Text: "Run sleep 60."}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); pid("tool") == 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the tool call never started")
+		}
+	}
+	closeCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	within(t, time.Second, "Close", func() error { return ag.Close(closeCtx) })
+	if !exits(pid("tool"), 2*time.Second) {
+		t.Error("the tool still runs after Close stopped claude")
+	}
+}
