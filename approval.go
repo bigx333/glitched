@@ -432,9 +432,10 @@ const dwell = 300 * time.Millisecond
 // press is a press of an answer to the waiting request that began at
 // began, by key or on a button. It brings a card whose start no frame
 // drew in view into view. It answers only a card that stood still since
-// dwell before the press began, and a key only one that showed before ⌘
-// went down, so that a key held, repeating, answers no card that came
-// after the one it answered. Deny on its button answers then, as the
+// dwell before the press began, and a key only the keyed card, which
+// showed its start and its keys before ⌘ went down, so that a key held,
+// repeating, answers no card that came after the one it answered, nor
+// one keyed after it. Deny on its button answers then, as the
 // user looks at it; else it answers a card that drew every line it holds,
 // and whose start the window draws. A card with a line no frame drew
 // scrolls that line into view; one whose start is out of view brings it
@@ -446,7 +447,7 @@ func (a *app) press(c *ui.Context, t thread, es []entry, r *client.RequestEntry,
 	case rd.born.IsZero():
 		a.reveal(t, es, r.Request)
 	case began.Before(rd.moved.Add(dwell)):
-	case key && !a.chord.After(rd.born):
+	case key && (!a.chord.After(rd.born) || !a.keyedShown()):
 	case !key && answer == client.Deny:
 		a.answer(c, t, r, answer)
 	case rd.unread():
@@ -753,8 +754,9 @@ func (a *app) keyedRequest(t thread, es []entry) *client.RequestEntry {
 // approvalKeys answer a waiting request from the keyboard while the
 // composer holds nothing: ⌘⏎ allows it once, as it would send a draft,
 // and ⇧⌘D denies it, as press says, and its answers show the keys. With a
-// draft, ⌘⏎ sends it, which steers the agent. They keep when ⌘ went down.
-// Questions take keys of in, the chat's pane, as questionKeys says.
+// draft, ⌘⏎ sends it, which steers the agent. They keep when ⌘ went down,
+// and when a frame first showed the keyed card's keys. Questions take keys
+// of in, the chat's pane, as questionKeys says.
 func (a *app) approvalKeys(c *ui.Context, in ui.Element, t thread, es []entry) {
 	switch {
 	case c.Modifiers()&ui.Cmd == 0:
@@ -763,9 +765,16 @@ func (a *app) approvalKeys(c *ui.Context, in ui.Element, t thread, es []entry) {
 		a.chord = a.now
 	}
 	r := a.keyedRequest(t, es)
-	a.keyed = api.ID{}
+	var keyed api.ID
 	if r != nil {
-		a.keyed = r.Request
+		keyed = r.Request
+	}
+	switch {
+	case keyed != a.keyed:
+		a.keyed, a.keyedSince = keyed, time.Time{}
+	case a.keyedSince.IsZero():
+		// This pass's timeline drew the card with its keys.
+		a.keyedSince = a.now
 	}
 	if r == nil || strings.TrimSpace(a.draft) != "" || len(a.attachments) > 0 {
 		return
@@ -783,6 +792,12 @@ func (a *app) approvalKeys(c *ui.Context, in ui.Element, t thread, es []entry) {
 		return
 	}
 	a.press(c, t, es, r, answer, a.now, true)
+}
+
+// keyedShown is whether ⌘ went down after a frame showed the keyed card
+// with its keys: a chord held from before acts on no card keyed since.
+func (a *app) keyedShown() bool {
+	return !a.keyedSince.IsZero() && a.chord.After(a.keyedSince)
 }
 
 // responding is the answer to the request sent from here and not landed,
