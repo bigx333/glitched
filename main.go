@@ -381,6 +381,9 @@ type app struct {
 	// aboveH is the height of what's over the composer card, the agents
 	// strip, as last measured.
 	aboveH float32
+	// composerAt is the composer's frame, the card with what's over and
+	// under it, as last laid out: a draft grows it over the timeline.
+	composerAt ui.Rect
 	// The agents strip: over whose composer the panel is open, and showing
 	// all its rows past five; in this frame, how far from pill (0) to panel
 	// (1), the panel's height as it heads for its rows', and the pill's

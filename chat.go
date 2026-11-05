@@ -698,6 +698,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 	}
 	bar.Children(func() {
 		frame := ui.Column(c).Key("composer-frame").WidthPercent(100).MaxWidth(lerp(compactWidth, contentWidth)).PassThrough()
+		a.composerAt = frame.Bounds()
 		frame.Children(func() {
 			a.heroHeading(c, d)
 			// The agents strip sits over the card, the room it takes going
