@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -19,8 +18,9 @@ import (
 func sysProcAttr() *syscall.SysProcAttr { return nil }
 
 // contain has cmd start claude suspended, so confine can put it in a job
-// before it starts anything.
-func contain(cmd *exec.Cmd, _ string) {
+// before it starts anything. Once cmd's context ends, the run's jobs end
+// with claude: with no SIGTERM, claude cannot stop its tools itself.
+func contain(cmd *exec.Cmd, run string) {
 	if cmd.Err != nil {
 		return
 	}
@@ -28,6 +28,19 @@ func contain(cmd *exec.Cmd, _ string) {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
+	cmd.Cancel = func() error {
+		end(run)
+		return terminate(cmd.Process)
+	}
+}
+
+// end kills every process in run's jobs, and waits for none.
+func end(run string) {
+	jobs.Lock()
+	defer jobs.Unlock()
+	for _, job := range jobs.of[run] {
+		windows.TerminateJobObject(job, 1)
+	}
 }
 
 // jobs is each run's job objects, one for each claude it started. A job
@@ -130,8 +143,11 @@ func resume(pid uint32) error {
 // has no SIGTERM to let claude stop its tools itself. It reports whether
 // any process was found, and fails while one is left.
 func stopRun(ctx context.Context, run string) (bool, error) {
+	// The jobs leave the map while they are stopped, so a stop of the run
+	// at the same time finds none to close again.
 	jobs.Lock()
-	held := slices.Clone(jobs.of[run])
+	held := jobs.of[run]
+	delete(jobs.of, run)
 	jobs.Unlock()
 	if len(held) == 0 {
 		return false, nil
@@ -149,15 +165,13 @@ func stopRun(ctx context.Context, run string) (bool, error) {
 			break
 		}
 		if ctx.Err() != nil || time.Now().After(deadline) {
+			// A later stop tries again.
+			jobs.Lock()
+			jobs.of[run] = append(jobs.of[run], held...)
+			jobs.Unlock()
 			return found, errors.Join(append(errs, fmt.Errorf("claude: %d processes of the run still run", left))...)
 		}
 	}
-	jobs.Lock()
-	jobs.of[run] = slices.DeleteFunc(jobs.of[run], func(h windows.Handle) bool { return slices.Contains(held, h) })
-	if len(jobs.of[run]) == 0 {
-		delete(jobs.of, run)
-	}
-	jobs.Unlock()
 	for _, job := range held {
 		windows.CloseHandle(job)
 	}
