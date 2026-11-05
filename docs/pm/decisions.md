@@ -2,6 +2,14 @@
 
 Newest first. Each entry has the date, who decided, and the decision.
 
+## 2026-11-05. The engine does the Settle/Delete cascade (Nelson)
+
+#74's GUI-side marks fixed Sol's High, a just-spawned child that Settle or Delete missed. Its re-check then found three more mark failures, after a failed command, a Retry, a Dismiss or a reconnect. Two were High (Sol) and the others Medium and Low (Opus).
+- **Nelson's decision.** Settle and Delete on a thread apply to its whole subtree inside the engine, in the same commit. This answers open question 1 in `docs/daemon/child-threads.md`.
+- **The marks go.** The client-side marks are removed.
+- **Protocol.** `api.Protocol` 5→6 lands in #74 under Nelson's Protocol 6 approval, because the command semantics change. Spawn PR 3 adds `MessageQueued.Report` within version 6, with no release in between.
+- **Schema.** No store schema change.
+
 ## 2026-11-05. #71 fix round 1 scope (PM)
 
 - **Sol's High was already on main.** Settle and Delete miss a child the engine has admitted but the GUI has not seen yet, because the GUI builds the cascade from its cached tree. #71 did not cause it. The spawn tool makes it normal use, so it is fixed in #71's replacement PR, preferably engine-side. If that needs an api change, it comes back to Nelson.
