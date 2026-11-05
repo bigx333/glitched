@@ -2,6 +2,13 @@
 
 Newest first. Each entry has the date, who decided, and the decision.
 
+## 2026-11-05. #60 merged; #61 gates slice 5; the approval-gate issues go in one PR (PM)
+
+- **#60 (AskUserQuestion PR A) was rebase-merged at 6f49cad.** Its rebase check found one High, which fix round 1 fixed: the question card's keys answered an approval waiting at the same time. The re-check found no High. Sol had no findings, and Opus had one Medium and one Low.
+- **Opus's Medium is #61, a slice 5 gate.** One held ⌘⏎ with key repeat answers a card, then allows the next approval. This is already on main with two approvals waiting. It is filed as a gate because a held key can allow a command the user did not press for.
+- **#59, #61 and #57 go in one PR.** All three live in the same approval key and read code, so separate PRs would conflict. The brief asks for one model of covers that reads all geometry from the same frame, not more patches.
+- **PR B (the Claude AskUserQuestion mapping) runs in parallel.** It touches only `internal/provider/claude` and must not change the UI key logic.
+
 ## 2026-11-05. #51 landed with two Highs tracked in #59 (Nelson, Q9)
 
 Round 4 (2ad59ed) fixed what it claimed, and CI was green. Opus and Sol each found a new High, and the PM reproduced both:
