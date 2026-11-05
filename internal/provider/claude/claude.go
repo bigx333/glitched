@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -127,17 +128,23 @@ func (a *Adapter) binary() (string, error) {
 		return p, nil
 	}
 	if home, err := os.UserHomeDir(); err == nil {
-		if p := filepath.Join(home, ".local", "bin", "claude"); isExecutable(p) {
+		if p := filepath.Join(home, ".local", "bin", "claude"+exeSuffix); isExecutable(p) {
 			return p, nil
 		}
 	}
 	return "", ErrNotInstalled
 }
 
+// isExecutable is whether path is a program. Windows has no execute bit:
+// any file there may be one.
 func isExecutable(path string) bool {
 	fi, err := os.Stat(path)
-	return err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0
+	return err == nil && !fi.IsDir() && (runtime.GOOS == "windows" || fi.Mode()&0o111 != 0)
 }
+
+// exeSuffix is what a program's name ends in: Claude Code's native
+// installer puts claude.exe in ~/.local/bin on Windows.
+var exeSuffix = map[bool]string{true: ".exe"}[runtime.GOOS == "windows"]
 
 // argv is how a run starts Claude Code. A tool call that the user's own
 // rules, hooks and the run's mode leave undecided comes to the run as a
