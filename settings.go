@@ -53,6 +53,9 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 			case r.Match("/keybindings"):
 				r.Title("Keybindings")
 				a.page(c, "Keybindings", "Shortcuts for the commands you use most.", a.keybindings)
+			case r.Match("/scripts"):
+				r.Title("Scripts")
+				a.page(c, "Scripts", "Native UI that a sandboxed Luau script describes. A mygoscript spike.", a.scripts)
 			default:
 				r.Title("About")
 				a.page(c, "About", "", a.about)

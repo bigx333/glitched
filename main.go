@@ -23,6 +23,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/browse/sysweb"
 	"glitched/internal/client"
+	"glitched/mygoscript"
 	"glitched/wind"
 )
 
@@ -441,6 +442,9 @@ type app struct {
 	checkUntil  time.Time
 
 	md markdown.Options
+
+	// counter is the scripted counter on the Scripts settings page.
+	counter *mygoscript.Plugin
 }
 
 // newApp is the app on the engines its state directory dir names. The
