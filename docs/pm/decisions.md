@@ -2,6 +2,13 @@
 
 Newest first. Each entry has the date, who decided, and the decision.
 
+## 2026-11-05. #71 fix round 1 scope (PM)
+
+- **Sol's High was already on main.** Settle and Delete miss a child the engine has admitted but the GUI has not seen yet, because the GUI builds the cascade from its cached tree. #71 did not cause it. The spawn tool makes it normal use, so it is fixed in #71's replacement PR, preferably engine-side. If that needs an api change, it comes back to Nelson.
+- **"20 in all" counts only children that still exist.** A deleted child no longer uses up a long-lived parent's limit. The PM decided this as the plain reading of Nelson's 5/20 answer.
+- **Uncertain children no longer count as "at work"** (Opus Medium). The flaky `seedChild` helper is fixed too.
+- **#71 conflicts with main**, so it is replaced under the `-v2` rule by `feat/spawn-engine-v2`.
+
 ## 2026-11-05. A stopped parent holds its children's reports (Nelson, plan claim 3.1)
 
 If the user stops a parent by hand while its children work, a child's report does not restart the parent. The report waits in the parent and is delivered with the user's next message, as in Zeron. A Stop stays a stop. This applies to spawn tool PR 3 (the report wakes the parent).
