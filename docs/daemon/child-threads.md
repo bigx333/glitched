@@ -1,6 +1,6 @@
 # Child threads
 
-Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, after archiving went (Settled is where a thread done with goes) and protocol 3 was taken by that change; changed on 2026-11-03 so that only an agent starts a child and Settle takes the tree; changed on 2026-11-05 so that the engine settles and deletes a tree in one commit (open question 1). This is what the branch builds, not a plan, except where a line says planned.
+Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, after archiving went (Settled is where a thread done with goes) and protocol 3 was taken by that change; changed on 2026-11-03 so that only an agent starts a child and Settle takes the tree; changed on 2026-11-05 so that the engine settles and deletes a tree in one commit (open question 1); changed on 2026-11-06 for `glitched mcp`, the spawn tool's server. This is what the branch builds, not a plan, except where a line says planned.
 
 ## Decision
 
@@ -9,7 +9,7 @@ Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, aft
 - The tree is one field on the thread. Depth is never stored; it's walked, bounded.
 - The engine refuses a child deeper than 4 below a thread of the user's, or wider than its parent's access, and a child past the configured limits (see Limits).
 - A child's run that completes, fails, or blocks on a request reports to its parent as a `child.reported` event. The report is an outbox effect, committed with the child's event, so a crash replays it rather than losing it.
-- Only an agent starts a child; the user can't (decided 2026-11-03). A create names the parent's live run in `ThreadCreate.Run`, and the engine refuses one that doesn't. No provider has a tool for it yet: the fake provider spawns for tests (`fake.Adapter.Spawns`), and `glitched mcp` is the next PR of the spawn tool.
+- Only an agent starts a child; the user can't (decided 2026-11-03). A create names the parent's live run in `ThreadCreate.Run`, and the engine refuses one that doesn't. A Claude Code agent asks through `glitched mcp`'s `delegate_task` (see The spawn tool), and the fake provider spawns for tests (`fake.Adapter.Spawns`).
 - Settle and delete of a tree are one command, on the thread the user acts on. The engine applies it to that thread and every thread under it in the same commit, a child started a moment before included: settling stops each run and cancels what waits, and deleting ends each run and closes its agent. A settled tree has nothing running, and a deleted one leaves nothing behind. Stop all stays one `turn.interrupt` per thread, sent by the GUI.
 - Each thread stores the tokens its own turns used. The GUI adds up a tree's.
 - The protocol goes from 3 to 4, and the store schema from 4 to 5. Protocol 5 and schema 6 add the parent's last report (see Reading it). Protocol 6 has settle and delete take the tree, with no schema change (see Protocol 6).
@@ -34,6 +34,16 @@ Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, aft
   - "a child thread's access can't be wider than its parent's": `Access` above the parent's. The parent's is no wider than its own parent's, so the check at one level holds for the line.
   - "N child threads of this thread are at work, the most at once; start another once one of them stops", and "this thread has N child threads, the most it may; start another once one is deleted": the parent is at a limit. `kidsOf` counts its children that aren't deleted, and those of them whose agent works: a live run that isn't uncertain. An uncertain child, as every live one is after an engine restart under Claude, has no agent at work and waits on the user, so it takes no place at once.
 - A replayed create with the same command ID returns its stored receipt before any of this runs, as every command does.
+
+## The spawn tool
+
+`glitched mcp` (`internal/mcp`) is a stdio MCP server, newline-delimited JSON-RPC 2.0, as Zeron's `zeron mcp` is. Both binaries answer it: the CLI and the GUI.
+
+- The host gives each run's agent the server in `provider.SessionSpec.MCP` (`runtime.WithMCP`, set by `daemon.Start`): the binary the engine runs in, with `mcp` and three variables that name the caller, `GLITCHED_THREAD`, `GLITCHED_RUN` and `GLITCHED_ENGINE` (the engine's socket). Only these name the calling thread, never a tool's arguments.
+- The claude adapter passes it as an inline `--mcp-config`, without `--strict-mcp-config`, so it goes beside the user's own servers. It adds `--allowedTools mcp__glitched__*`, so a spawn never asks, and short instructions with `--append-system-prompt`. `claude.Command` drops any of the three variables claude would inherit, so an engine inside a run never speaks for that run's thread.
+- The server answers `initialize`, `ping`, `tools/list` and `tools/call`, takes notifications, and answers any other method, such as the `server/discover` Claude Code sends first, with -32601.
+- `delegate_task` takes `task`, and `title`, `model`, `effort` and `client_request_id`. It reads the caller's thread and submits a `ThreadCreate` with `Parent`, `Run` and `Text` over the socket. The child's thread and the command's ID derive from the call's id: `client_request_id`, else Claude Code's `_meta.claudecode/toolUseId`. So a retry finds the same child. An engine refusal returns as an `isError` result with its reason.
+- `TestContractMCPConfig` (claudelive) pins the merge, the tool name and the tool use id against the claude on PATH, which must be 2.1.317 or 2.1.318. Its transcript, `delegate.jsonl`, holds the MCP traffic too, which the fake claude replays against the real server.
 
 ## Limits
 
