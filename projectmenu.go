@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/egoist/mygo/ui"
 
@@ -128,6 +129,11 @@ func (a *app) removeProject(p *project) {
 	for _, t := range tops {
 		a.deleteTree(t)
 	}
+	// Deletes that failed as they were sent, with no engine to take them,
+	// leave the project, and the draft in it.
+	if !slices.ContainsFunc(tops, deleting) {
+		return
+	}
 	// A draft with no machine is on the first, as current() has it.
 	e := a.fresh.env
 	if envs := a.backend.Envs(); e == nil && len(envs) > 0 {
@@ -181,7 +187,7 @@ func (a *app) removeAlert(c *ui.Context) {
 	// will be stopped.
 	live := a.projectLive(p)
 	if live {
-		body = "An agent is working in " + name + ": stop it first, and nothing is removed until then."
+		body = "An agent is working in " + name + ": stop it first, and nothing is removed until then. The folder, " + p.key.workspace + ", isn't touched."
 	}
 	switch a.alert(c, &a.removeOpen, head, body, "Cancel", "Remove") {
 	case 1:
