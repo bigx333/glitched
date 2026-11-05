@@ -146,9 +146,9 @@ func TestTheEngineKeepsChildrenInBounds(t *testing.T) {
 	}
 }
 
-// A child whose parent was deleted reports to no one, and its thread goes
-// on: its next turn runs.
-func TestAnOrphansReportGoesNowhere(t *testing.T) {
+// Deleting a parent deletes its child with it: the child takes no new
+// message, and the parent's line takes no new child.
+func TestDeletingAParentDeletesItsChild(t *testing.T) {
 	ad := fake.New(fake.Turn(false))
 	n := start(t, dbPath(t), ad)
 	parent := newThread(t, n.h)
@@ -157,17 +157,20 @@ func TestAnOrphansReportGoesNowhere(t *testing.T) {
 		t.Fatal(err)
 	}
 	submit(t, n.h, parent, api.ThreadDelete{})
-	for i := range 2 {
-		submit(t, n.h, c, dispatch("go", api.AfterActive))
-		until(t, n.h, c, "the child's turn", func(th api.Thread) bool {
-			return th.Run == api.RunIdle && th.LastTurn != nil && th.Queued == 0 && count(events(t, n.h, c), "turn.ended") == i+1
-		})
+	if _, err := n.h.Read(ctx, api.Query{Thread: c}); !errors.Is(err, api.ErrNotFound) {
+		t.Errorf("the child after its parent's delete: %v, want not found", err)
+	}
+	if _, err := n.h.Submit(ctx, api.Command{ID: api.NewID(), Target: c, Body: dispatch("go", api.AfterActive)}); !errors.Is(err, api.ErrNotFound) {
+		t.Errorf("a message to the deleted child: %v, want not found", err)
+	}
+	if err := createUnder(n.h, c, api.NewID()); err == nil {
+		t.Error("a child of the deleted child was created")
 	}
 }
 
-// A deleted ancestor ends a child's line: under a thread whose grandparent
-// was deleted, a child is as deep as the GUI shows it, and is created.
-func TestADeletedAncestorEndsTheLine(t *testing.T) {
+// Deleting a thread in a line deletes the line below it, and leaves the
+// line above it to start children.
+func TestDeletingAThreadInALineDeletesWhatsBelow(t *testing.T) {
 	ad := fake.New(fake.Turn(false))
 	n := start(t, dbPath(t), ad)
 	line := []api.ID{newThread(t, n.h)}
@@ -179,11 +182,13 @@ func TestADeletedAncestorEndsTheLine(t *testing.T) {
 		line = append(line, c)
 	}
 	submit(t, n.h, line[1], api.ThreadDelete{})
-	if _, err := newChild(t, n.h, ad, line[len(line)-1], api.AccessAsk); err != nil {
-		t.Errorf("a child under a line cut by a deleted thread: %v", err)
+	for i, id := range line[1:] {
+		if _, err := n.h.Read(ctx, api.Query{Thread: id}); !errors.Is(err, api.ErrNotFound) {
+			t.Errorf("thread %d of the line after the delete: %v, want not found", i+1, err)
+		}
 	}
-	if err := createUnder(n.h, line[1], api.NewID()); err == nil {
-		t.Error("a child of a deleted thread was created")
+	if _, err := newChild(t, n.h, ad, line[0], api.AccessAsk); err != nil {
+		t.Errorf("a child of the thread above the delete: %v", err)
 	}
 }
 
@@ -340,6 +345,53 @@ func TestADeletedOrSettledThreadsAgentStopsAcrossARestart(t *testing.T) {
 				t.Errorf("the thread is %v after the restart, want settled", v.Disposition.State)
 			}
 			gone(t, g, thread, run)
+		})
+	}
+}
+
+// runOf is the run thread's log last admitted.
+func runOf(t *testing.T, ep api.Endpoint, thread api.ID) api.ID {
+	t.Helper()
+	var run api.ID
+	for _, e := range events(t, ep, thread) {
+		if b, err := e.Decode(); err == nil {
+			if a, ok := b.(api.TurnAdmitted); ok {
+				run = a.Run
+			}
+		}
+	}
+	return run
+}
+
+// Deleting a thread deletes its child, and a host that crashes or shuts
+// down before it closed either agent leaves both closes to the next one:
+// its reconcile finds each agent of the deleted tree and closes it.
+func TestADeletedTreesAgentsCloseAcrossARestart(t *testing.T) {
+	for how, end := range map[string]func(node){"crash": node.kill, "shutdown": node.stop} {
+		t.Run(how, func(t *testing.T) {
+			ad := &unreachable{Adapter: fake.New(fake.Turn(true)), tried: make(chan struct{}, 1)}
+			path := dbPath(t)
+			n := start(t, path, ad)
+			parent := newThread(t, n.h)
+			child, err := newChild(t, n.h, ad, parent, api.AccessAsk, fake.Child{Title: "child", Task: "work"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			until(t, n.h, child, "the child's approval", waiting)
+			run := submit(t, n.h, parent, dispatch("go on", api.StartNow)).Command
+			until(t, n.h, parent, "the parent's approval", waiting)
+			childRun := runOf(t, n.h, child)
+			ad.fail.Store(true)
+			submit(t, n.h, parent, api.ThreadDelete{})
+			<-ad.tried
+			end(n)
+			ad.fail.Store(false)
+			n = start(t, path, ad)
+			if _, err := n.h.Read(ctx, api.Query{Thread: child}); !errors.Is(err, api.ErrNotFound) {
+				t.Errorf("the child after its parent's delete: %v, want not found", err)
+			}
+			gone(t, ad, parent, run)
+			gone(t, ad, child, childRun)
 		})
 	}
 }

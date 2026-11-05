@@ -17,7 +17,10 @@ import (
 
 // Submit decides c against its thread and commits the result with c's
 // receipt. The same ID and body returns the stored receipt without deciding
-// again; the same ID with another body is api.ErrConflict.
+// again; the same ID with another body is api.ErrConflict. A command that
+// takes the tree (engine.TakesTree) is decided on every thread under its
+// target too, in the same commit, so a child started a moment before goes
+// with it, and the engine starts none under a settled or deleted thread.
 func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.Receipt, error) {
 	c.Expires = c.Expires.UTC()
 	body, err := json.Marshal(c)
@@ -25,7 +28,7 @@ func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.R
 		return api.Receipt{}, &api.RejectedError{Reason: err.Error()}
 	}
 	hash := sha256.Sum256(body)
-	at, err := s.commit(ctx, c.Target, &receipt{c.ID, hash[:]}, 0, func(q querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
+	top := step{c.Target, func(q querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
 		if b, ok := c.Body.(api.ThreadCreate); ok && !b.Parent.IsZero() && !t.Exists() {
 			line, err := lineOf(ctx, q, b.Parent)
 			if err != nil {
@@ -40,8 +43,54 @@ func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.R
 			}
 		}
 		return engine.Decide(t, c, now)
+	}}
+	at, err := s.commit(ctx, &receipt{c.ID, hash[:]}, 0, func(q querier) ([]step, error) {
+		if !engine.TakesTree(c.Body) {
+			return []step{top}, nil
+		}
+		below, err := treeOf(ctx, q, c.Target)
+		if err != nil {
+			return nil, err
+		}
+		var steps []step
+		for _, id := range below {
+			steps = append(steps, step{id, func(_ querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
+				return engine.Decide(t, api.Command{ID: c.ID, Target: id, Body: c.Body}, now)
+			}})
+		}
+		return append(steps, top), nil
 	})
 	return api.Receipt{Command: c.ID, Committed: at}, err
+}
+
+// treeOf is every thread under top that isn't deleted, each before the
+// thread it's under, as far down as api.MaxDepth, so a cycle can't hang
+// the walk. A deleted thread's children stand on their own, as in lineOf.
+func treeOf(ctx context.Context, q querier, top api.ID) ([]api.ID, error) {
+	seen := map[api.ID]bool{top: true}
+	var out []api.ID
+	var walk func(id api.ID, depth int) error
+	walk = func(id api.ID, depth int) error {
+		if depth == api.MaxDepth {
+			return nil
+		}
+		kids, err := ids(ctx, q, `SELECT id FROM threads WHERE parent = ? AND deleted = 0 ORDER BY id`, id[:])
+		if err != nil {
+			return err
+		}
+		for _, k := range kids {
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			if err := walk(k, depth+1); err != nil {
+				return err
+			}
+			out = append(out, k)
+		}
+		return nil
+	}
+	return out, walk(top, 0)
 }
 
 // lineOf is the thread and those above it, it first, as far up as
@@ -80,8 +129,10 @@ func (s *Store) SetLimits(l engine.Limits) {
 // the observation completes; it is marked done in the same transaction, even
 // when the observation is refused with engine.ErrRefused.
 func (s *Store) Observe(ctx context.Context, thread api.ID, o engine.Observation, now time.Time, done int64) (api.Cursor, error) {
-	return s.commit(ctx, thread, nil, done, func(_ querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
-		return engine.Observe(t, o, now)
+	return s.commit(ctx, nil, done, func(querier) ([]step, error) {
+		return []step{{thread, func(_ querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
+			return engine.Observe(t, o, now)
+		}}}, nil
 	})
 }
 
@@ -94,7 +145,17 @@ type receipt struct {
 // q, the transaction's.
 type decider func(q querier, t engine.Thread) ([]engine.Event, []engine.Effect, error)
 
-func (s *Store) commit(ctx context.Context, thread api.ID, r *receipt, done int64, decide decider) (api.Cursor, error) {
+// step is a thread a commit decides on, and how.
+type step struct {
+	thread api.ID
+	decide decider
+}
+
+// commit writes the steps plan gives, in its order, in one transaction:
+// a crash leaves all of them or none. A step the tables refuse writes
+// nothing, and the commit returns engine.ErrRefused with what the rest
+// wrote.
+func (s *Store) commit(ctx context.Context, r *receipt, done int64, plan func(q querier) ([]step, error)) (api.Cursor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -117,13 +178,22 @@ func (s *Store) commit(ctx context.Context, thread api.ID, r *receipt, done int6
 		}
 	}
 
-	c, head, err := s.write(ctx, tx, thread, decide)
-	var refused error
-	if errors.Is(err, engine.ErrRefused) {
-		refused, err = err, nil
-	}
+	steps, err := plan(tx)
 	if err != nil {
 		return api.Cursor{}, err
+	}
+	var c Commit
+	var head uint64
+	var refused error
+	for _, st := range steps {
+		w, h, err := s.write(ctx, tx, st.thread, st.decide)
+		if errors.Is(err, engine.ErrRefused) {
+			refused, err = err, nil
+		}
+		if err != nil {
+			return api.Cursor{}, err
+		}
+		c.Events, c.Threads, head = append(c.Events, w.Events...), append(c.Threads, w.Threads...), h
 	}
 	if done != 0 {
 		if err := moveEffect(ctx, tx, done, "leased", "done"); err != nil {
@@ -244,8 +314,8 @@ func (s *Store) LiveThreads(ctx context.Context) ([]api.ID, error) {
 	return ids(ctx, s.db, `SELECT thread FROM runs WHERE state <> 'finished' ORDER BY thread`)
 }
 
-func ids(ctx context.Context, q querier, query string) ([]api.ID, error) {
-	rows, err := q.QueryContext(ctx, query)
+func ids(ctx context.Context, q querier, query string, args ...any) ([]api.ID, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

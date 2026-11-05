@@ -61,6 +61,19 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 	return d.events, d.effects, nil
 }
 
+// TakesTree is whether b on a thread applies to every thread under it
+// too, in the same commit, as the store commits it: settling a thread
+// settles its tree, and deleting it deletes its tree.
+func TakesTree(b api.Intent) bool {
+	switch b := b.(type) {
+	case api.ThreadDelete:
+		return true
+	case api.InboxSet:
+		return b.Disposition.State == api.Settled
+	}
+	return false
+}
+
 // ErrRefused is an observation the tables refuse: it arrived after the
 // thread moved on, so it records nothing.
 var ErrRefused = errors.New("engine: observation refused")
