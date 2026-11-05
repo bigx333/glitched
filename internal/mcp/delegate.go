@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"glitched/internal/api"
@@ -98,6 +99,9 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 			Text:   in.Task,
 		},
 	})
+	if errors.Is(err, api.ErrConflict) && in.RequestID != "" {
+		return TaskView{}, fmt.Errorf("delegate_task: client_request_id %q already started another task in this thread; use a new client_request_id for a new task", in.RequestID)
+	}
 	if err != nil {
 		return TaskView{}, refusal(err)
 	}

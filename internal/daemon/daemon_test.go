@@ -454,3 +454,39 @@ func TestEachRunGetsGlitchedMCPOnTheEnginesSocket(t *testing.T) {
 		t.Errorf("the run's MCP server %+v, want glitched mcp from %s with %v", s, exe, want)
 	}
 }
+
+// An engine started on a relative Dir hands the agent's glitched mcp the
+// socket's absolute path: that server runs in the agent's workspace.
+func TestARelativeDirGivesGlitchedMCPAnAbsoluteSocket(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	ad := &specs{Adapter: fake.New(fake.Turn(false))}
+	d, err := Start(context.Background(), Config{Dir: "state", Hub: true, Providers: provider.Mux{"fake": ad}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	ep := transport.NewEndpointClient(Socket("state"), api.ID{})
+	defer ep.Close()
+	ctx := context.Background()
+	thread := api.NewID()
+	if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{Workspace: "/src/app", Title: "t", Model: api.ModelRef{Provider: "fake", Model: "fake"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: "hi", Mode: api.StartNow}}); err != nil {
+		t.Fatal(err)
+	}
+	var seen []provider.SessionSpec
+	for deadline := time.Now().Add(5 * time.Second); len(seen) == 0; time.Sleep(5 * time.Millisecond) {
+		ad.mu.Lock()
+		seen = append([]provider.SessionSpec(nil), ad.seen...)
+		ad.mu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("the run never opened")
+		}
+	}
+	want := filepath.Join(root, "state", "engine.sock")
+	if s := seen[0].MCP; s == nil || s.Env["GLITCHED_ENGINE"] != want {
+		t.Errorf("the run's MCP server %+v, want GLITCHED_ENGINE %s", s, want)
+	}
+}

@@ -236,3 +236,41 @@ func TestAStaleRunStartsNoChild(t *testing.T) {
 		t.Errorf("%d children, want none", n)
 	}
 }
+
+// A client_request_id an agent reuses for a new task in a later turn gets
+// a reason it can act on, and starts nothing.
+func TestAReusedRequestIDSaysToPickANewOne(t *testing.T) {
+	h := engine(t)
+	o := working(t, h)
+	if r := serve(t, h, o, delegate(1, `{"task":"Write tests for parse","client_request_id":"task-1"}`, ""))[1]; r.Result.IsError {
+		t.Fatalf("turn 1: %+v", r)
+	}
+	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: o.Thread, Body: api.TurnInterrupt{}}); err != nil {
+		t.Fatal(err)
+	}
+	read := func() api.Thread {
+		s, _ := h.Read(ctx, api.Query{Thread: o.Thread})
+		return s.Threads[0]
+	}
+	for deadline := time.Now().Add(5 * time.Second); read().Run != api.RunIdle; time.Sleep(2 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("turn 1 never stopped: %+v", read())
+		}
+	}
+	r2, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: o.Thread, Body: api.MessageDispatch{Text: "now the docs", Mode: api.AfterActive}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); read().Run != api.RunWaiting; time.Sleep(2 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("turn 2 never waited: %+v", read())
+		}
+	}
+	r := serve(t, h, mcp.Origin{Thread: o.Thread, Run: r2.Command}, delegate(1, `{"task":"Update the README","client_request_id":"task-1"}`, ""))[1]
+	if !r.Result.IsError || len(r.Result.Content) == 0 || !strings.Contains(r.Result.Content[0].Text, "use a new client_request_id") {
+		t.Errorf("turn 2 reply %+v, want an error that says to use a new client_request_id", r)
+	}
+	if n := len(children(t, h, o.Thread)); n != 1 {
+		t.Errorf("%d children, want 1", n)
+	}
+}
