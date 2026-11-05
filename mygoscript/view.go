@@ -62,8 +62,8 @@ func draw(c *ui.Context, p *Plugin, n node, id string) {
 			seen := map[string]bool{}
 			for i, child := range n.Children {
 				childID := child.Key
-				if childID == "" || seen[childID] {
-					childID = fmt.Sprintf("%s#%d", child.Kind, i)
+				for n := 0; childID == "" || seen[childID]; n++ {
+					childID = fmt.Sprintf("%s#%d.%d", child.Kind, i, n)
 				}
 				seen[childID] = true
 				draw(c, p, child, id+"/"+childID)

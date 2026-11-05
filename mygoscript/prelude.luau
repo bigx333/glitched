@@ -6,6 +6,9 @@
 local plugin = nil
 
 local function quote(s: string): string
+	if not utf8.len(s) then
+		error("a string is not valid UTF-8", 0)
+	end
 	return '"' .. string.gsub(s, '[%c"\\]', function(ch)
 		return string.format("\\u%04x", string.byte(ch))
 	end) .. '"'

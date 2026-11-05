@@ -84,6 +84,7 @@ func TestScriptErrorsShowInPlace(t *testing.T) {
 		"no view":    "return {}",
 		"bad widget": "return { view = function() return { kind = 'iframe' } end }",
 		"sandbox":    "return { view = function() return ui.text(io.open('/etc/passwd')) end }",
+		"bad utf8":   "return { view = function() return ui.text(string.char(255)) end }",
 		"bad state":  "return { state = { f = function() end }, view = function() return ui.text('x') end }",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -93,6 +94,16 @@ func TestScriptErrorsShowInPlace(t *testing.T) {
 			waitFor(t, tt, "Script error in "+name)
 		})
 	}
+}
+
+func TestKeysStayUnique(t *testing.T) {
+	src := `return { view = function() return ui.column({
+		ui.button("A", { key = "button#1.0" }), ui.button("B"), ui.button("C", { key = "x" }), ui.button("D", { key = "x" }),
+	}) end }`
+	p := New("keys", src)
+	defer p.Close()
+	tt := ui.NewTester(func(c *ui.Context) { View(c, p) }, 400, 300)
+	waitFor(t, tt, "D")
 }
 
 func TestLuaString(t *testing.T) {

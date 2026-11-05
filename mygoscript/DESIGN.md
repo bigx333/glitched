@@ -57,7 +57,7 @@ Consequences:
 
 Widget identity is a key path. Each node uses its script `key`, or its kind
 and index among siblings when it has none. A duplicate key falls back to
-the index. The path goes through `c.Key` before each constructor, so a rerun
+the index, with a suffix until it is unique. Strings must be valid UTF-8. The path goes through `c.Key` before each constructor, so a rerun
 of `view` keeps MyGo's per-widget state (focus, hover, press) on the same
 widgets.
 
