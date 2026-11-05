@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -23,6 +25,35 @@ import (
 // Socket is the path of the app's browser socket in the state directory
 // dir.
 func Socket(dir string) string { return filepath.Join(dir, "browser.sock") }
+
+// Command is the command line, of the program running, that serves the
+// browser of the app on the state directory dir to an agent: both the
+// glitched CLI and the app answer browser-mcp (Main). Nil where the
+// program can't be found.
+func Command(dir string) []string {
+	self, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	if dir, err = filepath.Abs(dir); err != nil {
+		return nil
+	}
+	return []string{self, "browser-mcp", "-dir", dir}
+}
+
+// Main is browser-mcp: it serves the browser of the app on the state
+// directory -dir to the agent on in and out.
+func Main(ctx context.Context, args []string, in io.Reader, out io.Writer) error {
+	fs := flag.NewFlagSet("browser-mcp", flag.ContinueOnError)
+	dir := fs.String("dir", "", "the app's state directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *dir == "" || fs.NArg() > 0 {
+		return errors.New("usage: browser-mcp -dir DIR")
+	}
+	return Serve(ctx, in, out, Dial(*dir))
+}
 
 // WriteConfig writes the Claude Code MCP config (--mcp-config) that runs
 // command as the browser's server, named "glitched", to a file in the

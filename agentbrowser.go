@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"os"
@@ -65,6 +66,16 @@ func (a *app) serveAgents() {
 	ab := newAgentBrowser(a, a.post)
 	go browsermcp.Accept(ln, ab.call)
 	a.stopAgents = ln.Close
+}
+
+// serveBrowserMCP serves the browser to an agent on in and out, and
+// reports true, when the app runs as browser-mcp (args, after the
+// program's name); false otherwise, for the app to run.
+func serveBrowserMCP(args []string, in io.Reader, out io.Writer) (bool, error) {
+	if len(args) == 0 || args[0] != "browser-mcp" {
+		return false, nil
+	}
+	return true, browsermcp.Main(context.Background(), args[1:], in, out)
 }
 
 // toolArgs are every tool's arguments.
