@@ -860,6 +860,10 @@ func (s *suite) actions(t *testing.T) {
 	if got := s.eval(p, `return document.getElementById("ed").textContent`); got != "new text" {
 		t.Errorf("typing into an editor: %q", got)
 	}
+	// An editor that refuses the text says so.
+	if err := webtarget.Type(ctx, p, snap, ref("Locked"), "new", false); err == nil || !strings.Contains(err.Error(), "didn't take") {
+		t.Errorf("typing into an editor that refuses it: %v", err)
+	}
 	if err := webtarget.Type(ctx, p, snap, ref("Press"), "x", false); err == nil || !strings.Contains(err.Error(), "not a text box") {
 		t.Errorf("typing into a button: %v", err)
 	}
@@ -969,6 +973,13 @@ func (s *suite) actions(t *testing.T) {
 	clicked("the topmost dialog's button", `return window.escaped === 1`)
 	if err := webtarget.Click(ctx, p, snap, ref("Inside")); err == nil || !strings.Contains(err.Error(), "covered") {
 		t.Errorf("clicking a dialog under another: %v", err)
+	}
+	// Nor is a field in it typed into, which the user can't reach.
+	if err := webtarget.Type(ctx, p, snap, ref("Under field"), "x", false); err == nil || !strings.Contains(err.Error(), "nothing use it") {
+		t.Errorf("typing into a dialog under another: %v", err)
+	}
+	if got := s.eval(p, `return document.querySelector("[aria-label='Under field']").value`); got != "" {
+		t.Errorf("a field in a dialog under another took %q", got)
 	}
 	// A page scrolling smoothly is scrolled at once, so the click lands
 	// where the element is, not where it was.
@@ -1087,7 +1098,7 @@ func fixtures() http.Handler {
 	mux.Handle("/act/sent", page(`<!doctype html><title>Sent</title>`))
 	mux.Handle("/act/modal", page(`<!doctype html><title>Modal</title><button onclick="window.behind = 1">Behind</button>
 <input aria-label="Behind field"><iframe id="fr" srcdoc="<button onclick='parent.framed = 1'>Framed behind</button>"></iframe>
-<dialog id="d"><button onclick="window.inside = 1">Inside</button></dialog>
+<dialog id="d"><button onclick="window.inside = 1">Inside</button><input aria-label="Under field"></dialog>
 <dialog id="e"><button onclick="window.between = 1">Between</button></dialog>
 <main inert><dialog id="f"><button onclick="window.escaped = 1">Escaped</button></dialog></main>
 <script>d.showModal(); e.showModal(); f.showModal()</script>`))
@@ -1160,6 +1171,7 @@ const actFixture = `<!doctype html><meta charset="utf-8"><title>Act</title>
 <form action="/act/sent"><input id="taken" name="t" aria-label="Taken"></form>
 <textarea aria-label="Notes"></textarea>
 <div id="ed" contenteditable="true" aria-label="Editor">old</div>
+<div contenteditable="true" tabindex="0" aria-label="Locked" onfocus="this.contentEditable = 'false'">kept</div>
 <iframe id="fr" srcdoc="<button onclick='parent.framed = 1'>Framed press</button>"></iframe>
 <script>
 window.within = (e, el) => [...el.getClientRects()].some((r) => e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) ? 1 : 0;
