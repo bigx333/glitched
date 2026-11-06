@@ -25,7 +25,7 @@ const delegateTask = "delegate_task"
 var catalog = []map[string]any{{
 	"name": delegateTask,
 	"description": "Delegate a self-contained task to a child agent, in a new thread under this one. " +
-		"The child starts at once and the call returns; when it is done or fails, its report comes to this thread as a new message, so do not wait or poll for it. Folder, permissions and model inherit unless you pick a model. " +
+		"The child starts at once and the call returns; each time its turn ends done or failed, its report comes to this thread as a new message, so do not wait or poll for it. Folder, permissions and model inherit unless you pick a model. " +
 		"This thread's history is not copied, so the task must stand on its own. " +
 		"The user sees the child and can open it. A child cannot gain broader permissions. " +
 		"Reuse client_request_id to retry the same task safely; each new task needs a new one.",
