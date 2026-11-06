@@ -40,12 +40,16 @@ type ThreadCreated struct {
 
 // MessageQueued records a dispatched message. The ready message with the
 // lowest Pos starts when the thread is idle; a Held one waits to be promoted.
+// A message with a Report is no client's: the engine queued it to give the
+// thread's agent the report of that child, the one just before it in the
+// log, with the thread's next turn.
 type MessageQueued struct {
 	Message ID           `json:"message"`
 	Text    string       `json:"text"`
 	Mode    DispatchMode `json:"mode"`
 	Pos     int64        `json:"pos"`
 	Held    bool         `json:"held,omitempty"`
+	Report  ID           `json:"report,omitzero"`
 }
 
 // MessageClaimed binds a message to a live run it will be steered into.

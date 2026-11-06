@@ -49,8 +49,8 @@ func TestASpawnStartsOneChild(t *testing.T) {
 		t.Errorf("the child: %q, last turn %+v; want Write the tests, completed", v.Title, v.LastTurn)
 	}
 	evs := events(t, n.h, kid)
-	if c, a := count(evs, "thread.created"), count(evs, "turn.admitted"); c != 1 || a != 1 || ad.Starts() != 2 {
-		t.Fatalf("the child: created %d, admitted %d, adapter starts %d; want 1, 1 and 2 with the parent's", c, a, ad.Starts())
+	if c, a := count(evs, "thread.created"), count(evs, "turn.admitted"); c != 1 || a != 1 {
+		t.Fatalf("the child: created %d, admitted %d; want 1 and 1", c, a)
 	}
 	if evs[0].Cursor.Seq+1 != evs[1].Cursor.Seq || evs[1].Type != "message.queued" || evs[2].Type != "turn.admitted" {
 		t.Errorf("the child's log opens %s, %s, %s; want its create, task and turn in one commit", evs[0].Type, evs[1].Type, evs[2].Type)
@@ -58,7 +58,12 @@ func TestASpawnStartsOneChild(t *testing.T) {
 	if b, _ := evs[1].Decode(); b.(api.MessageQueued).Text != "Add table tests for parseRange in range.go" {
 		t.Errorf("the child's first message: %+v", b)
 	}
-	until(t, n.h, parent, "the child's report", func(th api.Thread) bool { return !th.Reported.IsZero() })
+	until(t, n.h, parent, "the child's report and the turn it woke", func(th api.Thread) bool {
+		return !th.Reported.IsZero() && th.Run == api.RunIdle && count(events(t, n.h, parent), "turn.admitted") == 2
+	})
+	if got := ad.Starts(); got != 3 {
+		t.Errorf("adapter starts %d; want 3: the parent's, the child's and the turn its report woke", got)
+	}
 	assertReplay(t, n.st)
 }
 

@@ -188,6 +188,9 @@ func engine(t *testing.T, cfg daemon.Config, adapter provider.Adapter) *daemon.D
 	if err != nil {
 		t.Fatal(err)
 	}
+	sd.mu.Lock()
+	sd.ep = d.Endpoint()
+	sd.mu.Unlock()
 	seeders.Store(d, sd)
 	t.Cleanup(func() {
 		d.Close()

@@ -8,25 +8,39 @@ import (
 	"glitched/internal/api"
 )
 
-// RunText is what a run's agent said in the thread's log: its text deltas,
-// in order, read without decoding the thread's other events.
-func (s *Store) RunText(ctx context.Context, thread, run api.ID) (string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT json_extract(payload, '$.text') FROM events
+// RunReply is what a run's agent said last in the thread's log: its text
+// deltas after its last tool call, in order, or all of them when nothing
+// follows that call. It reads without decoding the thread's other events.
+func (s *Store) RunReply(ctx context.Context, thread, run api.ID) (string, error) {
+	var last sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT max(seq) FROM events
+		WHERE thread = ? AND type = ? AND json_extract(payload, '$.run') = ?`,
+		thread[:], api.EventType(api.WorkItem{}), run.String()).Scan(&last); err != nil {
+		return "", err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT seq, json_extract(payload, '$.text') FROM events
 		WHERE thread = ? AND type = ? AND json_extract(payload, '$.run') = ? ORDER BY seq`,
 		thread[:], api.EventType(api.AssistantDelta{}), run.String())
 	if err != nil {
 		return "", err
 	}
 	defer rows.Close()
-	var b strings.Builder
+	var all, reply strings.Builder
 	for rows.Next() {
+		var seq int64
 		var text sql.NullString
-		if err := rows.Scan(&text); err != nil {
+		if err := rows.Scan(&seq, &text); err != nil {
 			return "", err
 		}
-		b.WriteString(text.String)
+		all.WriteString(text.String)
+		if seq > last.Int64 {
+			reply.WriteString(text.String)
+		}
 	}
-	return b.String(), rows.Err()
+	if strings.TrimSpace(reply.String()) == "" {
+		return all.String(), rows.Err()
+	}
+	return reply.String(), rows.Err()
 }
 
 // Read answers q from one read transaction, so the projection and the

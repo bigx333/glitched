@@ -690,3 +690,62 @@ func TestAVersion5DatabaseUpgradesWithEachLastReport(t *testing.T) {
 		t.Errorf("columns\n%s\nwant a new table's\n%s", strings.Join(got.columns, "\n"), strings.Join(want.columns, "\n"))
 	}
 }
+
+// A wake a stopped parent holds is a stored message like any other: after
+// a reopen it still goes in with the user's next message, and a report
+// replayed then logs nothing more.
+func TestAHeldWakeOutlivesAReopen(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	parent := api.NewID()
+	submit := func(body api.Intent) api.ID {
+		t.Helper()
+		c := api.Command{ID: api.NewID(), Target: parent, Body: body}
+		if _, err := s.Submit(ctx, c, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		return c.ID
+	}
+	observe := func(o engine.Observation) {
+		t.Helper()
+		if _, err := s.Observe(ctx, parent, o, time.Now(), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	submit(create(parent).Body)
+	run := submit(api.MessageDispatch{Text: "go", Mode: api.StartNow})
+	observe(engine.Started{Run: run})
+	submit(api.TurnInterrupt{})
+	observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted})
+	report := engine.Reported{Report: api.ChildReported{Child: api.NewID(), Run: api.NewID(), Kind: api.ReportDone, Title: "child", Outcome: "done"}}
+	observe(report)
+	s.Close()
+
+	s = open(t, path)
+	observe(report)
+	next := submit(api.MessageDispatch{Text: "carry on", Mode: api.StartNow})
+	snap, err := s.Read(ctx, api.Query{Thread: parent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reports, wakes, claimed int
+	for _, e := range snap.Events {
+		b, _ := e.Decode()
+		switch b := b.(type) {
+		case api.ChildReported:
+			reports++
+		case api.MessageQueued:
+			if !b.Report.IsZero() {
+				wakes++
+			}
+		case api.MessageClaimed:
+			if b.Run == next {
+				claimed++
+			}
+		}
+	}
+	if reports != 1 || wakes != 1 || claimed != 1 {
+		t.Errorf("%d reports, %d wakes, %d claimed by the next message; want one of each", reports, wakes, claimed)
+	}
+}

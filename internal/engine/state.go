@@ -77,6 +77,11 @@ type Message struct {
 	Run   api.ID // set once claimed
 }
 
+// waking is whether m is a wake that waits: a child's report the engine
+// queued for the thread's next turn. A wake is held in AfterActive, which
+// no client's message is: a client's held message is a Defer.
+func (m Message) waking() bool { return m.State == QueueHeld && m.Mode == api.AfterActive }
+
 type Request struct {
 	ID         api.ID
 	Run        api.ID
@@ -100,6 +105,18 @@ func (t Thread) Live() *Run {
 }
 
 func (t Thread) settled() bool { return t.Disposition.State == api.Settled }
+
+// stopped is whether the thread's last run was stopped: by the user, or by
+// the engine when it couldn't deliver an answer. A stop reached a run that
+// completed as it landed too.
+func (t Thread) stopped() bool {
+	n := len(t.Runs)
+	if n == 0 || t.Runs[n-1].State != RunFinished {
+		return false
+	}
+	r := t.Runs[n-1]
+	return r.Signalled || r.Outcome == api.OutcomeInterrupted || r.Outcome == api.OutcomeAbandoned
+}
 
 func (t Thread) slot() RunState {
 	if r := t.Live(); r != nil {

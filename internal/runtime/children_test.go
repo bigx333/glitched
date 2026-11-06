@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -98,6 +99,40 @@ func TestAChildReportsBackToItsParent(t *testing.T) {
 	}
 	if cv := until(t, n.h, c, "the child's turn", idle); cv.Parent != parent || cv.Tokens != 1500 {
 		t.Errorf("the child: parent %v, tokens %d; want %v, 1500", cv.Parent, cv.Tokens, parent)
+	}
+}
+
+// A child's done report starts its parent's next turn, with what the child
+// said last, past its tool calls, and that turn's end starts no other.
+func TestAReportStartsItsParentsTurn(t *testing.T) {
+	ad := fake.New([]provider.Event{
+		provider.TextDelta{Text: "Looking at the tests."},
+		provider.Work{Item: "w", Kind: "command", Title: "go test ./...", Status: api.WorkCompleted},
+		provider.TextDelta{Text: "Added 9 table tests. All pass."},
+	})
+	n := start(t, dbPath(t), ad)
+	parent := newThread(t, n.h)
+	c, err := newChild(t, n.h, ad, parent, api.AccessAsk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submit(t, n.h, c, dispatch("write them", api.StartNow))
+	var wake *api.MessageQueued
+	until(t, n.h, parent, "the report's turn", func(th api.Thread) bool {
+		for _, e := range events(t, n.h, parent) {
+			if b, err := e.Decode(); err == nil {
+				if q, ok := b.(api.MessageQueued); ok && !q.Report.IsZero() {
+					wake = &q
+				}
+			}
+		}
+		return wake != nil && th.Run == api.RunIdle && ended(t, n.h, parent, wake.Message)
+	})
+	if wake.Report != c || !strings.Contains(wake.Text, "Added 9 table tests. All pass.") || strings.Contains(wake.Text, "Looking at the tests.") {
+		t.Errorf("the wake: report %v, text %q; want the child's, with its last reply alone", wake.Report, wake.Text)
+	}
+	if turns := count(events(t, n.h, parent), "turn.admitted"); turns != 2 {
+		t.Errorf("the parent ran %d turns; want the one that started the child and the report's", turns)
 	}
 }
 

@@ -1,9 +1,12 @@
 package engine
 
 import (
+	"cmp"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"strings"
 	"time"
 
@@ -278,27 +281,71 @@ func (t Thread) pos(front bool) int64 {
 	return hi + 1
 }
 
+// admit starts message's turn. The wakes that wait go in with it, claimed
+// by its run: the reports first, so the user's words come last.
 func (d *decision) admit(message api.ID) error {
+	m := d.t.Queue[d.t.messageAt(message)]
+	var texts []string
+	var with []api.ID
+	for _, w := range d.t.Queue {
+		if w.waking() && w.ID != message {
+			texts, with = append(texts, w.Text), append(with, w.ID)
+		}
+	}
+	if m.waking() {
+		texts = append([]string{m.Text}, texts...)
+	} else {
+		texts = append(texts, m.Text)
+	}
 	gen := d.t.Generation + 1
 	if err := d.emit(api.TurnAdmitted{Run: message, Generation: gen}); err != nil {
 		return err
 	}
-	m := d.t.Queue[d.t.messageAt(message)]
+	for _, id := range with {
+		if err := d.emit(api.MessageClaimed{Message: id, Run: message}); err != nil {
+			return err
+		}
+	}
 	d.effects = append(d.effects, StartTurn{
-		Run: message, Generation: gen, Text: m.Text, Workspace: d.t.Workspace, Model: d.t.Model, Access: d.t.Access,
+		Run: message, Generation: gen, Text: strings.Join(texts, "\n\n"), Workspace: d.t.Workspace, Model: d.t.Model, Access: d.t.Access,
 	})
+	return nil
+}
+
+// sent marks the wakes that went in with run's first message as handed to
+// its agent, as that message is.
+func (d *decision) sent(run api.ID) error {
+	var ids []api.ID
+	for _, m := range d.t.Queue {
+		if m.State == QueueClaimed && m.Run == run && m.ID != run && m.Mode == api.AfterActive {
+			ids = append(ids, m.ID)
+		}
+	}
+	for _, id := range ids {
+		if err := d.emit(api.MessageDispatched{Message: id}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // settle starts the next ready message whenever the thread is idle, so
 // admission happens in the same commit as whatever freed the thread. A
-// settled or deleted thread starts nothing.
+// settled or deleted thread starts nothing. With no ready message, a wake
+// starts a turn of its own, unless the last run was stopped: a stop stays
+// a stop, and the wakes go in with the next message the user sends.
 func (d *decision) settle() error {
 	if d.t.Live() != nil || d.t.settled() || d.t.Deleted {
 		return nil
 	}
 	if m := d.t.next(); m != nil {
 		return d.admit(m.ID)
+	}
+	if d.t.stopped() {
+		return nil
+	}
+	if i := index(d.t.Queue, Message.waking); i >= 0 {
+		return d.admit(d.t.Queue[i].ID)
 	}
 	return nil
 }
@@ -457,9 +504,15 @@ func (d *decision) observe(o Observation) error {
 		}
 		if live.State != RunStarting {
 			// Interrupted while starting, but the agent did get the message.
-			return d.emit(api.MessageDispatched{Message: o.Run})
+			if err := d.emit(api.MessageDispatched{Message: o.Run}); err != nil {
+				return err
+			}
+			return d.sent(o.Run)
 		}
-		return d.emit(api.TurnStarted{Run: o.Run})
+		if err := d.emit(api.TurnStarted{Run: o.Run}); err != nil {
+			return err
+		}
+		return d.sent(o.Run)
 	case Ended:
 		// Only the user ends an uncertain run.
 		if isLive(o.Run) && live.State != RunUncertain {
@@ -533,7 +586,10 @@ func (d *decision) observe(o Observation) error {
 			return nil
 		}
 		if o.Restored {
-			return d.emit(api.TurnRestored{Run: o.Run})
+			if err := d.emit(api.TurnRestored{Run: o.Run}); err != nil {
+				return err
+			}
+			return d.sent(o.Run)
 		}
 		if o.Failed {
 			d.effects = append(d.effects, CloseAgent{Run: o.Run, Generation: live.Generation})
@@ -542,18 +598,61 @@ func (d *decision) observe(o Observation) error {
 	case Rewound:
 		return d.rewound()
 	case Reported:
-		if err := d.emit(o.Report); err != nil {
-			return err
-		}
-		// A report wakes a snoozed parent, and only its parent: back in the
-		// inbox. A settled one stays settled: settling halted the tree, so
-		// this is a run that ended before its stop landed, and the user is
-		// done with the thread. The report is logged either way.
-		if d.t.Disposition.State == api.Snoozed {
-			return d.emit(api.DispositionChanged{Disposition: api.Disposition{}})
-		}
+		return d.reported(o)
 	}
 	return nil
+}
+
+// reported logs a child's report. It brings a snoozed parent, and only its
+// parent, back to the inbox. A done or failed one queues a wake, which
+// gives the parent's agent the child's result with its next turn (see
+// settle). A settled parent stays settled and takes no wake: settling
+// halted the tree, so this is a run that ended before its stop landed, and
+// the user is done with the thread. The report is logged either way. A
+// report the parent already took a wake for is a replay, and changes
+// nothing.
+func (d *decision) reported(o Reported) error {
+	id := wakeID(o.Report.Run)
+	if d.t.messageAt(id) >= 0 {
+		return nil
+	}
+	if err := d.emit(o.Report); err != nil {
+		return err
+	}
+	if d.t.Disposition.State == api.Snoozed {
+		if err := d.emit(api.DispositionChanged{Disposition: api.Disposition{}}); err != nil {
+			return err
+		}
+	}
+	if o.Report.Kind == api.ReportBlocked || d.t.settled() {
+		return nil
+	}
+	return d.emit(api.MessageQueued{
+		Message: id, Text: wakeText(o), Mode: api.AfterActive, Pos: d.t.pos(false), Held: true, Report: o.Report.Child,
+	})
+}
+
+// wakeID is the wake for a child's run, the same each time it reports, so
+// a report replayed finds the wake it took. It keeps the run's time; the
+// rest is a hash of the run.
+func wakeID(run api.ID) api.ID {
+	sum := sha256.Sum256(append([]byte("glitched wake "), run[:]...))
+	var id api.ID
+	copy(id[:6], run[:6])
+	copy(id[6:], sum[:])
+	return id
+}
+
+// wakeText gives the parent's agent a child's result, in the tags Zeron
+// gives a task's: which child, how it ended, and what it said last.
+func wakeText(o Reported) string {
+	state := "completed"
+	if o.Report.Kind == api.ReportFailed {
+		state = "failed"
+	}
+	reply := cmp.Or(strings.TrimSpace(o.Reply), o.Report.Outcome)
+	return fmt.Sprintf("<task id=\"%s\" title=\"%s\" state=\"%s\">\n<task_result>\n%s\n</task_result>\n</task>",
+		o.Report.Child, html.EscapeString(o.Report.Title), state, reply)
 }
 
 // report has a child's run report to its parent, after the commit, as how
