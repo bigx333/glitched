@@ -125,7 +125,7 @@ func (a *app) projectTrees(p *project) (tops []thread, all []node) {
 // threads under them. A draft in its workspace starts over in the home
 // folder, so that the project doesn't come back with the next thread.
 func (a *app) removeProject(p *project) {
-	tops, _ := a.projectTrees(p)
+	tops, all := a.projectTrees(p)
 	for _, t := range tops {
 		a.deleteTree(t)
 	}
@@ -139,7 +139,12 @@ func (a *app) removeProject(p *project) {
 	if envs := a.backend.Envs(); e == nil && len(envs) > 0 {
 		e = envs[0]
 	}
-	if keyOf(e, a.fresh.workspace) == p.key {
+	// So does one in a workspace whose every thread went with the trees,
+	// as the shown thread's does when the delete leaves the draft there.
+	k := keyOf(e, a.fresh.workspace)
+	emptied := k != p.key && slices.ContainsFunc(all, func(n node) bool { return keyOf(n.t.env, n.t.View.Workspace) == k }) &&
+		!slices.ContainsFunc(a.gather(), func(x *project) bool { return x.key == k })
+	if k == p.key || emptied {
 		home := homeDir()
 		if e != nil && e.Kind == client.Remote {
 			home = "~" // a server's, as the workspace menu has it

@@ -283,7 +283,7 @@ func TestRemoveProjectResetsADraftOnAServer(t *testing.T) {
 // A live thread under another of the project's, by way of another
 // workspace, counts as working but doesn't keep the project from being
 // removed, as a live child doesn't keep a thread from its Delete….
-func TestRemoveProjectStopsALiveThreadUnderItsOwn(t *testing.T) {
+func TestRemoveProjectIsntHeldByALiveThreadUnderItsOwn(t *testing.T) {
 	h := crossTree(t)
 	h.thread("Check the sort").View.Run = api.RunUncertain // as a lost run leaves it
 	h.tt.Frame()
@@ -370,5 +370,19 @@ func TestPaletteFindsByWholeWordsOnly(t *testing.T) {
 	}
 	if want := []string{"Remove project mygo…"}; !slices.Equal(got, want) {
 		t.Fatalf("palette lists %q, want %q", got, want)
+	}
+}
+
+// A draft the delete leaves in another workspace whose threads all went
+// with the trees, as the shown thread's, starts over in the home folder
+// too, lest that project come back with the next thread.
+func TestRemoveProjectResetsADraftItsTreesEmptied(t *testing.T) {
+	h := crossTree(t)
+	mid := h.thread("Patch the table") // mygo's only thread, under t3code's
+	h.a.select_(mid)
+	h.tt.Advance(time.Second)
+	h.a.removeProject(h.a.projectOf(h.thread("Ship the sidebar sort")))
+	if h.a.fresh.workspace == "/work/mygo" {
+		t.Fatalf("the draft is in mygo, which went with t3code's trees: %+v", h.a.fresh)
 	}
 }
