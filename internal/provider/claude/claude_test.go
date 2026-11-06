@@ -102,7 +102,9 @@ func fakeClaude(path string) int {
 	wd, _ := os.Getwd()
 	// The uuids the transcript's messages had stand for those the adapter
 	// sent in their place.
-	uuids := []string{"$WORKSPACE", wd}
+	// A path goes into JSON escaped, as Windows' backslashes must be.
+	quoted, _ := json.Marshal(wd)
+	uuids := []string{"$WORKSPACE", string(quoted[1 : len(quoted)-1])}
 	// An entry with "if" plays only when a request so far set that field,
 	// and one with "unless" only when none did.
 	set := map[string]bool{}
