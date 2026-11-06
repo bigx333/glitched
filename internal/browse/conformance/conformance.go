@@ -834,6 +834,17 @@ func (s *suite) actions(t *testing.T) {
 	if err := webtarget.Type(ctx, p, snap, ref("Size"), "L", false); err == nil || !strings.Contains(err.Error(), "dropdown") {
 		t.Errorf("typing into a dropdown: %v", err)
 	}
+	// What a user can't type into, the agent doesn't either.
+	if err := webtarget.Type(ctx, p, snap, ref("Inert field"), "x", false); err == nil || !strings.Contains(err.Error(), "inert") {
+		t.Errorf("typing into an inert field: %v", err)
+	}
+	// A field refusing the text keeps what it had, as the page knows it.
+	if err := webtarget.Type(ctx, p, snap, ref("Count"), "abc", false); err == nil || !strings.Contains(err.Error(), `took "", not "abc"`) {
+		t.Errorf("typing what a number field can't take: %v", err)
+	}
+	if got := s.eval(p, `return document.querySelector("[aria-label=Count]").value + " " + (window.counted === 1)`); got != "5 false" {
+		t.Errorf("a number field refusing text was left %q", got)
+	}
 	if err := webtarget.Click(ctx, p, snap, ref("Off")); err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Errorf("clicking a disabled button: %v", err)
 	}
@@ -933,11 +944,22 @@ func (s *suite) actions(t *testing.T) {
 	s.until("the first button's page", func() bool { return r.last(&r.navigated) == want })
 	// Behind a modal dialog, only the dialog takes clicks.
 	p, _ = s.open("/act/modal")
+	s.until("the frame behind the dialogs", func() bool {
+		v, err := p.EvalContext(context.Background(), `return !!document.getElementById("fr").contentDocument?.querySelector("button")`)
+		return err == nil && v == true
+	})
 	if snap, err = webtarget.Take(ctx, p, webtarget.Options{Full: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := webtarget.Click(ctx, p, snap, ref("Behind")); err == nil || !strings.Contains(err.Error(), "behind a modal dialog") {
 		t.Errorf("clicking behind a modal dialog: %v", err)
+	}
+	// Nor does the agent type there, or click in a frame there.
+	if err := webtarget.Type(ctx, p, snap, ref("Behind field"), "x", false); err == nil || !strings.Contains(err.Error(), "behind a modal dialog") {
+		t.Errorf("typing behind a modal dialog: %v", err)
+	}
+	if err := webtarget.Click(ctx, p, snap, ref("Framed behind")); err == nil || !strings.Contains(err.Error(), "behind a modal dialog") {
+		t.Errorf("clicking in a frame behind a modal dialog: %v", err)
 	}
 	// The topmost of stacked dialogs takes clicks, inert around it or
 	// not; one under it, only behind its backdrop, doesn't.
@@ -1064,6 +1086,7 @@ func fixtures() http.Handler {
 	mux.Handle("/act", page(actFixture))
 	mux.Handle("/act/sent", page(`<!doctype html><title>Sent</title>`))
 	mux.Handle("/act/modal", page(`<!doctype html><title>Modal</title><button onclick="window.behind = 1">Behind</button>
+<input aria-label="Behind field"><iframe id="fr" srcdoc="<button onclick='parent.framed = 1'>Framed behind</button>"></iframe>
 <dialog id="d"><button onclick="window.inside = 1">Inside</button></dialog>
 <dialog id="e"><button onclick="window.between = 1">Between</button></dialog>
 <main inert><dialog id="f"><button onclick="window.escaped = 1">Escaped</button></dialog></main>
@@ -1122,7 +1145,8 @@ const actFixture = `<!doctype html><meta charset="utf-8"><title>Act</title>
 <label style="position:relative;display:inline-block"><input type="checkbox" id="styled" aria-label="Styled" style="position:absolute;left:0;top:0;margin:0;opacity:0"><span style="position:relative;display:inline-block;width:20px;height:20px;background:#888"></span></label>
 <p style="width:120px">Some words before <a href="#wrapped" onclick="window.wrapped = within(event, this); return false">a link that wraps onto the next line</a> and after.</p>
 <a href="#icon" onclick="window.icon = 1; return false" aria-label="Icon" style="position:relative;display:inline-block;width:0;height:0"><span style="position:absolute;left:30px;top:0;width:16px;height:16px;background:#888"></span></a>
-<section inert><button onclick="window.inert = 1">Inert</button></section>
+<section inert><button onclick="window.inert = 1">Inert</button><input aria-label="Inert field"></section>
+<input type="number" aria-label="Count" value="5" oninput="window.counted = 1">
 <a href="#off" style="pointer-events:none" onclick="window.unpointed = 1">Unpointed</a>
 <a href="#through" style="pointer-events:none" onclick="window.through = 1; return false"><span style="pointer-events:auto">Through</span></a>
 <span style="position:relative;display:inline-block"><input type="checkbox" id="toggle" aria-label="Toggle" style="position:absolute;clip:rect(0,0,0,0);pointer-events:none"><label for="toggle" style="display:inline-block;padding:4px">Toggle</label></span>
