@@ -393,3 +393,22 @@ func TestTheBridgeHearsOnlyAHangUp(t *testing.T) {
 		t.Errorf("a caller that sent a blank line after: %q, %v", line, err)
 	}
 }
+
+// Serve ends as ctx does, though the client's input hasn't: the CLI's
+// ends on a signal.
+func TestServeEndsWithItsContext(t *testing.T) {
+	inR, inW := io.Pipe()
+	defer inW.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, inR, io.Discard, Dial(socketDir(t))) }()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve went on after its context ended")
+	}
+}

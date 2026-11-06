@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -131,7 +132,11 @@ func Listen(dir string) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Only this user reaches it, as the engine's socket.
+	// Only this user reaches it, as the engine's socket. Windows has no
+	// modes: the directory's ACL is the gate there.
+	if runtime.GOOS == "windows" {
+		return ln, nil
+	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		ln.Close()
 		return nil, err
