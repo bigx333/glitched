@@ -239,7 +239,7 @@ func TestAStaleRunStartsNoChild(t *testing.T) {
 
 // A client_request_id an agent reuses for a new task in a later turn gets
 // a reason it can act on, and starts nothing.
-func TestAReusedRequestIDSaysToPickANewOne(t *testing.T) {
+func TestAReusedRequestIDFindsItsTaskOrSaysToPickANewOne(t *testing.T) {
 	h := engine(t)
 	o := working(t, h)
 	if r := serve(t, h, o, delegate(1, `{"task":"Write tests for parse","client_request_id":"task-1"}`, ""))[1]; r.Result.IsError {
@@ -272,5 +272,11 @@ func TestAReusedRequestIDSaysToPickANewOne(t *testing.T) {
 	}
 	if n := len(children(t, h, o.Thread)); n != 1 {
 		t.Errorf("%d children, want 1", n)
+	}
+	// The same task, retried with its id in a later turn, finds its child.
+	r = serve(t, h, mcp.Origin{Thread: o.Thread, Run: r2.Command}, delegate(2, `{"task":"Write tests for parse","client_request_id":"task-1"}`, ""))[2]
+	kids := children(t, h, o.Thread)
+	if r.Result.IsError || len(kids) != 1 || len(r.Result.Content) == 0 || !strings.Contains(r.Result.Content[0].Text, kids[0].ID.String()) {
+		t.Errorf("turn 2 retry of the same task: %+v with %d children; want the first child back", r, len(kids))
 	}
 }
