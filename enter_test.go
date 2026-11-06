@@ -80,8 +80,14 @@ func TestEnterOnEmptyDraftDoesNothing(t *testing.T) {
 	h.tt.Key(0, ui.KeyEnter)
 	h.tt.Type("   ")
 	h.tt.Key(0, ui.KeyEnter)
-	// Long enough for a stop to land, were one sent.
-	h.settle(func() bool { return !h.a.current().View.Live() })
+	// Long enough for a stop to land, were one sent: the engine's updates
+	// pumped in, rather than waiting out settle's timeout.
+	for range 100 {
+		if h.p.run() {
+			h.tt.Frame()
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if !h.a.current().View.Live() {
 		t.Error("Enter on an empty draft stopped the agent")
 	}
@@ -105,10 +111,14 @@ func TestEnterTakesTheSuggestionFirst(t *testing.T) {
 	}
 }
 
-// The keybindings in Settings say Enter sends and Shift+Enter breaks the
-// line.
+// The keybindings in Settings say Enter sends, Shift+Enter breaks the
+// line, and ⌘⏎ still sends, or stops the agent with nothing to send.
 func TestKeybindingsSayEnterSends(t *testing.T) {
-	want := map[string][]string{"Send message": {"↩"}, "New line in the message": {"⇧", "↩"}}
+	want := map[string][]string{
+		"Send message":                       {"↩"},
+		"New line in the message":            {"⇧", "↩"},
+		"Send, or stop the agent when empty": {"⌘", "↩"},
+	}
 	for _, k := range keybindings {
 		if w, ok := want[k.label]; ok {
 			if !slices.Equal(k.keys, w) {
@@ -152,5 +162,27 @@ func TestEnterFromTheHeroSlidesIn(t *testing.T) {
 	if hero(h.a.current()) || !h.a.inSidebar("Build the hero") || !h.a.arriving(h.a.current()) {
 		t.Fatalf("sent with Enter: hero %v, in the sidebar %v, arriving %v",
 			hero(h.a.current()), h.a.inSidebar("Build the hero"), h.a.arriving(h.a.current()))
+	}
+}
+
+// Only a plain Enter sends: with a modifier no shortcut takes, as Ctrl on
+// macOS, where ⌘ is the shortcuts' key, it neither sends nor breaks the
+// line.
+func TestEnterWithAModifierDoesntSend(t *testing.T) {
+	other, name := ui.Ctrl, "Ctrl"
+	if ui.Cmd == ui.Ctrl {
+		other, name = ui.Super, "Super"
+	}
+	h := enterReady(t, fake.New(fake.Turn(false)))
+	h.tt.Type("hello")
+	h.tt.Key(other, ui.KeyEnter)
+	for range 5 {
+		if h.p.run() {
+			h.tt.Frame()
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if h.a.draft != "hello" || len(sentTexts(h)) != 0 {
+		t.Errorf("after %s+Enter: draft %q, sent %q; want the draft kept, nothing sent", name, h.a.draft, sentTexts(h))
 	}
 }
