@@ -190,14 +190,20 @@ func stopRun(ctx context.Context, run string) (bool, error) {
 // they are empty. Jobs left with processes go back for a later stop.
 func stopJobs(ctx context.Context, run string, held []windows.Handle) (bool, error) {
 	found := running(held) > 0
+	members := processes(held)
+	defer func() {
+		for _, p := range members {
+			windows.CloseHandle(p)
+		}
+	}()
 	var errs []error
 	for _, job := range held {
 		if err := windows.TerminateJobObject(job, 1); err != nil {
 			errs = append(errs, os.NewSyscallError("TerminateJobObject", err))
 		}
 	}
-	for deadline := time.Now().Add(killGrace); ; time.Sleep(20 * time.Millisecond) {
-		left := running(held)
+	for deadline := time.Now().Add(killGrace); ; time.Sleep(time.Millisecond) {
+		left := running(held) + exiting(members)
 		if left == 0 {
 			break
 		}
@@ -233,6 +239,39 @@ func running(held []windows.Handle) int {
 			continue
 		}
 		n += int(info.ActiveProcesses)
+	}
+	return n
+}
+
+// processes is a handle to each process in held, the run's jobs. A job
+// counts a process as gone a while before it is: while it still holds its
+// files and working directory, and has not signalled its handle.
+func processes(held []windows.Handle) []windows.Handle {
+	var handles []windows.Handle
+	for _, job := range held {
+		var list struct {
+			Assigned, Listed uint32
+			IDs              [1024]uintptr
+		}
+		// With more than the list holds, Windows fails but fills it.
+		windows.QueryInformationJobObject(job, windows.JobObjectBasicProcessIdList,
+			uintptr(unsafe.Pointer(&list)), uint32(unsafe.Sizeof(list)), nil)
+		for _, id := range list.IDs[:min(list.Listed, uint32(len(list.IDs)))] {
+			if p, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(id)); err == nil {
+				handles = append(handles, p)
+			}
+		}
+	}
+	return handles
+}
+
+// exiting is how many of handles are of processes not yet gone.
+func exiting(handles []windows.Handle) int {
+	n := 0
+	for _, p := range handles {
+		if ev, _ := windows.WaitForSingleObject(p, 0); ev != windows.WAIT_OBJECT_0 {
+			n++
+		}
 	}
 	return n
 }
