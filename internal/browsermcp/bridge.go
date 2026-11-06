@@ -127,20 +127,40 @@ func Listen(dir string) (net.Listener, error) {
 		return nil, fmt.Errorf("browser: another Glitched app serves its browser at %s", path)
 	}
 	os.Remove(path)
-	return net.Listen("unix", path)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	// Only this user reaches it, as the engine's socket.
+	if err := os.Chmod(path, 0o600); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	return ln, nil
 }
 
 // Accept answers calls on ln with call until ln closes, each connection
 // on its own. A call's ctx ends as the connection's caller hangs up.
 func Accept(ln net.Listener, call Call) error {
+	var delay time.Duration
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
+			// An error that passes, as too many files open, waits and
+			// tries again, as net/http does: the socket stops answering
+			// only as the app closes it, or calls would wait on it.
+			if ne, ok := err.(interface{ Temporary() bool }); ok && ne.Temporary() {
+				delay = min(max(2*delay, 5*time.Millisecond), time.Second)
+				time.Sleep(delay)
+				continue
+			}
+			ln.Close()
 			return err
 		}
+		delay = 0
 		go answer(conn, call)
 	}
 }
@@ -162,10 +182,10 @@ func answer(conn net.Conn, call Call) {
 	conn.SetReadDeadline(time.Time{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// The caller sends nothing more: a read ending is it hanging up.
+	// The caller sends nothing more that matters: its connection
+	// ending is it hanging up.
 	go func() {
-		var b [1]byte
-		rd.Read(b[:])
+		io.Copy(io.Discard, rd)
 		cancel()
 	}()
 	text, err := call(ctx, req.Tool, req.Args)
