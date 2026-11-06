@@ -186,3 +186,14 @@ func TestEnterWithAModifierDoesntSend(t *testing.T) {
 		t.Errorf("after %s+Enter: draft %q, sent %q; want the draft kept, nothing sent", name, h.a.draft, sentTexts(h))
 	}
 }
+
+// Before anything is sent from the hero, nothing is arriving: not the
+// hero's own draft, whose id is as zero as the one never sent.
+func TestNothingArrivesBeforeTheHeroSends(t *testing.T) {
+	h := start(t, inboxDir(t))
+	h.click("New thread")
+	h.tt.Advance(time.Second)
+	if d := h.a.current(); !hero(d) || h.a.arriving(d) {
+		t.Fatalf("the hero's draft: hero %v, arriving %v; want it shown, not arriving", hero(d), h.a.arriving(d))
+	}
+}
