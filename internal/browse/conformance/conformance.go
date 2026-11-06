@@ -860,6 +860,25 @@ func (s *suite) actions(t *testing.T) {
 	if got := s.eval(p, `return document.getElementById("ed").textContent`); got != "new text" {
 		t.Errorf("typing into an editor: %q", got)
 	}
+	// A field passing the focus on, as one opening a picker, is typed
+	// into still.
+	if err := webtarget.Type(ctx, p, snap, ref("Picked"), "2026", false); err != nil {
+		t.Errorf("typing into a field that passes the focus on: %v", err)
+	}
+	if got := s.eval(p, `return document.querySelector("[aria-label=Picked]").value`); got != "2026" {
+		t.Errorf("a field passing the focus on took %q", got)
+	}
+	// A text box in an editor is typed into through the editor's focus.
+	if err := webtarget.Type(ctx, p, snap, ref("Inner"), "new", false); err != nil {
+		t.Errorf("typing into a text box in an editor: %v", err)
+	}
+	// A field takes no more than a user could type into it.
+	if err := webtarget.Type(ctx, p, snap, ref("Short"), "abcdef", false); err == nil || !strings.Contains(err.Error(), "at most 3") {
+		t.Errorf("typing past a field's length: %v", err)
+	}
+	if got := s.eval(p, `return document.querySelector("[aria-label=Short]").value`); got != "" {
+		t.Errorf("a field took %q past its length", got)
+	}
 	// An editor that refuses the text says so.
 	if err := webtarget.Type(ctx, p, snap, ref("Locked"), "new", false); err == nil || !strings.Contains(err.Error(), "didn't take") {
 		t.Errorf("typing into an editor that refuses it: %v", err)
@@ -1172,6 +1191,9 @@ const actFixture = `<!doctype html><meta charset="utf-8"><title>Act</title>
 <textarea aria-label="Notes"></textarea>
 <div id="ed" contenteditable="true" aria-label="Editor">old</div>
 <div contenteditable="true" id="locked" aria-label="Locked">kept</div>
+<input aria-label="Picked" onfocus="document.getElementById('b').focus()">
+<div contenteditable="true"><p role="textbox" aria-label="Inner">old</p></div>
+<input aria-label="Short" maxlength="3">
 <script>
 // An editor the page won't let take the text, whatever has the focus:
 // the edit command refuses there, as it does where nothing is editable.
