@@ -381,8 +381,12 @@ func TestRemoveProjectResetsADraftItsTreesEmptied(t *testing.T) {
 	mid := h.thread("Patch the table") // mygo's only thread, under t3code's
 	h.a.select_(mid)
 	h.tt.Advance(time.Second)
-	h.a.removeProject(h.a.projectOf(h.thread("Ship the sidebar sort")))
-	if h.a.fresh.workspace == "/work/mygo" {
-		t.Fatalf("the draft is in mygo, which went with t3code's trees: %+v", h.a.fresh)
+	p := h.a.projectOf(h.thread("Ship the sidebar sort"))
+	if _, all := h.a.projectTrees(p); !slices.ContainsFunc(all, func(n node) bool { return n.t.id() == mid.id() }) {
+		t.Fatal("mygo's thread isn't under t3code's")
+	}
+	h.a.removeProject(p)
+	if h.a.fresh != (draft{h.local(), homeDir()}) {
+		t.Fatalf("the draft is %+v, want the home folder: mygo went with t3code's trees", h.a.fresh)
 	}
 }
