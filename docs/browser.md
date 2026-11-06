@@ -371,10 +371,11 @@ Claude Code runs in threads get the browser as an MCP server named
   `mcp__glitched__browser_*`: in Ask mode, the thread's approval card.
 - **Actions** run in the page script (`act`), the same on every engine.
   It resolves the ref and checks the element is still the role and name
-  the snapshot gave it, shown and enabled, then:
-  - **Click:** refused for what a user couldn't click: an `inert`
-    element, one behind a modal `<dialog>` (the topmost modal escapes the
-    inertness around it). It scrolls the element to the middle of the
+  the snapshot gave it, shown and enabled, and not what a user couldn't
+  use: an `inert` element, or one behind a modal `<dialog>` (the topmost
+  modal escapes the inertness around it), in its own document or around a
+  frame it is in. Then:
+  - **Click:** it scrolls the element to the middle of the
     view at once, smooth scrolling or not, and aims at the middle, then
     the quarters, of each of its boxes, those in view first (a link
     wrapping onto two lines has two, a ring a hole; an element with no box
@@ -393,7 +394,8 @@ Claude Code runs in threads get the browser as an MCP server named
   - **Type:** the prototype's value setter, then `input` and `change`, so
     frameworks tracking the value on the element, as React does, see it;
     an editor through `insertText`. A read-only field takes nothing; one
-    that keeps only some values, as a date's, says what it took;
+    that keeps only some values, as a date's, says what it took and
+    keeps what it had;
     dropdowns, file, colour and other pickers say the tools can't fill
     them yet.
   - **Enter** (`submit`): `keydown`, `keypress` and `keyup`; unless the
