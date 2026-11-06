@@ -143,6 +143,8 @@ function install(key) {
     elementFromPoint: fn(Document, "elementFromPoint"),
     shadowFromPoint: fn(window.ShadowRoot, "elementFromPoint"),
     shadowHost: getter(window.ShadowRoot, "host"),
+    activeElement: getter(Document, "activeElement"),
+    shadowActive: getter(window.ShadowRoot, "activeElement"),
   };
   // The events actions fire, made with the constructors found as the
   // script was installed.
@@ -820,6 +822,16 @@ function install(key) {
     if (attr(el, "aria-readonly") === "true" || matches(el, ":read-only")) throw new Err(`${ref} is read-only`);
     reveal(el);
     focus();
+    // What the focus can't reach, the user can't type into: an element
+    // inert, as one in a modal dialog under another is.
+    if (html) {
+      let active = opt(B.activeElement, doc);
+      for (let i = 0; active && active !== el && i < 64; i++) {
+        const root = get(B.shadowRoot, active);
+        active = root ? opt(B.shadowActive, root) : null;
+      }
+      if (active !== el) throw new Err(`${ref} is inert: the page lets nothing use it now`);
+    }
     if (field) {
       const old = tag === "INPUT" ? get(B.inputValue, el) : "";
       apply(tag === "INPUT" ? B.setInputValue : B.setTextareaValue, el, [args.text]);
@@ -835,7 +847,7 @@ function install(key) {
       fire(new EV.Event("change", { __proto__: null, bubbles: true }));
     } else {
       apply(B.selectAllChildren, apply(B.getSelection, doc, []), [el]);
-      apply(B.execCommand, doc, ["insertText", false, args.text]);
+      if (!apply(B.execCommand, doc, ["insertText", false, args.text])) throw new Err(`${ref} didn't take the text`);
     }
     if (args.submit) {
       const key = (type) => {
