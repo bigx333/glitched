@@ -30,6 +30,7 @@ func TestTwoStopsOfARunAtOnceBothEndIt(t *testing.T) {
 		if err := confine(cmd, run); err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { stopRun(context.Background(), run) })
 		h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(cmd.Process.Pid))
 		if err != nil {
 			t.Fatal(err)
