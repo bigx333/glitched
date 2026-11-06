@@ -23,6 +23,14 @@ type Transcript struct {
 	Reported time.Time  // when the last child's report folded in came
 	Deleted  bool       // the thread's tombstone is folded in; nothing follows it
 	starting api.ID     // the run admitted and not yet started, stopped or ended
+	wakes    map[api.ID]*wake
+}
+
+// wake is a message the engine queued with a child's report, by its ID:
+// the report it carries, and the run that claimed it.
+type wake struct {
+	report *ReportEntry
+	run    api.ID
 }
 
 // Entry is sealed: *UserEntry, *AssistantEntry, *WorkEntry, *RequestEntry,
@@ -102,11 +110,22 @@ type RequestEntry struct {
 }
 
 // ReportEntry is a child thread's report: its run done, failed or blocked
-// on the user, and what came of it.
+// on the user, and what came of it. Wake is how the report went to the
+// parent's agent.
 type ReportEntry struct {
 	api.ChildReported
-	At time.Time
+	At   time.Time
+	Wake WakeState
 }
+
+type WakeState uint8
+
+const (
+	NoWake      WakeState = iota // a blocked report, or one to a settled parent
+	WakeWaiting                  // it goes in with the parent's next turn
+	WakeSent
+	WakeLost // cancelled, or cut off on its way
+)
 
 // ErrorEntry is why a run failed, as the engine or its agent said: that
 // Claude Code is not installed or not signed in, say.
@@ -146,6 +165,10 @@ func (t *Transcript) apply(e api.Event) {
 	}
 	switch b := body.(type) {
 	case api.MessageQueued:
+		if !b.Report.IsZero() {
+			t.queueWake(b)
+			break
+		}
 		state := Queued
 		if b.Held {
 			state = Held
@@ -159,7 +182,13 @@ func (t *Transcript) apply(e api.Event) {
 		if i := t.waiting(b.Message); i >= 0 {
 			t.Queue[i].State, t.Queue[i].run = Claimed, b.Run
 		}
+		if w := t.wakes[b.Message]; w != nil {
+			w.run = b.Run
+		}
 	case api.TurnAdmitted:
+		if w := t.wakes[b.Run]; w != nil {
+			w.run = b.Run
+		}
 		if i := t.waiting(b.Run); i >= 0 {
 			u := t.Queue[i]
 			u.State, u.run = Claimed, b.Run
@@ -253,9 +282,31 @@ func (t *Transcript) join(i int) {
 	t.add(u)
 }
 
+// queueWake marks the last report of q's child as going to the agent.
+func (t *Transcript) queueWake(q api.MessageQueued) {
+	for i := len(t.Entries) - 1; i >= 0; i-- {
+		if r, ok := t.Entries[i].(*ReportEntry); ok && r.Child == q.Report {
+			r.Wake = WakeWaiting
+			if t.wakes == nil {
+				t.wakes = map[api.ID]*wake{}
+			}
+			t.wakes[q.Message] = &wake{report: r}
+			return
+		}
+	}
+}
+
 // settle gives a message a state past waiting, moving it into the
 // conversation if it was still queued.
 func (t *Transcript) settle(message api.ID, state MessageState, reason string) {
+	if w := t.wakes[message]; w != nil {
+		w.report.Wake = WakeLost
+		if state == Sent {
+			w.report.Wake = WakeSent
+		}
+		delete(t.wakes, message)
+		return
+	}
 	if i := t.waiting(message); i >= 0 {
 		t.Queue[i].State, t.Queue[i].Reason = state, reason
 		t.join(i)
@@ -362,6 +413,11 @@ func (t *Transcript) end(run api.ID, released MessageState, at time.Time) {
 	}
 	if u := t.message(run); u != nil && u.State == Claimed {
 		u.State = released
+	}
+	for id, w := range t.wakes {
+		if w.run == run {
+			t.settle(id, released, "")
+		}
 	}
 	t.void(run)
 	for _, e := range t.since(run) {
