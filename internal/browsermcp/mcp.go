@@ -154,11 +154,39 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, call Call) error {
 		defer mu.Unlock()
 		enc.Encode(r)
 	}
-	sc := bufio.NewScanner(in)
-	sc.Buffer(make([]byte, 64<<10), maxMessage)
-	for sc.Scan() {
+	// in is read on its own, so ctx ending ends Serve though in hasn't:
+	// a read of a pipe can't be stopped.
+	lines := make(chan []byte)
+	var readErr error
+	go func() {
+		defer close(lines)
+		sc := bufio.NewScanner(in)
+		sc.Buffer(make([]byte, 64<<10), maxMessage)
+		for sc.Scan() {
+			select {
+			case lines <- slices.Clone(sc.Bytes()):
+			case <-ctx.Done():
+				return
+			}
+		}
+		readErr = sc.Err()
+	}()
+	for {
+		var line []byte
+		select {
+		case <-ctx.Done():
+			return nil
+		case l, ok := <-lines:
+			if !ok {
+				if readErr != nil && !errors.Is(readErr, io.EOF) {
+					return readErr
+				}
+				return nil
+			}
+			line = l
+		}
 		var req request
-		if err := json.Unmarshal(sc.Bytes(), &req); err != nil {
+		if err := json.Unmarshal(line, &req); err != nil {
 			send(response{ID: json.RawMessage("null"), Error: &rpcError{-32700, "parse error"}})
 			continue
 		}
@@ -244,8 +272,4 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, call Call) error {
 			send(response{ID: req.ID, Error: &rpcError{-32601, "method not found: " + req.Method}})
 		}
 	}
-	if err := sc.Err(); err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
-	return nil
 }
