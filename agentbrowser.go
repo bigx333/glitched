@@ -40,10 +40,13 @@ type agentBrowser struct {
 	// snaps are each tab's latest snapshot, by tab id: the refs the
 	// agent may act on, which name their tab by their epoch.
 	snaps map[int]webtarget.Snapshot
+	// pages hold each tab's page for one script at a time, so the
+	// snapshot the page last took is the one with the highest epoch.
+	pages map[int]*sync.Mutex
 }
 
 func newAgentBrowser(a *app, onView func(func())) *agentBrowser {
-	return &agentBrowser{a: a, onView: onView, settle: 300 * time.Millisecond, load: 15 * time.Second, snaps: map[int]webtarget.Snapshot{}}
+	return &agentBrowser{a: a, onView: onView, settle: 300 * time.Millisecond, load: 15 * time.Second, snaps: map[int]webtarget.Snapshot{}, pages: map[int]*sync.Mutex{}}
 }
 
 // toolTime bounds a tool call, past which the agent hears it timed out.
@@ -70,7 +73,13 @@ func (a *app) serveAgents() {
 		return
 	}
 	ab := newAgentBrowser(a, a.post)
-	go browsermcp.Accept(ln, ab.call)
+	go func() {
+		// The socket stops only as the app quits, or for an error the
+		// agents can't see: they hear the app isn't open.
+		if err := browsermcp.Accept(ln, ab.call); err != nil {
+			log.Printf("browser socket: %v", err)
+		}
+	}()
 	a.stopAgents = ln.Close
 }
 
@@ -140,7 +149,7 @@ func (ab *agentBrowser) view(ctx context.Context, fn func() error) error {
 		// A call the agent gave up on, or that timed out, does nothing
 		// more, as its tab opening late would surprise the user.
 		if ctx.Err() != nil {
-			done <- ctx.Err()
+			done <- errGaveUp
 			return
 		}
 		done <- fn()
@@ -241,14 +250,14 @@ func (ab *agentBrowser) tabs(ctx context.Context, args toolArgs) (string, error)
 			if err != nil {
 				return err
 			}
-			shown, active := ab.a.showPreview, b.active
+			shown, diff, active := ab.a.showPreview, ab.a.showDiff, b.active
 			ab.a.newTab(u)
 			opened = b.tabs[b.active]
 			if p, err = ab.page(opened); err != nil {
 				// A tab whose page can't start goes, and the pane is as
 				// it was.
 				ab.a.closeTab(b.active)
-				ab.a.showPreview, b.active = shown, min(active, max(len(b.tabs)-1, 0))
+				ab.a.showPreview, ab.a.showDiff, b.active = shown, diff, min(active, max(len(b.tabs)-1, 0))
 			}
 			return err
 		case "select":
@@ -415,11 +424,13 @@ func (ab *agentBrowser) act(ctx context.Context, tool string, args toolArgs) (st
 	if err != nil {
 		return "", err
 	}
+	unlock := ab.lock(t.id)
 	if tool == "browser_click" {
 		err = webtarget.Click(ctx, p, snap, args.Ref)
 	} else {
 		err = webtarget.Type(ctx, p, snap, args.Ref, args.Text, args.Submit)
 	}
+	unlock()
 	if err != nil {
 		return "", agentError(err)
 	}
@@ -502,11 +513,15 @@ func (ab *agentBrowser) loaded(ctx context.Context, t *browserTab, p browse.Page
 
 // snapshot reads t's page, keeping its refs as the tab's latest.
 func (ab *agentBrowser) snapshot(ctx context.Context, t *browserTab, p browse.Page, full bool) (string, error) {
+	unlock := ab.lock(t.id)
 	s, err := webtarget.Take(ctx, p, webtarget.Options{Full: full})
+	if err == nil {
+		ab.keep(t.id, s)
+	}
+	unlock()
 	if err != nil {
 		return "", fmt.Errorf("Tab %d's page couldn't be read: %w", t.id, agentError(err))
 	}
-	ab.keep(t.id, s)
 	var out strings.Builder
 	fmt.Fprintf(&out, "Tab %d: %q\nURL: %s\n", t.id, s.Title, s.URL)
 	if s.Truncated {
@@ -528,6 +543,19 @@ func (ab *agentBrowser) keep(id int, s webtarget.Snapshot) {
 	ab.snaps[id] = s
 }
 
+// lock holds tab id's page for a script until the func it returns.
+func (ab *agentBrowser) lock(id int) func() {
+	ab.mu.Lock()
+	m := ab.pages[id]
+	if m == nil {
+		m = &sync.Mutex{}
+		ab.pages[id] = m
+	}
+	ab.mu.Unlock()
+	m.Lock()
+	return m.Unlock
+}
+
 // forget drops the snapshots of tabs no longer open, however they
 // closed. It runs on the view's thread, where the tabs are.
 func (ab *agentBrowser) forget() {
@@ -536,6 +564,11 @@ func (ab *agentBrowser) forget() {
 	for id := range ab.snaps {
 		if !slices.ContainsFunc(ab.a.browser.tabs, func(t *browserTab) bool { return t.id == id }) {
 			delete(ab.snaps, id)
+		}
+	}
+	for id := range ab.pages {
+		if !slices.ContainsFunc(ab.a.browser.tabs, func(t *browserTab) bool { return t.id == id }) {
+			delete(ab.pages, id)
 		}
 	}
 }
