@@ -28,3 +28,16 @@ func TestClaudeIsFoundOnWindows(t *testing.T) {
 		t.Errorf("binary = %q, %v, want %s", got, err, bin)
 	}
 }
+
+// Windows runs a program only by a name with an extension it knows, so a
+// claude_path without one would fail at start with a bare "file does not
+// exist" instead of saying how to install Claude Code.
+func TestAClaudePathWindowsCannotRunIsNotInstalled(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(bin, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := (&Adapter{Path: bin}).binary(); err != ErrNotInstalled {
+		t.Errorf("binary with claude_path %s = %q, %v, want ErrNotInstalled", bin, got, err)
+	}
+}
