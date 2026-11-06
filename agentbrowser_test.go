@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,9 +29,14 @@ type agentPage struct {
 	title string
 	// onAct, if set, is what the page does as it acts, or why it won't.
 	onAct func() error
+	// onEval, if set, runs as each script does, outside the page's lock.
+	onEval func()
 }
 
 func (p *agentPage) EvalContext(_ context.Context, code string) (any, error) {
+	if p.onEval != nil {
+		p.onEval()
+	}
 	head, _, _ := strings.Cut(code, ";\n")
 	var args map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimPrefix(head, "const args = ")), &args); err != nil {
@@ -533,5 +539,63 @@ func TestTheBrowserSocketIsTheUsers(t *testing.T) {
 	defer a.stopAgents()
 	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
 		t.Errorf("the state directory: %v %v, want 0700", fi.Mode().Perm(), err)
+	}
+}
+
+// A call whose context ended before the view ran it says it gave up,
+// in words, not the context's.
+func TestAnAgentsLateCallSaysItGaveUp(t *testing.T) {
+	_, ab, _ := agents(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range 100 {
+		if err := ab.view(ctx, func() error { return nil }); err != errGaveUp {
+			t.Fatalf("a call ended before the view ran it: %v", err)
+		}
+	}
+}
+
+// A tab's page runs one script of the agents' at a time, so the
+// snapshot it holds is the one kept.
+func TestAnAgentsScriptsOnATabTakeTurns(t *testing.T) {
+	_, ab, made := agents(t)
+	callTool(t, ab, "browser_navigate", `{"url":"go.dev"}`)
+	p := (*made)[0]
+	var running, most atomic.Int32
+	p.onEval = func() {
+		n := running.Add(1)
+		for m := most.Load(); n > m && !most.CompareAndSwap(m, n); m = most.Load() {
+		}
+		time.Sleep(5 * time.Millisecond)
+		running.Add(-1)
+	}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() { callTool(t, ab, "browser_snapshot", `{}`) })
+		wg.Go(func() { callTool(t, ab, "browser_click", `{"ref":"`+refOf(ab, 1)+`"}`) })
+	}
+	wg.Wait()
+	if m := most.Load(); m != 1 {
+		t.Errorf("%d scripts ran on one tab at once", m)
+	}
+}
+
+// refOf is a ref of tab id's latest snapshot.
+func refOf(ab *agentBrowser, id int) string {
+	ab.mu.Lock()
+	defer ab.mu.Unlock()
+	return ab.snaps[id].Elements[0].Ref
+}
+
+// A tab that can't start leaves the diff open, as the pane was.
+func TestAnAgentsTabThatCannotStartLeavesTheDiff(t *testing.T) {
+	a, ab, _ := agents(t)
+	a.showPreview, a.showDiff = false, true
+	a.browser.open = func(string, browse.Events) (browse.Page, error) { return nil, errors.New("no web view") }
+	if _, err := callTool(t, ab, "browser_tabs", `{"action":"new","url":"example.com"}`); err == nil {
+		t.Fatal("a tab whose page can't start opened")
+	}
+	if a.showPreview || !a.showDiff {
+		t.Errorf("after a tab that couldn't start: pane %v, diff %v", a.showPreview, a.showDiff)
 	}
 }
