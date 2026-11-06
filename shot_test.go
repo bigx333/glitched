@@ -24,7 +24,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|refused|plain|stuck|children|blocked
+// SCENE=empty|running|approval|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|refused|plain|stuck|children|blocked|held (SEND=<text>)
 // for the engines' threads (none started without one; question takes
 // ASK=<request body>, PICK=<label>,… and QUESTION=answer|dismiss|stop;
 // both is an approval and questions waiting at once, the questions first
@@ -461,6 +461,19 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		h.a.select_(top)
 		h.until("its report", func() bool { return h.tt.HasText("Done") })
 		h.tt.Advance(time.Second)
+	case "held":
+		// A parent the user stopped while its child worked, the child's
+		// report held for the next message; with SEND, that message sent.
+		var d *daemon.Daemon
+		var ad *parking
+		var top api.ID
+		h, d, ad, top = heldReport(t)
+		if text := os.Getenv("SEND"); text != "" {
+			ad.park(api.ID{})
+			submitTo(t, d, top, api.MessageDispatch{Text: text, Mode: api.StartNow})
+			h.until("the message", func() bool { return h.tt.HasText(text) && !h.a.current().View.Working() })
+			h.tt.Advance(time.Second)
+		}
 	case "machines":
 		h = machines(t)
 		h.a.select_(h.thread("Rotate the API keys"))
