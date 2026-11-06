@@ -1,6 +1,6 @@
 # Child threads
 
-Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, after archiving went (Settled is where a thread done with goes) and protocol 3 was taken by that change; changed on 2026-11-03 so that only an agent starts a child and Settle takes the tree; changed on 2026-11-05 so that the engine settles and deletes a tree in one commit (open question 1); changed on 2026-11-06 for `glitched mcp`, the spawn tool's server. This is what the branch builds, not a plan, except where a line says planned.
+Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, after archiving went (Settled is where a thread done with goes) and protocol 3 was taken by that change; changed on 2026-11-03 so that only an agent starts a child and Settle takes the tree; changed on 2026-11-05 so that the engine settles and deletes a tree in one commit (open question 1); changed on 2026-11-06 for `glitched mcp`, the spawn tool's server, and so that a done or failed report wakes the parent's agent (spawn tool PR 3). This is what the branch builds, not a plan, except where a line says planned.
 
 ## Decision
 
@@ -56,8 +56,8 @@ When:
 
 | The child's run | Report | Source in `Observe` |
 |---|---|---|
-| ends Completed | `ReportDone` | `Ended` |
-| ends Failed, a failed start included | `ReportFailed`, with the error | `Ended` |
+| ends Completed | `ReportDone`, which wakes the parent | `Ended` |
+| ends Failed, a failed start included | `ReportFailed`, with the error, which wakes the parent | `Ended` |
 | opens a request (approval or question) | `ReportBlocked`, with the request's body | `Surfaced` |
 | ends Interrupted or Abandoned, or ends any way while stopping | none: the user stopped it | |
 | becomes Uncertain | none | |
@@ -67,9 +67,22 @@ A thread with no parent never reports.
 How:
 
 1. `decision.report` adds an `engine.ReportToParent` effect (`internal/engine/effect.go`, kind `child.report`): parent, child, run, kind, the child's title, and the error or the request body. The store writes it to `effects` in the same transaction as the child's `turn.ended` or `request.opened`. Its row is the child's, so it runs in the child's lane, in order with the child's other effects.
-2. The runtime's `perform` hands it to `Host.report` (`internal/runtime/report.go`). That reads what came of the run: for a block, a line from the request body ("Wants to run …", "Wants to edit main.go", or "Asks: " and the first question); for a failure, the error; otherwise the last paragraph of the run's assistant deltas, which `store.RunText` reads with one query on the child's log (`internal/store/read.go`). It's one line, cut to 280 characters.
+2. The runtime's `perform` hands it to `Host.report` (`internal/runtime/report.go`). That reads what came of the run: for a block, a line from the request body ("Wants to run …", "Wants to edit main.go", or "Asks: " and the first question); for a failure, the error; otherwise the last paragraph of what the run said last, its assistant deltas after its last tool call, which `store.RunReply` reads from the child's log (`internal/store/read.go`). It's one line, cut to 280 characters.
 3. It commits `engine.Reported` on the **parent** with the effect's completion, in one transaction (`store.Observe` with `done`). `Observe` emits `api.ChildReported{Child, Run, Kind, Title, Outcome}` (`child.reported`) into the parent's log. `apply` sets `Thread.Reported` and `Thread.LastReport` (the child, the kind, and the event's seq, which `Store.write` sets on `engine.Event.Seq` before it applies the event), and bumps the revision.
 4. In the same commit, a parent that was Snoozed goes back to Open. A Settled parent stays Settled: settling halted its tree, so a report into it comes from a run that ended before its stop landed. The report is still logged and counts as unread, but it moves no thread and starts no turn. A Settled thread comes back only by the user's hand (Back to inbox, or a message sent to it).
+5. A done or failed report to a parent that isn't settled wakes the parent's agent, in the same commit (see Wakes).
+
+## Wakes
+
+A done or failed report gives the child's result to the parent's agent, as Zeron's delegate tasks do. There is no blocking wait tool.
+
+- **The wake** is a message the engine queues on the parent with the report: `api.MessageQueued` with `Report` set to the child, held, in `AfterActive`. No client's message is held in `AfterActive` (a client's held message is a `Defer`), which is how the engine tells a wake from the user's words with no store schema change (`Message.waking` in `internal/engine/state.go`). Its text is the child's result in Zeron's task tags, `<task id="…" title="…" state="completed|failed"><task_result>…</task_result></task>`. The result is what the child's run said last, its text after its last tool call (`store.RunReply`), or all of why it failed. `Host.report` reads it and passes it in `engine.Reported.Reply`.
+- **When it runs.** `decision.settle` starts a wake when the parent is idle and nothing the user queued is ready. On an idle parent that is at once, in the report's own commit. On a parent at work, it is after the turn at work ends. Wakes that wait together go in one turn.
+- **A stop stays a stop** (Nelson, 2026-11-05). When the parent's last run was stopped (ended interrupted or abandoned, or an interrupt reached it), a wake starts no turn. It waits for the user's next message and goes in with it: `decision.admit` claims every waiting wake for the turn it starts and puts their texts before the user's words, in the one turn. The agent reads the results and then the user's word on them, and the user's message is not held behind a turn of the agent's own. A user's message queued before the stop that runs after it takes them the same way.
+- **Settled and deleted parents.** A settled parent takes no wake. Settling cancels the wakes that wait, with the rest of its queue, so none starts once the thread is back in the inbox. A deleted parent refuses the report, as before.
+- **Once.** The wake's ID is derived from the child's run (`wakeID`), so a report observed again, as a replayed effect's would be, finds its wake and changes nothing. A run ends once: only a live run ends, and boot's reconcile never ends one, so no other path reports a run twice.
+- **Sent.** The engine marks a wake dispatched when the turn that carries it starts (`decision.sent`), as it marks the turn's own message. A wake in a turn that ends before it starts is released as cancelled, as a claimed message is.
+- **In the GUI**, a wake is not the user's message. `client.Transcript` folds it into the report it carries (`ReportEntry.Wake`), and the report card shows one line under it: "↳ Goes to the agent after this turn", "↳ Goes to the agent with your next message" on a stopped parent, "↳ Sent to the agent", or "↳ Not sent to the agent".
 
 Replay and failure:
 
@@ -119,7 +132,7 @@ Settle and Delete are engine-side (decided 2026-11-05, open question 1). The GUI
 ## Protocol 6
 
 - A settle or a delete takes the thread's tree in its commit. `api.Protocol` is 6: a protocol 5 GUI sends a command per thread, which an engine of 6 has already taken, and a protocol 5 engine would leave a child of a settled or deleted thread at work behind a protocol 6 GUI's one command. So each refuses the other. No store schema change.
-- Spawn PR 3 adds `MessageQueued.Report` within protocol 6. No release goes out in between.
+- `api.MessageQueued.Report` (spawn PR 3) is new within protocol 6, with no release in between. A client that drops it would show a wake as the user's message.
 
 ## Not done
 

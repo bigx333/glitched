@@ -30,15 +30,15 @@ func Cut(outcome string) (string, bool) {
 // the effect that asked for it. A parent that was deleted, or never reached
 // this engine, takes nothing, and the effect is done.
 func (h *Host) report(e store.Effect, b engine.ReportToParent) {
-	var outcome string
+	var outcome, reply string
 	if !retry(h.ctx, "read report", func(ctx context.Context) (err error) {
-		outcome, err = h.outcome(ctx, e.Thread, b)
+		outcome, reply, err = h.outcome(ctx, e.Thread, b)
 		return err
 	}) {
 		retry(h.drain, "release effect", func(ctx context.Context) error { return h.store.Release(ctx, e.ID) })
 		return
 	}
-	o := engine.Reported{Report: api.ChildReported{Child: b.Child, Run: b.Run, Kind: b.Kind, Title: b.Title, Outcome: outcome}}
+	o := engine.Reported{Report: api.ChildReported{Child: b.Child, Run: b.Run, Kind: b.Kind, Title: b.Title, Outcome: outcome}, Reply: reply}
 	retry(h.drain, "commit report", func(ctx context.Context) error {
 		err := h.observe(ctx, b.Parent, o, e.ID)
 		if errors.Is(err, api.ErrNotFound) {
@@ -49,19 +49,20 @@ func (h *Host) report(e store.Effect, b engine.ReportToParent) {
 }
 
 // outcome is what came of the child's run, in a line or two: the request
-// it waits on, why it failed, or the last of what it said.
-func (h *Host) outcome(ctx context.Context, child api.ID, b engine.ReportToParent) (string, error) {
+// it waits on, why it failed, or the last of what it said. The reply is
+// all of why it failed or of what it said last, for the parent's agent.
+func (h *Host) outcome(ctx context.Context, child api.ID, b engine.ReportToParent) (outcome, reply string, err error) {
 	switch {
 	case b.Kind == api.ReportBlocked:
-		return askLine(b.Ask), nil
+		return askLine(b.Ask), "", nil
 	case b.Kind == api.ReportFailed && b.Error != "":
-		return clip(oneLine(b.Error), outcomeLimit), nil
+		return clip(oneLine(b.Error), outcomeLimit), b.Error, nil
 	}
-	text, err := h.store.RunText(ctx, child, b.Run)
+	text, err := h.store.RunReply(ctx, child, b.Run)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return summary(text), nil
+	return summary(text), text, nil
 }
 
 // summary is the last paragraph of a reply, on one line, cut to

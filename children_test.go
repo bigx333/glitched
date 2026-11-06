@@ -24,7 +24,9 @@ import (
 // seedChild has parent start a child on the engine, as an agent's
 // delegate_task call does, with messages for the child, and returns once
 // every turn they started has ended and reported. A parent at work starts
-// it from its live run; an idle one gets a turn that starts it and ends.
+// it from its live run; an idle one gets a turn that starts it and ends,
+// and seedChild returns once the turns those reports woke, up the line,
+// ended too.
 func seedChild(t *testing.T, d *daemon.Daemon, parent api.ID, title string, messages ...string) api.ID {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -43,7 +45,8 @@ func seedChild(t *testing.T, d *daemon.Daemon, parent api.ID, title string, mess
 		return snap
 	}
 	var id api.ID
-	if snap := read(parent); snap.Threads[0].Run != api.RunIdle {
+	spawnedLive := read(parent).Threads[0].Run != api.RunIdle
+	if snap := read(parent); spawnedLive {
 		id = api.NewID()
 		c := api.Command{ID: api.NewID(), Target: id, Body: api.ThreadCreate{Workspace: snap.Threads[0].Workspace, Title: title,
 			Model: snap.Threads[0].Model, Access: snap.Threads[0].Access, Parent: parent, Run: liveRun(t, snap.Events), Text: task}}
@@ -79,7 +82,26 @@ func seedChild(t *testing.T, d *daemon.Daemon, parent api.ID, title string, mess
 		settled(t, ep, id)
 		reportedAll(t, ep, id)
 	}
+	if !spawnedLive {
+		settledLine(t, ep, parent)
+	}
 	return id
+}
+
+// settledLine waits, from thread up its line, for each thread's turns to
+// end and report: a report wakes the thread above, whose turn reports in
+// turn.
+func settledLine(t *testing.T, ep api.Endpoint, thread api.ID) {
+	t.Helper()
+	for !thread.IsZero() {
+		settled(t, ep, thread)
+		reportedAll(t, ep, thread)
+		snap, err := ep.Read(context.Background(), api.Query{Thread: thread})
+		if err != nil {
+			t.Fatal(err)
+		}
+		thread = snap.Threads[0].Parent
+	}
 }
 
 // reportedAll waits for every turn of thread's that ended done or failed
@@ -159,12 +181,14 @@ func liveRun(t *testing.T, evs []api.Event) api.ID {
 	return api.ID{}
 }
 
-// seeding is an engine's adapter with the turns seedChild starts routed
-// to a fake that spawns, so a test's own adapter plays every other turn.
+// seeding is an engine's adapter with the turns seedChild starts, and the
+// turns children's reports wake, routed to a fake that spawns, so a test's
+// own adapter plays every other turn.
 type seeding struct {
 	provider.Adapter
 	spawner *fake.Adapter
 	mu      sync.Mutex
+	ep      api.Endpoint // nil until the engine started
 	runs    map[api.ID]bool
 }
 
@@ -177,21 +201,38 @@ func (s *seeding) route(run api.ID) {
 	s.mu.Unlock()
 }
 
-func (s *seeding) of(run api.ID) provider.Adapter {
+func (s *seeding) of(ctx context.Context, thread, run api.ID) provider.Adapter {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.runs[run] {
+	routed, ep := s.runs[run], s.ep
+	s.mu.Unlock()
+	if routed || ep != nil && wakes(ctx, ep, thread, run) {
 		return s.spawner
 	}
 	return s.Adapter
 }
 
+// wakes is whether run's message on thread is a wake, a child's report.
+func wakes(ctx context.Context, ep api.Endpoint, thread, run api.ID) bool {
+	snap, err := ep.Read(ctx, api.Query{Thread: thread})
+	if err != nil {
+		return false
+	}
+	for _, e := range snap.Events {
+		if b, err := e.Decode(); err == nil {
+			if q, ok := b.(api.MessageQueued); ok && q.Message == run {
+				return !q.Report.IsZero()
+			}
+		}
+	}
+	return false
+}
+
 func (s *seeding) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
-	return s.of(spec.Run).Open(ctx, spec)
+	return s.of(ctx, spec.Thread, spec.Run).Open(ctx, spec)
 }
 
 func (s *seeding) Reconcile(ctx context.Context, id provider.RuntimeIdentity) (provider.Recovery, error) {
-	return s.of(id.Run).Reconcile(ctx, id)
+	return s.of(ctx, id.Thread, id.Run).Reconcile(ctx, id)
 }
 
 // tree3 is the app on an engine holding a thread, Ship the sidebar sort,
@@ -734,7 +775,8 @@ func TestAReportTellsOnlyOfItsChild(t *testing.T) {
 		ask  bool // the second child asks too
 		want []string
 	}{
-		{"done", false, []string{"Write the tests: Needs you"}},
+		// The second child's done report wakes the parent, whose turn ends.
+		{"done", false, []string{"Write the tests: Needs you", "Done. Your turn."}},
 		{"blocked", true, []string{"Write the tests: Needs you", "Run the linter: Needs you"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -770,7 +812,7 @@ func TestAReportTellsOnlyOfItsChild(t *testing.T) {
 			h.until("the first child's report", func() bool { return len(reports()) == 1 })
 			at := parent.View.Reported
 			go_(second)
-			h.until("the second child's report", func() bool { return parent.View.Reported.After(at) })
+			h.until("the second child's report", func() bool { return parent.View.Reported.After(at) && len(reports()) == len(tc.want) })
 			for range 5 {
 				h.p.run()
 				h.tt.Advance(100 * time.Millisecond)

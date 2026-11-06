@@ -209,8 +209,12 @@ type Reconciled struct {
 type Rewound struct{}
 
 // Reported is a child's report, observed on its parent: what the runtime
-// made of a ReportToParent.
-type Reported struct{ Report api.ChildReported }
+// made of a ReportToParent. Reply is what the child's run said last, or
+// why it failed, for the parent's agent.
+type Reported struct {
+	Report api.ChildReported
+	Reply  string
+}
 
 func (Started) observed()        {}
 func (Ended) observed()          {}
