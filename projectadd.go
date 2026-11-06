@@ -1,6 +1,8 @@
 package main
 
 import (
+	"path/filepath"
+
 	"github.com/egoist/mygo"
 
 	"glitched/internal/client"
@@ -39,7 +41,7 @@ func (a *app) addProject() {
 			// This machine's engine is always listed first, so never one
 			// shown by another's.
 			if e := a.localEnv(); dir != "" && e != nil {
-				a.startIn(draft{e, dir})
+				a.startIn(draft{e, filepath.Clean(dir)})
 				a.draftArea.Focus()
 			}
 		})
