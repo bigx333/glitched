@@ -21,6 +21,9 @@ func signedIn(t *testing.T) (bin, ran string) {
 	dir := t.TempDir()
 	ran = filepath.Join(t.TempDir(), "ran")
 	bin = filepath.Join(dir, "claude")
+	if runtime.GOOS == "windows" {
+		bin += ".exe" // PATH finds no program without its extension
+	}
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\ntouch "+ran+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
