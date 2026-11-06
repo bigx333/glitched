@@ -121,7 +121,7 @@ func (a *app) leaveFor() {
 // arriving is whether t's row is sliding into the sidebar, just sent from
 // the hero, or about to.
 func (a *app) arriving(t thread) bool {
-	return t.id() == a.arrived && (a.arrivedAt.IsZero() || a.now.Sub(a.arrivedAt) < arriveFor)
+	return !a.arrived.IsZero() && t.id() == a.arrived && (a.arrivedAt.IsZero() || a.now.Sub(a.arrivedAt) < arriveFor)
 }
 
 // sentFromHero lets the thread id, just created from the hero, slide into
