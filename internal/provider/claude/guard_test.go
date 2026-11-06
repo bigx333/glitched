@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -58,6 +59,9 @@ func TestAProgramATestRunsCannotRunARealClaude(t *testing.T) {
 	}
 	bin, ran := signedIn(t)
 	helper := filepath.Join(t.TempDir(), "guardhelper")
+	if runtime.GOOS == "windows" {
+		helper += ".exe" // exec finds no program without its extension
+	}
 	if out, err := exec.Command(gobin, "build", "-o", helper, "./testdata/guardhelper").CombinedOutput(); err != nil {
 		t.Fatalf("build the helper: %v\n%s", err, out)
 	}
