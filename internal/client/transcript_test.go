@@ -581,3 +581,45 @@ func TestAReportIsNews(t *testing.T) {
 		t.Error("shown with its report, the thread is still unread")
 	}
 }
+
+// A wake the engine queued with a child's report shows on that report, not
+// as the user's message: waiting, then sent with its own turn or with the
+// user's, or lost with a run that never started.
+func TestAWakeShowsOnItsReport(t *testing.T) {
+	child, w1, w2, w3, user := api.NewID(), api.NewID(), api.NewID(), api.NewID(), api.NewID()
+	reported := func(kind api.ReportKind) api.ChildReported {
+		return api.ChildReported{Child: child, Run: api.NewID(), Kind: kind, Title: "Write the tests", Outcome: "Added 9 table tests."}
+	}
+	wake := func(id api.ID) api.MessageQueued {
+		return api.MessageQueued{Message: id, Text: "<task>…</task>", Mode: api.AfterActive, Held: true, Report: child}
+	}
+	tr := play(reported(api.ReportDone), wake(w1))
+	r := tr.Entries[0].(*ReportEntry)
+	if len(tr.Entries) != 1 || len(tr.Queue) != 0 || r.Wake != WakeWaiting {
+		t.Fatalf("a queued wake: %v, wake %d; want only the report, waiting", lines(tr), r.Wake)
+	}
+
+	tr = play(reported(api.ReportDone), wake(w1), api.TurnAdmitted{Run: w1, Generation: 1}, api.TurnStarted{Run: w1})
+	if r := tr.Entries[0].(*ReportEntry); r.Wake != WakeSent {
+		t.Errorf("a wake's own turn started: wake %d, want sent", r.Wake)
+	}
+
+	tr = play(reported(api.ReportFailed), wake(w2),
+		api.MessageQueued{Message: user, Text: "carry on", Mode: api.StartNow},
+		api.TurnAdmitted{Run: user, Generation: 1}, api.MessageClaimed{Message: w2, Run: user},
+		api.TurnStarted{Run: user}, api.MessageDispatched{Message: w2})
+	if r := tr.Entries[0].(*ReportEntry); r.Wake != WakeSent || describe(tr.Entries[1]) != `user "carry on" sent` {
+		t.Errorf("a wake that went in with the user's turn: %v, wake %d; want the report sent, then the user's words", lines(tr), r.Wake)
+	}
+
+	tr = play(reported(api.ReportDone), wake(w3),
+		api.TurnAdmitted{Run: w3, Generation: 1}, api.TurnStopping{Run: w3}, api.TurnEnded{Run: w3, Outcome: api.OutcomeInterrupted})
+	if r := tr.Entries[0].(*ReportEntry); r.Wake != WakeLost {
+		t.Errorf("a wake whose turn never started: wake %d, want lost", r.Wake)
+	}
+
+	tr = play(reported(api.ReportDone), wake(w1), api.MessageCancelled{Message: w1, Reason: "the thread was settled or deleted"})
+	if r := tr.Entries[0].(*ReportEntry); r.Wake != WakeLost || len(tr.Entries) != 1 {
+		t.Errorf("a cancelled wake: %v, wake %d; want the report alone, lost", lines(tr), r.Wake)
+	}
+}
