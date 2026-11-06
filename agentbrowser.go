@@ -42,11 +42,13 @@ type agentBrowser struct {
 	snaps map[int]webtarget.Snapshot
 	// pages hold each tab's page for one script at a time, so the
 	// snapshot the page last took is the one with the highest epoch.
-	pages map[int]*sync.Mutex
+	// They stay as their tabs close, as a call may yet hold one: tab ids
+	// aren't used again.
+	pages map[int]chan struct{}
 }
 
 func newAgentBrowser(a *app, onView func(func())) *agentBrowser {
-	return &agentBrowser{a: a, onView: onView, settle: 300 * time.Millisecond, load: 15 * time.Second, snaps: map[int]webtarget.Snapshot{}, pages: map[int]*sync.Mutex{}}
+	return &agentBrowser{a: a, onView: onView, settle: 300 * time.Millisecond, load: 15 * time.Second, snaps: map[int]webtarget.Snapshot{}, pages: map[int]chan struct{}{}}
 }
 
 // toolTime bounds a tool call, past which the agent hears it timed out.
@@ -158,7 +160,8 @@ func (ab *agentBrowser) view(ctx context.Context, fn func() error) error {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		// What the view did as the call ended, it did: the agent hears so.
+		// What the view finished as the call ended, it did: the agent
+		// hears so. What it was still doing, it may yet do.
 		select {
 		case err := <-done:
 			return err
@@ -424,7 +427,10 @@ func (ab *agentBrowser) act(ctx context.Context, tool string, args toolArgs) (st
 	if err != nil {
 		return "", err
 	}
-	unlock := ab.lock(t.id)
+	unlock, err := ab.lock(ctx, t.id)
+	if err != nil {
+		return "", err
+	}
 	if tool == "browser_click" {
 		err = webtarget.Click(ctx, p, snap, args.Ref)
 	} else {
@@ -513,7 +519,10 @@ func (ab *agentBrowser) loaded(ctx context.Context, t *browserTab, p browse.Page
 
 // snapshot reads t's page, keeping its refs as the tab's latest.
 func (ab *agentBrowser) snapshot(ctx context.Context, t *browserTab, p browse.Page, full bool) (string, error) {
-	unlock := ab.lock(t.id)
+	unlock, err := ab.lock(ctx, t.id)
+	if err != nil {
+		return "", err
+	}
 	s, err := webtarget.Take(ctx, p, webtarget.Options{Full: full})
 	if err == nil {
 		ab.keep(t.id, s)
@@ -543,17 +552,22 @@ func (ab *agentBrowser) keep(id int, s webtarget.Snapshot) {
 	ab.snaps[id] = s
 }
 
-// lock holds tab id's page for a script until the func it returns.
-func (ab *agentBrowser) lock(id int) func() {
+// lock holds tab id's page for a script until the func it returns, or
+// says the call gave up waiting.
+func (ab *agentBrowser) lock(ctx context.Context, id int) (func(), error) {
 	ab.mu.Lock()
-	m := ab.pages[id]
-	if m == nil {
-		m = &sync.Mutex{}
-		ab.pages[id] = m
+	turn := ab.pages[id]
+	if turn == nil {
+		turn = make(chan struct{}, 1)
+		ab.pages[id] = turn
 	}
 	ab.mu.Unlock()
-	m.Lock()
-	return m.Unlock
+	select {
+	case turn <- struct{}{}:
+		return func() { <-turn }, nil
+	case <-ctx.Done():
+		return nil, errGaveUp
+	}
 }
 
 // forget drops the snapshots of tabs no longer open, however they
@@ -566,9 +580,5 @@ func (ab *agentBrowser) forget() {
 			delete(ab.snaps, id)
 		}
 	}
-	for id := range ab.pages {
-		if !slices.ContainsFunc(ab.a.browser.tabs, func(t *browserTab) bool { return t.id == id }) {
-			delete(ab.pages, id)
-		}
-	}
+
 }
