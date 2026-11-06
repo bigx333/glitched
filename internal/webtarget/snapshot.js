@@ -754,19 +754,28 @@ function install(key) {
     const doc = get(B.ownerDocument, el), view = get(B.defaultView, doc), html = isHTML(el);
     const fire = (e) => apply(B.dispatch, el, [e]);
     const focus = () => { if (html) apply(B.focus, el, []); };
-    if (args.action === "click") {
-      // What a user can't click, the agent doesn't either: an element
-      // inert, or behind a modal dialog. A modal dialog escapes the
-      // inertness around it.
+    // What a user can't use, the agent doesn't either: an element inert,
+    // or behind a modal dialog, in its own document or around a frame
+    // it is in. A modal dialog escapes the inertness around it.
+    const usable = (node) => {
+      const d = get(B.ownerDocument, node);
       const modalAt = (n) => { try { return matches(n, "dialog:modal"); } catch { return false; } };
       let inModal = false;
-      for (let n = el, i = 0; n && i < 4096; i++, n = up(n)) {
+      for (let n = node, i = 0; n && i < 4096; i++, n = up(n)) {
         if (modalAt(n)) { inModal = true; break; }
         if (hasAttr(n, "inert")) throw new Err(`${ref} is inert: the page lets nothing use it now`);
       }
       let modal = null;
-      if (!inModal) try { modal = apply(B.query, get(B.documentElement, doc), ["dialog:modal"]); } catch {}
+      if (!inModal) try { modal = apply(B.query, get(B.documentElement, d), ["dialog:modal"]); } catch {}
       if (modal) throw new Err(`${ref} is behind a modal dialog`);
+    };
+    usable(el);
+    for (let i = 0; i < found.chain.length; i++) {
+      const f = deref(found.chain[i].frame);
+      if (!f) throw gone(ref);
+      usable(f);
+    }
+    if (args.action === "click") {
       reveal(el);
       // The events go to what the click hits, el or what is in it, or
       // its label, as a user's would.
@@ -812,11 +821,16 @@ function install(key) {
     reveal(el);
     focus();
     if (field) {
+      const old = tag === "INPUT" ? get(B.inputValue, el) : "";
       apply(tag === "INPUT" ? B.setInputValue : B.setTextareaValue, el, [args.text]);
       // A field that takes only some values, as a date's, keeps none
-      // other: the agent hears what it took.
+      // other: the agent hears what it took, and the field keeps what it
+      // had, which the page, hearing no input, still thinks it has.
       const took = tag === "INPUT" ? get(B.inputValue, el) : args.text;
-      if (took !== args.text) throw new Err(`${ref} took ${quote(took)}, not ${quote(args.text)}`);
+      if (took !== args.text) {
+        apply(B.setInputValue, el, [old]);
+        throw new Err(`${ref} took ${quote(took)}, not ${quote(args.text)}`);
+      }
       fire(new EV.Input("input", { __proto__: null, bubbles: true, composed: true, inputType: "insertText", data: args.text }));
       fire(new EV.Event("change", { __proto__: null, bubbles: true }));
     } else {
