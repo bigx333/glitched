@@ -14,8 +14,9 @@ import (
 // work; claude's end is synchronous, as a program expects of its standard
 // handles.
 func pipe(in bool) (child, ours *os.File, err error) {
-	// A random name keeps another program from taking it first, or
-	// connecting before claude's end does.
+	// A random name keeps another program from taking it first. One that
+	// lists the machine's pipes could still connect before claude's end
+	// does, which fails the start.
 	name := `\\.\pipe\glitched-claude-` + rand.Text()
 	path, err := windows.UTF16PtrFromString(name)
 	if err != nil {
