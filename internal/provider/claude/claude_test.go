@@ -550,6 +550,7 @@ func TestASignedOutTurnSaysToLogIn(t *testing.T) {
 func TestAMissingClaudeSaysToInstallIt(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir()) // the home Windows reads
 	want := "Claude Code is not installed.\nInstall it, or set claude_path in engine.json."
 	for _, ad := range []*claude.Adapter{{}, {Path: filepath.Join(t.TempDir(), "claude")}} {
 		h := host(t, ad)
