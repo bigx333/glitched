@@ -23,7 +23,11 @@ func pipe(in bool) (child, ours *os.File, err error) {
 	}
 	access, mode := uint32(windows.PIPE_ACCESS_INBOUND), uint32(windows.GENERIC_WRITE)
 	if in {
-		access, mode = windows.PIPE_ACCESS_OUTBOUND, windows.GENERIC_READ|windows.FILE_WRITE_ATTRIBUTES
+		// Duplex, not outbound: an outbound server's handle has no
+		// FILE_READ_ATTRIBUTES, so os.NewFile cannot query it, leaves it
+		// out of the poller, and its deadlines fail. Claude's end still
+		// cannot write, as its access is read-only.
+		access, mode = windows.PIPE_ACCESS_DUPLEX, windows.GENERIC_READ|windows.FILE_WRITE_ATTRIBUTES
 	}
 	server, err := windows.CreateNamedPipe(path,
 		access|windows.FILE_FLAG_OVERLAPPED|windows.FILE_FLAG_FIRST_PIPE_INSTANCE,
