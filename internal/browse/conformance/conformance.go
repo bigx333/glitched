@@ -1171,7 +1171,16 @@ const actFixture = `<!doctype html><meta charset="utf-8"><title>Act</title>
 <form action="/act/sent"><input id="taken" name="t" aria-label="Taken"></form>
 <textarea aria-label="Notes"></textarea>
 <div id="ed" contenteditable="true" aria-label="Editor">old</div>
-<div contenteditable="true" tabindex="0" aria-label="Locked" onfocus="this.contentEditable = 'false'">kept</div>
+<div contenteditable="true" id="locked" aria-label="Locked">kept</div>
+<script>
+// An editor the page won't let take the text, whatever has the focus:
+// the edit command refuses there, as it does where nothing is editable.
+const edit = Document.prototype.execCommand;
+Document.prototype.execCommand = function (...args) {
+  const at = getSelection().anchorNode;
+  return at && document.getElementById("locked").contains(at) ? false : edit.apply(this, args);
+};
+</script>
 <iframe id="fr" srcdoc="<button onclick='parent.framed = 1'>Framed press</button>"></iframe>
 <script>
 window.within = (e, el) => [...el.getClientRects()].some((r) => e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) ? 1 : 0;
