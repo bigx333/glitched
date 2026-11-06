@@ -123,7 +123,8 @@ func (a *app) projectTrees(p *project) (tops []thread, all []node) {
 
 // removeProject deletes every thread of the project, and with them the
 // threads under them. A draft in its workspace starts over in the home
-// folder, so that the project doesn't come back with the next thread.
+// folder, so that the project doesn't come back with the next thread,
+// unless the project is the home folder's, where every new thread starts.
 func (a *app) removeProject(p *project) {
 	tops, all := a.projectTrees(p)
 	for _, t := range tops {
