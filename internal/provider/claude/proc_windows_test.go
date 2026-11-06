@@ -30,7 +30,7 @@ func TestTwoStopsOfARunAtOnceBothEndIt(t *testing.T) {
 		if err := confine(cmd, run); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { stopRun(context.Background(), run) })
+		t.Cleanup(func() { stopRun(context.Background(), run); cmd.Process.Kill() })
 		h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(cmd.Process.Pid))
 		if err != nil {
 			t.Fatal(err)
@@ -47,7 +47,6 @@ func TestTwoStopsOfARunAtOnceBothEndIt(t *testing.T) {
 			})
 		}
 		wg.Wait()
-		cmd.Wait()
 		windows.CloseHandle(h)
 		for i, err := range errs {
 			if err != nil || early[i] {
@@ -57,5 +56,6 @@ func TestTwoStopsOfARunAtOnceBothEndIt(t *testing.T) {
 		if !found[0] && !found[1] {
 			t.Fatal("neither stop found the run's process")
 		}
+		cmd.Wait()
 	}
 }
