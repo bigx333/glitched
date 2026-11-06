@@ -68,7 +68,9 @@ var Tools = []Tool{
 			"full": {"type": "boolean", "description": "Also list the page's structure (landmarks, lists, tables) around the elements to act on."},
 			` + tabArg + `
 		}}`),
-		Annotations: Annotations{ReadOnly: true, OpenWorld: true},
+		// Not read-only: a tab never shown loads its page, and a snapshot
+		// replaces the tab's refs.
+		Annotations: Annotations{OpenWorld: true},
 	},
 	{
 		Name: "browser_click",

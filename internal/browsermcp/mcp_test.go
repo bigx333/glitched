@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +87,11 @@ func TestServeSpeaksMCP(t *testing.T) {
 		names = append(names, m["name"].(string))
 		if m["inputSchema"].(map[string]any)["type"] != "object" {
 			t.Errorf("%s's schema is %v", m["name"], m["inputSchema"])
+		}
+		// Every tool changes something: a snapshot loads a tab's page
+		// and replaces its refs, so none may run unasked or at once.
+		if m["annotations"].(map[string]any)["readOnlyHint"] != false {
+			t.Errorf("%s is said to be read-only", m["name"])
 		}
 	}
 	if want := "browser_tabs browser_navigate browser_snapshot browser_click browser_type"; strings.Join(names, " ") != want {
@@ -303,5 +309,87 @@ func TestTheBridgeSaysWhyItCantReachTheApp(t *testing.T) {
 	os.Chmod(Socket(dir), 0)
 	if _, err := Dial(dir)(context.Background(), "browser_tabs", json.RawMessage(`{}`)); err == nil || errors.Is(err, ErrNoApp) || !strings.Contains(err.Error(), "can't be reached") {
 		t.Errorf("a socket the server may not use: %v", err)
+	}
+}
+
+// The socket is the user's alone.
+func TestTheBridgeSocketIsTheUsers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no modes")
+	}
+	ln, err := Listen(socketDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if fi, err := os.Stat(ln.Addr().String()); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("the socket: %v %v, want 0600", fi.Mode().Perm(), err)
+	}
+}
+
+// flaky is a listener whose first accepts fail as too many files open
+// would.
+type flaky struct {
+	net.Listener
+	fails int
+}
+
+type tempErr struct{}
+
+func (tempErr) Error() string   { return "too many open files" }
+func (tempErr) Temporary() bool { return true }
+func (tempErr) Timeout() bool   { return false }
+
+func (l *flaky) Accept() (net.Conn, error) {
+	if l.fails > 0 {
+		l.fails--
+		return nil, tempErr{}
+	}
+	return l.Listener.Accept()
+}
+
+// An accept failing for a while doesn't stop the socket answering.
+func TestTheBridgeOutlastsAFailingAccept(t *testing.T) {
+	dir := socketDir(t)
+	ln, err := Listen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go Accept(&flaky{Listener: ln, fails: 3}, func(context.Context, string, json.RawMessage) (string, error) { return "ok", nil })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if got, err := Dial(dir)(ctx, "browser_tabs", json.RawMessage(`{}`)); err != nil || got != "ok" {
+		t.Errorf("after accepts failed: %q, %v", got, err)
+	}
+}
+
+// A caller sending more after its request is still there: only its
+// connection ending is it hanging up.
+func TestTheBridgeHearsOnlyAHangUp(t *testing.T) {
+	dir := socketDir(t)
+	ln, err := Listen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go Accept(ln, func(ctx context.Context, _ string, _ json.RawMessage) (string, error) {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+			return "ok", nil
+		}
+	})
+	conn, err := net.Dial("unix", Socket(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	io.WriteString(conn, `{"tool":"browser_tabs","args":{}}`+"\n\n")
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil || !strings.Contains(line, `"text":"ok"`) {
+		t.Errorf("a caller that sent a blank line after: %q, %v", line, err)
 	}
 }
