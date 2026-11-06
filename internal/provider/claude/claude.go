@@ -93,8 +93,8 @@ func (a *Adapter) Reconcile(ctx context.Context, id provider.RuntimeIdentity) (p
 // Once ctx ends, claude gets SIGTERM, and SIGKILL killGrace later. Claude
 // Code runs each tool call in a shell of its own session, which no signal
 // to claude or its process group reaches; on SIGTERM claude stops it.
-// Windows has no SIGTERM: there claude is killed at once, and its job
-// ends what it started.
+// Windows has no SIGTERM: there claude is killed at once, and for a run,
+// whose claude start puts in a job, the job ends what it started.
 func Command(ctx context.Context, bin string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Err = guard(bin)
