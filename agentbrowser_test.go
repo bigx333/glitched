@@ -599,3 +599,44 @@ func TestAnAgentsTabThatCannotStartLeavesTheDiff(t *testing.T) {
 		t.Errorf("after a tab that couldn't start: pane %v, diff %v", a.showPreview, a.showDiff)
 	}
 }
+
+// A tab closing as a script runs on it holds the next script back still.
+func TestAnAgentsScriptHoldsAClosingTab(t *testing.T) {
+	a, ab, _ := agents(t)
+	callTool(t, ab, "browser_navigate", `{"url":"go.dev"}`)
+	unlock, _ := ab.lock(context.Background(), 1)
+	a.closeTab(0)
+	callTool(t, ab, "browser_tabs", `{"action":"list"}`)
+	next := make(chan struct{})
+	go func() { u, _ := ab.lock(context.Background(), 1); u(); close(next) }()
+	select {
+	case <-next:
+		t.Fatal("a script ran on a tab another held, as the tab closed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	unlock()
+	<-next
+}
+
+// A call waiting on a tab another runs a script on gives up as the
+// agent does, not as the other ends.
+func TestAnAgentsCallWaitingOnATabGivesUp(t *testing.T) {
+	_, ab, _ := agents(t)
+	unlock, _ := ab.lock(context.Background(), 1)
+	defer unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := ab.lock(ctx, 1)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != errGaveUp {
+			t.Errorf("a call waiting on a held tab: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a call waiting on a held tab went on after the agent gave up")
+	}
+}
