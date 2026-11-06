@@ -136,11 +136,11 @@ func (a *Adapter) binary() (string, error) {
 	return "", ErrNotInstalled
 }
 
-// isExecutable is whether path is a program. Windows has no execute bit:
-// any file there may be one.
+// isExecutable is whether path is a program exec can start. Windows has
+// no execute bit: there a program is a file whose extension is in PATHEXT.
 func isExecutable(path string) bool {
-	fi, err := os.Stat(path)
-	return err == nil && !fi.IsDir() && (runtime.GOOS == "windows" || fi.Mode()&0o111 != 0)
+	_, err := exec.LookPath(path)
+	return err == nil
 }
 
 // exeSuffix is what a program's name ends in: Claude Code's native
