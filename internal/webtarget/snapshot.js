@@ -144,6 +144,8 @@ function install(key) {
     shadowFromPoint: fn(window.ShadowRoot, "elementFromPoint"),
     shadowHost: getter(window.ShadowRoot, "host"),
     activeElement: getter(Document, "activeElement"),
+    inputMaxLength: getter(window.HTMLInputElement, "maxLength"),
+    textareaMaxLength: getter(window.HTMLTextAreaElement, "maxLength"),
     shadowActive: getter(window.ShadowRoot, "activeElement"),
   };
   // The events actions fire, made with the constructors found as the
@@ -820,19 +822,43 @@ function install(key) {
     if (tag === "INPUT" && BLOCKS_IMPLICIT[kind] !== true && kind !== "")
       throw new Err(`${ref} is a ${kind} field, which the browser's tools can't fill`);
     if (attr(el, "aria-readonly") === "true" || matches(el, ":read-only")) throw new Err(`${ref} is read-only`);
-    reveal(el);
-    focus();
-    // What the focus can't reach, the user can't type into: an element
-    // inert, as one in a modal dialog under another is.
-    if (html) {
+    // The element the focus is on, through shadow roots.
+    const focused = () => {
       let active = opt(B.activeElement, doc);
       for (let i = 0; active && active !== el && i < 64; i++) {
         const root = get(B.shadowRoot, active);
-        active = root ? opt(B.shadowActive, root) : null;
+        const inner = root ? opt(B.shadowActive, root) : null;
+        if (!inner) break;
+        active = inner;
       }
-      if (active !== el) throw new Err(`${ref} is inert: the page lets nothing use it now`);
+      return active;
+    };
+    reveal(el);
+    const before = html ? focused() : null;
+    focus();
+    // What the focus can't reach, the user can't type into: an element
+    // inert, as one in a modal dialog under another is, leaves the focus
+    // where it was. One the page passes the focus on from, as a field
+    // opening a picker does, took it.
+    if (html) {
+      let after = focused();
+      // A text box within an editor takes no focus of its own: the
+      // editor's host takes it.
+      if (after !== el && after === before && editor) {
+        let host = el;
+        for (let n = up(host), i = 0; n && i < 4096 && isHTML(n) && opt(B.editable, n); i++, n = up(n)) host = n;
+        if (host !== el) {
+          apply(B.focus, host, []);
+          after = focused();
+          if (after === host) after = el;
+        }
+      }
+      if (after !== el && after === before) throw new Err(`${ref} is inert: the page lets nothing use it now`);
     }
     if (field) {
+      // A field takes no more than a user could type into it.
+      const most = get(tag === "INPUT" ? B.inputMaxLength : B.textareaMaxLength, el);
+      if (most >= 0 && args.text.length > most) throw new Err(`${ref} takes at most ${most} characters`);
       const old = tag === "INPUT" ? get(B.inputValue, el) : "";
       apply(tag === "INPUT" ? B.setInputValue : B.setTextareaValue, el, [args.text]);
       // A field that takes only some values, as a date's, keeps none
