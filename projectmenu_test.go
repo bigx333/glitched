@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -197,37 +196,44 @@ func TestRemoveProjectResetsItsDraft(t *testing.T) {
 // A project whose thread is under another root of the same project, by way
 // of a thread in another workspace, has each thread deleted once.
 func TestRemoveProjectDeletesEachThreadOnce(t *testing.T) {
-	dir := tempDir(t)
-	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
-	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
-	mid := seedChildIn(t, d, "/work/mygo", top, "Patch the table")
-	seedChildIn(t, d, "/work/t3code", mid, "Check the sort")
-	h := start(t, dir)
-	h.thread("Check the sort")
-	h.tt.Advance(time.Second)
-	h.a.askRemove(h.a.projectOf(h.thread("Ship the sidebar sort")))
+	h := crossTree(t)
+	top := h.thread("Ship the sidebar sort")
+	h.a.askRemove(h.a.projectOf(top))
 	h.tt.Frame()
 	if !h.tt.HasText("Remove “t3code” and 3 threads?") || !h.tt.HasText("1 of them is under its threads, in other workspaces. They're removed from every list and can't be brought back. Their history stays in the engine's log. The folder, /work/t3code, isn't touched.") {
 		t.Fatalf("no alert; texts %q", h.tt.Texts())
 	}
 	h.click("Remove")
+	// The engine deletes a thread's tree with it: one delete, to the top.
+	sent := 0
 	for _, th := range h.local().Threads {
-		if n := len(th.Pending); n > 1 {
-			t.Errorf("%q was sent %d deletes", th.View.Title, n)
-		}
+		sent += len(th.Pending)
 	}
-	h.until("every thread gone", func() bool { return len(h.local().Threads) == 0 })
+	if sent != 1 || len(top.Pending) != 1 {
+		t.Fatalf("%d deletes sent, want one, to the top thread", sent)
+	}
+	// While it's on its way, nothing of the tree shows.
+	if ps := h.a.gather(); len(ps) != 0 {
+		t.Fatalf("%d projects left, want the tree's both gone", len(ps))
+	}
 }
 
-// seedChildIn creates a child of parent in workspace on the engine.
-func seedChildIn(t *testing.T, d *daemon.Daemon, workspace string, parent api.ID, title string) api.ID {
+// crossTree is the app on a thread, Ship the sidebar sort, in t3code, with
+// a child in mygo, Patch the table, which has one back in t3code, Check
+// the sort. The engine starts a child only from its parent's live run, so
+// the tree is made here, in what the GUI holds of the threads.
+func crossTree(t *testing.T) *harness {
 	t.Helper()
-	id := api.NewID()
-	body := api.ThreadCreate{Workspace: workspace, Title: title, Model: fakeModel, Parent: parent}
-	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: body}); err != nil {
-		t.Fatal(err)
-	}
-	return id
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	mid := seed(t, d, "/work/mygo", "Patch the table")
+	seed(t, d, "/work/t3code", "Check the sort")
+	h := start(t, dir)
+	h.thread("Patch the table").View.Parent = top
+	h.thread("Check the sort").View.Parent = mid
+	h.tt.Advance(time.Second)
+	return h
 }
 
 // An alert left open while a thread at the top starts a run removes
@@ -278,12 +284,7 @@ func TestRemoveProjectResetsADraftOnAServer(t *testing.T) {
 // workspace, counts as working but doesn't keep the project from being
 // removed, as a live child doesn't keep a thread from its Delete….
 func TestRemoveProjectStopsALiveThreadUnderItsOwn(t *testing.T) {
-	dir := tempDir(t)
-	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
-	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
-	mid := seedChildIn(t, d, "/work/mygo", top, "Patch the table")
-	seedChildIn(t, d, "/work/t3code", mid, "Check the sort")
-	h := start(t, dir)
+	h := crossTree(t)
 	h.thread("Check the sort").View.Run = api.RunUncertain // as a lost run leaves it
 	h.tt.Frame()
 	p := h.a.projectOf(h.thread("Ship the sidebar sort"))
