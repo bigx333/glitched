@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"glitched/internal/api"
@@ -100,6 +101,11 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 		},
 	})
 	if errors.Is(err, api.ErrConflict) && in.RequestID != "" {
+		// A later turn that retries the same task finds the child the first
+		// try made: only the run differs, and the run is in the command.
+		if th, task, ok := t.child(ctx, child); ok && th.Parent == t.Origin.Thread && task == in.Task {
+			return TaskView{TaskID: child.String(), Title: th.Title, Status: "working"}, nil
+		}
 		return TaskView{}, fmt.Errorf("delegate_task: client_request_id %q already started another task in this thread; use a new client_request_id for a new task", in.RequestID)
 	}
 	if err != nil {
@@ -120,6 +126,26 @@ func (t *Tools) thread(ctx context.Context) (api.Thread, error) {
 		}
 	}
 	return api.Thread{}, errors.New("this agent's thread is gone")
+}
+
+// child is the thread id as the engine has it, with its first message.
+func (t *Tools) child(ctx context.Context, id api.ID) (api.Thread, string, bool) {
+	snap, err := t.Engine.Read(ctx, api.Query{Thread: id})
+	if err != nil {
+		return api.Thread{}, "", false
+	}
+	i := slices.IndexFunc(snap.Threads, func(th api.Thread) bool { return th.ID == id })
+	if i < 0 {
+		return api.Thread{}, "", false
+	}
+	for _, e := range snap.Events {
+		if b, err := e.Decode(); err == nil {
+			if m, ok := b.(api.MessageQueued); ok {
+				return snap.Threads[i], m.Text, true
+			}
+		}
+	}
+	return api.Thread{}, "", false
 }
 
 // refusal is the engine's reason, without the api's prefix, for the agent.
