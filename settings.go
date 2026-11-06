@@ -453,6 +453,7 @@ var keybindings = []struct {
 	{"Search threads and commands", []string{"⌘", "K"}},
 	{"Send message", []string{"↩"}},
 	{"New line in the message", []string{"⇧", "↩"}},
+	{"Send, or stop the agent when empty", []string{"⌘", "↩"}},
 	{"Allow the pending approval", []string{"⌘", "↩"}},
 	{"Deny the pending approval", []string{"⇧", "⌘", "D"}},
 	{"Previous / next change in the diff", []string{"⌘", "[", "]"}},
