@@ -306,10 +306,42 @@ func stillBlocked(t, child thread, r client.ReportEntry) bool {
 }
 
 // reportCard is the children's reports in the parent's timeline: each
-// one's state, a line or two of what came of it, and a way into it.
+// one's state, a line or two of what came of it, and a way into it. A
+// line under it says how the reports went to the parent's agent.
 func (a *app) reportCard(c *ui.Context, t thread, key string, e entry) {
-	ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Padding(4).Gap(2).
-		Transition(riseIn).Children(func() {
+	ui.Column(c).Key(key).Gap(6).Transition(riseIn).Children(func() {
+		a.reports(c, t, e)
+		if line := wakeLine(t, e.reports); line != "" {
+			ui.Text(c, line).FontSize(11.5).TextColor(palette.faint).Padding(0, 0, 0, 14)
+		}
+	})
+}
+
+// wakeLine is how a card's reports went to the parent's agent: waiting
+// for its next turn, which after a stop is the user's next message, sent,
+// or not sent. A card with no report that wakes the agent has none.
+func wakeLine(t thread, rs []client.ReportEntry) string {
+	var waiting, sent, lost bool
+	for _, r := range rs {
+		waiting, sent, lost = waiting || r.Wake == client.WakeWaiting, sent || r.Wake == client.WakeSent, lost || r.Wake == client.WakeLost
+	}
+	v := t.View
+	switch {
+	case waiting && v.Run == api.RunIdle && v.LastTurn != nil &&
+		(v.LastTurn.Outcome == api.OutcomeInterrupted || v.LastTurn.Outcome == api.OutcomeAbandoned):
+		return "↳ Goes to the agent with your next message"
+	case waiting:
+		return "↳ Goes to the agent after this turn"
+	case sent:
+		return "↳ Sent to the agent"
+	case lost:
+		return "↳ Not sent to the agent"
+	}
+	return ""
+}
+
+func (a *app) reports(c *ui.Context, t thread, e entry) {
+	ui.Column(c).Radius(12).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Padding(4).Gap(2).Children(func() {
 		for i, n := range e.reports {
 			child, found := thread{}, false
 			if t.env != nil {
