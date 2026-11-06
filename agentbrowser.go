@@ -58,6 +58,12 @@ func (a *app) serveAgents() {
 		log.Print(err)
 		return
 	}
+	// A directory made earlier may be wider; the engine, which narrows
+	// it too, may not have started yet.
+	if err := os.Chmod(a.dir, 0o700); err != nil {
+		log.Print(err)
+		return
+	}
 	ln, err := browsermcp.Listen(a.dir)
 	if err != nil {
 		log.Print(err)
@@ -143,7 +149,13 @@ func (ab *agentBrowser) view(ctx context.Context, fn func() error) error {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		return errGaveUp
+		// What the view did as the call ended, it did: the agent hears so.
+		select {
+		case err := <-done:
+			return err
+		default:
+			return errGaveUp
+		}
 	}
 }
 
@@ -164,6 +176,7 @@ func wait(ctx context.Context, d time.Duration) error {
 // tab is the tab of id, or the one shown for none. On the view's thread.
 func (ab *agentBrowser) tab(id *int) (*browserTab, error) {
 	b := &ab.a.browser
+	ab.forget()
 	if id == nil {
 		if len(b.tabs) == 0 {
 			return nil, errors.New("The browser has no tabs: open one with browser_tabs or browser_navigate.")
@@ -287,6 +300,7 @@ func (ab *agentBrowser) need(id *int, action string) (*browserTab, error) {
 // list lists the tabs, each its id, title and address, and which shows.
 // On the view's thread.
 func (ab *agentBrowser) list() string {
+	ab.forget()
 	a := ab.a
 	b := &a.browser
 	if len(b.tabs) == 0 {
@@ -492,9 +506,7 @@ func (ab *agentBrowser) snapshot(ctx context.Context, t *browserTab, p browse.Pa
 	if err != nil {
 		return "", fmt.Errorf("Tab %d's page couldn't be read: %w", t.id, agentError(err))
 	}
-	ab.mu.Lock()
-	ab.snaps[t.id] = s
-	ab.mu.Unlock()
+	ab.keep(t.id, s)
 	var out strings.Builder
 	fmt.Fprintf(&out, "Tab %d: %q\nURL: %s\n", t.id, s.Title, s.URL)
 	if s.Truncated {
@@ -503,4 +515,27 @@ func (ab *agentBrowser) snapshot(ctx context.Context, t *browserTab, p browse.Pa
 	out.WriteString("\n")
 	out.WriteString(s.Text)
 	return out.String(), nil
+}
+
+// keep keeps s as tab id's latest snapshot, unless a later one, taken
+// as s was, is kept already: its refs are those the page acts on.
+func (ab *agentBrowser) keep(id int, s webtarget.Snapshot) {
+	ab.mu.Lock()
+	defer ab.mu.Unlock()
+	if old, ok := ab.snaps[id]; ok && old.Epoch > s.Epoch {
+		return
+	}
+	ab.snaps[id] = s
+}
+
+// forget drops the snapshots of tabs no longer open, however they
+// closed. It runs on the view's thread, where the tabs are.
+func (ab *agentBrowser) forget() {
+	ab.mu.Lock()
+	defer ab.mu.Unlock()
+	for id := range ab.snaps {
+		if !slices.ContainsFunc(ab.a.browser.tabs, func(t *browserTab) bool { return t.id == id }) {
+			delete(ab.snaps, id)
+		}
+	}
 }
