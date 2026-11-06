@@ -393,9 +393,12 @@ Claude Code runs in threads get the browser as an MCP server named
     answer with it.
   - **Type:** the prototype's value setter, then `input` and `change`, so
     frameworks tracking the value on the element, as React does, see it;
-    an editor through `insertText`. A read-only field takes nothing; one
-    that keeps only some values, as a date's, says what it took and
-    keeps what it had;
+    an editor through `insertText`. It types only where the focus reaches (an
+    inert field keeps it from moving; a text box in an editor takes it
+    through the editor), and no more than a field's `maxlength`. A
+    read-only field takes nothing; one that keeps only some values, as a
+    date's, says what it took and keeps what it had; an editor refusing
+    the text says so;
     dropdowns, file, colour and other pickers say the tools can't fill
     them yet.
   - **Enter** (`submit`): `keydown`, `keypress` and `keyup`; unless the
