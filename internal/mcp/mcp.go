@@ -71,6 +71,7 @@ const instructions = `Glitched runs you in a thread. Its MCP server glitched giv
 
 - Follow the user's delegation preferences and the repository's instructions. That the tool is there does not by itself call for delegating work.
 - The child starts at once, with this thread's folder, permissions and model unless you pick another model. It does not see this conversation, so give it a self-contained brief.
+- When a child is done or fails, its report reaches this thread as a new message, in your next turn. Do not wait or poll for it: carry on, or end your turn.
 - The user sees each child and can open it. A child cannot get wider permissions than this thread.
 - Use a new client_request_id for each new task, and the same one to retry a call, so a retry does not start a second child.`
 
