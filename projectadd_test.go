@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,7 +12,7 @@ import (
 func TestAddProject(t *testing.T) {
 	dir := t.TempDir()
 	was := chooseFolder
-	chooseFolder = func(*app) string { return dir }
+	chooseFolder = func(*app) string { return dir + string(filepath.Separator) } // as a picker may give it
 	t.Cleanup(func() { chooseFolder = was })
 	h := start(t, inboxDir(t))
 	h.thread("SIP re-INVITE handling")
