@@ -390,7 +390,8 @@ func inputs(tape, workspace string) map[string]json.RawMessage {
 				}
 			}
 		}
-		json.Unmarshal([]byte(strings.ReplaceAll(l, "$WORKSPACE", workspace)), &e)
+		quoted, _ := json.Marshal(workspace)
+		json.Unmarshal([]byte(strings.ReplaceAll(l, "$WORKSPACE", string(quoted[1:len(quoted)-1]))), &e)
 		if m := e.Recv; m != nil && m.Type == "control_request" && m.Request != nil && m.Request.Subtype == "can_use_tool" {
 			in[m.RequestID] = m.Request.Input
 		}
