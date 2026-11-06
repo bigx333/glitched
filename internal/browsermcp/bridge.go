@@ -88,7 +88,7 @@ func Dial(dir string) Call {
 		case err == nil:
 		case ctx.Err() != nil:
 			return "", ctx.Err()
-		case errors.Is(err, os.ErrPermission):
+		case denied(err):
 			return "", fmt.Errorf("The Glitched app's browser can't be reached: %w", err)
 		case err != nil:
 			return "", ErrNoApp
