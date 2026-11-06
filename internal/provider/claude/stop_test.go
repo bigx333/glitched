@@ -44,6 +44,9 @@ func processes(t *testing.T) func(role string) int {
 
 // exits is whether pid is gone, reaped, within d.
 func exits(pid int, d time.Duration) bool {
+	if pid == 0 {
+		return false // a process never noted proves nothing exited
+	}
 	for deadline := time.Now().Add(d); ; time.Sleep(10 * time.Millisecond) {
 		if gone(pid) {
 			return true
