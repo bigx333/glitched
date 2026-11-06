@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	"glitched/internal/browse"
 	"glitched/internal/browsermcp"
+	"glitched/internal/webtarget"
 )
 
 // agentPage is a tab's page that answers the page script as it would: a
@@ -469,5 +471,67 @@ func TestTheAppServesBrowserMCP(t *testing.T) {
 	r := <-done
 	if !r.served || r.err != nil || !strings.Contains(line, `"text":"the app's browser_tabs"`) {
 		t.Errorf("browser-mcp served %v, %v:\n%s", r.served, r.err, line)
+	}
+}
+
+// A call whose work the view did as the call ended says it was done:
+// the tab it opened is there.
+func TestAnAgentsCallDoneAsItEndsSaysSo(t *testing.T) {
+	_, ab, _ := agents(t)
+	for range 200 {
+		ctx, cancel := context.WithCancel(context.Background())
+		if err := ab.view(ctx, func() error { cancel(); return nil }); err != nil {
+			t.Fatalf("work done as the call ended: %v", err)
+		}
+	}
+}
+
+// Of two snapshots of a tab, the later stays the tab's, whichever ends
+// first: its refs are those the page acts on.
+func TestAnAgentsLaterSnapshotStays(t *testing.T) {
+	_, ab, _ := agents(t)
+	ab.keep(1, webtarget.Snapshot{Epoch: 8})
+	ab.keep(1, webtarget.Snapshot{Epoch: 7})
+	if got := ab.snaps[1].Epoch; got != 8 {
+		t.Errorf("the tab's snapshot is s%d, want the later s8", got)
+	}
+}
+
+// A tab the user closes takes its snapshot with it.
+func TestAnAgentForgetsTabsTheUserCloses(t *testing.T) {
+	a, ab, _ := agents(t)
+	callTool(t, ab, "browser_navigate", `{"url":"go.dev"}`)
+	if len(ab.snaps) != 1 {
+		t.Fatalf("snapshots %v", ab.snaps)
+	}
+	a.closeTab(0)
+	if _, err := callTool(t, ab, "browser_tabs", `{"action":"list"}`); err != nil {
+		t.Fatal(err)
+	}
+	if len(ab.snaps) != 0 {
+		t.Errorf("a closed tab's snapshot is kept: %v", ab.snaps)
+	}
+}
+
+// The browser socket's directory is the user's alone, however wide it
+// was made before.
+func TestTheBrowserSocketIsTheUsers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no modes")
+	}
+	dir, err := os.MkdirTemp("", "gl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	os.Chmod(dir, 0o755)
+	a := newApp(dir, nil, func(func()) {})
+	a.serveAgents()
+	if a.stopAgents == nil {
+		t.Fatal("the app serves no browser socket")
+	}
+	defer a.stopAgents()
+	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("the state directory: %v %v, want 0700", fi.Mode().Perm(), err)
 	}
 }
