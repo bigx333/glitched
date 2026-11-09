@@ -711,7 +711,9 @@ func TestAChildsReportNotifies(t *testing.T) {
 		want   string
 	}{
 		{"blocked", true, false, "Write the tests: Needs you"},
-		{"done", false, false, ""}, // its turn's end tells of it
+		// A done report tells nothing: the child's turn's end told of it.
+		// The report wakes the parent, whose own turn's end tells.
+		{"done", false, false, "Done. Your turn."},
 		{"blocked, the parent shown", true, true, "Write the tests: Needs you"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -741,25 +743,12 @@ func TestAChildsReportNotifies(t *testing.T) {
 				}
 				return rs
 			}
-			if tc.want == "" {
-				h.until("the child's turn's end", func() bool {
-					return slices.ContainsFunc(got, func(o mygo.NotificationOptions) bool { return o.ID == "thread:"+kid.String() })
-				})
-			} else {
-				h.until("the report's notification", func() bool { return len(reports()) > 0 })
-			}
+			h.until("a notification on the parent", func() bool { return len(reports()) > 0 })
 			for range 5 {
 				h.p.run()
 				h.tt.Advance(100 * time.Millisecond)
 			}
-			rs := reports()
-			if tc.want == "" {
-				if len(rs) != 0 {
-					t.Fatalf("notifications on the parent: %+v; want none", rs)
-				}
-				return
-			}
-			if len(rs) != 1 || rs[0].Title != "Ship the sidebar sort" || rs[0].Body != tc.want {
+			if rs := reports(); len(rs) != 1 || rs[0].Title != "Ship the sidebar sort" || rs[0].Body != tc.want {
 				t.Fatalf("notifications on the parent: %+v; want one, %q", rs, tc.want)
 			}
 		})
