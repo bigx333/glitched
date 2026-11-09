@@ -336,8 +336,10 @@ func (l *longThread) Open(_ context.Context, s api.Subscription) (api.Stream, er
 	return &items{{Kind: api.StreamSnapshot, Snapshot: &l.log}}, nil
 }
 
-// serveOn serves ep on the socket under dir, as the engine there would.
+// serveOn serves ep on the socket under dir, as the engine there would,
+// holding its lock.
 func serveOn(t *testing.T, dir string, ep api.Endpoint) {
+	holdEngineLock(t, dir)
 	sock := daemon.Socket(dir)
 	ln, err := sock.Listen(context.Background())
 	if err != nil {
