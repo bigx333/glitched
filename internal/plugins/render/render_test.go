@@ -124,46 +124,88 @@ func TestWidgetsDrawAndDispatchTheirHandlers(t *testing.T) {
 	}
 }
 
-func TestAnInputKeepsWhatIsTypedAcrossViews(t *testing.T) {
-	s := &screen{}
-	s.show(t, formWith(""))
-	tt := ui.NewTester(s.draw, 800, 700)
-	tt.Frame()
+// typeName types into the form's input, in two goes.
+func typeName(t *testing.T, tt *ui.Tester, first, rest string) {
+	t.Helper()
 	r, ok := tt.Find("New")
 	if !ok {
 		t.Fatal(tt.Texts())
 	}
 	tt.ClickAt(r.X+40, r.Y+r.H+20)
-	tt.Type("A")
+	tt.Type(first)
 	tt.Frame()
-	tt.Type("da")
+	tt.Type(rest)
 	tt.Frame()
+}
+
+func controlled(value string) string {
+	return strings.Replace(formWith(value), `"onChange": "typed"`, `"controlled": true, "onChange": "typed"`, 1)
+}
+
+// An input whose onChange only validates keeps what is typed, however
+// often the plugin answers with the same value.
+func TestAnInputKeepsWhatIsTypedAcrossViews(t *testing.T) {
+	s := &screen{}
+	s.show(t, formWith(""))
+	tt := ui.NewTester(s.draw, 800, 700)
+	tt.Frame()
+	typeName(t, tt, "A", "da")
 	if ev := s.last(t); ev.Type != "change" || ev.Value != "Ada" || ev.Handler != "typed" {
 		t.Fatalf("typing: %+v", ev)
 	}
-	// The plugin echoes the first letter late, while the user typed on: its
-	// echo doesn't take the rest back.
-	s.show(t, formWith("A"))
-	tt.Frame()
-	if got := s.cs.Values()["name"]; got != "Ada" {
-		t.Fatalf("an echo took the text back to %q", got)
-	}
-	// A view that leaves the value as it was keeps the text too.
-	s.show(t, formWith("A"))
-	tt.Frame()
-	if got := s.cs.Values()["name"]; got != "Ada" {
-		t.Fatalf("the text went: %q", got)
+	for _, processed := range []int{0, 1, len(s.events)} {
+		s.processed = processed
+		s.show(t, formWith(""))
+		tt.Frame()
+		if got := s.cs.Values()["name"]; got != "Ada" {
+			t.Fatalf("a view of the same value, %d taken, took the text to %q", processed, got)
+		}
 	}
 	tt.Key(0, ui.KeyEnter)
 	tt.Frame()
 	if ev := s.last(t); ev.Type != "submit" || ev.Value != "Ada" || ev.Handler != "sent" {
 		t.Fatalf("submit: %+v", ev)
 	}
-	// The plugin clears it, a value it hasn't given or been sent.
-	s.show(t, formWith(""))
+	// A value the plugin changes is the value.
+	s.processed = len(s.events)
+	s.show(t, formWith("Bob"))
+	tt.Frame()
+	if got := s.cs.Values()["name"]; got != "Bob" {
+		t.Fatalf("the plugin's value didn't take: %q", got)
+	}
+}
+
+// A controlled input never loses typing the plugin hasn't taken, takes
+// the plugin's own spelling of it once it has, and clears when the plugin
+// clears it in the batch that took the submit.
+func TestAControlledInputFollowsThePluginOnceItCaughtUp(t *testing.T) {
+	s := &screen{}
+	s.show(t, controlled(""))
+	tt := ui.NewTester(s.draw, 800, 700)
+	tt.Frame()
+	typeName(t, tt, "a", "b")
+	if n := len(s.events); n != 2 {
+		t.Fatalf("%d events", n)
+	}
+	s.processed = 1
+	s.show(t, controlled("A")) // derived from the first change, while "b" waits
+	tt.Frame()
+	if got := s.cs.Values()["name"]; got != "ab" {
+		t.Fatalf("a view behind the typing took it to %q", got)
+	}
+	s.processed = 2
+	s.show(t, controlled("AB"))
+	tt.Frame()
+	if got := s.cs.Values()["name"]; got != "AB" {
+		t.Fatalf("the plugin's value, caught up: %q", got)
+	}
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	s.processed = len(s.events)
+	s.show(t, controlled(""))
 	tt.Frame()
 	if got := s.cs.Values()["name"]; got != "" {
-		t.Fatalf("not cleared: %q", got)
+		t.Fatalf("not cleared after the batch: %q", got)
 	}
 }
 
@@ -253,34 +295,6 @@ func TestEveryWidgetDraws(t *testing.T) {
 		tt.Frame()
 		s.show(t, `{"body": {"type": "`+box+`", "children": [`+all+`]}}`)
 		tt.Frame()
-	}
-}
-
-// A plugin that takes the typing and the submit in one batch, and clears
-// the input, clears it, though its value is the one its last view gave.
-func TestAControlledInputClearsAfterABatch(t *testing.T) {
-	s := &screen{}
-	s.show(t, formWith(""))
-	tt := ui.NewTester(s.draw, 800, 700)
-	tt.Frame()
-	r, _ := tt.Find("New")
-	tt.ClickAt(r.X+40, r.Y+r.H+20)
-	tt.Type("<b>&")
-	tt.Frame()
-	tt.Key(0, ui.KeyEnter)
-	tt.Frame()
-	// An echo, in JavaScript's spelling, while the plugin is behind.
-	s.processed = 0
-	s.show(t, `{"body": {"type": "input", "id": "name", "value": "<b>&", "onChange": "typed", "onSubmit": "sent"}}`)
-	tt.Frame()
-	if got := s.cs.Values()["name"]; got != "<b>&" {
-		t.Fatalf("an echo with <, > and & took the text to %q", got)
-	}
-	s.processed = len(s.events)
-	s.show(t, formWith(""))
-	tt.Frame()
-	if got := s.cs.Values()["name"]; got != "" {
-		t.Fatalf("not cleared after the batch: %q", got)
 	}
 }
 

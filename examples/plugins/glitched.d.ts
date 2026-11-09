@@ -56,19 +56,22 @@ type Widget =
       placeholder?: string;
       /** Applied when it differs from the value the last view gave. */
       value?: string;
+      /** The plugin holds the value: once it took the user's changes, value is the value. */
+      controlled?: boolean;
       multiline?: boolean;
       disabled?: boolean;
       onChange?: Handler;
       /** Enter, in a single-line input. */
       onSubmit?: Handler;
     }
-  | { type: "toggle"; id: string; label: string; value?: boolean; disabled?: boolean; onChange?: Handler }
+  | { type: "toggle"; id: string; label: string; value?: boolean; controlled?: boolean; disabled?: boolean; onChange?: Handler }
   | {
       type: "select";
       id: string;
       label?: string;
       options: (string | { value: string; label?: string })[];
       value?: string;
+      controlled?: boolean;
       disabled?: boolean;
       onChange?: Handler;
     };

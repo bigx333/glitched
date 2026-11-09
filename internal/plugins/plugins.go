@@ -415,7 +415,7 @@ func (h *Host) RunCommand(id, command string, done func(error)) {
 			return
 		}
 		for _, e := range out.Effects {
-			h.effect(id, p, e, func(_ any, err error) {
+			h.effect(id, p, e, nil, func(_ any, err error) {
 				if err != nil {
 					done(fmt.Errorf("%s: %w", e.Type, err))
 				}
@@ -430,8 +430,14 @@ func (h *Host) RunCommand(id, command string, done func(error)) {
 //
 // The checks run there too, as the effect runs: a grant taken back, or the
 // plugin turned off or reloaded, while it waited, stops it.
-func (h *Host) effect(id string, from *plugin.Plugin, e Effect, done func(any, error)) {
+//
+// live, when set, says whether what asked for it still wants it: a page
+// that started over or closed doesn't.
+func (h *Host) effect(id string, from *plugin.Plugin, e Effect, live func() bool, done func(any, error)) {
 	h.opts.Post(func() {
+		if live != nil && !live() {
+			return
+		}
 		if err := h.check(id, from, e.Type); err != nil {
 			done(nil, err)
 			return

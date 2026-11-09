@@ -4,7 +4,6 @@ package render
 
 import (
 	"encoding/json"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -38,9 +37,6 @@ type control struct {
 	// seen is the value the plugin last gave, as JSON, so that only a
 	// value it changes overrides the user's.
 	seen string
-	// sent are the changes sent to the plugin that its views haven't
-	// echoed yet: a view that echoes one isn't the plugin's change.
-	sent []string
 	// last is the number of the last change sent.
 	last int
 }
@@ -49,11 +45,11 @@ type control struct {
 // view's number, and processed the last event the plugin took before it
 // answered the view. It forgets the controls the view no longer has.
 //
-// A control's value changes with a view whose value differs from the last
-// view's, unless it echoes a change the user sent. A controlled one (with
-// an onChange) whose changes the plugin all took also takes a value that
-// differs from what it holds, as when the plugin clears it after a submit
-// in the same batch.
+// While the user has changes the plugin hasn't taken, a view never changes
+// the control: it answers an older value. Once the plugin took them, a
+// controlled control takes the view's value whenever it differs from what
+// the control holds; another takes it only when it differs from the last
+// view's.
 func (cs *Controls) Sync(v *widget.View, rev, processed int) {
 	if cs.m == nil {
 		cs.m = map[string]*control{}
@@ -79,22 +75,15 @@ func (cs *Controls) Sync(v *widget.View, rev, processed int) {
 		}
 		prev := ctl.seen
 		ctl.seen = raw
-		if n.OnChange != nil && ctl.last <= processed {
-			ctl.sent = nil
+		switch {
+		case ctl.last > processed:
+		case n.Controlled:
 			if raw != "null" && raw != ctl.current() {
 				ctl.set(n)
 			}
-			return
+		case raw != prev:
+			ctl.set(n)
 		}
-		if raw == prev {
-			return
-		}
-		if i := slices.Index(ctl.sent, raw); i >= 0 {
-			ctl.sent = ctl.sent[i+1:]
-			return
-		}
-		ctl.sent = nil
-		ctl.set(n)
 	})
 	for id := range cs.m {
 		if !live[id] {
@@ -196,11 +185,7 @@ func (r *renderer) fire(n *widget.Node, h *widget.Handler, typ string, value any
 		return
 	}
 	seq := r.dispatch(plugins.UIEvent{Type: typ, Handler: h.Name, Node: n.ID, Value: value, Payload: h.Payload}, r.cs.Values())
-	if ctl := r.cs.m[n.ID]; ctl != nil && typ == "change" {
-		ctl.sent = append(ctl.sent, encode(value))
-		if len(ctl.sent) > 64 {
-			ctl.sent = ctl.sent[1:]
-		}
+	if ctl := r.cs.m[n.ID]; ctl != nil && typ == "change" && seq > 0 {
 		ctl.last = seq
 	}
 }

@@ -486,3 +486,44 @@ func TestALinkedFolderLoads(t *testing.T) {
 		t.Fatalf("installed %+v", h.Installed())
 	}
 }
+
+func TestRetryDropsTheEarlierStartsEffects(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "eager", `"capabilities": ["clipboard"], `, `
+		export function init() { return { state: 0, effects: [{ type: "clipboard.write", text: "x" }] } }
+		export function view() { return { body: { type: "text", text: "x" } } }`)
+	h := open(t, state, u, fx)
+	s := session(t, h, "eager")
+	time.Sleep(300 * time.Millisecond) // the first start's effect waits for the UI thread
+	s.Retry()
+	u.until(t, "the second start's effect", func() bool { return len(fx.ran) >= 1 && s.View != nil })
+	time.Sleep(200 * time.Millisecond)
+	for len(u.q) > 0 {
+		(<-u.q)()
+	}
+	if len(fx.ran) != 1 {
+		t.Fatalf("ran %d effects for one live start", len(fx.ran))
+	}
+}
+
+func TestAnEarlierStartFailingLeavesARetryBe(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "slowfail", "", `
+		export function init() {
+			const n = (host.storage.get("n") ?? 0) + 1; host.storage.set("n", n)
+			if (n === 1) { const until = Date.now() + 300; while (Date.now() < until) {} throw new Error("first") }
+			return { state: n } }
+		export function view({ state }) { return { body: { type: "text", text: "start " + state } } }`)
+	h := open(t, state, u, fx)
+	s := session(t, h, "slowfail")
+	time.Sleep(50 * time.Millisecond) // the first init runs
+	s.Retry()
+	u.until(t, "the second start", func() bool { return strings.Contains(texts(s), "start 2") })
+	time.Sleep(100 * time.Millisecond)
+	for len(u.q) > 0 {
+		(<-u.q)()
+	}
+	if s.Err != nil {
+		t.Fatalf("the first start's failure landed: %v", s.Err)
+	}
+}

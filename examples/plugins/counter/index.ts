@@ -39,9 +39,9 @@ export function view({ state }: ViewArgs<State>): View {
           type: "card",
           title: "Greeting",
           children: [
-            { type: "input", id: "name", label: "Name", placeholder: "Who to greet", value: state.name, onChange: "name" },
+            { type: "input", id: "name", label: "Name", placeholder: "Who to greet", value: state.name, controlled: true, onChange: "name" },
             greeting,
-            { type: "toggle", id: "details", label: "Show details", value: state.details, onChange: "details" },
+            { type: "toggle", id: "details", label: "Show details", value: state.details, controlled: true, onChange: "details" },
             ...details,
           ],
         },

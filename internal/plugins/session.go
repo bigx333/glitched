@@ -130,7 +130,9 @@ func (s *Session) Dispatch(ev UIEvent, values map[string]any) int {
 	if ev.Type == "change" {
 		q.change = ev.Node
 	}
-	s.push(q)
+	if !s.push(q) {
+		return 0
+	}
 	return q.seq
 }
 
@@ -147,21 +149,22 @@ func (s *Session) Retry() {
 	s.push(queued{gen: gen, init: true})
 }
 
-func (s *Session) push(q queued) {
+// push queues q, and reports whether it did.
+func (s *Session) push(q queued) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.done || s.broken || q.gen != s.gen {
-		return
+		return false
 	}
 	// A change replaces the one of the same widget waiting just before it,
 	// never one before a click or a submit, which saw the earlier value.
 	if n := len(s.queue); q.change != "" && n > 0 && s.queue[n-1].change == q.change {
 		s.queue[n-1] = q
-		return
+		return true
 	}
 	if len(s.queue) >= MaxQueued {
 		s.h.opts.Post(func() { s.Err = fmt.Errorf("the plugin is %d events behind; dropped one", MaxQueued) })
-		return
+		return false
 	}
 	s.queue = append(s.queue, q)
 	s.Busy = true
@@ -169,6 +172,7 @@ func (s *Session) push(q queued) {
 		s.running = true
 		go s.run()
 	}
+	return true
 }
 
 func (s *Session) close() {
@@ -232,10 +236,14 @@ func (s *Session) run() {
 		if q.init && failed != nil {
 			err := fmt.Errorf("init: %w", failed)
 			s.mu.Lock()
+			if q.gen != s.gen {
+				s.mu.Unlock()
+				continue // a retry started the page over meanwhile
+			}
 			s.broken, s.queue, s.dirty, s.running = true, nil, false, false
 			s.mu.Unlock()
 			s.h.opts.Post(func() {
-				if !s.closed {
+				if s.current(q.gen) {
 					s.Err, s.Busy = err, false
 				}
 			})
@@ -272,7 +280,7 @@ func (s *Session) apply(q queued, state json.RawMessage, values map[string]any) 
 		s.setState(q.gen, u.state)
 	}
 	for _, e := range u.effects {
-		s.h.effect(s.plugin, s.p, e, func(result any, err error) {
+		s.h.effect(s.plugin, s.p, e, func() bool { return s.current(q.gen) }, func(result any, err error) {
 			ev := EffectEvent{Kind: "effect", ID: e.ID, Effect: e.Type, OK: err == nil, Result: result}
 			if err != nil {
 				ev.Error, ev.Denied = err.Error(), errors.Is(err, ErrDenied)
@@ -283,6 +291,13 @@ func (s *Session) apply(q queued, state json.RawMessage, values map[string]any) 
 		})
 	}
 	return nil
+}
+
+// current reports whether the page is open, in its start gen.
+func (s *Session) current(gen int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.done && gen == s.gen
 }
 
 func (s *Session) setState(gen int, st json.RawMessage) {
