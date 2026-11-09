@@ -372,7 +372,11 @@ func TestStoppedQuestionsAreNoLongerAsked(t *testing.T) {
 	h, th := questioning(t, fake.Asking())
 	h.click("SQLite")
 	h.a.backend.Interrupt(th.env, th.id())
-	h.until("the stop", func() bool { return !h.a.current().View.Live() })
+	// The run's end comes on the shell stream and the card's request on
+	// the thread's own, in no order between them: wait for both.
+	h.until("the stop", func() bool {
+		return !h.a.current().View.Live() && lastRequest(th).State == api.RequestInvalidated
+	})
 	h.tt.Advance(time.Second)
 	if !h.tt.HasText("No longer asked") || !h.tt.HasText("The turn stopped.") || !h.tt.HasText("Which store should the cache use?") ||
 		h.tt.HasText("Dismiss") || h.tt.HasText("Memory") {
