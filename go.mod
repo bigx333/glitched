@@ -8,6 +8,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/ebitengine/purego v0.11.1
 	github.com/egoist/mygo v0.5.5
+	github.com/yxxbc/mygo-plugin v0.6.1-0.20261107072211-4cef697878f0
 	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.61.0
 	tailscale.com v1.104.2
@@ -17,6 +18,7 @@ require (
 	9fans.net/go v0.0.8-0.20250307142834-96bdba94b63f // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
+	github.com/MoeForge/moejs v0.1.0-alpha.11 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
 	github.com/alexbrainman/sspi v0.0.0-20250919150558-7d374ff0d59e // indirect
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect

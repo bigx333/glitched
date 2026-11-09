@@ -166,6 +166,7 @@ func (a *app) threadsNav(c *ui.Context) {
 		})
 	}
 	ui.Column(c).Padding(8).Gap(1).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
+		a.pluginNav(c)
 		if ghost(c, "settings", false).Padding(7, 8).Children(func() {
 			ui.Icon(c, icSettings).FontSize(15)
 			ui.Text(c, "Settings").Grow(1)
