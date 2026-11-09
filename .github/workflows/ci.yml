@@ -14,47 +14,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# mygoscript links the official Luau VM, which is C++, so the app and
-# mygoscript build only with cgo and a C++17 compiler. The jobs that build
-# them install g++ rather than trust the runner image to have it.
 jobs:
+  # With cgo off, so vet also proves every package builds without it.
   vet:
-    runs-on: [self-hosted, ferrum, garm]
-    timeout-minutes: 15
-    env:
-      CGO_ENABLED: "1"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Install g++
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends g++
-      - run: go vet ./...
-      - run: go tool mygo vet .
-
-  test:
-    runs-on: [self-hosted, ferrum, garm]
-    timeout-minutes: 30
-    env:
-      CGO_ENABLED: "1"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      # mygo lays out text with Pango, loaded at run time. Without it the
-      # root package's UI tests click on a fallback layout and fail.
-      - name: Install Pango and g++
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libpangocairo-1.0-0 g++
-      - run: go test -timeout 20m ./...
-
-  # Everything but the app and mygoscript stays buildable without cgo, so
-  # the engine and the CLI cross-compile. This compiles those packages and
-  # their tests with cgo off; the test job runs them.
-  nocgo:
     runs-on: [self-hosted, ferrum, garm]
     timeout-minutes: 15
     env:
@@ -65,8 +27,27 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - run: go vet $(go list ./... | grep -vxE 'glitched|glitched/mygoscript(/.*)?')
+      - run: go vet ./...
+      - run: go tool mygo vet .
 
+  test:
+    runs-on: [self-hosted, ferrum, garm]
+    timeout-minutes: 30
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      # mygo lays out text with Pango, loaded at run time. Without it the
+      # root package's UI tests click on a fallback layout and fail.
+      - name: Install Pango
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libpangocairo-1.0-0
+      - run: go test -timeout 20m ./...
+
+  # The race detector needs cgo on Linux; nothing else does.
   race:
     runs-on: [self-hosted, ferrum, garm]
     timeout-minutes: 20
@@ -78,9 +59,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - name: Install g++
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends g++
-      - run: go test -race -timeout 10m ./internal/client ./internal/daemon ./internal/transport ./mygoscript/...
+      - run: go test -race -timeout 10m ./internal/client ./internal/daemon ./internal/transport
       # Verbose, so the log says whether this runner has the user systemd
       # manager these tests need, or skips them.
       - run: go test -race -v -run 'MarkerBehind|WithoutScopes' ./internal/provider/claude

@@ -29,7 +29,6 @@ import (
 	"glitched/internal/daemon"
 	eng "glitched/internal/engine"
 	"glitched/internal/mcp"
-	"glitched/mygoscript"
 	"glitched/wind"
 )
 
@@ -451,9 +450,6 @@ type app struct {
 	checkUntil  time.Time
 
 	md markdown.Options
-
-	// counter and widgetTour are the scripts on the Scripts settings page.
-	counter, widgetTour *mygoscript.Plugin
 }
 
 // newApp is the app on the engines its state directory dir names. The
