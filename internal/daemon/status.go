@@ -23,7 +23,7 @@ type Status struct {
 	// Tailnet is as the engine says, or as an installed Tailscale does
 	// when no engine answers.
 	Tailnet api.Tailnet
-	Tokens    []Token
+	Tokens  []Token
 }
 
 // A Listener is one of Config.Listen, and whether a TCP connection to it

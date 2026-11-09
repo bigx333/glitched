@@ -460,3 +460,21 @@ func TestNewer(t *testing.T) {
 		}
 	}
 }
+
+func TestPrereleasesOrderBySemVer(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"1.0.0-rc.10", "1.0.0-rc.9", true},
+		{"1.0.0-rc.2", "1.0.0-rc.10", false},
+		{"1.0.0-rc.1", "1.0.0-beta.9", true},
+		{"1.0.0-alpha.1", "1.0.0-alpha", true},
+		{"1.0.0-1", "1.0.0-alpha", false},
+		{"1.0.0", "1.0.0-rc.99", true},
+	} {
+		if got := newer(c.a, c.b); got != c.want {
+			t.Errorf("newer(%s, %s) = %v", c.a, c.b, got)
+		}
+	}
+}

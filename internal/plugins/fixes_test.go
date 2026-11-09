@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -105,3 +106,45 @@ func TestALinkedPluginReloadsAsItsFilesChange(t *testing.T) {
 	os.WriteFile(filepath.Join(folder, "index.ts"), []byte(strings.Replace(string(b), "`Count: ${", "`Linked: ${", 1)), 0o644)
 	u.until(t, "the edit through the link", func() bool { return strings.Contains(texts(s), "Linked: 0") })
 }
+
+func TestTheDatabaseRefusesWritingElsewhereHoweverItIsSpelled(t *testing.T) {
+	for _, q := range []string{
+		"VACUUM INTO '/tmp/x.db'", "VACUUM  INTO '/tmp/x.db'", "VACUUM\nINTO '/tmp/x.db'", "VACUUM/**/INTO '/tmp/x.db'",
+		"vacuum main into '/tmp/x.db'", "ATTACH/* */DATABASE '/tmp/x.db' AS x", "pragma max_page_count = 1e9", "SELECT load_extension('x')",
+	} {
+		if refused(q) == nil {
+			t.Errorf("%q ran", q)
+		}
+	}
+	for _, q := range []string{"SELECT 1", "CREATE TABLE t (a INTEGER) -- a comment", "VACUUM"} {
+		if err := refused(q); err != nil {
+			t.Errorf("%q: %v", q, err)
+		}
+	}
+}
+
+func TestAServiceDoesntRunTillItsGranted(t *testing.T) {
+	state := t.TempDir()
+	writeService(t, state, "svc", `"capabilities": ["service", "clipboard"], "glitched": { "service": "service.js", "timers": [{ "id": "t", "every": 30 }] }, `,
+		`export function view() {}`, `
+		await glitched.db.exec("CREATE TABLE ran (a INTEGER)")
+		export function timer() { return { effects: [{ type: "clipboard.write", text: "x" }] } }`)
+	var ran atomicCount
+	s := StartServices(state, ServiceOptions{Logf: t.Logf, TimerScale: 0.002, Do: func(string, Effect) (any, error) { ran.add(); return nil, nil }})
+	defer s.Close()
+	time.Sleep(400 * time.Millisecond)
+	if ran.get() != 0 {
+		t.Fatal("a service's timer ran without its grant")
+	}
+	if _, err := os.Stat(filepath.Join(DataDir(state), "svc", "plugin.db")); err == nil {
+		t.Fatal("a service's code ran without its grant")
+	}
+}
+
+type atomicCount struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *atomicCount) add()     { c.mu.Lock(); c.n++; c.mu.Unlock() }
+func (c *atomicCount) get() int { c.mu.Lock(); defer c.mu.Unlock(); return c.n }

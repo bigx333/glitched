@@ -246,6 +246,14 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 		if main = h.opts.Main(m, x); main == "" {
 			return nil, errNotHere
 		}
+		// The service module runs only once service is granted; till then
+		// a plugin with tools answers them from its main module.
+		if main == x.Service && !h.allowed(m.ID, "service") {
+			if len(x.Tools) == 0 {
+				return nil, errNotHere
+			}
+			main = m.Main
+		}
 	}
 	client, err := httpClient(m.Permissions.Network)
 	if err != nil {
