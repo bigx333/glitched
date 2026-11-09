@@ -20,6 +20,7 @@ func writeService(t *testing.T, state, id, extra, main, service string) {
 			t.Fatal(err)
 		}
 	}
+	signAsOwn(t, state, filepath.Join(Dir(state), id))
 }
 
 func eventually(t *testing.T, what string, ok func() bool) {

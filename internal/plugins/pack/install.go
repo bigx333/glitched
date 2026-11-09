@@ -385,19 +385,23 @@ func asks(manifest []byte) map[string][]string {
 			Network []string        `json:"network"`
 			Process plugin.Programs `json:"process"`
 		} `json:"permissions"`
-		Commands []json.RawMessage `json:"commands"`
-		Tools    []json.RawMessage `json:"tools"`
-		Service  json.RawMessage   `json:"service"`
+		// Glitched's own block: the programs it runs, its tools, its
+		// service.
+		Glitched struct {
+			Programs []json.RawMessage `json:"programs"`
+			Tools    []json.RawMessage `json:"tools"`
+			Service  json.RawMessage   `json:"service"`
+		} `json:"glitched"`
 	}
 	json.Unmarshal(manifest, &m) // what doesn't read asks for nothing: an update past it asks for all it lists
 	out := map[string][]string{
 		"capabilities": m.Capabilities,
 		"network":      m.Permissions.Network,
 		"process":      m.Permissions.Process,
-		"commands":     names(m.Commands),
-		"tools":        names(m.Tools),
+		"commands":     names(m.Glitched.Programs),
+		"tools":        names(m.Glitched.Tools),
 	}
-	if s := canonical(m.Service); s != "" && s != "null" {
+	if s := canonical(m.Glitched.Service); s != "" && s != "null" {
 		out["service"] = []string{s}
 	}
 	return out

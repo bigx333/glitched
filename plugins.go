@@ -73,6 +73,7 @@ func (a *app) openPlugins(dir string) {
 		OpenURL:    mygo.Shell.OpenExternal,
 		Post:       a.post,
 		Do:         a.pluginEffect,
+		SignOwn:    true,
 		Reloaded:   func(string) { clear(a.pluginAssets) },
 		ServiceCall: func(ctx context.Context, id, method string, args json.RawMessage) (any, error) {
 			call, _ := json.Marshal(plugins.ServiceCall{Plugin: id, Method: method, Args: args})

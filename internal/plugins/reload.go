@@ -93,7 +93,7 @@ func (h *Host) hotReload(folder string) {
 	}
 	h.mu.Lock()
 	old := in.p
-	in.p, in.ext, in.reloadErr = p, next.ext, nil
+	in.p, in.ext, in.reloadErr, in.code = p, next.ext, nil, next.code
 	h.mu.Unlock()
 	for k, s := range h.sessions {
 		if k.plugin == in.manifest.ID {

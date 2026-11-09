@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"glitched/internal/plugins/pack"
 	"glitched/internal/plugins/widget"
 )
 
@@ -48,6 +49,19 @@ func (e *effects) do(_ string, ef Effect) (any, error) {
 	return nil, nil
 }
 
+// signAsOwn signs the plugin in folder with the device's key of the state
+// directory, as Glitched signs the plugins you write.
+func signAsOwn(t *testing.T, state, folder string) {
+	t.Helper()
+	key, err := pack.LoadKey(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pack.Sign(folder, key); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // copyPlugin installs the plugin in examples/plugins/name as folder.
 func copyPlugin(t *testing.T, state, name, folder string) {
 	t.Helper()
@@ -69,6 +83,7 @@ func copyPlugin(t *testing.T, state, name, folder string) {
 			t.Fatal(err)
 		}
 	}
+	signAsOwn(t, state, dst)
 }
 
 // writeModule installs a plugin with the manifest and module.
@@ -85,11 +100,12 @@ func writeModule(t *testing.T, state, id, extra, js string) {
 	if err := os.WriteFile(filepath.Join(dst, "index.js"), []byte(js), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	signAsOwn(t, state, dst)
 }
 
 func open(t *testing.T, state string, u *uiThread, fx *effects) *Host {
 	t.Helper()
-	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf, CallTimeout: 2 * time.Second})
+	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf, CallTimeout: 2 * time.Second, SignOwn: true})
 	t.Cleanup(h.Close)
 	return h
 }
@@ -452,6 +468,7 @@ func TestPagesAreNamesNotPaths(t *testing.T) {
 	os.WriteFile(filepath.Join(dst, "plugin.json"), []byte(`{"id": "nav", "name": "Nav", "main": "index.js",
 		"navigation": [{"title": "Up", "page": "../../settings/plugins"}, {"title": "Dot", "page": ".."}, {"title": "Fine", "page": "home"}]}`), 0o644)
 	os.WriteFile(filepath.Join(dst, "index.js"), []byte(`export function page() { return { title: "x", sections: [] } }`), 0o644)
+	signAsOwn(t, state, dst)
 	h := Open(state, Options{Logf: t.Logf})
 	defer h.Close()
 	if got := h.Entries(); len(got) != 1 || got[0].Page != "home" {
@@ -476,6 +493,7 @@ func TestTheNetworkGrantIsACapability(t *testing.T) {
 func TestALinkedFolderLoads(t *testing.T) {
 	state, src := t.TempDir(), t.TempDir()
 	copyPlugin(t, src, "counter", "counter")
+	signAsOwn(t, state, filepath.Join(Dir(src), "counter"))
 	os.MkdirAll(Dir(state), 0o755)
 	if err := os.Symlink(filepath.Join(Dir(src), "counter"), filepath.Join(Dir(state), "counter")); err != nil {
 		t.Fatal(err)

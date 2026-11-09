@@ -63,6 +63,10 @@ type Options struct {
 	MemoryLimit int64
 	// TimerScale shortens timers, in tests.
 	TimerScale float64
+	// SignOwn signs the user's own plugins again as they change. The
+	// window's host does; the engine's leaves it to the window, so the two
+	// never sign one folder at once.
+	SignOwn bool
 	// Reloaded is told, on the UI thread, after a plugin's code is
 	// reloaded, so that what the app keeps of it goes.
 	Reloaded func(id string)
@@ -105,6 +109,13 @@ type installed struct {
 	// reloadErr is why the plugin's changed code didn't load: it runs the
 	// code it had.
 	reloadErr error
+	// code is the read-only snapshot of its signed files it runs from.
+	code   string
+	trust  Trust
+	signer string
+	asks   []string // what it asks for, when it waits for consent
+	// waitingKey signed it, as it waits for consent.
+	waitingKey string
 }
 
 // prefs are what the user chose for the plugins, in plugins.json in the
@@ -114,6 +125,8 @@ type prefs struct {
 	Grants   map[string][]string `json:"grants,omitempty"`
 	// Settings are the values the user set, by plugin and setting.
 	Settings map[string]map[string]json.RawMessage `json:"settings,omitempty"`
+	// Consent is what the user allowed each plugin of another key.
+	Consent map[string]consent `json:"consent,omitempty"`
 }
 
 // Dir is where the plugins are installed, one folder each.
@@ -204,6 +217,11 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 		}
 	}
 	in.ext = x
+	code, err := h.verify(in)
+	if err != nil {
+		return nil, err
+	}
+	in.code = code
 	var granted []string
 	for _, c := range m.Capabilities {
 		if h.allowed(m.ID, c) {
@@ -224,7 +242,7 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 	if err != nil {
 		return nil, fmt.Errorf("permissions.network: %w", err)
 	}
-	return plugin.Load(in.folder, plugin.Options{
+	return plugin.Load(code, plugin.Options{
 		HTTPClient:      client,
 		Main:            main,
 		Functions:       h.functions(in),
@@ -275,6 +293,11 @@ type Plugin struct {
 	Network []string
 	// Programs are the programs it runs, each with what running it risks.
 	Programs []Program
+	// Trust is why it may run, or why it waits; Signer the key that signed
+	// it; Asks, while it waits for consent, what it asks for in words.
+	Trust  Trust
+	Signer string
+	Asks   []string
 }
 
 // Program is a program a plugin names, and what running it risks.
@@ -294,6 +317,10 @@ func (h *Host) Installed() []Plugin {
 	for _, in := range h.installed {
 		m := in.manifest
 		p := Plugin{ID: m.ID, Name: m.Name, Version: m.Version, Description: m.Description, Folder: in.folder, Enabled: in.enabled, Err: in.err, Network: m.Permissions.Network}
+		p.Trust, p.Signer = in.trust, in.signer
+		for _, a := range in.asks {
+			p.Asks = append(p.Asks, describeAsk(a))
+		}
 		if in.reloadErr != nil {
 			p.Err = fmt.Errorf("its changed code didn't load, so it runs the code it had: %w", in.reloadErr)
 		}
