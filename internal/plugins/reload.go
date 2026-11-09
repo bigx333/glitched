@@ -117,7 +117,8 @@ func (h *Host) swapIn(in, next *installed, p *plugin.Plugin, err error) {
 	}
 	h.mu.Lock()
 	old, oldDB := in.p, in.db
-	in.p, in.ext, in.reloadErr, in.code, in.db = p, next.ext, nil, next.code, next.db
+	in.alive.Store(false) // the old code's calls waiting on the UI thread do nothing
+	in.p, in.ext, in.reloadErr, in.code, in.db, in.alive = p, next.ext, nil, next.code, next.db, next.alive
 	h.mu.Unlock()
 	for k, s := range h.sessions {
 		if k.plugin == in.manifest.ID {

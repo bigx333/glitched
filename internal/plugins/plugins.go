@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	plugin "github.com/yxxbc/mygo-plugin"
@@ -119,6 +120,7 @@ type installed struct {
 	// waitingKey signed it, as it waits for consent.
 	waitingKey string
 	db         *pluginDB
+	alive      *atomic.Bool // the running runtime's, cleared as it goes
 }
 
 // prefs are what the user chose for the plugins, in plugins.json in the
@@ -568,10 +570,10 @@ func (h *Host) RunCommand(id, command string, done func(error)) {
 // it runs: a grant taken back while it waited stops it. ctx is the
 // runtime's that asked: one that stopped meanwhile, as a plugin turned
 // off or reloaded, gets nothing done.
-func (h *Host) effect(ctx context.Context, id string, e Effect, done func(any, error)) {
+func (h *Host) effect(ctx context.Context, alive *atomic.Bool, id string, e Effect, done func(any, error)) {
 	h.opts.Post(func() {
-		if ctx.Err() != nil {
-			done(nil, ctx.Err())
+		if ctx.Err() != nil || !alive.Load() {
+			done(nil, fmt.Errorf("%w: the plugin's code was replaced or stopped", ErrDenied))
 			return
 		}
 		if err := h.check(id, e.Type); err != nil {
@@ -644,6 +646,9 @@ func (h *Host) closeAll() {
 	h.installed = nil
 	h.mu.Unlock()
 	for _, in := range list {
+		if in.alive != nil {
+			in.alive.Store(false) // its calls waiting on the UI thread do nothing
+		}
 		if in.p != nil {
 			// Off the UI thread: Close waits for a runtime that is still
 			// starting, up to its load timeout.

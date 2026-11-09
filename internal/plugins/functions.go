@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	plugin "github.com/yxxbc/mygo-plugin"
@@ -74,6 +75,11 @@ func (h *Host) functions(in *installed) map[string]plugin.Function {
 	id := in.manifest.ID
 	db := &pluginDB{path: filepath.Join(DataDir(h.state), id, "plugin.db")}
 	in.db = db
+	// alive is this load's: the host clears it as it replaces or closes
+	// the runtime, on the UI thread, before a call of the old one can run.
+	alive := new(atomic.Bool)
+	alive.Store(true)
+	in.alive = alive
 	fns := map[string]plugin.Function{
 		"db.exec":  db.exec,
 		"db.query": db.query,
@@ -89,7 +95,7 @@ func (h *Host) functions(in *installed) map[string]plugin.Function {
 				err error
 			}
 			ch := make(chan answer, 1)
-			h.effect(ctx, id, e, func(v any, err error) { ch <- answer{v, err} })
+			h.effect(ctx, alive, id, e, func(v any, err error) { ch <- answer{v, err} })
 			select {
 			case a := <-ch:
 				if errors.Is(a.err, ErrDenied) {
