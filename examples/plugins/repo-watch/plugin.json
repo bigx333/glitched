@@ -1,0 +1,22 @@
+{
+  "id": "repo-watch",
+  "name": "Repo watch",
+  "description": "Watches a repository in the background: its branch and changes, checked each minute.",
+  "version": "0.1.0",
+  "main": "index.js",
+  "contract": "glitched",
+  "contractVersion": 1,
+  "capabilities": ["service", "programs"],
+  "permissions": {},
+  "contributes": {
+    "pages": [{ "id": "home", "title": "Repo watch", "icon": "git-branch" }]
+  },
+  "glitched": {
+    "service": "service.js",
+    "programs": ["git"],
+    "timers": [{ "id": "check", "every": 60 }],
+    "settings": [
+      { "id": "folder", "kind": "folder", "label": "Repository", "description": "The checkout to watch." }
+    ]
+  }
+}

@@ -54,7 +54,15 @@ func (a *app) pluginSettings(c *ui.Context) {
 					a.pluginSettingRows(c, p.ID)
 				}
 				for _, cp := range p.Capabilities {
-					settingRow(c, cp.About, cp.Name, func() {
+					about := cp.About
+					if cp.Name == "programs" {
+						var names []string
+						for _, pr := range p.Programs {
+							names = append(names, pr.Name+" ("+pr.Risk+")")
+						}
+						about += ": " + strings.Join(names, ", ")
+					}
+					settingRow(c, about, cp.Name, func() {
 						if !cp.Grant {
 							ui.Text(c, "Allowed").FontSize(12).TextColor(palette.muted)
 							return

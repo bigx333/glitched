@@ -3,6 +3,7 @@ package plugins
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"slices"
 )
 
@@ -249,4 +250,24 @@ func (h *Host) Folder(id string) string {
 		return in.folder
 	}
 	return ""
+}
+
+// Fetcher is what reaches the network for the running plugin id, as its
+// fetch does: nil without the network grant.
+func (h *Host) Fetcher(id string) *http.Client {
+	in := h.running1(id)
+	if in == nil || len(in.manifest.Permissions.Network) == 0 {
+		return nil
+	}
+	h.mu.RLock()
+	ok := h.granted(id, Network)
+	h.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	c, err := httpClient(in.manifest.Permissions.Network)
+	if err != nil {
+		return nil
+	}
+	return c
 }
