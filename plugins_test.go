@@ -306,7 +306,9 @@ func TestInstallingSomeoneElsesPluginAsksForConsent(t *testing.T) {
 	h.a.pluginSource = file
 	h.tt.Frame()
 	h.click("Install")
-	h.until("the consent sheet", func() bool { return h.tt.HasText("Hello is someone else's. It asks to:") && h.tt.HasText("• Copy text to the clipboard") })
+	h.until("the consent sheet", func() bool {
+		return h.tt.HasText("Hello is someone else's. It asks to:") && h.tt.HasText("• Copy text to the clipboard")
+	})
 	if len(h.a.plugins.Entries()) != 0 {
 		t.Fatal("someone else's plugin ran before it was allowed")
 	}
