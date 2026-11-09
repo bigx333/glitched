@@ -251,7 +251,7 @@ func (h *Host) Remove(id string) error {
 	if folder == "" {
 		return fmt.Errorf("no plugin %q is installed", id)
 	}
-	h.closeAll()
+	h.closeAll().Wait() // its database closed before its data goes
 	if err := os.RemoveAll(folder); err != nil {
 		return err
 	}
