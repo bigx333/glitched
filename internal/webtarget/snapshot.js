@@ -559,6 +559,20 @@ function install(key) {
     return k > 0.99999 && k < 1.00001 ? 1 : k;
   }
 
+  // outward is where x, y of frame f's viewport shows in the viewport of
+  // the document f is in, and the scale f shows at: past f's border and
+  // padding, at the scale its box shows at against its layout size.
+  function outward(f, x, y) {
+    const fb = rect(f), s = styleOf(f);
+    const sx = scale(get(B.width, fb), s, "width", "left", "right");
+    const sy = scale(get(B.height, fb), s, "height", "top", "bottom");
+    return {
+      __proto__: null, sx, sy,
+      x: get(B.x, fb) + sx * (get(B.clientLeft, f) + num(prop(s, "padding-left")) + x),
+      y: get(B.y, fb) + sy * (get(B.clientTop, f) + num(prop(s, "padding-top")) + y),
+    };
+  }
+
   // describe says what a ref's element is, and where it shows in the top
   // frame's viewport, through the frames it is in, from the innermost out:
   // past each frame's border and padding, at the scale its box shows at
@@ -573,13 +587,11 @@ function install(key) {
     for (let i = chain.length - 1; i >= 0; i--) {
       const f = deref(chain[i].frame);
       if (!f) throw gone(ref);
-      const fb = rect(f), s = styleOf(f);
-      const sx = scale(get(B.width, fb), s, "width", "left", "right");
-      const sy = scale(get(B.height, fb), s, "height", "top", "bottom");
-      x = get(B.x, fb) + sx * (get(B.clientLeft, f) + num(prop(s, "padding-left")) + x);
-      y = get(B.y, fb) + sy * (get(B.clientTop, f) + num(prop(s, "padding-top")) + y);
-      width *= sx;
-      height *= sy;
+      const o = outward(f, x, y);
+      x = o.x;
+      y = o.y;
+      width *= o.sx;
+      height *= o.sy;
     }
     const box = { __proto__: null, x, y, width, height };
     return { __proto__: null, role: r || "", name: name(el, r), box };
@@ -714,27 +726,52 @@ function install(key) {
     return false;
   }
 
+  // covering is what a click at x, y of the innermost frame's viewport
+  // would hit instead of a frame it is in, in the documents around the
+  // frames (chain, from the top frame in), with the frame it misses; null
+  // where each document shows the frame there, or nothing at all, as at a
+  // point out of its view.
+  function covering(ref, chain, x, y) {
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const f = deref(chain[i].frame);
+      if (!f) throw gone(ref);
+      const o = outward(f, x, y);
+      x = o.x;
+      y = o.y;
+      const hit = hitAt(get(B.ownerDocument, f), x, y);
+      if (hit && hit !== f) return { __proto__: null, hit, under: f };
+    }
+    return null;
+  }
+
   // aim is where a click on el lands, and what it hits there: the first
-  // of its points where what shows is el's own. Where none is, it says
-  // what shows instead; where nothing shows at any, as no point is in
-  // view, el at its first.
-  function aim(ref, el, doc) {
+  // of its points where what shows is el's own, in its document and, at
+  // the frames el is in, in each document around them. Where none is, it
+  // says what shows instead; where nothing shows at any, as no point is
+  // in view, el at its first.
+  function aim(ref, el, doc, chain) {
     const ps = points(el, doc);
-    let other = null;
+    // other is what shows instead, and under is what it hides: el, or a
+    // frame el is in.
+    let other = null, under = el;
     for (let i = 0; i < ps.length; i++) {
       const hit = hitAt(doc, ps[i].x, ps[i].y);
       if (!hit) continue;
-      if (own(el, hit)) return { __proto__: null, x: ps[i].x, y: ps[i].y, target: hit };
-      if (!other) other = hit;
+      if (own(el, hit)) {
+        const c = covering(ref, chain, ps[i].x, ps[i].y);
+        if (!c) return { __proto__: null, x: ps[i].x, y: ps[i].y, target: hit };
+        if (!other) other = c.hit, under = c.under;
+      } else if (!other) other = hit;
     }
     if (!other) {
       const b = rect(el);
       const at = ps.length ? ps[0] : { __proto__: null, x: get(B.x, b) + get(B.width, b) / 2, y: get(B.y, b) + get(B.height, b) / 2 };
       return { __proto__: null, x: at.x, y: at.y, target: el };
     }
-    // What contains el showing where el is: el takes no pointer there, as
-    // under pointer-events: none, or a box of its ancestor's own covers it.
-    for (let n = up(el), i = 0; n && i < 4096; i++, n = up(n)) {
+    // What contains el, or its frame, showing where it is: it takes no
+    // pointer there, as under pointer-events: none, or a box of its
+    // ancestor's own covers it.
+    for (let n = up(under), i = 0; n && i < 4096; i++, n = up(n)) {
       if (n === other) throw new Err(`${ref} takes no clicks where it shows`);
     }
     const or = role(other), on = name(other, or);
@@ -783,7 +820,7 @@ function install(key) {
       reveal(el);
       // The events go to what the click hits, el or what is in it, or
       // its label, as a user's would.
-      const aimed = aim(ref, el, doc), x = aimed.x, y = aimed.y, target = aimed.target;
+      const aimed = aim(ref, el, doc, found.chain), x = aimed.x, y = aimed.y, target = aimed.target;
       const send = (e) => apply(B.dispatch, target, [e]);
       const at = (buttons) => ({ __proto__: null, bubbles: true, cancelable: true, composed: true, view,
         clientX: x, clientY: y, button: 0, buttons, detail: 1 });
