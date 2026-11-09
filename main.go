@@ -469,10 +469,12 @@ type app struct {
 	// placeControls their inputs' values.
 	placeFrame    placeFrame
 	placeControls map[placeKey]*render.Controls
-	// pluginRecords and pluginMessages are what the plugins were last told
-	// of the threads, and of the shown one's messages.
-	pluginRecords  map[string]string
-	pluginMessages map[string]int
+	// pluginRecords are what the plugins were last told of the threads.
+	pluginRecords map[string]string
+	// pluginMessages are the messages of the thread pluginMessagesOf the
+	// plugins were told of, by key.
+	pluginMessages   map[string]bool
+	pluginMessagesOf string
 	// showPluginTab shows pluginTabShown in the panel beside the chat.
 	showPluginTab  bool
 	pluginTabShown pluginTab
@@ -493,6 +495,9 @@ type app struct {
 	pluginBusy    bool
 	pluginUpdates []pack.Found
 	pluginChecked bool
+	// settingDrafts are text settings as typed, by plugin and setting,
+	// until saved.
+	settingDrafts map[string]string
 }
 
 // newApp is the app on the engines its state directory dir names. The
@@ -537,8 +542,8 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		pluginControls: map[pluginKey]*render.Controls{},
 		placeControls:  map[placeKey]*render.Controls{},
 		pluginAssets:   map[string]asset{},
+		settingDrafts:  map[string]string{},
 		pluginRecords:  map[string]string{},
-		pluginMessages: map[string]int{},
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,
@@ -852,13 +857,18 @@ func main() {
 		return
 	}
 	var a *app
+	// What's posted before the window exists, as a plugin's timer can,
+	// waits for it.
+	var early windowQueue
 	a = newApp(stateDir(), (*daemon.Config).WithClaude, func(fn func()) {
-		a.win.Update(func() {
-			fn()
-			// The quick ask panel shows the projects too.
-			if a.quick.panel != nil {
-				a.quick.panel.Invalidate()
-			}
+		early.post(func(w *mygo.Window) {
+			w.Update(func() {
+				fn()
+				// The quick ask panel shows the projects too.
+				if a.quick.panel != nil {
+					a.quick.panel.Invalidate()
+				}
+			})
 		})
 	})
 	// Off the main thread, RunOnMain queues, to run once the main thread's
@@ -887,6 +897,7 @@ func main() {
 			Vibrancy: mygo.VibrancyFullScreenUI,
 			Content:  ui.View(a.view),
 		})
+		early.ready(a.win)
 		a.notify = showNotification
 		// The wind's glyph atlases are drawn between the window's frames.
 		a.wind.SetLater(a.win.Update)
@@ -960,4 +971,35 @@ func (a *app) contentCard(e ui.Element) ui.Element {
 // leaves, clear at Clear.
 func (a *app) glassTint() ui.Color {
 	return palette.bg.Alpha(float32(1 - a.settings.vibrancy))
+}
+
+// windowQueue holds what's posted to the window until it exists.
+type windowQueue struct {
+	mu    sync.Mutex
+	win   *mygo.Window
+	queue []func(*mygo.Window)
+}
+
+func (q *windowQueue) post(fn func(*mygo.Window)) {
+	q.mu.Lock()
+	w := q.win
+	if w == nil {
+		q.queue = append(q.queue, fn)
+	}
+	q.mu.Unlock()
+	if w != nil {
+		fn(w)
+	}
+}
+
+// ready runs what waited, now that the window exists.
+func (q *windowQueue) ready(w *mygo.Window) {
+	q.mu.Lock()
+	q.win = w
+	waiting := q.queue
+	q.queue = nil
+	q.mu.Unlock()
+	for _, fn := range waiting {
+		fn(w)
+	}
 }

@@ -90,7 +90,9 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread) {
 		cs.Sync(v, app.Rev, app.Processed)
 		ref := &plugins.PlaceRef{ID: pl.Place.ID, At: at, Key: key, Context: ctx}
 		ui.Row(c).Key("plugin:" + pl.Plugin + ":" + pl.Place.ID).Shrink(1).AlignItems(ui.Center).ClipX().Children(func() {
-			render.View(c, v, cs, a.pluginStyle(pl.Plugin), &a.pluginMD, func(ev plugins.UIEvent, values map[string]any) int {
+			st := a.pluginStyle(pl.Plugin)
+			st.Scope = pl.Plugin + "/" + pl.Place.ID + "/" + key
+			render.View(c, v, cs, st, &a.pluginMD, func(ev plugins.UIEvent, values map[string]any) int {
 				ev.Place = ref
 				return app.Dispatch(ev, values)
 			})
@@ -151,23 +153,29 @@ func (a *app) emitThreadChanges() {
 	if !ok || t.Transcript == nil {
 		return
 	}
-	es := entriesOf(t)
-	from, known := a.pluginMessages[t.id().String()]
-	n := 0
-	for _, e := range es {
-		if (e.kind == entryUser || e.kind == entryAssistant) && !e.streaming {
-			n++
-			if known && n > from {
-				role := "user"
-				if e.kind == entryAssistant {
-					role = "assistant"
-				}
-				msg := map[string]any{"thread": t.id().String(), "role": role, "text": e.text}
-				a.plugins.Emit("thread.message", func(string) any { return msg })
-			}
-		}
+	// Messages by their keys, which a message keeps as more come: the
+	// first look at a thread tells nothing, then each new finished one is
+	// told once.
+	id := t.id().String()
+	first := a.pluginMessagesOf != id
+	if first {
+		a.pluginMessagesOf, a.pluginMessages = id, map[string]bool{}
 	}
-	a.pluginMessages[t.id().String()] = n
+	for _, e := range entriesOf(t) {
+		if (e.kind != entryUser && e.kind != entryAssistant) || e.streaming || a.pluginMessages[e.key] {
+			continue
+		}
+		a.pluginMessages[e.key] = true
+		if first {
+			continue
+		}
+		role := "user"
+		if e.kind == entryAssistant {
+			role = "assistant"
+		}
+		msg := map[string]any{"thread": id, "role": role, "text": e.text}
+		a.plugins.Emit("thread.message", func(string) any { return msg })
+	}
 }
 
 // pluginTab is a tab of a plugin's in the thread panel.

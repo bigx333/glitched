@@ -129,13 +129,13 @@ func (a *app) pluginSettingRows(c *ui.Context, id string) {
 					}
 					ui.Text(c, st.Status.Badge).FontSize(11).FontWeight(600).TextColor(tone).Padding(1, 6).Radius(5).Background(tone.Alpha(0.14))
 				}
-				a.pluginSettingControl(c, st, set)
+				a.pluginSettingControl(c, pluginSetting{st, id}, set)
 			})
 		})
 	}
 }
 
-func (a *app) pluginSettingControl(c *ui.Context, st plugins.SettingState, set func(any)) {
+func (a *app) pluginSettingControl(c *ui.Context, st pluginSetting, set func(any)) {
 	switch st.Kind {
 	case "switch":
 		on, _ := st.Value.(bool)
@@ -196,11 +196,34 @@ func (a *app) pluginSettingControl(c *ui.Context, st plugins.SettingState, set f
 			}
 		})
 	default: // text, shortcut
+		// A draft while it's typed, saved on Enter or Save: one write,
+		// and a shortcut half typed isn't refused as it goes.
 		v, _ := st.Value.(string)
-		e := ui.TextInput(c.Key("value"), &v).Label(st.Label).Width(240).Placeholder(cmpOr(st.Placeholder, map[string]string{"shortcut": "cmd+shift+k"}[st.Kind]))
-		if e.Changed() && (st.Kind == "text" || v == "" || validShortcut(v)) {
-			set(v)
+		k := st.plugin + "\x00" + st.ID
+		draft, editing := a.settingDrafts[k]
+		if !editing {
+			draft = v
 		}
+		save := func() {
+			if st.Kind == "shortcut" && draft != "" && !validShortcut(draft) {
+				a.pluginNotice(ui.Toast{Title: "Not a shortcut", Description: draft + ": cmd, ctrl or alt, then a key, as cmd+shift+k"})
+				return
+			}
+			delete(a.settingDrafts, k)
+			set(draft)
+		}
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			e := ui.TextInput(c.Key("value"), &draft).Label(st.Label).Width(220).Placeholder(cmpOr(st.Placeholder, map[string]string{"shortcut": "cmd+shift+k"}[st.Kind]))
+			if e.Changed() {
+				a.settingDrafts[k] = draft
+			}
+			if e.Submitted() {
+				save()
+			}
+			if editing && draft != v {
+				ui.Button(c.Key("save"), "Save").OnClick(save)
+			}
+		})
 	}
 }
 
@@ -349,4 +372,10 @@ func updateDiff(d pack.Diff) string {
 		return "Asks for nothing new."
 	}
 	return "Newly asks for " + strings.Join(parts, "; ") + ". You'll be asked to allow it."
+}
+
+// pluginSetting is a plugin's setting, with the plugin's id.
+type pluginSetting struct {
+	plugins.SettingState
+	plugin string
 }

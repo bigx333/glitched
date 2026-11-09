@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/egoist/mygo/ui"
 
@@ -48,11 +49,17 @@ func appIconNamed(name string) *ui.SVG {
 	if strings.ContainsAny(name, "/.") {
 		return nil
 	}
+	if s, ok := namedIcons.Load(name); ok {
+		return s.(*ui.SVG)
+	}
 	if _, err := fs.Stat(iconFiles, "icons/"+name+".svg"); err != nil {
 		return nil
 	}
-	return solar(name)
+	s, _ := namedIcons.LoadOrStore(name, solar(name)) // one SVG per name, as the renderer keys them
+	return s.(*ui.SVG)
 }
+
+var namedIcons sync.Map
 
 // pluginIcon is the icon a widget names: the app's, or an SVG of the
 // plugin's own ("plugin:icon.svg"), drawn in the text's color.

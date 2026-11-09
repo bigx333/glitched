@@ -23,6 +23,9 @@ type Style struct {
 	Icon func(name string) *ui.SVG
 	// Image is the picture at src, nil while it loads or if it can't.
 	Image func(src string) ui.ImageSource
+	// Scope names the view among every plugin view the window draws: a
+	// dialog's overlay is keyed by it, as overlays share one layer.
+	Scope string
 }
 
 // color is a theme token's color.
@@ -390,7 +393,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		})
 	case "dialog":
 		open := n.Open && !r.cs.dismissed[n.ID]
-		d := ui.Modal(kc, &open, func() {
+		d := ui.Modal(c.Key(st.Scope+"#dialog:"+n.ID), &open, func() {
 			ui.Column(c).Padding(20).Gap(12).MinWidth(320).MaxWidth(560).Children(func() {
 				ui.Text(c, n.Title).FontSize(16).FontWeight(650)
 				r.children(c, n)

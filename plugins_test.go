@@ -318,3 +318,33 @@ func TestInstallingSomeoneElsesPluginAsksForConsent(t *testing.T) {
 		t.Fatalf("after allowing: %q", h.tt.Texts())
 	}
 }
+
+// A text setting is a draft as it's typed, saved once on Enter: a
+// shortcut half typed isn't refused as it goes.
+func TestATextSettingSavesOnEnter(t *testing.T) {
+	h := pluginApp(t)
+	dst := filepath.Join(plugins.Dir(h.a.dir), "keys")
+	os.MkdirAll(dst, 0o755)
+	os.WriteFile(filepath.Join(dst, "plugin.json"), []byte(`{"id": "keys", "name": "Keys", "main": "index.js",
+		"glitched": {"settings": [{"id": "key", "kind": "shortcut", "label": "Its key"}]}}`), 0o644)
+	os.WriteFile(filepath.Join(dst, "index.js"), []byte(`export function view() {}`), 0o644)
+	signAsOwn(t, h.a.dir, dst)
+	h.a.plugins.Reload()
+	h.a.router.Push("/settings/plugins")
+	h.tt.Frame()
+	// The field is at the row's end, as the Reload button is at its.
+	row, _ := h.tt.Find("Its key")
+	reload, _ := h.tt.Find("Reload")
+	h.tt.ClickAt(reload.X+reload.W-110, row.Y+row.H/2)
+	h.tt.Type("cmd+sh")
+	h.tt.Frame()
+	if v := h.a.plugins.SettingValues("keys")["key"]; v != "" {
+		t.Fatalf("saved as typed: %q", v)
+	}
+	h.tt.Type("ift+k")
+	h.tt.Key(0, ui.KeyEnter)
+	h.tt.Frame()
+	if v := h.a.plugins.SettingValues("keys")["key"]; v != "cmd+shift+k" {
+		t.Fatalf("after Enter: %q", v)
+	}
+}

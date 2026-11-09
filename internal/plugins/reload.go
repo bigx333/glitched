@@ -7,13 +7,20 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
+
+	plugin "github.com/yxxbc/mygo-plugin"
 )
 
 // fingerprint is what a plugin's folder holds, as names, sizes and times:
 // a change to any file changes it. It skips what isn't the plugin's code.
 func fingerprint(folder string) string {
 	h := sha256.New()
+	// A linked plugin folder is fingerprinted by what it links to.
+	if real, err := filepath.EvalSymlinks(folder); err == nil {
+		folder = real
+	}
 	filepath.WalkDir(folder, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -48,7 +55,7 @@ func (h *Host) Watch(every time.Duration) (stop func()) {
 			}
 			for folder, fp := range now {
 				if old, ok := seen[folder]; ok && old != fp {
-					h.opts.Post(func() { h.hotReload(folder) })
+					h.hotReload(folder) // here, off the UI thread
 				}
 			}
 			if len(seen) > 0 && len(now) != len(seen) {
@@ -65,7 +72,8 @@ func (h *Host) Watch(every time.Duration) (stop func()) {
 	return func() { close(done) }
 }
 
-// hotReload reloads the plugin in folder. It runs on the UI thread.
+// hotReload reloads the plugin in folder. It verifies, signs and
+// compiles the new code here, off the UI thread, and swaps it in there.
 func (h *Host) hotReload(folder string) {
 	var in *installed
 	for _, i := range h.list() {
@@ -73,34 +81,53 @@ func (h *Host) hotReload(folder string) {
 			in = i
 		}
 	}
-	if in == nil || in.p == nil {
-		h.Reload() // not running: maybe it loads now
-		return
-	}
+	h.mu.RLock()
+	running := in != nil && in.p != nil
+	h.mu.RUnlock()
 	manifest, err := os.ReadFile(filepath.Join(folder, "plugin.json"))
-	if err != nil || !bytes.Equal(manifest, in.raw) {
-		h.Reload()
+	if !running || err != nil || !bytes.Equal(manifest, in.raw) {
+		h.opts.Post(h.Reload) // not running, or its manifest changed: whole
 		return
 	}
 	next := &installed{folder: folder, manifest: in.manifest, enabled: true, raw: in.raw}
+	h.mu.RLock()
 	p, err := h.load(next)
-	if err != nil {
-		h.mu.Lock()
+	h.mu.RUnlock()
+	h.opts.Post(func() { h.swapIn(in, next, p, err) })
+}
+
+// swapIn puts a reloaded plugin in its place, on the UI thread: its
+// sessions keep their state. One that failed to load leaves the running
+// one be, and says why.
+func (h *Host) swapIn(in, next *installed, p *plugin.Plugin, err error) {
+	h.mu.Lock()
+	current := in.p != nil && slices.Contains(h.installed, in)
+	if err != nil && current {
 		in.reloadErr = err
-		h.mu.Unlock()
-		h.opts.Logf("plugins: %s: kept the running code: %v", filepath.Base(folder), err)
+	}
+	h.mu.Unlock()
+	if err != nil || !current {
+		if p != nil {
+			go p.Close() // a Reload replaced it meanwhile
+		}
+		if err != nil {
+			h.opts.Logf("plugins: %s: kept the running code: %v", filepath.Base(in.folder), err)
+		}
 		return
 	}
 	h.mu.Lock()
-	old := in.p
-	in.p, in.ext, in.reloadErr, in.code = p, next.ext, nil, next.code
+	old, oldDB := in.p, in.db
+	in.p, in.ext, in.reloadErr, in.code, in.db = p, next.ext, nil, next.code, next.db
 	h.mu.Unlock()
 	for k, s := range h.sessions {
 		if k.plugin == in.manifest.ID {
 			s.swap(p)
 		}
 	}
-	go old.Close()
+	go func() {
+		old.Close()
+		oldDB.close()
+	}()
 	if h.opts.Reloaded != nil {
 		h.opts.Reloaded(in.manifest.ID)
 	}
