@@ -227,12 +227,12 @@ func (s *Session) apply(q queued, state json.RawMessage, values map[string]any) 
 		s.setState(nil)
 		return nil
 	case q.init:
-		err = s.p.Call("init", map[string]any{"page": s.page}, &raw)
+		err = s.call(0, "init", map[string]any{"page": s.page}, &raw)
 	default:
 		if !s.p.Can("update") {
 			return errors.New("the plugin has no update export")
 		}
-		err = s.p.Call("update", map[string]any{"page": s.page, "state": state, "event": q.event, "values": values}, &raw)
+		err = s.call(0, "update", map[string]any{"page": s.page, "state": state, "event": q.event, "values": values}, &raw)
 	}
 	if err != nil {
 		return err
@@ -307,7 +307,7 @@ func decodeUpdate(raw json.RawMessage) (update, error) {
 // publishes it with what failed.
 func (s *Session) render(state json.RawMessage, values map[string]any, failed error) {
 	var raw json.RawMessage
-	err := s.p.CallWithin(ViewTimeout, "view", map[string]any{"page": s.page, "state": state, "values": values}, &raw)
+	err := s.call(ViewTimeout, "view", map[string]any{"page": s.page, "state": state, "values": values}, &raw)
 	var v *widget.View
 	if err == nil {
 		v, err = widget.Decode(raw)
@@ -328,4 +328,19 @@ func (s *Session) render(state json.RawMessage, values map[string]any, failed er
 		s.Busy = s.running && (len(s.queue) > 0 || s.dirty)
 		s.mu.Unlock()
 	})
+}
+
+// call calls the plugin. A call that started as the page closed, with a
+// reload, may have started the plugin's runtime again: closing it again
+// leaves none behind.
+func (s *Session) call(timeout time.Duration, method string, args map[string]any, out *json.RawMessage) error {
+	err := s.p.CallWithin(timeout, method, args, out)
+	s.mu.Lock()
+	done := s.done
+	s.mu.Unlock()
+	if done {
+		s.p.Close()
+		return errors.New("the page closed")
+	}
+	return err
 }
