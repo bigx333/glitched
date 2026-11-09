@@ -251,7 +251,7 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 		if main == x.Service && !h.allowed(m.ID, "service") {
 			// A main module that is the service runs nothing till then:
 			// its tools wait with it.
-			if len(x.Tools) == 0 || filepath.Clean(x.Service) == filepath.Clean(m.Main) {
+			if len(x.Tools) == 0 || sameFile(in.folder, x.Service, m.Main) {
 				return nil, errNotHere
 			}
 			main = m.Main
@@ -685,4 +685,15 @@ func (h *Host) plugin(id string) (*plugin.Plugin, error) {
 func webURL(s string) bool {
 	u, err := url.Parse(s)
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
+// sameFile reports whether two paths of a plugin's folder are one file:
+// spelled alike, or alike on a disk that ignores case, or hard links.
+func sameFile(folder, a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	fa, err1 := os.Stat(filepath.Join(folder, a))
+	fb, err2 := os.Stat(filepath.Join(folder, b))
+	return err1 == nil && err2 == nil && os.SameFile(fa, fb)
 }

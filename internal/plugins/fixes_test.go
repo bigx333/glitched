@@ -251,3 +251,32 @@ func TestAServiceThatIsItsMainModuleWaitsForItsGrant(t *testing.T) {
 		return err == nil
 	})
 }
+
+func TestTempTablesKeepToTheCap(t *testing.T) {
+	d := &pluginDB{path: filepath.Join(t.TempDir(), "plugin.db")}
+	defer d.close()
+	db, err := d.open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE TEMP TABLE big (b BLOB); INSERT INTO big VALUES (zeroblob(120 * 1024 * 1024))"); err == nil {
+		t.Fatal("a temp table passed the cap")
+	}
+}
+
+func TestAServiceHardLinkedToItsMainModuleWaitsToo(t *testing.T) {
+	state := t.TempDir()
+	writeModule(t, state, "linked", `"capabilities": ["service", "tools"], "glitched": { "service": "service.js", "tools": [{ "name": "ping", "description": "Pings." }] }, `, `
+		await glitched.db.exec("CREATE TABLE IF NOT EXISTS ran (a INTEGER)")
+		export function tool() { return 1 }`)
+	folder := filepath.Join(Dir(state), "linked")
+	if err := os.Link(filepath.Join(folder, "index.js"), filepath.Join(folder, "service.js")); err != nil {
+		t.Skip(err)
+	}
+	signAsOwn(t, state, folder)
+	s := StartServices(state, ServiceOptions{Logf: t.Logf})
+	defer s.Close()
+	if _, err := s.CallTool(context.Background(), ToolCall{Plugin: "linked", Name: "ping"}); err == nil {
+		t.Fatal("its tool ran without the service grant")
+	}
+}
