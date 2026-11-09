@@ -73,7 +73,10 @@ func (a *app) openPlugins(dir string) {
 		Post:       a.post,
 		Do:         a.pluginEffect,
 		SignOwn:    true,
-		Reloaded:   func(string) { clear(a.pluginAssets) },
+		// Plugins with timers wait for Start, once the window runs and the
+		// language is known.
+		WaitToStart: true,
+		Reloaded:    func(string) { clear(a.pluginAssets) },
 		ServiceCall: func(ctx context.Context, id, method string, args json.RawMessage) (any, error) {
 			call, _ := json.Marshal(plugins.ServiceCall{Plugin: id, Method: method, Args: args})
 			out, err := a.serviceClient(dir).PluginCall(ctx, call)

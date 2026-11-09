@@ -914,7 +914,11 @@ func main() {
 		if err := a.backend.Start(); err != nil {
 			log.Print(err)
 		}
-		a.plugins.SetLanguage(mygo.App.Locale()) // here, on the main thread
+		// The language plugins read, set here, on the main thread, and as
+		// it changes, before any plugin wakes on its timers.
+		a.plugins.SetLanguage(mygo.App.Locale())
+		mygo.App.OnLocaleChanged(a.plugins.SetLanguage)
+		a.plugins.Start()
 		// A plugin reloads as its files are saved, keeping its pages' state.
 		a.stopWatch = a.plugins.Watch(time.Second)
 	})

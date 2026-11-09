@@ -30,17 +30,30 @@ type pluginDB struct {
 	mu     sync.Mutex // guards db and closed: a call of a runtime that is stopping may open it as the host closes it
 	db     *sql.DB
 	closed bool
+	// using are the statements running, which close waits for: a closed
+	// database lets go of its file.
+	using sync.WaitGroup
 }
 
-func (d *pluginDB) open() (*sql.DB, error) {
+// use is the database for one statement, opened on first use; done ends
+// the statement's use of it.
+func (d *pluginDB) use() (db *sql.DB, done func(), err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed {
-		return nil, errors.New("the plugin stopped")
+		return nil, nil, errors.New("the plugin stopped")
 	}
-	if d.db != nil {
-		return d.db, nil
+	if d.db == nil {
+		if d.db, err = d.open(); err != nil {
+			return nil, nil, err
+		}
 	}
+	d.using.Add(1) // under mu, so close's Wait counts it or open sees closed
+	return d.db, d.using.Done, nil
+}
+
+// open opens the file. The caller holds mu.
+func (d *pluginDB) open() (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(d.path), 0o700); err != nil {
 		return nil, err
 	}
@@ -54,7 +67,6 @@ func (d *pluginDB) open() (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
-	d.db = db
 	return db, nil
 }
 
@@ -63,10 +75,12 @@ func (d *pluginDB) close() {
 		return
 	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	d.closed = true
-	if d.db != nil {
-		d.db.Close()
+	db := d.db
+	d.mu.Unlock()
+	d.using.Wait() // the statements running end: their context is the stopped runtime's
+	if db != nil {
+		db.Close()
 	}
 }
 
@@ -192,10 +206,11 @@ func (d *pluginDB) exec(ctx context.Context, raw json.RawMessage) (any, error) {
 	if err := refused(c.SQL); err != nil {
 		return nil, err
 	}
-	db, err := d.open()
+	db, done, err := d.use()
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	res, err := db.ExecContext(ctx, c.SQL, c.Params...)
 	if err != nil {
 		return nil, err
@@ -214,10 +229,11 @@ func (d *pluginDB) query(ctx context.Context, raw json.RawMessage) (any, error) 
 	if err := refused(c.SQL); err != nil {
 		return nil, err
 	}
-	db, err := d.open()
+	db, done, err := d.use()
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	rows, err := db.QueryContext(ctx, c.SQL, c.Params...)
 	if err != nil {
 		return nil, err
