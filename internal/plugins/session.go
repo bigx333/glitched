@@ -320,6 +320,7 @@ func (s *Session) run() {
 		if q.refresh {
 			continue
 		}
+		ran := s.runtime()
 		failed = s.apply(q, state, values, context)
 		s.mu.Lock()
 		if q.seq > 0 && q.gen == s.gen {
@@ -332,6 +333,12 @@ func (s *Session) run() {
 			if q.gen != s.gen {
 				s.mu.Unlock()
 				continue // a retry started the page over meanwhile
+			}
+			if s.p != ran {
+				// Its code was swapped as it failed: the new code starts it.
+				s.queue = append([]queued{{gen: s.gen, init: true}}, s.queue...)
+				s.mu.Unlock()
+				continue
 			}
 			s.broken, s.queue, s.dirty, s.running = true, nil, false, false
 			s.mu.Unlock()

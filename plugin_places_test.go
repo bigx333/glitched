@@ -184,4 +184,16 @@ func TestNewMessagesAreToldOnceEach(t *testing.T) {
 	if h.tt.HasText("heard 4") || h.tt.HasText("user:first") {
 		t.Fatalf("told twice, or of what it had: %q", h.tt.Texts())
 	}
+
+	// Away from it, and back: what came meanwhile is told on the return.
+	seed(t, d, "/work/glitched", "Write the docs")
+	other := h.thread("Write the docs")
+	h.a.select_(other)
+	h.until("the other thread", func() bool { return other.Transcript != nil })
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: "third"}}); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the turn done", func() bool { return h.thread("Fix the sort").View.LastTurn != nil && !h.thread("Fix the sort").View.Working() && h.thread("Fix the sort").View.Queued == 0 })
+	h.a.select_(h.thread("Fix the sort"))
+	h.until("what came while away", func() bool { return h.tt.HasText("heard 6") && h.tt.HasText("user:third") })
 }

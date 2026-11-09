@@ -148,3 +148,40 @@ type atomicCount struct {
 
 func (c *atomicCount) add()     { c.mu.Lock(); c.n++; c.mu.Unlock() }
 func (c *atomicCount) get() int { c.mu.Lock(); defer c.mu.Unlock(); return c.n }
+
+func TestAFailedPlaceDrawKeepsWhatTheLastOneSaid(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "flaky", `"capabilities": ["ui.place"], "glitched": { "places": [{ "id": "p", "at": "sidebar.footer" }] }, `, `
+		export function init() { return { state: 0 } }
+		export function update({ state }) { return { state: state + 1 } }
+		export function place({ state, items }) {
+			if (state > 0) throw new Error("not now")
+			return items.map(() => ({ type: "input", id: "in", value: "", controlled: true, onChange: "typed" }))
+		}`)
+	h := open(t, state, u, fx)
+	app := h.App("flaky")
+	app.SetItems("p", []PlaceItem{{Key: "", Version: "1"}})
+	u.until(t, "the first drawing", func() bool { return app.PlaceView("p", "") != nil })
+	rev, processed := app.Rev, app.Processed
+	app.Dispatch(UIEvent{Type: "change", Handler: "typed", Node: "in", Value: "hi", Place: &PlaceRef{ID: "p", At: "sidebar.footer"}}, nil)
+	u.until(t, "the failed draw", func() bool { return app.Err != nil })
+	if app.Rev != rev || app.Processed != processed || app.PlaceView("p", "") == nil {
+		t.Fatalf("a failed draw moved rev %d→%d, processed %d→%d", rev, app.Rev, processed, app.Processed)
+	}
+}
+
+func TestASaveAsInitFailsStartsTheNewCode(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "racy", "", `
+		export function init() { const until = Date.now() + 400; while (Date.now() < until) {} throw new Error("old code") }
+		export function view() { return { body: { type: "text", text: "never" } } }`)
+	h := open(t, state, u, fx)
+	stop := h.Watch(20 * time.Millisecond)
+	defer stop()
+	s := session(t, h, "racy")
+	time.Sleep(100 * time.Millisecond) // the old init runs
+	os.WriteFile(filepath.Join(Dir(state), "racy", "index.js"), []byte(`
+		export function init() { return { state: 2 } }
+		export function view({ state }) { return { body: { type: "text", text: "new " + state } } }`), 0o644)
+	u.until(t, "the new code's start", func() bool { return strings.Contains(texts(s), "new 2") })
+}

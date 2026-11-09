@@ -130,10 +130,13 @@ func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed
 		}
 		s.Err = failed
 		s.places.Slow = took
+		if failed != nil {
+			// Keep the last good drawing, and what it says of the events
+			// it took: its controls keep what the user typed.
+			s.Busy = s.running && (len(s.queue) > 0 || s.dirty)
+			return
+		}
 		for id, views := range drawn {
-			if failed != nil {
-				continue // keep the last good drawing
-			}
 			s.places.views[id] = views
 		}
 		s.Rev++

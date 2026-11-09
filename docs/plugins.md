@@ -219,7 +219,7 @@ A plugin hears the events its manifest lists, if it may:
 | Event | Data | Needs |
 | --- | --- | --- |
 | `thread.changed` | the thread's record (its title, status, workspace, machine or time changed), or `{id, deleted: true}` | `threads:read` |
-| `thread.message` | `{thread, role, text}`, each new message of the thread shown | `messages:read` |
+| `thread.message` | `{thread, role, text}`, each new message of a thread you have open: from when it's first shown, and while you're away from it once it was | `messages:read` |
 | `setting.changed` | `{id, value, was}` | |
 | `theme.changed` | `{appearance}` | |
 

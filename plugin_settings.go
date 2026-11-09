@@ -115,10 +115,12 @@ func (a *app) pluginSettingRows(c *ui.Context, id string) {
 		if st.Status != nil && st.Status.Text != "" {
 			desc = st.Status.Text
 		}
-		set := func(v any) {
+		set := func(v any) bool {
 			if err := a.plugins.SetSetting(id, st.ID, v); err != nil {
 				a.pluginNotice(ui.Toast{Title: "Couldn't set " + st.Label, Description: err.Error()})
+				return false
 			}
+			return true
 		}
 		ui.Column(c).Key("setting:" + st.ID).Children(func() {
 			settingRow(c, st.Label, desc, func() {
@@ -135,7 +137,7 @@ func (a *app) pluginSettingRows(c *ui.Context, id string) {
 	}
 }
 
-func (a *app) pluginSettingControl(c *ui.Context, st pluginSetting, set func(any)) {
+func (a *app) pluginSettingControl(c *ui.Context, st pluginSetting, set func(any) bool) {
 	switch st.Kind {
 	case "switch":
 		on, _ := st.Value.(bool)
@@ -209,8 +211,9 @@ func (a *app) pluginSettingControl(c *ui.Context, st pluginSetting, set func(any
 				a.pluginNotice(ui.Toast{Title: "Not a shortcut", Description: draft + ": cmd, ctrl or alt, then a key, as cmd+shift+k"})
 				return
 			}
-			delete(a.settingDrafts, k)
-			set(draft)
+			if set(draft) {
+				delete(a.settingDrafts, k) // a value refused stays to fix
+			}
 		}
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			e := ui.TextInput(c.Key("value"), &draft).Label(st.Label).Width(220).Placeholder(cmpOr(st.Placeholder, map[string]string{"shortcut": "cmd+shift+k"}[st.Kind]))
