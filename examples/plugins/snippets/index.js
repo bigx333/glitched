@@ -198,6 +198,10 @@ function onEffect(state, event) {
 }
 
 export function update({ state, event, values }) {
+  if (event.kind === "app" && event.type === "grant.changed") {
+    // Granted or taken back in Settings: ask again.
+    return { state: { ...state, threads: null, threadsError: null, error: null }, effects: [{ type: "threads.list", id: "threads" }] };
+  }
   return event.kind === "ui" ? onUI(state, event, values) : onEffect(state, event);
 }
 
