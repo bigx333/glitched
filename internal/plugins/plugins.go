@@ -380,6 +380,7 @@ func (h *Host) SetEnabled(id string, on bool) error {
 // A grant holds at once: a plugin's runtime asks its grants as it uses
 // them, so it goes on, with what its pages hold.
 func (h *Host) SetGranted(id, capability string, on bool) error {
+	defer h.tellGrant(id, capability, on)
 	return h.save(func(p *prefs) {
 		g := slices.DeleteFunc(slices.Clone(p.Grants[id]), func(s string) bool { return s == capability })
 		if on {
@@ -393,6 +394,16 @@ func (h *Host) SetGranted(id, capability string, on bool) error {
 			delete(p.Grants, id)
 		}
 	})
+}
+
+// tellGrant tells the plugin id's pages, tabs and app session that a
+// grant of its changed, so that what they show follows at once.
+func (h *Host) tellGrant(id, capability string, on bool) {
+	for k, s := range h.sessions {
+		if k.plugin == id {
+			s.Notify(AppEvent{Kind: "app", Type: "grant.changed", Data: map[string]any{"capability": capability, "granted": on}})
+		}
+	}
 }
 
 // grantedNow and allowedNow are granted and allowed, from a goroutine of
