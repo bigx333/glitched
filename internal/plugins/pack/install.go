@@ -490,19 +490,28 @@ func newer(a, b string) bool {
 // comparePre orders two prereleases by SemVer's rule: identifier by
 // identifier, numbers as numbers and below words, words as text, and a
 // prerelease that runs out first below the longer.
+func numeric(s string) bool {
+	return s != "" && strings.Trim(s, "0123456789") == ""
+}
+
 func comparePre(a, b string) int {
 	as, bs := strings.Split(a, "."), strings.Split(b, ".")
 	for k := range min(len(as), len(bs)) {
-		x, xerr := strconv.Atoi(as[k])
-		y, yerr := strconv.Atoi(bs[k])
+		x, y := numeric(as[k]), numeric(bs[k])
 		switch {
-		case xerr == nil && yerr == nil:
-			if x != y {
-				return cmp.Compare(x, y)
+		case x && y:
+			// Numbers of any length: fewer digits, past leading zeros, is
+			// smaller.
+			p, q := strings.TrimLeft(as[k], "0"), strings.TrimLeft(bs[k], "0")
+			if c := cmp.Compare(len(p), len(q)); c != 0 {
+				return c
 			}
-		case xerr == nil:
+			if c := strings.Compare(p, q); c != 0 {
+				return c
+			}
+		case x:
 			return -1
-		case yerr == nil:
+		case y:
 			return 1
 		default:
 			if c := strings.Compare(as[k], bs[k]); c != 0 {

@@ -249,7 +249,9 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 		// The service module runs only once service is granted; till then
 		// a plugin with tools answers them from its main module.
 		if main == x.Service && !h.allowed(m.ID, "service") {
-			if len(x.Tools) == 0 {
+			// A main module that is the service runs nothing till then:
+			// its tools wait with it.
+			if len(x.Tools) == 0 || filepath.Clean(x.Service) == filepath.Clean(m.Main) {
 				return nil, errNotHere
 			}
 			main = m.Main

@@ -265,7 +265,7 @@ const status = await glitched.service.call("status", { cwd: folder });
 - A run waits `timeout` seconds (60, at most 300), then its process group is killed (`status` -1). 16 MiB of output is kept per stream.
 - The consent sheet names each program, and says that git, gh, a shell or an interpreter can do anything you can.
 
-**`glitched.db`** is the plugin's own SQLite file (pure Go): 100 MB, up to 10,000 rows a query, parameters always bound, and no `ATTACH`, `DETACH`, `PRAGMA`, `VACUUM INTO` or extensions. It goes with the plugin.
+**`glitched.db`** is the plugin's own SQLite file (pure Go): 100 MB, up to 10,000 rows and 100 MB a query, parameters always bound. SQLite's authorizer refuses `ATTACH`, `DETACH`, `PRAGMA`, `VACUUM INTO` and loading extensions, however a statement is written. It goes with the plugin.
 
 **`glitched.service.call(method, args, {timeout})`**, with `service`, calls the plugin's service in this machine's engine (30 s, at most 300).
 
@@ -276,6 +276,7 @@ const status = await glitched.service.call("status", { cwd: folder });
 The engine (the one the window embeds, or `glitched serve`) runs each plugin's headless half: its `service` module, if it declares one and you granted `service`, else its main module if it has tools.
 
 - It exports `serve` (for `glitched.service.call`), `tool` (for agents) and `timer`.
+- Till `service` is granted, nothing of the service runs: not its top level, timers or tools. A plugin whose tools live in a main module of their own still answers them.
 - It runs with no window, in a runtime of 64 MiB. A call has 30 s; a tool, 60 s.
 - It stops after 5 minutes with nothing to do, and starts again on the next call, tool or timer. Its state goes then; keep what matters in `glitched.db`.
 - It follows `plugins.json` and the plugins folder as they change.
