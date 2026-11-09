@@ -166,6 +166,7 @@ func (a *app) threadsNav(c *ui.Context) {
 		})
 	}
 	ui.Column(c).Padding(8).Gap(1).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
+		a.pluginSlot(c, "sidebar.footer", "", nil)
 		a.pluginNav(c)
 		if ghost(c, "settings", false).Padding(7, 8).Children(func() {
 			ui.Icon(c, icSettings).FontSize(15)
@@ -367,6 +368,7 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 		} else {
 			name = ui.Text(c, title(t)).FontSize(13).SingleLine().Grow(1).Shrink(1)
 		}
+		a.pluginSlot(c, "thread.row", t.id().String(), &t)
 		if unread {
 			name.FontWeight(600).TextColor(palette.text)
 		}

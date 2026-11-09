@@ -1,0 +1,27 @@
+{
+  "id": "focus-timer",
+  "name": "Focus timer",
+  "description": "A focus timer in each thread's header, with its length in Settings.",
+  "version": "0.1.0",
+  "main": "index.js",
+  "contract": "glitched",
+  "contractVersion": 1,
+  "capabilities": ["ui.place", "notify"],
+  "permissions": {},
+  "contributes": {
+    "commands": [{ "id": "start", "title": "Start a focus block" }]
+  },
+  "glitched": {
+    "places": [{ "id": "timer", "at": "thread.header" }],
+    "tabs": [{ "id": "log", "title": "Focus", "icon": "clock" }],
+    "timers": [{ "id": "tick", "every": 30 }],
+    "events": ["setting.changed"],
+    "settings": [
+      { "id": "show", "kind": "switch", "label": "Show the timer", "description": "In each thread's header.", "default": true },
+      { "id": "length", "kind": "number", "label": "Length", "min": 5, "max": 90, "step": 5, "unit": "minutes", "default": 25 },
+      { "id": "end", "kind": "choice", "style": "segmented", "label": "When it ends",
+        "options": [{ "value": "notify", "label": "Notify" }, { "value": "quiet", "label": "Stay quiet" }], "default": "notify" }
+    ],
+    "shortcuts": [{ "command": "start", "key": "cmd+shift+f" }]
+  }
+}

@@ -446,7 +446,13 @@ func (h *Host) RunCommand(id, command string, done func(error)) {
 				}
 			})
 		}
-		h.opts.Post(func() { done(nil) })
+		h.opts.Post(func() {
+			// Its app session hears it ran, to draw what the command changed.
+			if s := h.sessions[pageKey{plugin: id}]; s != nil {
+				s.Notify(AppEvent{Kind: "app", Type: "command", Data: map[string]string{"id": command}})
+			}
+			done(nil)
+		})
 	}()
 }
 

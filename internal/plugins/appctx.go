@@ -202,3 +202,43 @@ func (h *Host) setStatus(id string, args json.RawMessage) error {
 	}
 	return nil
 }
+
+// PlaceAt is a place of a running plugin's at a slot.
+type PlaceAt struct {
+	Plugin string
+	Place  Place
+}
+
+// PlacesAt are the running plugins' places at the slot, in plugin order.
+func (h *Host) PlacesAt(at string) []PlaceAt {
+	var out []PlaceAt
+	for _, in := range h.running() {
+		for _, p := range in.ext.Places {
+			if p.At == at {
+				out = append(out, PlaceAt{in.manifest.ID, p})
+			}
+		}
+	}
+	return out
+}
+
+// ShortcutCommand is a command a running plugin binds to a key.
+type ShortcutCommand struct {
+	Plugin, PluginName, Command string
+	Key                         Key
+}
+
+// Shortcuts are the running plugins' shortcuts, in plugin order.
+func (h *Host) Shortcuts() []ShortcutCommand {
+	var out []ShortcutCommand
+	for _, in := range h.running() {
+		for _, s := range in.ext.Shortcuts {
+			k, err := parseKey(s.Key)
+			if err != nil {
+				continue
+			}
+			out = append(out, ShortcutCommand{in.manifest.ID, in.manifest.Name, s.Command, k})
+		}
+	}
+	return out
+}

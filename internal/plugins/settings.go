@@ -204,3 +204,24 @@ func isNamedKey(p string) bool {
 	}
 	return slices.Contains([]string{"enter", "space", "tab", "up", "down", "left", "right", "comma", "period", "slash"}, p)
 }
+
+// String is the shortcut as plugin.json writes it, modifiers in one order.
+func (k Key) String() string {
+	var parts []string
+	for _, m := range []struct {
+		on   bool
+		name string
+	}{{k.Cmd, "cmd"}, {k.Ctrl, "ctrl"}, {k.Alt, "alt"}, {k.Shift, "shift"}} {
+		if m.on {
+			parts = append(parts, m.name)
+		}
+	}
+	return strings.Join(append(parts, k.Name), "+")
+}
+
+// ValidShortcut reports whether s is a shortcut a plugin's setting may
+// hold.
+func ValidShortcut(s string) bool {
+	_, err := parseKey(s)
+	return err == nil
+}

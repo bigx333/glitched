@@ -94,6 +94,8 @@ func (a *app) chatPage(c *ui.Context) {
 			ui.Column(c).Key("diff").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.diffPanel(c, t, es) })
 		case a.showPreview:
 			ui.Column(c).Key("preview").Width(a.previewWidth()).Transition(panel(16, 0)).Children(func() { a.previewPanel(c) })
+		case a.showPluginTab:
+			ui.Column(c).Key("plugin-tab").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.pluginTabPanel(c, t) })
 		}
 	})
 }
@@ -174,7 +176,11 @@ func (a *app) header(c *ui.Context, t thread, es []entry) {
 			}
 			a.usagePill(c, t)
 		}
+		if !t.id().IsZero() {
+			a.pluginSlot(c, "thread.header", t.id().String(), &t)
+		}
 		ui.Spacer(c)
+		a.tabButtons(c)
 		if !t.local() {
 			a.previewButton(c)
 			return
