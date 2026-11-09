@@ -85,6 +85,10 @@ type installed struct {
 	enabled  bool
 	p        *plugin.Plugin // nil unless loaded
 	ext      Extension      // plugin.json's glitched block
+	raw      []byte         // plugin.json as loaded
+	// reloadErr is why the plugin's changed code didn't load: it runs the
+	// code it had.
+	reloadErr error
 }
 
 // prefs are what the user chose for the plugins, in plugins.json in the
@@ -145,6 +149,7 @@ func (h *Host) Reload() {
 			continue
 		}
 		in.manifest = *m
+		in.raw, _ = os.ReadFile(filepath.Join(in.folder, "plugin.json"))
 		in.enabled = !slices.Contains(h.prefs.Disabled, m.ID)
 		switch {
 		case seen[m.ID]:
@@ -250,6 +255,9 @@ func (h *Host) Installed() []Plugin {
 	for _, in := range h.installed {
 		m := in.manifest
 		p := Plugin{ID: m.ID, Name: m.Name, Version: m.Version, Description: m.Description, Folder: in.folder, Enabled: in.enabled, Err: in.err, Network: m.Permissions.Network}
+		if in.reloadErr != nil {
+			p.Err = fmt.Errorf("its changed code didn't load, so it runs the code it had: %w", in.reloadErr)
+		}
 		if p.Name == "" {
 			p.Name = filepath.Base(in.folder)
 		}

@@ -343,13 +343,13 @@ func (s *Session) apply(q queued, state json.RawMessage, values map[string]any, 
 	var raw json.RawMessage
 	var err error
 	switch {
-	case q.init && !s.p.Can("init"):
+	case q.init && !s.runtime().Can("init"):
 		s.setState(q.gen, nil)
 		return nil
 	case q.init:
 		err = s.call(0, "init", s.args(map[string]any{}, context), &raw)
 	default:
-		if !s.p.Can("update") {
+		if !s.runtime().Can("update") {
 			return errors.New("the plugin has no update export")
 		}
 		err = s.call(0, "update", s.args(map[string]any{"state": state, "event": q.event, "values": values}, context), &raw)
@@ -365,7 +365,7 @@ func (s *Session) apply(q queued, state json.RawMessage, values map[string]any, 
 		s.setState(q.gen, u.state)
 	}
 	for _, e := range u.effects {
-		s.h.effect(s.plugin, s.p, e, func() bool { return s.current(q.gen) }, func(result any, err error) {
+		s.h.effect(s.plugin, s.runtime(), e, func() bool { return s.current(q.gen) }, func(result any, err error) {
 			ev := EffectEvent{Kind: "effect", ID: e.ID, Effect: e.Type, OK: err == nil, Result: result}
 			if err != nil {
 				ev.Error, ev.Denied = err.Error(), errors.Is(err, ErrDenied)
@@ -477,13 +477,31 @@ func (s *Session) render(gen, processed int, state json.RawMessage, values map[s
 // reload, may have started the plugin's runtime again: closing it again
 // leaves none behind.
 func (s *Session) call(timeout time.Duration, method string, args map[string]any, out *json.RawMessage) error {
-	err := s.p.CallWithin(timeout, method, args, out)
+	p := s.runtime()
+	err := p.CallWithin(timeout, method, args, out)
 	s.mu.Lock()
 	done := s.done
 	s.mu.Unlock()
 	if done {
-		s.p.Close()
+		p.Close()
 		return errors.New("the page closed")
 	}
 	return err
+}
+
+// runtime is the plugin the session calls, which a hot reload swaps.
+func (s *Session) runtime() *plugin.Plugin {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.p
+}
+
+// swap moves the session to a reloaded plugin, keeping its state, and
+// draws it again.
+func (s *Session) swap(p *plugin.Plugin) {
+	s.mu.Lock()
+	s.p = p
+	s.mu.Unlock()
+	s.Err = nil
+	s.refresh()
 }

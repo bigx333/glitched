@@ -142,7 +142,7 @@ func (s *Session) renderPlaces(gen int, state json.RawMessage, failed error) {
 }
 
 func (s *Session) drawBatch(pl Place, state json.RawMessage, batch []PlaceItem, views map[string]*widget.Node) error {
-	if !s.p.Can("place") {
+	if !s.runtime().Can("place") {
 		return errors.New("the plugin has places but no place export")
 	}
 	type item struct {
