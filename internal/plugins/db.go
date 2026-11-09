@@ -26,31 +26,48 @@ const (
 // its data, and with no other file reachable through it.
 type pluginDB struct {
 	path string
-	once sync.Once
-	db   *sql.DB
-	err  error
+
+	mu     sync.Mutex // guards db and closed: a call of a runtime that is stopping may open it as the host closes it
+	db     *sql.DB
+	closed bool
 }
 
 func (d *pluginDB) open() (*sql.DB, error) {
-	d.once.Do(func() {
-		if err := os.MkdirAll(filepath.Dir(d.path), 0o700); err != nil {
-			d.err = err
-			return
-		}
-		// The size cap in pages, of its file and of its temp tables, set as
-		// each connection opens, before the authorizer, which refuses every
-		// later PRAGMA.
-		dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=trusted_schema(off)&_pragma=max_page_count(%d)&_pragma=temp.max_page_count(%d)", d.path, MaxDBBytes/4096, MaxDBBytes/4096)
-		db := sql.OpenDB(authorized{dsn})
-		db.SetMaxOpenConns(1)
-		if err := db.Ping(); err != nil {
-			d.err = err
-			db.Close()
-			return
-		}
-		d.db = db
-	})
-	return d.db, d.err
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		return nil, errors.New("the plugin stopped")
+	}
+	if d.db != nil {
+		return d.db, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(d.path), 0o700); err != nil {
+		return nil, err
+	}
+	// The size cap in pages, of its file and of its temp tables, set as
+	// each connection opens, before the authorizer, which refuses every
+	// later PRAGMA.
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=trusted_schema(off)&_pragma=max_page_count(%d)&_pragma=temp.max_page_count(%d)", d.path, MaxDBBytes/4096, MaxDBBytes/4096)
+	db := sql.OpenDB(authorized{dsn})
+	db.SetMaxOpenConns(1)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	d.db = db
+	return db, nil
+}
+
+func (d *pluginDB) close() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.closed = true
+	if d.db != nil {
+		d.db.Close()
+	}
 }
 
 // authorized opens connections whose authorizer keeps a plugin's SQL to
@@ -90,12 +107,6 @@ func authorize(action sqlite.AuthorizerActionCode, _, arg2, _, _ string) sqlite.
 		}
 	}
 	return sqlite.AuthorizerOK
-}
-
-func (d *pluginDB) close() {
-	if d != nil && d.db != nil {
-		d.db.Close()
-	}
 }
 
 type dbCall struct {
