@@ -371,6 +371,28 @@ func TestAnAgentsRefusedActionShowsNothing(t *testing.T) {
 	}
 }
 
+// A click the page made succeeds, even if what follows it doesn't finish:
+// an agent told it failed would click again, and submit a form twice.
+func TestAnAgentsActionThatWentThroughSucceeds(t *testing.T) {
+	a, ab, made := agents(t)
+	first, _ := callTool(t, ab, "browser_navigate", `{"url":"go.dev"}`)
+	callTool(t, ab, "browser_tabs", `{"action":"new","url":"example.com"}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	(*made)[0].onAct = func() error { cancel(); return nil }
+	out, err := ab.call(ctx, "browser_click", json.RawMessage(`{"ref":"`+refIn(t, first, "Docs")+`"}`))
+	if err != nil || !strings.HasPrefix(out, "The click went through, but what followed didn't finish") {
+		t.Errorf("a click whose call ended as it acted answered %q, %v", out, err)
+	}
+	if n := len((*made)[0].acts); n != 1 {
+		t.Errorf("the page acted %d times", n)
+	}
+	// What the agent gave up on didn't show the tab.
+	if a.browser.active != 1 {
+		t.Errorf("tab %d shows", a.browser.tabs[a.browser.active].id)
+	}
+}
+
 // A tab whose page can't start closes again, leaving the pane as it was.
 func TestAnAgentsTabThatCannotStartGoes(t *testing.T) {
 	a, ab, _ := agents(t)
