@@ -440,13 +440,22 @@ func (ab *agentBrowser) act(ctx context.Context, tool string, args toolArgs) (st
 	if err != nil {
 		return "", agentError(err)
 	}
+	// The page has acted, so from here on the call succeeds: an agent told
+	// it failed would act again, and submit a form twice.
+	acted := func(err error) (string, error) {
+		verb := "click"
+		if tool == "browser_type" {
+			verb = "typing"
+		}
+		return fmt.Sprintf("The %s went through, but what followed didn't finish: %v Take a new snapshot to see the page.\n", verb, agentError(err)), nil
+	}
 	// Shown once it acted, so a refusal leaves the pane as it was.
 	if err := ab.view(ctx, func() error { ab.show(t); return nil }); err != nil {
-		return "", err
+		return acted(err)
 	}
 	out, err := ab.loaded(ctx, t, p, false)
 	if err != nil {
-		return "", err
+		return acted(err)
 	}
 	// The page may have opened tabs, which the agent hears of, as it
 	// reads only the page it acted on.
