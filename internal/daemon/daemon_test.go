@@ -524,7 +524,7 @@ func TestWithClaudeGivesRunsTheBrowser(t *testing.T) {
 	if err != nil || json.Unmarshal(b, &mcp) != nil {
 		t.Fatalf("the MCP config: %v %s", err, b)
 	}
-	s := mcp.MCPServers["glitched"]
+	s := mcp.MCPServers[browsermcp.ServerName]
 	got := append([]string{s.Command}, s.Args...)
 	if want := browsermcp.Command(filepath.Join(base, "state")); s.Type != "stdio" || !slices.Equal(got, want) {
 		t.Errorf("the MCP config runs %q, want %q", got, want)

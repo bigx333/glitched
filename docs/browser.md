@@ -332,7 +332,7 @@ bridge and its process model. Its CEF host is the model for a CEF adapter.
 ## Agents
 
 Claude Code runs in threads get the browser as an MCP server named
-`glitched`, all in Go:
+`glitched-browser`, all in Go:
 
 ```
  claude ──stdio MCP──▶ glitched browser-mcp -dir D ──browser.sock──▶ the app (agentbrowser.go)
@@ -342,12 +342,16 @@ Claude Code runs in threads get the browser as an MCP server named
 
 - **The engine**, `glitched serve` or the app's own, running Claude Code
   (`daemon.Config.WithClaude`), writes `browser-mcp.json` in its state
-  directory as it starts, `{"mcpServers":{"glitched":{"type":"stdio",
+  directory as it starts, `{"mcpServers":{"glitched-browser":{"type":"stdio",
   "command":"<the program running>","args":["browser-mcp","-dir","<the
-  directory>"]}}}`, and gives each run `--mcp-config` that file, beside
-  the user's own servers (`claude.Adapter.MCPConfig`). A file, not JSON on
-  the command line, which a `claude.cmd` shim on Windows would hand to
-  cmd.exe to unquote. Both the CLI and the app answer `browser-mcp`; the
+  directory>"]}}}`, and gives each run that file beside the user's own
+  servers (`claude.Adapter.MCPConfig`). It goes in the same
+  `--mcp-config` as the run's inline `glitched` server (glitched mcp,
+  `docs/daemon/child-threads.md`), after it. A file, not JSON on the
+  command line, which a `claude.cmd` shim on Windows would hand to
+  cmd.exe to unquote. Its own name keeps the browser's tools out of
+  `--allowedTools mcp__glitched__*`, which lets glitched mcp's run without
+  asking. Both the CLI and the app answer `browser-mcp`; the
   app does so with no window.
 - **`glitched browser-mcp`** speaks MCP on stdio (initialize, tools/list,
   tools/call, ping) and passes each call to the app on the state
@@ -368,7 +372,7 @@ Claude Code runs in threads get the browser as an MCP server named
   or acts shows the pane and its tab, so the user sees what the agent
   does, waits for the page to load (15 seconds at most), and answers with
   the page's next snapshot. They go through Claude Code's permissions, as
-  `mcp__glitched__browser_*`: in Ask mode, the thread's approval card.
+  `mcp__glitched-browser__browser_*`: in Ask mode, the thread's approval card.
 - **Actions** run in the page script (`act`), the same on every engine.
   It resolves the ref and checks the element is still the role and name
   the snapshot gave it, shown and enabled, and not what a user couldn't

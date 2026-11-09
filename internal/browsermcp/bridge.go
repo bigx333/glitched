@@ -57,15 +57,21 @@ func Main(ctx context.Context, args []string, in io.Reader, out io.Writer) error
 }
 
 // WriteConfig writes the Claude Code MCP config (--mcp-config) that runs
-// command as the browser's server, named "glitched", to a file in the
+// command as the browser's server, named ServerName, to a file in the
 // state directory dir, and returns its path.
 func WriteConfig(dir string, command []string) (string, error) {
 	path := filepath.Join(dir, "browser-mcp.json")
 	err := jsonfile.Write(path, map[string]any{"mcpServers": map[string]any{
-		"glitched": map[string]any{"type": "stdio", "command": command[0], "args": command[1:]},
+		ServerName: map[string]any{"type": "stdio", "command": command[0], "args": command[1:]},
 	}})
 	return path, err
 }
+
+// ServerName is the browser's server among a run's MCP servers. It is not
+// glitched mcp's "glitched", whose tools a run allows without asking: the
+// browser's go through Claude Code's permissions, as
+// mcp__glitched-browser__browser_*.
+const ServerName = "glitched-browser"
 
 // ErrNoApp is why a tool fails while the app isn't open.
 var ErrNoApp = errors.New("The Glitched app isn't open on this machine, so its browser can't be reached. Ask the user to open Glitched, then try again.")
