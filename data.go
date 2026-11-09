@@ -481,6 +481,7 @@ func (a *app) follow() {
 // transcript stays open, and each turn that ended since is told of once.
 func (a *app) changed() {
 	a.follow()
+	a.emitThreadChanges()
 	for _, e := range a.backend.Envs() {
 		for id, th := range e.Threads {
 			var ended time.Time

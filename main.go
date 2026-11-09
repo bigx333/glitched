@@ -462,6 +462,21 @@ type app struct {
 	// pluginLater are what plugins asked for that takes a frame: toasts
 	// and the clipboard.
 	pluginLater []func(c *ui.Context)
+	// placeFrame is what this frame drew of the plugins' places, and
+	// placeControls their inputs' values.
+	placeFrame    placeFrame
+	placeControls map[placeKey]*render.Controls
+	// pluginRecords and pluginMessages are what the plugins were last told
+	// of the threads, and of the shown one's messages.
+	pluginRecords  map[string]string
+	pluginMessages map[string]int
+	// showPluginTab shows pluginTabShown in the panel beside the chat.
+	showPluginTab  bool
+	pluginTabShown pluginTab
+	pluginDark     *bool
+	// openFolder, when set, chooses a folder in place of the system's
+	// dialog, as in a test.
+	openFolder func() string
 }
 
 // newApp is the app on the engines its state directory dir names. The
@@ -504,6 +519,9 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		covers:         map[coverKey]*ui.Handle{},
 		pluginPages:    map[pluginKey]*pluginPage{},
 		pluginControls: map[pluginKey]*render.Controls{},
+		placeControls:  map[placeKey]*render.Controls{},
+		pluginRecords:  map[string]string{},
+		pluginMessages: map[string]int{},
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,
@@ -561,6 +579,14 @@ func (a *app) applyTheme(c *ui.Context) {
 	t.Radius = 8
 	t.FontSize = float32(a.settings.fontSize)
 	c.SetTheme(&t)
+	if a.plugins != nil && (a.pluginDark == nil || *a.pluginDark != t.Dark) {
+		dark, first := t.Dark, a.pluginDark == nil
+		a.pluginDark = &dark
+		if !first {
+			appearance := map[bool]string{true: "dark", false: "light"}[dark]
+			a.plugins.Emit("theme.changed", func(string) any { return map[string]string{"appearance": appearance} })
+		}
+	}
 }
 
 // pane is the material of a floating panel: Liquid Glass, or a plain
@@ -687,6 +713,7 @@ func (a *app) view(c *ui.Context) {
 	}
 	a.pluginLater = nil
 	a.toasts(c)
+	a.syncPlaces()
 }
 
 func (a *app) pages(c *ui.Context) {
@@ -731,6 +758,7 @@ func (a *app) shortcuts(c *ui.Context) {
 	if c.Shortcut(ui.Cmd, ui.KeyComma) {
 		a.router.Push("/settings/general")
 	}
+	a.pluginShortcuts(c)
 	a.browserShortcuts(c)
 }
 

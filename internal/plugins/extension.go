@@ -84,7 +84,6 @@ var Slots = []Slot{
 	{"thread.header", true, "thread", "A thread's header, after its title."},
 	{"thread.row", true, "thread", "Each row of the sidebar's thread list, after its title. Built once per row."},
 	{"sidebar.footer", false, "", "The sidebar's foot, over Settings."},
-	{"composer.footer", false, "thread", "Under the composer of the thread shown."},
 }
 
 // Events are the app events a plugin may hear, and the capability each

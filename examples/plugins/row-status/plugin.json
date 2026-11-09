@@ -1,0 +1,15 @@
+{
+  "id": "row-status",
+  "name": "Row status",
+  "description": "A badge on each sidebar row: what the thread is doing, and how often it changed.",
+  "version": "0.1.0",
+  "main": "index.js",
+  "contract": "glitched",
+  "contractVersion": 1,
+  "capabilities": ["ui.place", "threads:read"],
+  "permissions": {},
+  "glitched": {
+    "places": [{ "id": "badge", "at": "thread.row" }],
+    "events": ["thread.changed"]
+  }
+}
