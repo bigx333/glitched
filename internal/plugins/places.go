@@ -60,7 +60,9 @@ func (h *Host) App(id string) *Session {
 	s := &Session{h: h, p: in.p, plugin: id, places: &placeSet{places: x.Places, items: map[string][]PlaceItem{}, views: map[string]map[string]*widget.Node{}}}
 	h.sessions[k] = s
 	s.push(queued{init: true})
-	h.startTimers(s, x.Timers)
+	if x.Service == "" {
+		h.startTimers(s, x.Timers) // a plugin with a service has its timers there
+	}
 	return s
 }
 

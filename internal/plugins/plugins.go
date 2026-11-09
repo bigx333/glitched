@@ -200,6 +200,15 @@ func (h *Host) Reload() {
 	h.mu.Lock()
 	h.installed = list
 	h.mu.Unlock()
+	// A window's plugin with timers wakes on them though it has no place
+	// shown yet: its app session starts now.
+	if h.opts.Main == nil {
+		for _, in := range h.running() {
+			if len(in.ext.Timers) > 0 && in.ext.Service == "" && in.p.Can("update") {
+				h.App(in.manifest.ID)
+			}
+		}
+	}
 }
 
 func (h *Host) load(in *installed) (*plugin.Plugin, error) {
