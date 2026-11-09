@@ -1,6 +1,8 @@
 package plugins
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -184,4 +186,68 @@ func TestASaveAsInitFailsStartsTheNewCode(t *testing.T) {
 		export function init() { return { state: 2 } }
 		export function view({ state }) { return { body: { type: "text", text: "new " + state } } }`), 0o644)
 	u.until(t, "the new code's start", func() bool { return strings.Contains(texts(s), "new 2") })
+}
+
+// SQLite itself refuses what would reach past the plugin's own file, past
+// any filter on the statement's text.
+func TestTheDatabasesAuthorizerKeepsItToItsFile(t *testing.T) {
+	dir, other := t.TempDir(), t.TempDir()
+	d := &pluginDB{path: filepath.Join(dir, "plugin.db")}
+	defer d.close()
+	db, err := d.open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		"ATTACH DATABASE '" + filepath.Join(other, "a.db") + "' AS x",
+		"VACUUM INTO '" + filepath.Join(other, "v.db") + "'",
+		"PRAGMA max_page_count = 1000000",
+		"SELECT load_extension('x')",
+	} {
+		if _, err := db.Exec(q); err == nil {
+			t.Errorf("%q ran", q)
+		}
+	}
+	if entries, _ := os.ReadDir(other); len(entries) != 0 {
+		t.Fatalf("wrote %v elsewhere", entries)
+	}
+	if _, err := db.Exec("CREATE TABLE t (a INTEGER); INSERT INTO t VALUES (1)"); err != nil {
+		t.Fatal(err)
+	}
+	// Through glitched.db, a quoted comment opener hides nothing.
+	for _, q := range []string{
+		"SELECT '/*'; ATTACH DATABASE '" + filepath.Join(other, "s.db") + "' AS pwn",
+		`SELECT "/*" AS x; ATTACH DATABASE '` + filepath.Join(other, "s.db") + "' AS pwn; SELECT '*/'",
+		"SELECT '/*'; VACUUM INTO '" + filepath.Join(other, "s.db") + "'",
+	} {
+		raw, _ := json.Marshal(map[string]string{"sql": q})
+		if _, err := d.exec(context.Background(), raw); err == nil {
+			t.Errorf("%q ran", q)
+		}
+	}
+	if entries, _ := os.ReadDir(other); len(entries) != 0 {
+		t.Fatalf("wrote %v elsewhere", entries)
+	}
+}
+
+func TestAServiceThatIsItsMainModuleWaitsForItsGrant(t *testing.T) {
+	state := t.TempDir()
+	writeModule(t, state, "one", `"capabilities": ["service", "tools"], "glitched": { "service": "./index.js", "tools": [{ "name": "ping", "description": "Pings." }] }, `, `
+		await glitched.db.exec("CREATE TABLE IF NOT EXISTS ran (a INTEGER)")
+		export function tool() { return 1 }
+		export function view() {}`)
+	s := StartServices(state, ServiceOptions{Logf: t.Logf})
+	defer s.Close()
+	if _, err := s.CallTool(context.Background(), ToolCall{Plugin: "one", Name: "ping"}); err == nil {
+		t.Fatal("its tool ran without the service grant")
+	}
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(DataDir(state), "one", "plugin.db")); err == nil {
+		t.Fatal("its code ran without the service grant")
+	}
+	grant(t, state, `{"grants": {"one": ["service"]}}`)
+	eventually(t, "its tool once granted", func() bool {
+		_, err := s.CallTool(context.Background(), ToolCall{Plugin: "one", Name: "ping"})
+		return err == nil
+	})
 }

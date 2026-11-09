@@ -3,6 +3,7 @@ package plugins
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	_ "modernc.org/sqlite" // pure Go: no cgo
+	"modernc.org/sqlite" // pure Go: no cgo
 )
 
 // The bounds of a plugin's database.
@@ -36,16 +37,12 @@ func (d *pluginDB) open() (*sql.DB, error) {
 			d.err = err
 			return
 		}
-		// No ATTACH of other files, no loading extensions, and a size cap
-		// in pages.
-		dsn := "file:" + d.path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=trusted_schema(off)"
-		db, err := sql.Open("sqlite", dsn)
-		if err != nil {
-			d.err = err
-			return
-		}
+		// The size cap in pages, set as each connection opens, before the
+		// authorizer, which refuses every later PRAGMA.
+		dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=trusted_schema(off)&_pragma=max_page_count(%d)", d.path, MaxDBBytes/4096)
+		db := sql.OpenDB(authorized{dsn})
 		db.SetMaxOpenConns(1)
-		if _, err := db.Exec(fmt.Sprintf("PRAGMA max_page_count = %d", MaxDBBytes/4096)); err != nil {
+		if err := db.Ping(); err != nil {
 			d.err = err
 			db.Close()
 			return
@@ -53,6 +50,45 @@ func (d *pluginDB) open() (*sql.DB, error) {
 		d.db = db
 	})
 	return d.db, d.err
+}
+
+// authorized opens connections whose authorizer keeps a plugin's SQL to
+// its own file: SQLite itself refuses ATTACH, DETACH, PRAGMA and loading
+// an extension, however the statement is written. VACUUM INTO attaches
+// its target, which the authorizer refuses too.
+type authorized struct{ dsn string }
+
+var sqliteDriver = &sqlite.Driver{}
+
+func (a authorized) Driver() driver.Driver { return sqliteDriver }
+
+func (a authorized) Connect(context.Context) (driver.Conn, error) {
+	conn, err := sqliteDriver.Open(a.dsn)
+	if err != nil {
+		return nil, err
+	}
+	r, ok := conn.(sqlite.AuthorizerRegisterer)
+	if !ok {
+		conn.Close()
+		return nil, errors.New("this SQLite can't keep a plugin to its own file")
+	}
+	if err := r.RegisterAuthorizer(authorize); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+func authorize(action sqlite.AuthorizerActionCode, _, arg2, _, _ string) sqlite.AuthorizerReturnCode {
+	switch action {
+	case sqlite.AuthAttach, sqlite.AuthDetach, sqlite.AuthPragma:
+		return sqlite.AuthorizerDeny
+	case sqlite.AuthFunction:
+		if strings.EqualFold(arg2, "load_extension") {
+			return sqlite.AuthorizerDeny
+		}
+	}
+	return sqlite.AuthorizerOK
 }
 
 func (d *pluginDB) close() {
@@ -84,7 +120,9 @@ func refused(q string) error {
 	return nil
 }
 
-// sqlWords are a statement's words, upper-cased, its comments left out.
+// sqlWords are a statement's words, upper-cased: outside its comments,
+// and outside its string literals and quoted names, which hold no keyword
+// and may hold what looks like a comment.
 func sqlWords(q string) []string {
 	var words []string
 	var w strings.Builder
@@ -94,8 +132,22 @@ func sqlWords(q string) []string {
 			w.Reset()
 		}
 	}
+	closer := map[byte]byte{'\'': '\'', '"': '"', '`': '`', '[': ']'}
 	for i := 0; i < len(q); i++ {
+		c := q[i]
 		switch {
+		case closer[c] != 0:
+			flush()
+			end := closer[c]
+			for i++; i < len(q); i++ {
+				if q[i] == end {
+					if end != ']' && i+1 < len(q) && q[i+1] == end {
+						i++ // a doubled quote is the quote
+						continue
+					}
+					break
+				}
+			}
 		case strings.HasPrefix(q[i:], "--"):
 			flush()
 			for i < len(q) && q[i] != '\n' {
@@ -108,8 +160,8 @@ func sqlWords(q string) []string {
 				return words
 			}
 			i += end + 3
-		case q[i] == '_' || q[i] >= 'a' && q[i] <= 'z' || q[i] >= 'A' && q[i] <= 'Z' || q[i] >= '0' && q[i] <= '9':
-			w.WriteByte(q[i])
+		case c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9':
+			w.WriteByte(c)
 		default:
 			flush()
 		}

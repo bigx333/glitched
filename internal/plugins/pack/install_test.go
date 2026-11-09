@@ -478,3 +478,9 @@ func TestPrereleasesOrderBySemVer(t *testing.T) {
 		}
 	}
 }
+
+func TestHugeNumericPrereleasesOrder(t *testing.T) {
+	if !newer("1.0.0-100000000000000000000", "1.0.0-99999999999999999999") || newer("1.0.0-rc.01", "1.0.0-rc.1") || !newer("1.0.0-rc.010", "1.0.0-rc.9") {
+		t.Fatal("misordered")
+	}
+}
