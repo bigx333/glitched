@@ -259,8 +259,9 @@ func TestRemoveProjectRechecksForALiveRun(t *testing.T) {
 	}
 }
 
-// A draft left in a server's project starts over in the server's home,
-// not this machine's, once the project is removed.
+// A draft left in a server's project starts over in a workspace the
+// server has, its newest project left, never in "~", which its engine
+// doesn't expand and claude can't start in.
 func TestRemoveProjectResetsADraftOnAServer(t *testing.T) {
 	h := machines(t)
 	devbox := h.thread("Retry failed invoice webhooks").env
@@ -275,8 +276,33 @@ func TestRemoveProjectResetsADraftOnAServer(t *testing.T) {
 		h.tt.Frame()
 		return !slices.ContainsFunc(h.a.projects, func(p *project) bool { return p.key.workspace == "/srv/billing" })
 	})
-	if h.a.fresh != (draft{devbox, "~"}) {
-		t.Fatalf("the draft is %+v, want devbox's home", h.a.fresh)
+	if h.a.fresh != (draft{devbox, "/srv/api"}) {
+		t.Fatalf("the draft is %+v, want devbox's api project, the one left", h.a.fresh)
+	}
+}
+
+// A draft on a server whose last project is removed goes to the app's
+// default, this machine's home, rather than a folder the server lacks.
+func TestRemoveAServersLastProjectMovesItsDraftHome(t *testing.T) {
+	h := machines(t)
+	devbox := h.thread("Retry failed invoice webhooks").env
+	for _, ws := range []string{"/srv/billing", "/srv/api"} {
+		h.a.fresh = draft{devbox, ws}
+		i := slices.IndexFunc(h.a.projects, func(p *project) bool { return p.env == devbox && p.key.workspace == ws })
+		if i < 0 {
+			t.Fatalf("devbox has no project in %s", ws)
+		}
+		h.a.removeProject(h.a.projects[i])
+		h.until(ws+" gone", func() bool {
+			h.tt.Frame()
+			return !slices.ContainsFunc(h.a.projects, func(p *project) bool { return p.key.workspace == ws })
+		})
+	}
+	if h.a.fresh != (draft{}) {
+		t.Fatalf("the draft is %+v, want the default draft: devbox has no project left", h.a.fresh)
+	}
+	if d := h.a.current(); d.env != h.local() || d.View.Workspace != homeDir() {
+		t.Fatalf("the draft shows %q, want this machine's home", d.View.Workspace)
 	}
 }
 
