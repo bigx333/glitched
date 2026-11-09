@@ -382,7 +382,8 @@ Claude Code runs in threads get the browser as an MCP server named
     of its own, what is in it), then its labels (a field hidden for a
     styled one is clicked through its label), then near its boxes' edges
     (one mostly clipped). The first point where what shows is the
-    element, what is in it, or its label, takes the pointer and mouse
+    element, what is in it, or its label, and, in each document around
+    a frame it is in, that frame, takes the pointer and mouse
     events (down, up, click), sent to what shows there, as a user's
     would be. Where none is, it says what covers it (a banner, a dialog's
     backdrop), or that it takes no clicks where it shows
