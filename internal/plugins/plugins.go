@@ -46,8 +46,7 @@ type Options struct {
 	// AppVersion is Glitched's version, which a plugin's minAppVersion is
 	// checked against.
 	AppVersion string
-	// Language is the user's language, as a BCP 47 tag.
-	Language func() string
+
 	// OpenURL opens a web page in the user's browser.
 	OpenURL func(string) error
 	// Logf logs a plugin that doesn't load, and what plugins log.
@@ -99,6 +98,10 @@ type Host struct {
 	statuses  map[string]map[string]SettingStatus
 
 	sessions map[pageKey]*Session
+	language atomic.Value // the user's language, a string, as the app last set it
+	// stopping are the runtimes and databases on their way to stop, which
+	// Close and Remove wait for.
+	stopping sync.WaitGroup
 }
 
 type installed struct {
@@ -151,6 +154,7 @@ func Open(stateDir string, o Options) *Host {
 		o.Post = func(fn func()) { fn() }
 	}
 	h := &Host{state: stateDir, opts: o, sessions: map[pageKey]*Session{}}
+	h.language.Store("en")
 	if err := jsonfile.Load(prefsPath(stateDir), &h.prefs); err != nil && !errors.Is(err, os.ErrNotExist) {
 		o.Logf("plugins: %v", err)
 	}
@@ -277,11 +281,19 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 		IdleTimeout: h.opts.IdleTimeout,
 		MemoryLimit: h.opts.MemoryLimit,
 		Allowed:     func(id, _ string) bool { return h.grantedNow(id, Network) },
+		// The runtime's own callbacks run on its loop: none waits on the UI
+		// thread, which may itself be waiting for the runtime to stop.
 		Host: plugin.Host{
-			Language: h.opts.Language,
-			OpenURL:  h.opts.OpenURL,
-			Logf:     h.opts.Logf,
-			Setting:  h.settingText,
+			Language: func() string { return h.language.Load().(string) },
+			OpenURL: func(u string) error {
+				if h.opts.OpenURL == nil {
+					return errors.New("this app opens no web pages")
+				}
+				go h.opts.OpenURL(u)
+				return nil
+			},
+			Logf:    h.opts.Logf,
+			Setting: h.settingText,
 		},
 	})
 }
@@ -405,6 +417,15 @@ func (h *Host) tellGrant(id, capability string, on bool) {
 		if k.plugin == id {
 			s.Notify(AppEvent{Kind: "app", Type: "grant.changed", Data: map[string]any{"capability": capability, "granted": on}})
 		}
+	}
+}
+
+// SetLanguage sets the user's language, a BCP 47 tag, which plugins read
+// with host.language(). The app sets it on the UI thread, where asking it
+// waits on nothing; a plugin's runtime only reads it.
+func (h *Host) SetLanguage(tag string) {
+	if tag != "" {
+		h.language.Store(tag)
 	}
 }
 
@@ -633,13 +654,16 @@ func (h *Host) openURL(u string) error {
 	return h.opts.OpenURL(u)
 }
 
-// Close stops every plugin's pages and runtime, and waits for them: their
-// databases are closed once it returns.
-func (h *Host) Close() { h.closeAll().Wait() }
+// Close stops every plugin's pages and runtime, and waits for them, and
+// for those reloads stopped: their databases are closed once it returns.
+func (h *Host) Close() {
+	h.closeAll()
+	h.stopping.Wait()
+}
 
 // closeAll stops every plugin's pages and runtime, off the UI thread: a
 // runtime still starting takes up to its load timeout to stop.
-func (h *Host) closeAll() *sync.WaitGroup {
+func (h *Host) closeAll() {
 	for k, s := range h.sessions {
 		s.close()
 		delete(h.sessions, k)
@@ -648,13 +672,12 @@ func (h *Host) closeAll() *sync.WaitGroup {
 	list := h.installed
 	h.installed = nil
 	h.mu.Unlock()
-	var stopped sync.WaitGroup
 	for _, in := range list {
 		if in.alive != nil {
 			in.alive.Store(false) // its calls waiting on the UI thread do nothing
 		}
 		if in.p != nil {
-			stopped.Go(func() {
+			h.stopping.Go(func() {
 				in.p.Shutdown()
 				if in.db != nil {
 					in.db.close()
@@ -662,7 +685,6 @@ func (h *Host) closeAll() *sync.WaitGroup {
 			})
 		}
 	}
-	return &stopped
 }
 
 // errNotHere is a plugin this host doesn't run: a service host runs only

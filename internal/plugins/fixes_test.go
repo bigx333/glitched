@@ -332,3 +332,26 @@ func TestOnlyWhatRunsReloadsTheEngine(t *testing.T) {
 		t.Fatal("turning off or a consent doesn't reload")
 	}
 }
+
+// Close, on the UI thread, never waits on a runtime that waits on the UI
+// thread: the runtime's callbacks don't.
+func TestCloseDoesntWaitOnARuntimeWaitingOnTheUIThread(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "opener", "", `
+		export function init() { host.openURL("https://example.com"); return { state: 1 } }
+		export function view() { return { body: { type: "text", text: "opened" } } }`)
+	release := make(chan struct{})
+	defer close(release)
+	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf, SignOwn: true,
+		OpenURL: func(string) error { <-release; return nil }, // as the UI thread would, while it waits in Close
+	})
+	s := session(t, h, "opener")
+	u.until(t, "the view", func() bool { return strings.Contains(texts(s), "opened") })
+	done := make(chan struct{})
+	go func() { h.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close waited on a runtime waiting on the UI thread")
+	}
+}
