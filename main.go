@@ -31,6 +31,7 @@ import (
 	eng "glitched/internal/engine"
 	"glitched/internal/mcp"
 	"glitched/internal/plugins"
+	"glitched/internal/plugins/pack"
 	"glitched/internal/plugins/render"
 	"glitched/internal/transport"
 	"glitched/wind"
@@ -485,6 +486,13 @@ type app struct {
 	// services reaches the plugins' services in this machine's engine.
 	serviceMu sync.Mutex
 	services  *transport.EndpointClient
+	// pluginSource is the install field's; pluginBusy is set while an
+	// install, an update or a check runs; pluginUpdates are what the last
+	// check found.
+	pluginSource  string
+	pluginBusy    bool
+	pluginUpdates []pack.Found
+	pluginChecked bool
 }
 
 // newApp is the app on the engines its state directory dir names. The

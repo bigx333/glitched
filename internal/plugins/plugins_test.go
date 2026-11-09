@@ -59,6 +59,7 @@ func install(t *testing.T, state, name string) {
 			t.Fatal(err)
 		}
 	}
+	signAsOwn(t, state, dst)
 }
 
 func writePlugin(t *testing.T, state, name, manifest string) {
@@ -72,6 +73,9 @@ func writePlugin(t *testing.T, state, name, manifest string) {
 	}
 	if err := os.WriteFile(filepath.Join(dst, "index.js"), []byte("export function page() { return { title: 'x', sections: [] } }"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	if strings.HasPrefix(manifest, "{\"") {
+		signAsOwn(t, state, dst) // not the broken one
 	}
 }
 

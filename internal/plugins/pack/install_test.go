@@ -110,7 +110,7 @@ func TestUpdateReportsWhatItNewlyAsksFor(t *testing.T) {
 	writePackage(t, pkg, author, "hello", "1.0.0", map[string]any{
 		"capabilities": []string{"clipboard"},
 		"permissions":  map[string]any{"network": []string{"api.example.com"}},
-		"tools":        []any{map[string]any{"name": "search", "description": "Searches"}},
+		"glitched":     map[string]any{"tools": []any{map[string]any{"name": "search", "description": "Searches"}}},
 	})
 	if _, err := inst.Install(ctx, Source{Location: pkg}); err != nil {
 		t.Fatal(err)
@@ -122,9 +122,11 @@ func TestUpdateReportsWhatItNewlyAsksFor(t *testing.T) {
 	writePackage(t, pkg, author, "hello", "1.1.0", map[string]any{
 		"capabilities": []string{"clipboard", "notify"},
 		"permissions":  map[string]any{"network": []string{"cdn.example.com"}, "process": []string{"git"}},
-		"commands":     []string{"rg"},
-		"tools":        []any{map[string]any{"name": "search", "description": "Searches better"}, "index"},
-		"service":      map[string]any{"command": "node", "args": []string{"serve.js"}},
+		"glitched": map[string]any{
+			"programs": []string{"rg"},
+			"tools":    []any{map[string]any{"name": "search", "description": "Searches better"}, "index"},
+			"service":  "service.js",
+		},
 	})
 	want := Diff{
 		"capabilities": {Added: []string{"notify"}},
@@ -132,7 +134,7 @@ func TestUpdateReportsWhatItNewlyAsksFor(t *testing.T) {
 		"process":      {Added: []string{"git"}},
 		"commands":     {Added: []string{"rg"}},
 		"tools":        {Added: []string{"index"}},
-		"service":      {Added: []string{`{"args":["serve.js"],"command":"node"}`}},
+		"service":      {Added: []string{`"service.js"`}},
 	}
 	found, err := inst.CheckUpdates(ctx)
 	if err != nil || len(found) != 1 || found[0].Err != nil {

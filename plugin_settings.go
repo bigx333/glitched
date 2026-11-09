@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/plugins"
+	"glitched/internal/plugins/pack"
 )
 
 // displayPath is a path as the user reads it, from ~ when it's in the
@@ -31,6 +36,21 @@ func (a *app) pluginSettings(c *ui.Context) {
 				a.pluginsChanged(nil)
 			})
 		})
+		settingRow(c, "Install a plugin", "A .glitched-plugin file, a link to one, a GitHub release or repository (owner/repo), or a git repository. Glitched checks its signature before it writes anything.", func() {
+			ui.TextInput(c.Key("source"), &a.pluginSource).Placeholder("owner/repo").Label("Plugin to install").Width(220)
+			ui.Button(c.Key("install"), "Install").Disabled(a.pluginBusy || strings.TrimSpace(a.pluginSource) == "").OnClick(a.installPlugin)
+		})
+		settingRow(c, "Updates", a.updatesNote(), func() {
+			ui.Button(c.Key("updates"), "Check for updates").Disabled(a.pluginBusy).OnClick(a.checkPluginUpdates)
+		})
+		for _, f := range a.pluginUpdates {
+			if f.Err != nil {
+				continue
+			}
+			settingRow(c, f.ID+" "+f.Version, updateDiff(f.Diff), func() {
+				ui.Button(c.Key("update:"+f.ID), "Update").Disabled(a.pluginBusy).OnClick(func() { a.updatePlugin(f.ID) })
+			})
+		}
 	})
 	list := a.plugins.Installed()
 	if len(list) == 0 {
@@ -47,6 +67,7 @@ func (a *app) pluginSettings(c *ui.Context) {
 						a.pluginsChanged(a.plugins.SetEnabled(p.ID, on))
 					}
 				})
+				a.pluginTrust(c, p)
 				if p.Err != nil {
 					ui.Text(c, p.Err.Error()).Key("error").Selectable().TextColor(palette.red).Padding(12, 16)
 				}
@@ -195,4 +216,137 @@ func (a *app) chooseFolder() string {
 		return ""
 	}
 	return paths[0]
+}
+
+// pluginTrust says why the plugin may run, or what it waits for: the
+// consent sheet for someone else's, a way to trust an unsigned one as
+// yours.
+func (a *app) pluginTrust(c *ui.Context, p plugins.Plugin) {
+	switch p.Trust {
+	case plugins.TrustWaiting:
+		ui.Column(c).Key("consent").Padding(14, 16).Gap(8).Background(palette.amber.Alpha(0.08)).Children(func() {
+			ui.Text(c, p.Name+" is someone else's. It asks to:").FontWeight(600)
+			for i, ask := range p.Asks {
+				ui.Text(c, "• "+ask).Key(i)
+			}
+			if len(p.Asks) == 0 {
+				ui.Text(c, "• Nothing beyond its own pages").Key("nothing")
+			}
+			ui.Text(c, "Signed by key "+p.Signer+". It stays off until you allow it; an update asking for more asks again.").FontSize(12).TextColor(palette.muted)
+			ui.Row(c).Gap(8).Children(func() {
+				ui.PrimaryButton(c.Key("allow"), "Allow").OnClick(func() { a.pluginsChanged(a.plugins.Allow(p.ID)) })
+				ui.Button(c.Key("remove"), "Remove").TextColor(palette.red).OnClick(func() { a.pluginsChanged(a.plugins.Remove(p.ID)) })
+			})
+		})
+	case plugins.TrustUnsigned:
+		ui.Row(c).Key("unsigned").Padding(14, 16).Gap(12).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "Not signed. Trust it as yours only if you wrote it, or know who did: it then runs with what you grant it, and Glitched signs it again as you change it.").FontSize(12).TextColor(palette.muted).Grow(1).Shrink(1)
+			ui.Button(c.Key("trust"), "Trust as mine").OnClick(func() { a.pluginsChanged(a.plugins.TrustAsMine(p.Folder)) })
+		})
+	default:
+		if p.ID == "" {
+			return
+		}
+		who := map[plugins.Trust]string{plugins.TrustOwn: "Yours", plugins.TrustConsented: "Someone else's, allowed", plugins.TrustTampered: "Changed since it was signed"}[p.Trust]
+		if who == "" {
+			return
+		}
+		settingRow(c, who, "Key "+p.Signer, func() {
+			ui.Button(c.Key("remove"), "Remove").TextColor(palette.red).OnClick(func() { a.pluginsChanged(a.plugins.Remove(p.ID)) })
+		})
+	}
+}
+
+// installPlugin installs what the source field names, off the UI thread.
+func (a *app) installPlugin() {
+	src := strings.TrimSpace(a.pluginSource)
+	a.pluginBusy = true
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		r, err := a.plugins.Install(ctx, pack.Source{Location: expandHome(src)})
+		a.post(func() {
+			a.pluginBusy = false
+			if err != nil {
+				a.pluginNotice(ui.Toast{Title: "Couldn't install " + src, Description: err.Error()})
+				return
+			}
+			a.pluginSource = ""
+			a.plugins.Reload()
+			a.pluginsChanged(nil)
+			note := "On, signed by your key."
+			if r.Decision != pack.Trusted {
+				note = "Someone else's: allow what it asks for below."
+			}
+			a.pluginNotice(ui.Toast{Title: "Installed " + r.ID + " " + r.Version, Description: note})
+		})
+	}()
+}
+
+func (a *app) checkPluginUpdates() {
+	a.pluginBusy = true
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		found, err := a.plugins.CheckUpdates(ctx)
+		a.post(func() {
+			a.pluginBusy, a.pluginUpdates, a.pluginChecked = false, found, true
+			if err != nil {
+				a.pluginNotice(ui.Toast{Title: "Couldn't check for updates", Description: err.Error()})
+			}
+		})
+	}()
+}
+
+func (a *app) updatePlugin(id string) {
+	a.pluginBusy = true
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		r, err := a.plugins.Update(ctx, id)
+		a.post(func() {
+			a.pluginBusy = false
+			a.pluginUpdates = slices.DeleteFunc(a.pluginUpdates, func(f pack.Found) bool { return f.ID == id })
+			if err != nil {
+				a.pluginNotice(ui.Toast{Title: "Couldn't update " + id, Description: err.Error()})
+				return
+			}
+			a.plugins.Reload()
+			a.pluginsChanged(nil)
+			a.pluginNotice(ui.Toast{Title: "Updated " + id + " to " + r.Version})
+		})
+	}()
+}
+
+func (a *app) updatesNote() string {
+	switch {
+	case a.pluginBusy:
+		return "Working…"
+	case !a.pluginChecked:
+		return "Plugins you installed from a file, a link or a repository update from there, signed by the same key."
+	}
+	n := 0
+	for _, f := range a.pluginUpdates {
+		if f.Err == nil {
+			n++
+		}
+	}
+	if n == 0 {
+		return "Up to date."
+	}
+	return fmt.Sprintf("%d updates.", n)
+}
+
+// updateDiff says what an update newly asks for, which asks the user again.
+func updateDiff(d pack.Diff) string {
+	var parts []string
+	for _, kind := range slices.Sorted(maps.Keys(d)) {
+		if ch := d[kind]; len(ch.Added) > 0 {
+			parts = append(parts, kind+": "+strings.Join(ch.Added, ", "))
+		}
+	}
+	if len(parts) == 0 {
+		return "Asks for nothing new."
+	}
+	return "Newly asks for " + strings.Join(parts, "; ") + ". You'll be asked to allow it."
 }

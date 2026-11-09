@@ -10,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/plugins"
+	"glitched/internal/plugins/pack"
 )
 
 // install copies examples/plugins/name into the state directory's plugins.
@@ -32,6 +33,20 @@ func install(t *testing.T, dir, name string) {
 		if err := os.WriteFile(filepath.Join(dst, e.Name()), b, 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	signAsOwn(t, dir, dst)
+}
+
+// signAsOwn signs the plugin in folder with the device's key of the
+// state directory dir, as Glitched signs the plugins you write.
+func signAsOwn(t *testing.T, dir, folder string) {
+	t.Helper()
+	key, err := pack.LoadKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pack.Sign(folder, key); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -125,6 +140,7 @@ func TestASlowPluginLeavesTheWindowBe(t *testing.T) {
 	os.WriteFile(filepath.Join(dst, "index.js"), []byte(`export function view() {
 		const until = Date.now() + 2000; while (Date.now() < until) {}
 		return { body: { type: "text", text: "done at last" } } }`), 0o644)
+	signAsOwn(t, dir, dst)
 	p := &posts{wake: make(chan struct{}, 1)}
 	a := newApp(dir, nil, p.post)
 	t.Cleanup(a.plugins.Close)
@@ -219,6 +235,7 @@ func TestABrokenPluginShowsWhyAndTheOthersRun(t *testing.T) {
 	os.MkdirAll(dst, 0o755)
 	os.WriteFile(filepath.Join(dst, "plugin.json"), []byte(`{"id": "broken", "name": "Broken", "main": "index.js", "contributes": {"pages": [{"id": "home", "title": "Broken"}]}}`), 0o644)
 	os.WriteFile(filepath.Join(dst, "index.js"), []byte(`export function view() { return { body: { type: "script", text: "alert(1)" } } }`), 0o644)
+	signAsOwn(t, dir, dst)
 	p := &posts{wake: make(chan struct{}, 1)}
 	a := newApp(dir, nil, p.post)
 	t.Cleanup(a.plugins.Close)
@@ -255,5 +272,47 @@ func TestABrokenPluginShowsWhyAndTheOthersRun(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(h.tt.Texts(), "|"), "script") {
 		t.Fatal("the broken page still shows")
+	}
+}
+
+// Someone else's plugin, installed from its package in Settings, waits on
+// the consent sheet until the user allows what it asks for.
+func TestInstallingSomeoneElsesPluginAsksForConsent(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "hello")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"plugin.json", "index.js"} {
+		b, _ := os.ReadFile(filepath.Join("examples/plugins/hello", f))
+		os.WriteFile(filepath.Join(src, f), []byte(strings.Replace(string(b), `"permissions": {}`, `"capabilities": ["clipboard"], "permissions": {}`, 1)), 0o644)
+	}
+	theirs, err := pack.LoadKey(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pack.Sign(src, theirs); err != nil {
+		t.Fatal(err)
+	}
+	data, err := pack.Pack(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "hello"+pack.Extension)
+	os.WriteFile(file, data, 0o644)
+
+	h := pluginApp(t)
+	h.a.router.Push("/settings/plugins")
+	h.tt.Frame()
+	h.a.pluginSource = file
+	h.tt.Frame()
+	h.click("Install")
+	h.until("the consent sheet", func() bool { return h.tt.HasText("Hello is someone else's. It asks to:") && h.tt.HasText("• Copy text to the clipboard") })
+	if len(h.a.plugins.Entries()) != 0 {
+		t.Fatal("someone else's plugin ran before it was allowed")
+	}
+	h.click("Allow")
+	h.tt.Frame()
+	if len(h.a.plugins.Entries()) != 1 || !h.tt.HasText("Someone else's, allowed") {
+		t.Fatalf("after allowing: %q", h.tt.Texts())
 	}
 }
