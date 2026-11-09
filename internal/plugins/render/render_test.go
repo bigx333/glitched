@@ -319,3 +319,23 @@ func TestKeysDontCollide(t *testing.T) {
 		{"type": "select", "id": "s", "options": ["a"]}, {"type": "select", "id": "s/select", "options": ["b"]}]}}`)
 	ui.NewTester(s.draw, 800, 700).Frame()
 }
+
+// Two views' dialogs of one id are two dialogs: their overlays are keyed
+// by their views' scopes.
+func TestDialogsOfTwoViewsDontMeet(t *testing.T) {
+	v, err := widget.Decode([]byte(`{"body": {"type": "dialog", "id": "d", "title": "Sure?", "open": true, "children": [{"type": "text", "text": "x"}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var one, two Controls
+	one.Sync(v, 1, 0)
+	two.Sync(v, 1, 0)
+	var md markdown.Options
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Children(func() {
+			View(c, v, &one, Style{Scope: "a/home"}, &md, nil)
+			View(c, v, &two, Style{Scope: "b/home"}, &md, nil)
+		})
+	}, 800, 600)
+	tt.Frame()
+}

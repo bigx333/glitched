@@ -172,9 +172,14 @@ func (h *Host) TabSession(id, tab, thread string, context any) (*Session, error)
 // SetContext changes what the session is about; the plugin sees it in its
 // next call.
 func (s *Session) SetContext(c any) {
+	next, _ := json.Marshal(c)
 	s.mu.Lock()
+	old, _ := json.Marshal(s.context)
 	s.context = c
 	s.mu.Unlock()
+	if !bytes.Equal(old, next) {
+		s.refresh() // a tab draws its thread as it changes
+	}
 }
 
 // Notify hands the plugin an app event or a timer.
@@ -204,6 +209,9 @@ func (s *Session) Dispatch(ev UIEvent, values map[string]any) int {
 	s.mu.Unlock()
 	if ev.Type == "change" {
 		q.change = ev.Node
+		if ev.Place != nil {
+			q.change = ev.Place.ID + "\x00" + ev.Place.Key + "\x00" + ev.Node // one copy's widget, not another's
+		}
 	}
 	if !s.push(q) {
 		return 0
@@ -291,7 +299,7 @@ func (s *Session) run() {
 			state, values, gen, processed, context := s.state, s.values, s.gen, s.processed, s.context
 			s.mu.Unlock()
 			if s.places != nil {
-				s.renderPlaces(gen, state, failed)
+				s.renderPlaces(gen, processed, state, failed)
 			} else {
 				s.render(gen, processed, state, values, context, failed)
 			}
@@ -501,7 +509,14 @@ func (s *Session) runtime() *plugin.Plugin {
 func (s *Session) swap(p *plugin.Plugin) {
 	s.mu.Lock()
 	s.p = p
+	broken := s.broken
+	s.broken = false
+	gen := s.gen
 	s.mu.Unlock()
 	s.Err = nil
+	if broken {
+		s.push(queued{gen: gen, init: true}) // its init failed: the new code starts it
+		return
+	}
 	s.refresh()
 }

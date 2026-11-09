@@ -148,3 +148,40 @@ func TestAPageAsksItsServiceWhichRunsGit(t *testing.T) {
 		return n >= 2
 	})
 }
+
+// A plugin that hears thread.message is told of each new message of the
+// thread shown once, and not of those it had when first shown.
+func TestNewMessagesAreToldOnceEach(t *testing.T) {
+	dir := tempDir(t)
+	dst := filepath.Join(plugins.Dir(dir), "ears")
+	os.MkdirAll(dst, 0o755)
+	os.WriteFile(filepath.Join(dst, "plugin.json"), []byte(`{"id": "ears", "name": "Ears", "main": "index.js",
+		"capabilities": ["ui.place", "messages:read"], "glitched": {"events": ["thread.message"], "places": [{"id": "count", "at": "sidebar.footer"}]}}`), 0o644)
+	os.WriteFile(filepath.Join(dst, "index.js"), []byte(`
+		export function init() { return { state: [] } }
+		export function update({ state, event }) { return event.type === "thread.message" ? { state: [...state, event.data.role + ":" + event.data.text] } : {} }
+		export function place({ state, items }) { return items.map(() => ({ type: "text", text: "heard " + state.length + " " + state.join(" | ") })) }`), 0o644)
+	signAsOwn(t, dir, dst)
+	grant(t, dir, `{"grants": {"ears": ["messages:read"]}}`)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	id := seed(t, d, "/work/glitched", "Fix the sort", "first")
+	h := start(t, dir)
+	th := h.thread("Fix the sort")
+	h.a.select_(th)
+	h.until("the transcript", func() bool { return th.Transcript != nil && len(entriesOf(th)) > 0 })
+	h.until("nothing told of what it had", func() bool { return h.tt.HasText("heard 0") })
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: "second"}}); err != nil {
+		t.Fatal(err)
+	}
+	// The fake agent answers in two messages, around its work.
+	h.until("the new message and its replies", func() bool {
+		return h.tt.HasText("heard 3 user:second | assistant:Looking at the code. | assistant:")
+	})
+	for range 10 {
+		h.p.run()
+		h.tt.Frame()
+	}
+	if h.tt.HasText("heard 4") || h.tt.HasText("user:first") {
+		t.Fatalf("told twice, or of what it had: %q", h.tt.Texts())
+	}
+}

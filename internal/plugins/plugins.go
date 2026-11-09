@@ -93,7 +93,6 @@ type Host struct {
 	installed []*installed
 	prefs     prefs
 	statuses  map[string]map[string]SettingStatus
-	dbs       map[string]*pluginDB
 
 	sessions map[pageKey]*Session
 }
@@ -116,6 +115,7 @@ type installed struct {
 	asks   []string // what it asks for, when it waits for consent
 	// waitingKey signed it, as it waits for consent.
 	waitingKey string
+	db         *pluginDB
 }
 
 // prefs are what the user chose for the plugins, in plugins.json in the
@@ -145,7 +145,7 @@ func Open(stateDir string, o Options) *Host {
 	if o.Post == nil {
 		o.Post = func(fn func()) { fn() }
 	}
-	h := &Host{state: stateDir, opts: o, sessions: map[pageKey]*Session{}, dbs: map[string]*pluginDB{}}
+	h := &Host{state: stateDir, opts: o, sessions: map[pageKey]*Session{}}
 	if err := jsonfile.Load(prefsPath(stateDir), &h.prefs); err != nil && !errors.Is(err, os.ErrNotExist) {
 		o.Logf("plugins: %v", err)
 	}
@@ -633,15 +633,14 @@ func (h *Host) closeAll() {
 		if in.p != nil {
 			// Off the UI thread: Close waits for a runtime that is still
 			// starting, up to its load timeout.
-			go in.p.Close()
+			go func() {
+				in.p.Close()
+				if in.db != nil {
+					in.db.close()
+				}
+			}()
 		}
 	}
-	h.mu.Lock()
-	for id, db := range h.dbs {
-		db.close()
-		delete(h.dbs, id)
-	}
-	h.mu.Unlock()
 }
 
 // errNotHere is a plugin this host doesn't run: a service host runs only

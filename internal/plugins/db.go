@@ -55,7 +55,7 @@ func (d *pluginDB) open() (*sql.DB, error) {
 }
 
 func (d *pluginDB) close() {
-	if d.db != nil {
+	if d != nil && d.db != nil {
 		d.db.Close()
 	}
 }

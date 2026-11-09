@@ -262,7 +262,9 @@ func (a *app) pluginView(c *ui.Context, k pluginKey, s *plugins.Session) {
 		}
 		return
 	}
-	render.View(c, s.View, cs, a.pluginStyle(k.plugin), &a.pluginMD, s.Dispatch)
+	st := a.pluginStyle(k.plugin)
+	st.Scope = k.plugin + "/" + k.page
+	render.View(c, s.View, cs, st, &a.pluginMD, s.Dispatch)
 }
 
 // pluginBody draws a stock page.

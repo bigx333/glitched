@@ -71,10 +71,8 @@ func (h *Host) App(id string) *Session {
 func (s *Session) SetItems(place string, items []PlaceItem) {
 	s.mu.Lock()
 	old := s.places.items[place]
-	same := len(old) == len(items) && !slices.ContainsFunc(items, func(it PlaceItem) bool {
-		i := slices.IndexFunc(old, func(o PlaceItem) bool { return o.Key == it.Key })
-		return i < 0 || old[i].Version != it.Version
-	})
+	// In the order drawn, frame after frame: compared side by side.
+	same := slices.EqualFunc(old, items, func(o, it PlaceItem) bool { return o.Key == it.Key && o.Version == it.Version })
 	if !same {
 		s.places.items[place] = slices.Clone(items)
 	}
@@ -106,7 +104,7 @@ func (s *Session) Places() []Place { return s.places.places }
 
 // renderPlaces draws every copy of every place, a batch at a time, with
 // the plugin's place export, and publishes them with what failed.
-func (s *Session) renderPlaces(gen int, state json.RawMessage, failed error) {
+func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed error) {
 	start := time.Now()
 	drawn := map[string]map[string]*widget.Node{}
 	for _, pl := range s.places.places {
@@ -139,6 +137,7 @@ func (s *Session) renderPlaces(gen int, state json.RawMessage, failed error) {
 			s.places.views[id] = views
 		}
 		s.Rev++
+		s.Processed = processed
 		s.Busy = s.running && (len(s.queue) > 0 || s.dirty)
 	})
 }

@@ -49,15 +49,13 @@ func denied(format string, args ...any) error {
 // functions are the host functions of the plugin in, which its glitched
 // global calls. Each checks the plugin's grants as it runs, so a grant
 // taken back stops the next call.
+//
+// The database is in's own, opened on first use; the host closes it with
+// in, so a reload that fails leaves the running one's open.
 func (h *Host) functions(in *installed) map[string]plugin.Function {
 	id := in.manifest.ID
 	db := &pluginDB{path: filepath.Join(DataDir(h.state), id, "plugin.db")}
-	h.mu.Lock()
-	if old := h.dbs[id]; old != nil {
-		old.close()
-	}
-	h.dbs[id] = db
-	h.mu.Unlock()
+	in.db = db
 	fns := map[string]plugin.Function{
 		"db.exec":  db.exec,
 		"db.query": db.query,

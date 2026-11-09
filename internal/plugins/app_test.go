@@ -257,7 +257,9 @@ func TestAPluginWithOnlyTimersWakesOnThem(t *testing.T) {
 		export function view() { return { body: { type: "text", text: "ticks " + (host.storage.get("ticks") ?? 0) } } }`)
 	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf, TimerScale: 0.002, SignOwn: true})
 	t.Cleanup(h.Close)
-	u.until(t, "a tick with nothing shown", func() bool { return h.sessions[pageKey{plugin: "ticker"}] != nil && h.sessions[pageKey{plugin: "ticker"}].Rev > 1 })
+	u.until(t, "a tick with nothing shown", func() bool {
+		return h.sessions[pageKey{plugin: "ticker"}] != nil && h.sessions[pageKey{plugin: "ticker"}].Rev > 1
+	})
 	s := session(t, h, "ticker")
 	u.until(t, "the ticks", func() bool { return strings.Contains(texts(s), "ticks ") && !strings.Contains(texts(s), "ticks 0") })
 }
