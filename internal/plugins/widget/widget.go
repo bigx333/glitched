@@ -153,7 +153,11 @@ var (
 )
 
 // Decode reads a view from a view export's JSON and checks it.
-func Decode(b []byte) (*View, error) {
+func Decode(b []byte) (*View, error) { return DecodeWithin(b, MaxNodes) }
+
+// DecodeWithin is Decode with a bound of its own on the widgets: a place's
+// copy is a badge, not a page.
+func DecodeWithin(b []byte, maxNodes int) (*View, error) {
 	if len(b) > MaxBytes {
 		return nil, fmt.Errorf("view is %d bytes, over the %d allowed", len(b), MaxBytes)
 	}
@@ -163,7 +167,7 @@ func Decode(b []byte) (*View, error) {
 	if err := d.Decode(&v); err != nil {
 		return nil, fmt.Errorf("view: %w", err)
 	}
-	if err := v.Check(); err != nil {
+	if err := v.check(maxNodes); err != nil {
 		return nil, err
 	}
 	return &v, nil
@@ -171,18 +175,21 @@ func Decode(b []byte) (*View, error) {
 
 // Check reports the first thing wrong with the view, by its path in the
 // tree, or nil.
-func (v *View) Check() error {
+func (v *View) Check() error { return v.check(MaxNodes) }
+
+func (v *View) check(maxNodes int) error {
 	if v.Body == nil {
 		return fmt.Errorf("view: no body")
 	}
 	if len(v.Title) > MaxText || len(v.Subtitle) > MaxText {
 		return fmt.Errorf("view: title or subtitle over %d bytes", MaxText)
 	}
-	c := checker{ids: map[string]bool{}}
+	c := checker{ids: map[string]bool{}, max: maxNodes}
 	return c.node(v.Body, "body", 1)
 }
 
 type checker struct {
+	max   int
 	nodes int
 	ids   map[string]bool
 }
@@ -192,8 +199,8 @@ func (c *checker) node(n *Node, path string, depth int) error {
 		return fmt.Errorf("%s: null widget", path)
 	}
 	c.nodes++
-	if c.nodes > MaxNodes {
-		return fmt.Errorf("%s: over %d widgets", path, MaxNodes)
+	if c.nodes > c.max {
+		return fmt.Errorf("%s: over %d widgets", path, c.max)
 	}
 	if depth > MaxDepth {
 		return fmt.Errorf("%s: nested over %d deep", path, MaxDepth)

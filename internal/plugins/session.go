@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -21,7 +22,9 @@ const (
 	ViewTimeout = 5 * time.Second
 )
 
-type pageKey struct{ plugin, page string }
+// pageKey names a session: a plugin's page, or its tab in one thread's
+// panel (scope being the thread), or its app session (page "").
+type pageKey struct{ plugin, page, scope string }
 
 // Session is one native view page: the state the plugin keeps in it, the
 // events waiting for its update, and what it shows. One worker goroutine
@@ -34,6 +37,11 @@ type Session struct {
 	h            *Host
 	p            *plugin.Plugin
 	plugin, page string
+	// tab is set for a tab in a thread's panel, whose page is the tab's id.
+	tab bool
+	// places is set for the app session, which draws the plugin's places
+	// in its view's stead, and hears app events and timers.
+	places *placeSet
 
 	// View is the last view the plugin answered that checked; nil before
 	// one. Rev counts them.
@@ -63,12 +71,14 @@ type Session struct {
 	dirty     bool
 	seq       int // the last UI event's number
 	processed int // the last UI event the plugin took
+	context   any // what the session is about, as plugins see it: a tab's thread
 }
 
 type queued struct {
-	gen   int
-	init  bool
-	event any
+	gen     int
+	init    bool
+	refresh bool // only draw again: the places' contexts changed
+	event   any
 	// values are the controls' values as the event happened; seq numbers a
 	// UI event.
 	values map[string]any
@@ -86,6 +96,26 @@ type UIEvent struct {
 	Node    string          `json:"node"`
 	Value   any             `json:"value,omitempty"`
 	Payload json.RawMessage `json:"payload,omitempty"`
+	// Place is set for a widget in one of the plugin's places.
+	Place *PlaceRef `json:"place,omitempty"`
+}
+
+// PlaceRef names the copy of a place a widget was in: the place, the item
+// it was drawn for, and that item's context.
+type PlaceRef struct {
+	ID      string `json:"id"`
+	At      string `json:"at"`
+	Key     string `json:"key"`
+	Context any    `json:"context,omitempty"`
+}
+
+// AppEvent is something that happened in the app, or a timer, as update
+// gets it.
+type AppEvent struct {
+	Kind string `json:"kind"` // "app" or "timer"
+	Type string `json:"type,omitempty"`
+	ID   string `json:"id,omitempty"` // a timer's
+	Data any    `json:"data,omitempty"`
 }
 
 // EffectEvent is an effect's answer, as update gets it.
@@ -101,7 +131,7 @@ type EffectEvent struct {
 
 // Session is the plugin id's view page, started if it isn't.
 func (h *Host) Session(id, page string) (*Session, error) {
-	k := pageKey{id, page}
+	k := pageKey{plugin: id, page: page}
 	if s := h.sessions[k]; s != nil {
 		return s, nil
 	}
@@ -116,6 +146,51 @@ func (h *Host) Session(id, page string) (*Session, error) {
 	h.sessions[k] = s
 	s.push(queued{init: true})
 	return s, nil
+}
+
+// TabSession is the plugin id's tab in the panel of a thread, started if
+// it isn't, about context: the thread's record.
+func (h *Host) TabSession(id, tab, thread string, context any) (*Session, error) {
+	k := pageKey{id, tab, thread}
+	if s := h.sessions[k]; s != nil {
+		s.SetContext(context)
+		return s, nil
+	}
+	p, err := h.plugin(id)
+	if err != nil {
+		return nil, err
+	}
+	if !p.Can("view") {
+		return nil, fmt.Errorf("plugin %s has no view export", id)
+	}
+	s := &Session{h: h, p: p, plugin: id, page: tab, tab: true, context: context}
+	h.sessions[k] = s
+	s.push(queued{init: true})
+	return s, nil
+}
+
+// SetContext changes what the session is about; the plugin sees it in its
+// next call.
+func (s *Session) SetContext(c any) {
+	s.mu.Lock()
+	s.context = c
+	s.mu.Unlock()
+}
+
+// Notify hands the plugin an app event or a timer.
+func (s *Session) Notify(ev AppEvent) {
+	s.mu.Lock()
+	gen := s.gen
+	s.mu.Unlock()
+	s.push(queued{gen: gen, event: ev})
+}
+
+// refresh draws again, with no event.
+func (s *Session) refresh() {
+	s.mu.Lock()
+	gen := s.gen
+	s.mu.Unlock()
+	s.push(queued{gen: gen, refresh: true})
 }
 
 // Dispatch hands the plugin what the user did, with the values of the
@@ -155,6 +230,9 @@ func (s *Session) push(q queued) bool {
 	defer s.mu.Unlock()
 	if s.done || s.broken || q.gen != s.gen {
 		return false
+	}
+	if q.refresh && slices.ContainsFunc(s.queue, func(w queued) bool { return w.refresh }) {
+		return true
 	}
 	// A change replaces the one of the same widget waiting just before it,
 	// never one before a click or a submit, which saw the earlier value.
@@ -210,9 +288,13 @@ func (s *Session) run() {
 				return
 			}
 			s.dirty = false
-			state, values, gen, processed := s.state, s.values, s.gen, s.processed
+			state, values, gen, processed, context := s.state, s.values, s.gen, s.processed, s.context
 			s.mu.Unlock()
-			s.render(gen, processed, state, values, failed)
+			if s.places != nil {
+				s.renderPlaces(gen, state, failed)
+			} else {
+				s.render(gen, processed, state, values, context, failed)
+			}
 			continue
 		}
 		q := s.queue[0]
@@ -224,10 +306,13 @@ func (s *Session) run() {
 		if q.values != nil {
 			s.values = q.values
 		}
-		state, values := s.state, s.values
+		state, values, context := s.state, s.values, s.context
 		s.dirty = true
 		s.mu.Unlock()
-		failed = s.apply(q, state, values)
+		if q.refresh {
+			continue
+		}
+		failed = s.apply(q, state, values, context)
 		s.mu.Lock()
 		if q.seq > 0 && q.gen == s.gen {
 			s.processed = q.seq
@@ -254,7 +339,7 @@ func (s *Session) run() {
 
 // apply hands the plugin one event, or starts it with init, and keeps the
 // state it answers. It runs the effects it asks for.
-func (s *Session) apply(q queued, state json.RawMessage, values map[string]any) error {
+func (s *Session) apply(q queued, state json.RawMessage, values map[string]any, context any) error {
 	var raw json.RawMessage
 	var err error
 	switch {
@@ -262,12 +347,12 @@ func (s *Session) apply(q queued, state json.RawMessage, values map[string]any) 
 		s.setState(q.gen, nil)
 		return nil
 	case q.init:
-		err = s.call(0, "init", map[string]any{"page": s.page}, &raw)
+		err = s.call(0, "init", s.args(map[string]any{}, context), &raw)
 	default:
 		if !s.p.Can("update") {
 			return errors.New("the plugin has no update export")
 		}
-		err = s.call(0, "update", map[string]any{"page": s.page, "state": state, "event": q.event, "values": values}, &raw)
+		err = s.call(0, "update", s.args(map[string]any{"state": state, "event": q.event, "values": values}, context), &raw)
 	}
 	if err != nil {
 		return err
@@ -291,6 +376,19 @@ func (s *Session) apply(q queued, state json.RawMessage, values map[string]any) 
 		})
 	}
 	return nil
+}
+
+// args are a call's arguments: what the call gives, and what every call
+// says of the session.
+func (s *Session) args(a map[string]any, context any) map[string]any {
+	a["page"] = s.page
+	if s.tab {
+		a["tab"] = s.page
+	}
+	if context != nil {
+		a["context"] = context
+	}
+	return a
 }
 
 // current reports whether the page is open, in its start gen.
@@ -349,9 +447,9 @@ func decodeUpdate(raw json.RawMessage) (update, error) {
 
 // render asks the plugin for its view of the state, checks it, and
 // publishes it with what failed.
-func (s *Session) render(gen, processed int, state json.RawMessage, values map[string]any, failed error) {
+func (s *Session) render(gen, processed int, state json.RawMessage, values map[string]any, context any, failed error) {
 	var raw json.RawMessage
-	err := s.call(ViewTimeout, "view", map[string]any{"page": s.page, "state": state, "values": values}, &raw)
+	err := s.call(ViewTimeout, "view", s.args(map[string]any{"state": state, "values": values}, context), &raw)
 	var v *widget.View
 	if err == nil {
 		v, err = widget.Decode(raw)
