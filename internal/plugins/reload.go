@@ -108,7 +108,7 @@ func (h *Host) swapIn(in, next *installed, p *plugin.Plugin, err error) {
 	h.mu.Unlock()
 	if err != nil || !current {
 		if p != nil {
-			go p.Close() // a Reload replaced it meanwhile
+			go p.Shutdown() // a Reload replaced it meanwhile
 		}
 		if err != nil {
 			h.opts.Logf("plugins: %s: kept the running code: %v", filepath.Base(in.folder), err)
@@ -125,7 +125,7 @@ func (h *Host) swapIn(in, next *installed, p *plugin.Plugin, err error) {
 		}
 	}
 	go func() {
-		old.Close()
+		old.Shutdown()
 		oldDB.close()
 	}()
 	if h.opts.Reloaded != nil {

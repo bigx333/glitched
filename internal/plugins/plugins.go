@@ -63,6 +63,9 @@ type Options struct {
 	MemoryLimit int64
 	// TimerScale shortens timers, in tests.
 	TimerScale float64
+	// IdleTimeout stops a runtime nothing called for that long; its next
+	// call starts it again. Zero keeps it.
+	IdleTimeout time.Duration
 	// SignOwn signs the user's own plugins again as they change. The
 	// window's host does; the engine's leaves it to the window, so the two
 	// never sign one folder at once.
@@ -231,16 +234,6 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 		return nil, err
 	}
 	in.code = code
-	var granted []string
-	for _, c := range m.Capabilities {
-		if h.allowed(m.ID, c) {
-			granted = append(granted, c)
-		}
-	}
-	network := h.granted(m.ID, Network)
-	if network && len(m.Permissions.Network) > 0 && !slices.Contains(granted, Network) {
-		granted = append(granted, Network)
-	}
 	main := ""
 	if h.opts.Main != nil {
 		if main = h.opts.Main(m, x); main == "" {
@@ -271,10 +264,17 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 		DataDir:         DataDir(h.state),
 		Contract:        Contract,
 		ContractVersion: ContractVersion,
-		Capabilities:    granted,
-		CallTimeout:     h.opts.CallTimeout,
-		MemoryLimit:     h.opts.MemoryLimit,
-		Allowed:         func(string, string) bool { return network },
+		// Asked live: a grant holds at once, with no restart.
+		Capability: func(id, name string) bool {
+			if name == Network {
+				return len(m.Permissions.Network) > 0 && h.grantedNow(id, Network)
+			}
+			return slices.Contains(m.Capabilities, name) && h.allowedNow(id, name)
+		},
+		CallTimeout: h.opts.CallTimeout,
+		IdleTimeout: h.opts.IdleTimeout,
+		MemoryLimit: h.opts.MemoryLimit,
+		Allowed:     func(id, _ string) bool { return h.grantedNow(id, Network) },
 		Host: plugin.Host{
 			Language: h.opts.Language,
 			OpenURL:  h.opts.OpenURL,
@@ -376,8 +376,11 @@ func (h *Host) SetEnabled(id string, on bool) error {
 
 // SetGranted grants the plugin id a capability, or takes it back, and
 // reloads the plugins.
+//
+// A grant holds at once: a plugin's runtime asks its grants as it uses
+// them, so it goes on, with what its pages hold.
 func (h *Host) SetGranted(id, capability string, on bool) error {
-	return h.edit(func(p *prefs) {
+	return h.save(func(p *prefs) {
 		g := slices.DeleteFunc(slices.Clone(p.Grants[id]), func(s string) bool { return s == capability })
 		if on {
 			g = append(g, capability)
@@ -390,6 +393,20 @@ func (h *Host) SetGranted(id, capability string, on bool) error {
 			delete(p.Grants, id)
 		}
 	})
+}
+
+// grantedNow and allowedNow are granted and allowed, from a goroutine of
+// the plugin's.
+func (h *Host) grantedNow(id, capability string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.granted(id, capability)
+}
+
+func (h *Host) allowedNow(id, capability string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.allowed(id, capability)
 }
 
 func (h *Host) edit(change func(*prefs)) error {
@@ -644,7 +661,7 @@ func (h *Host) closeAll() {
 			// Off the UI thread: Close waits for a runtime that is still
 			// starting, up to its load timeout.
 			go func() {
-				in.p.Close()
+				in.p.Shutdown()
 				if in.db != nil {
 					in.db.close()
 				}
