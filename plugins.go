@@ -369,6 +369,19 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		}
 		a.notify(mygo.NotificationOptions{ID: "plugin:" + id, Title: args.Title, Body: args.Body, Subtitle: name, Group: "plugins"})
 		return nil, nil
+	case "tab.open":
+		var args struct{ Tab string }
+		if err := json.Unmarshal(e.Args, &args); err != nil {
+			return nil, err
+		}
+		if !slices.ContainsFunc(a.plugins.Ext(id).Tabs, func(t plugins.Tab) bool { return t.ID == args.Tab }) {
+			return nil, fmt.Errorf("the plugin has no tab %q", args.Tab)
+		}
+		a.openPluginTab(pluginTab{id, args.Tab}, true)
+		if a.router.Path() != "/" {
+			a.router.Push("/")
+		}
+		return nil, nil
 	case "page.open":
 		var args struct{ Page string }
 		if err := json.Unmarshal(e.Args, &args); err != nil {
