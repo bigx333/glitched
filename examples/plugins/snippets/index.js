@@ -1,6 +1,8 @@
 // Snippets: prompts you reuse. They live in the plugin's storage, so they
 // outlast the app; using one drafts it in the composer, or starts a thread
-// with it, which needs the threads:write grant.
+// with it, which needs the threads:write grant. What it does in the app it
+// does with glitched's calls, which answer, or fail with err.code
+// "denied" without a grant.
 
 function saved() {
   return host.storage.get("snippets") ?? [];
@@ -14,11 +16,18 @@ function ordered(snippets) {
   return [...snippets].sort((a, b) => Number(b.pinned) - Number(a.pinned));
 }
 
-export function init() {
-  return {
-    state: { snippets: saved(), adding: false, error: null, notice: null, threads: null, threadsError: null },
-    effects: [{ type: "threads.list", id: "threads" }],
-  };
+// recent are the latest threads, or why they can't be shown.
+async function recent() {
+  try {
+    return { threads: (await glitched.threads.list()).slice(0, 5), threadsError: null };
+  } catch (e) {
+    const why = e.code === "denied" ? "Grant “threads:read” to Snippets in Settings › Plugins to see your threads." : e.message;
+    return { threads: null, threadsError: why };
+  }
+}
+
+export async function init() {
+  return { state: { snippets: saved(), adding: false, error: null, notice: null, ...(await recent()) } };
 }
 
 function form(state) {
@@ -137,7 +146,25 @@ function find(state, id) {
   return state.snippets.find((s) => s.id === id);
 }
 
-function onUI(state, event, values) {
+async function use(state, s) {
+  if (s.mode !== "run") {
+    await glitched.composer.draft(s.prompt);
+    return {};
+  }
+  try {
+    await glitched.threads.create(s.prompt, { title: s.title });
+    return { state: { ...state, error: null, notice: "Started a thread.", ...(await recent()) } };
+  } catch (e) {
+    const why = e.code === "denied" ? "Grant “threads:write” to Snippets in Settings › Plugins to start threads." : e.message;
+    return { state: { ...state, notice: null, error: why } };
+  }
+}
+
+export async function update({ state, event, values }) {
+  if (event.kind === "app" && event.type === "grant.changed") {
+    return { state: { ...state, error: null, ...(await recent()) } }; // granted or taken back: ask again
+  }
+  if (event.kind !== "ui") return {};
   switch (event.handler) {
     case "new":
       return { state: { ...state, adding: true, error: null, notice: null } };
@@ -161,58 +188,35 @@ function onUI(state, event, values) {
     }
     case "copy": {
       const s = find(state, event.payload);
-      return s ? { effects: [{ type: "clipboard.write", text: s.prompt }, { type: "toast", title: "Copied", description: s.title }] } : {};
+      if (s) {
+        await glitched.clipboard.write(s.prompt);
+        await glitched.toast("Copied", s.title);
+      }
+      return {};
     }
     case "use": {
       const s = find(state, event.payload);
-      if (!s) return {};
-      if (s.mode === "run") {
-        return { state: { ...state, notice: null }, effects: [{ type: "threads.create", id: "run", prompt: s.prompt, title: s.title }] };
-      }
-      return { effects: [{ type: "composer.draft", id: "draft", text: s.prompt }] };
+      return s ? use(state, s) : {};
     }
     case "refresh":
-      return { state: { ...state, threads: null, threadsError: null }, effects: [{ type: "threads.list", id: "threads" }] };
+      return { state: { ...state, ...(await recent()) } };
     case "open":
-      return { effects: [{ type: "threads.open", id: "open", thread: event.payload }] };
+      await glitched.threads.open(event.payload);
+      return {};
   }
   return {};
 }
 
-function onEffect(state, event) {
-  switch (event.id) {
-    case "threads":
-      if (!event.ok) {
-        const why = event.denied ? "Grant “threads:read” to Snippets in Settings › Plugins to see your threads." : event.error;
-        return { state: { ...state, threads: null, threadsError: why } };
-      }
-      return { state: { ...state, threads: event.result.slice(0, 5), threadsError: null } };
-    case "run":
-      if (!event.ok) {
-        const why = event.denied ? "Grant “threads:write” to Snippets in Settings › Plugins to start threads." : event.error;
-        return { state: { ...state, notice: null, error: why } };
-      }
-      return { state: { ...state, error: null, notice: "Started a thread." }, effects: [{ type: "threads.list", id: "threads" }] };
-  }
-  return event.ok ? {} : { state: { ...state, error: event.error } };
-}
-
-export function update({ state, event, values }) {
-  if (event.kind === "app" && event.type === "grant.changed") {
-    // Granted or taken back in Settings: ask again.
-    return { state: { ...state, threads: null, threadsError: null, error: null }, effects: [{ type: "threads.list", id: "threads" }] };
-  }
-  return event.kind === "ui" ? onUI(state, event, values) : onEffect(state, event);
-}
-
-export function command({ id }) {
+export async function command({ id }) {
   switch (id) {
     case "new":
-      return { effects: [{ type: "page.open", page: "home" }] };
+      await glitched.pages.open("home");
+      return;
     case "draft-pinned": {
       const s = ordered(saved()).find((s) => s.pinned);
-      if (!s) return { effects: [{ type: "toast", title: "No pinned snippet" }] };
-      return { effects: [{ type: "composer.draft", text: s.prompt }] };
+      if (!s) await glitched.toast("No pinned snippet");
+      else await glitched.composer.draft(s.prompt);
+      return;
     }
   }
   throw new Error("unknown command: " + id);

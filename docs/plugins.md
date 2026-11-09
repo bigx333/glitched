@@ -4,7 +4,7 @@ A Glitched plugin is a folder with a `plugin.json` and a JavaScript or TypeScrip
 
 - add pages to the sidebar, tabs to a thread's panel, and widgets to Glitched's own views (each thread row, a thread's header);
 - hear what happens in the app (threads changing, new messages, settings) and wake on timers;
-- act in the app through effects: start and message threads, draft in the composer, notify, copy;
+- act in the app by calling it: start and message threads, draft in the composer, notify, copy;
 - offer tools to Glitched's agents;
 - do real work outside its sandbox, behind your grants: run the programs it names (`git`, `gh`), keep a SQLite database, reach the network, and run a headless service with no window open.
 
@@ -14,7 +14,7 @@ Everything a plugin draws is data. Glitched checks it and draws it with its own 
 | --- | --- |
 | App contract (`contract`, `contractVersion`) | `glitched` 1 |
 | Widget tree (`internal/plugins/widget.Version`) | 1 |
-| Runtime | github.com/bigx333/mygo-plugin `v0.6.1-glitched.3`, a fork of mygo-plugin's `main` (see `go.mod`) |
+| Runtime | github.com/bigx333/mygo-plugin `v0.6.1-glitched.4`, a fork of mygo-plugin's `main` (see `go.mod`) |
 
 A plugin that names another contract, or a newer `contractVersion`, does not load. One that names none loads.
 
@@ -43,7 +43,7 @@ cp -R examples/plugins/snippets ~/.glitched/plugins/
 | --- | --- |
 | `hello` | a stock mygo-plugin page |
 | `counter` | a native view in TypeScript: buttons, a controlled input, a toggle, a section on a condition |
-| `snippets` | a form, storage, effects, the denial path, grants, commands |
+| `snippets` | a form, storage, calls into the app, the denial path, grants, commands |
 | `row-status` | a badge on each thread row, from permission-filtered records, counting the changes it hears |
 | `focus-timer` | a widget in a thread's header, a panel tab, settings with a status, a timer, a command with a shortcut |
 | `word-tools` | tools for agents, with a database |
@@ -110,8 +110,8 @@ flowchart LR
   end
   M[Agent's glitched mcp] -- "plugins.tool" --> S
   P -- "glitched.service.call" --> S
-  A -- effects --> X{declared?<br/>granted?}
-  P -- effects --> X
+  A -- "glitched.*" --> X{declared?<br/>granted?}
+  P -- "glitched.*" --> X
   X -- yes --> App[App: threads, composer,<br/>clipboard, toasts]
 ```
 
@@ -128,15 +128,15 @@ The window never waits for a plugin. One worker per session calls the plugin, on
 
 | Export | Called with | Answers | When |
 | --- | --- | --- | --- |
-| `init` | `{page, tab?, context?}` | `{state?, effects?}` | a page, tab or the app session opens, or starts over |
+| `init` | `{page, tab?, context?}` | `{state?}` | a page, tab or the app session opens, or starts over |
 | `view` | `{page, tab?, context?, state, values}` | `{title?, subtitle?, body}` | after `init`, and once after each batch of events |
-| `update` | `{page, tab?, context?, state, event, values}` | `{state?, effects?}` | each event; leave `state` out to keep it |
+| `update` | `{page, tab?, context?, state, event, values}` | `{state?}` | each event; leave `state` out to keep it |
 | `place` | `{id, at, state, items: [{key, context}]}` | a widget or `null` per item, in order | as the copies shown, their contexts or the app state change |
-| `command` | `{id, args}` | `{effects?}` | a palette command or shortcut |
+| `command` | `{id, args}` | nothing | a palette command or shortcut |
 | `page` | `{id}` | mygo-plugin's `Page` | stock pages only |
 | `tool` | `{name, args, call: {thread}}` | the tool's answer | an agent calls a tool (in the engine) |
 | `serve` | `{method, args}` | the method's answer | `glitched.service.call` (in the service) |
-| `timer` | `{id}` | `{effects?}` | a timer (in the service) |
+| `timer` | `{id}` | nothing | a timer (in the service) |
 
 Every export may be `async`. `context` is the thread record of a tab's thread. State is any JSON value, at most 1 MiB, kept by Glitched, so a runtime restarted after a timeout keeps it. Data that outlasts the app goes in `host.storage` or `glitched.db`.
 
@@ -144,15 +144,13 @@ Every export may be `async`. `context` is the thread record of a tab's thread. S
 
 ```js
 { kind: "ui", type: "click" | "change" | "submit" | "close", handler, node, value?, payload?, place? }
-{ kind: "effect", id?, effect, ok, result?, error?, denied? }
-{ kind: "app", type: "thread.changed" | "thread.message" | "setting.changed" | "theme.changed" | "command", data }
+{ kind: "app", type: "thread.changed" | "thread.message" | "setting.changed" | "theme.changed" | "command" | "grant.changed", data }
 { kind: "timer", id }
 ```
 
 - `handler` and `payload` are what the widget named (a name, or `{handler, payload}` with up to 4 KiB of JSON). No function crosses into the app.
 - `values` maps each input, toggle, select and tabs of the view, by `id`, to what it held when the event happened.
 - `place` is set for a widget in a place: `{id, at, key, context}` of the copy it was in.
-- An effect with an `id` always answers. One without answers only when it fails.
 - While a `change` waits last in line, a later `change` of the same widget replaces it. A change never replaces one before a click or a submit. At most 64 events wait.
 
 ### Keyed widgets
@@ -210,7 +208,7 @@ export function place({ id, at, state, items }) {
 
 Stable slots keep their name and context across Glitched's updates; others may move. A copy shows its last drawing while the next is drawn, so rows never wait or flicker. Glitched draws a place again only when a copy comes, goes or its record changes, or the app session's state does, in batches of up to 200 copies. What the user does in a place reaches `update` with `event.place`.
 
-**Panel tabs** (`glitched.tabs`) show as buttons in a thread's header and open in the panel beside the chat, one session per thread, with the thread as `context`. The `tab.open` effect opens one.
+**Panel tabs** (`glitched.tabs`) show as buttons in a thread's header and open in the panel beside the chat, one session per thread, with the thread as `context`. `glitched.tabs.open(id)` opens one.
 
 ## App events
 
@@ -223,28 +221,43 @@ A plugin hears the events its manifest lists, if it may:
 | `setting.changed` | `{id, value, was}` | |
 | `theme.changed` | `{appearance}` | |
 
-`command` (a command of its own ran) and `timer` reach every app session with `update`. A thread record is `{id, title, workspace, status, machine, updatedAt}`. Without `threads:read` it is `{id}` alone, in places and tabs too.
+`command` (a command of its own ran), `grant.changed` (`{capability, granted}`, a grant of its own given or taken back) and `timer` reach the plugin's sessions with `update`; `grant.changed` reaches its pages and tabs too, so what they show follows at once. A thread record is `{id, title, workspace, status, machine, updatedAt}`. Without `threads:read` it is `{id}` alone, in places and tabs too.
 
-## Effects
+## Calling the app
 
-`init`, `update`, `command` and a service's `timer` may answer up to 16 effects. They run on the UI thread, checked as they run: an effect that waits while its grant is taken back, or its plugin stops, doesn't run.
+A plugin acts in the app by calling it, from any export, and awaits the answer:
 
-| Effect | Fields | Answers | Needs |
-| --- | --- | --- | --- |
-| `toast` | `title`, `description?` | | |
-| `url.open` | `url` (http, https) | | |
-| `page.open` | `page` (its own) | | |
-| `tab.open` | `tab` (its own) | | `ui.place` |
-| `setting.status` | `setting`, `status: {badge?, tone?, text?}` or `null` | | |
-| `clipboard.write` | `text` | | `clipboard` |
-| `notify` | `title`, `body?` | | `notify` |
-| `composer.draft` | `text`, `workspace?` | | `composer` |
-| `threads.list` | | thread records, newest first | `threads:read` |
-| `threads.open` | `thread` | | `threads:read` |
-| `threads.create` | `prompt`, `title?`, `workspace?` | `{thread}` | `threads:write` |
-| `threads.send` | `thread`, `text` | `{message}` | `threads:write` |
+```js
+const threads = await glitched.threads.list();
+await glitched.composer.draft("Review the branch");
+try {
+  await glitched.threads.create(prompt, { title });
+} catch (e) {
+  if (e.code === "denied") { /* say which grant is missing */ }
+}
+```
+
+Each call runs on the UI thread (the engine's queue, for a service), checked as it runs: a call that waits while its grant is taken back fails, and one from a runtime that stopped, as a plugin turned off or reloaded, does nothing.
+
+| Call | Answers | Needs |
+| --- | --- | --- |
+| `glitched.toast(title, description?)` | | |
+| `glitched.openURL(url)` (http, https) | | |
+| `glitched.pages.open(page)` (its own) | | |
+| `glitched.tabs.open(tab)` (its own) | | `ui.place` |
+| `glitched.settings.get()` | its settings, typed, by id | |
+| `glitched.settings.status(setting, {badge?, tone?, text?} \| null)` | | |
+| `glitched.clipboard.write(text)` | | `clipboard` |
+| `glitched.notify(title, body?)` | | `notify` |
+| `glitched.composer.draft(text, workspace?)` | | `composer` |
+| `glitched.threads.list()` | thread records, newest first | `threads:read` |
+| `glitched.threads.open(thread)` | | `threads:read` |
+| `glitched.threads.create(prompt, {title?, workspace?})` | `{thread}` | `threads:write` |
+| `glitched.threads.send(thread, text)` | `{message}` | `threads:write` |
 
 A toast carries the plugin's name. `threads.create` starts a thread with the composer's model and access (a service's: the last thread's), and sends the prompt. A service can't toast, copy, notify, draft or open: it has no window.
+
+**Start over** starts a page's state over and drops what an earlier start answers; a call that start had already made goes through.
 
 ## The glitched global
 
@@ -301,11 +314,12 @@ Each has an `id`, a `kind`, a `label`, and optionally a `description`, `default`
 
 - **Read it:** `host.setting(id)` gives the value as text (`"true"`, `"25"`, the option's value), in the window and the service.
 - **Follow it:** list `setting.changed` in `events`.
-- **Say how it stands:** the `setting.status` effect sets a badge in a fixed tone (`neutral`, `success`, `warning`, `danger`) and words in the description's place; `null` clears it.
+- **Read them typed:** `glitched.settings.get()`.
+- **Say how it stands:** `glitched.settings.status(id, status)` sets a badge in a fixed tone (`neutral`, `success`, `warning`, `danger`) and words in the description's place; `null` clears it.
 
 ## Commands and shortcuts
 
-`contributes.commands` show in the palette (⌘K) as `<plugin>: <title>`, and run the `command` export, whose effects run. `glitched.shortcuts` bind them to keys. A key Glitched or an earlier plugin already has stays theirs.
+`contributes.commands` show in the palette (⌘K) as `<plugin>: <title>`, and run the `command` export. `glitched.shortcuts` bind them to keys. A key Glitched or an earlier plugin already has stays theirs.
 
 ## Permissions
 
@@ -325,7 +339,7 @@ Your plugins and others' plugins share one rule: the manifest says what a plugin
 | `service` | run in the background, with no window | yes |
 | `network` | reach the hosts `permissions.network` names | yes |
 
-Grants start off. **Settings › Plugins** has a switch for each one a plugin declares, and a grant reloads the plugin. `host.capability(name)` answers whether it has one now.
+Grants start off. **Settings › Plugins** has a switch for each one a plugin declares. A grant holds at once: the plugin's runtime asks for its grants as it uses them, so it goes on running, with what its pages hold, and its sessions hear `grant.changed`. `host.capability(name)` answers whether it has one now. In the engine, only the `service` grant reloads the plugin, as it decides which module runs.
 
 A plugin can never reach the UI tree, call Go beyond `glitched`, read files outside its data folder, share another plugin's runtime or storage, or hold the window.
 
@@ -363,7 +377,7 @@ Glitched checks the signature over every file before it writes anything, then in
 | State | 1 MiB |
 | A view / a place's copy | 1 MiB, 2000 widgets, 24 deep / 200 widgets |
 | A place call | 200 copies |
-| Events waiting / effects per answer | 64 / 16 |
+| Events waiting | 64 |
 | A timer | every 30 s at least |
 | A program run | 60 s (at most 300), 16 MiB per stream |
 | The database / a query | 100 MB / 10,000 rows |
@@ -402,5 +416,8 @@ Glitched pins `github.com/bigx333/mygo-plugin` by a `replace` of `github.com/yxx
 | `Options.LoadTimeout`, `Close` ending a start | upstream runs a module's top level with no limit, holding the plugin's lock |
 | `Options.Main` | the engine loads a plugin's service module as a runtime of its own |
 | A call fails as its runtime closes | upstream left it to its timeout, so a reload stalled callers |
+| `Plugin.Shutdown` | upstream's `Close` lets a later call start the runtime again; a replaced plugin is shut down for good |
+| `Options.IdleTimeout` | the runtime knows when calls run, so it stops an idle service itself |
+| `Options.Capability`, and `Allowed` asked on each request | upstream answered both as the runtime started, so a grant meant a restart that lost the plugin's state |
 
-The fork's README lists each change, and they are small enough to propose upstream. Glitched's own layers sit above it: the widget contract (`internal/plugins/widget`), the renderer (`render`), sessions, places, events, effects, grants, settings and services (`plugins`), the program and network guard (`guard`), and signing and installs (`pack`).
+The fork's README lists each change, and they are small enough to propose upstream. Glitched's own layers sit above it: the widget contract (`internal/plugins/widget`), the renderer (`render`), sessions, places, events, app calls, grants, settings and services (`plugins`), the program and network guard (`guard`), and signing and installs (`pack`).

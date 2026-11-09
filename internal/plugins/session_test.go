@@ -308,26 +308,28 @@ func TestMalformedPluginsFailAlone(t *testing.T) {
 	u.until(t, "the counter, beside them", func() bool { return strings.Contains(texts(s), "Count: 0") })
 }
 
-func TestEffectsNeedTheirCapabilityDeclared(t *testing.T) {
+func TestAppCallsNeedTheirCapability(t *testing.T) {
 	state, u, fx := t.TempDir(), newUIThread(), &effects{}
 	writeModule(t, state, "sneaky", `"capabilities": ["clipboard"], `, `
-		export function init() { return { state: [], effects: [
-			{ type: "threads.create", prompt: "rm -rf /" },
-			{ type: "clipboard.write", id: "copy", text: "hi" },
-			{ type: "eval", id: "eval" },
-			{ type: "url.open", id: "file", url: "file:///etc/passwd" },
-		] } }
-		export function view({ state }) { return { body: { type: "text", text: JSON.stringify(state) } } }
-		export function update({ state, event }) { return { state: [...state, event] } }`)
+		async function try_(f) { try { return "ok:" + JSON.stringify(await f()) } catch (e) { return e.code + ":" + e.message } }
+		export async function init() {
+			return { state: [
+				await try_(() => glitched.threads.create("rm -rf /")),
+				await try_(() => glitched.clipboard.write("hi")),
+				await try_(() => host.call("app", { type: "eval" })),
+				await try_(() => glitched.openURL("file:///etc/passwd")),
+			] }
+		}
+		export function view({ state }) { return { body: { type: "text", text: state.join(" | ") } } }`)
 	h := open(t, state, u, fx)
 	s := session(t, h, "sneaky")
-	u.until(t, "the four answers", func() bool { return strings.Count(texts(s), `"kind":"effect"`) == 4 })
+	u.until(t, "the four answers", func() bool { return strings.Count(texts(s), " | ") == 3 })
 	got := texts(s)
 	for _, want := range []string{
-		`"effect":"threads.create","ok":false,"error":"permission denied: threads.create needs the threads:write capability, which the plugin doesn't declare","denied":true`,
-		`"id":"copy","effect":"clipboard.write","ok":true`,
-		`"id":"eval","effect":"eval","ok":false,"error":"unknown effect \"eval\""`,
-		`"id":"file","effect":"url.open","ok":false`,
+		"denied:permission denied: threads.create needs the threads:write capability, which the plugin doesn't declare",
+		"ok:null",
+		`unknown effect "eval"`,
+		"not a web address",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("no %s in %s", want, got)
@@ -401,14 +403,14 @@ func TestRetryStartsThePageOver(t *testing.T) {
 func TestAnEffectWaitingWhenItsGrantGoesDoesNotRun(t *testing.T) {
 	state, u, fx := t.TempDir(), newUIThread(), &effects{}
 	writeModule(t, state, "runner", `"capabilities": ["threads:write"], `, `
-		export function init() { return { state: 0, effects: [{ type: "threads.create", prompt: "go" }] } }
+		export async function init() { try { await glitched.threads.create("go") } catch (e) {} return { state: 0 } }
 		export function view() { return { body: { type: "text", text: "x" } } }`)
 	h := open(t, state, u, fx)
 	if err := h.SetGranted("runner", "threads:write", true); err != nil {
 		t.Fatal(err)
 	}
 	session(t, h, "runner")
-	time.Sleep(300 * time.Millisecond) // the effect waits for the UI thread
+	time.Sleep(300 * time.Millisecond) // the call waits for the UI thread
 	if err := h.SetGranted("runner", "threads:write", false); err != nil {
 		t.Fatal(err)
 	}
@@ -442,23 +444,26 @@ func TestEachEventSeesTheValuesOfItsMoment(t *testing.T) {
 	}
 }
 
-func TestRetryDropsWhatTheEarlierStartAskedFor(t *testing.T) {
+func TestRetryDropsWhatTheEarlierStartAnswers(t *testing.T) {
 	state, u, fx := t.TempDir(), newUIThread(), &effects{}
 	writeModule(t, state, "counting", `"capabilities": ["clipboard"], `, `
-		export function init() { return { state: 0, effects: [{ type: "clipboard.write", id: "c", text: "x" }] } }
-		export function view({ state }) { return { body: { type: "text", text: "replies " + state } } }
-		export function update({ state }) { return { state: state + 1 } }`)
+		export async function init() {
+			const n = (host.storage.get("n") ?? 0) + 1; host.storage.set("n", n)
+			await glitched.clipboard.write("start " + n)
+			return { state: n }
+		}
+		export function view({ state }) { return { body: { type: "text", text: "start " + state } } }`)
 	h := open(t, state, u, fx)
 	s := session(t, h, "counting")
-	time.Sleep(300 * time.Millisecond) // the first start's effect waits for the UI thread
+	time.Sleep(300 * time.Millisecond) // the first start's call waits for the UI thread
 	s.Retry()
-	u.until(t, "the second start's reply", func() bool { return strings.Contains(texts(s), "replies 1") })
+	u.until(t, "the second start", func() bool { return strings.Contains(texts(s), "start 2") })
 	time.Sleep(200 * time.Millisecond)
 	for len(u.q) > 0 {
 		(<-u.q)()
 	}
-	if !strings.Contains(texts(s), "replies 1") {
-		t.Fatalf("an earlier start's reply landed: %s", texts(s))
+	if !strings.Contains(texts(s), "start 2") {
+		t.Fatalf("the earlier start's answer landed: %s", texts(s))
 	}
 }
 
@@ -503,25 +508,6 @@ func TestALinkedFolderLoads(t *testing.T) {
 	defer h.Close()
 	if len(h.Entries()) != 1 {
 		t.Fatalf("installed %+v", h.Installed())
-	}
-}
-
-func TestRetryDropsTheEarlierStartsEffects(t *testing.T) {
-	state, u, fx := t.TempDir(), newUIThread(), &effects{}
-	writeModule(t, state, "eager", `"capabilities": ["clipboard"], `, `
-		export function init() { return { state: 0, effects: [{ type: "clipboard.write", text: "x" }] } }
-		export function view() { return { body: { type: "text", text: "x" } } }`)
-	h := open(t, state, u, fx)
-	s := session(t, h, "eager")
-	time.Sleep(300 * time.Millisecond) // the first start's effect waits for the UI thread
-	s.Retry()
-	u.until(t, "the second start's effect", func() bool { return len(fx.ran) >= 1 && s.View != nil })
-	time.Sleep(200 * time.Millisecond)
-	for len(u.q) > 0 {
-		(<-u.q)()
-	}
-	if len(fx.ran) != 1 {
-		t.Fatalf("ran %d effects for one live start", len(fx.ran))
 	}
 }
 

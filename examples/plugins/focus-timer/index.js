@@ -2,25 +2,28 @@
 // so a command (the palette, or cmd+shift+f) and the header's button start
 // the same block. A 30 s timer moves the minutes on.
 
-const minutes = () => Number(host.setting("length")) || 25;
+let settings = {};
+const minutes = () => settings.length ?? 25;
 const ends = () => host.storage.get("ends") ?? 0;
 
 function left(now) {
   return Math.max(0, Math.ceil((ends() - now) / 60000));
 }
 
-export function init() {
-  return { state: { now: Date.now() }, effects: status() };
+export async function init() {
+  settings = await glitched.settings.get(); // typed: a number, a boolean
+  await status();
+  return { state: { now: Date.now() } };
 }
 
 // The setting's status says what the timer does now, beside its switch.
-function status() {
-  const on = left(Date.now()) > 0;
-  return [{ type: "setting.status", setting: "show", status: on ? { badge: "Running", tone: "success", text: `${left(Date.now())} minutes left.` } : null }];
+async function status() {
+  const n = left(Date.now());
+  await glitched.settings.status("show", n > 0 ? { badge: "Running", tone: "success", text: `${n} minutes left.` } : null);
 }
 
 export function place({ state, items }) {
-  if (host.setting("show") !== "true") return items.map(() => null);
+  if (settings.show === false) return items.map(() => null);
   const n = left(state.now);
   return items.map(() =>
     n > 0
@@ -49,20 +52,22 @@ export function view({ context }) {
   };
 }
 
-export function update({ state, event }) {
+export async function update({ state, event }) {
   const now = Date.now();
+  if (event.kind === "app" && event.type === "setting.changed") settings = await glitched.settings.get();
   if (event.kind === "ui" && event.handler === "start") start(event.place?.key);
   if (event.kind === "ui" && event.handler === "stop") host.storage.set("ends", 0);
   if (event.kind === "timer" && ends() > 0 && left(now) === 0) {
     host.storage.set("ends", 0);
-    const effects = host.setting("end") === "notify" ? [{ type: "notify", title: "Focus block done" }] : [];
-    return { state: { now }, effects: [...effects, ...status()] };
+    if (settings.end === "notify") await glitched.notify("Focus block done");
   }
-  return { state: { now }, effects: status() };
+  await status();
+  return { state: { now } };
 }
 
-export function command({ id }) {
+export async function command({ id }) {
   if (id !== "start") throw new Error("unknown command: " + id);
+  settings = await glitched.settings.get();
   start();
-  return { effects: [{ type: "toast", title: `Focus for ${minutes()} minutes` }] };
+  await glitched.toast(`Focus for ${minutes()} minutes`);
 }

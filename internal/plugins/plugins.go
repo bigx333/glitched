@@ -5,8 +5,8 @@
 // answering sections and items) or a native view: a widget tree (package
 // widget) that the plugin's view export answers from state the host keeps,
 // and its update export changes as the user acts on it. What a plugin may
-// do in the app beyond that, it asks for as effects, which the host checks
-// against the capabilities it declared and the user granted.
+// do in the app beyond that, it asks for with glitched's calls, which the
+// host checks against the capabilities it declared and the user granted.
 //
 // docs/plugins.md is the contract.
 package plugins
@@ -542,9 +542,9 @@ func (h *Host) Act(id string, a plugin.Action) error {
 	return fmt.Errorf("action %q is of a kind Glitched doesn't know: %q", a.ID, a.Kind)
 }
 
-// RunCommand runs the plugin id's command, off the UI thread, and the
-// effects it answers, whose answers go nowhere. done gets what failed, on
-// the UI thread.
+// RunCommand runs the plugin id's command, off the UI thread; what it
+// does in the app, it does with glitched's calls. done gets what failed,
+// on the UI thread.
 func (h *Host) RunCommand(id, command string, done func(error)) {
 	p, err := h.plugin(id)
 	if err != nil {
@@ -552,48 +552,29 @@ func (h *Host) RunCommand(id, command string, done func(error)) {
 		return
 	}
 	go func() {
-		var out struct {
-			Effects []Effect `json:"effects"`
-		}
-		err := p.Command(command, nil, &out)
-		if err == nil && len(out.Effects) > MaxEffects {
-			err = fmt.Errorf("command %s asked for %d effects, over %d", command, len(out.Effects), MaxEffects)
-		}
-		if err != nil {
-			h.opts.Post(func() { done(err) })
-			return
-		}
-		for _, e := range out.Effects {
-			h.effect(id, p, e, nil, func(_ any, err error) {
-				if err != nil {
-					done(fmt.Errorf("%s: %w", e.Type, err))
-				}
-			})
-		}
+		err := p.Command(command, nil, nil)
 		h.opts.Post(func() {
 			// Its app session hears it ran, to draw what the command changed.
-			if s := h.sessions[pageKey{plugin: id}]; s != nil {
+			if s := h.sessions[pageKey{plugin: id}]; err == nil && s != nil {
 				s.Notify(AppEvent{Kind: "app", Type: "command", Data: map[string]string{"id": command}})
 			}
-			done(nil)
+			done(err)
 		})
 	}()
 }
 
-// effect runs one effect the plugin id asked for, if it may, on the UI
-// thread, and gives done its answer there.
-//
-// The checks run there too, as the effect runs: a grant taken back, or the
-// plugin turned off or reloaded, while it waited, stops it.
-//
-// live, when set, says whether what asked for it still wants it: a page
-// that started over or closed doesn't.
-func (h *Host) effect(id string, from *plugin.Plugin, e Effect, live func() bool, done func(any, error)) {
+// effect runs what the plugin id asked the app for, if it may, on the UI
+// thread, and gives done its answer there. The checks run there too, as
+// it runs: a grant taken back while it waited stops it. ctx is the
+// runtime's that asked: one that stopped meanwhile, as a plugin turned
+// off or reloaded, gets nothing done.
+func (h *Host) effect(ctx context.Context, id string, e Effect, done func(any, error)) {
 	h.opts.Post(func() {
-		if live != nil && !live() {
+		if ctx.Err() != nil {
+			done(nil, ctx.Err())
 			return
 		}
-		if err := h.check(id, from, e.Type); err != nil {
+		if err := h.check(id, e.Type); err != nil {
 			done(nil, err)
 			return
 		}
@@ -620,18 +601,13 @@ func (h *Host) effect(id string, from *plugin.Plugin, e Effect, live func() bool
 	})
 }
 
-// check says why the plugin id's instance from may not run the effect, or
-// nil.
-func (h *Host) check(id string, from *plugin.Plugin, effect string) error {
+// check says why the running plugin id may not ask the app for effect,
+// or nil.
+func (h *Host) check(id string, effect string) error {
 	need, known := Effects[effect]
+	in := h.running1(id)
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	var in *installed
-	for _, i := range h.installed {
-		if i.p != nil && i.p == from {
-			in = i
-		}
-	}
 	switch {
 	case in == nil:
 		return fmt.Errorf("%w: plugin %s stopped", ErrDenied, id)

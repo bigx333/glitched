@@ -130,7 +130,7 @@ func TestAServiceDoesntRunTillItsGranted(t *testing.T) {
 	writeService(t, state, "svc", `"capabilities": ["service", "clipboard"], "glitched": { "service": "service.js", "timers": [{ "id": "t", "every": 30 }] }, `,
 		`export function view() {}`, `
 		await glitched.db.exec("CREATE TABLE ran (a INTEGER)")
-		export function timer() { return { effects: [{ type: "clipboard.write", text: "x" }] } }`)
+		export async function timer() { await glitched.clipboard.write("x") }`)
 	var ran atomicCount
 	s := StartServices(state, ServiceOptions{Logf: t.Logf, TimerScale: 0.002, Do: func(string, Effect) (any, error) { ran.add(); return nil, nil }})
 	defer s.Close()

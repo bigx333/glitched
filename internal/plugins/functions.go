@@ -21,7 +21,25 @@ const LoadTimeout = 5 * time.Second
 
 // Prelude defines the glitched global every plugin runtime has: awaitable
 // calls into the host, over mygo-plugin's host.call.
-const Prelude = `globalThis.glitched = Object.freeze({
+const Prelude = `const app = (type, args = {}) => host.call("app", { ...args, type });
+globalThis.glitched = Object.freeze({
+  toast: (title, description) => app("toast", { title, description }),
+  openURL: (url) => app("url.open", { url }),
+  pages: Object.freeze({ open: (page) => app("page.open", { page }) }),
+  tabs: Object.freeze({ open: (tab) => app("tab.open", { tab }) }),
+  clipboard: Object.freeze({ write: (text) => app("clipboard.write", { text }) }),
+  notify: (title, body) => app("notify", { title, body }),
+  composer: Object.freeze({ draft: (text, workspace) => app("composer.draft", { text, workspace }) }),
+  threads: Object.freeze({
+    list: () => app("threads.list"),
+    open: (thread) => app("threads.open", { thread }),
+    create: (prompt, options = {}) => app("threads.create", { ...options, prompt }),
+    send: (thread, text) => app("threads.send", { thread, text }),
+  }),
+  settings: Object.freeze({
+    get: () => host.call("settings"),
+    status: (setting, status) => app("setting.status", { setting, status: status ?? null }),
+  }),
   run: (program, args = [], options = {}) => host.call("run", { ...options, program, args }),
   db: Object.freeze({
     exec: (sql, params) => host.call("db.exec", { sql, params: params ?? [] }),
@@ -59,6 +77,32 @@ func (h *Host) functions(in *installed) map[string]plugin.Function {
 	fns := map[string]plugin.Function{
 		"db.exec":  db.exec,
 		"db.query": db.query,
+		// app asks the app to do what only it can, checked as it runs on
+		// the UI thread, and answers what it did.
+		"app": func(ctx context.Context, args json.RawMessage) (any, error) {
+			var e Effect
+			if err := json.Unmarshal(args, &e); err != nil || e.Type == "" {
+				return nil, errors.New("an app call names its type")
+			}
+			type answer struct {
+				v   any
+				err error
+			}
+			ch := make(chan answer, 1)
+			h.effect(ctx, id, e, func(v any, err error) { ch <- answer{v, err} })
+			select {
+			case a := <-ch:
+				if errors.Is(a.err, ErrDenied) {
+					return nil, coded{"denied", a.err}
+				}
+				return a.v, a.err
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+		"settings": func(context.Context, json.RawMessage) (any, error) {
+			return h.SettingValues(id), nil
+		},
 		"run": func(ctx context.Context, args json.RawMessage) (any, error) {
 			if !h.Allowed(id, "programs") {
 				return nil, denied("running programs needs the programs capability, granted in Settings › Plugins")

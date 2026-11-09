@@ -118,17 +118,6 @@ type AppEvent struct {
 	Data any    `json:"data,omitempty"`
 }
 
-// EffectEvent is an effect's answer, as update gets it.
-type EffectEvent struct {
-	Kind   string `json:"kind"` // "effect"
-	ID     string `json:"id,omitempty"`
-	Effect string `json:"effect"`
-	OK     bool   `json:"ok"`
-	Result any    `json:"result,omitempty"`
-	Error  string `json:"error,omitempty"`
-	Denied bool   `json:"denied,omitempty"`
-}
-
 // Session is the plugin id's view page, started if it isn't.
 func (h *Host) Session(id, page string) (*Session, error) {
 	k := pageKey{plugin: id, page: page}
@@ -353,7 +342,7 @@ func (s *Session) run() {
 }
 
 // apply hands the plugin one event, or starts it with init, and keeps the
-// state it answers. It runs the effects it asks for.
+// state it answers.
 func (s *Session) apply(q queued, state json.RawMessage, values map[string]any, context any) error {
 	var raw json.RawMessage
 	var err error
@@ -378,17 +367,6 @@ func (s *Session) apply(q queued, state json.RawMessage, values map[string]any, 
 	}
 	if q.init || u.hasState {
 		s.setState(q.gen, u.state)
-	}
-	for _, e := range u.effects {
-		s.h.effect(s.plugin, s.runtime(), e, func() bool { return s.current(q.gen) }, func(result any, err error) {
-			ev := EffectEvent{Kind: "effect", ID: e.ID, Effect: e.Type, OK: err == nil, Result: result}
-			if err != nil {
-				ev.Error, ev.Denied = err.Error(), errors.Is(err, ErrDenied)
-			} else if e.ID == "" {
-				return // no one waits for it
-			}
-			s.push(queued{gen: q.gen, event: ev})
-		})
 	}
 	return nil
 }
@@ -424,11 +402,11 @@ func (s *Session) setState(gen int, st json.RawMessage) {
 type update struct {
 	hasState bool
 	state    json.RawMessage
-	effects  []Effect
 }
 
 // decodeUpdate reads what init or update answered: nothing, which
-// changes nothing, or {state?, effects?}.
+// changes nothing, or {state}. What a plugin does in the app, it does
+// with glitched's calls as it runs.
 func decodeUpdate(raw json.RawMessage) (update, error) {
 	var u update
 	if len(raw) == 0 || string(raw) == "null" {
@@ -436,10 +414,14 @@ func decodeUpdate(raw json.RawMessage) (update, error) {
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
-		return u, fmt.Errorf("update answered %.40s…, not {state, effects}", raw)
+		return u, fmt.Errorf("update answered %.40s…, not {state}", raw)
 	}
 	for k := range fields {
-		if k != "state" && k != "effects" {
+		switch k {
+		case "state":
+		case "effects":
+			return u, errors.New("update answered effects: call glitched's functions instead, as glitched.toast(...)")
+		default:
 			return u, fmt.Errorf("update answered an unknown field %q", k)
 		}
 	}
@@ -448,14 +430,6 @@ func decodeUpdate(raw json.RawMessage) (update, error) {
 			return u, fmt.Errorf("state is %d bytes, over the %d allowed", len(st), MaxState)
 		}
 		u.hasState, u.state = true, st
-	}
-	if e, ok := fields["effects"]; ok && !bytes.Equal(e, []byte("null")) {
-		if err := json.Unmarshal(e, &u.effects); err != nil {
-			return u, fmt.Errorf("effects: %w", err)
-		}
-		if len(u.effects) > MaxEffects {
-			return u, fmt.Errorf("%d effects, over the %d allowed", len(u.effects), MaxEffects)
-		}
 	}
 	return u, nil
 }

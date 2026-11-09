@@ -70,9 +70,9 @@ func TestAServiceAnswersRunsItsTimersAndFollowsItsGrant(t *testing.T) {
 			if (method === "ping") return { pong: args, calls: ++calls, polls: host.storage.get("polls") ?? 0 }
 			throw new Error("no method " + method)
 		}
-		export function timer({ id }) {
+		export async function timer({ id }) {
 			host.storage.set("polls", (host.storage.get("polls") ?? 0) + 1)
-			return { effects: [{ type: "clipboard.write", text: "polled " + id }] }
+			await glitched.clipboard.write("polled " + id)
 		}`)
 	var mu sync.Mutex
 	var done []string

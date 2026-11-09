@@ -112,18 +112,6 @@ type UIEvent = {
   place?: { id: string; at: Slot; key: string; context?: ThreadRecord };
 };
 
-type EffectEvent = {
-  kind: "effect";
-  /** The effect's id; absent when it had none, which only a failure sends. */
-  id?: string;
-  effect: string;
-  ok: boolean;
-  result?: unknown;
-  error?: string;
-  /** The capability is undeclared or not granted. */
-  denied?: boolean;
-};
-
 /** An app event the plugin hears (its manifest's glitched.events), or a timer. */
 type AppEvent =
   | { kind: "app"; type: "thread.changed"; data: ThreadRecord | { id: string; deleted: true } }
@@ -131,30 +119,14 @@ type AppEvent =
   | { kind: "app"; type: "setting.changed"; data: { id: string; value: unknown; was: unknown } }
   | { kind: "app"; type: "theme.changed"; data: { appearance: "light" | "dark" } }
   | { kind: "app"; type: "command"; data: { id: string } }
+  | { kind: "app"; type: "grant.changed"; data: { capability: string; granted: boolean } }
   | { kind: "timer"; id: string };
 
-type GlitchedEvent = UIEvent | EffectEvent | AppEvent;
+type GlitchedEvent = UIEvent | AppEvent;
 
-/** An effect asks the app to do something; id names its answer. */
-type Effect = { id?: string } & (
-  | { type: "toast"; title: string; description?: string }
-  | { type: "url.open"; url: string }
-  | { type: "page.open"; page: string }
-  | { type: "tab.open"; tab: string }
-  | { type: "setting.status"; setting: string; status: { badge?: string; tone?: "neutral" | "success" | "warning" | "danger"; text?: string } | null }
-  | { type: "clipboard.write"; text: string }
-  | { type: "notify"; title: string; body?: string }
-  | { type: "composer.draft"; text: string; workspace?: string }
-  | { type: "threads.list" }
-  | { type: "threads.open"; thread: string }
-  | { type: "threads.create"; prompt: string; title?: string; workspace?: string }
-  | { type: "threads.send"; thread: string; text: string }
-);
-
-/** What init, update, command and a service's timer answer. Leave state out to keep it. */
+/** What init and update answer. Leave state out to keep it. */
 interface Update<S> {
   state?: S;
-  effects?: Effect[];
 }
 
 /** Glitched's slots. Stable ones keep their name and context across updates. */
@@ -208,6 +180,24 @@ interface RunResult {
 
 /** The glitched global: awaitable calls into Glitched. Each fails with err.code "denied" without its grant. */
 declare const glitched: {
+  toast(title: string, description?: string): Promise<void>;
+  openURL(url: string): Promise<void>;
+  pages: { open(page: string): Promise<void> };
+  tabs: { open(tab: string): Promise<void> };
+  settings: {
+    /** Its settings by id, typed: a switch's boolean, a number's number. */
+    get(): Promise<Record<string, string | number | boolean>>;
+    status(setting: string, status: { badge?: string; tone?: "neutral" | "success" | "warning" | "danger"; text?: string } | null): Promise<void>;
+  };
+  clipboard: { write(text: string): Promise<void> };
+  notify(title: string, body?: string): Promise<void>;
+  composer: { draft(text: string, workspace?: string): Promise<void> };
+  threads: {
+    list(): Promise<ThreadRecord[]>;
+    open(thread: string): Promise<void>;
+    create(prompt: string, options?: { title?: string; workspace?: string }): Promise<{ thread: string }>;
+    send(thread: string, text: string): Promise<{ message: string }>;
+  };
   /** Run a program the manifest's glitched.programs names, as you, with no shell. Needs programs. */
   run(program: string, args?: string[], options?: { cwd?: string; stdin?: string; timeout?: number; env?: Record<string, string> }): Promise<RunResult>;
   /** The plugin's own SQLite database: parameters are always bound. */
