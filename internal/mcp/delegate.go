@@ -18,6 +18,16 @@ import (
 type Tools struct {
 	Engine api.Endpoint
 	Origin Origin
+	// Plugins reaches the tools of the plugins the engine runs; nil offers
+	// none.
+	Plugins PluginTools
+}
+
+// PluginTools are the engine's plugin tools, as transport.EndpointClient
+// reaches them.
+type PluginTools interface {
+	PluginTools(ctx context.Context) (json.RawMessage, error)
+	PluginTool(ctx context.Context, call json.RawMessage) (json.RawMessage, error)
 }
 
 const delegateTask = "delegate_task"

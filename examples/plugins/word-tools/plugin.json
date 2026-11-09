@@ -1,0 +1,25 @@
+{
+  "id": "word-tools",
+  "name": "Word tools",
+  "description": "Tools for Glitched's agents: count a text's words, and keep notes per thread.",
+  "version": "0.1.0",
+  "main": "index.js",
+  "contract": "glitched",
+  "contractVersion": 1,
+  "capabilities": ["tools"],
+  "permissions": {},
+  "glitched": {
+    "tools": [
+      {
+        "name": "count_words",
+        "description": "Count the words, lines and characters of a text.",
+        "input": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] }
+      },
+      {
+        "name": "note",
+        "description": "Keep a short note for this thread, or read the ones kept. Give text to keep one; give none to read them.",
+        "input": { "type": "object", "properties": { "text": { "type": "string" } } }
+      }
+    ]
+  }
+}

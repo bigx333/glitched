@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"slices"
+	"strings"
 	"sync"
 )
 
@@ -100,7 +101,7 @@ func handle(ctx context.Context, tools *Tools, m message) reply {
 	case "ping":
 		r.Result = struct{}{}
 	case "tools/list":
-		r.Result = map[string]any{"tools": catalog}
+		r.Result = map[string]any{"tools": append(slices.Clone(catalog), tools.pluginCatalog(ctx)...)}
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
@@ -111,6 +112,15 @@ func handle(ctx context.Context, tools *Tools, m message) reply {
 		}
 		if err := json.Unmarshal(m.Params, &p); err != nil {
 			r.Error = &rpcError{invalidParams, err.Error()}
+			return r
+		}
+		if plugin, tool, ok := strings.Cut(p.Name, "__"); ok && tools.Plugins != nil {
+			out, err := tools.pluginTool(ctx, plugin, tool, p.Arguments)
+			if err != nil {
+				r.Result = map[string]any{"content": []any{text(err.Error())}, "isError": true}
+				return r
+			}
+			r.Result = map[string]any{"content": []any{text(string(out))}, "isError": false}
 			return r
 		}
 		if p.Name != delegateTask {

@@ -5,6 +5,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -64,6 +65,8 @@ type Config struct {
 	// Children caps the child threads agents start. Its zero fields take
 	// engine.DefaultLimits'.
 	Children engine.Limits `json:"children,omitzero"`
+	// PluginRun runs the programs plugins' services ask for; nil runs none.
+	PluginRun func(ctx context.Context, id string, allowed []string, args json.RawMessage) (any, error) `json:"-"`
 }
 
 const configFile = "engine.json"
@@ -271,7 +274,9 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	if err := os.Chmod(sock.Address, 0o600); err != nil {
 		return nil, err
 	}
-	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep}}
+	svc := d.startPlugins(cfg.Dir, cfg.PluginRun)
+	d.undo = append(d.undo, func() error { svc.Close(); return nil })
+	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}}}
 	g := &grants{dir: cfg.Dir, base: ctx}
 	tailnetServer := func(tn transport.Transport) *transport.Server {
 		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Authorize: g.authorize}
