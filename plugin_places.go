@@ -90,7 +90,7 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread) {
 		cs.Sync(v, app.Rev, app.Processed)
 		ref := &plugins.PlaceRef{ID: pl.Place.ID, At: at, Key: key, Context: ctx}
 		ui.Row(c).Key("plugin:" + pl.Plugin + ":" + pl.Place.ID).Shrink(1).AlignItems(ui.Center).ClipX().Children(func() {
-			render.View(c, v, cs, a.pluginStyle(), &a.pluginMD, func(ev plugins.UIEvent, values map[string]any) int {
+			render.View(c, v, cs, a.pluginStyle(pl.Plugin), &a.pluginMD, func(ev plugins.UIEvent, values map[string]any) int {
 				ev.Place = ref
 				return app.Dispatch(ev, values)
 			})
@@ -117,13 +117,6 @@ func (a *app) syncPlaces() {
 		if !f.keys[k] {
 			delete(a.placeControls, k)
 		}
-	}
-}
-
-func (a *app) pluginStyle() render.Style {
-	return render.Style{
-		Muted: palette.muted, Accent: palette.accent, Red: palette.red, Green: palette.green, Amber: palette.amber, Border: palette.border,
-		Card: func(c *ui.Context, title string, body func()) { card(c, strings.ToUpper(title), body) },
 	}
 }
 
@@ -207,7 +200,7 @@ type pluginTabEntry struct {
 func (a *app) tabButtons(c *ui.Context) {
 	for _, e := range a.pluginTabs() {
 		on := a.showPluginTab && !a.showDiff && !a.showPreview && a.pluginTabShown == e.key
-		icon := pluginIcons[e.tab.Icon]
+		icon := appIconNamed(e.tab.Icon)
 		if icon == nil {
 			icon = icPlug
 		}

@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 // Version is the version of the tree's shape. A change that breaks a
@@ -30,7 +31,14 @@ const (
 	MaxOptions = 200      // one select's options
 	MaxPayload = 4 << 10  // one handler's payload, as JSON
 	MaxSpacing = 64       // gap and padding, in points
+	MaxColumns = 20       // one table's
+	MaxRows    = 500      // one table's
+	MaxSize    = 2000     // an image's width or height, in points
 )
+
+// Colors are the theme's tokens a widget's color and background take: a
+// plugin follows the user's theme, never raw values.
+var Colors = []string{"$text", "$text.muted", "$text.faint", "$accent", "$success", "$warning", "$danger", "$border", "$surface"}
 
 // Types are the widgets this version draws.
 var Types = map[string]kind{
@@ -47,6 +55,12 @@ var Types = map[string]kind{
 	"input":    control,
 	"toggle":   control,
 	"select":   control,
+	"tabs":     control,
+	"menu":     control,
+	"dialog":   dialog,
+	"table":    leaf,
+	"image":    leaf,
+	"icon":     leaf,
 }
 
 type kind uint8
@@ -55,6 +69,7 @@ const (
 	leaf kind = iota
 	container
 	control // needs an id, which keys its state and its events
+	dialog  // a container with an id, drawn over the window while open
 )
 
 // View is what a view export answers: a page's heading and its body.
@@ -97,6 +112,39 @@ type Node struct {
 	OnClick  *Handler `json:"onClick,omitempty"`
 	OnChange *Handler `json:"onChange,omitempty"`
 	OnSubmit *Handler `json:"onSubmit,omitempty"`
+	// OnClose is a dialog's, as the user dismisses it.
+	OnClose *Handler `json:"onClose,omitempty"`
+
+	// Open shows a dialog.
+	Open bool `json:"open,omitempty"`
+	// A table's columns, and its rows: each a key and a text per column.
+	Columns []Column `json:"columns,omitempty"`
+	Rows    []Row    `json:"rows,omitempty"`
+	// An image's source: "plugin:<path>" in the plugin's folder, or an
+	// https address, which needs the network grant. Width and height are
+	// in points; Radius rounds its corners.
+	Src    string `json:"src,omitempty"`
+	Width  int    `json:"width,omitempty"`
+	Height int    `json:"height,omitempty"`
+	Radius int    `json:"radius,omitempty"`
+	// Name is an icon's: one of the app's, or "plugin:<path>.svg".
+	Name string `json:"name,omitempty"`
+	// Color and Background are theme tokens (Colors).
+	Color      string `json:"color,omitempty"`
+	Background string `json:"background,omitempty"`
+}
+
+// Column is a table's column.
+type Column struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Width int    `json:"width,omitempty"`
+}
+
+// Row is a table's row: its key, and its cells by column id.
+type Row struct {
+	Key   string            `json:"key"`
+	Cells map[string]string `json:"cells"`
 }
 
 // Option is one choice of a select: what the plugin gets, and what the
@@ -215,7 +263,7 @@ func (c *checker) node(n *Node, path string, depth int) error {
 	fail := func(format string, args ...any) error {
 		return fmt.Errorf("%s: %s", path, fmt.Sprintf(format, args...))
 	}
-	if n.ID != "" || k == control {
+	if n.ID != "" || k == control || k == dialog {
 		if !idPattern.MatchString(n.ID) {
 			return fail("a %s needs an id of 1 to 128 letters, digits or _.:/-, not %q", n.Type, n.ID)
 		}
@@ -224,7 +272,7 @@ func (c *checker) node(n *Node, path string, depth int) error {
 		}
 		c.ids[n.ID] = true
 	}
-	if k != container && len(n.Children) > 0 {
+	if k != container && k != dialog && len(n.Children) > 0 {
 		return fail("a %s has no children", n.Type)
 	}
 	for _, s := range []string{n.Text, n.Title, n.Label, n.Placeholder} {
@@ -248,6 +296,9 @@ func (c *checker) node(n *Node, path string, depth int) error {
 	if err := c.handlers(n); err != nil {
 		return fail("%v", err)
 	}
+	if err := c.extra(n); err != nil {
+		return fail("%v", err)
+	}
 	if err := c.value(n); err != nil {
 		return fail("%v", err)
 	}
@@ -266,8 +317,11 @@ func (c *checker) handlers(n *Node) error {
 		"input":  {"onChange", "onSubmit"},
 		"toggle": {"onChange"},
 		"select": {"onChange"},
+		"tabs":   {"onChange"},
+		"menu":   {"onChange"},
+		"dialog": {"onClose"},
 	}[n.Type]
-	for name, h := range map[string]*Handler{"onClick": n.OnClick, "onChange": n.OnChange, "onSubmit": n.OnSubmit} {
+	for name, h := range map[string]*Handler{"onClick": n.OnClick, "onChange": n.OnChange, "onSubmit": n.OnSubmit, "onClose": n.OnClose} {
 		if h == nil {
 			continue
 		}
@@ -286,17 +340,18 @@ func (c *checker) handlers(n *Node) error {
 
 // value checks the widget's value and options against its type.
 func (c *checker) value(n *Node) error {
-	if n.Type != "select" && len(n.Options) > 0 {
+	choosing := n.Type == "select" || n.Type == "tabs" || n.Type == "menu"
+	if !choosing && len(n.Options) > 0 {
 		return fmt.Errorf("a %s has no options", n.Type)
 	}
 	if n.Multiline && n.Type != "input" {
 		return fmt.Errorf("a %s is not multiline", n.Type)
 	}
-	if n.Controlled && n.Type != "input" && n.Type != "toggle" && n.Type != "select" {
+	if n.Controlled && n.Type != "input" && n.Type != "toggle" && n.Type != "select" && n.Type != "tabs" {
 		return fmt.Errorf("a %s is not controlled", n.Type)
 	}
-	if n.Type == "select" && (len(n.Options) == 0 || len(n.Options) > MaxOptions) {
-		return fmt.Errorf("a select has 1 to %d options", MaxOptions)
+	if choosing && (len(n.Options) == 0 || len(n.Options) > MaxOptions) {
+		return fmt.Errorf("a %s has 1 to %d options", n.Type, MaxOptions)
 	}
 	if len(n.Value) == 0 || string(n.Value) == "null" {
 		return nil
@@ -315,10 +370,10 @@ func (c *checker) value(n *Node) error {
 		if json.Unmarshal(n.Value, &b) != nil {
 			return fmt.Errorf("a toggle's value is true or false")
 		}
-	case "select":
+	case "select", "tabs":
 		var s string
 		if json.Unmarshal(n.Value, &s) != nil {
-			return fmt.Errorf("a select's value is a string")
+			return fmt.Errorf("a %s's value is a string", n.Type)
 		}
 		found := false
 		for _, o := range n.Options {
@@ -356,3 +411,69 @@ func (v *View) Find(id string) *Node {
 }
 
 func contains(list []string, s string) bool { return slices.Contains(list, s) }
+
+// extra checks the fields of the types that have their own: dialogs,
+// tables, images, icons, and the colors any widget may take.
+func (c *checker) extra(n *Node) error {
+	for _, col := range []string{n.Color, n.Background} {
+		if col != "" && !contains(Colors, col) {
+			return fmt.Errorf("color %q is none of %v", col, Colors)
+		}
+	}
+	if n.Open && n.Type != "dialog" {
+		return fmt.Errorf("a %s doesn't open", n.Type)
+	}
+	if (len(n.Columns) > 0 || len(n.Rows) > 0) && n.Type != "table" {
+		return fmt.Errorf("a %s has no columns or rows", n.Type)
+	}
+	if n.Src != "" && n.Type != "image" || n.Name != "" && n.Type != "icon" {
+		return fmt.Errorf("a %s has no src or name", n.Type)
+	}
+	if (n.Width != 0 || n.Height != 0 || n.Radius != 0) && n.Type != "image" {
+		return fmt.Errorf("a %s has no width, height or radius", n.Type)
+	}
+	switch n.Type {
+	case "table":
+		if len(n.Columns) == 0 || len(n.Columns) > MaxColumns || len(n.Rows) > MaxRows {
+			return fmt.Errorf("a table has 1 to %d columns and up to %d rows", MaxColumns, MaxRows)
+		}
+		cols := map[string]bool{}
+		for _, col := range n.Columns {
+			if col.ID == "" || cols[col.ID] || len(col.Title) > MaxText || col.Width < 0 || col.Width > MaxSize {
+				return fmt.Errorf("a table's columns each have an id of their own, a title and a width of 0 to %d", MaxSize)
+			}
+			cols[col.ID] = true
+		}
+		keys := map[string]bool{}
+		for _, r := range n.Rows {
+			if r.Key == "" || keys[r.Key] {
+				return fmt.Errorf("a table's rows each have a key of their own")
+			}
+			keys[r.Key] = true
+			for id, text := range r.Cells {
+				if !cols[id] || len(text) > MaxText {
+					return fmt.Errorf("row %q: cell %q is no column, or over %d bytes", r.Key, id, MaxText)
+				}
+			}
+		}
+	case "image":
+		if !strings.HasPrefix(n.Src, "plugin:") && !strings.HasPrefix(n.Src, "https://") {
+			return fmt.Errorf("an image's src is plugin:<path> or an https address")
+		}
+		if strings.Contains(n.Src, "..") || len(n.Src) > 2048 {
+			return fmt.Errorf("an image's src may not leave the plugin's folder")
+		}
+		if n.Width < 0 || n.Height < 0 || n.Width > MaxSize || n.Height > MaxSize || n.Radius < 0 || n.Radius > MaxSize {
+			return fmt.Errorf("an image's width, height and radius are 0 to %d", MaxSize)
+		}
+	case "icon":
+		if n.Name == "" || len(n.Name) > 128 || strings.Contains(n.Name, "..") {
+			return fmt.Errorf("an icon needs a name")
+		}
+	case "dialog":
+		if n.Title == "" {
+			return fmt.Errorf("a dialog needs a title")
+		}
+	}
+	return nil
+}

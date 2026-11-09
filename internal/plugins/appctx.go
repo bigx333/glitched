@@ -242,3 +242,11 @@ func (h *Host) Shortcuts() []ShortcutCommand {
 	}
 	return out
 }
+
+// Folder is the running plugin id's folder, "" if it doesn't run.
+func (h *Host) Folder(id string) string {
+	if in := h.running1(id); in != nil {
+		return in.folder
+	}
+	return ""
+}

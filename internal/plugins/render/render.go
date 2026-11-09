@@ -16,9 +16,20 @@ import (
 
 // Style is the look the app gives the widgets.
 type Style struct {
-	Muted, Accent, Red, Green, Amber, Border ui.Color
+	Text, Muted, Faint, Accent, Red, Green, Amber, Border, Surface ui.Color
 	// Card draws a card: its title over a body.
 	Card func(c *ui.Context, title string, body func())
+	// Icon is the icon a name gives, nil for none.
+	Icon func(name string) *ui.SVG
+	// Image is the picture at src, nil while it loads or if it can't.
+	Image func(src string) ui.ImageSource
+}
+
+// color is a theme token's color.
+func (st Style) color(token string) (ui.Color, bool) {
+	c, ok := map[string]ui.Color{"$text": st.Text, "$text.muted": st.Muted, "$text.faint": st.Faint, "$accent": st.Accent,
+		"$success": st.Green, "$warning": st.Amber, "$danger": st.Red, "$border": st.Border, "$surface": st.Surface}[token]
+	return c, ok
 }
 
 // Controls keep the values of a view's inputs, toggles and selects, by
@@ -28,6 +39,9 @@ type Style struct {
 type Controls struct {
 	m   map[string]*control
 	rev int
+	// dismissed are the dialogs the user closed, by id, till a view says
+	// again whether they're open.
+	dismissed map[string]bool
 }
 
 type control struct {
@@ -60,7 +74,10 @@ func (cs *Controls) Sync(v *widget.View, rev, processed int) {
 	cs.rev = rev
 	live := map[string]bool{}
 	v.Body.Walk(func(n *widget.Node) {
-		if n.Type != "input" && n.Type != "toggle" && n.Type != "select" {
+		if n.Type == "dialog" {
+			delete(cs.dismissed, n.ID)
+		}
+		if n.Type != "input" && n.Type != "toggle" && n.Type != "select" && n.Type != "tabs" {
 			return
 		}
 		live[n.ID] = true
@@ -123,7 +140,7 @@ func (ctl *control) set(n *widget.Node) {
 	case "toggle":
 		ctl.on = false
 		json.Unmarshal(n.Value, &ctl.on)
-	case "select":
+	case "select", "tabs":
 		ctl.text = ""
 		json.Unmarshal(n.Value, &ctl.text)
 		if ctl.text == "" && len(n.Options) > 0 {
@@ -215,6 +232,9 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		if n.Grow {
 			e.Grow(1).Shrink(1)
 		}
+		if col, ok := st.color(n.Background); ok {
+			e.Background(col).Radius(8)
+		}
 		e.Children(func() { r.children(c, n) })
 	case "card":
 		ui.Column(kc).Children(func() {
@@ -249,12 +269,18 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		if n.Selectable {
 			t.Selectable()
 		}
+		if col, ok := st.color(n.Color); ok {
+			t.TextColor(col)
+		}
 	case "markdown":
 		ui.Column(kc).LineHeight(1.55).Children(func() { markdown.View(c, n.Text, r.md) })
 	case "badge":
 		col := map[string]ui.Color{"accent": st.Accent, "success": st.Green, "warning": st.Amber, "danger": st.Red}[n.Style]
 		if col == (ui.Color{}) {
 			col = st.Muted
+		}
+		if c, ok := st.color(n.Color); ok {
+			col = c
 		}
 		ui.Text(kc, n.Text).FontSize(11).FontWeight(600).TextColor(col).Padding(1, 6).Radius(5).Background(col.Alpha(0.14))
 	case "divider":
@@ -336,6 +362,102 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			ui.Field(kc, n.Label, draw)
 		} else {
 			draw()
+		}
+	case "tabs":
+		ctl := r.cs.m[n.ID]
+		if ctl == nil {
+			return
+		}
+		labels := make([]string, len(n.Options))
+		at := 0
+		for j, o := range n.Options {
+			labels[j] = o.Shown()
+			if o.Value == ctl.text {
+				at = j
+			}
+		}
+		if ui.Tabs(kc, &at, labels...).Disabled(n.Disabled).Changed() {
+			ctl.text = n.Options[at].Value
+			r.fire(n, n.OnChange, "change", ctl.text)
+		}
+	case "menu":
+		ui.Button(kc, n.Label).Disabled(n.Disabled).Menu(func(m *ui.Menu) {
+			for _, o := range n.Options {
+				if m.Item(o.Shown()).Chosen() {
+					r.fire(n, n.OnChange, "change", o.Value)
+				}
+			}
+		})
+	case "dialog":
+		open := n.Open && !r.cs.dismissed[n.ID]
+		d := ui.Modal(kc, &open, func() {
+			ui.Column(c).Padding(20).Gap(12).MinWidth(320).MaxWidth(560).Children(func() {
+				ui.Text(c, n.Title).FontSize(16).FontWeight(650)
+				r.children(c, n)
+			})
+		})
+		if d.Dismissed() {
+			if r.cs.dismissed == nil {
+				r.cs.dismissed = map[string]bool{}
+			}
+			r.cs.dismissed[n.ID] = true
+			r.fire(n, n.OnClose, "close", nil)
+		}
+	case "table":
+		ui.Column(kc).Gap(0).Children(func() {
+			cell := func(col widget.Column, text string, head bool) {
+				t := ui.Text(c, text).SingleLine().Shrink(1).Padding(6, 8)
+				if col.Width > 0 {
+					t.Width(float32(col.Width))
+				} else {
+					t.Grow(1).Basis(0)
+				}
+				if head {
+					t.FontWeight(600).TextColor(st.Muted).FontSize(11.5)
+				}
+			}
+			ui.Row(c).Key("head").BorderWidth(0, 0, 1, 0).BorderColor(st.Border).Children(func() {
+				for _, col := range n.Columns {
+					cell(col, col.Title, true)
+				}
+			})
+			for _, row := range n.Rows {
+				ui.Row(c).Key("row:"+row.Key).BorderWidth(0, 0, 1, 0).BorderColor(st.Border.Alpha(0.5)).Children(func() {
+					for _, col := range n.Columns {
+						cell(col, row.Cells[col.ID], false)
+					}
+				})
+			}
+		})
+	case "image":
+		var src ui.ImageSource
+		if st.Image != nil {
+			src = st.Image(n.Src)
+		}
+		w, h := float32(n.Width), float32(n.Height)
+		if w == 0 {
+			w = 64
+		}
+		if h == 0 {
+			h = w
+		}
+		if src == nil {
+			ui.Box(kc).Size(w, h).Radius(float32(n.Radius)).Background(st.Border.Alpha(0.4))
+			return
+		}
+		ui.Image(kc, src).Size(w, h).Radius(float32(n.Radius))
+	case "icon":
+		var svg *ui.SVG
+		if st.Icon != nil {
+			svg = st.Icon(n.Name)
+		}
+		if svg == nil {
+			ui.Box(kc).Size(14, 14)
+			return
+		}
+		e := ui.Icon(kc, svg)
+		if col, ok := st.color(n.Color); ok {
+			e.TextColor(col)
 		}
 	}
 }
