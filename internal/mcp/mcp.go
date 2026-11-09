@@ -85,7 +85,7 @@ func Main(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	}
 	ep := transport.NewEndpointClient(transport.Loopback{Network: "unix", Address: engine}, api.ID{})
 	defer ep.Close()
-	return Serve(ctx, stdin, stdout, &Tools{Engine: ep, Origin: o})
+	return Serve(ctx, stdin, stdout, &Tools{Engine: ep, Origin: o, Plugins: ep})
 }
 
 func fromEnv() (Origin, string, error) {

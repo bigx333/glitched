@@ -552,6 +552,24 @@ func (e *EndpointClient) Read(ctx context.Context, q api.Query) (api.Snapshot, e
 	return snap, e.c.call(ctx, "read", q, &snap)
 }
 
+// PluginTools are the tools of the plugins the engine runs.
+func (e *EndpointClient) PluginTools(ctx context.Context) (json.RawMessage, error) {
+	var out json.RawMessage
+	return out, e.c.call(ctx, "plugins.tools", struct{}{}, &out)
+}
+
+// PluginTool calls a plugin's tool for an agent.
+func (e *EndpointClient) PluginTool(ctx context.Context, call json.RawMessage) (json.RawMessage, error) {
+	var out json.RawMessage
+	return out, e.c.call(ctx, "plugins.tool", call, &out)
+}
+
+// PluginCall calls a method of a plugin's service.
+func (e *EndpointClient) PluginCall(ctx context.Context, call json.RawMessage) (json.RawMessage, error) {
+	var out json.RawMessage
+	return out, e.c.call(ctx, "plugins.call", call, &out)
+}
+
 func (e *EndpointClient) Submit(ctx context.Context, cmd api.Command) (api.Receipt, error) {
 	var r api.Receipt
 	return r, e.c.call(ctx, "submit", cmd, &r)

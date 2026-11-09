@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,8 +18,10 @@ import (
 	plugin "github.com/yxxbc/mygo-plugin"
 
 	"glitched/internal/api"
+	"glitched/internal/daemon"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/render"
+	"glitched/internal/transport"
 )
 
 // pluginKey names a page a plugin contributes.
@@ -71,6 +74,14 @@ func (a *app) openPlugins(dir string) {
 		Post:       a.post,
 		Do:         a.pluginEffect,
 		Reloaded:   func(string) { clear(a.pluginAssets) },
+		ServiceCall: func(ctx context.Context, id, method string, args json.RawMessage) (any, error) {
+			call, _ := json.Marshal(plugins.ServiceCall{Plugin: id, Method: method, Args: args})
+			out, err := a.serviceClient(dir).PluginCall(ctx, call)
+			if err != nil {
+				return nil, err
+			}
+			return out, nil
+		},
 	})
 }
 
@@ -472,4 +483,15 @@ func pluginWorkspace(ws string) (string, error) {
 		return "", fmt.Errorf("workspace %q is not a folder", ws)
 	}
 	return filepath.Clean(ws), nil
+}
+
+// serviceClient reaches the plugins' services where this machine's engine
+// runs them, on its unix socket.
+func (a *app) serviceClient(dir string) *transport.EndpointClient {
+	a.serviceMu.Lock()
+	defer a.serviceMu.Unlock()
+	if a.services == nil {
+		a.services = transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
+	}
+	return a.services
 }

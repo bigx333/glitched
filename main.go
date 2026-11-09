@@ -15,6 +15,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -31,6 +32,7 @@ import (
 	"glitched/internal/mcp"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/render"
+	"glitched/internal/transport"
 	"glitched/wind"
 )
 
@@ -480,6 +482,9 @@ type app struct {
 	stopWatch  func()
 	// pluginAssets are the plugins' pictures, by plugin and file.
 	pluginAssets map[string]asset
+	// services reaches the plugins' services in this machine's engine.
+	serviceMu sync.Mutex
+	services  *transport.EndpointClient
 }
 
 // newApp is the app on the engines its state directory dir names. The
@@ -901,6 +906,9 @@ func main() {
 		}
 		a.stopWatch()
 		a.plugins.Close()
+		if a.services != nil {
+			a.services.Close()
+		}
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)

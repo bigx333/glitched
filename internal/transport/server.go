@@ -26,6 +26,9 @@ type Server struct {
 	Transport Transport
 	Endpoint  api.Endpoint
 	Hub       *hub.Replica
+	// Plugins serves the plugins' services and tools, to this machine's
+	// own callers only: the unix socket's server has it, a tailnet's never.
+	Plugins Plugins
 	// Authorize admits a socket whose client proved, in the handshake, that
 	// it holds one of the keys Authorize knows. proved reports whether the
 	// proof was made with a key; Authorize asks it of every key it knows,
@@ -291,6 +294,14 @@ func (k keepalive) run(ctx context.Context, ws *websocket.Conn) {
 	}
 }
 
+// Plugins are the plugins' services and tools, as JSON both ways, so that
+// the transport needn't know them.
+type Plugins interface {
+	PluginTools(ctx context.Context) (json.RawMessage, error)
+	PluginTool(ctx context.Context, call json.RawMessage) (json.RawMessage, error)
+	PluginCall(ctx context.Context, call json.RawMessage) (json.RawMessage, error)
+}
+
 // A handler answers one request with every message for its id.
 type handler func(ctx context.Context, params json.RawMessage, o *op)
 
@@ -303,6 +314,11 @@ func (s *Server) methods() map[string]handler {
 		m["subscribe"] = streamHandler(func(ctx context.Context, sub api.Subscription) (source[api.StreamItem], error) {
 			return e.Open(ctx, sub)
 		})
+	}
+	if p := s.Plugins; p != nil {
+		m["plugins.tools"] = callHandler(func(ctx context.Context, _ struct{}) (json.RawMessage, error) { return p.PluginTools(ctx) })
+		m["plugins.tool"] = callHandler(p.PluginTool)
+		m["plugins.call"] = callHandler(p.PluginCall)
 	}
 	if h := s.Hub; h != nil {
 		m["hub.append"] = callHandler(h.Append)
