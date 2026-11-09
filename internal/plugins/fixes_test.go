@@ -317,3 +317,18 @@ func TestACallOfReplacedCodeDoesNothing(t *testing.T) {
 		})
 	}
 }
+
+func TestOnlyWhatRunsReloadsTheEngine(t *testing.T) {
+	none := prefs{}
+	other := prefs{Grants: map[string][]string{"p": {"clipboard"}}}
+	svc := prefs{Grants: map[string][]string{"p": {"clipboard", "service"}}}
+	if loadingChanged(none, other) || loadingChanged(other, none) {
+		t.Fatal("a grant that isn't service reloads")
+	}
+	if !loadingChanged(other, svc) || !loadingChanged(svc, none) {
+		t.Fatal("the service grant doesn't reload")
+	}
+	if !loadingChanged(none, prefs{Disabled: []string{"p"}}) || !loadingChanged(none, prefs{Consent: map[string]consent{"p": {Key: "k"}}}) {
+		t.Fatal("turning off or a consent doesn't reload")
+	}
+}
