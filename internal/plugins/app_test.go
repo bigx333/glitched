@@ -234,7 +234,9 @@ func TestRunAndServiceNeedTheirGrants(t *testing.T) {
 			ran = append(ran, id+" "+strings.Join(allowed, ","))
 			return map[string]any{"status": 0}, nil
 		},
-		ServiceCall: func(_ context.Context, id, method string, _ json.RawMessage) (any, error) { return id + "." + method, nil },
+		ServiceCall: func(_ context.Context, id, method string, _ json.RawMessage) (any, error) {
+			return id + "." + method, nil
+		},
 	})
 	t.Cleanup(h.Close)
 	s := session(t, h, "worker")

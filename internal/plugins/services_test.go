@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -163,4 +164,41 @@ func TestTheWordToolsSample(t *testing.T) {
 	if got := call("note", `{}`, "t1"); got != `{"notes":["first"]}` {
 		t.Fatalf("notes: %s", got)
 	}
+}
+
+// repo is a git repository with two files not yet added.
+func repo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "-C", dir, "init", "-q", "-b", "main").CombinedOutput(); err != nil {
+		t.Skipf("no git: %v %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start").CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644)
+	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("b"), 0o644)
+	return dir
+}
+
+func TestTheRepoWatchServiceRunsGitOnItsTimer(t *testing.T) {
+	state, folder := t.TempDir(), repo(t)
+	copyPlugin(t, state, "repo-watch", "repo-watch")
+	grant(t, state, `{"grants": {"repo-watch": ["service", "programs"]}, "settings": {"repo-watch": {"folder": "`+folder+`"}}}`)
+	s := StartServices(state, ServiceOptions{Logf: t.Logf, TimerScale: 0.001})
+	defer s.Close()
+	out, err := s.Call(context.Background(), ServiceCall{Plugin: "repo-watch", Method: "check"})
+	if err != nil || string(out) != `{"branch":"main","changed":2}` {
+		t.Fatalf("check: %s, %v", out, err)
+	}
+	eventually(t, "a timer's check in the history", func() bool {
+		out, err := s.Call(context.Background(), ServiceCall{Plugin: "repo-watch", Method: "history"})
+		return err == nil && strings.Count(string(out), `"changed":2`) >= 2
+	})
+
+	grant(t, state, `{"grants": {"repo-watch": ["service"]}, "settings": {"repo-watch": {"folder": "`+folder+`"}}}`)
+	eventually(t, "git refused once programs is taken back", func() bool {
+		_, err := s.Call(context.Background(), ServiceCall{Plugin: "repo-watch", Method: "check"})
+		return err != nil && strings.Contains(err.Error(), "programs")
+	})
 }

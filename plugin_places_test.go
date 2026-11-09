@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -119,4 +120,31 @@ func TestSlotsAreStableNames(t *testing.T) {
 			}
 		}
 	}
+}
+
+// A page asks its plugin's service, which the engine runs with no window,
+// and the service runs git as the user.
+func TestAPageAsksItsServiceWhichRunsGit(t *testing.T) {
+	dir, repo := tempDir(t), t.TempDir()
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Skipf("git: %v %s", err, out)
+		}
+	}
+	os.WriteFile(filepath.Join(repo, "new.txt"), []byte("x"), 0o644)
+	install(t, dir, "repo-watch")
+	grant(t, dir, `{"grants": {"repo-watch": ["service", "programs"]}, "settings": {"repo-watch": {"folder": "`+repo+`"}}}`)
+	h := start(t, dir)
+	h.click("Repo watch")
+	h.until("the service's check", func() bool { return h.tt.HasText("1 changed") && h.tt.HasText("On main") })
+	h.click("Check now")
+	h.until("a second check in the table", func() bool {
+		n := 0
+		for _, s := range h.tt.Texts() {
+			if s == "main" {
+				n++
+			}
+		}
+		return n >= 2
+	})
 }

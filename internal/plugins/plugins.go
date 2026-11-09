@@ -29,6 +29,7 @@ import (
 	plugin "github.com/yxxbc/mygo-plugin"
 
 	"glitched/internal/jsonfile"
+	"glitched/internal/plugins/guard"
 )
 
 // Contract is the app contract Glitched provides: plugin.json's contract
@@ -219,7 +220,12 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 			return nil, errNotHere
 		}
 	}
+	client, err := httpClient(m.Permissions.Network)
+	if err != nil {
+		return nil, fmt.Errorf("permissions.network: %w", err)
+	}
 	return plugin.Load(in.folder, plugin.Options{
+		HTTPClient:      client,
 		Main:            main,
 		Functions:       h.functions(in),
 		Prelude:         Prelude,
@@ -267,7 +273,12 @@ type Plugin struct {
 	Capabilities []CapabilityState
 	// Network lists the hosts the plugin asks to reach.
 	Network []string
+	// Programs are the programs it runs, each with what running it risks.
+	Programs []Program
 }
+
+// Program is a program a plugin names, and what running it risks.
+type Program struct{ Name, Risk string }
 
 // CapabilityState is a capability a plugin declares, and whether it has it.
 type CapabilityState struct {
@@ -295,6 +306,9 @@ func (h *Host) Installed() []Plugin {
 				c = Capability{Name: name, Grant: true}
 			}
 			p.Capabilities = append(p.Capabilities, CapabilityState{c, h.allowed(m.ID, name)})
+		}
+		for _, name := range in.ext.Programs {
+			p.Programs = append(p.Programs, Program{name, guard.Risk(name)})
 		}
 		if len(p.Network) > 0 {
 			p.Capabilities = append(p.Capabilities, CapabilityState{Capability{Network, true, "Reach " + strings.Join(p.Network, ", ")}, h.granted(m.ID, Network)})

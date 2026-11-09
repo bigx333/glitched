@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -73,12 +74,13 @@ func (a *app) pluginIcon(id, name string) *ui.SVG {
 	return as.svg
 }
 
-// pluginImage is a picture of the plugin's folder ("plugin:cover.png"):
-// PNG, JPEG or SVG. Remote pictures aren't drawn yet.
+// pluginImage is a picture of the plugin's folder ("plugin:cover.png"),
+// or, with the network grant, an https one its permissions.network names:
+// PNG, JPEG or SVG.
 func (a *app) pluginImage(id, src string) ui.ImageSource {
 	rel, own := strings.CutPrefix(src, "plugin:")
 	if !own {
-		return nil
+		return a.remoteImage(id, src)
 	}
 	as := a.pluginAsset(id, "image:"+rel, func(b []byte) asset {
 		if len(b) > maxPluginImage {
@@ -121,4 +123,31 @@ func (a *app) pluginAsset(id, key string, decode func([]byte) asset, rel string)
 		a.post(func() { a.pluginAssets[k] = as })
 	}()
 	return asset{}
+}
+
+// remoteImage fetches an https picture under the plugin's network rules,
+// once, off the UI thread.
+func (a *app) remoteImage(id, src string) ui.ImageSource {
+	k := id + "\x00url:" + src
+	if as, ok := a.pluginAssets[k]; ok {
+		return as.src
+	}
+	a.pluginAssets[k] = asset{}
+	client := a.plugins.Fetcher(id)
+	go func() {
+		as := asset{loaded: true}
+		if client != nil && strings.HasPrefix(src, "https://") {
+			if resp, err := client.Get(src); err == nil {
+				b, err := io.ReadAll(io.LimitReader(resp.Body, maxPluginImage+1))
+				resp.Body.Close()
+				if err == nil && resp.StatusCode == 200 && len(b) <= maxPluginImage {
+					if bm, err := ui.DecodeBitmap(b); err == nil {
+						as.src = bm
+					}
+				}
+			}
+		}
+		a.post(func() { a.pluginAssets[k] = as })
+	}()
+	return nil
 }

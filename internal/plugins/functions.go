@@ -5,10 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	plugin "github.com/yxxbc/mygo-plugin"
+
+	"glitched/internal/plugins/guard"
 )
 
 // LoadTimeout bounds a module's top level as its runtime starts.
@@ -60,10 +65,11 @@ func (h *Host) functions(in *installed) map[string]plugin.Function {
 			if !h.Allowed(id, "programs") {
 				return nil, denied("running programs needs the programs capability, granted in Settings › Plugins")
 			}
-			if h.opts.Run == nil {
-				return nil, errors.New("this host runs no programs")
+			run := h.opts.Run
+			if run == nil {
+				run = RunProgram
 			}
-			return h.opts.Run(ctx, id, in.ext.Programs, args)
+			return run(ctx, id, in.ext.Programs, args)
 		},
 		"service.call": func(ctx context.Context, args json.RawMessage) (any, error) {
 			if in.ext.Service == "" {
@@ -93,4 +99,48 @@ func (h *Host) functions(in *installed) map[string]plugin.Function {
 		},
 	}
 	return fns
+}
+
+// RunProgram is glitched.run: a program the plugin's manifest names, run
+// as the user under the guard's rules, its output as text.
+func RunProgram(ctx context.Context, _ string, allowed []string, raw json.RawMessage) (any, error) {
+	var a struct {
+		Program string            `json:"program"`
+		Args    []string          `json:"args"`
+		Cwd     string            `json:"cwd"`
+		Stdin   string            `json:"stdin"`
+		Timeout float64           `json:"timeout"`
+		Env     map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(raw, &a); err != nil || a.Program == "" {
+		return nil, errors.New("glitched.run takes a program and its args")
+	}
+	if a.Cwd == "" {
+		a.Cwd, _ = os.UserHomeDir()
+	}
+	r, err := guard.Run(ctx, guard.Spec{
+		Program: a.Program, Args: a.Args, Cwd: a.Cwd, Stdin: []byte(a.Stdin), Env: a.Env,
+		Timeout: time.Duration(a.Timeout * float64(time.Second)), Allowed: allowed,
+	})
+	if errors.Is(err, guard.ErrRefused) {
+		return nil, coded{"refused", err}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": r.Status, "stdout": string(r.Stdout), "stderr": string(r.Stderr)}, nil
+}
+
+// httpClient is what the plugin's fetch sends with: under the guard's
+// rules, so a host it names that resolves to a private or metadata address
+// is never reached unless named exactly.
+func httpClient(hosts []string) (*http.Client, error) {
+	if slices.Contains(hosts, "*") {
+		hosts = nil // any public address
+	}
+	p, err := guard.NewNetPolicy(hosts)
+	if err != nil {
+		return nil, err
+	}
+	return guard.HTTPClient(p, 10*time.Minute), nil
 }
