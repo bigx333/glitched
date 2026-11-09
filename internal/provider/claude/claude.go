@@ -156,17 +156,29 @@ var exeSuffix = map[bool]string{true: ".exe"}[runtime.GOOS == "windows"]
 // rules, hooks and the run's mode leave undecided comes to the run as a
 // can_use_tool control request on stdout.
 //
-// The run's MCP server goes beside the user's own, which an inline
-// --mcp-config without --strict-mcp-config merges with, and its tools
-// never ask.
+// The run's MCP server and the engine's MCPConfig go beside the user's
+// own, which --mcp-config without --strict-mcp-config merges with. One
+// --mcp-config takes both, the run's inline first and the file after it,
+// as it takes every value up to the next flag, which always follows. Only
+// the run's server's tools never ask.
 func (ad *Adapter) argv(spec provider.SessionSpec, sessionFlag, session string) []string {
 	a := []string{"-p", "--verbose",
 		"--input-format", "stream-json", "--output-format", "stream-json",
 		"--include-partial-messages",
 		"--permission-mode", modes[spec.Access], "--permission-prompt-tool", "stdio",
 	}
+	var configs []string
 	if s := spec.MCP; s != nil {
-		a = append(a, "--mcp-config", mcpConfig(s), "--allowedTools", "mcp__"+s.Name+"__*",
+		configs = append(configs, mcpConfig(s))
+	}
+	if ad.MCPConfig != "" {
+		configs = append(configs, ad.MCPConfig)
+	}
+	if len(configs) > 0 {
+		a = append(append(a, "--mcp-config"), configs...)
+	}
+	if s := spec.MCP; s != nil {
+		a = append(a, "--allowedTools", "mcp__"+s.Name+"__*",
 			"--append-system-prompt", s.Instructions)
 	}
 	if m := modelOf(spec.Model.Model); m != "" {
@@ -174,11 +186,6 @@ func (ad *Adapter) argv(spec provider.SessionSpec, sessionFlag, session string) 
 	}
 	if e := spec.Model.Effort; e != "" {
 		a = append(a, "--effort", e)
-	}
-	// --mcp-config takes every value after it until the next flag,
-	// which follows here.
-	if ad.MCPConfig != "" {
-		a = append(a, "--mcp-config", ad.MCPConfig)
 	}
 	return append(a, sessionFlag, session)
 }
