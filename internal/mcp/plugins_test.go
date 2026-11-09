@@ -11,6 +11,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/daemon"
 	"glitched/internal/mcp"
+	"glitched/internal/plugins/pack"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
@@ -31,6 +32,13 @@ func TestAnAgentCallsAPluginsTool(t *testing.T) {
 		"input": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}]}}`), 0o644)
 	os.WriteFile(filepath.Join(folder, "index.js"), []byte(`export function tool({ name, args, call }) {
 		return { words: args.text.split(/\s+/).filter(Boolean).length, thread: call.thread } }`), 0o644)
+	key, err := pack.LoadKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pack.Sign(folder, key); err != nil {
+		t.Fatal(err)
+	}
 	d, err := daemon.Start(ctx, daemon.Config{Dir: dir, Hub: true, Providers: provider.Mux{"fake": fake.New(nil)}})
 	if err != nil {
 		t.Fatal(err)
