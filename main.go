@@ -471,10 +471,9 @@ type app struct {
 	placeControls map[placeKey]*render.Controls
 	// pluginRecords are what the plugins were last told of the threads.
 	pluginRecords map[string]string
-	// pluginMessages are the messages of the thread pluginMessagesOf the
-	// plugins were told of, by key.
-	pluginMessages   map[string]bool
-	pluginMessagesOf string
+	// pluginMessages are the messages the plugins were told of, by thread
+	// and key.
+	pluginMessages map[string]map[string]bool
 	// showPluginTab shows pluginTabShown in the panel beside the chat.
 	showPluginTab  bool
 	pluginTabShown pluginTab
@@ -544,6 +543,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		pluginAssets:   map[string]asset{},
 		settingDrafts:  map[string]string{},
 		pluginRecords:  map[string]string{},
+		pluginMessages: map[string]map[string]bool{},
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,
@@ -994,12 +994,12 @@ func (q *windowQueue) post(fn func(*mygo.Window)) {
 
 // ready runs what waited, now that the window exists.
 func (q *windowQueue) ready(w *mygo.Window) {
+	// Under the lock, so that nothing posted meanwhile runs ahead of what
+	// waited: each queues its update on the window and returns.
 	q.mu.Lock()
-	q.win = w
-	waiting := q.queue
-	q.queue = nil
-	q.mu.Unlock()
-	for _, fn := range waiting {
+	defer q.mu.Unlock()
+	for _, fn := range q.queue {
 		fn(w)
 	}
+	q.queue, q.win = nil, w
 }

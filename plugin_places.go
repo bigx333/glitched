@@ -146,6 +146,7 @@ func (a *app) emitThreadChanges() {
 	for id := range a.pluginRecords {
 		if !seen[id] {
 			delete(a.pluginRecords, id)
+			delete(a.pluginMessages, id)
 			a.plugins.Emit("thread.changed", func(string) any { return map[string]any{"id": id, "deleted": true} })
 		}
 	}
@@ -157,15 +158,17 @@ func (a *app) emitThreadChanges() {
 	// first look at a thread tells nothing, then each new finished one is
 	// told once.
 	id := t.id().String()
-	first := a.pluginMessagesOf != id
+	told, known := a.pluginMessages[id]
+	first := !known
 	if first {
-		a.pluginMessagesOf, a.pluginMessages = id, map[string]bool{}
+		told = map[string]bool{}
+		a.pluginMessages[id] = told
 	}
 	for _, e := range entriesOf(t) {
-		if (e.kind != entryUser && e.kind != entryAssistant) || e.streaming || a.pluginMessages[e.key] {
+		if (e.kind != entryUser && e.kind != entryAssistant) || e.streaming || told[e.key] {
 			continue
 		}
-		a.pluginMessages[e.key] = true
+		told[e.key] = true
 		if first {
 			continue
 		}
