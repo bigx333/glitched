@@ -30,6 +30,7 @@ import (
 	eng "glitched/internal/engine"
 	"glitched/internal/mcp"
 	"glitched/internal/plugins"
+	"glitched/internal/plugins/render"
 	"glitched/wind"
 )
 
@@ -454,8 +455,13 @@ type app struct {
 
 	// plugins are the plugins installed in the state directory, and
 	// pluginPages what their pages show.
-	plugins     *plugins.Host
-	pluginPages map[pluginKey]*pluginPage
+	plugins        *plugins.Host
+	pluginPages    map[pluginKey]*pluginPage
+	pluginControls map[pluginKey]*render.Controls
+	pluginMD       markdown.Options
+	// pluginLater are what plugins asked for that takes a frame: toasts
+	// and the clipboard.
+	pluginLater []func(c *ui.Context)
 }
 
 // newApp is the app on the engines its state directory dir names. The
@@ -464,39 +470,40 @@ type app struct {
 // with the fake for every provider when engine is nil, as in a test.
 func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 	a := &app{
-		dir:           dir,
-		router:        newRouter(),
-		wind:          wind.New(rand.Uint32(), nil),
-		ended:         map[api.ID]time.Time{},
-		questions:     map[api.ID]*questionForm{},
-		showSidebar:   true,
-		sidebarWidth:  272,
-		model:         "Claude Opus 5.5",
-		effort:        "High",
-		access:        accessAuto,
-		collapsed:     map[string]bool{},
-		sectionClosed: map[category]bool{catWorking: true, catSnoozed: true, catSettled: true},
-		projectFilter: map[projectKey]bool{},
-		rowFx:         map[api.ID]rowGagFx{},
-		shells:        map[string]*shell{},
-		diffs:         map[diffKey]*fileDiff{},
-		reading:       map[diffKey]diffRead{},
-		steers:        map[api.ID]steer{},
-		post:          post,
-		lists:         map[api.ID]*ui.ListState{},
-		files:         map[string][]string{},
-		diffLayout:    editor.DiffUnified,
-		diffWrap:      true,
-		diffFile:      map[api.ID]string{},
-		childrenOpen:  map[api.ID]bool{},
-		composerSeen:  map[api.ID]bool{},
-		agentsOpen:    map[api.ID]bool{},
-		agentsAll:     map[api.ID]bool{},
-		shownAll:      map[cardText]bool{},
-		drawn:         map[api.ID]sight{},
-		reads:         map[api.ID]*reading{},
-		covers:        map[coverKey]*ui.Handle{},
-		pluginPages:   map[pluginKey]*pluginPage{},
+		dir:            dir,
+		router:         newRouter(),
+		wind:           wind.New(rand.Uint32(), nil),
+		ended:          map[api.ID]time.Time{},
+		questions:      map[api.ID]*questionForm{},
+		showSidebar:    true,
+		sidebarWidth:   272,
+		model:          "Claude Opus 5.5",
+		effort:         "High",
+		access:         accessAuto,
+		collapsed:      map[string]bool{},
+		sectionClosed:  map[category]bool{catWorking: true, catSnoozed: true, catSettled: true},
+		projectFilter:  map[projectKey]bool{},
+		rowFx:          map[api.ID]rowGagFx{},
+		shells:         map[string]*shell{},
+		diffs:          map[diffKey]*fileDiff{},
+		reading:        map[diffKey]diffRead{},
+		steers:         map[api.ID]steer{},
+		post:           post,
+		lists:          map[api.ID]*ui.ListState{},
+		files:          map[string][]string{},
+		diffLayout:     editor.DiffUnified,
+		diffWrap:       true,
+		diffFile:       map[api.ID]string{},
+		childrenOpen:   map[api.ID]bool{},
+		composerSeen:   map[api.ID]bool{},
+		agentsOpen:     map[api.ID]bool{},
+		agentsAll:      map[api.ID]bool{},
+		shownAll:       map[cardText]bool{},
+		drawn:          map[api.ID]sight{},
+		reads:          map[api.ID]*reading{},
+		covers:         map[coverKey]*ui.Handle{},
+		pluginPages:    map[pluginKey]*pluginPage{},
+		pluginControls: map[pluginKey]*render.Controls{},
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,
@@ -517,11 +524,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		},
 	}
 	a.loadLayout()
-	a.plugins = plugins.Open(dir, plugins.Options{
-		AppVersion: mygo.App.Version(),
-		Language:   mygo.App.Locale,
-		OpenURL:    mygo.Shell.OpenExternal,
-	})
+	a.openPlugins(dir)
 	a.backend = client.New(client.Config{Dir: dir, Post: func(fn func()) {
 		post(func() {
 			fn()
@@ -679,6 +682,10 @@ func (a *app) view(c *ui.Context) {
 	})
 	a.commandPalette(c)
 	a.deleteAlert(c)
+	for _, fn := range a.pluginLater {
+		fn(c)
+	}
+	a.pluginLater = nil
 	a.toasts(c)
 }
 

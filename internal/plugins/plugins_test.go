@@ -100,7 +100,7 @@ func TestOpenLoadsWhatFitsAndLeavesTheRestOut(t *testing.T) {
 	if len(l) != 4 {
 		t.Fatalf("logged %d, want the copy, the other contract, the newer version and the broken one: %q", len(l), l)
 	}
-	for _, why := range []string{"already loaded", "mygo-music", "version 2", "broken"} {
+	for _, why := range []string{"already installed", "mygo-music", "version 2", "broken"} {
 		if !slices.ContainsFunc(l, func(s string) bool { return strings.Contains(s, why) }) {
 			t.Errorf("no log says %q: %q", why, l)
 		}

@@ -10,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/client"
+	"glitched/internal/plugins"
 )
 
 func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
@@ -53,6 +54,9 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 			case r.Match("/keybindings"):
 				r.Title("Keybindings")
 				a.page(c, "Keybindings", "Shortcuts for the commands you use most.", a.keybindings)
+			case r.Match("/plugins"):
+				r.Title("Plugins")
+				a.page(c, "Plugins", "JavaScript and TypeScript plugins in "+displayPath(plugins.Dir(a.dir))+". Each runs in a sandbox of its own, and reaches only what you grant it here.", a.pluginSettings)
 			default:
 				r.Title("About")
 				a.page(c, "About", "", a.about)

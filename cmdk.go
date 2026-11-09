@@ -55,6 +55,7 @@ func (a *app) commands() []command {
 		path := "/settings/" + s.path
 		cmds = append(cmds, action("Settings › "+s.label, hint, s.icon, func() { a.router.Push(path) }))
 	}
+	cmds = append(cmds, a.pluginCommands()...)
 	query, actionsOnly := strings.CutPrefix(a.cmdkQuery, ">")
 	query = strings.TrimSpace(query)
 	if !actionsOnly {
