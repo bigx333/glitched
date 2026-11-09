@@ -249,3 +249,15 @@ func TestRunAndServiceNeedTheirGrants(t *testing.T) {
 		t.Fatalf("ran %q", ran)
 	}
 }
+
+func TestAPluginWithOnlyTimersWakesOnThem(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "ticker", `"glitched": { "timers": [{ "id": "t", "every": 30 }] }, `, `
+		export function update({ event }) { if (event.kind === "timer") host.storage.set("ticks", (host.storage.get("ticks") ?? 0) + 1); return {} }
+		export function view() { return { body: { type: "text", text: "ticks " + (host.storage.get("ticks") ?? 0) } } }`)
+	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf, TimerScale: 0.002, SignOwn: true})
+	t.Cleanup(h.Close)
+	u.until(t, "a tick with nothing shown", func() bool { return h.sessions[pageKey{plugin: "ticker"}] != nil && h.sessions[pageKey{plugin: "ticker"}].Rev > 1 })
+	s := session(t, h, "ticker")
+	u.until(t, "the ticks", func() bool { return strings.Contains(texts(s), "ticks ") && !strings.Contains(texts(s), "ticks 0") })
+}
