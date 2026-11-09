@@ -280,3 +280,40 @@ func TestAServiceHardLinkedToItsMainModuleWaitsToo(t *testing.T) {
 		t.Fatal("its tool ran without the service grant")
 	}
 }
+
+// A call of code replaced while it waited on the UI thread does nothing,
+// though the old runtime's shutdown hasn't run yet.
+func TestACallOfReplacedCodeDoesNothing(t *testing.T) {
+	for _, how := range []string{"swap", "reload"} {
+		t.Run(how, func(t *testing.T) {
+			state, u, fx := t.TempDir(), newUIThread(), &effects{}
+			writeModule(t, state, "old", `"capabilities": ["clipboard"], `, `
+				export async function init() { await glitched.clipboard.write("old"); return { state: 1 } }
+				export function view() { return { body: { type: "text", text: "x" } } }`)
+			h := open(t, state, u, fx)
+			session(t, h, "old")
+			time.Sleep(300 * time.Millisecond) // the call waits on the UI thread
+			var waiting []func()
+			if how == "swap" {
+				os.WriteFile(filepath.Join(Dir(state), "old", "index.js"), []byte(`export function view() { return { body: { type: "text", text: "new" } } }`), 0o644)
+				h.hotReload(filepath.Join(Dir(state), "old"))
+				for len(u.q) > 0 {
+					waiting = append(waiting, <-u.q)
+				}
+				waiting[len(waiting)-1]() // the swap, ahead of the call
+				waiting = waiting[:len(waiting)-1]
+			} else {
+				h.Reload()
+			}
+			for _, fn := range waiting {
+				fn()
+			}
+			for len(u.q) > 0 {
+				(<-u.q)()
+			}
+			if len(fx.ran) != 0 {
+				t.Fatalf("the old code's call ran: %+v", fx.ran)
+			}
+		})
+	}
+}
