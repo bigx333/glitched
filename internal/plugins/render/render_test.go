@@ -15,12 +15,13 @@ import (
 
 // screen draws one view, as a page does, and keeps what it dispatched.
 type screen struct {
-	v      *widget.View
-	rev    int
-	cs     Controls
-	events []plugins.UIEvent
-	values []map[string]any
-	md     markdown.Options
+	v         *widget.View
+	rev       int
+	processed int
+	cs        Controls
+	events    []plugins.UIEvent
+	values    []map[string]any
+	md        markdown.Options
 }
 
 func (s *screen) show(t *testing.T, view string) {
@@ -34,16 +35,17 @@ func (s *screen) show(t *testing.T, view string) {
 }
 
 func (s *screen) draw(c *ui.Context) {
-	s.cs.Sync(s.v, s.rev)
+	s.cs.Sync(s.v, s.rev, s.processed)
 	ui.Column(c).Fill().Padding(20).Children(func() {
 		View(c, s.v, &s.cs, Style{Card: func(c *ui.Context, title string, body func()) {
 			ui.Column(c).Children(func() {
 				ui.Text(c, title)
 				body()
 			})
-		}}, &s.md, func(ev plugins.UIEvent, values map[string]any) {
+		}}, &s.md, func(ev plugins.UIEvent, values map[string]any) int {
 			s.events = append(s.events, ev)
 			s.values = append(s.values, values)
+			return len(s.events)
 		})
 	})
 }
@@ -174,15 +176,15 @@ func TestControlsGoWithTheirWidgets(t *testing.T) {
 		}
 		return w
 	}
-	cs.Sync(v(`{"body": {"type": "input", "id": "a", "value": "one"}}`), 1)
+	cs.Sync(v(`{"body": {"type": "input", "id": "a", "value": "one"}}`), 1, 0)
 	cs.m["a"].text = "typed"
-	cs.Sync(v(`{"body": {"type": "text", "text": "gone"}}`), 2)
-	cs.Sync(v(`{"body": {"type": "input", "id": "a", "value": "one"}}`), 3)
+	cs.Sync(v(`{"body": {"type": "text", "text": "gone"}}`), 2, 0)
+	cs.Sync(v(`{"body": {"type": "input", "id": "a", "value": "one"}}`), 3, 0)
 	if got := cs.Values()["a"]; got != "one" {
 		t.Fatalf("an input back after it went kept %q", got)
 	}
 	cs.m["a"].text = "typed"
-	cs.Sync(v(`{"body": {"type": "input", "id": "a", "value": "two"}}`), 3)
+	cs.Sync(v(`{"body": {"type": "input", "id": "a", "value": "two"}}`), 3, 0)
 	if got := cs.Values()["a"]; got != "typed" {
 		t.Fatalf("the same view, synced twice, took %q", got)
 	}
@@ -252,4 +254,42 @@ func TestEveryWidgetDraws(t *testing.T) {
 		s.show(t, `{"body": {"type": "`+box+`", "children": [`+all+`]}}`)
 		tt.Frame()
 	}
+}
+
+// A plugin that takes the typing and the submit in one batch, and clears
+// the input, clears it, though its value is the one its last view gave.
+func TestAControlledInputClearsAfterABatch(t *testing.T) {
+	s := &screen{}
+	s.show(t, formWith(""))
+	tt := ui.NewTester(s.draw, 800, 700)
+	tt.Frame()
+	r, _ := tt.Find("New")
+	tt.ClickAt(r.X+40, r.Y+r.H+20)
+	tt.Type("<b>&")
+	tt.Frame()
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	// An echo, in JavaScript's spelling, while the plugin is behind.
+	s.processed = 0
+	s.show(t, `{"body": {"type": "input", "id": "name", "value": "<b>&", "onChange": "typed", "onSubmit": "sent"}}`)
+	tt.Frame()
+	if got := s.cs.Values()["name"]; got != "<b>&" {
+		t.Fatalf("an echo with <, > and & took the text to %q", got)
+	}
+	s.processed = len(s.events)
+	s.show(t, formWith(""))
+	tt.Frame()
+	if got := s.cs.Values()["name"]; got != "" {
+		t.Fatalf("not cleared after the batch: %q", got)
+	}
+}
+
+// Generated keys can't meet a widget's: an input id'd x and a button
+// id'd x#input draw side by side.
+func TestKeysDontCollide(t *testing.T) {
+	s := &screen{}
+	s.show(t, `{"body": {"type": "column", "children": [
+		{"type": "input", "id": "name"}, {"type": "input", "id": "name/input"},
+		{"type": "select", "id": "s", "options": ["a"]}, {"type": "select", "id": "s/select", "options": ["b"]}]}}`)
+	ui.NewTester(s.draw, 800, 700).Frame()
 }

@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -126,10 +127,11 @@ func (h *Host) Reload() {
 	var list []*installed
 	seen := map[string]bool{}
 	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
-			continue
+		folder := filepath.Join(Dir(h.state), e.Name())
+		if fi, err := os.Stat(folder); err != nil || !fi.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue // a folder, or a link to one, as while developing
 		}
-		in := &installed{folder: filepath.Join(Dir(h.state), e.Name())}
+		in := &installed{folder: folder}
 		list = append(list, in)
 		m, err := plugin.ReadManifest(in.folder)
 		if err != nil {
@@ -169,6 +171,9 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 		}
 	}
 	network := h.granted(m.ID, Network)
+	if network && len(m.Permissions.Network) > 0 && !slices.Contains(granted, Network) {
+		granted = append(granted, Network)
+	}
 	return plugin.Load(in.folder, plugin.Options{
 		AppVersion:      h.opts.AppVersion,
 		DataDir:         DataDir(h.state),
@@ -289,6 +294,9 @@ func (h *Host) edit(change func(*prefs)) error {
 	return nil
 }
 
+// pageID is what a page's id may be: it is a part of the page's route.
+var pageID = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,63}$`)
+
 // Entry is a page a plugin contributes, as the sidebar lists it.
 type Entry struct {
 	Plugin, Page string
@@ -301,8 +309,8 @@ func (h *Host) Entries() []Entry {
 	var out []Entry
 	for _, in := range h.running() {
 		for _, n := range in.manifest.Pages() {
-			if n.Page == "" {
-				continue // a builtin page of MyGo Music's, which Glitched doesn't have
+			if !pageID.MatchString(n.Page) {
+				continue // a builtin page of MyGo Music's, which Glitched doesn't have, or a name no route takes
 			}
 			out = append(out, Entry{Plugin: in.manifest.ID, Page: n.Page, Title: n.Title, Icon: n.Icon})
 		}
@@ -407,7 +415,7 @@ func (h *Host) RunCommand(id, command string, done func(error)) {
 			return
 		}
 		for _, e := range out.Effects {
-			h.effect(id, e, func(_ any, err error) {
+			h.effect(id, p, e, func(_ any, err error) {
 				if err != nil {
 					done(fmt.Errorf("%s: %w", e.Type, err))
 				}
@@ -419,27 +427,12 @@ func (h *Host) RunCommand(id, command string, done func(error)) {
 
 // effect runs one effect the plugin id asked for, if it may, on the UI
 // thread, and gives done its answer there.
-func (h *Host) effect(id string, e Effect, done func(any, error)) {
-	need, known := Effects[e.Type]
-	h.mu.RLock()
-	var declared []string
-	for _, in := range h.installed {
-		if in.manifest.ID == id {
-			declared = in.manifest.Capabilities
-		}
-	}
-	var err error
-	switch {
-	case !known:
-		err = fmt.Errorf("unknown effect %q", e.Type)
-	case need != "" && !slices.Contains(declared, need):
-		err = fmt.Errorf("%w: %s needs the %s capability, which the plugin doesn't declare", ErrDenied, e.Type, need)
-	case need != "" && !h.allowed(id, need):
-		err = fmt.Errorf("%w: %s needs the %s capability, which isn't granted in Settings › Plugins", ErrDenied, e.Type, need)
-	}
-	h.mu.RUnlock()
+//
+// The checks run there too, as the effect runs: a grant taken back, or the
+// plugin turned off or reloaded, while it waited, stops it.
+func (h *Host) effect(id string, from *plugin.Plugin, e Effect, done func(any, error)) {
 	h.opts.Post(func() {
-		if err != nil {
+		if err := h.check(id, from, e.Type); err != nil {
 			done(nil, err)
 			return
 		}
@@ -460,6 +453,31 @@ func (h *Host) effect(id string, e Effect, done func(any, error)) {
 		}
 		done(h.opts.Do(id, e))
 	})
+}
+
+// check says why the plugin id's instance from may not run the effect, or
+// nil.
+func (h *Host) check(id string, from *plugin.Plugin, effect string) error {
+	need, known := Effects[effect]
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	var in *installed
+	for _, i := range h.installed {
+		if i.p != nil && i.p == from {
+			in = i
+		}
+	}
+	switch {
+	case in == nil:
+		return fmt.Errorf("%w: plugin %s stopped", ErrDenied, id)
+	case !known:
+		return fmt.Errorf("unknown effect %q", effect)
+	case need != "" && !slices.Contains(in.manifest.Capabilities, need):
+		return fmt.Errorf("%w: %s needs the %s capability, which the plugin doesn't declare", ErrDenied, effect, need)
+	case need != "" && !h.allowed(id, need):
+		return fmt.Errorf("%w: %s needs the %s capability, which isn't granted in Settings › Plugins", ErrDenied, effect, need)
+	}
+	return nil
 }
 
 func (h *Host) openURL(u string) error {
@@ -486,7 +504,9 @@ func (h *Host) closeAll() {
 	h.mu.Unlock()
 	for _, in := range list {
 		if in.p != nil {
-			in.p.Close()
+			// Off the UI thread: Close waits for a runtime that is still
+			// running the module's top level, which no timeout bounds.
+			go in.p.Close()
 		}
 	}
 }

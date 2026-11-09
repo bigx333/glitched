@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
@@ -40,11 +41,20 @@ type control struct {
 	// sent are the changes sent to the plugin that its views haven't
 	// echoed yet: a view that echoes one isn't the plugin's change.
 	sent []string
+	// last is the number of the last change sent.
+	last int
 }
 
-// Sync takes the values a new view gives, rev being its number, once per
-// view. It forgets the controls the view no longer has.
-func (cs *Controls) Sync(v *widget.View, rev int) {
+// Sync takes the values a new view gives, once per view: rev is the
+// view's number, and processed the last event the plugin took before it
+// answered the view. It forgets the controls the view no longer has.
+//
+// A control's value changes with a view whose value differs from the last
+// view's, unless it echoes a change the user sent. A controlled one (with
+// an onChange) whose changes the plugin all took also takes a value that
+// differs from what it holds, as when the plugin clears it after a submit
+// in the same batch.
+func (cs *Controls) Sync(v *widget.View, rev, processed int) {
 	if cs.m == nil {
 		cs.m = map[string]*control{}
 	}
@@ -59,10 +69,7 @@ func (cs *Controls) Sync(v *widget.View, rev int) {
 		}
 		live[n.ID] = true
 		ctl := cs.m[n.ID]
-		raw := string(n.Value)
-		if raw == "" {
-			raw = "null"
-		}
+		raw := canon(n.Value)
 		if ctl == nil {
 			ctl = &control{}
 			cs.m[n.ID] = ctl
@@ -70,10 +77,18 @@ func (cs *Controls) Sync(v *widget.View, rev int) {
 			ctl.seen = raw
 			return
 		}
-		if raw == ctl.seen {
+		prev := ctl.seen
+		ctl.seen = raw
+		if n.OnChange != nil && ctl.last <= processed {
+			ctl.sent = nil
+			if raw != "null" && raw != ctl.current() {
+				ctl.set(n)
+			}
 			return
 		}
-		ctl.seen = raw
+		if raw == prev {
+			return
+		}
 		if i := slices.Index(ctl.sent, raw); i >= 0 {
 			ctl.sent = ctl.sent[i+1:]
 			return
@@ -86,6 +101,31 @@ func (cs *Controls) Sync(v *widget.View, rev int) {
 			delete(cs.m, id)
 		}
 	}
+}
+
+// canon is a JSON value in one spelling, whichever encoder wrote it:
+// JavaScript leaves <, > and & as they are, Go escapes them.
+func canon(raw json.RawMessage) string {
+	var v any
+	if len(raw) == 0 || json.Unmarshal(raw, &v) != nil {
+		return "null"
+	}
+	return encode(v)
+}
+
+func encode(v any) string {
+	var b strings.Builder
+	e := json.NewEncoder(&b)
+	e.SetEscapeHTML(false)
+	e.Encode(v)
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+func (ctl *control) current() string {
+	if ctl.kind == "toggle" {
+		return encode(ctl.on)
+	}
+	return encode(ctl.text)
 }
 
 func (ctl *control) set(n *widget.Node) {
@@ -121,7 +161,7 @@ func (cs *Controls) Values() map[string]any {
 
 // View draws the view's body. dispatch gets what the user does, with the
 // handler the widget names, during the build pass.
-func View(c *ui.Context, v *widget.View, cs *Controls, st Style, md *markdown.Options, dispatch func(plugins.UIEvent, map[string]any)) {
+func View(c *ui.Context, v *widget.View, cs *Controls, st Style, md *markdown.Options, dispatch func(plugins.UIEvent, map[string]any) int) {
 	if v == nil {
 		return
 	}
@@ -133,12 +173,12 @@ type renderer struct {
 	cs       *Controls
 	st       Style
 	md       *markdown.Options
-	dispatch func(plugins.UIEvent, map[string]any)
+	dispatch func(plugins.UIEvent, map[string]any) int
 }
 
 func key(n *widget.Node, i int) string {
 	if n.ID != "" {
-		return "id:" + n.ID
+		return "id:" + n.ID // ids have no #, which the controls' own keys add
 	}
 	return "at:" + strconv.Itoa(i)
 }
@@ -155,14 +195,14 @@ func (r *renderer) fire(n *widget.Node, h *widget.Handler, typ string, value any
 	if h == nil || r.dispatch == nil {
 		return
 	}
+	seq := r.dispatch(plugins.UIEvent{Type: typ, Handler: h.Name, Node: n.ID, Value: value, Payload: h.Payload}, r.cs.Values())
 	if ctl := r.cs.m[n.ID]; ctl != nil && typ == "change" {
-		raw, _ := json.Marshal(value)
-		ctl.sent = append(ctl.sent, string(raw))
+		ctl.sent = append(ctl.sent, encode(value))
 		if len(ctl.sent) > 64 {
 			ctl.sent = ctl.sent[1:]
 		}
+		ctl.last = seq
 	}
-	r.dispatch(plugins.UIEvent{Type: typ, Handler: h.Name, Node: n.ID, Value: value, Payload: h.Payload}, r.cs.Values())
 }
 
 func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
@@ -262,7 +302,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			if n.Multiline {
 				newInput = ui.TextArea
 			}
-			e := newInput(c.Key(key(n, i)+"/input"), &ctl.text)
+			e := newInput(c.Key(key(n, i)+"#input"), &ctl.text)
 			e.Placeholder(n.Placeholder).Disabled(n.Disabled).Label(n.Label)
 			if e.Changed() {
 				r.fire(n, n.OnChange, "change", ctl.text)
@@ -297,7 +337,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			}
 		}
 		draw := func() {
-			e := ui.Select(c.Key(key(n, i)+"/select"), &shown, labels).Disabled(n.Disabled).Label(n.Label)
+			e := ui.Select(c.Key(key(n, i)+"#select"), &shown, labels).Disabled(n.Disabled).Label(n.Label)
 			if e.Changed() {
 				for _, o := range n.Options {
 					if o.Shown() == shown {

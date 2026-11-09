@@ -232,7 +232,7 @@ func (a *app) pluginView(c *ui.Context, k pluginKey, s *plugins.Session) {
 		cs = &render.Controls{}
 		a.pluginControls[k] = cs
 	}
-	cs.Sync(s.View, s.Rev)
+	cs.Sync(s.View, s.Rev, s.Processed)
 	if s.Err != nil {
 		ui.Row(c).Key("error").Gap(12).Padding(12, 14).Radius(10).Border(1, palette.red.Alpha(0.4)).Background(palette.red.Alpha(0.08)).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, s.Err.Error()).Selectable().TextColor(palette.red).Grow(1).Shrink(1)

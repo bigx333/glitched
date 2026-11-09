@@ -380,3 +380,109 @@ func TestRetryStartsThePageOver(t *testing.T) {
 		t.Fatal(s.Err)
 	}
 }
+
+func TestAnEffectWaitingWhenItsGrantGoesDoesNotRun(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "runner", `"capabilities": ["threads:write"], `, `
+		export function init() { return { state: 0, effects: [{ type: "threads.create", prompt: "go" }] } }
+		export function view() { return { body: { type: "text", text: "x" } } }`)
+	h := open(t, state, u, fx)
+	if err := h.SetGranted("runner", "threads:write", true); err != nil {
+		t.Fatal(err)
+	}
+	session(t, h, "runner")
+	time.Sleep(300 * time.Millisecond) // the effect waits for the UI thread
+	if err := h.SetGranted("runner", "threads:write", false); err != nil {
+		t.Fatal(err)
+	}
+	for len(u.q) > 0 {
+		(<-u.q)()
+	}
+	if len(fx.ran) != 0 {
+		t.Fatalf("ran %+v after the grant went", fx.ran)
+	}
+}
+
+func TestEachEventSeesTheValuesOfItsMoment(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "form", "", `
+		export function init() { return { state: [] } }
+		export function view({ state }) { return { body: { type: "text", text: state.join(",") } } }
+		export function update({ state, event, values }) {
+			const until = Date.now() + 40; while (Date.now() < until) {}
+			return { state: [...state, event.type + ":" + values.f] }
+		}`)
+	h := open(t, state, u, fx)
+	s := session(t, h, "form")
+	u.until(t, "the view", func() bool { return s.View != nil })
+	s.Dispatch(UIEvent{Type: "change", Handler: "h", Node: "f", Value: "first"}, map[string]any{"f": "first"})
+	s.Dispatch(UIEvent{Type: "change", Handler: "h", Node: "f", Value: "first!"}, map[string]any{"f": "first!"})
+	s.Dispatch(UIEvent{Type: "click", Handler: "save", Node: "save"}, map[string]any{"f": "first!"})
+	s.Dispatch(UIEvent{Type: "change", Handler: "h", Node: "f", Value: "second"}, map[string]any{"f": "second"})
+	u.until(t, "the second change", func() bool { return strings.Contains(texts(s), "change:second") })
+	if !strings.Contains(texts(s), "click:first!") {
+		t.Fatalf("save saw later values: %s", texts(s))
+	}
+}
+
+func TestRetryDropsWhatTheEarlierStartAskedFor(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "counting", `"capabilities": ["clipboard"], `, `
+		export function init() { return { state: 0, effects: [{ type: "clipboard.write", id: "c", text: "x" }] } }
+		export function view({ state }) { return { body: { type: "text", text: "replies " + state } } }
+		export function update({ state }) { return { state: state + 1 } }`)
+	h := open(t, state, u, fx)
+	s := session(t, h, "counting")
+	time.Sleep(300 * time.Millisecond) // the first start's effect waits for the UI thread
+	s.Retry()
+	u.until(t, "the second start's reply", func() bool { return strings.Contains(texts(s), "replies 1") })
+	time.Sleep(200 * time.Millisecond)
+	for len(u.q) > 0 {
+		(<-u.q)()
+	}
+	if !strings.Contains(texts(s), "replies 1") {
+		t.Fatalf("an earlier start's reply landed: %s", texts(s))
+	}
+}
+
+func TestPagesAreNamesNotPaths(t *testing.T) {
+	state := t.TempDir()
+	dst := filepath.Join(Dir(state), "nav")
+	os.MkdirAll(dst, 0o755)
+	os.WriteFile(filepath.Join(dst, "plugin.json"), []byte(`{"id": "nav", "name": "Nav", "main": "index.js",
+		"navigation": [{"title": "Up", "page": "../../settings/plugins"}, {"title": "Dot", "page": ".."}, {"title": "Fine", "page": "home"}]}`), 0o644)
+	os.WriteFile(filepath.Join(dst, "index.js"), []byte(`export function page() { return { title: "x", sections: [] } }`), 0o644)
+	h := Open(state, Options{Logf: t.Logf})
+	defer h.Close()
+	if got := h.Entries(); len(got) != 1 || got[0].Page != "home" {
+		t.Fatalf("entries %+v", got)
+	}
+}
+
+func TestTheNetworkGrantIsACapability(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "net", `"permissions": {"network": ["example.com"]}, `, `
+		export function view() { return { body: { type: "text", text: "network " + host.capability("network") } } }`)
+	h := open(t, state, u, fx)
+	s := session(t, h, "net")
+	u.until(t, "the view", func() bool { return strings.Contains(texts(s), "network false") })
+	if err := h.SetGranted("net", Network, true); err != nil {
+		t.Fatal(err)
+	}
+	s = session(t, h, "net")
+	u.until(t, "the granted view", func() bool { return strings.Contains(texts(s), "network true") })
+}
+
+func TestALinkedFolderLoads(t *testing.T) {
+	state, src := t.TempDir(), t.TempDir()
+	copyPlugin(t, src, "counter", "counter")
+	os.MkdirAll(Dir(state), 0o755)
+	if err := os.Symlink(filepath.Join(Dir(src), "counter"), filepath.Join(Dir(state), "counter")); err != nil {
+		t.Fatal(err)
+	}
+	h := Open(state, Options{Logf: t.Logf})
+	defer h.Close()
+	if len(h.Entries()) != 1 {
+		t.Fatalf("installed %+v", h.Installed())
+	}
+}
