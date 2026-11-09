@@ -78,12 +78,15 @@ type Node struct {
 	// Style is a text's look: body, muted, heading, title, code, error or
 	// success; a button's: default, primary or danger; a badge's: default,
 	// accent, success, warning or danger.
-	Style      string          `json:"style,omitempty"`
-	Value      json.RawMessage `json:"value,omitempty"`
-	Options    []Option        `json:"options,omitempty"`
-	Multiline  bool            `json:"multiline,omitempty"`
-	Disabled   bool            `json:"disabled,omitempty"`
-	Selectable bool            `json:"selectable,omitempty"`
+	Style     string          `json:"style,omitempty"`
+	Value     json.RawMessage `json:"value,omitempty"`
+	Options   []Option        `json:"options,omitempty"`
+	Multiline bool            `json:"multiline,omitempty"`
+	// Controlled says the plugin holds the control's value: once the
+	// plugin took the user's changes, the view's value is the value.
+	Controlled bool `json:"controlled,omitempty"`
+	Disabled   bool `json:"disabled,omitempty"`
+	Selectable bool `json:"selectable,omitempty"`
 
 	Gap     int    `json:"gap,omitempty"`
 	Padding int    `json:"padding,omitempty"`
@@ -281,6 +284,9 @@ func (c *checker) value(n *Node) error {
 	}
 	if n.Multiline && n.Type != "input" {
 		return fmt.Errorf("a %s is not multiline", n.Type)
+	}
+	if n.Controlled && n.Type != "input" && n.Type != "toggle" && n.Type != "select" {
+		return fmt.Errorf("a %s is not controlled", n.Type)
 	}
 	if n.Type == "select" && (len(n.Options) == 0 || len(n.Options) > MaxOptions) {
 		return fmt.Errorf("a select has 1 to %d options", MaxOptions)

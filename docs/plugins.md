@@ -145,17 +145,17 @@ An effect with an `id` always answers. An effect without one answers only when i
 Inputs, toggles and selects keep their value in the app, by their `id`, across views:
 
 - A new widget starts with the `value` its view gives.
-- A later view changes it only when its `value` differs from the one the last view gave. So a plugin that leaves `value` out, or keeps it the same, never takes back what the user typed.
-- A view that echoes a change the user sent is not a change. A plugin that sets `value` from `onChange` (a controlled input, as in `counter`) does not lose keystrokes made while it answered.
-- A controlled widget whose changes the plugin has all taken shows the view's `value` whenever it differs from what the widget holds. So clearing it in the same `update` as a submit works even when the plugin took the typing and the submit in one batch.
-- To clear a controlled input, set its `value` to `""` in the state. To reset an uncontrolled one, give it a new `id`, or leave it out of one view.
+- While the user has changes the plugin hasn't taken yet, no view changes the widget: such a view answers older text. Typing is never lost to a plugin that is behind.
+- Once the plugin took them, a widget with `controlled: true` shows the view's `value` whenever it differs from what it holds. The plugin owns the value: it sets it from `onChange` (as `counter` does), and clearing it in the state clears the widget, even when the plugin took the typing and the submit in one batch.
+- A widget without `controlled` takes the view's `value` only when it differs from the one the last view gave. A plugin that leaves `value` out, or keeps it the same, never takes back what the user typed. An `onChange` used only to validate doesn't clear the field.
+- To reset an uncontrolled widget, change its `value`, give it a new `id`, or leave it out of one view.
 - A widget that a view leaves out loses its value. Focus and scroll stay with a widget while its `id` stays.
 
 Widgets without an `id` are keyed by their place among their siblings. Give an `id` to any widget whose siblings come and go.
 
 ## Widgets
 
-Every widget is `{type, id?, ...}`. Interactive widgets need an `id`: 1 to 128 letters, digits or `_.:/-`, unique in the view. An unknown field is an error, and so are `children`, `style`, `value`, `options`, `multiline` or a handler on a type that has none.
+Every widget is `{type, id?, ...}`. Interactive widgets need an `id`: 1 to 128 letters, digits or `_.:/-`, unique in the view. An unknown field is an error, and so are `children`, `style`, `value`, `options`, `multiline`, `controlled` or a handler on a type that has none.
 
 | Type | Fields | Fires |
 | --- | --- | --- |
@@ -166,9 +166,9 @@ Every widget is `{type, id?, ...}`. Interactive widgets need an `id`: 1 to 128 l
 | `badge` | `text`, `style` (`default` `accent` `success` `warning` `danger`) | |
 | `divider`, `spacer`, `spinner` | | |
 | `button` | `label`, `style` (`default` `primary` `danger`), `disabled` | `onClick` |
-| `input` | `label`, `placeholder`, `value`, `multiline`, `disabled` | `onChange`, `onSubmit` (Enter, single line) |
-| `toggle` | `label`, `value`, `disabled` | `onChange` |
-| `select` | `label`, `options` (strings, or `{value, label}`; 1 to 200), `value`, `disabled` | `onChange` |
+| `input` | `label`, `placeholder`, `value`, `controlled`, `multiline`, `disabled` | `onChange`, `onSubmit` (Enter, single line) |
+| `toggle` | `label`, `value`, `controlled`, `disabled` | `onChange` |
+| `select` | `label`, `options` (strings, or `{value, label}`; 1 to 200), `value`, `controlled`, `disabled` | `onChange` |
 
 A view is at most 1 MiB of JSON, 2000 widgets, 24 deep, and 32 KiB per string. A view past these limits, or one with an unknown type, field, style or handler, is refused whole. The page keeps showing the last good view, with the error above it.
 

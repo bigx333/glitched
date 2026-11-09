@@ -14,7 +14,7 @@ func TestDecodeChecksTheTree(t *testing.T) {
 			{"type": "row", "children": [{"type": "badge", "text": "b", "style": "success"}, {"type": "spacer"}, {"type": "divider"}, {"type": "spinner"}]},
 			{"type": "button", "id": "b", "label": "Go", "style": "primary", "onClick": {"handler": "go", "payload": {"n": 1}}},
 			{"type": "input", "id": "i", "value": "x", "multiline": true, "onChange": "typed", "onSubmit": "sent"},
-			{"type": "toggle", "id": "t", "label": "On", "value": true, "onChange": "flip"},
+			{"type": "toggle", "id": "t", "label": "On", "value": true, "controlled": true, "onChange": "flip"},
 			{"type": "select", "id": "s", "options": ["a", {"value": "b", "label": "Bee"}], "value": "b", "onChange": "pick"}
 		]}}`,
 	}
@@ -44,6 +44,7 @@ func TestDecodeChecksTheTree(t *testing.T) {
 		`{"body": {"type": "text", "value": "y"}}`:                                                                 "a text has no value",
 		`{"body": {"type": "toggle", "id": "a", "multiline": true}}`:                                               "not multiline",
 		`{"body": {"type": "text", "options": ["x"]}}`:                                                             "a text has no options",
+		`{"body": {"type": "button", "id": "a", "controlled": true}}`:                                              "a button is not controlled",
 		`{"body": {"type": "column", "children": [null]}}`:                                                         "null widget",
 		`{"body": {"type": "column", "children": [{"type": "button", "id": "a"}, {"type": "toggle", "id": "a"}]}}`: `the id "a" is used twice`,
 	}
