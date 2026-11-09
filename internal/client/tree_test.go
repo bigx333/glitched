@@ -21,12 +21,13 @@ import (
 // of reach. It counts the commands that reach the engine, by target.
 type bridge struct {
 	api.Endpoint
-	mu     sync.Mutex
-	fail   bool          // the next submit fails, as one the network lost
-	down   bool          // out of reach: Info and Submit fail
-	hold   chan struct{} // the shell waits after its snapshot until closed
-	shells []api.Stream  // closed on a drop
-	sent   map[api.ID]int
+	mu      sync.Mutex
+	fail    bool          // the next submit fails, as one the network lost
+	down    bool          // out of reach: Info and Submit fail
+	refused int           // Infos failed while out of reach
+	hold    chan struct{} // the shell waits after its snapshot until closed
+	shells  []api.Stream  // closed on a drop
+	sent    map[api.ID]int
 }
 
 var errDown = errors.New("bridge: out of reach")
@@ -34,6 +35,9 @@ var errDown = errors.New("bridge: out of reach")
 func (b *bridge) Info(ctx context.Context) (api.Environment, error) {
 	b.mu.Lock()
 	down := b.down
+	if down {
+		b.refused++
+	}
 	b.mu.Unlock()
 	if down {
 		return api.Environment{}, errDown
