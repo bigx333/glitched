@@ -728,7 +728,8 @@ func (s *suite) tampering(t *testing.T) {
 // frame too; text typed into a field, a text area and an editor, as
 // frameworks hear it; Enter submitting a form as a browser does, through
 // its default button, unless the page takes it;
-// and what an action refuses: a disabled element, typing into a button,
+// and what an action refuses: a disabled element, one in a frame
+// something covers, typing into a button,
 // a read-only field, an element no longer what the snapshot named, and an
 // older snapshot's
 // ref.
@@ -1010,6 +1011,26 @@ func (s *suite) actions(t *testing.T) {
 		t.Fatal(err)
 	}
 	clicked("the far button", `return window.far === 1`)
+	// What shows over a frame, in the page around it, takes a click on
+	// what is in the frame there; a frame taking no pointer, none.
+	p, _ = s.open("/act/framecover")
+	s.until("the covered frames", func() bool {
+		v, err := p.EvalContext(context.Background(), `return [fr, unpointed].every((f) => !!f.contentDocument?.querySelector("button"))`)
+		return err == nil && v == true
+	})
+	if snap, err = webtarget.Take(ctx, p, webtarget.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := webtarget.Click(ctx, p, snap, ref("Framed covered")); err == nil || !strings.Contains(err.Error(), `covered by dialog "Overlay"`) {
+		t.Errorf("clicking in a frame something covers: %v", err)
+	}
+	if err := webtarget.Click(ctx, p, snap, ref("Framed unpointed")); err == nil || !strings.Contains(err.Error(), "takes no clicks") {
+		t.Errorf("clicking in a frame taking no pointer: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := s.eval(p, `return [window.coveredHit, window.unpointedHit].join(" ")`); got != " " {
+		t.Errorf("a click went through to a frame, as %q", got)
+	}
 }
 
 // refNamed is the ref of the i-th element named name in a snapshot, or "".
@@ -1121,6 +1142,10 @@ func fixtures() http.Handler {
 <dialog id="e"><button onclick="window.between = 1">Between</button></dialog>
 <main inert><dialog id="f"><button onclick="window.escaped = 1">Escaped</button></dialog></main>
 <script>d.showModal(); e.showModal(); f.showModal()</script>`))
+	mux.Handle("/act/framecover", page(`<!doctype html><title>Frame cover</title><style>body { margin: 0 } iframe { position: absolute; left: 0; width: 300px; height: 100px; border: 0 }</style>
+<iframe id="fr" style="top:0" srcdoc="<button onclick='parent.coveredHit = 1'>Framed covered</button>"></iframe>
+<div role="dialog" aria-label="Overlay" style="position:absolute;left:0;top:0;width:400px;height:150px;background:#0003"></div>
+<iframe id="unpointed" style="top:200px;pointer-events:none" srcdoc="<button onclick='parent.unpointedHit = 1'>Framed unpointed</button>"></iframe>`))
 	mux.Handle("/act/smooth", page(`<!doctype html><title>Smooth</title><style>html{scroll-behavior:smooth}</style>
 <script>window.within = (e, el) => [...el.getClientRects()].some((r) => e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) ? 1 : 0;</script>
 <div style="height:3000px"></div><button onclick="window.far = within(event, this)">Far</button><div style="height:3000px"></div>
