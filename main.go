@@ -29,6 +29,7 @@ import (
 	"glitched/internal/daemon"
 	eng "glitched/internal/engine"
 	"glitched/internal/mcp"
+	"glitched/internal/plugins"
 	"glitched/wind"
 )
 
@@ -450,6 +451,11 @@ type app struct {
 	checkUntil  time.Time
 
 	md markdown.Options
+
+	// plugins are the plugins installed in the state directory, and
+	// pluginPages what their pages show.
+	plugins     *plugins.Host
+	pluginPages map[pluginKey]*pluginPage
 }
 
 // newApp is the app on the engines its state directory dir names. The
@@ -490,6 +496,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		drawn:         map[api.ID]sight{},
 		reads:         map[api.ID]*reading{},
 		covers:        map[coverKey]*ui.Handle{},
+		pluginPages:   map[pluginKey]*pluginPage{},
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,
@@ -510,6 +517,11 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		},
 	}
 	a.loadLayout()
+	a.plugins = plugins.Open(dir, plugins.Options{
+		AppVersion: mygo.App.Version(),
+		Language:   mygo.App.Locale,
+		OpenURL:    mygo.Shell.OpenExternal,
+	})
 	a.backend = client.New(client.Config{Dir: dir, Post: func(fn func()) {
 		post(func() {
 			fn()
@@ -676,6 +688,8 @@ func (a *app) pages(c *ui.Context) {
 		case r.Match("/settings/{section...}"):
 			r.Title("Settings")
 			a.settingsPage(c, r)
+		case r.Match("/plugins/{plugin}/{page}"):
+			a.pluginsPage(c, r)
 		default:
 			r.Title("Chat")
 			a.chatPage(c)
@@ -844,6 +858,7 @@ func main() {
 		if err := a.backend.Close(); err != nil {
 			log.Print(err)
 		}
+		a.plugins.Close()
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)

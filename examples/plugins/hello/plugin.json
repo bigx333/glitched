@@ -1,0 +1,14 @@
+{
+  "id": "hello",
+  "name": "Hello",
+  "description": "A sample plugin: one page, and a command that counts greetings.",
+  "version": "0.1.0",
+  "main": "index.js",
+  "contract": "glitched",
+  "contractVersion": 1,
+  "permissions": {},
+  "contributes": {
+    "pages": [{ "id": "home", "title": "Hello", "icon": "sparkles" }],
+    "commands": [{ "id": "greet", "title": "Greet" }]
+  }
+}
