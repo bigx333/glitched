@@ -66,6 +66,9 @@ type Options struct {
 	// IdleTimeout stops a runtime nothing called for that long; its next
 	// call starts it again. Zero keeps it.
 	IdleTimeout time.Duration
+	// WaitToStart leaves a plugin with timers asleep until Start: the
+	// window sets the language first, which it can only once it runs.
+	WaitToStart bool
 	// SignOwn signs the user's own plugins again as they change. The
 	// window's host does; the engine's leaves it to the window, so the two
 	// never sign one folder at once.
@@ -98,6 +101,9 @@ type Host struct {
 	statuses  map[string]map[string]SettingStatus
 
 	sessions map[pageKey]*Session
+	// started is set once the app has started its plugins (Start): what
+	// they read of the app, as the language, is set by then.
+	started  bool
 	language atomic.Value // the user's language, a string, as the app last set it
 	// stopping are the runtimes and databases on their way to stop, which
 	// Close and Remove wait for.
@@ -155,6 +161,7 @@ func Open(stateDir string, o Options) *Host {
 	}
 	h := &Host{state: stateDir, opts: o, sessions: map[pageKey]*Session{}}
 	h.language.Store("en")
+	h.started = !o.WaitToStart
 	if err := jsonfile.Load(prefsPath(stateDir), &h.prefs); err != nil && !errors.Is(err, os.ErrNotExist) {
 		o.Logf("plugins: %v", err)
 	}
@@ -210,8 +217,8 @@ func (h *Host) Reload() {
 	h.installed = list
 	h.mu.Unlock()
 	// A window's plugin with timers wakes on them though it has no place
-	// shown yet: its app session starts now.
-	if h.opts.Main == nil {
+	// shown yet: its app session starts now, once the app started plugins.
+	if h.opts.Main == nil && h.started {
 		for _, in := range h.running() {
 			if len(in.ext.Timers) > 0 && in.ext.Service == "" && in.p.Can("update") {
 				h.App(in.manifest.ID)
@@ -417,6 +424,14 @@ func (h *Host) tellGrant(id, capability string, on bool) {
 		if k.plugin == id {
 			s.Notify(AppEvent{Kind: "app", Type: "grant.changed", Data: map[string]any{"capability": capability, "granted": on}})
 		}
+	}
+}
+
+// Start wakes the plugins with timers, for a host opened to wait to.
+func (h *Host) Start() {
+	if !h.started {
+		h.started = true
+		h.Reload()
 	}
 }
 

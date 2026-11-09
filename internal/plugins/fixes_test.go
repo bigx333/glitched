@@ -194,7 +194,8 @@ func TestTheDatabasesAuthorizerKeepsItToItsFile(t *testing.T) {
 	dir, other := t.TempDir(), t.TempDir()
 	d := &pluginDB{path: filepath.Join(dir, "plugin.db")}
 	defer d.close()
-	db, err := d.open()
+	db, done, err := d.use()
+	defer done()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +256,8 @@ func TestAServiceThatIsItsMainModuleWaitsForItsGrant(t *testing.T) {
 func TestTempTablesKeepToTheCap(t *testing.T) {
 	d := &pluginDB{path: filepath.Join(t.TempDir(), "plugin.db")}
 	defer d.close()
-	db, err := d.open()
+	db, done, err := d.use()
+	defer done()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,5 +355,52 @@ func TestCloseDoesntWaitOnARuntimeWaitingOnTheUIThread(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close waited on a runtime waiting on the UI thread")
+	}
+}
+
+// Closing a plugin's database waits for the statements using it, and
+// none starts after.
+func TestTheDatabaseClosesAfterItsStatements(t *testing.T) {
+	d := &pluginDB{path: filepath.Join(t.TempDir(), "plugin.db")}
+	_, done, err := d.use()
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan struct{})
+	go func() { d.close(); close(closed) }()
+	select {
+	case <-closed:
+		t.Fatal("closed while a statement used it")
+	case <-time.After(100 * time.Millisecond):
+	}
+	done()
+	<-closed
+	if _, _, err := d.use(); err == nil {
+		t.Fatal("used after close")
+	}
+}
+
+// A host told to wait starts its timer plugins with the language the app
+// set first.
+func TestTimerPluginsWaitForStart(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "ticker", `"glitched": { "timers": [{ "id": "t", "every": 30 }] }, `, `
+		export function init() { host.storage.set("lang", host.language()); return { state: 0 } }
+		export function update() { return {} }`)
+	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf, SignOwn: true, WaitToStart: true})
+	t.Cleanup(h.Close)
+	if h.sessions[pageKey{plugin: "ticker"}] != nil {
+		t.Fatal("a timer plugin woke before Start")
+	}
+	h.SetLanguage("de")
+	h.Start()
+	app := h.sessions[pageKey{plugin: "ticker"}]
+	if app == nil {
+		t.Fatal("not woken by Start")
+	}
+	u.until(t, "its init", func() bool { app.mu.Lock(); defer app.mu.Unlock(); return app.state != nil })
+	b, _ := os.ReadFile(filepath.Join(DataDir(state), "ticker", "storage.json"))
+	if !strings.Contains(string(b), `"de"`) {
+		t.Fatalf("storage %s", b)
 	}
 }
