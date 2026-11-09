@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -65,16 +66,56 @@ type dbCall struct {
 	Params []any  `json:"params"`
 }
 
-// refused are statements that would reach past the plugin's own file, or
-// change what SQLite is.
+// refused says why a statement may not run: one that would reach past
+// the plugin's own file, or change what SQLite is. It reads the words of
+// the statement, outside its comments, so no spacing or comment slips a
+// word past; a word in a string literal is refused too: data goes in
+// bound parameters.
 func refused(q string) error {
-	u := strings.ToUpper(q)
-	for _, w := range []string{"ATTACH", "DETACH", "LOAD_EXTENSION", "VACUUM INTO", "PRAGMA"} {
-		if strings.Contains(u, w) {
+	words := sqlWords(q)
+	for _, w := range []string{"ATTACH", "DETACH", "LOAD_EXTENSION", "PRAGMA"} {
+		if slices.Contains(words, w) {
 			return fmt.Errorf("a plugin's database refuses %s", w)
 		}
 	}
+	if slices.Contains(words, "VACUUM") && slices.Contains(words, "INTO") {
+		return errors.New("a plugin's database refuses VACUUM INTO")
+	}
 	return nil
+}
+
+// sqlWords are a statement's words, upper-cased, its comments left out.
+func sqlWords(q string) []string {
+	var words []string
+	var w strings.Builder
+	flush := func() {
+		if w.Len() > 0 {
+			words = append(words, strings.ToUpper(w.String()))
+			w.Reset()
+		}
+	}
+	for i := 0; i < len(q); i++ {
+		switch {
+		case strings.HasPrefix(q[i:], "--"):
+			flush()
+			for i < len(q) && q[i] != '\n' {
+				i++
+			}
+		case strings.HasPrefix(q[i:], "/*"):
+			flush()
+			end := strings.Index(q[i+2:], "*/")
+			if end < 0 {
+				return words
+			}
+			i += end + 3
+		case q[i] == '_' || q[i] >= 'a' && q[i] <= 'z' || q[i] >= 'A' && q[i] <= 'Z' || q[i] >= '0' && q[i] <= '9':
+			w.WriteByte(q[i])
+		default:
+			flush()
+		}
+	}
+	flush()
+	return words
 }
 
 // exec runs a statement with bound parameters, or a script of several
@@ -123,6 +164,7 @@ func (d *pluginDB) query(ctx context.Context, raw json.RawMessage) (any, error) 
 		return nil, err
 	}
 	out := []map[string]any{}
+	size := 0
 	for rows.Next() {
 		if len(out) == MaxDBRows {
 			return nil, fmt.Errorf("over %d rows: page with LIMIT", MaxDBRows)
@@ -140,7 +182,14 @@ func (d *pluginDB) query(ctx context.Context, raw json.RawMessage) (any, error) 
 			if b, ok := vals[i].([]byte); ok {
 				vals[i] = string(b)
 			}
+			if s, ok := vals[i].(string); ok {
+				size += len(s)
+			}
+			size += 8
 			row[col] = vals[i]
+		}
+		if size > MaxDBBytes {
+			return nil, fmt.Errorf("over %d MB of rows: page with LIMIT", MaxDBBytes>>20)
 		}
 		out = append(out, row)
 	}

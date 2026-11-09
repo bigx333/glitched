@@ -1,6 +1,7 @@
 package pack
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -483,7 +484,33 @@ func newer(a, b string) bool {
 	case pb.pre == "":
 		return false
 	}
-	return pa.pre > pb.pre
+	return comparePre(pa.pre, pb.pre) > 0
+}
+
+// comparePre orders two prereleases by SemVer's rule: identifier by
+// identifier, numbers as numbers and below words, words as text, and a
+// prerelease that runs out first below the longer.
+func comparePre(a, b string) int {
+	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+	for k := range min(len(as), len(bs)) {
+		x, xerr := strconv.Atoi(as[k])
+		y, yerr := strconv.Atoi(bs[k])
+		switch {
+		case xerr == nil && yerr == nil:
+			if x != y {
+				return cmp.Compare(x, y)
+			}
+		case xerr == nil:
+			return -1
+		case yerr == nil:
+			return 1
+		default:
+			if c := strings.Compare(as[k], bs[k]); c != 0 {
+				return c
+			}
+		}
+	}
+	return cmp.Compare(len(as), len(bs))
 }
 
 type version struct {

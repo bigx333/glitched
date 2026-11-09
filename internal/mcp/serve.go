@@ -114,7 +114,9 @@ func handle(ctx context.Context, tools *Tools, m message) reply {
 			r.Error = &rpcError{invalidParams, err.Error()}
 			return r
 		}
-		if plugin, tool, ok := strings.Cut(p.Name, "__"); ok && tools.Plugins != nil {
+		// A tool's name holds no __, a plugin's id may: split on the last.
+		if i := strings.LastIndex(p.Name, "__"); i > 0 && tools.Plugins != nil {
+			plugin, tool := p.Name[:i], p.Name[i+2:]
 			out, err := tools.pluginTool(ctx, plugin, tool, p.Arguments)
 			if err != nil {
 				r.Result = map[string]any{"content": []any{text(err.Error())}, "isError": true}

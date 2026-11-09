@@ -2,6 +2,7 @@ package mcp_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -74,5 +75,30 @@ func TestAnAgentCallsAPluginsTool(t *testing.T) {
 	}
 	if !strings.Contains(string(got[3]), `"isError":true`) {
 		t.Fatalf("an unknown tool: %s", got[3])
+	}
+}
+
+type fakePlugins struct{ called string }
+
+func (f *fakePlugins) PluginTools(context.Context) (json.RawMessage, error) {
+	return json.RawMessage(`[{"plugin": "my__plug", "name": "count", "description": "d"}]`), nil
+}
+
+func (f *fakePlugins) PluginTool(_ context.Context, call json.RawMessage) (json.RawMessage, error) {
+	f.called = string(call)
+	return json.RawMessage(`1`), nil
+}
+
+// A plugin's id may hold __, a tool's name may not: the name splits on its
+// last __.
+func TestAPluginIDWithUnderscoresStillReachesItsTool(t *testing.T) {
+	f := &fakePlugins{}
+	var out bytes.Buffer
+	in := `{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "my__plug__count", "arguments": {}}}` + "\n"
+	if err := mcp.Serve(ctx, strings.NewReader(in), &out, &mcp.Tools{Plugins: f}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.called, `"plugin":"my__plug"`) || !strings.Contains(f.called, `"name":"count"`) {
+		t.Fatalf("called %s", f.called)
 	}
 }
