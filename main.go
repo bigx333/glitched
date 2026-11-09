@@ -477,6 +477,7 @@ type app struct {
 	// openFolder, when set, chooses a folder in place of the system's
 	// dialog, as in a test.
 	openFolder func() string
+	stopWatch  func()
 }
 
 // newApp is the app on the engines its state directory dir names. The
@@ -886,6 +887,8 @@ func main() {
 		if err := a.backend.Start(); err != nil {
 			log.Print(err)
 		}
+		// A plugin reloads as its files are saved, keeping its pages' state.
+		a.stopWatch = a.plugins.Watch(time.Second)
 	})
 	// An engine embedded here stops with the app, which lets the CLI's
 	// next one take the state directory.
@@ -893,6 +896,7 @@ func main() {
 		if err := a.backend.Close(); err != nil {
 			log.Print(err)
 		}
+		a.stopWatch()
 		a.plugins.Close()
 	})
 	if err := mygo.App.Run(); err != nil {

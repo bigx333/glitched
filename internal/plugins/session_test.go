@@ -527,3 +527,30 @@ func TestAnEarlierStartFailingLeavesARetryBe(t *testing.T) {
 		t.Fatalf("the first start's failure landed: %v", s.Err)
 	}
 }
+
+func TestSavingThePluginSwapsItsCodeAndKeepsThePagesState(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	copyPlugin(t, state, "counter", "counter")
+	h := open(t, state, u, fx)
+	stop := h.Watch(20 * time.Millisecond)
+	defer stop()
+	s := session(t, h, "counter")
+	u.until(t, "the view", func() bool { return strings.Contains(texts(s), "Count: 0") })
+	s.Dispatch(UIEvent{Type: "click", Handler: "inc", Node: "inc"}, nil)
+	s.Dispatch(UIEvent{Type: "click", Handler: "inc", Node: "inc"}, nil)
+	u.until(t, "two", func() bool { return strings.Contains(texts(s), "Count: 2") })
+
+	src := filepath.Join(Dir(state), "counter", "index.ts")
+	b, _ := os.ReadFile(src)
+	time.Sleep(30 * time.Millisecond)
+	os.WriteFile(src, []byte(strings.Replace(string(b), "`Count: ${", "`Total: ${", 1)), 0o644)
+	u.until(t, "the new code, with the state", func() bool { return strings.Contains(texts(s), "Total: 2") })
+
+	os.WriteFile(src, []byte("export function view( {"), 0o644)
+	u.until(t, "the broken save reported", func() bool {
+		err := h.Installed()[0].Err
+		return err != nil && strings.Contains(err.Error(), "runs the code it had")
+	})
+	s.Dispatch(UIEvent{Type: "click", Handler: "inc", Node: "inc"}, nil)
+	u.until(t, "the old code still running", func() bool { return strings.Contains(texts(s), "Total: 3") })
+}
