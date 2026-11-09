@@ -12,6 +12,7 @@
 package plugins
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,6 +65,16 @@ type Options struct {
 	// Reloaded is told, on the UI thread, after a plugin's code is
 	// reloaded, so that what the app keeps of it goes.
 	Reloaded func(id string)
+	// Run runs a program the plugin id may, as glitched.run asks: its
+	// manifest's programs are allowed. Nil runs none.
+	Run func(ctx context.Context, id string, allowed []string, args json.RawMessage) (any, error)
+	// ServiceCall calls a method of the plugin id's service, as
+	// glitched.service.call asks. Nil reaches none.
+	ServiceCall func(ctx context.Context, id, method string, args json.RawMessage) (any, error)
+	// Main, when set, is the module each plugin runs in place of its
+	// manifest's main, as the service host runs services: a plugin
+	// without one is left out.
+	Main func(plugin.Manifest, Extension) string
 }
 
 // Host is the plugins installed under one state directory. Its methods
@@ -77,6 +88,7 @@ type Host struct {
 	installed []*installed
 	prefs     prefs
 	statuses  map[string]map[string]SettingStatus
+	dbs       map[string]*pluginDB
 
 	sessions map[pageKey]*Session
 }
@@ -119,7 +131,7 @@ func Open(stateDir string, o Options) *Host {
 	if o.Post == nil {
 		o.Post = func(fn func()) { fn() }
 	}
-	h := &Host{state: stateDir, opts: o, sessions: map[pageKey]*Session{}}
+	h := &Host{state: stateDir, opts: o, sessions: map[pageKey]*Session{}, dbs: map[string]*pluginDB{}}
 	if err := jsonfile.Load(prefsPath(stateDir), &h.prefs); err != nil && !errors.Is(err, os.ErrNotExist) {
 		o.Logf("plugins: %v", err)
 	}
@@ -160,6 +172,9 @@ func (h *Host) Reload() {
 			in.enabled = false
 		case in.enabled:
 			in.p, in.err = h.load(in)
+			if errors.Is(in.err, errNotHere) {
+				in.err = nil
+			}
 		}
 		seen[m.ID] = true
 	}
@@ -198,7 +213,17 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 	if network && len(m.Permissions.Network) > 0 && !slices.Contains(granted, Network) {
 		granted = append(granted, Network)
 	}
+	main := ""
+	if h.opts.Main != nil {
+		if main = h.opts.Main(m, x); main == "" {
+			return nil, errNotHere
+		}
+	}
 	return plugin.Load(in.folder, plugin.Options{
+		Main:            main,
+		Functions:       h.functions(in),
+		Prelude:         Prelude,
+		LoadTimeout:     LoadTimeout,
 		AppVersion:      h.opts.AppVersion,
 		DataDir:         DataDir(h.state),
 		Contract:        Contract,
@@ -557,11 +582,21 @@ func (h *Host) closeAll() {
 	for _, in := range list {
 		if in.p != nil {
 			// Off the UI thread: Close waits for a runtime that is still
-			// running the module's top level, which no timeout bounds.
+			// starting, up to its load timeout.
 			go in.p.Close()
 		}
 	}
+	h.mu.Lock()
+	for id, db := range h.dbs {
+		db.close()
+		delete(h.dbs, id)
+	}
+	h.mu.Unlock()
 }
+
+// errNotHere is a plugin this host doesn't run: a service host runs only
+// plugins with a service or tools.
+var errNotHere = errors.New("not run here")
 
 // running1 is the plugin id, if it runs.
 func (h *Host) running1(id string) *installed {
