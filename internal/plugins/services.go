@@ -171,7 +171,9 @@ func loadingChanged(a, b prefs) bool {
 	services := func(p prefs) map[string]bool {
 		out := map[string]bool{}
 		for id, g := range p.Grants {
-			out[id] = slices.Contains(g, "service")
+			if slices.Contains(g, "service") {
+				out[id] = true // only these: no grants and others alike say no
+			}
 		}
 		return out
 	}
