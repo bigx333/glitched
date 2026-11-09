@@ -69,7 +69,6 @@ func (a *app) openPlugins(dir string) {
 	}
 	a.plugins = plugins.Open(dir, plugins.Options{
 		AppVersion: mygo.App.Version(),
-		Language:   mygo.App.Locale,
 		OpenURL:    mygo.Shell.OpenExternal,
 		Post:       a.post,
 		Do:         a.pluginEffect,
