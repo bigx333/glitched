@@ -185,6 +185,7 @@ var settingsSections = []struct {
 	{"machine", "This machine", icGlobe, ui.Hex("#2dd4bf")},
 	{"servers", "Servers", icServer, ui.Hex("#38bdf8")},
 	{"keybindings", "Keybindings", icKeyboard, ui.Hex("#60a5fa")},
+	{"plugins", "Plugins", icPlug, ui.Hex("#22d3ee")},
 	{"about", "About", icInfo, ui.Hex("#a78bfa")},
 }
 

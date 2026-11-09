@@ -1,13 +1,12 @@
-# Plugins
+# Example plugins
 
-Glitched loads the plugins in `~/.glitched/plugins` (`$GLITCHED_DIR/plugins`), one folder each, when it starts. Each one keeps its storage in `~/.glitched/plugin-data/<id>`. The host is `internal/plugins`, on [mygo-plugin](https://github.com/yxxbc/mygo-plugin).
+[docs/plugins.md](../../docs/plugins.md) is the contract and the guide.
 
-A plugin is a `plugin.json` and a JavaScript or TypeScript module. Glitched shows each page in `contributes.pages` in its sidebar, and draws what the module's `page({ id })` export returns: the title, the subtitle, the Markdown body, and the sections and their items. An item's actions run the module's `command({ id, args })` export (`kind: "command"`, the command named in `meta.command`) or open a web page (`kind: "url"`). A page is read again after one of its commands runs.
-
-Glitched provides the `glitched` contract, version 1. A plugin that names another contract, or a newer version, does not load.
-
-`hello` is a sample. To try it:
+- `hello`: a stock mygo-plugin page.
+- `counter`: a native view in TypeScript.
+- `snippets`: saved prompts, with a form, storage, effects, grants and commands.
+- `glitched.d.ts`: the contract's types, for a TypeScript plugin's editor.
 
 ```sh
-cp -R examples/plugins/hello ~/.glitched/plugins/
+mkdir -p ~/.glitched/plugins && cp -R examples/plugins/snippets ~/.glitched/plugins/
 ```

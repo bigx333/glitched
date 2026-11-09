@@ -1,0 +1,18 @@
+{
+  "id": "snippets",
+  "name": "Snippets",
+  "description": "Prompts you reuse: saved here, drafted in the composer or started as threads.",
+  "version": "0.1.0",
+  "main": "index.js",
+  "contract": "glitched",
+  "contractVersion": 1,
+  "capabilities": ["composer", "clipboard", "threads:read", "threads:write"],
+  "permissions": {},
+  "contributes": {
+    "pages": [{ "id": "home", "title": "Snippets", "icon": "list" }],
+    "commands": [
+      { "id": "new", "title": "New snippet" },
+      { "id": "draft-pinned", "title": "Draft the first pinned snippet" }
+    ]
+  }
+}

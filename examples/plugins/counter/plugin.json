@@ -1,0 +1,13 @@
+{
+  "id": "counter",
+  "name": "Counter",
+  "description": "A native view in TypeScript: a counter, an input and a toggle.",
+  "version": "0.1.0",
+  "main": "index.ts",
+  "contract": "glitched",
+  "contractVersion": 1,
+  "permissions": {},
+  "contributes": {
+    "pages": [{ "id": "home", "title": "Counter", "icon": "zap" }]
+  }
+}
