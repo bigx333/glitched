@@ -146,12 +146,29 @@ func (a *app) removeProject(p *project) {
 	emptied := k != p.key && slices.ContainsFunc(all, func(n node) bool { return keyOf(n.t.env, n.t.View.Workspace) == k }) &&
 		!slices.ContainsFunc(a.gather(), func(x *project) bool { return x.key == k })
 	if k == p.key || emptied {
-		home := homeDir()
-		if e != nil && e.Kind == client.Remote {
-			home = "~" // a server's, as the workspace menu has it
-		}
-		a.fresh = draft{e, home}
+		a.fresh = a.homeDraft(e)
 	}
+}
+
+// homeDraft is where a draft on e starts over: this machine's home folder,
+// or on a server the workspace of its newest project left. The app doesn't
+// know a server's home, and its engine runs an agent in the workspace as
+// written, so "~" there is no folder; with no project left on the server,
+// the draft goes to the app's default, this machine's home.
+func (a *app) homeDraft(e *client.Env) draft {
+	if e == nil || e.Kind != client.Remote {
+		return draft{e, homeDir()}
+	}
+	var newest *project
+	for _, p := range a.gather() {
+		if p.env == e && (newest == nil || newestFirst(p.threads[0], newest.threads[0]) < 0) {
+			newest = p
+		}
+	}
+	if newest == nil {
+		return draft{}
+	}
+	return draft{e, newest.key.workspace}
 }
 
 // removeAlert asks before a project is removed, always: it deletes every
