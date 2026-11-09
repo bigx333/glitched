@@ -59,6 +59,8 @@ type Options struct {
 	// seconds. MemoryLimit bounds one plugin's runtime; zero is 256 MiB.
 	CallTimeout time.Duration
 	MemoryLimit int64
+	// TimerScale shortens timers, in tests.
+	TimerScale float64
 }
 
 // Host is the plugins installed under one state directory. Its methods
@@ -71,6 +73,7 @@ type Host struct {
 	mu        sync.RWMutex // guards installed and prefs, which a session's worker reads
 	installed []*installed
 	prefs     prefs
+	statuses  map[string]map[string]SettingStatus
 
 	sessions map[pageKey]*Session
 }
@@ -81,6 +84,7 @@ type installed struct {
 	err      error           // why it isn't loaded, besides being disabled
 	enabled  bool
 	p        *plugin.Plugin // nil unless loaded
+	ext      Extension      // plugin.json's glitched block
 }
 
 // prefs are what the user chose for the plugins, in plugins.json in the
@@ -88,6 +92,8 @@ type installed struct {
 type prefs struct {
 	Disabled []string            `json:"disabled,omitempty"`
 	Grants   map[string][]string `json:"grants,omitempty"`
+	// Settings are the values the user set, by plugin and setting.
+	Settings map[string]map[string]json.RawMessage `json:"settings,omitempty"`
 }
 
 // Dir is where the plugins are installed, one folder each.
@@ -164,6 +170,16 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 	if err := checkDeclared(m.Capabilities); err != nil {
 		return nil, err
 	}
+	x, err := readExtension(in.folder)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range x.needs() {
+		if !slices.Contains(m.Capabilities, c) {
+			return nil, fmt.Errorf("its glitched block needs the %q capability, which it doesn't declare", c)
+		}
+	}
+	in.ext = x
 	var granted []string
 	for _, c := range m.Capabilities {
 		if h.allowed(m.ID, c) {
@@ -187,6 +203,7 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 			Language: h.opts.Language,
 			OpenURL:  h.opts.OpenURL,
 			Logf:     h.opts.Logf,
+			Setting:  h.settingText,
 		},
 	})
 }
@@ -280,6 +297,15 @@ func (h *Host) SetGranted(id, capability string, on bool) error {
 }
 
 func (h *Host) edit(change func(*prefs)) error {
+	if err := h.save(change); err != nil {
+		return err
+	}
+	h.Reload()
+	return nil
+}
+
+// save changes plugins.json and what the host holds of it.
+func (h *Host) save(change func(*prefs)) error {
 	next, err := jsonfile.Edit(prefsPath(h.state), func(p *prefs) error {
 		change(p)
 		return nil
@@ -290,7 +316,6 @@ func (h *Host) edit(change func(*prefs)) error {
 	h.mu.Lock()
 	h.prefs = next
 	h.mu.Unlock()
-	h.Reload()
 	return nil
 }
 
@@ -442,6 +467,10 @@ func (h *Host) effect(id string, from *plugin.Plugin, e Effect, live func() bool
 			done(nil, err)
 			return
 		}
+		if e.Type == "setting.status" {
+			done(nil, h.setStatus(id, e.Args))
+			return
+		}
 		if e.Type == "url.open" {
 			var args struct {
 				URL string `json:"url"`
@@ -515,6 +544,18 @@ func (h *Host) closeAll() {
 			go in.p.Close()
 		}
 	}
+}
+
+// running1 is the plugin id, if it runs.
+func (h *Host) running1(id string) *installed {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, in := range h.installed {
+		if in.p != nil && in.manifest.ID == id {
+			return in
+		}
+	}
+	return nil
 }
 
 func (h *Host) plugin(id string) (*plugin.Plugin, error) {

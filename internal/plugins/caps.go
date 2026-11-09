@@ -25,6 +25,11 @@ var Capabilities = []Capability{
 	{"composer", false, "Open a new thread's composer with a draft, for you to send"},
 	{"threads:read", true, "Read your threads' titles, workspaces and status, and show a thread"},
 	{"threads:write", true, "Start threads and send messages to them, which runs agents"},
+	{"messages:read", true, "Read the messages of the thread you have open"},
+	{"ui.place", false, "Put widgets in Glitched's own views: thread rows, headers, panel tabs"},
+	{"tools", false, "Offer tools to Glitched's agents"},
+	{"programs", true, "Run the programs it names, as you"},
+	{"service", true, "Run in the background, with no window"},
 }
 
 // Network is the grant that lets a plugin reach the hosts its
@@ -36,6 +41,8 @@ var Effects = map[string]string{
 	"toast":           "",
 	"url.open":        "",
 	"page.open":       "",
+	"setting.status":  "",
+	"tab.open":        "ui.place",
 	"clipboard.write": "clipboard",
 	"notify":          "notify",
 	"composer.draft":  "composer",

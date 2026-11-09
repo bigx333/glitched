@@ -1,0 +1,239 @@
+package plugins
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+)
+
+// Extension is plugin.json's "glitched" block: what a plugin adds to
+// Glitched beyond mygo-plugin's manifest. It has a block of its own so
+// that mygo-plugin's fields, settings among them, keep their meaning.
+type Extension struct {
+	// Places are widgets the plugin puts in Glitched's own UI.
+	Places []Place `json:"places,omitempty"`
+	// Tabs are tabs of its own in a thread's side panel.
+	Tabs []Tab `json:"tabs,omitempty"`
+	// Timers wake the plugin now and then, every at least MinEvery.
+	Timers []Timer `json:"timers,omitempty"`
+	// Events are the app events the plugin hears.
+	Events []string `json:"events,omitempty"`
+	// Settings are drawn in Settings › Plugins.
+	Settings []Setting `json:"settings,omitempty"`
+	// Tools are tools Glitched's agents can call.
+	Tools []Tool `json:"tools,omitempty"`
+	// Programs are the programs it may run, each by name.
+	Programs []string `json:"programs,omitempty"`
+	// Service is its headless half's module, run by the engine.
+	Service string `json:"service,omitempty"`
+	// Shortcuts bind its commands to keys.
+	Shortcuts []Shortcut `json:"shortcuts,omitempty"`
+}
+
+// Place is a widget a plugin puts at a slot of Glitched's UI.
+type Place struct {
+	ID string `json:"id"`
+	At string `json:"at"`
+}
+
+// Tab is a tab in a thread's side panel.
+type Tab struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Icon  string `json:"icon,omitempty"`
+}
+
+// Timer wakes the plugin's app session, or its service, each Every
+// seconds.
+type Timer struct {
+	ID    string `json:"id"`
+	Every int    `json:"every"`
+}
+
+// Tool is a tool for agents: name, what it does, and a JSON Schema of its
+// input.
+type Tool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Input       json.RawMessage `json:"input,omitempty"`
+}
+
+// Shortcut binds a command of the plugin's to a key.
+type Shortcut struct {
+	Command string `json:"command"`
+	Key     string `json:"key"`
+}
+
+// Slot is a named place in Glitched's UI where plugins put widgets.
+type Slot struct {
+	Name string
+	// Stable slots keep their name and context across Glitched's updates.
+	Stable bool
+	// Provides is what each place there is given as its context.
+	Provides string
+	About    string
+}
+
+// Slots are the places Glitched offers. describe_elements in Zeron's
+// terms: docs/plugins.md lists them.
+var Slots = []Slot{
+	{"thread.header", true, "thread", "A thread's header, after its title."},
+	{"thread.row", true, "thread", "Each row of the sidebar's thread list, after its title. Built once per row."},
+	{"sidebar.footer", false, "", "The sidebar's foot, over Settings."},
+	{"composer.footer", false, "thread", "Under the composer of the thread shown."},
+}
+
+// Events are the app events a plugin may hear, and the capability each
+// needs.
+var Events = map[string]string{
+	"thread.changed":  "threads:read",
+	"thread.message":  "messages:read",
+	"setting.changed": "",
+	"theme.changed":   "",
+}
+
+// MinEvery is the shortest a timer may be, in seconds.
+const MinEvery = 30
+
+var (
+	toolName   = regexp.MustCompile(`^[a-z][a-z0-9_]{0,40}$`)
+	localID    = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,63}$`)
+	programRef = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}$`)
+)
+
+// readExtension reads plugin.json's glitched block, and checks it. A
+// plugin without one has none.
+func readExtension(folder string) (Extension, error) {
+	var raw struct {
+		Glitched *Extension `json:"glitched"`
+	}
+	b, err := os.ReadFile(filepath.Join(folder, "plugin.json"))
+	if err != nil {
+		return Extension{}, err
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return Extension{}, err
+	}
+	if raw.Glitched == nil {
+		return Extension{}, nil
+	}
+	x := *raw.Glitched
+	return x, x.check(folder)
+}
+
+func (x Extension) check(folder string) error {
+	ids := map[string]bool{}
+	unique := func(kind, id string) error {
+		if !localID.MatchString(id) {
+			return fmt.Errorf("glitched.%s: id %q is 1 to 64 letters, digits or _.-", kind, id)
+		}
+		if ids[kind+":"+id] {
+			return fmt.Errorf("glitched.%s: id %q twice", kind, id)
+		}
+		ids[kind+":"+id] = true
+		return nil
+	}
+	for _, p := range x.Places {
+		if err := unique("places", p.ID); err != nil {
+			return err
+		}
+		if !slices.ContainsFunc(Slots, func(s Slot) bool { return s.Name == p.At }) {
+			return fmt.Errorf("glitched.places: no slot %q", p.At)
+		}
+	}
+	for _, t := range x.Tabs {
+		if err := unique("tabs", t.ID); err != nil {
+			return err
+		}
+		if t.Title == "" {
+			return fmt.Errorf("glitched.tabs: %s has no title", t.ID)
+		}
+	}
+	for _, t := range x.Timers {
+		if err := unique("timers", t.ID); err != nil {
+			return err
+		}
+		if t.Every < MinEvery {
+			return fmt.Errorf("glitched.timers: %s runs every %d s, under the %d s allowed", t.ID, t.Every, MinEvery)
+		}
+	}
+	for _, e := range x.Events {
+		if _, ok := Events[e]; !ok {
+			return fmt.Errorf("glitched.events: no event %q", e)
+		}
+	}
+	for _, s := range x.Settings {
+		if err := unique("settings", s.ID); err != nil {
+			return err
+		}
+		if err := s.check(); err != nil {
+			return fmt.Errorf("glitched.settings: %s: %w", s.ID, err)
+		}
+	}
+	for _, t := range x.Tools {
+		if !toolName.MatchString(t.Name) || strings.Contains(t.Name, "__") {
+			return fmt.Errorf("glitched.tools: name %q is a lowercase letter, then up to 40 of a-z, 0-9 and _, without __", t.Name)
+		}
+		if err := unique("tools", t.Name); err != nil {
+			return err
+		}
+		if t.Description == "" {
+			return fmt.Errorf("glitched.tools: %s has no description", t.Name)
+		}
+		if len(t.Input) > 0 {
+			var schema map[string]any
+			if json.Unmarshal(t.Input, &schema) != nil || schema["type"] != "object" {
+				return fmt.Errorf("glitched.tools: %s's input is a JSON Schema of type object", t.Name)
+			}
+		}
+	}
+	for _, p := range x.Programs {
+		if !programRef.MatchString(p) {
+			return fmt.Errorf("glitched.programs: %q is a program's name, never a path", p)
+		}
+	}
+	if x.Service != "" {
+		if strings.Contains(x.Service, "..") || filepath.IsAbs(x.Service) {
+			return fmt.Errorf("glitched.service: %q is a file in the plugin's folder", x.Service)
+		}
+		if _, err := os.Stat(filepath.Join(folder, x.Service)); err != nil {
+			return fmt.Errorf("glitched.service: %w", err)
+		}
+	}
+	for _, s := range x.Shortcuts {
+		if _, err := parseKey(s.Key); err != nil {
+			return fmt.Errorf("glitched.shortcuts: %s: %w", s.Command, err)
+		}
+	}
+	return nil
+}
+
+// needs are the capabilities the extension's parts need declared.
+func (x Extension) needs() []string {
+	var out []string
+	add := func(c string) {
+		if c != "" && !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	if len(x.Places) > 0 || len(x.Tabs) > 0 {
+		add("ui.place")
+	}
+	for _, e := range x.Events {
+		add(Events[e])
+	}
+	if len(x.Tools) > 0 {
+		add("tools")
+	}
+	if len(x.Programs) > 0 {
+		add("programs")
+	}
+	if x.Service != "" {
+		add("service")
+	}
+	return out
+}
