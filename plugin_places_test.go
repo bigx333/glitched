@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -47,7 +49,18 @@ func TestARowBadgeDrawsOnEachThreadAndHearsItChange(t *testing.T) {
 	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: one, Body: api.MessageDispatch{Text: "go"}}); err != nil {
 		t.Fatal(err)
 	}
-	h.until("the changes counted on its row", func() bool { return h.tt.HasText("2×") }) // working, then completed
+	// Working, then completed, and maybe more as the turn ends: two at
+	// least, each counted on its row.
+	h.until("the changes counted on its row", func() bool {
+		for _, text := range h.tt.Texts() {
+			if n, ok := strings.CutSuffix(text, "×"); ok {
+				if v, err := strconv.Atoi(n); err == nil && v >= 2 {
+					return true
+				}
+			}
+		}
+		return false
+	})
 }
 
 func TestARowBadgeWithoutItsGrantDrawsNothing(t *testing.T) {

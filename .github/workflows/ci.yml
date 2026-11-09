@@ -59,7 +59,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - run: go test -race -timeout 10m ./internal/client ./internal/daemon ./internal/transport ./internal/plugins/... ./internal/mcp
+      - run: go test -race -timeout 10m ./internal/client ./internal/daemon ./internal/transport
+      # A step of its own: the plugins' runtimes, run beside the client's
+      # timed tests, would starve them of the runner's CPU.
+      - run: go test -race -timeout 10m ./internal/plugins/... ./internal/mcp
       # Verbose, so the log says whether this runner has the user systemd
       # manager these tests need, or skips them.
       - run: go test -race -v -run 'MarkerBehind|WithoutScopes' ./internal/provider/claude
