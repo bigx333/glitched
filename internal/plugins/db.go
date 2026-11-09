@@ -37,9 +37,10 @@ func (d *pluginDB) open() (*sql.DB, error) {
 			d.err = err
 			return
 		}
-		// The size cap in pages, set as each connection opens, before the
-		// authorizer, which refuses every later PRAGMA.
-		dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=trusted_schema(off)&_pragma=max_page_count(%d)", d.path, MaxDBBytes/4096)
+		// The size cap in pages, of its file and of its temp tables, set as
+		// each connection opens, before the authorizer, which refuses every
+		// later PRAGMA.
+		dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=trusted_schema(off)&_pragma=max_page_count(%d)&_pragma=temp.max_page_count(%d)", d.path, MaxDBBytes/4096, MaxDBBytes/4096)
 		db := sql.OpenDB(authorized{dsn})
 		db.SetMaxOpenConns(1)
 		if err := db.Ping(); err != nil {
