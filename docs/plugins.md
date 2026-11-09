@@ -26,7 +26,7 @@ cp -R examples/plugins/snippets ~/.glitched/plugins/
 
 The loop while you write a plugin:
 
-1. Edit the module in its plugins folder, or link it there: `ln -s ~/src/my-plugin ~/.glitched/plugins/my-plugin`.
+1. Edit the module in its plugins folder, or link the folder there: `ln -s ~/src/my-plugin ~/.glitched/plugins/my-plugin`.
 2. Press **Reload** in **Settings › Plugins**. A reload closes every plugin and opens it again, so its pages start over from `init`.
 3. A plugin that does not load shows why under its name in **Settings › Plugins**. A page whose `init`, `view` or `update` fails shows the error above the page, with **Start over**.
 
@@ -62,7 +62,7 @@ Samples in `examples/plugins`:
 - `id` names the plugin's storage and grants. Two folders with one id: the second does not load.
 - `capabilities` lists what the plugin uses of the app (see [Effects](#effects-and-capabilities)). An unknown name stops the plugin from loading.
 - `permissions.network` lists the hosts `fetch` may reach. They also need the `network` grant (see [Permissions](#permissions)).
-- `contributes.pages` become sidebar entries. `icon` is one of `sparkles`, `code`, `globe`, `terminal`, `file`, `note`, `inbox`, `clock`, `list`, `settings`, `zap`, `folder`, `message`. Another name shows a plug.
+- `contributes.pages` become sidebar entries. A page's `id` is 1 to 64 letters, digits or `_.-`, not starting with a dot; a page with another id is left out. `icon` is one of `sparkles`, `code`, `globe`, `terminal`, `file`, `note`, `inbox`, `clock`, `list`, `settings`, `zap`, `folder`, `message`. Another name shows a plug.
 - `contributes.commands` become command palette entries, named `<plugin name>: <title>`.
 
 mygo-plugin reads the other fields (`minAppVersion`, `settings`, `navigation`). Glitched does not show `settings` yet.
@@ -95,7 +95,7 @@ sequenceDiagram
 
 A plugin whose module exports `view` draws its pages as native views. A plugin without `view` but with `page` (or `browse`) draws mygo-plugin's stock pages, as `hello` does.
 
-One session per page holds the page's state. It lives while the app runs and the plugin stays loaded. Leaving the page and coming back keeps it. A reload, disabling the plugin, or **Start over** ends it.
+One session per page holds the page's state. It lives while the app runs and the plugin stays loaded. Leaving the page and coming back keeps it. A reload, disabling the plugin, or **Start over** ends it. What an ended page, or an earlier start of it, asked for is dropped. An effect that waits when its grant is taken back, or its plugin stops, does not run.
 
 The window never waits for the plugin. One worker goroutine per page calls the plugin, one call at a time and in event order. While it works, the window keeps drawing the last view, with a spinner in the page's header.
 
@@ -127,9 +127,9 @@ A UI event:
 - `node` is the widget's `id`.
 - `value` is an input's text, a toggle's `true` or `false`, or a select's value.
 
-`values` maps every input, toggle and select of the view, by `id`, to what it holds now. A form therefore needs no `onChange`. Read the fields in the Save button's `update`, as `snippets` does.
+`values` maps every input, toggle and select of the view, by `id`, to what it held when the event happened, even when the plugin takes the event later. A form therefore needs no `onChange`. Read the fields in the Save button's `update`, as `snippets` does.
 
-While a `change` event waits for the plugin, a later `change` of the same widget replaces it. A plugin that is behind sees the latest text, not every keystroke. At most 64 events wait. Past that, the page drops the event and says so.
+While a `change` event waits last in line, a later `change` of the same widget replaces it. A plugin that is behind sees the latest text, not every keystroke. A change never replaces one from before a click or a submit, so a Save sees the text it was pressed with. At most 64 events wait. Past that, the page drops the event and says so.
 
 An effect's answer:
 
@@ -147,6 +147,7 @@ Inputs, toggles and selects keep their value in the app, by their `id`, across v
 - A new widget starts with the `value` its view gives.
 - A later view changes it only when its `value` differs from the one the last view gave. So a plugin that leaves `value` out, or keeps it the same, never takes back what the user typed.
 - A view that echoes a change the user sent is not a change. A plugin that sets `value` from `onChange` (a controlled input, as in `counter`) does not lose keystrokes made while it answered.
+- A controlled widget whose changes the plugin has all taken shows the view's `value` whenever it differs from what the widget holds. So clearing it in the same `update` as a submit works even when the plugin took the typing and the submit in one batch.
 - To clear a controlled input, set its `value` to `""` in the state. To reset an uncontrolled one, give it a new `id`, or leave it out of one view.
 - A widget that a view leaves out loses its value. Focus and scroll stay with a widget while its `id` stays.
 
@@ -211,7 +212,9 @@ What the plugin cannot do, whatever it declares:
 - call Go, or anything of the app's but the effects above.
 - read files outside its data folder, or start programs. mygo-plugin's `host.spawn` always fails.
 - share a runtime, a heap or storage with another plugin.
-- hold the window. Calls run off the UI thread. A call is cut at 30 seconds (`view` at 5). A runtime is capped at 256 MiB, and a stuck one is restarted.
+- hold the window. Calls run off the UI thread. A call is cut at 30 seconds (`view` at 5). A runtime is capped at 256 MiB, and a stuck one is restarted. A plugin's runtime is stopped off the UI thread too.
+
+One gap is upstream's. mygo-plugin runs a module's top-level code when the plugin first starts, and bounds it with no timeout. A module whose top level never ends ties up that page's worker until the app quits, though the window and the other plugins carry on. Keep a module's top level to declarations.
 
 ## Failures and recovery
 

@@ -39,6 +39,9 @@ type Session struct {
 	// one. Rev counts them.
 	View *widget.View
 	Rev  int
+	// Processed is the last UI event, as Dispatch numbered it, that the
+	// plugin took before it answered View.
+	Processed int
 	// Err is what went wrong last: an update or a view that failed, or a
 	// view that didn't check, while View stays the last good one.
 	Err error
@@ -52,14 +55,24 @@ type Session struct {
 	done    bool
 	// broken is set when init failed: the page waits for a retry.
 	broken bool
-	state  json.RawMessage
-	values map[string]any
-	dirty  bool
+	// gen counts the page's starts: what an earlier start asked for is
+	// dropped.
+	gen       int
+	state     json.RawMessage
+	values    map[string]any
+	dirty     bool
+	seq       int // the last UI event's number
+	processed int // the last UI event the plugin took
 }
 
 type queued struct {
+	gen   int
 	init  bool
 	event any
+	// values are the controls' values as the event happened; seq numbers a
+	// UI event.
+	values map[string]any
+	seq    int
 	// change is the widget of a change event, which a later change of the
 	// same widget replaces while it waits.
 	change string
@@ -106,43 +119,45 @@ func (h *Host) Session(id, page string) (*Session, error) {
 }
 
 // Dispatch hands the plugin what the user did, with the values of the
-// view's inputs, toggles and selects.
-func (s *Session) Dispatch(ev UIEvent, values map[string]any) {
+// view's inputs, toggles and selects as it happened, and returns the
+// event's number.
+func (s *Session) Dispatch(ev UIEvent, values map[string]any) int {
 	ev.Kind = "ui"
 	s.mu.Lock()
-	s.values = values
+	s.seq++
+	q := queued{gen: s.gen, event: ev, values: values, seq: s.seq}
 	s.mu.Unlock()
-	q := queued{event: ev}
 	if ev.Type == "change" {
 		q.change = ev.Node
 	}
 	s.push(q)
+	return q.seq
 }
 
 // Retry starts the page over: the plugin's init, then its view.
 func (s *Session) Retry() {
 	s.mu.Lock()
+	s.gen++
 	s.queue = nil
 	s.state = nil
 	s.broken = false
+	gen := s.gen
 	s.mu.Unlock()
 	s.Err = nil
-	s.push(queued{init: true})
+	s.push(queued{gen: gen, init: true})
 }
 
 func (s *Session) push(q queued) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.done || s.broken {
+	if s.done || s.broken || q.gen != s.gen {
 		return
 	}
-	if q.change != "" {
-		for i, w := range s.queue {
-			if w.change == q.change {
-				s.queue[i] = q
-				return
-			}
-		}
+	// A change replaces the one of the same widget waiting just before it,
+	// never one before a click or a submit, which saw the earlier value.
+	if n := len(s.queue); q.change != "" && n > 0 && s.queue[n-1].change == q.change {
+		s.queue[n-1] = q
+		return
 	}
 	if len(s.queue) >= MaxQueued {
 		s.h.opts.Post(func() { s.Err = fmt.Errorf("the plugin is %d events behind; dropped one", MaxQueued) })
@@ -191,17 +206,29 @@ func (s *Session) run() {
 				return
 			}
 			s.dirty = false
-			state, values := s.state, s.values
+			state, values, gen, processed := s.state, s.values, s.gen, s.processed
 			s.mu.Unlock()
-			s.render(state, values, failed)
+			s.render(gen, processed, state, values, failed)
 			continue
 		}
 		q := s.queue[0]
 		s.queue = s.queue[1:]
+		if q.gen != s.gen {
+			s.mu.Unlock()
+			continue
+		}
+		if q.values != nil {
+			s.values = q.values
+		}
 		state, values := s.state, s.values
 		s.dirty = true
 		s.mu.Unlock()
 		failed = s.apply(q, state, values)
+		s.mu.Lock()
+		if q.seq > 0 && q.gen == s.gen {
+			s.processed = q.seq
+		}
+		s.mu.Unlock()
 		if q.init && failed != nil {
 			err := fmt.Errorf("init: %w", failed)
 			s.mu.Lock()
@@ -224,7 +251,7 @@ func (s *Session) apply(q queued, state json.RawMessage, values map[string]any) 
 	var err error
 	switch {
 	case q.init && !s.p.Can("init"):
-		s.setState(nil)
+		s.setState(q.gen, nil)
 		return nil
 	case q.init:
 		err = s.call(0, "init", map[string]any{"page": s.page}, &raw)
@@ -242,25 +269,27 @@ func (s *Session) apply(q queued, state json.RawMessage, values map[string]any) 
 		return err
 	}
 	if q.init || u.hasState {
-		s.setState(u.state)
+		s.setState(q.gen, u.state)
 	}
 	for _, e := range u.effects {
-		s.h.effect(s.plugin, e, func(result any, err error) {
+		s.h.effect(s.plugin, s.p, e, func(result any, err error) {
 			ev := EffectEvent{Kind: "effect", ID: e.ID, Effect: e.Type, OK: err == nil, Result: result}
 			if err != nil {
 				ev.Error, ev.Denied = err.Error(), errors.Is(err, ErrDenied)
 			} else if e.ID == "" {
 				return // no one waits for it
 			}
-			s.push(queued{event: ev})
+			s.push(queued{gen: q.gen, event: ev})
 		})
 	}
 	return nil
 }
 
-func (s *Session) setState(st json.RawMessage) {
+func (s *Session) setState(gen int, st json.RawMessage) {
 	s.mu.Lock()
-	s.state = st
+	if gen == s.gen {
+		s.state = st
+	}
 	s.mu.Unlock()
 }
 
@@ -305,7 +334,7 @@ func decodeUpdate(raw json.RawMessage) (update, error) {
 
 // render asks the plugin for its view of the state, checks it, and
 // publishes it with what failed.
-func (s *Session) render(state json.RawMessage, values map[string]any, failed error) {
+func (s *Session) render(gen, processed int, state json.RawMessage, values map[string]any, failed error) {
 	var raw json.RawMessage
 	err := s.call(ViewTimeout, "view", map[string]any{"page": s.page, "state": state, "values": values}, &raw)
 	var v *widget.View
@@ -316,17 +345,18 @@ func (s *Session) render(state json.RawMessage, values map[string]any, failed er
 		failed = fmt.Errorf("view: %w", err)
 	}
 	s.h.opts.Post(func() {
-		if s.closed {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.closed || gen != s.gen {
 			return
 		}
 		if v != nil {
 			s.View = v
 			s.Rev++
+			s.Processed = processed
 		}
 		s.Err = failed
-		s.mu.Lock()
 		s.Busy = s.running && (len(s.queue) > 0 || s.dirty)
-		s.mu.Unlock()
 	})
 }
 
