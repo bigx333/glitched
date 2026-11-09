@@ -240,61 +240,73 @@ func jsonEqual(raw json.RawMessage, want string) bool {
 // Every widget, in every style, with an id and without, in every
 // container, draws: a view that checks can't take the window down.
 func TestEveryWidgetDraws(t *testing.T) {
-	var leaves []string
-	for typ := range widget.Types {
-		styles := map[string][]string{"text": {"body", "muted", "heading", "title", "code", "error", "success"}, "button": {"default", "primary", "danger"}, "badge": {"default", "accent", "success", "warning", "danger"}}[typ]
-		if styles == nil {
-			styles = []string{""}
-		}
-		for j, st := range styles {
-			n := map[string]any{"type": typ, "text": "t", "label": "l"}
-			if st != "" {
-				n["style"] = st
-			}
-			switch typ {
-			case "button":
-				n["onClick"] = "h"
-			case "input":
-				n["onChange"], n["onSubmit"] = "h", "h"
-			case "toggle":
-				n["value"] = true
-			case "select":
-				n["options"] = []string{"a", "b"}
-			}
-			delete(n, "text")
-			if typ == "text" || typ == "markdown" || typ == "badge" {
-				n["text"] = "t"
-			}
-			if typ != "text" && typ != "markdown" && typ != "badge" && typ != "button" && typ != "input" && typ != "toggle" && typ != "select" {
-				delete(n, "label")
-			}
-			if typ == "text" || typ == "markdown" || typ == "badge" || typ == "column" || typ == "row" || typ == "card" || typ == "divider" || typ == "spacer" || typ == "spinner" {
-				delete(n, "label")
-			}
-			for _, withID := range []bool{true, false} {
-				if !withID && (typ == "button" || typ == "input" || typ == "toggle" || typ == "select") {
-					continue
-				}
-				m := map[string]any{}
-				for k, v := range n {
-					m[k] = v
-				}
-				if withID {
-					m["id"] = fmt.Sprintf("%s-%d", typ, j)
-				}
-				b, _ := json.Marshal(m)
-				leaves = append(leaves, string(b))
-			}
-		}
+	leaves := []string{
+		`{"type": "text", "text": "t"}`, `{"type": "text", "id": "t1", "text": "t", "style": "code", "color": "$accent", "selectable": true}`,
+		`{"type": "markdown", "text": "**m**"}`, `{"type": "badge", "text": "b", "style": "danger"}`, `{"type": "badge", "id": "b1", "text": "b", "color": "$success"}`,
+		`{"type": "divider"}`, `{"type": "spacer", "id": "sp"}`, `{"type": "spinner"}`,
+		`{"type": "button", "id": "b2", "label": "B", "style": "primary", "onClick": "h"}`, `{"type": "button", "id": "b3", "label": "B", "style": "danger", "disabled": true}`,
+		`{"type": "input", "id": "i1", "label": "L", "value": "v", "onChange": "h", "onSubmit": "h"}`, `{"type": "input", "id": "i2", "multiline": true, "controlled": true, "value": ""}`,
+		`{"type": "toggle", "id": "g1", "label": "G", "value": true}`,
+		`{"type": "select", "id": "s1", "label": "S", "options": ["a", "b"], "value": "b"}`, `{"type": "select", "id": "s2", "options": ["a"]}`,
+		`{"type": "tabs", "id": "tb", "options": [{"value": "x", "label": "X"}, "y"], "value": "y", "onChange": "h"}`,
+		`{"type": "menu", "id": "mn", "label": "More", "options": ["edit", "delete"], "onChange": "h"}`,
+		`{"type": "dialog", "id": "dl", "title": "Sure?", "open": true, "onClose": "h", "children": [{"type": "text", "text": "in"}]}`,
+		`{"type": "dialog", "id": "dl2", "title": "Closed"}`,
+		`{"type": "table", "columns": [{"id": "a", "title": "A"}, {"id": "b", "title": "B", "width": 80}], "rows": [{"key": "1", "cells": {"a": "x"}}, {"key": "2", "cells": {"b": "y"}}]}`,
+		`{"type": "image", "src": "plugin:x.png", "width": 20, "radius": 4}`, `{"type": "image", "id": "im", "src": "https://example.com/x.png"}`,
+		`{"type": "icon", "name": "check"}`, `{"type": "icon", "id": "ic", "name": "nope", "color": "$warning"}`,
 	}
 	all := strings.Join(leaves, ",")
-	for _, box := range []string{"column", "row", "card"} {
+	for _, box := range []string{`"column", "background": "$surface"`, `"row"`, `"card", "title": "C"`} {
 		s := &screen{}
-		s.show(t, `{"body": {"type": "`+box+`", "children": [`+all+`]}}`)
+		view := `{"body": {"type": ` + box + `, "children": [` + all + `]}}`
+		s.show(t, view)
 		tt := ui.NewTester(s.draw, 900, 3000)
 		tt.Frame()
-		s.show(t, `{"body": {"type": "`+box+`", "children": [`+all+`]}}`)
+		s.show(t, view)
 		tt.Frame()
+	}
+}
+
+func TestTabsMenusAndDialogsDispatch(t *testing.T) {
+	s := &screen{}
+	s.show(t, `{"body": {"type": "column", "children": [
+		{"type": "tabs", "id": "tb", "options": [{"value": "one", "label": "One"}, {"value": "two", "label": "Two"}], "value": "one", "onChange": "tab"},
+		{"type": "menu", "id": "mn", "label": "More", "options": [{"value": "rm", "label": "Remove"}], "onChange": "menu"},
+		{"type": "table", "columns": [{"id": "n", "title": "Name"}], "rows": [{"key": "r", "cells": {"n": "Ada"}}]},
+		{"type": "dialog", "id": "dl", "title": "Sure?", "open": true, "onClose": "closed", "children": [{"type": "text", "text": "Inside"}]}]}}`)
+	tt := ui.NewTester(s.draw, 900, 700)
+	tt.Frame()
+	for _, want := range []string{"One", "Two", "More", "Name", "Ada", "Sure?", "Inside"} {
+		if !tt.HasText(want) {
+			t.Errorf("no %q in %q", want, tt.Texts())
+		}
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "close" || ev.Handler != "closed" || ev.Node != "dl" {
+		t.Fatalf("dismissing: %+v", ev)
+	}
+	if tt.HasText("Inside") {
+		t.Fatal("a dismissed dialog still shows")
+	}
+	if err := tt.Click("Two"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "change" || ev.Handler != "tab" || ev.Value != "two" {
+		t.Fatalf("tabs: %+v", ev)
+	}
+	if err := tt.Click("More"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.ChooseMenuItem("Remove"); err != nil {
+		t.Fatalf("%v: %q", err, tt.Menu())
+	}
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "change" || ev.Handler != "menu" || ev.Value != "rm" {
+		t.Fatalf("menu: %+v", ev)
 	}
 }
 

@@ -478,6 +478,8 @@ type app struct {
 	// dialog, as in a test.
 	openFolder func() string
 	stopWatch  func()
+	// pluginAssets are the plugins' pictures, by plugin and file.
+	pluginAssets map[string]asset
 }
 
 // newApp is the app on the engines its state directory dir names. The
@@ -521,6 +523,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		pluginPages:    map[pluginKey]*pluginPage{},
 		pluginControls: map[pluginKey]*render.Controls{},
 		placeControls:  map[placeKey]*render.Controls{},
+		pluginAssets:   map[string]asset{},
 		pluginRecords:  map[string]string{},
 		pluginMessages: map[string]int{},
 		settings: settings{

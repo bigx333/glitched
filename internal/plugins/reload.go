@@ -101,6 +101,9 @@ func (h *Host) hotReload(folder string) {
 		}
 	}
 	go old.Close()
+	if h.opts.Reloaded != nil {
+		h.opts.Reloaded(in.manifest.ID)
+	}
 }
 
 func (h *Host) list() []*installed {

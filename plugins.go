@@ -70,6 +70,7 @@ func (a *app) openPlugins(dir string) {
 		OpenURL:    mygo.Shell.OpenExternal,
 		Post:       a.post,
 		Do:         a.pluginEffect,
+		Reloaded:   func(string) { clear(a.pluginAssets) },
 	})
 }
 
@@ -78,6 +79,7 @@ func (a *app) openPlugins(dir string) {
 func (a *app) pluginsChanged(err error) {
 	clear(a.pluginPages)
 	clear(a.pluginControls)
+	clear(a.pluginAssets)
 	if err != nil {
 		a.pluginNotice(ui.Toast{Title: "Couldn't save the plugin settings", Description: err.Error()})
 	}
@@ -93,7 +95,7 @@ func (a *app) pluginNotice(t ui.Toast) {
 func (a *app) pluginNav(c *ui.Context) {
 	for _, e := range a.plugins.Entries() {
 		k := pluginKey{e.Plugin, e.Page}
-		icon := pluginIcons[e.Icon]
+		icon := appIconNamed(e.Icon)
 		if icon == nil {
 			icon = icPlug
 		}
@@ -248,10 +250,7 @@ func (a *app) pluginView(c *ui.Context, k pluginKey, s *plugins.Session) {
 		}
 		return
 	}
-	render.View(c, s.View, cs, render.Style{
-		Muted: palette.muted, Accent: palette.accent, Red: palette.red, Green: palette.green, Amber: palette.amber, Border: palette.border,
-		Card: func(c *ui.Context, title string, body func()) { card(c, strings.ToUpper(title), body) },
-	}, &a.pluginMD, s.Dispatch)
+	render.View(c, s.View, cs, a.pluginStyle(k.plugin), &a.pluginMD, s.Dispatch)
 }
 
 // pluginBody draws a stock page.

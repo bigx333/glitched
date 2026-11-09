@@ -61,6 +61,9 @@ type Options struct {
 	MemoryLimit int64
 	// TimerScale shortens timers, in tests.
 	TimerScale float64
+	// Reloaded is told, on the UI thread, after a plugin's code is
+	// reloaded, so that what the app keeps of it goes.
+	Reloaded func(id string)
 }
 
 // Host is the plugins installed under one state directory. Its methods
