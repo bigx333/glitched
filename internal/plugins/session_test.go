@@ -194,10 +194,11 @@ func TestSnippetsAsksForThreadsAndIsDeniedUntilGranted(t *testing.T) {
 	if err := h.SetGranted("snippets", "threads:read", true); err != nil {
 		t.Fatal(err)
 	}
-	if !s.closed {
-		t.Fatal("the page outlived the reload")
+	// The grant holds at once: the page asks again, and keeps its state.
+	if s.closed {
+		t.Fatal("a grant reloaded the page")
 	}
-	s = session(t, h, "snippets")
+	s.Dispatch(UIEvent{Type: "click", Handler: "refresh", Node: "refresh"}, nil)
 	u.until(t, "the threads", func() bool { return strings.Contains(texts(s), "Fix the build") })
 	b, err := os.ReadFile(prefsPath(state))
 	if err != nil || !strings.Contains(string(b), "threads:read") {
@@ -486,7 +487,7 @@ func TestTheNetworkGrantIsACapability(t *testing.T) {
 	if err := h.SetGranted("net", Network, true); err != nil {
 		t.Fatal(err)
 	}
-	s = session(t, h, "net")
+	s.refresh() // the same runtime, asked again
 	u.until(t, "the granted view", func() bool { return strings.Contains(texts(s), "network true") })
 }
 

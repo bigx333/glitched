@@ -243,7 +243,7 @@ func TestRunAndServiceNeedTheirGrants(t *testing.T) {
 	u.until(t, "both denied", func() bool { return strings.Count(texts(s), "denied: permission denied") == 2 })
 	h.SetGranted("worker", "programs", true)
 	h.SetGranted("worker", "service", true)
-	s = session(t, h, "worker")
+	s.Retry() // the same runtime, its init again
 	u.until(t, "both run", func() bool { return strings.Contains(texts(s), "worker.ping") })
 	if len(ran) != 1 || ran[0] != "worker git" {
 		t.Fatalf("ran %q", ran)

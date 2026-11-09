@@ -488,20 +488,10 @@ func (s *Session) render(gen, processed int, state json.RawMessage, values map[s
 	})
 }
 
-// call calls the plugin. A call that started as the page closed, with a
-// reload, may have started the plugin's runtime again: closing it again
-// leaves none behind.
+// call calls the plugin. A runtime the host replaced is shut down for
+// good, so a call that started as it was fails, and starts none.
 func (s *Session) call(timeout time.Duration, method string, args map[string]any, out *json.RawMessage) error {
-	p := s.runtime()
-	err := p.CallWithin(timeout, method, args, out)
-	s.mu.Lock()
-	done := s.done
-	s.mu.Unlock()
-	if done {
-		p.Close()
-		return errors.New("the page closed")
-	}
-	return err
+	return s.runtime().CallWithin(timeout, method, args, out)
 }
 
 // runtime is the plugin the session calls, which a hot reload swaps.

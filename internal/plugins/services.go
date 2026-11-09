@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -36,9 +38,6 @@ type Services struct {
 	queue chan func()
 	stop  chan struct{}
 	once  sync.Once
-
-	mu     sync.Mutex
-	active map[string]time.Time // when each service last worked
 }
 
 // ServiceOptions are what the engine gives the services.
@@ -56,7 +55,7 @@ type ServiceOptions struct {
 // stateDir, and keeps up with what the user changes there: a plugin
 // installed or saved, turned on or off, a grant given or taken back.
 func StartServices(stateDir string, o ServiceOptions) *Services {
-	s := &Services{queue: make(chan func(), 256), stop: make(chan struct{}), active: map[string]time.Time{}}
+	s := &Services{queue: make(chan func(), 256), stop: make(chan struct{})}
 	go s.loop()
 	idle := o.Idle
 	if idle <= 0 {
@@ -69,6 +68,7 @@ func StartServices(stateDir string, o ServiceOptions) *Services {
 			Do:          o.Do,
 			Run:         o.Run,
 			MemoryLimit: ServiceMemory,
+			IdleTimeout: idle,
 			TimerScale:  o.TimerScale,
 			Main: func(m plugin.Manifest, x Extension) string {
 				switch {
@@ -83,19 +83,19 @@ func StartServices(stateDir string, o ServiceOptions) *Services {
 	})
 	// What the plugins are now, before StartServices returns, so that a
 	// change made once it has is seen.
-	last := stamp(stateDir)
+	choices, folder := choicesStamp(stateDir), fingerprint(Dir(stateDir))
 	s.do(s.startTimers)
-	go s.watch(stateDir, idle, last)
+	go s.watch(stateDir, choices, folder)
 	return s
 }
 
-// stamp changes as plugins.json or the plugins folder does.
-func stamp(stateDir string) string {
+// choicesStamp changes as plugins.json does.
+func choicesStamp(stateDir string) string {
 	fi, err := os.Stat(prefsPath(stateDir))
 	if err != nil {
-		return fingerprint(Dir(stateDir))
+		return ""
 	}
-	return fmt.Sprint(fi.ModTime().UnixNano(), fi.Size(), fingerprint(Dir(stateDir)))
+	return fmt.Sprint(fi.ModTime().UnixNano(), fi.Size())
 }
 
 func (s *Services) loop() {
@@ -126,10 +126,17 @@ func (s *Services) do(fn func()) {
 	}
 }
 
-// watch reloads the services as plugins.json or the plugins folder
-// change, starts each service's timers, and stops services left idle.
-func (s *Services) watch(stateDir string, idle time.Duration, last string) {
-	tick := time.NewTicker(min(time.Second, idle/2))
+// watch follows the window's changes: the plugins folder, which reloads
+// the services, and plugins.json. A grant is read as it's used, so a
+// change of grants needs no reload, but for service, which decides which
+// module runs; nor do settings. Turning a plugin on or off, or a consent,
+// reloads.
+//
+// It polls: the window that writes plugins.json may be another process,
+// and polling two stamps a second costs less than a file watcher's
+// dependency.
+func (s *Services) watch(stateDir, choices, folder string) {
+	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
 		select {
@@ -137,20 +144,38 @@ func (s *Services) watch(stateDir string, idle time.Duration, last string) {
 			return
 		case <-tick.C:
 		}
-		if now := stamp(stateDir); now != last {
-			last = now
-			s.do(func() {
-				var p prefs
-				readPrefs(stateDir, &p)
-				s.h.mu.Lock()
-				s.h.prefs = p
-				s.h.mu.Unlock()
+		c, f := choicesStamp(stateDir), fingerprint(Dir(stateDir))
+		if c == choices && f == folder {
+			continue
+		}
+		reload := f != folder
+		choices, folder = c, f
+		s.do(func() {
+			var p prefs
+			readPrefs(stateDir, &p)
+			s.h.mu.Lock()
+			reload = reload || loadingChanged(s.h.prefs, p)
+			s.h.prefs = p
+			s.h.mu.Unlock()
+			if reload {
 				s.h.Reload()
 				s.startTimers()
-			})
-		}
-		s.do(func() { s.stopIdle(idle) })
+			}
+		})
 	}
+}
+
+// loadingChanged reports whether plugins.json changed what runs: a plugin
+// turned on or off, a consent, or a service grant.
+func loadingChanged(a, b prefs) bool {
+	services := func(p prefs) map[string]bool {
+		out := map[string]bool{}
+		for id, g := range p.Grants {
+			out[id] = slices.Contains(g, "service")
+		}
+		return out
+	}
+	return !slices.Equal(a.Disabled, b.Disabled) || !reflect.DeepEqual(a.Consent, b.Consent) || !maps.Equal(services(a), services(b))
 }
 
 // startTimers wakes each running service on its timers.
@@ -178,7 +203,6 @@ func (s *Services) startTimers() {
 					if s.h.running1(id) == nil || s.h.running1(id).p != p {
 						return // reloaded: the new one has timers of its own
 					}
-					s.touch(id)
 					var out json.RawMessage
 					if err := p.Call("timer", map[string]string{"id": t.ID}, &out); err != nil {
 						s.h.opts.Logf("plugins: %s: timer %s: %v", id, t.ID, err)
@@ -188,28 +212,6 @@ func (s *Services) startTimers() {
 				}
 			}()
 		}
-	}
-}
-
-func (s *Services) touch(id string) {
-	s.mu.Lock()
-	s.active[id] = time.Now()
-	s.mu.Unlock()
-}
-
-// stopIdle stops the runtimes of services with nothing to do for idle;
-// mygo-plugin starts one again on its next call.
-func (s *Services) stopIdle(idle time.Duration) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for id, at := range s.active {
-		if time.Since(at) < idle {
-			continue
-		}
-		if in := s.h.running1(id); in != nil {
-			go in.p.Close()
-		}
-		delete(s.active, id)
 	}
 }
 
@@ -287,7 +289,6 @@ func (s *Services) CallTool(ctx context.Context, c ToolCall) (json.RawMessage, e
 	if !p.Can("tool") {
 		return nil, fmt.Errorf("plugin %s lists tools but has no tool export", c.Plugin)
 	}
-	s.touch(c.Plugin)
 	args := c.Args
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
@@ -323,7 +324,6 @@ func (s *Services) Call(ctx context.Context, c ServiceCall) (json.RawMessage, er
 	if !p.Can("serve") {
 		return nil, fmt.Errorf("plugin %s's service has no serve export", c.Plugin)
 	}
-	s.touch(c.Plugin)
 	timeout := 30 * time.Second
 	if d, ok := ctx.Deadline(); ok {
 		timeout = time.Until(d)
