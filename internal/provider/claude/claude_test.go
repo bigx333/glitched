@@ -673,7 +673,7 @@ func TestARunGetsGlitchedMCPAndTheEnginesMCPServers(t *testing.T) {
 	var args []string
 	json.Unmarshal([]byte(strings.TrimSpace(string(must(os.ReadFile(argv))))), &args)
 	i := slices.Index(args, "--mcp-config")
-	if i < 0 || i+3 >= len(args) {
+	if i < 0 || i+4 >= len(args) {
 		t.Fatalf("claude ran with %q, want an --mcp-config", args)
 	}
 	if n := strings.Count(strings.Join(args, "\x00"), "--mcp-config"); n != 1 {
