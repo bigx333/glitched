@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"sync/atomic"
@@ -184,5 +185,65 @@ func TestTheGlitchedBlockIsChecked(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v, want %q", manifest, err, want)
 		}
+	}
+}
+
+func TestEachPluginHasADatabaseOfItsOwn(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	module := `
+		export async function init() {
+			await glitched.db.exec("CREATE TABLE IF NOT EXISTS seen (url TEXT PRIMARY KEY, n INTEGER)")
+			await glitched.db.exec("INSERT INTO seen VALUES (?, ?) ON CONFLICT(url) DO UPDATE SET n = n + 1", ["a", 1])
+			const rows = await glitched.db.query("SELECT url, n FROM seen WHERE url = ?", ["a"])
+			let refused = ""
+			try { await glitched.db.exec("ATTACH DATABASE '/tmp/x.db' AS x") } catch (e) { refused = e.message }
+			return { state: { rows, refused } }
+		}
+		export function view({ state }) { return { body: { type: "text", text: JSON.stringify(state) } } }`
+	writeModule(t, state, "one", "", module)
+	writeModule(t, state, "two", "", module)
+	h := open(t, state, u, fx)
+	one, two := session(t, h, "one"), session(t, h, "two")
+	u.until(t, "both databases", func() bool {
+		return strings.Contains(texts(one), `"n":1`) && strings.Contains(texts(two), `"n":1`)
+	})
+	if !strings.Contains(texts(one), "refuses ATTACH") {
+		t.Fatalf("attach: %s", texts(one))
+	}
+	one.Retry()
+	u.until(t, "one's second start", func() bool { return strings.Contains(texts(one), `"n":2`) })
+	if !strings.Contains(texts(two), `"n":1`) {
+		t.Fatal("two saw one's rows")
+	}
+}
+
+func TestRunAndServiceNeedTheirGrants(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "worker", `"capabilities": ["programs", "service"], "glitched": { "programs": ["git"], "service": "index.js" }, `, `
+		export async function init() {
+			const out = []
+			for (const f of [() => glitched.run("git", ["--version"]), () => glitched.service.call("ping")]) {
+				try { out.push(await f()) } catch (e) { out.push(e.code + ": " + e.message) }
+			}
+			return { state: out }
+		}
+		export function view({ state }) { return { body: { type: "text", text: state.join(" | ") } } }`)
+	var ran []string
+	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf,
+		Run: func(_ context.Context, id string, allowed []string, args json.RawMessage) (any, error) {
+			ran = append(ran, id+" "+strings.Join(allowed, ","))
+			return map[string]any{"status": 0}, nil
+		},
+		ServiceCall: func(_ context.Context, id, method string, _ json.RawMessage) (any, error) { return id + "." + method, nil },
+	})
+	t.Cleanup(h.Close)
+	s := session(t, h, "worker")
+	u.until(t, "both denied", func() bool { return strings.Count(texts(s), "denied: permission denied") == 2 })
+	h.SetGranted("worker", "programs", true)
+	h.SetGranted("worker", "service", true)
+	s = session(t, h, "worker")
+	u.until(t, "both run", func() bool { return strings.Contains(texts(s), "worker.ping") })
+	if len(ran) != 1 || ran[0] != "worker git" {
+		t.Fatalf("ran %q", ran)
 	}
 }
