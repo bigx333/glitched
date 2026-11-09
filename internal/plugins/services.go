@@ -203,33 +203,12 @@ func (s *Services) startTimers() {
 					if s.h.running1(id) == nil || s.h.running1(id).p != p {
 						return // reloaded: the new one has timers of its own
 					}
-					var out json.RawMessage
-					if err := p.Call("timer", map[string]string{"id": t.ID}, &out); err != nil {
+					if err := p.Call("timer", map[string]string{"id": t.ID}, nil); err != nil {
 						s.h.opts.Logf("plugins: %s: timer %s: %v", id, t.ID, err)
-						continue
 					}
-					s.effects(id, p, out)
 				}
 			}()
 		}
-	}
-}
-
-// effects runs what a service's answer asks for, as a command's: their
-// answers go nowhere.
-func (s *Services) effects(id string, p *plugin.Plugin, out json.RawMessage) {
-	var a struct {
-		Effects []Effect `json:"effects"`
-	}
-	if json.Unmarshal(out, &a) != nil || len(a.Effects) > MaxEffects {
-		return
-	}
-	for _, e := range a.Effects {
-		s.h.effect(id, p, e, nil, func(_ any, err error) {
-			if err != nil {
-				s.h.opts.Logf("plugins: %s: %s: %v", id, e.Type, err)
-			}
-		})
 	}
 }
 

@@ -36,7 +36,8 @@ var Capabilities = []Capability{
 // permissions.network names.
 const Network = "network"
 
-// Effects maps each effect to the capability it needs, "" for none.
+// Effects maps each of the app's calls to the capability it needs, "" for
+// none.
 var Effects = map[string]string{
 	"toast":           "",
 	"url.open":        "",
@@ -52,32 +53,23 @@ var Effects = map[string]string{
 	"threads.send":    "threads:write",
 }
 
-// MaxEffects is how many effects one update or command may ask for.
-const MaxEffects = 16
-
 // Effect is something a plugin asks the app to do, which only the app
-// can: Type names it, ID, when set, names the answer that comes back to
-// the plugin's update, and Args are the rest of its fields.
+// can, as glitched's calls ask it: Type names it, and Args are its fields.
 type Effect struct {
 	Type string
-	ID   string
 	Args json.RawMessage
 }
 
-// UnmarshalJSON reads an effect as one object: {"type": ..., "id": ...,
-// and its own fields}.
+// UnmarshalJSON reads an effect as one object: {"type": ..., and its own
+// fields}.
 func (e *Effect) UnmarshalJSON(b []byte) error {
 	var head struct {
 		Type string `json:"type"`
-		ID   string `json:"id"`
 	}
 	if err := json.Unmarshal(b, &head); err != nil {
 		return err
 	}
-	if len(head.ID) > 128 {
-		return errors.New("an effect's id is at most 128 bytes")
-	}
-	e.Type, e.ID, e.Args = head.Type, head.ID, append(json.RawMessage(nil), b...)
+	e.Type, e.Args = head.Type, append(json.RawMessage(nil), b...)
 	return nil
 }
 
