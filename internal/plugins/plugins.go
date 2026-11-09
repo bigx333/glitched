@@ -633,10 +633,13 @@ func (h *Host) openURL(u string) error {
 	return h.opts.OpenURL(u)
 }
 
-// Close stops every plugin's pages and runtime.
-func (h *Host) Close() { h.closeAll() }
+// Close stops every plugin's pages and runtime, and waits for them: their
+// databases are closed once it returns.
+func (h *Host) Close() { h.closeAll().Wait() }
 
-func (h *Host) closeAll() {
+// closeAll stops every plugin's pages and runtime, off the UI thread: a
+// runtime still starting takes up to its load timeout to stop.
+func (h *Host) closeAll() *sync.WaitGroup {
 	for k, s := range h.sessions {
 		s.close()
 		delete(h.sessions, k)
@@ -645,21 +648,21 @@ func (h *Host) closeAll() {
 	list := h.installed
 	h.installed = nil
 	h.mu.Unlock()
+	var stopped sync.WaitGroup
 	for _, in := range list {
 		if in.alive != nil {
 			in.alive.Store(false) // its calls waiting on the UI thread do nothing
 		}
 		if in.p != nil {
-			// Off the UI thread: Close waits for a runtime that is still
-			// starting, up to its load timeout.
-			go func() {
+			stopped.Go(func() {
 				in.p.Shutdown()
 				if in.db != nil {
 					in.db.close()
 				}
-			}()
+			})
 		}
 	}
+	return &stopped
 }
 
 // errNotHere is a plugin this host doesn't run: a service host runs only
