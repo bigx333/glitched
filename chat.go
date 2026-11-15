@@ -351,18 +351,22 @@ func (a *app) emptyState(c *ui.Context) {
 	})
 }
 
-// userMarkdown is a message the user typed as Markdown that keeps its
-// lines: each line break within a paragraph, which Markdown reads as a
-// space, is made a hard break. Code, quotes' markers and the rest are as
-// typed. It is "" when the message holds no blocks, as one that is only
-// a link's definition, which shows as nothing.
+// userMarkdown is a message the user typed as Markdown that shows as
+// typed where Markdown would hide it: each line break within a
+// paragraph, which Markdown reads as a space, is made a hard break, and
+// each line read as a link's definition, which shows as nothing, has its
+// bracket escaped. A line break within a code span stays a space, and
+// code, quotes' markers and the rest are as typed. It is "" when the
+// message is only blocks' marks, as "#" or ">", which show as nothing.
 func userMarkdown(text string) string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
-	d := parser.New(parser.GFM)
-	d.Set(text)
-	if d.Len() <= 1 {
+	text = strings.ReplaceAll(text, "\r", "\n")
+	if strings.Trim(text, "#>-+*=_ \t\n") == "" {
 		return ""
 	}
+	text = keepDefinitions(text)
+	d := parser.New(parser.GFM)
+	d.Set(text)
 	var b strings.Builder
 	at := 0
 	for i := 1; i < d.Len(); i++ {
@@ -370,13 +374,55 @@ func userMarkdown(text string) string {
 		if k.Kind != parser.Paragraph {
 			continue
 		}
+		var code [][2]int // the code spans' and HTML's bytes
+		for _, in := range d.Inlines(i) {
+			if in.Kind == parser.Code || in.Kind == parser.HTML {
+				code = append(code, [2]int{in.Start, in.End})
+			}
+		}
 		for j := k.Start; j < k.End; j++ {
-			if text[j] == '\n' && j < k.End-1 {
+			if text[j] == '\n' && !slices.ContainsFunc(code, func(r [2]int) bool { return r[0] <= j && j < r[1] }) {
 				b.WriteString(text[at:j])
 				b.WriteString("  ")
 				at = j
 			}
 		}
+	}
+	b.WriteString(text[at:])
+	return b.String()
+}
+
+// keepDefinitions escapes the first bracket of each line of text that
+// no block shows, which, a link's definition, would show as nothing.
+func keepDefinitions(text string) string {
+	d := parser.New(parser.GFM)
+	d.Set(text)
+	var shown [][2]int // the bytes of the blocks that show text
+	for i := 1; i < d.Len(); i++ {
+		switch k := d.Block(i); k.Kind {
+		case parser.Quote, parser.List, parser.Item, parser.Table, parser.TableRow, parser.FootnoteDefinition:
+		default:
+			shown = append(shown, [2]int{k.Start, k.End})
+		}
+	}
+	var b strings.Builder
+	at := 0
+	for s := 0; s < len(text); {
+		e := strings.IndexByte(text[s:], '\n')
+		if e < 0 {
+			e = len(text)
+		} else {
+			e += s
+		}
+		line := text[s:e]
+		if strings.TrimSpace(line) != "" && !slices.ContainsFunc(shown, func(r [2]int) bool { return r[0] < e && r[1] > s }) {
+			if k := strings.IndexByte(line, '['); k >= 0 {
+				b.WriteString(text[at : s+k])
+				b.WriteString("\\")
+				at = s + k
+			}
+		}
+		s = e + 1
 	}
 	b.WriteString(text[at:])
 	return b.String()
@@ -388,13 +434,16 @@ func (a *app) userMarkdown(key, text string) string {
 	if m, ok := a.userMDs[key]; ok && m.text == text {
 		return m.md
 	}
-	if a.userMDs == nil {
+	if a.userMDs == nil || len(a.userMDs) >= userMDsKept {
 		a.userMDs = map[string]userMD{}
 	}
 	m := userMD{text, userMarkdown(text)}
 	a.userMDs[key] = m
 	return m.md
 }
+
+// userMDsKept is how many messages' Markdown userMarkdown keeps.
+const userMDsKept = 512
 
 // userMD is a message's text and the Markdown it shows as.
 type userMD struct{ text, md string }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
 	"slices"
@@ -70,8 +71,20 @@ func TestUserMarkdown(t *testing.T) {
 		{"    x\n    y", "    x\n    y"},
 		{"````\nx\ny\n`````\nz\nw", "````\nx\ny\n`````\nz  \nw"},
 		{"> a\n> b", "> a  \n> b"},
-		// Nothing but a link's definition shows as nothing.
-		{"[WARN]: disk", ""},
+		// Nothing but a link's definition shows as nothing; beside other
+		// text, a definition's line shows as typed.
+		{"[WARN]: disk", "\\[WARN]: disk"},
+		{"Got this:\n\n[ERROR]: timeout\n\nwhat now?", "Got this:\n\n\\[ERROR]: timeout\n\nwhat now?"},
+		{"[ERROR]: timeout\nwhat now?", "\\[ERROR]: timeout  \nwhat now?"},
+		{"> [1]: https://a", "> \\[1]: https://a"},
+		{"- [1]: https://a", "- \\[1]: https://a"},
+		{"[a] and [b]: c\nd", "[a] and [b]: c  \nd"},
+		// A code span's line break is a space, as typed.
+		{"x `a\nb` y\nz", "x `a\nb` y  \nz"},
+		// Lone carriage returns end lines as line feeds do.
+		{"a\rb", "a  \nb"},
+		// Only a block's marks, which show as nothing, show as typed.
+		{"#", ""}, {">", ""}, {"-", ""}, {"* * *\n", ""},
 	} {
 		if got := userMarkdown(c.in); got != c.want {
 			t.Errorf("userMarkdown(%q) = %q, want %q", c.in, got, c.want)
@@ -79,10 +92,10 @@ func TestUserMarkdown(t *testing.T) {
 	}
 }
 
-// A message that is only a link's definition, which Markdown shows as
-// nothing, shows as typed.
+// A line of a message that Markdown reads as a link's definition, and
+// shows as nothing, shows as typed.
 func TestAUserMessageOfALinksDefinitionShows(t *testing.T) {
-	const msg = "[WARN]: disk"
+	const msg = "Got this:\n\n[ERROR]: timeout\n\nwhat now?"
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(checks))
 	seed(t, d, t.TempDir(), "Warn", msg)
@@ -90,8 +103,19 @@ func TestAUserMessageOfALinksDefinitionShows(t *testing.T) {
 	h.a.select_(h.thread("Warn"))
 	h.until("its transcript", func() bool { return h.tt.HasText("One test fails.") })
 	h.tt.Advance(time.Second)
-	if !h.tt.HasText(msg) {
-		t.Errorf("no %q; texts %q", msg, h.tt.Texts())
+	if !h.tt.HasText("[ERROR]: timeout") {
+		t.Errorf("no definition's line; texts %q", h.tt.Texts())
+	}
+}
+
+// What the user's messages show as is kept for so many of them only.
+func TestUserMarkdownIsKeptForSoMany(t *testing.T) {
+	a := &app{}
+	for i := range 3 * userMDsKept {
+		a.userMarkdown(fmt.Sprint(i), "a")
+	}
+	if n := len(a.userMDs); n > userMDsKept {
+		t.Errorf("%d messages kept, want at most %d", n, userMDsKept)
 	}
 }
 
