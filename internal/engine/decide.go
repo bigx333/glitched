@@ -49,6 +49,8 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 		err = d.rename(b)
 	case api.ThreadDelete:
 		err = d.delete()
+	case api.ThreadConfigure:
+		err = d.configure(b)
 	default:
 		err = rejected("unknown intent")
 	}
@@ -73,8 +75,29 @@ func TakesTree(b api.Intent) bool {
 		return true
 	case api.InboxSet:
 		return b.Disposition.State == api.Settled
+	case api.ThreadConfigure:
+		return true
 	}
 	return false
+}
+
+// Below is what b on a thread decides on t, a thread under it, when b
+// takes the tree: a configure narrows t's access to b's, and leaves its
+// model as it is.
+func Below(b api.Intent, t Thread) api.Intent {
+	if c, ok := b.(api.ThreadConfigure); ok {
+		return api.ThreadConfigure{Model: t.Model, Access: min(t.Access, c.Access)}
+	}
+	return b
+}
+
+// CheckConfigure checks c on a child thread against parent, the thread
+// it's under: its access can't be wider than its parent's.
+func CheckConfigure(parent Thread, c api.ThreadConfigure) error {
+	if parent.Exists() && !parent.Deleted && c.Access > parent.Access {
+		return rejected("a child thread's access can't be wider than its parent's")
+	}
+	return nil
 }
 
 // ErrRefused is an observation the tables refuse: it arrived after the
@@ -492,6 +515,19 @@ func (d *decision) rename(b api.ThreadRename) error {
 		return nil
 	}
 	return d.emit(api.ThreadRenamed{Title: title})
+}
+
+func (d *decision) configure(b api.ThreadConfigure) error {
+	if b.Access > ceiling() {
+		return rejected("unknown access level")
+	}
+	if b.Model.Provider != d.t.Model.Provider {
+		return rejected("a thread keeps its provider")
+	}
+	if b.Model == d.t.Model && b.Access == d.t.Access {
+		return nil
+	}
+	return d.emit(api.ThreadConfigured{Model: b.Model, Access: b.Access})
 }
 
 func (d *decision) observe(o Observation) error {

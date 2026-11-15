@@ -166,6 +166,13 @@ type ThreadRenamed struct {
 	Title string `json:"title"`
 }
 
+// ThreadConfigured is the model and access the thread's turns run at from
+// its next on.
+type ThreadConfigured struct {
+	Model  ModelRef `json:"model"`
+	Access Access   `json:"access"`
+}
+
 // ThreadDeleted is a thread's tombstone, its last event.
 type ThreadDeleted struct{}
 
@@ -216,6 +223,7 @@ func (RequestInvalidation) eventType() string { return "request.invalidated" }
 func (DispositionChanged) eventType() string  { return "disposition.changed" }
 func (ThreadRenamed) eventType() string       { return "thread.renamed" }
 func (ThreadDeleted) eventType() string       { return "thread.deleted" }
+func (ThreadConfigured) eventType() string    { return "thread.configured" }
 func (ChildReported) eventType() string       { return "child.reported" }
 
 var eventBodies = map[string]func([]byte) (EventBody, error){}
@@ -243,6 +251,7 @@ func init() {
 	register[DispositionChanged]()
 	register[ThreadRenamed]()
 	register[ThreadDeleted]()
+	register[ThreadConfigured]()
 	register[ChildReported]()
 }
 

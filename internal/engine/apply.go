@@ -42,6 +42,8 @@ func apply(t Thread, e Event) (Thread, error) {
 		t.Disposition = b.Disposition
 	case api.ThreadRenamed:
 		t.Title = b.Title
+	case api.ThreadConfigured:
+		t.Model, t.Access = b.Model, b.Access
 	case api.ChildReported:
 		t.Reported = e.At
 		t.LastReport = &api.Report{Child: b.Child, Kind: b.Kind, Cursor: api.Cursor{Seq: e.Seq}}

@@ -107,6 +107,11 @@ func (m *Manager) Rename(e *Env, thread api.ID, title string) api.ID {
 	return m.submit(e, thread, api.ThreadRename{Title: title})
 }
 
+// ConfigureThread sets the model and access the thread's next turn runs at.
+func (m *Manager) ConfigureThread(e *Env, thread api.ID, model api.ModelRef, access api.Access) api.ID {
+	return m.submit(e, thread, api.ThreadConfigure{Model: model, Access: access})
+}
+
 // Delete deletes the thread. The engine ends its run with it.
 func (m *Manager) Delete(e *Env, thread api.ID) api.ID {
 	return m.submit(e, thread, api.ThreadDelete{})

@@ -116,6 +116,16 @@ type ThreadRename struct {
 	Title string `json:"title"`
 }
 
+// ThreadConfigure sets the model and the access the thread's next turn
+// runs at: a turn already running keeps its own. The provider stays the
+// thread's, as its session is that provider's. A child's access can't be
+// wider than its parent's, and a narrower access narrows the threads under
+// it to it too.
+type ThreadConfigure struct {
+	Model  ModelRef `json:"model"`
+	Access Access   `json:"access"`
+}
+
 func (ThreadCreate) intentType() string    { return "thread.create" }
 func (MessageDispatch) intentType() string { return "message.dispatch" }
 func (TurnInterrupt) intentType() string   { return "turn.interrupt" }
@@ -123,6 +133,7 @@ func (RequestRespond) intentType() string  { return "request.respond" }
 func (InboxSet) intentType() string        { return "inbox.set" }
 func (ThreadRename) intentType() string    { return "thread.rename" }
 func (ThreadDelete) intentType() string    { return "thread.delete" }
+func (ThreadConfigure) intentType() string { return "thread.configure" }
 
 var intents = map[string]func() Intent{
 	"thread.create":    func() Intent { return new(ThreadCreate) },
@@ -132,6 +143,7 @@ var intents = map[string]func() Intent{
 	"inbox.set":        func() Intent { return new(InboxSet) },
 	"thread.rename":    func() Intent { return new(ThreadRename) },
 	"thread.delete":    func() Intent { return new(ThreadDelete) },
+	"thread.configure": func() Intent { return new(ThreadConfigure) },
 }
 
 func IntentType(i Intent) string { return i.intentType() }
@@ -184,6 +196,8 @@ func (c *Command) UnmarshalJSON(b []byte) error {
 	case *ThreadRename:
 		c.Body = *v
 	case *ThreadDelete:
+		c.Body = *v
+	case *ThreadConfigure:
 		c.Body = *v
 	}
 	c.ID, c.Target, c.Revision, c.Expires = w.ID, w.Target, w.Revision, w.Expires
