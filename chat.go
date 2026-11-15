@@ -968,7 +968,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 			if card.FocusWithin() {
 				card.Shadow(0, 0, 0, 3, palette.accent.Alpha(0.22))
 			}
-			a.accessEffects(card)
+			a.accessEffects(card, a.shownAccess(t))
 			a.autocomplete(c, card)
 			// Files go to the agent as their paths, which a server's
 			// agent can't read.
@@ -1091,7 +1091,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 					in = fadeIn(k, 0.35, 0.5)
 					faded(ui.Row(c).Key("controls").Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).
 						Translate(0, 6*(1-in)), in).Children(func() {
-						a.composerControls(c)
+						a.threadControls(t, func() { a.composerControls(c) })
 						ui.Spacer(c)
 						if t.local() && a.iconButton(c, "attach", icPaperclip, "Attach files", false).Clicked() {
 							a.pickFiles()

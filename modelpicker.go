@@ -131,6 +131,9 @@ func (a *app) modelPicker(c *ui.Context) {
 	if a.pickerFamily == "" {
 		a.pickerFamily = m.provider
 	}
+	if a.pickerLock != "" {
+		a.pickerFamily = a.pickerLock
+	}
 	a.popover(c, b, &a.pickerOpen, func(panel ui.Element) {
 		panel.AttachTo(b, ui.AnchorTopStart, ui.AnchorBottomStart).Margin(0, 0, 10, -4).Width(420).Radius(16).Clip()
 		a.frosted(c, panel).Shadow(0, 16, 40, 0, ui.RGBA(0, 0, 0, 0.35)).Children(func() {
@@ -212,6 +215,9 @@ func (a *app) pickerGlow(c *ui.Context, b ui.Element, level int) {
 func (a *app) pickerFamilies(c *ui.Context) {
 	ui.Column(c).Width(150).Padding(6).Gap(1).Children(func() {
 		for _, f := range families {
+			if a.pickerLock != "" && f.name != a.pickerLock {
+				continue
+			}
 			open := f.name == a.pickerFamily
 			r := row(c, f.name, open).Padding(6, 8).Gap(8)
 			// Pointing at a family opens its models, as a submenu does.
