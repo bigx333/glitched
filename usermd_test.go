@@ -72,6 +72,45 @@ func TestAUserMessageShowsAsTyped(t *testing.T) {
 	}
 }
 
+// A code span ends on its line: backticks left open show as typed, and
+// what follows on later lines stays as typed, never Markdown.
+func TestAUserMessagesCodeSpanEndsOnItsLine(t *testing.T) {
+	h := sent(t,
+		"I ran `make` then `go test\n# FAIL\n[open settings](/settings) and see `foo`",
+		"run `go test ./... and then\n- it fails on `TestFoo`",
+	)
+	for _, s := range []string{
+		"I ran make then `go test\n# FAIL\n[open settings](/settings) and see foo",
+		"run `go test ./... and then\n- it fails on TestFoo",
+	} {
+		if !slices.Contains(h.tt.Texts(), s) {
+			t.Errorf("no %q; texts %q", s, h.tt.Texts())
+		}
+	}
+}
+
+// A fence closes only with spaces or tabs after it, as Markdown reads
+// it, so the text after a fence closed by other spaces stays code.
+func TestAUserMessagesFenceClosesAsMarkdownReadsIt(t *testing.T) {
+	h := sent(t, "```\nx\n```\u00a0\nthen *bold*")
+	if want := "x\n```\u00a0\nthen *bold*"; !slices.Contains(h.tt.Texts(), want) {
+		t.Errorf("no %q; texts %q", want, h.tt.Texts())
+	}
+}
+
+// Blank lines between a message's text and its code show as typed.
+func TestAUserMessageKeepsBlankLinesAroundCode(t *testing.T) {
+	h := sent(t, "tight\n```\ncode tight\n```", "loose\n\n\n\n```\ncode loose\n```")
+	gap := func(text, code string) float32 {
+		a, _ := h.tt.Find(text)
+		b, _ := h.tt.Find(code)
+		return b.Y - a.Y
+	}
+	if tight, loose := gap("tight", "code tight"), gap("loose", "code loose"); loose <= tight {
+		t.Errorf("the code is %v below three blank lines, %v below none", loose, tight)
+	}
+}
+
 // Line endings of other systems end lines as line feeds do.
 func TestAUserMessageReadsAnyLineEnding(t *testing.T) {
 	h := sent(t, "crlf one\r\ncrlf two", "cr one\rcr two")
@@ -90,6 +129,19 @@ func TestAUserMessageStaysOffTheAppsPages(t *testing.T) {
 	h.tt.Advance(time.Second)
 	if p := h.a.router.Path(); p != "/" {
 		t.Errorf("at %q after clicking the message", p)
+	}
+}
+
+// An address in a message opens nothing.
+func TestAUserMessagesAddressOpensNothing(t *testing.T) {
+	const msg = "Ping ops@example.com about it"
+	h := sent(t, msg)
+	if r, ok := h.tt.Find("ops@example.com"); ok {
+		h.tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
+	}
+	h.click(msg)
+	if o := h.tt.OpenedURLs(); len(o) > 0 {
+		t.Errorf("opened %q", o)
 	}
 }
 

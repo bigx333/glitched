@@ -462,8 +462,10 @@ type app struct {
 	checkUntil  time.Time
 
 	md markdown.Options
-	// userMD is how the user's messages read: as replies do, less math,
-	// which reads escaped brackets, and their code wrapped to the bubble.
+	// userMD is how the user's messages read: as replies do, their code
+	// wrapped to the bubble, without math, which reads escaped brackets,
+	// or autolinks, which read escaped addresses. Strikethrough only
+	// stands in for none: no extensions read as the default ones.
 	userMD markdown.Options
 	// userMDs are the user's messages as they show, by their entries'
 	// keys.
@@ -579,7 +581,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 			codexModel:    "GPT-5.5 Codex",
 		},
 	}
-	a.userMD.Extensions, a.userMD.WrapCode = parser.GFM, true
+	a.userMD.Extensions, a.userMD.WrapCode = parser.ExtStrikethrough, true
 	a.loadLayout()
 	a.openPlugins(dir)
 	a.backend = client.New(client.Config{Dir: dir, Post: func(fn func()) {
