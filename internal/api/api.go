@@ -322,8 +322,9 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // an Allow the engine refuses; version 6 settles and deletes a thread's
 // tree with it, so a version 5 GUI would send a command per thread the
 // engine already took, and a version 5 engine would leave a child of a
-// settled or deleted thread at work.
-const Protocol = 6
+// settled or deleted thread at work; version 7 changes a thread's model
+// and access, which a version 6 engine refuses as an unknown command.
+const Protocol = 7
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host

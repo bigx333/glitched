@@ -388,6 +388,7 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 		for _, v := range it.Snapshot.Threads {
 			live[v.ID] = true
 			moved[v.ID] = m.view(e, v) && same
+			e.Threads[v.ID].unconfigured()
 		}
 		for id, th := range e.Threads {
 			if th.known && !live[id] {
@@ -631,12 +632,19 @@ func (th *Thread) shows(c api.ThreadConfigure) bool {
 }
 
 // configured drops the committed configures the view now shows, and those
-// before them, which the view has moved past.
+// before them, which the view has moved past. One on its way that the view
+// shows is marked seen: its receipt drops it, though the view moved on.
 func (th *Thread) configured() {
 	last := -1
 	for i, p := range th.Pending {
-		if c, ok := p.Body.(api.ThreadConfigure); ok && p.sent && th.shows(c) {
+		c, ok := p.Body.(api.ThreadConfigure)
+		if !ok || !th.shows(c) {
+			continue
+		}
+		if p.sent {
 			last = i
+		} else if p.Err == nil {
+			th.Pending[i].seen = true
 		}
 	}
 	if last < 0 {
@@ -650,6 +658,15 @@ func (th *Thread) configured() {
 		kept = append(kept, p)
 	}
 	th.Pending = kept
+}
+
+// unconfigured drops the committed configures a snapshot doesn't show: it
+// came after them, so the thread moved past them.
+func (th *Thread) unconfigured() {
+	th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool {
+		_, ok := p.Body.(api.ThreadConfigure)
+		return ok && p.sent
+	})
 }
 
 // dropUnasked drops the answers, failed or taken, to requests the thread

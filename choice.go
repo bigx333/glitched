@@ -55,17 +55,18 @@ func (a *app) loadComposer() {
 	a.savedChoice = a.choice()
 }
 
-// saveComposer keeps the default for the next start, once it changed.
+// saveComposer keeps the default for the next start, once it changed and
+// the effort's thumb is let go. A write that fails is tried again at the
+// next change, not each frame.
 func (a *app) saveComposer() {
 	ch := a.choice()
-	if ch == a.savedChoice {
-		return
-	}
-	if err := jsonfile.Write(a.composerPath(), ch); err != nil {
-		log.Printf("glitched: composer: %v", err)
+	if ch == a.savedChoice || a.effortHeld {
 		return
 	}
 	a.savedChoice = ch
+	if err := jsonfile.Write(a.composerPath(), ch); err != nil {
+		log.Printf("glitched: composer: %v", err)
+	}
 }
 
 // configured is the thread's model and access, as the last change sent
@@ -137,7 +138,8 @@ func (a *app) threadControls(t thread, build func()) {
 	a.show(before)
 	m, level := configured(t)
 	a.pickerLock = familyOf(m.Provider)
-	defer func() { a.pickerLock = "" }()
+	family := a.pickerFamily
+	defer func() { a.pickerLock, a.pickerFamily = "", family }()
 	build()
 	after := a.choice()
 	if after == before || t.env == nil {
