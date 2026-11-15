@@ -466,6 +466,9 @@ type app struct {
 	// and footnotes, their code wrapped to the bubble, and their links
 	// opening web pages and mail only, never the app's own routes.
 	userMD markdown.Options
+	// userMDs are the user's messages as they show, by their entries'
+	// keys.
+	userMDs map[string]userMD
 
 	// plugins are the plugins installed in the state directory, and
 	// pluginPages what their pages show.
@@ -578,7 +581,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		},
 	}
 	a.userMD = markdown.Options{Extensions: parser.GFM, WrapCode: true, OnLink: func(u string) {
-		if strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "mailto:") {
+		if ui.SafeToOpen(u) {
 			mygo.Shell.OpenExternal(u)
 		}
 	}}
