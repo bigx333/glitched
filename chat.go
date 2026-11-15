@@ -350,6 +350,44 @@ func (a *app) emptyState(c *ui.Context) {
 	})
 }
 
+// userMarkdown is a message the user typed as Markdown that keeps its
+// lines: each line break outside a fenced code block, which Markdown
+// reads as a space, is made a hard break.
+func userMarkdown(text string) string {
+	lines := strings.Split(text, "\n")
+	var fence string // the open fence's marker, as "```"
+	for i, l := range lines {
+		t := strings.TrimLeft(l, " ")
+		if len(l)-len(t) <= 3 {
+			if m := fenceMarker(t); m != "" && (fence == "" || strings.HasPrefix(m, fence) && strings.TrimSpace(t[len(m):]) == "") {
+				if fence == "" {
+					fence = m
+				} else {
+					fence = ""
+				}
+				continue
+			}
+		}
+		if fence == "" && i < len(lines)-1 && strings.TrimSpace(l) != "" && strings.TrimSpace(lines[i+1]) != "" {
+			lines[i] = l + "  "
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// fenceMarker is the run of backticks or tildes, three or more, that
+// line starts with, or "".
+func fenceMarker(line string) string {
+	if line == "" || line[0] != '`' && line[0] != '~' {
+		return ""
+	}
+	n := len(line) - len(strings.TrimLeft(line, line[:1]))
+	if n < 3 {
+		return ""
+	}
+	return line[:n]
+}
+
 // bubbleInset is how far a message's text is inside its bubble's edges,
 // across: its padding and its border.
 const bubbleInset = 15
@@ -367,7 +405,7 @@ func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
 				// rather than scrolling within the bubble.
 				ui.Column(c).Padding(10, bubbleInset-1).Radius(16, 16, 4, 16).
 					Background(palette.surface).Border(1, palette.border).Children(func() {
-					markdown.View(c, e.text, &a.userMD)
+					markdown.View(c, userMarkdown(e.text), &a.userMD)
 				})
 				if e.note != "" {
 					a.messageNote(c, t, e)
