@@ -25,9 +25,9 @@ func TestTranscriptAndComposerShareEdges(t *testing.T) {
 			t.Fatalf("%s: missing a landmark: %q", name, tt.Texts())
 		}
 		// The reply's text is at the column's left edge and the bubble,
-		// its padding in its bounds, at its right; the composer's controls
-		// are 8 inside the card.
-		colL, colR := reply.X, bubble.X+bubble.W
+		// its text bubbleInset inside it, at its right; the composer's
+		// controls are 8 inside the card.
+		colL, colR := reply.X, bubble.X+bubble.W+bubbleInset
 		cardL, cardR := model.X-8, send.X+send.W+8
 		t.Logf("%s: column %.1f→%.1f, composer %.1f→%.1f", name, colL, colR, cardL, cardR)
 		if d := colL - cardL; d < -1 || d > 1 {

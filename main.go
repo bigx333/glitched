@@ -461,6 +461,9 @@ type app struct {
 	checkUntil  time.Time
 
 	md markdown.Options
+	// userMD is how the user's messages read: as replies do, their
+	// code wrapped to the bubble.
+	userMD markdown.Options
 
 	// plugins are the plugins installed in the state directory, and
 	// pluginPages what their pages show.
@@ -537,6 +540,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		files:          map[string][]string{},
 		diffLayout:     editor.DiffUnified,
 		diffWrap:       true,
+		userMD:         markdown.Options{WrapCode: true},
 		diffFile:       map[api.ID]string{},
 		childrenOpen:   map[api.ID]bool{},
 		composerSeen:   map[api.ID]bool{},
