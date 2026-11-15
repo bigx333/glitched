@@ -354,7 +354,8 @@ func (a *app) emptyState(c *ui.Context) {
 // its code as Markdown would, its fenced code blocks and code spans, and
 // the rest as typed: every mark escaped, and every line, blank line and
 // indent kept, but for one blank line each side of a code block, which
-// the block's spacing shows. It is "" for an empty message.
+// the block's spacing shows. A fence that opens nothing, unclosed with
+// no code after it, is text. It is "" for an empty message.
 func userMarkdown(text string) string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
@@ -378,11 +379,15 @@ func userMarkdown(text string) string {
 			prose = append(prose, lines[i])
 			continue
 		}
-		flush()
 		end := i + 1
 		for end < len(lines) && !closesFence(lines[end], fence) {
 			end++
 		}
+		if end == len(lines) && strings.TrimSpace(strings.Join(lines[i+1:], "")) == "" {
+			prose = append(prose, lines[i:]...)
+			break
+		}
+		flush()
 		end = min(end, len(lines)-1)
 		blocks = append(blocks, strings.Join(lines[i:end+1], "\n"))
 		i = end
