@@ -462,9 +462,8 @@ type app struct {
 	checkUntil  time.Time
 
 	md markdown.Options
-	// userMD is how the user's messages read: as replies do, less math
-	// and footnotes, their code wrapped to the bubble, and their links
-	// opening web pages and mail only, never the app's own routes.
+	// userMD is how the user's messages read: as replies do, less math,
+	// which reads escaped brackets, and their code wrapped to the bubble.
 	userMD markdown.Options
 	// userMDs are the user's messages as they show, by their entries'
 	// keys.
@@ -580,11 +579,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 			codexModel:    "GPT-5.5 Codex",
 		},
 	}
-	a.userMD = markdown.Options{Extensions: parser.GFM, WrapCode: true, OnLink: func(u string) {
-		if ui.SafeToOpen(u) {
-			mygo.Shell.OpenExternal(u)
-		}
-	}}
+	a.userMD.Extensions, a.userMD.WrapCode = parser.GFM, true
 	a.loadLayout()
 	a.openPlugins(dir)
 	a.backend = client.New(client.Config{Dir: dir, Post: func(fn func()) {
