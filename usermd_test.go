@@ -61,29 +61,20 @@ func TestUserMarkdown(t *testing.T) {
 		{"a\nb", "a  \nb"},
 		{"a\r\nb", "a  \nb"},
 		{"a\n\nb", "a\n\nb"},
-		// A code span of three backticks opens no fence.
 		{"```npm i``` first\nthen b", "```npm i``` first  \nthen b"},
-		// A fence in a list item closes with the item.
 		{"- a\n  ```\n  x\nb\nc", "- a\n  ```\n  x\nb  \nc"},
-		// Fences in quotes, indented code and closing fences longer than
-		// their openers.
 		{"> ```\n> x\n> y\n> ```", "> ```\n> x\n> y\n> ```"},
 		{"    x\n    y", "    x\n    y"},
 		{"````\nx\ny\n`````\nz\nw", "````\nx\ny\n`````\nz  \nw"},
 		{"> a\n> b", "> a  \n> b"},
-		// Nothing but a link's definition shows as nothing; beside other
-		// text, a definition's line shows as typed.
 		{"[WARN]: disk", "\\[WARN]: disk"},
 		{"Got this:\n\n[ERROR]: timeout\n\nwhat now?", "Got this:\n\n\\[ERROR]: timeout\n\nwhat now?"},
 		{"[ERROR]: timeout\nwhat now?", "\\[ERROR]: timeout  \nwhat now?"},
 		{"> [1]: https://a", "> \\[1]: https://a"},
 		{"- [1]: https://a", "- \\[1]: https://a"},
 		{"[a] and [b]: c\nd", "[a] and [b]: c  \nd"},
-		// A code span's line break is a space, as typed.
 		{"x `a\nb` y\nz", "x `a\nb` y  \nz"},
-		// Lone carriage returns end lines as line feeds do.
 		{"a\rb", "a  \nb"},
-		// Only a block's marks, which show as nothing, show as typed.
 		{"#", ""}, {">", ""}, {"-", ""}, {"* * *\n", ""},
 	} {
 		if got := userMarkdown(c.in); got != c.want {

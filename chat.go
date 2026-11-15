@@ -374,14 +374,14 @@ func userMarkdown(text string) string {
 		if k.Kind != parser.Paragraph {
 			continue
 		}
-		var code [][2]int // the code spans' and HTML's bytes
+		var literal [][2]int
 		for _, in := range d.Inlines(i) {
 			if in.Kind == parser.Code || in.Kind == parser.HTML {
-				code = append(code, [2]int{in.Start, in.End})
+				literal = append(literal, [2]int{in.Start, in.End})
 			}
 		}
 		for j := k.Start; j < k.End; j++ {
-			if text[j] == '\n' && !slices.ContainsFunc(code, func(r [2]int) bool { return r[0] <= j && j < r[1] }) {
+			if text[j] == '\n' && !slices.ContainsFunc(literal, func(r [2]int) bool { return r[0] <= j && j < r[1] }) {
 				b.WriteString(text[at:j])
 				b.WriteString("  ")
 				at = j
@@ -397,7 +397,7 @@ func userMarkdown(text string) string {
 func keepDefinitions(text string) string {
 	d := parser.New(parser.GFM)
 	d.Set(text)
-	var shown [][2]int // the bytes of the blocks that show text
+	var shown [][2]int
 	for i := 1; i < d.Len(); i++ {
 		switch k := d.Block(i); k.Kind {
 		case parser.Quote, parser.List, parser.Item, parser.Table, parser.TableRow, parser.FootnoteDefinition:
@@ -461,8 +461,6 @@ func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
 		r.Children(func() {
 			ui.Spacer(c)
 			ui.Column(c).AlignItems(ui.End).Gap(6).MaxWidthPercent(80).Children(func() {
-				// It reads as Markdown, as a reply does, its code wrapping
-				// rather than scrolling within the bubble.
 				ui.Column(c).Padding(10, bubbleInset-1).Radius(16, 16, 4, 16).
 					Background(palette.surface).Border(1, palette.border).Children(func() {
 					if md := a.userMarkdown(key, e.text); md != "" {
