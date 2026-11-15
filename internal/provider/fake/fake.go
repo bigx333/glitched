@@ -127,6 +127,18 @@ func (a *Adapter) Describe(context.Context) (provider.Info, error) {
 	return provider.Info{Name: "fake", Version: "1", Models: []string{"fake"}}, nil
 }
 
+var _ provider.Commander = (*Adapter)(nil)
+
+// Commands are a CLI's two own commands and a plugin's skill, the same in
+// every workspace.
+func (a *Adapter) Commands(context.Context, string) ([]provider.Command, error) {
+	return []provider.Command{
+		{Name: "compact", Description: "Summarize the conversation to save context", ArgumentHint: "<instructions>"},
+		{Name: "review", Description: "Review the changes so far"},
+		{Name: "fake:tidy", Description: "(fake) Tidy the workspace"},
+	}, nil
+}
+
 func (a *Adapter) Open(_ context.Context, spec provider.SessionSpec) (provider.Agent, error) {
 	g := &Agent{a: a, run: spec.Run, spec: spec, wake: make(chan struct{}, 1), answered: map[string]bool{}}
 	a.mu.Lock()
