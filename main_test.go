@@ -1158,8 +1158,7 @@ func TestPaletteScrollsToChoice(t *testing.T) {
 	}
 }
 
-// @ suggests the workspace's files and / commands; the keys move and take
-// the choice.
+// @ suggests the workspace's files; the keys move and take the choice.
 func TestAutocomplete(t *testing.T) {
 	ws := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(ws, "apps/web/src/components"), 0o755); err != nil {
@@ -1180,11 +1179,8 @@ func TestAutocomplete(t *testing.T) {
 	if a.draft != "look at @apps/web/src/components/Sidebar.tsx " {
 		t.Errorf("draft %q after taking the suggestion", a.draft)
 	}
-	a.draft = "/re"
+	a.draft = "@Side"
 	tt.Frame()
-	if len(a.suggestions) != 1 || a.suggestions[0].label != "/review" {
-		t.Fatalf("suggestions for /re: %+v", a.suggestions)
-	}
 	tt.Key(0, ui.KeyEscape)
 	if len(a.suggestions) != 0 {
 		t.Error("Escape should dismiss the suggestions")

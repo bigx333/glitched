@@ -99,14 +99,12 @@ func TestEnterOnEmptyDraftDoesNothing(t *testing.T) {
 // With suggestions showing, Enter takes the one chosen rather than send.
 func TestEnterTakesTheSuggestionFirst(t *testing.T) {
 	h := enterReady(t, fake.New(fake.Turn(false)))
-	h.tt.Type("/mod")
+	h.tt.Type("/rev")
 	h.tt.Frame()
-	if len(h.a.suggestions) == 0 {
-		t.Fatal("no suggestions for /mod")
-	}
+	h.until("the fake's /review", func() bool { return slices.Equal(labels(h.a.suggestions), []string{"/review"}) })
 	h.tt.Key(0, ui.KeyEnter)
 	h.tt.Advance(100 * time.Millisecond)
-	if h.a.draft != "/model " || len(sentTexts(h)) != 0 {
+	if h.a.draft != "/review " || len(sentTexts(h)) != 0 {
 		t.Errorf("draft %q, sent %q; want the suggestion taken, nothing sent", h.a.draft, sentTexts(h))
 	}
 }
