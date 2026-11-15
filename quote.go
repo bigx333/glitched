@@ -40,7 +40,8 @@ type quoteBar struct {
 	ask  string
 }
 
-// selectedText is the text of a selection's parts, a line each.
+// selectedText is the text of a selection's parts, a paragraph each, as
+// the reply's own copy as Markdown has them.
 func selectedText(parts []ui.SelectedText) string {
 	lines := make([]string, 0, len(parts))
 	for _, p := range parts {
@@ -50,7 +51,7 @@ func selectedText(parts []ui.SelectedText) string {
 			lines = append(lines, string(r[from:to]))
 		}
 	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
+	return strings.TrimSpace(strings.Join(lines, "\n\n"))
 }
 
 // blockquote is text quoted in Markdown.
@@ -108,7 +109,9 @@ func (a *app) selectionBar(c *ui.Context, t thread, key string, col, md ui.Eleme
 	x := min(max(s.x, 0), r.W) + r.X - cb.X
 	y := min(max(s.y, 0), r.H) + r.Y - cb.Y
 	at := ui.Box(c).Key("quote-at").Absolute().Left(x).Top(y).Size(1, 1).PassThrough()
-	a.overlay(c, true, func() {
+	// It covers the timeline, holding the cards' keys, only while in use:
+	// shown unasked, it leaves ⌘⏎ to approve.
+	a.overlay(c, s.held, func() {
 		bar := a.cover(coverKey{"quote", at.ID()}, ui.Row(c).Key("quote-bar")).
 			AttachTo(at, ui.AnchorBottomStart, ui.AnchorTopStart).Margin(16, 0, 0, -12).
 			Gap(4).Padding(4).AlignItems(ui.Center).Radius(10).Width(360).
@@ -136,7 +139,9 @@ func (a *app) selectionBar(c *ui.Context, t thread, key string, col, md ui.Eleme
 			a.closeQuote()
 			return
 		}
-		s.held = bar.Hovered() || bar.FocusWithin()
+		if s.open { // not closed by its buttons in this frame
+			s.held = bar.Hovered() || bar.FocusWithin()
+		}
 	})
 }
 
