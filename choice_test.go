@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -97,5 +98,23 @@ func TestAThreadOfAnUnlistedProviderIsOfferedNoModels(t *testing.T) {
 	h.tt.Frame()
 	if m := h.thread("Fake").View.Model; m.Model != "fake" {
 		t.Errorf("the thread's model is %+v", m)
+	}
+}
+
+// The effort chosen in a thread is that thread's, as the engine names it.
+func TestAThreadsEffortIsItsOwn(t *testing.T) {
+	h := start(t, tempDir(t))
+	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
+	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk)
+	h.thread("Mine")
+	h.a.selected = id
+	h.tt.Frame()
+	h.click("Model")
+	faster, _ := h.tt.Find("Faster")
+	h.tt.ClickAtWith(0, faster.X+stopInset, faster.Y-24) // Low's point
+	h.tt.Advance(time.Second)
+	h.until("the thread's new effort", func() bool { return h.thread("Mine").View.Model.Effort == "low" })
+	if h.a.effort != "High" {
+		t.Errorf("the default effort is %q after changing a thread's, want High", h.a.effort)
 	}
 }

@@ -50,3 +50,62 @@ func TestAConfigureStaysUntilTheViewShowsIt(t *testing.T) {
 		t.Fatalf("a view showing the last configure left %+v", th.Pending)
 	}
 }
+
+// A configure the view showed before its receipt came goes with the
+// receipt, though the view has moved on since, as another client's
+// configure moves it.
+func TestAConfigureTheViewShowedGoesWithItsReceipt(t *testing.T) {
+	id := api.NewID()
+	th := &Thread{View: api.Thread{ID: id, Access: api.AccessAutoEdits}}
+	e := &Env{Threads: map[api.ID]*Thread{id: th}}
+	m := &Manager{}
+	ask := api.ThreadConfigure{Access: api.AccessAsk}
+	cmd := api.Command{ID: api.NewID(), Target: id, Body: ask}
+	th.Pending = []Pending{{Command: cmd.ID, Body: ask}}
+	v := th.View
+	v.Access = api.AccessAsk
+	m.view(e, v)
+	v.Access = api.AccessFull
+	m.view(e, v)
+	m.submitted(e, cmd, nil)
+	if len(th.Pending) != 0 {
+		t.Fatalf("a configure the view showed and moved past stays: %+v", th.Pending)
+	}
+}
+
+// A snapshot comes after every configure committed before it: one it
+// doesn't show, the thread moved past.
+func TestASnapshotDropsTheConfiguresItMovedPast(t *testing.T) {
+	id := api.NewID()
+	th := &Thread{View: api.Thread{ID: id}}
+	e := &Env{Threads: map[api.ID]*Thread{id: th}}
+	th.Pending = []Pending{{Command: api.NewID(), Body: api.ThreadConfigure{Access: api.AccessFull}, sent: true}}
+	snap := api.Snapshot{Threads: []api.Thread{{ID: id, Access: api.AccessAsk}}}
+	(&Manager{}).shell(e, nil, api.Environment{}, api.StreamItem{Kind: api.StreamSnapshot, Snapshot: &snap})
+	if len(th.Pending) != 0 {
+		t.Fatalf("after a snapshot at Ask the thread still has %+v", th.Pending)
+	}
+}
+
+// A failed configure isn't sent again the same, as a held slider would
+// each frame; another drops it, as its retry would undo the new one.
+func TestAFailedConfigureIsNotSentAgainEachFrame(t *testing.T) {
+	id := api.NewID()
+	th := &Thread{View: api.Thread{ID: id}}
+	e := &Env{Threads: map[api.ID]*Thread{id: th}}
+	m := &Manager{}
+	high := api.ModelRef{Model: "m", Effort: "high"}
+	sent := map[api.ID]bool{}
+	for range 3 {
+		sent[m.ConfigureThread(e, id, high, api.AccessAsk)] = true // no engine: each fails at once
+	}
+	if len(sent) != 1 || len(th.Pending) != 1 || th.Pending[0].Err == nil {
+		t.Fatalf("three of the same failed configure sent %d commands and left %+v", len(sent), th.Pending)
+	}
+	low := high
+	low.Effort = "low"
+	m.ConfigureThread(e, id, low, api.AccessAsk)
+	if len(th.Pending) != 1 || th.Pending[0].Body.(api.ThreadConfigure).Model != low {
+		t.Fatalf("a new configure after a failed one left %+v", th.Pending)
+	}
+}

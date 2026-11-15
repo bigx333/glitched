@@ -23,6 +23,7 @@ type Pending struct {
 	Body    api.Intent
 	Err     error
 	sent    bool // committed; waiting for the thread to show it
+	seen    bool // a configure the thread's view showed before its receipt came
 }
 
 // Terminal is true when sending the command again can only fail the same
@@ -108,8 +109,27 @@ func (m *Manager) Rename(e *Env, thread api.ID, title string) api.ID {
 }
 
 // ConfigureThread sets the model and access the thread's next turn runs at.
+// A configure the same as the last, failed, goes no more, as a held
+// slider would send it each frame: its row offers to retry it. Any other
+// drops the failed ones before it, whose retry would undo it.
 func (m *Manager) ConfigureThread(e *Env, thread api.ID, model api.ModelRef, access api.Access) api.ID {
-	return m.submit(e, thread, api.ThreadConfigure{Model: model, Access: access})
+	c := api.ThreadConfigure{Model: model, Access: access}
+	if th := e.Threads[thread]; th != nil {
+		for i := len(th.Pending) - 1; i >= 0; i-- {
+			p := th.Pending[i]
+			if last, ok := p.Body.(api.ThreadConfigure); ok {
+				if p.Err != nil && last == c {
+					return p.Command
+				}
+				break
+			}
+		}
+		th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool {
+			_, ok := p.Body.(api.ThreadConfigure)
+			return ok && p.Err != nil
+		})
+	}
+	return m.submit(e, thread, c)
 }
 
 // Delete deletes the thread. The engine ends its run with it.
@@ -238,7 +258,7 @@ func (m *Manager) submitted(e *Env, cmd api.Command, err error) {
 		th.Pending[i].sent = true
 	case taken && answer && th.asks(r.Request):
 		th.Pending[i].sent = true
-	case err == nil && configure && !th.shows(c):
+	case err == nil && configure && !th.shows(c) && !th.Pending[i].seen:
 		// The receipt can come before the view that shows it: until then
 		// the thread's model and access are the configure's, and the next
 		// configure builds on them.
