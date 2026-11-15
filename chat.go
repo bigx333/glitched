@@ -372,11 +372,13 @@ func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
 	case entryAssistant:
 		col := ui.Column(c).Key(key).LineHeight(1.55).Transition(riseIn)
 		col.Children(func() {
+			var md ui.Element
 			if e.streaming {
-				markdown.Stream(c, e.text, &a.md)
+				md = markdown.Stream(c, e.text, &a.md)
 			} else {
-				markdown.View(c, e.text, &a.md)
+				md = markdown.View(c, e.text, &a.md)
 			}
+			a.selectionBar(c, t, key, col, md)
 			a.messageActions(c, t, es, i, col.Hovered() && !e.streaming)
 		})
 	case entryWork:
@@ -1045,9 +1047,18 @@ func (a *app) composerControls(c *ui.Context) {
 // draft. A snoozed thread comes back to the inbox with it, as the engine
 // brings a settled one back with any message.
 func (a *app) send(t thread) {
-	text := a.message(t)
-	if text == "" || t.env == nil {
+	if !a.sendText(t, a.message(t)) {
 		return
+	}
+	a.draft = ""
+	a.attachments = slices.DeleteFunc(a.attachments, func(at attachment) bool { return at.held(t) == "" })
+}
+
+// sendText sends text in the thread, creating it first when it's the draft,
+// and reports whether it went.
+func (a *app) sendText(t thread, text string) bool {
+	if text == "" || t.env == nil {
+		return false
 	}
 	id := t.id()
 	if id.IsZero() {
@@ -1056,7 +1067,7 @@ func (a *app) send(t thread) {
 			title = string(r[:48]) + "…"
 		}
 		if id = a.backend.Create(t.env, t.View.Workspace, title, a.modelRef(), accessOf[a.access]); id.IsZero() {
-			return
+			return false
 		}
 		if hero(t) {
 			a.sentFromHero(id)
@@ -1070,12 +1081,11 @@ func (a *app) send(t thread) {
 	// waiting its turn.
 	cmd := a.backend.Send(t.env, id, text, api.SteerActive)
 	if cmd.IsZero() {
-		return
+		return false
 	}
 	a.steers[cmd] = steer{t.env, id}
-	a.draft = ""
-	a.attachments = slices.DeleteFunc(a.attachments, func(at attachment) bool { return at.held(t) == "" })
 	a.listFor(id).ScrollToEnd()
+	return true
 }
 
 // steer is where a message sent from the composer went.
@@ -1115,12 +1125,20 @@ func (a *app) takeBack(c *ui.Context, t thread) {
 // files as their paths, as the composer's @ puts them, and pasted text
 // after.
 func (a *app) message(t thread) string {
-	parts := []string{strings.TrimSpace(a.draft)}
+	// Quotes first, as what the draft is about.
+	var parts []string
+	for _, at := range a.attachments {
+		if at.quote {
+			parts = append(parts, blockquote(at.text))
+		}
+	}
+	parts = append(parts, strings.TrimSpace(a.draft))
 	for _, at := range a.attachments {
 		if at.held(t) != "" {
 			continue
 		}
 		switch {
+		case at.quote:
 		case at.path != "":
 			parts = append(parts, "@"+at.path)
 		case at.text != "":

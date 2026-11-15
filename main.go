@@ -282,7 +282,9 @@ type app struct {
 	// attachments go with the next message; pastes counts pasted images,
 	// to name them.
 	attachments []attachment
-	pastes      int
+	// quote is the bar of text selected in a reply (quote.go).
+	quote  quoteBar
+	pastes int
 	// The composer's autocomplete: the token it's for, whether it was
 	// dismissed, its suggestions and choice, its flyout, and the projects'
 	// files it suggests.

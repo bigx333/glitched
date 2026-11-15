@@ -19,7 +19,8 @@ type attachment struct {
 	name, detail string
 	path         string     // a file's, "" for what was pasted
 	thumb        *ui.Bitmap // an image's, nil for others
-	text         string     // pasted text
+	text         string     // pasted text, or what a quote quotes
+	quote        bool       // a quote of a reply (quote.go)
 }
 
 // held is why the attachment stays when a message in t is sent, "" when
@@ -141,7 +142,10 @@ func (a *app) attachmentChips(c *ui.Context, list []attachment, t thread, remove
 					ui.Image(c, at.thumb).Size(28, 28).Radius(6).Fit(ui.Cover)
 				} else {
 					icon := icFile
-					if at.text != "" {
+					switch {
+					case at.quote:
+						icon = icQuote
+					case at.text != "":
 						icon = icMessage
 					}
 					ui.Box(c).Size(28, 28).Radius(6).Center().Background(palette.hover).Children(func() {
