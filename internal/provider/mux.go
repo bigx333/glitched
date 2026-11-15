@@ -45,3 +45,16 @@ func (m Mux) Reconcile(ctx context.Context, id RuntimeIdentity) (Recovery, error
 	}
 	return a.Reconcile(ctx, id)
 }
+
+// Commands are the slash commands of name's sessions in workspace, or
+// none for an adapter that can't list them.
+func (m Mux) Commands(ctx context.Context, name, workspace string) ([]Command, error) {
+	a, err := m.adapter(name)
+	if err != nil {
+		return nil, err
+	}
+	if c, ok := a.(Commander); ok {
+		return c.Commands(ctx, workspace)
+	}
+	return nil, nil
+}
