@@ -292,7 +292,11 @@ type app struct {
 	suggestIndex     int
 	suggestFly       *mygo.Window
 	suggestBox       [5]int // the flyout's anchor and height, as last set
+	suggestList      ui.ListState
 	files            map[string][]string
+	// slashLists are the providers' commands / suggests, by provider and
+	// workspace.
+	slashLists map[slashKey]*slashList
 	// The preview pane, a browser: shown, its tabs and the one shown, and
 	// why its web views could not start (see browser.go).
 	showPreview bool
@@ -535,6 +539,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		post:           post,
 		lists:          map[api.ID]*ui.ListState{},
 		files:          map[string][]string{},
+		slashLists:     map[slashKey]*slashList{},
 		diffLayout:     editor.DiffUnified,
 		diffWrap:       true,
 		diffFile:       map[api.ID]string{},

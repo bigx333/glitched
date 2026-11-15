@@ -235,6 +235,13 @@ func (s *seeding) Reconcile(ctx context.Context, id provider.RuntimeIdentity) (p
 	return s.of(ctx, id.Thread, id.Run).Reconcile(ctx, id)
 }
 
+func (s *seeding) Commands(ctx context.Context, workspace string) ([]provider.Command, error) {
+	if c, ok := s.Adapter.(provider.Commander); ok {
+		return c.Commands(ctx, workspace)
+	}
+	return nil, nil
+}
+
 // tree3 is the app on an engine holding a thread, Ship the sidebar sort,
 // with a child, Write the tests, which has a child of its own, Run them,
 // each with a finished turn.
