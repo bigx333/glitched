@@ -357,6 +357,7 @@ func (a *app) emptyState(c *ui.Context) {
 // the block's spacing shows. A fence that opens nothing, unclosed with
 // no code after it, is text. It is "" for an empty message.
 func userMarkdown(text string) string {
+	text = strings.TrimPrefix(text, "\ufeff")
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	lines := strings.Split(text, "\n")

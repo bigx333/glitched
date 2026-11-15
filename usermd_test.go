@@ -113,10 +113,11 @@ func TestAUserMessageKeepsBlankLinesAroundCode(t *testing.T) {
 	}
 }
 
-// Line endings of other systems end lines as line feeds do.
+// Line endings of other systems end lines as line feeds do, and a byte
+// order mark, which shows as nothing, leaves the first line's indent.
 func TestAUserMessageReadsAnyLineEnding(t *testing.T) {
-	h := sent(t, "crlf one\r\ncrlf two", "cr one\rcr two")
-	for _, s := range []string{"crlf one\ncrlf two", "cr one\ncr two"} {
+	h := sent(t, "crlf one\r\ncrlf two", "cr one\rcr two", "\ufeff    if a_b {\n    }")
+	for _, s := range []string{"crlf one\ncrlf two", "cr one\ncr two", "    if a_b {\n    }"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("no %q; texts %q", s, h.tt.Texts())
 		}
