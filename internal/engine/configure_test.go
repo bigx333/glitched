@@ -43,6 +43,7 @@ func TestAConfigureIsChecked(t *testing.T) {
 	}
 	for name, c := range map[string]api.ThreadConfigure{
 		"another provider": {Model: api.ModelRef{Provider: "codex", Model: "m"}},
+		"no model":         {Access: f.th.Access},
 		"unknown access":   {Model: api.ModelRef{Model: "m"}, Access: api.AccessFull + 1},
 	} {
 		var re *api.RejectedError

@@ -292,7 +292,9 @@ func (a *app) effortSlider(c *ui.Context) {
 		steps := float32(len(efforts) - 1)
 		sb := ui.SliderBase(c.Key("effort"), &v, 0, float64(steps)).Step(1).Height(28).Label("Effort").Cursor(ui.CursorPointer)
 		setLevel := func(l int) {
-			if l == level {
+			// A thread's effort the slider doesn't list shows at Medium,
+			// which it takes once chosen.
+			if l == level && efforts[l] == a.effort {
 				return
 			}
 			haptic() // a tick on the trackpad at each step

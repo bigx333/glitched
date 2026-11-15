@@ -64,7 +64,8 @@ func TestAThreadsPickersAreItsOwn(t *testing.T) {
 		t.Error("the picker offers another provider's models in a Claude thread")
 	}
 	h.click("Sonnet 5.5")
-	want := api.ModelRef{Provider: "claude", Model: "Claude Sonnet 5.5", Effort: "high"}
+	h.click("Fast mode")
+	want := api.ModelRef{Provider: "claude", Model: "Claude Sonnet 5.5", Effort: "high", Fast: true}
 	h.until("the thread's new model and access", func() bool {
 		v := h.thread("Mine").View
 		return v.Model == want && v.Access == api.AccessAsk
@@ -74,5 +75,27 @@ func TestAThreadsPickersAreItsOwn(t *testing.T) {
 	}
 	if _, err := os.Stat(h.a.composerPath()); !os.IsNotExist(err) {
 		t.Errorf("a thread's change saved the default for a new one: %v", err)
+	}
+}
+
+// A thread of a provider the picker doesn't list is offered no models to
+// switch to: it keeps its provider.
+func TestAThreadOfAnUnlistedProviderIsOfferedNoModels(t *testing.T) {
+	h := start(t, tempDir(t))
+	id := h.a.backend.Create(h.local(), t.TempDir(), "Fake", api.ModelRef{Provider: "fake", Model: "fake"}, api.AccessAsk)
+	h.thread("Fake")
+	h.a.selected = id
+	h.tt.Frame()
+	h.click("Model")
+	for _, s := range []string{"Claude", "Codex", "Sonnet 5.5", "GPT-5.5"} {
+		if r, ok := h.tt.Find(s); ok && r.W > 0 {
+			if err := h.tt.Click(s); err == nil {
+				t.Errorf("the picker offers %q on a fake thread", s)
+			}
+		}
+	}
+	h.tt.Frame()
+	if m := h.thread("Fake").View.Model; m.Model != "fake" {
+		t.Errorf("the thread's model is %+v", m)
 	}
 }

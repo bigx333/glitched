@@ -231,11 +231,17 @@ func (m *Manager) submitted(e *Env, cmd api.Command, err error) {
 	}
 	_, message := cmd.Body.(api.MessageDispatch)
 	r, answer := cmd.Body.(api.RequestRespond)
+	c, configure := cmd.Body.(api.ThreadConfigure)
 	taken := err == nil || errors.Is(err, api.ErrAlreadyAnswered)
 	switch {
 	case err == nil && message && th.open && th.Transcript.message(cmd.ID) == nil:
 		th.Pending[i].sent = true
 	case taken && answer && th.asks(r.Request):
+		th.Pending[i].sent = true
+	case err == nil && configure && !th.shows(c):
+		// The receipt can come before the view that shows it: until then
+		// the thread's model and access are the configure's, and the next
+		// configure builds on them.
 		th.Pending[i].sent = true
 	case taken:
 		th.Pending = slices.Delete(th.Pending, i, i+1)
