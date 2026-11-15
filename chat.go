@@ -350,6 +350,10 @@ func (a *app) emptyState(c *ui.Context) {
 	})
 }
 
+// bubbleInset is how far a message's text is inside its bubble's edges,
+// across: its padding and its border.
+const bubbleInset = 15
+
 func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
 	e := es[i]
 	key := e.key
@@ -359,8 +363,12 @@ func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
 		r.Children(func() {
 			ui.Spacer(c)
 			ui.Column(c).AlignItems(ui.End).Gap(6).MaxWidthPercent(80).Children(func() {
-				ui.Text(c, e.text).Selectable().LineHeight(1.5).Padding(10, 14).Radius(16, 16, 4, 16).
-					Background(palette.surface).Border(1, palette.border)
+				// It reads as Markdown, as a reply does, its code wrapping
+				// rather than scrolling within the bubble.
+				ui.Column(c).Padding(10, bubbleInset-1).Radius(16, 16, 4, 16).
+					Background(palette.surface).Border(1, palette.border).Children(func() {
+					markdown.View(c, e.text, &a.userMD)
+				})
 				if e.note != "" {
 					a.messageNote(c, t, e)
 				}
