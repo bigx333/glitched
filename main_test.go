@@ -1316,24 +1316,25 @@ func TestNormalizeURL(t *testing.T) {
 }
 
 // Scrolled up from the end, the composer is compact, its controls folded
-// away; a draft, a click or the end of the thread brings it back.
+// away; a draft, a click or the end of the thread brings it back. Its
+// access button, the seeded thread's Ask for approval, tells which.
 func TestCompactComposer(t *testing.T) {
 	h, th := long(t)
 	tt := h.tt
 	l := h.a.listFor(th.id())
-	if !tt.HasText("Approve for me") {
+	if !tt.HasText(accessAsk) {
 		t.Fatal("the composer should be full size at the end")
 	}
 	l.ScrollTo(0, ui.Start)
 	tt.Advance(time.Second)
-	if tt.HasText("Approve for me") {
+	if tt.HasText(accessAsk) {
 		t.Error("scrolled up, the composer should fold its controls away")
 	}
 	// Changes from outside the view, as typing's, which a frame shows.
 	h.a.draft = "a follow-up"
 	tt.Frame()
 	tt.Advance(time.Second)
-	if !tt.HasText("Approve for me") {
+	if !tt.HasText(accessAsk) {
 		t.Error("with a draft, the composer should be full size")
 	}
 	h.a.draft = ""
@@ -1342,7 +1343,7 @@ func TestCompactComposer(t *testing.T) {
 	l.ScrollToEnd()
 	tt.Frame()
 	tt.Advance(2 * time.Second)
-	if !tt.HasText("Approve for me") {
+	if !tt.HasText(accessAsk) {
 		t.Error("back at the end, the composer should be full size")
 	}
 }

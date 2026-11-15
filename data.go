@@ -422,6 +422,8 @@ func failedTo(p client.Pending) string {
 		return "rename the thread"
 	case api.ThreadDelete:
 		return "delete the thread"
+	case api.ThreadConfigure:
+		return "change the thread's model and access"
 	}
 	return ""
 }

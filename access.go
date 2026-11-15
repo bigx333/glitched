@@ -83,7 +83,7 @@ var (
 // much as it risks: Ask for approval glows a calm blue once along its
 // edge; Approve for me sweeps a teal scan across it; Full access shakes it
 // and flashes its edge red.
-func (a *app) accessEffects(card ui.Element) {
+func (a *app) accessEffects(card ui.Element, level string) {
 	if a.accessAt.IsZero() {
 		return
 	}
@@ -95,7 +95,7 @@ func (a *app) accessEffects(card ui.Element) {
 			{At: d, Value: 0, Ease: easeOut},
 		}, run)
 	}
-	switch a.access {
+	switch level {
 	case accessFull:
 		card.Translate(card.Keyframes("shake-x", shakeFrames(0), run), card.Keyframes("shake-y", shakeFrames(1), run))
 		if k := pulse("flash", grantTime); k > 0.01 {

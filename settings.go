@@ -114,6 +114,7 @@ func (a *app) general(c *ui.Context) {
 		})
 		settingRow(c, "Default model", "Used for new threads. Each thread can pick its own.", func() {
 			ui.Select(c, &a.model, modelNames()).Width(200)
+			a.saveComposer()
 		})
 		settingRow(c, "Confirm before deleting threads", "", func() {
 			ui.Switch(c, &s.confirmDelete).Label("Confirm before deleting threads")

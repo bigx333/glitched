@@ -274,7 +274,12 @@ type app struct {
 	access                      string // one of accessLevels
 	accessOpen                  bool
 	accessAt                    time.Time // when the level last changed, for its effect
-	collapsed                   map[string]bool
+	// savedChoice is the default for a new thread as composer.json last
+	// had it, and pickerLock the only family the model picker offers,
+	// a thread's provider's, or "" for all.
+	savedChoice choice
+	pickerLock  string
+	collapsed   map[string]bool
 	// The inbox: the project it's filtered to, and its closed sections.
 	projectFilter map[projectKey]bool // the projects the sidebar shows; none is all
 	sectionClosed map[category]bool
@@ -598,7 +603,9 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 	}
 	a.userMD.Extensions, a.userMD.WrapCode = parser.ExtStrikethrough, true
 	a.userMD.OnLink = func(string) {}
+	a.savedChoice = a.choice()
 	a.loadLayout()
+	a.loadComposer()
 	a.openPlugins(dir)
 	a.backend = client.New(client.Config{Dir: dir, Post: func(fn func()) {
 		post(func() {
