@@ -18,6 +18,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/hub"
+	"glitched/internal/provider"
 )
 
 // Server serves an Endpoint and a hub replica on /ws. Either may be nil, and
@@ -29,6 +30,10 @@ type Server struct {
 	// Plugins serves the plugins' services and tools, to this machine's
 	// own callers only: the unix socket's server has it, a tailnet's never.
 	Plugins Plugins
+	// Providers lists the providers' slash commands, to this machine's own
+	// callers only, as Plugins: a listing runs the provider's CLI in the
+	// folder the caller names.
+	Providers Providers
 	// Authorize admits a socket whose client proved, in the handshake, that
 	// it holds one of the keys Authorize knows. proved reports whether the
 	// proof was made with a key; Authorize asks it of every key it knows,
@@ -302,6 +307,18 @@ type Plugins interface {
 	PluginCall(ctx context.Context, call json.RawMessage) (json.RawMessage, error)
 }
 
+// Providers are what the engine's providers offer a session.
+type Providers interface {
+	Commands(ctx context.Context, provider, workspace string) ([]provider.Command, error)
+}
+
+// commandsQuery asks for the slash commands of Provider's sessions in
+// Workspace.
+type commandsQuery struct {
+	Provider  string `json:"provider"`
+	Workspace string `json:"workspace"`
+}
+
 // A handler answers one request with every message for its id.
 type handler func(ctx context.Context, params json.RawMessage, o *op)
 
@@ -319,6 +336,11 @@ func (s *Server) methods() map[string]handler {
 		m["plugins.tools"] = callHandler(func(ctx context.Context, _ struct{}) (json.RawMessage, error) { return p.PluginTools(ctx) })
 		m["plugins.tool"] = callHandler(p.PluginTool)
 		m["plugins.call"] = callHandler(p.PluginCall)
+	}
+	if p := s.Providers; p != nil {
+		m["provider.commands"] = callHandler(func(ctx context.Context, q commandsQuery) ([]provider.Command, error) {
+			return p.Commands(ctx, q.Provider, q.Workspace)
+		})
 	}
 	if h := s.Hub; h != nil {
 		m["hub.append"] = callHandler(h.Append)

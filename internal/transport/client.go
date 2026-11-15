@@ -15,6 +15,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/hub"
+	"glitched/internal/provider"
 )
 
 // conn dials one socket on first use and again after it drops. Calls in
@@ -568,6 +569,13 @@ func (e *EndpointClient) PluginTool(ctx context.Context, call json.RawMessage) (
 func (e *EndpointClient) PluginCall(ctx context.Context, call json.RawMessage) (json.RawMessage, error) {
 	var out json.RawMessage
 	return out, e.c.call(ctx, "plugins.call", call, &out)
+}
+
+// ProviderCommands are the slash commands a session of the engine's
+// provider name would have in workspace.
+func (e *EndpointClient) ProviderCommands(ctx context.Context, name, workspace string) ([]provider.Command, error) {
+	var out []provider.Command
+	return out, e.c.call(ctx, "provider.commands", commandsQuery{Provider: name, Workspace: workspace}, &out)
 }
 
 func (e *EndpointClient) Submit(ctx context.Context, cmd api.Command) (api.Receipt, error) {
