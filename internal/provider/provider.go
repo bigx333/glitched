@@ -24,6 +24,20 @@ type Info struct {
 	Models  []string
 }
 
+// Command is one of the provider's slash commands, as /Name in a prompt:
+// its own, the user's, or a skill.
+type Command struct {
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	ArgumentHint string `json:"argumentHint,omitempty"`
+}
+
+// Commander is an Adapter that can list the slash commands a session in
+// workspace would have, without a run.
+type Commander interface {
+	Commands(ctx context.Context, workspace string) ([]Command, error)
+}
+
 type SessionSpec struct {
 	Thread, Run api.ID
 	Generation  uint64
