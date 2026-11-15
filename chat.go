@@ -353,17 +353,18 @@ func (a *app) emptyState(c *ui.Context) {
 // userMarkdown is a message the user typed as Markdown that shows only
 // its code as Markdown would, its fenced code blocks and code spans, and
 // the rest as typed: every mark escaped, and every line, blank line and
-// indent kept. It is "" for an empty message.
+// indent kept, but for one blank line each side of a code block, which
+// the block's spacing shows. It is "" for an empty message.
 func userMarkdown(text string) string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	lines := strings.Split(text, "\n")
 	var blocks, prose []string
 	flush := func() {
-		for len(prose) > 0 && strings.TrimSpace(prose[0]) == "" {
+		if len(prose) > 0 && strings.TrimSpace(prose[0]) == "" {
 			prose = prose[1:]
 		}
-		for len(prose) > 0 && strings.TrimSpace(prose[len(prose)-1]) == "" {
+		if len(prose) > 0 && strings.TrimSpace(prose[len(prose)-1]) == "" {
 			prose = prose[:len(prose)-1]
 		}
 		if len(prose) > 0 {
@@ -432,7 +433,9 @@ func typedProse(text string) string {
 
 // codeSpanEnd is the end of the code span whose opening backticks start
 // at i in text, after the run of as many backticks that closes it, or 0
-// when none does before a blank line.
+// when none does on the same line. A span may not cross lines: Markdown
+// reads a line's blocks before its spans, so the lines after a span's
+// first would read as Markdown, unescaped.
 func codeSpanEnd(text string, i int) int {
 	n := 0
 	for i+n < len(text) && text[i+n] == '`' {
@@ -440,10 +443,7 @@ func codeSpanEnd(text string, i int) int {
 	}
 	for j := i + n; j < len(text); {
 		if text[j] == '\n' {
-			next, _, _ := strings.Cut(text[j+1:], "\n")
-			if strings.TrimSpace(next) == "" {
-				return 0
-			}
+			return 0
 		}
 		if text[j] != '`' {
 			j++
@@ -482,8 +482,7 @@ func closesFence(line, fence string) bool {
 	if len(line)-len(t) > 3 || !strings.HasPrefix(t, fence) {
 		return false
 	}
-	t = strings.TrimLeft(t, fence[:1])
-	return strings.TrimSpace(t) == ""
+	return strings.Trim(strings.TrimLeft(t, fence[:1]), " \t") == ""
 }
 
 // userMarkdown is userMarkdown(text) for the message keyed key, made
