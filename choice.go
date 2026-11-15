@@ -81,10 +81,10 @@ func configured(t thread) (api.ModelRef, api.Access) {
 }
 
 // threadChoice is the thread's model and access as the pickers name them.
-// A model the pickers don't list shows by its own name.
+// A model or effort the pickers don't list shows by its own name.
 func threadChoice(t thread) choice {
 	m, acc := configured(t)
-	ch := choice{Model: m.Model, Fast: m.Fast, Access: accessAuto}
+	ch := choice{Model: m.Model, Effort: m.Effort, Fast: m.Fast, Access: accessAuto}
 	if ch.Model == "" {
 		ch.Model = "Default model"
 	}
@@ -101,16 +101,18 @@ func threadChoice(t thread) choice {
 	return ch
 }
 
-// family is the picker's family of the thread's provider, or "" for one
-// the picker doesn't list.
+// familyOf is the picker's family of the thread's provider, or noFamily
+// for one the picker doesn't list: it offers none of its models.
 func familyOf(provider string) string {
 	for _, f := range families {
 		if strings.EqualFold(f.name, provider) {
 			return f.name
 		}
 	}
-	return ""
+	return noFamily
 }
+
+const noFamily = "-"
 
 // threadControls builds the pickers on the thread's own model and access,
 // and sends what they change to the engine, for the thread's next turn.
@@ -118,7 +120,13 @@ func familyOf(provider string) string {
 // in a draft. A thread keeps its provider, so the picker offers only its
 // family's models.
 func (a *app) threadControls(t thread, build func()) {
-	if t.id().IsZero() || t.env == nil {
+	accessAt := a.accessAt
+	defer func() {
+		if a.accessAt != accessAt {
+			a.accessFor = t.id()
+		}
+	}()
+	if t.id().IsZero() {
 		build()
 		a.saveComposer()
 		return
@@ -127,12 +135,12 @@ func (a *app) threadControls(t thread, build func()) {
 	defer a.show(draft)
 	before := threadChoice(t)
 	a.show(before)
-	m, _ := configured(t)
+	m, level := configured(t)
 	a.pickerLock = familyOf(m.Provider)
 	defer func() { a.pickerLock = "" }()
 	build()
 	after := a.choice()
-	if after == before {
+	if after == before || t.env == nil {
 		return
 	}
 	if after.Model != before.Model {
@@ -142,16 +150,20 @@ func (a *app) threadControls(t thread, build func()) {
 		m.Effort = strings.ToLower(after.Effort)
 	}
 	m.Fast = after.Fast
-	_, level := configured(t)
 	if after.Access != before.Access {
 		level = accessOf[after.Access]
 	}
 	a.backend.ConfigureThread(t.env, t.id(), m, level)
 }
 
-// shownAccess is the access level the composer shows for t.
+// shownAccess is the access level the composer shows for t, for its card's
+// effect, or "" when the level last changed elsewhere: the effect is that
+// thread's or the draft's.
 func (a *app) shownAccess(t thread) string {
-	if t.id().IsZero() || t.env == nil {
+	if a.accessFor != t.id() {
+		return ""
+	}
+	if t.id().IsZero() {
 		return a.access
 	}
 	return threadChoice(t).Access

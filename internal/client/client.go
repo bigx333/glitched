@@ -461,6 +461,7 @@ func (m *Manager) view(e *Env, v api.Thread) bool {
 	}
 	was, seen := th.View.LastReport, th.known
 	th.View, th.known = v, true
+	th.configured()
 	if th.told == nil {
 		th.told = map[api.ID]heard{}
 	}
@@ -622,6 +623,33 @@ func (th *Thread) shown() {
 		_, message := p.Body.(api.MessageDispatch)
 		return message && th.Transcript.message(p.Command) != nil
 	})
+}
+
+// shows is whether the thread's view has c's model and access.
+func (th *Thread) shows(c api.ThreadConfigure) bool {
+	return th.View.Model == c.Model && th.View.Access == c.Access
+}
+
+// configured drops the committed configures the view now shows, and those
+// before them, which the view has moved past.
+func (th *Thread) configured() {
+	last := -1
+	for i, p := range th.Pending {
+		if c, ok := p.Body.(api.ThreadConfigure); ok && p.sent && th.shows(c) {
+			last = i
+		}
+	}
+	if last < 0 {
+		return
+	}
+	var kept []Pending
+	for i, p := range th.Pending {
+		if _, ok := p.Body.(api.ThreadConfigure); ok && p.sent && i <= last {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	th.Pending = kept
 }
 
 // dropUnasked drops the answers, failed or taken, to requests the thread

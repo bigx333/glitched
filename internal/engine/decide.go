@@ -521,6 +521,9 @@ func (d *decision) configure(b api.ThreadConfigure) error {
 	if b.Access > ceiling() {
 		return rejected("unknown access level")
 	}
+	if b.Model.Model == "" && d.t.Model.Model != "" {
+		return rejected("a thread needs a model")
+	}
 	if b.Model.Provider != d.t.Model.Provider {
 		return rejected("a thread keeps its provider")
 	}
