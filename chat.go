@@ -11,7 +11,6 @@ import (
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
-	"github.com/egoist/mygo/ui/markdown/parser"
 
 	"glitched/internal/api"
 	"glitched/internal/client"
@@ -351,81 +350,140 @@ func (a *app) emptyState(c *ui.Context) {
 	})
 }
 
-// userMarkdown is a message the user typed as Markdown that shows as
-// typed where Markdown would hide it: each line break within a
-// paragraph, which Markdown reads as a space, is made a hard break, and
-// each line read as a link's definition, which shows as nothing, has its
-// bracket escaped. A line break within a code span stays a space, and
-// code, quotes' markers and the rest are as typed. It is "" when the
-// message is only blocks' marks, as "#" or ">", which show as nothing.
+// userMarkdown is a message the user typed as Markdown that shows only
+// its code as Markdown would, its fenced code blocks and code spans, and
+// the rest as typed: every mark escaped, and every line, blank line and
+// indent kept. It is "" for an empty message.
 func userMarkdown(text string) string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
-	if strings.Trim(text, "#>-+*=_ \t\n") == "" {
-		return ""
+	lines := strings.Split(text, "\n")
+	var blocks, prose []string
+	flush := func() {
+		for len(prose) > 0 && strings.TrimSpace(prose[0]) == "" {
+			prose = prose[1:]
+		}
+		for len(prose) > 0 && strings.TrimSpace(prose[len(prose)-1]) == "" {
+			prose = prose[:len(prose)-1]
+		}
+		if len(prose) > 0 {
+			blocks = append(blocks, typedProse(strings.Join(prose, "\n")))
+		}
+		prose = nil
 	}
-	text = keepDefinitions(text)
-	d := parser.New(parser.GFM)
-	d.Set(text)
-	var b strings.Builder
-	at := 0
-	for i := 1; i < d.Len(); i++ {
-		k := d.Block(i)
-		if k.Kind != parser.Paragraph {
+	for i := 0; i < len(lines); i++ {
+		fence := openingFence(lines[i])
+		if fence == "" {
+			prose = append(prose, lines[i])
 			continue
 		}
-		var literal [][2]int
-		for _, in := range d.Inlines(i) {
-			if in.Kind == parser.Code || in.Kind == parser.HTML {
-				literal = append(literal, [2]int{in.Start, in.End})
-			}
+		flush()
+		end := i + 1
+		for end < len(lines) && !closesFence(lines[end], fence) {
+			end++
 		}
-		for j := k.Start; j < k.End; j++ {
-			if text[j] == '\n' && !slices.ContainsFunc(literal, func(r [2]int) bool { return r[0] <= j && j < r[1] }) {
-				b.WriteString(text[at:j])
-				b.WriteString("  ")
-				at = j
-			}
-		}
+		end = min(end, len(lines)-1)
+		blocks = append(blocks, strings.Join(lines[i:end+1], "\n"))
+		i = end
 	}
-	b.WriteString(text[at:])
+	flush()
+	return strings.Join(blocks, "\n")
+}
+
+// typedProse is text as one paragraph of Markdown that shows it as typed
+// but for its code spans: each line a hard break, its indent entities
+// Markdown keeps, and its marks escaped.
+func typedProse(text string) string {
+	var b strings.Builder
+	lineStart := true
+	for i := 0; i < len(text); {
+		c := text[i]
+		switch {
+		case c == '\n':
+			b.WriteString("\\\n")
+			lineStart = true
+			i++
+			continue
+		case lineStart && (c == ' ' || c == '\t'):
+			fmt.Fprintf(&b, "&#%d;", c)
+			i++
+			continue
+		case c == '`':
+			if end := codeSpanEnd(text, i); end > 0 {
+				b.WriteString(text[i:end])
+				i, lineStart = end, false
+				continue
+			}
+			for i < len(text) && text[i] == '`' {
+				b.WriteString("\\`")
+				i++
+			}
+			lineStart = false
+			continue
+		case c < 0x80 && strings.IndexByte(`!"#$%&'()*+,-./:;<=>?@[\]^_{|}~`, c) >= 0:
+			b.WriteByte('\\')
+		}
+		b.WriteByte(c)
+		lineStart = false
+		i++
+	}
 	return b.String()
 }
 
-// keepDefinitions escapes the first bracket of each line of text that
-// no block shows, which, a link's definition, would show as nothing.
-func keepDefinitions(text string) string {
-	d := parser.New(parser.GFM)
-	d.Set(text)
-	var shown [][2]int
-	for i := 1; i < d.Len(); i++ {
-		switch k := d.Block(i); k.Kind {
-		case parser.Quote, parser.List, parser.Item, parser.Table, parser.TableRow, parser.FootnoteDefinition:
-		default:
-			shown = append(shown, [2]int{k.Start, k.End})
-		}
+// codeSpanEnd is the end of the code span whose opening backticks start
+// at i in text, after the run of as many backticks that closes it, or 0
+// when none does before a blank line.
+func codeSpanEnd(text string, i int) int {
+	n := 0
+	for i+n < len(text) && text[i+n] == '`' {
+		n++
 	}
-	var b strings.Builder
-	at := 0
-	for s := 0; s < len(text); {
-		e := strings.IndexByte(text[s:], '\n')
-		if e < 0 {
-			e = len(text)
-		} else {
-			e += s
-		}
-		line := text[s:e]
-		if strings.TrimSpace(line) != "" && !slices.ContainsFunc(shown, func(r [2]int) bool { return r[0] < e && r[1] > s }) {
-			if k := strings.IndexByte(line, '['); k >= 0 {
-				b.WriteString(text[at : s+k])
-				b.WriteString("\\")
-				at = s + k
+	for j := i + n; j < len(text); {
+		if text[j] == '\n' {
+			next, _, _ := strings.Cut(text[j+1:], "\n")
+			if strings.TrimSpace(next) == "" {
+				return 0
 			}
 		}
-		s = e + 1
+		if text[j] != '`' {
+			j++
+			continue
+		}
+		m := 0
+		for j+m < len(text) && text[j+m] == '`' {
+			m++
+		}
+		if m == n {
+			return j + m
+		}
+		j += m
 	}
-	b.WriteString(text[at:])
-	return b.String()
+	return 0
+}
+
+// openingFence is the run of backticks or tildes, three or more, that
+// opens a fenced code block on line, or "" when line opens none.
+func openingFence(line string) string {
+	t := strings.TrimLeft(line, " ")
+	if len(line)-len(t) > 3 || t == "" || t[0] != '`' && t[0] != '~' {
+		return ""
+	}
+	m := t[:len(t)-len(strings.TrimLeft(t, t[:1]))]
+	if len(m) < 3 || m[0] == '`' && strings.Contains(t[len(m):], "`") {
+		return ""
+	}
+	return m
+}
+
+// closesFence reports whether line closes the fenced code block fence
+// opened.
+func closesFence(line, fence string) bool {
+	t := strings.TrimLeft(line, " ")
+	if len(line)-len(t) > 3 || !strings.HasPrefix(t, fence) {
+		return false
+	}
+	t = strings.TrimLeft(t, fence[:1])
+	return strings.TrimSpace(t) == ""
 }
 
 // userMarkdown is userMarkdown(text) for the message keyed key, made

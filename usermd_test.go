@@ -10,92 +10,86 @@ import (
 	"time"
 )
 
-// A message the user sent reads as Markdown, as a reply does: a code span
-// and a fenced code block show as code, without their backticks.
-func TestAUserMessageShowsItsMarkdown(t *testing.T) {
-	const msg = "Why does `break` leave only the inner loop?\n\n```go\nfor {\n\tbreak\n}\n```"
+// sent seeds a thread with the user's messages and returns the texts
+// its transcript shows.
+func sent(t *testing.T, msgs ...string) *harness {
+	t.Helper()
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(checks))
-	seed(t, d, t.TempDir(), "Loops", msg)
+	seed(t, d, t.TempDir(), "Messages", msgs...)
 	h := start(t, dir)
-	th := h.thread("Loops")
-	h.a.select_(th)
+	h.tt.SetSize(1320, 12000)
+	h.a.select_(h.thread("Messages"))
 	h.until("its transcript", func() bool { return h.tt.HasText("One test fails.") })
 	h.tt.Advance(time.Second)
+	return h
+}
+
+// A message's code spans and fenced code blocks show as code, without
+// their backticks, as a reply's do.
+func TestAUserMessageShowsItsCode(t *testing.T) {
+	h := sent(t,
+		"Why does `break` leave only the inner loop?\n\n```go\nfor {\n\tbreak\n}\n```",
+		"~~~\n```\nx\n~~~\nafter",
+		"```npm i``` first\nthen b",
+	)
 	texts := h.tt.Texts()
-	if slices.ContainsFunc(texts, func(s string) bool { return strings.Contains(s, "`") }) {
-		t.Errorf("the message shows its backticks; texts %q", texts)
+	if slices.ContainsFunc(texts, func(s string) bool { return strings.Contains(s, "`break`") || strings.Contains(s, "```go") }) {
+		t.Errorf("a message shows its code's backticks; texts %q", texts)
 	}
-	for _, s := range []string{"Why does break leave only the inner loop?", "for {\n\tbreak\n}"} {
-		if !h.tt.HasText(s) {
+	for _, s := range []string{"Why does break leave only the inner loop?", "for {\n\tbreak\n}", "```\nx", "after", "npm i first\nthen b"} {
+		if !slices.Contains(texts, s) {
 			t.Errorf("no %q; texts %q", s, texts)
 		}
 	}
 }
 
-// A message keeps the lines the user typed, which Markdown would join,
-// but its code keeps its own.
-func TestAUserMessageKeepsItsLines(t *testing.T) {
-	const msg = "Steps:\nrun make\nthen run tests\n\n```\nmake\n```\n\n~~~\n```\nx\n~~~\nlast\nline"
-	dir := tempDir(t)
-	d := engine(t, daemon.Config{Dir: dir}, fake.New(checks))
-	seed(t, d, t.TempDir(), "Steps", msg)
-	h := start(t, dir)
-	h.a.select_(h.thread("Steps"))
-	h.until("its transcript", func() bool { return h.tt.HasText("One test fails.") })
-	h.tt.Advance(time.Second)
-	for _, s := range []string{"Steps:\nrun make\nthen run tests", "last\nline"} {
+// Outside its code, a message shows exactly as the user typed it: its
+// lines, blank lines and indents, and every mark Markdown would read.
+func TestAUserMessageShowsAsTyped(t *testing.T) {
+	typed := []string{
+		"Steps:\nrun make\nthen run tests",
+		"line one\nline two\n---",
+		"Status\n====",
+		"Traceback:\n  File \"main.py\", line 3\n    return x",
+		"\tindented with a tab",
+		`Use ^\d+\.\d+$ on C:\Users\me\_build`,
+		"What is <b> vs &nbsp; or &amp;? line one<br>line two",
+		"[ERROR]: timeout\nwhat now?",
+		`It matches \[a-z\]+ and *a* or __b__ ~~c~~ $x$`,
+		"# not a heading\n> not a quote\n- not a list\n1. not ordered\n| not | a table |",
+		"a\n\n\n\nb",
+		"#",
+		"See [the settings](/settings) or https://example.com",
+		"a\\\nb",
+	}
+	h := sent(t, typed...)
+	texts := h.tt.Texts()
+	for _, s := range typed {
+		if !slices.Contains(texts, s) {
+			t.Errorf("no %q as typed; texts %q", s, texts)
+		}
+	}
+}
+
+// Line endings of other systems end lines as line feeds do.
+func TestAUserMessageReadsAnyLineEnding(t *testing.T) {
+	h := sent(t, "crlf one\r\ncrlf two", "cr one\rcr two")
+	for _, s := range []string{"crlf one\ncrlf two", "cr one\ncr two"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("no %q; texts %q", s, h.tt.Texts())
 		}
 	}
-	if !h.tt.HasText("```\nx") {
-		t.Errorf("the tilde fence's code isn't as typed; texts %q", h.tt.Texts())
-	}
 }
 
-// Only a paragraph's line breaks are made hard: code, wherever it is,
-// keeps its lines as typed, as the parser reads it.
-func TestUserMarkdown(t *testing.T) {
-	for _, c := range []struct{ in, want string }{
-		{"a\nb", "a  \nb"},
-		{"a\r\nb", "a  \nb"},
-		{"a\n\nb", "a\n\nb"},
-		{"```npm i``` first\nthen b", "```npm i``` first  \nthen b"},
-		{"- a\n  ```\n  x\nb\nc", "- a\n  ```\n  x\nb  \nc"},
-		{"> ```\n> x\n> y\n> ```", "> ```\n> x\n> y\n> ```"},
-		{"    x\n    y", "    x\n    y"},
-		{"````\nx\ny\n`````\nz\nw", "````\nx\ny\n`````\nz  \nw"},
-		{"> a\n> b", "> a  \n> b"},
-		{"[WARN]: disk", "\\[WARN]: disk"},
-		{"Got this:\n\n[ERROR]: timeout\n\nwhat now?", "Got this:\n\n\\[ERROR]: timeout\n\nwhat now?"},
-		{"[ERROR]: timeout\nwhat now?", "\\[ERROR]: timeout  \nwhat now?"},
-		{"> [1]: https://a", "> \\[1]: https://a"},
-		{"- [1]: https://a", "- \\[1]: https://a"},
-		{"[a] and [b]: c\nd", "[a] and [b]: c  \nd"},
-		{"x `a\nb` y\nz", "x `a\nb` y  \nz"},
-		{"a\rb", "a  \nb"},
-		{"#", ""}, {">", ""}, {"-", ""}, {"* * *\n", ""},
-	} {
-		if got := userMarkdown(c.in); got != c.want {
-			t.Errorf("userMarkdown(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-// A line of a message that Markdown reads as a link's definition, and
-// shows as nothing, shows as typed.
-func TestAUserMessageOfALinksDefinitionShows(t *testing.T) {
-	const msg = "Got this:\n\n[ERROR]: timeout\n\nwhat now?"
-	dir := tempDir(t)
-	d := engine(t, daemon.Config{Dir: dir}, fake.New(checks))
-	seed(t, d, t.TempDir(), "Warn", msg)
-	h := start(t, dir)
-	h.a.select_(h.thread("Warn"))
-	h.until("its transcript", func() bool { return h.tt.HasText("One test fails.") })
+// Nothing a message holds moves the window to the app's own pages.
+func TestAUserMessageStaysOffTheAppsPages(t *testing.T) {
+	const msg = "See [the settings](/settings)."
+	h := sent(t, msg)
+	h.click(msg)
 	h.tt.Advance(time.Second)
-	if !h.tt.HasText("[ERROR]: timeout") {
-		t.Errorf("no definition's line; texts %q", h.tt.Texts())
+	if p := h.a.router.Path(); p != "/" {
+		t.Errorf("at %q after clicking the message", p)
 	}
 }
 
@@ -107,38 +101,5 @@ func TestUserMarkdownIsKeptForSoMany(t *testing.T) {
 	}
 	if n := len(a.userMDs); n > userMDsKept {
 		t.Errorf("%d messages kept, want at most %d", n, userMDsKept)
-	}
-}
-
-// Backslashed brackets in a message are text, not math.
-func TestAUserMessageHasNoMath(t *testing.T) {
-	const msg = "It matches \\[a-z\\]+"
-	dir := tempDir(t)
-	d := engine(t, daemon.Config{Dir: dir}, fake.New(checks))
-	seed(t, d, t.TempDir(), "Math", msg)
-	h := start(t, dir)
-	h.a.select_(h.thread("Math"))
-	h.until("its transcript", func() bool { return h.tt.HasText("One test fails.") })
-	h.tt.Advance(time.Second)
-	if want := "It matches [a-z]+"; !h.tt.HasText(want) {
-		t.Errorf("no %q; texts %q", want, h.tt.Texts())
-	}
-}
-
-// A link in a message to a path, as the app's own pages have, goes
-// nowhere: the user's text doesn't move the window.
-func TestAUserMessagesLinkStaysOffTheAppsPages(t *testing.T) {
-	const msg = "See [the settings](/settings)."
-	dir := tempDir(t)
-	d := engine(t, daemon.Config{Dir: dir}, fake.New(checks))
-	seed(t, d, t.TempDir(), "Links", msg)
-	h := start(t, dir)
-	h.a.select_(h.thread("Links"))
-	h.until("its transcript", func() bool { return h.tt.HasText("One test fails.") })
-	h.tt.Advance(time.Second)
-	h.click("the settings")
-	h.tt.Advance(time.Second)
-	if p := h.a.router.Path(); p != "/" {
-		t.Errorf("at %q after clicking the message's link", p)
 	}
 }
