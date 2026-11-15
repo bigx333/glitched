@@ -62,6 +62,8 @@ func TestAUserMessageShowsAsTyped(t *testing.T) {
 		"#",
 		"See [the settings](/settings) or https://example.com",
 		"a\\\nb",
+		"```",
+		"text\n~~~~",
 	}
 	h := sent(t, typed...)
 	texts := h.tt.Texts()
