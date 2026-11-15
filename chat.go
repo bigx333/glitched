@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
+	"github.com/egoist/mygo/ui/markdown/parser"
 
 	"glitched/internal/api"
 	"glitched/internal/client"
@@ -351,42 +352,52 @@ func (a *app) emptyState(c *ui.Context) {
 }
 
 // userMarkdown is a message the user typed as Markdown that keeps its
-// lines: each line break outside a fenced code block, which Markdown
-// reads as a space, is made a hard break.
+// lines: each line break within a paragraph, which Markdown reads as a
+// space, is made a hard break. Code, quotes' markers and the rest are as
+// typed. It is "" when the message holds no blocks, as one that is only
+// a link's definition, which shows as nothing.
 func userMarkdown(text string) string {
-	lines := strings.Split(text, "\n")
-	var fence string // the open fence's marker, as "```"
-	for i, l := range lines {
-		t := strings.TrimLeft(l, " ")
-		if len(l)-len(t) <= 3 {
-			if m := fenceMarker(t); m != "" && (fence == "" || strings.HasPrefix(m, fence) && strings.TrimSpace(t[len(m):]) == "") {
-				if fence == "" {
-					fence = m
-				} else {
-					fence = ""
-				}
-				continue
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	d := parser.New(parser.GFM)
+	d.Set(text)
+	if d.Len() <= 1 {
+		return ""
+	}
+	var b strings.Builder
+	at := 0
+	for i := 1; i < d.Len(); i++ {
+		k := d.Block(i)
+		if k.Kind != parser.Paragraph {
+			continue
+		}
+		for j := k.Start; j < k.End; j++ {
+			if text[j] == '\n' && j < k.End-1 {
+				b.WriteString(text[at:j])
+				b.WriteString("  ")
+				at = j
 			}
 		}
-		if fence == "" && i < len(lines)-1 && strings.TrimSpace(l) != "" && strings.TrimSpace(lines[i+1]) != "" {
-			lines[i] = l + "  "
-		}
 	}
-	return strings.Join(lines, "\n")
+	b.WriteString(text[at:])
+	return b.String()
 }
 
-// fenceMarker is the run of backticks or tildes, three or more, that
-// line starts with, or "".
-func fenceMarker(line string) string {
-	if line == "" || line[0] != '`' && line[0] != '~' {
-		return ""
+// userMarkdown is userMarkdown(text) for the message keyed key, made
+// again only when its text changes.
+func (a *app) userMarkdown(key, text string) string {
+	if m, ok := a.userMDs[key]; ok && m.text == text {
+		return m.md
 	}
-	n := len(line) - len(strings.TrimLeft(line, line[:1]))
-	if n < 3 {
-		return ""
+	if a.userMDs == nil {
+		a.userMDs = map[string]userMD{}
 	}
-	return line[:n]
+	m := userMD{text, userMarkdown(text)}
+	a.userMDs[key] = m
+	return m.md
 }
+
+// userMD is a message's text and the Markdown it shows as.
+type userMD struct{ text, md string }
 
 // bubbleInset is how far a message's text is inside its bubble's edges,
 // across: its padding and its border.
@@ -405,7 +416,11 @@ func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
 				// rather than scrolling within the bubble.
 				ui.Column(c).Padding(10, bubbleInset-1).Radius(16, 16, 4, 16).
 					Background(palette.surface).Border(1, palette.border).Children(func() {
-					markdown.View(c, userMarkdown(e.text), &a.userMD)
+					if md := a.userMarkdown(key, e.text); md != "" {
+						markdown.View(c, md, &a.userMD)
+					} else {
+						ui.Text(c, e.text).Selectable().LineHeight(1.5)
+					}
 				})
 				if e.note != "" {
 					a.messageNote(c, t, e)
