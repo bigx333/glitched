@@ -306,7 +306,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	}
 	svc := d.startPlugins(cfg.Dir, cfg.PluginRun)
 	d.undo = append(d.undo, func() error { svc.Close(); return nil })
-	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}}}
+	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: newCommandLists(ctx, cfg.Providers)}}
 	g := &grants{dir: cfg.Dir, base: ctx}
 	tailnetServer := func(tn transport.Transport) *transport.Server {
 		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Authorize: g.authorize}
