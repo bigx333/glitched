@@ -42,6 +42,15 @@ func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.R
 				return nil, nil, err
 			}
 		}
+		if b, ok := c.Body.(api.ThreadConfigure); ok && !t.Parent.IsZero() {
+			parent, err := loadThread(ctx, q, t.Parent)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := engine.CheckConfigure(parent, b); err != nil {
+				return nil, nil, err
+			}
+		}
 		return engine.Decide(t, c, now)
 	}}
 	at, err := s.commit(ctx, &receipt{c.ID, hash[:]}, 0, func(q querier) ([]step, error) {
@@ -55,7 +64,7 @@ func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.R
 		var steps []step
 		for _, id := range below {
 			steps = append(steps, step{id, func(_ querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
-				return engine.Decide(t, api.Command{ID: c.ID, Target: id, Body: c.Body}, now)
+				return engine.Decide(t, api.Command{ID: c.ID, Target: id, Body: engine.Below(c.Body, t)}, now)
 			}})
 		}
 		return append(steps, top), nil
