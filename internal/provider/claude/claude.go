@@ -40,7 +40,10 @@ type Adapter struct {
 	MCPConfig string
 }
 
-var _ provider.Adapter = (*Adapter)(nil)
+var (
+	_ provider.Adapter   = (*Adapter)(nil)
+	_ provider.Commander = (*Adapter)(nil)
+)
 
 func (a *Adapter) Describe(ctx context.Context) (provider.Info, error) {
 	bin, err := a.binary()
