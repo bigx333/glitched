@@ -37,7 +37,7 @@ func quoteReady(t *testing.T) (*harness, string) {
 }
 
 // barShown is whether the selection's bar shows.
-func barShown(h *harness) bool { return h.tt.HasText("Explain") }
+func barShown(h *harness) bool { return h.a.quote.open && h.tt.HasText("Ask about the selection") }
 
 // The bar waits for the selection to rest, then shows by it; Quote puts the
 // selection on the composer, which sends it as a blockquote before the
@@ -102,6 +102,7 @@ func TestSelectionBarExplains(t *testing.T) {
 func TestSelectionBarAsks(t *testing.T) {
 	h, sel := quoteReady(t)
 	h.a.draft = "unrelated draft"
+	h.a.attachments = []attachment{{name: "Pasted text", text: "kept"}}
 	h.tt.Advance(quoteWait + 50*time.Millisecond)
 	if err := h.tt.Click("Ask about the selection"); err != nil {
 		t.Fatalf("%v: %q", err, h.tt.Texts())
@@ -115,7 +116,7 @@ func TestSelectionBarAsks(t *testing.T) {
 	want := "> " + sel + "\n\nwhat does it mean?"
 	h.until("the question sent", func() bool { return slices.Contains(sentTexts(h), want) })
 	h.tt.Advance(time.Second)
-	if h.a.draft != "unrelated draft" || len(h.a.attachments) != 0 {
+	if h.a.draft != "unrelated draft" || len(h.a.attachments) != 1 || h.a.attachments[0].text != "kept" {
 		t.Errorf("after asking: draft %q, attachments %+v; want the draft untouched", h.a.draft, h.a.attachments)
 	}
 	if barShown(h) {
@@ -155,7 +156,49 @@ func TestSelectedText(t *testing.T) {
 		{Text: "x", Start: 3, End: 9}, // out of range: nothing
 		{Text: "second line", Start: 0, End: 6},
 	}
-	if got, want := selectedText(parts), "éllo\nsecond"; got != want {
+	if got, want := selectedText(parts), "éllo\n\nsecond"; got != want {
 		t.Errorf("selectedText = %q, want %q", got, want)
+	}
+}
+
+// Quoted, cleared and selected again, the same word brings the bar back,
+// though nothing else was selected between.
+func TestSelectionBarReturnsAfterQuote(t *testing.T) {
+	h, _ := quoteReady(t)
+	r, _ := h.tt.Find("Looking at the code.")
+	word := func() { // a double-click on "Looking"
+		h.tt.ClickAt(r.X+10, r.Y+r.H/2)
+		h.tt.ClickAt(r.X+10, r.Y+r.H/2)
+		h.tt.Advance(quoteWait + 50*time.Millisecond)
+	}
+	word()
+	if !barShown(h) || h.a.quote.text != "Looking" {
+		t.Fatalf("double-clicked, bar %v on %q", barShown(h), h.a.quote.text)
+	}
+	if err := h.tt.Click("Quote"); err != nil {
+		t.Fatal(err)
+	}
+	h.tt.Advance(time.Second)
+	// A click at the reply's end clears the selection.
+	h.tt.ClickAt(r.X+r.W-2, r.Y+r.H/2)
+	h.tt.Advance(time.Second)
+	word()
+	if !barShown(h) {
+		t.Fatalf("the word selected again after a quote, no bar: %+v", h.a.quote)
+	}
+}
+
+// Shown unasked, the bar leaves the cards' keys alone: it covers the
+// timeline only while pointed at or typed in.
+func TestSelectionBarCoversOnlyInUse(t *testing.T) {
+	h, _ := quoteReady(t)
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
+	h.tt.Move(1, 1)
+	h.tt.Advance(time.Second)
+	if !barShown(h) {
+		t.Fatal("no bar")
+	}
+	if h.a.covered {
+		t.Error("the bar, untouched, covers the timeline, holding ⌘⏎ from the cards")
 	}
 }
