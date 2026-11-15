@@ -1065,7 +1065,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 					if ahead {
 						key = "draft-ahead"
 					}
-					area := ui.TextArea(c.Key(key), &a.draft).Placeholder(placeholder).
+					area := ui.TextArea(c.Key(draftKeyOf{key, a.draftGen}), &a.draft).Placeholder(placeholder).
 						Lines(2, 10).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).
 						Padding(14, 16, 4).OnPaste(a.onPaste).OnTextKey(a.draftKey(t)).Opacity(in)
 					if !ahead {
@@ -1253,7 +1253,7 @@ func (a *app) composerControls(c *ui.Context) {
 // draft. A snoozed thread comes back to the inbox with it, as the engine
 // brings a settled one back with any message.
 func (a *app) send(t thread) {
-	if !a.sendText(t, a.message(t)) {
+	if !a.sendText(t, a.message(t), a.draft) {
 		return
 	}
 	a.draft = ""
@@ -1261,17 +1261,14 @@ func (a *app) send(t thread) {
 }
 
 // sendText sends text in the thread, creating it first when it's the draft,
-// and reports whether it went.
-func (a *app) sendText(t thread, text string) bool {
+// titled from about, or text without it, and reports whether it went.
+func (a *app) sendText(t thread, text, about string) bool {
 	if text == "" || t.env == nil {
 		return false
 	}
 	id := t.id()
 	if id.IsZero() {
-		title := text
-		if r := []rune(title); len(r) > 48 {
-			title = string(r[:48]) + "…"
-		}
+		title := threadTitle(text, about)
 		if id = a.backend.Create(t.env, t.View.Workspace, title, a.modelRef(), accessOf[a.access]); id.IsZero() {
 			return false
 		}
@@ -1416,4 +1413,24 @@ func blink(t float32) float32 {
 		return 1
 	}
 	return 0
+}
+
+// draftKeyOf keys the composer's text area: which of its two, and how many
+// times the draft was set from outside it (attachQuote).
+type draftKeyOf struct {
+	name string
+	gen  int
+}
+
+// threadTitle is the title of a thread started with text: about, as the
+// draft is without the quotes before it, when there is one.
+func threadTitle(text, about string) string {
+	title := strings.TrimSpace(about)
+	if title == "" {
+		title = text
+	}
+	if r := []rune(title); len(r) > 48 {
+		title = string(r[:48]) + "…"
+	}
+	return title
 }

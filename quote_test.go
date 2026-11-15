@@ -201,4 +201,118 @@ func TestSelectionBarCoversOnlyInUse(t *testing.T) {
 	if h.a.covered {
 		t.Error("the bar, untouched, covers the timeline, holding ⌘⏎ from the cards")
 	}
+	if err := h.tt.Click("Ask about the selection"); err != nil {
+		t.Fatal(err)
+	}
+	h.tt.Advance(time.Second)
+	if !h.a.covered || h.a.blind {
+		t.Errorf("typed in, the bar: covered %v, blind %v; want it to cover only its place", h.a.covered, h.a.blind)
+	}
+}
+
+// doubleClick selects the word of s at its start.
+func doubleClick(h *harness, s string) ui.Rect {
+	r, _ := h.tt.Find(s)
+	h.tt.ClickAt(r.X+10, r.Y+r.H/2)
+	h.tt.ClickAt(r.X+10, r.Y+r.H/2)
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
+	return r
+}
+
+// Selected just over the composer, the bar goes above the selection,
+// clear of both.
+func TestSelectionBarAboveNearComposer(t *testing.T) {
+	h, _ := quoteReady(t)
+	h.tt.Advance(time.Second)
+	r := doubleClick(h, "Done.")
+	if !barShown(h) || h.a.quote.text != "Done" {
+		t.Fatalf("double-clicked Done., bar %v on %q", barShown(h), h.a.quote.text)
+	}
+	b, _ := h.tt.Find("Explain")
+	if b.Y+b.H > r.Y {
+		t.Errorf("the bar's Explain (%v to %v) reaches the selected line at %v; want it above", b.Y, b.Y+b.H, r.Y)
+	}
+}
+
+// ⌘⏎ in the bar's box sends the question, not the composer's draft.
+func TestSelectionBarCmdEnter(t *testing.T) {
+	h, sel := quoteReady(t)
+	h.a.draft = "composer draft"
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
+	if err := h.tt.Click("Ask about the selection"); err != nil {
+		t.Fatal(err)
+	}
+	h.tt.Type("why?")
+	h.tt.Key(ui.Cmd, ui.KeyEnter)
+	want := "> " + sel + "\n\nwhy?"
+	h.until("the question sent", func() bool { return slices.Contains(sentTexts(h), want) })
+	if slices.Contains(sentTexts(h), "composer draft") || h.a.draft != "composer draft" {
+		t.Errorf("⌘⏎ in the box: sent %q, draft %q; want only the question sent", sentTexts(h), h.a.draft)
+	}
+}
+
+// After Explain, what's typed goes after the ask.
+func TestExplainLeavesCaretAtEnd(t *testing.T) {
+	h, _ := quoteReady(t)
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
+	if err := h.tt.Click("Explain"); err != nil {
+		t.Fatal(err)
+	}
+	h.tt.Advance(time.Second)
+	h.tt.Type(" More")
+	h.tt.Frame()
+	if want := explainAsk + " More"; h.a.draft != want {
+		t.Errorf("typed after Explain: draft %q, want %q", h.a.draft, want)
+	}
+}
+
+// With the pointer on the bar, a selection changed from the keyboard is
+// what Quote quotes.
+func TestSelectionBarFollowsNewSelection(t *testing.T) {
+	h, _ := quoteReady(t)
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
+	b, _ := h.tt.Find("Quote")
+	h.tt.Move(b.X+b.W/2, b.Y+b.H/2)
+	h.tt.Key(ui.Cmd, ui.KeyA)
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
+	if err := h.tt.Click("Quote"); err != nil {
+		t.Fatal(err)
+	}
+	h.tt.Frame()
+	if i := slices.IndexFunc(h.a.attachments, func(at attachment) bool { return at.quote }); i < 0 || h.a.attachments[i].text != "Looking at the code." {
+		t.Errorf("attachments %+v; want a quote of the whole reply", h.a.attachments)
+	}
+}
+
+func TestThreadTitleFromDraft(t *testing.T) {
+	if got := threadTitle("> a quote\n\nFix the flicker", " Fix the flicker "); got != "Fix the flicker" {
+		t.Errorf("title %q, want the draft's", got)
+	}
+	if got := threadTitle("> only a quote", ""); got != "> only a quote" {
+		t.Errorf("title %q, want the text without a draft", got)
+	}
+}
+
+// Scrolled past the pane's top or under the composer, the bar waits
+// unseen rather than riding over the header or the composer.
+func TestSelectionBarStaysInTimeline(t *testing.T) {
+	a, tt, th := longThread(t, nil)
+	h := &harness{t: t, a: a, tt: tt}
+	l := a.listFor(th.id())
+	l.ScrollTo(0, ui.Start)
+	tt.Advance(time.Second)
+	doubleClick(h, "Looking at the code.")
+	if !barShown(h) {
+		t.Fatalf("no bar on the first reply: %+v", a.quote)
+	}
+	mid := a.paneAt.X + a.paneAt.W/2
+	for _, dy := range []float32{40, -40} {
+		for range 30 {
+			tt.Scroll(mid, a.paneAt.Y+a.paneAt.H/2, 0, dy)
+			tt.Advance(100 * time.Millisecond)
+			if r, ok := tt.Find("Ask about the selection"); ok && (r.Y < a.paneAt.Y || r.Y+r.H > a.composerAt.Y) {
+				t.Fatalf("scrolled by %v, the bar shows at y %v to %v, past the timeline (%v to %v)", dy, r.Y, r.Y+r.H, a.paneAt.Y, a.composerAt.Y)
+			}
+		}
+	}
 }
