@@ -330,7 +330,7 @@ func (a *app) effortSlider(c *ui.Context) {
 			if !a.effortHeld {
 				a.effortHeld, a.effortPressAt, a.effortLock = true, at, -1
 			}
-			a.effortLastAt = at
+			a.effortPressed, a.effortLastAt = true, at
 			if nearest := float32(int(at + 0.5)); abs32(at-nearest) <= snapZone {
 				lock(int(nearest))
 				at = nearest

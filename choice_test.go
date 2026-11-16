@@ -234,3 +234,83 @@ func TestAnAccessRefusedIsSentAgainWhenPickedAgain(t *testing.T) {
 	}
 	h.until("the child at Approve for me", func() bool { return child.View.Access == api.AccessAutoEdits && len(child.Pending) == 0 })
 }
+
+// A picker that closes under the held thumb, as Escape and ⌘, close it,
+// lets the thumb go: the default it chose outlives a restart, and so does
+// the next one chosen.
+func TestADefaultChosenByAThumbItsPickerClosedOnIsKept(t *testing.T) {
+	for name, key := range map[string]struct {
+		mods ui.Modifiers
+		key  ui.Key
+	}{
+		"Escape":   {0, ui.KeyEscape},
+		"Settings": {ui.Cmd, ui.KeyComma},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			a := newApp(dir, nil, func(func()) {})
+			tt := ui.NewTester(a.view, 1320, 860)
+			if err := tt.Click("Model"); err != nil {
+				t.Fatal(err)
+			}
+			at, y := effortAt(t, tt)
+			tt.Press(at(2), y)
+			tt.Move(at(0), y)
+			tt.Key(key.mods, key.key)
+			tt.Frame()
+			if _, ok := tt.Find("Faster"); ok {
+				t.Fatalf("the picker is still open: %q", tt.Texts())
+			}
+			tt.Release(at(0), y)
+			tt.Advance(time.Second)
+			if got := newApp(dir, nil, func(func()) {}).effort; a.effort != "Low" || got != "Low" {
+				t.Errorf("the thumb chose %q; after a restart the default is %q, want Low", a.effort, got)
+			}
+			a.router.Push("/")
+			tt.Advance(time.Second)
+			for _, click := range []string{"Access", accessAsk} {
+				if err := tt.Click(click); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tt.Advance(time.Second)
+			if got, want := newApp(dir, nil, func(func()) {}).choice(), a.choice(); got != want || want.Access != accessAsk {
+				t.Errorf("after a restart the default is %+v, want %+v as chosen since", got, want)
+			}
+		})
+	}
+}
+
+// A press on the effort's track that its picker closes under chooses
+// nothing when it's let go: not for the draft, and not, as a click where
+// it was pressed, for the thread whose picker opens next.
+func TestAPressItsPickerClosedOnChoosesNoEffort(t *testing.T) {
+	h := start(t, tempDir(t))
+	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
+	h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk)
+	th := h.thread("Mine")
+	h.until("the thread's view", func() bool { return th.View.Revision > 0 && len(th.Pending) == 0 })
+	h.tt.Frame()
+	h.click("Model")
+	at, y := effortAt(t, h.tt)
+	h.tt.Press(at(0.3), y) // between Low and Medium, in the draft
+	h.tt.Frame()
+	h.tt.Key(0, ui.KeyEscape)
+	h.tt.Frame()
+	h.tt.Release(at(0.3), y)
+	h.tt.Advance(time.Second)
+	if h.a.effort != "High" {
+		t.Errorf("the draft's effort is %q after a press its picker closed on, want High", h.a.effort)
+	}
+	h.a.select_(th)
+	h.tt.Advance(time.Second)
+	h.click("Model") // only opens the thread's picker
+	h.tt.Advance(time.Second)
+	if len(th.Pending) != 0 {
+		t.Fatalf("opening the thread's picker sent %+v", th.Pending)
+	}
+	h.settle(func() bool { return false })
+	if got := th.View.Model.Effort; got != "high" {
+		t.Errorf("opening the thread's picker changed its effort to %q, want high", got)
+	}
+}
