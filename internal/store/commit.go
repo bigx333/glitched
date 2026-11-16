@@ -47,7 +47,7 @@ func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.R
 			if err != nil {
 				return nil, nil, err
 			}
-			if err := engine.CheckConfigure(parent, b); err != nil {
+			if err := engine.CheckConfigure(parent, t, b); err != nil {
 				return nil, nil, err
 			}
 		}

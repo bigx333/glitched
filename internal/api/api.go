@@ -116,14 +116,38 @@ type ThreadRename struct {
 	Title string `json:"title"`
 }
 
-// ThreadConfigure sets the model and the access the thread's next turn
-// runs at: a turn already running keeps its own. The provider stays the
-// thread's, as its session is that provider's. A child's access can't be
-// wider than its parent's, and a narrower access narrows the threads under
-// it to it too.
+// ThreadConfigure changes the model and the access the thread's next turn
+// runs at: a turn already running keeps its own. It gives only what its
+// sender chose: the model's name, its effort, fast mode, the access. What
+// it leaves out stays as the engine has it when it decides, so a configure
+// sent again, or chosen on a view the thread has moved past, undoes
+// nothing another client changed since. It names no provider: that stays
+// the thread's, as its session is that provider's. A child's access can't
+// be wider than its parent's, and a narrower access narrows the threads
+// under it to it too.
 type ThreadConfigure struct {
-	Model  ModelRef `json:"model"`
-	Access Access   `json:"access"`
+	Model  *string `json:"model,omitempty"`
+	Effort *string `json:"effort,omitempty"`
+	Fast   *bool   `json:"fast,omitempty"`
+	Access *Access `json:"access,omitempty"`
+}
+
+// Onto is the model and access c makes of m and a: what it gives in
+// place of theirs, and the rest as they are.
+func (c ThreadConfigure) Onto(m ModelRef, a Access) (ModelRef, Access) {
+	if c.Model != nil {
+		m.Model = *c.Model
+	}
+	if c.Effort != nil {
+		m.Effort = *c.Effort
+	}
+	if c.Fast != nil {
+		m.Fast = *c.Fast
+	}
+	if c.Access != nil {
+		a = *c.Access
+	}
+	return m, a
 }
 
 func (ThreadCreate) intentType() string    { return "thread.create" }

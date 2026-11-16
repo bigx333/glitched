@@ -68,7 +68,8 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 
 // TakesTree is whether b on a thread applies to every thread under it
 // too, in the same commit, as the store commits it: settling a thread
-// settles its tree, and deleting it deletes its tree.
+// settles its tree, deleting it deletes its tree, and a configure that
+// gives an access narrows its tree to it.
 func TakesTree(b api.Intent) bool {
 	switch b := b.(type) {
 	case api.ThreadDelete:
@@ -76,25 +77,30 @@ func TakesTree(b api.Intent) bool {
 	case api.InboxSet:
 		return b.Disposition.State == api.Settled
 	case api.ThreadConfigure:
-		return true
+		return b.Access != nil
 	}
 	return false
 }
 
 // Below is what b on a thread decides on t, a thread under it, when b
-// takes the tree: a configure narrows t's access to b's, and leaves its
-// model as it is.
+// takes the tree: a configure narrows t's access to the one it gives, and
+// leaves t's model as it is.
 func Below(b api.Intent, t Thread) api.Intent {
 	if c, ok := b.(api.ThreadConfigure); ok {
-		return api.ThreadConfigure{Model: t.Model, Access: min(t.Access, c.Access)}
+		var below api.ThreadConfigure
+		if c.Access != nil {
+			below.Access = new(min(t.Access, *c.Access))
+		}
+		return below
 	}
 	return b
 }
 
-// CheckConfigure checks c on a child thread against parent, the thread
-// it's under: its access can't be wider than its parent's.
-func CheckConfigure(parent Thread, c api.ThreadConfigure) error {
-	if parent.Exists() && !parent.Deleted && c.Access > parent.Access {
+// CheckConfigure checks c on t, a child thread, against parent, the
+// thread it's under: the access c leaves t at can't be wider than its
+// parent's.
+func CheckConfigure(parent, t Thread, c api.ThreadConfigure) error {
+	if _, access := c.Onto(t.Model, t.Access); parent.Exists() && !parent.Deleted && access > parent.Access {
 		return rejected("a child thread's access can't be wider than its parent's")
 	}
 	return nil
@@ -523,20 +529,21 @@ func (d *decision) rename(b api.ThreadRename) error {
 	return d.emit(api.ThreadRenamed{Title: title})
 }
 
+// configure sets what b gives of the thread's model and access, on the
+// ones the thread has now: what b leaves out stays, whatever its sender
+// last saw of it. The provider is none of b's to give.
 func (d *decision) configure(b api.ThreadConfigure) error {
-	if b.Access > ceiling() {
+	m, access := b.Onto(d.t.Model, d.t.Access)
+	if access > ceiling() {
 		return rejected("unknown access level")
 	}
-	if b.Model.Model == "" && d.t.Model.Model != "" {
+	if m.Model == "" && d.t.Model.Model != "" {
 		return rejected("a thread needs a model")
 	}
-	if b.Model.Provider != d.t.Model.Provider {
-		return rejected("a thread keeps its provider")
-	}
-	if b.Model == d.t.Model && b.Access == d.t.Access {
+	if m == d.t.Model && access == d.t.Access {
 		return nil
 	}
-	return d.emit(api.ThreadConfigured{Model: b.Model, Access: b.Access})
+	return d.emit(api.ThreadConfigured{Model: m, Access: access})
 }
 
 func (d *decision) observe(o Observation) error {

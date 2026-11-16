@@ -91,7 +91,7 @@ func TestAReceiptCarriesItsThreadsRevision(t *testing.T) {
 		return r
 	}
 	before := revision(thread)
-	full := api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadConfigure{Model: sonnet, Access: api.AccessFull}}
+	full := api.Command{ID: api.NewID(), Target: thread, Body: whole(sonnet, api.AccessFull)}
 	took := submit(full)
 	if took.Revision != revision(thread) || took.Revision <= before {
 		t.Fatalf("the configure's receipt says revision %d; the thread went from %d to %d", took.Revision, before, revision(thread))
@@ -102,7 +102,7 @@ func TestAReceiptCarriesItsThreadsRevision(t *testing.T) {
 		t.Errorf("a configure that changes nothing says revision %d, want the thread's, %d", same.Revision, took.Revision)
 	}
 	// One that takes the tree says its own thread's.
-	if narrowed := submit(api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadConfigure{Model: sonnet, Access: api.AccessAsk}}); narrowed.Revision != revision(thread) {
+	if narrowed := submit(api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadConfigure{Access: new(api.AccessAsk)}}); narrowed.Revision != revision(thread) {
 		t.Errorf("a configure that narrows the tree says revision %d, want its thread's, %d", narrowed.Revision, revision(thread))
 	}
 	if again := submit(full); again != took {

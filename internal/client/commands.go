@@ -16,12 +16,12 @@ import (
 // took until its request stops waiting, so the request never shows
 // waiting again in between. A configure the engine took stays until the
 // thread's view is at the revision its receipt gives, so the thread shows
-// its model and access, and the next configure builds on them, from when
-// they're chosen. Err is why the submit failed. A failed row stays until
-// Retry sends the command again under the same ID, or Dismiss drops it,
-// or, for an answer, its request stops waiting, or, for a configure,
-// another is chosen: one that fails with another chosen after it leaves
-// no row.
+// what was chosen of its model and access from when it's chosen. Err is
+// why the submit failed. A failed row stays until Retry sends the command
+// again under the same ID, or Dismiss drops it, or, for an answer, its
+// request stops waiting, or, for a configure, another is chosen of
+// something it gave: one that fails with such a one chosen after it
+// leaves no row.
 type Pending struct {
 	Command api.ID
 	Body    api.Intent
@@ -113,18 +113,28 @@ func (m *Manager) Rename(e *Env, thread api.ID, title string) api.ID {
 	return m.submit(e, thread, api.ThreadRename{Title: title})
 }
 
-// ConfigureThread sets the model and access the thread's next turn runs at.
-// It drops the thread's failed configure, whose Retry would undo this one.
-func (m *Manager) ConfigureThread(e *Env, thread api.ID, model api.ModelRef, access api.Access) api.ID {
+// ConfigureThread changes the model and access the thread's next turn runs
+// at: what c gives of them, which is what was chosen, the rest staying as
+// the engine has it. It drops the thread's failed configures of anything
+// c gives, whose Retry would undo this one.
+func (m *Manager) ConfigureThread(e *Env, thread api.ID, c api.ThreadConfigure) api.ID {
 	if th := e.Threads[thread]; th != nil {
-		th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool { return configures(p) && p.Err != nil })
+		th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool { return p.Err != nil && overlaps(p, c) })
 	}
-	return m.submit(e, thread, api.ThreadConfigure{Model: model, Access: access})
+	return m.submit(e, thread, c)
 }
 
 func configures(p Pending) bool {
 	_, ok := p.Body.(api.ThreadConfigure)
 	return ok
+}
+
+// overlaps is whether p is a configure that gives anything c gives: of
+// the two, the one sent last undoes the other's choice of it.
+func overlaps(p Pending, c api.ThreadConfigure) bool {
+	b, ok := p.Body.(api.ThreadConfigure)
+	return ok && (b.Model != nil && c.Model != nil || b.Effort != nil && c.Effort != nil ||
+		b.Fast != nil && c.Fast != nil || b.Access != nil && c.Access != nil)
 }
 
 // Delete deletes the thread. The engine ends its run with it.
@@ -248,7 +258,7 @@ func (m *Manager) submitted(e *Env, cmd api.Command, receipt api.Receipt, err er
 	}
 	_, message := cmd.Body.(api.MessageDispatch)
 	r, answer := cmd.Body.(api.RequestRespond)
-	configure := configures(th.Pending[i])
+	c, configure := cmd.Body.(api.ThreadConfigure)
 	taken := err == nil || errors.Is(err, api.ErrAlreadyAnswered)
 	switch {
 	case err == nil && message && th.open && th.Transcript.message(cmd.ID) == nil:
@@ -257,14 +267,16 @@ func (m *Manager) submitted(e *Env, cmd api.Command, receipt api.Receipt, err er
 		th.Pending[i].sent = true
 	case err == nil && configure && receipt.Committed.Log == e.log && receipt.Revision > th.View.Revision:
 		// The receipt came before the view that has the configure: until
-		// that view, the engine's model and access for the thread are the
-		// configure's, which the thread shows unless one chosen after is
-		// on its way. A receipt of another log than the views held, or
-		// one stored without its revision, names no view to wait for.
+		// that view, the thread shows what the configure gave, as the
+		// engine took it, unless one chosen after gives the same. A
+		// receipt of another log than the views held, or one stored
+		// without its revision, names no view to wait for.
 		th.Pending[i].sent, th.Pending[i].log, th.Pending[i].at = true, e.log, receipt.Revision
-	case taken, configure && slices.ContainsFunc(th.Pending[i+1:], configures):
-		// A configure that fails with another chosen after it leaves no
-		// row: its Retry would undo that one.
+	case taken, configure && slices.ContainsFunc(th.Pending[i+1:], func(p Pending) bool { return overlaps(p, c) }):
+		// A configure that fails with another chosen after it, of
+		// something it gave, leaves no row: its Retry would undo that
+		// one. With none such, its row stays: what it chose went with no
+		// other.
 		th.Pending = slices.Delete(th.Pending, i, i+1)
 	default:
 		th.Pending[i].Err = err
