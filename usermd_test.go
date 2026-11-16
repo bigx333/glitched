@@ -116,6 +116,9 @@ func TestAUserMessageKeepsBlankLinesAroundCode(t *testing.T) {
 	if tight, loose := gap("tight", "code tight"), gap("loose", "code loose"); loose <= tight {
 		t.Errorf("the code is %v below three blank lines, %v below none", loose, tight)
 	}
+	if slices.ContainsFunc(h.tt.Texts(), func(s string) bool { return strings.Contains(s, "\\") }) {
+		t.Errorf("a backslash shows that wasn't typed; texts %q", h.tt.Texts())
+	}
 }
 
 // In a message with code, line endings of other systems end lines as
@@ -130,25 +133,26 @@ func TestAUserMessageReadsAnyLineEnding(t *testing.T) {
 	}
 }
 
-// Nothing a message holds moves the window to the app's own pages.
+// Nothing a message with code holds moves the window to the app's own
+// pages.
 func TestAUserMessageStaysOffTheAppsPages(t *testing.T) {
-	const msg = "See [the settings](/settings)."
+	const msg = "See [the settings](/settings) `now`."
 	h := sent(t, msg)
-	h.click(msg)
+	h.click("See [the settings](/settings) now.")
 	h.tt.Advance(time.Second)
 	if p := h.a.router.Path(); p != "/" {
 		t.Errorf("at %q after clicking the message", p)
 	}
 }
 
-// An address in a message opens nothing.
+// An address in a message with code opens nothing.
 func TestAUserMessagesAddressOpensNothing(t *testing.T) {
-	const msg = "Ping ops@example.com about it"
+	const msg = "Ping ops@example.com about `it`"
 	h := sent(t, msg)
 	if r, ok := h.tt.Find("ops@example.com"); ok {
 		h.tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
 	}
-	h.click(msg)
+	h.click("Ping ops@example.com about it")
 	if o := h.tt.OpenedURLs(); len(o) > 0 {
 		t.Errorf("opened %q", o)
 	}
