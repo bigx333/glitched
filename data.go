@@ -423,9 +423,36 @@ func failedTo(p client.Pending) string {
 	case api.ThreadDelete:
 		return "delete the thread"
 	case api.ThreadConfigure:
-		return "change the thread's model and access"
+		return "change the thread's " + given(b)
 	}
 	return ""
+}
+
+// given names what a configure gives, the choice it was: one that failed
+// has a row of its own, beside those of the thread's other choices that
+// failed, and its Retry sets what it names and no more.
+func given(c api.ThreadConfigure) string {
+	var names []string
+	if c.Model != nil {
+		names = append(names, "model")
+	}
+	if c.Effort != nil {
+		names = append(names, "effort")
+	}
+	if c.Fast != nil {
+		names = append(names, "fast mode")
+	}
+	if c.Access != nil {
+		names = append(names, "access")
+	}
+	switch n := len(names); n {
+	case 0:
+		return "model and access"
+	case 1:
+		return names[0]
+	default:
+		return strings.Join(names[:n-1], ", ") + " and " + names[n-1]
+	}
 }
 
 // failure says what a failed command of failedTo's tried, and why it

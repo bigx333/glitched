@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -401,5 +402,98 @@ func TestAPressItsPickerClosedOnChoosesNoEffort(t *testing.T) {
 	h.settle(func() bool { return false })
 	if got := th.View.Model.Effort; got != "high" {
 		t.Errorf("opening the thread's picker changed its effort to %q, want high", got)
+	}
+}
+
+// A thread's pickers send only what they changed. With another client's
+// narrowing not yet shown here, an effort chosen in the thread shows at
+// once and leaves the access the engine has: it doesn't put back the one
+// this window still shows.
+func TestAThreadsPickerSendsOnlyWhatItChanged(t *testing.T) {
+	ctx := context.Background()
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
+	id := api.NewID()
+	if _, err := d.Endpoint().Submit(ctx, api.Command{ID: api.NewID(), Target: id,
+		Body: api.ThreadCreate{Workspace: "/work/t3code", Title: "Mine", Model: opus, Access: api.AccessFull}}); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, dir)
+	th := h.thread("Mine")
+	h.a.select_(th)
+	h.tt.Advance(time.Second)
+	// Another client narrows the thread. Its view waits among what the
+	// manager posted, which nothing runs until the effort is chosen.
+	if _, err := d.Endpoint().Submit(ctx, api.Command{ID: api.NewID(), Target: id,
+		Body: api.ThreadConfigure{Access: new(api.AccessAsk)}}); err != nil {
+		t.Fatal(err)
+	}
+	h.click("Model")
+	h.tt.Advance(time.Second)
+	at, y := effortAt(t, h.tt)
+	h.tt.Press(at(0), y)
+	h.tt.Release(at(0), y)
+	h.tt.Advance(time.Second)
+	if th.View.Access != api.AccessFull {
+		t.Fatalf("the other client's narrowing shows already: the thread's view is at access %v", th.View.Access)
+	}
+	if got, want := threadChoice(th), (choice{Model: "Claude Opus 5.5", Effort: "Low", Access: accessFull}); got != want {
+		t.Errorf("with its effort on its way the thread shows %+v, want %+v", got, want)
+	}
+	h.until("the thread's new effort", func() bool { return th.View.Model.Effort == "low" && len(th.Pending) == 0 })
+	snap, err := d.Endpoint().Read(ctx, api.Query{Thread: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := snap.Threads[0]; v.Access != api.AccessAsk || v.Model.Effort != "low" {
+		t.Errorf("the engine has effort %q at access %v, want the effort chosen here at the other client's Ask", v.Model.Effort, v.Access)
+	}
+}
+
+// A choice that failed has a row of its own, which says what it was: with
+// the engine gone, an effort and then an access chosen leave a row each,
+// as neither's Retry undoes the other.
+func TestAFailedChoicesRowSaysWhichItWas(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: api.NewID(),
+		Body: api.ThreadCreate{Workspace: "/work/t3code", Title: "Mine", Model: opus}}); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, dir)
+	th := h.thread("Mine")
+	h.a.select_(th)
+	h.tt.Advance(time.Second)
+	d.Close()
+	h.until("the engine gone", func() bool { return h.local().Status != client.Status(client.Online{}) })
+	h.click("Model")
+	h.tt.Advance(time.Second)
+	at, y := effortAt(t, h.tt)
+	h.tt.Press(at(0), y)
+	h.tt.Release(at(0), y)
+	h.tt.Key(0, ui.KeyEscape)
+	h.tt.Advance(time.Second)
+	h.click("Access")
+	h.click(accessAuto)
+	h.tt.Advance(time.Second)
+	if len(th.Pending) != 2 || th.Pending[0].Err == nil || th.Pending[1].Err == nil {
+		t.Fatalf("the thread's pending commands are %+v, want its failed effort and its failed access", th.Pending)
+	}
+	for _, row := range []string{"Couldn't change the thread's effort: ", "Couldn't change the thread's access: "} {
+		if !h.tt.HasText(row) {
+			t.Errorf("no row says %q: the window shows %q", row, h.tt.Texts())
+		}
+	}
+	for what, c := range map[string]api.ThreadConfigure{
+		"model":                       {Model: new("Claude Sonnet 5.5")},
+		"fast mode":                   {Fast: new(true)},
+		"model and fast mode":         {Model: new("Claude Sonnet 5.5"), Fast: new(false)},
+		"model, effort and fast mode": {Model: new("Claude Sonnet 5.5"), Effort: new("low"), Fast: new(false)},
+	} {
+		if got, want := failure(client.Pending{Body: c, Err: errors.New("boom")}), "Couldn't change the thread's "+what+": boom"; got != want {
+			t.Errorf("a failed configure's row says %q, want %q", got, want)
+		}
 	}
 }

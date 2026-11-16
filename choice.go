@@ -112,13 +112,14 @@ func (a *app) saveComposer() {
 	a.savedChoice, a.triedChoice = a.choice(), a.choice()
 }
 
-// configured is the thread's model and access, as the last change sent
-// from here makes them once it lands.
+// configured is the thread's model and access, as the changes sent from
+// here make them once they land: what each gives, in place of what the
+// view has.
 func configured(t thread) (api.ModelRef, api.Access) {
 	m, acc := t.View.Model, t.View.Access
 	for _, p := range t.Pending {
 		if c, ok := p.Body.(api.ThreadConfigure); ok && p.Err == nil {
-			m, acc = c.Model, c.Access
+			m, acc = c.Onto(m, acc)
 		}
 	}
 	return m, acc
@@ -160,9 +161,11 @@ const noFamily = "-"
 
 // threadControls builds the pickers on the thread's own model and access,
 // and sends what they change to the engine, for the thread's next turn.
-// The default for a new thread stays as it was: the pickers show it again
-// in a draft. A thread keeps its provider, so the picker offers only its
-// family's models.
+// It sends only what changed: what the pickers left as it showed stays as
+// the engine has it, though another client changed it since the view this
+// window holds. The default for a new thread stays as it was: the pickers
+// show it again in a draft. A thread keeps its provider, so the picker
+// offers only its family's models.
 func (a *app) threadControls(t thread, build func()) {
 	accessAt := a.accessAt
 	defer func() {
@@ -179,8 +182,7 @@ func (a *app) threadControls(t thread, build func()) {
 	defer a.show(draft)
 	before := threadChoice(t)
 	a.show(before)
-	m, level := configured(t)
-	a.pickerLock = familyOf(m.Provider)
+	a.pickerLock = familyOf(t.View.Model.Provider)
 	family := a.pickerFamily
 	defer func() { a.pickerLock, a.pickerFamily = "", family }()
 	build()
@@ -188,17 +190,20 @@ func (a *app) threadControls(t thread, build func()) {
 	if after == before || t.env == nil {
 		return
 	}
+	var c api.ThreadConfigure
 	if after.Model != before.Model {
-		m.Model = after.Model
+		c.Model = new(after.Model)
 	}
 	if after.Effort != before.Effort {
-		m.Effort = strings.ToLower(after.Effort)
+		c.Effort = new(strings.ToLower(after.Effort))
 	}
-	m.Fast = after.Fast
+	if after.Fast != before.Fast {
+		c.Fast = new(after.Fast)
+	}
 	if after.Access != before.Access {
-		level = accessOf[after.Access]
+		c.Access = new(accessOf[after.Access])
 	}
-	a.backend.ConfigureThread(t.env, t.id(), m, level)
+	a.backend.ConfigureThread(t.env, t.id(), c)
 }
 
 // shownAccess is the access level the composer shows for t, for its card's

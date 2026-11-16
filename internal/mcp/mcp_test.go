@@ -115,10 +115,11 @@ func delegate(id int, args, meta string) string {
 
 func itoa(n int) string { b, _ := json.Marshal(n); return string(b) }
 
-// configure gives thread model and access, for its turns from the next on.
-func configure(t *testing.T, h *runtime.Host, thread api.ID, model api.ModelRef, access api.Access) {
+// configure gives thread what c holds of a model and access, for its
+// turns from the next on.
+func configure(t *testing.T, h *runtime.Host, thread api.ID, c api.ThreadConfigure) {
 	t.Helper()
-	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadConfigure{Model: model, Access: access}}); err != nil {
+	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: c}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -300,7 +301,7 @@ func TestAReusedRequestIDFindsItsTaskOrSaysToPickANewOne(t *testing.T) {
 func TestARunningTurnDelegatesAtItsOwnModelAndAccess(t *testing.T) {
 	h := engine(t)
 	o := working(t, h)
-	configure(t, h, o.Thread, api.ModelRef{Provider: "fake", Model: "fake", Effort: "high", Fast: true}, api.AccessFull)
+	configure(t, h, o.Thread, api.ThreadConfigure{Effort: new("high"), Fast: new(true), Access: new(api.AccessFull)})
 	if r := serve(t, h, o, delegate(1, `{"task":"rm -rf build"}`, ""))[1]; r.Error != nil || r.Result.IsError {
 		t.Fatalf("delegate: %+v", r)
 	}
@@ -318,7 +319,7 @@ func TestARunningTurnDelegatesAtItsOwnModelAndAccess(t *testing.T) {
 func TestAThreadNarrowedUnderItsTurnNarrowsTheTurnsNewChildren(t *testing.T) {
 	h := engine(t)
 	o := workingAt(t, h, api.AccessFull)
-	configure(t, h, o.Thread, api.ModelRef{Provider: "fake", Model: "fake"}, api.AccessAutoEdits)
+	configure(t, h, o.Thread, api.ThreadConfigure{Access: new(api.AccessAutoEdits)})
 	if r := serve(t, h, o, delegate(1, `{"task":"Check the callers"}`, ""))[1]; r.Error != nil || r.Result.IsError {
 		t.Fatalf("delegate: %+v", r)
 	}
@@ -331,9 +332,9 @@ func TestAThreadNarrowedUnderItsTurnNarrowsTheTurnsNewChildren(t *testing.T) {
 // thread was given in between.
 func TestARetriedToolUseFindsItsChildAfterAConfigure(t *testing.T) {
 	for name, c := range map[string]api.ThreadConfigure{
-		"effort":   {Model: api.ModelRef{Provider: "fake", Model: "fake", Effort: "low"}, Access: api.AccessAutoEdits},
-		"widened":  {Model: api.ModelRef{Provider: "fake", Model: "fake"}, Access: api.AccessFull},
-		"narrowed": {Model: api.ModelRef{Provider: "fake", Model: "fake"}, Access: api.AccessAsk},
+		"effort":   {Effort: new("low")},
+		"widened":  {Access: new(api.AccessFull)},
+		"narrowed": {Access: new(api.AccessAsk)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := engine(t)
@@ -343,7 +344,7 @@ func TestARetriedToolUseFindsItsChildAfterAConfigure(t *testing.T) {
 			if first.Error != nil || first.Result.IsError {
 				t.Fatalf("the first try: %+v", first)
 			}
-			configure(t, h, o.Thread, c.Model, c.Access)
+			configure(t, h, o.Thread, c)
 			again := serve(t, h, o, call)[1]
 			if again.Error != nil || again.Result.IsError || again.Result.StructuredContent.TaskID != first.Result.StructuredContent.TaskID {
 				t.Errorf("the retry gave %+v, want the first try's child %s", again.Result, first.Result.StructuredContent.TaskID)

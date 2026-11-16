@@ -2,23 +2,29 @@ package client
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"glitched/internal/api"
 )
 
-// shown is the thread's model and access as the composer shows them and
-// builds the next configure on: the view's, or those of a configure on
-// its way or taken.
-func shown(th *Thread) api.ThreadConfigure {
-	c := api.ThreadConfigure{Model: th.View.Model, Access: th.View.Access}
+// shown is the thread's model and access as the composer shows them: the
+// view's, with what each configure on its way or taken gives in their
+// place.
+func shown(th *Thread) api.ThreadConfigured {
+	c := api.ThreadConfigured{Model: th.View.Model, Access: th.View.Access}
 	for _, p := range th.Pending {
 		if b, ok := p.Body.(api.ThreadConfigure); ok && p.Err == nil {
-			c = b
+			c.Model, c.Access = b.Onto(c.Model, c.Access)
 		}
 	}
 	return c
 }
+
+// effort and access are configures of the one thing, as the pickers send.
+func effort(level string) api.ThreadConfigure { return api.ThreadConfigure{Effort: &level} }
+
+func access(level api.Access) api.ThreadConfigure { return api.ThreadConfigure{Access: &level} }
 
 // answered is whether every command sent on the thread has its answer.
 func answered(th *Thread) bool {
@@ -44,23 +50,23 @@ func settled(t *testing.T, b *bridge, g *gui, th *Thread) api.Thread {
 	g.until(t, "the answers", func() bool { return answered(th) })
 	v, _ := engineView(t, b, th.View.ID)
 	g.until(t, "the engine's last view", func() bool { return th.View.Revision == v.Revision })
-	if got, want := shown(th), (api.ThreadConfigure{Model: v.Model, Access: v.Access}); got != want || len(th.Pending) != 0 {
+	if got, want := shown(th), (api.ThreadConfigured{Model: v.Model, Access: v.Access}); got != want || len(th.Pending) != 0 {
 		t.Errorf("the thread shows %+v with %d pending, the engine has %+v", got, len(th.Pending), want)
 	}
 	return v
 }
 
-// A thread shows the model and access chosen last from when they're
-// chosen, however far their receipts run ahead of the views: the next
-// configure builds on them, not on the view held.
+// A thread shows what was chosen of its model and access from when it's
+// chosen, however far the receipts run ahead of the views: each
+// configure's own, in place of the view's.
 func TestAThreadShowsItsLastConfigureUntilTheViewHasIt(t *testing.T) {
 	b, _, m, g, e, top := treeFixture(t)
 	th := e.Threads[top]
 	low := fakeModel
 	low.Effort = "low"
-	want := api.ThreadConfigure{Model: low, Access: api.AccessFull}
-	m.ConfigureThread(e, top, low, api.AccessAsk)
-	m.ConfigureThread(e, top, low, api.AccessFull)
+	want := api.ThreadConfigured{Model: low, Access: api.AccessFull}
+	m.ConfigureThread(e, top, effort("low"))
+	m.ConfigureThread(e, top, access(api.AccessFull))
 	if got := shown(th); got != want {
 		t.Fatalf("with its configures on their way the thread shows %+v, want %+v", got, want)
 	}
@@ -83,8 +89,8 @@ func TestAThreadShowsItsLastConfigureUntilTheViewHasIt(t *testing.T) {
 func TestAConfigureBackToTheViewsOwnIsWhatTheThreadShows(t *testing.T) {
 	b, _, m, g, e, top := treeFixture(t)
 	th := e.Threads[top]
-	m.ConfigureThread(e, top, fakeModel, api.AccessFull)
-	m.ConfigureThread(e, top, fakeModel, api.AccessAsk)
+	m.ConfigureThread(e, top, access(api.AccessFull))
+	m.ConfigureThread(e, top, access(api.AccessAsk))
 	g.until(t, "the receipts", func() bool { return answered(th) })
 	if th.View.Revision != 1 {
 		t.Fatalf("the held shell sent a view, revision %d", th.View.Revision)
@@ -98,34 +104,68 @@ func TestAConfigureBackToTheViewsOwnIsWhatTheThreadShows(t *testing.T) {
 	}
 }
 
-// A configure that fails with another chosen after it leaves no row: its
-// Retry would undo the choice made after it. So it is whether the network
-// lost it on the way or lost its answer.
-func TestANewerConfigureLeavesNoneBeforeItToRetry(t *testing.T) {
-	for name, lost := range map[string]func(*bridge) *bool{
-		"lost on the way": func(b *bridge) *bool { return &b.fail },
-		"its answer lost": func(b *bridge) *bool { return &b.lose },
-	} {
+// lost is how the network loses a configure: on its way, or its answer,
+// once the engine took it.
+var lost = map[string]func(*bridge) *bool{
+	"lost on the way": func(b *bridge) *bool { return &b.fail },
+	"its answer lost": func(b *bridge) *bool { return &b.lose },
+}
+
+// A configure that fails with another chosen after it, of something it
+// gave, leaves no row: its Retry would undo the choice made after it. So
+// it is whether the network lost it on the way or lost its answer.
+func TestANewerConfigureOfTheSameLeavesNoneBeforeItToRetry(t *testing.T) {
+	for name, lost := range lost {
 		t.Run(name, func(t *testing.T) {
 			b, _, m, g, e, top := treeFixture(t)
 			th := e.Threads[top]
-			low := fakeModel
-			low.Effort = "low"
 			set(b, lost(b))
-			first := m.ConfigureThread(e, top, fakeModel, api.AccessFull)
-			m.ConfigureThread(e, top, low, api.AccessAsk)
+			first := m.ConfigureThread(e, top, access(api.AccessFull))
+			m.ConfigureThread(e, top, api.ThreadConfigure{Effort: new("low"), Access: new(api.AccessAsk)})
 			g.until(t, "the answers", func() bool { return answered(th) })
 			close(b.hold)
 			settled(t, b, g, th)
 
 			// The row's Retry, had it one, then a change of the effort
-			// alone, built on what the thread shows.
+			// alone.
 			m.Retry(e, top, first)
-			high := shown(th)
-			high.Model.Effort = "high"
-			m.ConfigureThread(e, top, high.Model, high.Access)
-			if v := settled(t, b, g, th); v.Model != high.Model || v.Access != api.AccessAsk {
+			high := fakeModel
+			high.Effort = "high"
+			m.ConfigureThread(e, top, effort("high"))
+			if v := settled(t, b, g, th); v.Model != high || v.Access != api.AccessAsk {
 				t.Errorf("the engine has %+v at %v, want the effort chosen last at the access chosen last, Ask", v.Model, v.Access)
+			}
+		})
+	}
+}
+
+// A configure that fails keeps its row when the one chosen after it gives
+// something else: what it chose went with no other, so it isn't dropped
+// unsaid. The thread shows what the engine has, and the row's Retry sets
+// what it gave beside the later one's.
+func TestAFailedConfigureKeepsItsRowBesideOneOfSomethingElse(t *testing.T) {
+	for name, lost := range lost {
+		t.Run(name, func(t *testing.T) {
+			b, _, m, g, e, top := treeFixture(t)
+			close(b.hold)
+			th := e.Threads[top]
+			low := fakeModel
+			low.Effort = "low"
+			set(b, lost(b))
+			full := m.ConfigureThread(e, top, access(api.AccessFull))
+			m.ConfigureThread(e, top, effort("low"))
+			g.until(t, "the effort, with the access failed", func() bool {
+				return answered(th) && th.View.Model == low && len(th.Pending) == 1
+			})
+			if p := th.Pending[0]; p.Command != full || p.Err == nil {
+				t.Fatalf("the row left is %+v, want the failed configure of the access", p)
+			}
+			if v, _ := engineView(t, b, top); shown(th) != (api.ThreadConfigured{Model: v.Model, Access: v.Access}) {
+				t.Errorf("with the access failed the thread shows %+v, the engine has %+v at %v", shown(th), v.Model, v.Access)
+			}
+			m.Retry(e, top, full)
+			if v := settled(t, b, g, th); v.Model != low || v.Access != api.AccessFull {
+				t.Errorf("after the Retry the engine has %+v at %v, want the effort chosen at the access retried", v.Model, v.Access)
 			}
 		})
 	}
@@ -139,12 +179,11 @@ func TestARetriedConfigureTheThreadMovedPastGoesWithItsReceipt(t *testing.T) {
 	b, _, m, g, e, top := treeFixture(t)
 	th := e.Threads[top]
 	set(b, &b.lose)
-	full := m.ConfigureThread(e, top, fakeModel, api.AccessFull)
+	full := m.ConfigureThread(e, top, access(api.AccessFull))
 	g.until(t, "the failure", func() bool { return len(th.Pending) == 1 && th.Pending[0].Err != nil })
 	close(b.hold)
 	g.until(t, "the view the engine sent all the same", func() bool { return th.View.Access == api.AccessFull })
-	if _, err := b.Endpoint.Submit(context.Background(), api.Command{ID: api.NewID(), Target: top,
-		Body: api.ThreadConfigure{Model: fakeModel, Access: api.AccessAsk}}); err != nil {
+	if _, err := b.Endpoint.Submit(context.Background(), api.Command{ID: api.NewID(), Target: top, Body: access(api.AccessAsk)}); err != nil {
 		t.Fatal(err)
 	}
 	g.until(t, "the other client's configure", func() bool { return th.View.Access == api.AccessAsk })
@@ -159,7 +198,7 @@ func TestARetriedConfigureTheThreadMovedPastGoesWithItsReceipt(t *testing.T) {
 
 // A configure that fails leaves the thread at the one the engine took
 // before it, though the view that has it hasn't come: not at the view
-// held, where the next configure would be built and undo the one taken.
+// held, which is behind it.
 func TestAFailedConfigureLeavesTheThreadAtTheOneTheEngineTook(t *testing.T) {
 	for name, wait := range map[string]bool{
 		"taken before the next was chosen":    true,
@@ -170,13 +209,13 @@ func TestAFailedConfigureLeavesTheThreadAtTheOneTheEngineTook(t *testing.T) {
 			th := e.Threads[top]
 			low := fakeModel
 			low.Effort = "low"
-			taken := api.ThreadConfigure{Model: low, Access: api.AccessAsk}
-			m.ConfigureThread(e, top, low, api.AccessAsk)
+			taken := api.ThreadConfigured{Model: low, Access: api.AccessAsk}
+			m.ConfigureThread(e, top, effort("low"))
 			if wait {
 				g.until(t, "the receipt", func() bool { return answered(th) })
 			}
-			// The engine refuses this one: a thread keeps its provider.
-			refused := m.ConfigureThread(e, top, api.ModelRef{Provider: "other", Model: "other"}, api.AccessAsk)
+			// The engine refuses this one: it knows no such access.
+			refused := m.ConfigureThread(e, top, access(api.AccessFull+1))
 			g.until(t, "the refusal", func() bool {
 				n := len(th.Pending)
 				return answered(th) && n > 0 && th.Pending[n-1].Command == refused && th.Pending[n-1].Err != nil
@@ -187,8 +226,8 @@ func TestAFailedConfigureLeavesTheThreadAtTheOneTheEngineTook(t *testing.T) {
 			if got := shown(th); got != taken {
 				t.Fatalf("with the next configure refused the thread shows %+v, want the one the engine took, %+v", got, taken)
 			}
-			// A change of the access alone, built on what the thread shows.
-			m.ConfigureThread(e, top, shown(th).Model, api.AccessFull)
+			// A change of the access alone.
+			m.ConfigureThread(e, top, access(api.AccessFull))
 			close(b.hold)
 			if v := settled(t, b, g, th); v.Model != low || v.Access != api.AccessFull {
 				t.Errorf("the engine has %+v at %v, want the effort it took at the access chosen after", v.Model, v.Access)
@@ -198,7 +237,9 @@ func TestAFailedConfigureLeavesTheThreadAtTheOneTheEngineTook(t *testing.T) {
 }
 
 // A configure that failed goes again when the user chooses it again, the
-// same as before: nothing holds it back as sent already.
+// same as before: nothing holds it back as sent already, and it takes the
+// failed one's row, whose Retry would undo a choice made after. A choice
+// of something else in between leaves the row.
 func TestAFailedConfigureChosenAgainIsSentAgain(t *testing.T) {
 	b, _, m, g, e, top := treeFixture(t)
 	close(b.hold)
@@ -206,13 +247,21 @@ func TestAFailedConfigureChosenAgainIsSentAgain(t *testing.T) {
 	low := fakeModel
 	low.Effort = "low"
 	set(b, &b.fail)
-	first := m.ConfigureThread(e, top, low, api.AccessAsk)
+	first := m.ConfigureThread(e, top, effort("low"))
 	g.until(t, "the failure", func() bool { return len(th.Pending) == 1 && th.Pending[0].Err != nil })
-	if again := m.ConfigureThread(e, top, low, api.AccessAsk); again == first {
+	m.ConfigureThread(e, top, access(api.AccessFull))
+	if p := th.Pending[0]; len(th.Pending) != 2 || p.Command != first || p.Err == nil {
+		t.Fatalf("with the access chosen after it, the failed effort's row is gone: %+v", th.Pending)
+	}
+	again := m.ConfigureThread(e, top, effort("low"))
+	if again == first {
 		t.Fatal("the configure chosen again wasn't sent: it got the failed one's command")
 	}
-	if v := settled(t, b, g, th); v.Model != low {
-		t.Errorf("the engine has %+v, want %+v", v.Model, low)
+	if slices.ContainsFunc(th.Pending, func(p Pending) bool { return p.Command == first }) {
+		t.Errorf("the failed configure's row stays beside the same chosen again: %+v", th.Pending)
+	}
+	if v := settled(t, b, g, th); v.Model != low || v.Access != api.AccessFull {
+		t.Errorf("the engine has %+v at %v, want %+v at Full", v.Model, v.Access, low)
 	}
 }
 
@@ -220,7 +269,7 @@ func TestAFailedConfigureChosenAgainIsSentAgain(t *testing.T) {
 // to Full on its way.
 func taking(log api.ID) (*Manager, *Env, *Thread, api.Command) {
 	id := api.NewID()
-	full := api.ThreadConfigure{Access: api.AccessFull}
+	full := access(api.AccessFull)
 	cmd := api.Command{ID: api.NewID(), Target: id, Body: full}
 	th := &Thread{View: api.Thread{ID: id, Revision: 4}, Pending: []Pending{{Command: cmd.ID, Body: full}}, known: true}
 	return &Manager{}, &Env{Threads: map[api.ID]*Thread{id: th}, log: log}, th, cmd
@@ -295,5 +344,57 @@ func TestATakenConfigureGoesWithTheViewThatHasIt(t *testing.T) {
 				t.Errorf("the thread shows access %v with %d pending; want %v, the configure waiting: %v", got, len(th.Pending), want, tc.waits)
 			}
 		})
+	}
+}
+
+// A configure the network lost, of the effort alone, goes again by its
+// Retry after another client narrowed the thread: it sets the effort and
+// leaves the access the engine has, and doesn't widen the thread back to
+// the access this window last saw.
+func TestARetriedConfigureLeavesWhatAnotherClientChangedSince(t *testing.T) {
+	b, _, m, g, e, top := treeFixture(t)
+	close(b.hold)
+	th := e.Threads[top]
+	m.ConfigureThread(e, top, access(api.AccessFull))
+	settled(t, b, g, th)
+	low := fakeModel
+	low.Effort = "low"
+	set(b, &b.fail)
+	failed := m.ConfigureThread(e, top, effort("low"))
+	g.until(t, "the failure", func() bool { return len(th.Pending) == 1 && th.Pending[0].Err != nil })
+	if _, err := b.Endpoint.Submit(context.Background(), api.Command{ID: api.NewID(), Target: top, Body: access(api.AccessAutoEdits)}); err != nil {
+		t.Fatal(err)
+	}
+	g.until(t, "the other client's narrowing", func() bool { return th.View.Access == api.AccessAutoEdits })
+	m.Retry(e, top, failed)
+	if v := settled(t, b, g, th); v.Model != low || v.Access != api.AccessAutoEdits {
+		t.Errorf("after the Retry the engine has %+v at access %v, want the effort retried at the access the other client narrowed to", v.Model, v.Access)
+	}
+}
+
+// A configure chosen while this window's views lag the engine, as its own
+// last one's receipt runs ahead of them, gives only what was chosen: an
+// effort change doesn't put back the access this window still shows,
+// which another client narrowed meanwhile.
+func TestAConfigureChosenOnALaggingViewLeavesWhatAnotherClientChanged(t *testing.T) {
+	b, _, m, g, e, top := treeFixture(t)
+	th := e.Threads[top]
+	m.ConfigureThread(e, top, access(api.AccessFull))
+	g.until(t, "the receipt", func() bool { return answered(th) })
+	if _, err := b.Endpoint.Submit(context.Background(), api.Command{ID: api.NewID(), Target: top, Body: access(api.AccessAsk)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := shown(th); th.View.Revision != 1 || got.Access != api.AccessFull {
+		t.Fatalf("the held shell sent a view: at revision %d the thread shows %+v", th.View.Revision, got)
+	}
+	low := fakeModel
+	low.Effort = "low"
+	m.ConfigureThread(e, top, effort("low"))
+	if got, want := shown(th), (api.ThreadConfigured{Model: low, Access: api.AccessFull}); got != want {
+		t.Errorf("with its effort on its way the thread shows %+v, want %+v", got, want)
+	}
+	close(b.hold)
+	if v := settled(t, b, g, th); v.Model != low || v.Access != api.AccessAsk {
+		t.Errorf("the engine has %+v at access %v, want the effort chosen at the other client's Ask", v.Model, v.Access)
 	}
 }

@@ -12,9 +12,15 @@ import (
 	"glitched/internal/store"
 )
 
-func configure(s *store.Store, thread api.ID, m api.ModelRef, a api.Access) error {
-	_, err := s.Submit(context.Background(), api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadConfigure{Model: m, Access: a}}, time.Now())
+func configure(s *store.Store, thread api.ID, c api.ThreadConfigure) error {
+	_, err := s.Submit(context.Background(), api.Command{ID: api.NewID(), Target: thread, Body: c}, time.Now())
 	return err
+}
+
+// whole is the configure that gives all a configure can: m's name, effort
+// and fast mode, and a.
+func whole(m api.ModelRef, a api.Access) api.ThreadConfigure {
+	return api.ThreadConfigure{Model: new(m.Model), Effort: new(m.Effort), Fast: new(m.Fast), Access: new(a)}
 }
 
 func threadOf(t *testing.T, s *store.Store, id api.ID) engine.Thread {
@@ -34,7 +40,7 @@ func TestAConfigureIsKept(t *testing.T) {
 	s := open(t, path)
 	thread := api.NewID()
 	submitTo(t, s, create(thread))
-	if err := configure(s, thread, sonnet, api.AccessFull); err != nil {
+	if err := configure(s, thread, whole(sonnet, api.AccessFull)); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -44,21 +50,52 @@ func TestAConfigureIsKept(t *testing.T) {
 	}
 }
 
+// A configure gives only what was chosen, which the engine sets on what
+// the thread has when it commits: one of the effort alone, sent by a
+// client that last saw the thread at Full, leaves the access another
+// narrowed since, on the thread and on those under it.
+func TestAConfigureLeavesWhatAnotherChangedSince(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "host.db"))
+	tr := newTree(t, s)
+	for _, id := range tr.ids {
+		if err := configure(s, id, whole(sonnet, api.AccessFull)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := configure(s, tr.ids[0], api.ThreadConfigure{Access: new(api.AccessAutoEdits)}); err != nil {
+		t.Fatal(err)
+	}
+	low := sonnet
+	low.Effort = "low"
+	if err := configure(s, tr.ids[0], api.ThreadConfigure{Effort: new("low")}); err != nil {
+		t.Fatal(err)
+	}
+	if th := threadOf(t, s, tr.ids[0]); th.Model != low || th.Access != api.AccessAutoEdits {
+		t.Errorf("the thread is at %+v, %v; want the effort chosen at the access it was narrowed to", th.Model, th.Access)
+	}
+	for i, id := range tr.ids[1:] {
+		if th := threadOf(t, s, id); th.Model != sonnet || th.Access != api.AccessAutoEdits {
+			t.Errorf("thread %d under it is at %+v, %v; want its own model at the access it was narrowed to", i+1, th.Model, th.Access)
+		}
+	}
+}
+
 // A child's access can't be configured wider than its parent's, and
-// narrowing a thread narrows the threads under it, their models kept.
+// narrowing a thread narrows the threads under it, their models kept. A
+// configure that gives no access changes none under it.
 func TestAConfigureKeepsChildrenWithinTheirParent(t *testing.T) {
 	s := open(t, filepath.Join(t.TempDir(), "host.db"))
 	tr := newTree(t, s)
 	var re *api.RejectedError
-	if err := configure(s, tr.ids[1], api.ModelRef{Provider: "fake", Model: "m"}, api.AccessFull); !errors.As(err, &re) {
+	if err := configure(s, tr.ids[1], api.ThreadConfigure{Access: new(api.AccessFull)}); !errors.As(err, &re) {
 		t.Fatalf("a child wider than its parent: %v, not refused", err)
 	}
 	for _, id := range tr.ids {
-		if err := configure(s, id, sonnet, api.AccessFull); err != nil {
+		if err := configure(s, id, whole(sonnet, api.AccessFull)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := configure(s, tr.ids[0], api.ModelRef{Provider: "fake", Model: "top"}, api.AccessAutoEdits); err != nil {
+	if err := configure(s, tr.ids[0], api.ThreadConfigure{Model: new("top"), Access: new(api.AccessAutoEdits)}); err != nil {
 		t.Fatal(err)
 	}
 	for i, id := range tr.ids[1:] {
@@ -67,11 +104,42 @@ func TestAConfigureKeepsChildrenWithinTheirParent(t *testing.T) {
 		}
 	}
 	// Widening the top widens none under it.
-	if err := configure(s, tr.ids[0], sonnet, api.AccessFull); err != nil {
+	if err := configure(s, tr.ids[0], whole(sonnet, api.AccessFull)); err != nil {
 		t.Fatal(err)
 	}
 	if th := threadOf(t, s, tr.ids[1]); th.Access != api.AccessAutoEdits {
 		t.Errorf("a child widened with its parent, to %v", th.Access)
+	}
+	// The top's model, effort and fast mode are its own: the threads
+	// under it aren't decided on.
+	under := [2]engine.Thread{threadOf(t, s, tr.ids[1]), threadOf(t, s, tr.ids[2])}
+	if err := configure(s, tr.ids[0], api.ThreadConfigure{Model: new("top"), Effort: new("low"), Fast: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	for i, was := range under {
+		if th := threadOf(t, s, was.ID); th.Model != was.Model || th.Access != was.Access || th.Revision != was.Revision {
+			t.Errorf("thread %d under a thread given a model: %+v at %v, revision %d; want %+v at %v, revision %d",
+				i+1, th.Model, th.Access, th.Revision, was.Model, was.Access, was.Revision)
+		}
+	}
+	// A child takes a configure of its own that leaves it within its
+	// parent, with or without an access.
+	for _, tc := range []struct {
+		name string
+		c    api.ThreadConfigure
+	}{
+		{"its effort", api.ThreadConfigure{Effort: new("high")}},
+		{"its parent's access", api.ThreadConfigure{Access: new(api.AccessFull)}},
+		{"fast mode at a narrower access", api.ThreadConfigure{Fast: new(true), Access: new(api.AccessAsk)}},
+		{"nothing", api.ThreadConfigure{}},
+	} {
+		if err := configure(s, tr.ids[1], tc.c); err != nil {
+			t.Errorf("a child given %s: %v", tc.name, err)
+		}
+	}
+	want := api.ModelRef{Provider: "fake", Model: sonnet.Model, Effort: "high", Fast: true}
+	if th := threadOf(t, s, tr.ids[1]); th.Model != want || th.Access != api.AccessAsk {
+		t.Errorf("the child is at %+v, %v; want %+v at Ask", th.Model, th.Access, want)
 	}
 }
 
@@ -86,7 +154,7 @@ func TestARunsModelAndAccessAreKept(t *testing.T) {
 	opus := api.ModelRef{Provider: "fake", Model: "Claude Opus 5.5", Effort: "high", Fast: true}
 	submitTo(t, s, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{Workspace: "w", Title: "t", Model: opus, Access: api.AccessAutoEdits}})
 	submitTo(t, s, api.Command{ID: run, Target: thread, Body: api.MessageDispatch{Text: "go", Mode: api.StartNow}})
-	if err := configure(s, thread, sonnet, api.AccessFull); err != nil {
+	if err := configure(s, thread, whole(sonnet, api.AccessFull)); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
