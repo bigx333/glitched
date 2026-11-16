@@ -297,13 +297,7 @@ func TestSelectionQuotesLongCode(t *testing.T) {
 // though nothing else was selected between.
 func TestSelectionBarReturnsAfterQuote(t *testing.T) {
 	h, _ := quoteReady(t)
-	r, _ := h.tt.Find("Looking at the code.")
-	word := func() { // a double-click on "Looking"
-		h.tt.ClickAt(r.X+10, r.Y+r.H/2)
-		h.tt.ClickAt(r.X+10, r.Y+r.H/2)
-		h.tt.Advance(quoteWait + 50*time.Millisecond)
-	}
-	word()
+	r := doubleClick(h, "Looking at the code.")
 	if !barShown(h) || h.a.quote.text != "Looking" {
 		t.Fatalf("double-clicked, bar %v on %q", barShown(h), h.a.quote.text)
 	}
@@ -314,7 +308,7 @@ func TestSelectionBarReturnsAfterQuote(t *testing.T) {
 	// A click at the reply's end clears the selection.
 	h.tt.ClickAt(r.X+r.W-2, r.Y+r.H/2)
 	h.tt.Advance(time.Second)
-	word()
+	doubleClick(h, "Looking at the code.")
 	if !barShown(h) {
 		t.Fatalf("the word selected again after a quote, no bar: %+v", h.a.quote)
 	}
@@ -330,6 +324,9 @@ func TestSelectionBarCoversOnlyInUse(t *testing.T) {
 	if !barShown(h) {
 		t.Fatal("no bar")
 	}
+	// Two frames: the second reads what the first covered.
+	h.tt.Frame()
+	h.tt.Frame()
 	if h.a.covered {
 		t.Error("the bar, untouched, covers the timeline, holding ⌘⏎ from the cards")
 	}
@@ -337,6 +334,8 @@ func TestSelectionBarCoversOnlyInUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.tt.Advance(time.Second)
+	h.tt.Frame()
+	h.tt.Frame()
 	if !h.a.covered || h.a.blind {
 		t.Errorf("typed in, the bar: covered %v, blind %v; want it to cover only its place", h.a.covered, h.a.blind)
 	}
@@ -536,13 +535,24 @@ func TestSelectionBarFollowsNewSelection(t *testing.T) {
 	}
 }
 
-func TestThreadTitleFromDraft(t *testing.T) {
-	if got := threadTitle("> a quote\n\nFix the flicker", " Fix the flicker "); got != "Fix the flicker" {
-		t.Errorf("title %q, want the draft's", got)
+// A quote carried to a new thread, ⌘N, goes with its first message, which
+// titles the thread with the draft rather than the quote.
+func TestQuoteInNewThreadTitledByDraft(t *testing.T) {
+	h, sel := quoteReady(t)
+	from := h.a.current().id()
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
+	h.click("Quote")
+	h.tt.Advance(time.Second)
+	h.tt.Key(ui.Cmd, ui.KeyN)
+	h.tt.Advance(time.Second)
+	h.tt.Type("Fix the flicker")
+	h.tt.Key(0, ui.KeyEnter)
+	h.until("the new thread", func() bool { id := h.a.current().id(); return !id.IsZero() && id != from })
+	if got := h.a.current().View.Title; got != "Fix the flicker" {
+		t.Errorf("the new thread is titled %q; want the draft's %q", got, "Fix the flicker")
 	}
-	if got := threadTitle("> only a quote", ""); got != "> only a quote" {
-		t.Errorf("title %q, want the text without a draft", got)
-	}
+	want := "> " + sel + "\n\nFix the flicker"
+	h.until("the message with its quote", func() bool { return slices.Contains(sentTexts(h), want) })
 }
 
 // Scrolled past the pane's top or under the composer, the bar waits
