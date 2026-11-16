@@ -8,7 +8,7 @@ import (
 func TestReadCommandsFindsTheInitializeReply(t *testing.T) {
 	out := `{"type":"system","subtype":"hook_started"}
 {"type":"control_response","response":{"subtype":"success","request_id":"other","response":{"commands":[{"name":"wrong"}]}}}
-{"type":"control_response","response":{"subtype":"success","request_id":"` + initRequest + `","response":{"commands":[{"name":"pstack:poteto-mode","description":"Poteto mode","argumentHint":"<task>"},{"name":"review","description":"Review a PR"}]}}}
+{"type":"control_response","response":{"subtype":"success","request_id":"` + initRequest + `","response":{"commands":[{"name":"pstack:poteto-mode","description":"Poteto mode","argumentHint":"<task>"},{"name":"__remote-workflow"},{"name":"review","description":"Review a PR"}]}}}
 `
 	got, err := readCommands(strings.NewReader(out))
 	if err != nil {
