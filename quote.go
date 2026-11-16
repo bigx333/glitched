@@ -52,7 +52,8 @@ const (
 // quoteBar is the bar of the selection in a reply: none while text is "".
 type quoteBar struct {
 	of    quoteOf
-	text  string // what was selected
+	text  string    // what was selected
+	read  selection // what text was read from
 	state quoteState
 	at    time.Time // when the selection was made or last changed
 	// from and to are where the pointer was, relative to the reply's
@@ -79,6 +80,27 @@ type quoteBar struct {
 // column at col, which the pass that built the row binds to app.quoteCol.
 type replyAt struct {
 	md, col ui.Rect
+}
+
+// selection is a reply's selection as last read: its parts, from the
+// reply whose Markdown is src, and their text.
+type selection struct {
+	src   string
+	parts []ui.SelectedText
+	text  string
+}
+
+// textOf is the text of parts from the reply whose Markdown is src
+// (selectedText), read anew only when either changed since r was read:
+// MyGo gives a reply's selection in each frame that builds the reply.
+func (r *selection) textOf(parts []ui.SelectedText, src string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	if src != r.src || !slices.Equal(parts, r.parts) {
+		*r = selection{src: src, parts: parts, text: selectedText(parts, src)}
+	}
+	return r.text
 }
 
 // codeChunk is how many lines of a code block MyGo lays out in one text,
@@ -190,7 +212,7 @@ func (a *app) followSelection(c *ui.Context, t thread, key, src string, col, md 
 	of := quoteOf{t.id(), key}
 	s := &a.quote
 	open := s.state == quoteOpen
-	switch text := selectedText(md.SelectedTexts(), src); {
+	switch text := s.read.textOf(md.SelectedTexts(), src); {
 	case text == "":
 		if s.of == of && !s.inUse && s.ask == "" {
 			*s = quoteBar{}
@@ -210,7 +232,7 @@ func (a *app) followSelection(c *ui.Context, t thread, key, src string, col, md 
 		// keys, nor for more than a word selected at once, as by the
 		// menu's Select All, which may be anywhere in the reply.
 		loose := c.Modifiers() != 0 || from == p && strings.ContainsFunc(text, unicode.IsSpace)
-		*s = quoteBar{of: of, text: text, at: a.now, from: from, to: p, w: w, loose: loose}
+		*s = quoteBar{of: of, text: text, read: s.read, at: a.now, from: from, to: p, w: w, loose: loose}
 		c.After(quoteWait)
 	case s.state == quoteWaiting && md.PressedOutside():
 		// Pressed elsewhere before it rests, as in the composer to type:
