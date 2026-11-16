@@ -327,7 +327,7 @@ func (a *app) quoteBarAt(c *ui.Context, t thread, at ui.Element, spot quoteSpot)
 			// ⌘⏎ too, which would otherwise reach the composer's, stopping
 			// the agent or sending the draft.
 			if cmdEnter := in.Shortcut(ui.Cmd, ui.KeyEnter); (in.Submitted() || cmdEnter) && strings.TrimSpace(s.ask) != "" {
-				if a.sendText(t, blockquote(s.text)+"\n\n"+strings.TrimSpace(s.ask), "") {
+				if ask := strings.TrimSpace(s.ask); a.sendText(t, blockquote(s.text)+"\n\n"+ask, ask) {
 					a.closeQuote()
 					// Not back to the reply, which takes no typing.
 					a.draftArea.Focus()
