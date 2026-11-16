@@ -218,12 +218,8 @@ func (a *app) attachQuote(text, ask string) {
 		} else {
 			a.draft = ask
 		}
+		a.draftToEnd = true
 	}
 	a.closeQuote()
-	if ask != "" {
-		// A text area of its own, born with the caret at the end of what
-		// was asked, as one keeps its caret through a draft set from here.
-		a.draftGen++
-	}
 	a.draftArea.Focus()
 }

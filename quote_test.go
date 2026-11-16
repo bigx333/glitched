@@ -18,6 +18,13 @@ import (
 func quoteReady(t *testing.T) (*harness, string) {
 	t.Helper()
 	h := enterReady(t, fake.New(fake.Turn(false)), "go")
+	return h, dragHalfReply(t, h)
+}
+
+// dragHalfReply drags over the first words of the reply, "Looking at the
+// code.", and returns what was selected.
+func dragHalfReply(t *testing.T, h *harness) string {
+	t.Helper()
 	reply := "Looking at the code."
 	h.until("the reply", func() bool { return h.tt.HasText(reply) })
 	h.tt.Advance(time.Second)
@@ -35,7 +42,7 @@ func quoteReady(t *testing.T) (*harness, string) {
 	if !strings.HasPrefix(sel, "Looking") || sel == reply {
 		t.Fatalf("dragged over half the reply, the selection is %q", sel)
 	}
-	return h, sel
+	return sel
 }
 
 // replyReady is the app on a thread whose one reply is md, once it shows
@@ -106,6 +113,24 @@ func TestSelectionBarExplains(t *testing.T) {
 	}
 	if !slices.ContainsFunc(h.a.attachments, func(at attachment) bool { return at.quote && at.text == sel }) {
 		t.Errorf("attachments %+v; want a quote of %q", h.a.attachments, sel)
+	}
+}
+
+// Explain leaves the composer's undo: ⌘Z takes back what it asked.
+func TestExplainUndoes(t *testing.T) {
+	h := enterReady(t, fake.New(fake.Turn(false)), "go")
+	h.tt.Type("Before that,")
+	dragHalfReply(t, h)
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
+	h.click("Explain")
+	h.tt.Advance(time.Second)
+	if want := "Before that,\n\n" + explainAsk; h.a.draft != want {
+		t.Fatalf("draft %q, want %q", h.a.draft, want)
+	}
+	h.tt.Key(ui.Cmd, ui.KeyZ)
+	h.tt.Frame()
+	if strings.Contains(h.a.draft, explainAsk) {
+		t.Errorf("⌘Z after Explain left the draft %q; want what Explain asked taken back", h.a.draft)
 	}
 }
 
