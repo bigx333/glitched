@@ -1133,8 +1133,7 @@ func (a *app) takeBack(c *ui.Context, t thread) {
 }
 
 // message is what goes to t's agent: the quotes on the composer, as
-// blockquotes, then the draft and what else is attached to it, files as
-// their paths, as the composer's @ puts them, and pasted text after.
+// blockquotes, then what the draft says (said).
 func (a *app) message(t thread) string {
 	// Quotes first, as what the draft is about.
 	var parts []string
@@ -1143,13 +1142,22 @@ func (a *app) message(t thread) string {
 			parts = append(parts, blockquote(at.text))
 		}
 	}
-	parts = append(parts, strings.TrimSpace(a.draft))
+	if said := a.said(t); said != "" {
+		parts = append(parts, said)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// said is the draft and what else is attached to it that goes to t's
+// agent, but the quotes: files as their paths, as the composer's @ puts
+// them, and pasted text after.
+func (a *app) said(t thread) string {
+	parts := []string{strings.TrimSpace(a.draft)}
 	for _, at := range a.attachments {
-		if at.held(t) != "" {
+		if at.quote || at.held(t) != "" {
 			continue
 		}
 		switch {
-		case at.quote:
 		case at.path != "":
 			parts = append(parts, "@"+at.path)
 		case at.text != "":
