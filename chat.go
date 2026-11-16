@@ -588,7 +588,7 @@ func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
 			} else {
 				md = markdown.View(c, e.text, &a.md)
 			}
-			a.followSelection(c, t, key, col, md)
+			a.followSelection(c, t, key, e.text, col, md)
 			a.messageActions(c, t, es, i, col.Hovered() && !e.streaming)
 		})
 	case entryWork:
