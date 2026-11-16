@@ -58,9 +58,9 @@ type quoteBar struct {
 	// it began and where it ended.
 	from, to ui.Point
 	// inUse is the bar in use in the last frame: pointed at or holding the
-	// focus.
-	inUse bool
-	ask   string
+	// focus; focused is it holding the focus in this pass.
+	inUse, focused bool
+	ask            string
 	// spot is where the bar last showed.
 	spot quoteSpot
 	// reply is where the selection's reply is, as its row last noted it,
@@ -181,7 +181,7 @@ func (a *app) selectionBar(c *ui.Context, t thread) {
 	if !s.seen {
 		r = replyAt{} // not built since: held at the edge it went past
 	}
-	s.seen = false
+	s.seen, s.focused = false, false
 	if s.state != quoteOpen || s.of.thread != t.id() {
 		return
 	}
@@ -329,7 +329,8 @@ func (a *app) quoteBarAt(c *ui.Context, t thread, at ui.Element, spot quoteSpot)
 			return
 		}
 		if s.state == quoteOpen { // not closed by its buttons in this frame
-			s.inUse = bar.Hovered() || bar.FocusWithin()
+			s.focused = bar.FocusWithin()
+			s.inUse = bar.Hovered() || s.focused
 		}
 	})
 }

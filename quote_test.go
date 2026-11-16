@@ -736,3 +736,45 @@ func TestSelectionBarAsAgentWorksOn(t *testing.T) {
 		t.Errorf("typed on as the agent worked: the bar's box holds %q, the composer's draft %q; want %q in the box", h.a.quote.ask, h.a.draft, "what?")
 	}
 }
+
+// A question half typed in the bar, a little way up from the thread's
+// end, goes on in the bar as the chat is scrolled back to the end and the
+// composer opens from its line, and goes with its quote.
+func TestSelectionBarKeepsFocusAsComposerOpens(t *testing.T) {
+	var md strings.Builder
+	for i := 1; i <= 80; i++ {
+		fmt.Fprintf(&md, "Paragraph %02d of a long reply that goes on.\n\n", i)
+	}
+	h := replyReady(t, md.String()+"Outro here.", "Outro here.")
+	th := h.a.current()
+	wheel(h, -240)
+	if !h.a.composerCompact(th) {
+		t.Fatal("scrolled up from the end, the composer is open; want it folded to its line")
+	}
+	// A paragraph that shows at the end too.
+	var para string
+	for _, s := range h.tt.Texts() {
+		if r, ok := h.tt.Find(s); ok && strings.HasPrefix(s, "Paragraph ") && r.Y > h.a.paneAt.Y+400 && r.Y < h.a.paneAt.Y+440 {
+			para = s
+		}
+	}
+	if para == "" {
+		t.Fatalf("no paragraph there: %q", h.tt.Texts())
+	}
+	doubleClick(h, para)
+	h.click("Ask about the selection")
+	h.tt.Advance(200 * time.Millisecond)
+	h.tt.Type("what does this")
+	wheel(h, 240)
+	if h.a.composerCompact(th) {
+		t.Fatal("scrolled back to the end, the composer is still folded")
+	}
+	h.tt.Type(" mean")
+	h.tt.Frame()
+	if h.a.quote.ask != "what does this mean" || h.a.draft != "" {
+		t.Fatalf("typed on after the composer opened: the bar's box holds %q, the draft %q; want the box to hold %q, the draft empty", h.a.quote.ask, h.a.draft, "what does this mean")
+	}
+	h.tt.Key(0, ui.KeyEnter)
+	want := "> Paragraph\n\nwhat does this mean"
+	h.until("the question sent", func() bool { return slices.Contains(sentTexts(h), want) })
+}
