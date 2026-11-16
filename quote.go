@@ -78,17 +78,15 @@ type replyAt struct {
 	el      ui.Element
 }
 
-// codeChunk is how many lines of a code block MyGo lays out as one text,
-// a part of a selection each (ui/markdown's chunkLines).
-const codeChunk = 32
-
-// selectedText is the text of a selection's parts as ⌘C copies it, a
-// paragraph each, but for the chunks of a code block, which go on from
-// line to line; a list's items and a table's cells are paragraphs too, as
-// MyGo tells no part's block.
-func selectedText(parts []ui.SelectedText) string {
+// selectedText is the text of a selection's parts, from a reply whose
+// Markdown is src, as ⌘C copies it: a paragraph each, but for the texts
+// MyGo lays a long code block out in, which go on from line to line; a
+// list's items and a table's cells are paragraphs too, as MyGo tells no
+// part's block.
+func selectedText(parts []ui.SelectedText, src string) string {
 	var b strings.Builder
 	var prev ui.SelectedText
+	var lines []string // src's, once needed
 	for _, p := range parts {
 		r := []rune(p.Text)
 		from, to := min(max(p.Start, 0), len(r)), min(max(p.End, 0), len(r))
@@ -97,9 +95,20 @@ func selectedText(parts []ui.SelectedText) string {
 		}
 		switch {
 		case b.Len() == 0:
-		case prev.End >= utf8.RuneCountInString(prev.Text) && strings.Count(prev.Text, "\n") == codeChunk-1 && from == 0:
-			// A whole chunk selected to its end, and the next from its start.
-			b.WriteString("\n")
+		case prev.End >= utf8.RuneCountInString(prev.Text) && from == 0:
+			// One part selected to its end and the next from its start:
+			// one code block, where the source goes on from the last line
+			// of one to the first of the next.
+			if lines == nil {
+				lines = strings.Split(src, "\n")
+			}
+			last := prev.Text[strings.LastIndexByte(prev.Text, '\n')+1:]
+			first, _, _ := strings.Cut(p.Text, "\n")
+			if consecutive(lines, last, first) {
+				b.WriteString("\n")
+			} else {
+				b.WriteString("\n\n")
+			}
 		default:
 			b.WriteString("\n\n")
 		}
@@ -107,6 +116,19 @@ func selectedText(parts []ui.SelectedText) string {
 		prev = p
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// consecutive is whether a line of the source reads a and the next b,
+// but for the indentation and quote marks a container puts before them.
+func consecutive(lines []string, a, b string) bool {
+	bare := func(s string) string { return strings.TrimRight(strings.TrimLeft(s, " \t>"), "\r") }
+	a, b = bare(a), bare(b)
+	for i := 0; i+1 < len(lines); i++ {
+		if bare(lines[i]) == a && bare(lines[i+1]) == b {
+			return true
+		}
+	}
+	return false
 }
 
 // blockquote is text quoted in Markdown.
@@ -132,15 +154,15 @@ func quoteAttachment(text string) attachment {
 }
 
 // followSelection follows the selection in the reply of t keyed key,
-// whose column is col and text md, and notes where the reply is, for its
-// bar (selectionBar). It builds nothing of the bar, as the chat's list may
-// build the row as it lays out, after the bar: a frame shows a change in
-// whether the bar shows.
-func (a *app) followSelection(c *ui.Context, t thread, key string, col, md ui.Element) {
+// whose Markdown is src, column col and text md, and notes where the
+// reply is, for its bar (selectionBar). It builds nothing of the bar, as
+// the chat's list may build the row as it lays out, after the bar: a
+// frame shows a change in whether the bar shows.
+func (a *app) followSelection(c *ui.Context, t thread, key, src string, col, md ui.Element) {
 	of := quoteOf{t.id(), key}
 	s := &a.quote
 	open := s.state == quoteOpen
-	switch text := selectedText(md.SelectedTexts()); {
+	switch text := selectedText(md.SelectedTexts(), src); {
 	case text == "":
 		if s.of == of && !s.inUse && s.ask == "" {
 			*s = quoteBar{}

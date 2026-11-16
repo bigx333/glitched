@@ -265,36 +265,54 @@ func TestSelectedText(t *testing.T) {
 		{Text: "x", Start: 3, End: 9}, // out of range: nothing
 		{Text: "second line", Start: 0, End: 6},
 	}
-	if got, want := selectedText(parts), "éllo\n\nsecond"; got != want {
+	if got, want := selectedText(parts, "héllo world\n\nsecond line"), "éllo\n\nsecond"; got != want {
 		t.Errorf("selectedText = %q, want %q", got, want)
+	}
+	// A heading, and the paragraph on the line after it.
+	parts = []ui.SelectedText{{Text: "Title", Start: 0, End: 5}, {Text: "Text", Start: 0, End: 4}}
+	if got, want := selectedText(parts, "# Title\nText"), "Title\n\nText"; got != want {
+		t.Errorf("selectedText of a heading and a paragraph = %q, want %q", got, want)
 	}
 }
 
-// A quote of a code block longer than MyGo lays out in one text has its
-// lines as the reply has them, as ⌘C copies them.
+// A quote of a code block has its lines as the reply has them, as ⌘C
+// copies them, however many texts MyGo lays it out in, and a paragraph
+// after it as one.
 func TestSelectionQuotesLongCode(t *testing.T) {
-	var code strings.Builder
-	for i := 1; i <= 70; i++ {
-		fmt.Fprintf(&code, "line%02d := %d\n", i, i)
+	code := func(n int, indent string) string {
+		var b strings.Builder
+		for i := 1; i <= n; i++ {
+			fmt.Fprintf(&b, "%sline%02d := %d\n", indent, i, i)
+		}
+		return b.String()
 	}
-	h := replyReady(t, "Intro here.\n\n```go\n"+code.String()+"```\n\nOutro here.", "Outro here.")
-	doubleClick(h, "Outro here.")
-	h.tt.Key(ui.Cmd, ui.KeyA)
-	h.tt.Advance(quoteWait + 50*time.Millisecond)
-	h.tt.Key(ui.Cmd, ui.KeyC)
-	h.tt.Frame()
-	copied := strings.TrimSpace(h.tt.Clipboard())
-	if !strings.Contains(copied, "line32 := 32\nline33 := 33") {
-		t.Fatalf("⌘C copied %q; want the code's lines", copied)
-	}
-	h.click("Quote")
-	h.tt.Advance(time.Second)
-	i := slices.IndexFunc(h.a.attachments, func(at attachment) bool { return at.quote })
-	if i < 0 {
-		t.Fatalf("attachments %+v; want a quote", h.a.attachments)
-	}
-	if got := h.a.attachments[i].text; got != copied {
-		t.Errorf("the quote is\n%s\nwant it as ⌘C copies the selection:\n%s", got, copied)
+	for name, md := range map[string]string{
+		"70 lines":                "Intro here.\n\n```go\n" + code(70, "") + "```\n\nOutro here.",
+		"32 lines":                "Intro here.\n\n```go\n" + code(32, "") + "```\n\nOutro here.",
+		"64 lines":                "Intro here.\n\n```go\n" + code(64, "") + "```\n\nOutro here.",
+		"40 lines in a list item": "Intro here.\n\n1. Run this:\n\n   ```go\n" + code(40, "   ") + "   ```\n\nOutro here.",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := replyReady(t, md, "Outro here.")
+			doubleClick(h, "Outro here.")
+			h.tt.Key(ui.Cmd, ui.KeyA)
+			h.tt.Advance(quoteWait + 50*time.Millisecond)
+			h.tt.Key(ui.Cmd, ui.KeyC)
+			h.tt.Frame()
+			copied := strings.TrimSpace(h.tt.Clipboard())
+			if !strings.Contains(copied, "line31 := 31\nline32 := 32") {
+				t.Fatalf("⌘C copied %q; want the code's lines", copied)
+			}
+			h.click("Quote")
+			h.tt.Advance(time.Second)
+			i := slices.IndexFunc(h.a.attachments, func(at attachment) bool { return at.quote })
+			if i < 0 {
+				t.Fatalf("attachments %+v; want a quote", h.a.attachments)
+			}
+			if got := h.a.attachments[i].text; got != copied {
+				t.Errorf("the quote is\n%s\nwant it as ⌘C copies the selection:\n%s", got, copied)
+			}
+		})
 	}
 }
 
