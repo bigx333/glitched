@@ -662,6 +662,23 @@ func TestQuoteInNewThreadTitledByDraft(t *testing.T) {
 	h.until("the message with its quote", func() bool { return slices.Contains(sentTexts(h), want) })
 }
 
+// With the draft empty, a quote goes with what's attached, a blank line
+// between them.
+func TestQuoteSentWithoutDraft(t *testing.T) {
+	h, sel := quoteReady(t)
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
+	h.click("Quote")
+	h.tt.Advance(time.Second)
+	h.a.attachments = append(h.a.attachments, attachment{name: "Pasted text", text: "pasted"})
+	h.tt.Frame()
+	n := len(sentTexts(h))
+	h.click("Send")
+	h.until("the message", func() bool { return len(sentTexts(h)) > n })
+	if got, want := sentTexts(h)[n], "> "+sel+"\n\npasted"; got != want {
+		t.Errorf("sent %q, want %q", got, want)
+	}
+}
+
 // Scrolled past the pane's top or under the composer, the bar waits
 // unseen rather than riding over the header or the composer.
 func TestSelectionBarStaysInTimeline(t *testing.T) {
