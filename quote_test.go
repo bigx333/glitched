@@ -300,44 +300,112 @@ func TestSelectedText(t *testing.T) {
 	}
 }
 
+// quoteAll selects all of the reply from the word of at, and returns what
+// Quote quotes of it and what ⌘C copies.
+func quoteAll(t *testing.T, h *harness, at string) (quote, copied string) {
+	t.Helper()
+	doubleClick(h, at)
+	h.tt.Key(ui.Cmd, ui.KeyA)
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
+	h.tt.Key(ui.Cmd, ui.KeyC)
+	h.tt.Frame()
+	copied = strings.TrimSpace(h.tt.Clipboard())
+	h.click("Quote")
+	h.tt.Advance(time.Second)
+	i := slices.IndexFunc(h.a.attachments, func(at attachment) bool { return at.quote })
+	if i < 0 {
+		t.Fatalf("attachments %+v; want a quote", h.a.attachments)
+	}
+	return h.a.attachments[i].text, copied
+}
+
+// codeLines is n lines of code, each after indent.
+func codeLines(n int, indent string) string {
+	var b strings.Builder
+	for i := 1; i <= n; i++ {
+		fmt.Fprintf(&b, "%sline%02d := %d\n", indent, i, i)
+	}
+	return b.String()
+}
+
 // A quote of a code block has its lines as the reply has them, as ⌘C
 // copies them, however many texts MyGo lays it out in, and a paragraph
 // after it as one.
 func TestSelectionQuotesLongCode(t *testing.T) {
-	code := func(n int, indent string) string {
-		var b strings.Builder
-		for i := 1; i <= n; i++ {
-			fmt.Fprintf(&b, "%sline%02d := %d\n", indent, i, i)
-		}
-		return b.String()
-	}
 	for name, md := range map[string]string{
-		"70 lines":                "Intro here.\n\n```go\n" + code(70, "") + "```\n\nOutro here.",
-		"32 lines":                "Intro here.\n\n```go\n" + code(32, "") + "```\n\nOutro here.",
-		"64 lines":                "Intro here.\n\n```go\n" + code(64, "") + "```\n\nOutro here.",
-		"40 lines in a list item": "Intro here.\n\n1. Run this:\n\n   ```go\n" + code(40, "   ") + "   ```\n\nOutro here.",
+		"70 lines":                 "Intro here.\n\n```go\n" + codeLines(70, "") + "```\n\nOutro here.",
+		"32 lines":                 "Intro here.\n\n```go\n" + codeLines(32, "") + "```\n\nOutro here.",
+		"64 lines":                 "Intro here.\n\n```go\n" + codeLines(64, "") + "```\n\nOutro here.",
+		"40 lines in a list item":  "Intro here.\n\n1. Run this:\n\n   ```go\n" + codeLines(40, "   ") + "   ```\n\nOutro here.",
+		"40 lines in a blockquote": "Intro here.\n\n> ```go\n" + codeLines(40, "> ") + "> ```\n\nOutro here.",
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := replyReady(t, md, "Outro here.")
-			doubleClick(h, "Outro here.")
-			h.tt.Key(ui.Cmd, ui.KeyA)
-			h.tt.Advance(quoteWait + 50*time.Millisecond)
-			h.tt.Key(ui.Cmd, ui.KeyC)
-			h.tt.Frame()
-			copied := strings.TrimSpace(h.tt.Clipboard())
+			q, copied := quoteAll(t, h, "Outro here.")
 			if !strings.Contains(copied, "line31 := 31\nline32 := 32") {
 				t.Fatalf("⌘C copied %q; want the code's lines", copied)
 			}
-			h.click("Quote")
-			h.tt.Advance(time.Second)
-			i := slices.IndexFunc(h.a.attachments, func(at attachment) bool { return at.quote })
-			if i < 0 {
-				t.Fatalf("attachments %+v; want a quote", h.a.attachments)
-			}
-			if got := h.a.attachments[i].text; got != copied {
-				t.Errorf("the quote is\n%s\nwant it as ⌘C copies the selection:\n%s", got, copied)
+			if q != copied {
+				t.Errorf("the quote is\n%s\nwant it as ⌘C copies the selection:\n%s", q, copied)
 			}
 		})
+	}
+}
+
+// A quote keeps apart the blocks ⌘C keeps apart, though the reply's
+// Markdown has them on lines one after the other, or has them as lines
+// one after the other of a code block elsewhere.
+func TestSelectionQuotesBlocksApart(t *testing.T) {
+	for name, md := range map[string]string{
+		"a paragraph, then a blockquote":              "Intro line here.\n> Quoted line here.\n\nOutro here.",
+		"a blockquote in a blockquote":                "> Outer line here.\n> > Inner line here.\n\nOutro here.",
+		"paragraphs also in code":                     "Run these.\n\nnpm install\n\nnpm test\n\n```sh\nnpm install\nnpm test\n```\n\nOutro here.",
+		"a loose list's items also in code":           "Steps:\n\n- npm install\n\n- npm test\n\nAt once:\n\n```sh\nnpm install\nnpm test\n```\n\nOutro here.",
+		"paragraphs also at a long code block's seam": "line32 := 32\n\nline33 := 33\n\n```go\n" + codeLines(40, "") + "```\n\nOutro here.",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := replyReady(t, md, "Outro here.")
+			if q, copied := quoteAll(t, h, "Outro here."); q != copied {
+				t.Errorf("the quote is\n%s\nwant it as ⌘C copies the selection:\n%s", q, copied)
+			}
+		})
+	}
+}
+
+// Changed a key at a time, all of a reply of many paragraphs selected
+// takes about as long a frame to follow as a few words: its text is read
+// in time in proportion to it.
+func TestSelectionOfManyParagraphsFollowsQuickly(t *testing.T) {
+	var md strings.Builder
+	for i := 1; i <= 1000; i++ {
+		fmt.Fprintf(&md, "Paragraph %04d of a long reply that goes on.\n\n", i)
+	}
+	h := replyReady(t, md.String()+"Outro here.", "Outro here.")
+	// shrink is how long a frame takes as Shift and the left arrow shrink
+	// the selection, the least of a few runs.
+	shrink := func() time.Duration {
+		var least time.Duration
+		for i := range 5 {
+			start := time.Now()
+			for range 10 {
+				h.tt.Key(ui.Shift, ui.KeyLeft)
+			}
+			if took := time.Since(start) / 10; i == 0 || took < least {
+				least = took
+			}
+		}
+		return least
+	}
+	doubleClick(h, "Outro here.")
+	few := shrink()
+	h.tt.Key(ui.Cmd, ui.KeyA)
+	all := shrink()
+	h.tt.HoldModifiers(0)
+	if n := len([]rune(h.a.quote.text)); n < 40000 {
+		t.Fatalf("all of the reply selected and shrunk, %d runes of it selected", n)
+	}
+	if all > 2*few {
+		t.Errorf("shrunk a key at a time, all of the reply selected takes %v a frame, a few words %v; want about as long", all, few)
 	}
 }
 
