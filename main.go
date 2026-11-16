@@ -267,7 +267,12 @@ type app struct {
 	// The effort slider's drag: held, where it was pressed and last held,
 	// in levels, to tell a click from a drag, and the level the held
 	// thumb last locked onto, -1 before any, which it chooses once.
-	effortHeld                  bool
+	// effortPressed is set while the thumb is pressed, as the last frame
+	// built it: a slider not built, as its picker closed mid-drag, sees
+	// no release, so the next frame ends the hold (view). Left held, it
+	// would keep the default unsaved, and the next picker opened would
+	// take it for a click let go there.
+	effortHeld, effortPressed   bool
 	effortPressAt, effortLastAt float32
 	effortLock                  int
 	maxAt                       time.Time
@@ -715,7 +720,8 @@ func (a *app) view(c *ui.Context) {
 	if a.previewHeld && !a.previewPressed {
 		a.endPreviewDrag()
 	}
-	a.sidebarPressed, a.previewPressed = false, false
+	a.effortHeld = a.effortHeld && a.effortPressed
+	a.sidebarPressed, a.previewPressed, a.effortPressed = false, false, false
 	a.browser.letGo(a.showPreview)
 	a.projects = a.gather()
 	a.kids = a.kidsOf()
