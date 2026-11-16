@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
+	"strings"
 	"time"
 
 	"glitched/internal/provider"
@@ -68,7 +70,10 @@ func readCommands(r io.Reader) ([]provider.Command, error) {
 		if m.Response.Subtype != "success" {
 			return nil, fmt.Errorf("Claude Code refused to list its commands: %s", m.Response.Error)
 		}
-		return m.Response.Response.Commands, nil
+		// A name starting with _ is Claude Code's own, not one to type.
+		return slices.DeleteFunc(m.Response.Response.Commands, func(c provider.Command) bool {
+			return strings.HasPrefix(c.Name, "_")
+		}), nil
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
