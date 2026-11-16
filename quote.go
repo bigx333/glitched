@@ -289,13 +289,17 @@ func (a *app) placeQuote(c *ui.Context, s *quoteBar, md, col ui.Rect) (quoteSpot
 	if a.composerAt.H > 0 {
 		bandBottom = a.composerAt.Y
 	}
+	// Held with its reply not built, it stays where it was across the
+	// chat, but in the pane as it is now, which a panel opened beside it
+	// or the sidebar shown may have narrowed.
+	held := max(min(s.spot.x, a.paneAt.X+a.paneAt.W-columnRight-quoteBarW), a.paneAt.X+columnLeft)
 	switch {
 	case md.H <= 0 && !s.inUse:
 		return quoteSpot{}, false
 	case md.H <= 0 && s.spot.y < (bandTop+bandBottom)/2:
-		return quoteSpot{x: s.spot.x, y: bandTop + quoteGap, pinned: true}, true
+		return quoteSpot{x: held, y: bandTop + quoteGap, pinned: true}, true
 	case md.H <= 0:
-		return quoteSpot{x: s.spot.x, y: bandBottom - quoteGap, above: true, pinned: true}, true
+		return quoteSpot{x: held, y: bandBottom - quoteGap, above: true, pinned: true}, true
 	}
 	if (bottom < bandTop || top > bandBottom) && !s.inUse {
 		return quoteSpot{}, false
