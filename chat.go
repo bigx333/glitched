@@ -366,11 +366,11 @@ func userMarkdown(text string) string {
 	lines := strings.Split(text, "\n")
 	var blocks, prose []string
 	code := false
-	flush := func() {
-		if len(prose) > 0 && strings.TrimSpace(prose[0]) == "" {
+	flush := func(beforeCode bool) {
+		if len(blocks) > 0 && len(prose) > 0 && strings.TrimSpace(prose[0]) == "" {
 			prose = prose[1:]
 		}
-		if len(prose) > 0 && strings.TrimSpace(prose[len(prose)-1]) == "" {
+		if beforeCode && len(prose) > 0 && strings.TrimSpace(prose[len(prose)-1]) == "" {
 			prose = prose[:len(prose)-1]
 		}
 		if len(prose) > 0 {
@@ -393,7 +393,7 @@ func userMarkdown(text string) string {
 			prose = append(prose, lines[i:]...)
 			break
 		}
-		flush()
+		flush(true)
 		block := lines[i:min(end+1, len(lines))]
 		if end == len(lines) {
 			block = append(slices.Clip(block), fence)
@@ -401,7 +401,7 @@ func userMarkdown(text string) string {
 		blocks, code = append(blocks, strings.Join(block, "\n")), true
 		i = end
 	}
-	flush()
+	flush(false)
 	if !code {
 		return ""
 	}
