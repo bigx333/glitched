@@ -247,6 +247,31 @@ func TestSelectionBarEscape(t *testing.T) {
 	}
 }
 
+// A press elsewhere while the bar waits for the selection to rest, as in
+// the composer to type there, leaves the bar unshown.
+func TestSelectionBarWaitingPressedElsewhere(t *testing.T) {
+	h := enterReady(t, fake.New(fake.Turn(false)), "go")
+	h.until("the reply", func() bool { return h.tt.HasText("Looking at the code.") })
+	h.tt.Advance(time.Second)
+	r, _ := h.tt.Find("Looking at the code.")
+	h.tt.ClickAt(r.X+10, r.Y+r.H/2)
+	h.tt.ClickAt(r.X+10, r.Y+r.H/2)
+	h.tt.Advance(quoteWait / 3)
+	if barShown(h) || h.a.quote.text != "Looking" {
+		t.Fatalf("a word double-clicked: bar %v, selection %q; want it waiting on Looking", barShown(h), h.a.quote.text)
+	}
+	at := h.a.composerAt
+	h.tt.ClickAt(at.X+at.W/2, at.Y+30)
+	h.tt.Type("hello")
+	h.tt.Advance(time.Second)
+	if h.a.draft != "hello" {
+		t.Fatalf("typed in the composer: draft %q", h.a.draft)
+	}
+	if barShown(h) {
+		t.Error("the composer pressed before the selection rested, the selection's bar came up all the same")
+	}
+}
+
 func TestBlockquote(t *testing.T) {
 	for in, want := range map[string]string{
 		"one":                "> one",
