@@ -577,6 +577,54 @@ func TestSelectionBarInChatColumn(t *testing.T) {
 	}
 }
 
+// A word's bar shown under it keeps off it as the chat's column narrows
+// and the reply rewraps, moving the word down: as the diff panel opens
+// beside the chat, as the sidebar shows again, as the window narrows.
+func TestSelectionBarClearOfSelectionAfterRewrap(t *testing.T) {
+	key := func(k ui.Key) func(h *harness) {
+		return func(h *harness) { h.tt.Key(ui.Cmd, k); h.tt.HoldModifiers(0) }
+	}
+	for _, tc := range []struct {
+		name          string
+		repeat        int
+		widen, narrow func(h *harness)
+	}{
+		{"the diff panel", 10, nil, key(ui.KeyD)},
+		{"the sidebar", 10, func(h *harness) { h.tt.SetSize(1000, 860); key(ui.KeyB)(h) }, key(ui.KeyB)},
+		{"the window", 22, nil, func(h *harness) { h.tt.SetSize(900, 860) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			long := "Alpha " + strings.Repeat("lorem ipsum dolor sit amet consectetur ", tc.repeat) + "omega."
+			h := replyReady(t, long+"\n\nTarget words here.\n\nOutro here.", "Outro here.")
+			if tc.widen != nil {
+				tc.widen(h)
+				h.tt.Advance(time.Second)
+			}
+			doubleClick(h, "Target words here.")
+			h.tt.Move(1, 1)
+			h.tt.Advance(time.Second)
+			if _, ok := barAt(h); !ok || h.a.quote.text != "Target" {
+				t.Fatalf("double-clicked Target: bar %v on %q", ok, h.a.quote.text)
+			}
+			// How far down the reply the selected line is.
+			down := func() (ui.Rect, float32) {
+				line, _ := h.tt.Find("Target words here.")
+				return line, line.Y - startsWith(h, "Alpha ").Y
+			}
+			_, was := down()
+			tc.narrow(h)
+			h.tt.Advance(2 * time.Second)
+			line, now := down()
+			if now <= was {
+				t.Fatalf("the selected line went from %v to %v down the reply; want the reply rewrapped over more lines", was, now)
+			}
+			if b, ok := barAt(h); ok && meets(b, line) {
+				t.Errorf("rewrapped, the bar (y %v to %v) lies over the selected line (y %v to %v)", b.Y, b.Y+b.H, line.Y, line.Y+line.H)
+			}
+		})
+	}
+}
+
 // askAfterReply is a turn that replies, then asks to run a command.
 var askAfterReply = []provider.Event{
 	provider.TextDelta{Text: "May I run the tests now?"},

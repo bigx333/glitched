@@ -55,9 +55,11 @@ type quoteBar struct {
 	at    time.Time // when the selection was made or last changed
 	// from and to are where the pointer was, relative to the reply's
 	// text, as the selection was first seen and as it last changed: where
-	// it began and where it ended; loose, a selection they don't place,
-	// which may be anywhere in the reply (followSelection).
+	// it began and where it ended, the text w wide then; loose, a
+	// selection they don't place, which may be anywhere in the reply
+	// (followSelection).
 	from, to ui.Point
+	w        float32
 	loose    bool
 	// inUse is the bar in use in the last frame: pointed at or holding the
 	// focus; focused is it holding the focus in this pass.
@@ -170,9 +172,9 @@ func (a *app) followSelection(c *ui.Context, t thread, key, src string, col, md 
 		// Made or changed: wait for it to rest. Grown or shrunk at an end,
 		// as a drag changes it, it began where it did.
 		x, y, _ := md.PointerPosition()
-		p := ui.Point{X: x, Y: y}
+		p, w := ui.Point{X: x, Y: y}, md.Bounds().W
 		from := p
-		if s.of == of && atAnEnd(s.text, text) {
+		if s.of == of && atAnEnd(s.text, text) && s.w == w {
 			from = s.from
 		}
 		// The pointer tells where the selection is when it moved across
@@ -181,7 +183,7 @@ func (a *app) followSelection(c *ui.Context, t thread, key, src string, col, md 
 		// keys, nor for more than a word selected at once, as by the
 		// menu's Select All, which may be anywhere in the reply.
 		loose := c.Modifiers() != 0 || from == p && strings.ContainsFunc(text, unicode.IsSpace)
-		*s = quoteBar{of: of, text: text, at: a.now, from: from, to: p, loose: loose}
+		*s = quoteBar{of: of, text: text, at: a.now, from: from, to: p, w: w, loose: loose}
 		c.After(quoteWait)
 	case s.state == quoteWaiting:
 		if rest := a.now.Sub(s.at); rest < quoteWait {
@@ -263,8 +265,8 @@ const quoteGap, quoteLead, quoteBarW, quoteBarH = 4, 12, 360, 44
 // selection went past.
 func (a *app) placeQuote(c *ui.Context, s *quoteBar, md, col ui.Rect) (quoteSpot, bool) {
 	// The selection runs from the line of the point higher up to that of
-	// the one lower down, a line of the reply's around each; loose, over
-	// all of the reply.
+	// the one lower down, a line of the reply's around each; loose, or the
+	// reply rewrapped since, its text another width, over all of the reply.
 	line := c.Theme().FontSize * 1.5
 	hi, lo := s.from, s.to
 	if hi.Y > lo.Y {
@@ -272,7 +274,7 @@ func (a *app) placeQuote(c *ui.Context, s *quoteBar, md, col ui.Rect) (quoteSpot
 	}
 	top := md.Y + min(max(hi.Y, 0), md.H) - line
 	bottom := md.Y + min(max(lo.Y, 0), md.H) + line
-	if s.loose {
+	if s.loose || md.W != s.w {
 		top, bottom = md.Y, md.Y+md.H
 	}
 	by := func(p ui.Point) float32 {
