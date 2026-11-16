@@ -1,12 +1,14 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/markdown/parser"
 
 	"glitched/internal/api"
 )
@@ -79,6 +81,10 @@ type replyAt struct {
 	md, col ui.Rect
 }
 
+// codeChunk is how many lines of a code block MyGo lays out in one text,
+// a part of a selection each (ui/markdown's chunkLines).
+const codeChunk = 32
+
 // selectedText is the text of a selection's parts, from a reply whose
 // Markdown is src, as ⌘C copies it: a paragraph each, but for the texts
 // MyGo lays a long code block out in, which go on from line to line; a
@@ -87,7 +93,7 @@ type replyAt struct {
 func selectedText(parts []ui.SelectedText, src string) string {
 	var b strings.Builder
 	var prev ui.SelectedText
-	var lines []string // src's, once needed
+	var seams map[string][]string // src's, once needed
 	for _, p := range parts {
 		r := []rune(p.Text)
 		from, to := min(max(p.Start, 0), len(r)), min(max(p.End, 0), len(r))
@@ -96,16 +102,15 @@ func selectedText(parts []ui.SelectedText, src string) string {
 		}
 		switch {
 		case b.Len() == 0:
-		case prev.End >= utf8.RuneCountInString(prev.Text) && from == 0:
-			// One part selected to its end and the next from its start:
-			// one code block, where the source goes on from the last line
-			// of one to the first of the next.
-			if lines == nil {
-				lines = strings.Split(src, "\n")
+		case prev.End >= utf8.RuneCountInString(prev.Text) && from == 0 && strings.Count(prev.Text, "\n") == codeChunk-1:
+			// A text of as many lines as MyGo lays out in one, selected to
+			// its end, and the next from its start: one code block where
+			// the next is the text after it in the block, or its start, as
+			// the block is still being written.
+			if seams == nil {
+				seams = codeSeams(src)
 			}
-			last := prev.Text[strings.LastIndexByte(prev.Text, '\n')+1:]
-			first, _, _ := strings.Cut(p.Text, "\n")
-			if consecutive(lines, last, first) {
+			if slices.ContainsFunc(seams[prev.Text], func(next string) bool { return strings.HasPrefix(next, p.Text) }) {
 				b.WriteString("\n")
 			} else {
 				b.WriteString("\n\n")
@@ -119,17 +124,39 @@ func selectedText(parts []ui.SelectedText, src string) string {
 	return strings.TrimSpace(b.String())
 }
 
-// consecutive is whether a line of the source reads a and the next b,
-// but for the indentation and quote marks a container puts before them.
-func consecutive(lines []string, a, b string) bool {
-	bare := func(s string) string { return strings.TrimRight(strings.TrimLeft(s, " \t>"), "\r") }
-	a, b = bare(a), bare(b)
-	for i := 0; i+1 < len(lines); i++ {
-		if bare(lines[i]) == a && bare(lines[i+1]) == b {
-			return true
+// codeSeams maps each text MyGo lays a code block of src out in, but the
+// block's last, to the texts after it in its block: one, unless blocks
+// have a text alike.
+func codeSeams(src string) map[string][]string {
+	d := parser.Parse(src)
+	seams := map[string][]string{}
+	var b strings.Builder
+	for i := range d.Len() {
+		if d.Block(i).Kind != parser.CodeBlock || d.LineCount(i) <= codeChunk {
+			continue
+		}
+		n := d.LineCount(i)
+		var prev string
+		for first := 0; first < n; first += codeChunk {
+			b.Reset()
+			for k := first; k < min(first+codeChunk, n); k++ {
+				if k > first {
+					b.WriteByte('\n')
+				}
+				line, _ := d.Line(i, k)
+				b.WriteString(line)
+			}
+			text := b.String()
+			if text == "" {
+				text = " " // as MyGo shows a text of one empty line
+			}
+			if first > 0 {
+				seams[prev] = append(seams[prev], text)
+			}
+			prev = text
 		}
 	}
-	return false
+	return seams
 }
 
 // blockquote is text quoted in Markdown.
