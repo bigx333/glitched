@@ -85,6 +85,31 @@ func TestPaletteSwitchModel(t *testing.T) {
 	}
 }
 
+// It opens the picker of the composer the chat comes back to, though the
+// pickers were last another's: the thread shown before the settings page
+// was deleted since, so the draft's.
+func TestPaletteSwitchModelOpensThePickerOfTheComposerShown(t *testing.T) {
+	h := start(t, tempDir(t))
+	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
+	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk)
+	th := h.thread("Mine")
+	h.until("the thread's view", func() bool { return th.View.Revision > 0 && len(th.Pending) == 0 })
+	h.a.select_(th)
+	h.tt.Advance(time.Second)
+	h.a.router.Push("/settings/general")
+	h.tt.Frame()
+	h.a.backend.Delete(h.local(), id)
+	h.until("the thread gone", func() bool { return h.local().Threads[id] == nil })
+	h.a.openCommandPalette()
+	h.tt.Frame()
+	h.tt.Type("switch model")
+	h.tt.Key(0, ui.KeyEnter)
+	h.tt.Advance(time.Second)
+	if h.a.router.Path() != "/" || !h.a.current().id().IsZero() || !h.a.pickerOpen || !h.tt.HasText("Faster") {
+		t.Errorf("path %q, thread %q, picker %v: the window shows %q", h.a.router.Path(), h.a.current().View.Title, h.a.pickerOpen, h.tt.Texts())
+	}
+}
+
 // Two threads of one title are two rows of the palette.
 func TestPaletteListsThreadsOfOneTitle(t *testing.T) {
 	dir := tempDir(t)

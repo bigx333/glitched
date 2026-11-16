@@ -89,10 +89,14 @@ func (a *app) commands() []command {
 
 // openModelPicker opens the composer's model picker, from wherever the
 // palette was: the chat, with the composer at its full size, holds it.
+// The picker is the shown thread's composer's from here, which may not
+// have built its pickers since it came: compact or off screen, it builds
+// none, and would close this one as another composer's.
 func (a *app) openModelPicker() {
 	if a.router.Path() != "/" {
 		a.router.Push("/")
 	}
+	a.pickersIn(a.current().id())
 	a.composerOpened, a.pickerOpen = true, true
 }
 
