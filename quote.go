@@ -1,7 +1,6 @@
 package main
 
 import (
-	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -292,11 +291,25 @@ func (a *app) placeQuote(c *ui.Context, s *quoteBar, md, col ui.Rect) (quoteSpot
 		if p.above {
 			r.Y -= quoteBarH
 		}
-		if r.Y >= bandTop && r.Y+r.H <= bandBottom && !slices.ContainsFunc(a.waitingAt, func(v ui.Rect) bool { return meets(r, v) }) {
+		if r.Y >= bandTop && r.Y+r.H <= bandBottom && !a.overWaiting(r) {
 			return p, true
 		}
 	}
 	return spots[2], true // none clear: held at the edge it tried first
+}
+
+// overWaiting is whether r lies over a waiting card where the last frame
+// drew it, as this pass or the one before noted, the latter for a card
+// the chat's list built as it laid out, after the bar.
+func (a *app) overWaiting(r ui.Rect) bool {
+	for _, drawn := range []map[api.ID]sight{a.drawn, a.drew} {
+		for _, s := range drawn {
+			if meets(r, s.card) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // quoteBarAt builds the bar of the selection where spot is, from at by the

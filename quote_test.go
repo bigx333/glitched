@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -918,4 +919,27 @@ func TestSelectionBarKeepsFocusAsComposerOpens(t *testing.T) {
 	h.tt.Key(0, ui.KeyEnter)
 	want := "> Paragraph\n\nwhat does this mean"
 	h.until("the question sent", func() bool { return slices.Contains(sentTexts(h), want) })
+}
+
+// The chat with a waiting card left and come back to many times keeps as
+// many handles bound in the window as it did: MyGo keeps a window's
+// bindings until it closes, so a card that shows again binds no new one.
+func TestWaitingCardShownAgainBindsNoHandle(t *testing.T) {
+	h, th := asking(t, fake.Turn(true))
+	// The window's bindings, which no API counts.
+	refs := func() int { return reflect.ValueOf(h.tt).Elem().FieldByName("rt").Elem().FieldByName("refs").Len() }
+	h.tt.Advance(time.Second)
+	before := refs()
+	for range 20 {
+		h.click("Settings")
+		h.tt.Advance(300 * time.Millisecond)
+		h.a.select_(th)
+		h.tt.Advance(300 * time.Millisecond)
+	}
+	if !h.tt.HasText("Approval needed") {
+		t.Fatalf("back on the thread, no waiting card: %q", h.tt.Texts())
+	}
+	if after := refs(); after > before {
+		t.Errorf("the window's handle bindings went from %d to %d as the chat with a waiting card was left and come back to 20 times; want no more", before, after)
+	}
 }

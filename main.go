@@ -331,11 +331,6 @@ type app struct {
 	coverN          int
 	over            []ui.Rect
 	blind, blinding bool
-	// waiting are the cards of the waiting requests shown, and waitingAt
-	// where the frame on screen drew them (lookOver), which the bar of a
-	// selection keeps off (quote.go).
-	waiting   map[api.ID]*waitingCard
-	waitingAt []ui.Rect
 	// zap is a request's answers just answered, breaking up as they go;
 	// answerAt where the waiting request's answers were last laid out.
 	zap      approvalZap
@@ -557,7 +552,6 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		drawn:          map[api.ID]sight{},
 		reads:          map[api.ID]*reading{},
 		covers:         map[coverKey]*ui.Handle{},
-		waiting:        map[api.ID]*waitingCard{},
 		pluginPages:    map[pluginKey]*pluginPage{},
 		pluginControls: map[pluginKey]*render.Controls{},
 		placeControls:  map[placeKey]*render.Controls{},
