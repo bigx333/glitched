@@ -18,13 +18,16 @@ func TestTranscriptAndComposerShareEdges(t *testing.T) {
 		t.Helper()
 		tt.Advance(time.Second)
 		reply, ok1 := tt.Find("Looking at the code.")
-		bubbleText, ok2 := tt.Find("Step 8: look at main.go again.")
+		bubble, ok2 := tt.Find("Step 8: look at main.go again.")
 		model, ok3 := tt.Find("Model")
 		send, ok4 := tt.Find("Send")
 		if !ok1 || !ok2 || !ok3 || !ok4 {
 			t.Fatalf("%s: missing a landmark: %q", name, tt.Texts())
 		}
-		colL, colR := reply.X, bubbleText.X+bubbleText.W+bubbleInset
+		// The reply's text is at the column's left edge and the bubble,
+		// its padding in its bounds, at its right; the composer's controls
+		// are 8 inside the card.
+		colL, colR := reply.X, bubble.X+bubble.W
 		cardL, cardR := model.X-8, send.X+send.W+8
 		t.Logf("%s: column %.1f→%.1f, composer %.1f→%.1f", name, colL, colR, cardL, cardR)
 		if d := colL - cardL; d < -1 || d > 1 {
