@@ -409,6 +409,38 @@ func TestSelectionOfManyParagraphsFollowsQuickly(t *testing.T) {
 	}
 }
 
+// A frame with all of a long reply selected allocates about as much as
+// one with nothing selected: MyGo gives the selection's parts in each
+// frame, and their text is read anew only as they change.
+func TestSelectionReadAsItChanges(t *testing.T) {
+	var paras strings.Builder
+	for i := 1; i <= 1000; i++ {
+		fmt.Fprintf(&paras, "Paragraph %04d of a long reply that goes on.\n\n", i)
+	}
+	for name, md := range map[string]string{
+		"1000 paragraphs":     paras.String() + "Outro here.",
+		"10000 lines of code": "Intro here.\n\n```go\n" + codeLines(10000, "") + "```\n\nOutro here.",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := replyReady(t, md, "Outro here.")
+			allocs := func() float64 { return testing.AllocsPerRun(10, func() { h.tt.Frame() }) }
+			none := allocs()
+			doubleClick(h, "Outro here.")
+			h.tt.Key(ui.Cmd, ui.KeyA)
+			h.tt.HoldModifiers(0)
+			h.tt.Move(1, 1)
+			h.tt.Advance(time.Second)
+			if !barShown(h) {
+				t.Fatalf("all of the reply selected, no bar: %+v", h.a.quote)
+			}
+			// What the bar itself allocates, and a little more.
+			if all := allocs(); all > none+100 {
+				t.Errorf("a frame allocates %.0f times with all of the reply selected, %.0f with nothing selected; want about as many", all, none)
+			}
+		})
+	}
+}
+
 // Quoted, cleared and selected again, the same word brings the bar back,
 // though nothing else was selected between.
 func TestSelectionBarReturnsAfterQuote(t *testing.T) {
