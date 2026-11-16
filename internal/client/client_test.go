@@ -673,7 +673,7 @@ func TestATakenAnswerStaysUntilItsRequestStopsWaiting(t *testing.T) {
 		}
 		env := &Env{Threads: map[api.ID]*Thread{id: th}}
 		m := &Manager{}
-		m.submitted(env, api.Command{ID: cmd, Target: id, Body: body}, nil)
+		m.submitted(env, api.Command{ID: cmd, Target: id, Body: body}, api.Receipt{}, nil)
 		if len(th.Pending) != 1 {
 			t.Fatalf("open %v: taken, with its request still waiting, the rows are %s; want the answer", open, describePending(th.Pending))
 		}

@@ -51,7 +51,7 @@ type Command struct {
 	Expires  time.Time
 	Body     intent    // sealed: dispatch, queueEdit, interrupt, respond, inbox, checkpointRestore, terminal*, grant*
 }
-type Receipt struct{ Command ID; Committed Cursor } // intent committed, not "done"
+type Receipt struct{ Command ID; Committed Cursor; Revision uint64 } // intent committed, not "done"; Revision is the target's after it
 
 type DispatchMode uint8 // StartNow, AfterActive, SteerActive, RestartActive, Defer (t3code's five)
 

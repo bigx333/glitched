@@ -264,10 +264,12 @@ type app struct {
 	pickerFamily string
 	fast         bool
 	fastAt       time.Time
-	// The effort slider's drag: held, and where it was pressed and last
-	// held, in levels, to tell a click from a drag.
+	// The effort slider's drag: held, where it was pressed and last held,
+	// in levels, to tell a click from a drag, and the level the held
+	// thumb last locked onto, -1 before any, which it chooses once.
 	effortHeld                  bool
 	effortPressAt, effortLastAt float32
+	effortLock                  int
 	maxAt                       time.Time
 	model                       string
 	effort                      string

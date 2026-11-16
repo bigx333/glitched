@@ -65,6 +65,56 @@ func TestSubmitReturnsTheStoredReceipt(t *testing.T) {
 	}
 }
 
+// A receipt carries its thread's revision after the commit, which is the
+// view's that shows what the command did. The stored receipt says the
+// same after the thread has moved on, and after a reopen.
+func TestAReceiptCarriesItsThreadsRevision(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	tr := newTree(t, s)
+	thread := tr.ids[0]
+	revision := func(id api.ID) uint64 {
+		t.Helper()
+		snap, err := s.Read(ctx, api.Query{Thread: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return snap.Threads[0].Revision
+	}
+	submit := func(c api.Command) api.Receipt {
+		t.Helper()
+		r, err := s.Submit(ctx, c, time.Now())
+		if err != nil {
+			t.Fatalf("%T: %v", c.Body, err)
+		}
+		return r
+	}
+	before := revision(thread)
+	full := api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadConfigure{Model: sonnet, Access: api.AccessFull}}
+	took := submit(full)
+	if took.Revision != revision(thread) || took.Revision <= before {
+		t.Fatalf("the configure's receipt says revision %d; the thread went from %d to %d", took.Revision, before, revision(thread))
+	}
+	// A configure that changes nothing commits at the revision that shows
+	// it already.
+	if same := submit(api.Command{ID: api.NewID(), Target: thread, Body: full.Body}); same.Revision != took.Revision {
+		t.Errorf("a configure that changes nothing says revision %d, want the thread's, %d", same.Revision, took.Revision)
+	}
+	// One that takes the tree says its own thread's.
+	if narrowed := submit(api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadConfigure{Model: sonnet, Access: api.AccessAsk}}); narrowed.Revision != revision(thread) {
+		t.Errorf("a configure that narrows the tree says revision %d, want its thread's, %d", narrowed.Revision, revision(thread))
+	}
+	if again := submit(full); again != took {
+		t.Errorf("the stored receipt, the thread moved on: %+v, want %+v", again, took)
+	}
+	s.Close()
+	s = open(t, path)
+	if after := submit(full); after != took {
+		t.Errorf("the stored receipt after a reopen: %+v, want %+v", after, took)
+	}
+}
+
 func TestSubmitRejectsStaleCommands(t *testing.T) {
 	ctx := context.Background()
 	s := open(t, filepath.Join(t.TempDir(), "host.db"))
@@ -327,7 +377,7 @@ func TestAnOlderDatabaseUpgrades(t *testing.T) {
 			updated_at INTEGER NOT NULL, CHECK ((disposition = 1) = (until IS NOT NULL))) STRICT;
 		INSERT INTO threads_v1 SELECT id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at FROM threads;
 		DROP TABLE threads;
-		ALTER TABLE threads_v1 RENAME TO threads;` + runsV6 + `
+		ALTER TABLE threads_v1 RENAME TO threads;` + runsV6 + commandsV7 + `
 		PRAGMA user_version = 1;`); err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +424,7 @@ func TestAnArchivedThreadUpgradesSettled(t *testing.T) {
 			disposition, until, updated_at, deleted FROM threads;
 		DROP TABLE threads;
 		ALTER TABLE threads_v3 RENAME TO threads;
-		UPDATE threads SET disposition = 3;` + runsV6 + `
+		UPDATE threads SET disposition = 3;` + runsV6 + commandsV7 + `
 		PRAGMA user_version = 3;`); err != nil {
 		t.Fatal(err)
 	}
@@ -486,8 +536,8 @@ func tableOf(t *testing.T, path, name string) table {
 }
 
 // downgrade rewrites a database this build created into an older build's:
-// sql rebuilds its threads table, its runs lose the model and access, and
-// the version is set to version.
+// sql rebuilds its threads table, its runs and commands lose what the
+// versions after version gave them, and the version is set to version.
 func downgrade(t *testing.T, path, sqlText string, version int) {
 	t.Helper()
 	db, err := sql.Open("sqlite", path)
@@ -495,7 +545,10 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + runsV6 + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
+	if version < 7 {
+		sqlText += runsV6
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + commandsV7 + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -504,6 +557,12 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 const runsV6 = `
 	ALTER TABLE runs DROP COLUMN model;
 	ALTER TABLE runs DROP COLUMN access;
+`
+
+// The commands table up to version 7, before a receipt kept its thread's
+// revision.
+const commandsV7 = `
+	ALTER TABLE commands DROP COLUMN revision;
 `
 
 // The threads table of version 3, archived threads and all.
@@ -794,6 +853,46 @@ func TestAVersion6DatabaseUpgradesWithEachRunsModelAndAccess(t *testing.T) {
 	open(t, fresh).Close()
 	if got, want := tableOf(t, path, "runs"), tableOf(t, fresh, "runs"); !reflect.DeepEqual(got, want) {
 		t.Errorf("the runs table\n%+v\nwant a new database's\n%+v", got, want)
+	}
+}
+
+// A database from before receipts kept their thread's revision upgrades
+// to the commands table a new one has. A receipt stored before says no
+// revision, and one stored after says its thread's.
+func TestAVersion7DatabaseUpgradesWithItsReceipts(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	old := create(thread)
+	first, err := s.Submit(ctx, old, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	downgrade(t, path, "", 7)
+
+	s = open(t, path)
+	first.Revision = 0
+	if again, err := s.Submit(ctx, old, time.Now()); err != nil || again != first {
+		t.Errorf("a receipt stored before the upgrade: %+v %v, want %+v", again, err, first)
+	}
+	rename := api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadRename{Title: "renamed"}}
+	took, err := s.Submit(ctx, rename, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if th := threadOf(t, s, thread); took.Revision == 0 || took.Revision != th.Revision {
+		t.Errorf("a receipt after the upgrade says revision %d, want the thread's, %d", took.Revision, th.Revision)
+	}
+	if again, err := s.Submit(ctx, rename, time.Now()); err != nil || again != took {
+		t.Errorf("that receipt again: %+v %v, want %+v", again, err, took)
+	}
+	s.Close()
+	fresh := filepath.Join(t.TempDir(), "host.db")
+	open(t, fresh).Close()
+	if got, want := tableOf(t, path, "commands"), tableOf(t, fresh, "commands"); !reflect.DeepEqual(got, want) {
+		t.Errorf("the commands table\n%+v\nwant a new database's\n%+v", got, want)
 	}
 }
 

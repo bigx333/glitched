@@ -53,7 +53,8 @@ func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.R
 		}
 		return engine.Decide(t, c, now)
 	}}
-	at, err := s.commit(ctx, &receipt{c.ID, hash[:]}, 0, func(q querier) ([]step, error) {
+	r := &receipt{id: c.ID, hash: hash[:], thread: c.Target}
+	at, err := s.commit(ctx, r, 0, func(q querier) ([]step, error) {
 		if !engine.TakesTree(c.Body) {
 			return []step{top}, nil
 		}
@@ -69,7 +70,7 @@ func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.R
 		}
 		return append(steps, top), nil
 	})
-	return api.Receipt{Command: c.ID, Committed: at}, err
+	return api.Receipt{Command: c.ID, Committed: at, Revision: r.revision}, err
 }
 
 // treeOf is every thread under top that isn't deleted, each before the
@@ -145,9 +146,14 @@ func (s *Store) Observe(ctx context.Context, thread api.ID, o engine.Observation
 	})
 }
 
+// receipt is a command's, as commit stores it. commit sets revision, the
+// thread's after the command: the stored one for a command it took
+// before, which is 0 for one stored before version 8.
 type receipt struct {
-	id   api.ID
-	hash []byte
+	id       api.ID
+	hash     []byte
+	thread   api.ID // the command's target
+	revision uint64
 }
 
 // decider decides against the thread, reading what else it needs through
@@ -176,9 +182,11 @@ func (s *Store) commit(ctx context.Context, r *receipt, done int64, plan func(q 
 	if r != nil {
 		var hash []byte
 		var seq uint64
-		err := tx.QueryRowContext(ctx, `SELECT hash, seq FROM commands WHERE id = ?`, r.id[:]).Scan(&hash, &seq)
+		var revision sql.NullInt64
+		err := tx.QueryRowContext(ctx, `SELECT hash, seq, revision FROM commands WHERE id = ?`, r.id[:]).Scan(&hash, &seq, &revision)
 		switch {
 		case err == nil && bytes.Equal(hash, r.hash):
+			r.revision = uint64(revision.Int64)
 			return api.Cursor{Log: s.log, Seq: seq}, nil
 		case err == nil:
 			return api.Cursor{}, api.ErrConflict
@@ -210,7 +218,10 @@ func (s *Store) commit(ctx context.Context, r *receipt, done int64, plan func(q 
 		}
 	}
 	if r != nil {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO commands (id, hash, seq) VALUES (?, ?, ?)`, r.id[:], r.hash, head); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT revision FROM threads WHERE id = ?`, r.thread[:]).Scan(&r.revision); err != nil {
+			return api.Cursor{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO commands (id, hash, seq, revision) VALUES (?, ?, ?, ?)`, r.id[:], r.hash, head, r.revision); err != nil {
 			return api.Cursor{}, err
 		}
 	}

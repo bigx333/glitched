@@ -388,7 +388,6 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 		for _, v := range it.Snapshot.Threads {
 			live[v.ID] = true
 			moved[v.ID] = m.view(e, v) && same
-			e.Threads[v.ID].unconfigured()
 		}
 		for id, th := range e.Threads {
 			if th.known && !live[id] {
@@ -462,7 +461,7 @@ func (m *Manager) view(e *Env, v api.Thread) bool {
 	}
 	was, seen := th.View.LastReport, th.known
 	th.View, th.known = v, true
-	th.configured()
+	th.configured(e.log)
 	if th.told == nil {
 		th.told = map[api.ID]heard{}
 	}
@@ -626,46 +625,14 @@ func (th *Thread) shown() {
 	})
 }
 
-// shows is whether the thread's view has c's model and access.
-func (th *Thread) shows(c api.ThreadConfigure) bool {
-	return th.View.Model == c.Model && th.View.Access == c.Access
-}
-
-// configured drops the committed configures the view now shows, and those
-// before them, which the view has moved past. One on its way that the view
-// shows is marked seen: its receipt drops it, though the view moved on.
-func (th *Thread) configured() {
-	last := -1
-	for i, p := range th.Pending {
-		c, ok := p.Body.(api.ThreadConfigure)
-		if !ok || !th.shows(c) {
-			continue
-		}
-		if p.sent {
-			last = i
-		} else if p.Err == nil {
-			th.Pending[i].seen = true
-		}
-	}
-	if last < 0 {
-		return
-	}
-	var kept []Pending
-	for i, p := range th.Pending {
-		if _, ok := p.Body.(api.ThreadConfigure); ok && p.sent && i <= last {
-			continue
-		}
-		kept = append(kept, p)
-	}
-	th.Pending = kept
-}
-
-// unconfigured drops the committed configures a snapshot doesn't show: it
-// came after them, so the thread moved past them.
-func (th *Thread) unconfigured() {
+// configured drops the configures the engine took once the view has them:
+// a view of the log that took them, at the revision their receipt gave or
+// a later one. A view of another log, as a restored database's snapshot
+// sends, has none of that log's revisions, so they go for the thread to
+// show what the view does.
+func (th *Thread) configured(log api.ID) {
 	th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool {
-		_, ok := p.Body.(api.ThreadConfigure)
-		return ok && p.sent
+		return configures(p) && p.sent && (p.log != log || p.at <= th.View.Revision)
 	})
 }
 

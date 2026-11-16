@@ -144,9 +144,10 @@ CREATE TABLE events (
 CREATE INDEX events_by_thread ON events (thread, seq);
 
 CREATE TABLE commands (
-	id   BLOB PRIMARY KEY,
-	hash BLOB NOT NULL,
-	seq  INTEGER NOT NULL
+	id       BLOB PRIMARY KEY,
+	hash     BLOB NOT NULL,
+	seq      INTEGER NOT NULL,
+	revision INTEGER
 ) STRICT;
 
 CREATE TABLE threads (
@@ -228,7 +229,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 7
+const schemaVersion = 8
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -313,6 +314,9 @@ FROM (
 ) a
 WHERE a.thread = runs.thread AND a.generation = runs.generation;
 `,
+	// The target thread's revision after each command, which its receipt
+	// carries. A receipt stored before has none.
+	7: `ALTER TABLE commands ADD COLUMN revision INTEGER;`,
 }
 
 func (s *Store) migrate() error {
