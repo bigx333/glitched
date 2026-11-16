@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -9,6 +10,9 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/api"
+	"glitched/internal/client"
+	"glitched/internal/daemon"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 )
@@ -664,4 +668,71 @@ func TestSelectionBarStaysOnScroll(t *testing.T) {
 	h.tt.Key(0, ui.KeyEnter)
 	want := "> Looking\n\nwhat does this mean"
 	h.until("the question sent", func() bool { return slices.Contains(sentTexts(h), want) })
+}
+
+// paced is an adapter whose agents' text comes a piece every few
+// milliseconds, as a model's does, rather than all at once.
+type paced struct{ provider.Adapter }
+
+func (p paced) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	g, err := p.Adapter.Open(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	return pacedAgent{g}, nil
+}
+
+type pacedAgent struct{ provider.Agent }
+
+func (g pacedAgent) Next(ctx context.Context) (provider.Event, error) {
+	e, err := g.Agent.Next(ctx)
+	if _, ok := e.(provider.TextDelta); ok {
+		time.Sleep(20 * time.Millisecond)
+	}
+	return e, err
+}
+
+// The agent, allowed from elsewhere, works on, a command and a line at a
+// time, as a question is typed in the bar of its earlier words: the
+// chat's list builds the reply's row as it lays out, after the view, and
+// the bar takes what's typed throughout.
+func TestSelectionBarAsAgentWorksOn(t *testing.T) {
+	script := []provider.Event{
+		provider.TextDelta{Text: "May I run the tests now?"},
+		provider.RequestOpened{ID: "run-1", Kind: "approval", Body: []byte(`{"operation":"run","command":"bun run test","cwd":"/work/t3code","reason":"Runs the tests."}`)},
+	}
+	for i := 1; i <= 30; i++ {
+		item := fmt.Sprintf("w%d", i)
+		script = append(script,
+			provider.Work{Item: item, Kind: "command", Title: "bun run test", Status: api.WorkStarted},
+			provider.Work{Item: item, Kind: "command", Title: "bun run test", Status: api.WorkCompleted, Exit: new(0)},
+			provider.TextDelta{Text: fmt.Sprintf("Line %d of what the agent found.", i)},
+		)
+	}
+	dir := tempDir(t)
+	engine(t, daemon.Config{Dir: dir}, paced{fake.New(script)})
+	h := start(t, dir)
+	h.a.draft = "Run the sidebar tests."
+	h.tt.Frame()
+	h.click("Send")
+	h.until("the approval card", func() bool { return h.tt.HasText("Approval needed") })
+	h.tt.Advance(time.Second)
+	th := h.a.current()
+	doubleClick(h, "May I run the tests now?")
+	h.click("Ask about the selection")
+	h.tt.Advance(300 * time.Millisecond)
+	h.tt.Type("wh")
+	// Allowed from another window of the app, or a phone.
+	h.a.backend.Respond(th.env, th.id(), lastRequest(th).Request, client.AllowOnce)
+	lines := func() int { return strings.Count(texts(entriesOf(h.a.current())), "of what the agent found.") }
+	h.until("the turn's end", func() bool {
+		h.tt.Advance(16 * time.Millisecond)
+		return !h.a.current().View.Working() && lines() == 30
+	})
+	h.tt.Advance(time.Second)
+	h.tt.Type("at?")
+	h.tt.Frame()
+	if h.a.quote.ask != "what?" {
+		t.Errorf("typed on as the agent worked: the bar's box holds %q, the composer's draft %q; want %q in the box", h.a.quote.ask, h.a.draft, "what?")
+	}
 }

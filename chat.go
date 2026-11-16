@@ -71,9 +71,9 @@ func (a *app) chatPage(c *ui.Context) {
 				}
 				a.ambient(c)
 				a.timeline(c, t, es)
-				// After the timeline, which builds the selection's bar by
-				// its reply, when it builds the reply.
-				a.quoteBarAway(c, t)
+				// After the timeline, whose replies note where the
+				// selection is.
+				a.selectionBar(c, t)
 				// After the timeline, which says whether the end shows.
 				a.composerMorph(pane, t)
 				// What scrolls fades out under the composer.
@@ -382,7 +382,7 @@ func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
 			} else {
 				md = markdown.View(c, e.text, &a.md)
 			}
-			a.selectionBar(c, t, key, col, md)
+			a.followSelection(c, t, key, col, md)
 			a.messageActions(c, t, es, i, col.Hovered() && !e.streaming)
 		})
 	case entryWork:

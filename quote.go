@@ -61,10 +61,19 @@ type quoteBar struct {
 	// focus.
 	inUse bool
 	ask   string
-	// spot is where the bar last showed, and built whether this pass built
-	// it (quoteBarAway).
-	spot  quoteSpot
-	built bool
+	// spot is where the bar last showed.
+	spot quoteSpot
+	// reply is where the selection's reply is, as its row last noted it,
+	// and seen whether the row built since the bar last did.
+	reply replyAt
+	seen  bool
+}
+
+// replyAt is where the last frame drew a reply: its text at md, in its
+// column at col, which the pass that built the row built as el.
+type replyAt struct {
+	md, col ui.Rect
+	el      ui.Element
 }
 
 // codeChunk is how many lines of a code block MyGo lays out as one text,
@@ -120,11 +129,15 @@ func quoteAttachment(text string) attachment {
 	return attachment{name: "Quote", detail: detail, text: text, quote: true}
 }
 
-// selectionBar follows the selection in the reply of t keyed key, whose
-// column is col and text md, and shows its bar once it rests.
-func (a *app) selectionBar(c *ui.Context, t thread, key string, col, md ui.Element) {
+// followSelection follows the selection in the reply of t keyed key,
+// whose column is col and text md, and notes where the reply is, for its
+// bar (selectionBar). It builds nothing of the bar, as the chat's list may
+// build the row as it lays out, after the bar: a frame shows a change in
+// whether the bar shows.
+func (a *app) followSelection(c *ui.Context, t thread, key string, col, md ui.Element) {
 	of := quoteOf{t.id(), key}
 	s := &a.quote
+	open := s.state == quoteOpen
 	switch text := selectedText(md.SelectedTexts()); {
 	case text == "":
 		if s.of == of && !s.inUse && s.ask == "" {
@@ -148,37 +161,46 @@ func (a *app) selectionBar(c *ui.Context, t thread, key string, col, md ui.Eleme
 		}
 		s.state = quoteOpen
 	}
-	if s.of != of || s.state != quoteOpen {
+	if (s.state == quoteOpen) != open {
+		c.Invalidate()
+	}
+	if s.of == of && s.state == quoteOpen {
+		s.reply, s.seen = replyAt{md: md.Bounds(), col: col.Bounds(), el: col}, true
+		followUp(c, col)
+	}
+}
+
+// selectionBar builds the bar of the selection in t's timeline once it
+// rests, by its reply as the reply's row last noted it (followSelection).
+// It's the one place that builds the bar, after the timeline, whose list
+// builds the row in the view, as it lays out after the view, or not at
+// all while the chat is scrolled far from it, as the bar in use stays.
+func (a *app) selectionBar(c *ui.Context, t thread) {
+	s := &a.quote
+	r := s.reply
+	if !s.seen {
+		r = replyAt{} // not built since: held at the edge it went past
+	}
+	s.seen = false
+	if s.state != quoteOpen || s.of.thread != t.id() {
 		return
 	}
-	followUp(c, col)
-	spot, ok := a.placeQuote(c, s, md.Bounds(), col.Bounds())
+	spot, ok := a.placeQuote(c, s, r.md, r.col)
 	if !ok {
 		s.inUse = false
 		return
 	}
 	// By the selection, the bar hangs from a point in the reply's column,
-	// which follows it as the chat scrolls in this frame; pinned, from one
-	// in the window (quoteBarAt).
+	// which follows it as the chat scrolls in this frame, when this pass
+	// built the column; else, or pinned, from one in the window
+	// (quoteBarAt).
 	var at ui.Element
-	if !spot.pinned {
-		cb := col.Bounds()
-		at = ui.Box(c).Key("quote-at").Absolute().Left(spot.x-cb.X).Top(spot.y-cb.Y).Size(1, 1).PassThrough()
+	if !spot.pinned && r.el.Valid() {
+		r.el.Children(func() {
+			at = ui.Box(c).Key("quote-at").Absolute().Left(spot.x-r.col.X).Top(spot.y-r.col.Y).Size(1, 1).PassThrough()
+		})
 	}
 	a.quoteBarAt(c, t, at, spot)
-}
-
-// quoteBarAway builds the bar in use, in t's timeline, while the chat is
-// scrolled so far from its reply that the reply isn't built, which would
-// take it away with the focus in it: held at the edge the reply went past.
-func (a *app) quoteBarAway(c *ui.Context, t thread) {
-	s := &a.quote
-	if !s.built && s.state == quoteOpen && s.of.thread == t.id() {
-		if spot, ok := a.placeQuote(c, s, ui.Rect{}, ui.Rect{}); ok {
-			a.quoteBarAt(c, t, ui.Element{}, spot)
-		}
-	}
-	s.built = false
 }
 
 // quoteSpot is where the bar of a selection goes in the window: its left
@@ -259,15 +281,15 @@ func (a *app) placeQuote(c *ui.Context, s *quoteBar, md, col ui.Rect) (quoteSpot
 }
 
 // quoteBarAt builds the bar of the selection where spot is, from at by the
-// selection or, pinned, from the window.
+// selection or, without it, from the window.
 func (a *app) quoteBarAt(c *ui.Context, t thread, at ui.Element, spot quoteSpot) {
 	s := &a.quote
-	s.spot, s.built = spot, true
+	s.spot = spot
 	// Shown unasked, it leaves ⌘⏎ to the cards: it covers the timeline,
 	// holding their keys, only while in use.
 	coversTimeline := s.inUse
 	a.overlay(c, coversTimeline, func() {
-		if spot.pinned {
+		if !at.Valid() {
 			at = ui.Box(c).Key("quote-pin").Absolute().Left(spot.x).Top(spot.y).Size(1, 1).PassThrough()
 		}
 		self := ui.AnchorTopLeft
