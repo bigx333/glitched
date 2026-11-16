@@ -406,7 +406,9 @@ func userMarkdown(text string) string {
 
 // typedProse is text as one paragraph of Markdown that shows it as typed
 // but for its code spans: each line a hard break, its indent entities
-// Markdown keeps, and its marks escaped. spans reports a code span.
+// Markdown keeps, and its marks escaped. A last line left blank holds a
+// space, as a hard break ending a paragraph shows as a backslash. spans
+// reports a code span.
 func typedProse(text string) (md string, spans bool) {
 	var b strings.Builder
 	lineStart := true
@@ -440,6 +442,9 @@ func typedProse(text string) (md string, spans bool) {
 		b.WriteByte(c)
 		lineStart = false
 		i++
+	}
+	if strings.HasSuffix(text, "\n") {
+		b.WriteString("&#32;")
 	}
 	return b.String(), spans
 }
