@@ -491,17 +491,27 @@ func codeSpanEnd(text string, i int) int {
 }
 
 // openingFence is the run of backticks or tildes, three or more, that
-// opens a fenced code block on line, or "" when line opens none.
+// opens a fenced code block on line, or "" when line opens none or holds
+// more than a language's name after it.
 func openingFence(line string) string {
 	t := strings.TrimLeft(line, " ")
 	if len(line)-len(t) > 3 || t == "" || t[0] != '`' && t[0] != '~' {
 		return ""
 	}
 	m := t[:len(t)-len(strings.TrimLeft(t, t[:1]))]
-	if len(m) < 3 || m[0] == '`' && strings.Contains(t[len(m):], "`") {
+	if len(m) < 3 || !isLanguage(strings.TrimSpace(t[len(m):])) {
 		return ""
 	}
 	return m
+}
+
+// isLanguage reports whether info, a fence's info string, is empty or a
+// language's name alone, which the block shows as its label: the rest of
+// what a user types after a fence would show nowhere.
+func isLanguage(info string) bool {
+	return !strings.ContainsFunc(info, func(r rune) bool {
+		return !('a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || strings.ContainsRune("+#._-", r))
+	})
 }
 
 // closesFence reports whether line closes the fenced code block fence
@@ -534,10 +544,6 @@ const userMDsKept = 512
 // userMD is a message's text and the Markdown it shows as.
 type userMD struct{ text, md string }
 
-// bubbleInset is how far a message's text is inside its bubble's edges,
-// across: its padding and its border.
-const bubbleInset = 15
-
 func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
 	e := es[i]
 	key := e.key
@@ -547,14 +553,13 @@ func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
 		r.Children(func() {
 			ui.Spacer(c)
 			ui.Column(c).AlignItems(ui.End).Gap(6).MaxWidthPercent(80).Children(func() {
-				ui.Column(c).Padding(10, bubbleInset-1).Radius(16, 16, 4, 16).
-					Background(palette.surface).Border(1, palette.border).Children(func() {
-					if md := a.userMarkdown(key, e.text); md != "" {
-						markdown.View(c, md, &a.userMD)
-					} else {
-						ui.Text(c, e.text).Selectable().LineHeight(1.5)
-					}
-				})
+				var bubble ui.Element
+				if md := a.userMarkdown(key, e.text); md != "" {
+					bubble = markdown.View(c, md, &a.userMD)
+				} else {
+					bubble = ui.Text(c, e.text).Selectable().LineHeight(1.5)
+				}
+				bubble.Padding(10, 14).Radius(16, 16, 4, 16).Background(palette.surface).Border(1, palette.border)
 				if e.note != "" {
 					a.messageNote(c, t, e)
 				}

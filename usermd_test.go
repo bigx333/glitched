@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo/ui"
 )
 
 // sent seeds a thread with the user's messages and returns the texts
@@ -216,5 +218,39 @@ func TestAUserMessageWithoutCodeIsPlainText(t *testing.T) {
 	}
 	if m := h.tt.Menu(); slices.Contains(m, "Copy as Markdown") {
 		t.Errorf("menu %q offers the message's Markdown", m)
+	}
+}
+
+// A fence's opening line that holds more than a language's name is text,
+// so none of what was typed on it is hidden as the block's label.
+func TestAUserMessagesFenceLineShowsAsTyped(t *testing.T) {
+	typed := []string{"```npm install left-pad\nnpm run build\n```", "```R&amp;D\\_notes\nx = 1\n```"}
+	h := sent(t, typed...)
+	for _, s := range typed {
+		if !slices.Contains(h.tt.Texts(), s) {
+			t.Errorf("no %q as typed; texts %q", s, h.tt.Texts())
+		}
+	}
+}
+
+// The bubble's padding selects its text and opens its menu, as the text
+// does, with or without code.
+func TestAUserMessagesPaddingSelects(t *testing.T) {
+	for _, c := range []struct{ typed, shown string }{{"short", "short"}, {"short `c`", "short c"}} {
+		h := sent(t, c.typed)
+		r, _ := h.tt.Find(c.shown)
+		send, _ := h.tt.Find("Send")
+		x, y := send.X+send.W+8-5, r.Y+r.H/2
+		h.tt.RightClickAt(x, y)
+		menu := h.tt.Menu()
+		h.tt.CloseMenu()
+		h.tt.Press(x, y)
+		h.tt.Move(x-20, y)
+		h.tt.Move(r.X-40, y)
+		h.tt.Release(r.X-40, y)
+		h.tt.Key(ui.Cmd, ui.KeyC)
+		if len(menu) == 0 || h.tt.Clipboard() != c.shown {
+			t.Errorf("%q: menu %q and %q copied from the padding", c.typed, menu, h.tt.Clipboard())
+		}
 	}
 }
