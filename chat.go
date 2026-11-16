@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
@@ -859,11 +860,16 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 					if ahead {
 						key = "draft-ahead"
 					}
-					area := ui.TextArea(c.Key(draftKeyOf{key, a.draftGen}), &a.draft).Placeholder(placeholder).
+					area := ui.TextArea(c.Key(key), &a.draft).Placeholder(placeholder).
 						Lines(2, 10).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).
 						Padding(14, 16, 4).OnPaste(a.onPaste).OnTextKey(a.draftKey(t)).Opacity(in)
 					if !ahead {
 						area.AutoFocus().Bind(&a.draftArea)
+						if a.draftToEnd {
+							n := utf8.RuneCountInString(a.draft)
+							area.SetTextSelection(n, n)
+							a.draftToEnd = false
+						}
 					}
 					if large {
 						area.Grow(1)
@@ -1207,13 +1213,6 @@ func blink(t float32) float32 {
 		return 1
 	}
 	return 0
-}
-
-// draftKeyOf keys the composer's text area: which of its two, and how many
-// times the draft was set from outside it (attachQuote).
-type draftKeyOf struct {
-	name string
-	gen  int
 }
 
 // threadTitle is the title of a thread started with text: about, as the

@@ -282,9 +282,10 @@ type app struct {
 	// attachments go with the next message; pastes counts pasted images,
 	// to name them.
 	attachments []attachment
-	// draftGen counts the drafts set from outside the composer's text
-	// area, which keys it (draftKeyOf).
-	draftGen int
+	// draftToEnd puts the composer's caret at the end of the draft as its
+	// text area next builds, after a draft set from outside it
+	// (attachQuote).
+	draftToEnd bool
 	// quote is the bar of text selected in a reply (quote.go).
 	quote  quoteBar
 	pastes int
