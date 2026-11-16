@@ -174,6 +174,8 @@ func (a *app) quoteBarAt(c *ui.Context, t thread, at ui.Element, self, on ui.Anc
 			if send := in.Shortcut(ui.Cmd, ui.KeyEnter); (in.Submitted() || send) && strings.TrimSpace(s.ask) != "" {
 				if a.sendText(t, blockquote(s.text)+"\n\n"+strings.TrimSpace(s.ask), "") {
 					a.closeQuote()
+					// Not back to the reply, which takes no typing.
+					a.draftArea.Focus()
 				}
 				return
 			}

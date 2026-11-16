@@ -135,7 +135,8 @@ func TestExplainUndoes(t *testing.T) {
 }
 
 // A question typed in the bar goes at once, with the quote, leaving the
-// draft and its attachments as they were.
+// draft and its attachments as they were, and the composer taking what's
+// typed next.
 func TestSelectionBarAsks(t *testing.T) {
 	h, sel := quoteReady(t)
 	h.a.draft = "unrelated draft"
@@ -158,6 +159,11 @@ func TestSelectionBarAsks(t *testing.T) {
 	}
 	if barShown(h) {
 		t.Error("the bar stayed after the question went")
+	}
+	h.tt.Type("!")
+	h.tt.Frame()
+	if !strings.Contains(h.a.draft, "!") {
+		t.Errorf("typed after asking: draft %q; want what was typed in the composer", h.a.draft)
 	}
 }
 
