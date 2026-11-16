@@ -264,9 +264,9 @@ const quoteGap, quoteLead, quoteBarW, quoteBarH = 4, 12, 360, 44
 // and whether it shows: under the selection, or above it where under would
 // cross the composer or lie over a waiting card, whose keys it would hold,
 // and in the column. It shows in the timeline, between the pane's top and
-// the composer, held at its edge where neither fits, while any of the
-// selection is in it; once none is, only in use, held at the edge the
-// selection went past.
+// the composer, and above Jump to latest, whose clicks it would take, held
+// at its edge where neither fits, while any of the selection is in it;
+// once none is, only in use, held at the edge the selection went past.
 func (a *app) placeQuote(c *ui.Context, s *quoteBar, md, col ui.Rect) (quoteSpot, bool) {
 	// The selection runs from the line of the point higher up to that of
 	// the one lower down, a line of the reply's around each; loose, or the
@@ -293,6 +293,13 @@ func (a *app) placeQuote(c *ui.Context, s *quoteBar, md, col ui.Rect) (quoteSpot
 	if a.composerAt.H > 0 {
 		bandBottom = a.composerAt.Y
 	}
+	// It goes no lower than Jump to latest, where the last frame drew it.
+	floor := bandBottom
+	if h := a.covers[coverKey{kind: "jump"}]; h != nil && a.jumpK > 0 {
+		if r := h.Bounds(c); r.H > 0 {
+			floor = min(floor, r.Y)
+		}
+	}
 	// Held with its reply not built, it stays where it was across the
 	// chat, but in the pane as it is now, which a panel opened beside it
 	// or the sidebar shown may have narrowed.
@@ -303,7 +310,7 @@ func (a *app) placeQuote(c *ui.Context, s *quoteBar, md, col ui.Rect) (quoteSpot
 	case md.H <= 0 && s.spot.y < (bandTop+bandBottom)/2:
 		return quoteSpot{x: held, y: bandTop + quoteGap, pinned: true}, true
 	case md.H <= 0:
-		return quoteSpot{x: held, y: bandBottom - quoteGap, above: true, pinned: true}, true
+		return quoteSpot{x: held, y: floor - quoteGap, above: true, pinned: true}, true
 	}
 	if (bottom < bandTop || top > bandBottom) && !s.inUse {
 		return quoteSpot{}, false
@@ -311,7 +318,7 @@ func (a *app) placeQuote(c *ui.Context, s *quoteBar, md, col ui.Rect) (quoteSpot
 	spots := []quoteSpot{
 		under,
 		{x: by(hi), y: top - quoteGap, above: true},
-		{x: by(lo), y: bandBottom - quoteGap, above: true, pinned: true},
+		{x: by(lo), y: floor - quoteGap, above: true, pinned: true},
 		{x: by(hi), y: bandTop + quoteGap, pinned: true},
 	}
 	if bottom <= bandBottom {
@@ -323,7 +330,7 @@ func (a *app) placeQuote(c *ui.Context, s *quoteBar, md, col ui.Rect) (quoteSpot
 		if p.above {
 			r.Y -= quoteBarH
 		}
-		if r.Y >= bandTop && r.Y+r.H <= bandBottom && !a.overWaiting(r) {
+		if r.Y >= bandTop && r.Y+r.H <= floor && !a.overWaiting(r) {
 			return p, true
 		}
 	}
