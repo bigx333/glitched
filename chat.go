@@ -1267,7 +1267,7 @@ func (a *app) composerControls(c *ui.Context) {
 // draft. A snoozed thread comes back to the inbox with it, as the engine
 // brings a settled one back with any message.
 func (a *app) send(t thread) {
-	if !a.sendText(t, a.message(t), a.draft) {
+	if !a.sendText(t, a.message(t), a.said(t)) {
 		return
 	}
 	a.draft = ""
@@ -1437,8 +1437,8 @@ func blink(t float32) float32 {
 	return 0
 }
 
-// threadTitle is the title of a thread started with text: about, as the
-// draft is without the quotes before it, when there is one.
+// threadTitle is the title of a thread started with text: about, what
+// text says without the quotes before it, when it says anything else.
 func threadTitle(text, about string) string {
 	title := strings.TrimSpace(about)
 	if title == "" {

@@ -662,6 +662,27 @@ func TestQuoteInNewThreadTitledByDraft(t *testing.T) {
 	h.until("the message with its quote", func() bool { return slices.Contains(sentTexts(h), want) })
 }
 
+// A thread started with a quote is titled as its message would be
+// without the quote: the draft, and what's attached after it.
+func TestQuoteInNewThreadTitledWithAttachment(t *testing.T) {
+	h, sel := quoteReady(t)
+	from := h.a.current().id()
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
+	h.click("Quote")
+	h.tt.Advance(time.Second)
+	h.tt.Key(ui.Cmd, ui.KeyN)
+	h.tt.Advance(time.Second)
+	h.a.attachments = append(h.a.attachments, attachment{name: "Pasted text", text: "some pasted text"})
+	h.tt.Type("Fix it")
+	h.tt.Key(0, ui.KeyEnter)
+	h.until("the new thread", func() bool { id := h.a.current().id(); return !id.IsZero() && id != from })
+	if got, want := h.a.current().View.Title, "Fix it\n\nsome pasted text"; got != want {
+		t.Errorf("the new thread is titled %q; want %q, its message without the quote", got, want)
+	}
+	want := "> " + sel + "\n\nFix it\n\nsome pasted text"
+	h.until("the message with its quote", func() bool { return slices.Contains(sentTexts(h), want) })
+}
+
 // With the draft empty, a quote goes with what's attached, a blank line
 // between them.
 func TestQuoteSentWithoutDraft(t *testing.T) {
