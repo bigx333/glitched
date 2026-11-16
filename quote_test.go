@@ -715,6 +715,40 @@ func TestHeldSelectionBarInPane(t *testing.T) {
 	}
 }
 
+// Scrolled up, the bar of a word just over Jump to latest keeps off it,
+// which a click then takes to the end, quoting nothing.
+func TestSelectionBarLeavesJumpToLatest(t *testing.T) {
+	var md strings.Builder
+	for i := 1; i <= 80; i++ {
+		fmt.Fprintf(&md, "Paragraph %02d of a long reply that goes on.\n\n", i)
+	}
+	h := replyReady(t, md.String()+"Outro here.", "Outro here.")
+	wheel(h, -400)
+	jump, ok := h.tt.Find("Jump to latest")
+	if !ok {
+		t.Fatalf("scrolled up, no Jump to latest: %q", h.tt.Texts())
+	}
+	// The lowest paragraph wholly over the pill.
+	var para ui.Rect
+	for _, s := range h.tt.Texts() {
+		if r, ok := h.tt.Find(s); ok && strings.HasPrefix(s, "Paragraph ") && r.Y+r.H < jump.Y-4 && r.Y > para.Y {
+			para = r
+		}
+	}
+	doubleClickAt(h, para.X+200, para.Y+para.H/2)
+	h.tt.Move(1, 1)
+	h.tt.Advance(time.Second)
+	if !barShown(h) {
+		t.Fatalf("a word double-clicked over Jump to latest, no bar: %+v", h.a.quote)
+	}
+	h.tt.ClickAt(jump.X+jump.W/2, jump.Y+jump.H/2)
+	h.tt.Advance(2 * time.Second)
+	if slices.ContainsFunc(h.a.attachments, func(at attachment) bool { return at.quote }) || h.tt.HasText("Jump to latest") {
+		t.Errorf("Jump to latest clicked by the bar shown unasked: attachments %+v, Jump to latest shown %v; want the chat at its end, nothing quoted",
+			h.a.attachments, h.tt.HasText("Jump to latest"))
+	}
+}
+
 // askAfterReply is a turn that replies, then asks to run a command.
 var askAfterReply = []provider.Event{
 	provider.TextDelta{Text: "May I run the tests now?"},
