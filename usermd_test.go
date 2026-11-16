@@ -65,6 +65,7 @@ func TestAUserMessageShowsAsTyped(t *testing.T) {
 		"a\\\nb",
 		"```",
 		"text\n~~~~",
+		"    ```\n# not a heading\n    ```",
 	}
 	withCode := make([]string, len(typed))
 	for i, s := range typed {
@@ -99,15 +100,24 @@ func TestAUserMessagesCodeSpanEndsOnItsLine(t *testing.T) {
 // A fence closes only with spaces or tabs after it, as Markdown reads
 // it, so the text after a fence closed by other spaces stays code.
 func TestAUserMessagesFenceClosesAsMarkdownReadsIt(t *testing.T) {
-	h := sent(t, "```\nx\n```\u00a0\nthen *bold*")
-	if want := "x\n```\u00a0\nthen *bold*"; !slices.Contains(h.tt.Texts(), want) {
-		t.Errorf("no %q; texts %q", want, h.tt.Texts())
+	h := sent(t,
+		"```\nx\n```\u00a0\nthen *bold*",
+		"```\ny\n    ```\n*indented* `c`",
+		"```\nz\n```  \n*spaced* `c`",
+		"```\nw\n````\n*longer* `c`",
+	)
+	for _, want := range []string{"x\n```\u00a0\nthen *bold*", "y\n    ```\n*indented* `c`", "z", "*spaced* c", "w", "*longer* c"} {
+		if !slices.Contains(h.tt.Texts(), want) {
+			t.Errorf("no %q; texts %q", want, h.tt.Texts())
+		}
 	}
 }
 
-// Blank lines between a message's text and its code show as typed.
+// Blank lines between a message's text and its code show as typed, but
+// for the one each side the code's spacing shows, and so do blank lines
+// that border no code.
 func TestAUserMessageKeepsBlankLinesAroundCode(t *testing.T) {
-	h := sent(t, "tight\n```\ncode tight\n```", "loose\n\n\n\n```\ncode loose\n```")
+	h := sent(t, "tight\n```\ncode tight\n```\nafter `c`", "loose\n\n\n\n```\ncode loose\n```\n\nafter one `c`", "\n\nleading `c`")
 	gap := func(text, code string) float32 {
 		a, _ := h.tt.Find(text)
 		b, _ := h.tt.Find(code)
@@ -119,15 +129,20 @@ func TestAUserMessageKeepsBlankLinesAroundCode(t *testing.T) {
 	if slices.ContainsFunc(h.tt.Texts(), func(s string) bool { return strings.Contains(s, "\\") }) {
 		t.Errorf("a backslash shows that wasn't typed; texts %q", h.tt.Texts())
 	}
+	for _, s := range []string{"after c", "after one c", "\n\nleading c"} {
+		if !slices.Contains(h.tt.Texts(), s) {
+			t.Errorf("no %q; texts %q", s, h.tt.Texts())
+		}
+	}
 }
 
 // In a message with code, line endings of other systems end lines as
 // line feeds do, and a byte order mark, which shows as nothing, leaves
 // the first line's indent.
 func TestAUserMessageReadsAnyLineEnding(t *testing.T) {
-	h := sent(t, "crlf `one`\r\ncrlf two", "cr `one`\rcr two", "\ufeff\ufeff    if `a_b` {\n    }")
-	for _, s := range []string{"crlf one\ncrlf two", "cr one\ncr two", "    if a_b {\n    }"} {
-		if !h.tt.HasText(s) {
+	h := sent(t, "crlf `one`\r\ncrlf two", "cr `one`\rcr two", "\ufeff    if `a_b` {\n    }", "\ufeff\ufeff    if `b_c` {\n    }")
+	for _, s := range []string{"crlf one\ncrlf two", "cr one\ncr two", "    if a_b {\n    }", "    if b_c {\n    }"} {
+		if !slices.Contains(h.tt.Texts(), s) {
 			t.Errorf("no %q; texts %q", s, h.tt.Texts())
 		}
 	}
