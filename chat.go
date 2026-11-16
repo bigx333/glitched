@@ -355,13 +355,16 @@ func (a *app) emptyState(c *ui.Context) {
 // the rest as typed: every mark escaped, and every line, blank line and
 // indent kept, but for one blank line each side of a code block, which
 // the block's spacing shows. A fence that opens nothing, unclosed with
-// no code after it, is text. It is "" for an empty message.
+// no code after it, is text. It is "" for a message without code, which
+// shows as plain text: one Markdown span per escaped mark would draw a
+// long paste far slower.
 func userMarkdown(text string) string {
 	text = strings.TrimPrefix(text, "\ufeff")
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	lines := strings.Split(text, "\n")
 	var blocks, prose []string
+	code := false
 	flush := func() {
 		if len(prose) > 0 && strings.TrimSpace(prose[0]) == "" {
 			prose = prose[1:]
@@ -370,7 +373,8 @@ func userMarkdown(text string) string {
 			prose = prose[:len(prose)-1]
 		}
 		if len(prose) > 0 {
-			blocks = append(blocks, typedProse(strings.Join(prose, "\n")))
+			md, spans := typedProse(strings.Join(prose, "\n"))
+			blocks, code = append(blocks, md), code || spans
 		}
 		prose = nil
 	}
@@ -390,17 +394,20 @@ func userMarkdown(text string) string {
 		}
 		flush()
 		end = min(end, len(lines)-1)
-		blocks = append(blocks, strings.Join(lines[i:end+1], "\n"))
+		blocks, code = append(blocks, strings.Join(lines[i:end+1], "\n")), true
 		i = end
 	}
 	flush()
+	if !code {
+		return ""
+	}
 	return strings.Join(blocks, "\n")
 }
 
 // typedProse is text as one paragraph of Markdown that shows it as typed
 // but for its code spans: each line a hard break, its indent entities
-// Markdown keeps, and its marks escaped.
-func typedProse(text string) string {
+// Markdown keeps, and its marks escaped. spans reports a code span.
+func typedProse(text string) (md string, spans bool) {
 	var b strings.Builder
 	lineStart := true
 	for i := 0; i < len(text); {
@@ -418,7 +425,7 @@ func typedProse(text string) string {
 		case c == '`':
 			if end := codeSpanEnd(text, i); end > 0 {
 				b.WriteString(text[i:end])
-				i, lineStart = end, false
+				i, lineStart, spans = end, false, true
 				continue
 			}
 			for i < len(text) && text[i] == '`' {
@@ -434,7 +441,7 @@ func typedProse(text string) string {
 		lineStart = false
 		i++
 	}
-	return b.String()
+	return b.String(), spans
 }
 
 // codeSpanEnd is the end of the code span whose opening backticks start
