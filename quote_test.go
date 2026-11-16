@@ -348,10 +348,15 @@ func TestSelectionBarCoversOnlyInUse(t *testing.T) {
 // doubleClick selects the word of s at its start.
 func doubleClick(h *harness, s string) ui.Rect {
 	r, _ := h.tt.Find(s)
-	h.tt.ClickAt(r.X+10, r.Y+r.H/2)
-	h.tt.ClickAt(r.X+10, r.Y+r.H/2)
-	h.tt.Advance(quoteWait + 50*time.Millisecond)
+	doubleClickAt(h, r.X+10, r.Y+r.H/2)
 	return r
+}
+
+// doubleClickAt selects the word at (x, y), and lets it rest.
+func doubleClickAt(h *harness, x, y float32) {
+	h.tt.ClickAt(x, y)
+	h.tt.ClickAt(x, y)
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
 }
 
 // Selected just over the composer, the bar goes above the selection,
@@ -400,6 +405,104 @@ func TestSelectionBarClearOfSelection(t *testing.T) {
 		if top, bottom := r.Y, r.Y+5*line; b.Y < bottom && b.Y+b.H > top || !inTimeline(h, b) {
 			t.Errorf("the bar (y %v to %v) over the lines dragged up over (y %v to %v), or out of the timeline (%v to %v); want it clear of both",
 				b.Y, b.Y+b.H, top, bottom, h.a.paneAt.Y, h.a.composerAt.Y)
+		}
+	})
+	t.Run("up with a rest on the way", func(t *testing.T) {
+		para := "Alpha " + strings.Repeat("lorem ipsum dolor sit amet ", 60) + "omega."
+		h := replyReady(t, para+"\n\n"+strings.Repeat("Filler line.\n\n", 6)+"Outro here.", "Outro here.")
+		r := startsWith(h, "Alpha ")
+		x0, y0 := r.X+300, r.Y+7*line+10 // line 8
+		h.tt.Press(x0, y0)
+		h.tt.Move(x0-20, y0)
+		h.tt.Move(x0-60, y0-4*line) // line 4
+		h.tt.Advance(quoteWait + 100*time.Millisecond)
+		h.tt.Move(x0-200, y0-7*line) // line 1
+		h.tt.Release(x0-200, y0-7*line)
+		h.tt.Advance(quoteWait + 500*time.Millisecond)
+		b, ok := barAt(h)
+		if !ok {
+			t.Fatalf("no bar: %+v", h.a.quote)
+		}
+		if top, bottom := r.Y, r.Y+8*line; b.Y < bottom-1 && b.Y+b.H > top || !inTimeline(h, b) {
+			t.Errorf("the bar (y %v to %v) over the lines dragged up over (y %v to %v), or out of the timeline (%v to %v); want it clear of both",
+				b.Y, b.Y+b.H, top, bottom, h.a.paneAt.Y, h.a.composerAt.Y)
+		}
+	})
+}
+
+// A selection made other than by a drag keeps its bar clear of all it
+// selected, though the pointer is elsewhere: Shift and a click, Select
+// All from the menu or ⌘A, Shift and the arrows; a word double-clicked
+// has it by the word.
+func TestSelectionBarClearOfSelectionNotDragged(t *testing.T) {
+	const line = 19.5
+	para := "Alpha " + strings.Repeat("lorem ipsum dolor sit amet ", 40) + "omega."
+	// clear fails unless the bar, shown, keeps off the lines selected,
+	// from top to bottom.
+	clear := func(t *testing.T, h *harness, top, bottom float32) {
+		t.Helper()
+		b, ok := barAt(h)
+		if !ok {
+			t.Fatalf("no bar: %+v", h.a.quote)
+		}
+		if b.Y < bottom-1 && b.Y+b.H > top || !inTimeline(h, b) {
+			t.Errorf("the bar (y %v to %v) over the lines selected (y %v to %v), or out of the timeline (%v to %v); want it clear of both",
+				b.Y, b.Y+b.H, top, bottom, h.a.paneAt.Y, h.a.composerAt.Y)
+		}
+	}
+	t.Run("Shift and a click", func(t *testing.T) {
+		h := replyReady(t, para+"\n\nOutro here.", "Outro here.")
+		r := startsWith(h, "Alpha ")
+		// The caret on line 6, then Shift and a click on line 1.
+		h.tt.ClickAt(r.X+300, r.Y+5*line+10)
+		h.tt.Advance(time.Second)
+		h.tt.ClickAtWith(ui.Shift, r.X+100, r.Y+10)
+		h.tt.HoldModifiers(0)
+		h.tt.Advance(quoteWait + 500*time.Millisecond)
+		clear(t, h, r.Y, r.Y+6*line)
+	})
+	t.Run("Select All", func(t *testing.T) {
+		h := replyReady(t, para+"\n\nOutro here.", "Outro here.")
+		r := startsWith(h, "Alpha ")
+		h.tt.RightClickAt(r.X+300, r.Y+10)
+		if err := h.tt.ChooseMenuItem("Select All"); err != nil {
+			t.Fatalf("%v: menu %q", err, h.tt.Menu())
+		}
+		h.tt.Advance(quoteWait + 500*time.Millisecond)
+		outro, _ := h.tt.Find("Outro here.")
+		clear(t, h, r.Y, outro.Y+outro.H)
+	})
+	t.Run("⌘A", func(t *testing.T) {
+		h := replyReady(t, para+"\n\nOutro here.", "Outro here.")
+		r := startsWith(h, "Alpha ")
+		h.tt.ClickAt(r.X+10, r.Y+10)
+		h.tt.Key(ui.Cmd, ui.KeyA)
+		h.tt.HoldModifiers(0)
+		h.tt.Advance(quoteWait + 500*time.Millisecond)
+		outro, _ := h.tt.Find("Outro here.")
+		clear(t, h, r.Y, outro.Y+outro.H)
+	})
+	t.Run("Shift and the arrows", func(t *testing.T) {
+		h := replyReady(t, para+"\n\nOutro here.", "Outro here.")
+		r := startsWith(h, "Alpha ")
+		doubleClickAt(h, r.X+10, r.Y+10)
+		for range 4 {
+			h.tt.Key(ui.Shift, ui.KeyDown)
+		}
+		h.tt.HoldModifiers(0)
+		h.tt.Advance(quoteWait + 500*time.Millisecond)
+		clear(t, h, r.Y, r.Y+5*line)
+	})
+	t.Run("a word double-clicked", func(t *testing.T) {
+		h := replyReady(t, para+"\n\nOutro here.", "Outro here.")
+		r := startsWith(h, "Alpha ")
+		doubleClickAt(h, r.X+10, r.Y+10)
+		b, ok := barAt(h)
+		if !ok || h.a.quote.text != "Alpha" {
+			t.Fatalf("double-clicked Alpha: bar %v on %q", ok, h.a.quote.text)
+		}
+		if b.Y < r.Y+line || b.Y > r.Y+3*line {
+			t.Errorf("the bar at y %v, the word's line at y %v to %v; want the bar just under it", b.Y, r.Y, r.Y+line)
 		}
 	})
 }

@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
@@ -55,8 +56,10 @@ type quoteBar struct {
 	at    time.Time // when the selection was made or last changed
 	// from and to are where the pointer was, relative to the reply's
 	// text, as the selection was first seen and as it last changed: where
-	// it began and where it ended.
+	// it began and where it ended. loose is a selection they don't tell
+	// the place of (followSelection).
 	from, to ui.Point
+	loose    bool
 	// inUse is the bar in use in the last frame: pointed at or holding the
 	// focus; focused is it holding the focus in this pass.
 	inUse, focused bool
@@ -144,15 +147,21 @@ func (a *app) followSelection(c *ui.Context, t thread, key string, col, md ui.El
 			*s = quoteBar{}
 		}
 	case s.of != of || s.text != text:
-		// Made or changed: wait for it to rest. Changed as it's made, it
-		// began where it did.
+		// Made or changed: wait for it to rest. Grown or shrunk at an end,
+		// as a drag changes it, it began where it did.
 		x, y, _ := md.PointerPosition()
 		p := ui.Point{X: x, Y: y}
 		from := p
-		if s.of == of && s.text != "" && s.state == quoteWaiting {
+		if s.of == of && atAnEnd(s.text, text) {
 			from = s.from
 		}
-		*s = quoteBar{of: of, text: text, at: a.now, from: from, to: p}
+		// The pointer moved across what it selected, or is on the word it
+		// selected at once, as a double-click does; changed with a
+		// modifier held, as by Shift and a click or the keys, or more
+		// than a word at once, as by the menu's Select All, the selection
+		// is anywhere in the reply.
+		loose := c.Modifiers() != 0 || from == p && strings.ContainsFunc(text, unicode.IsSpace)
+		*s = quoteBar{of: of, text: text, at: a.now, from: from, to: p, loose: loose}
 		c.After(quoteWait)
 	case s.state == quoteWaiting:
 		if rest := a.now.Sub(s.at); rest < quoteWait {
@@ -203,6 +212,12 @@ func (a *app) selectionBar(c *ui.Context, t thread) {
 	a.quoteBarAt(c, t, at, spot)
 }
 
+// atAnEnd is whether now is was grown or shrunk at one end.
+func atAnEnd(was, now string) bool {
+	return strings.HasPrefix(now, was) || strings.HasSuffix(now, was) ||
+		strings.HasPrefix(was, now) || strings.HasSuffix(was, now)
+}
+
 // quoteSpot is where the bar of a selection goes in the window: its left
 // edge at x, and its top at y, or its bottom when above. pinned is a bar
 // held at an edge of the timeline, which stays as the chat scrolls,
@@ -227,7 +242,8 @@ const quoteGap, quoteLead, quoteBarW, quoteBarH = 4, 12, 360, 44
 // selection went past.
 func (a *app) placeQuote(c *ui.Context, s *quoteBar, md, col ui.Rect) (quoteSpot, bool) {
 	// The selection runs from the line of the point higher up to that of
-	// the one lower down, a line of the reply's around each.
+	// the one lower down, a line of the reply's around each; loose, over
+	// all of the reply.
 	line := c.Theme().FontSize * 1.5
 	hi, lo := s.from, s.to
 	if hi.Y > lo.Y {
@@ -235,6 +251,9 @@ func (a *app) placeQuote(c *ui.Context, s *quoteBar, md, col ui.Rect) (quoteSpot
 	}
 	top := md.Y + min(max(hi.Y, 0), md.H) - line
 	bottom := md.Y + min(max(lo.Y, 0), md.H) + line
+	if s.loose {
+		top, bottom = md.Y, md.Y+md.H
+	}
 	by := func(p ui.Point) float32 {
 		x := md.X + min(max(p.X, 0), md.W) - quoteLead
 		return max(min(x, col.X+col.W-quoteBarW), col.X)
