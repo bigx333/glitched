@@ -72,10 +72,9 @@ type quoteBar struct {
 }
 
 // replyAt is where the last frame drew a reply: its text at md, in its
-// column at col, which the pass that built the row built as el.
+// column at col, which the pass that built the row binds to app.quoteCol.
 type replyAt struct {
 	md, col ui.Rect
-	el      ui.Element
 }
 
 // selectedText is the text of a selection's parts, from a reply whose
@@ -195,7 +194,8 @@ func (a *app) followSelection(c *ui.Context, t thread, key, src string, col, md 
 		c.Invalidate()
 	}
 	if s.of == of && s.state == quoteOpen {
-		s.reply, s.seen = replyAt{md: md.Bounds(), col: col.Bounds(), el: col}, true
+		s.reply, s.seen = replyAt{md: md.Bounds(), col: col.Bounds()}, true
+		col.Bind(&a.quoteCol)
 		followUp(c, col)
 	}
 }
@@ -225,8 +225,8 @@ func (a *app) selectionBar(c *ui.Context, t thread) {
 	// built the column; else, or pinned, from one in the window
 	// (quoteBarAt).
 	var at ui.Element
-	if !spot.pinned && r.el.Valid() {
-		r.el.Children(func() {
+	if el := c.Resolve(a.quoteCol); !spot.pinned && el.Valid() {
+		el.Children(func() {
 			at = ui.Box(c).Key("quote-at").Absolute().Left(spot.x-r.col.X).Top(spot.y-r.col.Y).Size(1, 1).PassThrough()
 		})
 	}

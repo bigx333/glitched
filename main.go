@@ -286,6 +286,9 @@ type app struct {
 	// text area next builds, after a draft set from outside it
 	// (attachQuote).
 	draftToEnd bool
+	// quoteCol is the column of the reply whose selection has a bar open,
+	// as the pass that built its row bound it (followSelection).
+	quoteCol ui.Handle
 	// quote is the bar of text selected in a reply (quote.go).
 	quote  quoteBar
 	pastes int
