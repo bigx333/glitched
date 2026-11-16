@@ -207,9 +207,9 @@ type Kids struct{ Working, All int }
 // parent first and its top last, as far up as MaxDepth+1 threads, and the
 // parent's children: the parent is there, its live run asks and can still
 // take work, the child is no deeper than lim's Depth, its access no wider
-// than its parent's, which is no wider than its own parent's, and the
-// parent is under lim's counts. A line that runs past MaxDepth is too
-// deep, cycle or not.
+// than that run's, nor than its parent's as it is now, which is no wider
+// than its own parent's, and the parent is under lim's counts. A line that
+// runs past MaxDepth is too deep, cycle or not.
 func CheckChild(line []Thread, kids Kids, lim Limits, c api.ThreadCreate) error {
 	lim = lim.Effective()
 	if len(line) == 0 || !line[0].Exists() || line[0].Deleted {
@@ -218,11 +218,17 @@ func CheckChild(line []Thread, kids Kids, lim Limits, c api.ThreadCreate) error 
 	if line[0].settled() {
 		return rejected("the parent thread is settled")
 	}
-	if live := line[0].Live(); live == nil || live.ID != c.Run || !steerable[live.State] {
+	live := line[0].Live()
+	if live == nil || live.ID != c.Run || !steerable[live.State] {
 		return rejected("only the parent's live run can start a child thread, and not once it is stopping")
 	}
 	if len(line) > lim.Depth {
 		return rejected(fmt.Sprintf("a child thread can be at most %d below a thread of yours", lim.Depth))
+	}
+	// The run keeps the access it was admitted at, whatever the thread was
+	// given since for its next turn.
+	if c.Access > live.Access {
+		return rejected("a child thread's access can't be wider than the run's that starts it")
 	}
 	if c.Access > line[0].Access {
 		return rejected("a child thread's access can't be wider than its parent's")

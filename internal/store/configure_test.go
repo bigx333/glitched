@@ -74,3 +74,41 @@ func TestAConfigureKeepsChildrenWithinTheirParent(t *testing.T) {
 		t.Errorf("a child widened with its parent, to %v", th.Access)
 	}
 }
+
+// A run keeps the model and access it was admitted at across a reopen:
+// its thread widened since, its view still says them, and it starts a
+// child as wide as itself and none wider.
+func TestARunsModelAndAccessAreKept(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread, run := api.NewID(), api.NewID()
+	opus := api.ModelRef{Provider: "fake", Model: "Claude Opus 5.5", Effort: "high", Fast: true}
+	submitTo(t, s, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{Workspace: "w", Title: "t", Model: opus, Access: api.AccessAutoEdits}})
+	submitTo(t, s, api.Command{ID: run, Target: thread, Body: api.MessageDispatch{Text: "go", Mode: api.StartNow}})
+	if err := configure(s, thread, sonnet, api.AccessFull); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s = open(t, path)
+	snap, err := s.Read(ctx, api.Query{Thread: thread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, want := snap.Threads[0], (api.Turn{Run: run, Model: opus, Access: api.AccessAutoEdits}); v.Turn == nil || *v.Turn != want {
+		t.Errorf("after reopen the turn is %+v, want %+v as admitted", v.Turn, want)
+	}
+	child := func(a api.Access) error {
+		_, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: api.NewID(), Body: api.ThreadCreate{
+			Workspace: "w", Title: "child", Model: opus, Access: a, Parent: thread, Run: run, Text: "work",
+		}}, time.Now())
+		return err
+	}
+	var re *api.RejectedError
+	if err := child(api.AccessFull); !errors.As(err, &re) {
+		t.Errorf("a child at the access set for the next turn: %v, want refused", err)
+	}
+	if err := child(api.AccessAutoEdits); err != nil {
+		t.Errorf("a child as wide as its run: %v", err)
+	}
+}

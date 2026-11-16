@@ -76,7 +76,7 @@ func apply(t Thread, e Event) (Thread, error) {
 		if err = t.claim(b.Run, b.Run); err != nil {
 			break
 		}
-		t.Runs = append(slices.Clip(t.Runs), Run{ID: b.Run, Generation: b.Generation, State: RunStarting})
+		t.Runs = append(slices.Clip(t.Runs), Run{ID: b.Run, Generation: b.Generation, Model: t.Model, Access: t.Access, State: RunStarting})
 		t.Generation = b.Generation
 	case api.TurnStarted:
 		if err = t.setRun(b.Run, RunRunning); err == nil {

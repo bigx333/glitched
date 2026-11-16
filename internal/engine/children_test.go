@@ -29,7 +29,7 @@ func TestCheckChild(t *testing.T) {
 	run := api.NewID()
 	top := newThread(t).th
 	top.Access = api.AccessAutoEdits
-	top.Runs = []engine.Run{{ID: run, State: engine.RunRunning}}
+	top.Runs = []engine.Run{{ID: run, State: engine.RunRunning, Access: api.AccessAutoEdits}}
 	line := []engine.Thread{top}
 	none, lim := engine.Kids{}, engine.Limits{}
 	if err := engine.CheckChild(line, none, lim, api.ThreadCreate{Parent: top.ID, Run: run, Access: api.AccessAsk}); err != nil {
@@ -47,7 +47,7 @@ func TestCheckChild(t *testing.T) {
 	refused("no run", line, none, lim, api.ThreadCreate{Parent: top.ID})
 	refused("another run", line, none, lim, api.ThreadCreate{Parent: top.ID, Run: api.NewID()})
 	stopping := top
-	stopping.Runs = []engine.Run{{ID: run, State: engine.RunStopping}}
+	stopping.Runs = []engine.Run{{ID: run, State: engine.RunStopping, Access: api.AccessAutoEdits}}
 	refused("a stopping run", []engine.Thread{stopping}, none, lim, api.ThreadCreate{Parent: top.ID, Run: run})
 	gone := top
 	gone.Deleted = true

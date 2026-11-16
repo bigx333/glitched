@@ -1,13 +1,13 @@
 # Child threads
 
-Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, after archiving went (Settled is where a thread done with goes) and protocol 3 was taken by that change; changed on 2026-11-03 so that only an agent starts a child and Settle takes the tree; changed on 2026-11-05 so that the engine settles and deletes a tree in one commit (open question 1); changed on 2026-11-06 for `glitched mcp`, the spawn tool's server, and so that a done or failed report wakes the parent's agent (spawn tool PR 3). This is what the branch builds, not a plan, except where a line says planned.
+Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, after archiving went (Settled is where a thread done with goes) and protocol 3 was taken by that change; changed on 2026-11-03 so that only an agent starts a child and Settle takes the tree; changed on 2026-11-05 so that the engine settles and deletes a tree in one commit (open question 1); changed on 2026-11-06 for `glitched mcp`, the spawn tool's server, and so that a done or failed report wakes the parent's agent (spawn tool PR 3); changed on 2026-11-16 so that a run keeps the model and access it was admitted at, and starts no child wider (PR 90). This is what the branch builds, not a plan, except where a line says planned.
 
 ## Decision
 
 **A child thread is an ordinary thread on the same engine with a `Parent`. The engine checks the line at create, posts each child's report into its parent's log through the outbox, and settles or deletes a thread's tree with it in one commit. The GUI does Stop all and the usage roll-up.**
 
 - The tree is one field on the thread. Depth is never stored; it's walked, bounded.
-- The engine refuses a child deeper than 4 below a thread of the user's, or wider than its parent's access, and a child past the configured limits (see Limits).
+- The engine refuses a child deeper than 4 below a thread of the user's, or wider than its parent's access or the access of the run that starts it, and a child past the configured limits (see Limits).
 - A child's run that completes, fails, or blocks on a request reports to its parent as a `child.reported` event. The report is an outbox effect, committed with the child's event, so a crash replays it rather than losing it.
 - Only an agent starts a child; the user can't (decided 2026-11-03). A create names the parent's live run in `ThreadCreate.Run`, and the engine refuses one that doesn't. A Claude Code agent asks through `glitched mcp`'s `delegate_task` (see The spawn tool), and the fake provider spawns for tests (`fake.Adapter.Spawns`).
 - Settle and delete of a tree are one command, on the thread the user acts on. The engine applies it to that thread and every thread under it in the same commit, a child started a moment before included: settling stops each run and cancels what waits, and deleting ends each run and closes its agent. A settled tree has nothing running, and a deleted one leaves nothing behind. Stop all stays one `turn.interrupt` per thread, sent by the GUI.
@@ -17,7 +17,7 @@ Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, aft
 ## The parent
 
 - `api.ThreadCreate.Parent` (`internal/api/api.go`) names the parent; zero is a thread of the user's. It's carried into `api.ThreadCreated.Parent` (`internal/api/events.go`), folded into `engine.Thread.Parent` by `apply` (`internal/engine/apply.go`), and shown as `api.Thread.Parent` by `engine.View`.
-- The store keeps it in `threads.parent`, a nullable BLOB (`internal/store/store.go`). Upgrade 4 adds it with `tokens` and `reported`, after main's upgrade 3 settles the archived threads. Upgrade 5 adds `report` (see Reading it); `schemaVersion` is 6. An older build refuses a newer database ("newer than this build").
+- The store keeps it in `threads.parent`, a nullable BLOB (`internal/store/store.go`). Upgrade 4 adds it with `tokens` and `reported`, after main's upgrade 3 settles the archived threads. Upgrade 5 adds `report` (see Reading it), and upgrade 6 each run's `model` and `access` (see Checks at create); `schemaVersion` is 7. An older build refuses a newer database ("newer than this build").
 - The parent never changes after create. There's no intent to move a thread.
 - No client sends one: `Manager.Create` (`internal/client/commands.go`) makes a thread of the user's. An agent's run asks for a child with `Parent`, `Run` (the parent's live run) and `Text` (the child's first message).
 - A create with `Text` queues it and admits the child's first turn in the create's own commit, under the command's ID, with the `turn.start` effect in the outbox. A crash leaves both or neither, and a retry of the same command returns the stored receipt, so one call makes one child.
@@ -31,7 +31,8 @@ Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, aft
   - "the parent thread is gone": no parent on this engine, or a deleted one. A parent on another engine is "gone" too: children are same-engine only.
   - "only the parent's live run can start a child thread, and not once it is stopping": `Run` is not the parent's live run, or that run is stopping or uncertain.
   - "a child thread can be at most N below a thread of yours": the line is longer than the limits' depth, which is at most `MaxDepth`.
-  - "a child thread's access can't be wider than its parent's": `Access` above the parent's. The parent's is no wider than its own parent's, so the check at one level holds for the line.
+  - "a child thread's access can't be wider than the run's that starts it": `Access` above the access the parent's live run was admitted at. A `thread.configure` changes a thread's model and access for its next turn; the run keeps its own in `engine.Run.Model` and `Access`, which `apply` sets from the thread at `turn.admitted` and the store keeps in `runs.model` and `runs.access`. Upgrade 6 fills them in from each thread's log, the create or configure last before each admission, so a stored row still equals its log's fold; a run with no admission in its log would read at Ask and its thread's model.
+  - "a child thread's access can't be wider than its parent's": `Access` above the parent's as it is now, so a thread narrowed under its run narrows what the run starts. The parent's is no wider than its own parent's, so the check at one level holds for the line.
   - "N child threads of this thread are at work, the most at once; start another once one of them stops", and "this thread has N child threads, the most it may; start another once one is deleted": the parent is at a limit. `kidsOf` counts its children that aren't deleted, and those of them whose agent works: a live run that isn't uncertain. An uncertain child, as every live one is after an engine restart under Claude, has no agent at work and waits on the user, so it takes no place at once.
 - A replayed create with the same command ID returns its stored receipt before any of this runs, as every command does.
 
@@ -42,13 +43,13 @@ Written 2026-10-25 for review, with PR #2; brought up to main on 2026-10-29, aft
 - The host gives each run's agent the server in `provider.SessionSpec.MCP` (`runtime.WithMCP`, set by `daemon.Start`): the binary the engine runs in, with `mcp` and three variables that name the caller, `GLITCHED_THREAD`, `GLITCHED_RUN` and `GLITCHED_ENGINE` (the engine's socket). Only these name the calling thread, never a tool's arguments.
 - The claude adapter passes it as an inline `--mcp-config`, without `--strict-mcp-config`, so it goes beside the user's own servers. The same `--mcp-config` takes the engine's `claude.Adapter.MCPConfig` file after it, the app's browser as `glitched-browser` (`docs/browser.md`, Agents), whose tools still ask. It adds `--allowedTools mcp__glitched__*`, so a spawn never asks, and short instructions with `--append-system-prompt`. `claude.Command` drops any of the three variables claude would inherit, so an engine inside a run never speaks for that run's thread.
 - The server answers `initialize`, `ping`, `tools/list` and `tools/call`, takes notifications, and answers any other method, such as the `server/discover` Claude Code sends first, with -32601.
-- `delegate_task` takes `task`, and `title`, `model`, `effort` and `client_request_id`. It reads the caller's thread and submits a `ThreadCreate` with `Parent`, `Run` and `Text` over the socket. The child's thread and the command's ID derive from the call's id: `client_request_id`, else Claude Code's `_meta.claudecode/toolUseId`. So a retry finds the same child. An engine refusal returns as an `isError` result with its reason.
+- `delegate_task` takes `task`, and `title`, `model`, `effort` and `client_request_id`. It reads the caller's thread and submits a `ThreadCreate` with `Parent`, `Run` and `Text` over the socket. The child's model and access are the caller's turn's, `api.Thread.Turn`, the live run's as it was admitted, with the access no wider than the thread's is now; the thread's own are its next turn's. The child's thread and the command's ID derive from the call's id: `client_request_id`, else Claude Code's `_meta.claudecode/toolUseId`. So a retry finds the same child, and one whose command differs, a later turn's or one after the thread was narrowed, finds it by its thread and task. An engine refusal returns as an `isError` result with its reason.
 - `TestContractMCPConfig` (claudelive) pins the merge, the tool name and the tool use id against the claude on PATH, which must be 2.1.317 or 2.1.318. Its transcript, `delegate.jsonl`, holds the MCP traffic too, which the fake claude replays against the real server.
 
 ## Limits
 
 `engine.Limits` caps what agents start: 5 children of one thread at work at once, 20 in all not counting deleted ones, and depth 4, the defaults for a field of zero. Depth is at most `api.MaxDepth`. They live in `daemon.Config.Children`, saved in `engine.json` with no store schema change. `glitched serve -max-working -max-children -max-depth` sets them for the next start, and the Agents card on Settings, This machine sets them too. The engine embedded in the GUI applies a change at once through `Daemon.SetLimits`; an engine another process runs applies it when it next starts.
-- Access is fixed at create on main (there's no access-change intent), so narrowing after create isn't a case yet.
+- A `thread.configure` that narrows a thread narrows the threads under it in the same commit (`engine.Below`). Each live run keeps the access it was admitted at.
 
 ## Reports
 
@@ -139,7 +140,6 @@ Settle and Delete are engine-side (decided 2026-11-05, open question 1). The GUI
 - An agent starting a child (bb's `create_chat` tool): the follow-up PR, likely the first plugin. Until then no path in the app creates a child. The user's "New child thread", the Agents panel's +, and the child's draft were removed on 2026-11-03: a child is always an agent's.
 - Children on another engine than their parent, and moving a thread to another parent.
 - An engine-side Stop all.
-- Narrowing a tree after create, as access can't change after create on main.
 - Indexing parents in the hub replica.
 - Real token counts from Claude or Codex.
 

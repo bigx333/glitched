@@ -262,6 +262,15 @@ type TurnResult struct {
 	Ended   time.Time `json:"ended"`
 }
 
+// Turn is a thread's live run as its view carries it: the model and
+// access the run was admitted at, which a configure since leaves as they
+// were.
+type Turn struct {
+	Run    ID       `json:"run"`
+	Model  ModelRef `json:"model"`
+	Access Access   `json:"access"`
+}
+
 // Thread is the projection a client reads. Working is derived from Run and
 // never stored.
 type Thread struct {
@@ -290,6 +299,8 @@ type Thread struct {
 	// LastReport is the last child.reported in the thread's log, committed
 	// with that event, so the shell stream orders it with every view.
 	LastReport *Report `json:"lastReport,omitempty"`
+	// Turn is the live run, nil while there is none.
+	Turn *Turn `json:"turn,omitempty"`
 	// Deleted is the tombstone: the last view a deleted thread has, which
 	// the shell stream sends once so that clients drop it. No read returns
 	// one.
