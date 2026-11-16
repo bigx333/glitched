@@ -625,6 +625,71 @@ func TestSelectionBarClearOfSelectionAfterRewrap(t *testing.T) {
 	}
 }
 
+// wideThread is the app on a thread of n turns, each replied to with a
+// paragraph of long lines.
+func wideThread(t *testing.T, n int) *harness {
+	t.Helper()
+	para := "Alpha " + strings.Repeat("lorem ipsum dolor sit amet ", 24) + "omega."
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New([]provider.Event{provider.TextDelta{Text: para}}))
+	var msgs []string
+	for i := 1; i <= n; i++ {
+		msgs = append(msgs, fmt.Sprintf("Step %d.", i))
+	}
+	seed(t, d, "/work/t3code", "Wide replies", msgs...)
+	h := start(t, dir)
+	h.a.select_(h.thread("Wide replies"))
+	last := fmt.Sprintf("Step %d.", n)
+	h.until("its transcript", func() bool { h.tt.Advance(16 * time.Millisecond); return h.tt.HasText(last) })
+	h.tt.Advance(time.Second)
+	return h
+}
+
+// In use, the bar of a selection scrolled so far away that its reply
+// isn't built, held at the timeline's edge, stays in the chat's pane as
+// the pane narrows: as the diff panel opens by a bar at the right of the
+// chat, as the sidebar shows by one at its left.
+func TestHeldSelectionBarInPane(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		width int
+		key   ui.Key
+		// at is where on a line of the reply, r, the word selected is.
+		at func(r ui.Rect) float32
+	}{
+		{"the diff panel", 1320, ui.KeyD, func(r ui.Rect) float32 { return r.X + r.W - 60 }},
+		{"the sidebar", 1000, ui.KeyB, func(r ui.Rect) float32 { return r.X + 10 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := wideThread(t, 10)
+			h.tt.SetSize(tc.width, 860)
+			if tc.key == ui.KeyB {
+				h.tt.Key(ui.Cmd, ui.KeyB)
+				h.tt.HoldModifiers(0)
+			}
+			h.tt.Advance(time.Second)
+			h.a.listFor(h.a.current().id()).ScrollTo(0, ui.Start)
+			h.tt.Advance(time.Second)
+			r := startsWith(h, "Alpha ")
+			doubleClickAt(h, tc.at(r), r.Y+10)
+			h.click("Ask about the selection")
+			h.tt.Advance(200 * time.Millisecond)
+			h.tt.Type("what")
+			wheel(h, 2400)
+			if _, ok := barAt(h); !ok || !h.tt.Focused("Ask about the selection") {
+				t.Fatalf("typed in, the bar of a selection scrolled away: shown %v, its box focused %v", ok, h.tt.Focused("Ask about the selection"))
+			}
+			h.tt.Key(ui.Cmd, tc.key)
+			h.tt.HoldModifiers(0)
+			h.tt.Advance(2 * time.Second)
+			b, ok := barAt(h)
+			if pane := h.a.paneAt; !ok || b.X < pane.X || b.X+b.W > pane.X+pane.W {
+				t.Errorf("%s shown, the bar: shown %v at x %v to %v; want it in the chat's pane, x %v to %v", tc.name, ok, b.X, b.X+b.W, pane.X, pane.X+pane.W)
+			}
+		})
+	}
+}
+
 // askAfterReply is a turn that replies, then asks to run a command.
 var askAfterReply = []provider.Event{
 	provider.TextDelta{Text: "May I run the tests now?"},
