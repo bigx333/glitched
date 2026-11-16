@@ -84,6 +84,27 @@ func TestQuestionCardShowsTheQuestions(t *testing.T) {
 	}
 }
 
+// The questions' card names the access its turn asks at, as an approval's
+// does: with its thread narrowed while the turn waits, it still names the
+// level the turn was admitted at.
+func TestQuestionCardNamesTheAccessItsTurnAsksAt(t *testing.T) {
+	h, th := questioning(t, fake.Asking())
+	if got := cardAccess(h, "Dismiss"); got != accessAuto {
+		t.Fatalf("the card names %q, want the %q its thread started at", got, accessAuto)
+	}
+	h.click("Access")
+	h.tt.Advance(time.Second)
+	h.click(accessAsk)
+	h.until("the thread at Ask for approval", func() bool { return th.View.Access == api.AccessAsk && len(th.Pending) == 0 })
+	h.tt.Advance(time.Second)
+	if turn := th.View.Turn; turn == nil || turn.Access != api.AccessAutoEdits || lastRequest(th).State != api.RequestPending {
+		t.Fatalf("the turn no longer waits at %q: %+v", accessAuto, turn)
+	}
+	if got := cardAccess(h, "Dismiss"); got != accessAuto {
+		t.Errorf("the card of a turn that asks at %q names %q, its thread's since", accessAuto, got)
+	}
+}
+
 // Clicks pick: one option in a single question, any in a multi one, where
 // a second click takes a pick back. Answer sends them, by position.
 func TestQuestionCardAnswersByClicks(t *testing.T) {

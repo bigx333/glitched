@@ -43,8 +43,7 @@ func agentName(t thread) string {
 	return "The agent"
 }
 
-// accessLabel is the thread's access level as the composer's picker
-// names it.
+// accessLabel is an access level as the composer's picker names it.
 func accessLabel(a api.Access) string {
 	for label, v := range accessOf {
 		if v == a {
@@ -52,6 +51,17 @@ func accessLabel(a api.Access) string {
 		}
 	}
 	return ""
+}
+
+// askedAt is the access level r is asked at, which its card names: the
+// one its turn was admitted at, where that is the thread's live turn. The
+// thread's own, which a configure since may have changed, is its next
+// turn's; it names a request with no live turn of its own.
+func askedAt(t thread, r *client.RequestEntry) string {
+	if turn := t.View.Turn; turn != nil && turn.Run == r.Run {
+		return accessLabel(turn.Access)
+	}
+	return accessLabel(t.View.Access)
 }
 
 // answerOf reads an answer sent to the agent: {"allow":true} or not.
@@ -698,7 +708,7 @@ func (a *app) answerButtons(c *ui.Context, t thread, r *client.RequestEntry) (al
 		ui.Spacer(c)
 		ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, icHand).FontSize(12).TextColor(palette.faint)
-			text(accessLabel(t.View.Access), 11.5, 0, palette.faint)
+			text(askedAt(t, r), 11.5, 0, palette.faint)
 		})
 	})
 	return allow, deny, row, labels

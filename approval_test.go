@@ -268,6 +268,70 @@ func TestApprovalCardFlagsAnUnsandboxedCommand(t *testing.T) {
 	}
 }
 
+// cardAccess is the access level the waiting card names beside its
+// buttons, the last of which says last: the first level drawn after it.
+func cardAccess(h *harness, last string) string {
+	h.t.Helper()
+	ts := h.tt.Texts()
+	i := slices.Index(ts, last)
+	if i < 0 {
+		h.t.Fatalf("no %q on a waiting card: %q", last, ts)
+	}
+	for _, s := range ts[i+1:] {
+		if _, ok := accessOf[s]; ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// The card names the access its turn asks at. The thread's own, set
+// since, is its next turn's: with Full access granted while the turn
+// waits, the card still names the level the turn was admitted at.
+func TestApprovalCardNamesTheAccessItsTurnAsksAt(t *testing.T) {
+	h, th := asking(t, runTests)
+	if got := cardAccess(h, "Deny"); got != accessAuto {
+		t.Fatalf("the card names %q, want the %q its thread started at", got, accessAuto)
+	}
+	h.click("Access")
+	h.tt.Advance(time.Second)
+	r, ok := h.tt.Find(accessFull)
+	if !ok {
+		t.Fatalf("no Full access row: %q", h.tt.Texts())
+	}
+	h.tt.Press(r.X+r.W/2, r.Y+r.H/2)
+	h.tt.Advance(2 * holdTime)
+	h.tt.Release(r.X+r.W/2, r.Y+r.H/2)
+	h.until("the thread at Full access", func() bool { return th.View.Access == api.AccessFull && len(th.Pending) == 0 })
+	h.tt.Advance(time.Second)
+	if turn := th.View.Turn; turn == nil || turn.Access != api.AccessAutoEdits || lastRequest(th).State != api.RequestPending {
+		t.Fatalf("the turn no longer waits at %q: %+v", accessAuto, turn)
+	}
+	if got := cardAccess(h, "Deny"); got != accessAuto {
+		t.Errorf("the card of a turn that asks at %q names %q, its thread's since", accessAuto, got)
+	}
+}
+
+// A request that is not the live turn's is named at its thread's access:
+// there's no turn of its own to name it at.
+func TestACardNamesItsThreadsAccessForARequestOfNoLiveTurn(t *testing.T) {
+	run, other := api.NewID(), api.NewID()
+	th := thread{nil, &client.Thread{View: api.Thread{Access: api.AccessFull}}}
+	for name, tc := range map[string]struct {
+		turn *api.Turn
+		want string
+	}{
+		"its own turn's":   {&api.Turn{Run: run, Access: api.AccessAsk}, accessAsk},
+		"another turn's":   {&api.Turn{Run: other, Access: api.AccessAsk}, accessFull},
+		"with none at all": {nil, accessFull},
+	} {
+		th.View.Turn = tc.turn
+		if got := askedAt(th, &client.RequestEntry{Run: run}); got != tc.want {
+			t.Errorf("%s: the card names %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
 // With the composer empty, ⌘⏎ allows the request once and the turn goes on.
 func TestCmdEnterAllows(t *testing.T) {
 	h, th := asking(t, runTests)
