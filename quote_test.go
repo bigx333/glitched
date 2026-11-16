@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 )
 
@@ -34,6 +36,16 @@ func quoteReady(t *testing.T) (*harness, string) {
 		t.Fatalf("dragged over half the reply, the selection is %q", sel)
 	}
 	return h, sel
+}
+
+// replyReady is the app on a thread whose one reply is md, once it shows
+// wait.
+func replyReady(t *testing.T, md, wait string) *harness {
+	t.Helper()
+	h := enterReady(t, fake.New([]provider.Event{provider.TextDelta{Text: md}}), "go")
+	h.until("the reply", func() bool { return h.tt.HasText(wait) })
+	h.tt.Advance(2 * time.Second)
+	return h
 }
 
 // barShown is whether the selection's bar shows.
@@ -158,6 +170,34 @@ func TestSelectedText(t *testing.T) {
 	}
 	if got, want := selectedText(parts), "éllo\n\nsecond"; got != want {
 		t.Errorf("selectedText = %q, want %q", got, want)
+	}
+}
+
+// A quote of a code block longer than MyGo lays out in one text has its
+// lines as the reply has them, as ⌘C copies them.
+func TestSelectionQuotesLongCode(t *testing.T) {
+	var code strings.Builder
+	for i := 1; i <= 70; i++ {
+		fmt.Fprintf(&code, "line%02d := %d\n", i, i)
+	}
+	h := replyReady(t, "Intro here.\n\n```go\n"+code.String()+"```\n\nOutro here.", "Outro here.")
+	doubleClick(h, "Outro here.")
+	h.tt.Key(ui.Cmd, ui.KeyA)
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
+	h.tt.Key(ui.Cmd, ui.KeyC)
+	h.tt.Frame()
+	copied := strings.TrimSpace(h.tt.Clipboard())
+	if !strings.Contains(copied, "line32 := 32\nline33 := 33") {
+		t.Fatalf("⌘C copied %q; want the code's lines", copied)
+	}
+	h.click("Quote")
+	h.tt.Advance(time.Second)
+	i := slices.IndexFunc(h.a.attachments, func(at attachment) bool { return at.quote })
+	if i < 0 {
+		t.Fatalf("attachments %+v; want a quote", h.a.attachments)
+	}
+	if got := h.a.attachments[i].text; got != copied {
+		t.Errorf("the quote is\n%s\nwant it as ⌘C copies the selection:\n%s", got, copied)
 	}
 }
 

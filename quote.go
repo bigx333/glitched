@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -40,18 +41,35 @@ type quoteBar struct {
 	ask  string
 }
 
-// selectedText is the text of a selection's parts, a paragraph each: a
-// list's items and a table's cells too, as MyGo tells no part's block.
+// codeChunk is how many lines of a code block MyGo lays out as one text,
+// a part of a selection each (ui/markdown's chunkLines).
+const codeChunk = 32
+
+// selectedText is the text of a selection's parts as ⌘C copies it, a
+// paragraph each, but for the chunks of a code block, which go on from
+// line to line; a list's items and a table's cells are paragraphs too, as
+// MyGo tells no part's block.
 func selectedText(parts []ui.SelectedText) string {
-	lines := make([]string, 0, len(parts))
+	var b strings.Builder
+	var prev ui.SelectedText
 	for _, p := range parts {
 		r := []rune(p.Text)
 		from, to := min(max(p.Start, 0), len(r)), min(max(p.End, 0), len(r))
-		if from < to {
-			lines = append(lines, string(r[from:to]))
+		if from >= to {
+			continue
 		}
+		switch {
+		case b.Len() == 0:
+		case prev.End >= utf8.RuneCountInString(prev.Text) && strings.Count(prev.Text, "\n") == codeChunk-1 && from == 0:
+			// A whole chunk selected to its end, and the next from its start.
+			b.WriteString("\n")
+		default:
+			b.WriteString("\n\n")
+		}
+		b.WriteString(string(r[from:to]))
+		prev = p
 	}
-	return strings.TrimSpace(strings.Join(lines, "\n\n"))
+	return strings.TrimSpace(b.String())
 }
 
 // blockquote is text quoted in Markdown.
