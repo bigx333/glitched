@@ -374,16 +374,26 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 		t.LastReport = &api.Report{Child: r.Child, Kind: r.Kind, Cursor: api.Cursor{Seq: r.Seq}}
 	}
 
-	err = each(ctx, q, `SELECT id, generation, state, signalled, outcome, error, ended FROM runs WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
+	err = each(ctx, q, `SELECT id, generation, state, signalled, outcome, error, ended, model, access FROM runs WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
 		var r engine.Run
-		var outcome sql.NullByte
+		var outcome, access sql.NullByte
 		var ended sql.NullInt64
-		if err := rows.Scan(idScan{&r.ID}, &r.Generation, &r.State, &r.Signalled, &outcome, &r.Error, &ended); err != nil {
+		var model sql.NullString
+		if err := rows.Scan(idScan{&r.ID}, &r.Generation, &r.State, &r.Signalled, &outcome, &r.Error, &ended, &model, &access); err != nil {
 			return err
 		}
 		r.Outcome = api.Outcome(outcome.Byte)
 		if ended.Valid {
 			r.Ended = fromNanos(ended.Int64)
+		}
+		// A run the upgrade to version 7 found no admission for has
+		// neither: it reads at Ask, the narrowest, so it starts no child
+		// wider than it's known to be, and at its thread's model.
+		r.Access = api.Access(access.Byte)
+		if !model.Valid {
+			r.Model = t.Model
+		} else if err := json.Unmarshal([]byte(model.String), &r.Model); err != nil {
+			return err
 		}
 		t.Runs = append(t.Runs, r)
 		return nil
@@ -470,10 +480,14 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 		if r.State == engine.RunFinished {
 			outcome, ended = r.Outcome, r.Ended.UnixNano()
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO runs (thread, ord, id, generation, state, signalled, outcome, error, ended) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		admitted, err := json.Marshal(r.Model)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO runs (thread, ord, id, generation, state, signalled, outcome, error, ended, model, access) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (thread, ord) DO UPDATE SET state = excluded.state, signalled = excluded.signalled, outcome = excluded.outcome,
 				error = excluded.error, ended = excluded.ended`,
-			t.ID[:], i, r.ID[:], r.Generation, r.State, r.Signalled, outcome, r.Error, ended); err != nil {
+			t.ID[:], i, r.ID[:], r.Generation, r.State, r.Signalled, outcome, r.Error, ended, string(admitted), r.Access); err != nil {
 			return fmt.Errorf("store: run %s: %w", r.ID, err)
 		}
 	}

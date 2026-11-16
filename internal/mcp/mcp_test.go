@@ -42,9 +42,15 @@ func engine(t *testing.T) *runtime.Host {
 // working is a thread of the user's with a live run, and that run.
 func working(t *testing.T, h *runtime.Host) mcp.Origin {
 	t.Helper()
+	return workingAt(t, h, api.AccessAsk)
+}
+
+// workingAt is working, its thread created at access.
+func workingAt(t *testing.T, h *runtime.Host, access api.Access) mcp.Origin {
+	t.Helper()
 	thread := api.NewID()
 	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{
-		Workspace: "/src/app", Title: "fix it", Model: api.ModelRef{Provider: "fake", Model: "fake"},
+		Workspace: "/src/app", Title: "fix it", Model: api.ModelRef{Provider: "fake", Model: "fake"}, Access: access,
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -108,6 +114,14 @@ func delegate(id int, args, meta string) string {
 }
 
 func itoa(n int) string { b, _ := json.Marshal(n); return string(b) }
+
+// configure gives thread model and access, for its turns from the next on.
+func configure(t *testing.T, h *runtime.Host, thread api.ID, model api.ModelRef, access api.Access) {
+	t.Helper()
+	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadConfigure{Model: model, Access: access}}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func children(t *testing.T, h *runtime.Host, parent api.ID) []api.Thread {
 	t.Helper()
@@ -278,5 +292,65 @@ func TestAReusedRequestIDFindsItsTaskOrSaysToPickANewOne(t *testing.T) {
 	kids := children(t, h, o.Thread)
 	if r.Result.IsError || len(kids) != 1 || len(r.Result.Content) == 0 || !strings.Contains(r.Result.Content[0].Text, kids[0].ID.String()) {
 		t.Errorf("turn 2 retry of the same task: %+v with %d children; want the first child back", r, len(kids))
+	}
+}
+
+// A running turn's child starts at the model and access the turn was
+// admitted at: what its thread was given since is for its next turn.
+func TestARunningTurnDelegatesAtItsOwnModelAndAccess(t *testing.T) {
+	h := engine(t)
+	o := working(t, h)
+	configure(t, h, o.Thread, api.ModelRef{Provider: "fake", Model: "fake", Effort: "high", Fast: true}, api.AccessFull)
+	if r := serve(t, h, o, delegate(1, `{"task":"rm -rf build"}`, ""))[1]; r.Error != nil || r.Result.IsError {
+		t.Fatalf("delegate: %+v", r)
+	}
+	kids := children(t, h, o.Thread)
+	if len(kids) != 1 {
+		t.Fatalf("%d children, want 1", len(kids))
+	}
+	if k, turn := kids[0], (api.ModelRef{Provider: "fake", Model: "fake"}); k.Access != api.AccessAsk || k.Model != turn {
+		t.Errorf("a turn admitted at %+v and Ask started a child at %+v and %v", turn, k.Model, k.Access)
+	}
+}
+
+// A thread narrowed under its running turn narrows the children the turn
+// starts from then on.
+func TestAThreadNarrowedUnderItsTurnNarrowsTheTurnsNewChildren(t *testing.T) {
+	h := engine(t)
+	o := workingAt(t, h, api.AccessFull)
+	configure(t, h, o.Thread, api.ModelRef{Provider: "fake", Model: "fake"}, api.AccessAutoEdits)
+	if r := serve(t, h, o, delegate(1, `{"task":"Check the callers"}`, ""))[1]; r.Error != nil || r.Result.IsError {
+		t.Fatalf("delegate: %+v", r)
+	}
+	if kids := children(t, h, o.Thread); len(kids) != 1 || kids[0].Access != api.AccessAutoEdits {
+		t.Errorf("the children of a turn admitted at Full, its thread narrowed to AutoEdits since: %+v, want one at AutoEdits", kids)
+	}
+}
+
+// A retry of a tool use finds the child its first try made, whatever the
+// thread was given in between.
+func TestARetriedToolUseFindsItsChildAfterAConfigure(t *testing.T) {
+	for name, c := range map[string]api.ThreadConfigure{
+		"effort":   {Model: api.ModelRef{Provider: "fake", Model: "fake", Effort: "low"}, Access: api.AccessAutoEdits},
+		"widened":  {Model: api.ModelRef{Provider: "fake", Model: "fake"}, Access: api.AccessFull},
+		"narrowed": {Model: api.ModelRef{Provider: "fake", Model: "fake"}, Access: api.AccessAsk},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := engine(t)
+			o := workingAt(t, h, api.AccessAutoEdits)
+			call := delegate(1, `{"task":"Check the callers"}`, `{"claudecode/toolUseId":"toolu_A"}`)
+			first := serve(t, h, o, call)[1]
+			if first.Error != nil || first.Result.IsError {
+				t.Fatalf("the first try: %+v", first)
+			}
+			configure(t, h, o.Thread, c.Model, c.Access)
+			again := serve(t, h, o, call)[1]
+			if again.Error != nil || again.Result.IsError || again.Result.StructuredContent.TaskID != first.Result.StructuredContent.TaskID {
+				t.Errorf("the retry gave %+v, want the first try's child %s", again.Result, first.Result.StructuredContent.TaskID)
+			}
+			if n := len(children(t, h, o.Thread)); n != 1 {
+				t.Errorf("%d children, want 1", n)
+			}
+		})
 	}
 }

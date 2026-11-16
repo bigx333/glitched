@@ -179,6 +179,8 @@ CREATE TABLE runs (
 	outcome    INTEGER CHECK (outcome BETWEEN 0 AND 3),
 	error      TEXT NOT NULL,
 	ended      INTEGER,
+	model      TEXT,
+	access     INTEGER CHECK (access BETWEEN 0 AND 2),
 	PRIMARY KEY (thread, ord),
 	CHECK ((state = 'finished') = (outcome IS NOT NULL)),
 	CHECK ((state = 'finished') = (ended IS NOT NULL))
@@ -226,7 +228,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 6
+const schemaVersion = 7
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -289,6 +291,27 @@ UPDATE threads SET report = (
 	FROM events e
 	WHERE e.thread = threads.id AND e.type = 'child.reported'
 	ORDER BY e.seq DESC LIMIT 1);
+`,
+	// The model and access each run was admitted at, as its thread's log
+	// has them: those of the create or configure last before the run's
+	// admission. A run whose admission the log doesn't show keeps neither.
+	6: `
+ALTER TABLE runs ADD COLUMN model TEXT;
+ALTER TABLE runs ADD COLUMN access INTEGER CHECK (access BETWEEN 0 AND 2);
+UPDATE runs SET model = a.model, access = a.access
+FROM (
+	SELECT m.thread, m.generation,
+		json_extract(CAST(e.payload AS TEXT), '$.model') AS model,
+		json_extract(CAST(e.payload AS TEXT), '$.access') AS access
+	FROM (
+		SELECT thread, type, json_extract(CAST(payload AS TEXT), '$.generation') AS generation,
+			MAX(CASE WHEN type <> 'turn.admitted' THEN seq END) OVER (PARTITION BY thread ORDER BY seq) AS set_at
+		FROM events
+		WHERE type IN ('thread.created', 'thread.configured', 'turn.admitted')
+	) m JOIN events e ON e.seq = m.set_at
+	WHERE m.type = 'turn.admitted'
+) a
+WHERE a.thread = runs.thread AND a.generation = runs.generation;
 `,
 }
 

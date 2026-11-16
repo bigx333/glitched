@@ -52,3 +52,50 @@ func TestAConfigureIsChecked(t *testing.T) {
 		}
 	}
 }
+
+// A turn already running keeps the model and access it was admitted at,
+// which its view says, and starts no child wider than itself or than its
+// thread as configured since.
+func TestARunningTurnKeepsItsModelAndAccess(t *testing.T) {
+	opus := api.ModelRef{Model: "Claude Opus 5.5", Effort: "high"}
+	sonnet := api.ModelRef{Model: "Claude Sonnet 5.5", Effort: "low"}
+	for _, tc := range []struct {
+		name            string
+		admitted, since api.Access
+	}{{"widened since", api.AccessAutoEdits, api.AccessFull}, {"narrowed since", api.AccessFull, api.AccessAutoEdits}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newThread(t)
+			f.must(api.ThreadConfigure{Model: opus, Access: tc.admitted})
+			run := f.must(dispatch("go", api.StartNow))
+			f.observe(engine.Started{Run: run})
+			f.must(api.ThreadConfigure{Model: sonnet, Access: tc.since})
+
+			v := engine.View(f.th)
+			if v.Model != sonnet || v.Access != tc.since {
+				t.Fatalf("the thread is at %+v, %v after the configure", v.Model, v.Access)
+			}
+			if want := (api.Turn{Run: run, Model: opus, Access: tc.admitted}); v.Turn == nil || *v.Turn != want {
+				t.Errorf("the view's turn is %+v, want %+v as admitted", v.Turn, want)
+			}
+			child := func(a api.Access) error {
+				return engine.CheckChild([]engine.Thread{f.th}, engine.Kids{}, engine.Limits{}, api.ThreadCreate{Parent: f.th.ID, Run: run, Access: a})
+			}
+			if err := child(api.AccessAutoEdits); err != nil {
+				t.Errorf("a child as wide as the narrower of the turn and the thread: %v", err)
+			}
+			var rej *api.RejectedError
+			if err := child(api.AccessFull); !errors.As(err, &rej) {
+				t.Errorf("a child wider than the narrower of the turn and the thread: %v, want refused", err)
+			}
+
+			f.observe(engine.Ended{Run: run, Outcome: api.OutcomeCompleted})
+			if v := engine.View(f.th); v.Turn != nil {
+				t.Errorf("the view of the idle thread has a turn: %+v", v.Turn)
+			}
+			next := f.must(dispatch("again", api.StartNow))
+			if v, want := engine.View(f.th), (api.Turn{Run: next, Model: sonnet, Access: tc.since}); v.Turn == nil || *v.Turn != want {
+				t.Errorf("the next turn is %+v, want %+v as configured", v.Turn, want)
+			}
+		})
+	}
+}

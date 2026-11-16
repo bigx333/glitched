@@ -327,7 +327,7 @@ func TestAnOlderDatabaseUpgrades(t *testing.T) {
 			updated_at INTEGER NOT NULL, CHECK ((disposition = 1) = (until IS NOT NULL))) STRICT;
 		INSERT INTO threads_v1 SELECT id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at FROM threads;
 		DROP TABLE threads;
-		ALTER TABLE threads_v1 RENAME TO threads;
+		ALTER TABLE threads_v1 RENAME TO threads;` + runsV6 + `
 		PRAGMA user_version = 1;`); err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +374,7 @@ func TestAnArchivedThreadUpgradesSettled(t *testing.T) {
 			disposition, until, updated_at, deleted FROM threads;
 		DROP TABLE threads;
 		ALTER TABLE threads_v3 RENAME TO threads;
-		UPDATE threads SET disposition = 3;
+		UPDATE threads SET disposition = 3;` + runsV6 + `
 		PRAGMA user_version = 3;`); err != nil {
 		t.Fatal(err)
 	}
@@ -420,24 +420,23 @@ func TestADeletedThreadIsGone(t *testing.T) {
 	}
 }
 
-// threadsTable is the threads table's shape as SQLite has it: its columns
-// as table_info lists them, its CHECKs, whitespace aside, and whether it's
-// STRICT.
-type threadsTable struct {
+// table is a table's shape as SQLite has it: its columns as table_info
+// lists them, its CHECKs, whitespace aside, and whether it's STRICT.
+type table struct {
 	columns []string
 	checks  []string
 	strict  bool
 }
 
-func threadsOf(t *testing.T, path string) threadsTable {
+func tableOf(t *testing.T, path, name string) table {
 	t.Helper()
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	var tt threadsTable
-	rows, err := db.Query(`SELECT cid, name, type, "notnull", dflt_value, pk FROM pragma_table_info('threads') ORDER BY cid`)
+	var tt table
+	rows, err := db.Query(`SELECT cid, name, type, "notnull", dflt_value, pk FROM pragma_table_info(?) ORDER BY cid`, name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +451,7 @@ func threadsOf(t *testing.T, path string) threadsTable {
 	}
 	rows.Close()
 	var ddl string
-	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'threads'`).Scan(&ddl); err != nil {
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&ddl); err != nil {
 		t.Fatal(err)
 	}
 	for rest := ddl; ; {
@@ -480,14 +479,15 @@ func threadsOf(t *testing.T, path string) threadsTable {
 		rest = rest[end:]
 	}
 	slices.Sort(tt.checks)
-	if err := db.QueryRow(`SELECT strict FROM pragma_table_list WHERE name = 'threads' AND schema = 'main'`).Scan(&tt.strict); err != nil {
+	if err := db.QueryRow(`SELECT strict FROM pragma_table_list WHERE name = ? AND schema = 'main'`, name).Scan(&tt.strict); err != nil {
 		t.Fatal(err)
 	}
 	return tt
 }
 
 // downgrade rewrites a database this build created into an older build's:
-// sql rebuilds its threads table, and the version is set to version.
+// sql rebuilds its threads table, its runs lose the model and access, and
+// the version is set to version.
 func downgrade(t *testing.T, path, sqlText string, version int) {
 	t.Helper()
 	db, err := sql.Open("sqlite", path)
@@ -495,10 +495,16 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + runsV6 + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
 }
+
+// The runs table up to version 6, before a run kept its model and access.
+const runsV6 = `
+	ALTER TABLE runs DROP COLUMN model;
+	ALTER TABLE runs DROP COLUMN access;
+`
 
 // The threads table of version 3, archived threads and all.
 const threadsV3 = `
@@ -535,7 +541,7 @@ const threadsV4 = `
 func TestAnUpgradedThreadsTableIsANewOnes(t *testing.T) {
 	fresh := filepath.Join(t.TempDir(), "host.db")
 	open(t, fresh).Close()
-	want := threadsOf(t, fresh)
+	want := tableOf(t, fresh, "threads")
 	if !want.strict || len(want.checks) == 0 {
 		t.Fatalf("a new threads table: %+v", want)
 	}
@@ -549,7 +555,7 @@ func TestAnUpgradedThreadsTableIsANewOnes(t *testing.T) {
 			open(t, path).Close()
 			downgrade(t, path, tc.sql, tc.version)
 			open(t, path).Close()
-			got := threadsOf(t, path)
+			got := tableOf(t, path, "threads")
 			if !slices.Equal(got.columns, want.columns) {
 				t.Errorf("columns\n%s\nwant a new table's\n%s", strings.Join(got.columns, "\n"), strings.Join(want.columns, "\n"))
 			}
@@ -628,6 +634,23 @@ func TestAChildThreadAfterTheUpgradeFromVersion3(t *testing.T) {
 	}
 }
 
+// fixture is the path of a copy of testdata's database name, its fence
+// beside it.
+func fixture(t *testing.T, name string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "host.db")
+	for _, suffix := range []string{"", ".fence"} {
+		b, err := os.ReadFile(filepath.Join("testdata", name+suffix))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path+suffix, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return path
+}
+
 // testdata/v5.db is a database main's store wrote at version 5: a parent
 // with three reports from two children, the last Blocked, and a thread
 // with none. Opening it upgrades it to the projection its log folds to,
@@ -635,16 +658,7 @@ func TestAChildThreadAfterTheUpgradeFromVersion3(t *testing.T) {
 // a new database has.
 func TestAVersion5DatabaseUpgradesWithEachLastReport(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "host.db")
-	for _, name := range []string{"v5.db", "v5.db.fence"} {
-		b, err := os.ReadFile(filepath.Join("testdata", name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path+strings.TrimPrefix(name, "v5.db"), b, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+	path := fixture(t, "v5.db")
 	s := open(t, path)
 	log, err := s.ReadLog(ctx, 0, 0)
 	if err != nil {
@@ -686,8 +700,100 @@ func TestAVersion5DatabaseUpgradesWithEachLastReport(t *testing.T) {
 	s.Close()
 	fresh := filepath.Join(t.TempDir(), "host.db")
 	open(t, fresh).Close()
-	if got, want := threadsOf(t, path), threadsOf(t, fresh); !slices.Equal(got.columns, want.columns) {
+	if got, want := tableOf(t, path, "threads"), tableOf(t, fresh, "threads"); !slices.Equal(got.columns, want.columns) {
 		t.Errorf("columns\n%s\nwant a new table's\n%s", strings.Join(got.columns, "\n"), strings.Join(want.columns, "\n"))
+	}
+}
+
+// testdata/v6.db is a database the store wrote at version 6, when a thread
+// could be configured and its runs kept neither model nor access: a thread
+// never configured, one configured between its runs and widened under its
+// live one, one configured with no run, and a parent narrowed under its
+// live run, its child with it. Opening it upgrades it to the projection
+// its log folds to, each run at the model and access it was admitted at,
+// and the runs table a new database has.
+func TestAVersion6DatabaseUpgradesWithEachRunsModelAndAccess(t *testing.T) {
+	ctx := context.Background()
+	path := fixture(t, "v6.db")
+	s := open(t, path)
+	log, err := s.ReadLog(ctx, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	folded := map[api.ID]engine.Thread{}
+	for _, e := range log {
+		body, err := e.Decode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		folded[e.Thread] = engine.Apply(folded[e.Thread], engine.Event{Thread: e.Thread, Seq: e.Cursor.Seq, At: e.At, Body: body})
+	}
+	type admitted struct {
+		model  api.ModelRef
+		access api.Access
+	}
+	opus := api.ModelRef{Provider: "fake", Model: "Claude Opus 5.5", Effort: "high", Fast: true}
+	sonnet := api.ModelRef{Provider: "fake", Model: "Claude Sonnet 5.5", Effort: "medium"}
+	haiku := api.ModelRef{Provider: "fake", Model: "Claude Haiku 5.5"}
+	runs := map[string][]admitted{
+		"plain":      {{opus, api.AccessFull}, {opus, api.AccessFull}},
+		"configured": {{haiku, api.AccessAsk}, {sonnet, api.AccessAutoEdits}, {sonnet, api.AccessAutoEdits}},
+		"idle":       nil,
+		"parent":     {{opus, api.AccessFull}},
+		"child":      {{sonnet, api.AccessAutoEdits}},
+	}
+	if len(folded) != len(runs) {
+		t.Fatalf("the fixture's log holds %d threads, want %d", len(folded), len(runs))
+	}
+	var widened api.ID
+	for id, want := range folded {
+		got, err := s.Thread(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("thread %s upgraded to\n%+v\nwant its log's fold\n%+v", want.Title, got, want)
+		}
+		var at []admitted
+		for _, r := range got.Runs {
+			at = append(at, admitted{r.Model, r.Access})
+		}
+		if !slices.Equal(at, runs[got.Title]) {
+			t.Errorf("thread %s's runs upgraded at %+v, want %+v", got.Title, at, runs[got.Title])
+		}
+		if got.Title == "configured" {
+			widened = id
+		}
+	}
+
+	// The thread widened under its live run: the run starts a child as
+	// wide as it was admitted, and none as wide as the thread is now.
+	snap, err := s.Read(ctx, api.Query{Thread: widened})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := snap.Threads[0]
+	if v.Access != api.AccessFull || v.Turn == nil || v.Turn.Model != sonnet || v.Turn.Access != api.AccessAutoEdits {
+		t.Fatalf("the widened thread reads at %v, its turn %+v; want it at Full, its turn at %+v and AutoEdits", v.Access, v.Turn, sonnet)
+	}
+	child := func(a api.Access) error {
+		_, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: api.NewID(), Body: api.ThreadCreate{
+			Workspace: "w", Title: "child", Model: sonnet, Access: a, Parent: widened, Run: v.Turn.Run, Text: "work",
+		}}, time.Now())
+		return err
+	}
+	var re *api.RejectedError
+	if err := child(api.AccessFull); !errors.As(err, &re) {
+		t.Errorf("a child at the access set for the next turn: %v, want refused", err)
+	}
+	if err := child(api.AccessAutoEdits); err != nil {
+		t.Errorf("a child as wide as its run: %v", err)
+	}
+	s.Close()
+	fresh := filepath.Join(t.TempDir(), "host.db")
+	open(t, fresh).Close()
+	if got, want := tableOf(t, path, "runs"), tableOf(t, fresh, "runs"); !reflect.DeepEqual(got, want) {
+		t.Errorf("the runs table\n%+v\nwant a new database's\n%+v", got, want)
 	}
 }
 

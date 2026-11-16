@@ -66,6 +66,10 @@ type Run struct {
 	Outcome    api.Outcome // set when Finished
 	Error      string
 	Ended      time.Time // set when Finished
+	// Model and Access are the thread's as the run was admitted: a
+	// configure since changes the thread's, and leaves the run's.
+	Model  api.ModelRef
+	Access api.Access
 }
 
 type Message struct {
@@ -204,6 +208,9 @@ func View(t Thread) api.Thread {
 		Parent:      t.Parent,
 		Tokens:      t.Tokens,
 		Reported:    t.Reported,
+	}
+	if r := t.Live(); r != nil {
+		v.Turn = &api.Turn{Run: r.ID, Model: r.Model, Access: r.Access}
 	}
 	if t.LastReport != nil {
 		r := *t.LastReport

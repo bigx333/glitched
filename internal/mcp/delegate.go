@@ -89,6 +89,13 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 	if err != nil {
 		return TaskView{}, err
 	}
+	// The child inherits from the turn that asks, at the model and access
+	// it was admitted at: the thread's are its next turn's, and they narrow
+	// the child only where the thread was narrowed since.
+	model, access := parent.Model, parent.Access
+	if turn := parent.Turn; turn != nil && turn.Run == t.Origin.Run {
+		model, access = turn.Model, min(turn.Access, parent.Access)
+	}
 	key := cmp.Or(in.RequestID, toolUse, api.NewID().String())
 	child := derive(t.Origin.Thread, "thread", key)
 	title := cmp.Or(in.Title, firstLine(in.Task))
@@ -99,24 +106,27 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 			Workspace: parent.Workspace,
 			Title:     title,
 			Model: api.ModelRef{
-				Provider: parent.Model.Provider,
-				Model:    cmp.Or(in.Model, parent.Model.Model),
-				Effort:   cmp.Or(in.Effort, parent.Model.Effort),
-				Fast:     parent.Model.Fast,
+				Provider: model.Provider,
+				Model:    cmp.Or(in.Model, model.Model),
+				Effort:   cmp.Or(in.Effort, model.Effort),
+				Fast:     model.Fast,
 			},
-			Access: parent.Access,
+			Access: access,
 			Parent: t.Origin.Thread,
 			Run:    t.Origin.Run,
 			Text:   in.Task,
 		},
 	})
-	if errors.Is(err, api.ErrConflict) && in.RequestID != "" {
-		// A later turn that retries the same task finds the child the first
-		// try made: only the run differs, and the run is in the command.
+	if errors.Is(err, api.ErrConflict) {
+		// A retry of the same task finds the child the first try made,
+		// though its command differs: a later turn's is another run's, and
+		// a thread narrowed since narrows it.
 		if th, task, ok := t.child(ctx, child); ok && th.Parent == t.Origin.Thread && task == in.Task {
 			return TaskView{TaskID: child.String(), Title: th.Title, Status: "working"}, nil
 		}
-		return TaskView{}, fmt.Errorf("delegate_task: client_request_id %q already started another task in this thread; use a new client_request_id for a new task", in.RequestID)
+		if in.RequestID != "" {
+			return TaskView{}, fmt.Errorf("delegate_task: client_request_id %q already started another task in this thread; use a new client_request_id for a new task", in.RequestID)
+		}
 	}
 	if err != nil {
 		return TaskView{}, refusal(err)
