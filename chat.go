@@ -355,11 +355,12 @@ func (a *app) emptyState(c *ui.Context) {
 // the rest as typed: every mark escaped, and every line, blank line and
 // indent kept, but for one blank line each side of a code block, which
 // the block's spacing shows. A fence that opens nothing, unclosed with
-// no code after it, is text. It is "" for a message without code, which
+// no code after it, is text, and one left unclosed after code is closed,
+// which leaves its code to copy. It is "" for a message without code, which
 // shows as plain text: one Markdown span per escaped mark would draw a
 // long paste far slower.
 func userMarkdown(text string) string {
-	text = strings.TrimPrefix(text, "\ufeff")
+	text = strings.TrimLeft(text, "\ufeff")
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	lines := strings.Split(text, "\n")
@@ -393,8 +394,11 @@ func userMarkdown(text string) string {
 			break
 		}
 		flush()
-		end = min(end, len(lines)-1)
-		blocks, code = append(blocks, strings.Join(lines[i:end+1], "\n")), true
+		block := lines[i:min(end+1, len(lines))]
+		if end == len(lines) {
+			block = append(slices.Clip(block), fence)
+		}
+		blocks, code = append(blocks, strings.Join(block, "\n")), true
 		i = end
 	}
 	flush()
@@ -449,6 +453,10 @@ func typedProse(text string) (md string, spans bool) {
 	return b.String(), spans
 }
 
+// maxBackticks is the longest run of backticks that opens a code span in
+// MyGo's parser, which reads a longer run as text.
+const maxBackticks = 1000
+
 // codeSpanEnd is the end of the code span whose opening backticks start
 // at i in text, after the run of as many backticks that closes it, or 0
 // when none does on the same line. A span may not cross lines: Markdown
@@ -458,6 +466,9 @@ func codeSpanEnd(text string, i int) int {
 	n := 0
 	for i+n < len(text) && text[i+n] == '`' {
 		n++
+	}
+	if n > maxBackticks {
+		return 0
 	}
 	for j := i + n; j < len(text); {
 		if text[j] == '\n' {
