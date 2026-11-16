@@ -313,17 +313,26 @@ func (a *app) effortSlider(c *ui.Context) {
 		// by the same spring.
 		// Held is the whole press, not only the frames the pointer moves
 		// in: a pause mid-drag keeps the thumb where it is.
+		// The thumb chooses a level as it locks onto it, once: a thread
+		// whose engine refuses the level shows its own again, and the
+		// thumb still held there mustn't ask for it each frame.
+		lock := func(l int) {
+			if l != a.effortLock {
+				a.effortLock = l
+				setLevel(l)
+			}
+		}
 		var pos float32
 		held := sb.Pressed()
 		if w := sb.Bounds().W; held && w > 2*stopInset {
 			x, _, _ := sb.PointerPosition()
 			at := min(max((x-stopInset)/(w-2*stopInset)*steps, 0), steps)
 			if !a.effortHeld {
-				a.effortHeld, a.effortPressAt = true, at
+				a.effortHeld, a.effortPressAt, a.effortLock = true, at, -1
 			}
 			a.effortLastAt = at
 			if nearest := float32(int(at + 0.5)); abs32(at-nearest) <= snapZone {
-				setLevel(int(nearest))
+				lock(int(nearest))
 				at = nearest
 			}
 			pos = sb.Jump("pos", at)
@@ -333,7 +342,7 @@ func (a *app) effortSlider(c *ui.Context) {
 				// nearest it, wherever on the track.
 				a.effortHeld = false
 				if abs32(a.effortLastAt-a.effortPressAt) < 0.05 {
-					setLevel(int(a.effortLastAt + 0.5))
+					lock(int(a.effortLastAt + 0.5))
 				}
 			}
 			if sb.Changed() {

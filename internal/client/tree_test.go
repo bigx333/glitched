@@ -17,12 +17,14 @@ import (
 )
 
 // bridge is a real engine behind a link the test can break: it can fail
-// the next submit, hold the shell after its snapshot, drop it, and be out
-// of reach. It counts the commands that reach the engine, by target.
+// the next submit, or lose its answer, hold the shell after its snapshot,
+// drop it, and be out of reach. It counts the commands that reach the
+// engine, by target.
 type bridge struct {
 	api.Endpoint
 	mu      sync.Mutex
 	fail    bool          // the next submit fails, as one the network lost
+	lose    bool          // the next submit fails once the engine took it, as one whose answer the network lost
 	down    bool          // out of reach: Info and Submit fail
 	refused int           // Infos failed while out of reach
 	hold    chan struct{} // the shell waits after its snapshot until closed
@@ -49,14 +51,20 @@ func (b *bridge) Submit(ctx context.Context, c api.Command) (api.Receipt, error)
 	b.mu.Lock()
 	fail := b.fail || b.down
 	b.fail = false
+	lose := b.lose && !fail
 	if !fail {
 		b.sent[c.Target]++
+		b.lose = false
 	}
 	b.mu.Unlock()
 	if fail {
 		return api.Receipt{}, errDown
 	}
-	return b.Endpoint.Submit(ctx, c)
+	r, err := b.Endpoint.Submit(ctx, c)
+	if lose && err == nil {
+		return api.Receipt{}, errDown
+	}
+	return r, err
 }
 
 func (b *bridge) Open(ctx context.Context, sub api.Subscription) (api.Stream, error) {

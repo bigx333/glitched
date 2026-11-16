@@ -14,16 +14,21 @@ import (
 // stays pending until its thread's open transcript shows it, so the row
 // never blinks out before the entry replaces it, and an answer the engine
 // took until its request stops waiting, so the request never shows
-// waiting again in between. Err is why the submit
-// failed. A failed row stays until Retry sends the command again under the
-// same ID, or Dismiss drops it, or, for an answer, its request stops
-// waiting.
+// waiting again in between. A configure the engine took stays until the
+// thread's view is at the revision its receipt gives, so the thread shows
+// its model and access, and the next configure builds on them, from when
+// they're chosen. Err is why the submit failed. A failed row stays until
+// Retry sends the command again under the same ID, or Dismiss drops it,
+// or, for an answer, its request stops waiting, or, for a configure,
+// another is chosen: one that fails with another chosen after it leaves
+// no row.
 type Pending struct {
 	Command api.ID
 	Body    api.Intent
 	Err     error
-	sent    bool // committed; waiting for the thread to show it
-	seen    bool // a configure the thread's view showed before its receipt came
+	sent    bool   // committed; waiting for the thread to show it
+	log     api.ID // of a committed configure: the log that took it,
+	at      uint64 // and the thread's revision there that has it
 }
 
 // Terminal is true when sending the command again can only fail the same
@@ -109,27 +114,17 @@ func (m *Manager) Rename(e *Env, thread api.ID, title string) api.ID {
 }
 
 // ConfigureThread sets the model and access the thread's next turn runs at.
-// A configure the same as the last, failed, goes no more, as a held
-// slider would send it each frame: its row offers to retry it. Any other
-// drops the failed ones before it, whose retry would undo it.
+// It drops the thread's failed configure, whose Retry would undo this one.
 func (m *Manager) ConfigureThread(e *Env, thread api.ID, model api.ModelRef, access api.Access) api.ID {
-	c := api.ThreadConfigure{Model: model, Access: access}
 	if th := e.Threads[thread]; th != nil {
-		for i := len(th.Pending) - 1; i >= 0; i-- {
-			p := th.Pending[i]
-			if last, ok := p.Body.(api.ThreadConfigure); ok {
-				if p.Err != nil && last == c {
-					return p.Command
-				}
-				break
-			}
-		}
-		th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool {
-			_, ok := p.Body.(api.ThreadConfigure)
-			return ok && p.Err != nil
-		})
+		th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool { return configures(p) && p.Err != nil })
 	}
-	return m.submit(e, thread, c)
+	return m.submit(e, thread, api.ThreadConfigure{Model: model, Access: access})
+}
+
+func configures(p Pending) bool {
+	_, ok := p.Body.(api.ThreadConfigure)
+	return ok
 }
 
 // Delete deletes the thread. The engine ends its run with it.
@@ -188,7 +183,7 @@ func (m *Manager) submit(e *Env, thread api.ID, body api.Intent) api.ID {
 func (m *Manager) send(e *Env, th *Thread, cmd api.Command) {
 	s := e.session
 	if s == nil {
-		m.submitted(e, cmd, errNoEngine)
+		m.submitted(e, cmd, api.Receipt{}, errNoEngine)
 		return
 	}
 	prev, done := th.last, make(chan struct{})
@@ -205,6 +200,7 @@ func (m *Manager) send(e *Env, th *Thread, cmd api.Command) {
 		}
 		ctx, cancel := context.WithTimeout(ectx, submitTimeout)
 		defer cancel()
+		var r api.Receipt
 		var err error
 		for {
 			if s.ctx.Err() != nil {
@@ -213,11 +209,11 @@ func (m *Manager) send(e *Env, th *Thread, cmd api.Command) {
 					break
 				}
 			}
-			if _, err = s.ep.Submit(ctx, cmd); err == nil || s.ctx.Err() == nil {
+			if r, err = s.ep.Submit(ctx, cmd); err == nil || s.ctx.Err() == nil {
 				break
 			}
 		}
-		m.post(ectx, func() { m.submitted(e, cmd, err) })
+		m.post(ectx, func() { m.submitted(e, cmd, r, err) })
 	})
 }
 
@@ -240,7 +236,8 @@ func (m *Manager) next(ctx context.Context, e *Env) *session {
 	}
 }
 
-func (m *Manager) submitted(e *Env, cmd api.Command, err error) {
+// submitted takes the answer to cmd: its receipt, or why it failed.
+func (m *Manager) submitted(e *Env, cmd api.Command, receipt api.Receipt, err error) {
 	th := e.Threads[cmd.Target]
 	if th == nil {
 		return
@@ -251,19 +248,23 @@ func (m *Manager) submitted(e *Env, cmd api.Command, err error) {
 	}
 	_, message := cmd.Body.(api.MessageDispatch)
 	r, answer := cmd.Body.(api.RequestRespond)
-	c, configure := cmd.Body.(api.ThreadConfigure)
+	configure := configures(th.Pending[i])
 	taken := err == nil || errors.Is(err, api.ErrAlreadyAnswered)
 	switch {
 	case err == nil && message && th.open && th.Transcript.message(cmd.ID) == nil:
 		th.Pending[i].sent = true
 	case taken && answer && th.asks(r.Request):
 		th.Pending[i].sent = true
-	case err == nil && configure && !th.shows(c) && !th.Pending[i].seen:
-		// The receipt can come before the view that shows it: until then
-		// the thread's model and access are the configure's, and the next
-		// configure builds on them.
-		th.Pending[i].sent = true
-	case taken:
+	case err == nil && configure && receipt.Committed.Log == e.log && receipt.Revision > th.View.Revision:
+		// The receipt came before the view that has the configure: until
+		// that view, the engine's model and access for the thread are the
+		// configure's, which the thread shows unless one chosen after is
+		// on its way. A receipt of another log than the views held, or
+		// one stored without its revision, names no view to wait for.
+		th.Pending[i].sent, th.Pending[i].log, th.Pending[i].at = true, e.log, receipt.Revision
+	case taken, configure && slices.ContainsFunc(th.Pending[i+1:], configures):
+		// A configure that fails with another chosen after it leaves no
+		// row: its Retry would undo that one.
 		th.Pending = slices.Delete(th.Pending, i, i+1)
 	default:
 		th.Pending[i].Err = err

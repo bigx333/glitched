@@ -208,6 +208,10 @@ func (c *Command) UnmarshalJSON(b []byte) error {
 type Receipt struct {
 	Command   ID     `json:"command"`
 	Committed Cursor `json:"committed"`
+	// Revision is the target thread's after the commit: its view at that
+	// revision or a later one has what the command did. Zero is a receipt
+	// stored before receipts kept it.
+	Revision uint64 `json:"revision,omitempty"`
 }
 
 type DispositionState uint8

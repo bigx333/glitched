@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +10,9 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/client"
+	"glitched/internal/daemon"
+	"glitched/internal/provider/fake"
 )
 
 // The model and access chosen for a new thread are the default again
@@ -117,4 +121,116 @@ func TestAThreadsEffortIsItsOwn(t *testing.T) {
 	if h.a.effort != "High" {
 		t.Errorf("the default effort is %q after changing a thread's, want High", h.a.effort)
 	}
+}
+
+// effortAt is where the open picker's effort slider has its levels: the
+// window's x of the point level levels along it, from Low at 0, and its y.
+func effortAt(t *testing.T, tt *ui.Tester) (at func(level float32) float32, y float32) {
+	t.Helper()
+	faster, ok := tt.Find("Faster")
+	smarter, there := tt.Find("Smarter")
+	if !ok || !there {
+		t.Fatalf("no effort slider in %q", tt.Texts())
+	}
+	left, right := faster.X, smarter.X+smarter.W
+	return func(level float32) float32 { return left + stopInset + (right-left-2*stopInset)*level/3 }, faster.Y - 24
+}
+
+// The effort's thumb sends a level's configure once, when it locks onto
+// the level, though the configure fails: held there it asks no more of
+// the engine, and let go there it asks nothing either, as a click on a
+// level asks once. Dragged onto the level again, it asks again.
+func TestTheEffortThumbSendsALevelOnceEachTimeItsChosen(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: api.NewID(),
+		Body: api.ThreadCreate{Workspace: "/work/t3code", Title: "Mine", Model: opus}}); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, dir)
+	th := h.thread("Mine")
+	h.a.select_(th)
+	h.tt.Advance(time.Second)
+	d.Close()
+	h.until("the engine gone", func() bool { return h.local().Status != client.Status(client.Online{}) })
+	h.click("Model")
+	h.tt.Advance(time.Second)
+	at, y := effortAt(t, h.tt)
+	// The failed configure's row: with no engine, each one sent fails at
+	// once and takes the place of the one before it.
+	sent := func() api.ID {
+		t.Helper()
+		if len(th.Pending) != 1 || th.Pending[0].Err == nil {
+			t.Fatalf("the thread's pending commands are %+v, want its one failed configure", th.Pending)
+		}
+		return th.Pending[0].Command
+	}
+
+	h.tt.Press(at(2), y) // High, the thread's own
+	if len(th.Pending) != 0 {
+		t.Fatalf("pressing the thumb where it is sent %+v", th.Pending)
+	}
+	h.tt.Move(at(1.5), y)
+	h.tt.Move(at(0), y)
+	low := sent()
+	for range 5 {
+		h.tt.Frame()
+	}
+	h.tt.Move(at(0.05), y)
+	if sent() != low {
+		t.Error("the thumb held on Low sent its configure again")
+	}
+	h.tt.Release(at(0.05), y)
+	h.tt.Advance(time.Second)
+	if sent() != low {
+		t.Error("letting the thumb go on Low sent its configure again")
+	}
+
+	h.tt.Press(at(2), y)
+	h.tt.Move(at(0), y)
+	h.tt.Release(at(0), y)
+	h.tt.Advance(time.Second)
+	again := sent()
+	if again == low {
+		t.Error("the thumb dragged onto Low again, after its configure failed, sent nothing")
+	}
+
+	h.tt.Press(at(1), y)
+	medium := sent()
+	if medium == again {
+		t.Fatal("a press on Medium's point sent nothing")
+	}
+	h.tt.Release(at(1), y)
+	h.tt.Advance(time.Second)
+	if sent() != medium {
+		t.Error("a click on Medium's point sent its configure twice")
+	}
+}
+
+// A child's wider access the engine refuses fails, with its row. Picked
+// again once its parent is as wide, it's sent again and taken.
+func TestAnAccessRefusedIsSentAgainWhenPickedAgain(t *testing.T) {
+	h := tree3(t)
+	pick := func(title, level string) {
+		t.Helper()
+		h.a.select_(h.thread(title))
+		h.tt.Advance(time.Second)
+		h.click("Access")
+		h.click(level)
+		h.tt.Advance(time.Second)
+	}
+	child := h.thread("Write the tests")
+	pick("Write the tests", accessAuto)
+	h.until("the refusal", func() bool { return len(child.Pending) == 1 && child.Pending[0].Err != nil })
+	refused := child.Pending[0].Command
+
+	pick("Ship the sidebar sort", accessAuto)
+	h.until("the parent at Approve for me", func() bool { return h.thread("Ship the sidebar sort").View.Access == api.AccessAutoEdits })
+
+	pick("Write the tests", accessAuto)
+	if len(child.Pending) == 1 && child.Pending[0].Command == refused {
+		t.Fatal("picking the level again sent nothing: the refused configure's row is all there is")
+	}
+	h.until("the child at Approve for me", func() bool { return child.View.Access == api.AccessAutoEdits && len(child.Pending) == 0 })
 }
