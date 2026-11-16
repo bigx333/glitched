@@ -289,6 +289,7 @@ type app struct {
 	triedChoice choice
 	pickerLock  string
 	accessFor   api.ID // the thread whose access changed at accessAt, zero for the draft
+	pickersFor  api.ID // the thread whose composer the pickers are in, zero for the draft (pickersIn)
 	collapsed   map[string]bool
 	// The inbox: the project it's filtered to, and its closed sections.
 	projectFilter map[projectKey]bool // the projects the sidebar shows; none is all

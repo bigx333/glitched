@@ -167,6 +167,7 @@ const noFamily = "-"
 // show it again in a draft. A thread keeps its provider, so the picker
 // offers only its family's models.
 func (a *app) threadControls(t thread, build func()) {
+	a.pickersIn(t.id())
 	accessAt := a.accessAt
 	defer func() {
 		if a.accessAt != accessAt {
@@ -204,6 +205,20 @@ func (a *app) threadControls(t thread, build func()) {
 		c.Access = new(accessOf[after.Access])
 	}
 	a.backend.ConfigureThread(t.env, t.id(), c)
+}
+
+// pickersIn ties the pickers to the composer of the thread id, zero for
+// the draft's. Their popovers are of the composer they opened in, and
+// close as another's builds them: closed, a popover builds nothing, which
+// lets go of what was pressed in it, and ends the thumb's hold (view). A
+// thumb dragged in one thread would else choose the effort of the thread
+// that comes under it, or the default's as ⌘N brings the draft, and a
+// hold on Full access would grant it there.
+func (a *app) pickersIn(id api.ID) {
+	if a.pickersFor != id {
+		a.pickersFor = id
+		a.pickerOpen, a.accessOpen = false, false
+	}
 }
 
 // shownAccess is the access level the composer shows for t, for its card's

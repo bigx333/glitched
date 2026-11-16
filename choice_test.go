@@ -405,6 +405,110 @@ func TestAPressItsPickerClosedOnChoosesNoEffort(t *testing.T) {
 	}
 }
 
+// A thumb held in one composer chooses nothing in another. Dragged in a
+// thread, with ⌘N bringing the draft under it, it leaves the default for
+// a new thread as it was, and the picker closes with the thread it was of.
+func TestAThumbHeldInAThreadChoosesNothingInTheDraft(t *testing.T) {
+	h := start(t, tempDir(t))
+	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
+	h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk)
+	th := h.thread("Mine")
+	h.until("the thread's view", func() bool { return th.View.Revision > 0 && len(th.Pending) == 0 })
+	h.a.select_(th)
+	h.tt.Advance(time.Second)
+	h.click("Model")
+	h.tt.Advance(time.Second)
+	at, y := effortAt(t, h.tt)
+	h.tt.Press(at(2), y) // High, the thread's own
+	h.tt.Move(at(1), y)
+	h.until("the thread at Medium", func() bool { return th.View.Model.Effort == "medium" && len(th.Pending) == 0 })
+	h.tt.Key(ui.Cmd, ui.KeyN)
+	h.tt.Frame()
+	h.tt.Move(at(0), y)
+	h.tt.Frame()
+	h.tt.Release(at(0), y)
+	h.tt.Advance(time.Second)
+	if !h.a.current().id().IsZero() {
+		t.Fatalf("⌘N left the thread %q in the composer", h.a.current().View.Title)
+	}
+	if _, open := h.tt.Find("Faster"); open {
+		t.Errorf("the thread's picker is open over the draft: %q", h.tt.Texts())
+	}
+	if got := newApp(h.a.dir, nil, func(func()) {}).effort; h.a.effort != "High" || got != "High" {
+		t.Errorf("a thumb held in a thread left the default's effort at %q, and %q after a restart; want High, as it was", h.a.effort, got)
+	}
+	if got := th.View.Model.Effort; got != "medium" || len(th.Pending) != 0 {
+		t.Errorf("the thread's effort is %q with %+v pending, want the medium its thumb chose", got, th.Pending)
+	}
+}
+
+// Nor does a thumb held in one thread choose for the thread that comes
+// under it, as one jumped to from the keyboard: that one is sent nothing.
+func TestAThumbHeldInAThreadChoosesNothingInTheNextThread(t *testing.T) {
+	h := start(t, tempDir(t))
+	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
+	h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk)
+	h.a.backend.Create(h.local(), t.TempDir(), "Other", opus, api.AccessAsk)
+	mine, other := h.thread("Mine"), h.thread("Other")
+	h.until("the threads' views", func() bool {
+		return mine.View.Revision > 0 && other.View.Revision > 0 && len(mine.Pending)+len(other.Pending) == 0
+	})
+	h.a.select_(mine)
+	h.tt.Advance(time.Second)
+	h.click("Model")
+	h.tt.Advance(time.Second)
+	at, y := effortAt(t, h.tt)
+	h.tt.Press(at(2), y) // High, the thread's own
+	h.tt.Frame()
+	h.a.select_(other)
+	h.tt.Frame()
+	h.tt.Move(at(0), y)
+	h.tt.Frame()
+	h.tt.Release(at(0), y)
+	h.tt.Advance(time.Second)
+	if got := threadChoice(other).Effort; got != "High" || len(mine.Pending)+len(other.Pending) != 0 {
+		t.Errorf("a thumb held in one thread left the thread come under it at effort %q, with %d sent to it and %d to its own; want High and nothing sent",
+			got, len(other.Pending), len(mine.Pending))
+	}
+	if _, open := h.tt.Find("Faster"); open {
+		t.Errorf("the first thread's picker is open over the next: %q", h.tt.Texts())
+	}
+}
+
+// A hold on Full access begun in one thread grants nothing to the thread
+// that comes under it.
+func TestAHoldOnFullAccessGrantsNothingToTheNextThread(t *testing.T) {
+	h := start(t, tempDir(t))
+	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
+	h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk)
+	h.a.backend.Create(h.local(), t.TempDir(), "Other", opus, api.AccessAsk)
+	mine, other := h.thread("Mine"), h.thread("Other")
+	h.until("the threads' views", func() bool {
+		return mine.View.Revision > 0 && other.View.Revision > 0 && len(mine.Pending)+len(other.Pending) == 0
+	})
+	h.a.select_(mine)
+	h.tt.Advance(time.Second)
+	h.click("Access")
+	h.tt.Advance(time.Second)
+	r, ok := h.tt.Find(accessFull)
+	if !ok {
+		t.Fatalf("no Full access row: %q", h.tt.Texts())
+	}
+	h.tt.Press(r.X+r.W/2, r.Y+r.H/2)
+	h.tt.Advance(holdTime / 2)
+	h.a.select_(other)
+	h.tt.Advance(2 * holdTime)
+	h.tt.Release(r.X+r.W/2, r.Y+r.H/2)
+	h.tt.Advance(time.Second)
+	if got := threadChoice(other).Access; got != accessAsk || len(mine.Pending)+len(other.Pending) != 0 {
+		t.Errorf("a hold begun in one thread left the thread come under it at %q, with %d sent to it and %d to its own; want %q and nothing sent",
+			got, len(other.Pending), len(mine.Pending), accessAsk)
+	}
+	if _, open := h.tt.Find(accessAuto); open {
+		t.Errorf("the first thread's picker is open over the next: %q", h.tt.Texts())
+	}
+}
+
 // A thread's pickers send only what they changed. With another client's
 // narrowing not yet shown here, an effort chosen in the thread shows at
 // once and leaves the access the engine has: it doesn't put back the one
