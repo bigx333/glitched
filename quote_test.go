@@ -56,7 +56,68 @@ func replyReady(t *testing.T, md, wait string) *harness {
 }
 
 // barShown is whether the selection's bar shows.
-func barShown(h *harness) bool { return h.a.quote.open && h.tt.HasText("Ask about the selection") }
+func barShown(h *harness) bool { return h.tt.HasText("Ask about the selection") }
+
+// barAt is where the selection's bar shows: around its box and buttons.
+func barAt(h *harness) (ui.Rect, bool) {
+	in, ok := h.tt.Find("Ask about the selection")
+	if !ok {
+		return ui.Rect{}, false
+	}
+	b, _ := h.tt.Find("Explain")
+	x, y := min(in.X, b.X), min(in.Y, b.Y)
+	return ui.Rect{X: x, Y: y, W: max(in.X+in.W, b.X+b.W) - x, H: max(in.Y+in.H, b.Y+b.H) - y}, true
+}
+
+// inTimeline is whether r lies in the timeline, between the pane's top
+// and the composer's.
+func inTimeline(h *harness, r ui.Rect) bool {
+	return r.Y >= h.a.paneAt.Y-0.5 && r.Y+r.H <= h.a.composerAt.Y+0.5
+}
+
+// startsWith is the box of the first text starting with prefix.
+func startsWith(h *harness, prefix string) ui.Rect {
+	h.t.Helper()
+	for _, s := range h.tt.Texts() {
+		if strings.HasPrefix(s, prefix) {
+			r, _ := h.tt.Find(s)
+			return r
+		}
+	}
+	h.t.Fatalf("no text starting %q", prefix)
+	return ui.Rect{}
+}
+
+// drag selects from (x0, y0) to (x1, y1) as a hand does, the selection
+// starting a little way from the press, and lets it rest.
+func drag(h *harness, x0, y0, x1, y1 float32) {
+	step := float32(20)
+	if x1 < x0 {
+		step = -step
+	}
+	h.tt.Press(x0, y0)
+	h.tt.Move(x0+step, y0)
+	h.tt.Move((x0+x1)/2, (y0+y1)/2)
+	h.tt.Move(x1, y1)
+	h.tt.Frame()
+	h.tt.Release(x1, y1)
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
+}
+
+// wheel scrolls the chat by dy, a notch of 40 at a time, the pointer at
+// the pane's right edge, off the bar.
+func wheel(h *harness, dy float32) {
+	at := h.a.paneAt
+	notch := float32(40)
+	if dy < 0 {
+		notch = -notch
+	}
+	for range int(dy / notch) {
+		h.tt.Scroll(at.X+at.W-8, at.Y+at.H/2, 0, notch)
+		h.tt.Advance(50 * time.Millisecond)
+	}
+	h.tt.Advance(time.Second)
+}
 
 // The bar waits for the selection to rest, then shows by it; Quote puts the
 // selection on the composer, which sends it as a blockquote before the
@@ -305,6 +366,126 @@ func TestSelectionBarAboveNearComposer(t *testing.T) {
 	}
 }
 
+// A drag's bar keeps clear of all it selected, not just where it was let
+// go: under its last line, or above its first where under would cross the
+// composer.
+func TestSelectionBarClearOfSelection(t *testing.T) {
+	const line = 19.5
+	t.Run("down to the composer", func(t *testing.T) {
+		para := "Alpha " + strings.Repeat("lorem ipsum dolor sit amet ", 30) + "omega."
+		h := replyReady(t, "Intro here.\n\n"+para, "Intro here.")
+		r := startsWith(h, "Alpha ")
+		drag(h, r.X+2, r.Y+10, r.X+300, r.Y+r.H-10)
+		b, ok := barAt(h)
+		if !ok {
+			t.Fatalf("no bar: %+v", h.a.quote)
+		}
+		if b.Y < r.Y+r.H && b.Y+b.H > r.Y || !inTimeline(h, b) {
+			t.Errorf("the bar (y %v to %v) over the selected lines (y %v to %v), or out of the timeline (%v to %v); want it clear of both",
+				b.Y, b.Y+b.H, r.Y, r.Y+r.H, h.a.paneAt.Y, h.a.composerAt.Y)
+		}
+	})
+	t.Run("up", func(t *testing.T) {
+		para := "Alpha " + strings.Repeat("lorem ipsum dolor sit amet ", 60) + "omega."
+		h := replyReady(t, para+"\n\n"+strings.Repeat("Filler line.\n\n", 6)+"Outro here.", "Outro here.")
+		r := startsWith(h, "Alpha ")
+		drag(h, r.X+300, r.Y+4*line+10, r.X+100, r.Y+10)
+		b, ok := barAt(h)
+		if !ok {
+			t.Fatalf("no bar: %+v", h.a.quote)
+		}
+		if top, bottom := r.Y, r.Y+5*line; b.Y < bottom && b.Y+b.H > top || !inTimeline(h, b) {
+			t.Errorf("the bar (y %v to %v) over the lines dragged up over (y %v to %v), or out of the timeline (%v to %v); want it clear of both",
+				b.Y, b.Y+b.H, top, bottom, h.a.paneAt.Y, h.a.composerAt.Y)
+		}
+	})
+}
+
+// A drag let go over the composer or over the header brings up its bar
+// too, in the timeline.
+func TestSelectionBarLetGoPastTheTimeline(t *testing.T) {
+	var b strings.Builder
+	for i := 1; i <= 80; i++ {
+		fmt.Fprintf(&b, "Paragraph %02d of a long reply that goes on.\n\n", i)
+	}
+	h := replyReady(t, b.String()+"Outro here.", "Outro here.")
+	wheel(h, -600)
+	for _, to := range []struct {
+		name   string
+		y0, y1 float32
+	}{
+		{"over the composer", 300, h.a.composerAt.Y + 20},
+		{"over the header", 400, 30},
+	} {
+		drag(h, 430, to.y0, 520, to.y1)
+		h.tt.Advance(time.Second)
+		bar, ok := barAt(h)
+		if n := len([]rune(h.a.quote.text)); n == 0 {
+			t.Fatalf("let go %s: nothing selected", to.name)
+		}
+		if !ok || !inTimeline(h, bar) {
+			t.Errorf("let go %s (y %v): bar %v at %v; want it in the timeline (%v to %v)", to.name, to.y1, ok, bar, h.a.paneAt.Y, h.a.composerAt.Y)
+		}
+		h.tt.Key(0, ui.KeyEscape)
+		h.tt.ClickAt(1100, 300)
+		h.tt.Advance(time.Second)
+	}
+}
+
+// With the diff panel beside the chat, the bar of a selection at the
+// reply's right edge stays in the chat, off the panel.
+func TestSelectionBarInChatColumn(t *testing.T) {
+	h := replyReady(t, "Start here. "+strings.Repeat("word ", 300)+"\n\nOutro here.", "Outro here.")
+	h.click("Toggle diff  ⌘D")
+	h.tt.Advance(2 * time.Second)
+	h.a.listFor(h.a.current().id()).ScrollTo(0, ui.Start)
+	h.tt.Advance(time.Second)
+	para := startsWith(h, "Start here.")
+	y := para.Y + 30
+	drag(h, para.X+para.W-120, y, para.X+para.W-4, y)
+	b, ok := barAt(h)
+	if !ok {
+		t.Fatalf("no bar: %+v", h.a.quote)
+	}
+	if pane := h.a.paneAt; b.X < pane.X || b.X+b.W > pane.X+pane.W+0.5 {
+		t.Errorf("the bar at x %v to %v; want it in the chat's pane, x %v to %v, off the diff panel", b.X, b.X+b.W, pane.X, pane.X+pane.W)
+	}
+}
+
+// askAfterReply is a turn that replies, then asks to run a command.
+var askAfterReply = []provider.Event{
+	provider.TextDelta{Text: "May I run the tests now?"},
+	provider.RequestOpened{ID: "run-1", Kind: "approval", Body: []byte(`{"operation":"run","command":"bun run test","cwd":"/work/t3code","reason":"Runs the tests."}`)},
+	provider.TextDelta{Text: " Ran."},
+}
+
+// Shown unasked by a selection just over a waiting approval card, the bar
+// keeps off the card, which ⌘⏎ and Allow once answer at the first press.
+func TestSelectionBarLeavesApprovalCard(t *testing.T) {
+	for name, answer := range map[string]func(h *harness){
+		"⌘⏎":         func(h *harness) { h.tt.Key(ui.Cmd, ui.KeyEnter); h.tt.HoldModifiers(0) },
+		"Allow once": func(h *harness) { h.click("Allow once") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, _ := asking(t, askAfterReply)
+			h.tt.Advance(time.Second)
+			doubleClick(h, "May I run the tests now?")
+			h.tt.Move(300, 60)
+			h.tt.Advance(2 * time.Second)
+			b, ok := barAt(h)
+			if !ok {
+				t.Fatalf("no bar: %+v", h.a.quote)
+			}
+			answer(h)
+			h.tt.Frame()
+			if !answering(h, lastRequest(h.a.current())) {
+				hd, _ := h.tt.Find("Approval needed")
+				t.Errorf("the bar at %v, the card's header at %v: %s didn't answer the card", b, hd, name)
+			}
+		})
+	}
+}
+
 // ⌘⏎ in the bar's box sends the question, not the composer's draft.
 func TestSelectionBarCmdEnter(t *testing.T) {
 	h, sel := quoteReady(t)
@@ -386,4 +567,91 @@ func TestSelectionBarStaysInTimeline(t *testing.T) {
 			}
 		}
 	}
+}
+
+// While any of what's selected shows in the timeline, its bar shows there
+// too, however the chat scrolls; once all of it has gone well past an
+// edge, the bar has, unused.
+func TestSelectionBarInTimelineWithSelection(t *testing.T) {
+	para := "Alpha " + strings.Repeat("lorem ipsum dolor sit amet ", 40) + "omega."
+	var fill strings.Builder
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&fill, "Filler paragraph %02d.\n\n", i)
+	}
+	h := replyReady(t, fill.String()+para+"\n\n"+fill.String()+"Outro here.", "Outro here.")
+	r := startsWith(h, "Alpha ")
+	for range 40 {
+		if r.H > 0 && r.Y+r.H/2 >= h.a.paneAt.Y+h.a.paneAt.H/2-100 {
+			break
+		}
+		wheel(h, -200)
+		r = startsWith(h, "Alpha ")
+	}
+	drag(h, r.X+2, r.Y+10, r.X+r.W-2, r.Y+r.H-10)
+	h.tt.Move(1, 1)
+	h.tt.Advance(time.Second)
+	top, bottom := h.a.paneAt.Y, h.a.composerAt.Y
+	for _, dy := range []float32{40, -40} {
+		// The selection's box as shown, cut to the chat's pane: none once
+		// it has gone past an edge; gone counts the notches since.
+		seen, gone := false, 0
+		for range 80 {
+			wheel(h, dy)
+			r = startsWith(h, "Alpha ")
+			b, shown := barAt(h)
+			switch in := r.H > 0 && r.Y+r.H > top+2 && r.Y < bottom-2; {
+			case in && !shown:
+				t.Fatalf("scrolled by %v, the selection at y %v to %v shows in the timeline (%v to %v), no bar", dy, r.Y, r.Y+r.H, top, bottom)
+			case shown && !inTimeline(h, b):
+				t.Fatalf("scrolled by %v, the bar at y %v to %v, past the timeline (%v to %v)", dy, b.Y, b.Y+b.H, top, bottom)
+			case shown && gone >= 3:
+				t.Fatalf("scrolled by %v, the selection gone from the pane %d notches ago, the bar shows unused", dy, gone)
+			}
+			seen = seen || r.H > 0
+			if seen && r.H == 0 {
+				gone++
+			}
+			if gone > 3 {
+				break
+			}
+		}
+		if gone <= 3 {
+			t.Fatalf("scrolled by %v, the selection never went past the edge", dy)
+		}
+	}
+}
+
+// In use, the bar stays as the chat scrolls the selection away, held at
+// the timeline's edge, taking what's typed; let be, it goes with the
+// selection, and comes back with the reply, its question kept, though the
+// chat scrolled so far that the reply went, and its selection with it.
+func TestSelectionBarStaysOnScroll(t *testing.T) {
+	h, th := longHarness(t, nil)
+	h.a.listFor(th.id()).ScrollTo(0, ui.Start)
+	h.tt.Advance(time.Second)
+	doubleClick(h, "Looking at the code.")
+	h.click("Ask about the selection")
+	h.tt.Advance(200 * time.Millisecond)
+	h.tt.Type("what does this")
+	wheel(h, 720)
+	if b, ok := barAt(h); !ok || !inTimeline(h, b) {
+		t.Fatalf("typed in, the bar of a selection scrolled away: shown %v at %v; want it held in the timeline (%v to %v)", ok, b, h.a.paneAt.Y, h.a.composerAt.Y)
+	}
+	h.tt.Type(" mean")
+	for range 3 { // past its buttons
+		h.tt.Key(0, ui.KeyTab)
+	}
+	h.tt.Advance(time.Second)
+	if barShown(h) {
+		t.Error("let be, the bar of a selection scrolled away still shows")
+	}
+	wheel(h, 2400)
+	wheel(h, -2400-720-240)
+	if _, ok := h.tt.Find("Looking at the code."); !ok || !barShown(h) {
+		t.Fatalf("scrolled far and back: the reply shows %v, the bar %v; want both", ok, barShown(h))
+	}
+	h.click("Ask about the selection")
+	h.tt.Key(0, ui.KeyEnter)
+	want := "> Looking\n\nwhat does this mean"
+	h.until("the question sent", func() bool { return slices.Contains(sentTexts(h), want) })
 }

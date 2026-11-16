@@ -1,21 +1,25 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
+
+	"glitched/internal/api"
 )
 
-// Text selected in an assistant's reply brings up a bar by where the
-// selection ended, as T3 Code's does: Quote puts the selection on the
-// composer as a quote, which goes with the next message as a blockquote;
-// Explain does that and asks for an explanation in the draft; a question
-// typed in its box goes at once, with the quote and nothing of the draft.
-// It waits for the selection to rest, as there is no telling the end of a
-// drag otherwise, and keeps what was selected while it's in use, as a
-// press in it may take the selection away.
+// Text selected in an assistant's reply brings up a bar by the selection,
+// as T3 Code's does: Quote puts the selection on the composer as a quote,
+// which goes with the next message as a blockquote; Explain does that and
+// asks for an explanation in the draft; a question typed in its box goes at
+// once, with the quote and nothing of the draft. It waits for the
+// selection to rest, as there is no telling the end of a drag otherwise,
+// and keeps what was selected while it's in use or holds a question, as a
+// press in it may take the selection away, and so does the chat scrolled
+// far enough that the reply isn't built.
 
 // quoteWait is how long a selection rests before its bar shows.
 const quoteWait = 300 * time.Millisecond
@@ -23,22 +27,44 @@ const quoteWait = 300 * time.Millisecond
 // explainAsk is what Explain asks.
 const explainAsk = "Explain this."
 
-// quoteBar is the bar of the selection in a reply, if any.
+// quoteOf is a reply's: its thread, and its entry's key.
+type quoteOf struct {
+	thread api.ID
+	key    string
+}
+
+// quoteState is where the bar of a selection is.
+type quoteState int
+
+const (
+	// quoteWaiting is a selection made or changed, its bar waiting for it
+	// to rest.
+	quoteWaiting quoteState = iota
+	// quoteOpen is the bar open, showing where it finds a place.
+	quoteOpen
+	// quoteDismissed is the bar closed on its selection, which it doesn't
+	// come back for until another is made.
+	quoteDismissed
+)
+
+// quoteBar is the bar of the selection in a reply: none while text is "".
 type quoteBar struct {
-	of   string // the reply's: its thread and its entry's key
-	text string // what was selected
-	at   time.Time
-	// x and y are where the selection ended, relative to the reply's
-	// text: the pointer as the selection last changed.
-	x, y float32
-	open bool
-	// shut is a bar closed on this selection, which doesn't come back
-	// until another is made.
-	shut bool
-	// held is the bar in use in the last frame: pointed at or holding the
+	of    quoteOf
+	text  string // what was selected
+	state quoteState
+	at    time.Time // when the selection was made or last changed
+	// from and to are where the pointer was, relative to the reply's
+	// text, as the selection was first seen and as it last changed: where
+	// it began and where it ended.
+	from, to ui.Point
+	// inUse is the bar in use in the last frame: pointed at or holding the
 	// focus.
-	held bool
-	ask  string
+	inUse bool
+	ask   string
+	// spot is where the bar last showed, and built whether this pass built
+	// it (quoteBarAway).
+	spot  quoteSpot
+	built bool
 }
 
 // codeChunk is how many lines of a code block MyGo lays out as one text,
@@ -97,81 +123,169 @@ func quoteAttachment(text string) attachment {
 // selectionBar follows the selection in the reply of t keyed key, whose
 // column is col and text md, and shows its bar once it rests.
 func (a *app) selectionBar(c *ui.Context, t thread, key string, col, md ui.Element) {
-	of := t.id().String() + "/" + key
+	of := quoteOf{t.id(), key}
 	s := &a.quote
-	text := selectedText(md.SelectedTexts())
-	switch {
-	case text != "" && (s.of != of || s.text != text):
-		// Made or changed: wait for it to rest, where the pointer is. A
-		// press in the bar may take the selection away, but never makes
-		// another, so the bar in use keeps what it has only past that.
-		*s = quoteBar{of: of, text: text, at: a.now}
-		s.x, s.y, _ = md.PointerPosition()
+	switch text := selectedText(md.SelectedTexts()); {
+	case text == "":
+		if s.of == of && !s.inUse && s.ask == "" {
+			*s = quoteBar{}
+		}
+	case s.of != of || s.text != text:
+		// Made or changed: wait for it to rest. Changed as it's made, it
+		// began where it did.
+		x, y, _ := md.PointerPosition()
+		p := ui.Point{X: x, Y: y}
+		from := p
+		if s.of == of && s.text != "" && s.state == quoteWaiting {
+			from = s.from
+		}
+		*s = quoteBar{of: of, text: text, at: a.now, from: from, to: p}
 		c.After(quoteWait)
-	case text != "" && !s.open && !s.shut:
-		if a.now.Sub(s.at) < quoteWait {
-			c.After(quoteWait - a.now.Sub(s.at))
+	case s.state == quoteWaiting:
+		if rest := a.now.Sub(s.at); rest < quoteWait {
+			c.After(quoteWait - rest)
 			break
 		}
-		s.open = true
-	case text == "" && s.of == of && !s.held:
-		*s = quoteBar{}
+		s.state = quoteOpen
 	}
-	if s.of != of || !s.open {
+	if s.of != of || s.state != quoteOpen {
 		return
 	}
-	// Where the selection ended, in the reply's column, which the bar
-	// hangs from, following it as the chat scrolls.
-	r, cb := md.Bounds(), col.Bounds()
-	x := min(max(s.x, 0), r.W) + r.X - cb.X
-	y := min(max(s.y, 0), r.H) + r.Y - cb.Y
-	at := ui.Box(c).Key("quote-at").Absolute().Left(x).Top(y).Size(1, 1).PassThrough()
-	// Only over the timeline: scrolled under the composer or past the
-	// pane's top, it waits there, unused; too near the composer to hang
-	// below the selection, it goes above it.
-	top, bottom := a.paneAt.Y, a.paneAt.Y+a.paneAt.H
-	if a.composerAt.H > 0 {
-		bottom = a.composerAt.Y
-	}
-	ay := cb.Y + y
-	if a.paneAt.H > 0 && (ay < top || ay > bottom) {
-		s.held = false
+	followUp(c, col)
+	spot, ok := a.placeQuote(c, s, md.Bounds(), col.Bounds())
+	if !ok {
+		s.inUse = false
 		return
 	}
-	self, on := ui.AnchorTopStart, ui.AnchorBottomStart
-	if a.paneAt.H > 0 && ay+quoteGap+quoteBarH > bottom {
-		self, on = ui.AnchorBottomStart, ui.AnchorTopStart
+	// By the selection, the bar hangs from a point in the reply's column,
+	// which follows it as the chat scrolls in this frame; pinned, from one
+	// in the window (quoteBarAt).
+	var at ui.Element
+	if !spot.pinned {
+		cb := col.Bounds()
+		at = ui.Box(c).Key("quote-at").Absolute().Left(spot.x-cb.X).Top(spot.y-cb.Y).Size(1, 1).PassThrough()
 	}
-	a.quoteBarAt(c, t, at, self, on)
+	a.quoteBarAt(c, t, at, spot)
 }
 
-// quoteGap is between the bar and where the selection ended, and
-// quoteBarH about the bar's height.
-const quoteGap, quoteBarH = 16, 44
-
-// quoteBarAt builds the bar of the selection, its point self on at's point
-// on.
-func (a *app) quoteBarAt(c *ui.Context, t thread, at ui.Element, self, on ui.Anchor) {
+// quoteBarAway builds the bar in use, in t's timeline, while the chat is
+// scrolled so far from its reply that the reply isn't built, which would
+// take it away with the focus in it: held at the edge the reply went past.
+func (a *app) quoteBarAway(c *ui.Context, t thread) {
 	s := &a.quote
-	// It covers the timeline, holding the cards' keys, only while in use:
-	// shown unasked, it leaves ⌘⏎ to approve.
-	a.overlay(c, s.held, func() {
-		bar := a.cover(coverKey{"quote", at.ID()}, ui.Row(c).Key("quote-bar")).
-			AttachTo(at, on, self).
-			Gap(4).Padding(4).AlignItems(ui.Center).Radius(10).Width(360).
-			Background(palette.surface).Border(1, palette.border).Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.3))
-		if self == ui.AnchorTopStart {
-			bar.Margin(quoteGap, 0, 0, -12)
-		} else {
-			bar.Margin(0, 0, quoteGap, -12)
+	if !s.built && s.state == quoteOpen && s.of.thread == t.id() {
+		if spot, ok := a.placeQuote(c, s, ui.Rect{}, ui.Rect{}); ok {
+			a.quoteBarAt(c, t, ui.Element{}, spot)
 		}
+	}
+	s.built = false
+}
+
+// quoteSpot is where the bar of a selection goes in the window: its left
+// edge at x, and its top at y, or its bottom when above. pinned is a bar
+// held at an edge of the timeline, which stays as the chat scrolls,
+// rather than by the selection, which it follows.
+type quoteSpot struct {
+	x, y          float32
+	above, pinned bool
+}
+
+// quoteGap is between the bar and what it keeps clear of, quoteLead how
+// far it starts before the point of the selection it's by, and quoteBarW
+// and quoteBarH its width and about its height.
+const quoteGap, quoteLead, quoteBarW, quoteBarH = 4, 12, 360, 44
+
+// placeQuote is where the bar of selection s goes, as the last frame drew
+// its reply's text at md in the column col, none for a reply not built,
+// and whether it shows: under the selection, or above it where under would
+// cross the composer or lie over a waiting card, whose keys it would hold,
+// and in the column. It shows in the timeline, between the pane's top and
+// the composer, held at its edge where neither fits, while any of the
+// selection is in it; once none is, only in use, held at the edge the
+// selection went past.
+func (a *app) placeQuote(c *ui.Context, s *quoteBar, md, col ui.Rect) (quoteSpot, bool) {
+	// The selection runs from the line of the point higher up to that of
+	// the one lower down, a line of the reply's around each.
+	line := c.Theme().FontSize * 1.5
+	hi, lo := s.from, s.to
+	if hi.Y > lo.Y {
+		hi, lo = lo, hi
+	}
+	top := md.Y + min(max(hi.Y, 0), md.H) - line
+	bottom := md.Y + min(max(lo.Y, 0), md.H) + line
+	by := func(p ui.Point) float32 {
+		x := md.X + min(max(p.X, 0), md.W) - quoteLead
+		return max(min(x, col.X+col.W-quoteBarW), col.X)
+	}
+	under := quoteSpot{x: by(lo), y: bottom + quoteGap}
+	if a.paneAt.H <= 0 {
+		return under, md.H > 0 // no timeline laid out to keep it in
+	}
+	bandTop, bandBottom := a.paneAt.Y, a.paneAt.Y+a.paneAt.H
+	if a.composerAt.H > 0 {
+		bandBottom = a.composerAt.Y
+	}
+	switch {
+	case md.H <= 0 && !s.inUse:
+		return quoteSpot{}, false
+	case md.H <= 0 && s.spot.y < (bandTop+bandBottom)/2:
+		return quoteSpot{x: s.spot.x, y: bandTop + quoteGap, pinned: true}, true
+	case md.H <= 0:
+		return quoteSpot{x: s.spot.x, y: bandBottom - quoteGap, above: true, pinned: true}, true
+	}
+	if (bottom < bandTop || top > bandBottom) && !s.inUse {
+		return quoteSpot{}, false
+	}
+	spots := []quoteSpot{
+		under,
+		{x: by(hi), y: top - quoteGap, above: true},
+		{x: by(lo), y: bandBottom - quoteGap, above: true, pinned: true},
+		{x: by(hi), y: bandTop + quoteGap, pinned: true},
+	}
+	if bottom <= bandBottom {
+		// Past only the pane's top, it's held there first.
+		spots[2], spots[3] = spots[3], spots[2]
+	}
+	for _, p := range spots {
+		r := ui.Rect{X: p.x, Y: p.y, W: quoteBarW, H: quoteBarH}
+		if p.above {
+			r.Y -= quoteBarH
+		}
+		if r.Y >= bandTop && r.Y+r.H <= bandBottom && !slices.ContainsFunc(a.waitingAt, func(v ui.Rect) bool { return meets(r, v) }) {
+			return p, true
+		}
+	}
+	return spots[2], true // none clear: held at the edge it tried first
+}
+
+// quoteBarAt builds the bar of the selection where spot is, from at by the
+// selection or, pinned, from the window.
+func (a *app) quoteBarAt(c *ui.Context, t thread, at ui.Element, spot quoteSpot) {
+	s := &a.quote
+	s.spot, s.built = spot, true
+	// Shown unasked, it leaves ⌘⏎ to the cards: it covers the timeline,
+	// holding their keys, only while in use.
+	coversTimeline := s.inUse
+	a.overlay(c, coversTimeline, func() {
+		if spot.pinned {
+			at = ui.Box(c).Key("quote-pin").Absolute().Left(spot.x).Top(spot.y).Size(1, 1).PassThrough()
+		}
+		self := ui.AnchorTopLeft
+		if spot.above {
+			self = ui.AnchorBottomLeft
+		}
+		bar := a.cover(coverKey{kind: "quote"}, ui.Row(c).Key("quote-bar")).
+			AttachTo(at, ui.AnchorTopLeft, self).
+			Gap(4).Padding(4).AlignItems(ui.Center).Radius(10).Width(quoteBarW).
+			Background(palette.surface).Border(1, palette.border).Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.3))
+		followUp(c, bar)
 		bar.Children(func() {
 			in := ui.TextInput(c.Key("quote-ask"), &s.ask).Placeholder("Ask about this…").Label("Ask about the selection").
 				Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).Padding(6, 8).
 				FontSize(12.5).Grow(1).Shrink(1)
 			// ⌘⏎ too, which would otherwise reach the composer's, stopping
 			// the agent or sending the draft.
-			if send := in.Shortcut(ui.Cmd, ui.KeyEnter); (in.Submitted() || send) && strings.TrimSpace(s.ask) != "" {
+			if cmdEnter := in.Shortcut(ui.Cmd, ui.KeyEnter); (in.Submitted() || cmdEnter) && strings.TrimSpace(s.ask) != "" {
 				if a.sendText(t, blockquote(s.text)+"\n\n"+strings.TrimSpace(s.ask), "") {
 					a.closeQuote()
 					// Not back to the reply, which takes no typing.
@@ -192,8 +306,20 @@ func (a *app) quoteBarAt(c *ui.Context, t thread, at ui.Element, self, on ui.Anc
 			a.closeQuote()
 			return
 		}
-		if s.open { // not closed by its buttons in this frame
-			s.held = bar.Hovered() || bar.FocusWithin()
+		if s.state == quoteOpen { // not closed by its buttons in this frame
+			s.inUse = bar.Hovered() || bar.FocusWithin()
+		}
+	})
+}
+
+// followUp has a frame that draws e elsewhere than the last frame did
+// build another: the bar, placed from where the last frame drew the reply,
+// goes anew where it is, as the chat scrolled in that frame.
+func followUp(c *ui.Context, e ui.Element) {
+	was := e.LayoutBounds()
+	e.Draw(func(_ *ui.Painter, r ui.Rect) {
+		if r != was {
+			c.Invalidate()
 		}
 	})
 }
@@ -207,7 +333,7 @@ func quoteButton(c *ui.Context, key string, icon *ui.SVG, label string) ui.Eleme
 
 // closeQuote closes the bar, which stays closed on this selection.
 func (a *app) closeQuote() {
-	a.quote = quoteBar{of: a.quote.of, text: a.quote.text, shut: true}
+	a.quote = quoteBar{of: a.quote.of, text: a.quote.text, state: quoteDismissed}
 }
 
 // attachQuote puts text on the composer as a quote, with ask added to the
