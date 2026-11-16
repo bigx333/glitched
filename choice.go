@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"log"
 	"path/filepath"
 	"slices"
@@ -13,12 +15,34 @@ import (
 // choice is what the composer's pickers show: the model, its effort, fast
 // mode and the access, by the names the pickers give them. In a new
 // thread's draft it's the default a new thread takes; in a thread, that
-// thread's own.
+// thread's own. composer.json holds the default's fields the user chose:
+// one never chosen is the app's own.
 type choice struct {
-	Model  string `json:"model"`
-	Effort string `json:"effort"`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 	Fast   bool   `json:"fast,omitempty"`
-	Access string `json:"access"`
+	Access string `json:"access,omitempty"`
+}
+
+// ownChoice is the default a new thread takes where the user chose none.
+var ownChoice = choice{Model: "Claude Opus 5.5", Effort: "High", Access: accessAuto}
+
+// starting is the default the app starts with from file, composer.json's
+// contents: the app's own, with each of file's names the pickers offer. A
+// name they no longer offer, as a model since gone, keeps the app's own.
+func starting(file choice) choice {
+	ch := ownChoice
+	if slices.Contains(modelNames(), file.Model) {
+		ch.Model = file.Model
+	}
+	if slices.Contains(efforts, file.Effort) {
+		ch.Effort = file.Effort
+	}
+	ch.Fast = file.Fast
+	if _, ok := accessOf[file.Access]; ok {
+		ch.Access = file.Access
+	}
+	return ch
 }
 
 // choice is what the pickers show now.
@@ -32,41 +56,60 @@ func (a *app) show(ch choice) {
 
 func (a *app) composerPath() string { return filepath.Join(a.dir, "composer.json") }
 
-// loadComposer takes the default a new thread took when the app last
-// saved it: composer.json in the state directory, beside layout.json. A
-// name the pickers no longer offer, as a model since gone, keeps the
-// app's own default for it.
+// loadComposer takes the default a new thread took when an app last
+// saved it: composer.json in the state directory, beside layout.json.
 func (a *app) loadComposer() {
-	var ch choice
-	if err := jsonfile.Load(a.composerPath(), &ch); err != nil {
+	var file choice
+	if err := jsonfile.Load(a.composerPath(), &file); err != nil {
 		log.Printf("glitched: composer: %v", err)
-		return
+		file = choice{}
 	}
-	if slices.Contains(modelNames(), ch.Model) {
-		a.model = ch.Model
-	}
-	if slices.Contains(efforts, ch.Effort) {
-		a.effort = ch.Effort
-	}
-	a.fast = ch.Fast
-	if _, ok := accessOf[ch.Access]; ok {
-		a.access = ch.Access
-	}
-	a.savedChoice = a.choice()
+	a.show(starting(file))
+	a.savedChoice, a.triedChoice = a.choice(), a.choice()
 }
 
 // saveComposer keeps the default for the next start, once it changed and
-// the effort's thumb is let go. A write that fails is tried again at the
-// next change, not each frame.
+// the effort's thumb is let go. Another window on the state directory
+// saves its own: under the file's lock, only what changed here goes onto
+// what the file holds, and the composer then shows the default a start
+// would take from it, the other window's choices with this one's. A save
+// that fails is tried again at the next change, not each frame.
 func (a *app) saveComposer() {
 	ch := a.choice()
-	if ch == a.savedChoice || a.effortHeld {
+	if ch == a.triedChoice || a.effortHeld {
 		return
 	}
-	a.savedChoice = ch
-	if err := jsonfile.Write(a.composerPath(), ch); err != nil {
-		log.Printf("glitched: composer: %v", err)
+	a.triedChoice = ch
+	had := a.savedChoice
+	if ch == had {
+		return
 	}
+	file, err := jsonfile.Edit(a.composerPath(), func(f *choice) error {
+		if ch.Model != had.Model {
+			f.Model = ch.Model
+		}
+		if ch.Effort != had.Effort {
+			f.Effort = ch.Effort
+		}
+		if ch.Fast != had.Fast {
+			f.Fast = ch.Fast
+		}
+		if ch.Access != had.Access {
+			f.Access = ch.Access
+		}
+		return nil
+	})
+	syntax, kind := (*json.SyntaxError)(nil), (*json.UnmarshalTypeError)(nil)
+	if errors.As(err, &syntax) || errors.As(err, &kind) {
+		// A file that doesn't parse holds no default to keep.
+		file, err = ch, jsonfile.Write(a.composerPath(), ch)
+	}
+	if err != nil {
+		log.Printf("glitched: composer: %v", err)
+		return
+	}
+	a.show(starting(file))
+	a.savedChoice, a.triedChoice = a.choice(), a.choice()
 }
 
 // configured is the thread's model and access, as the last change sent

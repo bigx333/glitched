@@ -47,6 +47,95 @@ func TestAStaleComposerFileKeepsTheDefaults(t *testing.T) {
 	}
 }
 
+// Two windows on one state directory each choose a default. What one chose
+// isn't undone by the other choosing something else, and a window that
+// chose shows what a restart would: the other's choice with its own.
+func TestTwoWindowsOnOneStateDirectoryKeepEachOthersDefault(t *testing.T) {
+	dir := t.TempDir()
+	one, two := newApp(dir, nil, func(func()) {}), newApp(dir, nil, func(func()) {})
+	first, second := ui.NewTester(one.view, 1320, 860), ui.NewTester(two.view, 1320, 860)
+	click := func(tt *ui.Tester, texts ...string) {
+		t.Helper()
+		for _, text := range texts {
+			if err := tt.Click(text); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	restarted := func() choice { return newApp(dir, nil, func(func()) {}).choice() }
+
+	click(first, "Access", accessAsk)
+	click(second, "Model", "Sonnet 5.5")
+	want := choice{Model: "Claude Sonnet 5.5", Effort: "High", Access: accessAsk}
+	if got := restarted(); got != want {
+		t.Errorf("after a restart the default is %+v, want %+v: one window's access and the other's model", got, want)
+	}
+	if got := two.choice(); got != want {
+		t.Errorf("the window that chose the model shows %+v, want %+v as a restart would", got, want)
+	}
+
+	click(first, "Model", "Fast mode")
+	want.Fast = true
+	if got := restarted(); got != want {
+		t.Errorf("after a restart the default is %+v, want %+v", got, want)
+	}
+	if got := one.choice(); got != want {
+		t.Errorf("the window that chose fast mode shows %+v, want %+v as a restart would", got, want)
+	}
+}
+
+// A default that couldn't be saved is saved with the next one chosen, and
+// not tried again each frame until then.
+func TestADefaultThatCouldNotBeSavedIsSavedWithTheNext(t *testing.T) {
+	dir := t.TempDir()
+	a := newApp(dir, nil, func(func()) {})
+	tt := ui.NewTester(a.view, 1320, 860)
+	// Nothing can be written over a directory.
+	path := filepath.Join(dir, "composer.json")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, click := range []string{"Access", accessAsk} {
+		if err := tt.Click(click); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	tt.Advance(time.Second)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("the save that failed was tried again with nothing chosen since: %v", err)
+	}
+	for _, click := range []string{"Model", "Fast mode"} {
+		if err := tt.Click(click); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := newApp(dir, nil, func(func()) {}).choice(), a.choice(); got != want || !want.Fast || want.Access != accessAsk {
+		t.Errorf("after a restart the default is %+v, want %+v", got, want)
+	}
+}
+
+// A composer.json that doesn't parse holds no default to keep: the next
+// one chosen replaces it.
+func TestAComposerFileThatDoesNotParseIsReplaced(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "composer.json"), []byte(`{"model": `), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := newApp(dir, nil, func(func()) {})
+	tt := ui.NewTester(a.view, 1320, 860)
+	for _, click := range []string{"Access", accessAsk} {
+		if err := tt.Click(click); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := newApp(dir, nil, func(func()) {}).choice(), a.choice(); got != want || want.Access != accessAsk {
+		t.Errorf("after a restart the default is %+v, want %+v", got, want)
+	}
+}
+
 // In a thread, the pickers show and change that thread's own model and
 // access, within its provider, and leave the default for a new thread as
 // it was.

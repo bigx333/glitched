@@ -282,9 +282,11 @@ type app struct {
 	accessOpen                  bool
 	accessAt                    time.Time // when the level last changed, for its effect
 	// savedChoice is the default for a new thread as composer.json last
-	// had it, and pickerLock the only family the model picker offers,
-	// a thread's provider's, or "" for all.
+	// gave it, triedChoice the one last saved or tried (saveComposer),
+	// and pickerLock the only family the model picker offers, a thread's
+	// provider's, or "" for all.
 	savedChoice choice
+	triedChoice choice
 	pickerLock  string
 	accessFor   api.ID // the thread whose access changed at accessAt, zero for the draft
 	collapsed   map[string]bool
@@ -557,9 +559,6 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		questions:      map[api.ID]*questionForm{},
 		showSidebar:    true,
 		sidebarWidth:   272,
-		model:          "Claude Opus 5.5",
-		effort:         "High",
-		access:         accessAuto,
 		collapsed:      map[string]bool{},
 		sectionClosed:  map[category]bool{catWorking: true, catSnoozed: true, catSettled: true},
 		projectFilter:  map[projectKey]bool{},
@@ -611,7 +610,6 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 	}
 	a.userMD.Extensions, a.userMD.WrapCode = parser.ExtStrikethrough, true
 	a.userMD.OnLink = func(string) {}
-	a.savedChoice = a.choice()
 	a.loadLayout()
 	a.loadComposer()
 	a.openPlugins(dir)
