@@ -185,6 +185,10 @@ func (a *app) followSelection(c *ui.Context, t thread, key, src string, col, md 
 		loose := c.Modifiers() != 0 || from == p && strings.ContainsFunc(text, unicode.IsSpace)
 		*s = quoteBar{of: of, text: text, at: a.now, from: from, to: p, w: w, loose: loose}
 		c.After(quoteWait)
+	case s.state == quoteWaiting && md.PressedOutside():
+		// Pressed elsewhere before it rests, as in the composer to type:
+		// not shown over what was pressed.
+		a.closeQuote()
 	case s.state == quoteWaiting:
 		if rest := a.now.Sub(s.at); rest < quoteWait {
 			c.After(quoteWait - rest)
