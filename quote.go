@@ -55,8 +55,8 @@ type quoteBar struct {
 	at    time.Time // when the selection was made or last changed
 	// from and to are where the pointer was, relative to the reply's
 	// text, as the selection was first seen and as it last changed: where
-	// it began and where it ended. loose is a selection they don't tell
-	// the place of (followSelection).
+	// it began and where it ended; loose, a selection they don't place,
+	// which may be anywhere in the reply (followSelection).
 	from, to ui.Point
 	loose    bool
 	// inUse is the bar in use in the last frame: pointed at or holding the
@@ -176,11 +176,11 @@ func (a *app) followSelection(c *ui.Context, t thread, key, src string, col, md 
 		if s.of == of && atAnEnd(s.text, text) {
 			from = s.from
 		}
-		// The pointer moved across what it selected, or is on the word it
-		// selected at once, as a double-click does; changed with a
-		// modifier held, as by Shift and a click or the keys, or more
-		// than a word at once, as by the menu's Select All, the selection
-		// is anywhere in the reply.
+		// The pointer tells where the selection is when it moved across
+		// it, or is on the word it selected at once, as a double-click
+		// does; not with a modifier held, as with Shift and a click or the
+		// keys, nor for more than a word selected at once, as by the
+		// menu's Select All, which may be anywhere in the reply.
 		loose := c.Modifiers() != 0 || from == p && strings.ContainsFunc(text, unicode.IsSpace)
 		*s = quoteBar{of: of, text: text, at: a.now, from: from, to: p, loose: loose}
 		c.After(quoteWait)
@@ -202,9 +202,9 @@ func (a *app) followSelection(c *ui.Context, t thread, key, src string, col, md 
 
 // selectionBar builds the bar of the selection in t's timeline once it
 // rests, by its reply as the reply's row last noted it (followSelection).
-// It's the one place that builds the bar, after the timeline, whose list
-// builds the row in the view, as it lays out after the view, or not at
-// all while the chat is scrolled far from it, as the bar in use stays.
+// It's built here alone, after the timeline, whose list builds the row in
+// the view, or as it lays out after the view, or, while the chat is
+// scrolled far from the reply, not at all, as the bar in use stays.
 func (a *app) selectionBar(c *ui.Context, t thread) {
 	s := &a.quote
 	r := s.reply
