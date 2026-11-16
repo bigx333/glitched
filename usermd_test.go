@@ -125,7 +125,7 @@ func TestAUserMessageKeepsBlankLinesAroundCode(t *testing.T) {
 // line feeds do, and a byte order mark, which shows as nothing, leaves
 // the first line's indent.
 func TestAUserMessageReadsAnyLineEnding(t *testing.T) {
-	h := sent(t, "crlf `one`\r\ncrlf two", "cr `one`\rcr two", "\ufeff    if `a_b` {\n    }")
+	h := sent(t, "crlf `one`\r\ncrlf two", "cr `one`\rcr two", "\ufeff\ufeff    if `a_b` {\n    }")
 	for _, s := range []string{"crlf one\ncrlf two", "cr one\ncr two", "    if a_b {\n    }"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("no %q; texts %q", s, h.tt.Texts())
@@ -142,6 +142,28 @@ func TestAUserMessageStaysOffTheAppsPages(t *testing.T) {
 	h.tt.Advance(time.Second)
 	if p := h.a.router.Path(); p != "/" {
 		t.Errorf("at %q after clicking the message", p)
+	}
+}
+
+// A link between runs of backticks too long to open a code span, which
+// Markdown leaves as text, opens nothing either.
+func TestAUserMessagesLongBacktickRunsOpenNothing(t *testing.T) {
+	run := strings.Repeat("`", 1001)
+	h := sent(t, run+" [click here](https://example.org) "+run+" `c`")
+	if r, ok := h.tt.Find("click here"); ok {
+		h.tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
+	}
+	if o := h.tt.OpenedURLs(); len(o) > 0 || !h.tt.HasText("[click here](https://example.org)") {
+		t.Errorf("opened %q; texts %q", o, h.tt.Texts())
+	}
+}
+
+// A code block whose fence the user left open copies its code.
+func TestAUserMessagesOpenFenceCopies(t *testing.T) {
+	h := sent(t, "left open:\n```\nx := 1")
+	h.click("Copy code")
+	if c := h.tt.Clipboard(); c != "x := 1\n" {
+		t.Errorf("clipboard %q", c)
 	}
 }
 
