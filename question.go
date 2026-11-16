@@ -129,6 +129,7 @@ func (a *app) questionCard(c *ui.Context, t thread, e entry) {
 		}
 		if waiting {
 			a.drawn[r.Request] = sight{header: header.Bounds(), card: card.Bounds(), lead: lead, texts: card.Bounds()}
+			a.bindWaiting(r.Request, card)
 		}
 		if escaped {
 			ui.Box(c).Key("ascii").Padding(0, 14, 12).Children(func() { asciiNotice(c) })

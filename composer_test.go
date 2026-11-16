@@ -573,6 +573,13 @@ func TestComposerStrip(t *testing.T) {
 // view view makes of it, or its own; the tester's first second passed.
 func longThread(t *testing.T, view func(a *app) func(*ui.Context)) (*app, *ui.Tester, thread) {
 	t.Helper()
+	h, th := longHarness(t, view)
+	return h.a, h.tt, th
+}
+
+// longHarness is longThread's harness.
+func longHarness(t *testing.T, view func(a *app) func(*ui.Context)) (*harness, thread) {
+	t.Helper()
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
 	var msgs []string
@@ -588,5 +595,5 @@ func longThread(t *testing.T, view func(a *app) func(*ui.Context)) (*app, *ui.Te
 	h.a.select_(th)
 	h.until("its transcript", func() bool { return h.tt.HasText("Step 8: look at main.go again.") })
 	h.tt.Advance(time.Second)
-	return h.a, h.tt, th
+	return h, th
 }

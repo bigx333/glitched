@@ -71,6 +71,9 @@ func (a *app) chatPage(c *ui.Context) {
 				}
 				a.ambient(c)
 				a.timeline(c, t, es)
+				// After the timeline, which builds the selection's bar by
+				// its reply, when it builds the reply.
+				a.quoteBarAway(c, t)
 				// After the timeline, which says whether the end shows.
 				a.composerMorph(pane, t)
 				// What scrolls fades out under the composer.
