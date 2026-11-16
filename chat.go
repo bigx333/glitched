@@ -1073,7 +1073,12 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 						Lines(2, 10).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).
 						Padding(14, 16, 4).OnPaste(a.onPaste).OnTextKey(a.draftKey(t)).Opacity(in)
 					if !ahead {
-						area.AutoFocus().Bind(&a.draftArea)
+						// Opening, it takes the focus, but from the bar of
+						// a selection, which keeps what's typed in it.
+						if !a.quote.focused {
+							area.AutoFocus()
+						}
+						area.Bind(&a.draftArea)
 						if a.draftToEnd {
 							n := utf8.RuneCountInString(a.draft)
 							area.SetTextSelection(n, n)
