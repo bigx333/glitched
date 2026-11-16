@@ -1127,9 +1127,9 @@ func (a *app) takeBack(c *ui.Context, t thread) {
 	}
 }
 
-// message is the draft and what's attached to it that goes to t's agent:
-// files as their paths, as the composer's @ puts them, and pasted text
-// after.
+// message is what goes to t's agent: the quotes on the composer, as
+// blockquotes, then the draft and what else is attached to it, files as
+// their paths, as the composer's @ puts them, and pasted text after.
 func (a *app) message(t thread) string {
 	// Quotes first, as what the draft is about.
 	var parts []string
