@@ -5,8 +5,6 @@ import (
 	"slices"
 
 	"github.com/egoist/mygo/ui"
-
-	"glitched/internal/api"
 )
 
 // The app's overlays and covers. An overlay is a dialog, popover or panel
@@ -43,8 +41,8 @@ func (a *app) cover(key coverKey, e ui.Element) ui.Element {
 	return e.Bind(h)
 }
 
-// lookOver reads where the frame on screen drew each cover, the composer
-// and the waiting cards, before this pass builds any.
+// lookOver reads where the frame on screen drew each cover, and the
+// composer, before this pass builds either.
 func (a *app) lookOver(c *ui.Context) {
 	a.over = a.over[:0]
 	for _, h := range a.covers {
@@ -56,35 +54,6 @@ func (a *app) lookOver(c *ui.Context) {
 		return cmp.Or(cmp.Compare(p.Y, q.Y), cmp.Compare(p.X, q.X), cmp.Compare(p.H, q.H), cmp.Compare(p.W, q.W))
 	})
 	a.composerAt = a.composerH.Bounds(c)
-	a.waitingAt = a.waitingAt[:0]
-	for request, w := range a.waiting {
-		switch r := w.h.Bounds(c); {
-		case !w.bound:
-			delete(a.waiting, request) // gone, or no longer waiting
-		case r.W > 0 && r.H > 0:
-			a.waitingAt = append(a.waitingAt, r)
-		}
-		w.bound = false
-	}
-}
-
-// waitingCard is the handle of a waiting request's card, and whether the
-// last pass bound it.
-type waitingCard struct {
-	h     ui.Handle
-	bound bool
-}
-
-// bindWaiting binds card, of the waiting request, to the handle reading
-// where the frame on screen drew it (lookOver).
-func (a *app) bindWaiting(request api.ID, card ui.Element) {
-	w := a.waiting[request]
-	if w == nil {
-		w = &waitingCard{}
-		a.waiting[request] = w
-	}
-	w.bound = true
-	card.Bind(&w.h)
 }
 
 // hidden is whether a cover the frame on screen drew lies over r.

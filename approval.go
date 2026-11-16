@@ -214,7 +214,6 @@ func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 		if waiting {
 			a.read(t, r.Request, seen, read)
 			a.drawn[r.Request] = seen
-			a.bindWaiting(r.Request, card)
 		} else {
 			delete(a.reads, r.Request)
 		}
