@@ -248,7 +248,7 @@ func (a *app) questionButtons(c *ui.Context, t thread, r *client.RequestEntry, q
 	ui.Spacer(c)
 	ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
 		ui.Icon(c, icHand).FontSize(12).TextColor(palette.faint)
-		ui.Text(c, accessLabel(t.View.Access)).FontSize(11.5).TextColor(palette.faint)
+		ui.Text(c, askedAt(t, r)).FontSize(11.5).TextColor(palette.faint)
 	})
 	if answer.Clicked() && f.done() {
 		a.answerQuestions(t, r, f.answers())
