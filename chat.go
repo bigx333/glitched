@@ -380,7 +380,7 @@ func userMarkdown(text string) string {
 		prose = nil
 	}
 	for i := 0; i < len(lines); i++ {
-		fence := openingFence(lines[i])
+		fence, labeled := openingFence(lines[i])
 		if fence == "" {
 			prose = append(prose, lines[i])
 			continue
@@ -388,6 +388,11 @@ func userMarkdown(text string) string {
 		end := i + 1
 		for end < len(lines) && !closesFence(lines[end], fence) {
 			end++
+		}
+		if !labeled {
+			prose = append(prose, lines[i:min(end+1, len(lines))]...)
+			i = end
+			continue
 		}
 		if end == len(lines) && strings.TrimSpace(strings.Join(lines[i+1:], "")) == "" {
 			prose = append(prose, lines[i:]...)
@@ -491,18 +496,20 @@ func codeSpanEnd(text string, i int) int {
 }
 
 // openingFence is the run of backticks or tildes, three or more, that
-// opens a fenced code block on line, or "" when line opens none or holds
-// more than a language's name after it.
-func openingFence(line string) string {
+// opens a fenced code block on line, or "" when line opens none. labeled
+// reports whether no more than a language's name follows it: a block
+// whose fence holds more shows as typed, up to the fence that closes it.
+func openingFence(line string) (fence string, labeled bool) {
 	t := strings.TrimLeft(line, " ")
 	if len(line)-len(t) > 3 || t == "" || t[0] != '`' && t[0] != '~' {
-		return ""
+		return "", false
 	}
 	m := t[:len(t)-len(strings.TrimLeft(t, t[:1]))]
-	if len(m) < 3 || !isLanguage(strings.TrimSpace(t[len(m):])) {
-		return ""
+	info := strings.TrimSpace(t[len(m):])
+	if len(m) < 3 || m[0] == '`' && strings.Contains(info, "`") {
+		return "", false
 	}
-	return m
+	return m, isLanguage(info)
 }
 
 // isLanguage reports whether info, a fence's info string, is empty or a
