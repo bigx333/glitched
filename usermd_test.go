@@ -222,11 +222,12 @@ func TestAUserMessageWithoutCodeIsPlainText(t *testing.T) {
 }
 
 // A fence's opening line that holds more than a language's name is text,
-// so none of what was typed on it is hidden as the block's label.
+// so none of what was typed on it is hidden as the block's label, and so
+// is all up to the fence that closes it, which opens nothing after.
 func TestAUserMessagesFenceLineShowsAsTyped(t *testing.T) {
 	typed := []string{"```npm install left-pad\nnpm run build\n```", "```R&amp;D\\_notes\nx = 1\n```"}
-	h := sent(t, typed...)
-	for _, s := range typed {
+	h := sent(t, append(typed, "```npm install left-pad\nnpm run build\n```\nPlease explain `it`.")...)
+	for _, s := range append(typed, "```npm install left-pad\nnpm run build\n```\nPlease explain it.") {
 		if !slices.Contains(h.tt.Texts(), s) {
 			t.Errorf("no %q as typed; texts %q", s, h.tt.Texts())
 		}
