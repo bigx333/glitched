@@ -31,7 +31,7 @@ func quoteReady(t *testing.T) (*harness, string) {
 func dragHalfReply(t *testing.T, h *harness) string {
 	t.Helper()
 	reply := "Looking at the code."
-	h.until("the reply", func() bool { return h.tt.HasText(reply) })
+	h.untilShown("the reply", reply)
 	h.tt.Advance(time.Second)
 	r, ok := h.tt.Find(reply)
 	if !ok {
@@ -55,9 +55,24 @@ func dragHalfReply(t *testing.T, h *harness) string {
 func replyReady(t *testing.T, md, wait string) *harness {
 	t.Helper()
 	h := enterReady(t, fake.New([]provider.Event{provider.TextDelta{Text: md}}), "go")
-	h.until("the reply", func() bool { return h.tt.HasText(wait) })
+	h.untilShown("the reply", wait)
 	h.tt.Advance(2 * time.Second)
 	return h
+}
+
+// untilShown runs what the manager posts and lets the clock run, as a
+// streamed reply shows its words over time, until text shows.
+func (h *harness) untilShown(what, text string) {
+	h.t.Helper()
+	for end := time.Now().Add(30 * time.Second); !h.tt.HasText(text); time.Sleep(time.Millisecond) {
+		if time.Now().After(end) {
+			h.t.Fatalf("timed out waiting for %s; the window shows %q", what, h.tt.Texts())
+		}
+		if h.p.run() {
+			h.tt.Frame()
+		}
+		h.tt.Advance(16 * time.Millisecond)
+	}
 }
 
 // barShown is whether the selection's bar shows.
@@ -251,7 +266,7 @@ func TestSelectionBarEscape(t *testing.T) {
 // the composer to type there, leaves the bar unshown.
 func TestSelectionBarWaitingPressedElsewhere(t *testing.T) {
 	h := enterReady(t, fake.New(fake.Turn(false)), "go")
-	h.until("the reply", func() bool { return h.tt.HasText("Looking at the code.") })
+	h.untilShown("the reply", "Looking at the code.")
 	h.tt.Advance(time.Second)
 	r, _ := h.tt.Find("Looking at the code.")
 	h.tt.ClickAt(r.X+10, r.Y+r.H/2)
@@ -507,6 +522,7 @@ func doubleClickAt(h *harness, x, y float32) {
 // clear of both.
 func TestSelectionBarAboveNearComposer(t *testing.T) {
 	h, _ := quoteReady(t)
+	h.untilShown("the reply's end", "Done.")
 	h.tt.Advance(time.Second)
 	r := doubleClick(h, "Done.")
 	if !barShown(h) || h.a.quote.text != "Done" {
@@ -715,7 +731,7 @@ func TestSelectionBarClearOfSelectionAfterRewrap(t *testing.T) {
 		widen, narrow func(h *harness)
 	}{
 		{"the diff panel", 10, nil, key(ui.KeyD)},
-		{"the sidebar", 10, func(h *harness) { h.tt.SetSize(1000, 860); key(ui.KeyB)(h) }, key(ui.KeyB)},
+		{"the sidebar", 20, func(h *harness) { h.tt.SetSize(1000, 860); key(ui.KeyB)(h) }, key(ui.KeyB)},
 		{"the window", 22, nil, func(h *harness) { h.tt.SetSize(900, 860) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -765,7 +781,7 @@ func wideThread(t *testing.T, n int) *harness {
 	h := start(t, dir)
 	h.a.select_(h.thread("Wide replies"))
 	last := fmt.Sprintf("Step %d.", n)
-	h.until("its transcript", func() bool { h.tt.Advance(16 * time.Millisecond); return h.tt.HasText(last) })
+	h.untilShown("its transcript", last)
 	h.tt.Advance(time.Second)
 	return h
 }
