@@ -68,6 +68,9 @@ var Effects = map[string]string{
 	"threads.markRead":       "threads:write",
 	"threads.interrupt":      "threads:write",
 	"projects.remove":        "threads:write",
+	"projects.list":          "threads:read",
+	"projects.filter":        "ui.place",
+	"projects.add":           "threads:write",
 }
 
 // Effect is something a plugin asks the app to do, which only the app

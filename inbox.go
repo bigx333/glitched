@@ -8,6 +8,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/plugins"
 )
 
 // The sidebar is an inbox of threads: those that need you, those the agent
@@ -206,56 +207,12 @@ func tile(c *ui.Context, icon *ui.SVG, color ui.Color, size float32) ui.Element 
 		Children(func() { ui.Icon(c, icon).FontSize(size * 0.6).TextColor(ui.Hex("#ffffff")) })
 }
 
-// projectStrip filters the inbox to some of the projects: each project's
-// chip, its tile and name, toggles it in or out, All shows them all
-// again, as does choosing every one; then a button adding a project. The
-// chips wrap, as many as there are.
+// projectStrip filters the inbox to some of the projects, a plugin's: the
+// built-in draws All, a chip per project, and Add project.
 func (a *app) projectStrip(c *ui.Context) {
-	filtered := len(a.projectFilter) > 0
-	ui.Row(c).Wrap().Padding(6, 10, 6, 12).Gap(4).AlignItems(ui.Center).Children(func() {
-		all := a.tip(c, ghost(c, "all", !filtered).Padding(4, 8), "All projects")
-		if all.Children(func() { ui.Text(c, "All").FontSize(11.5).FontWeight(500) }).Clicked() {
-			clear(a.projectFilter)
-		}
-		for _, p := range a.projects {
-			on := a.projectFilter[p.key]
-			name := p.name()
-			if len(a.backend.Envs()) > 1 {
-				name += " on " + p.env.Name
-			}
-			tip := "Show " + name
-			if on {
-				tip = "Hide " + name
-			}
-			b := a.tip(c, ghost(c, p.key, on).Padding(3, 7, 3, 3).Gap(5).Label(p.name()), tip)
-			b.ContextMenu(func(m *ui.Menu) { a.projectMenu(m, p) })
-			if filtered && !on {
-				b.Opacity(0.45)
-			}
-			if b.Children(func() {
-				projectTile(c, p, 16)
-				ui.Text(c, p.name()).FontSize(11.5)
-			}).Clicked() {
-				a.toggleProject(p.key)
-			}
-		}
-		if a.iconButton(c, "add-project", icPlus, "Add project", false).Padding(4).Disabled(a.picking).Clicked() {
-			a.addProject()
-		}
-	})
-}
-
-// toggleProject puts a project in the sidebar's filter or takes it out;
-// a filter of every project, or of none, is no filter.
-func (a *app) toggleProject(id projectKey) {
-	if a.projectFilter[id] {
-		delete(a.projectFilter, id)
-	} else {
-		a.projectFilter[id] = true
-	}
-	if len(a.projectFilter) == len(a.projects) {
-		clear(a.projectFilter)
-	}
+	box := func() ui.Element { return ui.Column(c).Key("component:sidebar.projects") }
+	strip := projectStrip{Projects: a.projectRecords(), Filtered: len(a.projectFilter) > 0, Picking: a.picking, Machines: len(a.backend.Envs()) > 1}
+	a.pluginComponent(c, box, "sidebar.projects", "strip", nil, func(plugins.ThreadRecord) any { return strip })
 }
 
 // section lists a category's threads under a header that opens and closes

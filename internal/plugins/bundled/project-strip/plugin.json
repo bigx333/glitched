@@ -1,0 +1,13 @@
+{
+  "id": "project-strip",
+  "name": "Project strip",
+  "description": "The sidebar's project strip: All, a chip per project that filters the inbox to it, and Add project. Built into Glitched; make a copy in Settings › Plugins to change it.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "ui.replace", "threads:read", "threads:write"],
+  "glitched": {
+    "places": [{ "id": "strip", "at": "sidebar.projects", "replaces": true }]
+  }
+}

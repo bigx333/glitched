@@ -47,6 +47,9 @@ type Style struct {
 	// attached to anchor while *open, width wide: body fills it. A
 	// dismissal sets *open false. Nil draws MyGo's.
 	Popover func(c *ui.Context, anchor ui.Element, open *bool, width float32, body func())
+	// ContextMenu gives e the menu of Glitched's that name names, as a
+	// widget's contextMenu does. Nil gives none.
+	ContextMenu func(c *ui.Context, e ui.Element, name string)
 	// Tile draws a project's mark: its icon, white on its color. Nil
 	// draws the icon on the color.
 	Tile func(c *ui.Context, icon *ui.SVG, color ui.Color, size float32)
@@ -271,6 +274,12 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			e = ui.ButtonBase(kc).Gap(8).AlignItems(ui.Center).Padding(6, 8).Radius(7).Cursor(ui.CursorPointer)
 		default:
 			e = newBox(kc)
+		}
+		if n.Wrap {
+			e.Wrap()
+		}
+		if n.ContextMenu != "" && st.ContextMenu != nil {
+			st.ContextMenu(c, e, n.ContextMenu)
 		}
 		if n.OnClick != nil {
 			if n.Type == "column" {
@@ -791,6 +800,7 @@ func (r *renderer) button(c *ui.Context, n *widget.Node, k string) {
 		if n.Size == "small" {
 			b.Padding(3)
 		}
+		padding(b, n.Padding)
 		if col, ok := st.color(n.Color); ok {
 			b.TextColor(col)
 		} else if n.Color != "" {
@@ -803,7 +813,22 @@ func (r *renderer) button(c *ui.Context, n *widget.Node, k string) {
 	default:
 		b = ui.ButtonBase(c.Key(k)).Gap(6).AlignItems(ui.Center).Padding(5, 11).Radius(999).Cursor(ui.CursorPointer)
 	}
-	b.Label(cmp.Or(n.Tooltip, n.Label)).Disabled(n.Disabled)
+	if len(n.Children) > 0 {
+		// Its own content: its gap, and its label first.
+		if n.Gap != 0 {
+			b.Gap(float32(n.Gap))
+		}
+		b.Label(cmp.Or(n.Label, n.Tooltip))
+	} else {
+		b.Label(cmp.Or(n.Tooltip, n.Label))
+	}
+	b.Disabled(n.Disabled)
+	if n.Opacity != 0 {
+		b.Opacity(float32(n.Opacity))
+	}
+	if n.ContextMenu != "" && st.ContextMenu != nil {
+		st.ContextMenu(c, b, n.ContextMenu)
+	}
 	r.tip(c, b, n.Tooltip)
 	icon := func(name string, size float32) {
 		if st.Icon == nil {
@@ -815,6 +840,10 @@ func (r *renderer) button(c *ui.Context, n *widget.Node, k string) {
 	}
 	ghost := n.Style == "ghost"
 	b.Children(func() {
+		if len(n.Children) > 0 {
+			r.children(c, n)
+			return
+		}
 		if ghost {
 			icon(n.Icon, 15)
 			return

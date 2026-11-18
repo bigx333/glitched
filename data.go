@@ -67,13 +67,19 @@ func keyOf(e *client.Env, workspace string) projectKey {
 func (p *project) name() string { return filepath.Base(p.key.workspace) }
 
 var (
-	projectIcons  = []*ui.SVG{icTerminal, icWind, icPhone, icCode, icGlobe, icSparkles, icZap, icFolder}
-	projectColors = []ui.Color{ui.Hex("#8b5cf6"), ui.Hex("#0ea5e9"), ui.Hex("#22c55e"), ui.Hex("#f97316"), ui.Hex("#ec4899"), ui.Hex("#14b8a6"), ui.Hex("#eab308")}
+	projectIcons  = []string{"terminal", "wind", "phone", "code", "global", "magic-stick-3", "fast-tier", "folder"}
+	projectColors = []string{"#8b5cf6", "#0ea5e9", "#22c55e", "#f97316", "#ec4899", "#14b8a6", "#eab308"}
 )
 
 // mark is the project's icon and color, picked by its name so that it
 // keeps them, and the same workspace on two machines looks the same.
 func (p *project) mark() (*ui.SVG, ui.Color) {
+	icon, color := p.markNames()
+	return appIconNamed(icon), ui.Hex(color)
+}
+
+// markNames are the project's icon, by name, and color, as #rrggbb.
+func (p *project) markNames() (string, string) {
 	h := fnv.New32a()
 	h.Write([]byte(p.name()))
 	n := h.Sum32()
