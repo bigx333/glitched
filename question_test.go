@@ -276,7 +276,7 @@ var appOverlays = []appOverlay{
 		func(h *harness, th thread) { h.a.deleting, h.a.deleteOpen = th, true },
 		func(a *app) bool { return a.deleteOpen }},
 	{"the snooze popover", nil,
-		func(h *harness, th thread) { h.hover(title(th)); h.click("Snooze") },
+		func(h *harness, th thread) { h.hover(title(th)); h.click("Snooze"); settlePlugins(h.t, h.a, h.tt, h.p) },
 		func(a *app) bool { return a.snoozeFor != api.ID{} }},
 	{"the access popover", nil,
 		func(h *harness, _ thread) { h.a.composerOpened, h.a.accessOpen = true, true },
