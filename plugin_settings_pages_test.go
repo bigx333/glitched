@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -192,7 +193,12 @@ func TestAPluginsSettingsPageIsInSettings(t *testing.T) {
 	if err := tt.Click("Prefs page"); err != nil {
 		t.Fatalf("Settings doesn't list it: %v, %q", err, tt.Texts())
 	}
-	settleTester(tt)
+	// A page's view comes on its own session, which settling doesn't wait
+	// for: it shows Loading… till then.
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline) && !tt.HasText("Prefs body"); {
+		settleTester(tt)
+		time.Sleep(10 * time.Millisecond)
+	}
 	if a.router.Path() != "/settings/plugin/prefs/home" || !tt.HasText("Prefs body") || !tt.HasText("Mine to set.") {
 		t.Fatalf("at %s it shows %q", a.router.Path(), tt.Texts())
 	}
