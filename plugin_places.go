@@ -86,13 +86,15 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread) {
 		if node == nil {
 			continue
 		}
-		a.drawPlace(c, ui.Row(c).Key("plugin:"+pl.Plugin+":"+pl.Place.ID).Shrink(1).AlignItems(ui.Center).ClipX(), pl, key, ctx, app, node)
+		a.drawPlace(c, ui.Row(c).Key("plugin:"+pl.Plugin+":"+pl.Place.ID).Shrink(1).AlignItems(ui.Center).ClipX(), pl, key, ctx, app, node, nil)
 	}
 }
 
 // drawPlace draws in box what the plugin drew for one copy of its place,
 // and hands what the user does there to its app session.
-func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key string, ctx any, app *plugins.Session, node *widget.Node) {
+//
+// native draws the native widgets of a component's copy, nil elsewhere.
+func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key string, ctx any, app *plugins.Session, node *widget.Node, native func(*ui.Context, *widget.Node, func(any))) {
 	pk := placeKey{pl.Plugin, pl.Place.ID, key}
 	a.placeFrame.keys[pk] = true
 	cs := a.placeControls[pk]
@@ -106,6 +108,7 @@ func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key s
 	box.Children(func() {
 		st := a.pluginStyle(pl.Plugin)
 		st.Scope = pl.Plugin + "/" + pl.Place.ID + "/" + key
+		st.Native = native
 		render.View(c, v, cs, st, &a.pluginMD, func(ev plugins.UIEvent, values map[string]any) int {
 			ev.Place = ref
 			return app.Dispatch(ev, values)
@@ -138,8 +141,9 @@ func (a *app) syncPlaces() {
 }
 
 // emitThreadChanges tells the plugins that hear thread.changed of each
-// thread whose record changed since the last time, and those that hear
-// thread.message of each new message in the thread shown.
+// thread whose record changed since the last time, those that hear
+// thread.message of each new message in the thread shown, and those that
+// hear thread.files.changed of each edit to the thread shown's files.
 func (a *app) emitThreadChanges() {
 	if a.plugins == nil {
 		return
@@ -162,6 +166,7 @@ func (a *app) emitThreadChanges() {
 		if !seen[id] {
 			delete(a.pluginRecords, id)
 			delete(a.pluginMessages, id)
+			delete(a.pluginFiles, id)
 			a.plugins.Emit("thread.changed", func(string) any { return map[string]any{"id": id, "deleted": true} })
 		}
 	}
@@ -173,6 +178,20 @@ func (a *app) emitThreadChanges() {
 	// first look at a thread tells nothing, then each new finished one is
 	// told once.
 	id := t.id().String()
+	var edited []string
+	files := changedFiles(entriesOf(t))
+	stamps := make(map[string]time.Time, len(files))
+	for _, f := range files {
+		stamps[f.path] = f.stamp
+		if was, ok := a.pluginFiles[id][f.path]; !ok || !was.Equal(f.stamp) {
+			edited = append(edited, f.path)
+		}
+	}
+	if _, known := a.pluginFiles[id]; known && len(edited) > 0 {
+		ev := map[string]any{"thread": id, "files": edited}
+		a.plugins.Emit("thread.files.changed", func(string) any { return ev })
+	}
+	a.pluginFiles[id] = stamps
 	told, known := a.pluginMessages[id]
 	first := !known
 	if first {

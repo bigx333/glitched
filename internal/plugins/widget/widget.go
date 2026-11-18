@@ -63,6 +63,39 @@ var Types = map[string]kind{
 	"table":    leaf,
 	"image":    leaf,
 	"icon":     leaf,
+	"item":     control,
+	"native":   leaf,
+}
+
+// Native is a widget Glitched draws itself, which a plugin only places:
+// a surface too heavy or too live for widgets, as the diff of a file.
+type Native struct {
+	// Props are what a plugin may pass it, by name, each "string", "bool"
+	// or "number".
+	Props map[string]string
+	// In are the components it draws in, about the copy's own thread;
+	// anywhere else it says so in its place.
+	In []string
+	// Fires are the handlers it fires.
+	Fires []string
+}
+
+// Natives are the native widgets a plugin may place, by name. Only these
+// draw: a name that isn't one, a locked one included, refuses the view.
+var Natives = map[string]Native{
+	"diff.body": {Props: map[string]string{"path": "string"}, In: []string{"thread.panel.diff"}, Fires: []string{"onChange"}},
+}
+
+// Locked are the parts of Glitched's UI no plugin draws, replaces or
+// places, and why. No manifest or grant changes them.
+var Locked = map[string]string{
+	"approval.card":       "an approval answers for you, so only Glitched draws it",
+	"question.card":       "an answer to an agent's question is yours, so only Glitched draws it",
+	"composer.access":     "the access picker sets what agents may do, so only Glitched draws it",
+	"composer.send":       "send and stop run and stop agents, so only Glitched draws them",
+	"settings.plugins":    "it is where you turn plugins off, so no plugin draws it",
+	"settings.servers":    "pairing an engine trusts a machine, so only Glitched draws it",
+	"confirm.destructive": "a confirm before something is deleted must be Glitched's own",
 }
 
 type kind uint8
@@ -92,10 +125,13 @@ type Node struct {
 	Title       string `json:"title,omitempty"`
 	Label       string `json:"label,omitempty"`
 	Placeholder string `json:"placeholder,omitempty"`
-	// Style is a text's look: body, muted, heading, title, code, error or
-	// success; a button's: default, primary or danger; a badge's: default,
-	// accent, success, warning or danger.
-	Style     string          `json:"style,omitempty"`
+	// Style is a text's look: body, muted, strong, heading, title, code,
+	// error or success; a button's: default, primary or danger; a badge's:
+	// default, accent, success, warning, danger or count; tabs' default or
+	// segmented; an item's text plain or code.
+	Style string `json:"style,omitempty"`
+	// Size small is a text's or a ghost button's smaller size.
+	Size      string          `json:"size,omitempty"`
 	Value     json.RawMessage `json:"value,omitempty"`
 	Options   []Option        `json:"options,omitempty"`
 	Multiline bool            `json:"multiline,omitempty"`
@@ -145,6 +181,16 @@ type Node struct {
 	Compact bool   `json:"compact,omitempty"`
 	Active  bool   `json:"active,omitempty"`
 	Badge   string `json:"badge,omitempty"`
+
+	// An item is a list's row: its icon and text, with Active showing it
+	// selected. Trailing follow its text, and while it is pointed at
+	// Actions show in their place.
+	Trailing []*Node `json:"trailing,omitempty"`
+	Actions  []*Node `json:"actions,omitempty"`
+
+	// Name is also a native widget's (Natives), and Props what it is
+	// passed.
+	Props map[string]json.RawMessage `json:"props,omitempty"`
 }
 
 // Column is a table's column.
@@ -165,6 +211,10 @@ type Row struct {
 type Option struct {
 	Value string `json:"value"`
 	Label string `json:"label,omitempty"`
+	// Disabled and Tooltip are a segmented tabs' option's: why it can't
+	// be chosen.
+	Disabled bool   `json:"disabled,omitempty"`
+	Tooltip  string `json:"tooltip,omitempty"`
 }
 
 // UnmarshalJSON takes an option as an object, or as a string that is both.
@@ -205,10 +255,12 @@ var (
 	idPattern      = regexp.MustCompile(`^[A-Za-z0-9_.:/-]{1,128}$`)
 	handlerPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
 	styles         = map[string][]string{
-		"text":   {"", "body", "muted", "heading", "title", "code", "error", "success"},
+		"text":   {"", "body", "muted", "strong", "heading", "title", "code", "error", "success"},
 		"button": {"", "default", "primary", "danger", "ghost", "outline"},
 		"menu":   {"", "default", "outline"},
-		"badge":  {"", "default", "accent", "success", "warning", "danger"},
+		"badge":  {"", "default", "accent", "success", "warning", "danger", "count"},
+		"tabs":   {"", "default", "segmented"},
+		"item":   {"", "code"},
 	}
 	aligns   = []string{"", "start", "center", "end", "stretch"}
 	justifys = []string{"", "start", "center", "end", "between"}
@@ -307,6 +359,12 @@ func (c *checker) node(n *Node, path string, depth int) error {
 	if n.Gap < 0 || n.Gap > MaxSpacing || n.Padding < 0 || n.Padding > MaxSpacing {
 		return fail("gap and padding are 0 to %d", MaxSpacing)
 	}
+	if n.Type == "native" {
+		// What it is comes first: a locked or unknown name says so.
+		if err := checkNative(n); err != nil {
+			return fail("%v", err)
+		}
+	}
 	if err := c.handlers(n); err != nil {
 		return fail("%v", err)
 	}
@@ -316,9 +374,11 @@ func (c *checker) node(n *Node, path string, depth int) error {
 	if err := c.value(n); err != nil {
 		return fail("%v", err)
 	}
-	for i, ch := range n.Children {
-		if err := c.node(ch, path+".children["+strconv.Itoa(i)+"]", depth+1); err != nil {
-			return err
+	for field, list := range map[string][]*Node{"children": n.Children, "trailing": n.Trailing, "actions": n.Actions} {
+		for i, ch := range list {
+			if err := c.node(ch, path+"."+field+"["+strconv.Itoa(i)+"]", depth+1); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -334,6 +394,8 @@ func (c *checker) handlers(n *Node) error {
 		"tabs":   {"onChange"},
 		"menu":   {"onChange"},
 		"dialog": {"onClose"},
+		"item":   {"onClick"},
+		"native": Natives[n.Name].Fires,
 	}[n.Type]
 	for name, h := range map[string]*Handler{"onClick": n.OnClick, "onChange": n.OnChange, "onSubmit": n.OnSubmit, "onClose": n.OnClose} {
 		if h == nil {
@@ -408,7 +470,7 @@ func (n *Node) Walk(fn func(*Node)) {
 		return
 	}
 	fn(n)
-	for _, ch := range n.Children {
+	for _, ch := range slices.Concat(n.Children, n.Trailing, n.Actions) {
 		ch.Walk(fn)
 	}
 }
@@ -440,13 +502,30 @@ func (c *checker) extra(n *Node) error {
 	if (len(n.Columns) > 0 || len(n.Rows) > 0) && n.Type != "table" {
 		return fmt.Errorf("a %s has no columns or rows", n.Type)
 	}
-	if n.Src != "" && n.Type != "image" || n.Name != "" && n.Type != "icon" {
+	if n.Src != "" && n.Type != "image" || n.Name != "" && n.Type != "icon" && n.Type != "native" {
 		return fmt.Errorf("a %s has no src or name", n.Type)
+	}
+	if (len(n.Trailing) > 0 || len(n.Actions) > 0) && n.Type != "item" {
+		return fmt.Errorf("a %s has no trailing or actions", n.Type)
+	}
+	if len(n.Props) > 0 && n.Type != "native" {
+		return fmt.Errorf("a %s has no props", n.Type)
+	}
+	if n.Size != "" && (n.Size != "small" || n.Type != "text" && n.Style != "ghost") {
+		return fmt.Errorf("size is small, of a text or a ghost button, not %q of a %s", n.Size, n.Type)
+	}
+	for _, o := range n.Options {
+		if (o.Disabled || o.Tooltip != "") && n.Style != "segmented" {
+			return fmt.Errorf("only segmented tabs' options are disabled or have a tooltip")
+		}
+		if len(o.Tooltip) > MaxTooltip {
+			return fmt.Errorf("a tooltip is up to %d bytes", MaxTooltip)
+		}
 	}
 	if (n.Width != 0 || n.Height != 0 || n.Radius != 0) && n.Type != "image" {
 		return fmt.Errorf("a %s has no width, height or radius", n.Type)
 	}
-	drawn := n.Style == "ghost" || n.Style == "outline"
+	drawn := n.Style == "ghost" || n.Style == "outline" || n.Type == "item"
 	switch {
 	case n.Tooltip != "" && n.Type != "button" && n.Type != "menu":
 		return fmt.Errorf("a %s has no tooltip", n.Type)
@@ -456,10 +535,12 @@ func (c *checker) extra(n *Node) error {
 		return fmt.Errorf("only a ghost or outline %s has an icon", n.Type)
 	case n.Style == "ghost" && n.Icon == "":
 		return fmt.Errorf("a ghost button shows an icon, which it doesn't name")
-	case n.Compact && n.Icon == "":
+	case n.Type == "item" && n.Icon == "":
+		return fmt.Errorf("an item shows an icon, which it doesn't name")
+	case n.Compact && (n.Icon == "" || n.Type == "item"):
 		return fmt.Errorf("a compact %s shows its icon alone, which it doesn't name", n.Type)
-	case (n.Active || n.Badge != "") && n.Style != "ghost":
-		return fmt.Errorf("only a ghost button is active or has a badge")
+	case n.Badge != "" && n.Style != "ghost", n.Active && n.Style != "ghost" && n.Type != "item":
+		return fmt.Errorf("only a ghost button is active or has a badge, and an item is active")
 	}
 	switch n.Type {
 	case "table":
@@ -503,6 +584,46 @@ func (c *checker) extra(n *Node) error {
 		if n.Title == "" {
 			return fmt.Errorf("a dialog needs a title")
 		}
+	}
+	return nil
+}
+
+// checkNative checks that a native widget is one of Natives, and that it
+// is passed only the props it takes.
+func checkNative(n *Node) error {
+	if why, ok := Locked[n.Name]; ok {
+		return fmt.Errorf("%s is off limits to plugins: %s", n.Name, why)
+	}
+	nat, ok := Natives[n.Name]
+	if !ok {
+		return fmt.Errorf("no native widget %q", n.Name)
+	}
+	size := 0
+	for name, raw := range n.Props {
+		size += len(name) + len(raw)
+		var v any
+		if json.Unmarshal(raw, &v) != nil {
+			return fmt.Errorf("prop %s is no JSON value", name)
+		}
+		want, ok := nat.Props[name]
+		if !ok {
+			return fmt.Errorf("%s takes no prop %q", n.Name, name)
+		}
+		got := ""
+		switch v.(type) {
+		case string:
+			got = "string"
+		case bool:
+			got = "bool"
+		case float64:
+			got = "number"
+		}
+		if got != want {
+			return fmt.Errorf("%s's prop %s is a %s", n.Name, name, want)
+		}
+	}
+	if size > MaxPayload {
+		return fmt.Errorf("props over %d bytes", MaxPayload)
 	}
 	return nil
 }

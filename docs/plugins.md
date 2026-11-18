@@ -173,24 +173,26 @@ Every widget is `{type, id?, ...}`. Interactive widgets and dialogs need an `id`
 | --- | --- | --- |
 | `column`, `row` | `children`, `gap`, `padding` (0 to 64), `align`, `justify`, `grow`, `background` | |
 | `card` | `title`, `children`, `gap`, `padding` | |
-| `text` | `text`, `style` (`body` `muted` `heading` `title` `code` `error` `success`), `color`, `selectable` | |
+| `text` | `text`, `style` (`body` `muted` `strong` `heading` `title` `code` `error` `success`), `size` (`small`), `color`, `selectable` | |
 | `markdown` | `text` (http and https links open in the browser) | |
-| `badge` | `text`, `style` (`default` `accent` `success` `warning` `danger`), `color` | |
+| `badge` | `text`, `style` (`default` `accent` `success` `warning` `danger` `count`), `color` | |
 | `icon` | `name`, `color` | |
 | `image` | `src` (`plugin:<file>`, PNG, JPEG or SVG up to 4 MiB; or `https://…` with the network grant), `width`, `height`, `radius` | |
 | `table` | `columns` (`{id, title, width?}`, up to 20), `rows` (`{key, cells: {column: text}}`, up to 500) | |
 | `divider`, `spacer`, `spinner` | | |
-| `button` | `label`, `style` (`default` `primary` `danger` `ghost` `outline`), `disabled`, `tooltip`; for `ghost` and `outline`: `icon`, `compact`; for `ghost`: `active`, `badge` | `onClick` |
+| `button` | `label`, `style` (`default` `primary` `danger` `ghost` `outline`), `disabled`, `tooltip`; for `ghost` and `outline`: `icon`, `compact`; for `ghost`: `active`, `badge`, `size` (`small`) | `onClick` |
 | `input` | `label`, `placeholder`, `value`, `controlled`, `multiline`, `disabled` | `onChange`, `onSubmit` |
 | `toggle` | `label`, `value`, `controlled`, `disabled` | `onChange` |
 | `select` | `label`, `options`, `value`, `controlled`, `disabled` | `onChange` |
-| `tabs` | `options`, `value`, `controlled`, `disabled` | `onChange` |
+| `tabs` | `options`, `value`, `controlled`, `disabled`, `style` (`default` `segmented`) | `onChange` |
+| `item` | `icon`, `text`, `style` (`code` for a monospace text), `label`, `active`, `trailing`, `actions` | `onClick` |
 | `menu` | `label`, `options`, `disabled`, `tooltip`, `style` (`default` `outline`); for `outline`: `icon`, `compact` | `onChange` (the chosen option's value) |
 | `dialog` | `title`, `open`, `children` | `onClose` (Escape, a click outside) |
+| `native` | `name`, `props`, `grow` (see [Native widgets](#native-widgets)) | what the native fires |
 
-`ghost` and `outline` buttons and menus are drawn as Glitched's header draws its own. A `ghost` button is a square that shows only its `icon` (it needs one), on while `active`, with a `badge` of up to 4 characters over its corner. An `outline` one is a hairline pill with its `icon` and `label`, or the icon alone when `compact`; an `outline` menu adds a chevron. `tooltip` (up to 200 bytes) shows on hover and is the control's name to assistive tools; without one, `label` is. `options` are strings, or `{value, label}`, 1 to 200. `color` and `background` are theme tokens, never raw values: `$text`, `$text.muted`, `$text.faint`, `$accent`, `$success`, `$warning`, `$danger`, `$border`, `$surface`.
+`ghost` and `outline` buttons and menus are drawn as Glitched's header draws its own. A `ghost` button is a square that shows only its `icon` (it needs one), on while `active`, with a `badge` of up to 4 characters over its corner. An `outline` one is a hairline pill with its `icon` and `label`, or the icon alone when `compact`; an `outline` menu adds a chevron. `tooltip` (up to 200 bytes) shows on hover and is the control's name to assistive tools; without one, `label` is. `options` are strings, or `{value, label}`, 1 to 200. A `count` badge is the muted pill a heading's count shows in. `segmented` tabs are drawn as the diff panel's Unified and Split switch; their options may each be `disabled`, with a `tooltip` saying why. An `item` is a list's row, as the diff panel's files: its `icon` and `text`, `active` when it is the one selected, its `trailing` widgets after the text, and, while the pointer is over it, its `actions` in their place. `color` and `background` are theme tokens, never raw values: `$text`, `$text.muted`, `$text.faint`, `$accent`, `$success`, `$warning`, `$danger`, `$border`, `$surface`.
 
-A view is at most 1 MiB, 2000 widgets, 24 deep, and 32 KiB per string. A place's copy is at most 200 widgets. A view past a limit is refused whole: the last good one stays, with the error.
+A view is at most 1 MiB, 2000 widgets, 24 deep, and 32 KiB per string. A place's copy is at most 200 widgets, a component's 2000. A view past a limit is refused whole: the last good one stays, with the error.
 
 ## Places and slots
 
@@ -232,6 +234,7 @@ Your `place` export draws it as it draws any place.
 | Component | Copies | Context |
 | --- | --- | --- |
 | `thread.header.actions` | the thread shown, keyed by its id | `{thread, local, narrow, panels: {terminal, diff, preview}, changedFiles}` |
+| `thread.panel.diff` | two for the thread shown: `<id>/header` and `<id>/body` | `{thread, part, local, files: [{path, add, del, reviewed, read}], shown, layout, splitFits, splitWidth, wrap, canOpen}` |
 
 `thread.header.actions` is the buttons at the right of a thread's header. Glitched keeps the header's frame, its drag region, the title, the pills, the `thread.header` slot and the panel tabs' buttons. `local` says the thread's workspace is on this machine. `narrow` says the chat is under 700 points wide, where the built-in shows icons only. `changedFiles` counts the files the agent changed. Without `threads:read` the thread is `{id}` alone, as everywhere.
 
@@ -239,7 +242,23 @@ Your `place` export draws it as it draws any place.
 
 **Off limits.** These never take a replacement, whatever a manifest says or a grant allows: `approval.card`, `question.card`, `composer.access` (the access picker), `composer.send` (send and stop), `settings.plugins`, `settings.servers` (pairing an engine) and `confirm.destructive`. A plugin that names one does not load, and Settings says why. They are where you answer an agent, give it access, or delete something, so only Glitched draws them.
 
-A component is drawn from widgets today. A later version will let a plugin place one of Glitched's heavy native views (the diff, a terminal, a web page) inside its layout as a widget, so that a component like the diff panel can be a plugin around a native body.
+`thread.panel.diff` is the diff panel beside the chat. Its `header` copy is drawn in the panel's title bar, whose height, drag region and window buttons stay Glitched's; its `body` copy below it. `files` are the files the agent changed, in the order it first changed them, with the lines each change adds and deletes as its diff has them now; `reviewed` is the user's mark, and `read` says the file's diff is read, which marking it needs. `shown` is the file the diff shows, `""` with none. `layout` is `unified` or `split` as shown: Split falls back to Unified while `splitFits` is false, short of `splitWidth` points. `canOpen` says there is an editor to open a file in. The built-in draws the header and the list of files, and places the native `diff.body` under them.
+
+### Native widgets
+
+A native widget is one of Glitched's own views, which a plugin places in its layout and Glitched draws: a surface too heavy or too live for widgets, as the diff of a file. The plugin says where, with which props, and hears what it fires:
+
+```json
+{ "type": "native", "id": "diff", "name": "diff.body", "props": { "path": "src/main.go" }, "grow": true, "onChange": "marked" }
+```
+
+| Native | Props | Draws in | Fires |
+| --- | --- | --- | --- |
+| `diff.body` | `path`: the file, one the thread changed | `thread.panel.diff` | `onChange` with `{path, remaining}` when a change is marked reviewed in it |
+
+`diff.body` draws the file's diff, the hunk bar and its shortcuts, or why it can't: no changes yet, the files on another machine, still reading, not shown (binary, over 1 MB, outside the workspace), or HEAD's side unknown. It fills its parent's width, and with `grow` the height its parent column leaves; without, its own.
+
+A native widget draws only in the components its row names, about the copy's own thread; a thread is never a prop. Anywhere else (a page, a tab, a slot) it says so in its place. Its name must be one of the table: an unknown name refuses the view, as does a part of the UI that is off limits (`approval.card` and the rest), so a plugin can't place a locked part any more than replace it. A prop it doesn't take, or of the wrong type, refuses the view too, and props are at most 4 KiB.
 
 ### Built-in plugins
 
@@ -248,8 +267,11 @@ Built-in plugins are compiled into Glitched (`internal/plugins/bundled`) and lis
 | Built-in | Draws | Asks for |
 | --- | --- | --- |
 | `header-actions` | `thread.header.actions` | `ui.place`, `ui.replace`, `threads:read`, `programs` (`git`) |
+| `diff-panel` | `thread.panel.diff` | `ui.place`, `ui.replace`, `threads:read`, `clipboard` |
 
 Header actions' **Open in** opens the thread's workspace in Cursor, VS Code, Zed or the file manager, with `glitched.openIn`. Its **Commit & push** opens a dialog that lists every changed file, the branch, where it pushes, and a message (the thread's title to start), and says that your git hooks don't run for a plugin's git. On **Commit & push** in the dialog it runs `git add -A`, `git commit -m <message>`, then `git push`, or `git push -u origin <branch>` when the branch tracks nothing yet. It never forces. It refuses before running anything when there is nothing to commit, HEAD is detached, a merge has conflicts, or the message is empty. A push that fails or takes over 20 seconds keeps the commit and says so. A repository with no `origin` keeps the commit here.
+
+Diff panel draws the header (Changes, the count, the Unified and Split switch, Wrap long lines, Close diff) and the list of files over `diff.body`. Pointed at, a file shows Mark reviewed, Copy path and, with an editor, Open in editor. It lists up to 300 files, then how many more.
 
 ### Copy and edit
 
@@ -265,6 +287,7 @@ A plugin hears the events its manifest lists, if it may:
 | --- | --- | --- |
 | `thread.changed` | the thread's record (its title, status, workspace, machine or time changed), or `{id, deleted: true}` | `threads:read` |
 | `thread.message` | `{thread, role, text}`, each new message of a thread you have open: from when it's first shown, and while you're away from it once it was | `messages:read` |
+| `thread.files.changed` | `{thread, files}`, the files of a thread you have open that the agent edited since you were last told, as `thread.message` is | `threads:read` |
 | `setting.changed` | `{id, value, was}` | |
 | `theme.changed` | `{appearance}` | |
 
@@ -304,8 +327,11 @@ Each call runs on the UI thread (the engine's queue, for a service), checked as 
 | `glitched.panels.toggle(panel, open?)` (`terminal`, `diff`, `preview`) | the panels' state | `ui.place` |
 | `glitched.panels.state()` | `{terminal, diff, preview}`, each open or not | `ui.place` |
 | `glitched.openIn(app, thread)` (`cursor`, `vscode`, `zed`, `finder`) | | `threads:read` |
+| `glitched.diff.set(thread, {shown?, layout?, wrap?})` | | `ui.place` |
+| `glitched.diff.setReviewed(thread, path, reviewed?)` | | `threads:read` |
+| `glitched.diff.openFile(thread, path)` | | `threads:read` |
 
-`openIn` names a thread, never a path: Glitched opens that thread's workspace, if it is on this machine. A toast carries the plugin's name. `threads.create` starts a thread with the composer's model and access (a service's: the last thread's), and sends the prompt. A service can't toast, copy, notify, draft or open: it has no window.
+`openIn` names a thread, never a path: Glitched opens that thread's workspace, if it is on this machine. The `diff` calls name a thread and, for a file, one the thread changed, and refuse any other: `set` shows a file and sets the layout (`unified`, `split`) and wrapping; `setReviewed` marks a file reviewed or not (`true` without `reviewed`), once its diff is read; `openFile` opens it in the editor found, for a thread on this machine. A toast carries the plugin's name. `threads.create` starts a thread with the composer's model and access (a service's: the last thread's), and sends the prompt. A service can't toast, copy, notify, draft or open: it has no window.
 
 **Start over** starts a page's state over and drops what an earlier start answers; a call that start had already made goes through.
 
@@ -449,7 +475,7 @@ Glitched checks the signature over every file before it writes anything, then in
 
 ## Not supported yet
 
-- **Slots:** inside messages, the composer, files, or another plugin's slots and menus (Zeron's `slot:` and `menu_entries`). Replacing a part of Glitched beyond its [components](#components), or choosing in Settings which of two replacements draws.
+- **Slots:** inside messages, the composer, files, or another plugin's slots and menus (Zeron's `slot:` and `menu_entries`). Replacing a part of Glitched beyond its [components](#components), native widgets beyond `diff.body`, or choosing in Settings which of two replacements draws.
 - **Your other devices:** reaching your other devices (Zeron's `devices`, a service called on another machine); a thread on another machine from `threads.create`.
 - **Services:** a service's `emit` to windows, and folder watching.
 - **Settings:** wallpaper and permission settings, a chosen thread's model or access level.

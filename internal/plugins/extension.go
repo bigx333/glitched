@@ -91,10 +91,11 @@ var Slots = []Slot{
 // Events are the app events a plugin may hear, and the capability each
 // needs.
 var Events = map[string]string{
-	"thread.changed":  "threads:read",
-	"thread.message":  "messages:read",
-	"setting.changed": "",
-	"theme.changed":   "",
+	"thread.changed":       "threads:read",
+	"thread.message":       "messages:read",
+	"thread.files.changed": "threads:read",
+	"setting.changed":      "",
+	"theme.changed":        "",
 }
 
 // MinEvery is the shortest a timer may be, in seconds.

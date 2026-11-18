@@ -188,7 +188,10 @@ func (a *app) header(c *ui.Context, t thread, es []entry) {
 		// The rest of the row is a plugin's: the built-in Header actions,
 		// or one of the user's that replaces it.
 		state := headerActions{Local: t.local(), Narrow: narrow, Panels: a.panels(), ChangedFiles: len(changedFiles(es))}
-		a.pluginComponent(c, "thread.header.actions", t.id().String(), t, func(r plugins.ThreadRecord) any {
+		box := func() ui.Element {
+			return ui.Row(c).Key("component:thread.header.actions").Shrink(0).AlignItems(ui.Center)
+		}
+		a.pluginComponent(c, box, "thread.header.actions", t.id().String(), t, func(r plugins.ThreadRecord) any {
 			state.Thread = r
 			return state
 		})

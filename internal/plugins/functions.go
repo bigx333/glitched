@@ -33,6 +33,11 @@ globalThis.glitched = Object.freeze({
     state: () => app("panels.state"),
   }),
   openIn: (app_, thread) => app("open.in", { app: app_, thread }),
+  diff: Object.freeze({
+    set: (thread, options = {}) => app("diff.set", { ...options, thread }),
+    setReviewed: (thread, path, reviewed = true) => app("diff.setReviewed", { thread, path, reviewed }),
+    openFile: (thread, path) => app("diff.openFile", { thread, path }),
+  }),
   clipboard: Object.freeze({ write: (text) => app("clipboard.write", { text }) }),
   notify: (title, body) => app("notify", { title, body }),
   composer: Object.freeze({ draft: (text, workspace) => app("composer.draft", { text, workspace }) }),

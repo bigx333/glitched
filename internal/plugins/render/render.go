@@ -17,7 +17,7 @@ import (
 
 // Style is the look the app gives the widgets.
 type Style struct {
-	Text, Muted, Faint, Accent, Red, Green, Amber, Border, Surface ui.Color
+	Text, Muted, Faint, Accent, Red, Green, Amber, Border, Surface, Hover ui.Color
 	// Card draws a card: its title over a body.
 	Card func(c *ui.Context, title string, body func())
 	// Icon is the icon a name gives, nil for none.
@@ -33,6 +33,13 @@ type Style struct {
 	Ghost   func(c *ui.Context, key any, on bool) ui.Element
 	Outline func(c *ui.Context, key any) ui.Element
 	Tip     func(c *ui.Context, e ui.Element, tip string) ui.Element
+	// Row makes the app's list row, keyed by key in c: selected shows at
+	// once, hover fades. Nil draws a ghost button.
+	Row func(c *ui.Context, key any, selected bool) ui.Element
+	// Native draws a native widget, which the checks let only Natives be:
+	// fire gives the plugin a change. Nil, outside a component, says it
+	// draws only in one.
+	Native func(c *ui.Context, n *widget.Node, fire func(value any))
 }
 
 // color is a theme token's color.
@@ -265,6 +272,8 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		switch n.Style {
 		case "muted":
 			t.TextColor(st.Muted)
+		case "strong":
+			t.FontWeight(600)
 		case "heading":
 			t.FontSize(16).FontWeight(650)
 		case "title":
@@ -276,6 +285,9 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		case "success":
 			t.TextColor(st.Green)
 		}
+		if n.Size == "small" {
+			t.FontSize(11.5)
+		}
 		if n.Selectable {
 			t.Selectable()
 		}
@@ -285,6 +297,10 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 	case "markdown":
 		ui.Column(kc).LineHeight(1.55).Children(func() { markdown.View(c, n.Text, r.md) })
 	case "badge":
+		if n.Style == "count" {
+			ui.Text(kc, n.Text).FontSize(11).TextColor(st.Muted).Padding(0, 6).Radius(999).Background(st.Hover)
+			return
+		}
 		col := map[string]ui.Color{"accent": st.Accent, "success": st.Green, "warning": st.Amber, "danger": st.Red}[n.Style]
 		if col == (ui.Color{}) {
 			col = st.Muted
@@ -304,6 +320,27 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			r.drawnButton(c, n, key(n, i))
 			return
 		}
+	case "tabs":
+		if n.Style == "segmented" {
+			r.segmented(c, kc, n)
+			return
+		}
+	case "item":
+		r.item(c, n, key(n, i))
+		return
+	case "native":
+		e := ui.Column(kc)
+		if n.Grow {
+			e.Grow(1).Shrink(1)
+		}
+		e.Children(func() {
+			if st.Native == nil {
+				ui.Text(c, n.Name+" draws only in a component of Glitched's.").TextColor(st.Muted).Margin(ui.Auto)
+				return
+			}
+			st.Native(c, n, func(value any) { r.fire(n, n.OnChange, "change", value) })
+		})
+		return
 	}
 	switch n.Type {
 	case "button":
@@ -474,6 +511,76 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 	}
 }
 
+// segmented is tabs drawn as the app's segmented switch: an option it
+// can't take is dimmed, and its box says why.
+func (r *renderer) segmented(c *ui.Context, kc *ui.Context, n *widget.Node) {
+	ctl := r.cs.m[n.ID]
+	if ctl == nil {
+		return
+	}
+	st := r.st
+	ui.Row(kc).Radius(7).Border(1, st.Border).Padding(2).Gap(2).Children(func() {
+		for _, o := range n.Options {
+			box := ui.Box(c).Key(o.Value + "-box")
+			if o.Disabled {
+				r.tip(c, box, o.Tooltip)
+			}
+			box.Children(func() {
+				var b ui.Element
+				if st.Ghost != nil {
+					b = st.Ghost(c, o.Value, ctl.text == o.Value)
+				} else {
+					b = ui.ButtonBase(c.Key(o.Value)).Radius(6).Cursor(ui.CursorPointer)
+				}
+				b.Padding(3, 9).Disabled(o.Disabled || n.Disabled).Children(func() { ui.Text(c, o.Shown()).FontSize(11.5) }).OnClick(func() {
+					if o.Disabled || n.Disabled || ctl.text == o.Value {
+						return
+					}
+					ctl.text = o.Value
+					r.fire(n, n.OnChange, "change", ctl.text)
+				})
+			})
+		}
+	})
+}
+
+// item is a list's row: its icon and text, then its trailing widgets, or,
+// while it is pointed at, its actions.
+func (r *renderer) item(c *ui.Context, n *widget.Node, k string) {
+	st := r.st
+	var b ui.Element
+	if st.Row != nil {
+		b = st.Row(c, k, n.Active)
+	} else {
+		b = ui.ButtonBase(c.Key(k)).Gap(8).AlignItems(ui.Center).Padding(6, 8).Radius(7).Cursor(ui.CursorPointer)
+	}
+	b.Padding(3, 4, 3, 8).Height(28).Label(cmp.Or(n.Label, n.Text))
+	hovered := b.Hovered()
+	b.Children(func() {
+		if st.Icon != nil {
+			if svg := st.Icon(n.Icon); svg != nil {
+				ui.Icon(c, svg).FontSize(12)
+			}
+		}
+		t := ui.Text(c, n.Text).FontSize(12)
+		if n.Style == "code" {
+			t.Font("monospace")
+		}
+		t.SingleLine().Grow(1).Shrink(1)
+		if !hovered {
+			for i, ch := range n.Trailing {
+				r.node(c, ch, i)
+			}
+			return
+		}
+		ui.Row(c).Gap(0).Children(func() {
+			for i, ch := range n.Actions {
+				r.node(c, ch, i)
+			}
+		})
+	}).OnClick(func() { r.fire(n, n.OnClick, "click", nil) })
+}
+
 func (r *renderer) menu(n *widget.Node) func(*ui.Menu) {
 	return func(m *ui.Menu) {
 		for _, o := range n.Options {
@@ -515,6 +622,9 @@ func (r *renderer) button(c *ui.Context, n *widget.Node, k string) {
 	switch {
 	case n.Style == "ghost" && st.Ghost != nil:
 		b = st.Ghost(c, k, n.Active).Padding(6)
+		if n.Size == "small" {
+			b.Padding(3)
+		}
 	case n.Style == "outline" && st.Outline != nil:
 		b = st.Outline(c, k).Shrink(0)
 	default:

@@ -543,6 +543,9 @@ type app struct {
 	// pluginMessages are the messages the plugins were told of, by thread
 	// and key.
 	pluginMessages map[string]map[string]bool
+	// pluginFiles are the thread's changed files the plugins were told
+	// of, by thread id, with each one's last edit.
+	pluginFiles map[string]map[string]time.Time
 	// showPluginTab shows pluginTabShown in the panel beside the chat.
 	showPluginTab  bool
 	pluginTabShown pluginTab
@@ -614,6 +617,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		settingDrafts:  map[string]string{},
 		pluginRecords:  map[string]string{},
 		pluginMessages: map[string]map[string]bool{},
+		pluginFiles:    map[string]map[string]time.Time{},
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,
