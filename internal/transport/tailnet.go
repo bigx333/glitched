@@ -64,7 +64,11 @@ func (t Tailnet) Listen(ctx context.Context) (net.Listener, error) {
 		return nil, fmt.Errorf("transport: %s %w", t.Address, errNotTailnet)
 	}
 	var lc net.ListenConfig
-	return lc.Listen(ctx, "tcp", t.Address)
+	ln, err := lc.Listen(ctx, "tcp", t.Address)
+	if err != nil {
+		return nil, err
+	}
+	return release(ln), nil
 }
 
 // dialNet is how Tailnet dials; a test swaps it for routes this machine lacks.

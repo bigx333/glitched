@@ -9,9 +9,13 @@ import (
 )
 
 // lock takes the engine's OS lock, so two engines never open one database.
-// The lock lasts until the returned file is closed: the caller must hold it,
-// or its finalizer closes the fd and releases the lock.
-func lock(path string) (*os.File, error) {
+// The lock lasts until the returned unlock: the caller must hold it, or the
+// file's finalizer closes the fd and releases the lock.
+//
+// unlock releases the lock before closing the file. A child this process
+// forks shares the file until it execs, so a close alone leaves the lock to
+// that child, and an engine started at once finds it taken.
+func lock(path string) (unlock func() error, err error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -23,5 +27,7 @@ func lock(path string) (*os.File, error) {
 		}
 		return nil, err
 	}
-	return f, nil
+	return func() error {
+		return errors.Join(syscall.Flock(int(f.Fd()), syscall.LOCK_UN), f.Close())
+	}, nil
 }

@@ -2,6 +2,4 @@
 
 package daemon
 
-import "os"
-
-func lock(string) (*os.File, error) { return nil, nil }
+func lock(string) (func() error, error) { return nil, nil }

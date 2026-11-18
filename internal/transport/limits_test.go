@@ -125,7 +125,7 @@ func TestServerReadLimit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		go ws.Write(ctx, websocket.MessageText, make([]byte, size))
+		go writeMessage(ctx, ws, make([]byte, size))
 		_, _, err = ws.Read(ctx)
 		ws.CloseNow()
 		if got := websocket.CloseStatus(err); got != want {
