@@ -55,7 +55,7 @@ func TestASettingsFileGivesOnlyWhatThePagesOffer(t *testing.T) {
 	}{
 		{"missing", "", fileOf(defaults)},
 		{"older", `{"theme":"Light","wind":false}`, with(func(s *settings) { s.theme, s.wind = "Light", false })},
-		{"stale", `{"theme":"Neon","accent":"Mauve","fontSize":99,"glassTint":-1,"timestamps":"Mayan","newThread":"Cloud","claude":{"enabled":true,"model":"Claude 2"}}`, fileOf(defaults)},
+		{"stale", `{"theme":"Neon","accent":"Mauve","fontSize":99,"glassTint":-1,"timestamps":"Mayan","newThread":"Cloud","claudeModel":"Claude 2","codexModel":"GPT-1"}`, fileOf(defaults)},
 		{"mistyped", `{"wind":"yes","glass":false}`, with(func(s *settings) { s.glass = false })},
 		{"corrupt", `{"theme": `, fileOf(defaults)},
 		{"not an object", `[1, 2]`, fileOf(defaults)},
@@ -108,12 +108,15 @@ func TestTwoWindowsKeepEachOthersSettings(t *testing.T) {
 	one.settings.theme = "Dark"
 	one.saveSettings()
 	one.settingsOut.wait()
-	two.settings.fontSize = 14
+	one.settings.claudePath = "/usr/bin/claude"
+	one.saveSettings()
+	one.settingsOut.wait()
+	two.settings.fontSize, two.settings.claudeModel = 14, "Claude Haiku 5.5"
 	two.saveSettings()
 	two.settingsOut.wait()
 	again := newApp(dir, nil, func(func()) {}).settings
-	if again.theme != "Dark" || again.fontSize != 14 {
-		t.Fatalf("after both saved, theme %q and font size %v", again.theme, again.fontSize)
+	if again.theme != "Dark" || again.fontSize != 14 || again.claudePath != "/usr/bin/claude" || again.claudeModel != "Claude Haiku 5.5" {
+		t.Fatalf("after both saved, theme %q, font size %v, Claude at %q on %q", again.theme, again.fontSize, again.claudePath, again.claudeModel)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil || !strings.Contains(string(b), `"fromANewerVersion": 42`) {
