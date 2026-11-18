@@ -44,6 +44,9 @@ type placeSet struct {
 	// first is set while DrawFirst waits on the UI thread: each drawing
 	// goes to it as well as being posted.
 	first chan placeDraw
+	// tried are the copies DrawFirst waited on, by place and key, with
+	// their version: it waits once per version.
+	tried map[[2]string]string
 }
 
 // App is the plugin id's app session, started if it isn't: one per
@@ -112,10 +115,14 @@ func (s *Session) Places() []Place { return s.places.places }
 func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed error) {
 	start := time.Now()
 	drawn := map[string]map[string]*widget.Node{}
+	asked := map[[2]string]bool{}
 	for _, pl := range s.places.places {
 		s.mu.Lock()
 		items := slices.Clone(s.places.items[pl.ID])
 		s.mu.Unlock()
+		for _, it := range items {
+			asked[[2]string{pl.ID, it.Key}] = true
+		}
 		views := map[string]*widget.Node{}
 		drawn[pl.ID] = views
 		for len(items) > 0 && failed == nil {
@@ -126,7 +133,7 @@ func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed
 			}
 		}
 	}
-	d := placeDraw{gen, processed, drawn, failed, time.Since(start)}
+	d := placeDraw{gen, processed, drawn, asked, failed, time.Since(start)}
 	s.mu.Lock()
 	if s.places.first != nil {
 		select {
@@ -142,8 +149,10 @@ func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed
 type placeDraw struct {
 	gen, processed int
 	drawn          map[string]map[string]*widget.Node
-	failed         error
-	took           time.Duration
+	// asked are the copies it drew, by place and key, nulls included.
+	asked  map[[2]string]bool
+	failed error
+	took   time.Duration
 }
 
 // publish shows a drawing, on the UI thread.
@@ -171,15 +180,26 @@ func (s *Session) publish(d placeDraw) {
 
 // DrawFirst draws the copy key of the place before the UI shows it, for a
 // copy it has no drawing of yet: it waits, on the UI thread, until the
-// plugin drew it, it failed, or the deadline passed. A component drawn so
-// never shows empty as it opens. Nil when there is no drawing by then.
+// plugin drew it (or answered null for it), it failed, or the deadline
+// passed. A component drawn so never shows empty as it opens. It waits
+// once per version of the copy, as items has it: a copy the plugin leaves
+// undrawn doesn't stall every frame. Nil when there is no drawing by then.
 func (s *Session) DrawFirst(place string, items []PlaceItem, key string, deadline time.Time) *widget.Node {
+	i := slices.IndexFunc(items, func(it PlaceItem) bool { return it.Key == key })
+	if i < 0 {
+		return nil
+	}
+	k := [2]string{place, key}
 	first := make(chan placeDraw, 1)
 	s.mu.Lock()
-	if s.broken || s.done {
+	if s.broken || s.done || s.places.tried[k] == items[i].Version {
 		s.mu.Unlock()
 		return nil
 	}
+	if s.places.tried == nil {
+		s.places.tried = map[[2]string]string{}
+	}
+	s.places.tried[k] = items[i].Version
 	s.places.first = first
 	s.mu.Unlock()
 	defer func() {
@@ -194,8 +214,8 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, key string, deadlin
 		select {
 		case d := <-first:
 			s.publish(d)
-			if n := s.PlaceView(place, key); n != nil || d.failed != nil {
-				return n
+			if d.asked[k] || d.failed != nil {
+				return s.PlaceView(place, key)
 			}
 		case <-wait.C:
 			return nil

@@ -47,6 +47,7 @@ func TestYourDiffPanelEmbedsTheNativeDiff(t *testing.T) {
 
 	writeOwnPlugin(t, h.a, "locked-diff", manifest("locked-diff"), strings.ReplaceAll(yourDiffPanel, "NATIVE", `"approval.card"`))
 	h.a.plugins.SetGranted("locked-diff", "ui.replace", true)
+	h.a.plugins.SetGranted("locked-diff", "threads:read", true)
 	h.a.plugins.Reload()
 	h.tt.Frame()
 	h.until("the locked native to be refused", func() bool {
@@ -63,6 +64,15 @@ func TestYourDiffPanelEmbedsTheNativeDiff(t *testing.T) {
 	h.a.plugins.SetGranted("your-diff", "ui.replace", true)
 	h.a.plugins.Reload()
 	h.tt.Frame()
+	// Its context has the thread's files: without threads:read it doesn't
+	// draw the panel.
+	settlePlugins(t, h.a, h.tt, h.p)
+	if !h.tt.HasText("Changes") || h.tt.HasText("Your header") {
+		t.Fatalf("without threads:read the panel shows %q, want the built-in's", h.tt.Texts())
+	}
+	h.a.plugins.SetGranted("your-diff", "threads:read", true)
+	h.a.plugins.Reload()
+	h.tt.Frame()
 	h.until("your panel", func() bool { return h.tt.HasText("Yours: " + sidebarPath) })
 	if h.tt.HasText("Changes") || !h.tt.HasText("Your header") {
 		t.Errorf("the panel shows %q, want yours in place of the built-in", h.tt.Texts())
@@ -74,6 +84,10 @@ func TestYourDiffPanelEmbedsTheNativeDiff(t *testing.T) {
 	}
 	h.click("Mark change reviewed")
 	h.until("the mark to reach your plugin", func() bool { return h.tt.HasText(fmt.Sprintf("Yours: %s, %d left", sidebarPath, n-1)) })
+	// A change's own button marks it as the bar does: the plugin hears it.
+	d.Accept(0)
+	h.tt.Frame()
+	h.until("the change's own mark to reach your plugin", func() bool { return h.tt.HasText(fmt.Sprintf("Yours: %s, %d left", sidebarPath, n-2)) })
 }
 
 // The diff calls reach only the files the thread changed.
@@ -152,4 +166,23 @@ func TestTheDiffPanelOpensDrawn(t *testing.T) {
 		t.Fatalf("the first frame after opening has no file list: %q", h.tt.Texts())
 	}
 	t.Logf("the opening frame took %v", took)
+}
+
+// A copy your plugin leaves undrawn (null) is waited on once, not on every
+// frame after it.
+func TestAnUndrawnCopyIsWaitedOnOnce(t *testing.T) {
+	a := offline(t)
+	writeOwnPlugin(t, a, "blank-actions", replacing("blank-actions", "thread.header.actions"), `export function place({ items }) { return items.map(() => null) }`)
+	a.plugins.SetGranted("blank-actions", "ui.replace", true)
+	a.plugins.SetGranted("header-actions", "ui.replace", false) // no fallback draws it either
+	a.plugins.Reload()
+	tt := newTester(t, a, 1320, 860)
+	settleTester(tt)
+	start := time.Now()
+	for range 5 {
+		tt.Frame()
+	}
+	if took := time.Since(start); took > firstDrawWait {
+		t.Fatalf("5 frames took %v: the undrawn copy is waited on again", took)
+	}
 }

@@ -533,7 +533,7 @@ func (r *renderer) segmented(c *ui.Context, kc *ui.Context, n *widget.Node) {
 					b = ui.ButtonBase(c.Key(o.Value)).Radius(6).Cursor(ui.CursorPointer)
 				}
 				b.Padding(3, 9).Disabled(o.Disabled || n.Disabled).Children(func() { ui.Text(c, o.Shown()).FontSize(11.5) }).OnClick(func() {
-					if o.Disabled || n.Disabled || ctl.text == o.Value {
+					if o.Disabled || n.Disabled {
 						return
 					}
 					ctl.text = o.Value
