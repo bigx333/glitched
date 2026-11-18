@@ -1,6 +1,9 @@
 package main
 
 import (
+	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -81,6 +84,25 @@ func TestAboutChecksForUpdates(t *testing.T) {
 	settleTester(tt)
 	if !tt.HasText("You're up to date") || !tt.HasText("Check for updates") {
 		t.Fatalf("the check doesn't say how it went: %q", tt.Texts())
+	}
+}
+
+// About names the MyGo Glitched was built with: the one go.mod requires.
+func TestAboutNamesTheMyGoItIsBuiltWith(t *testing.T) {
+	mod, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^\s*github\.com/egoist/mygo (v\S+)$`).FindSubmatch(mod)
+	if m == nil {
+		t.Fatal("go.mod requires no github.com/egoist/mygo")
+	}
+	a := offline(t)
+	a.router.Push("/settings/about")
+	tt := newTester(t, a, 1320, 860)
+	settleTester(tt)
+	if want := "built with MyGo " + string(m[1]); !slices.ContainsFunc(tt.Texts(), func(s string) bool { return strings.HasSuffix(s, want) }) {
+		t.Errorf("About doesn't say %q: %q", want, tt.Texts())
 	}
 }
 

@@ -101,7 +101,26 @@ export function place({ state, items }) {
 
 async function git(cwd, args, timeout = 5) {
   const r = await glitched.run("git", args, { cwd, timeout });
-  return { ok: r.status === 0, out: r.stdout, err: (r.stderr || r.stdout).trim().split("\n")[0] || "git exited " + r.status, timedOut: r.status === -1 };
+  return { ok: r.status === 0, out: r.stdout, err: reason(r.stderr || r.stdout, r.status), timedOut: r.status === -1 };
+}
+
+// reason is the line of git's output that says why it failed, short
+// enough for a toast: not the "To <remote>" a push starts with, nor its
+// hints. A push the remote turned down says why it did.
+function reason(output, status) {
+  const lines = output.split("\n").map((l) => l.trim()).filter(Boolean);
+  const rejected = lines.map((l) => /^! \[(remote )?rejected\] .*\((.+)\)$/.exec(l)).find(Boolean);
+  let why;
+  if (rejected && (rejected[2] === "fetch first" || rejected[2] === "non-fast-forward")) {
+    why = "the remote has commits this branch doesn't; pull them, then push again";
+  } else if (rejected) {
+    const said = lines.find((l) => l.startsWith("remote: ") && l.length > 8);
+    why = "the remote refused it (" + rejected[2] + ")" + (said ? ": " + said.slice(8).trim() : "");
+  } else {
+    const line = lines.find((l) => !/^(To |hint: )/.test(l));
+    why = line ? line.replace(/^(fatal|error): /, "") : "git exited " + status;
+  }
+  return why.length > 200 ? why.slice(0, 199) + "…" : why;
 }
 
 // status reads what a commit would take: the branch, where it pushes, and

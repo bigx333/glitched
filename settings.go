@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"time"
@@ -586,11 +587,28 @@ func (a *app) about(c *ui.Context) {
 			c.After(a.checkUntil.Sub(c.Now()))
 		}
 	}
-	a.settingsComponent(c, "settings.page.about", aboutPage{Version: appVersion, Toolkit: "MyGo v0.5.5", Checking: s.checking, Source: "https://github.com/bigx333/glitched"})
+	a.settingsComponent(c, "settings.page.about", aboutPage{Version: appVersion, Toolkit: toolkit, Checking: s.checking, Source: "https://github.com/bigx333/glitched"})
 }
 
 // appVersion is Glitched's version.
 const appVersion = "0.0.42"
+
+// toolkit is the MyGo Glitched was built with, as its build says.
+var toolkit = func() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "MyGo"
+	}
+	for _, d := range info.Deps {
+		if d.Path == "github.com/egoist/mygo" {
+			if d.Replace != nil {
+				d = d.Replace
+			}
+			return "MyGo " + d.Version
+		}
+	}
+	return "MyGo"
+}()
 
 // aboutPage is the context of settings.page.about.
 type aboutPage struct {
