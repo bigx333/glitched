@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
@@ -36,6 +37,7 @@ func (a *app) pluginComponent(c *ui.Context, box func() ui.Element, name, key st
 		node *widget.Node
 	}
 	var good, failed *drawing
+	var undrawn []drawing
 	for _, pl := range a.plugins.Replacers(name) {
 		ctx := context(a.plugins.Record(pl.Plugin, full))
 		version, _ := json.Marshal(ctx)
@@ -48,10 +50,22 @@ func (a *app) pluginComponent(c *ui.Context, box func() ui.Element, name, key st
 		node := app.PlaceView(pl.Place.ID, key)
 		switch {
 		case node == nil:
+			undrawn = append(undrawn, drawing{pl, ctx, app, nil})
 		case app.Err == nil:
 			good = &drawing{pl, ctx, app, node}
 		case failed == nil:
 			failed = &drawing{pl, ctx, app, node}
+		}
+	}
+	// A copy none has drawn yet, as a panel opening, is drawn before it
+	// shows, the user's first: it never opens empty.
+	if good == nil && failed == nil {
+		deadline := time.Now().Add(firstDrawWait)
+		for _, u := range undrawn {
+			if u.node = u.app.DrawFirst(u.pl.Place.ID, f.items[[2]string{u.pl.Plugin, u.pl.Place.ID}], key, deadline); u.node != nil && u.app.Err == nil {
+				good = &u
+				break
+			}
 		}
 	}
 	// When every one failed, the first one's last good drawing stays: a
@@ -78,6 +92,10 @@ func (a *app) drawNative(c *ui.Context, component string, t thread, n *widget.No
 		a.diffBody(c, t, path, fire)
 	}
 }
+
+// firstDrawWait bounds how long the UI waits for a component's first
+// drawing: past it, the copy shows empty till the plugin answers.
+const firstDrawWait = 300 * time.Millisecond
 
 // headerActions is the context of thread.header.actions.
 type headerActions struct {

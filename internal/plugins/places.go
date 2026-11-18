@@ -41,6 +41,9 @@ type placeSet struct {
 	views map[string]map[string]*widget.Node
 	// Slow is the last draw's time, which Settings shows when it's long.
 	Slow time.Duration
+	// first is set while DrawFirst waits on the UI thread: each drawing
+	// goes to it as well as being posted.
+	first chan placeDraw
 }
 
 // App is the plugin id's app session, started if it isn't: one per
@@ -123,28 +126,81 @@ func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed
 			}
 		}
 	}
-	took := time.Since(start)
-	s.h.opts.Post(func() {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.closed || gen != s.gen {
-			return
+	d := placeDraw{gen, processed, drawn, failed, time.Since(start)}
+	s.mu.Lock()
+	if s.places.first != nil {
+		select {
+		case s.places.first <- d:
+		default:
 		}
-		s.Err = failed
-		s.places.Slow = took
-		if failed != nil {
-			// Keep the last good drawing, and what it says of the events
-			// it took: its controls keep what the user typed.
-			s.Busy = s.running && (len(s.queue) > 0 || s.dirty)
-			return
-		}
-		for id, views := range drawn {
-			s.places.views[id] = views
-		}
-		s.Rev++
-		s.Processed = processed
+	}
+	s.mu.Unlock()
+	s.h.opts.Post(func() { s.publish(d) })
+}
+
+// placeDraw is one drawing of every copy of the places, or what failed.
+type placeDraw struct {
+	gen, processed int
+	drawn          map[string]map[string]*widget.Node
+	failed         error
+	took           time.Duration
+}
+
+// publish shows a drawing, on the UI thread.
+func (s *Session) publish(d placeDraw) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || d.gen != s.gen {
+		return
+	}
+	s.Err = d.failed
+	s.places.Slow = d.took
+	if d.failed != nil {
+		// Keep the last good drawing, and what it says of the events
+		// it took: its controls keep what the user typed.
 		s.Busy = s.running && (len(s.queue) > 0 || s.dirty)
-	})
+		return
+	}
+	for id, views := range d.drawn {
+		s.places.views[id] = views
+	}
+	s.Rev++
+	s.Processed = d.processed
+	s.Busy = s.running && (len(s.queue) > 0 || s.dirty)
+}
+
+// DrawFirst draws the copy key of the place before the UI shows it, for a
+// copy it has no drawing of yet: it waits, on the UI thread, until the
+// plugin drew it, it failed, or the deadline passed. A component drawn so
+// never shows empty as it opens. Nil when there is no drawing by then.
+func (s *Session) DrawFirst(place string, items []PlaceItem, key string, deadline time.Time) *widget.Node {
+	first := make(chan placeDraw, 1)
+	s.mu.Lock()
+	if s.broken || s.done {
+		s.mu.Unlock()
+		return nil
+	}
+	s.places.first = first
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.places.first = nil
+		s.mu.Unlock()
+	}()
+	s.SetItems(place, items)
+	wait := time.NewTimer(time.Until(deadline))
+	defer wait.Stop()
+	for {
+		select {
+		case d := <-first:
+			s.publish(d)
+			if n := s.PlaceView(place, key); n != nil || d.failed != nil {
+				return n
+			}
+		case <-wait.C:
+			return nil
+		}
+	}
 }
 
 func (s *Session) drawBatch(pl Place, state json.RawMessage, batch []PlaceItem, views map[string]*widget.Node) error {
