@@ -234,6 +234,15 @@ func TestAUserMessagesFenceLineShowsAsTyped(t *testing.T) {
 	}
 }
 
+// A backtick fence whose info holds a backtick is no fence, as Markdown
+// reads it, so it holds no code to a later closer as text.
+func TestAUserMessagesBacktickedFenceLineFencesNothing(t *testing.T) {
+	h := sent(t, "``` x ```\n```go\nx := 1\n```")
+	if !slices.Contains(h.tt.Texts(), "x := 1") {
+		t.Errorf("no code block; texts %q", h.tt.Texts())
+	}
+}
+
 // The bubble's padding selects its text and opens its menu, as the text
 // does, with or without code.
 func TestAUserMessagesPaddingSelects(t *testing.T) {
