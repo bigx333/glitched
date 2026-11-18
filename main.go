@@ -583,6 +583,9 @@ type app struct {
 	showPluginTab  bool
 	pluginTabShown pluginTab
 	pluginDark     *bool
+	// pluginFocused is whether the window was in front, as plugins last
+	// heard it; nil before the first frame.
+	pluginFocused *bool
 	// openFolder, when set, chooses a folder in place of the system's
 	// dialog, as in a test.
 	openFolder func() string
@@ -817,6 +820,12 @@ func (a *app) view(c *ui.Context) {
 	}
 	systemDark := c.Theme().Dark
 	a.applyTheme(c)
+	if f := c.WindowActive(); a.plugins != nil && (a.pluginFocused == nil || *a.pluginFocused != f) {
+		if a.pluginFocused != nil {
+			a.plugins.Emit("window.focused", func(string) any { return map[string]bool{"focused": f} })
+		}
+		a.pluginFocused = &f
+	}
 	a.shortcuts(c)
 	// The drawer sets it again as it builds with the keyboard (chat.go);
 	// a frame without it, as on another page, leaves the keys the browser's.

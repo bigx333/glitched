@@ -62,6 +62,9 @@ var Effects = map[string]string{
 	"threads.open":        "threads:read",
 	"threads.create":      "threads:write",
 	"threads.send":        "threads:write",
+	"threads.rename":      "threads:write",
+	"threads.delete":      "threads:write",
+	"projects.remove":     "threads:write",
 }
 
 // Effect is something a plugin asks the app to do, which only the app

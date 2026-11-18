@@ -54,6 +54,9 @@ func (a *app) threadMenu(c *ui.Context, m *ui.Menu, t thread, cat category) {
 			a.openInEditor(c, ed, projectDir(t.View.Workspace))
 		}
 	}
+	a.pluginMenuItems(m, "thread.menu", func(plugin string) map[string]any {
+		return map[string]any{"thread": a.plugins.Record(plugin, a.threadRecord(t))}
+	})
 	m.Separator()
 	// The user stops a thread's own agent before deleting it, an uncertain
 	// run too, as on main; the engine would end it unasked.
