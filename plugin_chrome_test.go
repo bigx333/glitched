@@ -145,3 +145,30 @@ func TestAnEmptyThreadsGreetingIsReplaceable(t *testing.T) {
 		t.Fatalf("a broken replacement left no built-in: %q", h.tt.Texts())
 	}
 }
+
+// Keybindings' search is kept as you leave the page and come back: the
+// field still holds what it filters by, with its clear button.
+func TestKeybindingsKeepsItsSearch(t *testing.T) {
+	a := offline(t)
+	a.router.Push("/settings/keybindings")
+	tt := newTester(t, a, 1320, 860)
+	settleTester(tt)
+	r, ok := tt.Find("Shortcuts for the commands you use most.")
+	if !ok {
+		t.Fatalf("no Keybindings page: %q", tt.Texts())
+	}
+	tt.ClickAt(r.X+60, r.Y+r.H+20+14)
+	settleTester(tt)
+	tt.Type("toggle")
+	settleTester(tt)
+	if tt.HasText("New thread") || !tt.HasText("Toggle sidebar") {
+		t.Fatalf("the search doesn't filter: %q", tt.Texts())
+	}
+	a.router.Push("/settings/about")
+	settleTester(tt)
+	a.router.Push("/settings/keybindings")
+	settleTester(tt)
+	if !tt.HasText("Clear") || tt.HasText("New thread") {
+		t.Fatalf("back on the page, the field lost the search it filters by: %q", tt.Texts())
+	}
+}

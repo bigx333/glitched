@@ -404,3 +404,24 @@ func TestTimerPluginsWaitForStart(t *testing.T) {
 		t.Fatalf("storage %s", b)
 	}
 }
+
+// After a hot reload, a call of the new code into the app is seen as one:
+// a copy it hasn't drawn isn't waited on.
+func TestAReloadedPluginsAppCallsAreSeen(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "w", `"capabilities": ["clipboard"], `, `export function view() { return { body: { type: "text", text: "x" } } }`)
+	h := open(t, state, u, fx)
+	os.WriteFile(filepath.Join(Dir(state), "w", "index.js"), []byte(`
+		export async function init() { await glitched.clipboard.write("new"); return { state: 1 } }
+		export function view() { return { body: { type: "text", text: "x" } } }`), 0o644)
+	h.hotReload(filepath.Join(Dir(state), "w"))
+	for len(u.q) > 0 {
+		(<-u.q)()
+	}
+	session(t, h, "w")
+	for deadline := time.Now().Add(2 * time.Second); !h.awaitsApp("w"); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the reloaded code's call into the app isn't seen")
+		}
+	}
+}
