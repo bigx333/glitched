@@ -941,7 +941,7 @@ func TestDiffPanel(t *testing.T) {
 	h, th := checked(t)
 	a, tt := h.a, h.tt
 	a.showDiff = true
-	tt.Frame()
+	h.until("the panel's plugin to draw it", func() bool { return tt.HasText("Unified") })
 	d := h.diffOf(th, sidebarPath)
 	if a.diffLayout != editor.DiffUnified || !tt.HasText("Unified") {
 		t.Fatalf("layout %v", a.diffLayout)
@@ -956,17 +956,13 @@ func TestDiffPanel(t *testing.T) {
 		t.Errorf("%d changes after accepting one of %d", len(d.Hunks()), n)
 	}
 	// Split needs the room: at 1320 the panel would be 608 wide.
-	if err := tt.Click("Split"); err != nil {
-		t.Fatal(err)
-	}
+	h.click("Split")
 	if a.diffLayout != editor.DiffUnified {
 		t.Error("Split switched the layout without the room for it")
 	}
 	tt.SetSize(1600, 900)
-	tt.Frame()
-	if err := tt.Click("Split"); err != nil {
-		t.Fatal(err)
-	}
+	settlePlugins(t, a, tt, h.p)
+	h.click("Split")
 	if a.diffLayout != editor.DiffSplit {
 		t.Error("Split did not switch the layout")
 	}

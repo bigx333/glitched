@@ -49,6 +49,8 @@ var pluginIcons = map[string]*ui.SVG{
 	"globe":    icGlobe,
 	"terminal": icTerminal,
 	"file":     icFile,
+	"wrap":     icWrap,
+	"copy":     icCopy,
 	"note":     icFile,
 	"inbox":    icInbox,
 	"clock":    icClock,
@@ -385,6 +387,8 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		return a.panels(), nil
 	case "open.in":
 		return a.openInEffect(e.Args)
+	case "diff.set", "diff.setReviewed", "diff.openFile":
+		return a.diffEffect(e.Type, e.Args)
 	case "tab.open":
 		var args struct{ Tab string }
 		if err := json.Unmarshal(e.Args, &args); err != nil {

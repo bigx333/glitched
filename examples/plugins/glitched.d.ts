@@ -35,12 +35,13 @@ type Widget =
       type: "text";
       id?: string;
       text: string;
-      style?: "body" | "muted" | "heading" | "title" | "code" | "error" | "success";
+      style?: "body" | "muted" | "strong" | "heading" | "title" | "code" | "error" | "success";
+      size?: "small";
       color?: Color;
       selectable?: boolean;
     }
   | { type: "markdown"; id?: string; text: string }
-  | { type: "badge"; id?: string; text: string; style?: "default" | "accent" | "success" | "warning" | "danger"; color?: Color }
+  | { type: "badge"; id?: string; text: string; style?: "default" | "accent" | "success" | "warning" | "danger" | "count"; color?: Color }
   | { type: "divider" | "spacer" | "spinner"; id?: string }
   | { type: "icon"; id?: string; /** One of the app's icons, or "plugin:<file>.svg". */ name: string; color?: Color }
   | {
@@ -59,7 +60,7 @@ type Widget =
       rows: { key: string; cells: Record<string, string> }[];
     }
   | { type: "button"; id: string; label: string; style?: "default" | "primary" | "danger"; disabled?: boolean; tooltip?: string; onClick?: Handler }
-  | ({ type: "button"; style: "ghost"; /** It shows only its icon. */ icon: string; /** On, as a panel's toggle. */ active?: boolean; /** Up to 4 characters over its corner. */ badge?: string } & DrawnButton)
+  | ({ type: "button"; style: "ghost"; /** It shows only its icon. */ icon: string; /** On, as a panel's toggle. */ active?: boolean; /** Up to 4 characters over its corner. */ badge?: string; size?: "small" } & DrawnButton)
   | ({ type: "button"; style: "outline"; icon?: string; /** The icon alone. */ compact?: boolean } & DrawnButton)
   | {
       type: "input";
@@ -77,7 +78,36 @@ type Widget =
     }
   | { type: "toggle"; id: string; label: string; value?: boolean; controlled?: boolean; disabled?: boolean; onChange?: Handler }
   | { type: "select"; id: string; label?: string; options: Option[]; value?: string; controlled?: boolean; disabled?: boolean; onChange?: Handler }
-  | { type: "tabs"; id: string; options: Option[]; value?: string; controlled?: boolean; disabled?: boolean; onChange?: Handler }
+  | { type: "tabs"; id: string; options: Option[]; value?: string; controlled?: boolean; disabled?: boolean; onChange?: Handler; style?: "default" }
+  | {
+      type: "tabs";
+      id: string;
+      /** Drawn as the diff panel's Unified and Split switch. */
+      style: "segmented";
+      options: (string | { value: string; label?: string; disabled?: boolean; tooltip?: string })[];
+      value?: string;
+      controlled?: boolean;
+      disabled?: boolean;
+      onChange?: Handler;
+    }
+  | {
+      /** A list's row. */
+      type: "item";
+      id: string;
+      icon: string;
+      text: string;
+      /** code: a monospace text. */
+      style?: "code";
+      label?: string;
+      /** Selected. */
+      active?: boolean;
+      /** After the text. */
+      trailing?: Widget[];
+      /** In place of trailing while the pointer is over it. */
+      actions?: Widget[];
+      onClick?: Handler;
+    }
+  | NativeWidget
   | {
       type: "menu";
       id: string;
@@ -94,6 +124,23 @@ type Widget =
       onChange?: Handler;
     }
   | { type: "dialog"; id: string; title: string; open?: boolean; children?: Widget[]; /** Escape, or a click outside. */ onClose?: Handler };
+
+/**
+ * One of Glitched's own views, placed in the plugin's layout and drawn by
+ * Glitched, only in the components it names. Any other name, a locked part
+ * of the UI included, refuses the view.
+ */
+interface NativeWidget {
+  type: "native";
+  id?: string;
+  /** diff.body: the diff of a file the thread changed, in thread.panel.diff. */
+  name: "diff.body";
+  props?: { path?: string };
+  /** Fill the height the parent column leaves. */
+  grow?: boolean;
+  /** diff.body fires it with {path, remaining} as a change is marked reviewed. */
+  onChange?: Handler;
+}
 
 /** A ghost or outline button: drawn as Glitched's header draws its own. */
 interface DrawnButton {
@@ -133,16 +180,17 @@ type UIEvent = {
   /** The id of the widget. */
   node: string;
   /** An input's text, a toggle's state, a select's, tab's or menu's value. */
-  value?: string | boolean;
+  value?: string | boolean | { path: string; remaining: number };
   payload?: unknown;
   /** Set in a place: which copy, and the context it was drawn with. */
-  place?: { id: string; at: Slot | Component; key: string; context?: ThreadRecord | HeaderActionsContext };
+  place?: { id: string; at: Slot | Component; key: string; context?: ThreadRecord | HeaderActionsContext | DiffPanelContext };
 };
 
 /** An app event the plugin hears (its manifest's glitched.events), or a timer. */
 type AppEvent =
   | { kind: "app"; type: "thread.changed"; data: ThreadRecord | { id: string; deleted: true } }
   | { kind: "app"; type: "thread.message"; data: { thread: string; role: "user" | "assistant"; text: string } }
+  | { kind: "app"; type: "thread.files.changed"; data: { thread: string; files: string[] } }
   | { kind: "app"; type: "setting.changed"; data: { id: string; value: unknown; was: unknown } }
   | { kind: "app"; type: "theme.changed"; data: { appearance: "light" | "dark" } }
   | { kind: "app"; type: "command"; data: { id: string } }
@@ -166,7 +214,7 @@ type Slot = "thread.header" | "thread.row" | "sidebar.footer";
  * composer.send, settings.plugins, settings.servers and
  * confirm.destructive are off limits: a plugin that names one doesn't load.
  */
-type Component = "thread.header.actions";
+type Component = "thread.header.actions" | "thread.panel.diff";
 
 /** The context of thread.header.actions, the buttons at the right of a thread's header. */
 interface HeaderActionsContext {
@@ -178,6 +226,25 @@ interface HeaderActionsContext {
   panels: PanelState;
   /** The files the agent changed, which the diff toggle counts. */
   changedFiles: number;
+}
+
+/** The context of thread.panel.diff: a copy for its header, one for its body. */
+interface DiffPanelContext {
+  thread: ThreadRecord;
+  part: "header" | "body";
+  /** The thread's files are on this machine. */
+  local: boolean;
+  /** The files the agent changed, in the order it first changed them. */
+  files: { path: string; add: number; del: number; reviewed: boolean; /** Its diff is read, which marking it needs. */ read: boolean }[];
+  /** The file diff.body shows, "" with none. */
+  shown: string;
+  /** As shown: split falls back to unified while it doesn't fit. */
+  layout: "unified" | "split";
+  splitFits: boolean;
+  splitWidth: number;
+  wrap: boolean;
+  /** There is an editor for diff.openFile. */
+  canOpen: boolean;
 }
 
 /** Which of the panels beside the chat are open. */
@@ -208,8 +275,8 @@ interface PlaceArgs<S> {
   id: string;
   at: Slot | Component;
   state: S;
-  /** A component's copies have its context: HeaderActionsContext for thread.header.actions. */
-  items: { key: string; context?: ThreadRecord | HeaderActionsContext }[];
+  /** A component's copies have its context: HeaderActionsContext for thread.header.actions, DiffPanelContext for thread.panel.diff. */
+  items: { key: string; context?: ThreadRecord | HeaderActionsContext | DiffPanelContext }[];
 }
 interface CommandArgs {
   id: string;
@@ -248,6 +315,15 @@ declare const glitched: {
   };
   /** Opens the thread's workspace, on this machine, in an app. Needs threads:read. */
   openIn(app: "cursor" | "vscode" | "zed" | "finder", thread: string): Promise<void>;
+  /** The diff panel. Each names the thread and, for a file, one it changed. */
+  diff: {
+    /** Needs ui.place. */
+    set(thread: string, options: { shown?: string; layout?: "unified" | "split"; wrap?: boolean }): Promise<void>;
+    /** Marks a read file reviewed, or not. Needs threads:read. */
+    setReviewed(thread: string, path: string, reviewed?: boolean): Promise<void>;
+    /** Opens it in the editor found, for a thread on this machine. Needs threads:read. */
+    openFile(thread: string, path: string): Promise<void>;
+  };
   settings: {
     /** Its settings by id, typed: a switch's boolean, a number's number. */
     get(): Promise<Record<string, string | number | boolean>>;

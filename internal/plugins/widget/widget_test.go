@@ -102,3 +102,42 @@ func TestDecodeBoundsTheTree(t *testing.T) {
 		t.Errorf("a big view: %v", err)
 	}
 }
+
+// A native widget is one of Natives, passed only the props it takes; a
+// locked part of the UI is never one, whatever a plugin names.
+func TestANativeWidgetIsOneGlitchedOffers(t *testing.T) {
+	good := []string{
+		`{"body": {"type": "native", "name": "diff.body", "props": {"path": "a.go"}, "grow": true, "onChange": "marked"}}`,
+		`{"body": {"type": "native", "name": "diff.body"}}`,
+	}
+	for _, s := range good {
+		if _, err := Decode([]byte(s)); err != nil {
+			t.Errorf("%s: %v", s, err)
+		}
+	}
+	bad := map[string]string{
+		`{"body": {"type": "native", "name": "terminal"}}`:                                       `no native widget "terminal"`,
+		`{"body": {"type": "native", "name": "approval.card"}}`:                                  "approval.card is off limits to plugins: an approval answers for you",
+		`{"body": {"type": "native", "name": "composer.send"}}`:                                  "composer.send is off limits to plugins",
+		`{"body": {"type": "native", "name": "diff.body", "props": {"thread": "t1"}}}`:           `diff.body takes no prop "thread"`,
+		`{"body": {"type": "native", "name": "diff.body", "props": {"path": 3}}}`:                "diff.body's prop path is a string",
+		`{"body": {"type": "native", "name": "diff.body", "onClick": "x"}}`:                      "a native has no onClick",
+		`{"body": {"type": "text", "text": "x", "props": {"path": "a"}}}`:                        "a text has no props",
+		`{"body": {"type": "item", "id": "i", "text": "x"}}`:                                     "an item shows an icon",
+		`{"body": {"type": "text", "text": "x", "trailing": [{"type": "text"}]}}`:                "a text has no trailing or actions",
+		`{"body": {"type": "item", "id": "i", "icon": "file", "actions": [{"type": "button"}]}}`: "a button needs an id",
+		`{"body": {"type": "tabs", "id": "t", "options": [{"value": "a", "disabled": true}]}}`:   "only segmented tabs' options are disabled",
+		`{"body": {"type": "button", "id": "b", "label": "B", "size": "small"}}`:                 "size is small, of a text or a ghost button",
+	}
+	for s, want := range bad {
+		_, err := Decode([]byte(s))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", s, err, want)
+		}
+	}
+	for name := range Natives {
+		if _, ok := Locked[name]; ok {
+			t.Errorf("%s is both a native widget and locked", name)
+		}
+	}
+}

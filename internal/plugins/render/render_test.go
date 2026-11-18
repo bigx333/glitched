@@ -339,3 +339,70 @@ func TestDialogsOfTwoViewsDontMeet(t *testing.T) {
 	}, 800, 600)
 	tt.Frame()
 }
+
+// An item fires its click and shows its actions while pointed at; a
+// segmented tabs' disabled option can't be chosen; a native widget draws
+// only where the host draws it, and its changes reach the plugin.
+func TestItemsSegmentsAndNatives(t *testing.T) {
+	s := &screen{}
+	s.show(t, `{"body": {"type": "column", "children": [
+		{"type": "item", "id": "f", "icon": "file", "text": "a.go", "style": "code", "label": "Diff of a.go", "onClick": "show",
+			"trailing": [{"type": "text", "text": "+1", "size": "small"}],
+			"actions": [{"type": "button", "id": "copy", "style": "ghost", "size": "small", "icon": "copy", "label": "Copy path", "tooltip": "Copy path", "onClick": "copy"}]},
+		{"type": "tabs", "id": "layout", "style": "segmented", "value": "unified", "onChange": "layout",
+			"options": [{"value": "unified", "label": "Unified"}, {"value": "split", "label": "Split", "disabled": true, "tooltip": "No room"}]},
+		{"type": "native", "id": "n", "name": "diff.body", "props": {"path": "a.go"}, "onChange": "marked"}
+	]}}`)
+	tt := ui.NewTester(s.draw, 800, 700)
+	tt.Frame()
+	if !tt.HasText("+1") || tt.HasText("Copy path") {
+		t.Fatalf("an item not pointed at shows %q, want its trailing text and no actions", tt.Texts())
+	}
+	if !tt.HasText("diff.body draws only in a component of Glitched's.") {
+		t.Errorf("a native outside a component shows %q", tt.Texts())
+	}
+	if err := tt.Click("Diff of a.go"); err != nil {
+		t.Fatal(err)
+	}
+	if ev := s.last(t); ev.Handler != "show" || ev.Type != "click" {
+		t.Errorf("the item fired %+v", ev)
+	}
+	r, _ := tt.Find("Diff of a.go")
+	tt.Move(r.X+r.W/2, r.Y+r.H/2)
+	tt.Frame()
+	if _, ok := tt.Find("Copy path"); !ok {
+		t.Errorf("an item pointed at shows %q, want its actions", tt.Texts())
+	}
+	n := len(s.events)
+	tt.Click("Split")
+	if len(s.events) != n {
+		t.Errorf("a disabled option fired %+v", s.last(t))
+	}
+
+	var drawn []string
+	native := Style{Native: func(c *ui.Context, n *widget.Node, fire func(any)) {
+		drawn = append(drawn, n.Name+" "+string(n.Props["path"]))
+		if ui.Button(c, "Mark").Clicked() {
+			fire(map[string]any{"remaining": 2})
+		}
+	}}
+	s2 := &screen{}
+	s2.show(t, `{"body": {"type": "native", "id": "n", "name": "diff.body", "props": {"path": "a.go"}, "onChange": "marked"}}`)
+	tt2 := ui.NewTester(func(c *ui.Context) {
+		s2.cs.Sync(s2.v, s2.rev, s2.processed)
+		View(c, s2.v, &s2.cs, native, &s2.md, func(ev plugins.UIEvent, values map[string]any) int {
+			s2.events = append(s2.events, ev)
+			return len(s2.events)
+		})
+	}, 400, 300)
+	tt2.Frame()
+	if len(drawn) == 0 || drawn[0] != `diff.body "a.go"` {
+		t.Fatalf("the host drew %q", drawn)
+	}
+	if err := tt2.Click("Mark"); err != nil {
+		t.Fatal(err)
+	}
+	if ev := s2.last(t); ev.Handler != "marked" || ev.Type != "change" || fmt.Sprint(ev.Value) != "map[remaining:2]" {
+		t.Errorf("the native fired %+v", ev)
+	}
+}

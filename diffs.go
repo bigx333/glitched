@@ -20,6 +20,7 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 
 	"glitched/internal/api"
+	"glitched/internal/plugins"
 )
 
 // The diff panel is MyGo's diff viewer (ui/editor), as its code-editor
@@ -326,60 +327,106 @@ func (a *app) diffStats(t thread, f fileChange) (add, del int) {
 	return 0, 0
 }
 
+// diffPanel is the panel of the thread's changed files: a plugin's, the
+// built-in Diff panel or one of the user's that replaces it, in two copies
+// of thread.panel.diff. The header's copy is in the window's title bar,
+// the body's below it, over the native diff.body.
 func (a *app) diffPanel(c *ui.Context, t thread, es []entry) {
 	files := changedFiles(es)
+	panel := diffPanel{Local: t.local(), Files: make([]diffFile, len(files)), Layout: "unified", SplitFits: a.splitFits(),
+		SplitWidth: splitWidth, Wrap: a.diffWrap, CanOpen: t.local() && editorCLI() != ""}
+	if a.layout() == editor.DiffSplit {
+		panel.Layout = "split"
+	}
+	for i, f := range files {
+		d := a.diffFor(t, f)
+		add, del := a.diffStats(t, f)
+		panel.Files[i] = diffFile{Path: f.path, Add: add, Del: del, Reviewed: d != nil && d.reviewed, Read: d != nil}
+	}
+	if len(files) > 0 {
+		panel.Shown = files[max(slices.IndexFunc(files, func(f fileChange) bool { return f.path == a.diffFile[t.id()] }), 0)].path
+	}
+	copyOf := func(part string) func(plugins.ThreadRecord) any {
+		return func(r plugins.ThreadRecord) any {
+			p := panel
+			p.Thread, p.Part = r, part
+			return p
+		}
+	}
+	key := t.id().String()
 	ui.Column(c).Width(a.diffWidth()).FillHeight().Children(func() {
 		bar := c.TitleBar()
-		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8+bar.Right, 0, 14).Gap(8).AlignItems(ui.Center)
-		head.DragWindow().Children(func() {
-			ui.Text(c, "Changes").FontWeight(600)
-			ui.Textf(c, "%d", len(files)).FontSize(11).TextColor(palette.muted).Padding(0, 6).Radius(999).Background(palette.hover)
-			ui.Spacer(c)
-			a.layoutSwitch(c)
-			if a.iconButton(c, "wrap", icWrap, "Wrap long lines", a.diffWrap).Clicked() {
-				a.diffWrap = !a.diffWrap
-			}
-			if a.iconButton(c, "close-diff", icX, "Close diff", false).Clicked() {
-				a.showDiff = false
-			}
-		})
+		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8+bar.Right, 0, 14).Gap(8).AlignItems(ui.Center).DragWindow()
+		a.pluginComponent(c, func() ui.Element { return head }, "thread.panel.diff", key+"/header", t, copyOf("header"))
 		// Below its glass header, the panel on the sidebar's color.
-		ui.Column(c).Grow(1).Background(palette.sidebar).BorderWidth(1, 0, 0, 1).BorderColor(palette.border).Children(func() {
-			if len(files) == 0 {
-				ui.Text(c, "No changes in this thread yet.").TextColor(palette.muted).Margin(ui.Auto)
-				return
-			}
-			shown := max(slices.IndexFunc(files, func(f fileChange) bool { return f.path == a.diffFile[t.id()] }), 0)
-			ui.Column(c).Padding(6).Gap(1).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).Children(func() {
-				for i, f := range files {
-					a.fileRow(c, t, f, i == shown)
-				}
-			})
-			f := files[shown]
-			if !t.local() {
-				ui.Text(c, "The files are on "+t.env.Name+".").TextColor(palette.muted).Margin(ui.Auto)
-				return
-			}
-			d := a.diffFor(t, f)
-			switch {
-			case d == nil:
-				ui.Text(c, "Reading "+filepath.Base(f.path)+"…").TextColor(palette.muted).Margin(ui.Auto)
-				return
-			case d.DiffState == nil:
-				ui.Text(c, "Not shown: "+d.unshown+".").TextColor(palette.muted).Margin(ui.Auto)
-				return
-			}
-			d.Layout, d.Wrap = a.layout(), a.diffWrap
-			if d.noHead != "" {
-				// Both sides are the working file: show it once.
-				d.Layout = editor.DiffUnified
-				notice(c, "HEAD's side is unknown: "+d.noHead+".")
-			} else {
-				a.hunkBar(c, d.DiffState)
-			}
-			editor.DiffView(c.Key(f.path), d.DiffState).Grow(1).FillWidth()
-		})
+		body := ui.Column(c).Grow(1).Background(palette.sidebar).BorderWidth(1, 0, 0, 1).BorderColor(palette.border)
+		a.pluginComponent(c, func() ui.Element { return body }, "thread.panel.diff", key+"/body", t, copyOf("body"))
 	})
+}
+
+// diffPanel is the context of thread.panel.diff.
+type diffPanel struct {
+	Thread plugins.ThreadRecord `json:"thread"`
+	// Part is the copy's: the header or the body.
+	Part  string     `json:"part"`
+	Local bool       `json:"local"`
+	Files []diffFile `json:"files"`
+	// Shown is the file diff.body shows, "" with none.
+	Shown      string `json:"shown"`
+	Layout     string `json:"layout"`
+	SplitFits  bool   `json:"splitFits"`
+	SplitWidth int    `json:"splitWidth"`
+	Wrap       bool   `json:"wrap"`
+	// CanOpen says diff.openFile has an editor to open a file in.
+	CanOpen bool `json:"canOpen"`
+}
+
+// diffFile is a changed file as the panel's context has it: Read once its
+// diff is, which marking it reviewed needs.
+type diffFile struct {
+	Path     string `json:"path"`
+	Add      int    `json:"add"`
+	Del      int    `json:"del"`
+	Reviewed bool   `json:"reviewed"`
+	Read     bool   `json:"read"`
+}
+
+// diffBody is the native diff.body: the diff of the thread's file at
+// path, or why it isn't shown. Marking one of its changes reviewed fires
+// the plugin's change with the file and the changes left.
+func (a *app) diffBody(c *ui.Context, t thread, path string, fire func(any)) {
+	files := changedFiles(entriesOf(t))
+	i := slices.IndexFunc(files, func(f fileChange) bool { return f.path == path })
+	switch {
+	case len(files) == 0:
+		ui.Text(c, "No changes in this thread yet.").TextColor(palette.muted).Margin(ui.Auto)
+		return
+	case i < 0:
+		ui.Text(c, "The thread has no change to "+path+".").TextColor(palette.muted).Margin(ui.Auto)
+		return
+	case !t.local():
+		ui.Text(c, "The files are on "+t.env.Name+".").TextColor(palette.muted).Margin(ui.Auto)
+		return
+	}
+	f := files[i]
+	d := a.diffFor(t, f)
+	switch {
+	case d == nil:
+		ui.Text(c, "Reading "+filepath.Base(f.path)+"…").TextColor(palette.muted).Margin(ui.Auto)
+		return
+	case d.DiffState == nil:
+		ui.Text(c, "Not shown: "+d.unshown+".").TextColor(palette.muted).Margin(ui.Auto)
+		return
+	}
+	d.Layout, d.Wrap = a.layout(), a.diffWrap
+	if d.noHead != "" {
+		// Both sides are the working file: show it once.
+		d.Layout = editor.DiffUnified
+		notice(c, "HEAD's side is unknown: "+d.noHead+".")
+	} else {
+		a.hunkBar(c, d.DiffState, func() { fire(map[string]any{"path": f.path, "remaining": len(d.Hunks())}) })
+	}
+	editor.DiffView(c.Key(f.path), d.DiffState).Grow(1).FillWidth()
 }
 
 // splitWidth is the least width side by side reads at: two columns of
@@ -402,65 +449,6 @@ func (a *app) layout() editor.DiffLayout {
 	return a.diffLayout
 }
 
-// layoutSwitch chooses Unified or Split. Short of room for Split, its
-// segment is dimmed and says so.
-func (a *app) layoutSwitch(c *ui.Context) {
-	fits := a.splitFits()
-	ui.Row(c).Radius(7).Border(1, palette.border).Padding(2).Gap(2).Children(func() {
-		segment := func(key, label string, layout editor.DiffLayout, enabled bool) {
-			// A disabled button shows no tooltip of its own: the box
-			// around it says why it is.
-			box := ui.Box(c).Key(key + "-box")
-			if !enabled {
-				a.tip(c, box, fmt.Sprintf("Split needs %d DIPs of room", splitWidth))
-			}
-			box.Children(func() {
-				if ghost(c, key, a.layout() == layout).Padding(3, 9).Disabled(!enabled).
-					Children(func() { ui.Text(c, label).FontSize(11.5) }).Clicked() {
-					a.diffLayout = layout
-				}
-			})
-		}
-		segment("unified", "Unified", editor.DiffUnified, true)
-		segment("split", "Split", editor.DiffSplit, fits)
-	})
-}
-
-// fileRow is a changed file in the panel's list; pointed at, its actions:
-// mark it reviewed, copy its path, open it in the editor. A reviewed file shows a filled check.
-func (a *app) fileRow(c *ui.Context, t thread, f fileChange, shown bool) {
-	r := row(c, f.path, shown).Padding(3, 4, 3, 8).Height(28).Label("Diff of " + f.path)
-	d := a.diffFor(t, f)
-	hovered := r.Hovered()
-	if r.Children(func() {
-		icon := icFile
-		if d != nil && d.reviewed {
-			icon = icCheckCirc
-		}
-		ui.Icon(c, icon).FontSize(12)
-		ui.Text(c, f.path).FontSize(12).Font("monospace").SingleLine().Grow(1).Shrink(1)
-		if !hovered {
-			add, del := a.diffStats(t, f)
-			counts(c, add, del)
-			return
-		}
-		ui.Row(c).Gap(0).Children(func() {
-			if a.iconButton(c, "reviewed", icCheckCirc, "Mark reviewed", d != nil && d.reviewed).Padding(3).Disabled(d == nil).Clicked() {
-				d.reviewed = !d.reviewed
-			}
-			if a.iconButton(c, "copy-path", icCopy, "Copy path", false).Padding(3).Clicked() {
-				c.WriteClipboard(f.path)
-				c.AddToast(ui.Toast{Title: "Copied", Description: f.path})
-			}
-			if ed := editorCLI(); ed != "" && t.local() && a.iconButton(c, "open-file", icExternal, "Open in editor", false).Padding(3).Clicked() {
-				a.openInEditor(c, ed, workingFile(t.View.Workspace, f.path))
-			}
-		})
-	}).Clicked() {
-		a.diffFile[t.id()] = f.path
-	}
-}
-
 // notice is a line across the panel saying why it does less than usual.
 func notice(c *ui.Context, text string) {
 	ui.Row(c).Padding(6, 8, 6, 14).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(palette.border).
@@ -472,8 +460,8 @@ func notice(c *ui.Context, text string) {
 
 // hunkBar counts the file's changes, "2 of 5", steps between them, and
 // marks the one in view reviewed, as the change's own button does. ⌘[
-// and ⌘] step from the keyboard, and ⇧⌘↩ marks.
-func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
+// and ⌘] step from the keyboard, and ⇧⌘↩ marks; marked follows a mark.
+func (a *app) hunkBar(c *ui.Context, d *editor.DiffState, marked func()) {
 	n := len(d.Hunks())
 	i, _ := d.CurrentHunk()
 	prev := func() { d.GoToHunk(max(i-1, 0)) }
@@ -481,6 +469,7 @@ func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 	mark := func() {
 		if i >= 0 {
 			d.Accept(i)
+			marked()
 		}
 	}
 	if n > 0 {

@@ -15,6 +15,8 @@ const (
 	// MaxPlaceBatch is how many copies of a place one place call draws.
 	MaxPlaceBatch = 200
 	// MaxPlaceWidgets bounds one copy's tree: a row's badge, not a page.
+	// A copy of a component, which is a part of the window, has
+	// widget.MaxNodes.
 	MaxPlaceWidgets = 200
 )
 
@@ -165,11 +167,15 @@ func (s *Session) drawBatch(pl Place, state json.RawMessage, batch []PlaceItem, 
 	if err := json.Unmarshal(raw, &out); err != nil || len(out) != len(batch) {
 		return fmt.Errorf("place answered %.40s…, not a list of %d widgets or nulls", raw, len(batch))
 	}
+	bound := MaxPlaceWidgets
+	if pl.Replaces {
+		bound = widget.MaxNodes
+	}
 	for i, w := range out {
 		if string(w) == "null" {
 			continue
 		}
-		v, err := widget.DecodeWithin(append(append([]byte(`{"body":`), w...), '}'), MaxPlaceWidgets)
+		v, err := widget.DecodeWithin(append(append([]byte(`{"body":`), w...), '}'), bound)
 		if err != nil {
 			return fmt.Errorf("%s: %w", batch[i].Key, err)
 		}

@@ -3,6 +3,8 @@ package plugins
 import (
 	"fmt"
 	"slices"
+
+	"glitched/internal/plugins/widget"
 )
 
 // Component is a named part of Glitched's UI that one plugin draws: a
@@ -13,7 +15,8 @@ type Component struct {
 	Provides string
 	About    string
 	// Locked is why the component stays Glitched's own, "" when a plugin
-	// may replace it. No manifest or grant changes it.
+	// may replace it: widget.Locked, which also keeps it from being placed
+	// as a native widget.
 	Locked string
 }
 
@@ -21,13 +24,14 @@ type Component struct {
 // ones it never may. docs/plugins.md lists them.
 var Components = []Component{
 	{Name: "thread.header.actions", Provides: "headerActions", About: "The buttons at the right of a thread's header: panel toggles, Open in, Commit & push."},
-	{Name: "approval.card", Locked: "an approval answers for you, so only Glitched draws it"},
-	{Name: "question.card", Locked: "an answer to an agent's question is yours, so only Glitched draws it"},
-	{Name: "composer.access", Locked: "the access picker sets what agents may do, so only Glitched draws it"},
-	{Name: "composer.send", Locked: "send and stop run and stop agents, so only Glitched draws them"},
-	{Name: "settings.plugins", Locked: "it is where you turn plugins off, so no plugin draws it"},
-	{Name: "settings.servers", Locked: "pairing an engine trusts a machine, so only Glitched draws it"},
-	{Name: "confirm.destructive", Locked: "a confirm before something is deleted must be Glitched's own"},
+	{Name: "thread.panel.diff", Provides: "diffPanel", About: "The diff panel: its header, and its list of changed files over the native diff.body."},
+	{Name: "approval.card", Locked: widget.Locked["approval.card"]},
+	{Name: "question.card", Locked: widget.Locked["question.card"]},
+	{Name: "composer.access", Locked: widget.Locked["composer.access"]},
+	{Name: "composer.send", Locked: widget.Locked["composer.send"]},
+	{Name: "settings.plugins", Locked: widget.Locked["settings.plugins"]},
+	{Name: "settings.servers", Locked: widget.Locked["settings.servers"]},
+	{Name: "confirm.destructive", Locked: widget.Locked["confirm.destructive"]},
 }
 
 // component is the component named name, if Glitched has one.

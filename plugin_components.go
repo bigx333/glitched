@@ -7,19 +7,23 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"slices"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/widget"
 )
 
-// pluginComponent draws the component name, for the copy key, with the
-// first plugin that replaces it and has a good drawing: the user's before
-// the built-in. Each is given the copy, so that one failing falls back to
-// the next with no gap. context is what a plugin is given, from the
-// thread's record as that plugin may see it.
-func (a *app) pluginComponent(c *ui.Context, name, key string, t thread, context func(plugins.ThreadRecord) any) {
+// pluginComponent draws the component name, for the copy key, in the box
+// it makes, with the first plugin that replaces it and has a good
+// drawing: the user's before the built-in. Each is given the copy, so
+// that one failing falls back to the next with no gap. context is what a
+// plugin is given, from the thread's record as that plugin may see it.
+// The native widgets it places draw about t.
+func (a *app) pluginComponent(c *ui.Context, box func() ui.Element, name, key string, t thread, context func(plugins.ThreadRecord) any) {
 	if a.plugins == nil {
 		return
 	}
@@ -56,7 +60,23 @@ func (a *app) pluginComponent(c *ui.Context, name, key string, t thread, context
 	if d == nil {
 		return
 	}
-	a.drawPlace(c, ui.Row(c).Key("component:"+name).Shrink(0).AlignItems(ui.Center), d.pl, key, d.ctx, d.app, d.node)
+	a.drawPlace(c, box(), d.pl, key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, fire func(any)) { a.drawNative(c, name, t, n, fire) })
+}
+
+// drawNative draws the native widget n in a copy of the component about
+// t: only in the components it names.
+func (a *app) drawNative(c *ui.Context, component string, t thread, n *widget.Node, fire func(any)) {
+	in := widget.Natives[n.Name].In
+	if !slices.Contains(in, component) {
+		ui.Text(c, n.Name+" draws only in "+strings.Join(in, ", ")+".").TextColor(palette.muted).Margin(ui.Auto)
+		return
+	}
+	switch n.Name {
+	case "diff.body":
+		var path string
+		json.Unmarshal(n.Props["path"], &path)
+		a.diffBody(c, t, path, fire)
+	}
 }
 
 // headerActions is the context of thread.header.actions.
@@ -137,19 +157,96 @@ func (a *app) openInEffect(args json.RawMessage) (any, error) {
 	if _, ok := openInApps[in.App]; !ok {
 		return nil, fmt.Errorf("no app %q to open in: cursor, vscode, zed or finder", in.App)
 	}
+	t, err := a.threadNamed(in.Thread)
+	if err != nil {
+		return nil, err
+	}
+	if !t.local() || t.View.Workspace == "" {
+		return nil, errors.New("the thread's workspace isn't on this machine")
+	}
+	return nil, openInApp(in.App, expandHome(t.View.Workspace))
+}
+
+// threadNamed is the thread a plugin names by its id.
+func (a *app) threadNamed(id string) (thread, error) {
 	for _, e := range a.backend.Envs() {
 		for _, th := range e.Threads {
-			t := thread{e, th}
-			if t.id().String() != in.Thread {
-				continue
+			if t := (thread{e, th}); t.id().String() == id {
+				return t, nil
 			}
-			if !t.local() || t.View.Workspace == "" {
-				return nil, errors.New("the thread's workspace isn't on this machine")
-			}
-			return nil, openInApp(in.App, expandHome(t.View.Workspace))
 		}
 	}
-	return nil, fmt.Errorf("no thread %q", in.Thread)
+	return thread{}, fmt.Errorf("no thread %q", id)
+}
+
+// diffEffect is diff.set, diff.setReviewed and diff.openFile. Each names
+// the thread and, for a file, one the thread changed: a plugin reaches
+// no other file.
+func (a *app) diffEffect(typ string, args json.RawMessage) (any, error) {
+	var in struct {
+		Thread, Path, Shown, Layout string
+		Wrap, Reviewed              *bool
+	}
+	if err := json.Unmarshal(args, &in); err != nil {
+		return nil, err
+	}
+	t, err := a.threadNamed(in.Thread)
+	if err != nil {
+		return nil, err
+	}
+	files := changedFiles(entriesOf(t))
+	changed := func(path string) (fileChange, error) {
+		if i := slices.IndexFunc(files, func(f fileChange) bool { return f.path == path }); i >= 0 {
+			return files[i], nil
+		}
+		return fileChange{}, fmt.Errorf("the thread changed no file %q", path)
+	}
+	switch typ {
+	case "diff.set":
+		layouts := map[string]editor.DiffLayout{"unified": editor.DiffUnified, "split": editor.DiffSplit}
+		layout, ok := layouts[in.Layout]
+		if !ok && in.Layout != "" {
+			return nil, fmt.Errorf("no layout %q: unified or split", in.Layout)
+		}
+		if in.Shown != "" {
+			if _, err := changed(in.Shown); err != nil {
+				return nil, err
+			}
+			a.diffFile[t.id()] = in.Shown
+		}
+		if ok {
+			a.diffLayout = layout
+		}
+		if in.Wrap != nil {
+			a.diffWrap = *in.Wrap
+		}
+		return nil, nil
+	case "diff.setReviewed":
+		f, err := changed(in.Path)
+		if err != nil {
+			return nil, err
+		}
+		d := a.diffFor(t, f)
+		if d == nil {
+			return nil, fmt.Errorf("the diff of %s isn't read yet", in.Path)
+		}
+		d.reviewed = in.Reviewed == nil || *in.Reviewed
+		return nil, nil
+	}
+	f, err := changed(in.Path)
+	if err != nil {
+		return nil, err
+	}
+	ed := editorCLI()
+	switch {
+	case !t.local():
+		return nil, errors.New("the thread's files aren't on this machine")
+	case ed == "":
+		return nil, errors.New("no editor to open the file in")
+	}
+	path := workingFile(t.View.Workspace, f.path)
+	a.pluginLater = append(a.pluginLater, func(c *ui.Context) { a.openInEditor(c, ed, path) })
+	return nil, nil
 }
 
 // openInApp opens the folder in the app, and doesn't wait for it.
