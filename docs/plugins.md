@@ -15,7 +15,7 @@ Everything a plugin draws is data. Glitched checks it and draws it with its own 
 | --- | --- |
 | App contract (`contract`, `contractVersion`) | `glitched` 2 |
 | Widget tree (`internal/plugins/widget.Version`) | 1 |
-| Runtime | github.com/bigx333/mygo-plugin `v0.6.1-glitched.4`, a fork of mygo-plugin's `main` (see `go.mod`) |
+| Runtime | github.com/bigx333/mygo-plugin `v0.6.1-glitched.5`, a fork of mygo-plugin's `main` (see `go.mod`) |
 
 A plugin that names another contract, or a newer `contractVersion`, does not load. One that names none loads. Version 2 adds [components](#components), which a plugin replaces; a version 1 plugin loads and runs as before.
 
@@ -582,6 +582,7 @@ Glitched pins `github.com/bigx333/mygo-plugin` by a `replace` of `github.com/yxx
 | `Options.LoadTimeout`, `Close` ending a start | upstream runs a module's top level with no limit, holding the plugin's lock |
 | `Options.Main` | the engine loads a plugin's service module as a runtime of its own |
 | A call fails as its runtime closes | upstream left it to its timeout, so a reload stalled callers |
+| A call answers once when its runtime closes after the answer | upstream answered again with the interrupt error, which blocked the loop, so `Close` never returned |
 | `Plugin.Shutdown` | upstream's `Close` lets a later call start the runtime again; a replaced plugin is shut down for good |
 | `Options.IdleTimeout` | the runtime knows when calls run, so it stops an idle service itself |
 | `Options.Capability`, and `Allowed` asked on each request | upstream answered both as the runtime started, so a grant meant a restart that lost the plugin's state |
