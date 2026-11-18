@@ -180,18 +180,28 @@ func (a *app) threadsNav(c *ui.Context) {
 }
 
 // wakeSnoozed asks for a frame when the next snoozed thread's time comes,
-// to bring it back to the inbox.
+// to bring it back to the inbox, and tells the plugins once it has: no
+// change from the engine says so.
 func (a *app) wakeSnoozed(c *ui.Context) {
+	if !a.snoozeWake.IsZero() && !a.now.Before(a.snoozeWake) {
+		a.snoozeWake = time.Time{}
+		a.emitThreadChanges()
+	}
 	var next time.Time
-	for _, it := range a.itemsIn(catSnoozed) {
-		// A row still playing its way out of Snoozed has no time.
-		if u := disposition(it.t).Until; !u.IsZero() && (next.IsZero() || u.Before(next)) {
-			next = u
+	// Every project's, those filtered out of sight included, whose plugins
+	// still hear them come back.
+	for _, p := range a.projects {
+		for _, t := range p.threads {
+			// A row still playing its way out of Snoozed has no time.
+			if u := disposition(t).Until; a.shownIn(t) == catSnoozed && !u.IsZero() && (next.IsZero() || u.Before(next)) {
+				next = u
+			}
 		}
 	}
 	if !next.IsZero() {
 		c.After(next.Sub(a.now))
 	}
+	a.snoozeWake = next
 }
 
 // projectTile is a project's mark: its icon, white on its color.

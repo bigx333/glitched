@@ -40,7 +40,7 @@ type Widget =
       onClick: Handler;
       background?: Color;
       wrap?: boolean;
-      /** Glitched's menu on a right click: "thread:<id>" or "project:<key>". Needs threads:read. */
+      /** A row's: Glitched's menu on a right click, "thread:<id>" or "project:<key>". Needs threads:read. */
       contextMenu?: string;
     } & Layout)
   | {
@@ -104,7 +104,7 @@ type Widget =
     }
   | ({ type: "button"; /** Settings' secondary button. */ style: "bordered"; icon?: string } & DrawnButton)
   | ({ type: "button"; style: "ghost"; /** It shows only its icon. */ icon: string } & GhostButton)
-  | ({ type: "button"; style: "ghost"; /** Drawn in place of an icon, as a project's chip. */ children: Widget[]; gap?: number } & GhostButton)
+  | ({ type: "button"; style: "ghost"; /** Drawn in place of an icon, as a project's chip: text, tile, icon, badge and spacer only. */ children: Widget[]; gap?: number } & GhostButton)
   | ({ type: "button"; style: "outline"; icon?: string; /** The icon alone. */ compact?: boolean } & DrawnButton)
   | {
       type: "input";
@@ -240,7 +240,7 @@ interface DrawnButton {
   /** Shown on hover, and its name to assistive tools. */
   tooltip?: string;
   disabled?: boolean;
-  /** Dims it, 0 to 1. */
+  /** Dims it, 0.2 to 1. */
   opacity?: number;
   onClick?: Handler;
 }
@@ -595,7 +595,7 @@ declare const glitched: {
     rename(thread: string, title: string): Promise<void>;
     /** Asks the user first, with Glitched's own confirm. Needs threads:write. */
     delete(thread: string): Promise<void>;
-    /** Inbox, snoozed till until, or settled, with a row joke and its toast. Needs threads:write. */
+    /** Inbox, snoozed till until, or settled, with the row joke of that move (undo, snooze, settle) and its toast. Needs threads:write. */
     setDisposition(thread: string, disposition: Disposition, options?: { animation?: "snooze" | "settle" | "undo" }): Promise<void>;
     /** Needs threads:write. */
     markRead(thread: string): Promise<void>;
@@ -605,7 +605,7 @@ declare const glitched: {
   projects: {
     /** In the sidebar's order. Needs threads:read. */
     list(): Promise<ProjectRecord[]>;
-    /** The sidebar shows only these; none, or every one, is no filter. Needs ui.place. */
+    /** The sidebar shows only these; none, or every one, is no filter. Needs threads:read. */
     filter(keys: string[]): Promise<void>;
     /** Opens Add project's folder picker. Needs threads:write. */
     add(): Promise<void>;
