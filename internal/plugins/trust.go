@@ -20,6 +20,8 @@ type Trust string
 const (
 	// TrustOwn: signed by this device's key, or one the user trusts.
 	TrustOwn Trust = "own"
+	// TrustBuiltin: built into the app, and signed by its release key.
+	TrustBuiltin Trust = "builtin"
 	// TrustConsented: signed by another key, and allowed for what it asks.
 	TrustConsented Trust = "consented"
 	// TrustWaiting: signed by another key, waiting for the user to allow
@@ -104,6 +106,14 @@ func (h *Host) verify(in *installed) (code string, err error) {
 		return "", fmt.Errorf("it changed since its author signed it (%s): reinstall it", st.File)
 	}
 	in.signer = st.KeyID
+	if in.bundled {
+		if !h.releaseSigned(st.KeyID) {
+			in.trust = TrustTampered
+			return "", fmt.Errorf("it's built in, but key %s, not Glitched's release key, signed it", st.KeyID)
+		}
+		in.trust = TrustBuiltin
+		return pack.Snapshot(folder, pack.SnapshotsDir(h.state))
+	}
 	trusted := st.KeyID == own || slices.ContainsFunc(keys.Trusted, func(pub string) bool { return pack.KeyID(pub) == st.KeyID })
 	switch {
 	case trusted:
@@ -244,7 +254,7 @@ func (h *Host) Update(ctx context.Context, id string) (*pack.Result, error) {
 func (h *Host) Remove(id string) error {
 	var folder string
 	for _, in := range h.list() {
-		if in.manifest.ID == id {
+		if in.manifest.ID == id && !in.bundled {
 			folder = in.folder
 		}
 	}

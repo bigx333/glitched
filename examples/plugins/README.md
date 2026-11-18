@@ -11,6 +11,7 @@
 | `focus-timer` | a header widget, a panel tab, settings, a timer, a shortcut |
 | `word-tools` | tools for agents, with a database |
 | `repo-watch` | a headless service on a timer that runs git |
+| `quiet-header` | a component replaced: the thread header's buttons, icons only |
 
 `glitched.d.ts` types the contract for a TypeScript plugin's editor.
 

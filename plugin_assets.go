@@ -34,9 +34,12 @@ func (a *app) pluginStyle(id string) render.Style {
 	return render.Style{
 		Text: palette.text, Muted: palette.muted, Faint: palette.faint, Accent: palette.accent,
 		Red: palette.red, Green: palette.green, Amber: palette.amber, Border: palette.border, Surface: palette.surface,
-		Card:  func(c *ui.Context, title string, body func()) { card(c, strings.ToUpper(title), body) },
-		Icon:  func(name string) *ui.SVG { return a.pluginIcon(id, name) },
-		Image: func(src string) ui.ImageSource { return a.pluginImage(id, src) },
+		Card:    func(c *ui.Context, title string, body func()) { card(c, strings.ToUpper(title), body) },
+		Icon:    func(name string) *ui.SVG { return a.pluginIcon(id, name) },
+		Image:   func(src string) ui.ImageSource { return a.pluginImage(id, src) },
+		Ghost:   ghost,
+		Outline: headerButton,
+		Tip:     a.tip,
 	}
 }
 

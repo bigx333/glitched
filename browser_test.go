@@ -49,7 +49,7 @@ func browsing(t *testing.T) (*app, *ui.Tester, *[]string) {
 		made = append(made, url)
 		return p, nil
 	}
-	tt := ui.NewTester(a.view, 1320, 860)
+	tt := newTester(t, a, 1320, 860)
 	a.browser.clock = tt.Now
 	return a, tt, &made
 }
@@ -59,9 +59,11 @@ func pageOf(tab *browserTab) *fakePage { return tab.page.(*fakePage) }
 
 func click(t *testing.T, tt *ui.Tester, label string) {
 	t.Helper()
+	settleTester(tt)
 	if err := tt.Click(label); err != nil {
 		t.Fatal(err)
 	}
+	settleTester(tt)
 }
 
 // The pane opens on the dev server; ⌘T opens a tab with the keyboard in

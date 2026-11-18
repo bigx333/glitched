@@ -1,0 +1,14 @@
+{
+  "id": "header-actions",
+  "name": "Header actions",
+  "description": "The buttons at the right of a thread's header: Open in, Commit & push, and the terminal, diff and preview toggles. Built into Glitched; make a copy in Settings › Plugins to change it.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "ui.replace", "threads:read", "programs"],
+  "glitched": {
+    "places": [{ "id": "actions", "at": "thread.header.actions", "replaces": true }],
+    "programs": ["git"]
+  }
+}

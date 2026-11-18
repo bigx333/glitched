@@ -260,6 +260,24 @@ func (s *Session) close() {
 
 // run takes the events in order, then asks for the view once they're all
 // taken.
+// Idle reports whether no plugin's app session, which draws its places and
+// components, has an event waiting or a call running: what they last did
+// is posted to the UI thread by then. Pages and tabs aren't asked.
+func (h *Host) Idle() bool {
+	for k, s := range h.sessions {
+		if k != (pageKey{plugin: k.plugin}) {
+			continue
+		}
+		s.mu.Lock()
+		busy := s.running || len(s.queue) > 0 || s.dirty
+		s.mu.Unlock()
+		if busy {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Session) run() {
 	var failed error
 	defer func() {
@@ -353,6 +371,9 @@ func (s *Session) apply(q queued, state json.RawMessage, values map[string]any, 
 	case q.init:
 		err = s.call(0, "init", s.args(map[string]any{}, context), &raw)
 	default:
+		if _, app := q.event.(AppEvent); app && !s.runtime().Can("update") {
+			return nil // nothing hears it: a grant changing doesn't break a plugin that only draws
+		}
 		if !s.runtime().Can("update") {
 			return errors.New("the plugin has no update export")
 		}

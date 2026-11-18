@@ -84,7 +84,6 @@ var (
 	icCode           = solar("code")
 	icLockOpen       = solar("lock-keyhole-unlocked")
 	icX              = solar("close")
-	icUpload         = solar("upload-minimalistic")
 	icEye            = solar("eye")
 	icPanelLeft      = solar("sidebar-minimalistic")
 	icMessage        = solar("chat-round-line")

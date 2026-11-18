@@ -31,6 +31,8 @@ const (
 	MaxOptions = 200      // one select's options
 	MaxPayload = 4 << 10  // one handler's payload, as JSON
 	MaxSpacing = 64       // gap and padding, in points
+	MaxTooltip = 200      // a button's or menu's tooltip
+	MaxBadge   = 4        // a ghost button's count
 	MaxColumns = 20       // one table's
 	MaxRows    = 500      // one table's
 	MaxSize    = 2000     // an image's width or height, in points
@@ -132,6 +134,17 @@ type Node struct {
 	// Color and Background are theme tokens (Colors).
 	Color      string `json:"color,omitempty"`
 	Background string `json:"background,omitempty"`
+
+	// Tooltip is a button's or menu's tooltip, and what it is called to
+	// assistive tools. Icon is an icon before the label of a ghost or
+	// outline button or menu, and Compact shows it alone. Active shows a
+	// ghost button on, as a panel's toggle; Badge is a count over its
+	// corner.
+	Tooltip string `json:"tooltip,omitempty"`
+	Icon    string `json:"icon,omitempty"`
+	Compact bool   `json:"compact,omitempty"`
+	Active  bool   `json:"active,omitempty"`
+	Badge   string `json:"badge,omitempty"`
 }
 
 // Column is a table's column.
@@ -193,7 +206,8 @@ var (
 	handlerPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
 	styles         = map[string][]string{
 		"text":   {"", "body", "muted", "heading", "title", "code", "error", "success"},
-		"button": {"", "default", "primary", "danger"},
+		"button": {"", "default", "primary", "danger", "ghost", "outline"},
+		"menu":   {"", "default", "outline"},
 		"badge":  {"", "default", "accent", "success", "warning", "danger"},
 	}
 	aligns   = []string{"", "start", "center", "end", "stretch"}
@@ -431,6 +445,21 @@ func (c *checker) extra(n *Node) error {
 	}
 	if (n.Width != 0 || n.Height != 0 || n.Radius != 0) && n.Type != "image" {
 		return fmt.Errorf("a %s has no width, height or radius", n.Type)
+	}
+	drawn := n.Style == "ghost" || n.Style == "outline"
+	switch {
+	case n.Tooltip != "" && n.Type != "button" && n.Type != "menu":
+		return fmt.Errorf("a %s has no tooltip", n.Type)
+	case len(n.Tooltip) > MaxTooltip || len(n.Badge) > MaxBadge:
+		return fmt.Errorf("a tooltip is up to %d bytes and a badge up to %d", MaxTooltip, MaxBadge)
+	case (n.Icon != "" || n.Compact) && !drawn:
+		return fmt.Errorf("only a ghost or outline %s has an icon", n.Type)
+	case n.Style == "ghost" && n.Icon == "":
+		return fmt.Errorf("a ghost button shows an icon, which it doesn't name")
+	case n.Compact && n.Icon == "":
+		return fmt.Errorf("a compact %s shows its icon alone, which it doesn't name", n.Type)
+	case (n.Active || n.Badge != "") && n.Style != "ghost":
+		return fmt.Errorf("only a ghost button is active or has a badge")
 	}
 	switch n.Type {
 	case "table":

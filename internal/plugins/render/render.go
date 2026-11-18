@@ -3,6 +3,7 @@
 package render
 
 import (
+	"cmp"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -26,6 +27,12 @@ type Style struct {
 	// Scope names the view among every plugin view the window draws: a
 	// dialog's overlay is keyed by it, as overlays share one layer.
 	Scope string
+	// Ghost and Outline make the app's own ghost and outline buttons, as
+	// its header draws them, keyed by key in c; Tip gives an element its
+	// tooltip in the app's look. Nil draws MyGo's.
+	Ghost   func(c *ui.Context, key any, on bool) ui.Element
+	Outline func(c *ui.Context, key any) ui.Element
+	Tip     func(c *ui.Context, e ui.Element, tip string) ui.Element
 }
 
 // color is a theme token's color.
@@ -292,6 +299,13 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		ui.Spacer(kc)
 	case "spinner":
 		ui.Spinner(kc)
+	case "button", "menu":
+		if n.Style == "ghost" || n.Style == "outline" {
+			r.drawnButton(c, n, key(n, i))
+			return
+		}
+	}
+	switch n.Type {
 	case "button":
 		newButton := ui.Button
 		if n.Style == "primary" {
@@ -306,6 +320,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 				r.fire(n, n.OnClick, "click", nil)
 			}
 		})
+		r.tip(c, b, n.Tooltip)
 	case "input":
 		ctl := r.cs.m[n.ID]
 		if ctl == nil {
@@ -384,13 +399,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			r.fire(n, n.OnChange, "change", ctl.text)
 		}
 	case "menu":
-		ui.Button(kc, n.Label).Disabled(n.Disabled).Menu(func(m *ui.Menu) {
-			for _, o := range n.Options {
-				if m.Item(o.Shown()).Chosen() {
-					r.fire(n, n.OnChange, "change", o.Value)
-				}
-			}
-		})
+		r.tip(c, ui.Button(kc, n.Label).Disabled(n.Disabled).Menu(r.menu(n)), n.Tooltip)
 	case "dialog":
 		open := n.Open && !r.cs.dismissed[n.ID]
 		d := ui.Modal(c.Key(st.Scope+"#dialog:"+n.ID), &open, func() {
@@ -463,4 +472,90 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			e.TextColor(col)
 		}
 	}
+}
+
+func (r *renderer) menu(n *widget.Node) func(*ui.Menu) {
+	return func(m *ui.Menu) {
+		for _, o := range n.Options {
+			if m.Item(o.Shown()).Chosen() {
+				r.fire(n, n.OnChange, "change", o.Value)
+			}
+		}
+	}
+}
+
+func (r *renderer) tip(c *ui.Context, e ui.Element, tip string) {
+	switch {
+	case tip == "":
+	case r.st.Tip != nil:
+		r.st.Tip(c, e, tip)
+	default:
+		e.Tooltip(tip)
+	}
+}
+
+// drawnButton is a ghost or outline button or menu, drawn as the app's
+// header draws its own: a ghost one shows only its icon, and is on while
+// active; an outline one its icon and label, or its icon alone when
+// compact. Its tooltip, when it has one, is also its name to assistive
+// tools.
+func (r *renderer) drawnButton(c *ui.Context, n *widget.Node, k string) {
+	if n.Style == "ghost" {
+		// In a box of its own, whether or not it has a badge now, so that
+		// one coming keeps the button's state.
+		ui.Box(c.Key(k)).Children(func() { r.button(c, n, k) })
+		return
+	}
+	r.button(c, n, k)
+}
+
+func (r *renderer) button(c *ui.Context, n *widget.Node, k string) {
+	st := r.st
+	var b ui.Element
+	switch {
+	case n.Style == "ghost" && st.Ghost != nil:
+		b = st.Ghost(c, k, n.Active).Padding(6)
+	case n.Style == "outline" && st.Outline != nil:
+		b = st.Outline(c, k).Shrink(0)
+	default:
+		b = ui.ButtonBase(c.Key(k)).Gap(6).AlignItems(ui.Center).Padding(5, 11).Radius(999).Cursor(ui.CursorPointer)
+	}
+	b.Label(cmp.Or(n.Tooltip, n.Label)).Disabled(n.Disabled)
+	r.tip(c, b, n.Tooltip)
+	icon := func(name string, size float32) {
+		if st.Icon == nil {
+			return
+		}
+		if svg := st.Icon(name); svg != nil {
+			ui.Icon(c, svg).FontSize(size)
+		}
+	}
+	ghost := n.Style == "ghost"
+	b.Children(func() {
+		if ghost {
+			icon(n.Icon, 15)
+			return
+		}
+		icon(n.Icon, 14)
+		if !n.Compact {
+			ui.Text(c, n.Label).SingleLine()
+		}
+		if n.Type == "menu" {
+			icon("alt-arrow-down", 11)
+		}
+	})
+	if n.Type == "menu" {
+		b.Menu(r.menu(n))
+		return
+	}
+	b.OnClick(func() {
+		if !n.Disabled {
+			r.fire(n, n.OnClick, "click", nil)
+		}
+	})
+	if !ghost || n.Badge == "" {
+		return
+	}
+	ui.Text(c, n.Badge).Absolute().Top(1).Right(1).FontSize(9).FontWeight(600).LineHeight(1.4).
+		Padding(0, 4).Radius(999).Background(st.Accent).TextColor(ui.Hex("#ffffff")).PassThrough()
 }

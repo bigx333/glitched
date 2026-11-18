@@ -25,7 +25,12 @@ func TestDecodeChecksTheTree(t *testing.T) {
 	}
 	bad := map[string]string{
 		`{}`: "no body",
-		`{"body": {"type": "text", "text": "x"}, "html": "<b>"}`:                                                           `unknown field "html"`,
+		`{"body": {"type": "button", "id": "a", "label": "A", "style": "ghost"}}`:                                 "a ghost button shows an icon",
+		`{"body": {"type": "button", "id": "a", "label": "A", "icon": "code"}}`:                                   "only a ghost or outline button has an icon",
+		`{"body": {"type": "button", "id": "a", "label": "A", "style": "outline", "badge": "3"}}`:                 "only a ghost button is active or has a badge",
+		`{"body": {"type": "text", "text": "x", "tooltip": "t"}}`:                                                 "a text has no tooltip",
+		`{"body": {"type": "menu", "id": "m", "label": "M", "options": ["a"], "style": "ghost", "icon": "code"}}`: "unknown style",
+		`{"body": {"type": "text", "text": "x"}, "html": "<b>"}`:                                                  `unknown field "html"`,
 		`{"body": {"type": "frame"}}`:                                                                                      `unknown widget type "frame"`,
 		`{"body": {"type": "text", "children": [{"type": "text"}]}}`:                                                       "a text has no children",
 		`{"body": {"type": "button", "label": "x"}}`:                                                                       "a button needs an id",

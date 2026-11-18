@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -67,8 +68,61 @@ func (p *posts) run() bool {
 }
 
 // offline is the app before its manager starts: no machines, no threads.
+// What it posts waits for a tester made with newTester to run it.
 func offline(t *testing.T) *app {
-	return newApp(t.TempDir(), nil, func(func()) {})
+	p := &posts{wake: make(chan struct{}, 1)}
+	a := newApp(t.TempDir(), nil, p.post)
+	offlinePosts.Store(a, p)
+	t.Cleanup(func() { offlinePosts.Delete(a) })
+	return a
+}
+
+var (
+	offlinePosts sync.Map // *app: *posts
+	settlers     sync.Map // *ui.Tester: func()
+)
+
+// newTester is a tester of the offline app a, which click settles.
+func newTester(t *testing.T, a *app, w, h int) *ui.Tester {
+	tt := ui.NewTester(a.view, w, h)
+	v, _ := offlinePosts.Load(a)
+	p := v.(*posts)
+	settlers.Store(tt, func() { settlePlugins(t, a, tt, p) })
+	t.Cleanup(func() { settlers.Delete(tt) })
+	return tt
+}
+
+// settleTester runs what the tester's app posted, and waits for its plugins,
+// till both are done: a plugin draws, and does what it's clicked for,
+// on its own goroutine.
+func settleTester(tt *ui.Tester) {
+	if f, ok := settlers.Load(tt); ok {
+		f.(func())()
+	}
+}
+
+func settlePlugins(t *testing.T, a *app, tt *ui.Tester, p *posts) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	tt.Frame()
+	for {
+		ran := p.run()
+		if ran {
+			tt.Frame()
+		}
+		if !ran && (a.plugins == nil || a.plugins.Idle()) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the plugins never settled; the window shows %q", tt.Texts())
+		}
+		if !ran {
+			select {
+			case <-p.wake:
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}
 }
 
 // harness is the app on the engines its state directory reaches, with its
@@ -160,10 +214,22 @@ func (h *harness) hover(text string) {
 	h.tt.Move(r.X+r.W/2, r.Y+r.H/2)
 }
 
+// click clicks what text names once the window shows it, and waits for
+// the plugins to do what the click asks of them.
 func (h *harness) click(text string) {
 	h.t.Helper()
+	if _, ok := h.tt.Find(text); !ok {
+		h.until(fmt.Sprintf("%q to click", text), func() bool { _, ok := h.tt.Find(text); return ok })
+	}
 	if err := h.tt.Click(text); err != nil {
 		h.t.Fatal(err)
+	}
+	// A click a plugin took is done once its session is: what it asked
+	// the app for is posted by then.
+	if h.a.plugins != nil && !h.a.plugins.Idle() {
+		h.until("the plugins to settle", h.a.plugins.Idle)
+		h.p.run()
+		h.tt.Frame()
 	}
 }
 

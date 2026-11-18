@@ -34,10 +34,12 @@ type Extension struct {
 	Shortcuts []Shortcut `json:"shortcuts,omitempty"`
 }
 
-// Place is a widget a plugin puts at a slot of Glitched's UI.
+// Place is a widget a plugin puts at a slot of Glitched's UI, or, with
+// Replaces, a component of Glitched's it draws in place of the built-in.
 type Place struct {
-	ID string `json:"id"`
-	At string `json:"at"`
+	ID       string `json:"id"`
+	At       string `json:"at"`
+	Replaces bool   `json:"replaces,omitempty"`
 }
 
 // Tab is a tab in a thread's side panel.
@@ -140,6 +142,15 @@ func (x Extension) check(folder string) error {
 		if err := unique("places", p.ID); err != nil {
 			return err
 		}
+		if p.Replaces {
+			if err := checkReplace(p); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, ok := component(p.At); ok {
+			return fmt.Errorf("glitched.places: %s is a component, which a place takes over with \"replaces\": true", p.At)
+		}
 		if !slices.ContainsFunc(Slots, func(s Slot) bool { return s.Name == p.At }) {
 			return fmt.Errorf("glitched.places: no slot %q", p.At)
 		}
@@ -211,6 +222,10 @@ func (x Extension) check(folder string) error {
 	return nil
 }
 
+func (x Extension) replaces() bool {
+	return slices.ContainsFunc(x.Places, func(p Place) bool { return p.Replaces })
+}
+
 // needs are the capabilities the extension's parts need declared.
 func (x Extension) needs() []string {
 	var out []string
@@ -221,6 +236,9 @@ func (x Extension) needs() []string {
 	}
 	if len(x.Places) > 0 || len(x.Tabs) > 0 {
 		add("ui.place")
+	}
+	if x.replaces() {
+		add("ui.replace")
 	}
 	for _, e := range x.Events {
 		add(Events[e])
