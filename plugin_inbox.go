@@ -12,7 +12,6 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/plugins"
-	"glitched/internal/plugins/widget"
 )
 
 // rowActions is the context of thread.row.actions: the thread, the
@@ -40,13 +39,12 @@ func (a *app) rowActions(c *ui.Context, t thread, cat category) {
 		snooze = append(snooze, snoozeChoice{s.when, s.joke, s.emoji, s.until(a.now).UTC().Format(time.RFC3339)})
 	}
 	box := func() ui.Element { return ui.Row(c).Key("component:thread.row.actions").Gap(0) }
-	n := a.pluginComponent(c, box, "thread.row.actions", t.id().String(), &t, func(r plugins.ThreadRecord) any {
+	a.popoverOpen = false
+	a.pluginComponent(c, box, "thread.row.actions", t.id().String(), &t, func(r plugins.ThreadRecord) any {
 		return rowActions{r, sectionNames[cat], snooze}
 	})
-	open := false
-	n.Walk(func(n *widget.Node) { open = open || n.Popover != nil && n.Open })
 	switch {
-	case open:
+	case a.popoverOpen:
 		a.snoozeFor = t.id()
 	case a.snoozeFor == t.id():
 		a.snoozeFor = api.ID{}

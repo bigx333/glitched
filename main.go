@@ -519,8 +519,10 @@ type app struct {
 	// steers are the messages sent from the composer, until each lands
 	// or fails, by command.
 	steers map[api.ID]steer
-	// snoozeFor is the thread whose snooze popover is open.
-	snoozeFor api.ID
+	// snoozeFor is the thread whose snooze popover is open; popoverOpen
+	// says a plugin's popover drew open, as its row's actions are drawn.
+	snoozeFor   api.ID
+	popoverOpen bool
 	// renaming is the thread whose title is being edited in its row, and
 	// renameDraft the title as typed; renameFocused once the input has
 	// had the focus, so that losing it ends the edit.

@@ -48,6 +48,7 @@ func (a *app) pluginStyle(id string) render.Style {
 				panel.AttachTo(anchor, ui.AnchorBottomStart, ui.AnchorTopStart).Margin(6, 0, 0, 0).Width(width).Radius(12).Clip()
 				a.frosted(c, panel).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.35)).Children(body)
 			})
+			a.popoverOpen = a.popoverOpen || *open
 		},
 		ContextMenu: a.contextMenu(id),
 		Tile:        func(c *ui.Context, icon *ui.SVG, color ui.Color, size float32) { tile(c, icon, color, size) },

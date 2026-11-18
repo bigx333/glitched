@@ -207,3 +207,43 @@ func TestTheSettingsWidgetsAreChecked(t *testing.T) {
 		}
 	}
 }
+
+// The sidebar's widgets: a ghost button's popover, color and own content,
+// a clicked row, a project's tile, wrapping, dimming and Glitched's
+// menus, each only where it belongs.
+func TestTheSidebarWidgetsAreChecked(t *testing.T) {
+	good := `{"body": {"type": "row", "wrap": true, "children": [
+		{"type": "button", "id": "z", "style": "ghost", "icon": "clock", "color": "#fbbf24", "open": true, "onClose": "close",
+			"popover": {"type": "column", "width": 220, "children": [
+				{"type": "row", "id": "r", "onClick": "go", "contextMenu": "thread:x", "children": [{"type": "text", "text": "Later", "italic": true}]}]}},
+		{"type": "button", "id": "p", "style": "ghost", "opacity": 0.45, "contextMenu": "project::/work/a", "padding": [3, 7, 3, 3], "gap": 5,
+			"children": [{"type": "tile", "icon": "code", "color": "#8b5cf6", "width": 16}, {"type": "text", "text": "a"}]}
+	]}}`
+	if _, err := Decode([]byte(good)); err != nil {
+		t.Fatal(err)
+	}
+	bad := map[string]string{
+		`{"body": {"type": "button", "id": "b", "label": "x", "popover": {"type": "column", "width": 220}}}`:                  "only a ghost button has a popover",
+		`{"body": {"type": "button", "id": "b", "style": "ghost", "icon": "x", "popover": {"type": "row", "width": 220}}}`:    "a popover is a column",
+		`{"body": {"type": "button", "id": "b", "style": "ghost", "icon": "x", "popover": {"type": "column", "width": 90}}}`:  "a popover's width is 120 to 480",
+		`{"body": {"type": "button", "id": "b", "style": "ghost", "icon": "x", "open": true}}`:                                "doesn't open",
+		`{"body": {"type": "button", "id": "b", "label": "x", "onClose": "c"}}`:                                               "only a button with a popover has onClose",
+		`{"body": {"type": "button", "id": "b", "style": "ghost", "icon": "x", "children": [{"type": "text", "text": "y"}]}}`: "an icon or its children, not both",
+		`{"body": {"type": "button", "id": "b", "label": "x", "children": [{"type": "text", "text": "y"}]}}`:                  "has no children",
+		`{"body": {"type": "button", "id": "b", "label": "x", "color": "#fbbf24"}}`:                                           "is none of",
+		`{"body": {"type": "row", "onClick": "go"}}`:                                                                          "a row that is clicked needs an id",
+		`{"body": {"type": "row", "contextMenu": "thread:x"}}`:                                                                "only a ghost button or a clicked row has a contextMenu",
+		`{"body": {"type": "button", "id": "b", "style": "ghost", "icon": "x", "contextMenu": "file:/etc"}}`:                  "a contextMenu is thread:<id> or project:<key>",
+		`{"body": {"type": "tile", "icon": "code", "color": "$accent", "width": 16}}`:                                         "a tile has a color as #rrggbb",
+		`{"body": {"type": "tile", "icon": "code", "color": "#8b5cf6", "width": 100}}`:                                        "a width of 8 to 64",
+		`{"body": {"type": "column", "wrap": true}}`:                                                                          "only a row wraps",
+		`{"body": {"type": "text", "text": "x", "opacity": 0.5}}`:                                                             "opacity is a button's",
+		`{"body": {"type": "badge", "text": "x", "italic": true}}`:                                                            "isn't italic",
+	}
+	for s, want := range bad {
+		_, err := Decode([]byte(s))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", s, err, want)
+		}
+	}
+}

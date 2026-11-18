@@ -32,7 +32,27 @@ interface Layout {
 }
 
 type Widget =
-  | ({ type: "column" | "row"; background?: Color } & Layout)
+  | ({ type: "column" | "row"; background?: Color; /** A row's children run onto more lines. */ wrap?: boolean } & Layout)
+  | ({
+      type: "column" | "row";
+      /** A list row: lit under the pointer, clicked as a whole. */
+      id: string;
+      onClick: Handler;
+      background?: Color;
+      wrap?: boolean;
+      /** Glitched's menu on a right click: "thread:<id>" or "project:<key>". Needs threads:read. */
+      contextMenu?: string;
+    } & Layout)
+  | {
+      /** A project's mark: its icon, white on its color, as projects.list gives them. */
+      type: "tile";
+      id?: string;
+      icon: string;
+      /** #rrggbb. */
+      color: string;
+      /** 8 to 64 points. */
+      width: number;
+    }
   | ({ type: "card"; title?: string; /** list: Settings' list of rows, a line between its children. */ style?: "default" | "list" } & Layout)
   | {
       type: "text";
@@ -45,6 +65,7 @@ type Widget =
       /** 100 to 900, over its style's. */
       weight?: number;
       color?: Color;
+      italic?: boolean;
       selectable?: boolean;
       padding?: Spacing;
       grow?: boolean;
@@ -82,7 +103,8 @@ type Widget =
       onClick?: Handler;
     }
   | ({ type: "button"; /** Settings' secondary button. */ style: "bordered"; icon?: string } & DrawnButton)
-  | ({ type: "button"; style: "ghost"; /** It shows only its icon. */ icon: string; /** On, as a panel's toggle. */ active?: boolean; /** Up to 4 characters over its corner. */ badge?: string; size?: "small" } & DrawnButton)
+  | ({ type: "button"; style: "ghost"; /** It shows only its icon. */ icon: string } & GhostButton)
+  | ({ type: "button"; style: "ghost"; /** Drawn in place of an icon, as a project's chip. */ children: Widget[]; gap?: number } & GhostButton)
   | ({ type: "button"; style: "outline"; icon?: string; /** The icon alone. */ compact?: boolean } & DrawnButton)
   | {
       type: "input";
@@ -218,7 +240,27 @@ interface DrawnButton {
   /** Shown on hover, and its name to assistive tools. */
   tooltip?: string;
   disabled?: boolean;
+  /** Dims it, 0 to 1. */
+  opacity?: number;
   onClick?: Handler;
+}
+
+interface GhostButton extends DrawnButton {
+  /** On, as a panel's toggle. */
+  active?: boolean;
+  /** Up to 4 characters over its corner. */
+  badge?: string;
+  size?: "small";
+  /** A theme token, or #rrggbb. */
+  color?: Color | string;
+  padding?: Spacing;
+  /** Glitched's menu on a right click: "thread:<id>" or "project:<key>". Needs threads:read. */
+  contextMenu?: string;
+  /** A panel hanging from the button while open: a column, 120 to 480 points wide. */
+  popover?: { type: "column"; width: number } & Layout;
+  open?: boolean;
+  /** Escape or a click outside closed the popover: clear open in your state. */
+  onClose?: Handler;
 }
 
 /** What view answers. */
@@ -239,6 +281,39 @@ interface ThreadRecord {
   status?: "idle" | "working" | "completed" | "waiting";
   machine?: string;
   updatedAt?: string;
+  /** Where the sidebar files it. */
+  section?: "inbox" | "working" | "snoozed" | "settled";
+  /** How the user left it, what was just done here counted. */
+  disposition?: Disposition;
+  unread?: boolean;
+  /** The thread that started it; that one's line, the furthest first; the threads it started, newest first. */
+  parent?: string;
+  ancestors?: string[];
+  children?: string[];
+  /** The approvals and questions it waits on. */
+  requests?: number;
+  /** What its own runs used. */
+  tokens?: number;
+}
+
+interface Disposition {
+  state: "inbox" | "snoozed" | "settled";
+  /** RFC 3339, a snooze's. */
+  until?: string;
+}
+
+/** A project, as projects.list gives it. */
+interface ProjectRecord {
+  /** Names it to projects.filter and in a contextMenu. */
+  key: string;
+  workspace: string;
+  machine?: string;
+  name: string;
+  /** Its mark: an icon of the app's, and #rrggbb. */
+  icon: string;
+  color: string;
+  /** The sidebar shows it, filtered to some projects. */
+  filtered?: boolean;
 }
 
 type UIEvent = {
@@ -257,6 +332,7 @@ type UIEvent = {
 /** An app event the plugin hears (its manifest's glitched.events), or a timer. */
 type AppEvent =
   | { kind: "app"; type: "thread.changed"; data: ThreadRecord | { id: string; deleted: true } }
+  | { kind: "app"; type: "thread.moved"; data: { thread: string; from: string; to: string } }
   | { kind: "app"; type: "thread.message"; data: { thread: string; role: "user" | "assistant"; text: string } }
   | { kind: "app"; type: "thread.files.changed"; data: { thread: string; files: string[] } }
   | { kind: "app"; type: "setting.changed"; data: { id: string; value: unknown; was: unknown } }
@@ -292,6 +368,8 @@ type Slot = "thread.header" | "thread.row" | "sidebar.footer";
 type Component =
   | "thread.header.actions"
   | "thread.panel.diff"
+  | "thread.row.actions"
+  | "sidebar.projects"
   | "hero.heading"
   | "thread.empty"
   | "settings.page.general"
@@ -355,7 +433,29 @@ type ComponentContext =
   | AppearancePageContext
   | AboutPageContext
   | KeybindingsPageContext
+  | RowActionsContext
+  | ProjectStripContext
   | Record<string, never>;
+
+/** The context of thread.row.actions, a pointed-at sidebar row's actions. */
+interface RowActionsContext {
+  thread: ThreadRecord;
+  /** The section the row shows in. */
+  section: "inbox" | "working" | "snoozed" | "settled";
+  /** The times Glitched offers, until in RFC 3339. */
+  snooze: { when: string; joke: string; emoji: string; until: string }[];
+}
+
+/** The context of sidebar.projects, the sidebar's strip of projects. */
+interface ProjectStripContext {
+  projects: ProjectRecord[];
+  /** The sidebar shows only some projects. */
+  filtered: boolean;
+  /** Add project's folder picker is open. */
+  picking: boolean;
+  /** More than one machine: their names tell projects apart. */
+  machines: boolean;
+}
 
 /** The context of thread.header.actions, the buttons at the right of a thread's header. */
 interface HeaderActionsContext {
@@ -495,8 +595,20 @@ declare const glitched: {
     rename(thread: string, title: string): Promise<void>;
     /** Asks the user first, with Glitched's own confirm. Needs threads:write. */
     delete(thread: string): Promise<void>;
+    /** Inbox, snoozed till until, or settled, with a row joke and its toast. Needs threads:write. */
+    setDisposition(thread: string, disposition: Disposition, options?: { animation?: "snooze" | "settle" | "undo" }): Promise<void>;
+    /** Needs threads:write. */
+    markRead(thread: string): Promise<void>;
+    /** Stops its agent, if one runs. Needs threads:write. */
+    interrupt(thread: string): Promise<void>;
   };
   projects: {
+    /** In the sidebar's order. Needs threads:read. */
+    list(): Promise<ProjectRecord[]>;
+    /** The sidebar shows only these; none, or every one, is no filter. Needs ui.place. */
+    filter(keys: string[]): Promise<void>;
+    /** Opens Add project's folder picker. Needs threads:write. */
+    add(): Promise<void>;
     /** Asks the user first, with Glitched's own confirm. Needs threads:write. */
     remove(workspace: string, machine?: string): Promise<void>;
   };
