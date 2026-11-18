@@ -149,7 +149,13 @@ func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed
 // app, which the UI thread answers.
 func (h *Host) awaitsApp(id string) bool {
 	in := h.running1(id)
-	return in != nil && in.awaiting != nil && in.awaiting.Load() > 0
+	if in == nil {
+		return false
+	}
+	h.mu.RLock()
+	awaiting := in.awaiting
+	h.mu.RUnlock()
+	return awaiting != nil && awaiting.Load() > 0
 }
 
 // placeDraw is one drawing of every copy of the places, or what failed.

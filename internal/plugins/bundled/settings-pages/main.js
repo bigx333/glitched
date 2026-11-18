@@ -72,7 +72,7 @@ function keybindings(ctx, query) {
     type: "column",
     gap: 20,
     children: [
-      { type: "input", id: "search", style: "search", placeholder: "Search keybindings", onChange: "search" },
+      { type: "input", id: "search", style: "search", placeholder: "Search keybindings", value: query, onChange: "search" },
       { type: "card", style: "list", children: rows.length > 0 ? rows : [{ type: "text", id: "none", text: "No keybindings match.", style: "muted", padding: 16 }] },
     ],
   };
