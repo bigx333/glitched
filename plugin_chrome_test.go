@@ -93,7 +93,10 @@ func TestAboutNamesTheMyGoItIsBuiltWith(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := regexp.MustCompile(`(?m)^\s*github\.com/egoist/mygo (v\S+)$`).FindSubmatch(mod)
+	m := regexp.MustCompile(`(?m)^\s*(?:replace\s+)?github\.com/egoist/mygo(?: v\S+)? => github\.com/egoist/mygo (v\S+)$`).FindSubmatch(mod)
+	if m == nil {
+		m = regexp.MustCompile(`(?m)^\s*github\.com/egoist/mygo (v\S+)$`).FindSubmatch(mod)
+	}
 	if m == nil {
 		t.Fatal("go.mod requires no github.com/egoist/mygo")
 	}

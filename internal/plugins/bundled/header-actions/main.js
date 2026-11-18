@@ -108,7 +108,7 @@ async function git(cwd, args, timeout = 5) {
 // enough for a toast: not the "To <remote>" a push starts with, nor its
 // hints. A push the remote turned down says why it did.
 function reason(output, status) {
-  const lines = output.split("\n").map((l) => l.trim()).filter(Boolean);
+  const lines = output.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
   const rejected = lines.map((l) => /^! \[(remote )?rejected\] .*\((.+)\)$/.exec(l)).find(Boolean);
   let why;
   if (rejected && (rejected[2] === "fetch first" || rejected[2] === "non-fast-forward")) {
@@ -120,7 +120,8 @@ function reason(output, status) {
     const line = lines.find((l) => !/^(To |hint: )/.test(l));
     why = line ? line.replace(/^(fatal|error): /, "") : "git exited " + status;
   }
-  return why.length > 200 ? why.slice(0, 199) + "…" : why;
+  const chars = [...why];
+  return chars.length > 200 ? chars.slice(0, 199).join("") + "…" : why;
 }
 
 // status reads what a commit would take: the branch, where it pushes, and
@@ -167,7 +168,7 @@ async function commitAndPush(d, message) {
   const files = d.files.length === 1 ? "1 file" : d.files.length + " files";
   if (!d.push) return { title: "Committed " + sha, description: files + " on " + d.branch + "; not pushed: " + d.noPush };
   const to = d.push.remote + "/" + d.push.branch;
-  const args = ["push", ...(d.push.track ? ["-u"] : []), d.push.remote, "refs/heads/" + d.branch + ":refs/heads/" + d.push.branch];
+  const args = ["push", "--no-follow-tags", ...(d.push.track ? ["-u"] : []), d.push.remote, "refs/heads/" + d.branch + ":refs/heads/" + d.push.branch];
   const push = await git(d.workspace, args, 20);
   if (!push.ok) {
     const why = push.timedOut ? "it took over 20 seconds" : push.err;
