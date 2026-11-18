@@ -151,6 +151,9 @@ type installed struct {
 	// user's folder with its id, which runs in its place.
 	bundled    bool
 	shadowedBy string
+	// fallback is a built-in that a copy shadows, run only to draw the
+	// components the copy can't: no pages, commands, slots or events.
+	fallback bool
 }
 
 // prefs are what the user chose for the plugins, in plugins.json in the
@@ -222,7 +225,16 @@ func (h *Host) Reload() {
 		first := seen[m.ID]
 		switch {
 		case first != nil && in.bundled:
-			in.shadowedBy, in.enabled = first.folder, false
+			// The user's copy runs in its place; it still loads, under an id
+			// of its own, to draw the components the copy fails to.
+			in.shadowedBy, in.enabled, in.fallback = first.folder, false, true
+			in.manifest.ID += FallbackSuffix
+			h.mu.Lock()
+			builtins[in.manifest.ID] = builtinCaps(*m)
+			h.mu.Unlock()
+			if in.p, in.err = h.load(in); errors.Is(in.err, errNotHere) {
+				in.err = nil
+			}
 			return
 		case first != nil:
 			in.err = fmt.Errorf("the id %q is already installed", m.ID)
@@ -325,16 +337,18 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 		Contract:        Contract,
 		ContractVersion: ContractVersion,
 		// Asked live: a grant holds at once, with no restart.
-		Capability: func(id, name string) bool {
+		// By the id the host knows it as, which a built-in shadowed by a
+		// copy has of its own.
+		Capability: func(_, name string) bool {
 			if name == Network {
-				return len(m.Permissions.Network) > 0 && h.grantedNow(id, Network)
+				return len(m.Permissions.Network) > 0 && h.grantedNow(m.ID, Network)
 			}
-			return slices.Contains(m.Capabilities, name) && h.allowedNow(id, name)
+			return slices.Contains(m.Capabilities, name) && h.allowedNow(m.ID, name)
 		},
 		CallTimeout: h.opts.CallTimeout,
 		IdleTimeout: h.opts.IdleTimeout,
 		MemoryLimit: h.opts.MemoryLimit,
-		Allowed:     func(id, _ string) bool { return h.grantedNow(id, Network) },
+		Allowed:     func(string, string) bool { return h.grantedNow(m.ID, Network) },
 		// The runtime's own callbacks run on its loop: none waits on the UI
 		// thread, which may itself be waiting for the runtime to stop.
 		Host: plugin.Host{
@@ -356,7 +370,7 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 // a built-in plugin has those it declares, till the user takes one back.
 func (h *Host) granted(id, capability string) bool {
 	if declared, ok := h.builtins[id]; ok {
-		return slices.Contains(declared, capability) && !slices.Contains(h.prefs.Revoked[id], capability)
+		return slices.Contains(declared, capability) && !slices.Contains(h.prefs.Revoked[strings.TrimSuffix(id, FallbackSuffix)], capability)
 	}
 	return slices.Contains(h.prefs.Grants[id], capability)
 }
@@ -614,7 +628,7 @@ func (h *Host) Commands() []Command {
 func (h *Host) running() []*installed {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return slices.DeleteFunc(slices.Clone(h.installed), func(in *installed) bool { return in.p == nil })
+	return slices.DeleteFunc(slices.Clone(h.installed), func(in *installed) bool { return in.p == nil || in.fallback })
 }
 
 // Name is the plugin's name, or its id if it gives none.

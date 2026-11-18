@@ -38,7 +38,7 @@ function panelButton(p, ctx) {
 function commitDialog(d) {
   const shown = d.files.slice(0, MAX_FILES).map((f, i) => ({ type: "text", id: "file" + i, text: f, style: "code" }));
   if (d.files.length > MAX_FILES) shown.push({ type: "text", id: "more", text: "and " + (d.files.length - MAX_FILES) + " more", style: "muted" });
-  const where = d.upstream ? "pushes to " + d.upstream : d.origin ? "pushes to origin/" + d.branch + ", which it starts tracking" : "stays here: the repository has no origin";
+  const where = d.push ? "pushes to " + d.push.remote + "/" + d.push.branch + (d.push.track ? ", which it starts tracking" : "") : "stays here: " + d.noPush;
   return {
     type: "dialog",
     id: "commit-dialog",
@@ -112,11 +112,30 @@ async function status(cwd) {
   const head = (lines.shift() || "").replace(/^## /, "");
   if (head.startsWith("HEAD (no branch)")) return { error: "HEAD is detached: check out a branch to commit on." };
   const branch = head.replace(/^No commits yet on /, "").split("...")[0].split(" ")[0];
-  const upstream = head.includes("...") ? head.split("...")[1].split(" ")[0] : "";
   if (lines.some((l) => /^(DD|AU|UD|UA|DU|AA|UU)/.test(l))) return { error: "Resolve the merge's conflicts first." };
   if (lines.length === 0) return { error: "Nothing to commit." };
+  return { branch, files: lines, ...(await target(cwd, branch)) };
+}
+
+async function config(cwd, key) {
+  const r = await git(cwd, ["config", "--get", key]);
+  return r.ok ? r.out.trim() : "";
+}
+
+// target is the one ref a push updates: the branch's upstream, or origin's
+// branch of the same name when it tracks none. The push names it in full,
+// with no +, so the repository's push config (pushRemote, push.default,
+// remote.*.push, a forced refspec) can't send it anywhere else, or force it.
+async function target(cwd, branch) {
+  const remote = await config(cwd, "branch." + branch + ".remote");
+  const merge = await config(cwd, "branch." + branch + ".merge");
+  if (remote === ".") return { noPush: "the branch tracks a local branch" };
+  if (remote && merge.startsWith("refs/heads/")) {
+    return { push: { remote, branch: merge.slice("refs/heads/".length), track: false } };
+  }
   const remotes = await git(cwd, ["remote"]);
-  return { branch, upstream, origin: remotes.ok && remotes.out.split("\n").includes("origin"), files: lines };
+  if (!remotes.ok || !remotes.out.split("\n").includes("origin")) return { noPush: "the repository has no origin" };
+  return { push: { remote: "origin", branch, track: true } };
 }
 
 async function commitAndPush(d, message) {
@@ -126,16 +145,29 @@ async function commitAndPush(d, message) {
   if (!commit.ok) return { error: "git commit: " + commit.err };
   const sha = (await git(d.workspace, ["rev-parse", "--short", "HEAD"])).out.trim();
   const files = d.files.length === 1 ? "1 file" : d.files.length + " files";
-  if (!d.upstream && !d.origin) return { title: "Committed " + sha, description: files + " on " + d.branch + "; no origin to push to" };
-  const push = await git(d.workspace, d.upstream ? ["push"] : ["push", "-u", "origin", d.branch], 20);
+  if (!d.push) return { title: "Committed " + sha, description: files + " on " + d.branch + "; not pushed: " + d.noPush };
+  const to = d.push.remote + "/" + d.push.branch;
+  const args = ["push", ...(d.push.track ? ["-u"] : []), d.push.remote, "refs/heads/" + d.branch + ":refs/heads/" + d.push.branch];
+  const push = await git(d.workspace, args, 20);
   if (!push.ok) {
     const why = push.timedOut ? "it took over 20 seconds" : push.err;
-    return { title: "Committed " + sha + ", not pushed", description: "Push failed: " + why + ". The commit stays on " + d.branch + "." };
+    return { title: "Committed " + sha + ", not pushed", description: "Push to " + to + " failed: " + why + ". The commit stays on " + d.branch + "." };
   }
-  return { title: "Pushed " + sha, description: files + " to " + (d.upstream || "origin/" + d.branch) };
+  return { title: "Pushed " + sha, description: files + " to " + to };
 }
 
-export async function update({ state, event, values }) {
+// update answers what the user did. A call the app refuses, as a grant
+// taken back or git missing, is told in a toast: the row stays.
+export async function update(args) {
+  try {
+    return await act(args);
+  } catch (e) {
+    await glitched.toast("Header actions", e.message).catch(() => {});
+    return { state: { ...args.state, dialog: null } };
+  }
+}
+
+async function act({ state, event, values }) {
   if (event.kind !== "ui") return {};
   const ctx = event.place?.context;
   switch (event.handler) {

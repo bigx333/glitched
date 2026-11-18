@@ -122,7 +122,9 @@ func (a *app) syncPlaces() {
 		return
 	}
 	for at := range f.slots {
-		for _, pl := range a.plugins.PlacesAt(at) {
+		// A built-in a copy shadows draws only a component's copies, as a
+		// fallback, so only Replacers names it.
+		for _, pl := range slices.Concat(a.plugins.PlacesAt(at), a.plugins.Replacers(at)) {
 			if app := a.plugins.App(pl.Plugin); app != nil {
 				app.SetItems(pl.Place.ID, f.items[[2]string{pl.Plugin, pl.Place.ID}])
 			}
