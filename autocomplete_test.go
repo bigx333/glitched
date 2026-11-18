@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -205,5 +207,32 @@ func TestAFailedListingIsNotAskedAgainAtOnce(t *testing.T) {
 	}
 	if got := labels(h.a.suggestions); !slices.Contains(got, "/model") {
 		t.Errorf("after a failure: %q, want the fallback with the error", got)
+	}
+}
+
+// Files of one name in two folders are two rows of the flyout, each its
+// own: clicking one takes that file.
+func TestTheFlyoutKeepsFilesOfOneNameApart(t *testing.T) {
+	ws := t.TempDir()
+	for _, f := range []string{"src/index.ts", "tests/index.ts"} {
+		if err := os.MkdirAll(filepath.Join(ws, filepath.Dir(f)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(ws, f), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := offline(t)
+	a.fresh.workspace = ws
+	tt := ui.NewTester(a.view, 1320, 860)
+	a.draft = "@index"
+	tt.Frame()
+	if len(a.suggestions) != 2 {
+		t.Fatalf("suggestions for @index: %+v", a.suggestions)
+	}
+	fly := ui.NewTester(a.suggestView, 460, suggestRows*suggestRow+12)
+	fly.Frame()
+	if got := fly.Texts(); !slices.Contains(got, "src") || !slices.Contains(got, "tests") {
+		t.Fatalf("the flyout shows %q, want both folders", got)
 	}
 }
