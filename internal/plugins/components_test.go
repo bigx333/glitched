@@ -133,8 +133,8 @@ func TestACopyOfABuiltInShadowsItAndRevertBringsItBack(t *testing.T) {
 	if b := installedAs(h, filepath.Join(BundledDir(state), "header")); b.ShadowedBy != copied || b.Enabled {
 		t.Fatalf("the built-in beside the copy: %+v", b)
 	}
-	if got := replacers(h); !slices.Equal(got, []string{"header"}) {
-		t.Fatalf("%v draw the header; the copy, with the grants it took, should", got)
+	if got := replacers(h); !slices.Equal(got, []string{"header", "header" + FallbackSuffix}) {
+		t.Fatalf("%v draw the header; the copy, with the grants it took, should, and the built-in after it", got)
 	}
 	if in := h.running1("header"); in == nil || in.bundled {
 		t.Fatal("the built-in runs in place of the copy")
@@ -165,8 +165,11 @@ func TestAFolderOfTheSameIDMadeByHandShadowsWithNoGrants(t *testing.T) {
 	if in := h.running1("header"); in == nil || in.folder != dst {
 		t.Fatal("your folder doesn't run in place of the built-in")
 	}
-	if got := replacers(h); len(got) != 0 {
-		t.Fatalf("%v draw with grants never given", got)
+	if got := replacers(h); !slices.Equal(got, []string{"header" + FallbackSuffix}) {
+		t.Fatalf("%v draw; only the built-in should, your copy having no grants", got)
+	}
+	if len(h.Entries()) != 0 || h.Allowed("header", "ui.replace") {
+		t.Fatal("the shadowed built-in shows as a plugin of its own, or lent your copy its grants")
 	}
 }
 

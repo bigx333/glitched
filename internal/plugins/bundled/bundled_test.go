@@ -128,7 +128,7 @@ func header(t *testing.T, work, message string) (*app, *plugins.Session) {
 	a.until("the commit dialog", func() bool { v := view(); return v != nil && v.Find("message") != nil })
 	text := ""
 	view().Body.Walk(func(n *widget.Node) { text += n.Text + "|" })
-	for _, want := range []string{"M a.txt", "?? new.txt", "on main", "pushes to origin/main"} {
+	for _, want := range []string{"M a.txt", "?? new.txt", "on main", "pushes to origin/main."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the dialog doesn't say %q: %s", want, text)
 		}
@@ -152,6 +152,39 @@ func TestCommitAndPushCommitsEveryChangeAndPushesIt(t *testing.T) {
 	}
 }
 
+// The push updates only the ref the dialog named, without force, whatever
+// the repository's push config says.
+func TestThePushIgnoresTheRepositorysPushConfig(t *testing.T) {
+	work, origin := repo(t)
+	git(t, work, "config", "remote.origin.push", "+refs/heads/main:refs/heads/elsewhere")
+	git(t, work, "config", "push.default", "matching")
+	header(t, work, "Only main")
+	if got := git(t, origin, "log", "-1", "--format=%s", "main"); got != "Only main" {
+		t.Errorf("origin's main is at %q", got)
+	}
+	if out, _ := exec.Command("git", "-C", origin, "rev-parse", "--verify", "-q", "refs/heads/elsewhere").Output(); len(out) > 0 {
+		t.Error("the push followed the repository's refspec to elsewhere")
+	}
+}
+
+// A call the app refuses is told, and the row stays.
+func TestARefusedCallLeavesTheRow(t *testing.T) {
+	work, _ := repo(t)
+	a := open(t)
+	if err := a.h.SetGranted("header-actions", "programs", false); err != nil {
+		t.Fatal(err)
+	}
+	s := a.h.App("header-actions")
+	ctx := map[string]any{"thread": map[string]any{"id": "t1", "workspace": work}, "local": true, "panels": map[string]bool{}}
+	s.SetItems("actions", []plugins.PlaceItem{{Key: "t1", Version: "1", Context: ctx}})
+	a.until("the row", func() bool { return s.PlaceView("actions", "t1") != nil })
+	s.Dispatch(plugins.UIEvent{Type: "click", Handler: "commit.open", Node: "commit", Place: &plugins.PlaceRef{ID: "actions", At: "thread.header.actions", Key: "t1", Context: ctx}}, nil)
+	a.until("the refusal", func() bool { return len(a.toasts) > 0 })
+	if !strings.Contains(a.toasts[0], "programs") || a.h.Failed("header-actions") != nil {
+		t.Fatalf("told %q, failed %v", a.toasts, a.h.Failed("header-actions"))
+	}
+}
+
 func TestAPushThatFailsKeepsTheCommitAndSaysSo(t *testing.T) {
 	work, origin := repo(t)
 	os.RemoveAll(origin)
@@ -159,7 +192,7 @@ func TestAPushThatFailsKeepsTheCommitAndSaysSo(t *testing.T) {
 	if got := git(t, work, "log", "-1", "--format=%s"); got != "Keep it local" {
 		t.Errorf("the commit is %q", got)
 	}
-	if len(a.toasts) != 1 || !strings.Contains(a.toasts[0], ", not pushed: Push failed") || !strings.Contains(a.toasts[0], "The commit stays on main") {
+	if len(a.toasts) != 1 || !strings.Contains(a.toasts[0], ", not pushed: Push to origin/main failed") || !strings.Contains(a.toasts[0], "The commit stays on main") {
 		t.Errorf("told %q", a.toasts)
 	}
 }

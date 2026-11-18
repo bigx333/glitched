@@ -96,6 +96,12 @@ func TestTheHeaderActionsAreABuiltInPluginYoursReplaces(t *testing.T) {
 	if !shows("Ship it") || shows("Commit & push") {
 		t.Fatalf("your edited copy doesn't run in the built-in's place: %q", tt.Texts())
 	}
+	os.WriteFile(js, []byte(brokenModule), 0o644)
+	a.plugins.Reload()
+	a.pluginsChanged(nil)
+	if !shows("Commit & push") {
+		t.Fatalf("a broken copy left no built-in: %q", tt.Texts())
+	}
 	if err := a.plugins.Revert("header-actions"); err != nil {
 		t.Fatal(err)
 	}

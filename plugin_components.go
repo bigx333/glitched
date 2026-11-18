@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/plugins"
+	"glitched/internal/plugins/widget"
 )
 
 // pluginComponent draws the component name, for the copy key, with the
@@ -23,23 +25,38 @@ func (a *app) pluginComponent(c *ui.Context, name, key string, t thread, context
 	}
 	f := a.frameOf(name)
 	full := a.threadRecord(t)
-	drawn := false
+	type drawing struct {
+		pl   plugins.PlaceAt
+		ctx  any
+		app  *plugins.Session
+		node *widget.Node
+	}
+	var good, failed *drawing
 	for _, pl := range a.plugins.Replacers(name) {
 		ctx := context(a.plugins.Record(pl.Plugin, full))
 		version, _ := json.Marshal(ctx)
 		fk := [2]string{pl.Plugin, pl.Place.ID}
 		f.items[fk] = append(f.items[fk], plugins.PlaceItem{Key: key, Version: string(version), Context: ctx})
 		app := a.plugins.App(pl.Plugin)
-		if drawn || app == nil || app.Err != nil {
+		if good != nil || app == nil {
 			continue
 		}
 		node := app.PlaceView(pl.Place.ID, key)
-		if node == nil {
-			continue
+		switch {
+		case node == nil:
+		case app.Err == nil:
+			good = &drawing{pl, ctx, app, node}
+		case failed == nil:
+			failed = &drawing{pl, ctx, app, node}
 		}
-		drawn = true
-		a.drawPlace(c, ui.Row(c).Key("component:"+name).Shrink(0).AlignItems(ui.Center), pl, key, ctx, app, node)
 	}
+	// When every one failed, the first one's last good drawing stays: a
+	// row that can still be clicked beats none.
+	d := cmp.Or(good, failed)
+	if d == nil {
+		return
+	}
+	a.drawPlace(c, ui.Row(c).Key("component:"+name).Shrink(0).AlignItems(ui.Center), d.pl, key, d.ctx, d.app, d.node)
 }
 
 // headerActions is the context of thread.header.actions.

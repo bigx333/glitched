@@ -52,12 +52,12 @@ func checkReplace(p Place) error {
 }
 
 // Replacers are the running plugins that draw the component, best first:
-// your plugins before the built-in ones, each in folder order. Only a
-// plugin allowed ui.replace is one.
+// your plugins before the built-in ones, each in folder order, a built-in
+// that your copy shadows included. Only a plugin allowed ui.replace is one.
 func (h *Host) Replacers(name string) []PlaceAt {
 	var out []PlaceAt
-	for _, in := range h.running() {
-		if !h.Allowed(in.manifest.ID, "ui.replace") {
+	for _, in := range h.list() {
+		if in.p == nil || !h.Allowed(in.manifest.ID, "ui.replace") {
 			continue
 		}
 		for _, p := range in.ext.Places {

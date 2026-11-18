@@ -16,6 +16,10 @@ import (
 	"glitched/internal/plugins/pack"
 )
 
+// FallbackSuffix ends the id a built-in plugin runs under while a copy of
+// the user's shadows it: it draws what the copy fails to.
+const FallbackSuffix = ".builtin"
+
 // BundledDir is where the built-in plugins are written out to be verified
 // and run, one folder each, as the app holds them.
 func BundledDir(stateDir string) string { return filepath.Join(stateDir, "plugin-bundled") }
@@ -122,7 +126,7 @@ func (h *Host) releaseSigned(keyID string) bool {
 func (h *Host) shadowing(id string) *installed {
 	list := h.list()
 	for _, b := range list {
-		if b.bundled && b.manifest.ID == id && b.shadowedBy != "" {
+		if b.bundled && b.manifest.ID == id+FallbackSuffix {
 			for _, in := range list {
 				if in.folder == b.shadowedBy {
 					return in
