@@ -917,10 +917,16 @@ func TestAnAnsweredCardNeverShowsWaitingAgain(t *testing.T) {
 // nothing, and nor does ⌘⏎ while the ⌘ that answered the last card is
 // still held, as a key held down repeats.
 func TestAnAnswerNeedsACardThatStoodStill(t *testing.T) {
-	for how, answer := range map[string]func(h *harness){
-		"⌘⏎":         func(h *harness) { h.tt.Key(ui.Cmd, ui.KeyEnter) },
-		"Allow once": func(h *harness) { h.click("Allow once") },
+	for how, press := range map[string]func(h *harness) error{
+		"⌘⏎":         func(h *harness) error { h.tt.Key(ui.Cmd, ui.KeyEnter); return nil },
+		"Allow once": func(h *harness) error { return h.tt.Click("Allow once") },
 	} {
+		answer := func(h *harness) {
+			h.t.Helper()
+			if err := press(h); err != nil {
+				h.t.Fatal(err)
+			}
+		}
 		t.Run(how, func(t *testing.T) {
 			dir := tempDir(t)
 			engine(t, daemon.Config{Dir: dir}, chain{commandAsk("a", "ls"), commandAsk("b", curl)})
@@ -944,7 +950,11 @@ func TestAnAnswerNeedsACardThatStoodStill(t *testing.T) {
 				return b != nil
 			})
 			for i := range 20 {
-				answer(h)
+				// Rising in, the card's button starts below the window,
+				// where no pointer can press it.
+				if err := press(h); err != nil && !strings.Contains(err.Error(), "outside the window") {
+					t.Fatal(err)
+				}
 				h.tt.Frame()
 				if answering(h, b) {
 					t.Fatalf("%s answered the next card %d presses after it landed", how, i+1)
