@@ -213,9 +213,15 @@ func (a *app) threadControls(t thread, build func()) {
 // lets go of what was pressed in it, and ends the thumb's hold (view). A
 // thumb dragged in one thread would else choose the effort of the thread
 // that comes under it, or the default's as ⌘N brings the draft, and a
-// hold on Full access would grant it there.
+// hold on Full access would grant it there. A hold the draft loses so
+// ends here, and saves the default its thumb chose: the draft's composer
+// that would save it once let go is no longer built.
 func (a *app) pickersIn(id api.ID) {
 	if a.pickersFor != id {
+		if a.effortHeld && a.pickersFor.IsZero() {
+			a.effortHeld = false
+			a.saveComposer()
+		}
 		a.pickersFor = id
 		a.pickerOpen, a.accessOpen = false, false
 	}

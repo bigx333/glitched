@@ -601,3 +601,30 @@ func TestAFailedChoicesRowSaysWhichItWas(t *testing.T) {
 		}
 	}
 }
+
+// A default the draft's thumb chose is kept though a thread comes under
+// the thumb before it's let go: the default is saved once the hold ends,
+// in whichever composer the app shows then.
+func TestADefaultChosenByAThumbAThreadCameUnderIsKept(t *testing.T) {
+	h := start(t, tempDir(t))
+	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
+	h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk)
+	th := h.thread("Mine")
+	h.until("the thread's view", func() bool { return th.View.Revision > 0 && len(th.Pending) == 0 })
+	h.tt.Frame()
+	h.click("Model")
+	at, y := effortAt(t, h.tt)
+	h.tt.Press(at(2), y)
+	h.tt.Move(at(0), y)
+	h.tt.Frame()
+	h.a.select_(th)
+	h.tt.Frame()
+	h.tt.Release(at(0), y)
+	h.tt.Advance(time.Second)
+	if got := newApp(h.a.dir, nil, func(func()) {}).effort; got != "Low" {
+		t.Errorf("after a restart the default's effort is %q, want the Low its thumb chose", got)
+	}
+	if got := th.View.Model.Effort; got != "high" || len(th.Pending) != 0 {
+		t.Errorf("the thread's effort is %q with %+v pending, want high and nothing sent", got, th.Pending)
+	}
+}
