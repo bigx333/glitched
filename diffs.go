@@ -430,7 +430,12 @@ func (a *app) diffBody(c *ui.Context, t thread, path string, fire func(any)) {
 		a.hunkBar(c, d.DiffState)
 	}
 	editor.DiffView(c.Key(f.path), d.DiffState).Grow(1).FillWidth()
-	// Marked from the hunk bar, a shortcut or the change's own button.
+	// Marked from the hunk bar, a shortcut or the change's own button,
+	// counted once a large file's comparison, which has no changes yet, is
+	// done.
+	if d.Comparing() {
+		return
+	}
 	n := len(d.Hunks())
 	if d.told != nil && n < *d.told {
 		fire(map[string]any{"path": f.path, "remaining": n})
