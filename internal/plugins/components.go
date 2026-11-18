@@ -13,7 +13,10 @@ type Component struct {
 	Name string
 	// Provides is what each copy is given as its context.
 	Provides string
-	About    string
+	// Needs is a capability a replacement must also be granted, as its
+	// context holds what only it may read.
+	Needs string
+	About string
 	// Locked is why the component stays Glitched's own, "" when a plugin
 	// may replace it: widget.Locked, which also keeps it from being placed
 	// as a native widget.
@@ -24,7 +27,7 @@ type Component struct {
 // ones it never may. docs/plugins.md lists them.
 var Components = []Component{
 	{Name: "thread.header.actions", Provides: "headerActions", About: "The buttons at the right of a thread's header: panel toggles, Open in, Commit & push."},
-	{Name: "thread.panel.diff", Provides: "diffPanel", About: "The diff panel: its header, and its list of changed files over the native diff.body."},
+	{Name: "thread.panel.diff", Provides: "diffPanel", Needs: "threads:read", About: "The diff panel: its header, and its list of changed files over the native diff.body."},
 	{Name: "approval.card", Locked: widget.Locked["approval.card"]},
 	{Name: "question.card", Locked: widget.Locked["question.card"]},
 	{Name: "composer.access", Locked: widget.Locked["composer.access"]},
@@ -57,11 +60,14 @@ func checkReplace(p Place) error {
 
 // Replacers are the running plugins that draw the component, best first:
 // your plugins before the built-in ones, each in folder order, a built-in
-// that your copy shadows included. Only a plugin allowed ui.replace is one.
+// that your copy shadows included. Only a plugin allowed ui.replace, and
+// what the component needs, is one.
 func (h *Host) Replacers(name string) []PlaceAt {
+	c, _ := component(name)
 	var out []PlaceAt
 	for _, in := range h.list() {
-		if in.p == nil || !h.Allowed(in.manifest.ID, "ui.replace") {
+		id := in.manifest.ID
+		if in.p == nil || !h.Allowed(id, "ui.replace") || c.Needs != "" && !h.Allowed(id, c.Needs) {
 			continue
 		}
 		for _, p := range in.ext.Places {

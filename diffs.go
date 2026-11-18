@@ -48,6 +48,9 @@ type fileDiff struct {
 	// does.
 	unshown, noHead string
 	reviewed        bool
+	// told is how many changes diff.body last drew, once it has: fewer
+	// than that tells the plugin one was marked reviewed.
+	told *int
 }
 
 // diffRead is a read of a file under way, for the edits' stamp. A newer
@@ -424,9 +427,15 @@ func (a *app) diffBody(c *ui.Context, t thread, path string, fire func(any)) {
 		d.Layout = editor.DiffUnified
 		notice(c, "HEAD's side is unknown: "+d.noHead+".")
 	} else {
-		a.hunkBar(c, d.DiffState, func() { fire(map[string]any{"path": f.path, "remaining": len(d.Hunks())}) })
+		a.hunkBar(c, d.DiffState)
 	}
 	editor.DiffView(c.Key(f.path), d.DiffState).Grow(1).FillWidth()
+	// Marked from the hunk bar, a shortcut or the change's own button.
+	n := len(d.Hunks())
+	if d.told != nil && n < *d.told {
+		fire(map[string]any{"path": f.path, "remaining": n})
+	}
+	d.told = &n
 }
 
 // splitWidth is the least width side by side reads at: two columns of
@@ -460,8 +469,8 @@ func notice(c *ui.Context, text string) {
 
 // hunkBar counts the file's changes, "2 of 5", steps between them, and
 // marks the one in view reviewed, as the change's own button does. ⌘[
-// and ⌘] step from the keyboard, and ⇧⌘↩ marks; marked follows a mark.
-func (a *app) hunkBar(c *ui.Context, d *editor.DiffState, marked func()) {
+// and ⌘] step from the keyboard, and ⇧⌘↩ marks.
+func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 	n := len(d.Hunks())
 	i, _ := d.CurrentHunk()
 	prev := func() { d.GoToHunk(max(i-1, 0)) }
@@ -469,7 +478,6 @@ func (a *app) hunkBar(c *ui.Context, d *editor.DiffState, marked func()) {
 	mark := func() {
 		if i >= 0 {
 			d.Accept(i)
-			marked()
 		}
 	}
 	if n > 0 {

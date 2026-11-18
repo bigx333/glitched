@@ -378,6 +378,13 @@ func TestItemsSegmentsAndNatives(t *testing.T) {
 	if len(s.events) != n {
 		t.Errorf("a disabled option fired %+v", s.last(t))
 	}
+	// The option shown is chosen again: the plugin may hold another.
+	if err := tt.Click("Unified"); err != nil {
+		t.Fatal(err)
+	}
+	if ev := s.last(t); ev.Handler != "layout" || ev.Value != "unified" {
+		t.Errorf("choosing the option shown fired %+v", ev)
+	}
 
 	var drawn []string
 	native := Style{Native: func(c *ui.Context, n *widget.Node, fire func(any)) {
