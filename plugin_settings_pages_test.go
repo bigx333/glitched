@@ -114,7 +114,7 @@ func TestAppSettingsAreSetOnlyToWhatThePagesOffer(t *testing.T) {
 		key   string
 		value any
 		want  string
-	}{{"theme", "Neon", "can't be"}, {"accent", "Plaid", "can't be"}, {"timestamps", 12, "timestamps"}, {"confirmDelete", "no", "confirmDelete"}, {"fontSize", 14, "no setting a plugin sets"}, {"claudePath", "/bin/sh", "no setting a plugin sets"}, {"defaultModel", "GPT-1", "defaultModel is one of"}} {
+	}{{"theme", "Neon", "can't be"}, {"accent", "Plaid", "can't be"}, {"timestamps", 12, "timestamps"}, {"confirmDelete", "no", "confirmDelete"}, {"fontSize", 14, "no setting a plugin sets"}, {"claudePath", "/bin/sh", "no setting a plugin sets"}, {"defaultModel", "GPT-1", "defaultModel is one of"}, {"confirmDelete", nil, "confirmDelete is a bool"}, {"streaming", nil, "streaming is a bool"}, {"theme", nil, "theme is a string"}, {"notifications", "true", "notifications is a bool"}} {
 		if err := set(bad.key, bad.value); err == nil || !strings.Contains(err.Error(), bad.want) {
 			t.Errorf("%s = %v: %v, want %q", bad.key, bad.value, err, bad.want)
 		}
@@ -194,5 +194,65 @@ func TestAPluginsSettingsPageIsInSettings(t *testing.T) {
 	settleTester(tt)
 	if a.router.Path() != "/settings/plugin/prefs/home" || !tt.HasText("Prefs body") || !tt.HasText("Mine to set.") {
 		t.Fatalf("at %s it shows %q", a.router.Path(), tt.Texts())
+	}
+}
+
+// Choosing a theme while a plugin's theme waits to show drops it, and the
+// choice is kept, though it is the theme that stood in.
+func TestAThemeChosenWhileAPluginsThemeWaitsIsKept(t *testing.T) {
+	first := offline(t)
+	writeOwnPlugin(t, first, "neon", neonManifest, "")
+	if err := first.plugins.SetEnabled("neon", false); err != nil {
+		t.Fatal(err)
+	}
+	dir := first.dir
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"theme": "Neon"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &posts{wake: make(chan struct{}, 1)}
+	a := newApp(dir, nil, p.post)
+	offlinePosts.Store(a, p)
+	t.Cleanup(func() { offlinePosts.Delete(a) })
+	tt := newTester(t, a, 1320, 860)
+	settleTester(tt)
+	if a.settings.theme != systemTheme {
+		t.Fatalf("with Neon off, the app started on %q", a.settings.theme)
+	}
+	b, _ := json.Marshal(map[string]any{"key": "theme", "value": systemTheme})
+	if _, err := a.setAppSetting(b); err != nil {
+		t.Fatal(err)
+	}
+	settleTester(tt)
+	if err := a.plugins.SetEnabled("neon", true); err != nil {
+		t.Fatal(err)
+	}
+	a.pluginsChanged(nil)
+	settleTester(tt)
+	if a.settings.theme != systemTheme {
+		t.Errorf("Neon took over the System you chose: %q", a.settings.theme)
+	}
+	a.settingsOut.wait()
+	saved, _ := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if !strings.Contains(string(saved), `"theme":"System"`) && !strings.Contains(string(saved), `"theme": "System"`) {
+		t.Errorf("settings.json kept %s, not the System you chose", saved)
+	}
+}
+
+// glitched.pages.open opens a settings page in Settings.
+func TestAPluginOpensItsSettingsPageInSettings(t *testing.T) {
+	a := offline(t)
+	tt := newTester(t, a, 1320, 860)
+	writeOwnPlugin(t, a, "prefs", `{"id": "prefs", "name": "Prefs", "main": "index.js", "contract": "glitched", "contractVersion": 2,
+		"contributes": {"pages": [{"id": "home", "title": "Prefs page"}], "commands": [{"id": "open", "title": "Open prefs"}]}, "glitched": {"settingsPages": ["home"]}}`,
+		`export function view() { return { body: { type: "text", text: "Prefs body" } } }
+export async function command() { await glitched.pages.open("home") }`)
+	a.plugins.RunCommand("prefs", "open", func(err error) {
+		if err != nil {
+			t.Error(err)
+		}
+	})
+	settleTester(tt)
+	if a.router.Path() != "/settings/plugin/prefs/home" {
+		t.Fatalf("it opened %s", a.router.Path())
 	}
 }
