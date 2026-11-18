@@ -206,6 +206,16 @@ func (h *harness) thread(title string) thread {
 	return found
 }
 
+// rightClick right-clicks what text names once the window shows it: a
+// project's chip is drawn by a plugin, a moment after the project shows.
+func (h *harness) rightClick(text string) {
+	h.t.Helper()
+	h.until(fmt.Sprintf("%q to right-click", text), func() bool { _, ok := h.tt.Find(text); return ok })
+	if err := h.tt.RightClick(text); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
 // hover points at the text's middle.
 func (h *harness) hover(text string) {
 	h.t.Helper()

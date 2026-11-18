@@ -54,9 +54,7 @@ func TestAPluginsCommandsJoinTheAppsMenus(t *testing.T) {
 	h.tt.Advance(time.Second)
 
 	project := h.a.projects[0].name()
-	if err := h.tt.RightClick(project); err != nil {
-		t.Fatal(err)
-	}
+	h.rightClick(project)
 	if err := h.tt.ChooseMenuItem("Pin project"); err != nil {
 		t.Fatalf("the project's menu is %q: %v", h.tt.Menu(), err)
 	}

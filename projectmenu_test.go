@@ -27,9 +27,7 @@ func TestRemoveProject(t *testing.T) {
 	if !h.a.projectFilter[projectKey{workspace: "/work/t3code"}] {
 		t.Fatal("clicking the chip didn't filter to it")
 	}
-	if err := h.tt.RightClick("t3code"); err != nil {
-		t.Fatal(err)
-	}
+	h.rightClick("t3code")
 	if err := h.tt.ChooseMenuItem("Remove project…"); err != nil {
 		t.Fatalf("menu %q: %v", h.tt.Menu(), err)
 	}
@@ -56,6 +54,7 @@ func TestRemoveProject(t *testing.T) {
 	if len(h.a.projectFilter) != 0 {
 		t.Errorf("the filter still holds %v", h.a.projectFilter)
 	}
+	settlePlugins(t, h.a, h.tt, h.p)
 	if h.tt.HasText("t3code") {
 		t.Error("the chip still shows")
 	}
@@ -65,9 +64,7 @@ func TestRemoveProject(t *testing.T) {
 // counts them in the alert.
 func TestRemoveProjectTakesItsTrees(t *testing.T) {
 	h := tree3(t)
-	if err := h.tt.RightClick("t3code"); err != nil {
-		t.Fatal(err)
-	}
+	h.rightClick("t3code")
 	if err := h.tt.ChooseMenuItem("Remove project…"); err != nil {
 		t.Fatal(err)
 	}
@@ -84,9 +81,7 @@ func TestRemoveProjectCancelled(t *testing.T) {
 	h := start(t, inboxDir(t))
 	h.thread("SIP re-INVITE handling")
 	h.tt.Advance(time.Second)
-	if err := h.tt.RightClick("t3code"); err != nil {
-		t.Fatal(err)
-	}
+	h.rightClick("t3code")
 	if err := h.tt.ChooseMenuItem("Remove project…"); err != nil {
 		t.Fatal(err)
 	}
@@ -109,9 +104,7 @@ func TestRemoveProjectWaitsForALiveRun(t *testing.T) {
 	h := start(t, uncertainDir(t))
 	h.thread("Stuck")
 	h.tt.Advance(time.Second)
-	if err := h.tt.RightClick("t3code"); err != nil {
-		t.Fatal(err)
-	}
+	h.rightClick("t3code")
 	if m := h.tt.Menu(); !slices.Contains(m, "Remove project…") {
 		t.Fatalf("the chip's menu %q has no Remove project…", m)
 	}
