@@ -1,0 +1,13 @@
+{
+  "id": "row-actions",
+  "name": "Row actions",
+  "description": "A sidebar row's actions, shown while it's pointed at: snooze, with its popover of times, settle, and back to the inbox. Built into Glitched; make a copy in Settings › Plugins to change them.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "ui.replace", "threads:read", "threads:write"],
+  "glitched": {
+    "places": [{ "id": "actions", "at": "thread.row.actions", "replaces": true }]
+  }
+}

@@ -196,6 +196,11 @@ func (a *app) wakeSnoozed(c *ui.Context) {
 // projectTile is a project's mark: its icon, white on its color.
 func projectTile(c *ui.Context, p *project, size float32) ui.Element {
 	icon, color := p.mark()
+	return tile(c, icon, color, size)
+}
+
+// tile is a mark, a project's: the icon, white on the color.
+func tile(c *ui.Context, icon *ui.SVG, color ui.Color, size float32) ui.Element {
 	return ui.Box(c).Size(size, size).Radius(size * 0.28).Center().Shrink(0).
 		LinearGradient(ui.LinearGradient{From: color.Mix(ui.Hex("#ffffff"), 0.1), To: color.Mix(ui.Hex("#000000"), 0.2), Angle: 135, Oklab: true}).
 		Children(func() { ui.Icon(c, icon).FontSize(size * 0.6).TextColor(ui.Hex("#ffffff")) })
@@ -443,26 +448,6 @@ func morning(now time.Time, days int) time.Time {
 	return time.Date(y, m, d+days, 9, 0, 0, 0, now.Location())
 }
 
-// rowActions are a pointed-at thread's actions: snooze it until a time,
-// and settle it; a settled or snoozed thread goes back to the inbox
-// instead.
-func (a *app) rowActions(c *ui.Context, t thread, cat category) {
-	ui.Row(c).Gap(0).Children(func() {
-		switch cat {
-		case catSettled, catSnoozed:
-			if a.iconButton(c, "back", icUndo, "Back to inbox", false).Padding(3).TextColor(tintBack).Clicked() {
-				a.backend.SetDisposition(t.env, t.id(), api.Disposition{})
-				a.gag(c, t.id(), gagUndo, cat)
-			}
-		case catInbox:
-			a.snoozeButton(c, t, cat)
-			if a.iconButton(c, "settle", icCheckCirc, "Settle", false).Padding(3).TextColor(tintSettle).Clicked() {
-				a.settle(c, t, cat)
-			}
-		}
-	})
-}
-
 func lower(s string) string {
 	if s == "Later today" {
 		return "later today"
@@ -471,47 +456,6 @@ func lower(s string) string {
 		return s
 	}
 	return fmt.Sprintf("%c%s", s[0]|0x20, s[1:])
-}
-
-// snoozeButton opens a popover of when to snooze the thread until, each
-// with a joke; a native menu would take the pointer from the row, which
-// stops building its actions, and lose the choice.
-func (a *app) snoozeButton(c *ui.Context, t thread, cat category) {
-	open := a.snoozeFor == t.id()
-	b := a.iconButton(c, "snooze", icClock, "Snooze", open).Padding(3).TextColor(tintSnooze)
-	if b.Clicked() {
-		if open {
-			a.snoozeFor = api.ID{}
-		} else {
-			a.snoozeFor = t.id()
-		}
-		open = !open
-	}
-	a.popover(c, b, &open, func(panel ui.Element) {
-		// Under the button, from its left edge: above it, the panel ran
-		// left over the sidebar's header and the traffic lights. Near the
-		// window's bottom, AttachTo puts it above instead.
-		panel.AttachTo(b, ui.AnchorBottomStart, ui.AnchorTopStart).Margin(6, 0, 0, 0).Width(220).Radius(12).Clip()
-		a.frosted(c, panel).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.35)).Children(func() {
-			ui.Column(c).Padding(5).Gap(1).Children(func() {
-				ui.Text(c, "Snooze until…").FontSize(11).FontWeight(600).TextColor(palette.faint).Padding(4, 8, 3)
-				for _, s := range snoozeTimes {
-					if row(c, s.when, false).Padding(6, 8).Gap(10).Children(func() {
-						ui.Text(c, s.emoji).FontSize(15)
-						ui.Column(c).Grow(1).Gap(1).Children(func() {
-							ui.Text(c, s.when).FontWeight(500).TextColor(palette.text)
-							ui.Text(c, s.joke).FontSize(11.5).TextColor(palette.muted).Italic()
-						})
-					}).Clicked() {
-						a.snooze(c, t, s.when, s.until(a.now), cat)
-					}
-				}
-			})
-		})
-	})
-	if !open && a.snoozeFor == t.id() {
-		a.snoozeFor = api.ID{} // dismissed
-	}
 }
 
 func (a *app) snooze(c *ui.Context, t thread, when string, until time.Time, from category) {

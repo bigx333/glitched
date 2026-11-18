@@ -68,6 +68,7 @@ var Types = map[string]kind{
 	"keys":     leaf,
 	"link":     leaf,
 	"swatch":   control,
+	"tile":     leaf,
 }
 
 // Native is a widget Glitched draws itself, which a plugin only places:
@@ -173,8 +174,10 @@ type Node struct {
 	Radius int    `json:"radius,omitempty"`
 	// Name is an icon's: one of the app's, or "plugin:<path>.svg".
 	Name string `json:"name,omitempty"`
-	// Color and Background are theme tokens (Colors); a swatch's color
-	// is the color it shows, as #rrggbb. A select's Width is in points.
+	// Color and Background are theme tokens (Colors); a swatch's or a
+	// tile's color is the color it shows, as #rrggbb, and a ghost
+	// button's either. A select's Width is in points, as is a tile's
+	// size.
 	Color      string `json:"color,omitempty"`
 	Background string `json:"background,omitempty"`
 
@@ -206,6 +209,14 @@ type Node struct {
 	Keys []string `json:"keys,omitempty"`
 	// Href is a link's http or https address.
 	Href string `json:"href,omitempty"`
+
+	// Italic slants a text.
+	Italic bool `json:"italic,omitempty"`
+	// Popover is a ghost button's panel, a column anchored under it,
+	// shown while Open; OnClose fires as the user dismisses it. The
+	// column's Width is the panel's, 120 to 480.
+	Popover *Node `json:"popover,omitempty"`
+	popover bool  // is one
 
 	// Name is also a native widget's (Natives), and Props what it is
 	// passed.
@@ -430,6 +441,15 @@ func (c *checker) node(n *Node, path string, depth int) error {
 	if err := c.value(n); err != nil {
 		return fail("%v", err)
 	}
+	if n.Popover != nil {
+		if n.Popover.Type != "column" {
+			return fail("a popover is a column")
+		}
+		n.Popover.popover = true
+		if err := c.node(n.Popover, path+".popover", depth+1); err != nil {
+			return err
+		}
+	}
 	for field, list := range map[string][]*Node{"children": n.Children, "trailing": n.Trailing, "actions": n.Actions} {
 		for i, ch := range list {
 			if err := c.node(ch, path+"."+field+"["+strconv.Itoa(i)+"]", depth+1); err != nil {
@@ -443,7 +463,7 @@ func (c *checker) node(n *Node, path string, depth int) error {
 // handlers checks that the widget names only the handlers its type fires.
 func (c *checker) handlers(n *Node) error {
 	fires := map[string][]string{
-		"button": {"onClick"},
+		"button": {"onClick", "onClose"},
 		"input":  {"onChange", "onSubmit"},
 		"toggle": {"onChange"},
 		"select": {"onChange"},
@@ -452,6 +472,8 @@ func (c *checker) handlers(n *Node) error {
 		"dialog": {"onClose"},
 		"item":   {"onClick"},
 		"swatch": {"onClick"},
+		"row":    {"onClick"},
+		"column": {"onClick"},
 		"native": Natives[n.Name].Fires,
 	}[n.Type]
 	for name, h := range map[string]*Handler{"onClick": n.OnClick, "onChange": n.OnChange, "onSubmit": n.OnSubmit, "onClose": n.OnClose} {
@@ -530,6 +552,7 @@ func (n *Node) Walk(fn func(*Node)) {
 	for _, ch := range slices.Concat(n.Children, n.Trailing, n.Actions) {
 		ch.Walk(fn)
 	}
+	n.Popover.Walk(fn)
 }
 
 // Find is the widget with the id, or nil.
@@ -551,13 +574,28 @@ func (c *checker) extra(n *Node) error {
 	if n.Type == "swatch" && (!hexColor.MatchString(n.Color) || n.Label == "") {
 		return fmt.Errorf("a swatch has a color as #rrggbb, and a label")
 	}
+	if n.Type == "tile" && (!hexColor.MatchString(n.Color) || n.Icon == "" || n.Width < 8 || n.Width > 64) {
+		return fmt.Errorf("a tile has a color as #rrggbb, an icon, and a width of 8 to 64")
+	}
+	ghost := n.Type == "button" && n.Style == "ghost"
 	for _, col := range []string{n.Color, n.Background} {
-		if col != "" && !contains(Colors, col) && n.Type != "swatch" {
+		if col != "" && !contains(Colors, col) && n.Type != "swatch" && n.Type != "tile" && !(ghost && col == n.Color && hexColor.MatchString(col)) {
 			return fmt.Errorf("color %q is none of %v", col, Colors)
 		}
 	}
-	if n.Open && n.Type != "dialog" {
+	switch {
+	case n.Open && n.Type != "dialog" && n.Popover == nil:
 		return fmt.Errorf("a %s doesn't open", n.Type)
+	case n.Popover != nil && !ghost:
+		return fmt.Errorf("only a ghost button has a popover")
+	case n.Popover != nil && (n.Popover.Width < 120 || n.Popover.Width > 480):
+		return fmt.Errorf("a popover's width is 120 to 480")
+	case n.OnClose != nil && n.Type == "button" && n.Popover == nil:
+		return fmt.Errorf("only a button with a popover has onClose")
+	case n.Italic && n.Type != "text":
+		return fmt.Errorf("a %s isn't italic", n.Type)
+	case n.OnClick != nil && (n.Type == "row" || n.Type == "column") && n.ID == "":
+		return fmt.Errorf("a %s that is clicked needs an id", n.Type)
 	}
 	if (len(n.Columns) > 0 || len(n.Rows) > 0) && n.Type != "table" {
 		return fmt.Errorf("a %s has no columns or rows", n.Type)
@@ -582,7 +620,7 @@ func (c *checker) extra(n *Node) error {
 			return fmt.Errorf("a tooltip is up to %d bytes", MaxTooltip)
 		}
 	}
-	if (n.Width != 0 || n.Height != 0 || n.Radius != 0) && n.Type != "image" && (n.Type != "select" || n.Height != 0 || n.Radius != 0) {
+	if (n.Width != 0 || n.Height != 0 || n.Radius != 0) && n.Type != "image" && (n.Type != "select" && n.Type != "tile" && !n.popover || n.Height != 0 || n.Radius != 0) {
 		return fmt.Errorf("a %s has no width, height or radius", n.Type)
 	}
 	if n.Type == "select" && n.Width != 0 && (n.Width < 40 || n.Width > 480) {
@@ -609,7 +647,7 @@ func (c *checker) extra(n *Node) error {
 			return fmt.Errorf("only a menu has separators, which have no value or label")
 		}
 	}
-	drawn := n.Style == "ghost" || n.Style == "outline" || n.Style == "bordered" || n.Type == "item"
+	drawn := n.Style == "ghost" || n.Style == "outline" || n.Style == "bordered" || n.Type == "item" || n.Type == "tile"
 	switch {
 	case n.Tooltip != "" && n.Type != "button" && n.Type != "menu":
 		return fmt.Errorf("a %s has no tooltip", n.Type)

@@ -571,8 +571,10 @@ type app struct {
 	// placeControls their inputs' values.
 	placeFrame    placeFrame
 	placeControls map[placeKey]*render.Controls
-	// pluginRecords are what the plugins were last told of the threads.
-	pluginRecords map[string]string
+	// pluginRecords are what the plugins were last told of the threads,
+	// and pluginSections the sidebar section each was last in.
+	pluginRecords  map[string]string
+	pluginSections map[string]string
 	// pluginMessages are the messages the plugins were told of, by thread
 	// and key.
 	pluginMessages map[string]map[string]bool
@@ -652,6 +654,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		pluginAssets:   map[string]asset{},
 		settingDrafts:  map[string]string{},
 		pluginRecords:  map[string]string{},
+		pluginSections: map[string]string{},
 		pluginMessages: map[string]map[string]bool{},
 		pluginFiles:    map[string]map[string]time.Time{},
 		settings: settings{

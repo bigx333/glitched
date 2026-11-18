@@ -17,6 +17,29 @@ type ThreadRecord struct {
 	Status    string `json:"status,omitempty"`
 	Machine   string `json:"machine,omitempty"`
 	UpdatedAt string `json:"updatedAt,omitempty"`
+	// Section is where the sidebar files it: inbox, working, snoozed or
+	// settled. Disposition is how the user left it, with what they last
+	// did here counted before the engine has it.
+	Section     string       `json:"section,omitempty"`
+	Disposition *Disposition `json:"disposition,omitempty"`
+	Unread      bool         `json:"unread,omitempty"`
+	// Parent is the thread that started it, Ancestors that one's line,
+	// the furthest first, and Children the threads it started, the
+	// newest first.
+	Parent    string   `json:"parent,omitempty"`
+	Ancestors []string `json:"ancestors,omitempty"`
+	Children  []string `json:"children,omitempty"`
+	// Requests are the approvals and questions it waits on, and Tokens
+	// what its own runs used.
+	Requests int   `json:"requests,omitempty"`
+	Tokens   int64 `json:"tokens,omitempty"`
+}
+
+// Disposition is a thread's inbox state: inbox, snoozed till Until (RFC
+// 3339), or settled.
+type Disposition struct {
+	State string `json:"state"`
+	Until string `json:"until,omitempty"`
 }
 
 // Record is the thread as the plugin id may see it.

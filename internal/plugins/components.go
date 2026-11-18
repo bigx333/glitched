@@ -33,6 +33,7 @@ var Components = []Component{
 	{Name: "settings.page.keybindings", Provides: "keybindingsPage", About: "The Keybindings page of Settings: the app's shortcuts, with a search."},
 	{Name: "thread.empty", Provides: "threadEmpty", About: "What a thread with no messages yet shows, when it isn't a new thread's hero."},
 	{Name: "hero.heading", Provides: "", About: "The greeting over a new thread's composer. The hero fades it as the composer docks."},
+	{Name: "thread.row.actions", Provides: "rowActions", Needs: "threads:write", About: "A sidebar row's actions, shown while it's pointed at: snooze, with its popover of times, settle, or back to the inbox."},
 	{Name: "thread.panel.diff", Provides: "diffPanel", Needs: "threads:read", About: "The diff panel: its header, and its list of changed files over the native diff.body."},
 	{Name: "approval.card", Locked: widget.Locked["approval.card"]},
 	{Name: "question.card", Locked: widget.Locked["question.card"]},
