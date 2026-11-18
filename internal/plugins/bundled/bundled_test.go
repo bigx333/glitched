@@ -88,6 +88,7 @@ func repo(t *testing.T) (string, string) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("LC_ALL", "C") // git's messages, as the tests read them
 	os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[user]\n\tname = T\n\temail = t@example.invalid\n[init]\n\tdefaultBranch = main\n"), 0o644)
 	origin := filepath.Join(t.TempDir(), "origin.git")
 	git(t, ".", "init", "-q", "--bare", origin)
@@ -158,12 +159,17 @@ func TestThePushIgnoresTheRepositorysPushConfig(t *testing.T) {
 	work, origin := repo(t)
 	git(t, work, "config", "remote.origin.push", "+refs/heads/main:refs/heads/elsewhere")
 	git(t, work, "config", "push.default", "matching")
+	git(t, work, "config", "push.followTags", "true")
+	git(t, work, "tag", "-a", "-m", "Not this", "v1")
 	header(t, work, "Only main")
 	if got := git(t, origin, "log", "-1", "--format=%s", "main"); got != "Only main" {
 		t.Errorf("origin's main is at %q", got)
 	}
 	if out, _ := exec.Command("git", "-C", origin, "rev-parse", "--verify", "-q", "refs/heads/elsewhere").Output(); len(out) > 0 {
 		t.Error("the push followed the repository's refspec to elsewhere")
+	}
+	if out, _ := exec.Command("git", "-C", origin, "rev-parse", "--verify", "-q", "refs/tags/v1").Output(); len(out) > 0 {
+		t.Error("the push followed push.followTags and pushed a tag")
 	}
 }
 
