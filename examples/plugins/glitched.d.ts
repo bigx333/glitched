@@ -14,14 +14,17 @@ type Color = "$text" | "$text.muted" | "$text.faint" | "$accent" | "$success" | 
 /** A choice of a select, tabs or menu: a string is both value and label. */
 type Option = string | { value: string; label?: string };
 
+/** 0 to 64 points: every side; top and bottom, then the sides; or top, right, bottom and left. */
+type Spacing = number | [number, number] | [number, number, number, number];
+
 /** Containers lay out their children. */
 interface Layout {
   id?: string;
   children?: Widget[];
   /** Space between the children, 0 to 64 points. */
   gap?: number;
-  /** Space around the children, 0 to 64 points. */
-  padding?: number;
+  /** Space around the children. */
+  padding?: Spacing;
   align?: "start" | "center" | "end" | "stretch";
   justify?: "start" | "center" | "end" | "between";
   /** Take the room the parent leaves. */
@@ -30,24 +33,32 @@ interface Layout {
 
 type Widget =
   | ({ type: "column" | "row"; background?: Color } & Layout)
-  | ({ type: "card"; title?: string } & Layout)
+  | ({ type: "card"; title?: string; /** list: Settings' list of rows, a line between its children. */ style?: "default" | "list" } & Layout)
   | {
       type: "text";
       id?: string;
       text: string;
       style?: "body" | "muted" | "strong" | "heading" | "title" | "code" | "error" | "success";
       size?: "small";
+      /** 8 to 48 points, over its style's. */
+      fontSize?: number;
+      /** 100 to 900, over its style's. */
+      weight?: number;
       color?: Color;
       selectable?: boolean;
+      padding?: Spacing;
+      grow?: boolean;
     }
   | { type: "markdown"; id?: string; text: string }
   | { type: "badge"; id?: string; text: string; style?: "default" | "accent" | "success" | "warning" | "danger" | "count"; color?: Color }
   | { type: "divider" | "spacer" | "spinner"; id?: string }
-  | { type: "icon"; id?: string; /** One of the app's icons, or "plugin:<file>.svg". */ name: string; color?: Color }
+  | { type: "icon"; id?: string; /** One of the app's icons, or "plugin:<file>.svg". */ name: string; color?: Color; /** 8 to 48 points. */ fontSize?: number }
+  | { type: "keys"; id?: string; /** Keycaps, 1 to 8, as ["⌘", "K"]. */ keys: string[] }
+  | { type: "link"; id?: string; text: string; /** http or https, opened in the browser. */ href: string }
   | {
       type: "image";
       id?: string;
-      /** "plugin:<file>" (PNG, JPEG or SVG) in the plugin's folder. */
+      /** "plugin:<file>" (PNG, JPEG or SVG) in the plugin's folder, an https address with the network grant, or "app:icon", Glitched's icon. */
       src: string;
       width?: number;
       height?: number;
@@ -59,7 +70,18 @@ type Widget =
       columns: { id: string; title: string; width?: number }[];
       rows: { key: string; cells: Record<string, string> }[];
     }
-  | { type: "button"; id: string; label: string; style?: "default" | "primary" | "danger"; disabled?: boolean; tooltip?: string; onClick?: Handler }
+  | {
+      type: "button";
+      id: string;
+      label: string;
+      style?: "default" | "primary" | "danger";
+      disabled?: boolean;
+      tooltip?: string;
+      /** Once clicked, a spinner and no clicks till the plugin has drawn after the click. */
+      progress?: boolean;
+      onClick?: Handler;
+    }
+  | ({ type: "button"; /** Settings' secondary button. */ style: "bordered"; icon?: string } & DrawnButton)
   | ({ type: "button"; style: "ghost"; /** It shows only its icon. */ icon: string; /** On, as a panel's toggle. */ active?: boolean; /** Up to 4 characters over its corner. */ badge?: string; size?: "small" } & DrawnButton)
   | ({ type: "button"; style: "outline"; icon?: string; /** The icon alone. */ compact?: boolean } & DrawnButton)
   | {
@@ -72,6 +94,8 @@ type Widget =
       controlled?: boolean;
       multiline?: boolean;
       disabled?: boolean;
+      /** search: a magnifier and a clear button. */
+      style?: "default" | "search";
       onChange?: Handler;
       /** Enter, in a single-line input. */
       onSubmit?: Handler;
@@ -112,7 +136,8 @@ type Widget =
       type: "menu";
       id: string;
       label: string;
-      options: Option[];
+      /** A separator is a line between two options. */
+      options: (Option | { separator: true })[];
       disabled?: boolean;
       tooltip?: string;
       /** outline: a hairline pill with a chevron, as the header's Open in. */
@@ -183,7 +208,7 @@ type UIEvent = {
   value?: string | boolean | { path: string; remaining: number };
   payload?: unknown;
   /** Set in a place: which copy, and the context it was drawn with. */
-  place?: { id: string; at: Slot | Component; key: string; context?: ThreadRecord | HeaderActionsContext | DiffPanelContext };
+  place?: { id: string; at: Slot | Component; key: string; context?: ThreadRecord | ComponentContext };
 };
 
 /** An app event the plugin hears (its manifest's glitched.events), or a timer. */
@@ -214,7 +239,29 @@ type Slot = "thread.header" | "thread.row" | "sidebar.footer";
  * composer.send, settings.plugins, settings.servers and
  * confirm.destructive are off limits: a plugin that names one doesn't load.
  */
-type Component = "thread.header.actions" | "thread.panel.diff";
+type Component = "thread.header.actions" | "thread.panel.diff" | "hero.heading" | "thread.empty" | "settings.page.about" | "settings.page.keybindings";
+
+/** The context of thread.empty, a thread with no messages. */
+interface ThreadEmptyContext {
+  thread: ThreadRecord;
+}
+
+/** The context of settings.page.about. hero.heading's is {}. */
+interface AboutPageContext {
+  version: string;
+  toolkit: string;
+  /** Check for updates runs. */
+  checking: boolean;
+  /** The repository's address. */
+  source: string;
+}
+
+/** The context of settings.page.keybindings. */
+interface KeybindingsPageContext {
+  keybindings: { label: string; keys: string[] }[];
+}
+
+type ComponentContext = HeaderActionsContext | DiffPanelContext | ThreadEmptyContext | AboutPageContext | KeybindingsPageContext | Record<string, never>;
 
 /** The context of thread.header.actions, the buttons at the right of a thread's header. */
 interface HeaderActionsContext {
@@ -275,8 +322,8 @@ interface PlaceArgs<S> {
   id: string;
   at: Slot | Component;
   state: S;
-  /** A component's copies have its context: HeaderActionsContext for thread.header.actions, DiffPanelContext for thread.panel.diff. */
-  items: { key: string; context?: ThreadRecord | HeaderActionsContext | DiffPanelContext }[];
+  /** A component's copies have its context: HeaderActionsContext for thread.header.actions, DiffPanelContext for thread.panel.diff, and so on. */
+  items: { key: string; context?: ThreadRecord | ComponentContext }[];
 }
 interface CommandArgs {
   id: string;
@@ -315,6 +362,10 @@ declare const glitched: {
   };
   /** Opens the thread's workspace, on this machine, in an app. Needs threads:read. */
   openIn(app: "cursor" | "vscode" | "zed" | "finder", thread: string): Promise<void>;
+  app: {
+    /** About's update check: the page shows it runs, then a toast says how it went. */
+    checkForUpdates(): Promise<void>;
+  };
   /** The diff panel. Each names the thread and, for a file, one it changed. */
   diff: {
     /** Needs ui.place. */

@@ -6,6 +6,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/plugins"
 )
 
 // A new thread opens as a hero: its composer large in the middle of the
@@ -101,12 +102,12 @@ func (a *app) heroHeading(c *ui.Context, d float32) {
 	if o <= 0 {
 		return
 	}
-	ui.Column(c).Key("hero-heading").AlignItems(ui.Center).Gap(10).Padding(0, 0, 28).PassThrough().
-		Opacity(o).Translate(0, -12*(1-o)).Children(func() {
-		ui.Icon(c, icSparkles).FontSize(30).TextColor(palette.accent)
-		ui.Text(c, "What should we build?").FontSize(22).FontWeight(600)
-		ui.Text(c, "Send a message to start the thread.").TextColor(palette.muted)
-	})
+	// What it says is a plugin's: the built-in Hero heading, or one of the
+	// user's that replaces it. How it fades is the hero's.
+	box := func() ui.Element {
+		return ui.Column(c).Key("hero-heading").AlignItems(ui.Center).Padding(0, 0, 28).PassThrough().Opacity(o).Translate(0, -12*(1-o))
+	}
+	a.pluginComponent(c, box, "hero.heading", "hero", nil, func(plugins.ThreadRecord) any { return struct{}{} })
 }
 
 // leaveFor notes the thread shown as the one left for a new thread's hero,

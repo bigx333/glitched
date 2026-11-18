@@ -387,6 +387,8 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		return a.panels(), nil
 	case "open.in":
 		return a.openInEffect(e.Args)
+	case "app.checkForUpdates":
+		return a.checkForUpdatesEffect()
 	case "diff.set", "diff.setReviewed", "diff.openFile":
 		return a.diffEffect(e.Type, e.Args)
 	case "tab.open":

@@ -34,13 +34,15 @@ func (a *app) pluginStyle(id string) render.Style {
 	return render.Style{
 		Text: palette.text, Muted: palette.muted, Faint: palette.faint, Accent: palette.accent,
 		Red: palette.red, Green: palette.green, Amber: palette.amber, Border: palette.border, Surface: palette.surface, Hover: palette.hover,
-		Card:    func(c *ui.Context, title string, body func()) { card(c, strings.ToUpper(title), body) },
-		Icon:    func(name string) *ui.SVG { return a.pluginIcon(id, name) },
-		Image:   func(src string) ui.ImageSource { return a.pluginImage(id, src) },
-		Ghost:   ghost,
-		Outline: headerButton,
-		Tip:     a.tip,
-		Row:     row,
+		Card:     func(c *ui.Context, title string, body func()) { card(c, strings.ToUpper(title), body) },
+		Icon:     func(name string) *ui.SVG { return a.pluginIcon(id, name) },
+		Image:    func(src string) ui.ImageSource { return a.pluginImage(id, src) },
+		Ghost:    ghost,
+		Outline:  headerButton,
+		Tip:      a.tip,
+		Row:      row,
+		ListCard: func(c *ui.Context, body func()) { card(c, "", body) },
+		Keys:     func(c *ui.Context, keys []string) { kbd(c, keys...) },
 	}
 }
 
@@ -89,6 +91,9 @@ func (a *app) pluginIcon(id, name string) *ui.SVG {
 // or, with the network grant, an https one its permissions.network names:
 // PNG, JPEG or SVG.
 func (a *app) pluginImage(id, src string) ui.ImageSource {
+	if src == "app:icon" {
+		return appIcon
+	}
 	rel, own := strings.CutPrefix(src, "plugin:")
 	if !own {
 		return a.remoteImage(id, src)

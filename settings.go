@@ -467,58 +467,69 @@ var keybindings = []struct {
 	{"Next thread", []string{"⌘", "⌥", "↓"}},
 }
 
+// keybindings is a plugin's: the built-in Keybindings page, or one of
+// the user's that replaces it.
 func (a *app) keybindings(c *ui.Context) {
-	ui.SearchField(c, &a.keyQuery).Placeholder("Search keybindings")
-	card(c, "", func() {
-		shown := 0
-		for _, k := range keybindings {
-			if !matches(k.label, a.keyQuery) {
-				continue
-			}
-			shown++
-			ui.Row(c).Key(k.label).Padding(11, 16).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, k.label).Grow(1)
-				kbd(c, k.keys...)
-			})
-		}
-		if shown == 0 {
-			ui.Text(c, "No keybindings match.").Key("none").TextColor(palette.muted).Padding(16)
-		}
-	})
+	ctx := keybindingsPage{Keybindings: make([]keybindingRecord, len(keybindings))}
+	for i, k := range keybindings {
+		ctx.Keybindings[i] = keybindingRecord{k.label, k.keys}
+	}
+	a.settingsComponent(c, "settings.page.keybindings", ctx)
+}
+
+// keybindingsPage is the context of settings.page.keybindings.
+type keybindingsPage struct {
+	Keybindings []keybindingRecord `json:"keybindings"`
+}
+
+type keybindingRecord struct {
+	Label string   `json:"label"`
+	Keys  []string `json:"keys"`
+}
+
+// settingsComponent draws a settings page's body with the plugin that
+// replaces the component, in the page's column.
+func (a *app) settingsComponent(c *ui.Context, name string, ctx any) {
+	box := func() ui.Element { return ui.Column(c).Key("component:" + name) }
+	a.pluginComponent(c, box, name, "page", nil, func(plugins.ThreadRecord) any { return ctx })
 }
 
 // --- About
 
+// about is a plugin's: the built-in About page, or one of the user's
+// that replaces it. The update check it starts is the app's, which says
+// how it went.
 func (a *app) about(c *ui.Context) {
 	s := &a.settings
-	ui.Column(c).Center().Gap(10).Padding(24, 0).Children(func() {
-		ui.Image(c, appIcon).Size(96, 96)
-		ui.Text(c, "Glitched").FontSize(20).FontWeight(650)
-		ui.Text(c, "0.0.42 · native prototype built with MyGo v0.5.5").TextColor(palette.muted)
+	if s.checking {
+		if !c.Now().Before(a.checkUntil) {
+			s.checking = false
+			c.AddToast(ui.Toast{Title: "You're up to date", Description: "Glitched " + appVersion + " is the newest version."})
+		} else {
+			c.After(a.checkUntil.Sub(c.Now()))
+		}
+	}
+	a.settingsComponent(c, "settings.page.about", aboutPage{Version: appVersion, Toolkit: "MyGo v0.5.5", Checking: s.checking, Source: "https://github.com/bigx333/glitched"})
+}
+
+// appVersion is Glitched's version.
+const appVersion = "0.0.42"
+
+// aboutPage is the context of settings.page.about.
+type aboutPage struct {
+	Version  string `json:"version"`
+	Toolkit  string `json:"toolkit"`
+	Checking bool   `json:"checking"`
+	Source   string `json:"source"`
+}
+
+// checkForUpdatesEffect is app.checkForUpdates: About's check, which
+// shows it runs for a moment and says how it went.
+func (a *app) checkForUpdatesEffect() (any, error) {
+	a.pluginLater = append(a.pluginLater, func(c *ui.Context) {
+		if !a.settings.checking {
+			a.settings.checking, a.checkUntil = true, c.Now().Add(1500*time.Millisecond)
+		}
 	})
-	card(c, "", func() {
-		settingRow(c, "Updates", "Checks for a new version when the app starts.", func() {
-			if s.checking {
-				if c.Now().Before(a.checkUntil) {
-					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-						ui.Spinner(c)
-						ui.Text(c, "Checking…").TextColor(palette.muted)
-					})
-					c.After(a.checkUntil.Sub(c.Now()))
-					return
-				}
-				s.checking = false
-				c.AddToast(ui.Toast{Title: "You're up to date", Description: "Glitched 0.0.42 is the newest version."})
-			}
-			if ghost(c, "check", false).Border(1, palette.border).Padding(6, 12).Children(func() {
-				ui.Icon(c, icRotate).FontSize(13)
-				ui.Text(c, "Check for updates")
-			}).Clicked() {
-				s.checking, a.checkUntil = true, c.Now().Add(1500*time.Millisecond)
-			}
-		})
-		settingRow(c, "Source", "github.com/bigx333/glitched", func() {
-			ui.Link(c, "Open on GitHub", "https://github.com/bigx333/glitched")
-		})
-	})
+	return nil, nil
 }

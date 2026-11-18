@@ -510,7 +510,6 @@ type app struct {
 	cmdkIndex int
 	cmdkList  ui.ListState
 
-	keyQuery    string
 	glassOffset ui.Point
 	checkUntil  time.Time
 

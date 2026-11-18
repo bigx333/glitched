@@ -65,6 +65,8 @@ var Types = map[string]kind{
 	"icon":     leaf,
 	"item":     control,
 	"native":   leaf,
+	"keys":     leaf,
+	"link":     leaf,
 }
 
 // Native is a widget Glitched draws itself, which a plugin only places:
@@ -141,11 +143,11 @@ type Node struct {
 	Disabled   bool `json:"disabled,omitempty"`
 	Selectable bool `json:"selectable,omitempty"`
 
-	Gap     int    `json:"gap,omitempty"`
-	Padding int    `json:"padding,omitempty"`
-	Align   string `json:"align,omitempty"`
-	Justify string `json:"justify,omitempty"`
-	Grow    bool   `json:"grow,omitempty"`
+	Gap     int     `json:"gap,omitempty"`
+	Padding Spacing `json:"padding,omitempty"`
+	Align   string  `json:"align,omitempty"`
+	Justify string  `json:"justify,omitempty"`
+	Grow    bool    `json:"grow,omitempty"`
 
 	OnClick  *Handler `json:"onClick,omitempty"`
 	OnChange *Handler `json:"onChange,omitempty"`
@@ -188,6 +190,18 @@ type Node struct {
 	Trailing []*Node `json:"trailing,omitempty"`
 	Actions  []*Node `json:"actions,omitempty"`
 
+	// FontSize and Weight are a text's size in points and weight, over
+	// its style's; FontSize is also an icon's size.
+	FontSize float64 `json:"fontSize,omitempty"`
+	Weight   int     `json:"weight,omitempty"`
+	// Progress shows a button runs, once clicked, till the plugin
+	// answers: for a click whose update takes a while, as a git push.
+	Progress bool `json:"progress,omitempty"`
+	// Keys are a shortcut's keycaps, as "⌘" and "K".
+	Keys []string `json:"keys,omitempty"`
+	// Href is a link's http or https address.
+	Href string `json:"href,omitempty"`
+
 	// Name is also a native widget's (Natives), and Props what it is
 	// passed.
 	Props map[string]json.RawMessage `json:"props,omitempty"`
@@ -215,6 +229,39 @@ type Option struct {
 	// be chosen.
 	Disabled bool   `json:"disabled,omitempty"`
 	Tooltip  string `json:"tooltip,omitempty"`
+	// Separator is a menu's line between options, with no value.
+	Separator bool `json:"separator,omitempty"`
+}
+
+// Spacing is a padding: one value for every side, two for vertical and
+// horizontal, or four for top, right, bottom and left. JSON has it as a
+// number or a list.
+type Spacing []int
+
+// UnmarshalJSON takes a number or a list of numbers.
+func (s *Spacing) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] != '[' {
+		var n int
+		if err := json.Unmarshal(b, &n); err != nil {
+			return err
+		}
+		*s = Spacing{n}
+		return nil
+	}
+	return json.Unmarshal(b, (*[]int)(s))
+}
+
+// Sides are the padding's top, right, bottom and left.
+func (s Spacing) Sides() (t, r, b, l int) {
+	switch len(s) {
+	case 1:
+		return s[0], s[0], s[0], s[0]
+	case 2:
+		return s[0], s[1], s[0], s[1]
+	case 4:
+		return s[0], s[1], s[2], s[3]
+	}
+	return 0, 0, 0, 0
 }
 
 // UnmarshalJSON takes an option as an object, or as a string that is both.
@@ -256,11 +303,13 @@ var (
 	handlerPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
 	styles         = map[string][]string{
 		"text":   {"", "body", "muted", "strong", "heading", "title", "code", "error", "success"},
-		"button": {"", "default", "primary", "danger", "ghost", "outline"},
+		"button": {"", "default", "primary", "danger", "ghost", "outline", "bordered"},
 		"menu":   {"", "default", "outline"},
 		"badge":  {"", "default", "accent", "success", "warning", "danger", "count"},
 		"tabs":   {"", "default", "segmented"},
 		"item":   {"", "code"},
+		"card":   {"", "default", "list"},
+		"input":  {"", "default", "search"},
 	}
 	aligns   = []string{"", "start", "center", "end", "stretch"}
 	justifys = []string{"", "start", "center", "end", "between"}
@@ -356,8 +405,8 @@ func (c *checker) node(n *Node, path string, depth int) error {
 	if !contains(aligns, n.Align) || !contains(justifys, n.Justify) {
 		return fail("unknown align %q or justify %q", n.Align, n.Justify)
 	}
-	if n.Gap < 0 || n.Gap > MaxSpacing || n.Padding < 0 || n.Padding > MaxSpacing {
-		return fail("gap and padding are 0 to %d", MaxSpacing)
+	if n.Gap < 0 || n.Gap > MaxSpacing || len(n.Padding) == 3 || len(n.Padding) > 4 || slices.ContainsFunc(n.Padding, func(p int) bool { return p < 0 || p > MaxSpacing }) {
+		return fail("gap and padding are 0 to %d, and padding is 1, 2 or 4 of them", MaxSpacing)
 	}
 	if n.Type == "native" {
 		// What it is comes first: a locked or unknown name says so.
@@ -525,14 +574,35 @@ func (c *checker) extra(n *Node) error {
 	if (n.Width != 0 || n.Height != 0 || n.Radius != 0) && n.Type != "image" {
 		return fmt.Errorf("a %s has no width, height or radius", n.Type)
 	}
-	drawn := n.Style == "ghost" || n.Style == "outline" || n.Type == "item"
+	switch {
+	case n.FontSize != 0 && n.Type != "text" && n.Type != "icon", n.Weight != 0 && n.Type != "text":
+		return fmt.Errorf("a %s has no fontSize or weight", n.Type)
+	case n.FontSize != 0 && (n.FontSize < 8 || n.FontSize > 48), n.Weight != 0 && (n.Weight < 100 || n.Weight > 900):
+		return fmt.Errorf("fontSize is 8 to 48, and weight 100 to 900")
+	case len(n.Keys) > 0 && n.Type != "keys", n.Type == "keys" && (len(n.Keys) == 0 || len(n.Keys) > 8):
+		return fmt.Errorf("keys are a keys widget's, 1 to 8 of them")
+	case slices.ContainsFunc(n.Keys, func(k string) bool { return k == "" || len(k) > 16 }):
+		return fmt.Errorf("a key is 1 to 16 bytes")
+	case n.Progress && (n.Type != "button" || n.Style == "ghost" || n.Style == "outline" || n.Style == "bordered"):
+		return fmt.Errorf("progress is a plain button's")
+	case n.Href != "" && n.Type != "link":
+		return fmt.Errorf("a %s has no href", n.Type)
+	case n.Type == "link" && (n.Text == "" || !strings.HasPrefix(n.Href, "https://") && !strings.HasPrefix(n.Href, "http://") || len(n.Href) > 2048):
+		return fmt.Errorf("a link has a text and an http or https href")
+	}
+	for _, o := range n.Options {
+		if o.Separator && (n.Type != "menu" || o.Value != "" || o.Label != "") {
+			return fmt.Errorf("only a menu has separators, which have no value or label")
+		}
+	}
+	drawn := n.Style == "ghost" || n.Style == "outline" || n.Style == "bordered" || n.Type == "item"
 	switch {
 	case n.Tooltip != "" && n.Type != "button" && n.Type != "menu":
 		return fmt.Errorf("a %s has no tooltip", n.Type)
 	case len(n.Tooltip) > MaxTooltip || len(n.Badge) > MaxBadge:
 		return fmt.Errorf("a tooltip is up to %d bytes and a badge up to %d", MaxTooltip, MaxBadge)
 	case (n.Icon != "" || n.Compact) && !drawn:
-		return fmt.Errorf("only a ghost or outline %s has an icon", n.Type)
+		return fmt.Errorf("only a ghost or outline %s has an icon, or a bordered one", n.Type)
 	case n.Style == "ghost" && n.Icon == "":
 		return fmt.Errorf("a ghost button shows an icon, which it doesn't name")
 	case n.Type == "item" && n.Icon == "":
@@ -567,8 +637,8 @@ func (c *checker) extra(n *Node) error {
 			}
 		}
 	case "image":
-		if !strings.HasPrefix(n.Src, "plugin:") && !strings.HasPrefix(n.Src, "https://") {
-			return fmt.Errorf("an image's src is plugin:<path> or an https address")
+		if !strings.HasPrefix(n.Src, "plugin:") && !strings.HasPrefix(n.Src, "https://") && n.Src != "app:icon" {
+			return fmt.Errorf("an image's src is plugin:<path> or an https address, or app:icon")
 		}
 		if strings.Contains(n.Src, "..") || len(n.Src) > 2048 {
 			return fmt.Errorf("an image's src may not leave the plugin's folder")

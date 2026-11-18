@@ -36,6 +36,10 @@ type Style struct {
 	// Row makes the app's list row, keyed by key in c: selected shows at
 	// once, hover fades. Nil draws a ghost button.
 	Row func(c *ui.Context, key any, selected bool) ui.Element
+	// ListCard is the app's card of rows with lines between them, as
+	// Settings draws them; Keys its keycaps of a shortcut.
+	ListCard func(c *ui.Context, body func())
+	Keys     func(c *ui.Context, keys []string)
 	// Native draws a native widget, which the checks let only Natives be:
 	// fire gives the plugin a change. Nil, outside a component, says it
 	// draws only in one.
@@ -59,6 +63,9 @@ type Controls struct {
 	// dismissed are the dialogs the user closed, by id, till a view says
 	// again whether they're open.
 	dismissed map[string]bool
+	// pending are the progress buttons clicked, by id, with the click's
+	// number: each shows it runs till a view answers after it.
+	pending map[string]int
 }
 
 type control struct {
@@ -89,6 +96,11 @@ func (cs *Controls) Sync(v *widget.View, rev, processed int) {
 		return
 	}
 	cs.rev = rev
+	for id, seq := range cs.pending {
+		if seq <= processed {
+			delete(cs.pending, id)
+		}
+	}
 	live := map[string]bool{}
 	v.Body.Walk(func(n *widget.Node) {
 		if n.Type == "dialog" {
@@ -222,6 +234,12 @@ func (r *renderer) fire(n *widget.Node, h *widget.Handler, typ string, value any
 	if ctl := r.cs.m[n.ID]; ctl != nil && typ == "change" && seq > 0 {
 		ctl.last = seq
 	}
+	if n.Progress && typ == "click" && seq > 0 {
+		if r.cs.pending == nil {
+			r.cs.pending = map[string]int{}
+		}
+		r.cs.pending[n.ID] = seq
+	}
 }
 
 func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
@@ -239,7 +257,8 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		if n.Type == "row" {
 			e.AlignItems(ui.Center)
 		}
-		e.Gap(float32(n.Gap)).Padding(float32(n.Padding))
+		e.Gap(float32(n.Gap))
+		padding(e, n.Padding)
 		if a, ok := aligns[n.Align]; ok {
 			e.AlignItems(a)
 		}
@@ -254,17 +273,29 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		}
 		e.Children(func() { r.children(c, n) })
 	case "card":
+		if n.Style == "list" {
+			ui.Column(kc).Children(func() {
+				if st.ListCard == nil {
+					ui.Column(c).Radius(12).Border(1, st.Border).Background(st.Surface).Clip().Dividers(1, st.Border).Children(func() { r.children(c, n) })
+					return
+				}
+				st.ListCard(c, func() { r.children(c, n) })
+			})
+			return
+		}
 		ui.Column(kc).Children(func() {
 			st.Card(c, n.Title, func() {
 				gap := float32(n.Gap)
 				if gap == 0 {
 					gap = 12
 				}
-				pad := float32(n.Padding)
-				if pad == 0 {
-					pad = 16
+				pad := n.Padding
+				if len(pad) == 0 {
+					pad = widget.Spacing{16}
 				}
-				ui.Column(c).Padding(pad).Gap(gap).Children(func() { r.children(c, n) })
+				box := ui.Column(c).Gap(gap)
+				padding(box, pad)
+				box.Children(func() { r.children(c, n) })
 			})
 		})
 	case "text":
@@ -288,6 +319,16 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		if n.Size == "small" {
 			t.FontSize(11.5)
 		}
+		if n.FontSize != 0 {
+			t.FontSize(float32(n.FontSize))
+		}
+		if n.Weight != 0 {
+			t.FontWeight(n.Weight)
+		}
+		if n.Grow {
+			t.Grow(1)
+		}
+		padding(t, n.Padding)
 		if n.Selectable {
 			t.Selectable()
 		}
@@ -316,7 +357,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 	case "spinner":
 		ui.Spinner(kc)
 	case "button", "menu":
-		if n.Style == "ghost" || n.Style == "outline" {
+		if n.Style == "ghost" || n.Style == "outline" || n.Style == "bordered" {
 			r.drawnButton(c, n, key(n, i))
 			return
 		}
@@ -348,12 +389,18 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		if n.Style == "primary" {
 			newButton = ui.PrimaryButton
 		}
+		// A progress button runs till the plugin answers its click: a
+		// spinner before it, and it can't be pressed again.
+		busy := r.cs.pending[n.ID] > 0
+		if busy {
+			ui.Spinner(c.Key(key(n, i) + "#busy"))
+		}
 		b := newButton(kc, n.Label)
 		if n.Style == "danger" {
 			b.TextColor(st.Red)
 		}
-		b.Disabled(n.Disabled).OnClick(func() {
-			if !n.Disabled {
+		b.Disabled(n.Disabled || busy).OnClick(func() {
+			if !n.Disabled && !busy {
 				r.fire(n, n.OnClick, "click", nil)
 			}
 		})
@@ -365,8 +412,11 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		}
 		draw := func() {
 			newInput := ui.TextInput
-			if n.Multiline {
+			switch {
+			case n.Multiline:
 				newInput = ui.TextArea
+			case n.Style == "search":
+				newInput = ui.SearchField
 			}
 			e := newInput(c.Key(key(n, i)+"#input"), &ctl.text)
 			e.Placeholder(n.Placeholder).Disabled(n.Disabled).Label(n.Label)
@@ -505,10 +555,30 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			return
 		}
 		e := ui.Icon(kc, svg)
+		if n.FontSize != 0 {
+			e.FontSize(float32(n.FontSize))
+		}
 		if col, ok := st.color(n.Color); ok {
 			e.TextColor(col)
 		}
+	case "keys":
+		if st.Keys != nil {
+			st.Keys(kc, n.Keys)
+			return
+		}
+		ui.Text(kc, strings.Join(n.Keys, " ")).TextColor(st.Muted)
+	case "link":
+		ui.Link(kc, n.Text, n.Href)
 	}
+}
+
+// padding gives e the widget's padding, if it has one.
+func padding(e ui.Element, s widget.Spacing) {
+	if len(s) == 0 {
+		return
+	}
+	t, r, b, l := s.Sides()
+	e.Padding(float32(t), float32(r), float32(b), float32(l))
 }
 
 // segmented is tabs drawn as the app's segmented switch: an option it
@@ -584,6 +654,10 @@ func (r *renderer) item(c *ui.Context, n *widget.Node, k string) {
 func (r *renderer) menu(n *widget.Node) func(*ui.Menu) {
 	return func(m *ui.Menu) {
 		for _, o := range n.Options {
+			if o.Separator {
+				m.Separator()
+				continue
+			}
 			if m.Item(o.Shown()).Chosen() {
 				r.fire(n, n.OnChange, "change", o.Value)
 			}
@@ -625,6 +699,8 @@ func (r *renderer) button(c *ui.Context, n *widget.Node, k string) {
 		if n.Size == "small" {
 			b.Padding(3)
 		}
+	case n.Style == "bordered" && st.Ghost != nil:
+		b = st.Ghost(c, k, false).Border(1, st.Border).Padding(6, 12)
 	case n.Style == "outline" && st.Outline != nil:
 		b = st.Outline(c, k).Shrink(0)
 	default:
@@ -644,6 +720,11 @@ func (r *renderer) button(c *ui.Context, n *widget.Node, k string) {
 	b.Children(func() {
 		if ghost {
 			icon(n.Icon, 15)
+			return
+		}
+		if n.Style == "bordered" {
+			icon(n.Icon, 13)
+			ui.Text(c, n.Label)
 			return
 		}
 		icon(n.Icon, 14)

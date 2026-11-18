@@ -141,3 +141,40 @@ func TestANativeWidgetIsOneGlitchedOffers(t *testing.T) {
 		}
 	}
 }
+
+// The chrome's widgets: sizes and weights, paddings, keycaps, links and
+// menu separators, each only where it belongs.
+func TestTheChromeWidgetsAreChecked(t *testing.T) {
+	good := `{"body": {"type": "column", "padding": [24, 0], "children": [
+		{"type": "text", "text": "G", "fontSize": 20, "weight": 650, "padding": [1, 2, 3, 4], "grow": true},
+		{"type": "icon", "name": "sparkles", "fontSize": 30},
+		{"type": "keys", "keys": ["⌘", "K"]},
+		{"type": "link", "text": "Open", "href": "https://example.com"},
+		{"type": "image", "src": "app:icon"},
+		{"type": "card", "style": "list", "children": [{"type": "text", "text": "row"}]},
+		{"type": "input", "id": "q", "style": "search"},
+		{"type": "button", "id": "b", "label": "Check", "style": "bordered", "icon": "refresh"},
+		{"type": "button", "id": "g", "label": "Go", "progress": true},
+		{"type": "menu", "id": "m", "label": "M", "options": ["a", {"separator": true}, "b"]}
+	]}}`
+	if _, err := Decode([]byte(good)); err != nil {
+		t.Fatal(err)
+	}
+	bad := map[string]string{
+		`{"body": {"type": "column", "padding": [1, 2, 3]}}`:                                                     "padding is 1, 2 or 4",
+		`{"body": {"type": "column", "padding": [80]}}`:                                                          "gap and padding are 0 to 64",
+		`{"body": {"type": "badge", "text": "x", "fontSize": 12}}`:                                               "a badge has no fontSize or weight",
+		`{"body": {"type": "text", "text": "x", "fontSize": 200}}`:                                               "fontSize is 8 to 48",
+		`{"body": {"type": "keys", "keys": []}}`:                                                                 "keys are a keys widget's",
+		`{"body": {"type": "link", "text": "x", "href": "javascript:alert(1)"}}`:                                 "an http or https href",
+		`{"body": {"type": "image", "src": "app:secrets"}}`:                                                      "or app:icon",
+		`{"body": {"type": "select", "id": "s", "options": [{"separator": true}]}}`:                              "only a menu has separators",
+		`{"body": {"type": "button", "id": "b", "label": "B", "style": "ghost", "icon": "x", "progress": true}}`: "progress is a plain button's",
+	}
+	for s, want := range bad {
+		_, err := Decode([]byte(s))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", s, err, want)
+		}
+	}
+}

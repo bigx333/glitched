@@ -360,10 +360,10 @@ func (a *app) diffPanel(c *ui.Context, t thread, es []entry) {
 	ui.Column(c).Width(a.diffWidth()).FillHeight().Children(func() {
 		bar := c.TitleBar()
 		head := ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 8+bar.Right, 0, 14).Gap(8).AlignItems(ui.Center).DragWindow()
-		a.pluginComponent(c, func() ui.Element { return head }, "thread.panel.diff", key+"/header", t, copyOf("header"))
+		a.pluginComponent(c, func() ui.Element { return head }, "thread.panel.diff", key+"/header", &t, copyOf("header"))
 		// Below its glass header, the panel on the sidebar's color.
 		body := ui.Column(c).Grow(1).Background(palette.sidebar).BorderWidth(1, 0, 0, 1).BorderColor(palette.border)
-		a.pluginComponent(c, func() ui.Element { return body }, "thread.panel.diff", key+"/body", t, copyOf("body"))
+		a.pluginComponent(c, func() ui.Element { return body }, "thread.panel.diff", key+"/body", &t, copyOf("body"))
 	})
 }
 

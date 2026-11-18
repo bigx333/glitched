@@ -146,6 +146,9 @@ type installed struct {
 	waitingKey string
 	db         *pluginDB
 	alive      *atomic.Bool // the running runtime's, cleared as it goes
+	// awaiting counts the running runtime's app calls under way, which
+	// wait on the UI thread.
+	awaiting *atomic.Int32
 
 	// bundled is built into the app; shadowedBy, a bundled one's, is the
 	// user's folder with its id, which runs in its place.
