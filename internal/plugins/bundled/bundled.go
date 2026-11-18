@@ -16,4 +16,4 @@ var FS fs.FS = files
 
 // ReleaseKey is the public half of the key that signs the built-in
 // plugins, base64. cmd/sign-bundled -new replaces it.
-const ReleaseKey = "Izn/RWFjuCT+3a9TcHIB+lAJd3itmV5FKC2+7wcmDFc="
+const ReleaseKey = "dj7v6ruVjh7tTklNCssj6SWwWpzkD0Xc9J6Jy0sFzgw="

@@ -1,0 +1,105 @@
+name: Sign built-in plugins
+
+# Signs internal/plugins/bundled on a branch with the release key, commits
+# the new signature.json files to that branch, and runs CI on the new head.
+# Only someone with write access can dispatch it; it has no pull_request
+# trigger, so a fork can never reach the key.
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch of this repository to sign
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sign-bundled-${{ inputs.branch }}
+
+jobs:
+  sign:
+    runs-on: [self-hosted, ferrum, garm]
+    timeout-minutes: 15
+    env:
+      BRANCH: ${{ inputs.branch }}
+      CGO_ENABLED: "0"
+    steps:
+      - name: Refuse anything but a branch of this repository
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const branch = process.env.BRANCH;
+            if (branch === context.payload.repository.default_branch) {
+              core.setFailed(`sign a pull request's branch, not ${branch}`);
+              return;
+            }
+            try {
+              await github.rest.git.getRef({ ...context.repo, ref: `heads/${branch}` });
+            } catch (e) {
+              core.setFailed(`${branch} is not a branch of ${context.repo.owner}/${context.repo.repo}`);
+            }
+
+      # The signer is built from the default branch, so the key only ever
+      # reaches reviewed code. The branch's files are only hashed.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: trusted/go.mod
+          cache-dependency-path: trusted/go.sum
+      - name: Build the signer
+        working-directory: trusted
+        run: go build -o "$RUNNER_TEMP/sign-bundled" ./cmd/sign-bundled
+
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/heads/${{ inputs.branch }}
+          path: work
+
+      - name: Sign
+        working-directory: work
+        env:
+          KEY: ${{ secrets.GLITCHED_RELEASE_KEY }}
+        run: |
+          umask 077
+          key=$(mktemp "$RUNNER_TEMP/release-key.XXXXXX")
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$KEY" > "$key"
+          unset KEY
+          GLITCHED_RELEASE_KEY="$key" "$RUNNER_TEMP/sign-bundled"
+
+      - name: Commit the signatures
+        id: commit
+        working-directory: work
+        run: |
+          git add -- 'internal/plugins/bundled/*/signature.json'
+          if git diff --cached --quiet; then
+            echo "Every built-in plugin on $BRANCH is already signed."
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m 'plugins: sign the built-in plugins with the release key'
+          git push origin "HEAD:refs/heads/$BRANCH"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      # A push made with GITHUB_TOKEN starts no workflow, so the pull
+      # request's new head would have no checks. A dispatch is the one event
+      # that token may start: CI runs on the branch, and its checks land on
+      # the new head under their usual names.
+      - name: Run CI on the signed head
+        if: steps.commit.outputs.pushed == 'true'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              ...context.repo,
+              workflow_id: 'ci.yml',
+              ref: process.env.BRANCH,
+            });
