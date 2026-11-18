@@ -941,7 +941,7 @@ func TestDiffPanel(t *testing.T) {
 	h, th := checked(t)
 	a, tt := h.a, h.tt
 	a.showDiff = true
-	h.until("the panel's plugin to draw it", func() bool { return tt.HasText("Unified") })
+	tt.Frame()
 	d := h.diffOf(th, sidebarPath)
 	if a.diffLayout != editor.DiffUnified || !tt.HasText("Unified") {
 		t.Fatalf("layout %v", a.diffLayout)

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
@@ -130,4 +131,25 @@ func TestEditsToTheThreadsFilesAreTold(t *testing.T) {
 	h.until("the edits told", func() bool {
 		return slices.ContainsFunc(h.tt.Texts(), func(s string) bool { return strings.HasSuffix(s, " README.md "+sidebarPath) })
 	})
+}
+
+// The diff panel is drawn by a plugin, yet the first frame after it opens
+// already shows it: a component's first drawing is waited for before it
+// shows, never an empty frame.
+func TestTheDiffPanelOpensDrawn(t *testing.T) {
+	h, _ := checked(t)
+	if h.a.showDiff {
+		t.Fatal("the panel is open before it was asked for")
+	}
+	h.a.showDiff = true
+	start := time.Now()
+	h.tt.Frame()
+	took := time.Since(start)
+	if !h.tt.HasText("Changes") || !h.tt.HasText("Unified") {
+		t.Fatalf("the first frame after opening shows %q, want the panel's header", h.tt.Texts())
+	}
+	if _, ok := h.tt.Find("Diff of " + sidebarPath); !ok {
+		t.Fatalf("the first frame after opening has no file list: %q", h.tt.Texts())
+	}
+	t.Logf("the opening frame took %v", took)
 }
