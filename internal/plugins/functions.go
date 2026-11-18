@@ -28,6 +28,11 @@ globalThis.glitched = Object.freeze({
   openURL: (url) => app("url.open", { url }),
   pages: Object.freeze({ open: (page) => app("page.open", { page }) }),
   tabs: Object.freeze({ open: (tab) => app("tab.open", { tab }) }),
+  panels: Object.freeze({
+    toggle: (panel, open) => app("panels.toggle", { panel, open: open ?? null }),
+    state: () => app("panels.state"),
+  }),
+  openIn: (app_, thread) => app("open.in", { app: app_, thread }),
   clipboard: Object.freeze({ write: (text) => app("clipboard.write", { text }) }),
   notify: (title, body) => app("notify", { title, body }),
   composer: Object.freeze({ draft: (text, workspace) => app("composer.draft", { text, workspace }) }),

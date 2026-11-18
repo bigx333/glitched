@@ -20,6 +20,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/daemon"
 	"glitched/internal/plugins"
+	"glitched/internal/plugins/bundled"
 	"glitched/internal/plugins/render"
 	"glitched/internal/transport"
 )
@@ -72,7 +73,11 @@ func (a *app) openPlugins(dir string) {
 		OpenURL:    mygo.Shell.OpenExternal,
 		Post:       a.post,
 		Do:         a.pluginEffect,
-		SignOwn:    true,
+		// The built-in plugins: Header actions draws the thread header's
+		// buttons till one of the user's replaces it.
+		Bundled:     bundled.FS,
+		ReleaseKeys: []string{bundled.ReleaseKey},
+		SignOwn:     true,
 		// Plugins with timers wait for Start, once the window runs and the
 		// language is known.
 		WaitToStart: true,
@@ -374,6 +379,12 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		}
 		a.notify(mygo.NotificationOptions{ID: "plugin:" + id, Title: args.Title, Body: args.Body, Subtitle: name, Group: "plugins"})
 		return nil, nil
+	case "panels.toggle":
+		return a.panelEffect(e.Args)
+	case "panels.state":
+		return a.panels(), nil
+	case "open.in":
+		return a.openInEffect(e.Args)
 	case "tab.open":
 		var args struct{ Tab string }
 		if err := json.Unmarshal(e.Args, &args); err != nil {

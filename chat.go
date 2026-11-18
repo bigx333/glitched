@@ -14,6 +14,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/client"
+	"glitched/internal/plugins"
 )
 
 const (
@@ -184,59 +185,14 @@ func (a *app) header(c *ui.Context, t thread, es []entry) {
 		}
 		ui.Spacer(c)
 		a.tabButtons(c)
-		if !t.local() {
-			a.previewButton(c)
-			return
-		}
-
-		a.tip(c, headerButton(c, "open").Shrink(0).Label("Open in"), "Open in").Children(func() {
-			ui.Icon(c, icCode).FontSize(14)
-			if !narrow {
-				ui.Text(c, "Open").SingleLine()
-			}
-			ui.Icon(c, icChevronD).FontSize(11)
-		}).Menu(func(m *ui.Menu) {
-			m.Item("Cursor")
-			m.Item("VS Code")
-			m.Item("Zed")
-			m.Separator()
-			m.Item("Finder")
-		})
-		if a.tip(c, headerButton(c, "commit").Shrink(0).Label("Commit & push"), "Commit & push").Children(func() {
-			ui.Icon(c, icUpload).FontSize(14)
-			if !narrow {
-				ui.Text(c, "Commit & push").SingleLine()
-			}
-		}).Clicked() {
-			c.AddToast(ui.Toast{Title: "Pushed to origin", Description: filepath.Base(t.View.Workspace) + " · 2 files, +23 −2"})
-		}
-		ui.Row(c).Padding(2).Gap(2).Radius(10).Shrink(0).Children(func() {
-			if a.iconButton(c, "terminal", icTerminal, "Toggle terminal  ⌘J", a.showTerminal).Clicked() {
-				a.showTerminal, a.panelsJump = !a.showTerminal, false
-			}
-			// The diff's button counts the files the agent changed.
-			ui.Box(c).Children(func() {
-				if a.iconButton(c, "diff", icDiff, "Toggle diff  ⌘D", a.showDiff).Clicked() {
-					a.showDiff, a.panelsJump = !a.showDiff, false
-					if a.showDiff {
-						a.showPreview = false
-					}
-				}
-				if n := len(changedFiles(es)); n > 0 {
-					ui.Textf(c, "%d", n).Absolute().Top(1).Right(1).FontSize(9).FontWeight(600).LineHeight(1.4).
-						Padding(0, 4).Radius(999).Background(palette.accent).TextColor(ui.Hex("#ffffff")).PassThrough()
-				}
-			})
-			a.previewButton(c)
+		// The rest of the row is a plugin's: the built-in Header actions,
+		// or one of the user's that replaces it.
+		state := headerActions{Local: t.local(), Narrow: narrow, Panels: a.panels(), ChangedFiles: len(changedFiles(es))}
+		a.pluginComponent(c, "thread.header.actions", t.id().String(), t, func(r plugins.ThreadRecord) any {
+			state.Thread = r
+			return state
 		})
 	})
-}
-
-func (a *app) previewButton(c *ui.Context) {
-	if a.iconButton(c, "preview", icGlobe, "Toggle preview  ⇧⌘P", a.showPreview).Clicked() {
-		a.togglePreview()
-		a.panelsJump = false
-	}
 }
 
 // headerButton is a button of the header's glass bar: a hairline pill,

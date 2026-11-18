@@ -3,6 +3,7 @@
 A Glitched plugin is a folder with a `plugin.json` and a JavaScript or TypeScript module, run with [mygo-plugin](https://github.com/yxxbc/mygo-plugin) (Glitched pins a fork of it: see [Upstream](#upstream-and-the-fork)). A plugin can:
 
 - add pages to the sidebar, tabs to a thread's panel, and widgets to Glitched's own views (each thread row, a thread's header);
+- replace a component of Glitched's own UI, such as the thread header's buttons, which Glitched itself draws with a built-in plugin;
 - hear what happens in the app (threads changing, new messages, settings) and wake on timers;
 - act in the app by calling it: start and message threads, draft in the composer, notify, copy;
 - offer tools to Glitched's agents;
@@ -12,11 +13,11 @@ Everything a plugin draws is data. Glitched checks it and draws it with its own 
 
 | What | Version |
 | --- | --- |
-| App contract (`contract`, `contractVersion`) | `glitched` 1 |
+| App contract (`contract`, `contractVersion`) | `glitched` 2 |
 | Widget tree (`internal/plugins/widget.Version`) | 1 |
 | Runtime | github.com/bigx333/mygo-plugin `v0.6.1-glitched.4`, a fork of mygo-plugin's `main` (see `go.mod`) |
 
-A plugin that names another contract, or a newer `contractVersion`, does not load. One that names none loads.
+A plugin that names another contract, or a newer `contractVersion`, does not load. One that names none loads. Version 2 adds [components](#components), which a plugin replaces; a version 1 plugin loads and runs as before.
 
 ## Install and develop
 
@@ -48,6 +49,7 @@ cp -R examples/plugins/snippets ~/.glitched/plugins/
 | `focus-timer` | a widget in a thread's header, a panel tab, settings with a status, a timer, a command with a shortcut |
 | `word-tools` | tools for agents, with a database |
 | `repo-watch` | a headless service on a timer that runs `git`, keeps its checks in SQLite, and answers its page |
+| `quiet-header` | a component replaced: the thread header's buttons as a smaller row, with the built-in as the fallback |
 
 ## plugin.json
 
@@ -178,15 +180,15 @@ Every widget is `{type, id?, ...}`. Interactive widgets and dialogs need an `id`
 | `image` | `src` (`plugin:<file>`, PNG, JPEG or SVG up to 4 MiB; or `https://…` with the network grant), `width`, `height`, `radius` | |
 | `table` | `columns` (`{id, title, width?}`, up to 20), `rows` (`{key, cells: {column: text}}`, up to 500) | |
 | `divider`, `spacer`, `spinner` | | |
-| `button` | `label`, `style` (`default` `primary` `danger`), `disabled` | `onClick` |
+| `button` | `label`, `style` (`default` `primary` `danger` `ghost` `outline`), `disabled`, `tooltip`; for `ghost` and `outline`: `icon`, `compact`; for `ghost`: `active`, `badge` | `onClick` |
 | `input` | `label`, `placeholder`, `value`, `controlled`, `multiline`, `disabled` | `onChange`, `onSubmit` |
 | `toggle` | `label`, `value`, `controlled`, `disabled` | `onChange` |
 | `select` | `label`, `options`, `value`, `controlled`, `disabled` | `onChange` |
 | `tabs` | `options`, `value`, `controlled`, `disabled` | `onChange` |
-| `menu` | `label`, `options`, `disabled` | `onChange` (the chosen option's value) |
+| `menu` | `label`, `options`, `disabled`, `tooltip`, `style` (`default` `outline`); for `outline`: `icon`, `compact` | `onChange` (the chosen option's value) |
 | `dialog` | `title`, `open`, `children` | `onClose` (Escape, a click outside) |
 
-`options` are strings, or `{value, label}`, 1 to 200. `color` and `background` are theme tokens, never raw values: `$text`, `$text.muted`, `$text.faint`, `$accent`, `$success`, `$warning`, `$danger`, `$border`, `$surface`.
+`ghost` and `outline` buttons and menus are drawn as Glitched's header draws its own. A `ghost` button is a square that shows only its `icon` (it needs one), on while `active`, with a `badge` of up to 4 characters over its corner. An `outline` one is a hairline pill with its `icon` and `label`, or the icon alone when `compact`; an `outline` menu adds a chevron. `tooltip` (up to 200 bytes) shows on hover and is the control's name to assistive tools; without one, `label` is. `options` are strings, or `{value, label}`, 1 to 200. `color` and `background` are theme tokens, never raw values: `$text`, `$text.muted`, `$text.faint`, `$accent`, `$success`, `$warning`, `$danger`, `$border`, `$surface`.
 
 A view is at most 1 MiB, 2000 widgets, 24 deep, and 32 KiB per string. A place's copy is at most 200 widgets. A view past a limit is refused whole: the last good one stays, with the error.
 
@@ -209,6 +211,51 @@ export function place({ id, at, state, items }) {
 Stable slots keep their name and context across Glitched's updates; others may move. A copy shows its last drawing while the next is drawn, so rows never wait or flicker. Glitched draws a place again only when a copy comes, goes or its record changes, or the app session's state does, in batches of up to 200 copies. What the user does in a place reaches `update` with `event.place`.
 
 **Panel tabs** (`glitched.tabs`) show as buttons in a thread's header and open in the panel beside the chat, one session per thread, with the thread as `context`. `glitched.tabs.open(id)` opens one.
+
+## Components
+
+A component is a part of Glitched's own UI that one plugin draws. Glitched draws each of its components with a built-in plugin, and your plugin can draw one in its place. A replacement is a place whose `at` names the component, with `"replaces": true`. It needs `contractVersion` 2 and the `ui.replace` capability, which you grant:
+
+```json
+{
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "ui.replace", "threads:read"],
+  "glitched": {
+    "places": [{ "id": "actions", "at": "thread.header.actions", "replaces": true }]
+  }
+}
+```
+
+Your `place` export draws it as it draws any place.
+
+| Component | Copies | Context |
+| --- | --- | --- |
+| `thread.header.actions` | the thread shown, keyed by its id | `{thread, local, narrow, panels: {terminal, diff, preview}, changedFiles}` |
+
+`thread.header.actions` is the buttons at the right of a thread's header. Glitched keeps the header's frame, its drag region, the title, the pills, the `thread.header` slot and the panel tabs' buttons. `local` says the thread's workspace is on this machine. `narrow` says the chat is under 700 points wide, where the built-in shows icons only. `changedFiles` counts the files the agent changed. Without `threads:read` the thread is `{id}` alone, as everywhere.
+
+**Which plugin draws it.** Your plugins come before the built-in, in the order of their folders, and only one draws: the first that runs, is granted `ui.replace`, and whose last drawing went well. The built-in draws it when yours is off, didn't load, isn't granted, or failed (a `place` or `update` that threw or took too long), and Settings › Plugins says why under your plugin. Every plugin that could draw it is given the copy all along, so a fallback shows at once.
+
+**Off limits.** These never take a replacement, whatever a manifest says or a grant allows: `approval.card`, `question.card`, `composer.access` (the access picker), `composer.send` (send and stop), `settings.plugins`, `settings.servers` (pairing an engine) and `confirm.destructive`. A plugin that names one does not load, and Settings says why. They are where you answer an agent, give it access, or delete something, so only Glitched draws them.
+
+A component is drawn from widgets today. A later version will let a plugin place one of Glitched's heavy native views (the diff, a terminal, a web page) inside its layout as a widget, so that a component like the diff panel can be a plugin around a native body.
+
+### Built-in plugins
+
+Built-in plugins are compiled into Glitched (`internal/plugins/bundled`) and listed in Settings › Plugins as **Built into Glitched**. Each is verified as yours are: Glitched writes it to `~/.glitched/plugin-bundled`, checks its signature, and runs it from a read-only snapshot. It must be signed by Glitched's release key, whose public half is compiled in. It has the capabilities it declares without asking, and you can take any of them back in Settings.
+
+| Built-in | Draws | Asks for |
+| --- | --- | --- |
+| `header-actions` | `thread.header.actions` | `ui.place`, `ui.replace`, `threads:read`, `programs` (`git`) |
+
+Header actions' **Open in** opens the thread's workspace in Cursor, VS Code, Zed or the file manager, with `glitched.openIn`. Its **Commit & push** opens a dialog that lists every changed file, the branch, where it pushes, and a message (the thread's title to start), and says that your git hooks don't run for a plugin's git. On **Commit & push** in the dialog it runs `git add -A`, `git commit -m <message>`, then `git push`, or `git push -u origin <branch>` when the branch tracks nothing yet. It never forces. It refuses before running anything when there is nothing to commit, HEAD is detached, a merge has conflicts, or the message is empty. A push that fails or takes over 20 seconds keeps the commit and says so. A repository with no `origin` keeps the commit here.
+
+### Copy and edit
+
+To change a built-in, press **Make a copy** under it in Settings › Plugins. Its files go to `~/.glitched/plugins/<id>`, signed with this device's key, with the grants the built-in had. The copy has the built-in's id, so it runs in the built-in's place and keeps its data. Edit it and it reloads as any plugin of yours does. **Revert to built-in** under the copy moves your folder to `~/.glitched/plugins/.reverted/<id>-<time>`, so nothing you wrote is lost, and runs the built-in again. A folder you make by hand with a built-in's id shadows it too, but starts with no grants.
+
+After changing a built-in in Glitched's source, sign it again with the release key: `GLITCHED_RELEASE_KEY=<key file> go run ./cmd/sign-bundled`. A test fails until you do. `-new` makes a new key and compiles its public half in. A copy of yours is signed with your device's key, so a new release key changes nothing installed.
 
 ## App events
 
@@ -254,8 +301,11 @@ Each call runs on the UI thread (the engine's queue, for a service), checked as 
 | `glitched.threads.open(thread)` | | `threads:read` |
 | `glitched.threads.create(prompt, {title?, workspace?})` | `{thread}` | `threads:write` |
 | `glitched.threads.send(thread, text)` | `{message}` | `threads:write` |
+| `glitched.panels.toggle(panel, open?)` (`terminal`, `diff`, `preview`) | the panels' state | `ui.place` |
+| `glitched.panels.state()` | `{terminal, diff, preview}`, each open or not | `ui.place` |
+| `glitched.openIn(app, thread)` (`cursor`, `vscode`, `zed`, `finder`) | | `threads:read` |
 
-A toast carries the plugin's name. `threads.create` starts a thread with the composer's model and access (a service's: the last thread's), and sends the prompt. A service can't toast, copy, notify, draft or open: it has no window.
+`openIn` names a thread, never a path: Glitched opens that thread's workspace, if it is on this machine. A toast carries the plugin's name. `threads.create` starts a thread with the composer's model and access (a service's: the last thread's), and sends the prompt. A service can't toast, copy, notify, draft or open: it has no window.
 
 **Start over** starts a page's state over and drops what an earlier start answers; a call that start had already made goes through.
 
@@ -330,7 +380,8 @@ Your plugins and others' plugins share one rule: the manifest says what a plugin
 | `clipboard` | copy text | |
 | `notify` | show notifications | |
 | `composer` | draft in a new thread's composer, for you to send | |
-| `ui.place` | put widgets in Glitched's views, open panel tabs | |
+| `ui.place` | put widgets in Glitched's views, open panel tabs, toggle the panels beside the chat | |
+| `ui.replace` | draw a [component](#components) of Glitched's in place of the built-in | yes |
 | `tools` | offer tools to your agents | |
 | `threads:read` | read threads' titles, workspaces and status; see full records in places, tabs and events | yes |
 | `messages:read` | read the messages of the thread you have open | yes |
@@ -339,7 +390,7 @@ Your plugins and others' plugins share one rule: the manifest says what a plugin
 | `service` | run in the background, with no window | yes |
 | `network` | reach the hosts `permissions.network` names | yes |
 
-Grants start off. **Settings › Plugins** has a switch for each one a plugin declares. A grant holds at once: the plugin's runtime asks for its grants as it uses them, so it goes on running, with what its pages hold, and its sessions hear `grant.changed`. `host.capability(name)` answers whether it has one now. In the engine, only the `service` grant reloads the plugin, as it decides which module runs.
+Grants start off, except a built-in plugin's, which start on. **Settings › Plugins** has a switch for each one a plugin declares. A grant holds at once: the plugin's runtime asks for its grants as it uses them, so it goes on running, with what its pages hold, and its sessions hear `grant.changed`. `host.capability(name)` answers whether it has one now. In the engine, only the `service` grant reloads the plugin, as it decides which module runs.
 
 A plugin can never reach the UI tree, call Go beyond `glitched`, read files outside its data folder, share another plugin's runtime or storage, or hold the window.
 
@@ -398,7 +449,7 @@ Glitched checks the signature over every file before it writes anything, then in
 
 ## Not supported yet
 
-- **Slots:** inside messages, the composer, files, or another plugin's slots and menus (Zeron's `slot:` and `menu_entries`). Replacing Glitched's elements or screens.
+- **Slots:** inside messages, the composer, files, or another plugin's slots and menus (Zeron's `slot:` and `menu_entries`). Replacing a part of Glitched beyond its [components](#components), or choosing in Settings which of two replacements draws.
 - **Your other devices:** reaching your other devices (Zeron's `devices`, a service called on another machine); a thread on another machine from `threads.create`.
 - **Services:** a service's `emit` to windows, and folder watching.
 - **Settings:** wallpaper and permission settings, a chosen thread's model or access level.

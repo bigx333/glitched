@@ -1,5 +1,5 @@
 // glitched.d.ts: the types of Glitched's plugin contract, "glitched"
-// version 1, for a plugin's editor. Reference it from a TypeScript plugin:
+// version 2, for a plugin's editor. Reference it from a TypeScript plugin:
 //
 //   /// <reference path="./glitched.d.ts" />
 //
@@ -58,7 +58,9 @@ type Widget =
       columns: { id: string; title: string; width?: number }[];
       rows: { key: string; cells: Record<string, string> }[];
     }
-  | { type: "button"; id: string; label: string; style?: "default" | "primary" | "danger"; disabled?: boolean; onClick?: Handler }
+  | { type: "button"; id: string; label: string; style?: "default" | "primary" | "danger"; disabled?: boolean; tooltip?: string; onClick?: Handler }
+  | ({ type: "button"; style: "ghost"; /** It shows only its icon. */ icon: string; /** On, as a panel's toggle. */ active?: boolean; /** Up to 4 characters over its corner. */ badge?: string } & DrawnButton)
+  | ({ type: "button"; style: "outline"; icon?: string; /** The icon alone. */ compact?: boolean } & DrawnButton)
   | {
       type: "input";
       id: string;
@@ -76,8 +78,33 @@ type Widget =
   | { type: "toggle"; id: string; label: string; value?: boolean; controlled?: boolean; disabled?: boolean; onChange?: Handler }
   | { type: "select"; id: string; label?: string; options: Option[]; value?: string; controlled?: boolean; disabled?: boolean; onChange?: Handler }
   | { type: "tabs"; id: string; options: Option[]; value?: string; controlled?: boolean; disabled?: boolean; onChange?: Handler }
-  | { type: "menu"; id: string; label: string; options: Option[]; disabled?: boolean; /** The chosen option's value is the event's. */ onChange?: Handler }
+  | {
+      type: "menu";
+      id: string;
+      label: string;
+      options: Option[];
+      disabled?: boolean;
+      tooltip?: string;
+      /** outline: a hairline pill with a chevron, as the header's Open in. */
+      style?: "default" | "outline";
+      /** An outline menu's. */
+      icon?: string;
+      compact?: boolean;
+      /** The chosen option's value is the event's. */
+      onChange?: Handler;
+    }
   | { type: "dialog"; id: string; title: string; open?: boolean; children?: Widget[]; /** Escape, or a click outside. */ onClose?: Handler };
+
+/** A ghost or outline button: drawn as Glitched's header draws its own. */
+interface DrawnButton {
+  id: string;
+  /** Its text, and its name to assistive tools when it has no tooltip. */
+  label: string;
+  /** Shown on hover, and its name to assistive tools. */
+  tooltip?: string;
+  disabled?: boolean;
+  onClick?: Handler;
+}
 
 /** What view answers. */
 interface View {
@@ -109,7 +136,7 @@ type UIEvent = {
   value?: string | boolean;
   payload?: unknown;
   /** Set in a place: which copy, and the context it was drawn with. */
-  place?: { id: string; at: Slot; key: string; context?: ThreadRecord };
+  place?: { id: string; at: Slot | Component; key: string; context?: ThreadRecord | HeaderActionsContext };
 };
 
 /** An app event the plugin hears (its manifest's glitched.events), or a timer. */
@@ -132,6 +159,34 @@ interface Update<S> {
 /** Glitched's slots. Stable ones keep their name and context across updates. */
 type Slot = "thread.header" | "thread.row" | "sidebar.footer";
 
+/**
+ * Glitched's components: a place with `replaces: true` at one draws it in
+ * place of the built-in plugin, once ui.replace is granted. Needs
+ * contractVersion 2. approval.card, question.card, composer.access,
+ * composer.send, settings.plugins, settings.servers and
+ * confirm.destructive are off limits: a plugin that names one doesn't load.
+ */
+type Component = "thread.header.actions";
+
+/** The context of thread.header.actions, the buttons at the right of a thread's header. */
+interface HeaderActionsContext {
+  thread: ThreadRecord;
+  /** The thread's workspace is on this machine. */
+  local: boolean;
+  /** The chat is under 700 points wide: the built-in shows icons only. */
+  narrow: boolean;
+  panels: PanelState;
+  /** The files the agent changed, which the diff toggle counts. */
+  changedFiles: number;
+}
+
+/** Which of the panels beside the chat are open. */
+interface PanelState {
+  terminal: boolean;
+  diff: boolean;
+  preview: boolean;
+}
+
 interface InitArgs {
   /** The page's id; "" for the app session; a tab's id in a tab. */
   page: string;
@@ -151,9 +206,10 @@ interface UpdateArgs<S> extends InitArgs {
 /** place draws every copy of a place in one call: a widget or null each, in order. */
 interface PlaceArgs<S> {
   id: string;
-  at: Slot;
+  at: Slot | Component;
   state: S;
-  items: { key: string; context?: ThreadRecord }[];
+  /** A component's copies have its context: HeaderActionsContext for thread.header.actions. */
+  items: { key: string; context?: ThreadRecord | HeaderActionsContext }[];
 }
 interface CommandArgs {
   id: string;
@@ -184,6 +240,14 @@ declare const glitched: {
   openURL(url: string): Promise<void>;
   pages: { open(page: string): Promise<void> };
   tabs: { open(tab: string): Promise<void> };
+  /** The panels beside the chat. Needs ui.place. */
+  panels: {
+    /** Opens or closes one; open says which way, else it flips. */
+    toggle(panel: "terminal" | "diff" | "preview", open?: boolean): Promise<PanelState>;
+    state(): Promise<PanelState>;
+  };
+  /** Opens the thread's workspace, on this machine, in an app. Needs threads:read. */
+  openIn(app: "cursor" | "vscode" | "zed" | "finder", thread: string): Promise<void>;
   settings: {
     /** Its settings by id, typed: a switch's boolean, a number's number. */
     get(): Promise<Record<string, string | number | boolean>>;

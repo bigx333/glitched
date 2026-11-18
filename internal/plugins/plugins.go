@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/url"
 	"os"
@@ -38,8 +39,12 @@ import (
 // version, does not load. One that names none loads.
 const (
 	Contract        = "glitched"
-	ContractVersion = 1
+	ContractVersion = 2
 )
+
+// ReplaceVersion is the contract version that brought replacing
+// components: a plugin that replaces one names it or later.
+const ReplaceVersion = 2
 
 // Options are what the app gives its plugins.
 type Options struct {
@@ -82,6 +87,14 @@ type Options struct {
 	// ServiceCall calls a method of the plugin id's service, as
 	// glitched.service.call asks. Nil reaches none.
 	ServiceCall func(ctx context.Context, id, method string, args json.RawMessage) (any, error)
+	// Bundled holds the plugins built into the app, a folder each at its
+	// root. Each is verified as a plugin in the plugins folder is, and
+	// runs when signed by one of ReleaseKeys (base64 public keys), with
+	// the capabilities it declares granted till the user takes one back.
+	// A folder of the user's with the same id is run in its place.
+	Bundled     fs.FS
+	ReleaseKeys []string
+
 	// Main, when set, is the module each plugin runs in place of its
 	// manifest's main, as the service host runs services: a plugin
 	// without one is left out.
@@ -98,7 +111,10 @@ type Host struct {
 	mu        sync.RWMutex // guards installed and prefs, which a session's worker reads
 	installed []*installed
 	prefs     prefs
-	statuses  map[string]map[string]SettingStatus
+	// builtins are the capabilities each running built-in plugin
+	// declares, which it has unless revoked.
+	builtins map[string][]string
+	statuses map[string]map[string]SettingStatus
 
 	sessions map[pageKey]*Session
 	// started is set once the app has started its plugins (Start): what
@@ -130,6 +146,11 @@ type installed struct {
 	waitingKey string
 	db         *pluginDB
 	alive      *atomic.Bool // the running runtime's, cleared as it goes
+
+	// bundled is built into the app; shadowedBy, a bundled one's, is the
+	// user's folder with its id, which runs in its place.
+	bundled    bool
+	shadowedBy string
 }
 
 // prefs are what the user chose for the plugins, in plugins.json in the
@@ -141,6 +162,9 @@ type prefs struct {
 	Settings map[string]map[string]json.RawMessage `json:"settings,omitempty"`
 	// Consent is what the user allowed each plugin of another key.
 	Consent map[string]consent `json:"consent,omitempty"`
+	// Revoked are the capabilities the user took back from a built-in
+	// plugin, which has the rest it declares without asking.
+	Revoked map[string][]string `json:"revoked,omitempty"`
 }
 
 // Dir is where the plugins are installed, one folder each.
@@ -180,33 +204,53 @@ func (h *Host) Reload() {
 		h.opts.Logf("plugins: %v", err)
 	}
 	var list []*installed
-	seen := map[string]bool{}
-	for _, e := range entries {
-		folder := filepath.Join(Dir(h.state), e.Name())
-		if fi, err := os.Stat(folder); err != nil || !fi.IsDir() || strings.HasPrefix(e.Name(), ".") {
-			continue // a folder, or a link to one, as while developing
-		}
-		in := &installed{folder: folder}
+	seen := map[string]*installed{}
+	builtins := map[string][]string{}
+	h.mu.Lock()
+	h.builtins = builtins // what load asks of a built-in's grants, as it loads
+	h.mu.Unlock()
+	add := func(in *installed) {
 		list = append(list, in)
 		m, err := plugin.ReadManifest(in.folder)
 		if err != nil {
 			in.err = err
-			continue
+			return
 		}
 		in.manifest = *m
 		in.raw, _ = os.ReadFile(filepath.Join(in.folder, "plugin.json"))
 		in.enabled = !slices.Contains(h.prefs.Disabled, m.ID)
+		first := seen[m.ID]
 		switch {
-		case seen[m.ID]:
+		case first != nil && in.bundled:
+			in.shadowedBy, in.enabled = first.folder, false
+			return
+		case first != nil:
 			in.err = fmt.Errorf("the id %q is already installed", m.ID)
 			in.enabled = false
-		case in.enabled:
+			return
+		}
+		seen[m.ID] = in
+		if in.bundled {
+			h.mu.Lock()
+			builtins[m.ID] = builtinCaps(*m)
+			h.mu.Unlock()
+		}
+		if in.enabled {
 			in.p, in.err = h.load(in)
 			if errors.Is(in.err, errNotHere) {
 				in.err = nil
 			}
 		}
-		seen[m.ID] = true
+	}
+	for _, e := range entries {
+		folder := filepath.Join(Dir(h.state), e.Name())
+		if fi, err := os.Stat(folder); err != nil || !fi.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue // a folder, or a link to one, as while developing
+		}
+		add(&installed{folder: folder})
+	}
+	for _, folder := range h.writeBundled() {
+		add(&installed{folder: folder, bundled: true})
 	}
 	for _, in := range list {
 		if in.err != nil {
@@ -214,7 +258,7 @@ func (h *Host) Reload() {
 		}
 	}
 	h.mu.Lock()
-	h.installed = list
+	h.installed, h.builtins = list, builtins
 	h.mu.Unlock()
 	// A window's plugin with timers wakes on them though it has no place
 	// shown yet: its app session starts now, once the app started plugins.
@@ -240,6 +284,9 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 		if !slices.Contains(m.Capabilities, c) {
 			return nil, fmt.Errorf("its glitched block needs the %q capability, which it doesn't declare", c)
 		}
+	}
+	if x.replaces() && m.ContractVersion < ReplaceVersion {
+		return nil, fmt.Errorf("it replaces a component, which needs contractVersion %d", ReplaceVersion)
 	}
 	in.ext = x
 	code, err := h.verify(in)
@@ -305,8 +352,12 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 	})
 }
 
-// granted reports whether the user granted the plugin id the capability.
+// granted reports whether the user granted the plugin id the capability:
+// a built-in plugin has those it declares, till the user takes one back.
 func (h *Host) granted(id, capability string) bool {
+	if declared, ok := h.builtins[id]; ok {
+		return slices.Contains(declared, capability) && !slices.Contains(h.prefs.Revoked[id], capability)
+	}
 	return slices.Contains(h.prefs.Grants[id], capability)
 }
 
@@ -338,6 +389,14 @@ type Plugin struct {
 	Trust  Trust
 	Signer string
 	Asks   []string
+	// Builtin is built into the app. ShadowedBy, a built-in one's, is the
+	// folder of the user's copy that runs in its place; Shadows says this
+	// is such a copy, which Revert takes away.
+	Builtin    bool
+	ShadowedBy string
+	Shadows    bool
+	// Replaces are the components it draws in place of the built-in.
+	Replaces []string
 }
 
 // Program is a program a plugin names, and what running it risks.
@@ -358,6 +417,13 @@ func (h *Host) Installed() []Plugin {
 		m := in.manifest
 		p := Plugin{ID: m.ID, Name: m.Name, Version: m.Version, Description: m.Description, Folder: in.folder, Enabled: in.enabled, Err: in.err, Network: m.Permissions.Network}
 		p.Trust, p.Signer = in.trust, in.signer
+		p.Builtin, p.ShadowedBy = in.bundled, in.shadowedBy
+		p.Shadows = !in.bundled && slices.ContainsFunc(h.installed, func(b *installed) bool { return b.shadowedBy == in.folder })
+		for _, pl := range in.ext.Places {
+			if pl.Replaces {
+				p.Replaces = append(p.Replaces, pl.At)
+			}
+		}
 		for _, a := range in.asks {
 			p.Asks = append(p.Asks, describeAsk(a))
 		}
@@ -402,6 +468,24 @@ func (h *Host) SetEnabled(id string, on bool) error {
 // them, so it goes on, with what its pages hold.
 func (h *Host) SetGranted(id, capability string, on bool) error {
 	defer h.tellGrant(id, capability, on)
+	h.mu.RLock()
+	_, builtin := h.builtins[id]
+	h.mu.RUnlock()
+	if builtin {
+		return h.save(func(p *prefs) {
+			r := slices.DeleteFunc(slices.Clone(p.Revoked[id]), func(s string) bool { return s == capability })
+			if !on {
+				r = append(r, capability)
+			}
+			if p.Revoked == nil {
+				p.Revoked = map[string][]string{}
+			}
+			p.Revoked[id] = r
+			if len(r) == 0 {
+				delete(p.Revoked, id)
+			}
+		})
+	}
 	return h.save(func(p *prefs) {
 		g := slices.DeleteFunc(slices.Clone(p.Grants[id]), func(s string) bool { return s == capability })
 		if on {

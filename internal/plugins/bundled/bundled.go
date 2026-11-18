@@ -1,0 +1,19 @@
+// Package bundled holds the plugins built into Glitched, which draw parts
+// of its UI by default. Each is a folder signed by Glitched's release key;
+// run cmd/sign-bundled after changing one.
+package bundled
+
+import (
+	"embed"
+	"io/fs"
+)
+
+//go:embed all:header-actions
+var files embed.FS
+
+// FS is the built-in plugins, a folder each at its root.
+var FS fs.FS = files
+
+// ReleaseKey is the public half of the key that signs the built-in
+// plugins, base64. cmd/sign-bundled -new replaces it.
+const ReleaseKey = "Izn/RWFjuCT+3a9TcHIB+lAJd3itmV5FKC2+7wcmDFc="

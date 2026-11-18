@@ -46,6 +46,17 @@ type placeFrame struct {
 	keys  map[placeKey]bool
 }
 
+// frameOf is this frame's record of what the plugins drew, with the slot
+// or component at marked drawn.
+func (a *app) frameOf(at string) *placeFrame {
+	f := &a.placeFrame
+	if f.items == nil {
+		f.items, f.slots, f.keys = map[[2]string][]plugins.PlaceItem{}, map[string]bool{}, map[placeKey]bool{}
+	}
+	f.slots[at] = true
+	return f
+}
+
 // pluginSlot draws what every running plugin puts at the slot at, for the
 // copy key: a thread's id, or "" for a slot drawn once. t is the thread it
 // is about, nil for none.
@@ -53,11 +64,7 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread) {
 	if a.plugins == nil {
 		return
 	}
-	f := &a.placeFrame
-	if f.items == nil {
-		f.items, f.slots, f.keys = map[[2]string][]plugins.PlaceItem{}, map[string]bool{}, map[placeKey]bool{}
-	}
-	f.slots[at] = true
+	f := a.frameOf(at)
 	var full plugins.ThreadRecord
 	if t != nil {
 		full = a.threadRecord(*t)
@@ -79,25 +86,31 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread) {
 		if node == nil {
 			continue
 		}
-		pk := placeKey{pl.Plugin, pl.Place.ID, key}
-		f.keys[pk] = true
-		cs := a.placeControls[pk]
-		if cs == nil {
-			cs = &render.Controls{}
-			a.placeControls[pk] = cs
-		}
-		v := &widget.View{Body: node}
-		cs.Sync(v, app.Rev, app.Processed)
-		ref := &plugins.PlaceRef{ID: pl.Place.ID, At: at, Key: key, Context: ctx}
-		ui.Row(c).Key("plugin:" + pl.Plugin + ":" + pl.Place.ID).Shrink(1).AlignItems(ui.Center).ClipX().Children(func() {
-			st := a.pluginStyle(pl.Plugin)
-			st.Scope = pl.Plugin + "/" + pl.Place.ID + "/" + key
-			render.View(c, v, cs, st, &a.pluginMD, func(ev plugins.UIEvent, values map[string]any) int {
-				ev.Place = ref
-				return app.Dispatch(ev, values)
-			})
-		})
+		a.drawPlace(c, ui.Row(c).Key("plugin:"+pl.Plugin+":"+pl.Place.ID).Shrink(1).AlignItems(ui.Center).ClipX(), pl, key, ctx, app, node)
 	}
+}
+
+// drawPlace draws in box what the plugin drew for one copy of its place,
+// and hands what the user does there to its app session.
+func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key string, ctx any, app *plugins.Session, node *widget.Node) {
+	pk := placeKey{pl.Plugin, pl.Place.ID, key}
+	a.placeFrame.keys[pk] = true
+	cs := a.placeControls[pk]
+	if cs == nil {
+		cs = &render.Controls{}
+		a.placeControls[pk] = cs
+	}
+	v := &widget.View{Body: node}
+	cs.Sync(v, app.Rev, app.Processed)
+	ref := &plugins.PlaceRef{ID: pl.Place.ID, At: pl.Place.At, Key: key, Context: ctx}
+	box.Children(func() {
+		st := a.pluginStyle(pl.Plugin)
+		st.Scope = pl.Plugin + "/" + pl.Place.ID + "/" + key
+		render.View(c, v, cs, st, &a.pluginMD, func(ev plugins.UIEvent, values map[string]any) int {
+			ev.Place = ref
+			return app.Dispatch(ev, values)
+		})
+	})
 }
 
 // syncPlaces tells each app session which copies of its places this frame

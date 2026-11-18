@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -57,6 +58,9 @@ func (a *app) pluginSettings(c *ui.Context) {
 		ui.Text(c, "No plugins are installed.").Key("none").TextColor(palette.muted).Padding(0, 4)
 	}
 	for _, p := range list {
+		if p.ShadowedBy != "" {
+			continue // its copy's card says so, and reverts to it
+		}
 		ui.Column(c).Key("plugin:" + p.Folder).Children(func() {
 			card(c, strings.ToUpper(p.Name), func() {
 				desc := strings.TrimSpace(strings.Join([]string{p.Version, p.Description}, " · "))
@@ -68,6 +72,9 @@ func (a *app) pluginSettings(c *ui.Context) {
 					}
 				})
 				a.pluginTrust(c, p)
+				for _, name := range p.Replaces {
+					settingRow(c, "Draws "+name, a.replaceNote(p, name), func() {})
+				}
 				if p.Err != nil {
 					ui.Text(c, p.Err.Error()).Key("error").Selectable().TextColor(palette.red).Padding(12, 16)
 				}
@@ -269,18 +276,59 @@ func (a *app) pluginTrust(c *ui.Context, p plugins.Plugin) {
 			ui.Text(c, "Not signed. Trust it as yours only if you wrote it, or know who did: it then runs with what you grant it, and Glitched signs it again as you change it.").FontSize(12).TextColor(palette.muted).Grow(1).Shrink(1)
 			ui.Button(c.Key("trust"), "Trust as mine").OnClick(func() { a.pluginsChanged(a.plugins.TrustAsMine(p.Folder)) })
 		})
-	default:
-		if p.ID == "" {
-			return
-		}
-		who := map[plugins.Trust]string{plugins.TrustOwn: "Yours", plugins.TrustConsented: "Someone else's, allowed", plugins.TrustTampered: "Changed since it was signed"}[p.Trust]
-		if who == "" {
-			return
-		}
-		settingRow(c, who, "Key "+p.Signer, func() {
-			ui.Button(c.Key("remove"), "Remove").TextColor(palette.red).OnClick(func() { a.pluginsChanged(a.plugins.Remove(p.ID)) })
+	case plugins.TrustBuiltin:
+		settingRow(c, "Built into Glitched", "Make a copy to change it: your copy runs in its place, from your plugins folder, and Revert to built-in brings this one back.", func() {
+			ui.Button(c.Key("copy"), "Make a copy").OnClick(func() {
+				_, err := a.plugins.Copy(p.ID)
+				a.pluginsChanged(err)
+			})
 		})
+	case plugins.TrustOwn:
+		if !p.Shadows {
+			a.pluginOwner(c, p)
+			return
+		}
+		settingRow(c, "Yours, in place of the built-in", "Key "+p.Signer+". Revert moves your copy to "+displayPath(filepath.Join(plugins.Dir(a.dir), ".reverted"))+" and runs the built-in again.", func() {
+			ui.Button(c.Key("revert"), "Revert to built-in").OnClick(func() { a.pluginsChanged(a.plugins.Revert(p.ID)) })
+		})
+	default:
+		a.pluginOwner(c, p)
 	}
+}
+
+// replaceNote says whether the plugin p draws the component name now,
+// and why not when it doesn't.
+func (a *app) replaceNote(p plugins.Plugin, name string) string {
+	fallback := ", so the built-in draws it"
+	if p.Builtin {
+		fallback = ""
+	}
+	switch {
+	case !p.Enabled || p.Err != nil:
+		return "It isn't running" + fallback + "."
+	case !a.plugins.Allowed(p.ID, "ui.replace"):
+		return "Grant ui.replace below to draw it."
+	case a.plugins.Failed(p.ID) != nil:
+		return "It failed" + fallback + ": " + a.plugins.Failed(p.ID).Error()
+	}
+	if rs := a.plugins.Replacers(name); len(rs) > 0 && rs[0].Plugin != p.ID {
+		return a.plugins.Name(rs[0].Plugin) + " draws it in place of this one."
+	}
+	return "It draws it now."
+}
+
+// pluginOwner says whose the plugin is, with a way to remove it.
+func (a *app) pluginOwner(c *ui.Context, p plugins.Plugin) {
+	if p.ID == "" {
+		return
+	}
+	who := map[plugins.Trust]string{plugins.TrustOwn: "Yours", plugins.TrustConsented: "Someone else's, allowed", plugins.TrustTampered: "Changed since it was signed"}[p.Trust]
+	if who == "" {
+		return
+	}
+	settingRow(c, who, "Key "+p.Signer, func() {
+		ui.Button(c.Key("remove"), "Remove").TextColor(palette.red).OnClick(func() { a.pluginsChanged(a.plugins.Remove(p.ID)) })
+	})
 }
 
 // installPlugin installs what the source field names, off the UI thread.

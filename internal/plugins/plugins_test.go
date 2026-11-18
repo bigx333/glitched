@@ -88,7 +88,7 @@ func TestOpenLoadsWhatFitsAndLeavesTheRestOut(t *testing.T) {
 	install(t, state, "a-hello")
 	install(t, state, "b-hello-again")
 	writePlugin(t, state, "music", `{"id": "music", "name": "Music", "contract": "mygo-music", "contributes": {"pages": [{"id": "home"}]}}`)
-	writePlugin(t, state, "newer", `{"id": "newer", "name": "Newer", "contract": "glitched", "contractVersion": 2, "contributes": {"pages": [{"id": "home"}]}}`)
+	writePlugin(t, state, "newer", `{"id": "newer", "name": "Newer", "contract": "glitched", "contractVersion": 3, "contributes": {"pages": [{"id": "home"}]}}`)
 	writePlugin(t, state, "broken", `{`)
 	var l logs
 	h := Open(state, Options{Logf: l.logf})
