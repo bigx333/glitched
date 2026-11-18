@@ -1081,7 +1081,7 @@ func main() {
 		mygo.App.OnLocaleChanged(a.plugins.SetLanguage)
 		a.plugins.Start()
 		// A plugin reloads as its files are saved, keeping its pages' state.
-		a.stopWatch = a.plugins.Watch(time.Second)
+		a.stopWatch = a.plugins.Watch(250 * time.Millisecond)
 		// Agents' runs reach the browser on its socket in the state
 		// directory.
 		a.serveAgents()
