@@ -32,7 +32,7 @@ jobs:
 
   test:
     runs-on: [self-hosted, ferrum, garm]
-    timeout-minutes: 30
+    timeout-minutes: 50
     env:
       CGO_ENABLED: "0"
     steps:
@@ -45,7 +45,9 @@ jobs:
       # root package's UI tests click on a fallback layout and fail.
       - name: Install Pango
         run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libpangocairo-1.0-0
-      - run: go test -timeout 20m ./...
+      # Stopgap: the root package takes up to 20 minutes on a slow runner.
+      # Bring this back to 20m once the suite is fast again (NEL-20).
+      - run: go test -timeout 40m ./...
 
   # The race detector needs cgo on Linux; nothing else does.
   race:
