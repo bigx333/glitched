@@ -175,6 +175,10 @@ func TestTheGlitchedBlockIsChecked(t *testing.T) {
 		`"capabilities": ["programs"], "glitched": { "programs": ["/bin/sh"] }, `:                            "never a path",
 		`"capabilities": ["service"], "glitched": { "service": "../escape.js" }, `:                           "a file in the plugin's folder",
 		`"glitched": { "shortcuts": [{ "command": "c", "key": "k" }] }, `:                                    "needs cmd, ctrl or alt",
+		`"glitched": { "settingsPages": ["nope"] }, `:                                                        `"nope" is none of its pages`,
+		`"glitched": { "themes": [{ "name": "Bad/Name", "colors": {} }] }, `:                                 "is 1 to 32 letters",
+		`"glitched": { "themes": [{ "name": "T", "colors": { "bg": "red" } }] }, `:                           "colors.bg is #rrggbb or #rrggbbaa",
+		`"glitched": { "themes": [{ "name": "T", "colors": { "bg": "#000000", "sidebar": "#000000", "surface": "#000000", "hover": "#000000", "active": "#000000", "border": "#000000", "text": "#000000", "muted": "#000000", "faint": "#000000", "green": "#000000", "red": "#000000", "amber": "#000000", "blue": "#000000", "pink": "#000000" } }] }, `: "no others",
 	}
 	for manifest, want := range cases {
 		state := t.TempDir()

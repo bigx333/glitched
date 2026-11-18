@@ -67,6 +67,7 @@ var Types = map[string]kind{
 	"native":   leaf,
 	"keys":     leaf,
 	"link":     leaf,
+	"swatch":   control,
 }
 
 // Native is a widget Glitched draws itself, which a plugin only places:
@@ -75,9 +76,10 @@ type Native struct {
 	// Props are what a plugin may pass it, by name, each "string", "bool"
 	// or "number".
 	Props map[string]string
-	// In are the components it draws in, about the copy's own thread;
-	// anywhere else it says so in its place.
-	In []string
+	// In are the components it draws in; anywhere else it says so in its
+	// place. Thread says it draws about the copy's own thread.
+	In     []string
+	Thread bool
 	// Fires are the handlers it fires.
 	Fires []string
 }
@@ -85,7 +87,8 @@ type Native struct {
 // Natives are the native widgets a plugin may place, by name. Only these
 // draw: a name that isn't one, a locked one included, refuses the view.
 var Natives = map[string]Native{
-	"diff.body": {Props: map[string]string{"path": "string"}, In: []string{"thread.panel.diff"}, Fires: []string{"onChange"}},
+	"diff.body":  {Props: map[string]string{"path": "string"}, In: []string{"thread.panel.diff"}, Thread: true, Fires: []string{"onChange"}},
+	"theme.card": {Props: map[string]string{"theme": "string"}, In: []string{"settings.page.appearance"}, Fires: []string{"onChange"}},
 }
 
 // Locked are the parts of Glitched's UI no plugin draws, replaces or
@@ -129,8 +132,9 @@ type Node struct {
 	Placeholder string `json:"placeholder,omitempty"`
 	// Style is a text's look: body, muted, strong, heading, title, code,
 	// error or success; a button's: default, primary or danger; a badge's:
-	// default, accent, success, warning, danger or count; tabs' default or
-	// segmented; an item's text plain or code.
+	// default, accent, success, warning, danger or count; tabs' default,
+	// segmented or control (Settings' segmented control); a toggle's
+	// default or switch; an item's text plain or code.
 	Style string `json:"style,omitempty"`
 	// Size small is a text's or a ghost button's smaller size.
 	Size      string          `json:"size,omitempty"`
@@ -169,7 +173,8 @@ type Node struct {
 	Radius int    `json:"radius,omitempty"`
 	// Name is an icon's: one of the app's, or "plugin:<path>.svg".
 	Name string `json:"name,omitempty"`
-	// Color and Background are theme tokens (Colors).
+	// Color and Background are theme tokens (Colors); a swatch's color
+	// is the color it shows, as #rrggbb. A select's Width is in points.
 	Color      string `json:"color,omitempty"`
 	Background string `json:"background,omitempty"`
 
@@ -300,13 +305,15 @@ func (h *Handler) UnmarshalJSON(b []byte) error {
 
 var (
 	idPattern      = regexp.MustCompile(`^[A-Za-z0-9_.:/-]{1,128}$`)
+	hexColor       = regexp.MustCompile("^#[0-9a-fA-F]{6}$")
 	handlerPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
 	styles         = map[string][]string{
 		"text":   {"", "body", "muted", "strong", "heading", "title", "code", "error", "success"},
 		"button": {"", "default", "primary", "danger", "ghost", "outline", "bordered"},
 		"menu":   {"", "default", "outline"},
 		"badge":  {"", "default", "accent", "success", "warning", "danger", "count"},
-		"tabs":   {"", "default", "segmented"},
+		"tabs":   {"", "default", "segmented", "control"},
+		"toggle": {"", "default", "switch"},
 		"item":   {"", "code"},
 		"card":   {"", "default", "list"},
 		"input":  {"", "default", "search"},
@@ -444,6 +451,7 @@ func (c *checker) handlers(n *Node) error {
 		"menu":   {"onChange"},
 		"dialog": {"onClose"},
 		"item":   {"onClick"},
+		"swatch": {"onClick"},
 		"native": Natives[n.Name].Fires,
 	}[n.Type]
 	for name, h := range map[string]*Handler{"onClick": n.OnClick, "onChange": n.OnChange, "onSubmit": n.OnSubmit, "onClose": n.OnClose} {
@@ -540,8 +548,11 @@ func contains(list []string, s string) bool { return slices.Contains(list, s) }
 // extra checks the fields of the types that have their own: dialogs,
 // tables, images, icons, and the colors any widget may take.
 func (c *checker) extra(n *Node) error {
+	if n.Type == "swatch" && (!hexColor.MatchString(n.Color) || n.Label == "") {
+		return fmt.Errorf("a swatch has a color as #rrggbb, and a label")
+	}
 	for _, col := range []string{n.Color, n.Background} {
-		if col != "" && !contains(Colors, col) {
+		if col != "" && !contains(Colors, col) && n.Type != "swatch" {
 			return fmt.Errorf("color %q is none of %v", col, Colors)
 		}
 	}
@@ -571,8 +582,11 @@ func (c *checker) extra(n *Node) error {
 			return fmt.Errorf("a tooltip is up to %d bytes", MaxTooltip)
 		}
 	}
-	if (n.Width != 0 || n.Height != 0 || n.Radius != 0) && n.Type != "image" {
+	if (n.Width != 0 || n.Height != 0 || n.Radius != 0) && n.Type != "image" && (n.Type != "select" || n.Height != 0 || n.Radius != 0) {
 		return fmt.Errorf("a %s has no width, height or radius", n.Type)
+	}
+	if n.Type == "select" && n.Width != 0 && (n.Width < 40 || n.Width > 480) {
+		return fmt.Errorf("a select's width is 40 to 480")
 	}
 	switch {
 	case n.FontSize != 0 && n.Type != "text" && n.Type != "icon", n.Weight != 0 && n.Type != "text":
@@ -609,7 +623,7 @@ func (c *checker) extra(n *Node) error {
 		return fmt.Errorf("an item shows an icon, which it doesn't name")
 	case n.Compact && (n.Icon == "" || n.Type == "item"):
 		return fmt.Errorf("a compact %s shows its icon alone, which it doesn't name", n.Type)
-	case n.Badge != "" && n.Style != "ghost", n.Active && n.Style != "ghost" && n.Type != "item":
+	case n.Badge != "" && n.Style != "ghost", n.Active && n.Style != "ghost" && n.Type != "item" && n.Type != "swatch":
 		return fmt.Errorf("only a ghost button is active or has a badge, and an item is active")
 	}
 	switch n.Type {

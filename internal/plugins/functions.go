@@ -33,7 +33,13 @@ globalThis.glitched = Object.freeze({
     state: () => app("panels.state"),
   }),
   openIn: (app_, thread) => app("open.in", { app: app_, thread }),
-  app: Object.freeze({ checkForUpdates: () => app("app.checkForUpdates") }),
+  app: Object.freeze({
+    checkForUpdates: () => app("app.checkForUpdates"),
+    settings: Object.freeze({
+      get: () => app("app.settings.get"),
+      set: (key, value) => app("app.settings.set", { key, value }),
+    }),
+  }),
   diff: Object.freeze({
     set: (thread, options = {}) => app("diff.set", { ...options, thread }),
     setReviewed: (thread, path, reviewed = true) => app("diff.setReviewed", { thread, path, reviewed }),

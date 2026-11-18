@@ -94,6 +94,8 @@ mygo-plugin reads the top level: `id`, `name`, `version`, `main`, `contract`, `c
 | `programs` | the programs it runs, each a name, never a path | `programs` |
 | `service` | its headless module, a file in its folder | `service` |
 | `shortcuts` | `{command, key}`: `key` is modifiers and a key, as `cmd+shift+f`; it needs cmd, ctrl or alt | |
+| `settingsPages` | ids of its own pages (`contributes.pages`) listed in Settings rather than over it: see [Settings pages and themes](#settings-pages-and-themes) | |
+| `themes` | looks it adds to Appearance: see [Settings pages and themes](#settings-pages-and-themes) | |
 
 A part whose capability isn't declared, an unknown capability, slot or event, or a bad field stops the plugin from loading, and Settings says which.
 
@@ -184,15 +186,16 @@ Every widget is `{type, id?, ...}`. Interactive widgets and dialogs need an `id`
 | `divider`, `spacer`, `spinner` | | |
 | `button` | `label`, `style` (`default` `primary` `danger` `ghost` `outline` `bordered`), `disabled`, `tooltip`; for `default`, `primary` and `danger`: `progress`; for `ghost`, `outline` and `bordered`: `icon`; for `ghost` and `outline`: `compact`; for `ghost`: `active`, `badge`, `size` (`small`) | `onClick` |
 | `input` | `label`, `placeholder`, `value`, `controlled`, `multiline`, `disabled`, `style` (`default` `search`) | `onChange`, `onSubmit` |
-| `toggle` | `label`, `value`, `controlled`, `disabled` | `onChange` |
-| `select` | `label`, `options`, `value`, `controlled`, `disabled` | `onChange` |
-| `tabs` | `options`, `value`, `controlled`, `disabled`, `style` (`default` `segmented`) | `onChange` |
+| `toggle` | `label`, `value`, `controlled`, `disabled`, `style` (`default` `switch`) | `onChange` |
+| `select` | `label`, `options`, `value`, `controlled`, `disabled`, `width` (40 to 480) | `onChange` |
+| `tabs` | `options`, `value`, `controlled`, `disabled`, `style` (`default` `segmented` `control`), `label` | `onChange` |
+| `swatch` | `color` (`#rrggbb`), `label`, `active` | `onClick` |
 | `item` | `icon`, `text`, `style` (`code` for a monospace text), `label`, `active`, `trailing`, `actions` | `onClick` |
 | `menu` | `label`, `options`, `disabled`, `tooltip`, `style` (`default` `outline`); for `outline`: `icon`, `compact` | `onChange` (the chosen option's value) |
 | `dialog` | `title`, `open`, `children` | `onClose` (Escape, a click outside) |
 | `native` | `name`, `props`, `grow` (see [Native widgets](#native-widgets)) | what the native fires |
 
-`ghost` and `outline` buttons and menus are drawn as Glitched's header draws its own. A `ghost` button is a square that shows only its `icon` (it needs one), on while `active`, with a `badge` of up to 4 characters over its corner. An `outline` one is a hairline pill with its `icon` and `label`, or the icon alone when `compact`; an `outline` menu adds a chevron. `tooltip` (up to 200 bytes) shows on hover and is the control's name to assistive tools; without one, `label` is. `options` are strings, or `{value, label}`, 1 to 200; a menu's may also be `{separator: true}`, a line between two options. `padding` is 0 to 64, as one number for every side, two for top and bottom then the sides, or four for top, right, bottom and left. A `list` card is Settings' list of rows, with a line between its children. `keys` are drawn as keycaps, as Keybindings shows a shortcut. A `link` opens its `href` in the browser. A `search` input has a magnifier and a clear button. A `bordered` button is Settings' secondary button, with its `icon` before the label. A `progress` button, once clicked, shows a spinner and takes no clicks until the plugin has drawn after the click, so a long `update` (as a commit) shows it runs. A `count` badge is the muted pill a heading's count shows in. `segmented` tabs are drawn as the diff panel's Unified and Split switch; their options may each be `disabled`, with a `tooltip` saying why. An `item` is a list's row, as the diff panel's files: its `icon` and `text`, `active` when it is the one selected, its `trailing` widgets after the text, and, while the pointer is over it, its `actions` in their place. `color` and `background` are theme tokens, never raw values: `$text`, `$text.muted`, `$text.faint`, `$accent`, `$success`, `$warning`, `$danger`, `$border`, `$surface`.
+`ghost` and `outline` buttons and menus are drawn as Glitched's header draws its own. A `ghost` button is a square that shows only its `icon` (it needs one), on while `active`, with a `badge` of up to 4 characters over its corner. An `outline` one is a hairline pill with its `icon` and `label`, or the icon alone when `compact`; an `outline` menu adds a chevron. `tooltip` (up to 200 bytes) shows on hover and is the control's name to assistive tools; without one, `label` is. `options` are strings, or `{value, label}`, 1 to 200; a menu's may also be `{separator: true}`, a line between two options. `padding` is 0 to 64, as one number for every side, two for top and bottom then the sides, or four for top, right, bottom and left. A `list` card is Settings' list of rows, with a line between its children. `keys` are drawn as keycaps, as Keybindings shows a shortcut. A `link` opens its `href` in the browser. A `search` input has a magnifier and a clear button. A `bordered` button is Settings' secondary button, with its `icon` before the label. A `progress` button, once clicked, shows a spinner and takes no clicks until the plugin has drawn after the click, so a long `update` (as a commit) shows it runs. A `count` badge is the muted pill a heading's count shows in. A `switch` toggle and `control` tabs are Settings' switch and segmented control; their `label` is only their name to assistive tools. A `swatch` is a dot of its own `color`, the one raw color a widget takes, ringed while `active`; the ring moves to the next one made active, as Appearance's accents do. `segmented` tabs are drawn as the diff panel's Unified and Split switch; their options may each be `disabled`, with a `tooltip` saying why. An `item` is a list's row, as the diff panel's files: its `icon` and `text`, `active` when it is the one selected, its `trailing` widgets after the text, and, while the pointer is over it, its `actions` in their place. `color` and `background` are theme tokens, never raw values: `$text`, `$text.muted`, `$text.faint`, `$accent`, `$success`, `$warning`, `$danger`, `$border`, `$surface`.
 
 A view is at most 1 MiB, 2000 widgets, 24 deep, and 32 KiB per string. A place's copy is at most 200 widgets, a component's 2000. A view past a limit is refused whole: the last good one stays, with the error.
 
@@ -238,6 +241,8 @@ Your `place` export draws it as it draws any place.
 | `thread.header.actions` | the thread shown, keyed by its id | `{thread, local, narrow, panels: {terminal, diff, preview}, changedFiles}` |
 | `hero.heading` | one, keyed `hero` | `{}` |
 | `thread.empty` | the thread shown while it has no messages, keyed by its id | `{thread}` |
+| `settings.page.general` | one, keyed `page` | `{settings, choices: {newThread, defaultModel, timestamps}}` |
+| `settings.page.appearance` | one, keyed `page` | `{settings, themes, accents: [{name, color}]}` |
 | `settings.page.about` | one, keyed `page` | `{version, toolkit, checking, source}` |
 | `settings.page.keybindings` | one, keyed `page` | `{keybindings: [{label, keys}]}` |
 | `thread.panel.diff` | two for the thread shown: `<id>/header` and `<id>/body` | `{thread, part, local, files: [{path, add, del, reviewed, read}], shown, layout, splitFits, splitWidth, wrap, canOpen}` |
@@ -248,7 +253,7 @@ Your `place` export draws it as it draws any place.
 
 **Off limits.** These never take a replacement, whatever a manifest says or a grant allows: `approval.card`, `question.card`, `composer.access` (the access picker), `composer.send` (send and stop), `settings.plugins`, `settings.servers` (pairing an engine) and `confirm.destructive`. A plugin that names one does not load, and Settings says why. They are where you answer an agent, give it access, or delete something, so only Glitched draws them.
 
-`hero.heading` is the greeting over a new thread's composer, inside the hero's fade; Glitched keeps the composer, the workspace picker and the layout. `thread.empty` is what a thread with no messages shows where its messages will be. `settings.page.about` and `settings.page.keybindings` are the About and Keybindings pages of Settings, beside its sidebar and inside the page's scroll. About's `checking` is true while **Check for updates** runs, which `glitched.app.checkForUpdates()` starts; `source` is the repository's address. Keybindings' `keys` are each shortcut's keycaps, as `["⌘", "K"]`.
+`hero.heading` is the greeting over a new thread's composer, inside the hero's fade; Glitched keeps the composer, the workspace picker and the layout. `thread.empty` is what a thread with no messages shows where its messages will be. `settings.page.general` is Settings' General page. `settings.page.appearance` is the theme and the accent of Appearance; the material under them (Liquid Glass, its tint, the wind and the font size) stays Glitched's. Their `settings` are what `glitched.app.settings.get()` answers, and what they change they set with `glitched.app.settings.set`, so a replacement needs `settings:write` granted as well as `ui.replace`; without it, the built-in draws them. Appearance's `themes` are the themes' names, System first and plugins' last; it draws each with the native `theme.card`. `settings.page.about` and `settings.page.keybindings` are the About and Keybindings pages of Settings, beside its sidebar and inside the page's scroll. About's `checking` is true while **Check for updates** runs, which `glitched.app.checkForUpdates()` starts; `source` is the repository's address. Keybindings' `keys` are each shortcut's keycaps, as `["⌘", "K"]`.
 
 `thread.panel.diff` is the diff panel beside the chat. Its `header` copy is drawn in the panel's title bar, whose height, drag region and window buttons stay Glitched's; its `body` copy below it. `files` are the files the agent changed, in the order it first changed them, with the lines each change adds and deletes as its diff has them now; `reviewed` is the user's mark, and `read` says the file's diff is read, which marking it needs. `shown` is the file the diff shows, `""` with none. `layout` is `unified` or `split` as shown: Split falls back to Unified while `splitFits` is false, short of `splitWidth` points. `canOpen` says there is an editor to open a file in. Its context holds the thread's files, so a replacement needs `threads:read` granted as well as `ui.replace`; without it, the built-in draws the panel. The built-in draws the header and the list of files, and places the native `diff.body` under them.
 
@@ -262,11 +267,14 @@ A native widget is one of Glitched's own views, which a plugin places in its lay
 
 | Native | Props | Draws in | Fires |
 | --- | --- | --- | --- |
+| `theme.card` | `theme`: a theme's name, from the context's `themes` | `settings.page.appearance` | `onChange` with the theme's name when it is clicked |
 | `diff.body` | `path`: the file, one the thread changed | `thread.panel.diff` | `onChange` with `{path, remaining}` when a change is marked reviewed in it |
 
 `diff.body` draws the file's diff, the hunk bar and its shortcuts, or why it can't: no changes yet, the files on another machine, still reading, not shown (binary, over 1 MB, outside the workspace), or HEAD's side unknown. It fills its parent's width, and with `grow` the height its parent column leaves; without, its own.
 
-A native widget draws only in the components its row names, about the copy's own thread; a thread is never a prop. Anywhere else (a page, a tab, a slot) it says so in its place. Its name must be one of the table: an unknown name refuses the view, as does a part of the UI that is off limits (`approval.card` and the rest), so a plugin can't place a locked part any more than replace it. A prop it doesn't take, or of the wrong type, refuses the view too, and props are at most 4 KiB.
+`theme.card` draws a theme's preview, its sidebar, chat and terminal colors, with its name under it, ringed while it is the one chosen; with `grow` the cards of a row share its width.
+
+A native widget draws only in the components its row names, and `diff.body` about the copy's own thread; a thread is never a prop. Anywhere else (a page, a tab, a slot) it says so in its place. Its name must be one of the table: an unknown name refuses the view, as does a part of the UI that is off limits (`approval.card` and the rest), so a plugin can't place a locked part any more than replace it. A prop it doesn't take, or of the wrong type, refuses the view too, and props are at most 4 KiB.
 
 ### Built-in plugins
 
@@ -276,7 +284,7 @@ Built-in plugins are compiled into Glitched (`internal/plugins/bundled`) and lis
 | --- | --- | --- |
 | `header-actions` | `thread.header.actions` | `ui.place`, `ui.replace`, `threads:read`, `programs` (`git`) |
 | `diff-panel` | `thread.panel.diff` | `ui.place`, `ui.replace`, `threads:read`, `clipboard` |
-| `settings-pages` | `settings.page.about`, `settings.page.keybindings` | `ui.place`, `ui.replace` |
+| `settings-pages` | `settings.page.general`, `settings.page.appearance`, `settings.page.about`, `settings.page.keybindings` | `ui.place`, `ui.replace`, `settings:write` |
 | `greetings` | `hero.heading`, `thread.empty` | `ui.place`, `ui.replace` |
 
 Header actions' **Open in** opens the thread's workspace in Cursor, VS Code, Zed or, below a line, the file manager, with `glitched.openIn`. Its **Commit & push** opens a dialog that lists every changed file, the branch, where it pushes, and a message (the thread's title to start), and says that your git hooks don't run for a plugin's git. On **Commit & push** in the dialog, which shows a spinner while git runs, it runs `git add -A`, `git commit -m <message>`, then `git push`, or `git push -u origin <branch>` when the branch tracks nothing yet. It never forces. It refuses before running anything when there is nothing to commit, HEAD is detached, a merge has conflicts, or the message is empty. A push that fails or takes over 20 seconds keeps the commit and says so. A repository with no `origin` keeps the commit here.
@@ -338,11 +346,13 @@ Each call runs on the UI thread (the engine's queue, for a service), checked as 
 | `glitched.panels.state()` | `{terminal, diff, preview}`, each open or not | `ui.place` |
 | `glitched.openIn(app, thread)` (`cursor`, `vscode`, `zed`, `finder`) | | `threads:read` |
 | `glitched.app.checkForUpdates()` | | |
+| `glitched.app.settings.get()` | `{theme, accent, newThread, defaultModel, timestamps, confirmDelete, streaming, notifications}` | |
+| `glitched.app.settings.set(key, value)` | | `settings:write` |
 | `glitched.diff.set(thread, {shown?, layout?, wrap?})` | | `ui.place` |
 | `glitched.diff.setReviewed(thread, path, reviewed?)` | | `threads:read` |
 | `glitched.diff.openFile(thread, path)` | | `threads:read` |
 
-`openIn` names a thread, never a path: Glitched opens that thread's workspace, if it is on this machine. The `diff` calls name a thread and, for a file, one the thread changed, and refuse any other: `set` shows a file and sets the layout (`unified`, `split`) and wrapping; `setReviewed` marks a file reviewed or not (`true` without `reviewed`), once its diff is read; `openFile` opens it in the editor found, for a thread on this machine. `app.checkForUpdates` runs About's update check: the page shows it running, then a toast says how it went. A toast carries the plugin's name. `threads.create` starts a thread with the composer's model and access (a service's: the last thread's), and sends the prompt. A service can't toast, copy, notify, draft or open: it has no window.
+`openIn` names a thread, never a path: Glitched opens that thread's workspace, if it is on this machine. The `diff` calls name a thread and, for a file, one the thread changed, and refuse any other: `set` shows a file and sets the layout (`unified`, `split`) and wrapping; `setReviewed` marks a file reviewed or not (`true` without `reviewed`), once its diff is read; `openFile` opens it in the editor found, for a thread on this machine. `app.settings.set` sets one of the settings `get` answers to a value its page offers: a theme or accent by name, a choice as General lists it, a switch `true` or `false`. It refuses any other value, and any other setting. `app.checkForUpdates` runs About's update check: the page shows it running, then a toast says how it went. A toast carries the plugin's name. `threads.create` starts a thread with the composer's model and access (a service's: the last thread's), and sends the prompt. A service can't toast, copy, notify, draft or open: it has no window.
 
 **Start over** starts a page's state over and drops what an earlier start answers; a call that start had already made goes through.
 
@@ -404,6 +414,29 @@ Each has an `id`, a `kind`, a `label`, and optionally a `description`, `default`
 - **Read them typed:** `glitched.settings.get()`.
 - **Say how it stands:** `glitched.settings.status(id, status)` sets a badge in a fixed tone (`neutral`, `success`, `warning`, `danger`) and words in the description's place; `null` clears it.
 
+## Settings pages and themes
+
+A plugin's page is listed over Settings in the sidebar. Name it in `settingsPages`, and Settings lists it under its own pages instead, at `/settings/plugin/<plugin>/<page>`, with its title and subtitle as a Settings page's heading:
+
+```json
+{
+  "contributes": { "pages": [{ "id": "prefs", "title": "Snippets" }] },
+  "glitched": { "settingsPages": ["prefs"] }
+}
+```
+
+A theme is colors only, one for each of the app's: `bg`, `sidebar`, `surface`, `hover`, `active`, `border`, `text`, `muted`, `faint`, `green`, `red`, `amber` and `blue`, each `#rrggbb` or `#rrggbbaa`. `dark` says it is a dark look, and `terminal` names a Ghostty theme for the terminal; without one, the terminal takes the theme's background and text over the stock light or dark colors. The accent stays the user's.
+
+```json
+{
+  "glitched": {
+    "themes": [{ "name": "Neon", "dark": true, "colors": { "bg": "#05050a", "sidebar": "#0a0a14", "...": "…" } }]
+  }
+}
+```
+
+Appearance lists a plugin's themes after Glitched's. A theme whose name Glitched's or an earlier plugin's took is left out. A theme chosen in `settings.json` shows once its plugin runs, unless another is chosen meanwhile; with its plugin off, the app follows the system's appearance.
+
 ## Commands and shortcuts
 
 `contributes.commands` show in the palette (⌘K) as `<plugin>: <title>`, and run the `command` export. `glitched.shortcuts` bind them to keys. A key Glitched or an earlier plugin already has stays theirs.
@@ -425,6 +458,7 @@ Your plugins and others' plugins share one rule: the manifest says what a plugin
 | `threads:write` | start threads and send messages, which runs agents | yes |
 | `programs` | run the programs it names, as you | yes |
 | `service` | run in the background, with no window | yes |
+| `settings:write` | change Glitched's settings: the theme, the accent, defaults for new threads and how the app behaves | yes |
 | `network` | reach the hosts `permissions.network` names | yes |
 
 Grants start off, except a built-in plugin's, which start on. **Settings › Plugins** has a switch for each one a plugin declares. A grant holds at once: the plugin's runtime asks for its grants as it uses them, so it goes on running, with what its pages hold, and its sessions hear `grant.changed`. `host.capability(name)` answers whether it has one now. In the engine, only the `service` grant reloads the plugin, as it decides which module runs.

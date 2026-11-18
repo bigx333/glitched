@@ -121,6 +121,9 @@ func (a *app) loadSettings() {
 		log.Printf("glitched: settings: %v", err)
 	}
 	a.settings = settingsFrom(a.settings, f)
+	if f.Theme != "" && f.Theme != a.settings.theme {
+		a.pendingTheme = pendingTheme{f.Theme, a.settings.theme}
+	}
 	a.keepSaved()
 }
 

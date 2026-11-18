@@ -303,6 +303,11 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 	if x.replaces() && m.ContractVersion < ReplaceVersion {
 		return nil, fmt.Errorf("it replaces a component, which needs contractVersion %d", ReplaceVersion)
 	}
+	for _, id := range x.SettingsPages {
+		if !slices.ContainsFunc(m.Pages(), func(p plugin.Navigation) bool { return p.Page == id }) {
+			return nil, fmt.Errorf("glitched.settingsPages: %q is none of its pages", id)
+		}
+	}
 	in.ext = x
 	code, err := h.verify(in)
 	if err != nil {
@@ -589,6 +594,8 @@ var pageID = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,63}$`)
 type Entry struct {
 	Plugin, Page string
 	Title, Icon  string
+	// Settings lists it in Settings' nav.
+	Settings bool
 }
 
 // Entries are the pages the running plugins contribute, plugin by plugin
@@ -600,8 +607,18 @@ func (h *Host) Entries() []Entry {
 			if !pageID.MatchString(n.Page) {
 				continue // a builtin page of MyGo Music's, which Glitched doesn't have, or a name no route takes
 			}
-			out = append(out, Entry{Plugin: in.manifest.ID, Page: n.Page, Title: n.Title, Icon: n.Icon})
+			out = append(out, Entry{Plugin: in.manifest.ID, Page: n.Page, Title: n.Title, Icon: n.Icon, Settings: slices.Contains(in.ext.SettingsPages, n.Page)})
 		}
+	}
+	return out
+}
+
+// Themes are the looks the running plugins add, in the order of their
+// folders.
+func (h *Host) Themes() []Theme {
+	var out []Theme
+	for _, in := range h.running() {
+		out = append(out, in.ext.Themes...)
 	}
 	return out
 }

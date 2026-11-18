@@ -31,6 +31,7 @@ var Capabilities = []Capability{
 	{"tools", false, "Offer tools to Glitched's agents"},
 	{"programs", true, "Run the programs it names, as you"},
 	{"service", true, "Run in the background, with no window"},
+	{"settings:write", true, "Change Glitched's settings: the theme, the accent, defaults for new threads and how the app behaves"},
 }
 
 // Network is the grant that lets a plugin reach the hosts its
@@ -49,6 +50,8 @@ var Effects = map[string]string{
 	"panels.state":        "ui.place",
 	"open.in":             "threads:read",
 	"app.checkForUpdates": "",
+	"app.settings.get":    "",
+	"app.settings.set":    "settings:write",
 	"diff.set":            "ui.place",
 	"diff.setReviewed":    "threads:read",
 	"diff.openFile":       "threads:read",

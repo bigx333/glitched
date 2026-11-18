@@ -100,9 +100,42 @@ type Widget =
       /** Enter, in a single-line input. */
       onSubmit?: Handler;
     }
-  | { type: "toggle"; id: string; label: string; value?: boolean; controlled?: boolean; disabled?: boolean; onChange?: Handler }
-  | { type: "select"; id: string; label?: string; options: Option[]; value?: string; controlled?: boolean; disabled?: boolean; onChange?: Handler }
-  | { type: "tabs"; id: string; options: Option[]; value?: string; controlled?: boolean; disabled?: boolean; onChange?: Handler; style?: "default" }
+  | {
+      type: "toggle";
+      id: string;
+      /** A switch's is only its name to assistive tools. */
+      label: string;
+      /** switch: Settings' switch. */
+      style?: "default" | "switch";
+      value?: boolean;
+      controlled?: boolean;
+      disabled?: boolean;
+      onChange?: Handler;
+    }
+  | { type: "select"; id: string; label?: string; options: Option[]; value?: string; controlled?: boolean; disabled?: boolean; /** 40 to 480 points. */ width?: number; onChange?: Handler }
+  | {
+      type: "tabs";
+      id: string;
+      options: Option[];
+      value?: string;
+      controlled?: boolean;
+      disabled?: boolean;
+      onChange?: Handler;
+      /** control: Settings' segmented control. */
+      style?: "default" | "control";
+      /** Its name to assistive tools. */
+      label?: string;
+    }
+  | {
+      /** A dot of its color, ringed while active, as Appearance's accents. */
+      type: "swatch";
+      id: string;
+      /** #rrggbb. */
+      color: string;
+      label: string;
+      active?: boolean;
+      onClick?: Handler;
+    }
   | {
       type: "tabs";
       id: string;
@@ -155,17 +188,27 @@ type Widget =
  * Glitched, only in the components it names. Any other name, a locked part
  * of the UI included, refuses the view.
  */
-interface NativeWidget {
+type NativeWidget = {
   type: "native";
   id?: string;
-  /** diff.body: the diff of a file the thread changed, in thread.panel.diff. */
-  name: "diff.body";
-  props?: { path?: string };
-  /** Fill the height the parent column leaves. */
+  /** Fill the room the parent leaves. */
   grow?: boolean;
-  /** diff.body fires it with {path, remaining} as a change is marked reviewed. */
-  onChange?: Handler;
-}
+} & (
+  | {
+      /** The diff of a file the thread changed, in thread.panel.diff. */
+      name: "diff.body";
+      props?: { path?: string };
+      /** Fired with {path, remaining} as a change is marked reviewed. */
+      onChange?: Handler;
+    }
+  | {
+      /** A theme's preview and name, in settings.page.appearance. */
+      name: "theme.card";
+      props: { theme: string };
+      /** Fired with the theme's name as it is clicked. */
+      onChange?: Handler;
+    }
+);
 
 /** A ghost or outline button: drawn as Glitched's header draws its own. */
 interface DrawnButton {
@@ -239,7 +282,43 @@ type Slot = "thread.header" | "thread.row" | "sidebar.footer";
  * composer.send, settings.plugins, settings.servers and
  * confirm.destructive are off limits: a plugin that names one doesn't load.
  */
-type Component = "thread.header.actions" | "thread.panel.diff" | "hero.heading" | "thread.empty" | "settings.page.about" | "settings.page.keybindings";
+type Component =
+  | "thread.header.actions"
+  | "thread.panel.diff"
+  | "hero.heading"
+  | "thread.empty"
+  | "settings.page.general"
+  | "settings.page.appearance"
+  | "settings.page.about"
+  | "settings.page.keybindings";
+
+/** The settings glitched.app.settings reads and sets, by settings.json's names. */
+interface AppSettings {
+  theme: string;
+  accent: string;
+  newThread: string;
+  defaultModel: string;
+  timestamps: string;
+  confirmDelete: boolean;
+  streaming: boolean;
+  notifications: boolean;
+}
+
+/** The context of settings.page.general. */
+interface GeneralPageContext {
+  settings: AppSettings;
+  /** What each choice may be. */
+  choices: { newThread: string[]; defaultModel: string[]; timestamps: string[] };
+}
+
+/** The context of settings.page.appearance: the theme and the accent. */
+interface AppearancePageContext {
+  settings: AppSettings;
+  /** The themes' names, System first. */
+  themes: string[];
+  /** Each accent's color as #rrggbb. */
+  accents: { name: string; color: string }[];
+}
 
 /** The context of thread.empty, a thread with no messages. */
 interface ThreadEmptyContext {
@@ -261,7 +340,15 @@ interface KeybindingsPageContext {
   keybindings: { label: string; keys: string[] }[];
 }
 
-type ComponentContext = HeaderActionsContext | DiffPanelContext | ThreadEmptyContext | AboutPageContext | KeybindingsPageContext | Record<string, never>;
+type ComponentContext =
+  | HeaderActionsContext
+  | DiffPanelContext
+  | ThreadEmptyContext
+  | GeneralPageContext
+  | AppearancePageContext
+  | AboutPageContext
+  | KeybindingsPageContext
+  | Record<string, never>;
 
 /** The context of thread.header.actions, the buttons at the right of a thread's header. */
 interface HeaderActionsContext {
@@ -365,6 +452,11 @@ declare const glitched: {
   app: {
     /** About's update check: the page shows it runs, then a toast says how it went. */
     checkForUpdates(): Promise<void>;
+    settings: {
+      get(): Promise<AppSettings>;
+      /** A value its page offers, or it refuses. Needs settings:write. */
+      set<K extends keyof AppSettings>(key: K, value: AppSettings[K]): Promise<void>;
+    };
   };
   /** The diff panel. Each names the thread and, for a file, one it changed. */
   diff: {

@@ -178,3 +178,32 @@ func TestTheChromeWidgetsAreChecked(t *testing.T) {
 		}
 	}
 }
+
+// Settings' controls: switches, segmented controls, selects of a width
+// and color swatches, each only where it belongs.
+func TestTheSettingsWidgetsAreChecked(t *testing.T) {
+	good := `{"body": {"type": "column", "children": [
+		{"type": "toggle", "id": "s", "style": "switch", "label": "Stream"},
+		{"type": "tabs", "id": "m", "style": "control", "label": "Mode", "options": ["Local", "New worktree"]},
+		{"type": "select", "id": "t", "options": ["a", "b"], "width": 160},
+		{"type": "swatch", "id": "v", "color": "#8b5cf6", "label": "Violet", "active": true, "onClick": {"handler": "accent", "payload": "Violet"}}
+	]}}`
+	if _, err := Decode([]byte(good)); err != nil {
+		t.Fatal(err)
+	}
+	bad := map[string]string{
+		`{"body": {"type": "swatch", "id": "v", "color": "$accent", "label": "Violet"}}`:             "a swatch has a color as #rrggbb, and a label",
+		`{"body": {"type": "swatch", "id": "v", "color": "#8b5cf6"}}`:                                "a swatch has a color as #rrggbb, and a label",
+		`{"body": {"type": "text", "text": "x", "color": "#8b5cf6"}}`:                                "is none of",
+		`{"body": {"type": "select", "id": "t", "options": ["a"], "width": 900}}`:                    "a select's width is 40 to 480",
+		`{"body": {"type": "input", "id": "t", "width": 100}}`:                                       "has no width",
+		`{"body": {"type": "toggle", "id": "s", "style": "control"}}`:                                "unknown style",
+		`{"body": {"type": "swatch", "id": "v", "color": "#8b5cf6", "label": "V", "onChange": "x"}}`: "has no onChange",
+	}
+	for s, want := range bad {
+		_, err := Decode([]byte(s))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", s, err, want)
+		}
+	}
+}

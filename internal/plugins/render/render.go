@@ -38,8 +38,11 @@ type Style struct {
 	Row func(c *ui.Context, key any, selected bool) ui.Element
 	// ListCard is the app's card of rows with lines between them, as
 	// Settings draws them; Keys its keycaps of a shortcut.
-	ListCard func(c *ui.Context, body func())
+	ListCard func(c *ui.Context, title string, body func())
 	Keys     func(c *ui.Context, keys []string)
+	// Swatch is the app's color swatch, keyed by key in c, ringed while
+	// on; it says whether it was clicked. Nil draws a plain dot.
+	Swatch func(c *ui.Context, key any, color ui.Color, on bool, label string) bool
 	// Native draws a native widget, which the checks let only Natives be:
 	// fire gives the plugin a change. Nil, outside a component, says it
 	// draws only in one.
@@ -279,7 +282,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 					ui.Column(c).Radius(12).Border(1, st.Border).Background(st.Surface).Clip().Dividers(1, st.Border).Children(func() { r.children(c, n) })
 					return
 				}
-				st.ListCard(c, func() { r.children(c, n) })
+				st.ListCard(c, n.Title, func() { r.children(c, n) })
 			})
 			return
 		}
@@ -372,7 +375,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 	case "native":
 		e := ui.Column(kc)
 		if n.Grow {
-			e.Grow(1).Shrink(1)
+			e.Grow(1).Shrink(1).Basis(0)
 		}
 		e.Children(func() {
 			if st.Native == nil {
@@ -437,8 +440,25 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		if ctl == nil {
 			return
 		}
+		if n.Style == "switch" {
+			if ui.Switch(kc, &ctl.on).Label(n.Label).Disabled(n.Disabled).Changed() {
+				r.fire(n, n.OnChange, "change", ctl.on)
+			}
+			return
+		}
 		if ui.Checkbox(kc, &ctl.on, n.Label).Disabled(n.Disabled).Changed() {
 			r.fire(n, n.OnChange, "change", ctl.on)
+		}
+	case "swatch":
+		color := ui.Hex(n.Color)
+		if st.Swatch == nil {
+			if ui.ButtonBase(kc).Size(24, 24).Radius(12).Background(color).Label(n.Label).Clicked() {
+				r.fire(n, n.OnClick, "click", nil)
+			}
+			return
+		}
+		if st.Swatch(kc, n.ID, color, n.Active, n.Label) {
+			r.fire(n, n.OnClick, "click", nil)
 		}
 	case "select":
 		ctl := r.cs.m[n.ID]
@@ -454,6 +474,9 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		}
 		draw := func() {
 			e := ui.Select(c.Key(key(n, i)+"#select"), &shown, labels).Disabled(n.Disabled).Label(n.Label)
+			if n.Width > 0 {
+				e.Width(float32(n.Width))
+			}
 			if e.Changed() {
 				for _, o := range n.Options {
 					if o.Shown() == shown {
@@ -480,6 +503,13 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			if o.Value == ctl.text {
 				at = j
 			}
+		}
+		if n.Style == "control" {
+			if ui.Segmented(kc, &at, labels...).Label(n.Label).Disabled(n.Disabled).Changed() {
+				ctl.text = n.Options[at].Value
+				r.fire(n, n.OnChange, "change", ctl.text)
+			}
+			return
 		}
 		if ui.Tabs(kc, &at, labels...).Disabled(n.Disabled).Changed() {
 			ctl.text = n.Options[at].Value

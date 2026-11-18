@@ -32,6 +32,11 @@ func (k pluginKey) path() string {
 	return "/plugins/" + url.PathEscape(k.plugin) + "/" + url.PathEscape(k.page)
 }
 
+// settingsPath is the page's route in Settings, where the plugin lists it.
+func (k pluginKey) settingsPath() string {
+	return "/settings/plugin/" + url.PathEscape(k.plugin) + "/" + url.PathEscape(k.page)
+}
+
 // pluginPage is what a plugin's stock page shows: what the plugin answered
 // last, and what went wrong last, reading it or acting on it.
 type pluginPage struct {
@@ -83,7 +88,10 @@ func (a *app) openPlugins(dir string) {
 		// Plugins with timers wait for Start, once the window runs and the
 		// language is known.
 		WaitToStart: true,
-		Reloaded:    func(string) { clear(a.pluginAssets) },
+		Reloaded: func(string) {
+			clear(a.pluginAssets)
+			forgetPluginTerminals()
+		},
 		ServiceCall: func(ctx context.Context, id, method string, args json.RawMessage) (any, error) {
 			call, _ := json.Marshal(plugins.ServiceCall{Plugin: id, Method: method, Args: args})
 			out, err := a.serviceClient(dir).PluginCall(ctx, call)
@@ -98,6 +106,7 @@ func (a *app) openPlugins(dir string) {
 // pluginsChanged forgets what the plugins' pages showed, as after a
 // reload, which closed them.
 func (a *app) pluginsChanged(err error) {
+	forgetPluginTerminals()
 	clear(a.pluginPages)
 	clear(a.pluginControls)
 	clear(a.pluginAssets)
@@ -115,6 +124,9 @@ func (a *app) pluginNotice(t ui.Toast) {
 // reads it again.
 func (a *app) pluginNav(c *ui.Context) {
 	for _, e := range a.plugins.Entries() {
+		if e.Settings {
+			continue
+		}
 		k := pluginKey{e.Plugin, e.Page}
 		icon := appIconNamed(e.Icon)
 		if icon == nil {
@@ -181,39 +193,7 @@ func (a *app) actOnPluginPage(k pluginKey, act plugin.Action) {
 
 func (a *app) pluginsPage(c *ui.Context, r *ui.Route) {
 	k := pluginKey{r.Param("plugin"), r.Param("page")}
-	title := k.page
-	for _, e := range a.plugins.Entries() {
-		if e.Plugin == k.plugin && e.Page == k.page {
-			title = e.Title
-		}
-	}
-	var subtitle string
-	var body func(c *ui.Context)
-	busy := false
-	if a.plugins.HasView(k.plugin) {
-		s, err := a.plugins.Session(k.plugin, k.page)
-		switch {
-		case err != nil:
-			body = func(c *ui.Context) { ui.Text(c, err.Error()).Selectable().TextColor(palette.red) }
-		default:
-			if s.View != nil {
-				title = cmpOr(s.View.Title, title)
-				subtitle = s.View.Subtitle
-			}
-			busy = s.Busy
-			body = func(c *ui.Context) { a.pluginView(c, k, s) }
-		}
-	} else {
-		if a.pluginPages[k] == nil {
-			a.readPluginPage(k)
-		}
-		st := a.pluginPages[k]
-		if st.page != nil {
-			title = cmpOr(st.page.Title, title)
-			subtitle = st.page.Subtitle
-		}
-		body = func(c *ui.Context) { a.pluginBody(c, k, st) }
-	}
+	title, subtitle, busy, body := a.pluginPageParts(k)
 	r.Title(title)
 	bar := c.TitleBar()
 	left := 24 + bar.Left*(1-a.sidebarOpen)
@@ -238,6 +218,43 @@ func (a *app) pluginsPage(c *ui.Context, r *ui.Route) {
 		})
 		a.contentCard(main.Grow(1))
 	})
+}
+
+// pluginPageParts are what a plugin's page shows: its title and subtitle,
+// whether it is busy, and its body. A stock page is read again when no
+// read of it is under way.
+func (a *app) pluginPageParts(k pluginKey) (title, subtitle string, busy bool, body func(c *ui.Context)) {
+	title = k.page
+	for _, e := range a.plugins.Entries() {
+		if e.Plugin == k.plugin && e.Page == k.page {
+			title = e.Title
+		}
+	}
+	if a.plugins.HasView(k.plugin) {
+		s, err := a.plugins.Session(k.plugin, k.page)
+		switch {
+		case err != nil:
+			body = func(c *ui.Context) { ui.Text(c, err.Error()).Selectable().TextColor(palette.red) }
+		default:
+			if s.View != nil {
+				title = cmpOr(s.View.Title, title)
+				subtitle = s.View.Subtitle
+			}
+			busy = s.Busy
+			body = func(c *ui.Context) { a.pluginView(c, k, s) }
+		}
+	} else {
+		if a.pluginPages[k] == nil {
+			a.readPluginPage(k)
+		}
+		st := a.pluginPages[k]
+		if st.page != nil {
+			title = cmpOr(st.page.Title, title)
+			subtitle = st.page.Subtitle
+		}
+		body = func(c *ui.Context) { a.pluginBody(c, k, st) }
+	}
+	return title, subtitle, busy, body
 }
 
 func cmpOr(s, or string) string {
@@ -389,6 +406,10 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		return a.openInEffect(e.Args)
 	case "app.checkForUpdates":
 		return a.checkForUpdatesEffect()
+	case "app.settings.get":
+		return a.appSettings(), nil
+	case "app.settings.set":
+		return a.setAppSetting(e.Args)
 	case "diff.set", "diff.setReviewed", "diff.openFile":
 		return a.diffEffect(e.Type, e.Args)
 	case "tab.open":
