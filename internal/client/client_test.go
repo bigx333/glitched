@@ -36,8 +36,9 @@ func (g *gui) post(fn func()) {
 	}
 }
 
-// until runs posts until ok holds. state describes what the test saw when
-// it gives up.
+// until runs posts until ok holds, checking it after each as a GUI could
+// look between them, and leaves the posts after that one queued. state
+// describes what the test saw when it gives up.
 func (g *gui) until(t *testing.T, what string, ok func() bool, state ...func() string) {
 	t.Helper()
 	deadline := time.After(30 * time.Second)
@@ -46,10 +47,16 @@ func (g *gui) until(t *testing.T, what string, ok func() bool, state ...func() s
 		q := g.q
 		g.q = nil
 		g.mu.Unlock()
-		for _, fn := range q {
+		for i, fn := range q {
 			fn()
+			if ok() {
+				g.mu.Lock()
+				g.q = append(q[i+1:], g.q...)
+				g.mu.Unlock()
+				return
+			}
 		}
-		if ok() {
+		if len(q) == 0 && ok() {
 			return
 		}
 		select {

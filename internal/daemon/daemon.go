@@ -194,12 +194,12 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	if err := os.Chmod(cfg.Dir, 0o700); err != nil {
 		return nil, err
 	}
-	lk, err := lock(filepath.Join(cfg.Dir, "engine.lock"))
+	unlock, err := lock(filepath.Join(cfg.Dir, "engine.lock"))
 	if err != nil {
 		return nil, err
 	}
-	if lk != nil {
-		d.undo = append(d.undo, lk.Close)
+	if unlock != nil {
+		d.undo = append(d.undo, unlock)
 	}
 	sock := Socket(cfg.Dir)
 	// The lock is ours, so a socket file left here is from a dead engine.
