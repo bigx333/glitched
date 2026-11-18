@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"log"
 	"maps"
 	"path/filepath"
@@ -17,27 +16,26 @@ import (
 // pages edit, by name. The default model and access are composer.json's,
 // the servers gui.json's and This machine's engine.json's.
 type settingsFile struct {
-	Theme         string       `json:"theme"`
-	Accent        string       `json:"accent"`
-	Glass         bool         `json:"glass"`
-	GlassTint     float64      `json:"glassTint"`
-	TintPanels    bool         `json:"tintPanels"`
-	Wind          bool         `json:"wind"`
-	FontSize      float64      `json:"fontSize"`
-	Timestamps    string       `json:"timestamps"`
-	ConfirmDelete bool         `json:"confirmDelete"`
-	Streaming     bool         `json:"streaming"`
-	NewThread     string       `json:"newThread"`
-	Notifications bool         `json:"notifications"`
-	Claude        providerFile `json:"claude"`
-	Codex         providerFile `json:"codex"`
-}
-
-type providerFile struct {
-	Enabled bool     `json:"enabled"`
-	Path    string   `json:"path"`
-	Model   string   `json:"model"`
-	Custom  []string `json:"custom"`
+	Theme         string   `json:"theme"`
+	Accent        string   `json:"accent"`
+	Glass         bool     `json:"glass"`
+	GlassTint     float64  `json:"glassTint"`
+	TintPanels    bool     `json:"tintPanels"`
+	Wind          bool     `json:"wind"`
+	FontSize      float64  `json:"fontSize"`
+	Timestamps    string   `json:"timestamps"`
+	ConfirmDelete bool     `json:"confirmDelete"`
+	Streaming     bool     `json:"streaming"`
+	NewThread     string   `json:"newThread"`
+	Notifications bool     `json:"notifications"`
+	ClaudeEnabled bool     `json:"claudeEnabled"`
+	ClaudePath    string   `json:"claudePath"`
+	ClaudeModel   string   `json:"claudeModel"`
+	ClaudeCustom  []string `json:"claudeCustom"`
+	CodexEnabled  bool     `json:"codexEnabled"`
+	CodexPath     string   `json:"codexPath"`
+	CodexModel    string   `json:"codexModel"`
+	CodexCustom   []string `json:"codexCustom"`
 }
 
 var (
@@ -62,8 +60,14 @@ func fileOf(s settings) settingsFile {
 		Streaming:     s.streaming,
 		NewThread:     newThreadModes[s.newThreadMode],
 		Notifications: s.notifications,
-		Claude:        providerFile{s.claudeEnabled, s.claudePath, s.claudeModel, s.claudeCustom},
-		Codex:         providerFile{s.codexEnabled, s.codexPath, s.codexModel, s.codexCustom},
+		ClaudeEnabled: s.claudeEnabled,
+		ClaudePath:    s.claudePath,
+		ClaudeModel:   s.claudeModel,
+		ClaudeCustom:  s.claudeCustom,
+		CodexEnabled:  s.codexEnabled,
+		CodexPath:     s.codexPath,
+		CodexModel:    s.codexModel,
+		CodexCustom:   s.codexCustom,
 	}
 }
 
@@ -99,10 +103,10 @@ func settingsFrom(s settings, f settingsFile) settings {
 		s.newThreadMode = i
 	}
 	s.notifications = f.Notifications
-	s.claudeEnabled, s.claudePath, s.claudeCustom = f.Claude.Enabled, f.Claude.Path, f.Claude.Custom
-	pick(&s.claudeModel, claudeModels, f.Claude.Model)
-	s.codexEnabled, s.codexPath, s.codexCustom = f.Codex.Enabled, f.Codex.Path, f.Codex.Custom
-	pick(&s.codexModel, codexModels, f.Codex.Model)
+	s.claudeEnabled, s.claudePath, s.claudeCustom = f.ClaudeEnabled, f.ClaudePath, f.ClaudeCustom
+	pick(&s.claudeModel, claudeModels, f.ClaudeModel)
+	s.codexEnabled, s.codexPath, s.codexCustom = f.CodexEnabled, f.CodexPath, f.CodexCustom
+	pick(&s.codexModel, codexModels, f.CodexModel)
 	return s
 }
 
@@ -125,8 +129,8 @@ func (a *app) loadSettings() {
 // edit in place.
 func (a *app) keepSaved() {
 	a.savedSettings = fileOf(a.settings)
-	a.savedSettings.Claude.Custom = slices.Clone(a.savedSettings.Claude.Custom)
-	a.savedSettings.Codex.Custom = slices.Clone(a.savedSettings.Codex.Custom)
+	a.savedSettings.ClaudeCustom = slices.Clone(a.savedSettings.ClaudeCustom)
+	a.savedSettings.CodexCustom = slices.Clone(a.savedSettings.CodexCustom)
 }
 
 // saveSettings hands what changed since the last save to the writer,
@@ -161,8 +165,8 @@ func fields(f settingsFile) map[string]json.RawMessage {
 // order the saves came. Under the file's lock it puts only the settings
 // that changed here onto what the file holds, so another window on the
 // state directory keeps what it chose, and a key this app doesn't know,
-// as a newer one's, stays. A file that doesn't parse is replaced whole. A
-// write that fails is tried again with the next save.
+// as a newer one's, stays. A file that doesn't parse, or none, takes every
+// setting. A write that fails is tried again with the next save.
 type settingsWriter struct {
 	path string
 	wg   sync.WaitGroup
@@ -216,14 +220,13 @@ func (w *settingsWriter) drain() {
 }
 
 func (w *settingsWriter) write(changed, all map[string]json.RawMessage) error {
-	_, err := jsonfile.Edit(w.path, func(f *map[string]json.RawMessage) error {
+	_, err := jsonfile.EditOrReset(w.path, func(f *map[string]json.RawMessage) error {
+		if *f == nil {
+			*f = maps.Clone(all)
+		}
 		*f = merged(*f, changed)
 		return nil
 	})
-	syntax, kind := (*json.SyntaxError)(nil), (*json.UnmarshalTypeError)(nil)
-	if errors.As(err, &syntax) || errors.As(err, &kind) {
-		return jsonfile.Write(w.path, all)
-	}
 	return err
 }
 

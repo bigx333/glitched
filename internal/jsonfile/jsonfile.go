@@ -56,6 +56,16 @@ func Write(path string, v any) error {
 // lock, loads what the others wrote, applies change and writes the result,
 // which it returns. An error from change leaves the file as it was.
 func Edit[T any](path string, change func(*T) error) (T, error) {
+	return edit(path, change, false)
+}
+
+// EditOrReset is Edit, but a file that doesn't parse as T is, under the
+// lock, a zero T for change to start anew from.
+func EditOrReset[T any](path string, change func(*T) error) (T, error) {
+	return edit(path, change, true)
+}
+
+func edit[T any](path string, change func(*T) error, reset bool) (T, error) {
 	var v T
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return v, err
@@ -66,7 +76,12 @@ func Edit[T any](path string, change func(*T) error) (T, error) {
 	}
 	defer lk.Close()
 	if err := Load(path, &v); err != nil {
-		return v, err
+		syntax, kind := (*json.SyntaxError)(nil), (*json.UnmarshalTypeError)(nil)
+		if !reset || !errors.As(err, &syntax) && !errors.As(err, &kind) {
+			return v, err
+		}
+		var zero T
+		v = zero
 	}
 	if err := change(&v); err != nil {
 		return v, err
