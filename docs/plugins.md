@@ -96,6 +96,7 @@ mygo-plugin reads the top level: `id`, `name`, `version`, `main`, `contract`, `c
 | `shortcuts` | `{command, key}`: `key` is modifiers and a key, as `cmd+shift+f`; it needs cmd, ctrl or alt | |
 | `settingsPages` | ids of its own pages (`contributes.pages`) listed in Settings rather than over it: see [Settings pages and themes](#settings-pages-and-themes) | |
 | `themes` | looks it adds to Appearance: see [Settings pages and themes](#settings-pages-and-themes) | |
+| `menus` | its commands in Glitched's menus: see [Menus](#menus) | `ui.place` |
 
 A part whose capability isn't declared, an unknown capability, slot or event, or a bad field stops the plugin from loading, and Settings says which.
 
@@ -136,7 +137,7 @@ The window never waits for a plugin. One worker per session calls the plugin, on
 | `view` | `{page, tab?, context?, state, values}` | `{title?, subtitle?, body}` | after `init`, and once after each batch of events |
 | `update` | `{page, tab?, context?, state, event, values}` | `{state?}` | each event; leave `state` out to keep it |
 | `place` | `{id, at, state, items: [{key, context}]}` | a widget or `null` per item, in order | as the copies shown, their contexts or the app state change |
-| `command` | `{id, args}` | nothing | a palette command or shortcut |
+| `command` | `{id, args}` | nothing | a palette command or shortcut, or a menu item (see [Menus](#menus)) |
 | `page` | `{id}` | mygo-plugin's `Page` | stock pages only |
 | `tool` | `{name, args, call: {thread}}` | the tool's answer | an agent calls a tool (in the engine) |
 | `serve` | `{method, args}` | the method's answer | `glitched.service.call` (in the service) |
@@ -148,7 +149,7 @@ Every export may be `async`. `context` is the thread record of a tab's thread. S
 
 ```js
 { kind: "ui", type: "click" | "change" | "submit" | "close", handler, node, value?, payload?, place? }
-{ kind: "app", type: "thread.changed" | "thread.message" | "setting.changed" | "theme.changed" | "command" | "grant.changed", data }
+{ kind: "app", type: "thread.changed" | "thread.message" | "setting.changed" | "theme.changed" | "window.focused" | "command" | "grant.changed", data }
 { kind: "timer", id }
 ```
 
@@ -216,6 +217,26 @@ export function place({ id, at, state, items }) {
 | `sidebar.footer` | no | one | none |
 
 Stable slots keep their name and context across Glitched's updates; others may move. A copy shows its last drawing while the next is drawn, so rows never wait or flicker. Glitched draws a place again only when a copy comes, goes or its record changes, or the app session's state does, in batches of up to 200 copies. What the user does in a place reaches `update` with `event.place`.
+
+### Menus
+
+A plugin's command can join a menu of Glitched's: a thread row's context menu, a project's, or the actions under a message. Glitched draws the menu; the plugin's items come after its own, past a line, with the command's title. Choosing one runs the plugin's `command` export with `args` about what the menu is on:
+
+```json
+{
+  "capabilities": ["ui.place"],
+  "contributes": { "commands": [{ "id": "quote", "title": "Quote" }] },
+  "glitched": { "menus": [{ "command": "quote", "at": "message.actions", "icon": "copy" }] }
+}
+```
+
+| Menu | `args` |
+| --- | --- |
+| `thread.menu` | `{thread}`: the thread's record, `{id}` alone without `threads:read` |
+| `project.menu` | `{project: {name, workspace}}`: `workspace` only with `threads:read` |
+| `message.actions` | `{thread, message: {role, text}}`: `text` only with `messages:read` |
+
+A message's actions are buttons, so their items name an `icon`, one of the app's; a menu's don't. The menus themselves stay Glitched's: Rename, Snooze, Delete and the rest can't be removed or replaced.
 
 **Panel tabs** (`glitched.tabs`) show as buttons in a thread's header and open in the panel beside the chat, one session per thread, with the thread as `context`. `glitched.tabs.open(id)` opens one.
 
@@ -308,6 +329,7 @@ A plugin hears the events its manifest lists, if it may:
 | `thread.files.changed` | `{thread, files}`, the files of a thread you have open that the agent edited since you were last told, as `thread.message` is | `threads:read` |
 | `setting.changed` | `{id, value, was}` | |
 | `theme.changed` | `{appearance}` | |
+| `window.focused` | `{focused}`, as the window comes to the front or goes behind | |
 
 `command` (a command of its own ran), `grant.changed` (`{capability, granted}`, a grant of its own given or taken back) and `timer` reach the plugin's sessions with `update`; `grant.changed` reaches its pages and tabs too, so what they show follows at once. A thread record is `{id, title, workspace, status, machine, updatedAt}`. Without `threads:read` it is `{id}` alone, in places and tabs too.
 
@@ -336,12 +358,15 @@ Each call runs on the UI thread (the engine's queue, for a service), checked as 
 | `glitched.settings.get()` | its settings, typed, by id | |
 | `glitched.settings.status(setting, {badge?, tone?, text?} \| null)` | | |
 | `glitched.clipboard.write(text)` | | `clipboard` |
-| `glitched.notify(title, body?)` | | `notify` |
-| `glitched.composer.draft(text, workspace?)` | | `composer` |
+| `glitched.notify(title, body?, {thread?})` | | `notify`; naming a thread, `threads:read` |
+| `glitched.composer.draft(text, workspace?)`, or `(text, {thread})` | | `composer`; naming a thread, `threads:read` |
 | `glitched.threads.list()` | thread records, newest first | `threads:read` |
 | `glitched.threads.open(thread)` | | `threads:read` |
 | `glitched.threads.create(prompt, {title?, workspace?})` | `{thread}` | `threads:write` |
 | `glitched.threads.send(thread, text)` | `{message}` | `threads:write` |
+| `glitched.threads.rename(thread, title)` | | `threads:write` |
+| `glitched.threads.delete(thread)` | | `threads:write` |
+| `glitched.projects.remove(workspace)` | | `threads:write` |
 | `glitched.panels.toggle(panel, open?)` (`terminal`, `diff`, `preview`) | the panels' state | `ui.place` |
 | `glitched.panels.state()` | `{terminal, diff, preview}`, each open or not | `ui.place` |
 | `glitched.openIn(app, thread)` (`cursor`, `vscode`, `zed`, `finder`) | | `threads:read` |
@@ -352,7 +377,7 @@ Each call runs on the UI thread (the engine's queue, for a service), checked as 
 | `glitched.diff.setReviewed(thread, path, reviewed?)` | | `threads:read` |
 | `glitched.diff.openFile(thread, path)` | | `threads:read` |
 
-`openIn` names a thread, never a path: Glitched opens that thread's workspace, if it is on this machine. The `diff` calls name a thread and, for a file, one the thread changed, and refuse any other: `set` shows a file and sets the layout (`unified`, `split`) and wrapping; `setReviewed` marks a file reviewed or not (`true` without `reviewed`), once its diff is read; `openFile` opens it in the editor found, for a thread on this machine. `app.settings.set` sets one of the settings `get` answers to a value its page offers: a theme or accent by name, a choice as General lists it, a switch `true` or `false`. It refuses any other value, and any other setting. `app.checkForUpdates` runs About's update check: the page shows it running, then a toast says how it went. A toast carries the plugin's name. `threads.create` starts a thread with the composer's model and access (a service's: the last thread's), and sends the prompt. A service can't toast, copy, notify, draft or open: it has no window.
+A `notify` that names a thread opens it when clicked, as Glitched's own notifications do. `composer.draft` with a thread shows the thread with the draft in its composer, for the user to send. `threads.rename` takes a title of up to 200 bytes. `threads.delete` and `projects.remove` delete nothing themselves: they ask the user with Glitched's own confirm, whatever the settings say, and refuse while an agent runs there. `openIn` names a thread, never a path: Glitched opens that thread's workspace, if it is on this machine. The `diff` calls name a thread and, for a file, one the thread changed, and refuse any other: `set` shows a file and sets the layout (`unified`, `split`) and wrapping; `setReviewed` marks a file reviewed or not (`true` without `reviewed`), once its diff is read; `openFile` opens it in the editor found, for a thread on this machine. `app.settings.set` sets one of the settings `get` answers to a value its page offers: a theme or accent by name, a choice as General lists it, a switch `true` or `false`. It refuses any other value, and any other setting. `app.checkForUpdates` runs About's update check: the page shows it running, then a toast says how it went. A toast carries the plugin's name. `threads.create` starts a thread with the composer's model and access (a service's: the last thread's), and sends the prompt. A service can't toast, copy, notify, draft or open: it has no window.
 
 **Start over** starts a page's state over and drops what an earlier start answers; a call that start had already made goes through.
 

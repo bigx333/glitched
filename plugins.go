@@ -346,7 +346,7 @@ func (a *app) pluginCommands() []command {
 	var out []command
 	for _, pc := range a.plugins.Commands() {
 		out = append(out, command{section: "Actions", label: pc.PluginName + ": " + pc.Title, icon: icPlug, run: func() {
-			a.plugins.RunCommand(pc.Plugin, pc.ID, func(err error) {
+			a.plugins.RunCommand(pc.Plugin, pc.ID, nil, func(err error) {
 				if err != nil {
 					a.pluginNotice(ui.Toast{Title: pc.PluginName + ": " + pc.Title + " failed", Description: err.Error()})
 				}
@@ -389,14 +389,27 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		a.pluginLater = append(a.pluginLater, func(c *ui.Context) { c.WriteClipboard(args.Text) })
 		return nil, nil
 	case "notify":
-		var args struct{ Title, Body string }
+		var args struct{ Title, Body, Thread string }
 		if err := json.Unmarshal(e.Args, &args); err != nil || args.Title == "" {
 			return nil, errors.New("notify needs a title")
 		}
 		if a.notify == nil {
 			return nil, errors.New("notifications are off")
 		}
-		a.notify(mygo.NotificationOptions{ID: "plugin:" + id, Title: args.Title, Body: args.Body, Subtitle: name, Group: "plugins"})
+		// A notification about a thread opens it when clicked, as the
+		// app's own do; naming one needs threads:read.
+		nid := "plugin:" + id
+		if args.Thread != "" {
+			if !a.plugins.Allowed(id, "threads:read") {
+				return nil, fmt.Errorf("%w: naming a thread needs threads:read", plugins.ErrDenied)
+			}
+			t, err := a.pluginFind(e.Args)
+			if err != nil {
+				return nil, err
+			}
+			nid = "thread:" + t.id().String()
+		}
+		a.notify(mygo.NotificationOptions{ID: nid, Title: args.Title, Body: args.Body, Subtitle: name, Group: "plugins"})
 		return nil, nil
 	case "panels.toggle":
 		return a.panelEffect(e.Args)
@@ -443,9 +456,23 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		}
 		return nil, fmt.Errorf("the plugin has no page %q", args.Page)
 	case "composer.draft":
-		var args struct{ Text, Workspace string }
+		var args struct{ Text, Workspace, Thread string }
 		if err := json.Unmarshal(e.Args, &args); err != nil {
 			return nil, err
+		}
+		// In a thread's composer: the thread is shown, with the draft.
+		if args.Thread != "" {
+			if !a.plugins.Allowed(id, "threads:read") {
+				return nil, fmt.Errorf("%w: drafting in a thread needs threads:read", plugins.ErrDenied)
+			}
+			t, err := a.pluginFind(e.Args)
+			if err != nil {
+				return nil, err
+			}
+			a.select_(t)
+			a.draft, a.code = args.Text, codeBlock{}
+			a.focusPane(0, -1)
+			return nil, nil
 		}
 		ws, err := pluginWorkspace(args.Workspace)
 		if err != nil {
@@ -472,6 +499,45 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		}
 		a.select_(t)
 		return nil, nil
+	case "threads.rename":
+		var args struct{ Title string }
+		json.Unmarshal(e.Args, &args)
+		s := strings.TrimSpace(args.Title)
+		if s == "" || len(s) > 200 {
+			return nil, errors.New("threads.rename needs a title of up to 200 bytes")
+		}
+		t, err := a.pluginFind(e.Args)
+		if err != nil {
+			return nil, err
+		}
+		a.backend.Rename(t.env, t.id(), s)
+		return nil, nil
+	case "threads.delete":
+		// Glitched asks the user first, whatever the settings say: a
+		// plugin never deletes unasked.
+		t, err := a.pluginFind(e.Args)
+		if err != nil {
+			return nil, err
+		}
+		if t.View.Live() {
+			return nil, errors.New("the thread's agent runs: stop it first")
+		}
+		a.deleting, a.deleteOpen = t, true
+		return nil, nil
+	case "projects.remove":
+		var args struct{ Workspace string }
+		json.Unmarshal(e.Args, &args)
+		for _, p := range a.projects {
+			if p.key.workspace != args.Workspace {
+				continue
+			}
+			if a.projectLive(p) {
+				return nil, errors.New("an agent runs in the project: stop it first")
+			}
+			a.askRemove(p)
+			return nil, nil
+		}
+		return nil, fmt.Errorf("no project %q", args.Workspace)
 	case "threads.send":
 		var args struct{ Text string }
 		if err := json.Unmarshal(e.Args, &args); err != nil || strings.TrimSpace(args.Text) == "" {

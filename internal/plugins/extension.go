@@ -37,6 +37,26 @@ type Extension struct {
 	SettingsPages []string `json:"settingsPages,omitempty"`
 	// Themes are looks it adds to Appearance's: colors only.
 	Themes []Theme `json:"themes,omitempty"`
+	// Menus put its commands in Glitched's menus: a thread's, a
+	// project's, a message's actions.
+	Menus []Menu `json:"menus,omitempty"`
+}
+
+// Menu puts one of the plugin's commands (contributes.commands) in a menu
+// of Glitched's, after its own items: At is one of MenuSlots. A message's
+// actions are buttons, which show Icon, one of the app's icons.
+type Menu struct {
+	Command string `json:"command"`
+	At      string `json:"at"`
+	Icon    string `json:"icon,omitempty"`
+}
+
+// MenuSlots are the menus a plugin's commands may join, and what the
+// command is passed when chosen there.
+var MenuSlots = map[string]string{
+	"thread.menu":     "{thread}",
+	"project.menu":    "{project: {name, workspace}}",
+	"message.actions": "{thread, message: {role, text}}",
 }
 
 // Theme is a look a plugin adds to Appearance: its name, whether it is
@@ -119,6 +139,7 @@ var Events = map[string]string{
 	"thread.files.changed": "threads:read",
 	"setting.changed":      "",
 	"theme.changed":        "",
+	"window.focused":       "",
 }
 
 // MinEvery is the shortest a timer may be, in seconds.
@@ -243,6 +264,18 @@ func (x Extension) check(folder string) error {
 			return fmt.Errorf("glitched.shortcuts: %s: %w", s.Command, err)
 		}
 	}
+	for _, m := range x.Menus {
+		if _, ok := MenuSlots[m.At]; !ok {
+			return fmt.Errorf("glitched.menus: no menu %q", m.At)
+		}
+		if (m.At == "message.actions") != (m.Icon != "") || len(m.Icon) > 64 {
+			return fmt.Errorf("glitched.menus: %s: a message's actions show an icon, which no menu's item does", m.Command)
+		}
+		if ids["menus:"+m.At+":"+m.Command] {
+			return fmt.Errorf("glitched.menus: %s twice in %s", m.Command, m.At)
+		}
+		ids["menus:"+m.At+":"+m.Command] = true
+	}
 	for _, t := range x.Themes {
 		if !themeName.MatchString(t.Name) {
 			return fmt.Errorf("glitched.themes: name %q is 1 to 32 letters, digits, spaces or ._-", t.Name)
@@ -278,7 +311,7 @@ func (x Extension) needs() []string {
 			out = append(out, c)
 		}
 	}
-	if len(x.Places) > 0 || len(x.Tabs) > 0 {
+	if len(x.Places) > 0 || len(x.Tabs) > 0 || len(x.Menus) > 0 {
 		add("ui.place")
 	}
 	if x.replaces() {

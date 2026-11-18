@@ -261,11 +261,18 @@ type AppEvent =
   | { kind: "app"; type: "thread.files.changed"; data: { thread: string; files: string[] } }
   | { kind: "app"; type: "setting.changed"; data: { id: string; value: unknown; was: unknown } }
   | { kind: "app"; type: "theme.changed"; data: { appearance: "light" | "dark" } }
+  | { kind: "app"; type: "window.focused"; data: { focused: boolean } }
   | { kind: "app"; type: "command"; data: { id: string } }
   | { kind: "app"; type: "grant.changed"; data: { capability: string; granted: boolean } }
   | { kind: "timer"; id: string };
 
 type GlitchedEvent = UIEvent | AppEvent;
+
+/** The args of a command chosen in a menu of Glitched's (glitched.menus): thread.menu's, project.menu's, message.actions'. */
+type MenuArgs =
+  | { thread: ThreadRecord }
+  | { project: { name: string; /** With threads:read. */ workspace?: string } }
+  | { thread: ThreadRecord; message: { role: "user" | "assistant"; /** With messages:read. */ text?: string } };
 
 /** What init and update answer. Leave state out to keep it. */
 interface Update<S> {
@@ -473,13 +480,25 @@ declare const glitched: {
     status(setting: string, status: { badge?: string; tone?: "neutral" | "success" | "warning" | "danger"; text?: string } | null): Promise<void>;
   };
   clipboard: { write(text: string): Promise<void> };
-  notify(title: string, body?: string): Promise<void>;
-  composer: { draft(text: string, workspace?: string): Promise<void> };
+  /** Naming a thread, a click opens it; that needs threads:read. */
+  notify(title: string, body?: string, options?: { thread?: string }): Promise<void>;
+  composer: {
+    /** A new thread's draft in workspace, or, with a thread, the draft in its composer (needs threads:read). */
+    draft(text: string, where?: string | { thread: string }): Promise<void>;
+  };
   threads: {
     list(): Promise<ThreadRecord[]>;
     open(thread: string): Promise<void>;
     create(prompt: string, options?: { title?: string; workspace?: string }): Promise<{ thread: string }>;
     send(thread: string, text: string): Promise<{ message: string }>;
+    /** Up to 200 bytes. Needs threads:write. */
+    rename(thread: string, title: string): Promise<void>;
+    /** Asks the user first, with Glitched's own confirm. Needs threads:write. */
+    delete(thread: string): Promise<void>;
+  };
+  projects: {
+    /** Asks the user first, with Glitched's own confirm. Needs threads:write. */
+    remove(workspace: string): Promise<void>;
   };
   /** Run a program the manifest's glitched.programs names, as you, with no shell. Needs programs. */
   run(program: string, args?: string[], options?: { cwd?: string; stdin?: string; timeout?: number; env?: Record<string, string> }): Promise<RunResult>;

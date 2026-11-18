@@ -347,7 +347,7 @@ func (a *app) pluginShortcuts(c *ui.Context) {
 		taken = append(taken, norm)
 		mods, key, ok := shortcutKey(cmd.Key)
 		if ok && c.Shortcut(mods, key) {
-			a.plugins.RunCommand(cmd.Plugin, cmd.Command, func(err error) {
+			a.plugins.RunCommand(cmd.Plugin, cmd.Command, nil, func(err error) {
 				if err != nil {
 					a.pluginNotice(ui.Toast{Title: fmt.Sprintf("%s: %s failed", cmd.PluginName, cmd.Command), Description: err.Error()})
 				}

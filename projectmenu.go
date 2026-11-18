@@ -20,6 +20,13 @@ func (a *app) projectMenu(m *ui.Menu, p *project) {
 	if m.Item("New thread").Chosen() {
 		a.startThread(p)
 	}
+	a.pluginMenuItems(m, "project.menu", func(plugin string) map[string]any {
+		project := map[string]string{"name": p.name()}
+		if a.plugins.Allowed(plugin, "threads:read") {
+			project["workspace"] = p.key.workspace
+		}
+		return map[string]any{"project": project}
+	})
 	m.Separator()
 	// As a thread is stopped before it's deleted, so is every thread at the
 	// top of the project's trees; those under them stop as they go.

@@ -242,12 +242,12 @@ func TestCommandsRunTheirEffects(t *testing.T) {
 		t.Fatalf("commands %+v", got)
 	}
 	var done []error
-	h.RunCommand("snippets", "draft-pinned", func(err error) { done = append(done, err) })
+	h.RunCommand("snippets", "draft-pinned", nil, func(err error) { done = append(done, err) })
 	u.until(t, "the command", func() bool { return len(done) == 1 && len(fx.ran) == 1 })
 	if done[0] != nil || fx.ran[0].Type != "toast" {
 		t.Fatalf("done %v, ran %+v", done, fx.ran)
 	}
-	h.RunCommand("snippets", "nope", func(err error) { done = append(done, err) })
+	h.RunCommand("snippets", "nope", nil, func(err error) { done = append(done, err) })
 	u.until(t, "the failure", func() bool { return len(done) == 2 })
 	if done[1] == nil || !strings.Contains(done[1].Error(), "unknown command") {
 		t.Fatalf("done %v", done)

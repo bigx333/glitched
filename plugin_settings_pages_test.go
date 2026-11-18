@@ -246,7 +246,7 @@ func TestAPluginOpensItsSettingsPageInSettings(t *testing.T) {
 		"contributes": {"pages": [{"id": "home", "title": "Prefs page"}], "commands": [{"id": "open", "title": "Open prefs"}]}, "glitched": {"settingsPages": ["home"]}}`,
 		`export function view() { return { body: { type: "text", text: "Prefs body" } } }
 export async function command() { await glitched.pages.open("home") }`)
-	a.plugins.RunCommand("prefs", "open", func(err error) {
+	a.plugins.RunCommand("prefs", "open", nil, func(err error) {
 		if err != nil {
 			t.Error(err)
 		}

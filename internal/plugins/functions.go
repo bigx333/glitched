@@ -46,13 +46,20 @@ globalThis.glitched = Object.freeze({
     openFile: (thread, path) => app("diff.openFile", { thread, path }),
   }),
   clipboard: Object.freeze({ write: (text) => app("clipboard.write", { text }) }),
-  notify: (title, body) => app("notify", { title, body }),
-  composer: Object.freeze({ draft: (text, workspace) => app("composer.draft", { text, workspace }) }),
+  notify: (title, body, options = {}) => app("notify", { ...options, title, body }),
+  composer: Object.freeze({
+    draft: (text, where) => app("composer.draft", typeof where === "object" && where !== null ? { ...where, text } : { text, workspace: where }),
+  }),
   threads: Object.freeze({
     list: () => app("threads.list"),
     open: (thread) => app("threads.open", { thread }),
     create: (prompt, options = {}) => app("threads.create", { ...options, prompt }),
     send: (thread, text) => app("threads.send", { thread, text }),
+    rename: (thread, title) => app("threads.rename", { thread, title }),
+    delete: (thread) => app("threads.delete", { thread }),
+  }),
+  projects: Object.freeze({
+    remove: (workspace) => app("projects.remove", { workspace }),
   }),
   settings: Object.freeze({
     get: () => host.call("settings"),

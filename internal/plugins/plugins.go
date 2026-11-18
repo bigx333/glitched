@@ -303,6 +303,11 @@ func (h *Host) load(in *installed) (*plugin.Plugin, error) {
 	if x.replaces() && m.ContractVersion < ReplaceVersion {
 		return nil, fmt.Errorf("it replaces a component, which needs contractVersion %d", ReplaceVersion)
 	}
+	for _, mn := range x.Menus {
+		if !slices.ContainsFunc(m.Commands(), func(c plugin.CommandContribution) bool { return c.ID == mn.Command }) {
+			return nil, fmt.Errorf("glitched.menus: %q is none of its commands", mn.Command)
+		}
+	}
 	for _, id := range x.SettingsPages {
 		if !slices.ContainsFunc(m.Pages(), func(p plugin.Navigation) bool { return p.Page == id }) {
 			return nil, fmt.Errorf("glitched.settingsPages: %q is none of its pages", id)
@@ -613,6 +618,32 @@ func (h *Host) Entries() []Entry {
 	return out
 }
 
+// MenuItem is a plugin's command in one of Glitched's menus.
+type MenuItem struct {
+	Plugin, Command, Title, Icon string
+}
+
+// MenuItems are the commands the running plugins put in the menu at, in
+// the order of their folders.
+func (h *Host) MenuItems(at string) []MenuItem {
+	var out []MenuItem
+	for _, in := range h.running() {
+		for _, m := range in.ext.Menus {
+			if m.At != at {
+				continue
+			}
+			title := m.Command
+			for _, c := range in.manifest.Commands() {
+				if c.ID == m.Command && c.Title != "" {
+					title = c.Title
+				}
+			}
+			out = append(out, MenuItem{in.manifest.ID, m.Command, title, m.Icon})
+		}
+	}
+	return out
+}
+
 // Themes are the looks the running plugins add, in the order of their
 // folders.
 func (h *Host) Themes() []Theme {
@@ -701,14 +732,14 @@ func (h *Host) Act(id string, a plugin.Action) error {
 // RunCommand runs the plugin id's command, off the UI thread; what it
 // does in the app, it does with glitched's calls. done gets what failed,
 // on the UI thread.
-func (h *Host) RunCommand(id, command string, done func(error)) {
+func (h *Host) RunCommand(id, command string, args map[string]any, done func(error)) {
 	p, err := h.plugin(id)
 	if err != nil {
 		done(err)
 		return
 	}
 	go func() {
-		err := p.Command(command, nil, nil)
+		err := p.Command(command, args, nil)
 		h.opts.Post(func() {
 			// Its app session hears it ran, to draw what the command changed.
 			if s := h.sessions[pageKey{plugin: id}]; err == nil && s != nil {

@@ -4,6 +4,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/plugins"
 )
 
 // Pointing at a message shows what can be done with it, in a toolbar
@@ -42,6 +43,20 @@ func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed
 				a.listFor(t.id()).ScrollToEnd()
 			}
 		}
+		role := map[bool]string{true: "user", false: "assistant"}[e.kind == entryUser]
+		for _, it := range a.plugins.MenuItems("message.actions") {
+			icon := appIconNamed(it.Icon)
+			if icon == nil {
+				icon = icPlug
+			}
+			if action(c, "plugin:"+it.Plugin+"/"+it.Command, icon, it.Title, false).Clicked() {
+				message := map[string]string{"role": role}
+				if a.plugins.Allowed(it.Plugin, "messages:read") {
+					message["text"] = e.text
+				}
+				a.runMenuItem(it, map[string]any{"thread": a.plugins.Record(it.Plugin, a.threadRecord(t)), "message": message})
+			}
+		}
 	})
 }
 
@@ -61,4 +76,29 @@ func askedBefore(es []entry, i int) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// pluginMenuItems end a menu with the commands plugins put in it, after a
+// line; args are what the plugin's command is passed.
+func (a *app) pluginMenuItems(m *ui.Menu, at string, args func(plugin string) map[string]any) {
+	items := a.plugins.MenuItems(at)
+	if len(items) == 0 {
+		return
+	}
+	m.Separator()
+	for _, it := range items {
+		if m.Item(it.Title).Chosen() {
+			a.runMenuItem(it, args(it.Plugin))
+		}
+	}
+}
+
+// runMenuItem runs a plugin's command chosen in a menu of the app's, and
+// says so when it fails.
+func (a *app) runMenuItem(it plugins.MenuItem, args map[string]any) {
+	a.plugins.RunCommand(it.Plugin, it.Command, args, func(err error) {
+		if err != nil {
+			a.pluginNotice(ui.Toast{Title: a.plugins.Name(it.Plugin) + ": " + it.Title + " failed", Description: err.Error()})
+		}
+	})
 }
