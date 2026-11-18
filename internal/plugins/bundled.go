@@ -17,8 +17,9 @@ import (
 )
 
 // FallbackSuffix ends the id a built-in plugin runs under while a copy of
-// the user's shadows it: it draws what the copy fails to.
-const FallbackSuffix = ".builtin"
+// the user's shadows it: it draws what the copy fails to. A manifest's id
+// can't hold an @, so no plugin's id is ever one of these.
+const FallbackSuffix = "@builtin"
 
 // BundledDir is where the built-in plugins are written out to be verified
 // and run, one folder each, as the app holds them.
