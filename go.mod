@@ -125,4 +125,4 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 )
 
-replace github.com/yxxbc/mygo-plugin => github.com/bigx333/mygo-plugin v0.6.1-glitched.4
+replace github.com/yxxbc/mygo-plugin => github.com/bigx333/mygo-plugin v0.6.1-glitched.5
