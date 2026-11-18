@@ -2,10 +2,12 @@ package claude
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -35,22 +37,33 @@ func (a *Adapter) Commands(ctx context.Context, workspace string) ([]provider.Co
 	if err != nil {
 		return nil, err
 	}
-	out, err := cmd.StdoutPipe()
+	// The adapter's own pipe, as a run's: a process claude's hooks leave
+	// holding it can't keep the read, or Wait, from ending with ctx.
+	outW, out, err := pipe(false)
 	if err != nil {
+		in.Close()
 		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
+	defer out.Close()
+	cmd.Stdout = outW
+	err = cmd.Start()
+	outW.Close()
+	if err != nil {
+		in.Close()
 		return nil, err
 	}
 	defer cmd.Wait()
 	defer in.Close()
 	fmt.Fprintf(in, `{"type":"control_request","request_id":%q,"request":{"subtype":"initialize"}}`+"\n", initRequest)
-	return readCommands(out)
+	return readCommands(ctx, out)
 }
 
-// readCommands finds the initialize reply among what claude prints.
-func readCommands(r io.Reader) ([]provider.Command, error) {
-	sc := bufio.NewScanner(r)
+// readCommands finds the initialize reply among what claude prints, giving
+// up when ctx ends.
+func readCommands(ctx context.Context, out *os.File) ([]provider.Command, error) {
+	stop := context.AfterFunc(ctx, func() { out.SetReadDeadline(time.Now()) })
+	defer stop()
+	sc := bufio.NewScanner(out)
 	sc.Buffer(nil, 16<<20)
 	for sc.Scan() {
 		var m struct {
@@ -76,6 +89,9 @@ func readCommands(r io.Reader) ([]provider.Command, error) {
 		}), nil
 	}
 	if err := sc.Err(); err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			err = cmp.Or(ctx.Err(), err)
+		}
 		return nil, err
 	}
 	return nil, fmt.Errorf("Claude Code exited before listing its commands")
