@@ -135,6 +135,7 @@ var Slots = []Slot{
 // needs.
 var Events = map[string]string{
 	"thread.changed":       "threads:read",
+	"thread.moved":         "threads:read",
 	"thread.message":       "messages:read",
 	"thread.files.changed": "threads:read",
 	"setting.changed":      "",

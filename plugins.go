@@ -356,16 +356,6 @@ func (a *app) pluginCommands() []command {
 	return out
 }
 
-// pluginThread is a thread, as a plugin sees it.
-type pluginThread struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	Workspace string    `json:"workspace"`
-	Status    string    `json:"status"`
-	Machine   string    `json:"machine"`
-	UpdatedAt time.Time `json:"updatedAt"`
-}
-
 var statusNames = map[status]string{statusIdle: "idle", statusWorking: "working", statusCompleted: "completed", statusApproval: "waiting"}
 
 // pluginEffect does what the plugin id asked for, which the host already
@@ -483,14 +473,17 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		a.focusPane(0, -1)
 		return nil, nil
 	case "threads.list":
-		out := []pluginThread{}
+		var ts []thread
 		for _, env := range a.backend.Envs() {
 			for _, th := range env.Threads {
-				t := thread{env, th}
-				out = append(out, pluginThread{t.id().String(), t.View.Title, t.View.Workspace, statusNames[a.statusOf(t)], env.Name, t.View.UpdatedAt})
+				ts = append(ts, thread{env, th})
 			}
 		}
-		slices.SortFunc(out, func(x, y pluginThread) int { return y.UpdatedAt.Compare(x.UpdatedAt) })
+		slices.SortFunc(ts, newestFirst)
+		out := []plugins.ThreadRecord{}
+		for _, t := range ts {
+			out = append(out, a.threadRecord(t))
+		}
 		return out, nil
 	case "threads.open":
 		t, err := a.pluginFind(e.Args)
@@ -511,6 +504,24 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 			return nil, err
 		}
 		a.backend.Rename(t.env, t.id(), s)
+		return nil, nil
+	case "threads.setDisposition":
+		return a.setDispositionEffect(e.Args)
+	case "threads.markRead":
+		t, err := a.pluginFind(e.Args)
+		if err != nil {
+			return nil, err
+		}
+		a.backend.MarkRead(t.Thread)
+		return nil, nil
+	case "threads.interrupt":
+		t, err := a.pluginFind(e.Args)
+		if err != nil {
+			return nil, err
+		}
+		if t.View.Live() {
+			a.backend.Interrupt(t.env, t.id())
+		}
 		return nil, nil
 	case "threads.delete":
 		// Glitched asks the user first, whatever the settings say: a

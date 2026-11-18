@@ -8,7 +8,7 @@ import (
 	"io/fs"
 )
 
-//go:embed all:header-actions all:diff-panel all:settings-pages all:greetings
+//go:embed all:header-actions all:diff-panel all:settings-pages all:greetings all:row-actions
 var files embed.FS
 
 // FS is the built-in plugins, a folder each at its root.

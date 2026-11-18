@@ -35,6 +35,7 @@ func TestSnoozePopoverHangsFromItsButton(t *testing.T) {
 				t.Fatal("no Snooze button")
 			}
 			h.click("Snooze")
+			settlePlugins(t, h.a, h.tt, h.p)
 			h.tt.Advance(time.Second)
 			head, ok1 := h.tt.Find("Snooze until…")
 			last, ok2 := h.tt.Find("a long vacation")

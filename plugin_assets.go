@@ -43,7 +43,14 @@ func (a *app) pluginStyle(id string) render.Style {
 		Row:      row,
 		ListCard: func(c *ui.Context, title string, body func()) { card(c, title, body) },
 		Swatch:   a.swatch,
-		Keys:     func(c *ui.Context, keys []string) { kbd(c, keys...) },
+		Popover: func(c *ui.Context, anchor ui.Element, open *bool, width float32, body func()) {
+			a.popover(c, anchor, open, func(panel ui.Element) {
+				panel.AttachTo(anchor, ui.AnchorBottomStart, ui.AnchorTopStart).Margin(6, 0, 0, 0).Width(width).Radius(12).Clip()
+				a.frosted(c, panel).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.35)).Children(body)
+			})
+		},
+		Tile: func(c *ui.Context, icon *ui.SVG, color ui.Color, size float32) { tile(c, icon, color, size) },
+		Keys: func(c *ui.Context, keys []string) { kbd(c, keys...) },
 	}
 }
 

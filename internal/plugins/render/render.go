@@ -43,6 +43,13 @@ type Style struct {
 	// Swatch is the app's color swatch, keyed by key in c, ringed while
 	// on; it says whether it was clicked. Nil draws a plain dot.
 	Swatch func(c *ui.Context, key any, color ui.Color, on bool, label string) bool
+	// Popover draws a ghost button's panel, as the app's popovers are,
+	// attached to anchor while *open, width wide: body fills it. A
+	// dismissal sets *open false. Nil draws MyGo's.
+	Popover func(c *ui.Context, anchor ui.Element, open *bool, width float32, body func())
+	// Tile draws a project's mark: its icon, white on its color. Nil
+	// draws the icon on the color.
+	Tile func(c *ui.Context, icon *ui.SVG, color ui.Color, size float32)
 	// Native draws a native widget, which the checks let only Natives be:
 	// fire gives the plugin a change. Nil, outside a component, says it
 	// draws only in one.
@@ -106,7 +113,7 @@ func (cs *Controls) Sync(v *widget.View, rev, processed int) {
 	}
 	live := map[string]bool{}
 	v.Body.Walk(func(n *widget.Node) {
-		if n.Type == "dialog" {
+		if n.Type == "dialog" || n.Popover != nil {
 			delete(cs.dismissed, n.ID)
 		}
 		if n.Type != "input" && n.Type != "toggle" && n.Type != "select" && n.Type != "tabs" {
@@ -256,7 +263,21 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		if n.Type == "row" {
 			newBox = ui.Row
 		}
-		e := newBox(kc)
+		var e ui.Element
+		switch {
+		case n.OnClick != nil && st.Row != nil:
+			e = st.Row(c, key(n, i), false)
+		case n.OnClick != nil:
+			e = ui.ButtonBase(kc).Gap(8).AlignItems(ui.Center).Padding(6, 8).Radius(7).Cursor(ui.CursorPointer)
+		default:
+			e = newBox(kc)
+		}
+		if n.OnClick != nil {
+			if n.Type == "column" {
+				e.Column()
+			}
+			e.OnClick(func() { r.fire(n, n.OnClick, "click", nil) })
+		}
 		if n.Type == "row" {
 			e.AlignItems(ui.Center)
 		}
@@ -321,6 +342,9 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		}
 		if n.Size == "small" {
 			t.FontSize(11.5)
+		}
+		if n.Italic {
+			t.Italic()
 		}
 		if n.FontSize != 0 {
 			t.FontSize(float32(n.FontSize))
@@ -449,6 +473,23 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		if ui.Checkbox(kc, &ctl.on, n.Label).Disabled(n.Disabled).Changed() {
 			r.fire(n, n.OnChange, "change", ctl.on)
 		}
+	case "tile":
+		var svg *ui.SVG
+		if st.Icon != nil {
+			svg = st.Icon(n.Icon)
+		}
+		ui.Box(kc).Children(func() {
+			if st.Tile != nil {
+				st.Tile(c, svg, ui.Hex(n.Color), float32(n.Width))
+				return
+			}
+			size := float32(n.Width)
+			ui.Box(c).Size(size, size).Radius(size * 0.28).Center().Background(ui.Hex(n.Color)).Children(func() {
+				if svg != nil {
+					ui.Icon(c, svg).FontSize(size * 0.6).TextColor(ui.Hex("#ffffff"))
+				}
+			})
+		})
 	case "swatch":
 		color := ui.Hex(n.Color)
 		if st.Swatch == nil {
@@ -681,6 +722,27 @@ func (r *renderer) item(c *ui.Context, n *widget.Node, k string) {
 	}).OnClick(func() { r.fire(n, n.OnClick, "click", nil) })
 }
 
+// popover draws n's popover under the button b while it's open, till the
+// user dismisses it, which tells the plugin.
+func (r *renderer) popover(c *ui.Context, b ui.Element, n *widget.Node) {
+	open := n.Open && !r.cs.dismissed[n.ID]
+	body := func() { r.node(c, n.Popover, 0) }
+	if r.st.Popover != nil {
+		r.st.Popover(c, b, &open, float32(n.Popover.Width), body)
+	} else {
+		ui.PopoverBase(c, b, &open, func(panel ui.Element) {
+			panel.AttachTo(b, ui.AnchorBottomStart, ui.AnchorTopStart).Width(float32(n.Popover.Width)).Radius(12).Background(r.st.Surface).Children(body)
+		})
+	}
+	if n.Open && !open && !r.cs.dismissed[n.ID] {
+		if r.cs.dismissed == nil {
+			r.cs.dismissed = map[string]bool{}
+		}
+		r.cs.dismissed[n.ID] = true
+		r.fire(n, n.OnClose, "close", nil)
+	}
+}
+
 func (r *renderer) menu(n *widget.Node) func(*ui.Menu) {
 	return func(m *ui.Menu) {
 		for _, o := range n.Options {
@@ -729,6 +791,11 @@ func (r *renderer) button(c *ui.Context, n *widget.Node, k string) {
 		if n.Size == "small" {
 			b.Padding(3)
 		}
+		if col, ok := st.color(n.Color); ok {
+			b.TextColor(col)
+		} else if n.Color != "" {
+			b.TextColor(ui.Hex(n.Color))
+		}
 	case n.Style == "bordered" && st.Ghost != nil:
 		b = st.Ghost(c, k, false).Border(1, st.Border).Padding(6, 12)
 	case n.Style == "outline" && st.Outline != nil:
@@ -774,6 +841,9 @@ func (r *renderer) button(c *ui.Context, n *widget.Node, k string) {
 			r.fire(n, n.OnClick, "click", nil)
 		}
 	})
+	if n.Popover != nil {
+		r.popover(c, b, n)
+	}
 	if !ghost || n.Badge == "" {
 		return
 	}

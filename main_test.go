@@ -877,6 +877,7 @@ func TestSnooze(t *testing.T) {
 	h.tt.Advance(time.Second)
 	h.hover(th.View.Title)
 	h.click("Snooze")
+	settlePlugins(t, h.a, h.tt, h.p)
 	if h.a.snoozeFor != th.id() || !h.tt.HasText("sleep on it") {
 		t.Fatalf("snooze popover not open: %s", h.a.snoozeFor)
 	}

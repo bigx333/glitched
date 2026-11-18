@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/api"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/render"
 	"glitched/internal/plugins/widget"
@@ -21,18 +23,46 @@ func (a *app) threadRecord(t thread) plugins.ThreadRecord {
 	if t.env != nil {
 		machine = t.env.Name
 	}
-	return plugins.ThreadRecord{
-		ID:        t.id().String(),
-		Title:     t.View.Title,
-		Workspace: t.View.Workspace,
-		Status:    statusNames[a.statusOf(t)],
-		Machine:   machine,
-		UpdatedAt: t.View.UpdatedAt.UTC().Format(time.RFC3339),
+	d := disposition(t)
+	pd := &plugins.Disposition{State: dispositionNames[d.State]}
+	if d.State == api.Snoozed {
+		pd.Until = d.Until.UTC().Format(time.RFC3339)
 	}
+	r := plugins.ThreadRecord{
+		ID:          t.id().String(),
+		Title:       t.View.Title,
+		Workspace:   t.View.Workspace,
+		Status:      statusNames[a.statusOf(t)],
+		Machine:     machine,
+		UpdatedAt:   t.View.UpdatedAt.UTC().Format(time.RFC3339),
+		Section:     sectionNames[a.categoryOf(t)],
+		Disposition: pd,
+		Unread:      a.backend.Unread(t.Thread),
+		Requests:    len(t.View.Requests),
+		Tokens:      t.View.Tokens,
+	}
+	if p, ok := a.parentOf(t); ok {
+		r.Parent = p.id().String()
+	}
+	for _, x := range a.ancestors(t) {
+		r.Ancestors = append(r.Ancestors, x.id().String())
+	}
+	for _, k := range a.kids[t.id()] {
+		r.Children = append(r.Children, k.id().String())
+	}
+	return r
 }
 
+// sectionNames and dispositionNames are the sidebar's sections and the
+// inbox states as plugins name them.
+var (
+	sectionNames     = map[category]string{catInbox: "inbox", catWorking: "working", catSnoozed: "snoozed", catSettled: "settled"}
+	dispositionNames = map[api.DispositionState]string{api.Open: "inbox", api.Snoozed: "snoozed", api.Settled: "settled"}
+)
+
 func recordVersion(r plugins.ThreadRecord) string {
-	return strings.Join([]string{r.Title, r.Workspace, r.Status, r.Machine, r.UpdatedAt}, "\x00")
+	b, _ := json.Marshal(r)
+	return string(b)
 }
 
 // placeKey names one copy of a plugin's place.
@@ -160,11 +190,18 @@ func (a *app) emitThreadChanges() {
 			if known && old != v {
 				a.plugins.Emit("thread.changed", func(p string) any { return a.plugins.Record(p, r) })
 			}
+			from, filed := a.pluginSections[r.ID]
+			a.pluginSections[r.ID] = r.Section
+			if filed && from != r.Section {
+				ev := map[string]string{"thread": r.ID, "from": from, "to": r.Section}
+				a.plugins.Emit("thread.moved", func(string) any { return ev })
+			}
 		}
 	}
 	for id := range a.pluginRecords {
 		if !seen[id] {
 			delete(a.pluginRecords, id)
+			delete(a.pluginSections, id)
 			delete(a.pluginMessages, id)
 			delete(a.pluginFiles, id)
 			a.plugins.Emit("thread.changed", func(string) any { return map[string]any{"id": id, "deleted": true} })
