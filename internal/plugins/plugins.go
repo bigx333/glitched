@@ -107,6 +107,8 @@ type Options struct {
 type Host struct {
 	state string
 	opts  Options
+	// commands counts the commands under way, till each one's done runs.
+	commands atomic.Int32
 
 	mu        sync.RWMutex // guards installed and prefs, which a session's worker reads
 	installed []*installed
@@ -738,9 +740,11 @@ func (h *Host) RunCommand(id, command string, args map[string]any, done func(err
 		done(err)
 		return
 	}
+	h.commands.Add(1)
 	go func() {
 		err := p.Command(command, args, nil)
 		h.opts.Post(func() {
+			defer h.commands.Add(-1)
 			// Its app session hears it ran, to draw what the command changed.
 			if s := h.sessions[pageKey{plugin: id}]; err == nil && s != nil {
 				s.Notify(AppEvent{Kind: "app", Type: "command", Data: map[string]string{"id": command}})

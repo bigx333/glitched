@@ -260,10 +260,14 @@ func (s *Session) close() {
 
 // run takes the events in order, then asks for the view once they're all
 // taken.
-// Idle reports whether no plugin's app session, which draws its places and
-// components, has an event waiting or a call running: what they last did
-// is posted to the UI thread by then. Pages and tabs aren't asked.
+// Idle reports whether no command runs and no plugin's app session, which
+// draws its places and components, has an event waiting or a call
+// running: what they last did is posted to the UI thread by then. Pages
+// and tabs aren't asked.
 func (h *Host) Idle() bool {
+	if h.commands.Load() > 0 {
+		return false
+	}
 	for k, s := range h.sessions {
 		if k != (pageKey{plugin: k.plugin}) {
 			continue
