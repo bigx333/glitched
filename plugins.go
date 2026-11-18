@@ -522,22 +522,33 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		if t.View.Live() {
 			return nil, errors.New("the thread's agent runs: stop it first")
 		}
+		// A confirm stays about the thread it asked about till it closes.
+		if a.deleteOpen || a.deleting.Thread != nil {
+			return nil, errors.New("another delete waits for the user")
+		}
 		a.deleting, a.deleteOpen = t, true
 		return nil, nil
 	case "projects.remove":
-		var args struct{ Workspace string }
+		var args struct{ Workspace, Machine string }
 		json.Unmarshal(e.Args, &args)
+		var found []*project
 		for _, p := range a.projects {
-			if p.key.workspace != args.Workspace {
-				continue
+			if p.key.workspace == args.Workspace && (args.Machine == "" || p.env.Name == args.Machine) {
+				found = append(found, p)
 			}
-			if a.projectLive(p) {
-				return nil, errors.New("an agent runs in the project: stop it first")
-			}
-			a.askRemove(p)
-			return nil, nil
 		}
-		return nil, fmt.Errorf("no project %q", args.Workspace)
+		switch {
+		case len(found) == 0:
+			return nil, fmt.Errorf("no project %q", args.Workspace)
+		case len(found) > 1:
+			return nil, fmt.Errorf("%q is a project on more than one machine: name the machine", args.Workspace)
+		case a.projectLive(found[0]):
+			return nil, errors.New("an agent runs in the project: stop it first")
+		case a.removeOpen:
+			return nil, errors.New("another removal waits for the user")
+		}
+		a.askRemove(found[0])
+		return nil, nil
 	case "threads.send":
 		var args struct{ Text string }
 		if err := json.Unmarshal(e.Args, &args); err != nil || strings.TrimSpace(args.Text) == "" {

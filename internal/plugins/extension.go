@@ -55,7 +55,7 @@ type Menu struct {
 // command is passed when chosen there.
 var MenuSlots = map[string]string{
 	"thread.menu":     "{thread}",
-	"project.menu":    "{project: {name, workspace}}",
+	"project.menu":    "{project: {name, workspace, machine}}",
 	"message.actions": "{thread, message: {role, text}}",
 }
 

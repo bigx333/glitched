@@ -59,7 +59,7 @@ globalThis.glitched = Object.freeze({
     delete: (thread) => app("threads.delete", { thread }),
   }),
   projects: Object.freeze({
-    remove: (workspace) => app("projects.remove", { workspace }),
+    remove: (workspace, machine) => app("projects.remove", { workspace, machine: machine ?? "" }),
   }),
   settings: Object.freeze({
     get: () => host.call("settings"),

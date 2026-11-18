@@ -271,7 +271,7 @@ type GlitchedEvent = UIEvent | AppEvent;
 /** The args of a command chosen in a menu of Glitched's (glitched.menus): thread.menu's, project.menu's, message.actions'. */
 type MenuArgs =
   | { thread: ThreadRecord }
-  | { project: { name: string; /** With threads:read. */ workspace?: string } }
+  | { project: { name: string; /** With threads:read. */ workspace?: string; /** With threads:read. */ machine?: string } }
   | { thread: ThreadRecord; message: { role: "user" | "assistant"; /** With messages:read. */ text?: string } };
 
 /** What init and update answer. Leave state out to keep it. */
@@ -498,7 +498,7 @@ declare const glitched: {
   };
   projects: {
     /** Asks the user first, with Glitched's own confirm. Needs threads:write. */
-    remove(workspace: string): Promise<void>;
+    remove(workspace: string, machine?: string): Promise<void>;
   };
   /** Run a program the manifest's glitched.programs names, as you, with no shell. Needs programs. */
   run(program: string, args?: string[], options?: { cwd?: string; stdin?: string; timeout?: number; env?: Record<string, string> }): Promise<RunResult>;

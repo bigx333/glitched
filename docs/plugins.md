@@ -233,7 +233,7 @@ A plugin's command can join a menu of Glitched's: a thread row's context menu, a
 | Menu | `args` |
 | --- | --- |
 | `thread.menu` | `{thread}`: the thread's record, `{id}` alone without `threads:read` |
-| `project.menu` | `{project: {name, workspace}}`: `workspace` only with `threads:read` |
+| `project.menu` | `{project: {name, workspace, machine}}`: `workspace` and `machine` only with `threads:read` |
 | `message.actions` | `{thread, message: {role, text}}`: `text` only with `messages:read` |
 
 A message's actions are buttons, so their items name an `icon`, one of the app's; a menu's don't. The menus themselves stay Glitched's: Rename, Snooze, Delete and the rest can't be removed or replaced.
@@ -366,7 +366,7 @@ Each call runs on the UI thread (the engine's queue, for a service), checked as 
 | `glitched.threads.send(thread, text)` | `{message}` | `threads:write` |
 | `glitched.threads.rename(thread, title)` | | `threads:write` |
 | `glitched.threads.delete(thread)` | | `threads:write` |
-| `glitched.projects.remove(workspace)` | | `threads:write` |
+| `glitched.projects.remove(workspace, machine?)` | | `threads:write` |
 | `glitched.panels.toggle(panel, open?)` (`terminal`, `diff`, `preview`) | the panels' state | `ui.place` |
 | `glitched.panels.state()` | `{terminal, diff, preview}`, each open or not | `ui.place` |
 | `glitched.openIn(app, thread)` (`cursor`, `vscode`, `zed`, `finder`) | | `threads:read` |
@@ -377,7 +377,7 @@ Each call runs on the UI thread (the engine's queue, for a service), checked as 
 | `glitched.diff.setReviewed(thread, path, reviewed?)` | | `threads:read` |
 | `glitched.diff.openFile(thread, path)` | | `threads:read` |
 
-A `notify` that names a thread opens it when clicked, as Glitched's own notifications do. `composer.draft` with a thread shows the thread with the draft in its composer, for the user to send. `threads.rename` takes a title of up to 200 bytes. `threads.delete` and `projects.remove` delete nothing themselves: they ask the user with Glitched's own confirm, whatever the settings say, and refuse while an agent runs there. `openIn` names a thread, never a path: Glitched opens that thread's workspace, if it is on this machine. The `diff` calls name a thread and, for a file, one the thread changed, and refuse any other: `set` shows a file and sets the layout (`unified`, `split`) and wrapping; `setReviewed` marks a file reviewed or not (`true` without `reviewed`), once its diff is read; `openFile` opens it in the editor found, for a thread on this machine. `app.settings.set` sets one of the settings `get` answers to a value its page offers: a theme or accent by name, a choice as General lists it, a switch `true` or `false`. It refuses any other value, and any other setting. `app.checkForUpdates` runs About's update check: the page shows it running, then a toast says how it went. A toast carries the plugin's name. `threads.create` starts a thread with the composer's model and access (a service's: the last thread's), and sends the prompt. A service can't toast, copy, notify, draft or open: it has no window.
+A `notify` that names a thread opens it when clicked, as Glitched's own notifications do. `composer.draft` with a thread shows the thread with the draft in its composer, for the user to send. `threads.rename` takes a title of up to 200 bytes. `threads.delete` and `projects.remove` delete nothing themselves: they ask the user with Glitched's own confirm, whatever the settings say, and refuse while an agent runs there, or while another such confirm is open. `projects.remove` names the machine when the same folder is a project on more than one. `openIn` names a thread, never a path: Glitched opens that thread's workspace, if it is on this machine. The `diff` calls name a thread and, for a file, one the thread changed, and refuse any other: `set` shows a file and sets the layout (`unified`, `split`) and wrapping; `setReviewed` marks a file reviewed or not (`true` without `reviewed`), once its diff is read; `openFile` opens it in the editor found, for a thread on this machine. `app.settings.set` sets one of the settings `get` answers to a value its page offers: a theme or accent by name, a choice as General lists it, a switch `true` or `false`. It refuses any other value, and any other setting. `app.checkForUpdates` runs About's update check: the page shows it running, then a toast says how it went. A toast carries the plugin's name. `threads.create` starts a thread with the composer's model and access (a service's: the last thread's), and sends the prompt. A service can't toast, copy, notify, draft or open: it has no window.
 
 **Start over** starts a page's state over and drops what an earlier start answers; a call that start had already made goes through.
 

@@ -23,7 +23,7 @@ func (a *app) projectMenu(m *ui.Menu, p *project) {
 	a.pluginMenuItems(m, "project.menu", func(plugin string) map[string]any {
 		project := map[string]string{"name": p.name()}
 		if a.plugins.Allowed(plugin, "threads:read") {
-			project["workspace"] = p.key.workspace
+			project["workspace"], project["machine"] = p.key.workspace, p.env.Name
 		}
 		return map[string]any{"project": project}
 	})
