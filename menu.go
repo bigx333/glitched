@@ -23,7 +23,7 @@ func (a *app) installMenu() {
 		}
 	}
 	theme := func(name string) func(*mygo.MenuItem, *mygo.Window) {
-		return do(func() { a.settings.theme = name })
+		return do(func() { a.chooseTheme(name) })
 	}
 	var appearance []*mygo.MenuItem
 	for _, name := range themeNames() {

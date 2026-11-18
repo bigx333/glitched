@@ -432,7 +432,12 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		}
 		for _, en := range a.plugins.Entries() {
 			if en.Plugin == id && en.Page == args.Page {
-				a.router.Push(pluginKey{id, args.Page}.path())
+				k := pluginKey{id, args.Page}
+				path := k.path()
+				if en.Settings {
+					path = k.settingsPath()
+				}
+				a.router.Push(path)
 				return nil, nil
 			}
 		}

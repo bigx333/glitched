@@ -247,9 +247,10 @@ func (x Extension) check(folder string) error {
 		if !themeName.MatchString(t.Name) {
 			return fmt.Errorf("glitched.themes: name %q is 1 to 32 letters, digits, spaces or ._-", t.Name)
 		}
-		if err := unique("themes", t.Name); err != nil {
-			return err
+		if ids["themes:"+t.Name] {
+			return fmt.Errorf("glitched.themes: %q twice", t.Name)
 		}
+		ids["themes:"+t.Name] = true
 		for _, k := range ThemeColors {
 			if !themeColor.MatchString(t.Colors[k]) {
 				return fmt.Errorf("glitched.themes: %s: colors.%s is #rrggbb or #rrggbbaa, not %q", t.Name, k, t.Colors[k])

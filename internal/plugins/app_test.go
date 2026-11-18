@@ -267,3 +267,22 @@ func TestAPluginWithOnlyTimersWakesOnThem(t *testing.T) {
 	s := session(t, h, "ticker")
 	u.until(t, "the ticks", func() bool { return strings.Contains(texts(s), "ticks ") && !strings.Contains(texts(s), "ticks 0") })
 }
+
+// A theme's name may have spaces, which no id may.
+func TestAThemeNameWithSpacesLoads(t *testing.T) {
+	state := t.TempDir()
+	colors := map[string]string{}
+	for _, k := range ThemeColors {
+		colors[k] = "#102030"
+	}
+	b, _ := json.Marshal(map[string]any{"themes": []any{map[string]any{"name": "Solarized Dark", "dark": true, "colors": colors}}})
+	writeModule(t, state, "x", `"glitched": `+string(b)+`, `, `export function view() {}`)
+	h := Open(state, Options{Logf: t.Logf})
+	defer h.Close()
+	if err := h.Installed()[0].Err; err != nil {
+		t.Fatal(err)
+	}
+	if th := h.Themes(); len(th) != 1 || th[0].Name != "Solarized Dark" {
+		t.Fatalf("themes %+v", th)
+	}
+}

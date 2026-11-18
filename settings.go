@@ -180,6 +180,11 @@ func (a *app) setAppSetting(args json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("%q is no setting a plugin sets", in.Key)
 	}
 	all := fields(fileOf(a.settings))
+	var was, value any
+	json.Unmarshal(all[in.Key], &was)
+	if json.Unmarshal(in.Value, &value) != nil || fmt.Sprintf("%T", value) != fmt.Sprintf("%T", was) {
+		return nil, fmt.Errorf("%s is a %T, not %s", in.Key, was, cmpOr(string(in.Value), "nothing"))
+	}
 	all[in.Key] = in.Value
 	b, _ := json.Marshal(all)
 	var f settingsFile
@@ -189,6 +194,9 @@ func (a *app) setAppSetting(args json.RawMessage) (any, error) {
 	s := settingsFrom(a.settings, f)
 	if got := fields(fileOf(s))[in.Key]; string(got) != string(fields(f)[in.Key]) {
 		return nil, fmt.Errorf("%s can't be %s", in.Key, in.Value)
+	}
+	if in.Key == "theme" {
+		a.chooseTheme(s.theme)
 	}
 	a.settings = s
 	return nil, nil

@@ -228,10 +228,6 @@ type settings struct {
 	checking bool
 }
 
-// pendingTheme is a theme chosen in settings.json, want, that the app
-// started without, and the theme it took instead, was.
-type pendingTheme struct{ want, was string }
-
 type app struct {
 	// post runs a func on the thread that builds the views, as the
 	// manager's changes do.
@@ -260,8 +256,10 @@ type app struct {
 	// savedSettings are the settings as last saved to settings.json, or
 	// read from it; settingsOut writes it (settingsfile.go).
 	savedSettings settingsFile
-	// pendingTheme waits for a plugin's theme settings.json chose.
-	pendingTheme pendingTheme
+	// pendingTheme is a plugin's theme settings.json chose, which the app
+	// started without: it shows once the plugin runs, unless the user
+	// chose one meanwhile.
+	pendingTheme string
 	settingsOut  settingsWriter
 	// theme is the frame's look, as the settings and the system choose it.
 	theme theme
@@ -691,15 +689,8 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 // which the default choice follows, or a theme of the app's or a plugin's.
 func (a *app) applyTheme(c *ui.Context) {
 	pluginThemes = a.readPluginThemes()
-	// A plugin's theme the settings chose shows once the plugin runs,
-	// unless another was chosen meanwhile.
-	if p := a.pendingTheme; p.want != "" {
-		switch {
-		case a.settings.theme != p.was:
-			a.pendingTheme = pendingTheme{}
-		case slices.Contains(themeNames(), p.want):
-			a.settings.theme, a.pendingTheme = p.want, pendingTheme{}
-		}
+	if a.pendingTheme != "" && slices.Contains(themeNames(), a.pendingTheme) {
+		a.settings.theme, a.pendingTheme = a.pendingTheme, ""
 	}
 	a.theme = themeFor(a.settings.theme, c.Theme().Dark)
 	palette = a.theme.colors
@@ -942,10 +933,21 @@ func luminance(c ui.Color) float64 {
 // toggleLightDark switches to Light from any dark theme, and to Dark from
 // any light one.
 func (a *app) toggleLightDark() {
-	a.settings.theme = lightTheme.name
+	name := lightTheme.name
 	if !a.theme.dark {
-		a.settings.theme = darkTheme.name
+		name = darkTheme.name
 	}
+	a.chooseTheme(name)
+}
+
+// chooseTheme is the user's choice of a theme. It drops a plugin's theme
+// settings.json chose that the app still waits for, and saves the choice
+// even as the theme that stood in for it.
+func (a *app) chooseTheme(name string) {
+	if a.pendingTheme != "" {
+		a.savedSettings.Theme, a.pendingTheme = a.pendingTheme, ""
+	}
+	a.settings.theme = name
 }
 
 // toasts draws the window's toasts, frosted, in the bottom right corner.

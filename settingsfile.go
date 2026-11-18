@@ -122,7 +122,7 @@ func (a *app) loadSettings() {
 	}
 	a.settings = settingsFrom(a.settings, f)
 	if f.Theme != "" && f.Theme != a.settings.theme {
-		a.pendingTheme = pendingTheme{f.Theme, a.settings.theme}
+		a.pendingTheme = f.Theme
 	}
 	a.keepSaved()
 }
