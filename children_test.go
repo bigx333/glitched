@@ -427,7 +427,7 @@ func TestDeleteTreeWithAQueuedFollowUp(t *testing.T) {
 	}
 	h := start(t, dir)
 	child := h.thread("Write the tests")
-	h.until("the child working, its follow-up queued", func() bool { return child.View.Working() && child.View.Queued == 1 })
+	h.until("the child's turn started, its follow-up queued", func() bool { return child.View.Run == api.RunRunning && child.View.Queued == 1 })
 	before := opens.Load()
 	h.a.settings.confirmDelete = false
 	h.a.askDelete(h.thread("Ship the sidebar sort"))
@@ -1022,7 +1022,7 @@ func TestADeleteWinsOverAnotherClientsFollowUps(t *testing.T) {
 	}
 	h := start(t, dir)
 	child := h.thread("Write the tests")
-	h.until("the child working", func() bool { return child.View.Working() })
+	h.until("the child's turn started", func() bool { return child.View.Run == api.RunRunning })
 	if _, err := send("then this", api.AfterActive); err != nil {
 		t.Fatal(err)
 	}
