@@ -33,7 +33,7 @@ func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed
 		switch e.kind {
 		case entryUser:
 			if action(c, "edit", icPencil, "Edit & resend", false).Clicked() {
-				a.draft, a.composerOpened = e.text, true
+				a.draft, a.code, a.composerOpened = e.text, codeBlock{}, true
 			}
 		case entryAssistant:
 			asked, ok := askedBefore(es, i)

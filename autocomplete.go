@@ -238,7 +238,8 @@ func (a *app) autocomplete(c *ui.Context, card ui.Element) {
 		a.suggestList.ScrollTo(0, ui.Start)
 	}
 	a.suggestions = nil
-	if !a.suggestDismissed {
+	// Code is no place for commands or @ mentions.
+	if !a.suggestDismissed && !a.code.on {
 		a.suggestions = a.suggestionsFor(a.draft)
 	}
 	n := len(a.suggestions)

@@ -79,7 +79,21 @@ func (a *app) attachFiles(paths []string) {
 
 // onPaste takes what the box shouldn't: an image, which it reads from the
 // clipboard itself, and a very long text.
-func (a *app) onPaste(text string) bool {
+func (a *app) onPaste(text string) bool { return a.paste(text, unclosedFence(a.draft), nil) }
+
+// onPasteIn is onPaste for a piece of a draft holding code blocks.
+func (a *app) onPasteIn(s *segment) func(string) bool {
+	return func(text string) bool {
+		if s.code {
+			return a.paste(text, true, &s.tag)
+		}
+		return a.paste(text, unclosedFence(s.text), nil)
+	}
+}
+
+// paste is onPaste into code, or not: a block's, with its tag, or a fence
+// typed by hand.
+func (a *app) paste(text string, code bool, tag *string) bool {
 	if text == "" {
 		png := mygo.Clipboard.ReadImage()
 		if png == nil {
@@ -90,7 +104,13 @@ func (a *app) onPaste(text string) bool {
 		a.attachments = append(a.attachments, attachment{name: fmt.Sprintf("Pasted image %d", a.pastes), detail: sizeLabel(int64(len(png))), thumb: thumb})
 		return true
 	}
-	if len(text) > longPaste {
+	// In a code block, or a fence typed by hand, a long paste is the code
+	// and goes in it as typed, unless it's too long to edit: then it's an
+	// attachment, fenced with the block's language.
+	if len(text) > longPaste && (!code || len(text) > longCodePaste) {
+		if tag != nil {
+			text = fenced(*tag, text)
+		}
 		lines := strings.Count(text, "\n") + 1
 		a.attachments = append(a.attachments, attachment{name: "Pasted text", detail: fmt.Sprintf("%d lines", lines), text: text})
 		return true

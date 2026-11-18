@@ -215,7 +215,7 @@ func (a *app) settingsNav(c *ui.Context) {
 func (a *app) newThread() {
 	t := a.current()
 	a.startIn(draft{t.env, t.View.Workspace})
-	a.draftArea.Focus()
+	a.focusBack()
 }
 
 // startThread shows the draft, in the project's workspace.

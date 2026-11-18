@@ -409,8 +409,8 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 			return nil, err
 		}
 		a.startIn(draft{nil, ws})
-		a.draft = args.Text
-		a.draftArea.Focus()
+		a.draft, a.code = args.Text, codeBlock{}
+		a.focusPane(0, -1)
 		return nil, nil
 	case "threads.list":
 		out := []pluginThread{}

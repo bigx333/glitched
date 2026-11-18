@@ -1249,3 +1249,26 @@ func TestWaitingCardShownAgainBindsNoHandle(t *testing.T) {
 		t.Errorf("the window's handle bindings went from %d to %d as the chat with a waiting card was left and come back to 20 times; want no more", before, after)
 	}
 }
+
+// With a code block in the draft, Explain asks in the text under it, and
+// the code and the ask go together.
+func TestExplainWithACodeBlockAsksUnderIt(t *testing.T) {
+	h := enterReady(t, fake.New(fake.Turn(false)), "go")
+	h.tt.Type("```")
+	h.tt.Key(0, ui.KeyEnter)
+	h.tt.Type("x := 1")
+	h.tt.Frame()
+	if !h.a.code.on {
+		t.Fatal("no block opened")
+	}
+	sel := dragHalfReply(t, h)
+	h.tt.Advance(quoteWait + 50*time.Millisecond)
+	h.click("Explain")
+	h.tt.Advance(time.Second)
+	if got := h.a.code.segs[len(h.a.code.segs)-1].text; got != explainAsk {
+		t.Fatalf("the text under the block %q, want %q", got, explainAsk)
+	}
+	h.tt.Key(ui.Cmd, ui.KeyEnter)
+	want := "> " + sel + "\n\n```\nx := 1\n```\n" + explainAsk
+	h.until("the quote, the code and the ask sent", func() bool { return slices.Contains(sentTexts(h), want) })
+}

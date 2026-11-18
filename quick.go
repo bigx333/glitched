@@ -144,7 +144,7 @@ func (a *app) startQuickThread() {
 	if a.router.Path() != "/" {
 		a.router.Push("/")
 	}
-	a.draft = q.query
+	a.draft, a.code = q.query, codeBlock{}
 	a.send(a.current())
 	q.query = ""
 	if q.panel != nil {
