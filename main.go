@@ -223,6 +223,10 @@ type app struct {
 	// notify shows a desktop notification: nil until the window is.
 	notify   func(mygo.NotificationOptions)
 	settings settings
+	// savedSettings are the settings as last saved to settings.json, or
+	// read from it; settingsOut writes it (settingsfile.go).
+	savedSettings settingsFile
+	settingsOut   settingsWriter
 	// theme is the frame's look, as the settings and the system choose it.
 	theme theme
 	// server is the Servers page's form for adding one, why the last add
@@ -633,6 +637,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 	a.userMD.OnLink = func(string) {}
 	a.loadLayout()
 	a.loadComposer()
+	a.loadSettings()
 	a.openPlugins(dir)
 	a.backend = client.New(client.Config{Dir: dir, Post: func(fn func()) {
 		post(func() {
@@ -746,6 +751,7 @@ func (a *app) view(c *ui.Context) {
 		}
 	}
 	a.sidebarPressed, a.previewPressed, a.effortPressed = false, false, false
+	a.saveSettings()
 	a.browser.letGo(a.showPreview)
 	a.projects = a.gather()
 	a.kids = a.kidsOf()
@@ -1015,6 +1021,9 @@ func main() {
 	// An engine embedded here stops with the app, which lets the CLI's
 	// next one take the state directory.
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		// What the last frame didn't save yet, the next start keeps too.
+		a.saveSettings()
+		a.settingsOut.wait()
 		if a.stopAgents != nil {
 			a.stopAgents()
 		}

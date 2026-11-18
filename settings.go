@@ -110,7 +110,7 @@ func (a *app) general(c *ui.Context) {
 	s := &a.settings
 	card(c, "THREADS", func() {
 		settingRow(c, "New thread environment", "Where a new thread runs its agent.", func() {
-			ui.Segmented(c, &s.newThreadMode, "Local", "New worktree").Label("New thread environment")
+			ui.Segmented(c, &s.newThreadMode, newThreadModes...).Label("New thread environment")
 		})
 		settingRow(c, "Default model", "Used for new threads. Each thread can pick its own.", func() {
 			ui.Select(c, &a.model, modelNames()).Width(200)
@@ -122,7 +122,7 @@ func (a *app) general(c *ui.Context) {
 	})
 	card(c, "INTERFACE", func() {
 		settingRow(c, "Timestamps", "How the sidebar shows when a thread last changed.", func() {
-			ui.Select(c, &s.timeFormat, []string{"Relative", "12-hour", "24-hour"}).Width(160)
+			ui.Select(c, &s.timeFormat, timeFormats).Width(160)
 		})
 		settingRow(c, "Stream assistant messages", "Show replies as they're written, rather than once done.", func() {
 			ui.Switch(c, &s.streaming).Label("Stream assistant messages")
@@ -281,10 +281,8 @@ func (a *app) glassDemo(c *ui.Context) {
 
 func (a *app) providers(c *ui.Context) {
 	s := &a.settings
-	a.provider(c, "Claude Code", icClaude, ui.Hex("#d97757"), "v2.4.1", &s.claudeEnabled, &s.claudePath, &s.claudeModel, &s.claudeCustom,
-		[]string{"Claude Opus 5.5", "Claude Sonnet 5.5", "Claude Haiku 5.5"})
-	a.provider(c, "Codex", icOpenAI, ui.Hex("#10a37f"), "v0.98.0", &s.codexEnabled, &s.codexPath, &s.codexModel, &s.codexCustom,
-		[]string{"GPT-5.5 Codex", "GPT-5.5", "GPT-5.5 mini"})
+	a.provider(c, "Claude Code", icClaude, ui.Hex("#d97757"), "v2.4.1", &s.claudeEnabled, &s.claudePath, &s.claudeModel, &s.claudeCustom, claudeModels)
+	a.provider(c, "Codex", icOpenAI, ui.Hex("#10a37f"), "v0.98.0", &s.codexEnabled, &s.codexPath, &s.codexModel, &s.codexCustom, codexModels)
 }
 
 func (a *app) provider(c *ui.Context, name string, mark *ui.SVG, brand ui.Color, version string, enabled *bool, path, model *string, custom *[]string, models []string) {
