@@ -134,7 +134,7 @@ func header(t *testing.T, work, message string) (*app, *plugins.Session) {
 		}
 	}
 	s.Dispatch(plugins.UIEvent{Type: "click", Handler: "commit.go", Node: "go", Place: ref}, map[string]any{"message": message})
-	a.until("the dialog to close", func() bool { v := view(); return v != nil && v.Find("message") == nil })
+	a.until("the dialog to close, or say why not", func() bool { v := view(); return v != nil && (v.Find("message") == nil || v.Find("error") != nil) })
 	return a, s
 }
 
@@ -192,7 +192,41 @@ func TestAPushThatFailsKeepsTheCommitAndSaysSo(t *testing.T) {
 	if got := git(t, work, "log", "-1", "--format=%s"); got != "Keep it local" {
 		t.Errorf("the commit is %q", got)
 	}
-	if len(a.toasts) != 1 || !strings.Contains(a.toasts[0], ", not pushed: Push to origin/main failed") || !strings.Contains(a.toasts[0], "The commit stays on main") {
+	if len(a.toasts) != 1 || !strings.Contains(a.toasts[0], ", not pushed: Push to origin/main failed: '"+origin+"' does not appear to be a git repository. The commit stays on main") {
 		t.Errorf("told %q", a.toasts)
+	}
+}
+
+// A push the remote turns down says why: that it has commits the branch
+// lacks, or what refused it.
+func TestARejectedPushSaysWhy(t *testing.T) {
+	work, origin := repo(t)
+	other := filepath.Join(t.TempDir(), "other")
+	git(t, ".", "clone", "-q", origin, other)
+	git(t, other, "commit", "-q", "--allow-empty", "-m", "Theirs")
+	git(t, other, "push", "-q", "origin", "main")
+	a, _ := header(t, work, "Mine")
+	if len(a.toasts) != 1 || !strings.Contains(a.toasts[0], "Push to origin/main failed: the remote has commits this branch doesn't; pull them, then push again. The commit stays on main") {
+		t.Errorf("diverged: told %q", a.toasts)
+	}
+
+	work, origin = repo(t)
+	hook := filepath.Join(origin, "hooks", "pre-receive")
+	os.WriteFile(hook, []byte("#!/bin/sh\necho 'main is frozen for the release'\nexit 1\n"), 0o755)
+	a, _ = header(t, work, "Mine")
+	if len(a.toasts) != 1 || !strings.Contains(a.toasts[0], "failed: the remote refused it (pre-receive hook declined): main is frozen for the release. The commit") {
+		t.Errorf("hook: told %q", a.toasts)
+	}
+}
+
+// A commit git refuses says why, as git's first line does.
+func TestARefusedCommitSaysWhy(t *testing.T) {
+	work, _ := repo(t)
+	git(t, work, "config", "user.useConfigOnly", "true")
+	git(t, work, "config", "user.name", "")
+	git(t, work, "config", "user.email", "")
+	_, s := header(t, work, "Nobody's")
+	if e := (&widget.View{Body: s.PlaceView("actions", "t1")}).Find("error"); e == nil || e.Text != "git commit: Author identity unknown" {
+		t.Errorf("the dialog says %+v", e)
 	}
 }
