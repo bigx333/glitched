@@ -719,7 +719,12 @@ func (a *app) view(c *ui.Context) {
 	if a.previewHeld && !a.previewPressed {
 		a.endPreviewDrag()
 	}
-	a.effortHeld = a.effortHeld && a.effortPressed
+	if a.effortHeld && !a.effortPressed {
+		a.effortHeld = false
+		if a.pickersFor.IsZero() {
+			a.saveComposer()
+		}
+	}
 	a.sidebarPressed, a.previewPressed, a.effortPressed = false, false, false
 	a.browser.letGo(a.showPreview)
 	a.projects = a.gather()
