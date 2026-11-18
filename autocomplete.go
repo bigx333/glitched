@@ -137,9 +137,9 @@ func summary(desc, plugin string) string {
 	return desc
 }
 
-// commandsRecheck is how long the composer shows a provider's commands
-// before asking the engine again, which answers from its own listing while
-// that's fresh (daemon.commandsFresh).
+// commandsRecheck is how long the composer shows a provider's commands,
+// or why they couldn't be listed, before asking the engine again, which
+// answers from its own listing while that's fresh (daemon.commandsFresh).
 const commandsRecheck = time.Minute
 
 type slashKey struct{ provider, workspace string }
@@ -167,7 +167,7 @@ func (a *app) slashListFor(t thread) *slashList {
 		l = &slashList{}
 		a.slashLists[k] = l
 	}
-	if l.asking || l.listed && time.Since(l.at) < commandsRecheck {
+	if l.asking || !l.at.IsZero() && time.Since(l.at) < commandsRecheck {
 		return l
 	}
 	l.asking = true
