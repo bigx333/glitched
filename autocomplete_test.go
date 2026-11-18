@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +28,17 @@ func (s skills) Commands(context.Context, string) ([]provider.Command, error) { 
 
 // silent is an adapter that can't list its commands.
 type silent struct{ provider.Adapter }
+
+// broken is an adapter whose every listing fails, counting them.
+type broken struct {
+	provider.Adapter
+	asked *atomic.Int32
+}
+
+func (b broken) Commands(context.Context, string) ([]provider.Command, error) {
+	b.asked.Add(1)
+	return nil, errors.New("claude: not found")
+}
 
 func labels(ss []suggestion) []string {
 	var out []string
@@ -156,5 +169,41 @@ func TestTheFlyoutScrollsToTheChoice(t *testing.T) {
 	h.tt.Frame()
 	if h.a.draft != "/skill-12 " {
 		t.Errorf("draft %q, want the twelfth taken", h.a.draft)
+	}
+}
+
+// A listing that fails is asked again only once commandsRecheck passes,
+// not on each rebuild its answer causes while / stays open.
+func TestAFailedListingIsNotAskedAgainAtOnce(t *testing.T) {
+	dir := tempDir(t)
+	var asked atomic.Int32
+	d, err := daemon.Start(context.Background(), daemon.Config{Dir: dir, Hub: true, Providers: provider.Mux{
+		"claude": broken{fake.New(nil), &asked},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: api.NewID(),
+		Body: api.ThreadCreate{Workspace: "/work/t3code", Title: "On Claude", Model: api.ModelRef{Provider: "claude", Model: "claude"}}}); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, dir)
+	h.a.select_(h.thread("On Claude"))
+	h.tt.Advance(time.Second)
+	h.tt.Type("/")
+	h.tt.Frame()
+	h.until("the error row", func() bool {
+		return slices.Contains(labels(h.a.suggestions), "Couldn't list the agent's commands")
+	})
+	for range 20 {
+		h.tt.Advance(50 * time.Millisecond)
+		h.tt.Frame()
+	}
+	if n := asked.Load(); n != 1 {
+		t.Errorf("a failed listing was asked %d times while / stayed open, want once", n)
+	}
+	if got := labels(h.a.suggestions); !slices.Contains(got, "/model") {
+		t.Errorf("after a failure: %q, want the fallback with the error", got)
 	}
 }
