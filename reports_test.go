@@ -810,10 +810,12 @@ func TestARemoteChildAskingTwiceIsToldOfTwice(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	h.until("the child's turn's end", func() bool {
-		return child.View.LastTurn != nil && child.View.Run == api.RunIdle && len(child.View.Requests) == 0
-	})
-	if want := []string{"Write the tests: Needs you", "Write the tests: Needs you"}; parent.Transcript != nil || !slices.Equal(*got, want) {
+	// The child's report wakes the parent, whose turn ends: a turn the
+	// user isn't watching, told of as any is. Only then is all told.
+	h.until("the parent's turn on the report", func() bool { return len(*got) == 3 })
+	for h.p.run() { // and nothing told after it
+	}
+	if want := []string{"Write the tests: Needs you", "Write the tests: Needs you", "Done. Your turn."}; parent.Transcript != nil || !slices.Equal(*got, want) {
 		t.Fatalf("notifications on the parent: %q; want %q, with the parent never opened", *got, want)
 	}
 }
