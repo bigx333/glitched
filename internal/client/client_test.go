@@ -71,6 +71,17 @@ func (g *gui) until(t *testing.T, what string, ok func() bool, state ...func() s
 	}
 }
 
+// drain runs the posts queued now.
+func (g *gui) drain() {
+	g.mu.Lock()
+	q := g.q
+	g.q = nil
+	g.mu.Unlock()
+	for _, fn := range q {
+		fn()
+	}
+}
+
 // stateDir is short: unix socket paths are limited to about 100 bytes.
 func stateDir(t *testing.T) string {
 	t.Helper()

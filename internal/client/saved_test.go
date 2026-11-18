@@ -526,7 +526,7 @@ func settles(t *testing.T, g *gui, what string, want int) {
 		if time.Now().After(deadline) {
 			t.Fatalf("%d manager goroutines %s, want %d", got, what, want)
 		}
-		g.until(t, "posts drained", func() bool { return true })
+		g.drain()
 		time.Sleep(20 * time.Millisecond)
 	}
 }
