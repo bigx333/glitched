@@ -65,7 +65,8 @@ export async function update({ event }) {
 	if err := a.plugins.SetGranted("mine", "settings:write", true); err != nil {
 		t.Fatal(err)
 	}
-	for path, at := range map[string]string{"/settings/general": "settings.page.general", "/settings/appearance": "settings.page.appearance"} {
+	for _, page := range []struct{ path, at string }{{"/settings/general", "settings.page.general"}, {"/settings/appearance", "settings.page.appearance"}} {
+		path, at := page.path, page.at
 		open(path)
 		if !tt.HasText("Mine: "+at) || tt.HasText("Stream assistant messages") || tt.HasText("Accent color") {
 			t.Errorf("%s: yours doesn't replace the built-in: %q", path, tt.Texts())
