@@ -94,6 +94,7 @@ func TestAHeaderWidgetItsTabItsSettingsAndItsShortcut(t *testing.T) {
 
 	// Its tab, in the thread's panel, about the thread.
 	h.a.openPluginTab(pluginTab{"focus-timer", "log"}, true)
+	h.tt.Frame()
 	h.until("the tab", func() bool { return h.tt.HasText("Focus blocks in this thread: 1") })
 	h.a.showPluginTab = false
 	h.tt.Frame()
