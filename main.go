@@ -256,8 +256,28 @@ type app struct {
 	panelsJump bool
 
 	draft string
-	typed string // the draft the wind last saw: typing keeps it blowing
-	wind  *wind.Texture
+	// code is the draft's pieces once it holds code blocks, which ``` and
+	// Enter open: the draft is then "" (codeblock.go).
+	code codeBlock
+	// panes are what the draft's text areas held as last laid out, by the
+	// id of the piece, 0 for the draft without blocks, and codeSeq the
+	// last id given. codeFocus is where the focus goes next among them,
+	// codeLast the one that had it last (focusBack), and codeCarry a text
+	// area the focus left as it went (codeblock.go).
+	panes     map[int]*paneState
+	codeSeq   int
+	codeFocus codeFocus
+	codeLast  int
+	codeCarry codeCarry
+	// codeScroll is where the draft holding blocks is scrolled, and
+	// codeReveal how many frames more it follows the caret.
+	codeScroll  ui.ScrollState
+	codeReveal  int
+	codeScrollW float32 // the scroll's width as last laid out
+	// fenceSaw is the draft as typedFence last saw it.
+	fenceSaw string
+	typed    string // the draft the wind last saw: typing keeps it blowing
+	wind     *wind.Texture
 	// The model picker: open, fast mode, and when fast mode came on and
 	// effort went Max, for their effects.
 	pickerOpen   bool

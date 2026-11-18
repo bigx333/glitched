@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
@@ -112,8 +111,8 @@ func (a *app) windBackground(c *ui.Context, pane ui.Element) {
 		return
 	}
 	a.wind.SetStill(c.Preferences().ReduceMotion)
-	if a.draft != a.typed {
-		a.typed = a.draft
+	if typed := a.typedText(); typed != a.typed {
+		a.typed = typed
 		a.wind.Wake()
 	}
 	dark := c.Theme().Dark
@@ -822,7 +821,13 @@ func (a *app) composerCompact(t thread) bool {
 		a.composerOpened = false
 		return false
 	}
-	return !a.composerOpened && strings.TrimSpace(a.draft) == "" && len(a.attachments) == 0
+	return !a.composerOpened && !a.drafting()
+}
+
+// drafting reports whether the composer holds anything: a draft, a code
+// block, empty or not, or attachments.
+func (a *app) drafting() bool {
+	return strings.TrimSpace(a.draft) != "" || a.code.on || len(a.attachments) > 0
 }
 
 // compactWidth is the composer's width while compact.
@@ -1001,7 +1006,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 				// before the first frame of the morph, rather than in it.
 				// Invisible, it takes neither the pointer nor the focus, and
 				// isn't there to assistive technology.
-				ahead := k == 0 && (a.composerOpened || strings.TrimSpace(a.draft) != "" || len(a.attachments) > 0)
+				ahead := k == 0 && (a.composerOpened || a.drafting())
 				if k == 0 && !ahead {
 					// Compact, there's no Send to stop the agent with: ⌘⏎
 					// still does, as it does from the full composer.
@@ -1069,25 +1074,8 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 					if ahead {
 						key = "draft-ahead"
 					}
-					area := ui.TextArea(c.Key(key), &a.draft).Placeholder(placeholder).
-						Lines(2, 10).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).
-						Padding(14, 16, 4).OnPaste(a.onPaste).OnTextKey(a.draftKey(t)).Opacity(in)
-					if !ahead {
-						// Opening, it takes the focus, but from the bar of
-						// a selection, which keeps what's typed in it.
-						if !a.quote.focused {
-							area.AutoFocus()
-						}
-						area.Bind(&a.draftArea)
-						if a.draftToEnd {
-							n := utf8.RuneCountInString(a.draft)
-							area.SetTextSelection(n, n)
-							a.draftToEnd = false
-						}
-					}
-					if large {
-						area.Grow(1)
-					}
+					a.typedFence()
+					a.draftAreas(c, t, key, placeholder, ahead, large, in)
 					in = fadeIn(k, 0.35, 0.5)
 					faded(ui.Row(c).Key("controls").Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).
 						Translate(0, 6*(1-in)), in).Children(func() {
@@ -1219,11 +1207,15 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 			ui.Icon(c, icArrowUp).FontSize(16)
 		}
 	})
-	if send.Clicked() || keys && c.Shortcut(ui.Cmd, ui.KeyEnter) {
-		if working {
-			a.backend.Interrupt(t.env, t.id())
-		} else {
+	// ⌘⏎ is how a code block sends: with a block open, it doesn't stop
+	// the agent.
+	clicked := send.Clicked()
+	if clicked || keys && c.Shortcut(ui.Cmd, ui.KeyEnter) {
+		switch {
+		case !working:
 			a.send(t)
+		case clicked || !a.code.on:
+			a.backend.Interrupt(t.env, t.id())
 		}
 	}
 }
@@ -1241,6 +1233,9 @@ func (a *app) draftKey(t thread) func(ui.TextKey) bool {
 	return func(k ui.TextKey) bool {
 		if a.suggestKey(k) {
 			return true
+		}
+		if own, take := a.codeKey(k); own {
+			return take
 		}
 		if k.Key != ui.KeyEnter || k.Mods != 0 {
 			return false
@@ -1267,10 +1262,19 @@ func (a *app) composerControls(c *ui.Context) {
 // draft. A snoozed thread comes back to the inbox with it, as the engine
 // brings a settled one back with any message.
 func (a *app) send(t thread) {
-	if !a.sendText(t, a.message(t), a.said(t)) {
+	about := a.said(t)
+	if ct := codeTitle(about); a.code.on && ct != "" {
+		about = ct
+	}
+	if !a.sendText(t, a.message(t), about) {
 		return
 	}
-	a.draft = ""
+	if a.code.on {
+		// Sent from a piece of the draft, which goes with it, the focus
+		// comes back to the draft.
+		a.focusPane(0, 0)
+	}
+	a.draft, a.code = "", codeBlock{}
 	a.attachments = slices.DeleteFunc(a.attachments, func(at attachment) bool { return at.held(t) == "" })
 }
 
@@ -1329,11 +1333,11 @@ func (a *app) takeBack(c *ui.Context, t thread) {
 		}
 		delete(a.steers, cmd)
 		var rej *api.RejectedError
-		if !errors.As(p.Err, &rej) || s.env != t.env || s.thread != t.id() || a.message(t) != "" {
+		if !errors.As(p.Err, &rej) || s.env != t.env || s.thread != t.id() || a.message(t) != "" || a.code.on {
 			continue // landed, or kept in the timeline
 		}
 		a.backend.Dismiss(s.env, s.thread, cmd)
-		a.draft = p.Body.(api.MessageDispatch).Text
+		a.draft, a.code = p.Body.(api.MessageDispatch).Text, codeBlock{}
 		c.AddToast(ui.Toast{Title: "Not sent", Description: rej.Reason, Type: "info"})
 	}
 }
@@ -1358,7 +1362,11 @@ func (a *app) message(t thread) string {
 // agent, but the quotes: files as their paths, as the composer's @ puts
 // them, and pasted text after.
 func (a *app) said(t thread) string {
-	parts := []string{strings.TrimSpace(a.draft)}
+	draft := strings.TrimSpace(a.draft)
+	if a.code.on {
+		draft = a.codeMessage()
+	}
+	parts := []string{draft}
 	for _, at := range a.attachments {
 		if at.quote || at.held(t) != "" {
 			continue

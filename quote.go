@@ -483,14 +483,27 @@ func (a *app) closeQuote() {
 // draft, and takes the composer there.
 func (a *app) attachQuote(text, ask string) {
 	a.attachments = append(a.attachments, quoteAttachment(text))
-	if ask != "" {
-		if d := strings.TrimRight(a.draft, " \t\n"); d != "" {
-			a.draft = d + "\n\n" + ask
-		} else {
-			a.draft = ask
-		}
-		a.draftToEnd = true
-	}
 	a.closeQuote()
+	if ask == "" {
+		a.draftArea.Focus()
+		return
+	}
+	if a.code.on {
+		// With blocks, the ask goes in the text after the last.
+		last := a.code.segs[len(a.code.segs)-1]
+		last.text = withAsk(last.text, ask)
+		a.focusPane(last.id, runes(last.text))
+		return
+	}
+	a.draft = withAsk(a.draft, ask)
+	a.draftToEnd = true
 	a.draftArea.Focus()
+}
+
+// withAsk is draft with ask after it, a blank line between.
+func withAsk(draft, ask string) string {
+	if d := strings.TrimRight(draft, " \t\n"); d != "" {
+		return d + "\n\n" + ask
+	}
+	return ask
 }

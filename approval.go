@@ -787,7 +787,7 @@ func (a *app) approvalKeys(c *ui.Context, in ui.Element, t thread, es []entry) {
 		// This pass's timeline drew the card with its keys.
 		a.keyedSince = a.now
 	}
-	if r == nil || strings.TrimSpace(a.draft) != "" || len(a.attachments) > 0 {
+	if r == nil || a.drafting() {
 		return
 	}
 	if r.Kind == api.KindQuestion {
