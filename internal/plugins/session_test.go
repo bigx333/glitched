@@ -29,6 +29,7 @@ func (u *uiThread) until(t *testing.T, what string, ok func() bool) {
 		select {
 		case fn := <-u.q:
 			fn()
+		case <-time.After(time.Millisecond): // ok may hold with nothing posted
 		case <-deadline:
 			t.Fatalf("timed out waiting for %s", what)
 		}

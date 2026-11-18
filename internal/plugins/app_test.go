@@ -70,13 +70,11 @@ func TestPlacesDrawEachCopyAndKeepItWhileTheNextIsDrawn(t *testing.T) {
 	if s.PlaceView("badge", "t3") != nil {
 		t.Fatal("a null copy drew")
 	}
-	before := s.Rev
-	s.SetItems("badge", items) // the same: nothing to draw
-	time.Sleep(100 * time.Millisecond)
-	for len(u.q) > 0 {
-		(<-u.q)()
-	}
-	if s.Rev != before {
+	// Its timer draws too: once nothing is drawing, the same items must
+	// not start a draw.
+	u.until(t, "the drawing to settle", func() bool { return h.Idle() && len(u.q) == 0 })
+	s.SetItems("badge", items)
+	if !h.Idle() {
 		t.Fatal("drew again for the same items")
 	}
 	items[0].Version, items[0].Context = "2", ThreadRecord{ID: "t1", Title: "Uno"}
