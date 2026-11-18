@@ -30,9 +30,15 @@ jobs:
       - run: go vet ./...
       - run: go tool mygo vet .
 
+  # The root package's UI tests take most of the run, so each of three
+  # runners takes every third of them; the first also tests the rest.
   test:
     runs-on: [self-hosted, ferrum, garm]
-    timeout-minutes: 50
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3]
     env:
       CGO_ENABLED: "0"
     steps:
@@ -45,9 +51,15 @@ jobs:
       # root package's UI tests click on a fallback layout and fail.
       - name: Install Pango
         run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libpangocairo-1.0-0
-      # Stopgap: the root package takes up to 20 minutes on a slow runner.
-      # Bring this back to 20m once the suite is fast again (NEL-20).
-      - run: go test -timeout 40m ./...
+      - name: Test part ${{ matrix.part }} of the root package
+        run: |
+          set -o pipefail
+          tests=$(go test -list . . | grep '^Test' | awk -v i=${{ strategy.job-index }} -v n=${{ strategy.job-total }} '(NR - 1) % n == i' | paste -sd'|')
+          test -n "$tests"
+          go test -timeout 20m -run "^($tests)\$" .
+      - name: Test the other packages
+        if: ${{ !cancelled() && strategy.job-index == 0 }}
+        run: go test -timeout 20m $(go list ./... | grep -vx glitched)
 
   # The race detector needs cgo on Linux; nothing else does.
   race:
