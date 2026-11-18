@@ -57,6 +57,7 @@ func TestSidebarEdge(t *testing.T) {
 func TestProjectChipsNameTheProject(t *testing.T) {
 	h := start(t, inboxDir(t))
 	h.thread("SIP re-INVITE handling")
+	settlePlugins(t, h.a, h.tt, h.p) // the strip is a plugin's, drawn after the projects show
 	for _, name := range []string{"t3code", "mygo", "agent-phone"} {
 		if !h.tt.HasText(name) {
 			t.Errorf("no chip naming %s; texts %q", name, h.tt.Texts())
