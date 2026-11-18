@@ -49,7 +49,7 @@ func badgeText(s *Session, key string) string {
 func TestPlacesDrawEachCopyAndKeepItWhileTheNextIsDrawn(t *testing.T) {
 	state, u, fx := t.TempDir(), newUIThread(), &effects{}
 	writeModule(t, state, "badges", badgeManifest(`"ui.place", "threads:read"`), badgeModule)
-	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf, CallTimeout: 2 * time.Second, TimerScale: 0.002})
+	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf, CallTimeout: 2 * time.Second})
 	t.Cleanup(h.Close)
 	if err := h.SetGranted("badges", "threads:read", true); err != nil {
 		t.Fatal(err)
@@ -70,12 +70,13 @@ func TestPlacesDrawEachCopyAndKeepItWhileTheNextIsDrawn(t *testing.T) {
 	if s.PlaceView("badge", "t3") != nil {
 		t.Fatal("a null copy drew")
 	}
-	// Its timer draws too: once nothing is drawing, the same items must
-	// not start a draw.
-	u.until(t, "the drawing to settle", func() bool { return h.Idle() && len(u.q) == 0 })
+	settled := func() bool { return h.Idle() && len(u.q) == 0 }
+	u.until(t, "the drawing to settle", settled)
+	before := s.Rev
 	s.SetItems("badge", items)
-	if !h.Idle() {
-		t.Fatal("drew again for the same items")
+	u.until(t, "any draw of the same items", settled)
+	if s.Rev != before {
+		t.Fatalf("drew again for the same items: revision %d -> %d", before, s.Rev)
 	}
 	items[0].Version, items[0].Context = "2", ThreadRecord{ID: "t1", Title: "Uno"}
 	s.SetItems("badge", items)
@@ -83,6 +84,8 @@ func TestPlacesDrawEachCopyAndKeepItWhileTheNextIsDrawn(t *testing.T) {
 
 	h.Emit("thread.changed", func(string) any { return ThreadRecord{ID: "t1"} })
 	u.until(t, "the event", func() bool { return strings.HasPrefix(badgeText(s, "t1"), "Uno 1/") })
+	// Its 30 s timer, unscaled, never ticks in the test, so it ticks here.
+	s.Notify(AppEvent{Kind: "timer", ID: "tick"})
 	u.until(t, "a timer", func() bool { return !strings.Contains(badgeText(s, "t1"), "/0/") })
 
 	s.Dispatch(UIEvent{Type: "click", Handler: "poke", Node: "b", Payload: json.RawMessage(`"t2"`), Place: &PlaceRef{ID: "badge", At: "thread.row", Key: "t2"}}, nil)
