@@ -85,7 +85,7 @@ func (a *app) pluginComponent(c *ui.Context, box func() ui.Element, name, key st
 // t: only in the components it names.
 func (a *app) drawNative(c *ui.Context, component string, t *thread, n *widget.Node, fire func(any)) {
 	in := widget.Natives[n.Name].In
-	if !slices.Contains(in, component) || t == nil {
+	if !slices.Contains(in, component) || widget.Natives[n.Name].Thread && t == nil {
 		ui.Text(c, n.Name+" draws only in "+strings.Join(in, ", ")+".").TextColor(palette.muted).Margin(ui.Auto)
 		return
 	}
@@ -94,6 +94,14 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, n *widget.N
 		var path string
 		json.Unmarshal(n.Props["path"], &path)
 		a.diffBody(c, *t, path, fire)
+	case "theme.card":
+		var name string
+		json.Unmarshal(n.Props["theme"], &name)
+		if !slices.Contains(themeNames(), name) {
+			ui.Text(c, "No theme "+name+".").TextColor(palette.muted)
+			return
+		}
+		ui.Row(c).Children(func() { a.themeCard(c, name, func() { fire(name) }) })
 	}
 }
 

@@ -73,16 +73,46 @@ const systemTheme = "System"
 // each theme.
 func themeNames() []string {
 	names := []string{systemTheme}
-	for _, t := range themes {
+	for _, t := range slices.Concat(themes, pluginThemes) {
 		names = append(names, t.name)
 	}
 	return names
 }
 
+// pluginThemes are the looks plugins add, after the app's, as the frame
+// last read them.
+var pluginThemes []theme
+
+// readPluginThemes reads the running plugins' themes: one whose name the
+// app or an earlier plugin took is left out.
+func (a *app) readPluginThemes() []theme {
+	var out []theme
+	for _, t := range a.plugins.Themes() {
+		if slices.ContainsFunc(slices.Concat(themes, out), func(th theme) bool { return th.name == t.Name }) || t.Name == systemTheme {
+			continue
+		}
+		hex := func(k string) ui.Color { return ui.Hex(t.Colors[k]) }
+		out = append(out, theme{t.Name, t.Dark, colors{
+			bg: hex("bg"), sidebar: hex("sidebar"), surface: hex("surface"), hover: hex("hover"), active: hex("active"),
+			border: hex("border"), text: hex("text"), muted: hex("muted"), faint: hex("faint"),
+			green: hex("green"), red: hex("red"), amber: hex("amber"), blue: hex("blue"),
+		}, t.Terminal})
+	}
+	return out
+}
+
+// forgetPluginTerminals drops the terminal colors read for plugins'
+// themes, which a plugin's change may have changed.
+func forgetPluginTerminals() {
+	for _, t := range pluginThemes {
+		delete(terminalThemes, t.name)
+	}
+}
+
 // themeFor is the theme a settings choice names; System, or a name
 // that is no theme's, is the system's appearance, Dark or Light.
 func themeFor(name string, systemDark bool) theme {
-	for _, t := range themes {
+	for _, t := range slices.Concat(themes, pluginThemes) {
 		if t.name == name {
 			return t
 		}
@@ -198,6 +228,10 @@ type settings struct {
 	checking bool
 }
 
+// pendingTheme is a theme chosen in settings.json, want, that the app
+// started without, and the theme it took instead, was.
+type pendingTheme struct{ want, was string }
+
 type app struct {
 	// post runs a func on the thread that builds the views, as the
 	// manager's changes do.
@@ -226,7 +260,9 @@ type app struct {
 	// savedSettings are the settings as last saved to settings.json, or
 	// read from it; settingsOut writes it (settingsfile.go).
 	savedSettings settingsFile
-	settingsOut   settingsWriter
+	// pendingTheme waits for a plugin's theme settings.json chose.
+	pendingTheme pendingTheme
+	settingsOut  settingsWriter
 	// theme is the frame's look, as the settings and the system choose it.
 	theme theme
 	// server is the Servers page's form for adding one, why the last add
@@ -652,8 +688,19 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 }
 
 // applyTheme sets the theme the settings ask for: the system's appearance,
-// which the default choice follows, or one of the app's themes.
+// which the default choice follows, or a theme of the app's or a plugin's.
 func (a *app) applyTheme(c *ui.Context) {
+	pluginThemes = a.readPluginThemes()
+	// A plugin's theme the settings chose shows once the plugin runs,
+	// unless another was chosen meanwhile.
+	if p := a.pendingTheme; p.want != "" {
+		switch {
+		case a.settings.theme != p.was:
+			a.pendingTheme = pendingTheme{}
+		case slices.Contains(themeNames(), p.want):
+			a.settings.theme, a.pendingTheme = p.want, pendingTheme{}
+		}
+	}
 	a.theme = themeFor(a.settings.theme, c.Theme().Dark)
 	palette = a.theme.colors
 	palette.accent = accents[a.settings.accent].color

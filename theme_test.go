@@ -10,12 +10,13 @@ import (
 // alike, and ⇧⌘L flips between Light and Dark from any theme.
 func TestThemeColorsTheTerminal(t *testing.T) {
 	a := offline(t)
-	tt := ui.NewTester(a.view, 1320, 860)
+	tt := newTester(t, a, 1320, 860)
 	a.router.Push("/settings/appearance")
 	tt.Frame()
 	if err := tt.Click("Mocha"); err != nil {
 		t.Fatal(err)
 	}
+	settleTester(tt) // the built-in Appearance sets it
 	a.router.Push("/")
 	a.showTerminal = true
 	tt.Frame()

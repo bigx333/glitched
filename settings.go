@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -32,6 +33,11 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 					title = s.label
 				}
 			}
+			for _, e := range a.plugins.Entries() {
+				if e.Settings && a.router.Path() == (pluginKey{e.Plugin, e.Page}).settingsPath() {
+					title = e.Title
+				}
+			}
 			ui.Text(c, title).FontWeight(600)
 		})
 		body := r.View(c, func(r *ui.Route) {
@@ -54,6 +60,10 @@ func (a *app) settingsPage(c *ui.Context, r *ui.Route) {
 			case r.Match("/keybindings"):
 				r.Title("Keybindings")
 				a.page(c, "Keybindings", "Shortcuts for the commands you use most.", a.keybindings)
+			case r.Match("/plugin/{plugin}/{page}"):
+				title, subtitle, _, body := a.pluginPageParts(pluginKey{r.Param("plugin"), r.Param("page")})
+				r.Title(title)
+				a.page(c, title, subtitle, body)
 			case r.Match("/plugins"):
 				r.Title("Plugins")
 				a.page(c, "Plugins", "JavaScript and TypeScript plugins in "+displayPath(plugins.Dir(a.dir))+". Each runs in a sandbox of its own, and reaches only what you grant it here.", a.pluginSettings)
@@ -106,31 +116,82 @@ func settingRow(c *ui.Context, title, desc string, control func()) {
 
 // --- General
 
+// general is a plugin's: the built-in General page, or one of the user's
+// that replaces it, each setting it changes set through the app.
 func (a *app) general(c *ui.Context) {
-	s := &a.settings
-	card(c, "THREADS", func() {
-		settingRow(c, "New thread environment", "Where a new thread runs its agent.", func() {
-			ui.Segmented(c, &s.newThreadMode, newThreadModes...).Label("New thread environment")
-		})
-		settingRow(c, "Default model", "Used for new threads. Each thread can pick its own.", func() {
-			ui.Select(c, &a.model, modelNames()).Width(200)
-			a.saveComposer()
-		})
-		settingRow(c, "Confirm before deleting threads", "", func() {
-			ui.Switch(c, &s.confirmDelete).Label("Confirm before deleting threads")
-		})
+	a.settingsComponent(c, "settings.page.general", generalPage{
+		Settings: a.appSettings(),
+		Choices:  settingChoices{NewThread: newThreadModes, DefaultModel: modelNames(), Timestamps: timeFormats},
 	})
-	card(c, "INTERFACE", func() {
-		settingRow(c, "Timestamps", "How the sidebar shows when a thread last changed.", func() {
-			ui.Select(c, &s.timeFormat, timeFormats).Width(160)
-		})
-		settingRow(c, "Stream assistant messages", "Show replies as they're written, rather than once done.", func() {
-			ui.Switch(c, &s.streaming).Label("Stream assistant messages")
-		})
-		settingRow(c, "Desktop notifications", "When a thread finishes or needs approval in the background.", func() {
-			ui.Switch(c, &s.notifications).Label("Desktop notifications")
-		})
-	})
+}
+
+// generalPage is the context of settings.page.general.
+type generalPage struct {
+	Settings appSettings    `json:"settings"`
+	Choices  settingChoices `json:"choices"`
+}
+
+type settingChoices struct {
+	NewThread    []string `json:"newThread"`
+	DefaultModel []string `json:"defaultModel"`
+	Timestamps   []string `json:"timestamps"`
+}
+
+// appSettings are the settings a plugin reads and sets, by settings.json's
+// names: General's and Appearance's, but for the material's.
+type appSettings struct {
+	Theme         string `json:"theme"`
+	Accent        string `json:"accent"`
+	NewThread     string `json:"newThread"`
+	DefaultModel  string `json:"defaultModel"`
+	Timestamps    string `json:"timestamps"`
+	ConfirmDelete bool   `json:"confirmDelete"`
+	Streaming     bool   `json:"streaming"`
+	Notifications bool   `json:"notifications"`
+}
+
+func (a *app) appSettings() appSettings {
+	f := fileOf(a.settings)
+	return appSettings{f.Theme, f.Accent, f.NewThread, a.model, f.Timestamps, f.ConfirmDelete, f.Streaming, f.Notifications}
+}
+
+// setAppSetting is app.settings.set: it sets one of appSettings to a
+// value the page could have chosen, and refuses any other, as
+// settingsFrom does a file's.
+func (a *app) setAppSetting(args json.RawMessage) (any, error) {
+	var in struct {
+		Key   string
+		Value json.RawMessage
+	}
+	if err := json.Unmarshal(args, &in); err != nil {
+		return nil, err
+	}
+	keys := fields(settingsFile{})
+	switch _, ok := keys[in.Key]; {
+	case in.Key == "defaultModel":
+		var m string
+		if json.Unmarshal(in.Value, &m) != nil || !slices.Contains(modelNames(), m) {
+			return nil, fmt.Errorf("defaultModel is one of %s", strings.Join(modelNames(), ", "))
+		}
+		a.model = m
+		a.saveComposer()
+		return nil, nil
+	case !ok || !slices.Contains([]string{"theme", "accent", "newThread", "timestamps", "confirmDelete", "streaming", "notifications"}, in.Key):
+		return nil, fmt.Errorf("%q is no setting a plugin sets", in.Key)
+	}
+	all := fields(fileOf(a.settings))
+	all[in.Key] = in.Value
+	b, _ := json.Marshal(all)
+	var f settingsFile
+	if err := json.Unmarshal(b, &f); err != nil {
+		return nil, fmt.Errorf("%s: %v", in.Key, err)
+	}
+	s := settingsFrom(a.settings, f)
+	if got := fields(fileOf(s))[in.Key]; string(got) != string(fields(f)[in.Key]) {
+		return nil, fmt.Errorf("%s can't be %s", in.Key, in.Value)
+	}
+	a.settings = s
+	return nil, nil
 }
 
 // --- Appearance
@@ -138,33 +199,16 @@ func (a *app) general(c *ui.Context) {
 type themeMatch struct{}
 type accentMatch struct{}
 
+// appearance draws the theme and the accent with a plugin, the built-in
+// Appearance or one of the user's that replaces it, over the material,
+// which is Glitched's own.
 func (a *app) appearance(c *ui.Context) {
 	s := &a.settings
-	card(c, "THEME", func() {
-		ui.Row(c).Padding(16).Gap(12).Children(func() {
-			for _, name := range themeNames() {
-				a.themeCard(c, name)
-			}
-		})
-	})
-	card(c, "ACCENT", func() {
-		settingRow(c, "Accent color", accents[s.accent].name, func() {
-			ui.Row(c).Gap(10).Children(func() {
-				for i, acc := range accents {
-					sw := a.tip(c, ui.ButtonBase(c.Key(acc.name)).Size(24, 24).Radius(12).Center().Label(acc.name), acc.name).Cursor(ui.CursorPointer)
-					if sw.Children(func() {
-						if i == s.accent {
-							ui.Box(c).Key("ring").Absolute().Top(-4).Left(-4).Right(-4).Bottom(-4).Radius(16).Border(2, acc.color).PassThrough().
-								Transition(indicator(accentMatch{}))
-						}
-						ui.Box(c).Size(24, 24).Radius(12).Background(acc.color)
-					}).Clicked() {
-						s.accent = i
-					}
-				}
-			})
-		})
-	})
+	ctx := appearancePage{Settings: a.appSettings(), Themes: themeNames()}
+	for _, acc := range accents {
+		ctx.Accents = append(ctx.Accents, accentRecord{acc.name, fmt.Sprintf("#%02x%02x%02x", acc.color.R, acc.color.G, acc.color.B)})
+	}
+	a.settingsComponent(c, "settings.page.appearance", ctx)
 	card(c, "MATERIAL", func() {
 		settingRow(c, "Liquid Glass", "The sidebar shows the desktop through the window, and floating panels what scrolls under them.", func() {
 			ui.Switch(c, &s.glass).Label("Liquid Glass")
@@ -202,9 +246,34 @@ func (a *app) appearance(c *ui.Context) {
 	})
 }
 
+// appearancePage is the context of settings.page.appearance.
+type appearancePage struct {
+	Settings appSettings    `json:"settings"`
+	Themes   []string       `json:"themes"`
+	Accents  []accentRecord `json:"accents"`
+}
+
+type accentRecord struct {
+	Name  string `json:"name"`
+	Color string `json:"color"`
+}
+
+// swatch is an accent's dot, ringed while it is the one chosen: the ring
+// moves to the next one chosen.
+func (a *app) swatch(c *ui.Context, key any, color ui.Color, on bool, label string) bool {
+	sw := a.tip(c, ui.ButtonBase(c.Key(key)).Size(24, 24).Radius(12).Center().Label(label), label).Cursor(ui.CursorPointer)
+	return sw.Children(func() {
+		if on {
+			ui.Box(c).Key("ring").Absolute().Top(-4).Left(-4).Right(-4).Bottom(-4).Radius(16).Border(2, color).PassThrough().
+				Transition(indicator(accentMatch{}))
+		}
+		ui.Box(c).Size(24, 24).Radius(12).Background(color)
+	}).Clicked()
+}
+
 // themeCard previews a theme's sidebar and chat, and the terminal's
-// colors under them; System's is half light, half dark.
-func (a *app) themeCard(c *ui.Context, name string) {
+// colors under them; System's is half light, half dark. A click picks it.
+func (a *app) themeCard(c *ui.Context, name string, pick func()) {
 	s := &a.settings
 	th := themeFor(name, true)
 	cols := th.colors
@@ -242,7 +311,7 @@ func (a *app) themeCard(c *ui.Context, name string) {
 			t.TextColor(palette.muted)
 		}
 	}).Clicked() {
-		s.theme = name
+		pick()
 	}
 }
 

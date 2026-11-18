@@ -1,4 +1,5 @@
-// Settings' About and Keybindings pages, as Glitched draws them by default.
+// Settings' General, Appearance, About and Keybindings pages, as Glitched
+// draws them by default.
 // It is a plugin like any other: copy it in Settings › Plugins, and the
 // copy draws the pages in its place.
 
@@ -15,10 +16,97 @@ function settingRow(title, description, control) {
         gap: 2,
         children: [
           { type: "text", text: title, weight: 500 },
-          { type: "text", text: description, fontSize: 12, style: "muted" },
+          ...(description ? [{ type: "text", text: description, fontSize: 12, style: "muted" }] : []),
         ],
       },
       control,
+    ],
+  };
+}
+
+function choice(id, label, options, value, width) {
+  return { type: "select", id, options, value, width, controlled: true, onChange: id };
+}
+
+function toggle(id, label, value) {
+  return { type: "toggle", id, style: "switch", label, value, controlled: true, onChange: id };
+}
+
+function general({ settings: s, choices }) {
+  return {
+    type: "column",
+    gap: 20,
+    children: [
+      {
+        type: "card",
+        style: "list",
+        title: "THREADS",
+        children: [
+          settingRow("New thread environment", "Where a new thread runs its agent.", {
+            type: "tabs",
+            id: "newThread",
+            style: "control",
+            label: "New thread environment",
+            options: choices.newThread,
+            value: s.newThread,
+            controlled: true,
+            onChange: "newThread",
+          }),
+          settingRow("Default model", "Used for new threads. Each thread can pick its own.", choice("defaultModel", "Default model", choices.defaultModel, s.defaultModel, 200)),
+          settingRow("Confirm before deleting threads", "", toggle("confirmDelete", "Confirm before deleting threads", s.confirmDelete)),
+        ],
+      },
+      {
+        type: "card",
+        style: "list",
+        title: "INTERFACE",
+        children: [
+          settingRow("Timestamps", "How the sidebar shows when a thread last changed.", choice("timestamps", "Timestamps", choices.timestamps, s.timestamps, 160)),
+          settingRow("Stream assistant messages", "Show replies as they're written, rather than once done.", toggle("streaming", "Stream assistant messages", s.streaming)),
+          settingRow("Desktop notifications", "When a thread finishes or needs approval in the background.", toggle("notifications", "Desktop notifications", s.notifications)),
+        ],
+      },
+    ],
+  };
+}
+
+function appearance({ settings: s, themes, accents }) {
+  return {
+    type: "column",
+    gap: 20,
+    children: [
+      {
+        type: "card",
+        style: "list",
+        title: "THEME",
+        children: [
+          {
+            type: "row",
+            padding: 16,
+            gap: 12,
+            children: themes.map((theme, i) => ({ type: "native", id: "theme" + i, name: "theme.card", props: { theme }, grow: true, onChange: "theme" })),
+          },
+        ],
+      },
+      {
+        type: "card",
+        style: "list",
+        title: "ACCENT",
+        children: [
+          settingRow("Accent color", s.accent, {
+            type: "row",
+            gap: 10,
+            children: accents.map((a, i) => ({
+              type: "swatch",
+              id: "accent" + i,
+              color: a.color,
+              label: a.name,
+              active: a.name === s.accent,
+              onClick: { handler: "accent", payload: a.name },
+            })),
+          }),
+        ],
+      },
     ],
   };
 }
@@ -85,7 +173,15 @@ export function init() {
 export function place({ at, state, items }) {
   return items.map((it) => {
     if (!it.context) return null;
-    return at === "settings.page.about" ? about(it.context) : keybindings(it.context, state.query);
+    switch (at) {
+      case "settings.page.general":
+        return general(it.context);
+      case "settings.page.appearance":
+        return appearance(it.context);
+      case "settings.page.about":
+        return about(it.context);
+    }
+    return keybindings(it.context, state.query);
   });
 }
 
@@ -94,6 +190,18 @@ export async function update({ state, event }) {
   switch (event.handler) {
     case "search":
       return { state: { ...state, query: String(event.value ?? "") } };
+    case "theme":
+    case "newThread":
+    case "defaultModel":
+    case "timestamps":
+    case "confirmDelete":
+    case "streaming":
+    case "notifications":
+      await glitched.app.settings.set(event.handler, event.value).catch((e) => glitched.toast("Settings", e.message));
+      return {};
+    case "accent":
+      await glitched.app.settings.set("accent", event.payload).catch((e) => glitched.toast("Settings", e.message));
+      return {};
     case "check":
       await glitched.app.checkForUpdates().catch((e) => glitched.toast("About", e.message));
       return {};

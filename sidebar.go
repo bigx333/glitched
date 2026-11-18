@@ -207,6 +207,26 @@ func (a *app) settingsNav(c *ui.Context) {
 				a.router.Replace(path)
 			}
 		}
+		for _, e := range a.plugins.Entries() {
+			if !e.Settings {
+				continue
+			}
+			k := pluginKey{e.Plugin, e.Page}
+			path := k.settingsPath()
+			icon := appIconNamed(e.Icon)
+			if icon == nil {
+				icon = icPlug
+			}
+			if row(c, "plugin:"+path, a.router.Path() == path).Padding(7, 8).Children(func() {
+				ui.Icon(c, icon).FontSize(15).TextColor(palette.muted)
+				ui.Text(c, e.Title).Grow(1).SingleLine()
+			}).Clicked() {
+				if !a.plugins.HasView(k.plugin) {
+					a.readPluginPage(k)
+				}
+				a.router.Replace(path)
+			}
+		}
 	})
 }
 

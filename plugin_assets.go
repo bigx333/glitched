@@ -41,7 +41,8 @@ func (a *app) pluginStyle(id string) render.Style {
 		Outline:  headerButton,
 		Tip:      a.tip,
 		Row:      row,
-		ListCard: func(c *ui.Context, body func()) { card(c, "", body) },
+		ListCard: func(c *ui.Context, title string, body func()) { card(c, title, body) },
+		Swatch:   a.swatch,
 		Keys:     func(c *ui.Context, keys []string) { kbd(c, keys...) },
 	}
 }

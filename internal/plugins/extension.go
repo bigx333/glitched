@@ -32,7 +32,30 @@ type Extension struct {
 	Service string `json:"service,omitempty"`
 	// Shortcuts bind its commands to keys.
 	Shortcuts []Shortcut `json:"shortcuts,omitempty"`
+	// SettingsPages are pages of its own (contributes.pages) listed in
+	// Settings' nav, rather than over Settings in the sidebar.
+	SettingsPages []string `json:"settingsPages,omitempty"`
+	// Themes are looks it adds to Appearance's: colors only.
+	Themes []Theme `json:"themes,omitempty"`
 }
+
+// Theme is a look a plugin adds to Appearance: its name, whether it is
+// dark, a color for each of ThemeColors as #rrggbb or #rrggbbaa, and the
+// Ghostty theme the terminal takes, if any.
+type Theme struct {
+	Name     string            `json:"name"`
+	Dark     bool              `json:"dark,omitempty"`
+	Colors   map[string]string `json:"colors"`
+	Terminal string            `json:"terminal,omitempty"`
+}
+
+// ThemeColors are the colors a theme names, as the app's palette has them.
+var ThemeColors = []string{"bg", "sidebar", "surface", "hover", "active", "border", "text", "muted", "faint", "green", "red", "amber", "blue"}
+
+var (
+	themeName  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}$`)
+	themeColor = regexp.MustCompile(`^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
+)
 
 // Place is a widget a plugin puts at a slot of Glitched's UI, or, with
 // Replaces, a component of Glitched's it draws in place of the built-in.
@@ -218,6 +241,25 @@ func (x Extension) check(folder string) error {
 	for _, s := range x.Shortcuts {
 		if _, err := parseKey(s.Key); err != nil {
 			return fmt.Errorf("glitched.shortcuts: %s: %w", s.Command, err)
+		}
+	}
+	for _, t := range x.Themes {
+		if !themeName.MatchString(t.Name) {
+			return fmt.Errorf("glitched.themes: name %q is 1 to 32 letters, digits, spaces or ._-", t.Name)
+		}
+		if err := unique("themes", t.Name); err != nil {
+			return err
+		}
+		for _, k := range ThemeColors {
+			if !themeColor.MatchString(t.Colors[k]) {
+				return fmt.Errorf("glitched.themes: %s: colors.%s is #rrggbb or #rrggbbaa, not %q", t.Name, k, t.Colors[k])
+			}
+		}
+		if len(t.Colors) != len(ThemeColors) {
+			return fmt.Errorf("glitched.themes: %s: colors are %s, no others", t.Name, strings.Join(ThemeColors, ", "))
+		}
+		if len(t.Terminal) > 64 {
+			return fmt.Errorf("glitched.themes: %s: terminal is a Ghostty theme's name, up to 64 bytes", t.Name)
 		}
 	}
 	return nil

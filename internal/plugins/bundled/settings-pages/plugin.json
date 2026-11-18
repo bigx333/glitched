@@ -1,17 +1,28 @@
 {
   "id": "settings-pages",
   "name": "Settings pages",
-  "description": "Settings' About and Keybindings pages. Built into Glitched; make a copy in Settings › Plugins to change them.",
+  "description": "Settings' General, Appearance, About and Keybindings pages. Built into Glitched; make a copy in Settings › Plugins to change them.",
   "version": "1.0.0",
   "main": "main.js",
   "contract": "glitched",
   "contractVersion": 2,
   "capabilities": [
     "ui.place",
-    "ui.replace"
+    "ui.replace",
+    "settings:write"
   ],
   "glitched": {
     "places": [
+      {
+        "id": "general",
+        "at": "settings.page.general",
+        "replaces": true
+      },
+      {
+        "id": "appearance",
+        "at": "settings.page.appearance",
+        "replaces": true
+      },
       {
         "id": "about",
         "at": "settings.page.about",

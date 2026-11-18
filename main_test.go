@@ -574,7 +574,7 @@ func TestMachinePrefixes(t *testing.T) {
 
 func TestSettingsPages(t *testing.T) {
 	a := offline(t)
-	tt := ui.NewTester(a.view, 1320, 860)
+	tt := newTester(t, a, 1320, 860)
 	if err := tt.Click("Settings"); err != nil {
 		t.Fatal(err)
 	}
@@ -593,6 +593,7 @@ func TestSettingsPages(t *testing.T) {
 	if err := tt.Click("Light"); err != nil {
 		t.Fatal(err)
 	}
+	settleTester(tt) // the built-in Appearance sets it
 	if a.settings.theme != "Light" {
 		t.Errorf("theme %q", a.settings.theme)
 	}
