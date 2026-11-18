@@ -27,6 +27,10 @@ type Component struct {
 // ones it never may. docs/plugins.md lists them.
 var Components = []Component{
 	{Name: "thread.header.actions", Provides: "headerActions", About: "The buttons at the right of a thread's header: panel toggles, Open in, Commit & push."},
+	{Name: "settings.page.about", Provides: "aboutPage", About: "The About page of Settings: the version, the update check and the source."},
+	{Name: "settings.page.keybindings", Provides: "keybindingsPage", About: "The Keybindings page of Settings: the app's shortcuts, with a search."},
+	{Name: "thread.empty", Provides: "threadEmpty", About: "What a thread with no messages yet shows, when it isn't a new thread's hero."},
+	{Name: "hero.heading", Provides: "", About: "The greeting over a new thread's composer. The hero fades it as the composer docks."},
 	{Name: "thread.panel.diff", Provides: "diffPanel", Needs: "threads:read", About: "The diff panel: its header, and its list of changed files over the native diff.body."},
 	{Name: "approval.card", Locked: widget.Locked["approval.card"]},
 	{Name: "question.card", Locked: widget.Locked["question.card"]},

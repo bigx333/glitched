@@ -145,6 +145,13 @@ func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed
 	s.h.opts.Post(func() { s.publish(d) })
 }
 
+// awaitsApp reports whether the plugin id's runtime is in a call into the
+// app, which the UI thread answers.
+func (h *Host) awaitsApp(id string) bool {
+	in := h.running1(id)
+	return in != nil && in.awaiting != nil && in.awaiting.Load() > 0
+}
+
 // placeDraw is one drawing of every copy of the places, or what failed.
 type placeDraw struct {
 	gen, processed int
@@ -210,8 +217,17 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, key string, deadlin
 	s.SetItems(place, items)
 	wait := time.NewTimer(time.Until(deadline))
 	defer wait.Stop()
+	poll := time.NewTicker(time.Millisecond)
+	defer poll.Stop()
 	for {
 		select {
+		case <-poll.C:
+			// A call of the plugin's into the app waits on this thread,
+			// which waits on the plugin: the copy isn't drawn in time, so
+			// the next plugin draws it.
+			if s.h.awaitsApp(s.plugin) {
+				return nil
+			}
 		case d := <-first:
 			s.publish(d)
 			if d.asked[k] || d.failed != nil {

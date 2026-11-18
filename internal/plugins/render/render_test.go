@@ -413,3 +413,38 @@ func TestItemsSegmentsAndNatives(t *testing.T) {
 		t.Errorf("the native fired %+v", ev)
 	}
 }
+
+// A menu's separator is a line between its options; a progress button,
+// once clicked, runs till a view answers after the click.
+func TestMenuSeparatorsAndProgressButtons(t *testing.T) {
+	s := &screen{}
+	view := `{"body": {"type": "row", "children": [
+		{"type": "menu", "id": "m", "label": "Open", "options": ["a", {"separator": true}, "b"], "onChange": "open"},
+		{"type": "button", "id": "go", "label": "Go", "progress": true, "onClick": "go"}
+	]}}`
+	s.show(t, view)
+	tt := ui.NewTester(s.draw, 800, 300)
+	tt.Frame()
+	if err := tt.Click("Open"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(tt.Menu(), "|"); got != "a||b" && got != "a|-|b" {
+		t.Errorf("the menu has %q, want a, a line, b", tt.Menu())
+	}
+	tt.CloseMenu()
+	if err := tt.Click("Go"); err != nil {
+		t.Fatal(err)
+	}
+	n := len(s.events)
+	tt.Click("Go")
+	tt.Frame()
+	if len(s.events) != n {
+		t.Error("a running progress button fired again")
+	}
+	s.processed = n
+	s.show(t, view)
+	tt.Frame()
+	if err := tt.Click("Go"); err != nil || len(s.events) != n+1 {
+		t.Errorf("once answered, the button doesn't fire: %v, %d events", err, len(s.events))
+	}
+}

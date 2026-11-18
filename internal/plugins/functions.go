@@ -33,6 +33,7 @@ globalThis.glitched = Object.freeze({
     state: () => app("panels.state"),
   }),
   openIn: (app_, thread) => app("open.in", { app: app_, thread }),
+  app: Object.freeze({ checkForUpdates: () => app("app.checkForUpdates") }),
   diff: Object.freeze({
     set: (thread, options = {}) => app("diff.set", { ...options, thread }),
     setReviewed: (thread, path, reviewed = true) => app("diff.setReviewed", { thread, path, reviewed }),
@@ -90,6 +91,8 @@ func (h *Host) functions(in *installed) map[string]plugin.Function {
 	alive := new(atomic.Bool)
 	alive.Store(true)
 	in.alive = alive
+	awaiting := new(atomic.Int32)
+	in.awaiting = awaiting
 	fns := map[string]plugin.Function{
 		"db.exec":  db.exec,
 		"db.query": db.query,
@@ -105,6 +108,8 @@ func (h *Host) functions(in *installed) map[string]plugin.Function {
 				err error
 			}
 			ch := make(chan answer, 1)
+			awaiting.Add(1)
+			defer awaiting.Add(-1)
 			h.effect(ctx, alive, id, e, func(v any, err error) { ch <- answer{v, err} })
 			select {
 			case a := <-ch:

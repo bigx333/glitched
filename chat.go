@@ -191,7 +191,7 @@ func (a *app) header(c *ui.Context, t thread, es []entry) {
 		box := func() ui.Element {
 			return ui.Row(c).Key("component:thread.header.actions").Shrink(0).AlignItems(ui.Center)
 		}
-		a.pluginComponent(c, box, "thread.header.actions", t.id().String(), t, func(r plugins.ThreadRecord) any {
+		a.pluginComponent(c, box, "thread.header.actions", t.id().String(), &t, func(r plugins.ThreadRecord) any {
 			state.Thread = r
 			return state
 		})
@@ -260,10 +260,20 @@ func (a *app) timeline(c *ui.Context, t thread, es []entry) {
 		ScrollbarInsets(0, 0, room-40, 0).Opacity(tr).Children(func() {
 		// The hero has its own greeting, over its composer.
 		if len(es) == 0 && !hero(t) {
-			ui.Row(c).Justify(ui.Center).Children(func() { a.emptyState(c) })
+			ui.Row(c).Justify(ui.Center).Children(func() {
+				// What it says is a plugin's: the built-in Empty thread, or
+				// one of the user's that replaces it.
+				box := func() ui.Element { return ui.Column(c).Key("empty").Center().Padding(140, 0, 0) }
+				a.pluginComponent(c, box, "thread.empty", t.id().String(), &t, func(r plugins.ThreadRecord) any { return threadEmpty{r} })
+			})
 		}
 	})
 	a.turnMarkers(c, es, l)
+}
+
+// threadEmpty is the context of thread.empty.
+type threadEmpty struct {
+	Thread plugins.ThreadRecord `json:"thread"`
 }
 
 // jumpToLatest floats a pill over the composer while the user has
@@ -301,14 +311,6 @@ func (a *app) jumpToLatest(c *ui.Context, t thread) {
 		}).Clicked() {
 			l.ScrollToEnd()
 		}
-	})
-}
-
-func (a *app) emptyState(c *ui.Context) {
-	ui.Column(c).Key("empty").Center().Gap(12).Padding(140, 0, 0).Children(func() {
-		ui.Icon(c, icSparkles).FontSize(30).TextColor(palette.accent)
-		ui.Text(c, "What should we build?").FontSize(18).FontWeight(600)
-		ui.Text(c, "Send a message to start the conversation.").TextColor(palette.muted)
 	})
 }
 

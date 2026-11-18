@@ -12,6 +12,7 @@ const editors = [
   { value: "cursor", label: "Cursor" },
   { value: "vscode", label: "VS Code" },
   { value: "zed", label: "Zed" },
+  { separator: true },
   { value: "finder", label: "Finder" },
 ];
 
@@ -58,7 +59,7 @@ function commitDialog(d) {
         justify: "end",
         children: [
           { type: "button", id: "cancel", label: "Cancel", onClick: "commit.cancel" },
-          { type: "button", id: "go", label: "Commit & push", style: "primary", onClick: "commit.go" },
+          { type: "button", id: "go", label: "Commit & push", style: "primary", progress: true, onClick: "commit.go" },
         ],
       },
     ],

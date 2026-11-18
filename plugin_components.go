@@ -23,13 +23,17 @@ import (
 // drawing: the user's before the built-in. Each is given the copy, so
 // that one failing falls back to the next with no gap. context is what a
 // plugin is given, from the thread's record as that plugin may see it.
-// The native widgets it places draw about t.
-func (a *app) pluginComponent(c *ui.Context, box func() ui.Element, name, key string, t thread, context func(plugins.ThreadRecord) any) {
+// The native widgets it places draw about t. t is nil for a component of
+// the app's own, as a settings page, whose record is zero.
+func (a *app) pluginComponent(c *ui.Context, box func() ui.Element, name, key string, t *thread, context func(plugins.ThreadRecord) any) {
 	if a.plugins == nil {
 		return
 	}
 	f := a.frameOf(name)
-	full := a.threadRecord(t)
+	var full plugins.ThreadRecord
+	if t != nil {
+		full = a.threadRecord(*t)
+	}
 	type drawing struct {
 		pl   plugins.PlaceAt
 		ctx  any
@@ -79,9 +83,9 @@ func (a *app) pluginComponent(c *ui.Context, box func() ui.Element, name, key st
 
 // drawNative draws the native widget n in a copy of the component about
 // t: only in the components it names.
-func (a *app) drawNative(c *ui.Context, component string, t thread, n *widget.Node, fire func(any)) {
+func (a *app) drawNative(c *ui.Context, component string, t *thread, n *widget.Node, fire func(any)) {
 	in := widget.Natives[n.Name].In
-	if !slices.Contains(in, component) {
+	if !slices.Contains(in, component) || t == nil {
 		ui.Text(c, n.Name+" draws only in "+strings.Join(in, ", ")+".").TextColor(palette.muted).Margin(ui.Auto)
 		return
 	}
@@ -89,7 +93,7 @@ func (a *app) drawNative(c *ui.Context, component string, t thread, n *widget.No
 	case "diff.body":
 		var path string
 		json.Unmarshal(n.Props["path"], &path)
-		a.diffBody(c, t, path, fire)
+		a.diffBody(c, *t, path, fire)
 	}
 }
 
