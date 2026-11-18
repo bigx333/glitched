@@ -86,9 +86,13 @@ func TestChangesInTwoCopiesOfAPlaceBothArrive(t *testing.T) {
 		app.mu.Unlock()
 		return strings.Contains(got, "a=3") && strings.Contains(got, "b=4")
 	})
-	if app.Processed == 0 {
-		t.Fatal("a place's drawing doesn't say which events it took")
-	}
+	// The state changes as the plugin takes an event; the drawing that
+	// took it is posted after, once the places are drawn.
+	u.until(t, "a drawing that says it took the last event", func() bool {
+		app.mu.Lock()
+		defer app.mu.Unlock()
+		return app.Processed == 4
+	})
 }
 
 func TestALinkedPluginReloadsAsItsFilesChange(t *testing.T) {
