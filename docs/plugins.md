@@ -33,7 +33,7 @@ cp -R examples/plugins/snippets ~/.glitched/plugins/
 
 1. Put the folder in the plugins folder, or link it there: `ln -s ~/src/my-plugin ~/.glitched/plugins/my-plugin`.
 2. In **Settings › Plugins**, press **Trust as mine**. Glitched signs it with this device's key (`~/.glitched/plugin-key`).
-3. Edit and save. Glitched signs your plugin again and reloads it within a second, and **keeps its pages' state**. A save that doesn't load keeps the last good code running, and Settings says why. A change to `plugin.json` reloads the plugin whole: its pages start over.
+3. Edit and save. Glitched signs your plugin again and reloads it within about half a second, and **keeps its pages' state**. A save that doesn't load keeps the last good code running, and Settings says why. A change to `plugin.json` reloads the plugin whole: its pages start over.
 4. A plugin that fails to load says why under its name in Settings. A page whose `init`, `view` or `update` fails shows the error, with **Start over**.
 
 `examples/plugins/glitched.d.ts` types the whole contract. In TypeScript, reference it with `/// <reference path="./glitched.d.ts" />` (copy it next to your module). A `main` ending in `.ts` compiles as TypeScript. A module is one file: bundle first if you need several.
