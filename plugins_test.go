@@ -66,6 +66,14 @@ func pluginApp(t *testing.T, names ...string) *harness {
 	return h
 }
 
+// openPlugin opens the plugin's row in Settings › Plugins, and waits for
+// its detail to grow into view.
+func (h *harness) openPlugin(name string) {
+	h.t.Helper()
+	h.click(name)
+	h.tt.Advance(300 * time.Millisecond)
+}
+
 // typeInto clicks the input under the label, and types.
 func (h *harness) typeInto(label, text string) {
 	h.t.Helper()
@@ -189,13 +197,15 @@ func TestSnippetsStartsAThreadOnceGranted(t *testing.T) {
 
 	h.a.router.Push("/settings/plugins")
 	h.tt.Frame()
-	for _, about := range []string{"Read your threads' titles, workspaces and status, and show a thread", "Start threads and send messages to them, which runs agents"} {
-		row, ok := h.tt.Find(about)
-		reload, ok2 := h.tt.Find("Reload")
-		if !ok || !ok2 {
+	h.openPlugin("Snippets")
+	for about, grant := range map[string]string{
+		"Read your threads' titles, workspaces and status, and show a thread": "Grant threads:read to Snippets",
+		"Start threads and send messages to them, which runs agents":          "Grant threads:write to Snippets",
+	} {
+		if !h.tt.HasText(about) {
 			t.Fatalf("no %q in %q", about, h.tt.Texts())
 		}
-		h.tt.ClickAt(reload.X+reload.W-14, row.Y+row.H/2+8)
+		h.click(grant)
 		h.tt.Frame()
 	}
 	got := h.a.plugins.Installed()[0].Capabilities
@@ -252,12 +262,10 @@ func TestABrokenPluginShowsWhyAndTheOthersRun(t *testing.T) {
 	// Off in Settings: its page leaves the sidebar, and comes back on.
 	h.a.router.Push("/settings/plugins")
 	h.tt.Frame()
-	if !h.tt.HasText("BROKEN") || !h.tt.HasText("COUNTER") {
+	if !h.tt.HasText("Broken") || !h.tt.HasText("Counter") {
 		t.Fatalf("settings: %q", h.tt.Texts())
 	}
-	enabled, _ := h.tt.Find("Enabled")
-	reload, _ := h.tt.Find("Reload")
-	h.tt.ClickAt(reload.X+reload.W-14, enabled.Y+enabled.H/2)
+	h.click("Enable Broken")
 	h.tt.Frame()
 	if a.plugins.Installed()[0].Enabled {
 		t.Fatal("still enabled")
@@ -332,10 +340,12 @@ func TestATextSettingSavesOnEnter(t *testing.T) {
 	h.a.plugins.Reload()
 	h.a.router.Push("/settings/plugins")
 	h.tt.Frame()
-	// The field is at the row's end, as the Reload button is at its.
-	row, _ := h.tt.Find("Its key")
-	reload, _ := h.tt.Find("Reload")
-	h.tt.ClickAt(reload.X+reload.W-110, row.Y+row.H/2)
+	h.openPlugin("Keys")
+	field, ok := h.tt.AccessByRole(ui.RoleTextField, "Its key")
+	if !ok {
+		t.Fatalf("no field for the setting: %q", h.tt.Texts())
+	}
+	h.tt.ClickAt(field.Bounds.X+field.Bounds.W/2, field.Bounds.Y+field.Bounds.H/2)
 	h.tt.Type("cmd+sh")
 	h.tt.Frame()
 	if v := h.a.plugins.SettingValues("keys")["key"]; v != "" {

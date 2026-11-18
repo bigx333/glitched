@@ -604,6 +604,14 @@ type app struct {
 	// pluginSource is the install field's; pluginBusy is set while an
 	// install, an update or a check runs; pluginUpdates are what the last
 	// check found.
+	// Settings › Plugins as the user left it: pluginsView is the plugins
+	// or the parts of Glitched; pluginsQuery the filter's words;
+	// pluginsOpen the rows opened or closed, by folder; pluginsReveal the
+	// folder of a row to scroll to once.
+	pluginsView   int
+	pluginsQuery  string
+	pluginsOpen   map[string]bool
+	pluginsReveal string
 	pluginSource  string
 	pluginBusy    bool
 	pluginUpdates []pack.Found
@@ -657,6 +665,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		placeControls:  map[placeKey]*render.Controls{},
 		pluginAssets:   map[string]asset{},
 		settingDrafts:  map[string]string{},
+		pluginsOpen:    map[string]bool{},
 		pluginRecords:  map[string]string{},
 		pluginSections: map[string]string{},
 		pluginMessages: map[string]map[string]bool{},

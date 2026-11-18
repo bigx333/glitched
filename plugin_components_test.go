@@ -77,7 +77,7 @@ func TestTheHeaderActionsAreABuiltInPluginYoursReplaces(t *testing.T) {
 		t.Fatalf("a broken replacement left no built-in: %q", tt.Texts())
 	}
 	p := installed(a, "mine")
-	if note := a.replaceNote(p, "thread.header.actions"); !strings.Contains(note, "failed, so the built-in draws it") || !strings.Contains(note, "broken on purpose") {
+	if note := a.partState(p, "thread.header.actions").why; !strings.Contains(note, "failed, so the built-in draws it") || !strings.Contains(note, "broken on purpose") {
 		t.Errorf("Settings says %q of the broken one", note)
 	}
 	if err := a.plugins.SetEnabled("mine", false); err != nil {
