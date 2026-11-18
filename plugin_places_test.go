@@ -104,6 +104,7 @@ func TestAHeaderWidgetItsTabItsSettingsAndItsShortcut(t *testing.T) {
 	h.until("stopped", func() bool { return h.tt.HasText("Focus 25 min") })
 	h.a.router.Push("/settings/plugins")
 	h.tt.Frame()
+	h.openPlugin("Focus timer")
 	for _, want := range []string{"Show the timer", "Length", "minutes", "When it ends", "Notify", "Stay quiet"} {
 		if !h.tt.HasText(want) {
 			t.Errorf("no %q in Settings: %q", want, h.tt.Texts())
