@@ -159,6 +159,11 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 
 	// A failed write closes ws, which ends the read loop below.
 	send := func(f response) {
+		// A socket going away, as its grant ended, answers nothing: what
+		// its calls answer now is only that they were cut off.
+		if ctx.Err() != nil {
+			return
+		}
 		b, _ := json.Marshal(f)
 		writeMessage(ctx, ws, b)
 	}
