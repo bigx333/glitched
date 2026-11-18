@@ -72,6 +72,7 @@ func (p *posts) run() bool {
 func offline(t *testing.T) *app {
 	p := &posts{wake: make(chan struct{}, 1)}
 	a := newApp(t.TempDir(), nil, p.post)
+	t.Cleanup(a.settingsOut.wait)
 	offlinePosts.Store(a, p)
 	t.Cleanup(func() { offlinePosts.Delete(a) })
 	return a
@@ -145,6 +146,7 @@ func startWith(t *testing.T, dir string, engine func(*daemon.Config)) *harness {
 	t.Helper()
 	p := &posts{wake: make(chan struct{}, 1)}
 	a := newApp(dir, engine, p.post)
+	t.Cleanup(a.settingsOut.wait)
 	if err := a.backend.Start(); err != nil {
 		t.Fatal(err)
 	}
