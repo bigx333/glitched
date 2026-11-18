@@ -673,14 +673,22 @@ func TestApprovalCardShowsWhatRunsFirst(t *testing.T) {
 // apart from a backslash and a space.
 func TestApprovalCardMarksWhereItWraps(t *testing.T) {
 	a := offline(t)
+	// One window draws every card: a Tester of its own for each costs
+	// MyGo a text system of its own, and fonts loaded anew, each time.
+	var e entry
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.applyTheme(c)
+		ui.Column(c).Fill().Background(palette.bg).Children(func() {
+			if e.request != nil {
+				a.requestCard(c, thread{Thread: &client.Thread{}}, e)
+			}
+		})
+	}, 800, 320)
 	card := func(field, text string) []byte {
 		ask := map[string]string{"command": "ls", "cwd": "/w", field: text}
 		body, _ := json.Marshal(ask)
-		e := entry{key: "ask", request: &client.RequestEntry{Request: api.ID{1}, Body: body, State: api.RequestPending}}
-		tt := ui.NewTester(func(c *ui.Context) {
-			a.applyTheme(c)
-			ui.Column(c).Fill().Background(palette.bg).Children(func() { a.requestCard(c, thread{Thread: &client.Thread{}}, e) })
-		}, 800, 320)
+		e = entry{key: "ask", request: &client.RequestEntry{Request: api.ID{1}, Body: body, State: api.RequestPending}}
+		tt.Frame()
 		tt.Advance(time.Second)
 		return bytes.Clone(tt.Image().Pix)
 	}
