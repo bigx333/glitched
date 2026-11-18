@@ -336,8 +336,10 @@ var (
 		"card":   {"", "default", "list"},
 		"input":  {"", "default", "search"},
 	}
-	aligns   = []string{"", "start", "center", "end", "stretch"}
-	justifys = []string{"", "start", "center", "end", "between"}
+	aligns = []string{"", "start", "center", "end", "stretch"}
+	// ghostContent is what a ghost button may show in place of its icon.
+	ghostContent = []string{"text", "tile", "icon", "badge", "spacer"}
+	justifys     = []string{"", "start", "center", "end", "between"}
 )
 
 // Decode reads a view from a view export's JSON and checks it.
@@ -585,8 +587,9 @@ func (c *checker) extra(n *Node) error {
 		return fmt.Errorf("a tile has a color as #rrggbb, an icon, and a width of 8 to 64")
 	}
 	ghost := n.Type == "button" && n.Style == "ghost"
-	for _, col := range []string{n.Color, n.Background} {
-		if col != "" && !contains(Colors, col) && n.Type != "swatch" && n.Type != "tile" && !(ghost && col == n.Color && hexColor.MatchString(col)) {
+	rawColor := n.Type == "swatch" || n.Type == "tile" || ghost && hexColor.MatchString(n.Color)
+	for i, col := range []string{n.Color, n.Background} {
+		if col != "" && !contains(Colors, col) && !(rawColor && i == 0) {
 			return fmt.Errorf("color %q is none of %v", col, Colors)
 		}
 	}
@@ -603,8 +606,10 @@ func (c *checker) extra(n *Node) error {
 		return fmt.Errorf("a %s isn't italic", n.Type)
 	case n.Wrap && n.Type != "row":
 		return fmt.Errorf("only a row wraps")
-	case n.Opacity != 0 && (n.Type != "button" || n.Opacity < 0 || n.Opacity > 1):
-		return fmt.Errorf("opacity is a button's, 0 to 1")
+	case n.Opacity != 0 && (n.Type != "button" || n.Opacity < 0.2 || n.Opacity > 1):
+		return fmt.Errorf("opacity is a button's, 0.2 to 1")
+	case ghost && slices.ContainsFunc(n.Children, func(ch *Node) bool { return !contains(ghostContent, ch.Type) }):
+		return fmt.Errorf("a ghost button's children are %v", ghostContent)
 	case n.ContextMenu != "" && !ghost && !(n.Type == "row" && n.OnClick != nil):
 		return fmt.Errorf("only a ghost button or a clicked row has a contextMenu")
 	case n.ContextMenu != "" && (!strings.HasPrefix(n.ContextMenu, "thread:") && !strings.HasPrefix(n.ContextMenu, "project:") || len(n.ContextMenu) > 1024):

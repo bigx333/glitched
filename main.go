@@ -523,6 +523,8 @@ type app struct {
 	// says a plugin's popover drew open, as its row's actions are drawn.
 	snoozeFor   api.ID
 	popoverOpen bool
+	// snoozeWake is when the next snoozed thread comes back.
+	snoozeWake time.Time
 	// renaming is the thread whose title is being edited in its row, and
 	// renameDraft the title as typed; renameFocused once the input has
 	// had the focus, so that losing it ends the edit.

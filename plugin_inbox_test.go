@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func TestTheRowActionsAndProjectStripAreBuiltInPluginsYoursReplace(t *testing.T)
 const moverModule = `async function sip() {
 	return (await glitched.threads.list()).find((t) => t.title === "SIP re-INVITE handling")
 }
-export async function command({ id }) {
+export async function command({ id, args }) {
 	const t = await sip()
 	const later = new Date(Date.now() + 86400e3).toISOString().replace(/\\.\\d+Z$/, "Z")
 	switch (id) {
@@ -79,6 +80,9 @@ export async function command({ id }) {
 	case "snooze":
 		await glitched.threads.setDisposition(t.id, { state: "snoozed", until: later })
 		return
+	case "nap":
+		await glitched.threads.setDisposition(t.id, { state: "snoozed", until: args.until })
+		return
 	case "back":
 		await glitched.threads.setDisposition(t.id, { state: "inbox" }, { animation: "undo" })
 		return
@@ -88,6 +92,8 @@ export async function command({ id }) {
 			[{ state: "inbox" }, { animation: "dance" }],
 			[{ state: "snoozed", until: "2001-01-01T00:00:00Z" }, {}],
 			[{ state: "snoozed", until: "tomorrow" }, {}],
+			[{ state: "inbox" }, { animation: "settle" }],
+			[{ state: "settled" }, { animation: "snooze" }],
 		]
 		for (const [d, o] of tries) {
 			const took = await glitched.threads.setDisposition(t.id, d, o).then(() => true, () => false)
@@ -119,7 +125,7 @@ func TestAPluginFilesThreadsAndHearsThemMove(t *testing.T) {
 	h.tt.Advance(time.Second)
 	writeOwnPlugin(t, h.a, "mover", `{"id": "mover", "name": "Mover", "main": "index.js", "contract": "glitched", "contractVersion": 2,
 		"capabilities": ["threads:read", "threads:write", "ui.place"],
-		"contributes": {"commands": [{"id": "record", "title": "r"}, {"id": "settle", "title": "s"}, {"id": "snooze", "title": "z"}, {"id": "back", "title": "b"}, {"id": "wrong", "title": "w"}, {"id": "filter", "title": "f"}]},
+		"contributes": {"commands": [{"id": "record", "title": "r"}, {"id": "settle", "title": "s"}, {"id": "snooze", "title": "z"}, {"id": "back", "title": "b"}, {"id": "nap", "title": "n"}, {"id": "wrong", "title": "w"}, {"id": "filter", "title": "f"}]},
 		"glitched": {"events": ["thread.moved"]}}`, moverModule)
 	for _, c := range []string{"threads:read", "threads:write"} {
 		if err := h.a.plugins.SetGranted("mover", c, true); err != nil {
@@ -127,11 +133,15 @@ func TestAPluginFilesThreadsAndHearsThemMove(t *testing.T) {
 		}
 	}
 	settlePlugins(t, h.a, h.tt, h.p)
-	run := func(cmd string) {
+	run := func(cmd string, args ...map[string]any) {
 		t.Helper()
 		var failed error
 		ran := false
-		h.a.plugins.RunCommand("mover", cmd, nil, func(err error) { failed, ran = err, true })
+		var a map[string]any
+		if len(args) > 0 {
+			a = args[0]
+		}
+		h.a.plugins.RunCommand("mover", cmd, a, func(err error) { failed, ran = err, true })
 		h.until(cmd+" to run", func() bool { return ran })
 		settlePlugins(t, h.a, h.tt, h.p)
 		if failed != nil {
@@ -166,5 +176,61 @@ func TestAPluginFilesThreadsAndHearsThemMove(t *testing.T) {
 	run("filter")
 	if len(h.a.projectFilter) != 1 {
 		t.Errorf("the filter is %v, want mygo alone", h.a.projectFilter)
+	}
+
+	// A snooze running out is a move no engine change tells of.
+	until := h.a.now.Add(30 * time.Second).UTC().Truncate(time.Second).Add(time.Second)
+	run("nap", map[string]any{"until": until.Format(time.RFC3339)})
+	h.until("the engine to snooze it", func() bool { return th.View.Disposition.State == api.Snoozed && len(th.Pending) == 0 })
+	h.tt.Advance(3 * time.Second)
+	settlePlugins(t, h.a, h.tt, h.p)
+	for range 40 {
+		h.tt.Advance(time.Second)
+		h.p.run()
+	}
+	settlePlugins(t, h.a, h.tt, h.p)
+	if !shows("moved snoozed to inbox") {
+		t.Errorf("the plugin didn't hear the snooze run out: %q", h.tt.Texts())
+	}
+}
+
+// A plugin that can't read threads is told neither where a row is nor
+// which projects there are, nor may it pick which the sidebar shows.
+func TestAPluginThatCantReadThreadsIsNotToldWhereItsRowIs(t *testing.T) {
+	dir := tempDir(t)
+	inbox(t, dir)
+	h := start(t, dir)
+	th := h.thread("SIP re-INVITE handling")
+	h.tt.Advance(time.Second)
+	var mygo string
+	for _, p := range h.a.projects {
+		if p.name() == "mygo" {
+			mygo = p.key.String()
+		}
+	}
+	writeOwnPlugin(t, h.a, "blind", `{"id": "blind", "name": "Blind", "main": "index.js", "contract": "glitched", "contractVersion": 2,
+		"capabilities": ["ui.place", "ui.replace", "threads:write"], "contributes": {"commands": [{"id": "filter", "title": "f"}]},
+		"glitched": {"places": [{"id": "a", "at": "thread.row.actions", "replaces": true}]}}`,
+		`export function place({ items }) { return items.map((it) => ({ type: "text", text: "section=" + it.context.section })) }
+export async function command() {
+	await glitched.projects.filter(["`+mygo+`"]).then(() => glitched.toast("filtered"), (e) => glitched.toast("refused"))
+}`)
+	for _, c := range []string{"ui.replace", "threads:write"} {
+		if err := h.a.plugins.SetGranted("blind", c, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.hover(th.View.Title)
+	settlePlugins(t, h.a, h.tt, h.p)
+	if !slices.Contains(h.tt.Texts(), "section=") {
+		t.Errorf("the row was told its section: %q", h.tt.Texts())
+	}
+	ran := false
+	h.a.plugins.RunCommand("blind", "filter", nil, func(error) { ran = true })
+	h.until("the command to run", func() bool { return ran })
+	settlePlugins(t, h.a, h.tt, h.p)
+	if !h.tt.HasText("refused") || len(h.a.projectFilter) != 0 {
+		t.Errorf("a plugin that can't read threads filtered the projects to %v: %q", h.a.projectFilter, h.tt.Texts())
 	}
 }

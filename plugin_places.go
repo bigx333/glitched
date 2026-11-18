@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
@@ -61,8 +60,12 @@ var (
 )
 
 func recordVersion(r plugins.ThreadRecord) string {
-	b, _ := json.Marshal(r)
-	return string(b)
+	d := ""
+	if r.Disposition != nil {
+		d = r.Disposition.State + " " + r.Disposition.Until
+	}
+	return strings.Join([]string{r.Title, r.Workspace, r.Status, r.Machine, r.UpdatedAt, r.Section, d, strconv.FormatBool(r.Unread),
+		r.Parent, strings.Join(r.Ancestors, ","), strings.Join(r.Children, ","), strconv.Itoa(r.Requests), strconv.FormatInt(r.Tokens, 10)}, "\x00")
 }
 
 // placeKey names one copy of a plugin's place.

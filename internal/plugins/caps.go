@@ -69,7 +69,7 @@ var Effects = map[string]string{
 	"threads.interrupt":      "threads:write",
 	"projects.remove":        "threads:write",
 	"projects.list":          "threads:read",
-	"projects.filter":        "ui.place",
+	"projects.filter":        "threads:read",
 	"projects.add":           "threads:write",
 }
 

@@ -41,7 +41,12 @@ func (a *app) rowActions(c *ui.Context, t thread, cat category) {
 	box := func() ui.Element { return ui.Row(c).Key("component:thread.row.actions").Gap(0) }
 	a.popoverOpen = false
 	a.pluginComponent(c, box, "thread.row.actions", t.id().String(), &t, func(r plugins.ThreadRecord) any {
-		return rowActions{r, sectionNames[cat], snooze}
+		// A plugin that can't read threads isn't told where it is.
+		section := sectionNames[cat]
+		if r.Section == "" {
+			section = ""
+		}
+		return rowActions{r, section, snooze}
 	})
 	switch {
 	case a.popoverOpen:
@@ -141,8 +146,12 @@ func (a *app) contextMenu(id string) func(c *ui.Context, e ui.Element, name stri
 }
 
 // jokes are the row animations a plugin may play as it moves a thread,
-// each with the app's toast, if it has one.
-var jokes = map[string]gagKind{"snooze": gagSnooze, "settle": gagSettle, "undo": gagUndo}
+// each with the app's toast, if it has one, and each only as the thread
+// goes where its joke says.
+var jokes = map[string]struct {
+	kind  gagKind
+	state string
+}{"snooze": {gagSnooze, "snoozed"}, "settle": {gagSettle, "settled"}, "undo": {gagUndo, "inbox"}}
 
 // setDispositionEffect is threads.setDisposition: the thread goes to the
 // inbox, is snoozed till a time to come, or is settled, and its row plays
@@ -152,10 +161,14 @@ func (a *app) setDispositionEffect(raw json.RawMessage) (any, error) {
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, err
 	}
-	kind, joking := jokes[args.Animation]
-	if args.Animation != "" && !joking {
+	joke, joking := jokes[args.Animation]
+	switch {
+	case args.Animation != "" && !joking:
 		return nil, errors.New("threads.setDisposition: animation is snooze, settle or undo")
+	case joking && joke.state != args.State:
+		return nil, errors.New("threads.setDisposition: " + args.Animation + " plays only as a thread is " + joke.state)
 	}
+	kind := joke.kind
 	t, err := a.pluginFind(raw)
 	if err != nil {
 		return nil, err

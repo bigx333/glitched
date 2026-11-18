@@ -238,6 +238,10 @@ func TestTheSidebarWidgetsAreChecked(t *testing.T) {
 		`{"body": {"type": "tile", "icon": "code", "color": "#8b5cf6", "width": 100}}`:                                        "a width of 8 to 64",
 		`{"body": {"type": "column", "wrap": true}}`:                                                                          "only a row wraps",
 		`{"body": {"type": "text", "text": "x", "opacity": 0.5}}`:                                                             "opacity is a button's",
+		`{"body": {"type": "button", "id": "b", "label": "x", "opacity": 0.01}}`:                                              "0.2 to 1",
+		`{"body": {"type": "button", "id": "b", "style": "ghost", "label": "x", "children": [{"type": "input", "id": "i"}]}}`: "a ghost button's children are",
+		`{"body": {"type": "tile", "icon": "code", "color": "#8b5cf6", "width": 16, "background": "#ff0000"}}`:                "is none of",
+		`{"body": {"type": "button", "id": "b", "style": "ghost", "icon": "x", "color": "#ff0000", "background": "#ff0000"}}`: "is none of",
 		`{"body": {"type": "badge", "text": "x", "italic": true}}`:                                                            "isn't italic",
 	}
 	for s, want := range bad {
