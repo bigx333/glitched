@@ -121,7 +121,6 @@ func (a *app) loadSettings() {
 		log.Printf("glitched: settings: %v", err)
 	}
 	a.settings = settingsFrom(a.settings, f)
-	a.settingsOut.path = a.settingsPath()
 	a.keepSaved()
 }
 
@@ -145,7 +144,7 @@ func (a *app) saveSettings() {
 	changed := maps.Clone(all)
 	maps.DeleteFunc(changed, func(k string, v json.RawMessage) bool { return string(had[k]) == string(v) })
 	a.keepSaved()
-	a.settingsOut.save(changed, all)
+	a.settingsOut.save(a.settingsPath(), changed, all)
 }
 
 // fields is f as settings.json's keys and their values.
@@ -168,18 +167,19 @@ func fields(f settingsFile) map[string]json.RawMessage {
 // as a newer one's, stays. A file that doesn't parse, or none, takes every
 // setting. A write that fails is tried again with the next save.
 type settingsWriter struct {
-	path string
-	wg   sync.WaitGroup
+	wg sync.WaitGroup
 
 	mu      sync.Mutex
+	path    string
 	changed map[string]json.RawMessage // what no write has kept yet
 	all     map[string]json.RawMessage // every setting, as last saved
 	running bool
 }
 
-func (w *settingsWriter) save(changed, all map[string]json.RawMessage) {
+func (w *settingsWriter) save(path string, changed, all map[string]json.RawMessage) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.path = path
 	w.changed = merged(w.changed, changed)
 	w.all = all
 	if !w.running {
@@ -200,7 +200,7 @@ func merged(older, newer map[string]json.RawMessage) map[string]json.RawMessage 
 func (w *settingsWriter) drain() {
 	for {
 		w.mu.Lock()
-		changed, all := w.changed, w.all
+		path, changed, all := w.path, w.changed, w.all
 		w.changed = nil
 		if changed == nil {
 			w.running = false
@@ -208,7 +208,7 @@ func (w *settingsWriter) drain() {
 			return
 		}
 		w.mu.Unlock()
-		if err := w.write(changed, all); err != nil {
+		if err := writeSettings(path, changed, all); err != nil {
 			log.Printf("glitched: settings: %v", err)
 			w.mu.Lock()
 			w.changed = merged(changed, w.changed)
@@ -219,8 +219,8 @@ func (w *settingsWriter) drain() {
 	}
 }
 
-func (w *settingsWriter) write(changed, all map[string]json.RawMessage) error {
-	_, err := jsonfile.EditOrReset(w.path, func(f *map[string]json.RawMessage) error {
+func writeSettings(path string, changed, all map[string]json.RawMessage) error {
+	_, err := jsonfile.EditOrReset(path, func(f *map[string]json.RawMessage) error {
 		if *f == nil {
 			*f = maps.Clone(all)
 		}
