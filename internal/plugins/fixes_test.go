@@ -33,6 +33,59 @@ func TestAFailedReloadLeavesTheDatabaseOpen(t *testing.T) {
 	u.until(t, "a row added through the kept database", func() bool { return strings.Contains(texts(s), "rows 1") })
 }
 
+// An editor saving in place empties the file, then writes it: a scan
+// between the two loads nothing in place of the running code.
+func TestAFileCaughtHalfWrittenIsNotLoaded(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "keeper", "", `
+		export function init() { return { state: 0 } }
+		export function update({ state }) { return { state: state + 1 } }
+		export function view({ state }) { return { body: { type: "text", text: "clicks " + state } } }`)
+	h := open(t, state, u, fx)
+	s := session(t, h, "keeper")
+	u.until(t, "the view", func() bool { return strings.Contains(texts(s), "clicks 0") })
+	var w watcher
+	w.scan(h)
+	index := filepath.Join(Dir(state), "keeper", "index.js")
+	os.WriteFile(index, nil, 0o644)
+	w.scan(h)
+	os.WriteFile(index, []byte("export function view( {"), 0o644)
+	w.scan(h)
+	w.scan(h)
+	u.until(t, "the failed reload", func() bool { return h.Installed()[0].Err != nil })
+	s.Dispatch(UIEvent{Type: "click", Handler: "add", Node: "add"}, nil)
+	u.until(t, "a click the running code took", func() bool { return strings.Contains(texts(s), "clicks 1") })
+}
+
+// A plugin that comes or goes reloads them all, but only once the folders
+// hold still: not while another's file is caught half written. The first
+// plugin into an empty folder loads too.
+func TestAPluginComingOrGoingWaitsForTheFoldersToHoldStill(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	h := open(t, state, u, fx)
+	var w watcher
+	w.scan(h)
+	code := `
+		export function init() { return { state: 0 } }
+		export function view({ state }) { return { body: { type: "text", text: "up " + state } } }`
+	writeModule(t, state, "keeper", "", code)
+	w.scan(h)
+	w.scan(h)
+	u.until(t, "the first plugin", func() bool { return h.running1("keeper") != nil })
+	writeModule(t, state, "other", "", code)
+	os.WriteFile(filepath.Join(Dir(state), "keeper", "index.js"), nil, 0o644)
+	w.scan(h)
+	for len(u.q) > 0 { // what that scan asked for runs while the file is empty
+		(<-u.q)()
+	}
+	os.WriteFile(filepath.Join(Dir(state), "keeper", "index.js"), []byte(code), 0o644)
+	w.scan(h)
+	w.scan(h)
+	u.until(t, "the second plugin", func() bool { return h.running1("other") != nil })
+	s := session(t, h, "keeper")
+	u.until(t, "the first plugin's page", func() bool { return strings.Contains(texts(s), "up 0") })
+}
+
 func TestAPageWhoseInitFailedStartsOnceItsCodeIsFixed(t *testing.T) {
 	state, u, fx := t.TempDir(), newUIThread(), &effects{}
 	writeModule(t, state, "fixme", "", `

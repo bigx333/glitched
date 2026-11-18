@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -43,25 +44,11 @@ func fingerprint(folder string) string {
 func (h *Host) Watch(every time.Duration) (stop func()) {
 	done := make(chan struct{})
 	go func() {
-		seen := map[string]string{}
+		var w watcher
 		tick := time.NewTicker(every)
 		defer tick.Stop()
 		for {
-			entries, _ := os.ReadDir(Dir(h.state))
-			now := map[string]string{}
-			for _, e := range entries {
-				folder := filepath.Join(Dir(h.state), e.Name())
-				now[folder] = fingerprint(folder)
-			}
-			for folder, fp := range now {
-				if old, ok := seen[folder]; ok && old != fp {
-					h.hotReload(folder) // here, off the UI thread
-				}
-			}
-			if len(seen) > 0 && len(now) != len(seen) {
-				h.opts.Post(h.Reload) // a plugin came or went
-			}
-			seen = now
+			w.scan(h)
 			select {
 			case <-done:
 				return
@@ -70,6 +57,62 @@ func (h *Host) Watch(every time.Duration) (stop func()) {
 		}
 	}()
 	return func() { close(done) }
+}
+
+// watcher is what Watch saw: each folder's fingerprint as loaded, and as
+// the last scan found it.
+type watcher struct {
+	loaded, last map[string]string
+}
+
+// scan reloads the plugins whose files changed since they loaded and then
+// held still a scan: an editor may empty a file before it writes it, and
+// a scan between the two would load an empty plugin in place of the one
+// running. A plugin that came or went reloads them all, once every folder
+// held still a scan.
+func (w *watcher) scan(h *Host) {
+	entries, _ := os.ReadDir(Dir(h.state))
+	now := map[string]string{}
+	for _, e := range entries {
+		folder := filepath.Join(Dir(h.state), e.Name())
+		now[folder] = fingerprint(folder)
+	}
+	defer func() { w.last = now }()
+	if w.loaded == nil {
+		w.loaded = now
+		return
+	}
+	if !sameFolders(now, w.loaded) {
+		if maps.Equal(now, w.last) {
+			h.opts.Post(h.Reload)
+			w.loaded = now
+		}
+		return
+	}
+	loaded := map[string]string{}
+	for folder, fp := range now {
+		loaded[folder] = fp
+		switch old := w.loaded[folder]; {
+		case old == fp:
+		case w.last[folder] != fp:
+			loaded[folder] = old
+		default:
+			h.hotReload(folder) // here, off the UI thread
+		}
+	}
+	w.loaded = loaded
+}
+
+func sameFolders(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for folder := range a {
+		if _, ok := b[folder]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // hotReload reloads the plugin in folder. It verifies, signs and
