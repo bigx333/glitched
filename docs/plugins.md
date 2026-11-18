@@ -316,7 +316,26 @@ Diff panel draws the header (Changes, the count, the Unified and Split switch, W
 
 To change a built-in, press **Make a copy** under it in Settings › Plugins. Its files go to `~/.glitched/plugins/<id>`, signed with this device's key, with the grants the built-in had. The copy has the built-in's id, so it runs in the built-in's place and keeps its data. Edit it and it reloads as any plugin of yours does. **Revert to built-in** under the copy moves your folder to `~/.glitched/plugins/.reverted/<id>-<time>`, so nothing you wrote is lost, and runs the built-in again. A folder you make by hand with a built-in's id shadows it too, but starts with no grants.
 
-After changing a built-in in Glitched's source, sign it again with the release key: `GLITCHED_RELEASE_KEY=<key file> go run ./cmd/sign-bundled`. A test fails until you do. `-new` makes a new key and compiles its public half in. A copy of yours is signed with your device's key, so a new release key changes nothing installed.
+### Signing a built-in
+
+A change to a built-in's files must be signed again with the release key, or `TestTheBuiltInPluginsAreSignedByTheReleaseKey` fails. The private key is on the maintainer's Mac and in the repository's Actions secret `GLITCHED_RELEASE_KEY`, so a change is signed by a workflow:
+
+1. Push the change to a branch of `bigx333/glitched` and open its pull request.
+2. Run `gh workflow run sign-bundled.yml -R bigx333/glitched -f branch=<branch>`, or **Actions › Sign built-in plugins › Run workflow**.
+3. The workflow signs every built-in on the branch, commits the changed `signature.json` files to it, and dispatches CI on the new head, since a push made with `GITHUB_TOKEN` starts no checks. A branch that is already signed gets no commit.
+
+It refuses `main` and any name that is not a branch of the repository. It builds the signer from `main`, so the key never runs through a branch's code. Only someone with write access can dispatch it. Pull your branch after it runs.
+
+The maintainer can sign locally too: `GLITCHED_RELEASE_KEY=~/.glitched-release/release-key go run ./cmd/sign-bundled`.
+
+**Rotating the key.** On the maintainer's Mac:
+
+1. Move the old key aside: `mv ~/.glitched-release/release-key ~/.glitched-release/release-key.old`.
+2. On a new branch, run `GLITCHED_RELEASE_KEY=~/.glitched-release/release-key go run ./cmd/sign-bundled -new`. It makes the key (0600), writes its public half into `ReleaseKey` in `internal/plugins/bundled/bundled.go`, and signs every built-in.
+3. Run `gh secret set GLITCHED_RELEASE_KEY -R bigx333/glitched < ~/.glitched-release/release-key`.
+4. Commit `bundled.go` and the `signature.json` files, and merge the pull request. Then delete the old key.
+
+Every open branch that changes a built-in must take `main` in after the rotation merges, then run the workflow again. A copy of yours is signed with your device's key, so a new release key changes nothing installed.
 
 ## App events
 
