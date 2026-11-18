@@ -304,7 +304,7 @@ func (a *app) suggestView(c *ui.Context) {
 	c.Root().Background(ui.Transparent)
 	ui.Column(c).Fill().Radius(12).Background(palette.surface).Border(1, palette.border).Padding(6).Gap(0).Children(func() {
 		l := &a.suggestList
-		l.Key = func(i int) any { return a.suggestions[i].label }
+		l.Key = func(i int) any { return a.suggestions[i].insert }
 		ui.List(c.Key("suggestions"), l, len(a.suggestions), func(i int) {
 			s := a.suggestions[i]
 			r := row(c, "row", i == a.suggestIndex).Height(suggestRow).Padding(0, 10).Gap(10)
