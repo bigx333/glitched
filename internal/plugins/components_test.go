@@ -171,6 +171,13 @@ func TestAFolderOfTheSameIDMadeByHandShadowsWithNoGrants(t *testing.T) {
 	if len(h.Entries()) != 0 || h.Allowed("header", "ui.replace") {
 		t.Fatal("the shadowed built-in shows as a plugin of its own, or lent your copy its grants")
 	}
+
+	posing := filepath.Join(Dir(state), "posing")
+	writeReplacer(t, posing, replacerManifest("header"+FallbackSuffix, "thread.header.actions", "2"), actionsModule)
+	h.Reload()
+	if p := installedAs(h, posing); p.Err == nil {
+		t.Fatal("a plugin of yours took the id the built-in falls back under")
+	}
 }
 
 func TestABuiltInChangedSinceItsReleaseDoesntRun(t *testing.T) {
