@@ -94,7 +94,10 @@ func TestAPluginsDeleteAsksFirst(t *testing.T) {
 	writeOwnPlugin(t, h.a, "mine", `{"id": "mine", "name": "Mine", "main": "index.js", "contract": "glitched", "contractVersion": 2,
 		"capabilities": ["ui.place", "threads:read", "threads:write"],
 		"contributes": {"commands": [{"id": "drop", "title": "Drop"}]}, "glitched": {"menus": [{"command": "drop", "at": "thread.menu"}]}}`,
-		`export async function command({ args }) { await glitched.threads.delete(args.thread.id) }`)
+		`export async function command({ args }) {
+	await glitched.threads.delete(args.thread.id)
+	await glitched.threads.delete(args.thread.id).catch((e) => glitched.toast("Refused", e.message))
+}`)
 	for _, c := range []string{"threads:read", "threads:write"} {
 		if err := h.a.plugins.SetGranted("mine", c, true); err != nil {
 			t.Fatal(err)
@@ -114,6 +117,9 @@ func TestAPluginsDeleteAsksFirst(t *testing.T) {
 	}
 	if _, ok := h.a.find(th.id()); !ok {
 		t.Fatal("the plugin deleted the thread unasked")
+	}
+	if !strings.Contains(strings.Join(h.tt.Texts(), "|"), "another delete waits for the user") {
+		t.Errorf("a second delete took over the open confirm: %q", h.tt.Texts())
 	}
 }
 
@@ -139,12 +145,14 @@ export async function command({ id }) {
 		const why = []
 		for (const title of ["", "x".repeat(201)]) await glitched.threads.rename(t.id, title).catch((e) => why.push(e.message))
 		await glitched.projects.remove("/nowhere").catch((e) => why.push(e.message))
+		await glitched.projects.remove(t.workspace, "elsewhere").catch((e) => why.push(e.message))
 		await glitched.toast("Refused", why.join(" / "))
 		return
 	}
 	await glitched.notify("Reviewed", "All good.", { thread: t.id })
 	await glitched.composer.draft("Ship it", { thread: t.id })
-	await glitched.projects.remove(t.workspace)
+	await glitched.projects.remove(t.workspace, t.machine)
+	await glitched.projects.remove(t.workspace, t.machine).catch((e) => glitched.toast("Twice", e.message))
 }`)
 	for _, c := range []string{"threads:read", "threads:write"} {
 		if err := h.a.plugins.SetGranted("n", c, true); err != nil {
@@ -177,10 +185,13 @@ export async function command({ id }) {
 	if !h.a.removeOpen {
 		t.Error("removing the project didn't ask")
 	}
+	if !strings.Contains(strings.Join(h.tt.Texts(), "|"), "another removal waits for the user") {
+		t.Errorf("a second removal took over the open confirm: %q", h.tt.Texts())
+	}
 	h.a.removeOpen = false
 	run("bad")
 	texts := strings.Join(h.tt.Texts(), "|")
-	if !strings.Contains(texts, "a title of up to 200 bytes / threads.rename needs a title of up to 200 bytes / no project") {
+	if !strings.Contains(texts, `a title of up to 200 bytes / threads.rename needs a title of up to 200 bytes / no project "/nowhere" / no project`) {
 		t.Errorf("the bad calls weren't refused: %q", texts)
 	}
 
