@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -48,6 +50,95 @@ func (a *app) rowActions(c *ui.Context, t thread, cat category) {
 		a.snoozeFor = t.id()
 	case a.snoozeFor == t.id():
 		a.snoozeFor = api.ID{}
+	}
+}
+
+// projectRecord is a project as plugins see it: Key names it to
+// projects.filter and in a contextMenu, and Icon and Color are its mark.
+type projectRecord struct {
+	Key       string `json:"key"`
+	Workspace string `json:"workspace"`
+	Machine   string `json:"machine,omitempty"`
+	Name      string `json:"name"`
+	Icon      string `json:"icon"`
+	Color     string `json:"color"`
+	// Filtered is whether the sidebar is filtered to it.
+	Filtered bool `json:"filtered,omitempty"`
+}
+
+// projectStrip is the context of sidebar.projects.
+type projectStrip struct {
+	Projects []projectRecord `json:"projects"`
+	// Filtered is whether the sidebar shows only some projects; Picking
+	// whether Add project's folder picker is open; Machines whether there
+	// is more than one machine, whose names then tell projects apart.
+	Filtered bool `json:"filtered"`
+	Picking  bool `json:"picking"`
+	Machines bool `json:"machines"`
+}
+
+func (k projectKey) String() string { return k.server + ":" + k.workspace }
+
+// projectRecords are the sidebar's projects, in its order.
+func (a *app) projectRecords() []projectRecord {
+	out := []projectRecord{}
+	for _, p := range a.projects {
+		icon, color := p.markNames()
+		machine := ""
+		if p.env != nil {
+			machine = p.env.Name
+		}
+		out = append(out, projectRecord{p.key.String(), p.key.workspace, machine, p.name(), icon, color, a.projectFilter[p.key]})
+	}
+	return out
+}
+
+// filterEffect is projects.filter: the sidebar shows only the projects
+// named, or every one when none, or every one, is.
+func (a *app) filterEffect(raw json.RawMessage) (any, error) {
+	var args struct{ Keys []string }
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, err
+	}
+	keep := map[projectKey]bool{}
+	for _, k := range args.Keys {
+		i := slices.IndexFunc(a.projects, func(p *project) bool { return p.key.String() == k })
+		if i < 0 {
+			return nil, errors.New("projects.filter: no project " + k)
+		}
+		keep[a.projects[i].key] = true
+	}
+	clear(a.projectFilter)
+	if len(keep) < len(a.projects) {
+		maps.Copy(a.projectFilter, keep)
+	}
+	return nil, nil
+}
+
+// contextMenu gives e, in a plugin's view, the menu of Glitched's that
+// name names: a thread's or a project's, which only a plugin that reads
+// threads may open.
+func (a *app) contextMenu(id string) func(c *ui.Context, e ui.Element, name string) {
+	return func(c *ui.Context, e ui.Element, name string) {
+		if !a.plugins.Allowed(id, "threads:read") {
+			return
+		}
+		kind, ref, _ := strings.Cut(name, ":")
+		switch kind {
+		case "project":
+			if i := slices.IndexFunc(a.projects, func(p *project) bool { return p.key.String() == ref }); i >= 0 {
+				p := a.projects[i]
+				e.ContextMenu(func(m *ui.Menu) { a.projectMenu(m, p) })
+			}
+		case "thread":
+			id, err := api.ParseID(ref)
+			if err != nil {
+				return
+			}
+			if t, ok := a.find(id); ok {
+				e.ContextMenu(func(m *ui.Menu) { a.threadMenu(c, m, t, a.categoryOf(t)) })
+			}
+		}
 	}
 }
 

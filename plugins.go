@@ -505,6 +505,13 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		}
 		a.backend.Rename(t.env, t.id(), s)
 		return nil, nil
+	case "projects.list":
+		return a.projectRecords(), nil
+	case "projects.filter":
+		return a.filterEffect(e.Args)
+	case "projects.add":
+		a.addProject()
+		return nil, nil
 	case "threads.setDisposition":
 		return a.setDispositionEffect(e.Args)
 	case "threads.markRead":

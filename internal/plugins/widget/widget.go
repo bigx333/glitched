@@ -217,6 +217,13 @@ type Node struct {
 	// column's Width is the panel's, 120 to 480.
 	Popover *Node `json:"popover,omitempty"`
 	popover bool  // is one
+	// Wrap lets a row's children run onto more lines. Opacity dims a
+	// button, 0 to 1. ContextMenu names the menu of Glitched's a ghost
+	// button or a clicked row opens on a right click: "thread:<id>" or
+	// "project:<key>", with what plugins add to it.
+	Wrap        bool    `json:"wrap,omitempty"`
+	Opacity     float64 `json:"opacity,omitempty"`
+	ContextMenu string  `json:"contextMenu,omitempty"`
 
 	// Name is also a native widget's (Natives), and Props what it is
 	// passed.
@@ -405,7 +412,7 @@ func (c *checker) node(n *Node, path string, depth int) error {
 		}
 		c.ids[n.ID] = true
 	}
-	if k != container && k != dialog && len(n.Children) > 0 {
+	if k != container && k != dialog && len(n.Children) > 0 && !(n.Type == "button" && n.Style == "ghost") {
 		return fail("a %s has no children", n.Type)
 	}
 	for _, s := range []string{n.Text, n.Title, n.Label, n.Placeholder} {
@@ -594,6 +601,14 @@ func (c *checker) extra(n *Node) error {
 		return fmt.Errorf("only a button with a popover has onClose")
 	case n.Italic && n.Type != "text":
 		return fmt.Errorf("a %s isn't italic", n.Type)
+	case n.Wrap && n.Type != "row":
+		return fmt.Errorf("only a row wraps")
+	case n.Opacity != 0 && (n.Type != "button" || n.Opacity < 0 || n.Opacity > 1):
+		return fmt.Errorf("opacity is a button's, 0 to 1")
+	case n.ContextMenu != "" && !ghost && !(n.Type == "row" && n.OnClick != nil):
+		return fmt.Errorf("only a ghost button or a clicked row has a contextMenu")
+	case n.ContextMenu != "" && (!strings.HasPrefix(n.ContextMenu, "thread:") && !strings.HasPrefix(n.ContextMenu, "project:") || len(n.ContextMenu) > 1024):
+		return fmt.Errorf("a contextMenu is thread:<id> or project:<key>")
 	case n.OnClick != nil && (n.Type == "row" || n.Type == "column") && n.ID == "":
 		return fmt.Errorf("a %s that is clicked needs an id", n.Type)
 	}
@@ -655,8 +670,10 @@ func (c *checker) extra(n *Node) error {
 		return fmt.Errorf("a tooltip is up to %d bytes and a badge up to %d", MaxTooltip, MaxBadge)
 	case (n.Icon != "" || n.Compact) && !drawn:
 		return fmt.Errorf("only a ghost or outline %s has an icon, or a bordered one", n.Type)
-	case n.Style == "ghost" && n.Icon == "":
-		return fmt.Errorf("a ghost button shows an icon, which it doesn't name")
+	case n.Style == "ghost" && n.Icon == "" && len(n.Children) == 0:
+		return fmt.Errorf("a ghost button shows an icon or its children, which it hasn't")
+	case n.Style == "ghost" && n.Icon != "" && len(n.Children) > 0:
+		return fmt.Errorf("a ghost button shows an icon or its children, not both")
 	case n.Type == "item" && n.Icon == "":
 		return fmt.Errorf("an item shows an icon, which it doesn't name")
 	case n.Compact && (n.Icon == "" || n.Type == "item"):

@@ -49,8 +49,9 @@ func (a *app) pluginStyle(id string) render.Style {
 				a.frosted(c, panel).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.35)).Children(body)
 			})
 		},
-		Tile: func(c *ui.Context, icon *ui.SVG, color ui.Color, size float32) { tile(c, icon, color, size) },
-		Keys: func(c *ui.Context, keys []string) { kbd(c, keys...) },
+		ContextMenu: a.contextMenu(id),
+		Tile:        func(c *ui.Context, icon *ui.SVG, color ui.Color, size float32) { tile(c, icon, color, size) },
+		Keys:        func(c *ui.Context, keys []string) { kbd(c, keys...) },
 	}
 }
 
