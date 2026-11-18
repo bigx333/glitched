@@ -1,0 +1,122 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/egoist/mygo/ui"
+)
+
+// Each setting the Settings pages edit is as it was set once the app
+// starts anew on the same state directory.
+func TestSettingsOutliveARestart(t *testing.T) {
+	dir := t.TempDir()
+	a := newApp(dir, nil, func(func()) {})
+	tt := ui.NewTester(a.view, 1320, 860)
+	a.router.Push("/settings/appearance")
+	tt.Frame()
+	click(t, tt, "Tint the panels")
+	tt.Frame()
+	if !a.settings.tintPanels {
+		t.Fatal("the switch left Tint panels off")
+	}
+	s := &a.settings
+	s.confirmDelete, s.theme, s.accent, s.glass, s.vibrancy, s.wind, s.fontSize = false, "Light", 3, false, 0.25, false, 15
+	s.timeFormat, s.streaming, s.newThreadMode, s.notifications = "24-hour", false, 1, false
+	s.claudeEnabled, s.claudePath, s.claudeModel, s.claudeCustom = false, "/usr/local/bin/claude", "Claude Haiku 5.5", []string{"x", "y"}
+	s.codexEnabled, s.codexPath, s.codexModel, s.codexCustom = false, "", "GPT-5.5 mini", []string{"z"}
+	tt.Frame()
+	a.settingsOut.wait()
+	want := fileOf(a.settings)
+	if reflect.DeepEqual(want, fileOf(offline(t).settings)) {
+		t.Fatal("the test sets every setting to its default")
+	}
+	if got := fileOf(newApp(dir, nil, func(func()) {}).settings); !reflect.DeepEqual(got, want) {
+		t.Fatalf("after a restart the settings are\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+// A settings.json that's missing, older than a setting, names what the
+// pages no longer offer or doesn't parse keeps the defaults for what it
+// doesn't give.
+func TestASettingsFileGivesOnlyWhatThePagesOffer(t *testing.T) {
+	defaults := offline(t).settings
+	with := func(change func(*settings)) settingsFile {
+		s := defaults
+		change(&s)
+		return fileOf(s)
+	}
+	for _, tc := range []struct {
+		name, file string
+		want       settingsFile
+	}{
+		{"missing", "", fileOf(defaults)},
+		{"older", `{"theme":"Light","wind":false}`, with(func(s *settings) { s.theme, s.wind = "Light", false })},
+		{"stale", `{"theme":"Neon","accent":"Mauve","fontSize":99,"glassTint":-1,"timestamps":"Mayan","newThread":"Cloud","claude":{"enabled":true,"model":"Claude 2"}}`, fileOf(defaults)},
+		{"mistyped", `{"wind":"yes","glass":false}`, with(func(s *settings) { s.glass = false })},
+		{"corrupt", `{"theme": `, fileOf(defaults)},
+		{"not an object", `[1, 2]`, fileOf(defaults)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.file != "" {
+				if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(tc.file), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := fileOf(newApp(dir, nil, func(func()) {}).settings); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("the settings are\n%+v\nwant\n%+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A change saved over a settings.json that doesn't parse replaces it, and
+// leaves the app's other files as they were.
+func TestACorruptSettingsFileIsReplacedAlone(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, s string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("settings.json", "{oops")
+	write("composer.json", `{"model":"Claude Sonnet 5.5"}`)
+	write("layout.json", `{"previewWidth":500}`)
+	a := newApp(dir, nil, func(func()) {})
+	a.settings.wind = false
+	a.saveSettings()
+	a.settingsOut.wait()
+	again := newApp(dir, nil, func(func()) {})
+	if again.settings.wind || again.model != "Claude Sonnet 5.5" || again.previewDragged != 500 {
+		t.Fatalf("after the save, wind %v, model %q, preview %v", again.settings.wind, again.model, again.previewDragged)
+	}
+}
+
+// Two windows on one state directory each change a setting: neither undoes
+// the other's, and a key this version doesn't know stays in the file.
+func TestTwoWindowsKeepEachOthersSettings(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(path, []byte(`{"fromANewerVersion":42}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	one, two := newApp(dir, nil, func(func()) {}), newApp(dir, nil, func(func()) {})
+	one.settings.theme = "Dark"
+	one.saveSettings()
+	one.settingsOut.wait()
+	two.settings.fontSize = 14
+	two.saveSettings()
+	two.settingsOut.wait()
+	again := newApp(dir, nil, func(func()) {}).settings
+	if again.theme != "Dark" || again.fontSize != 14 {
+		t.Fatalf("after both saved, theme %q and font size %v", again.theme, again.fontSize)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(b), `"fromANewerVersion": 42`) {
+		t.Fatalf("settings.json lost the newer version's key (%v):\n%s", err, b)
+	}
+}
