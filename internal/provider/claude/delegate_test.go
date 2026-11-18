@@ -196,8 +196,11 @@ func TestAClaudeParentDelegatesATask(t *testing.T) {
 		t.Errorf("the child's first message %q, want the task %q", text, call.Arguments.Task)
 	}
 
+	// The child's report starts the parent's next run, which may have
+	// appended its own line by now.
+	first, _, _ := strings.Cut(string(must(os.ReadFile(argv))), "\n")
 	var args []string
-	json.Unmarshal([]byte(strings.TrimSpace(string(must(os.ReadFile(argv))))), &args)
+	json.Unmarshal([]byte(first), &args)
 	i := slices.Index(args, "--mcp-config")
 	if i < 0 {
 		t.Fatalf("claude ran with %q, want an --mcp-config", args)

@@ -75,6 +75,15 @@ func sleeper(t *testing.T, env ...string) *child {
 	return nil
 }
 
+// needPIDPick skips the test where the kernel lets no PID namespace pick
+// its next PID, as reuse does.
+func needPIDPick(t *testing.T) {
+	t.Helper()
+	if _, err := os.Stat("/proc/sys/kernel/ns_last_pid"); err != nil {
+		t.Skipf("no ns_last_pid to pick the next PID with: %v", err)
+	}
+}
+
 // reuse ends old and starts in its PID a process that sleeps with env.
 func reuse(t *testing.T, old *child, env ...string) *child {
 	t.Helper()
@@ -123,6 +132,7 @@ func deny(t *testing.T, nr uintptr, errno syscall.Errno) {
 // A process found with the run's marker can exit before it is signalled,
 // and its PID go to another process. That one is not signalled.
 func TestAReusedPIDIsNotSignalled(t *testing.T) {
+	needPIDPick(t)
 	if !inPIDNamespace(t) {
 		return
 	}
@@ -142,6 +152,7 @@ func TestAReusedPIDIsNotSignalled(t *testing.T) {
 // to a later scan, rather than to a signal by PID, which can reach another
 // process that took the PID since.
 func TestAProcessWithoutAPidfdIsNotSignalledByPID(t *testing.T) {
+	needPIDPick(t)
 	if !inPIDNamespace(t) {
 		return
 	}
