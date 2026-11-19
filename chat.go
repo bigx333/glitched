@@ -670,7 +670,17 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, w client.WorkSte
 	}
 	if r.Children(func() {
 		ui.Icon(c, icon).FontSize(12).TextColor(palette.faint)
-		ui.Text(c, w.Title).FontSize(12).SingleLine().Shrink(1).TextColor(palette.text)
+		// An edit's path reads from the workspace and gives way at its
+		// start, so the file's name shows.
+		if verb, ok := strings.CutSuffix(w.Title, " "+w.Path); ok && w.Path != "" {
+			path := shownPath(t.View.Workspace, w.Path)
+			ui.Row(c).Gap(4).Shrink(1).Label(verb + " " + path).Children(func() {
+				ui.Text(c, verb).FontSize(12).SingleLine().Shrink(0).TextColor(palette.text)
+				ui.Text(c, path).FontSize(12).SingleLine().TruncateStart().Shrink(1).TextColor(palette.text)
+			})
+		} else {
+			ui.Text(c, w.Title).FontSize(12).SingleLine().Shrink(1).TextColor(palette.text)
+		}
 		if file >= 0 {
 			add, del := a.diffStats(t, files[file])
 			counts(c, add, del)
