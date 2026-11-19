@@ -151,3 +151,29 @@ func TestTheHeroIsCentred(t *testing.T) {
 		}
 	}
 }
+
+// A thread with messages, chosen from the new thread's draft, never shows
+// the empty thread's greeting, even in a window out of sight, where MyGo
+// holds the composer's move to its dock on its first frame and the hero's
+// own greeting stays (NEL-49).
+func TestAThreadChosenFromTheDraftIsNeverEmpty(t *testing.T) {
+	for _, hidden := range []bool{false, true} {
+		h, th := checked(t)
+		h.a.newThread()
+		h.tt.Advance(time.Second)
+		settlePlugins(t, h.a, h.tt, h.p)
+		h.tt.SetWindowHidden(hidden)
+		if err := h.tt.Click(th.View.Title); err != nil {
+			t.Fatal(err)
+		}
+		for range 6 {
+			if h.tt.HasText("Send a message to start the conversation.") {
+				t.Fatalf("hidden %v: a thread with messages shows the empty thread's greeting", hidden)
+			}
+			if !h.tt.HasText("One test fails.") {
+				t.Fatalf("hidden %v: the thread's messages aren't built", hidden)
+			}
+			h.tt.Advance(50 * time.Millisecond)
+		}
+	}
+}
