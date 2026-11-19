@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"path/filepath"
 	"slices"
@@ -238,4 +240,69 @@ func (a *app) shownAccess(t thread) string {
 		return a.access
 	}
 	return threadChoice(t).Access
+}
+
+// modelRecords is models.list: the models the picker offers, each by its
+// name, its provider's family and what it's for, and the efforts.
+func modelRecords() any {
+	type record struct {
+		Name        string `json:"name"`
+		Provider    string `json:"provider"`
+		Description string `json:"description"`
+	}
+	out := struct {
+		Models  []record `json:"models"`
+		Efforts []string `json:"efforts"`
+	}{}
+	for _, m := range models {
+		out.Models = append(out.Models, record{m.name, m.provider, m.desc})
+	}
+	for _, e := range efforts {
+		out.Efforts = append(out.Efforts, strings.ToLower(e))
+	}
+	return out
+}
+
+// configureEffect is threads.configure: the model, effort and fast mode of
+// the thread's next turn, as its picker sets them, and only those. The
+// access is the access picker's alone, so a configure that names it, or
+// anything else, is refused whole.
+func (a *app) configureEffect(args json.RawMessage) (any, error) {
+	var in struct {
+		Type   string // the call's own, threads.configure
+		Thread string
+		Model  *string
+		Effort *string
+		Fast   *bool
+	}
+	d := json.NewDecoder(bytes.NewReader(args))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&in); err != nil {
+		return nil, fmt.Errorf("threads.configure sets a model, an effort and fast mode, and nothing else: %v", err)
+	}
+	if in.Model == nil && in.Effort == nil && in.Fast == nil {
+		return nil, errors.New("threads.configure needs a model, an effort or fast mode")
+	}
+	t, err := a.pluginFind(args)
+	if err != nil {
+		return nil, err
+	}
+	c := api.ThreadConfigure{Fast: in.Fast}
+	if in.Model != nil {
+		// A thread keeps its provider: its session is that provider's.
+		family := familyOf(t.View.Model.Provider)
+		if !slices.ContainsFunc(models, func(m modelInfo) bool { return m.name == *in.Model && m.provider == family }) {
+			return nil, fmt.Errorf("%q is no model of the thread's provider, %s", *in.Model, t.View.Model.Provider)
+		}
+		c.Model = in.Model
+	}
+	if in.Effort != nil {
+		i := slices.IndexFunc(efforts, func(e string) bool { return strings.EqualFold(e, *in.Effort) })
+		if i < 0 {
+			return nil, errors.New("an effort is low, medium, high or max")
+		}
+		c.Effort = new(strings.ToLower(efforts[i]))
+	}
+	a.backend.ConfigureThread(t.env, t.id(), c)
+	return nil, nil
 }

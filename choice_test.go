@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
+	"glitched/internal/plugins/widget"
 	"glitched/internal/provider/fake"
 )
 
@@ -636,5 +638,94 @@ func TestADefaultChosenByAThumbTheDraftLostIsKept(t *testing.T) {
 				t.Errorf("the thread's effort is %q with %+v pending, want high and nothing sent", got, th.Pending)
 			}
 		})
+	}
+}
+
+const configurerModule = `export async function command({ id, args }) {
+	switch (id) {
+	case "list": {
+		const l = await glitched.models.list()
+		await glitched.toast("models " + l.models.map((m) => m.provider + ":" + m.name).join(",") + " efforts " + l.efforts.join(","))
+		return
+	}
+	case "configure":
+		await glitched.threads.configure(args.thread, args.options)
+		return
+	}
+}`
+
+// A plugin lists the picker's models and sets a thread's model, effort and
+// fast mode as the picker does, under threads:write, but never its access:
+// a configure that names it, or anything else, is refused whole. The
+// Providers page is Glitched's own: no plugin replaces or places it.
+func TestAPluginConfiguresAThreadsModelButNeverItsAccess(t *testing.T) {
+	h := start(t, tempDir(t))
+	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
+	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAutoEdits)
+	h.thread("Mine")
+	writeOwnPlugin(t, h.a, "configurer", `{"id": "configurer", "name": "Configurer", "main": "index.js", "contract": "glitched", "contractVersion": 2,
+		"capabilities": ["threads:write"], "contributes": {"commands": [{"id": "list", "title": "l"}, {"id": "configure", "title": "c"}]}}`, configurerModule)
+	settlePlugins(t, h.a, h.tt, h.p)
+	run := func(cmd string, options map[string]any) error {
+		t.Helper()
+		var failed error
+		ran := false
+		h.a.plugins.RunCommand("configurer", cmd, map[string]any{"thread": id.String(), "options": options}, func(err error) { failed, ran = err, true })
+		h.until(cmd+" to run", func() bool { return ran })
+		settlePlugins(t, h.a, h.tt, h.p)
+		return failed
+	}
+	if err := run("list", nil); err != nil {
+		t.Fatal(err)
+	}
+	if !h.tt.HasText("models Claude:Claude Opus 5.5,Claude:Claude Sonnet 5.5") || !h.tt.HasText("efforts low,medium,high,max") {
+		t.Errorf("models.list answered %q", h.tt.Texts())
+	}
+	sonnet := map[string]any{"model": "Claude Sonnet 5.5", "effort": "Low", "fast": true}
+	if err := run("configure", sonnet); err == nil || !strings.Contains(err.Error(), "threads:write") {
+		t.Fatalf("configured without threads:write: %v", err)
+	}
+	if err := h.a.plugins.SetGranted("configurer", "threads:write", true); err != nil {
+		t.Fatal(err)
+	}
+	settlePlugins(t, h.a, h.tt, h.p)
+	for _, options := range []map[string]any{
+		{"access": "full"},
+		{"model": "Claude Sonnet 5.5", "access": "full"},
+		{"Access": "full"},
+		{"fast": true, "provider": "codex"},
+		{"model": "GPT-5.5"},
+		{"effort": "extreme"},
+		{},
+	} {
+		if err := run("configure", options); err == nil {
+			t.Errorf("configure %v was taken", options)
+		}
+	}
+	if v := h.thread("Mine"); v.View.Model != opus || v.View.Access != api.AccessAutoEdits || len(v.Pending) != 0 {
+		t.Fatalf("a refused configure changed the thread: %+v %v, pending %v", v.View.Model, v.View.Access, v.Pending)
+	}
+	if err := run("configure", sonnet); err != nil {
+		t.Fatal(err)
+	}
+	want := api.ModelRef{Provider: "claude", Model: "Claude Sonnet 5.5", Effort: "low", Fast: true}
+	h.until("the thread's new model", func() bool {
+		v := h.thread("Mine").View
+		return v.Model == want && v.Access == api.AccessAutoEdits
+	})
+
+	writeOwnPlugin(t, h.a, "providers", replacing("providers", "settings.providers"), `export function place({ items }) { return items.map(() => ({ type: "text", text: "Mine" })) }`)
+	h.a.plugins.SetGranted("providers", "ui.replace", true)
+	h.a.plugins.Reload()
+	if err := installed(h.a, "providers").Err; err == nil || !strings.Contains(err.Error(), "settings.providers, which is off limits to plugins") {
+		t.Errorf("a plugin replacing the Providers page loaded: %v", err)
+	}
+	if _, err := widget.Decode([]byte(`{"body": {"type": "native", "name": "settings.providers"}}`)); err == nil || !strings.Contains(err.Error(), "off limits") {
+		t.Errorf("a view may place the Providers page: %v", err)
+	}
+	h.a.router.Push("/settings/providers")
+	h.tt.Frame()
+	if !h.tt.HasText("Claude Code") || h.tt.HasText("Mine") {
+		t.Errorf("the Providers page isn't Glitched's: %q", h.tt.Texts())
 	}
 }

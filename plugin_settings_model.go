@@ -47,6 +47,7 @@ var partTitles = map[string]string{
 	"composer.send":             "Send and stop",
 	"settings.plugins":          "Settings › Plugins",
 	"settings.servers":          "Settings › Servers",
+	"settings.providers":        "Settings › Providers",
 	"confirm.destructive":       "Delete confirmation",
 }
 

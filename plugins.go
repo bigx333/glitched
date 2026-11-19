@@ -514,6 +514,10 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		return nil, nil
 	case "threads.setDisposition":
 		return a.setDispositionEffect(e.Args)
+	case "models.list":
+		return modelRecords(), nil
+	case "threads.configure":
+		return a.configureEffect(e.Args)
 	case "threads.markRead":
 		t, err := a.pluginFind(e.Args)
 		if err != nil {
