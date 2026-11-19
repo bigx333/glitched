@@ -650,3 +650,36 @@ func TestASplitDiffGoesWithoutAPanic(t *testing.T) {
 		})
 	}
 }
+
+// A diff opened from the work log paints in the frame that makes room for
+// it, even in a window none of which shows, where MyGo draws the frame
+// after input but holds what moves till the window shows: the panel's
+// entrance can't start from nothing (NEL-49).
+func TestADiffOpensPainted(t *testing.T) {
+	h, _ := checked(t)
+	h.tt.SetSize(1320, 860)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.SetWindowHidden(true)
+	if err := h.tt.Click("Edit " + sidebarPath); err != nil {
+		t.Fatal(err)
+	}
+	heading, ok := h.tt.Find("Changes")
+	if !ok {
+		t.Fatalf("no Changes heading in the first frame: %q", h.tt.Texts())
+	}
+	if _, ok := h.tt.Find("Close diff"); !ok {
+		t.Fatal("no Close diff in the first frame")
+	}
+	img := h.tt.Image()
+	scale := float32(img.Bounds().Dx()) / 1320
+	colors := map[[4]uint8]bool{}
+	for y := int((heading.Y - 8) * scale); y < img.Bounds().Max.Y; y++ {
+		for x := int((heading.X - 8) * scale); x < img.Bounds().Max.X; x++ {
+			i := img.PixOffset(x, y)
+			colors[[4]uint8(img.Pix[i:i+4])] = true
+		}
+	}
+	if len(colors) < 16 {
+		t.Errorf("the diff panel's first frame is blank: %d colors", len(colors))
+	}
+}
