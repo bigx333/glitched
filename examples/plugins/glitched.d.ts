@@ -476,7 +476,7 @@ interface DiffPanelContext {
   /** The thread's files are on this machine. */
   local: boolean;
   /** The files the agent changed, in the order it first changed them. */
-  files: { path: string; add: number; del: number; reviewed: boolean; /** Its diff is read, which marking it needs. */ read: boolean }[];
+  files: { path: string; /** The path as the user reads it: from the workspace. */ name: string; add: number; del: number; reviewed: boolean; /** Its diff is read, which marking it needs. */ read: boolean }[];
   /** The file diff.body shows, "" with none. */
   shown: string;
   /** As shown: split falls back to unified while it doesn't fit. */

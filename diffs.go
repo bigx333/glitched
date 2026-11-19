@@ -207,7 +207,7 @@ func shownPath(workspace, path string) string {
 	}
 	rel, err := filepath.Rel(unaliased(expandHome(workspace)), unaliased(path))
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return path
+		return filepath.Clean(path)
 	}
 	return rel
 }

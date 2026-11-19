@@ -757,6 +757,7 @@ func TestShownPath(t *testing.T) {
 		{"/var/folders/x/app", "/private/var/folders/x/app/a.txt", "a.txt"},
 		{"/private/var/folders/x/app", "/var/folders/x/app/a.txt", "a.txt"},
 		{"/work/app", "/work/other/a.txt", "/work/other/a.txt"},
+		{"/work/app", "/work/other//b/../a.txt", "/work/other/a.txt"},
 		{"/work/app", "/work/app", "/work/app"},
 	} {
 		if got := shownPath(tc.ws, tc.path); got != tc.want {
