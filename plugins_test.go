@@ -199,8 +199,8 @@ func TestSnippetsStartsAThreadOnceGranted(t *testing.T) {
 	h.tt.Frame()
 	h.openPlugin("Snippets")
 	for about, grant := range map[string]string{
-		"Read your threads' titles, workspaces and status, and show a thread": "Grant threads:read to Snippets",
-		"Start threads and send messages to them, which runs agents":          "Grant threads:write to Snippets",
+		"Read your threads' titles, workspaces and status, and show a thread":                          "Grant threads:read to Snippets",
+		"Start threads and send messages to them, which runs agents, and change the model they run at": "Grant threads:write to Snippets",
 	} {
 		if !h.tt.HasText(about) {
 			t.Fatalf("no %q in %q", about, h.tt.Texts())

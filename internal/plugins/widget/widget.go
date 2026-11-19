@@ -101,6 +101,7 @@ var Locked = map[string]string{
 	"composer.send":       "send and stop run and stop agents, so only Glitched draws them",
 	"settings.plugins":    "it is where you turn plugins off, so no plugin draws it",
 	"settings.servers":    "pairing an engine trusts a machine, so only Glitched draws it",
+	"settings.providers":  "it chooses the program Glitched runs as an agent, so only Glitched draws it",
 	"confirm.destructive": "a confirm before something is deleted must be Glitched's own",
 }
 

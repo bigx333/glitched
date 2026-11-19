@@ -362,8 +362,9 @@ type Slot = "thread.header" | "thread.row" | "sidebar.footer";
  * Glitched's components: a place with `replaces: true` at one draws it in
  * place of the built-in plugin, once ui.replace is granted. Needs
  * contractVersion 2. approval.card, question.card, composer.access,
- * composer.send, settings.plugins, settings.servers and
- * confirm.destructive are off limits: a plugin that names one doesn't load.
+ * composer.send, settings.plugins, settings.servers, settings.providers
+ * and confirm.destructive are off limits: a plugin that names one doesn't
+ * load.
  */
 type Component =
   | "thread.header.actions"
@@ -601,6 +602,16 @@ declare const glitched: {
     markRead(thread: string): Promise<void>;
     /** Stops its agent, if one runs. Needs threads:write. */
     interrupt(thread: string): Promise<void>;
+    /**
+     * The model (one of models.list, of the thread's provider), effort and
+     * fast mode of its next turn. Never the access: naming it, or anything
+     * else, is refused. Needs threads:write.
+     */
+    configure(thread: string, options: { model?: string; effort?: "low" | "medium" | "high" | "max"; fast?: boolean }): Promise<void>;
+  };
+  models: {
+    /** The models the composer's picker offers, and the efforts. */
+    list(): Promise<{ models: { name: string; provider: string; description: string }[]; efforts: string[] }>;
   };
   projects: {
     /** In the sidebar's order. Needs threads:read. */

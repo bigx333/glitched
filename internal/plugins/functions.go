@@ -60,7 +60,9 @@ globalThis.glitched = Object.freeze({
     setDisposition: (thread, disposition, options = {}) => app("threads.setDisposition", { ...options, ...disposition, thread }),
     markRead: (thread) => app("threads.markRead", { thread }),
     interrupt: (thread) => app("threads.interrupt", { thread }),
+    configure: (thread, options = {}) => app("threads.configure", { ...options, thread }),
   }),
+  models: Object.freeze({ list: () => app("models.list") }),
   projects: Object.freeze({
     remove: (workspace, machine) => app("projects.remove", { workspace, machine: machine ?? "" }),
     list: () => app("projects.list"),

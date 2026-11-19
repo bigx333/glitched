@@ -42,6 +42,7 @@ var Components = []Component{
 	{Name: "composer.send", Locked: widget.Locked["composer.send"]},
 	{Name: "settings.plugins", Locked: widget.Locked["settings.plugins"]},
 	{Name: "settings.servers", Locked: widget.Locked["settings.servers"]},
+	{Name: "settings.providers", Locked: widget.Locked["settings.providers"]},
 	{Name: "confirm.destructive", Locked: widget.Locked["confirm.destructive"]},
 }
 
