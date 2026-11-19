@@ -94,9 +94,11 @@ func (a *app) pluginStanding(p plugins.Plugin) (string, tone) {
 	case a.plugins.Failed(p.ID) != nil:
 		return "Failed", toneBad
 	}
+	// Not a thing to do: the grant it lacks is one the user may well
+	// mean to withhold.
 	for _, name := range p.Replaces {
-		if a.partState(p, name).tone == toneWarn {
-			return "Needs a grant", toneWarn
+		if a.partState(p, name).word == "Not granted" {
+			return "Not granted to draw", toneQuiet
 		}
 	}
 	for _, f := range a.pluginUpdates {
@@ -122,36 +124,53 @@ func (a *app) partState(p plugins.Plugin, name string) partState {
 			comp = c
 		}
 	}
-	fallback := ", so the built-in draws it"
-	if p.Builtin {
-		fallback = ""
+	// Who draws it when this one doesn't: the built-in, another plugin
+	// of the user's ahead of it, or nothing.
+	instead := "."
+	switch drawer, drawn := a.partDrawer(name); {
+	case !drawn:
+		instead = ", and nothing draws it."
+	case drawer.Folder == p.Folder:
+	case drawer.Builtin:
+		instead = ", so the built-in draws it."
+	default:
+		instead = ", so " + drawer.Name + " draws it."
 	}
 	switch {
 	case !p.Enabled:
-		return partState{"Off", toneQuiet, "This plugin is off" + fallback + "."}
+		return partState{"Off", toneQuiet, "This plugin is off" + instead}
 	case p.Err != nil:
-		return partState{"Not drawing", toneBad, "It isn't running" + fallback + "."}
+		return partState{"Not drawing", toneBad, "It isn't running" + instead}
 	case !a.plugins.Allowed(p.ID, "ui.replace"):
-		return partState{"Needs a grant", toneWarn, "It draws it once you grant it ui.replace."}
+		return partState{"Not granted", toneQuiet, "It isn't granted ui.replace" + instead}
 	case comp.Needs != "" && !a.plugins.Allowed(p.ID, comp.Needs):
-		return partState{"Needs a grant", toneWarn, "It draws it once you grant it " + comp.Needs + ", which the part's context needs."}
+		return partState{"Not granted", toneQuiet, "It isn't granted " + comp.Needs + ", which this part's context needs" + instead}
 	case a.plugins.Failed(p.ID) != nil:
-		return partState{"Failed", toneBad, "It failed" + fallback + ": " + a.plugins.Failed(p.ID).Error()}
+		return partState{"Failed", toneBad, "It failed" + strings.TrimSuffix(instead, ".") + ": " + a.plugins.Failed(p.ID).Error()}
 	}
-	if rs := a.plugins.Replacers(name); len(rs) > 0 && rs[0].Plugin != p.ID {
-		return partState{"Standing by", toneQuiet, a.plugins.Name(rs[0].Plugin) + " draws it in place of this one."}
+	if drawer, drawn := a.partDrawer(name); drawn && drawer.Folder != p.Folder {
+		return partState{"Standing by", toneQuiet, drawer.Name + " draws it in place of this one."}
 	}
 	return partState{"Drawing it now", toneGood, cmpOr(comp.About, "It draws it now.")}
 }
 
-// partDrawer is the plugin that draws the component now, if one does: a
-// copy of the user's rather than the built-in it stands in for.
-func (a *app) partDrawer(name string, list []plugins.Plugin) (plugins.Plugin, bool) {
+// partDrawer is the plugin that draws the component now, if one does:
+// the first that replaces it whose last drawing went well, as
+// pluginComponent picks it, else the first.
+func (a *app) partDrawer(name string) (plugins.Plugin, bool) {
 	rs := a.plugins.Replacers(name)
 	if len(rs) == 0 {
 		return plugins.Plugin{}, false
 	}
-	i := slices.IndexFunc(list, func(p plugins.Plugin) bool { return p.ID == rs[0].Plugin && p.ShadowedBy == "" })
+	id := rs[0].Plugin
+	for _, r := range rs {
+		if a.plugins.Failed(r.Plugin) == nil {
+			id = r.Plugin
+			break
+		}
+	}
+	list := a.plugins.Installed()
+	i := slices.IndexFunc(list, func(p plugins.Plugin) bool { return p.ID == id })
 	if i < 0 {
 		return plugins.Plugin{}, false
 	}
@@ -165,27 +184,31 @@ type pluginGroup struct {
 	list         []plugins.Plugin
 }
 
-// groupPlugins sorts the plugins by whose they are, which no grant or
-// switch changes: a row never moves under the pointer.
+// groupPlugins sorts the plugins into those the user added and those
+// built in, which no switch, grant or failure changes: a row never moves
+// under the pointer. Whose an added one is isn't known while it's off,
+// so its row says it, not its group.
 func groupPlugins(list []plugins.Plugin) []pluginGroup {
 	gs := []pluginGroup{
-		{title: "YOURS", empty: "Nothing of yours yet. Make a copy of a built-in to change a part of Glitched, or put a plugin's folder in the plugins folder below."},
-		{title: "FROM OTHERS"},
+		{title: "ADDED BY YOU", empty: "Nothing added yet. Make a copy of a built-in to change a part of Glitched, or install a plugin below."},
 		{title: "BUILT INTO GLITCHED"},
 	}
 	for _, p := range list {
-		i := 1
-		switch {
-		case p.Builtin:
-			i = 2
-		case p.Trust == plugins.TrustOwn || p.Trust == plugins.TrustUnsigned || p.Trust == "":
-			// One that failed before its signature was read is in the
-			// user's folder, and no one else's key has been allowed for it.
-			i = 0
-		}
-		gs[i].list = append(gs[i].list, p)
+		gs[btoi(p.Builtin)].list = append(gs[btoi(p.Builtin)].list, p)
 	}
 	return gs
+}
+
+// originTag marks an added plugin's row with whose it is, "" for one of
+// the user's own or one not yet known.
+func originTag(p plugins.Plugin) string {
+	switch {
+	case p.Shadows:
+		return "Your copy"
+	case p.Trust == plugins.TrustConsented || p.Trust == plugins.TrustWaiting || p.Trust == plugins.TrustTampered:
+		return "Someone else's"
+	}
+	return ""
 }
 
 // matchesPlugin is whether the filter's words are all in what the plugin
@@ -232,7 +255,7 @@ func pluginSummary(p plugins.Plugin) string {
 		out = append(out, fmt.Sprintf("granted %d of %d", given, asked))
 	}
 	if len(out) == 0 {
-		return cmpOr(p.Description, "Asks for nothing")
+		return cmpOr(p.Description, "Needs no grant")
 	}
 	s := strings.Join(out, " · ")
 	return strings.ToUpper(s[:1]) + s[1:]
@@ -244,15 +267,15 @@ func trustWords(p plugins.Plugin) (who, how string) {
 	case p.Trust == plugins.TrustBuiltin:
 		return "Built into Glitched", "Signed by Glitched's release key."
 	case p.Trust == plugins.TrustOwn && p.Shadows:
-		return "Yours, in place of the built-in", "Signed by this device, key " + p.Signer + "."
+		return "Yours, in place of the built-in", "Signed by this device's key or one you trust: " + p.Signer + "."
 	case p.Trust == plugins.TrustOwn:
-		return "Yours", "Signed by this device, key " + p.Signer + "."
+		return "Yours", "Signed by this device's key or one you trust: " + p.Signer + "."
 	case p.Trust == plugins.TrustConsented:
 		return "Someone else's, allowed", "Signed by key " + p.Signer + "."
 	case p.Trust == plugins.TrustWaiting:
 		return "Someone else's", "Signed by key " + p.Signer + "."
 	case p.Trust == plugins.TrustTampered:
-		return "Changed since it was signed", cmpOr(p.Signer, "no key")
+		return "Changed since it was signed", "Its files no longer match its signature."
 	case p.Trust == plugins.TrustUnsigned:
 		return "Not signed", "No key says whose it is."
 	}

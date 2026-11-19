@@ -10,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/plugins"
+	"glitched/internal/plugins/pack"
 )
 
 // Settings › Plugins, on the plugins pluginShotState installs: built-ins,
@@ -51,13 +52,26 @@ func TestThePluginsPage(t *testing.T) {
 	}
 
 	t.Run("groups plugins by whose they are", func(t *testing.T) {
-		at := []float32{y("YOURS  6"), disclosure("Scratchpad").Bounds.Y, y("FROM OTHERS  1"), disclosure("Linear sync").Bounds.Y, y("BUILT INTO GLITCHED  6"), disclosure("Diff panel").Bounds.Y, y("ADD AND UPDATE")}
+		at := []float32{y("ADDED BY YOU  7"), disclosure("Linear sync").Bounds.Y, disclosure("Scratchpad").Bounds.Y, y("BUILT INTO GLITCHED  6"), disclosure("Diff panel").Bounds.Y, y("ADD AND UPDATE")}
 		if !slices.IsSorted(at) {
-			t.Errorf("yours, then others', then the built-ins, then installing: %v", at)
+			t.Errorf("what you added, then the built-ins, then installing: %v", at)
+		}
+		if !tt.HasText("Someone else's") || !tt.HasText("Your copy") {
+			t.Errorf("no word of whose Linear sync and the copy of Greetings are: %q", tt.Texts())
+		}
+		if !tt.HasText("3 to look at") {
+			t.Errorf("no count of the three that wait or failed: %q", tt.Texts())
 		}
 	})
 
 	t.Run("opens what waits on you, and nothing else", func(t *testing.T) {
+		const captain = "Release captain for the whole monorepo and its satellites"
+		if d := disclosure(captain); d.Expanded || !strings.HasPrefix(d.Description, "Not granted to draw. ") {
+			t.Errorf("a plugin that lacks a grant reads as something to do: %+v", d)
+		}
+		if _, ok := tt.Access("Remove Scratchpad"); ok {
+			t.Error("an unsigned plugin can be removed, which only Trust as mine was offered for")
+		}
 		for name, open := range map[string]bool{"Linear sync": true, "Scratchpad": true, "Broken loader": true, "Focus timer": false, "Diff panel": false} {
 			if got := disclosure(name).Expanded; got != open {
 				t.Errorf("%s open: %v, want %v", name, got, open)
@@ -109,6 +123,7 @@ func TestThePluginsPage(t *testing.T) {
 
 	t.Run("a grant holds, and its row stays where it was", func(t *testing.T) {
 		const name = "Release captain for the whole monorepo and its satellites"
+		click(name)
 		was := disclosure(name).Bounds.Y
 		if !tt.HasText("They run as you, with your files and your accounts.") || !tt.HasText("git: "+a.plugins.Installed()[slices.IndexFunc(a.plugins.Installed(), func(p plugins.Plugin) bool { return p.ID == "release-captain" })].Programs[0].Risk) {
 			t.Errorf("the programs grant doesn't say what it risks: %q", tt.Texts())
@@ -156,7 +171,7 @@ func TestThePluginsPage(t *testing.T) {
 		if !tt.HasText("An approval answers for you, so only Glitched draws it.") {
 			t.Error("the locked parts don't say why")
 		}
-		if !tt.HasText(a.plugins.Name("release-captain") + ": It draws it once you grant it ui.replace.") {
+		if !tt.HasText(a.plugins.Name("release-captain") + ": It isn't granted ui.replace, so the built-in draws it.") {
 			t.Errorf("no word of why yours doesn't draw the header's buttons: %q", tt.Texts())
 		}
 		if _, ok := tt.Access("Show Header actions, which draws Thread header buttons"); !ok {
@@ -205,10 +220,15 @@ func TestThePluginsPage(t *testing.T) {
 		if got := disclosure("Diff panel").Description; !strings.HasPrefix(got, "On. ") {
 			t.Errorf("the copy reads %q", got)
 		}
-		// The built-in's row, the second named Diff panel, says the copy
-		// runs and reverts to itself.
+		// The built-in's row says the copy runs, and reverts to itself:
+		// with the copy's row closed, the one Revert is the built-in's.
+		a.pluginsOpen[installed(a, "diff-panel").Folder] = false
+		settle()
 		if !tt.HasText("Your copy runs in its place") {
 			t.Fatalf("the built-in doesn't say your copy runs: %q", tt.Texts())
+		}
+		if tt.HasText("Yours, in place of the built-in") {
+			t.Fatal("the copy's row is still open")
 		}
 		click("Revert to built-in, Diff panel")
 		if p := installed(a, "diff-panel"); p.ID != "" {
@@ -267,6 +287,82 @@ func TestThePluginsPage(t *testing.T) {
 	})
 }
 
+// What the page says of states the host is rarely in: a plugin that
+// failed as it drew, one with an update, one changed since it was signed,
+// and a built-in that draws for a copy turned off.
+func TestThePluginsPageSaysWhoDrawsAndWhatFailed(t *testing.T) {
+	a := offline(t)
+	pluginShotState(t, a, "mixed")
+	// The app's own window first: Thrower fails as it draws the strip.
+	tt := newTester(t, a, 1320, 6000)
+	settleTester(tt)
+	a.router.Push("/settings/plugins")
+	settleTester(tt)
+	tt.Advance(300 * time.Millisecond)
+	thrower := installed(a, "thrower")
+	if s, _ := a.pluginStanding(thrower); s != "Failed" {
+		t.Fatalf("Thrower reads %q", s)
+	}
+	if !tt.HasText("It failed while it ran") || !tt.HasText("Copy error") {
+		t.Errorf("no notice of the failure, open from the start: %q", tt.Texts())
+	}
+	if d, ok := a.partDrawer("sidebar.projects"); !ok || !d.Builtin {
+		t.Errorf("with Thrower failed, %q draws the project strip, not the built-in", d.Name)
+	}
+	if why := a.partState(thrower, "sidebar.projects").why; !strings.HasPrefix(why, "It failed, so the built-in draws it: ") {
+		t.Errorf("of the strip, Thrower's row says %q", why)
+	}
+
+	// A copy turned off: the built-in it shadows draws, under its own id.
+	if err := a.plugins.SetEnabled("greetings", false); err != nil {
+		t.Fatal(err)
+	}
+	a.pluginsChanged(nil)
+	settleTester(tt)
+	if d, ok := a.partDrawer("hero.heading"); !ok || !d.Builtin {
+		t.Errorf("with the copy off, %q draws the greeting (found: %v)", d.Name, ok)
+	}
+	if why := a.partState(installed(a, "greetings"), "hero.heading").why; why != "This plugin is off, so the built-in draws it." {
+		t.Errorf("the copy's row says %q", why)
+	}
+
+	a.pluginUpdates = []pack.Found{{Result: pack.Result{ID: "focus-timer", Version: "9.9.9"}}}
+	if s, tone := a.pluginStanding(installed(a, "focus-timer")); s != "Update to 9.9.9" || tone != toneNews {
+		t.Errorf("with an update found, Focus timer reads %q", s)
+	}
+
+	who, how := trustWords(plugins.Plugin{Trust: plugins.TrustTampered})
+	if who != "Changed since it was signed" || strings.Contains(how, "no key") {
+		t.Errorf("a tampered plugin reads %q, %q", who, how)
+	}
+	if originTag(plugins.Plugin{Trust: plugins.TrustTampered}) != "Someone else's" {
+		t.Error("a tampered plugin isn't marked as someone else's")
+	}
+}
+
+// A manifest may name a component or a program twice, and an error may be
+// one long word: the page draws them.
+func TestThePluginsPageDrawsOddManifests(t *testing.T) {
+	a := offline(t)
+	writeOwnPlugin(t, a, "twice", `{"id": "twice", "name": "Twice", "main": "index.js", "contract": "glitched", "contractVersion": 2,
+		"capabilities": ["ui.place", "ui.replace", "programs"], "glitched": {"programs": ["git", "git"], "places": [
+			{"id": "one", "at": "thread.header.actions", "replaces": true}, {"id": "two", "at": "thread.header.actions", "replaces": true}]}}`, "export function place() { return [] }")
+	a.router.Push("/settings/plugins")
+	a.pluginsOpen[filepath.Join(plugins.Dir(a.dir), "twice")] = true
+	tt := newTester(t, a, 1320, 2400)
+	settleTester(tt)
+	tt.Advance(300 * time.Millisecond)
+	if p := installed(a, "twice"); p.Err != nil || len(p.Replaces) != 2 || len(p.Programs) != 2 {
+		t.Fatalf("the manifest didn't load as written: %+v", p)
+	}
+	if !tt.HasText("Grant programs to Twice") {
+		t.Errorf("its row isn't drawn: %q", tt.Texts())
+	}
+	if got := clip(strings.Repeat("é", 5000), 1200); len([]rune(got)) != 1201 {
+		t.Errorf("a long error is cut to %d runes", len([]rune(got)))
+	}
+}
+
 // With only the built-ins, the page says how to make something yours,
 // and offers no filter.
 func TestThePluginsPageWithNoneOfYours(t *testing.T) {
@@ -274,7 +370,7 @@ func TestThePluginsPageWithNoneOfYours(t *testing.T) {
 	a.router.Push("/settings/plugins")
 	tt := newTester(t, a, 1320, 1600)
 	settleTester(tt)
-	if !tt.HasText("YOURS  0") || !tt.HasText(groupPlugins(nil)[0].empty) {
+	if !tt.HasText("ADDED BY YOU  0") || !tt.HasText(groupPlugins(nil)[0].empty) {
 		t.Errorf("no word of how to make a plugin yours: %q", tt.Texts())
 	}
 	if _, ok := tt.Access("Filter plugins"); ok {
