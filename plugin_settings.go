@@ -174,7 +174,7 @@ func (a *app) pluginRow(c *ui.Context, p plugins.Plugin) {
 		}
 		head.Children(func() {
 			parts = ui.CollapsibleBase(c.Key("open"), &open)
-			parts.Trigger.Label(p.Name).Description(state+". "+pluginSummary(p)).Grow(1).Shrink(1).Padding(12, 12, 12, 14).Gap(12).AlignItems(ui.Center).
+			parts.Trigger.Label(rowName(p)).Description(state+". "+pluginSummary(p)).Grow(1).Shrink(1).Padding(12, 12, 12, 14).Gap(12).AlignItems(ui.Center).
 				Cursor(ui.CursorPointer).Radius(8).FocusRingOffset(-3).Children(func() {
 				ui.Icon(c, icChevronR).FontSize(14).TextColor(palette.faint).Shrink(0).Rotate(90 * parts.Progress())
 				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
@@ -200,11 +200,16 @@ func (a *app) pluginRow(c *ui.Context, p plugins.Plugin) {
 			if p.ShadowedBy != "" {
 				return // its copy has the switch
 			}
-			// Lit only when the plugin runs, as its pill says; a click
-			// still turns the plugin itself on or off.
-			on := p.Enabled && t != toneWarn && t != toneBad
+			// Lit only when the plugin runs, as its pill says.
+			on := a.pluginRuns(p)
 			if ui.Switch(c.Key("enabled"), &on).Label("Enable " + p.Name).Description(state).Disabled(p.ID == "").Changed() {
-				a.pluginsChanged(a.plugins.SetEnabled(p.ID, !p.Enabled))
+				if on && p.Enabled {
+					// Turned on, and something stops it: loaded again, with
+					// its row open at what does. Its notice turns it off.
+					a.pluginsOpen[p.Folder] = true
+					a.pluginsReveal = p.Folder
+				}
+				a.pluginsChanged(a.plugins.SetEnabled(p.ID, on))
 			}
 		})
 		panel := parts.Panel(func() { a.pluginDetail(c, p) })
@@ -307,12 +312,27 @@ func (a *app) pluginNotices(c *ui.Context, p plugins.Plugin) {
 	remove := func() {
 		ui.Button(c.Key("remove"), "Remove").Label("Remove " + p.Name).TextColor(palette.red).OnClick(func() { a.pluginsChanged(a.plugins.Remove(p.ID)) })
 	}
+	// Its switch shows off while something stops it, so the notice of
+	// what does is where it is turned off.
+	turnOff := func() {
+		ui.Button(c.Key("off"), "Turn off").Label("Turn off " + p.Name).OnClick(func() { a.pluginsChanged(a.plugins.SetEnabled(p.ID, false)) })
+	}
+	stopped := func(err error) func() {
+		return func() {
+			copyError(err)()
+			turnOff()
+		}
+	}
 	switch {
 	case p.ShadowedBy != "":
-		pluginNotice(c, "shadowed", toneQuiet, "Your copy runs in its place", said("Your copy in "+displayPath(p.ShadowedBy)+" draws what this one drew. Revert to built-in moves the copy to "+displayPath(filepath.Join(plugins.Dir(a.dir), ".reverted"))+" and runs this one again."), func() {
+		title, what := "Your copy runs in its place", " draws what this one drew"
+		if !a.copyRuns(p) {
+			title, what = "Your copy isn't running, so this one draws", " is off or stopped, and this one draws until it runs"
+		}
+		pluginNotice(c, "shadowed", toneQuiet, title, said("Your copy in "+displayPath(p.ShadowedBy)+what+". Revert to built-in moves the copy to "+displayPath(filepath.Join(plugins.Dir(a.dir), ".reverted"))+" and runs this one again."), func() {
 			// Shadowed, the built-in runs as a fallback under an id of its
 			// own; Revert takes the id its copy has.
-			ui.Button(c.Key("revert"), "Revert to built-in").Label("Revert to built-in, " + p.Name).OnClick(func() {
+			ui.Button(c.Key("revert"), "Revert to built-in").Label("Revert to the built-in " + p.Name).OnClick(func() {
 				a.pluginsChanged(a.plugins.Revert(strings.TrimSuffix(p.ID, plugins.FallbackSuffix)))
 			})
 		})
@@ -328,13 +348,15 @@ func (a *app) pluginNotices(c *ui.Context, p plugins.Plugin) {
 		}, func() {
 			ui.PrimaryButton(c.Key("allow"), "Allow").Label("Allow " + p.Name).OnClick(func() { a.pluginsChanged(a.plugins.Allow(p.ID)) })
 			remove()
+			turnOff()
 		})
 	case p.Trust == plugins.TrustUnsigned:
 		pluginNotice(c, "unsigned", toneWarn, "Not signed, so it isn't running", said("Trust it as yours only if you wrote it, or know who did: it then runs with what you grant it, and Glitched signs it again as you change it."), func() {
 			ui.Button(c.Key("trust"), "Trust as mine").Label("Trust as mine, " + p.Name).OnClick(func() { a.pluginsChanged(a.plugins.TrustAsMine(p.Folder)) })
+			turnOff()
 		})
 	case p.Trust == plugins.TrustTampered && p.Err != nil:
-		pluginNotice(c, "tampered", toneBad, "Changed since it was signed, so it isn't running", failure(p.Err, ""), copyError(p.Err))
+		pluginNotice(c, "tampered", toneBad, "Changed since it was signed, so it isn't running", failure(p.Err, ""), stopped(p.Err))
 	case p.Err != nil && p.Enabled:
 		title, advice := "It didn't load", "Reload below. If it still doesn't load, turn it off: Glitched draws what it drew."
 		switch {
@@ -345,9 +367,9 @@ func (a *app) pluginNotices(c *ui.Context, p plugins.Plugin) {
 		case !p.Builtin:
 			advice = "Fix its plugin.json or its code in " + displayPath(p.Folder) + ": Glitched loads it again as you save."
 		}
-		pluginNotice(c, "failed", toneBad, title, failure(p.Err, advice), copyError(p.Err))
+		pluginNotice(c, "failed", toneBad, title, failure(p.Err, advice), stopped(p.Err))
 	case p.Enabled && a.plugins.Failed(p.ID) != nil:
-		pluginNotice(c, "failed", toneBad, "It failed while it ran", failure(a.plugins.Failed(p.ID), ""), copyError(a.plugins.Failed(p.ID)))
+		pluginNotice(c, "failed", toneBad, "It failed while it ran", failure(a.plugins.Failed(p.ID), ""), stopped(a.plugins.Failed(p.ID)))
 	}
 }
 

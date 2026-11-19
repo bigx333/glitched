@@ -230,7 +230,7 @@ func TestThePluginsPage(t *testing.T) {
 		if tt.HasText("Yours, in place of the built-in") {
 			t.Fatal("the copy's row is still open")
 		}
-		click("Revert to built-in, Diff panel")
+		click("Revert to the built-in Diff panel")
 		if p := installed(a, "diff-panel"); p.ID != "" {
 			t.Fatalf("the copy still runs: %+v", p)
 		}
@@ -334,13 +334,30 @@ func TestThePluginsPageSaysWhoDrawsAndWhatFailed(t *testing.T) {
 			t.Errorf("the switch of %s is lit: %v, want %v", name, !want, want)
 		}
 	}
-	// The switch still turns the plugin itself off and on.
-	tt.Click("Enable Broken loader")
+	// Turned on while something stops it, a plugin stays the user's to
+	// allow or mend: the click never turns it off.
+	for name, id := range map[string]string{"Broken loader": "broken-loader", "Linear sync": "linear-sync", "Scratchpad": "scratchpad"} {
+		tt.Click("Enable " + name)
+		settleTester(tt)
+		if !installed(a, id).Enabled || lit(name) {
+			t.Errorf("a click on the unlit switch of %s: enabled %v, lit %v", name, installed(a, id).Enabled, lit(name))
+		}
+	}
+	for _, label := range []string{"Allow Linear sync", "Trust as mine, Scratchpad", "Copy error of Broken loader"} {
+		if _, ok := tt.Access(label); !ok {
+			t.Errorf("after the click, no %q", label)
+		}
+	}
+	// Its notice turns it off, and the switch turns it on again.
+	tt.Click("Turn off Broken loader")
 	settleTester(tt)
 	if p := installed(a, "broken-loader"); p.Enabled || lit("Broken loader") {
-		t.Errorf("a click on a plugin that didn't load left it enabled: %v", p.Enabled)
+		t.Errorf("Turn off left it enabled: %v", p.Enabled)
 	} else if s, _ := a.pluginStanding(p); s != "Off" {
 		t.Errorf("turned off, it reads %q", s)
+	}
+	if _, ok := tt.Access("Turn off Broken loader"); ok {
+		t.Error("Turn off stays on a plugin that is off")
 	}
 	tt.Click("Enable Broken loader")
 	settleTester(tt)
@@ -368,6 +385,13 @@ func TestThePluginsPageSaysWhoDrawsAndWhatFailed(t *testing.T) {
 	settleTester(tt)
 	if d, ok := a.partDrawer("hero.heading"); !ok || !d.Builtin {
 		t.Errorf("with the copy off, %q draws the greeting (found: %v)", d.Name, ok)
+	}
+	shadowed := slices.IndexFunc(a.plugins.Installed(), func(p plugins.Plugin) bool { return p.ShadowedBy != "" })
+	if s, _ := a.pluginStanding(a.plugins.Installed()[shadowed]); s != "Draws for your copy" {
+		t.Errorf("with the copy off, the built-in reads %q", s)
+	}
+	if !tt.HasText("Draws for your copy") {
+		t.Error("the built-in's row doesn't say it draws")
 	}
 	if why := a.partState(installed(a, "greetings"), "hero.heading").why; why != "This plugin is off, so the built-in draws it." {
 		t.Errorf("the copy's row says %q", why)
