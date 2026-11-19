@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 
 	"glitched/internal/api"
 	"glitched/internal/client"
@@ -603,5 +604,43 @@ func TestOpenInEditorOpensTheEditedFile(t *testing.T) {
 	}
 	if want := []string{filepath.Join(ws, sidebarPath), abs}; !slices.Equal(opened, want) {
 		t.Fatalf("opened %q, want %q", opened, want)
+	}
+}
+
+// A split diff's panel goes without a panic, however it goes: closed, with
+// its divider focused, for the preview in its place, or with the page. A
+// panel going with an Exit is painted from its last frame, where MyGo's
+// divider reads an Element of the frame that built it.
+func TestASplitDiffGoesWithoutAPanic(t *testing.T) {
+	for name, leave := range map[string]func(h *harness){
+		"closed": func(h *harness) { h.click("Close diff") },
+		"closed with its divider focused": func(h *harness) {
+			for range 40 {
+				h.tt.Key(0, ui.KeyTab)
+			}
+			h.click("Close diff")
+		},
+		"for the preview": func(h *harness) { h.tt.Key(ui.Cmd|ui.Shift, ui.KeyP) },
+		"with the page":   func(h *harness) { h.a.router.Push("/settings/general") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, th := checked(t)
+			h.tt.SetSize(1600, 900)
+			h.a.showDiff = true
+			h.tt.Frame()
+			h.diffOf(th, sidebarPath)
+			settlePlugins(t, h.a, h.tt, h.p)
+			h.click("Split")
+			if h.a.layout() != editor.DiffSplit {
+				t.Fatal("the diff isn't split")
+			}
+			h.tt.Advance(time.Second)
+			leave(h)
+			h.tt.Advance(time.Second)
+			settlePlugins(t, h.a, h.tt, h.p)
+			if h.a.showDiff && h.a.router.Path() != "/settings/general" {
+				t.Error("the diff panel didn't go")
+			}
+		})
 	}
 }

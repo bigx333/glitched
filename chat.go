@@ -10,6 +10,7 @@ import (
 
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 	"github.com/egoist/mygo/ui/markdown"
 
 	"glitched/internal/api"
@@ -95,7 +96,15 @@ func (a *app) chatPage(c *ui.Context) {
 		})
 		switch {
 		case a.showDiff:
-			ui.Column(c).Key("diff").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.diffPanel(c, t, es) })
+			// A split diff's panel goes at once. A panel going with an Exit
+			// is painted from its last frame, and MyGo's DiffView draws its
+			// divider's focus ring from the divider of the frame that built
+			// it: a dev build panics on that stale Element.
+			slide := panel(16, 0)
+			if a.layout() == editor.DiffSplit {
+				slide.Exit = nil
+			}
+			ui.Column(c).Key("diff").Width(a.diffWidth()).Transition(slide).Children(func() { a.diffPanel(c, t, es) })
 		case a.showPreview:
 			ui.Column(c).Key("preview").Width(a.previewWidth()).Transition(panel(16, 0)).Children(func() { a.previewPanel(c) })
 		case a.showPluginTab:
