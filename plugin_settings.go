@@ -71,7 +71,7 @@ func (a *app) pluginSettings(c *ui.Context) {
 			ui.Row(c).Gap(10).Padding(0, 4).AlignItems(ui.Center).Children(func() {
 				sectionLabel(c, fmt.Sprintf("%s  %d", g.title, len(g.list)))
 				if waiting > 0 {
-					ui.Text(c, fmt.Sprintf("%d waiting on you", waiting)).Key("waiting").FontSize(11).FontWeight(600).TextColor(palette.amber)
+					ui.Text(c, fmt.Sprintf("%d to look at", waiting)).Key("waiting").FontSize(11).FontWeight(600).TextColor(palette.amber)
 				}
 			})
 			ui.Column(c).Radius(12).Border(1, palette.border).Background(palette.surface).Clip().Dividers(1, palette.border).Children(func() {
@@ -183,8 +183,8 @@ func (a *app) pluginRow(c *ui.Context, p plugins.Plugin) {
 						if p.ShadowedBy != "" {
 							name.TextColor(palette.muted)
 						}
-						if p.Shadows {
-							ui.Text(c, "Your copy").FontSize(10.5).FontWeight(600).TextColor(palette.muted).Padding(1, 6).Radius(5).Border(1, palette.border).SingleLine().Shrink(0)
+						if tag := originTag(p); tag != "" {
+							ui.Text(c, tag).FontSize(10.5).FontWeight(600).TextColor(palette.muted).Padding(1, 6).Radius(5).Border(1, palette.border).SingleLine().Shrink(0)
 						}
 						if p.Version != "" {
 							ui.Text(c, p.Version).FontSize(11.5).TextColor(palette.faint).SingleLine().Shrink(0)
@@ -237,12 +237,12 @@ func (a *app) pluginDetail(c *ui.Context, p plugins.Plugin) {
 		}
 		if len(p.Replaces) > 0 {
 			inset(c, "DRAWS", func() {
-				for _, name := range p.Replaces {
+				for i, name := range p.Replaces {
 					st := a.partState(p, name)
-					ui.Row(c).Key(name).Padding(10, 12).GapY(8).GapX(12).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Row(c).Key(i).Padding(10, 12).GapY(8).GapX(12).AlignItems(ui.Center).Wrap().Children(func() {
 						ui.Column(c).Grow(1).Shrink(1).Basis(220).Gap(2).Children(func() {
 							ui.Text(c, partTitle(name)).FontWeight(500)
-							ui.Text(c, st.why).FontSize(12).TextColor(palette.muted)
+							ui.Text(c, clip(st.why, 240)).FontSize(12).TextColor(palette.muted)
 						})
 						statePill(c, st.word, st.tone)
 					})
@@ -284,11 +284,22 @@ func (a *app) pluginNotices(c *ui.Context, p plugins.Plugin) {
 	}
 	failure := func(err error, advice string) func() {
 		return func() {
-			ui.Text(c, err.Error()).Key("error").Selectable().Font("monospace").FontSize(11.5).TextColor(palette.text).
-				Padding(8, 10).Radius(6).Background(palette.bg.Alpha(0.6)).MaxLines(12)
+			// The start of it, in a box that cuts a line with nowhere to
+			// break; Copy takes the whole of it.
+			ui.Column(c).Radius(6).Background(palette.bg.Alpha(0.6)).Padding(8, 10).Clip().Children(func() {
+				ui.Text(c, clip(err.Error(), 1200)).Key("error").Selectable().Font("monospace").FontSize(11.5).TextColor(palette.text).MaxLines(12)
+			})
 			if advice != "" {
 				ui.Text(c, advice).FontSize(12).TextColor(palette.muted)
 			}
+		}
+	}
+	copyError := func(err error) func() {
+		return func() {
+			ui.Button(c.Key("copy-error"), "Copy error").Label("Copy error of " + p.Name).OnClick(func() {
+				text := err.Error()
+				a.pluginLater = append(a.pluginLater, func(c *ui.Context) { c.WriteClipboard(text) })
+			})
 		}
 	}
 	remove := func() {
@@ -297,7 +308,11 @@ func (a *app) pluginNotices(c *ui.Context, p plugins.Plugin) {
 	switch {
 	case p.ShadowedBy != "":
 		pluginNotice(c, "shadowed", toneQuiet, "Your copy runs in its place", said("Your copy in "+displayPath(p.ShadowedBy)+" draws what this one drew. Revert to built-in moves the copy to "+displayPath(filepath.Join(plugins.Dir(a.dir), ".reverted"))+" and runs this one again."), func() {
-			ui.Button(c.Key("revert"), "Revert to built-in").Label("Revert to built-in, " + p.Name).OnClick(func() { a.pluginsChanged(a.plugins.Revert(p.ID)) })
+			// Shadowed, the built-in runs as a fallback under an id of its
+			// own; Revert takes the id its copy has.
+			ui.Button(c.Key("revert"), "Revert to built-in").Label("Revert to built-in, " + p.Name).OnClick(func() {
+				a.pluginsChanged(a.plugins.Revert(strings.TrimSuffix(p.ID, plugins.FallbackSuffix)))
+			})
 		})
 	case p.Trust == plugins.TrustWaiting:
 		pluginNotice(c, "consent", toneWarn, p.Name+" is someone else's. It asks to:", func() {
@@ -317,7 +332,7 @@ func (a *app) pluginNotices(c *ui.Context, p plugins.Plugin) {
 			ui.Button(c.Key("trust"), "Trust as mine").Label("Trust as mine, " + p.Name).OnClick(func() { a.pluginsChanged(a.plugins.TrustAsMine(p.Folder)) })
 		})
 	case p.Trust == plugins.TrustTampered && p.Err != nil:
-		pluginNotice(c, "tampered", toneBad, "Changed since it was signed, so it isn't running", failure(p.Err, ""), nil)
+		pluginNotice(c, "tampered", toneBad, "Changed since it was signed, so it isn't running", failure(p.Err, ""), copyError(p.Err))
 	case p.Err != nil && p.Enabled:
 		title, advice := "It didn't load", "Reload below. If it still doesn't load, turn it off: Glitched draws what it drew."
 		switch {
@@ -328,13 +343,9 @@ func (a *app) pluginNotices(c *ui.Context, p plugins.Plugin) {
 		case !p.Builtin:
 			advice = "Fix its plugin.json or its code in " + displayPath(p.Folder) + ": Glitched loads it again as you save."
 		}
-		pluginNotice(c, "failed", toneBad, title, failure(p.Err, advice), nil)
+		pluginNotice(c, "failed", toneBad, title, failure(p.Err, advice), copyError(p.Err))
 	case p.Enabled && a.plugins.Failed(p.ID) != nil:
-		advice := "Where it draws a part of Glitched, the built-in draws that part instead."
-		if p.Builtin {
-			advice = ""
-		}
-		pluginNotice(c, "failed", toneBad, "It failed while it ran", failure(a.plugins.Failed(p.ID), advice), nil)
+		pluginNotice(c, "failed", toneBad, "It failed while it ran", failure(a.plugins.Failed(p.ID), ""), copyError(a.plugins.Failed(p.ID)))
 	}
 }
 
@@ -377,8 +388,8 @@ func (a *app) pluginGrants(c *ui.Context, p plugins.Plugin) {
 						ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
 							ui.Text(c, cmpOr(cp.About, cp.Name)).FontWeight(500)
 							if cp.Name == "programs" {
-								for _, pr := range p.Programs {
-									ui.Text(c, pr.Name+": "+pr.Risk).Key("program:" + pr.Name).FontSize(12).TextColor(palette.muted)
+								for i, pr := range p.Programs {
+									ui.Text(c, pr.Name+": "+pr.Risk).Key(i).FontSize(12).TextColor(palette.muted)
 								}
 							}
 							if risk != "" {
@@ -406,6 +417,14 @@ func (a *app) pluginGrants(c *ui.Context, p plugins.Plugin) {
 			})
 		}
 	})
+}
+
+// clip is s cut to n runes, with an ellipsis when it was longer.
+func clip(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
 }
 
 func btoi(b bool) int {
@@ -440,7 +459,9 @@ func (a *app) pluginTrust(c *ui.Context, p plugins.Plugin) {
 			optionRow(c, who, how+" Revert moves your copy to "+displayPath(filepath.Join(plugins.Dir(a.dir), ".reverted"))+" and runs the built-in again.", func() {
 				ui.Button(c.Key("revert"), "Revert to built-in").Label("Revert to built-in, " + p.Name).OnClick(func() { a.pluginsChanged(a.plugins.Revert(p.ID)) })
 			})
-		case p.ID == "" || p.Trust == plugins.TrustWaiting:
+		case p.ID == "" || p.Trust == plugins.TrustWaiting || p.Trust == plugins.TrustUnsigned:
+			// The consent sheet removes one that waits; an unsigned
+			// folder is the user's to delete.
 			optionRow(c, who, how, func() {})
 		default:
 			optionRow(c, who, how, func() {
@@ -460,7 +481,7 @@ func (a *app) appParts(c *ui.Context, list []plugins.Plugin) {
 			if comp.Locked != "" {
 				continue
 			}
-			drawer, drawn := a.partDrawer(comp.Name, list)
+			drawer, drawn := a.partDrawer(comp.Name)
 			ui.Row(c).Key(comp.Name).Padding(12, 16).GapY(8).GapX(16).AlignItems(ui.Center).Wrap().Children(func() {
 				ui.Column(c).Grow(1).Shrink(1).Basis(240).Gap(2).Children(func() {
 					ui.Text(c, partTitle(comp.Name)).FontWeight(500)
@@ -470,18 +491,16 @@ func (a *app) appParts(c *ui.Context, list []plugins.Plugin) {
 							continue
 						}
 						st := a.partState(p, comp.Name)
-						ui.Text(c, p.Name+": "+st.why).Key("other:" + p.Folder).FontSize(12).TextColor(max(st.tone, toneWarn).color())
+						ui.Text(c, p.Name+": "+clip(st.why, 240)).Key("other:" + p.Folder).FontSize(12).TextColor(st.tone.color())
 					}
 				})
 				if !drawn {
 					statePill(c, "Nothing draws it", toneBad)
 					return
 				}
-				whose := "Yours"
+				whose := cmpOr(originTag(drawer), "Yours")
 				if drawer.Builtin {
 					whose = "Built in"
-				} else if drawer.Trust != plugins.TrustOwn {
-					whose = "Someone else's"
 				}
 				b := ui.ButtonBase(c.Key("drawer")).Label("Show "+drawer.Name+", which draws "+partTitle(comp.Name)).Gap(8).AlignItems(ui.Center).Padding(5, 10).Radius(8).
 					Border(1, palette.border).Background(ui.Transparent).Cursor(ui.CursorPointer).Transition(hoverFade).Shrink(0)
