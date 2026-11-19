@@ -303,6 +303,15 @@ func (a *app) configureEffect(args json.RawMessage) (any, error) {
 		}
 		c.Effort = new(strings.ToLower(efforts[i]))
 	}
-	a.backend.ConfigureThread(t.env, t.id(), c)
+	// It answers once the configure is sent; one that can't be, as to an
+	// engine that's gone, says why.
+	cmd := a.backend.ConfigureThread(t.env, t.id(), c)
+	if now, ok := a.find(t.id()); ok {
+		for _, p := range now.Pending {
+			if p.Command == cmd && p.Err != nil {
+				return nil, p.Err
+			}
+		}
+	}
 	return nil, nil
 }

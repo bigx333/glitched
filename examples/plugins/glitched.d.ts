@@ -611,7 +611,7 @@ declare const glitched: {
   };
   models: {
     /** The models the composer's picker offers, and the efforts. */
-    list(): Promise<{ models: { name: string; provider: string; description: string }[]; efforts: string[] }>;
+    list(): Promise<{ models: { name: string; provider: string; description: string }[]; efforts: ("low" | "medium" | "high" | "max")[] }>;
   };
   projects: {
     /** In the sidebar's order. Needs threads:read. */
