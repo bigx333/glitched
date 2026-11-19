@@ -610,13 +610,19 @@ func TestOpenInEditorOpensTheEditedFile(t *testing.T) {
 // A split diff's panel goes without a panic, however it goes: closed, with
 // its divider focused, for the preview in its place, or with the page. A
 // panel going with an Exit is painted from its last frame, where MyGo's
-// divider reads an Element of the frame that built it.
+// divider reads an Element of the frame that built it. (The page goes
+// whole, its panels with it, painting no copy of them.)
 func TestASplitDiffGoesWithoutAPanic(t *testing.T) {
 	for name, leave := range map[string]func(h *harness){
 		"closed": func(h *harness) { h.click("Close diff") },
 		"closed with its divider focused": func(h *harness) {
 			for range 40 {
-				h.tt.Key(0, ui.KeyTab)
+				if h.tt.Key(0, ui.KeyTab); h.tt.Focused("Divider") {
+					break
+				}
+			}
+			if !h.tt.Focused("Divider") {
+				h.t.Fatal("Tab never reached the divider")
 			}
 			h.click("Close diff")
 		},
@@ -631,7 +637,7 @@ func TestASplitDiffGoesWithoutAPanic(t *testing.T) {
 			h.diffOf(th, sidebarPath)
 			settlePlugins(t, h.a, h.tt, h.p)
 			h.click("Split")
-			if h.a.layout() != editor.DiffSplit {
+			if _, ok := h.tt.Find("Divider"); !ok || h.a.layout() != editor.DiffSplit {
 				t.Fatal("the diff isn't split")
 			}
 			h.tt.Advance(time.Second)
