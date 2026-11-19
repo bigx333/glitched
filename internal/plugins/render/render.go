@@ -714,7 +714,7 @@ func (r *renderer) item(c *ui.Context, n *widget.Node, k string) {
 		}
 		t := ui.Text(c, n.Text).FontSize(12)
 		if n.Style == "code" {
-			t.Font("monospace")
+			t.Font("monospace").TruncateStart()
 		}
 		t.SingleLine().Grow(1).Shrink(1)
 		if !hovered {

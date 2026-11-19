@@ -192,6 +192,26 @@ func workingFile(workspace, path string) string {
 	return filepath.Join(expandHome(workspace), path)
 }
 
+// shownPath is the file an edit names as the user reads it: from the
+// workspace when it is in there, else as named. It reads no disk, so it
+// takes /private/var for /var, as macOS's temporary folders are both.
+func shownPath(workspace, path string) string {
+	if !filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	unaliased := func(p string) string {
+		if rest, ok := strings.CutPrefix(filepath.Clean(p), "/private/"); ok {
+			return "/" + rest
+		}
+		return filepath.Clean(p)
+	}
+	rel, err := filepath.Rel(unaliased(expandHome(workspace)), unaliased(path))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return path
+	}
+	return rel
+}
+
 // locate is where the file an edit names is, its folders' links resolved,
 // or why the panel won't read it. An agent's path can be absolute, climb
 // out with .., or pass through a link, and the panel reads only regular
@@ -344,7 +364,7 @@ func (a *app) diffPanel(c *ui.Context, t thread, es []entry) {
 	for i, f := range files {
 		d := a.diffFor(t, f)
 		add, del := a.diffStats(t, f)
-		panel.Files[i] = diffFile{Path: f.path, Add: add, Del: del, Reviewed: d != nil && d.reviewed, Read: d != nil}
+		panel.Files[i] = diffFile{Path: f.path, Name: shownPath(t.View.Workspace, f.path), Add: add, Del: del, Reviewed: d != nil && d.reviewed, Read: d != nil}
 	}
 	if len(files) > 0 {
 		panel.Shown = files[max(slices.IndexFunc(files, func(f fileChange) bool { return f.path == a.diffFile[t.id()] }), 0)].path
@@ -387,7 +407,9 @@ type diffPanel struct {
 // diffFile is a changed file as the panel's context has it: Read once its
 // diff is, which marking it reviewed needs.
 type diffFile struct {
-	Path     string `json:"path"`
+	Path string `json:"path"`
+	// Name is Path as the user reads it: from the workspace.
+	Name     string `json:"name"`
 	Add      int    `json:"add"`
 	Del      int    `json:"del"`
 	Reviewed bool   `json:"reviewed"`

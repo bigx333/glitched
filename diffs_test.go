@@ -683,3 +683,83 @@ func TestADiffOpensPainted(t *testing.T) {
 		t.Errorf("the diff panel's first frame is blank: %d colors", len(colors))
 	}
 }
+
+// A changed file reads by its path from the workspace, in the diff panel
+// and the work log, and a long one gives way at its start: two files of
+// one deep folder show their own names (NEL-49).
+func TestADiffFileShowsItsName(t *testing.T) {
+	ws := gitWorkspace(t)
+	folder := filepath.Join(ws, "packages", "a-rather-long-package-name", "src", "some", "deeply", "nested", "folder")
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var events []provider.Event
+	for _, name := range []string{"ruled.txt", "hooked.txt"} {
+		file := write(t, filepath.Join(folder, name))
+		events = append(events, provider.Work{Item: name, Kind: "edit", Title: "Write " + file, Status: api.WorkCompleted, Path: file})
+	}
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(append(events, provider.TextDelta{Text: "Wrote them."})))
+	seed(t, d, ws, "Deep", "Go.")
+	h := start(t, dir)
+	h.a.select_(h.thread("Deep"))
+	h.until("its transcript", func() bool { return h.tt.HasText("Wrote them.") })
+	h.tt.Advance(time.Second)
+	rel := filepath.Join("packages", "a-rather-long-package-name", "src", "some", "deeply", "nested", "folder")
+	ruled, hooked := filepath.Join(rel, "ruled.txt"), filepath.Join(rel, "hooked.txt")
+	if h.tt.HasText(ws) {
+		t.Errorf("the work log shows the workspace's path: %q", h.tt.Texts())
+	}
+	h.click("Write " + ruled)
+	h.diffsRead()
+	settlePlugins(t, h.a, h.tt, h.p)
+	for _, f := range []string{ruled, hooked} {
+		if _, ok := h.tt.Find("Diff of " + f); !ok {
+			t.Fatalf("no row labeled %q in %q", "Diff of "+f, h.tt.Texts())
+		}
+	}
+	// What is drawn over the right half of a file's row, as its name
+	// shows there.
+	ink := func(path string) []bool {
+		r, _ := h.tt.Find("Diff of " + path)
+		img := h.tt.Image()
+		x0, y0, x1, y1 := int(r.X), int(r.Y), int(r.X+r.W), int(r.Y+r.H)
+		bg := img.RGBAAt(x0+2, (y0+y1)/2)
+		var out []bool
+		for y := y0; y < y1; y++ {
+			for x := (x0 + x1) / 2; x < x1; x++ {
+				p := img.RGBAAt(x, y)
+				out = append(out, max(p.R, bg.R)-min(p.R, bg.R) > 48 || max(p.G, bg.G)-min(p.G, bg.G) > 48 || max(p.B, bg.B)-min(p.B, bg.B) > 48)
+			}
+		}
+		return out
+	}
+	a, b := ink(ruled), ink(hooked)
+	differ, drawn := 0, 0
+	for i := range min(len(a), len(b)) {
+		if a[i] != b[i] {
+			differ++
+		}
+		if a[i] {
+			drawn++
+		}
+	}
+	if differ*4 < drawn {
+		t.Errorf("the two files' rows end alike, %d of %d drawn pixels apart: their names don't show", differ, drawn)
+	}
+}
+
+func TestShownPath(t *testing.T) {
+	for _, tc := range []struct{ ws, path, want string }{
+		{"/work/app", "src/main.go", "src/main.go"},
+		{"/work/app", "/work/app/src/main.go", "src/main.go"},
+		{"/var/folders/x/app", "/private/var/folders/x/app/a.txt", "a.txt"},
+		{"/private/var/folders/x/app", "/var/folders/x/app/a.txt", "a.txt"},
+		{"/work/app", "/work/other/a.txt", "/work/other/a.txt"},
+		{"/work/app", "/work/app", "/work/app"},
+	} {
+		if got := shownPath(tc.ws, tc.path); got != tc.want {
+			t.Errorf("shownPath(%q, %q) = %q, want %q", tc.ws, tc.path, got, tc.want)
+		}
+	}
+}
