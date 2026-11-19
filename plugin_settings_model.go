@@ -79,6 +79,8 @@ func capRisk(name string) string {
 // shows: whether it runs, and what it waits for.
 func (a *app) pluginStanding(p plugins.Plugin) (string, tone) {
 	switch {
+	case p.ShadowedBy != "" && !a.copyRuns(p):
+		return "Draws for your copy", toneQuiet
 	case p.ShadowedBy != "":
 		return "Your copy runs instead", toneQuiet
 	case p.Trust == plugins.TrustWaiting:
@@ -107,6 +109,33 @@ func (a *app) pluginStanding(p plugins.Plugin) (string, tone) {
 		}
 	}
 	return "On", toneGood
+}
+
+// pluginRuns is whether the plugin runs: on, and nothing stops it. Its
+// switch is lit by it, so the switch and the pill say the same.
+func (a *app) pluginRuns(p plugins.Plugin) bool {
+	_, t := a.pluginStanding(p)
+	return p.Enabled && p.ShadowedBy == "" && t != toneWarn && t != toneBad
+}
+
+// copyRuns is whether the user's copy of the shadowed built-in p runs.
+// While it doesn't, the built-in draws in its place.
+func (a *app) copyRuns(p plugins.Plugin) bool {
+	for _, q := range a.plugins.Installed() {
+		if q.ShadowedBy == "" && q.ID == strings.TrimSuffix(p.ID, plugins.FallbackSuffix) {
+			return a.pluginRuns(q)
+		}
+	}
+	return false
+}
+
+// rowName is the plugin's name to assistive tools: a built-in under a
+// copy has the copy's name, so it says which it is.
+func rowName(p plugins.Plugin) string {
+	if p.ShadowedBy != "" {
+		return p.Name + ", built-in"
+	}
+	return p.Name
 }
 
 // partState is whether a plugin draws a component it replaces: a word for
