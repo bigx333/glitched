@@ -313,6 +313,53 @@ func TestThePluginsPageSaysWhoDrawsAndWhatFailed(t *testing.T) {
 		t.Errorf("of the strip, Thrower's row says %q", why)
 	}
 
+	// A switch is lit only beside a pill that says its plugin runs.
+	lit := func(name string) bool {
+		t.Helper()
+		sw, ok := tt.Access("Enable " + name)
+		if !ok {
+			t.Fatalf("no switch for %s", name)
+		}
+		return sw.Checked
+	}
+	for name, want := range map[string]bool{
+		"Broken loader": false, // Didn't load
+		"Thrower":       false, // Failed
+		"Linear sync":   false, // Waiting for your OK
+		"Scratchpad":    false, // Not trusted yet
+		"Focus timer":   true,  // On
+		"Release captain for the whole monorepo and its satellites": true, // Not granted to draw, and running
+	} {
+		if lit(name) != want {
+			t.Errorf("the switch of %s is lit: %v, want %v", name, !want, want)
+		}
+	}
+	// The switch still turns the plugin itself off and on.
+	tt.Click("Enable Broken loader")
+	settleTester(tt)
+	if p := installed(a, "broken-loader"); p.Enabled || lit("Broken loader") {
+		t.Errorf("a click on a plugin that didn't load left it enabled: %v", p.Enabled)
+	} else if s, _ := a.pluginStanding(p); s != "Off" {
+		t.Errorf("turned off, it reads %q", s)
+	}
+	tt.Click("Enable Broken loader")
+	settleTester(tt)
+	if p := installed(a, "broken-loader"); !p.Enabled || lit("Broken loader") {
+		t.Errorf("turned on again: enabled %v, lit %v", p.Enabled, lit("Broken loader"))
+	} else if s, _ := a.pluginStanding(p); s != "Didn't load" {
+		t.Errorf("turned on again, it reads %q", s)
+	}
+	tt.Click("Enable Focus timer")
+	settleTester(tt)
+	if p := installed(a, "focus-timer"); p.Enabled || lit("Focus timer") {
+		t.Errorf("Focus timer turned off: enabled %v, lit %v", p.Enabled, lit("Focus timer"))
+	}
+	tt.Click("Enable Focus timer")
+	settleTester(tt)
+	if !lit("Focus timer") {
+		t.Error("Focus timer turned on again, and its switch is not lit")
+	}
+
 	// A copy turned off: the built-in it shadows draws, under its own id.
 	if err := a.plugins.SetEnabled("greetings", false); err != nil {
 		t.Fatal(err)

@@ -200,9 +200,11 @@ func (a *app) pluginRow(c *ui.Context, p plugins.Plugin) {
 			if p.ShadowedBy != "" {
 				return // its copy has the switch
 			}
-			on := p.Enabled
-			if ui.Switch(c.Key("enabled"), &on).Label("Enable " + p.Name).Disabled(p.ID == "").Changed() {
-				a.pluginsChanged(a.plugins.SetEnabled(p.ID, on))
+			// Lit only when the plugin runs, as its pill says; a click
+			// still turns the plugin itself on or off.
+			on := p.Enabled && t != toneWarn && t != toneBad
+			if ui.Switch(c.Key("enabled"), &on).Label("Enable " + p.Name).Description(state).Disabled(p.ID == "").Changed() {
+				a.pluginsChanged(a.plugins.SetEnabled(p.ID, !p.Enabled))
 			}
 		})
 		panel := parts.Panel(func() { a.pluginDetail(c, p) })
