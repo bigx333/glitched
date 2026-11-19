@@ -593,7 +593,8 @@ func TestOpenInEditorOpensTheEditedFile(t *testing.T) {
 	h.tt.Advance(time.Second)
 	h.click("Edit " + sidebarPath)
 	h.diffsRead()
-	for _, path := range []string{sidebarPath, abs} {
+	// Each row is named by the path from the workspace.
+	for _, path := range []string{sidebarPath, "README.md"} {
 		r, ok := h.tt.Find("Diff of " + path)
 		if !ok {
 			t.Fatalf("no row for %s", path)
