@@ -875,6 +875,9 @@ func TestSnooze(t *testing.T) {
 	h := start(t, dir)
 	th := h.thread("SIP re-INVITE handling")
 	h.tt.Advance(time.Second)
+	// The project strip is a plugin's and comes in a moment later,
+	// pushing the rows down: point at the row once it has.
+	settlePlugins(t, h.a, h.tt, h.p)
 	h.hover(th.View.Title)
 	h.click("Snooze")
 	settlePlugins(t, h.a, h.tt, h.p)
