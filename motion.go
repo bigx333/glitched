@@ -39,14 +39,16 @@ var (
 		Ease:     easeOut,
 		Enter:    &ui.Motion{Y: 8},
 	}
-	// slideIn shows a panel sliding a little in from its edge as it
-	// fades in, after the layout made room for it at once.
+	// slideFrom shows a panel sliding a little in from its edge, after
+	// the layout made room for it at once, and fading as it goes. It
+	// comes in opaque: the room it takes is never an empty hole, as in a
+	// window out of sight, where what moves waits on its first frame.
 	slideFrom = func(x, y float32) ui.ElementTransition {
 		return ui.ElementTransition{
 			Colors:   true,
 			Duration: 200 * time.Millisecond,
 			Ease:     easeOut,
-			Enter:    &ui.Motion{X: x, Y: y},
+			Enter:    &ui.Motion{X: x, Y: y, Opacity: 1},
 			Exit:     &ui.Motion{X: x, Y: y},
 		}
 	}
