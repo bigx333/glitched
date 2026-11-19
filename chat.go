@@ -674,7 +674,11 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, w client.WorkSte
 		// start, so the file's name shows.
 		if verb, ok := strings.CutSuffix(w.Title, " "+w.Path); ok && w.Path != "" {
 			path := shownPath(t.View.Workspace, w.Path)
-			ui.Row(c).Gap(4).Shrink(1).Label(verb + " " + path).Children(func() {
+			name := ui.Row(c).Gap(4).Shrink(1)
+			if file >= 0 {
+				name.Label(verb + " " + path) // the button's name
+			}
+			name.Children(func() {
 				ui.Text(c, verb).FontSize(12).SingleLine().Shrink(0).TextColor(palette.text)
 				ui.Text(c, path).FontSize(12).SingleLine().TruncateStart().Shrink(1).TextColor(palette.text)
 			})
