@@ -257,7 +257,7 @@ func TestShot(t *testing.T) {
 // scene is the app showing what SCENE names, from engines the test runs.
 func scene(t *testing.T, name string) (*app, *ui.Tester) {
 	if name == "" {
-		a := newApp(t.TempDir(), nil, func(func()) {})
+		a := testApp(t, t.TempDir(), nil, func(func()) {})
 		return a, ui.NewTester(a.view, 1320, 860)
 	}
 	var h *harness

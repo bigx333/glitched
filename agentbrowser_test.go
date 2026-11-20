@@ -553,7 +553,7 @@ func TestTheBrowserSocketIsTheUsers(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	os.Chmod(dir, 0o755)
-	a := newApp(dir, nil, func(func()) {})
+	a := testApp(t, dir, nil, func(func()) {})
 	a.serveAgents()
 	if a.stopAgents == nil {
 		t.Fatal("the app serves no browser socket")

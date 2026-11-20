@@ -165,8 +165,7 @@ func TestAPluginsThemeChosenBeforeItLoadsIsShownOnceItDoes(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &posts{wake: make(chan struct{}, 1)}
-	a := newApp(dir, nil, p.post)
-	t.Cleanup(a.settingsOut.wait)
+	a := testApp(t, dir, nil, p.post)
 	offlinePosts.Store(a, p)
 	t.Cleanup(func() { offlinePosts.Delete(a) })
 	tt := newTester(t, a, 1320, 860)
@@ -218,7 +217,7 @@ func TestAThemeChosenWhileAPluginsThemeWaitsIsKept(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &posts{wake: make(chan struct{}, 1)}
-	a := newApp(dir, nil, p.post)
+	a := testApp(t, dir, nil, p.post)
 	offlinePosts.Store(a, p)
 	t.Cleanup(func() { offlinePosts.Delete(a) })
 	tt := newTester(t, a, 1320, 860)

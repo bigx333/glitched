@@ -59,8 +59,7 @@ func pluginApp(t *testing.T, names ...string) *harness {
 		install(t, dir, n)
 	}
 	p := &posts{wake: make(chan struct{}, 1)}
-	a := newApp(dir, nil, p.post)
-	t.Cleanup(a.plugins.Close)
+	a := testApp(t, dir, nil, p.post)
 	h := &harness{t, a, ui.NewTester(a.view, 1320, 1000), p}
 	h.tt.Frame()
 	return h
@@ -150,8 +149,7 @@ func TestASlowPluginLeavesTheWindowBe(t *testing.T) {
 		return { body: { type: "text", text: "done at last" } } }`), 0o644)
 	signAsOwn(t, dir, dst)
 	p := &posts{wake: make(chan struct{}, 1)}
-	a := newApp(dir, nil, p.post)
-	t.Cleanup(a.plugins.Close)
+	a := testApp(t, dir, nil, p.post)
 	h := &harness{t, a, ui.NewTester(a.view, 1320, 900), p}
 	h.tt.Frame()
 	h.click("Slow")
@@ -247,8 +245,7 @@ func TestABrokenPluginShowsWhyAndTheOthersRun(t *testing.T) {
 	os.WriteFile(filepath.Join(dst, "index.js"), []byte(`export function view() { return { body: { type: "script", text: "alert(1)" } } }`), 0o644)
 	signAsOwn(t, dir, dst)
 	p := &posts{wake: make(chan struct{}, 1)}
-	a := newApp(dir, nil, p.post)
-	t.Cleanup(a.plugins.Close)
+	a := testApp(t, dir, nil, p.post)
 	h := &harness{t, a, ui.NewTester(a.view, 1320, 900), p}
 	h.tt.Frame()
 	h.click("Broken")

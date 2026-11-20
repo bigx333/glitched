@@ -47,7 +47,7 @@ func enterReadyQ(t *testing.T, adapter provider.Adapter, messages ...string) qha
 func startQ(t *testing.T, dir string) qharness {
 	t.Helper()
 	p := &posts{wake: make(chan struct{}, 1)}
-	a := newApp(dir, nil, p.post)
+	a := testApp(t, dir, nil, p.post)
 	if err := a.backend.Start(); err != nil {
 		t.Fatal(err)
 	}

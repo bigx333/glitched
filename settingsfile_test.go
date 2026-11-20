@@ -14,7 +14,7 @@ import (
 // starts anew on the same state directory.
 func TestSettingsOutliveARestart(t *testing.T) {
 	dir := t.TempDir()
-	a := newApp(dir, nil, func(func()) {})
+	a := testApp(t, dir, nil, func(func()) {})
 	tt := ui.NewTester(a.view, 1320, 860)
 	a.router.Push("/settings/appearance")
 	tt.Frame()
@@ -34,7 +34,7 @@ func TestSettingsOutliveARestart(t *testing.T) {
 	if reflect.DeepEqual(want, fileOf(offline(t).settings)) {
 		t.Fatal("the test sets every setting to its default")
 	}
-	if got := fileOf(newApp(dir, nil, func(func()) {}).settings); !reflect.DeepEqual(got, want) {
+	if got := fileOf(testApp(t, dir, nil, func(func()) {}).settings); !reflect.DeepEqual(got, want) {
 		t.Fatalf("after a restart the settings are\n%+v\nwant\n%+v", got, want)
 	}
 }
@@ -67,7 +67,7 @@ func TestASettingsFileGivesOnlyWhatThePagesOffer(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if got := fileOf(newApp(dir, nil, func(func()) {}).settings); !reflect.DeepEqual(got, tc.want) {
+			if got := fileOf(testApp(t, dir, nil, func(func()) {}).settings); !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("the settings are\n%+v\nwant\n%+v", got, tc.want)
 			}
 		})
@@ -86,11 +86,11 @@ func TestACorruptSettingsFileIsReplacedAlone(t *testing.T) {
 	write("settings.json", "{oops")
 	write("composer.json", `{"model":"Claude Sonnet 5.5"}`)
 	write("layout.json", `{"previewWidth":500}`)
-	a := newApp(dir, nil, func(func()) {})
+	a := testApp(t, dir, nil, func(func()) {})
 	a.settings.wind = false
 	a.saveSettings()
 	a.settingsOut.wait()
-	again := newApp(dir, nil, func(func()) {})
+	again := testApp(t, dir, nil, func(func()) {})
 	if again.settings.wind || again.model != "Claude Sonnet 5.5" || again.previewDragged != 500 {
 		t.Fatalf("after the save, wind %v, model %q, preview %v", again.settings.wind, again.model, again.previewDragged)
 	}
@@ -104,7 +104,7 @@ func TestTwoWindowsKeepEachOthersSettings(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"fromANewerVersion":42}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	one, two := newApp(dir, nil, func(func()) {}), newApp(dir, nil, func(func()) {})
+	one, two := testApp(t, dir, nil, func(func()) {}), testApp(t, dir, nil, func(func()) {})
 	one.settings.theme = "Dark"
 	one.saveSettings()
 	one.settingsOut.wait()
@@ -114,7 +114,7 @@ func TestTwoWindowsKeepEachOthersSettings(t *testing.T) {
 	two.settings.fontSize, two.settings.claudeModel = 14, "Claude Haiku 5.5"
 	two.saveSettings()
 	two.settingsOut.wait()
-	again := newApp(dir, nil, func(func()) {}).settings
+	again := testApp(t, dir, nil, func(func()) {}).settings
 	if again.theme != "Dark" || again.fontSize != 14 || again.claudePath != "/usr/bin/claude" || again.claudeModel != "Claude Haiku 5.5" {
 		t.Fatalf("after both saved, theme %q, font size %v, Claude at %q on %q", again.theme, again.fontSize, again.claudePath, again.claudeModel)
 	}
