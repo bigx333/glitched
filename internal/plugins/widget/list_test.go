@@ -67,7 +67,7 @@ func TestAListOfTwentyThousandFitsAView(t *testing.T) {
 		t.Fatal(err)
 	}
 	padded := `{"body": {"type": "column", "children": [` + strings.Repeat(`{"type": "text", "text": "`+strings.Repeat("x", 30000)+`"},`, 40) + `{"type": "list", "id": "l", "label": "L", "grow": true, "items": [{"key": "a", "label": "A"}]}]}}`
-	if _, err := Decode([]byte(padded)); err == nil || !strings.Contains(err.Error(), "besides a list's items") {
+	if _, err := Decode([]byte(padded)); err == nil || !strings.Contains(err.Error(), "besides its lists' items") {
 		t.Errorf("a view over 1 MiB of widgets, with a list of one item: %v", err)
 	}
 	over := strings.Replace(view, "[", `[{"key": "one more", "label": "One more"},`, 1)

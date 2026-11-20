@@ -418,24 +418,32 @@ func DecodeWithin(b []byte, maxNodes int) (*View, error) {
 	if err := v.check(maxNodes); err != nil {
 		return nil, err
 	}
-	// The bytes past MaxBytes are the lists' items', never other widgets'.
+	// The bytes past MaxBytes are the lists' items', never other widgets':
+	// the view without its items is MaxBytes at most.
 	if len(b) > MaxBytes {
-		items := 0
+		var lists []*Node
 		v.Body.Walk(func(n *Node) {
-			for _, it := range n.Items {
-				items += len(it.Key) + len(it.Label) + len(it.Version) + len(it.Thread) + itemFraming
+			if len(n.Items) > 0 {
+				lists = append(lists, n)
 			}
 		})
-		if len(b)-items > MaxBytes {
-			return nil, fmt.Errorf("view is %d bytes, %d of them items, over the %d allowed besides a list's items", len(b), items, MaxBytes)
+		kept := make([][]ListItem, len(lists))
+		for i, n := range lists {
+			kept[i], n.Items = n.Items, nil
+		}
+		var rest bytes.Buffer
+		e := json.NewEncoder(&rest)
+		e.SetEscapeHTML(false)
+		err := e.Encode(&v)
+		for i, n := range lists {
+			n.Items = kept[i]
+		}
+		if err != nil || rest.Len() > MaxBytes {
+			return nil, fmt.Errorf("view is %d bytes besides its lists' items, over the %d allowed", rest.Len(), MaxBytes)
 		}
 	}
 	return &v, nil
 }
-
-// itemFraming is what an item's JSON spends besides its strings, at most:
-// its field names, quotes, a height and a header.
-const itemFraming = 96
 
 // DecodeRow reads one row of a list, as the rows export draws it, and
 // checks it. A row holds no control that keeps a value, no dialog, popover,

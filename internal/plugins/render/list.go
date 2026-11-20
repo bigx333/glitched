@@ -14,6 +14,8 @@ type listView struct {
 	items []widget.ListItem
 	index map[string]int
 	tall  float32
+	// drawn is the build it was last drawn in.
+	drawn int
 }
 
 // listOf is the list's view of n's items, built again for a new view's.
@@ -49,6 +51,7 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 		return
 	}
 	lv := ctl.listOf(n)
+	lv.drawn = r.cs.passes
 	ls := &lv.state
 	ls.Key = func(i int) any { return n.Items[i].Key }
 	ls.Label = func(i int) string { return n.Items[i].Label }
@@ -109,6 +112,7 @@ func (r *renderer) listRow(c *ui.Context, n *widget.Node, ctl *control, i int) {
 		}
 	})
 	if b.DoubleClicked() && !n.SubmitOnClick {
+		r.choose(n, ctl, it.Key)
 		r.submit(c, n, it.Key)
 	}
 }
@@ -171,8 +175,10 @@ func (r *renderer) submit(c *ui.Context, n *widget.Node, key string) {
 // drive lets the input e move the list l with Up and Down, and submit it
 // with Enter, as a palette's search field does.
 func (r *renderer) drive(c *ui.Context, e ui.Element, l *widget.Node) {
+	// Only a list drawn, in this build or the last, as one in a dialog
+	// shut is not.
 	ctl := r.cs.m[l.ID]
-	if ctl == nil {
+	if ctl == nil || ctl.list == nil || ctl.list.drawn < r.cs.passes-1 {
 		return
 	}
 	e.OnShortcut(0, ui.KeyDown, func() { r.move(l, ctl, 1) })
