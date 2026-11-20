@@ -140,10 +140,8 @@ func (l *listRows) forget(rev int) {
 	l.asked, l.shown, l.rev = map[string]string{}, map[string]bool{}, rev
 }
 
-// dropLists drops, as a view is shown under the session's mu, the rows of
-// the lists no view shown has: the session's, or a copy's of a place. A
-// copy shown by a drawing of an older version than the UI's keeps its
-// lists till the drawing of its own version shows.
+// dropLists drops, as a view is shown, the rows of the lists no view shown
+// has: the session's, or a copy's of a place.
 func (s *Session) dropLists() {
 	rs := &s.rows
 	live := map[rowKey]bool{}
@@ -164,13 +162,7 @@ func (s *Session) dropLists() {
 			}
 		}
 	}
-	maps.DeleteFunc(rs.lists, func(k rowKey, _ *listRows) bool {
-		if live[k] || k.place == "" {
-			return !live[k]
-		}
-		i := slices.IndexFunc(s.places.items[k.place], func(it PlaceItem) bool { return it.Key == k.copy })
-		return i < 0 || s.places.answered[[2]string{k.place, k.copy}] == s.places.items[k.place][i].Version
-	})
+	maps.DeleteFunc(rs.lists, func(k rowKey, _ *listRows) bool { return !live[k] })
 }
 
 // dropWants drops the rows asked for an earlier view that the worker
@@ -254,11 +246,11 @@ func (s *Session) drawRows(gen int, state json.RawMessage, context any, want map
 			}
 			for key, d := range rows {
 				// A row drawn for an earlier view or version than the list
-				// last asked for never replaces a drawing: the last one
-				// shows till the row's own is.
+				// last asked for never replaces what it answered, null
+				// included: the last answer shows till the row's own is.
 				v, asked := l.asked[key]
 				current := d.rev == s.Rev && (!asked || v == d.version)
-				if old := l.drawn[key]; !current && (d.node == nil || old.node != nil) {
+				if _, has := l.drawn[key]; !current && (d.node == nil || has) {
 					continue
 				}
 				l.drawn[key] = d

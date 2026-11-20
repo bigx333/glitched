@@ -257,7 +257,7 @@ func (s *Session) publish(d placeDraw) {
 					s.places.answered = map[[2]string]string{}
 				}
 				s.places.answered[k] = it.Version
-			} else if n := s.places.views[id][it.Key]; n != nil && views[it.Key] == nil {
+			} else if n := s.places.views[id][it.Key]; n != nil {
 				views[it.Key] = n
 			}
 		}
