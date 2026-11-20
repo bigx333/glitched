@@ -296,29 +296,28 @@ export function rows({ state, keys }) {
 	}
 }
 
-// A view that changes partway through a frame, as a copy drawn first
-// changes it, keeps the rows the frame showed before it.
-func TestAListKeepsItsRowsThroughTwoFirstDraws(t *testing.T) {
-	h, s, u := placeTest(t, `export function place({ items }) { return items.map(({ key }) => ({ type: "text", text: key })) }
-export function rows({ keys, place }) { return keys.map((k) => ({ type: "text", text: place.key + ":" + k })) }`)
-	a, b, c := PlaceItem{Key: "a", Version: "1"}, PlaceItem{Key: "b", Version: "1"}, PlaceItem{Key: "c", Version: "1"}
-	s.SetItems("badge", []PlaceItem{a})
-	settled(t, h, u, "a drawn", func() bool { return text(s, "a") == "a" })
-	row := func(key string) string {
-		if n := s.Row(RowAt{List: "l", Place: &PlaceRef{ID: "badge", Key: key}}, widget.ListItem{Key: "r"}); n != nil {
-			return n.Text
-		}
-		return ""
-	}
-	u.until(t, "a's row drawn", func() bool { return row("a") == "a:r" })
-	// One frame shows a, then b drawn first; the next, c drawn first,
-	// then a.
-	s.DrawFirst("badge", []PlaceItem{a, b}, []string{"b"}, time.Now().Add(2*time.Second))
-	row("b")
-	settled(t, h, u, "the frame's drawings", func() bool { return true })
-	s.DrawFirst("badge", []PlaceItem{c, a, b}, []string{"c"}, time.Now().Add(2*time.Second))
-	row("c")
-	if got := row("a"); got != "a:r" {
-		t.Fatalf("a, shown throughout, lost its row: %q", got)
+// A copy answered null, then drawn by a drawing posted but not yet shown,
+// after an event or a retry, shows that drawing at once.
+func TestAPostedDrawingReplacesAnEarlierNull(t *testing.T) {
+	for _, change := range []string{"event", "retry"} {
+		t.Run(change, func(t *testing.T) {
+			h, s, u := placeTest(t, `let starts = 0
+export function init() { return { state: ++starts > 1 } }
+export function update({ state, event }) { return { state: state || event.kind === "timer" } }
+export function place({ state, items }) { return items.map(() => state ? { type: "text", text: "ready" } : null) }`)
+			items := []PlaceItem{{Key: "a", Version: "1"}}
+			s.SetItems("badge", items)
+			settled(t, h, u, "a answered null", func() bool { return s.Rev > 0 && s.PlaceView("badge", "a") == nil })
+			if change == "retry" {
+				s.Retry()
+			} else {
+				s.Notify(AppEvent{Kind: "timer"})
+			}
+			posted(t, h, u, 1)
+			s.DrawFirst("badge", items, []string{"a"}, time.Now().Add(time.Second))
+			if got := text(s, "a"); got != "ready" {
+				t.Fatalf("a shows %q, not the drawing already posted", got)
+			}
+		})
 	}
 }

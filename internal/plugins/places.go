@@ -280,6 +280,15 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 	// Room for the drawings the worker finishes while this one is read:
 	// the one with these copies may come after another.
 	first := make(chan placeDraw, 8)
+	// A drawing the worker posted is newer than what is shown: what it
+	// answered isn't waited on.
+	s.mu.Lock()
+	posted := s.places.posted
+	newer := posted != nil && posted.seq > s.places.shownSeq
+	s.mu.Unlock()
+	if newer {
+		s.publish(*posted)
+	}
 	s.mu.Lock()
 	if s.broken || s.done {
 		s.mu.Unlock()
@@ -313,7 +322,7 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 		}
 	}
 	s.places.first = first
-	var posted *placeDraw
+	posted = nil
 	if p := s.places.posted; p != nil && p.seq > s.places.shownSeq {
 		posted = p
 	}

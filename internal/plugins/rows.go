@@ -50,11 +50,7 @@ type rowSet struct {
 	drawn map[rowKey]map[string]drawnRow
 	asked map[rowKey]map[string]string
 	shown map[rowKey]map[string]bool
-	// wasShown are those asked before the last change: a view that
-	// changes partway through a frame leaves the rows the frame asked
-	// for before it there.
-	wasShown map[rowKey]map[string]bool
-	rev      int
+	rev   int
 	// seen stamps each row as a list last asked for it: past MaxRowsKept
 	// drawn, a list keeps those it asked for last.
 	seen  map[rowKey]map[string]int
@@ -125,7 +121,7 @@ func (rs *rowSet) forget(rev int) {
 	seen := map[rowKey]map[string]int{}
 	for k, rows := range rs.drawn {
 		for key := range rows {
-			if !rs.shown[k][key] && !rs.wasShown[k][key] {
+			if !rs.shown[k][key] {
 				delete(rows, key)
 				continue
 			}
@@ -142,7 +138,6 @@ func (rs *rowSet) forget(rev int) {
 		rs.drawn = map[rowKey]map[string]drawnRow{}
 	}
 	rs.seen = seen
-	rs.wasShown = rs.shown
 	rs.asked, rs.shown, rs.rev = map[rowKey]map[string]string{}, map[rowKey]map[string]bool{}, rev
 }
 
