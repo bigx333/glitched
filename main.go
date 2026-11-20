@@ -445,6 +445,9 @@ type app struct {
 	leavingFullScreen func()
 	// lists are the threads' timelines, by thread.
 	lists map[api.ID]*ui.ListState
+	// markerFocus is the turn whose marker held the focus last frame, or
+	// -1: turnMarkers builds it and its neighbours.
+	markerFocus int
 	// rows are the threads' timelines' rows, by thread, as rowsOf
 	// derives them; posts counts the changes posted to the window, after
 	// which they are derived again.
@@ -591,7 +594,7 @@ type app struct {
 	pluginSections map[string]string
 	// pluginMessages are the messages the plugins were told of, by thread
 	// and key.
-	pluginMessages map[string]map[string]bool
+	pluginMessages map[string]*toldMessages
 	// pluginFiles are the thread's changed files the plugins were told
 	// of, by thread id, with each one's last edit.
 	pluginFiles map[string]map[string]time.Time
@@ -679,7 +682,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		pluginsOpen:    map[string]bool{},
 		pluginRecords:  map[string]string{},
 		pluginSections: map[string]string{},
-		pluginMessages: map[string]map[string]bool{},
+		pluginMessages: map[string]*toldMessages{},
 		pluginFiles:    map[string]map[string]time.Time{},
 		settings: settings{
 			theme:         systemTheme,

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -59,7 +60,6 @@ func syntheticReply(i int) string {
 	return s
 }
 
-
 // turnText is what the user said in turn i of synthetic.
 func turnText(i int) string {
 	return fmt.Sprintf("Turn %d: look at chat.go and tell me why the list jumps when a reply streams in.", i)
@@ -101,6 +101,14 @@ func TestALongTimeline(t *testing.T) {
 	changed := func() {
 		h.a.changed()
 		h.tt.Frame()
+	}
+	// apply folds an event in, as following the thread does.
+	apply := func(b api.EventBody) {
+		p, err := json.Marshal(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tr.Apply(api.Event{Cursor: api.Cursor{Log: tr.Cursor.Log, Seq: tr.Cursor.Seq + 1}, Type: api.EventType(b), Schema: api.EventSchema, At: time.Now(), Payload: p})
 	}
 	// The y of a text that shows, to tell the list kept its place.
 	at := func(t *testing.T, text string) float32 {
@@ -151,14 +159,52 @@ func TestALongTimeline(t *testing.T) {
 		at(t, turnText(5))
 	})
 
+	t.Run("Tab walks every marker, and Shift-Tab back", func(t *testing.T) {
+		h.click("Go to: " + turnText(0))
+		h.tt.Advance(time.Second)
+		names, _ := accessNames(h.tt, "Go to: ")
+		y0 := markerY(t, h.tt, turnText(0))
+		for k := 1; k < 1000; k++ {
+			h.tt.Key(0, ui.KeyTab)
+			h.tt.Frame()
+			if !h.tt.Focused("Go to: " + turnText(k)) {
+				t.Fatalf("Tab %d didn't move to the marker of turn %d", k, k)
+			}
+			if k%97 == 0 {
+				// Where it would be with every marker built, out of view
+				// past the window, and the markers that show are as they were.
+				if y := markerY(t, h.tt, turnText(k)); y-y0 != float32(k*markerPitch) {
+					t.Errorf("the marker of turn %d is %v below the first, want %v", k, y-y0, k*markerPitch)
+				}
+				if now, _ := accessNames(h.tt, "Go to: "); !slices.Equal(now[:len(names)], names) {
+					t.Errorf("Tab to turn %d changed the markers that show", k)
+				}
+			}
+		}
+		for k := 998; k > 990; k-- {
+			h.tt.Key(ui.Shift, ui.KeyTab)
+			h.tt.Frame()
+			if !h.tt.Focused("Go to: " + turnText(k)) {
+				t.Fatalf("Shift-Tab didn't move back to the marker of turn %d", k)
+			}
+		}
+		h.tt.Key(0, ui.KeyEnter)
+		h.tt.Advance(time.Second)
+		if first, _ := l().Visible(); first != 3*991 {
+			t.Errorf("Enter on the marker of turn 991 scrolled to row %d, want %d", first, 3*991)
+		}
+	})
+
 	t.Run("keeps its place as a row above grows", func(t *testing.T) {
 		l().ScrollTo(300, ui.Start)
 		h.tt.Frame()
 		h.tt.Advance(time.Second)
 		y := at(t, turnText(101))
-		// The reply above, out of view, says more.
-		reply := tr.Entries[299].(*client.AssistantEntry)
-		reply.Text += strings.Repeat("\n\nAnd another paragraph that takes room.", 6)
+		// A command of the work above, out of view, fails, and shows what
+		// it printed.
+		exit := 1
+		apply(api.WorkItem{Run: tr.Entries[298].(*client.WorkEntry).Run, Item: "s1", Status: api.WorkFailed, Exit: &exit,
+			Output: strings.Repeat("--- FAIL: TestAnother line it printed\n", 6) + "exit status 1"})
 		changed()
 		h.tt.Advance(time.Second)
 		if got := at(t, turnText(101)); got != y {
@@ -169,6 +215,16 @@ func TestALongTimeline(t *testing.T) {
 		if got := at(t, turnText(101)); got-y < 119 || got-y > 121 {
 			t.Errorf("scrolling up 120 moved the turn by %v", got-y)
 		}
+		// The work above shows what the command printed.
+		l().ScrollTo(298, ui.Start)
+		h.tt.Frame()
+		h.tt.Advance(time.Second)
+		if !slices.ContainsFunc(h.tt.Texts(), func(s string) bool { return strings.Contains(s, "TestAnother line it printed") }) {
+			t.Error("the work above doesn't show what its command printed")
+		}
+		l().ScrollTo(300, ui.Start)
+		h.tt.Frame()
+		h.tt.Advance(time.Second)
 	})
 
 	t.Run("keeps its place as older rows come above it", func(t *testing.T) {
@@ -294,4 +350,17 @@ func TestALongTimeline(t *testing.T) {
 			t.Errorf("the selection is %q, want the rest of reply 100 alone", text)
 		}
 	})
+}
+
+// markerY is the top of the marker of the turn that said text, built
+// whether or not it shows.
+func markerY(t *testing.T, tt *ui.Tester, text string) float32 {
+	t.Helper()
+	for _, n := range tt.AccessAll() {
+		if n.Name == "Go to: "+text {
+			return n.Bounds.Y
+		}
+	}
+	t.Fatalf("no marker for %q", text)
+	return 0
 }
