@@ -2,6 +2,7 @@ package main
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
 
 	"github.com/egoist/mygo/ui"
@@ -79,6 +80,9 @@ func meets(r, v ui.Rect) bool {
 }
 
 func (a *app) popover(c *ui.Context, anchor ui.Element, open *bool, fn func(panel ui.Element)) {
+	if *open {
+		focusBefore(c, fmt.Sprint("popover ", anchor.ID()))
+	}
 	ui.PopoverBase(c, anchor, open, func(panel ui.Element) {
 		a.cover(coverKey{"popover", anchor.ID()}, panel)
 		fn(panel)
@@ -87,6 +91,9 @@ func (a *app) popover(c *ui.Context, anchor ui.Element, open *bool, fn func(pane
 }
 
 func (a *app) dialog(c *ui.Context, open *bool, fn func(backdrop, panel ui.Element)) {
+	if *open {
+		focusBefore(c, fmt.Sprintf("dialog %p", open))
+	}
 	ui.DialogBase(c, open, func(backdrop, panel ui.Element) {
 		a.cover(coverKey{"dialog", backdrop.ID()}, backdrop)
 		fn(backdrop, panel)
@@ -95,10 +102,26 @@ func (a *app) dialog(c *ui.Context, open *bool, fn func(backdrop, panel ui.Eleme
 }
 
 func (a *app) alert(c *ui.Context, open *bool, title, message string, buttons ...string) int {
+	if *open {
+		focusBefore(c, fmt.Sprintf("alert %p", open))
+	}
 	chose := ui.AlertDialog(c, open, title, message, buttons...)
 	a.covering = a.covering || *open
 	a.blinding = a.blinding || *open
 	return chose
+}
+
+// focusBefore keeps, while the overlay key names shows, the element that
+// had the focus before it opened, for the focus to go back to as it
+// closes. MyGo gives the focus back to the element that had it as an
+// overlay opened, but notes which that was once it has built what's in
+// it, by when a field there that takes the focus as it shows (AutoFocus),
+// as the palette's search and an alert's default button do, has it, and
+// the focus goes nowhere. An empty overlay of its own, opened first,
+// notes the element before anything takes it, and closes with the one it
+// stands for, as it's built only while that is open.
+func focusBefore(c *ui.Context, key string) {
+	ui.Overlay(c, func() { ui.Box(c.Key("focus before " + key)).Absolute().PassThrough() })
 }
 
 // overlay builds fn over the window, which covers the app while open, and
