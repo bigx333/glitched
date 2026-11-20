@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	gotoken "go/token"
 	"image"
+	"image/draw"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -156,15 +157,33 @@ func TestDismissingGivesTheFocusBack(t *testing.T) {
 		r := e.Bounds
 		at := image.Rect(int(r.X)-4, int(r.Y)-4, int(r.X+r.W)+4, int(r.Y+r.H)+4)
 		shown := func() []byte {
-			img := h.tt.Image()
-			return img.SubImage(at).(*image.RGBA).Pix
+			crop := image.NewRGBA(image.Rect(0, 0, at.Dx(), at.Dy()))
+			draw.Draw(crop, crop.Bounds(), h.tt.Image(), at.Min, draw.Src)
+			return crop.Pix
 		}
-		want := slices.Clone(shown())
+		want := shown()
 		h.tt.KeyRepeat(ui.Cmd, ui.KeyK)
+		if !h.a.cmdkOpen {
+			t.Fatal("⌘K didn't open the palette")
+		}
 		h.tt.KeyRepeat(0, ui.KeyEscape)
 		focused(t, marker(1), "the palette dismissed")
 		if !slices.Equal(shown(), want) {
 			t.Error("the marker given the focus back isn't drawn as it was focused")
+		}
+		// An alert closes with what asked for it, which leaves the
+		// wrapper unbuilt.
+		if err := h.tt.RightClick("Another thread"); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.tt.ChooseMenuItem("Delete…"); err != nil {
+			t.Fatal(err)
+		}
+		h.tt.Frame()
+		h.tt.KeyRepeat(0, ui.KeyEscape)
+		focused(t, marker(1), "the alert dismissed")
+		if !slices.Equal(shown(), want) {
+			t.Error("the marker given the focus back by the alert isn't drawn as it was focused")
 		}
 	})
 	t.Run("a popover, from its button", func(t *testing.T) {
