@@ -150,14 +150,11 @@ func TestAPluginRunsOnlyThePalettesActions(t *testing.T) {
 		return
 	}
 	const ids = id === "all" ? (await glitched.commands.list()).map((c) => c.id).filter((id) => !id.startsWith("project.") && !id.startsWith("plugin:")) : [args.id]
+	const out = []
 	for (const id of ids) {
-		try {
-			await glitched.commands.run(id)
-			await glitched.toast("Ran " + id)
-		} catch (e) {
-			await glitched.toast("Refused " + id, e.message)
-		}
+		await glitched.commands.run(id).then(() => out.push("Ran " + id), (e) => out.push("Refused " + id + ": " + e.message))
 	}
+	await glitched.toast(out.join(", "))
 }`)
 	settle := func() { settlePlugins(t, h.a, h.tt, h.p) }
 	settle()
@@ -204,7 +201,9 @@ func TestAPluginRunsOnlyThePalettesActions(t *testing.T) {
 
 	// Every action but the projects' and the plugins' own leaves the
 	// approval to the user.
-	run("all", nil)
+	if _, all, _ := strings.Cut(run("all", nil), "Ran thread.new,"); all == "" || strings.Contains(strings.Split(all, "|")[0], "Refused") {
+		t.Errorf("the palette refused one of its own actions: %q", all)
+	}
 	if t2, ok := h.a.find(th.id()); !ok || len(t2.View.Requests) == 0 {
 		t.Fatal("an action answered the approval")
 	}
@@ -220,13 +219,13 @@ func TestAPluginRunsOnlyThePalettesActions(t *testing.T) {
 	// a confirm waits.
 	key := h.a.projectOf(th).key
 	there := func() bool { return slices.ContainsFunc(h.a.projects, func(p *project) bool { return p.key == key }) }
-	remove := "project.remove:" + key.String()
+	remove := "project.remove:" + key.id()
 	if texts := run("run", map[string]any{"id": remove}); !strings.Contains(texts, "Ran "+remove) || !h.a.removeOpen || !there() {
 		t.Fatalf("removing the project: asked %v, still there %v: %q", h.a.removeOpen, there(), texts)
 	}
 	for _, open := range []*bool{&h.a.removeOpen, &h.a.deleteOpen} {
 		*open = true
-		if texts := run("run", map[string]any{"id": "diff.toggle"}); !strings.Contains(texts, "a confirm waits for the user") {
+		if texts := run("run", map[string]any{"id": "diff.toggle"}); !strings.Contains(texts, "a dialog waits for the user") {
 			t.Errorf("an action ran under a confirm: %q", texts)
 		}
 		*open = false
@@ -290,5 +289,56 @@ func TestARowsNativesDrawTheSidebarsOwnParts(t *testing.T) {
 		if drawn := tt.HasText(name + " draws only in sidebar.body."); drawn != (name == "thread.tile") {
 			t.Errorf("%s in the palette: %q", name, tt.Texts())
 		}
+	}
+}
+
+// Nothing runs while a plugin's dialog holds the window's keys, as ⌘K
+// doesn't open the palette then, and an action's id names a project
+// without its workspace's path.
+func TestAPluginRunsNoActionUnderADialog(t *testing.T) {
+	h := start(t, inboxDir(t))
+	writeOwnPlugin(t, h.a, "modal", `{"id": "modal", "name": "Modal", "main": "index.js", "contract": "glitched", "contractVersion": 2, "capabilities": ["commands"],
+		"contributes": {"pages": [{"id": "home", "title": "Modal"}], "commands": [{"id": "list", "title": "List"}, {"id": "run", "title": "Run"}]}}`,
+		`export function view() {
+	return { body: { type: "dialog", id: "wait", title: "Plugin modal", open: true, children: [{ type: "text", text: "Still editing" }] } }
+}
+export async function command({ id }) {
+	if (id === "list") {
+		await glitched.toast("Ids", (await glitched.commands.list()).map((c) => c.id).join(" "))
+		return
+	}
+	await glitched.commands.run("settings:appearance").then(() => glitched.toast("Ran"), (e) => glitched.toast("Refused", e.message))
+}`)
+	if err := h.a.plugins.SetGranted("modal", "commands", true); err != nil {
+		t.Fatal(err)
+	}
+	settle := func() { settlePlugins(t, h.a, h.tt, h.p) }
+	run := func(cmd string) string {
+		h.a.plugins.RunCommand("modal", cmd, nil, func(err error) {
+			if err != nil {
+				t.Error(err)
+			}
+		})
+		settle()
+		return strings.Join(h.tt.Texts(), "|")
+	}
+	settle()
+	texts := run("list")
+	for _, p := range h.a.projects {
+		if !strings.Contains(texts, "project.remove:") || strings.Contains(texts, p.key.workspace) {
+			t.Fatalf("the ids name %s's workspace: %q", p.name(), texts)
+		}
+	}
+
+	h.a.router.Push("/plugins/modal/home")
+	settle()
+	h.tt.Advance(time.Second)
+	h.tt.Key(ui.Cmd, ui.KeyK)
+	h.tt.Frame()
+	if !h.tt.HasText("Plugin modal") || h.a.cmdkOpen {
+		t.Fatalf("the dialog doesn't hold ⌘K: %q", h.tt.Texts())
+	}
+	if texts := run("run"); !strings.Contains(texts, "a dialog waits for the user") || h.a.router.Path() != "/plugins/modal/home" {
+		t.Fatalf("an action ran under the dialog, to %s: %q", h.a.router.Path(), texts)
 	}
 }

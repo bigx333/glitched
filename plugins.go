@@ -374,10 +374,11 @@ type commandRecord struct {
 
 // runCommand is glitched.commands.run: what choosing the action of that
 // id in the palette does, closing it, and only while the palette could be
-// opened to choose it. An action that deletes asks first, as there.
+// opened to choose it: no dialog but the palette holds the window's keys.
+// An action that deletes asks first, as there.
 func (a *app) runCommand(id string) error {
-	if a.removeOpen || a.deleteOpen {
-		return errors.New("a confirm waits for the user")
+	if a.modal || a.removeOpen || a.deleteOpen {
+		return errors.New("a dialog waits for the user")
 	}
 	for _, cmd := range a.actions() {
 		if cmd.id == id {

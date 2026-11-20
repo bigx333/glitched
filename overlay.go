@@ -92,11 +92,13 @@ func (a *app) dialog(c *ui.Context, open *bool, fn func(backdrop, panel ui.Eleme
 		fn(backdrop, panel)
 	})
 	a.covering = a.covering || *open
+	a.modalNow = a.modalNow || *open && open != &a.cmdkOpen
 }
 
 func (a *app) alert(c *ui.Context, open *bool, title, message string, buttons ...string) int {
 	chose := ui.AlertDialog(c, open, title, message, buttons...)
 	a.covering = a.covering || *open
+	a.modalNow = a.modalNow || *open
 	a.blinding = a.blinding || *open
 	return chose
 }

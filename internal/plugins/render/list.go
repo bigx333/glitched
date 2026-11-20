@@ -16,6 +16,10 @@ type listView struct {
 	tall  float32
 	// drawn is the build it was last drawn in.
 	drawn int
+	// pointed is the key of the row the pointer came onto, and pointedAt
+	// the build that last saw it there.
+	pointed   string
+	pointedAt int
 }
 
 // listOf is the list's view of n's items, built again for a new view's.
@@ -52,6 +56,9 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 	}
 	lv := ctl.listOf(n)
 	lv.drawn = r.cs.passes
+	if lv.pointedAt < r.cs.passes-1 {
+		lv.pointed = ""
+	}
 	ls := &lv.state
 	ls.Key = func(i int) any { return n.Items[i].Key }
 	ls.Label = func(i int) string { return n.Items[i].Label }
@@ -99,8 +106,14 @@ func (r *renderer) listRow(c *ui.Context, n *widget.Node, ctl *control, i int) {
 	}
 	b.Height(h).Padding(0).Label(it.Label)
 	in.hovered = held(b) || b.Hovered()
-	if n.ChooseOnHover && b.Hovered() {
-		r.choose(n, ctl, it.Key)
+	// The pointer coming onto a row chooses it; resting there doesn't,
+	// so the keys and the plugin's own value move the choice from it.
+	if lv := ctl.list; n.ChooseOnHover && b.Hovered() {
+		if lv.pointed != it.Key {
+			lv.pointed = it.Key
+			r.choose(n, ctl, it.Key)
+		}
+		lv.pointedAt = r.cs.passes
 	}
 	if it.Thread != "" && r.st.ContextMenu != nil {
 		r.st.ContextMenu(c, b, "thread:"+it.Thread)
