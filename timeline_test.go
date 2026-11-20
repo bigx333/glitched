@@ -139,21 +139,21 @@ func TestALongTimeline(t *testing.T) {
 
 	t.Run("its markers are the ticks that show, in order", func(t *testing.T) {
 		h.tt.Advance(time.Second)
-		// Those that show, then the last, for Shift-Tab to come to.
+		// Those that show, then the last three, for Shift-Tab to come to.
 		names, shown := accessNames(h.tt, "Go to: ")
-		if want := markersShown(1000, 860) + 1; len(names) != want {
+		if want := markersShown(1000, 860) + 3; len(names) != want {
 			t.Fatalf("%d markers in the accessibility tree, want %d", len(names), want)
 		}
 		for i, name := range names {
 			k := i
-			if i == len(names)-1 {
-				k = 999
+			if i >= len(names)-3 {
+				k = 1000 - (len(names) - i)
 			}
 			if want := "Go to: " + turnText(k); name != want {
 				t.Fatalf("marker %d is %q, want %q", i, name, want)
 			}
 		}
-		if shown < len(names)-5 {
+		if shown < len(names)-7 {
 			t.Errorf("only %d of the %d markers built show", shown, len(names))
 		}
 		h.click("Go to: " + turnText(5))
@@ -187,7 +187,7 @@ func TestALongTimeline(t *testing.T) {
 				if y := markerY(t, h.tt, turnText(k)); y-y0 != float32(k*markerPitch) {
 					t.Errorf("the marker of turn %d is %v below the first, want %v", k, y-y0, k*markerPitch)
 				}
-				if now, _ := accessNames(h.tt, "Go to: "); !slices.Equal(now[:len(names)-1], names[:len(names)-1]) {
+				if now, _ := accessNames(h.tt, "Go to: "); !slices.Equal(now[:len(names)-3], names[:len(names)-3]) {
 					t.Errorf("Tab to turn %d changed the markers that show", k)
 				}
 			}

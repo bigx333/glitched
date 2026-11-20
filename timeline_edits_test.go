@@ -194,7 +194,7 @@ func TestTabWalksPastTheWindow(t *testing.T) {
 	turn := func(k int) string { return fmt.Sprintf("Go to: Turn %d", k) }
 	// markers is a window of the markers between two buttons, which tab
 	// keys walk.
-	markers := func(t *testing.T) (*ui.Tester, func(ui.Modifiers, int)) {
+	markers := func(t *testing.T) (*ui.Tester, func(ui.Modifiers, int), *app) {
 		var es []entry
 		for i := range n {
 			es = append(es, entry{kind: entryUser, key: fmt.Sprint(i), text: fmt.Sprintf("Turn %d", i)})
@@ -239,10 +239,10 @@ func TestTabWalksPastTheWindow(t *testing.T) {
 				t.Fatalf("the key focused %s, want %s", focused(), name)
 			}
 		}
-		return tt, press
+		return tt, press, &a
 	}
 	t.Run("Tab from a turn clicked to the last and on", func(t *testing.T) {
-		tt, press := markers(t)
+		tt, press, a := markers(t)
 		if err := tt.Click(turn(3)); err != nil {
 			t.Fatal(err)
 		}
@@ -250,9 +250,19 @@ func TestTabWalksPastTheWindow(t *testing.T) {
 		for k := 4; k <= n; k++ {
 			press(0, k)
 		}
+		// The handles that ask for the focus are as many as ticks were built
+		// at most, however many were built over time, and whatever size the
+		// window was.
+		for _, h := range []int{400, 160, 300, 220} {
+			tt.SetSize(480, h)
+			tt.Frame()
+		}
+		if got, most := len(a.markers[api.ID{}].handles), markersShown(n, 400)+8; got > most {
+			t.Errorf("%d handles to the ticks, want at most %d", got, most)
+		}
 	})
 	t.Run("Tab in from before the markers", func(t *testing.T) {
-		tt, press := markers(t)
+		tt, press, _ := markers(t)
 		if err := tt.Click("Before markers"); err != nil {
 			t.Fatal(err)
 		}
@@ -261,7 +271,7 @@ func TestTabWalksPastTheWindow(t *testing.T) {
 		}
 	})
 	t.Run("Shift-Tab in from after the markers to the first and on", func(t *testing.T) {
-		tt, press := markers(t)
+		tt, press, _ := markers(t)
 		if err := tt.Click("After markers"); err != nil {
 			t.Fatal(err)
 		}
@@ -270,7 +280,7 @@ func TestTabWalksPastTheWindow(t *testing.T) {
 		}
 	})
 	t.Run("Shift-Tab from the last turn, and Tab back", func(t *testing.T) {
-		tt, press := markers(t)
+		tt, press, _ := markers(t)
 		if err := tt.Click("After markers"); err != nil {
 			t.Fatal(err)
 		}
@@ -283,7 +293,7 @@ func TestTabWalksPastTheWindow(t *testing.T) {
 		}
 	})
 	t.Run("with the window not having the keys", func(t *testing.T) {
-		tt, press := markers(t)
+		tt, press, _ := markers(t)
 		if err := tt.Click(turn(3)); err != nil {
 			t.Fatal(err)
 		}
