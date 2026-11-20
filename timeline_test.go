@@ -166,12 +166,18 @@ func TestALongTimeline(t *testing.T) {
 
 	t.Run("Tab walks every marker, and Shift-Tab back", func(t *testing.T) {
 		h.click("Go to: " + turnText(0))
+		// The pointer goes into the chat, as on the Mac, and each key is
+		// followed by a frame and no more, as one held down repeats.
+		h.tt.Move(660, 300)
 		h.tt.Advance(time.Second)
 		names, _ := accessNames(h.tt, "Go to: ")
 		y0 := markerY(t, h.tt, turnText(0))
 		for k := 1; k < 1000; k++ {
-			h.tt.Key(0, ui.KeyTab)
-			h.tt.Frame()
+			if k == 500 {
+				// Scrolled meanwhile, the focus stays where it is.
+				wheel(h, -400)
+			}
+			h.tt.KeyRepeat(0, ui.KeyTab)
 			if !h.tt.Focused("Go to: " + turnText(k)) {
 				t.Fatalf("Tab %d didn't move to the marker of turn %d", k, k)
 			}
@@ -187,8 +193,7 @@ func TestALongTimeline(t *testing.T) {
 			}
 		}
 		for k := 998; k > 990; k-- {
-			h.tt.Key(ui.Shift, ui.KeyTab)
-			h.tt.Frame()
+			h.tt.KeyRepeat(ui.Shift, ui.KeyTab)
 			if !h.tt.Focused("Go to: " + turnText(k)) {
 				t.Fatalf("Shift-Tab didn't move back to the marker of turn %d", k)
 			}
