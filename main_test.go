@@ -1246,6 +1246,29 @@ func TestTurnMarkers(t *testing.T) {
 	}
 }
 
+// A marker's card shows the turn's first reply that says something as
+// prose, never a later turn's.
+func TestTurnReplyIsTheTurnsFirstProse(t *testing.T) {
+	es := []entry{
+		{kind: entryUser, text: "fix it"},
+		{kind: entryAssistant, text: "```go\nx := 1\n```"},
+		{kind: entryWork},
+		{kind: entryAssistant, text: "**Fixed** the `list`."},
+		{kind: entryAssistant, text: "Also this."},
+		{kind: entryUser, text: "thanks"},
+		{kind: entryUser, text: "and?"},
+		{kind: entryAssistant, text: "Later."},
+	}
+	turns := turnsOf(es)
+	var got []string
+	for _, tr := range turns {
+		got = append(got, turnReply(es, tr))
+	}
+	if want := []string{"Fixed the list.", "", "Later."}; !slices.Equal(got, want) {
+		t.Errorf("turn replies %q, want %q", got, want)
+	}
+}
+
 // The sidebar shows the projects chosen, several at once; choosing every
 // one is showing all.
 func TestProjectFilter(t *testing.T) {

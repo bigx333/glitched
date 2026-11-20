@@ -155,7 +155,7 @@ func firstLine(md string) string {
 		if l == "" {
 			continue
 		}
-		l = strings.NewReplacer("**", "", "`", "", "*", "").Replace(l)
+		l = markRemover.Replace(l)
 		if len(l) > 120 {
 			l = l[:117] + "…"
 		}
@@ -163,6 +163,9 @@ func firstLine(md string) string {
 	}
 	return ""
 }
+
+// markRemover takes Markdown's emphasis and code marks out of a line.
+var markRemover = strings.NewReplacer("**", "", "`", "", "*", "")
 
 // plainText is Markdown as prose on one line, for a preview: its marks
 // out, code blocks left out, lines joined by spaces.
@@ -178,7 +181,7 @@ func plainText(md string) string {
 			continue
 		}
 		l = strings.TrimSpace(strings.Trim(l, "#>*-` "))
-		l = strings.NewReplacer("**", "", "`", "", "*", "").Replace(l)
+		l = markRemover.Replace(l)
 		if l != "" {
 			out = append(out, l)
 		}
