@@ -44,6 +44,7 @@ var partTitles = map[string]string{
 	"approval.card":             "Approval card",
 	"question.card":             "Question card",
 	"composer":                  "Composer",
+	"timeline.message":          "Timeline rows",
 	"composer.access":           "Access picker",
 	"composer.send":             "Send and stop",
 	"settings.plugins":          "Settings › Plugins",

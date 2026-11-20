@@ -137,14 +137,15 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 			}
 			continue
 		}
-		a.drawPlace(c, cp.box(), d.pl, cp.key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, fire func(any)) { a.drawNative(c, name, t, n, fire) })
+		a.drawPlace(c, cp.box(), d.pl, cp.key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, fire func(any)) { a.drawNative(c, name, t, n, fire, cp.native) })
 	}
 	return drewAll
 }
 
 // drawNative draws the native widget n in a copy of the component about
-// t: only in the components it names.
-func (a *app) drawNative(c *ui.Context, component string, t *thread, n *widget.Node, fire func(any)) {
+// t: only in the components it names. body is the copy's native body,
+// which transcript.body draws.
+func (a *app) drawNative(c *ui.Context, component string, t *thread, n *widget.Node, fire func(any), body func()) {
 	in := widget.Natives[n.Name].In
 	if !slices.Contains(in, component) || widget.Natives[n.Name].Thread && t == nil {
 		ui.Text(c, n.Name+" draws only in "+strings.Join(in, ", ")+".").TextColor(palette.muted).Margin(ui.Auto)
@@ -153,6 +154,8 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, n *widget.N
 	switch n.Name {
 	case "composer.input":
 		a.composerIn(c)
+	case "transcript.body":
+		body()
 	case "diff.body":
 		var path string
 		json.Unmarshal(n.Props["path"], &path)
