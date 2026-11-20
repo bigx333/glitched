@@ -396,3 +396,54 @@ func TestAPalettesListChoosesTheRowThePointerComesOnto(t *testing.T) {
 		t.Fatalf("pointing at Alpha: %+v", ev)
 	}
 }
+
+// A pointer at rest chooses nothing, though the rows move under it: a
+// wrap the keys scroll to, or rows the plugin reorders, keep the choice.
+func TestAPointerAtRestChoosesNothingAsRowsMoveUnderIt(t *testing.T) {
+	items := make([]string, 100)
+	for i := range items {
+		items[i] = fmt.Sprintf(`{"key": "k%d", "label": "Row %02d"}`, i, i)
+	}
+	s := &screen{}
+	s.show(t, `{"body": {"type": "list", "id": "l", "label": "Results", "height": 108, "rowHeight": 36, "chooseOnHover": true, "wrapAround": true, "onChange": "choose", "onSubmit": "open", "items": [`+strings.Join(items, ",")+`]}}`)
+	draw := func(c *ui.Context) {
+		s.cs.Sync(s.v, s.rev, s.processed)
+		View(c, s.v, &s.cs, Style{Rows: func(_ string, it widget.ListItem) *widget.Node {
+			return &widget.Node{Type: "text", Text: it.Label}
+		}}, &s.md, func(ev plugins.UIEvent, _ map[string]any) int {
+			s.events = append(s.events, ev)
+			return len(s.events)
+		})
+	}
+	tt := ui.NewTester(draw, 400, 400)
+	if err := tt.Click("Row 00"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(0, ui.KeyUp)
+	tt.Frame()
+	tt.Frame()
+	tt.Key(0, ui.KeyEnter)
+	if ev := s.last(t); ev.Type != "submit" || ev.Value != "k99" {
+		t.Fatalf("Up wrapped to the last row, scrolled under the pointer, then Enter: %+v", ev)
+	}
+
+	const start = `{"body": {"type": "list", "id": "l", "label": "Results", "height": 300, "controlled": true, "value": "a", "chooseOnHover": true, "onChange": "choose", "items": [{"key": "a", "label": "Alpha"}, {"key": "b", "label": "Bravo"}, {"key": "c", "label": "Charlie"}]}}`
+	reordered := strings.Replace(start, `{"key": "b", "label": "Bravo"}, {"key": "c", "label": "Charlie"}`, `{"key": "c", "label": "Charlie"}, {"key": "b", "label": "Bravo"}`, 1)
+	s.show(t, start)
+	s.processed = len(s.events)
+	tt.Frame()
+	r, _ := tt.Find("Bravo")
+	tt.Move(r.X+r.W/2, r.Y+r.H/2)
+	if ev := s.last(t); ev.Type != "change" || ev.Value != "b" {
+		t.Fatalf("moving onto Bravo: %+v", ev)
+	}
+	n := len(s.events)
+	for i := range 6 {
+		s.processed = len(s.events)
+		s.show(t, []string{reordered, start}[i%2])
+		tt.Frame()
+	}
+	if len(s.events) != n {
+		t.Fatalf("rows reordered under a pointer at rest chose %+v", s.events[n:])
+	}
+}
