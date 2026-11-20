@@ -42,6 +42,13 @@ export function place({ items }) {
 	return items.map(({ key, context }) => context === "hide" ? null : { type: "text", text: key + " " + ++drawn })
 }`
 
+func label(s *Session, key string) string {
+	if n := s.PlaceView("badge", key); n != nil {
+		return n.Label
+	}
+	return ""
+}
+
 func text(s *Session, key string) string {
 	if n := s.PlaceView("badge", key); n != nil {
 		return n.Text
@@ -155,10 +162,10 @@ func TestAnOlderDrawingNeverReplacesANewerOne(t *testing.T) {
 // first, and they are drawn again for the drawing that copy is in.
 func TestAListInACopyKeepsItsRowsWhileAnotherIsDrawnFirst(t *testing.T) {
 	h, s, u := placeTest(t, `let calls = 0
-export function place({ items }) { return items.map(({ key }) => ({ type: "text", text: key })) }
+export function place({ items }) { return items.map(({ key }) => ({ type: "list", id: "l", label: key, height: 120 })) }
 export function rows({ keys, place }) { calls++; return keys.map((k) => ({ type: "text", text: place.key + ":" + k + "#" + calls })) }`)
 	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "1"}})
-	settled(t, h, u, "a drawn", func() bool { return text(s, "a") == "a" })
+	settled(t, h, u, "a drawn", func() bool { return label(s, "a") == "a" })
 	at := RowAt{List: "l", Place: &PlaceRef{ID: "badge", Key: "a"}}
 	row := func() string {
 		if n := s.Row(at, widget.ListItem{Key: "r"}); n != nil {
@@ -169,8 +176,8 @@ export function rows({ keys, place }) { calls++; return keys.map((k) => ({ type:
 	u.until(t, "a's row drawn", func() bool { return row() != "" })
 	first := row()
 	s.DrawFirst("badge", []PlaceItem{{Key: "a", Version: "1"}, {Key: "b", Version: "1"}}, []string{"b"}, time.Now().Add(2*time.Second))
-	if text(s, "a") != "a" || text(s, "b") != "b" {
-		t.Fatalf("after b was drawn first: a %q, b %q", text(s, "a"), text(s, "b"))
+	if label(s, "a") != "a" || label(s, "b") != "b" {
+		t.Fatalf("after b was drawn first: a %q, b %q", label(s, "a"), label(s, "b"))
 	}
 	if got := row(); got != first {
 		t.Fatalf("a's row shows %q while b is drawn first, not its last drawing %q", got, first)

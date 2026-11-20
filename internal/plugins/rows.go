@@ -45,15 +45,11 @@ func (at RowAt) key() rowKey {
 // and key, each with the view it was drawn for. A row drawn for an earlier
 // view shows till it is drawn again, so rows never flicker or wait.
 type rowSet struct {
-	// The UI thread's: drawn rows, the view each was asked for, and the
-	// rows asked of Row since the view changed, which keep their drawing.
-	drawn map[rowKey]map[string]drawnRow
-	asked map[rowKey]map[string]string
-	shown map[rowKey]map[string]bool
+	// The UI thread's: each list in a view shown, and the view lists were
+	// last checked against.
+	lists map[rowKey]*listRows
 	rev   int
-	// seen stamps each row as a list last asked for it: past MaxRowsKept
-	// drawn, a list keeps those it asked for last.
-	seen  map[rowKey]map[string]int
+	// stamp counts the rows asked of Row, which stamps each as its list's.
 	stamp int
 	// The worker's, under the session's mu: rows to draw, and the state
 	// and context of the last view drawn, which rows are drawn with: a
@@ -61,6 +57,20 @@ type rowSet struct {
 	want    map[rowKey]*rowWant
 	state   json.RawMessage
 	context any
+}
+
+// listRows is one list's rows: those drawn, and, since the view changed
+// as the list last saw it, those it asked of Row and the version it asked
+// for. Only the list's own next read in a new view drops a row it no
+// longer shows, so other lists drawn meanwhile never take its rows away.
+type listRows struct {
+	drawn map[string]drawnRow
+	asked map[string]string
+	shown map[string]bool
+	rev   int
+	// seen stamps each row as the list last asked for it: past
+	// MaxRowsKept drawn, a list keeps those it asked for last.
+	seen map[string]int
 }
 
 // drewView records, on the worker, what the view it drew was drawn with.
@@ -89,56 +99,72 @@ type rowWant struct {
 // rows asked for are drawn: a list asks for those in view.
 func (s *Session) Row(at RowAt, it widget.ListItem) *widget.Node {
 	rs := &s.rows
-	if rs.drawn == nil || rs.rev != s.Rev {
-		rs.forget(s.Rev)
+	if rs.lists == nil || rs.rev != s.Rev {
+		s.dropLists()
 		s.dropWants()
 	}
 	k := at.key()
-	if rs.shown[k] == nil {
-		rs.shown[k] = map[string]bool{}
-		rs.asked[k] = map[string]string{}
+	l := rs.lists[k]
+	if l == nil {
+		l = &listRows{drawn: map[string]drawnRow{}, seen: map[string]int{}}
+		rs.lists[k] = l
 	}
-	rs.shown[k][it.Key] = true
+	if l.shown == nil || l.rev != s.Rev {
+		l.forget(s.Rev)
+	}
+	l.shown[it.Key] = true
 	rs.stamp++
-	if rs.seen[k] == nil {
-		rs.seen[k] = map[string]int{}
-	}
-	rs.seen[k][it.Key] = rs.stamp
-	d, ok := rs.drawn[k][it.Key]
+	l.seen[it.Key] = rs.stamp
+	d, ok := l.drawn[it.Key]
 	if ok && d.rev == s.Rev && d.version == it.Version {
 		return d.node
 	}
-	if v, asked := rs.asked[k][it.Key]; !asked || v != it.Version {
-		rs.asked[k][it.Key] = it.Version
+	if v, asked := l.asked[it.Key]; !asked || v != it.Version {
+		l.asked[it.Key] = it.Version
 		s.wantRow(k, at.Place, it)
 	}
 	return d.node
 }
 
-// forget drops, as the view changes to rev, the rows no list asked for
-// since the last change: a list keeps the drawings of the rows it shows.
-func (rs *rowSet) forget(rev int) {
-	seen := map[rowKey]map[string]int{}
-	for k, rows := range rs.drawn {
-		for key := range rows {
-			if !rs.shown[k][key] {
-				delete(rows, key)
-				continue
-			}
-			if seen[k] == nil {
-				seen[k] = map[string]int{}
-			}
-			seen[k][key] = rs.seen[k][key]
-		}
-		if len(rows) == 0 {
-			delete(rs.drawn, k)
+// forget drops, as the list reads the view rev, the rows it didn't ask for
+// since it last read another: it keeps the drawings of the rows it shows.
+func (l *listRows) forget(rev int) {
+	for key := range l.drawn {
+		if !l.shown[key] {
+			delete(l.drawn, key)
+			delete(l.seen, key)
 		}
 	}
-	if rs.drawn == nil {
-		rs.drawn = map[rowKey]map[string]drawnRow{}
+	l.asked, l.shown, l.rev = map[string]string{}, map[string]bool{}, rev
+}
+
+// dropLists drops, as the view changes, the rows of the lists no view
+// shown has: the session's, or a copy's of a place.
+func (s *Session) dropLists() {
+	rs := &s.rows
+	live := map[rowKey]bool{}
+	lists := func(place, copy string, n *widget.Node) {
+		n.Walk(func(n *widget.Node) {
+			if n.Type == "list" {
+				live[rowKey{place, copy, n.ID}] = true
+			}
+		})
 	}
-	rs.seen = seen
-	rs.asked, rs.shown, rs.rev = map[rowKey]map[string]string{}, map[rowKey]map[string]bool{}, rev
+	if s.View != nil {
+		lists("", "", s.View.Body)
+	}
+	if s.places != nil {
+		for id, views := range s.places.views {
+			for key, n := range views {
+				lists(id, key, n)
+			}
+		}
+	}
+	if rs.lists == nil {
+		rs.lists = map[rowKey]*listRows{}
+	}
+	maps.DeleteFunc(rs.lists, func(k rowKey, _ *listRows) bool { return !live[k] })
+	rs.rev = s.Rev
 }
 
 // dropWants drops the rows asked for an earlier view that the worker
@@ -215,36 +241,37 @@ func (s *Session) drawRows(gen int, state json.RawMessage, context any, want map
 		if failed != nil && failedRev == s.Rev {
 			s.Err = failed
 		}
-		rs := &s.rows
-		if rs.drawn == nil {
-			rs.forget(s.Rev)
-		}
 		for k, rows := range drawn {
-			if rs.drawn[k] == nil {
-				rs.drawn[k] = map[string]drawnRow{}
+			l := s.rows.lists[k]
+			if l == nil {
+				continue // the list is gone
 			}
 			for key, d := range rows {
-				rs.drawn[k][key] = d
+				// A null asked for an earlier view or version isn't the
+				// row's drawing: the last one shows till the row's is.
+				if v, ok := l.asked[key]; d.node == nil && (d.rev < s.Rev || ok && v != d.version) {
+					continue
+				}
+				l.drawn[key] = d
 			}
-			rs.keep(k)
+			l.keep()
 		}
 	})
 }
 
-// keep drops the rows of list k a list asked for longest ago, past
-// MaxRowsKept, down to half of it: scrolling a long list keeps the rows it
-// showed last, not every row it went by.
-func (rs *rowSet) keep(k rowKey) {
-	rows := rs.drawn[k]
-	if len(rows) <= MaxRowsKept {
+// keep drops the rows the list asked for longest ago, past MaxRowsKept,
+// down to half of it: scrolling a long list keeps the rows it showed last,
+// not every row it went by.
+func (l *listRows) keep() {
+	if len(l.drawn) <= MaxRowsKept {
 		return
 	}
-	keys := slices.Collect(maps.Keys(rows))
-	slices.SortFunc(keys, func(a, b string) int { return rs.seen[k][b] - rs.seen[k][a] })
+	keys := slices.Collect(maps.Keys(l.drawn))
+	slices.SortFunc(keys, func(a, b string) int { return l.seen[b] - l.seen[a] })
 	for _, key := range keys[MaxRowsKept/2:] {
-		delete(rows, key)
-		delete(rs.asked[k], key)
-		delete(rs.seen[k], key)
+		delete(l.drawn, key)
+		delete(l.asked, key)
+		delete(l.seen, key)
 	}
 }
 
