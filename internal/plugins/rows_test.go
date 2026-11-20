@@ -362,3 +362,45 @@ export function rows({ place, keys }) { return keys.map(() => ({ type: "text", t
 	}
 	u.until(t, "a's row drawn for version 3", func() bool { return listRow(t, s, "a") == "current" })
 }
+
+// A copy changed and changed back before either drawing shows keeps its
+// list's rows.
+func TestACopyChangedAndBackKeepsItsListsRows(t *testing.T) {
+	h, s, u := placeTest(t, `export function place({ items }) {
+	return items.map(({ context }) => context === "no list" ? { type: "text", text: context }
+		: { type: "list", id: "l", height: 120, label: context, items: [{ key: "r", version: "1", label: "row" }] })
+}
+export function rows({ place, keys }) { return keys.map(() => ({ type: "text", text: place.context })) }`)
+	a := PlaceItem{Key: "a", Version: "1", Context: "row"}
+	s.SetItems("badge", []PlaceItem{a})
+	settled(t, h, u, "a drawn", func() bool { return s.PlaceView("badge", "a") != nil })
+	u.until(t, "a's row drawn", func() bool { return listRow(t, s, "a") == "row" })
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "2", Context: "no list"}})
+	posted(t, h, u, 1)
+	s.SetItems("badge", []PlaceItem{a})
+	posted(t, h, u, 2)
+	(<-u.q)()
+	(<-u.q)()
+	if got := listRow(t, s, "a"); got != "row" {
+		t.Fatalf("a changed and back shows its row as %q", got)
+	}
+}
+
+// A row read again at a version answered null, after a newer version was
+// asked for, stays null when that version comes.
+func TestARowBackAtAVersionAnsweredNullStaysNull(t *testing.T) {
+	h, s, u := placeTest(t, listModule+`
+export function rows({ place, keys }) { return keys.map(() => place.context ? { type: "text", text: place.context } : null) }`)
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "1"}})
+	settled(t, h, u, "a drawn", func() bool { return s.PlaceView("badge", "a") != nil })
+	listRow(t, s, "a")
+	settled(t, h, u, "a's row answered", func() bool { return true })
+	s.Row(RowAt{List: "l", Place: &PlaceRef{ID: "badge", Key: "a", Context: "version 2"}}, widget.ListItem{Key: "r", Version: "2"})
+	posted(t, h, u, 1)
+	listRow(t, s, "a")
+	(<-u.q)()
+	settled(t, h, u, "the worker done", func() bool { return true })
+	if got := listRow(t, s, "a"); got != "" {
+		t.Fatalf("after version 2 came, the row at version 1, answered null, shows %q", got)
+	}
+}
