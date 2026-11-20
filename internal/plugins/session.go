@@ -207,6 +207,9 @@ func (s *Session) Dispatch(ev UIEvent, values map[string]any) int {
 		if ev.Place != nil {
 			q.change = ev.Place.ID + "\x00" + ev.Place.Key + "\x00" + ev.Node // one copy's widget, not another's
 		}
+		if ev.Row != nil {
+			q.change += "\x00" + ev.Row.List + "\x00" + ev.Row.Key // one row's, not another's
+		}
 	}
 	if !s.push(q) {
 		return 0
@@ -221,6 +224,7 @@ func (s *Session) Retry() {
 	s.queue = nil
 	s.state = nil
 	s.broken = false
+	s.rows = rowSet{} // what an earlier start asked for, or drew, goes
 	gen := s.gen
 	s.mu.Unlock()
 	s.Err = nil

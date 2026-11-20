@@ -34,6 +34,10 @@ func (ctl *control) listOf(n *widget.Node) *listView {
 		lv.index[it.Key] = i
 		lv.tall += float32(n.ItemHeight(i))
 	}
+	// A choice whose item went is none.
+	if i, ok := lv.index[ctl.text]; !ok || n.Items[i].Header {
+		ctl.text = ""
+	}
 	return lv
 }
 
@@ -59,8 +63,8 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 	e.OnShortcut(0, ui.KeyUp, func() { r.move(n, ctl, -1) })
 	e.OnShortcut(0, ui.KeyHome, func() { r.move(n, ctl, -len(n.Items)) })
 	e.OnShortcut(0, ui.KeyEnd, func() { r.move(n, ctl, len(n.Items)) })
-	e.OnShortcut(0, ui.KeyEnter, func() { r.submit(kc, n, ctl) })
-	e.OnShortcut(ui.Cmd, ui.KeyEnter, func() { r.submit(kc, n, ctl) })
+	e.OnShortcut(0, ui.KeyEnter, func() { r.submit(kc, n, ctl.text) })
+	e.OnShortcut(ui.Cmd, ui.KeyEnter, func() { r.submit(kc, n, ctl.text) })
 	e.Rows(func(row ui.ListRow) { r.listRow(row.Context, n, ctl, row.Index) })
 }
 
@@ -74,7 +78,9 @@ func (r *renderer) listRow(c *ui.Context, n *widget.Node, ctl *control, i int) {
 	in.row = &plugins.RowRef{List: n.ID, Key: it.Key}
 	h := float32(n.ItemHeight(i))
 	if it.Header {
-		ui.Column(c.Key("header")).Height(h).Justify(ui.Center).Label(it.Label).Children(func() {
+		head := ui.Column(c.Key("header")).Height(h).Justify(ui.Center).Label(it.Label)
+		in.hovered = head.Hovered()
+		head.Children(func() {
 			if node != nil {
 				in.node(c, node, 0)
 			}
@@ -99,11 +105,11 @@ func (r *renderer) listRow(c *ui.Context, n *widget.Node, ctl *control, i int) {
 	}).OnClick(func() {
 		r.choose(n, ctl, it.Key)
 		if n.SubmitOnClick {
-			r.submit(c, n, ctl)
+			r.submit(c, n, it.Key)
 		}
 	})
 	if b.DoubleClicked() && !n.SubmitOnClick {
-		r.submit(c, n, ctl)
+		r.submit(c, n, it.Key)
 	}
 }
 
@@ -145,8 +151,8 @@ func (r *renderer) move(n *widget.Node, ctl *control, d int) {
 
 // submit tells the plugin the choice was submitted, with the keys held:
 // cmd is Command on macOS and Control elsewhere, where ctrl is never told.
-func (r *renderer) submit(c *ui.Context, n *widget.Node, ctl *control) {
-	if ctl.text == "" {
+func (r *renderer) submit(c *ui.Context, n *widget.Node, key string) {
+	if i, ok := r.cs.m[n.ID].listOf(n).index[key]; !ok || n.Items[i].Header {
 		return
 	}
 	s := *r
@@ -159,7 +165,7 @@ func (r *renderer) submit(c *ui.Context, n *widget.Node, ctl *control) {
 			s.mods = append(s.mods, m.name)
 		}
 	}
-	s.fire(n, n.OnSubmit, "submit", ctl.text)
+	s.fire(n, n.OnSubmit, "submit", key)
 }
 
 // drive lets the input e move the list l with Up and Down, and submit it
@@ -171,8 +177,8 @@ func (r *renderer) drive(c *ui.Context, e ui.Element, l *widget.Node) {
 	}
 	e.OnShortcut(0, ui.KeyDown, func() { r.move(l, ctl, 1) })
 	e.OnShortcut(0, ui.KeyUp, func() { r.move(l, ctl, -1) })
-	e.OnShortcut(ui.Cmd, ui.KeyEnter, func() { r.submit(c, l, ctl) })
+	e.OnShortcut(ui.Cmd, ui.KeyEnter, func() { r.submit(c, l, ctl.text) })
 	if e.Submitted() {
-		r.submit(c, l, ctl)
+		r.submit(c, l, ctl.text)
 	}
 }

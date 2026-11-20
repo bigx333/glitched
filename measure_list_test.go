@@ -59,7 +59,9 @@ func TestMeasureTenThousandRows(t *testing.T) {
 	wg.Wait()
 	t.Logf("seeded %d threads in %v", n, time.Since(seeding))
 	native := start(t, dir)
-	native.until("10,000 threads in the sidebar", func() bool { return native.tt.HasText("Thread 0 of the sidebar") && len(native.a.itemsIn(catInbox)) == n })
+	native.until("10,000 threads in the sidebar", func() bool {
+		return native.tt.HasText("Thread 0 of the sidebar") && len(native.a.itemsIn(catInbox)) == n
+	})
 	t.Logf("native sidebar, %d threads: frame %v", n, frame(native))
 
 	list := pluginApp(t, "long-list")

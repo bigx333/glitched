@@ -235,13 +235,13 @@ interface ListWidget {
   value?: string;
   /** The plugin holds the choice: once it took the user's moves, the view's value is the choice. */
   controlled?: boolean;
-  /** The id of a single-line input of the view, with no onSubmit, whose Up and Down move the choice and whose Enter submits it. */
+  /** The id of a single-line input of the view, with no onSubmit and no other list, whose Up and Down move the choice and whose Enter submits it. */
   input?: string;
   /** A click submits the row as well as choosing it, as a palette's. */
   submitOnClick?: boolean;
   /** The choice moved: the event's value is its key. */
   onChange?: Handler;
-  /** Enter, Cmd-Enter, a double click, or a click with submitOnClick: the value is the key, and modifiers the keys held. */
+  /** Enter, Cmd-Enter (Control-Enter off macOS), a double click, or a click with submitOnClick: the value is the key, and modifiers the keys held. */
   onSubmit?: Handler;
 }
 
@@ -603,7 +603,7 @@ interface PlaceArgs<S> {
   /** A component's copies have its context: HeaderActionsContext for thread.header.actions, DiffPanelContext for thread.panel.diff, and so on. */
   items: { key: string; context?: ThreadRecord | ComponentContext }[];
 }
-/** rows draws the rows of a list that Glitched shows: a widget or null each, in the order of keys. */
+/** rows draws the rows of a list that Glitched shows: a widget or null each, in the order of keys; null for a key the state no longer has. A row is at most 200 widgets and 16 KiB. */
 interface RowsArgs<S> extends InitArgs {
   /** The list's id. */
   list: string;

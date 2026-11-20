@@ -1,15 +1,22 @@
 package plugins
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 
 	"glitched/internal/plugins/widget"
 )
 
-// MaxRowBatch is how many rows of a list one rows call draws.
-const MaxRowBatch = 200
+// The bounds of a list's rows: how many one rows call draws, and how many
+// a list keeps drawn, each at most widget.MaxRowBytes.
+const (
+	MaxRowBatch = 200
+	MaxRowsKept = 1000
+)
 
 // RowAt names a list whose rows a session draws: the list's id in a page or
 // tab, and for a list in a copy of a place, that copy.
@@ -43,6 +50,10 @@ type rowSet struct {
 	asked map[rowKey]map[string]string
 	shown map[rowKey]map[string]bool
 	rev   int
+	// seen stamps each row as a list last asked for it: past MaxRowsKept
+	// drawn, a list keeps those it asked for last.
+	seen  map[rowKey]map[string]int
+	stamp int
 	// want is the worker's, under the session's mu: rows to draw.
 	want map[rowKey]*rowWant
 }
@@ -68,6 +79,7 @@ func (s *Session) Row(at RowAt, it widget.ListItem) *widget.Node {
 	rs := &s.rows
 	if rs.drawn == nil || rs.rev != s.Rev {
 		rs.forget(s.Rev)
+		s.dropWants()
 	}
 	k := at.key()
 	if rs.shown[k] == nil {
@@ -75,6 +87,11 @@ func (s *Session) Row(at RowAt, it widget.ListItem) *widget.Node {
 		rs.asked[k] = map[string]string{}
 	}
 	rs.shown[k][it.Key] = true
+	rs.stamp++
+	if rs.seen[k] == nil {
+		rs.seen[k] = map[string]int{}
+	}
+	rs.seen[k][it.Key] = rs.stamp
 	d, ok := rs.drawn[k][it.Key]
 	if ok && d.rev == s.Rev && d.version == it.Version {
 		return d.node
@@ -93,13 +110,26 @@ func (rs *rowSet) forget(rev int) {
 		for key := range rows {
 			if !rs.shown[k][key] {
 				delete(rows, key)
+				delete(rs.seen[k], key)
 			}
+		}
+		if len(rows) == 0 {
+			delete(rs.drawn, k)
+			delete(rs.seen, k)
 		}
 	}
 	if rs.drawn == nil {
-		rs.drawn = map[rowKey]map[string]drawnRow{}
+		rs.drawn, rs.seen = map[rowKey]map[string]drawnRow{}, map[rowKey]map[string]int{}
 	}
 	rs.asked, rs.shown, rs.rev = map[rowKey]map[string]string{}, map[rowKey]map[string]bool{}, rev
+}
+
+// dropWants drops the rows asked for an earlier view that the worker
+// hasn't taken yet: the rows the new view shows are asked again.
+func (s *Session) dropWants() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	maps.DeleteFunc(s.rows.want, func(_ rowKey, w *rowWant) bool { return w.rev < s.Rev })
 }
 
 func (s *Session) wantRow(k rowKey, place *PlaceRef, it widget.ListItem) {
@@ -141,14 +171,15 @@ func (s *Session) drawRows(gen int, state json.RawMessage, context any, want map
 	for k, w := range want {
 		rows := map[string]drawnRow{}
 		drawn[k] = rows
-		for keys := w.keys; len(keys) > 0 && failed == nil; {
+		for keys := w.keys; len(keys) > 0; {
 			batch := keys[:min(len(keys), MaxRowBatch)]
 			keys = keys[len(batch):]
 			nodes, err := s.callRows(k.list, w.place, batch, state, context)
-			if err != nil {
-				failed = fmt.Errorf("rows of %s: %w", k.list, err)
+			if err != nil && nodes == nil {
+				failed = cmp.Or(failed, fmt.Errorf("rows of %s: %w", k.list, err))
 				break
 			}
+			failed = cmp.Or(failed, err)
 			for i, key := range batch {
 				rows[key] = drawnRow{nodes[i], w.rev, w.versions[key]}
 			}
@@ -160,7 +191,6 @@ func (s *Session) drawRows(gen int, state json.RawMessage, context any, want map
 		}
 		if failed != nil {
 			s.Err = failed
-			return
 		}
 		rs := &s.rows
 		if rs.drawn == nil {
@@ -173,8 +203,25 @@ func (s *Session) drawRows(gen int, state json.RawMessage, context any, want map
 			for key, d := range rows {
 				rs.drawn[k][key] = d
 			}
+			rs.keep(k)
 		}
 	})
+}
+
+// keep drops the rows of list k a list asked for longest ago, past
+// MaxRowsKept, down to half of it: scrolling a long list keeps the rows it
+// showed last, not every row it went by.
+func (rs *rowSet) keep(k rowKey) {
+	rows := rs.drawn[k]
+	if len(rows) <= MaxRowsKept {
+		return
+	}
+	keys := slices.Collect(maps.Keys(rows))
+	slices.SortFunc(keys, func(a, b string) int { return rs.seen[k][b] - rs.seen[k][a] })
+	for _, key := range keys[MaxRowsKept/2:] {
+		delete(rows, key)
+		delete(rs.asked[k], key)
+	}
 }
 
 func (s *Session) callRows(list string, place *PlaceRef, keys []string, state json.RawMessage, context any) ([]*widget.Node, error) {
@@ -193,16 +240,20 @@ func (s *Session) callRows(list string, place *PlaceRef, keys []string, state js
 	if err := json.Unmarshal(raw, &out); err != nil || len(out) != len(keys) {
 		return nil, fmt.Errorf("rows answered %.40s…, not a list of %d widgets or nulls", raw, len(keys))
 	}
+	// A row that doesn't check draws nothing, and says why; the others
+	// draw.
 	nodes := make([]*widget.Node, len(keys))
+	var failed error
 	for i, w := range out {
 		if string(w) == "null" {
 			continue
 		}
 		n, err := widget.DecodeRow(w)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", keys[i], err)
+			failed = cmp.Or(failed, fmt.Errorf("rows of %s: %s: %w", list, keys[i], err))
+			continue
 		}
 		nodes[i] = n
 	}
-	return nodes, nil
+	return nodes, failed
 }
