@@ -279,7 +279,7 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) {
 			})
 		}
 	})
-	a.turnMarkers(c, rs, l)
+	a.turnMarkers(c, t.id(), rs, l)
 }
 
 // threadEmpty is the context of thread.empty.

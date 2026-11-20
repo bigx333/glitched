@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"glitched/internal/api"
 )
 
 // Turn markers run down the chat's edge, as Codex's and T3 Code's do: a
@@ -55,10 +57,11 @@ func markersShown(n int, h float32) int {
 
 // turnMarkers draws the thread's markers over the chat's left edge, for
 // its list l. With fewer than two turns, there's nothing to navigate.
-// Only the ticks the window can show are built, and, past them, the tick
-// holding the focus and its neighbours, where they would be, below the
-// window: Tab and Shift-Tab walk every tick, as with all of them built.
-func (a *app) turnMarkers(c *ui.Context, rs rows, l *ui.ListState) {
+// Only the ticks the window can show are built, and, past them, where
+// they would be, below the window, the tick that held the focus and its
+// neighbours, and the last tick: Tab and Shift-Tab walk every tick, as
+// with all of them built.
+func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
 	es, turns := rs.es, rs.turns
 	if len(turns) < 2 {
 		return
@@ -81,23 +84,20 @@ func (a *app) turnMarkers(c *ui.Context, rs rows, l *ui.ListState) {
 	_, py, over := col.PointerPosition()
 	colBox := col.Bounds()
 	_, h := c.Size()
-	shown := markersShown(len(turns), h)
-	from, to := shown, shown
-	if f := a.markerFocus; f >= shown-1 && f < len(turns) {
-		from, to = max(shown, f-1), min(len(turns), f+2)
+	n := len(turns)
+	shown := markersShown(n, h)
+	// The ticks built: those that show, then, past them, the ones
+	// around the focus and the last, which Shift-Tab comes to first.
+	built := [][2]int{{0, shown}}
+	if f, ok := a.markerFocus[id]; ok && f >= shown-1 && f < n {
+		built = append(built, [2]int{max(shown, f-1), min(n, f+2)})
 	}
-	a.markerFocus = -1
+	built = append(built, [2]int{max(shown, n-1), n})
+	delete(a.markerFocus, id)
 	col.Children(func() {
 		pointed, pointedY := -1, float32(0)
 		nearest := float32(math.MaxFloat32)
-		for k := range to {
-			if k == shown && from > shown {
-				// The ticks skipped, with the gaps around them but one.
-				ui.Box(c.Key("skipped")).Height(float32((from-shown)*markerPitch - markerGap))
-			}
-			if k >= shown && k < from {
-				continue
-			}
+		tick := func(k int) {
 			tr := turns[k]
 			b := ui.ButtonBase(c.Key(es[tr.entry].key)).Padding(3, 6).Cursor(ui.CursorPointer).
 				Label("Go to: " + preview(es[tr.entry]))
@@ -125,10 +125,21 @@ func (a *app) turnMarkers(c *ui.Context, rs rows, l *ui.ListState) {
 				}
 			})
 			if b.Focused() {
-				a.markerFocus = k
+				a.markerFocus[id] = k
 			}
 			if b.Clicked() {
 				l.ScrollTo(tr.entry, ui.Start)
+			}
+		}
+		k := 0
+		for _, r := range built {
+			if r[0] > k {
+				// The ticks skipped, with the gaps around them but one.
+				ui.Box(c.Key(fmt.Sprint("skipped", r[0]))).Height(float32((r[0]-k)*markerPitch - markerGap))
+				k = r[0]
+			}
+			for ; k < r[1]; k++ {
+				tick(k)
 			}
 		}
 		if over && pointed >= 0 {

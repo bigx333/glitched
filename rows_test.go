@@ -227,4 +227,15 @@ func TestAnEditsPathChanges(t *testing.T) {
 	if files := a.rowsOf(th).files; len(files) != 1 || files[0].path != "b.go" {
 		t.Errorf("the diff lists %+v after the edit moved to b.go", files)
 	}
+	// Again and again, read each time and not, past the edits a
+	// transcript keeps.
+	for i := range 3 * 4096 {
+		path := fmt.Sprintf("%c.go", 'c'+i%3)
+		play(api.WorkItem{Run: first, Item: "e", Status: api.WorkCompleted, Path: path})
+		if i < 4096 || i%1000 == 999 {
+			if files := a.rowsOf(th).files; len(files) != 1 || files[0].path != path {
+				t.Fatalf("the diff lists %+v after the edit %d moved to %s", files, i, path)
+			}
+		}
+	}
 }

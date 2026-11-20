@@ -25,36 +25,48 @@ type Transcript struct {
 	starting api.ID     // the run admitted and not yet started, stopped or ended
 	wakes    map[api.ID]*wake
 	// edits are the indexes of Entries changed in place, in the order
-	// they changed, the same one once in a row: Edits reads them.
-	edits []int
+	// they changed, but for the first editsBase, dropped: Edits reads
+	// them. An entry changed again before a reader was told of its last
+	// change is noted once.
+	edits                []int
+	editsBase, editsRead int
 }
 
-// Edits is what changed in place among Entries since a reader's mark:
-// the lowest index of an entry changed, len(Entries) when none was, and
-// the mark to pass next time. An entry appended is not an edit; folding
-// a snapshot replaces the entries and starts the marks again, which a mark
-// past them tells, as all changed.
-func (t *Transcript) Edits(mark int) (low, next int) {
-	if mark > len(t.edits) {
-		return 0, len(t.edits)
+// editsKept is how many edits a transcript keeps: a reader further
+// behind is told all changed.
+const editsKept = 4096
+
+// Edits is what changed in place among Entries since a reader's mark: the
+// indexes of the entries changed, all when the reader is too far behind to
+// say, and the mark to pass next time. The indexes are the transcript's,
+// to read before it changes again. An entry appended is not an edit;
+// folding a snapshot replaces the entries and starts the marks again,
+// which a mark past them tells, as all changed.
+func (t *Transcript) Edits(mark int) (edited []int, all bool, next int) {
+	next = t.editsBase + len(t.edits)
+	t.editsRead = next
+	if mark < t.editsBase || mark > next {
+		return nil, true, next
 	}
-	low = len(t.Entries)
-	for _, i := range t.edits[mark:] {
-		low = min(low, i)
-	}
-	return low, len(t.edits)
+	return t.edits[mark-t.editsBase:], false, next
 }
 
 // edited notes that e, one of Entries, changed in place. It looks from the
 // end, where events change entries.
 func (t *Transcript) edited(e Entry) {
 	for i := len(t.Entries) - 1; i >= 0; i-- {
-		if t.Entries[i] == e {
-			if n := len(t.edits); n == 0 || t.edits[n-1] != i {
-				t.edits = append(t.edits, i)
-			}
+		if t.Entries[i] != e {
+			continue
+		}
+		n := len(t.edits)
+		if n > 0 && t.edits[n-1] == i && t.editsBase+n > t.editsRead {
 			return
 		}
+		if n == editsKept {
+			t.editsBase, t.edits = t.editsBase+n, t.edits[:0]
+		}
+		t.edits = append(t.edits, i)
+		return
 	}
 }
 
