@@ -139,17 +139,39 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 			pick() // the wait may have changed any copy's drawing, not only the new ones'
 		}
 	}
+	drawn := f.drawn[name]
+	if drawn == nil {
+		drawn = &componentDrawn{}
+		if t != nil {
+			id := t.id()
+			drawn.thread = &id
+		}
+		for _, pl := range replacers {
+			drawn.replacers = append(drawn.replacers, replacerDrawn{pl.Plugin, a.plugins.Live(pl.Plugin), a.plugins.Failed(pl.Plugin) != nil})
+		}
+		f.drawn[name] = drawn
+	}
 	drewAll := true
 	for i, cp := range copies {
+		var by copyDrawn
+		for _, pl := range replacers {
+			if app := a.plugins.Live(pl.Plugin); app != nil && app.AnsweredNull(pl.Place.ID, cp.key) {
+				by.nulls = append(by.nulls, pl.Plugin)
+			}
+		}
 		// When every one failed, the first one's last good drawing stays:
 		// a row that can still be clicked beats none. Where Glitched draws
 		// the built-in itself, it does instead.
 		d := cmp.Or(good[i], failed[i])
 		if d == nil || good[i] == nil && plugins.ComponentNamed(name).Native {
 			drewAll = false
+			by.glitched = cp.native != nil
+			drawn.copies = append(drawn.copies, by)
 			cp.fallback(c)
 			continue
 		}
+		by.plugin = d.pl.Plugin
+		drawn.copies = append(drawn.copies, by)
 		a.drawPlace(c, cp.box(), d.pl, cp.key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, row string, fire func(any)) {
 			a.drawNative(c, name, t, row, n, fire, cp.native)
 		})

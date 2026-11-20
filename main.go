@@ -593,6 +593,13 @@ type app struct {
 	// placeControls their inputs' values.
 	placeFrame    placeFrame
 	placeControls map[placeKey]*render.Controls
+	// partsDrawn is who drew each component's copies, as the last frame
+	// that drew it did, for Settings to say.
+	partsDrawn map[string]*componentDrawn
+	// frames counts the frames that drew plugins' places; scopeFrames is
+	// the last that drew a thread's components, and the app's own.
+	frames      int
+	scopeFrames [2]int
 	// pluginRecords are what the plugins were last told of the threads,
 	// and pluginSections the sidebar section each was last in.
 	pluginRecords  map[string]string

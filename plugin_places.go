@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -79,6 +80,44 @@ type placeFrame struct {
 	keys  map[placeKey]bool
 	// waited are the components that waited for a first drawing.
 	waited map[string]bool
+	// drawn is who drew the copies of each component drawn.
+	drawn map[string]*componentDrawn
+}
+
+// componentDrawn is who drew each copy of a component in a frame, in
+// order: thread is the thread they were about, nil for a component of the
+// app's own.
+type componentDrawn struct {
+	thread *api.ID
+	copies []copyDrawn
+	// frame is the frame that drew them, and replacers the plugins that
+	// replaced the component then, best first, as they stood.
+	frame     int
+	replacers []replacerDrawn
+}
+
+// replacerDrawn is a plugin that replaced a component as a frame drew it:
+// its session then, and whether its last drawing had failed.
+type replacerDrawn struct {
+	id      string
+	session *plugins.Session
+	failed  bool
+}
+
+// scopeOf is 1 for a thread's component, 0 for the app's own.
+func scopeOf(d *componentDrawn) int {
+	if d.thread != nil {
+		return 1
+	}
+	return 0
+}
+
+// copyDrawn is who drew one copy: the plugin, or Glitched when glitched,
+// or nothing; and the plugins that answered null for it.
+type copyDrawn struct {
+	plugin   string
+	glitched bool
+	nulls    []string
 }
 
 // frameOf is this frame's record of what the plugins drew, with the slot
@@ -86,7 +125,7 @@ type placeFrame struct {
 func (a *app) frameOf(at string) *placeFrame {
 	f := &a.placeFrame
 	if f.items == nil {
-		f.items, f.slots, f.keys, f.waited = map[[2]string][]plugins.PlaceItem{}, map[string]bool{}, map[placeKey]bool{}, map[string]bool{}
+		f.items, f.slots, f.keys, f.waited, f.drawn = map[[2]string][]plugins.PlaceItem{}, map[string]bool{}, map[placeKey]bool{}, map[string]bool{}, map[string]*componentDrawn{}
 	}
 	f.slots[at] = true
 	return f
@@ -159,7 +198,14 @@ func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key s
 func (a *app) syncPlaces() {
 	f := a.placeFrame
 	a.placeFrame = placeFrame{}
-	if a.plugins == nil || f.slots == nil {
+	if a.plugins == nil {
+		return
+	}
+	// A record of a session since stopped holds it no longer.
+	maps.DeleteFunc(a.partsDrawn, func(_ string, d *componentDrawn) bool {
+		return slices.ContainsFunc(d.replacers, func(r replacerDrawn) bool { return a.plugins.Live(r.id) != r.session })
+	})
+	if f.slots == nil {
 		return
 	}
 	for at := range f.slots {
@@ -176,6 +222,15 @@ func (a *app) syncPlaces() {
 			delete(a.placeControls, k)
 		}
 	}
+	if a.partsDrawn == nil {
+		a.partsDrawn = map[string]*componentDrawn{}
+	}
+	a.frames++
+	for _, d := range f.drawn {
+		d.frame = a.frames
+		a.scopeFrames[scopeOf(d)] = a.frames
+	}
+	maps.Copy(a.partsDrawn, f.drawn)
 }
 
 // emitThreadChanges tells the plugins that hear thread.changed of each

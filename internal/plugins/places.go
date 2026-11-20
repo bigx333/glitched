@@ -97,6 +97,10 @@ func (h *Host) App(id string) *Session {
 	return s
 }
 
+// Live is the plugin id's app session if one runs: unlike App, it starts
+// none.
+func (h *Host) Live(id string) *Session { return h.sessions[pageKey{plugin: id}] }
+
 // SetItems says which copies of the place id the UI shows now. It draws
 // them again only when one came, went or changed its version.
 func (s *Session) SetItems(place string, items []PlaceItem) {
@@ -126,6 +130,15 @@ func (s *Session) SetItems(place string, items []PlaceItem) {
 // PlaceView is what the plugin drew for one copy of its place, or nil.
 func (s *Session) PlaceView(place, key string) *widget.Node {
 	return s.places.views[place][key]
+}
+
+// AnsweredNull is whether the plugin's drawing shown answered null for
+// the copy key of the place: not one it hasn't answered yet.
+func (s *Session) AnsweredNull(place, key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.places.answered[[2]string{place, key}]
+	return ok && s.places.views[place][key] == nil
 }
 
 // PlaceContext is the context a copy of the place was drawn with.
