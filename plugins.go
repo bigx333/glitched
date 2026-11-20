@@ -50,6 +50,7 @@ type pluginPage struct {
 }
 
 var pluginIcons = map[string]*ui.SVG{
+	"server":   icServer,
 	"sparkles": icSparkles,
 	"code":     icCode,
 	"globe":    icGlobe,
@@ -347,7 +348,7 @@ func (a *app) pluginItem(c *ui.Context, k pluginKey, item plugin.Item) {
 func (a *app) pluginCommands() []command {
 	var out []command
 	for _, pc := range a.plugins.Commands() {
-		out = append(out, command{section: "Actions", label: pc.PluginName + ": " + pc.Title, icon: icPlug, run: func() {
+		out = append(out, command{id: "plugin:" + pc.Plugin + ":" + pc.ID, section: "Actions", label: pc.PluginName + ": " + pc.Title, icon: "plug-circle", run: func() {
 			a.plugins.RunCommand(pc.Plugin, pc.ID, nil, func(err error) {
 				if err != nil {
 					a.pluginNotice(ui.Toast{Title: pc.PluginName + ": " + pc.Title + " failed", Description: err.Error()})
@@ -359,6 +360,34 @@ func (a *app) pluginCommands() []command {
 }
 
 var statusNames = map[status]string{statusIdle: "idle", statusWorking: "working", statusCompleted: "completed", statusApproval: "waiting"}
+
+// commandRecord is one of the palette's actions as glitched.commands.list
+// gives it.
+type commandRecord struct {
+	ID      string `json:"id"`
+	Section string `json:"section"`
+	Label   string `json:"label"`
+	Hint    string `json:"hint,omitempty"`
+	Icon    string `json:"icon"`
+	Also    string `json:"also,omitempty"`
+}
+
+// runCommand is glitched.commands.run: what choosing the action of that
+// id in the palette does, closing it, and only while the palette could be
+// opened to choose it. An action that deletes asks first, as there.
+func (a *app) runCommand(id string) error {
+	if a.removeOpen || a.deleteOpen {
+		return errors.New("a confirm waits for the user")
+	}
+	for _, cmd := range a.actions() {
+		if cmd.id == id {
+			a.cmdkOpen = false
+			cmd.run()
+			return nil
+		}
+	}
+	return fmt.Errorf("no command %q: glitched.commands.list names them", id)
+}
 
 // pluginEffect does what the plugin id asked for, which the host already
 // checked it may. It runs on the UI thread.
@@ -556,6 +585,16 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		}
 		a.deleting, a.deleteOpen = t, true
 		return nil, nil
+	case "commands.list":
+		out := []commandRecord{}
+		for _, cmd := range a.actions() {
+			out = append(out, commandRecord{cmd.id, cmd.section, cmd.label, cmd.hint, cmd.icon, cmd.also})
+		}
+		return out, nil
+	case "commands.run":
+		var args struct{ ID string }
+		json.Unmarshal(e.Args, &args)
+		return nil, a.runCommand(args.ID)
 	case "projects.remove":
 		var args struct{ Workspace, Machine string }
 		json.Unmarshal(e.Args, &args)

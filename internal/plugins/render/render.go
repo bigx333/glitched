@@ -53,10 +53,16 @@ type Style struct {
 	// Tile draws a project's mark: its icon, white on its color. Nil
 	// draws the icon on the color.
 	Tile func(c *ui.Context, icon *ui.SVG, color ui.Color, size float32)
-	// Native draws a native widget, which the checks let only Natives be:
-	// fire gives the plugin a change. Nil, outside a component, says it
-	// draws only in one.
-	Native func(c *ui.Context, n *widget.Node, fire func(value any))
+	// Native draws a native widget, which the checks let only Natives be,
+	// in a list's row about the thread its item names, else "": fire gives
+	// the plugin a change. Nil, outside a component, says it draws only in
+	// one.
+	Native func(c *ui.Context, n *widget.Node, thread string, fire func(value any))
+	// ListRow does to the row e of a list's item i what the app does to
+	// its own rows, as their transitions and the jokes played on them; it
+	// says whether the row stays as though pointed at, as while a popover
+	// of it is open. Nil does nothing.
+	ListRow func(c *ui.Context, list *widget.Node, i int, e ui.Element) (held bool)
 	// Rows is the row of a list's item as the plugin drew it, nil before
 	// it did: the list asks for the rows in view alone. Nil draws none.
 	Rows func(list string, it widget.ListItem) *widget.Node
@@ -241,9 +247,11 @@ type renderer struct {
 	dispatch func(plugins.UIEvent, map[string]any) int
 	// inputs are the lists the inputs of the view move, by the input's id.
 	inputs map[string]*widget.Node
-	// row is the list's row being drawn, and hovered whether the pointer
-	// is over it; mods are the keys held as a list is submitted.
+	// row is the list's row being drawn, thread the thread its item
+	// names, and hovered whether the pointer is over it; mods are the keys
+	// held as a list is submitted.
 	row     *plugins.RowRef
+	thread  string
 	hovered bool
 	mods    []string
 }
@@ -457,7 +465,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 				ui.Text(c, n.Name+" draws only in a component of Glitched's.").TextColor(st.Muted).Margin(ui.Auto)
 				return
 			}
-			st.Native(c, n, func(value any) { r.fire(n, n.OnChange, "change", value) })
+			st.Native(c, n, r.thread, func(value any) { r.fire(n, n.OnChange, "change", value) })
 		})
 		return
 	}

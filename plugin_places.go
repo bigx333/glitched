@@ -129,7 +129,7 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread) {
 // and hands what the user does there to its app session.
 //
 // native draws the native widgets of a component's copy, nil elsewhere.
-func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key string, ctx any, app *plugins.Session, node *widget.Node, native func(*ui.Context, *widget.Node, func(any))) {
+func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key string, ctx any, app *plugins.Session, node *widget.Node, native func(c *ui.Context, n *widget.Node, row string, fire func(any))) {
 	pk := placeKey{pl.Plugin, pl.Place.ID, key}
 	a.placeFrame.keys[pk] = true
 	cs := a.placeControls[pk]

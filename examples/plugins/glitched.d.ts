@@ -239,6 +239,10 @@ interface ListWidget {
   input?: string;
   /** A click submits the row as well as choosing it, as a palette's. */
   submitOnClick?: boolean;
+  /** The row under the pointer becomes the choice, as a palette's. */
+  chooseOnHover?: boolean;
+  /** Up from the first item goes to the last, Down from the last to the first; Home and End stop at the ends. */
+  wrapAround?: boolean;
   /** The choice moved: the event's value is its key. */
   onChange?: Handler;
   /** Enter, Cmd-Enter (Control-Enter off macOS), a double click, or a click with submitOnClick: the value is the key, and modifiers the keys held. */
@@ -292,6 +296,20 @@ type NativeWidget = {
   | {
       /** A timeline row as Glitched draws it, live, in timeline.message: placed exactly once, in rows, columns and cards alone. */
       name: "transcript.body";
+    }
+  | {
+      /**
+       * In a list's row of sidebar.body, about the thread its item names:
+       * the row's actions (place it with when: "hover"), the field that
+       * renames it while the user does, its project's tile with its state
+       * and jokes, or its children's toggle.
+       */
+      name: "thread.row.actions" | "thread.rename" | "thread.tile" | "thread.children";
+    }
+  | {
+      /** In a list's row of sidebar.body, palette or agents.body: what the item's thread is doing, as a mark or, with dot, the agents panel's dot. */
+      name: "thread.status";
+      props?: { dot?: boolean };
     }
 );
 
@@ -363,6 +381,21 @@ interface Disposition {
   state: "inbox" | "snoozed" | "settled";
   /** RFC 3339, a snooze's. */
   until?: string;
+}
+
+/** One of the command palette's actions, as commands.list gives it. */
+interface CommandRecord {
+  /** Names it to commands.run. */
+  id: string;
+  /** The palette's heading over it. */
+  section: string;
+  label: string;
+  /** Its shortcut's keycaps. */
+  hint?: string;
+  /** One of the app's icons, by name. */
+  icon: string;
+  /** Words a search finds it by, whole, not shown. */
+  also?: string;
 }
 
 /** A project, as projects.list gives it. */
@@ -746,6 +779,12 @@ declare const glitched: {
     configure(thread: string, options: { model?: string; effort?: "low" | "medium" | "high" | "max"; fast?: boolean }): Promise<void>;
     /** The access of its next turns, one the access picker offers; with "", the default for new threads. Needs threads:access. */
     setAccess(thread: string, access: AccessLevel): Promise<void>;
+  };
+  commands: {
+    /** The command palette's actions, in its order. Needs commands. */
+    list(): Promise<CommandRecord[]>;
+    /** Does what choosing the action in the palette does, and closes it; only one list names now. Needs commands. */
+    run(id: string): Promise<void>;
   };
   models: {
     /** The models the composer's picker offers, and the efforts. */

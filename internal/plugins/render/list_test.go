@@ -210,3 +210,132 @@ func TestAListDrawsTheRowsInViewAndKeepsTheChoice(t *testing.T) {
 		t.Fatalf("Enter submitted an item the view no longer has: %+v", s.last(t))
 	}
 }
+
+// A palette's list moves its choice to the row pointed at, and its Up and
+// Down go on from one end to the other, past headers; Home and End stop.
+func TestAPalettesListFollowsThePointerAndWrapsAround(t *testing.T) {
+	s := &screen{}
+	s.show(t, `{"body": {"type": "list", "id": "l", "label": "Results", "height": 400, "chooseOnHover": true, "wrapAround": true, "onChange": "chose", "items": [
+		{"key": "h0", "label": "Actions", "header": true},
+		{"key": "a", "label": "Alpha"}, {"key": "b", "label": "Bravo"},
+		{"key": "h1", "label": "Threads", "header": true},
+		{"key": "c", "label": "Charlie"}]}}`)
+	st := Style{Rows: func(list string, it widget.ListItem) *widget.Node {
+		row, _ := widget.DecodeRow([]byte(`{"type": "text", "text": "` + it.Label + `"}`))
+		return row
+	}}
+	tt := ui.NewTester(func(c *ui.Context) {
+		s.cs.Sync(s.v, s.rev, s.processed)
+		View(c, s.v, &s.cs, st, &s.md, func(ev plugins.UIEvent, values map[string]any) int {
+			s.events = append(s.events, ev)
+			return len(s.events)
+		})
+	}, 400, 500)
+	tt.Frame()
+	if err := tt.Click("Alpha"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Move(390, 490) // the pointer would hold the choice where it rests
+	tt.Frame()
+	for _, step := range []struct {
+		key  ui.Key
+		want string
+	}{{ui.KeyUp, "c"}, {ui.KeyDown, "a"}, {ui.KeyDown, "b"}, {ui.KeyDown, "c"}, {ui.KeyDown, "a"}, {ui.KeyEnd, "c"}, {ui.KeyHome, "a"}} {
+		tt.Key(0, step.key)
+		tt.Frame()
+		if ev := s.last(t); ev.Type != "change" || ev.Value != step.want {
+			t.Fatalf("after %v: %+v, want the choice at %s", step.key, ev, step.want)
+		}
+	}
+	n := len(s.events)
+	tt.Key(0, ui.KeyHome)
+	tt.Frame()
+	if len(s.events) != n {
+		t.Fatalf("Home at the first row moved the choice: %+v", s.last(t))
+	}
+	r, ok := tt.Find("Bravo")
+	if !ok {
+		t.Fatal("Bravo isn't drawn")
+	}
+	tt.Move(r.X+2, r.Y+2)
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "change" || ev.Value != "b" {
+		t.Fatalf("pointing at Bravo: %+v, want the choice there", ev)
+	}
+	n = len(s.events)
+	tt.Frame()
+	if len(s.events) != n {
+		t.Fatal("the row still pointed at fired again")
+	}
+
+	// Without the options, the pointer leaves the choice and the ends stop.
+	s.show(t, strings.NewReplacer(`"chooseOnHover": true, `, "", `"wrapAround": true, `, "").Replace(`{"body": {"type": "list", "id": "l", "label": "Results", "height": 400, "chooseOnHover": true, "wrapAround": true, "onChange": "chose", "items": [
+		{"key": "a", "label": "Alpha"}, {"key": "c", "label": "Charlie"}]}}`))
+	s.processed = len(s.events)
+	tt.Frame()
+	if r, ok = tt.Find("Charlie"); !ok {
+		t.Fatal("Charlie isn't drawn")
+	}
+	n = len(s.events)
+	tt.Move(r.X+2, r.Y+2)
+	tt.Frame()
+	if len(s.events) != n {
+		t.Fatalf("a list that doesn't follow the pointer did: %+v", s.last(t))
+	}
+	for range 3 {
+		tt.Key(0, ui.KeyDown)
+		tt.Frame()
+	}
+	if len(s.events) != n+2 || s.last(t).Value != "c" {
+		t.Fatalf("a list that doesn't wrap went on past its end: %+v", s.events[n:])
+	}
+}
+
+// The app's hook gets each row a list draws, and a row it holds shows its
+// hover widgets though the pointer is elsewhere; a native in a row draws
+// about the thread its item names.
+func TestTheAppHoldsAListsRowsAndItsNativesDrawAboutTheirThread(t *testing.T) {
+	s := &screen{}
+	s.show(t, `{"body": {"type": "list", "id": "l", "label": "Threads", "height": 300, "items": [
+		{"key": "a", "label": "Alpha", "thread": "ta"}, {"key": "b", "label": "Bravo", "thread": "tb"}, {"key": "c", "label": "Charlie"}]}}`)
+	var hooked []string
+	var natives []string
+	st := Style{
+		Rows: func(list string, it widget.ListItem) *widget.Node {
+			row, err := widget.DecodeRow([]byte(`{"type": "row", "children": [
+				{"type": "text", "text": "` + it.Label + `"},
+				{"type": "text", "text": "idle ` + it.Key + `", "when": "idle"},
+				{"type": "native", "name": "thread.status", "props": {"dot": true}, "when": "hover"}]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return row
+		},
+		ListRow: func(c *ui.Context, l *widget.Node, i int, e ui.Element) bool {
+			hooked = append(hooked, l.ID+"/"+l.Items[i].Key)
+			return l.Items[i].Key == "b"
+		},
+		Native: func(c *ui.Context, n *widget.Node, thread string, fire func(any)) {
+			natives = append(natives, n.Name+" "+thread)
+			ui.Text(c, "native "+thread)
+		},
+	}
+	tt := ui.NewTester(func(c *ui.Context) {
+		s.cs.Sync(s.v, s.rev, s.processed)
+		View(c, s.v, &s.cs, st, &s.md, nil)
+	}, 400, 400)
+	tt.Frame()
+	slices.Sort(hooked)
+	if hooked = slices.Compact(hooked); !slices.Equal(hooked, []string{"l/a", "l/b", "l/c"}) {
+		t.Fatalf("the hook got %v, want each row drawn", hooked)
+	}
+	if !tt.HasText("idle a") || tt.HasText("idle b") || !tt.HasText("native tb") || tt.HasText("native ta") {
+		t.Fatalf("only the held row shows its hover widgets: %q", tt.Texts())
+	}
+	r, _ := tt.Find("Charlie")
+	tt.Move(r.X+2, r.Y+2)
+	tt.Frame()
+	if !slices.Contains(natives, "thread.status ") || !tt.HasText("native ") {
+		t.Fatalf("a native in a row of no thread is told none: %v", natives)
+	}
+}

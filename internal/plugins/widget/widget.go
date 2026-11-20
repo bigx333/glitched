@@ -91,9 +91,12 @@ type Native struct {
 	// or "number".
 	Props map[string]string
 	// In are the components it draws in; anywhere else it says so in its
-	// place. Thread says it draws about the copy's own thread.
+	// place. Thread says it draws about the copy's own thread; Row that it
+	// sits only in a list's row, and draws about the thread the row's item
+	// names.
 	In     []string
 	Thread bool
+	Row    bool
 	// Fires are the handlers it fires.
 	Fires []string
 }
@@ -105,6 +108,15 @@ var Natives = map[string]Native{
 	"theme.card":      {Props: map[string]string{"theme": "string"}, In: []string{"settings.page.appearance"}, Fires: []string{"onChange"}},
 	"composer.input":  {In: []string{"composer"}, Thread: true},
 	"transcript.body": {In: []string{"timeline.message"}, Thread: true},
+	// The sidebar's own parts of a thread's row, which its plugin's rows
+	// draw: the row's actions while it is pointed at, the field that
+	// renames it, its project's tile with its state and the jokes snooze
+	// and settle play on it, its state, and its children's toggle.
+	"thread.row.actions": {In: []string{"sidebar.body"}, Row: true},
+	"thread.rename":      {In: []string{"sidebar.body"}, Row: true},
+	"thread.tile":        {In: []string{"sidebar.body"}, Row: true},
+	"thread.status":      {Props: map[string]string{"dot": "bool"}, In: []string{"sidebar.body", "palette", "agents.body"}, Row: true},
+	"thread.children":    {In: []string{"sidebar.body"}, Row: true},
 }
 
 // Locked are the parts of Glitched's UI no plugin draws, replaces or
@@ -252,8 +264,12 @@ type Node struct {
 	RowHeight int        `json:"rowHeight,omitempty"`
 	Input     string     `json:"input,omitempty"`
 	// SubmitOnClick makes a click on a list's row submit it as well as
-	// choose it, as a palette's does.
+	// choose it, as a palette's does. ChooseOnHover makes the row pointed
+	// at the choice; WrapAround moves the choice from one end to the
+	// other, as a palette's Up and Down do.
 	SubmitOnClick bool `json:"submitOnClick,omitempty"`
+	ChooseOnHover bool `json:"chooseOnHover,omitempty"`
+	WrapAround    bool `json:"wrapAround,omitempty"`
 	// When shows a widget of a list's row only while the row is pointed
 	// at ("hover") or only while it isn't ("idle").
 	When string `json:"when,omitempty"`
@@ -885,7 +901,9 @@ func (c *checker) extra(n *Node) error {
 func (c *checker) list(n *Node) error {
 	if c.row {
 		switch {
-		case n.Type == "input" || n.Type == "toggle" || n.Type == "select" || n.Type == "tabs" || n.Type == "dialog" || n.Type == "list" || n.Type == "native":
+		case n.Type == "native" && !Natives[n.Name].Row:
+			return fmt.Errorf("a list's row holds no native %s", n.Name)
+		case n.Type == "input" || n.Type == "toggle" || n.Type == "select" || n.Type == "tabs" || n.Type == "dialog" || n.Type == "list":
 			return fmt.Errorf("a list's row holds no %s", n.Type)
 		case n.Popover != nil || n.Progress:
 			return fmt.Errorf("a list's row holds no popover or progress button")
@@ -896,8 +914,10 @@ func (c *checker) list(n *Node) error {
 		return fmt.Errorf("when is for a widget in a list's row")
 	case n.When != "" && n.When != "hover" && n.When != "idle":
 		return fmt.Errorf("when is hover or idle, not %q", n.When)
-	case n.Type != "list" && (len(n.Items) > 0 || n.RowHeight != 0 || n.Input != "" || n.SubmitOnClick):
-		return fmt.Errorf("a %s has no items, rowHeight, input or submitOnClick", n.Type)
+	case n.Type == "native" && Natives[n.Name].Row && !c.row:
+		return fmt.Errorf("%s draws only in a list's row", n.Name)
+	case n.Type != "list" && (len(n.Items) > 0 || n.RowHeight != 0 || n.Input != "" || n.SubmitOnClick || n.ChooseOnHover || n.WrapAround):
+		return fmt.Errorf("a %s has no items, rowHeight, input, submitOnClick, chooseOnHover or wrapAround", n.Type)
 	case n.Type != "list":
 		return nil
 	case n.Label == "":
