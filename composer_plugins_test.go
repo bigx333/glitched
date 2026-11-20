@@ -75,7 +75,7 @@ func TestAPluginDrawsSendButGlitchedKeepsStop(t *testing.T) {
 	if shows("My send") || !shows("Send") || !shows("Stop") {
 		t.Fatalf("a Send that threw left no Glitched Send: %q", h.tt.Texts())
 	}
-	if note := h.a.partState(installed(h.a, "my-send"), "composer.send").why; !strings.Contains(note, "broken on purpose") {
+	if note := h.a.partState(installed(h.a, "my-send"), "composer.send").why; !strings.Contains(note, "broken on purpose") || !strings.Contains(note, "Glitched draws its own") {
 		t.Errorf("Settings says %q of the broken Send", note)
 	}
 
@@ -247,6 +247,17 @@ func TestSetAccessTakesOnlyThePickersLevels(t *testing.T) {
 		if _, err := h.a.setAccessEffect(json.RawMessage(args)); err == nil {
 			t.Errorf("setAccess %s was taken", args)
 		}
+	}
+	// Full asked for and taken back before it lands: the thread ends where
+	// the last call left it.
+	for _, level := range []string{accessFull, accessAuto} {
+		if _, err := h.a.setAccessEffect(json.RawMessage(`{"thread": "` + id.String() + `", "access": "` + level + `"}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.until("the thread back at Approve for me", func() bool { v := h.thread("Mine"); return len(v.Pending) == 0 })
+	if v := h.thread("Mine").View; v.Access != api.AccessAutoEdits {
+		t.Fatalf("Full access asked for, then taken back, left the thread at %v", v.Access)
 	}
 	if err := run(map[string]any{"thread": id.String(), "access": accessAsk}); err != nil {
 		t.Fatal(err)

@@ -361,8 +361,7 @@ func (a *app) setAccessEffect(args json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if t.View.Access == level {
-		return nil, nil
-	}
+	// Sent though the thread shows the level already: one asked for just
+	// before may not have landed yet, and this one must come after it.
 	return nil, a.sendConfigure(t, api.ThreadConfigure{Access: &level})
 }
