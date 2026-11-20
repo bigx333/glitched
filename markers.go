@@ -50,12 +50,18 @@ type markerAt struct {
 }
 
 // markerState is what a thread's markers keep from frame to frame: the
-// marker that had the focus last, and the ticks built, in order, with a
-// handle to each to ask whether it has the focus. The handles are kept
-// and bound again from frame to frame, as many as ticks are built.
+// marker that had the focus last.
 type markerState struct {
 	focus   markerAt
 	focused bool
+}
+
+// markerTicks are the ticks the window's markers built last, of a thread,
+// in order, with a handle to each to ask whether it has the focus. The
+// handles are bound again from frame to frame, whichever thread shows, as
+// many as ticks are built.
+type markerTicks struct {
+	thread  api.ID
 	built   []markerAt
 	handles []*ui.Handle
 }
@@ -113,8 +119,9 @@ func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
 		m = &markerState{}
 		a.markers[id] = m
 	}
-	for i, at := range m.built {
-		if m.handles[i].FocusWithin(c) {
+	ts := &a.markerTicks
+	for i, at := range ts.built {
+		if ts.thread == id && ts.handles[i].FocusWithin(c) {
 			m.focus, m.focused = at, true
 			break
 		}
@@ -136,18 +143,18 @@ func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
 		}
 	}
 	built = append(built, [2]int{max(shown, n-3), n})
-	m.built = m.built[:0]
+	ts.thread, ts.built = id, ts.built[:0]
 	col.Children(func() {
 		pointed, pointedY := -1, float32(0)
 		nearest := float32(math.MaxFloat32)
 		tick := func(k int) {
 			tr := turns[k]
 			key := es[tr.entry].key
-			if len(m.built) == len(m.handles) {
-				m.handles = append(m.handles, &ui.Handle{})
+			if len(ts.built) == len(ts.handles) {
+				ts.handles = append(ts.handles, &ui.Handle{})
 			}
-			h := m.handles[len(m.built)]
-			m.built = append(m.built, markerAt{key, k})
+			h := ts.handles[len(ts.built)]
+			ts.built = append(ts.built, markerAt{key, k})
 			b := ui.ButtonBase(c.Key(key)).Padding(3, 6).Cursor(ui.CursorPointer).
 				Label("Go to: " + preview(es[tr.entry])).Bind(h)
 			box := b.Bounds()

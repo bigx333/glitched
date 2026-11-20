@@ -447,7 +447,8 @@ type app struct {
 	lists map[api.ID]*ui.ListState
 	// markers are, by thread, what its turn markers keep from frame to
 	// frame.
-	markers map[api.ID]*markerState
+	markers     map[api.ID]*markerState
+	markerTicks markerTicks
 	// rows are the threads' timelines' rows, by thread, as rowsOf
 	// derives them; posts counts the changes posted to the window, after
 	// which they are derived again.
