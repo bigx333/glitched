@@ -25,6 +25,9 @@ type Component struct {
 	// than a built-in plugin: a replacement that fails gives way to it,
 	// rather than to its own last drawing.
 	Native bool
+	// Requires is the native widget a replacement must place: a drawing
+	// without it is taken as one that failed.
+	Requires string
 }
 
 // Components are the parts of Glitched's UI a plugin may replace, and the
@@ -40,6 +43,7 @@ var Components = []Component{
 	{Name: "sidebar.projects", Provides: "projectStrip", Needs: "threads:read", About: "The sidebar's project strip: All, a chip per project that filters the inbox to it, and Add project."},
 	{Name: "thread.row.actions", Provides: "rowActions", Needs: "threads:write", About: "A sidebar row's actions, shown while it's pointed at: snooze, with its popover of times, settle, or back to the inbox."},
 	{Name: "thread.panel.diff", Provides: "diffPanel", Needs: "threads:read", About: "The diff panel: its header, and its list of changed files over the native diff.body."},
+	{Name: "composer", Provides: "composer", Native: true, Requires: "composer.input", About: "The composer's layout, around the native composer.input: the card the user writes in, with its pickers, Send, and what comes and goes with it."},
 	{Name: "composer.send", Provides: "composerSend", Needs: "threads:write", Native: true, About: "The composer's Send button, which stops the agent while it works. While it draws, Glitched keeps its own Stop beside it as a turn runs."},
 	{Name: "composer.access", Provides: "composerAccess", Needs: "threads:access", Native: true, About: "The access picker, which sets what agents may do in a thread. While it draws, Glitched keeps its own sign of the access in force beside it."},
 	{Name: "approval.card", Locked: widget.Locked["approval.card"]},
@@ -59,10 +63,10 @@ func component(name string) (Component, bool) {
 	return Components[i], true
 }
 
-// Native reports whether Glitched draws the component's built-in itself.
-func Native(name string) bool {
+// ComponentNamed is the component named name, zero if Glitched has none.
+func ComponentNamed(name string) Component {
 	c, _ := component(name)
-	return c.Native
+	return c
 }
 
 // checkReplace says why the place p may not replace the component it names.

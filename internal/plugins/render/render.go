@@ -439,7 +439,9 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		r.item(c, n, key(n, i))
 		return
 	case "native":
-		e := ui.Column(kc)
+		// It lets the pointer through to what is under it, but for the
+		// native in it, as a composer's frame does.
+		e := ui.Column(kc).PassThrough()
 		if n.Grow {
 			e.Grow(1).Shrink(1).Basis(0)
 		}

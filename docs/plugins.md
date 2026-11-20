@@ -307,6 +307,7 @@ Your `place` export draws it as it draws any place.
 | `thread.row.actions` | the sidebar row pointed at, keyed by its thread's id | `{thread, section, snooze: [{when, joke, emoji, until}]}` |
 | `sidebar.projects` | one, keyed `strip` | `{projects, filtered, picking, machines}` |
 | `thread.panel.diff` | two for the thread shown: `<id>/header` and `<id>/body` | `{thread, part, local, files: [{path, name, add, del, reviewed, read}], shown, layout, splitFits, splitWidth, wrap, canOpen}` |
+| `composer` | one, keyed `composer` | `{thread}` |
 | `composer.send` | the open composer, keyed by its thread's id, or `draft` for a new thread's | `{thread, draft, working}` |
 | `composer.access` | the open composer, keyed as `composer.send` | `{thread, access, levels: [{name, about}]}` |
 
@@ -315,6 +316,8 @@ Your `place` export draws it as it draws any place.
 **Which plugin draws it.** Your plugins come before the built-in, in the order of their folders, and only one draws: the first that runs, is granted `ui.replace`, and whose last drawing went well. The built-in draws it when yours is off, didn't load, isn't granted, or failed (a `place` or `update` that threw or took too long), and Settings › Plugins says why in your plugin's row. Its **Parts of Glitched** view lists every component with the plugin that draws it now. Every plugin that could draw it is given the copy all along, so a fallback shows at once. A copy no plugin has drawn yet, as a panel opening or a thread shown for the first time, is drawn before it shows: Glitched waits for it, the user's plugin first, for up to 300 ms in all, so a component never opens empty. It waits once for each version of a copy, so a copy the plugin leaves `null` is not waited on again. Past that, it shows as soon as the plugin answers. A plugin that is waiting on a call into the app as the copy opens (`await glitched.toast(…)` in its `init`, say) can't answer before the window does, so the next plugin, in the end the built-in, draws that first frame at once, and yours takes over once it has drawn. Keep `place` fast.
 
 **Off limits.** These never take a replacement, whatever a manifest says or a grant allows: `approval.card`, `question.card`, `settings.plugins`, `settings.servers` (pairing an engine), `settings.providers` (the program Glitched runs as an agent) and `confirm.destructive`. A plugin that names one does not load, and Settings says why. They are where you answer an agent, pair a machine, or delete something, so only Glitched draws them.
+
+`composer` is the composer's layout, around the native `composer.input`, which is the card the user writes in, with its pickers, Send and what comes and goes with it as it morphs. A replacement places `composer.input` exactly once, with widgets around it if it likes; a layout that leaves it out or places it twice fails, and the next plugin, in the end Glitched, draws the composer. When none draws it, Glitched draws its own, as it does when the replacement throws or answers `null`. `thread` is the thread whose composer it is.
 
 `composer.send` is the composer's Send, which stops the agent while it works and the composer holds nothing to send. `draft` says the composer holds something to send, and `working` that the agent runs a turn. A replacement sends what the composer holds with `glitched.composer.submit(thread)`, as Send does, and stops the agent with `glitched.threads.interrupt(thread)`, so it needs `threads:write` granted as well as `ui.replace`. `composer.access` is the access picker. `access` is the level in force, and `levels` what the picker offers, by name, with what each lets agents do. A replacement sets the access with `glitched.threads.setAccess(thread, name)`, which takes only one of those names, so it needs `threads:access` granted as well as `ui.replace`. For both, the built-in is Glitched's own: without the grants, or when the replacement fails, Glitched draws it. While a replacement draws, Glitched keeps its own Stop beside Send while the agent works, and its own sign of the access in force beside the picker, whatever the replacement draws; ⌘⏎ sends and stops as it does with Glitched's. Approvals and questions still come to their cards at any access, and no plugin answers them.
 
@@ -338,8 +341,11 @@ A native widget is one of Glitched's own views, which a plugin places in its lay
 | --- | --- | --- | --- |
 | `theme.card` | `theme`: a theme's name, from the context's `themes` | `settings.page.appearance` | `onChange` with the theme's name when it is clicked |
 | `diff.body` | `path`: the file, one the thread changed | `thread.panel.diff` | `onChange` with `{path, remaining}` when a change is marked reviewed in it |
+| `composer.input` | none | `composer` | nothing |
 
 `diff.body` draws the file's diff, the hunk bar and its shortcuts, or why it can't: no changes yet, the files on another machine, still reading, not shown (binary, over 1 MB, outside the workspace), or HEAD's side unknown. It fills its parent's width, and with `grow` the height its parent column leaves; without, its own.
+
+`composer.input` draws the composer: the agents strip over the card, the card the user writes in, compact or full as it morphs, with its pickers, Send (or a plugin's `composer.send` and `composer.access`), and the workspace under it. Its text, focus and keys are Glitched's. It lets the pointer through to the chat around it, as every native widget's frame does.
 
 `theme.card` draws a theme's preview, its sidebar, chat and terminal colors, with its name under it, ringed while it is the one chosen; with `grow` the cards of a row share its width.
 
@@ -357,6 +363,7 @@ Built-in plugins are compiled into Glitched (`internal/plugins/bundled`) and lis
 | `greetings` | `hero.heading`, `thread.empty` | `ui.place`, `ui.replace` |
 | `row-actions` | `thread.row.actions` | `ui.place`, `ui.replace`, `threads:read`, `threads:write` |
 | `project-strip` | `sidebar.projects` | `ui.place`, `ui.replace`, `threads:read`, `threads:write` |
+| `composer` | `composer` | `ui.place`, `ui.replace` |
 
 Header actions' **Open in** opens the thread's workspace in Cursor, VS Code, Zed or, below a line, the file manager, with `glitched.openIn`. Its **Commit & push** opens a dialog that lists every changed file, the branch, where it pushes, and a message (the thread's title to start), and says that your git hooks don't run for a plugin's git. On **Commit & push** in the dialog, which shows a spinner while git runs, it runs `git add -A`, `git commit -m <message>`, then `git push`, or `git push -u origin <branch>` when the branch tracks nothing yet. It never forces. It refuses before running anything when there is nothing to commit, HEAD is detached, a merge has conflicts, or the message is empty. A push that fails or takes over 20 seconds keeps the commit and says so. A repository with no `origin` keeps the commit here.
 

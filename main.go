@@ -504,6 +504,9 @@ type app struct {
 	// the frame on screen drew it (lookOver).
 	composerH  ui.Handle
 	composerAt ui.Rect
+	// composerIn draws composer.input in this frame's composer, for the
+	// plugin that places it.
+	composerIn func(*ui.Context)
 	// The agents strip: over whose composer the panel is open, and showing
 	// all its rows past five; in this frame, how far from pill (0) to panel
 	// (1), the panel's height as it heads for its rows', and the pill's
