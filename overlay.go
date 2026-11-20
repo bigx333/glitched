@@ -80,9 +80,7 @@ func meets(r, v ui.Rect) bool {
 }
 
 func (a *app) popover(c *ui.Context, anchor ui.Element, open *bool, fn func(panel ui.Element)) {
-	if *open {
-		focusBefore(c, fmt.Sprint("popover ", anchor.ID()))
-	}
+	a.focusBefore(c, fmt.Sprint("popover ", anchor.ID()), *open)
 	ui.PopoverBase(c, anchor, open, func(panel ui.Element) {
 		a.cover(coverKey{"popover", anchor.ID()}, panel)
 		fn(panel)
@@ -91,9 +89,7 @@ func (a *app) popover(c *ui.Context, anchor ui.Element, open *bool, fn func(pane
 }
 
 func (a *app) dialog(c *ui.Context, open *bool, fn func(backdrop, panel ui.Element)) {
-	if *open {
-		focusBefore(c, fmt.Sprintf("dialog %p", open))
-	}
+	a.focusBefore(c, fmt.Sprintf("dialog %p", open), *open)
 	ui.DialogBase(c, open, func(backdrop, panel ui.Element) {
 		a.cover(coverKey{"dialog", backdrop.ID()}, backdrop)
 		fn(backdrop, panel)
@@ -103,9 +99,7 @@ func (a *app) dialog(c *ui.Context, open *bool, fn func(backdrop, panel ui.Eleme
 }
 
 func (a *app) alert(c *ui.Context, open *bool, title, message string, buttons ...string) int {
-	if *open {
-		focusBefore(c, fmt.Sprintf("alert %p", open))
-	}
+	a.focusBefore(c, fmt.Sprintf("alert %p", open), *open)
 	chose := ui.AlertDialog(c, open, title, message, buttons...)
 	a.covering = a.covering || *open
 	a.modalNow = a.modalNow || *open
@@ -121,8 +115,22 @@ func (a *app) alert(c *ui.Context, open *bool, title, message string, buttons ..
 // as the palette's search and an alert's default button do, has it, and
 // the focus goes nowhere. An empty overlay of its own, opened first,
 // notes the element before anything takes it, and closes with the one it
-// stands for, as it's built only while that is open.
-func focusBefore(c *ui.Context, key string) {
+// stands for, as it's built only while that is open. MyGo gives the
+// focus back once the frame is drawn, and draws no frame for it, so the
+// frame after the overlay is gone asks for one more, which draws the focus
+// where it went.
+func (a *app) focusBefore(c *ui.Context, key string, open bool) {
+	if !open {
+		if a.focusKept[key] {
+			delete(a.focusKept, key)
+			c.AnimationFrame()
+		}
+		return
+	}
+	if a.focusKept == nil {
+		a.focusKept = map[string]bool{}
+	}
+	a.focusKept[key] = true
 	ui.Overlay(c, func() { ui.Box(c.Key("focus before " + key)).Absolute().PassThrough() })
 }
 
