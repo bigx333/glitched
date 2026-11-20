@@ -150,6 +150,10 @@ func (h *Host) SetSetting(id, key string, value any) error {
 	}); err != nil {
 		return err
 	}
+	// place may read its settings: every copy is drawn again.
+	if s := h.sessions[pageKey{plugin: id}]; s != nil {
+		s.refresh()
+	}
 	h.Emit("setting.changed", func(p string) any {
 		if p != id {
 			return nil

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/egoist/mygo/ui"
+
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/pack"
 )
@@ -132,5 +134,44 @@ func TestAPluginCantReplaceTheApprovalCard(t *testing.T) {
 	settleTester(tt)
 	if !tt.HasText("approval.card, which is off limits to plugins") {
 		t.Fatalf("Settings doesn't say why: %q", tt.Texts())
+	}
+}
+
+// A frame waits once for a component's copies no plugin has drawn yet: the
+// copies a later call of the frame brings show their native body till
+// their drawings come.
+func TestAFrameWaitsOnceForAComponentsNewCopies(t *testing.T) {
+	a := offline(t)
+	writeOwnPlugin(t, a, "rows", replacing("rows", "thread.empty"), `export function place({ items }) {
+	return items.map(({ key }) => ({ type: "text", text: "plugin " + key }))
+}`)
+	if err := a.plugins.SetGranted("rows", "ui.replace", true); err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{"one", "two", "three"}
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Children(func() {
+			for _, k := range keys {
+				a.pluginComponent(c, "thread.empty", nil, componentCopy{
+					key:     k,
+					box:     func() ui.Element { return ui.Column(c).Key(k) },
+					context: func(plugins.ThreadRecord) any { return k },
+					native:  func() { ui.Text(c, "native "+k) },
+				})
+			}
+		})
+		a.syncPlaces()
+	}, 400, 300)
+	for _, want := range []string{"plugin one", "native two", "native three"} {
+		if !tt.HasText(want) {
+			t.Fatalf("the first frame doesn't show %q: %q", want, tt.Texts())
+		}
+	}
+	v, _ := offlinePosts.Load(a)
+	settlePlugins(t, a, tt, v.(*posts))
+	for _, k := range keys {
+		if !tt.HasText("plugin "+k) || tt.HasText("native "+k) {
+			t.Fatalf("once drawn, %s shows %q", k, tt.Texts())
+		}
 	}
 }

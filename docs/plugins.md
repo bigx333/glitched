@@ -137,7 +137,7 @@ The window never waits for a plugin. One worker per session calls the plugin, on
 | `init` | `{page, tab?, context?}` | `{state?}` | a page, tab or the app session opens, or starts over |
 | `view` | `{page, tab?, context?, state, values}` | `{title?, subtitle?, body}` | after `init`, and once after each batch of events |
 | `update` | `{page, tab?, context?, state, event, values}` | `{state?}` | each event; leave `state` out to keep it |
-| `place` | `{id, at, state, items: [{key, context}]}` | a widget or `null` per item, in order | as the copies shown, their contexts or the app state change |
+| `place` | `{id, at, state, items: [{key, context}]}` | a widget or `null` per item, in order | for the copies that came or changed; for every copy shown after an event, a setting or a reload ([what a copy may depend on](#places-and-slots)) |
 | `rows` | `{list, keys, state, page, tab?, context?, place?}` | a widget or `null` per key, in order | as a [list](#lists) shows rows not drawn for its view |
 | `command` | `{id, args}` | nothing | a palette command or shortcut, or a menu item (see [Menus](#menus)) |
 | `page` | `{id}` | mygo-plugin's `Page` | stock pages only |
@@ -240,7 +240,7 @@ Glitched draws each row in its own list row, which lights up under the pointer a
 
 ## Places and slots
 
-A place puts widgets in Glitched's own views. Declare it (`glitched.places`, with `ui.place`), and export `place`, which draws every copy of it in one call:
+A place puts widgets in Glitched's own views. Declare it (`glitched.places`, with `ui.place`), and export `place`, which draws the copies Glitched asks for in one call:
 
 ```js
 export function place({ id, at, state, items }) {
@@ -254,7 +254,15 @@ export function place({ id, at, state, items }) {
 | `thread.header` | yes | the thread shown | the thread |
 | `sidebar.footer` | no | one | none |
 
-Stable slots keep their name and context across Glitched's updates; others may move. A copy shows its last drawing while the next is drawn, so rows never wait or flicker. Glitched draws a place again only when a copy comes, goes or its record changes, or the app session's state does, in batches of up to 200 copies. What the user does in a place reaches `update` with `event.place`.
+Stable slots keep their name and context across Glitched's updates; others may move. A copy shows its last drawing while the next is drawn, so rows never wait or flicker. What the user does in a place reaches `update` with `event.place`.
+
+**What a copy may depend on.** A copy's drawing must depend only on the app session's state, the copy's own `key` and `context`, and your settings (`host.setting`). Glitched relies on that to draw only what changed:
+
+- When copies come or their context changes, and nothing else does, `place` is called with those copies alone. `items` is never the whole set of copies shown, and a copy that didn't change keeps its drawing without being asked again. Don't count `items` or draw one copy from another's context.
+- After anything else, every copy shown is drawn again. That covers an event or a timer `update` took, a setting changed, or your code reloaded, even when the state comes back the same.
+- `null` for a copy leaves it empty, even if it showed a widget before.
+
+Copies are drawn in batches of up to 200.
 
 ### Menus
 
@@ -313,7 +321,7 @@ Your `place` export draws it as it draws any place.
 
 `thread.header.actions` is the buttons at the right of a thread's header. Glitched keeps the header's frame, its drag region, the title, the pills, the `thread.header` slot and the panel tabs' buttons. `local` says the thread's workspace is on this machine. `narrow` says the chat is under 700 points wide, where the built-in shows icons only. `changedFiles` counts the files the agent changed. Without `threads:read` the thread is `{id}` alone, as everywhere.
 
-**Which plugin draws it.** Your plugins come before the built-in, in the order of their folders, and only one draws: the first that runs, is granted `ui.replace`, and whose last drawing went well. The built-in draws it when yours is off, didn't load, isn't granted, or failed (a `place` or `update` that threw or took too long), and Settings › Plugins says why in your plugin's row. Its **Parts of Glitched** view lists every component with the plugin that draws it now. Every plugin that could draw it is given the copy all along, so a fallback shows at once. A copy no plugin has drawn yet, as a panel opening or a thread shown for the first time, is drawn before it shows: Glitched waits for it, the user's plugin first, for up to 300 ms in all, so a component never opens empty. It waits once for each version of a copy, so a copy the plugin leaves `null` is not waited on again. Past that, it shows as soon as the plugin answers. A plugin that is waiting on a call into the app as the copy opens (`await glitched.toast(…)` in its `init`, say) can't answer before the window does, so the next plugin, in the end the built-in, draws that first frame at once, and yours takes over once it has drawn. Keep `place` fast.
+**Which plugin draws it.** Your plugins come before the built-in, in the order of their folders, and only one draws: the first that runs, is granted `ui.replace`, and whose last drawing went well. The built-in draws it when yours is off, didn't load, isn't granted, or failed (a `place` or `update` that threw or took too long), and Settings › Plugins says why in your plugin's row. Its **Parts of Glitched** view lists every component with the plugin that draws it now. Every plugin that could draw it is given the copy all along, so a fallback shows at once. A copy no plugin has drawn yet, as a panel opening or a thread shown for the first time, is drawn before it shows: Glitched waits for it, the user's plugin first, for up to 300 ms in all, so a component never opens empty. A frame waits at most once for each component, for every new copy it has met so far: the diff panel's header and body are drawn in one wait. A new copy met later in the same frame shows the component's native body if it has one, and nothing if not, until its drawing comes, usually by the next frame. Drawing a new copy never takes another copy's drawing away. Glitched waits once for each version of a copy, so a copy the plugin leaves `null` is not waited on again. Past that, it shows as soon as the plugin answers. A plugin that is waiting on a call into the app as the copy opens (`await glitched.toast(…)` in its `init`, say) can't answer before the window does, so the next plugin, in the end the built-in, draws that first frame at once, and yours takes over once it has drawn. Keep `place` fast.
 
 **Off limits.** These never take a replacement, whatever a manifest says or a grant allows: `approval.card`, `question.card`, `settings.plugins`, `settings.servers` (pairing an engine), `settings.providers` (the program Glitched runs as an agent) and `confirm.destructive`. A plugin that names one does not load, and Settings says why. They are where you answer an agent, pair a machine, or delete something, so only Glitched draws them.
 

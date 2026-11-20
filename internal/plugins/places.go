@@ -47,6 +47,19 @@ type placeSet struct {
 	// tried are the copies DrawFirst waited on, by place and key, with
 	// their version: it waits once per version.
 	tried map[[2]string]string
+	// drawn is the worker's: each copy's last drawing, by place and key,
+	// with the version it drew. A copy whose version is the same isn't
+	// drawn again until something but the copies shown changes:
+	// redrawAll, set under mu, says so.
+	drawn     map[string]map[string]drawnCopy
+	drawnGen  int
+	redrawAll bool
+}
+
+// drawnCopy is a copy's drawing, nil when the plugin answered null.
+type drawnCopy struct {
+	version string
+	node    *widget.Node
 }
 
 // App is the plugin id's app session, started if it isn't: one per
@@ -86,7 +99,10 @@ func (s *Session) SetItems(place string, items []PlaceItem) {
 	}
 	s.mu.Unlock()
 	if !same {
-		s.refresh()
+		s.mu.Lock()
+		gen := s.gen
+		s.mu.Unlock()
+		s.push(queued{gen: gen, refresh: true, items: true})
 	}
 }
 
@@ -116,22 +132,45 @@ func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed
 	start := time.Now()
 	drawn := map[string]map[string]*widget.Node{}
 	asked := map[[2]string]bool{}
-	for _, pl := range s.places.places {
+	ps := s.places
+	s.mu.Lock()
+	if ps.redrawAll || ps.drawnGen != gen || ps.drawn == nil {
+		ps.drawn, ps.drawnGen = map[string]map[string]drawnCopy{}, gen
+	}
+	ps.redrawAll = false
+	s.mu.Unlock()
+	for _, pl := range ps.places {
 		s.mu.Lock()
-		items := slices.Clone(s.places.items[pl.ID])
+		items := slices.Clone(ps.items[pl.ID])
 		s.mu.Unlock()
-		for _, it := range items {
-			asked[[2]string{pl.ID, it.Key}] = true
-		}
 		views := map[string]*widget.Node{}
 		drawn[pl.ID] = views
-		for len(items) > 0 && failed == nil {
-			batch := items[:min(len(items), MaxPlaceBatch)]
-			items = items[len(batch):]
+		last := ps.drawn[pl.ID]
+		kept := map[string]drawnCopy{}
+		var todo []PlaceItem
+		for _, it := range items {
+			if p, ok := last[it.Key]; ok && p.version == it.Version {
+				kept[it.Key] = p
+				if p.node != nil {
+					views[it.Key] = p.node
+				}
+			} else {
+				todo = append(todo, it)
+			}
+			asked[[2]string{pl.ID, it.Key}] = true
+		}
+		for len(todo) > 0 && failed == nil {
+			batch := todo[:min(len(todo), MaxPlaceBatch)]
+			todo = todo[len(batch):]
 			if err := s.drawBatch(pl, state, batch, views); err != nil {
 				failed = fmt.Errorf("place %s: %w", pl.ID, err)
+				break
+			}
+			for _, it := range batch {
+				kept[it.Key] = drawnCopy{it.Version, views[it.Key]}
 			}
 		}
+		ps.drawn[pl.ID] = kept
 	}
 	if failed == nil {
 		s.rows.drewView(&s.mu, state, nil)
@@ -187,6 +226,13 @@ func (s *Session) publish(d placeDraw) {
 		return
 	}
 	for id, views := range d.drawn {
+		// A copy shown since the drawing began keeps its last drawing
+		// till one has it; a copy drawn null has none.
+		for _, it := range s.places.items[id] {
+			if n := s.places.views[id][it.Key]; n != nil && !d.asked[[2]string{id, it.Key}] {
+				views[it.Key] = n
+			}
+		}
 		s.places.views[id] = views
 	}
 	s.Rev++
@@ -194,28 +240,46 @@ func (s *Session) publish(d placeDraw) {
 	s.Busy = s.running && (len(s.queue) > 0 || s.dirty)
 }
 
-// DrawFirst draws the copy key of the place before the UI shows it, for a
-// copy it has no drawing of yet: it waits, on the UI thread, until the
-// plugin drew it (or answered null for it), it failed, or the deadline
-// passed. A component drawn so never shows empty as it opens. It waits
-// once per version of the copy, as items has it: a copy the plugin leaves
-// undrawn doesn't stall every frame. Nil when there is no drawing by then.
-func (s *Session) DrawFirst(place string, items []PlaceItem, key string, deadline time.Time) *widget.Node {
-	i := slices.IndexFunc(items, func(it PlaceItem) bool { return it.Key == key })
-	if i < 0 {
-		return nil
-	}
-	k := [2]string{place, key}
+// DrawFirst draws the copies keys of the place before the UI shows them,
+// those it has no drawing of yet, in one wait: on the UI thread, until the
+// plugin drew them all (or answered null for them), it failed, or the
+// deadline passed. A component drawn so never shows empty as it opens. It
+// waits once per version of a copy, as items has it: a copy the plugin
+// leaves undrawn doesn't stall every frame. items are the copies the frame
+// has drawn so far; the others shown keep theirs, so drawing these never
+// takes their drawings away.
+func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, deadline time.Time) {
 	first := make(chan placeDraw, 1)
 	s.mu.Lock()
-	if s.broken || s.done || s.places.tried[k] == items[i].Version {
+	if s.broken || s.done {
 		s.mu.Unlock()
-		return nil
+		return
 	}
 	if s.places.tried == nil {
 		s.places.tried = map[[2]string]string{}
 	}
-	s.places.tried[k] = items[i].Version
+	var want [][2]string
+	for _, key := range keys {
+		i := slices.IndexFunc(items, func(it PlaceItem) bool { return it.Key == key })
+		k := [2]string{place, key}
+		if i < 0 || s.places.tried[k] == items[i].Version {
+			continue
+		}
+		s.places.tried[k] = items[i].Version
+		want = append(want, k)
+	}
+	if len(want) == 0 {
+		s.mu.Unlock()
+		return
+	}
+	shown := slices.Clone(s.places.items[place])
+	for _, it := range items {
+		if j := slices.IndexFunc(shown, func(o PlaceItem) bool { return o.Key == it.Key }); j >= 0 {
+			shown[j] = it
+		} else {
+			shown = append(shown, it)
+		}
+	}
 	s.places.first = first
 	s.mu.Unlock()
 	defer func() {
@@ -223,7 +287,7 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, key string, deadlin
 		s.places.first = nil
 		s.mu.Unlock()
 	}()
-	s.SetItems(place, items)
+	s.SetItems(place, shown)
 	wait := time.NewTimer(time.Until(deadline))
 	defer wait.Stop()
 	poll := time.NewTicker(time.Millisecond)
@@ -232,18 +296,18 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, key string, deadlin
 		select {
 		case <-poll.C:
 			// A call of the plugin's into the app waits on this thread,
-			// which waits on the plugin: the copy isn't drawn in time, so
-			// the next plugin draws it.
+			// which waits on the plugin: the copies aren't drawn in time,
+			// so the next plugin draws them.
 			if s.h.awaitsApp(s.plugin) {
-				return nil
+				return
 			}
 		case d := <-first:
 			s.publish(d)
-			if d.asked[k] || d.failed != nil {
-				return s.PlaceView(place, key)
+			if d.failed != nil || !slices.ContainsFunc(want, func(k [2]string) bool { return !d.asked[k] }) {
+				return
 			}
 		case <-wait.C:
-			return nil
+			return
 		}
 	}
 }

@@ -77,6 +77,8 @@ type placeFrame struct {
 	items map[[2]string][]plugins.PlaceItem
 	slots map[string]bool
 	keys  map[placeKey]bool
+	// waited are the components that waited for a first drawing.
+	waited map[string]bool
 }
 
 // frameOf is this frame's record of what the plugins drew, with the slot
@@ -84,7 +86,7 @@ type placeFrame struct {
 func (a *app) frameOf(at string) *placeFrame {
 	f := &a.placeFrame
 	if f.items == nil {
-		f.items, f.slots, f.keys = map[[2]string][]plugins.PlaceItem{}, map[string]bool{}, map[placeKey]bool{}
+		f.items, f.slots, f.keys, f.waited = map[[2]string][]plugins.PlaceItem{}, map[string]bool{}, map[placeKey]bool{}, map[string]bool{}
 	}
 	f.slots[at] = true
 	return f

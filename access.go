@@ -190,7 +190,7 @@ func (a *app) accessControl(c *ui.Context, t thread) {
 		}
 		return composerAccess{Thread: r, Access: a.access, Levels: levels}
 	}
-	if !a.pluginComponent(c, box, "composer.access", composerKey(t), &t, ctx) {
+	if !a.pluginComponent(c, "composer.access", &t, componentCopy{key: composerKey(t), box: box, context: ctx}) {
 		a.accessPicker(c)
 		return
 	}

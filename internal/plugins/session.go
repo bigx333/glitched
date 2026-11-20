@@ -80,7 +80,10 @@ type queued struct {
 	gen     int
 	init    bool
 	refresh bool // only draw again: the places' contexts changed
-	event   any
+	// items is set on a refresh for the copies shown changing alone: only
+	// the copies that came or changed are drawn.
+	items bool
+	event any
 	// values are the controls' values as the event happened; seq numbers a
 	// UI event.
 	values map[string]any
@@ -238,7 +241,8 @@ func (s *Session) push(q queued) bool {
 	if s.done || s.broken || q.gen != s.gen {
 		return false
 	}
-	if q.refresh && slices.ContainsFunc(s.queue, func(w queued) bool { return w.refresh }) {
+	if i := slices.IndexFunc(s.queue, func(w queued) bool { return w.refresh }); q.refresh && i >= 0 {
+		s.queue[i].items = s.queue[i].items && q.items
 		return true
 	}
 	// A change replaces the one of the same widget waiting just before it,
@@ -345,6 +349,9 @@ func (s *Session) run() {
 		}
 		state, values, context := s.state, s.values, s.context
 		s.dirty = true
+		if s.places != nil && !q.items {
+			s.places.redrawAll = true
+		}
 		s.mu.Unlock()
 		if q.refresh {
 			continue

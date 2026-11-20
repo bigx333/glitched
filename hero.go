@@ -107,7 +107,7 @@ func (a *app) heroHeading(c *ui.Context, d float32) {
 	box := func() ui.Element {
 		return ui.Column(c).Key("hero-heading").AlignItems(ui.Center).Padding(0, 0, 28).PassThrough().Opacity(o).Translate(0, -12*(1-o))
 	}
-	a.pluginComponent(c, box, "hero.heading", "hero", nil, func(plugins.ThreadRecord) any { return struct{}{} })
+	a.pluginComponent(c, "hero.heading", nil, componentCopy{key: "hero", box: box, context: func(plugins.ThreadRecord) any { return struct{}{} }})
 }
 
 // leaveFor notes the thread shown as the one left for a new thread's hero,
