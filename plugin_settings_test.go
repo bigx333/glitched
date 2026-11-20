@@ -52,7 +52,7 @@ func TestThePluginsPage(t *testing.T) {
 	}
 
 	t.Run("groups plugins by whose they are", func(t *testing.T) {
-		at := []float32{y("ADDED BY YOU  7"), disclosure("Linear sync").Bounds.Y, disclosure("Scratchpad").Bounds.Y, y("BUILT INTO GLITCHED  7"), disclosure("Diff panel").Bounds.Y, y("ADD AND UPDATE")}
+		at := []float32{y("ADDED BY YOU  7"), disclosure("Linear sync").Bounds.Y, disclosure("Scratchpad").Bounds.Y, y("BUILT INTO GLITCHED  8"), disclosure("Diff panel").Bounds.Y, y("ADD AND UPDATE")}
 		if !slices.IsSorted(at) {
 			t.Errorf("what you added, then the built-ins, then installing: %v", at)
 		}
