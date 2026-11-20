@@ -328,3 +328,79 @@ export function place({ state, items }) { return items.map(() => state ? { type:
 		})
 	}
 }
+
+// contextListModule draws each copy as a list of one row, with the copy's
+// context as its label and the row's, but for the contexts "no list",
+// "null" and "failed".
+const contextListModule = `export function place({items}) {
+  if (items.some(({context}) => context === "failed")) throw new Error("place refused");
+  return items.map(({context}) => context === "no list" ? {type: "text", text: context}
+    : context === "null" ? null
+    : {type: "list", id: "l", height: 120, label: context, items: [{key: "r", label: "row", version: context}]});
+}
+export function rows({place, keys}) { return keys.map(() => ({type: "text", text: place.context})) }
+`
+
+// A drawing posted before a first draw is judged by the versions of the
+// frame drawing, so a copy drawn for an older one keeps its list's rows.
+func TestADrawFirstJudgesADrawingPostedByTheFramesVersions(t *testing.T) {
+	h, s, u := placeTest(t, contextListModule)
+	a := PlaceItem{Key: "a", Version: "1", Context: "last row"}
+	s.SetItems("badge", []PlaceItem{a})
+	settled(t, h, u, "initial copy", func() bool { return s.PlaceView("badge", "a") != nil })
+	u.until(t, "initial row", func() bool { return listRow(t, s, "a") == "last row" })
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "2", Context: "no list"}})
+	posted(t, h, u, 1)
+	a.Version, a.Context = "3", "new row"
+	b := PlaceItem{Key: "b", Version: "1", Context: "new b"}
+	s.DrawFirst("badge", []PlaceItem{a, b}, []string{"b"}, time.Now().Add(2*time.Second))
+	if n := s.PlaceView("badge", "a"); n == nil || n.Label != "new row" || s.PlaceView("badge", "b") == nil {
+		t.Fatalf("DrawFirst did not publish both current copies: a=%+v b=%+v", n, s.PlaceView("badge", "b"))
+	}
+	if got := listRow(t, s, "a"); got != "last row" {
+		t.Errorf("DrawFirst was given a:v3 and b, then a:v3's list showed %q before its row refresh; want %q", got, "last row")
+	}
+	u.until(t, "row refresh", func() bool { return listRow(t, s, "a") == "new row" })
+}
+
+// A copy answered null stays so till a drawing of its version comes.
+func TestADrawingOfAnOlderVersionNeverReplacesACopyAnsweredNull(t *testing.T) {
+	h, s, u := placeTest(t, contextListModule)
+	a := PlaceItem{Key: "a", Version: "1", Context: "null"}
+	s.SetItems("badge", []PlaceItem{{Key: "b", Version: "1", Context: "other"}, a})
+	settled(t, h, u, "a answered and b visible", func() bool { return s.PlaceView("badge", "b") != nil })
+	if s.PlaceView("badge", "a") != nil || s.places.answered[[2]string{"badge", "a"}] != "1" {
+		t.Fatal("a was not answered null")
+	}
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "2", Context: "obsolete list"}})
+	posted(t, h, u, 1)
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "3", Context: "failed"}})
+	posted(t, h, u, 2)
+	(<-u.q)()
+	(<-u.q)()
+	if n := s.PlaceView("badge", "a"); n != nil {
+		t.Errorf("after a:v1 was accepted null and a:v3 failed, obsolete a:v2 showed and stayed: %s %q", n.Type, n.Label)
+	}
+}
+
+// A copy without a version, gone and back before the drawing without it
+// shows, keeps its drawing and its list's rows.
+func TestACopyGoneAndBackUnversionedKeepsItsDrawing(t *testing.T) {
+	h, s, u := placeTest(t, contextListModule)
+	a := PlaceItem{Key: "a", Context: "last row"}
+	s.SetItems("badge", []PlaceItem{a})
+	settled(t, h, u, "unversioned copy", func() bool { return s.PlaceView("badge", "a") != nil })
+	u.until(t, "initial row", func() bool { return listRow(t, s, "a") == "last row" })
+	s.SetItems("badge", nil)
+	posted(t, h, u, 1)
+	s.SetItems("badge", []PlaceItem{a})
+	posted(t, h, u, 2)
+	(<-u.q)()
+	if s.PlaceView("badge", "a") == nil {
+		t.Error("an omission from an old items snapshot cleared a currently requested empty-version copy")
+	}
+	(<-u.q)()
+	if got := listRow(t, s, "a"); got != "last row" {
+		t.Errorf("after return, copy's list showed %q before refresh; want %q", got, "last row")
+	}
+}
