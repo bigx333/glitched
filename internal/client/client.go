@@ -590,7 +590,7 @@ func (m *Manager) watch(ctx context.Context, e *Env, s *sub, ep api.Endpoint, th
 				after = it.Snapshot.Cursor
 				tr := fold(*it.Snapshot)
 				deleted = tr.Deleted
-				take = func(t *Transcript) { *t = tr }
+				take = func(t *Transcript) { t.Replace(tr) }
 			case api.StreamEvent:
 				after = it.Event.Cursor
 				deleted = deleted || it.Event.Type == api.EventType(api.ThreadDeleted{})

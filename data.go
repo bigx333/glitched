@@ -263,17 +263,19 @@ const rowsLive = 64
 // (app.posts); a command sent from here changes Pending at once, so its
 // rows are derived each time and compared.
 type rowsCache struct {
-	tr      *client.Transcript
-	posts   uint64
-	edits   int // the transcript's edits read
-	filesOf int // the entries files was derived from, or -1
-	settled settledRows
-	paused  []int // the rows marked paused
-	live    *deriving
-	head    []entry // the transcript's rows, the queue's last
-	headTs  int     // the head's turns
-	tail    []entry // the commands'
-	joined  bool    // rows is head and tail
+	tr    *client.Transcript
+	posts uint64
+	edits client.EditMark // the transcript's edits read
+	// liveFiles are the files the live part's edits name, as files was
+	// last derived with them over the settled part's.
+	liveFiles []fileChange
+	settled   settledRows
+	paused    []int // the rows marked paused
+	live      *deriving
+	head      []entry // the transcript's rows, the queue's last
+	headTs    int     // the head's turns
+	tail      []entry // the commands'
+	joined    bool    // rows is head and tail
 	rows
 }
 
@@ -332,7 +334,7 @@ func (a *app) rowsOf(t thread) rows {
 func (c *rowsCache) derive(tr *client.Transcript) {
 	var src []client.Entry
 	var edited []int
-	all, mark := false, 0
+	all, mark := false, client.EditMark{}
 	if tr != nil {
 		src = tr.Entries
 		edited, all, mark = tr.Edits(c.edits)
@@ -340,13 +342,8 @@ func (c *rowsCache) derive(tr *client.Transcript) {
 	s := &c.settled
 	if c.tr != tr || !s.holds(src) || all || slices.ContainsFunc(edited, func(i int) bool { return i < s.entries }) {
 		rowsEpochs++
-		*c = rowsCache{rows: rows{epoch: rowsEpochs}, filesOf: -1}
+		*c = rowsCache{rows: rows{epoch: rowsEpochs}}
 		*s = settledRows{n: map[string]int{}, listed: map[api.ID]bool{}, at: map[string]int{}}
-	}
-	// The files are derived again only as the work changes: a reply
-	// streaming in leaves them.
-	if slices.ContainsFunc(edited, func(i int) bool { _, ok := src[i].(*client.WorkEntry); return ok }) {
-		c.filesOf = -1
 	}
 	c.tr, c.edits = tr, mark
 	for _, i := range c.paused {
@@ -356,11 +353,15 @@ func (c *rowsCache) derive(tr *client.Transcript) {
 	turns := c.turns[:s.turns]
 	// A report that follows the settled part's last, a report too, joins
 	// its row, again each time: addReport keeps one report of a child.
+	// Whether rows naming files moved into the settled part, whose files
+	// they change.
+	filesMoved := false
 	if to := len(src) - rowsLive; to > s.entries {
 		d := &deriving{es: c.es[:s.es], n: s.n, listed: s.listed}
 		for _, e := range src[s.entries:to] {
 			d.add(e)
 		}
+		filesMoved = len(addFiles(nil, map[string]int{}, d.es[s.es:])) > 0
 		s.files = addFiles(s.files, s.at, d.es[s.es:])
 		turns, s.steps = addTurns(turns, s.steps, d.es, s.es)
 		s.asks = addAsks(s.asks, d.es, s.es)
@@ -382,8 +383,12 @@ func (c *rowsCache) derive(tr *client.Transcript) {
 		}
 	}
 	c.live, c.head = live, live.es
-	if c.filesOf != len(src) {
-		c.files, c.filesOf = addFiles(slices.Clone(s.files), maps.Clone(s.at), live.es[s.es:]), len(src)
+	// The files are the settled part's with the live part's over them,
+	// derived again only as those change: a reply streaming in, a
+	// command run or a report leaves them as they were.
+	liveFiles := addFiles(nil, map[string]int{}, live.es[s.es:])
+	if filesMoved || c.files == nil || !slices.Equal(liveFiles, c.liveFiles) {
+		c.files, c.liveFiles = addFiles(slices.Clone(s.files), maps.Clone(s.at), live.es[s.es:]), liveFiles
 	}
 	c.turns, _ = addTurns(turns, s.steps, live.es, s.es)
 	c.headTs = len(c.turns)

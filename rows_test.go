@@ -124,7 +124,7 @@ func TestRowsFollowTheTranscript(t *testing.T) {
 						for _, e := range played {
 							fresh.Apply(e)
 						}
-						*tr = fresh
+						tr.Replace(fresh)
 					}
 				},
 			}

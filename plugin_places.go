@@ -223,20 +223,26 @@ func (a *app) emitThreadChanges() {
 	// first look at a thread tells nothing, then each new finished one is
 	// told once.
 	id := t.id().String()
-	var edited []string
+	// The files, unless they're the very ones told of, which rowsOf
+	// keeps while none changes.
 	files := a.rowsOf(t).files
-	stamps := make(map[string]time.Time, len(files))
-	for _, f := range files {
-		stamps[f.path] = f.stamp
-		if was, ok := a.pluginFiles[id][f.path]; !ok || !was.Equal(f.stamp) {
-			edited = append(edited, f.path)
+	if was := a.pluginFiles[id]; was == nil || len(was.of) != len(files) || len(files) > 0 && &was.of[0] != &files[0] {
+		var edited []string
+		stamps := make(map[string]time.Time, len(files))
+		for _, f := range files {
+			stamps[f.path] = f.stamp
+			if was != nil {
+				if at, ok := was.stamps[f.path]; !ok || !at.Equal(f.stamp) {
+					edited = append(edited, f.path)
+				}
+			}
 		}
+		if len(edited) > 0 {
+			ev := map[string]any{"thread": id, "files": edited}
+			a.plugins.Emit("thread.files.changed", func(string) any { return ev })
+		}
+		a.pluginFiles[id] = &toldFiles{stamps: stamps, of: files}
 	}
-	if _, known := a.pluginFiles[id]; known && len(edited) > 0 {
-		ev := map[string]any{"thread": id, "files": edited}
-		a.plugins.Emit("thread.files.changed", func(string) any { return ev })
-	}
-	a.pluginFiles[id] = stamps
 	told, known := a.pluginMessages[id]
 	first := !known
 	if first {
@@ -266,6 +272,13 @@ func (a *app) emitThreadChanges() {
 		msg := map[string]any{"thread": id, "role": role, "text": e.text}
 		a.plugins.Emit("thread.message", func(string) any { return msg })
 	}
+}
+
+// toldFiles are the changed files of a thread the plugins were told of,
+// with each one's last edit, and the files rowsOf gave for them.
+type toldFiles struct {
+	stamps map[string]time.Time
+	of     []fileChange
 }
 
 // toldMessages are the messages of a thread the plugins were told of, by
