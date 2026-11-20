@@ -404,3 +404,61 @@ export function rows({ place, keys }) { return keys.map(() => place.context ? { 
 		t.Fatalf("after version 2 came, the row at version 1, answered null, shows %q", got)
 	}
 }
+
+// startOver is a page whose third start fails, and a view of the state
+// whose rows say which start drew them, with its session and a read of its
+// row.
+func startOver(t *testing.T) (*Session, *uiThread, func() string) {
+	t.Helper()
+	dir, u := t.TempDir(), newUIThread()
+	writeModule(t, dir, "retryrows", "", `
+export function init() {
+	const n = (host.storage.get("starts") ?? 0) + 1
+	host.storage.set("starts", n)
+	if (n === 3) throw new Error("restart refused")
+	return { state: n }
+}
+export function update({ state }) { return { state: -state } }
+export function view({ state }) {
+	if (state < 0) throw new Error("update refused")
+	return { body: { type: "list", id: "l", label: "rows", height: 120, items: [{ key: "r", label: "row" }] } }
+}
+export function rows({ state, keys }) { return keys.map(() => ({ type: "text", text: "start " + state })) }`)
+	h := open(t, dir, u, &effects{})
+	s := session(t, h, "retryrows")
+	u.until(t, "the view", func() bool { return s.View != nil })
+	row := func() string {
+		if n := s.Row(RowAt{List: "l"}, s.View.Body.Items[0]); n != nil {
+			return n.Text
+		}
+		return ""
+	}
+	u.until(t, "the row", func() bool { return row() == "start 1" })
+	return s, u, row
+}
+
+// Start over keeps the rows a list shows till the new start's view draws
+// them again.
+func TestStartingOverKeepsTheRowsShownTillTheNewViewDrawsThem(t *testing.T) {
+	s, u, row := startOver(t)
+	s.Retry()
+	if got := row(); got != "start 1" {
+		t.Fatalf("right after Start over, the row shows %q, not its drawing", got)
+	}
+	u.until(t, "the row of the new start", func() bool { return row() == "start 2" })
+}
+
+// A Start over that fails keeps the rows the list shows: the page it leaves
+// up isn't blank.
+func TestAStartOverThatFailsKeepsTheRowsShown(t *testing.T) {
+	s, u, row := startOver(t)
+	s.Retry()
+	u.until(t, "the row of the second start", func() bool { return row() == "start 2" })
+	s.Dispatch(UIEvent{Type: "click", Handler: "h", Node: "n"}, nil)
+	u.until(t, "the view refused", func() bool { return s.Err != nil })
+	s.Retry()
+	u.until(t, "the start refused", func() bool { return s.Err != nil && strings.Contains(s.Err.Error(), "restart refused") })
+	if got := row(); got != "start 2" {
+		t.Fatalf("after Start over failed, the row shows %q, not its drawing", got)
+	}
+}

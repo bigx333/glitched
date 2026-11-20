@@ -307,6 +307,8 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 	s.mu.Unlock()
 	if newer {
 		s.publish(*posted)
+	} else {
+		posted = nil
 	}
 	s.mu.Lock()
 	if s.broken || s.done {
@@ -339,6 +341,15 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 		} else {
 			shown = append(shown, it)
 		}
+	}
+	// A failure just shown of every copy at the version the frame has
+	// is the answer: waiting draws nothing new.
+	if posted != nil && posted.failed != nil && posted.gen == s.gen && !slices.ContainsFunc(shown, func(it PlaceItem) bool {
+		v, ok := posted.asked[[2]string{place, it.Key}]
+		return !ok || v != it.Version
+	}) {
+		s.mu.Unlock()
+		return
 	}
 	s.places.first = first
 	posted = nil

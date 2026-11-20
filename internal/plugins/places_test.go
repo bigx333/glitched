@@ -473,3 +473,38 @@ func TestAListNoDrawingShowsDrawsNoRow(t *testing.T) {
 	}
 	u.until(t, "a's row drawn again", func() bool { return listRow(t, s, "a") == "again" })
 }
+
+// A failure of every copy at the version a first draw has, posted before
+// it and shown as it begins, ends it: waiting would draw nothing new.
+func TestAFailurePostedBeforeAFirstDrawEndsItsWait(t *testing.T) {
+	h, s, u := placeTest(t, contextModule)
+	settled(t, h, u, "the first drawing", func() bool { return s.Rev > 0 })
+	items := []PlaceItem{{Key: "a", Version: "1", Context: "bad"}}
+	s.SetItems("badge", items)
+	posted(t, h, u, 1)
+	deadline := time.Now().Add(time.Second)
+	s.DrawFirst("badge", items, []string{"a"}, deadline)
+	if !time.Now().Before(deadline) || s.Err == nil {
+		t.Fatalf("the first draw waited till its deadline for the failure posted before it: %v", s.Err)
+	}
+}
+
+// A failure posted before a first draw of a sibling's older version doesn't
+// end it: the drawing of the frame's versions is waited for.
+func TestAFailureOfASiblingsOlderVersionDoesNotEndAFirstDraw(t *testing.T) {
+	h, s, u := placeTest(t, `export function place({ items }) {
+	if (items.some(({ context }) => context === "bad")) throw new Error("bad sibling")
+	return items.map(({ context }) => ({ type: "text", text: context }))
+}`)
+	a, b := PlaceItem{Key: "a", Version: "1", Context: "new"}, PlaceItem{Key: "b", Version: "1", Context: "good"}
+	s.SetItems("badge", []PlaceItem{b})
+	settled(t, h, u, "b drawn", func() bool { return text(s, "b") == "good" })
+	b.Version, b.Context = "2", "bad"
+	s.SetItems("badge", []PlaceItem{a, b})
+	posted(t, h, u, 1)
+	b.Version, b.Context = "3", "fixed"
+	s.DrawFirst("badge", []PlaceItem{a, b}, []string{"a"}, time.Now().Add(2*time.Second))
+	if text(s, "a") != "new" || s.Err != nil {
+		t.Fatalf("the first draw ended on b's older failure: a %q, error %v", text(s, "a"), s.Err)
+	}
+}
