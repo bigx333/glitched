@@ -867,7 +867,7 @@ func (a *app) composerHeight(c *ui.Context, t thread) float32 {
 	if len(a.shown(t)) > 0 {
 		h += a.aboveH * k
 	}
-	return h + a.envH*k
+	return h + a.envH*k + a.composerAround.h
 }
 
 // composer is the card the user writes in, over the end of the chat.
@@ -911,11 +911,20 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 			// The composer plugin's layout, around the native
 			// composer.input, which is the card and what comes and goes
 			// with it; Glitched's own when no plugin draws it.
-			input := func(c *ui.Context) { a.composerInput(c, t, es, fullW, frame.Bounds().W) }
-			a.composerIn = input
+			a.composerIn = func(c *ui.Context) {
+				// In a plugin's layout, the card is as wide as the layout
+				// leaves it, and the room it takes over and under the
+				// card is the composer's too, as Jump to latest rides it.
+				in := ui.Column(c).Key("composer-input").PassThrough()
+				if b, f := in.Bounds(), frame.Bounds(); b.W > 0 {
+					a.composerAround.w, a.composerAround.h = f.W-b.W, f.H-b.H
+				}
+				in.Children(func() { a.composerInput(c, t, es, max(0, fullW-a.composerAround.w), in.Bounds().W) })
+			}
 			box := func() ui.Element { return ui.Column(c).Key("composer-plugin").PassThrough() }
 			if !a.pluginComponent(c, box, "composer", "composer", &t, func(r plugins.ThreadRecord) any { return composerContext{r} }) {
-				input(c)
+				a.composerAround.w, a.composerAround.h = 0, 0
+				a.composerInput(c, t, es, fullW, frame.Bounds().W)
 			}
 		})
 	})

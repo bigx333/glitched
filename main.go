@@ -505,8 +505,10 @@ type app struct {
 	composerH  ui.Handle
 	composerAt ui.Rect
 	// composerIn draws composer.input in this frame's composer, for the
-	// plugin that places it.
-	composerIn func(*ui.Context)
+	// plugin that places it; composerAround is the room the plugin's
+	// layout takes around it, as last laid out, zero in Glitched's own.
+	composerIn     func(*ui.Context)
+	composerAround struct{ w, h float32 }
 	// The agents strip: over whose composer the panel is open, and showing
 	// all its rows past five; in this frame, how far from pill (0) to panel
 	// (1), the panel's height as it heads for its rows', and the pill's
