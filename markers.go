@@ -48,14 +48,16 @@ const markerPitch = 3 + 2*3 + markerGap
 // column centers its ticks while they fit and starts them at its top when
 // they don't, as MyGo's flex layout gives an overflowing column no free
 // room: the ticks past the window's height never show, and leaving them
-// out leaves it overflowing. One more shows for Tab to move to.
+// out leaves it overflowing. One more is built for Tab to move to.
 func markersShown(n int, h float32) int {
 	return min(n, int(h/markerPitch)+2)
 }
 
 // turnMarkers draws the thread's markers over the chat's left edge, for
 // its list l. With fewer than two turns, there's nothing to navigate.
-// Only the ticks the window can show are built.
+// Only the ticks the window can show are built, and, past them, the tick
+// holding the focus and its neighbours, where they would be, below the
+// window: Tab and Shift-Tab walk every tick, as with all of them built.
 func (a *app) turnMarkers(c *ui.Context, rs rows, l *ui.ListState) {
 	es, turns := rs.es, rs.turns
 	if len(turns) < 2 {
@@ -80,10 +82,22 @@ func (a *app) turnMarkers(c *ui.Context, rs rows, l *ui.ListState) {
 	colBox := col.Bounds()
 	_, h := c.Size()
 	shown := markersShown(len(turns), h)
+	from, to := shown, shown
+	if f := a.markerFocus; f >= shown-1 && f < len(turns) {
+		from, to = max(shown, f-1), min(len(turns), f+2)
+	}
+	a.markerFocus = -1
 	col.Children(func() {
 		pointed, pointedY := -1, float32(0)
 		nearest := float32(math.MaxFloat32)
-		for k := range shown {
+		for k := range to {
+			if k == shown && from > shown {
+				// The ticks skipped, with the gaps around them but one.
+				ui.Box(c.Key("skipped")).Height(float32((from-shown)*markerPitch - markerGap))
+			}
+			if k >= shown && k < from {
+				continue
+			}
 			tr := turns[k]
 			b := ui.ButtonBase(c.Key(es[tr.entry].key)).Padding(3, 6).Cursor(ui.CursorPointer).
 				Label("Go to: " + preview(es[tr.entry]))
@@ -110,6 +124,9 @@ func (a *app) turnMarkers(c *ui.Context, rs rows, l *ui.ListState) {
 					tick.Background(palette.text.Alpha(0.2))
 				}
 			})
+			if b.Focused() {
+				a.markerFocus = k
+			}
 			if b.Clicked() {
 				l.ScrollTo(tr.entry, ui.Start)
 			}

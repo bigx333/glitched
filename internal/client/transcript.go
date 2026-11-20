@@ -24,6 +24,38 @@ type Transcript struct {
 	Deleted  bool       // the thread's tombstone is folded in; nothing follows it
 	starting api.ID     // the run admitted and not yet started, stopped or ended
 	wakes    map[api.ID]*wake
+	// edits are the indexes of Entries changed in place, in the order
+	// they changed, the same one once in a row: Edits reads them.
+	edits []int
+}
+
+// Edits is what changed in place among Entries since a reader's mark:
+// the lowest index of an entry changed, len(Entries) when none was, and
+// the mark to pass next time. An entry appended is not an edit; folding
+// a snapshot replaces the entries and starts the marks again, which a mark
+// past them tells, as all changed.
+func (t *Transcript) Edits(mark int) (low, next int) {
+	if mark > len(t.edits) {
+		return 0, len(t.edits)
+	}
+	low = len(t.Entries)
+	for _, i := range t.edits[mark:] {
+		low = min(low, i)
+	}
+	return low, len(t.edits)
+}
+
+// edited notes that e, one of Entries, changed in place. It looks from the
+// end, where events change entries.
+func (t *Transcript) edited(e Entry) {
+	for i := len(t.Entries) - 1; i >= 0; i-- {
+		if t.Entries[i] == e {
+			if n := len(t.edits); n == 0 || t.edits[n-1] != i {
+				t.edits = append(t.edits, i)
+			}
+			return
+		}
+	}
 }
 
 // wake is a message the engine queued with a child's report, by its ID:
@@ -151,6 +183,9 @@ func fold(snap api.Snapshot) Transcript {
 	return t
 }
 
+// Apply folds one event in, as following the thread does.
+func (t *Transcript) Apply(e api.Event) { t.apply(e) }
+
 // apply folds one event in, mirroring how the engine's projection reads
 // it. An event at or before the cursor is already in. One this client can't
 // decode is skipped, and the cursor still moves past it.
@@ -215,6 +250,7 @@ func (t *Transcript) apply(e api.Event) {
 			t.add(a)
 		}
 		a.write(b.Text)
+		t.edited(a)
 	case api.WorkItem:
 		t.work(b, e.At)
 	case api.RequestOpened:
@@ -222,14 +258,17 @@ func (t *Transcript) apply(e api.Event) {
 	case api.RequestAnswer:
 		if r := t.request(b.Request); r != nil {
 			r.State, r.Answer = api.RequestAnswered, b.Answer
+			t.edited(r)
 		}
 	case api.RequestDelivery:
 		if r := t.request(b.Request); r != nil {
 			r.State = api.RequestDelivered
+			t.edited(r)
 		}
 	case api.RequestInvalidation:
 		if r := t.request(b.Request); r != nil {
 			r.State, r.Reason = api.RequestInvalidated, b.Reason
+			t.edited(r)
 		}
 	case api.TurnStopping:
 		t.starting = api.ID{}
@@ -265,8 +304,9 @@ func (t *Transcript) last() Entry {
 
 // add appends e. The text before e is done streaming.
 func (t *Transcript) add(e Entry) {
-	if a, ok := t.last().(*AssistantEntry); ok {
+	if a, ok := t.last().(*AssistantEntry); ok && a.Streaming {
 		a.Streaming = false
+		t.edited(a)
 	}
 	t.Entries = append(t.Entries, e)
 }
@@ -287,6 +327,7 @@ func (t *Transcript) queueWake(q api.MessageQueued) {
 	for i := len(t.Entries) - 1; i >= 0; i-- {
 		if r, ok := t.Entries[i].(*ReportEntry); ok && r.Child == q.Report {
 			r.Wake = WakeWaiting
+			t.edited(r)
 			if t.wakes == nil {
 				t.wakes = map[api.ID]*wake{}
 			}
@@ -304,6 +345,7 @@ func (t *Transcript) settle(message api.ID, state MessageState, reason string) {
 		if state == Sent {
 			w.report.Wake = WakeSent
 		}
+		t.edited(w.report)
 		delete(t.wakes, message)
 		return
 	}
@@ -314,6 +356,7 @@ func (t *Transcript) settle(message api.ID, state MessageState, reason string) {
 	}
 	if u := t.message(message); u != nil {
 		u.State, u.Reason = state, reason
+		t.edited(u)
 	}
 }
 
@@ -370,6 +413,7 @@ func (t *Transcript) work(w api.WorkItem, at time.Time) {
 					step.Exit = was.Exit
 				}
 				we.Items[i] = step
+				t.edited(we)
 				break
 			}
 		}
@@ -387,6 +431,7 @@ func (t *Transcript) work(w api.WorkItem, at time.Time) {
 	if !slices.ContainsFunc(into.Items, func(s WorkStep) bool { return s.Status == api.WorkStarted }) {
 		into.Ended = at
 	}
+	t.edited(into)
 }
 
 // void invalidates the run's open requests, as the engine does once the run
@@ -395,6 +440,7 @@ func (t *Transcript) void(run api.ID) {
 	for _, e := range t.since(run) {
 		if r, ok := e.(*RequestEntry); ok && r.Run == run && r.State == api.RequestPending {
 			r.State = api.RequestInvalidated
+			t.edited(r)
 		}
 	}
 }
@@ -413,6 +459,7 @@ func (t *Transcript) end(run api.ID, released MessageState, at time.Time) {
 	}
 	if u := t.message(run); u != nil && u.State == Claimed {
 		u.State = released
+		t.edited(u)
 	}
 	for id, w := range t.wakes {
 		if w.run == run {
@@ -423,12 +470,14 @@ func (t *Transcript) end(run api.ID, released MessageState, at time.Time) {
 	for _, e := range t.since(run) {
 		switch e := e.(type) {
 		case *AssistantEntry:
-			if e.Run == run {
+			if e.Run == run && e.Streaming {
 				e.Streaming = false
+				t.edited(e)
 			}
 		case *WorkEntry:
 			if e.Run == run && e.Ended.IsZero() {
 				e.Ended = at
+				t.edited(e)
 			}
 		}
 	}

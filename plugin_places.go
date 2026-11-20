@@ -240,14 +240,22 @@ func (a *app) emitThreadChanges() {
 	told, known := a.pluginMessages[id]
 	first := !known
 	if first {
-		told = map[string]bool{}
+		told = &toldMessages{keys: map[string]bool{}}
 		a.pluginMessages[id] = told
 	}
-	for _, e := range a.rowsOf(t).es {
-		if (e.kind != entryUser && e.kind != entryAssistant) || e.streaming || told[e.key] {
+	rs := a.rowsOf(t)
+	if told.epoch != rs.epoch {
+		told.epoch, told.through = rs.epoch, 0
+	}
+	for i := told.through; i < len(rs.es); i++ {
+		e := rs.es[i]
+		if told.through == i && i < rs.fixed && !e.streaming {
+			told.through++
+		}
+		if (e.kind != entryUser && e.kind != entryAssistant) || e.streaming || told.keys[e.key] {
 			continue
 		}
-		told[e.key] = true
+		told.keys[e.key] = true
 		if first {
 			continue
 		}
@@ -258,6 +266,15 @@ func (a *app) emitThreadChanges() {
 		msg := map[string]any{"thread": id, "role": role, "text": e.text}
 		a.plugins.Emit("thread.message", func(string) any { return msg })
 	}
+}
+
+// toldMessages are the messages of a thread the plugins were told of, by
+// key, and the rows of the thread's rows (of epoch) through which every
+// message is told and none will change.
+type toldMessages struct {
+	keys    map[string]bool
+	through int
+	epoch   uint64
 }
 
 // pluginTab is a tab of a plugin's in the thread panel.
