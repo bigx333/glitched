@@ -286,7 +286,7 @@ type NativeWidget = {
       onChange?: Handler;
     }
   | {
-      /** The composer itself, in composer: placed exactly once. */
+      /** The composer itself, in composer: placed exactly once, in rows, columns and cards alone. */
       name: "composer.input";
     }
 );
