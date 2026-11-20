@@ -248,6 +248,15 @@ type renderer struct {
 	mods    []string
 }
 
+// NativeBox is the box the native n, child i of its parent, draws in. It
+// lets the pointer through to what is under it, but for the native in it,
+// as a composer's frame does. Glitched draws a built-in's native in the
+// same box when the built-in has no drawing yet, so that the native keeps
+// its state, as a selection, when the drawing comes.
+func NativeBox(c *ui.Context, n *widget.Node, i int) ui.Element {
+	return ui.Column(c.Key(key(n, i))).PassThrough()
+}
+
 func key(n *widget.Node, i int) string {
 	if n.ID != "" {
 		return "id:" + n.ID // ids have no #, which the controls' own keys add
@@ -439,9 +448,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		r.item(c, n, key(n, i))
 		return
 	case "native":
-		// It lets the pointer through to what is under it, but for the
-		// native in it, as a composer's frame does.
-		e := ui.Column(kc).PassThrough()
+		e := NativeBox(c, n, i)
 		if n.Grow {
 			e.Grow(1).Shrink(1).Basis(0)
 		}

@@ -17,6 +17,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/plugins"
+	"glitched/internal/plugins/widget"
 )
 
 const (
@@ -542,9 +543,13 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 		context: func(plugins.ThreadRecord) any {
 			return timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil}
 		},
-		native: func() { a.nativeEntry(c, t, rs, i) },
+		native:  func() { a.nativeEntry(c, t, rs, i) },
+		builtin: timelineBody,
 	})
 }
+
+// timelineBody is what the built-in timeline plugin places for each row.
+var timelineBody = &widget.Node{Type: "native", ID: "body", Name: "transcript.body"}
 
 // timelineMessage is the context of timeline.message: which row a copy is
 // and what it is doing. Its text is transcript.body's alone, so a reply
