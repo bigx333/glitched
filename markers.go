@@ -42,6 +42,13 @@ func turnsOf(es []entry) []turnInfo {
 	return turns
 }
 
+// markerAt is a turn's marker: its message's key, and the turn's index
+// when it was drawn.
+type markerAt struct {
+	key  string
+	turn int
+}
+
 // markerPitch is how far apart the ticks are: a tick's hit area, its
 // padding above and below a 3 DIP tick, and the gap to the next.
 const markerPitch = 3 + 2*3 + markerGap
@@ -89,10 +96,13 @@ func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
 	// The ticks built: those that show, then, past them, the ones
 	// around the focus and the last, which Shift-Tab comes to first.
 	built := [][2]int{{0, shown}}
-	if key, ok := a.markerFocus[id]; ok {
-		f := slices.IndexFunc(turns[shown-1:], func(tr turnInfo) bool { return es[tr.entry].key == key })
-		if f >= 0 {
-			f += shown - 1
+	if at, ok := a.markerFocus[id]; ok {
+		// Where it was, unless messages came before it.
+		f := at.turn
+		if f >= n || es[turns[f].entry].key != at.key {
+			f = slices.IndexFunc(turns, func(tr turnInfo) bool { return es[tr.entry].key == at.key })
+		}
+		if f >= shown-1 {
 			built = append(built, [2]int{max(shown, f-1), min(n, f+2)})
 		}
 	}
@@ -129,7 +139,7 @@ func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
 				}
 			})
 			if b.Focused() {
-				a.markerFocus[id] = es[tr.entry].key
+				a.markerFocus[id] = markerAt{es[tr.entry].key, k}
 			}
 			if b.Clicked() {
 				l.ScrollTo(tr.entry, ui.Start)

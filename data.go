@@ -397,14 +397,17 @@ func (c *rowsCache) derive(tr *client.Transcript) {
 // pauseAsked marks each run's last work paused while a request of the run
 // waits, as markPaused does, from the rows of those requests, asks, in
 // order: each marks the run's work nearest before it, unless a request
-// before it did, looking back no further than the run's message. It
-// returns marked with the rows it marked.
+// before it did, looking back no further than the run's message or a
+// request of the run waiting too, whose work it is. It returns marked
+// with the rows it marked.
 func pauseAsked(es []entry, asks, marked []int) []int {
 	for _, k := range asks {
 		r := es[k].request
+		message := "m/" + r.Run.String()
 		for i := k - 1; i >= 0; i-- {
 			e := &es[i]
-			if e.kind == entryUser && e.key == "m/"+r.Run.String() {
+			if e.kind == entryUser && e.key == message ||
+				e.kind == entryRequest && e.request.Run == r.Run && e.request.State == api.RequestPending {
 				break
 			}
 			if e.kind != entryWork || e.run != r.Run {
