@@ -342,13 +342,13 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 			shown = append(shown, it)
 		}
 	}
-	// A failure just shown of the copies as the UI and this frame have
-	// them, none gone, with nothing on its way to draw them again, is the
-	// answer: waiting draws nothing new.
+	// A failure just shown, still the worker's last drawing, of the copies
+	// as the UI and this frame have them, none gone, with nothing on its
+	// way to draw them again, is the answer: waiting draws nothing new.
 	gone := slices.ContainsFunc(s.places.items[place], func(o PlaceItem) bool {
 		return !slices.ContainsFunc(items, func(it PlaceItem) bool { return it.Key == o.Key })
 	})
-	if posted != nil && posted.failed != nil && posted.gen == s.gen && !s.running && !gone && answers(posted.asked, place, shown) &&
+	if posted != nil && posted == s.places.posted && posted.failed != nil && posted.gen == s.gen && !s.running && !gone && answers(posted.asked, place, shown) &&
 		!slices.ContainsFunc(slices.Collect(maps.Keys(s.places.items)), func(id string) bool { return !answers(posted.asked, id, s.places.items[id]) }) {
 		s.mu.Unlock()
 		return
