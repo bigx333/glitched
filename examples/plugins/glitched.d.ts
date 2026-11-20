@@ -606,12 +606,19 @@ interface UpdateArgs<S> extends InitArgs {
   event: GlitchedEvent;
   values: Values;
 }
-/** place draws every copy of a place in one call: a widget or null each, in order. */
+/**
+ * place draws the copies Glitched asks for in one call: a widget or null
+ * each, in order. A copy's drawing may depend only on state, its own key
+ * and context, and host.setting: when copies come or change and nothing
+ * else does, items holds those copies alone, and the others keep their
+ * drawings. Anything else (an event, a timer, a setting, a reload) asks for
+ * every copy shown. null leaves a copy empty.
+ */
 interface PlaceArgs<S> {
   id: string;
   at: Slot | Component;
   state: S;
-  /** A component's copies have its context: HeaderActionsContext for thread.header.actions, DiffPanelContext for thread.panel.diff, and so on. */
+  /** The copies to draw now, never all those shown. A component's copies have its context: HeaderActionsContext for thread.header.actions, DiffPanelContext for thread.panel.diff, and so on. */
   items: { key: string; context?: ThreadRecord | ComponentContext }[];
 }
 /** rows draws the rows of a list that Glitched shows: a widget or null each, in the order of keys; null for a key the state no longer has. A row is at most 200 widgets and 16 KiB. */

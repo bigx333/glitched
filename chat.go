@@ -201,10 +201,10 @@ func (a *app) header(c *ui.Context, t thread, es []entry) {
 		box := func() ui.Element {
 			return ui.Row(c).Key("component:thread.header.actions").Shrink(0).AlignItems(ui.Center)
 		}
-		a.pluginComponent(c, box, "thread.header.actions", t.id().String(), &t, func(r plugins.ThreadRecord) any {
+		a.pluginComponent(c, "thread.header.actions", &t, componentCopy{key: t.id().String(), box: box, context: func(r plugins.ThreadRecord) any {
 			state.Thread = r
 			return state
-		})
+		}})
 	})
 }
 
@@ -274,7 +274,7 @@ func (a *app) timeline(c *ui.Context, t thread, es []entry) {
 				// What it says is a plugin's: the built-in Empty thread, or
 				// one of the user's that replaces it.
 				box := func() ui.Element { return ui.Column(c).Key("empty").Center().Padding(140, 0, 0) }
-				a.pluginComponent(c, box, "thread.empty", t.id().String(), &t, func(r plugins.ThreadRecord) any { return threadEmpty{r} })
+				a.pluginComponent(c, "thread.empty", &t, componentCopy{key: t.id().String(), box: box, context: func(r plugins.ThreadRecord) any { return threadEmpty{r} }})
 			})
 		}
 	})
@@ -922,7 +922,7 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 				in.Children(func() { a.composerInput(c, t, es, max(0, fullW-a.composerAround.w), in.Bounds().W) })
 			}
 			box := func() ui.Element { return ui.Column(c).Key("composer-plugin").PassThrough() }
-			if !a.pluginComponent(c, box, "composer", "composer", &t, func(r plugins.ThreadRecord) any { return composerContext{r} }) {
+			if !a.pluginComponent(c, "composer", &t, componentCopy{key: "composer", box: box, context: func(r plugins.ThreadRecord) any { return composerContext{r} }}) {
 				a.composerAround.w, a.composerAround.h = 0, 0
 				a.composerInput(c, t, es, fullW, frame.Bounds().W)
 			}
@@ -1264,7 +1264,7 @@ func (a *app) sendControl(c *ui.Context, t thread, keys bool) {
 	ctx := func(r plugins.ThreadRecord) any {
 		return composerSend{Thread: r, Draft: a.message(t) != "", Working: t.View.Live()}
 	}
-	if !a.pluginComponent(c, box, "composer.send", composerKey(t), &t, ctx) {
+	if !a.pluginComponent(c, "composer.send", &t, componentCopy{key: composerKey(t), box: box, context: ctx}) {
 		a.sendButton(c, t, keys)
 		return
 	}

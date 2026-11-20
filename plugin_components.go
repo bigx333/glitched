@@ -18,15 +18,36 @@ import (
 	"glitched/internal/plugins/widget"
 )
 
-// pluginComponent draws the component name, for the copy key, in the box
-// it makes, with the first plugin that replaces it and has a good
-// drawing: the user's before the built-in. Each is given the copy, so
-// that one failing falls back to the next with no gap. context is what a
-// plugin is given, from the thread's record as that plugin may see it.
-// The native widgets it places draw about t. t is nil for a component of
-// the app's own, as a settings page, whose record is zero.
-func (a *app) pluginComponent(c *ui.Context, box func() ui.Element, name, key string, t *thread, context func(plugins.ThreadRecord) any) bool {
+// A componentCopy is one copy of a component that a frame draws: its
+// key, the box it makes to draw in, its context from the thread's record
+// as each plugin may see it, and its native body, which Glitched draws
+// while no plugin has drawn the copy yet. Nil draws nothing then.
+type componentCopy struct {
+	key     string
+	box     func() ui.Element
+	context func(plugins.ThreadRecord) any
+	native  func()
+}
+
+// pluginComponent draws copies of the component name, each with the first
+// plugin that replaces it and has a good drawing of it: the user's before
+// the built-in. Each is given every copy, so that one failing falls back
+// to the next with no gap. The native widgets they place draw about t,
+// which is nil for a component of the app's own, as a settings page,
+// whose record is zero. It reports whether a plugin drew every copy:
+// where Glitched draws the built-in itself (plugins.Native), it draws it
+// for a copy no replacement draws well.
+//
+// Copies none has drawn yet, as a panel opening, are drawn before they
+// show, in one wait a frame for the component: a copy a later call of
+// the same frame brings shows its native body until its drawing comes.
+func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...componentCopy) bool {
 	if a.plugins == nil {
+		for _, cp := range copies {
+			if cp.native != nil {
+				cp.box().Children(cp.native)
+			}
+		}
 		return false
 	}
 	f := a.frameOf(name)
@@ -40,47 +61,77 @@ func (a *app) pluginComponent(c *ui.Context, box func() ui.Element, name, key st
 		app  *plugins.Session
 		node *widget.Node
 	}
-	var good, failed *drawing
-	var undrawn []drawing
-	for _, pl := range a.plugins.Replacers(name) {
-		ctx := context(a.plugins.Record(pl.Plugin, full))
-		version, _ := json.Marshal(ctx)
-		fk := [2]string{pl.Plugin, pl.Place.ID}
-		f.items[fk] = append(f.items[fk], plugins.PlaceItem{Key: key, Version: string(version), Context: ctx})
-		app := a.plugins.App(pl.Plugin)
-		if good != nil || app == nil {
-			continue
-		}
-		node := app.PlaceView(pl.Place.ID, key)
-		switch {
-		case node == nil:
-			undrawn = append(undrawn, drawing{pl, ctx, app, nil})
-		case app.Err == nil:
-			good = &drawing{pl, ctx, app, node}
-		case failed == nil:
-			failed = &drawing{pl, ctx, app, node}
-		}
-	}
-	// A copy none has drawn yet, as a panel opening, is drawn before it
-	// shows, the user's first: it never opens empty.
-	if good == nil && failed == nil {
-		deadline := time.Now().Add(firstDrawWait)
-		for _, u := range undrawn {
-			if u.node = u.app.DrawFirst(u.pl.Place.ID, f.items[[2]string{u.pl.Plugin, u.pl.Place.ID}], key, deadline); u.node != nil && u.app.Err == nil {
-				good = &u
-				break
+	replacers := a.plugins.Replacers(name)
+	good := make([]*drawing, len(copies))
+	failed := make([]*drawing, len(copies))
+	ctxs := make([][]any, len(copies))
+	for i, cp := range copies {
+		for j, pl := range replacers {
+			ctx := cp.context(a.plugins.Record(pl.Plugin, full))
+			ctxs[i] = append(ctxs[i], ctx)
+			version, _ := json.Marshal(ctx)
+			fk := [2]string{pl.Plugin, pl.Place.ID}
+			f.items[fk] = append(f.items[fk], plugins.PlaceItem{Key: cp.key, Version: string(version), Context: ctx})
+			app := a.plugins.App(pl.Plugin)
+			if good[i] != nil || app == nil {
+				continue
+			}
+			node := app.PlaceView(pl.Place.ID, cp.key)
+			switch {
+			case node == nil:
+			case app.Err == nil:
+				good[i] = &drawing{pl, ctxs[i][j], app, node}
+			case failed[i] == nil:
+				failed[i] = &drawing{pl, ctxs[i][j], app, node}
 			}
 		}
 	}
-	// When every one failed, the first one's last good drawing stays: a
-	// row that can still be clicked beats none. Where Glitched draws the
-	// built-in itself, it does instead.
-	d := cmp.Or(good, failed)
-	if d == nil || good == nil && plugins.ComponentNamed(name).Native {
-		return false
+	undrawn := func(i int) bool { return good[i] == nil && failed[i] == nil }
+	waits := false
+	for i := range copies {
+		waits = waits || undrawn(i)
 	}
-	a.drawPlace(c, box(), d.pl, key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, fire func(any)) { a.drawNative(c, name, t, n, fire) })
-	return true
+	if waits && !f.waited[name] {
+		f.waited[name] = true
+		deadline := time.Now().Add(firstDrawWait)
+		for j, pl := range replacers {
+			app := a.plugins.App(pl.Plugin)
+			if app == nil {
+				continue
+			}
+			var keys []string
+			for i, cp := range copies {
+				if undrawn(i) {
+					keys = append(keys, cp.key)
+				}
+			}
+			if len(keys) == 0 {
+				break
+			}
+			app.DrawFirst(pl.Place.ID, f.items[[2]string{pl.Plugin, pl.Place.ID}], keys, deadline)
+			for i, cp := range copies {
+				if node := app.PlaceView(pl.Place.ID, cp.key); undrawn(i) && node != nil && app.Err == nil {
+					good[i] = &drawing{pl, ctxs[i][j], app, node}
+				}
+			}
+		}
+	}
+	drewAll := true
+	for i, cp := range copies {
+		// When every one failed, the first one's last good drawing stays:
+		// a row that can still be clicked beats none. Where Glitched draws
+		// the built-in itself, it does instead.
+		d := cmp.Or(good[i], failed[i])
+		if d == nil || good[i] == nil && plugins.ComponentNamed(name).Native {
+			drewAll = false
+			if cp.native != nil {
+				cp.box().Children(cp.native)
+			}
+			continue
+		}
+		a.drawPlace(c, cp.box(), d.pl, cp.key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, fire func(any)) { a.drawNative(c, name, t, n, fire) })
+	}
+	return drewAll
 }
 
 // drawNative draws the native widget n in a copy of the component about

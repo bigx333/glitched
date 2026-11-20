@@ -569,7 +569,7 @@ type keybindingRecord struct {
 // replaces the component, in the page's column.
 func (a *app) settingsComponent(c *ui.Context, name string, ctx any) {
 	box := func() ui.Element { return ui.Column(c).Key("component:" + name) }
-	a.pluginComponent(c, box, name, "page", nil, func(plugins.ThreadRecord) any { return ctx })
+	a.pluginComponent(c, name, nil, componentCopy{key: "page", box: box, context: func(plugins.ThreadRecord) any { return ctx }})
 }
 
 // --- About

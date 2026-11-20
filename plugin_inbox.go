@@ -40,14 +40,14 @@ func (a *app) rowActions(c *ui.Context, t thread, cat category) {
 	}
 	box := func() ui.Element { return ui.Row(c).Key("component:thread.row.actions").Gap(0) }
 	a.popoverOpen = false
-	a.pluginComponent(c, box, "thread.row.actions", t.id().String(), &t, func(r plugins.ThreadRecord) any {
+	a.pluginComponent(c, "thread.row.actions", &t, componentCopy{key: t.id().String(), box: box, context: func(r plugins.ThreadRecord) any {
 		// A plugin that can't read threads isn't told where it is.
 		section := sectionNames[cat]
 		if r.Section == "" {
 			section = ""
 		}
 		return rowActions{r, section, snooze}
-	})
+	}})
 	switch {
 	case a.popoverOpen:
 		a.snoozeFor = t.id()

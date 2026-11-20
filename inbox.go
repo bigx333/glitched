@@ -222,7 +222,7 @@ func tile(c *ui.Context, icon *ui.SVG, color ui.Color, size float32) ui.Element 
 func (a *app) projectStrip(c *ui.Context) {
 	box := func() ui.Element { return ui.Column(c).Key("component:sidebar.projects") }
 	strip := projectStrip{Projects: a.projectRecords(), Filtered: len(a.projectFilter) > 0, Picking: a.picking, Machines: len(a.backend.Envs()) > 1}
-	a.pluginComponent(c, box, "sidebar.projects", "strip", nil, func(plugins.ThreadRecord) any { return strip })
+	a.pluginComponent(c, "sidebar.projects", nil, componentCopy{key: "strip", box: box, context: func(plugins.ThreadRecord) any { return strip }})
 }
 
 // section lists a category's threads under a header that opens and closes
