@@ -82,6 +82,9 @@ type Controls struct {
 	// pending are the progress buttons clicked, by id, with the click's
 	// number: each shows it runs till a view answers after it.
 	pending map[string]int
+	// passes counts the view's builds: a list remembers the one it was
+	// last drawn in, and an input moves only a list drawn.
+	passes int
 }
 
 type control struct {
@@ -218,6 +221,7 @@ func View(c *ui.Context, v *widget.View, cs *Controls, st Style, md *markdown.Op
 	if v == nil {
 		return
 	}
+	cs.passes++
 	r := renderer{cs: cs, st: st, md: md, dispatch: dispatch}
 	v.Body.Walk(func(n *widget.Node) {
 		if n.Type == "list" && n.Input != "" {

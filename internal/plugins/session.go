@@ -319,7 +319,7 @@ func (s *Session) run() {
 					s.mu.Unlock()
 					return
 				}
-				state, gen, context := s.state, s.gen, s.context
+				state, gen, context := s.rows.state, s.gen, s.rows.context
 				s.mu.Unlock()
 				s.drawRows(gen, state, context, want)
 				continue
@@ -488,6 +488,8 @@ func (s *Session) render(gen, processed int, state json.RawMessage, values map[s
 	}
 	if err != nil {
 		failed = fmt.Errorf("view: %w", err)
+	} else {
+		s.rows.drewView(&s.mu, state, context)
 	}
 	s.h.opts.Post(func() {
 		s.mu.Lock()

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync"
 
 	"glitched/internal/plugins/widget"
 )
@@ -54,8 +55,19 @@ type rowSet struct {
 	// drawn, a list keeps those it asked for last.
 	seen  map[rowKey]map[string]int
 	stamp int
-	// want is the worker's, under the session's mu: rows to draw.
-	want map[rowKey]*rowWant
+	// The worker's, under the session's mu: rows to draw, and the state
+	// and context of the last view drawn, which rows are drawn with: a
+	// view refused leaves its rows as they were.
+	want    map[rowKey]*rowWant
+	state   json.RawMessage
+	context any
+}
+
+// drewView records, on the worker, what the view it drew was drawn with.
+func (rs *rowSet) drewView(mu *sync.Mutex, state json.RawMessage, context any) {
+	mu.Lock()
+	rs.state, rs.context = state, context
+	mu.Unlock()
 }
 
 type drawnRow struct {
@@ -106,21 +118,26 @@ func (s *Session) Row(at RowAt, it widget.ListItem) *widget.Node {
 // forget drops, as the view changes to rev, the rows no list asked for
 // since the last change: a list keeps the drawings of the rows it shows.
 func (rs *rowSet) forget(rev int) {
+	seen := map[rowKey]map[string]int{}
 	for k, rows := range rs.drawn {
 		for key := range rows {
 			if !rs.shown[k][key] {
 				delete(rows, key)
-				delete(rs.seen[k], key)
+				continue
 			}
+			if seen[k] == nil {
+				seen[k] = map[string]int{}
+			}
+			seen[k][key] = rs.seen[k][key]
 		}
 		if len(rows) == 0 {
 			delete(rs.drawn, k)
-			delete(rs.seen, k)
 		}
 	}
 	if rs.drawn == nil {
-		rs.drawn, rs.seen = map[rowKey]map[string]drawnRow{}, map[rowKey]map[string]int{}
+		rs.drawn = map[rowKey]map[string]drawnRow{}
 	}
+	rs.seen = seen
 	rs.asked, rs.shown, rs.rev = map[rowKey]map[string]string{}, map[rowKey]map[string]bool{}, rev
 }
 
@@ -176,8 +193,9 @@ func (s *Session) drawRows(gen int, state json.RawMessage, context any, want map
 			keys = keys[len(batch):]
 			nodes, err := s.callRows(k.list, w.place, batch, state, context)
 			if err != nil && nodes == nil {
+				// Its rows are asked again with the next view.
 				failed = cmp.Or(failed, fmt.Errorf("rows of %s: %w", k.list, err))
-				break
+				continue
 			}
 			failed = cmp.Or(failed, err)
 			for i, key := range batch {
@@ -221,6 +239,7 @@ func (rs *rowSet) keep(k rowKey) {
 	for _, key := range keys[MaxRowsKept/2:] {
 		delete(rows, key)
 		delete(rs.asked[k], key)
+		delete(rs.seen[k], key)
 	}
 }
 

@@ -11,8 +11,9 @@ import (
 const rowsJS = `
 let calls = 0, asked = [];
 export function init() { return { state: { n: 0 } }; }
-export function update({ state }) { return { state: { n: state.n + 1 } }; }
+export function update({ state, event }) { return { state: { n: state.n + 1, broken: event.handler === "break" } }; }
 export function view({ state }) {
+  if (state.broken) throw new Error("broken");
   return { body: { type: "text", text: "asked " + asked.join(",") } };
 }
 export function rows({ list, keys, state }) {
@@ -90,6 +91,16 @@ func TestAListAsksForTheRowsShownOnce(t *testing.T) {
 	if s.Err != nil {
 		t.Fatal(s.Err)
 	}
+
+	// A view refused keeps the last good one, whose rows are drawn with
+	// the state it was drawn with.
+	good := s.Rev
+	s.Dispatch(UIEvent{Type: "click", Handler: "break", Node: "n"}, nil)
+	u.until(t, "the view refused", func() bool { return s.Err != nil })
+	if s.Rev != good {
+		t.Fatal("a view that threw was shown")
+	}
+	drawn("e", "", "l:e@2")
 
 	// Scrolled through, a list keeps the rows it showed last.
 	for i := range MaxRowsKept + 100 {

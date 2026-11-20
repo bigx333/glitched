@@ -133,6 +133,9 @@ func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed
 			}
 		}
 	}
+	if failed == nil {
+		s.rows.drewView(&s.mu, state, nil)
+	}
 	d := placeDraw{gen, processed, drawn, asked, failed, time.Since(start)}
 	s.mu.Lock()
 	if s.places.first != nil {
