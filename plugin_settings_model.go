@@ -184,29 +184,132 @@ func (a *app) partState(p plugins.Plugin, name string) partState {
 	case a.plugins.Failed(p.ID) != nil:
 		return partState{"Failed", toneBad, "It failed" + strings.TrimSuffix(instead, ".") + ": " + a.plugins.Failed(p.ID).Error()}
 	}
+	nulls := a.nullCopies(p.ID, name)
+	shown := len(a.copiesShown(name))
+	if len(nulls) > 0 && len(nulls) == shown {
+		return partState{"Answered null", toneQuiet, "It answered null for every copy shown" + a.drawnInstead(nulls, "it")}
+	}
 	if drawer, drawn := a.partDrawer(name); drawn && drawer.Folder != p.Folder {
 		return partState{"Standing by", toneQuiet, drawer.Name + " draws it in place of this one."}
+	}
+	if len(nulls) > 0 {
+		return partState{"Drawing some", toneGood, fmt.Sprintf("It answered null for %d of the %d copies shown%s", len(nulls), shown, a.drawnInstead(nulls, "those"))}
 	}
 	return partState{"Drawing it now", toneGood, cmpOr(comp.About, "It draws it now.")}
 }
 
-// partDrawer is the plugin that draws the component now, if one does:
-// the first that replaces it whose last drawing went well, as
-// pluginComponent picks it, else the first; none of a native component's
-// failed ones, as Glitched draws its own instead.
+// copiesShown are who drew the copies of the component name the app
+// shows, as the last frame to draw the thread shown, or the app's own
+// parts, drew them: none when that frame didn't draw it, or when what
+// decides who draws it changed since: which plugins replace it, in what
+// order, their sessions, or whether they failed.
+func (a *app) copiesShown(name string) []copyDrawn {
+	d := a.partsDrawn[name]
+	if d == nil || d.frame != a.scopeFrames[scopeOf(d)] || d.thread != nil && *d.thread != a.current().id() {
+		return nil
+	}
+	rs := a.plugins.Replacers(name)
+	if len(rs) != len(d.replacers) {
+		return nil
+	}
+	for i, r := range d.replacers {
+		if rs[i].Plugin != r.id || a.plugins.Live(r.id) != r.session || (a.plugins.Failed(r.id) != nil) != r.failed {
+			return nil
+		}
+	}
+	return d.copies
+}
+
+// nullCopies are the copies shown of the component name that the plugin
+// id answered null for.
+func (a *app) nullCopies(id, name string) []copyDrawn {
+	var out []copyDrawn
+	for _, cp := range a.copiesShown(name) {
+		if slices.Contains(cp.nulls, id) {
+			out = append(out, cp)
+		}
+	}
+	return out
+}
+
+// drawnInstead says who draws the copies a plugin answered null for:
+// the plugins and Glitched that do, and whether some have nothing. it is
+// what to call them.
+func (a *app) drawnInstead(copies []copyDrawn, it string) string {
+	list := a.plugins.Installed()
+	var who []string
+	glitched, none := false, false
+	for _, cp := range copies {
+		switch {
+		case cp.glitched:
+			glitched = true
+		case cp.plugin == "":
+			none = true
+		default:
+			name := a.plugins.Name(cp.plugin)
+			if i := slices.IndexFunc(list, func(p plugins.Plugin) bool { return p.ID == cp.plugin }); i >= 0 && list[i].Builtin {
+				name = "the built-in"
+			}
+			if !slices.Contains(who, name) {
+				who = append(who, name)
+			}
+		}
+	}
+	switch {
+	case len(who) == 0 && !glitched:
+		return ", and nothing draws " + it + "."
+	case len(who) == 0 && !none && it == "it":
+		return ", so Glitched draws its own."
+	case len(who) == 0 && !none:
+		return ", so Glitched draws its own for " + it + "."
+	case len(who) == 1 && !glitched && !none:
+		return ", so " + who[0] + " draws " + it + "."
+	}
+	if glitched {
+		who = append(who, "Glitched")
+	}
+	if none {
+		return ", so " + andList(who) + " draw some, and nothing draws the rest."
+	}
+	return ", so " + andList(who) + " draw them."
+}
+
+// andList joins words as a sentence does: a, b and c.
+func andList(words []string) string {
+	if len(words) < 2 {
+		return strings.Join(words, "")
+	}
+	return strings.Join(words[:len(words)-1], ", ") + " and " + words[len(words)-1]
+}
+
+// partDrawer is the plugin that draws the component now, if one does.
+// As the copies shown were drawn, it is the first that replaces it that
+// drew one; else the first that replaces it whose last drawing went well,
+// as pluginComponent picks it, else the first, whose last good drawing
+// stays; none of a native component's failed ones, as Glitched draws its
+// own instead.
 func (a *app) partDrawer(name string) (plugins.Plugin, bool) {
 	rs := a.plugins.Replacers(name)
 	if len(rs) == 0 {
 		return plugins.Plugin{}, false
 	}
-	id := rs[0].Plugin
-	if plugins.ComponentNamed(name).Native {
-		id = ""
-	}
-	for _, r := range rs {
-		if a.plugins.Failed(r.Plugin) == nil {
-			id = r.Plugin
-			break
+	id := ""
+	if shown := a.copiesShown(name); len(shown) > 0 {
+		for _, r := range rs {
+			if slices.ContainsFunc(shown, func(cp copyDrawn) bool { return cp.plugin == r.Plugin }) {
+				id = r.Plugin
+				break
+			}
+		}
+	} else {
+		if !plugins.ComponentNamed(name).Native {
+			id = rs[0].Plugin
+		}
+		for _, r := range rs {
+			if a.plugins.Failed(r.Plugin) == nil {
+				id = r.Plugin
+				break
+			}
 		}
 	}
 	list := a.plugins.Installed()

@@ -106,6 +106,87 @@ func TestTimelineRowsAreABuiltInPluginYoursCanWrap(t *testing.T) {
 	}
 }
 
+// A copy a plugin answers null for is drawn by whoever draws the part when
+// the plugin doesn't, and Settings says so, of any part: one answered null
+// for every copy shown isn't drawing it, and one answered null for some
+// draws only the others.
+func TestThePluginsPageSaysWhoDrawsTheCopiesAPluginAnswersNullFor(t *testing.T) {
+	h, _ := timelineHarness(t)
+	a, tt := h.a, h.tt
+	state := func(id, part string) partState {
+		settlePlugins(t, a, tt, h.p)
+		return a.partState(installed(a, id), part)
+	}
+
+	writeOwnPlugin(t, a, "my-rows", rowsManifest, `export function place({ items }) { return items.map(() => null) }`)
+	if err := a.plugins.SetGranted("my-rows", "ui.replace", true); err != nil {
+		t.Fatal(err)
+	}
+	if st := state("my-rows", "timeline.message"); st.word != "Answered null" || st.why != "It answered null for every copy shown, so the built-in draws it." {
+		t.Errorf("Settings says %q: %q of rows answered null for every copy", st.word, st.why)
+	}
+	if drawer, drawn := a.partDrawer("timeline.message"); !drawn || drawer.ID != "timeline" {
+		t.Errorf("Settings has %+v (%v) draw the rows my-rows answers null for", drawer, drawn)
+	}
+	if err := a.plugins.SetEnabled("timeline", false); err != nil {
+		t.Fatal(err)
+	}
+	if st := state("my-rows", "timeline.message"); st.why != "It answered null for every copy shown, so Glitched draws its own." {
+		t.Errorf("with the built-in off, Settings says %q", st.why)
+	}
+
+	writeOwnPlugin(t, a, "my-rows", rowsManifest, rowsModule(`context.kind === "user" ? null : { type: "column", children: [{ type: "text", text: "Mine " + context.kind }, { type: "native", id: "body", name: "transcript.body" }] }`))
+	st := state("my-rows", "timeline.message")
+	if !tt.HasText("Mine assistant") || tt.HasText("Mine user") {
+		t.Fatalf("my-rows doesn't draw only the rows it answers: %q", tt.Texts())
+	}
+	if st.word != "Drawing some" || !strings.HasPrefix(st.why, "It answered null for ") || !strings.HasSuffix(st.why, " copies shown, so Glitched draws its own for those.") {
+		t.Errorf("Settings says %q: %q of rows answered null for some copies", st.word, st.why)
+	}
+	// Each copy it answers null for names who draws that one.
+	writeOwnPlugin(t, a, "my-rows", rowsManifest, rowsModule(`context.kind !== "assistant" ? null : { type: "column", children: [{ type: "text", text: "Mine " + context.kind }, { type: "native", id: "body", name: "transcript.body" }] }`))
+	writeOwnPlugin(t, a, "my-work", strings.NewReplacer("my-rows", "my-work", "My rows", "My work").Replace(rowsManifest), rowsModule(`context.kind !== "work" ? null : { type: "column", children: [{ type: "text", text: "Work " + context.kind }, { type: "native", id: "body", name: "transcript.body" }] }`))
+	if err := a.plugins.SetGranted("my-work", "ui.replace", true); err != nil {
+		t.Fatal(err)
+	}
+	st = state("my-rows", "timeline.message")
+	if !tt.HasText("Mine assistant") || !tt.HasText("Work work") {
+		t.Fatalf("my-rows and my-work don't each draw their rows: %q", tt.Texts())
+	}
+	if !strings.HasSuffix(st.why, " copies shown, so My work and Glitched draw them.") {
+		t.Errorf("Settings says %q of rows that My work and Glitched draw", st.why)
+	}
+	if err := a.plugins.SetEnabled("my-work", false); err != nil {
+		t.Fatal(err)
+	}
+
+	// A new thread shows no rows: none answered null.
+	writeOwnPlugin(t, a, "my-rows", rowsManifest, `export function place({ items }) { return items.map(() => null) }`)
+	if st := state("my-rows", "timeline.message"); st.word != "Answered null" {
+		t.Fatalf("Settings says %q of rows answered null for every copy", st.word)
+	}
+	a.newThread()
+	if st := state("my-rows", "timeline.message"); st.word == "Answered null" || tt.HasText(turnText(1)) {
+		t.Errorf("a new thread with no rows has Settings say %q: %q", st.word, st.why)
+	}
+
+	writeOwnPlugin(t, a, "my-actions", `{"id": "my-actions", "name": "My actions", "main": "index.js", "contract": "glitched", "contractVersion": 2,
+	"capabilities": ["ui.place", "ui.replace"], "glitched": {"places": [{"id": "actions", "at": "thread.header.actions", "replaces": true}]}}`,
+		`export function place({ items }) { return items.map(() => null) }`)
+	if err := a.plugins.SetGranted("my-actions", "ui.replace", true); err != nil {
+		t.Fatal(err)
+	}
+	if st := state("my-actions", "thread.header.actions"); st.word != "Answered null" || st.why != "It answered null for every copy shown, so the built-in draws it." {
+		t.Errorf("Settings says %q: %q of header actions answered null", st.word, st.why)
+	}
+	if err := a.plugins.SetEnabled("header-actions", false); err != nil {
+		t.Fatal(err)
+	}
+	if st := state("my-actions", "thread.header.actions"); st.why != "It answered null for every copy shown, and nothing draws it." {
+		t.Errorf("with the built-in off, Settings says %q of header actions answered null", st.why)
+	}
+}
+
 // A reply streaming in shows its newest text in every frame while the
 // plugin that draws around it isn't asked again: its context says it
 // streams, not what it says. It is asked once more as it ends.
