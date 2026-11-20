@@ -16,10 +16,10 @@ type listView struct {
 	tall  float32
 	// drawn is the build it was last drawn in.
 	drawn int
-	// pointed is the key of the row the pointer came onto, and pointedAt
-	// the build that last saw it there.
-	pointed   string
-	pointedAt int
+	// pointer is where the pointer was over the list, in the window, as
+	// the last build saw it; moved is whether this build sees it moved.
+	pointerX, pointerY float32
+	pointerIn, moved   bool
 }
 
 // listOf is the list's view of n's items, built again for a new view's.
@@ -56,13 +56,17 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 	}
 	lv := ctl.listOf(n)
 	lv.drawn = r.cs.passes
-	if lv.pointedAt < r.cs.passes-1 {
-		lv.pointed = ""
-	}
 	ls := &lv.state
 	ls.Key = func(i int) any { return n.Items[i].Key }
 	ls.Label = func(i int) string { return n.Items[i].Label }
 	e := ui.List(kc, ls, len(n.Items)).Label(n.Label).Focusable().Gap(float32(n.Gap))
+	if n.ChooseOnHover {
+		x, y, in := e.PointerPosition()
+		at := e.Bounds()
+		x, y = x+at.X, y+at.Y
+		lv.moved = in && (!lv.pointerIn || x != lv.pointerX || y != lv.pointerY)
+		lv.pointerX, lv.pointerY, lv.pointerIn = x, y, in
+	}
 	padding(e, n.Padding)
 	if n.Grow {
 		e.Grow(1).Shrink(1).Basis(0)
@@ -106,14 +110,11 @@ func (r *renderer) listRow(c *ui.Context, n *widget.Node, ctl *control, i int) {
 	}
 	b.Height(h).Padding(0).Label(it.Label)
 	in.hovered = held(b) || b.Hovered()
-	// The pointer coming onto a row chooses it; resting there doesn't,
-	// so the keys and the plugin's own value move the choice from it.
-	if lv := ctl.list; n.ChooseOnHover && b.Hovered() {
-		if lv.pointed != it.Key {
-			lv.pointed = it.Key
-			r.choose(n, ctl, it.Key)
-		}
-		lv.pointedAt = r.cs.passes
+	// The pointer moving over a row chooses it; resting there doesn't,
+	// though the rows scroll or move under it, so the keys and the
+	// plugin's own value move the choice from it.
+	if n.ChooseOnHover && ctl.list.moved && b.Hovered() {
+		r.choose(n, ctl, it.Key)
 	}
 	if it.Thread != "" && r.st.ContextMenu != nil {
 		r.st.ContextMenu(c, b, "thread:"+it.Thread)

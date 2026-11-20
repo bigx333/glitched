@@ -342,3 +342,37 @@ export async function command({ id }) {
 		t.Fatalf("an action ran under the dialog, to %s: %q", h.a.router.Path(), texts)
 	}
 }
+
+// An action waits on a dialog from the pass that shows it, and runs again
+// from the pass that shows it gone, as effects run between passes.
+func TestAnActionWaitsOnTheDialogOnScreen(t *testing.T) {
+	a := offline(t)
+	writeOwnPlugin(t, a, "modal", `{"id": "modal", "name": "Modal", "main": "index.js", "contract": "glitched", "contractVersion": 2, "contributes": {"pages": [{"id": "home", "title": "Modal"}]}}`,
+		`export function view() {
+	return { body: { type: "dialog", id: "wait", title: "Plugin modal", open: true, children: [{ type: "text", text: "Still editing" }] } }
+}`)
+	stored, _ := offlinePosts.Load(a)
+	p := stored.(*posts)
+	tt := ui.NewTesterWith(a.view, 1320, 860, ui.TesterOptions{Preferences: ui.Preferences{ReduceMotion: true}})
+	settlePlugins(t, a, tt, p)
+	until := func(shown bool) {
+		t.Helper()
+		for deadline := time.Now().Add(3 * time.Second); tt.HasText("Plugin modal") != shown; {
+			if time.Now().After(deadline) {
+				t.Fatalf("the dialog never came or went (%v)", shown)
+			}
+			p.run()
+			tt.Frame()
+		}
+	}
+	a.router.Push("/plugins/modal/home")
+	until(true)
+	if err := a.runCommand("sidebar.toggle"); err == nil {
+		t.Error("an action ran under the dialog the window shows")
+	}
+	tt.Key(0, ui.KeyEscape)
+	until(false)
+	if err := a.runCommand("sidebar.toggle"); err != nil {
+		t.Errorf("an action waited on a dialog the window no longer shows: %v", err)
+	}
+}

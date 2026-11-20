@@ -404,7 +404,7 @@ type app struct {
 	// covered is whether the last pass showed one of the app's overlays,
 	// which covering notes as this one builds them (overlay.go).
 	covered, covering bool
-	// modal is whether the last pass showed a dialog other than the
+	// modal is whether the last pass built showed a dialog other than the
 	// palette, which holds the window's keys, ⌘K's too; modalNow notes
 	// one as this pass builds it.
 	modal, modalNow bool
@@ -867,7 +867,6 @@ func (a *app) view(c *ui.Context) {
 	// a frame without it, as on another page, leaves the keys the browser's.
 	a.terminalFocused = false
 	a.covered, a.covering = a.covering, false
-	a.modal, a.modalNow = a.modalNow, false
 	a.blind, a.blinding = a.blinding, false
 	a.coverN = 0
 	// Before anything this pass builds binds its cover anew.
@@ -908,6 +907,7 @@ func (a *app) view(c *ui.Context) {
 	a.pluginLater = nil
 	a.toasts(c)
 	a.syncPlaces()
+	a.modal, a.modalNow = a.modalNow, false
 }
 
 func (a *app) pages(c *ui.Context) {
