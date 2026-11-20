@@ -50,6 +50,7 @@ var Effects = map[string]string{
 	"tab.open":               "ui.place",
 	"panels.toggle":          "ui.place",
 	"panels.state":           "ui.place",
+	"palette.close":          "ui.replace",
 	"open.in":                "threads:read",
 	"app.checkForUpdates":    "",
 	"app.settings.get":       "",

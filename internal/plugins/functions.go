@@ -69,6 +69,7 @@ globalThis.glitched = Object.freeze({
     list: () => app("commands.list"),
     run: (id) => app("commands.run", { id }),
   }),
+  palette: Object.freeze({ close: () => app("palette.close") }),
   projects: Object.freeze({
     remove: (workspace, machine) => app("projects.remove", { workspace, machine: machine ?? "" }),
     list: () => app("projects.list"),

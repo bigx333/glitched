@@ -152,7 +152,8 @@ func TestPaletteAddsAndRemovesProjects(t *testing.T) {
 	h.tt.Frame()
 	h.tt.Type("workspace")
 	var got []string
-	for _, cmd := range h.a.commands() {
+	shown, _ := paletteShows(t, h)
+	for _, cmd := range shown {
 		got = append(got, cmd.label)
 	}
 	want := []string{"Add project…", "Remove project agent-phone…", "Remove project mygo…", "Remove project t3code…"}
@@ -162,7 +163,7 @@ func TestPaletteAddsAndRemovesProjects(t *testing.T) {
 	h.tt.Key(ui.Cmd, ui.KeyA)
 	h.tt.Type("remove project mygo")
 	h.tt.Key(0, ui.KeyEnter)
-	h.tt.Frame()
+	settlePlugins(t, h.a, h.tt, h.p)
 	if !h.tt.HasText("Remove “mygo” and its thread?") {
 		t.Fatalf("no alert; texts %q", h.tt.Texts())
 	}
@@ -362,7 +363,7 @@ func TestPaletteListsRemoveWhileWorking(t *testing.T) {
 	h.tt.Frame()
 	h.tt.Type("remove project t3code")
 	h.tt.Key(0, ui.KeyEnter)
-	h.tt.Frame()
+	settlePlugins(t, h.a, h.tt, h.p)
 	if !h.tt.HasText("An agent is working in t3code: stop it first, and nothing is removed until then. The folder, /work/t3code, isn't touched.") {
 		t.Fatalf("no alert; texts %q", h.tt.Texts())
 	}
@@ -376,7 +377,8 @@ func TestPaletteFindsByWholeWordsOnly(t *testing.T) {
 	h.a.openCommandPalette()
 	h.tt.Frame()
 	h.tt.Type("old")
-	for _, cmd := range h.a.commands() {
+	shown, _ := paletteShows(t, h)
+	for _, cmd := range shown {
 		if cmd.section == "Actions" {
 			t.Errorf("%q listed for old", cmd.label)
 		}
@@ -384,7 +386,8 @@ func TestPaletteFindsByWholeWordsOnly(t *testing.T) {
 	h.tt.Key(ui.Cmd, ui.KeyA)
 	h.tt.Type("remove workspace mygo")
 	var got []string
-	for _, cmd := range h.a.commands() {
+	shown, _ = paletteShows(t, h)
+	for _, cmd := range shown {
 		got = append(got, cmd.label)
 	}
 	if want := []string{"Remove project mygo…"}; !slices.Equal(got, want) {

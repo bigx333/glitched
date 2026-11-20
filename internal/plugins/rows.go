@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"time"
 
 	"glitched/internal/plugins/widget"
 )
@@ -57,6 +58,9 @@ type rowSet struct {
 	want    map[rowKey]*rowWant
 	state   json.RawMessage
 	context any
+	// first is set while WaitRows waits on the UI thread: each batch of
+	// rows the worker draws goes to it as well as through Post.
+	first chan func()
 }
 
 // listRows is one list's rows: those drawn, and, since the view changed
@@ -261,7 +265,7 @@ func (s *Session) drawRows(gen int, state json.RawMessage, context any, want map
 			}
 		}
 	}
-	s.h.opts.Post(func() {
+	apply := func() {
 		if s.closed || !s.current(gen) {
 			return
 		}
@@ -287,7 +291,82 @@ func (s *Session) drawRows(gen int, state json.RawMessage, context any, want map
 			}
 			l.keep()
 		}
-	})
+	}
+	s.mu.Lock()
+	if s.rows.first != nil {
+		select {
+		case s.rows.first <- apply:
+		default:
+		}
+	}
+	s.mu.Unlock()
+	s.h.opts.Post(apply)
+}
+
+// WaitRows draws the rows of items the list neither drew nor asked for
+// yet before the UI shows them, in one wait on the UI thread: until the
+// plugin drew them all, it failed, or the deadline passed. The rows a list
+// opens with, and those a new view brings into it, never show empty. A
+// row is waited on once, as it is asked for, so one the plugin is slow to
+// draw stalls no later frame.
+func (s *Session) WaitRows(at RowAt, items []widget.ListItem, deadline time.Time) {
+	if s.Err != nil {
+		return
+	}
+	k := at.key()
+	fresh := func(l *listRows, key string) bool {
+		if l == nil {
+			return true
+		}
+		_, drawn := l.drawn[key]
+		_, asked := l.asked[key]
+		return !drawn && !asked
+	}
+	var want []string
+	for _, it := range items {
+		if fresh(s.rows.lists[k], it.Key) {
+			want = append(want, it.Key)
+			s.Row(at, it)
+		}
+	}
+	l := s.rows.lists[k]
+	if len(want) == 0 || l == nil {
+		return
+	}
+	first := make(chan func(), 8)
+	s.mu.Lock()
+	if s.done || s.broken {
+		s.mu.Unlock()
+		return
+	}
+	s.rows.first = first
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.rows.first = nil
+		s.mu.Unlock()
+	}()
+	wait := time.NewTimer(time.Until(deadline))
+	defer wait.Stop()
+	poll := time.NewTicker(time.Millisecond)
+	defer poll.Stop()
+	for {
+		select {
+		case <-poll.C:
+			// A call of the plugin's into the app waits on this thread,
+			// which waits on the plugin.
+			if s.h.awaitsApp(s.plugin) {
+				return
+			}
+		case apply := <-first:
+			apply()
+			if s.Err != nil || s.rows.lists[k] != l || !slices.ContainsFunc(want, func(key string) bool { _, ok := l.drawn[key]; return !ok }) {
+				return
+			}
+		case <-wait.C:
+			return
+		}
+	}
 }
 
 // keep drops the rows the list asked for longest ago, past MaxRowsKept,

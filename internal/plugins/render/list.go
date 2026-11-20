@@ -16,10 +16,12 @@ type listView struct {
 	tall  float32
 	// drawn is the build it was last drawn in.
 	drawn int
-	// pointer is where the pointer was over the list, in the window, as
-	// the last build saw it; moved is whether this build sees it moved.
+	// pointer is where the pointer was, in the window, as the last build
+	// saw it, if one did; moved is whether this build sees it moved over
+	// the list. A list that opens or moves under a pointer at rest sees
+	// none move.
 	pointerX, pointerY float32
-	pointerIn, moved   bool
+	sampled, moved     bool
 }
 
 // listOf is the list's view of n's items, built again for a new view's.
@@ -64,8 +66,8 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 		x, y, in := e.PointerPosition()
 		at := e.Bounds()
 		x, y = x+at.X, y+at.Y
-		lv.moved = in && (!lv.pointerIn || x != lv.pointerX || y != lv.pointerY)
-		lv.pointerX, lv.pointerY, lv.pointerIn = x, y, in
+		lv.moved = in && lv.sampled && (x != lv.pointerX || y != lv.pointerY)
+		lv.pointerX, lv.pointerY, lv.sampled = x, y, true
 	}
 	padding(e, n.Padding)
 	if n.Grow {
@@ -79,8 +81,26 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 	e.OnShortcut(0, ui.KeyEnd, func() { r.move(n, ctl, len(n.Items)) })
 	e.OnShortcut(0, ui.KeyEnter, func() { r.submit(kc, n, ctl.text) })
 	e.OnShortcut(ui.Cmd, ui.KeyEnter, func() { r.submit(kc, n, ctl.text) })
+	if r.st.WaitRows != nil && len(n.Items) > 0 {
+		first, _ := ls.Visible()
+		first = min(max(first, 0), len(n.Items)-1)
+		tall := max(e.Bounds().H, float32(n.Height))
+		if tall == 0 {
+			tall = maxListView
+		}
+		var in []widget.ListItem
+		for i, y := first, float32(0); i < len(n.Items) && y < tall; i++ {
+			in = append(in, n.Items[i])
+			y += float32(n.ItemHeight(i) + n.Gap)
+		}
+		r.st.WaitRows(n.ID, in)
+	}
 	e.Rows(func(row ui.ListRow) { r.listRow(row.Context, n, ctl, row.Index) })
 }
+
+// maxListView is how tall a list that grows is taken to be before it was
+// laid out: the rows it waits for as it opens are those that fit.
+const maxListView = 2000
 
 func (r *renderer) listRow(c *ui.Context, n *widget.Node, ctl *control, i int) {
 	it := n.Items[i]

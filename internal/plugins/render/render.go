@@ -69,6 +69,9 @@ type Style struct {
 	// Rows is the row of a list's item as the plugin drew it, nil before
 	// it did: the list asks for the rows in view alone. Nil draws none.
 	Rows func(list string, it widget.ListItem) *widget.Node
+	// WaitRows draws the rows of a list's items in view before they show,
+	// those not drawn yet.
+	WaitRows func(list string, items []widget.ListItem)
 }
 
 // color is a theme token's color.
@@ -408,6 +411,9 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		if n.Italic {
 			t.Italic()
 		}
+		if n.SingleLine {
+			t.SingleLine().Shrink(1)
+		}
 		if n.FontSize != 0 {
 			t.FontSize(float32(n.FontSize))
 		}
@@ -509,6 +515,9 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			}
 			e := newInput(c.Key(key(n, i)+"#input"), &ctl.text)
 			e.Placeholder(n.Placeholder).Disabled(n.Disabled).Label(n.Label)
+			if n.Style == "bare" {
+				e.AutoFocus().Grow(1).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).Padding(0).FontSize(15)
+			}
 			if e.Changed() {
 				r.fire(n, n.OnChange, "change", ctl.text)
 			}

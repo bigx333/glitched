@@ -372,6 +372,16 @@ type commandRecord struct {
 	Also    string `json:"also,omitempty"`
 }
 
+// commandRecords are the palette's actions as glitched.commands.list
+// gives them.
+func (a *app) commandRecords() []commandRecord {
+	out := []commandRecord{}
+	for _, cmd := range a.actions() {
+		out = append(out, commandRecord{cmd.id, cmd.section, cmd.label, cmd.hint, cmd.icon, cmd.also})
+	}
+	return out
+}
+
 // runCommand is glitched.commands.run: what choosing the action of that
 // id in the palette does, closing it, and only while the palette could be
 // opened to choose it: no dialog but the palette holds the window's keys.
@@ -437,6 +447,9 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		return a.panelEffect(e.Args)
 	case "panels.state":
 		return a.panels(), nil
+	case "palette.close":
+		a.cmdkOpen = false
+		return nil, nil
 	case "open.in":
 		return a.openInEffect(e.Args)
 	case "app.checkForUpdates":
@@ -587,11 +600,7 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		a.deleting, a.deleteOpen = t, true
 		return nil, nil
 	case "commands.list":
-		out := []commandRecord{}
-		for _, cmd := range a.actions() {
-			out = append(out, commandRecord{cmd.id, cmd.section, cmd.label, cmd.hint, cmd.icon, cmd.also})
-		}
-		return out, nil
+		return a.commandRecords(), nil
 	case "commands.run":
 		var args struct{ ID string }
 		json.Unmarshal(e.Args, &args)

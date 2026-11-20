@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -35,8 +37,12 @@ func TestPaletteCommands(t *testing.T) {
 	if n != 5 {
 		t.Errorf("%d threads listed, want 5", n)
 	}
+	if shown, _ := paletteShows(t, h); !slices.EqualFunc(shown, h.a.commands(), func(x, y command) bool { return x.label == y.label }) {
+		t.Errorf("the palette lists %d results, not the %d of its commands", len(shown), len(h.a.commands()))
+	}
 	h.tt.Type("websocket")
 	h.tt.Key(ui.Cmd, ui.KeyEnter)
+	settlePlugins(t, h.a, h.tt, h.p)
 	loop := h.thread("Investigate websocket reconnect loop")
 	if h.a.cmdkOpen || h.a.selected != loop.id() || !h.a.showDiff {
 		t.Errorf("⌘↩: open %v, selected %v, diff %v", h.a.cmdkOpen, h.a.selected, h.a.showDiff)
@@ -45,13 +51,15 @@ func TestPaletteCommands(t *testing.T) {
 	h.a.openCommandPalette()
 	h.tt.Frame()
 	h.tt.Type(">")
-	for _, cmd := range h.a.commands() {
+	shown, _ := paletteShows(t, h)
+	for _, cmd := range shown {
 		if cmd.section != "Actions" {
 			t.Fatalf("%q listed after >", cmd.label)
 		}
 	}
 	h.tt.Type("new thread in mygo")
 	h.tt.Key(0, ui.KeyEnter)
+	settlePlugins(t, h.a, h.tt, h.p)
 	if cur := h.a.current(); !cur.id().IsZero() || cur.View.Workspace != "/work/mygo" {
 		t.Errorf("new thread %v in %q, want a draft in /work/mygo", cur.id(), cur.View.Workspace)
 	}
@@ -75,13 +83,14 @@ func TestPaletteKeepsCmdEnter(t *testing.T) {
 // chat's composer.
 func TestPaletteSwitchModel(t *testing.T) {
 	a := offline(t)
-	tt := ui.NewTester(a.view, 1320, 860)
+	tt := newTester(t, a, 1320, 860)
 	a.router.Push("/settings/general")
 	tt.Frame()
 	a.openCommandPalette()
 	tt.Frame()
 	tt.Type("switch model")
 	tt.Key(0, ui.KeyEnter)
+	settleTester(tt)
 	tt.Advance(time.Second)
 	if a.router.Path() != "/" || !a.pickerOpen || !tt.HasText("OpenAI") {
 		t.Errorf("path %q, picker %v", a.router.Path(), a.pickerOpen)
@@ -107,6 +116,7 @@ func TestPaletteSwitchModelOpensThePickerOfTheComposerShown(t *testing.T) {
 	h.tt.Frame()
 	h.tt.Type("switch model")
 	h.tt.Key(0, ui.KeyEnter)
+	settlePlugins(t, h.a, h.tt, h.p)
 	h.tt.Advance(time.Second)
 	if h.a.router.Path() != "/" || !h.a.current().id().IsZero() || !h.a.pickerOpen || !h.tt.HasText("Faster") {
 		t.Errorf("path %q, thread %q, picker %v: the window shows %q", h.a.router.Path(), h.a.current().View.Title, h.a.pickerOpen, h.tt.Texts())
@@ -124,7 +134,7 @@ func TestPaletteListsThreadsOfOneTitle(t *testing.T) {
 	h.a.openCommandPalette()
 	h.tt.Frame()
 	h.tt.Type("fix the build")
-	h.tt.Frame()
+	settlePlugins(t, h.a, h.tt, h.p)
 	n := 0
 	for _, s := range h.tt.Texts() {
 		if s == "Fix the build" {
@@ -374,5 +384,206 @@ func TestAnActionWaitsOnTheDialogOnScreen(t *testing.T) {
 	until(false)
 	if err := a.runCommand("sidebar.toggle"); err != nil {
 		t.Errorf("an action waited on a dialog the window no longer shows: %v", err)
+	}
+}
+
+// paletteShows is what the palette lists, once its built-in plugin took
+// every key pressed: its results, as the palette's commands are, and the
+// one chosen.
+func paletteShows(t *testing.T, h *harness) (shown []command, chosen int) {
+	t.Helper()
+	settlePlugins(t, h.a, h.tt, h.p)
+	app := h.a.plugins.App("palette")
+	if app == nil {
+		t.Fatal("the built-in palette doesn't run")
+	}
+	var list *widget.Node
+	var find func(*widget.Node)
+	find = func(n *widget.Node) {
+		if n == nil || list != nil {
+			return
+		}
+		if n.Type == "list" {
+			list = n
+			return
+		}
+		for _, ch := range n.Children {
+			find(ch)
+		}
+	}
+	find(app.PlaceView("palette", "palette:"+strconv.Itoa(h.a.cmdkOpens)))
+	if list == nil {
+		t.Fatal("the palette draws no results")
+	}
+	by := map[string]command{}
+	for _, cmd := range h.a.actions() {
+		by["a:"+cmd.id] = cmd
+	}
+	for _, cmd := range h.a.threadCommands() {
+		by["t:"+cmd.t.id().String()] = cmd
+	}
+	var key string
+	json.Unmarshal(list.Value, &key)
+	chosen = -1
+	for _, it := range list.Items {
+		if it.Header {
+			continue
+		}
+		if it.Key == key {
+			chosen = len(shown)
+		}
+		shown = append(shown, by[it.Key])
+	}
+	return shown, chosen
+}
+
+const paletteManifest = `{"id": "mine", "name": "mine", "main": "index.js", "contract": "glitched", "contractVersion": 2,
+	"capabilities": ["ui.place", "ui.replace", "threads:read"], "glitched": {"places": [{"id": "palette", "at": "palette", "replaces": true}]}}`
+
+// The palette is the built-in Command palette plugin's, till a plugin of
+// yours replaces it; yours throwing, answering null or failing to draw its
+// rows brings the built-in back, and with the built-in off Glitched draws
+// its own.
+func TestThePaletteIsABuiltInPluginYoursReplaces(t *testing.T) {
+	a := offline(t)
+	tt := newTester(t, a, 1320, 860)
+	tt.Frame()
+	a.openCommandPalette()
+	shows := func(text string) bool {
+		settleTester(tt)
+		return tt.HasText(text)
+	}
+	builtin := func() bool {
+		settleTester(tt)
+		app := a.plugins.App("palette")
+		drawn := shows("Toggle diff panel")
+		return drawn && app != nil && app.PlaceView("palette", "palette:"+strconv.Itoa(a.cmdkOpens)) != nil
+	}
+	if !builtin() {
+		t.Fatalf("the built-in doesn't draw the palette: %q", tt.Texts())
+	}
+
+	writeOwnPlugin(t, a, "mine", paletteManifest, mineModule)
+	a.plugins.SetGranted("mine", "ui.replace", true)
+	a.plugins.SetGranted("mine", "threads:read", true)
+	if !shows("Mine") || shows("Toggle diff panel") {
+		t.Fatalf("yours doesn't replace the built-in: %q", tt.Texts())
+	}
+	for name, js := range map[string]string{
+		"throws": brokenModule,
+		"null":   `export function place({ items }) { return items.map(() => null) }`,
+		"rows": `export function place({ items }) {
+	return items.map(() => ({ type: "list", id: "l", label: "Mine", height: 100, items: [{ key: "a", label: "Mine" }] }))
+}
+export function rows() { throw new Error("broken on purpose") }`,
+	} {
+		writeOwnPlugin(t, a, "mine", paletteManifest, js)
+		a.openCommandPalette()
+		if !builtin() {
+			t.Fatalf("yours that %s left no built-in: %q", name, tt.Texts())
+		}
+	}
+
+	a.plugins.SetEnabled("mine", false)
+	if err := a.plugins.SetEnabled("palette", false); err != nil {
+		t.Fatal(err)
+	}
+	a.pluginsChanged(nil)
+	a.openCommandPalette()
+	if !shows("Toggle diff panel") || len(a.plugins.Replacers("palette")) > 0 {
+		t.Fatalf("with no plugin to draw it, Glitched's own palette doesn't show: %q", tt.Texts())
+	}
+}
+
+// The pointer chooses the row it moves onto, never one that comes under
+// it at rest: there the arrows' choice holds. Up and Down go round from
+// one end to the other.
+func TestThePalettesChoiceFollowsThePointerAsItMoves(t *testing.T) {
+	h := start(t, inboxDir(t))
+	h.thread("SIP re-INVITE handling")
+	h.tt.Move(500, 330) // where Add project… will be
+	h.tt.Frame()
+	h.a.openCommandPalette()
+	chosen := func() string {
+		shown, i := paletteShows(t, h)
+		if i < 0 {
+			return ""
+		}
+		return shown[i].label
+	}
+	if got := chosen(); got != "New thread" {
+		t.Fatalf("the palette opened under the pointer chose %q, want the first", got)
+	}
+	h.tt.Key(0, ui.KeyDown)
+	if got := chosen(); got != "New thread in agent-phone" {
+		t.Fatalf("Down chose %q", got)
+	}
+	r, ok := h.tt.Find("Switch model")
+	if !ok {
+		t.Fatal("Switch model isn't shown")
+	}
+	h.tt.Move(r.X+2, r.Y+2)
+	if got := chosen(); got != "Switch model" {
+		t.Fatalf("the pointer moving onto Switch model chose %q", got)
+	}
+	shown, _ := paletteShows(t, h)
+	h.a.cmdkOpen = false
+	h.tt.Frame()
+	h.a.openCommandPalette()
+	if got := chosen(); got != "New thread" {
+		t.Fatalf("the palette opened again under the pointer chose %q, want the first", got)
+	}
+	h.tt.Key(0, ui.KeyUp)
+	if got := chosen(); got != shown[len(shown)-1].label {
+		t.Fatalf("Up from the first chose %q, want the last", got)
+	}
+	h.tt.Key(0, ui.KeyDown)
+	if got := chosen(); got != "New thread" {
+		t.Fatalf("Down from the last chose %q, want the first", got)
+	}
+}
+
+// The palette's keys say what they do, each row tells assistive tools
+// what it shows, and Escape puts it away.
+func TestThePalettesKeysAndNames(t *testing.T) {
+	h := start(t, inboxDir(t))
+	h.thread("SIP re-INVITE handling")
+	h.a.openCommandPalette()
+	paletteShows(t, h)
+	for _, s := range []string{"esc", "↑↓", "navigate", "↩", "open", "⌘↩", "open with diff", "Type", ">", "for actions"} {
+		if !slices.Contains(h.tt.Texts(), s) {
+			t.Errorf("no %q among the palette's keys", s)
+		}
+	}
+	if _, ok := h.tt.AccessByRole(ui.RoleButton, "New thread ⌘N"); !ok {
+		t.Error("the New thread row doesn't name its shortcut to assistive tools")
+	}
+	h.tt.Type("websocket")
+	paletteShows(t, h)
+	if _, ok := h.tt.AccessByRole(ui.RoleButton, "Investigate websocket reconnect loop t3code now"); !ok {
+		t.Errorf("the thread's row doesn't name its project and age: %+v", h.tt.AccessAll())
+	}
+	h.tt.Key(0, ui.KeyEscape)
+	h.tt.Frame()
+	if h.a.cmdkOpen {
+		t.Error("Escape left the palette open")
+	}
+}
+
+// The palette's rows show in the frame it opens in: Glitched waits for
+// the rows in view as it waits for the palette's first drawing.
+func TestThePalettesRowsShowAsItOpens(t *testing.T) {
+	a := offline(t)
+	tt := ui.NewTester(a.view, 1320, 860)
+	tt.Frame()
+	a.openCommandPalette()
+	tt.Frame()
+	if app := a.plugins.App("palette"); app == nil || app.PlaceView("palette", "palette:"+strconv.Itoa(a.cmdkOpens)) == nil {
+		t.Fatal("the built-in palette didn't draw as it opened")
+	}
+	for _, s := range []string{"New thread", "⌘N", "Toggle diff panel", "⌘D"} {
+		if !slices.Contains(tt.Texts(), s) {
+			t.Errorf("%q isn't shown as the palette opens: %q", s, tt.Texts())
+		}
 	}
 }
