@@ -32,14 +32,17 @@ type componentCopy struct {
 	builtin *widget.Node
 }
 
-// fallback draws the copy's native body in the box the built-in's drawing
-// puts it in, so that the body keeps its state, as a selection, when a
-// drawing takes over.
+// fallback draws the copy's native body, in the box the built-in's
+// drawing puts it in where the copy names one, so that the body keeps its
+// state, as a selection, when that drawing takes over.
 func (cp componentCopy) fallback(c *ui.Context) {
-	if cp.native == nil {
-		return
+	switch {
+	case cp.native == nil:
+	case cp.builtin == nil:
+		cp.box().Children(cp.native)
+	default:
+		cp.box().Children(func() { render.NativeBox(c, cp.builtin, 0).Children(cp.native) })
 	}
-	cp.box().Children(func() { render.NativeBox(c, cp.builtin, 0).Children(cp.native) })
 }
 
 // pluginComponent draws copies of the component name, each with the first

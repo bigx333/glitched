@@ -359,7 +359,7 @@ A native widget is one of Glitched's own views, which a plugin places in its lay
 
 `composer.input` draws the composer: the agents strip over the card, the card the user writes in, compact or full as it morphs, with its pickers, Send (or a plugin's `composer.send` and `composer.access`), and the workspace under it. Its text, focus and keys are Glitched's. It lets the pointer through to the chat around it, as every native widget's frame does.
 
-`transcript.body` draws the timeline row whose copy it is in, as Glitched draws it when no plugin does, live: a reply's words as they stream in, its selection, the actions shown as it is pointed at, a work log's steps and diffs. A copy's own row is the only one it draws.
+`transcript.body` draws the timeline row whose copy it is in, as Glitched draws it when no plugin does, live: a reply's words as they stream in, its selection, the actions shown as it is pointed at, a work log's steps and diffs. A copy's own row is the only one it draws. A selection in the row lasts while Glitched's own row and the built-in's drawing swap, as they share a place: `transcript.body` alone, with the id `body`. A copy that places it elsewhere, under widgets of its own or with another id, clears the row's selection when it takes over from Glitched's row or gives way to it.
 
 `theme.card` draws a theme's preview, its sidebar, chat and terminal colors, with its name under it, ringed while it is the one chosen; with `grow` the cards of a row share its width.
 
