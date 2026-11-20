@@ -142,6 +142,9 @@ func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key s
 		st := a.pluginStyle(pl.Plugin)
 		st.Scope = pl.Plugin + "/" + pl.Place.ID + "/" + key
 		st.Native = native
+		st.Rows = func(list string, it widget.ListItem) *widget.Node {
+			return app.Row(plugins.RowAt{List: list, Place: ref}, it)
+		}
 		render.View(c, v, cs, st, &a.pluginMD, func(ev plugins.UIEvent, values map[string]any) int {
 			ev.Place = ref
 			return app.Dispatch(ev, values)

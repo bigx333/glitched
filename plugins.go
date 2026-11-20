@@ -22,6 +22,7 @@ import (
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/bundled"
 	"glitched/internal/plugins/render"
+	"glitched/internal/plugins/widget"
 	"glitched/internal/transport"
 )
 
@@ -290,6 +291,7 @@ func (a *app) pluginView(c *ui.Context, k pluginKey, s *plugins.Session) {
 	}
 	st := a.pluginStyle(k.plugin)
 	st.Scope = k.plugin + "/" + k.page
+	st.Rows = func(list string, it widget.ListItem) *widget.Node { return s.Row(plugins.RowAt{List: list}, it) }
 	render.View(c, s.View, cs, st, &a.pluginMD, s.Dispatch)
 }
 

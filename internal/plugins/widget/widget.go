@@ -36,6 +36,17 @@ const (
 	MaxColumns = 20       // one table's
 	MaxRows    = 500      // one table's
 	MaxSize    = 2000     // an image's width or height, in points
+
+	// A list's bounds: its items are data, not widgets, so they count
+	// toward neither MaxNodes nor MaxDepth, and a view with a list may be
+	// MaxListBytes. A row the plugin draws is MaxRowNodes at most.
+	MaxListItems = 20000
+	MaxListBytes = 4 << 20
+	MaxItemKey   = 256
+	MaxItemLabel = 1024
+	MaxRowNodes  = 200
+	MinRowHeight = 8
+	MaxRowHeight = 400
 )
 
 // Colors are the theme's tokens a widget's color and background take: a
@@ -69,6 +80,7 @@ var Types = map[string]kind{
 	"link":     leaf,
 	"swatch":   control,
 	"tile":     leaf,
+	"list":     control,
 }
 
 // Native is a widget Glitched draws itself, which a plugin only places:
@@ -227,6 +239,47 @@ type Node struct {
 	// Name is also a native widget's (Natives), and Props what it is
 	// passed.
 	Props map[string]json.RawMessage `json:"props,omitempty"`
+
+	// Items are a list's, every one of them, in order: Glitched draws the
+	// rows in view and asks the plugin's rows export for those alone.
+	// RowHeight is an item's height when it names none; Height caps the
+	// list, which is as tall as its rows up to it. Input names an input of
+	// the view whose Up, Down and Enter move and submit the list.
+	Items     []ListItem `json:"items,omitempty"`
+	RowHeight int        `json:"rowHeight,omitempty"`
+	Input     string     `json:"input,omitempty"`
+	// SubmitOnClick makes a click on a list's row submit it as well as
+	// choose it, as a palette's does.
+	SubmitOnClick bool `json:"submitOnClick,omitempty"`
+	// When shows a widget of a list's row only while the row is pointed
+	// at ("hover") or only while it isn't ("idle").
+	When string `json:"when,omitempty"`
+}
+
+// ListItem is one row of a list, as its view names it: Key is its
+// identity, which the choice and the rows export use; Label its name to
+// assistive tools; Version changes when its row must be drawn again;
+// Height is its own; a Header heads a section and is never chosen; Thread
+// gives the row Glitched's menu of that thread.
+type ListItem struct {
+	Key     string `json:"key"`
+	Label   string `json:"label"`
+	Version string `json:"version,omitempty"`
+	Height  int    `json:"height,omitempty"`
+	Header  bool   `json:"header,omitempty"`
+	Thread  string `json:"thread,omitempty"`
+}
+
+// ItemHeight is the height of the list's item i: its own, else the list's
+// RowHeight, else 32.
+func (n *Node) ItemHeight(i int) int {
+	if h := n.Items[i].Height; h > 0 {
+		return h
+	}
+	if n.RowHeight > 0 {
+		return n.RowHeight
+	}
+	return 32
 }
 
 // Column is a table's column.
@@ -347,8 +400,13 @@ func Decode(b []byte) (*View, error) { return DecodeWithin(b, MaxNodes) }
 // DecodeWithin is Decode with a bound of its own on the widgets: a place's
 // copy is a badge, not a page.
 func DecodeWithin(b []byte, maxNodes int) (*View, error) {
-	if len(b) > MaxBytes {
-		return nil, fmt.Errorf("view is %d bytes, over the %d allowed", len(b), MaxBytes)
+	// Only a view with a list may pass MaxBytes, which its JSON says.
+	limit := MaxBytes
+	if bytes.Contains(b, []byte(`"list"`)) {
+		limit = MaxListBytes
+	}
+	if len(b) > limit {
+		return nil, fmt.Errorf("view is %d bytes, over the %d allowed", len(b), limit)
 	}
 	var v View
 	d := json.NewDecoder(bytes.NewReader(b))
@@ -359,7 +417,40 @@ func DecodeWithin(b []byte, maxNodes int) (*View, error) {
 	if err := v.check(maxNodes); err != nil {
 		return nil, err
 	}
+	if len(b) > MaxBytes && v.Body.find(func(n *Node) bool { return n.Type == "list" }) == nil {
+		return nil, fmt.Errorf("view is %d bytes, over the %d allowed without a list", len(b), MaxBytes)
+	}
 	return &v, nil
+}
+
+// DecodeRow reads one row of a list, as the rows export draws it, and
+// checks it. A row holds no control that keeps a value, no dialog, popover,
+// list or native widget: it is drawn and dropped as it scrolls.
+func DecodeRow(b []byte) (*Node, error) {
+	var v View
+	d := json.NewDecoder(bytes.NewReader(append(append([]byte(`{"body":`), b...), '}')))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&v); err != nil {
+		return nil, fmt.Errorf("row: %w", err)
+	}
+	if v.Body == nil {
+		return nil, fmt.Errorf("row: no widget")
+	}
+	c := checker{ids: map[string]bool{}, max: MaxRowNodes, row: true}
+	if err := c.node(v.Body, "row", 1); err != nil {
+		return nil, err
+	}
+	return v.Body, nil
+}
+
+func (n *Node) find(ok func(*Node) bool) *Node {
+	var found *Node
+	n.Walk(func(n *Node) {
+		if found == nil && ok(n) {
+			found = n
+		}
+	})
+	return found
 }
 
 // Check reports the first thing wrong with the view, by its path in the
@@ -374,13 +465,28 @@ func (v *View) check(maxNodes int) error {
 		return fmt.Errorf("view: title or subtitle over %d bytes", MaxText)
 	}
 	c := checker{ids: map[string]bool{}, max: maxNodes}
-	return c.node(v.Body, "body", 1)
+	if err := c.node(v.Body, "body", 1); err != nil {
+		return err
+	}
+	for _, l := range c.lists {
+		if l.Input == "" {
+			continue
+		}
+		in := v.Body.find(func(n *Node) bool { return n.ID == l.Input })
+		if in == nil || in.Type != "input" || in.Multiline || in.OnSubmit != nil {
+			return fmt.Errorf("list %q: its input %q is no single-line input of the view without an onSubmit: Enter in it submits the list", l.ID, l.Input)
+		}
+	}
+	return nil
 }
 
 type checker struct {
 	max   int
 	nodes int
 	ids   map[string]bool
+	// row is set while checking a list's row; lists are the lists seen.
+	row   bool
+	lists []*Node
 }
 
 func (c *checker) node(n *Node, path string, depth int) error {
@@ -440,6 +546,9 @@ func (c *checker) node(n *Node, path string, depth int) error {
 			return fail("%v", err)
 		}
 	}
+	if err := c.list(n); err != nil {
+		return fail("%v", err)
+	}
 	if err := c.handlers(n); err != nil {
 		return fail("%v", err)
 	}
@@ -482,6 +591,7 @@ func (c *checker) handlers(n *Node) error {
 		"swatch": {"onClick"},
 		"row":    {"onClick"},
 		"column": {"onClick"},
+		"list":   {"onChange", "onSubmit"},
 		"native": Natives[n.Name].Fires,
 	}[n.Type]
 	for name, h := range map[string]*Handler{"onClick": n.OnClick, "onChange": n.OnChange, "onSubmit": n.OnSubmit, "onClose": n.OnClose} {
@@ -510,7 +620,7 @@ func (c *checker) value(n *Node) error {
 	if n.Multiline && n.Type != "input" {
 		return fmt.Errorf("a %s is not multiline", n.Type)
 	}
-	if n.Controlled && n.Type != "input" && n.Type != "toggle" && n.Type != "select" && n.Type != "tabs" {
+	if n.Controlled && n.Type != "input" && n.Type != "toggle" && n.Type != "select" && n.Type != "tabs" && n.Type != "list" {
 		return fmt.Errorf("a %s is not controlled", n.Type)
 	}
 	if choosing && (len(n.Options) == 0 || len(n.Options) > MaxOptions) {
@@ -544,6 +654,14 @@ func (c *checker) value(n *Node) error {
 		}
 		if !found {
 			return fmt.Errorf("value %q is none of the options", s)
+		}
+	case "list":
+		var s string
+		if json.Unmarshal(n.Value, &s) != nil {
+			return fmt.Errorf("a list's value is the key of the item chosen")
+		}
+		if s != "" && !slices.ContainsFunc(n.Items, func(it ListItem) bool { return it.Key == s && !it.Header }) {
+			return fmt.Errorf("value %q is no item of the list, or a header", s)
 		}
 	default:
 		return fmt.Errorf("a %s has no value", n.Type)
@@ -639,7 +757,7 @@ func (c *checker) extra(n *Node) error {
 			return fmt.Errorf("a tooltip is up to %d bytes", MaxTooltip)
 		}
 	}
-	if (n.Width != 0 || n.Height != 0 || n.Radius != 0) && n.Type != "image" && (n.Type != "select" && n.Type != "tile" && !n.popover || n.Height != 0 || n.Radius != 0) {
+	if (n.Width != 0 || n.Height != 0 || n.Radius != 0) && n.Type != "image" && !(n.Type == "list" && n.Width == 0 && n.Radius == 0) && (n.Type != "select" && n.Type != "tile" && !n.popover || n.Height != 0 || n.Radius != 0) {
 		return fmt.Errorf("a %s has no width, height or radius", n.Type)
 	}
 	if n.Type == "select" && n.Width != 0 && (n.Width < 40 || n.Width > 480) {
@@ -728,6 +846,58 @@ func (c *checker) extra(n *Node) error {
 			return fmt.Errorf("a dialog needs a title")
 		}
 	}
+	return nil
+}
+
+// list checks a list's own fields, and what a list's row holds.
+func (c *checker) list(n *Node) error {
+	if c.row {
+		switch {
+		case n.Type == "input" || n.Type == "toggle" || n.Type == "select" || n.Type == "tabs" || n.Type == "dialog" || n.Type == "list" || n.Type == "native":
+			return fmt.Errorf("a list's row holds no %s", n.Type)
+		case n.Popover != nil || n.Progress:
+			return fmt.Errorf("a list's row holds no popover or progress button")
+		}
+	}
+	switch {
+	case n.When != "" && !c.row:
+		return fmt.Errorf("when is for a widget in a list's row")
+	case n.When != "" && n.When != "hover" && n.When != "idle":
+		return fmt.Errorf("when is hover or idle, not %q", n.When)
+	case n.Type != "list" && (len(n.Items) > 0 || n.RowHeight != 0 || n.Input != "" || n.SubmitOnClick):
+		return fmt.Errorf("a %s has no items, rowHeight, input or submitOnClick", n.Type)
+	case n.Type != "list":
+		return nil
+	case n.Label == "":
+		return fmt.Errorf("a list needs a label, its name to assistive tools")
+	case !n.Grow && n.Height == 0:
+		return fmt.Errorf("a list grows or has a height: it draws only the rows in it")
+	case len(n.Items) > MaxListItems:
+		return fmt.Errorf("a list has up to %d items", MaxListItems)
+	case n.RowHeight != 0 && (n.RowHeight < MinRowHeight || n.RowHeight > MaxRowHeight):
+		return fmt.Errorf("a rowHeight is %d to %d", MinRowHeight, MaxRowHeight)
+	case n.Height != 0 && (n.Height < MinRowHeight || n.Height > MaxSize):
+		return fmt.Errorf("a list's height is %d to %d", MinRowHeight, MaxSize)
+	}
+	keys := make(map[string]bool, len(n.Items))
+	for i, it := range n.Items {
+		switch {
+		case it.Key == "" || len(it.Key) > MaxItemKey:
+			return fmt.Errorf("items[%d]: a key is 1 to %d bytes", i, MaxItemKey)
+		case keys[it.Key]:
+			return fmt.Errorf("items[%d]: the key %q is used twice", i, it.Key)
+		case it.Label == "" || len(it.Label) > MaxItemLabel:
+			return fmt.Errorf("items[%d]: a label is 1 to %d bytes", i, MaxItemLabel)
+		case len(it.Version) > MaxItemKey || len(it.Thread) > MaxItemKey:
+			return fmt.Errorf("items[%d]: a version or a thread is up to %d bytes", i, MaxItemKey)
+		case it.Height != 0 && (it.Height < MinRowHeight || it.Height > MaxRowHeight):
+			return fmt.Errorf("items[%d]: a height is %d to %d", i, MinRowHeight, MaxRowHeight)
+		case it.Header && it.Thread != "":
+			return fmt.Errorf("items[%d]: a header has no thread", i)
+		}
+		keys[it.Key] = true
+	}
+	c.lists = append(c.lists, n)
 	return nil
 }
 

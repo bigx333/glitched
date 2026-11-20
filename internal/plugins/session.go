@@ -72,6 +72,8 @@ type Session struct {
 	seq       int // the last UI event's number
 	processed int // the last UI event the plugin took
 	context   any // what the session is about, as plugins see it: a tab's thread
+	// rows are its lists' rows, which the rows export draws.
+	rows rowSet
 }
 
 type queued struct {
@@ -98,6 +100,10 @@ type UIEvent struct {
 	Payload json.RawMessage `json:"payload,omitempty"`
 	// Place is set for a widget in one of the plugin's places.
 	Place *PlaceRef `json:"place,omitempty"`
+	// Row is set for a widget in a list's row. Modifiers are the keys held
+	// as a list was submitted: cmd, shift, alt and ctrl.
+	Row       *RowRef  `json:"row,omitempty"`
+	Modifiers []string `json:"modifiers,omitempty"`
 }
 
 // PlaceRef names the copy of a place a widget was in: the place, the item
@@ -302,9 +308,17 @@ func (s *Session) run() {
 		}
 		if len(s.queue) == 0 {
 			if !s.dirty {
-				s.running = false
+				// The rows in view are drawn once the view they are in is.
+				want := s.rows.take()
+				if want == nil {
+					s.running = false
+					s.mu.Unlock()
+					return
+				}
+				state, gen, context := s.state, s.gen, s.context
 				s.mu.Unlock()
-				return
+				s.drawRows(gen, state, context, want)
+				continue
 			}
 			s.dirty = false
 			state, values, gen, processed, context := s.state, s.values, s.gen, s.processed, s.context

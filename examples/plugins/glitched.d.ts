@@ -31,7 +31,10 @@ interface Layout {
   grow?: boolean;
 }
 
-type Widget =
+type Widget = {
+  /** In a list's row only: drawn while the row is pointed at (hover), or while it isn't (idle). */
+  when?: "hover" | "idle";
+} & (
   | ({ type: "column" | "row"; background?: Color; /** A row's children run onto more lines. */ wrap?: boolean } & Layout)
   | ({
       type: "column" | "row";
@@ -187,6 +190,7 @@ type Widget =
       onClick?: Handler;
     }
   | NativeWidget
+  | ListWidget
   | {
       type: "menu";
       id: string;
@@ -203,7 +207,58 @@ type Widget =
       /** The chosen option's value is the event's. */
       onChange?: Handler;
     }
-  | { type: "dialog"; id: string; title: string; open?: boolean; children?: Widget[]; /** Escape, or a click outside. */ onClose?: Handler };
+  | { type: "dialog"; id: string; title: string; open?: boolean; children?: Widget[]; /** Escape, or a click outside. */ onClose?: Handler }
+);
+
+/**
+ * A long list: the view names every item, as data, and Glitched draws the
+ * rows in view, asking the plugin's rows export for those alone. Glitched
+ * keeps the choice, which a click, Up, Down, Home and End move.
+ */
+interface ListWidget {
+  type: "list";
+  id: string;
+  /** Its name to assistive tools. */
+  label: string;
+  /** Up to 20,000, in order. */
+  items: ListItem[];
+  /** An item's height when it names none: 8 to 400 points, 32 if left out. */
+  rowHeight?: number;
+  /** Fill the room the parent leaves; else give a height. */
+  grow?: boolean;
+  /** As tall as its rows, up to this, past which it scrolls: 8 to 2000 points. */
+  height?: number;
+  /** Space between the rows, 0 to 64 points. */
+  gap?: number;
+  padding?: Spacing;
+  /** The key of the item chosen, "" for none; never a header's. */
+  value?: string;
+  /** The plugin holds the choice: once it took the user's moves, the view's value is the choice. */
+  controlled?: boolean;
+  /** The id of a single-line input of the view, with no onSubmit, whose Up and Down move the choice and whose Enter submits it. */
+  input?: string;
+  /** A click submits the row as well as choosing it, as a palette's. */
+  submitOnClick?: boolean;
+  /** The choice moved: the event's value is its key. */
+  onChange?: Handler;
+  /** Enter, Cmd-Enter, a double click, or a click with submitOnClick: the value is the key, and modifiers the keys held. */
+  onSubmit?: Handler;
+}
+
+interface ListItem {
+  /** 1 to 256 bytes, unique in the list: the choice, rows and events name the item by it. */
+  key: string;
+  /** Its name to assistive tools, 1 to 1024 bytes. */
+  label: string;
+  /** Changes when its row must be drawn again. A new view draws the rows in view again too. */
+  version?: string;
+  /** 8 to 400 points. */
+  height?: number;
+  /** Heads a section: never chosen, and the keys move past it. */
+  header?: boolean;
+  /** A thread's id: a right click opens Glitched's menu of it. Needs threads:read. */
+  thread?: string;
+}
 
 /**
  * One of Glitched's own views, placed in the plugin's layout and drawn by
@@ -322,11 +377,15 @@ type UIEvent = {
   handler: string;
   /** The id of the widget. */
   node: string;
-  /** An input's text, a toggle's state, a select's, tab's or menu's value. */
+  /** An input's text, a toggle's state, a select's, tab's or menu's value, a list's key. */
   value?: string | boolean | { path: string; remaining: number };
   payload?: unknown;
   /** Set in a place: which copy, and the context it was drawn with. */
   place?: { id: string; at: Slot | Component; key: string; context?: ThreadRecord | ComponentContext };
+  /** Set for a widget in a list's row: the list's id and the row's key. */
+  row?: { list: string; key: string };
+  /** A list's submit: the keys held. cmd is Command on macOS, Control elsewhere. */
+  modifiers?: ("cmd" | "shift" | "alt" | "ctrl")[];
 };
 
 /** An app event the plugin hears (its manifest's glitched.events), or a timer. */
@@ -543,6 +602,16 @@ interface PlaceArgs<S> {
   state: S;
   /** A component's copies have its context: HeaderActionsContext for thread.header.actions, DiffPanelContext for thread.panel.diff, and so on. */
   items: { key: string; context?: ThreadRecord | ComponentContext }[];
+}
+/** rows draws the rows of a list that Glitched shows: a widget or null each, in the order of keys. */
+interface RowsArgs<S> extends InitArgs {
+  /** The list's id. */
+  list: string;
+  /** Up to 200 items' keys. */
+  keys: string[];
+  state: S;
+  /** Set for a list in a place: the copy it is in. */
+  place?: { id: string; at: Slot | Component; key: string; context?: ThreadRecord | ComponentContext };
 }
 interface CommandArgs {
   id: string;
