@@ -1,8 +1,10 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -30,38 +32,41 @@ type turnInfo struct {
 }
 
 // turnsOf is a thread's turns: each message the user sent, with the
-// steps the agent took for it. It runs every frame over the whole
-// thread, so it reads no message's text: turnReply does, for the one
-// turn a card shows.
+// steps the agent took for it. It reads no message's text: turnReply
+// does, for the one turn a card shows. rowsOf keeps them as the thread
+// grows.
 func turnsOf(es []entry) []turnInfo {
-	var turns []turnInfo
-	for i, e := range es {
-		switch {
-		case e.kind == entryUser:
-			turns = append(turns, turnInfo{entry: i})
-		case len(turns) == 0:
-		case e.kind == entryWork:
-			turns[len(turns)-1].steps += len(e.work)
-		}
-	}
+	turns, _ := addTurns(nil, 0, es, 0)
 	return turns
+}
+
+// markerPitch is how far apart the ticks are: a tick's hit area, its
+// padding above and below a 3 DIP tick, and the gap to the next.
+const markerPitch = 3 + 2*3 + markerGap
+
+// markersShown is how many of n ticks a window h DIPs tall can show. The
+// column centers its ticks while they fit and starts them at its top when
+// they don't, as MyGo's flex layout gives an overflowing column no free
+// room: the ticks past the window's height never show, and leaving them
+// out leaves it overflowing. One more shows for Tab to move to.
+func markersShown(n int, h float32) int {
+	return min(n, int(h/markerPitch)+2)
 }
 
 // turnMarkers draws the thread's markers over the chat's left edge, for
 // its list l. With fewer than two turns, there's nothing to navigate.
-func (a *app) turnMarkers(c *ui.Context, es []entry, l *ui.ListState) {
-	turns := turnsOf(es)
+// Only the ticks the window can show are built.
+func (a *app) turnMarkers(c *ui.Context, rs rows, l *ui.ListState) {
+	es, turns := rs.es, rs.turns
 	if len(turns) < 2 {
 		return
 	}
 	// The turn being read: the last that starts at or above the top of
 	// what shows, or the last when the end shows.
-	active := 0
 	first, _ := l.Visible()
-	for k, tr := range turns {
-		if tr.entry <= first {
-			active = k
-		}
+	active, found := slices.BinarySearchFunc(turns, first, func(tr turnInfo, row int) int { return cmp.Compare(tr.entry, row) })
+	if !found {
+		active = max(0, active-1)
 	}
 	if l.AtEnd() {
 		active = len(turns) - 1
@@ -73,10 +78,13 @@ func (a *app) turnMarkers(c *ui.Context, es []entry, l *ui.ListState) {
 	// toward it.
 	_, py, over := col.PointerPosition()
 	colBox := col.Bounds()
+	_, h := c.Size()
+	shown := markersShown(len(turns), h)
 	col.Children(func() {
 		pointed, pointedY := -1, float32(0)
 		nearest := float32(math.MaxFloat32)
-		for k, tr := range turns {
+		for k := range shown {
+			tr := turns[k]
 			b := ui.ButtonBase(c.Key(es[tr.entry].key)).Padding(3, 6).Cursor(ui.CursorPointer).
 				Label("Go to: " + preview(es[tr.entry]))
 			box := b.Bounds()

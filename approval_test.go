@@ -1262,7 +1262,7 @@ func TestAHeldChordAnswersOneCard(t *testing.T) {
 			h.until("both cards", func() bool { return len(h.a.current().View.Requests) == 2 })
 			h.tt.Advance(time.Second)
 			es := entriesOf(h.a.current())
-			first := h.a.keyedRequest(h.a.current(), es)
+			first := h.a.keyedRequest(h.a.current(), h.a.rowsOf(h.a.current()))
 			for _, e := range es {
 				if r := e.request; r != nil && r.Request != first.Request {
 					return h, first, r

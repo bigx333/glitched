@@ -43,7 +43,7 @@ func (a *app) chatPage(c *ui.Context) {
 	if a.focused() {
 		a.backend.MarkShown(t.Thread)
 	}
-	es := entriesOf(t)
+	rs := a.rowsOf(t)
 	// The layout makes room for a panel at once, so the chat rewraps
 	// once; the panel itself slides a little in from its edge as it fades.
 	panel := func(x, y float32) ui.ElementTransition {
@@ -59,7 +59,7 @@ func (a *app) chatPage(c *ui.Context) {
 			// The header is glass, the window's vibrancy as the sidebar's;
 			// the chat is below it, on the background, and doesn't scroll
 			// under it.
-			a.header(c, t, es)
+			a.header(c, t, rs.files)
 			pane := a.contentCard(ui.Box(c).Grow(1))
 			a.paneAt = pane.Bounds()
 			// Before the timeline and the composer, which it stages.
@@ -72,7 +72,7 @@ func (a *app) chatPage(c *ui.Context) {
 					ui.Box(c).Key("wind").Absolute().Top(0).Left(0).Right(0).Bottom(0).PassThrough().Draw(a.windDraw)
 				}
 				a.ambient(c)
-				a.timeline(c, t, es)
+				a.timeline(c, t, rs)
 				// After the timeline, whose replies note where the
 				// selection is.
 				a.selectionBar(c, t)
@@ -84,8 +84,8 @@ func (a *app) chatPage(c *ui.Context) {
 				// Over the edge, which would take its clicks.
 				a.jumpToLatest(c, t)
 				// Before the composer, whose ⌘⏎ would send or stop.
-				a.approvalKeys(c, pane, t, es)
-				a.composer(c, t, es)
+				a.approvalKeys(c, pane, t, rs)
+				a.composer(c, t, rs)
 			})
 			// A server's workspace isn't here for a shell. The diff panel,
 			// opened from an edit, says its files are there.
@@ -105,7 +105,7 @@ func (a *app) chatPage(c *ui.Context) {
 			if a.layout() == editor.DiffSplit {
 				slide.Exit = nil
 			}
-			ui.Column(c).Key("diff").Width(a.diffWidth()).Transition(slide).Children(func() { a.diffPanel(c, t, es) })
+			ui.Column(c).Key("diff").Width(a.diffWidth()).Transition(slide).Children(func() { a.diffPanel(c, t, rs.files) })
 		case a.showPreview:
 			ui.Column(c).Key("preview").Width(a.previewWidth()).Transition(panel(16, 0)).Children(func() { a.previewPanel(c) })
 		case a.showPluginTab:
@@ -159,7 +159,7 @@ func (a *app) ambient(c *ui.Context) {
 	})
 }
 
-func (a *app) header(c *ui.Context, t thread, es []entry) {
+func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 	bar := c.TitleBar()
 	// Clear of the traffic lights as the sidebar slides away from them.
 	left := 16 + bar.Left*(1-a.sidebarOpen)
@@ -197,7 +197,7 @@ func (a *app) header(c *ui.Context, t thread, es []entry) {
 		a.tabButtons(c)
 		// The rest of the row is a plugin's: the built-in Header actions,
 		// or one of the user's that replaces it.
-		state := headerActions{Local: t.local(), Narrow: narrow, Panels: a.panels(), ChangedFiles: len(changedFiles(es))}
+		state := headerActions{Local: t.local(), Narrow: narrow, Panels: a.panels(), ChangedFiles: len(files)}
 		box := func() ui.Element {
 			return ui.Row(c).Key("component:thread.header.actions").Shrink(0).AlignItems(ui.Center)
 		}
@@ -244,12 +244,13 @@ func (a *app) listFor(id api.ID) *ui.ListState {
 // as the pane, so that the wheel scrolls it wherever the pointer is. It
 // fades in as the composer docks from the hero; into a hero, the thread
 // left fades out, sliding up, out of the pointer's way.
-func (a *app) timeline(c *ui.Context, t thread, es []entry) {
+func (a *app) timeline(c *ui.Context, t thread, rs rows) {
 	tr := transcriptK(a.dockK)
 	from, leaving := a.departing(t)
 	if leaving {
-		t, es = from, entriesOf(from)
+		t, rs = from, a.rowsOf(from)
 	}
+	es := rs.es
 	a.drew, a.drawn = a.drawn, map[api.ID]sight{}
 	a.laidAt, a.builtAt = a.builtAt, a.now
 	l := a.listFor(t.id())
@@ -260,7 +261,7 @@ func (a *app) timeline(c *ui.Context, t thread, es []entry) {
 	room := composerRoom + a.agentsRoom(t)
 	list := ui.List(c.Key(t.id()), l, len(es), func(i int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, es, i) })
+			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, rs, i) })
 		})
 	})
 	if leaving {
@@ -278,7 +279,7 @@ func (a *app) timeline(c *ui.Context, t thread, es []entry) {
 			})
 		}
 	})
-	a.turnMarkers(c, es, l)
+	a.turnMarkers(c, rs, l)
 }
 
 // threadEmpty is the context of thread.empty.
@@ -525,7 +526,8 @@ const userMDsKept = 512
 // userMD is a message's text and the Markdown it shows as.
 type userMD struct{ text, md string }
 
-func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
+func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
+	es := rs.es
 	e := es[i]
 	key := e.key
 	switch e.kind {
@@ -562,7 +564,7 @@ func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
 			a.messageActions(c, t, es, i, col.Hovered() && !e.streaming)
 		})
 	case entryWork:
-		a.workLog(c, t, key, e, changedFiles(es))
+		a.workLog(c, t, key, e, rs.files)
 	case entryRequest:
 		a.requestCard(c, t, e)
 	case entryReport:
@@ -885,7 +887,7 @@ func (a *app) composerHeight(c *ui.Context, t thread) float32 {
 // going first as it folds.
 // Mid-way, what isn't in the card's flow is held to its top, the card
 // clipping it.
-func (a *app) composer(c *ui.Context, t thread, es []entry) {
+func (a *app) composer(c *ui.Context, t thread, rs rows) {
 	k := a.composerK
 	lerp := func(from, to float32) float32 { return from + (to-from)*k }
 	// The bar lets the pointer through, but for the composer in it, to
@@ -919,12 +921,12 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 				if b, f := in.Bounds(), frame.Bounds(); b.W > 0 {
 					a.composerAround.w, a.composerAround.h = f.W-b.W, f.H-b.H
 				}
-				in.Children(func() { a.composerInput(c, t, es, max(0, fullW-a.composerAround.w), in.Bounds().W) })
+				in.Children(func() { a.composerInput(c, t, rs, max(0, fullW-a.composerAround.w), in.Bounds().W) })
 			}
 			box := func() ui.Element { return ui.Column(c).Key("composer-plugin").PassThrough() }
 			if !a.pluginComponent(c, "composer", &t, componentCopy{key: "composer", box: box, context: func(r plugins.ThreadRecord) any { return composerContext{r} }}) {
 				a.composerAround.w, a.composerAround.h = 0, 0
-				a.composerInput(c, t, es, fullW, frame.Bounds().W)
+				a.composerInput(c, t, rs, fullW, frame.Bounds().W)
 			}
 		})
 	})
@@ -939,7 +941,7 @@ type composerContext struct {
 // agents strip over the card, the card the user writes in, and the row
 // below it, in the composer's frame, frameW wide. fullW is the full card's
 // width at rest, 0 before there's been a frame.
-func (a *app) composerInput(c *ui.Context, t thread, es []entry, fullW, frameW float32) {
+func (a *app) composerInput(c *ui.Context, t thread, rs rows, fullW, frameW float32) {
 	compact := a.composerCompact(t)
 	k := a.composerK
 	morphing := k > 0 && k < 1
@@ -1078,7 +1080,7 @@ func (a *app) composerInput(c *ui.Context, t thread, es []entry, fullW, frameW f
 				})
 			}
 			placeholder := "Ask anything, @tag files/folders, or use / to show available commands"
-			switch r := waitingRequest(t, es); {
+			switch r := waitingRequest(t, rs); {
 			case r != nil && r.Kind == api.KindQuestion:
 				placeholder = "Reply to steer, or answer the questions above"
 			case r != nil:

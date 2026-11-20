@@ -148,6 +148,7 @@ func (a *app) pruneThreadState() {
 	}
 	maps.DeleteFunc(a.childrenOpen, gone)
 	maps.DeleteFunc(a.composerSeen, gone)
+	maps.DeleteFunc(a.rows, func(id api.ID, _ *rowsCache) bool { return gone(id, false) })
 }
 
 // --- Stopping and deleting trees

@@ -354,8 +354,7 @@ func (a *app) diffStats(t thread, f fileChange) (add, del int) {
 // built-in Diff panel or one of the user's that replaces it, in two copies
 // of thread.panel.diff. The header's copy is in the window's title bar,
 // the body's below it, over the native diff.body.
-func (a *app) diffPanel(c *ui.Context, t thread, es []entry) {
-	files := changedFiles(es)
+func (a *app) diffPanel(c *ui.Context, t thread, files []fileChange) {
 	panel := diffPanel{Local: t.local(), Files: make([]diffFile, len(files)), Layout: "unified", SplitFits: a.splitFits(),
 		SplitWidth: splitWidth, Wrap: a.diffWrap, CanOpen: t.local() && editorCLI() != ""}
 	if a.layout() == editor.DiffSplit {
@@ -422,7 +421,7 @@ type diffFile struct {
 // path, or why it isn't shown. Marking one of its changes reviewed fires
 // the plugin's change with the file and the changes left.
 func (a *app) diffBody(c *ui.Context, t thread, path string, fire func(any)) {
-	files := changedFiles(entriesOf(t))
+	files := a.rowsOf(t).files
 	i := slices.IndexFunc(files, func(f fileChange) bool { return f.path == path })
 	switch {
 	case len(files) == 0:

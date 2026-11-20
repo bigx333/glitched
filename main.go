@@ -445,6 +445,11 @@ type app struct {
 	leavingFullScreen func()
 	// lists are the threads' timelines, by thread.
 	lists map[api.ID]*ui.ListState
+	// rows are the threads' timelines' rows, by thread, as rowsOf
+	// derives them; posts counts the changes posted to the window, after
+	// which they are derived again.
+	rows  map[api.ID]*rowsCache
+	posts uint64
 	// The diff panel: each file's viewer, by thread and path, and their
 	// layout.
 	diffs      map[diffKey]*fileDiff
@@ -652,6 +657,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		steers:         map[api.ID]steer{},
 		post:           post,
 		lists:          map[api.ID]*ui.ListState{},
+		rows:           map[api.ID]*rowsCache{},
 		files:          map[string][]string{},
 		slashLists:     map[slashKey]*slashList{},
 		diffLayout:     editor.DiffUnified,
