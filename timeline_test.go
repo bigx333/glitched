@@ -355,6 +355,21 @@ func TestALongTimeline(t *testing.T) {
 			t.Errorf("the selection is %q, want the rest of reply 100 alone", text)
 		}
 	})
+
+	t.Run("its accessibility tree is what shows, however long the thread", func(t *testing.T) {
+		nodes := func(rows int) int {
+			tr.Entries = synthetic(rows)
+			changed()
+			l().ScrollToEnd()
+			h.tt.Advance(time.Second)
+			return len(h.tt.AccessAll())
+		}
+		short, long := nodes(300), nodes(30000)
+		t.Logf("%d accessibility nodes at 300 rows, %d at 30,000", short, long)
+		if long > short+5 {
+			t.Errorf("%d accessibility nodes at 30,000 rows, %d at 300", long, short)
+		}
+	})
 }
 
 // markerY is the top of the marker of the turn that said text, built
