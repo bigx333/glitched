@@ -49,6 +49,22 @@ type markerAt struct {
 	turn int
 }
 
+// markerState is what a thread's markers keep from frame to frame: the
+// marker that had the focus last, and the ticks built, by their messages'
+// keys.
+type markerState struct {
+	focus   markerAt
+	focused bool
+	ticks   map[string]markerTick
+}
+
+// markerTick is a tick built: a handle to ask whether it has the focus,
+// and its turn.
+type markerTick struct {
+	h    *ui.Handle
+	turn int
+}
+
 // markerPitch is how far apart the ticks are: a tick's hit area, its
 // padding above and below a 3 DIP tick, and the gap to the next.
 const markerPitch = 3 + 2*3 + markerGap
@@ -93,32 +109,50 @@ func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
 	_, h := c.Size()
 	n := len(turns)
 	shown := markersShown(n, h)
-	// The ticks built: those that show, then, past them, the ones
-	// around the focus and the last, which Shift-Tab comes to first.
-	built := [][2]int{{0, shown}}
-	// A key moves the focus on among the ticks the last frame built,
-	// before this one builds: when it moved, another frame builds the
-	// ticks either side of where it is, before the next key.
-	held := -1
-	if at, ok := a.markerFocus[id]; ok {
-		// Where it was, unless messages came before it.
-		held = at.turn
-		if held >= n || es[turns[held].entry].key != at.key {
-			held = slices.IndexFunc(turns, func(tr turnInfo) bool { return es[tr.entry].key == at.key })
+	// Where the focus is. A key moves it among the ticks the last frame
+	// built, before this one builds, so they're asked, whether or not the
+	// window has the keyboard. When none has it, the last that had it is
+	// built still, for the focus to come back to, as from another thread.
+	m := a.markers[id]
+	if m == nil {
+		m = &markerState{}
+		a.markers[id] = m
+	}
+	for key, t := range m.ticks {
+		if t.h.FocusWithin(c) {
+			m.focus, m.focused = markerAt{key, t.turn}, true
+			break
 		}
-		if held >= shown-1 {
-			built = append(built, [2]int{max(shown, held-1), min(n, held+2)})
+	}
+	// The ticks built: those that show, then, past them, two either side
+	// of the focus, for keys that come before a frame does, and the last,
+	// which Shift-Tab comes to first.
+	built := [][2]int{{0, shown}}
+	if m.focused {
+		// Where it was, unless messages came before it.
+		f := m.focus.turn
+		if f >= n || es[turns[f].entry].key != m.focus.key {
+			f = slices.IndexFunc(turns, func(tr turnInfo) bool { return es[tr.entry].key == m.focus.key })
+		}
+		if f >= shown-2 {
+			built = append(built, [2]int{max(shown, f-2), min(n, f+3)})
 		}
 	}
 	built = append(built, [2]int{max(shown, n-1), n})
-	delete(a.markerFocus, id)
+	ticks := make(map[string]markerTick, len(m.ticks))
 	col.Children(func() {
 		pointed, pointedY := -1, float32(0)
 		nearest := float32(math.MaxFloat32)
 		tick := func(k int) {
 			tr := turns[k]
-			b := ui.ButtonBase(c.Key(es[tr.entry].key)).Padding(3, 6).Cursor(ui.CursorPointer).
-				Label("Go to: " + preview(es[tr.entry]))
+			key := es[tr.entry].key
+			h := m.ticks[key].h
+			if h == nil {
+				h = &ui.Handle{}
+			}
+			ticks[key] = markerTick{h, k}
+			b := ui.ButtonBase(c.Key(key)).Padding(3, 6).Cursor(ui.CursorPointer).
+				Label("Go to: " + preview(es[tr.entry])).Bind(h)
 			box := b.Bounds()
 			cy := box.Y + box.H/2 - colBox.Y // the tick's middle, in the column
 			w := float32(markerW)
@@ -142,13 +176,6 @@ func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
 					tick.Background(palette.text.Alpha(0.2))
 				}
 			})
-			// The focus, whether or not the window has the keyboard.
-			if b.FocusWithin() {
-				a.markerFocus[id] = markerAt{es[tr.entry].key, k}
-				if k != held {
-					c.AnimationFrame()
-				}
-			}
 			if b.Clicked() {
 				l.ScrollTo(tr.entry, ui.Start)
 			}
@@ -168,6 +195,7 @@ func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
 			a.turnCard(c, es, turns, pointed, pointedY)
 		}
 	})
+	m.ticks = ticks
 }
 
 // turnCard previews a turn beside its tick, as Zeron's does: the message,

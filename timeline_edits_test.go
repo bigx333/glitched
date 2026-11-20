@@ -96,7 +96,7 @@ func TestShiftTabComesToTheLastMarker(t *testing.T) {
 		es = append(es, entry{kind: entryUser, key: fmt.Sprint(i), text: fmt.Sprintf("Turn %d", i)})
 	}
 	turns := turnsOf(es)
-	a := app{markerFocus: map[api.ID]markerAt{}}
+	a := app{markers: map[api.ID]*markerState{}}
 	var l ui.ListState
 	tt := ui.NewTester(func(c *ui.Context) {
 		ui.Box(c).Grow(1).Children(func() {
@@ -200,7 +200,7 @@ func TestTabWalksPastTheWindow(t *testing.T) {
 			es = append(es, entry{kind: entryUser, key: fmt.Sprint(i), text: fmt.Sprintf("Turn %d", i)})
 		}
 		turns := turnsOf(es)
-		a := app{markerFocus: map[api.ID]markerAt{}}
+		a := app{markers: map[api.ID]*markerState{}}
 		var l ui.ListState
 		tt := ui.NewTester(func(c *ui.Context) {
 			ui.Column(c).Grow(1).Children(func() {
