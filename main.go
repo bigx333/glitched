@@ -573,8 +573,12 @@ type app struct {
 	pluginLater []func(c *ui.Context)
 	// placeFrame is what this frame drew of the plugins' places, and
 	// placeControls their inputs' values.
-	placeFrame    placeFrame
-	placeControls map[placeKey]*render.Controls
+	placeFrame placeFrame
+	// PROTOTYPE (GLIT-19): the timeline row being drawn by a plugin, and
+	// whether timeline.message's context carries the row's text.
+	drawingEntry        drawingEntry
+	timelineFullContext bool
+	placeControls       map[placeKey]*render.Controls
 	// pluginRecords are what the plugins were last told of the threads,
 	// and pluginSections the sidebar section each was last in.
 	pluginRecords  map[string]string

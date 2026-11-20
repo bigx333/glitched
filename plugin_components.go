@@ -94,6 +94,15 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, n *widget.N
 		var path string
 		json.Unmarshal(n.Props["path"], &path)
 		a.diffBody(c, *t, path, fire)
+	case "transcript.body":
+		var key string
+		json.Unmarshal(n.Props["key"], &key)
+		d := a.drawingEntry
+		if d.es == nil || d.es[d.i].key != key {
+			ui.Text(c, "transcript.body draws only its own row.").TextColor(palette.muted)
+			return
+		}
+		a.nativeEntry(c, *t, d.es, d.i)
 	case "theme.card":
 		var name string
 		json.Unmarshal(n.Props["theme"], &name)

@@ -524,7 +524,68 @@ const userMDsKept = 512
 // userMD is a message's text and the Markdown it shows as.
 type userMD struct{ text, md string }
 
+// entry draws the timeline row es[i]. PROTOTYPE (GLIT-19): while a
+// plugin replaces timeline.message, its messages, work logs and errors are
+// that plugin's, which may embed transcript.body for the row as Glitched
+// draws it.
 func (a *app) entry(c *ui.Context, t thread, es []entry, i int) {
+	e := es[i]
+	if a.plugins != nil && e.kind != entryRequest && e.kind != entryReport && len(a.plugins.Replacers("timeline.message")) > 0 {
+		a.drawingEntry = drawingEntry{es, i}
+		box := func() ui.Element { return ui.Column(c).Key(e.key) }
+		a.pluginComponent(c, box, "timeline.message", e.key, &t, func(plugins.ThreadRecord) any { return a.messageContext(e) })
+		a.drawingEntry = drawingEntry{}
+		return
+	}
+	a.nativeEntry(c, t, es, i)
+}
+
+// drawingEntry is the row a timeline.message copy is drawn for, which its
+// transcript.body draws.
+type drawingEntry struct {
+	es []entry
+	i  int
+}
+
+// timelineMessage is the context of timeline.message. With
+// timelineFullContext unset it is the thin context, which names the row
+// and leaves its text to transcript.body.
+type timelineMessage struct {
+	Key       string        `json:"key"`
+	Kind      string        `json:"kind"`
+	Streaming bool          `json:"streaming,omitempty"`
+	Note      string        `json:"note,omitempty"`
+	Text      string        `json:"text,omitempty"`
+	Markdown  string        `json:"markdown,omitempty"`
+	Took      string        `json:"took,omitempty"`
+	Working   bool          `json:"working,omitempty"`
+	Steps     []messageStep `json:"steps,omitempty"`
+}
+
+type messageStep struct {
+	Kind  string `json:"kind"`
+	Title string `json:"title"`
+	Exit  *int   `json:"exit,omitempty"`
+}
+
+var entryKindNames = map[entryKind]string{entryUser: "user", entryAssistant: "assistant", entryWork: "work", entryFailed: "failed", entryError: "error"}
+
+func (a *app) messageContext(e entry) timelineMessage {
+	m := timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note}
+	if !a.timelineFullContext {
+		return m
+	}
+	m.Text, m.Took, m.Working = e.text, e.took, e.working
+	if e.kind == entryUser {
+		m.Markdown = a.userMarkdown(e.key, e.text)
+	}
+	for _, w := range e.work {
+		m.Steps = append(m.Steps, messageStep{w.Kind, w.Title, w.Exit})
+	}
+	return m
+}
+
+func (a *app) nativeEntry(c *ui.Context, t thread, es []entry, i int) {
 	e := es[i]
 	key := e.key
 	switch e.kind {

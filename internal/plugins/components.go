@@ -36,6 +36,7 @@ var Components = []Component{
 	{Name: "sidebar.projects", Provides: "projectStrip", Needs: "threads:read", About: "The sidebar's project strip: All, a chip per project that filters the inbox to it, and Add project."},
 	{Name: "thread.row.actions", Provides: "rowActions", Needs: "threads:write", About: "A sidebar row's actions, shown while it's pointed at: snooze, with its popover of times, settle, or back to the inbox."},
 	{Name: "thread.panel.diff", Provides: "diffPanel", Needs: "threads:read", About: "The diff panel: its header, and its list of changed files over the native diff.body."},
+	{Name: "timeline.message", Provides: "timelineMessage", About: "PROTOTYPE (GLIT-19): one row of the chat timeline: a message, a run's work log, or an error. Approval and question cards stay Glitched's."},
 	{Name: "approval.card", Locked: widget.Locked["approval.card"]},
 	{Name: "question.card", Locked: widget.Locked["question.card"]},
 	{Name: "composer.access", Locked: widget.Locked["composer.access"]},
