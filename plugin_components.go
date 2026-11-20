@@ -62,30 +62,42 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 		node *widget.Node
 	}
 	replacers := a.plugins.Replacers(name)
-	good := make([]*drawing, len(copies))
-	failed := make([]*drawing, len(copies))
 	ctxs := make([][]any, len(copies))
 	for i, cp := range copies {
-		for j, pl := range replacers {
+		for _, pl := range replacers {
 			ctx := cp.context(a.plugins.Record(pl.Plugin, full))
 			ctxs[i] = append(ctxs[i], ctx)
 			version, _ := json.Marshal(ctx)
 			fk := [2]string{pl.Plugin, pl.Place.ID}
 			f.items[fk] = append(f.items[fk], plugins.PlaceItem{Key: cp.key, Version: string(version), Context: ctx})
-			app := a.plugins.App(pl.Plugin)
-			if good[i] != nil || app == nil {
-				continue
-			}
-			node := app.PlaceView(pl.Place.ID, cp.key)
-			switch {
-			case node == nil:
-			case app.Err == nil:
-				good[i] = &drawing{pl, ctxs[i][j], app, node}
-			case failed[i] == nil:
-				failed[i] = &drawing{pl, ctxs[i][j], app, node}
+		}
+	}
+	// pick chooses each copy's drawing from what the plugins have drawn.
+	good := make([]*drawing, len(copies))
+	failed := make([]*drawing, len(copies))
+	pick := func() {
+		for i, cp := range copies {
+			good[i], failed[i] = nil, nil
+			for j, pl := range replacers {
+				app := a.plugins.App(pl.Plugin)
+				if app == nil {
+					continue
+				}
+				node := app.PlaceView(pl.Place.ID, cp.key)
+				switch {
+				case node == nil:
+				case app.Err == nil:
+					good[i] = &drawing{pl, ctxs[i][j], app, node}
+				case failed[i] == nil:
+					failed[i] = &drawing{pl, ctxs[i][j], app, node}
+				}
+				if good[i] != nil {
+					break
+				}
 			}
 		}
 	}
+	pick()
 	undrawn := func(i int) bool { return good[i] == nil && failed[i] == nil }
 	waits := false
 	for i := range copies {
@@ -94,7 +106,7 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 	if waits && !f.waited[name] {
 		f.waited[name] = true
 		deadline := time.Now().Add(firstDrawWait)
-		for j, pl := range replacers {
+		for _, pl := range replacers {
 			app := a.plugins.App(pl.Plugin)
 			if app == nil {
 				continue
@@ -109,11 +121,7 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 				break
 			}
 			app.DrawFirst(pl.Place.ID, f.items[[2]string{pl.Plugin, pl.Place.ID}], keys, deadline)
-			for i, cp := range copies {
-				if node := app.PlaceView(pl.Place.ID, cp.key); undrawn(i) && node != nil && app.Err == nil {
-					good[i] = &drawing{pl, ctxs[i][j], app, node}
-				}
-			}
+			pick() // the wait may have changed any copy's drawing, not only the new ones'
 		}
 	}
 	drewAll := true

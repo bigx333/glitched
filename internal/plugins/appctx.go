@@ -176,11 +176,15 @@ func (h *Host) settingText(id, key string) string {
 	if in == nil {
 		return ""
 	}
-	i := slices.IndexFunc(in.ext.Settings, func(s Setting) bool { return s.ID == key })
+	// A reload swaps in.ext under mu as place reads a setting.
+	h.mu.RLock()
+	settings := in.ext.Settings
+	h.mu.RUnlock()
+	i := slices.IndexFunc(settings, func(s Setting) bool { return s.ID == key })
 	if i < 0 {
 		return ""
 	}
-	switch v := h.settingValue(id, in.ext.Settings[i]).(type) {
+	switch v := h.settingValue(id, settings[i]).(type) {
 	case string:
 		return v
 	default:

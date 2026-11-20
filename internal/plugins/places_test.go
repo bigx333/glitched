@@ -108,3 +108,42 @@ export function place({ items }) { return items.map(() => ({ type: "text", text:
 	}
 	settled(t, h, u, "a drawn with the setting", func() bool { return text(s, "a") == "false" })
 }
+
+// A copy the worker has already answered null for, at the version shown,
+// has nothing to wait for.
+func TestACopyAlreadyAnsweredNullIsNotWaitedFor(t *testing.T) {
+	h, s, u := placeTest(t, countingModule)
+	items := []PlaceItem{{Key: "a", Version: "1", Context: "hide"}, {Key: "b", Version: "1"}}
+	s.SetItems("badge", items)
+	settled(t, h, u, "a and b answered", func() bool { return text(s, "b") != "" })
+	deadline := time.Now().Add(time.Second)
+	s.DrawFirst("badge", items, []string{"a"}, deadline)
+	if !time.Now().Before(deadline) {
+		t.Fatal("DrawFirst waited its whole deadline for a copy already answered null")
+	}
+}
+
+// A drawing published late, for versions the frame has since moved past,
+// mustn't replace the newer drawing.
+func TestAnOlderDrawingNeverReplacesANewerOne(t *testing.T) {
+	h, s, u := placeTest(t, countingModule)
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "1"}})
+	settled(t, h, u, "a drawn", func() bool { return text(s, "a") != "" })
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "2", Context: "hide"}})
+	deadline := time.Now().Add(3 * time.Second)
+	for !h.Idle() || len(u.q) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("want the null drawing queued, have %d", len(u.q))
+		}
+		time.Sleep(time.Millisecond)
+	}
+	s.DrawFirst("badge", []PlaceItem{{Key: "a", Version: "3"}, {Key: "b", Version: "1"}}, []string{"b"}, time.Now().Add(2*time.Second))
+	a := text(s, "a")
+	if a == "" || text(s, "b") == "" {
+		t.Fatalf("the first draw left a %q, b %q; want both drawn", a, text(s, "b"))
+	}
+	(<-u.q)()
+	if text(s, "a") != a {
+		t.Fatalf("the late null drawing of a's version 2 replaced its version 3 %q with %q", a, text(s, "a"))
+	}
+}
