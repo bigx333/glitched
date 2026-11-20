@@ -204,10 +204,13 @@ func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed
 	}
 	s.mu.Unlock()
 	s.h.opts.Post(func() {
+		rev := s.Rev
 		s.publish(d)
-		s.mu.Lock()
-		s.dropLists()
-		s.mu.Unlock()
+		if s.Rev != rev {
+			s.mu.Lock()
+			s.dropLists()
+			s.mu.Unlock()
+		}
 	})
 }
 
@@ -269,6 +272,7 @@ func (s *Session) publish(d placeDraw) {
 		s.places.views[id] = views
 	}
 	s.Rev++
+	s.rows.dropCopies(s.places.views)
 	s.Processed = d.processed
 	s.Busy = s.running && (len(s.queue) > 0 || s.dirty)
 }
@@ -285,12 +289,15 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 	// Room for the drawings the worker finishes while this one is read:
 	// the one with these copies may come after another.
 	first := make(chan placeDraw, 8)
-	// Lists go by the drawing shown as the first draw ends, not one shown
-	// on the way.
+	// A list a copy shown has goes by the drawing shown as the first draw
+	// ends, not one shown on the way.
+	rev := s.Rev
 	defer func() {
-		s.mu.Lock()
-		s.dropLists()
-		s.mu.Unlock()
+		if s.Rev != rev {
+			s.mu.Lock()
+			s.dropLists()
+			s.mu.Unlock()
+		}
 	}()
 	// A drawing the worker posted is newer than what is shown: what it
 	// answered isn't waited on.
