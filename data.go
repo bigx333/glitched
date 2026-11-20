@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -141,47 +143,73 @@ type fileChange struct {
 // messages waiting their turn, then those sent from here that it doesn't
 // show yet, and the other commands sent from here that failed.
 func entriesOf(t thread) []entry {
-	var es []entry
-	listed := map[api.ID]bool{}
+	d := newDeriving(nil, nil, nil)
 	if tr := t.Transcript; tr != nil {
-		// A run's entries of a kind are keyed by their order in it.
-		n := map[string]int{}
-		key := func(kind string, run api.ID) string {
-			k := kind + "/" + run.String()
-			n[k]++
-			return fmt.Sprintf("%s/%d", k, n[k])
-		}
 		for _, e := range tr.Entries {
-			switch e := e.(type) {
-			case *client.UserEntry:
-				listed[e.Message] = true
-				es = append(es, userEntry(e))
-			case *client.AssistantEntry:
-				es = append(es, entry{key: key("a", e.Run), kind: entryAssistant, text: e.Text, streaming: e.Streaming})
-			case *client.WorkEntry:
-				es = append(es, workEntry(key("w", e.Run), e))
-			case *client.RequestEntry:
-				es = append(es, entry{key: "r/" + e.Request.String(), kind: entryRequest, request: e})
-			case *client.ErrorEntry:
-				es = append(es, entry{key: key("e", e.Run), kind: entryError, text: e.Error})
-			case *client.ReportEntry:
-				// One after another, they're one card, keyed by its first and
-				// its order among the cards a run's report starts: a run that
-				// asked twice can start two, the parent's text between them.
-				if n := len(es); n > 0 && es[n-1].kind == entryReport {
-					es[n-1].reports = addReport(es[n-1].reports, *e)
-					break
-				}
-				es = append(es, entry{key: key("c/"+e.Child.String(), e.Run), kind: entryReport, reports: []client.ReportEntry{*e}})
-			}
+			d.add(e)
 		}
-		markPaused(es)
+		markPaused(d.es)
 		for _, u := range tr.Queue {
-			listed[u.Message] = true
-			es = append(es, userEntry(u))
+			d.listed[u.Message] = true
+			d.es = append(d.es, userEntry(u))
 		}
 	}
-	for _, p := range t.Pending {
+	return append(d.es, pendingEntries(t.Pending, d.isListed)...)
+}
+
+// deriving derives a transcript's rows in order: the rows so far, and
+// what the next entry's row depends on, over what was derived before it
+// (base), which it leaves as it was.
+type deriving struct {
+	es         []entry
+	n, baseN   map[string]int // entries so far by kind and run, for keys
+	listed     map[api.ID]bool
+	baseListed map[api.ID]bool
+}
+
+func newDeriving(es []entry, n map[string]int, listed map[api.ID]bool) *deriving {
+	return &deriving{es: es, n: map[string]int{}, baseN: n, listed: map[api.ID]bool{}, baseListed: listed}
+}
+
+// key keys a run's entries of a kind by their order in it.
+func (d *deriving) key(kind string, run api.ID) string {
+	k := kind + "/" + run.String()
+	d.n[k]++
+	return k + "/" + strconv.Itoa(d.baseN[k]+d.n[k])
+}
+
+func (d *deriving) isListed(id api.ID) bool { return d.listed[id] || d.baseListed[id] }
+
+func (d *deriving) add(e client.Entry) {
+	switch e := e.(type) {
+	case *client.UserEntry:
+		d.listed[e.Message] = true
+		d.es = append(d.es, userEntry(e))
+	case *client.AssistantEntry:
+		d.es = append(d.es, entry{key: d.key("a", e.Run), kind: entryAssistant, text: e.Text, streaming: e.Streaming})
+	case *client.WorkEntry:
+		d.es = append(d.es, workEntry(d.key("w", e.Run), e))
+	case *client.RequestEntry:
+		d.es = append(d.es, entry{key: "r/" + e.Request.String(), kind: entryRequest, request: e})
+	case *client.ErrorEntry:
+		d.es = append(d.es, entry{key: d.key("e", e.Run), kind: entryError, text: e.Error})
+	case *client.ReportEntry:
+		// One after another, they're one card, keyed by its first and
+		// its order among the cards a run's report starts: a run that
+		// asked twice can start two, the parent's text between them.
+		if n := len(d.es); n > 0 && d.es[n-1].kind == entryReport {
+			d.es[n-1].reports = addReport(d.es[n-1].reports, *e)
+			break
+		}
+		d.es = append(d.es, entry{key: d.key("c/"+e.Child.String(), e.Run), kind: entryReport, reports: []client.ReportEntry{*e}})
+	}
+}
+
+// pendingEntries are the rows of the commands sent from here: messages the
+// transcript doesn't list yet, and other commands that failed.
+func pendingEntries(pending []client.Pending, listed func(api.ID) bool) []entry {
+	var es []entry
+	for _, p := range pending {
 		if failedTo(p) != "" {
 			if p.Err != nil {
 				es = append(es, entry{key: "f/" + p.Command.String(), kind: entryFailed, text: failure(p), failed: p})
@@ -189,7 +217,7 @@ func entriesOf(t thread) []entry {
 			continue
 		}
 		m, ok := p.Body.(api.MessageDispatch)
-		if !ok || listed[p.Command] {
+		if !ok || listed(p.Command) {
 			continue
 		}
 		e := entry{key: "m/" + p.Command.String(), kind: entryUser, text: m.Text, note: "Sending…"}
@@ -199,6 +227,223 @@ func entriesOf(t thread) []entry {
 		es = append(es, e)
 	}
 	return es
+}
+
+// rows is a thread's timeline as the frame reads it: entriesOf's entries,
+// the files their edits name, its turns, and the entries of the requests
+// waiting on the user.
+type rows struct {
+	es    []entry
+	files []fileChange
+	turns []turnInfo
+	asks  []int
+}
+
+// rowsLive is how many of a transcript's last entries are derived again
+// on each change: a reply streams, and a run's work and requests change,
+// at the end of the thread.
+const rowsLive = 64
+
+// A rowsCache is a thread's rows, derived in two parts so that a long
+// thread costs a change, and a frame, what changes rather than all it
+// holds. The settled part is the rows of the transcript's entries before
+// its last rowsLive, each derived once: each change checks that none of
+// those entries changed, by its mark, and derives them all again if one
+// did. The live part, the last entries and the queue, is derived again
+// after each change, over the settled part. Every change to a transcript
+// is posted to the window, whose changed counts it (app.posts); a command
+// sent from here changes Pending at once, so its rows are derived each
+// time and compared.
+type rowsCache struct {
+	tr      *client.Transcript
+	posts   uint64
+	settled settledRows
+	paused  []int // the rows markPaused marked
+	live    *deriving
+	head    []entry // the transcript's rows, the queue's last
+	headTs  int     // the head's turns
+	tail    []entry // the commands'
+	joined  bool    // rows is head and tail
+	rows
+}
+
+// settledRows is the settled part of a rowsCache: its entries, as derived,
+// and the first rows of rowsCache.es, with what the rows after them
+// depend on. The turns and asks are the first of the rows'.
+type settledRows struct {
+	marks  []entryMark
+	es     int
+	n      map[string]int
+	listed map[api.ID]bool
+	files  []fileChange
+	at     map[string]int // files by path
+	turns  int
+	steps  int // the last turn's steps in the settled part
+	asks   []int
+}
+
+// holds is whether src starts with the settled entries, unchanged.
+func (s *settledRows) holds(src []client.Entry) bool {
+	if len(src) < len(s.marks) {
+		return false
+	}
+	for i, m := range s.marks {
+		if markOf(src[i]) != m {
+			return false
+		}
+	}
+	return true
+}
+
+// entryMark is what an entry's row and the rows' files, turns and requests
+// read of it, to tell that it changed.
+type entryMark struct {
+	e    client.Entry
+	n    int
+	at   int64
+	text string
+}
+
+func markOf(e client.Entry) entryMark {
+	m := entryMark{e: e}
+	switch e := e.(type) {
+	case *client.UserEntry:
+		m.n, m.text = int(e.State), e.Reason
+	case *client.AssistantEntry:
+		m.n = len(e.Text) << 1
+		if e.Streaming {
+			m.n++
+		}
+	case *client.WorkEntry:
+		m.n, m.at = len(e.Items), e.Started.UnixNano()^e.Ended.UnixNano()<<1
+		for _, w := range e.Items {
+			m.at = m.at*31 + w.Started.UnixNano() ^ w.Ended.UnixNano() ^ int64(len(w.Path)+len(w.Kind)<<16+int(w.Status)<<24)
+		}
+	case *client.RequestEntry:
+		m.n = int(e.State)
+	case *client.ReportEntry:
+		m.n = int(e.Wake)
+	}
+	return m
+}
+
+// rowsOf is the thread's rows: entriesOf's, derived again only as the
+// thread changes.
+func (a *app) rowsOf(t thread) rows {
+	c := a.rows[t.id()]
+	if c == nil {
+		c = &rowsCache{}
+		a.rows[t.id()] = c
+	}
+	if c.live == nil || c.tr != t.Transcript || c.posts != a.posts {
+		c.derive(t.Transcript)
+		c.posts, c.joined = a.posts, false
+	}
+	tail := pendingEntries(t.Pending, c.live.isListed)
+	if !c.joined || !sameRows(tail, c.tail) {
+		c.tail, c.joined = tail, true
+		c.es = append(c.head, tail...)
+		c.turns = c.turns[:c.headTs]
+		for i, e := range tail {
+			if e.kind == entryUser {
+				c.turns = append(c.turns, turnInfo{entry: len(c.head) + i})
+			}
+		}
+	}
+	return c.rows
+}
+
+// derive derives the head of tr's rows: the settled part again if one of
+// its entries changed, more of it as the thread grows, and the live part.
+// The rows, turns and asks of both parts share their arrays: deriving the
+// live part again writes past the settled part's.
+func (c *rowsCache) derive(tr *client.Transcript) {
+	var src []client.Entry
+	if tr != nil {
+		src = tr.Entries
+	}
+	s := &c.settled
+	if c.tr != tr || !s.holds(src) {
+		*c = rowsCache{rows: rows{es: c.es[:0], turns: c.turns[:0]}}
+		*s = settledRows{n: map[string]int{}, listed: map[api.ID]bool{}, at: map[string]int{}}
+	}
+	c.tr = tr
+	for _, i := range c.paused {
+		c.es[i].paused = ""
+	}
+	c.paused = c.paused[:0]
+	turns := c.turns[:s.turns]
+	// A report that follows the settled part's last, a report too, joins
+	// its row, again each time: addReport keeps one report of a child.
+	if to := len(src) - rowsLive; to > len(s.marks) {
+		d := &deriving{es: c.es[:s.es], n: s.n, listed: s.listed}
+		for _, e := range src[len(s.marks):to] {
+			d.add(e)
+			s.marks = append(s.marks, markOf(e))
+		}
+		s.files = addFiles(s.files, s.at, d.es[s.es:])
+		turns, s.steps = addTurns(turns, s.steps, d.es, s.es)
+		s.asks = addAsks(s.asks, d.es, s.es)
+		c.es, s.es, s.turns = d.es, len(d.es), len(turns)
+	}
+
+	live := newDeriving(c.es[:s.es], s.n, s.listed)
+	for _, e := range src[len(s.marks):] {
+		live.add(e)
+	}
+	c.asks = addAsks(slices.Clip(s.asks), live.es, s.es)
+	if len(c.asks) > 0 {
+		markPaused(live.es)
+		for i, e := range live.es {
+			if e.paused != "" {
+				c.paused = append(c.paused, i)
+			}
+		}
+	}
+	if tr != nil {
+		for _, u := range tr.Queue {
+			live.listed[u.Message] = true
+			live.es = append(live.es, userEntry(u))
+		}
+	}
+	c.live, c.head = live, live.es
+	c.files = addFiles(slices.Clone(s.files), maps.Clone(s.at), live.es[s.es:])
+	c.turns, _ = addTurns(turns, s.steps, live.es, s.es)
+	c.headTs = len(c.turns)
+}
+
+// addTurns adds the turns of es[from:] to turns, whose last has steps so
+// far, and returns them and the last's steps.
+func addTurns(turns []turnInfo, steps int, es []entry, from int) ([]turnInfo, int) {
+	for i := from; i < len(es); i++ {
+		switch e := es[i]; {
+		case e.kind == entryUser:
+			turns = append(turns, turnInfo{entry: i})
+			steps = 0
+		case len(turns) == 0:
+		case e.kind == entryWork:
+			steps += len(e.work)
+			turns[len(turns)-1].steps = steps
+		}
+	}
+	return turns, steps
+}
+
+// addAsks adds the rows of es[from:] of requests waiting on the user.
+func addAsks(asks []int, es []entry, from int) []int {
+	for i := from; i < len(es); i++ {
+		if r := es[i].request; r != nil && r.State == api.RequestPending {
+			asks = append(asks, i)
+		}
+	}
+	return asks
+}
+
+// sameRows is whether two runs of the commands' rows show the same.
+func sameRows(x, y []entry) bool {
+	return slices.EqualFunc(x, y, func(x, y entry) bool {
+		return x.key == y.key && x.text == y.text && x.note == y.note && x.failed.Terminal() == y.failed.Terminal()
+	})
 }
 
 // pausedFor is what paused work says, by whether its run waits on
@@ -246,9 +491,11 @@ func workEntry(key string, w *client.WorkEntry) entry {
 
 // changedFiles is every file the agent's edits in the thread name, in the
 // order first named.
-func changedFiles(es []entry) []fileChange {
-	var files []fileChange
-	at := map[string]int{}
+func changedFiles(es []entry) []fileChange { return addFiles(nil, map[string]int{}, es) }
+
+// addFiles adds the files the edits of es name to files, which at indexes
+// by path, and moves those named again.
+func addFiles(files []fileChange, at map[string]int, es []entry) []fileChange {
 	for _, e := range es {
 		for _, w := range e.work {
 			if w.Kind != "edit" || w.Path == "" {
@@ -515,6 +762,7 @@ func (a *app) follow() {
 // changed runs after each change the manager posts: the shown thread's
 // transcript stays open, and each turn that ended since is told of once.
 func (a *app) changed() {
+	a.posts++
 	a.follow()
 	a.emitThreadChanges()
 	for _, e := range a.backend.Envs() {

@@ -637,10 +637,10 @@ func (a *app) requestAnswers(c *ui.Context, t thread, r *client.RequestEntry) {
 	a.answerAt = answerRow{r.Request, row.Bounds(), allow.Bounds(), deny.Bounds(), labels}
 	began := a.pressBegan(r.Request, allow.Pressed() || deny.Pressed())
 	if allow.Clicked() {
-		a.press(c, t, entriesOf(t), r, client.AllowOnce, began, false)
+		a.press(c, t, a.rowsOf(t).es, r, client.AllowOnce, began, false)
 	}
 	if deny.Clicked() {
-		a.press(c, t, entriesOf(t), r, client.Deny, began, false)
+		a.press(c, t, a.rowsOf(t).es, r, client.Deny, began, false)
 	}
 }
 
@@ -726,28 +726,24 @@ func filled(c *ui.Context, key any, bg, fg ui.Color) ui.Element {
 
 // waitingRequest is the request the thread waits on that no answer from
 // here is on its way to: the last one the timeline shows waiting.
-func waitingRequest(t thread, es []entry) *client.RequestEntry {
-	for i := len(es) - 1; i >= 0; i-- {
-		if r := es[i].request; r != nil && r.State == api.RequestPending {
-			if _, sending := responding(t, r.Request); sending {
-				return nil
-			}
-			return r
-		}
+func waitingRequest(t thread, rs rows) *client.RequestEntry {
+	if len(rs.asks) == 0 {
+		return nil
 	}
-	return nil
+	r := rs.es[rs.asks[len(rs.asks)-1]].request
+	if _, sending := responding(t, r.Request); sending {
+		return nil
+	}
+	return r
 }
 
 // keyedRequest is the waiting request ⌘⏎ and ⇧⌘D answer, with no answer
 // from here on its way: the last one the window draws in full, and else
 // the last one, which they bring into view.
-func (a *app) keyedRequest(t thread, es []entry) *client.RequestEntry {
+func (a *app) keyedRequest(t thread, rs rows) *client.RequestEntry {
 	var last *client.RequestEntry
-	for i := len(es) - 1; i >= 0; i-- {
-		r := es[i].request
-		if r == nil || r.State != api.RequestPending {
-			continue
-		}
+	for _, i := range slices.Backward(rs.asks) {
+		r := rs.es[i].request
 		if _, sending := responding(t, r.Request); sending {
 			continue
 		}
@@ -768,14 +764,14 @@ func (a *app) keyedRequest(t thread, es []entry) *client.RequestEntry {
 // and when a frame first showed the keyed card's keys. Under an overlay of
 // the app they wait, taken from the composer, whose ⌘⏎ would stop the
 // turn. Questions take keys of in, the chat's pane, as questionKeys says.
-func (a *app) approvalKeys(c *ui.Context, in ui.Element, t thread, es []entry) {
+func (a *app) approvalKeys(c *ui.Context, in ui.Element, t thread, rs rows) {
 	switch {
 	case c.Modifiers()&ui.Cmd == 0:
 		a.chord = time.Time{}
 	case a.chord.IsZero():
 		a.chord = a.now
 	}
-	r := a.keyedRequest(t, es)
+	r := a.keyedRequest(t, rs)
 	var keyed api.ID
 	if r != nil {
 		keyed = r.Request
@@ -803,7 +799,7 @@ func (a *app) approvalKeys(c *ui.Context, in ui.Element, t thread, es []entry) {
 		return
 	}
 	if !a.covered {
-		a.press(c, t, es, r, answer, a.now, true)
+		a.press(c, t, rs.es, r, answer, a.now, true)
 	}
 }
 

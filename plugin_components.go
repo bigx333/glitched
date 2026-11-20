@@ -287,7 +287,7 @@ func (a *app) diffEffect(typ string, args json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	files := changedFiles(entriesOf(t))
+	files := a.rowsOf(t).files
 	changed := func(path string) (fileChange, error) {
 		if i := slices.IndexFunc(files, func(f fileChange) bool { return f.path == path }); i >= 0 {
 			return files[i], nil

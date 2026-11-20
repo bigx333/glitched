@@ -224,7 +224,7 @@ func (a *app) emitThreadChanges() {
 	// told once.
 	id := t.id().String()
 	var edited []string
-	files := changedFiles(entriesOf(t))
+	files := a.rowsOf(t).files
 	stamps := make(map[string]time.Time, len(files))
 	for _, f := range files {
 		stamps[f.path] = f.stamp
@@ -243,7 +243,7 @@ func (a *app) emitThreadChanges() {
 		told = map[string]bool{}
 		a.pluginMessages[id] = told
 	}
-	for _, e := range entriesOf(t) {
+	for _, e := range a.rowsOf(t).es {
 		if (e.kind != entryUser && e.kind != entryAssistant) || e.streaming || told[e.key] {
 			continue
 		}
