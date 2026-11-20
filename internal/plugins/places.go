@@ -248,6 +248,18 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, key string, deadlin
 	}
 }
 
+// placed counts the native widgets name the tree n places.
+func placed(n *widget.Node, name string) int {
+	count := 0
+	if n.Type == "native" && n.Name == name {
+		count++
+	}
+	for _, ch := range n.Children {
+		count += placed(ch, name)
+	}
+	return count
+}
+
 func (s *Session) drawBatch(pl Place, state json.RawMessage, batch []PlaceItem, views map[string]*widget.Node) error {
 	if !s.runtime().Can("place") {
 		return errors.New("the plugin has places but no place export")
@@ -279,6 +291,11 @@ func (s *Session) drawBatch(pl Place, state json.RawMessage, batch []PlaceItem, 
 		v, err := widget.DecodeWithin(append(append([]byte(`{"body":`), w...), '}'), bound)
 		if err != nil {
 			return fmt.Errorf("%s: %w", batch[i].Key, err)
+		}
+		// A component's layout around a native it requires, as the
+		// composer's around composer.input, places it once.
+		if need := ComponentNamed(pl.At).Requires; pl.Replaces && need != "" && placed(v.Body, need) != 1 {
+			return fmt.Errorf("%s: %s's layout places %s once, not %d times", batch[i].Key, pl.At, need, placed(v.Body, need))
 		}
 		views[batch[i].Key] = v.Body
 	}

@@ -1,0 +1,13 @@
+{
+  "id": "composer",
+  "name": "Composer",
+  "description": "The composer's layout, around Glitched's native composer.input: the card you write in, with its pickers and Send. Built into Glitched; make a copy in Settings › Plugins to add to it.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "ui.replace"],
+  "glitched": {
+    "places": [{ "id": "composer", "at": "composer", "replaces": true }]
+  }
+}

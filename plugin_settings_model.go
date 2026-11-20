@@ -43,6 +43,7 @@ var partTitles = map[string]string{
 	"thread.panel.diff":         "Diff panel",
 	"approval.card":             "Approval card",
 	"question.card":             "Question card",
+	"composer":                  "Composer",
 	"composer.access":           "Access picker",
 	"composer.send":             "Send and stop",
 	"settings.plugins":          "Settings › Plugins",
@@ -197,7 +198,7 @@ func (a *app) partDrawer(name string) (plugins.Plugin, bool) {
 		return plugins.Plugin{}, false
 	}
 	id := rs[0].Plugin
-	if plugins.Native(name) {
+	if plugins.ComponentNamed(name).Native {
 		id = ""
 	}
 	for _, r := range rs {

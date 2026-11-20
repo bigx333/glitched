@@ -285,6 +285,10 @@ type NativeWidget = {
       /** Fired with the theme's name as it is clicked. */
       onChange?: Handler;
     }
+  | {
+      /** The composer itself, in composer: placed exactly once. */
+      name: "composer.input";
+    }
 );
 
 /** A ghost or outline button: drawn as Glitched's header draws its own. */
@@ -436,6 +440,7 @@ type Component =
   | "settings.page.appearance"
   | "settings.page.about"
   | "settings.page.keybindings"
+  | "composer"
   | "composer.send"
   | "composer.access";
 
@@ -497,9 +502,15 @@ type ComponentContext =
   | KeybindingsPageContext
   | RowActionsContext
   | ProjectStripContext
+  | ComposerContext
   | ComposerSendContext
   | ComposerAccessContext
   | Record<string, never>;
+
+/** The context of composer: its layout must place the native composer.input once. */
+interface ComposerContext {
+  thread: ThreadRecord;
+}
 
 /** The context of composer.send. Glitched keeps its own Stop beside it while the agent works. */
 interface ComposerSendContext {

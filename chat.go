@@ -886,11 +886,8 @@ func (a *app) composerHeight(c *ui.Context, t thread) float32 {
 // Mid-way, what isn't in the card's flow is held to its top, the card
 // clipping it.
 func (a *app) composer(c *ui.Context, t thread, es []entry) {
-	compact := a.composerCompact(t)
 	k := a.composerK
-	morphing := k > 0 && k < 1
 	lerp := func(from, to float32) float32 { return from + (to-from)*k }
-	compactH, fullH := a.cardHeights(c)
 	// The bar lets the pointer through, but for the composer in it, to
 	// what is around it, as the pill taking the user to the end.
 	// d is how far it is from the hero to its dock (hero.go). Docked, it's
@@ -911,189 +908,216 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 		frame := ui.Column(c).Key("composer-frame").WidthPercent(100).MaxWidth(lerp(compactWidth, contentWidth)).PassThrough().
 			Bind(&a.composerH)
 		frame.Children(func() {
-			a.heroHeading(c, d)
-			// The agents strip sits over the card, the room it takes going
-			// with it as it slides down into it.
-			if k > 0 && len(a.shown(t)) > 0 {
-				s := fadeIn(k, 0.45, 0.55)
-				above := ui.Column(c).Key("above").Justify(ui.End).PassThrough()
-				if morphing {
-					above.Height(a.aboveH * k).ClipY()
-				}
-				above.Children(func() {
-					in := faded(ui.Column(c).Key("in").Padding(0, 0, 8).Shrink(0).PassThrough().
-						Translate(0, 8*(1-s)), s)
-					if h := in.Bounds().H; h > 0 {
-						a.aboveH = h
-					}
-					in.Children(func() { a.agents(c, t, frame.Bounds().W, s) })
-				})
+			// The composer plugin's layout, around the native
+			// composer.input, which is the card and what comes and goes
+			// with it; Glitched's own when no plugin draws it.
+			input := func(c *ui.Context) { a.composerInput(c, t, es, fullW, frame.Bounds().W) }
+			a.composerIn = input
+			box := func() ui.Element { return ui.Column(c).Key("composer-plugin").PassThrough() }
+			if !a.pluginComponent(c, box, "composer", "composer", &t, func(r plugins.ThreadRecord) any { return composerContext{r} }) {
+				input(c)
 			}
-			// What the last frame measured was laid out under the settings
-			// in force, or it isn't to be taken.
-			fresh := a.cardLaid == a.cardFor
-			a.cardLaid = a.cardFor
-			card := ui.Column(c).Key("composer").Radius(lerp(min(20, compactH/2), 20))
+		})
+	})
+}
+
+// composerContext is the context of composer.
+type composerContext struct {
+	Thread plugins.ThreadRecord `json:"thread"`
+}
+
+// composerInput is the native composer.input: the hero's heading, the
+// agents strip over the card, the card the user writes in, and the row
+// below it, in the composer's frame, frameW wide. fullW is the full card's
+// width at rest, 0 before there's been a frame.
+func (a *app) composerInput(c *ui.Context, t thread, es []entry, fullW, frameW float32) {
+	compact := a.composerCompact(t)
+	k := a.composerK
+	morphing := k > 0 && k < 1
+	lerp := func(from, to float32) float32 { return from + (to-from)*k }
+	compactH, fullH := a.cardHeights(c)
+	d := a.dockK
+	a.heroHeading(c, d)
+	// The agents strip sits over the card, the room it takes going
+	// with it as it slides down into it.
+	if k > 0 && len(a.shown(t)) > 0 {
+		s := fadeIn(k, 0.45, 0.55)
+		above := ui.Column(c).Key("above").Justify(ui.End).PassThrough()
+		if morphing {
+			above.Height(a.aboveH * k).ClipY()
+		}
+		above.Children(func() {
+			in := faded(ui.Column(c).Key("in").Padding(0, 0, 8).Shrink(0).PassThrough().
+				Translate(0, 8*(1-s)), s)
+			if h := in.Bounds().H; h > 0 {
+				a.aboveH = h
+			}
+			in.Children(func() { a.agents(c, t, frameW, s) })
+		})
+	}
+	// What the last frame measured was laid out under the settings
+	// in force, or it isn't to be taken.
+	fresh := a.cardLaid == a.cardFor
+	a.cardLaid = a.cardFor
+	card := ui.Column(c).Key("composer").Radius(lerp(min(20, compactH/2), 20))
+	if morphing {
+		a.cardH = lerp(compactH, fullH)
+		card.Height(a.cardH)
+	} else if d < 1 {
+		// The hero's card is larger, settling to its own height as
+		// it docks; it isn't the full card's height to measure.
+		card.MinHeight(heroCardH * (1 - d))
+	} else if a.composerRest && fresh {
+		if h := card.Bounds().H; h > 0 && k == 0 {
+			a.cardCompactH = h
+		} else if h > 0 {
+			a.cardFullH = h
+		}
+	} else if a.composerRest {
+		// Laid out under other settings: measured in the next
+		// frame, which nothing else may ask for.
+		c.AnimationFrame()
+	}
+	if compact && card.Clicked() {
+		a.composerOpened = true
+	}
+	if card.FocusWithin() {
+		card.Shadow(0, 0, 0, 3, palette.accent.Alpha(0.22))
+	}
+	a.accessEffects(card, a.shownAccess(t))
+	a.autocomplete(c, card)
+	// Files go to the agent as their paths, which a server's
+	// agent can't read.
+	dragOver := t.local() && a.dropZone(card)
+	a.frosted(c, card).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.28)).Clip().Children(func() {
+		workingGlow(c, card, t.View.Working(), 20)
+		if k < 1 {
+			// A line to type a follow-up into, which a text area,
+			// at least two lines high, can't be; the first key
+			// typed brings the full composer back, its text with it.
+			line := ui.Column(c).Key("line")
 			if morphing {
+				line.Absolute().Top(0).Left(0).Right(0).Opacity(1 - fadeIn(k, 0, 0.3))
+				// The compact card is as high as the line in its
+				// border: before it's been at rest, the line says
+				// how high.
+				if h := line.Bounds().H; h > 0 && a.cardCompactH == 0 && fresh {
+					a.cardCompactH = h + 2*a.paneBorder()
+				}
+			}
+			line.Children(func() {
+				ui.TextInput(c.Key("draft-compact"), &a.draft).Placeholder("Ask a follow-up…").
+					Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).Padding(11, 18).
+					OnPaste(a.onPaste)
+			})
+		}
+		// Compact but holding something now, typed, pasted or
+		// dropped in this frame, the composer opens from the next:
+		// laid out unseen in this one, the full composer is measured
+		// before the first frame of the morph, rather than in it.
+		// Invisible, it takes neither the pointer nor the focus, and
+		// isn't there to assistive technology.
+		ahead := k == 0 && (a.composerOpened || a.drafting())
+		if k == 0 && !ahead {
+			// Compact, there's no Send to stop the agent with: ⌘⏎
+			// still does, as it does from the full composer.
+			if t.View.Live() && a.message(t) == "" && c.Shortcut(ui.Cmd, ui.KeyEnter) {
+				a.backend.Interrupt(t.env, t.id())
+			}
+			return
+		}
+		full := ui.Column(c).Key("full")
+		// In the hero's larger card, the text area takes the room.
+		large := d < 1 && !morphing && !ahead
+		if large {
+			full.Grow(1)
+		}
+		if morphing || ahead {
+			// Out of the card's flow, it's as wide as it is at rest,
+			// rather than the card's width on its way there, the
+			// card clipping it: its text wraps as it will, never
+			// reflowing as the card widens. So it's as high as it
+			// is at rest, and the full card is that in its border.
+			full.Absolute().Top(0).Left(0)
+			if fullW > 0 {
+				full.Width(fullW)
+			} else {
+				full.Right(0)
+			}
+			if ahead {
+				full.Invisible()
+			}
+			if h := full.Bounds().H; h > 0 && fresh {
+				a.cardFullH = h + 2*a.paneBorder()
+			}
+			// The card takes the heights as just updated, from the
+			// last frame's layout, the unseen pass's included,
+			// rather than as they were before this frame took them.
+			if morphing {
+				compactH, fullH = a.cardHeights(c)
 				a.cardH = lerp(compactH, fullH)
 				card.Height(a.cardH)
-			} else if d < 1 {
-				// The hero's card is larger, settling to its own height as
-				// it docks; it isn't the full card's height to measure.
-				card.MinHeight(heroCardH * (1 - d))
-			} else if a.composerRest && fresh {
-				if h := card.Bounds().H; h > 0 && k == 0 {
-					a.cardCompactH = h
-				} else if h > 0 {
-					a.cardFullH = h
-				}
-			} else if a.composerRest {
-				// Laid out under other settings: measured in the next
-				// frame, which nothing else may ask for.
-				c.AnimationFrame()
 			}
-			if compact && card.Clicked() {
-				a.composerOpened = true
-			}
-			if card.FocusWithin() {
-				card.Shadow(0, 0, 0, 3, palette.accent.Alpha(0.22))
-			}
-			a.accessEffects(card, a.shownAccess(t))
-			a.autocomplete(c, card)
-			// Files go to the agent as their paths, which a server's
-			// agent can't read.
-			dragOver := t.local() && a.dropZone(card)
-			a.frosted(c, card).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.28)).Clip().Children(func() {
-				workingGlow(c, card, t.View.Working(), 20)
-				if k < 1 {
-					// A line to type a follow-up into, which a text area,
-					// at least two lines high, can't be; the first key
-					// typed brings the full composer back, its text with it.
-					line := ui.Column(c).Key("line")
-					if morphing {
-						line.Absolute().Top(0).Left(0).Right(0).Opacity(1 - fadeIn(k, 0, 0.3))
-						// The compact card is as high as the line in its
-						// border: before it's been at rest, the line says
-						// how high.
-						if h := line.Bounds().H; h > 0 && a.cardCompactH == 0 && fresh {
-							a.cardCompactH = h + 2*a.paneBorder()
-						}
-					}
-					line.Children(func() {
-						ui.TextInput(c.Key("draft-compact"), &a.draft).Placeholder("Ask a follow-up…").
-							Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).Padding(11, 18).
-							OnPaste(a.onPaste)
-					})
-				}
-				// Compact but holding something now, typed, pasted or
-				// dropped in this frame, the composer opens from the next:
-				// laid out unseen in this one, the full composer is measured
-				// before the first frame of the morph, rather than in it.
-				// Invisible, it takes neither the pointer nor the focus, and
-				// isn't there to assistive technology.
-				ahead := k == 0 && (a.composerOpened || a.drafting())
-				if k == 0 && !ahead {
-					// Compact, there's no Send to stop the agent with: ⌘⏎
-					// still does, as it does from the full composer.
-					if t.View.Live() && a.message(t) == "" && c.Shortcut(ui.Cmd, ui.KeyEnter) {
-						a.backend.Interrupt(t.env, t.id())
-					}
-					return
-				}
-				full := ui.Column(c).Key("full")
-				// In the hero's larger card, the text area takes the room.
-				large := d < 1 && !morphing && !ahead
-				if large {
-					full.Grow(1)
-				}
-				if morphing || ahead {
-					// Out of the card's flow, it's as wide as it is at rest,
-					// rather than the card's width on its way there, the
-					// card clipping it: its text wraps as it will, never
-					// reflowing as the card widens. So it's as high as it
-					// is at rest, and the full card is that in its border.
-					full.Absolute().Top(0).Left(0)
-					if fullW > 0 {
-						full.Width(fullW)
-					} else {
-						full.Right(0)
-					}
-					if ahead {
-						full.Invisible()
-					}
-					if h := full.Bounds().H; h > 0 && fresh {
-						a.cardFullH = h + 2*a.paneBorder()
-					}
-					// The card takes the heights as just updated, from the
-					// last frame's layout, the unseen pass's included,
-					// rather than as they were before this frame took them.
-					if morphing {
-						compactH, fullH = a.cardHeights(c)
-						a.cardH = lerp(compactH, fullH)
-						card.Height(a.cardH)
-					}
-				}
-				full.Children(func() {
-					in := fadeIn(k, 0.25, 0.5)
-					if len(a.attachments) > 0 {
-						faded(ui.Column(c).Key("attachments").Padding(12, 12, 0), in).Children(func() {
-							a.attachmentChips(c, a.attachments, t, func(i int) {
-								a.attachments = append(a.attachments[:i:i], a.attachments[i+1:]...)
-							})
-						})
-					}
-					placeholder := "Ask anything, @tag files/folders, or use / to show available commands"
-					switch r := waitingRequest(t, es); {
-					case r != nil && r.Kind == api.KindQuestion:
-						placeholder = "Reply to steer, or answer the questions above"
-					case r != nil:
-						placeholder = "Reply to steer, or answer the approval above"
-					}
-					// Unseen, the text area is one of its own, which never
-					// takes the focus: the one that shows is new as it shows,
-					// taking the focus from the line with the caret at the
-					// end of the draft, rather than where it was left as the
-					// unseen one was laid out, what the line took since
-					// having gone in after it.
-					key := "draft"
-					if ahead {
-						key = "draft-ahead"
-					}
-					a.typedFence()
-					a.draftAreas(c, t, key, placeholder, ahead, large, in)
-					in = fadeIn(k, 0.35, 0.5)
-					faded(ui.Row(c).Key("controls").Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).
-						Translate(0, 6*(1-in)), in).Children(func() {
-						a.threadControls(t, func() { a.composerControls(c, t) })
-						ui.Spacer(c)
-						if t.local() && a.iconButton(c, "attach", icPaperclip, "Attach files", false).Clicked() {
-							a.pickFiles()
-						}
-						a.sendControl(c, t, !ahead)
+		}
+		full.Children(func() {
+			in := fadeIn(k, 0.25, 0.5)
+			if len(a.attachments) > 0 {
+				faded(ui.Column(c).Key("attachments").Padding(12, 12, 0), in).Children(func() {
+					a.attachmentChips(c, a.attachments, t, func(i int) {
+						a.attachments = append(a.attachments[:i:i], a.attachments[i+1:]...)
 					})
 				})
-				if dragOver {
-					dropRing(c)
-				}
-			})
-			if k == 0 {
-				return
 			}
-			// The row below the card, which rises up under it as it folds.
-			e := fadeIn(k, 0.45, 0.55)
-			below := ui.Column(c).Key("below").PassThrough()
-			if morphing {
-				below.Height(a.envH * k).ClipY()
+			placeholder := "Ask anything, @tag files/folders, or use / to show available commands"
+			switch r := waitingRequest(t, es); {
+			case r != nil && r.Kind == api.KindQuestion:
+				placeholder = "Reply to steer, or answer the questions above"
+			case r != nil:
+				placeholder = "Reply to steer, or answer the approval above"
 			}
-			below.Children(func() {
-				env := faded(ui.Row(c).Key("env-row").Gap(4).AlignItems(ui.Center).Padding(8, 6, 0).Shrink(0).
-					Translate(0, -6*(1-e)), e)
-				if h := env.Bounds().H; h > 0 {
-					a.envH = h
+			// Unseen, the text area is one of its own, which never
+			// takes the focus: the one that shows is new as it shows,
+			// taking the focus from the line with the caret at the
+			// end of the draft, rather than where it was left as the
+			// unseen one was laid out, what the line took since
+			// having gone in after it.
+			key := "draft"
+			if ahead {
+				key = "draft-ahead"
+			}
+			a.typedFence()
+			a.draftAreas(c, t, key, placeholder, ahead, large, in)
+			in = fadeIn(k, 0.35, 0.5)
+			faded(ui.Row(c).Key("controls").Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).
+				Translate(0, 6*(1-in)), in).Children(func() {
+				a.threadControls(t, func() { a.composerControls(c, t) })
+				ui.Spacer(c)
+				if t.local() && a.iconButton(c, "attach", icPaperclip, "Attach files", false).Clicked() {
+					a.pickFiles()
 				}
-				env.Children(func() { a.workspaceButton(c, t) })
+				a.sendControl(c, t, !ahead)
 			})
 		})
+		if dragOver {
+			dropRing(c)
+		}
+	})
+	if k == 0 {
+		return
+	}
+	// The row below the card, which rises up under it as it folds.
+	e := fadeIn(k, 0.45, 0.55)
+	below := ui.Column(c).Key("below").PassThrough()
+	if morphing {
+		below.Height(a.envH * k).ClipY()
+	}
+	below.Children(func() {
+		env := faded(ui.Row(c).Key("env-row").Gap(4).AlignItems(ui.Center).Padding(8, 6, 0).Shrink(0).
+			Translate(0, -6*(1-e)), e)
+		if h := env.Bounds().H; h > 0 {
+			a.envH = h
+		}
+		env.Children(func() { a.workspaceButton(c, t) })
 	})
 }
 

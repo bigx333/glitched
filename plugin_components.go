@@ -76,7 +76,7 @@ func (a *app) pluginComponent(c *ui.Context, box func() ui.Element, name, key st
 	// row that can still be clicked beats none. Where Glitched draws the
 	// built-in itself, it does instead.
 	d := cmp.Or(good, failed)
-	if d == nil || good == nil && plugins.Native(name) {
+	if d == nil || good == nil && plugins.ComponentNamed(name).Native {
 		return false
 	}
 	a.drawPlace(c, box(), d.pl, key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, fire func(any)) { a.drawNative(c, name, t, n, fire) })
@@ -92,6 +92,8 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, n *widget.N
 		return
 	}
 	switch n.Name {
+	case "composer.input":
+		a.composerIn(c)
 	case "diff.body":
 		var path string
 		json.Unmarshal(n.Props["path"], &path)
