@@ -52,7 +52,7 @@ function row(m) {
 	switch (m.kind) {
 	case "user": {
 		const bubble = m.markdown ? { type: "markdown", text: m.markdown } : { type: "text", text: m.text }
-		const col = [{ type: "column", padding: [10, 14], background: "surface", children: [bubble] }]
+		const col = [{ type: "column", padding: [10, 14], background: "$surface", children: [bubble] }]
 		if (m.note) col.push({ type: "text", style: "muted", text: m.note })
 		return { type: "row", children: [{ type: "spacer" }, { type: "column", align: "end", gap: 6, children: col }] }
 	}
@@ -94,6 +94,9 @@ func setMode(t *testing.T, h *harness, mode string) {
 	writeOwnPlugin(t, h.a, benchPlugin, replacing(benchPlugin, "timeline.message"), m.module)
 	if err := h.a.plugins.SetGranted(benchPlugin, "ui.replace", true); err != nil {
 		t.Fatal(err)
+	}
+	if h.a.plugins.App(benchPlugin) == nil {
+		t.Fatalf("%s: the plugin doesn't run: %+v", mode, installed(h.a, benchPlugin))
 	}
 }
 
@@ -153,6 +156,10 @@ func cpu() time.Duration {
 type sample struct {
 	steps          []time.Duration // each step's UI time: a tick of a 60 Hz window
 	frameTimes     []time.Duration // each frame's UI time: build, layout and paint
+	// firstFrames are each step's first frame, which handles its input
+	// and change: the frames after it in the step are a still clock's
+	// repeats, which a Tester runs while something animates.
+	firstFrames []time.Duration
 	frames         int
 	cpu, wall      time.Duration
 	mallocs, bytes uint64
@@ -196,8 +203,11 @@ func (b *bench) measure(n int, step func(i int)) sample {
 		// A frame runs from its build to the next one's: the posts run
 		// and the input handled before the first are the first's.
 		from := start
-		for _, at := range append((*b.starts)[min(1, len(*b.starts)):], end) {
+		for j, at := range append((*b.starts)[min(1, len(*b.starts)):], end) {
 			s.frameTimes = append(s.frameTimes, at.Sub(from))
+			if j == 0 {
+				s.firstFrames = append(s.firstFrames, at.Sub(from))
+			}
 			from = at
 		}
 		s.blank += b.blankRows()
@@ -211,7 +221,7 @@ func (b *bench) measure(n int, step func(i int)) sample {
 
 // blankRows counts the rows in view a plugin draws that have no drawing.
 func (b *bench) blankRows() int {
-	if b.mode == "native" {
+	if b.mode == "native" || b.h.a.selected != b.long.id() {
 		return 0
 	}
 	app := b.h.a.plugins.App(benchPlugin)
@@ -252,7 +262,7 @@ func (b *bench) settle() {
 				for i := first; i <= last && i < len(es); i++ {
 					rows = append(rows, fmt.Sprintf("%d:%s item=%v view=%v", i, es[i].key, app.PlaceContext("row", es[i].key) != nil, app.PlaceView("row", es[i].key) != nil))
 				}
-				rows = append(rows, fmt.Sprintf("busy=%v idle=%v", app.Busy, b.h.a.plugins.Idle()))
+				rows = append(rows, fmt.Sprintf("path=%s selected=%v long=%v busy=%v idle=%v replacers=%v allowed=%v plugin=%+v", b.h.a.router.Path(), b.h.a.selected, b.long.id(), app.Busy, b.h.a.plugins.Idle(), b.h.a.plugins.Replacers("timeline.message"), b.h.a.plugins.Allowed(benchPlugin, "ui.replace"), installed(b.h.a, benchPlugin)))
 			}
 			b.t.Log(strings.Join(rows, "\n"))
 			b.t.Fatalf("%s: never settled: %d blank rows (plugin: %v; %v)", b.mode, b.blankRows(), why, b.h.a.plugins.Failed(benchPlugin))
@@ -390,7 +400,7 @@ func TestTimelineCost(t *testing.T) {
 	if p := os.Getenv("TIMELINE_OUT"); p != "" {
 		out, _ = os.Create(p)
 		defer out.Close()
-		fmt.Fprintln(out, "round\tsize\tmode\tscenario\tsteps\tframes\tframe_p50_ms\tframe_p95_ms\tframe_max_ms\tui_ms_per_step\tcpu_ms_per_step\tkB_per_step\tmallocs_per_step\tgcs\tblank_row_steps\tstale_steps\tfirst_ms\tsettle_ms\tvisible\tmoved")
+		fmt.Fprintln(out, "round\tsize\tmode\tscenario\tsteps\tframes\tframe_p50_ms\tframe_p95_ms\tframe_max_ms\twork_p50_ms\twork_p95_ms\tui_ms_per_step\tcpu_ms_per_step\tkB_per_step\tmallocs_per_step\tgcs\tblank_row_steps\tstale_steps\tfirst_ms\tsettle_ms\tvisible\tmoved")
 	}
 	ms := func(d time.Duration) string { return fmt.Sprintf("%.2f", float64(d.Microseconds())/1000) }
 	for r := range rounds {
@@ -419,7 +429,7 @@ func TestTimelineCost(t *testing.T) {
 					}
 					steps := time.Duration(len(s.steps))
 					line := []string{strconv.Itoa(r), strconv.Itoa(n), mode, sc.name, strconv.Itoa(len(s.steps)), strconv.Itoa(s.frames),
-						ms(pct(s.frameTimes, 0.5)), ms(pct(s.frameTimes, 0.95)), ms(pct(s.frameTimes, 1)), ms(total / steps), ms(s.cpu / steps),
+						ms(pct(s.frameTimes, 0.5)), ms(pct(s.frameTimes, 0.95)), ms(pct(s.frameTimes, 1)), ms(pct(s.firstFrames, 0.5)), ms(pct(s.firstFrames, 0.95)), ms(total / steps), ms(s.cpu / steps),
 						fmt.Sprintf("%.0f", float64(s.bytes)/1024/float64(steps)), strconv.FormatUint(s.mallocs/uint64(steps), 10), strconv.Itoa(int(s.gcs)),
 						strconv.Itoa(s.blank), strconv.Itoa(s.stale), ms(s.steps[0]), ms(s.settle), strconv.Itoa(s.visible), strconv.Itoa(s.moved)}
 					t.Log(strings.Join(line, "\t"))
