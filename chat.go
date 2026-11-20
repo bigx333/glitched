@@ -1205,7 +1205,7 @@ func (a *app) sendOrStop(t thread, clicked bool) {
 
 // stopButton stops the agent at work, beside Send while the composer holds
 // a message, or beside a plugin's Send whatever that draws.
-func (a *app) stopButton(c *ui.Context, t thread) {
+func (a *app) stopButton(c *ui.Context, t thread) ui.Element {
 	stop := a.tip(c, ui.ButtonBase(c.Key("stop")).Label("Stop"), "Stop the agent").Size(30, 30).Radius(15).Center().
 		Cursor(ui.CursorPointer).Border(1, palette.border).Margin(0, 4, 0, 0)
 	if stop.Hovered() {
@@ -1214,6 +1214,7 @@ func (a *app) stopButton(c *ui.Context, t thread) {
 	if stop.Children(func() { ui.Box(c).Size(10, 10).Radius(2).Background(palette.text) }).Clicked() {
 		a.backend.Interrupt(t.env, t.id())
 	}
+	return stop
 }
 
 // sendControl is Send, Glitched's or a plugin's that replaces it. Beside a
@@ -1222,7 +1223,11 @@ func (a *app) stopButton(c *ui.Context, t thread) {
 // never takes away the way to stop a run, and one that fails gives way to
 // Glitched's Send.
 func (a *app) sendControl(c *ui.Context, t thread, keys bool) {
-	box := func() ui.Element { return ui.Row(c).Key("send-plugin").AlignItems(ui.Center) }
+	// The plugin's gives up its room first: however wide it draws, Stop
+	// keeps its own.
+	box := func() ui.Element {
+		return ui.Row(c).Key("send-plugin").AlignItems(ui.Center).Shrink(1).MinWidth(0).ClipX()
+	}
 	ctx := func(r plugins.ThreadRecord) any {
 		return composerSend{Thread: r, Draft: a.message(t) != "", Working: t.View.Live()}
 	}
@@ -1231,7 +1236,7 @@ func (a *app) sendControl(c *ui.Context, t thread, keys bool) {
 		return
 	}
 	if t.View.Live() {
-		a.stopButton(c, t)
+		a.stopButton(c, t).Shrink(0)
 	}
 	if keys && c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		a.sendOrStop(t, false)
