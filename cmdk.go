@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"slices"
 	"strings"
 
@@ -28,6 +30,13 @@ func (a *app) openCommandPalette() {
 	a.cmdkOpen, a.cmdkQuery, a.cmdkIndex = true, "", 0
 }
 
+// id names the project in an action's id without its workspace's path,
+// which only threads:read reads.
+func (k projectKey) id() string {
+	sum := sha256.Sum256([]byte(k.String()))
+	return hex.EncodeToString(sum[:8])
+}
+
 // actions are the palette's actions, in its order, which plugins list and
 // run as glitched.commands.list and run.
 func (a *app) actions() []command {
@@ -36,7 +45,7 @@ func (a *app) actions() []command {
 	}
 	cmds := []command{action("thread.new", "New thread", "⌘N", "pen-new-square", a.newThread)}
 	for _, p := range a.projects {
-		cmds = append(cmds, action("thread.new:"+p.key.String(), "New thread in "+a.projectLabel(p), "", "pen-new-square", func() { a.startThread(p) }))
+		cmds = append(cmds, action("thread.new:"+p.key.id(), "New thread in "+a.projectLabel(p), "", "pen-new-square", func() { a.startThread(p) }))
 	}
 	if !a.picking {
 		add := action("project.add", "Add project…", "", "folder-open", a.addProject)
@@ -46,7 +55,7 @@ func (a *app) actions() []command {
 	// Each is listed while an agent works in it too, lest the rows shift
 	// under the one chosen as a run starts; its alert says to stop it.
 	for _, p := range a.projects {
-		rm := action("project.remove:"+p.key.String(), "Remove project "+a.projectLabel(p)+"…", "", "folder", func() { a.askRemove(p) })
+		rm := action("project.remove:"+p.key.id(), "Remove project "+a.projectLabel(p)+"…", "", "folder", func() { a.askRemove(p) })
 		rm.also = "workspace delete"
 		cmds = append(cmds, rm)
 	}

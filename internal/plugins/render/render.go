@@ -63,6 +63,9 @@ type Style struct {
 	// says whether the row stays as though pointed at, as while a popover
 	// of it is open. Nil does nothing.
 	ListRow func(c *ui.Context, list *widget.Node, i int, e ui.Element) (held bool)
+	// Modal is told of each dialog the view draws open, which holds the
+	// window's keys. Nil is told nothing.
+	Modal func()
 	// Rows is the row of a list's item as the plugin drew it, nil before
 	// it did: the list asks for the rows in view alone. Nil draws none.
 	Rows func(list string, it widget.ListItem) *widget.Node
@@ -621,6 +624,9 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		r.tip(c, ui.Button(kc, n.Label).Disabled(n.Disabled).Menu(r.menu(n)), n.Tooltip)
 	case "dialog":
 		open := n.Open && !r.cs.dismissed[n.ID]
+		if open && st.Modal != nil {
+			st.Modal()
+		}
 		d := ui.Modal(c.Key(st.Scope+"#dialog:"+n.ID), &open, func() {
 			ui.Column(c).Padding(20).Gap(12).MinWidth(320).MaxWidth(560).Children(func() {
 				ui.Text(c, n.Title).FontSize(16).FontWeight(650)

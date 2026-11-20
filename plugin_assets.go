@@ -38,6 +38,7 @@ func (a *app) pluginStyle(id string) render.Style {
 		Icon:     func(name string) *ui.SVG { return a.pluginIcon(id, name) },
 		Image:    func(src string) ui.ImageSource { return a.pluginImage(id, src) },
 		Ghost:    ghost,
+		Modal:    func() { a.modalNow = true },
 		Outline:  headerButton,
 		Tip:      a.tip,
 		Row:      row,

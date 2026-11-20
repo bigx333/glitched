@@ -339,3 +339,60 @@ func TestTheAppHoldsAListsRowsAndItsNativesDrawAboutTheirThread(t *testing.T) {
 		t.Fatalf("a native in a row of no thread is told none: %v", natives)
 	}
 }
+
+// The pointer coming onto a row chooses it once: resting there leaves the
+// keys, and a plugin that keeps its own value, to move the choice.
+func TestAPalettesListChoosesTheRowThePointerComesOnto(t *testing.T) {
+	const list = `{"body": {"type": "list", "id": "l", "label": "Results", "height": 300, "chooseOnHover": true, "controlled": true, "value": "a", "onChange": "chose", "onSubmit": "open",
+		"items": [{"key": "a", "label": "Alpha"}, {"key": "b", "label": "Bravo"}, {"key": "c", "label": "Charlie"}]}}`
+	s := &screen{}
+	s.show(t, list)
+	tt := ui.NewTester(func(c *ui.Context) {
+		s.cs.Sync(s.v, s.rev, s.processed)
+		View(c, s.v, &s.cs, Style{Rows: func(_ string, it widget.ListItem) *widget.Node {
+			return &widget.Node{Type: "text", Text: it.Label}
+		}}, &s.md, func(ev plugins.UIEvent, _ map[string]any) int {
+			s.events = append(s.events, ev)
+			return len(s.events)
+		})
+	}, 400, 400)
+	r, _ := tt.Find("Bravo")
+	tt.Move(r.X+2, r.Y+2)
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "change" || ev.Value != "b" {
+		t.Fatalf("pointing at Bravo: %+v", ev)
+	}
+	// The plugin keeps its own value, a: the pointer resting doesn't ask
+	// again.
+	n := len(s.events)
+	for range 4 {
+		s.processed = len(s.events)
+		s.show(t, list)
+		tt.Frame()
+	}
+	if len(s.events) != n {
+		t.Fatalf("the pointer resting on Bravo asked again: %+v", s.events[n:])
+	}
+	// The keys move the choice from under the resting pointer.
+	s.show(t, strings.Replace(list, `"value": "a"`, `"value": "b"`, 1))
+	s.processed = len(s.events)
+	tt.Frame()
+	if err := tt.Click("Bravo"); err != nil { // the keyboard, where the pointer rests
+		t.Fatal(err)
+	}
+	tt.Frame()
+	tt.Key(0, ui.KeyDown)
+	tt.Frame()
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "submit" || ev.Value != "c" {
+		t.Fatalf("Down then Enter under a resting pointer: %+v, want c submitted", s.events[n:])
+	}
+	// Coming onto another row chooses it.
+	r, _ = tt.Find("Alpha")
+	tt.Move(r.X+2, r.Y+2)
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "change" || ev.Value != "a" {
+		t.Fatalf("pointing at Alpha: %+v", ev)
+	}
+}
