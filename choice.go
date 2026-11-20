@@ -8,6 +8,7 @@ import (
 	"log"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"glitched/internal/api"
@@ -303,15 +304,65 @@ func (a *app) configureEffect(args json.RawMessage) (any, error) {
 		}
 		c.Effort = new(strings.ToLower(efforts[i]))
 	}
-	// It answers once the configure is sent; one that can't be, as to an
-	// engine that's gone, says why.
+	return nil, a.sendConfigure(t, c)
+}
+
+// sendConfigure sends c to t's engine for its next turn, and answers once
+// it's sent; one that can't be, as to an engine that's gone, says why.
+func (a *app) sendConfigure(t thread, c api.ThreadConfigure) error {
 	cmd := a.backend.ConfigureThread(t.env, t.id(), c)
 	if now, ok := a.find(t.id()); ok {
 		for _, p := range now.Pending {
 			if p.Command == cmd && p.Err != nil {
-				return nil, p.Err
+				return p.Err
 			}
 		}
 	}
-	return nil, nil
+	return nil
+}
+
+// setAccessEffect is threads.setAccess: a thread's access, or with none
+// the default for new threads the draft's picker sets, to one of the
+// levels the access picker offers, and nothing else.
+func (a *app) setAccessEffect(args json.RawMessage) (any, error) {
+	var in struct {
+		Type   string // the call's own, threads.setAccess
+		Thread string
+		Access string
+	}
+	d := json.NewDecoder(bytes.NewReader(args))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&in); err != nil {
+		return nil, fmt.Errorf("threads.setAccess sets an access, and nothing else: %v", err)
+	}
+	level, ok := accessOf[in.Access]
+	if !ok {
+		names := make([]string, len(accessLevels))
+		for i, l := range accessLevels {
+			names[i] = strconv.Quote(l.name)
+		}
+		return nil, fmt.Errorf("%q is no access; the access picker offers %s", in.Access, strings.Join(names, ", "))
+	}
+	var id api.ID
+	if in.Thread != "" {
+		var err error
+		if id, err = api.ParseID(in.Thread); err != nil {
+			return nil, fmt.Errorf("no thread %q", in.Thread)
+		}
+	}
+	if id.IsZero() {
+		if a.access != in.Access {
+			a.access = in.Access
+			a.saveComposer()
+		}
+		return nil, nil
+	}
+	t, err := a.pluginFind(args)
+	if err != nil {
+		return nil, err
+	}
+	if t.View.Access == level {
+		return nil, nil
+	}
+	return nil, a.sendConfigure(t, api.ThreadConfigure{Access: &level})
 }

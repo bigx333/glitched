@@ -49,6 +49,7 @@ globalThis.glitched = Object.freeze({
   notify: (title, body, options = {}) => app("notify", { ...options, title, body }),
   composer: Object.freeze({
     draft: (text, where) => app("composer.draft", typeof where === "object" && where !== null ? { ...where, text } : { text, workspace: where }),
+    submit: (thread) => app("composer.submit", { thread: thread ?? "" }),
   }),
   threads: Object.freeze({
     list: () => app("threads.list"),
@@ -61,6 +62,7 @@ globalThis.glitched = Object.freeze({
     markRead: (thread) => app("threads.markRead", { thread }),
     interrupt: (thread) => app("threads.interrupt", { thread }),
     configure: (thread, options = {}) => app("threads.configure", { ...options, thread }),
+    setAccess: (thread, access) => app("threads.setAccess", { thread: thread ?? "", access }),
   }),
   models: Object.freeze({ list: () => app("models.list") }),
   projects: Object.freeze({

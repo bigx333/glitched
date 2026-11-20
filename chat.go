@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -1063,12 +1064,12 @@ func (a *app) composer(c *ui.Context, t thread, es []entry) {
 					in = fadeIn(k, 0.35, 0.5)
 					faded(ui.Row(c).Key("controls").Padding(6, 8, 8).Gap(2).AlignItems(ui.Center).
 						Translate(0, 6*(1-in)), in).Children(func() {
-						a.threadControls(t, func() { a.composerControls(c) })
+						a.threadControls(t, func() { a.composerControls(c, t) })
 						ui.Spacer(c)
 						if t.local() && a.iconButton(c, "attach", icPaperclip, "Attach files", false).Clicked() {
 							a.pickFiles()
 						}
-						a.sendButton(c, t, !ahead)
+						a.sendControl(c, t, !ahead)
 					})
 				})
 				if dragOver {
@@ -1159,14 +1160,7 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 	live := t.View.Live()
 	working := live && empty
 	if live && !empty {
-		stop := a.tip(c, ui.ButtonBase(c.Key("stop")).Label("Stop"), "Stop the agent").Size(30, 30).Radius(15).Center().
-			Cursor(ui.CursorPointer).Border(1, palette.border).Margin(0, 4, 0, 0)
-		if stop.Hovered() {
-			stop.Background(palette.hover)
-		}
-		if stop.Children(func() { ui.Box(c).Size(10, 10).Radius(2).Background(palette.text) }).Clicked() {
-			a.backend.Interrupt(t.env, t.id())
-		}
+		a.stopButton(c, t)
 	}
 	label := "Send"
 	if working {
@@ -1191,17 +1185,95 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 			ui.Icon(c, icArrowUp).FontSize(16)
 		}
 	})
-	// ⌘⏎ is how a code block sends: with a block open, it doesn't stop
-	// the agent.
 	clicked := send.Clicked()
 	if clicked || keys && c.Shortcut(ui.Cmd, ui.KeyEnter) {
-		switch {
-		case !working:
-			a.send(t)
-		case clicked || !a.code.on:
-			a.backend.Interrupt(t.env, t.id())
-		}
+		a.sendOrStop(t, clicked)
 	}
+}
+
+// sendOrStop is what Send does, clicked or by ⌘⏎: it sends the draft, or
+// with none stops the agent at work. ⌘⏎ is how a code block sends: with a
+// block open, it doesn't stop the agent.
+func (a *app) sendOrStop(t thread, clicked bool) {
+	switch {
+	case !t.View.Live() || a.message(t) != "":
+		a.send(t)
+	case clicked || !a.code.on:
+		a.backend.Interrupt(t.env, t.id())
+	}
+}
+
+// stopButton stops the agent at work, beside Send while the composer holds
+// a message, or beside a plugin's Send whatever that draws.
+func (a *app) stopButton(c *ui.Context, t thread) {
+	stop := a.tip(c, ui.ButtonBase(c.Key("stop")).Label("Stop"), "Stop the agent").Size(30, 30).Radius(15).Center().
+		Cursor(ui.CursorPointer).Border(1, palette.border).Margin(0, 4, 0, 0)
+	if stop.Hovered() {
+		stop.Background(palette.hover)
+	}
+	if stop.Children(func() { ui.Box(c).Size(10, 10).Radius(2).Background(palette.text) }).Clicked() {
+		a.backend.Interrupt(t.env, t.id())
+	}
+}
+
+// sendControl is Send, Glitched's or a plugin's that replaces it. Beside a
+// plugin's, Glitched keeps its own Stop while the agent works, and ⌘⏎
+// sends and stops as it does with Glitched's: a plugin that draws nothing
+// never takes away the way to stop a run, and one that fails gives way to
+// Glitched's Send.
+func (a *app) sendControl(c *ui.Context, t thread, keys bool) {
+	box := func() ui.Element { return ui.Row(c).Key("send-plugin").AlignItems(ui.Center) }
+	ctx := func(r plugins.ThreadRecord) any {
+		return composerSend{Thread: r, Draft: a.message(t) != "", Working: t.View.Live()}
+	}
+	if !a.pluginComponent(c, box, "composer.send", composerKey(t), &t, ctx) {
+		a.sendButton(c, t, keys)
+		return
+	}
+	if t.View.Live() {
+		a.stopButton(c, t)
+	}
+	if keys && c.Shortcut(ui.Cmd, ui.KeyEnter) {
+		a.sendOrStop(t, false)
+	}
+}
+
+// composerSend is the context of composer.send.
+type composerSend struct {
+	Thread plugins.ThreadRecord `json:"thread"`
+	// Draft is whether the composer holds something to send.
+	Draft bool `json:"draft"`
+	// Working is whether the agent runs a turn, which Send stops when
+	// there's nothing to send.
+	Working bool `json:"working"`
+}
+
+// composerKey keys the composer's components by its thread's id, or the
+// draft's.
+func composerKey(t thread) string {
+	if t.id().IsZero() {
+		return "draft"
+	}
+	return t.id().String()
+}
+
+// submitEffect is composer.submit: it sends what the open composer holds,
+// as Send does, in the thread it names, or with none in the new thread's
+// draft. It never sends what the plugin wrote: only the user's draft.
+func (a *app) submitEffect(args json.RawMessage) (any, error) {
+	var ref struct{ Thread string }
+	if err := json.Unmarshal(args, &ref); err != nil {
+		return nil, err
+	}
+	t := a.current()
+	if a.router.Path() != "/" || ref.Thread != t.id().String() && !(ref.Thread == "" && t.id().IsZero()) {
+		return nil, fmt.Errorf("the composer of %q isn't open", ref.Thread)
+	}
+	if a.message(t) == "" {
+		return nil, errors.New("the composer holds nothing to send")
+	}
+	a.send(t)
+	return nil, nil
 }
 
 // draftKey takes the draft's keys before the text area does, as T3 Code's
@@ -1235,11 +1307,11 @@ func (a *app) draftKey(t thread) func(ui.TextKey) bool {
 	}
 }
 
-func (a *app) composerControls(c *ui.Context) {
+func (a *app) composerControls(c *ui.Context, t thread) {
 	a.modelPicker(c)
 	ui.Box(c).Size(1, 16).Background(palette.border).Margin(0, 4)
 
-	a.accessPicker(c)
+	a.accessControl(c, t)
 }
 
 // send sends the draft in the thread, creating it first when it's the

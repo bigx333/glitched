@@ -361,10 +361,10 @@ type Slot = "thread.header" | "thread.row" | "sidebar.footer";
 /**
  * Glitched's components: a place with `replaces: true` at one draws it in
  * place of the built-in plugin, once ui.replace is granted. Needs
- * contractVersion 2. approval.card, question.card, composer.access,
- * composer.send, settings.plugins, settings.servers, settings.providers
- * and confirm.destructive are off limits: a plugin that names one doesn't
- * load.
+ * contractVersion 2. approval.card, question.card, settings.plugins,
+ * settings.servers, settings.providers and confirm.destructive are off
+ * limits: a plugin that names one doesn't load. composer.send needs
+ * threads:write, and composer.access threads:access, as well.
  */
 type Component =
   | "thread.header.actions"
@@ -376,7 +376,9 @@ type Component =
   | "settings.page.general"
   | "settings.page.appearance"
   | "settings.page.about"
-  | "settings.page.keybindings";
+  | "settings.page.keybindings"
+  | "composer.send"
+  | "composer.access";
 
 /** The settings glitched.app.settings reads and sets, by settings.json's names. */
 interface AppSettings {
@@ -436,7 +438,29 @@ type ComponentContext =
   | KeybindingsPageContext
   | RowActionsContext
   | ProjectStripContext
+  | ComposerSendContext
+  | ComposerAccessContext
   | Record<string, never>;
+
+/** The context of composer.send. Glitched keeps its own Stop beside it while the agent works. */
+interface ComposerSendContext {
+  thread: ThreadRecord;
+  /** The composer holds something to send: composer.submit sends it. */
+  draft: boolean;
+  /** The agent runs a turn, which threads.interrupt stops. */
+  working: boolean;
+}
+
+/** The context of composer.access. Glitched keeps its own sign of the access beside it. */
+interface ComposerAccessContext {
+  thread: ThreadRecord;
+  /** The level in force, one of levels' names. */
+  access: AccessLevel;
+  /** What the access picker offers, which threads.setAccess takes. */
+  levels: { name: AccessLevel; about: string }[];
+}
+
+type AccessLevel = "Ask for approval" | "Approve for me" | "Full access";
 
 /** The context of thread.row.actions, a pointed-at sidebar row's actions. */
 interface RowActionsContext {
@@ -586,6 +610,8 @@ declare const glitched: {
   composer: {
     /** A new thread's draft in workspace, or, with a thread, the draft in its composer (needs threads:read). */
     draft(text: string, where?: string | { thread: string }): Promise<void>;
+    /** Sends what the open composer holds, as Send does: the thread's, or a new thread's with "". Needs threads:write. */
+    submit(thread: string): Promise<void>;
   };
   threads: {
     list(): Promise<ThreadRecord[]>;
@@ -608,6 +634,8 @@ declare const glitched: {
      * else, is refused. Needs threads:write.
      */
     configure(thread: string, options: { model?: string; effort?: "low" | "medium" | "high" | "max"; fast?: boolean }): Promise<void>;
+    /** The access of its next turns, one the access picker offers; with "", the default for new threads. Needs threads:access. */
+    setAccess(thread: string, access: AccessLevel): Promise<void>;
   };
   models: {
     /** The models the composer's picker offers, and the efforts. */

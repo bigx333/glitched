@@ -62,6 +62,7 @@ var capRisks = map[string]string{
 	"threads:write":  "Agents it starts work with the access you gave them.",
 	"settings:write": "It can change how Glitched looks and behaves, without asking again.",
 	"ui.replace":     "What you see in those parts is the plugin's, not Glitched's.",
+	"threads:access": "It draws the control that sets what agents may do, and can give them Full access to your computer without the hold Glitched asks for.",
 }
 
 // capRisk is what granting the capability risks, "" for a lighter grant.

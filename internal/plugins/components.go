@@ -21,6 +21,10 @@ type Component struct {
 	// may replace it: widget.Locked, which also keeps it from being placed
 	// as a native widget.
 	Locked string
+	// Native is a component whose built-in Glitched draws itself, rather
+	// than a built-in plugin: a replacement that fails gives way to it,
+	// rather than to its own last drawing.
+	Native bool
 }
 
 // Components are the parts of Glitched's UI a plugin may replace, and the
@@ -36,10 +40,10 @@ var Components = []Component{
 	{Name: "sidebar.projects", Provides: "projectStrip", Needs: "threads:read", About: "The sidebar's project strip: All, a chip per project that filters the inbox to it, and Add project."},
 	{Name: "thread.row.actions", Provides: "rowActions", Needs: "threads:write", About: "A sidebar row's actions, shown while it's pointed at: snooze, with its popover of times, settle, or back to the inbox."},
 	{Name: "thread.panel.diff", Provides: "diffPanel", Needs: "threads:read", About: "The diff panel: its header, and its list of changed files over the native diff.body."},
+	{Name: "composer.send", Provides: "composerSend", Needs: "threads:write", Native: true, About: "The composer's Send button, which stops the agent while it works. While it draws, Glitched keeps its own Stop beside it as a turn runs."},
+	{Name: "composer.access", Provides: "composerAccess", Needs: "threads:access", Native: true, About: "The access picker, which sets what agents may do in a thread. While it draws, Glitched keeps its own sign of the access in force beside it."},
 	{Name: "approval.card", Locked: widget.Locked["approval.card"]},
 	{Name: "question.card", Locked: widget.Locked["question.card"]},
-	{Name: "composer.access", Locked: widget.Locked["composer.access"]},
-	{Name: "composer.send", Locked: widget.Locked["composer.send"]},
 	{Name: "settings.plugins", Locked: widget.Locked["settings.plugins"]},
 	{Name: "settings.servers", Locked: widget.Locked["settings.servers"]},
 	{Name: "settings.providers", Locked: widget.Locked["settings.providers"]},
@@ -53,6 +57,12 @@ func component(name string) (Component, bool) {
 		return Component{}, false
 	}
 	return Components[i], true
+}
+
+// Native reports whether Glitched draws the component's built-in itself.
+func Native(name string) bool {
+	c, _ := component(name)
+	return c.Native
 }
 
 // checkReplace says why the place p may not replace the component it names.

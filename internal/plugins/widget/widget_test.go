@@ -118,7 +118,7 @@ func TestANativeWidgetIsOneGlitchedOffers(t *testing.T) {
 	bad := map[string]string{
 		`{"body": {"type": "native", "name": "terminal"}}`:                                       `no native widget "terminal"`,
 		`{"body": {"type": "native", "name": "approval.card"}}`:                                  "approval.card is off limits to plugins: an approval answers for you",
-		`{"body": {"type": "native", "name": "composer.send"}}`:                                  "composer.send is off limits to plugins",
+		`{"body": {"type": "native", "name": "settings.servers"}}`:                               "settings.servers is off limits to plugins",
 		`{"body": {"type": "native", "name": "diff.body", "props": {"thread": "t1"}}}`:           `diff.body takes no prop "thread"`,
 		`{"body": {"type": "native", "name": "diff.body", "props": {"path": 3}}}`:                "diff.body's prop path is a string",
 		`{"body": {"type": "native", "name": "diff.body", "onClick": "x"}}`:                      "a native has no onClick",

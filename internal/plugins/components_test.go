@@ -227,6 +227,7 @@ func TestOffLimitsComponentsNeverLoad(t *testing.T) {
 	state := t.TempDir()
 	for name, manifest := range map[string]string{
 		"approval": replacerManifest("approval", "approval.card", "2"),
+		"servers":  replacerManifest("servers", "settings.servers", "2"),
 		"send":     replacerManifest("send", "composer.send", "2"),
 		"nowhere":  replacerManifest("nowhere", "no.such.thing", "2"),
 		"old":      replacerManifest("old", "thread.header.actions", "1"),
@@ -238,12 +239,13 @@ func TestOffLimitsComponentsNeverLoad(t *testing.T) {
 		signAsOwn(t, state, dst)
 	}
 	h := openBuiltIn(t, state, nil, "")
-	for _, id := range []string{"approval", "send"} {
+	for _, id := range []string{"approval", "servers", "send"} {
 		h.SetGranted(id, "ui.replace", true)
 	}
 	want := map[string]string{
 		"approval": "approval.card, which is off limits to plugins",
-		"send":     "composer.send, which is off limits to plugins",
+		"servers":  "settings.servers, which is off limits to plugins",
+		"send":     "",
 		"nowhere":  "which is no component",
 		"old":      "needs contractVersion 2",
 		"added":    `takes over with "replaces": true`,
