@@ -227,7 +227,9 @@ func (s *Session) Retry() {
 	s.queue = nil
 	s.state = nil
 	s.broken = false
-	s.rows = rowSet{} // what an earlier start asked for, or drew, goes
+	// What an earlier start asked for goes; what it drew shows till the
+	// new start's view draws its rows again.
+	s.rows = rowSet{lists: s.rows.lists, rev: s.rows.rev, stamp: s.rows.stamp}
 	gen := s.gen
 	s.mu.Unlock()
 	s.Err = nil
