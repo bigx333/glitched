@@ -201,3 +201,124 @@ func TestACopyDrawnButNotYetShownIsNotWaitedFor(t *testing.T) {
 		t.Fatalf("DrawFirst waited till its deadline for a drawing already posted: a %q", text(s, "a"))
 	}
 }
+
+// posted waits till the worker is idle with n callbacks posted to the UI
+// thread and not yet run.
+func posted(t *testing.T, h *Host, u *uiThread, n int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !h.Idle() || len(u.q) != n {
+		if time.Now().After(deadline) {
+			t.Fatalf("want %d callbacks posted, have %d", n, len(u.q))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+const contextModule = `export function place({ items }) {
+	if (items.some((i) => i.context === "bad")) throw new Error("bad context")
+	return items.map(({ context }) => context === "null" ? null : { type: "text", text: context })
+}`
+
+// A drawing that failed for a version the copy has moved past doesn't end
+// a first draw of the version shown.
+func TestAFailureOfAnOlderVersionDoesNotEndTheFirstDraw(t *testing.T) {
+	h, s, u := placeTest(t, contextModule)
+	settled(t, h, u, "the first drawing", func() bool { return s.Rev > 0 })
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "1", Context: "bad"}})
+	posted(t, h, u, 1)
+	s.DrawFirst("badge", []PlaceItem{{Key: "a", Version: "2", Context: "good"}}, []string{"a"}, time.Now().Add(2*time.Second))
+	if text(s, "a") != "good" || s.Err != nil {
+		t.Fatalf("the first draw of version 2 ended with a %q, error %v", text(s, "a"), s.Err)
+	}
+}
+
+// A null drawn for a version the copy has moved past doesn't clear its
+// last drawing while the version shown is drawn.
+func TestANullForAnOlderVersionKeepsTheLastDrawing(t *testing.T) {
+	h, s, u := placeTest(t, contextModule)
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "1", Context: "first"}})
+	settled(t, h, u, "a drawn", func() bool { return text(s, "a") == "first" })
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "2", Context: "null"}})
+	posted(t, h, u, 1)
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "3", Context: "third"}})
+	(<-u.q)()
+	if got := text(s, "a"); got != "first" {
+		t.Fatalf("while version 3 is drawn, a shows %q, not its last drawing", got)
+	}
+	settled(t, h, u, "version 3 drawn", func() bool { return text(s, "a") == "third" })
+}
+
+// listModule draws each copy as a list of two rows, and counts timers in
+// its state.
+const listModule = `export function init() { return { state: 0 } }
+export function update({ state, event }) { return { state: event.kind === "timer" ? state + 1 : state } }
+export function place({ items }) {
+	return items.map(({ key }) => ({ type: "list", id: "l", label: key, height: 120,
+		items: [{ key: "r", label: "first " + key, version: "1" }, { key: "r2", label: "second " + key, version: "1" }] }))
+}`
+
+// listRow is the first row of copy key's list as the plugin drew it.
+func listRow(t *testing.T, s *Session, key string) string {
+	t.Helper()
+	view := s.PlaceView("badge", key)
+	if view == nil || view.Type != "list" || len(view.Items) == 0 {
+		t.Fatalf("copy %q has no list: %+v, error %v", key, view, s.Err)
+	}
+	if n := s.Row(RowAt{List: view.ID, Place: &PlaceRef{ID: "badge", Key: key, Context: s.PlaceContext("badge", key)}}, view.Items[0]); n != nil {
+		return n.Text
+	}
+	return ""
+}
+
+// Rows that failed for an earlier view leave no error once a newer one is
+// shown.
+func TestRowsThatFailedForAnOlderViewLeaveNoError(t *testing.T) {
+	h, s, u := placeTest(t, listModule+`
+export function rows({ state, keys }) {
+	if (state === 0) throw new Error("rows failed")
+	return keys.map((k) => ({ type: "text", text: k + " at " + state }))
+}`)
+	a, b := PlaceItem{Key: "a", Version: "1"}, PlaceItem{Key: "b", Version: "1"}
+	s.SetItems("badge", []PlaceItem{a})
+	settled(t, h, u, "a drawn", func() bool { return s.PlaceView("badge", "a") != nil })
+	listRow(t, s, "a")
+	posted(t, h, u, 1)
+	s.Notify(AppEvent{Kind: "timer"})
+	s.DrawFirst("badge", []PlaceItem{a, b}, []string{"b"}, time.Now().Add(2*time.Second))
+	if s.PlaceView("badge", "b") == nil || s.Err != nil {
+		t.Fatalf("after b was drawn first: b %+v, error %v", s.PlaceView("badge", "b"), s.Err)
+	}
+	(<-u.q)()
+	u.until(t, "a's row drawn for the new view", func() bool { return listRow(t, s, "a") == "r at 1" })
+	if s.Err != nil {
+		t.Fatalf("rows that failed for the earlier view: %v", s.Err)
+	}
+}
+
+// A view that changes partway through a frame, as a copy drawn first
+// changes it, keeps the rows the frame showed before it.
+func TestAListKeepsItsRowsThroughTwoFirstDraws(t *testing.T) {
+	h, s, u := placeTest(t, `export function place({ items }) { return items.map(({ key }) => ({ type: "text", text: key })) }
+export function rows({ keys, place }) { return keys.map((k) => ({ type: "text", text: place.key + ":" + k })) }`)
+	a, b, c := PlaceItem{Key: "a", Version: "1"}, PlaceItem{Key: "b", Version: "1"}, PlaceItem{Key: "c", Version: "1"}
+	s.SetItems("badge", []PlaceItem{a})
+	settled(t, h, u, "a drawn", func() bool { return text(s, "a") == "a" })
+	row := func(key string) string {
+		if n := s.Row(RowAt{List: "l", Place: &PlaceRef{ID: "badge", Key: key}}, widget.ListItem{Key: "r"}); n != nil {
+			return n.Text
+		}
+		return ""
+	}
+	u.until(t, "a's row drawn", func() bool { return row("a") == "a:r" })
+	// One frame shows a, then b drawn first; the next, c drawn first,
+	// then a.
+	s.DrawFirst("badge", []PlaceItem{a, b}, []string{"b"}, time.Now().Add(2*time.Second))
+	row("b")
+	settled(t, h, u, "the frame's drawings", func() bool { return true })
+	s.DrawFirst("badge", []PlaceItem{c, a, b}, []string{"c"}, time.Now().Add(2*time.Second))
+	row("c")
+	if got := row("a"); got != "a:r" {
+		t.Fatalf("a, shown throughout, lost its row: %q", got)
+	}
+}

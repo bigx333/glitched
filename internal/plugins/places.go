@@ -247,16 +247,17 @@ func (s *Session) publish(d placeDraw) {
 		return
 	}
 	for id, views := range d.drawn {
-		// A copy shown since the drawing began keeps its last drawing
-		// till one has it; a copy drawn null has none.
+		// A copy drawn for the version shown has that drawing, none if
+		// null; one shown or changed since the drawing began keeps its
+		// last drawing till one is for its version.
 		for _, it := range s.places.items[id] {
 			k := [2]string{id, it.Key}
-			if v, ok := d.asked[k]; ok {
+			if d.asked[k] == it.Version {
 				if s.places.answered == nil {
 					s.places.answered = map[[2]string]string{}
 				}
-				s.places.answered[k] = v
-			} else if n := s.places.views[id][it.Key]; n != nil {
+				s.places.answered[k] = it.Version
+			} else if n := s.places.views[id][it.Key]; n != nil && views[it.Key] == nil {
 				views[it.Key] = n
 			}
 		}
@@ -323,13 +324,19 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 		s.mu.Unlock()
 	}()
 	s.SetItems(place, shown)
+	// The wait is over with a drawing of this generation that drew, or
+	// failed to draw, every copy waited on at its version.
 	drew := func(d placeDraw) bool {
 		s.publish(d)
-		done := true
-		for k, v := range want {
-			done = done && d.asked[k] == v
+		if !s.current(d.gen) {
+			return false
 		}
-		return d.failed != nil || done
+		for k, v := range want {
+			if d.asked[k] != v {
+				return false
+			}
+		}
+		return true
 	}
 	if posted != nil && drew(*posted) {
 		return

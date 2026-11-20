@@ -50,7 +50,11 @@ type rowSet struct {
 	drawn map[rowKey]map[string]drawnRow
 	asked map[rowKey]map[string]string
 	shown map[rowKey]map[string]bool
-	rev   int
+	// wasShown are those asked before the last change: a view that
+	// changes partway through a frame leaves the rows the frame asked
+	// for before it there.
+	wasShown map[rowKey]map[string]bool
+	rev      int
 	// seen stamps each row as a list last asked for it: past MaxRowsKept
 	// drawn, a list keeps those it asked for last.
 	seen  map[rowKey]map[string]int
@@ -121,7 +125,7 @@ func (rs *rowSet) forget(rev int) {
 	seen := map[rowKey]map[string]int{}
 	for k, rows := range rs.drawn {
 		for key := range rows {
-			if !rs.shown[k][key] {
+			if !rs.shown[k][key] && !rs.wasShown[k][key] {
 				delete(rows, key)
 				continue
 			}
@@ -138,6 +142,7 @@ func (rs *rowSet) forget(rev int) {
 		rs.drawn = map[rowKey]map[string]drawnRow{}
 	}
 	rs.seen = seen
+	rs.wasShown = rs.shown
 	rs.asked, rs.shown, rs.rev = map[rowKey]map[string]string{}, map[rowKey]map[string]bool{}, rev
 }
 
@@ -185,6 +190,7 @@ func (rs *rowSet) take() map[rowKey]*rowWant {
 func (s *Session) drawRows(gen int, state json.RawMessage, context any, want map[rowKey]*rowWant) {
 	drawn := map[rowKey]map[string]drawnRow{}
 	var failed error
+	failedRev := 0 // the view the rows that failed were asked for
 	for k, w := range want {
 		rows := map[string]drawnRow{}
 		drawn[k] = rows
@@ -192,6 +198,9 @@ func (s *Session) drawRows(gen int, state json.RawMessage, context any, want map
 			batch := keys[:min(len(keys), MaxRowBatch)]
 			keys = keys[len(batch):]
 			nodes, err := s.callRows(k.list, w.place, batch, state, context)
+			if err != nil && failed == nil {
+				failedRev = w.rev
+			}
 			if err != nil && nodes == nil {
 				// Its rows are asked again with the next view.
 				failed = cmp.Or(failed, fmt.Errorf("rows of %s: %w", k.list, err))
@@ -207,7 +216,8 @@ func (s *Session) drawRows(gen int, state json.RawMessage, context any, want map
 		if s.closed || !s.current(gen) {
 			return
 		}
-		if failed != nil {
+		// Rows that failed for an earlier view say nothing of this one's.
+		if failed != nil && failedRev == s.Rev {
 			s.Err = failed
 		}
 		rs := &s.rows
