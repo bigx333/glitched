@@ -57,6 +57,9 @@ type Style struct {
 	// fire gives the plugin a change. Nil, outside a component, says it
 	// draws only in one.
 	Native func(c *ui.Context, n *widget.Node, fire func(value any))
+	// Rows is the row of a list's item as the plugin drew it, nil before
+	// it did: the list asks for the rows in view alone. Nil draws none.
+	Rows func(list string, it widget.ListItem) *widget.Node
 }
 
 // color is a theme token's color.
@@ -90,6 +93,8 @@ type control struct {
 	seen string
 	// last is the number of the last change sent.
 	last int
+	// list is a list's place among its rows.
+	list *listView
 }
 
 // Sync takes the values a new view gives, once per view: rev is the
@@ -119,7 +124,7 @@ func (cs *Controls) Sync(v *widget.View, rev, processed int) {
 		if n.Type == "dialog" || n.Popover != nil {
 			delete(cs.dismissed, n.ID)
 		}
-		if n.Type != "input" && n.Type != "toggle" && n.Type != "select" && n.Type != "tabs" {
+		if n.Type != "input" && n.Type != "toggle" && n.Type != "select" && n.Type != "tabs" && n.Type != "list" {
 			return
 		}
 		live[n.ID] = true
@@ -214,6 +219,14 @@ func View(c *ui.Context, v *widget.View, cs *Controls, st Style, md *markdown.Op
 		return
 	}
 	r := renderer{cs: cs, st: st, md: md, dispatch: dispatch}
+	v.Body.Walk(func(n *widget.Node) {
+		if n.Type == "list" && n.Input != "" {
+			if r.inputs == nil {
+				r.inputs = map[string]*widget.Node{}
+			}
+			r.inputs[n.Input] = n
+		}
+	})
 	r.node(c, v.Body, 0)
 }
 
@@ -222,6 +235,13 @@ type renderer struct {
 	st       Style
 	md       *markdown.Options
 	dispatch func(plugins.UIEvent, map[string]any) int
+	// inputs are the lists the inputs of the view move, by the input's id.
+	inputs map[string]*widget.Node
+	// row is the list's row being drawn, and hovered whether the pointer
+	// is over it; mods are the keys held as a list is submitted.
+	row     *plugins.RowRef
+	hovered bool
+	mods    []string
 }
 
 func key(n *widget.Node, i int) string {
@@ -243,7 +263,7 @@ func (r *renderer) fire(n *widget.Node, h *widget.Handler, typ string, value any
 	if h == nil || r.dispatch == nil {
 		return
 	}
-	seq := r.dispatch(plugins.UIEvent{Type: typ, Handler: h.Name, Node: n.ID, Value: value, Payload: h.Payload}, r.cs.Values())
+	seq := r.dispatch(plugins.UIEvent{Type: typ, Handler: h.Name, Node: n.ID, Value: value, Payload: h.Payload, Row: r.row, Modifiers: r.mods}, r.cs.Values())
 	if ctl := r.cs.m[n.ID]; ctl != nil && typ == "change" && seq > 0 {
 		ctl.last = seq
 	}
@@ -260,7 +280,13 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 	// Stateful widgets take their key before they're built: a key set
 	// after is a panic.
 	kc := c.Key(key(n, i))
+	if n.When == "hover" && !r.hovered || n.When == "idle" && r.hovered {
+		return
+	}
 	switch n.Type {
+	case "list":
+		r.list(kc, n)
+		return
 	case "column", "row":
 		newBox := ui.Column
 		if n.Type == "row" {
@@ -459,7 +485,9 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			if e.Changed() {
 				r.fire(n, n.OnChange, "change", ctl.text)
 			}
-			if !n.Multiline && e.Submitted() {
+			if l := r.inputs[n.ID]; l != nil {
+				r.drive(c, e, l)
+			} else if !n.Multiline && e.Submitted() {
 				r.fire(n, n.OnSubmit, "submit", ctl.text)
 			}
 		}

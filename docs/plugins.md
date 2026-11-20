@@ -50,6 +50,7 @@ cp -R examples/plugins/snippets ~/.glitched/plugins/
 | `word-tools` | tools for agents, with a database |
 | `repo-watch` | a headless service on a timer that runs `git`, keeps its checks in SQLite, and answers its page |
 | `quiet-header` | a component replaced: the thread header's buttons as a smaller row, with the built-in as the fallback |
+| `long-list` | a list of 10,000 rows, drawn as they scroll into view, moved from a search field |
 
 ## plugin.json
 
@@ -137,6 +138,7 @@ The window never waits for a plugin. One worker per session calls the plugin, on
 | `view` | `{page, tab?, context?, state, values}` | `{title?, subtitle?, body}` | after `init`, and once after each batch of events |
 | `update` | `{page, tab?, context?, state, event, values}` | `{state?}` | each event; leave `state` out to keep it |
 | `place` | `{id, at, state, items: [{key, context}]}` | a widget or `null` per item, in order | as the copies shown, their contexts or the app state change |
+| `rows` | `{list, keys, state, page, tab?, context?, place?}` | a widget or `null` per key, in order | as a [list](#lists) shows rows not drawn for its view |
 | `command` | `{id, args}` | nothing | a palette command or shortcut, or a menu item (see [Menus](#menus)) |
 | `page` | `{id}` | mygo-plugin's `Page` | stock pages only |
 | `tool` | `{name, args, call: {thread}}` | the tool's answer | an agent calls a tool (in the engine) |
@@ -156,6 +158,7 @@ Every export may be `async`. `context` is the thread record of a tab's thread. S
 - `handler` and `payload` are what the widget named (a name, or `{handler, payload}` with up to 4 KiB of JSON). No function crosses into the app.
 - `values` maps each input, toggle, select and tabs of the view, by `id`, to what it held when the event happened.
 - `place` is set for a widget in a place: `{id, at, key, context}` of the copy it was in.
+- `row` is set for a widget in a [list's](#lists) row: `{list, key}`. `modifiers` are the keys held as a list is submitted: `cmd` (Command on macOS, Control elsewhere), `shift`, `alt` and `ctrl` (macOS only).
 - While a `change` waits last in line, a later `change` of the same widget replaces it. A change never replaces one before a click or a submit. At most 64 events wait.
 
 ### Keyed widgets
@@ -196,12 +199,44 @@ Every widget is `{type, id?, ...}`. Interactive widgets and dialogs need an `id`
 | `menu` | `label`, `options`, `disabled`, `tooltip`, `style` (`default` `outline`); for `outline`: `icon`, `compact` | `onChange` (the chosen option's value) |
 | `dialog` | `title`, `open`, `children` | `onClose` (Escape, a click outside) |
 | `native` | `name`, `props`, `grow` (see [Native widgets](#native-widgets)) | what the native fires |
+| `list` | `label`, `items`, `rowHeight`, `grow` or `height`, `gap`, `padding`, `value`, `controlled`, `input`, `submitOnClick` (see [Lists](#lists)) | `onChange` (the key chosen), `onSubmit` (the key submitted) |
 
 `ghost` and `outline` buttons and menus are drawn as Glitched's header draws its own. A `ghost` button is a square that shows only its `icon` (it needs one), on while `active`, with a `badge` of up to 4 characters over its corner. An `outline` one is a hairline pill with its `icon` and `label`, or the icon alone when `compact`; an `outline` menu adds a chevron. `tooltip` (up to 200 bytes) shows on hover and is the control's name to assistive tools; without one, `label` is. `options` are strings, or `{value, label}`, 1 to 200; a menu's may also be `{separator: true}`, a line between two options. `padding` is 0 to 64, as one number for every side, two for top and bottom then the sides, or four for top, right, bottom and left. A `list` card is Settings' list of rows, with a line between its children. `keys` are drawn as keycaps, as Keybindings shows a shortcut. A `link` opens its `href` in the browser. A `search` input has a magnifier and a clear button. A `bordered` button is Settings' secondary button, with its `icon` before the label. A `progress` button, once clicked, shows a spinner and takes no clicks until the plugin has drawn after the click, so a long `update` (as a commit) shows it runs. A `count` badge is the muted pill a heading's count shows in. A `switch` toggle and `control` tabs are Settings' switch and segmented control; their `label` is only their name to assistive tools. A `swatch` is a dot of its own `color`, the one raw color a widget takes, ringed while `active`; the ring moves to the next one made active, as Appearance's accents do. `segmented` tabs are drawn as the diff panel's Unified and Split switch; their options may each be `disabled`, with a `tooltip` saying why. An `item` is a list's row, as the diff panel's files: its `icon` and `text`, `active` when it is the one selected, its `trailing` widgets after the text, and, while the pointer is over it, its `actions` in their place. `color` and `background` are theme tokens, never raw values: `$text`, `$text.muted`, `$text.faint`, `$accent`, `$success`, `$warning`, `$danger`, `$border`, `$surface`. A `ghost` button's `color` may also be `#rrggbb`, as the sidebar's row actions are tinted.
 
 The sidebar's widgets. A `ghost` button with `children` (`text`, `tile`, `icon`, `badge` and `spacer` only) draws them in place of its icon, with its `padding` and `gap`, as a project's chip; its `label` is then its name to assistive tools. Its `popover` is a `column` of a `width` (120 to 480) that hangs from the button in Glitched's frosted panel while `open`: under it, or above it near the window's bottom. Escape or a click outside fires `onClose`, and the popover stays shut until the plugin draws again, so keep `open` in your state and clear it there. A `row` or `column` with `onClick` is a list row, as the popover's choices: it lights up under the pointer and is clicked as a whole. `contextMenu` opens Glitched's own menu on a right click, with what plugins add to it: `thread:<id>` is a thread's, `project:<key>` a project's (a key from `projects.list`); it needs `threads:read`. A `tile` is a project's mark, its `icon` white on its `color`, as `projects.list` gives them. `opacity` dims a button, as the strip dims the projects filtered out.
 
-A view is at most 1 MiB, 2000 widgets, 24 deep, and 32 KiB per string. A place's copy is at most 200 widgets, a component's 2000. A view past a limit is refused whole: the last good one stays, with the error.
+A view is at most 1 MiB, or 4 MiB with a list, 2000 widgets, 24 deep, and 32 KiB per string. A place's copy is at most 200 widgets, a component's 2000. A view past a limit is refused whole: the last good one stays, with the error.
+
+### Lists
+
+A `list` is a long list, as the sidebar's threads or a palette's results. The view names every item, as data; Glitched draws the rows in view, and asks the plugin's `rows` export for those alone. A list of 10,000 rows costs a screenful of rows to draw, not 10,000.
+
+```js
+export function view({ state }) {
+  const items = state.threads.map((t) => ({ key: t.id, label: t.title, version: t.updatedAt, thread: t.id }));
+  return { body: { type: "list", id: "threads", label: "Threads", items, grow: true,
+    value: state.open, controlled: true, onChange: "open" } };
+}
+
+export function rows({ list, keys, state }) {
+  return keys.map((key) => ({ type: "row", gap: 9, padding: [0, 6, 0, 8], grow: true, children: [
+    { type: "text", text: state.titles[key] },
+    { type: "spacer" },
+    { type: "text", text: state.ago[key], style: "muted", size: "small", when: "idle" },
+    { type: "button", id: "settle", style: "ghost", icon: "check-circle", tooltip: "Settle", when: "hover", onClick: "settle" },
+  ] }));
+}
+```
+
+**Items.** Up to 20,000, each `{key, label, version?, height?, header?, thread?}`. `key` (1 to 256 bytes, unique in the list) is the item's identity: the choice, `rows` and the events name it by its key, so the choice stays with its item as items come, go and move. `label` (1 to 1024 bytes) is the row's name to assistive tools. `height` (8 to 400 points) is the row's; without it, the list's `rowHeight`, else 32. A `header` heads a section: it is never chosen, and the keys move past it. `thread` is a thread's id: a right click on the row opens Glitched's menu of that thread, with what plugins add to it; it needs `threads:read`. Items are data, not widgets: they count toward neither the 2000 widgets nor the depth, and a view with a list may be 4 MiB.
+
+**Size.** A list either grows into the room its parent column leaves (`grow`), or is as tall as its rows up to `height` (8 to 2000 points), past which it scrolls. One of them is needed: a list draws only the rows in it.
+
+**Rows.** Glitched calls `rows({list, keys, state})` with the keys of the rows it shows that it has no drawing of for the plugin's current view, up to 200 at a time, after the view; a list in a place's copy gets that copy as `place`. It answers a widget or `null` per key, in order. A row is drawn again when its item's `version` changes, or when the plugin draws a new view (its state changed), and shows its last drawing meanwhile, so rows never flicker or wait. Glitched forgets the rows no list showed since the last view. A row is at most 200 widgets, and holds nothing that keeps a value or opens: no input, toggle, select, tabs, dialog, popover, progress button, list or native widget. Its buttons and clicked rows fire as anywhere, with `event.row` naming the list and the row's key. A widget of a row with `when: "hover"` shows only while the row is pointed at, and one with `when: "idle"` only while it isn't: a row swaps its time for its actions with no call to the plugin. `when` is a row's alone.
+
+**The choice.** Glitched keeps it, as an input's text: `value` is the key of the item chosen (`""` for none, never a header's), with `controlled` as for [keyed widgets](#keyed-widgets). A click chooses a row; Up, Down, Home and End move the choice while the list has the keyboard, and scroll it into view. Each move fires `onChange` with the key. Enter, Cmd-Enter or a double click fires `onSubmit` with the key and the `modifiers` held. With `submitOnClick`, a click submits as well, as a palette's does. `input` names a single-line input of the view, which has no `onSubmit` of its own: Up and Down in it move the list's choice, and Enter submits it, so the keyboard stays in the search field.
+
+Glitched draws each row in its own list row, which lights up under the pointer and shows the choice, as the sidebar's rows do; the plugin draws what is in it. A `row` with `grow` fills it.
 
 ## Places and slots
 

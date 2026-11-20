@@ -1,0 +1,13 @@
+{
+  "id": "long-list",
+  "name": "Long list",
+  "description": "A list of 10,000 rows: Glitched draws the rows in view and asks the plugin for those alone.",
+  "version": "0.1.0",
+  "main": "index.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "permissions": {},
+  "contributes": {
+    "pages": [{ "id": "home", "title": "Long list", "icon": "list" }]
+  }
+}
