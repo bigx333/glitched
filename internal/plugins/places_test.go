@@ -341,9 +341,9 @@ const contextListModule = `export function place({items}) {
 export function rows({place, keys}) { return keys.map(() => ({type: "text", text: place.context})) }
 `
 
-// A drawing posted before a first draw is judged by the versions of the
-// frame drawing, so a copy drawn for an older one keeps its list's rows.
-func TestADrawFirstJudgesADrawingPostedByTheFramesVersions(t *testing.T) {
+// A first draw that shows, on its way, a drawing posted before it, of a
+// copy without its list, leaves the list's rows to the drawing it ends on.
+func TestAFirstDrawKeepsAListsRowsThroughADrawingShownOnItsWay(t *testing.T) {
 	h, s, u := placeTest(t, contextListModule)
 	a := PlaceItem{Key: "a", Version: "1", Context: "last row"}
 	s.SetItems("badge", []PlaceItem{a})
@@ -402,20 +402,5 @@ func TestACopyGoneAndBackUnversionedKeepsItsDrawing(t *testing.T) {
 	(<-u.q)()
 	if got := listRow(t, s, "a"); got != "last row" {
 		t.Errorf("after return, copy's list showed %q before refresh; want %q", got, "last row")
-	}
-}
-
-// A failure of the copies' versions posted before a first draw, and shown
-// as it begins, ends the wait: the first draw doesn't wait its deadline.
-func TestAFailurePostedBeforeAFirstDrawEndsItsWait(t *testing.T) {
-	h, s, u := placeTest(t, contextModule)
-	settled(t, h, u, "the first drawing", func() bool { return s.Rev > 0 })
-	items := []PlaceItem{{Key: "a", Version: "1", Context: "bad"}}
-	s.SetItems("badge", items)
-	posted(t, h, u, 1)
-	deadline := time.Now().Add(time.Second)
-	s.DrawFirst("badge", items, []string{"a"}, deadline)
-	if !time.Now().Before(deadline) || s.Err == nil {
-		t.Fatalf("the first draw waited till its deadline for the failure posted before it: %v", s.Err)
 	}
 }

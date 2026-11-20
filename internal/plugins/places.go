@@ -203,7 +203,12 @@ func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed
 		}
 	}
 	s.mu.Unlock()
-	s.h.opts.Post(func() { s.publish(d) })
+	s.h.opts.Post(func() {
+		s.publish(d)
+		s.mu.Lock()
+		s.dropLists()
+		s.mu.Unlock()
+	})
 }
 
 // awaitsApp reports whether the plugin id's runtime is in a call into the
@@ -264,7 +269,6 @@ func (s *Session) publish(d placeDraw) {
 		s.places.views[id] = views
 	}
 	s.Rev++
-	s.dropLists()
 	s.Processed = d.processed
 	s.Busy = s.running && (len(s.queue) > 0 || s.dirty)
 }
@@ -281,20 +285,13 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 	// Room for the drawings the worker finishes while this one is read:
 	// the one with these copies may come after another.
 	first := make(chan placeDraw, 8)
-	// The copies shown are the frame's, at its versions, before any
-	// drawing is judged against them.
-	s.mu.Lock()
-	since := s.places.shownSeq
-	shown := slices.Clone(s.places.items[place])
-	for _, it := range items {
-		if j := slices.IndexFunc(shown, func(o PlaceItem) bool { return o.Key == it.Key }); j >= 0 {
-			shown[j] = it
-		} else {
-			shown = append(shown, it)
-		}
-	}
-	s.mu.Unlock()
-	s.SetItems(place, shown)
+	// Lists go by the drawing shown as the first draw ends, not one shown
+	// on the way.
+	defer func() {
+		s.mu.Lock()
+		s.dropLists()
+		s.mu.Unlock()
+	}()
 	// A drawing the worker posted is newer than what is shown: what it
 	// answered isn't waited on.
 	s.mu.Lock()
@@ -328,11 +325,17 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 		s.mu.Unlock()
 		return
 	}
+	shown := slices.Clone(s.places.items[place])
+	for _, it := range items {
+		if j := slices.IndexFunc(shown, func(o PlaceItem) bool { return o.Key == it.Key }); j >= 0 {
+			shown[j] = it
+		} else {
+			shown = append(shown, it)
+		}
+	}
 	s.places.first = first
-	// A drawing posted since this began, shown already or not, may be the
-	// one waited on: the refresh of these copies can fail that fast.
 	posted = nil
-	if p := s.places.posted; p != nil && p.seq > since {
+	if p := s.places.posted; p != nil && p.seq > s.places.shownSeq {
 		posted = p
 	}
 	s.mu.Unlock()
@@ -341,6 +344,7 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 		s.places.first = nil
 		s.mu.Unlock()
 	}()
+	s.SetItems(place, shown)
 	// The wait is over with a drawing of this generation that drew, or
 	// failed to draw, every copy waited on at its version.
 	drew := func(d placeDraw) bool {
