@@ -47,6 +47,17 @@ type placeSet struct {
 	// tried are the copies DrawFirst waited on, by place and key, with
 	// their version: it waits once per version.
 	tried map[[2]string]string
+	// cache is the worker's: each copy's last drawing, by place and key,
+	// with the version and the state it was drawn at. A copy whose
+	// version and state are the same isn't drawn again.
+	cache      map[string]map[string]placed
+	cacheState string
+	cacheGen   int
+}
+
+type placed struct {
+	version string
+	node    *widget.Node
 }
 
 // App is the plugin id's app session, started if it isn't: one per
@@ -116,22 +127,41 @@ func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed
 	start := time.Now()
 	drawn := map[string]map[string]*widget.Node{}
 	asked := map[[2]string]bool{}
-	for _, pl := range s.places.places {
+	ps := s.places
+	if ps.cache == nil || ps.cacheState != string(state) || ps.cacheGen != gen {
+		ps.cache, ps.cacheState, ps.cacheGen = map[string]map[string]placed{}, string(state), gen
+	}
+	for _, pl := range ps.places {
 		s.mu.Lock()
-		items := slices.Clone(s.places.items[pl.ID])
+		items := slices.Clone(ps.items[pl.ID])
 		s.mu.Unlock()
-		for _, it := range items {
-			asked[[2]string{pl.ID, it.Key}] = true
-		}
 		views := map[string]*widget.Node{}
 		drawn[pl.ID] = views
-		for len(items) > 0 && failed == nil {
-			batch := items[:min(len(items), MaxPlaceBatch)]
-			items = items[len(batch):]
+		cache := map[string]placed{}
+		var todo []PlaceItem
+		for _, it := range items {
+			asked[[2]string{pl.ID, it.Key}] = true
+			if c, ok := ps.cache[pl.ID][it.Key]; ok && c.version == it.Version {
+				cache[it.Key] = c
+				if c.node != nil {
+					views[it.Key] = c.node
+				}
+				continue
+			}
+			todo = append(todo, it)
+		}
+		for len(todo) > 0 && failed == nil {
+			batch := todo[:min(len(todo), MaxPlaceBatch)]
+			todo = todo[len(batch):]
 			if err := s.drawBatch(pl, state, batch, views); err != nil {
 				failed = fmt.Errorf("place %s: %w", pl.ID, err)
+				break
+			}
+			for _, it := range batch {
+				cache[it.Key] = placed{it.Version, views[it.Key]}
 			}
 		}
+		ps.cache[pl.ID] = cache
 	}
 	d := placeDraw{gen, processed, drawn, asked, failed, time.Since(start)}
 	s.mu.Lock()
@@ -184,6 +214,13 @@ func (s *Session) publish(d placeDraw) {
 		return
 	}
 	for id, views := range d.drawn {
+		// A copy shown since the drawing began keeps its last drawing
+		// till the next one has it.
+		for _, it := range s.places.items[id] {
+			if _, ok := views[it.Key]; !ok && s.places.views[id][it.Key] != nil {
+				views[it.Key] = s.places.views[id][it.Key]
+			}
+		}
 		s.places.views[id] = views
 	}
 	s.Rev++
@@ -220,7 +257,19 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, key string, deadlin
 		s.places.first = nil
 		s.mu.Unlock()
 	}()
-	s.SetItems(place, items)
+	// items are the copies the frame has drawn so far: the others shown
+	// keep theirs, lest drawing this one take their drawings away.
+	s.mu.Lock()
+	shown := slices.Clone(s.places.items[place])
+	s.mu.Unlock()
+	for _, it := range items {
+		if j := slices.IndexFunc(shown, func(o PlaceItem) bool { return o.Key == it.Key }); j >= 0 {
+			shown[j] = it
+		} else {
+			shown = append(shown, it)
+		}
+	}
+	s.SetItems(place, shown)
 	wait := time.NewTimer(time.Until(deadline))
 	defer wait.Stop()
 	poll := time.NewTicker(time.Millisecond)

@@ -154,12 +154,12 @@ func cpu() time.Duration {
 // sample is one scenario's run: each step's UI-thread time, and what the
 // process spent over the whole of it.
 type sample struct {
-	steps          []time.Duration // each step's UI time: a tick of a 60 Hz window
-	frameTimes     []time.Duration // each frame's UI time: build, layout and paint
+	steps      []time.Duration // each step's UI time: a tick of a 60 Hz window
+	frameTimes []time.Duration // each frame's UI time: build, layout and paint
 	// firstFrames are each step's first frame, which handles its input
 	// and change: the frames after it in the step are a still clock's
 	// repeats, which a Tester runs while something animates.
-	firstFrames []time.Duration
+	firstFrames    []time.Duration
 	frames         int
 	cpu, wall      time.Duration
 	mallocs, bytes uint64
@@ -286,7 +286,7 @@ func (b *bench) firstOpen(marker string) sample {
 	opened, done := false, false
 	var settledAt time.Duration
 	start := time.Now()
-	s := b.measure(60, func(i int) {
+	s := b.measure(90, func(i int) {
 		if !opened {
 			a.select_(b.long)
 			opened = true
@@ -324,6 +324,22 @@ func (b *bench) scroll() sample {
 	})
 	to, last := l.Visible()
 	s.moved, s.visible = from-to, last-to+1
+	if os.Getenv("TIMELINE_DEBUG") != "" && b.mode != "native" {
+		for range 100 {
+			b.h.p.run()
+			b.h.tt.Frame()
+			b.h.tt.Advance(time.Second / 60)
+			time.Sleep(10 * time.Millisecond)
+		}
+		app := b.h.a.plugins.App(benchPlugin)
+		es := entriesOf(b.long)
+		f, la := l.Visible()
+		var rows []string
+		for i := f; i <= la && i < len(es); i++ {
+			rows = append(rows, fmt.Sprintf("%d:%s item=%v view=%v", i, entryKindNames[es[i].kind], app.PlaceContext("row", es[i].key) != nil, app.PlaceView("row", es[i].key) != nil))
+		}
+		b.t.Logf("after scroll, 1s later: busy=%v err=%v %s", app.Busy, app.Err, strings.Join(rows, " "))
+	}
 	if s.moved <= 0 {
 		b.t.Fatalf("%s: scrolling didn't move the list: %d to %d", b.mode, from, to)
 	}
@@ -406,10 +422,9 @@ func TestTimelineCost(t *testing.T) {
 	for r := range rounds {
 		for _, n := range sizes {
 			b.long.Transcript.Entries = synthetic(n)
-			marker := "Reply " + strconv.Itoa((n-1)/3) + "."
-			if n%3 == 1 {
-				marker = "Turn " + strconv.Itoa(n/3) + ":"
-			}
+			// The last reply's: rows go user, work, reply.
+			last := n - 1 - (n-1-2+3)%3
+			marker := "Reply " + strconv.Itoa(last/3) + "."
 			// Each round starts the modes at a different one, so warmup and
 			// drift favour none.
 			k := r % len(modes)
