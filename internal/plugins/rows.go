@@ -110,6 +110,9 @@ func (s *Session) Row(at RowAt, it widget.ListItem) *widget.Node {
 	}
 	k := at.key()
 	l := rs.lists[k]
+	if l == nil && !s.shows(k) {
+		return nil // a list of a drawing no longer shown
+	}
 	if l == nil {
 		l = &listRows{drawn: map[string]drawnRow{}, seen: map[string]int{}}
 		rs.lists[k] = l
@@ -168,11 +171,28 @@ func (s *Session) dropLists() {
 	maps.DeleteFunc(rs.lists, func(k rowKey, _ *listRows) bool { return !live[k] })
 }
 
-// dropCopies drops, as a drawing of the places is shown, the rows of the
-// lists of the copies it has no drawing of: a copy gone, or drawn null,
-// takes its lists' rows with it at once.
-func (rs *rowSet) dropCopies(views map[string]map[string]*widget.Node) {
-	maps.DeleteFunc(rs.lists, func(k rowKey, _ *listRows) bool { return k.place != "" && views[k.place][k.copy] == nil })
+// shows says a view shown has the list k.
+func (s *Session) shows(k rowKey) bool {
+	var n *widget.Node
+	switch {
+	case k.place != "" && s.places != nil:
+		n = s.places.views[k.place][k.copy]
+	case k.place == "" && s.View != nil:
+		n = s.View.Body
+	}
+	found := false
+	n.Walk(func(n *widget.Node) { found = found || n.Type == "list" && n.ID == k.list })
+	return found
+}
+
+// dropCopies drops, as a drawing of the places is shown under the
+// session's mu, the rows of the lists of the copies gone: neither drawn nor
+// shown by the UI any more.
+func (s *Session) dropCopies() {
+	maps.DeleteFunc(s.rows.lists, func(k rowKey, _ *listRows) bool {
+		return k.place != "" && s.places.views[k.place][k.copy] == nil &&
+			!slices.ContainsFunc(s.places.items[k.place], func(it PlaceItem) bool { return it.Key == k.copy })
+	})
 }
 
 // dropWants drops the rows asked for an earlier view that the worker

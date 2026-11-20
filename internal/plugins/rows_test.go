@@ -31,7 +31,7 @@ func TestAListAsksForTheRowsShownOnce(t *testing.T) {
 	state := t.TempDir()
 	u, fx := newUIThread(), &effects{}
 	writeModule(t, state, "rows", "", rowsJS)
-	writeModule(t, state, "norows", "", `export function view() { return { body: { type: "text", text: "x" } }; }`)
+	writeModule(t, state, "norows", "", `export function view() { return { body: { type: "list", id: "l", label: "rows", height: 120 } }; }`)
 	h := open(t, state, u, fx)
 	s := session(t, h, "rows")
 	u.until(t, "the view", func() bool { return s.Rev > 0 })

@@ -272,7 +272,7 @@ func (s *Session) publish(d placeDraw) {
 		s.places.views[id] = views
 	}
 	s.Rev++
-	s.rows.dropCopies(s.places.views)
+	s.dropCopies()
 	s.Processed = d.processed
 	s.Busy = s.running && (len(s.queue) > 0 || s.dirty)
 }
