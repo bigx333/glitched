@@ -507,6 +507,7 @@ func (s *Session) render(gen, processed int, state json.RawMessage, values map[s
 		if v != nil {
 			s.View = v
 			s.Rev++
+			s.dropLists()
 			s.Processed = processed
 		}
 		s.Err = failed

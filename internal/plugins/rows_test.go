@@ -164,8 +164,8 @@ export function rows({ state, keys }) { return keys.map((k) => state === 1 ? nul
 	u.until(t, "a's row drawn for state 2", func() bool { return listRow(t, s, "a") == "r at 2" })
 }
 
-// The rows of a list no drawing shows any more go: a copy gone takes its
-// list's rows with it.
+// The rows of a list no drawing shows any more go as the drawing without
+// it is shown: a copy gone takes its list's rows with it.
 func TestTheRowsOfAListGoneAreDropped(t *testing.T) {
 	h, s, u := placeTest(t, listModule+"\nexport function rows({ keys }) { return keys.map((k) => ({ type: \"text\", text: k })) }")
 	a, b := PlaceItem{Key: "a", Version: "1"}, PlaceItem{Key: "b", Version: "1"}
@@ -174,8 +174,124 @@ func TestTheRowsOfAListGoneAreDropped(t *testing.T) {
 	u.until(t, "their rows drawn", func() bool { return listRow(t, s, "a") == "r" && listRow(t, s, "b") == "r" })
 	s.SetItems("badge", []PlaceItem{a})
 	settled(t, h, u, "b gone", func() bool { return s.PlaceView("badge", "b") == nil })
-	listRow(t, s, "a")
 	if _, ok := s.rows.lists[rowKey{"badge", "b", "l"}]; ok || len(s.rows.lists) != 1 {
 		t.Fatalf("with b gone, the session keeps the rows of %d lists, b's among them: %v", len(s.rows.lists), ok)
+	}
+}
+
+// A list asks for each row of every view it shows, and remembers only
+// those of the view before: a row answered null for a view since replaced
+// leaves nothing behind.
+func TestAListRemembersOnlyTheRowsOfTheViewBefore(t *testing.T) {
+	h, s, u := placeTest(t, `export function init() { return { state: 0 } }
+export function update({ state }) { return { state: state + 1 } }
+export function place({ state, items }) {
+	return items.map(() => ({ type: "list", id: "l", label: "results", height: 120, items: [{ key: "result-" + state, label: "result" }] }))
+}
+export function rows({ keys }) { return keys.map(() => null) }`)
+	a := PlaceItem{Key: "a", Version: "1"}
+	s.SetItems("badge", []PlaceItem{a})
+	settled(t, h, u, "a drawn", func() bool { return s.PlaceView("badge", "a") != nil })
+	for range 64 {
+		listRow(t, s, "a")
+		posted(t, h, u, 1)
+		s.Notify(AppEvent{Kind: "timer"})
+		posted(t, h, u, 2)
+		s.DrawFirst("badge", []PlaceItem{a}, nil, time.Now().Add(2*time.Second))
+		(<-u.q)()
+		(<-u.q)()
+	}
+	if l := s.rows.lists[rowKey{"badge", "a", "l"}]; len(l.seen) > 2 || len(l.asked) > 2 {
+		t.Fatalf("after 64 views of one row, the list remembers %d rows seen and %d asked", len(l.seen), len(l.asked))
+	}
+}
+
+// A row read again at the version drawn, after a newer version was asked
+// for, keeps its drawing when that version comes null.
+func TestARowBackAtTheVersionDrawnKeepsItsDrawing(t *testing.T) {
+	h, s, u := placeTest(t, listModule+`
+let calls = 0
+export function rows({ keys }) { calls++; return keys.map(() => calls === 2 ? null : { type: "text", text: "version 1" }) }`)
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "1"}})
+	settled(t, h, u, "a drawn", func() bool { return s.PlaceView("badge", "a") != nil })
+	u.until(t, "a's row drawn", func() bool { return listRow(t, s, "a") == "version 1" })
+	s.Row(RowAt{List: "l", Place: &PlaceRef{ID: "badge", Key: "a"}}, widget.ListItem{Key: "r", Version: "2"})
+	posted(t, h, u, 1)
+	listRow(t, s, "a")
+	(<-u.q)()
+	if got := listRow(t, s, "a"); got != "version 1" {
+		t.Fatalf("after version 2 came null, the row at version 1 shows %q", got)
+	}
+}
+
+// A copy gone and back has a new list: a row asked for the old one never
+// shows in it.
+func TestARowAskedForAListGoneDoesNotShowInItsSuccessor(t *testing.T) {
+	h, s, u := placeTest(t, listModule+`
+export function rows({ place, keys }) { return keys.map(() => ({ type: "text", text: place.context })) }`)
+	a, b := PlaceItem{Key: "a", Version: "1", Context: "old"}, PlaceItem{Key: "b", Version: "1", Context: "b"}
+	s.SetItems("badge", []PlaceItem{a, b})
+	settled(t, h, u, "a and b drawn", func() bool { return s.PlaceView("badge", "a") != nil })
+	listRow(t, s, "a")
+	posted(t, h, u, 1)
+	s.SetItems("badge", []PlaceItem{b})
+	posted(t, h, u, 2)
+	s.DrawFirst("badge", []PlaceItem{b}, nil, time.Now().Add(2*time.Second))
+	if s.PlaceView("badge", "a") != nil {
+		t.Fatal("a is still drawn")
+	}
+	a.Version, a.Context = "2", "new"
+	s.DrawFirst("badge", []PlaceItem{a, b}, []string{"a"}, time.Now().Add(2*time.Second))
+	listRow(t, s, "a")
+	(<-u.q)()
+	if got := listRow(t, s, "a"); got != "" {
+		t.Fatalf("a's new list shows %q, the row asked for its old one", got)
+	}
+	u.until(t, "a's new row", func() bool { return listRow(t, s, "a") == "new" })
+}
+
+// A row past MaxRowsKept whose drawing is on its way isn't asked for again.
+func TestARowDroppedPastTheBoundIsNotAskedAgainWhileOnItsWay(t *testing.T) {
+	h, s, u := placeTest(t, fmt.Sprintf(`let asked = 0
+export function init() { return { state: 0 } }
+export function update({ state, event }) { return { state: state + (event.kind === "timer" ? 1 : 0) } }
+export function place({ items }) {
+	return items.map(({ key }) => ({ type: "list", id: "l", label: key, height: 120, items: Array.from({ length: %d }, (_, i) => ({ key: "r" + i, label: "row" })) }))
+}
+export function rows({ state, keys }) {
+	return keys.map((k) => k === "count" ? { type: "text", text: String(asked) } : state === 1 && k === "r0" ? (++asked === 1 ? { type: "text", text: "new" } : null) : { type: "text", text: k })
+}`, MaxRowsKept+1))
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "1"}})
+	settled(t, h, u, "a drawn", func() bool { return s.PlaceView("badge", "a") != nil })
+	at := RowAt{List: "l", Place: &PlaceRef{ID: "badge", Key: "a"}}
+	items := s.PlaceView("badge", "a").Items
+	for i := 0; i < MaxRowsKept; i += 40 {
+		for _, it := range items[i:min(i+40, MaxRowsKept)] {
+			s.Row(at, it)
+		}
+		settled(t, h, u, "rows drawn", func() bool { return true })
+	}
+	rev := s.Rev
+	s.Notify(AppEvent{Kind: "timer"})
+	settled(t, h, u, "the view of state 1", func() bool { return s.Rev > rev })
+	s.Row(at, items[MaxRowsKept])
+	posted(t, h, u, 1)
+	s.Row(at, items[0])
+	posted(t, h, u, 2)
+	for _, it := range items[1 : MaxRowsKept/2+1] {
+		s.Row(at, it)
+	}
+	(<-u.q)()
+	s.Row(at, items[0])
+	(<-u.q)()
+	settled(t, h, u, "rows drawn", func() bool { return true })
+	if n := s.Row(at, items[0]); n == nil || n.Text != "new" {
+		t.Fatalf("r0 shows %v, not its drawing", n)
+	}
+	count := widget.ListItem{Key: "count"}
+	s.Row(at, count)
+	settled(t, h, u, "the count drawn", func() bool { return s.Row(at, count) != nil })
+	if n := s.Row(at, count); n.Text != "1" {
+		t.Fatalf("r0 was asked for %s times for one view", n.Text)
 	}
 }
