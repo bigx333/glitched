@@ -284,6 +284,7 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 	// The copies shown are the frame's, at its versions, before any
 	// drawing is judged against them.
 	s.mu.Lock()
+	since := s.places.shownSeq
 	shown := slices.Clone(s.places.items[place])
 	for _, it := range items {
 		if j := slices.IndexFunc(shown, func(o PlaceItem) bool { return o.Key == it.Key }); j >= 0 {
@@ -328,8 +329,10 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 		return
 	}
 	s.places.first = first
+	// A drawing posted since this began, shown already or not, may be the
+	// one waited on: the refresh of these copies can fail that fast.
 	posted = nil
-	if p := s.places.posted; p != nil && p.seq > s.places.shownSeq {
+	if p := s.places.posted; p != nil && p.seq > since {
 		posted = p
 	}
 	s.mu.Unlock()
