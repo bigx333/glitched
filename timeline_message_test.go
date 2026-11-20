@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -27,9 +28,12 @@ func timelineHarness(t *testing.T) (*harness, *client.Transcript) {
 	h := start(t, dir)
 	th := h.thread("A thread")
 	h.a.select_(th)
-	h.until("its transcript", func() bool { return th.Transcript != nil && len(th.Transcript.Entries) > 0 })
-	th.Transcript.Entries = synthetic(6)
+	h.until("its first turn", func() bool { settleTester(h.tt); return h.tt.HasText("Done.") })
+	fresh := *th.Transcript
+	fresh.Entries = synthetic(6)
+	th.Transcript.Replace(fresh)
 	h.a.changed()
+	h.until("its rows", func() bool { settleTester(h.tt); return h.tt.HasText(turnText(1)) })
 	return h, th.Transcript
 }
 
@@ -42,7 +46,7 @@ func TestTimelineRowsAreABuiltInPluginYoursCanWrap(t *testing.T) {
 	h, _ := timelineHarness(t)
 	a, tt := h.a, h.tt
 	shows := func(label string) bool {
-		settleTester(tt)
+		settlePlugins(t, a, tt, h.p)
 		return tt.HasText(label)
 	}
 	rows := func() bool { return shows(turnText(1)) && shows("Reply 1.") && shows("Worked for 40s") }
@@ -117,26 +121,34 @@ export function place({ items }) {
 		t.Fatal(err)
 	}
 	a.listFor(h.thread("A thread").id()).ScrollToEnd()
-	settleTester(tt)
-	reply := &client.AssistantEntry{Run: api.NewID(), Streaming: true}
-	tr.Entries = append(tr.Entries, reply)
-	for i := range 40 {
-		reply.Text += "Word" + strings.Repeat("x", i%3) + string(rune('A'+i%26)) + " "
+	settlePlugins(t, a, tt, h.p)
+	// apply folds an event in, as following the thread does.
+	apply := func(b api.EventBody) {
+		p, err := json.Marshal(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tr.Apply(api.Event{Cursor: api.Cursor{Log: tr.Cursor.Log, Seq: tr.Cursor.Seq + 1}, Type: api.EventType(b), Schema: api.EventSchema, At: time.Now(), Payload: p})
 		a.changed()
 		tt.Frame()
-		last := strings.Fields(reply.Text)[i]
-		if i > 0 && !tt.HasText(last) {
-			t.Fatalf("step %d: the streaming reply doesn't show %q: %q", i, last, tt.Texts())
-		}
-		tt.Advance(time.Second / 30)
 	}
-	settleTester(tt)
+	run := api.NewID()
+	for i := range 40 {
+		word := "Word" + strings.Repeat("x", i%3) + string(rune('A'+i%26))
+		apply(api.AssistantDelta{Run: run, Text: word + " "})
+		// Streamed text fades in; once it has, the row shows it all.
+		tt.Advance(time.Second / 2)
+		if !tt.HasText(word) {
+			t.Fatalf("step %d: the streaming reply doesn't show %q: %q", i, word, tt.Texts())
+		}
+	}
+	settlePlugins(t, a, tt, h.p)
 	if !tt.HasText("Mine assistant streaming 1") {
 		t.Fatalf("the plugin was asked for the streaming row again as it streamed: %q", tt.Texts())
 	}
-	reply.Streaming = false
-	a.changed()
-	settleTester(tt)
+	// A reply of another run ends this one's.
+	apply(api.AssistantDelta{Run: api.NewID(), Text: "Next."})
+	settlePlugins(t, a, tt, h.p)
 	if !tt.HasText("Mine assistant 2") {
 		t.Fatalf("the plugin wasn't asked once more as the reply ended: %q", tt.Texts())
 	}

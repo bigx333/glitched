@@ -289,6 +289,10 @@ type NativeWidget = {
       /** The composer itself, in composer: placed exactly once, in rows, columns and cards alone. */
       name: "composer.input";
     }
+  | {
+      /** A timeline row as Glitched draws it, live, in timeline.message: placed exactly once, in rows, columns and cards alone. */
+      name: "transcript.body";
+    }
 );
 
 /** A ghost or outline button: drawn as Glitched's header draws its own. */
@@ -442,7 +446,8 @@ type Component =
   | "settings.page.keybindings"
   | "composer"
   | "composer.send"
-  | "composer.access";
+  | "composer.access"
+  | "timeline.message";
 
 /** The settings glitched.app.settings reads and sets, by settings.json's names. */
 interface AppSettings {
@@ -505,7 +510,25 @@ type ComponentContext =
   | ComposerContext
   | ComposerSendContext
   | ComposerAccessContext
+  | TimelineMessageContext
   | Record<string, never>;
+
+/**
+ * The context of timeline.message: which row a copy is and what it is
+ * doing, never what it says, which transcript.body draws. Its layout must
+ * place transcript.body once.
+ */
+interface TimelineMessageContext {
+  /** The row's key, the same while it changes. */
+  key: string;
+  kind: "user" | "assistant" | "work" | "failed" | "error";
+  /** A reply still coming in: its context stays the same till it ends. */
+  streaming?: boolean;
+  /** Under a message that hasn't simply been sent: queued, sending, cancelled, not sent. */
+  note?: string;
+  /** The message's send failed. */
+  failed?: boolean;
+}
 
 /** The context of composer: its layout must place the native composer.input once. */
 interface ComposerContext {

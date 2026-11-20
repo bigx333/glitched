@@ -114,8 +114,30 @@ func (b *bench) measure(n int, step func(i int)) sample {
 	return s
 }
 
-// blankRows is 0: native rows always draw.
-func (b *bench) blankRows() int { return 0 }
+// blankRows counts the rows in view that the built-in Timeline rows plugin
+// hasn't drawn yet, which show Glitched's own row meanwhile. Approval,
+// question and report cards are always Glitched's.
+func (b *bench) blankRows() int {
+	if b.h.a.plugins == nil || b.h.a.selected != b.long.id() {
+		return 0
+	}
+	app := b.h.a.plugins.App("timeline")
+	if app == nil {
+		return 0
+	}
+	es := b.es
+	if es == nil {
+		es = entriesOf(b.long)
+	}
+	first, last := b.h.a.listFor(b.long.id()).Visible()
+	n := 0
+	for i := first; i <= last && i < len(es); i++ {
+		if k := es[i].kind; k != entryRequest && k != entryReport && app.PlaceView("row", es[i].key) == nil {
+			n++
+		}
+	}
+	return n
+}
 
 func (b *bench) settled() bool {
 	return (b.h.a.plugins == nil || b.h.a.plugins.Idle()) && b.blankRows() == 0
@@ -196,6 +218,10 @@ func (b *bench) stream() sample {
 		reply.Text = text[:(i+1)*chunk]
 		b.h.a.changed()
 		b.h.tt.Frame()
+		// The row the frame drew is the reply as it is now.
+		if es := b.h.a.rowsOf(b.long).es; es[len(es)-1].text != reply.Text {
+			b.staleN++
+		}
 	})
 	s.stale, b.staleN = b.staleN, 0
 	if !l.AtEnd() {
