@@ -342,12 +342,14 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 			shown = append(shown, it)
 		}
 	}
-	// A failure just shown of every copy at the version the frame has
-	// is the answer: waiting draws nothing new.
-	if posted != nil && posted.failed != nil && posted.gen == s.gen && !slices.ContainsFunc(shown, func(it PlaceItem) bool {
-		v, ok := posted.asked[[2]string{place, it.Key}]
-		return !ok || v != it.Version
-	}) {
+	// A failure just shown of the copies as the UI and this frame have
+	// them, none gone, with nothing on its way to draw them again, is the
+	// answer: waiting draws nothing new.
+	gone := slices.ContainsFunc(s.places.items[place], func(o PlaceItem) bool {
+		return !slices.ContainsFunc(items, func(it PlaceItem) bool { return it.Key == o.Key })
+	})
+	if posted != nil && posted.failed != nil && posted.gen == s.gen && !s.running && !gone && answers(posted.asked, place, shown) &&
+		!slices.ContainsFunc(slices.Collect(maps.Keys(s.places.items)), func(id string) bool { return !answers(posted.asked, id, s.places.items[id]) }) {
 		s.mu.Unlock()
 		return
 	}
@@ -497,4 +499,12 @@ func (h *Host) startTimers(s *Session, timers []Timer) {
 			}
 		}()
 	}
+}
+
+// answers says asked has every copy of the place at its version.
+func answers(asked map[[2]string]string, place string, items []PlaceItem) bool {
+	return !slices.ContainsFunc(items, func(it PlaceItem) bool {
+		v, ok := asked[[2]string{place, it.Key}]
+		return !ok || v != it.Version
+	})
 }

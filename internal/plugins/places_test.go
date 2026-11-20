@@ -508,3 +508,24 @@ func TestAFailureOfASiblingsOlderVersionDoesNotEndAFirstDraw(t *testing.T) {
 		t.Fatalf("the first draw ended on b's older failure: a %q, error %v", text(s, "a"), s.Err)
 	}
 }
+
+// A failure posted before a first draw doesn't end it while the plugin has
+// work queued that may draw the copies after all.
+func TestAFailurePostedBeforeAFirstDrawWaitsForWorkQueued(t *testing.T) {
+	h, s, u := placeTest(t, `export function init() { return { state: 0 } }
+export function update({ state, event }) { return { state: state + (event.kind === "timer" ? 1 : 0) } }
+export function place({ items, state }) {
+	if (state === 0 && items.length) throw new Error("not yet")
+	for (const until = Date.now() + 50; Date.now() < until; ) {}
+	return items.map(({ context }) => ({ type: "text", text: context }))
+}`)
+	settled(t, h, u, "the first drawing", func() bool { return s.Rev > 0 })
+	items := []PlaceItem{{Key: "a", Version: "1", Context: "drawn"}}
+	s.SetItems("badge", items)
+	posted(t, h, u, 1)
+	s.Notify(AppEvent{Kind: "timer"})
+	s.DrawFirst("badge", items, []string{"a"}, time.Now().Add(2*time.Second))
+	if text(s, "a") != "drawn" || s.Err != nil {
+		t.Fatalf("the first draw ended on the failure before the event queued: a %q, error %v", text(s, "a"), s.Err)
+	}
+}
