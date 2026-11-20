@@ -257,7 +257,7 @@ func TestTabWalksPastTheWindow(t *testing.T) {
 			tt.SetSize(480, h)
 			tt.Frame()
 		}
-		if got, most := len(a.markers[api.ID{}].handles), markersShown(n, 400)+8; got > most {
+		if got, most := len(a.markerTicks.handles), markersShown(n, 400)+8; got > most {
 			t.Errorf("%d handles to the ticks, want at most %d", got, most)
 		}
 	})
