@@ -25,9 +25,9 @@ import (
 // plugin is given, from the thread's record as that plugin may see it.
 // The native widgets it places draw about t. t is nil for a component of
 // the app's own, as a settings page, whose record is zero.
-func (a *app) pluginComponent(c *ui.Context, box func() ui.Element, name, key string, t *thread, context func(plugins.ThreadRecord) any) {
+func (a *app) pluginComponent(c *ui.Context, box func() ui.Element, name, key string, t *thread, context func(plugins.ThreadRecord) any) bool {
 	if a.plugins == nil {
-		return
+		return false
 	}
 	f := a.frameOf(name)
 	var full plugins.ThreadRecord
@@ -73,12 +73,14 @@ func (a *app) pluginComponent(c *ui.Context, box func() ui.Element, name, key st
 		}
 	}
 	// When every one failed, the first one's last good drawing stays: a
-	// row that can still be clicked beats none.
+	// row that can still be clicked beats none. Where Glitched draws the
+	// built-in itself, it does instead.
 	d := cmp.Or(good, failed)
-	if d == nil {
-		return
+	if d == nil || good == nil && plugins.Native(name) {
+		return false
 	}
 	a.drawPlace(c, box(), d.pl, key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, fire func(any)) { a.drawNative(c, name, t, n, fire) })
+	return true
 }
 
 // drawNative draws the native widget n in a copy of the component about

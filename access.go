@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"glitched/internal/plugins"
 )
 
 // The levels of autonomy the agent runs at.
@@ -170,17 +172,59 @@ func (a *app) accessIcon(c *ui.Context, icon *ui.SVG) {
 	}
 }
 
+// accessControl is the access picker, Glitched's or a plugin's that
+// replaces it. Beside a plugin's, Glitched keeps its own sign of the access
+// in force: a plugin that draws nothing never hides it, and one that fails
+// gives way to Glitched's picker. A plugin sets the access only through
+// threads.setAccess, to a level this picker offers.
+func (a *app) accessControl(c *ui.Context, t thread) {
+	box := func() ui.Element { return ui.Row(c).Key("access-plugin").AlignItems(ui.Center) }
+	ctx := func(r plugins.ThreadRecord) any {
+		levels := make([]accessChoice, len(accessLevels))
+		for i, l := range accessLevels {
+			levels[i] = accessChoice{l.name, l.desc}
+		}
+		return composerAccess{Thread: r, Access: a.access, Levels: levels}
+	}
+	if !a.pluginComponent(c, box, "composer.access", composerKey(t), &t, ctx) {
+		a.accessPicker(c)
+		return
+	}
+	a.tip(c, ui.Row(c).Key("access-sign").Label("Access: "+a.access).Padding(0, 6).AlignItems(ui.Center), "Access: "+a.access).
+		Children(func() { ui.Icon(c, accessIconOf(a.access)).FontSize(13).TextColor(accessColor(a.access)) })
+}
+
+// composerAccess is the context of composer.access.
+type composerAccess struct {
+	Thread plugins.ThreadRecord `json:"thread"`
+	// Access is the level in force, one of Levels' names.
+	Access string `json:"access"`
+	// Levels are what the access picker offers, which threads.setAccess
+	// takes.
+	Levels []accessChoice `json:"levels"`
+}
+
+type accessChoice struct {
+	Name  string `json:"name"`
+	About string `json:"about"`
+}
+
+// accessIconOf is the level's icon.
+func accessIconOf(level string) *ui.SVG {
+	for _, l := range accessLevels {
+		if l.name == level {
+			return l.icon
+		}
+	}
+	return icShieldTerminal
+}
+
 // accessPicker is the composer's autonomy button and the popover it
 // opens. Full access is held to be granted, as hazard tape fills the row,
 // and it keeps the button striped while it's on.
 func (a *app) accessPicker(c *ui.Context) {
 	full := a.access == accessFull
-	icon := icShieldTerminal
-	for _, l := range accessLevels {
-		if l.name == a.access {
-			icon = l.icon
-		}
-	}
+	icon := accessIconOf(a.access)
 	b := a.tip(c, ghost(c, "access", a.accessOpen).Label("Access").TextColor(accessColor(a.access)), "How freely the agent acts")
 	if full {
 		b.TextColor(danger)

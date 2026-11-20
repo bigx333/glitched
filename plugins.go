@@ -518,6 +518,10 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		return modelRecords(), nil
 	case "threads.configure":
 		return a.configureEffect(e.Args)
+	case "threads.setAccess":
+		return a.setAccessEffect(e.Args)
+	case "composer.submit":
+		return a.submitEffect(e.Args)
 	case "threads.markRead":
 		t, err := a.pluginFind(e.Args)
 		if err != nil {
