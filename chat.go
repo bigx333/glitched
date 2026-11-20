@@ -526,7 +526,41 @@ const userMDsKept = 512
 // userMD is a message's text and the Markdown it shows as.
 type userMD struct{ text, md string }
 
+// entry draws the timeline row rs.es[i]. A message, a run's work log or an
+// error is a copy of timeline.message, which a plugin may draw around
+// transcript.body: the row as Glitched draws it. Approval, question and
+// report cards are Glitched's alone.
 func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
+	e := rs.es[i]
+	if e.kind == entryRequest || e.kind == entryReport {
+		a.nativeEntry(c, t, rs, i)
+		return
+	}
+	a.pluginComponent(c, "timeline.message", &t, componentCopy{
+		key: e.key,
+		box: func() ui.Element { return ui.Column(c).Key(e.key) },
+		context: func(plugins.ThreadRecord) any {
+			return timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil}
+		},
+		native: func() { a.nativeEntry(c, t, rs, i) },
+	})
+}
+
+// timelineMessage is the context of timeline.message: which row a copy is
+// and what it is doing. Its text is transcript.body's alone, so a reply
+// streaming in changes no copy's context.
+type timelineMessage struct {
+	Key       string `json:"key"`
+	Kind      string `json:"kind"`
+	Streaming bool   `json:"streaming,omitempty"`
+	Note      string `json:"note,omitempty"`
+	Failed    bool   `json:"failed,omitempty"`
+}
+
+var entryKindNames = map[entryKind]string{entryUser: "user", entryAssistant: "assistant", entryWork: "work", entryFailed: "failed", entryError: "error"}
+
+// nativeEntry draws the timeline row rs.es[i] as Glitched does.
+func (a *app) nativeEntry(c *ui.Context, t thread, rs rows, i int) {
 	es := rs.es
 	e := es[i]
 	key := e.key

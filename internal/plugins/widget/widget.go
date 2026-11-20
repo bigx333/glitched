@@ -101,9 +101,10 @@ type Native struct {
 // Natives are the native widgets a plugin may place, by name. Only these
 // draw: a name that isn't one, a locked one included, refuses the view.
 var Natives = map[string]Native{
-	"diff.body":      {Props: map[string]string{"path": "string"}, In: []string{"thread.panel.diff"}, Thread: true, Fires: []string{"onChange"}},
-	"theme.card":     {Props: map[string]string{"theme": "string"}, In: []string{"settings.page.appearance"}, Fires: []string{"onChange"}},
-	"composer.input": {In: []string{"composer"}, Thread: true},
+	"diff.body":       {Props: map[string]string{"path": "string"}, In: []string{"thread.panel.diff"}, Thread: true, Fires: []string{"onChange"}},
+	"theme.card":      {Props: map[string]string{"theme": "string"}, In: []string{"settings.page.appearance"}, Fires: []string{"onChange"}},
+	"composer.input":  {In: []string{"composer"}, Thread: true},
+	"transcript.body": {In: []string{"timeline.message"}, Thread: true},
 }
 
 // Locked are the parts of Glitched's UI no plugin draws, replaces or

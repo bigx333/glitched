@@ -1,0 +1,13 @@
+{
+  "id": "timeline",
+  "name": "Timeline rows",
+  "description": "Each row of the chat timeline, around Glitched's native transcript.body: a message, a run's work log, or an error. Built into Glitched; make a copy in Settings › Plugins to draw around it.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "ui.replace"],
+  "glitched": {
+    "places": [{ "id": "row", "at": "timeline.message", "replaces": true }]
+  }
+}
