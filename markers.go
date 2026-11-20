@@ -26,12 +26,13 @@ const (
 
 type turnInfo struct {
 	entry int // the user's message
-	reply string
 	steps int
 }
 
 // turnsOf is a thread's turns: each message the user sent, with the
-// first reply after it and the steps the agent took for it.
+// steps the agent took for it. It runs every frame over the whole
+// thread, so it reads no message's text: turnReply does, for the one
+// turn a card shows.
 func turnsOf(es []entry) []turnInfo {
 	var turns []turnInfo
 	for i, e := range es {
@@ -39,8 +40,6 @@ func turnsOf(es []entry) []turnInfo {
 		case e.kind == entryUser:
 			turns = append(turns, turnInfo{entry: i})
 		case len(turns) == 0:
-		case e.kind == entryAssistant && turns[len(turns)-1].reply == "":
-			turns[len(turns)-1].reply = plainText(e.text)
 		case e.kind == entryWork:
 			turns[len(turns)-1].steps += len(e.work)
 		}
@@ -131,8 +130,8 @@ func (a *app) turnCard(c *ui.Context, es []entry, turns []turnInfo, k int, tickY
 	a.cover(coverKey{kind: "turn"}, card)
 	card.Children(func() {
 		ui.Text(c, es[tr.entry].text).FontSize(13.5).FontWeight(500).LineHeight(1.4).MaxLines(3).TextColor(palette.text)
-		if tr.reply != "" {
-			ui.Text(c, tr.reply).FontSize(12.5).LineHeight(1.45).MaxLines(4).TextColor(palette.muted)
+		if reply := turnReply(es, tr); reply != "" {
+			ui.Text(c, reply).FontSize(12.5).LineHeight(1.45).MaxLines(4).TextColor(palette.muted)
 		}
 		meta := fmt.Sprintf("Turn %d of %d", k+1, len(turns))
 		if tr.steps > 0 {
@@ -140,6 +139,22 @@ func (a *app) turnCard(c *ui.Context, es []entry, turns []turnInfo, k int, tickY
 		}
 		ui.Text(c, meta).FontSize(11.5).TextColor(palette.faint)
 	})
+}
+
+// turnReply is the start of a turn's reply: its first that says
+// something as prose.
+func turnReply(es []entry, tr turnInfo) string {
+	for _, e := range es[tr.entry+1:] {
+		if e.kind == entryUser {
+			break
+		}
+		if e.kind == entryAssistant {
+			if p := plainText(e.text); p != "" {
+				return p
+			}
+		}
+	}
+	return ""
 }
 
 // preview is a message's first line.
