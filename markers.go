@@ -96,14 +96,18 @@ func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
 	// The ticks built: those that show, then, past them, the ones
 	// around the focus and the last, which Shift-Tab comes to first.
 	built := [][2]int{{0, shown}}
+	// A key moves the focus on among the ticks the last frame built,
+	// before this one builds: when it moved, another frame builds the
+	// ticks either side of where it is, before the next key.
+	held := -1
 	if at, ok := a.markerFocus[id]; ok {
 		// Where it was, unless messages came before it.
-		f := at.turn
-		if f >= n || es[turns[f].entry].key != at.key {
-			f = slices.IndexFunc(turns, func(tr turnInfo) bool { return es[tr.entry].key == at.key })
+		held = at.turn
+		if held >= n || es[turns[held].entry].key != at.key {
+			held = slices.IndexFunc(turns, func(tr turnInfo) bool { return es[tr.entry].key == at.key })
 		}
-		if f >= shown-1 {
-			built = append(built, [2]int{max(shown, f-1), min(n, f+2)})
+		if held >= shown-1 {
+			built = append(built, [2]int{max(shown, held-1), min(n, held+2)})
 		}
 	}
 	built = append(built, [2]int{max(shown, n-1), n})
@@ -138,8 +142,12 @@ func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
 					tick.Background(palette.text.Alpha(0.2))
 				}
 			})
-			if b.Focused() {
+			// The focus, whether or not the window has the keyboard.
+			if b.FocusWithin() {
 				a.markerFocus[id] = markerAt{es[tr.entry].key, k}
+				if k != held {
+					c.AnimationFrame()
+				}
 			}
 			if b.Clicked() {
 				l.ScrollTo(tr.entry, ui.Start)

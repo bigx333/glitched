@@ -184,3 +184,116 @@ func TestAFarMarkerKeepsTheFocus(t *testing.T) {
 		t.Fatal("after visiting a two-turn thread, the far marker did not regain focus")
 	}
 }
+
+// TestTabWalksPastTheWindow walks the markers of 80 turns with Tab and
+// Shift-Tab, a frame after each key and no more, as on the Mac: from a
+// turn clicked, from the controls before and after the markers, to both
+// ends, each key moves one turn, and with the window not having the keys.
+func TestTabWalksPastTheWindow(t *testing.T) {
+	const n = 80
+	turn := func(k int) string { return fmt.Sprintf("Go to: Turn %d", k) }
+	// markers is a window of the markers between two buttons, which tab
+	// keys walk.
+	markers := func(t *testing.T) (*ui.Tester, func(ui.Modifiers, int)) {
+		var es []entry
+		for i := range n {
+			es = append(es, entry{kind: entryUser, key: fmt.Sprint(i), text: fmt.Sprintf("Turn %d", i)})
+		}
+		turns := turnsOf(es)
+		a := app{markerFocus: map[api.ID]markerAt{}}
+		var l ui.ListState
+		tt := ui.NewTester(func(c *ui.Context) {
+			ui.Column(c).Grow(1).Children(func() {
+				ui.Button(c.Key("before"), "Before markers")
+				ui.Box(c).Grow(1).Children(func() { a.turnMarkers(c, api.ID{}, rows{es: es, turns: turns}, &l) })
+				ui.Button(c.Key("after"), "After markers")
+			})
+		}, 480, 220)
+		tt.Frame()
+		focused := func() string {
+			for k := range n {
+				if tt.Focused(turn(k)) {
+					return turn(k)
+				}
+			}
+			for _, b := range []string{"Before markers", "After markers"} {
+				if tt.Focused(b) {
+					return b
+				}
+			}
+			return "nothing"
+		}
+		// A key repeated, as held down: one frame follows it, as one does a
+		// key that comes up before the next frame.
+		press := func(mods ui.Modifiers, want int) {
+			t.Helper()
+			tt.KeyRepeat(mods, ui.KeyTab)
+			name := "After markers"
+			switch {
+			case want < 0:
+				name = "Before markers"
+			case want < n:
+				name = turn(want)
+			}
+			if !tt.Focused(name) {
+				t.Fatalf("the key focused %s, want %s", focused(), name)
+			}
+		}
+		return tt, press
+	}
+	t.Run("Tab from a turn clicked to the last and on", func(t *testing.T) {
+		tt, press := markers(t)
+		if err := tt.Click(turn(3)); err != nil {
+			t.Fatal(err)
+		}
+		tt.Move(400, 80)
+		for k := 4; k <= n; k++ {
+			press(0, k)
+		}
+	})
+	t.Run("Tab in from before the markers", func(t *testing.T) {
+		tt, press := markers(t)
+		if err := tt.Click("Before markers"); err != nil {
+			t.Fatal(err)
+		}
+		for k := range n {
+			press(0, k)
+		}
+	})
+	t.Run("Shift-Tab in from after the markers to the first and on", func(t *testing.T) {
+		tt, press := markers(t)
+		if err := tt.Click("After markers"); err != nil {
+			t.Fatal(err)
+		}
+		for k := n - 1; k >= -1; k-- {
+			press(ui.Shift, k)
+		}
+	})
+	t.Run("Shift-Tab from the last turn, and Tab back", func(t *testing.T) {
+		tt, press := markers(t)
+		if err := tt.Click("After markers"); err != nil {
+			t.Fatal(err)
+		}
+		press(ui.Shift, n-1)
+		for k := n - 2; k >= 30; k-- {
+			press(ui.Shift, k)
+		}
+		for k := 31; k < n; k++ {
+			press(0, k)
+		}
+	})
+	t.Run("with the window not having the keys", func(t *testing.T) {
+		tt, press := markers(t)
+		if err := tt.Click(turn(3)); err != nil {
+			t.Fatal(err)
+		}
+		tt.SetFocused(false)
+		for k := 4; k < 40; k++ {
+			press(0, k)
+		}
+		tt.SetFocused(true)
+		for k := 40; k < n; k++ {
+			press(0, k)
+		}
+	})
+}
