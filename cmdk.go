@@ -9,11 +9,14 @@ import (
 )
 
 type command struct {
+	// id names an action to glitched.commands.run; a thread has none.
+	id      string
 	section string
 	label   string
 	hint    string
-	icon    *ui.SVG
-	run     func()
+	// icon is the name of one of the app's icons (appIconNamed).
+	icon string
+	run  func()
 	// also are words the query finds the command by, not shown: each
 	// word of the query is in the label, or is one of them whole.
 	also string
@@ -25,37 +28,36 @@ func (a *app) openCommandPalette() {
 	a.cmdkOpen, a.cmdkQuery, a.cmdkIndex = true, "", 0
 }
 
-// commands are what the palette offers for the query: the actions, then
-// the threads, the most recently active first. A query starting with >
-// keeps to the actions.
-func (a *app) commands() []command {
-	action := func(label, hint string, icon *ui.SVG, run func()) command {
-		return command{section: "Actions", label: label, hint: hint, icon: icon, run: run}
+// actions are the palette's actions, in its order, which plugins list and
+// run as glitched.commands.list and run.
+func (a *app) actions() []command {
+	action := func(id, label, hint, icon string, run func()) command {
+		return command{id: id, section: "Actions", label: label, hint: hint, icon: icon, run: run}
 	}
-	cmds := []command{action("New thread", "⌘N", icSquarePen, a.newThread)}
+	cmds := []command{action("thread.new", "New thread", "⌘N", "pen-new-square", a.newThread)}
 	for _, p := range a.projects {
-		cmds = append(cmds, action("New thread in "+a.projectLabel(p), "", icSquarePen, func() { a.startThread(p) }))
+		cmds = append(cmds, action("thread.new:"+p.key.String(), "New thread in "+a.projectLabel(p), "", "pen-new-square", func() { a.startThread(p) }))
 	}
 	if !a.picking {
-		add := action("Add project…", "", icFolderOpen, a.addProject)
+		add := action("project.add", "Add project…", "", "folder-open", a.addProject)
 		add.also = "workspace folder"
 		cmds = append(cmds, add)
 	}
 	// Each is listed while an agent works in it too, lest the rows shift
 	// under the one chosen as a run starts; its alert says to stop it.
 	for _, p := range a.projects {
-		rm := action("Remove project "+a.projectLabel(p)+"…", "", icFolder, func() { a.askRemove(p) })
+		rm := action("project.remove:"+p.key.String(), "Remove project "+a.projectLabel(p)+"…", "", "folder", func() { a.askRemove(p) })
 		rm.also = "workspace delete"
 		cmds = append(cmds, rm)
 	}
 	cmds = append(cmds,
-		action("Switch model", "", icSparkles, a.openModelPicker),
-		action("Toggle diff panel", "⌘D", icDiff, func() { a.showDiff = !a.showDiff }),
-		action("Toggle terminal", "⌘J", icTerminal, func() { a.showTerminal = !a.showTerminal }),
-		action("Toggle preview", "⇧⌘P", icGlobe, a.togglePreview),
-		action("New browser tab", "⌘T", icPlus, func() { a.newTab("") }),
-		action("Toggle sidebar", "⌘B", icPanelLeft, func() { a.showSidebar = !a.showSidebar }),
-		action("Toggle light / dark", "⇧⌘L", icPalette, a.toggleLightDark),
+		action("model.switch", "Switch model", "", "sparkles", a.openModelPicker),
+		action("diff.toggle", "Toggle diff panel", "⌘D", "pull-request", func() { a.showDiff = !a.showDiff }),
+		action("terminal.toggle", "Toggle terminal", "⌘J", "terminal", func() { a.showTerminal = !a.showTerminal }),
+		action("preview.toggle", "Toggle preview", "⇧⌘P", "global", a.togglePreview),
+		action("browser.newTab", "New browser tab", "⌘T", "plus", func() { a.newTab("") }),
+		action("sidebar.toggle", "Toggle sidebar", "⌘B", "sidebar-minimalistic", func() { a.showSidebar = !a.showSidebar }),
+		action("theme.toggle", "Toggle light / dark", "⇧⌘L", "pallete-2", a.toggleLightDark),
 	)
 	for i, s := range settingsSections {
 		hint := ""
@@ -63,9 +65,16 @@ func (a *app) commands() []command {
 			hint = "⌘,"
 		}
 		path := "/settings/" + s.path
-		cmds = append(cmds, action("Settings › "+s.label, hint, s.icon, func() { a.router.Push(path) }))
+		cmds = append(cmds, action("settings:"+s.path, "Settings › "+s.label, hint, s.icon, func() { a.router.Push(path) }))
 	}
-	cmds = append(cmds, a.pluginCommands()...)
+	return append(cmds, a.pluginCommands()...)
+}
+
+// commands are what the palette offers for the query: the actions, then
+// the threads, the most recently active first. A query starting with >
+// keeps to the actions.
+func (a *app) commands() []command {
+	cmds := a.actions()
 	query, actionsOnly := strings.CutPrefix(a.cmdkQuery, ">")
 	query = strings.TrimSpace(query)
 	if !actionsOnly {
@@ -176,7 +185,7 @@ func (a *app) commandPalette(c *ui.Context) {
 					if cmd.t != nil {
 						ui.Box(c).Size(14, 14).Center().Shrink(0).Children(func() { a.statusMark(c, a.statusOf(*cmd.t)) })
 					} else {
-						ui.Icon(c, cmd.icon).FontSize(14)
+						ui.Icon(c, appIconNamed(cmd.icon)).FontSize(14)
 					}
 					ui.Text(c, cmd.label).SingleLine().Grow(1).Shrink(1)
 					ui.Text(c, cmd.hint).FontSize(11.5).TextColor(palette.faint)

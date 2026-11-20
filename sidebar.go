@@ -176,17 +176,17 @@ func (a *app) pendingMark(c *ui.Context) {
 
 var settingsSections = []struct {
 	path, label string
-	icon        *ui.SVG
+	icon        string // appIconNamed
 	color       ui.Color
 }{
-	{"general", "General", icSliders, ui.Hex("#94a3b8")},
-	{"appearance", "Appearance", icPalette, ui.Hex("#f472b6")},
-	{"providers", "Providers", icPlug, ui.Hex("#4ade80")},
-	{"machine", "This machine", icGlobe, ui.Hex("#2dd4bf")},
-	{"servers", "Servers", icServer, ui.Hex("#38bdf8")},
-	{"keybindings", "Keybindings", icKeyboard, ui.Hex("#60a5fa")},
-	{"plugins", "Plugins", icPlug, ui.Hex("#22d3ee")},
-	{"about", "About", icInfo, ui.Hex("#a78bfa")},
+	{"general", "General", "tuning", ui.Hex("#94a3b8")},
+	{"appearance", "Appearance", "pallete-2", ui.Hex("#f472b6")},
+	{"providers", "Providers", "plug-circle", ui.Hex("#4ade80")},
+	{"machine", "This machine", "global", ui.Hex("#2dd4bf")},
+	{"servers", "Servers", "server", ui.Hex("#38bdf8")},
+	{"keybindings", "Keybindings", "keyboard", ui.Hex("#60a5fa")},
+	{"plugins", "Plugins", "plug-circle", ui.Hex("#22d3ee")},
+	{"about", "About", "info-circle", ui.Hex("#a78bfa")},
 }
 
 func (a *app) settingsNav(c *ui.Context) {
@@ -201,7 +201,7 @@ func (a *app) settingsNav(c *ui.Context) {
 		for _, s := range settingsSections {
 			path := "/settings/" + s.path
 			if row(c, s.path, a.router.Path() == path).Padding(7, 8).Children(func() {
-				ui.Icon(c, s.icon).FontSize(15).TextColor(s.color)
+				ui.Icon(c, appIconNamed(s.icon)).FontSize(15).TextColor(s.color)
 				ui.Text(c, s.label)
 			}).Clicked() {
 				a.router.Replace(path)

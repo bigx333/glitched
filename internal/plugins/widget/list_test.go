@@ -108,3 +108,34 @@ func TestARowHoldsWhatScrollsAway(t *testing.T) {
 		t.Errorf("a row of %d widgets: %v", MaxRowNodes+1, err)
 	}
 }
+
+// A thread's own parts of a row sit only in a list's row, and a list's
+// options only on a list.
+func TestARowsNativesSitOnlyInARow(t *testing.T) {
+	for _, row := range []string{
+		`{"type": "native", "name": "thread.row.actions", "when": "hover"}`,
+		`{"type": "row", "children": [{"type": "native", "name": "thread.tile"}, {"type": "native", "name": "thread.rename"}, {"type": "native", "name": "thread.status", "props": {"dot": true}}, {"type": "native", "name": "thread.children"}]}`,
+	} {
+		if _, err := DecodeRow([]byte(row)); err != nil {
+			t.Errorf("%s: %v", row, err)
+		}
+	}
+	bad := map[string]string{
+		`{"body": {"type": "native", "name": "thread.tile"}}`:                                                                              "thread.tile draws only in a list's row",
+		`{"body": {"type": "column", "children": [{"type": "native", "name": "thread.row.actions"}]}}`:                                     "thread.row.actions draws only in a list's row",
+		`{"body": {"type": "text", "text": "x", "chooseOnHover": true}}`:                                                                   "a text has no items, rowHeight, input, submitOnClick, chooseOnHover or wrapAround",
+		`{"body": {"type": "column", "wrapAround": true}}`:                                                                                 "chooseOnHover or wrapAround",
+		`{"body": {"type": "list", "id": "l", "label": "L", "grow": true, "items": [{"key": "a", "label": "A"}], "chooseOnHover": "yes"}}`: "cannot unmarshal",
+	}
+	for view, want := range bad {
+		if _, err := Decode([]byte(view)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", view, err, want)
+		}
+	}
+	if _, err := DecodeRow([]byte(`{"type": "native", "name": "thread.status", "props": {"dot": "yes"}}`)); err == nil || !strings.Contains(err.Error(), "prop dot is a bool") {
+		t.Errorf("a dot that isn't a bool: %v", err)
+	}
+	if _, err := Decode([]byte(`{"body": {"type": "list", "id": "l", "label": "L", "grow": true, "chooseOnHover": true, "wrapAround": true, "items": [{"key": "a", "label": "A"}]}}`)); err != nil {
+		t.Errorf("a palette's list: %v", err)
+	}
+}

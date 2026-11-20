@@ -32,6 +32,7 @@ var Capabilities = []Capability{
 	{"tools", false, "Offer tools to Glitched's agents"},
 	{"programs", true, "Run the programs it names, as you"},
 	{"service", true, "Run in the background, with no window"},
+	{"commands", true, "Run Glitched's actions, the ones its command palette offers you"},
 	{"settings:write", true, "Change Glitched's settings: the theme, the accent, defaults for new threads and how the app behaves"},
 }
 
@@ -76,6 +77,8 @@ var Effects = map[string]string{
 	"projects.list":          "threads:read",
 	"projects.filter":        "threads:read",
 	"projects.add":           "threads:write",
+	"commands.list":          "commands",
+	"commands.run":           "commands",
 }
 
 // Effect is something a plugin asks the app to do, which only the app

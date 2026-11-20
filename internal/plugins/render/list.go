@@ -78,11 +78,12 @@ func (r *renderer) listRow(c *ui.Context, n *widget.Node, ctl *control, i int) {
 		node = r.st.Rows(n.ID, it)
 	}
 	in := *r
-	in.row = &plugins.RowRef{List: n.ID, Key: it.Key}
+	in.row, in.thread = &plugins.RowRef{List: n.ID, Key: it.Key}, it.Thread
 	h := float32(n.ItemHeight(i))
+	held := func(e ui.Element) bool { return r.st.ListRow != nil && r.st.ListRow(c, n, i, e) }
 	if it.Header {
 		head := ui.Column(c.Key("header")).Height(h).Justify(ui.Center).Label(it.Label)
-		in.hovered = head.Hovered()
+		in.hovered = held(head) || head.Hovered()
 		head.Children(func() {
 			if node != nil {
 				in.node(c, node, 0)
@@ -97,7 +98,10 @@ func (r *renderer) listRow(c *ui.Context, n *widget.Node, ctl *control, i int) {
 		b = ui.ButtonBase(c.Key("row")).AlignItems(ui.Center).Radius(7).Cursor(ui.CursorPointer)
 	}
 	b.Height(h).Padding(0).Label(it.Label)
-	in.hovered = b.Hovered()
+	in.hovered = held(b) || b.Hovered()
+	if n.ChooseOnHover && b.Hovered() {
+		r.choose(n, ctl, it.Key)
+	}
 	if it.Thread != "" && r.st.ContextMenu != nil {
 		r.st.ContextMenu(c, b, "thread:"+it.Thread)
 	}
@@ -126,7 +130,8 @@ func (r *renderer) choose(n *widget.Node, ctl *control, key string) {
 	r.fire(n, n.OnChange, "change", key)
 }
 
-// move moves the choice by d items, past headers, as far as the ends.
+// move moves the choice by d items, past headers, as far as the ends; a
+// list that wraps around goes on from the other end by one item.
 func (r *renderer) move(n *widget.Node, ctl *control, d int) {
 	lv := ctl.listOf(n)
 	at, chosen := lv.index[ctl.text]
@@ -144,6 +149,18 @@ func (r *renderer) move(n *widget.Node, ctl *control, d int) {
 	for i := at + step; i >= 0 && i < len(n.Items) && d > 0; i += step {
 		if !n.Items[i].Header {
 			to, d = i, d-1
+		}
+	}
+	if to < 0 && n.WrapAround && d == 1 {
+		for i := range n.Items {
+			j := i
+			if step < 0 {
+				j = len(n.Items) - 1 - i
+			}
+			if !n.Items[j].Header {
+				to = j
+				break
+			}
 		}
 	}
 	if to < 0 {

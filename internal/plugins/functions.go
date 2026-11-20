@@ -65,6 +65,10 @@ globalThis.glitched = Object.freeze({
     setAccess: (thread, access) => app("threads.setAccess", { thread: thread ?? "", access }),
   }),
   models: Object.freeze({ list: () => app("models.list") }),
+  commands: Object.freeze({
+    list: () => app("commands.list"),
+    run: (id) => app("commands.run", { id }),
+  }),
   projects: Object.freeze({
     remove: (workspace, machine) => app("projects.remove", { workspace, machine: machine ?? "" }),
     list: () => app("projects.list"),

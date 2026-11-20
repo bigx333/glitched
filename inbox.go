@@ -301,33 +301,13 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 	if a.arriving(t) {
 		r.Transition(arrive) // just sent from the hero, sliding in
 	}
-	fx, playing := a.rowFx[t.id()]
-	if playing && fx.done(c.Now()) {
-		delete(a.rowFx, t.id())
-		playing = false
-	}
-	if playing {
+	if fx, playing := a.rowJoke(c, t.id()); playing {
 		rowGag(r, fx)
 	}
 	hovered := r.Hovered()
 	r.ContextMenu(func(m *ui.Menu) { a.threadMenu(c, m, t, cat) })
 	if r.Children(func() {
-		wrap := ui.Box(c).Children(func() {
-			tile := projectTile(c, it.p, 20)
-			if playing {
-				tileGag(tile, fx)
-			}
-			// The thread's state, as a badge on the project's tile.
-			if mark := a.statusBadge(c, a.statusOf(t)); mark.Valid() {
-				mark.Absolute().Right(-3).Bottom(-3)
-			}
-			if playing {
-				floatGag(c, fx)
-			}
-		})
-		if playing && fx.kind == gagSettle {
-			burstGag(wrap, fx)
-		}
+		a.threadTile(c, t, it.p)
 		if a.renaming == t.id() {
 			a.renameInput(c, t)
 			return
@@ -381,6 +361,39 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 		}
 	}).Clicked() {
 		a.select_(t)
+	}
+}
+
+// rowJoke is the joke playing on the row of the thread id, if one is; one
+// done is over.
+func (a *app) rowJoke(c *ui.Context, id api.ID) (rowGagFx, bool) {
+	fx, playing := a.rowFx[id]
+	if playing && fx.done(c.Now()) {
+		delete(a.rowFx, id)
+		return fx, false
+	}
+	return fx, playing
+}
+
+// threadTile is the tile of t's project, p, with t's state as a badge on
+// it, and the joke playing on t's row.
+func (a *app) threadTile(c *ui.Context, t thread, p *project) {
+	fx, playing := a.rowJoke(c, t.id())
+	wrap := ui.Box(c).Children(func() {
+		tile := projectTile(c, p, 20)
+		if playing {
+			tileGag(tile, fx)
+		}
+		// The thread's state, as a badge on the project's tile.
+		if mark := a.statusBadge(c, a.statusOf(t)); mark.Valid() {
+			mark.Absolute().Right(-3).Bottom(-3)
+		}
+		if playing {
+			floatGag(c, fx)
+		}
+	})
+	if playing && fx.kind == gagSettle {
+		burstGag(wrap, fx)
 	}
 }
 

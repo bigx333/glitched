@@ -387,7 +387,7 @@ func TestItemsSegmentsAndNatives(t *testing.T) {
 	}
 
 	var drawn []string
-	native := Style{Native: func(c *ui.Context, n *widget.Node, fire func(any)) {
+	native := Style{Native: func(c *ui.Context, n *widget.Node, _ string, fire func(any)) {
 		drawn = append(drawn, n.Name+" "+string(n.Props["path"]))
 		if ui.Button(c, "Mark").Clicked() {
 			fire(map[string]any{"remaining": 2})

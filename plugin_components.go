@@ -14,6 +14,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 
+	"glitched/internal/api"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/render"
 	"glitched/internal/plugins/widget"
@@ -149,21 +150,52 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 			cp.fallback(c)
 			continue
 		}
-		a.drawPlace(c, cp.box(), d.pl, cp.key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, fire func(any)) { a.drawNative(c, name, t, n, fire, cp.native) })
+		a.drawPlace(c, cp.box(), d.pl, cp.key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, row string, fire func(any)) {
+			a.drawNative(c, name, t, row, n, fire, cp.native)
+		})
 	}
 	return drewAll
 }
 
 // drawNative draws the native widget n in a copy of the component about
-// t: only in the components it names. body is the copy's native body,
-// which transcript.body draws.
-func (a *app) drawNative(c *ui.Context, component string, t *thread, n *widget.Node, fire func(any), body func()) {
-	in := widget.Natives[n.Name].In
-	if !slices.Contains(in, component) || widget.Natives[n.Name].Thread && t == nil {
-		ui.Text(c, n.Name+" draws only in "+strings.Join(in, ", ")+".").TextColor(palette.muted).Margin(ui.Auto)
+// t, or, in a list's row, about the thread its item names, row: only in
+// the components it names. body is the copy's native body, which
+// transcript.body draws.
+func (a *app) drawNative(c *ui.Context, component string, t *thread, row string, n *widget.Node, fire func(any), body func()) {
+	nat := widget.Natives[n.Name]
+	if nat.Row {
+		t = nil
+		if id, err := api.ParseID(row); err == nil {
+			if rt, ok := a.find(id); ok {
+				t = &rt
+			}
+		}
+	}
+	if !slices.Contains(nat.In, component) || (nat.Thread || nat.Row) && t == nil {
+		ui.Text(c, n.Name+" draws only in "+strings.Join(nat.In, ", ")+".").TextColor(palette.muted).Margin(ui.Auto)
 		return
 	}
 	switch n.Name {
+	case "thread.row.actions":
+		a.rowActions(c, *t, a.shownIn(*t))
+	case "thread.rename":
+		if a.renaming == t.id() {
+			a.renameInput(c, *t)
+		}
+	case "thread.tile":
+		a.threadTile(c, *t, a.projectOf(*t))
+	case "thread.status":
+		var dot bool
+		json.Unmarshal(n.Props["dot"], &dot)
+		if dot {
+			a.statusDot(c, a.statusOf(*t), failedLast(*t))
+		} else {
+			a.statusMark(c, a.statusOf(*t))
+		}
+	case "thread.children":
+		if len(a.shown(*t)) > 0 {
+			a.childToggle(c, *t)
+		}
 	case "composer.input":
 		a.composerIn(c)
 	case "transcript.body":
