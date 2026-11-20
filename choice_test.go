@@ -22,7 +22,7 @@ import (
 // once the app starts anew on the same state directory.
 func TestTheNewThreadDefaultOutlivesARestart(t *testing.T) {
 	dir := t.TempDir()
-	a := newApp(dir, nil, func(func()) {})
+	a := testApp(t, dir, nil, func(func()) {})
 	tt := ui.NewTester(a.view, 1320, 860)
 	for _, click := range []string{"Model", "Sonnet 5.5", "Fast mode", "Access", accessAsk} {
 		if err := tt.Click(click); err != nil {
@@ -31,7 +31,7 @@ func TestTheNewThreadDefaultOutlivesARestart(t *testing.T) {
 	}
 	a.effort = "Low"
 	tt.Frame()
-	again := newApp(dir, nil, func(func()) {})
+	again := testApp(t, dir, nil, func(func()) {})
 	if got, want := again.choice(), (choice{Model: "Claude Sonnet 5.5", Effort: "Low", Fast: true, Access: accessAsk}); got != want {
 		t.Fatalf("after a restart the composer has %+v, want %+v", got, want)
 	}
@@ -45,7 +45,7 @@ func TestAStaleComposerFileKeepsTheDefaults(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "composer.json"), []byte(`{"model":"Claude Opus 3","effort":"Huge","access":"Root"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := newApp(dir, nil, func(func()) {}).choice(); got != want {
+	if got := testApp(t, dir, nil, func(func()) {}).choice(); got != want {
 		t.Fatalf("from a stale file the composer has %+v, want %+v", got, want)
 	}
 }
@@ -55,7 +55,7 @@ func TestAStaleComposerFileKeepsTheDefaults(t *testing.T) {
 // chose shows what a restart would: the other's choice with its own.
 func TestTwoWindowsOnOneStateDirectoryKeepEachOthersDefault(t *testing.T) {
 	dir := t.TempDir()
-	one, two := newApp(dir, nil, func(func()) {}), newApp(dir, nil, func(func()) {})
+	one, two := testApp(t, dir, nil, func(func()) {}), testApp(t, dir, nil, func(func()) {})
 	first, second := ui.NewTester(one.view, 1320, 860), ui.NewTester(two.view, 1320, 860)
 	click := func(tt *ui.Tester, texts ...string) {
 		t.Helper()
@@ -65,7 +65,7 @@ func TestTwoWindowsOnOneStateDirectoryKeepEachOthersDefault(t *testing.T) {
 			}
 		}
 	}
-	restarted := func() choice { return newApp(dir, nil, func(func()) {}).choice() }
+	restarted := func() choice { return testApp(t, dir, nil, func(func()) {}).choice() }
 
 	click(first, "Access", accessAsk)
 	click(second, "Model", "Sonnet 5.5")
@@ -91,7 +91,7 @@ func TestTwoWindowsOnOneStateDirectoryKeepEachOthersDefault(t *testing.T) {
 // not tried again each frame until then.
 func TestADefaultThatCouldNotBeSavedIsSavedWithTheNext(t *testing.T) {
 	dir := t.TempDir()
-	a := newApp(dir, nil, func(func()) {})
+	a := testApp(t, dir, nil, func(func()) {})
 	tt := ui.NewTester(a.view, 1320, 860)
 	// Nothing can be written over a directory.
 	path := filepath.Join(dir, "composer.json")
@@ -115,7 +115,7 @@ func TestADefaultThatCouldNotBeSavedIsSavedWithTheNext(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got, want := newApp(dir, nil, func(func()) {}).choice(), a.choice(); got != want || !want.Fast || want.Access != accessAsk {
+	if got, want := testApp(t, dir, nil, func(func()) {}).choice(), a.choice(); got != want || !want.Fast || want.Access != accessAsk {
 		t.Errorf("after a restart the default is %+v, want %+v", got, want)
 	}
 }
@@ -127,14 +127,14 @@ func TestAComposerFileThatDoesNotParseIsReplaced(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "composer.json"), []byte(`{"model": `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	a := newApp(dir, nil, func(func()) {})
+	a := testApp(t, dir, nil, func(func()) {})
 	tt := ui.NewTester(a.view, 1320, 860)
 	for _, click := range []string{"Access", accessAsk} {
 		if err := tt.Click(click); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if got, want := newApp(dir, nil, func(func()) {}).choice(), a.choice(); got != want || want.Access != accessAsk {
+	if got, want := testApp(t, dir, nil, func(func()) {}).choice(), a.choice(); got != want || want.Access != accessAsk {
 		t.Errorf("after a restart the default is %+v, want %+v", got, want)
 	}
 }
@@ -340,7 +340,7 @@ func TestADefaultChosenByAThumbItsPickerClosedOnIsKept(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			a := newApp(dir, nil, func(func()) {})
+			a := testApp(t, dir, nil, func(func()) {})
 			tt := ui.NewTester(a.view, 1320, 860)
 			if err := tt.Click("Model"); err != nil {
 				t.Fatal(err)
@@ -355,7 +355,7 @@ func TestADefaultChosenByAThumbItsPickerClosedOnIsKept(t *testing.T) {
 			}
 			tt.Release(at(0), y)
 			tt.Advance(time.Second)
-			if got := newApp(dir, nil, func(func()) {}).effort; a.effort != "Low" || got != "Low" {
+			if got := testApp(t, dir, nil, func(func()) {}).effort; a.effort != "Low" || got != "Low" {
 				t.Errorf("the thumb chose %q; after a restart the default is %q, want Low", a.effort, got)
 			}
 			a.router.Push("/")
@@ -366,7 +366,7 @@ func TestADefaultChosenByAThumbItsPickerClosedOnIsKept(t *testing.T) {
 				}
 			}
 			tt.Advance(time.Second)
-			if got, want := newApp(dir, nil, func(func()) {}).choice(), a.choice(); got != want || want.Access != accessAsk {
+			if got, want := testApp(t, dir, nil, func(func()) {}).choice(), a.choice(); got != want || want.Access != accessAsk {
 				t.Errorf("after a restart the default is %+v, want %+v as chosen since", got, want)
 			}
 		})
@@ -436,7 +436,7 @@ func TestAThumbHeldInAThreadChoosesNothingInTheDraft(t *testing.T) {
 	if _, open := h.tt.Find("Faster"); open {
 		t.Errorf("the thread's picker is open over the draft: %q", h.tt.Texts())
 	}
-	if got := newApp(h.a.dir, nil, func(func()) {}).effort; h.a.effort != "High" || got != "High" {
+	if got := testApp(t, h.a.dir, nil, func(func()) {}).effort; h.a.effort != "High" || got != "High" {
 		t.Errorf("a thumb held in a thread left the default's effort at %q, and %q after a restart; want High, as it was", h.a.effort, got)
 	}
 	if got := th.View.Model.Effort; got != "medium" || len(th.Pending) != 0 {
@@ -631,7 +631,7 @@ func TestADefaultChosenByAThumbTheDraftLostIsKept(t *testing.T) {
 			h.a.router.Push("/")
 			h.a.select_(th)
 			h.tt.Advance(time.Second)
-			if got := newApp(h.a.dir, nil, func(func()) {}).effort; got != "Low" {
+			if got := testApp(t, h.a.dir, nil, func(func()) {}).effort; got != "Low" {
 				t.Errorf("after a restart the default's effort is %q, want the Low its thumb chose", got)
 			}
 			if got := th.View.Model.Effort; got != "high" || len(th.Pending) != 0 {

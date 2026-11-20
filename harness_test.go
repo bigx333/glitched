@@ -71,10 +71,22 @@ func (p *posts) run() bool {
 // What it posts waits for a tester made with newTester to run it.
 func offline(t *testing.T) *app {
 	p := &posts{wake: make(chan struct{}, 1)}
-	a := newApp(t.TempDir(), nil, p.post)
-	t.Cleanup(a.settingsOut.wait)
+	a := testApp(t, t.TempDir(), nil, p.post)
 	offlinePosts.Store(a, p)
 	t.Cleanup(func() { offlinePosts.Delete(a) })
+	return a
+}
+
+// testApp is newApp for a test, which it outlives by nothing: its
+// plugins' runtimes stop as the test ends, as the app's do as it quits.
+// A runtime left running holds the app, and with it the window the test
+// drew, its surfaces and all, to the end of the test binary.
+func testApp(t *testing.T, dir string, engine func(*daemon.Config), post func(func())) *app {
+	a := newApp(dir, engine, post)
+	t.Cleanup(a.settingsOut.wait)
+	if a.plugins != nil {
+		t.Cleanup(a.plugins.Close)
+	}
 	return a
 }
 
@@ -145,8 +157,7 @@ func start(t *testing.T, dir string) *harness {
 func startWith(t *testing.T, dir string, engine func(*daemon.Config)) *harness {
 	t.Helper()
 	p := &posts{wake: make(chan struct{}, 1)}
-	a := newApp(dir, engine, p.post)
-	t.Cleanup(a.settingsOut.wait)
+	a := testApp(t, dir, engine, p.post)
 	if err := a.backend.Start(); err != nil {
 		t.Fatal(err)
 	}

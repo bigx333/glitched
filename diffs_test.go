@@ -192,7 +192,7 @@ func readNow(t *testing.T, a *app, p *posts, th thread, f fileChange) *fileDiff 
 // posted is the app before its manager starts, with what it posts queued.
 func posted(t *testing.T) (*app, *posts) {
 	p := &posts{wake: make(chan struct{}, 1)}
-	return newApp(t.TempDir(), nil, p.post), p
+	return testApp(t, t.TempDir(), nil, p.post), p
 }
 
 // The panel shows only a file in the workspace, which an agent's edit
