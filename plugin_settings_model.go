@@ -192,6 +192,13 @@ func (a *app) partState(p plugins.Plugin, name string) partState {
 	if drawer, drawn := a.partDrawer(name); drawn && drawer.Folder != p.Folder {
 		return partState{"Standing by", toneQuiet, drawer.Name + " draws it in place of this one."}
 	}
+	if drew := slices.ContainsFunc(a.copiesShown(name), func(cp copyDrawn) bool { return cp.plugin == p.ID }); shown > 0 && !drew {
+		why := "It hasn't drawn the copies shown yet"
+		if len(nulls) > 0 {
+			why = fmt.Sprintf("It answered null for %d of the %d copies shown, and hasn't drawn the others yet", len(nulls), shown)
+		}
+		return partState{"Not drawn yet", toneQuiet, why + a.drawnInstead(a.copiesShown(name), "it")}
+	}
 	if len(nulls) > 0 {
 		return partState{"Drawing some", toneGood, fmt.Sprintf("It answered null for %d of the %d copies shown%s", len(nulls), shown, a.drawnInstead(nulls, "those"))}
 	}
