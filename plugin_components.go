@@ -15,6 +15,7 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 
 	"glitched/internal/plugins"
+	"glitched/internal/plugins/render"
 	"glitched/internal/plugins/widget"
 )
 
@@ -22,11 +23,23 @@ import (
 // key, the box it makes to draw in, its context from the thread's record
 // as each plugin may see it, and its native body, which Glitched draws
 // while no plugin has drawn the copy yet. Nil draws nothing then.
+// builtin is the native node the built-in places as its whole drawing.
 type componentCopy struct {
 	key     string
 	box     func() ui.Element
 	context func(plugins.ThreadRecord) any
 	native  func()
+	builtin *widget.Node
+}
+
+// fallback draws the copy's native body in the box the built-in's drawing
+// puts it in, so that the body keeps its state, as a selection, when a
+// drawing takes over.
+func (cp componentCopy) fallback(c *ui.Context) {
+	if cp.native == nil {
+		return
+	}
+	cp.box().Children(func() { render.NativeBox(c, cp.builtin, 0).Children(cp.native) })
 }
 
 // pluginComponent draws copies of the component name, each with the first
@@ -44,9 +57,7 @@ type componentCopy struct {
 func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...componentCopy) bool {
 	if a.plugins == nil {
 		for _, cp := range copies {
-			if cp.native != nil {
-				cp.box().Children(cp.native)
-			}
+			cp.fallback(c)
 		}
 		return false
 	}
@@ -132,9 +143,7 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 		d := cmp.Or(good[i], failed[i])
 		if d == nil || good[i] == nil && plugins.ComponentNamed(name).Native {
 			drewAll = false
-			if cp.native != nil {
-				cp.box().Children(cp.native)
-			}
+			cp.fallback(c)
 			continue
 		}
 		a.drawPlace(c, cp.box(), d.pl, cp.key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, fire func(any)) { a.drawNative(c, name, t, n, fire, cp.native) })

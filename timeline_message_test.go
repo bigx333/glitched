@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -151,5 +152,101 @@ export function place({ items }) {
 	settlePlugins(t, a, tt, h.p)
 	if !tt.HasText("Mine assistant 2") {
 		t.Fatalf("the plugin wasn't asked once more as the reply ended: %q", tt.Texts())
+	}
+}
+
+// replyKeyOf is the key of the fake turn's reply.
+func replyKeyOf(t *testing.T, h *harness) string {
+	t.Helper()
+	es := entriesOf(h.a.current())
+	i := slices.IndexFunc(es, func(e entry) bool {
+		return e.kind == entryAssistant && strings.Contains(e.text, "Looking at the code.")
+	})
+	if i < 0 {
+		t.Fatal("reply missing from the transcript")
+	}
+	return es[i].key
+}
+
+// A reply's selection and its Quote bar outlive the built-in drawing the
+// row Glitched drew while the built-in had not.
+func TestASelectedReplyKeepsItsQuoteWhenTheBuiltInTakesOver(t *testing.T) {
+	h := enterReady(t, fake.New(fake.Turn(false)), "go")
+	a, tt := h.a, h.tt
+	if err := a.plugins.SetGranted("timeline", "ui.replace", false); err != nil {
+		t.Fatal(err)
+	}
+	settlePlugins(t, a, tt, h.p)
+	if _, ok := a.partDrawer("timeline.message"); ok {
+		t.Fatal("the timeline plugin still draws with the grant revoked")
+	}
+	sel := dragHalfReply(t, h)
+	tt.Advance(quoteWait + 50*time.Millisecond)
+	if !barShown(h) {
+		t.Fatal("could not open the quote bar on the native fallback")
+	}
+	if err := a.plugins.SetGranted("timeline", "ui.replace", true); err != nil {
+		t.Fatal(err)
+	}
+	settlePlugins(t, a, tt, h.p)
+	tt.Advance(quoteWait + 50*time.Millisecond)
+	if drawer, ok := a.partDrawer("timeline.message"); !ok || drawer.ID != "timeline" || !drawer.Builtin {
+		t.Fatalf("the built-in did not take over from Glitched's own rows: %+v, %v", drawer, ok)
+	}
+	if node := a.plugins.App("timeline").PlaceView("row", replyKeyOf(t, h)); node == nil || node.Name != "transcript.body" {
+		t.Fatalf("the built-in did not draw the selected reply: %+v", node)
+	}
+	if !barShown(h) || a.quote.text != sel {
+		t.Fatalf("after the layout handoff, selection=%q and quote bar=%v; want %q with the quote bar", a.quote.text, barShown(h), sel)
+	}
+	if err := tt.Click("Quote"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(a.attachments, func(at attachment) bool { return at.quote && at.text == sel }) {
+		t.Fatalf("Quote did not attach the original selected text %q", sel)
+	}
+}
+
+// And a user's copy that places only transcript.body, drawn late, keeps
+// them too.
+func TestASelectedReplyKeepsItsQuoteWhenALateCopyTakesOver(t *testing.T) {
+	h := enterReady(t, fake.New(fake.Turn(false)), "go")
+	a, tt := h.a, h.tt
+	if err := a.plugins.SetGranted("timeline", "ui.replace", false); err != nil {
+		t.Fatal(err)
+	}
+	h.untilShown("the reply", "Looking at the code.")
+	settlePlugins(t, a, tt, h.p)
+	manifest := `{"id":"async-rows","name":"Async rows","main":"index.js","contract":"glitched","contractVersion":2,
+	"capabilities":["ui.place","ui.replace"],"glitched":{"places":[{"id":"row","at":"timeline.message","replaces":true}]}}`
+	writeOwnPlugin(t, a, "async-rows", manifest, `
+export async function place({items}) {
+	await glitched.app.settings.get()
+	return items.map(() => ({type:"native", id:"body", name:"transcript.body"}))
+}`)
+	if err := a.plugins.SetGranted("async-rows", "ui.replace", true); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	key := replyKeyOf(t, h)
+	s := a.plugins.App("async-rows")
+	if s.PlaceView("row", key) != nil {
+		t.Fatal("the user layout drew before the UI answered its pending call")
+	}
+	sel := dragHalfReply(t, h)
+	tt.Advance(quoteWait + 50*time.Millisecond)
+	if !barShown(h) {
+		t.Fatal("no quote bar on the native fallback")
+	}
+	if s.PlaceView("row", key) != nil {
+		t.Fatal("the user layout replaced the native fallback before selection was captured")
+	}
+	settlePlugins(t, a, tt, h.p)
+	tt.Advance(quoteWait + 50*time.Millisecond)
+	if node := s.PlaceView("row", key); node == nil || node.Name != "transcript.body" || s.Err != nil {
+		t.Fatalf("did not publish the user's finished layout: %+v, %v", node, s.Err)
+	}
+	if !barShown(h) || a.quote.text != sel {
+		t.Fatalf("finishing a native-only layout cleared selection %q to %q (quote bar: %v)", sel, a.quote.text, barShown(h))
 	}
 }
