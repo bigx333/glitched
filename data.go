@@ -266,6 +266,7 @@ type rowsCache struct {
 	tr      *client.Transcript
 	posts   uint64
 	edits   int // the transcript's edits read
+	filesOf int // the entries files was derived from, or -1
 	settled settledRows
 	paused  []int // the rows marked paused
 	live    *deriving
@@ -330,18 +331,24 @@ func (a *app) rowsOf(t thread) rows {
 // live part again writes past the settled part's.
 func (c *rowsCache) derive(tr *client.Transcript) {
 	var src []client.Entry
-	low, edits := 0, 0
+	var edited []int
+	all, mark := false, 0
 	if tr != nil {
 		src = tr.Entries
-		low, edits = tr.Edits(c.edits)
+		edited, all, mark = tr.Edits(c.edits)
 	}
 	s := &c.settled
-	if c.tr != tr || !s.holds(src) || low < s.entries {
+	if c.tr != tr || !s.holds(src) || all || slices.ContainsFunc(edited, func(i int) bool { return i < s.entries }) {
 		rowsEpochs++
-		*c = rowsCache{rows: rows{epoch: rowsEpochs}}
+		*c = rowsCache{rows: rows{epoch: rowsEpochs}, filesOf: -1}
 		*s = settledRows{n: map[string]int{}, listed: map[api.ID]bool{}, at: map[string]int{}}
 	}
-	c.tr, c.edits = tr, edits
+	// The files are derived again only as the work changes: a reply
+	// streaming in leaves them.
+	if slices.ContainsFunc(edited, func(i int) bool { _, ok := src[i].(*client.WorkEntry); return ok }) {
+		c.filesOf = -1
+	}
+	c.tr, c.edits = tr, mark
 	for _, i := range c.paused {
 		c.es[i].paused = ""
 	}
@@ -375,7 +382,9 @@ func (c *rowsCache) derive(tr *client.Transcript) {
 		}
 	}
 	c.live, c.head = live, live.es
-	c.files = addFiles(slices.Clone(s.files), maps.Clone(s.at), live.es[s.es:])
+	if c.filesOf != len(src) {
+		c.files, c.filesOf = addFiles(slices.Clone(s.files), maps.Clone(s.at), live.es[s.es:]), len(src)
+	}
 	c.turns, _ = addTurns(turns, s.steps, live.es, s.es)
 	c.headTs = len(c.turns)
 }

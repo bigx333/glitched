@@ -445,9 +445,10 @@ type app struct {
 	leavingFullScreen func()
 	// lists are the threads' timelines, by thread.
 	lists map[api.ID]*ui.ListState
-	// markerFocus is the turn whose marker held the focus last frame, or
-	// -1: turnMarkers builds it and its neighbours.
-	markerFocus int
+	// markerFocus is, by thread, the turn whose marker held the focus
+	// when its markers were last drawn: turnMarkers builds it and its
+	// neighbours.
+	markerFocus map[api.ID]int
 	// rows are the threads' timelines' rows, by thread, as rowsOf
 	// derives them; posts counts the changes posted to the window, after
 	// which they are derived again.
@@ -660,6 +661,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		steers:         map[api.ID]steer{},
 		post:           post,
 		lists:          map[api.ID]*ui.ListState{},
+		markerFocus:    map[api.ID]int{},
 		rows:           map[api.ID]*rowsCache{},
 		files:          map[string][]string{},
 		slashLists:     map[slashKey]*slashList{},
