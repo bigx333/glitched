@@ -4,7 +4,9 @@ import (
 	"go/ast"
 	"go/parser"
 	gotoken "go/token"
+	"image"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -64,8 +66,10 @@ func TestEveryOverlayIsTheApps(t *testing.T) {
 
 // An overlay dismissed gives the focus back to what had it before it
 // opened: a turn's marker, past the window's or not, a thread in the
-// sidebar, or a popover's button. Each key is followed by a frame and no
-// more, as on the Mac.
+// sidebar, or a popover's button, and shows where it went. Each key comes
+// as one event, with no frame between its press and its release, as the
+// Mac probe posts them: KeyRepeat sends the press alone, and the frames it
+// asks for follow.
 func TestDismissingGivesTheFocusBack(t *testing.T) {
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
@@ -136,6 +140,33 @@ func TestDismissingGivesTheFocusBack(t *testing.T) {
 		}
 		focused(t, marker(past), "the alert dismissed")
 	})
+	t.Run("the palette, from a turn in view, drawn focused", func(t *testing.T) {
+		if err := h.tt.Click(marker(0)); err != nil {
+			t.Fatal(err)
+		}
+		h.tt.Move(660, 300)
+		h.tt.KeyRepeat(0, ui.KeyTab)
+		h.tt.Advance(time.Second)
+		focused(t, marker(1), "Tab from turn 0")
+		e, ok := h.tt.Access(marker(1))
+		if !ok {
+			t.Fatal("turn 1's marker doesn't show")
+		}
+		// The marker's box and the ring around it.
+		r := e.Bounds
+		at := image.Rect(int(r.X)-4, int(r.Y)-4, int(r.X+r.W)+4, int(r.Y+r.H)+4)
+		shown := func() []byte {
+			img := h.tt.Image()
+			return img.SubImage(at).(*image.RGBA).Pix
+		}
+		want := slices.Clone(shown())
+		h.tt.KeyRepeat(ui.Cmd, ui.KeyK)
+		h.tt.KeyRepeat(0, ui.KeyEscape)
+		focused(t, marker(1), "the palette dismissed")
+		if !slices.Equal(shown(), want) {
+			t.Error("the marker given the focus back isn't drawn as it was focused")
+		}
+	})
 	t.Run("a popover, from its button", func(t *testing.T) {
 		// The composer, and the picker's button in it, show at the end.
 		if err := h.tt.Click("Jump to latest"); err != nil {
@@ -158,8 +189,49 @@ func TestDismissingGivesTheFocusBack(t *testing.T) {
 		if err := h.tt.Click("Another thread"); err != nil {
 			t.Fatal(err)
 		}
+		focused(t, "Another thread", "a click on it")
 		h.tt.KeyRepeat(ui.Cmd, ui.KeyK)
 		h.tt.KeyRepeat(0, ui.KeyEscape)
 		focused(t, "Another thread", "the palette dismissed")
 	})
+}
+
+// Whatever an overlay's content takes the focus with as it shows, the
+// app's popovers and dialogs give it back to what had it before.
+func TestOverlaysKeepTheFocusBefore(t *testing.T) {
+	for _, kind := range []string{"popover", "dialog"} {
+		t.Run(kind, func(t *testing.T) {
+			a := app{covers: map[coverKey]*ui.Handle{}}
+			var open bool
+			var q string
+			tt := ui.NewTester(func(c *ui.Context) {
+				ui.Button(c.Key("before"), "Before")
+				b := ui.Button(c.Key("anchor"), "Open")
+				if c.Shortcut(ui.Cmd, ui.KeyK) {
+					open = true
+				}
+				field := func() { ui.TextInput(c.Key("q"), &q).Label("Query").AutoFocus() }
+				if kind == "popover" {
+					a.popover(c, b, &open, func(panel ui.Element) { panel.Children(field) })
+				} else {
+					a.dialog(c, &open, func(_, panel ui.Element) { panel.Children(field) })
+				}
+			}, 400, 300)
+			tt.Frame()
+			if err := tt.Click("Before"); err != nil {
+				t.Fatal(err)
+			}
+			tt.KeyRepeat(ui.Cmd, ui.KeyK)
+			if !open || !tt.Focused("Query") {
+				t.Fatalf("⌘K: open %v, the field focused %v", open, tt.Focused("Query"))
+			}
+			tt.KeyRepeat(0, ui.KeyEscape)
+			if open {
+				t.Fatal("Escape didn't close it")
+			}
+			if !tt.Focused("Before") {
+				t.Error("the focus didn't go back to what had it before")
+			}
+		})
+	}
 }

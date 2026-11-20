@@ -413,6 +413,9 @@ type app struct {
 	coverN          int
 	over            []ui.Rect
 	blind, blinding bool
+	// focusKept are the overlays showing, by focusBefore's key, that keep
+	// the element that had the focus before they opened (overlay.go).
+	focusKept map[string]bool
 	// zap is a request's answers just answered, breaking up as they go;
 	// answerAt where the waiting request's answers were last laid out.
 	zap      approvalZap
