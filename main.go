@@ -445,10 +445,10 @@ type app struct {
 	leavingFullScreen func()
 	// lists are the threads' timelines, by thread.
 	lists map[api.ID]*ui.ListState
-	// markerFocus is, by thread, the turn whose marker held the focus
-	// when its markers were last drawn: turnMarkers builds it and its
-	// neighbours.
-	markerFocus map[api.ID]int
+	// markerFocus is, by thread, the key of the message whose marker held
+	// the focus when its markers were last drawn: turnMarkers builds it
+	// and its neighbours.
+	markerFocus map[api.ID]string
 	// rows are the threads' timelines' rows, by thread, as rowsOf
 	// derives them; posts counts the changes posted to the window, after
 	// which they are derived again.
@@ -598,7 +598,7 @@ type app struct {
 	pluginMessages map[string]*toldMessages
 	// pluginFiles are the thread's changed files the plugins were told
 	// of, by thread id, with each one's last edit.
-	pluginFiles map[string]map[string]time.Time
+	pluginFiles map[string]*toldFiles
 	// showPluginTab shows pluginTabShown in the panel beside the chat.
 	showPluginTab  bool
 	pluginTabShown pluginTab
@@ -661,7 +661,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		steers:         map[api.ID]steer{},
 		post:           post,
 		lists:          map[api.ID]*ui.ListState{},
-		markerFocus:    map[api.ID]int{},
+		markerFocus:    map[api.ID]string{},
 		rows:           map[api.ID]*rowsCache{},
 		files:          map[string][]string{},
 		slashLists:     map[slashKey]*slashList{},
@@ -685,7 +685,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		pluginRecords:  map[string]string{},
 		pluginSections: map[string]string{},
 		pluginMessages: map[string]*toldMessages{},
-		pluginFiles:    map[string]map[string]time.Time{},
+		pluginFiles:    map[string]*toldFiles{},
 		settings: settings{
 			theme:         systemTheme,
 			glass:         true,

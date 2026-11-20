@@ -89,8 +89,12 @@ func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
 	// The ticks built: those that show, then, past them, the ones
 	// around the focus and the last, which Shift-Tab comes to first.
 	built := [][2]int{{0, shown}}
-	if f, ok := a.markerFocus[id]; ok && f >= shown-1 && f < n {
-		built = append(built, [2]int{max(shown, f-1), min(n, f+2)})
+	if key, ok := a.markerFocus[id]; ok {
+		f := slices.IndexFunc(turns[shown-1:], func(tr turnInfo) bool { return es[tr.entry].key == key })
+		if f >= 0 {
+			f += shown - 1
+			built = append(built, [2]int{max(shown, f-1), min(n, f+2)})
+		}
 	}
 	built = append(built, [2]int{max(shown, n-1), n})
 	delete(a.markerFocus, id)
@@ -125,7 +129,7 @@ func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
 				}
 			})
 			if b.Focused() {
-				a.markerFocus[id] = k
+				a.markerFocus[id] = es[tr.entry].key
 			}
 			if b.Clicked() {
 				l.ScrollTo(tr.entry, ui.Start)

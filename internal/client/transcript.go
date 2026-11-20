@@ -30,6 +30,20 @@ type Transcript struct {
 	// change is noted once.
 	edits                []int
 	editsBase, editsRead int
+	// folds counts the snapshots that replaced the transcript, each of
+	// which starts its edits again.
+	folds int
+}
+
+// An EditMark is where a reader of a transcript's edits got to.
+type EditMark struct{ folds, n int }
+
+// Replace replaces the transcript with with, as folding a snapshot does:
+// its readers are told all changed.
+func (t *Transcript) Replace(with Transcript) {
+	folds := t.folds
+	*t = with
+	t.folds = folds + 1
 }
 
 // editsKept is how many edits a transcript keeps: a reader further
@@ -39,16 +53,15 @@ const editsKept = 4096
 // Edits is what changed in place among Entries since a reader's mark: the
 // indexes of the entries changed, all when the reader is too far behind to
 // say, and the mark to pass next time. The indexes are the transcript's,
-// to read before it changes again. An entry appended is not an edit;
-// folding a snapshot replaces the entries and starts the marks again,
-// which a mark past them tells, as all changed.
-func (t *Transcript) Edits(mark int) (edited []int, all bool, next int) {
-	next = t.editsBase + len(t.edits)
-	t.editsRead = next
-	if mark < t.editsBase || mark > next {
+// to read before it changes again. An entry appended is not an edit; a
+// snapshot replacing the transcript changes all.
+func (t *Transcript) Edits(mark EditMark) (edited []int, all bool, next EditMark) {
+	next = EditMark{t.folds, t.editsBase + len(t.edits)}
+	t.editsRead = next.n
+	if mark.folds != t.folds || mark.n < t.editsBase || mark.n > next.n {
 		return nil, true, next
 	}
-	return t.edits[mark-t.editsBase:], false, next
+	return t.edits[mark.n-t.editsBase:], false, next
 }
 
 // edited notes that e, one of Entries, changed in place. It looks from the
