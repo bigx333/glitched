@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -54,6 +55,12 @@ type placeSet struct {
 	drawn     map[string]map[string]drawnCopy
 	drawnGen  int
 	redrawAll bool
+	// drawSeq numbers the worker's drawings; shownSeq is the last one
+	// published, so an older one never takes a newer one's place.
+	drawSeq, shownSeq int
+	// answered are the copies shown that a published drawing answered,
+	// null included, by place and key, with the version it answered.
+	answered map[[2]string]string
 }
 
 // drawnCopy is a copy's drawing, nil when the plugin answered null.
@@ -96,6 +103,13 @@ func (s *Session) SetItems(place string, items []PlaceItem) {
 	same := slices.EqualFunc(old, items, func(o, it PlaceItem) bool { return o.Key == it.Key && o.Version == it.Version })
 	if !same {
 		s.places.items[place] = slices.Clone(items)
+		// What was waited on or answered of a copy no longer shown is
+		// forgotten with it.
+		for _, m := range []map[[2]string]string{s.places.tried, s.places.answered} {
+			maps.DeleteFunc(m, func(k [2]string, _ string) bool {
+				return k[0] == place && !slices.ContainsFunc(items, func(it PlaceItem) bool { return it.Key == k[1] })
+			})
+		}
 	}
 	s.mu.Unlock()
 	if !same {
@@ -131,7 +145,7 @@ func (s *Session) Places() []Place { return s.places.places }
 func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed error) {
 	start := time.Now()
 	drawn := map[string]map[string]*widget.Node{}
-	asked := map[[2]string]bool{}
+	asked := map[[2]string]string{}
 	ps := s.places
 	s.mu.Lock()
 	if ps.redrawAll || ps.drawnGen != gen || ps.drawn == nil {
@@ -157,7 +171,7 @@ func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed
 			} else {
 				todo = append(todo, it)
 			}
-			asked[[2]string{pl.ID, it.Key}] = true
+			asked[[2]string{pl.ID, it.Key}] = it.Version
 		}
 		for len(todo) > 0 && failed == nil {
 			batch := todo[:min(len(todo), MaxPlaceBatch)]
@@ -175,7 +189,8 @@ func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed
 	if failed == nil {
 		s.rows.drewView(&s.mu, state, nil)
 	}
-	d := placeDraw{gen, processed, drawn, asked, failed, time.Since(start)}
+	ps.drawSeq++
+	d := placeDraw{ps.drawSeq, gen, processed, drawn, asked, failed, time.Since(start)}
 	s.mu.Lock()
 	if s.places.first != nil {
 		select {
@@ -202,10 +217,11 @@ func (h *Host) awaitsApp(id string) bool {
 
 // placeDraw is one drawing of every copy of the places, or what failed.
 type placeDraw struct {
-	gen, processed int
-	drawn          map[string]map[string]*widget.Node
-	// asked are the copies it drew, by place and key, nulls included.
-	asked  map[[2]string]bool
+	seq, gen, processed int
+	drawn               map[string]map[string]*widget.Node
+	// asked are the copies it drew, by place and key, nulls included,
+	// with the version drawn.
+	asked  map[[2]string]string
 	failed error
 	took   time.Duration
 }
@@ -214,9 +230,10 @@ type placeDraw struct {
 func (s *Session) publish(d placeDraw) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || d.gen != s.gen {
-		return
+	if s.closed || d.gen != s.gen || d.seq <= s.places.shownSeq {
+		return // DrawFirst published it already, or a newer one is out
 	}
+	s.places.shownSeq = d.seq
 	s.Err = d.failed
 	s.places.Slow = d.took
 	if d.failed != nil {
@@ -229,7 +246,13 @@ func (s *Session) publish(d placeDraw) {
 		// A copy shown since the drawing began keeps its last drawing
 		// till one has it; a copy drawn null has none.
 		for _, it := range s.places.items[id] {
-			if n := s.places.views[id][it.Key]; n != nil && !d.asked[[2]string{id, it.Key}] {
+			k := [2]string{id, it.Key}
+			if v, ok := d.asked[k]; ok {
+				if s.places.answered == nil {
+					s.places.answered = map[[2]string]string{}
+				}
+				s.places.answered[k] = v
+			} else if n := s.places.views[id][it.Key]; n != nil {
 				views[it.Key] = n
 			}
 		}
@@ -249,7 +272,9 @@ func (s *Session) publish(d placeDraw) {
 // has drawn so far; the others shown keep theirs, so drawing these never
 // takes their drawings away.
 func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, deadline time.Time) {
-	first := make(chan placeDraw, 1)
+	// Room for the drawings the worker finishes while this one is read:
+	// the one with these copies may come after another.
+	first := make(chan placeDraw, 8)
 	s.mu.Lock()
 	if s.broken || s.done {
 		s.mu.Unlock()
@@ -258,15 +283,17 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 	if s.places.tried == nil {
 		s.places.tried = map[[2]string]string{}
 	}
-	var want [][2]string
+	// Each copy as items has it: one already answered at that version,
+	// null included, isn't waited on.
+	want := map[[2]string]string{}
 	for _, key := range keys {
 		i := slices.IndexFunc(items, func(it PlaceItem) bool { return it.Key == key })
 		k := [2]string{place, key}
-		if i < 0 || s.places.tried[k] == items[i].Version {
+		if i < 0 || s.places.tried[k] == items[i].Version || s.places.answered[k] == items[i].Version {
 			continue
 		}
 		s.places.tried[k] = items[i].Version
-		want = append(want, k)
+		want[k] = items[i].Version
 	}
 	if len(want) == 0 {
 		s.mu.Unlock()
@@ -303,7 +330,11 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 			}
 		case d := <-first:
 			s.publish(d)
-			if d.failed != nil || !slices.ContainsFunc(want, func(k [2]string) bool { return !d.asked[k] }) {
+			done := true
+			for k, v := range want {
+				done = done && d.asked[k] == v
+			}
+			if d.failed != nil || done {
 				return
 			}
 		case <-wait.C:

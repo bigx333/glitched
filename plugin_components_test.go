@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -173,5 +174,46 @@ func TestAFrameWaitsOnceForAComponentsNewCopies(t *testing.T) {
 		if !tt.HasText("plugin "+k) || tt.HasText("native "+k) {
 			t.Fatalf("once drawn, %s shows %q", k, tt.Texts())
 		}
+	}
+}
+
+// A copy the plugin answered null for shows its native body without the
+// frame waiting for it again, wherever it moves.
+func TestACopyAnsweredNullIsNotWaitedForAgain(t *testing.T) {
+	a := offline(t)
+	writeOwnPlugin(t, a, "my-send", sendManifest, `export function place({ items }) {
+	return items.map(() => null)
+}`)
+	for _, c := range []string{"ui.replace", "threads:write"} {
+		if err := a.plugins.SetGranted("my-send", c, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keys := []string{"b", "a"}
+	var took time.Duration
+	tt := ui.NewTester(func(c *ui.Context) {
+		start := time.Now()
+		ui.Column(c).Children(func() {
+			for _, k := range keys {
+				a.pluginComponent(c, "composer.send", nil, componentCopy{
+					key:     k,
+					box:     func() ui.Element { return ui.Column(c).Key(k) },
+					context: func(plugins.ThreadRecord) any { return k },
+					native:  func() { ui.Text(c, "native "+k) },
+				})
+			}
+		})
+		took = time.Since(start)
+		a.syncPlaces()
+	}, 400, 300)
+	v, _ := offlinePosts.Load(a)
+	settlePlugins(t, a, tt, v.(*posts))
+	keys = []string{"a", "b"}
+	tt.Frame()
+	if !tt.HasText("native a") || !tt.HasText("native b") {
+		t.Fatalf("copies answered null show %q; want their native bodies", tt.Texts())
+	}
+	if took >= firstDrawWait {
+		t.Fatalf("a frame waited %v for copies already answered null", took)
 	}
 }
