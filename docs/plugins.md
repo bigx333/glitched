@@ -258,7 +258,7 @@ Stable slots keep their name and context across Glitched's updates; others may m
 
 **What a copy may depend on.** A copy's drawing must depend only on the app session's state, the copy's own `key` and `context`, and your settings (`host.setting`). Glitched relies on that to draw only what changed:
 
-- When copies come or their context changes, and nothing else does, `place` is called with those copies alone. `items` is never the whole set of copies shown, and a copy that didn't change keeps its drawing without being asked again. Don't count `items` or draw one copy from another's context.
+- When copies come or their context changes, and nothing else does, `place` is called with those copies alone. `items` then holds only those copies, not every copy shown, and a copy that didn't change keeps its drawing without being asked again. Don't count `items` or draw one copy from another's context.
 - After anything else, every copy shown is drawn again. That covers an event or a timer `update` took, a setting changed, or your code reloaded, even when the state comes back the same.
 - `null` for a copy leaves it empty, even if it showed a widget before.
 
