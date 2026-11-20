@@ -50,19 +50,14 @@ type markerAt struct {
 }
 
 // markerState is what a thread's markers keep from frame to frame: the
-// marker that had the focus last, and the ticks built, by their messages'
-// keys.
+// marker that had the focus last, and the ticks built, in order, with a
+// handle to each to ask whether it has the focus. The handles are kept
+// and bound again from frame to frame, as many as ticks are built.
 type markerState struct {
 	focus   markerAt
 	focused bool
-	ticks   map[string]markerTick
-}
-
-// markerTick is a tick built: a handle to ask whether it has the focus,
-// and its turn.
-type markerTick struct {
-	h    *ui.Handle
-	turn int
+	built   []markerAt
+	handles []*ui.Handle
 }
 
 // markerPitch is how far apart the ticks are: a tick's hit area, its
@@ -118,39 +113,41 @@ func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
 		m = &markerState{}
 		a.markers[id] = m
 	}
-	for key, t := range m.ticks {
-		if t.h.FocusWithin(c) {
-			m.focus, m.focused = markerAt{key, t.turn}, true
+	for i, at := range m.built {
+		if m.handles[i].FocusWithin(c) {
+			m.focus, m.focused = at, true
 			break
 		}
 	}
 	// The ticks built: those that show, then, past them, two either side
-	// of the focus, for keys that come before a frame does, and the last,
-	// which Shift-Tab comes to first.
+	// of the focus, for keys that come before a frame does, and the last
+	// three, which Shift-Tab comes to first.
 	built := [][2]int{{0, shown}}
 	if m.focused {
-		// Where it was, unless messages came before it.
+		// Where it was, unless messages came before it; gone with its
+		// message.
 		f := m.focus.turn
 		if f >= n || es[turns[f].entry].key != m.focus.key {
 			f = slices.IndexFunc(turns, func(tr turnInfo) bool { return es[tr.entry].key == m.focus.key })
+			m.focus.turn, m.focused = f, f >= 0
 		}
 		if f >= shown-2 {
 			built = append(built, [2]int{max(shown, f-2), min(n, f+3)})
 		}
 	}
-	built = append(built, [2]int{max(shown, n-1), n})
-	ticks := make(map[string]markerTick, len(m.ticks))
+	built = append(built, [2]int{max(shown, n-3), n})
+	m.built = m.built[:0]
 	col.Children(func() {
 		pointed, pointedY := -1, float32(0)
 		nearest := float32(math.MaxFloat32)
 		tick := func(k int) {
 			tr := turns[k]
 			key := es[tr.entry].key
-			h := m.ticks[key].h
-			if h == nil {
-				h = &ui.Handle{}
+			if len(m.built) == len(m.handles) {
+				m.handles = append(m.handles, &ui.Handle{})
 			}
-			ticks[key] = markerTick{h, k}
+			h := m.handles[len(m.built)]
+			m.built = append(m.built, markerAt{key, k})
 			b := ui.ButtonBase(c.Key(key)).Padding(3, 6).Cursor(ui.CursorPointer).
 				Label("Go to: " + preview(es[tr.entry])).Bind(h)
 			box := b.Bounds()
@@ -195,7 +192,6 @@ func (a *app) turnMarkers(c *ui.Context, id api.ID, rs rows, l *ui.ListState) {
 			a.turnCard(c, es, turns, pointed, pointedY)
 		}
 	})
-	m.ticks = ticks
 }
 
 // turnCard previews a turn beside its tick, as Zeron's does: the message,
