@@ -612,10 +612,12 @@ func TestCommandPalette(t *testing.T) {
 	loop := h.thread("Investigate websocket reconnect loop")
 	h.click("Search")
 	h.tt.Type("websocket")
+	settlePlugins(t, h.a, h.tt, h.p)
 	if !h.tt.HasText(loop.View.Title) {
 		t.Fatalf("texts %q", h.tt.Texts())
 	}
 	h.tt.Key(0, ui.KeyEnter)
+	settlePlugins(t, h.a, h.tt, h.p)
 	if h.a.cmdkOpen || h.a.selected != loop.id() {
 		t.Errorf("open %v, selected %s", h.a.cmdkOpen, h.a.selected)
 	}
@@ -1144,16 +1146,18 @@ func TestPaletteScrollsToChoice(t *testing.T) {
 	tt.Frame()
 	cmds := a.commands()
 	last := cmds[len(cmds)-1].label
+	settlePlugins(t, a, tt, h.p)
 	tt.Key(0, ui.KeyUp) // wraps to the last
 	tt.Advance(time.Second)
-	if a.cmdkIndex != len(cmds)-1 {
-		t.Fatalf("choice %d, want the last, %d", a.cmdkIndex, len(cmds)-1)
+	if _, chosen := paletteShows(t, h); chosen != len(cmds)-1 {
+		t.Fatalf("choice %d, want the last, %d", chosen, len(cmds)-1)
 	}
 	r, ok := tt.Find(last)
 	if !ok || r.Y > 96+60+380 {
 		t.Errorf("the last result %q is not in view (%v, %v)", last, r, ok)
 	}
 	tt.Key(0, ui.KeyEnter)
+	settlePlugins(t, a, tt, h.p)
 	if a.cmdkOpen {
 		t.Error("Enter should open the choice and close the palette")
 	}

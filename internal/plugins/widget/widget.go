@@ -111,11 +111,13 @@ var Natives = map[string]Native{
 	// The sidebar's own parts of a thread's row, which its plugin's rows
 	// draw: the row's actions while it is pointed at, the field that
 	// renames it, its project's tile with its state and the jokes snooze
-	// and settle play on it, its state, and its children's toggle.
+	// and settle play on it, its state, and its children's toggle; and how
+	// long ago it was last active, as the palette shows it.
 	"thread.row.actions": {In: []string{"sidebar.body"}, Row: true},
 	"thread.rename":      {In: []string{"sidebar.body"}, Row: true},
 	"thread.tile":        {In: []string{"sidebar.body"}, Row: true},
-	"thread.status":      {Props: map[string]string{"dot": "bool"}, In: []string{"sidebar.body", "palette", "agents.body"}, Row: true},
+	"thread.status":      {Props: map[string]string{"dot": "bool", "size": "number"}, In: []string{"sidebar.body", "palette", "agents.body"}, Row: true},
+	"thread.age":         {In: []string{"palette"}, Row: true},
 	"thread.children":    {In: []string{"sidebar.body"}, Row: true},
 }
 
@@ -161,7 +163,9 @@ type Node struct {
 	// error or success; a button's: default, primary or danger; a badge's:
 	// default, accent, success, warning, danger or count; tabs' default,
 	// segmented or control (Settings' segmented control); a toggle's
-	// default or switch; an item's text plain or code.
+	// default or switch; an item's text plain or code; an input's default,
+	// search, or bare: no frame, filling its row and taking the keyboard
+	// as it shows, as the palette's search field.
 	Style string `json:"style,omitempty"`
 	// Size small is a text's or a ghost button's smaller size.
 	Size      string          `json:"size,omitempty"`
@@ -238,6 +242,8 @@ type Node struct {
 
 	// Italic slants a text.
 	Italic bool `json:"italic,omitempty"`
+	// SingleLine keeps a text on one line, cut short where it doesn't fit.
+	SingleLine bool `json:"singleLine,omitempty"`
 	// Popover is a ghost button's panel, a column anchored under it,
 	// shown while Open; OnClose fires as the user dismisses it. The
 	// column's Width is the panel's, 120 to 480.
@@ -405,7 +411,7 @@ var (
 		"toggle": {"", "default", "switch"},
 		"item":   {"", "code"},
 		"card":   {"", "default", "list"},
-		"input":  {"", "default", "search"},
+		"input":  {"", "default", "search", "bare"},
 	}
 	aligns = []string{"", "start", "center", "end", "stretch"}
 	// ghostContent is what a ghost button may show in place of its icon.
@@ -769,6 +775,8 @@ func (c *checker) extra(n *Node) error {
 		return fmt.Errorf("only a button with a popover has onClose")
 	case n.Italic && n.Type != "text":
 		return fmt.Errorf("a %s isn't italic", n.Type)
+	case n.SingleLine && n.Type != "text":
+		return fmt.Errorf("a %s has no singleLine", n.Type)
 	case n.Wrap && n.Type != "row":
 		return fmt.Errorf("only a row wraps")
 	case n.Opacity != 0 && (n.Type != "button" || n.Opacity < 0.2 || n.Opacity > 1):

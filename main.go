@@ -564,6 +564,9 @@ type app struct {
 	cmdkOpen  bool
 	cmdkQuery string
 	cmdkIndex int
+	// cmdkOpens counts the palette's openings, each a copy of its own of
+	// the palette component, which none of the last one's state shows in.
+	cmdkOpens int
 	cmdkList  ui.ListState
 
 	glassOffset ui.Point

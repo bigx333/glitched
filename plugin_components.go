@@ -208,12 +208,23 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 		a.threadTile(c, *t, a.projectOf(*t))
 	case "thread.status":
 		var dot bool
+		var size float32
 		json.Unmarshal(n.Props["dot"], &dot)
-		if dot {
-			a.statusDot(c, a.statusOf(*t), failedLast(*t))
-		} else {
-			a.statusMark(c, a.statusOf(*t))
+		json.Unmarshal(n.Props["size"], &size)
+		mark := func() {
+			if dot {
+				a.statusDot(c, a.statusOf(*t), failedLast(*t))
+			} else {
+				a.statusMark(c, a.statusOf(*t))
+			}
 		}
+		if size > 0 {
+			ui.Box(c).Size(size, size).Center().Shrink(0).Children(mark)
+		} else {
+			mark()
+		}
+	case "thread.age":
+		ui.Text(c, ago(t.View.UpdatedAt, a.now)).FontSize(11.5).TextColor(palette.faint).MinWidth(28).TextAlign(ui.End)
 	case "thread.children":
 		if len(a.shown(*t)) > 0 {
 			a.childToggle(c, *t)
