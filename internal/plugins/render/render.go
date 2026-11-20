@@ -264,6 +264,9 @@ func (r *renderer) fire(n *widget.Node, h *widget.Handler, typ string, value any
 		return
 	}
 	seq := r.dispatch(plugins.UIEvent{Type: typ, Handler: h.Name, Node: n.ID, Value: value, Payload: h.Payload, Row: r.row, Modifiers: r.mods}, r.cs.Values())
+	if r.row != nil {
+		return // a row's widgets keep no values: its ids are its own
+	}
 	if ctl := r.cs.m[n.ID]; ctl != nil && typ == "change" && seq > 0 {
 		ctl.last = seq
 	}

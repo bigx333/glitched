@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -17,7 +18,7 @@ export function view({ state }) {
 export function rows({ list, keys, state }) {
   calls++;
   asked.push(...keys);
-  return keys.map((k) => k === "none" ? null : { type: "text", text: list + ":" + k + "@" + state.n + "#" + calls });
+  return keys.map((k) => k === "none" ? null : k === "bad" ? { type: "input", id: "i" } : { type: "text", text: list + ":" + k + "@" + state.n + "#" + calls });
 }
 `
 
@@ -53,6 +54,13 @@ func TestAListAsksForTheRowsShownOnce(t *testing.T) {
 	if n := s.Row(at, widget.ListItem{Key: "none"}); n != nil {
 		t.Fatal("a row the plugin drew null shows")
 	}
+	s.Row(at, widget.ListItem{Key: "bad"})
+	s.Row(at, widget.ListItem{Key: "d"})
+	drawn("d", "", "l:d@0")
+	u.until(t, "the bad row's error", func() bool { return s.Err != nil })
+	if !strings.Contains(s.Err.Error(), "bad: ") || s.Row(at, widget.ListItem{Key: "bad"}) != nil {
+		t.Fatalf("a row that doesn't check: %v", s.Err)
+	}
 
 	// A new version of one item draws it alone, its last drawing showing
 	// meanwhile.
@@ -76,11 +84,21 @@ func TestAListAsksForTheRowsShownOnce(t *testing.T) {
 	rev = s.Rev
 	s.Dispatch(UIEvent{Type: "click", Handler: "h", Node: "n"}, nil)
 	u.until(t, "a view after", func() bool { return s.Rev > rev })
-	if v := texts(s); !strings.Contains(v, "asked a,b,c,") || strings.Count(v, "none") != 1 || strings.Count(v, "a") != 3 {
-		t.Fatalf("the plugin was asked for %s: the null row once", v)
+	if v := texts(s); !strings.Contains(v, "asked a,b,c,") || strings.Count(v, "none") != 1 || strings.Count(v, "bad") != 1 {
+		t.Fatalf("the plugin was asked for %s: the null and the bad row once", v)
 	}
 	if s.Err != nil {
 		t.Fatal(s.Err)
+	}
+
+	// Scrolled through, a list keeps the rows it showed last.
+	for i := range MaxRowsKept + 100 {
+		s.Row(at, widget.ListItem{Key: fmt.Sprint("k", i)})
+	}
+	last := fmt.Sprint("k", MaxRowsKept+99)
+	u.until(t, "the last row", func() bool { return s.Row(at, widget.ListItem{Key: last}) != nil })
+	if n := len(s.rows.drawn[at.key()]); n > MaxRowsKept {
+		t.Fatalf("a list keeps %d rows drawn", n)
 	}
 
 	no := session(t, h, "norows")

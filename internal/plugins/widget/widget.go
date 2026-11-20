@@ -45,6 +45,7 @@ const (
 	MaxItemKey   = 256
 	MaxItemLabel = 1024
 	MaxRowNodes  = 200
+	MaxRowBytes  = 16 << 10
 	MinRowHeight = 8
 	MaxRowHeight = 400
 )
@@ -417,16 +418,32 @@ func DecodeWithin(b []byte, maxNodes int) (*View, error) {
 	if err := v.check(maxNodes); err != nil {
 		return nil, err
 	}
-	if len(b) > MaxBytes && v.Body.find(func(n *Node) bool { return n.Type == "list" }) == nil {
-		return nil, fmt.Errorf("view is %d bytes, over the %d allowed without a list", len(b), MaxBytes)
+	// The bytes past MaxBytes are the lists' items', never other widgets'.
+	if len(b) > MaxBytes {
+		items := 0
+		v.Body.Walk(func(n *Node) {
+			for _, it := range n.Items {
+				items += len(it.Key) + len(it.Label) + len(it.Version) + len(it.Thread) + itemFraming
+			}
+		})
+		if len(b)-items > MaxBytes {
+			return nil, fmt.Errorf("view is %d bytes, %d of them items, over the %d allowed besides a list's items", len(b), items, MaxBytes)
+		}
 	}
 	return &v, nil
 }
+
+// itemFraming is what an item's JSON spends besides its strings, at most:
+// its field names, quotes, a height and a header.
+const itemFraming = 96
 
 // DecodeRow reads one row of a list, as the rows export draws it, and
 // checks it. A row holds no control that keeps a value, no dialog, popover,
 // list or native widget: it is drawn and dropped as it scrolls.
 func DecodeRow(b []byte) (*Node, error) {
+	if len(b) > MaxRowBytes {
+		return nil, fmt.Errorf("row is %d bytes, over the %d allowed", len(b), MaxRowBytes)
+	}
 	var v View
 	d := json.NewDecoder(bytes.NewReader(append(append([]byte(`{"body":`), b...), '}')))
 	d.DisallowUnknownFields()
@@ -468,10 +485,15 @@ func (v *View) check(maxNodes int) error {
 	if err := c.node(v.Body, "body", 1); err != nil {
 		return err
 	}
+	inputs := map[string]bool{}
 	for _, l := range c.lists {
 		if l.Input == "" {
 			continue
 		}
+		if inputs[l.Input] {
+			return fmt.Errorf("list %q: the input %q moves another list", l.ID, l.Input)
+		}
+		inputs[l.Input] = true
 		in := v.Body.find(func(n *Node) bool { return n.ID == l.Input })
 		if in == nil || in.Type != "input" || in.Multiline || in.OnSubmit != nil {
 			return fmt.Errorf("list %q: its input %q is no single-line input of the view without an onSubmit: Enter in it submits the list", l.ID, l.Input)
@@ -725,7 +747,7 @@ func (c *checker) extra(n *Node) error {
 		return fmt.Errorf("only a row wraps")
 	case n.Opacity != 0 && (n.Type != "button" || n.Opacity < 0.2 || n.Opacity > 1):
 		return fmt.Errorf("opacity is a button's, 0.2 to 1")
-	case ghost && slices.ContainsFunc(n.Children, func(ch *Node) bool { return !contains(ghostContent, ch.Type) }):
+	case ghost && slices.ContainsFunc(n.Children, func(ch *Node) bool { return ch == nil || !contains(ghostContent, ch.Type) }):
 		return fmt.Errorf("a ghost button's children are %v", ghostContent)
 	case n.ContextMenu != "" && !ghost && !(n.Type == "row" && n.OnClick != nil):
 		return fmt.Errorf("only a ghost button or a clicked row has a contextMenu")

@@ -188,4 +188,25 @@ func TestAListDrawsTheRowsInViewAndKeepsTheChoice(t *testing.T) {
 	if ev := s.last(t); ev.Type != "submit" || ev.Node != "l" || ev.Value != "r1001" {
 		t.Fatalf("Enter in the search field: %+v", ev)
 	}
+
+	// A view without the item chosen leaves no choice to submit, though the
+	// plugin doesn't hold the choice: Down chose r1, which goes.
+	short := func(n int) string {
+		return strings.Replace(longList(n, "r0"), `"controlled": true,`, "", 1)
+	}
+	s.show(t, short(3))
+	s.processed = len(s.events)
+	tt.Frame()
+	tt.Key(0, ui.KeyDown)
+	tt.Frame()
+	chose("r1")
+	s.show(t, short(1))
+	s.processed = len(s.events)
+	tt.Frame()
+	n = len(s.events)
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if len(s.events) != n {
+		t.Fatalf("Enter submitted an item the view no longer has: %+v", s.last(t))
+	}
 }

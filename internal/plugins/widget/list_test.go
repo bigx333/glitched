@@ -42,7 +42,8 @@ func TestAListIsCheckedItemByItem(t *testing.T) {
 		`{"body": {"type": "list", "label": "L", "grow": true}}`:                           "a list needs an id",
 		`{"body": {"type": "column", "rowHeight": 20}}`:                                    "a column has no items, rowHeight",
 		`{"body": {"type": "text", "text": "x", "when": "hover"}}`:                         "when is for a widget in a list's row",
-		`{"body": {"type": "column", "children": [{"type": "input", "id": "i", "onSubmit": "s"}, {"type": "list", "id": "l", "label": "L", "grow": true, "input": "i"}]}}`: "without an onSubmit",
+		`{"body": {"type": "column", "children": [{"type": "input", "id": "i", "onSubmit": "s"}, {"type": "list", "id": "l", "label": "L", "grow": true, "input": "i"}]}}`:                                                       "without an onSubmit",
+		`{"body": {"type": "column", "children": [{"type": "input", "id": "i"}, {"type": "list", "id": "l", "label": "L", "grow": true, "input": "i"}, {"type": "list", "id": "m", "label": "M", "grow": true, "input": "i"}]}}`: "the input \"i\" moves another list",
 	}
 	for view, want := range bad {
 		if _, err := Decode([]byte(view)); err == nil || !strings.Contains(err.Error(), want) {
@@ -64,6 +65,10 @@ func TestAListOfTwentyThousandFitsAView(t *testing.T) {
 	}
 	if _, err := Decode([]byte(view)); err != nil {
 		t.Fatal(err)
+	}
+	padded := `{"body": {"type": "column", "children": [` + strings.Repeat(`{"type": "text", "text": "`+strings.Repeat("x", 30000)+`"},`, 40) + `{"type": "list", "id": "l", "label": "L", "grow": true, "items": [{"key": "a", "label": "A"}]}]}}`
+	if _, err := Decode([]byte(padded)); err == nil || !strings.Contains(err.Error(), "besides a list's items") {
+		t.Errorf("a view over 1 MiB of widgets, with a list of one item: %v", err)
 	}
 	over := strings.Replace(view, "[", `[{"key": "one more", "label": "One more"},`, 1)
 	if _, err := Decode([]byte(over)); err == nil || !strings.Contains(err.Error(), "up to 20000 items") {
@@ -90,6 +95,8 @@ func TestARowHoldsWhatScrollsAway(t *testing.T) {
 		`{"type": "text", "text": "x", "when": "always"}`:                            `when is hover or idle`,
 		`{"type": "text", "text": "x", "html": "<b>"}`:                               `unknown field "html"`,
 		`null`: "no widget",
+		`{"type": "button", "id": "b", "style": "ghost", "label": "B", "children": [null]}`: "a ghost button's children",
+		`{"type": "text", "text": "` + strings.Repeat("x", MaxRowBytes) + `"}`:              "over the 16384 allowed",
 	}
 	for row, want := range bad {
 		if _, err := DecodeRow([]byte(row)); err == nil || !strings.Contains(err.Error(), want) {
