@@ -159,6 +159,8 @@ func (a *app) partState(p plugins.Plugin, name string) partState {
 	// of the user's ahead of it, or nothing.
 	instead := "."
 	switch drawer, drawn := a.partDrawer(name); {
+	case !drawn && comp.Native:
+		instead = ", so Glitched draws its own."
 	case !drawn:
 		instead = ", and nothing draws it."
 	case drawer.Folder == p.Folder:
@@ -187,13 +189,17 @@ func (a *app) partState(p plugins.Plugin, name string) partState {
 
 // partDrawer is the plugin that draws the component now, if one does:
 // the first that replaces it whose last drawing went well, as
-// pluginComponent picks it, else the first.
+// pluginComponent picks it, else the first; none of a native component's
+// failed ones, as Glitched draws its own instead.
 func (a *app) partDrawer(name string) (plugins.Plugin, bool) {
 	rs := a.plugins.Replacers(name)
 	if len(rs) == 0 {
 		return plugins.Plugin{}, false
 	}
 	id := rs[0].Plugin
+	if plugins.Native(name) {
+		id = ""
+	}
 	for _, r := range rs {
 		if a.plugins.Failed(r.Plugin) == nil {
 			id = r.Plugin

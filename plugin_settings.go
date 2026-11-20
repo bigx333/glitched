@@ -518,7 +518,11 @@ func (a *app) appParts(c *ui.Context, list []plugins.Plugin) {
 						ui.Text(c, p.Name+": "+clip(st.why, 240)).Key("other:" + p.Folder).FontSize(12).TextColor(st.tone.color())
 					}
 				})
-				if !drawn {
+				switch {
+				case !drawn && comp.Native:
+					statePill(c, "Glitched's own", toneQuiet)
+					return
+				case !drawn:
 					statePill(c, "Nothing draws it", toneBad)
 					return
 				}
