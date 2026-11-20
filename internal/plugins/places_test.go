@@ -428,3 +428,48 @@ export function rows({ place, keys }) { return keys.map(() => ({ type: "text", t
 	}
 	u.until(t, "a's new row", func() bool { return listRow(t, s, "a") == "new" })
 }
+
+// A copy drawn null on a first draw's way, and drawn again with its list
+// as the first draw ends, keeps its list's rows.
+func TestACopyDrawnNullOnAFirstDrawsWayKeepsItsListsRows(t *testing.T) {
+	h, s, u := placeTest(t, contextListModule)
+	a := PlaceItem{Key: "a", Version: "1", Context: "last row"}
+	s.SetItems("badge", []PlaceItem{a})
+	settled(t, h, u, "a drawn", func() bool { return s.PlaceView("badge", "a") != nil })
+	u.until(t, "a's row drawn", func() bool { return listRow(t, s, "a") == "last row" })
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "2", Context: "null"}})
+	posted(t, h, u, 1)
+	a.Version, a.Context = "3", "current row"
+	s.DrawFirst("badge", []PlaceItem{a, {Key: "b", Version: "1", Context: "b"}}, []string{"b"}, time.Now().Add(2*time.Second))
+	if label(s, "a") != "current row" {
+		t.Fatalf("the first draw ended with a as %q", label(s, "a"))
+	}
+	if got := listRow(t, s, "a"); got != "last row" {
+		t.Fatalf("after a was drawn null on the way, its list shows %q, not its last drawing", got)
+	}
+}
+
+// A list read from a drawing no longer shown, as a renderer still drawing
+// one it took before, draws no row: its rows never reach the list shown
+// next with its id.
+func TestAListNoDrawingShowsDrawsNoRow(t *testing.T) {
+	h, s, u := placeTest(t, contextListModule)
+	a := PlaceItem{Key: "a", Version: "1", Context: "first"}
+	s.SetItems("badge", []PlaceItem{a})
+	settled(t, h, u, "a drawn", func() bool { return s.PlaceView("badge", "a") != nil })
+	taken := s.PlaceView("badge", "a")
+	u.until(t, "a's row drawn", func() bool { return listRow(t, s, "a") == "first" })
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "2", Context: "no list"}})
+	settled(t, h, u, "a drawn without its list", func() bool { return s.PlaceView("badge", "a").Type == "text" })
+	if n := s.Row(RowAt{List: "l", Place: &PlaceRef{ID: "badge", Key: "a", Context: "taken"}}, taken.Items[0]); n != nil {
+		t.Fatalf("a list no drawing shows drew %q", n.Text)
+	}
+	settled(t, h, u, "the worker done", func() bool { return true })
+	a.Version, a.Context = "3", "again"
+	s.SetItems("badge", []PlaceItem{a})
+	settled(t, h, u, "a drawn with its list", func() bool { return label(s, "a") == "again" })
+	if got := listRow(t, s, "a"); got != "" {
+		t.Fatalf("a's list shown again shows %q, a row asked of the list no drawing showed", got)
+	}
+	u.until(t, "a's row drawn again", func() bool { return listRow(t, s, "a") == "again" })
+}
