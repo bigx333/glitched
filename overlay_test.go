@@ -179,7 +179,13 @@ func TestDismissingGivesTheFocusBack(t *testing.T) {
 		if err := h.tt.ChooseMenuItem("Delete…"); err != nil {
 			t.Fatal(err)
 		}
-		h.tt.Frame()
+		// The pointer away from the sidebar, and everything settled, so
+		// that nothing else draws a frame as the alert goes.
+		h.tt.Move(700, 55)
+		h.tt.Advance(time.Second)
+		if !h.a.deleteOpen {
+			t.Fatal("Delete… didn't ask")
+		}
 		h.tt.KeyRepeat(0, ui.KeyEscape)
 		focused(t, marker(1), "the alert dismissed")
 		if !slices.Equal(shown(), want) {
