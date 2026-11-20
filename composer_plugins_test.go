@@ -287,3 +287,30 @@ func TestNoPluginAnswersForTheUser(t *testing.T) {
 		}
 	}
 }
+
+// However wide the replacements draw, Glitched's Stop and its sign of the
+// access keep their room, at the narrowest window Glitched allows.
+func TestGlitchedsStopAndAccessSignKeepTheirRoom(t *testing.T) {
+	h, _ := questioning(t, fake.Asking())
+	writeOwnPlugin(t, h.a, "my-access", accessManifest, strings.ReplaceAll(accessModule, "DRAWS", strconv.Quote("levels")))
+	h.a.plugins.SetGranted("my-access", "ui.replace", true)
+	h.a.plugins.SetGranted("my-access", "threads:access", true)
+	writeOwnPlugin(t, h.a, "my-send", sendManifest, sendPlugin("send"))
+	h.a.plugins.SetGranted("my-send", "ui.replace", true)
+	h.a.plugins.SetGranted("my-send", "threads:write", true)
+	h.tt.SetSize(760, 860)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Advance(time.Second)
+	if _, ok := h.tt.Find("My send"); !ok {
+		t.Fatalf("the replacements don't draw: %q", h.tt.Texts())
+	}
+	for _, label := range []string{"Stop", "Access: " + accessAuto} {
+		if r, ok := h.tt.Find(label); !ok || r.W < 1 || r.H < 1 {
+			t.Errorf("%q has no room beside the replacements: %+v", label, r)
+		}
+	}
+	if err := h.tt.Click("Stop"); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the turn stopped", func() bool { return !h.a.current().View.Live() })
+}

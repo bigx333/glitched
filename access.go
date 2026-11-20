@@ -178,7 +178,11 @@ func (a *app) accessIcon(c *ui.Context, icon *ui.SVG) {
 // gives way to Glitched's picker. A plugin sets the access only through
 // threads.setAccess, to a level this picker offers.
 func (a *app) accessControl(c *ui.Context, t thread) {
-	box := func() ui.Element { return ui.Row(c).Key("access-plugin").AlignItems(ui.Center) }
+	// The plugin's gives up its room first: however wide it draws, the
+	// sign keeps its own.
+	box := func() ui.Element {
+		return ui.Row(c).Key("access-plugin").AlignItems(ui.Center).Shrink(1).MinWidth(0).ClipX()
+	}
 	ctx := func(r plugins.ThreadRecord) any {
 		levels := make([]accessChoice, len(accessLevels))
 		for i, l := range accessLevels {
@@ -190,7 +194,7 @@ func (a *app) accessControl(c *ui.Context, t thread) {
 		a.accessPicker(c)
 		return
 	}
-	a.tip(c, ui.Row(c).Key("access-sign").Label("Access: "+a.access).Padding(0, 6).AlignItems(ui.Center), "Access: "+a.access).
+	a.tip(c, ui.Row(c).Key("access-sign").Label("Access: "+a.access).Padding(0, 6).AlignItems(ui.Center).Shrink(0), "Access: "+a.access).
 		Children(func() { ui.Icon(c, accessIconOf(a.access)).FontSize(13).TextColor(accessColor(a.access)) })
 }
 
