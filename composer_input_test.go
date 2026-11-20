@@ -45,8 +45,11 @@ func TestTheComposerIsABuiltInPluginYoursCanWrap(t *testing.T) {
 	}
 
 	for name, body := range map[string]string{
-		"leaves it out":   `{ type: "text", text: "Mine above" }`,
-		"places it twice": `{ type: "column", children: [{ type: "text", text: "Mine above" }, { type: "native", id: "a", name: "composer.input" }, { type: "native", id: "b", name: "composer.input" }] }`,
+		"leaves it out":                  `{ type: "text", text: "Mine above" }`,
+		"hides it in a closed dialog":    `{ type: "column", children: [{ type: "text", text: "Mine above" }, { type: "dialog", id: "d", title: "Waiting", children: [{ type: "native", id: "input", name: "composer.input" }] }] }`,
+		"adds one in a popover":          `{ type: "column", children: [{ type: "text", text: "Mine above" }, { type: "native", id: "a", name: "composer.input" }, { type: "button", id: "more", style: "ghost", icon: "plus", tooltip: "More", open: true, popover: { type: "column", width: 400, children: [{ type: "native", id: "b", name: "composer.input" }] } }] }`,
+		"adds one in an item's trailing": `{ type: "column", children: [{ type: "text", text: "Mine above" }, { type: "native", id: "a", name: "composer.input" }, { type: "item", id: "row", icon: "plus", text: "Row", trailing: [{ type: "native", id: "b", name: "composer.input" }] }] }`,
+		"places it twice":                `{ type: "column", children: [{ type: "text", text: "Mine above" }, { type: "native", id: "a", name: "composer.input" }, { type: "native", id: "b", name: "composer.input" }] }`,
 	} {
 		writeOwnPlugin(t, a, "my-composer", composerManifest, composerModule(body))
 		if shows("Mine above") || !composer() {

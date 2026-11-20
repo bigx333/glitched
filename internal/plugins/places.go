@@ -248,16 +248,31 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, key string, deadlin
 	}
 }
 
-// placed counts the native widgets name the tree n places.
-func placed(n *widget.Node, name string) int {
-	count := 0
+// placed counts the native widgets name the tree n places, anywhere, and
+// those every frame draws: in rows, columns and cards alone, never in a
+// dialog, a popover, or an item's trailing or actions, which may not show.
+// shown says n is drawn every frame.
+func placed(n *widget.Node, name string, shown bool) (all, drawn int) {
 	if n.Type == "native" && n.Name == name {
-		count++
+		all++
+		if shown {
+			drawn++
+		}
 	}
+	in := shown && (n.Type == "row" || n.Type == "column" || n.Type == "card")
 	for _, ch := range n.Children {
-		count += placed(ch, name)
+		a, d := placed(ch, name, in)
+		all, drawn = all+a, drawn+d
 	}
-	return count
+	for _, ch := range slices.Concat(n.Trailing, n.Actions) {
+		a, _ := placed(ch, name, false)
+		all += a
+	}
+	if n.Popover != nil {
+		a, _ := placed(n.Popover, name, false)
+		all += a
+	}
+	return all, drawn
 }
 
 func (s *Session) drawBatch(pl Place, state json.RawMessage, batch []PlaceItem, views map[string]*widget.Node) error {
@@ -293,9 +308,12 @@ func (s *Session) drawBatch(pl Place, state json.RawMessage, batch []PlaceItem, 
 			return fmt.Errorf("%s: %w", batch[i].Key, err)
 		}
 		// A component's layout around a native it requires, as the
-		// composer's around composer.input, places it once.
-		if need := ComponentNamed(pl.At).Requires; pl.Replaces && need != "" && placed(v.Body, need) != 1 {
-			return fmt.Errorf("%s: %s's layout places %s once, not %d times", batch[i].Key, pl.At, need, placed(v.Body, need))
+		// composer's around composer.input, places it once, where it
+		// always shows.
+		if need := ComponentNamed(pl.At).Requires; pl.Replaces && need != "" {
+			if all, drawn := placed(v.Body, need, true); all != 1 || drawn != 1 {
+				return fmt.Errorf("%s: %s's layout places %s once, in rows, columns and cards alone, not %d times, %d of them always shown", batch[i].Key, pl.At, need, all, drawn)
+			}
 		}
 		views[batch[i].Key] = v.Body
 	}
