@@ -295,3 +295,70 @@ export function rows({ state, keys }) {
 		t.Fatalf("r0 was asked for %s times for one view", n.Text)
 	}
 }
+
+// A row drawn for a view since replaced never replaces the row's drawing,
+// null or not: the last one shows till the row's own for the view comes.
+func TestARowForAnOlderViewNeverReplacesTheLastDrawing(t *testing.T) {
+	h, s, u := placeTest(t, listModule+`
+export function rows({ state, keys }) { return keys.map(() => ({ type: "text", text: ["last", "older", "current"][state] })) }`)
+	a, b := PlaceItem{Key: "a", Version: "1"}, PlaceItem{Key: "b", Version: "1"}
+	s.SetItems("badge", []PlaceItem{a})
+	settled(t, h, u, "a drawn", func() bool { return s.PlaceView("badge", "a") != nil })
+	u.until(t, "a's row drawn", func() bool { return listRow(t, s, "a") == "last" })
+	rev := s.Rev
+	s.Notify(AppEvent{Kind: "timer"})
+	settled(t, h, u, "the view of state 1", func() bool { return s.Rev > rev })
+	listRow(t, s, "a")
+	posted(t, h, u, 1)
+	s.Notify(AppEvent{Kind: "timer"})
+	s.DrawFirst("badge", []PlaceItem{a, b}, []string{"b"}, time.Now().Add(2*time.Second))
+	(<-u.q)()
+	if got := listRow(t, s, "a"); got != "last" {
+		t.Fatalf("after the row of state 1 came, a's row shows %q, not its last drawing", got)
+	}
+	u.until(t, "a's row drawn for state 2", func() bool { return listRow(t, s, "a") == "current" })
+}
+
+// A row read again at the version drawn, after a newer version was asked
+// for, keeps its drawing when that version comes.
+func TestARowBackAtTheVersionDrawnKeepsItsDrawingWhenTheOtherComes(t *testing.T) {
+	h, s, u := placeTest(t, listModule+`
+export function rows({ place, keys }) { return keys.map(() => ({ type: "text", text: place.context ?? "version 1" })) }`)
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "1"}})
+	settled(t, h, u, "a drawn", func() bool { return s.PlaceView("badge", "a") != nil })
+	u.until(t, "a's row drawn", func() bool { return listRow(t, s, "a") == "version 1" })
+	s.Row(RowAt{List: "l", Place: &PlaceRef{ID: "badge", Key: "a", Context: "version 2"}}, widget.ListItem{Key: "r", Version: "2"})
+	posted(t, h, u, 1)
+	listRow(t, s, "a")
+	(<-u.q)()
+	settled(t, h, u, "the worker done", func() bool { return true })
+	if got := listRow(t, s, "a"); got != "version 1" {
+		t.Fatalf("after version 2 came, the row at version 1 shows %q", got)
+	}
+}
+
+// A copy shown by a drawing of an older version without its list keeps the
+// list's rows till the drawing of its own version shows.
+func TestACopyDrawnForAnOlderVersionKeepsItsListsRows(t *testing.T) {
+	h, s, u := placeTest(t, `export function place({ items }) {
+	return items.map(({ context }) => context === "no list" ? { type: "text", text: context }
+		: { type: "list", id: "l", height: 120, label: context, items: [{ key: "r", version: context, label: "row" }] })
+}
+export function rows({ place, keys }) { return keys.map(() => ({ type: "text", text: place.context })) }`)
+	a := PlaceItem{Key: "a", Version: "1", Context: "last"}
+	s.SetItems("badge", []PlaceItem{a})
+	settled(t, h, u, "a drawn", func() bool { return s.PlaceView("badge", "a") != nil })
+	u.until(t, "a's row drawn", func() bool { return listRow(t, s, "a") == "last" })
+	a.Version, a.Context = "2", "no list"
+	s.SetItems("badge", []PlaceItem{a})
+	posted(t, h, u, 1)
+	a.Version, a.Context = "3", "current"
+	s.SetItems("badge", []PlaceItem{a})
+	posted(t, h, u, 2)
+	(<-u.q)()
+	(<-u.q)()
+	if got := listRow(t, s, "a"); got != "last" {
+		t.Fatalf("after version 2 showed without the list, version 3's list shows %q, not the row's last drawing", got)
+	}
+	u.until(t, "a's row drawn for version 3", func() bool { return listRow(t, s, "a") == "current" })
+}
