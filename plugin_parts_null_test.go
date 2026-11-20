@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/api"
 	"glitched/internal/plugins"
 )
 
@@ -332,5 +334,114 @@ export function place({state,items}) {
 	}
 	if b || !c {
 		t.Errorf("Parts links b-never-drew %v and c-cached %v; only c-cached draws", b, c)
+	}
+}
+
+// A plugin that hasn't answered for the copies shown isn't said to draw
+// them.
+func TestAPluginNotYetAnsweredIsNotSaidToDraw(t *testing.T) {
+	h, _ := timelineHarness(t)
+	a, tt := h.a, h.tt
+	const id, part = "a-pending", "timeline.message"
+	turnOff(t, a, "timeline")
+	writeOwnPlugin(t, a, id, replacing(id, part), `
+export async function place({items}) {
+	await glitched.app.settings.get()
+	return items.map(() => (`+rowsOfB+`))
+}`)
+	allow(t, a, id, "ui.replace")
+	tt.Frame()
+	if !tt.HasText(turnText(1)) || tt.HasText("Replacement marker from B") {
+		t.Fatalf("the normal timeline did not take the first pending frame")
+	}
+	parts := partsOfGlitched(t, a)
+	p := installed(a, id)
+	st := a.partState(p, part)
+	_, link := parts.Access("Show a-pending, which draws Timeline rows")
+	_, draws := a.partDrawer(part)
+	if draws || link {
+		t.Error("Parts names a-pending, which hasn't drawn a row yet")
+	}
+	if st.word != "Not drawn yet" || st.why != "It hasn't drawn the copies shown yet, so Glitched draws its own." {
+		t.Errorf("Settings says %q: %q of a plugin that hasn't drawn a row yet", st.word, st.why)
+	}
+	settlePlugins(t, a, parts, h.p)
+	published := false
+	for _, row := range entriesOf(a.current()) {
+		if a.plugins.App(id).PlaceView("row", row.key) != nil {
+			published = true
+			break
+		}
+	}
+	if !published {
+		t.Fatal("the held drawing did not publish while Settings was still open")
+	}
+	a.router.Push("/")
+	settlePlugins(t, a, tt, h.p)
+	if !tt.HasText("Replacement marker from B") {
+		t.Fatal("pending worker did not take over after its UI call was answered")
+	}
+}
+
+// Nulls and a copy not yet answered aren't drawing some.
+func TestNullsAndACopyNotYetAnsweredAreNotDrawingSome(t *testing.T) {
+	h, tr := timelineHarness(t)
+	a, tt := h.a, h.tt
+	const id, part = "a-pending", "timeline.message"
+	turnOff(t, a, "timeline")
+	writeOwnPlugin(t, a, id, replacing(id, part), `
+export async function place({items}) {
+	if (items.some(it => it.context.streaming)) await glitched.app.settings.get()
+	return items.map(it => it.context.streaming ? (`+rowsOfB+`) : null)
+}`)
+	allow(t, a, id, "ui.replace")
+	settlePlugins(t, a, tt, h.p)
+	if !tt.HasText(turnText(1)) || tt.HasText("Replacement marker from B") {
+		t.Fatal("initial native rows did not appear")
+	}
+	if st := a.partState(installed(a, id), part); st.word != "Answered null" {
+		t.Fatalf("Settings says %q of rows all answered null", st.word)
+	}
+	a.listFor(h.thread("A thread").id()).ScrollToEnd()
+	b := api.AssistantDelta{Run: api.NewID(), Text: "The pending fixture reply"}
+	payload, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr.Apply(api.Event{Cursor: api.Cursor{Log: tr.Cursor.Log, Seq: tr.Cursor.Seq + 1}, Type: api.EventType(b), Schema: api.EventSchema, At: time.Now(), Payload: payload})
+	a.changed()
+	tt.Advance(time.Second)
+	if !tt.HasText("The pending fixture reply") || tt.HasText("Replacement marker from B") {
+		t.Fatalf("the new pending copy did not display native content without the plugin marker")
+	}
+	for k := range a.placeControls {
+		if k.plugin == id {
+			t.Fatal("the replacer has drawn one of the copies before the measurement")
+		}
+	}
+	parts := partsOfGlitched(t, a)
+	p := installed(a, id)
+	st := a.partState(p, part)
+	if _, link := parts.Access("Show a-pending, which draws Timeline rows"); link {
+		t.Error("Parts names a-pending, which hasn't drawn a row")
+	}
+	if st.word != "Not drawn yet" || !strings.HasSuffix(st.why, " copies shown, and hasn't drawn the others yet, so Glitched draws its own.") {
+		t.Errorf("Settings says %q: %q of nulls and a row not yet answered", st.word, st.why)
+	}
+	settlePlugins(t, a, parts, h.p)
+	published := false
+	for _, row := range entriesOf(a.current()) {
+		if row.streaming && a.plugins.App(id).PlaceView("row", row.key) != nil {
+			published = true
+			break
+		}
+	}
+	if !published {
+		t.Fatal("the new row's answer did not publish while Settings was still open")
+	}
+	a.router.Push("/")
+	settlePlugins(t, a, tt, h.p)
+	if !tt.HasText("Replacement marker from B") {
+		t.Fatal("the suspended streaming answer never published")
 	}
 }
