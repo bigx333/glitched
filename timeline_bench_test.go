@@ -183,6 +183,9 @@ type bench struct {
 	long, other thread
 	mode        string
 	staleN      int
+	// es are the rows while a scenario is measured, so that counting
+	// blank rows doesn't list them anew each step inside the measurement.
+	es []entry
 }
 
 // measure runs step n times, a frame time apart, as a window would.
@@ -191,6 +194,8 @@ func (b *bench) measure(n int, step func(i int)) sample {
 	runtime.GC()
 	var m0, m1 runtime.MemStats
 	runtime.ReadMemStats(&m0)
+	b.es = entriesOf(b.long)
+	defer func() { b.es = nil }()
 	c0, w0 := cpu(), time.Now()
 	for i := range n {
 		*b.starts = (*b.starts)[:0]
@@ -221,11 +226,14 @@ func (b *bench) measure(n int, step func(i int)) sample {
 
 // blankRows counts the rows in view a plugin draws that have no drawing.
 func (b *bench) blankRows() int {
+	es := b.es
+	if es == nil {
+		es = entriesOf(b.long)
+	}
 	if b.mode == "native" || b.h.a.selected != b.long.id() {
 		return 0
 	}
 	app := b.h.a.plugins.App(benchPlugin)
-	es := entriesOf(b.long)
 	first, last := b.h.a.listFor(b.long.id()).Visible()
 	n := 0
 	for i := first; i <= last && i < len(es); i++ {
