@@ -1,8 +1,11 @@
 package plugins
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"glitched/internal/plugins/widget"
 )
 
 // placeTest is a plugin of one thread.row place, whose module is js, with
@@ -145,5 +148,35 @@ func TestAnOlderDrawingNeverReplacesANewerOne(t *testing.T) {
 	(<-u.q)()
 	if text(s, "a") != a {
 		t.Fatalf("the late null drawing of a's version 2 replaced its version 3 %q with %q", a, text(s, "a"))
+	}
+}
+
+// A list in a copy keeps showing its rows while another copy is drawn
+// first, and they are drawn again for the drawing that copy is in.
+func TestAListInACopyKeepsItsRowsWhileAnotherIsDrawnFirst(t *testing.T) {
+	h, s, u := placeTest(t, `let calls = 0
+export function place({ items }) { return items.map(({ key }) => ({ type: "text", text: key })) }
+export function rows({ keys, place }) { calls++; return keys.map((k) => ({ type: "text", text: place.key + ":" + k + "#" + calls })) }`)
+	s.SetItems("badge", []PlaceItem{{Key: "a", Version: "1"}})
+	settled(t, h, u, "a drawn", func() bool { return text(s, "a") == "a" })
+	at := RowAt{List: "l", Place: &PlaceRef{ID: "badge", Key: "a"}}
+	row := func() string {
+		if n := s.Row(at, widget.ListItem{Key: "r"}); n != nil {
+			return n.Text
+		}
+		return ""
+	}
+	u.until(t, "a's row drawn", func() bool { return row() != "" })
+	first := row()
+	s.DrawFirst("badge", []PlaceItem{{Key: "a", Version: "1"}, {Key: "b", Version: "1"}}, []string{"b"}, time.Now().Add(2*time.Second))
+	if text(s, "a") != "a" || text(s, "b") != "b" {
+		t.Fatalf("after b was drawn first: a %q, b %q", text(s, "a"), text(s, "b"))
+	}
+	if got := row(); got != first {
+		t.Fatalf("a's row shows %q while b is drawn first, not its last drawing %q", got, first)
+	}
+	u.until(t, "a's row drawn for the new drawing", func() bool { return row() != first && strings.HasPrefix(row(), "a:r#") })
+	if s.Err != nil {
+		t.Fatal(s.Err)
 	}
 }
