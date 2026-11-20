@@ -180,3 +180,24 @@ export function rows({ keys, place }) { calls++; return keys.map((k) => ({ type:
 		t.Fatal(s.Err)
 	}
 }
+
+// A copy the worker has drawn, in a drawing posted to the UI thread but
+// not yet shown, is shown at once rather than waited for.
+func TestACopyDrawnButNotYetShownIsNotWaitedFor(t *testing.T) {
+	h, s, u := placeTest(t, countingModule)
+	settled(t, h, u, "the first drawing", func() bool { return s.Rev > 0 })
+	items := []PlaceItem{{Key: "a", Version: "1"}}
+	s.SetItems("badge", items)
+	deadline := time.Now().Add(3 * time.Second)
+	for !h.Idle() || len(u.q) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("want a's drawing posted, have %d", len(u.q))
+		}
+		time.Sleep(time.Millisecond)
+	}
+	deadline = time.Now().Add(time.Second)
+	s.DrawFirst("badge", items, []string{"a"}, deadline)
+	if !time.Now().Before(deadline) || text(s, "a") == "" {
+		t.Fatalf("DrawFirst waited till its deadline for a drawing already posted: a %q", text(s, "a"))
+	}
+}

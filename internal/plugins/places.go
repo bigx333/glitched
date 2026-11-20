@@ -61,6 +61,9 @@ type placeSet struct {
 	// answered are the copies shown that a published drawing answered,
 	// null included, by place and key, with the version it answered.
 	answered map[[2]string]string
+	// posted is the worker's last drawing, posted to the UI thread: one
+	// DrawFirst waits on may be in it, not yet published.
+	posted *placeDraw
 }
 
 // drawnCopy is a copy's drawing, nil when the plugin answered null.
@@ -192,6 +195,7 @@ func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed
 	ps.drawSeq++
 	d := placeDraw{ps.drawSeq, gen, processed, drawn, asked, failed, time.Since(start)}
 	s.mu.Lock()
+	s.places.posted = &d
 	if s.places.first != nil {
 		select {
 		case s.places.first <- d:
@@ -308,6 +312,10 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 		}
 	}
 	s.places.first = first
+	var posted *placeDraw
+	if p := s.places.posted; p != nil && p.seq > s.places.shownSeq {
+		posted = p
+	}
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
@@ -315,6 +323,17 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 		s.mu.Unlock()
 	}()
 	s.SetItems(place, shown)
+	drew := func(d placeDraw) bool {
+		s.publish(d)
+		done := true
+		for k, v := range want {
+			done = done && d.asked[k] == v
+		}
+		return d.failed != nil || done
+	}
+	if posted != nil && drew(*posted) {
+		return
+	}
 	wait := time.NewTimer(time.Until(deadline))
 	defer wait.Stop()
 	poll := time.NewTicker(time.Millisecond)
@@ -329,12 +348,7 @@ func (s *Session) DrawFirst(place string, items []PlaceItem, keys []string, dead
 				return
 			}
 		case d := <-first:
-			s.publish(d)
-			done := true
-			for k, v := range want {
-				done = done && d.asked[k] == v
-			}
-			if d.failed != nil || done {
+			if drew(d) {
 				return
 			}
 		case <-wait.C:
