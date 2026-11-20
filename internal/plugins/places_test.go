@@ -404,3 +404,27 @@ func TestACopyGoneAndBackUnversionedKeepsItsDrawing(t *testing.T) {
 		t.Errorf("after return, copy's list showed %q before refresh; want %q", got, "last row")
 	}
 }
+
+// A row asked for a copy removed and drawn again within one first draw
+// never shows in the copy's new list.
+func TestARowOfACopyRemovedWithinAFirstDrawDoesNotShowWhenItReturns(t *testing.T) {
+	h, s, u := placeTest(t, `export function place({ items }) {
+	return items.map(({ context }) => ({ type: "list", id: "l", height: 120, label: context, items: [{ key: "r", label: "row", version: context }] }))
+}
+export function rows({ place, keys }) { return keys.map(() => ({ type: "text", text: place.context })) }`)
+	a := PlaceItem{Key: "a", Version: "1", Context: "old"}
+	s.SetItems("badge", []PlaceItem{a})
+	settled(t, h, u, "a drawn", func() bool { return s.PlaceView("badge", "a") != nil })
+	listRow(t, s, "a")
+	posted(t, h, u, 1)
+	s.SetItems("badge", nil)
+	posted(t, h, u, 2)
+	a.Version, a.Context = "2", "new"
+	s.DrawFirst("badge", []PlaceItem{a}, []string{"a"}, time.Now().Add(2*time.Second))
+	listRow(t, s, "a")
+	(<-u.q)()
+	if got := listRow(t, s, "a"); got != "" {
+		t.Fatalf("a's new list shows %q, the row asked before a was removed", got)
+	}
+	u.until(t, "a's new row", func() bool { return listRow(t, s, "a") == "new" })
+}

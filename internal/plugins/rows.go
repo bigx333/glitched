@@ -144,6 +144,9 @@ func (l *listRows) forget(rev int) {
 // has: the session's, or a copy's of a place.
 func (s *Session) dropLists() {
 	rs := &s.rows
+	if len(rs.lists) == 0 {
+		return
+	}
 	live := map[rowKey]bool{}
 	lists := func(place, copy string, n *widget.Node) {
 		n.Walk(func(n *widget.Node) {
@@ -163,6 +166,13 @@ func (s *Session) dropLists() {
 		}
 	}
 	maps.DeleteFunc(rs.lists, func(k rowKey, _ *listRows) bool { return !live[k] })
+}
+
+// dropCopies drops, as a drawing of the places is shown, the rows of the
+// lists of the copies it has no drawing of: a copy gone, or drawn null,
+// takes its lists' rows with it at once.
+func (rs *rowSet) dropCopies(views map[string]map[string]*widget.Node) {
+	maps.DeleteFunc(rs.lists, func(k rowKey, _ *listRows) bool { return k.place != "" && views[k.place][k.copy] == nil })
 }
 
 // dropWants drops the rows asked for an earlier view that the worker
