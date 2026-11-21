@@ -1,0 +1,13 @@
+{
+  "id": "workspace",
+  "name": "Workspace",
+  "description": "The button under the composer that says where the thread runs, and a new thread's menu of where it could start. Built into Glitched; make a copy in Settings › Plugins to change it.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "ui.replace", "threads:read"],
+  "glitched": {
+    "places": [{ "id": "workspace", "at": "composer.workspace", "replaces": true }]
+  }
+}

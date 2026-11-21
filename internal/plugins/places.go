@@ -493,7 +493,25 @@ func (s *Session) drawBatch(pl Place, state json.RawMessage, batch []PlaceItem, 
 				return fmt.Errorf("%s: %s's layout places %s once, in rows, columns and cards alone, not %d times, %d of them always shown", batch[i].Key, pl.At, need, all, drawn)
 			}
 		}
+		if pl.Replaces && pl.At == "composer.workspace" {
+			if err := workspaceMenu(v.Body, batch[i].Version); err != nil {
+				return fmt.Errorf("%s: %w", batch[i].Key, err)
+			}
+		}
 		views[batch[i].Key] = v.Body
+	}
+	return nil
+}
+
+// workspaceMenu says whether body draws a draft's composer.workspace with
+// Glitched's menu: an enabled ghost menu of no options of its own, which
+// Glitched's choices, Add project and Remove project fill. A ghost menu's children
+// are never menus, so nothing else gets them.
+func workspaceMenu(body *widget.Node, version string) error {
+	var ctx struct{ Draft bool }
+	json.Unmarshal([]byte(version), &ctx)
+	if ctx.Draft && (body.Type != "menu" || body.Style != "ghost" || len(body.Options) > 0 || body.Disabled) {
+		return fmt.Errorf("a draft's composer.workspace is a ghost menu of no options, which Glitched's choices fill, never disabled")
 	}
 	return nil
 }

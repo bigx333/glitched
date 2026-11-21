@@ -51,6 +51,10 @@ type Style struct {
 	// ContextMenu gives e the menu of Glitched's that name names, as a
 	// widget's contextMenu does. Nil gives none.
 	ContextMenu func(c *ui.Context, e ui.Element, name string)
+	// MenuEnd ends every menu with Glitched's own items, as a draft's
+	// composer.workspace ends with where it could start and adding and
+	// removing projects. Nil ends none.
+	MenuEnd func(m *ui.Menu)
 	// Tile draws a project's mark: its icon, white on its color. Nil
 	// draws the icon on the color.
 	Tile func(c *ui.Context, icon *ui.SVG, color ui.Color, size float32)
@@ -887,6 +891,9 @@ func (r *renderer) menu(n *widget.Node) func(*ui.Menu) {
 			if m.Item(o.Shown()).Chosen() {
 				r.fire(n, n.OnChange, "change", o.Value)
 			}
+		}
+		if r.st.MenuEnd != nil {
+			r.st.MenuEnd(m)
 		}
 	}
 }

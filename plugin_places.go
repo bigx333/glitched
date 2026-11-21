@@ -211,6 +211,9 @@ func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key s
 		st := a.pluginStyle(pl.Plugin)
 		st.Scope = pl.Plugin + "/" + pl.Place.ID + "/" + key
 		st.Native = native
+		if w, ok := ctx.(composerWorkspace); ok {
+			st.MenuEnd = w.menu
+		}
 		st.ListRow = listRow
 		st.Reveal = reveal
 		st.Rows = func(list string, it widget.ListItem) *widget.Node {

@@ -51,6 +51,7 @@ var partTitles = map[string]string{
 	"agents.body":               "Agents panel",
 	"composer.access":           "Access picker",
 	"composer.send":             "Send and stop",
+	"composer.workspace":        "Workspace",
 	"settings.plugins":          "Settings › Plugins",
 	"settings.servers":          "Settings › Servers",
 	"settings.providers":        "Settings › Providers",

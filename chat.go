@@ -1248,8 +1248,44 @@ func (a *app) composerInput(c *ui.Context, t thread, rs rows, fullW, frameW floa
 		if h := env.Bounds().H; h > 0 {
 			a.envH = h
 		}
-		env.Children(func() { a.workspaceButton(c, t) })
+		env.Children(func() { a.workspaceControl(c, t) })
 	})
+}
+
+// workspaceControl is where the thread runs, Glitched's button or a
+// plugin's that replaces it (composer.workspace). A plugin draws the
+// button; a draft's menu of where it could start is Glitched's, at the end
+// of the plugin's menu. A plugin's that fails gives way to Glitched's.
+func (a *app) workspaceControl(c *ui.Context, t thread) {
+	box := func() ui.Element { return ui.Row(c).Key("workspace-plugin").AlignItems(ui.Center) }
+	w := composerWorkspace{Workspace: filepath.Base(t.View.Workspace), Draft: t.id().IsZero()}
+	if len(a.backend.Envs()) > 1 && t.env != nil {
+		w.Machine = t.env.Name
+	}
+	if w.Draft {
+		w.menu = func(m *ui.Menu) { a.workspaceMenu(m, t) }
+	}
+	ctx := func(r plugins.ThreadRecord) any {
+		w.Thread = r
+		return w
+	}
+	// The key is what the button says, with the workspace's whole path, so
+	// that a drawing of another workspace's never stands for this one's.
+	key := composerKey(t) + "\x00" + t.View.Workspace + "\x00" + w.Machine
+	a.pluginComponent(c, "composer.workspace", &t, componentCopy{key: key, box: box, context: ctx, native: func(*widget.Node) { a.workspaceButton(c, t) }})
+}
+
+// composerWorkspace is the context of composer.workspace.
+type composerWorkspace struct {
+	Thread plugins.ThreadRecord `json:"thread"`
+	// Workspace is the folder's name, and Machine the machine's, only
+	// while there is more than one.
+	Workspace string `json:"workspace"`
+	Machine   string `json:"machine,omitempty"`
+	// Draft is whether the composer is a new thread's, whose workspace the
+	// user chooses from the menu, which menu ends.
+	Draft bool `json:"draft"`
+	menu  func(*ui.Menu)
 }
 
 // workspaceButton is where the thread runs: its workspace, and its machine
@@ -1269,27 +1305,32 @@ func (a *app) workspaceButton(c *ui.Context, t thread) {
 	if !t.id().IsZero() {
 		return
 	}
-	b.Menu(func(m *ui.Menu) {
-		for _, e := range a.backend.Envs() {
-			if a.duplicate(e) {
-				continue
+	b.Menu(func(m *ui.Menu) { a.workspaceMenu(m, t) })
+}
+
+// workspaceMenu is the draft t's menu of where it could start, ended with
+// Add project and Remove project.
+func (a *app) workspaceMenu(m *ui.Menu, t thread) {
+	several := len(a.backend.Envs()) > 1
+	for _, e := range a.backend.Envs() {
+		if a.duplicate(e) {
+			continue
+		}
+		home := homeDir()
+		if e.Kind == client.Remote {
+			home = "~"
+		}
+		for _, d := range a.workspacesOn(e, home) {
+			label := filepath.Base(d.workspace)
+			if several {
+				label += " on " + e.Name
 			}
-			home := homeDir()
-			if e.Kind == client.Remote {
-				home = "~"
-			}
-			for _, d := range a.workspacesOn(e, home) {
-				label := filepath.Base(d.workspace)
-				if several {
-					label += " on " + e.Name
-				}
-				if m.Item(label).Checked(t.env == e && t.View.Workspace == d.workspace).Chosen() {
-					a.fresh = d
-				}
+			if m.Item(label).Checked(t.env == e && t.View.Workspace == d.workspace).Chosen() {
+				a.fresh = d
 			}
 		}
-		a.workspaceItems(m)
-	})
+	}
+	a.workspaceItems(m)
 }
 
 // workspacesOn are where a draft on e could start: the workspaces of e's
