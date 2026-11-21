@@ -663,3 +663,60 @@ func TestKeysPressedInADialogShutGoWithIt(t *testing.T) {
 		t.Errorf("the dialog opened again ran a key pressed before it shut: %+v", s.events[2:])
 	}
 }
+
+func TestTypingBehindAWaitingKeyGoesToTheInputTheViewHasThen(t *testing.T) {
+	view := func(input string) string {
+		drive := ""
+		if input != "" {
+			drive = `"input": "q", `
+		}
+		return `{"body": {"type": "column", "children": [` + input + `
+			{"type": "list", "id": "l", "label": "Results", "height": 300, ` + drive + `"controlled": true, "value": "a", "onChange": "chose", "onSubmit": "open", "items": [{"key": "a", "label": "Row a"}]}]}}`
+	}
+	for _, c := range []struct {
+		name, input, want string
+	}{
+		{"gone", "", ""},
+		{"handled anew", `{"type": "input", "id": "q", "label": "Query", "onChange": "search"},`, "search"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := &screen{}
+			s.show(t, view(`{"type": "input", "id": "q", "label": "Query", "onChange": "query"},`))
+			tt := ui.NewTester(s.draw, 400, 400)
+			tt.Frame()
+			in, ok := tt.AccessByRole(ui.RoleTextField, "")
+			if !ok {
+				t.Fatal("no search field")
+			}
+			tt.ClickAt(in.Bounds.X+5, in.Bounds.Y+in.Bounds.H/2)
+			tt.Type("x")
+			tt.Key(0, ui.KeyEnter)
+			tt.Type("y")
+			tt.Frame()
+			if len(s.events) != 1 {
+				t.Fatalf("what was typed behind Enter went before it: %+v", s.events)
+			}
+			s.show(t, view(c.input))
+			s.processed = len(s.events)
+			tt.Frame()
+			if ev := s.last(t); ev.Type != "submit" {
+				t.Fatalf("Enter after the plugin took x: %+v, want a submit", ev)
+			}
+			s.processed = len(s.events)
+			s.rev++
+			tt.Frame()
+			var got []plugins.UIEvent
+			for _, ev := range s.events[2:] {
+				if ev.Type == "change" {
+					got = append(got, ev)
+				}
+			}
+			switch {
+			case c.want == "" && len(got) > 0:
+				t.Errorf("an input the view took away got what was typed in it: %+v", got)
+			case c.want != "" && (len(got) != 1 || got[0].Handler != c.want || got[0].Value != "xy"):
+				t.Errorf("what was typed behind Enter: %+v, want xy to %s, the input's handler now", got, c.want)
+			}
+		})
+	}
+}
