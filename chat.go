@@ -71,7 +71,7 @@ func (a *app) chatPage(c *ui.Context) {
 		beside = "plugin-tab"
 	}
 	if beside != a.besideShown {
-		a.besideShown = beside
+		a.besideShown, a.pushUntil = beside, time.Time{}
 		if !a.panelsJump {
 			a.pushUntil = c.Now().Add(slideBeside.Duration)
 		}
