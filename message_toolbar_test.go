@@ -176,31 +176,3 @@ func TestAToolbarsCommandIsOnlyOneThatIsThere(t *testing.T) {
 		}
 	}
 }
-
-// A toolbar drawn taller than a line runs on down, never up over the
-// message it is under, and still takes no room.
-func TestATallToolbarNeverCoversItsMessage(t *testing.T) {
-	h, _ := checked(t)
-	const msg, next = "Sort them by most recent activity.", "Checking the build."
-	before, _ := h.tt.Find(next)
-	writeOwnPlugin(t, h.a, "my-bar", barManifest, barModule(`{ type: "column", gap: 24, children: [{ type: "button", id: "one", label: "Action one" }, { type: "button", id: "two", label: "Action two" }] }`))
-	allow(t, h.a, "my-bar", "ui.replace")
-	h.tt.Move(800, 30)
-	h.tt.Advance(time.Second)
-	h.hover(msg)
-	h.tt.Advance(time.Second)
-	settlePlugins(t, h.a, h.tt, h.p)
-	words, _ := h.tt.Find(msg)
-	if after, _ := h.tt.Find(next); after != before {
-		t.Errorf("the toolbar moved what follows from %v to %v", before, after)
-	}
-	for _, label := range []string{"Action one", "Action two"} {
-		b, ok := h.tt.Access(label)
-		if !ok {
-			t.Fatalf("no %q: %q", label, h.tt.Texts())
-		}
-		if b.Bounds.Y < words.Y+words.H {
-			t.Errorf("%q starts at y=%v, over the message, which ends at y=%v", label, b.Bounds.Y, words.Y+words.H)
-		}
-	}
-}

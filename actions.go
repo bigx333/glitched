@@ -14,8 +14,7 @@ import (
 // that floats under it: copying it, putting it back in the composer to
 // edit and send again, having the agent answer the message again, or a
 // plugin's command. The toolbar takes no room, so pointing at a message
-// moves nothing, and however a plugin draws it, it never covers the
-// message: past one line, it runs on down.
+// moves nothing.
 
 // messageActions is the toolbar under the message es[i], at the edge the
 // message is on, while the message is pointed at or the toolbar itself
@@ -32,7 +31,7 @@ func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed
 	a.pluginComponent(c, "message.toolbar", &t, componentCopy{
 		key: e.key,
 		box: func() ui.Element {
-			bar := ui.Row(c).Key("actions").Absolute().Bottom(-22).MaxHeight(22).AlignItems(ui.Start).Padding(2, 0, 0)
+			bar := ui.Row(c).Key("actions").Absolute().Bottom(-22).Padding(2, 0, 0)
 			if e.kind == entryUser {
 				bar.Right(0)
 			} else {
