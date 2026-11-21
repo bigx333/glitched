@@ -18,10 +18,10 @@ function opening(state, key, ctx) {
   return state.key === key ? state : { key, query: ctx.query, chosen: "" };
 }
 
-// lower lowers each letter on its own, as Glitched does: a final sigma is
-// a sigma.
+// lower lowers each letter on its own, to one letter, as Glitched does: a
+// final sigma is a sigma, and a dotted capital I an i.
 function lower(s) {
-  return Array.from(s, (c) => c.toLowerCase()).join("");
+  return Array.from(s, (c) => Array.from(c.toLowerCase())[0]).join("");
 }
 
 function matches(s, q) {

@@ -5,6 +5,7 @@ package render
 import (
 	"cmp"
 	"encoding/json"
+	"math"
 	"strconv"
 	"strings"
 
@@ -522,10 +523,19 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			if n.Style == "bare" {
 				e.AutoFocus().Grow(1).Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).Padding(0).FontSize(15)
 			}
-			if e.Changed() {
+			l := r.inputs[n.ID]
+			switch {
+			case !e.Changed():
+			case l != nil && r.waits(l):
+				// The plugin is to take the query it had as the keys
+				// were pressed, then this; meanwhile the text is the
+				// user's, whatever value a view gives it.
+				ctl.last = math.MaxInt
+				r.press(l, r.cs.m[l.ID], press{input: n, text: ctl.text})
+			default:
 				r.fire(n, n.OnChange, "change", ctl.text)
 			}
-			if l := r.inputs[n.ID]; l != nil {
+			if l != nil {
 				r.drive(c, e, l)
 			} else if !n.Multiline && e.Submitted() {
 				r.fire(n, n.OnSubmit, "submit", ctl.text)

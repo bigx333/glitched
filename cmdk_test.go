@@ -607,3 +607,21 @@ func TestAnEarlierChoiceLeavesThePaletteOpenedSince(t *testing.T) {
 		t.Fatalf("terminal %v, palette open %v: want the terminal toggled and the new palette open", h.a.showTerminal, h.a.cmdkOpen)
 	}
 }
+
+// Enter runs what the query before it found, though the query is
+// replaced before the palette has caught up, as on Glitched's own.
+func TestThePaletteRunsWhatWasFoundBeforeEnter(t *testing.T) {
+	h := start(t, inboxDir(t))
+	h.thread("SIP re-INVITE handling")
+	h.a.openCommandPalette()
+	paletteShows(t, h)
+	diff, terminal := h.a.showDiff, h.a.showTerminal
+	h.tt.Type("toggle diff panel")
+	h.tt.Key(0, ui.KeyEnter)
+	h.tt.Key(ui.Cmd, ui.KeyA)
+	h.tt.Type("toggle terminal")
+	settlePlugins(t, h.a, h.tt, h.p)
+	if h.a.showDiff == diff || h.a.showTerminal != terminal || h.a.cmdkOpen {
+		t.Fatalf("diff %v, terminal %v, palette open %v: want the diff toggled alone and the palette closed", h.a.showDiff, h.a.showTerminal, h.a.cmdkOpen)
+	}
+}
