@@ -54,6 +54,7 @@ func (a *app) gag(c *ui.Context, thread api.ID, kind gagKind, from category) {
 		return
 	}
 	a.rowFx[thread] = newGag(kind, c.Now(), from)
+	a.fxEdits++
 	if kind == gagSettle {
 		hapticBump()
 	}

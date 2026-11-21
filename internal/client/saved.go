@@ -177,7 +177,7 @@ func (m *Manager) Unread(th *Thread) bool {
 
 // Edits counts the changes the GUI made to threads here, which change
 // what it shows of them before the engine answers: the commands it
-// submitted and the threads it read.
+// submitted or retried and the threads it read.
 func (m *Manager) Edits() uint64 { return m.edits }
 
 // MarkRead records that the GUI showed the thread's last turn and reports,

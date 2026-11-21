@@ -115,6 +115,7 @@ func (a *app) filterEffect(raw json.RawMessage) (any, error) {
 	if len(keep) < len(a.projects) {
 		maps.Copy(a.projectFilter, keep)
 	}
+	a.filterEdits++
 	return nil, nil
 }
 

@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -76,48 +78,97 @@ type inboxItem struct {
 	p *project
 }
 
-// sortedAt is what itemsIn sorted the threads after: the frame, the
-// changes posted and those made here, the threads, and the projects.
+// sortedAt is what sortThreads sorted the threads after: the changes
+// posted and those made here, the threads, and the changes to the project
+// filter and the rows' jokes.
 type sortedAt struct {
-	built, posts, edits uint64
-	threads, n          int // n is the projects'
-	recent              *thread
-	projects            **project
+	posts, edits, filter, fx uint64
+	threads                  int
+	recent                   *thread
 }
 
-// itemsIn returns the threads of a category, of the projects filtered to,
-// every machine's together, the most recently updated first. The threads
-// are sorted into their categories once a frame, and again after a change
-// the manager posts, as threads come and go, or as the projects change,
-// not once for each category asked: with 10,000 threads, sorting them
-// took most of a frame.
-func (a *app) itemsIn(cat category) []inboxItem {
+// sortedThreads are the threads of each section, of the projects filtered
+// to, every machine's together, the most recently updated first; at is
+// what they were sorted after, and until when a snooze or a row's joke
+// ends, which moves a thread with no change at all. index is each
+// thread's place in its section, unread how many in the inbox are, and
+// snoozed when the first snoozed thread, of any project, wakes.
+type sortedThreads struct {
+	at             sortedAt
+	until, snoozed time.Time
+	items          map[category][]inboxItem
+	index          map[category]map[api.ID]int
+	unread         int
+}
+
+// sortThreads sorts the threads into the sidebar's sections, with their
+// projects and children, as a change moves them: not each frame, as with
+// 50,000 threads that took most of one.
+func (a *app) sortThreads() {
 	recent := a.recent()
-	at := sortedAt{built: a.built, posts: a.posts, edits: a.backend.Edits(), threads: len(recent), n: len(a.projects)}
+	at := sortedAt{posts: a.posts, edits: a.backend.Edits(), filter: a.filterEdits, fx: a.fxEdits, threads: len(recent)}
 	if len(recent) > 0 {
 		at.recent = &recent[0]
 	}
-	if len(a.projects) > 0 {
-		at.projects = &a.projects[0]
+	s := &a.sorted
+	if s.items != nil && s.at == at && (s.until.IsZero() || a.now.Before(s.until)) {
+		return
 	}
-	if a.sorted.items == nil || a.sorted.at != at {
-		a.sorted.at, a.sorted.items = at, map[category][]inboxItem{}
-		shown := map[envProject]*project{}
-		for _, p := range a.projects {
-			if len(a.projectFilter) == 0 || a.projectFilter[p.key] {
-				shown[envProject{p.env, p.key}] = p
-			}
-		}
-		for _, t := range recent {
-			p := shown[envProject{t.env, keyOf(t.env, t.View.Workspace)}]
-			// A child shows under its parent, but for one lifted into
-			// Working.
-			if p != nil && !deleting(t) && (!a.nested(t) || a.lifted(t)) {
-				c := a.shownIn(t)
-				a.sorted.items[c] = append(a.sorted.items[c], inboxItem{t, p})
-			}
+	a.projects = a.gather()
+	a.kids = a.kidsOf()
+	// A project gone, as with its server, leaves the filter, lest it hide
+	// every thread left.
+	maps.DeleteFunc(a.projectFilter, func(k projectKey, _ bool) bool {
+		return !slices.ContainsFunc(a.projects, func(p *project) bool { return p.key == k })
+	})
+	*s = sortedThreads{at: at, items: map[category][]inboxItem{}, index: map[category]map[api.ID]int{}}
+	soon := func(t time.Time) {
+		if t.After(a.now) && (s.until.IsZero() || t.Before(s.until)) {
+			s.until = t
 		}
 	}
+	for _, fx := range a.rowFx {
+		soon(fx.at.Add(fx.hold))
+	}
+	shown := map[envProject]*project{}
+	for _, p := range a.projects {
+		if len(a.projectFilter) == 0 || a.projectFilter[p.key] {
+			shown[envProject{p.env, p.key}] = p
+		}
+	}
+	for _, t := range recent {
+		if deleting(t) {
+			continue
+		}
+		c, d := a.shownIn(t), disposition(t)
+		if d.State == api.Snoozed {
+			soon(d.Until)
+		}
+		// A row still playing its way out of Snoozed has no time.
+		if c == catSnoozed && !d.Until.IsZero() && (s.snoozed.IsZero() || d.Until.Before(s.snoozed)) {
+			s.snoozed = d.Until
+		}
+		p := shown[envProject{t.env, keyOf(t.env, t.View.Workspace)}]
+		// A child shows under its parent, but for one lifted into
+		// Working.
+		if p == nil || a.nested(t) && !a.lifted(t) {
+			continue
+		}
+		if s.index[c] == nil {
+			s.index[c] = map[api.ID]int{}
+		}
+		s.index[c][t.id()] = len(s.items[c])
+		s.items[c] = append(s.items[c], inboxItem{t, p})
+		if c == catInbox && a.backend.Unread(t.Thread) {
+			s.unread++
+		}
+	}
+}
+
+// itemsIn returns the threads of a category, of the projects filtered to,
+// every machine's together, the most recently updated first.
+func (a *app) itemsIn(cat category) []inboxItem {
+	a.sortThreads()
 	return a.sorted.items[cat]
 }
 
@@ -222,17 +273,10 @@ func (a *app) wakeSnoozed(c *ui.Context) {
 		a.snoozeWake = time.Time{}
 		a.emitThreadChanges()
 	}
-	var next time.Time
 	// Every project's, those filtered out of sight included, whose plugins
 	// still hear them come back.
-	for _, p := range a.projects {
-		for _, t := range p.threads {
-			// A row still playing its way out of Snoozed has no time.
-			if u := disposition(t).Until; a.shownIn(t) == catSnoozed && !u.IsZero() && (next.IsZero() || u.Before(next)) {
-				next = u
-			}
-		}
-	}
+	a.sortThreads()
+	next := a.sorted.snoozed
 	if !next.IsZero() {
 		c.After(next.Sub(a.now))
 	}
@@ -322,13 +366,8 @@ func (a *app) sectionHead(c *ui.Context, cat category, count int) {
 }
 
 func (a *app) unreadCount() int {
-	n := 0
-	for _, it := range a.itemsIn(catInbox) {
-		if a.backend.Unread(it.t.Thread) {
-			n++
-		}
-	}
-	return n
+	a.sortThreads()
+	return a.sorted.unread
 }
 
 // inboxRow is a thread: its project's tile, its title, bold while unread,

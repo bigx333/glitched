@@ -326,7 +326,7 @@ func TestTheSidebarsListStaysInItsBounds(t *testing.T) {
 	s := h.a.plugins.App("sidebar")
 	draw := func(version string) []sidebarRow {
 		t.Helper()
-		h.a.built++
+		h.a.posts++ // as the engine's changes to the threads come
 		body := h.a.sidebarBodyOf("inbox", 0, catInbox)
 		s.DrawFirst("body", []plugins.PlaceItem{{Key: "inbox", Version: version, Context: body}}, []string{"inbox"}, time.Now().Add(5*time.Second))
 		if s.Err != nil {

@@ -155,6 +155,7 @@ func (m *Manager) Retry(e *Env, thread, command api.ID) {
 		return
 	}
 	th.Pending[i].Err = nil
+	m.edits++
 	m.send(e, th, api.Command{ID: command, Target: thread, Body: th.Pending[i].Body})
 }
 
