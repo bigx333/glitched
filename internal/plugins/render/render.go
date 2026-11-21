@@ -149,7 +149,8 @@ func (cs *Controls) Sync(v *widget.View, rev, processed int) {
 		live[n.ID] = true
 		ctl := cs.m[n.ID]
 		raw := canon(n.Value)
-		if ctl == nil {
+		// A widget of another kind under the same id is a new control.
+		if ctl == nil || ctl.kind != n.Type {
 			ctl = &control{}
 			cs.m[n.ID] = ctl
 			ctl.set(n)

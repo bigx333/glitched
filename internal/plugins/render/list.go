@@ -1,6 +1,9 @@
 package render
 
 import (
+	"math"
+	"slices"
+
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/plugins"
@@ -256,6 +259,11 @@ func (r *renderer) pressed(n *widget.Node, ctl *control) {
 			// An input the view no longer has took nothing.
 			if in := r.fields[p.input]; in != nil {
 				r.fire(in, in.OnChange, "change", p.text)
+			}
+			// What no handler took, the input no longer holds against
+			// the plugin's value, once nothing else typed in it waits.
+			if c := r.cs.m[p.input]; c != nil && c.last == math.MaxInt && !slices.ContainsFunc(lv.pressed, func(q press) bool { return q.input == p.input }) {
+				c.last = 0
 			}
 		case p.submit:
 			r.submit(n, ctl.text, p.mods)

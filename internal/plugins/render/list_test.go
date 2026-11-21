@@ -667,7 +667,7 @@ func TestKeysPressedInADialogShutGoWithIt(t *testing.T) {
 func TestTypingBehindAWaitingKeyGoesToTheInputTheViewHasThen(t *testing.T) {
 	view := func(input string) string {
 		drive := ""
-		if input != "" {
+		if strings.Contains(input, `"type": "input"`) {
 			drive = `"input": "q", `
 		}
 		return `{"body": {"type": "column", "children": [` + input + `
@@ -675,9 +675,13 @@ func TestTypingBehindAWaitingKeyGoesToTheInputTheViewHasThen(t *testing.T) {
 	}
 	for _, c := range []struct {
 		name, input, want string
+		// then is the view's next value of q, once every event is taken.
+		then any
 	}{
-		{"gone", "", ""},
-		{"handled anew", `{"type": "input", "id": "q", "label": "Query", "onChange": "search"},`, "search"},
+		{"gone", "", "", nil},
+		{"handled anew", `{"type": "input", "id": "q", "label": "Query", "onChange": "search"},`, "search", nil},
+		{"handled by none", `{"type": "input", "id": "q", "label": "Query", "controlled": true, "value": "READY"},`, "", "READY"},
+		{"a toggle now", `{"type": "toggle", "id": "q", "label": "Query", "controlled": true, "value": true},`, "", true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := &screen{}
@@ -716,6 +720,13 @@ func TestTypingBehindAWaitingKeyGoesToTheInputTheViewHasThen(t *testing.T) {
 				t.Errorf("an input the view took away got what was typed in it: %+v", got)
 			case c.want != "" && (len(got) != 1 || got[0].Handler != c.want || got[0].Value != "xy"):
 				t.Errorf("what was typed behind Enter: %+v, want xy to %s, the input's handler now", got, c.want)
+			}
+			if c.then != nil {
+				s.rev++
+				tt.Frame()
+				if v := s.cs.Values()["q"]; v != c.then {
+					t.Errorf("q, once the plugin took every event: %#v, want the view's %#v", v, c.then)
+				}
 			}
 		})
 	}
