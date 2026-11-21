@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,5 +102,27 @@ func TestTheAgentsPanelsRowsKeepTheirWays(t *testing.T) {
 	h.tt.Advance(time.Second)
 	if th, ok := h.a.find(h.a.selected); !ok || th.View.Title != "Child 3" {
 		t.Fatalf("a click on a row didn't show its thread")
+	}
+}
+
+// A title longer than a list's item labels take is still the built-in's
+// to draw, beside its siblings.
+func TestTheAgentsPanelDrawsATitleOfAnyLength(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	top := seed(t, d, "/work/t3code", "Ship the sidebar sort")
+	seedChild(t, d, top, "Long "+strings.Repeat("é", 520))
+	seedChild(t, d, top, "Short")
+	h := start(t, dir)
+	parent := h.thread("Ship the sidebar sort")
+	h.until("the children", func() bool { return len(h.a.shown(parent)) == 2 })
+	h.a.select_(parent)
+	h.tt.Advance(time.Second)
+	h.click("Agents")
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Advance(time.Second)
+	app := h.a.plugins.App("agents")
+	if _, ok := h.tt.Find("Short"); !ok || app == nil || app.PlaceView("body", parent.id().String()) == nil {
+		t.Fatalf("the built-in doesn't draw a long title's panel: %q", h.tt.Texts())
 	}
 }
