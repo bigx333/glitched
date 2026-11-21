@@ -292,6 +292,10 @@ type app struct {
 	// panelsJump shows the diff panel and the terminal without motion,
 	// as when ⌘D and ⌘J toggle them.
 	panelsJump bool
+	// besideShown is the panel beside the chat the last frame built, and
+	// pushUntil when the chat's width stops following one coming or going.
+	besideShown string
+	pushUntil   time.Time
 
 	draft string
 	// code is the draft's pieces once it holds code blocks, which ``` and

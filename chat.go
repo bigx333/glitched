@@ -44,16 +44,44 @@ func (a *app) chatPage(c *ui.Context) {
 		a.backend.MarkShown(t.Thread)
 	}
 	rs := a.rowsOf(t)
-	// The layout makes room for a panel at once, so the chat rewraps
-	// once; the panel itself slides a little in from its edge as it fades.
+	// The layout makes room for the terminal at once, so the chat rewraps
+	// once; the drawer itself slides a little in from its edge as it fades.
 	panel := func(x, y float32) ui.ElementTransition {
 		if a.panelsJump {
 			return ui.ElementTransition{}
 		}
 		return slideFrom(x, y)
 	}
+	// A panel beside the chat pushes it: the chat's width follows the
+	// panel's edge in from the window's and back out, rewrapping as it
+	// goes, as long as one comes or goes.
+	side := func() ui.ElementTransition {
+		if a.panelsJump {
+			return ui.ElementTransition{}
+		}
+		return slideBeside
+	}
+	beside := ""
+	switch {
+	case a.showDiff:
+		beside = "diff"
+	case a.showPreview:
+		beside = "preview"
+	case a.showPluginTab:
+		beside = "plugin-tab"
+	}
+	if beside != a.besideShown {
+		a.besideShown = beside
+		if !a.panelsJump {
+			a.pushUntil = c.Now().Add(slideBeside.Duration)
+		}
+	}
+	follow := ui.ElementTransition{Width: true, Duration: -1}
+	if c.Now().Before(a.pushUntil) {
+		follow = ui.ElementTransition{Width: true, Duration: slideBeside.Duration, Ease: slideBeside.Ease}
+	}
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
-		chat := ui.Column(c).Key("chat").Grow(1).Shrink(1).MinWidth(minChatWidth)
+		chat := ui.Column(c).Key("chat").Grow(1).Shrink(1).MinWidth(minChatWidth).Transition(follow)
 		a.chatWidth = chat.Bounds().W
 		chat.Children(func() {
 			// The header is glass, the window's vibrancy as the sidebar's;
@@ -97,11 +125,11 @@ func (a *app) chatPage(c *ui.Context) {
 		})
 		switch {
 		case a.showDiff:
-			ui.Column(c).Key("diff").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.diffPanel(c, t, rs.files) })
+			ui.Column(c).Key("diff").Width(a.diffWidth()).Transition(side()).Children(func() { a.diffPanel(c, t, rs.files) })
 		case a.showPreview:
-			ui.Column(c).Key("preview").Width(a.previewWidth()).Transition(panel(16, 0)).Children(func() { a.previewPanel(c) })
+			ui.Column(c).Key("preview").Width(a.previewWidth()).Transition(side()).Children(func() { a.previewPanel(c) })
 		case a.showPluginTab:
-			ui.Column(c).Key("plugin-tab").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.pluginTabPanel(c, t) })
+			ui.Column(c).Key("plugin-tab").Width(a.diffWidth()).Transition(side()).Children(func() { a.pluginTabPanel(c, t) })
 		}
 	})
 }

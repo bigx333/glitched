@@ -52,6 +52,16 @@ var (
 			Exit:     &ui.Motion{X: x, Y: y},
 		}
 	}
+	// slideBeside brings a panel beside the chat in from the window's
+	// edge and takes it back out, opaque, as the chat's width follows it
+	// on the same curve.
+	slideBeside = ui.ElementTransition{
+		Colors:   true,
+		Duration: 200 * time.Millisecond,
+		Ease:     easeOut,
+		Enter:    &ui.Motion{XPercent: 100, Opacity: 1},
+		Exit:     &ui.Motion{XPercent: 100, Opacity: 1},
+	}
 	// press is the feedback of a press.
 	press = ui.Animation{Duration: 160 * time.Millisecond, Ease: easeOut}
 	// turn rotates a chevron as its section opens.
