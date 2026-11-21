@@ -790,6 +790,16 @@ func (a *app) select_(t thread) {
 	}
 }
 
+// revealRow says, once, that the sidebar's row of the thread id is to
+// scroll into view: while it is the thread shown, opened to be revealed.
+func (a *app) revealRow(id api.ID) bool {
+	if id != a.revealing || id != a.selected {
+		return false
+	}
+	a.revealing = api.ID{}
+	return true
+}
+
 // choose shows the thread a person chose, its composer taking the focus
 // (composerInput).
 func (a *app) choose(t thread) {

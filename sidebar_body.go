@@ -218,7 +218,7 @@ func (a *app) sidebarCopy(c *ui.Context, part string, maxHeight float32, box fun
 	}
 	a.sidebarRows[part] = now
 	var reveal string
-	if !a.revealing.IsZero() {
+	if !a.revealing.IsZero() && a.revealing == a.selected {
 		reveal = a.revealing.String()
 	}
 	return componentCopy{
@@ -253,9 +253,7 @@ func (a *app) sidebarListRow(c *ui.Context, thread string, was map[api.ID]bool, 
 	if !ok {
 		return false
 	}
-	if id == a.revealing {
-		a.revealing = api.ID{}
-	}
+	a.revealRow(id)
 	if !was[id] {
 		e.Transition(fold)
 	} else {

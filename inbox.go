@@ -377,9 +377,8 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 	t := it.t
 	selected := t.id() == a.selected && a.router.Path() == "/"
 	r := row(c, t.id(), selected).Height(rowHeight).Padding(0, 6, 0, 8).Gap(9).Transition(fold)
-	if t.id() == a.revealing {
+	if a.revealRow(t.id()) {
 		r.ScrollIntoView()
-		a.revealing = api.ID{}
 	}
 	if a.arriving(t) {
 		r.Transition(arrive) // just sent from the hero, sliding in
