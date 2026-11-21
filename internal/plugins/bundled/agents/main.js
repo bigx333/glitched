@@ -14,7 +14,7 @@ export function init() {
 }
 
 function items(ctx) {
-  const out = ctx.rows.map((r) => ({ key: r.thread, label: r.title, thread: r.thread, version: String(r.depth) }));
+  const out = ctx.rows.map((r) => ({ key: r.thread, label: "", thread: r.thread, version: String(r.depth) }));
   if (ctx.more) out.push({ key: "more", label: "More" });
   return out;
 }

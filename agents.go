@@ -309,7 +309,7 @@ func (a *app) agentsBody(c *ui.Context, t thread, tree []node, all bool, s func(
 			if !ok {
 				return false
 			}
-			e.ContextMenu(func(m *ui.Menu) { a.threadMenu(c, m, k, a.categoryOf(k)) })
+			e.Label(title(k)).ContextMenu(func(m *ui.Menu) { a.threadMenu(c, m, k, a.categoryOf(k)) })
 			if e.Clicked() {
 				a.choose(k)
 			}
