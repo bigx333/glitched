@@ -1,0 +1,13 @@
+{
+  "id": "message-toolbar",
+  "name": "Message toolbar",
+  "description": "The actions under a message, shown while it's pointed at: Copy, Edit & resend or Retry, and plugins' commands. Built into Glitched; make a copy in Settings › Plugins to change it.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "ui.replace"],
+  "glitched": {
+    "places": [{ "id": "bar", "at": "message.toolbar", "replaces": true }]
+  }
+}

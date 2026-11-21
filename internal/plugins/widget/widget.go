@@ -116,6 +116,13 @@ var Natives = map[string]Native{
 	// transcript.retry is a failed command's Retry and Dismiss, by its
 	// row's error or under its message's note.
 	"transcript.retry": {In: []string{"timeline.message"}, Thread: true},
+	// A message's actions, as Glitched draws them under it: Copy, Edit &
+	// resend (a message of yours), Retry (a reply), and the command a
+	// plugin put in message.actions at index.
+	"message.copy":  {In: []string{"message.toolbar"}, Thread: true},
+	"message.edit":  {In: []string{"message.toolbar"}, Thread: true},
+	"message.retry": {In: []string{"message.toolbar"}, Thread: true},
+	"message.item":  {Props: map[string]string{"index": "number"}, In: []string{"message.toolbar"}, Thread: true},
 	// The sidebar's own parts of a thread's row, which its plugin's rows
 	// draw: the row's actions while it is pointed at, the field that
 	// renames it, its project's tile with its state and the jokes snooze

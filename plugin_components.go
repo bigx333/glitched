@@ -37,6 +37,8 @@ type componentCopy struct {
 	context func(plugins.ThreadRecord) any
 	native  func(body *widget.Node)
 	retry   func()
+	// action draws the message.* native n, one of a message's actions.
+	action  func(n *widget.Node)
 	over    func(box ui.Element)
 	builtin func() *widget.Node
 	// listRow does to the rows of the copy's lists what the app does to
@@ -56,7 +58,7 @@ type componentCopy struct {
 // built-in's drawing where the copy names one, so that the body keeps its
 // state, as a selection, when that drawing takes over.
 func (a *app) fallback(c *ui.Context, name string, t *thread, cp componentCopy) {
-	if cp.native == nil {
+	if cp.native == nil && cp.builtin == nil {
 		return
 	}
 	box := cp.box()
@@ -201,7 +203,7 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 		d := cmp.Or(good[i], failed[i])
 		if d == nil || good[i] == nil && (plugins.ComponentNamed(name).Native || cp.current) {
 			drewAll = false
-			by.glitched = cp.native != nil
+			by.glitched = cp.native != nil || cp.builtin != nil
 			drawn.copies = append(drawn.copies, by)
 			a.fallback(c, name, t, cp)
 			continue
@@ -323,6 +325,8 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 		cp.native(n)
 	case "transcript.retry":
 		cp.retry()
+	case "message.copy", "message.edit", "message.retry", "message.item":
+		cp.action(n)
 	case "diff.body":
 		var path string
 		json.Unmarshal(n.Props["path"], &path)

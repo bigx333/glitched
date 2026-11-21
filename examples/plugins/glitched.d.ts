@@ -320,6 +320,15 @@ type NativeWidget = {
       name: "transcript.retry";
     }
   | {
+      /** A message's actions, in message.toolbar, as Glitched draws them: Copy; Edit & resend, a message of yours'; Retry, a reply's. Nothing where the message has no such action. */
+      name: "message.copy" | "message.edit" | "message.retry";
+    }
+  | {
+      /** The command a plugin put in message.actions at index, of the context's items; nothing at an index no command has. */
+      name: "message.item";
+      props: { index: number };
+    }
+  | {
       /**
        * In a list's row of sidebar.body, about the thread its item names:
        * the row's actions (place it with when: "hover"), the field that
@@ -566,6 +575,7 @@ type ComponentContext =
   | ComposerSendContext
   | ComposerAccessContext
   | TimelineMessageContext
+  | MessageToolbarContext
   | Record<string, never>;
 
 /**
@@ -583,6 +593,19 @@ interface TimelineMessageContext {
   note?: string;
   /** The message's send failed. */
   failed?: boolean;
+}
+
+/**
+ * The context of message.toolbar: which message's toolbar a copy is and
+ * whose message it is, never what it says. Its actions are the natives
+ * message.copy, message.edit, message.retry and message.item.
+ */
+interface MessageToolbarContext {
+  /** The message's row's key. */
+  key: string;
+  role: "user" | "assistant";
+  /** How many commands plugins put in message.actions, which message.item draws by index. */
+  items?: number;
 }
 
 /** The context of composer: its layout must place the native composer.input once. */
