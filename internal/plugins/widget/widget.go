@@ -445,7 +445,7 @@ var (
 	styles         = map[string][]string{
 		"text":   {"", "body", "muted", "strong", "heading", "title", "code", "error", "success"},
 		"button": {"", "default", "primary", "danger", "ghost", "outline", "bordered"},
-		"menu":   {"", "default", "outline"},
+		"menu":   {"", "default", "outline", "ghost"},
 		"badge":  {"", "default", "accent", "success", "warning", "danger", "count"},
 		"tabs":   {"", "default", "segmented", "control"},
 		"toggle": {"", "default", "switch"},
@@ -628,7 +628,7 @@ func (c *checker) node(n *Node, path string, depth int) error {
 		}
 		c.ids[n.ID] = true
 	}
-	if k != container && k != dialog && len(n.Children) > 0 && !(n.Type == "button" && n.Style == "ghost") {
+	if k != container && k != dialog && len(n.Children) > 0 && !((n.Type == "button" || n.Type == "menu") && n.Style == "ghost") {
 		return fail("a %s has no children", n.Type)
 	}
 	for _, s := range []string{n.Text, n.Title, n.Label, n.Placeholder} {
@@ -732,7 +732,8 @@ func (c *checker) value(n *Node) error {
 	if n.Controlled && n.Type != "input" && n.Type != "toggle" && n.Type != "select" && n.Type != "tabs" && n.Type != "list" {
 		return fmt.Errorf("a %s is not controlled", n.Type)
 	}
-	if choosing && (len(n.Options) == 0 || len(n.Options) > MaxOptions) {
+	// A ghost menu may have none: Glitched's own items may end it.
+	if choosing && (len(n.Options) == 0 && !(n.Type == "menu" && n.Style == "ghost") || len(n.Options) > MaxOptions) {
 		return fmt.Errorf("a %s has 1 to %d options", n.Type, MaxOptions)
 	}
 	if len(n.Value) == 0 || string(n.Value) == "null" {
@@ -836,7 +837,7 @@ func (c *checker) extra(n *Node) error {
 		return fmt.Errorf("only a row wraps")
 	case n.Opacity != 0 && (n.Type != "button" || n.Opacity < 0.2 || n.Opacity > 1):
 		return fmt.Errorf("opacity is a button's, 0.2 to 1")
-	case ghost && slices.ContainsFunc(n.Children, func(ch *Node) bool { return ch == nil || !contains(ghostContent, ch.Type) }):
+	case n.Style == "ghost" && slices.ContainsFunc(n.Children, func(ch *Node) bool { return ch == nil || !contains(ghostContent, ch.Type) }):
 		return fmt.Errorf("a ghost button's children are %v", ghostContent)
 	case n.ContextMenu != "" && !ghost && !(n.Type == "row" && n.OnClick != nil):
 		return fmt.Errorf("only a ghost button or a clicked row has a contextMenu")
@@ -924,7 +925,7 @@ func (c *checker) extra(n *Node) error {
 		return fmt.Errorf("an item shows an icon, which it doesn't name")
 	case n.Compact && (n.Icon == "" || n.Type == "item"):
 		return fmt.Errorf("a compact %s shows its icon alone, which it doesn't name", n.Type)
-	case n.Badge != "" && n.Style != "ghost", n.Active && n.Style != "ghost" && n.Type != "item" && n.Type != "swatch":
+	case n.Badge != "" && (n.Style != "ghost" || n.Type == "menu"), n.Active && n.Style != "ghost" && n.Type != "item" && n.Type != "swatch":
 		return fmt.Errorf("only a ghost button is active or has a badge, and an item is active")
 	}
 	switch n.Type {

@@ -213,8 +213,12 @@ type Widget = {
       options: (Option | { separator: true })[];
       disabled?: boolean;
       tooltip?: string;
-      /** outline: a hairline pill with a chevron, as the header's Open in. */
-      style?: "default" | "outline";
+      /** outline: a hairline pill with a chevron, as the header's Open in. ghost: drawn as a ghost button, with its children, as the composer's workspace. */
+      style?: "default" | "outline" | "ghost";
+      /** A ghost menu's, in place of an icon: text, tile, icon and spacer only. */
+      children?: Widget[];
+      gap?: number;
+      padding?: number | number[];
       /** An outline menu's. */
       icon?: string;
       compact?: boolean;
@@ -495,7 +499,8 @@ type Slot = "thread.header" | "thread.row" | "sidebar.footer";
  * contractVersion 2. approval.card, question.card, settings.plugins,
  * settings.servers, settings.providers and confirm.destructive are off
  * limits: a plugin that names one doesn't load. composer.send needs
- * threads:write, and composer.access threads:access, as well.
+ * threads:write, composer.access threads:access, and composer.workspace
+ * threads:read, as well.
  */
 type Component =
   | "thread.header.actions"
@@ -511,6 +516,7 @@ type Component =
   | "composer"
   | "composer.send"
   | "composer.access"
+  | "composer.workspace"
   | "timeline.message"
   | "message.toolbar";
 
@@ -630,6 +636,17 @@ interface ComposerAccessContext {
   access: AccessLevel;
   /** What the access picker offers, which threads.setAccess takes. */
   levels: { name: AccessLevel; about: string }[];
+}
+
+/** The context of composer.workspace. In a draft, Glitched ends its menu with where the thread could start, Add project and Remove project. */
+interface ComposerWorkspaceContext {
+  thread: ThreadRecord;
+  /** The workspace folder's name. */
+  workspace: string;
+  /** The machine's name, only while there is more than one. */
+  machine?: string;
+  /** A new thread's composer, whose workspace the user chooses from Glitched's choices at the end of a ghost menu. */
+  draft: boolean;
 }
 
 type AccessLevel = "Ask for approval" | "Approve for me" | "Full access";

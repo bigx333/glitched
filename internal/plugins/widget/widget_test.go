@@ -25,12 +25,12 @@ func TestDecodeChecksTheTree(t *testing.T) {
 	}
 	bad := map[string]string{
 		`{}`: "no body",
-		`{"body": {"type": "button", "id": "a", "label": "A", "style": "ghost"}}`:                                 "a ghost button shows an icon",
-		`{"body": {"type": "button", "id": "a", "label": "A", "icon": "code"}}`:                                   "only a ghost or outline button has an icon",
-		`{"body": {"type": "button", "id": "a", "label": "A", "style": "outline", "badge": "3"}}`:                 "only a ghost button is active or has a badge",
-		`{"body": {"type": "text", "text": "x", "tooltip": "t"}}`:                                                 "a text has no tooltip",
-		`{"body": {"type": "menu", "id": "m", "label": "M", "options": ["a"], "style": "ghost", "icon": "code"}}`: "unknown style",
-		`{"body": {"type": "text", "text": "x"}, "html": "<b>"}`:                                                  `unknown field "html"`,
+		`{"body": {"type": "button", "id": "a", "label": "A", "style": "ghost"}}`:                                    "a ghost button shows an icon",
+		`{"body": {"type": "button", "id": "a", "label": "A", "icon": "code"}}`:                                      "only a ghost or outline button has an icon",
+		`{"body": {"type": "button", "id": "a", "label": "A", "style": "outline", "badge": "3"}}`:                    "only a ghost button is active or has a badge",
+		`{"body": {"type": "text", "text": "x", "tooltip": "t"}}`:                                                    "a text has no tooltip",
+		`{"body": {"type": "menu", "id": "m", "label": "M", "options": ["a"], "style": "bordered", "icon": "code"}}`: "unknown style",
+		`{"body": {"type": "text", "text": "x"}, "html": "<b>"}`:                                                     `unknown field "html"`,
 		`{"body": {"type": "frame"}}`:                                                                                      `unknown widget type "frame"`,
 		`{"body": {"type": "text", "children": [{"type": "text"}]}}`:                                                       "a text has no children",
 		`{"body": {"type": "button", "label": "x"}}`:                                                                       "a button needs an id",
@@ -274,6 +274,39 @@ func TestPointsTakeFractions(t *testing.T) {
 	} {
 		if _, err := Decode([]byte(js)); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v, want %q", js, err, want)
+		}
+	}
+}
+
+// A ghost menu, as the composer's workspace: drawn as a ghost button, its
+// own children in place of an icon, with none of its own options when
+// Glitched's end it.
+func TestAGhostMenuIsTheWorkspaces(t *testing.T) {
+	good := `{"body": {"type": "menu", "id": "w", "label": "Workspace", "style": "ghost", "padding": [3, 6], "gap": 6, "options": [{"value": "a", "label": "A"}, {"separator": true}, "b"], "children": [
+		{"type": "icon", "name": "folder", "fontSize": 12},
+		{"type": "text", "text": "glitched", "fontSize": 11.5},
+		{"type": "text", "text": "on Praetor", "fontSize": 11.5, "color": "$text.faint"}
+	]}}`
+	if _, err := Decode([]byte(good)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Decode([]byte(`{"body": {"type": "menu", "id": "m", "label": "M", "style": "ghost", "icon": "folder", "options": []}}`)); err != nil {
+		t.Errorf("a ghost menu of none of its own options: %v", err)
+	}
+	bad := map[string]string{
+		`{"body": {"type": "menu", "id": "m", "label": "M", "style": "outline", "icon": "code", "options": []}}`:                                               "a menu has 1 to",
+		`{"body": {"type": "menu", "id": "m", "label": "M", "style": "ghost", "options": ["a"]}}`:                                                              "a ghost button shows an icon or its children",
+		`{"body": {"type": "menu", "id": "m", "label": "M", "style": "ghost", "icon": "code", "options": ["a"], "children": [{"type": "text", "text": "x"}]}}`: "not both",
+		`{"body": {"type": "menu", "id": "m", "label": "M", "style": "ghost", "options": ["a"], "children": [{"type": "button", "id": "b", "label": "B"}]}}`:   "a ghost button's children are",
+		`{"body": {"type": "menu", "id": "m", "label": "M", "style": "outline", "options": ["a"], "children": [{"type": "text", "text": "x"}]}}`:               "a menu has no children",
+		`{"body": {"type": "menu", "id": "m", "label": "M", "style": "ghost", "icon": "code", "badge": "3", "options": ["a"]}}`:                                "only a ghost button is active or has a badge",
+		`{"body": {"type": "menu", "id": "m", "label": "M", "style": "ghost", "icon": "code", "options": ["a"], "popover": {"type": "column", "width": 200}}}`: "only a ghost button has a popover",
+		`{"body": {"type": "menu", "id": "m", "label": "M", "style": "ghost", "icon": "code", "options": ["a"], "contextMenu": "thread:x"}}`:                   "only a ghost button or a clicked row has a contextMenu",
+	}
+	for s, want := range bad {
+		_, err := Decode([]byte(s))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", s, err, want)
 		}
 	}
 }
