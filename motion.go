@@ -52,6 +52,15 @@ var (
 			Exit:     &ui.Motion{X: x, Y: y},
 		}
 	}
+	// slideOver brings a panel beside the chat in as slideFrom does, and
+	// takes it out the whole of its width, opaque, to the window's edge.
+	slideOver = ui.ElementTransition{
+		Colors:   true,
+		Duration: 200 * time.Millisecond,
+		Ease:     easeOut,
+		Enter:    &ui.Motion{X: 16, Opacity: 1},
+		Exit:     &ui.Motion{XPercent: 100, Opacity: 1},
+	}
 	// press is the feedback of a press.
 	press = ui.Animation{Duration: 160 * time.Millisecond, Ease: easeOut}
 	// turn rotates a chevron as its section opens.

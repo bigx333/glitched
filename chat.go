@@ -52,6 +52,15 @@ func (a *app) chatPage(c *ui.Context) {
 		}
 		return slideFrom(x, y)
 	}
+	// A panel beside the chat leaves the whole of its width, over the
+	// chat that took its room back at once: above it, as its copy would
+	// otherwise go under the chat, out of sight.
+	side := func() ui.ElementTransition {
+		if a.panelsJump {
+			return ui.ElementTransition{}
+		}
+		return slideOver
+	}
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		chat := ui.Column(c).Key("chat").Grow(1).Shrink(1).MinWidth(minChatWidth)
 		a.chatWidth = chat.Bounds().W
@@ -97,11 +106,11 @@ func (a *app) chatPage(c *ui.Context) {
 		})
 		switch {
 		case a.showDiff:
-			ui.Column(c).Key("diff").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.diffPanel(c, t, rs.files) })
+			ui.Column(c).Key("diff").Width(a.diffWidth()).ZIndex(1).Transition(side()).Children(func() { a.diffPanel(c, t, rs.files) })
 		case a.showPreview:
-			ui.Column(c).Key("preview").Width(a.previewWidth()).Transition(panel(16, 0)).Children(func() { a.previewPanel(c) })
+			ui.Column(c).Key("preview").Width(a.previewWidth()).ZIndex(1).Transition(side()).Children(func() { a.previewPanel(c) })
 		case a.showPluginTab:
-			ui.Column(c).Key("plugin-tab").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.pluginTabPanel(c, t) })
+			ui.Column(c).Key("plugin-tab").Width(a.diffWidth()).ZIndex(1).Transition(side()).Children(func() { a.pluginTabPanel(c, t) })
 		}
 	})
 }
