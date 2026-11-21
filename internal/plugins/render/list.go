@@ -28,12 +28,18 @@ type listView struct {
 }
 
 // press is a key pressed on a list: a move by d items, or a submit with
-// the keys held.
+// the keys held; or a change of the input that drives it, typed behind
+// such a key, which waits behind it too.
 type press struct {
 	d      int
 	submit bool
 	mods   []string
+	input  *widget.Node
+	text   string
 }
+
+// toEnd is a move as far as the list goes, however long it is by then.
+const toEnd = 1 << 30
 
 // listOf is the list's view of n's items, built again for a new view's.
 func (ctl *control) listOf(n *widget.Node) *listView {
@@ -89,8 +95,8 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 	r.pressed(n, ctl)
 	e.OnShortcut(0, ui.KeyDown, func() { r.press(n, ctl, press{d: 1}) })
 	e.OnShortcut(0, ui.KeyUp, func() { r.press(n, ctl, press{d: -1}) })
-	e.OnShortcut(0, ui.KeyHome, func() { r.press(n, ctl, press{d: -len(n.Items)}) })
-	e.OnShortcut(0, ui.KeyEnd, func() { r.press(n, ctl, press{d: len(n.Items)}) })
+	e.OnShortcut(0, ui.KeyHome, func() { r.press(n, ctl, press{d: -toEnd}) })
+	e.OnShortcut(0, ui.KeyEnd, func() { r.press(n, ctl, press{d: toEnd}) })
 	e.OnShortcut(0, ui.KeyEnter, func() { r.press(n, ctl, press{submit: true, mods: heldKeys(kc)}) })
 	e.OnShortcut(ui.Cmd, ui.KeyEnter, func() { r.press(n, ctl, press{submit: true, mods: heldKeys(kc)}) })
 	if r.st.WaitRows != nil && len(n.Items) > 0 {
@@ -232,9 +238,12 @@ func (r *renderer) pressed(n *widget.Node, ctl *control) {
 	for len(lv.pressed) > 0 && r.cs.sent <= r.cs.processed {
 		p := lv.pressed[0]
 		lv.pressed = lv.pressed[1:]
-		if p.submit {
+		switch {
+		case p.input != nil:
+			r.fire(p.input, p.input.OnChange, "change", p.text)
+		case p.submit:
 			r.submit(n, ctl.text, p.mods)
-		} else {
+		default:
 			r.move(n, ctl, p.d)
 		}
 	}
@@ -264,6 +273,13 @@ func (r *renderer) submit(n *widget.Node, key string, mods []string) {
 	s := *r
 	s.mods = mods
 	s.fire(n, n.OnSubmit, "submit", key)
+}
+
+// waits says keys pressed on the list l wait for the plugin, so that what
+// its input types now waits behind them.
+func (r *renderer) waits(l *widget.Node) bool {
+	ctl := r.cs.m[l.ID]
+	return ctl != nil && ctl.list != nil && len(ctl.list.pressed) > 0
 }
 
 // drive lets the input e move the list l with Up and Down, and submit it

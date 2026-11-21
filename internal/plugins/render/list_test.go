@@ -511,3 +511,73 @@ func TestKeysWaitForThePluginToTakeWhatWasSentBefore(t *testing.T) {
 		t.Fatalf("Enter after the plugin took the move: %+v, want x2 submitted", ev)
 	}
 }
+
+// What the input types behind a key still waiting for the plugin waits
+// behind it: Enter submits what the query before it found, and End goes
+// to the end of the list the plugin draws by then.
+func TestTypingBehindAWaitingKeyWaitsBehindIt(t *testing.T) {
+	s := &screen{}
+	view := func(value string, keys ...string) string {
+		var items []string
+		for _, k := range keys {
+			items = append(items, `{"key": "`+k+`", "label": "Row `+k+`"}`)
+		}
+		return `{"body": {"type": "column", "children": [{"type": "input", "id": "q", "label": "Query", "onChange": "query"},
+			{"type": "list", "id": "l", "label": "Results", "height": 300, "input": "q", "controlled": true, "value": "` + value + `", "onChange": "chose", "onSubmit": "open", "items": [` + strings.Join(items, ",") + `]}]}}`
+	}
+	s.show(t, view("a", "a", "b"))
+	tt := ui.NewTester(func(c *ui.Context) {
+		s.cs.Sync(s.v, s.rev, s.processed)
+		View(c, s.v, &s.cs, Style{Rows: func(_ string, it widget.ListItem) *widget.Node {
+			return &widget.Node{Type: "text", Text: it.Label}
+		}}, &s.md, func(ev plugins.UIEvent, _ map[string]any) int {
+			s.events = append(s.events, ev)
+			return len(s.events)
+		})
+	}, 400, 400)
+	tt.Frame()
+	in, ok := tt.AccessByRole(ui.RoleTextField, "")
+	if !ok {
+		t.Fatal("no search field")
+	}
+	tt.ClickAt(in.Bounds.X+5, in.Bounds.Y+in.Bounds.H/2)
+	tt.Type("x")
+	tt.Key(0, ui.KeyEnter)
+	tt.Type("y")
+	tt.Frame()
+	if len(s.events) != 1 || s.events[0].Value != "x" {
+		t.Fatalf("what was typed behind Enter went before it: %+v", s.events)
+	}
+	s.show(t, view("x1", "x1", "x2"))
+	s.processed = len(s.events)
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "submit" || ev.Value != "x1" {
+		t.Fatalf("Enter after the plugin took x: %+v, want x1 submitted", ev)
+	}
+	tt.Frame()
+	if len(s.events) != 2 {
+		t.Fatalf("what was typed behind Enter went before the plugin took it: %+v", s.events)
+	}
+	s.processed = len(s.events)
+	s.rev++
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "change" || ev.Value != "xy" {
+		t.Fatalf("what was typed behind Enter: %+v, want xy sent after it", ev)
+	}
+
+	// End, pressed before the plugin took the query, goes to the end of
+	// the longer list it draws for it.
+	r, _ := tt.Find("Row x1")
+	tt.ClickAt(r.X+2, r.Y+2)
+	tt.Frame()
+	s.show(t, view("x1", "x1", "x2"))
+	s.processed = len(s.events) - 1
+	tt.Frame()
+	tt.Key(0, ui.KeyEnd)
+	s.show(t, view("x1", "x1", "x2", "x3", "x4", "x5", "x6", "x7"))
+	s.processed = len(s.events)
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "change" || ev.Value != "x7" {
+		t.Fatalf("End before the plugin caught up: %+v, want x7 chosen", ev)
+	}
+}
