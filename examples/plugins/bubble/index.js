@@ -13,16 +13,15 @@ function row({ kind, note, failed }) {
   }
   const bubble = {
     type: "column",
-    padding: [8, 12],
     radius: 4,
     background: "$surface",
     border: "$accent",
-    children: [body],
+    children: [{ ...body, padding: [8, 12] }],
   };
   const children = [bubble];
   if (note) {
     const text = { type: "text", text: note, size: "small", color: failed ? "$danger" : "$text.muted" };
-    children.push({ type: "row", gap: 8, children: failed ? [text, retry] : [text] });
+    children.push({ type: "row", children: [text, retry] });
   }
   return {
     type: "row",

@@ -88,7 +88,7 @@ func (h *Host) App(id string) *Session {
 	if len(x.Places) == 0 && len(x.Events) == 0 && len(x.Timers) == 0 {
 		return nil
 	}
-	s := &Session{h: h, p: in.p, plugin: id, places: &placeSet{places: x.Places, items: map[string][]PlaceItem{}, views: map[string]map[string]*widget.Node{}}}
+	s := &Session{h: h, p: in.p, plugin: id, Builtin: in.bundled, places: &placeSet{places: x.Places, items: map[string][]PlaceItem{}, views: map[string]map[string]*widget.Node{}}}
 	h.sessions[k] = s
 	s.push(queued{init: true})
 	if x.Service == "" {
@@ -130,6 +130,14 @@ func (s *Session) SetItems(place string, items []PlaceItem) {
 // PlaceView is what the plugin drew for one copy of its place, or nil.
 func (s *Session) PlaceView(place, key string) *widget.Node {
 	return s.places.views[place][key]
+}
+
+// Answered is the version of the copy key of the place that the drawing
+// shown answered, "" while none has.
+func (s *Session) Answered(place, key string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.places.answered[[2]string{place, key}]
 }
 
 // AnsweredNull is whether the plugin's drawing shown answered null for

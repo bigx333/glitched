@@ -366,8 +366,8 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			e.Background(col).Radius(8)
 		}
 		if col, ok := st.color(n.Border); ok {
-			if n.BorderOpacity != 0 {
-				col = col.Alpha(float32(n.BorderOpacity))
+			if n.BorderOpacity != nil {
+				col = col.Alpha(float32(*n.BorderOpacity))
 			}
 			e.Border(1, col)
 		}

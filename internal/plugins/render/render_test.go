@@ -448,3 +448,36 @@ func TestMenuSeparatorsAndProgressButtons(t *testing.T) {
 		t.Errorf("once answered, the button doesn't fire: %v, %d events", err, len(s.events))
 	}
 }
+
+// A border at borderOpacity 0 draws nothing; one with none set is opaque.
+func TestABorderAtOpacityZeroIsClear(t *testing.T) {
+	red := func(props string) int {
+		t.Helper()
+		v, err := widget.Decode([]byte(`{"body":{"type":"row","padding":16,"children":[{"type":"text","text":"label"}]` + props + `}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		tt := ui.NewTester(func(c *ui.Context) {
+			ui.Column(c).Fill().Padding(16).Background(ui.RGBA(0, 0, 0, 1)).Children(func() {
+				View(c, v, &Controls{}, Style{Red: ui.RGBA(1, 0, 0, 1)}, nil, nil)
+			})
+		}, 160, 80)
+		tt.Frame()
+		img, n := tt.Image(), 0
+		b := img.Bounds()
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			for x := b.Min.X; x < b.Max.X; x++ {
+				if r, g, b, a := img.At(x, y).RGBA(); r > 0 && g == 0 && b == 0 && a > 0 {
+					n++
+				}
+			}
+		}
+		return n
+	}
+	if red("") != 0 || red(`,"border":"$danger"`) == 0 {
+		t.Fatal("no border should draw no red, and a $danger one some")
+	}
+	if n := red(`,"border":"$danger","borderOpacity":0`); n != 0 {
+		t.Errorf("a border at opacity 0 draws %d red pixels", n)
+	}
+}
