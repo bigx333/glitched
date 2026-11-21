@@ -121,7 +121,7 @@ func (a *app) threadCommands() []command {
 	var threads []command
 	for _, p := range a.projects {
 		for _, t := range p.threads {
-			threads = append(threads, command{section: "Threads", label: title(t), hint: p.name(), run: func() { a.select_(t) }, t: &t})
+			threads = append(threads, command{section: "Threads", label: title(t), hint: p.name(), run: func() { a.select_(t); a.revealing = t.id() }, t: &t})
 		}
 	}
 	slices.SortStableFunc(threads, func(x, y command) int { return newestFirst(*x.t, *y.t) })

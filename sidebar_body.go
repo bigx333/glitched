@@ -217,6 +217,10 @@ func (a *app) sidebarCopy(c *ui.Context, part string, maxHeight float32, box fun
 		}
 	}
 	a.sidebarRows[part] = now
+	var reveal string
+	if !a.revealing.IsZero() {
+		reveal = a.revealing.String()
+	}
 	return componentCopy{
 		key:     part,
 		box:     box,
@@ -226,6 +230,7 @@ func (a *app) sidebarCopy(c *ui.Context, part string, maxHeight float32, box fun
 		listRow: func(c *ui.Context, list *widget.Node, i int, e ui.Element, _ bool) bool {
 			return a.sidebarListRow(c, list.Items[i].Thread, was, e)
 		},
+		reveal: reveal,
 	}
 }
 
@@ -247,6 +252,9 @@ func (a *app) sidebarListRow(c *ui.Context, thread string, was map[api.ID]bool, 
 	t, ok := a.find(id)
 	if !ok {
 		return false
+	}
+	if id == a.revealing {
+		a.revealing = api.ID{}
 	}
 	if !was[id] {
 		e.Transition(fold)
