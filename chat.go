@@ -547,7 +547,7 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 		key:     e.key,
 		box:     func() ui.Element { return ui.Column(c).Key(e.key).Transition(riseIn) },
 		context: func(plugins.ThreadRecord) any { return m },
-		native:  func(body, drawing *widget.Node) { a.transcriptBody(c, t, rs, i, body, drawing) },
+		native:  func(body *widget.Node) { a.transcriptBody(c, t, rs, i, body) },
 		retry: func() {
 			if e.failed.Err != nil {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(0, 0, 0, 8).Children(func() { a.failedActions(c, t, e.failed) })
@@ -566,8 +566,9 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 }
 
 var (
-	timelineBody  = &widget.Node{Type: "native", ID: "body", Name: "transcript.body"}
+	timelineBody  = &widget.Node{Type: "native", ID: "body", Name: "transcript.body", Props: bare}
 	timelineRetry = &widget.Node{Type: "native", ID: "retry", Name: "transcript.retry"}
+	bare          = map[string]json.RawMessage{"bare": json.RawMessage("true")}
 )
 
 // timelineRow is the built-in Timeline rows plugin's drawing of the row m,
@@ -577,7 +578,7 @@ var (
 func timelineRow(m timelineMessage) *widget.Node {
 	switch m.Kind {
 	case "user":
-		words := &widget.Node{Type: "native", ID: "body", Name: "transcript.body", Padding: widget.Spacing{10, 14}}
+		words := &widget.Node{Type: "native", ID: "body", Name: "transcript.body", Props: bare, Padding: widget.Spacing{10, 14}}
 		bubble := &widget.Node{Type: "column", Corners: []int{16, 16, 4, 16}, Background: "$surface", Border: "$border", Children: []*widget.Node{words}}
 		col := &widget.Node{Type: "column", Align: "end", Gap: 6, MaxWidthPercent: 80, Children: []*widget.Node{bubble}}
 		if m.Note != "" {
@@ -590,7 +591,7 @@ func timelineRow(m timelineMessage) *widget.Node {
 		return &widget.Node{Type: "row", Children: []*widget.Node{{Type: "spacer"}, col}}
 	case "failed", "error":
 		row := &widget.Node{Type: "row", Align: "center", Padding: widget.Spacing{6, 6, 6, 14}, Radius: 12, Border: "$danger", BorderOpacity: new(0.35),
-			Children: []*widget.Node{{Type: "native", ID: "body", Name: "transcript.body", Grow: true}}}
+			Children: []*widget.Node{{Type: "native", ID: "body", Name: "transcript.body", Props: bare, Grow: true}}}
 		if m.Kind == "failed" {
 			row.Children = append(row.Children, timelineRetry)
 		}
@@ -612,39 +613,47 @@ type timelineMessage struct {
 
 var entryKindNames = map[entryKind]string{entryUser: "user", entryAssistant: "assistant", entryWork: "work", entryFailed: "failed", entryError: "error"}
 
-// transcriptBody draws what the timeline row rs.es[i] says, which body,
-// transcript.body, places in drawing: a message's words, inset by body's
-// padding so that it selects with them, a run's work log, an error's
-// words. What is around it is drawing's. A drawing that places no
-// transcript.retry has the body draw a message's note and a failed
-// command's Retry and Dismiss, as it did before transcript.retry was one.
-func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body, drawing *widget.Node) {
+// transcriptBody draws the timeline row rs.es[i], which body,
+// transcript.body, places. Bare, it draws only what the row says, with
+// nothing around it: a message's words, inset by body's padding so that
+// it selects with them, a run's work log, an error's words; the copy
+// draws the rest, and transcript.retry a failed command's Retry and
+// Dismiss. Otherwise it draws the row as Glitched did before the built-in
+// drew its chrome: a message in its bubble with its note, an error in its
+// outline with Retry and Dismiss.
+func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body *widget.Node) {
 	e := rs.es[i]
+	var bare bool
+	if body != nil {
+		json.Unmarshal(body.Props["bare"], &bare)
+	}
 	inset := func(el ui.Element) ui.Element {
-		if body != nil && len(body.Padding) > 0 {
+		if bare && len(body.Padding) > 0 {
 			t, r, b, l := body.Padding.Sides()
 			el.Padding(float32(t), float32(r), float32(b), float32(l))
 		}
 		return el
 	}
-	own := true
-	drawing.Walk(func(n *widget.Node) { own = own && n.Name != "transcript.retry" })
 	switch e.kind {
 	case entryUser:
-		words := func() {
+		words := func() ui.Element {
 			if md := a.userMarkdown(e.key, e.text); md != "" {
-				inset(markdown.View(c, md, &a.userMD))
-			} else {
-				inset(ui.Text(c, e.text).Selectable().LineHeight(1.5))
+				return inset(markdown.View(c, md, &a.userMD))
 			}
+			return inset(ui.Text(c, e.text).Selectable().LineHeight(1.5))
 		}
-		if !own || e.note == "" {
+		if bare {
 			words()
 			return
 		}
-		ui.Column(c).AlignItems(ui.End).Gap(6).Children(func() {
-			words()
-			a.messageNote(c, t, e)
+		ui.Row(c).Key(e.key).Children(func() {
+			ui.Spacer(c)
+			ui.Column(c).AlignItems(ui.End).Gap(6).MaxWidthPercent(80).Children(func() {
+				words().Padding(10, 14).Radius(16, 16, 4, 16).Background(palette.surface).Border(1, palette.border)
+				if e.note != "" {
+					a.messageNote(c, t, e)
+				}
+			})
 		})
 	case entryAssistant:
 		col := inset(ui.Column(c).Key(e.key).LineHeight(1.55))
@@ -660,13 +669,15 @@ func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body, draw
 	case entryWork:
 		a.workLog(c, t, e.key, e, rs.files)
 	case entryFailed, entryError:
-		if !own || e.failed.Err == nil {
+		if bare {
 			inset(ui.Text(c, e.text).FontSize(12).TextColor(palette.red))
 			return
 		}
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			inset(ui.Text(c, e.text).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1))
-			a.failedActions(c, t, e.failed)
+		ui.Row(c).Key(e.key).Gap(8).AlignItems(ui.Center).Padding(6, 6, 6, 14).Radius(12).Border(1, palette.red.Alpha(0.35)).Children(func() {
+			ui.Text(c, e.text).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
+			if e.kind == entryFailed {
+				a.failedActions(c, t, e.failed)
+			}
 		})
 	}
 }

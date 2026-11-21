@@ -310,11 +310,13 @@ type NativeWidget = {
   | {
       /** What a timeline row says, live, with nothing around it, in timeline.message: placed exactly once, in rows, columns and cards alone. */
       name: "transcript.body";
-      /** Insets the words inside their own text, so it selects with them. */
+      /** bare: only what the row says, with nothing around it; the copy draws the bubble, note and outline. Without, the row as Glitched drew it before. */
+      props?: { bare?: boolean };
+      /** A bare body's: insets the words inside their own text, so it selects with them. */
       padding?: number | number[];
     }
   | {
-      /** A failed command's Retry and Dismiss, in timeline.message, 8 points after what is before it; nothing, and no room, in any other row. Placed, the copy draws the row's note: placed nowhere, transcript.body draws it with Retry and Dismiss. */
+      /** A failed command's Retry and Dismiss, in timeline.message, 8 points after what is before it; nothing, and no room, in any other row. */
       name: "transcript.retry";
     }
   | {

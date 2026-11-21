@@ -24,8 +24,8 @@ import (
 // key, the box it makes to draw in, its context from the thread's record
 // as each plugin may see it, and its native body, which Glitched draws
 // while no plugin has drawn the copy yet. Nil draws nothing then. The
-// body is given the native node that places it, and the drawing it is
-// in, drawing; both are nil where Glitched draws the body alone.
+// body is given the native node that places it, nil where Glitched draws
+// the body alone.
 // builtin is the built-in's drawing of the copy, which Glitched draws
 // around the body while no plugin has drawn it, or while the built-in's
 // drawing is of the copy as it was. retry is the copy's transcript.retry,
@@ -35,11 +35,10 @@ type componentCopy struct {
 	key     string
 	box     func() ui.Element
 	context func(plugins.ThreadRecord) any
-	native  func(body, drawing *widget.Node)
+	native  func(body *widget.Node)
 	retry   func()
 	over    func(box ui.Element)
 	builtin func() *widget.Node
-	drawing *widget.Node
 }
 
 // fallback draws the copy's native body of the component name, in the
@@ -52,14 +51,13 @@ func (a *app) fallback(c *ui.Context, name string, t *thread, cp componentCopy) 
 	box := cp.box()
 	box.Children(func() {
 		if cp.builtin == nil {
-			cp.native(nil, nil)
+			cp.native(nil)
 		} else {
-			cp.drawing = cp.builtin()
 			st := a.pluginStyle("")
 			st.Native = func(c *ui.Context, n *widget.Node, row string, fire func(any)) {
 				a.drawNative(c, name, t, row, n, fire, cp)
 			}
-			render.View(c, &widget.View{Body: cp.drawing}, &render.Controls{}, st, &a.pluginMD, nil)
+			render.View(c, &widget.View{Body: cp.builtin()}, &render.Controls{}, st, &a.pluginMD, nil)
 		}
 		if cp.over != nil {
 			cp.over(box)
@@ -202,7 +200,6 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 			a.fallback(c, name, t, cp)
 			continue
 		}
-		cp.drawing = d.node
 		box := cp.box()
 		a.drawPlace(c, box, d.pl, cp.key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, row string, fire func(any)) {
 			a.drawNative(c, name, t, row, n, fire, cp)
@@ -268,7 +265,7 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 	case "composer.input":
 		a.composerIn(c)
 	case "transcript.body":
-		cp.native(n, cp.drawing)
+		cp.native(n)
 	case "transcript.retry":
 		cp.retry()
 	case "diff.body":

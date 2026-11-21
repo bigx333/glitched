@@ -107,7 +107,7 @@ var Natives = map[string]Native{
 	"diff.body":       {Props: map[string]string{"path": "string"}, In: []string{"thread.panel.diff"}, Thread: true, Fires: []string{"onChange"}},
 	"theme.card":      {Props: map[string]string{"theme": "string"}, In: []string{"settings.page.appearance"}, Fires: []string{"onChange"}},
 	"composer.input":  {In: []string{"composer"}, Thread: true},
-	"transcript.body": {In: []string{"timeline.message"}, Thread: true},
+	"transcript.body": {Props: map[string]string{"bare": "bool"}, In: []string{"timeline.message"}, Thread: true},
 	// transcript.retry is a failed command's Retry and Dismiss, by its
 	// row's error or under its message's note.
 	"transcript.retry": {In: []string{"timeline.message"}, Thread: true},

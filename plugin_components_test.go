@@ -158,7 +158,7 @@ func TestAFrameWaitsOnceForAComponentsNewCopies(t *testing.T) {
 					key:     k,
 					box:     func() ui.Element { return ui.Column(c).Key(k) },
 					context: func(plugins.ThreadRecord) any { return k },
-					native:  func(_, _ *widget.Node) { ui.Text(c, "native "+k) },
+					native:  func(_ *widget.Node) { ui.Text(c, "native "+k) },
 				})
 			}
 		})
@@ -200,7 +200,7 @@ func TestACopyAnsweredNullIsNotWaitedForAgain(t *testing.T) {
 					key:     k,
 					box:     func() ui.Element { return ui.Column(c).Key(k) },
 					context: func(plugins.ThreadRecord) any { return k },
-					native:  func(_, _ *widget.Node) { ui.Text(c, "native "+k) },
+					native:  func(_ *widget.Node) { ui.Text(c, "native "+k) },
 				})
 			}
 		})
