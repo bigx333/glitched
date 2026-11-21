@@ -146,3 +146,61 @@ export function place({ items }) {
 		t.Errorf("Settings says %q of a toolbar that failed with the built-in off", why)
 	}
 }
+
+// message.item draws a command only at a whole-number index one has:
+// one past them, below 0, between two or none draws nothing.
+func TestAToolbarsCommandIsOnlyOneThatIsThere(t *testing.T) {
+	h, _ := checked(t)
+	const msg = "Sort them by most recent activity."
+	writeOwnPlugin(t, h.a, "mine", menusManifest, menusModule)
+	for _, tc := range []struct {
+		props string
+		quote bool
+	}{
+		{", props: { index: 0 }", true},
+		{", props: { index: 1 }", false},
+		{", props: { index: -1 }", false},
+		{", props: { index: 0.5 }", false},
+		{", props: { index: 1e30 }", false},
+		{"", false},
+	} {
+		writeOwnPlugin(t, h.a, "my-bar", barManifest, barModule(`{ type: "row", children: [{ type: "text", text: "Mine" }, { type: "native", id: "item", name: "message.item"`+tc.props+` }] }`))
+		allow(t, h.a, "my-bar", "ui.replace")
+		h.tt.Move(800, 30)
+		h.tt.Advance(time.Second)
+		h.hover(msg)
+		h.tt.Advance(time.Second)
+		settlePlugins(t, h.a, h.tt, h.p)
+		if !h.tt.HasText("Mine") || h.tt.HasText("Quote") != tc.quote {
+			t.Errorf("message.item%s: Quote shown %v, want %v: %q", tc.props, h.tt.HasText("Quote"), tc.quote, h.tt.Texts())
+		}
+	}
+}
+
+// A toolbar drawn taller than a line runs on down, never up over the
+// message it is under, and still takes no room.
+func TestATallToolbarNeverCoversItsMessage(t *testing.T) {
+	h, _ := checked(t)
+	const msg, next = "Sort them by most recent activity.", "Checking the build."
+	before, _ := h.tt.Find(next)
+	writeOwnPlugin(t, h.a, "my-bar", barManifest, barModule(`{ type: "column", gap: 24, children: [{ type: "button", id: "one", label: "Action one" }, { type: "button", id: "two", label: "Action two" }] }`))
+	allow(t, h.a, "my-bar", "ui.replace")
+	h.tt.Move(800, 30)
+	h.tt.Advance(time.Second)
+	h.hover(msg)
+	h.tt.Advance(time.Second)
+	settlePlugins(t, h.a, h.tt, h.p)
+	words, _ := h.tt.Find(msg)
+	if after, _ := h.tt.Find(next); after != before {
+		t.Errorf("the toolbar moved what follows from %v to %v", before, after)
+	}
+	for _, label := range []string{"Action one", "Action two"} {
+		b, ok := h.tt.Access(label)
+		if !ok {
+			t.Fatalf("no %q: %q", label, h.tt.Texts())
+		}
+		if b.Bounds.Y < words.Y+words.H {
+			t.Errorf("%q starts at y=%v, over the message, which ends at y=%v", label, b.Bounds.Y, words.Y+words.H)
+		}
+	}
+}

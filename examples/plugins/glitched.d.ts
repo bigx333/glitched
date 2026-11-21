@@ -511,7 +511,8 @@ type Component =
   | "composer"
   | "composer.send"
   | "composer.access"
-  | "timeline.message";
+  | "timeline.message"
+  | "message.toolbar";
 
 /** The settings glitched.app.settings reads and sets, by settings.json's names. */
 interface AppSettings {

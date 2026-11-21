@@ -45,6 +45,7 @@ var partTitles = map[string]string{
 	"question.card":             "Question card",
 	"composer":                  "Composer",
 	"timeline.message":          "Timeline rows",
+	"message.toolbar":           "Message toolbar",
 	"palette":                   "Command palette",
 	"sidebar.body":              "Sidebar threads",
 	"agents.body":               "Agents panel",
