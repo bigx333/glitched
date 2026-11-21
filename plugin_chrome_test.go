@@ -87,13 +87,14 @@ func TestAboutChecksForUpdates(t *testing.T) {
 	}
 }
 
-// About names the MyGo Glitched was built with: the one go.mod requires.
+// About names the MyGo Glitched was built with: the one go.mod requires,
+// or what go.mod replaces it with, as a fork.
 func TestAboutNamesTheMyGoItIsBuiltWith(t *testing.T) {
 	mod, err := os.ReadFile("go.mod")
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := regexp.MustCompile(`(?m)^\s*(?:replace\s+)?github\.com/egoist/mygo(?: v\S+)? => github\.com/egoist/mygo (v\S+)$`).FindSubmatch(mod)
+	m := regexp.MustCompile(`(?m)^\s*(?:replace\s+)?github\.com/egoist/mygo(?: v\S+)? => \S+ (v\S+)$`).FindSubmatch(mod)
 	if m == nil {
 		m = regexp.MustCompile(`(?m)^\s*github\.com/egoist/mygo (v\S+)$`).FindSubmatch(mod)
 	}

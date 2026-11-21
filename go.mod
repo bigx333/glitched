@@ -126,3 +126,5 @@ require (
 )
 
 replace github.com/yxxbc/mygo-plugin => github.com/bigx333/mygo-plugin v0.6.1-glitched.5
+
+replace github.com/egoist/mygo => github.com/bigx333/mygo v0.10.0-glitched.1
