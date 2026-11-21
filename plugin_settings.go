@@ -382,13 +382,14 @@ func (a *app) pluginGrants(c *ui.Context, p plugins.Plugin) {
 	var asked []plugins.CapabilityState
 	var free []string
 	for _, cp := range p.Capabilities {
-		if cp.Grant {
+		switch {
+		case grantListed(p, cp):
 			asked = append(asked, cp)
-		} else {
+		case !cp.Grant:
 			free = append(free, cp.About)
 		}
 	}
-	if len(p.Capabilities) == 0 {
+	if len(asked)+len(free) == 0 {
 		return
 	}
 	slices.SortStableFunc(asked, func(x, y plugins.CapabilityState) int {
@@ -398,9 +399,9 @@ func (a *app) pluginGrants(c *ui.Context, p plugins.Plugin) {
 		sectionLabel(c, "WHAT IT MAY DO")
 		if len(asked) > 0 {
 			ui.Column(c).Radius(10).Border(1, palette.border).Background(palette.surface).Clip().Dividers(1, palette.border).Children(func() {
-				for i, cp := range asked {
+				for _, cp := range asked {
 					risk := capRisk(cp.Name)
-					row := ui.Row(c).Key(i).Padding(10, 12).Gap(12).AlignItems(ui.Center)
+					row := ui.Row(c).Key(cp.Name).Padding(10, 12).Gap(12).AlignItems(ui.Center)
 					if risk != "" && cp.Granted {
 						row.Background(palette.amber.Alpha(0.06))
 					}
