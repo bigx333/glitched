@@ -1,0 +1,13 @@
+{
+  "id": "model-picker",
+  "name": "Model picker",
+  "description": "The composer's model picker: what its button shows, and its popover's families, models, and effort with fast mode. Built into Glitched; make a copy in Settings › Plugins to change it.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "ui.replace", "threads:read"],
+  "glitched": {
+    "places": [{ "id": "picker", "at": "composer.model", "replaces": true }]
+  }
+}

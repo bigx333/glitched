@@ -50,6 +50,7 @@ var partTitles = map[string]string{
 	"sidebar.body":              "Sidebar threads",
 	"agents.body":               "Agents panel",
 	"composer.access":           "Access picker",
+	"composer.model":            "Model picker",
 	"composer.send":             "Send and stop",
 	"composer.workspace":        "Workspace",
 	"settings.plugins":          "Settings › Plugins",

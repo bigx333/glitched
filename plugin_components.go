@@ -274,6 +274,25 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 		} else {
 			mark()
 		}
+	case "model.tile":
+		var name string
+		size := 18.0
+		json.Unmarshal(n.Props["family"], &name)
+		json.Unmarshal(n.Props["size"], &size)
+		if i := slices.IndexFunc(families, func(f family) bool { return f.name == name }); i >= 0 {
+			modelTile(c, families[i].icon, families[i].color, float32(size))
+			break
+		}
+		m := modelByName(a.model)
+		modelTile(c, m.icon, m.color, float32(size))
+	case "model.level":
+		ui.Text(c, a.effort).FontSize(11).FontWeight(600).TextColor(effortColor(a.effortLevel()))
+	case "model.zap":
+		if a.fast {
+			a.zapIcon(c, "trigger-zap", 12)
+		}
+	case "model.effort":
+		a.effortSlider(c)
 	case "thread.age":
 		if component == "agents.body" {
 			ui.Text(c, ago(t.View.UpdatedAt, a.now)).FontSize(11).TextColor(palette.faint).Shrink(0)

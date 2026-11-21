@@ -131,8 +131,15 @@ var Natives = map[string]Native{
 	"thread.row.actions": {In: []string{"sidebar.body"}, Row: true},
 	"thread.rename":      {In: []string{"sidebar.body"}, Row: true},
 	"thread.tile":        {In: []string{"sidebar.body"}, Row: true},
-	"thread.status":      {Props: map[string]string{"dot": "bool", "size": "number"}, In: []string{"sidebar.body", "palette", "agents.body"}, Row: true},
-	"thread.age":         {In: []string{"palette", "agents.body"}, Row: true},
+	// The model picker's parts: a model's or, with family, a family's
+	// tile; the effort's name in its color; fast mode's lightning while
+	// it's on; and the effort slider with fast mode's switch.
+	"model.tile":    {Props: map[string]string{"family": "string", "size": "number"}, In: []string{"composer.model"}, InRow: true},
+	"model.level":   {In: []string{"composer.model"}},
+	"model.zap":     {In: []string{"composer.model"}},
+	"model.effort":  {In: []string{"composer.model"}},
+	"thread.status": {Props: map[string]string{"dot": "bool", "size": "number"}, In: []string{"sidebar.body", "palette", "agents.body"}, Row: true},
+	"thread.age":    {In: []string{"palette", "agents.body"}, Row: true},
 	// thread.actions is the … that opens the thread's menu, as the agents
 	// panel's rows show it while pointed at.
 	"thread.actions":  {In: []string{"agents.body"}, Row: true},
@@ -443,15 +450,16 @@ var (
 	hexColor       = regexp.MustCompile("^#[0-9a-fA-F]{6}$")
 	handlerPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
 	styles         = map[string][]string{
-		"text":   {"", "body", "muted", "strong", "heading", "title", "code", "error", "success"},
-		"button": {"", "default", "primary", "danger", "ghost", "outline", "bordered"},
-		"menu":   {"", "default", "outline", "ghost"},
-		"badge":  {"", "default", "accent", "success", "warning", "danger", "count"},
-		"tabs":   {"", "default", "segmented", "control"},
-		"toggle": {"", "default", "switch"},
-		"item":   {"", "code"},
-		"card":   {"", "default", "list"},
-		"input":  {"", "default", "search", "bare"},
+		"text":    {"", "body", "muted", "strong", "heading", "title", "code", "error", "success"},
+		"button":  {"", "default", "primary", "danger", "ghost", "outline", "bordered"},
+		"menu":    {"", "default", "outline", "ghost"},
+		"badge":   {"", "default", "accent", "success", "warning", "danger", "count"},
+		"tabs":    {"", "default", "segmented", "control"},
+		"toggle":  {"", "default", "switch"},
+		"item":    {"", "code"},
+		"card":    {"", "default", "list"},
+		"input":   {"", "default", "search", "bare"},
+		"divider": {"", "vertical"},
 	}
 	aligns = []string{"", "start", "center", "end", "stretch"}
 	// ghostContent is what a ghost button may show in place of its icon.
@@ -881,8 +889,10 @@ func (c *checker) extra(n *Node) error {
 		return fmt.Errorf("a maxWidthPercent is 1 to 100")
 	case box && (n.Radius < 0 || n.Radius > MaxSize):
 		return fmt.Errorf("a radius is 0 to %d", MaxSize)
+	case box && (n.Width < 0 || n.Height < 0 || n.Width > MaxSize || n.Height > MaxSize):
+		return fmt.Errorf("a width or a height is 0 to %d", MaxSize)
 	}
-	if (n.Width != 0 || n.Height != 0 || n.Radius != 0 && !box) && n.Type != "image" && !(n.Type == "list" && n.Width == 0 && n.Radius == 0) && (n.Type != "select" && n.Type != "tile" && !n.popover || n.Height != 0 || n.Radius != 0) {
+	if !box && (n.Width != 0 || n.Height != 0 || n.Radius != 0) && n.Type != "image" && !(n.Type == "list" && n.Width == 0 && n.Radius == 0) && (n.Type != "select" && n.Type != "tile" && !n.popover || n.Height != 0 || n.Radius != 0) {
 		return fmt.Errorf("a %s has no width, height or radius", n.Type)
 	}
 	if n.Type == "select" && n.Width != 0 && (n.Width < 40 || n.Width > 480) {

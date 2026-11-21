@@ -3,6 +3,7 @@ package render
 import (
 	"encoding/json"
 	"fmt"
+	"image"
 	"strings"
 	"testing"
 
@@ -501,5 +502,58 @@ func TestABorderAtOpacityZeroIsClear(t *testing.T) {
 	}
 	if n := red(`,"border":"$danger","borderOpacity":0`); n != 0 {
 		t.Errorf("a border at opacity 0 draws %d red pixels", n)
+	}
+}
+
+// A sized column is as big as it says, a vertical divider is a line as
+// tall as its row, and a popover's column is as wide as the panel holds,
+// not wider: its width is the panel's.
+func TestSizedBoxesVerticalDividersAndPopoverColumns(t *testing.T) {
+	red := func(view string, st Style) (n int, box image.Rectangle) {
+		t.Helper()
+		v, err := widget.Decode([]byte(view))
+		if err != nil {
+			t.Fatal(err)
+		}
+		st.Border, st.Red = ui.RGBA(1, 0, 0, 1), ui.RGBA(1, 0, 0, 1)
+		tt := ui.NewTester(func(c *ui.Context) {
+			ui.Column(c).Fill().Background(ui.RGBA(0, 0, 0, 1)).Children(func() {
+				View(c, v, &Controls{}, st, nil, nil)
+			})
+		}, 400, 200)
+		tt.Frame()
+		tt.Frame()
+		img := tt.Image()
+		b := img.Bounds()
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			for x := b.Min.X; x < b.Max.X; x++ {
+				if r, g, bl, a := img.At(x, y).RGBA(); r > 0 && g == 0 && bl == 0 && a > 0 {
+					n++
+					if px := image.Rect(x, y, x+1, y+1); n == 1 {
+						box = px
+					} else {
+						box = box.Union(px)
+					}
+				}
+			}
+		}
+		return n, box
+	}
+	for _, align := range []string{"", "center", "stretch"} {
+		if _, box := red(`{"body": {"type": "row", "align": "`+align+`", "children": [
+			{"type": "column", "width": 150, "height": 60},
+			{"type": "divider", "style": "vertical"}]}}`, Style{}); box != image.Rect(150, 0, 151, 60) {
+			t.Errorf("in a row aligned %q, the vertical divider after a 150 by 60 column covers %v, want x 150 for 60 points", align, box)
+		}
+	}
+	if _, box := red(`{"body": {"type": "column", "width": 120, "height": 50, "border": "$danger"}}`, Style{}); box.Dx() != 120 || box.Dy() != 50 {
+		t.Errorf("a 120 by 50 column's border covers %v", box)
+	}
+	pop := Style{Popover: func(c *ui.Context, anchor ui.Element, open *bool, width float32, body func()) {
+		ui.Column(c).Width(width).Padding(20).Children(body)
+	}}
+	if _, box := red(`{"body": {"type": "button", "id": "b", "style": "ghost", "icon": "x", "open": true,
+		"popover": {"type": "column", "width": 220, "border": "$danger"}}}`, pop); box.Dx() != 180 {
+		t.Errorf("a popover's column in a 220-point panel padded by 20 covers %v, want 180 wide", box)
 	}
 }

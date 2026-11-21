@@ -310,3 +310,27 @@ func TestAGhostMenuIsTheWorkspaces(t *testing.T) {
 		}
 	}
 }
+
+// A row or a column takes a width and a height, in points, and a divider
+// with style vertical stands up in its row.
+func TestBoxesTakeASizeAndADividerStandsUp(t *testing.T) {
+	good := `{"body": {"type": "row", "width": 150.5, "height": 40, "align": "stretch", "children": [
+		{"type": "column", "width": 60, "height": 20},
+		{"type": "divider", "style": "vertical"},
+		{"type": "divider"}]}}`
+	if _, err := Decode([]byte(good)); err != nil {
+		t.Fatal(err)
+	}
+	bad := map[string]string{
+		`{"body": {"type": "text", "text": "x", "width": 10}}`:   "a text has no width, height or radius",
+		`{"body": {"type": "divider", "style": "sideways"}}`:     "unknown style",
+		`{"body": {"type": "column", "width": 1e9}}`:             "",
+		`{"body": {"type": "card", "title": "x", "height": 10}}`: "a card has no width, height or radius",
+	}
+	for s, want := range bad {
+		_, err := Decode([]byte(s))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", s, err, want)
+		}
+	}
+}
