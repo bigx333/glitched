@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -114,7 +115,7 @@ func TestACounterPluginDrawsNativeWidgetsAndTakesEvents(t *testing.T) {
 
 	h.typeInto("Name", "Ada")
 	h.until("the greeting", func() bool { return h.tt.HasText("Hello, Ada!") })
-	if v := h.a.pluginControls[pluginKey{"counter", "home"}].Values()["name"]; v != "Ada" {
+	if v := h.a.pluginControls[pluginKey{"counter", "home"}].cs.Values()["name"]; v != "Ada" {
 		t.Fatalf("the input holds %q", v)
 	}
 	if h.tt.HasText("The name has") {
@@ -354,4 +355,39 @@ func TestATextSettingSavesOnEnter(t *testing.T) {
 	if v := h.a.plugins.SettingValues("keys")["key"]; v != "cmd+shift+k" {
 		t.Fatalf("after Enter: %q", v)
 	}
+}
+
+// A plugin loaded again as another one goes draws its own state: its
+// controls start again with its session, so a field shows what the
+// plugin now says, not what it said before, and takes what you type.
+func TestAPluginLoadedAgainAsAnotherGoesShowsItsOwnState(t *testing.T) {
+	h := pluginApp(t, "counter", "hello")
+	h.click("Counter")
+	h.until("the counter's page", func() bool { return h.tt.HasText("Count: 0") })
+	h.typeInto("Name", "Ada")
+	h.until("the counter to take the name", func() bool { return h.tt.HasText("Hello, Ada!") })
+	old, err := h.a.plugins.Session("counter", "home")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := h.a.plugins.Watch(8 * time.Millisecond)
+	defer stop()
+	time.Sleep(40 * time.Millisecond)
+	if err := os.RemoveAll(filepath.Join(plugins.Dir(h.a.dir), "hello")); err != nil {
+		t.Fatal(err)
+	}
+	h.until("hello to go", func() bool {
+		return !slices.ContainsFunc(h.a.plugins.Installed(), func(p plugins.Plugin) bool { return p.ID == "hello" })
+	})
+	settlePlugins(t, h.a, h.tt, h.p)
+	if now, err := h.a.plugins.Session("counter", "home"); err != nil || now == old {
+		t.Fatalf("the counter didn't load again as hello went: %v, the same session %v", err, now == old)
+	}
+	// The counter starts again with no name, and its field says so, not
+	// the name its last load had.
+	if v, ok := h.tt.AccessByRole(ui.RoleTextField, "Name"); !ok || v.Value != "" || !h.tt.HasText("Type a name.") {
+		t.Fatalf("the counter's name reads %+v beside %q, after it started again with none", v, h.tt.Texts())
+	}
+	h.typeInto("Name", "Bo")
+	h.until("the counter to take the new name", func() bool { return h.tt.HasText("Hello, Bo!") })
 }

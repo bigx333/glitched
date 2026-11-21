@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"weak"
 
 	"github.com/egoist/mygo/ui"
 
@@ -167,6 +168,31 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread) {
 	}
 }
 
+// sessionControls are the controls of what a plugin's app session draws,
+// and that session, held weakly: one closed is no longer kept.
+type sessionControls struct {
+	cs *render.Controls
+	s  weak.Pointer[plugins.Session]
+}
+
+// controlsOf are the controls at k of what the session s draws. A plugin
+// loaded again counts its views and the events it took from the start, so
+// its controls start again with it, else a view of the same count would
+// leave them as they were: an input or a list it now draws would never
+// show, and a field would keep the last load's value.
+func controlsOf[K comparable](m map[K]*sessionControls, k K, s *plugins.Session) *render.Controls {
+	sc := m[k]
+	switch {
+	case sc == nil:
+		sc = &sessionControls{&render.Controls{}, weak.Make(s)}
+		m[k] = sc
+	case sc.s != weak.Make(s):
+		sc.cs.Restart()
+		sc.s = weak.Make(s)
+	}
+	return sc.cs
+}
+
 // drawPlace draws in box what the plugin drew for one copy of its place,
 // and hands what the user does there to its app session.
 //
@@ -176,11 +202,7 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread) {
 func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key string, ctx any, app *plugins.Session, node *widget.Node, native func(c *ui.Context, n *widget.Node, row string, fire func(any)), after func()) {
 	pk := placeKey{pl.Plugin, pl.Place.ID, key}
 	a.placeFrame.keys[pk] = true
-	cs := a.placeControls[pk]
-	if cs == nil {
-		cs = &render.Controls{}
-		a.placeControls[pk] = cs
-	}
+	cs := controlsOf(a.placeControls, pk, app)
 	v := &widget.View{Body: node}
 	cs.Sync(v, app.Rev, app.Processed)
 	ref := &plugins.PlaceRef{ID: pl.Place.ID, At: pl.Place.At, Key: key, Context: ctx}
