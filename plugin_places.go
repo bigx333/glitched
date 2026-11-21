@@ -295,6 +295,7 @@ func (a *app) emitThreadChanges() {
 			from, filed := a.pluginSections[r.ID]
 			a.pluginSections[r.ID] = r.Section
 			if filed && from != r.Section {
+				a.sidebarKept[t.id()] = true
 				ev := map[string]string{"thread": r.ID, "from": from, "to": r.Section}
 				a.plugins.Emit("thread.moved", func(string) any { return ev })
 			}

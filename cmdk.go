@@ -152,16 +152,20 @@ type paletteThread struct {
 	Ago string `json:"ago"`
 }
 
+// lineHeight is how tall a line of text of the interface font draws, at
+// size and weight, on this platform: a text element's height, padding
+// aside.
+func lineHeight(c *ui.Context, size float32, weight int) float32 {
+	m := ui.Font{Family: c.Theme().Font, Size: size, Weight: weight}.Metrics()
+	return m.Ascent + m.Descent + m.LineGap
+}
+
 func (a *app) paletteContext(c *ui.Context) paletteContext {
-	t := c.Theme()
-	line := func(size float32, weight int) float32 {
-		m := ui.Font{Family: t.Font, Size: size, Weight: weight}.Metrics()
-		return m.Ascent + m.Descent + m.LineGap
-	}
+	size := c.Theme().FontSize
 	ctx := paletteContext{Query: a.cmdkQuery, Actions: a.commandRecords(), Threads: []paletteThread{},
-		RowHeight:    16 + max(line(t.FontSize, 0), line(11.5, 0)),
-		HeaderHeight: 12 + line(11, 600),
-		NoneHeight:   48 + line(t.FontSize, 0),
+		RowHeight:    16 + max(lineHeight(c, size, 0), lineHeight(c, 11.5, 0)),
+		HeaderHeight: 12 + lineHeight(c, 11, 600),
+		NoneHeight:   48 + lineHeight(c, size, 0),
 	}
 	for _, cmd := range a.threadCommands() {
 		ctx.Threads = append(ctx.Threads, paletteThread{cmd.t.id().String(), cmd.label, cmd.hint, ago(cmd.t.View.UpdatedAt, a.now)})

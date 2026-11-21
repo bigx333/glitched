@@ -76,25 +76,49 @@ type inboxItem struct {
 	p *project
 }
 
+// sortedAt is what itemsIn sorted the threads after: the frame, the
+// changes posted, the threads, and the projects.
+type sortedAt struct {
+	built, posts uint64
+	threads, n   int // n is the projects'
+	recent       *thread
+	projects     **project
+}
+
 // itemsIn returns the threads of a category, of the projects filtered to,
-// every machine's together, the most recently updated first.
+// every machine's together, the most recently updated first. The threads
+// are sorted into their categories once a frame, and again after a change
+// the manager posts, as threads come and go, or as the projects change,
+// not once for each category asked: with 10,000 threads, sorting them
+// took most of a frame.
 func (a *app) itemsIn(cat category) []inboxItem {
-	shown := map[envProject]*project{}
-	for _, p := range a.projects {
-		if len(a.projectFilter) == 0 || a.projectFilter[p.key] {
-			shown[envProject{p.env, p.key}] = p
+	recent := a.recent()
+	at := sortedAt{built: a.built, posts: a.posts, threads: len(recent), n: len(a.projects)}
+	if len(recent) > 0 {
+		at.recent = &recent[0]
+	}
+	if len(a.projects) > 0 {
+		at.projects = &a.projects[0]
+	}
+	if a.sorted.items == nil || a.sorted.at != at {
+		a.sorted.at, a.sorted.items = at, map[category][]inboxItem{}
+		shown := map[envProject]*project{}
+		for _, p := range a.projects {
+			if len(a.projectFilter) == 0 || a.projectFilter[p.key] {
+				shown[envProject{p.env, p.key}] = p
+			}
+		}
+		for _, t := range recent {
+			p := shown[envProject{t.env, keyOf(t.env, t.View.Workspace)}]
+			// A child shows under its parent, but for one lifted into
+			// Working.
+			if p != nil && !deleting(t) && (!a.nested(t) || a.lifted(t)) {
+				c := a.shownIn(t)
+				a.sorted.items[c] = append(a.sorted.items[c], inboxItem{t, p})
+			}
 		}
 	}
-	var items []inboxItem
-	for _, t := range a.recent() {
-		p := shown[envProject{t.env, keyOf(t.env, t.View.Workspace)}]
-		// A child shows under its parent, but for one lifted into
-		// Working.
-		if p != nil && !deleting(t) && a.shownIn(t) == cat && (!a.nested(t) || a.lifted(t)) {
-			items = append(items, inboxItem{t, p})
-		}
-	}
-	return items
+	return a.sorted.items[cat]
 }
 
 // lifted is whether t, a child, shows in Working on its own, as well as

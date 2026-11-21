@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -449,6 +450,16 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		var args struct{ Palette string }
 		json.Unmarshal(e.Args, &args)
 		a.closePalette(args.Palette)
+		return nil, nil
+	case "sidebar.more":
+		var args struct{ Key string }
+		json.Unmarshal(e.Args, &args)
+		id, err := api.ParseID(args.Key)
+		_, thread := a.find(id)
+		if !slices.Contains(slices.Collect(maps.Values(sectionNames)), args.Key) && (err != nil || !thread) {
+			return nil, fmt.Errorf("no section or thread %q to show more of", args.Key)
+		}
+		a.showMore(args.Key)
 		return nil, nil
 	case "open.in":
 		return a.openInEffect(e.Args)

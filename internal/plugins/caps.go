@@ -51,6 +51,7 @@ var Effects = map[string]string{
 	"panels.toggle":          "ui.place",
 	"panels.state":           "ui.place",
 	"palette.close":          "ui.replace",
+	"sidebar.more":           "threads:read",
 	"open.in":                "threads:read",
 	"app.checkForUpdates":    "",
 	"app.settings.get":       "",

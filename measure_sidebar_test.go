@@ -13,14 +13,14 @@ import (
 	"glitched/internal/provider/fake"
 )
 
-// The sidebar at 100, 1,000 and 10,000 threads: how long it takes to show
+// The sidebar at 1,000, 10,000 and 50,000 threads: how long it takes to show
 // them, a frame once it has, and a new thread's way to its row. Run with
 // GLITCHED_MEASURE=1; CI skips it.
 func TestMeasureTheSidebar(t *testing.T) {
 	if os.Getenv("GLITCHED_MEASURE") == "" {
-		t.Skip("set GLITCHED_MEASURE=1 to measure the sidebar at 100, 1,000 and 10,000 threads")
+		t.Skip("set GLITCHED_MEASURE=1 to measure the sidebar at 1,000, 10,000 and 50,000 threads")
 	}
-	for _, n := range []int{100, 1000, 10000} {
+	for _, n := range []int{1000, 10000, 50000} {
 		t.Run(fmt.Sprint(n), func(t *testing.T) {
 			dir := tempDir(t)
 			d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))

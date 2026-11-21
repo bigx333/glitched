@@ -39,7 +39,7 @@ import (
 // RENAME=<title>, ALERT=<title>, MENU=<title> (its items to
 // SHOT.menu.txt), HOVER=<text>, FAILED, PICKER=<effort>, FAST and
 // STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH,
-// TICK=<turn>, TINT=0..1, PANELS, SCROLLUP, WIDTH=1100, AGENTS, HERO and DOCK,
+// TICK=<turn>, TINT=0..1, PANELS, SCROLLUP, SIDEBARDOWN, WIDTH=1100, AGENTS, HERO and DOCK,
 // SNOOZE=<title> for a row's snooze popover, SIDEBAR=<width>,
 // GAG=snooze|settle|undo with AT=350ms, and HIDE=60ms for a frame that
 // long into hiding the sidebar.
@@ -320,6 +320,12 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		})
 		settlePlugins(t, h.a, h.tt, h.p)
 		h.tt.Advance(time.Second)
+		if os.Getenv("SIDEBARDOWN") != "" {
+			h.tt.Scroll(120, 500, 0, 100000)
+			h.tt.Advance(time.Second)
+			settlePlugins(t, h.a, h.tt, h.p)
+			h.tt.Advance(time.Second)
+		}
 	case "approval":
 		h, _ = asking(t, runTests)
 	case "asked":
