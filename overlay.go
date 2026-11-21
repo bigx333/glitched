@@ -82,6 +82,9 @@ func meets(r, v ui.Rect) bool {
 func (a *app) popover(c *ui.Context, anchor ui.Element, open *bool, fn func(panel ui.Element)) {
 	key := fmt.Sprint("popover ", anchor.ID())
 	focusBefore(c, key, *open)
+	if !*open {
+		return
+	}
 	ui.PopoverBase(c.Key(key), anchor, open, func(panel ui.Element) {
 		a.cover(coverKey{"popover", anchor.ID()}, panel)
 		fn(panel)
@@ -92,6 +95,9 @@ func (a *app) popover(c *ui.Context, anchor ui.Element, open *bool, fn func(pane
 func (a *app) dialog(c *ui.Context, open *bool, fn func(backdrop, panel ui.Element)) {
 	key := fmt.Sprintf("dialog %p", open)
 	focusBefore(c, key, *open)
+	if !*open {
+		return
+	}
 	ui.DialogBase(c.Key(key), open, func(backdrop, panel ui.Element) {
 		a.cover(coverKey{"dialog", backdrop.ID()}, backdrop)
 		fn(backdrop, panel)
@@ -103,6 +109,9 @@ func (a *app) dialog(c *ui.Context, open *bool, fn func(backdrop, panel ui.Eleme
 func (a *app) alert(c *ui.Context, open *bool, title, message string, buttons ...string) int {
 	key := fmt.Sprintf("alert %p", open)
 	focusBefore(c, key, *open)
+	if !*open {
+		return -1
+	}
 	chose := ui.AlertDialog(c.Key(key), open, title, message, buttons...)
 	a.covering = a.covering || *open
 	a.modalNow = a.modalNow || *open

@@ -747,11 +747,16 @@ func (a *app) select_(t thread) {
 }
 
 // choose shows the thread a person chose, its composer, compact or full,
-// taking the focus.
+// taking the focus. Shown already, it's the editor there now: on its way
+// between the two, the full one, which the compact line isn't yet.
 func (a *app) choose(t thread) {
+	line := a.composerSeen[t.id()] && a.composerCompact(t)
+	if t.id() == a.selected {
+		line = a.composerK == 0 && a.composerCompact(t)
+	}
 	a.select_(t)
 	area, other := &a.draftArea, &a.draftLine
-	if a.composerSeen[t.id()] && a.composerCompact(t) {
+	if line {
 		area, other = other, area
 	}
 	other.CancelFocus()
