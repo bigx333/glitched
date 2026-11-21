@@ -2,9 +2,13 @@ package main
 
 import (
 	"math"
+	"slices"
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"glitched/internal/plugins"
+	"glitched/internal/plugins/widget"
 )
 
 type modelInfo struct {
@@ -108,7 +112,10 @@ func (a *app) effortLevel() int {
 // the families of models beside the models of the one pointed at, as a
 // submenu, and the effort slider. High effort lights a glow around the
 // button, and fast mode runs electricity around it in the glow's place.
-func (a *app) modelPicker(c *ui.Context) {
+// What the button shows and what the popover holds are composer.model's
+// two copies, a plugin's or Glitched's own: Glitched keeps the button, its
+// glow and electricity, the popover, and what a row does (modelListRow).
+func (a *app) modelPicker(c *ui.Context, t thread) {
 	m := modelByName(a.model)
 	level := a.effortLevel()
 	b := a.tip(c, ghost(c, "model", a.pickerOpen).Padding(4, 8, 4, 4).Gap(6).Label("Model"), "Model and effort")
@@ -117,13 +124,23 @@ func (a *app) modelPicker(c *ui.Context) {
 		if a.fast {
 			a.electricBorder(c)
 		}
-		modelTile(c, m.icon, m.color, 18)
-		ui.Text(c, a.model).FontSize(12).SingleLine()
-		ui.Text(c, a.effort).FontSize(11).FontWeight(600).TextColor(effortColor(level))
-		if a.fast {
-			a.zapIcon(c, "trigger-zap", 12)
-		}
-		ui.Icon(c, icChevronD).FontSize(11)
+		a.pluginComponent(c, "composer.model", &t, componentCopy{
+			key: composerKey(t) + "/button",
+			box: func() ui.Element {
+				return ui.Row(c).Key("component:composer.model/button").Gap(6).AlignItems(ui.Center)
+			},
+			native: func(*widget.Node) {
+				modelTile(c, m.icon, m.color, 18)
+				ui.Text(c, a.model).FontSize(12).SingleLine()
+				ui.Text(c, a.effort).FontSize(11).FontWeight(600).TextColor(effortColor(level))
+				if a.fast {
+					a.zapIcon(c, "trigger-zap", 12)
+				}
+				ui.Icon(c, icChevronD).FontSize(11)
+			},
+			current: true,
+			context: func(r plugins.ThreadRecord) any { return a.composerModelOf(c, r, "button") },
+		})
 	}).Clicked() {
 		a.pickerOpen = !a.pickerOpen
 		a.pickerFamily = m.provider
@@ -137,15 +154,102 @@ func (a *app) modelPicker(c *ui.Context) {
 	a.popover(c, b, &a.pickerOpen, func(panel ui.Element) {
 		panel.AttachTo(b, ui.AnchorTopStart, ui.AnchorBottomStart).Margin(0, 0, 10, -4).Width(420).Radius(16).Clip()
 		a.frosted(c, panel).Shadow(0, 16, 40, 0, ui.RGBA(0, 0, 0, 0.35)).Children(func() {
-			ui.Row(c).AlignItems(ui.Stretch).Children(func() {
-				a.pickerFamilies(c)
-				ui.Box(c).Width(1).Background(palette.border)
-				a.pickerModels(c)
+			a.pluginComponent(c, "composer.model", &t, componentCopy{
+				key: composerKey(t) + "/panel",
+				box: func() ui.Element { return ui.Column(c).Key("component:composer.model/panel") },
+				native: func(*widget.Node) {
+					ui.Row(c).AlignItems(ui.Stretch).Children(func() {
+						a.pickerFamilies(c)
+						ui.Box(c).Width(1).Background(palette.border)
+						a.pickerModels(c)
+					})
+					ui.Divider(c).Background(palette.border)
+					a.effortSlider(c)
+				},
+				current: true,
+				context: func(r plugins.ThreadRecord) any { return a.composerModelOf(c, r, "panel") },
+				listRow: func(c *ui.Context, list *widget.Node, i int, e ui.Element, _ bool) bool {
+					a.modelListRow(list.ID, list.Items[i].Key, e)
+					return false
+				},
 			})
-			ui.Divider(c).Background(palette.border)
-			a.effortSlider(c)
 		})
 	})
+}
+
+// composerModel is the context of composer.model: the button's copy, or
+// the popover's, of the picker as it shows the thread's choice, or a new
+// thread's default in the draft.
+type composerModel struct {
+	Thread plugins.ThreadRecord `json:"thread"`
+	// Part is the copy's: "button" or "panel".
+	Part   string `json:"part"`
+	Model  string `json:"model"`
+	Effort string `json:"effort"`
+	Fast   bool   `json:"fast"`
+	// Family is the family whose models the popover shows, and Lock the
+	// only one it offers, a thread's provider's, or "" for every one.
+	Family   string        `json:"family"`
+	Lock     string        `json:"lock"`
+	Families []modelFamily `json:"families"`
+	Models   []modelChoice `json:"models"`
+	// FamilyRowHeight and ModelRowHeight are how tall Glitched's own
+	// popover draws a family's row and a model's, from the interface
+	// font's lines on this platform.
+	FamilyRowHeight float32 `json:"familyRowHeight"`
+	ModelRowHeight  float32 `json:"modelRowHeight"`
+}
+
+type modelFamily struct {
+	Name  string `json:"name"`
+	About string `json:"about"`
+}
+
+type modelChoice struct {
+	Name   string `json:"name"`
+	Short  string `json:"short"`
+	About  string `json:"about"`
+	Family string `json:"family"`
+}
+
+func (a *app) composerModelOf(c *ui.Context, r plugins.ThreadRecord, part string) composerModel {
+	size := c.Theme().FontSize
+	out := composerModel{Thread: r, Part: part, Model: a.model, Effort: a.effort, Fast: a.fast, Family: a.pickerFamily, Lock: a.pickerLock,
+		FamilyRowHeight: 12 + max(22, 1+lineHeight(c, size, 500)+lineHeight(c, 11, 0)),
+		ModelRowHeight:  14 + max(14, 1+lineHeight(c, size, 500)+lineHeight(c, 11.5, 0)),
+	}
+	for _, f := range families {
+		out.Families = append(out.Families, modelFamily{f.name, f.desc})
+	}
+	for _, m := range models {
+		out.Models = append(out.Models, modelChoice{m.name, m.short, m.desc, m.provider})
+	}
+	return out
+}
+
+// modelListRow does what the popover's own rows do to the row e of a
+// copy's list: of "families", pointed at or clicked, it shows the
+// family's models; of "models", clicked, it chooses the model. Only what
+// the picker offers: a family or a model past the thread's lock, or none
+// of the picker's, does nothing.
+func (a *app) modelListRow(list, key string, e ui.Element) {
+	switch list {
+	case "families":
+		if !slices.ContainsFunc(families, func(f family) bool { return f.name == key }) || a.pickerLock != "" && key != a.pickerLock {
+			return
+		}
+		if e.Hovered() || e.Clicked() {
+			a.pickerFamily = key
+		}
+	case "models":
+		i := slices.IndexFunc(models, func(m modelInfo) bool { return m.name == key })
+		if i < 0 || a.pickerLock != "" && models[i].provider != a.pickerLock {
+			return
+		}
+		if e.Clicked() {
+			a.model = key
+		}
+	}
 }
 
 // fastButton turns fast mode on and off, beside the effort in the

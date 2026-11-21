@@ -1509,7 +1509,7 @@ func (a *app) draftKey(t thread) func(ui.TextKey) bool {
 }
 
 func (a *app) composerControls(c *ui.Context, t thread) {
-	a.modelPicker(c)
+	a.modelPicker(c, t)
 	ui.Box(c).Size(1, 16).Background(palette.border).Margin(0, 4)
 
 	a.accessControl(c, t)

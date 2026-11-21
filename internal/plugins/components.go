@@ -21,9 +21,9 @@ type Component struct {
 	// may replace it: widget.Locked, which also keeps it from being placed
 	// as a native widget.
 	Locked string
-	// Native is a component whose built-in Glitched draws itself, rather
-	// than a built-in plugin: a replacement that fails gives way to it,
-	// rather than to its own last drawing.
+	// Native is a component Glitched can draw itself, whether or not a
+	// built-in plugin draws it first: a replacement that fails gives way
+	// to it, rather than to its own last drawing.
 	Native bool
 	// Requires is the native widget a replacement must place: a drawing
 	// without it is taken as one that failed.
@@ -52,6 +52,7 @@ var Components = []Component{
 	{Name: "timeline.message", Provides: "timelineMessage", Native: true, Requires: "transcript.body", About: "A row of the chat timeline, around the native transcript.body: a message, a run's work log, or an error. Approval, question and report cards stay Glitched's."},
 	{Name: "composer.send", Provides: "composerSend", Needs: "threads:write", Native: true, About: "The composer's Send button, which stops the agent while it works. While it draws, Glitched keeps its own Stop beside it as a turn runs."},
 	{Name: "composer.workspace", Provides: "composerWorkspace", Needs: "threads:read", Native: true, About: "The button under the composer that says where the thread runs, and a new thread's menu of where it could start, whose choices, Add project and Remove project are Glitched's own."},
+	{Name: "composer.model", Provides: "composerModel", Needs: "threads:read", Native: true, About: "The model picker: what its button shows, and what its popover holds, the families of models, the models of the one pointed at, and the effort with fast mode. Glitched keeps the button, its glow, the popover, and what a row does."},
 	{Name: "composer.access", Provides: "composerAccess", Needs: "threads:access", Native: true, About: "The access picker, which sets what agents may do in a thread. While it draws, Glitched keeps its own sign of the access in force beside it."},
 	{Name: "sidebar.body", Provides: "sidebarBody", Needs: "threads:read", About: "The sidebar's threads: the inbox, and Working, Snoozed and Settled under it, each a header over its threads' rows and their children's."},
 	{Name: "agents.body", Provides: "agentsBody", Needs: "threads:read", Own: true, About: "The agents panel's rows: the threads under the one shown, each with its run's dot, its title and how long ago it changed, and More past the first five. Glitched keeps the pill, the panel it grows into, and its head."},

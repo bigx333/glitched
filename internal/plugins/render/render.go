@@ -404,6 +404,12 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		if n.Radius != 0 {
 			e.Radius(n.Radius)
 		}
+		if n.Width != 0 {
+			e.Width(n.Width)
+		}
+		if n.Height != 0 {
+			e.Height(n.Height)
+		}
 		if len(n.Corners) == 4 {
 			e.Radius(n.Corners[0], n.Corners[1], n.Corners[2], n.Corners[3])
 		}
@@ -496,6 +502,10 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		}
 		ui.Text(kc, n.Text).FontSize(11).FontWeight(600).TextColor(col).Padding(1, 6).Radius(5).Background(col.Alpha(0.14))
 	case "divider":
+		if n.Style == "vertical" {
+			ui.Box(kc).Width(1).AlignSelf(ui.Stretch).Background(st.Border)
+			break
+		}
 		ui.Box(kc).Height(1).Background(st.Border)
 	case "spacer":
 		ui.Spacer(kc)
@@ -864,7 +874,10 @@ func (r *renderer) item(c *ui.Context, n *widget.Node, k string) {
 // user dismisses it, which tells the plugin.
 func (r *renderer) popover(c *ui.Context, b ui.Element, n *widget.Node) {
 	open := n.Open && !r.cs.dismissed[n.ID]
-	body := func() { r.node(c, n.Popover, 0) }
+	// The panel is as wide as the column's Width says, not the column in it.
+	inner := *n.Popover
+	inner.Width = 0
+	body := func() { r.node(c, &inner, 0) }
 	if r.st.Popover != nil {
 		r.st.Popover(c, b, &open, float32(n.Popover.Width), body)
 	} else {

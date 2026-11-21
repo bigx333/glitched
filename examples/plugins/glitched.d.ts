@@ -43,6 +43,9 @@ interface Box {
   corners?: [number, number, number, number];
   /** At most this share of the parent's width, 1 to 100; 0 is none. */
   maxWidthPercent?: number;
+  /** Its width and height, in points; 0 is as its children need. */
+  width?: number;
+  height?: number;
 }
 
 type Widget = {
@@ -89,7 +92,8 @@ type Widget = {
     }
   | { type: "markdown"; id?: string; text: string }
   | { type: "badge"; id?: string; text: string; style?: "default" | "accent" | "success" | "warning" | "danger" | "count"; color?: Color }
-  | { type: "divider" | "spacer" | "spinner"; id?: string }
+  | { type: "divider"; id?: string; /** vertical: a line that stands up in its row, as tall as the row. */ style?: "vertical" }
+  | { type: "spacer" | "spinner"; id?: string }
   | { type: "icon"; id?: string; /** One of the app's icons, or "plugin:<file>.svg". */ name: string; color?: Color; /** 8 to 48 points. */ fontSize?: number }
   | { type: "keys"; id?: string; /** Keycaps, 1 to 8, as ["⌘", "K"]. */ keys: string[] }
   | { type: "link"; id?: string; text: string; /** http or https, opened in the browser. */ href: string }
@@ -346,6 +350,19 @@ type NativeWidget = {
       name: "thread.status";
       props?: { dot?: boolean };
     }
+  | {
+      /** In composer.model, in a list's row or not: a model's mark, the copy's model's or, with family, that family's; size is its side, 18 by default. */
+      name: "model.tile";
+      props?: { family?: string; size?: number };
+    }
+  | {
+      /**
+       * In composer.model: the effort's name in its color; fast mode's
+       * lightning while it's on, nothing while it's off; or the effort's
+       * slider under its name and fast mode's switch.
+       */
+      name: "model.level" | "model.zap" | "model.effort";
+    }
 );
 
 /** A ghost or outline button: drawn as Glitched's header draws its own. */
@@ -373,7 +390,7 @@ interface GhostButton extends DrawnButton {
   /** Glitched's menu on a right click: "thread:<id>" or "project:<key>". Needs threads:read. */
   contextMenu?: string;
   /** A panel hanging from the button while open: a column, 120 to 480 points wide. */
-  popover?: { type: "column"; width: number } & Layout;
+  popover?: { type: "column"; width: number } & Box & Layout;
   open?: boolean;
   /** Escape or a click outside closed the popover: clear open in your state. */
   onClose?: Handler;
@@ -517,6 +534,7 @@ type Component =
   | "composer.send"
   | "composer.access"
   | "composer.workspace"
+  | "composer.model"
   | "timeline.message"
   | "message.toolbar";
 
@@ -581,6 +599,7 @@ type ComponentContext =
   | ComposerContext
   | ComposerSendContext
   | ComposerAccessContext
+  | ComposerModelContext
   | TimelineMessageContext
   | MessageToolbarContext
   | Record<string, never>;
@@ -650,6 +669,31 @@ interface ComposerWorkspaceContext {
 }
 
 type AccessLevel = "Ask for approval" | "Approve for me" | "Full access";
+
+/**
+ * The context of composer.model, the model picker: what its button shows
+ * (part "button"), or its popover holds while open (part "panel"). A row of
+ * a list with id "families" shows that family's models as it is pointed at
+ * or clicked, and one of a list with id "models" chooses that model on a
+ * click, where the picker offers it; keys are names.
+ */
+interface ComposerModelContext {
+  thread: ThreadRecord;
+  part: "button" | "panel";
+  /** The thread's own, or in the draft the default a new thread takes. */
+  model: string;
+  effort: string;
+  fast: boolean;
+  /** The family whose models the popover shows. */
+  family: string;
+  /** The only family a thread offers, its provider's ("-" for none the picker lists), or "" in the draft. */
+  lock: string;
+  families: { name: string; about: string }[];
+  models: { name: string; short: string; about: string; family: string }[];
+  /** How tall Glitched's own popover draws a family's row and a model's, in points, from the interface font on this platform. */
+  familyRowHeight: number;
+  modelRowHeight: number;
+}
 
 /** The context of thread.row.actions, a pointed-at sidebar row's actions. */
 interface RowActionsContext {
