@@ -40,8 +40,9 @@ type componentCopy struct {
 	over    func(box ui.Element)
 	builtin func() *widget.Node
 	// listRow does to the rows of the copy's lists what the app does to
-	// its own (render.Style.ListRow); nil does nothing.
-	listRow func(c *ui.Context, list *widget.Node, i int, e ui.Element) bool
+	// its own (render.Style.ListRow), builtin when the built-in plugin
+	// draws the copy; nil does nothing.
+	listRow func(c *ui.Context, list *widget.Node, i int, e ui.Element, builtin bool) bool
 	// current waits for the plugin to draw each new context of the copy,
 	// as for its first drawing, so that what it shows keeps up with the
 	// app's own state, as the sidebar's threads moving between sections.
@@ -213,7 +214,9 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 		box := cp.box()
 		a.drawPlace(c, box, d.pl, cp.key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, row string, fire func(any)) {
 			a.drawNative(c, name, t, row, n, fire, cp)
-		}, cp.listRow, func() {
+		}, func(c *ui.Context, list *widget.Node, i int, e ui.Element) bool {
+			return cp.listRow != nil && cp.listRow(c, list, i, e, d.app.Builtin)
+		}, func() {
 			if cp.over != nil {
 				cp.over(box)
 			}

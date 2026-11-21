@@ -223,7 +223,7 @@ func (a *app) sidebarCopy(c *ui.Context, part string, maxHeight float32, box fun
 		native:  func(*widget.Node) { native() },
 		current: true,
 		context: func(plugins.ThreadRecord) any { return body },
-		listRow: func(c *ui.Context, list *widget.Node, i int, e ui.Element) bool {
+		listRow: func(c *ui.Context, list *widget.Node, i int, e ui.Element, _ bool) bool {
 			return a.sidebarListRow(c, list.Items[i].Thread, was, e)
 		},
 	}
