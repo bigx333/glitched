@@ -547,6 +547,7 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 			return nil, err
 		}
 		a.select_(t)
+		a.revealing = t.id()
 		return nil, nil
 	case "threads.rename":
 		var args struct{ Title string }

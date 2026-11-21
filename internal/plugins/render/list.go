@@ -130,6 +130,9 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 	ls := lv.state
 	ls.Key = func(i int) any { return n.Items[i].Key }
 	ls.Label = func(i int) string { return n.Items[i].Label }
+	if i, ok := lv.index[r.st.Reveal]; ok {
+		ls.ScrollIntoView(i)
+	}
 	e := ui.List(kc, ls, len(n.Items)).Label(n.Label).Gap(n.Gap)
 	if n.ChooseOnHover {
 		x, y, in := e.PointerPosition()

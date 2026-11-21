@@ -560,6 +560,9 @@ type app struct {
 	// has the focus, and asked the editor its focus was asked for.
 	chosen api.ID
 	asked  *ui.Handle
+	// revealing is the thread opened from the palette, or by a plugin,
+	// till its sidebar row has scrolled into view.
+	revealing api.ID
 	// steers are the messages sent from the composer, until each lands
 	// or fails, by command.
 	steers map[api.ID]steer
