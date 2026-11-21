@@ -52,8 +52,8 @@ func TestUIReplaceIsListedOnlyForAPluginGlitchedDidntSign(t *testing.T) {
 		if !tt.HasText("WHAT IT MAY DO") || !tt.HasText("Without asking, as any plugin may:") {
 			t.Errorf("what it may do without asking went with the row: %q", tt.Texts())
 		}
-		if !a.plugins.Allowed("greetings", "ui.replace") {
-			t.Error("the built-in lost ui.replace with its row")
+		if !a.plugins.Allowed("greetings", "ui.replace") || a.partState(p, "hero.heading").word != "Drawing it now" {
+			t.Errorf("the built-in stopped drawing with its row gone: %+v", a.partState(p, "hero.heading"))
 		}
 		if s := pluginSummary(p); s != "Draws New thread greeting, Empty thread" {
 			t.Errorf("its summary counts the grant it doesn't list: %q", s)
