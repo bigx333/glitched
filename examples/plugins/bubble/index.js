@@ -4,7 +4,7 @@
 // Timeline rows draws it. The words are transcript.body's: a plugin draws
 // only what is around them.
 
-const body = { type: "native", id: "body", name: "transcript.body" };
+const body = { type: "native", id: "body", name: "transcript.body", props: { bare: true } };
 const retry = { type: "native", id: "retry", name: "transcript.retry" };
 
 function row({ kind, note, failed }) {

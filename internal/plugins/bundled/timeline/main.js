@@ -1,17 +1,18 @@
 // A row of the chat timeline, as Glitched draws it by default: the row's
-// chrome in widgets, around the native transcript.body, which draws the
+// chrome in widgets, around a bare transcript.body, which draws only the
 // message's own text, a run's work log or an error's words. A message of
 // yours is a bubble on the right with its note under it; an error is a
 // red outline. transcript.retry is a failed command's Retry and Dismiss;
-// placed, it takes them and the note from transcript.body. It draws
-// nothing, and takes no room, where nothing failed. Copy it in Settings › Plugins and restyle the chrome: each
-// copy's context names the row's key and kind, whether it streams, its
-// note and whether it failed. A layout that leaves transcript.body out,
-// or places it twice, isn't drawn: Glitched draws its own row instead.
-// Glitched draws a message's Copy and Edit or Retry over every copy, while
-// it is pointed at.
+// it draws nothing, and takes no room, where nothing failed. Copy it in
+// Settings › Plugins and restyle the chrome: each copy's context names
+// the row's key and kind, whether it streams, its note and whether it
+// failed. A layout that leaves transcript.body out, or places it twice,
+// isn't drawn: Glitched draws its own row instead. Glitched draws a
+// message's Copy and Edit or Retry over every copy, while it is pointed
+// at.
 
-const body = { type: "native", id: "body", name: "transcript.body" };
+// Bare, transcript.body draws only the words: the chrome is this layout's.
+const body = { type: "native", id: "body", name: "transcript.body", props: { bare: true } };
 const retry = { type: "native", id: "retry", name: "transcript.retry" };
 
 function row({ kind, note, failed }) {
