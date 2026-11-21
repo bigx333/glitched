@@ -290,6 +290,13 @@ type app struct {
 	// sidebarRows are the threads in the rows of each part of the
 	// sidebar's body, as last built.
 	sidebarRows map[string]map[api.ID]bool
+	// sidebarPages are how many pages of threads the user had a section,
+	// by its id, or a thread's children, by the thread's, show; one
+	// without has one. sidebarKept are the threads shown wherever they
+	// sort, past the pages: those the user chose, and those that moved
+	// section.
+	sidebarPages map[string]int
+	sidebarKept  map[api.ID]bool
 	// sectionCounts are each section's threads, as the sidebar's body last
 	// counted them, for the headers its plugin places.
 	sectionCounts map[category]int
@@ -467,6 +474,14 @@ type app struct {
 	posts uint64
 	// recentThreads are the threads, the most recently updated first.
 	recentThreads recentThreads
+	// built counts the frames built; sorted are the threads of each
+	// category, as itemsIn sorted them, and the frame and posts after
+	// which it did.
+	built  uint64
+	sorted struct {
+		at    sortedAt
+		items map[category][]inboxItem
+	}
 	// The diff panel: each file's viewer, by thread and path, and their
 	// layout.
 	diffs      map[diffKey]*fileDiff
@@ -682,6 +697,8 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		collapsed:      map[string]bool{},
 		sectionClosed:  map[category]bool{catWorking: true, catSnoozed: true, catSettled: true},
 		sidebarRows:    map[string]map[api.ID]bool{},
+		sidebarPages:   map[string]int{},
+		sidebarKept:    map[api.ID]bool{},
 		sectionCounts:  map[category]int{},
 		projectFilter:  map[projectKey]bool{},
 		rowFx:          map[api.ID]rowGagFx{},
@@ -843,6 +860,7 @@ func (a *app) view(c *ui.Context) {
 	// appearance: the sidebar shows it while the app's theme matches, and
 	// the Liquid Glass setting is on.
 	a.now = c.Now()
+	a.built++
 	if !a.arrived.IsZero() && a.arrivedAt.IsZero() {
 		a.arrivedAt = a.now // sentFromHero
 	}

@@ -9,7 +9,6 @@ const HEAD = 30;
 const ROW = 32;
 const CHILD = 28;
 const GAP = 2;
-const EMPTY = 27;
 
 export function init() {
   return { state: {} };
@@ -27,9 +26,14 @@ function items(ctx) {
     const after = s.rows.length === 0 && !(s.empty && !s.closed) ? GAP : 0;
     out.push({ key: "h:" + s.id, label: s.title, header: true, height: HEAD + before + after });
     if (s.rows.length === 0 && s.empty && !s.closed) {
-      out.push({ key: "e:" + s.id, label: s.empty, header: true, height: EMPTY });
+      out.push({ key: "e:" + s.id, label: s.empty, header: true, height: ctx.emptyHeight });
     }
     for (const r of s.rows) {
+      if (r.more) {
+        const n = Math.min(r.more, ctx.page);
+        out.push({ key: "m:" + (r.parent || s.id), label: `Show ${n} more, of ${r.more} not shown`, height: r.depth > 0 ? CHILD : ROW, version: String(r.more) });
+        continue;
+      }
       // A child lifted into Working shows there and under its line.
       const key = seen.has(r.thread) ? r.thread + "#" + r.depth : r.thread;
       seen.add(r.thread);
@@ -55,6 +59,7 @@ function body(ctx) {
     noKeys: true,
     value,
     controlled: true,
+    onChange: "chose",
   };
   if (ctx.part === "inbox") {
     return { ...list, grow: true, padding: [4, 8, 8, 8] };
@@ -107,6 +112,28 @@ function row(ctx, r) {
   return { type: "row", grow: true, gap: 9, padding: [0, 6, 0, 8], children };
 }
 
+// more is the row that shows the next page of a section, or of a thread's
+// children; its item names it to assistive tools with how many aren't
+// shown, and choosing it, by a click or the keys, shows them.
+function more(ctx, key, it) {
+  let depth = 0;
+  for (const s of ctx.sections) for (const r of s.rows) if (r.more && (r.parent || s.id) === key) depth = r.depth || 0;
+  const n = Math.min(Number(it.version), ctx.page);
+  return {
+    type: "row",
+    grow: true,
+    padding: [0, 6, 0, 8 + depth * 16],
+    children: [{ type: "text", text: `Show ${n} more`, fontSize: 12, color: "$text.muted" }],
+  };
+}
+
+export async function update({ event }) {
+  if (event.kind === "ui" && event.handler === "chose" && event.value.startsWith("m:")) {
+    await glitched.sidebar.more(event.value.slice(2));
+  }
+  return {};
+}
+
 export function rows({ keys, place }) {
   const ctx = place.context;
   const byKey = new Map();
@@ -120,6 +147,7 @@ export function rows({ keys, place }) {
     if (key.startsWith("e:")) {
       return { type: "text", text: it.label, fontSize: 12, color: "$text.faint", padding: [6, 10] };
     }
+    if (key.startsWith("m:")) return more(ctx, key.slice(2), it);
     const r = byThread.get(it.thread + "#" + it.version.split(":")[0]);
     return r ? row(ctx, r) : null;
   });
