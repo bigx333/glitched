@@ -116,6 +116,8 @@ type Host struct {
 	// builtins are the capabilities each running built-in plugin
 	// declares, which it has unless revoked.
 	builtins map[string][]string
+	// failed is OnFailure's.
+	failed   atomic.Pointer[func(plugin string, builtin bool, err error)]
 	statuses map[string]map[string]SettingStatus
 
 	sessions map[pageKey]*Session

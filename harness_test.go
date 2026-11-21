@@ -86,8 +86,39 @@ func testApp(t *testing.T, dir string, engine func(*daemon.Config), post func(fu
 	t.Cleanup(a.settingsOut.wait)
 	if a.plugins != nil {
 		t.Cleanup(a.plugins.Close)
+		failBuiltinFailures(t, a)
 	}
 	return a
+}
+
+// expectedBuiltinFailures are the tests that break a built-in plugin on
+// purpose, which expectBuiltinFailures names.
+var expectedBuiltinFailures sync.Map // *testing.T: true
+
+// expectBuiltinFailures lets t's built-in plugins fail, as a test of what
+// Glitched does then.
+func expectBuiltinFailures(t *testing.T) { expectedBuiltinFailures.Store(t, true) }
+
+// failBuiltinFailures fails t if a built-in plugin of a records a failure
+// t doesn't expect: Glitched draws its own in the built-in's place, which
+// looks the same, so a test would pass on the fallback unawares.
+func failBuiltinFailures(t *testing.T, a *app) {
+	var mu sync.Mutex
+	var failed []string
+	a.plugins.OnFailure(func(plugin string, builtin bool, err error) {
+		if builtin {
+			mu.Lock()
+			failed = append(failed, plugin+": "+err.Error())
+			mu.Unlock()
+		}
+	})
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if _, ok := expectedBuiltinFailures.LoadAndDelete(t); !ok && len(failed) > 0 {
+			t.Errorf("a built-in plugin failed, and Glitched drew its own in its place: %q", failed)
+		}
+	})
 }
 
 var (

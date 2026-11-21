@@ -271,7 +271,7 @@ func (s *Session) drawRows(gen int, state json.RawMessage, context any, want map
 		}
 		// Rows that failed for an earlier view say nothing of this one's.
 		if failed != nil && failedRev == s.Rev {
-			s.Err = failed
+			s.fail(failed)
 		}
 		for k, rows := range drawn {
 			l := want[k].list

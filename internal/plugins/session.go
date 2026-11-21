@@ -256,7 +256,7 @@ func (s *Session) push(q queued) bool {
 		return true
 	}
 	if len(s.queue) >= MaxQueued {
-		s.h.opts.Post(func() { s.Err = fmt.Errorf("the plugin is %d events behind; dropped one", MaxQueued) })
+		s.h.opts.Post(func() { s.fail(fmt.Errorf("the plugin is %d events behind; dropped one", MaxQueued)) })
 		return false
 	}
 	s.queue = append(s.queue, q)
@@ -308,7 +308,7 @@ func (s *Session) run() {
 			s.mu.Lock()
 			s.running = false
 			s.mu.Unlock()
-			s.h.opts.Post(func() { s.Err, s.Busy = err, false })
+			s.h.opts.Post(func() { s.fail(err); s.Busy = false })
 		}
 	}()
 	for {
@@ -384,7 +384,8 @@ func (s *Session) run() {
 			s.mu.Unlock()
 			s.h.opts.Post(func() {
 				if s.current(q.gen) {
-					s.Err, s.Busy = err, false
+					s.fail(err)
+					s.Busy = false
 				}
 			})
 			return
@@ -514,7 +515,7 @@ func (s *Session) render(gen, processed int, state json.RawMessage, values map[s
 			s.dropLists()
 			s.Processed = processed
 		}
-		s.Err = failed
+		s.fail(failed)
 		s.Busy = s.running && (len(s.queue) > 0 || s.dirty)
 	})
 }
@@ -547,4 +548,23 @@ func (s *Session) swap(p *plugin.Plugin) {
 		return
 	}
 	s.refresh()
+}
+
+// fail records what went wrong last, or that nothing did, and tells
+// OnFailure of a failure.
+func (s *Session) fail(err error) {
+	s.Err = err
+	if fn := s.h.failed.Load(); err != nil && fn != nil {
+		s.h.mu.RLock()
+		_, builtin := s.h.builtins[s.plugin]
+		s.h.mu.RUnlock()
+		(*fn)(s.plugin, builtin, err)
+	}
+}
+
+// OnFailure has fn hear each failure a plugin's session records, on the
+// UI thread, with whether the plugin is one built into the app, as tests
+// fail on a built-in's failure they don't expect.
+func (h *Host) OnFailure(fn func(plugin string, builtin bool, err error)) {
+	h.failed.Store(&fn)
 }
