@@ -32,9 +32,11 @@ jobs:
 
   # The root package's UI tests take most of the run, so each of three
   # runners takes every third of them; the first also tests the rest.
+  # 40 minutes: part 1 takes about 23, and Install Pango may wait up to 11
+  # on a runner whose unattended-upgrades holds apt's locks.
   test:
     runs-on: [self-hosted, ferrum, garm]
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -48,9 +50,24 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       # mygo lays out text with Pango, loaded at run time. Without it the
-      # root package's UI tests click on a fallback layout and fail.
+      # root package's UI tests click on a fallback layout and fail. A
+      # runner's unattended-upgrades may hold apt's locks as the job starts:
+      # install waits for dpkg's (DPkg::Lock::Timeout), and update, which
+      # that option doesn't cover, tries again until the same 10 minutes
+      # are up.
       - name: Install Pango
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libpangocairo-1.0-0
+        timeout-minutes: 11
+        run: |
+          if dpkg-query -W -f='${Status}' libpangocairo-1.0-0 2>/dev/null | grep -qx 'install ok installed'; then
+            echo "Pango is already installed"
+            exit 0
+          fi
+          apt="sudo apt-get -q -o DPkg::Lock::Timeout=600"
+          until $apt update; do
+            if [ $SECONDS -ge 600 ]; then exit 1; fi
+            sleep 10
+          done
+          $apt install -y --no-install-recommends libpangocairo-1.0-0
       - name: Test part ${{ matrix.part }} of the root package
         run: |
           set -o pipefail
