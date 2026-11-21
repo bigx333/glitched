@@ -47,6 +47,7 @@ var partTitles = map[string]string{
 	"timeline.message":          "Timeline rows",
 	"palette":                   "Command palette",
 	"sidebar.body":              "Sidebar threads",
+	"agents.body":               "Agents panel",
 	"composer.access":           "Access picker",
 	"composer.send":             "Send and stop",
 	"settings.plugins":          "Settings › Plugins",

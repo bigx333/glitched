@@ -125,13 +125,16 @@ var Natives = map[string]Native{
 	"thread.rename":      {In: []string{"sidebar.body"}, Row: true},
 	"thread.tile":        {In: []string{"sidebar.body"}, Row: true},
 	"thread.status":      {Props: map[string]string{"dot": "bool", "size": "number"}, In: []string{"sidebar.body", "palette", "agents.body"}, Row: true},
-	"thread.age":         {In: []string{"palette"}, Row: true},
-	"thread.children":    {In: []string{"sidebar.body"}, Row: true},
+	"thread.age":         {In: []string{"palette", "agents.body"}, Row: true},
+	// thread.actions is the … that opens the thread's menu, as the agents
+	// panel's rows show it while pointed at.
+	"thread.actions":  {In: []string{"agents.body"}, Row: true},
+	"thread.children": {In: []string{"sidebar.body"}, Row: true},
 	// The rest of a sidebar row's parts: its title, bold while unread, a
 	// child's smaller; what it shows at its end while it isn't pointed at;
 	// what plugins place in each row; and its machine, where there are
 	// several. And a section's header, which opens and closes it.
-	"thread.title":    {Props: map[string]string{"child": "bool"}, In: []string{"sidebar.body"}, Row: true},
+	"thread.title":    {Props: map[string]string{"child": "bool"}, In: []string{"sidebar.body", "agents.body"}, Row: true},
 	"thread.mark":     {Props: map[string]string{"child": "bool"}, In: []string{"sidebar.body"}, Row: true},
 	"thread.slot":     {In: []string{"sidebar.body"}, Row: true},
 	"thread.machine":  {In: []string{"sidebar.body"}, Row: true},

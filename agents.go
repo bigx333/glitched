@@ -7,6 +7,8 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/plugins"
+	"glitched/internal/plugins/widget"
 )
 
 // The Agents strip is Cursor's, over the composer of a thread with
@@ -198,17 +200,7 @@ func (a *app) agents(c *ui.Context, t thread, frameW, fade float32) {
 						a.agentsOpen[id], a.agentsAll[id] = false, false
 					}
 				})
-				for i, n := range tree {
-					s := stagger(k, i+1, shown)
-					if !all && i == agentsShown {
-						more := ghost(c, "more", false).Height(agentsRowH).Padding(0, 8).Opacity(s).Translate(0, 6*(1-s))
-						if more.Children(func() { ui.Text(c, "More").FontSize(12.5) }).Clicked() {
-							a.agentsAll[id] = true
-						}
-						break
-					}
-					a.agentRow(c, n, s)
-				}
+				a.agentsBody(c, t, tree, all, func(i int) float32 { return stagger(k, i+1, shown) })
 			})
 		})
 		if !open && box.Clicked() {
@@ -243,6 +235,86 @@ func (a *app) agents(c *ui.Context, t thread, frameW, fade float32) {
 				a.agentsOpen[id], a.agentsAll[id] = false, false
 			}
 		})
+	})
+}
+
+// agentsBody is what a copy of agents.body is about: the panel's rows,
+// the threads under the one shown, each as deep as it is under it, and
+// whether More stands in place of those past the first five.
+type agentsBody struct {
+	Rows []agentsBodyRow `json:"rows"`
+	More bool            `json:"more"`
+}
+
+type agentsBodyRow struct {
+	Thread string `json:"thread"`
+	Title  string `json:"title"`
+	Depth  int    `json:"depth"`
+	Status string `json:"status"`
+}
+
+// agentsBody draws the panel's rows, under its head, as agents.body: a
+// plugin's list, or Glitched's own. Glitched keeps what a row does: each
+// rises in s(i) of the way, the i-th, as the panel opens; a click shows
+// its thread, a right click opens its menu, and More shows every one.
+func (a *app) agentsBody(c *ui.Context, t thread, tree []node, all bool, s func(i int) float32) {
+	rows := tree
+	if !all {
+		rows = tree[:agentsShown]
+	}
+	body := agentsBody{Rows: []agentsBodyRow{}, More: !all}
+	for _, n := range rows {
+		body.Rows = append(body.Rows, agentsBodyRow{Thread: n.t.id().String(), Title: title(n.t), Depth: n.depth, Status: statusNames[a.statusOf(n.t)]})
+	}
+	id := t.id()
+	more := func(e ui.Element) {
+		if e.Clicked() {
+			a.agentsAll[id] = true
+		}
+	}
+	tall := float32(len(rows)) * agentsRowH
+	if !all {
+		tall += agentsRowH
+	}
+	a.pluginComponent(c, "agents.body", &t, componentCopy{
+		key: id.String(),
+		box: func() ui.Element { return ui.Column(c).Key("component:agents.body").Height(tall).Shrink(0) },
+		native: func(*widget.Node) {
+			for i, n := range rows {
+				a.agentRow(c, n, s(i))
+			}
+			if !all {
+				f := s(agentsShown)
+				more(ghost(c, "more", false).Height(agentsRowH).Padding(0, 8).Opacity(f).Translate(0, 6*(1-f)).Children(func() {
+					ui.Text(c, "More").FontSize(12.5)
+				}))
+			}
+		},
+		current: true,
+		context: func(plugins.ThreadRecord) any { return body },
+		listRow: func(c *ui.Context, list *widget.Node, i int, e ui.Element) bool {
+			f := s(i)
+			e.Opacity(f).Translate(0, 6*(1-f))
+			it := list.Items[i]
+			if it.Thread == "" {
+				// More, a ghost of the panel's.
+				more(e.Radius(6))
+				return false
+			}
+			rid, err := api.ParseID(it.Thread)
+			if err != nil {
+				return false
+			}
+			k, ok := a.find(rid)
+			if !ok {
+				return false
+			}
+			e.ContextMenu(func(m *ui.Menu) { a.threadMenu(c, m, k, a.categoryOf(k)) })
+			if e.Clicked() {
+				a.choose(k)
+			}
+			return false
+		},
 	})
 }
 
