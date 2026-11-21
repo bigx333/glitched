@@ -130,8 +130,8 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 	ls := lv.state
 	ls.Key = func(i int) any { return n.Items[i].Key }
 	ls.Label = func(i int) string { return n.Items[i].Label }
-	if r.st.Reveal != "" {
-		if i := slices.IndexFunc(n.Items, func(it widget.ListItem) bool { return it.Thread == r.st.Reveal }); i >= 0 {
+	if r.st.Reveal != nil {
+		if i := slices.IndexFunc(n.Items, func(it widget.ListItem) bool { return it.Thread != "" && r.st.Reveal(it.Thread) }); i >= 0 {
 			ls.ScrollIntoView(i)
 		}
 	}
