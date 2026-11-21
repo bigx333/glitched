@@ -449,6 +449,28 @@ func TestMenuSeparatorsAndProgressButtons(t *testing.T) {
 	}
 }
 
+// A progress button keeps the focus while it runs and once answered: the
+// spinner before it takes a key of its own.
+func TestAProgressButtonKeepsTheFocus(t *testing.T) {
+	s := &screen{}
+	view := `{"body": {"type": "button", "id": "go", "label": "Go", "progress": true, "onClick": "go"}}`
+	s.show(t, view)
+	tt := ui.NewTester(s.draw, 800, 300)
+	tt.Frame()
+	if err := tt.Click("Go"); err != nil {
+		t.Fatal(err)
+	}
+	if !tt.Focused("Go") {
+		t.Fatal("running, the button lost the focus")
+	}
+	s.processed = len(s.events)
+	s.show(t, view)
+	tt.Frame()
+	if !tt.Focused("Go") {
+		t.Fatal("answered, the button lost the focus")
+	}
+}
+
 // A border at borderOpacity 0 draws nothing; one with none set is opaque.
 func TestABorderAtOpacityZeroIsClear(t *testing.T) {
 	red := func(props string) int {

@@ -517,6 +517,9 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		busy := r.cs.pending[n.ID] > 0
 		if busy {
 			ui.Spinner(c.Key(key(n, i) + "#busy"))
+			// The spinner took the button's key: built unkeyed, the
+			// button would be another, and lose the focus.
+			kc = c.Key(key(n, i))
 		}
 		b := newButton(kc, n.Label)
 		if n.Style == "danger" {
