@@ -83,6 +83,14 @@ func capRisk(name string) string {
 	return ""
 }
 
+// grantListed is whether Settings lists the grant cp of p. A built-in
+// Glitched's release key signed draws Glitched's own parts, so its
+// ui.replace isn't listed with a warning that they're the plugin's while
+// it holds; a copy, or a built-in that fails its signature, lists it.
+func grantListed(p plugins.Plugin, cp plugins.CapabilityState) bool {
+	return cp.Grant && !(cp.Name == "ui.replace" && cp.Granted && p.Trust == plugins.TrustBuiltin)
+}
+
 // pluginStanding is how the plugin stands, in the word or two its row
 // shows: whether it runs, and what it waits for.
 func (a *app) pluginStanding(p plugins.Plugin) (string, tone) {
@@ -399,7 +407,7 @@ func pluginSummary(p plugins.Plugin) string {
 	}
 	asked, given := 0, 0
 	for _, cp := range p.Capabilities {
-		if cp.Grant {
+		if grantListed(p, cp) {
 			asked++
 			given += btoi(cp.Granted)
 		}
