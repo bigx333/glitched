@@ -315,12 +315,17 @@ func (r *renderer) fire(n *widget.Node, h *widget.Handler, typ string, value any
 
 func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 	st := r.st
+	// A node that builds nothing takes no key: the key would go on the
+	// next element built, wherever, giving it and all inside it another
+	// identity, as a dialog the user closed, which the plugin draws till
+	// it hears of it, gave the app's composer, whose text area, new, took
+	// the focus.
+	if n.When == "hover" && !r.hovered || n.When == "idle" && r.hovered || n.Type == "dialog" && (!n.Open || r.cs.dismissed[n.ID]) {
+		return
+	}
 	// Stateful widgets take their key before they're built: a key set
 	// after is a panic.
 	kc := c.Key(key(n, i))
-	if n.When == "hover" && !r.hovered || n.When == "idle" && r.hovered {
-		return
-	}
 	switch n.Type {
 	case "list":
 		r.list(kc, n)
@@ -664,8 +669,8 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 	case "menu":
 		r.tip(c, ui.Button(kc, n.Label).Disabled(n.Disabled).Menu(r.menu(n)), n.Tooltip)
 	case "dialog":
-		open := n.Open && !r.cs.dismissed[n.ID]
-		if open && st.Modal != nil {
+		open := true
+		if st.Modal != nil {
 			st.Modal()
 		}
 		d := ui.Modal(c.Key(st.Scope+"#dialog:"+n.ID), &open, func() {
