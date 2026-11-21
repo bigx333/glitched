@@ -760,3 +760,57 @@ func TestAListWithNoKeysMovesOnlyByThePointer(t *testing.T) {
 		t.Errorf("a list with noKeys took the focus: %+v", l)
 	}
 }
+
+// A row keeps its widgets as the pointer comes and goes, though those
+// shown on hover or idle alone come and go with it: a button the user
+// focused keeps the focus.
+func TestARowsWidgetsKeepTheirIdentityAsThePointerComesAndGoes(t *testing.T) {
+	s := &screen{}
+	s.show(t, `{"body": {"type": "list", "id": "l", "label": "Rows", "height": 200, "items": [{"key": "a", "label": "Row a"}]}}`)
+	st := Style{Rows: func(list string, it widget.ListItem) *widget.Node {
+		row, err := widget.DecodeRow([]byte(`{"type": "row", "children": [
+			{"type": "text", "text": "idle", "when": "idle"},
+			{"type": "button", "id": "star", "label": "Star", "when": "hover", "onClick": "star"},
+			{"type": "button", "id": "open", "label": "Open", "onClick": "open"},
+			{"type": "button", "id": "pin", "label": "Pin", "when": "hover", "onClick": "pin"}
+		]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return row
+	}}
+	tt := ui.NewTester(func(c *ui.Context) {
+		s.taking()
+		ui.Column(c).Fill().Padding(20).Children(func() {
+			View(c, s.v, &s.cs, st, &s.md, func(ev plugins.UIEvent, values map[string]any) int {
+				s.events = append(s.events, ev)
+				return len(s.events)
+			})
+		})
+	}, 600, 400)
+	tt.Frame()
+	in, ok := tt.Find("Open")
+	if !ok {
+		t.Fatal("the row's button isn't drawn")
+	}
+	tt.Move(in.X+2, in.Y+2)
+	tt.Frame()
+	if err := tt.Click("Open"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.HasText("Star") || !tt.Focused("Open") {
+		t.Fatal("pointed at, the row shows its hover widgets and the button has the focus")
+	}
+	for _, at := range [][2]float32{{590, 390}, {in.X + 2, in.Y + 2}, {590, 390}} {
+		tt.Move(at[0], at[1])
+		tt.Frame()
+		tt.Frame()
+		if !tt.Focused("Open") {
+			t.Fatalf("with the pointer at %v, the button lost the focus; the window shows %q", at, tt.Texts())
+		}
+	}
+	if tt.HasText("Star") || !tt.HasText("idle") {
+		t.Fatalf("left, the row shows its idle widgets alone: %q", tt.Texts())
+	}
+}
