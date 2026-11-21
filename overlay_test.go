@@ -388,3 +388,81 @@ func TestADialogGivesTheFocusToWhatOpenedIt(t *testing.T) {
 		}
 	}
 }
+
+// A closed overlay keys nothing: the control built after it keeps its
+// place, and the focus, when it opens.
+func TestAClosedOverlayLeavesTheNextControlAlone(t *testing.T) {
+	a := app{covers: map[coverKey]*ui.Handle{}}
+	var open bool
+	var next uint64
+	tt := ui.NewTester(func(c *ui.Context) {
+		anchor := ui.Button(c.Key("anchor"), "Anchor")
+		if c.Shortcut(ui.Cmd, ui.KeyK) {
+			open = true
+		}
+		a.popover(c, anchor, &open, func(panel ui.Element) {
+			panel.Children(func() { ui.Text(c, "Popover") })
+		})
+		next = ui.Button(c, "Next").ID()
+	}, 500, 300)
+	if err := tt.Click("Next"); err != nil {
+		t.Fatal(err)
+	}
+	before := next
+	tt.KeyRepeat(ui.Cmd, ui.KeyK)
+	if !tt.HasText("Popover") {
+		t.Fatal("⌘K didn't open the popover")
+	}
+	if next != before || !tt.Focused("Next") {
+		t.Fatalf("opening the popover moved Next from %d to %d, focused %v", before, next, tt.Focused("Next"))
+	}
+}
+
+// Clicked in the sidebar while its composer is on its way to compact, the
+// thread shown gives the focus to the full composer, there throughout,
+// which keeps it and all that's typed; never to the line, not yet built,
+// which would take it, once built, from whatever was clicked meanwhile.
+func TestChoosingTheThreadShownMidMorph(t *testing.T) {
+	for _, when := range []string{"before it moves", "half-way"} {
+		t.Run(when, func(t *testing.T) {
+			dir := tempDir(t)
+			d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+			seed(t, d, "/work/t3code", "A long thread", "Start")
+			h := start(t, dir)
+			long := h.thread("A long thread")
+			h.a.select_(long)
+			h.until("its transcript", func() bool { return long.Transcript != nil && len(long.Transcript.Entries) > 0 })
+			long.Transcript.Entries = synthetic(100)
+			h.a.changed()
+			h.tt.Frame()
+			h.tt.Advance(time.Second)
+			h.click("Go to: " + turnText(0))
+			if when == "before it moves" {
+				h.click("A long thread")
+				h.click("Model")
+				if !h.tt.Focused("Model") {
+					t.Fatal("Model didn't take the focus")
+				}
+				h.tt.Advance(time.Second)
+				for _, e := range h.tt.AccessAll() {
+					if e.Focused && e.Placeholder == "Ask a follow-up…" {
+						t.Fatal("the line, built after Model was clicked, took the focus from it")
+					}
+				}
+				return
+			}
+			h.tt.Move(660, 300)
+			h.tt.Advance(50 * time.Millisecond)
+			if k := h.a.composerK; k <= 0.3 || k >= 1 {
+				t.Fatalf("the composer isn't half-way: k %g", k)
+			}
+			h.click("A long thread")
+			h.tt.Type("first")
+			h.tt.Advance(time.Second)
+			h.tt.Type("second")
+			if h.a.draft != "firstsecond" {
+				t.Fatalf("the draft is %q, want %q", h.a.draft, "firstsecond")
+			}
+		})
+	}
+}
