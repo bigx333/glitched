@@ -359,7 +359,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		if n.Type == "row" {
 			e.AlignItems(ui.Center)
 		}
-		e.Gap(float32(n.Gap))
+		e.Gap(n.Gap)
 		padding(e, n.Padding)
 		if a, ok := aligns[n.Align]; ok {
 			e.AlignItems(a)
@@ -380,10 +380,10 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			e.Border(1, col)
 		}
 		if n.Radius != 0 {
-			e.Radius(float32(n.Radius))
+			e.Radius(n.Radius)
 		}
 		if len(n.Corners) == 4 {
-			e.Radius(float32(n.Corners[0]), float32(n.Corners[1]), float32(n.Corners[2]), float32(n.Corners[3]))
+			e.Radius(n.Corners[0], n.Corners[1], n.Corners[2], n.Corners[3])
 		}
 		if n.MaxWidthPercent != 0 {
 			e.MaxWidthPercent(float32(n.MaxWidthPercent))
@@ -402,7 +402,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		}
 		ui.Column(kc).Children(func() {
 			st.Card(c, n.Title, func() {
-				gap := float32(n.Gap)
+				gap := n.Gap
 				if gap == 0 {
 					gap = 12
 				}
@@ -593,10 +593,10 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		}
 		ui.Box(kc).Children(func() {
 			if st.Tile != nil {
-				st.Tile(c, svg, ui.Hex(n.Color), float32(n.Width))
+				st.Tile(c, svg, ui.Hex(n.Color), n.Width)
 				return
 			}
-			size := float32(n.Width)
+			size := n.Width
 			ui.Box(c).Size(size, size).Radius(size * 0.28).Center().Background(ui.Hex(n.Color)).Children(func() {
 				if svg != nil {
 					ui.Icon(c, svg).FontSize(size * 0.6).TextColor(ui.Hex("#ffffff"))
@@ -629,7 +629,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		draw := func() {
 			e := ui.Select(c.Key(key(n, i)+"#select"), &shown, labels).Disabled(n.Disabled).Label(n.Label)
 			if n.Width > 0 {
-				e.Width(float32(n.Width))
+				e.Width(n.Width)
 			}
 			if e.Changed() {
 				for _, o := range n.Options {
@@ -720,7 +720,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		if st.Image != nil {
 			src = st.Image(n.Src)
 		}
-		w, h := float32(n.Width), float32(n.Height)
+		w, h := n.Width, n.Height
 		if w == 0 {
 			w = 64
 		}
@@ -728,10 +728,10 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			h = w
 		}
 		if src == nil {
-			ui.Box(kc).Size(w, h).Radius(float32(n.Radius)).Background(st.Border.Alpha(0.4))
+			ui.Box(kc).Size(w, h).Radius(n.Radius).Background(st.Border.Alpha(0.4))
 			return
 		}
-		ui.Image(kc, src).Size(w, h).Radius(float32(n.Radius))
+		ui.Image(kc, src).Size(w, h).Radius(n.Radius)
 	case "icon":
 		var svg *ui.SVG
 		if st.Icon != nil {
@@ -765,7 +765,7 @@ func padding(e ui.Element, s widget.Spacing) {
 		return
 	}
 	t, r, b, l := s.Sides()
-	e.Padding(float32(t), float32(r), float32(b), float32(l))
+	e.Padding(t, r, b, l)
 }
 
 // segmented is tabs drawn as the app's segmented switch: an option it
@@ -923,7 +923,7 @@ func (r *renderer) button(c *ui.Context, n *widget.Node, k string) {
 	if len(n.Children) > 0 {
 		// Its own content: its gap, and its label first.
 		if n.Gap != 0 {
-			b.Gap(float32(n.Gap))
+			b.Gap(n.Gap)
 		}
 		b.Label(cmp.Or(n.Label, n.Tooltip))
 	} else {

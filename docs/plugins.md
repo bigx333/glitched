@@ -173,7 +173,7 @@ Inputs, toggles, selects and tabs keep their value in the app, by `id`, across v
 
 ## Widgets
 
-Every widget is `{type, id?, ...}`. Interactive widgets and dialogs need an `id` (1 to 128 of letters, digits, `_.:/-`), unique in the view. An unknown field, or a field a type doesn't take, is an error.
+Every widget is `{type, id?, ...}`. Interactive widgets and dialogs need an `id` (1 to 128 of letters, digits, `_.:/-`), unique in the view. An unknown field, or a field a type doesn't take, is an error. Sizes in points (`width`, `height`, `rowHeight`, an item's `height`, `gap`, `padding`, `radius`, `corners`) take fractions, as half of an odd window's height is; a count, a `weight` or a `maxWidthPercent` is a whole number, and a fraction there is an error that names the field.
 
 | Type | Fields | Fires |
 | --- | --- | --- |
@@ -228,7 +228,7 @@ export function rows({ list, keys, state }) {
 }
 ```
 
-**Items.** Up to 20,000, each `{key, label, version?, height?, header?, thread?}`. `key` (1 to 256 bytes, unique in the list) is the item's identity: the choice, `rows` and the events name it by its key, so the choice stays with its item as items come, go and move. `label` (1 to 1024 bytes) is the row's name to assistive tools. `height` (8 to 400 points, fractions too) is the row's; without it, the list's `rowHeight`, else 32. A `header` heads a section: it is never chosen, and the keys move past it. `thread` is a thread's id: a right click on the row opens Glitched's menu of that thread, with what plugins add to it; it needs `threads:read`. Items are data, not widgets: they count toward neither the 2000 widgets nor the depth, and a view with a list may be 4 MiB, of which all but 1 MiB is its items.
+**Items.** Up to 20,000, each `{key, label, version?, height?, header?, thread?}`. `key` (1 to 256 bytes, unique in the list) is the item's identity: the choice, `rows` and the events name it by its key, so the choice stays with its item as items come, go and move. `label` (1 to 1024 bytes) is the row's name to assistive tools. `height` (8 to 400 points) is the row's; without it, the list's `rowHeight`, else 32. A `header` heads a section: it is never chosen, and the keys move past it. `thread` is a thread's id: a right click on the row opens Glitched's menu of that thread, with what plugins add to it; it needs `threads:read`. Items are data, not widgets: they count toward neither the 2000 widgets nor the depth, and a view with a list may be 4 MiB, of which all but 1 MiB is its items.
 
 **Size.** A list either grows into the room its parent column leaves (`grow`), or is as tall as its rows up to `height` (8 to 2000 points), past which it scrolls. One of them is needed: a list draws only the rows in it.
 

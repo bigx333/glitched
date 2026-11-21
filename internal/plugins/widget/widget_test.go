@@ -251,3 +251,28 @@ func TestTheSidebarWidgetsAreChecked(t *testing.T) {
 		}
 	}
 }
+
+// Points take fractions, as a window's half does on an odd height: a
+// list's height, its items', gaps, padding, sizes and radii. A count, a
+// weight or a percent is a whole number, and a fraction there says which.
+func TestPointsTakeFractions(t *testing.T) {
+	v, err := Decode([]byte(`{"body": {"type": "column", "gap": 2.5, "padding": [6, 8.5, 6, 8.5], "children": [
+		{"type": "list", "id": "l", "label": "L", "height": 394.5, "rowHeight": 31.25, "gap": 0.5, "items": [{"key": "a", "label": "A", "height": 26.13}]},
+		{"type": "image", "src": "app:icon", "width": 20.5, "height": 20.5, "radius": 4.5},
+		{"type": "row", "corners": [16, 16, 4.5, 16]}
+	]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := v.Body.Children[0]; l.Height != 394.5 || l.RowHeight != 31.25 || l.Items[0].Height != 26.13 || v.Body.Gap != 2.5 || v.Body.Padding[1] != 8.5 {
+		t.Fatalf("the fractions didn't come through: %+v", l)
+	}
+	for js, want := range map[string]string{
+		`{"body": {"type": "text", "text": "x", "weight": 600.5}}`:         "body.weight is a whole number, not 600.5",
+		`{"body": {"type": "text", "text": "x", "maxWidthPercent": 50.5}}`: "body.maxWidthPercent is a whole number, not 50.5",
+	} {
+		if _, err := Decode([]byte(js)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", js, err, want)
+		}
+	}
+}
