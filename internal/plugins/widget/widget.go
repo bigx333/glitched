@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"strconv"
@@ -323,9 +324,9 @@ func (n *Node) ItemHeight(i int) float32 {
 
 // Column is a table's column.
 type Column struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-	Width int    `json:"width,omitempty"`
+	ID    string  `json:"id"`
+	Title string  `json:"title"`
+	Width float32 `json:"width,omitempty"`
 }
 
 // Row is a table's row: its key, and its cells by column id.
@@ -562,10 +563,14 @@ type checker struct {
 // weight or a percent doesn't.
 func whole(err error) error {
 	var t *json.UnmarshalTypeError
-	if errors.As(err, &t) && strings.HasPrefix(t.Value, "number") && strings.HasPrefix(t.Type.Kind().String(), "int") {
-		return fmt.Errorf("%s is a whole number, not %s", t.Field, strings.TrimPrefix(t.Value, "number "))
+	if !errors.As(err, &t) || !strings.HasPrefix(t.Type.Kind().String(), "int") {
+		return err
 	}
-	return err
+	n, ok := strings.CutPrefix(t.Value, "number ")
+	if f, perr := strconv.ParseFloat(n, 64); !ok || perr != nil || f == math.Trunc(f) {
+		return err
+	}
+	return fmt.Errorf("%s is a whole number, not %s", t.Field, n)
 }
 
 func (c *checker) node(n *Node, path string, depth int) error {
