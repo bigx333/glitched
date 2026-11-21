@@ -35,7 +35,7 @@ type press struct {
 	d      int
 	submit bool
 	mods   []string
-	input  *widget.Node
+	input  string
 	text   string
 	choose string
 }
@@ -252,8 +252,11 @@ func (r *renderer) pressed(n *widget.Node, ctl *control) {
 		p := lv.pressed[0]
 		lv.pressed = lv.pressed[1:]
 		switch {
-		case p.input != nil:
-			r.fire(p.input, p.input.OnChange, "change", p.text)
+		case p.input != "":
+			// An input the view no longer has took nothing.
+			if in := r.fields[p.input]; in != nil {
+				r.fire(in, in.OnChange, "change", p.text)
+			}
 		case p.submit:
 			r.submit(n, ctl.text, p.mods)
 		case p.choose != "":

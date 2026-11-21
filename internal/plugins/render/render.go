@@ -239,12 +239,13 @@ func View(c *ui.Context, v *widget.View, cs *Controls, st Style, md *markdown.Op
 	}
 	cs.passes++
 	r := renderer{cs: cs, st: st, md: md, dispatch: dispatch}
+	r.inputs, r.fields = map[string]*widget.Node{}, map[string]*widget.Node{}
 	v.Body.Walk(func(n *widget.Node) {
-		if n.Type == "list" && n.Input != "" {
-			if r.inputs == nil {
-				r.inputs = map[string]*widget.Node{}
-			}
+		switch {
+		case n.Type == "list" && n.Input != "":
 			r.inputs[n.Input] = n
+		case n.Type == "input":
+			r.fields[n.ID] = n
 		}
 	})
 	r.node(c, v.Body, 0)
@@ -255,8 +256,9 @@ type renderer struct {
 	st       Style
 	md       *markdown.Options
 	dispatch func(plugins.UIEvent, map[string]any) int
-	// inputs are the lists the inputs of the view move, by the input's id.
-	inputs map[string]*widget.Node
+	// inputs are the lists the inputs of the view move, by the input's id,
+	// and fields the view's inputs, by id.
+	inputs, fields map[string]*widget.Node
 	// row is the list's row being drawn, thread the thread its item
 	// names, and hovered whether the pointer is over it; mods are the keys
 	// held as a list is submitted.
@@ -531,7 +533,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 				// were pressed, then this; meanwhile the text is the
 				// user's, whatever value a view gives it.
 				ctl.last = math.MaxInt
-				r.press(l, r.cs.m[l.ID], press{input: n, text: ctl.text})
+				r.press(l, r.cs.m[l.ID], press{input: n.ID, text: ctl.text})
 			default:
 				r.fire(n, n.OnChange, "change", ctl.text)
 			}
