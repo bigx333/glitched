@@ -217,9 +217,12 @@ func (a *app) sidebarCopy(c *ui.Context, part string, maxHeight float32, box fun
 		}
 	}
 	a.sidebarRows[part] = now
-	var reveal string
+	var reveal func(string) bool
 	if !a.revealing.IsZero() && a.revealing == a.selected {
-		reveal = a.revealing.String()
+		reveal = func(thread string) bool {
+			id, err := api.ParseID(thread)
+			return err == nil && id == a.revealing
+		}
 	}
 	return componentCopy{
 		key:     part,

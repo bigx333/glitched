@@ -196,17 +196,19 @@ export function rows({keys, place}) {
 }
 
 // Your sidebar scrolls to the row whose item names the thread opened,
-// whatever its key.
+// whatever its key, and in whatever case it spells the thread's id.
 func TestYourSidebarScrollsToTheRowThatNamesTheThreadOpened(t *testing.T) {
-	h := start(t, pagedDir(t, pagedBatch{name: "Custom row", n: 60}))
-	old := h.thread("Custom row 003")
-	h.until("the custom rows", func() bool { return len(h.a.itemsIn(catInbox)) == 60 })
-	revealReplacement(t, h, `"copy:" + r.thread`, `r.thread`)
-	if _, ok := revealRowOf(h, old.View.Title); ok {
-		t.Fatal("fixture already shows the old row")
-	}
-	revealOpen(t, h, old)
-	if _, ok := revealRowOf(h, old.View.Title); !ok {
-		t.Error("threads.open did not reveal the replacement row that names the thread")
+	for _, thread := range []string{`r.thread`, `r.thread.toLowerCase()`} {
+		h := start(t, pagedDir(t, pagedBatch{name: "Custom row", n: 60}))
+		old := h.thread("Custom row 003")
+		h.until("the custom rows", func() bool { return len(h.a.itemsIn(catInbox)) == 60 })
+		revealReplacement(t, h, `"copy:" + r.thread`, thread)
+		if _, ok := revealRowOf(h, old.View.Title); ok {
+			t.Fatal("fixture already shows the old row")
+		}
+		revealOpen(t, h, old)
+		if _, ok := revealRowOf(h, old.View.Title); !ok {
+			t.Errorf("threads.open did not reveal the replacement row that names the thread as %s", thread)
+		}
 	}
 }
