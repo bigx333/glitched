@@ -219,10 +219,10 @@ type Node struct {
 	// no radius, and Corners each of them: top-left, top-right,
 	// bottom-right and bottom-left. MaxWidthPercent caps a row's or
 	// column's width at that share of its parent's, 1 to 100.
-	Border          string  `json:"border,omitempty"`
-	BorderOpacity   float64 `json:"borderOpacity,omitempty"`
-	Corners         []int   `json:"corners,omitempty"`
-	MaxWidthPercent int     `json:"maxWidthPercent,omitempty"`
+	Border          string   `json:"border,omitempty"`
+	BorderOpacity   *float64 `json:"borderOpacity,omitempty"`
+	Corners         []int    `json:"corners,omitempty"`
+	MaxWidthPercent int      `json:"maxWidthPercent,omitempty"`
 
 	// Tooltip is a button's or menu's tooltip, and what it is called to
 	// assistive tools. Icon is an icon before the label of a ghost or
@@ -828,11 +828,11 @@ func (c *checker) extra(n *Node) error {
 	}
 	box := n.Type == "row" || n.Type == "column"
 	switch {
-	case (n.Border != "" || n.BorderOpacity != 0 || len(n.Corners) > 0 || n.MaxWidthPercent != 0) && !box:
+	case (n.Border != "" || n.BorderOpacity != nil || n.Corners != nil || n.MaxWidthPercent != 0) && !box:
 		return fmt.Errorf("a %s has no border, borderOpacity, corners or maxWidthPercent", n.Type)
-	case n.BorderOpacity != 0 && (n.Border == "" || n.BorderOpacity < 0 || n.BorderOpacity > 1):
+	case n.BorderOpacity != nil && (n.Border == "" || *n.BorderOpacity < 0 || *n.BorderOpacity > 1):
 		return fmt.Errorf("a borderOpacity is 0 to 1, of a border")
-	case len(n.Corners) > 0 && (len(n.Corners) != 4 || slices.ContainsFunc(n.Corners, func(r int) bool { return r < 0 || r > MaxSize })):
+	case n.Corners != nil && (len(n.Corners) != 4 || slices.ContainsFunc(n.Corners, func(r int) bool { return r < 0 || r > MaxSize })):
 		return fmt.Errorf("corners are 4 radii, each 0 to %d", MaxSize)
 	case n.MaxWidthPercent < 0 || n.MaxWidthPercent > 100:
 		return fmt.Errorf("a maxWidthPercent is 1 to 100")

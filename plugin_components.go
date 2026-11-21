@@ -23,19 +23,23 @@ import (
 // A componentCopy is one copy of a component that a frame draws: its
 // key, the box it makes to draw in, its context from the thread's record
 // as each plugin may see it, and its native body, which Glitched draws
-// while no plugin has drawn the copy yet. Nil draws nothing then.
+// while no plugin has drawn the copy yet. Nil draws nothing then. The
+// body is given the native node that places it, and the drawing it is
+// in, drawing; both are nil where Glitched draws the body alone.
 // builtin is the built-in's drawing of the copy, which Glitched draws
-// around the body while no plugin has drawn it. retry is the copy's
-// transcript.retry, and over what Glitched draws over every drawing of
-// it, in its box, as a message's actions.
+// around the body while no plugin has drawn it, or while the built-in's
+// drawing is of the copy as it was. retry is the copy's transcript.retry,
+// and over what Glitched draws over every drawing of it, in its box, as
+// a message's actions.
 type componentCopy struct {
 	key     string
 	box     func() ui.Element
 	context func(plugins.ThreadRecord) any
-	native  func()
+	native  func(body, drawing *widget.Node)
 	retry   func()
 	over    func(box ui.Element)
 	builtin func() *widget.Node
+	drawing *widget.Node
 }
 
 // fallback draws the copy's native body of the component name, in the
@@ -48,13 +52,14 @@ func (a *app) fallback(c *ui.Context, name string, t *thread, cp componentCopy) 
 	box := cp.box()
 	box.Children(func() {
 		if cp.builtin == nil {
-			cp.native()
+			cp.native(nil, nil)
 		} else {
+			cp.drawing = cp.builtin()
 			st := a.pluginStyle("")
 			st.Native = func(c *ui.Context, n *widget.Node, row string, fire func(any)) {
 				a.drawNative(c, name, t, row, n, fire, cp)
 			}
-			render.View(c, &widget.View{Body: cp.builtin()}, &render.Controls{}, st, &a.pluginMD, nil)
+			render.View(c, &widget.View{Body: cp.drawing}, &render.Controls{}, st, &a.pluginMD, nil)
 		}
 		if cp.over != nil {
 			cp.over(box)
@@ -87,18 +92,21 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 		full = a.threadRecord(*t)
 	}
 	type drawing struct {
-		pl   plugins.PlaceAt
-		ctx  any
-		app  *plugins.Session
-		node *widget.Node
+		pl      plugins.PlaceAt
+		ctx     any
+		version string
+		app     *plugins.Session
+		node    *widget.Node
 	}
 	replacers := a.plugins.Replacers(name)
 	ctxs := make([][]any, len(copies))
+	versions := make([][]string, len(copies))
 	for i, cp := range copies {
 		for _, pl := range replacers {
 			ctx := cp.context(a.plugins.Record(pl.Plugin, full))
 			ctxs[i] = append(ctxs[i], ctx)
 			version, _ := json.Marshal(ctx)
+			versions[i] = append(versions[i], string(version))
 			fk := [2]string{pl.Plugin, pl.Place.ID}
 			f.items[fk] = append(f.items[fk], plugins.PlaceItem{Key: cp.key, Version: string(version), Context: ctx})
 		}
@@ -118,9 +126,9 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 				switch {
 				case node == nil:
 				case app.Err == nil:
-					good[i] = &drawing{pl, ctxs[i][j], app, node}
+					good[i] = &drawing{pl, ctxs[i][j], versions[i][j], app, node}
 				case failed[i] == nil:
-					failed[i] = &drawing{pl, ctxs[i][j], app, node}
+					failed[i] = &drawing{pl, ctxs[i][j], versions[i][j], app, node}
 				}
 				if good[i] != nil {
 					break
@@ -188,6 +196,13 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 		}
 		by.plugin = d.pl.Plugin
 		drawn.copies = append(drawn.copies, by)
+		// The built-in's drawing of the copy as it was, as a message's
+		// note before it failed, is Glitched's of it as it is.
+		if cp.builtin != nil && d.app.Builtin && d.app.Answered(d.pl.Place.ID, cp.key) != d.version {
+			a.fallback(c, name, t, cp)
+			continue
+		}
+		cp.drawing = d.node
 		box := cp.box()
 		a.drawPlace(c, box, d.pl, cp.key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, row string, fire func(any)) {
 			a.drawNative(c, name, t, row, n, fire, cp)
@@ -253,9 +268,9 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 	case "composer.input":
 		a.composerIn(c)
 	case "transcript.body":
-		cp.native()
+		cp.native(n, cp.drawing)
 	case "transcript.retry":
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(cp.retry)
+		cp.retry()
 	case "diff.body":
 		var path string
 		json.Unmarshal(n.Props["path"], &path)

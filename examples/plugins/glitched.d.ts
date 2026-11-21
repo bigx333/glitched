@@ -41,7 +41,7 @@ interface Box {
   radius?: number;
   /** Each corner's radius: top-left, top-right, bottom-right, bottom-left. */
   corners?: [number, number, number, number];
-  /** At most this share of the parent's width, 1 to 100. */
+  /** At most this share of the parent's width, 1 to 100; 0 is none. */
   maxWidthPercent?: number;
 }
 
@@ -310,9 +310,11 @@ type NativeWidget = {
   | {
       /** What a timeline row says, live, with nothing around it, in timeline.message: placed exactly once, in rows, columns and cards alone. */
       name: "transcript.body";
+      /** Insets the words inside their own text, so it selects with them. */
+      padding?: number | number[];
     }
   | {
-      /** A failed command's Retry and Dismiss, in timeline.message; nothing in any other row. */
+      /** A failed command's Retry and Dismiss, in timeline.message, 8 points after what is before it; nothing, and no room, in any other row. Placed, the copy draws the row's note: placed nowhere, transcript.body draws it with Retry and Dismiss. */
       name: "transcript.retry";
     }
   | {

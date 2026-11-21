@@ -547,10 +547,10 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 		key:     e.key,
 		box:     func() ui.Element { return ui.Column(c).Key(e.key).Transition(riseIn) },
 		context: func(plugins.ThreadRecord) any { return m },
-		native:  func() { a.transcriptBody(c, t, rs, i) },
+		native:  func(body, drawing *widget.Node) { a.transcriptBody(c, t, rs, i, body, drawing) },
 		retry: func() {
 			if e.failed.Err != nil {
-				a.failedActions(c, t, e.failed)
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(0, 0, 0, 8).Children(func() { a.failedActions(c, t, e.failed) })
 			}
 		},
 		over: func(box ui.Element) {
@@ -577,19 +577,19 @@ var (
 func timelineRow(m timelineMessage) *widget.Node {
 	switch m.Kind {
 	case "user":
-		bubble := &widget.Node{Type: "column", Padding: widget.Spacing{10, 14}, Corners: []int{16, 16, 4, 16}, Background: "$surface", Border: "$border", Children: []*widget.Node{timelineBody}}
+		words := &widget.Node{Type: "native", ID: "body", Name: "transcript.body", Padding: widget.Spacing{10, 14}}
+		bubble := &widget.Node{Type: "column", Corners: []int{16, 16, 4, 16}, Background: "$surface", Border: "$border", Children: []*widget.Node{words}}
 		col := &widget.Node{Type: "column", Align: "end", Gap: 6, MaxWidthPercent: 80, Children: []*widget.Node{bubble}}
 		if m.Note != "" {
-			note := &widget.Node{Type: "row", Gap: 8, Children: []*widget.Node{{Type: "text", Text: m.Note, Size: "small", Color: "$text.faint"}}}
+			note := &widget.Node{Type: "text", Text: m.Note, Size: "small", Color: "$text.faint"}
 			if m.Failed {
-				note.Children[0].Color = "$danger"
-				note.Children = append(note.Children, timelineRetry)
+				note.Color = "$danger"
 			}
-			col.Children = append(col.Children, note)
+			col.Children = append(col.Children, &widget.Node{Type: "row", Children: []*widget.Node{note, timelineRetry}})
 		}
 		return &widget.Node{Type: "row", Children: []*widget.Node{{Type: "spacer"}, col}}
 	case "failed", "error":
-		row := &widget.Node{Type: "row", Gap: 8, Align: "center", Padding: widget.Spacing{6, 6, 6, 14}, Radius: 12, Border: "$danger", BorderOpacity: 0.35,
+		row := &widget.Node{Type: "row", Align: "center", Padding: widget.Spacing{6, 6, 6, 14}, Radius: 12, Border: "$danger", BorderOpacity: new(0.35),
 			Children: []*widget.Node{{Type: "native", ID: "body", Name: "transcript.body", Grow: true}}}
 		if m.Kind == "failed" {
 			row.Children = append(row.Children, timelineRetry)
@@ -612,20 +612,42 @@ type timelineMessage struct {
 
 var entryKindNames = map[entryKind]string{entryUser: "user", entryAssistant: "assistant", entryWork: "work", entryFailed: "failed", entryError: "error"}
 
-// transcriptBody draws the content of the timeline row rs.es[i], which
-// transcript.body places: a message's text, a run's work log, an error's
-// words. What is around it is the row's drawing's.
-func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int) {
+// transcriptBody draws what the timeline row rs.es[i] says, which body,
+// transcript.body, places in drawing: a message's words, inset by body's
+// padding so that it selects with them, a run's work log, an error's
+// words. What is around it is drawing's. A drawing that places no
+// transcript.retry has the body draw a message's note and a failed
+// command's Retry and Dismiss, as it did before transcript.retry was one.
+func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body, drawing *widget.Node) {
 	e := rs.es[i]
+	inset := func(el ui.Element) ui.Element {
+		if body != nil && len(body.Padding) > 0 {
+			t, r, b, l := body.Padding.Sides()
+			el.Padding(float32(t), float32(r), float32(b), float32(l))
+		}
+		return el
+	}
+	own := true
+	drawing.Walk(func(n *widget.Node) { own = own && n.Name != "transcript.retry" })
 	switch e.kind {
 	case entryUser:
-		if md := a.userMarkdown(e.key, e.text); md != "" {
-			markdown.View(c, md, &a.userMD)
-		} else {
-			ui.Text(c, e.text).Selectable().LineHeight(1.5)
+		words := func() {
+			if md := a.userMarkdown(e.key, e.text); md != "" {
+				inset(markdown.View(c, md, &a.userMD))
+			} else {
+				inset(ui.Text(c, e.text).Selectable().LineHeight(1.5))
+			}
 		}
+		if !own || e.note == "" {
+			words()
+			return
+		}
+		ui.Column(c).AlignItems(ui.End).Gap(6).Children(func() {
+			words()
+			a.messageNote(c, t, e)
+		})
 	case entryAssistant:
-		col := ui.Column(c).Key(e.key).LineHeight(1.55)
+		col := inset(ui.Column(c).Key(e.key).LineHeight(1.55))
 		col.Children(func() {
 			var md ui.Element
 			if e.streaming {
@@ -638,7 +660,14 @@ func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int) {
 	case entryWork:
 		a.workLog(c, t, e.key, e, rs.files)
 	case entryFailed, entryError:
-		ui.Text(c, e.text).FontSize(12).TextColor(palette.red)
+		if !own || e.failed.Err == nil {
+			inset(ui.Text(c, e.text).FontSize(12).TextColor(palette.red))
+			return
+		}
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			inset(ui.Text(c, e.text).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1))
+			a.failedActions(c, t, e.failed)
+		})
 	}
 }
 

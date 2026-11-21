@@ -2,8 +2,9 @@
 // chrome in widgets, around the native transcript.body, which draws the
 // message's own text, a run's work log or an error's words. A message of
 // yours is a bubble on the right with its note under it; an error is a
-// red outline, with transcript.retry's Retry and Dismiss where it failed a
-// command. Copy it in Settings › Plugins and restyle the chrome: each
+// red outline. transcript.retry is a failed command's Retry and Dismiss;
+// placed, it takes them and the note from transcript.body. It draws
+// nothing, and takes no room, where nothing failed. Copy it in Settings › Plugins and restyle the chrome: each
 // copy's context names the row's key and kind, whether it streams, its
 // note and whether it failed. A layout that leaves transcript.body out,
 // or places it twice, isn't drawn: Glitched draws its own row instead.
@@ -18,16 +19,16 @@ function row({ kind, note, failed }) {
     case "user": {
       const bubble = {
         type: "column",
-        padding: [10, 14],
         corners: [16, 16, 4, 16],
         background: "$surface",
         border: "$border",
-        children: [body],
+        // The words' own padding, which selects with them.
+        children: [{ ...body, padding: [10, 14] }],
       };
       const children = [bubble];
       if (note) {
         const text = { type: "text", text: note, size: "small", color: failed ? "$danger" : "$text.faint" };
-        children.push({ type: "row", gap: 8, children: failed ? [text, retry] : [text] });
+        children.push({ type: "row", children: [text, retry] });
       }
       return {
         type: "row",
@@ -39,7 +40,6 @@ function row({ kind, note, failed }) {
       const words = { ...body, grow: true };
       return {
         type: "row",
-        gap: 8,
         align: "center",
         padding: [6, 6, 6, 14],
         radius: 12,

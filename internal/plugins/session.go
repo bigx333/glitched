@@ -39,6 +39,8 @@ type Session struct {
 	plugin, page string
 	// tab is set for a tab in a thread's panel, whose page is the tab's id.
 	tab bool
+	// Builtin is set for a plugin built into the app.
+	Builtin bool
 	// places is set for the app session, which draws the plugin's places
 	// in its view's stead, and hears app events and timers.
 	places *placeSet
