@@ -17,7 +17,7 @@ func TestALongListShowsTheRowsInViewAndKeepsTheChoice(t *testing.T) {
 	if h.tt.HasText("Row 400") || h.tt.HasText("Row 9999") {
 		t.Fatal("rows far out of view are drawn")
 	}
-	chosen := func() any { return h.a.pluginControls[pluginKey{"long-list", "home"}].Values()["rows"] }
+	chosen := func() any { return h.a.pluginControls[pluginKey{"long-list", "home"}].cs.Values()["rows"] }
 	h.click("Row 3")
 	h.until("Row 3 chosen", func() bool { return chosen() == "r3" })
 	h.tt.Key(0, ui.KeyDown)

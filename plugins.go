@@ -269,11 +269,7 @@ func cmpOr(s, or string) string {
 // pluginView draws a native view page: what went wrong, with a way to
 // start over, then the plugin's widgets.
 func (a *app) pluginView(c *ui.Context, k pluginKey, s *plugins.Session) {
-	cs := a.pluginControls[k]
-	if cs == nil {
-		cs = &render.Controls{}
-		a.pluginControls[k] = cs
-	}
+	cs := controlsOf(a.pluginControls, k, s)
 	cs.Sync(s.View, s.Rev, s.Processed)
 	if s.Err != nil {
 		ui.Row(c).Key("error").Gap(12).Padding(12, 14).Radius(10).Border(1, palette.red.Alpha(0.4)).Background(palette.red.Alpha(0.08)).AlignItems(ui.Center).Children(func() {

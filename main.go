@@ -33,7 +33,6 @@ import (
 	"glitched/internal/mcp"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/pack"
-	"glitched/internal/plugins/render"
 	"glitched/internal/transport"
 	"glitched/wind"
 )
@@ -594,7 +593,7 @@ type app struct {
 	// pluginPages what their pages show.
 	plugins        *plugins.Host
 	pluginPages    map[pluginKey]*pluginPage
-	pluginControls map[pluginKey]*render.Controls
+	pluginControls map[pluginKey]*sessionControls
 	pluginMD       markdown.Options
 	// pluginLater are what plugins asked for that takes a frame: toasts
 	// and the clipboard.
@@ -602,7 +601,7 @@ type app struct {
 	// placeFrame is what this frame drew of the plugins' places, and
 	// placeControls their inputs' values.
 	placeFrame    placeFrame
-	placeControls map[placeKey]*render.Controls
+	placeControls map[placeKey]*sessionControls
 	// partsDrawn is who drew each component's copies, as the last frame
 	// that drew it did, for Settings to say.
 	partsDrawn map[string]*componentDrawn
@@ -698,8 +697,8 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		reads:          map[api.ID]*reading{},
 		covers:         map[coverKey]*ui.Handle{},
 		pluginPages:    map[pluginKey]*pluginPage{},
-		pluginControls: map[pluginKey]*render.Controls{},
-		placeControls:  map[placeKey]*render.Controls{},
+		pluginControls: map[pluginKey]*sessionControls{},
+		placeControls:  map[placeKey]*sessionControls{},
 		pluginAssets:   map[string]asset{},
 		settingDrafts:  map[string]string{},
 		pluginsOpen:    map[string]bool{},

@@ -116,6 +116,20 @@ type control struct {
 	list *listView
 }
 
+// Restart readies the controls for the views of a session started again,
+// which counts its views and the events it took from the start: the next
+// view syncs them as any new view does, and no change sent to the last
+// session waits on this one.
+func (cs *Controls) Restart() {
+	cs.rev, cs.sent, cs.processed, cs.pending = -1, 0, 0, nil
+	for _, ctl := range cs.m {
+		ctl.last = 0
+		if ctl.list != nil {
+			ctl.list.pressed = nil
+		}
+	}
+}
+
 // Sync takes the values a new view gives, once per view: rev is the
 // view's number, and processed the last event the plugin took before it
 // answered the view. It forgets the controls the view no longer has.

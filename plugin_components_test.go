@@ -218,3 +218,33 @@ func TestACopyAnsweredNullIsNotWaitedForAgain(t *testing.T) {
 		t.Fatalf("a frame waited %v for copies already answered null", took)
 	}
 }
+
+// Your plugin loaded again draws what it now draws, though its last load
+// drew as many views of something else: its controls are its own, not
+// the last load's, so a list or an input it now draws shows.
+func TestAPluginLoadedAgainDrawsItsNewControls(t *testing.T) {
+	h := start(t, inboxDir(t))
+	h.thread("SIP re-INVITE handling")
+	const manifest = `{"id": "mine", "name": "mine", "main": "index.js", "contract": "glitched", "contractVersion": 2,
+	"capabilities": ["ui.place", "ui.replace"], "glitched": {"places": [{"id": "a", "at": "thread.header.actions", "replaces": true}]}}`
+	writeOwnPlugin(t, h.a, "mine", manifest, mineModule)
+	h.a.plugins.SetGranted("mine", "ui.replace", true)
+	settlePlugins(t, h.a, h.tt, h.p)
+	if !h.tt.HasText("Mine") {
+		t.Fatalf("yours doesn't draw the header's actions: %q", h.tt.Texts())
+	}
+	rev := h.a.plugins.App("mine").Rev
+	writeOwnPlugin(t, h.a, "mine", manifest, `export function place({ items }) {
+	return items.map(() => ({ type: "list", id: "l", label: "Mine", height: 40, items: [{ key: "a", label: "Row a" }] }))
+}
+export function rows({ keys }) { return keys.map(() => ({ type: "text", text: "Row a drawn" })) }`)
+	settlePlugins(t, h.a, h.tt, h.p)
+	if got := h.a.plugins.App("mine").Rev; got != rev {
+		t.Fatalf("the new load drew view %d, the last %d: this no longer tries what it means to", got, rev)
+	}
+	h.tt.Advance(time.Second)
+	settlePlugins(t, h.a, h.tt, h.p)
+	if !h.tt.HasText("Row a drawn") {
+		t.Fatalf("yours loaded again draws no list: %q", h.tt.Texts())
+	}
+}
