@@ -316,7 +316,7 @@ type NativeWidget = {
       padding?: number | number[];
     }
   | {
-      /** A failed command's Retry and Dismiss, in timeline.message, 8 points after what is before it; nothing, and no room, in any other row. */
+      /** A failed command's Retry and Dismiss, in timeline.message, 8 points after what is before it; nothing in any other row, taking no room of its own, though its row's gap and its own grow still do. */
       name: "transcript.retry";
     }
   | {
