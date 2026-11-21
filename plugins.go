@@ -60,6 +60,7 @@ var pluginIcons = map[string]*ui.SVG{
 	"copy":     icCopy,
 	"note":     icFile,
 	"inbox":    icInbox,
+	"child":    icChild,
 	"clock":    icClock,
 	"list":     icListChecks,
 	"settings": icSettings,

@@ -73,6 +73,7 @@ func (a *app) sidebarFrame(c *ui.Context) {
 	w := a.sidebarWidth * a.sidebarOpen
 	ui.Row(c).Key("sidebar").Width(w).Shrink(0).AlignItems(ui.Stretch).Clip().Children(func() {
 		side := ui.Column(c).Width(a.sidebarWidth).Shrink(0).Margin(0, 0, 0, w-a.sidebarWidth)
+		a.sidebarTall = side.Bounds().H
 		switch {
 		case !a.vibrant:
 			side.Background(palette.sidebar)

@@ -304,27 +304,28 @@ func (s *Session) drawRows(gen int, state json.RawMessage, context any, want map
 }
 
 // WaitRows draws the rows of items the list neither drew nor asked for
-// yet before the UI shows them, in one wait on the UI thread: until the
-// plugin drew them all, it failed, or the deadline passed. The rows a list
-// opens with, and those a new view brings into it, never show empty. A
-// row is waited on once, as it is asked for, so one the plugin is slow to
-// draw stalls no later frame.
+// yet, at the version items give them, before the UI shows them, in one
+// wait on the UI thread: until the plugin drew them all, it failed, or the
+// deadline passed. The rows a list opens with, and those a new view brings
+// into it, never show empty, and a row whose version changed never shows
+// its last one. A row is waited on once at each version, as it is asked
+// for, so one the plugin is slow to draw stalls no later frame.
 func (s *Session) WaitRows(at RowAt, items []widget.ListItem, deadline time.Time) {
 	if s.Err != nil {
 		return
 	}
 	k := at.key()
-	fresh := func(l *listRows, key string) bool {
+	fresh := func(l *listRows, it widget.ListItem) bool {
 		if l == nil {
 			return true
 		}
-		_, drawn := l.drawn[key]
-		_, asked := l.asked[key]
-		return !drawn && !asked
+		d, drawn := l.drawn[it.Key]
+		v, asked := l.asked[it.Key]
+		return !(drawn && d.version == it.Version) && !(asked && v == it.Version)
 	}
 	var want []widget.ListItem
 	for _, it := range items {
-		if fresh(s.rows.lists[k], it.Key) {
+		if fresh(s.rows.lists[k], it) {
 			want = append(want, it)
 		}
 	}
@@ -370,7 +371,7 @@ func (s *Session) WaitRows(at RowAt, items []widget.ListItem, deadline time.Time
 			}
 		case apply := <-first:
 			apply()
-			if s.Err != nil || s.rows.lists[k] != l || !slices.ContainsFunc(want, func(it widget.ListItem) bool { _, ok := l.drawn[it.Key]; return !ok }) {
+			if s.Err != nil || s.rows.lists[k] != l || !slices.ContainsFunc(want, func(it widget.ListItem) bool { d, ok := l.drawn[it.Key]; return !ok || d.version != it.Version }) {
 				return
 			}
 		case <-wait.C:

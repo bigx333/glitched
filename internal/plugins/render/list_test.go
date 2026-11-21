@@ -731,3 +731,32 @@ func TestTypingBehindAWaitingKeyGoesToTheInputTheViewHasThen(t *testing.T) {
 		})
 	}
 }
+
+func TestAListWithNoKeysMovesOnlyByThePointer(t *testing.T) {
+	s := &screen{}
+	s.show(t, `{"body": {"type": "list", "id": "l", "label": "Threads", "height": 200, "noKeys": true, "onChange": "chose", "onSubmit": "open",
+		"items": [{"key": "a", "label": "Row a"}, {"key": "b", "label": "Row b"}]}}`)
+	tt := ui.NewTester(s.draw, 400, 400)
+	tt.Frame()
+	r, _ := tt.Find("Row a")
+	tt.ClickAt(r.X+2, r.Y+2)
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "change" || ev.Value != "a" {
+		t.Fatalf("a click: %+v, want a chosen", ev)
+	}
+	n := len(s.events)
+	// A click under the rows, on the list itself, and the keys a list
+	// takes, and Tab to the next row.
+	tt.ClickAt(r.X+2, r.Y+150)
+	tt.Frame()
+	for _, k := range []ui.Key{ui.KeyDown, ui.KeyUp, ui.KeyEnd, ui.KeyHome, ui.KeyTab, ui.KeyDown} {
+		tt.Key(0, k)
+		tt.Frame()
+	}
+	if len(s.events) != n {
+		t.Errorf("keys moved a list with noKeys: %+v", s.events[n:])
+	}
+	if l, ok := tt.AccessByRole(ui.RoleList, "Threads"); !ok || l.Focused {
+		t.Errorf("a list with noKeys took the focus: %+v", l)
+	}
+}

@@ -311,6 +311,14 @@ func TestInstallingSomeoneElsesPluginAsksForConsent(t *testing.T) {
 	h.tt.Frame()
 	h.a.pluginSource = file
 	h.tt.Frame()
+	// Under the built-ins' list, past the window's end.
+	for i := 0; i < 20; i++ {
+		if r, ok := h.tt.Find("Install"); ok && r.Y+r.H < 1000 {
+			break
+		}
+		h.tt.Scroll(800, 500, 0, 120)
+		h.tt.Advance(100 * time.Millisecond)
+	}
 	h.click("Install")
 	h.until("the consent sheet", func() bool {
 		return h.tt.HasText("Hello is someone else's. It asks to:") && h.tt.HasText("• Copy text to the clipboard")

@@ -47,6 +47,7 @@ var Components = []Component{
 	{Name: "timeline.message", Provides: "timelineMessage", Native: true, Requires: "transcript.body", About: "A row of the chat timeline, around the native transcript.body: a message, a run's work log, or an error. Approval, question and report cards stay Glitched's."},
 	{Name: "composer.send", Provides: "composerSend", Needs: "threads:write", Native: true, About: "The composer's Send button, which stops the agent while it works. While it draws, Glitched keeps its own Stop beside it as a turn runs."},
 	{Name: "composer.access", Provides: "composerAccess", Needs: "threads:access", Native: true, About: "The access picker, which sets what agents may do in a thread. While it draws, Glitched keeps its own sign of the access in force beside it."},
+	{Name: "sidebar.body", Provides: "sidebarBody", Needs: "threads:read", About: "The sidebar's threads: the inbox, and Working, Snoozed and Settled under it, each a header over its threads' rows and their children's."},
 	{Name: "palette", Provides: "palette", Needs: "threads:read", About: "The command palette's search field, its results, the actions and the threads it finds, and its keys. Glitched keeps the dialog of glass it sits in."},
 	{Name: "approval.card", Locked: widget.Locked["approval.card"]},
 	{Name: "question.card", Locked: widget.Locked["question.card"]},

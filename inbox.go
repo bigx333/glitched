@@ -156,16 +156,27 @@ func (a *app) threadsNav(c *ui.Context) {
 			}
 		}
 	}
-	ui.Scroll(c).Grow(1).Padding(4, 8, 8).Gap(10).Children(func() {
-		sections(catInbox)
-	})
+	body := []componentCopy{a.sidebarCopy(c, "inbox", 0, func() ui.Element {
+		return ui.Column(c).Key("component:sidebar.body:inbox").Grow(1).Shrink(1).Basis(0)
+	}, func() {
+		ui.Scroll(c).Grow(1).Padding(4, 8, 8).Gap(10).Children(func() {
+			sections(catInbox)
+		})
+	}, catInbox)}
 	a.wakeSnoozed(c)
 	if len(a.itemsIn(catWorking))+len(a.itemsIn(catSnoozed))+len(a.itemsIn(catSettled)) > 0 {
 		// Settled may hold many: past half the sidebar, they scroll.
-		ui.Scroll(c).Key("bottom").MaxHeightPercent(50).Shrink(0).Padding(6, 8).Gap(6).Children(func() {
-			sections(catWorking, catSnoozed, catSettled)
-		})
+		body = append(body, a.sidebarCopy(c, "bottom", a.sidebarTall/2, func() ui.Element {
+			return ui.Column(c).Key("component:sidebar.body:bottom").MaxHeightPercent(50).Shrink(0)
+		}, func() {
+			ui.Scroll(c).Key("bottom").Shrink(1).Padding(6, 8).Gap(6).Children(func() {
+				sections(catWorking, catSnoozed, catSettled)
+			})
+		}, catWorking, catSnoozed, catSettled))
+	} else {
+		delete(a.sidebarRows, "bottom")
 	}
+	a.pluginComponent(c, "sidebar.body", nil, body...)
 	ui.Column(c).Padding(8).Gap(1).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
 		a.pluginSlot(c, "sidebar.footer", "", nil)
 		a.pluginNav(c)
@@ -230,41 +241,13 @@ func (a *app) projectStrip(c *ui.Context) {
 // thread moving into it folds in rather than appearing.
 func (a *app) section(c *ui.Context, cat category, title, empty string, icon *ui.SVG, color ui.Color) {
 	items := a.itemsIn(cat)
-	open := !a.sectionClosed[cat]
 	if len(items) == 0 && cat != catInbox {
 		return // Working, Snoozed and Settled show only while they have threads
 	}
 	// The inbox is always open: its header is a title, not a button.
-	collapsible := cat != catInbox
-	if !collapsible {
-		open = true
-	}
+	open := cat == catInbox || !a.sectionClosed[cat]
 	ui.Column(c).Key(title).Gap(2).Children(func() {
-		var head ui.Element
-		if collapsible {
-			head = ghost(c, "head", false)
-		} else {
-			head = ui.Row(c).Key("head").AlignItems(ui.Center)
-		}
-		head.Height(30).Padding(0, 8).Gap(8).Children(func() {
-			ui.Icon(c, icon).FontSize(14).TextColor(color)
-			ui.Text(c, title).FontSize(12.5).FontWeight(600).TextColor(palette.text)
-			if len(items) > 0 {
-				count := ui.Textf(c, "%d", len(items)).FontSize(11).FontWeight(600).Padding(1, 7).Radius(999)
-				if cat == catInbox && a.unreadCount() > 0 {
-					count.Background(color.Alpha(0.2)).TextColor(color)
-				} else {
-					count.Background(palette.hover).TextColor(palette.muted)
-				}
-			}
-			if collapsible {
-				ui.Spacer(c)
-				chevron(c, open).TextColor(palette.faint)
-			}
-		})
-		if collapsible && head.Clicked() {
-			a.sectionClosed[cat] = open
-		}
+		a.sectionHead(c, cat, len(items))
 		ui.Column(c).Key("rows").Gap(2).Children(func() {
 			if !open {
 				return
@@ -278,6 +261,40 @@ func (a *app) section(c *ui.Context, cat category, title, empty string, icon *ui
 			}
 		})
 	})
+}
+
+// sectionHead is a section's header: its icon, title and count of threads,
+// and, but for the inbox's, which is always open, a chevron; a click opens
+// or closes it.
+func (a *app) sectionHead(c *ui.Context, cat category, count int) {
+	s := categories[cat]
+	collapsible := cat != catInbox
+	open := !collapsible || !a.sectionClosed[cat]
+	var head ui.Element
+	if collapsible {
+		head = ghost(c, "head", false)
+	} else {
+		head = ui.Row(c).Key("head").AlignItems(ui.Center)
+	}
+	head.Height(30).Padding(0, 8).Gap(8).Children(func() {
+		ui.Icon(c, s.icon).FontSize(14).TextColor(s.color)
+		ui.Text(c, s.title).FontSize(12.5).FontWeight(600).TextColor(palette.text)
+		if count > 0 {
+			n := ui.Textf(c, "%d", count).FontSize(11).FontWeight(600).Padding(1, 7).Radius(999)
+			if cat == catInbox && a.unreadCount() > 0 {
+				n.Background(s.color.Alpha(0.2)).TextColor(s.color)
+			} else {
+				n.Background(palette.hover).TextColor(palette.muted)
+			}
+		}
+		if collapsible {
+			ui.Spacer(c)
+			chevron(c, open).TextColor(palette.faint)
+		}
+	})
+	if collapsible && head.Clicked() {
+		a.sectionClosed[cat] = open
+	}
 }
 
 func (a *app) unreadCount() int {
@@ -296,7 +313,6 @@ func (a *app) unreadCount() int {
 func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 	t := it.t
 	selected := t.id() == a.selected && a.router.Path() == "/"
-	unread := a.backend.Unread(t.Thread)
 	r := row(c, t.id(), selected).Height(rowHeight).Padding(0, 6, 0, 8).Gap(9).Transition(fold)
 	if a.arriving(t) {
 		r.Transition(arrive) // just sent from the hero, sliding in
@@ -312,21 +328,8 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 			a.renameInput(c, t)
 			return
 		}
-		var name ui.Element
-		if p, ok := a.parentOf(t); ok {
-			// A child lifted into Working: the way to its parent, under its
-			// title.
-			ui.Column(c).Grow(1).Shrink(1).Children(func() {
-				name = ui.Text(c, title(t)).FontSize(13).SingleLine()
-				ui.Text(c, "under "+title(p)).FontSize(10.5).TextColor(palette.faint).SingleLine()
-			})
-		} else {
-			name = ui.Text(c, title(t)).FontSize(13).SingleLine().Grow(1).Shrink(1)
-		}
+		a.rowTitle(c, t)
 		a.pluginSlot(c, "thread.row", t.id().String(), &t)
-		if unread {
-			name.FontWeight(600).TextColor(palette.text)
-		}
 		if len(a.backend.Envs()) > 1 {
 			a.machineBadge(c, t.env)
 		}
@@ -341,26 +344,50 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 			a.rowActions(c, t, cat)
 			return
 		}
-		// The selected row's face is darker: its faint text steps up.
-		dim := palette.faint
-		if selected {
-			dim = palette.muted
-		}
-		switch {
-		case failed(t):
-			a.tip(c, ui.Box(c).Size(7, 7).Radius(4).Background(palette.red).Label("A command failed"), "A command failed")
-		case cat == catSnoozed:
-			ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, icClock).FontSize(10).TextColor(dim)
-				ui.Text(c, snoozeLabel(disposition(t).Until, a.now)).FontSize(11).TextColor(dim)
-			})
-		case unread:
-			ui.Box(c).Size(7, 7).Radius(4).Background(palette.accent)
-		default:
-			ui.Text(c, ago(t.View.UpdatedAt, a.now)).FontSize(11).TextColor(dim)
-		}
+		a.rowMark(c, t, cat, selected)
 	}).Clicked() {
 		a.choose(t)
+	}
+}
+
+// rowTitle is a row's thread's title, bold while unread; a child lifted
+// into Working has the way to its parent under it.
+func (a *app) rowTitle(c *ui.Context, t thread) {
+	var name ui.Element
+	if p, ok := a.parentOf(t); ok {
+		ui.Column(c).Grow(1).Shrink(1).Children(func() {
+			name = ui.Text(c, title(t)).FontSize(13).SingleLine()
+			ui.Text(c, "under "+title(p)).FontSize(10.5).TextColor(palette.faint).SingleLine()
+		})
+	} else {
+		name = ui.Text(c, title(t)).FontSize(13).SingleLine().Grow(1).Shrink(1)
+	}
+	if a.backend.Unread(t.Thread) {
+		name.FontWeight(600).TextColor(palette.text)
+	}
+}
+
+// rowMark is what a row, in the section cat, shows at its end while it
+// isn't pointed at: a command failed, when a snoozed thread wakes, that
+// it is unread, or how long ago it changed. The selected row's face is
+// darker: its faint text steps up.
+func (a *app) rowMark(c *ui.Context, t thread, cat category, selected bool) {
+	dim := palette.faint
+	if selected {
+		dim = palette.muted
+	}
+	switch {
+	case failed(t):
+		a.tip(c, ui.Box(c).Size(7, 7).Radius(4).Background(palette.red).Label("A command failed"), "A command failed")
+	case cat == catSnoozed:
+		ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, icClock).FontSize(10).TextColor(dim)
+			ui.Text(c, snoozeLabel(disposition(t).Until, a.now)).FontSize(11).TextColor(dim)
+		})
+	case a.backend.Unread(t.Thread):
+		ui.Box(c).Size(7, 7).Radius(4).Background(palette.accent)
+	default:
+		ui.Text(c, ago(t.View.UpdatedAt, a.now)).FontSize(11).TextColor(dim)
 	}
 }
 

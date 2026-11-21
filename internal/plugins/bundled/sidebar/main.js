@@ -1,0 +1,126 @@
+// The sidebar's threads, as Glitched draws them by default: the inbox,
+// which grows, and Working, Snoozed and Settled under it, which scroll past
+// half the sidebar. Glitched works out which threads go where and draws
+// their parts; this lays them out, and draws only the rows in view. Copy it
+// in Settings › Plugins, and the copy draws the sidebar's threads in its
+// place.
+
+const HEAD = 30;
+const ROW = 32;
+const CHILD = 28;
+const GAP = 2;
+const EMPTY = 27;
+
+export function init() {
+  return { state: {} };
+}
+
+// items are a copy's list items: each section's header, then its rows, or
+// what it says while empty. The sections of the bottom part are 6 apart.
+function items(ctx) {
+  const out = [];
+  const seen = new Set();
+  ctx.sections.forEach((s, i) => {
+    // A section's header is 2 over its rows, and the next section 6 under
+    // them, as are the rows' column, empty or not, and the list's end.
+    const before = i === 0 ? 0 : 4;
+    const after = s.rows.length === 0 && !(s.empty && !s.closed) ? GAP : 0;
+    out.push({ key: "h:" + s.id, label: s.title, header: true, height: HEAD + before + after });
+    if (s.rows.length === 0 && s.empty && !s.closed) {
+      out.push({ key: "e:" + s.id, label: s.empty, header: true, height: EMPTY });
+    }
+    for (const r of s.rows) {
+      // A child lifted into Working shows there and under its line.
+      const key = seen.has(r.thread) ? r.thread + "#" + r.depth : r.thread;
+      seen.add(r.thread);
+      // The row's version is what its widgets are made of; its title, as
+      // the rest the natives draw, is the app's to keep up to date.
+      const version = [r.depth || 0, r.status, r.kids ? 1 : 0, r.renaming ? 1 : 0].join(":");
+      out.push({ key, label: "", thread: r.thread, height: r.depth > 0 ? CHILD : ROW, version });
+    }
+  });
+  return out;
+}
+
+function body(ctx) {
+  const all = items(ctx);
+  // The thread shown, where this copy shows it.
+  const value = all.some((it) => it.key === ctx.selected) ? ctx.selected : "";
+  const list = {
+    type: "list",
+    id: "threads",
+    label: ctx.part === "inbox" ? "Inbox" : "Working, Snoozed and Settled",
+    items: all,
+    gap: GAP,
+    noKeys: true,
+    value,
+    controlled: true,
+  };
+  if (ctx.part === "inbox") {
+    return { ...list, grow: true, padding: [4, 8, 8, 8] };
+  }
+  return { ...list, height: Math.max(ctx.maxHeight, 1), padding: [6, 8] };
+}
+
+export function place({ items }) {
+  return items.map((it) => (it.context ? body(it.context) : null));
+}
+
+const native = (name, props, more = {}) => ({ type: "native", name, ...(props ? { props } : {}), ...more });
+
+function header(ctx, key, height) {
+  const id = key.slice(2);
+  const i = ctx.sections.findIndex((s) => s.id === id);
+  const top = i === 0 ? 0 : 4;
+  return {
+    type: "column",
+    padding: [top, 0, height - HEAD - top, 0],
+    children: [native("sidebar.section", { section: id })],
+  };
+}
+
+function row(ctx, r) {
+  if (r.depth > 0) {
+    const children = [
+      { type: "icon", name: "child", fontSize: 12, color: "$text.faint" },
+      native("thread.title", { child: true }, { grow: true }),
+    ];
+    if (r.renaming) {
+      children.splice(1, 1, native("thread.rename", null, { grow: true }));
+      return { type: "row", grow: true, gap: 8, padding: [0, 6, 0, 8 + r.depth * 16], children };
+    }
+    if (["working", "waiting", "completed"].includes(r.status)) children.push(native("thread.status"));
+    children.push(r.kids ? native("thread.children") : native("thread.mark", { child: true }));
+    return { type: "row", grow: true, gap: 8, padding: [0, 6, 0, 8 + r.depth * 16], children };
+  }
+  const children = [native("thread.tile")];
+  if (r.renaming) {
+    children.push(native("thread.rename", null, { grow: true }));
+  } else {
+    children.push(native("thread.title", null, { grow: true }));
+    if (ctx.slots) children.push(native("thread.slot"));
+    if (ctx.machines) children.push(native("thread.machine"));
+    children.push(native("thread.row.actions", null, { when: "hover" }));
+    children.push(native("thread.mark", null, { when: "idle" }));
+    if (r.kids) children.push(native("thread.children"));
+  }
+  return { type: "row", grow: true, gap: 9, padding: [0, 6, 0, 8], children };
+}
+
+export function rows({ keys, place }) {
+  const ctx = place.context;
+  const byKey = new Map();
+  for (const it of items(ctx)) byKey.set(it.key, it);
+  const byThread = new Map();
+  for (const s of ctx.sections) for (const r of s.rows) byThread.set(r.thread + "#" + (r.depth || 0), r);
+  return keys.map((key) => {
+    const it = byKey.get(key);
+    if (!it) return null;
+    if (key.startsWith("h:")) return header(ctx, key, it.height);
+    if (key.startsWith("e:")) {
+      return { type: "text", text: it.label, fontSize: 12, color: "$text.faint", padding: [6, 10] };
+    }
+    const r = byThread.get(it.thread + "#" + it.version.split(":")[0]);
+    return r ? row(ctx, r) : null;
+  });
+}
