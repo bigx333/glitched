@@ -29,13 +29,15 @@ type listView struct {
 
 // press is a key pressed on a list: a move by d items, or a submit with
 // the keys held; or a change of the input that drives it, typed behind
-// such a key, which waits behind it too.
+// such a key, or a row the pointer moved over then, which wait behind it
+// too.
 type press struct {
 	d      int
 	submit bool
 	mods   []string
 	input  *widget.Node
 	text   string
+	choose string
 }
 
 // toEnd is a move as far as the list goes, however long it is by then.
@@ -74,6 +76,11 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 		return
 	}
 	lv := ctl.listOf(n)
+	// Keys pressed on a list that went, as one in a dialog shut, went
+	// with it: they don't act on what it shows when it comes back.
+	if lv.drawn < r.cs.passes-1 {
+		lv.pressed = nil
+	}
 	lv.drawn = r.cs.passes
 	ls := &lv.state
 	ls.Key = func(i int) any { return n.Items[i].Key }
@@ -152,7 +159,13 @@ func (r *renderer) listRow(c *ui.Context, n *widget.Node, ctl *control, i int) {
 	// though the rows scroll or move under it, so the keys and the
 	// plugin's own value move the choice from it.
 	if n.ChooseOnHover && ctl.list.moved && b.Hovered() {
-		r.choose(n, ctl, it.Key)
+		if lv := ctl.list; len(lv.pressed) > 0 {
+			if last := lv.pressed[len(lv.pressed)-1]; last.choose != it.Key {
+				lv.pressed = append(lv.pressed, press{choose: it.Key})
+			}
+		} else {
+			r.choose(n, ctl, it.Key)
+		}
 	}
 	if it.Thread != "" && r.st.ContextMenu != nil {
 		r.st.ContextMenu(c, b, "thread:"+it.Thread)
@@ -243,6 +256,8 @@ func (r *renderer) pressed(n *widget.Node, ctl *control) {
 			r.fire(p.input, p.input.OnChange, "change", p.text)
 		case p.submit:
 			r.submit(n, ctl.text, p.mods)
+		case p.choose != "":
+			r.choose(n, ctl, p.choose)
 		default:
 			r.move(n, ctl, p.d)
 		}
