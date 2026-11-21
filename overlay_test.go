@@ -6,6 +6,8 @@ import (
 	gotoken "go/token"
 	"image"
 	"image/draw"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -479,5 +481,55 @@ func TestChoosingAThreadWhileItsComposerFolds(t *testing.T) {
 				t.Fatalf("the draft is %q, want %q", h.a.draft, want)
 			}
 		})
+	}
+}
+
+// Escape on a plugin's dialog gives the focus back to the button that
+// opened it, though the plugin, yet to hear of it, still draws the dialog
+// for a frame or more: there's nothing then to take the dialog's key.
+func TestEscapeOnCommitAndPushFocusesItsButton(t *testing.T) {
+	dir := tempDir(t)
+	repo := filepath.Join(t.TempDir(), "repo")
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatal(err, string(out))
+	}
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	seed(t, d, repo, "Shipping", "Hello")
+	h := start(t, dir)
+	h.a.select_(h.thread("Shipping"))
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	for range 30 {
+		if h.tt.Focused("Commit & push") {
+			break
+		}
+		h.tt.KeyRepeat(ui.Shift, ui.KeyTab)
+	}
+	if !h.tt.Focused("Commit & push") {
+		t.Fatal("Shift-Tab never reached Commit & push")
+	}
+	const shown = "Your git hooks don't run for a plugin's git."
+	h.tt.KeyRepeat(0, ui.KeySpace)
+	h.until("the dialog", func() bool { return h.tt.HasText(shown) })
+	h.tt.KeyRepeat(0, ui.KeyEscape)
+	if h.tt.HasText(shown) {
+		t.Fatal("Escape didn't close the dialog")
+	}
+	if !h.tt.Focused("Commit & push") {
+		t.Fatal("closed, the dialog didn't give the focus back to Commit & push")
+	}
+	// The plugin hears of it, and drops the dialog, frames later.
+	for range 10 {
+		if h.p.run() {
+			h.tt.Frame()
+		}
+		h.tt.Advance(16 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !h.tt.Focused("Commit & push") {
+		t.Fatal("the focus left Commit & push once the plugin dropped the dialog")
 	}
 }
