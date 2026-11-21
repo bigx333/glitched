@@ -535,6 +535,10 @@ type app struct {
 	// draftArea is the full composer's text area, and draftLine the
 	// compact composer's line.
 	draftArea, draftLine ui.Handle
+	// chosen is the thread a person chose, until its composer, at rest,
+	// has the focus, and asked the editor its focus was asked for.
+	chosen api.ID
+	asked  *ui.Handle
 	// steers are the messages sent from the composer, until each lands
 	// or fails, by command.
 	steers map[api.ID]steer

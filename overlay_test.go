@@ -418,16 +418,19 @@ func TestAClosedOverlayLeavesTheNextControlAlone(t *testing.T) {
 	}
 }
 
-// Clicked in the sidebar while its composer is on its way to compact, the
-// thread shown gives the focus to the full composer, there throughout,
-// which keeps it and all that's typed; never to the line, not yet built,
-// which would take it, once built, from whatever was clicked meanwhile.
-func TestChoosingTheThreadShownMidMorph(t *testing.T) {
-	for _, when := range []string{"before it moves", "half-way"} {
+// Clicked in the sidebar while its composer is on its way to compact,
+// from that thread or back from another, a thread gives the focus to the
+// editor its composer has then: the full one, there throughout the fold,
+// which keeps it and all that's typed, and, left to fold, hands it on to
+// the line. Never to the line before it's built, which would take the
+// focus, once it is, from whatever was clicked meanwhile.
+func TestChoosingAThreadWhileItsComposerFolds(t *testing.T) {
+	for _, when := range []string{"before it moves", "half-way", "half-way, back from another thread", "half-way, left to fold"} {
 		t.Run(when, func(t *testing.T) {
 			dir := tempDir(t)
 			d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
 			seed(t, d, "/work/t3code", "A long thread", "Start")
+			seed(t, d, "/work/t3code", "Another thread", "Hello")
 			h := start(t, dir)
 			long := h.thread("A long thread")
 			h.a.select_(long)
@@ -456,12 +459,24 @@ func TestChoosingTheThreadShownMidMorph(t *testing.T) {
 			if k := h.a.composerK; k <= 0.3 || k >= 1 {
 				t.Fatalf("the composer isn't half-way: k %g", k)
 			}
+			if when == "half-way, back from another thread" {
+				h.click("Another thread")
+			}
 			h.click("A long thread")
-			h.tt.Type("first")
-			h.tt.Advance(time.Second)
+			want := "firstsecond"
+			if when == "half-way, left to fold" {
+				h.tt.Advance(time.Second)
+				if h.a.composerK != 0 {
+					t.Fatalf("the composer didn't fold: k %g", h.a.composerK)
+				}
+				want = "second"
+			} else {
+				h.tt.Type("first")
+				h.tt.Advance(time.Second)
+			}
 			h.tt.Type("second")
-			if h.a.draft != "firstsecond" {
-				t.Fatalf("the draft is %q, want %q", h.a.draft, "firstsecond")
+			if h.a.draft != want {
+				t.Fatalf("the draft is %q, want %q", h.a.draft, want)
 			}
 		})
 	}
