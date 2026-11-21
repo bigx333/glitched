@@ -228,6 +228,9 @@ func (a *app) childRows(c *ui.Context, t thread, depth int) {
 func (a *app) childRow(c *ui.Context, k thread, depth int) {
 	selected := k.id() == a.selected && a.router.Path() == "/"
 	r := row(c, k.id(), selected).Height(28).Padding(0, 6, 0, 8+float32(depth)*16).Gap(8).Transition(fold)
+	if a.revealRow(k.id()) {
+		r.ScrollIntoView()
+	}
 	r.ContextMenu(func(m *ui.Menu) { a.threadMenu(c, m, k, a.categoryOf(k)) })
 	if r.Children(func() {
 		ui.Icon(c, icChild).FontSize(12).TextColor(palette.faint).Shrink(0)

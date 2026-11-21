@@ -64,7 +64,7 @@ type Style struct {
 	// says whether the row stays as though pointed at, as while a popover
 	// of it is open. Nil does nothing.
 	ListRow func(c *ui.Context, list *widget.Node, i int, e ui.Element) (held bool)
-	// Reveal is the key of the item a list scrolls into view, where it
+	// Reveal is a thread whose item a list scrolls into view, where it
 	// has one; "" is none.
 	Reveal string
 	// Modal is told of each dialog the view draws open, which holds the

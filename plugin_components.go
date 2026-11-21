@@ -43,7 +43,7 @@ type componentCopy struct {
 	// its own (render.Style.ListRow), builtin when the built-in plugin
 	// draws the copy; nil does nothing.
 	listRow func(c *ui.Context, list *widget.Node, i int, e ui.Element, builtin bool) bool
-	// reveal is the key of the item its lists scroll into view
+	// reveal is the thread whose item its lists scroll into view
 	// (render.Style.Reveal).
 	reveal string
 	// current waits for the plugin to draw each new context of the copy,
