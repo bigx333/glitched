@@ -1396,3 +1396,74 @@ func TestFlowKeepsGoing(t *testing.T) {
 		t.Errorf("speed %.0f, level %.2f: should have eased to Max's", f.speed, f.level)
 	}
 }
+
+// The inbox lists its threads the most recently active first, and a
+// thread active again, as one renamed on its engine, goes to the top: the
+// order is sorted again after each change the engine sends, not only once.
+func TestInboxIsNewestFirstAsThreadsChange(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	older := seed(t, d, "/work/mygo", "The older thread")
+	seed(t, d, "/work/t3code", "The newer thread")
+	h := start(t, dir)
+	h.thread("The newer thread")
+	titles := func() []string {
+		var out []string
+		for _, it := range h.a.itemsIn(catInbox) {
+			out = append(out, it.t.View.Title)
+		}
+		return out
+	}
+	if got := titles(); !slices.Equal(got, []string{"The newer thread", "The older thread"}) {
+		t.Fatalf("the inbox reads %q, the newest first", got)
+	}
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: older, Body: api.ThreadRename{Title: "The older thread, renamed"}}); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the rename", func() bool { return h.tt.HasText("The older thread, renamed") })
+	if got := titles(); !slices.Equal(got, []string{"The older thread, renamed", "The newer thread"}) {
+		t.Errorf("after the older thread's rename the inbox reads %q, it first", got)
+	}
+}
+
+// A thread dismissed and another created here in its place, with no change
+// from the engine between, and as many threads as before, shows in its
+// place: the order is sorted again as threads come and go, whatever their
+// count.
+func TestInboxShowsAThreadThatTookAnothersPlace(t *testing.T) {
+	a := offline(t)
+	if err := a.backend.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.backend.Close() })
+	e := a.backend.Envs()[0]
+	add := func(title string) api.ID {
+		t.Helper()
+		id := a.backend.Create(e, "/work/test", title, fakeModel, api.AccessFull)
+		if th := e.Threads[id]; th == nil || len(th.Pending) != 1 || th.Pending[0].Err == nil {
+			t.Fatalf("offline, the create should fail here at once: %+v", th)
+		}
+		return id
+	}
+	titles := func() []string {
+		a.projects = a.gather()
+		var out []string
+		for _, it := range a.itemsIn(catInbox) {
+			out = append(out, it.t.View.Title)
+		}
+		return out
+	}
+	old := add("The first try")
+	if got := titles(); !slices.Equal(got, []string{"The first try"}) {
+		t.Fatalf("the inbox reads %q", got)
+	}
+	posts := a.posts
+	a.backend.Dismiss(e, old, e.Threads[old].Pending[0].Command)
+	add("The second try")
+	if len(e.Threads) != 1 || a.posts != posts {
+		t.Fatalf("the threads are %d, the posts %d to %d: not the case this is about", len(e.Threads), posts, a.posts)
+	}
+	if got := titles(); !slices.Equal(got, []string{"The second try"}) {
+		t.Errorf("the inbox reads %q, not the thread that took the first's place", got)
+	}
+}

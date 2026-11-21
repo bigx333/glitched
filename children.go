@@ -30,16 +30,10 @@ const maxDepth = api.MaxDepth
 // the agents panel and the cascades walk.
 func (a *app) kidsOf() map[api.ID][]thread {
 	kids := map[api.ID][]thread{}
-	for _, e := range a.backend.Envs() {
-		for _, th := range e.Threads {
-			t := thread{e, th}
-			if p := th.View.Parent; !p.IsZero() && !deleting(t) {
-				kids[p] = append(kids[p], t)
-			}
+	for _, t := range a.recent() {
+		if p := t.View.Parent; !p.IsZero() && !deleting(t) {
+			kids[p] = append(kids[p], t)
 		}
-	}
-	for _, ts := range kids {
-		slices.SortFunc(ts, newestFirst)
 	}
 	return kids
 }
