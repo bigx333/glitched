@@ -269,6 +269,7 @@ func TestPointsTakeFractions(t *testing.T) {
 	}
 	for js, want := range map[string]string{
 		`{"body": {"type": "text", "text": "x", "weight": 600.5}}`:         "body.weight is a whole number, not 600.5",
+		`{"body": {"type": "text", "text": "x", "weight": 1e20}}`:          "cannot unmarshal number 1e20",
 		`{"body": {"type": "text", "text": "x", "maxWidthPercent": 50.5}}`: "body.maxWidthPercent is a whole number, not 50.5",
 	} {
 		if _, err := Decode([]byte(js)); err == nil || !strings.Contains(err.Error(), want) {

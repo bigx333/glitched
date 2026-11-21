@@ -694,7 +694,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			cell := func(col widget.Column, text string, head bool) {
 				t := ui.Text(c, text).SingleLine().Shrink(1).Padding(6, 8)
 				if col.Width > 0 {
-					t.Width(float32(col.Width))
+					t.Width(col.Width)
 				} else {
 					t.Grow(1).Basis(0)
 				}
