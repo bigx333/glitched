@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"maps"
@@ -608,15 +610,54 @@ func TestOpenInEditorOpensTheEditedFile(t *testing.T) {
 	}
 }
 
-// A split diff's panel goes without a panic, however it goes: closed, with
-// its divider focused, for the preview in its place, or with the page. A
-// panel going with an Exit is painted from its last frame, where MyGo's
-// divider reads an Element of the frame that built it. (The page goes
-// whole, its panels with it, painting no copy of them.)
+// A split diff's panel goes without a panic, however it or what holds it
+// goes, and slides out as the other panels do. A panel going with an Exit
+// is painted from its last frame, divider and all (NEL-47). The ways it
+// goes are those #114's review drove: closed, with its divider focused,
+// for the preview, the plugin tab or another thread, with the page, as the
+// window or the sidebar leaves it too little room for Split, as a plugin
+// replacing the panel goes, and reopened while it goes.
 func TestASplitDiffGoesWithoutAPanic(t *testing.T) {
-	for name, leave := range map[string]func(h *harness){
-		"closed": func(h *harness) { h.click("Close diff") },
-		"closed with its divider focused": func(h *harness) {
+	divider := func(h *harness, want bool) {
+		h.t.Helper()
+		r, ok := h.tt.Find("Divider")
+		if shown := ok && r.W > 0 && r.H > 0; shown != want {
+			h.t.Fatalf("the divider shows %v, want %v (layout %v, room %v)", shown, want, h.a.layout(), h.a.roomBeside)
+		}
+	}
+	closePanel := func(h *harness) {
+		h.t.Helper()
+		if _, err := h.a.panelEffect(json.RawMessage(`{"panel": "diff", "open": false}`)); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	yours := func(h *harness, js string) {
+		h.t.Helper()
+		manifest := strings.Replace(replacing("your-diff", "thread.panel.diff"), `"ui.replace"]`, `"ui.replace", "threads:read"]`, 1)
+		writeOwnPlugin(h.t, h.a, "your-diff", manifest, js)
+		h.a.plugins.SetGranted("your-diff", "ui.replace", true)
+		h.a.plugins.SetGranted("your-diff", "threads:read", true)
+		h.a.plugins.Reload()
+		h.tt.Frame()
+		settlePlugins(h.t, h.a, h.tt, h.p)
+		if err := h.a.plugins.Failed("your-diff"); err != nil || !h.tt.HasText("Your header") {
+			h.t.Fatalf("your panel didn't replace the diff's (%v): %q", err, h.tt.Texts())
+		}
+		divider(h, true)
+	}
+	inYours := func(wrap string) string {
+		body := `{ type: "row", align: "stretch", children: [{ type: "native", id: "diff", name: "diff.body", props: { path: it.context.shown }, grow: true }, { type: "image", src: "plugin:fixture.png", width: 2, height: 300 }] }`
+		return `export function place({ items }) { return items.map((it) => it.context.part === "header" ? { type: "text", text: "Your header" } : ` + strings.Replace(wrap, "BODY", body, 1) + `) }`
+	}
+	type way struct {
+		name    string
+		width   int
+		sidebar bool
+		leave   func(h *harness, dir string, second thread)
+	}
+	for _, w := range []way{
+		{name: "closed", leave: func(h *harness, _ string, _ thread) { h.click("Close diff") }},
+		{name: "closed with its divider focused", leave: func(h *harness, _ string, _ thread) {
 			for range 40 {
 				if h.tt.Key(0, ui.KeyTab); h.tt.Focused("Divider") {
 					break
@@ -626,28 +667,112 @@ func TestASplitDiffGoesWithoutAPanic(t *testing.T) {
 				h.t.Fatal("Tab never reached the divider")
 			}
 			h.click("Close diff")
-		},
-		"for the preview": func(h *harness) { h.tt.Key(ui.Cmd|ui.Shift, ui.KeyP) },
-		"with the page":   func(h *harness) { h.a.router.Push("/settings/general") },
-	} {
-		t.Run(name, func(t *testing.T) {
-			h, th := checked(t)
-			h.tt.SetSize(1600, 900)
+		}},
+		{name: "for the preview", leave: func(h *harness, _ string, _ thread) { h.tt.Key(ui.Cmd|ui.Shift, ui.KeyP) }},
+		{name: "for the plugin tab", leave: func(h *harness, dir string, _ thread) {
+			install(h.t, dir, "focus-timer")
+			h.a.plugins.Reload()
+			h.tt.Frame()
+			h.until("the plugin's tab", func() bool { return len(h.a.pluginTabs()) > 0 })
+			h.a.openPluginTab(h.a.pluginTabs()[0].key, true)
+		}},
+		{name: "for another thread", leave: func(h *harness, _ string, second thread) { h.a.select_(second) }},
+		{name: "for a new thread", leave: func(h *harness, _ string, _ thread) { h.a.newThread() }},
+		{name: "with the page", leave: func(h *harness, _ string, _ thread) { h.a.router.Push("/settings/general") }},
+		{name: "with the page fading", leave: func(h *harness, _ string, _ thread) {
+			h.a.router.Transition = ui.TransitionFade
+			h.a.router.Push("/settings/general")
+		}},
+		{name: "unified in the frame it closes", leave: func(h *harness, _ string, _ thread) {
+			if _, err := h.a.diffEffect("diff.set", json.RawMessage(fmt.Sprintf(`{"thread": %q, "layout": "unified"}`, h.a.current().id().String()))); err != nil {
+				h.t.Fatal(err)
+			}
+			closePanel(h)
+		}},
+		{name: "narrowed in the frame it closes", leave: func(h *harness, _ string, _ thread) {
+			closePanel(h)
+			h.tt.SetSize(1100, 900)
+		}},
+		{name: "narrowed, then closed", leave: func(h *harness, _ string, _ thread) {
+			h.tt.SetSize(1100, 900)
+			divider(h, false)
+			h.click("Close diff")
+		}},
+		{name: "the sidebar shown in the frame it closes", width: 1440, leave: func(h *harness, _ string, _ thread) {
+			h.a.toggleSidebar(false)
+			closePanel(h)
+		}},
+		{name: "the sidebar shown, then closed", width: 1440, leave: func(h *harness, _ string, _ thread) {
+			h.a.toggleSidebar(false)
+			h.tt.Frame()
+			h.tt.Advance(time.Second)
+			divider(h, false)
+			h.click("Close diff")
+		}},
+		{name: "the sidebar widened, then closed", width: 1530, sidebar: true, leave: func(h *harness, _ string, _ thread) {
+			h.a.sidebarWidth += 70
+			h.tt.Frame()
+			divider(h, false)
+			h.click("Close diff")
+		}},
+		{name: "replaced by your panel, closed", leave: func(h *harness, _ string, _ thread) {
+			yours(h, strings.ReplaceAll(yourDiffPanel, "NATIVE", `"diff.body"`))
+			closePanel(h)
+		}},
+		{name: "replaced by your panel, given back, closed", leave: func(h *harness, _ string, _ thread) {
+			yours(h, strings.ReplaceAll(yourDiffPanel, "NATIVE", `"diff.body"`))
+			h.a.plugins.SetGranted("your-diff", "ui.replace", false)
+			h.a.plugins.Reload()
+			h.tt.Frame()
+			h.until("the built-in panel", func() bool { return h.tt.HasText("Changes") })
+			divider(h, true)
+			h.click("Close diff")
+		}},
+		{name: "in your panel's popover, dismissed", leave: func(h *harness, _ string, _ thread) {
+			yours(h, inYours(`{ type: "button", id: "open", style: "ghost", icon: "plug", label: "Diff popover", open: true, popover: { type: "column", width: 440, children: [BODY] } }`))
+			h.tt.Key(0, ui.KeyEscape)
+		}},
+		{name: "in your panel's dialog, dismissed", leave: func(h *harness, _ string, _ thread) {
+			yours(h, inYours(`{ type: "dialog", id: "open", title: "Diff dialog", open: true, children: [BODY] }`))
+			h.tt.Key(0, ui.KeyEscape)
+		}},
+		{name: "reopened while it goes", leave: func(h *harness, _ string, _ thread) {
+			h.click("Close diff")
 			h.a.showDiff = true
 			h.tt.Frame()
-			h.diffOf(th, sidebarPath)
+			divider(h, true)
+			closePanel(h)
+		}},
+	} {
+		t.Run(w.name, func(t *testing.T) {
+			ws := gitWorkspace(t)
+			dir := tempDir(t)
+			d := engine(t, daemon.Config{Dir: dir}, fake.New(checks))
+			seed(t, d, ws, "Sort sidebar threads by recent activity", "Sort them by most recent activity.")
+			seed(t, d, ws, "Second thread")
+			h := start(t, dir)
+			first, second := h.thread("Sort sidebar threads by recent activity"), h.thread("Second thread")
+			h.a.select_(first)
+			h.until("its transcript", func() bool { return h.tt.HasText("One test fails.") })
+			h.tt.Advance(time.Second)
+			width := cmp.Or(w.width, 1600)
+			h.a.showSidebar, h.a.sidebarJump = width == 1600 || w.sidebar, true
+			h.tt.SetSize(width, 900)
+			h.a.showDiff = true
+			h.tt.Frame()
+			h.diffOf(first, sidebarPath)
 			settlePlugins(t, h.a, h.tt, h.p)
 			h.click("Split")
-			if _, ok := h.tt.Find("Divider"); !ok || h.a.layout() != editor.DiffSplit {
+			h.tt.Advance(time.Second)
+			if h.a.layout() != editor.DiffSplit {
 				t.Fatal("the diff isn't split")
 			}
-			h.tt.Advance(time.Second)
-			leave(h)
+			divider(h, true)
+			w.leave(h, dir, second)
+			h.tt.Frame()
 			h.tt.Advance(time.Second)
 			settlePlugins(t, h.a, h.tt, h.p)
-			if h.a.showDiff && h.a.router.Path() != "/settings/general" {
-				t.Error("the diff panel didn't go")
-			}
+			divider(h, false)
 		})
 	}
 }
