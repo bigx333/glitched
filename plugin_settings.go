@@ -521,7 +521,7 @@ func (a *app) appParts(c *ui.Context, list []plugins.Plugin) {
 					}
 				})
 				switch {
-				case !drawn && comp.Native:
+				case !drawn && (comp.Native || comp.Own):
 					statePill(c, "Glitched's own", toneQuiet)
 					return
 				case !drawn:

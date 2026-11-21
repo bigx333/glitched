@@ -28,6 +28,11 @@ type Component struct {
 	// Requires is the native widget a replacement must place: a drawing
 	// without it is taken as one that failed.
 	Requires string
+	// Own is a component Glitched also draws itself where no plugin draws
+	// it, behind its built-in plugin. Unlike a Native one, a replacement
+	// that fails keeps its last drawing until a plugin or Glitched draws
+	// it again.
+	Own bool
 }
 
 // Components are the parts of Glitched's UI a plugin may replace, and the
@@ -48,8 +53,8 @@ var Components = []Component{
 	{Name: "composer.send", Provides: "composerSend", Needs: "threads:write", Native: true, About: "The composer's Send button, which stops the agent while it works. While it draws, Glitched keeps its own Stop beside it as a turn runs."},
 	{Name: "composer.access", Provides: "composerAccess", Needs: "threads:access", Native: true, About: "The access picker, which sets what agents may do in a thread. While it draws, Glitched keeps its own sign of the access in force beside it."},
 	{Name: "sidebar.body", Provides: "sidebarBody", Needs: "threads:read", About: "The sidebar's threads: the inbox, and Working, Snoozed and Settled under it, each a header over its threads' rows and their children's."},
-	{Name: "agents.body", Provides: "agentsBody", Needs: "threads:read", About: "The agents panel's rows: the threads under the one shown, each with its run's dot, its title and how long ago it changed, and More past the first five. Glitched keeps the pill, the panel it grows into, and its head."},
-	{Name: "palette", Provides: "palette", Needs: "threads:read", About: "The command palette's search field, its results, the actions and the threads it finds, and its keys. Glitched keeps the dialog of glass it sits in."},
+	{Name: "agents.body", Provides: "agentsBody", Needs: "threads:read", Own: true, About: "The agents panel's rows: the threads under the one shown, each with its run's dot, its title and how long ago it changed, and More past the first five. Glitched keeps the pill, the panel it grows into, and its head."},
+	{Name: "palette", Provides: "palette", Needs: "threads:read", Own: true, About: "The command palette's search field, its results, the actions and the threads it finds, and its keys. Glitched keeps the dialog of glass it sits in."},
 	{Name: "message.toolbar", Provides: "messageToolbar", Native: true, About: "The actions under a message, shown while it's pointed at: Copy, Edit & resend or Retry, and plugins' commands, each the native Glitched draws. Glitched keeps where the toolbar sits and when it shows."},
 	{Name: "approval.card", Locked: widget.Locked["approval.card"]},
 	{Name: "question.card", Locked: widget.Locked["question.card"]},

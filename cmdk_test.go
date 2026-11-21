@@ -500,6 +500,103 @@ export function rows() { throw new Error("broken on purpose") }`,
 	}
 }
 
+// With the built-in off and yours failing, Glitched draws its own palette,
+// and Settings says so beside the failure.
+func TestAFailedPaletteSaysGlitchedDrawsItsOwn(t *testing.T) {
+	a := offline(t)
+	tt := newTester(t, a, 1320, 860)
+	tt.Frame()
+	if err := a.plugins.SetEnabled("palette", false); err != nil {
+		t.Fatal(err)
+	}
+	a.pluginsChanged(nil)
+	writeOwnPlugin(t, a, "mine", paletteManifest, mineModule)
+	a.plugins.SetGranted("mine", "ui.replace", true)
+	a.plugins.SetGranted("mine", "threads:read", true)
+	a.openCommandPalette()
+	settleTester(tt)
+	if !tt.HasText("Mine") {
+		t.Fatalf("yours doesn't draw the palette: %q", tt.Texts())
+	}
+	writeOwnPlugin(t, a, "mine", paletteManifest, brokenModule)
+	settleTester(tt)
+	if !tt.HasText("Toggle diff panel") || tt.HasText("Mine") || a.plugins.Failed("mine") == nil {
+		t.Fatalf("yours that throws didn't leave Glitched's own palette: %v %q", a.plugins.Failed("mine"), tt.Texts())
+	}
+	tt.Key(0, ui.KeyEscape)
+	p := installed(a, "mine")
+	a.pluginsOpen[p.Folder] = true
+	a.router.Push("/settings/plugins")
+	settleTester(tt)
+	if why := a.partState(p, "palette").why; !tt.HasText(why) || !strings.HasPrefix(why, "It failed, so Glitched draws its own:") {
+		t.Errorf("Settings says %q of the failed palette", why)
+	}
+}
+
+const queryPalette = `
+export function init() {
+  return {state: {query: ""}};
+}
+export function place({state, items}) {
+  return items.map(() => ({
+    type: "column", children: [
+      {type: "input", id: "query", style: "bare", placeholder: "Mine", controlled: true, value: state.query, onChange: "query", onSubmit: "submit"},
+      {type: "text", text: state.query === "toggle terminal" ? "Mine: Toggle terminal" : "Mine: no match"}
+    ]
+  }));
+}
+export async function update({state, event}) {
+  if (event.kind !== "ui") return {};
+  if (event.handler === "query") {
+    if (event.value.endsWith("!")) throw new Error("broken on purpose");
+    return {state: {query: event.value}};
+  }
+  if (event.handler === "submit" && state.query === "toggle terminal") {
+    await glitched.commands.run("terminal.toggle", {palette: event.place.key});
+  }
+  return {};
+}
+`
+
+// With the built-in off, a palette of yours that fails mid-search keeps
+// its last drawing, so Enter runs what it showed, not what Glitched's
+// own palette would have chosen.
+func TestAPaletteThatFailsMidSearchKeepsWhatItShowed(t *testing.T) {
+	h := start(t, inboxDir(t))
+	th := h.thread("SIP re-INVITE handling")
+	h.a.select_(th)
+	if err := h.a.plugins.SetEnabled("palette", false); err != nil {
+		t.Fatal(err)
+	}
+	h.a.pluginsChanged(nil)
+	writeOwnPlugin(t, h.a, "mine", strings.Replace(paletteManifest, `"threads:read"]`, `"threads:read", "commands"]`, 1), queryPalette)
+	for _, g := range []string{"ui.replace", "threads:read", "commands"} {
+		h.a.plugins.SetGranted("mine", g, true)
+	}
+	step := func() {
+		settlePlugins(t, h.a, h.tt, h.p)
+		h.tt.Advance(time.Second)
+		settlePlugins(t, h.a, h.tt, h.p)
+	}
+	h.a.openCommandPalette()
+	step()
+	h.tt.Type("toggle terminal")
+	step()
+	if !h.tt.HasText("Mine: Toggle terminal") {
+		t.Fatalf("yours doesn't show its result: %q", h.tt.Texts())
+	}
+	h.tt.Type("!")
+	step()
+	if h.a.plugins.Failed("mine") == nil || !h.tt.HasText("Mine: Toggle terminal") {
+		t.Fatalf("yours that failed mid-search didn't keep what it showed: %v %q", h.a.plugins.Failed("mine"), h.tt.Texts())
+	}
+	h.tt.Key(0, ui.KeyEnter)
+	step()
+	if h.a.selected != th.id() || !h.a.showTerminal {
+		t.Errorf("Enter after the failure left %s selected and the terminal shown %v, want %s and true", h.a.selected, h.a.showTerminal, th.id())
+	}
+}
+
 // The pointer chooses the row it moves onto, never one that comes under
 // it at rest: there the arrows' choice holds. Up and Down go round from
 // one end to the other.

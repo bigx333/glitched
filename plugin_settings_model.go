@@ -174,7 +174,7 @@ func (a *app) partState(p plugins.Plugin, name string) partState {
 	// of the user's ahead of it, or nothing.
 	instead := "."
 	switch drawer, drawn := a.partDrawer(name); {
-	case !drawn && comp.Native:
+	case !drawn && (comp.Native || comp.Own):
 		instead = ", so Glitched draws its own."
 	case !drawn:
 		instead = ", and nothing draws it."
@@ -321,7 +321,7 @@ func (a *app) partDrawer(name string) (plugins.Plugin, bool) {
 			}
 		}
 	} else {
-		if !plugins.ComponentNamed(name).Native {
+		if comp := plugins.ComponentNamed(name); !comp.Native && !comp.Own {
 			id = rs[0].Plugin
 		}
 		for _, r := range rs {
