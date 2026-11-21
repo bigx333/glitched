@@ -77,6 +77,38 @@ func TestTheAgentsPanelIsABuiltInPluginYoursReplaces(t *testing.T) {
 	}
 }
 
+// With the built-in off and yours failing, Glitched draws its own rows,
+// and Settings says so beside the failure.
+func TestAFailedAgentsPanelSaysGlitchedDrawsItsOwn(t *testing.T) {
+	h, _ := agentsTree(t, 2)
+	if err := h.a.plugins.SetEnabled("agents", false); err != nil {
+		t.Fatal(err)
+	}
+	h.a.pluginsChanged(nil)
+	writeOwnPlugin(t, h.a, "mine", agentsManifest, mineModule)
+	h.a.plugins.SetGranted("mine", "ui.replace", true)
+	h.a.plugins.SetGranted("mine", "threads:read", true)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Advance(time.Second)
+	if _, ok := h.tt.Find("Mine"); !ok {
+		t.Fatalf("yours doesn't draw the rows: %q", h.tt.Texts())
+	}
+	writeOwnPlugin(t, h.a, "mine", agentsManifest, brokenModule)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Advance(time.Second)
+	_, mine := h.tt.Find("Mine")
+	if _, ok := h.tt.Find("Child 1"); !ok || mine || h.a.plugins.Failed("mine") == nil {
+		t.Fatalf("yours that throws didn't leave Glitched's own rows: %v %q", h.a.plugins.Failed("mine"), h.tt.Texts())
+	}
+	p := installed(h.a, "mine")
+	h.a.pluginsOpen[p.Folder] = true
+	h.a.router.Push("/settings/plugins")
+	h.tt.Advance(time.Second)
+	if why := h.a.partState(p, "agents.body").why; !h.tt.HasText(why) || !strings.HasPrefix(why, "It failed, so Glitched draws its own:") {
+		t.Errorf("Settings says %q of the failed agents panel", why)
+	}
+}
+
 // The built-in's rows do what the panel's own did: past five, More shows
 // every one; pointed at, a row's age gives way to … for its menu; a click
 // shows its thread.
