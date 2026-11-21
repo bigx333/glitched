@@ -342,6 +342,10 @@ export async function command({ id }) {
 
 	h.a.router.Push("/plugins/modal/home")
 	settle()
+	// The page's view comes on a session of its own, which the frame
+	// opens and settling the plugins doesn't wait for: ⌘K would find
+	// Loading… under it.
+	h.until("the page's dialog", func() bool { return h.tt.HasText("Plugin modal") })
 	h.tt.Advance(time.Second)
 	h.tt.Key(ui.Cmd, ui.KeyK)
 	h.tt.Frame()
