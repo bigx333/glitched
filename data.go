@@ -530,32 +530,76 @@ func addFiles(files []fileChange, at map[string]int, es []entry) []fileChange {
 // gather groups every env's threads into projects: this machine's first,
 // then each server's, each machine's by name.
 func (a *app) gather() []*project {
+	byKey := map[envProject]*project{}
+	for _, t := range a.recent() {
+		if deleting(t) {
+			continue
+		}
+		k := envProject{t.env, keyOf(t.env, t.View.Workspace)}
+		p := byKey[k]
+		if p == nil {
+			p = &project{key: k.key, env: t.env}
+			byKey[k] = p
+		}
+		p.threads = append(p.threads, t)
+	}
 	var all []*project
 	for _, e := range a.backend.Envs() {
-		byKey := map[projectKey]*project{}
 		var ps []*project
-		for _, th := range e.Threads {
-			if deleting(thread{e, th}) {
-				continue
-			}
-			k := keyOf(e, th.View.Workspace)
-			p := byKey[k]
-			if p == nil {
-				p = &project{key: k, env: e}
-				byKey[k] = p
+		for k, p := range byKey {
+			if k.env == e {
 				ps = append(ps, p)
 			}
-			p.threads = append(p.threads, thread{e, th})
 		}
 		slices.SortFunc(ps, func(x, y *project) int {
 			return cmp.Or(cmp.Compare(x.name(), y.name()), cmp.Compare(x.key.workspace, y.key.workspace))
 		})
-		for _, p := range ps {
-			slices.SortFunc(p.threads, newestFirst)
-		}
 		all = append(all, ps...)
 	}
 	return all
+}
+
+// envProject is a project of one env's.
+type envProject struct {
+	env *client.Env
+	key projectKey
+}
+
+// recentThreads are every env's threads, the most recently updated first,
+// as recent last sorted them.
+type recentThreads struct {
+	threads []thread
+	// posts, envs and membership are what they were sorted after: the
+	// changes posted to the window, the envs, and the threads that came
+	// and went in them.
+	posts      uint64
+	envs       []*client.Env
+	membership uint64
+}
+
+// recent is every env's threads, the most recently updated first. They are
+// sorted again only after a change the manager posts, the only way a
+// thread's recency changes, or as threads or envs come or go, not each
+// frame: with 10,000 threads, sorting them took most of a frame.
+func (a *app) recent() []thread {
+	envs := a.backend.Envs()
+	var membership uint64
+	for _, e := range envs {
+		membership += e.Membership
+	}
+	r := &a.recentThreads
+	if r.threads != nil && r.posts == a.posts && r.membership == membership && slices.Equal(r.envs, envs) {
+		return r.threads
+	}
+	var ts []thread
+	for _, e := range envs {
+		for _, th := range e.Threads {
+			ts = append(ts, thread{e, th})
+		}
+	}
+	slices.SortFunc(ts, newestFirst)
+	*r = recentThreads{ts, a.posts, slices.Clone(envs), membership}
+	return ts
 }
 
 func newestFirst(x, y thread) int {

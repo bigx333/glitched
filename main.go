@@ -458,6 +458,8 @@ type app struct {
 	// which they are derived again.
 	rows  map[api.ID]*rowsCache
 	posts uint64
+	// recentThreads are the threads, the most recently updated first.
+	recentThreads recentThreads
 	// The diff panel: each file's viewer, by thread and path, and their
 	// layout.
 	diffs      map[diffKey]*fileDiff

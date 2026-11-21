@@ -54,6 +54,7 @@ func (m *Manager) Create(e *Env, workspace, title string, model api.ModelRef, ac
 	}
 	id := api.NewID()
 	e.Threads[id] = &Thread{View: api.Thread{ID: id, Workspace: workspace, Title: title, Model: model, Access: access, UpdatedAt: time.Now()}}
+	e.Membership++
 	m.submit(e, id, api.ThreadCreate{Workspace: workspace, Title: title, Model: model, Access: access})
 	return id
 }
@@ -172,6 +173,7 @@ func (m *Manager) Dismiss(e *Env, thread, command api.ID) {
 	th.Pending = slices.Delete(th.Pending, i, i+1)
 	if create && !th.known {
 		delete(e.Threads, thread)
+		e.Membership++
 	}
 }
 

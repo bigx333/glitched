@@ -205,6 +205,9 @@ type Env struct {
 	Kind    Kind
 	Status  Status
 	Threads map[api.ID]*Thread
+	// Membership counts the threads that came to Threads or left it,
+	// whether here, as a thread created or dismissed, or on the engine.
+	Membership uint64
 
 	ctx     context.Context // ends when the env is removed or the manager closes
 	stop    context.CancelFunc
@@ -250,6 +253,7 @@ type sub struct{ cancel context.CancelFunc }
 
 func (m *Manager) launch(e *Env, r route) *Env {
 	e.Status, e.Threads = Connecting{}, map[api.ID]*Thread{}
+	e.Membership++
 	e.ctx, e.stop = context.WithCancel(m.ctx)
 	m.connect(e, r)
 	return e
@@ -393,6 +397,7 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 			if th.known && !live[id] {
 				th.unfollow()
 				delete(e.Threads, id)
+				e.Membership++
 			}
 		}
 		for _, v := range it.Snapshot.Threads {
@@ -452,12 +457,14 @@ func (m *Manager) view(e *Env, v api.Thread) bool {
 		if th != nil {
 			th.unfollow()
 			delete(e.Threads, v.ID)
+			e.Membership++
 		}
 		return false
 	}
 	if th == nil {
 		th = &Thread{}
 		e.Threads[v.ID] = th
+		e.Membership++
 	}
 	was, seen := th.View.LastReport, th.known
 	th.View, th.known = v, true
@@ -516,6 +523,7 @@ func (m *Manager) down(e *Env, s Status) {
 	}
 	if _, dup := s.(Duplicate); dup {
 		clear(e.Threads)
+		e.Membership++
 		e.log = api.ID{}
 	}
 }

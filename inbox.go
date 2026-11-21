@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -80,20 +79,21 @@ type inboxItem struct {
 // itemsIn returns the threads of a category, of the projects filtered to,
 // every machine's together, the most recently updated first.
 func (a *app) itemsIn(cat category) []inboxItem {
-	var items []inboxItem
+	shown := map[envProject]*project{}
 	for _, p := range a.projects {
-		if len(a.projectFilter) > 0 && !a.projectFilter[p.key] {
-			continue
-		}
-		for _, t := range p.threads {
-			// A child shows under its parent, but for one lifted into
-			// Working.
-			if a.shownIn(t) == cat && (!a.nested(t) || a.lifted(t)) {
-				items = append(items, inboxItem{t, p})
-			}
+		if len(a.projectFilter) == 0 || a.projectFilter[p.key] {
+			shown[envProject{p.env, p.key}] = p
 		}
 	}
-	slices.SortFunc(items, func(x, y inboxItem) int { return newestFirst(x.t, y.t) })
+	var items []inboxItem
+	for _, t := range a.recent() {
+		p := shown[envProject{t.env, keyOf(t.env, t.View.Workspace)}]
+		// A child shows under its parent, but for one lifted into
+		// Working.
+		if p != nil && !deleting(t) && a.shownIn(t) == cat && (!a.nested(t) || a.lifted(t)) {
+			items = append(items, inboxItem{t, p})
+		}
+	}
 	return items
 }
 
