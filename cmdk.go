@@ -34,6 +34,18 @@ func (a *app) openCommandPalette() {
 	a.cmdkOpens++
 }
 
+// paletteKey is the key of the palette's opening now, its copy of the
+// palette component.
+func (a *app) paletteKey() string { return "palette:" + strconv.Itoa(a.cmdkOpens) }
+
+// closePalette closes the palette's opening of that key, "" for any: what
+// was chosen in one closed since leaves the next be.
+func (a *app) closePalette(key string) {
+	if key == "" || key == a.paletteKey() {
+		a.cmdkOpen = false
+	}
+}
+
 // id names the project in an action's id without its workspace's path,
 // which only threads:read reads.
 func (k projectKey) id() string {
@@ -169,7 +181,7 @@ func (a *app) commandPalette(c *ui.Context) {
 		a.frosted(c, panel).Shadow(0, 24, 64, 0, ui.RGBA(0, 0, 0, 0.4))
 		ctx := a.paletteContext()
 		a.pluginComponent(c, "palette", nil, componentCopy{
-			key:     "palette:" + strconv.Itoa(a.cmdkOpens),
+			key:     a.paletteKey(),
 			box:     func() ui.Element { return ui.Column(c) },
 			context: func(plugins.ThreadRecord) any { return ctx },
 			native:  func() { a.nativePalette(c) },

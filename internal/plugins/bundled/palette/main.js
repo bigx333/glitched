@@ -18,14 +18,20 @@ function opening(state, key, ctx) {
   return state.key === key ? state : { key, query: ctx.query, chosen: "" };
 }
 
+// lower lowers each letter on its own, as Glitched does: a final sigma is
+// a sigma.
+function lower(s) {
+  return Array.from(s, (c) => c.toLowerCase()).join("");
+}
+
 function matches(s, q) {
-  return q === "" || s.toLowerCase().includes(q.toLowerCase());
+  return q === "" || lower(s).includes(lower(q));
 }
 
 // alsoMatches is whether each word of the query is in the action's label
 // or is one of its unshown words, whole.
 function alsoMatches(action, query) {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const words = lower(query).split(/\s+/).filter(Boolean);
   if (!action.also || words.length === 0) return false;
   const also = action.also.split(/\s+/).filter(Boolean);
   return words.every((w) => also.includes(w) || matches(action.label, w));
@@ -82,16 +88,11 @@ function hint(key, what) {
   };
 }
 
-// choice is the result chosen: the one the user chose while the query
-// finds it, else the first.
-function choice(cmds, s) {
-  return cmds.some((cmd) => cmd.key === s.chosen) ? s.chosen : (cmds[0]?.key ?? "");
-}
-
 function palette(ctx, s) {
   const cmds = found(ctx, s.query);
   const { items, height } = results(cmds);
-  const chosen = choice(cmds, s);
+  // The one the user chose while the query finds it, else the first.
+  const chosen = cmds.some((cmd) => cmd.key === s.chosen) ? s.chosen : (cmds[0]?.key ?? "");
   return {
     type: "column",
     children: [
@@ -201,19 +202,20 @@ export async function update({ state, event }) {
     case "chose":
       return { state: { ...s, chosen: event.value } };
     case "submit": {
-      // The choice as this state has it, every key typed before Enter
-      // taken: the list on screen may not have caught up with them yet.
-      const key = choice(found(event.place.context, s.query), s);
+      // Glitched submits a key pressed once this took every key typed
+      // before it, so the key is of the results the user meant. Each
+      // closes this opening of the palette alone, not one opened since.
+      const key = event.value;
       const withDiff = (event.modifiers ?? []).includes("cmd");
       if (key.startsWith("t:")) {
-        await glitched.palette.close();
+        await glitched.palette.close(event.place.key);
         await glitched.threads.open(key.slice(2));
         if (withDiff) {
           await glitched.panels.toggle("diff", true);
           await glitched.panels.toggle("preview", false);
         }
       } else if (key.startsWith("a:") && !withDiff) {
-        await glitched.commands.run(key.slice(2));
+        await glitched.commands.run(key.slice(2), event.place.key);
       }
       return {};
     }

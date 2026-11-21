@@ -265,7 +265,7 @@ func (s *Session) drawRows(gen int, state json.RawMessage, context any, want map
 			}
 		}
 	}
-	apply := func() {
+	apply := sync.OnceFunc(func() {
 		if s.closed || !s.current(gen) {
 			return
 		}
@@ -291,7 +291,7 @@ func (s *Session) drawRows(gen int, state json.RawMessage, context any, want map
 			}
 			l.keep()
 		}
-	}
+	})
 	s.mu.Lock()
 	if s.rows.first != nil {
 		select {
@@ -322,17 +322,17 @@ func (s *Session) WaitRows(at RowAt, items []widget.ListItem, deadline time.Time
 		_, asked := l.asked[key]
 		return !drawn && !asked
 	}
-	var want []string
+	var want []widget.ListItem
 	for _, it := range items {
 		if fresh(s.rows.lists[k], it.Key) {
-			want = append(want, it.Key)
-			s.Row(at, it)
+			want = append(want, it)
 		}
 	}
-	l := s.rows.lists[k]
-	if len(want) == 0 || l == nil {
+	if len(want) == 0 {
 		return
 	}
+	// Listening before the rows are asked for: the worker may draw them
+	// before this goes on.
 	first := make(chan func(), 8)
 	s.mu.Lock()
 	if s.done || s.broken {
@@ -346,6 +346,13 @@ func (s *Session) WaitRows(at RowAt, items []widget.ListItem, deadline time.Time
 		s.rows.first = nil
 		s.mu.Unlock()
 	}()
+	for _, it := range want {
+		s.Row(at, it)
+	}
+	l := s.rows.lists[k]
+	if l == nil {
+		return
+	}
 	wait := time.NewTimer(time.Until(deadline))
 	defer wait.Stop()
 	poll := time.NewTicker(time.Millisecond)
@@ -355,12 +362,15 @@ func (s *Session) WaitRows(at RowAt, items []widget.ListItem, deadline time.Time
 		case <-poll.C:
 			// A call of the plugin's into the app waits on this thread,
 			// which waits on the plugin.
-			if s.h.awaitsApp(s.plugin) {
+			s.mu.Lock()
+			done := s.done
+			s.mu.Unlock()
+			if done || s.h.awaitsApp(s.plugin) {
 				return
 			}
 		case apply := <-first:
 			apply()
-			if s.Err != nil || s.rows.lists[k] != l || !slices.ContainsFunc(want, func(key string) bool { _, ok := l.drawn[key]; return !ok }) {
+			if s.Err != nil || s.rows.lists[k] != l || !slices.ContainsFunc(want, func(it widget.ListItem) bool { _, ok := l.drawn[it.Key]; return !ok }) {
 				return
 			}
 		case <-wait.C:

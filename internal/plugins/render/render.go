@@ -97,6 +97,9 @@ type Controls struct {
 	// passes counts the view's builds: a list remembers the one it was
 	// last drawn in, and an input moves only a list drawn.
 	passes int
+	// sent is the number of the last event sent, and processed of the last
+	// the plugin took before it drew the view shown.
+	sent, processed int
 }
 
 type control struct {
@@ -128,7 +131,7 @@ func (cs *Controls) Sync(v *widget.View, rev, processed int) {
 	if v == nil || rev == cs.rev {
 		return
 	}
-	cs.rev = rev
+	cs.rev, cs.processed = rev, processed
 	for id, seq := range cs.pending {
 		if seq <= processed {
 			delete(cs.pending, id)
@@ -291,6 +294,7 @@ func (r *renderer) fire(n *widget.Node, h *widget.Handler, typ string, value any
 		return
 	}
 	seq := r.dispatch(plugins.UIEvent{Type: typ, Handler: h.Name, Node: n.ID, Value: value, Payload: h.Payload, Row: r.row, Modifiers: r.mods}, r.cs.Values())
+	r.cs.sent = max(r.cs.sent, seq)
 	if r.row != nil {
 		return // a row's widgets keep no values: its ids are its own
 	}

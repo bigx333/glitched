@@ -328,7 +328,8 @@ func TestProjectsOfOneNameAreToldApart(t *testing.T) {
 	h.tt.Frame()
 	h.tt.Type("remove project")
 	var got []string
-	for _, cmd := range h.a.commands() {
+	shown, _ := paletteShows(t, h)
+	for _, cmd := range shown {
 		got = append(got, cmd.label)
 	}
 	if want := []string{"Remove project /a/web…", "Remove project /b/web…"}; !slices.Equal(got, want) {
