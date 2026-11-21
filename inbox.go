@@ -360,7 +360,7 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 			ui.Text(c, ago(t.View.UpdatedAt, a.now)).FontSize(11).TextColor(dim)
 		}
 	}).Clicked() {
-		a.select_(t)
+		a.choose(t)
 	}
 }
 

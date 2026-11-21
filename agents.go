@@ -266,7 +266,7 @@ func (a *app) agentRow(c *ui.Context, n node, s float32) {
 		a.iconButton(c, "menu", icDots, "Thread actions", false).Padding(3).
 			Menu(func(m *ui.Menu) { a.threadMenu(c, m, k, a.categoryOf(k)) })
 	}).Clicked() {
-		a.select_(k)
+		a.choose(k)
 	}
 }
 

@@ -532,8 +532,9 @@ type app struct {
 	agentsFor                     api.ID
 	// shownAll are the texts of requests' cards shown all, not cut.
 	shownAll map[cardText]bool
-	// draftArea is the full composer's text area.
-	draftArea ui.Handle
+	// draftArea is the full composer's text area, and draftLine the
+	// compact composer's line.
+	draftArea, draftLine ui.Handle
 	// steers are the messages sent from the composer, until each lands
 	// or fails, by command.
 	steers map[api.ID]steer
