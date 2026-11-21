@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/plugins"
+	"glitched/internal/plugins/widget"
 )
 
 type command struct {
@@ -184,7 +185,7 @@ func (a *app) commandPalette(c *ui.Context) {
 			key:     a.paletteKey(),
 			box:     func() ui.Element { return ui.Column(c) },
 			context: func(plugins.ThreadRecord) any { return ctx },
-			native:  func() { a.nativePalette(c) },
+			native:  func(*widget.Node) { a.nativePalette(c) },
 		})
 	})
 }
