@@ -54,12 +54,18 @@ type sidebarRow struct {
 	Renaming bool   `json:"renaming,omitempty"`
 	More     int    `json:"more,omitempty"`
 	Parent   string `json:"parent,omitempty"`
+	Full     bool   `json:"full,omitempty"`
 }
 
 // sidebarPage is how many threads a section, or a thread's children,
 // shows till the user asks for more: past it, a row says how many more
 // there are and shows the next as many.
 const sidebarPage = 100
+
+// sidebarSpare is the room a copy's list keeps, past its last thread, for
+// the rows that say how many more there are: one for each section, and
+// each thread's children, it is in the middle of.
+const sidebarSpare = 2 * (maxDepth + 2)
 
 func (a *app) sidebarRow(t thread, depth int) sidebarRow {
 	return sidebarRow{Thread: t.id().String(), Title: title(t), Depth: depth, Status: statusNames[a.statusOf(t)], Kids: len(a.shown(t)) > 0, Renaming: a.renaming == t.id()}
@@ -87,6 +93,14 @@ func (a *app) sidebarSections(cats ...category) []sidebarSection {
 		}
 	}
 	var out []sidebarSection
+	// However many pages the user asked for, the list holds no more items
+	// than a list can: each section's header and the row under it, the
+	// threads, and the rows that say how many more there are.
+	left := widget.MaxListItems - 2*len(cats)
+	more := func(n int, parent string, depth int) sidebarRow {
+		left--
+		return sidebarRow{More: n, Parent: parent, Depth: depth, Full: left < sidebarSpare}
+	}
 	for _, cat := range cats {
 		items := a.itemsIn(cat)
 		a.sectionCounts[cat] = len(items)
@@ -102,20 +116,18 @@ func (a *app) sidebarSections(cats ...category) []sidebarSection {
 					return
 				}
 				ks := a.kids[t.id()]
-				more := a.paged(t.id().String(), len(ks), func(i int) api.ID { return ks[i].id() }, func(i int) {
+				if n := a.paged(t.id().String(), len(ks), &left, func(i int) api.ID { return ks[i].id() }, func(i int) {
 					sec.Rows = append(sec.Rows, a.sidebarRow(ks[i], depth))
 					kids(ks[i], depth+1)
-				})
-				if more > 0 {
-					sec.Rows = append(sec.Rows, sidebarRow{More: more, Parent: t.id().String(), Depth: depth})
+				}); n > 0 {
+					sec.Rows = append(sec.Rows, more(n, t.id().String(), depth))
 				}
 			}
-			more := a.paged(sec.ID, len(items), func(i int) api.ID { return items[i].t.id() }, func(i int) {
+			if n := a.paged(sec.ID, len(items), &left, func(i int) api.ID { return items[i].t.id() }, func(i int) {
 				sec.Rows = append(sec.Rows, a.sidebarRow(items[i].t, 0))
 				kids(items[i].t, 1)
-			})
-			if more > 0 {
-				sec.Rows = append(sec.Rows, sidebarRow{More: more})
+			}); n > 0 {
+				sec.Rows = append(sec.Rows, more(n, "", 0))
 			}
 		}
 		out = append(out, sec)
@@ -125,16 +137,18 @@ func (a *app) sidebarSections(cats ...category) []sidebarSection {
 
 // paged adds those of n threads the pages of key show, in order: as many
 // pages as the user asked for, then the threads kept wherever they sort,
-// a page of them at most, and the shown thread and its parents always.
-// It returns how many more there are.
-func (a *app) paged(key string, n int, id func(int) api.ID, add func(int)) (more int) {
+// a page of them at most, and the shown thread and its parents always,
+// while the list has room left. It returns how many more there are.
+func (a *app) paged(key string, n int, left *int, id func(int) api.ID, add func(int)) (more int) {
 	shown, kept := sidebarPage*max(a.sidebarPages[key], 1), 0
 	for i := range n {
-		switch k := a.sidebarKept[id(i)]; {
-		case i < shown, k && kept < sidebarPage, k && a.onSelectedPath(id(i)):
+		k := a.sidebarKept[id(i)]
+		switch {
+		case *left > sidebarSpare && (i < shown || k && kept < sidebarPage), k && *left > sidebarSpare/2 && a.onSelectedPath(id(i)):
 			if i >= shown {
 				kept++
 			}
+			*left--
 			add(i)
 		default:
 			more++

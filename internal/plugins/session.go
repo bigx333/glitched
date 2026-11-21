@@ -554,7 +554,9 @@ func (s *Session) swap(p *plugin.Plugin) {
 // OnFailure of a failure.
 func (s *Session) fail(err error) {
 	s.Err = err
-	if fn := s.h.failed.Load(); err != nil && fn != nil {
+	// A session closed may yet hear of what it posted: its plugin may be
+	// another by now, as a built-in back in a copy's place.
+	if fn := s.h.failed.Load(); err != nil && fn != nil && !s.closed {
 		s.h.mu.RLock()
 		_, builtin := s.h.builtins[s.plugin]
 		s.h.mu.RUnlock()

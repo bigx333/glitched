@@ -184,6 +184,7 @@ func (m *Manager) submit(e *Env, thread api.ID, body api.Intent) api.ID {
 	}
 	cmd := api.Command{ID: api.NewID(), Target: thread, Body: body}
 	th.Pending = append(th.Pending, Pending{Command: cmd.ID, Body: body})
+	m.edits++
 	m.send(e, th, cmd)
 	return cmd.ID
 }

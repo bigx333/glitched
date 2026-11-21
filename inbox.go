@@ -77,12 +77,12 @@ type inboxItem struct {
 }
 
 // sortedAt is what itemsIn sorted the threads after: the frame, the
-// changes posted, the threads, and the projects.
+// changes posted and those made here, the threads, and the projects.
 type sortedAt struct {
-	built, posts uint64
-	threads, n   int // n is the projects'
-	recent       *thread
-	projects     **project
+	built, posts, edits uint64
+	threads, n          int // n is the projects'
+	recent              *thread
+	projects            **project
 }
 
 // itemsIn returns the threads of a category, of the projects filtered to,
@@ -93,7 +93,7 @@ type sortedAt struct {
 // took most of a frame.
 func (a *app) itemsIn(cat category) []inboxItem {
 	recent := a.recent()
-	at := sortedAt{built: a.built, posts: a.posts, threads: len(recent), n: len(a.projects)}
+	at := sortedAt{built: a.built, posts: a.posts, edits: a.backend.Edits(), threads: len(recent), n: len(a.projects)}
 	if len(recent) > 0 {
 		at.recent = &recent[0]
 	}

@@ -30,8 +30,17 @@ function items(ctx) {
     }
     for (const r of s.rows) {
       if (r.more) {
+        // A thread's children show twice, as it does, if it's lifted into
+        // Working: the depth tells the two apart.
+        const key = (r.full ? "f:" : "m:") + (r.parent || s.id) + "#" + (r.depth || 0);
+        const height = r.depth > 0 ? CHILD : ROW;
+        if (r.full) {
+          // The list holds as many as a list can: the rest are the palette's.
+          out.push({ key, label: `${r.more} more not listed: search for them with ⌘K`, header: true, height });
+          continue;
+        }
         const n = Math.min(r.more, ctx.page);
-        out.push({ key: "m:" + (r.parent || s.id), label: `Show ${n} more, of ${r.more} not shown`, height: r.depth > 0 ? CHILD : ROW, version: String(r.more) });
+        out.push({ key, label: `Show ${n} more, of ${r.more} not shown`, height, version: String(r.more) });
         continue;
       }
       // A child lifted into Working shows there and under its line.
@@ -116,8 +125,7 @@ function row(ctx, r) {
 // children; its item names it to assistive tools with how many aren't
 // shown, and choosing it, by a click or the keys, shows them.
 function more(ctx, key, it) {
-  let depth = 0;
-  for (const s of ctx.sections) for (const r of s.rows) if (r.more && (r.parent || s.id) === key) depth = r.depth || 0;
+  const depth = Number(key.split("#")[1]);
   const n = Math.min(Number(it.version), ctx.page);
   return {
     type: "row",
@@ -129,7 +137,7 @@ function more(ctx, key, it) {
 
 export async function update({ event }) {
   if (event.kind === "ui" && event.handler === "chose" && event.value.startsWith("m:")) {
-    await glitched.sidebar.more(event.value.slice(2));
+    await glitched.sidebar.more(event.value.slice(2).split("#")[0]);
   }
   return {};
 }
@@ -144,7 +152,7 @@ export function rows({ keys, place }) {
     const it = byKey.get(key);
     if (!it) return null;
     if (key.startsWith("h:")) return header(ctx, key, it.height);
-    if (key.startsWith("e:")) {
+    if (key.startsWith("e:") || key.startsWith("f:")) {
       return { type: "text", text: it.label, fontSize: 12, color: "$text.faint", padding: [6, 10] };
     }
     if (key.startsWith("m:")) return more(ctx, key.slice(2), it);
