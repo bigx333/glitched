@@ -739,28 +739,18 @@ func failed(t thread) bool {
 
 // select_ shows the thread in the chat, read.
 func (a *app) select_(t thread) {
-	a.selected, a.dockJump = t.id(), false
+	a.selected, a.dockJump, a.chosen, a.asked = t.id(), false, api.ID{}, nil
 	a.follow()
 	if a.router.Path() != "/" {
 		a.router.Push("/")
 	}
 }
 
-// choose shows the thread a person chose, its composer, compact or full,
-// taking the focus. Shown already, it's the editor there now: on its way
-// between the two, the full one, which the compact line isn't yet.
+// choose shows the thread a person chose, its composer taking the focus
+// (composerInput).
 func (a *app) choose(t thread) {
-	line := a.composerSeen[t.id()] && a.composerCompact(t)
-	if t.id() == a.selected {
-		line = a.composerK == 0 && a.composerCompact(t)
-	}
 	a.select_(t)
-	area, other := &a.draftArea, &a.draftLine
-	if line {
-		area, other = other, area
-	}
-	other.CancelFocus()
-	area.Focus()
+	a.chosen = t.id()
 }
 
 // opened is the thread whose transcript the manager follows.

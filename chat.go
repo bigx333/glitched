@@ -986,6 +986,25 @@ func (a *app) composerInput(c *ui.Context, t thread, rs rows, fullW, frameW floa
 	compact := a.composerCompact(t)
 	k := a.composerK
 	morphing := k > 0 && k < 1
+	// Chosen, the thread's composer takes the focus in the editor this
+	// build makes, the line only once the card is compact: a request for
+	// a control not built would wait, and take the focus later from
+	// whatever had it by then. Folding, the focus goes on to the line
+	// only from the area, still focused, rather than from something
+	// clicked since.
+	if a.chosen != (api.ID{}) && a.chosen == t.id() {
+		want := &a.draftArea
+		if k == 0 {
+			want = &a.draftLine
+		}
+		if a.asked == nil || a.asked != want && a.asked.Focused(c) {
+			want.Focus()
+			a.asked = want
+		}
+		if k == 0 && compact || k == 1 && !compact {
+			a.chosen, a.asked = api.ID{}, nil
+		}
+	}
 	lerp := func(from, to float32) float32 { return from + (to-from)*k }
 	compactH, fullH := a.cardHeights(c)
 	d := a.dockK
