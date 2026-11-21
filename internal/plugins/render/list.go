@@ -3,6 +3,7 @@ package render
 import (
 	"math"
 	"slices"
+	"sync"
 
 	"github.com/egoist/mygo/ui"
 
@@ -13,7 +14,7 @@ import (
 // listView is what a list keeps across frames: its place among its rows,
 // and, for the view's items, where each key is and how tall they are.
 type listView struct {
-	state ui.ListState
+	state *ui.ListState
 	items []widget.ListItem
 	index map[string]int
 	tall  float32
@@ -43,6 +44,47 @@ type press struct {
 	choose string
 }
 
+// spare are the states of lists gone, to give lists to come. A list's
+// state binds a handle in the window, which MyGo keeps till the window
+// closes: a list that comes and goes, as a palette's or the sidebar's,
+// takes one gone rather than binding another each time.
+var spare struct {
+	sync.Mutex
+	lists []*ui.ListState
+}
+
+func spareList() *ui.ListState {
+	spare.Lock()
+	defer spare.Unlock()
+	n := len(spare.lists)
+	if n == 0 {
+		return &ui.ListState{}
+	}
+	s := spare.lists[n-1]
+	spare.lists = spare.lists[:n-1]
+	*s = ui.ListState{Handle: s.Handle}
+	return s
+}
+
+// release gives the control's list state, if it has one, to a list to
+// come.
+func (ctl *control) release() {
+	if ctl.list == nil {
+		return
+	}
+	spare.Lock()
+	spare.lists = append(spare.lists, ctl.list.state)
+	spare.Unlock()
+	ctl.list = nil
+}
+
+// Release gives the lists of a view no longer drawn to lists to come.
+func (cs *Controls) Release() {
+	for _, ctl := range cs.m {
+		ctl.release()
+	}
+}
+
 // toEnd is a move as far as the list goes, however long it is by then.
 const toEnd = 1 << 30
 
@@ -50,7 +92,7 @@ const toEnd = 1 << 30
 func (ctl *control) listOf(n *widget.Node) *listView {
 	lv := ctl.list
 	if lv == nil {
-		lv = &listView{}
+		lv = &listView{state: spareList()}
 		ctl.list = lv
 	}
 	if len(lv.items) == len(n.Items) && (len(n.Items) == 0 || &lv.items[0] == &n.Items[0]) {
@@ -85,10 +127,10 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 		lv.pressed = nil
 	}
 	lv.drawn = r.cs.passes
-	ls := &lv.state
+	ls := lv.state
 	ls.Key = func(i int) any { return n.Items[i].Key }
 	ls.Label = func(i int) string { return n.Items[i].Label }
-	e := ui.List(kc, ls, len(n.Items)).Label(n.Label).Focusable().Gap(n.Gap)
+	e := ui.List(kc, ls, len(n.Items)).Label(n.Label).Gap(n.Gap)
 	if n.ChooseOnHover {
 		x, y, in := e.PointerPosition()
 		at := e.Bounds()
@@ -103,12 +145,15 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 		e.Height(min(lv.tall, n.Height))
 	}
 	r.pressed(n, ctl)
-	e.OnShortcut(0, ui.KeyDown, func() { r.press(n, ctl, press{d: 1}) })
-	e.OnShortcut(0, ui.KeyUp, func() { r.press(n, ctl, press{d: -1}) })
-	e.OnShortcut(0, ui.KeyHome, func() { r.press(n, ctl, press{d: -toEnd}) })
-	e.OnShortcut(0, ui.KeyEnd, func() { r.press(n, ctl, press{d: toEnd}) })
-	e.OnShortcut(0, ui.KeyEnter, func() { r.press(n, ctl, press{submit: true, mods: heldKeys(kc)}) })
-	e.OnShortcut(ui.Cmd, ui.KeyEnter, func() { r.press(n, ctl, press{submit: true, mods: heldKeys(kc)}) })
+	if !n.NoKeys {
+		e.Focusable()
+		e.OnShortcut(0, ui.KeyDown, func() { r.press(n, ctl, press{d: 1}) })
+		e.OnShortcut(0, ui.KeyUp, func() { r.press(n, ctl, press{d: -1}) })
+		e.OnShortcut(0, ui.KeyHome, func() { r.press(n, ctl, press{d: -toEnd}) })
+		e.OnShortcut(0, ui.KeyEnd, func() { r.press(n, ctl, press{d: toEnd}) })
+		e.OnShortcut(0, ui.KeyEnter, func() { r.press(n, ctl, press{submit: true, mods: heldKeys(kc)}) })
+		e.OnShortcut(ui.Cmd, ui.KeyEnter, func() { r.press(n, ctl, press{submit: true, mods: heldKeys(kc)}) })
+	}
 	if r.st.WaitRows != nil && len(n.Items) > 0 {
 		first, _ := ls.Visible()
 		first = min(max(first, 0), len(n.Items)-1)
@@ -156,7 +201,10 @@ func (r *renderer) listRow(c *ui.Context, n *widget.Node, ctl *control, i int) {
 	} else {
 		b = ui.ButtonBase(c.Key("row")).AlignItems(ui.Center).Radius(7).Cursor(ui.CursorPointer)
 	}
-	b.Height(h).Padding(0).Label(it.Label)
+	b.Height(h).Padding(0)
+	if it.Label != "" {
+		b.Label(it.Label)
+	}
 	in.hovered = held(b) || b.Hovered()
 	// The pointer moving over a row chooses it; resting there doesn't,
 	// though the rows scroll or move under it, so the keys and the

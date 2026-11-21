@@ -121,11 +121,13 @@ func TestARowsNativesSitOnlyInARow(t *testing.T) {
 		}
 	}
 	bad := map[string]string{
-		`{"body": {"type": "native", "name": "thread.tile"}}`:                                                                              "thread.tile draws only in a list's row",
-		`{"body": {"type": "column", "children": [{"type": "native", "name": "thread.row.actions"}]}}`:                                     "thread.row.actions draws only in a list's row",
-		`{"body": {"type": "text", "text": "x", "chooseOnHover": true}}`:                                                                   "a text has no items, rowHeight, input, submitOnClick, chooseOnHover or wrapAround",
-		`{"body": {"type": "column", "wrapAround": true}}`:                                                                                 "chooseOnHover or wrapAround",
-		`{"body": {"type": "list", "id": "l", "label": "L", "grow": true, "items": [{"key": "a", "label": "A"}], "chooseOnHover": "yes"}}`: "cannot unmarshal",
+		`{"body": {"type": "native", "name": "thread.tile"}}`:                                          "thread.tile draws only in a list's row",
+		`{"body": {"type": "column", "children": [{"type": "native", "name": "thread.row.actions"}]}}`: "thread.row.actions draws only in a list's row",
+		`{"body": {"type": "text", "text": "x", "chooseOnHover": true}}`:                               "a text has no items, rowHeight, input, submitOnClick, chooseOnHover, wrapAround or noKeys",
+		`{"body": {"type": "column", "wrapAround": true}}`:                                             "wrapAround or noKeys",
+		`{"body": {"type": "column", "noKeys": true}}`:                                                 "wrapAround or noKeys",
+		`{"body": {"type": "column", "children": [{"type": "input", "id": "q", "label": "Q"}, {"type": "list", "id": "l", "label": "L", "height": 100, "input": "q", "noKeys": true}]}}`: "a list with noKeys has no input",
+		`{"body": {"type": "list", "id": "l", "label": "L", "grow": true, "items": [{"key": "a", "label": "A"}], "chooseOnHover": "yes"}}`:                                               "cannot unmarshal",
 	}
 	for view, want := range bad {
 		if _, err := Decode([]byte(view)); err == nil || !strings.Contains(err.Error(), want) {

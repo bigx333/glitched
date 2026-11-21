@@ -1,0 +1,13 @@
+{
+  "id": "sidebar",
+  "name": "Sidebar",
+  "description": "The sidebar's threads: the inbox, and Working, Snoozed and Settled under it, each a header over its threads' rows and their children's. Built into Glitched; make a copy in Settings › Plugins to change it.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "ui.replace", "threads:read"],
+  "glitched": {
+    "places": [{ "id": "body", "at": "sidebar.body", "replaces": true }]
+  }
+}

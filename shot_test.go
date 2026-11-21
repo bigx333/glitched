@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -277,6 +278,48 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		h = start(t, dir)
 		h.a.select_(h.thread("Sort sidebar threads by recent activity"))
 		h.until("the turn mid-edit", func() bool { return h.tt.HasText("Edit apps/web/src/components/Sidebar.tsx") })
+	case "sidebar":
+		// Threads in every section: a tree with its children open, one
+		// snoozed, one settled, one unread, and the shown one.
+		dir := tempDir(t)
+		d := engine(t, daemon.Config{Dir: dir}, fake.New([]provider.Event{provider.TextDelta{Text: "Done."}}))
+		top := seed(t, d, "/work/t3code", "Ship the sidebar sort", "Ship it.")
+		kid := seedChild(t, d, top, "Write the tests", "Write them.")
+		seedChild(t, d, kid, "Run them", "Run them.")
+		seed(t, d, "/work/mygo", "Markdown table column alignment", "Align them.")
+		seed(t, d, "/work/agent-phone", "SIP re-INVITE handling", "Handle it.")
+		seed(t, d, "/work/mygo", "Snoozed until tomorrow", "Later.")
+		seed(t, d, "/work/agent-phone", "Settled long ago", "Done.")
+		seed(t, d, "/work/t3code", "Read me", "Read.")
+		many, _ := strconv.Atoi(os.Getenv("MANY"))
+		for i := range many {
+			seed(t, d, "/work/mygo", fmt.Sprintf("Settled %d", i+1))
+		}
+		h = start(t, dir)
+		h.tt.Advance(time.Second)
+		snoozed, settled := h.thread("Snoozed until tomorrow"), h.thread("Settled long ago")
+		h.a.backend.SetDisposition(snoozed.env, snoozed.id(), api.Disposition{State: api.Snoozed, Until: morning(h.a.now, 1)})
+		h.a.backend.SetDisposition(settled.env, settled.id(), api.Disposition{State: api.Settled})
+		for i := range many {
+			if x := h.thread(fmt.Sprintf("Settled %d", i+1)); os.Getenv("MANYIN") == "" {
+				h.a.backend.SetDisposition(x.env, x.id(), api.Disposition{State: api.Settled})
+			}
+		}
+		root := h.thread("Ship the sidebar sort")
+		h.a.childrenOpen[root.id()] = true
+		h.a.childrenOpen[h.thread("Write the tests").id()] = true
+		h.a.choose(h.thread("Markdown table column alignment"))
+		for _, s := range []string{"Markdown table column alignment", "SIP re-INVITE handling", "Ship the sidebar sort", "Write the tests", "Run them", "Snoozed until tomorrow", "Settled long ago"} {
+			h.a.backend.MarkRead(h.thread(s).Thread)
+		}
+		if os.Getenv("OPEN") != "" {
+			h.a.sectionClosed[catSnoozed], h.a.sectionClosed[catSettled] = false, false
+		}
+		h.until("the sections and the thread shown", func() bool {
+			return h.tt.HasText("Snoozed") && h.tt.HasText("Align them.")
+		})
+		settlePlugins(t, h.a, h.tt, h.p)
+		h.tt.Advance(time.Second)
 	case "approval":
 		h, _ = asking(t, runTests)
 	case "asked":

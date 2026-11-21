@@ -185,6 +185,7 @@ func (cs *Controls) Sync(v *widget.View, rev, processed int) {
 	})
 	for id := range cs.m {
 		if !live[id] {
+			cs.m[id].release()
 			delete(cs.m, id)
 		}
 	}

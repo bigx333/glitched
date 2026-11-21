@@ -39,6 +39,13 @@ type componentCopy struct {
 	retry   func()
 	over    func(box ui.Element)
 	builtin func() *widget.Node
+	// listRow does to the rows of the copy's lists what the app does to
+	// its own (render.Style.ListRow); nil does nothing.
+	listRow func(c *ui.Context, list *widget.Node, i int, e ui.Element) bool
+	// current waits for the plugin to draw each new context of the copy,
+	// as for its first drawing, so that what it shows keeps up with the
+	// app's own state, as the sidebar's threads moving between sections.
+	current bool
 }
 
 // fallback draws the copy's native body of the component name, in the
@@ -137,8 +144,8 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 	pick()
 	undrawn := func(i int) bool { return good[i] == nil && failed[i] == nil }
 	waits := false
-	for i := range copies {
-		waits = waits || undrawn(i)
+	for i, cp := range copies {
+		waits = waits || undrawn(i) || cp.current
 	}
 	if waits && !f.waited[name] {
 		f.waited[name] = true
@@ -150,7 +157,9 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 			}
 			var keys []string
 			for i, cp := range copies {
-				if undrawn(i) {
+				// A current copy waits on the plugin drawing it, not
+				// on one after it.
+				if undrawn(i) || cp.current && (good[i] == nil || good[i].pl.Plugin == pl.Plugin) {
 					keys = append(keys, cp.key)
 				}
 			}
@@ -183,9 +192,10 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 		}
 		// When every one failed, the first one's last good drawing stays:
 		// a row that can still be clicked beats none. Where Glitched draws
-		// the built-in itself, it does instead.
+		// the built-in itself, it does instead, as it does for a current
+		// copy, whose last good drawing shows what no longer is.
 		d := cmp.Or(good[i], failed[i])
-		if d == nil || good[i] == nil && plugins.ComponentNamed(name).Native {
+		if d == nil || good[i] == nil && (plugins.ComponentNamed(name).Native || cp.current) {
 			drewAll = false
 			by.glitched = cp.native != nil
 			drawn.copies = append(drawn.copies, by)
@@ -203,7 +213,7 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 		box := cp.box()
 		a.drawPlace(c, box, d.pl, cp.key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, row string, fire func(any)) {
 			a.drawNative(c, name, t, row, n, fire, cp)
-		}, func() {
+		}, cp.listRow, func() {
 			if cp.over != nil {
 				cp.over(box)
 			}
@@ -262,6 +272,34 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 		if len(a.shown(*t)) > 0 {
 			a.childToggle(c, *t)
 		}
+	case "thread.title":
+		var child bool
+		json.Unmarshal(n.Props["child"], &child)
+		if !child {
+			a.rowTitle(c, *t)
+			break
+		}
+		name := ui.Text(c, title(*t)).FontSize(12.5).SingleLine().Grow(1).Shrink(1)
+		if a.backend.Unread(t.Thread) {
+			name.FontWeight(600).TextColor(palette.text)
+		}
+	case "thread.mark":
+		var child bool
+		json.Unmarshal(n.Props["child"], &child)
+		switch {
+		case !child:
+			a.rowMark(c, *t, a.shownIn(*t), t.id() == a.selected && a.router.Path() == "/")
+		case len(a.shown(*t)) == 0:
+			ui.Text(c, ago(t.View.UpdatedAt, a.now)).FontSize(11).TextColor(palette.faint).Shrink(0)
+		}
+	case "thread.slot":
+		a.pluginSlot(c, "thread.row", t.id().String(), t)
+	case "thread.machine":
+		if len(a.backend.Envs()) > 1 {
+			a.machineBadge(c, t.env)
+		}
+	case "sidebar.section":
+		a.sectionNative(c, n)
 	case "composer.input":
 		a.composerIn(c)
 	case "transcript.body":

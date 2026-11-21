@@ -99,6 +99,9 @@ type Native struct {
 	In     []string
 	Thread bool
 	Row    bool
+	// InRow says it may sit in a list's row too, though it draws about
+	// no thread, as a section's header among the sidebar's rows.
+	InRow bool
 	// Fires are the handlers it fires.
 	Fires []string
 }
@@ -124,6 +127,15 @@ var Natives = map[string]Native{
 	"thread.status":      {Props: map[string]string{"dot": "bool", "size": "number"}, In: []string{"sidebar.body", "palette", "agents.body"}, Row: true},
 	"thread.age":         {In: []string{"palette"}, Row: true},
 	"thread.children":    {In: []string{"sidebar.body"}, Row: true},
+	// The rest of a sidebar row's parts: its title, bold while unread, a
+	// child's smaller; what it shows at its end while it isn't pointed at;
+	// what plugins place in each row; and its machine, where there are
+	// several. And a section's header, which opens and closes it.
+	"thread.title":    {Props: map[string]string{"child": "bool"}, In: []string{"sidebar.body"}, Row: true},
+	"thread.mark":     {Props: map[string]string{"child": "bool"}, In: []string{"sidebar.body"}, Row: true},
+	"thread.slot":     {In: []string{"sidebar.body"}, Row: true},
+	"thread.machine":  {In: []string{"sidebar.body"}, Row: true},
+	"sidebar.section": {Props: map[string]string{"section": "string"}, In: []string{"sidebar.body"}, InRow: true},
 }
 
 // Locked are the parts of Glitched's UI no plugin draws, replaces or
@@ -291,6 +303,9 @@ type Node struct {
 	SubmitOnClick bool `json:"submitOnClick,omitempty"`
 	ChooseOnHover bool `json:"chooseOnHover,omitempty"`
 	WrapAround    bool `json:"wrapAround,omitempty"`
+	// NoKeys keeps the keys out of a list: it takes no focus, and only
+	// the pointer chooses, as the sidebar's threads.
+	NoKeys bool `json:"noKeys,omitempty"`
 	// When shows a widget of a list's row only while the row is pointed
 	// at ("hover") or only while it isn't ("idle").
 	When string `json:"when,omitempty"`
@@ -952,7 +967,7 @@ func (c *checker) extra(n *Node) error {
 func (c *checker) list(n *Node) error {
 	if c.row {
 		switch {
-		case n.Type == "native" && !Natives[n.Name].Row:
+		case n.Type == "native" && !Natives[n.Name].Row && !Natives[n.Name].InRow:
 			return fmt.Errorf("a list's row holds no native %s", n.Name)
 		case n.Type == "input" || n.Type == "toggle" || n.Type == "select" || n.Type == "tabs" || n.Type == "dialog" || n.Type == "list":
 			return fmt.Errorf("a list's row holds no %s", n.Type)
@@ -967,10 +982,12 @@ func (c *checker) list(n *Node) error {
 		return fmt.Errorf("when is hover or idle, not %q", n.When)
 	case n.Type == "native" && Natives[n.Name].Row && !c.row:
 		return fmt.Errorf("%s draws only in a list's row", n.Name)
-	case n.Type != "list" && (len(n.Items) > 0 || n.RowHeight != 0 || n.Input != "" || n.SubmitOnClick || n.ChooseOnHover || n.WrapAround):
-		return fmt.Errorf("a %s has no items, rowHeight, input, submitOnClick, chooseOnHover or wrapAround", n.Type)
+	case n.Type != "list" && (len(n.Items) > 0 || n.RowHeight != 0 || n.Input != "" || n.SubmitOnClick || n.ChooseOnHover || n.WrapAround || n.NoKeys):
+		return fmt.Errorf("a %s has no items, rowHeight, input, submitOnClick, chooseOnHover, wrapAround or noKeys", n.Type)
 	case n.Type != "list":
 		return nil
+	case n.NoKeys && n.Input != "":
+		return fmt.Errorf("a list with noKeys has no input: its keys would move it")
 	case n.Label == "":
 		return fmt.Errorf("a list needs a label, its name to assistive tools")
 	case !n.Grow && n.Height == 0:
@@ -989,8 +1006,8 @@ func (c *checker) list(n *Node) error {
 			return fmt.Errorf("items[%d]: a key is 1 to %d bytes", i, MaxItemKey)
 		case keys[it.Key]:
 			return fmt.Errorf("items[%d]: the key %q is used twice", i, it.Key)
-		case it.Label == "" || len(it.Label) > MaxItemLabel:
-			return fmt.Errorf("items[%d]: a label is 1 to %d bytes", i, MaxItemLabel)
+		case it.Label == "" && it.Thread == "" || len(it.Label) > MaxItemLabel:
+			return fmt.Errorf("items[%d]: a label is 1 to %d bytes, or none for a thread's, whose row names it", i, MaxItemLabel)
 		case len(it.Version) > MaxItemKey || len(it.Thread) > MaxItemKey:
 			return fmt.Errorf("items[%d]: a version or a thread is up to %d bytes", i, MaxItemKey)
 		case it.Height != 0 && (it.Height < MinRowHeight || it.Height > MaxRowHeight):

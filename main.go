@@ -285,7 +285,15 @@ type app struct {
 	// sidebarOpen is how far the sidebar has slid in this frame, from 0
 	// to 1; sidebarJump skips the slide, for ⌘B.
 	sidebarOpen float32
-	sidebarJump bool
+	// sidebarTall is how tall the sidebar was as last laid out.
+	sidebarTall float32
+	// sidebarRows are the threads in the rows of each part of the
+	// sidebar's body, as last built.
+	sidebarRows map[string]map[api.ID]bool
+	// sectionCounts are each section's threads, as the sidebar's body last
+	// counted them, for the headers its plugin places.
+	sectionCounts map[category]int
+	sidebarJump   bool
 	// vibrant is whether the sidebar shows the window's vibrancy.
 	vibrant bool
 	// panelsJump shows the diff panel and the terminal without motion,
@@ -673,6 +681,8 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		sidebarWidth:   272,
 		collapsed:      map[string]bool{},
 		sectionClosed:  map[category]bool{catWorking: true, catSnoozed: true, catSettled: true},
+		sidebarRows:    map[string]map[api.ID]bool{},
+		sectionCounts:  map[category]int{},
 		projectFilter:  map[projectKey]bool{},
 		rowFx:          map[api.ID]rowGagFx{},
 		shells:         map[string]*shell{},
