@@ -292,7 +292,7 @@ func (a *app) agentsBody(c *ui.Context, t thread, tree []node, all bool, s func(
 		},
 		current: true,
 		context: func(plugins.ThreadRecord) any { return body },
-		listRow: func(c *ui.Context, list *widget.Node, i int, e ui.Element) bool {
+		listRow: func(c *ui.Context, list *widget.Node, i int, e ui.Element, builtin bool) bool {
 			f := s(i)
 			e.Opacity(f).Translate(0, 6*(1-f))
 			it := list.Items[i]
@@ -309,7 +309,10 @@ func (a *app) agentsBody(c *ui.Context, t thread, tree []node, all bool, s func(
 			if !ok {
 				return false
 			}
-			e.Label(title(k)).ContextMenu(func(m *ui.Menu) { a.threadMenu(c, m, k, a.categoryOf(k)) })
+			if builtin && it.Label == "" {
+				e.Label(title(k))
+			}
+			e.ContextMenu(func(m *ui.Menu) { a.threadMenu(c, m, k, a.categoryOf(k)) })
 			if e.Clicked() {
 				a.choose(k)
 			}

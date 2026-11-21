@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/ui"
+
 	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
 )
@@ -124,5 +126,39 @@ func TestTheAgentsPanelDrawsATitleOfAnyLength(t *testing.T) {
 	app := h.a.plugins.App("agents")
 	if _, ok := h.tt.Find("Short"); !ok || app == nil || app.PlaceView("body", parent.id().String()) == nil {
 		t.Fatalf("the built-in doesn't draw a long title's panel: %q", h.tt.Texts())
+	}
+}
+
+// A replacement's rows are named by what it gives them, and Glitched
+// names only the built-in's by their thread's title.
+func TestTheAgentsPanelsReplacementNamesItsOwnRows(t *testing.T) {
+	h, parent := agentsTree(t, 1)
+	writeOwnPlugin(t, h.a, "mine", agentsManifest, `
+export function place({items}) {
+  return items.map(({context}) => ({
+    type: "list", id: "mine", label: "Mine", noKeys: true, grow: true, rowHeight: 26,
+    items: context.rows.map(r => ({key: r.thread, thread: r.thread, label: ""})),
+  }));
+}
+export function rows({keys}) {
+  return keys.map(() => ({type: "text", text: "Yours"}));
+}
+`)
+	h.a.plugins.SetGranted("mine", "ui.replace", true)
+	h.a.plugins.SetGranted("mine", "threads:read", true)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Advance(time.Second)
+	if mine := h.a.plugins.App("mine"); mine == nil || mine.PlaceView("body", parent.id().String()) == nil {
+		t.Fatalf("yours doesn't draw the panel: %q", h.tt.Texts())
+	}
+	if _, ok := h.tt.AccessByRole(ui.RoleButton, "Yours"); !ok {
+		t.Fatalf("yours's row isn't named by what it shows")
+	}
+	h.a.plugins.SetEnabled("mine", false)
+	h.a.pluginsChanged(nil)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Advance(time.Second)
+	if _, ok := h.tt.AccessByRole(ui.RoleButton, "Child 0"); !ok {
+		t.Fatalf("the built-in's row isn't named by its thread's title")
 	}
 }
