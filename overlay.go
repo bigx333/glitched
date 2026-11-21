@@ -80,8 +80,9 @@ func meets(r, v ui.Rect) bool {
 }
 
 func (a *app) popover(c *ui.Context, anchor ui.Element, open *bool, fn func(panel ui.Element)) {
-	focusBefore(c, fmt.Sprint("popover ", anchor.ID()), *open)
-	ui.PopoverBase(c, anchor, open, func(panel ui.Element) {
+	key := fmt.Sprint("popover ", anchor.ID())
+	focusBefore(c, key, *open)
+	ui.PopoverBase(c.Key(key), anchor, open, func(panel ui.Element) {
 		a.cover(coverKey{"popover", anchor.ID()}, panel)
 		fn(panel)
 	})
@@ -89,8 +90,9 @@ func (a *app) popover(c *ui.Context, anchor ui.Element, open *bool, fn func(pane
 }
 
 func (a *app) dialog(c *ui.Context, open *bool, fn func(backdrop, panel ui.Element)) {
-	focusBefore(c, fmt.Sprintf("dialog %p", open), *open)
-	ui.DialogBase(c, open, func(backdrop, panel ui.Element) {
+	key := fmt.Sprintf("dialog %p", open)
+	focusBefore(c, key, *open)
+	ui.DialogBase(c.Key(key), open, func(backdrop, panel ui.Element) {
 		a.cover(coverKey{"dialog", backdrop.ID()}, backdrop)
 		fn(backdrop, panel)
 	})
@@ -99,8 +101,9 @@ func (a *app) dialog(c *ui.Context, open *bool, fn func(backdrop, panel ui.Eleme
 }
 
 func (a *app) alert(c *ui.Context, open *bool, title, message string, buttons ...string) int {
-	focusBefore(c, fmt.Sprintf("alert %p", open), *open)
-	chose := ui.AlertDialog(c, open, title, message, buttons...)
+	key := fmt.Sprintf("alert %p", open)
+	focusBefore(c, key, *open)
+	chose := ui.AlertDialog(c.Key(key), open, title, message, buttons...)
 	a.covering = a.covering || *open
 	a.modalNow = a.modalNow || *open
 	a.blinding = a.blinding || *open
@@ -119,6 +122,10 @@ func (a *app) alert(c *ui.Context, open *bool, title, message string, buttons ..
 // back after the frame is drawn and asks for no other, so the empty
 // overlay, as it goes, asks for the frame that draws the focus where it
 // went.
+//
+// Each overlay is keyed by what it stands for: built where it falls among
+// the window's overlays, one that came after another that went would take
+// its identity, and with it the element that one gives the focus back to.
 func focusBefore(c *ui.Context, key string, open bool) {
 	if !open {
 		return

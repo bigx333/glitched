@@ -746,6 +746,18 @@ func (a *app) select_(t thread) {
 	}
 }
 
+// choose shows the thread a person chose, its composer, compact or full,
+// taking the focus.
+func (a *app) choose(t thread) {
+	a.select_(t)
+	area, other := &a.draftArea, &a.draftLine
+	if a.composerSeen[t.id()] && a.composerCompact(t) {
+		area, other = other, area
+	}
+	other.CancelFocus()
+	area.Focus()
+}
+
 // opened is the thread whose transcript the manager follows.
 type opened struct {
 	env *client.Env

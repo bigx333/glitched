@@ -98,6 +98,14 @@ func TestDismissingGivesTheFocusBack(t *testing.T) {
 		}
 		t.Fatalf("%s, %q has the focus, want %q", after, now, name)
 	}
+	composer := func() bool {
+		for _, e := range h.tt.AccessAll() {
+			if e.Focused {
+				return strings.HasPrefix(e.Placeholder, "Ask anything")
+			}
+		}
+		return false
+	}
 	past := markersShown(3000, 860) + 10
 	h.click(marker(0))
 	h.tt.Move(660, 300)
@@ -210,14 +218,18 @@ func TestDismissingGivesTheFocusBack(t *testing.T) {
 		}
 		focused(t, "Model", "the picker dismissed")
 	})
-	t.Run("the palette, from a thread in the sidebar", func(t *testing.T) {
+	t.Run("the palette, from the composer of a thread clicked in the sidebar", func(t *testing.T) {
 		if err := h.tt.Click("Another thread"); err != nil {
 			t.Fatal(err)
 		}
-		focused(t, "Another thread", "a click on it")
+		if !composer() {
+			t.Fatal("the click didn't give its composer the focus")
+		}
 		h.tt.KeyRepeat(ui.Cmd, ui.KeyK)
 		h.tt.KeyRepeat(0, ui.KeyEscape)
-		focused(t, "Another thread", "the palette dismissed")
+		if !composer() {
+			t.Fatal("the palette dismissed, the composer hasn't the focus back")
+		}
 	})
 }
 
@@ -258,5 +270,121 @@ func TestOverlaysKeepTheFocusBefore(t *testing.T) {
 				t.Error("the focus didn't go back to what had it before")
 			}
 		})
+	}
+}
+
+// A thread clicked in the sidebar gives the focus to its composer,
+// whatever had it, a turn's marker, another thread, or nothing, and on a
+// thread shown before as on one not: what's typed right after the click
+// goes in its draft.
+func TestClickingAThreadFocusesItsComposer(t *testing.T) {
+	for _, from := range []string{"a turn", "a thread", "nothing", "a turn, back to a thread shown before", "a short thread, back to a thread shown before", "a turn, back to its thread scrolled up"} {
+		t.Run(from, func(t *testing.T) {
+			dir := tempDir(t)
+			d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+			seed(t, d, "/work/t3code", "A long thread", "Start")
+			seed(t, d, "/work/t3code", "Another thread", "Hello")
+			h := start(t, dir)
+			long := h.thread("A long thread")
+			if strings.HasSuffix(from, "back to a thread shown before") {
+				h.a.select_(h.thread("Another thread"))
+				h.tt.Advance(time.Second)
+			}
+			h.a.select_(long)
+			h.until("its transcript", func() bool { return long.Transcript != nil && len(long.Transcript.Entries) > 0 })
+			if !strings.HasPrefix(from, "a short thread") {
+				long.Transcript.Entries = synthetic(300)
+				h.a.changed()
+			}
+			h.tt.Frame()
+			h.tt.Advance(time.Second)
+			switch from {
+			case "a thread", "a short thread, back to a thread shown before":
+				if err := h.tt.Click("A long thread"); err != nil {
+					t.Fatal(err)
+				}
+			case "nothing":
+			default:
+				if err := h.tt.Click("Go to: " + turnText(0)); err != nil {
+					t.Fatal(err)
+				}
+				h.tt.KeyRepeat(0, ui.KeyTab)
+			}
+			h.tt.Move(660, 300)
+			h.tt.Advance(time.Second)
+			if err := h.tt.Click("Another thread"); err != nil {
+				t.Fatal(err)
+			}
+			if from == "a turn, back to its thread scrolled up" {
+				// Back to the long thread, read up from its end: its
+				// composer is the compact line.
+				h.tt.Advance(time.Second)
+				if err := h.tt.Click("A long thread"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h.tt.Type("early")
+			h.tt.Advance(time.Second)
+			if h.a.draft != "early" {
+				t.Errorf("typed right after the click, the draft is %q, want %q", h.a.draft, "early")
+			}
+			for _, e := range h.tt.AccessAll() {
+				if e.Focused {
+					if !strings.HasPrefix(e.Placeholder, "Ask anything") && e.Placeholder != "Ask a follow-up…" {
+						t.Fatalf("%q has the focus, want the composer", e.Name)
+					}
+					return
+				}
+			}
+			t.Fatal("nothing has the focus, want the composer")
+		})
+	}
+}
+
+// A dialog opened while a popover shows gives the focus back to what it
+// was opened from, though the popover closed meanwhile, every time.
+func TestADialogGivesTheFocusToWhatOpenedIt(t *testing.T) {
+	for range 20 {
+		a := app{covers: map[coverKey]*ui.Handle{}}
+		var popover, dialog bool
+		var q string
+		tt := ui.NewTester(func(c *ui.Context) {
+			if c.Shortcut(ui.Cmd, ui.KeyK) {
+				dialog = true
+			}
+			first := ui.Button(c.Key("first"), "First")
+			if first.Clicked() {
+				popover = true
+			}
+			a.popover(c, first, &popover, func(panel ui.Element) {
+				panel.Children(func() { ui.Text(c, "Popover") })
+			})
+			ui.Button(c.Key("second"), "Second")
+			a.dialog(c, &dialog, func(_, panel ui.Element) {
+				panel.Children(func() { ui.TextInput(c.Key("q"), &q).Label("Query").AutoFocus() })
+			})
+		}, 400, 300)
+		tt.Frame()
+		if err := tt.Click("First"); err != nil {
+			t.Fatal(err)
+		}
+		tt.KeyRepeat(0, ui.KeyTab)
+		if !popover || !tt.Focused("Second") {
+			t.Fatalf("Tab from First: popover %v, Second focused %v", popover, tt.Focused("Second"))
+		}
+		tt.KeyRepeat(ui.Cmd, ui.KeyK)
+		if err := tt.Click("Query"); err != nil {
+			t.Fatal(err)
+		}
+		if popover {
+			t.Fatal("a press in the dialog didn't close the popover")
+		}
+		tt.KeyRepeat(0, ui.KeyEscape)
+		if dialog {
+			t.Fatal("Escape didn't close the dialog")
+		}
+		if !tt.Focused("Second") {
+			t.Fatalf("the focus went to First, or nowhere: First %v", tt.Focused("First"))
+		}
 	}
 }

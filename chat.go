@@ -789,9 +789,11 @@ func (a *app) composerMorph(host ui.Element, t thread) {
 	id := t.id()
 	// A thread's list starts at its end, which it only knows once laid
 	// out: until then the composer is full, rather than folding at first.
+	// The passes after the first, before it's laid out, start from full.
 	if !a.composerSeen[id] {
 		a.composerSeen[id] = true
 		a.composerRest, a.composerK, a.jumpK = false, 1, 0
+		host.Jump("composer:"+id.String(), 1)
 		return
 	}
 	target, anim := float32(1), composerOpen
@@ -1056,7 +1058,7 @@ func (a *app) composerInput(c *ui.Context, t thread, rs rows, fullW, frameW floa
 				}
 			}
 			line.Children(func() {
-				ui.TextInput(c.Key("draft-compact"), &a.draft).Placeholder("Ask a follow-up…").
+				ui.TextInput(c.Key("draft-compact"), &a.draft).Bind(&a.draftLine).Placeholder("Ask a follow-up…").
 					Background(ui.Transparent).Border(0, ui.Transparent).FocusRing(false).Padding(11, 18).
 					OnPaste(a.onPaste)
 			})

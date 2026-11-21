@@ -252,7 +252,7 @@ func (a *app) childRow(c *ui.Context, k thread, depth int) {
 			ui.Text(c, ago(k.View.UpdatedAt, a.now)).FontSize(11).TextColor(palette.faint).Shrink(0)
 		}
 	}).Clicked() {
-		a.select_(k)
+		a.choose(k)
 	}
 }
 
@@ -270,7 +270,7 @@ func (a *app) breadcrumb(c *ui.Context, t thread, narrow bool) {
 		if b.Children(func() {
 			ui.Text(c, title(x)).FontSize(12.5).SingleLine().MaxWidth(180)
 		}).Clicked() {
-			a.select_(x)
+			a.choose(x)
 		}
 		ui.Icon(c, icChevronR).FontSize(11).TextColor(palette.faint).Shrink(0)
 	}
@@ -387,7 +387,7 @@ func (a *app) reports(c *ui.Context, t thread, e entry) {
 					ui.Text(c, "Deleted").FontSize(11).TextColor(palette.faint)
 				}
 			}).Clicked() && found {
-				a.select_(child)
+				a.choose(child)
 			}
 		}
 	})
