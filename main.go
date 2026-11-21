@@ -474,14 +474,11 @@ type app struct {
 	posts uint64
 	// recentThreads are the threads, the most recently updated first.
 	recentThreads recentThreads
-	// built counts the frames built; sorted are the threads of each
-	// category, as itemsIn sorted them, and the frame and posts after
-	// which it did.
-	built  uint64
-	sorted struct {
-		at    sortedAt
-		items map[category][]inboxItem
-	}
+	// sorted are the threads in the sidebar's sections, as sortThreads
+	// last sorted them. filterEdits and fxEdits count the changes to the
+	// project filter and the rows' jokes, which move threads too.
+	sorted               sortedThreads
+	filterEdits, fxEdits uint64
 	// The diff panel: each file's viewer, by thread and path, and their
 	// layout.
 	diffs      map[diffKey]*fileDiff
@@ -860,7 +857,6 @@ func (a *app) view(c *ui.Context) {
 	// appearance: the sidebar shows it while the app's theme matches, and
 	// the Liquid Glass setting is on.
 	a.now = c.Now()
-	a.built++
 	if !a.arrived.IsZero() && a.arrivedAt.IsZero() {
 		a.arrivedAt = a.now // sentFromHero
 	}
@@ -877,13 +873,7 @@ func (a *app) view(c *ui.Context) {
 	a.sidebarPressed, a.previewPressed, a.effortPressed = false, false, false
 	a.saveSettings()
 	a.browser.letGo(a.showPreview)
-	a.projects = a.gather()
-	a.kids = a.kidsOf()
-	// A project gone, as with its server, leaves the filter, lest it hide
-	// every thread left.
-	maps.DeleteFunc(a.projectFilter, func(k projectKey, _ bool) bool {
-		return !slices.ContainsFunc(a.projects, func(p *project) bool { return p.key == k })
-	})
+	a.sortThreads()
 	a.pruneDiffs()
 	a.pruneThreadState()
 	// A steer to a server removed since never lands.

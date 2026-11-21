@@ -116,14 +116,27 @@ func (a *app) sidebarSections(cats ...category) []sidebarSection {
 					return
 				}
 				ks := a.kids[t.id()]
-				if n := a.paged(t.id().String(), len(ks), &left, func(i int) api.ID { return ks[i].id() }, func(i int) {
+				var kept []int
+				for i, k := range ks {
+					if a.sidebarKept[k.id()] {
+						kept = append(kept, i)
+					}
+				}
+				if n := a.paged(t.id().String(), len(ks), kept, &left, func(i int) api.ID { return ks[i].id() }, func(i int) {
 					sec.Rows = append(sec.Rows, a.sidebarRow(ks[i], depth))
 					kids(ks[i], depth+1)
 				}); n > 0 {
 					sec.Rows = append(sec.Rows, more(n, t.id().String(), depth))
 				}
 			}
-			if n := a.paged(sec.ID, len(items), &left, func(i int) api.ID { return items[i].t.id() }, func(i int) {
+			var kept []int
+			for id := range a.sidebarKept {
+				if i, ok := a.sorted.index[cat][id]; ok {
+					kept = append(kept, i)
+				}
+			}
+			slices.Sort(kept)
+			if n := a.paged(sec.ID, len(items), kept, &left, func(i int) api.ID { return items[i].t.id() }, func(i int) {
 				sec.Rows = append(sec.Rows, a.sidebarRow(items[i].t, 0))
 				kids(items[i].t, 1)
 			}); n > 0 {
@@ -136,25 +149,32 @@ func (a *app) sidebarSections(cats ...category) []sidebarSection {
 }
 
 // paged adds those of n threads the pages of key show, in order: as many
-// pages as the user asked for, then the threads kept wherever they sort,
-// a page of them at most, and the shown thread and its parents always,
-// while the list has room left. It returns how many more there are.
-func (a *app) paged(key string, n int, left *int, id func(int) api.ID, add func(int)) (more int) {
-	shown, kept := sidebarPage*max(a.sidebarPages[key], 1), 0
-	for i := range n {
-		k := a.sidebarKept[id(i)]
-		switch {
-		case *left > sidebarSpare && (i < shown || k && kept < sidebarPage), k && *left > sidebarSpare/2 && a.onSelectedPath(id(i)):
+// pages as the user asked for, then of those kept, at their places in
+// order, those past the pages, a page of them at most, and the shown
+// thread and its parents always, while the list has room left. It returns
+// how many more there are.
+func (a *app) paged(key string, n int, kept []int, left *int, id func(int) api.ID, add func(int)) (more int) {
+	shown, added, past := min(n, sidebarPage*max(a.sidebarPages[key], 1)), 0, 0
+	for added < shown && *left > sidebarSpare {
+		*left--
+		add(added)
+		added++
+	}
+	paged := added
+	for _, i := range kept {
+		if i < paged {
+			continue
+		}
+		if *left > sidebarSpare && (i < shown || past < sidebarPage) || *left > sidebarSpare/2 && a.onSelectedPath(id(i)) {
 			if i >= shown {
-				kept++
+				past++
 			}
 			*left--
 			add(i)
-		default:
-			more++
+			added++
 		}
 	}
-	return more
+	return n - added
 }
 
 // onSelectedPath is whether the thread is the one shown or a parent of it.

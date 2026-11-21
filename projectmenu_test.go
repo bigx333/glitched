@@ -226,6 +226,7 @@ func crossTree(t *testing.T) *harness {
 	h := start(t, dir)
 	h.thread("Patch the table").View.Parent = top
 	h.thread("Check the sort").View.Parent = mid
+	h.a.posts++ // as the engine's change to the threads would come
 	h.tt.Advance(time.Second)
 	return h
 }
