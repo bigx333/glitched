@@ -24,26 +24,42 @@ import (
 // key, the box it makes to draw in, its context from the thread's record
 // as each plugin may see it, and its native body, which Glitched draws
 // while no plugin has drawn the copy yet. Nil draws nothing then.
-// builtin is the native node the built-in places as its whole drawing.
+// builtin is the built-in's drawing of the copy, which Glitched draws
+// around the body while no plugin has drawn it. retry is the copy's
+// transcript.retry, and over what Glitched draws over every drawing of
+// it, in its box, as a message's actions.
 type componentCopy struct {
 	key     string
 	box     func() ui.Element
 	context func(plugins.ThreadRecord) any
 	native  func()
-	builtin *widget.Node
+	retry   func()
+	over    func(box ui.Element)
+	builtin func() *widget.Node
 }
 
-// fallback draws the copy's native body, in the box the built-in's
-// drawing puts it in where the copy names one, so that the body keeps its
+// fallback draws the copy's native body of the component name, in the
+// built-in's drawing where the copy names one, so that the body keeps its
 // state, as a selection, when that drawing takes over.
-func (cp componentCopy) fallback(c *ui.Context) {
-	switch {
-	case cp.native == nil:
-	case cp.builtin == nil:
-		cp.box().Children(cp.native)
-	default:
-		cp.box().Children(func() { render.NativeBox(c, cp.builtin, 0).Children(cp.native) })
+func (a *app) fallback(c *ui.Context, name string, t *thread, cp componentCopy) {
+	if cp.native == nil {
+		return
 	}
+	box := cp.box()
+	box.Children(func() {
+		if cp.builtin == nil {
+			cp.native()
+		} else {
+			st := a.pluginStyle("")
+			st.Native = func(c *ui.Context, n *widget.Node, row string, fire func(any)) {
+				a.drawNative(c, name, t, row, n, fire, cp)
+			}
+			render.View(c, &widget.View{Body: cp.builtin()}, &render.Controls{}, st, &a.pluginMD, nil)
+		}
+		if cp.over != nil {
+			cp.over(box)
+		}
+	})
 }
 
 // pluginComponent draws copies of the component name, each with the first
@@ -61,7 +77,7 @@ func (cp componentCopy) fallback(c *ui.Context) {
 func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...componentCopy) bool {
 	if a.plugins == nil {
 		for _, cp := range copies {
-			cp.fallback(c)
+			a.fallback(c, name, t, cp)
 		}
 		return false
 	}
@@ -167,13 +183,18 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 			drewAll = false
 			by.glitched = cp.native != nil
 			drawn.copies = append(drawn.copies, by)
-			cp.fallback(c)
+			a.fallback(c, name, t, cp)
 			continue
 		}
 		by.plugin = d.pl.Plugin
 		drawn.copies = append(drawn.copies, by)
-		a.drawPlace(c, cp.box(), d.pl, cp.key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, row string, fire func(any)) {
-			a.drawNative(c, name, t, row, n, fire, cp.native)
+		box := cp.box()
+		a.drawPlace(c, box, d.pl, cp.key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, row string, fire func(any)) {
+			a.drawNative(c, name, t, row, n, fire, cp)
+		}, func() {
+			if cp.over != nil {
+				cp.over(box)
+			}
 		})
 	}
 	return drewAll
@@ -181,9 +202,9 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 
 // drawNative draws the native widget n in a copy of the component about
 // t, or, in a list's row, about the thread its item names, row: only in
-// the components it names. body is the copy's native body, which
-// transcript.body draws.
-func (a *app) drawNative(c *ui.Context, component string, t *thread, row string, n *widget.Node, fire func(any), body func()) {
+// the components it names. cp is the copy it is in, whose native body
+// transcript.body draws and whose retry transcript.retry does.
+func (a *app) drawNative(c *ui.Context, component string, t *thread, row string, n *widget.Node, fire func(any), cp componentCopy) {
 	nat := widget.Natives[n.Name]
 	if nat.Row {
 		t = nil
@@ -232,7 +253,9 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 	case "composer.input":
 		a.composerIn(c)
 	case "transcript.body":
-		body()
+		cp.native()
+	case "transcript.retry":
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(cp.retry)
 	case "diff.body":
 		var path string
 		json.Unmarshal(n.Props["path"], &path)

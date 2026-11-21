@@ -31,11 +31,25 @@ interface Layout {
   grow?: boolean;
 }
 
+/** A row's or column's frame. */
+interface Box {
+  /** A border one point wide. */
+  border?: Color;
+  /** The border's opacity, 0 to 1. */
+  borderOpacity?: number;
+  /** One radius for every corner; a background alone rounds them by 8. */
+  radius?: number;
+  /** Each corner's radius: top-left, top-right, bottom-right, bottom-left. */
+  corners?: [number, number, number, number];
+  /** At most this share of the parent's width, 1 to 100. */
+  maxWidthPercent?: number;
+}
+
 type Widget = {
   /** In a list's row only: drawn while the row is pointed at (hover), or while it isn't (idle). */
   when?: "hover" | "idle";
 } & (
-  | ({ type: "column" | "row"; background?: Color; /** A row's children run onto more lines. */ wrap?: boolean } & Layout)
+  | ({ type: "column" | "row"; background?: Color; /** A row's children run onto more lines. */ wrap?: boolean } & Box & Layout)
   | ({
       type: "column" | "row";
       /** A list row: lit under the pointer, clicked as a whole. */
@@ -45,7 +59,7 @@ type Widget = {
       wrap?: boolean;
       /** A row's: Glitched's menu on a right click, "thread:<id>" or "project:<key>". Needs threads:read. */
       contextMenu?: string;
-    } & Layout)
+    } & Box & Layout)
   | {
       /** A project's mark: its icon, white on its color, as projects.list gives them. */
       type: "tile";
@@ -294,8 +308,12 @@ type NativeWidget = {
       name: "composer.input";
     }
   | {
-      /** A timeline row as Glitched draws it, live, in timeline.message: placed exactly once, in rows, columns and cards alone. */
+      /** What a timeline row says, live, with nothing around it, in timeline.message: placed exactly once, in rows, columns and cards alone. */
       name: "transcript.body";
+    }
+  | {
+      /** A failed command's Retry and Dismiss, in timeline.message; nothing in any other row. */
+      name: "transcript.retry";
     }
   | {
       /**

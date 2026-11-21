@@ -528,28 +528,76 @@ const userMDsKept = 512
 type userMD struct{ text, md string }
 
 // entry draws the timeline row rs.es[i]. A message, a run's work log or an
-// error is a copy of timeline.message, which a plugin may draw around
-// transcript.body: the row as Glitched draws it. Approval, question and
-// report cards are Glitched's alone.
+// error is a copy of timeline.message, which a plugin draws around
+// transcript.body: the row's own content, as Glitched draws it. Glitched
+// draws a message's actions over every copy, shown while it is pointed
+// at. Approval, question and report cards are Glitched's alone.
 func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 	e := rs.es[i]
-	if e.kind == entryRequest || e.kind == entryReport {
-		a.nativeEntry(c, t, rs, i)
+	switch e.kind {
+	case entryRequest:
+		a.requestCard(c, t, e)
+		return
+	case entryReport:
+		a.reportCard(c, t, e.key, e)
 		return
 	}
+	m := timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil}
 	a.pluginComponent(c, "timeline.message", &t, componentCopy{
-		key: e.key,
-		box: func() ui.Element { return ui.Column(c).Key(e.key) },
-		context: func(plugins.ThreadRecord) any {
-			return timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil}
+		key:     e.key,
+		box:     func() ui.Element { return ui.Column(c).Key(e.key).Transition(riseIn) },
+		context: func(plugins.ThreadRecord) any { return m },
+		native:  func() { a.transcriptBody(c, t, rs, i) },
+		retry: func() {
+			if e.failed.Err != nil {
+				a.failedActions(c, t, e.failed)
+			}
 		},
-		native:  func() { a.nativeEntry(c, t, rs, i) },
-		builtin: timelineBody,
+		over: func(box ui.Element) {
+			switch {
+			case e.kind == entryUser && e.failed.Err == nil && !t.id().IsZero():
+				a.messageActions(c, t, rs.es, i, box.Hovered())
+			case e.kind == entryAssistant:
+				a.messageActions(c, t, rs.es, i, box.Hovered() && !e.streaming)
+			}
+		},
+		builtin: func() *widget.Node { return timelineRow(m) },
 	})
 }
 
-// timelineBody is what the built-in timeline plugin places for each row.
-var timelineBody = &widget.Node{Type: "native", ID: "body", Name: "transcript.body"}
+var (
+	timelineBody  = &widget.Node{Type: "native", ID: "body", Name: "transcript.body"}
+	timelineRetry = &widget.Node{Type: "native", ID: "retry", Name: "transcript.retry"}
+)
+
+// timelineRow is the built-in Timeline rows plugin's drawing of the row m,
+// as its main.js draws it. Glitched draws the same while no plugin has
+// drawn the row, so that the body keeps its state, as a selection, when
+// the plugin's drawing comes.
+func timelineRow(m timelineMessage) *widget.Node {
+	switch m.Kind {
+	case "user":
+		bubble := &widget.Node{Type: "column", Padding: widget.Spacing{10, 14}, Corners: []int{16, 16, 4, 16}, Background: "$surface", Border: "$border", Children: []*widget.Node{timelineBody}}
+		col := &widget.Node{Type: "column", Align: "end", Gap: 6, MaxWidthPercent: 80, Children: []*widget.Node{bubble}}
+		if m.Note != "" {
+			note := &widget.Node{Type: "row", Gap: 8, Children: []*widget.Node{{Type: "text", Text: m.Note, Size: "small", Color: "$text.faint"}}}
+			if m.Failed {
+				note.Children[0].Color = "$danger"
+				note.Children = append(note.Children, timelineRetry)
+			}
+			col.Children = append(col.Children, note)
+		}
+		return &widget.Node{Type: "row", Children: []*widget.Node{{Type: "spacer"}, col}}
+	case "failed", "error":
+		row := &widget.Node{Type: "row", Gap: 8, Align: "center", Padding: widget.Spacing{6, 6, 6, 14}, Radius: 12, Border: "$danger", BorderOpacity: 0.35,
+			Children: []*widget.Node{{Type: "native", ID: "body", Name: "transcript.body", Grow: true}}}
+		if m.Kind == "failed" {
+			row.Children = append(row.Children, timelineRetry)
+		}
+		return row
+	}
+	return timelineBody
+}
 
 // timelineMessage is the context of timeline.message: which row a copy is
 // and what it is doing. Its text is transcript.body's alone, so a reply
@@ -564,34 +612,20 @@ type timelineMessage struct {
 
 var entryKindNames = map[entryKind]string{entryUser: "user", entryAssistant: "assistant", entryWork: "work", entryFailed: "failed", entryError: "error"}
 
-// nativeEntry draws the timeline row rs.es[i] as Glitched does.
-func (a *app) nativeEntry(c *ui.Context, t thread, rs rows, i int) {
-	es := rs.es
-	e := es[i]
-	key := e.key
+// transcriptBody draws the content of the timeline row rs.es[i], which
+// transcript.body places: a message's text, a run's work log, an error's
+// words. What is around it is the row's drawing's.
+func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int) {
+	e := rs.es[i]
 	switch e.kind {
 	case entryUser:
-		r := ui.Row(c).Key(key).Transition(riseIn)
-		r.Children(func() {
-			ui.Spacer(c)
-			ui.Column(c).AlignItems(ui.End).Gap(6).MaxWidthPercent(80).Children(func() {
-				var bubble ui.Element
-				if md := a.userMarkdown(key, e.text); md != "" {
-					bubble = markdown.View(c, md, &a.userMD)
-				} else {
-					bubble = ui.Text(c, e.text).Selectable().LineHeight(1.5)
-				}
-				bubble.Padding(10, 14).Radius(16, 16, 4, 16).Background(palette.surface).Border(1, palette.border)
-				if e.note != "" {
-					a.messageNote(c, t, e)
-				}
-			})
-			if e.failed.Err == nil && !t.id().IsZero() {
-				a.messageActions(c, t, es, i, r.Hovered())
-			}
-		})
+		if md := a.userMarkdown(e.key, e.text); md != "" {
+			markdown.View(c, md, &a.userMD)
+		} else {
+			ui.Text(c, e.text).Selectable().LineHeight(1.5)
+		}
 	case entryAssistant:
-		col := ui.Column(c).Key(key).LineHeight(1.55).Transition(riseIn)
+		col := ui.Column(c).Key(e.key).LineHeight(1.55)
 		col.Children(func() {
 			var md ui.Element
 			if e.streaming {
@@ -599,23 +633,12 @@ func (a *app) nativeEntry(c *ui.Context, t thread, rs rows, i int) {
 			} else {
 				md = markdown.View(c, e.text, &a.md)
 			}
-			a.followSelection(c, t, key, e.text, col, md)
-			a.messageActions(c, t, es, i, col.Hovered() && !e.streaming)
+			a.followSelection(c, t, e.key, e.text, col, md)
 		})
 	case entryWork:
-		a.workLog(c, t, key, e, rs.files)
-	case entryRequest:
-		a.requestCard(c, t, e)
-	case entryReport:
-		a.reportCard(c, t, key, e)
+		a.workLog(c, t, e.key, e, rs.files)
 	case entryFailed, entryError:
-		ui.Row(c).Key(key).Gap(8).AlignItems(ui.Center).Padding(6, 6, 6, 14).Radius(12).
-			Border(1, palette.red.Alpha(0.35)).Transition(riseIn).Children(func() {
-			ui.Text(c, e.text).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
-			if e.kind == entryFailed {
-				a.failedActions(c, t, e.failed)
-			}
-		})
+		ui.Text(c, e.text).FontSize(12).TextColor(palette.red)
 	}
 }
 
@@ -657,34 +680,34 @@ func (a *app) workLog(c *ui.Context, t thread, key string, e entry, files []file
 	working := e.working
 	open := !a.collapsed[key]
 	ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Clip().
-		Transition(riseIn).Children(func() {
-		if ghost(c, "head", false).Radius(0).Padding(8, 12).Children(func() {
-			switch {
-			case e.paused != "":
-				ui.Icon(c, icClock).FontSize(12).TextColor(palette.amber)
-				ui.Text(c, e.paused).FontSize(12).Grow(1)
-			case working:
-				a.statusMark(c, statusWorking)
-				shimmerText(c, e.took, 12, palette.muted, palette.text)
-			default:
-				ui.Text(c, e.took).FontSize(12).Grow(1)
+		Children(func() {
+			if ghost(c, "head", false).Radius(0).Padding(8, 12).Children(func() {
+				switch {
+				case e.paused != "":
+					ui.Icon(c, icClock).FontSize(12).TextColor(palette.amber)
+					ui.Text(c, e.paused).FontSize(12).Grow(1)
+				case working:
+					a.statusMark(c, statusWorking)
+					shimmerText(c, e.took, 12, palette.muted, palette.text)
+				default:
+					ui.Text(c, e.took).FontSize(12).Grow(1)
+				}
+				ui.Text(c, plural(len(e.work), "step")).FontSize(11).TextColor(palette.faint)
+				chevron(c, open)
+			}).Clicked() {
+				a.collapsed[key] = open
 			}
-			ui.Text(c, plural(len(e.work), "step")).FontSize(11).TextColor(palette.faint)
-			chevron(c, open)
-		}).Clicked() {
-			a.collapsed[key] = open
-		}
-		if !open {
-			return
-		}
-		ui.Column(c).Key("steps").Padding(6, 8, 10).Gap(2).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).
-			ClipY().Transition(fold).Children(func() {
-			for _, w := range e.work {
-				// Each step the agent takes unfolds below the last.
-				a.step(c, t, files, w)
+			if !open {
+				return
 			}
+			ui.Column(c).Key("steps").Padding(6, 8, 10).Gap(2).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).
+				ClipY().Transition(fold).Children(func() {
+				for _, w := range e.work {
+					// Each step the agent takes unfolds below the last.
+					a.step(c, t, files, w)
+				}
+			})
 		})
-	})
 }
 
 // step is one of the agent's steps. A command that finished shows its
