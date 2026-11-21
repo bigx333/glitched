@@ -267,7 +267,14 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 			mark()
 		}
 	case "thread.age":
+		if component == "agents.body" {
+			ui.Text(c, ago(t.View.UpdatedAt, a.now)).FontSize(11).TextColor(palette.faint).Shrink(0)
+			break
+		}
 		ui.Text(c, ago(t.View.UpdatedAt, a.now)).FontSize(11.5).TextColor(palette.faint).MinWidth(28).TextAlign(ui.End)
+	case "thread.actions":
+		a.iconButton(c, "menu", icDots, "Thread actions", false).Padding(3).
+			Menu(func(m *ui.Menu) { a.threadMenu(c, m, *t, a.categoryOf(*t)) })
 	case "thread.children":
 		if len(a.shown(*t)) > 0 {
 			a.childToggle(c, *t)
@@ -275,6 +282,10 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 	case "thread.title":
 		var child bool
 		json.Unmarshal(n.Props["child"], &child)
+		if component == "agents.body" {
+			ui.Text(c, title(*t)).FontSize(12.5).TextColor(palette.text).SingleLine().Grow(1).Shrink(1)
+			break
+		}
 		if !child {
 			a.rowTitle(c, *t)
 			break
