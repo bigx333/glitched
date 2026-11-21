@@ -75,6 +75,9 @@ type Manager struct {
 	// changes counts the changes made here to engine.json and tokens.json,
 	// so a read begun before one is dropped for a new one.
 	changes int
+	// edits counts the changes the GUI made to threads here: the commands
+	// it submitted and the threads it read.
+	edits uint64
 	// node is the embedded engine's own tailnet node, which remotes dial
 	// through while it runs; the link goroutines read it, so it's atomic.
 	node atomic.Pointer[node]

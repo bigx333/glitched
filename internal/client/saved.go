@@ -175,6 +175,11 @@ func (m *Manager) Unread(th *Thread) bool {
 	return !at.IsZero() && at.After(m.saved.Seen[th.View.ID])
 }
 
+// Edits counts the changes the GUI made to threads here, which change
+// what it shows of them before the engine answers: the commands it
+// submitted and the threads it read.
+func (m *Manager) Edits() uint64 { return m.edits }
+
 // MarkRead records that the GUI showed the thread's last turn and reports,
 // at once, and saves the mark to gui.json from a goroutine, as the file's
 // lock may wait on another GUI. It leaves the envs as they are, whatever
@@ -207,6 +212,7 @@ func (m *Manager) read(thread api.ID, at time.Time) {
 		return
 	}
 	m.saved.see(map[api.ID]time.Time{thread: at})
+	m.edits++
 	m.unsaved = true
 	m.saveSeen()
 }

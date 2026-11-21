@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -11,8 +12,10 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/daemon"
 	engines "glitched/internal/engine"
+	"glitched/internal/plugins"
 	"glitched/internal/plugins/widget"
 	"glitched/internal/provider/fake"
 )
@@ -265,5 +268,115 @@ func TestTheSidebarKeepsAPageOfMovedThreadsAtMost(t *testing.T) {
 	titles, more := listed(t, h, "bottom")
 	if len(titles) > 2*sidebarPage+1 || !slices.Contains(titles, last.View.Title) || !slices.Equal(more, []string{fmt.Sprintf("Show 100 more, of %d not shown", 390-len(titles))}) {
 		t.Fatalf("Settled lists %d threads, the one shown among them: %v, and %q", len(titles), slices.Contains(titles, last.View.Title), more)
+	}
+}
+
+// addThreads puts n threads under parent straight into the local machine's
+// threads, newer as they go, past the engine's bounds on children.
+func addThreads(h *harness, n int, parent api.ID, prefix string) []api.ID {
+	e := h.local()
+	now := h.tt.Now()
+	ids := make([]api.ID, n)
+	for i := range n {
+		id := api.NewID()
+		ids[i] = id
+		e.Threads[id] = &client.Thread{View: api.Thread{
+			ID: id, Parent: parent, Title: fmt.Sprintf("%s %05d", prefix, i),
+			Workspace: "/work/paged", Model: fakeModel, UpdatedAt: now.Add(time.Duration(i) * time.Millisecond),
+		}}
+		e.Membership++
+	}
+	return ids
+}
+
+// A child lifted into Working shows there and under its parent, and so do
+// its children's pages, each with its own row for the next.
+func TestTheSidebarPagesALiftedChildsChildrenWhereverItShows(t *testing.T) {
+	h := start(t, tempDir(t))
+	parent := addThreads(h, 1, api.ID{}, "Snoozed root")[0]
+	working := addThreads(h, 1, parent, "Working child")[0]
+	addThreads(h, 101, working, "Grandchild")
+	e := h.local()
+	e.Threads[parent].View.Disposition = api.Disposition{State: api.Snoozed, Until: h.tt.Now().Add(24 * time.Hour)}
+	e.Threads[working].View.Run = api.RunRunning
+	h.a.sectionClosed[catWorking], h.a.sectionClosed[catSnoozed] = false, false
+	h.a.childrenOpen[parent], h.a.childrenOpen[working] = true, true
+	titles, more := listed(t, h, "bottom")
+	if !h.a.lifted(thread{e, e.Threads[working]}) || len(slices.DeleteFunc(titles, func(s string) bool { return !strings.HasPrefix(s, "Grandchild") })) != 200 || !slices.Equal(more, []string{"Show 1 more, of 1 not shown", "Show 1 more, of 1 not shown"}) {
+		t.Fatalf("the lifted child's children show %q", more)
+	}
+}
+
+// However many pages the user asks for, and however many threads move in,
+// a copy's list holds no more than a list can; a row says the rest are
+// the palette's.
+func TestTheSidebarsListStaysInItsBounds(t *testing.T) {
+	h := start(t, tempDir(t))
+	movers := addThreads(h, 100, api.ID{}, "Old mover")
+	addThreads(h, 20100, api.ID{}, "New")
+	e := h.local()
+	for _, id := range movers {
+		e.Threads[id].View.UpdatedAt = h.tt.Now().Add(-time.Hour)
+	}
+	h.a.projects = h.a.gather()
+	h.a.emitThreadChanges()
+	if _, err := h.a.plugins.Copy("sidebar"); err != nil {
+		t.Fatal(err)
+	}
+	s := h.a.plugins.App("sidebar")
+	draw := func(version string) []sidebarRow {
+		t.Helper()
+		h.a.built++
+		body := h.a.sidebarBodyOf("inbox", 0, catInbox)
+		s.DrawFirst("body", []plugins.PlaceItem{{Key: "inbox", Version: version, Context: body}}, []string{"inbox"}, time.Now().Add(5*time.Second))
+		if s.Err != nil {
+			t.Fatalf("%s, the copy failed: %v", version, s.Err)
+		}
+		var items int
+		s.PlaceView("body", "inbox").Walk(func(n *widget.Node) {
+			if n.Type == "list" {
+				items = len(n.Items)
+			}
+		})
+		if items > widget.MaxListItems {
+			t.Fatalf("%s, the list holds %d items", version, items)
+		}
+		return body.Sections[0].Rows
+	}
+	draw("first")
+	for range 250 {
+		if _, err := h.a.pluginEffect("sidebar", plugins.Effect{Type: "sidebar.more", Args: json.RawMessage(`{"key":"inbox"}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows := draw("every page")
+	if last := rows[len(rows)-1]; !last.Full || last.More+len(rows)-1 != 20200 {
+		t.Fatalf("past the list's room, the last row is %+v of %d", last, len(rows))
+	}
+	for _, id := range movers {
+		e.Threads[id].View.Run = api.RunRunning
+	}
+	h.a.emitThreadChanges()
+	for _, id := range movers {
+		e.Threads[id].View.Run = api.RunIdle
+	}
+	h.a.emitThreadChanges()
+	draw("the movers back")
+}
+
+// A thread settled here leaves the inbox at once, before the engine
+// answers or the next frame.
+func TestTheInboxSortsAThreadSettledHereAtOnce(t *testing.T) {
+	h := start(t, inboxDir(t))
+	th := h.thread("SIP re-INVITE handling")
+	has := func(c category) bool {
+		return slices.ContainsFunc(h.a.itemsIn(c), func(it inboxItem) bool { return it.t.id() == th.id() })
+	}
+	if !has(catInbox) || has(catSettled) {
+		t.Fatal("the thread isn't in the inbox")
+	}
+	h.a.backend.SetDisposition(th.env, th.id(), api.Disposition{State: api.Settled})
+	if has(catInbox) || !has(catSettled) {
+		t.Error("settled here, the thread is still in the inbox till the next frame")
 	}
 }
