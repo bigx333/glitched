@@ -385,14 +385,15 @@ func (a *app) commandRecords() []commandRecord {
 // runCommand is glitched.commands.run: what choosing the action of that
 // id in the palette does, closing it, and only while the palette could be
 // opened to choose it: no dialog but the palette holds the window's keys.
-// An action that deletes asks first, as there.
-func (a *app) runCommand(id string) error {
+// An action that deletes asks first, as there. palette names the opening
+// of the palette it was chosen in, which alone it closes; "" closes any.
+func (a *app) runCommand(id, palette string) error {
 	if a.modal || a.removeOpen || a.deleteOpen {
 		return errors.New("a dialog waits for the user")
 	}
 	for _, cmd := range a.actions() {
 		if cmd.id == id {
-			a.cmdkOpen = false
+			a.closePalette(palette)
 			cmd.run()
 			return nil
 		}
@@ -448,7 +449,9 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 	case "panels.state":
 		return a.panels(), nil
 	case "palette.close":
-		a.cmdkOpen = false
+		var args struct{ Palette string }
+		json.Unmarshal(e.Args, &args)
+		a.closePalette(args.Palette)
 		return nil, nil
 	case "open.in":
 		return a.openInEffect(e.Args)
@@ -602,9 +605,9 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 	case "commands.list":
 		return a.commandRecords(), nil
 	case "commands.run":
-		var args struct{ ID string }
+		var args struct{ ID, Palette string }
 		json.Unmarshal(e.Args, &args)
-		return nil, a.runCommand(args.ID)
+		return nil, a.runCommand(args.ID, args.Palette)
 	case "projects.remove":
 		var args struct{ Workspace, Machine string }
 		json.Unmarshal(e.Args, &args)

@@ -67,7 +67,7 @@ func TestAListDrawsTheRowsInViewAndKeepsTheChoice(t *testing.T) {
 		},
 	}
 	tt := ui.NewTester(func(c *ui.Context) {
-		s.cs.Sync(s.v, s.rev, s.processed)
+		s.taking()
 		ui.Column(c).Fill().Padding(20).Children(func() {
 			View(c, s.v, &s.cs, st, &s.md, func(ev plugins.UIEvent, values map[string]any) int {
 				s.events = append(s.events, ev)
@@ -225,7 +225,7 @@ func TestAPalettesListFollowsThePointerAndWrapsAround(t *testing.T) {
 		return row
 	}}
 	tt := ui.NewTester(func(c *ui.Context) {
-		s.cs.Sync(s.v, s.rev, s.processed)
+		s.taking()
 		View(c, s.v, &s.cs, st, &s.md, func(ev plugins.UIEvent, values map[string]any) int {
 			s.events = append(s.events, ev)
 			return len(s.events)
@@ -321,7 +321,7 @@ func TestTheAppHoldsAListsRowsAndItsNativesDrawAboutTheirThread(t *testing.T) {
 		},
 	}
 	tt := ui.NewTester(func(c *ui.Context) {
-		s.cs.Sync(s.v, s.rev, s.processed)
+		s.taking()
 		View(c, s.v, &s.cs, st, &s.md, nil)
 	}, 400, 400)
 	tt.Frame()
@@ -348,7 +348,7 @@ func TestAPalettesListChoosesTheRowThePointerComesOnto(t *testing.T) {
 	s := &screen{}
 	s.show(t, list)
 	tt := ui.NewTester(func(c *ui.Context) {
-		s.cs.Sync(s.v, s.rev, s.processed)
+		s.taking()
 		View(c, s.v, &s.cs, Style{Rows: func(_ string, it widget.ListItem) *widget.Node {
 			return &widget.Node{Type: "text", Text: it.Label}
 		}}, &s.md, func(ev plugins.UIEvent, _ map[string]any) int {
@@ -407,7 +407,7 @@ func TestAPointerAtRestChoosesNothingAsRowsMoveUnderIt(t *testing.T) {
 	s := &screen{}
 	s.show(t, `{"body": {"type": "list", "id": "l", "label": "Results", "height": 108, "rowHeight": 36, "chooseOnHover": true, "wrapAround": true, "onChange": "choose", "onSubmit": "open", "items": [`+strings.Join(items, ",")+`]}}`)
 	draw := func(c *ui.Context) {
-		s.cs.Sync(s.v, s.rev, s.processed)
+		s.taking()
 		View(c, s.v, &s.cs, Style{Rows: func(_ string, it widget.ListItem) *widget.Node {
 			return &widget.Node{Type: "text", Text: it.Label}
 		}}, &s.md, func(ev plugins.UIEvent, _ map[string]any) int {
@@ -445,5 +445,69 @@ func TestAPointerAtRestChoosesNothingAsRowsMoveUnderIt(t *testing.T) {
 	}
 	if len(s.events) != n {
 		t.Fatalf("rows reordered under a pointer at rest chose %+v", s.events[n:])
+	}
+}
+
+// taking syncs the screen's controls with its view, as a plugin that
+// takes each event the moment it's sent: the keys pressed on a list wait
+// for nothing.
+func (s *screen) taking() {
+	s.cs.Sync(s.v, s.rev, s.processed)
+	s.cs.processed = max(s.cs.processed, len(s.events))
+}
+
+// Keys pressed on a list while the plugin hasn't taken what was sent
+// before them wait for it, then move and submit the list it draws: a
+// query typed and Enter at once submit what the query finds, as on
+// Glitched's own palette.
+func TestKeysWaitForThePluginToTakeWhatWasSentBefore(t *testing.T) {
+	s := &screen{}
+	view := func(value string, keys ...string) string {
+		var items []string
+		for _, k := range keys {
+			items = append(items, `{"key": "`+k+`", "label": "Row `+k+`"}`)
+		}
+		return `{"body": {"type": "column", "children": [{"type": "input", "id": "q", "label": "Query", "onChange": "query"},
+			{"type": "list", "id": "l", "label": "Results", "height": 200, "input": "q", "controlled": true, "value": "` + value + `", "onChange": "chose", "onSubmit": "open", "items": [` + strings.Join(items, ",") + `]}]}}`
+	}
+	s.show(t, view("a", "a", "b", "c"))
+	tt := ui.NewTester(func(c *ui.Context) {
+		s.cs.Sync(s.v, s.rev, s.processed)
+		View(c, s.v, &s.cs, Style{Rows: func(_ string, it widget.ListItem) *widget.Node {
+			return &widget.Node{Type: "text", Text: it.Label}
+		}}, &s.md, func(ev plugins.UIEvent, _ map[string]any) int {
+			s.events = append(s.events, ev)
+			return len(s.events)
+		})
+	}, 400, 400)
+	tt.Frame()
+	in, ok := tt.AccessByRole(ui.RoleTextField, "")
+	if !ok {
+		t.Fatal("no search field")
+	}
+	tt.ClickAt(in.Bounds.X+5, in.Bounds.Y+in.Bounds.H/2)
+	tt.Type("x")
+	tt.Key(0, ui.KeyDown)
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "change" || ev.Handler != "query" {
+		t.Fatalf("keys acted on the list before the plugin took the query: %+v", s.events)
+	}
+	// The plugin takes the query and draws what it finds.
+	s.show(t, view("x1", "x1", "x2", "x3"))
+	s.processed = len(s.events)
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "change" || ev.Value != "x2" {
+		t.Fatalf("Down after the plugin took the query: %+v, want x2 chosen", ev)
+	}
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "change" {
+		t.Fatalf("Enter went before the plugin took the move: %+v", ev)
+	}
+	s.show(t, view("x2", "x1", "x2", "x3"))
+	s.processed = len(s.events)
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "submit" || ev.Value != "x2" {
+		t.Fatalf("Enter after the plugin took the move: %+v, want x2 submitted", ev)
 	}
 }

@@ -82,6 +82,9 @@ type placeFrame struct {
 	waited map[string]bool
 	// drawn is who drew the copies of each component drawn.
 	drawn map[string]*componentDrawn
+	// rowsBy is when the frame stops waiting for lists' rows: one wait
+	// for all its lists, however many.
+	rowsBy time.Time
 }
 
 // componentDrawn is who drew each copy of a component in a frame, in
@@ -187,7 +190,10 @@ func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key s
 			return app.Row(plugins.RowAt{List: list, Place: ref}, it)
 		}
 		st.WaitRows = func(list string, items []widget.ListItem) {
-			app.WaitRows(plugins.RowAt{List: list, Place: ref}, items, time.Now().Add(firstDrawWait))
+			if a.placeFrame.rowsBy.IsZero() {
+				a.placeFrame.rowsBy = time.Now().Add(firstDrawWait)
+			}
+			app.WaitRows(plugins.RowAt{List: list, Place: ref}, items, a.placeFrame.rowsBy)
 		}
 		render.View(c, v, cs, st, &a.pluginMD, func(ev plugins.UIEvent, values map[string]any) int {
 			ev.Place = ref

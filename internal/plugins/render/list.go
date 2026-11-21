@@ -22,6 +22,17 @@ type listView struct {
 	// none move.
 	pointerX, pointerY float32
 	sampled, moved     bool
+	// pressed are the keys pressed on the list the plugin hasn't caught
+	// up with yet, in order.
+	pressed []press
+}
+
+// press is a key pressed on a list: a move by d items, or a submit with
+// the keys held.
+type press struct {
+	d      int
+	submit bool
+	mods   []string
 }
 
 // listOf is the list's view of n's items, built again for a new view's.
@@ -75,12 +86,13 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 	} else {
 		e.Height(min(lv.tall, float32(n.Height)))
 	}
-	e.OnShortcut(0, ui.KeyDown, func() { r.move(n, ctl, 1) })
-	e.OnShortcut(0, ui.KeyUp, func() { r.move(n, ctl, -1) })
-	e.OnShortcut(0, ui.KeyHome, func() { r.move(n, ctl, -len(n.Items)) })
-	e.OnShortcut(0, ui.KeyEnd, func() { r.move(n, ctl, len(n.Items)) })
-	e.OnShortcut(0, ui.KeyEnter, func() { r.submit(kc, n, ctl.text) })
-	e.OnShortcut(ui.Cmd, ui.KeyEnter, func() { r.submit(kc, n, ctl.text) })
+	r.pressed(n, ctl)
+	e.OnShortcut(0, ui.KeyDown, func() { r.press(n, ctl, press{d: 1}) })
+	e.OnShortcut(0, ui.KeyUp, func() { r.press(n, ctl, press{d: -1}) })
+	e.OnShortcut(0, ui.KeyHome, func() { r.press(n, ctl, press{d: -len(n.Items)}) })
+	e.OnShortcut(0, ui.KeyEnd, func() { r.press(n, ctl, press{d: len(n.Items)}) })
+	e.OnShortcut(0, ui.KeyEnter, func() { r.press(n, ctl, press{submit: true, mods: heldKeys(kc)}) })
+	e.OnShortcut(ui.Cmd, ui.KeyEnter, func() { r.press(n, ctl, press{submit: true, mods: heldKeys(kc)}) })
 	if r.st.WaitRows != nil && len(n.Items) > 0 {
 		first, _ := ls.Visible()
 		first = min(max(first, 0), len(n.Items)-1)
@@ -113,7 +125,7 @@ func (r *renderer) listRow(c *ui.Context, n *widget.Node, ctl *control, i int) {
 	h := float32(n.ItemHeight(i))
 	held := func(e ui.Element) bool { return r.st.ListRow != nil && r.st.ListRow(c, n, i, e) }
 	if it.Header {
-		head := ui.Column(c.Key("header")).Height(h).Justify(ui.Center).Label(it.Label)
+		head := ui.Column(c.Key("header")).Height(h).Justify(ui.Center)
 		in.hovered = held(head) || head.Hovered()
 		head.Children(func() {
 			if node != nil {
@@ -146,12 +158,12 @@ func (r *renderer) listRow(c *ui.Context, n *widget.Node, ctl *control, i int) {
 	}).OnClick(func() {
 		r.choose(n, ctl, it.Key)
 		if n.SubmitOnClick {
-			r.submit(c, n, it.Key)
+			r.submit(n, it.Key, heldKeys(c))
 		}
 	})
 	if b.DoubleClicked() && !n.SubmitOnClick {
 		r.choose(n, ctl, it.Key)
-		r.submit(c, n, it.Key)
+		r.submit(n, it.Key, heldKeys(c))
 	}
 }
 
@@ -204,22 +216,53 @@ func (r *renderer) move(n *widget.Node, ctl *control, d int) {
 	lv.state.ScrollIntoView(to)
 }
 
-// submit tells the plugin the choice was submitted, with the keys held:
-// cmd is Command on macOS and Control elsewhere, where ctrl is never told.
-func (r *renderer) submit(c *ui.Context, n *widget.Node, key string) {
-	if i, ok := r.cs.m[n.ID].listOf(n).index[key]; !ok || n.Items[i].Header {
-		return
+// press does what a key asks of the list once the plugin took every event
+// sent before it: a key pressed as the plugin draws the list a query
+// just typed brings moves and submits that list, not the one on screen.
+func (r *renderer) press(n *widget.Node, ctl *control, p press) {
+	lv := ctl.listOf(n)
+	lv.pressed = append(lv.pressed, p)
+	r.pressed(n, ctl)
+}
+
+// pressed does the keys pressed on the list, in order, while the plugin
+// has caught up with what they sent.
+func (r *renderer) pressed(n *widget.Node, ctl *control) {
+	lv := ctl.listOf(n)
+	for len(lv.pressed) > 0 && r.cs.sent <= r.cs.processed {
+		p := lv.pressed[0]
+		lv.pressed = lv.pressed[1:]
+		if p.submit {
+			r.submit(n, ctl.text, p.mods)
+		} else {
+			r.move(n, ctl, p.d)
+		}
 	}
-	s := *r
+}
+
+// heldKeys are the keys held, as a submit tells them: cmd is Command on macOS
+// and Control elsewhere, where ctrl is never told.
+func heldKeys(c *ui.Context) []string {
+	var out []string
 	mods := c.Modifiers()
 	for _, m := range []struct {
 		m    ui.Modifiers
 		name string
 	}{{ui.Cmd, "cmd"}, {ui.Shift, "shift"}, {ui.Alt, "alt"}, {ui.Ctrl &^ ui.Cmd, "ctrl"}} {
 		if mods&m.m != 0 {
-			s.mods = append(s.mods, m.name)
+			out = append(out, m.name)
 		}
 	}
+	return out
+}
+
+// submit tells the plugin the choice was submitted, with the keys held.
+func (r *renderer) submit(n *widget.Node, key string, mods []string) {
+	if i, ok := r.cs.m[n.ID].listOf(n).index[key]; !ok || n.Items[i].Header {
+		return
+	}
+	s := *r
+	s.mods = mods
 	s.fire(n, n.OnSubmit, "submit", key)
 }
 
@@ -232,10 +275,10 @@ func (r *renderer) drive(c *ui.Context, e ui.Element, l *widget.Node) {
 	if ctl == nil || ctl.list == nil || ctl.list.drawn < r.cs.passes-1 {
 		return
 	}
-	e.OnShortcut(0, ui.KeyDown, func() { r.move(l, ctl, 1) })
-	e.OnShortcut(0, ui.KeyUp, func() { r.move(l, ctl, -1) })
-	e.OnShortcut(ui.Cmd, ui.KeyEnter, func() { r.submit(c, l, ctl.text) })
+	e.OnShortcut(0, ui.KeyDown, func() { r.press(l, ctl, press{d: 1}) })
+	e.OnShortcut(0, ui.KeyUp, func() { r.press(l, ctl, press{d: -1}) })
+	e.OnShortcut(ui.Cmd, ui.KeyEnter, func() { r.press(l, ctl, press{submit: true, mods: heldKeys(c)}) })
 	if e.Submitted() {
-		r.submit(c, l, ctl.text)
+		r.press(l, ctl, press{submit: true, mods: heldKeys(c)})
 	}
 }

@@ -31,7 +31,8 @@ func displayPath(p string) string {
 // isn't running; and the parts of Glitched, with who draws each.
 func (a *app) pluginSettings(c *ui.Context) {
 	list := a.plugins.Installed()
-	long := len(list) > 8
+	// Only yours make the list long: the built-ins alone need no filter.
+	long := len(list) > 8 && slices.ContainsFunc(list, func(p plugins.Plugin) bool { return !p.Builtin })
 	ui.Row(c).Gap(12).AlignItems(ui.Center).Wrap().Children(func() {
 		ui.Segmented(c.Key("view"), &a.pluginsView, "Plugins", "Parts of Glitched").Label("Show")
 		ui.Spacer(c)

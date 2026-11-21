@@ -377,12 +377,12 @@ func TestAnActionWaitsOnTheDialogOnScreen(t *testing.T) {
 	}
 	a.router.Push("/plugins/modal/home")
 	until(true)
-	if err := a.runCommand("sidebar.toggle"); err == nil {
+	if err := a.runCommand("sidebar.toggle", ""); err == nil {
 		t.Error("an action ran under the dialog the window shows")
 	}
 	tt.Key(0, ui.KeyEscape)
 	until(false)
-	if err := a.runCommand("sidebar.toggle"); err != nil {
+	if err := a.runCommand("sidebar.toggle", ""); err != nil {
 		t.Errorf("an action waited on a dialog the window no longer shows: %v", err)
 	}
 }
@@ -585,5 +585,25 @@ func TestThePalettesRowsShowAsItOpens(t *testing.T) {
 		if !slices.Contains(tt.Texts(), s) {
 			t.Errorf("%q isn't shown as the palette opens: %q", s, tt.Texts())
 		}
+	}
+}
+
+// What was chosen in a palette closed since runs, and leaves the palette
+// opened after it be, as Glitched's own palette did.
+func TestAnEarlierChoiceLeavesThePaletteOpenedSince(t *testing.T) {
+	h := start(t, inboxDir(t))
+	h.thread("SIP re-INVITE handling")
+	h.a.openCommandPalette()
+	paletteShows(t, h)
+	h.tt.Type("toggle terminal")
+	paletteShows(t, h)
+	h.tt.Key(0, ui.KeyEnter)
+	h.tt.Key(0, ui.KeyEscape)
+	h.tt.Frame()
+	h.a.openCommandPalette()
+	h.tt.Frame()
+	settlePlugins(t, h.a, h.tt, h.p)
+	if !h.a.showTerminal || !h.a.cmdkOpen {
+		t.Fatalf("terminal %v, palette open %v: want the terminal toggled and the new palette open", h.a.showTerminal, h.a.cmdkOpen)
 	}
 }
