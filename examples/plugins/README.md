@@ -12,6 +12,7 @@
 | `word-tools` | tools for agents, with a database |
 | `repo-watch` | a headless service on a timer that runs git |
 | `quiet-header` | a component replaced: the thread header's buttons, icons only |
+| `bubble` | a component restyled: your messages' bubble, square, outlined and narrower |
 
 `glitched.d.ts` types the contract for a TypeScript plugin's editor.
 

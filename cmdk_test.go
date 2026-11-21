@@ -258,7 +258,7 @@ func TestARowsNativesDrawTheSidebarsOwnParts(t *testing.T) {
 	tt := ui.NewTester(func(c *ui.Context) { ui.Row(c).Children(func() { draw(c) }) }, 600, 80)
 	shows := func(component, row, name string) {
 		t.Helper()
-		draw = func(c *ui.Context) { h.a.drawNative(c, component, nil, row, native(name), nil, nil) }
+		draw = func(c *ui.Context) { h.a.drawNative(c, component, nil, row, native(name), nil, componentCopy{}) }
 		tt.Frame()
 		tt.Advance(time.Second)
 	}

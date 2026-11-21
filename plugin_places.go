@@ -163,15 +163,17 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread) {
 		if node == nil {
 			continue
 		}
-		a.drawPlace(c, ui.Row(c).Key("plugin:"+pl.Plugin+":"+pl.Place.ID).Shrink(1).AlignItems(ui.Center).ClipX(), pl, key, ctx, app, node, nil)
+		a.drawPlace(c, ui.Row(c).Key("plugin:"+pl.Plugin+":"+pl.Place.ID).Shrink(1).AlignItems(ui.Center).ClipX(), pl, key, ctx, app, node, nil, nil)
 	}
 }
 
 // drawPlace draws in box what the plugin drew for one copy of its place,
 // and hands what the user does there to its app session.
 //
-// native draws the native widgets of a component's copy, nil elsewhere.
-func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key string, ctx any, app *plugins.Session, node *widget.Node, native func(c *ui.Context, n *widget.Node, row string, fire func(any))) {
+// native draws the native widgets of a component's copy, nil elsewhere,
+// and after what Glitched draws over the drawing in box, as a message's
+// actions, nil for nothing.
+func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key string, ctx any, app *plugins.Session, node *widget.Node, native func(c *ui.Context, n *widget.Node, row string, fire func(any)), after func()) {
 	pk := placeKey{pl.Plugin, pl.Place.ID, key}
 	a.placeFrame.keys[pk] = true
 	cs := a.placeControls[pk]
@@ -199,6 +201,9 @@ func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key s
 			ev.Place = ref
 			return app.Dispatch(ev, values)
 		})
+		if after != nil {
+			after()
+		}
 	})
 }
 

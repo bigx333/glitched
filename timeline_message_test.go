@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
+	"glitched/internal/plugins/widget"
 	"glitched/internal/provider/fake"
 )
 
@@ -329,5 +332,117 @@ export async function place({items}) {
 	}
 	if !barShown(h) || a.quote.text != sel {
 		t.Fatalf("finishing a native-only layout cleared selection %q to %q (quote bar: %v)", sel, a.quote.text, barShown(h))
+	}
+}
+
+// Glitched draws the built-in Timeline rows' own drawing of a row while
+// the plugin has drawn none, so the plugin taking over moves nothing: its
+// main.js and timelineRow draw every row alike, notes and failures too.
+func TestGlitchedWaitsForTheBuiltInRowsWithTheirOwnDrawing(t *testing.T) {
+	h, _ := timelineHarness(t)
+	a, tt := h.a, h.tt
+	settlePlugins(t, a, tt, h.p)
+	same := func(who string, got *widget.Node, m timelineMessage) {
+		t.Helper()
+		want, _ := json.Marshal(timelineRow(m))
+		have, _ := json.Marshal(got)
+		if string(have) != string(want) {
+			t.Errorf("%s draws the %s row %s as %s, Glitched as %s", who, m.Kind, m.Key, have, want)
+		}
+	}
+	th := h.thread("A thread")
+	rs := a.rowsOf(th)
+	for _, e := range rs.es {
+		if e.kind == entryRequest || e.kind == entryReport {
+			continue
+		}
+		m := timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil}
+		same("the built-in", a.plugins.App("timeline").PlaceView("row", e.key), m)
+	}
+
+	// Each row as one of cases in turn, to draw what the thread has none of.
+	cases := []timelineMessage{{Kind: "user", Note: "Sending…"}, {Kind: "user", Note: "Not sent: offline", Failed: true}, {Kind: "failed", Failed: true}, {Kind: "error"}, {Kind: "assistant", Streaming: true}, {Kind: "work"}}
+	pick := map[string]int{}
+	for _, e := range rs.es {
+		pick[e.key] = len(pick) % len(cases)
+	}
+	of := func(key string) timelineMessage {
+		m := cases[pick[key]]
+		m.Key = key
+		return m
+	}
+	src, err := os.ReadFile("internal/plugins/bundled/timeline/main.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs, _ := json.Marshal(cases)
+	ps, _ := json.Marshal(pick)
+	js := strings.Replace(string(src), "row(context))", "row(cases[pick[key]]))", 1)
+	js = strings.Replace(js, "({ context })", "({ key })", 1) + "\nconst cases = " + string(cs) + ";\nconst pick = " + string(ps) + ";\n"
+	writeOwnPlugin(t, a, "my-rows", rowsManifest, js)
+	allow(t, a, "my-rows", "ui.replace")
+	settlePlugins(t, a, tt, h.p)
+	seen := map[string]bool{}
+	for _, e := range rs.es {
+		if e.kind == entryRequest || e.kind == entryReport {
+			continue
+		}
+		m := of(e.key)
+		seen[m.Kind+m.Note] = true
+		same("main.js", a.plugins.App("my-rows").PlaceView("row", e.key), m)
+	}
+	if len(seen) < len(cases) {
+		t.Errorf("the rows drew only %v of the cases", seen)
+	}
+}
+
+// The bubble sample restyles your messages and leaves every other row to
+// the built-in.
+func TestTheBubbleSampleRestylesYourMessages(t *testing.T) {
+	h, _ := timelineHarness(t)
+	a, tt := h.a, h.tt
+	var files [2]string
+	for i, name := range []string{"plugin.json", "index.js"} {
+		b, err := os.ReadFile(filepath.Join("examples/plugins/bubble", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[i] = string(b)
+	}
+	writeOwnPlugin(t, a, "bubble", files[0], files[1])
+	allow(t, a, "bubble", "ui.replace")
+	settlePlugins(t, a, tt, h.p)
+	if !tt.HasText(turnText(1)) || !tt.HasText("Reply 1.") {
+		t.Fatalf("the rows don't draw: %q", tt.Texts())
+	}
+	rs := a.rowsOf(h.thread("A thread"))
+	drawn := a.partsDrawn["timeline.message"]
+	if drawn == nil {
+		t.Fatal("no record of who drew the rows")
+	}
+	by := map[string]int{}
+	for _, cp := range drawn.copies {
+		by[cp.plugin]++
+	}
+	if by["bubble"] == 0 || by["timeline"] == 0 || by[""] != 0 {
+		t.Fatalf("the rows shown are drawn by %v, not your messages by bubble and the rest by the built-in", by)
+	}
+	checked := 0
+	for _, e := range rs.es {
+		if e.kind != entryUser {
+			continue
+		}
+		n := a.plugins.App("bubble").PlaceView("row", e.key)
+		if n == nil {
+			continue
+		}
+		checked++
+		bubble := n.Children[1].Children[0]
+		if n.Children[1].MaxWidthPercent != 60 || bubble.Radius != 4 || bubble.Border != "$accent" || bubble.Children[0].Name != "transcript.body" {
+			t.Fatalf("bubble draws %s as %+v", e.key, bubble)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("bubble drew none of your messages")
 	}
 }

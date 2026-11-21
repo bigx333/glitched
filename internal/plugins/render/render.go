@@ -365,6 +365,21 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		if col, ok := st.color(n.Background); ok {
 			e.Background(col).Radius(8)
 		}
+		if col, ok := st.color(n.Border); ok {
+			if n.BorderOpacity != 0 {
+				col = col.Alpha(float32(n.BorderOpacity))
+			}
+			e.Border(1, col)
+		}
+		if n.Radius != 0 {
+			e.Radius(float32(n.Radius))
+		}
+		if len(n.Corners) == 4 {
+			e.Radius(float32(n.Corners[0]), float32(n.Corners[1]), float32(n.Corners[2]), float32(n.Corners[3]))
+		}
+		if n.MaxWidthPercent != 0 {
+			e.MaxWidthPercent(float32(n.MaxWidthPercent))
+		}
 		e.Children(func() { r.children(c, n) })
 	case "card":
 		if n.Style == "list" {
