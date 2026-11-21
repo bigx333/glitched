@@ -543,22 +543,20 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 		return
 	}
 	m := timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil}
+	acted := false
 	a.pluginComponent(c, "timeline.message", &t, componentCopy{
 		key:     e.key,
 		box:     func() ui.Element { return ui.Column(c).Key(e.key).Transition(riseIn) },
 		context: func(plugins.ThreadRecord) any { return m },
-		native:  func(body *widget.Node) { a.transcriptBody(c, t, rs, i, body) },
+		native:  func(body *widget.Node) { acted = a.transcriptBody(c, t, rs, i, body) },
 		retry: func() {
 			if e.failed.Err != nil {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(0, 0, 0, 8).Children(func() { a.failedActions(c, t, e.failed) })
 			}
 		},
 		over: func(box ui.Element) {
-			switch {
-			case e.kind == entryUser && e.failed.Err == nil && !t.id().IsZero():
+			if !acted && e.kind == entryUser && e.failed.Err == nil && !t.id().IsZero() {
 				a.messageActions(c, t, rs.es, i, box.Hovered())
-			case e.kind == entryAssistant:
-				a.messageActions(c, t, rs.es, i, box.Hovered() && !e.streaming)
 			}
 		},
 		builtin: func() *widget.Node { return timelineRow(m) },
@@ -620,8 +618,10 @@ var entryKindNames = map[entryKind]string{entryUser: "user", entryAssistant: "as
 // draws the rest, and transcript.retry a failed command's Retry and
 // Dismiss. Otherwise it draws the row as Glitched did before the built-in
 // drew its chrome: a message in its bubble with its note, an error in its
-// outline with Retry and Dismiss.
-func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body *widget.Node) {
+// outline with Retry and Dismiss. It draws a message's actions, shown
+// while it is pointed at, under it, and says whether it did: a bare
+// message of yours has them under its copy instead.
+func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body *widget.Node) bool {
 	e := rs.es[i]
 	var bare bool
 	if body != nil {
@@ -644,9 +644,10 @@ func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body *widg
 		}
 		if bare {
 			words()
-			return
+			return false
 		}
-		ui.Row(c).Key(e.key).Children(func() {
+		r := ui.Row(c).Key(e.key)
+		r.Children(func() {
 			ui.Spacer(c)
 			ui.Column(c).AlignItems(ui.End).Gap(6).MaxWidthPercent(80).Children(func() {
 				words().Padding(10, 14).Radius(16, 16, 4, 16).Background(palette.surface).Border(1, palette.border)
@@ -654,6 +655,9 @@ func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body *widg
 					a.messageNote(c, t, e)
 				}
 			})
+			if e.failed.Err == nil && !t.id().IsZero() {
+				a.messageActions(c, t, rs.es, i, r.Hovered())
+			}
 		})
 	case entryAssistant:
 		col := inset(ui.Column(c).Key(e.key).LineHeight(1.55))
@@ -665,13 +669,14 @@ func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body *widg
 				md = markdown.View(c, e.text, &a.md)
 			}
 			a.followSelection(c, t, e.key, e.text, col, md)
+			a.messageActions(c, t, rs.es, i, col.Hovered() && !e.streaming)
 		})
 	case entryWork:
 		a.workLog(c, t, e.key, e, rs.files)
 	case entryFailed, entryError:
 		if bare {
 			inset(ui.Text(c, e.text).FontSize(12).TextColor(palette.red))
-			return
+			return false
 		}
 		ui.Row(c).Key(e.key).Gap(8).AlignItems(ui.Center).Padding(6, 6, 6, 14).Radius(12).Border(1, palette.red.Alpha(0.35)).Children(func() {
 			ui.Text(c, e.text).FontSize(12).TextColor(palette.red).Grow(1).Shrink(1)
@@ -680,6 +685,7 @@ func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body *widg
 			}
 		})
 	}
+	return e.kind == entryUser || e.kind == entryAssistant
 }
 
 // messageNote is under a message that hasn't simply been sent: queued,

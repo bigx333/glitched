@@ -8,8 +8,8 @@
 // the row's key and kind, whether it streams, its note and whether it
 // failed. A layout that leaves transcript.body out, or places it twice,
 // isn't drawn: Glitched draws its own row instead. Glitched draws a
-// message's Copy and Edit or Retry over every copy, while it is pointed
-// at.
+// message's Copy and Edit or Retry while it is pointed at: under a reply's
+// body, and under the whole row of a message of yours.
 
 // Bare, transcript.body draws only the words: the chrome is this layout's.
 const body = { type: "native", id: "body", name: "transcript.body", props: { bare: true } };

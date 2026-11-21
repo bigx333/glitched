@@ -14,15 +14,14 @@ import (
 
 // messageActions is the toolbar under the message es[i], at the edge the
 // message is on, while the message is pointed at or the toolbar itself
-// is. It touches the message, so the pointer can reach it. A reply's
-// keeps the reply's line height, as its words have.
+// is. It touches the message, so the pointer can reach it.
 func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed bool) {
 	e := es[i]
 	bar := ui.Row(c).Key("actions").Absolute().Bottom(-22).Padding(2, 0, 0).Gap(2)
 	if e.kind == entryUser {
 		bar.Right(0)
 	} else {
-		bar.Left(0).LineHeight(1.55)
+		bar.Left(0)
 	}
 	if !pointed && !bar.Hovered() {
 		bar.Invisible()
