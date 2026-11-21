@@ -59,7 +59,7 @@ func (ctl *control) listOf(n *widget.Node) *listView {
 	lv.items = n.Items
 	lv.index = make(map[string]int, len(n.Items))
 	t, _, b, _ := n.Padding.Sides()
-	lv.tall = float32(t + b + n.Gap*max(len(n.Items)-1, 0))
+	lv.tall = t + b + n.Gap*float32(max(len(n.Items)-1, 0))
 	for i, it := range n.Items {
 		lv.index[it.Key] = i
 		lv.tall += n.ItemHeight(i)
@@ -88,7 +88,7 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 	ls := &lv.state
 	ls.Key = func(i int) any { return n.Items[i].Key }
 	ls.Label = func(i int) string { return n.Items[i].Label }
-	e := ui.List(kc, ls, len(n.Items)).Label(n.Label).Focusable().Gap(float32(n.Gap))
+	e := ui.List(kc, ls, len(n.Items)).Label(n.Label).Focusable().Gap(n.Gap)
 	if n.ChooseOnHover {
 		x, y, in := e.PointerPosition()
 		at := e.Bounds()
@@ -100,7 +100,7 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 	if n.Grow {
 		e.Grow(1).Shrink(1).Basis(0)
 	} else {
-		e.Height(min(lv.tall, float32(n.Height)))
+		e.Height(min(lv.tall, n.Height))
 	}
 	r.pressed(n, ctl)
 	e.OnShortcut(0, ui.KeyDown, func() { r.press(n, ctl, press{d: 1}) })
@@ -112,14 +112,14 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 	if r.st.WaitRows != nil && len(n.Items) > 0 {
 		first, _ := ls.Visible()
 		first = min(max(first, 0), len(n.Items)-1)
-		tall := max(e.Bounds().H, float32(n.Height))
+		tall := max(e.Bounds().H, n.Height)
 		if tall == 0 {
 			tall = maxListView
 		}
 		var in []widget.ListItem
 		for i, y := first, float32(0); i < len(n.Items) && y < tall; i++ {
 			in = append(in, n.Items[i])
-			y += n.ItemHeight(i) + float32(n.Gap)
+			y += n.ItemHeight(i) + n.Gap
 		}
 		r.st.WaitRows(n.ID, in)
 	}

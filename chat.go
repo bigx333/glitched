@@ -568,7 +568,7 @@ func timelineRow(m timelineMessage) *widget.Node {
 	switch m.Kind {
 	case "user":
 		words := &widget.Node{Type: "native", ID: "body", Name: "transcript.body", Props: bare, Padding: widget.Spacing{10, 14}}
-		bubble := &widget.Node{Type: "column", Corners: []int{16, 16, 4, 16}, Background: "$surface", Border: "$border", Children: []*widget.Node{words}}
+		bubble := &widget.Node{Type: "column", Corners: []float32{16, 16, 4, 16}, Background: "$surface", Border: "$border", Children: []*widget.Node{words}}
 		col := &widget.Node{Type: "column", Align: "end", Gap: 6, MaxWidthPercent: 80, Children: []*widget.Node{bubble}}
 		if m.Note != "" {
 			note := &widget.Node{Type: "text", Text: m.Note, Size: "small", Color: "$text.faint"}
@@ -621,7 +621,7 @@ func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body *widg
 	inset := func(el ui.Element) ui.Element {
 		if bare && len(body.Padding) > 0 {
 			t, r, b, l := body.Padding.Sides()
-			el.Padding(float32(t), float32(r), float32(b), float32(l))
+			el.Padding(t, r, b, l)
 		}
 		return el
 	}

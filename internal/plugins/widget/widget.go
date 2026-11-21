@@ -11,6 +11,7 @@ package widget
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -181,7 +182,7 @@ type Node struct {
 	Disabled   bool `json:"disabled,omitempty"`
 	Selectable bool `json:"selectable,omitempty"`
 
-	Gap     int     `json:"gap,omitempty"`
+	Gap     float32 `json:"gap,omitempty"`
 	Padding Spacing `json:"padding,omitempty"`
 	Align   string  `json:"align,omitempty"`
 	Justify string  `json:"justify,omitempty"`
@@ -201,10 +202,10 @@ type Node struct {
 	// An image's source: "plugin:<path>" in the plugin's folder, or an
 	// https address, which needs the network grant. Width and height are
 	// in points; Radius rounds its corners.
-	Src    string `json:"src,omitempty"`
-	Width  int    `json:"width,omitempty"`
-	Height int    `json:"height,omitempty"`
-	Radius int    `json:"radius,omitempty"`
+	Src    string  `json:"src,omitempty"`
+	Width  float32 `json:"width,omitempty"`
+	Height float32 `json:"height,omitempty"`
+	Radius float32 `json:"radius,omitempty"`
 	// Name is an icon's: one of the app's, or "plugin:<path>.svg".
 	Name string `json:"name,omitempty"`
 	// Color and Background are theme tokens (Colors); a swatch's or a
@@ -219,10 +220,10 @@ type Node struct {
 	// no radius, and Corners each of them: top-left, top-right,
 	// bottom-right and bottom-left. MaxWidthPercent caps a row's or
 	// column's width at that share of its parent's, 1 to 100.
-	Border          string   `json:"border,omitempty"`
-	BorderOpacity   *float64 `json:"borderOpacity,omitempty"`
-	Corners         []int    `json:"corners,omitempty"`
-	MaxWidthPercent int      `json:"maxWidthPercent,omitempty"`
+	Border          string    `json:"border,omitempty"`
+	BorderOpacity   *float64  `json:"borderOpacity,omitempty"`
+	Corners         []float32 `json:"corners,omitempty"`
+	MaxWidthPercent int       `json:"maxWidthPercent,omitempty"`
 
 	// Tooltip is a button's or menu's tooltip, and what it is called to
 	// assistive tools. Icon is an icon before the label of a ghost or
@@ -349,23 +350,23 @@ type Option struct {
 // Spacing is a padding: one value for every side, two for vertical and
 // horizontal, or four for top, right, bottom and left. JSON has it as a
 // number or a list.
-type Spacing []int
+type Spacing []float32
 
 // UnmarshalJSON takes a number or a list of numbers.
 func (s *Spacing) UnmarshalJSON(b []byte) error {
 	if len(b) > 0 && b[0] != '[' {
-		var n int
+		var n float32
 		if err := json.Unmarshal(b, &n); err != nil {
 			return err
 		}
 		*s = Spacing{n}
 		return nil
 	}
-	return json.Unmarshal(b, (*[]int)(s))
+	return json.Unmarshal(b, (*[]float32)(s))
 }
 
 // Sides are the padding's top, right, bottom and left.
-func (s Spacing) Sides() (t, r, b, l int) {
+func (s Spacing) Sides() (t, r, b, l float32) {
 	switch len(s) {
 	case 1:
 		return s[0], s[0], s[0], s[0]
@@ -450,7 +451,7 @@ func DecodeWithin(b []byte, maxNodes int) (*View, error) {
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	if err := d.Decode(&v); err != nil {
-		return nil, fmt.Errorf("view: %w", err)
+		return nil, fmt.Errorf("view: %w", whole(err))
 	}
 	if err := v.check(maxNodes); err != nil {
 		return nil, err
@@ -493,7 +494,7 @@ func DecodeRow(b []byte) (*Node, error) {
 	d := json.NewDecoder(bytes.NewReader(append(append([]byte(`{"body":`), b...), '}')))
 	d.DisallowUnknownFields()
 	if err := d.Decode(&v); err != nil {
-		return nil, fmt.Errorf("row: %w", err)
+		return nil, fmt.Errorf("row: %w", whole(err))
 	}
 	if v.Body == nil {
 		return nil, fmt.Errorf("row: no widget")
@@ -556,6 +557,17 @@ type checker struct {
 	lists []*Node
 }
 
+// whole says which field takes a whole number, where json says a number
+// with a fraction doesn't fit an int. Points take fractions; a count, a
+// weight or a percent doesn't.
+func whole(err error) error {
+	var t *json.UnmarshalTypeError
+	if errors.As(err, &t) && strings.HasPrefix(t.Value, "number") && strings.HasPrefix(t.Type.Kind().String(), "int") {
+		return fmt.Errorf("%s is a whole number, not %s", t.Field, strings.TrimPrefix(t.Value, "number "))
+	}
+	return err
+}
+
 func (c *checker) node(n *Node, path string, depth int) error {
 	if n == nil {
 		return fmt.Errorf("%s: null widget", path)
@@ -604,7 +616,7 @@ func (c *checker) node(n *Node, path string, depth int) error {
 	if !contains(aligns, n.Align) || !contains(justifys, n.Justify) {
 		return fail("unknown align %q or justify %q", n.Align, n.Justify)
 	}
-	if n.Gap < 0 || n.Gap > MaxSpacing || len(n.Padding) == 3 || len(n.Padding) > 4 || slices.ContainsFunc(n.Padding, func(p int) bool { return p < 0 || p > MaxSpacing }) {
+	if n.Gap < 0 || n.Gap > MaxSpacing || len(n.Padding) == 3 || len(n.Padding) > 4 || slices.ContainsFunc(n.Padding, func(p float32) bool { return p < 0 || p > MaxSpacing }) {
 		return fail("gap and padding are 0 to %d, and padding is 1, 2 or 4 of them", MaxSpacing)
 	}
 	if n.Type == "native" {
@@ -832,7 +844,7 @@ func (c *checker) extra(n *Node) error {
 		return fmt.Errorf("a %s has no border, borderOpacity, corners or maxWidthPercent", n.Type)
 	case n.BorderOpacity != nil && (n.Border == "" || *n.BorderOpacity < 0 || *n.BorderOpacity > 1):
 		return fmt.Errorf("a borderOpacity is 0 to 1, of a border")
-	case n.Corners != nil && (len(n.Corners) != 4 || slices.ContainsFunc(n.Corners, func(r int) bool { return r < 0 || r > MaxSize })):
+	case n.Corners != nil && (len(n.Corners) != 4 || slices.ContainsFunc(n.Corners, func(r float32) bool { return r < 0 || r > MaxSize })):
 		return fmt.Errorf("corners are 4 radii, each 0 to %d", MaxSize)
 	case n.MaxWidthPercent < 0 || n.MaxWidthPercent > 100:
 		return fmt.Errorf("a maxWidthPercent is 1 to 100")
