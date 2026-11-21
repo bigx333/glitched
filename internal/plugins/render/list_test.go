@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -579,5 +580,86 @@ func TestTypingBehindAWaitingKeyWaitsBehindIt(t *testing.T) {
 	tt.Frame()
 	if ev := s.last(t); ev.Type != "change" || ev.Value != "x7" {
 		t.Fatalf("End before the plugin caught up: %+v, want x7 chosen", ev)
+	}
+}
+
+func TestThePointerMovingBehindAWaitingEnterWaitsBehindIt(t *testing.T) {
+	s := &screen{}
+	view := func(chosen string) string {
+		return `{"body": {"type": "column", "children": [{"type": "input", "id": "q", "label": "Query", "onChange": "query"},
+			{"type": "list", "id": "l", "input": "q", "label": "Results", "height": 300, "chooseOnHover": true, "controlled": true, "value": "` + chosen + `", "onChange": "chose", "onSubmit": "open", "items": [{"key": "a", "label": "Alpha"}, {"key": "b", "label": "Bravo"}]}]}}`
+	}
+	s.show(t, view("a"))
+	tt := ui.NewTester(func(c *ui.Context) {
+		s.cs.Sync(s.v, s.rev, s.processed)
+		View(c, s.v, &s.cs, Style{Rows: func(_ string, it widget.ListItem) *widget.Node {
+			return &widget.Node{Type: "text", Text: it.Label}
+		}}, &s.md, func(ev plugins.UIEvent, _ map[string]any) int {
+			s.events = append(s.events, ev)
+			return len(s.events)
+		})
+	}, 400, 400)
+	tt.Frame()
+	in, ok := tt.AccessByRole(ui.RoleTextField, "")
+	if !ok {
+		t.Fatal("no search field")
+	}
+	tt.ClickAt(in.Bounds.X+5, in.Bounds.Y+in.Bounds.H/2)
+	tt.Type("x")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	row, _ := tt.Find("Bravo")
+	tt.Move(row.X+row.W/2, row.Y+row.H/2)
+	tt.Frame()
+	if len(s.events) != 1 || s.events[0].Value != "x" {
+		t.Fatalf("the pointer moving went before the waiting Enter: %+v", s.events)
+	}
+	s.processed = len(s.events)
+	s.rev++
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "submit" || ev.Value != "a" {
+		t.Fatalf("Enter: %+v, want a, chosen as it was pressed, submitted", ev)
+	}
+	s.processed = len(s.events)
+	s.rev++
+	tt.Frame()
+	if ev := s.last(t); ev.Type != "change" || ev.Value != "b" {
+		t.Fatalf("the pointer moving over Bravo behind Enter: %+v, want b chosen after it", ev)
+	}
+}
+
+func TestKeysPressedInADialogShutGoWithIt(t *testing.T) {
+	view := func(open bool, key string) string {
+		return `{"body": {"type": "dialog", "id": "d", "title": "Picker", "onClose": "dismiss", "open": ` + strconv.FormatBool(open) + `, "children": [{"type": "input", "id": "q", "label": "Query", "onChange": "query"},
+			{"type": "list", "id": "l", "input": "q", "label": "Results", "height": 120, "controlled": true, "value": "` + key + `", "onChange": "chose", "onSubmit": "run", "items": [{"key": "` + key + `", "label": "Row ` + key + `"}]}]}}`
+	}
+	s := &screen{}
+	s.show(t, view(true, "a"))
+	tt := ui.NewTester(s.draw, 800, 700)
+	tt.Frame()
+	in, ok := tt.AccessByRole(ui.RoleTextField, "")
+	if !ok {
+		t.Fatal("no search field")
+	}
+	tt.ClickAt(in.Bounds.X+5, in.Bounds.Y+in.Bounds.H/2)
+	tt.Type("x")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if len(s.events) != 2 || s.events[1].Type != "close" || tt.HasText("Picker") {
+		t.Fatalf("Escape: events %+v, screen %q, want the dialog shut", s.events, tt.Texts())
+	}
+	s.processed = len(s.events)
+	s.show(t, view(false, "a"))
+	tt.Frame()
+	s.show(t, view(true, "b"))
+	tt.Frame()
+	tt.Frame()
+	if !tt.HasText("Picker") {
+		t.Fatal("the dialog didn't open again")
+	}
+	if len(s.events) != 2 {
+		t.Errorf("the dialog opened again ran a key pressed before it shut: %+v", s.events[2:])
 	}
 }
