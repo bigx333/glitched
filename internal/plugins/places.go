@@ -267,7 +267,7 @@ func (s *Session) publish(d placeDraw) {
 		return // DrawFirst published it already, or a newer one is out
 	}
 	s.places.shownSeq = d.seq
-	s.Err = d.failed
+	s.fail(d.failed)
 	s.places.Slow = d.took
 	if d.failed != nil {
 		// Keep the last good drawing, and what it says of the events
