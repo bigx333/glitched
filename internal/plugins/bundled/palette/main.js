@@ -4,8 +4,6 @@
 // Copy it in Settings › Plugins, and the copy draws the palette in its
 // place.
 
-const ROW = 34;
-const HEADER = 28;
 const MAX_HEIGHT = 380;
 
 // Each opening of the palette is a copy of its own, by its key: the state
@@ -58,23 +56,29 @@ function found(ctx, query) {
   return out;
 }
 
-// results are the list's items, a header over each section, and its
-// height: as tall as Glitched's own palette makes them, up to 380.
-function results(cmds) {
+// results are the list's items, a header over each section, its height
+// and the room under its rows, as Glitched's own palette makes them: its
+// rows as tall as the context says, in the interface font, and the list as
+// tall as 34 points a row and 26 a header, up to 380, whatever its rows'.
+function results(ctx, cmds) {
   if (cmds.length === 0) {
-    return { items: [{ key: "none", label: "No results", header: true, height: 66 }], height: 72 };
+    return { items: [{ key: "none", label: "No results", header: true, height: ctx.noneHeight }], height: 72, under: 0 };
   }
   const items = [];
   let height = 12;
+  let rows = 12;
   cmds.forEach((cmd, i) => {
     if (i === 0 || cmds[i - 1].section !== cmd.section) {
-      items.push({ key: "h:" + cmd.section, label: cmd.section, header: true, height: HEADER });
+      items.push({ key: "h:" + cmd.section, label: cmd.section, header: true, height: ctx.headerHeight });
       height += 26;
+      rows += ctx.headerHeight;
     }
     items.push({ key: cmd.key, label: cmd.label, thread: cmd.thread });
-    height += ROW;
+    height += 34;
+    rows += ctx.rowHeight;
   });
-  return { items, height: Math.min(height, MAX_HEIGHT) };
+  height = Math.min(height, MAX_HEIGHT);
+  return { items, height, under: Math.max(Math.ceil(height - rows), 0) };
 }
 
 function hint(key, what) {
@@ -90,7 +94,7 @@ function hint(key, what) {
 
 function palette(ctx, s) {
   const cmds = found(ctx, s.query);
-  const { items, height } = results(cmds);
+  const { items, height, under } = results(ctx, cmds);
   // The one the user chose while the query finds it, else the first.
   const chosen = cmds.some((cmd) => cmd.key === s.chosen) ? s.chosen : (cmds[0]?.key ?? "");
   return {
@@ -114,8 +118,8 @@ function palette(ctx, s) {
         input: "q",
         items,
         height,
-        rowHeight: ROW,
-        padding: 6,
+        rowHeight: ctx.rowHeight,
+        padding: [6, 6, 6 + under, 6],
         value: chosen,
         controlled: true,
         chooseOnHover: true,

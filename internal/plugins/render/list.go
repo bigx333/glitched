@@ -62,7 +62,7 @@ func (ctl *control) listOf(n *widget.Node) *listView {
 	lv.tall = float32(t + b + n.Gap*max(len(n.Items)-1, 0))
 	for i, it := range n.Items {
 		lv.index[it.Key] = i
-		lv.tall += float32(n.ItemHeight(i))
+		lv.tall += n.ItemHeight(i)
 	}
 	// A choice whose item went is none.
 	if i, ok := lv.index[ctl.text]; !ok || n.Items[i].Header {
@@ -119,7 +119,7 @@ func (r *renderer) list(kc *ui.Context, n *widget.Node) {
 		var in []widget.ListItem
 		for i, y := first, float32(0); i < len(n.Items) && y < tall; i++ {
 			in = append(in, n.Items[i])
-			y += float32(n.ItemHeight(i) + n.Gap)
+			y += n.ItemHeight(i) + float32(n.Gap)
 		}
 		r.st.WaitRows(n.ID, in)
 	}
@@ -138,7 +138,7 @@ func (r *renderer) listRow(c *ui.Context, n *widget.Node, ctl *control, i int) {
 	}
 	in := *r
 	in.row, in.thread = &plugins.RowRef{List: n.ID, Key: it.Key}, it.Thread
-	h := float32(n.ItemHeight(i))
+	h := n.ItemHeight(i)
 	held := func(e ui.Element) bool { return r.st.ListRow != nil && r.st.ListRow(c, n, i, e) }
 	if it.Header {
 		head := ui.Column(c.Key("header")).Height(h).Justify(ui.Center)

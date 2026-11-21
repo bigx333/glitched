@@ -130,11 +130,18 @@ func (a *app) threadCommands() []command {
 
 // paletteContext is the palette component's context: the query it opened
 // with, and what it finds, which it filters as the query changes: the
-// actions, then the threads, the most recently active first.
+// actions, then the threads, the most recently active first. RowHeight,
+// HeaderHeight and NoneHeight are how tall Glitched's own palette draws a
+// row, a section's header and No results, in points: they follow the
+// font's lines on each platform, a row's the taller of its label's and
+// its 11.5 point hint's.
 type paletteContext struct {
-	Query   string          `json:"query"`
-	Actions []commandRecord `json:"actions"`
-	Threads []paletteThread `json:"threads"`
+	Query        string          `json:"query"`
+	Actions      []commandRecord `json:"actions"`
+	Threads      []paletteThread `json:"threads"`
+	RowHeight    float32         `json:"rowHeight"`
+	HeaderHeight float32         `json:"headerHeight"`
+	NoneHeight   float32         `json:"noneHeight"`
 }
 
 type paletteThread struct {
@@ -145,8 +152,17 @@ type paletteThread struct {
 	Ago string `json:"ago"`
 }
 
-func (a *app) paletteContext() paletteContext {
-	ctx := paletteContext{Query: a.cmdkQuery, Actions: a.commandRecords(), Threads: []paletteThread{}}
+func (a *app) paletteContext(c *ui.Context) paletteContext {
+	t := c.Theme()
+	line := func(size float32, weight int) float32 {
+		m := ui.Font{Family: t.Font, Size: size, Weight: weight}.Metrics()
+		return m.Ascent + m.Descent + m.LineGap
+	}
+	ctx := paletteContext{Query: a.cmdkQuery, Actions: a.commandRecords(), Threads: []paletteThread{},
+		RowHeight:    16 + max(line(t.FontSize, 0), line(11.5, 0)),
+		HeaderHeight: 12 + line(11, 600),
+		NoneHeight:   48 + line(t.FontSize, 0),
+	}
 	for _, cmd := range a.threadCommands() {
 		ctx.Threads = append(ctx.Threads, paletteThread{cmd.t.id().String(), cmd.label, cmd.hint, ago(cmd.t.View.UpdatedAt, a.now)})
 	}
@@ -180,7 +196,7 @@ func (a *app) commandPalette(c *ui.Context) {
 		}
 		panel.Width(600).Radius(18).Clip()
 		a.frosted(c, panel).Shadow(0, 24, 64, 0, ui.RGBA(0, 0, 0, 0.4))
-		ctx := a.paletteContext()
+		ctx := a.paletteContext(c)
 		a.pluginComponent(c, "palette", nil, componentCopy{
 			key:     a.paletteKey(),
 			box:     func() ui.Element { return ui.Column(c) },

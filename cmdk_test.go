@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -623,5 +624,57 @@ func TestThePaletteRunsWhatWasFoundBeforeEnter(t *testing.T) {
 	settlePlugins(t, h.a, h.tt, h.p)
 	if h.a.showDiff == diff || h.a.showTerminal != terminal || h.a.cmdkOpen {
 		t.Fatalf("diff %v, terminal %v, palette open %v: want the diff toggled alone and the palette closed", h.a.showDiff, h.a.showTerminal, h.a.cmdkOpen)
+	}
+}
+
+// The palette's rows are as tall as Glitched's own palette draws them,
+// header, rows and No results, and its list as tall, at any interface
+// font size: its rows follow the interface font's lines, as its text does
+// on each platform, not a height measured once on one of them.
+func TestThePalettesRowsAreAsTallAsGlitchedsOwn(t *testing.T) {
+	for _, size := range []float64{11, 13, 16} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			// gaps are what the palette shows apart, the builtin drawing it or
+			// Glitched: a row's height, the Actions header and the rows down
+			// to Toggle diff panel, the keys from the first of a few results,
+			// and from No results.
+			gaps := func(builtin bool) [4]float32 {
+				a := offline(t)
+				a.settings.fontSize = size
+				if !builtin {
+					if err := a.plugins.SetEnabled("palette", false); err != nil {
+						t.Fatal(err)
+					}
+					a.pluginsChanged(nil)
+				}
+				tt := newTester(t, a, 1320, 860)
+				tt.Frame()
+				a.openCommandPalette()
+				settleTester(tt)
+				drawn := a.plugins.App("palette") != nil && a.plugins.App("palette").PlaceView("palette", a.paletteKey()) != nil
+				if drawn != builtin {
+					t.Fatalf("the built-in drew the palette: %v, want %v", drawn, builtin)
+				}
+				y := func(text string) float32 {
+					t.Helper()
+					r, ok := tt.Find(text)
+					if !ok {
+						t.Fatalf("no %q in %q", text, tt.Texts())
+					}
+					return r.Y
+				}
+				row := y("Toggle terminal") - y("Toggle diff panel")
+				header := y("Toggle diff panel") - y("Actions")
+				tt.Type("toggle")
+				settleTester(tt)
+				few := y("navigate") - y("Toggle diff panel")
+				tt.Type(" no such thing")
+				settleTester(tt)
+				return [4]float32{row, header, few, y("navigate") - y("No results")}
+			}
+			if own, builtin := gaps(false), gaps(true); own != builtin {
+				t.Errorf("at %vpt the built-in's row, header, few results and No results are %v apart, Glitched's own %v", size, builtin, own)
+			}
+		})
 	}
 }

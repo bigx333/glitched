@@ -280,7 +280,7 @@ type Node struct {
 	// list, which is as tall as its rows up to it. Input names an input of
 	// the view whose Up, Down and Enter move and submit the list.
 	Items     []ListItem `json:"items,omitempty"`
-	RowHeight int        `json:"rowHeight,omitempty"`
+	RowHeight float32    `json:"rowHeight,omitempty"`
 	Input     string     `json:"input,omitempty"`
 	// SubmitOnClick makes a click on a list's row submit it as well as
 	// choose it, as a palette's does. ChooseOnHover makes the row pointed
@@ -300,17 +300,17 @@ type Node struct {
 // Height is its own; a Header heads a section and is never chosen; Thread
 // gives the row Glitched's menu of that thread.
 type ListItem struct {
-	Key     string `json:"key"`
-	Label   string `json:"label"`
-	Version string `json:"version,omitempty"`
-	Height  int    `json:"height,omitempty"`
-	Header  bool   `json:"header,omitempty"`
-	Thread  string `json:"thread,omitempty"`
+	Key     string  `json:"key"`
+	Label   string  `json:"label"`
+	Version string  `json:"version,omitempty"`
+	Height  float32 `json:"height,omitempty"`
+	Header  bool    `json:"header,omitempty"`
+	Thread  string  `json:"thread,omitempty"`
 }
 
 // ItemHeight is the height of the list's item i: its own, else the list's
 // RowHeight, else 32.
-func (n *Node) ItemHeight(i int) int {
+func (n *Node) ItemHeight(i int) float32 {
 	if h := n.Items[i].Height; h > 0 {
 		return h
 	}
