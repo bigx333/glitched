@@ -129,6 +129,11 @@ func (a *Adapter) Reconcile(ctx context.Context, id provider.RuntimeIdentity) (p
 		return nil, err
 	}
 	found, err := stopRun(ctx, threadMark(id.Thread))
+	if err == nil {
+		var legacy bool
+		legacy, err = stopRun(ctx, legacyMark(id.Run))
+		found = found || legacy
+	}
 	switch {
 	case err != nil:
 		return nil, err

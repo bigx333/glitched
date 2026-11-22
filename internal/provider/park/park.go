@@ -92,7 +92,16 @@ func (p *Pool[P]) Take(ctx context.Context, thread api.ID, key string) (proc P, 
 			return e.proc, true
 		}
 		if err := e.proc.Close(ctx); err != nil {
+			// It may still run: kept under a key no run has, a Drop, a
+			// reap or the thread's next Park closes it again.
 			slog.Warn("park: closing a parked process that can't take the run", "thread", thread, "err", err)
+			p.mu.Lock()
+			if p.parked[thread] == nil && !p.closed {
+				e = &parked[P]{proc: e.proc, since: time.Now(), left: make(chan struct{})}
+				p.parked[thread] = e
+				go p.watch(thread, e)
+			}
+			p.mu.Unlock()
 		}
 		p.end(thread, done)
 		return proc, false

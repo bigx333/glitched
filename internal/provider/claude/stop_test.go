@@ -67,7 +67,9 @@ func openIn(t *testing.T, ws string) provider.Agent {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	ag, err := (&claude.Adapter{Path: must(os.Executable())}).Open(ctx, provider.SessionSpec{Thread: api.NewID(), Run: api.NewID(), Workspace: ws})
+	ad := &claude.Adapter{Path: must(os.Executable())}
+	t.Cleanup(func() { ad.Close() })
+	ag, err := ad.Open(ctx, provider.SessionSpec{Thread: api.NewID(), Run: api.NewID(), Workspace: ws})
 	if err != nil {
 		t.Fatal(err)
 	}
