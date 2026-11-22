@@ -489,6 +489,10 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 	case "markdown":
 		ui.Column(kc).LineHeight(1.55).Children(func() { markdown.View(c, n.Text, r.md) })
 	case "badge":
+		if n.Style == "pill" {
+			r.tip(c, ui.Text(kc, n.Text).FontSize(11).TextColor(st.Muted).SingleLine().Padding(2, 7).Radius(999).Border(1, st.Border).Shrink(0), n.Tooltip)
+			return
+		}
 		if n.Style == "count" {
 			ui.Text(kc, n.Text).FontSize(11).TextColor(st.Muted).Padding(0, 6).Radius(999).Background(st.Hover)
 			return
@@ -525,6 +529,10 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		r.item(c, n, key(n, i))
 		return
 	case "native":
+		if widget.Natives[n.Name].Inline && st.Native != nil {
+			st.Native(c, n, r.thread, func(value any) { r.fire(n, n.OnChange, "change", value) })
+			return
+		}
 		e := NativeBox(c, n, i)
 		if n.Grow {
 			e.Grow(1).Shrink(1).Basis(0)

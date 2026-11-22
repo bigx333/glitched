@@ -98,6 +98,10 @@ type Native struct {
 	// names.
 	In     []string
 	Thread bool
+	// Inline draws it straight into its parent, with no box of its own,
+	// so that it takes and gives up room in a row as the view it draws
+	// does where Glitched draws it itself.
+	Inline bool
 	Row    bool
 	// InRow says it may sit in a list's row too, though it draws about
 	// no thread, as a section's header among the sidebar's rows.
@@ -123,6 +127,11 @@ var Natives = map[string]Native{
 	"message.edit":  {In: []string{"message.toolbar"}, Thread: true},
 	"message.retry": {In: []string{"message.toolbar"}, Thread: true},
 	"message.item":  {Props: map[string]string{"index": "number"}, In: []string{"message.toolbar"}, Thread: true},
+	// thread.crumb is the header's button back to a thread above the one
+	// shown, by its id.
+	"thread.crumb": {Props: map[string]string{"thread": "string"}, In: []string{"thread.header.breadcrumb"}, Thread: true, Inline: true},
+	// thread.heading is the title of the thread shown, in the header.
+	"thread.heading": {In: []string{"thread.header.breadcrumb"}, Thread: true, Inline: true},
 	// The sidebar's own parts of a thread's row, which its plugin's rows
 	// draw: the row's actions while it is pointed at, the field that
 	// renames it, its project's tile with its state and the jokes snooze
@@ -453,7 +462,7 @@ var (
 		"text":    {"", "body", "muted", "strong", "heading", "title", "code", "error", "success"},
 		"button":  {"", "default", "primary", "danger", "ghost", "outline", "bordered"},
 		"menu":    {"", "default", "outline", "ghost"},
-		"badge":   {"", "default", "accent", "success", "warning", "danger", "count"},
+		"badge":   {"", "default", "accent", "success", "warning", "danger", "count", "pill"},
 		"tabs":    {"", "default", "segmented", "control"},
 		"toggle":  {"", "default", "switch"},
 		"item":    {"", "code"},
@@ -921,7 +930,7 @@ func (c *checker) extra(n *Node) error {
 	}
 	drawn := n.Style == "ghost" || n.Style == "outline" || n.Style == "bordered" || n.Type == "item" || n.Type == "tile"
 	switch {
-	case n.Tooltip != "" && n.Type != "button" && n.Type != "menu":
+	case n.Tooltip != "" && n.Type != "button" && n.Type != "menu" && !(n.Type == "badge" && n.Style == "pill"):
 		return fmt.Errorf("a %s has no tooltip", n.Type)
 	case len(n.Tooltip) > MaxTooltip || len(n.Badge) > MaxBadge:
 		return fmt.Errorf("a tooltip is up to %d bytes and a badge up to %d", MaxTooltip, MaxBadge)

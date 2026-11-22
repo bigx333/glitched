@@ -1,15 +1,19 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/plain"
+	"glitched/internal/plugins"
+	"glitched/internal/plugins/widget"
 	"glitched/internal/runtime"
 )
 
@@ -255,37 +259,148 @@ func (a *app) childRow(c *ui.Context, k thread, depth int) {
 
 // --- The chat
 
-// breadcrumb is the way back up from a child: its ancestors in the header,
-// the furthest first; narrow, only its parent.
-func (a *app) breadcrumb(c *ui.Context, t thread, narrow bool) {
+// heading is the thread's title in the header, and a child's way back up
+// before it: its ancestors, the furthest first; narrow, only its parent.
+// A child's is a copy of thread.header.breadcrumb, which the built-in
+// Child threads draws from the natives thread.crumb, each ancestor's
+// button as Glitched draws it, and thread.heading, the title. The title is
+// in the copy so that the crumbs and it share the header's room as they
+// did beside each other.
+func (a *app) heading(c *ui.Context, t thread, narrow bool) {
 	up := a.ancestors(t)
-	if narrow && len(up) > 1 {
+	if len(up) == 0 {
+		headingTitle(c, t)
+		return
+	}
+	b := headerBreadcrumb{Narrow: narrow}
+	for _, x := range up {
+		b.Ancestors = append(b.Ancestors, headerCrumb{ID: x.id().String(), Title: title(x)})
+	}
+	// The key says whether the header is narrow, so that a drawing of it
+	// wide never stands for it narrow.
+	key := t.id().String()
+	if narrow {
+		key += " narrow"
+	}
+	drawn := map[string]int{}
+	a.pluginComponent(c, "thread.header.breadcrumb", &t, componentCopy{
+		key: key,
+		box: func() ui.Element {
+			return ui.Row(c).Key("component:thread.header.breadcrumb").Gap(8).AlignItems(ui.Center).Shrink(1)
+		},
+		context: func(r plugins.ThreadRecord) any {
+			b.Thread = r
+			return b
+		},
+		action: func(n *widget.Node) {
+			if n.Name == "thread.heading" {
+				headingTitle(c, t)
+				return
+			}
+			var id string
+			json.Unmarshal(n.Props["thread"], &id)
+			if i := slices.IndexFunc(up, func(x thread) bool { return x.id().String() == id }); i >= 0 {
+				drawn[id]++
+				a.crumb(c, up[i], drawn[id])
+			}
+		},
+		builtin: func() *widget.Node { return breadcrumbRow(b) },
+	})
+}
+
+// headerBreadcrumb is the context of thread.header.breadcrumb: the
+// threads above the one shown, the furthest first, and whether the
+// header is narrow, beside a panel.
+type headerBreadcrumb struct {
+	Thread    plugins.ThreadRecord `json:"thread"`
+	Ancestors []headerCrumb        `json:"ancestors"`
+	Narrow    bool                 `json:"narrow"`
+}
+
+type headerCrumb struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+// breadcrumbRow is the built-in Child threads' drawing of the breadcrumb
+// b, as its main.js draws it: each ancestor's thread.crumb and a chevron
+// after it, narrow only the parent's, then thread.heading. Glitched draws
+// the same while no plugin has drawn it.
+func breadcrumbRow(b headerBreadcrumb) *widget.Node {
+	up := b.Ancestors
+	if b.Narrow && len(up) > 1 {
 		up = up[len(up)-1:]
 	}
+	row := &widget.Node{Type: "row", Gap: 8}
 	for _, x := range up {
-		b := a.tip(c, ghost(c, "crumb:"+x.id().String(), false).Padding(3, 6).Shrink(1).MinWidth(40).Label("Back to "+title(x)), title(x))
-		if b.Children(func() {
-			ui.Text(c, title(x)).FontSize(12.5).SingleLine().MaxWidth(180)
-		}).Clicked() {
-			a.choose(x)
-		}
-		ui.Icon(c, icChevronR).FontSize(11).TextColor(palette.faint).Shrink(0)
+		id, _ := json.Marshal(x.ID)
+		row.Children = append(row.Children,
+			&widget.Node{Type: "native", ID: "crumb-" + x.ID, Name: "thread.crumb", Props: map[string]json.RawMessage{"thread": id}},
+			&widget.Node{Type: "icon", Name: "alt-arrow-right", FontSize: 11, Color: "$text.faint"})
+	}
+	row.Children = append(row.Children, &widget.Node{Type: "native", ID: "title", Name: "thread.heading"})
+	return row
+}
+
+// headingTitle is the thread's title in the header.
+func headingTitle(c *ui.Context, t thread) {
+	ui.Text(c, title(t)).FontWeight(600).SingleLine().Shrink(1).MinWidth(80)
+}
+
+// crumb is the nth button back to x, an ancestor of the thread shown, in
+// this frame's breadcrumb: a copy may draw one twice.
+func (a *app) crumb(c *ui.Context, x thread, nth int) {
+	key := "crumb:" + x.id().String()
+	if nth > 1 {
+		key += "#" + strconv.Itoa(nth)
+	}
+	b := a.tip(c, ghost(c, key, false).Padding(3, 6).Shrink(1).MinWidth(40).Label("Back to "+title(x)), title(x))
+	if b.Children(func() {
+		ui.Text(c, title(x)).FontSize(12.5).SingleLine().MaxWidth(180)
+	}).Clicked() {
+		a.choose(x)
 	}
 }
 
 // usagePill is the thread's tokens, and with children, everything under it
-// rolled up.
+// rolled up. It is a copy of thread.header.usage, which the built-in Child
+// threads draws.
 func (a *app) usagePill(c *ui.Context, t thread) {
-	own, total := t.View.Tokens, a.usage(t)
-	if total == 0 {
+	u := headerUsage{Tokens: t.View.Tokens, Total: a.usage(t)}
+	if u.Total == 0 {
 		return
 	}
-	label, tip := fmtTokens(own)+" tokens", "This thread's tokens"
-	if total != own {
-		label = fmtTokens(own) + " · " + fmtTokens(total) + " with children"
-		tip = fmt.Sprintf("This thread %s, its child threads %s", fmtTokens(own), fmtTokens(total-own))
+	a.pluginComponent(c, "thread.header.usage", &t, componentCopy{
+		key: t.id().String(),
+		box: func() ui.Element {
+			return ui.Row(c).Key("component:thread.header.usage").Shrink(0).AlignItems(ui.Center)
+		},
+		context: func(r plugins.ThreadRecord) any {
+			u.Thread = r
+			return u
+		},
+		builtin: func() *widget.Node { return usageBadge(u) },
+	})
+}
+
+// headerUsage is the context of thread.header.usage: the thread's own
+// tokens, and its and every thread's under it.
+type headerUsage struct {
+	Thread plugins.ThreadRecord `json:"thread"`
+	Tokens int64                `json:"tokens"`
+	Total  int64                `json:"total"`
+}
+
+// usageBadge is the built-in Child threads' drawing of the usage u, as its
+// main.js draws it: a pill of the tokens, and with children, everything
+// under the thread rolled up.
+func usageBadge(u headerUsage) *widget.Node {
+	label, tip := fmtTokens(u.Tokens)+" tokens", "This thread's tokens"
+	if u.Total != u.Tokens {
+		label = fmtTokens(u.Tokens) + " · " + fmtTokens(u.Total) + " with children"
+		tip = fmt.Sprintf("This thread %s, its child threads %s", fmtTokens(u.Tokens), fmtTokens(u.Total-u.Tokens))
 	}
-	a.tip(c, pill(c, label).Shrink(0), tip)
+	return &widget.Node{Type: "badge", Style: "pill", Text: label, Tooltip: tip}
 }
 
 // stillBlocked is whether a blocked report of child's, in t's transcript,

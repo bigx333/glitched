@@ -92,6 +92,8 @@ type Widget = {
     }
   | { type: "markdown"; id?: string; text: string }
   | { type: "badge"; id?: string; text: string; style?: "default" | "accent" | "success" | "warning" | "danger" | "count"; color?: Color }
+  /** The header's hairline pill, as its workspace and tokens; the tooltip is also its name to assistive tools. */
+  | { type: "badge"; id?: string; text: string; style: "pill"; tooltip?: string }
   | { type: "divider"; id?: string; /** vertical: a line that stands up in its row, as tall as the row. */ style?: "vertical" }
   | { type: "spacer" | "spinner"; id?: string }
   | { type: "icon"; id?: string; /** One of the app's icons, or "plugin:<file>.svg". */ name: string; color?: Color; /** 8 to 48 points. */ fontSize?: number }
@@ -337,6 +339,15 @@ type NativeWidget = {
       props: { index: number };
     }
   | {
+      /** The header's button back to a thread above the one shown, in thread.header.breadcrumb; nothing for a thread not among the context's ancestors. */
+      name: "thread.crumb";
+      props: { thread: string };
+    }
+  | {
+      /** The title of the thread shown, in thread.header.breadcrumb, whose layout must place it once. */
+      name: "thread.heading";
+    }
+  | {
       /**
        * In a list's row of sidebar.body, about the thread its item names:
        * the row's actions (place it with when: "hover"), the field that
@@ -516,8 +527,8 @@ type Slot = "thread.header" | "thread.row" | "sidebar.footer";
  * contractVersion 2. approval.card, question.card, settings.plugins,
  * settings.servers, settings.providers and confirm.destructive are off
  * limits: a plugin that names one doesn't load. composer.send needs
- * threads:write, composer.access threads:access, and composer.workspace
- * threads:read, as well.
+ * threads:write, composer.access threads:access, and composer.workspace,
+ * thread.header.breadcrumb and thread.header.usage threads:read, as well.
  */
 type Component =
   | "thread.header.actions"
@@ -536,7 +547,9 @@ type Component =
   | "composer.workspace"
   | "composer.model"
   | "timeline.message"
-  | "message.toolbar";
+  | "message.toolbar"
+  | "thread.header.breadcrumb"
+  | "thread.header.usage";
 
 /** The settings glitched.app.settings reads and sets, by settings.json's names. */
 interface AppSettings {
@@ -602,6 +615,8 @@ type ComponentContext =
   | ComposerModelContext
   | TimelineMessageContext
   | MessageToolbarContext
+  | HeaderBreadcrumbContext
+  | HeaderUsageContext
   | Record<string, never>;
 
 /**
@@ -632,6 +647,24 @@ interface MessageToolbarContext {
   role: "user" | "assistant";
   /** How many commands plugins put in message.actions, which message.item draws by index. */
   items?: number;
+}
+
+/** The context of thread.header.breadcrumb, a child thread's way back up around its title: its layout must place the native thread.heading once. Needs threads:read. */
+interface HeaderBreadcrumbContext {
+  thread: ThreadRecord;
+  /** The threads above it, the furthest first: each a thread.crumb's thread. */
+  ancestors: { id: string; title: string }[];
+  /** The header keeps to icons, beside a panel. */
+  narrow: boolean;
+}
+
+/** The context of thread.header.usage, the header's pill of tokens. Needs threads:read. */
+interface HeaderUsageContext {
+  thread: ThreadRecord;
+  /** The thread's own tokens. */
+  tokens: number;
+  /** Its and every thread's under it. */
+  total: number;
 }
 
 /** The context of composer: its layout must place the native composer.input once. */

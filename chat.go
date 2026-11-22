@@ -172,9 +172,8 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 				a.toggleSidebar(false)
 			}
 		}
-		// A child's way back up, before its title.
-		a.breadcrumb(c, t, narrow)
-		ui.Text(c, title(t)).FontWeight(600).SingleLine().Shrink(1).MinWidth(80)
+		// The title, and a child's way back up before it.
+		a.heading(c, t, narrow)
 		if !narrow {
 			pill(c, filepath.Base(t.View.Workspace)).Shrink(0)
 			if len(a.backend.Envs()) > 1 && t.env != nil {
