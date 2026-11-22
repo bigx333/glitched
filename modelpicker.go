@@ -131,7 +131,6 @@ var effortStops = []ui.GradientStop{
 	{Color: ui.Hex("#ef4444"), At: 1},
 }
 
-
 var (
 	maxPixels = []ui.Color{ui.Hex("#fecaca"), ui.Hex("#fda4af"), ui.Hex("#ffffff"), ui.Hex("#fca5a5"), ui.Hex("#f9a8d4")}
 	// electric is fast mode's color: its lightning, its filled icon.
@@ -229,7 +228,7 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 type composerModel struct {
 	Thread plugins.ThreadRecord `json:"thread"`
 	// Part is the copy's: "button" or "panel".
-	Part   string `json:"part"`
+	Part string `json:"part"`
 	// Model and Effort are what the button shows of the chosen model and
 	// effort; Key is the row key of the model.
 	Model  string `json:"model"`

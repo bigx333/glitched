@@ -204,7 +204,6 @@ func TestThePickerKeepsInAShortWindow(t *testing.T) {
 	}
 }
 
-
 // engineReportsBy has each provider in by report its models, and every
 // other family's provider none.
 func engineReportsBy(by map[string][]provider.Model) func(*daemon.Config) {

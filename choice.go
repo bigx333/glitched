@@ -23,8 +23,8 @@ import (
 type choice struct {
 	Model  modelKey `json:"model,omitzero"`
 	Effort string   `json:"effort,omitempty"`
-	Fast   bool   `json:"fast,omitempty"`
-	Access string `json:"access,omitempty"`
+	Fast   bool     `json:"fast,omitempty"`
+	Access string   `json:"access,omitempty"`
 }
 
 // ownChoice is the default a new thread takes where the user chose none.
