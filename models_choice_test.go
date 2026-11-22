@@ -189,7 +189,10 @@ func TestModelsNamedAlikeAreChosenApart(t *testing.T) {
 	if len(slices.Compact(slices.Sorted(slices.Values(names)))) != len(names) {
 		t.Fatalf("the settings offer %q, two alike", names)
 	}
-	second := names[slices.IndexFunc(names, func(n string) bool { return n != "Claude Same" })]
+	second := modelKey{"claude", "b"}.String()
+	if !slices.Contains(names, "Claude Same") || !slices.Contains(names, second) {
+		t.Fatalf("the settings offer %q, want Claude Same and %s", names, second)
+	}
 	value, _ := json.Marshal(second)
 	if _, err := h.a.setAppSetting([]byte(fmt.Sprintf(`{"key":"defaultModel","value":%s}`, value))); err != nil {
 		t.Fatal(err)

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,7 +45,10 @@ func (a *app) starting(file choice) choice {
 		}
 	}
 	m, _ := a.modelOf(ch.Model)
-	ch.Effort = effortFor(m, cmp.Or(file.Effort, ownChoice.Effort))
+	ch.Effort = effortFor(m, ownChoice.Effort)
+	if e := effortFor(m, file.Effort); strings.EqualFold(e, file.Effort) {
+		ch.Effort = e
+	}
 	ch.Fast = file.Fast
 	if _, ok := accessOf[file.Access]; ok {
 		ch.Access = file.Access
