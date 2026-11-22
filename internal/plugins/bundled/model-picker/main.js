@@ -27,12 +27,12 @@ function button(ctx) {
   return { type: "row", gap: 6, children };
 }
 
-// The models' column is as tall as the longest family's list, whichever
-// shows: the popover keeps its size as the pointer moves between families.
-// Past the most Glitched gives it, its rows scroll.
+// The models' column is as tall as the longest list of the families it
+// offers, whichever shows: the popover keeps its size as the pointer moves
+// between families. Past the most Glitched gives it, its rows scroll.
 function modelsHeight(ctx) {
   const counts = new Map();
-  for (const m of ctx.models) counts.set(m.family, (counts.get(m.family) ?? 0) + 1);
+  for (const m of ctx.models) if (!ctx.lock || m.family === ctx.lock) counts.set(m.family, (counts.get(m.family) ?? 0) + 1);
   const n = Math.max(0, ...counts.values());
   return Math.min(2 * PAD + n * ctx.modelRowHeight + Math.max(0, n - 1) * GAP, ctx.modelsMaxHeight);
 }

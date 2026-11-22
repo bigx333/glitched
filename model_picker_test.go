@@ -177,11 +177,11 @@ func TestAModelPickersCopyChoosesOnlyWhatThePickerOffers(t *testing.T) {
 export function place({items}) {
   return items.map(({context}) => context.part === "button" ? {type: "text", text: "Pick"} : {
     type: "list", id: "models", label: "All", noKeys: true, height: 300, rowHeight: 30,
-    items: [...context.models.map(m => ({key: m.name, label: m.name})), {key: "Made up", label: "Made up"}],
+    items: [...context.models.map(m => ({key: m.key, label: m.name})), {key: "Made up", label: "Made up"}],
   });
 }
-export function rows({keys}) {
-  return keys.map(key => ({type: "text", text: "Row " + key}));
+export function rows({keys, place}) {
+  return keys.map(key => ({type: "text", text: "Row " + (place.context.models.find(m => m.key === key)?.name ?? key)}));
 }
 `)
 	h.a.plugins.SetGranted("mine", "ui.replace", true)
