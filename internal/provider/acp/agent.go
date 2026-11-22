@@ -50,12 +50,14 @@ var (
 	_ provider.Sessioned = (*Agent)(nil)
 )
 
-// ask is a permission request the agent waits on. It gets one reply: the
-// first answer, or cancelled once the agent or the turn stops waiting.
+// ask is a request the agent waits on: a permission request, or a
+// question it asks with a form. It gets one reply: the first answer, in the
+// agent's shape, or nil once the agent or the turn stops waiting.
 type ask struct {
-	options []acpsdk.PermissionOption
+	options []acpsdk.PermissionOption // a permission request's
+	form    *form                     // a question's
 	state   askState
-	reply   chan acpsdk.RequestPermissionOutcome // takes the one reply
+	reply   chan any // takes the one reply
 }
 
 type askState int
@@ -220,7 +222,7 @@ func (g *Agent) withdrawLocked(reason string) {
 		id := askID(i)
 		if a := g.asks[id]; a != nil && a.state == asking {
 			a.state = gone
-			a.reply <- acpsdk.NewRequestPermissionOutcomeCancelled()
+			a.reply <- nil
 			g.queueLocked(provider.RequestWithdrawn{ID: id, Reason: reason})
 		}
 	}
@@ -263,14 +265,47 @@ func (g *Agent) permission(ctx context.Context, r acpsdk.RequestPermissionReques
 		}
 		return acpsdk.NewRequestPermissionOutcomeCancelled()
 	}
-	a := &ask{options: r.Options, reply: make(chan acpsdk.RequestPermissionOutcome, 1)}
+	if o, ok := g.await(ctx, id, &ask{options: r.Options}).(acpsdk.RequestPermissionOutcome); ok {
+		return o
+	}
+	return acpsdk.NewRequestPermissionOutcomeCancelled()
+}
+
+// question is the answer to a question the agent asks with a form, as agy
+// does for its ask_question tool: Glitched's own question card, its
+// options the form's, and the user's picks and words sent back in the
+// form's fields. A form the card can't show is cancelled.
+func (g *Agent) question(ctx context.Context, f acpsdk.CreateElicitationForm) acpsdk.CreateElicitationResponse {
+	cancelled := acpsdk.CreateElicitationResponse{Cancel: &acpsdk.CreateElicitationCancel{Action: "cancel"}}
+	fm, body, err := parseForm(f)
+	if err != nil {
+		slog.Warn("acp: a question Glitched's card can't show, so it is cancelled", "agent", g.p.profile.Name, "err", err)
+		return cancelled
+	}
+	g.mu.Lock()
+	if g.ended || g.interrupted {
+		g.mu.Unlock()
+		return cancelled
+	}
+	g.asked++
+	id := askID(g.asked)
+	g.queueLocked(provider.RequestOpened{ID: id, Kind: api.KindQuestion, Body: body})
+	if r, ok := g.await(ctx, id, &ask{form: fm}).(acpsdk.CreateElicitationResponse); ok {
+		return r
+	}
+	return cancelled
+}
+
+// await opens a and waits for its reply, which is nil when the agent
+// withdrew the request or the connection ended. g.mu is held, and released.
+func (g *Agent) await(ctx context.Context, id string, a *ask) any {
+	a.reply = make(chan any, 1)
 	g.asks[id] = a
 	g.mu.Unlock()
 	select {
 	case o := <-a.reply:
 		return o
 	case <-ctx.Done():
-		// The agent withdrew the request, or the connection ended.
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -278,7 +313,7 @@ func (g *Agent) permission(ctx context.Context, r acpsdk.RequestPermissionReques
 		a.state = gone
 		g.queueLocked(provider.RequestWithdrawn{ID: id, Reason: g.p.profile.Name + " no longer asks."})
 	}
-	return acpsdk.NewRequestPermissionOutcomeCancelled()
+	return nil
 }
 
 // trusted is whether call is a tool of one of the run's trusted MCP
@@ -307,17 +342,12 @@ func pick(options []acpsdk.PermissionOption, kind acpsdk.PermissionOptionKind) (
 	return "", false
 }
 
-// respond sends a request's one reply. Allow picks the agent's allow-once
+// respond sends a request's one reply: a question's answers in its form's
+// fields, or for a permission request, allow picks the agent's allow-once
 // option and deny its reject-once one; Glitched never picks an option that
 // lasts past the call. A request already answered takes nothing more, and
 // one the agent stopped waiting on takes no answer.
 func (g *Agent) respond(r provider.Respond) error {
-	var answer struct {
-		Allow bool `json:"allow"`
-	}
-	if err := json.Unmarshal(r.Answer, &answer); err != nil {
-		return fmt.Errorf("acp: an answer the agent can't take: %w", err)
-	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	a, ok := g.asks[r.Request]
@@ -329,19 +359,40 @@ func (g *Agent) respond(r provider.Respond) error {
 	case a.state == gone:
 		return provider.ErrWithdrawn
 	}
-	outcome := acpsdk.NewRequestPermissionOutcomeCancelled()
-	if answer.Allow {
-		id, ok := pick(a.options, acpsdk.PermissionOptionKindAllowOnce)
-		if !ok {
-			return fmt.Errorf("%s offers no way to allow this only once. Deny it, or allow it in %s itself.", g.p.profile.Name, g.p.profile.Name)
-		}
-		outcome = acpsdk.NewRequestPermissionOutcomeSelected(id)
-	} else if id, ok := pick(a.options, acpsdk.PermissionOptionKindRejectOnce); ok {
-		outcome = acpsdk.NewRequestPermissionOutcomeSelected(id)
+	var reply any
+	var err error
+	if a.form != nil {
+		reply, err = a.form.answer(r.Answer)
+	} else {
+		reply, err = g.allow(a, r.Answer)
+	}
+	if err != nil {
+		return err
 	}
 	a.state = answered
-	a.reply <- outcome
+	a.reply <- reply
 	return nil
+}
+
+// allow is the outcome of a permission request the answer gives.
+func (g *Agent) allow(a *ask, raw json.RawMessage) (acpsdk.RequestPermissionOutcome, error) {
+	var answer struct {
+		Allow bool `json:"allow"`
+	}
+	if err := json.Unmarshal(raw, &answer); err != nil {
+		return acpsdk.RequestPermissionOutcome{}, fmt.Errorf("acp: an answer the agent can't take: %w", err)
+	}
+	if !answer.Allow {
+		if id, ok := pick(a.options, acpsdk.PermissionOptionKindRejectOnce); ok {
+			return acpsdk.NewRequestPermissionOutcomeSelected(id), nil
+		}
+		return acpsdk.NewRequestPermissionOutcomeCancelled(), nil
+	}
+	id, ok := pick(a.options, acpsdk.PermissionOptionKindAllowOnce)
+	if !ok {
+		return acpsdk.RequestPermissionOutcome{}, fmt.Errorf("%s offers no way to allow this only once. Deny it, or allow it in %s itself.", g.p.profile.Name, g.p.profile.Name)
+	}
+	return acpsdk.NewRequestPermissionOutcomeSelected(id), nil
 }
 
 // update is what one of the turn's updates means for the run: text, or a

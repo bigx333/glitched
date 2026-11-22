@@ -25,7 +25,7 @@ type Questions struct {
 type Question struct {
 	Text    string   `json:"text"`             // the full question
 	Header  string   `json:"header,omitempty"` // a short label for it
-	Options []Option `json:"options"`          // 2 to 4
+	Options []Option `json:"options"`          // 2 to 10
 	Multi   bool     `json:"multi,omitempty"`  // more than one option may be picked
 }
 
@@ -49,7 +49,8 @@ type Answer struct {
 
 // ParseQuestions reads a question request's body, and refuses one that
 // asks no question, more than 4, or a question without text or with
-// fewer than 2 or more than 4 options, or two options of one label.
+// fewer than 2 or more than 10 options, or two options of one label.
+// Claude Code offers 2 to 4; agy offers more.
 func ParseQuestions(body json.RawMessage) (Questions, error) {
 	var q Questions
 	if err := json.Unmarshal(body, &q); err != nil {
@@ -62,8 +63,8 @@ func ParseQuestions(body json.RawMessage) (Questions, error) {
 		if strings.TrimSpace(x.Text) == "" {
 			return Questions{}, fmt.Errorf("questions: question %d has no text", i+1)
 		}
-		if n := len(x.Options); n < 2 || n > 4 {
-			return Questions{}, fmt.Errorf("questions: question %d has %d options, want 2 to 4", i+1, n)
+		if n := len(x.Options); n < 2 || n > 10 {
+			return Questions{}, fmt.Errorf("questions: question %d has %d options, want 2 to 10", i+1, n)
 		}
 		for j, o := range x.Options {
 			if strings.TrimSpace(o.Label) == "" || slices.ContainsFunc(x.Options[:j], func(p Option) bool { return p.Label == o.Label }) {

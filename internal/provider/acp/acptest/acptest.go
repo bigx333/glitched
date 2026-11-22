@@ -89,6 +89,7 @@ type fake struct {
 	model    string
 	level    string
 	sessions int
+	forms    bool // the client takes elicitation forms
 }
 
 var _ acp.Agent = (*fake)(nil)
@@ -190,6 +191,7 @@ func (f *fake) replay(ctx context.Context, sid acp.SessionId) (acp.PromptRespons
 
 func (f *fake) Initialize(ctx context.Context, p acp.InitializeRequest) (acp.InitializeResponse, error) {
 	f.record("initialize", p)
+	f.forms = p.ClientCapabilities.Elicitation != nil && p.ClientCapabilities.Elicitation.Form != nil
 	if f.is("replay") {
 		r, _ := recorded[acp.InitializeResponse]("initialize", 0)
 		return r, nil
@@ -430,6 +432,8 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 		<-ctx.Done()
 		f.record("cancelled", nil)
 		return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+	case "question", "question-multi":
+		return f.question(ctx, sid)
 	case "crash-mid-turn":
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Starting"))
 		fmt.Fprintln(os.Stderr, "fake agent: out of memory")
@@ -459,6 +463,46 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 		f.send(ctx, sid, acp.UpdateAgentMessageText("there."))
 	}
 	return end, nil
+}
+
+// agyQuestion is the form agy 1.5.14 asks its ask_question tool's one
+// question with, and agyMulti a multi-select one, as it sent them live.
+const (
+	agyQuestion = `{"mode":"form","message":"The agent has a question.","sessionId":"SID","toolCallId":"call-ask-1","requestedSchema":{"type":"object","properties":{"q1":{"type":"string","title":"What is your favourite colour?","oneOf":[{"const":"1","title":"(Recommended) Blue"},{"const":"2","title":"Green"},{"const":"3","title":"Red"},{"const":"4","title":"Yellow"},{"const":"5","title":"Purple"}]},"q1_other":{"type":"string","title":"Other","description":"Optional free-form answer to: What is your favourite colour?"}}}}`
+	agyMulti    = `{"mode":"form","message":"The agent has a question.","sessionId":"SID","toolCallId":"call-ask-1","requestedSchema":{"type":"object","properties":{"q1":{"type":"array","title":"Which suites gate the merge?","items":{"anyOf":[{"const":"1","title":"Unit"},{"const":"2","title":"Race"},{"const":"3","title":"GUI"}]}},"q1_other":{"type":"string","title":"Other"}}}}`
+)
+
+// question asks as agy does: its ask_question tool's step, and the form
+// when the client takes forms, else the question printed in the reply.
+// It says the answer it got.
+func (f *fake) question(ctx context.Context, sid acp.SessionId) (acp.PromptResponse, error) {
+	const call = "call-ask-1"
+	f.send(ctx, sid, acp.StartToolCall(call, "Run ask_question", acp.WithStartKind(acp.ToolKindOther), acp.WithStartStatus(acp.ToolCallStatusInProgress)))
+	if !f.forms {
+		f.send(ctx, sid, acp.UpdateToolCall(call, acp.WithUpdateStatus(acp.ToolCallStatusPending)))
+		f.send(ctx, sid, acp.UpdateAgentMessageText("\nWhat is your favourite colour?\n- [1] (Recommended) Blue\n- [2] Green\n"))
+		return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+	}
+	shape := agyQuestion
+	if f.is("question-multi") {
+		shape = agyMulti
+	}
+	var req acp.CreateElicitationRequest
+	if err := json.Unmarshal([]byte(strings.Replace(shape, "SID", string(sid), 1)), &req); err != nil {
+		panic(err)
+	}
+	// What the client answers, whatever the agent's own context does once
+	// a cancel comes.
+	r, err := f.conn.CreateElicitation(context.WithoutCancel(ctx), req)
+	if err != nil {
+		f.record("elicitation error", err.Error())
+		return acp.PromptResponse{}, err
+	}
+	f.record("elicitation/create answer", r)
+	b, _ := json.Marshal(r)
+	f.send(ctx, sid, acp.UpdateToolCall(call, acp.WithUpdateStatus(acp.ToolCallStatusCompleted)))
+	f.send(ctx, sid, acp.UpdateAgentMessageText("Answer: "+string(b)))
+	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
 }
 
 // cwdOf is where the fake's session runs, from its first prompt's log.
