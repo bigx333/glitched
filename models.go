@@ -53,6 +53,9 @@ type modelLists struct {
 	reported map[string][]provider.Model // by provider
 	asking   bool
 	next     time.Time // when to ask again
+	// changed is set as an answer comes, till the draft's default takes
+	// it (saveComposer).
+	changed bool
 }
 
 // modelsRecheck is how long the engine's answer stands: a model the
@@ -109,30 +112,29 @@ func (a *app) askModels() {
 					l.reported[f.provider] = []provider.Model{}
 				}
 			}
+			failed := false
 			for _, p := range served {
 				if p.Error != "" {
 					log.Printf("glitched: models: %s: %s", p.Name, p.Error)
-					retry()
+					failed = true
 					continue
 				}
 				l.reported[p.Name] = append([]provider.Model{}, p.Info.Models...)
 			}
+			if failed {
+				retry()
+			}
 			if err := jsonfile.Write(a.modelsPath(), l.reported); err != nil {
 				log.Printf("glitched: models: %v", err)
 			}
-			// A default the user left as it was takes what the engine
-			// now offers: the engine's first model where none was chosen,
-			// an effort the model runs at.
-			if a.choice() == a.savedChoice && !a.effortHeld {
-				a.show(a.starting(a.composerFile))
-				a.savedChoice, a.triedChoice = a.choice(), a.choice()
-			}
+			l.changed = true
 		})
 	}()
 }
 
 // providerFamilies are the families of Glitched's table, then those of
-// any other provider an engine reported, by its key.
+// any other provider an engine reported, or the chosen model is of, by
+// its key.
 func (a *app) providerFamilies() []family {
 	out := slices.Clone(families)
 	var others []string
@@ -140,6 +142,9 @@ func (a *app) providerFamilies() []family {
 		if !slices.ContainsFunc(families, func(f family) bool { return f.provider == p }) {
 			others = append(others, p)
 		}
+	}
+	if p := a.model.Provider; p != "" && !slices.Contains(others, p) && !slices.ContainsFunc(families, func(f family) bool { return f.provider == p }) {
+		others = append(others, p) // the chosen model's, which its engine no longer offers
 	}
 	slices.Sort(others)
 	for _, p := range others {
@@ -219,6 +224,9 @@ func (a *app) modelNames() []string {
 		names = append(names, m.name)
 	}
 	if m, offered := a.modelOf(a.model); !offered {
+		if slices.Contains(names, m.name) {
+			m.name = m.key.String()
+		}
 		names = append(names, m.name)
 	}
 	return names

@@ -348,8 +348,10 @@ type app struct {
 	effortPressAt, effortLastAt float32
 	effortLock                  int
 	// effortIDs are the efforts the slider last showed: a press held as
-	// they change ends, its levels being the old ones'.
+	// they change ends, its levels being the old ones', and effortVoid
+	// is set till it's let go.
 	effortIDs  string
+	effortVoid bool
 	maxAt      time.Time
 	model      modelKey
 	effort     string

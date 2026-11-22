@@ -25,10 +25,14 @@ func engineReports(p string, models ...provider.Model) func(*daemon.Config) {
 	}
 }
 
-// allAnswered waits till the app has every family's engine's answer.
+// allAnswered waits till the app has every family's engine's answer: an
+// answer came, not only the models testApp starts with.
 func allAnswered(h *harness) {
 	h.t.Helper()
 	h.until("every family's models", func() bool {
+		if h.a.models.next.IsZero() || h.a.models.asking {
+			return false
+		}
 		for _, f := range families {
 			if _, ok := h.a.models.reported[strings.ToLower(f.name)]; !ok {
 				return false

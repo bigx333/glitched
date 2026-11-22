@@ -87,8 +87,21 @@ func (a *app) loadComposer() {
 // would take from it, the other window's choices with this one's. A save
 // that fails is tried again at the next change, not each frame.
 func (a *app) saveComposer() {
+	if a.effortHeld {
+		return
+	}
+	if a.models.changed {
+		// A default the user left as it was takes what the engines now
+		// offer: their first model where none was chosen, an effort the
+		// model runs at.
+		a.models.changed = false
+		if a.choice() == a.savedChoice {
+			a.show(a.starting(a.composerFile))
+			a.savedChoice, a.triedChoice = a.choice(), a.choice()
+		}
+	}
 	ch := a.choice()
-	if ch == a.triedChoice || a.effortHeld {
+	if ch == a.triedChoice {
 		return
 	}
 	a.triedChoice = ch
@@ -98,7 +111,9 @@ func (a *app) saveComposer() {
 	}
 	file, err := jsonfile.Edit(a.composerPath(), func(f *choice) error {
 		if ch.Model != had.Model {
-			f.Model = ch.Model
+			// The effort goes with the model: one the file holds that
+			// the last model didn't run at mustn't come back with this.
+			f.Model, f.Effort = ch.Model, ch.Effort
 		}
 		if ch.Effort != had.Effort {
 			f.Effort = ch.Effort
@@ -185,7 +200,10 @@ func (a *app) threadControls(t thread, build func()) {
 	}
 	var c api.ThreadConfigure
 	if after.Model != before.Model {
-		c.Model = new(after.Model.ID)
+		// A model goes with its effort: the engine keeps an effort not
+		// sent, which another client may have changed since.
+		m, _ := a.modelOf(after.Model)
+		c.Model, c.Effort = new(after.Model.ID), new(effortFor(m, after.Effort))
 	}
 	if after.Effort != before.Effort {
 		c.Effort = new(after.Effort)
@@ -299,10 +317,11 @@ func (a *app) configureEffect(args json.RawMessage) (any, error) {
 	}
 	if in.Effort == nil && in.Model != nil {
 		// The new model takes the effort the thread runs at, where it
-		// runs at it, else the one the picker would show.
-		if e := effortFor(m, now.Effort); e != now.Effort {
-			c.Effort = &e
-		}
+		// runs at it, else the one the picker would show; sent with it,
+		// as the engine keeps an effort not sent, which another client
+		// may have changed since.
+		e := effortFor(m, now.Effort)
+		c.Effort = &e
 	}
 	if in.Effort != nil {
 		var ids []string
