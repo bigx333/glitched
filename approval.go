@@ -38,8 +38,8 @@ func askOf(body json.RawMessage) (ask, bool) {
 // family, else the provider's own name for it, capitalised.
 func agentName(t thread) string {
 	p := t.View.Model.Provider
-	if f := familyOf(p); f != noFamily {
-		return f
+	if i := slices.IndexFunc(families, func(f family) bool { return f.provider == p }); i >= 0 {
+		return families[i].name
 	}
 	if p == "" {
 		return "The agent"
