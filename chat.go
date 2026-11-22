@@ -248,14 +248,29 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) {
 	a.drew, a.drawn = a.drawn, map[api.ID]sight{}
 	a.laidAt, a.builtAt = a.builtAt, a.now
 	l := a.listFor(t.id())
-	l.Key = func(i int) any { return es[i].key }
+	n := len(es)
+	if thinking(t, es) {
+		n++
+	}
+	l.Key = func(i int) any {
+		if i == len(es) {
+			return "thinking"
+		}
+		return es[i].key
+	}
 	l.FollowEnd = true
 	l.FollowAnimation = &ui.Smooth
 	// The agents strip sits over the composer: the end clears it too.
 	room := composerRoom + a.agentsRoom(t)
-	list := ui.List(c.Key(t.id()), l, len(es), func(i int) {
+	list := ui.List(c.Key(t.id()), l, n, func(i int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() { a.entry(c, t, rs, i) })
+			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() {
+				if i == len(es) {
+					a.thinkingRow(c)
+					return
+				}
+				a.entry(c, t, rs, i)
+			})
 		})
 	})
 	if leaving {
@@ -274,6 +289,26 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) {
 		}
 	})
 	a.turnMarkers(c, t.id(), rs, l)
+}
+
+// thinking is whether the transcript ends in a row saying the agent is at
+// work: from the moment its run takes a message until the turn ends, unless
+// a steps card already shimmers last or the run waits on the user.
+func thinking(t thread, es []entry) bool {
+	if t.View.Run != api.RunStarting && t.View.Run != api.RunRunning {
+		return false
+	}
+	return len(es) == 0 || es[len(es)-1].kind != entryWork || !es[len(es)-1].working
+}
+
+// thinkingRow is the transcript's last row while the agent works between
+// steps: the steps card's working mark and shimmering label, without the
+// card, at the card header's inset.
+func (a *app) thinkingRow(c *ui.Context) {
+	ui.Row(c).Key("thinking").Gap(6).AlignItems(ui.Center).Padding(0, 13).Transition(riseIn).Children(func() {
+		a.statusMark(c, statusWorking)
+		shimmerText(c, "Thinking…", 12, palette.muted, palette.text)
+	})
 }
 
 // threadEmpty is the context of thread.empty.
