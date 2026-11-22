@@ -33,11 +33,6 @@ type Adapter struct {
 	// Path is the claude binary. Empty looks on PATH, then in ~/.local/bin,
 	// where Claude Code's installer puts it.
 	Path string
-	// MCPConfig is a file of MCP servers each run gets beside the user's
-	// own, as the app's browser (browsermcp.WriteConfig), or empty for
-	// none. A file, not JSON on the command line, which a claude.cmd shim
-	// on Windows would hand to cmd.exe to unquote.
-	MCPConfig string
 }
 
 var (
@@ -159,30 +154,34 @@ var exeSuffix = map[bool]string{true: ".exe"}[runtime.GOOS == "windows"]
 // rules, hooks and the run's mode leave undecided comes to the run as a
 // can_use_tool control request on stdout.
 //
-// The run's MCP server and the engine's MCPConfig go beside the user's
-// own, which --mcp-config without --strict-mcp-config merges with. One
-// --mcp-config takes both, the run's inline first and the file after it,
-// as it takes every value up to the next flag, which always follows. Only
-// the run's server's tools never ask.
+// The run's MCP servers go beside the user's own, which --mcp-config
+// without --strict-mcp-config merges with. One --mcp-config takes them
+// all, a value each in the run's order, as it takes every value up to the
+// next flag, which always follows. Only trusted servers' tools never ask.
 func (ad *Adapter) argv(spec provider.SessionSpec, sessionFlag, session string) []string {
 	a := []string{"-p", "--verbose",
 		"--input-format", "stream-json", "--output-format", "stream-json",
 		"--include-partial-messages",
 		"--permission-mode", modes[spec.Access], "--permission-prompt-tool", "stdio",
 	}
-	var configs []string
-	if s := spec.MCP; s != nil {
-		configs = append(configs, mcpConfig(s))
+	var trusted, instructions []string
+	for i, s := range spec.MCP {
+		if i == 0 {
+			a = append(a, "--mcp-config")
+		}
+		a = append(a, mcpConfig(s))
+		if s.Trusted {
+			trusted = append(trusted, "mcp__"+s.Name+"__*")
+		}
+		if s.Instructions != "" {
+			instructions = append(instructions, s.Instructions)
+		}
 	}
-	if ad.MCPConfig != "" {
-		configs = append(configs, ad.MCPConfig)
+	if len(trusted) > 0 {
+		a = append(append(a, "--allowedTools"), trusted...)
 	}
-	if len(configs) > 0 {
-		a = append(append(a, "--mcp-config"), configs...)
-	}
-	if s := spec.MCP; s != nil {
-		a = append(a, "--allowedTools", "mcp__"+s.Name+"__*",
-			"--append-system-prompt", s.Instructions)
+	if len(instructions) > 0 {
+		a = append(a, "--append-system-prompt", strings.Join(instructions, "\n\n"))
 	}
 	if m := modelOf(spec.Model.Model); m != "" {
 		a = append(a, "--model", m)
@@ -193,11 +192,14 @@ func (ad *Adapter) argv(spec provider.SessionSpec, sessionFlag, session string) 
 	return append(a, sessionFlag, session)
 }
 
-// mcpConfig is s as Claude Code reads an --mcp-config.
-func mcpConfig(s *provider.MCPServer) string {
-	b, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
-		s.Name: map[string]any{"type": "stdio", "command": s.Command, "args": s.Args, "env": s.Env},
-	}})
+// mcpConfig is s as Claude Code reads an --mcp-config, with no env where
+// s adds none.
+func mcpConfig(s provider.MCPServer) string {
+	server := map[string]any{"type": "stdio", "command": s.Command, "args": s.Args}
+	if s.Env != nil {
+		server["env"] = s.Env
+	}
+	b, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{s.Name: server}})
 	return string(b)
 }
 

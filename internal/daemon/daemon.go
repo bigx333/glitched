@@ -60,6 +60,9 @@ type Config struct {
 	Control   string       `json:"control,omitempty"`
 	Epoch     uint64       `json:"epoch"` // this host's epoch at the hub
 	Providers provider.Mux `json:"-"`
+	// MCP are the engine's own MCP servers, which every run's agent gets
+	// after glitched mcp, as the app's browser.
+	MCP []provider.MCPServer `json:"-"`
 	// ClaudePath is the claude binary an engine with WithClaude runs Claude
 	// Code threads with, when it is not on PATH or in ~/.local/bin.
 	ClaudePath string `json:"claude_path,omitempty"`
@@ -104,33 +107,10 @@ func FakeProviders(ad provider.Adapter) provider.Mux {
 // Each run gets the browser of the app on the engine's state directory
 // as an MCP server (package browsermcp), as this program's browser-mcp.
 func (cfg *Config) WithClaude() {
-	cfg.Providers["claude"] = &claude.Adapter{Path: cfg.ClaudePath, MCPConfig: cfg.browserConfig()}
-}
-
-// browserConfig writes the MCP config that has each run's Claude Code
-// start the browser's server, and returns its path; "", and no browser,
-// where it can't.
-func (cfg *Config) browserConfig() string {
-	// Claude Code runs in the thread's workspace, where a relative path
-	// finds nothing.
-	dir, err := filepath.Abs(cfg.Dir)
-	if err != nil {
-		return ""
+	cfg.Providers["claude"] = &claude.Adapter{Path: cfg.ClaudePath}
+	if s, ok := browsermcp.Server(cfg.Dir); ok {
+		cfg.MCP = []provider.MCPServer{s}
 	}
-	cmd := browsermcp.Command(dir)
-	if cmd == nil {
-		return ""
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		slog.Warn("browser: no MCP config", "err", err)
-		return ""
-	}
-	path, err := browsermcp.WriteConfig(dir, cmd)
-	if err != nil {
-		slog.Warn("browser: no MCP config", "err", err)
-		return ""
-	}
-	return path
 }
 
 // Save records cfg in engine.json under its Dir, for Defaults.
@@ -281,6 +261,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	} else {
 		slog.Warn("agents run without glitched mcp, so they start no child threads", "err", errors.Join(err, absErr))
 	}
+	opts = append(opts, runtime.WithMCPServers(cfg.MCP...))
 	h, err := runtime.New(ctx, st, cfg.Providers, opts...)
 	if err != nil {
 		return nil, err

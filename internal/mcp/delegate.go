@@ -44,7 +44,7 @@ var catalog = []map[string]any{{
 		"properties": map[string]any{
 			"task":              map[string]any{"type": "string", "minLength": 1, "maxLength": 120000, "description": "The child's first message: a complete brief."},
 			"title":             map[string]any{"type": "string", "maxLength": 512, "description": "A short name for the child's thread."},
-			"model":             map[string]any{"type": "string", "description": "The child's model, such as sonnet or haiku; else this thread's."},
+			"model":             map[string]any{"type": "string", "description": "The child's model, by the id this thread's agent knows it by; else this thread's."},
 			"effort":            map[string]any{"type": "string", "description": "The child's reasoning effort; else this thread's."},
 			"client_request_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 256},
 		},
