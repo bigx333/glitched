@@ -170,6 +170,9 @@ func launch(ctx context.Context, profile Profile, bin, dir, mark string) (*proc,
 	r, err := p.conn.Initialize(ctx, acpsdk.InitializeRequest{
 		ProtocolVersion: acpsdk.ProtocolVersionNumber,
 		ClientInfo:      &acpsdk.Implementation{Name: "glitched", Version: "1"},
+		// An agent that can ask with a form asks on Glitched's question
+		// card. Without one, agy only prints its questions in the reply.
+		ClientCapabilities: acpsdk.ClientCapabilities{Elicitation: &acpsdk.ElicitationCapabilities{Form: &acpsdk.ElicitationFormCapabilities{}}},
 	})
 	if err != nil {
 		err = p.failure("start", err)
@@ -755,10 +758,18 @@ func (*proc) KillTerminal(context.Context, acpsdk.KillTerminalRequest) (acpsdk.K
 	return acpsdk.KillTerminalResponse{}, acpsdk.NewMethodNotFound("terminal/kill")
 }
 
-// Glitched advertises no elicitation, so the agent asks in chat instead.
-
-func (*proc) CreateElicitation(context.Context, acpsdk.CreateElicitationRequest) (acpsdk.CreateElicitationResponse, error) {
-	return acpsdk.CreateElicitationResponse{}, acpsdk.NewMethodNotFound("elicitation/create")
+// CreateElicitation asks the run's user the form's questions. Glitched
+// advertises forms only, each for a session's run.
+func (p *proc) CreateElicitation(ctx context.Context, r acpsdk.CreateElicitationRequest) (acpsdk.CreateElicitationResponse, error) {
+	cancelled := acpsdk.CreateElicitationResponse{Cancel: &acpsdk.CreateElicitationCancel{Action: "cancel"}}
+	if r.Form == nil || r.Form.Session == nil || !p.ours(r.Form.Session.SessionId) {
+		return cancelled, nil
+	}
+	run := p.current(true, "question")
+	if run == nil {
+		return cancelled, nil
+	}
+	return run.question(ctx, *r.Form), nil
 }
 
 func (*proc) CompleteElicitation(context.Context, acpsdk.CompleteElicitationNotification) error {
