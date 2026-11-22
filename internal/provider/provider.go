@@ -29,11 +29,20 @@ type Info struct {
 
 // Model is one a provider's sessions can run. ID is what a session's
 // api.ModelRef names it by; Name and Description are the provider's own
-// words for it.
+// words for it. Efforts are the levels it runs at, in order, least first:
+// none where the provider doesn't say.
 type Model struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Efforts     []Effort `json:"efforts,omitempty"`
+}
+
+// Effort is a level of effort a model runs at: ID is what a session's
+// api.ModelRef names it by, Label the provider's word for it, if any.
+type Effort struct {
+	ID    string `json:"id"`
+	Label string `json:"label,omitempty"`
 }
 
 // Command is one of the provider's slash commands, as /Name in a prompt:

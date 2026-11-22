@@ -35,10 +35,11 @@ func (a *Adapter) Commands(ctx context.Context, workspace string) ([]provider.Co
 type initialized struct {
 	Commands []provider.Command `json:"commands"`
 	Models   []struct {
-		Value         string `json:"value"`
-		ResolvedModel string `json:"resolvedModel"`
-		DisplayName   string `json:"displayName"`
-		Description   string `json:"description"`
+		Value         string   `json:"value"`
+		ResolvedModel string   `json:"resolvedModel"`
+		DisplayName   string   `json:"displayName"`
+		Description   string   `json:"description"`
+		Efforts       []string `json:"supportedEffortLevels"`
 	} `json:"models"`
 	Version string `json:"claude_code_version"`
 }
@@ -52,8 +53,9 @@ func (r initialized) commands() []provider.Command {
 }
 
 // models are the ones the account can run, each by its full id, as the
-// session pins it, with Claude Code's words for it less its price. The
-// default is left out: it is one of the others, which it names.
+// session pins it, with Claude Code's words for it less its price, and the
+// efforts --effort takes for it. The default is left out: it is one of
+// the others, which it names.
 func (r initialized) models() []provider.Model {
 	var out []provider.Model
 	for _, m := range r.Models {
@@ -66,7 +68,11 @@ func (r initialized) models() []provider.Model {
 		if len(parts) > 0 && strings.HasPrefix(parts[0], m.DisplayName) {
 			name, parts = parts[0], parts[1:]
 		}
-		out = append(out, provider.Model{ID: cmp.Or(m.ResolvedModel, m.Value), Name: name, Description: strings.Join(parts, " · ")})
+		var efforts []provider.Effort
+		for _, e := range m.Efforts {
+			efforts = append(efforts, provider.Effort{ID: e})
+		}
+		out = append(out, provider.Model{ID: cmp.Or(m.ResolvedModel, m.Value), Name: name, Description: strings.Join(parts, " · "), Efforts: efforts})
 	}
 	return out
 }

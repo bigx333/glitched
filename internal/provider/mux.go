@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 )
 
 // ErrNoAdapter is what a Mux returns for a provider it has no adapter for.
@@ -18,6 +20,11 @@ func (m Mux) adapter(name string) (Adapter, error) {
 		return a, nil
 	}
 	return nil, fmt.Errorf("%w for %q on this engine", ErrNoAdapter, name)
+}
+
+// Names are the providers m serves, sorted.
+func (m Mux) Names() []string {
+	return slices.Sorted(maps.Keys(m))
 }
 
 func (m Mux) Describe(ctx context.Context, name string) (Info, error) {

@@ -629,7 +629,7 @@ func TestModelPicker(t *testing.T) {
 	if err := tt.Click("Model"); err != nil {
 		t.Fatal(err)
 	}
-	if !a.pickerOpen || a.pickerFamily != "Claude" {
+	if !a.pickerOpen || a.pickerFamily != "claude" {
 		t.Fatalf("picker should open on Claude's models: %v %q", a.pickerOpen, a.pickerFamily)
 	}
 	// The families stay put whichever family's models show.
@@ -643,7 +643,7 @@ func TestModelPicker(t *testing.T) {
 	if err := tt.Click("GPT-5.5 Codex"); err != nil {
 		t.Fatal(err)
 	}
-	if a.model != "GPT-5.5 Codex" {
+	if a.model != keyNamed("GPT-5.5 Codex") {
 		t.Errorf("model %q", a.model)
 	}
 	if err := tt.Click("Fast mode"); err != nil {
@@ -660,7 +660,7 @@ func TestModelPicker(t *testing.T) {
 // onto when let go.
 func TestEffortDrag(t *testing.T) {
 	a := offline(t)
-	a.effort = "Low"
+	a.effort = "low"
 	tt := ui.NewTester(a.view, 1320, 860)
 	if err := tt.Click("Model"); err != nil {
 		t.Fatal(err)
@@ -674,23 +674,23 @@ func TestEffortDrag(t *testing.T) {
 	tt.Press(at(0), y)
 	tt.Move(at(0.5), y)
 	tt.Move(at(0.8), y)
-	if a.effort != "Low" {
+	if a.effort != "low" {
 		t.Errorf("effort %q at 0.8 levels, short of Medium's point, want Low", a.effort)
 	}
 	tt.Move(at(1.05), y)
-	if a.effort != "Medium" {
+	if a.effort != "medium" {
 		t.Errorf("effort %q at Medium's point, want Medium", a.effort)
 	}
 	// Past half way to High, but not at its point: still Medium, and
 	// let go, it goes back to Medium.
 	tt.Move(at(1.7), y)
 	tt.Advance(time.Second)
-	if a.effort != "Medium" {
+	if a.effort != "medium" {
 		t.Errorf("effort %q at 1.7 levels, want Medium", a.effort)
 	}
 	tt.Release(at(1.7), y)
 	tt.Advance(time.Second)
-	if a.effort != "Medium" {
+	if a.effort != "medium" {
 		t.Errorf("effort %q after letting go at 1.7 levels, want Medium", a.effort)
 	}
 }
@@ -698,7 +698,7 @@ func TestEffortDrag(t *testing.T) {
 // A click on the effort's track, away from a point, picks the nearest level.
 func TestEffortClick(t *testing.T) {
 	a := offline(t)
-	a.effort = "Low"
+	a.effort = "low"
 	tt := ui.NewTester(a.view, 1320, 860)
 	if err := tt.Click("Model"); err != nil {
 		t.Fatal(err)
@@ -709,7 +709,7 @@ func TestEffortClick(t *testing.T) {
 	x := left + stopInset + (right-left-2*stopInset)*2.3/3
 	tt.ClickAtWith(0, x, faster.Y-24)
 	tt.Advance(time.Second)
-	if a.effort != "High" {
+	if a.effort != "high" {
 		t.Errorf("effort %q after clicking at 2.3 levels, want High", a.effort)
 	}
 }

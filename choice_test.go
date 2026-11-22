@@ -29,10 +29,10 @@ func TestTheNewThreadDefaultOutlivesARestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	a.effort = "Low"
+	a.effort = "low"
 	tt.Frame()
 	again := testApp(t, dir, nil, func(func()) {})
-	if got, want := again.choice(), (choice{Model: "Claude Sonnet 5.5", Effort: "Low", Fast: true, Access: accessAsk}); got != want {
+	if got, want := again.choice(), (choice{Model: keyNamed("Claude Sonnet 5.5"), Effort: "low", Fast: true, Access: accessAsk}); got != want {
 		t.Fatalf("after a restart the composer has %+v, want %+v", got, want)
 	}
 }
@@ -69,7 +69,7 @@ func TestTwoWindowsOnOneStateDirectoryKeepEachOthersDefault(t *testing.T) {
 
 	click(first, "Access", accessAsk)
 	click(second, "Model", "Sonnet 5.5")
-	want := choice{Model: "Claude Sonnet 5.5", Effort: "High", Access: accessAsk}
+	want := choice{Model: keyNamed("Claude Sonnet 5.5"), Effort: "high", Access: accessAsk}
 	if got := restarted(); got != want {
 		t.Errorf("after a restart the default is %+v, want %+v: one window's access and the other's model", got, want)
 	}
@@ -148,7 +148,7 @@ func TestAThreadsPickersAreItsOwn(t *testing.T) {
 	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAutoEdits)
 	h.thread("Mine")
 	h.a.selected = id
-	h.a.model, h.a.access = "Claude Haiku 5.5", accessFull
+	h.a.model, h.a.access = keyNamed("Claude Haiku 5.5"), accessFull
 	draft := h.a.choice()
 	h.tt.Frame()
 	if _, ok := h.tt.Find("Claude Opus 5.5"); !ok {
@@ -210,7 +210,7 @@ func TestAThreadsEffortIsItsOwn(t *testing.T) {
 	h.tt.ClickAtWith(0, faster.X+stopInset, faster.Y-24) // Low's point
 	h.tt.Advance(time.Second)
 	h.until("the thread's new effort", func() bool { return h.thread("Mine").View.Model.Effort == "low" })
-	if h.a.effort != "High" {
+	if h.a.effort != "high" {
 		t.Errorf("the default effort is %q after changing a thread's, want High", h.a.effort)
 	}
 }
@@ -355,7 +355,7 @@ func TestADefaultChosenByAThumbItsPickerClosedOnIsKept(t *testing.T) {
 			}
 			tt.Release(at(0), y)
 			tt.Advance(time.Second)
-			if got := testApp(t, dir, nil, func(func()) {}).effort; a.effort != "Low" || got != "Low" {
+			if got := testApp(t, dir, nil, func(func()) {}).effort; a.effort != "low" || got != "low" {
 				t.Errorf("the thumb chose %q; after a restart the default is %q, want Low", a.effort, got)
 			}
 			a.router.Push("/")
@@ -391,7 +391,7 @@ func TestAPressItsPickerClosedOnChoosesNoEffort(t *testing.T) {
 	h.tt.Frame()
 	h.tt.Release(at(0.3), y)
 	h.tt.Advance(time.Second)
-	if h.a.effort != "High" {
+	if h.a.effort != "high" {
 		t.Errorf("the draft's effort is %q after a press its picker closed on, want High", h.a.effort)
 	}
 	h.a.select_(th)
@@ -436,7 +436,7 @@ func TestAThumbHeldInAThreadChoosesNothingInTheDraft(t *testing.T) {
 	if _, open := h.tt.Find("Faster"); open {
 		t.Errorf("the thread's picker is open over the draft: %q", h.tt.Texts())
 	}
-	if got := testApp(t, h.a.dir, nil, func(func()) {}).effort; h.a.effort != "High" || got != "High" {
+	if got := testApp(t, h.a.dir, nil, func(func()) {}).effort; h.a.effort != "high" || got != "high" {
 		t.Errorf("a thumb held in a thread left the default's effort at %q, and %q after a restart; want High, as it was", h.a.effort, got)
 	}
 	if got := th.View.Model.Effort; got != "medium" || len(th.Pending) != 0 {
@@ -468,7 +468,7 @@ func TestAThumbHeldInAThreadChoosesNothingInTheNextThread(t *testing.T) {
 	h.tt.Frame()
 	h.tt.Release(at(0), y)
 	h.tt.Advance(time.Second)
-	if got := h.a.threadChoice(other).Effort; got != "High" || len(mine.Pending)+len(other.Pending) != 0 {
+	if got := h.a.threadChoice(other).Effort; got != "high" || len(mine.Pending)+len(other.Pending) != 0 {
 		t.Errorf("a thumb held in one thread left the thread come under it at effort %q, with %d sent to it and %d to its own; want High and nothing sent",
 			got, len(other.Pending), len(mine.Pending))
 	}
@@ -544,7 +544,7 @@ func TestAThreadsPickerSendsOnlyWhatItChanged(t *testing.T) {
 	if th.View.Access != api.AccessFull {
 		t.Fatalf("the other client's narrowing shows already: the thread's view is at access %v", th.View.Access)
 	}
-	if got, want := h.a.threadChoice(th), (choice{Model: "Claude Opus 5.5", Effort: "Low", Access: accessFull}); got != want {
+	if got, want := h.a.threadChoice(th), (choice{Model: keyNamed("Claude Opus 5.5"), Effort: "low", Access: accessFull}); got != want {
 		t.Errorf("with its effort on its way the thread shows %+v, want %+v", got, want)
 	}
 	h.until("the thread's new effort", func() bool { return th.View.Model.Effort == "low" && len(th.Pending) == 0 })
@@ -631,7 +631,7 @@ func TestADefaultChosenByAThumbTheDraftLostIsKept(t *testing.T) {
 			h.a.router.Push("/")
 			h.a.select_(th)
 			h.tt.Advance(time.Second)
-			if got := testApp(t, h.a.dir, nil, func(func()) {}).effort; got != "Low" {
+			if got := testApp(t, h.a.dir, nil, func(func()) {}).effort; got != "low" {
 				t.Errorf("after a restart the default's effort is %q, want the Low its thumb chose", got)
 			}
 			if got := th.View.Model.Effort; got != "high" || len(th.Pending) != 0 {
@@ -678,10 +678,10 @@ func TestAPluginConfiguresAThreadsModelButNeverItsAccess(t *testing.T) {
 	if err := run("list", nil); err != nil {
 		t.Fatal(err)
 	}
-	if !h.tt.HasText("models Claude:Claude Opus 5.5,Claude:Claude Sonnet 5.5") || !h.tt.HasText("efforts low,medium,high,max") {
+	if !h.tt.HasText("models claude:Claude Opus 5.5,claude:Claude Sonnet 5.5") || !h.tt.HasText("efforts low,medium,high,max") {
 		t.Errorf("models.list answered %q", h.tt.Texts())
 	}
-	sonnet := map[string]any{"model": "Claude Sonnet 5.5", "effort": "Low", "fast": true}
+	sonnet := map[string]any{"model": "claude-sonnet-5-5", "effort": "low", "fast": true}
 	if err := run("configure", sonnet); err == nil || !strings.Contains(err.Error(), "threads:write") {
 		t.Fatalf("configured without threads:write: %v", err)
 	}

@@ -122,7 +122,7 @@ func settingRow(c *ui.Context, title, desc string, control func()) {
 func (a *app) general(c *ui.Context) {
 	a.settingsComponent(c, "settings.page.general", generalPage{
 		Settings: a.appSettings(),
-		Choices:  settingChoices{NewThread: newThreadModes, DefaultModel: a.defaultModels(), Timestamps: timeFormats},
+		Choices:  settingChoices{NewThread: newThreadModes, DefaultModel: a.modelNames(), Timestamps: timeFormats},
 	})
 }
 
@@ -153,7 +153,8 @@ type appSettings struct {
 
 func (a *app) appSettings() appSettings {
 	f := fileOf(a.settings)
-	return appSettings{f.Theme, f.Accent, f.NewThread, a.model, f.Timestamps, f.ConfirmDelete, f.Streaming, f.Notifications}
+	m, _ := a.modelOf(a.model)
+	return appSettings{f.Theme, f.Accent, f.NewThread, m.name, f.Timestamps, f.ConfirmDelete, f.Streaming, f.Notifications}
 }
 
 // setAppSetting is app.settings.set: it sets one of appSettings to a
@@ -170,11 +171,15 @@ func (a *app) setAppSetting(args json.RawMessage) (any, error) {
 	keys := fields(settingsFile{})
 	switch _, ok := keys[in.Key]; {
 	case in.Key == "defaultModel":
-		var m string
-		if json.Unmarshal(in.Value, &m) != nil || !slices.Contains(a.defaultModels(), m) {
-			return nil, fmt.Errorf("defaultModel is one of %s", strings.Join(a.defaultModels(), ", "))
+		// The page chooses the default by the name it shows: one of
+		// the models offered, or the default itself.
+		var name string
+		if json.Unmarshal(in.Value, &name) != nil || !slices.Contains(a.modelNames(), name) {
+			return nil, fmt.Errorf("defaultModel is one of %s", strings.Join(a.modelNames(), ", "))
 		}
-		a.model = m
+		if m, ok := a.modelNamed(name); ok {
+			a.model = m.key
+		}
 		a.saveComposer()
 		return nil, nil
 	case !ok || !slices.Contains([]string{"theme", "accent", "newThread", "timestamps", "confirmDelete", "streaming", "notifications"}, in.Key):

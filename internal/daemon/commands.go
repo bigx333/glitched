@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"glitched/internal/provider"
+	"glitched/internal/transport"
 )
 
 // commandsFresh is how long one listing of a provider's slash commands
@@ -69,10 +70,23 @@ func (c *commandLists) stale(l *listing) bool {
 	}
 }
 
-// Describe asks the provider each time: the app asks seldom, and keeps
-// what it was told.
-func (c *commandLists) Describe(ctx context.Context, name string) (provider.Info, error) {
-	return c.mux.Describe(ctx, name)
+// Providers asks every provider at once, each time: the app asks seldom,
+// and keeps what it was told.
+func (c *commandLists) Providers(ctx context.Context) []transport.ProviderInfo {
+	names := c.mux.Names()
+	out := make([]transport.ProviderInfo, len(names))
+	var wg sync.WaitGroup
+	for i, name := range names {
+		wg.Go(func() {
+			info, err := c.mux.Describe(ctx, name)
+			out[i] = transport.ProviderInfo{Name: name, Info: info}
+			if err != nil {
+				out[i].Error = err.Error()
+			}
+		})
+	}
+	wg.Wait()
+	return out
 }
 
 func (c *commandLists) list(k listKey, l *listing) {

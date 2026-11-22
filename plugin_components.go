@@ -279,14 +279,15 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 		size := 18.0
 		json.Unmarshal(n.Props["family"], &name)
 		json.Unmarshal(n.Props["size"], &size)
-		if i := slices.IndexFunc(families, func(f family) bool { return f.name == name }); i >= 0 {
+		if i := slices.IndexFunc(families, func(f family) bool { return f.provider == name }); i >= 0 {
 			modelTile(c, families[i].icon, families[i].color, float32(size))
 			break
 		}
-		m, _ := a.modelByName(a.model, a.pickerLock)
+		m, _ := a.modelOf(a.model)
 		modelTile(c, m.icon, m.color, float32(size))
 	case "model.level":
-		ui.Text(c, a.effort).FontSize(11).FontWeight(600).TextColor(effortColor(a.effortLevel()))
+		e := a.efforts()[a.effortLevel()]
+		ui.Text(c, e.label).FontSize(11).FontWeight(600).TextColor(e.color)
 	case "model.zap":
 		if a.fast {
 			a.zapIcon(c, "trigger-zap", 12)

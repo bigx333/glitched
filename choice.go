@@ -15,31 +15,32 @@ import (
 	"glitched/internal/jsonfile"
 )
 
-// choice is what the composer's pickers show: the model, its effort, fast
-// mode and the access, by the names the pickers give them. In a new
+// choice is what the composer's pickers show: the model by its key, its
+// effort by its id, fast mode and the access by the name its picker gives it. In a new
 // thread's draft it's the default a new thread takes; in a thread, that
 // thread's own. composer.json holds the default's fields the user chose:
 // one never chosen is the app's own.
 type choice struct {
-	Model  string `json:"model,omitempty"`
-	Effort string `json:"effort,omitempty"`
+	Model  modelKey `json:"model,omitzero"`
+	Effort string   `json:"effort,omitempty"`
 	Fast   bool   `json:"fast,omitempty"`
 	Access string `json:"access,omitempty"`
 }
 
 // ownChoice is the default a new thread takes where the user chose none.
-var ownChoice = choice{Model: "Claude Opus 5.5", Effort: "High", Access: accessAuto}
+var ownChoice = choice{Model: modelKey{"claude", "claude-opus-5-5"}, Effort: "high", Access: accessAuto}
 
 // starting is the default the app starts with from file, composer.json's
 // contents: the app's own, with each of file's names the pickers offer. A
 // name they no longer offer, as a model since gone, keeps the app's own.
 func (a *app) starting(file choice) choice {
 	ch := ownChoice
-	if slices.Contains(a.modelNames(), file.Model) {
-		ch.Model = file.Model
+	if m, offered := a.modelOf(file.Model); offered {
+		ch.Model = m.key
 	}
-	if slices.Contains(efforts, file.Effort) {
-		ch.Effort = file.Effort
+	m, _ := a.modelOf(ch.Model)
+	if e := effortID(file.Effort); slices.ContainsFunc(effortsOf(m), func(k effortInfo) bool { return k.id == e }) {
+		ch.Effort = e
 	}
 	ch.Fast = file.Fast
 	if _, ok := accessOf[file.Access]; ok {
@@ -132,15 +133,7 @@ func configured(t thread) (api.ModelRef, api.Access) {
 // A model or effort the pickers don't list shows by its own name.
 func (a *app) threadChoice(t thread) choice {
 	m, acc := configured(t)
-	ch := choice{Model: a.modelOfThread(familyOf(m.Provider), m.Model), Effort: m.Effort, Fast: m.Fast, Access: accessAuto}
-	if ch.Model == "" {
-		ch.Model = "Default model"
-	}
-	for _, e := range efforts {
-		if strings.EqualFold(e, m.Effort) {
-			ch.Effort = e
-		}
-	}
+	ch := choice{Model: keyOfThread(m.Provider, m.Model), Effort: effortID(m.Effort), Fast: m.Fast, Access: accessAuto}
 	for name, v := range accessOf {
 		if v == acc {
 			ch.Access = name
@@ -148,19 +141,6 @@ func (a *app) threadChoice(t thread) choice {
 	}
 	return ch
 }
-
-// familyOf is the picker's family of the thread's provider, or noFamily
-// for one the picker doesn't list: it offers none of its models.
-func familyOf(provider string) string {
-	for _, f := range families {
-		if strings.EqualFold(f.name, provider) {
-			return f.name
-		}
-	}
-	return noFamily
-}
-
-const noFamily = "-"
 
 // threadControls builds the pickers on the thread's own model and access,
 // and sends what they change to the engine, for the thread's next turn.
@@ -186,7 +166,7 @@ func (a *app) threadControls(t thread, build func()) {
 	defer a.show(draft)
 	before := a.threadChoice(t)
 	a.show(before)
-	a.pickerLock = familyOf(t.View.Model.Provider)
+	a.pickerLock = t.View.Model.Provider
 	family := a.pickerFamily
 	defer func() { a.pickerLock, a.pickerFamily = "", family }()
 	build()
@@ -196,11 +176,10 @@ func (a *app) threadControls(t thread, build func()) {
 	}
 	var c api.ThreadConfigure
 	if after.Model != before.Model {
-		m, _ := a.modelByName(after.Model, a.pickerLock)
-		c.Model = new(m.id)
+		c.Model = new(after.Model.ID)
 	}
 	if after.Effort != before.Effort {
-		c.Effort = new(strings.ToLower(after.Effort))
+		c.Effort = new(after.Effort)
 	}
 	if after.Fast != before.Fast {
 		c.Fast = new(after.Fast)
@@ -245,22 +224,31 @@ func (a *app) shownAccess(t thread) string {
 }
 
 // modelRecords is models.list: the models the picker offers, each by its
-// name, its provider's family and what it's for, and the efforts.
+// provider and id, which name it, its name, family and what it's for as
+// the picker shows them, and the efforts it runs at; and every model's
+// efforts.
 func (a *app) modelRecords() any {
 	type record struct {
-		Name        string `json:"name"`
-		Provider    string `json:"provider"`
-		Description string `json:"description"`
+		Provider    string   `json:"provider"`
+		ID          string   `json:"id"`
+		Name        string   `json:"name"`
+		Family      string   `json:"family"`
+		Description string   `json:"description"`
+		Efforts     []string `json:"efforts"`
 	}
 	out := struct {
 		Models  []record `json:"models"`
 		Efforts []string `json:"efforts"`
-	}{}
+	}{Models: []record{}, Efforts: []string{}}
 	for _, m := range a.offeredModels() {
-		out.Models = append(out.Models, record{m.name, m.provider, m.desc})
-	}
-	for _, e := range efforts {
-		out.Efforts = append(out.Efforts, strings.ToLower(e))
+		r := record{m.key.Provider, m.key.ID, m.name, familyOf(m.key.Provider).name, m.desc, []string{}}
+		for _, e := range effortsOf(m) {
+			r.Efforts = append(r.Efforts, e.id)
+			if !slices.Contains(out.Efforts, e.id) {
+				out.Efforts = append(out.Efforts, e.id)
+			}
+		}
+		out.Models = append(out.Models, r)
 	}
 	return out
 }
@@ -290,21 +278,25 @@ func (a *app) configureEffect(args json.RawMessage) (any, error) {
 		return nil, err
 	}
 	c := api.ThreadConfigure{Fast: in.Fast}
+	now, _ := configured(t)
+	// A thread keeps its provider: its session is that provider's.
+	m, _ := a.modelOf(keyOfThread(now.Provider, now.Model))
 	if in.Model != nil {
-		// A thread keeps its provider: its session is that provider's.
-		family := familyOf(t.View.Model.Provider)
-		i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.name == *in.Model && m.provider == family })
-		if i < 0 {
-			return nil, fmt.Errorf("%q is no model of the thread's provider, %s", *in.Model, t.View.Model.Provider)
+		var offered bool
+		if m, offered = a.modelOf(modelKey{now.Provider, *in.Model}); !offered {
+			return nil, fmt.Errorf("%q is no model of the thread's provider, %s", *in.Model, now.Provider)
 		}
-		c.Model = new(a.offeredModels()[i].id)
+		c.Model = in.Model
 	}
 	if in.Effort != nil {
-		i := slices.IndexFunc(efforts, func(e string) bool { return strings.EqualFold(e, *in.Effort) })
-		if i < 0 {
-			return nil, errors.New("an effort is low, medium, high or max")
+		var ids []string
+		for _, e := range effortsOf(m) {
+			ids = append(ids, e.id)
 		}
-		c.Effort = new(strings.ToLower(efforts[i]))
+		if !slices.Contains(ids, *in.Effort) {
+			return nil, fmt.Errorf("%s's effort is one of %s", m.name, strings.Join(ids, ", "))
+		}
+		c.Effort = in.Effort
 	}
 	return nil, a.sendConfigure(t, c)
 }

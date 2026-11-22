@@ -101,13 +101,14 @@ func FakeProviders(ad provider.Adapter) provider.Mux {
 }
 
 // WithClaude has the engine run Claude Code threads with the real claude,
-// as `glitched serve` and the GUI's own engine do. An engine a test starts
-// keeps the fake, as Defaults gives it.
+// as `glitched serve` and the GUI's own engine do, and nothing else: the
+// fake that plays the other providers is a test's. An engine a test
+// starts keeps the fake, as Defaults gives it.
 //
 // Each run gets the browser of the app on the engine's state directory
 // as an MCP server (package browsermcp), as this program's browser-mcp.
 func (cfg *Config) WithClaude() {
-	cfg.Providers["claude"] = &claude.Adapter{Path: cfg.ClaudePath}
+	cfg.Providers = provider.Mux{"claude": &claude.Adapter{Path: cfg.ClaudePath}}
 	if s, ok := browsermcp.Server(cfg.Dir); ok {
 		cfg.MCP = []provider.MCPServer{s}
 	}

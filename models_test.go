@@ -148,7 +148,7 @@ func TestThePickersModelsScrollPastModelRows(t *testing.T) {
 	height := func(n int) float32 {
 		h := startWith(t, tempDir(t), engineReports("claude", numbered(n)...))
 		allAnswered(h)
-		h.a.model = "Claude M 00"
+		h.a.model = modelKey{"claude", "m-00"}
 		h.click("Model")
 		pickerSettle(t, h)
 		top, effort := pickerBox(t, h)
@@ -161,7 +161,7 @@ func TestThePickersModelsScrollPastModelRows(t *testing.T) {
 
 	h := startWith(t, tempDir(t), engineReports("claude", numbered(30)...))
 	allAnswered(h)
-	h.a.model = "Claude M 00"
+	h.a.model = modelKey{"claude", "m-00"}
 	h.click("Model")
 	pickerSettle(t, h)
 	_, effort := pickerBox(t, h)
@@ -184,7 +184,7 @@ func TestThePickersModelsScrollPastModelRows(t *testing.T) {
 	}
 	h.tt.Key(0, ui.KeySpace)
 	pickerSettle(t, h)
-	if h.a.model != "Claude M 29" {
+	if h.a.model != (modelKey{"claude", "m-29"}) {
 		t.Errorf("Space on the 30th model chose %q", h.a.model)
 	}
 }
@@ -201,5 +201,81 @@ func TestThePickerKeepsInAShortWindow(t *testing.T) {
 	top, effort := pickerBox(t, h)
 	if top.Y < 0 || effort.Y+effort.H > 460 {
 		t.Errorf("the popover runs from %v to %v, out of a window 460 tall", top, effort)
+	}
+}
+
+
+// engineReportsBy has each provider in by report its models, and every
+// other family's provider none.
+func engineReportsBy(by map[string][]provider.Model) func(*daemon.Config) {
+	return func(c *daemon.Config) {
+		for _, f := range families {
+			c.Providers[f.provider] = reporting{c.Providers[f.provider], by[f.provider]}
+		}
+	}
+}
+
+// A model is the provider's that offers it, though another offers one
+// by the same id: the thread made on it runs on the provider it was
+// picked from.
+func TestAModelIDTwoProvidersShareGoesToTheOnePicked(t *testing.T) {
+	h := startWith(t, tempDir(t), engineReportsBy(map[string][]provider.Model{
+		"claude": {{ID: "shared", Name: "Shared Claude"}},
+		"codex":  {{ID: "shared", Name: "Shared Codex"}},
+	}))
+	allAnswered(h)
+	for _, pick := range []struct{ family, row, provider string }{{"Codex", "Shared Codex", "codex"}, {"Claude", "Shared Claude", "claude"}} {
+		if !h.a.pickerOpen {
+			h.click("Model")
+		}
+		pickerSettle(t, h)
+		h.tt.Move(0, 0)
+		h.click(pick.family)
+		pickerSettle(t, h)
+		h.click(pick.row)
+		pickerSettle(t, h)
+		if got := h.a.modelRef(); got.Provider != pick.provider || got.Model != "shared" {
+			t.Errorf("picking %s made a thread on %+v, want %s's shared", pick.row, got, pick.provider)
+		}
+		id := h.a.backend.Create(h.local(), t.TempDir(), pick.row, h.a.modelRef(), api.AccessAsk)
+		h.until("the thread", func() bool { _, ok := h.a.find(id); return ok })
+		if th, _ := h.a.find(id); h.a.threadChoice(th).Model != (modelKey{pick.provider, "shared"}) {
+			t.Errorf("the thread made on %s shows %+v", pick.row, h.a.threadChoice(th).Model)
+		}
+	}
+}
+
+// The effort slider has the levels the chosen model's engine says it runs
+// at, in Glitched's words for those it knows and the engine's for others,
+// and Low to Max for a model whose engine says none. A thread made at one
+// runs at its id.
+func TestTheEffortSliderHasTheModelsLevels(t *testing.T) {
+	h := startWith(t, tempDir(t), engineReports("claude",
+		provider.Model{ID: "five", Name: "Five", Efforts: []provider.Effort{{ID: "low"}, {ID: "medium"}, {ID: "high"}, {ID: "xhigh"}, {ID: "turbo", Label: "Turbo"}}},
+		provider.Model{ID: "plain", Name: "Plain"},
+	))
+	allAnswered(h)
+	ids := func() (out []string) {
+		for _, e := range h.a.efforts() {
+			out = append(out, e.label)
+		}
+		return out
+	}
+	h.a.model = modelKey{"claude", "plain"}
+	if got := ids(); !slices.Equal(got, []string{"Low", "Medium", "High", "Max"}) {
+		t.Errorf("a model whose engine names no efforts runs at %q", got)
+	}
+	h.a.model = modelKey{"claude", "five"}
+	h.click("Model")
+	pickerSettle(t, h)
+	if got := ids(); !slices.Equal(got, []string{"Low", "Medium", "High", "Extra high", "Turbo"}) {
+		t.Errorf("Five runs at %q", got)
+	}
+	at, y := effortAt(t, h.tt)
+	h.tt.Press(at(3), y)
+	h.tt.Release(at(3), y)
+	pickerSettle(t, h)
+	if !pickerShows(h, "Turbo") || h.a.modelRef().Effort != "turbo" {
+		t.Errorf("the slider's last stop chose %q: %q", h.a.modelRef().Effort, h.tt.Texts())
 	}
 }
