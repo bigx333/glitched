@@ -87,15 +87,18 @@ func TestThePickerOffersTheModelsItsEngineReports(t *testing.T) {
 
 // A family whose engine reports no model, as a placeholder's, isn't
 // offered. A thread already on one of its models keeps it, which shows
-// as no longer offered, and a plugin can't move it to another.
+// as no longer offered, in a popover as tall as its one row needs, and a
+// plugin can't move it to another.
 func TestAFamilyWhoseEngineReportsNoneIsntOffered(t *testing.T) {
-	h := startWith(t, tempDir(t), engineReports("claude", provider.Model{ID: "claude-opus-5-5"}))
+	h := startWith(t, tempDir(t), engineReports("claude", append([]provider.Model{{ID: "claude-opus-5-5"}}, numbered(3)...)...))
 	allAnswered(h)
 	h.click("Model")
 	pickerSettle(t, h)
 	if pickerShows(h, "Codex") || !pickerShows(h, "Opus 5.5") {
 		t.Fatalf("the draft's picker shows %q", h.tt.Texts())
 	}
+	top, effort := pickerBox(t, h)
+	draft := effort.Y - top.Y
 	h.click("Model")
 	codex := api.ModelRef{Provider: "codex", Model: "gpt-5.5-codex", Effort: "high"}
 	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", codex, api.AccessAsk)
@@ -109,7 +112,11 @@ func TestAFamilyWhoseEngineReportsNoneIsntOffered(t *testing.T) {
 			t.Errorf("the Codex thread's picker doesn't show %q: %q", s, h.tt.Texts())
 		}
 	}
-	args := fmt.Sprintf(`{"thread": %q, "model": "GPT-5.5"}`, id)
+	top, _ = h.tt.Find("Codex")
+	if effort, _ = h.tt.Find("Effort"); effort.Y-top.Y >= draft {
+		t.Errorf("the Codex thread's popover is %v tall over its effort for one row, as the draft's %v for Claude's four", effort.Y-top.Y, draft)
+	}
+	args := fmt.Sprintf(`{"thread": %q, "model": "gpt-5.5"}`, id)
 	if _, err := h.a.configureEffect([]byte(args)); err == nil {
 		t.Error("threads.configure set a model no engine offers")
 	}
