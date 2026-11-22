@@ -42,7 +42,7 @@ type Adapter struct {
 }
 
 // keepIdle and keepMax are how long a thread's claude waits for its next
-// run, and how many wait at once. A parked claude holds about 400 MB, and
+// run, and how many wait at once. A parked claude holds about 380 MB, and
 // relaunching one costs about a second, so ten minutes keeps a thread the
 // user is working in warm, and four bounds what idle threads hold.
 var (
