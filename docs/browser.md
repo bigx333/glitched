@@ -341,15 +341,15 @@ Claude Code runs in threads get the browser as an MCP server named
 ```
 
 - **The engine**, `glitched serve` or the app's own, running Claude Code
-  (`daemon.Config.WithClaude`), writes `browser-mcp.json` in its state
-  directory as it starts, `{"mcpServers":{"glitched-browser":{"type":"stdio",
-  "command":"<the program running>","args":["browser-mcp","-dir","<the
-  directory>"]}}}`, and gives each run that file beside the user's own
-  servers (`claude.Adapter.MCPConfig`). It goes in the same
-  `--mcp-config` as the run's inline `glitched` server (glitched mcp,
-  `docs/daemon/child-threads.md`), after it. A file, not JSON on the
-  command line, which a `claude.cmd` shim on Windows would hand to
-  cmd.exe to unquote. Its own name keeps the browser's tools out of
+  (`daemon.Config.WithClaude`), puts the browser's server in
+  `daemon.Config.MCP` (`browsermcp.Server`): the program running, with
+  `browser-mcp -dir <the directory>`, untrusted. The host gives it to each
+  run after glitched mcp (`runtime.WithMCPServers`), and the claude
+  adapter passes it as its own inline value in the same `--mcp-config` as
+  the run's `glitched` server (`docs/daemon/child-threads.md`), after it:
+  `{"mcpServers":{"glitched-browser":{"type":"stdio","command":"<the
+  program running>","args":["browser-mcp","-dir","<the directory>"]}}}`.
+  A `browser-mcp.json` an older engine wrote is no longer read. Its own name keeps the browser's tools out of
   `--allowedTools mcp__glitched__*`, which lets glitched mcp's run without
   asking. Both the CLI and the app answer `browser-mcp`; the
   app does so with no window.

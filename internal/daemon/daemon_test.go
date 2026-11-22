@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -544,5 +545,59 @@ func TestWithClaudeGivesRunsTheBrowser(t *testing.T) {
 	got := append([]string{s.Command}, s.Args...)
 	if want := browsermcp.Command(filepath.Join(base, "state")); s.Name != browsermcp.ServerName || s.Trusted || s.Env != nil || !slices.Equal(got, want) {
 		t.Errorf("the run's browser %+v, want untrusted %s running %q", s, browsermcp.ServerName, want)
+	}
+}
+
+// mutating opens each run's agent after changing what the run's spec
+// says of its MCP servers, as an adapter that edits them in place would.
+type mutating struct {
+	*fake.Adapter
+	got chan provider.MCPServer // each run's last server, as it came
+}
+
+func (m *mutating) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	last := spec.MCP[len(spec.MCP)-1]
+	m.got <- provider.MCPServer{Name: last.Name, Args: slices.Clone(last.Args), Env: maps.Clone(last.Env)}
+	for _, s := range spec.MCP {
+		s.Args[0] = "mutated"
+		if s.Env != nil {
+			s.Env["MARK"] = "mutated"
+		}
+	}
+	return m.Adapter.Open(ctx, spec)
+}
+
+// What one run's adapter does to its MCP servers never reaches the
+// engine's own servers in a later run.
+func TestARunsMCPServersAreItsOwn(t *testing.T) {
+	dir := stateDir(t)
+	ad := &mutating{Adapter: fake.New(fake.Turn(false)), got: make(chan provider.MCPServer, 2)}
+	engineServer := provider.MCPServer{Name: "engine", Command: "/engine", Args: []string{"serve"}, Env: map[string]string{"MARK": "original"}}
+	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Providers: provider.Mux{"fake": ad}, MCP: []provider.MCPServer{engineServer}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	ep := transport.NewEndpointClient(Socket(dir), api.ID{})
+	defer ep.Close()
+	ctx := context.Background()
+	for i := range 2 {
+		thread := api.NewID()
+		for _, body := range []api.Intent{
+			api.ThreadCreate{Workspace: "/src/app", Title: "t", Model: api.ModelRef{Provider: "fake", Model: "fake"}},
+			api.MessageDispatch{Text: "hi", Mode: api.StartNow},
+		} {
+			if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: body}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		select {
+		case s := <-ad.got:
+			if s.Name != "engine" || s.Args[0] != "serve" || s.Env["MARK"] != "original" {
+				t.Fatalf("run %d's engine server %+v, want it as the engine has it", i, s)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("run %d never opened", i)
+		}
 	}
 }
