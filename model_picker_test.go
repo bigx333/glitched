@@ -150,7 +150,7 @@ func TestTheModelPickersRowsKeepTheirWays(t *testing.T) {
 	}
 	h.click("GPT-5.5")
 	pickerSettle(t, h)
-	if h.a.model != "GPT-5.5" {
+	if h.a.model != keyNamed("GPT-5.5") {
 		t.Errorf("a click on GPT-5.5 chose %q", h.a.model)
 	}
 	h.click("Fast mode")

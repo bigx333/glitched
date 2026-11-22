@@ -1639,8 +1639,7 @@ func (a *app) said(t thread) string {
 
 // modelRef is the model the pickers chose, for a new thread.
 func (a *app) modelRef() api.ModelRef {
-	m, _ := a.modelByName(a.model, "")
-	return api.ModelRef{Provider: strings.ToLower(m.provider), Model: m.id, Effort: strings.ToLower(a.effort), Fast: a.fast}
+	return api.ModelRef{Provider: a.model.Provider, Model: a.model.ID, Effort: a.effort, Fast: a.fast}
 }
 
 var accessOf = map[string]api.Access{accessAsk: api.AccessAsk, accessAuto: api.AccessAutoEdits, accessFull: api.AccessFull}

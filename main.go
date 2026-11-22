@@ -348,7 +348,7 @@ type app struct {
 	effortPressAt, effortLastAt float32
 	effortLock                  int
 	maxAt                       time.Time
-	model                       string
+	model                       modelKey
 	effort                      string
 	access                      string // one of accessLevels
 	accessOpen                  bool

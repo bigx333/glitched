@@ -11,42 +11,55 @@ import (
 	"glitched/internal/plugins/widget"
 )
 
-// modelInfo is a model as the picker shows it. id is its engine's, which
-// a thread's api.ModelRef names it by; name is the picker's, as composer.json,
-// the settings and plugins name it.
+// modelInfo is a model as the picker shows it: key is what names it, and
+// the rest only what the picker shows of it, efforts the levels it runs
+// at where its engine says.
 type modelInfo struct {
-	id, name, short, desc string
-	provider              string
-	color                 ui.Color
-	icon                  *ui.SVG
+	key               modelKey
+	name, short, desc string
+	color             ui.Color
+	icon              *ui.SVG
+	efforts           []effortInfo
 }
 
+// family is how the picker shows the models of a provider, which names
+// it as a thread's api.ModelRef does.
 type family struct {
+	provider   string
 	name, desc string
 	color      ui.Color
 	icon       *ui.SVG
 }
 
 var families = []family{
-	{"Claude", "Anthropic", ui.Hex("#d97757"), icClaude},
-	{"Codex", "OpenAI", ui.Hex("#10a37f"), icOpenAI},
-	{"Gemini", "Google", ui.Hex("#4f7cf7"), icGemini},
-	{"Grok", "xAI", ui.Hex("#2c2c31"), icGrok},
+	{"claude", "Claude", "Anthropic", ui.Hex("#d97757"), icClaude},
+	{"codex", "Codex", "OpenAI", ui.Hex("#10a37f"), icOpenAI},
+	{"gemini", "Gemini", "Google", ui.Hex("#4f7cf7"), icGemini},
+	{"grok", "Grok", "xAI", ui.Hex("#2c2c31"), icGrok},
+}
+
+// familyOf is the family of provider, or one shown by its name alone for a
+// provider Glitched has none for.
+func familyOf(provider string) family {
+	if i := slices.IndexFunc(families, func(f family) bool { return f.provider == provider }); i >= 0 {
+		return families[i]
+	}
+	return family{provider: provider, name: provider, color: ui.Hex("#6b7280"), icon: icSparkles}
 }
 
 // knownModels are how the picker shows the models Glitched knows, by the
 // id their engine reports. Which models it offers is the engines' to say
 // (modelLists): these only until a family's engine first answers.
 var knownModels = []modelInfo{
-	{"claude-opus-5-5", "Claude Opus 5.5", "Opus 5.5", "Most capable, for complex work", "Claude", ui.Hex("#d97757"), icClaude},
-	{"claude-sonnet-5-5", "Claude Sonnet 5.5", "Sonnet 5.5", "Smart and fast, for every day", "Claude", ui.Hex("#d97757"), icClaude},
-	{"claude-haiku-5-5", "Claude Haiku 5.5", "Haiku 5.5", "Fastest, for quick edits", "Claude", ui.Hex("#d97757"), icClaude},
-	{"gpt-5.5-codex", "GPT-5.5 Codex", "GPT-5.5 Codex", "Tuned for agentic coding", "Codex", ui.Hex("#10a37f"), icOpenAI},
-	{"gpt-5.5", "GPT-5.5", "GPT-5.5", "General reasoning", "Codex", ui.Hex("#10a37f"), icOpenAI},
-	{"gemini-3-pro", "Gemini 3 Pro", "Gemini 3 Pro", "Long context, sees images", "Gemini", ui.Hex("#4f7cf7"), icGemini},
-	{"gemini-3-flash", "Gemini 3 Flash", "Gemini 3 Flash", "Fast and light", "Gemini", ui.Hex("#4f7cf7"), icGemini},
-	{"grok-4", "Grok 4", "Grok 4", "Reasoning, with what's happening now", "Grok", ui.Hex("#2c2c31"), icGrok},
-	{"grok-code-fast", "Grok Code Fast", "Grok Code Fast", "Quick agentic coding", "Grok", ui.Hex("#2c2c31"), icGrok},
+	{key: modelKey{"claude", "claude-opus-5-5"}, name: "Claude Opus 5.5", short: "Opus 5.5", desc: "Most capable, for complex work", color: ui.Hex("#d97757"), icon: icClaude},
+	{key: modelKey{"claude", "claude-sonnet-5-5"}, name: "Claude Sonnet 5.5", short: "Sonnet 5.5", desc: "Smart and fast, for every day", color: ui.Hex("#d97757"), icon: icClaude},
+	{key: modelKey{"claude", "claude-haiku-5-5"}, name: "Claude Haiku 5.5", short: "Haiku 5.5", desc: "Fastest, for quick edits", color: ui.Hex("#d97757"), icon: icClaude},
+	{key: modelKey{"codex", "gpt-5.5-codex"}, name: "GPT-5.5 Codex", short: "GPT-5.5 Codex", desc: "Tuned for agentic coding", color: ui.Hex("#10a37f"), icon: icOpenAI},
+	{key: modelKey{"codex", "gpt-5.5"}, name: "GPT-5.5", short: "GPT-5.5", desc: "General reasoning", color: ui.Hex("#10a37f"), icon: icOpenAI},
+	{key: modelKey{"gemini", "gemini-3-pro"}, name: "Gemini 3 Pro", short: "Gemini 3 Pro", desc: "Long context, sees images", color: ui.Hex("#4f7cf7"), icon: icGemini},
+	{key: modelKey{"gemini", "gemini-3-flash"}, name: "Gemini 3 Flash", short: "Gemini 3 Flash", desc: "Fast and light", color: ui.Hex("#4f7cf7"), icon: icGemini},
+	{key: modelKey{"grok", "grok-4"}, name: "Grok 4", short: "Grok 4", desc: "Reasoning, with what's happening now", color: ui.Hex("#2c2c31"), icon: icGrok},
+	{key: modelKey{"grok", "grok-code-fast"}, name: "Grok Code Fast", short: "Grok Code Fast", desc: "Quick agentic coding", color: ui.Hex("#2c2c31"), icon: icGrok},
 }
 
 // goneModel is what a model's row says of it while its engine no longer
@@ -58,8 +71,8 @@ const goneModel = "No longer offered"
 // and the model chosen, of f, where the engine no longer offers it.
 func (a *app) pickerRows(f family) []modelInfo {
 	rows := a.familyModels(f)
-	m, offered := a.modelByName(a.model, a.pickerLock)
-	if !offered && m.provider == f.name {
+	m, offered := a.modelOf(a.model)
+	if !offered && m.key.Provider == f.provider {
 		m.desc = goneModel
 		rows = append(rows, m)
 	}
@@ -80,14 +93,18 @@ func (a *app) modelFamilies() []family {
 
 // shownFamilies are the ones the picker offers: in a thread, only its own.
 func (a *app) shownFamilies() []family {
-	return slices.DeleteFunc(a.modelFamilies(), func(f family) bool { return a.pickerLock != "" && f.name != a.pickerLock })
+	return slices.DeleteFunc(a.modelFamilies(), func(f family) bool { return a.pickerLock != "" && f.provider != a.pickerLock })
 }
 
 // modelRows is how many model rows the popover shows before its models
 // scroll.
 const modelRows = 8
 
-var efforts = []string{"Low", "Medium", "High", "Max"}
+// efforts are the levels the chosen model runs at, least first.
+func (a *app) efforts() []effortInfo {
+	m, _ := a.modelOf(a.model)
+	return effortsOf(m)
+}
 
 // snap carries the effort's thumb to its level: a spring without bounce,
 // which takes over a drag at the speed the pointer let it go.
@@ -114,10 +131,6 @@ var effortStops = []ui.GradientStop{
 	{Color: ui.Hex("#ef4444"), At: 1},
 }
 
-// effortColor is the color of an effort level, the gradient's at its stop.
-func effortColor(level int) ui.Color {
-	return []ui.Color{ui.Hex("#60a5fa"), ui.Hex("#a78bfa"), ui.Hex("#f472b6"), ui.Hex("#f87171")}[level]
-}
 
 var (
 	maxPixels = []ui.Color{ui.Hex("#fecaca"), ui.Hex("#fda4af"), ui.Hex("#ffffff"), ui.Hex("#fca5a5"), ui.Hex("#f9a8d4")}
@@ -125,13 +138,14 @@ var (
 	electric = ui.Hex("#60c3ff")
 )
 
+// effortLevel is the chosen effort's place among the model's efforts:
+// one it doesn't run at shows at Medium, or the least.
 func (a *app) effortLevel() int {
-	for i, e := range efforts {
-		if e == a.effort {
-			return i
-		}
+	es := a.efforts()
+	if i := slices.IndexFunc(es, func(e effortInfo) bool { return e.id == a.effort }); i >= 0 {
+		return i
 	}
-	return 1
+	return max(slices.IndexFunc(es, func(e effortInfo) bool { return e.id == "medium" }), 0)
 }
 
 // modelPicker is the composer's model button, and the popover it opens:
@@ -143,11 +157,12 @@ func (a *app) effortLevel() int {
 // glow and electricity, the popover, and what a row does (modelListRow).
 func (a *app) modelPicker(c *ui.Context, t thread) {
 	a.askModels()
-	m, _ := a.modelByName(a.model, a.pickerLock)
+	m, _ := a.modelOf(a.model)
 	level := a.effortLevel()
+	effort := a.efforts()[level]
 	b := a.tip(c, ghost(c, "model", a.pickerOpen).Padding(4, 8, 4, 4).Gap(6).Label("Model"), "Model and effort")
 	if b.Children(func() {
-		a.pickerGlow(c, b, level)
+		a.pickerGlow(c, b, effort)
 		if a.fast {
 			a.electricBorder(c)
 		}
@@ -158,8 +173,8 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 			},
 			native: func(*widget.Node) {
 				modelTile(c, m.icon, m.color, 18)
-				ui.Text(c, a.model).FontSize(12).SingleLine()
-				ui.Text(c, a.effort).FontSize(11).FontWeight(600).TextColor(effortColor(level))
+				ui.Text(c, m.name).FontSize(12).SingleLine()
+				ui.Text(c, effort.label).FontSize(11).FontWeight(600).TextColor(effort.color)
 				if a.fast {
 					a.zapIcon(c, "trigger-zap", 12)
 				}
@@ -170,16 +185,16 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 		})
 	}).Clicked() {
 		a.pickerOpen = !a.pickerOpen
-		a.pickerFamily = m.provider
+		a.pickerFamily = m.key.Provider
 	}
 	if a.pickerFamily == "" {
-		a.pickerFamily = m.provider
+		a.pickerFamily = m.key.Provider
 	}
 	if a.pickerLock != "" {
 		a.pickerFamily = a.pickerLock
 	}
-	if shown := a.shownFamilies(); len(shown) > 0 && !slices.ContainsFunc(shown, func(f family) bool { return f.name == a.pickerFamily }) {
-		a.pickerFamily = shown[0].name
+	if shown := a.shownFamilies(); len(shown) > 0 && !slices.ContainsFunc(shown, func(f family) bool { return f.provider == a.pickerFamily }) {
+		a.pickerFamily = shown[0].provider
 	}
 	a.pickerAt = b.Bounds()
 	a.popover(c, b, &a.pickerOpen, func(panel ui.Element) {
@@ -215,11 +230,14 @@ type composerModel struct {
 	Thread plugins.ThreadRecord `json:"thread"`
 	// Part is the copy's: "button" or "panel".
 	Part   string `json:"part"`
+	// Model and Effort are what the button shows of the chosen model and
+	// effort; Key is the row key of the model.
 	Model  string `json:"model"`
+	Key    string `json:"key"`
 	Effort string `json:"effort"`
 	Fast   bool   `json:"fast"`
-	// Family is the family whose models the popover shows, and Lock the
-	// only one it offers, a thread's provider's, or "" for every one.
+	// Family is the provider whose models the popover shows, and Lock the
+	// only one it offers, a thread's provider, or "" for every one.
 	Family   string        `json:"family"`
 	Lock     string        `json:"lock"`
 	Families []modelFamily `json:"families"`
@@ -235,12 +253,17 @@ type composerModel struct {
 	ModelsMaxHeight float32 `json:"modelsMaxHeight"`
 }
 
+// modelFamily is a family by its provider, Key, and what it shows.
 type modelFamily struct {
+	Key   string `json:"key"`
 	Name  string `json:"name"`
 	About string `json:"about"`
 }
 
+// modelChoice is a model by its row key, Key, its family's provider and
+// what it shows.
 type modelChoice struct {
+	Key    string `json:"key"`
 	Name   string `json:"name"`
 	Short  string `json:"short"`
 	About  string `json:"about"`
@@ -249,16 +272,17 @@ type modelChoice struct {
 
 func (a *app) composerModelOf(c *ui.Context, r plugins.ThreadRecord, part string) composerModel {
 	size := c.Theme().FontSize
-	out := composerModel{Thread: r, Part: part, Model: a.model, Effort: a.effort, Fast: a.fast, Family: a.pickerFamily, Lock: a.pickerLock,
+	m, _ := a.modelOf(a.model)
+	out := composerModel{Thread: r, Part: part, Model: m.name, Key: a.model.String(), Effort: a.efforts()[a.effortLevel()].label, Fast: a.fast, Family: a.pickerFamily, Lock: a.pickerLock,
 		FamilyRowHeight: familyRowHeight(c),
 		ModelRowHeight:  modelRowHeight(c, size),
 		ModelsMaxHeight: a.modelsMaxHeight(c),
 	}
 	out.Families, out.Models = []modelFamily{}, []modelChoice{}
 	for _, f := range a.modelFamilies() {
-		out.Families = append(out.Families, modelFamily{f.name, f.desc})
+		out.Families = append(out.Families, modelFamily{f.provider, f.name, f.desc})
 		for _, m := range a.pickerRows(f) {
-			out.Models = append(out.Models, modelChoice{m.name, m.short, m.desc, m.provider})
+			out.Models = append(out.Models, modelChoice{m.key.String(), m.name, m.short, m.desc, f.provider})
 		}
 	}
 	return out
@@ -308,19 +332,19 @@ const (
 func (a *app) modelListRow(list, key string, e ui.Element) {
 	switch list {
 	case "families":
-		if !slices.ContainsFunc(a.shownFamilies(), func(f family) bool { return f.name == key }) {
+		if !slices.ContainsFunc(a.shownFamilies(), func(f family) bool { return f.provider == key }) {
 			return
 		}
 		if e.Hovered() || e.Clicked() {
 			a.pickerFamily = key
 		}
 	case "models":
-		i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.name == key })
-		if i < 0 || a.pickerLock != "" && a.offeredModels()[i].provider != a.pickerLock {
+		i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.key.String() == key })
+		if i < 0 || a.pickerLock != "" && a.offeredModels()[i].key.Provider != a.pickerLock {
 			return
 		}
 		if e.Clicked() {
-			a.model = key
+			a.model = a.offeredModels()[i].key
 		}
 	}
 }
@@ -354,14 +378,10 @@ func modelTile(c *ui.Context, icon *ui.SVG, color ui.Color, size float32) {
 // electricity takes its place. Without a GPU only the sharp one shows: a
 // blurred layer is drawn anew every frame, and the glass composer under it
 // with it.
-func (a *app) pickerGlow(c *ui.Context, b ui.Element, level int) {
-	on := float32(0)
-	switch {
-	case a.fast:
-	case level >= 3:
-		on = 1
-	case level == 2:
-		on = 0.55
+func (a *app) pickerGlow(c *ui.Context, b ui.Element, effort effortInfo) {
+	on := effort.glow
+	if a.fast {
+		on = 0
 	}
 	// The glow fades in and out as the settings change.
 	k := b.AnimateTo("glow", on, ui.Animation{Duration: 250 * time.Millisecond, Ease: easeOut})
@@ -375,7 +395,7 @@ func (a *app) pickerGlow(c *ui.Context, b ui.Element, level int) {
 		{Color: effortStops[1].Color, At: 1},
 	}
 	angle := float32(0)
-	if level >= 3 {
+	if effort.id == "max" {
 		angle = b.Loop("turn", 4*time.Second, ui.Linear) * 360
 	}
 	g := ui.ConicGradient{Stops: stops, Angle: angle, Oklab: true}
@@ -392,11 +412,11 @@ func (a *app) pickerGlow(c *ui.Context, b ui.Element, level int) {
 func (a *app) pickerFamilies(c *ui.Context) {
 	ui.Column(c).Width(150).Padding(pickerPad).Gap(pickerGap).Children(func() {
 		for _, f := range a.shownFamilies() {
-			open := f.name == a.pickerFamily
+			open := f.provider == a.pickerFamily
 			r := row(c, f.name, open).Padding(6, 8).Gap(8)
 			// Pointing at a family opens its models, as a submenu does.
 			if r.Hovered() {
-				a.pickerFamily = f.name
+				a.pickerFamily = f.provider
 			}
 			if r.Children(func() {
 				modelTile(c, f.icon, f.color, 22)
@@ -406,7 +426,7 @@ func (a *app) pickerFamilies(c *ui.Context) {
 				})
 				ui.Icon(c, icChevronR).FontSize(11)
 			}).Clicked() {
-				a.pickerFamily = f.name
+				a.pickerFamily = f.provider
 			}
 		}
 	})
@@ -422,7 +442,7 @@ func (a *app) pickerModels(c *ui.Context) {
 		ui.Grid(c).Columns(1).Children(func() {
 			for _, f := range a.shownFamilies() {
 				list := ui.Column(c).Key(f.name).RowStart(1).ColumnStart(1).Padding(pickerPad).Gap(pickerGap)
-				if f.name != a.pickerFamily {
+				if f.provider != a.pickerFamily {
 					list.Invisible()
 				}
 				list.Children(func() {
@@ -436,8 +456,8 @@ func (a *app) pickerModels(c *ui.Context) {
 }
 
 func (a *app) pickerModel(c *ui.Context, m modelInfo) {
-	selected := m.name == a.model
-	if row(c, m.name, selected).Padding(7, 10).Gap(10).Children(func() {
+	selected := m.key == a.model
+	if row(c, m.key.String(), selected).Padding(7, 10).Gap(10).Children(func() {
 		ui.Column(c).Grow(1).Shrink(1).Gap(1).Children(func() {
 			ui.Text(c, m.short).FontWeight(500).TextColor(palette.text).SingleLine()
 			ui.Text(c, m.desc).FontSize(11.5).TextColor(palette.muted).SingleLine()
@@ -446,7 +466,7 @@ func (a *app) pickerModel(c *ui.Context, m modelInfo) {
 			ui.Icon(c, icCheck).FontSize(14).TextColor(palette.accent)
 		}
 	}).Clicked() {
-		a.model = m.name
+		a.model = m.key
 	}
 }
 
@@ -454,29 +474,29 @@ func (a *app) pickerModel(c *ui.Context, m modelInfo) {
 // fill grows warmer as the effort goes up, twinkling at High and Max, a
 // burst and a glow at the thumb at Max.
 func (a *app) effortSlider(c *ui.Context) {
-	level := a.effortLevel()
+	level, es := a.effortLevel(), a.efforts()
 	ui.Column(c).Bind(&a.effortBox).Padding(12, 14, 14).Gap(10).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "Effort").FontWeight(500)
 			// The new level rises in as it changes.
-			ui.Text(c, efforts[level]).Key(efforts[level]).FontWeight(600).TextColor(effortColor(level)).Transition(riseIn).Margin(0, 0, 0, 8)
+			ui.Text(c, es[level].label).Key(es[level].id).FontWeight(600).TextColor(es[level].color).Transition(riseIn).Margin(0, 0, 0, 8)
 			ui.Spacer(c)
 			a.fastButton(c)
 		})
 		v := float64(level)
-		steps := float32(len(efforts) - 1)
+		steps := float32(len(es) - 1)
 		sb := ui.SliderBase(c.Key("effort"), &v, 0, float64(steps)).Step(1).Height(28).Label("Effort").Cursor(ui.CursorPointer)
 		setLevel := func(l int) {
 			// A thread's effort the slider doesn't list shows at Medium,
 			// which it takes once chosen.
-			if l == level && efforts[l] == a.effort {
+			if l == level && es[l].id == a.effort {
 				return
 			}
 			haptic() // a tick on the trackpad at each step
-			if l == 3 {
+			if es[l].id == "max" {
 				a.maxAt = c.Now()
 			}
-			a.effort = efforts[l]
+			a.effort = es[l].id
 			level = l
 		}
 		// While the pointer holds the thumb, it stays under the pointer,
@@ -527,7 +547,7 @@ func (a *app) effortSlider(c *ui.Context) {
 		}
 		maxAt := a.maxAt
 		sb.Draw(func(p *ui.Painter, r ui.Rect) {
-			if drawEffortTrack(p, r, pos, level, maxAt, &a.effortFlow) {
+			if drawEffortTrack(p, r, pos, es, level, maxAt, &a.effortFlow) {
 				p.AnimationFrame()
 			}
 		})
@@ -548,11 +568,11 @@ const (
 	glowRadius = 26
 )
 
-// drawEffortTrack draws the track in r with the thumb pos levels along it,
-// and reports whether it's still moving.
-func drawEffortTrack(p *ui.Painter, r ui.Rect, pos float32, level int, maxAt time.Time, flow *flowState) bool {
+// drawEffortTrack draws the track in r of the efforts es with the thumb pos
+// levels along it, at level, and reports whether it's still moving.
+func drawEffortTrack(p *ui.Painter, r ui.Rect, pos float32, es []effortInfo, level int, maxAt time.Time, flow *flowState) bool {
 	t := p.Now()
-	steps := float32(len(efforts) - 1)
+	steps := float32(len(es) - 1)
 	x0, x1 := r.X+stopInset, r.X+r.W-stopInset
 	cy := r.Y + r.H/2
 	tx := x0 + (x1-x0)*pos/steps
@@ -566,11 +586,13 @@ func drawEffortTrack(p *ui.Painter, r ui.Rect, pos float32, level int, maxAt tim
 	p.FillGradient(fill, g, trackH/2)
 	// Light flows through the fill toward the thumb, as through a fibre:
 	// more of it, and faster, the more effort.
-	p.Clip(fill, trackH/2, func() { flow.draw(p, track, fill, level) })
+	// The flow's levels are four's: more efforts share them.
+	flowLevel := (level*3 + (len(es)-1)/2) / max(len(es)-1, 1)
+	p.Clip(fill, trackH/2, func() { flow.draw(p, track, fill, flowLevel) })
 	animating := fill.W > 0
 
 	// The stops.
-	for i := range len(efforts) {
+	for i := range len(es) {
 		x := x0 + (x1-x0)*float32(i)/steps
 		col := palette.text.Alpha(0.25)
 		if float32(i) <= pos {
@@ -580,7 +602,7 @@ func drawEffortTrack(p *ui.Painter, r ui.Rect, pos float32, level int, maxAt tim
 	}
 
 	// At Max, a glow behind the thumb, a flash and a burst as it arrives.
-	if level >= 3 {
+	if es[level].id == "max" {
 		drawGlow(p, tx, cy, glowRadius, effortStops[3].Color, 0.55)
 		since := t.Sub(maxAt)
 		if !maxAt.IsZero() && since < burstTime {
@@ -595,7 +617,7 @@ func drawEffortTrack(p *ui.Painter, r ui.Rect, pos float32, level int, maxAt tim
 	thumb := ui.Rect{X: tx - thumbR, Y: cy - thumbR, W: 2 * thumbR, H: 2 * thumbR}
 	p.Shadow(thumb, thumbR, 0, 1, 4, 0, ui.RGBA(0, 0, 0, 0.35))
 	p.Fill(thumb, ui.Hex("#ffffff"), thumbR)
-	p.Fill(ui.Rect{X: tx - 3, Y: cy - 3, W: 6, H: 6}, effortColor(level), 3)
+	p.Fill(ui.Rect{X: tx - 3, Y: cy - 3, W: 6, H: 6}, es[level].color, 3)
 	return animating || float32(level) != pos
 }
 

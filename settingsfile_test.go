@@ -91,7 +91,7 @@ func TestACorruptSettingsFileIsReplacedAlone(t *testing.T) {
 	a.saveSettings()
 	a.settingsOut.wait()
 	again := testApp(t, dir, nil, func(func()) {})
-	if again.settings.wind || again.model != "Claude Sonnet 5.5" || again.previewDragged != 500 {
+	if again.settings.wind || again.model != keyNamed("Claude Sonnet 5.5") || again.previewDragged != 500 {
 		t.Fatalf("after the save, wind %v, model %q, preview %v", again.settings.wind, again.model, again.previewDragged)
 	}
 }

@@ -578,11 +578,12 @@ func (e *EndpointClient) ProviderCommands(ctx context.Context, name, workspace s
 	return out, e.c.call(ctx, "provider.commands", commandsQuery{Provider: name, Workspace: workspace}, &out)
 }
 
-// ProviderInfo is what the engine's provider name is, with the models its
-// sessions can run.
-func (e *EndpointClient) ProviderInfo(ctx context.Context, name string) (provider.Info, error) {
-	var out provider.Info
-	return out, e.c.call(ctx, "provider.describe", describeQuery{Provider: name}, &out)
+// Providers are every provider the engine serves, each with the models
+// its sessions can run, or why it couldn't say. One it doesn't list it
+// has no adapter for.
+func (e *EndpointClient) Providers(ctx context.Context) ([]ProviderInfo, error) {
+	var out []ProviderInfo
+	return out, e.c.call(ctx, "providers", struct{}{}, &out)
 }
 
 func (e *EndpointClient) Submit(ctx context.Context, cmd api.Command) (api.Receipt, error) {

@@ -38,7 +38,7 @@ function modelsHeight(ctx) {
 }
 
 function panel(ctx) {
-  const families = ctx.families.filter((f) => !ctx.lock || f.name === ctx.lock);
+  const families = ctx.families.filter((f) => !ctx.lock || f.key === ctx.lock);
   const models = ctx.models.filter((m) => m.family === ctx.family);
   return {
     type: "column",
@@ -60,9 +60,9 @@ function panel(ctx) {
                 height: 400,
                 rowHeight: ctx.familyRowHeight,
                 gap: GAP,
-                value: families.some((f) => f.name === ctx.family) ? ctx.family : undefined,
+                value: families.some((f) => f.key === ctx.family) ? ctx.family : undefined,
                 controlled: true,
-                items: families.map((f) => ({ key: f.name, label: f.name + " " + f.about })),
+                items: families.map((f) => ({ key: f.key, label: f.name + " " + f.about })),
               },
             ],
           },
@@ -81,9 +81,9 @@ function panel(ctx) {
                 height: ctx.modelsMaxHeight - 2 * PAD,
                 rowHeight: ctx.modelRowHeight,
                 gap: GAP,
-                value: models.some((m) => m.name === ctx.model) ? ctx.model : undefined,
+                value: models.some((m) => m.key === ctx.key) ? ctx.key : undefined,
                 controlled: true,
-                items: models.map((m) => ({ key: m.name, label: m.short + " " + m.about, version: m.name === ctx.model ? "chosen" : "" })),
+                items: models.map((m) => ({ key: m.key, label: m.short + " " + m.about, version: m.key === ctx.key ? "chosen" : "" })),
               },
             ],
           },
@@ -106,7 +106,7 @@ export function rows({ list, keys, place }) {
   const ctx = place.context;
   return keys.map((key) => {
     if (list === "families") {
-      const f = ctx.families.find((f) => f.name === key);
+      const f = ctx.families.find((f) => f.key === key);
       if (!f) return null;
       return {
         type: "row",
@@ -114,7 +114,7 @@ export function rows({ list, keys, place }) {
         gap: 8,
         padding: [6, 8],
         children: [
-          native("model.tile", { family: f.name, size: 22 }),
+          native("model.tile", { family: f.key, size: 22 }),
           {
             type: "column",
             grow: true,
@@ -128,7 +128,7 @@ export function rows({ list, keys, place }) {
         ],
       };
     }
-    const m = ctx.models.find((m) => m.name === key);
+    const m = ctx.models.find((m) => m.key === key);
     if (!m) return null;
     const children = [
       {
@@ -141,7 +141,7 @@ export function rows({ list, keys, place }) {
         ],
       },
     ];
-    if (m.name === ctx.model) children.push({ type: "icon", name: "check", fontSize: 14, color: "$accent" });
+    if (m.key === ctx.key) children.push({ type: "icon", name: "check", fontSize: 14, color: "$accent" });
     return { type: "row", grow: true, gap: 10, padding: [7, 10], children };
   });
 }
