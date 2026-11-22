@@ -92,33 +92,42 @@ func (p *Pool[P]) Take(ctx context.Context, thread api.ID, key string) (proc P, 
 			p.end(thread, done)
 			return e.proc, true, nil
 		}
-		if err := e.proc.Close(ctx); err != nil {
+		if err := p.close(ctx, thread, e.proc, done); err != nil {
 			slog.Warn("park: closing a parked process that can't take the run", "thread", thread, "err", err)
-			go p.closeAgain(thread, e.proc, done)
 			return proc, false, err
 		}
-		p.end(thread, done)
 		return proc, false, nil
 	}
 }
 
-// closeAgain closes proc, whose close failed, until a close succeeds. Its
-// close stays under way until then, so Take, Drop and Close wait on it.
-func (p *Pool[P]) closeAgain(thread api.ID, proc P, done chan struct{}) {
-	for {
-		ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
-		err := proc.Close(ctx)
-		cancel()
-		if err == nil {
-			p.end(thread, done)
-			return
-		}
-		slog.Warn("park: closing a process again", "thread", thread, "err", err)
-		select {
-		case <-proc.Done():
-		case <-time.After(closeTimeout):
-		}
+// close closes proc, a close of thread's process under way as done. One
+// that fails stays under way, so Take, Drop and Close wait on it, and is
+// tried again once the process exits, else every closeTimeout.
+func (p *Pool[P]) close(ctx context.Context, thread api.ID, proc P, done chan struct{}) error {
+	err := proc.Close(ctx)
+	if err == nil {
+		p.end(thread, done)
+		return nil
 	}
+	go func() {
+		exited := proc.Done()
+		for {
+			select {
+			case <-exited:
+				exited = nil
+			case <-time.After(closeTimeout):
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+			err := proc.Close(ctx)
+			cancel()
+			if err == nil {
+				p.end(thread, done)
+				return
+			}
+			slog.Warn("park: closing a process again", "thread", thread, "err", err)
+		}
+	}()
+	return err
 }
 
 // Park keeps proc for thread's next run under key. A process already parked for thread
@@ -130,10 +139,9 @@ func (p *Pool[P]) Park(thread api.ID, key string, proc P) {
 		p.mu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 		defer cancel()
-		if err := proc.Close(ctx); err != nil {
+		if err := p.close(ctx, thread, proc, done); err != nil {
 			slog.Warn("park: closing a process the pool can't keep", "thread", thread, "err", err)
 		}
-		p.end(thread, done)
 		return
 	}
 	if old := p.parked[thread]; old != nil {
@@ -176,8 +184,7 @@ func (p *Pool[P]) Drop(ctx context.Context, thread api.ID) error {
 	p.mu.Unlock()
 	var err error
 	if e != nil {
-		err = e.proc.Close(ctx)
-		p.end(thread, done)
+		err = p.close(ctx, thread, e.proc, done)
 	}
 	return errors.Join(err, wait(ctx, waits))
 }
@@ -205,8 +212,7 @@ func (p *Pool[P]) Close(ctx context.Context) error {
 	var wg sync.WaitGroup
 	for i, c := range all {
 		wg.Go(func() {
-			errs[i] = c.e.proc.Close(ctx)
-			p.end(c.thread, c.done)
+			errs[i] = p.close(ctx, c.thread, c.e.proc, c.done)
 		})
 	}
 	wg.Wait()
@@ -244,10 +250,9 @@ func (p *Pool[P]) watch(thread api.ID, e *parked[P]) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 	defer cancel()
-	if err := e.proc.Close(ctx); err != nil {
+	if err := p.close(ctx, thread, e.proc, done); err != nil {
 		slog.Warn("park: closing a parked process", "thread", thread, "why", why, "err", err)
 	}
-	p.end(thread, done)
 }
 
 // remove takes e out of the pool. A why has its watcher close it; without

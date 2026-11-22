@@ -404,15 +404,12 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 		}) {
 			return nil, false
 		}
-		// A run whose start never ran has no agent, as boot's rule says: its
-		// message was never dispatched, and no dead host left its start
-		// leased. Its provider may still keep the agent of an earlier run for
-		// the thread's next run, unless no message of the thread ever reached
-		// an agent.
-		reached := slices.ContainsFunc(t.Queue, func(m engine.Message) bool {
-			return m.State == engine.QueueDispatched || m.State == engine.QueueUncertain
-		})
-		if m, _ := t.Message(b.Run); m.State == engine.QueueCancelled && start == 0 && !reached {
+		// A thread's first run whose start never ran has no agent, as boot's
+		// rule says: its message was never dispatched, and no dead host left
+		// its start leased. A later run's may: its provider can keep the
+		// agent of an earlier run, and an earlier start can leave a process
+		// whatever its message reached.
+		if m, _ := t.Message(b.Run); m.State == engine.QueueCancelled && start == 0 && t.Generation <= 1 {
 			return nil, true
 		}
 		// This host's pump closed the agent it held before the thread took
