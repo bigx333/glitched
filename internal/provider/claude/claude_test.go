@@ -29,8 +29,8 @@ import (
 // The test binary plays claude: with these set, it replays a transcript
 // that record wrote, one stdin line for each line the adapter sent.
 const (
-	envFake   = "GLITCHED_FAKE_CLAUDE"        // the transcript a --session-id run replays
-	envResume = "GLITCHED_FAKE_CLAUDE_RESUME" // the transcript a --resume run replays
+	envFake   = "GLITCHED_FAKE_CLAUDE"        // the transcripts a --session-id run replays
+	envResume = "GLITCHED_FAKE_CLAUDE_RESUME" // the transcripts a --resume run replays
 	envArgv   = "GLITCHED_FAKE_CLAUDE_ARGV"   // a file each run appends its argv to
 	envEntry  = "GLITCHED_FAKE_CLAUDE_ENTRY"  // a file each run appends its entrypoint entries to
 	envPids   = "GLITCHED_FAKE_CLAUDE_PIDS"   // a file each run appends its processes to, by role
@@ -94,7 +94,7 @@ func fakeClaude(path string) int {
 		b, _ := json.Marshal(entries)
 		os.WriteFile(f, b, 0o644)
 	}
-	data, err := os.ReadFile(path)
+	lines, err := tapes(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fake claude:", err)
 		return 2
@@ -116,7 +116,7 @@ func fakeClaude(path string) int {
 			server.close()
 		}
 	}()
-	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+	for _, l := range lines {
 		var e map[string]json.RawMessage
 		json.Unmarshal([]byte(strings.NewReplacer(uuids...).Replace(l)), &e)
 		var when struct{ If, Unless string }
@@ -184,6 +184,11 @@ func fakeClaude(path string) int {
 			var s string
 			json.Unmarshal(e["stderr"], &s)
 			fmt.Fprintln(os.Stderr, s)
+		case e["park"] != nil:
+			// Idle between turns: the next turn's message, or stdin's end.
+			if _, err := in.Peek(1); err != nil {
+				return 0
+			}
 		case e["eof"] != nil:
 			for {
 				got, err := in.ReadBytes('\n')
@@ -251,6 +256,40 @@ func fakeClaude(path string) int {
 		}
 	}
 	return 0
+}
+
+// tapes is what one fake claude plays: the transcripts of the list path,
+// each a turn of the same process, as one claude kept between runs takes
+// them. A later transcript starts at its first user message, past the
+// start its own process made, and every one but the last waits, parked,
+// for the next turn's message where it would have waited for stdin's end.
+func tapes(path string) ([]string, error) {
+	paths := filepath.SplitList(path)
+	var lines []string
+	for i, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil, err
+		}
+		ls := strings.Split(strings.TrimSpace(string(data)), "\n")
+		if i > 0 {
+			first := slices.IndexFunc(ls, func(l string) bool {
+				var e struct{ Sent json.RawMessage }
+				return json.Unmarshal([]byte(l), &e) == nil && e.Sent != nil && kind(e.Sent) == "user"
+			})
+			if first < 0 {
+				return nil, fmt.Errorf("%s has no user message to start a later turn at", p)
+			}
+			ls = ls[first:]
+		}
+		if i < len(paths)-1 {
+			if end := slices.IndexFunc(ls, func(l string) bool { return strings.HasPrefix(l, `{"eof"`) }); end >= 0 {
+				ls = append(ls[:end:end], `{"park":true}`)
+			}
+		}
+		lines = append(lines, ls...)
+	}
+	return lines, nil
 }
 
 // mcpServer is the run's MCP server as the fake claude started it.
@@ -397,6 +436,7 @@ func hostAt(t *testing.T, path string, ad *claude.Adapter, opts ...runtime.Optio
 	}
 	t.Cleanup(func() {
 		h.Close()
+		ad.Close()
 		st.Close()
 	})
 	return h
@@ -500,33 +540,6 @@ func TestATurnEndsTheStepsItLeftOpen(t *testing.T) {
 				t.Errorf("work items %+v, want the Bash step started, then failed", got.work)
 			}
 		})
-	}
-}
-
-func TestALaterTurnResumesTheThreadsSession(t *testing.T) {
-	argv := replay(t, "hi", "")
-	h := host(t, nil)
-	thread := newThread(t, h, api.AccessAsk)
-	if first := turn(t, h, thread, "Say hi in three words."); first.ended.Outcome != api.OutcomeCompleted || first.text == "" {
-		t.Fatalf("first turn: %+v", first)
-	}
-
-	replay(t, "again", "again-resume")
-	t.Setenv(envArgv, argv)
-	got := turn(t, h, thread, "What did I ask you to do last time? Answer in under ten words.")
-	if got.ended.Outcome != api.OutcomeCompleted || !strings.Contains(got.text, "say hi") {
-		t.Errorf("second turn %+v, want Claude to answer from the first turn's session", got)
-	}
-
-	var sessions [][2]string
-	for _, l := range strings.Split(strings.TrimSpace(string(must(os.ReadFile(argv)))), "\n") {
-		var args []string
-		json.Unmarshal([]byte(l), &args)
-		sessions = append(sessions, [2]string{args[len(args)-2], args[len(args)-1]})
-	}
-	if len(sessions) != 3 || sessions[0][0] != "--session-id" || sessions[1][0] != "--session-id" || sessions[2][0] != "--resume" ||
-		sessions[1][1] != sessions[0][1] || sessions[2][1] != sessions[0][1] {
-		t.Errorf("claude ran with sessions %v, want the thread's session created, found in use, then resumed", sessions)
 	}
 }
 
@@ -700,7 +713,7 @@ func TestARunGetsGlitchedMCPAndTheEnginesMCPServers(t *testing.T) {
 	if args[i+2] != browserConfig {
 		t.Errorf("--mcp-config's second value %q, want %s", args[i+2], browserConfig)
 	}
-	want := []string{"--allowedTools", "mcp__glitched__*", "--append-system-prompt", l.For(thread, api.ID{}).Instructions}
+	want := []string{"--allowedTools", "mcp__glitched__*", "--append-system-prompt", l.For(thread).Instructions}
 	if got := args[i+3 : i+7]; !slices.Equal(got, want) {
 		t.Errorf("--mcp-config is followed by %q, want %q", got, want)
 	}

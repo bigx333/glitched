@@ -64,7 +64,7 @@ func toolRunning(l promptLog) bool {
 // checkStopped is what Stop leaves of a run busy in a tool call: an
 // interrupted turn, not an uncertain one, no step still going, and no
 // process left.
-func checkStopped(t *testing.T, got promptLog, run api.ID) {
+func checkStopped(t *testing.T, got promptLog, thread api.ID) {
 	t.Helper()
 	if got.ended.Outcome != api.OutcomeInterrupted || got.ended.Error != "" {
 		t.Errorf("the turn ended %+v, want interrupted and no error", got.ended)
@@ -72,8 +72,8 @@ func checkStopped(t *testing.T, got promptLog, run api.ID) {
 	if toolRunning(got) {
 		t.Errorf("work items %+v, want the stopped Bash step ended", got.work)
 	}
-	if !noneLeft(run, 6*time.Second) {
-		t.Errorf("processes %v of the stopped run still run", marked(run))
+	if !noneLeft(thread, 6*time.Second) {
+		t.Errorf("processes %v of the stopped run still run", marked(thread))
 	}
 }
 
@@ -89,10 +89,10 @@ func TestStopEndsTheTurnInterrupted(t *testing.T) {
 	replay(t, "interrupt", "")
 	h := host(t, nil)
 	thread := threadIn(t, h, t.TempDir())
-	got, run := during(t, h, thread, "Run ./busy.sh with the Bash tool. Then reply done.", toolRunning, func() {
+	got, _ := during(t, h, thread, "Run ./busy.sh with the Bash tool. Then reply done.", toolRunning, func() {
 		submit(t, h, thread, api.TurnInterrupt{})
 	})
-	checkStopped(t, got, run)
+	checkStopped(t, got, thread)
 }
 
 func TestASteerJoinsTheLiveTurn(t *testing.T) {
@@ -130,8 +130,8 @@ func TestAnIgnoredStopStillEndsTheTurn(t *testing.T) {
 	claude.SetInterruptGrace(t, 100*time.Millisecond)
 	h := host(t, nil)
 	thread := threadIn(t, h, t.TempDir())
-	got, run := during(t, h, thread, "Run ./busy.sh with the Bash tool. Then reply done.", toolRunning, func() {
+	got, _ := during(t, h, thread, "Run ./busy.sh with the Bash tool. Then reply done.", toolRunning, func() {
 		submit(t, h, thread, api.TurnInterrupt{})
 	})
-	checkStopped(t, got, run)
+	checkStopped(t, got, thread)
 }

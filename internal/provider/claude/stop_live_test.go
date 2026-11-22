@@ -57,11 +57,11 @@ func TestLiveStopSteerAndCrash(t *testing.T) {
 		script(t, ws, "busy.sh", "sleep 30\necho finished")
 		h := host(t, nil)
 		thread := threadIn(t, h, ws)
-		got, run := during(t, h, thread, "Run ./busy.sh with the Bash tool. Then reply done.", toolRunning, func() {
+		got, _ := during(t, h, thread, "Run ./busy.sh with the Bash tool. Then reply done.", toolRunning, func() {
 			time.Sleep(time.Second)
 			submit(t, h, thread, api.TurnInterrupt{})
 		})
-		checkStopped(t, got, run)
+		checkStopped(t, got, thread)
 	})
 
 	t.Run("stop at a prompt", func(t *testing.T) {
@@ -100,7 +100,7 @@ func TestLiveStopSteerAndCrash(t *testing.T) {
 		h := host(t, nil)
 		thread := threadIn(t, h, ws)
 		steer := api.NewID()
-		got, run := during(t, h, thread, "Run ./busy.sh with the Bash tool.", toolRunning, func() {
+		got, _ := during(t, h, thread, "Run ./busy.sh with the Bash tool.", toolRunning, func() {
 			if _, err := h.Submit(ctx, api.Command{ID: steer, Target: thread,
 				Body: api.MessageDispatch{Text: "After that, run this exact Bash command: touch steer-ran", Mode: api.SteerActive}}); err != nil {
 				t.Fatal(err)
@@ -111,7 +111,7 @@ func TestLiveStopSteerAndCrash(t *testing.T) {
 			time.Sleep(time.Second)
 			submit(t, h, thread, api.TurnInterrupt{})
 		})
-		checkStopped(t, got, run)
+		checkStopped(t, got, thread)
 		time.Sleep(5 * time.Second)
 		if _, err := os.Stat(filepath.Join(ws, "steer-ran")); err == nil {
 			t.Error("claude ran the steer's tool after the stopped turn ended")
@@ -129,10 +129,10 @@ func TestLiveStopSteerAndCrash(t *testing.T) {
 		ws := scratch(t)
 		script(t, ws, "busy.sh", "sleep 60\necho finished")
 		path := filepath.Join(t.TempDir(), "host.db")
-		thread, run := queue(t, path, ws, "Remember the word PAPAYA. Then run ./busy.sh with the Bash tool.")
-		killedEngine(t, path, func() bool { return running(run, "busy.sh") })
-		if !noneLeft(run, 6*time.Second) {
-			t.Fatalf("processes %v of the run outlived the engine", marked(run))
+		thread, _ := queue(t, path, ws, "Remember the word PAPAYA. Then run ./busy.sh with the Bash tool.")
+		killedEngine(t, path, func() bool { return running(thread, "busy.sh") })
+		if !noneLeft(thread, 6*time.Second) {
+			t.Fatalf("processes %v of the run outlived the engine", marked(thread))
 		}
 		h := hostAt(t, path, &claude.Adapter{})
 		if got := runOf(t, h, thread, uncertain); got != api.RunUncertain {
@@ -147,8 +147,8 @@ func TestLiveStopSteerAndCrash(t *testing.T) {
 }
 
 // running is whether one of run's processes runs name.
-func running(run api.ID, name string) bool {
-	for _, pid := range marked(run) {
+func running(thread api.ID, name string) bool {
+	for _, pid := range marked(thread) {
 		cmd, _ := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
 		if strings.Contains(string(cmd), name) {
 			return true

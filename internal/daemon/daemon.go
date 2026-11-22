@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -263,6 +264,15 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		slog.Warn("agents run without glitched mcp, so they start no child threads", "err", errors.Join(err, absErr))
 	}
 	opts = append(opts, runtime.WithMCPServers(cfg.MCP...))
+	// An adapter that keeps agents between runs stops them once the host
+	// that ran them has.
+	closers := map[io.Closer]bool{}
+	for _, ad := range cfg.Providers {
+		if c, ok := ad.(io.Closer); ok && !closers[c] {
+			closers[c] = true
+			d.undo = append(d.undo, c.Close)
+		}
+	}
 	h, err := runtime.New(ctx, st, cfg.Providers, opts...)
 	if err != nil {
 		return nil, err

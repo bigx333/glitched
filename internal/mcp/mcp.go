@@ -3,13 +3,14 @@
 // stdout. It forwards each tool call to the engine over its socket. The
 // engine decides, and the server only shapes the replies.
 //
-// Only the environment names the calling thread and run, never a tool's
-// arguments, so an agent acts for its own thread alone.
+// Only the environment names the calling thread, never a tool's arguments,
+// so an agent acts for its own thread alone. An agent's process can outlive
+// a run and serve its thread's next one, so the server names no run: each
+// call acts for the thread's live turn.
 package mcp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -20,11 +21,10 @@ import (
 	"glitched/internal/transport"
 )
 
-// The environment of glitched mcp names its caller: the thread and run of
-// the agent that started it, and the engine's socket.
+// The environment of glitched mcp names its caller: the thread of the agent
+// that started it, and the engine's socket.
 const (
 	EnvThread = "GLITCHED_THREAD"
-	EnvRun    = "GLITCHED_RUN"
 	EnvEngine = "GLITCHED_ENGINE"
 )
 
@@ -32,7 +32,7 @@ const (
 // process the engine starts drops any it inherited, so an engine inside a
 // run never speaks for that run's thread.
 func Routing(k string) bool {
-	for _, e := range []string{EnvThread, EnvRun, EnvEngine} {
+	for _, e := range []string{EnvThread, EnvEngine} {
 		if strings.EqualFold(k, e) {
 			return true
 		}
@@ -40,9 +40,9 @@ func Routing(k string) bool {
 	return false
 }
 
-// Origin is the run whose agent calls the tools.
+// Origin is the thread whose agent calls the tools.
 type Origin struct {
-	Thread, Run api.ID
+	Thread api.ID
 }
 
 // Launcher is how an engine's agents start glitched mcp: Command is a
@@ -52,15 +52,15 @@ type Launcher struct {
 	Engine  string
 }
 
-// For is the server for run's agent on thread.
-func (l Launcher) For(thread, run api.ID) provider.MCPServer {
+// For is the server for the agent of thread, whichever of its runs that
+// agent serves.
+func (l Launcher) For(thread api.ID) provider.MCPServer {
 	return provider.MCPServer{
 		Name:    "glitched",
 		Command: l.Command,
 		Args:    []string{"mcp"},
 		Env: map[string]string{
 			EnvThread: thread.String(),
-			EnvRun:    run.String(),
 			EnvEngine: l.Engine,
 		},
 		Instructions: instructions,
@@ -90,11 +90,10 @@ func Main(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 }
 
 func fromEnv() (Origin, string, error) {
-	thread, err1 := api.ParseID(os.Getenv(EnvThread))
-	run, err2 := api.ParseID(os.Getenv(EnvRun))
+	thread, err := api.ParseID(os.Getenv(EnvThread))
 	engine := os.Getenv(EnvEngine)
-	if err := errors.Join(err1, err2); err != nil || engine == "" {
-		return Origin{}, "", fmt.Errorf("mcp: %s, %s and %s name the agent's run, and glitched sets them for each agent it starts", EnvThread, EnvRun, EnvEngine)
+	if err != nil || engine == "" {
+		return Origin{}, "", fmt.Errorf("mcp: %s and %s name the agent's thread, and glitched sets them for each agent it starts", EnvThread, EnvEngine)
 	}
-	return Origin{Thread: thread, Run: run}, engine, nil
+	return Origin{Thread: thread}, engine, nil
 }

@@ -1,4 +1,4 @@
-//go:build !linux && !windows
+//go:build !linux && !windows && !darwin
 
 package claude
 
@@ -11,12 +11,15 @@ import (
 
 func sysProcAttr() *syscall.SysProcAttr { return nil }
 
-func contain(*exec.Cmd, string) {}
+func contain(*exec.Cmd, mark) {}
 
-// stopRun finds no process: only Linux lets the engine read another
-// process's environment without help.
-func stopRun(context.Context, string) (bool, error) { return false, nil }
+// stopRun finds no process: the engine reads no other process's
+// environment here.
+func stopRun(context.Context, mark) (bool, error) { return false, nil }
 
-func confine(*exec.Cmd, string) error { return nil }
+// stopTools finds no process either, as stopRun.
+func stopTools(context.Context, mark, int) error { return nil }
+
+func confine(*exec.Cmd, mark) error { return nil }
 
 func terminate(p *os.Process) error { return p.Signal(syscall.SIGTERM) }

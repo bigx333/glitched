@@ -490,7 +490,7 @@ func (h *Host) open(ctx context.Context, thread api.ID, b engine.StartTurn) (pro
 		Thread: thread, Run: b.Run, Generation: b.Generation, Workspace: b.Workspace, Model: b.Model, Access: b.Access,
 	}
 	if h.mcp != nil {
-		spec.MCP = append(spec.MCP, h.mcp.For(thread, b.Run))
+		spec.MCP = append(spec.MCP, h.mcp.For(thread))
 	}
 	for _, s := range h.servers {
 		s.Args, s.Env = slices.Clone(s.Args), maps.Clone(s.Env)

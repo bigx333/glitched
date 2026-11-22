@@ -216,8 +216,8 @@ func TestAClaudeParentDelegatesATask(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := cfg.MCPServers["glitched"]
-	if len(cfg.MCPServers) != 1 || !slices.Equal(s.Args, []string{"mcp"}) || s.Env[mcp.EnvThread] != parent.String() || s.Env[mcp.EnvRun] == "" || s.Env[mcp.EnvEngine] == "" {
-		t.Errorf("--mcp-config %s, want glitched mcp for the parent's thread and run", args[i+1])
+	if len(cfg.MCPServers) != 1 || !slices.Equal(s.Args, []string{"mcp"}) || s.Env[mcp.EnvThread] != parent.String() || s.Env[mcp.EnvEngine] == "" || len(s.Env) != 2 {
+		t.Errorf("--mcp-config %s, want glitched mcp for the parent's thread, and no run: its claude serves the thread's later runs too", args[i+1])
 	}
 	if slices.Contains(args, "--strict-mcp-config") {
 		t.Errorf("claude ran with %q, want the user's own servers beside glitched's", args)
@@ -236,7 +236,6 @@ func TestAClaudeParentDelegatesATask(t *testing.T) {
 func TestClaudeInheritsNoCaller(t *testing.T) {
 	replay(t, "hi", "")
 	t.Setenv(mcp.EnvThread, api.NewID().String())
-	t.Setenv(mcp.EnvRun, api.NewID().String())
 	t.Setenv(strings.ToLower(mcp.EnvEngine), "/elsewhere/engine.sock")
 	entry := filepath.Join(t.TempDir(), "entry")
 	t.Setenv(envEntry, entry)

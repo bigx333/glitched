@@ -11,26 +11,29 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Two stops of one run at once must not both close its jobs' handles,
-// nor read a handle the other closed as a job still running, and neither
-// may say the run is over before it is.
-func TestTwoStopsOfARunAtOnceBothEndIt(t *testing.T) {
+// Two stops of one launch at once, one by its mark and one by its
+// thread's, must not both close its job's handle, nor read a handle the
+// other closed as a job still running, and neither may say the launch is
+// over before it is.
+func TestTwoStopsOfALaunchAtOnceBothEndIt(t *testing.T) {
 	for range 20 {
-		run := api.NewID().String()
+		thread := api.NewID()
+		m := launchMark(thread, api.NewID())
+		marks := []mark{m, threadMark(thread)}
 		self, err := os.Executable()
 		if err != nil {
 			t.Fatal(err)
 		}
 		cmd := Command(context.Background(), self)
 		cmd.Env = append(cmd.Env, "GLITCHED_FAKE_SLEEP=60s")
-		contain(cmd, run)
+		contain(cmd, m)
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
-		if err := confine(cmd, run); err != nil {
+		if err := confine(cmd, m); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { stopRun(context.Background(), run); cmd.Process.Kill() })
+		t.Cleanup(func() { stopRun(context.Background(), m); cmd.Process.Kill() })
 		h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(cmd.Process.Pid))
 		if err != nil {
 			t.Fatal(err)
@@ -41,7 +44,7 @@ func TestTwoStopsOfARunAtOnceBothEndIt(t *testing.T) {
 		early := make([]bool, 2)
 		for i := range errs {
 			wg.Go(func() {
-				found[i], errs[i] = stopRun(context.Background(), run)
+				found[i], errs[i] = stopRun(context.Background(), marks[i])
 				ev, _ := windows.WaitForSingleObject(h, 0)
 				early[i] = errs[i] == nil && ev != windows.WAIT_OBJECT_0
 			})
