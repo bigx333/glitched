@@ -148,22 +148,29 @@ func numbered(n int) []provider.Model {
 	return out
 }
 
-// The models' column grows with the models, up to modelRows of them, past
-// which they scroll, the effort staying under them; the keyboard reaches
-// every one.
-func TestThePickersModelsScrollPastModelRows(t *testing.T) {
+// The models' column grows a row with each model, up to eight of them,
+// past which they scroll, in a window with room for many more; the effort
+// stays under them, and the keyboard reaches every one.
+func TestThePickersModelsScrollPastEightRows(t *testing.T) {
+	var pitch float32
 	height := func(n int) float32 {
 		h := startWith(t, tempDir(t), engineReports("claude", numbered(n)...))
 		allAnswered(h)
+		h.tt.SetSize(1320, 2000)
 		h.a.model = modelKey{"claude", "m-00"}
+		h.tt.Frame()
 		h.click("Model")
 		pickerSettle(t, h)
 		top, effort := pickerBox(t, h)
+		if first, ok := h.tt.Find("M 00"); ok && pitch == 0 {
+			second, _ := h.tt.Find("M 01")
+			pitch = second.Y - first.Y
+		}
 		return effort.Y - top.Y
 	}
-	one, three, eight, many := height(1), height(3), height(modelRows), height(30)
-	if !(one < three && three < eight) || many != eight {
-		t.Fatalf("the popover is %v, %v, %v and %v tall over its effort for 1, 3, %d and 30 models; want it to grow up to %d and stay", one, three, eight, many, modelRows, modelRows)
+	seven, eight, nine, many := height(7), height(8), height(9), height(30)
+	if pitch <= 0 || abs32(eight-seven-pitch) > 0.5 || nine != eight || many != eight {
+		t.Fatalf("over its effort the popover is %v, %v, %v and %v tall for 7, 8, 9 and 30 models, a row %v; want a row more for the 8th, and no more after", seven, eight, nine, many, pitch)
 	}
 
 	h := startWith(t, tempDir(t), engineReports("claude", numbered(30)...))
@@ -196,18 +203,40 @@ func TestThePickersModelsScrollPastModelRows(t *testing.T) {
 	}
 }
 
-// On a short window the popover keeps in it: its models scroll sooner.
+// On a short window the popover keeps between the window's top and the
+// button: its models scroll sooner, the whole effort control shows and
+// takes a click, and the keyboard reaches a model below the first screen.
 func TestThePickerKeepsInAShortWindow(t *testing.T) {
 	h := startWith(t, tempDir(t), engineReports("claude", numbered(30)...))
 	allAnswered(h)
+	h.a.model = modelKey{"claude", "m-00"}
 	h.tt.SetSize(1320, 460)
 	h.tt.Frame()
 	h.click("Model")
 	pickerSettle(t, h)
 	h.tt.Frame()
 	top, effort := pickerBox(t, h)
-	if top.Y < 0 || effort.Y+effort.H > 460 {
-		t.Errorf("the popover runs from %v to %v, out of a window 460 tall", top, effort)
+	button, _ := h.tt.Find("Model")
+	faster, ok := h.tt.Find("Faster")
+	if !ok || top.Y < 0 || faster.Y+faster.H > button.Y {
+		t.Fatalf("the popover runs from %v to its effort's foot %v, out of the window's top and the button at %v", top, faster, button)
+	}
+	at, y := effortAt(t, h.tt)
+	h.tt.Press(at(3), y)
+	h.tt.Release(at(3), y)
+	pickerSettle(t, h)
+	if h.a.effort != "max" {
+		t.Errorf("a click on the effort's last stop chose %q", h.a.effort)
+	}
+	for range 80 {
+		if h.tt.Focused("M 29") {
+			break
+		}
+		h.tt.Key(0, ui.KeyTab)
+		pickerSettle(t, h)
+	}
+	if r, ok := h.tt.Find("M 29"); !h.tt.Focused("M 29") || !ok || r.Y < top.Y || r.Y+r.H > effort.Y {
+		t.Errorf("the 30th model, tabbed to, is at %v (focused %v), out of the models between %v and %v", r, h.tt.Focused("M 29"), top, effort)
 	}
 }
 

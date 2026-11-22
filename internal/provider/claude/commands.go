@@ -57,7 +57,7 @@ func (r initialized) commands() []provider.Command {
 // efforts --effort takes for it. The default is left out: it is one of
 // the others, which it names.
 func (r initialized) models() []provider.Model {
-	var out []provider.Model
+	out := []provider.Model{}
 	for _, m := range r.Models {
 		if m.Value == "default" {
 			continue

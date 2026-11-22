@@ -46,10 +46,9 @@ func (k *modelKey) UnmarshalJSON(b []byte) error {
 }
 
 // modelLists are the models each provider's engine last reported, as
-// models.json keeps them across restarts. A provider its engine never
-// answered for offers the ones Glitched knows of it (knownModels); one it
-// answered for offers what it said, though that's none, as of a provider
-// it has no adapter for.
+// models.json keeps them across restarts. A provider offers what its
+// engine said, though that's none, as of a provider it has no adapter
+// for; one its engine never answered for offers none yet.
 type modelLists struct {
 	reported map[string][]provider.Model // by provider
 	asking   bool
@@ -72,6 +71,9 @@ func (a *app) loadModels() {
 	if err := jsonfile.Load(a.modelsPath(), &a.models.reported); err != nil {
 		log.Printf("glitched: models: %v", err)
 	}
+	if a.models.reported == nil {
+		a.models.reported = map[string][]provider.Model{} // a file of null
+	}
 }
 
 // askModels asks this machine's engine, off the UI thread, for the models
@@ -93,58 +95,94 @@ func (a *app) askModels() {
 		cancel()
 		a.post(func() {
 			l.asking = false
-			if err != nil {
+			retry := func() {
 				l.next = time.Now().Add(modelsRetry)
 				time.AfterFunc(modelsRetry, func() { a.post(func() {}) })
+			}
+			if err != nil {
+				retry()
 				return
 			}
 			l.next = time.Now().Add(modelsRecheck)
-			for _, f := range families {
-				if i := slices.IndexFunc(served, func(p transport.ProviderInfo) bool { return p.Name == f.provider }); i < 0 {
+			for _, f := range a.providerFamilies() {
+				if !slices.ContainsFunc(served, func(p transport.ProviderInfo) bool { return p.Name == f.provider }) {
 					l.reported[f.provider] = []provider.Model{}
-				} else if served[i].Error == "" {
-					l.reported[f.provider] = append([]provider.Model{}, served[i].Info.Models...)
 				}
+			}
+			for _, p := range served {
+				if p.Error != "" {
+					log.Printf("glitched: models: %s: %s", p.Name, p.Error)
+					retry()
+					continue
+				}
+				l.reported[p.Name] = append([]provider.Model{}, p.Info.Models...)
 			}
 			if err := jsonfile.Write(a.modelsPath(), l.reported); err != nil {
 				log.Printf("glitched: models: %v", err)
+			}
+			// A default the user left as it was takes what the engine
+			// now offers: the engine's first model where none was chosen,
+			// an effort the model runs at.
+			if a.choice() == a.savedChoice && !a.effortHeld {
+				a.show(a.starting(a.composerFile))
+				a.savedChoice, a.triedChoice = a.choice(), a.choice()
 			}
 		})
 	}()
 }
 
-// familyModels are the models the picker offers of family f, in its
-// engine's order: each as Glitched knows it, else as its engine words it.
-func (a *app) familyModels(f family) []modelInfo {
-	reported, ok := a.models.reported[f.provider]
-	var out []modelInfo
-	if !ok {
-		for _, m := range knownModels {
-			if m.key.Provider == f.provider {
-				out = append(out, m)
-			}
+// providerFamilies are the families of Glitched's table, then those of
+// any other provider an engine reported, by its key.
+func (a *app) providerFamilies() []family {
+	out := slices.Clone(families)
+	var others []string
+	for p := range a.models.reported {
+		if !slices.ContainsFunc(families, func(f family) bool { return f.provider == p }) {
+			others = append(others, p)
 		}
-		return out
 	}
-	taken := map[string]bool{}
-	for _, r := range reported {
-		key := modelKey{f.provider, r.ID}
-		m, known := knownModel(key)
-		if !known {
-			short := cmp.Or(r.Name, r.ID)
-			m = modelInfo{key: key, name: f.name + " " + short, short: short, desc: r.Description, color: f.color, icon: f.icon}
-		}
-		if taken[m.name] {
-			m.name = r.ID
-		}
-		taken[m.name] = true
-		m.efforts = nil
-		for _, e := range r.Efforts {
-			m.efforts = append(m.efforts, effortOf(e))
-		}
-		out = append(out, m)
+	slices.Sort(others)
+	for _, p := range others {
+		out = append(out, familyOf(p))
 	}
 	return out
+}
+
+// offeredModels are the models the engines offer, family by family in
+// providerFamilies' order, each in its engine's order: as Glitched knows
+// it, else as its engine words it. Each has a name of its own, as the
+// settings choose the default by it: a name another took is its key.
+func (a *app) offeredModels() []modelInfo {
+	var out []modelInfo
+	taken := map[string]bool{}
+	for _, f := range a.providerFamilies() {
+		for _, r := range a.models.reported[f.provider] {
+			key := modelKey{f.provider, r.ID}
+			if slices.ContainsFunc(out, func(m modelInfo) bool { return m.key == key }) {
+				continue
+			}
+			m, known := knownModel(key)
+			if !known {
+				short := cmp.Or(r.Name, r.ID)
+				m = modelInfo{key: key, name: f.name + " " + short, short: short, desc: r.Description, color: f.color, icon: f.icon}
+			}
+			if taken[m.name] {
+				m.name = key.String()
+			}
+			taken[m.name] = true
+			m.efforts = nil
+			for _, e := range r.Efforts {
+				m.efforts = append(m.efforts, effortOf(e))
+			}
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// familyModels are the models offered of family f.
+func (a *app) familyModels(f family) []modelInfo {
+	return slices.DeleteFunc(a.offeredModels(), func(m modelInfo) bool { return m.key.Provider != f.provider })
 }
 
 func knownModel(k modelKey) (modelInfo, bool) {
@@ -161,15 +199,6 @@ func knownNamed(name string) (modelInfo, bool) {
 		return modelInfo{}, false
 	}
 	return knownModels[i], true
-}
-
-// offeredModels are every family's, in the families' order.
-func (a *app) offeredModels() []modelInfo {
-	var out []modelInfo
-	for _, f := range families {
-		out = append(out, a.familyModels(f)...)
-	}
-	return out
 }
 
 // modelNamed is the offered model named name: the settings' default model
@@ -261,6 +290,23 @@ func effortsOf(m modelInfo) []effortInfo {
 	return out
 }
 
-// effortID is the id of an effort named by its id or, as composer.json and
-// threads held them before, its label.
-func effortID(s string) string { return strings.ToLower(s) }
+// effortFor is the effort m runs at for want: want, or the effort want
+// names by its label, as composer.json and threads held them before; else
+// Medium, else the least m runs at. The picker shows it, and sends it.
+func effortFor(m modelInfo, want string) string {
+	es := effortsOf(m)
+	for _, id := range []string{want, strings.ToLower(want), "medium"} {
+		if slices.ContainsFunc(es, func(e effortInfo) bool { return e.id == id }) {
+			return id
+		}
+	}
+	return es[0].id
+}
+
+// chooseModel chooses the model k, at the effort chosen where k runs at
+// it, else at the one it shows (effortFor).
+func (a *app) chooseModel(k modelKey) {
+	a.model = k
+	m, _ := a.modelOf(k)
+	a.effort = effortFor(m, a.effort)
+}

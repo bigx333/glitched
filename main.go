@@ -347,22 +347,29 @@ type app struct {
 	effortHeld, effortPressed   bool
 	effortPressAt, effortLastAt float32
 	effortLock                  int
-	maxAt                       time.Time
-	model                       modelKey
-	effort                      string
-	access                      string // one of accessLevels
-	accessOpen                  bool
-	accessAt                    time.Time // when the level last changed, for its effect
+	// effortIDs are the efforts the slider last showed: a press held as
+	// they change ends, its levels being the old ones'.
+	effortIDs  string
+	maxAt      time.Time
+	model      modelKey
+	effort     string
+	access     string // one of accessLevels
+	accessOpen bool
+	accessAt   time.Time // when the level last changed, for its effect
 	// savedChoice is the default for a new thread as composer.json last
 	// gave it, triedChoice the one last saved or tried (saveComposer),
 	// and pickerLock the only family the model picker offers, a thread's
 	// provider's, or "" for all.
 	savedChoice choice
 	triedChoice choice
-	pickerLock  string
-	accessFor   api.ID // the thread whose access changed at accessAt, zero for the draft
-	pickersFor  api.ID // the thread whose composer the pickers are in, zero for the draft (pickersIn)
-	collapsed   map[string]bool
+	// composerFile is what composer.json held as it was last read or
+	// saved, which the default is taken from again as the engines'
+	// models come (askModels).
+	composerFile choice
+	pickerLock   string
+	accessFor    api.ID // the thread whose access changed at accessAt, zero for the draft
+	pickersFor   api.ID // the thread whose composer the pickers are in, zero for the draft (pickersIn)
+	collapsed    map[string]bool
 	// The inbox: the project it's filtered to, and its closed sections.
 	projectFilter map[projectKey]bool // the projects the sidebar shows; none is all
 	sectionClosed map[category]bool

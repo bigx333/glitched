@@ -34,6 +34,7 @@ const (
 	envArgv   = "GLITCHED_FAKE_CLAUDE_ARGV"   // a file each run appends its argv to
 	envEntry  = "GLITCHED_FAKE_CLAUDE_ENTRY"  // a file each run appends its entrypoint entries to
 	envPids   = "GLITCHED_FAKE_CLAUDE_PIDS"   // a file each run appends its processes to, by role
+	envAfter  = "GLITCHED_FAKE_CLAUDE_AFTER"  // a file a run appends what comes on stdin past its transcript's end to, by kind
 	envEngine = "GLITCHED_FAKE_ENGINE"        // the store a test binary serves, as an engine a test can kill
 	envHide   = "GLITCHED_FAKE_HIDE"          // a file a test binary writes its PID to, as a tool that hides its environment
 	envSleep  = "GLITCHED_FAKE_SLEEP"         // how long a test binary sleeps, as sleep where there is none
@@ -191,6 +192,11 @@ func fakeClaude(path string) int {
 				}
 				transcript.Got(got)
 				fmt.Fprintf(os.Stderr, "fake claude: got %s on stdin, want its end\n", kind(got))
+				if f := os.Getenv(envAfter); f != "" {
+					after, _ := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+					fmt.Fprintln(after, kind(got))
+					after.Close()
+				}
 			}
 		case e["tool"] != nil:
 			// Claude Code runs a tool call in a shell of its own session,

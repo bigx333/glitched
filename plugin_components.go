@@ -279,7 +279,7 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 		size := 18.0
 		json.Unmarshal(n.Props["family"], &name)
 		json.Unmarshal(n.Props["size"], &size)
-		if i := slices.IndexFunc(families, func(f family) bool { return f.provider == name }); i >= 0 {
+		if i := slices.IndexFunc(families, func(f family) bool { return f.provider == name || f.name == name }); i >= 0 {
 			modelTile(c, families[i].icon, families[i].color, float32(size))
 			break
 		}

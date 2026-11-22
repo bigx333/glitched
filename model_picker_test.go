@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +65,33 @@ func TestTheModelPickerIsABuiltInPluginYoursReplaces(t *testing.T) {
 	pickerSettle(t, h)
 	if !pickerShows(h, "Sonnet 5.5") || len(h.a.plugins.Replacers("composer.model")) > 0 {
 		t.Fatalf("with no plugin to draw it, Glitched's own picker doesn't show: %q", h.tt.Texts())
+	}
+}
+
+// A copy of the picker made before models had keys, which keys its rows
+// by the names they show, still chooses: a family's row shows its models,
+// and a model's row chooses it.
+func TestACopyOfThePickerMadeBeforeKeysStillChooses(t *testing.T) {
+	h := start(t, tempDir(t))
+	js, err := os.ReadFile(filepath.Join("testdata", "model-picker-before-keys.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeOwnPlugin(t, h.a, "mine", pickerManifest, string(js))
+	h.a.plugins.SetGranted("mine", "ui.replace", true)
+	h.a.plugins.SetGranted("mine", "threads:read", true)
+	h.click("Model")
+	pickerSettle(t, h)
+	if app := h.a.plugins.App("mine"); app == nil || app.PlaceView("picker", "draft/panel") == nil {
+		t.Fatalf("the copy doesn't draw the picker: %q", h.tt.Texts())
+	}
+	h.tt.Move(0, 0)
+	h.click("Codex")
+	pickerSettle(t, h)
+	h.click("GPT-5.5")
+	pickerSettle(t, h)
+	if h.a.model != (modelKey{"codex", "gpt-5.5"}) {
+		t.Errorf("a click on the copy's GPT-5.5 chose %+v: %q", h.a.model, h.tt.Texts())
 	}
 }
 

@@ -49,6 +49,11 @@ func (a *Adapter) Describe(ctx context.Context) (provider.Info, error) {
 	if err != nil {
 		return provider.Info{}, err
 	}
+	if r.Models == nil {
+		// An answer without its models says nothing of them: what the
+		// account ran before stands.
+		return provider.Info{}, fmt.Errorf("Claude Code %s doesn't say what models the account runs", r.Version)
+	}
 	return provider.Info{Name: "claude", Version: r.Version, Models: r.models()}, nil
 }
 
