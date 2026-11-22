@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"glitched/internal/api"
@@ -22,9 +23,11 @@ import (
 )
 
 // The environment of glitched mcp names its caller: the thread of the agent
-// that started it, and the engine's socket.
+// that started it, the access that agent was started at, and the engine's
+// socket.
 const (
 	EnvThread = "GLITCHED_THREAD"
+	EnvAccess = "GLITCHED_ACCESS"
 	EnvEngine = "GLITCHED_ENGINE"
 )
 
@@ -32,7 +35,7 @@ const (
 // process the engine starts drops any it inherited, so an engine inside a
 // run never speaks for that run's thread.
 func Routing(k string) bool {
-	for _, e := range []string{EnvThread, EnvEngine} {
+	for _, e := range []string{EnvThread, EnvAccess, EnvEngine} {
 		if strings.EqualFold(k, e) {
 			return true
 		}
@@ -40,9 +43,11 @@ func Routing(k string) bool {
 	return false
 }
 
-// Origin is the thread whose agent calls the tools.
+// Origin is the thread whose agent calls the tools, and the access the
+// agent was started at.
 type Origin struct {
 	Thread api.ID
+	Access api.Access
 }
 
 // Launcher is how an engine's agents start glitched mcp: Command is a
@@ -52,15 +57,16 @@ type Launcher struct {
 	Engine  string
 }
 
-// For is the server for the agent of thread, whichever of its runs that
-// agent serves.
-func (l Launcher) For(thread api.ID) provider.MCPServer {
+// For is the server for an agent of thread started at access, whichever of
+// the thread's runs at that access the agent serves.
+func (l Launcher) For(thread api.ID, access api.Access) provider.MCPServer {
 	return provider.MCPServer{
 		Name:    "glitched",
 		Command: l.Command,
 		Args:    []string{"mcp"},
 		Env: map[string]string{
 			EnvThread: thread.String(),
+			EnvAccess: strconv.Itoa(int(access)),
 			EnvEngine: l.Engine,
 		},
 		Instructions: instructions,
@@ -91,9 +97,10 @@ func Main(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 
 func fromEnv() (Origin, string, error) {
 	thread, err := api.ParseID(os.Getenv(EnvThread))
+	access, aerr := strconv.ParseUint(os.Getenv(EnvAccess), 10, 8)
 	engine := os.Getenv(EnvEngine)
-	if err != nil || engine == "" {
-		return Origin{}, "", fmt.Errorf("mcp: %s and %s name the agent's thread, and glitched sets them for each agent it starts", EnvThread, EnvEngine)
+	if err != nil || aerr != nil || engine == "" {
+		return Origin{}, "", fmt.Errorf("mcp: %s, %s and %s name the agent's thread and access, and glitched sets them for each agent it starts", EnvThread, EnvAccess, EnvEngine)
 	}
-	return Origin{Thread: thread}, engine, nil
+	return Origin{Thread: thread, Access: api.Access(access)}, engine, nil
 }

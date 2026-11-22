@@ -713,7 +713,7 @@ func TestARunGetsGlitchedMCPAndTheEnginesMCPServers(t *testing.T) {
 	if args[i+2] != browserConfig {
 		t.Errorf("--mcp-config's second value %q, want %s", args[i+2], browserConfig)
 	}
-	want := []string{"--allowedTools", "mcp__glitched__*", "--append-system-prompt", l.For(thread).Instructions}
+	want := []string{"--allowedTools", "mcp__glitched__*", "--append-system-prompt", l.For(thread, api.AccessAsk).Instructions}
 	if got := args[i+3 : i+7]; !slices.Equal(got, want) {
 		t.Errorf("--mcp-config is followed by %q, want %q", got, want)
 	}

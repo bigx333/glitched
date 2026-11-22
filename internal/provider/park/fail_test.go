@@ -17,7 +17,7 @@ func TestAFailedCloseKeepsTheProcessDroppable(t *testing.T) {
 	p.Park(thread, "access-ask", f)
 	expired, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, ok := p.Take(expired, thread, "access-full"); ok {
+	if _, ok, _ := p.Take(expired, thread, "access-full"); ok {
 		t.Fatal("mismatched key unexpectedly returned old process")
 	}
 	// It was not killed; a caller with a fresh context must still be able

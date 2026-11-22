@@ -77,11 +77,11 @@ func TestTakeSameKeyHandsItBack(t *testing.T) {
 		p := newPool(t, 4)
 		thread, f := api.NewID(), newFake(nil)
 		p.Park(thread, "k", f)
-		got, ok := p.Take(t.Context(), thread, "k")
+		got, ok, _ := p.Take(t.Context(), thread, "k")
 		if !ok || got != f {
 			t.Fatalf("Take = %v, %v; want the parked process", got, ok)
 		}
-		if _, ok := p.Take(t.Context(), thread, "k"); ok {
+		if _, ok, _ := p.Take(t.Context(), thread, "k"); ok {
 			t.Fatal("a taken process is still parked")
 		}
 		time.Sleep(2 * idle)
@@ -95,7 +95,7 @@ func TestTakeOtherKeyClosesIt(t *testing.T) {
 		p := newPool(t, 4)
 		thread, f := api.NewID(), newFake(nil)
 		p.Park(thread, "k", f)
-		if _, ok := p.Take(t.Context(), thread, "other"); ok {
+		if _, ok, _ := p.Take(t.Context(), thread, "other"); ok {
 			t.Fatal("Take under another key hit")
 		}
 		closes(t, f, 1)
@@ -108,7 +108,7 @@ func TestTakeWakeRefusedClosesIt(t *testing.T) {
 		thread, f := api.NewID(), newFake(nil)
 		f.wake = false
 		p.Park(thread, "k", f)
-		if _, ok := p.Take(t.Context(), thread, "k"); ok {
+		if _, ok, _ := p.Take(t.Context(), thread, "k"); ok {
 			t.Fatal("Take hit a process Wake refused")
 		}
 		closes(t, f, 1)
@@ -126,7 +126,7 @@ func TestIdleReap(t *testing.T) {
 		time.Sleep(2 * time.Second)
 		synctest.Wait()
 		closes(t, f, 1)
-		if _, ok := p.Take(t.Context(), thread, "k"); ok {
+		if _, ok, _ := p.Take(t.Context(), thread, "k"); ok {
 			t.Fatal("Take hit a reaped process")
 		}
 	})
@@ -143,10 +143,10 @@ func TestParkPastMaxEvictsOldest(t *testing.T) {
 		synctest.Wait()
 		closes(t, f1, 1)
 		closes(t, f2, 0)
-		if _, ok := p.Take(t.Context(), t1, "k"); ok {
+		if _, ok, _ := p.Take(t.Context(), t1, "k"); ok {
 			t.Fatal("Take hit an evicted process")
 		}
-		if got, ok := p.Take(t.Context(), t2, "k"); !ok || got != f2 {
+		if got, ok, _ := p.Take(t.Context(), t2, "k"); !ok || got != f2 {
 			t.Fatal("Take missed the process parked last")
 		}
 	})
@@ -167,7 +167,7 @@ func TestExitedFreesItsPlace(t *testing.T) {
 		synctest.Wait()
 		closes(t, live, 0)
 		closes(t, dead, 1)
-		if got, ok := p.Take(t.Context(), older, "k"); !ok || got != live {
+		if got, ok, _ := p.Take(t.Context(), older, "k"); !ok || got != live {
 			t.Fatal("an exited process cost a live one its place")
 		}
 	})
@@ -221,7 +221,7 @@ func TestTakeWaitEndsWithContext(t *testing.T) {
 		synctest.Wait()
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
-		if _, ok := p.Take(ctx, thread, "k"); ok {
+		if _, ok, _ := p.Take(ctx, thread, "k"); ok {
 			t.Fatal("Take hit a process being reaped")
 		}
 		if ctx.Err() == nil {
@@ -245,7 +245,7 @@ func TestCloseClosesAllAndLaterParks(t *testing.T) {
 		thread := api.NewID()
 		p.Park(thread, "k", f3)
 		closes(t, f3, 1)
-		if _, ok := p.Take(t.Context(), thread, "k"); ok {
+		if _, ok, _ := p.Take(t.Context(), thread, "k"); ok {
 			t.Fatal("a Park after Close kept its process")
 		}
 	})
@@ -287,7 +287,7 @@ func TestDrop(t *testing.T) {
 		}
 		closes(t, f, 1)
 		closes(t, kept, 0)
-		if _, ok := p.Take(t.Context(), thread, "k"); ok {
+		if _, ok, _ := p.Take(t.Context(), thread, "k"); ok {
 			t.Fatal("Take hit a dropped process")
 		}
 		if err := p.Drop(t.Context(), api.NewID()); err != nil {
@@ -302,7 +302,7 @@ func TestMaxBelowOneParksNothing(t *testing.T) {
 		thread, f := api.NewID(), newFake(nil)
 		p.Park(thread, "k", f)
 		closes(t, f, 1)
-		if _, ok := p.Take(t.Context(), thread, "k"); ok {
+		if _, ok, _ := p.Take(t.Context(), thread, "k"); ok {
 			t.Fatal("max 0 parked a process")
 		}
 	})

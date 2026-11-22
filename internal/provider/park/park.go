@@ -63,9 +63,10 @@ func New[P Process](idle time.Duration, max int) *Pool[P] {
 // Take hands back the process parked for thread when it was parked under key and Wake
 // says it can take a run; it is no longer parked. A process parked under another key,
 // or one Wake refuses, is closed before Take returns, so a thread never has two processes:
-// Take also waits for a close of thread's process already under way (reap, eviction),
-// until ctx ends. ok false means the caller starts a new process.
-func (p *Pool[P]) Take(ctx context.Context, thread api.ID, key string) (proc P, ok bool) {
+// Take also waits for a close of thread's process already under way (reap, eviction).
+// ok false with no error means the caller starts a new process; an error, that the
+// thread's old process may still run, so the caller must not.
+func (p *Pool[P]) Take(ctx context.Context, thread api.ID, key string) (proc P, ok bool, err error) {
 	for {
 		p.mu.Lock()
 		if c := p.closing[thread]; len(c) > 0 {
@@ -74,13 +75,13 @@ func (p *Pool[P]) Take(ctx context.Context, thread api.ID, key string) (proc P, 
 			case <-c[0]:
 				continue
 			case <-ctx.Done():
-				return proc, false
+				return proc, false, ctx.Err()
 			}
 		}
 		e := p.parked[thread]
 		if e == nil {
 			p.mu.Unlock()
-			return proc, false
+			return proc, false, nil
 		}
 		p.remove(thread, e, "")
 		// Wake runs outside the lock, so a second Take must still see that
@@ -89,22 +90,34 @@ func (p *Pool[P]) Take(ctx context.Context, thread api.ID, key string) (proc P, 
 		p.mu.Unlock()
 		if e.key == key && e.proc.Wake() {
 			p.end(thread, done)
-			return e.proc, true
+			return e.proc, true, nil
 		}
 		if err := e.proc.Close(ctx); err != nil {
-			// It may still run: kept under a key no run has, a Drop, a
-			// reap or the thread's next Park closes it again.
 			slog.Warn("park: closing a parked process that can't take the run", "thread", thread, "err", err)
-			p.mu.Lock()
-			if p.parked[thread] == nil && !p.closed {
-				e = &parked[P]{proc: e.proc, since: time.Now(), left: make(chan struct{})}
-				p.parked[thread] = e
-				go p.watch(thread, e)
-			}
-			p.mu.Unlock()
+			go p.closeAgain(thread, e.proc, done)
+			return proc, false, err
 		}
 		p.end(thread, done)
-		return proc, false
+		return proc, false, nil
+	}
+}
+
+// closeAgain closes proc, whose close failed, until a close succeeds. Its
+// close stays under way until then, so Take, Drop and Close wait on it.
+func (p *Pool[P]) closeAgain(thread api.ID, proc P, done chan struct{}) {
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+		err := proc.Close(ctx)
+		cancel()
+		if err == nil {
+			p.end(thread, done)
+			return
+		}
+		slog.Warn("park: closing a process again", "thread", thread, "err", err)
+		select {
+		case <-proc.Done():
+		case <-time.After(closeTimeout):
+		}
 	}
 }
 

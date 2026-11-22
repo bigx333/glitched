@@ -453,7 +453,7 @@ func TestEachRunGetsGlitchedMCPOnTheEnginesSocket(t *testing.T) {
 		}
 	}
 	exe, _ := os.Executable()
-	want := map[string]string{"GLITCHED_THREAD": thread.String(), "GLITCHED_ENGINE": Socket(dir).Address}
+	want := map[string]string{"GLITCHED_THREAD": thread.String(), "GLITCHED_ACCESS": "0", "GLITCHED_ENGINE": Socket(dir).Address}
 	if len(seen[0].MCP) != 1 {
 		t.Fatalf("the run's MCP servers %+v, want glitched mcp alone", seen[0].MCP)
 	}
