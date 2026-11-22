@@ -96,15 +96,18 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 	if turn == nil {
 		return TaskView{}, errors.New("delegate_task: this thread has no turn running, so nothing can delegate for it")
 	}
+	key := cmp.Or(in.RequestID, toolUse, api.NewID().String())
+	child := derive(t.Origin.Thread, "thread", key)
 	// An agent's access is fixed when it starts. One started at another
 	// access than the live turn's serves an earlier turn, as one still
-	// closing does.
+	// closing does: it may only find a child it already started.
 	if turn.Access != t.Origin.Access {
+		if th, task, ok := t.child(ctx, child); ok && th.Parent == t.Origin.Thread && task == in.Task {
+			return TaskView{TaskID: child.String(), Title: th.Title, Status: "working"}, nil
+		}
 		return TaskView{}, errors.New("delegate_task: this agent was started for an earlier turn of the thread, so it can't delegate for the current one")
 	}
 	model, access := turn.Model, min(turn.Access, parent.Access)
-	key := cmp.Or(in.RequestID, toolUse, api.NewID().String())
-	child := derive(t.Origin.Thread, "thread", key)
 	title := cmp.Or(in.Title, firstLine(in.Task))
 	_, err = t.Engine.Submit(ctx, api.Command{
 		ID:     derive(t.Origin.Thread, "call", key),
