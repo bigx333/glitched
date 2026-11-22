@@ -1,0 +1,16 @@
+{
+  "id": "child-threads",
+  "name": "Child threads",
+  "description": "A child thread's way back up in the header, and the header's pill of tokens with children's rolled up. Built into Glitched; make a copy in Settings › Plugins to change them.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "ui.replace", "threads:read"],
+  "glitched": {
+    "places": [
+      { "id": "breadcrumb", "at": "thread.header.breadcrumb", "replaces": true },
+      { "id": "usage", "at": "thread.header.usage", "replaces": true }
+    ]
+  }
+}
