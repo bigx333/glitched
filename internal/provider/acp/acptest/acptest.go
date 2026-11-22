@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -197,14 +198,53 @@ func (f *fake) Initialize(ctx context.Context, p acp.InitializeRequest) (acp.Ini
 		<-ctx.Done()
 		select {}
 	}
+	caps := acp.AgentCapabilities{SessionCapabilities: acp.SessionCapabilities{Close: &acp.SessionCloseCapabilities{}}}
+	switch f.scenario {
+	case "memory", "memory-reject-model", "memory-resume-fails", "memory-load-metadata":
+		caps.LoadSession = true
+		caps.SessionCapabilities.Resume = &acp.SessionResumeCapabilities{}
+	case "memory-load-only":
+		caps.LoadSession = true
+	}
 	return acp.InitializeResponse{
-		ProtocolVersion: acp.ProtocolVersionNumber,
-		AgentInfo:       &acp.Implementation{Name: "Fake ACP Agent", Version: "9.9.9"},
-		AgentCapabilities: acp.AgentCapabilities{
-			SessionCapabilities: acp.SessionCapabilities{Close: &acp.SessionCloseCapabilities{}},
-		},
-		AuthMethods: []acp.AuthMethod{},
+		ProtocolVersion:   acp.ProtocolVersionNumber,
+		AgentInfo:         &acp.Implementation{Name: "Fake ACP Agent", Version: "9.9.9"},
+		AgentCapabilities: caps,
+		AuthMethods:       []acp.AuthMethod{},
 	}, nil
+}
+
+// The memory scenarios keep each session's prompts in a file beside the
+// log, so another process of the fake can take the session up again.
+func (f *fake) remembers() bool { return strings.HasPrefix(f.scenario, "memory") }
+
+func memory() map[acp.SessionId][]string {
+	m := map[acp.SessionId][]string{}
+	if b, err := os.ReadFile(os.Getenv(Log) + ".sessions"); err == nil {
+		json.Unmarshal(b, &m)
+	}
+	return m
+}
+
+func remember(m map[acp.SessionId][]string) {
+	b, _ := json.Marshal(m)
+	os.WriteFile(os.Getenv(Log)+".sessions", b, 0o600)
+}
+
+// takeUp answers a resume or load of id: the session's options when the
+// fake has it. As agy 1.5.14 does, it fails a resume of a session it
+// doesn't have with -32603, and loads one as an empty session that it
+// keeps nowhere: a later resume of it fails again.
+func (f *fake) takeUp(id acp.SessionId, load bool) ([]acp.SessionConfigOption, []string, error) {
+	m := memory()
+	said, ok := m[id]
+	if !ok && !load {
+		return nil, nil, acp.NewInternalError(map[string]any{"message": "Failed to read session " + string(id) + "; retry, or load it with session/load"})
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.model, f.level = Models[0].ID, "high"
+	return f.options(), said, nil
 }
 
 // Models are the fake's: Pro runs at two efforts, Flash at none.
@@ -247,9 +287,17 @@ func (f *fake) NewSession(ctx context.Context, p acp.NewSessionRequest) (acp.New
 	f.mu.Lock()
 	f.sessions++
 	id := acp.SessionId("session-" + strconv.Itoa(f.sessions))
+	if f.remembers() {
+		id = acp.SessionId(fmt.Sprintf("session-%d-%d", os.Getpid(), f.sessions))
+	}
 	f.model, f.level = Models[0].ID, "high"
 	options := f.options()
 	f.mu.Unlock()
+	if f.remembers() {
+		m := memory()
+		m[id] = []string{}
+		remember(m)
+	}
 	if f.is("updates-before-new-response") {
 		f.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: id, Update: acp.UpdateAgentMessageText("history the run must not show")})
 		f.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: id, Update: acp.SessionUpdate{AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{AvailableCommands: []acp.AvailableCommand{}}}})
@@ -266,7 +314,7 @@ func (f *fake) SetSessionConfigOption(ctx context.Context, p acp.SetSessionConfi
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if v.ConfigId == "model" {
-		if f.is("reject-model") {
+		if f.is("reject-model") || f.is("memory-reject-model") {
 			return acp.SetSessionConfigOptionResponse{}, acp.NewInvalidParams("Model not available on your plan")
 		}
 		f.model = string(v.Value)
@@ -309,6 +357,21 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 	f.record("session/prompt", p)
 	sid := p.SessionId
 	end := acp.PromptResponse{StopReason: acp.StopReasonEndTurn}
+	switch {
+	case f.remembers():
+		var said []string
+		for _, b := range p.Prompt {
+			if b.Text != nil {
+				said = append(said, b.Text.Text)
+			}
+		}
+		m := memory()
+		earlier := m[sid]
+		m[sid] = append(earlier, strings.Join(said, " "))
+		remember(m)
+		f.send(ctx, sid, acp.UpdateAgentMessageText(fmt.Sprintf("Earlier: %q", earlier)))
+		return end, nil
+	}
 	switch f.scenario {
 	case "replay":
 		return f.replay(ctx, sid)
@@ -430,8 +493,35 @@ func (f *fake) ListSessions(context.Context, acp.ListSessionsRequest) (acp.ListS
 	return acp.ListSessionsResponse{}, acp.NewMethodNotFound("session/list")
 }
 
-func (f *fake) ResumeSession(context.Context, acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
-	return acp.ResumeSessionResponse{}, acp.NewMethodNotFound("session/resume")
+func (f *fake) ResumeSession(ctx context.Context, p acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
+	f.record("session/resume", p)
+	switch f.scenario {
+	case "memory", "memory-reject-model", "memory-load-metadata":
+	case "memory-resume-fails":
+		return acp.ResumeSessionResponse{}, acp.NewInternalError(map[string]any{"message": "Failed to read session " + string(p.SessionId) + "; retry, or load it with session/load"})
+	default:
+		return acp.ResumeSessionResponse{}, acp.NewMethodNotFound("session/resume")
+	}
+	options, _, err := f.takeUp(p.SessionId, false)
+	return acp.ResumeSessionResponse{ConfigOptions: options}, err
+}
+
+// LoadSession replays the session's conversation, as ACP has an agent
+// do, before it answers.
+func (f *fake) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (acp.LoadSessionResponse, error) {
+	f.record("session/load", p)
+	if !f.remembers() || f.is("memory-no-resume") {
+		return acp.LoadSessionResponse{}, acp.NewMethodNotFound("session/load")
+	}
+	options, said, err := f.takeUp(p.SessionId, true)
+	if f.is("memory-load-metadata") {
+		f.send(ctx, p.SessionId, acp.SessionUpdate{AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{AvailableCommands: []acp.AvailableCommand{}}})
+	}
+	for _, s := range said {
+		f.send(ctx, p.SessionId, acp.UpdateUserMessageText(s))
+		f.send(ctx, p.SessionId, acp.UpdateAgentMessageText("replayed: "+s))
+	}
+	return acp.LoadSessionResponse{ConfigOptions: options}, err
 }
 
 func (f *fake) SetSessionMode(context.Context, acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {

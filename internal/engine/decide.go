@@ -554,6 +554,11 @@ func (d *decision) observe(o Observation) error {
 	live := d.t.Live()
 	isLive := func(run api.ID) bool { return live != nil && live.ID == run }
 	switch o := o.(type) {
+	case Bound:
+		// A run that is no longer the thread's binds nothing.
+		if isLive(o.Run) && o.Session != "" && o.Session != d.t.Session {
+			return d.emit(api.SessionBound{Run: o.Run, Session: o.Session})
+		}
 	case Started:
 		if !isLive(o.Run) {
 			return nil

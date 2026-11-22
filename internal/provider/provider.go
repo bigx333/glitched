@@ -23,6 +23,11 @@ var ErrWithdrawn = errors.New("The agent stopped waiting before the answer reach
 // models, it says nothing of what the account runs.
 var ErrSignedOut = errors.New("signed out")
 
+// Sessioned is an Agent whose provider chose its own id for the thread's
+// conversation. The host reads it after Open and stores it before Start,
+// and gives it back in SessionSpec.Session to the thread's later runs.
+type Sessioned interface{ Session() string }
+
 // Info is what a provider is and offers. Models are those its sessions can
 // run, as the provider reports them for the user's own account, in its
 // order: none for a provider that runs nothing yet.
@@ -74,6 +79,9 @@ type SessionSpec struct {
 	// which each adapter hands its agent its own way; none runs the agent
 	// without them.
 	MCP []MCPServer
+	// Session is the thread's conversation as a Sessioned agent of the
+	// provider's last bound it; "" when none has.
+	Session string
 }
 
 // MCPServer is a stdio MCP server an agent starts for itself: Command with

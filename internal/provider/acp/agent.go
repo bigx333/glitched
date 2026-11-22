@@ -45,7 +45,10 @@ type Agent struct {
 	asked       int
 }
 
-var _ provider.Agent = (*Agent)(nil)
+var (
+	_ provider.Agent     = (*Agent)(nil)
+	_ provider.Sessioned = (*Agent)(nil)
+)
 
 // ask is a permission request the agent waits on. It gets one reply: the
 // first answer, or cancelled once the agent or the turn stops waiting.
@@ -72,6 +75,17 @@ func newAgent(spec provider.SessionSpec, p *proc, keep func(*proc)) *Agent {
 	p.attach(g)
 	return g
 }
+
+// notice tells the user, as a finished step of the turn's, what the agent
+// can't.
+func (g *Agent) notice(text string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.queueLocked(provider.Work{Item: "glitched-notice", Kind: "tool", Title: text, Status: api.WorkCompleted})
+}
+
+// Session is the agent's id for the thread's conversation.
+func (g *Agent) Session() string { return g.p.sessionID() }
 
 // queueLocked adds events for Next. g.mu is held.
 func (g *Agent) queueLocked(events ...provider.Event) {

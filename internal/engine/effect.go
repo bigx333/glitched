@@ -135,6 +135,13 @@ type Observation interface{ observed() }
 
 type Started struct{ Run api.ID }
 
+// Bound is the session the run's agent opened or resumed, before its
+// first prompt.
+type Bound struct {
+	Run     api.ID
+	Session string
+}
+
 type Ended struct {
 	Run     api.ID
 	Outcome api.Outcome
@@ -217,6 +224,7 @@ type Reported struct {
 }
 
 func (Started) observed()        {}
+func (Bound) observed()          {}
 func (Ended) observed()          {}
 func (Delta) observed()          {}
 func (Work) observed()           {}

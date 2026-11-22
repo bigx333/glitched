@@ -42,6 +42,8 @@ func apply(t Thread, e Event) (Thread, error) {
 		t.Disposition = b.Disposition
 	case api.ThreadRenamed:
 		t.Title = b.Title
+	case api.SessionBound:
+		t.Session = b.Session
 	case api.ThreadConfigured:
 		t.Model, t.Access = b.Model, b.Access
 	case api.ChildReported:

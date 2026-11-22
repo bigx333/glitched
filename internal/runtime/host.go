@@ -362,7 +362,7 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 	switch b := e.Body.(type) {
 	case engine.StartTurn:
 		var ag provider.Agent
-		if ag, err = h.open(lr.ctx, e.Thread, b); err == nil {
+		if ag, err = h.open(lr.ctx, t, b); err == nil {
 			h.mu.Lock()
 			lr.agent = ag
 			h.mu.Unlock()
@@ -487,11 +487,13 @@ func retry(ctx context.Context, what string, fn func(context.Context) error) boo
 
 // open starts the run's agent. A start that fails while the host is up
 // closes what it opened.
-func (h *Host) open(ctx context.Context, thread api.ID, b engine.StartTurn) (provider.Agent, error) {
+func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (provider.Agent, error) {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
+	thread := t.ID
 	spec := provider.SessionSpec{
 		Thread: thread, Run: b.Run, Generation: b.Generation, Workspace: b.Workspace, Model: b.Model, Access: b.Access,
+		Session: t.Session,
 	}
 	if h.mcp != nil {
 		spec.MCP = append(spec.MCP, h.mcp.For(thread, b.Access))
@@ -501,10 +503,19 @@ func (h *Host) open(ctx context.Context, thread api.ID, b engine.StartTurn) (pro
 		spec.MCP = append(spec.MCP, s)
 	}
 	ag, err := h.providers.Open(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	// The session is stored before the prompt goes out, so a crash after
+	// it still has the conversation to resume.
+	if s, ok := ag.(provider.Sessioned); ok && s.Session() != "" && s.Session() != t.Session {
+		err = h.observe(ctx, thread, engine.Bound{Run: b.Run, Session: s.Session()}, 0)
+	}
 	if err == nil {
-		if err = ag.Do(ctx, provider.Start{Text: b.Text}); err != nil && h.ctx.Err() == nil {
-			h.closeAgent(ag)
-		}
+		err = ag.Do(ctx, provider.Start{Text: b.Text})
+	}
+	if err != nil && h.ctx.Err() == nil {
+		h.closeAgent(ag)
 	}
 	return ag, err
 }

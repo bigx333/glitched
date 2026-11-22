@@ -548,7 +548,13 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 	if version < 7 {
 		sqlText += runsV6
 	}
-	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + commandsV7 + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
+	if version < 8 {
+		sqlText += commandsV7
+	}
+	if version < 9 {
+		sqlText = threadsV8 + sqlText
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -557,6 +563,12 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 const runsV6 = `
 	ALTER TABLE runs DROP COLUMN model;
 	ALTER TABLE runs DROP COLUMN access;
+`
+
+// The threads table up to version 8, before a thread kept its provider's
+// session.
+const threadsV8 = `
+	ALTER TABLE threads DROP COLUMN session;
 `
 
 // The commands table up to version 7, before a receipt kept its thread's
@@ -952,5 +964,93 @@ func TestAHeldWakeOutlivesAReopen(t *testing.T) {
 	}
 	if reports != 1 || wakes != 1 || claimed != 1 {
 		t.Errorf("%d reports, %d wakes, %d claimed by the next message; want one of each", reports, wakes, claimed)
+	}
+}
+
+// A database from before threads kept their provider's session upgrades
+// to the threads table a new one has. Its threads have none, a session a
+// run binds after is kept across a reopen, and a stale run binds nothing.
+func TestAVersion8DatabaseUpgradesWithASessionPerThread(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	downgrade(t, path, "", 8)
+
+	s = open(t, path)
+	if th := threadOf(t, s, thread); th.Session != "" {
+		t.Errorf("an upgraded thread has session %q, want none", th.Session)
+	}
+	run := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{ID: run, Target: thread, Body: api.MessageDispatch{Text: "go", Mode: api.StartNow}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range []engine.Observation{
+		engine.Bound{Run: run, Session: "sess-1"},
+		engine.Bound{Run: run, Session: "sess-1"},
+		engine.Bound{Run: run, Session: ""},
+		engine.Bound{Run: api.NewID(), Session: "stale"},
+	} {
+		if _, err := s.Observe(ctx, thread, o, time.Now(), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap, err := s.Read(ctx, api.Query{Thread: thread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bound int
+	for _, e := range snap.Events {
+		if b, _ := e.Decode(); b == (api.SessionBound{Run: run, Session: "sess-1"}) {
+			bound++
+		} else if _, ok := b.(api.SessionBound); ok {
+			t.Errorf("an empty, repeated or stale bind logged %+v", b)
+		}
+	}
+	if bound != 1 {
+		t.Errorf("%d session.bound events, want 1", bound)
+	}
+	s.Close()
+	s = open(t, path)
+	if th := threadOf(t, s, thread); th.Session != "sess-1" {
+		t.Errorf("after a reopen the thread has session %q, want sess-1", th.Session)
+	}
+	s.Close()
+	fresh := filepath.Join(t.TempDir(), "host.db")
+	open(t, fresh).Close()
+	if got, want := tableOf(t, path, "threads"), tableOf(t, fresh, "threads"); !reflect.DeepEqual(got, want) {
+		t.Errorf("the threads table\n%+v\nwant a new database's\n%+v", got, want)
+	}
+}
+
+// A database a newer build wrote is refused with what to do, and left as
+// it was.
+func TestADatabaseFromANewerBuildIsRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "host.db")
+	open(t, path).Close()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA user_version = 99;`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	_, err = store.Open(path)
+	if err == nil || !strings.Contains(err.Error(), "from a newer Glitched") || !strings.Contains(err.Error(), "schema version 99") {
+		t.Fatalf("opening a newer database: %v", err)
+	}
+	db, err = sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 99 {
+		t.Fatalf("the refused database is at version %d (%v)", version, err)
 	}
 }

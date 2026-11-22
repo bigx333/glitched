@@ -166,6 +166,13 @@ type ThreadRenamed struct {
 	Title string `json:"title"`
 }
 
+// SessionBound is the provider's id for the thread's conversation, as the
+// run's agent bound it: the thread's later runs resume it.
+type SessionBound struct {
+	Run     ID     `json:"run"`
+	Session string `json:"session"`
+}
+
 // ThreadConfigured is the model and access the thread's turns run at from
 // its next on.
 type ThreadConfigured struct {
@@ -225,6 +232,7 @@ func (ThreadRenamed) eventType() string       { return "thread.renamed" }
 func (ThreadDeleted) eventType() string       { return "thread.deleted" }
 func (ThreadConfigured) eventType() string    { return "thread.configured" }
 func (ChildReported) eventType() string       { return "child.reported" }
+func (SessionBound) eventType() string        { return "session.bound" }
 
 var eventBodies = map[string]func([]byte) (EventBody, error){}
 
@@ -253,6 +261,7 @@ func init() {
 	register[ThreadDeleted]()
 	register[ThreadConfigured]()
 	register[ChildReported]()
+	register[SessionBound]()
 }
 
 func register[B EventBody]() {
