@@ -74,18 +74,20 @@ type proc struct {
 	caps    caps
 	briefed bool // the session's first prompt went out
 
-	mu      sync.Mutex
-	session acpsdk.SessionId
-	options []acpsdk.SessionConfigOption // the session's, as the agent last said
-	run     *Agent                       // the run the agent serves, if any
-	prompt  chan struct{}                // closes once the run's prompt is written
-	parked  bool                         // it waits for its thread's next run
-	spoke   bool                         // it spoke while parked
+	mu       sync.Mutex
+	loading  acpsdk.SessionId // the session being loaded, whose replay is counted
+	replayed int
+	session  acpsdk.SessionId
+	options  []acpsdk.SessionConfigOption // the session's, as the agent last said
+	run      *Agent                       // the run the agent serves, if any
+	prompt   chan struct{}                // closes once the run's prompt is written
+	parked   bool                         // it waits for its thread's next run
+	spoke    bool                         // it spoke while parked
 }
 
 // caps is what the agent said it can do, as the adapter reads it.
 type caps struct {
-	close bool
+	close, resume, load bool
 }
 
 var (
@@ -175,11 +177,17 @@ func launch(ctx context.Context, profile Profile, bin, dir, mark string) (*proc,
 		p.version = r.AgentInfo.Version
 	}
 	p.caps.close = r.AgentCapabilities.SessionCapabilities.Close != nil
+	p.caps.resume = r.AgentCapabilities.SessionCapabilities.Resume != nil
+	p.caps.load = r.AgentCapabilities.LoadSession
 	return p, nil
 }
 
-// open starts the agent's session in dir with servers.
-func (p *proc) open(ctx context.Context, dir string, servers []provider.MCPServer) error {
+// open takes up the thread's session in dir with servers: it resumes the
+// session the thread had, where the agent can, else loads it, and else
+// starts one, which lost reports. agy answers a resume of a session it
+// doesn't have with -32603 "Failed to read session", not -32002, so any
+// refusal falls through to the next way; only a sign-in ends it.
+func (p *proc) open(ctx context.Context, dir string, servers []provider.MCPServer, had string) (lost bool, err error) {
 	stop := context.AfterFunc(ctx, p.halt)
 	defer stop()
 	list := []acpsdk.McpServer{}
@@ -191,14 +199,73 @@ func (p *proc) open(ctx context.Context, dir string, servers []provider.MCPServe
 		args := append([]string{}, s.Args...)
 		list = append(list, acpsdk.McpServer{Stdio: &acpsdk.McpServerStdio{Name: s.Name, Command: s.Command, Args: args, Env: env}})
 	}
-	r, err := p.conn.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: dir, McpServers: list})
-	if err != nil {
-		return p.failure("open a session", err)
+	var options []acpsdk.SessionConfigOption
+	id := acpsdk.SessionId(had)
+	taken := false
+	if had != "" && p.caps.resume {
+		r, err := p.conn.ResumeSession(ctx, acpsdk.ResumeSessionRequest{SessionId: id, Cwd: dir, McpServers: list})
+		if err == nil {
+			taken, options = true, r.ConfigOptions
+		} else if err := p.fatal("resume the thread's session", err); err != nil {
+			return false, err
+		}
+	}
+	if had != "" && !taken && p.caps.load {
+		// The agent replays the conversation before it answers, which no
+		// run hears. agy loads a session it doesn't have as an empty one,
+		// so a load that replays no message has lost the conversation.
+		p.mu.Lock()
+		p.loading, p.replayed = id, 0
+		p.mu.Unlock()
+		r, err := p.conn.LoadSession(ctx, acpsdk.LoadSessionRequest{SessionId: id, Cwd: dir, McpServers: list})
+		p.mu.Lock()
+		replayed := p.replayed
+		p.loading = ""
+		p.mu.Unlock()
+		if err == nil {
+			taken, options = replayed > 0, r.ConfigOptions
+		} else if err := p.fatal("load the thread's session", err); err != nil {
+			return false, err
+		}
+	}
+	// A session taken up again is briefed again: that it was bound says
+	// only that a run opened it, not that its first prompt went out.
+	if !taken {
+		lost = had != ""
+		r, err := p.conn.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: dir, McpServers: list})
+		if err != nil {
+			return false, p.failure("open a session", err)
+		}
+		id, options = r.SessionId, r.ConfigOptions
 	}
 	p.mu.Lock()
-	p.session, p.options = r.SessionId, r.ConfigOptions
+	p.session, p.options = id, options
 	p.mu.Unlock()
+	return lost, nil
+}
+
+// fatal is err when it ends the run: a sign-in the agent needs, or an
+// agent that is gone. An answer of the agent's that refuses is nil, and
+// the caller tries the next way.
+func (p *proc) fatal(doing string, err error) error {
+	f := p.failure(doing, err)
+	var re *acpsdk.RequestError
+	select {
+	case <-p.conn.Done():
+		return f
+	default:
+	}
+	if errors.Is(f, provider.ErrSignedOut) || p.halted.Load() || !errors.As(err, &re) {
+		return f
+	}
+	slog.Info("acp: the agent didn't take up the thread's session", "agent", p.profile.Name, "doing", doing, "err", f)
 	return nil
+}
+
+func (p *proc) sessionID() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return string(p.session)
 }
 
 // ours is whether id is the agent's session. Before session/new answers
@@ -592,6 +659,15 @@ func (p *proc) current(speaking bool, what string) *Agent {
 }
 
 func (p *proc) SessionUpdate(ctx context.Context, n acpsdk.SessionNotification) error {
+	p.mu.Lock()
+	replay := p.loading != "" && n.SessionId == p.loading
+	if replay && (n.Update.UserMessageChunk != nil || n.Update.AgentMessageChunk != nil) {
+		p.replayed++
+	}
+	p.mu.Unlock()
+	if replay {
+		return nil
+	}
 	if !p.ours(n.SessionId) {
 		slog.Info("acp: an update for another session, which the agent's run drops", "agent", p.profile.Name, "update", kindOf(n.Update))
 		return nil

@@ -136,7 +136,7 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 		return provider.Info{}, err
 	}
 	defer p.discard()
-	if err := p.open(ctx, home, nil); err != nil {
+	if _, err := p.open(ctx, home, nil, ""); err != nil {
 		return provider.Info{}, err
 	}
 	models, err := p.models(ctx)
@@ -168,27 +168,57 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		return nil, fmt.Errorf("%s: the thread's earlier agent may still run: %w", a.Profile.Name, err)
 	}
 	// A woken agent stays parked until the run takes it, so one that
-	// speaks while its model is set is stopped, and a new one starts.
+	// speaks while its model is set is stopped, and a new one starts. One
+	// on another session than the thread's is the thread's no longer.
+	if ok && spec.Session != "" && p.sessionID() != spec.Session {
+		p.discard()
+		ok = false
+	}
 	if ok {
-		if err := p.configure(ctx, spec.Model); err != nil || p.halted.Load() {
+		err = p.configure(ctx, spec.Model)
+		if p.halted.Load() {
 			p.discard()
 			ok = false
+		} else if err != nil {
+			return nil, a.refused(p, keep, err)
 		}
 	}
+	lost := false
 	if !ok {
 		if p, err = launch(ctx, a.Profile, bin, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String()); err != nil {
 			return nil, err
 		}
-		if err = p.open(ctx, spec.Workspace, spec.MCP); err != nil {
+		if lost, err = p.open(ctx, spec.Workspace, spec.MCP, spec.Session); err != nil {
 			p.discard()
 			return nil, err
 		}
 		if err := p.configure(ctx, spec.Model); err != nil {
-			p.discard()
-			return nil, err
+			return nil, a.refused(p, keep, err)
 		}
 	}
-	return newAgent(spec, p, keep), nil
+	g := newAgent(spec, p, keep)
+	if lost {
+		g.notice(a.Profile.Name + " no longer has this thread's earlier conversation, so this turn starts a new one.")
+	}
+	return g, nil
+}
+
+// refused is Open's error when the session would not take the run's model
+// or effort. An agent that refused and still runs keeps the thread's
+// conversation warm for its next run; any other is stopped.
+func (a *Adapter) refused(p *proc, keep func(*proc), err error) error {
+	select {
+	case <-p.reaped:
+	case <-p.conn.Done():
+	default:
+		if !p.halted.Load() && !errors.Is(err, provider.ErrSignedOut) {
+			p.park()
+			keep(p)
+			return err
+		}
+	}
+	p.discard()
+	return err
 }
 
 func launchKey(bin string, spec provider.SessionSpec) string {

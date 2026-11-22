@@ -167,6 +167,7 @@ CREATE TABLE threads (
 	tokens      INTEGER NOT NULL DEFAULT 0,
 	reported    INTEGER,
 	report      TEXT,
+	session     TEXT NOT NULL DEFAULT '',
 	CHECK ((disposition = 1) = (until IS NOT NULL))
 ) STRICT;
 
@@ -229,7 +230,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 8
+const schemaVersion = 9
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -317,6 +318,8 @@ WHERE a.thread = runs.thread AND a.generation = runs.generation;
 	// The target thread's revision after each command, which its receipt
 	// carries. A receipt stored before has none.
 	7: `ALTER TABLE commands ADD COLUMN revision INTEGER;`,
+	// The provider's id for each thread's conversation (SessionBound).
+	8: `ALTER TABLE threads ADD COLUMN session TEXT NOT NULL DEFAULT '';`,
 }
 
 func (s *Store) migrate() error {
@@ -346,7 +349,7 @@ func (s *Store) migrate() error {
 		}
 	case schemaVersion:
 	default:
-		return fmt.Errorf("store: schema version %d is newer than this build", version)
+		return fmt.Errorf("store: this database is from a newer Glitched (schema version %d; this build reads up to %d). Open it with that build or a later one", version, schemaVersion)
 	}
 	for key, dst := range map[string]*api.ID{"log": &s.log, "host": &s.host} {
 		if err := tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, key).Scan(idScan{dst}); err != nil {

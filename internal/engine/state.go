@@ -51,6 +51,7 @@ type Thread struct {
 	UpdatedAt   time.Time
 	Parent      api.ID      // the thread that started this one; zero for the user's
 	Tokens      int64       // what the thread's own turns used
+	Session     string      // the provider's id for the thread's conversation; "" until a run binds one
 	Reported    time.Time   // when a child last reported back
 	LastReport  *api.Report // never written through; its Cursor has no Log
 	Runs        []Run

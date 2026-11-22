@@ -192,3 +192,95 @@ func TestARequestWithNoAllowOnceIsDeclinedAndTheTurnGoesOn(t *testing.T) {
 		}
 	}
 }
+
+// A thread remembers across an engine restart: the engine stores the
+// session its first turn bound, and the next engine's agent resumes it.
+func TestAnACPThreadRemembersAcrossARestart(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(t.TempDir(), "wire.jsonl")
+	t.Setenv(acptest.Scenario, "memory")
+	t.Setenv(acptest.Log, log)
+	dir := stateDir(t)
+	thread := api.NewID()
+	workspace := t.TempDir()
+	turn := func(text string, create bool) string {
+		t.Helper()
+		d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Providers: provider.Mux{
+			"antigravity": &acp.Adapter{Profile: acp.Antigravity, Path: self},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
+		ep := transport.NewEndpointClient(Socket(dir), api.ID{})
+		defer ep.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if create {
+			if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{
+				Workspace: workspace, Title: "t", Model: api.ModelRef{Provider: "antigravity", Model: "fake-pro", Effort: "low"},
+			}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		stream, err := ep.Open(ctx, api.Subscription{Thread: thread})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer stream.Close()
+		sent := api.NewID()
+		if _, err := ep.Submit(ctx, api.Command{ID: sent, Target: thread, Body: api.MessageDispatch{Text: text, Mode: api.StartNow}}); err != nil {
+			t.Fatal(err)
+		}
+		var said strings.Builder
+		for {
+			item, err := stream.Next(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if item.Kind != api.StreamEvent {
+				continue
+			}
+			body, err := item.Event.Decode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch b := body.(type) {
+			case api.AssistantDelta:
+				if b.Run == sent {
+					said.WriteString(b.Text)
+				}
+			case api.TurnEnded:
+				if b.Run == sent {
+					if b.Outcome != api.OutcomeCompleted {
+						t.Fatalf("turn %q ended %+v", text, b)
+					}
+					return said.String()
+				}
+			}
+		}
+	}
+	turn("Remember the word kumquat.", true)
+	if got := turn("What word did I ask you to remember?", false); !strings.Contains(got, "kumquat") {
+		t.Fatalf("after a restart the thread answers %q", got)
+	}
+	entries, err := acptest.Read(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var news, resumes int
+	for _, e := range entries {
+		switch e.Method {
+		case "session/new":
+			news++
+		case "session/resume":
+			resumes++
+		}
+	}
+	if news != 1 || resumes != 1 {
+		t.Fatalf("%d new sessions and %d resumes, want one of each", news, resumes)
+	}
+}
