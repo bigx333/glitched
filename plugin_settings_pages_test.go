@@ -103,13 +103,13 @@ func TestAppSettingsAreSetOnlyToWhatThePagesOffer(t *testing.T) {
 	for _, ok := range []struct {
 		key   string
 		value any
-	}{{"theme", "Dark"}, {"accent", accents[1].name}, {"newThread", "New worktree"}, {"timestamps", "24-hour"}, {"confirmDelete", false}, {"streaming", true}, {"notifications", false}, {"defaultModel", modelNames()[1]}} {
+	}{{"theme", "Dark"}, {"accent", accents[1].name}, {"newThread", "New worktree"}, {"timestamps", "24-hour"}, {"confirmDelete", false}, {"streaming", true}, {"notifications", false}, {"defaultModel", a.modelNames()[1]}} {
 		if err := set(ok.key, ok.value); err != nil {
 			t.Errorf("%s = %v: %v", ok.key, ok.value, err)
 		}
 	}
 	got := a.appSettings()
-	if got.Theme != "Dark" || got.Accent != accents[1].name || got.NewThread != "New worktree" || got.Timestamps != "24-hour" || got.ConfirmDelete || !got.Streaming || got.Notifications || got.DefaultModel != modelNames()[1] {
+	if got.Theme != "Dark" || got.Accent != accents[1].name || got.NewThread != "New worktree" || got.Timestamps != "24-hour" || got.ConfirmDelete || !got.Streaming || got.Notifications || got.DefaultModel != a.modelNames()[1] {
 		t.Errorf("after the sets, the settings are %+v", got)
 	}
 	for _, bad := range []struct {

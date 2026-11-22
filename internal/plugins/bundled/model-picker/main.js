@@ -29,11 +29,12 @@ function button(ctx) {
 
 // The models' column is as tall as the longest family's list, whichever
 // shows: the popover keeps its size as the pointer moves between families.
+// Past the most Glitched gives it, its rows scroll.
 function modelsHeight(ctx) {
   const counts = new Map();
   for (const m of ctx.models) counts.set(m.family, (counts.get(m.family) ?? 0) + 1);
   const n = Math.max(0, ...counts.values());
-  return 2 * PAD + n * ctx.modelRowHeight + Math.max(0, n - 1) * GAP;
+  return Math.min(2 * PAD + n * ctx.modelRowHeight + Math.max(0, n - 1) * GAP, ctx.modelsMaxHeight);
 }
 
 function panel(ctx) {
@@ -77,7 +78,7 @@ function panel(ctx) {
                 id: "models",
                 label: "Models",
                 noKeys: true,
-                height: 400,
+                height: ctx.modelsMaxHeight - 2 * PAD,
                 rowHeight: ctx.modelRowHeight,
                 gap: GAP,
                 value: models.some((m) => m.name === ctx.model) ? ctx.model : undefined,

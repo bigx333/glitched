@@ -26,10 +26,11 @@ func TestReadCommandsFindsTheInitializeReply(t *testing.T) {
 {"type":"control_response","response":{"subtype":"success","request_id":"other","response":{"commands":[{"name":"wrong"}]}}}
 {"type":"control_response","response":{"subtype":"success","request_id":"`+initRequest+`","response":{"commands":[{"name":"pstack:poteto-mode","description":"Poteto mode","argumentHint":"<task>"},{"name":"__remote-workflow"},{"name":"review","description":"Review a PR"}]}}}
 `)
-	got, err := readCommands(context.Background(), out)
+	r, err := readInitialized(context.Background(), out)
 	if err != nil {
 		t.Fatal(err)
 	}
+	got := r.commands()
 	if len(got) != 2 || got[0].Name != "pstack:poteto-mode" || got[0].ArgumentHint != "<task>" || got[1].Description != "Review a PR" {
 		t.Fatalf("commands = %+v", got)
 	}
@@ -39,7 +40,7 @@ func TestReadCommandsSaysWhenClaudeExitsFirst(t *testing.T) {
 	out, claude := printed(t, `{"type":"system"}`+"\n")
 	time.Sleep(50 * time.Millisecond)
 	claude.Close()
-	if _, err := readCommands(context.Background(), out); err == nil {
+	if _, err := readInitialized(context.Background(), out); err == nil {
 		t.Fatal("no reply read as no error")
 	}
 }
@@ -52,7 +53,7 @@ func TestReadCommandsEndsWithItsContextWhileStdoutStaysOpen(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := readCommands(ctx, out)
+		_, err := readInitialized(ctx, out)
 		done <- err
 	}()
 	select {

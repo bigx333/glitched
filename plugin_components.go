@@ -283,7 +283,7 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 			modelTile(c, families[i].icon, families[i].color, float32(size))
 			break
 		}
-		m := modelByName(a.model)
+		m, _ := a.modelByName(a.model, a.pickerLock)
 		modelTile(c, m.icon, m.color, float32(size))
 	case "model.level":
 		ui.Text(c, a.effort).FontSize(11).FontWeight(600).TextColor(effortColor(a.effortLevel()))

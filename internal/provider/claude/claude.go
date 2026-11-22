@@ -40,17 +40,16 @@ var (
 	_ provider.Commander = (*Adapter)(nil)
 )
 
+// Describe asks a claude for the models the user's account can run, as
+// /model lists them. It starts in the home directory: the models are the
+// account's, not a project's.
 func (a *Adapter) Describe(ctx context.Context) (provider.Info, error) {
-	bin, err := a.binary()
+	home, _ := os.UserHomeDir()
+	r, err := a.initialize(ctx, home)
 	if err != nil {
 		return provider.Info{}, err
 	}
-	out, err := Command(ctx, bin, "--version").Output()
-	if err != nil {
-		return provider.Info{}, fmt.Errorf("claude --version: %w", err)
-	}
-	version, _, _ := strings.Cut(strings.TrimSpace(string(out)), " ")
-	return provider.Info{Name: "claude", Version: version, Models: []string{"opus", "sonnet", "haiku"}}, nil
+	return provider.Info{Name: "claude", Version: r.Version, Models: r.models()}, nil
 }
 
 // Open starts the run's process on the thread's Claude session. The first

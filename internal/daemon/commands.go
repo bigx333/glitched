@@ -69,6 +69,12 @@ func (c *commandLists) stale(l *listing) bool {
 	}
 }
 
+// Describe asks the provider each time: the app asks seldom, and keeps
+// what it was told.
+func (c *commandLists) Describe(ctx context.Context, name string) (provider.Info, error) {
+	return c.mux.Describe(ctx, name)
+}
+
 func (c *commandLists) list(k listKey, l *listing) {
 	l.cmds, l.err = c.mux.Commands(c.ctx, k.provider, k.workspace)
 	l.at = c.now()

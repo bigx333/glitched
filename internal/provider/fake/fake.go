@@ -62,6 +62,9 @@ type Adapter struct {
 	HoldStart bool
 	// Tokens is what each turn that completes says it used.
 	Tokens int64
+	// Models are what Describe reports it runs: none, as a provider
+	// that's only a placeholder.
+	Models []provider.Model
 
 	mu     sync.Mutex
 	agents map[api.ID]*Agent
@@ -124,7 +127,7 @@ func (a *Adapter) Starts() int {
 }
 
 func (a *Adapter) Describe(context.Context) (provider.Info, error) {
-	return provider.Info{Name: "fake", Version: "1", Models: []string{"fake"}}, nil
+	return provider.Info{Name: "fake", Version: "1", Models: a.Models}, nil
 }
 
 var _ provider.Commander = (*Adapter)(nil)

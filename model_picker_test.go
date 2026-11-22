@@ -197,6 +197,6 @@ export function rows({keys}) {
 		t.Fatalf("a copy's rows changed a Claude thread's model to %+v", m)
 	}
 	h.click("Row Claude Haiku 5.5")
-	want := api.ModelRef{Provider: "claude", Model: "Claude Haiku 5.5", Effort: "high"}
+	want := api.ModelRef{Provider: "claude", Model: "claude-haiku-5-5", Effort: "high"}
 	h.until("the thread's new model", func() bool { return h.thread("Mine").View.Model == want })
 }

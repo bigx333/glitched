@@ -721,11 +721,14 @@ interface ComposerModelContext {
   family: string;
   /** The only family a thread offers, its provider's ("-" for none the picker lists), or "" in the draft. */
   lock: string;
+  /** The families whose engines report models, and those models, in each engine's order. A model chosen that its engine no longer offers is listed too, about "No longer offered". */
   families: { name: string; about: string }[];
   models: { name: string; short: string; about: string; family: string }[];
   /** How tall Glitched's own popover draws a family's row and a model's, in points, from the interface font on this platform. */
   familyRowHeight: number;
   modelRowHeight: number;
+  /** How tall the models' column may be, padding and all, past which its rows scroll: eight rows, less what the window has no room for above the button. */
+  modelsMaxHeight: number;
 }
 
 /** The context of thread.row.actions, a pointed-at sidebar row's actions. */
