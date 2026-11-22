@@ -9,9 +9,9 @@ import (
 	"glitched/internal/daemon"
 )
 
-// tripwire puts a claude on PATH and in ~/.local/bin, where the adapter
-// looks for one, that leaves a mark if anything runs it.
-func tripwire(t *testing.T) (ran string) {
+// tripwire puts an agent named name on PATH and in ~/.local/bin, where
+// its adapter looks for one, that leaves a mark if anything runs it.
+func tripwire(t *testing.T, name string) (ran string) {
 	t.Helper()
 	home, bin := t.TempDir(), t.TempDir()
 	ran = filepath.Join(t.TempDir(), "ran")
@@ -20,7 +20,7 @@ func tripwire(t *testing.T) (ran string) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -41,7 +41,7 @@ func sendNew(h *harness, text string) {
 // The app a test starts plays Claude Code with the fake, even with a
 // signed-in claude on PATH: only the app's main wires in the real one.
 func TestTheGUIsTestsNeverRunClaude(t *testing.T) {
-	ran := tripwire(t)
+	ran := tripwire(t, "claude")
 	h := start(t, tempDir(t))
 	sendNew(h, "Say hi.")
 	h.until("the fake's ask, or a claude run", func() bool {
@@ -55,6 +55,21 @@ func TestTheGUIsTestsNeverRunClaude(t *testing.T) {
 	}
 	if out, err := os.ReadFile(ran); err == nil {
 		t.Fatalf("the app a test starts ran claude: %s", strings.TrimSpace(string(out)))
+	}
+}
+
+// Nor does it run agy, with one on PATH: only the app's main wires in the
+// ACP agents (daemon.Config.WithAgents).
+func TestTheGUIsTestsNeverRunAgy(t *testing.T) {
+	ran := tripwire(t, "agy")
+	h := start(t, tempDir(t))
+	sendNew(h, "Say hi.")
+	h.until("the fake's ask, or an agy run", func() bool {
+		_, err := os.Stat(ran)
+		return err == nil || h.tt.HasText("Allow once")
+	})
+	if out, err := os.ReadFile(ran); err == nil {
+		t.Fatalf("the app a test starts ran agy: %s", strings.TrimSpace(string(out)))
 	}
 }
 

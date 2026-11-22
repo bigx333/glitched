@@ -1,0 +1,47 @@
+package acp
+
+// Profile is what one ACP agent needs that the protocol does not say:
+// how to start it, what Glitched calls it, and what it prints that ACP
+// has no message for.
+type Profile struct {
+	// Provider is the agent's key, as a thread's api.ModelRef and the
+	// engine's provider.Mux name it.
+	Provider string
+	// Name is what Glitched calls the agent.
+	Name string
+	// Binaries are looked for on PATH, then in ~/.local/bin, in order.
+	Binaries []string
+	// Args start the agent's ACP server on stdio.
+	Args []string
+	// Env is added to the engine's environment for the agent.
+	Env map[string]string
+	// Install is what Open says when no binary is found.
+	Install string
+	// SignIn is what a turn says when the agent needs its user to sign in.
+	SignIn string
+	// SignedOut are words the agent prints, outside ACP, when its login
+	// went stale.
+	SignedOut []string
+}
+
+// Antigravity is Google's Antigravity CLI, agy, from the user's own
+// install, with the user's own login and rules.
+var Antigravity = Profile{
+	Provider: "antigravity",
+	Name:     "Antigravity",
+	Binaries: []string{"agy"},
+	Args:     []string{"acp", "--disable-telemetry"},
+	// A stale login must never open a browser tab in the middle of a turn.
+	Env:     map[string]string{"BROWSER": "true"},
+	Install: "Antigravity is not installed.\nInstall its CLI with: curl -fsSL https://antigravity.google/cli/install.sh | bash\nor set agy_path in engine.json.",
+	SignIn:  "Antigravity is signed out. Run agy in Terminal to sign in.",
+	SignedOut: []string{
+		"Authentication required",
+		"Please sign in",
+		"Please log in",
+		"Log in with Google",
+	},
+}
+
+// Profiles are the ACP agents Glitched knows.
+var Profiles = []Profile{Antigravity}
