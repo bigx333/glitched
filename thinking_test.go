@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"glitched/internal/api"
 	"glitched/internal/daemon"
 	"glitched/internal/provider"
 	"glitched/internal/provider/acp/acptest"
@@ -51,7 +52,8 @@ func thinks(h *harness) bool {
 }
 
 // A Claude thread says it is thinking from the moment its message is taken
-// until the turn ends, though the agent says nothing for a while.
+// until the turn ends, though the agent says nothing for a while, and that
+// it is stopping once stopped, until the agent hears it.
 func TestAClaudeThreadShowsItThinksBeforeItsFirstWord(t *testing.T) {
 	gate := make(chan struct{})
 	h := startWith(t, tempDir(t), func(cfg *daemon.Config) {
@@ -66,6 +68,14 @@ func TestAClaudeThreadShowsItThinksBeforeItsFirstWord(t *testing.T) {
 		t.Fatalf("a Claude thread with no word yet shows no sign of work: %q", h.tt.Texts())
 	}
 	shoot(t, h, "claude-thinking")
+	h.click("Stop")
+	h.until("the run stopping", func() bool { return h.a.current().View.Run == api.RunStopping })
+	for range 5 {
+		h.tt.Advance(100 * time.Millisecond)
+	}
+	if !h.tt.HasText("Stopping…") {
+		t.Fatalf("a thread whose run stops shows no sign of it: %q", h.tt.Texts())
+	}
 	close(gate)
 	h.until("the turn's end", func() bool { return !h.a.current().View.Working() })
 	if thinks(h) {

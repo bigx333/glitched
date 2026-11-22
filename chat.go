@@ -266,7 +266,7 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).MaxWidth(contentWidth).Children(func() {
 				if i == len(es) {
-					a.thinkingRow(c)
+					a.thinkingRow(c, t)
 					return
 				}
 				a.entry(c, t, rs, i)
@@ -295,19 +295,21 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) {
 // work: from the moment its run takes a message until the turn ends, unless
 // a steps card already shimmers last or the run waits on the user.
 func thinking(t thread, es []entry) bool {
-	if t.View.Run != api.RunStarting && t.View.Run != api.RunRunning {
+	if _, ok := thinkingLabels[t.View.Run]; !ok {
 		return false
 	}
 	return len(es) == 0 || es[len(es)-1].kind != entryWork || !es[len(es)-1].working
 }
 
+var thinkingLabels = map[api.RunState]string{api.RunStarting: "Thinking…", api.RunRunning: "Thinking…", api.RunStopping: "Stopping…"}
+
 // thinkingRow is the transcript's last row while the agent works between
 // steps: the steps card's working mark and shimmering label, without the
 // card, at the card header's inset.
-func (a *app) thinkingRow(c *ui.Context) {
+func (a *app) thinkingRow(c *ui.Context, t thread) {
 	ui.Row(c).Key("thinking").Gap(6).AlignItems(ui.Center).Padding(0, 13).Transition(riseIn).Children(func() {
 		a.statusMark(c, statusWorking)
-		shimmerText(c, "Thinking…", 12, palette.muted, palette.text)
+		shimmerText(c, thinkingLabels[t.View.Run], 12, palette.muted, palette.text)
 	})
 }
 
