@@ -102,7 +102,12 @@ func contain(cmd *exec.Cmd, m mark) {
 // from the start.
 func confine(*exec.Cmd, mark) error { return nil }
 
-func scopePrefix(m mark) string { return "glitched-claude-" + string(m) }
+func scopePrefix(m mark) string {
+	if run, ok := strings.CutPrefix(string(m), "run-"); ok {
+		return "glitched-run-" + run + "-"
+	}
+	return "glitched-claude-" + string(m)
+}
 
 // scopesOf is the cgroups of m's scopes.
 func scopesOf(m mark) []string {

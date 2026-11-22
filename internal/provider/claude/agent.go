@@ -289,27 +289,45 @@ func (p *proc) halt() {
 func (p *proc) park() {
 	p.wake, p.woke = make(chan struct{}), make(chan bool, 1)
 	go func() {
-		select {
-		case line, ok := <-p.lines:
-			if ok {
+		for {
+			select {
+			case line, ok := <-p.lines:
+				if !ok {
+					p.woke <- false
+					return
+				}
+				// Claude Code reports a command's end after its result.
+				var m message
+				if json.Unmarshal(line, &m) == nil && m.Type == "command_lifecycle" {
+					continue
+				}
 				slog.Warn("claude: a parked claude spoke, so it is stopped", "line", string(bytes.TrimSpace(line[:min(len(line), 200)])))
 				p.halt()
+				p.woke <- false
+				return
+			case <-p.wake:
+				p.woke <- true
+				return
 			}
-			p.woke <- false
-		case <-p.wake:
-			p.woke <- true
 		}
 	}()
 }
 
-// Wake ends the parked watch, and is whether claude can take a run.
+// Wake ends the parked watch, and is whether claude can take a run. What
+// claude said on stderr before belongs to the runs it served.
 func (p *proc) Wake() bool {
 	close(p.wake)
 	if !<-p.woke || p.halted.Load() {
 		return false
 	}
+	select {
+	case <-p.reaped:
+		return false
+	default:
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.stderr.reset()
 	return p.cut == nil
 }
 
@@ -463,6 +481,17 @@ func (g *Agent) over(m message) (over, interrupted bool) {
 	return g.ended, g.interrupted && m.IsError
 }
 
+// foreign is whether a result finishes only messages this run never sent,
+// as one a kept claude's earlier run left would.
+func (g *Agent) foreign(m message) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return m.UserMessageUUIDs != nil && !slices.ContainsFunc(m.UserMessageUUIDs, func(id string) bool {
+		_, ok := g.outstanding[id]
+		return ok
+	})
+}
+
 // cutOff is whether an interrupt went out on a turn that has not ended,
 // which it now has.
 func (g *Agent) cutOff() bool {
@@ -561,6 +590,10 @@ func (g *Agent) read(ctx context.Context, m message) []provider.Event {
 		}
 		return nil
 	case "result":
+		if g.foreign(m) {
+			slog.Warn("claude: a result for messages this run did not send, which it ignores", "messages", m.UserMessageUUIDs)
+			return nil
+		}
 		g.pmu.Lock()
 		for _, p := range g.prompts {
 			if p.state == asking {
@@ -655,6 +688,12 @@ func (t *tail) Write(p []byte) (int, error) {
 		t.buf = t.buf[over:]
 	}
 	return len(p), nil
+}
+
+func (t *tail) reset() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = nil
 }
 
 func (t *tail) String() string {
