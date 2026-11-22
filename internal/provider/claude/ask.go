@@ -58,6 +58,9 @@ func question(id string, input json.RawMessage) (provider.RequestOpened, *prompt
 		if slices.ContainsFunc(q.Questions, func(p api.Question) bool { return p.Text == x.Question }) {
 			return provider.RequestOpened{}, nil, fmt.Errorf("question %d repeats an earlier question", i+1)
 		}
+		if n := len(x.Options); n < 2 || n > 4 {
+			return provider.RequestOpened{}, nil, fmt.Errorf("questions: question %d has %d options, want 2 to 4", i+1, n)
+		}
 		n := api.Question{Text: x.Question, Header: x.Header, Multi: x.MultiSelect}
 		for _, o := range x.Options {
 			if x.MultiSelect && strings.Contains(o.Label, ",") {

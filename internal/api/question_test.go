@@ -18,13 +18,21 @@ func TestParseQuestionsRefusesWhatNoCardCanAsk(t *testing.T) {
 	}
 	opts := `"options":[{"label":"a"},{"label":"b"}]`
 	five := strings.Repeat(`{"text":"q",`+opts+`},`, 5)
+	var labels []string
+	for _, l := range "abcdefghijk" {
+		labels = append(labels, `{"label":"`+string(l)+`"}`)
+	}
+	eleven := strings.Join(labels, ",")
+	if _, err := ParseQuestions(json.RawMessage(`{"questions":[{"text":"q","options":[` + strings.Join(labels[:10], ",") + `]}]}`)); err != nil {
+		t.Fatalf("a question of ten options, as agy may ask: %v", err)
+	}
 	for _, body := range []string{
 		`{"allow":true}`,
 		`{"questions":[]}`,
 		`{"questions":[` + five[:len(five)-1] + `]}`,
 		`{"questions":[{"text":" ",` + opts + `}]}`,
 		`{"questions":[{"text":"q","options":[{"label":"a"}]}]}`,
-		`{"questions":[{"text":"q","options":[{"label":"a"},{"label":"b"},{"label":"c"},{"label":"d"},{"label":"e"}]}]}`,
+		`{"questions":[{"text":"q","options":[` + eleven + `]}]}`,
 		`{"questions":[{"text":"q","options":[{"label":"a"},{"label":"a"}]}]}`,
 		`{"questions":[{"text":"q","options":[{"label":"a"},{"label":""}]}]}`,
 		`[1]`,
