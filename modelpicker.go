@@ -78,6 +78,9 @@ func (a *app) pickerRows(f family) []modelInfo {
 		if _, answered := a.models.reported[f.provider]; answered {
 			m.desc = goneModel
 		}
+		if slices.ContainsFunc(a.offeredModels(), func(o modelInfo) bool { return o.name == m.name }) {
+			m.name = m.key.String() // a name of its own, as an offered model has
+		}
 		rows = append(rows, m)
 	}
 	return rows
@@ -494,7 +497,9 @@ func (a *app) effortSlider(c *ui.Context) {
 		ids = append(ids, e.id)
 	}
 	if k := strings.Join(ids, " "); k != a.effortIDs {
-		a.effortIDs, a.effortHeld, a.effortLock = k, false, -1
+		// A press of the old efforts chooses nothing of these, till it's
+		// let go.
+		a.effortIDs, a.effortHeld, a.effortLock, a.effortVoid = k, false, -1, true
 	}
 	ui.Column(c).Bind(&a.effortBox).Padding(12, 14, 14).Gap(10).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
@@ -542,7 +547,11 @@ func (a *app) effortSlider(c *ui.Context) {
 		}
 		var pos float32
 		held := sb.Pressed()
-		if w := sb.Bounds().W; held && w > 2*stopInset {
+		void := a.effortVoid
+		if !held {
+			a.effortVoid = false
+		}
+		if w := sb.Bounds().W; held && !void && w > 2*stopInset {
 			x, _, _ := sb.PointerPosition()
 			at := min(max((x-stopInset)/(w-2*stopInset)*steps, 0), float32(last))
 			if !a.effortHeld {
@@ -563,7 +572,7 @@ func (a *app) effortSlider(c *ui.Context) {
 					lock(int(a.effortLastAt + 0.5))
 				}
 			}
-			if sb.Changed() {
+			if sb.Changed() && !void {
 				setLevel(int(v + 0.5))
 			}
 			pos = sb.AnimateTo("pos", float32(level), snap)

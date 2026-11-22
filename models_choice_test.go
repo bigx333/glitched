@@ -78,6 +78,44 @@ func TestChoosingAModelTakesAnEffortItRunsAt(t *testing.T) {
 	}
 }
 
+// A default model changed in the draft keeps the effort shown: not one
+// composer.json held that the model before it didn't run at.
+func TestChangingTheDefaultModelKeepsTheEffortShown(t *testing.T) {
+	dir := tempDir(t)
+	os.WriteFile(filepath.Join(dir, "composer.json"), []byte(`{"model":{"provider":"claude","id":"small"},"effort":"max"}`), 0o600)
+	h := startWith(t, dir, engineReports("claude",
+		provider.Model{ID: "small", Name: "Small", Efforts: []provider.Effort{{ID: "low"}, {ID: "medium"}}},
+		provider.Model{ID: "large", Name: "Large", Efforts: []provider.Effort{{ID: "low"}, {ID: "medium"}, {ID: "max"}}},
+	))
+	allAnswered(h)
+	h.tt.Frame()
+	if m := h.a.modelRef(); m.Model != "small" || m.Effort != "medium" {
+		t.Fatalf("a default of Small at Max, which it doesn't run at, starts as %+v", m)
+	}
+	h.click("Model")
+	pickerSettle(t, h)
+	h.click("Large")
+	pickerSettle(t, h)
+	if m := h.a.modelRef(); m.Model != "large" || m.Effort != "medium" {
+		t.Errorf("Large, chosen at Medium, gives %+v", m)
+	}
+}
+
+// A turn sent in a thread runs at the effort its picker shows: one its
+// model doesn't run at is set to it first.
+func TestAThreadRunsAtTheEffortItsPickerShows(t *testing.T) {
+	h := startWith(t, tempDir(t), engineReports("claude",
+		provider.Model{ID: "small", Name: "Small", Efforts: []provider.Effort{{ID: "low"}, {ID: "medium"}}},
+	))
+	allAnswered(h)
+	h.a.backend.Create(h.local(), t.TempDir(), "Mine", api.ModelRef{Provider: "claude", Model: "small", Effort: "max"}, api.AccessAsk)
+	th := h.thread("Mine")
+	if !h.a.sendText(th, "Go.", "") {
+		t.Fatal("nothing sent")
+	}
+	h.until("the effort set", func() bool { return h.thread("Mine").View.Model.Effort == "medium" })
+}
+
 // threads.configure that sets the model alone sets an effort it runs at.
 func TestConfiguringTheModelAloneTakesAnEffortItRunsAt(t *testing.T) {
 	h := startWith(t, tempDir(t), engineReports("claude",
@@ -114,11 +152,12 @@ func TestTheEffortsChangingUnderAHeldThumbEndItsPress(t *testing.T) {
 	if !a.effortHeld || a.effortLastAt < 3.5 {
 		t.Fatalf("the thumb isn't held near Max: held %v at %v", a.effortHeld, a.effortLastAt)
 	}
-	a.models.reported["claude"][0].Efforts = five[:2]
+	a.models.reported["claude"][0].Efforts = []provider.Effort{{ID: "medium"}, {ID: "other", Label: "Other"}}
+	tt.Frame() // drawn with the thumb still held
 	tt.Release(x, y)
 	pickerSettle(t, h)
 	if m := a.modelRef(); m.Effort != "medium" || !pickerShows(h, "Medium") {
-		t.Errorf("let go after the efforts became Low and Medium, a new thread is %+v: %q", m, tt.Texts())
+		t.Errorf("let go after the efforts became Medium and Other, a new thread is %+v: %q", m, tt.Texts())
 	}
 	a.models.reported["claude"][0].Efforts = five[:1]
 	tt.Frame()

@@ -1551,8 +1551,18 @@ func (a *app) sendText(t thread, text, about string) bool {
 		}
 		a.selected = id
 		a.follow()
-	} else if t.View.Disposition.State == api.Snoozed {
-		a.backend.SetDisposition(t.env, id, api.Disposition{})
+	} else {
+		if t.View.Disposition.State == api.Snoozed {
+			a.backend.SetDisposition(t.env, id, api.Disposition{})
+		}
+		// A thread runs at the effort its picker shows: one its model
+		// doesn't run at, as since its engine stopped listing it, is
+		// set to that one before the turn.
+		m, _ := configured(t)
+		model, _ := a.modelOf(keyOfThread(m.Provider, m.Model))
+		if e := effortFor(model, m.Effort); !strings.EqualFold(e, m.Effort) {
+			a.backend.ConfigureThread(t.env, id, api.ThreadConfigure{Effort: &e})
+		}
 	}
 	// Steer only: a message reaches a working agent now, rather than
 	// waiting its turn.
