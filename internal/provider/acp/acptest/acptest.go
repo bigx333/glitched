@@ -30,6 +30,9 @@ const (
 	// answers from as the agent that made it did: lines ">> " the client
 	// sent and "<< " the agent did, a JSON-RPC message each.
 	Replay = "GLITCHED_FAKE_ACP_REPLAY"
+	// Gate names, for the "thinking" scenarios, a file the fake waits to
+	// exist before it says the turn's next thing.
+	Gate = "GLITCHED_FAKE_ACP_GATE"
 )
 
 // Entry is a line of the fake's log: a method it was called with and its
@@ -430,6 +433,20 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 		<-ctx.Done()
 		f.record("cancelled", nil)
 		return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+	case "thinking":
+		f.send(ctx, sid, acp.UpdateAgentThoughtText("The user wants a plan."))
+		gate()
+		f.send(ctx, sid, acp.UpdateAgentMessageText("Here is the plan."))
+	case "thinking-silent":
+		gate()
+		f.send(ctx, sid, acp.UpdateAgentMessageText("Here is the plan."))
+	case "thinking-tools":
+		f.send(ctx, sid, acp.UpdateAgentThoughtText("First the notes."))
+		f.send(ctx, sid, acp.StartToolCall("read-1", "Read notes.txt", acp.WithStartKind(acp.ToolKindRead), acp.WithStartStatus(acp.ToolCallStatusCompleted)))
+		f.send(ctx, sid, acp.UpdateAgentThoughtText("Then the code."))
+		gate()
+		f.send(ctx, sid, acp.StartToolCall("read-2", "Read main.go", acp.WithStartKind(acp.ToolKindRead), acp.WithStartStatus(acp.ToolCallStatusCompleted)))
+		f.send(ctx, sid, acp.UpdateAgentMessageText("Read both."))
 	case "crash-mid-turn":
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Starting"))
 		fmt.Fprintln(os.Stderr, "fake agent: out of memory")
@@ -459,6 +476,16 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 		f.send(ctx, sid, acp.UpdateAgentMessageText("there."))
 	}
 	return end, nil
+}
+
+// gate waits for the file Gate names to exist.
+func gate() {
+	for {
+		if _, err := os.Stat(os.Getenv(Gate)); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // cwdOf is where the fake's session runs, from its first prompt's log.
