@@ -122,7 +122,7 @@ func settingRow(c *ui.Context, title, desc string, control func()) {
 func (a *app) general(c *ui.Context) {
 	a.settingsComponent(c, "settings.page.general", generalPage{
 		Settings: a.appSettings(),
-		Choices:  settingChoices{NewThread: newThreadModes, DefaultModel: modelNames(), Timestamps: timeFormats},
+		Choices:  settingChoices{NewThread: newThreadModes, DefaultModel: a.defaultModels(), Timestamps: timeFormats},
 	})
 }
 
@@ -171,8 +171,8 @@ func (a *app) setAppSetting(args json.RawMessage) (any, error) {
 	switch _, ok := keys[in.Key]; {
 	case in.Key == "defaultModel":
 		var m string
-		if json.Unmarshal(in.Value, &m) != nil || !slices.Contains(modelNames(), m) {
-			return nil, fmt.Errorf("defaultModel is one of %s", strings.Join(modelNames(), ", "))
+		if json.Unmarshal(in.Value, &m) != nil || !slices.Contains(a.defaultModels(), m) {
+			return nil, fmt.Errorf("defaultModel is one of %s", strings.Join(a.defaultModels(), ", "))
 		}
 		a.model = m
 		a.saveComposer()

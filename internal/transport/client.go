@@ -578,6 +578,13 @@ func (e *EndpointClient) ProviderCommands(ctx context.Context, name, workspace s
 	return out, e.c.call(ctx, "provider.commands", commandsQuery{Provider: name, Workspace: workspace}, &out)
 }
 
+// ProviderInfo is what the engine's provider name is, with the models its
+// sessions can run.
+func (e *EndpointClient) ProviderInfo(ctx context.Context, name string) (provider.Info, error) {
+	var out provider.Info
+	return out, e.c.call(ctx, "provider.describe", describeQuery{Provider: name}, &out)
+}
+
 func (e *EndpointClient) Submit(ctx context.Context, cmd api.Command) (api.Receipt, error) {
 	var r api.Receipt
 	return r, e.c.call(ctx, "submit", cmd, &r)

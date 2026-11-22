@@ -395,6 +395,12 @@ type app struct {
 	// slashLists are the providers' commands / suggests, by provider and
 	// workspace.
 	slashLists map[slashKey]*slashList
+	// models are the models each family's engine reports (models.go);
+	// pickerAt is the model button's place, and effortBox the picker's
+	// effort, which the popover's height leaves room for.
+	models    modelLists
+	pickerAt  ui.Rect
+	effortBox ui.Handle
 	// The preview pane, a browser: shown, its tabs and the one shown, and
 	// why its web views could not start (see browser.go).
 	showPreview bool
@@ -755,6 +761,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 	a.userMD.Extensions, a.userMD.WrapCode = parser.ExtStrikethrough, true
 	a.userMD.OnLink = func(string) {}
 	a.loadLayout()
+	a.loadModels()
 	a.loadComposer()
 	a.loadSettings()
 	a.openPlugins(dir)

@@ -33,9 +33,9 @@ var ownChoice = choice{Model: "Claude Opus 5.5", Effort: "High", Access: accessA
 // starting is the default the app starts with from file, composer.json's
 // contents: the app's own, with each of file's names the pickers offer. A
 // name they no longer offer, as a model since gone, keeps the app's own.
-func starting(file choice) choice {
+func (a *app) starting(file choice) choice {
 	ch := ownChoice
-	if slices.Contains(modelNames(), file.Model) {
+	if slices.Contains(a.modelNames(), file.Model) {
 		ch.Model = file.Model
 	}
 	if slices.Contains(efforts, file.Effort) {
@@ -67,7 +67,7 @@ func (a *app) loadComposer() {
 		log.Printf("glitched: composer: %v", err)
 		file = choice{}
 	}
-	a.show(starting(file))
+	a.show(a.starting(file))
 	a.savedChoice, a.triedChoice = a.choice(), a.choice()
 }
 
@@ -111,7 +111,7 @@ func (a *app) saveComposer() {
 		log.Printf("glitched: composer: %v", err)
 		return
 	}
-	a.show(starting(file))
+	a.show(a.starting(file))
 	a.savedChoice, a.triedChoice = a.choice(), a.choice()
 }
 
@@ -130,9 +130,9 @@ func configured(t thread) (api.ModelRef, api.Access) {
 
 // threadChoice is the thread's model and access as the pickers name them.
 // A model or effort the pickers don't list shows by its own name.
-func threadChoice(t thread) choice {
+func (a *app) threadChoice(t thread) choice {
 	m, acc := configured(t)
-	ch := choice{Model: m.Model, Effort: m.Effort, Fast: m.Fast, Access: accessAuto}
+	ch := choice{Model: a.modelOfThread(familyOf(m.Provider), m.Model), Effort: m.Effort, Fast: m.Fast, Access: accessAuto}
 	if ch.Model == "" {
 		ch.Model = "Default model"
 	}
@@ -184,7 +184,7 @@ func (a *app) threadControls(t thread, build func()) {
 	}
 	draft := a.choice()
 	defer a.show(draft)
-	before := threadChoice(t)
+	before := a.threadChoice(t)
 	a.show(before)
 	a.pickerLock = familyOf(t.View.Model.Provider)
 	family := a.pickerFamily
@@ -196,7 +196,8 @@ func (a *app) threadControls(t thread, build func()) {
 	}
 	var c api.ThreadConfigure
 	if after.Model != before.Model {
-		c.Model = new(after.Model)
+		m, _ := a.modelByName(after.Model, a.pickerLock)
+		c.Model = new(m.id)
 	}
 	if after.Effort != before.Effort {
 		c.Effort = new(strings.ToLower(after.Effort))
@@ -240,12 +241,12 @@ func (a *app) shownAccess(t thread) string {
 	if t.id().IsZero() {
 		return a.access
 	}
-	return threadChoice(t).Access
+	return a.threadChoice(t).Access
 }
 
 // modelRecords is models.list: the models the picker offers, each by its
 // name, its provider's family and what it's for, and the efforts.
-func modelRecords() any {
+func (a *app) modelRecords() any {
 	type record struct {
 		Name        string `json:"name"`
 		Provider    string `json:"provider"`
@@ -255,7 +256,7 @@ func modelRecords() any {
 		Models  []record `json:"models"`
 		Efforts []string `json:"efforts"`
 	}{}
-	for _, m := range models {
+	for _, m := range a.offeredModels() {
 		out.Models = append(out.Models, record{m.name, m.provider, m.desc})
 	}
 	for _, e := range efforts {
@@ -292,10 +293,11 @@ func (a *app) configureEffect(args json.RawMessage) (any, error) {
 	if in.Model != nil {
 		// A thread keeps its provider: its session is that provider's.
 		family := familyOf(t.View.Model.Provider)
-		if !slices.ContainsFunc(models, func(m modelInfo) bool { return m.name == *in.Model && m.provider == family }) {
+		i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.name == *in.Model && m.provider == family })
+		if i < 0 {
 			return nil, fmt.Errorf("%q is no model of the thread's provider, %s", *in.Model, t.View.Model.Provider)
 		}
-		c.Model = in.Model
+		c.Model = new(a.offeredModels()[i].id)
 	}
 	if in.Effort != nil {
 		i := slices.IndexFunc(efforts, func(e string) bool { return strings.EqualFold(e, *in.Effort) })

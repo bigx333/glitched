@@ -18,10 +18,22 @@ var ErrUnsupported = errors.New("provider: unsupported action")
 // hook decided first. The answer went nowhere, and the run goes on.
 var ErrWithdrawn = errors.New("The agent stopped waiting before the answer reached it.")
 
+// Info is what a provider is and offers. Models are those its sessions can
+// run, as the provider reports them for the user's own account, in its
+// order: none for a provider that runs nothing yet.
 type Info struct {
-	Name    string
-	Version string
-	Models  []string
+	Name    string  `json:"name"`
+	Version string  `json:"version"`
+	Models  []Model `json:"models"`
+}
+
+// Model is one a provider's sessions can run. ID is what a session's
+// api.ModelRef names it by; Name and Description are the provider's own
+// words for it.
+type Model struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 // Command is one of the provider's slash commands, as /Name in a prompt:
@@ -77,6 +89,8 @@ type RuntimeIdentity struct {
 // that call only. The agent it returns lives until its Close, so an adapter
 // must not tie the session to that ctx.
 type Adapter interface {
+	// Describe may start the provider, as to ask it for its models, but
+	// never calls a model.
 	Describe(ctx context.Context) (Info, error)
 	Open(ctx context.Context, spec SessionSpec) (Agent, error)
 	// Reconcile answers Restored only when it can prove the agent is the

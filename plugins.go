@@ -572,7 +572,7 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 	case "threads.setDisposition":
 		return a.setDispositionEffect(e.Args)
 	case "models.list":
-		return modelRecords(), nil
+		return a.modelRecords(), nil
 	case "threads.configure":
 		return a.configureEffect(e.Args)
 	case "threads.setAccess":

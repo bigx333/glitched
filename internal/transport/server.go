@@ -315,6 +315,12 @@ type Plugins interface {
 // Providers are what the engine's providers offer a session.
 type Providers interface {
 	Commands(ctx context.Context, provider, workspace string) ([]provider.Command, error)
+	Describe(ctx context.Context, provider string) (provider.Info, error)
+}
+
+// describeQuery asks what Provider is and the models it runs.
+type describeQuery struct {
+	Provider string `json:"provider"`
 }
 
 // commandsQuery asks for the slash commands of Provider's sessions in
@@ -345,6 +351,9 @@ func (s *Server) methods() map[string]handler {
 	if p := s.Providers; p != nil {
 		m["provider.commands"] = callHandler(func(ctx context.Context, q commandsQuery) ([]provider.Command, error) {
 			return p.Commands(ctx, q.Provider, q.Workspace)
+		})
+		m["provider.describe"] = callHandler(func(ctx context.Context, q describeQuery) (provider.Info, error) {
+			return p.Describe(ctx, q.Provider)
 		})
 	}
 	if h := s.Hub; h != nil {

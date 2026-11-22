@@ -81,8 +81,17 @@ func offline(t *testing.T) *app {
 // plugins' runtimes stop as the test ends, as the app's do as it quits.
 // A runtime left running holds the app, and with it the window the test
 // drew, its surfaces and all, to the end of the test binary.
+//
+// Its engine's providers report the models the picker showed before it
+// asked engines for theirs (todaysModels), unless the test's engine has
+// them report others.
 func testApp(t *testing.T, dir string, engine func(*daemon.Config), post func(func())) *app {
-	a := newApp(dir, engine, post)
+	a := newApp(dir, func(c *daemon.Config) {
+		if engine != nil {
+			engine(c)
+		}
+		todaysModels(c.Providers)
+	}, post)
 	t.Cleanup(a.settingsOut.wait)
 	if a.plugins != nil {
 		t.Cleanup(a.plugins.Close)
@@ -304,6 +313,7 @@ func engine(t *testing.T, cfg daemon.Config, adapter provider.Adapter) *daemon.D
 	t.Helper()
 	sd := &seeding{Adapter: adapter, spawner: fake.New(nil), runs: map[api.ID]bool{}}
 	cfg.Hub, cfg.Providers = true, daemon.FakeProviders(sd)
+	todaysModels(cfg.Providers)
 	d, err := daemon.Start(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)

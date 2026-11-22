@@ -416,7 +416,7 @@ func TestCmdEnterWithADraftSteers(t *testing.T) {
 type burst struct{ events []provider.Event }
 
 func (b burst) Describe(context.Context) (provider.Info, error) {
-	return provider.Info{Name: "fake", Version: "1", Models: []string{"fake"}}, nil
+	return provider.Info{Name: "fake", Version: "1"}, nil
 }
 
 func (b burst) Open(context.Context, provider.SessionSpec) (provider.Agent, error) {
@@ -938,7 +938,7 @@ func TestAnAnswerNeedsEveryLineDrawn(t *testing.T) {
 type chain struct{ a, b provider.Event }
 
 func (c chain) Describe(context.Context) (provider.Info, error) {
-	return provider.Info{Name: "fake", Version: "1", Models: []string{"fake"}}, nil
+	return provider.Info{Name: "fake", Version: "1"}, nil
 }
 
 func (c chain) Open(context.Context, provider.SessionSpec) (provider.Agent, error) {

@@ -11,11 +11,14 @@ import (
 	"glitched/internal/plugins/widget"
 )
 
+// modelInfo is a model as the picker shows it. id is its engine's, which
+// a thread's api.ModelRef names it by; name is the picker's, as composer.json,
+// the settings and plugins name it.
 type modelInfo struct {
-	name, short, desc string
-	provider          string
-	color             ui.Color
-	icon              *ui.SVG
+	id, name, short, desc string
+	provider              string
+	color                 ui.Color
+	icon                  *ui.SVG
 }
 
 type family struct {
@@ -31,35 +34,58 @@ var families = []family{
 	{"Grok", "xAI", ui.Hex("#2c2c31"), icGrok},
 }
 
-var models = []modelInfo{
-	{"Claude Opus 5.5", "Opus 5.5", "Most capable, for complex work", "Claude", ui.Hex("#d97757"), icClaude},
-	{"Claude Sonnet 5.5", "Sonnet 5.5", "Smart and fast, for every day", "Claude", ui.Hex("#d97757"), icClaude},
-	{"Claude Haiku 5.5", "Haiku 5.5", "Fastest, for quick edits", "Claude", ui.Hex("#d97757"), icClaude},
-	{"GPT-5.5 Codex", "GPT-5.5 Codex", "Tuned for agentic coding", "Codex", ui.Hex("#10a37f"), icOpenAI},
-	{"GPT-5.5", "GPT-5.5", "General reasoning", "Codex", ui.Hex("#10a37f"), icOpenAI},
-	{"Gemini 3 Pro", "Gemini 3 Pro", "Long context, sees images", "Gemini", ui.Hex("#4f7cf7"), icGemini},
-	{"Gemini 3 Flash", "Gemini 3 Flash", "Fast and light", "Gemini", ui.Hex("#4f7cf7"), icGemini},
-	{"Grok 4", "Grok 4", "Reasoning, with what's happening now", "Grok", ui.Hex("#2c2c31"), icGrok},
-	{"Grok Code Fast", "Grok Code Fast", "Quick agentic coding", "Grok", ui.Hex("#2c2c31"), icGrok},
+// knownModels are how the picker shows the models Glitched knows, by the
+// id their engine reports. Which models it offers is the engines' to say
+// (modelLists): these only until a family's engine first answers.
+var knownModels = []modelInfo{
+	{"claude-opus-5-5", "Claude Opus 5.5", "Opus 5.5", "Most capable, for complex work", "Claude", ui.Hex("#d97757"), icClaude},
+	{"claude-sonnet-5-5", "Claude Sonnet 5.5", "Sonnet 5.5", "Smart and fast, for every day", "Claude", ui.Hex("#d97757"), icClaude},
+	{"claude-haiku-5-5", "Claude Haiku 5.5", "Haiku 5.5", "Fastest, for quick edits", "Claude", ui.Hex("#d97757"), icClaude},
+	{"gpt-5.5-codex", "GPT-5.5 Codex", "GPT-5.5 Codex", "Tuned for agentic coding", "Codex", ui.Hex("#10a37f"), icOpenAI},
+	{"gpt-5.5", "GPT-5.5", "GPT-5.5", "General reasoning", "Codex", ui.Hex("#10a37f"), icOpenAI},
+	{"gemini-3-pro", "Gemini 3 Pro", "Gemini 3 Pro", "Long context, sees images", "Gemini", ui.Hex("#4f7cf7"), icGemini},
+	{"gemini-3-flash", "Gemini 3 Flash", "Gemini 3 Flash", "Fast and light", "Gemini", ui.Hex("#4f7cf7"), icGemini},
+	{"grok-4", "Grok 4", "Grok 4", "Reasoning, with what's happening now", "Grok", ui.Hex("#2c2c31"), icGrok},
+	{"grok-code-fast", "Grok Code Fast", "Grok Code Fast", "Quick agentic coding", "Grok", ui.Hex("#2c2c31"), icGrok},
 }
 
-// modelNames is every model's name, for the settings' choice.
-func modelNames() []string {
-	names := make([]string, len(models))
-	for i, m := range models {
-		names[i] = m.name
+// goneModel is what a model's row says of it while its engine no longer
+// offers it: a thread, or the default, set to it keeps it till another is
+// chosen, and its engine runs it or says why not.
+const goneModel = "No longer offered"
+
+// pickerRows are the rows of family f's models: what its engine offers,
+// and the model chosen, of f, where the engine no longer offers it.
+func (a *app) pickerRows(f family) []modelInfo {
+	rows := a.familyModels(f)
+	m, offered := a.modelByName(a.model, a.pickerLock)
+	if !offered && m.provider == f.name {
+		m.desc = goneModel
+		rows = append(rows, m)
 	}
-	return names
+	return rows
 }
 
-func modelByName(name string) modelInfo {
-	for _, m := range models {
-		if m.name == name {
-			return m
+// modelFamilies are the families with a model to show. A family whose
+// engine runs nothing, a placeholder, isn't one.
+func (a *app) modelFamilies() []family {
+	out := []family{}
+	for _, f := range families {
+		if len(a.pickerRows(f)) > 0 {
+			out = append(out, f)
 		}
 	}
-	return models[0]
+	return out
 }
+
+// shownFamilies are the ones the picker offers: in a thread, only its own.
+func (a *app) shownFamilies() []family {
+	return slices.DeleteFunc(a.modelFamilies(), func(f family) bool { return a.pickerLock != "" && f.name != a.pickerLock })
+}
+
+// modelRows is how many model rows the popover shows before its models
+// scroll.
+const modelRows = 8
 
 var efforts = []string{"Low", "Medium", "High", "Max"}
 
@@ -116,7 +142,8 @@ func (a *app) effortLevel() int {
 // two copies, a plugin's or Glitched's own: Glitched keeps the button, its
 // glow and electricity, the popover, and what a row does (modelListRow).
 func (a *app) modelPicker(c *ui.Context, t thread) {
-	m := modelByName(a.model)
+	a.askModels()
+	m, _ := a.modelByName(a.model, a.pickerLock)
 	level := a.effortLevel()
 	b := a.tip(c, ghost(c, "model", a.pickerOpen).Padding(4, 8, 4, 4).Gap(6).Label("Model"), "Model and effort")
 	if b.Children(func() {
@@ -151,8 +178,12 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 	if a.pickerLock != "" {
 		a.pickerFamily = a.pickerLock
 	}
+	if shown := a.shownFamilies(); len(shown) > 0 && !slices.ContainsFunc(shown, func(f family) bool { return f.name == a.pickerFamily }) {
+		a.pickerFamily = shown[0].name
+	}
+	a.pickerAt = b.Bounds()
 	a.popover(c, b, &a.pickerOpen, func(panel ui.Element) {
-		panel.AttachTo(b, ui.AnchorTopStart, ui.AnchorBottomStart).Margin(0, 0, 10, -4).Width(420).Radius(16).Clip()
+		panel.AttachTo(b, ui.AnchorTopStart, ui.AnchorBottomStart).Margin(0, 0, pickerMargin, -4).Width(420).Radius(16).Clip()
 		a.frosted(c, panel).Shadow(0, 16, 40, 0, ui.RGBA(0, 0, 0, 0.35)).Children(func() {
 			a.pluginComponent(c, "composer.model", &t, componentCopy{
 				key: composerKey(t) + "/panel",
@@ -198,6 +229,10 @@ type composerModel struct {
 	// font's lines on this platform.
 	FamilyRowHeight float32 `json:"familyRowHeight"`
 	ModelRowHeight  float32 `json:"modelRowHeight"`
+	// ModelsMaxHeight is how tall the models' column may be, padding and
+	// all, past which its rows scroll: modelRows of them, less what the
+	// window has no room for above the button.
+	ModelsMaxHeight float32 `json:"modelsMaxHeight"`
 }
 
 type modelFamily struct {
@@ -215,17 +250,55 @@ type modelChoice struct {
 func (a *app) composerModelOf(c *ui.Context, r plugins.ThreadRecord, part string) composerModel {
 	size := c.Theme().FontSize
 	out := composerModel{Thread: r, Part: part, Model: a.model, Effort: a.effort, Fast: a.fast, Family: a.pickerFamily, Lock: a.pickerLock,
-		FamilyRowHeight: 12 + max(22, 1+lineHeight(c, size, 500)+lineHeight(c, 11, 0)),
-		ModelRowHeight:  14 + max(14, 1+lineHeight(c, size, 500)+lineHeight(c, 11.5, 0)),
+		FamilyRowHeight: familyRowHeight(c),
+		ModelRowHeight:  modelRowHeight(c, size),
+		ModelsMaxHeight: a.modelsMaxHeight(c),
 	}
-	for _, f := range families {
+	out.Families, out.Models = []modelFamily{}, []modelChoice{}
+	for _, f := range a.modelFamilies() {
 		out.Families = append(out.Families, modelFamily{f.name, f.desc})
-	}
-	for _, m := range models {
-		out.Models = append(out.Models, modelChoice{m.name, m.short, m.desc, m.provider})
+		for _, m := range a.pickerRows(f) {
+			out.Models = append(out.Models, modelChoice{m.name, m.short, m.desc, m.provider})
+		}
 	}
 	return out
 }
+
+func familyRowHeight(c *ui.Context) float32 {
+	return 12 + max(22, 1+lineHeight(c, c.Theme().FontSize, 500)+lineHeight(c, 11, 0))
+}
+
+func modelRowHeight(c *ui.Context, size float32) float32 {
+	return 14 + max(14, 1+lineHeight(c, size, 500)+lineHeight(c, 11.5, 0))
+}
+
+// pickerPad and pickerGap are the padding of the popover's columns and the
+// gap between their rows.
+const (
+	pickerPad = 6
+	pickerGap = 1
+)
+
+// modelsMaxHeight is how tall the models' column may be: modelRows rows,
+// but no taller than the window has room for above the button, with the
+// effort under it, so the popover stays in the window. One row shows at
+// the least.
+func (a *app) modelsMaxHeight(c *ui.Context) float32 {
+	rowH := modelRowHeight(c, c.Theme().FontSize)
+	rows := func(n float32) float32 { return 2*pickerPad + n*rowH + (n-1)*pickerGap }
+	most := rows(modelRows)
+	if room := a.pickerAt.Y - pickerMargin - pickerEdge - 1 - a.effortBox.Bounds(c).H; a.pickerAt.H > 0 && room < most {
+		most = room
+	}
+	return max(most, rows(1))
+}
+
+// pickerMargin is the popover's gap above the button; pickerEdge the
+// least it keeps from the window's top.
+const (
+	pickerMargin = 10
+	pickerEdge   = 8
+)
 
 // modelListRow does what the popover's own rows do to the row e of a
 // copy's list: of "families", pointed at or clicked, it shows the
@@ -235,15 +308,15 @@ func (a *app) composerModelOf(c *ui.Context, r plugins.ThreadRecord, part string
 func (a *app) modelListRow(list, key string, e ui.Element) {
 	switch list {
 	case "families":
-		if !slices.ContainsFunc(families, func(f family) bool { return f.name == key }) || a.pickerLock != "" && key != a.pickerLock {
+		if !slices.ContainsFunc(a.shownFamilies(), func(f family) bool { return f.name == key }) {
 			return
 		}
 		if e.Hovered() || e.Clicked() {
 			a.pickerFamily = key
 		}
 	case "models":
-		i := slices.IndexFunc(models, func(m modelInfo) bool { return m.name == key })
-		if i < 0 || a.pickerLock != "" && models[i].provider != a.pickerLock {
+		i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.name == key })
+		if i < 0 || a.pickerLock != "" && a.offeredModels()[i].provider != a.pickerLock {
 			return
 		}
 		if e.Clicked() {
@@ -317,11 +390,8 @@ func (a *app) pickerGlow(c *ui.Context, b ui.Element, level int) {
 }
 
 func (a *app) pickerFamilies(c *ui.Context) {
-	ui.Column(c).Width(150).Padding(6).Gap(1).Children(func() {
-		for _, f := range families {
-			if a.pickerLock != "" && f.name != a.pickerLock {
-				continue
-			}
+	ui.Column(c).Width(150).Padding(pickerPad).Gap(pickerGap).Children(func() {
+		for _, f := range a.shownFamilies() {
 			open := f.name == a.pickerFamily
 			r := row(c, f.name, open).Padding(6, 8).Gap(8)
 			// Pointing at a family opens its models, as a submenu does.
@@ -346,21 +416,22 @@ func (a *app) pickerFamilies(c *ui.Context) {
 // list is built in the same cell, the others invisible, so the column is
 // as tall as the longest list whichever shows: the popover keeps its size,
 // and the families stay put under the pointer as it moves between them.
+// Past modelsMaxHeight the lists scroll.
 func (a *app) pickerModels(c *ui.Context) {
-	ui.Grid(c).Columns(1).Grow(1).Children(func() {
-		for _, f := range families {
-			list := ui.Column(c).Key(f.name).RowStart(1).ColumnStart(1).Padding(6).Gap(1)
-			if f.name != a.pickerFamily {
-				list.Invisible()
-			}
-			list.Children(func() {
-				for _, m := range models {
-					if m.provider == f.name {
+	ui.Scroll(c).Key("models").Grow(1).MaxHeight(a.modelsMaxHeight(c)).Children(func() {
+		ui.Grid(c).Columns(1).Children(func() {
+			for _, f := range a.shownFamilies() {
+				list := ui.Column(c).Key(f.name).RowStart(1).ColumnStart(1).Padding(pickerPad).Gap(pickerGap)
+				if f.name != a.pickerFamily {
+					list.Invisible()
+				}
+				list.Children(func() {
+					for _, m := range a.pickerRows(f) {
 						a.pickerModel(c, m)
 					}
-				}
-			})
-		}
+				})
+			}
+		})
 	})
 }
 
@@ -384,7 +455,7 @@ func (a *app) pickerModel(c *ui.Context, m modelInfo) {
 // burst and a glow at the thumb at Max.
 func (a *app) effortSlider(c *ui.Context) {
 	level := a.effortLevel()
-	ui.Column(c).Padding(12, 14, 14).Gap(10).Children(func() {
+	ui.Column(c).Bind(&a.effortBox).Padding(12, 14, 14).Gap(10).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "Effort").FontWeight(500)
 			// The new level rises in as it changes.

@@ -162,7 +162,7 @@ func TestAThreadsPickersAreItsOwn(t *testing.T) {
 	}
 	h.click("Sonnet 5.5")
 	h.click("Fast mode")
-	want := api.ModelRef{Provider: "claude", Model: "Claude Sonnet 5.5", Effort: "high", Fast: true}
+	want := api.ModelRef{Provider: "claude", Model: "claude-sonnet-5-5", Effort: "high", Fast: true}
 	h.until("the thread's new model and access", func() bool {
 		v := h.thread("Mine").View
 		return v.Model == want && v.Access == api.AccessAsk
@@ -468,7 +468,7 @@ func TestAThumbHeldInAThreadChoosesNothingInTheNextThread(t *testing.T) {
 	h.tt.Frame()
 	h.tt.Release(at(0), y)
 	h.tt.Advance(time.Second)
-	if got := threadChoice(other).Effort; got != "High" || len(mine.Pending)+len(other.Pending) != 0 {
+	if got := h.a.threadChoice(other).Effort; got != "High" || len(mine.Pending)+len(other.Pending) != 0 {
 		t.Errorf("a thumb held in one thread left the thread come under it at effort %q, with %d sent to it and %d to its own; want High and nothing sent",
 			got, len(other.Pending), len(mine.Pending))
 	}
@@ -502,7 +502,7 @@ func TestAHoldOnFullAccessGrantsNothingToTheNextThread(t *testing.T) {
 	h.tt.Advance(2 * holdTime)
 	h.tt.Release(r.X+r.W/2, r.Y+r.H/2)
 	h.tt.Advance(time.Second)
-	if got := threadChoice(other).Access; got != accessAsk || len(mine.Pending)+len(other.Pending) != 0 {
+	if got := h.a.threadChoice(other).Access; got != accessAsk || len(mine.Pending)+len(other.Pending) != 0 {
 		t.Errorf("a hold begun in one thread left the thread come under it at %q, with %d sent to it and %d to its own; want %q and nothing sent",
 			got, len(other.Pending), len(mine.Pending), accessAsk)
 	}
@@ -544,7 +544,7 @@ func TestAThreadsPickerSendsOnlyWhatItChanged(t *testing.T) {
 	if th.View.Access != api.AccessFull {
 		t.Fatalf("the other client's narrowing shows already: the thread's view is at access %v", th.View.Access)
 	}
-	if got, want := threadChoice(th), (choice{Model: "Claude Opus 5.5", Effort: "Low", Access: accessFull}); got != want {
+	if got, want := h.a.threadChoice(th), (choice{Model: "Claude Opus 5.5", Effort: "Low", Access: accessFull}); got != want {
 		t.Errorf("with its effort on its way the thread shows %+v, want %+v", got, want)
 	}
 	h.until("the thread's new effort", func() bool { return th.View.Model.Effort == "low" && len(th.Pending) == 0 })
@@ -708,7 +708,7 @@ func TestAPluginConfiguresAThreadsModelButNeverItsAccess(t *testing.T) {
 	if err := run("configure", sonnet); err != nil {
 		t.Fatal(err)
 	}
-	want := api.ModelRef{Provider: "claude", Model: "Claude Sonnet 5.5", Effort: "low", Fast: true}
+	want := api.ModelRef{Provider: "claude", Model: "claude-sonnet-5-5", Effort: "low", Fast: true}
 	h.until("the thread's new model", func() bool {
 		v := h.thread("Mine").View
 		return v.Model == want && v.Access == api.AccessAutoEdits
