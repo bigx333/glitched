@@ -1093,7 +1093,7 @@ func main() {
 		return
 	}
 	// Claude Code runs the app itself as its browser's MCP server
-	// (daemon.Config.WithClaude), with no window.
+	// (daemon.Config.WithAgents), with no window.
 	if served, err := serveBrowserMCP(os.Args[1:], os.Stdin, os.Stdout); served {
 		if err != nil {
 			log.Fatal(err)
@@ -1104,7 +1104,7 @@ func main() {
 	// What's posted before the window exists, as a plugin's timer can,
 	// waits for it.
 	var early windowQueue
-	a = newApp(stateDir(), (*daemon.Config).WithClaude, func(fn func()) {
+	a = newApp(stateDir(), (*daemon.Config).WithAgents, func(fn func()) {
 		early.post(func(w *mygo.Window) {
 			w.Update(func() {
 				fn()

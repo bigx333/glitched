@@ -25,6 +25,7 @@ import (
 	"glitched/internal/jsonfile"
 	"glitched/internal/mcp"
 	"glitched/internal/provider"
+	"glitched/internal/provider/acp"
 	"glitched/internal/provider/claude"
 	"glitched/internal/provider/fake"
 	"glitched/internal/runtime"
@@ -67,6 +68,9 @@ type Config struct {
 	// ClaudePath is the claude binary an engine with WithClaude runs Claude
 	// Code threads with, when it is not on PATH or in ~/.local/bin.
 	ClaudePath string `json:"claude_path,omitempty"`
+	// AgyPath is the agy binary an engine with WithAgents runs Antigravity
+	// threads with, when it is not on PATH or in ~/.local/bin.
+	AgyPath string `json:"agy_path,omitempty"`
 	// Children caps the child threads agents start. Its zero fields take
 	// engine.DefaultLimits'.
 	Children engine.Limits `json:"children,omitzero"`
@@ -112,6 +116,20 @@ func (cfg *Config) WithClaude() {
 	cfg.Providers = provider.Mux{"claude": &claude.Adapter{Path: cfg.ClaudePath}}
 	if s, ok := browsermcp.Server(cfg.Dir); ok {
 		cfg.MCP = []provider.MCPServer{s}
+	}
+}
+
+// WithAgents has the engine run every agent of the user's it knows: Claude
+// Code, as WithClaude has it, and each ACP agent whose binary it finds, as
+// `glitched serve` and the GUI's own engine do.
+func (cfg *Config) WithAgents() {
+	cfg.WithClaude()
+	paths := map[string]string{acp.Antigravity.Provider: cfg.AgyPath}
+	for _, p := range acp.Profiles {
+		ad := &acp.Adapter{Profile: p, Path: paths[p.Provider]}
+		if _, err := ad.Binary(); err == nil {
+			cfg.Providers[p.Provider] = ad
+		}
 	}
 }
 

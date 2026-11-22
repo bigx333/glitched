@@ -18,6 +18,11 @@ var ErrUnsupported = errors.New("provider: unsupported action")
 // hook decided first. The answer went nowhere, and the run goes on.
 var ErrWithdrawn = errors.New("The agent stopped waiting before the answer reached it.")
 
+// ErrSignedOut is what Describe and Open return, wrapped with what to do,
+// when the provider needs its user to sign in: unlike an empty list of
+// models, it says nothing of what the account runs.
+var ErrSignedOut = errors.New("signed out")
+
 // Info is what a provider is and offers. Models are those its sessions can
 // run, as the provider reports them for the user's own account, in its
 // order: none for a provider that runs nothing yet.

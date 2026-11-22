@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -249,7 +250,9 @@ func TestThePickerKeepsInAShortWindow(t *testing.T) {
 func engineReportsBy(by map[string][]provider.Model) func(*daemon.Config) {
 	return func(c *daemon.Config) {
 		for _, f := range families {
-			c.Providers[f.provider] = reporting{c.Providers[f.provider], by[f.provider]}
+			// A family no fake plays, as Antigravity, gets the fake's.
+			inner := cmp.Or(c.Providers[f.provider], c.Providers["fake"])
+			c.Providers[f.provider] = reporting{inner, by[f.provider]}
 		}
 	}
 }

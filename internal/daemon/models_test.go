@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -55,6 +57,40 @@ func TestTheSocketSaysWhatModelsEachProviderRuns(t *testing.T) {
 	}
 	if want := []string{"claude", "codex", "fake", "gemini", "grok"}; !slices.Equal(names, want) {
 		t.Errorf("the socket says the engine serves %q, want %q", names, want)
+	}
+}
+
+// A real build's engine serves each ACP agent whose binary it finds, as
+// the user installed it or engine.json's path names it, beside Claude
+// Code; one it can't find, it doesn't offer.
+func TestWithAgentsServesTheInstalledACPAgents(t *testing.T) {
+	home, bin := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
+	serves := func(agyPath string) []string {
+		cfg, err := Defaults(stateDir(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.AgyPath = agyPath
+		cfg.WithAgents()
+		return cfg.Providers.Names()
+	}
+	if got := serves(""); !slices.Equal(got, []string{"claude"}) {
+		t.Errorf("with no agy, serves %q", got)
+	}
+	agy := filepath.Join(home, ".local", "bin", "agy")
+	if err := os.MkdirAll(filepath.Dir(agy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(agy, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := serves(""); !slices.Equal(got, []string{"antigravity", "claude"}) {
+		t.Errorf("with agy in ~/.local/bin, serves %q", got)
+	}
+	if got := serves(filepath.Join(bin, "no-agy")); !slices.Equal(got, []string{"claude"}) {
+		t.Errorf("with agy_path naming nothing, serves %q", got)
 	}
 }
 

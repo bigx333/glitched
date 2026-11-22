@@ -61,7 +61,7 @@ const usage = `usage: glitched <command> [flags]
   mcp       serve MCP on stdin and stdout for the agent the engine started it for
   browser-mcp
             serve the browser of the app on -dir to an agent, as an MCP server on stdio;
-            the engine gives it to each Claude Code run
+            the engine gives it to each agent's run
 
 run, threads and replica reach the engine under -dir, or another with -server ADDR -token TOKEN.`
 
@@ -199,7 +199,7 @@ func serve(ctx context.Context, args []string) error {
 	if set["max-depth"] {
 		cfg.Children.Depth = *maxDepth
 	}
-	cfg.WithClaude()
+	cfg.WithAgents()
 	d, err := daemon.Start(ctx, cfg)
 	if err != nil {
 		return err
@@ -357,7 +357,7 @@ func run(ctx context.Context, args []string) error {
 	threadFlag := fs.String("thread", "", "thread to send to; a new one when empty")
 	yes := fs.Bool("yes", false, "approve every request, and dismiss every question, without asking")
 	modeFlag := fs.String("mode", "after", "now, after, steer, restart or defer; restart also ends an uncertain run")
-	providerFlag := fs.String("provider", "fake", "the provider a new thread runs, by the engine's name for it, such as fake or claude")
+	providerFlag := fs.String("provider", "fake", "the provider a new thread runs, by the engine's name for it, such as fake, claude or antigravity")
 	modelFlag := fs.String("model", "", "the model a new thread runs, by its provider's id for it; empty is the provider's default")
 	fs.Parse(args)
 	mode, ok := modes[*modeFlag]

@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"glitched/internal/provider"
+	"glitched/internal/provider/acp"
 	"glitched/internal/provider/claude"
 )
 
@@ -38,12 +39,12 @@ func (undescribed) Describe(context.Context) (provider.Info, error) {
 // todaysModels has each family's provider in m report the models the
 // picker listed before it asked engines, by the ids Glitched knows them
 // by: the fixture on which the picker looks as it did. A provider that
-// reports its own already, or the real claude, is left as it is.
+// reports its own already, or a real adapter, is left as it is.
 func todaysModels(m provider.Mux) {
 	for _, f := range families {
 		p := f.provider
 		switch m[p].(type) {
-		case nil, reporting, undescribed, *claude.Adapter:
+		case nil, reporting, undescribed, *claude.Adapter, *acp.Adapter:
 			continue
 		}
 		m[p] = reporting{m[p], knownOf(p)}
