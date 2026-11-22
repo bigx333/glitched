@@ -297,8 +297,8 @@ func (p *proc) park() {
 					return
 				}
 				// Claude Code reports a command's end after its result.
-				var m message
-				if json.Unmarshal(line, &m) == nil && m.Type == "command_lifecycle" {
+				var m struct{ Type, State string }
+				if json.Unmarshal(line, &m) == nil && m.Type == "command_lifecycle" && m.State == "completed" {
 					continue
 				}
 				slog.Warn("claude: a parked claude spoke, so it is stopped", "line", string(bytes.TrimSpace(line[:min(len(line), 200)])))

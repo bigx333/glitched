@@ -65,7 +65,7 @@ func workingAt(t *testing.T, h *runtime.Host, access api.Access) mcp.Origin {
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(2 * time.Millisecond) {
 		snap, err := h.Read(ctx, api.Query{Thread: thread})
 		if err == nil && snap.Threads[0].Run == api.RunWaiting {
-			return mcp.Origin{Thread: thread}
+			return mcp.Origin{Thread: thread, Access: access}
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("the run never waited: %+v %v", snap.Threads, err)

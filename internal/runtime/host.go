@@ -130,19 +130,6 @@ func (h *Host) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 }
 
 func (h *Host) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
-	// While a thread's ended run still closes its agent, the thread's live
-	// run, if any, has no agent yet: a child asked for now comes from the
-	// agent of the run before it, whose access may be narrower.
-	if b, ok := c.Body.(api.ThreadCreate); ok && !b.Parent.IsZero() {
-		h.mu.Lock()
-		closing := h.closing[b.Parent]
-		h.mu.Unlock()
-		if closing {
-			if t, err := h.store.Thread(ctx, b.Parent); err == nil && !t.Deleted {
-				return api.Receipt{}, &api.RejectedError{Reason: "only the parent's live run can start a child thread, and its agent has not started"}
-			}
-		}
-	}
 	return h.store.Submit(ctx, c, time.Now())
 }
 
@@ -417,11 +404,15 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 		}) {
 			return nil, false
 		}
-		// A thread's first run whose start never ran has no agent, as boot's
-		// rule says: its message was never dispatched, and no dead host left
-		// its start leased. A later run's may: its provider can keep the
-		// agent of the run before it for the thread's next run.
-		if m, _ := t.Message(b.Run); m.State == engine.QueueCancelled && start == 0 && t.Generation <= 1 {
+		// A run whose start never ran has no agent, as boot's rule says: its
+		// message was never dispatched, and no dead host left its start
+		// leased. Its provider may still keep the agent of an earlier run for
+		// the thread's next run, unless no message of the thread ever reached
+		// an agent.
+		reached := slices.ContainsFunc(t.Queue, func(m engine.Message) bool {
+			return m.State == engine.QueueDispatched || m.State == engine.QueueUncertain
+		})
+		if m, _ := t.Message(b.Run); m.State == engine.QueueCancelled && start == 0 && !reached {
 			return nil, true
 		}
 		// This host's pump closed the agent it held before the thread took
@@ -506,7 +497,7 @@ func (h *Host) open(ctx context.Context, thread api.ID, b engine.StartTurn) (pro
 		Thread: thread, Run: b.Run, Generation: b.Generation, Workspace: b.Workspace, Model: b.Model, Access: b.Access,
 	}
 	if h.mcp != nil {
-		spec.MCP = append(spec.MCP, h.mcp.For(thread))
+		spec.MCP = append(spec.MCP, h.mcp.For(thread, b.Access))
 	}
 	for _, s := range h.servers {
 		s.Args, s.Env = slices.Clone(s.Args), maps.Clone(s.Env)

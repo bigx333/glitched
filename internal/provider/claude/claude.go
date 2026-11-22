@@ -100,7 +100,11 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	// would start it otherwise needs another one.
 	key := strings.Join(slices.Concat([]string{bin, spec.Workspace}, args), "\x00")
 	keep := func(p *proc) { a.parked().Park(spec.Thread, key, p) }
-	if p, ok := a.parked().Take(ctx, spec.Thread, key); ok {
+	p, ok, err := a.parked().Take(ctx, spec.Thread, key)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("claude: the thread's earlier claude may still run: %w", err)
+	case ok:
 		return newAgent(spec, p, keep), nil
 	}
 	session := uuidOf(spec.Thread)
@@ -108,7 +112,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	if spec.Generation > 1 {
 		slices.Reverse(flags)
 	}
-	p, err := launch(ctx, bin, spec, slices.Concat(args, []string{flags[0], session}))
+	p, err = launch(ctx, bin, spec, slices.Concat(args, []string{flags[0], session}))
 	if errors.Is(err, errSessionInUse) || errors.Is(err, errNoSession) {
 		p, err = launch(ctx, bin, spec, slices.Concat(args, []string{flags[1], session}))
 	}
