@@ -440,8 +440,8 @@ func TestARequestNotifies(t *testing.T) {
 		script []provider.Event
 		want   string
 	}{
-		{"questions", fake.Asking(), "The agent asks: Which store should the cache use?"},
-		{"an approval", runTests, "The agent wants to run bun run test -- Sidebar"},
+		{"questions", fake.Asking(), "Fake asks: Which store should the cache use?"},
+		{"an approval", runTests, "Fake wants to run bun run test -- Sidebar"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := tempDir(t)
@@ -705,7 +705,7 @@ func TestAnAskOfAThreadOfTheUsersIsToldOfOnce(t *testing.T) {
 	s.show(top)
 	shown(h, top)
 	settle(h)
-	if want := []string{outsideASCII + "\n" + `The agent asks: Which store \u{202E}should\u{202C} the cache use?`}; !slices.Equal(*got, want) {
+	if want := []string{outsideASCII + "\n" + `Fake asks: Which store \u{202E}should\u{202C} the cache use?`}; !slices.Equal(*got, want) {
 		t.Fatalf("notifications: %q; want %q", *got, want)
 	}
 }
@@ -732,7 +732,7 @@ func TestAnAskOfAThreadOfTheUsersMadeWhileAwayIsToldOfOnReconnect(t *testing.T) 
 	reconnect(h, s)
 	shown(h, top)
 	settle(h)
-	if want := []string{"The agent asks: Which suites?"}; !slices.Equal(*got, want) {
+	if want := []string{"Fake asks: Which suites?"}; !slices.Equal(*got, want) {
 		t.Fatalf("notifications: %q; want %q", *got, want)
 	}
 }

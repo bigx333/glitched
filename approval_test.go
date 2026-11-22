@@ -17,6 +17,7 @@ import (
 	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider"
+	"glitched/internal/provider/fake"
 )
 
 // lastRequest is the thread's last request, as its transcript has it.
@@ -41,6 +42,34 @@ func TestApprovalCardSaysWhatAndWhy(t *testing.T) {
 	}
 	if h.tt.HasText(outsideASCII) {
 		t.Errorf("a card in printable ASCII flags %q", outsideASCII)
+	}
+}
+
+// A thread on a provider Glitched has no family for names its agent by
+// that provider's own name, capitalised, as antigravity's is Antigravity.
+func TestApprovalCardNamesTheThreadsProvider(t *testing.T) {
+	dir := tempDir(t)
+	d, err := daemon.Start(context.Background(), daemon.Config{Dir: dir, Hub: true, Providers: provider.Mux{"antigravity": fake.New(runTests)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	id := api.NewID()
+	submit := func(body api.Intent) {
+		t.Helper()
+		if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: body}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	submit(api.ThreadCreate{Workspace: "/work/t3code", Title: "Add a cache", Model: api.ModelRef{Provider: "antigravity", Model: "gemini-3-pro"}})
+	h := start(t, dir)
+	h.a.select_(h.thread("Add a cache"))
+	h.tt.Frame()
+	submit(api.MessageDispatch{Text: "Run the sidebar tests.", Mode: api.StartNow})
+	h.until("the approval card", func() bool { return h.tt.HasText("Approval needed") })
+	h.tt.Advance(time.Second)
+	if !h.tt.HasText("Antigravity wants to run a command") || h.tt.HasText("The agent wants to run a command") {
+		t.Errorf("the card shows %q, want Antigravity named", h.tt.Texts())
 	}
 }
 

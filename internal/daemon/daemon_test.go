@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -452,10 +451,12 @@ func TestEachRunGetsGlitchedMCPOnTheEnginesSocket(t *testing.T) {
 		}
 	}
 	exe, _ := os.Executable()
-	s := seen[0].MCP
 	want := map[string]string{"GLITCHED_THREAD": thread.String(), "GLITCHED_RUN": run.String(), "GLITCHED_ENGINE": Socket(dir).Address}
-	if s == nil || s.Name != "glitched" || s.Command != exe || len(s.Args) != 1 || s.Args[0] != "mcp" || fmt.Sprint(s.Env) != fmt.Sprint(want) || s.Instructions == "" {
-		t.Errorf("the run's MCP server %+v, want glitched mcp from %s with %v", s, exe, want)
+	if len(seen[0].MCP) != 1 {
+		t.Fatalf("the run's MCP servers %+v, want glitched mcp alone", seen[0].MCP)
+	}
+	if s := seen[0].MCP[0]; s.Name != "glitched" || s.Command != exe || len(s.Args) != 1 || s.Args[0] != "mcp" || fmt.Sprint(s.Env) != fmt.Sprint(want) || s.Instructions == "" || !s.Trusted {
+		t.Errorf("the run's MCP server %+v, want trusted glitched mcp from %s with %v", s, exe, want)
 	}
 }
 
@@ -490,14 +491,14 @@ func TestARelativeDirGivesGlitchedMCPAnAbsoluteSocket(t *testing.T) {
 		}
 	}
 	want := filepath.Join(root, "state", "engine.sock")
-	if s := seen[0].MCP; s == nil || s.Env["GLITCHED_ENGINE"] != want {
-		t.Errorf("the run's MCP server %+v, want GLITCHED_ENGINE %s", s, want)
+	if s := seen[0].MCP; len(s) != 1 || s[0].Env["GLITCHED_ENGINE"] != want {
+		t.Errorf("the run's MCP servers %+v, want glitched mcp with GLITCHED_ENGINE %s", s, want)
 	}
 }
 
 // An engine running Claude Code gives each run the browser of the app on
-// its state directory, through a config at an absolute path: claude runs
-// in the thread's workspace.
+// its state directory, after glitched mcp, at an absolute path: the agent
+// runs in the thread's workspace. The browser's tools ask.
 func TestWithClaudeGivesRunsTheBrowser(t *testing.T) {
 	base := t.TempDir()
 	t.Chdir(base)
@@ -506,27 +507,42 @@ func TestWithClaudeGivesRunsTheBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.WithClaude()
-	ad, ok := cfg.Providers["claude"].(*claude.Adapter)
-	if !ok {
+	if _, ok := cfg.Providers["claude"].(*claude.Adapter); !ok {
 		t.Fatalf("claude's adapter is %T", cfg.Providers["claude"])
 	}
-	if !filepath.IsAbs(ad.MCPConfig) {
-		t.Fatalf("the MCP config is at %q, which claude, in the thread's workspace, won't find", ad.MCPConfig)
+	ad := &specs{Adapter: fake.New(fake.Turn(false))}
+	cfg.Providers["fake"] = ad
+	d, err := Start(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
 	}
-	var mcp struct {
-		MCPServers map[string]struct {
-			Type    string   `json:"type"`
-			Command string   `json:"command"`
-			Args    []string `json:"args"`
-		} `json:"mcpServers"`
+	t.Cleanup(func() { d.Close() })
+	ep := transport.NewEndpointClient(Socket("state"), api.ID{})
+	defer ep.Close()
+	ctx := context.Background()
+	thread := api.NewID()
+	if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{Workspace: "/src/app", Title: "t", Model: api.ModelRef{Provider: "fake", Model: "fake"}}}); err != nil {
+		t.Fatal(err)
 	}
-	b, err := os.ReadFile(ad.MCPConfig)
-	if err != nil || json.Unmarshal(b, &mcp) != nil {
-		t.Fatalf("the MCP config: %v %s", err, b)
+	if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: "hi", Mode: api.StartNow}}); err != nil {
+		t.Fatal(err)
 	}
-	s := mcp.MCPServers[browsermcp.ServerName]
+	var seen []provider.SessionSpec
+	for deadline := time.Now().Add(5 * time.Second); len(seen) == 0; time.Sleep(5 * time.Millisecond) {
+		ad.mu.Lock()
+		seen = append([]provider.SessionSpec(nil), ad.seen...)
+		ad.mu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("the run never opened")
+		}
+	}
+	servers := seen[0].MCP
+	if len(servers) != 2 || servers[0].Name != "glitched" {
+		t.Fatalf("the run's MCP servers %+v, want glitched mcp, then the browser", servers)
+	}
+	s := servers[1]
 	got := append([]string{s.Command}, s.Args...)
-	if want := browsermcp.Command(filepath.Join(base, "state")); s.Type != "stdio" || !slices.Equal(got, want) {
-		t.Errorf("the MCP config runs %q, want %q", got, want)
+	if want := browsermcp.Command(filepath.Join(base, "state")); s.Name != browsermcp.ServerName || s.Trusted || s.Env != nil || !slices.Equal(got, want) {
+		t.Errorf("the run's browser %+v, want untrusted %s running %q", s, browsermcp.ServerName, want)
 	}
 }

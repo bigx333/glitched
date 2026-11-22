@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
@@ -33,14 +34,18 @@ func askOf(body json.RawMessage) (ask, bool) {
 	return b, json.Unmarshal(body, &b) == nil && (b.Operation != "" || b.Command != "")
 }
 
-// agentNames are the providers' agents as the card names them.
-var agentNames = map[string]string{"claude": "Claude", "codex": "Codex"}
-
+// agentName is the thread's agent as its cards name it: its provider's
+// family, else the provider's own name for it, capitalised.
 func agentName(t thread) string {
-	if n, ok := agentNames[t.View.Model.Provider]; ok {
-		return n
+	p := t.View.Model.Provider
+	if f := familyOf(p); f != noFamily {
+		return f
 	}
-	return "The agent"
+	if p == "" {
+		return "The agent"
+	}
+	r, n := utf8.DecodeRuneInString(p)
+	return string(unicode.ToUpper(r)) + p[n:]
 }
 
 // accessLabel is an access level as the composer's picker names it.

@@ -53,8 +53,8 @@ type Launcher struct {
 }
 
 // For is the server for run's agent on thread.
-func (l Launcher) For(thread, run api.ID) *provider.MCPServer {
-	return &provider.MCPServer{
+func (l Launcher) For(thread, run api.ID) provider.MCPServer {
+	return provider.MCPServer{
 		Name:    "glitched",
 		Command: l.Command,
 		Args:    []string{"mcp"},
@@ -64,10 +64,11 @@ func (l Launcher) For(thread, run api.ID) *provider.MCPServer {
 			EnvEngine: l.Engine,
 		},
 		Instructions: instructions,
+		Trusted:      true,
 	}
 }
 
-const instructions = `Glitched runs you in a thread. Its MCP server glitched gives you delegate_task (mcp__glitched__delegate_task), which starts a child agent in a thread of its own, under this one.
+const instructions = `Glitched runs you in a thread. Its MCP server glitched gives you the tool delegate_task, which starts a child agent in a thread of its own, under this one.
 
 - Follow the user's delegation preferences and the repository's instructions. That the tool is there does not by itself call for delegating work.
 - The child starts at once, with this thread's folder, permissions and model unless you pick another model. It does not see this conversation, so give it a self-contained brief.

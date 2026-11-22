@@ -369,13 +369,13 @@ var ctx = context.Background()
 var turnWait = 10 * time.Second
 
 // host is a real engine on ad, the fake claude when nil.
-func host(t *testing.T, ad *claude.Adapter) *runtime.Host {
+func host(t *testing.T, ad *claude.Adapter, opts ...runtime.Option) *runtime.Host {
 	t.Helper()
-	return hostAt(t, filepath.Join(t.TempDir(), "host.db"), ad)
+	return hostAt(t, filepath.Join(t.TempDir(), "host.db"), ad, opts...)
 }
 
 // hostAt is host on the store at path.
-func hostAt(t *testing.T, path string, ad *claude.Adapter) *runtime.Host {
+func hostAt(t *testing.T, path string, ad *claude.Adapter, opts ...runtime.Option) *runtime.Host {
 	t.Helper()
 	st, err := store.Open(path)
 	if err != nil {
@@ -384,7 +384,7 @@ func hostAt(t *testing.T, path string, ad *claude.Adapter) *runtime.Host {
 	if ad == nil {
 		ad = &claude.Adapter{Path: must(os.Executable())}
 	}
-	h, err := runtime.New(ctx, st, provider.Mux{"claude": ad})
+	h, err := runtime.New(ctx, st, provider.Mux{"claude": ad}, opts...)
 	if err != nil {
 		st.Close()
 		t.Fatal(err)
@@ -618,13 +618,20 @@ func TestClaudeRunsAsGlitched(t *testing.T) {
 	}
 }
 
-// A run gets the MCP servers of the engine's config, the app's browser,
-// beside the user's own, when the engine has one; none otherwise.
+// browser is an engine's own MCP server, as the app's browser: untrusted,
+// with no env of its own.
+var browser = provider.MCPServer{Name: "glitched-browser", Command: "/glitched", Args: []string{"browser-mcp", "-dir", "/state"}}
+
+// browserConfig is browser as Claude Code reads it, as the engine wrote it
+// to browser-mcp.json before runs got it inline.
+const browserConfig = `{"mcpServers":{"glitched-browser":{"args":["browser-mcp","-dir","/state"],"command":"/glitched","type":"stdio"}}}`
+
+// A run gets the engine's own MCP servers, the app's browser, beside the
+// user's own, when the engine has one; none otherwise. Their tools ask.
 func TestARunGetsTheEnginesMCPServers(t *testing.T) {
 	argv := replay(t, "hi", "")
-	config := filepath.Join(t.TempDir(), "browser-mcp.json")
-	for _, ad := range []*claude.Adapter{{Path: must(os.Executable()), MCPConfig: config}, nil} {
-		h := host(t, ad)
+	for _, opts := range [][]runtime.Option{{runtime.WithMCPServers(browser)}, nil} {
+		h := host(t, nil, opts...)
 		turn(t, h, newThread(t, h, api.AccessAsk), "Say hi in three words.")
 	}
 	lines := strings.Split(strings.TrimSpace(string(must(os.ReadFile(argv)))), "\n")
@@ -638,57 +645,57 @@ func TestARunGetsTheEnginesMCPServers(t *testing.T) {
 		t.Errorf("claude ran with %q, want no MCP config without one", without)
 	}
 	i := slices.Index(with, "--mcp-config")
-	if i < 0 || i+2 >= len(with) || with[i+1] != config {
-		t.Fatalf("claude ran with %q, want --mcp-config %s", with, config)
+	if i < 0 || i+2 >= len(with) || with[i+1] != browserConfig {
+		t.Fatalf("claude ran with %q, want --mcp-config %s", with, browserConfig)
 	}
 	// --mcp-config takes every value up to the next flag.
 	if !strings.HasPrefix(with[i+2], "--") {
 		t.Errorf("--mcp-config is followed by %q, not a flag", with[i+2])
 	}
+	if slices.Contains(with, "--allowedTools") || slices.Contains(with, "--append-system-prompt") {
+		t.Errorf("claude ran with %q, want the browser's tools to ask and no prompt for it", with)
+	}
 }
 
-// A run with glitched mcp and the engine's config gets both in one
-// --mcp-config, the run's inline first, then the file, and the next flag
-// after them. Only glitched mcp's tools run without asking.
+// A run with glitched mcp and the engine's servers gets them all in one
+// --mcp-config, glitched mcp first, and the next flag after them. Only
+// glitched mcp's tools run without asking, and its instructions are the
+// system prompt's addition.
 func TestARunGetsGlitchedMCPAndTheEnginesMCPServers(t *testing.T) {
 	argv := replay(t, "hi", "")
-	config := filepath.Join(t.TempDir(), "browser-mcp.json")
-	st, err := store.Open(filepath.Join(t.TempDir(), "host.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ad := &claude.Adapter{Path: must(os.Executable()), MCPConfig: config}
-	h, err := runtime.New(ctx, st, provider.Mux{"claude": ad},
-		runtime.WithMCP(mcp.Launcher{Command: must(os.Executable()), Engine: filepath.Join(t.TempDir(), "engine.sock")}))
-	if err != nil {
-		st.Close()
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		h.Close()
-		st.Close()
-	})
-	turn(t, h, newThread(t, h, api.AccessAsk), "Say hi in three words.")
+	l := mcp.Launcher{Command: must(os.Executable()), Engine: filepath.Join(t.TempDir(), "engine.sock")}
+	h := host(t, nil, runtime.WithMCP(l), runtime.WithMCPServers(browser))
+	thread := newThread(t, h, api.AccessAsk)
+	turn(t, h, thread, "Say hi in three words.")
 
 	var args []string
 	json.Unmarshal([]byte(strings.TrimSpace(string(must(os.ReadFile(argv))))), &args)
-	i := slices.Index(args, "--mcp-config")
-	if i < 0 || i+4 >= len(args) {
-		t.Fatalf("claude ran with %q, want an --mcp-config", args)
-	}
 	if n := strings.Count(strings.Join(args, "\x00"), "--mcp-config"); n != 1 {
 		t.Errorf("claude ran with %d --mcp-config, want 1: %q", n, args)
 	}
+	i := slices.Index(args, "--mcp-config")
+	if i < 0 || i+7 > len(args) {
+		t.Fatalf("claude ran with %q, want an --mcp-config, --allowedTools and --append-system-prompt", args)
+	}
 	var cfg struct {
-		MCPServers map[string]any `json:"mcpServers"`
+		MCPServers map[string]struct {
+			Type, Command string
+			Args          []string
+			Env           map[string]string
+		} `json:"mcpServers"`
 	}
-	if err := json.Unmarshal([]byte(args[i+1]), &cfg); err != nil || cfg.MCPServers["glitched"] == nil {
-		t.Errorf("--mcp-config's first value %q, want glitched mcp inline", args[i+1])
+	if err := json.Unmarshal([]byte(args[i+1]), &cfg); err != nil || len(cfg.MCPServers) != 1 {
+		t.Fatalf("--mcp-config's first value %q, want glitched mcp inline", args[i+1])
 	}
-	if args[i+2] != config {
-		t.Errorf("--mcp-config's second value %q, want %s", args[i+2], config)
+	s := cfg.MCPServers["glitched"]
+	if s.Type != "stdio" || s.Command != l.Command || !slices.Equal(s.Args, []string{"mcp"}) || s.Env[mcp.EnvThread] != thread.String() || s.Env[mcp.EnvEngine] != l.Engine {
+		t.Errorf("--mcp-config's first value %q, want glitched mcp for the thread on %s", args[i+1], l.Engine)
 	}
-	if args[i+3] != "--allowedTools" || args[i+4] != "mcp__glitched__*" {
-		t.Errorf("--mcp-config is followed by %q, want --allowedTools mcp__glitched__*", args[i+3:])
+	if args[i+2] != browserConfig {
+		t.Errorf("--mcp-config's second value %q, want %s", args[i+2], browserConfig)
+	}
+	want := []string{"--allowedTools", "mcp__glitched__*", "--append-system-prompt", l.For(thread, api.ID{}).Instructions}
+	if got := args[i+3 : i+7]; !slices.Equal(got, want) {
+		t.Errorf("--mcp-config is followed by %q, want %q", got, want)
 	}
 }

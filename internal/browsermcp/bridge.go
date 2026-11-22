@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"glitched/internal/jsonfile"
+	"glitched/internal/provider"
 )
 
 // The bridge is how the server reaches the app: a unix socket in the
@@ -56,20 +56,20 @@ func Main(ctx context.Context, args []string, in io.Reader, out io.Writer) error
 	return Serve(ctx, in, out, Dial(*dir))
 }
 
-// WriteConfig writes the Claude Code MCP config (--mcp-config) that runs
-// command as the browser's server, named ServerName, to a file in the
-// state directory dir, and returns its path.
-func WriteConfig(dir string, command []string) (string, error) {
-	path := filepath.Join(dir, "browser-mcp.json")
-	err := jsonfile.Write(path, map[string]any{"mcpServers": map[string]any{
-		ServerName: map[string]any{"type": "stdio", "command": command[0], "args": command[1:]},
-	}})
-	return path, err
+// Server is the browser of the app on the state directory dir as a run's
+// MCP server, ServerName, run as Command says; false where it can't be.
+// It is not trusted: its tools ask as the agent's own do.
+func Server(dir string) (provider.MCPServer, bool) {
+	cmd := Command(dir)
+	if cmd == nil {
+		return provider.MCPServer{}, false
+	}
+	return provider.MCPServer{Name: ServerName, Command: cmd[0], Args: cmd[1:]}, true
 }
 
 // ServerName is the browser's server among a run's MCP servers. It is not
 // glitched mcp's "glitched", whose tools a run allows without asking: the
-// browser's go through Claude Code's permissions, as
+// browser's go through the agent's permissions, as Claude Code's
 // mcp__glitched-browser__browser_*.
 const ServerName = "glitched-browser"
 

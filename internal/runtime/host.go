@@ -33,7 +33,8 @@ type Host struct {
 	store     *store.Store
 	providers provider.Mux
 	name      string
-	mcp       *mcp.Launcher // how each run's agent starts glitched mcp; nil runs it without
+	mcp       *mcp.Launcher        // how each run's agent starts glitched mcp; nil runs it without
+	servers   []provider.MCPServer // the engine's own MCP servers, which every run's agent gets after glitched mcp
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -69,6 +70,12 @@ type Option func(*Host)
 
 // WithMCP gives each run's agent glitched mcp, started as l says.
 func WithMCP(l mcp.Launcher) Option { return func(h *Host) { h.mcp = &l } }
+
+// WithMCPServers gives each run's agent servers too, after glitched mcp:
+// the engine's own, the same for every run, as the app's browser.
+func WithMCPServers(servers ...provider.MCPServer) Option {
+	return func(h *Host) { h.servers = servers }
+}
 
 // New reconciles what the last process left in flight, then starts the
 // effect worker. The caller keeps owning st.
@@ -483,8 +490,9 @@ func (h *Host) open(ctx context.Context, thread api.ID, b engine.StartTurn) (pro
 		Thread: thread, Run: b.Run, Generation: b.Generation, Workspace: b.Workspace, Model: b.Model, Access: b.Access,
 	}
 	if h.mcp != nil {
-		spec.MCP = h.mcp.For(thread, b.Run)
+		spec.MCP = append(spec.MCP, h.mcp.For(thread, b.Run))
 	}
+	spec.MCP = append(spec.MCP, h.servers...)
 	ag, err := h.providers.Open(ctx, spec)
 	if err == nil {
 		if err = ag.Do(ctx, provider.Start{Text: b.Text}); err != nil && h.ctx.Err() == nil {
