@@ -1637,9 +1637,11 @@ func (a *app) said(t thread) string {
 	return strings.TrimSpace(strings.Join(parts, "\n\n"))
 }
 
-// modelRef is the model the pickers chose, for a new thread.
+// modelRef is the model the pickers chose, for a new thread, at the
+// effort they show (effortFor).
 func (a *app) modelRef() api.ModelRef {
-	return api.ModelRef{Provider: a.model.Provider, Model: a.model.ID, Effort: a.effort, Fast: a.fast}
+	m, _ := a.modelOf(a.model)
+	return api.ModelRef{Provider: a.model.Provider, Model: a.model.ID, Effort: effortFor(m, a.effort), Fast: a.fast}
 }
 
 var accessOf = map[string]api.Access{accessAsk: api.AccessAsk, accessAuto: api.AccessAutoEdits, accessFull: api.AccessFull}

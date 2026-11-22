@@ -32,14 +32,14 @@ function button(ctx) {
 // between families. Past the most Glitched gives it, its rows scroll.
 function modelsHeight(ctx) {
   const counts = new Map();
-  for (const m of ctx.models) if (!ctx.lock || m.family === ctx.lock) counts.set(m.family, (counts.get(m.family) ?? 0) + 1);
+  for (const m of ctx.models) if (!ctx.lockKey || m.familyKey === ctx.lockKey) counts.set(m.familyKey, (counts.get(m.familyKey) ?? 0) + 1);
   const n = Math.max(0, ...counts.values());
   return Math.min(2 * PAD + n * ctx.modelRowHeight + Math.max(0, n - 1) * GAP, ctx.modelsMaxHeight);
 }
 
 function panel(ctx) {
-  const families = ctx.families.filter((f) => !ctx.lock || f.key === ctx.lock);
-  const models = ctx.models.filter((m) => m.family === ctx.family);
+  const families = ctx.families.filter((f) => !ctx.lockKey || f.key === ctx.lockKey);
+  const models = ctx.models.filter((m) => m.familyKey === ctx.familyKey);
   return {
     type: "column",
     children: [
@@ -60,7 +60,7 @@ function panel(ctx) {
                 height: 400,
                 rowHeight: ctx.familyRowHeight,
                 gap: GAP,
-                value: families.some((f) => f.key === ctx.family) ? ctx.family : undefined,
+                value: families.some((f) => f.key === ctx.familyKey) ? ctx.familyKey : undefined,
                 controlled: true,
                 items: families.map((f) => ({ key: f.key, label: f.name + " " + f.about })),
               },

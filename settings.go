@@ -178,7 +178,7 @@ func (a *app) setAppSetting(args json.RawMessage) (any, error) {
 			return nil, fmt.Errorf("defaultModel is one of %s", strings.Join(a.modelNames(), ", "))
 		}
 		if m, ok := a.modelNamed(name); ok {
-			a.model = m.key
+			a.chooseModel(m.key)
 		}
 		a.saveComposer()
 		return nil, nil

@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -68,12 +69,15 @@ var knownModels = []modelInfo{
 const goneModel = "No longer offered"
 
 // pickerRows are the rows of family f's models: what its engine offers,
-// and the model chosen, of f, where the engine no longer offers it.
+// and the model chosen, of f, where the engine doesn't offer it: no
+// longer, once it answered, or not yet, till it does.
 func (a *app) pickerRows(f family) []modelInfo {
 	rows := a.familyModels(f)
 	m, offered := a.modelOf(a.model)
 	if !offered && m.key.Provider == f.provider {
-		m.desc = goneModel
+		if _, answered := a.models.reported[f.provider]; answered {
+			m.desc = goneModel
+		}
 		rows = append(rows, m)
 	}
 	return rows
@@ -83,7 +87,7 @@ func (a *app) pickerRows(f family) []modelInfo {
 // engine runs nothing, a placeholder, isn't one.
 func (a *app) modelFamilies() []family {
 	out := []family{}
-	for _, f := range families {
+	for _, f := range a.providerFamilies() {
 		if len(a.pickerRows(f)) > 0 {
 			out = append(out, f)
 		}
@@ -138,13 +142,11 @@ var (
 )
 
 // effortLevel is the chosen effort's place among the model's efforts:
-// one it doesn't run at shows at Medium, or the least.
+// one it doesn't run at shows as effortFor has it.
 func (a *app) effortLevel() int {
-	es := a.efforts()
-	if i := slices.IndexFunc(es, func(e effortInfo) bool { return e.id == a.effort }); i >= 0 {
-		return i
-	}
-	return max(slices.IndexFunc(es, func(e effortInfo) bool { return e.id == "medium" }), 0)
+	m, _ := a.modelOf(a.model)
+	e := effortFor(m, a.effort)
+	return slices.IndexFunc(effortsOf(m), func(k effortInfo) bool { return k.id == e })
 }
 
 // modelPicker is the composer's model button, and the popover it opens:
@@ -235,12 +237,16 @@ type composerModel struct {
 	Key    string `json:"key"`
 	Effort string `json:"effort"`
 	Fast   bool   `json:"fast"`
-	// Family is the provider whose models the popover shows, and Lock the
-	// only one it offers, a thread's provider, or "" for every one.
-	Family   string        `json:"family"`
-	Lock     string        `json:"lock"`
-	Families []modelFamily `json:"families"`
-	Models   []modelChoice `json:"models"`
+	// FamilyKey is the provider whose models the popover shows, and
+	// LockKey the only one it offers, a thread's provider, or "" for
+	// every one; Family and Lock are their families' names, as a copy
+	// made before there were keys knows them.
+	FamilyKey string        `json:"familyKey"`
+	LockKey   string        `json:"lockKey"`
+	Family    string        `json:"family"`
+	Lock      string        `json:"lock"`
+	Families  []modelFamily `json:"families"`
+	Models    []modelChoice `json:"models"`
 	// FamilyRowHeight and ModelRowHeight are how tall Glitched's own
 	// popover draws a family's row and a model's, from the interface
 	// font's lines on this platform.
@@ -259,29 +265,34 @@ type modelFamily struct {
 	About string `json:"about"`
 }
 
-// modelChoice is a model by its row key, Key, its family's provider and
-// what it shows.
+// modelChoice is a model by its row key, Key, its family's provider,
+// FamilyKey, and what it shows, its family's name as Family.
 type modelChoice struct {
-	Key    string `json:"key"`
-	Name   string `json:"name"`
-	Short  string `json:"short"`
-	About  string `json:"about"`
-	Family string `json:"family"`
+	Key       string `json:"key"`
+	Name      string `json:"name"`
+	Short     string `json:"short"`
+	About     string `json:"about"`
+	FamilyKey string `json:"familyKey"`
+	Family    string `json:"family"`
 }
 
 func (a *app) composerModelOf(c *ui.Context, r plugins.ThreadRecord, part string) composerModel {
 	size := c.Theme().FontSize
 	m, _ := a.modelOf(a.model)
-	out := composerModel{Thread: r, Part: part, Model: m.name, Key: a.model.String(), Effort: a.efforts()[a.effortLevel()].label, Fast: a.fast, Family: a.pickerFamily, Lock: a.pickerLock,
+	out := composerModel{Thread: r, Part: part, Model: m.name, Key: a.model.String(), Effort: a.efforts()[a.effortLevel()].label, Fast: a.fast, FamilyKey: a.pickerFamily, LockKey: a.pickerLock,
 		FamilyRowHeight: familyRowHeight(c),
 		ModelRowHeight:  modelRowHeight(c, size),
 		ModelsMaxHeight: a.modelsMaxHeight(c),
+	}
+	out.Family = familyOf(a.pickerFamily).name
+	if a.pickerLock != "" {
+		out.Lock = familyOf(a.pickerLock).name
 	}
 	out.Families, out.Models = []modelFamily{}, []modelChoice{}
 	for _, f := range a.modelFamilies() {
 		out.Families = append(out.Families, modelFamily{f.provider, f.name, f.desc})
 		for _, m := range a.pickerRows(f) {
-			out.Models = append(out.Models, modelChoice{m.key.String(), m.name, m.short, m.desc, f.provider})
+			out.Models = append(out.Models, modelChoice{m.key.String(), m.name, m.short, m.desc, f.provider, f.name})
 		}
 	}
 	return out
@@ -325,25 +336,28 @@ const (
 
 // modelListRow does what the popover's own rows do to the row e of a
 // copy's list: of "families", pointed at or clicked, it shows the
-// family's models; of "models", clicked, it chooses the model. Only what
+// family's models; of "models", clicked, it chooses the model. A row is
+// keyed by the family's provider or the model's key, or, as copies did
+// before there were keys, by its name, which is its own (offeredModels). Only what
 // the picker offers: a family or a model past the thread's lock, or none
 // of the picker's, does nothing.
 func (a *app) modelListRow(list, key string, e ui.Element) {
 	switch list {
 	case "families":
-		if !slices.ContainsFunc(a.shownFamilies(), func(f family) bool { return f.provider == key }) {
+		i := slices.IndexFunc(a.shownFamilies(), func(f family) bool { return f.provider == key || f.name == key })
+		if i < 0 {
 			return
 		}
 		if e.Hovered() || e.Clicked() {
-			a.pickerFamily = key
+			a.pickerFamily = a.shownFamilies()[i].provider
 		}
 	case "models":
-		i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.key.String() == key })
+		i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.key.String() == key || m.name == key })
 		if i < 0 || a.pickerLock != "" && a.offeredModels()[i].key.Provider != a.pickerLock {
 			return
 		}
 		if e.Clicked() {
-			a.model = a.offeredModels()[i].key
+			a.chooseModel(a.offeredModels()[i].key)
 		}
 	}
 }
@@ -465,7 +479,7 @@ func (a *app) pickerModel(c *ui.Context, m modelInfo) {
 			ui.Icon(c, icCheck).FontSize(14).TextColor(palette.accent)
 		}
 	}).Clicked() {
-		a.model = m.key
+		a.chooseModel(m.key)
 	}
 }
 
@@ -474,6 +488,14 @@ func (a *app) pickerModel(c *ui.Context, m modelInfo) {
 // burst and a glow at the thumb at Max.
 func (a *app) effortSlider(c *ui.Context) {
 	level, es := a.effortLevel(), a.efforts()
+	last := len(es) - 1
+	var ids []string
+	for _, e := range es {
+		ids = append(ids, e.id)
+	}
+	if k := strings.Join(ids, " "); k != a.effortIDs {
+		a.effortIDs, a.effortHeld, a.effortLock = k, false, -1
+	}
 	ui.Column(c).Bind(&a.effortBox).Padding(12, 14, 14).Gap(10).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "Effort").FontWeight(500)
@@ -483,11 +505,13 @@ func (a *app) effortSlider(c *ui.Context) {
 			a.fastButton(c)
 		})
 		v := float64(level)
-		steps := float32(len(es) - 1)
+		// One effort is a track with its one stop, at the start.
+		steps := float32(max(last, 1))
 		sb := ui.SliderBase(c.Key("effort"), &v, 0, float64(steps)).Step(1).Height(28).Label("Effort").Cursor(ui.CursorPointer)
 		setLevel := func(l int) {
-			// A thread's effort the slider doesn't list shows at Medium,
-			// which it takes once chosen.
+			l = min(max(l, 0), last)
+			// A thread's effort the slider doesn't list shows as
+			// effortFor has it, which it takes once chosen.
 			if l == level && es[l].id == a.effort {
 				return
 			}
@@ -520,7 +544,7 @@ func (a *app) effortSlider(c *ui.Context) {
 		held := sb.Pressed()
 		if w := sb.Bounds().W; held && w > 2*stopInset {
 			x, _, _ := sb.PointerPosition()
-			at := min(max((x-stopInset)/(w-2*stopInset)*steps, 0), steps)
+			at := min(max((x-stopInset)/(w-2*stopInset)*steps, 0), float32(last))
 			if !a.effortHeld {
 				a.effortHeld, a.effortPressAt, a.effortLock = true, at, -1
 			}
@@ -571,7 +595,7 @@ const (
 // levels along it, at level, and reports whether it's still moving.
 func drawEffortTrack(p *ui.Painter, r ui.Rect, pos float32, es []effortInfo, level int, maxAt time.Time, flow *flowState) bool {
 	t := p.Now()
-	steps := float32(len(es) - 1)
+	steps := float32(max(len(es)-1, 1))
 	x0, x1 := r.X+stopInset, r.X+r.W-stopInset
 	cy := r.Y + r.H/2
 	tx := x0 + (x1-x0)*pos/steps

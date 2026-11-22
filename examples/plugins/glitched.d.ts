@@ -708,22 +708,28 @@ type AccessLevel = "Ask for approval" | "Approve for me" | "Full access";
  * (part "button"), or its popover holds while open (part "panel"). A row of
  * a list with id "families" shows that family's models as it is pointed at
  * or clicked, and one of a list with id "models" chooses that model on a
- * click, where the picker offers it; keys are names.
+ * click, where the picker offers it; keys are a family's key and a model's,
+ * or, as copies made before there were keys have them, names.
  */
 interface ComposerModelContext {
   thread: ThreadRecord;
   part: "button" | "panel";
-  /** The thread's own, or in the draft the default a new thread takes. */
+  /** The thread's own, or in the draft the default a new thread takes: the model's name, and its key. */
   model: string;
+  key: string;
   effort: string;
   fast: boolean;
-  /** The family whose models the popover shows. */
+  /** The family whose models the popover shows, by its provider. */
+  familyKey: string;
+  /** The only family a thread offers, its provider, or "" in the draft. */
+  lockKey: string;
+  /** familyKey's and lockKey's families' names. */
   family: string;
-  /** The only family a thread offers, its provider's ("-" for none the picker lists), or "" in the draft. */
   lock: string;
   /** The families whose engines report models, and those models, in each engine's order. A model chosen that its engine no longer offers is listed too, about "No longer offered". */
-  families: { name: string; about: string }[];
-  models: { name: string; short: string; about: string; family: string }[];
+  families: { key: string; name: string; about: string }[];
+  /** key is "provider:id"; familyKey the family's key, family its name. */
+  models: { key: string; name: string; short: string; about: string; familyKey: string; family: string }[];
   /** How tall Glitched's own popover draws a family's row and a model's, in points, from the interface font on this platform. */
   familyRowHeight: number;
   modelRowHeight: number;
@@ -915,11 +921,11 @@ declare const glitched: {
     /** Stops its agent, if one runs. Needs threads:write. */
     interrupt(thread: string): Promise<void>;
     /**
-     * The model (one of models.list, of the thread's provider), effort and
-     * fast mode of its next turn. Never the access: naming it, or anything
+     * The model (the id of one of models.list, of the thread's provider),
+     * effort (one of that model's efforts) and fast mode of its next turn. Never the access: naming it, or anything
      * else, is refused. Needs threads:write.
      */
-    configure(thread: string, options: { model?: string; effort?: "low" | "medium" | "high" | "max"; fast?: boolean }): Promise<void>;
+    configure(thread: string, options: { model?: string; effort?: string; fast?: boolean }): Promise<void>;
     /** The access of its next turns, one the access picker offers; with "", the default for new threads. Needs threads:access. */
     setAccess(thread: string, access: AccessLevel): Promise<void>;
   };
@@ -931,7 +937,7 @@ declare const glitched: {
   };
   models: {
     /** The models the composer's picker offers, and the efforts. */
-    list(): Promise<{ models: { name: string; provider: string; description: string }[]; efforts: ("low" | "medium" | "high" | "max")[] }>;
+    list(): Promise<{ models: { provider: string; id: string; name: string; family: string; description: string; efforts: string[] }[]; efforts: string[] }>;
   };
   projects: {
     /** In the sidebar's order. Needs threads:read. */

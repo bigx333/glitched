@@ -84,14 +84,25 @@ func offline(t *testing.T) *app {
 //
 // Its engine's providers report the models the picker showed before it
 // asked engines for theirs (todaysModels), unless the test's engine has
-// them report others.
+// them report others. Without a models.json, as a first start, the app
+// has those already, as though they answered before it started: else its
+// picker would offer nothing till they do, and a test without an engine
+// nothing at all.
 func testApp(t *testing.T, dir string, engine func(*daemon.Config), post func(func())) *app {
+	_, cached := os.Stat(filepath.Join(dir, "models.json"))
 	a := newApp(dir, func(c *daemon.Config) {
 		if engine != nil {
 			engine(c)
 		}
 		todaysModels(c.Providers)
 	}, post)
+	if cached != nil {
+		for _, f := range families {
+			a.models.reported[f.provider] = knownOf(f.provider)
+		}
+		a.show(a.starting(a.composerFile))
+		a.savedChoice, a.triedChoice = a.choice(), a.choice()
+	}
 	t.Cleanup(a.settingsOut.wait)
 	if a.plugins != nil {
 		t.Cleanup(a.plugins.Close)

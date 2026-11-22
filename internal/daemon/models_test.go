@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"glitched/internal/api"
@@ -23,6 +25,7 @@ func TestTheSocketSaysWhatModelsEachProviderRuns(t *testing.T) {
 	runs := fake.New(nil)
 	runs.Models = []provider.Model{{ID: "m-1", Name: "One", Description: "The first", Efforts: []provider.Effort{{ID: "low"}, {ID: "max"}}}}
 	cfg.Providers["claude"] = runs
+	cfg.Providers["gemini"] = undescribed{fake.New(nil)}
 	d, err := Start(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +41,10 @@ func TestTheSocketSaysWhatModelsEachProviderRuns(t *testing.T) {
 	for _, p := range served {
 		names = append(names, p.Name)
 		switch {
+		case p.Name == "gemini":
+			if !strings.Contains(p.Error, "no answer") || len(p.Info.Models) != 0 {
+				t.Errorf("gemini, which can't say, says %+v, %q", p.Info, p.Error)
+			}
 		case p.Error != "":
 			t.Errorf("%s couldn't say: %s", p.Name, p.Error)
 		case p.Name == "claude" && (len(p.Info.Models) != 1 || p.Info.Models[0].ID != "m-1" || len(p.Info.Models[0].Efforts) != 2):
@@ -49,6 +56,13 @@ func TestTheSocketSaysWhatModelsEachProviderRuns(t *testing.T) {
 	if want := []string{"claude", "codex", "fake", "gemini", "grok"}; !slices.Equal(names, want) {
 		t.Errorf("the socket says the engine serves %q, want %q", names, want)
 	}
+}
+
+// undescribed is a provider that can't say what it runs.
+type undescribed struct{ provider.Adapter }
+
+func (undescribed) Describe(context.Context) (provider.Info, error) {
+	return provider.Info{}, errors.New("no answer")
 }
 
 // A real build's engine serves Claude Code and nothing else: no thread

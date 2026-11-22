@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 
 	"glitched/internal/provider"
 	"glitched/internal/provider/claude"
@@ -27,6 +28,13 @@ func (r reporting) Commands(ctx context.Context, workspace string) ([]provider.C
 	return nil, nil
 }
 
+// undescribed is an adapter whose provider can't say what it runs.
+type undescribed struct{ provider.Adapter }
+
+func (undescribed) Describe(context.Context) (provider.Info, error) {
+	return provider.Info{}, errors.New("no answer")
+}
+
 // todaysModels has each family's provider in m report the models the
 // picker listed before it asked engines, by the ids Glitched knows them
 // by: the fixture on which the picker looks as it did. A provider that
@@ -35,17 +43,23 @@ func todaysModels(m provider.Mux) {
 	for _, f := range families {
 		p := f.provider
 		switch m[p].(type) {
-		case nil, reporting, *claude.Adapter:
+		case nil, reporting, undescribed, *claude.Adapter:
 			continue
 		}
-		var models []provider.Model
-		for _, k := range knownModels {
-			if k.key.Provider == p {
-				models = append(models, provider.Model{ID: k.key.ID, Name: k.short})
-			}
-		}
-		m[p] = reporting{m[p], models}
+		m[p] = reporting{m[p], knownOf(p)}
 	}
+}
+
+// knownOf are the models the picker listed of provider p before it asked
+// engines.
+func knownOf(p string) []provider.Model {
+	var models []provider.Model
+	for _, k := range knownModels {
+		if k.key.Provider == p {
+			models = append(models, provider.Model{ID: k.key.ID, Name: k.short})
+		}
+	}
+	return models
 }
 
 // keyNamed is the key of the model Glitched knows by name.

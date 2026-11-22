@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,17 +32,21 @@ type choice struct {
 var ownChoice = choice{Model: modelKey{"claude", "claude-opus-5-5"}, Effort: "high", Access: accessAuto}
 
 // starting is the default the app starts with from file, composer.json's
-// contents: the app's own, with each of file's names the pickers offer. A
-// name they no longer offer, as a model since gone, keeps the app's own.
+// contents: the model file chose, though its engine no longer offers it
+// (goneModel), as the user chose it; with none, the app's own where its
+// engine offers it, else the first model the engines offer. The effort
+// is file's, or the app's own, as the model runs at it (effortFor).
 func (a *app) starting(file choice) choice {
 	ch := ownChoice
-	if m, offered := a.modelOf(file.Model); offered {
-		ch.Model = m.key
+	if file.Model.Provider != "" && file.Model.ID != "" {
+		ch.Model = file.Model
+	} else if _, offered := a.modelOf(ch.Model); !offered {
+		if ms := a.offeredModels(); len(ms) > 0 {
+			ch.Model = ms[0].key
+		}
 	}
 	m, _ := a.modelOf(ch.Model)
-	if e := effortID(file.Effort); slices.ContainsFunc(effortsOf(m), func(k effortInfo) bool { return k.id == e }) {
-		ch.Effort = e
-	}
+	ch.Effort = effortFor(m, cmp.Or(file.Effort, ownChoice.Effort))
 	ch.Fast = file.Fast
 	if _, ok := accessOf[file.Access]; ok {
 		ch.Access = file.Access
@@ -68,6 +73,7 @@ func (a *app) loadComposer() {
 		log.Printf("glitched: composer: %v", err)
 		file = choice{}
 	}
+	a.composerFile = file
 	a.show(a.starting(file))
 	a.savedChoice, a.triedChoice = a.choice(), a.choice()
 }
@@ -112,6 +118,7 @@ func (a *app) saveComposer() {
 		log.Printf("glitched: composer: %v", err)
 		return
 	}
+	a.composerFile = file
 	a.show(a.starting(file))
 	a.savedChoice, a.triedChoice = a.choice(), a.choice()
 }
@@ -133,7 +140,7 @@ func configured(t thread) (api.ModelRef, api.Access) {
 // A model or effort the pickers don't list shows by its own name.
 func (a *app) threadChoice(t thread) choice {
 	m, acc := configured(t)
-	ch := choice{Model: keyOfThread(m.Provider, m.Model), Effort: effortID(m.Effort), Fast: m.Fast, Access: accessAuto}
+	ch := choice{Model: keyOfThread(m.Provider, m.Model), Effort: m.Effort, Fast: m.Fast, Access: accessAuto}
 	for name, v := range accessOf {
 		if v == acc {
 			ch.Access = name
@@ -287,6 +294,13 @@ func (a *app) configureEffect(args json.RawMessage) (any, error) {
 			return nil, fmt.Errorf("%q is no model of the thread's provider, %s", *in.Model, now.Provider)
 		}
 		c.Model = in.Model
+	}
+	if in.Effort == nil && in.Model != nil {
+		// The new model takes the effort the thread runs at, where it
+		// runs at it, else the one the picker would show.
+		if e := effortFor(m, now.Effort); e != now.Effort {
+			c.Effort = &e
+		}
 	}
 	if in.Effort != nil {
 		var ids []string
