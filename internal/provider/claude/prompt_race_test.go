@@ -32,8 +32,8 @@ func TestAnswersRacingACancel(t *testing.T) {
 			r.Close()
 			sent <- b
 		}()
-		g := &Agent{stdin: w, turn: newTurn(ws), prompts: map[string]*prompt{}, lines: make(chan []byte, 2)}
-		g.lines <- []byte(`{"type":"control_request","request_id":"ask","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
+		g := &Agent{p: &proc{stdin: w, lines: make(chan []byte, 2)}, turn: newTurn(ws), prompts: map[string]*prompt{}}
+		g.p.lines <- []byte(`{"type":"control_request","request_id":"ask","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
 		if _, err := g.Next(ctx); err != nil {
 			t.Fatal(err)
 		}
@@ -48,8 +48,8 @@ func TestAnswersRacingACancel(t *testing.T) {
 		}
 		wg.Go(func() {
 			<-gate
-			g.lines <- []byte(`{"type":"control_cancel_request","request_id":"ask"}`)
-			g.lines <- []byte(`{"type":"result","subtype":"success"}`)
+			g.p.lines <- []byte(`{"type":"control_cancel_request","request_id":"ask"}`)
+			g.p.lines <- []byte(`{"type":"result","subtype":"success"}`)
 			if _, err := g.Next(ctx); err != nil {
 				t.Error(err)
 			}
@@ -91,8 +91,8 @@ func TestAnsweringAPromptWhileQuestionsAreRefusedDoesNotHang(t *testing.T) {
 			r.Close()
 			sent <- b
 		}()
-		g := &Agent{stdin: w, turn: newTurn(ws), prompts: map[string]*prompt{}, lines: make(chan []byte, 1)}
-		g.lines <- []byte(`{"type":"control_request","request_id":"ask","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
+		g := &Agent{p: &proc{stdin: w, lines: make(chan []byte, 1)}, turn: newTurn(ws), prompts: map[string]*prompt{}}
+		g.p.lines <- []byte(`{"type":"control_request","request_id":"ask","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
 		if _, err := g.Next(ctx); err != nil {
 			t.Fatal(err)
 		}

@@ -89,13 +89,14 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 	if err != nil {
 		return TaskView{}, err
 	}
-	// The child inherits from the turn that asks, at the model and access
-	// it was admitted at: the thread's are its next turn's, and they narrow
-	// the child only where the thread was narrowed since.
-	model, access := parent.Model, parent.Access
-	if turn := parent.Turn; turn != nil && turn.Run == t.Origin.Run {
-		model, access = turn.Model, min(turn.Access, parent.Access)
+	// The thread's live turn asks. The child inherits from it, at the model
+	// and access it was admitted at: the thread's are its next turn's, and
+	// they narrow the child only where the thread was narrowed since.
+	turn := parent.Turn
+	if turn == nil {
+		return TaskView{}, errors.New("delegate_task: this thread has no turn running, so nothing can delegate for it")
 	}
+	model, access := turn.Model, min(turn.Access, parent.Access)
 	key := cmp.Or(in.RequestID, toolUse, api.NewID().String())
 	child := derive(t.Origin.Thread, "thread", key)
 	title := cmp.Or(in.Title, firstLine(in.Task))
@@ -113,7 +114,7 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 			},
 			Access: access,
 			Parent: t.Origin.Thread,
-			Run:    t.Origin.Run,
+			Run:    turn.Run,
 			Text:   in.Task,
 		},
 	})

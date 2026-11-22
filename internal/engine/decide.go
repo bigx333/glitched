@@ -507,12 +507,16 @@ func (d *decision) inbox(b api.InboxSet) error {
 // delete tombstones the thread. A live run ends with it, abandoned, in the
 // same commit, with an effect that closes its agent, which a crash or a
 // shutdown leaves for the next host: whatever a client last saw of the
-// thread, nothing of it is left running.
+// thread, nothing of it is left running. An idle thread's last run gets the
+// close too, for an agent its provider kept for the next run.
 func (d *decision) delete() error {
 	if r := d.t.Live(); r != nil {
 		if err := d.emit(api.TurnEnded{Run: r.ID, Outcome: api.OutcomeAbandoned}); err != nil {
 			return err
 		}
+		d.effects = append(d.effects, CloseAgent{Run: r.ID, Generation: r.Generation})
+	} else if n := len(d.t.Runs); n > 0 {
+		r := d.t.Runs[n-1]
 		d.effects = append(d.effects, CloseAgent{Run: r.ID, Generation: r.Generation})
 	}
 	return d.emit(api.ThreadDeleted{})

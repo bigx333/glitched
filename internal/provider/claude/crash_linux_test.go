@@ -80,10 +80,10 @@ func queue(t *testing.T, path, ws, text string) (thread, run api.ID) {
 	return thread, run
 }
 
-// marked is the processes that carry run as theirs: its claude, and all
-// that claude started.
-func marked(run api.ID) []int {
-	want := []byte("GLITCHED_CLAUDE_RUN=" + run.String())
+// marked is the processes that carry thread as theirs: each claude of the
+// thread, and all that claude started.
+func marked(thread api.ID) []int {
+	want := []byte("GLITCHED_CLAUDE_PROCESS=" + thread.String() + "-")
 	var pids []int
 	dirs, _ := os.ReadDir("/proc")
 	for _, d := range dirs {
@@ -92,17 +92,17 @@ func marked(run api.ID) []int {
 			continue
 		}
 		env, _ := os.ReadFile(filepath.Join("/proc", d.Name(), "environ"))
-		if slices.ContainsFunc(bytes.Split(env, []byte{0}), func(kv []byte) bool { return bytes.Equal(kv, want) }) {
+		if slices.ContainsFunc(bytes.Split(env, []byte{0}), func(kv []byte) bool { return bytes.HasPrefix(kv, want) }) {
 			pids = append(pids, pid)
 		}
 	}
 	return pids
 }
 
-// noneLeft waits up to d for run's processes to be gone.
-func noneLeft(run api.ID, d time.Duration) bool {
+// noneLeft waits up to d for thread's processes to be gone.
+func noneLeft(thread api.ID, d time.Duration) bool {
 	for deadline := time.Now().Add(d); ; time.Sleep(20 * time.Millisecond) {
-		if len(marked(run)) == 0 {
+		if len(marked(thread)) == 0 {
 			return true
 		}
 		if time.Now().After(deadline) {
@@ -135,11 +135,11 @@ func killedEngine(t *testing.T, path string, ready func() bool) {
 // thread's next turn resumes its Claude session.
 func TestAKilledEngineLeavesNoProcessAndTheNextTurnResumes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "host.db")
-	thread, run := queue(t, path, t.TempDir(), "Run sleep 60.")
+	thread, _ := queue(t, path, t.TempDir(), "Run sleep 60.")
 	argv := replay(t, "busy-tool", "")
 	pid := processes(t)
 	killedEngine(t, path, func() bool { return pid("tool") > 0 })
-	if !exits(pid("claude"), 6*time.Second) || !exits(pid("tool"), 6*time.Second) || !noneLeft(run, 0) {
+	if !exits(pid("claude"), 6*time.Second) || !exits(pid("tool"), 6*time.Second) || !noneLeft(thread, 0) {
 		t.Fatal("claude or its tool shell outlived the engine that started them")
 	}
 
@@ -160,8 +160,8 @@ func TestAKilledEngineLeavesNoProcessAndTheNextTurnResumes(t *testing.T) {
 		json.Unmarshal([]byte(l), &args)
 		sessions = append(sessions, [2]string{args[len(args)-2], args[len(args)-1]})
 	}
-	if len(sessions) != 3 || sessions[0][0] != "--session-id" || sessions[2] != [2]string{"--resume", sessions[0][1]} {
-		t.Errorf("claude ran with sessions %v, want the crashed run's session resumed", sessions)
+	if len(sessions) != 2 || sessions[0][0] != "--session-id" || sessions[1] != [2]string{"--resume", sessions[0][1]} {
+		t.Errorf("claude ran with sessions %v, want the crashed run's session resumed, with no start refused first", sessions)
 	}
 }
 
@@ -185,6 +185,48 @@ func TestReconcileStopsAToolShellItsClaudeLeftBehind(t *testing.T) {
 	st.Close()
 	syscall.Kill(pid("claude"), syscall.SIGKILL)
 	if !exits(pid("claude"), 3*time.Second) || exits(tool, 200*time.Millisecond) {
+		t.Fatal("want claude gone and its tool shell still running")
+	}
+
+	h = hostAt(t, path, nil)
+	if got := runOf(t, h, thread, uncertain); got != api.RunUncertain {
+		t.Errorf("the run is %v after the restart, want uncertain", got)
+	}
+	if !exits(tool, 0) {
+		t.Error("the tool shell still runs after the next engine reconciled its run")
+	}
+}
+
+// A claude kept from a thread's earlier run carries that run's launch, not
+// the run it dies in. The next engine still finds the tool shell it left.
+func TestReconcileStopsAToolShellAKeptClaudeLeftBehind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "host.db")
+	_, started := keep(t, []string{"hi", "orphan-tool"}, nil)
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ad := &claude.Adapter{Path: must(os.Executable())}
+	h, err := runtime.New(ctx, st, provider.Mux{"claude": ad})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread := newThread(t, h, api.AccessFull)
+	turn(t, h, thread, firstAsk)
+	submit(t, h, thread, api.MessageDispatch{Text: "Run sleep 60.", Mode: api.StartNow})
+	tool := waitFor(t, func(role string) int {
+		if p := started(role); len(p) > 0 {
+			return p[0]
+		}
+		return 0
+	}, "tool")
+	h.Close()
+	st.Close()
+	if n := len(started("claude")); n != 1 {
+		t.Fatalf("%d claudes ran, want the first turn's kept for the second", n)
+	}
+	syscall.Kill(started("claude")[0], syscall.SIGKILL)
+	if !exits(started("claude")[0], 3*time.Second) || exits(tool, 200*time.Millisecond) {
 		t.Fatal("want claude gone and its tool shell still running")
 	}
 

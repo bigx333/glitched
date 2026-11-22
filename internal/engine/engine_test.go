@@ -564,6 +564,20 @@ func TestDeletingALiveThreadEndsItsRun(t *testing.T) {
 	}
 }
 
+// Deleting an idle thread closes the agent of its last run, which its
+// provider may keep for the next one; a thread that never ran has none.
+func TestDeletingAnIdleThreadClosesItsLastRunsAgent(t *testing.T) {
+	f, run := running(t)
+	f.observe(engine.Ended{Run: run, Outcome: api.OutcomeCompleted})
+	want := []engine.Effect{engine.CloseAgent{Run: run, Generation: 1}}
+	if _, effects, err := f.submit(api.ThreadDelete{}); err != nil || !reflect.DeepEqual(effects, want) {
+		t.Errorf("delete of an idle thread: %v with effects %v, want %v", err, effects, want)
+	}
+	if _, effects, err := newThread(t).submit(api.ThreadDelete{}); err != nil || len(effects) != 0 {
+		t.Errorf("delete of a thread that never ran: %v with effects %v, want none", err, effects)
+	}
+}
+
 // A message sent to a settled thread, in any mode and from any client, is
 // new work: in the same commit the thread comes back to the inbox and the
 // message starts, or waits held if it was deferred.

@@ -18,9 +18,9 @@ import (
 func sysProcAttr() *syscall.SysProcAttr { return nil }
 
 // contain has cmd start claude suspended, so confine can put it in a job
-// before it starts anything. Once cmd's context ends, the run's jobs end
-// with claude: with no SIGTERM, claude cannot stop its tools itself.
-func contain(cmd *exec.Cmd, run string) {
+// before it starts anything. Once cmd's context ends, m's jobs end with
+// claude: with no SIGTERM, claude cannot stop its tools itself.
+func contain(cmd *exec.Cmd, m mark) {
 	if cmd.Err != nil {
 		return
 	}
@@ -29,52 +29,56 @@ func contain(cmd *exec.Cmd, run string) {
 	}
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
 	cmd.Cancel = func() error {
-		end(run)
+		end(m)
 		return terminate(cmd.Process)
 	}
 }
 
-// end kills every process in run's jobs, and waits for none.
-func end(run string) {
+// end kills every process in m's jobs, and waits for none.
+func end(m mark) {
 	jobs.Lock()
 	defer jobs.Unlock()
-	for _, job := range jobs.of[run] {
-		windows.TerminateJobObject(job, 1)
+	for key, held := range jobs.of {
+		if m.covers(key) {
+			for _, job := range held {
+				windows.TerminateJobObject(job, 1)
+			}
+		}
 	}
 }
 
-// jobs is each run's job objects, one for each claude it started. A job
-// holds claude and every process it starts, and Windows kills them all
-// when its last handle closes: when the engine exits, too. So a run's
-// jobs end with the engine that made them.
+// jobs is each launch's job object, by its mark. A job holds claude and
+// every process it starts, and Windows kills them all when its last handle
+// closes: when the engine exits, too. So the jobs end with the engine that
+// made them.
 var jobs = struct {
 	sync.Mutex
-	of       map[string][]windows.Handle
-	stopping map[string]*halt // a stop of the run under way
-}{of: map[string][]windows.Handle{}, stopping: map[string]*halt{}}
+	of       map[mark][]windows.Handle
+	stopping map[mark]*halt // stops under way, by the mark they stop
+}{of: map[mark][]windows.Handle{}, stopping: map[mark]*halt{}}
 
-// halt is one stop of a run, which a stop of it at the same time waits for
-// and reports.
+// halt is one stop of a mark's jobs, which a stop of any of them at the
+// same time waits for.
 type halt struct {
 	done  chan struct{}
 	found bool
 	err   error
 }
 
-// confine puts claude, which contain had start suspended, in a job of
-// run's, then lets it run. Where Windows gives no job, claude runs
+// confine puts claude, which contain had start suspended, in m's job,
+// then lets it run. Where Windows gives no job, claude runs
 // without one, and Stop and Delete reach claude alone. An engine that dies
 // between the start and the resume leaves claude suspended, in no job:
 // Go cannot start a process in a job, as PROC_THREAD_ATTRIBUTE_JOB_LIST
 // would.
-func confine(cmd *exec.Cmd, run string) error {
+func confine(cmd *exec.Cmd, m mark) error {
 	if cmd.SysProcAttr == nil || cmd.SysProcAttr.CreationFlags&windows.CREATE_SUSPENDED == 0 {
 		return nil
 	}
 	pid := uint32(cmd.Process.Pid)
 	job, err := jobFor(pid)
 	if err != nil {
-		slog.Warn("claude: no job object for a run, so Stop and Delete leave the processes claude started running", "err", err)
+		slog.Warn("claude: no job object for claude, so Stop and Delete leave the processes it started running", "err", err)
 	}
 	if err := resume(pid); err != nil {
 		if job != 0 {
@@ -85,7 +89,7 @@ func confine(cmd *exec.Cmd, run string) error {
 	}
 	if job != 0 {
 		jobs.Lock()
-		jobs.of[run] = append(jobs.of[run], job)
+		jobs.of[m] = append(jobs.of[m], job)
 		jobs.Unlock()
 	}
 	return nil
@@ -152,74 +156,107 @@ func resume(pid uint32) error {
 	return nil
 }
 
-// stopRun kills every process in run's jobs, claude and all it started,
+// stopRun kills every process in m's jobs, claude and all it started,
 // and waits up to killGrace, or until ctx ends, for them to exit. Windows
 // has no SIGTERM to let claude stop its tools itself. It reports whether
 // any process was found, and fails while one is left.
-func stopRun(ctx context.Context, run string) (bool, error) {
-	// The jobs leave the map while they are stopped, so a stop of the run
-	// at the same time finds none to close again, and waits for this one.
+func stopRun(ctx context.Context, m mark) (bool, error) {
+	// The jobs leave the map while they are stopped, so a stop of any of
+	// them at the same time finds none to close again: it waits for this
+	// one, then takes what is left.
+	waited := false
 	jobs.Lock()
-	if s := jobs.stopping[run]; s != nil {
+	for {
+		var s *halt
+		for key, h := range jobs.stopping {
+			if m.covers(key) || key.covers(m) {
+				s = h
+				break
+			}
+		}
+		if s == nil {
+			break
+		}
 		jobs.Unlock()
 		select {
 		case <-s.done:
-			return s.found, s.err
 		case <-ctx.Done():
 			return true, ctx.Err()
 		}
+		if s.err != nil {
+			return true, s.err
+		}
+		waited = waited || s.found
+		jobs.Lock()
 	}
-	held := jobs.of[run]
-	delete(jobs.of, run)
+	held := map[mark][]windows.Handle{}
+	for key, js := range jobs.of {
+		if m.covers(key) {
+			held[key] = js
+			delete(jobs.of, key)
+		}
+	}
 	if len(held) == 0 {
 		jobs.Unlock()
-		return false, nil
+		return waited, nil
 	}
 	s := &halt{done: make(chan struct{})}
-	jobs.stopping[run] = s
+	jobs.stopping[m] = s
 	jobs.Unlock()
-	s.found, s.err = stopJobs(ctx, run, held)
+	s.found, s.err = stopJobs(ctx, held)
 	jobs.Lock()
-	delete(jobs.stopping, run)
+	delete(jobs.stopping, m)
 	jobs.Unlock()
 	close(s.done)
-	return s.found, s.err
+	return waited || s.found, s.err
 }
 
-// stopJobs kills every process in held, run's jobs, and closes them once
-// they are empty. Jobs left with processes go back for a later stop.
-func stopJobs(ctx context.Context, run string, held []windows.Handle) (bool, error) {
-	found := running(held) > 0
-	members := processes(held)
+// stopJobs kills every process in held, jobs by their marks, and closes
+// them once they are empty. Jobs left with processes go back for a later
+// stop.
+func stopJobs(ctx context.Context, held map[mark][]windows.Handle) (bool, error) {
+	var all []windows.Handle
+	for _, js := range held {
+		all = append(all, js...)
+	}
+	found := running(all) > 0
+	members := processes(all)
 	defer func() {
 		for _, p := range members {
 			windows.CloseHandle(p)
 		}
 	}()
 	var errs []error
-	for _, job := range held {
+	for _, job := range all {
 		if err := windows.TerminateJobObject(job, 1); err != nil {
 			errs = append(errs, os.NewSyscallError("TerminateJobObject", err))
 		}
 	}
 	for deadline := time.Now().Add(killGrace); ; time.Sleep(time.Millisecond) {
-		left := running(held) + exiting(members)
+		left := running(all) + exiting(members)
 		if left == 0 {
 			break
 		}
 		if ctx.Err() != nil || time.Now().After(deadline) {
 			// A later stop tries again.
 			jobs.Lock()
-			jobs.of[run] = append(jobs.of[run], held...)
+			for key, js := range held {
+				jobs.of[key] = append(jobs.of[key], js...)
+			}
 			jobs.Unlock()
-			return found, errors.Join(append(errs, fmt.Errorf("claude: %d processes of the run still run", left))...)
+			return found, errors.Join(append(errs, fmt.Errorf("claude: %d of claude's processes still run", left))...)
 		}
 	}
-	for _, job := range held {
+	for _, job := range all {
 		windows.CloseHandle(job)
 	}
 	return found, errors.Join(errs...)
 }
+
+// stopTools has nothing to do: a job holds claude and all it starts, and
+// Windows has no process groups to tell the tool shells of a turn from the
+// MCP servers claude keeps, so a parked claude's tools end with its job.
+func stopTools(context.Context, mark, int) error { return nil }
 
 // accounting is JOBOBJECT_BASIC_ACCOUNTING_INFORMATION.
 type accounting struct {
@@ -243,7 +280,7 @@ func running(held []windows.Handle) int {
 	return n
 }
 
-// processes is a handle to each process in held, the run's jobs. A job
+// processes is a handle to each process in held's jobs. A job
 // counts a process as gone a while before it is: while it still holds its
 // files and working directory, and has not signalled its handle.
 func processes(held []windows.Handle) []windows.Handle {

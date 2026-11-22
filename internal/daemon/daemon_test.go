@@ -423,7 +423,8 @@ func (s *specs) Open(ctx context.Context, spec provider.SessionSpec) (provider.A
 }
 
 // Each run gets glitched mcp from the binary the engine runs in, the CLI's
-// or the GUI's, for its thread and run, dialing the engine's own socket.
+// or the GUI's, for its thread, dialing the engine's own socket. It names
+// no run: an agent kept between runs serves the thread's next one too.
 func TestEachRunGetsGlitchedMCPOnTheEnginesSocket(t *testing.T) {
 	dir := stateDir(t)
 	ad := &specs{Adapter: fake.New(fake.Turn(false))}
@@ -435,11 +436,11 @@ func TestEachRunGetsGlitchedMCPOnTheEnginesSocket(t *testing.T) {
 	ep := transport.NewEndpointClient(Socket(dir), api.ID{})
 	defer ep.Close()
 	ctx := context.Background()
-	thread, run := api.NewID(), api.NewID()
+	thread := api.NewID()
 	if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{Workspace: "/src/app", Title: "t", Model: api.ModelRef{Provider: "fake", Model: "fake"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ep.Submit(ctx, api.Command{ID: run, Target: thread, Body: api.MessageDispatch{Text: "hi", Mode: api.StartNow}}); err != nil {
+	if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: "hi", Mode: api.StartNow}}); err != nil {
 		t.Fatal(err)
 	}
 	var seen []provider.SessionSpec
@@ -452,7 +453,7 @@ func TestEachRunGetsGlitchedMCPOnTheEnginesSocket(t *testing.T) {
 		}
 	}
 	exe, _ := os.Executable()
-	want := map[string]string{"GLITCHED_THREAD": thread.String(), "GLITCHED_RUN": run.String(), "GLITCHED_ENGINE": Socket(dir).Address}
+	want := map[string]string{"GLITCHED_THREAD": thread.String(), "GLITCHED_ENGINE": Socket(dir).Address}
 	if len(seen[0].MCP) != 1 {
 		t.Fatalf("the run's MCP servers %+v, want glitched mcp alone", seen[0].MCP)
 	}

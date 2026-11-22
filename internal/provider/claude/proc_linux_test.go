@@ -38,41 +38,10 @@ func inPIDNamespace(t *testing.T) bool {
 	return false
 }
 
-// child is a started process. Only its own goroutine waits for it, and
-// closes exited once it is reaped.
-type child struct {
-	*exec.Cmd
-	exited chan struct{}
-}
-
-// sleeper starts a process that sleeps with env as its environment, and
-// waits until it has exec'd: until then, it has this process's environment.
-func sleeper(t *testing.T, env ...string) *child {
-	t.Helper()
-	c := exec.Command("/bin/sleep", "60")
-	c.Env = env
-	if err := c.Start(); err != nil {
-		t.Fatal(err)
-	}
-	p := &child{Cmd: c, exited: make(chan struct{})}
-	go func() { c.Wait(); close(p.exited) }()
-	t.Cleanup(func() {
-		select {
-		case <-p.exited:
-		default:
-			// By PID: a test may deny this thread pidfd signals, which Kill uses.
-			syscall.Kill(c.Process.Pid, syscall.SIGKILL)
-			<-p.exited
-		}
-	})
-	cmdline := "/proc/" + strconv.Itoa(c.Process.Pid) + "/cmdline"
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
-		if cmd, _ := os.ReadFile(cmdline); bytes.Equal(cmd, []byte("/bin/sleep\x0060\x00")) {
-			return p
-		}
-	}
-	t.Fatal("the process never exec'd")
-	return nil
+// execd is whether pid runs sleep 60.
+func execd(pid int) bool {
+	cmd, _ := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+	return bytes.Equal(cmd, []byte("/bin/sleep\x0060\x00"))
 }
 
 // needPIDPick skips the test where the kernel lets no PID namespace pick
@@ -92,7 +61,7 @@ func reuse(t *testing.T, old *child, env ...string) *child {
 	if err := os.WriteFile("/proc/sys/kernel/ns_last_pid", []byte(strconv.Itoa(old.Process.Pid-1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	other := sleeper(t, env...)
+	other := sleeper(t, nil, env...)
 	if other.Process.Pid != old.Process.Pid {
 		t.Fatalf("the new process got PID %d, want %d again", other.Process.Pid, old.Process.Pid)
 	}
@@ -129,15 +98,16 @@ func deny(t *testing.T, nr uintptr, errno syscall.Errno) {
 	}
 }
 
-// A process found with the run's marker can exit before it is signalled,
+// A process found with a launch's marker can exit before it is signalled,
 // and its PID go to another process. That one is not signalled.
 func TestAReusedPIDIsNotSignalled(t *testing.T) {
 	needPIDPick(t)
 	if !inPIDNamespace(t) {
 		return
 	}
-	old := sleeper(t, runEnv+"=run")
-	found := marked("run")
+	m := launchMark(api.NewID(), api.NewID())
+	old := sleeper(t, nil, procEnv+"="+string(m))
+	found := sweep{m: m}.marked()
 	if len(found) != 1 {
 		t.Fatalf("found %d marked processes, want the one", len(found))
 	}
@@ -156,9 +126,10 @@ func TestAProcessWithoutAPidfdIsNotSignalledByPID(t *testing.T) {
 	if !inPIDNamespace(t) {
 		return
 	}
-	old := sleeper(t, runEnv+"=run")
+	m := launchMark(api.NewID(), api.NewID())
+	old := sleeper(t, nil, procEnv+"="+string(m))
 	deny(t, unix.SYS_PIDFD_OPEN, unix.EPERM)
-	found := marked("run")
+	found := sweep{m: m}.marked()
 	other := reuse(t, old)
 	signal(found, syscall.SIGTERM)
 	if signalled(other) {
@@ -166,16 +137,16 @@ func TestAProcessWithoutAPidfdIsNotSignalledByPID(t *testing.T) {
 	}
 }
 
-// Reconcile fails while a process of the run is left, so it is retried.
-func TestReconcileFailsWhileAProcessOfTheRunIsLeft(t *testing.T) {
+// Reconcile fails while a process of the thread is left, so it is retried.
+func TestReconcileFailsWhileAProcessOfTheThreadIsLeft(t *testing.T) {
 	if !inPIDNamespace(t) {
 		return
 	}
-	run := api.NewID()
-	tool := sleeper(t, runEnv+"="+run.String())
+	thread := api.NewID()
+	tool := sleeper(t, nil, procEnv+"="+string(launchMark(thread, api.NewID())))
 	deny(t, unix.SYS_PIDFD_SEND_SIGNAL, unix.EPERM)
-	_, err := (&Adapter{}).Reconcile(context.Background(), provider.RuntimeIdentity{Run: run})
-	if left := carries(tool.Process.Pid, marker(run.String())); left && err == nil {
-		t.Error("Reconcile succeeded with a process of the run still running")
+	_, err := (&Adapter{}).Reconcile(context.Background(), provider.RuntimeIdentity{Thread: thread, Run: api.NewID()})
+	if left := carries(tool.Process.Pid, threadMark(thread)); left && err == nil {
+		t.Error("Reconcile succeeded with a process of the thread still running")
 	}
 }

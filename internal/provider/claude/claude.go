@@ -1,5 +1,5 @@
-// Package claude runs Claude Code turns: one `claude -p` process per run,
-// speaking stream-json on stdin and stdout.
+// Package claude runs Claude Code turns on one `claude -p` process per
+// thread, kept between its runs, speaking stream-json on stdin and stdout.
 //
 // Every claude glitched starts names glitched as its entrypoint, because
 // Anthropic meters the SDK entrypoints, sdk-cli and sdk-ts, harder against
@@ -11,17 +11,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/mcp"
 	"glitched/internal/provider"
+	"glitched/internal/provider/park"
 )
 
 // ErrNotInstalled is Open's error when no claude binary can be found.
@@ -33,11 +36,36 @@ type Adapter struct {
 	// Path is the claude binary. Empty looks on PATH, then in ~/.local/bin,
 	// where Claude Code's installer puts it.
 	Path string
+
+	once sync.Once
+	pool *park.Pool[*proc]
+}
+
+// keepIdle and keepMax are how long a thread's claude waits for its next
+// run, and how many wait at once. A parked claude holds about 400 MB, and
+// relaunching one costs about a second, so ten minutes keeps a thread the
+// user is working in warm, and four bounds what idle threads hold.
+var (
+	keepIdle = 10 * time.Minute
+	keepMax  = 4
+)
+
+func (a *Adapter) parked() *park.Pool[*proc] {
+	a.once.Do(func() { a.pool = park.New[*proc](keepIdle, keepMax) })
+	return a.pool
+}
+
+// Close stops every claude waiting for its thread's next run.
+func (a *Adapter) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return a.parked().Close(ctx)
 }
 
 var (
 	_ provider.Adapter   = (*Adapter)(nil)
 	_ provider.Commander = (*Adapter)(nil)
+	_ io.Closer          = (*Adapter)(nil)
 )
 
 // Describe asks a claude for the models the user's account can run, as
@@ -57,30 +85,50 @@ func (a *Adapter) Describe(ctx context.Context) (provider.Info, error) {
 	return provider.Info{Name: "claude", Version: r.Version, Models: r.models()}, nil
 }
 
-// Open starts the run's process on the thread's Claude session. The first
-// run of a thread creates the session; later ones find it in use and resume
-// it. Both answers come before any model call.
+// Open runs the run on the thread's claude: the one its last run left,
+// when that claude was started as this run would start one, or else a new
+// one. A thread's first run creates its Claude session, and a later one
+// resumes it; a session that turns out to exist, or not to, takes the
+// other flag. Both answers come before any model call.
 func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
 	bin, err := a.binary()
 	if err != nil {
 		return nil, err
 	}
+	args := a.argv(spec)
+	// What a claude is started with is fixed for its life: a run that
+	// would start it otherwise needs another one.
+	key := strings.Join(slices.Concat([]string{bin, spec.Workspace}, args), "\x00")
+	keep := func(p *proc) { a.parked().Park(spec.Thread, key, p) }
+	if p, ok := a.parked().Take(ctx, spec.Thread, key); ok {
+		return newAgent(spec, p, keep), nil
+	}
 	session := uuidOf(spec.Thread)
-	g, err := start(ctx, bin, spec, a.argv(spec, "--session-id", session))
-	if errors.Is(err, errSessionInUse) {
-		g, err = start(ctx, bin, spec, a.argv(spec, "--resume", session))
+	flags := []string{"--session-id", "--resume"}
+	if spec.Generation > 1 {
+		slices.Reverse(flags)
+	}
+	p, err := launch(ctx, bin, spec, slices.Concat(args, []string{flags[0], session}))
+	if errors.Is(err, errSessionInUse) || errors.Is(err, errNoSession) {
+		p, err = launch(ctx, bin, spec, slices.Concat(args, []string{flags[1], session}))
 	}
 	if err != nil {
 		return nil, err
 	}
-	return g, nil
+	return newAgent(spec, p, keep), nil
 }
 
 // Reconcile stops what is left of the run: nothing can reattach to a
 // claude whose pipes died with the engine that started it. The run is
-// Lost, and the thread's next turn resumes its Claude session.
+// Lost, and the thread's next turn resumes its Claude session. The claude
+// that ran it may have served the thread's earlier runs too, so every
+// claude of the thread is stopped: the host reconciles a run only while
+// no other run of its thread is live here.
 func (a *Adapter) Reconcile(ctx context.Context, id provider.RuntimeIdentity) (provider.Recovery, error) {
-	found, err := stopRun(ctx, id.Run.String())
+	if err := a.parked().Drop(ctx, id.Thread); err != nil {
+		return nil, err
+	}
+	found, err := stopRun(ctx, threadMark(id.Thread))
 	switch {
 	case err != nil:
 		return nil, err
@@ -119,12 +167,6 @@ func Command(ctx context.Context, bin string, args ...string) *exec.Cmd {
 // killed.
 const killGrace = 2 * time.Second
 
-// runEnv names, in the environment of a run's claude, the run. Every process
-// claude starts inherits it, so the engine can find them all, tool shells
-// in sessions of their own included, after the engine that started them is
-// gone.
-const runEnv = "GLITCHED_CLAUDE_RUN"
-
 func (a *Adapter) binary() (string, error) {
 	if a.Path != "" {
 		if isExecutable(a.Path) {
@@ -162,7 +204,7 @@ var exeSuffix = map[bool]string{true: ".exe"}[runtime.GOOS == "windows"]
 // without --strict-mcp-config merges with. One --mcp-config takes them
 // all, a value each in the run's order, as it takes every value up to the
 // next flag, which always follows. Only trusted servers' tools never ask.
-func (ad *Adapter) argv(spec provider.SessionSpec, sessionFlag, session string) []string {
+func (ad *Adapter) argv(spec provider.SessionSpec) []string {
 	a := []string{"-p", "--verbose",
 		"--input-format", "stream-json", "--output-format", "stream-json",
 		"--include-partial-messages",
@@ -193,7 +235,7 @@ func (ad *Adapter) argv(spec provider.SessionSpec, sessionFlag, session string) 
 	if e := spec.Model.Effort; e != "" {
 		a = append(a, "--effort", e)
 	}
-	return append(a, sessionFlag, session)
+	return a
 }
 
 // mcpConfig is s as Claude Code reads an --mcp-config, with no env where

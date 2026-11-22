@@ -64,10 +64,10 @@ func userScopes(t *testing.T) {
 // writes to $PIDFILE the PID of a process that sleeps without it.
 var escapes = map[string]func(pidfile string) []string{
 	"unset": func(f string) []string {
-		return []string{"env", "-u", "GLITCHED_CLAUDE_RUN", "sh", "-c", "echo $$ > '" + f + "'; exec sleep 60"}
+		return []string{"env", "-u", "GLITCHED_CLAUDE_PROCESS", "sh", "-c", "echo $$ > '" + f + "'; exec sleep 60"}
 	},
 	"changed": func(f string) []string {
-		return []string{"env", "GLITCHED_CLAUDE_RUN=another", "sh", "-c", "echo $$ > '" + f + "'; exec sleep 60"}
+		return []string{"env", "GLITCHED_CLAUDE_PROCESS=another", "sh", "-c", "echo $$ > '" + f + "'; exec sleep 60"}
 	},
 	"cleared, in a new session, forked twice": func(f string) []string {
 		return []string{"sh", "-c", "env -i setsid sh -c 'echo $$ > \"" + f + "\"; exec sleep 60' &"}
@@ -78,8 +78,9 @@ var escapes = map[string]func(pidfile string) []string{
 }
 
 // escaped starts a run whose tool leaves the marker behind as escape says,
-// and returns the agent, the run, its fake claude, and the escaped process.
-func escaped(t *testing.T, escape func(string) []string) (ag provider.Agent, run api.ID, claudePID, pid int) {
+// and returns the agent, the thread, its fake claude, and the escaped
+// process.
+func escaped(t *testing.T, escape func(string) []string) (ag provider.Agent, thread api.ID, claudePID, pid int) {
 	t.Helper()
 	ws := t.TempDir()
 	pidfile := filepath.Join(ws, "pid")
@@ -93,8 +94,8 @@ func escaped(t *testing.T, escape func(string) []string) (ag provider.Agent, run
 	}
 	t.Setenv(envFake, tape)
 	fake := processes(t)
-	run = api.NewID()
-	ag, err := (&claude.Adapter{Path: must(os.Executable())}).Open(ctx, provider.SessionSpec{Thread: api.NewID(), Run: run, Workspace: ws})
+	thread = api.NewID()
+	ag, err := (&claude.Adapter{Path: must(os.Executable())}).Open(ctx, provider.SessionSpec{Thread: thread, Run: api.NewID(), Workspace: ws})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +111,7 @@ func escaped(t *testing.T, escape func(string) []string) (ag provider.Agent, run
 		}
 	}
 	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
-	return ag, run, fake("claude"), pid
+	return ag, thread, fake("claude"), pid
 }
 
 // A tool's process that drops or changes the run's marker, or hides it, is
@@ -131,17 +132,17 @@ func TestCloseStopsAProcessThatLeftTheMarkerBehind(t *testing.T) {
 }
 
 // The same process outlives a claude that died with its engine. The next
-// engine's Reconcile stops it, knowing nothing but the run.
+// engine's Reconcile stops it, knowing nothing but the thread.
 func TestReconcileStopsAProcessThatLeftTheMarkerBehind(t *testing.T) {
 	userScopes(t)
 	for name, escape := range escapes {
 		t.Run(name, func(t *testing.T) {
-			_, run, claudePID, pid := escaped(t, escape)
+			_, thread, claudePID, pid := escaped(t, escape)
 			syscall.Kill(claudePID, syscall.SIGKILL)
 			if !exits(claudePID, 3*time.Second) || exits(pid, 0) {
 				t.Fatal("want claude gone and the tool's process still running")
 			}
-			if _, err := (&claude.Adapter{}).Reconcile(ctx, provider.RuntimeIdentity{Run: run}); err != nil {
+			if _, err := (&claude.Adapter{}).Reconcile(ctx, provider.RuntimeIdentity{Thread: thread}); err != nil {
 				t.Errorf("Reconcile: %v", err)
 			}
 			if !stopped(pid) {
@@ -179,8 +180,8 @@ func unscoped(t *testing.T) {
 	ws := t.TempDir()
 	replay(t, "orphan-tool", "")
 	fake := processes(t)
-	run := api.NewID()
-	ag, err := (&claude.Adapter{Path: must(os.Executable())}).Open(ctx, provider.SessionSpec{Thread: api.NewID(), Run: run, Workspace: ws})
+	thread := api.NewID()
+	ag, err := (&claude.Adapter{Path: must(os.Executable())}).Open(ctx, provider.SessionSpec{Thread: thread, Run: api.NewID(), Workspace: ws})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,14 +191,14 @@ func unscoped(t *testing.T) {
 	}
 	tool := waitFor(t, fake, "tool")
 	cg, _ := os.ReadFile("/proc/" + strconv.Itoa(fake("claude")) + "/cgroup")
-	if strings.Contains(string(cg), "glitched-run-") {
+	if strings.Contains(string(cg), "glitched-claude-") {
 		t.Errorf("claude started in a scope: %s", cg)
 	}
 	syscall.Kill(fake("claude"), syscall.SIGKILL)
 	if !exits(fake("claude"), 3*time.Second) || exits(tool, 0) {
 		t.Fatal("want claude gone and its tool still running")
 	}
-	if _, err := (&claude.Adapter{}).Reconcile(ctx, provider.RuntimeIdentity{Run: run}); err != nil {
+	if _, err := (&claude.Adapter{}).Reconcile(ctx, provider.RuntimeIdentity{Thread: thread}); err != nil {
 		t.Errorf("Reconcile: %v", err)
 	}
 	if !stopped(tool) {

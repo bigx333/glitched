@@ -1,10 +1,15 @@
 package mcp_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -54,14 +59,13 @@ func workingAt(t *testing.T, h *runtime.Host, access api.Access) mcp.Origin {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	r, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: "split it", Mode: api.AfterActive}})
-	if err != nil {
+	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: "split it", Mode: api.AfterActive}}); err != nil {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(2 * time.Millisecond) {
 		snap, err := h.Read(ctx, api.Query{Thread: thread})
 		if err == nil && snap.Threads[0].Run == api.RunWaiting {
-			return mcp.Origin{Thread: thread, Run: r.Command}
+			return mcp.Origin{Thread: thread}
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("the run never waited: %+v %v", snap.Threads, err)
@@ -225,7 +229,7 @@ func TestACallCannotNameAnotherCaller(t *testing.T) {
 	other := working(t, h)
 	got := serve(t, h, o,
 		delegate(1, `{"task":"x","parent":"`+other.Thread.String()+`"}`, ""),
-		delegate(2, `{"task":"x","thread":"`+other.Thread.String()+`","run":"`+other.Run.String()+`"}`, ""),
+		delegate(2, `{"task":"x","thread":"`+other.Thread.String()+`","run":"`+api.NewID().String()+`"}`, ""),
 	)
 	for _, id := range []int{1, 2} {
 		r := got[id]
@@ -238,17 +242,87 @@ func TestACallCannotNameAnotherCaller(t *testing.T) {
 	}
 }
 
-// A run that is no longer live starts no child: the engine refuses, and
-// the agent reads why.
-func TestAStaleRunStartsNoChild(t *testing.T) {
+// A call while the thread has no turn running starts no child, and the
+// agent reads why.
+func TestAThreadWithNoTurnRunningStartsNoChild(t *testing.T) {
+	h := engine(t)
+	thread := api.NewID()
+	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{
+		Workspace: "/src/app", Title: "idle", Model: api.ModelRef{Provider: "fake", Model: "fake"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	got := serve(t, h, mcp.Origin{Thread: thread}, delegate(1, `{"task":"x"}`, ""))
+	if r := got[1]; !r.Result.IsError || !strings.Contains(r.Result.Content[0].Text, "no turn running") {
+		t.Errorf("a call with no turn running: %+v, want a refusal that says so", r)
+	}
+	if n := len(children(t, h, thread)); n != 0 {
+		t.Errorf("%d children, want none", n)
+	}
+}
+
+// An agent's process, and the glitched mcp it started, can outlive a run
+// and serve the thread's next one. Each call acts for the turn running when
+// it is made: its child records that run as its parent's, at that turn's
+// model, and a server that named its first run would see the engine refuse
+// the second turn's call as one from a run no longer live.
+func TestOneServerDelegatesForEachTurnOfItsThread(t *testing.T) {
 	h := engine(t)
 	o := working(t, h)
-	got := serve(t, h, mcp.Origin{Thread: o.Thread, Run: api.NewID()}, delegate(1, `{"task":"x"}`, ""))
-	if r := got[1]; !r.Result.IsError || !strings.Contains(r.Result.Content[0].Text, "live run") {
-		t.Errorf("a call from a run that isn't live: %+v, want the engine's refusal", r)
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	go func() {
+		mcp.Serve(ctx, inR, outW, &mcp.Tools{Engine: h, Origin: o})
+		outW.Close()
+	}()
+	t.Cleanup(func() { inW.Close() })
+	replies := bufio.NewReader(outR)
+	call := func(id int, task string) reply {
+		t.Helper()
+		fmt.Fprintln(inW, delegate(id, `{"task":"`+task+`"}`, ""))
+		line, err := replies.ReadBytes('\n')
+		var r reply
+		if err := errors.Join(err, json.Unmarshal(line, &r)); err != nil {
+			t.Fatal(err)
+		}
+		return r
 	}
-	if n := len(children(t, h, o.Thread)); n != 0 {
-		t.Errorf("%d children, want none", n)
+	read := func() api.Thread {
+		s, _ := h.Read(ctx, api.Query{Thread: o.Thread})
+		return s.Threads[0]
+	}
+	if r := call(1, "first"); r.Error != nil || r.Result.IsError {
+		t.Fatalf("turn 1: %+v", r)
+	}
+	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: o.Thread, Body: api.TurnInterrupt{}}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); read().Run != api.RunIdle; time.Sleep(2 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("turn 1 never stopped: %+v", read())
+		}
+	}
+	configure(t, h, o.Thread, api.ThreadConfigure{Effort: new("high")})
+	r2, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: o.Thread, Body: api.MessageDispatch{Text: "again", Mode: api.AfterActive}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); read().Run != api.RunWaiting; time.Sleep(2 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("turn 2 never waited: %+v", read())
+		}
+	}
+	if turn := read().Turn; turn == nil || turn.Run != r2.Command {
+		t.Fatalf("turn 2 is %+v, want run %s", turn, r2.Command)
+	}
+	configure(t, h, o.Thread, api.ThreadConfigure{Effort: new("low")})
+	if r := call(2, "second"); r.Error != nil || r.Result.IsError {
+		t.Fatalf("turn 2, on the server turn 1 started: %+v, want a child", r)
+	}
+	kids := children(t, h, o.Thread)
+	i := slices.IndexFunc(kids, func(k api.Thread) bool { return k.Title == "second" })
+	if i < 0 || kids[i].Model.Effort != "high" {
+		t.Errorf("children %+v, want turn 2's child at the effort turn 2 was admitted at", kids)
 	}
 }
 
@@ -272,7 +346,7 @@ func TestAReusedRequestIDFindsItsTaskOrSaysToPickANewOne(t *testing.T) {
 			t.Fatalf("turn 1 never stopped: %+v", read())
 		}
 	}
-	r2, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: o.Thread, Body: api.MessageDispatch{Text: "now the docs", Mode: api.AfterActive}})
+	_, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: o.Thread, Body: api.MessageDispatch{Text: "now the docs", Mode: api.AfterActive}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +355,7 @@ func TestAReusedRequestIDFindsItsTaskOrSaysToPickANewOne(t *testing.T) {
 			t.Fatalf("turn 2 never waited: %+v", read())
 		}
 	}
-	r := serve(t, h, mcp.Origin{Thread: o.Thread, Run: r2.Command}, delegate(1, `{"task":"Update the README","client_request_id":"task-1"}`, ""))[1]
+	r := serve(t, h, o, delegate(1, `{"task":"Update the README","client_request_id":"task-1"}`, ""))[1]
 	if !r.Result.IsError || len(r.Result.Content) == 0 || !strings.Contains(r.Result.Content[0].Text, "use a new client_request_id") {
 		t.Errorf("turn 2 reply %+v, want an error that says to use a new client_request_id", r)
 	}
@@ -289,7 +363,7 @@ func TestAReusedRequestIDFindsItsTaskOrSaysToPickANewOne(t *testing.T) {
 		t.Errorf("%d children, want 1", n)
 	}
 	// The same task, retried with its id in a later turn, finds its child.
-	r = serve(t, h, mcp.Origin{Thread: o.Thread, Run: r2.Command}, delegate(2, `{"task":"Write tests for parse","client_request_id":"task-1"}`, ""))[2]
+	r = serve(t, h, o, delegate(2, `{"task":"Write tests for parse","client_request_id":"task-1"}`, ""))[2]
 	kids := children(t, h, o.Thread)
 	if r.Result.IsError || len(kids) != 1 || len(r.Result.Content) == 0 || !strings.Contains(r.Result.Content[0].Text, kids[0].ID.String()) {
 		t.Errorf("turn 2 retry of the same task: %+v with %d children; want the first child back", r, len(kids))
