@@ -19,6 +19,11 @@ func wizardShot(t *testing.T, step string) *harness {
 			t.Fatal(err)
 		}
 	}
+	if step == "failed" {
+		// The clone goes into ~/Projects on build-box, whose engine is in
+		// this process: a home of the test's keeps it off the real one.
+		t.Setenv("HOME", t.TempDir())
+	}
 	h, box := wizardMachines(t, inboxDir(t))
 	h.local().Name = "studio"
 	h.thread("SIP re-INVITE handling")

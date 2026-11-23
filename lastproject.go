@@ -11,8 +11,9 @@ import (
 )
 
 // A new thread's draft starts where the last thread on its machine was
-// started: last-project.json holds that project's folder by the server's
-// label, "" for this machine, the scratch root for No project.
+// started: last-project.json holds that project's folder by machineKey,
+// the scratch root for No project. An entry by a server's label, as files
+// written before engine IDs hold them, is no server's.
 
 func (a *app) lastProjectPath() string { return filepath.Join(a.dir, "last-project.json") }
 
@@ -23,15 +24,19 @@ func (a *app) loadLastProject() {
 	}
 }
 
-// rememberProject keeps k as the project last started in on its machine.
-// One it couldn't save is still remembered here, for as long as the app
-// runs.
-func (a *app) rememberProject(k projectKey) {
+// rememberProject keeps the folder ws as the project last started in on
+// e's machine. One it couldn't save is still remembered here, for as long
+// as the app runs.
+func (a *app) rememberProject(e *client.Env, ws string) {
+	key, ok := machineKey(e)
+	if !ok {
+		return
+	}
 	m, err := jsonfile.EditOrReset(a.lastProjectPath(), func(m *map[string]string) error {
 		if *m == nil {
 			*m = map[string]string{}
 		}
-		(*m)[k.server] = k.workspace
+		(*m)[key] = ws
 		return nil
 	})
 	if err != nil {
@@ -39,7 +44,7 @@ func (a *app) rememberProject(k projectKey) {
 		if a.lastProject == nil {
 			a.lastProject = map[string]string{}
 		}
-		a.lastProject[k.server] = k.workspace
+		a.lastProject[key] = ws
 		return
 	}
 	a.lastProject = m
@@ -53,8 +58,9 @@ func (a *app) lastDraft(e *client.Env) (draft, bool) {
 	if e == nil {
 		return draft{}, false
 	}
-	ws, ok := a.lastProject[keyOf(e, "").server]
-	if !ok {
+	key, ok := machineKey(e)
+	ws, last := a.lastProject[key]
+	if !ok || !last {
 		return draft{}, false
 	}
 	local := e.Kind != client.Remote
@@ -71,21 +77,23 @@ func (a *app) lastDraft(e *client.Env) (draft, bool) {
 	return draft{e, ws}, true
 }
 
-// forgetLastProject drops k from where the last threads were started, so
-// that a project removed doesn't come back with the next new thread.
-func (a *app) forgetLastProject(k projectKey) {
-	if a.lastProject[k.server] != k.workspace {
+// forgetLastProject drops the folder ws on e's machine from where the
+// last threads were started, so that a project removed doesn't come back
+// with the next new thread.
+func (a *app) forgetLastProject(e *client.Env, ws string) {
+	key, ok := machineKey(e)
+	if !ok || a.lastProject[key] != ws {
 		return
 	}
 	m, err := jsonfile.EditOrReset(a.lastProjectPath(), func(m *map[string]string) error {
-		if (*m)[k.server] == k.workspace {
-			delete(*m, k.server)
+		if (*m)[key] == ws {
+			delete(*m, key)
 		}
 		return nil
 	})
 	if err != nil {
 		log.Printf("glitched: last project: %v", err)
-		delete(a.lastProject, k.server)
+		delete(a.lastProject, key)
 		return
 	}
 	a.lastProject = m

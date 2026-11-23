@@ -51,15 +51,16 @@ func (e endpoint) Info(ctx context.Context) (api.Environment, error) {
 
 var _ transport.Projects = endpoint{}
 
-// Folders lists a folder on this machine, never the engine's secrets.
+// Folders lists a folder on this machine, never the engine's state
+// folder, which holds its secrets.
 func (e endpoint) Folders(ctx context.Context, q api.FolderQuery) (api.FolderList, error) {
-	return projects.List(ctx, q.Path, []string{e.d.vault})
+	return projects.List(ctx, q.Path, []string{e.d.stateDir})
 }
 
 // Clone clones a repository onto this machine, never into the engine's
-// secrets, with the programs the user's terminal finds.
+// state folder, with the programs the user's terminal finds.
 func (e endpoint) Clone(ctx context.Context, req api.CloneRequest, progress func(string)) (api.Cloned, error) {
-	return projects.CloneInto(ctx, req, []string{e.d.vault}, guard.UserPath(), progress)
+	return projects.CloneInto(ctx, req, []string{e.d.stateDir}, guard.UserPath(), progress)
 }
 
 // Providers is every provider the engine serves, as its socket's

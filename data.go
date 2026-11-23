@@ -73,6 +73,20 @@ func keyOf(e *client.Env, workspace string) projectKey {
 	return projectKey{workspace: workspace}
 }
 
+// machineKey is what a file keeps e's machine by: "" for this machine, and
+// a server's engine ID, not its label, which may come to name another
+// engine. A server whose engine hasn't answered yet has none, nor does
+// a machine gone, nil.
+func machineKey(e *client.Env) (string, bool) {
+	if e == nil {
+		return "", false
+	}
+	if e.Kind != client.Remote {
+		return "", true
+	}
+	return e.ID.String(), !e.ID.IsZero()
+}
+
 // newProject is e's project at k, with no thread yet.
 func (a *app) newProject(e *client.Env, k projectKey) *project {
 	return &project{key: k, env: e, noProject: k == keyOf(nil, a.scratchRoot())}

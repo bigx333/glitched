@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 
 	"glitched/internal/api"
@@ -13,30 +15,52 @@ import (
 )
 
 // The engine lists folders to a paired client on the tailnet, to one on
-// its unix socket and to the GUI that embeds it, and to none of them the
-// folder that holds its secrets.
-func TestEveryWayInListsFoldersButNeverTheSecrets(t *testing.T) {
-	dir := stateDir(t)
+// its unix socket and to the GUI that embeds it, and to none of them its
+// state folder, which holds its secrets: the folder it's in lists without
+// it, and it isn't entered or cloned into by any name for it.
+func TestEveryWayInListsFoldersButNeverTheStateFolder(t *testing.T) {
+	home := stateDir(t)
+	dir := filepath.Join(home, "state")
+	for _, p := range []string{filepath.Join(secrets.Under(dir), "thread"), filepath.Join(dir, "worktrees"), filepath.Join(home, "kept")} {
+		if err := os.MkdirAll(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(dir, filepath.Join(home, "to-state")); err != nil {
+		t.Fatal(err)
+	}
 	token, err := Pair(dir, "laptop")
 	if err != nil {
 		t.Fatal(err)
 	}
 	d := start(t, Config{Dir: dir, Listen: []string{"127.0.0.1:0"}})
-	vault := secrets.Under(dir)
-	for _, p := range []string{filepath.Join(vault, "thread"), filepath.Join(dir, "kept")} {
-		if err := os.MkdirAll(p, 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
 	unix := transport.NewEndpointClient(Socket(dir), api.ID{})
 	t.Cleanup(func() { unix.Close() })
 	embedded, ok := d.Endpoint().(transport.Projects)
 	if !ok {
 		t.Fatalf("the embedded engine, a %T, serves no Projects", d.Endpoint())
 	}
+	refused := []string{
+		dir,
+		filepath.Join(dir, "worktrees"),
+		filepath.Join(secrets.Under(dir), "thread"),
+		home + "/kept/../state",
+		filepath.Join(home, "to-state"),
+		filepath.Join(home, "to-state", "worktrees"),
+	}
+	if upper := strings.ToUpper(dir); upper != dir {
+		if _, err := os.Stat(upper); err == nil {
+			refused = append(refused, upper)
+		}
+	}
+	if real, err := filepath.EvalSymlinks(dir); err == nil && runtime.GOOS == "darwin" {
+		if _, err := os.Stat(filepath.Join("/System/Volumes/Data", real)); err == nil {
+			refused = append(refused, filepath.Join("/System/Volumes/Data", real))
+		}
+	}
 	ctx := context.Background()
 	for name, p := range map[string]transport.Projects{"the tailnet": remote(t, d, token), "the unix socket": unix, "the embedded engine": embedded} {
-		list, err := p.Folders(ctx, api.FolderQuery{Path: dir})
+		list, err := p.Folders(ctx, api.FolderQuery{Path: home})
 		if err != nil {
 			t.Errorf("%s: %v", name, err)
 			continue
@@ -45,18 +69,21 @@ func TestEveryWayInListsFoldersButNeverTheSecrets(t *testing.T) {
 		for _, f := range list.Folders {
 			names = append(names, f.Name)
 		}
-		if !slices.Contains(names, "kept") || slices.Contains(names, "secrets") {
-			t.Errorf("%s lists %q in the state folder, want kept and not secrets", name, names)
+		if !slices.Equal(names, []string{"kept"}) {
+			t.Errorf("%s lists %q in the folder the state folder is in, want kept alone", name, names)
 		}
-		if list, err := p.Folders(ctx, api.FolderQuery{Path: filepath.Join(vault, "thread")}); err == nil {
-			t.Errorf("%s lists the secrets: %+v", name, list)
+		for _, path := range refused {
+			if list, err := p.Folders(ctx, api.FolderQuery{Path: path}); err == nil {
+				t.Errorf("%s lists %s: %+v", name, path, list)
+			}
 		}
-		dest := filepath.Join(vault, "lighthouse")
-		if _, err := p.Clone(ctx, api.CloneRequest{Source: "o/lighthouse", Dest: dest}, func(string) {}); err == nil {
-			t.Errorf("%s cloned into the secrets", name)
-		}
-		if _, err := os.Stat(dest); !os.IsNotExist(err) {
-			t.Errorf("%s made %s: %v", name, dest, err)
+		for _, dest := range []string{filepath.Join(dir, "lighthouse"), filepath.Join(home, "to-state", "lighthouse"), filepath.Join(secrets.Under(dir), "lighthouse")} {
+			if _, err := p.Clone(ctx, api.CloneRequest{Source: "o/lighthouse", Dest: dest}, func(string) {}); err == nil {
+				t.Errorf("%s cloned into %s", name, dest)
+			}
+			if _, err := os.Lstat(dest); !os.IsNotExist(err) {
+				t.Errorf("%s made %s: %v", name, dest, err)
+			}
 		}
 	}
 }
