@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Splits the root package's tests into CI shards, balanced by run time.
+#
+#   root-shard list <i> <n>      prints the tests of shard i (1 to n)
+#   root-shard run <i> <n> <p>   runs shard i of n in p processes at once
+#   root-shard check <n>         fails unless the n shards hold every test
+#                                go test -list finds exactly once
+#
+# Each test weighs its seconds in .github/root-test-seconds, measured on
+# GitHub's runners; a test the file lacks weighs the file's median. Tests go
+# heaviest first, ties by name, each to the lightest shard so far, so every
+# runner computes the same split. Refresh the file from a run with -v:
+#   grep -oE -- '--- (PASS|FAIL): [A-Za-z0-9_]+ \([0-9.]+s\)' log |
+#     awk '{gsub(/[()s]/, "", $4); print $3, $4}' | sort -u -k1,1
+set -euo pipefail
+
+seconds=$(dirname "$0")/root-test-seconds
+
+tests() {
+	go test -list . . | grep -E '^(Test|Example|Fuzz)'
+}
+
+# split <n> reads test names and prints "<part> <name>" for n parts.
+split() {
+	local median
+	median=$(awk '{ print $2 }' "$seconds" | sort -g | awk '{ a[NR] = $1 } END { print NR ? a[int((NR + 1) / 2)] : 1 }')
+	awk -v median="$median" '
+		NR == FNR { w[$1] = $2; next }
+		{ print ($1 in w ? w[$1] : median), $1 }' "$seconds" - |
+		sort -k1,1gr -k2,2 |
+		awk -v n="$1" '{
+			best = 1
+			for (b = 2; b <= n; b++) if (load[b] < load[best]) best = b
+			load[best] += $1
+			print best, $2
+		}'
+}
+
+part() {
+	awk -v i="$1" '$1 == i { print $2 }'
+}
+
+case "$1" in
+list)
+	tests | split "$3" | part "$2"
+	;;
+run)
+	bin=$RUNNER_TEMP/root.test
+	go test -c -o "$bin" .
+	shard=$("$bin" -test.list . | grep -E '^(Test|Example|Fuzz)' | split "$3" | part "$2")
+	[ -n "$shard" ] || { echo "shard $2 of $3 is empty"; exit 1; }
+	echo "Shard $2 of $3 runs $(grep -c . <<<"$shard") root tests in $4 processes."
+	pids=()
+	for p in $(seq 1 "$4"); do
+		run=$(split "$4" <<<"$shard" | part "$p" | paste -sd'|' -)
+		[ -n "$run" ] || continue
+		( set -o pipefail; "$bin" -test.count=1 -test.timeout 20m -test.run "^($run)\$" 2>&1 | sed -u "s/^/[$p] /" ) &
+		pids+=($!)
+	done
+	failed=0
+	for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
+	exit $failed
+	;;
+check)
+	n=$2
+	all=$(tests)
+	split=$(split "$n" <<<"$all")
+	for i in $(seq 1 "$n"); do
+		[ -n "$(part "$i" <<<"$split")" ] || { echo "shard $i of $n is empty"; exit 1; }
+	done
+	if ! diff <(sort <<<"$all") <(awk '{ print $2 }' <<<"$split" | sort); then
+		echo "the shards do not hold exactly the tests go test -list finds, once each"
+		exit 1
+	fi
+	awk -v n="$n" '{ c[$1]++ } END { for (i = 1; i <= n; i++) printf "shard %d: %d tests\n", i, c[i] }' <<<"$split"
+	echo "$n shards hold all $(grep -c . <<<"$all") root tests, each exactly once"
+	;;
+*)
+	echo "usage: root-shard list <i> <n> | run <i> <n> <p> | check <n>" >&2
+	exit 2
+	;;
+esac

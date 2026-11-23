@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+env:
+  ROOT_SHARDS: 8
+  ROOT_PROCS: 2
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -33,17 +37,20 @@ jobs:
       - run: go vet ./...
       - run: go tool mygo vet .
 
-  # The root package's UI tests take most of the run, so each of three
-  # runners takes every third of them; the first also tests the rest.
-  # 40 minutes: part 1 took about 23 on the self-hosted runners, and
-  # Install Pango may wait up to 11 if another apt run holds its locks.
+  # The root package's UI tests take most of the run, so they are split over
+  # ROOT_SHARDS runners, balanced by .github/root-test-seconds, and each runs
+  # its share in ROOT_PROCS processes at once on the runner's four cores.
+  # Measured on GitHub's runners, 8 shards of 2 brought every part to within
+  # a minute of the slowest single test's 100 s. The matrix must list 1 to
+  # ROOT_SHARDS; each part checks that it does, and test (others) checks that
+  # the shards hold every root test exactly once.
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        part: [1, 2, 3]
+        part: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
       CGO_ENABLED: "0"
     steps:
@@ -73,12 +80,43 @@ jobs:
           $apt install -y --no-install-recommends libpangocairo-1.0-0
       - name: Test part ${{ matrix.part }} of the root package
         run: |
-          set -o pipefail
-          tests=$(go test -list . . | grep -E '^(Test|Example|Fuzz)' | awk -v i=${{ strategy.job-index }} -v n=${{ strategy.job-total }} '(NR - 1) % n == i' | paste -sd'|')
-          test -n "$tests"
-          go test -count=1 -timeout 30m -run "^($tests)\$" .
-      - name: Test the other packages
-        if: ${{ !cancelled() && strategy.job-index == 0 }}
+          test ${{ strategy.job-total }} = "$ROOT_SHARDS"
+          ./.github/root-shard run ${{ matrix.part }} "$ROOT_SHARDS" "$ROOT_PROCS"
+
+  others:
+    name: test (others)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      # mygo lays out text with Pango, loaded at run time. Without it the
+      # root package's UI tests click on a fallback layout and fail. If the
+      # runner's image already has it, the step installs nothing. Should
+      # another apt run hold the locks as the job starts, install waits for
+      # dpkg's (DPkg::Lock::Timeout), and update, which that option doesn't
+      # cover, tries again until the same 10 minutes are up.
+      - name: Install Pango
+        timeout-minutes: 11
+        run: |
+          if dpkg-query -W -f='${Status}' libpangocairo-1.0-0 2>/dev/null | grep -qx 'install ok installed'; then
+            echo "Pango is already installed"
+            exit 0
+          fi
+          apt="sudo apt-get -q -o DPkg::Lock::Timeout=600"
+          until $apt update; do
+            if [ $SECONDS -ge 600 ]; then exit 1; fi
+            sleep 10
+          done
+          $apt install -y --no-install-recommends libpangocairo-1.0-0
+      - name: Check that the root's shards hold every test once
+        run: ./.github/root-shard check "$ROOT_SHARDS"
+      - name: Test the packages other than the root
         run: |
           set -eo pipefail
           packages=$(go list ./...)
@@ -96,7 +134,11 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          # A key of its own, since its packages build with -race and cgo,
+          # which the other jobs' cache lacks; go.mod makes it differ.
+          cache-dependency-path: |
+            go.mod
+            go.sum
       - run: go test -race -count=1 -timeout 10m ./internal/client ./internal/daemon ./internal/transport
       # A step of its own: the plugins' runtimes, run beside the client's
       # timed tests, would starve them of the runner's CPU.
