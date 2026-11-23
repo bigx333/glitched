@@ -164,7 +164,8 @@ func (a *Adapter) DefaultModel(ctx context.Context, workspace string) (string, e
 		return "", err
 	}
 	defer p.discard()
-	return p.configured(ctx, workspace).Model, nil
+	c, err := p.configured(ctx, workspace)
+	return c.Model, err
 }
 
 // Open runs the run on the thread's app-server: the one its last run

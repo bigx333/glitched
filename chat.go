@@ -1963,16 +1963,14 @@ func (a *app) cliDecides(t thread) bool { return a.followsCLI && t.id().IsZero()
 // newThreadRef is the model a new thread in the draft t starts on: the
 // pickers' (modelRef), but none where the default follows its provider's
 // program, which then runs its own where the thread runs, as its settings
-// there say; and no effort there but one the user chose. The picker's
+// there say; and no effort there but the one the user chose, as they
+// chose it, whatever model the picker expects. The picker's
 // name for that default is the one the engine expects, until the
 // program's report of what it ran replaces it.
 func (a *app) newThreadRef(t thread) api.ModelRef {
 	ref := a.modelRef()
 	if a.followsCLI && t.id().IsZero() {
-		ref.Model = ""
-		if a.composerFile.Effort == "" {
-			ref.Effort = ""
-		}
+		ref.Model, ref.Effort = "", a.composerFile.Effort
 	}
 	return ref
 }

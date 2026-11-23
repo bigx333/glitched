@@ -1573,3 +1573,16 @@ func TestAConfiguredEffortIsOneTheDefaultRunsAt(t *testing.T) {
 		}
 	}
 }
+
+// A config/read that fails is an error DefaultModel says, so the app asks
+// again; a Codex without config/read names no default there.
+func TestAFailedConfigReadIsDefaultModelsError(t *testing.T) {
+	a, _ := fake(t, "config-read-fails")
+	if got, err := a.DefaultModel(context.Background(), t.TempDir()); err == nil {
+		t.Errorf("DefaultModel = %q, nil; want config/read's error", got)
+	}
+	a, _ = fake(t, "no-config-read")
+	if got, err := a.DefaultModel(context.Background(), t.TempDir()); err != nil || got != "" {
+		t.Errorf("without config/read, DefaultModel = %q, %v; want none and no error", got, err)
+	}
+}

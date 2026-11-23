@@ -294,6 +294,9 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 			break
 		}
 		_, e := a.runningModel(*t, "")
+		if e.label == "" {
+			break
+		}
 		ui.Text(c, e.label).FontSize(11).FontWeight(600).TextColor(e.color)
 	case "model.zap":
 		if a.fast {

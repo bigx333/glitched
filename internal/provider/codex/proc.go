@@ -200,7 +200,7 @@ func (p *proc) signedIn(ctx context.Context) error {
 // where it names one; else the first model/list marks isDefault. A model
 // the config names that Codex doesn't list is listed by its id.
 func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
-	config := p.configured(ctx, "")
+	config, _ := p.configured(ctx, "")
 	var out, rest []provider.Model
 	cursor := ""
 	for range 50 {
@@ -277,8 +277,8 @@ type codexConfig struct {
 
 // configured is the config a Codex thread in cwd runs by, as config/read
 // says it: a trusted project's over the user's; the user's where cwd is
-// "". A Codex without config/read names none.
-func (p *proc) configured(ctx context.Context, cwd string) codexConfig {
+// "". A Codex without config/read names none; another error is config/read's.
+func (p *proc) configured(ctx context.Context, cwd string) (codexConfig, error) {
 	params := map[string]any{"includeLayers": false}
 	if cwd != "" {
 		params["cwd"] = cwd
@@ -286,8 +286,11 @@ func (p *proc) configured(ctx context.Context, cwd string) codexConfig {
 	var r struct {
 		Config codexConfig `json:"config"`
 	}
-	p.conn.call(ctx, "config/read", params, &r)
-	return r.Config
+	var refused *rpcError
+	if err := p.conn.call(ctx, "config/read", params, &r); err != nil && !(errors.As(err, &refused) && refused.Code == -32601) {
+		return codexConfig{}, p.failure("read its config", err)
+	}
+	return r.Config, nil
 }
 
 // startThread opens the Codex thread the Glitched thread's runs go to,

@@ -223,7 +223,11 @@ func (a *app) runningModel(t thread, name string) (string, effortInfo) {
 	if v.ModelStanding() == api.Short || asked.Model == "" {
 		name = cmp.Or(info.name, g.Model)
 	}
-	if v.EffortStanding() == api.Short || asked.Model == "" && asked.Effort == "" && g.Effort != "" {
+	if asked.Model == "" && asked.Effort == "" && g.Effort == "" {
+		// Its program didn't say the effort it ran at.
+		return name, effortInfo{}
+	}
+	if v.EffortStanding() == api.Short || asked.Model == "" && asked.Effort == "" {
 		effort = effortOf(provider.Effort{ID: g.Effort})
 		for _, e := range effortsOf(info) {
 			if e.id == g.Effort {

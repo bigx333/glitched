@@ -244,6 +244,9 @@ func (f *fake) take(m message, raw []byte) {
 		case "no-config-read":
 			f.refuse(m.ID, -32601, "unsupported method config/read")
 			return
+		case "config-read-fails":
+			f.refuse(m.ID, -32603, "config is being written")
+			return
 		case "configured":
 			config = map[string]any{"model": "gpt-6-luna", "model_reasoning_effort": "low"}
 		case "configured-unlisted":
