@@ -348,7 +348,11 @@ func TestStopCancelsTheTurn(t *testing.T) {
 	a, log := fake(t, "cancel")
 	g := open(t, a, spec(t))
 	do(t, g, provider.Start{Text: "Work."})
-	if d, ok := next(t, g).(provider.TextDelta); !ok || d.Text != "Working" {
+	e := next(t, g)
+	for len(reports([]provider.Event{e})) > 0 {
+		e = next(t, g)
+	}
+	if d, ok := e.(provider.TextDelta); !ok || d.Text != "Working" {
 		t.Fatal("no text before the stop")
 	}
 	do(t, g, provider.Interrupt{})

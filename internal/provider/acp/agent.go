@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -43,6 +45,8 @@ type Agent struct {
 	order       []acpsdk.ToolCallId
 	asks        map[string]*ask
 	asked       int
+	granted     *provider.Granted // the last sent
+	ran         *provider.Ran     // the last sent
 }
 
 var (
@@ -76,6 +80,87 @@ func newAgent(spec provider.SessionSpec, p *proc, keep func(*proc)) *Agent {
 	g.prompt, g.cancel = context.WithCancel(context.Background())
 	p.attach(g)
 	return g
+}
+
+// report sends what the session runs at, as the agent last said, where
+// that changed since the run last sent it, while its turn is on.
+func (g *Agent) report() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.started && !g.ended {
+		g.reportLocked()
+	}
+}
+
+// reportLocked sends what report does. What the agent never said is not
+// sent. g.mu is held.
+func (g *Agent) reportLocked() {
+	g.p.mu.Lock()
+	mode, refused, options := g.p.mode, g.p.refused, g.p.options
+	g.p.mu.Unlock()
+	if e, ok := g.grantedAt(mode, refused); ok && (g.granted == nil || *g.granted != e) {
+		g.granted = &e
+		g.queueLocked(e)
+	}
+	if e, ok := g.runs(options); ok && (g.ran == nil || *g.ran != e) {
+		g.ran = &e
+		g.queueLocked(e)
+	}
+}
+
+// grantedAt is the access the session's mode makes, by the profile's
+// grants read backwards. A level reached by arguments is confirmed by the
+// process that started with them, which is how its run got it: agy says
+// nothing more of them. A mode no grant names lets the agent do no more
+// than ask.
+func (g *Agent) grantedAt(mode, refused string) (provider.Granted, bool) {
+	grants, asked := g.p.profile.Access, g.spec.Access
+	if len(grants[asked].Args) > 0 {
+		return provider.Granted{Access: asked, Mode: mode}, true
+	}
+	if mode == "" {
+		return provider.Granted{}, false
+	}
+	out := provider.Granted{Access: api.AccessAsk, Mode: mode, Why: g.p.profile.Name + " runs in its " + mode + " mode"}
+	levels := slices.Sorted(maps.Keys(grants))
+	if i := slices.IndexFunc(levels, func(a api.Access) bool { return grants[a].Mode == mode }); i >= 0 {
+		out.Access = levels[i]
+	} else if i := slices.IndexFunc(levels, func(a api.Access) bool { return grants[a].Else == mode }); i >= 0 {
+		out.Access = levels[i]
+	} else {
+		return out, true
+	}
+	switch {
+	case mode == grants[asked].Mode || out.Access > asked:
+		out.Why = ""
+	case mode == grants[asked].Else && refused != "":
+		out.Why = refused
+	}
+	return out, true
+}
+
+// runs is the model and effort the session's options show, by the ids
+// the run's ModelRef names them by, which are the options' own.
+func (g *Agent) runs(options []acpsdk.SessionConfigOption) (provider.Ran, bool) {
+	m, ok := option(options, acpsdk.SessionConfigOptionCategoryModel)
+	if !ok || m.CurrentValue == "" {
+		return provider.Ran{}, false
+	}
+	out := provider.Ran{Model: string(m.CurrentValue)}
+	level, leveled := option(options, acpsdk.SessionConfigOptionCategoryThoughtLevel)
+	if leveled {
+		out.Effort = string(level.CurrentValue)
+	}
+	name, want := g.p.profile.Name, g.spec.Model
+	switch {
+	case want.Model != "" && out.Model != want.Model:
+		out.Why = name + " runs " + out.Model
+	case want.Effort != "" && !leveled:
+		out.Why = name + " offers no effort level for " + out.Model
+	case want.Effort != "" && out.Effort != want.Effort:
+		out.Why = name + " runs " + out.Model + " at " + out.Effort
+	}
+	return out, true
 }
 
 // notice tells the user, as a finished step of the turn's, what the agent
@@ -125,6 +210,7 @@ func (g *Agent) start(text string) error {
 		return errors.New("acp: the run already started")
 	}
 	g.started = true
+	g.reportLocked()
 	if !g.p.briefed {
 		g.p.briefed = true
 		for i := len(g.spec.MCP) - 1; i >= 0; i-- {

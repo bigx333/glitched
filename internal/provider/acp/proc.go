@@ -89,6 +89,7 @@ type proc struct {
 	mode     string                       // the session's mode, as the agent last said
 	moded    bool                         // the session has modes, as the agent said
 	offered  []string                     // the modes the session offers, as the agent said
+	refused  string                       // why the session runs the access's Else, as configure last found
 	run      *Agent                       // the run the agent serves, if any
 	prompt   chan struct{}                // closes once the run's prompt is written
 	parked   bool                         // it waits for its thread's next run
@@ -369,6 +370,9 @@ func (p *proc) configure(ctx context.Context, ref api.ModelRef, g provider.Grant
 	case g.Else != "" && !slices.Contains(offered, mode):
 		refused, mode = p.profile.Name+" doesn't offer its "+mode+" mode", g.Else
 	}
+	p.mu.Lock()
+	p.refused = refused
+	p.mu.Unlock()
 	if mode != "" && mode != current && moded {
 		if _, err := p.conn.SetSessionMode(ctx, acpsdk.SetSessionModeRequest{SessionId: p.session, ModeId: acpsdk.SessionModeId(mode)}); err != nil {
 			return "", p.failure("run at this access level, as its mode "+mode, err)
@@ -753,6 +757,8 @@ func (p *proc) SessionUpdate(ctx context.Context, n acpsdk.SessionNotification) 
 	run := p.current(!quiet, kindOf(u))
 	switch {
 	case run == nil:
+	case u.ConfigOptionUpdate != nil || u.CurrentModeUpdate != nil:
+		run.report()
 	case u.UsageUpdate != nil:
 		run.usage(*u.UsageUpdate)
 	case !quiet:
