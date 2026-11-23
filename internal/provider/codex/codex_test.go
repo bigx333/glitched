@@ -912,6 +912,9 @@ func TestAThreadResumesItsConversation(t *testing.T) {
 	if got := text(events); got != "earlier you said: Remember kumquat." {
 		t.Errorf("after a restart Codex said %q", got)
 	}
+	if end := ended(events); end.Tokens != 100 {
+		t.Errorf("the resumed turn used %d tokens, want its own 100", end.Tokens)
+	}
 	if len(works(events)) != 0 {
 		t.Errorf("steps %+v", works(events))
 	}
@@ -1131,5 +1134,32 @@ func TestUsageBetweenRunsChargesNoRun(t *testing.T) {
 	}
 	if n := len(sent(t, log, "initialize")); n != 1 {
 		t.Errorf("%d app-servers started, want the one", n)
+	}
+}
+
+// A request cut short has Codex send its reading again with what the cut
+// part spent: the turn spent the totals' growth, not the request twice.
+func TestACutShortRequestCountsWhatItSpent(t *testing.T) {
+	a, _ := fake(t, "cut-short")
+	g := open(t, a, spec(t))
+	do(t, g, provider.Start{Text: "hi"})
+	end := ended(turn(t, g))
+	closeRun(t, g)
+	if end.Tokens != 190 {
+		t.Errorf("the turn used %d tokens, want 190", end.Tokens)
+	}
+}
+
+// A request too big for the window has Codex fill it with a made-up last
+// reading: that is no model's spend, and the turn spent only its real
+// request.
+func TestAnOverflowSpendsOnlyWhatWasSent(t *testing.T) {
+	a, _ := fake(t, "overflow")
+	g := open(t, a, spec(t))
+	do(t, g, provider.Start{Text: "hi"})
+	end := ended(turn(t, g))
+	closeRun(t, g)
+	if end.Tokens != 100 {
+		t.Errorf("the turn used %d tokens, want 100", end.Tokens)
 	}
 }

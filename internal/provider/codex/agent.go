@@ -348,7 +348,8 @@ func (g *Agent) notify(m message) {
 		live := g.started && !g.ended && (n.TurnID == "" || n.TurnID == g.turn)
 		usage := m.Method == "thread/tokenUsage/updated"
 		u, prev := n.TokenUsage, tokenUsage{}
-		if p := g.p.usage.Load(); usage && p != nil {
+		p := g.p.usage.Load()
+		if usage && p != nil {
 			prev = *p
 		}
 		if usage {
@@ -361,9 +362,14 @@ func (g *Agent) notify(m message) {
 		// fill it, emptying every count but the totals.
 		fresh := u.Last.Input > 0 && (u.Last != prev.Last || u.Window != prev.Window) && u.Total.Total-prev.Total.Total == u.Last.Total
 		filled := u.Window > 0 && u.Total == tokens{Total: u.Window} && u.Last == tokens{Total: u.Last.Total}
-		// The turn spent what each of its requests did: a reading whose
-		// total moved is a new request's.
-		if live && usage && u.Total.Total != prev.Total.Total {
+		// The turn spent what the thread's total grew by since the last
+		// reading, or, with none to go by, what its request did. A filled
+		// window's last reading is made up, and no spend.
+		switch grew := u.Total.Total - prev.Total.Total; {
+		case !live || !usage || filled:
+		case p != nil && grew >= 0:
+			g.tokens += grew
+		default:
 			g.tokens += u.Last.Total
 		}
 		switch {

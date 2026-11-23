@@ -274,6 +274,7 @@ func (f *fake) take(m message, raw []byte) {
 		}
 		f.mu.Lock()
 		f.thread = p.ThreadID
+		f.spent = 500
 		f.mu.Unlock()
 		f.reply(m.ID, map[string]any{"thread": map[string]any{"id": p.ThreadID}, "model": "gpt-6.2-sol"})
 	case "thread/start":
@@ -523,6 +524,16 @@ func (f *fake) play(n int, turn, said string) {
 		full := map[string]any{"totalTokens": 258400, "inputTokens": 0, "cachedInputTokens": 0, "outputTokens": 0, "reasoningOutputTokens": 0}
 		delta := map[string]any{"totalTokens": 13400, "inputTokens": 0, "cachedInputTokens": 0, "outputTokens": 0, "reasoningOutputTokens": 0}
 		f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": full, "last": delta, "modelContextWindow": 258400}})
+	case "cut-short":
+		f.mu.Lock()
+		f.spent = 90
+		f.mu.Unlock()
+		count := func(n int) map[string]any {
+			return map[string]any{"totalTokens": n, "inputTokens": n * 2 / 3, "cachedInputTokens": 0, "outputTokens": n / 3, "reasoningOutputTokens": 0}
+		}
+		f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": count(60), "last": count(60), "modelContextWindow": 258400}})
+		f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": count(90), "last": count(60), "modelContextWindow": 258400}})
+		f.message("msg-"+turn, "cut short")
 	case "resent":
 		if n == 2 {
 			f.mu.Lock()
