@@ -3,8 +3,8 @@ package acp
 import (
 	"cmp"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -24,83 +24,41 @@ type form struct {
 }
 
 type field struct {
-	key, other string            // other is "" when the form takes no words
+	key, other string            // other takes the user's own words
 	values     map[string]string // an option's label to the value it sends
 	multi      bool
-}
-
-// offer is what a form field offers to pick from: JSON Schema's enum, or
-// a oneOf or anyOf of titled constants, on the field or on its items.
-type offer struct {
-	Enum  []string `json:"enum"`
-	OneOf []choice `json:"oneOf"`
-	AnyOf []choice `json:"anyOf"`
-}
-
-type choice struct{ Const, Title string }
-
-func (c offer) options() (labels []string, values map[string]string) {
-	values = map[string]string{}
-	add := func(label, value string) {
-		labels = append(labels, label)
-		values[label] = value
-	}
-	for _, v := range c.Enum {
-		add(v, v)
-	}
-	for _, o := range append(c.OneOf, c.AnyOf...) {
-		add(cmp.Or(o.Title, o.Const), o.Const)
-	}
-	return labels, values
 }
 
 // parseForm reads an elicitation form as questions: one for each field
 // that offers options, in the order of their names (q1, q2, ... q10), with
 // the field named for it with "_other" as its words. It refuses a form
-// Glitched's card can't show.
+// whose every answer on Glitched's card the form wouldn't take: one that
+// requires a field, limits what a field takes, offers no words for a
+// question, or has a field the card doesn't ask.
 func parseForm(f acpsdk.CreateElicitationForm) (*form, json.RawMessage, error) {
-	raw, err := json.Marshal(f.RequestedSchema)
-	if err != nil {
-		return nil, nil, err
+	props := f.RequestedSchema.Properties
+	if len(f.RequestedSchema.Required) > 0 {
+		return nil, nil, fmt.Errorf("acp: the form requires %v, which the card may leave empty", f.RequestedSchema.Required)
 	}
-	var schema struct {
-		Properties map[string]struct {
-			offer
-			Type        string `json:"type"`
-			Title       string `json:"title"`
-			Description string `json:"description"`
-			Items       offer  `json:"items"`
-		} `json:"properties"`
-	}
-	if err := json.Unmarshal(raw, &schema); err != nil {
-		return nil, nil, err
-	}
-	keys := make([]string, 0, len(schema.Properties))
-	for k := range schema.Properties {
-		keys = append(keys, k)
-	}
+	keys := slices.Collect(maps.Keys(props))
 	slices.SortFunc(keys, func(a, b string) int { return cmp.Or(cmp.Compare(len(a), len(b)), strings.Compare(a, b)) })
 	fm := &form{}
 	for _, k := range keys {
-		p := schema.Properties[k]
-		c := p.offer
-		if p.Type == "array" {
-			c = p.Items
+		if base, ok := strings.CutSuffix(k, "_other"); ok {
+			if _, _, asks := fieldQuestion(props[base]); asks {
+				continue
+			}
 		}
-		labels, values := c.options()
-		if len(labels) == 0 {
-			continue
+		q, values, ok := fieldQuestion(props[k])
+		if !ok {
+			return nil, nil, fmt.Errorf("acp: the card can't ask the form's field %q", k)
 		}
-		fd := field{key: k, values: values, multi: p.Type == "array"}
-		if o, ok := schema.Properties[k+"_other"]; ok && o.Type == "string" {
-			fd.other = k + "_other"
+		if !takesWords(props[k+"_other"]) {
+			return nil, nil, fmt.Errorf("acp: the form takes no words of the user's for %q, which the card offers", k)
 		}
-		q := api.Question{Text: cmp.Or(p.Title, p.Description, f.Message), Multi: fd.multi}
-		for _, l := range labels {
-			q.Options = append(q.Options, api.Option{Label: l})
-		}
+		q.Text = cmp.Or(q.Text, f.Message)
 		fm.q.Questions = append(fm.q.Questions, q)
-		fm.fields = append(fm.fields, fd)
+		fm.fields = append(fm.fields, field{key: k, other: k + "_other", values: values, multi: q.Multi})
 	}
 	body, err := json.Marshal(fm.q)
 	if err != nil {
@@ -110,6 +68,66 @@ func parseForm(f acpsdk.CreateElicitationForm) (*form, json.RawMessage, error) {
 		return nil, nil, err
 	}
 	return fm, body, nil
+}
+
+// fieldQuestion is the question a form field asks and the value each of its
+// options sends: a string of one of its options, or an array of them,
+// that takes any of its options and no more limits.
+func fieldQuestion(p acpsdk.ElicitationPropertySchema) (q api.Question, values map[string]string, ok bool) {
+	values = map[string]string{}
+	add := func(label, value string) {
+		q.Options = append(q.Options, api.Option{Label: label})
+		values[label] = value
+	}
+	var title, about *string
+	switch {
+	case p.String != nil:
+		s := p.String
+		if s.Format != nil || s.MinLength != nil || s.MaxLength != nil || s.Pattern != nil {
+			return q, nil, false
+		}
+		for _, v := range s.Enum {
+			add(v, v)
+		}
+		for _, o := range s.OneOf {
+			add(cmp.Or(o.Title, o.Const), o.Const)
+		}
+		title, about = s.Title, s.Description
+	case p.Array != nil:
+		a := p.Array
+		if a.MinItems != nil || a.MaxItems != nil {
+			return q, nil, false
+		}
+		switch {
+		case a.Items.String != nil:
+			for _, v := range a.Items.String.Enum {
+				add(v, v)
+			}
+		case a.Items.Titled != nil:
+			for _, o := range a.Items.Titled.AnyOf {
+				add(cmp.Or(o.Title, o.Const), o.Const)
+			}
+		}
+		q.Multi, title, about = true, a.Title, a.Description
+	}
+	if len(q.Options) == 0 {
+		return q, nil, false
+	}
+	q.Text = cmp.Or(deref(title), deref(about))
+	return q, values, true
+}
+
+// takesWords is whether a form field takes whatever the user writes.
+func takesWords(p acpsdk.ElicitationPropertySchema) bool {
+	s := p.String
+	return s != nil && len(s.Enum) == 0 && len(s.OneOf) == 0 && s.Format == nil && s.MinLength == nil && s.MaxLength == nil && s.Pattern == nil
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // answer is the agent's reply to answers: each pick as the value its
@@ -139,13 +157,9 @@ func (fm *form) answer(raw json.RawMessage) (acpsdk.CreateElicitationResponse, e
 		case len(picked) > 0:
 			content[fd.key] = acpsdk.NewElicitationContentValueString(picked[0])
 		}
-		if an.Other == "" {
-			continue
+		if an.Other != "" {
+			content[fd.other] = acpsdk.NewElicitationContentValueString(an.Other)
 		}
-		if fd.other == "" {
-			return acpsdk.CreateElicitationResponse{}, errors.New("acp: the agent takes only its own options for this question")
-		}
-		content[fd.other] = acpsdk.NewElicitationContentValueString(an.Other)
 	}
 	return acpsdk.CreateElicitationResponse{Accept: &acpsdk.CreateElicitationAccept{Action: "accept", Content: content}}, nil
 }

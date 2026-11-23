@@ -455,7 +455,7 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 		}
 		f.send(ctx, sid, acp.StartToolCall("read-2", "Read main.go", acp.WithStartKind(acp.ToolKindRead), acp.WithStartStatus(acp.ToolCallStatusCompleted)))
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Read both."))
-	case "question", "question-multi":
+	case "question", "question-multi", "question-two":
 		return f.question(ctx, sid)
 	case "crash-mid-turn":
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Starting"))
@@ -504,9 +504,11 @@ func gate(ctx context.Context) bool {
 }
 
 // agyQuestion is the form agy 1.5.14 asks its ask_question tool's one
-// question with, and agyMulti a multi-select one, as it sent them live.
+// question with, agyMulti a multi-select one, and agyTwo two questions,
+// one of each, as it sent them live.
 const (
 	agyQuestion = `{"mode":"form","message":"The agent has a question.","sessionId":"SID","toolCallId":"call-ask-1","requestedSchema":{"type":"object","properties":{"q1":{"type":"string","title":"What is your favourite colour?","oneOf":[{"const":"1","title":"(Recommended) Blue"},{"const":"2","title":"Green"},{"const":"3","title":"Red"},{"const":"4","title":"Yellow"},{"const":"5","title":"Purple"}]},"q1_other":{"type":"string","title":"Other","description":"Optional free-form answer to: What is your favourite colour?"}}}}`
+	agyTwo      = `{"mode":"form","message":"The agent has a question.","sessionId":"SID","toolCallId":"call-ask-1","requestedSchema":{"type":"object","properties":{"q1":{"type":"string","title":"What is your favourite colour?","oneOf":[{"const":"1","title":"(Recommended) Blue"},{"const":"2","title":"Red"},{"const":"3","title":"Green"},{"const":"4","title":"Yellow"}]},"q1_other":{"type":"string","title":"Other","description":"Optional free-form answer to: What is your favourite colour?"},"q2":{"type":"array","title":"Which fruits do you like?","items":{"anyOf":[{"const":"1","title":"(Recommended) Apple"},{"const":"2","title":"Banana"},{"const":"3","title":"Orange"},{"const":"4","title":"Strawberry"}]}},"q2_other":{"type":"string","title":"Other","description":"Optional free-form answer to: Which fruits do you like?"}}}}`
 	agyMulti    = `{"mode":"form","message":"The agent has a question.","sessionId":"SID","toolCallId":"call-ask-1","requestedSchema":{"type":"object","properties":{"q1":{"type":"array","title":"Which suites gate the merge?","items":{"anyOf":[{"const":"1","title":"Unit"},{"const":"2","title":"Race"},{"const":"3","title":"GUI"}]}},"q1_other":{"type":"string","title":"Other"}}}}`
 )
 
@@ -522,8 +524,11 @@ func (f *fake) question(ctx context.Context, sid acp.SessionId) (acp.PromptRespo
 		return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
 	}
 	shape := agyQuestion
-	if f.is("question-multi") {
+	switch {
+	case f.is("question-multi"):
 		shape = agyMulti
+	case f.is("question-two"):
+		shape = agyTwo
 	}
 	var req acp.CreateElicitationRequest
 	if err := json.Unmarshal([]byte(strings.Replace(shape, "SID", string(sid), 1)), &req); err != nil {
