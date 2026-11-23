@@ -20,6 +20,8 @@ import (
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
+
+	"glitched/internal/mcp/mcptest"
 )
 
 const (
@@ -695,55 +697,14 @@ func (f *fake) askCredentials() (json.RawMessage, error) {
 	if srv == nil {
 		return nil, fmt.Errorf("no glitched MCP server in %d", len(servers))
 	}
-	cmd := exec.Command(srv.Command, srv.Args...)
+	var env []string
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, Scenario+"=") {
-			cmd.Env = append(cmd.Env, kv)
+			env = append(env, kv)
 		}
 	}
 	for _, e := range srv.Env {
-		cmd.Env = append(cmd.Env, e.Name+"="+e.Value)
+		env = append(env, e.Name+"="+e.Value)
 	}
-	in, _ := cmd.StdinPipe()
-	out, _ := cmd.StdoutPipe()
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	defer func() { in.Close(); cmd.Wait() }()
-	r := bufio.NewReader(out)
-	call := func(id int, method string, params any) (json.RawMessage, error) {
-		b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
-		in.Write(append(b, '\n'))
-		line, err := r.ReadBytes('\n')
-		if err != nil {
-			return nil, err
-		}
-		var reply struct {
-			Result json.RawMessage
-			Error  json.RawMessage
-		}
-		json.Unmarshal(line, &reply)
-		if reply.Error != nil {
-			return nil, fmt.Errorf("%s: %s", method, reply.Error)
-		}
-		return reply.Result, nil
-	}
-	if _, err := call(0, "initialize", map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "fake", "version": "1"}}); err != nil {
-		return nil, err
-	}
-	res, err := call(1, "tools/call", map[string]any{"name": "request_credentials", "arguments": map[string]any{
-		"reason": "probe", "fields": []any{map[string]any{"name": "GLX_PROBE", "label": "Probe key"}}, "client_request_id": "fake-1",
-	}})
-	if err != nil {
-		return nil, err
-	}
-	var result struct {
-		Content []struct{ Text string }
-		IsError bool
-	}
-	json.Unmarshal(res, &result)
-	if len(result.Content) == 0 || result.IsError {
-		return nil, fmt.Errorf("request_credentials: %s", res)
-	}
-	return json.RawMessage(result.Content[0].Text), nil
+	return mcptest.RequestCredentials(context.Background(), srv.Command, srv.Args, env)
 }

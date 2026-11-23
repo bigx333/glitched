@@ -252,6 +252,9 @@ func (p *proc) startThread(ctx context.Context, spec provider.SessionSpec) (lost
 		if s.Trusted {
 			entry["default_tools_approval_mode"] = "approve"
 		}
+		if s.ToolTimeout > 0 {
+			entry["tool_timeout_sec"] = s.ToolTimeout.Seconds()
+		}
 		servers[s.Name] = entry
 		if s.Instructions != "" {
 			notes = append(notes, s.Instructions)
