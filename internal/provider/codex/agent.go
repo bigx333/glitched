@@ -314,6 +314,7 @@ func (g *Agent) notify(m message) {
 			} `json:"total"`
 			Last struct {
 				TotalTokens int64 `json:"totalTokens"`
+				InputTokens int64 `json:"inputTokens"`
 			} `json:"last"`
 			ModelContextWindow int64 `json:"modelContextWindow"`
 		} `json:"tokenUsage"`
@@ -334,10 +335,18 @@ func (g *Agent) notify(m message) {
 		// How full the context is, as of the turn's last request: news
 		// of the thread's, which this run reports while its turn is on.
 		live := g.started && !g.ended && (n.TurnID == "" || n.TurnID == g.turn)
+		u := n.TokenUsage
 		switch {
 		case !live:
-		case m.Method == "thread/tokenUsage/updated" && n.TokenUsage.Last.TotalTokens > 0 && g.p.total.Swap(n.TokenUsage.Total.TotalTokens) != n.TokenUsage.Total.TotalTokens:
-			g.queueLocked(provider.Context{Used: n.TokenUsage.Last.TotalTokens, Window: n.TokenUsage.ModelContextWindow})
+		case m.Method == "thread/tokenUsage/updated" && g.p.total.Swap(u.Total.TotalTokens) != u.Total.TotalTokens:
+			// A request's usage holds its input. With none, Codex fills
+			// the window for a request that no longer fits in it.
+			switch {
+			case u.Last.InputTokens > 0:
+				g.queueLocked(provider.Context{Used: u.Last.TotalTokens, Window: u.ModelContextWindow})
+			case u.ModelContextWindow > 0 && u.Total.TotalTokens == u.ModelContextWindow:
+				g.queueLocked(provider.Context{Used: u.ModelContextWindow, Window: u.ModelContextWindow})
+			}
 		case m.Method == "thread/compacted":
 			g.queueLocked(provider.Context{Compacted: true})
 		}

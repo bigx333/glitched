@@ -484,6 +484,13 @@ func (f *fake) play(n int, turn, said string) {
 		f.message("msg-b", "second")
 	case "whole":
 		f.item("item/completed", map[string]any{"type": "agentMessage", "id": "msg-w", "text": "all at once"})
+	case "overflow":
+		f.mu.Lock()
+		f.spent = 258400
+		f.mu.Unlock()
+		full := map[string]any{"totalTokens": 258400, "inputTokens": 0, "cachedInputTokens": 0, "outputTokens": 0, "reasoningOutputTokens": 0}
+		delta := map[string]any{"totalTokens": 13400, "inputTokens": 0, "cachedInputTokens": 0, "outputTokens": 0, "reasoningOutputTokens": 0}
+		f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": full, "last": delta, "modelContextWindow": 258400}})
 	case "resent":
 		if n == 2 {
 			f.mu.Lock()

@@ -380,6 +380,24 @@ func TestResentUsageIsNoReport(t *testing.T) {
 	}
 }
 
+// A request too big for the window has Codex fill it, with a usage of no
+// input: the context is full, whatever the usage says it cost.
+func TestAnOverflowShowsTheWindowFull(t *testing.T) {
+	a, _ := fake(t, "overflow")
+	g := open(t, a, spec(t))
+	do(t, g, provider.Start{Text: "hi"})
+	var got []provider.Context
+	for _, e := range turn(t, g) {
+		if c, ok := e.(provider.Context); ok {
+			got = append(got, c)
+		}
+	}
+	closeRun(t, g)
+	if want := []provider.Context{{Used: 258400, Window: 258400}, {Used: 100, Window: 258400}}; !slices.Equal(got, want) {
+		t.Errorf("the turn reported %+v, want %+v", got, want)
+	}
+}
+
 // A run on a new app-server is a new Codex conversation, and says so: the
 // last one's context is not this one's.
 func TestANewAppServerIsANewSession(t *testing.T) {
