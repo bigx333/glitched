@@ -383,3 +383,43 @@ func TestABaseThatIsGoneIsNotTheBase(t *testing.T) {
 		t.Errorf("the draft asks for %+v, want its current branch", w)
 	}
 }
+
+// A draft with no project offers no worktree, even with Settings › General
+// on New worktree and the scratch root in a repository; a project's draft
+// lists Local folder and New worktree below the project rows.
+func TestADraftWithNoProjectOffersNoWorktree(t *testing.T) {
+	h, seeded := workspaceHarness(t)
+	root := h.a.scratchRoot()
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "root"}} {
+		if out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	h.a.settings.newThreadMode = 1
+	h.a.startIn(draft{env: h.local(), workspace: root})
+	h.tt.Advance(time.Second)
+	if h.a.newWorktree(h.a.current()) != nil || h.tt.HasText("New worktree from") {
+		t.Errorf("a draft with no project asks for a worktree")
+	}
+	h.click("Workspace")
+	h.tt.Advance(time.Second)
+	if m := h.tt.Menu(); slices.Contains(m, "New worktree") || slices.Contains(m, "Local folder") {
+		t.Errorf("the menu of a draft with no project has %q", m)
+	}
+	h.tt.CloseMenu()
+	h.tt.Advance(time.Second)
+
+	ws := seeded.View.Workspace
+	h.a.startIn(draft{env: h.local(), workspace: ws})
+	h.tt.Advance(time.Second)
+	h.click("Workspace")
+	h.tt.Advance(time.Second)
+	m := h.tt.Menu()
+	none, proj, local := slices.Index(m, "No project"), slices.Index(m, filepath.Base(ws)), slices.Index(m, "Local folder")
+	if none < 0 || proj < 0 || local < 0 || !(none < proj && proj < local) || !slices.Contains(m, "New worktree") {
+		t.Errorf("the menu of a project's draft is %q, want No project, then %s, then Local folder and New worktree", m, filepath.Base(ws))
+	}
+}
