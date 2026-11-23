@@ -150,8 +150,9 @@ func TestACompactionThatCannotBeStoppedEndsFailed(t *testing.T) {
 		}
 		return nil, gate
 	}}}
-	n := serveOpts(t, dbPath(t), provider.Mux{"claude": ad}, runtime.WithClock(func() time.Time { return now }), runtime.WithIdleCompaction(false))
-	thread, _ := idleSeed(t, n.st, now.Add(6*time.Minute-time.Second))
+	path, seeds := seeded(t, now.Add(6*time.Minute-time.Second))
+	thread := seeds[0]
+	n := serveOpts(t, path, provider.Mux{"claude": ad}, runtime.WithClock(func() time.Time { return now }), runtime.WithIdleCompaction(false))
 	n.h.SetIdleCompaction(true)
 	until(t, n.h, thread, "the compaction to resolve", func(v api.Thread) bool {
 		return len(compactions(ad.compactAdapter)) > 0 && (v.Run == api.RunUncertain || v.Run == api.RunIdle)
