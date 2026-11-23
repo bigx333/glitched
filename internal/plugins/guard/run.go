@@ -34,8 +34,9 @@ type Spec struct {
 	Env     map[string]string
 	Timeout time.Duration
 	Allowed []string
-	// Denied are folders no run reads: none is its cwd, and no arg names
-	// a path inside one, as itself or after a flag's "=".
+	// Denied are folders no run reads or writes: none is its cwd, no arg
+	// names a path inside one, and on macOS the kernel holds the program
+	// and all it starts out of them.
 	Denied []string
 }
 
@@ -63,7 +64,7 @@ func run(ctx context.Context, s Spec, path string) (Result, error) {
 	if info, err := os.Stat(s.Cwd); !filepath.IsAbs(s.Cwd) || err != nil || !info.IsDir() {
 		return Result{}, refuse("a run's cwd is an absolute path to a folder, not %q", s.Cwd)
 	}
-	if err := checkDenied(s.Denied, s.Args, s.Cwd); err != nil {
+	if err := checkDenied(s.Program, s.Denied, s.Args, s.Cwd); err != nil {
 		return Result{}, err
 	}
 	env, err := envOf(s.Env)
@@ -97,7 +98,8 @@ func run(ctx context.Context, s Spec, path string) (Result, error) {
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(tctx, found, s.Args...)
+	program, args := confine(found, s.Args, s.Denied)
+	cmd := exec.CommandContext(tctx, program, args...)
 	cmd.Dir = s.Cwd
 	cmd.Env = append(os.Environ(), "PATH="+path)
 	cmd.Env = append(cmd.Env, env...)

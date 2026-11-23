@@ -301,14 +301,23 @@ func TestAThemeNameWithSpacesLoads(t *testing.T) {
 // engine's vault under the same state directory is denied to its runs.
 func TestRunCantReadTheVault(t *testing.T) {
 	state, u, fx := t.TempDir(), newUIThread(), &effects{}
-	held := filepath.Join(secrets.Under(state), "thread", "KEY")
-	os.MkdirAll(filepath.Dir(held), 0o700)
-	os.WriteFile(held, []byte("probe-value-0123"), 0o600)
+	held, outside := filepath.Join(secrets.Under(state), "thread", "KEY"), filepath.Join(state, "notes.txt")
+	for _, err := range []error{
+		os.MkdirAll(filepath.Dir(held), 0o700),
+		os.WriteFile(held, []byte("probe-value-0123"), 0o600),
+		os.WriteFile(outside, []byte("fine"), 0o600),
+	} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	writeModule(t, state, "reader", `"capabilities": ["programs"], "glitched": { "programs": ["cat"] }, `, `
 		export async function init() {
-			let out
-			try { out = (await glitched.run("cat", [`+strconv.Quote(held)+`])).stdout } catch (e) { out = e.code + ": " + e.message }
-			return { state: out }
+			const out = []
+			for (const p of [`+strconv.Quote(outside)+`, `+strconv.Quote(held)+`]) {
+				try { out.push((await glitched.run("cat", [p])).stdout) } catch (e) { out.push(e.code + ": " + e.message) }
+			}
+			return { state: out.join(" | ") }
 		}
 		export function view({ state }) { return { body: { type: "text", text: state } } }`)
 	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf})
@@ -316,8 +325,8 @@ func TestRunCantReadTheVault(t *testing.T) {
 	h.SetGranted("reader", "programs", true)
 	s := session(t, h, "reader")
 	s.Retry()
-	u.until(t, "the refusal", func() bool { return strings.Contains(texts(s), "refused") })
-	if strings.Contains(texts(s), "probe-value") {
+	u.until(t, "both runs", func() bool { return strings.Contains(texts(s), " | ") })
+	if !strings.HasPrefix(texts(s), "fine | refused: ") || strings.Contains(texts(s), "probe-value") {
 		t.Fatalf("the plugin read the vault: %s", texts(s))
 	}
 }
