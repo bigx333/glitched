@@ -337,9 +337,9 @@ func splitLines(data []byte, atEOF bool) (int, []byte, error) {
 const maxCloneLine = 4096
 
 // cloneDialog is the Clone a repository sheet, drawn as the app's alerts
-// are (MyGo's AlertDialog), with their measures: a field for the
-// repository, the folder it goes into, and Cancel and Clone. Escape
-// cancels, and stops the clone.
+// are (MyGo's AlertDialog), with their measures but wider, for a URL and
+// a folder's path: a field for the repository, the folder it goes into,
+// and Cancel and Clone. Escape cancels, and stops the clone.
 func (a *app) cloneDialog(c *ui.Context) {
 	if !a.clone.open {
 		return
