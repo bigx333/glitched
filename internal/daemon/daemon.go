@@ -79,7 +79,7 @@ type Config struct {
 	// Children caps the child threads agents start. Its zero fields take
 	// engine.DefaultLimits'.
 	Children engine.Limits `json:"children,omitzero"`
-	// PluginRun runs the programs plugins' services ask for; nil runs none.
+	// PluginRun runs the programs plugins' services ask for; nil runs them with RunProgram.
 	PluginRun func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error) `json:"-"`
 }
 
