@@ -30,6 +30,7 @@ func TestParseSource(t *testing.T) {
 		"", "glitched", "bigx333/", "/glitched", "./glitched", "bigx333/..", "../x", "o/n/x",
 		"o/n!", "o n/r", "https://github.com/bigx333", "https://github.com/", "https:///o/r.git",
 		"ftp://example.com/r.git", "ssh:///r.git", "file:///", "https://example.com/", "git@github.com:", "mailto:a@b",
+		"-o/r", "o/-r", "--help/r", "https://github.com/-o/r", "https://github.com/o/-r",
 	} {
 		if got, ok := ParseSource(in); ok {
 			t.Errorf("ParseSource(%q) = %+v, want it refused", in, got)

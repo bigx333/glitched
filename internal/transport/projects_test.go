@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -102,15 +103,16 @@ func TestCancellingACloneStopsItAndTakesItsFolder(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the clone said nothing")
 	}
-	if _, err := os.Stat(dest); err != nil {
-		t.Fatalf("the clone made no folder: %v", err)
+	parent := filepath.Dir(dest)
+	if entries, _ := os.ReadDir(parent); len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), ".lighthouse.glitched-clone-") {
+		t.Fatalf("the clone made %v beside %s", entries, dest)
 	}
 	cancel()
 	if err := <-ended; !errors.Is(err, context.Canceled) {
 		t.Fatalf("the cancelled clone ended with %v, want context.Canceled", err)
 	}
 	for began := time.Now(); ; time.Sleep(10 * time.Millisecond) {
-		if _, err := os.Stat(dest); errors.Is(err, os.ErrNotExist) {
+		if entries, _ := os.ReadDir(parent); len(entries) == 0 {
 			break
 		}
 		if time.Since(began) > 10*time.Second {

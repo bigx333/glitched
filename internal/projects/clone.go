@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
@@ -32,7 +32,9 @@ type Source struct {
 }
 
 var (
-	ownerName = regexp.MustCompile(`^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$`)
+	// ownerName is owner/name, neither starting with a dash, which gh
+	// would take as an option.
+	ownerName = regexp.MustCompile(`^([A-Za-z0-9_.][A-Za-z0-9_.-]*)/([A-Za-z0-9_.][A-Za-z0-9_.-]*)$`)
 	scpLike   = regexp.MustCompile(`^[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+:(.+)$`)
 	// gitProgress is one of git's progress lines, which it redraws in
 	// place, and which say nothing of why a clone failed.
@@ -46,6 +48,7 @@ const (
 	CloneTimeout = 15 * time.Minute
 	// CloneHint ends the error of a clone that was refused access.
 	CloneHint = "Sign in with gh auth login, or paste a clone URL your git can reach."
+	noGit     = "git isn't installed on this machine (or isn't on your PATH)"
 )
 
 // ParseSource reads s as owner/name, a clone URL (https, http, ssh, git
@@ -107,7 +110,7 @@ func dots(s string) bool { return s == "." || s == ".." }
 func CloneInto(ctx context.Context, req api.CloneRequest, hide []string, path string, progress func(string)) (api.Cloned, error) {
 	src, ok := ParseSource(req.Source)
 	if !ok {
-		return api.Cloned{}, fmt.Errorf("projects: %q isn't a clone URL or owner/name", req.Source)
+		return api.Cloned{}, errors.New("projects: that isn't a clone URL or owner/name")
 	}
 	dest, err := Expand(req.Dest)
 	if err != nil {
@@ -125,17 +128,22 @@ func CloneInto(ctx context.Context, req api.CloneRequest, hide []string, path st
 }
 
 // Clone clones src into dest, a folder that isn't there yet or is empty,
-// with the programs path finds, and says each line they print. A clone
-// that fails or is stopped takes away dest if it made it. Its error is
-// the last lines git said, with what to do if it was refused access.
+// with the programs path finds, and says each line they print, with no
+// credentials in them. It clones into a folder of its own beside dest,
+// which goes to dest only once the clone is whole, and is all a clone
+// that fails or is stopped takes away. Its error is the last lines git
+// said, with what to do if it was refused access.
 func Clone(ctx context.Context, src Source, dest, path string, progress func(string)) error {
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+	gh, hasGH := guard.Find("gh", path)
+	git, hasGit := guard.Find("git", path)
+	if !hasGit && (src.Repo == "" || !hasGH) {
+		return errors.New(noGit)
+	}
+	parent := filepath.Dir(dest)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return err
 	}
-	// Making dest here claims it: only a folder this clone made is taken
-	// away when it fails, never one the user made meanwhile.
-	created := os.Mkdir(dest, 0o755) == nil
-	if entries, err := os.ReadDir(dest); err != nil || len(entries) > 0 {
+	if entries, err := os.ReadDir(dest); len(entries) > 0 || err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return errors.New(dest + " already exists and isn't empty")
 	}
 	env := append(os.Environ(), "PATH="+path, "GIT_TERMINAL_PROMPT=0", "GH_PROMPT_DISABLED=1", "GCM_INTERACTIVE=never")
@@ -146,16 +154,18 @@ func Clone(ctx context.Context, src Source, dest, path string, progress func(str
 		cmd.WaitDelay = time.Second
 		return cmd
 	}
-	var cmd *exec.Cmd
-	gh, hasGH := guard.Find("gh", path)
-	git, hasGit := guard.Find("git", path)
-	switch {
-	case src.Repo != "" && hasGH && command(gh, "auth", "status", "--hostname", "github.com").Run() == nil:
-		cmd = command(gh, "repo", "clone", src.Repo, dest, "--", "--progress")
-	case hasGit:
-		cmd = command(git, "clone", "--progress", "--", src.URL, dest)
-	default:
-		return errors.New("git isn't installed on this machine (or isn't on your PATH)")
+	useGH := src.Repo != "" && hasGH && command(gh, "auth", "status", "--hostname", "github.com").Run() == nil
+	if !useGH && !hasGit {
+		return errors.New(noGit)
+	}
+	stage, err := os.MkdirTemp(parent, "."+filepath.Base(dest)+".glitched-clone-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	cmd := command(git, "clone", "--progress", "--", src.URL, stage)
+	if useGH {
+		cmd = command(gh, "repo", "clone", src.Repo, stage, "--", "--progress")
 	}
 	stderr, err := cmd.StderrPipe()
 	if err == nil {
@@ -169,22 +179,27 @@ func Clone(ctx context.Context, src Source, dest, path string, progress func(str
 	lines := bufio.NewScanner(stderr)
 	lines.Split(splitLines)
 	for lines.Scan() {
-		line := strings.TrimSpace(lines.Text())
+		line := credentials.ReplaceAllString(strings.ReplaceAll(strings.TrimSpace(lines.Text()), stage, dest), "$1")
 		if line == "" {
 			continue
 		}
 		progress(line)
 		if !gitProgress.MatchString(line) {
-			tail = append(tail[max(0, len(tail)-3):], credentials.ReplaceAllString(line, "$1"))
+			tail = append(tail[max(0, len(tail)-3):], line)
 			refused = refused || authFailure.MatchString(line)
 		}
 	}
 	err = cmd.Wait()
 	if err == nil {
+		// Renaming onto dest replaces it only while it's an empty folder:
+		// one the user filled meanwhile, or another clone's, stays.
+		if err := os.Rename(stage, dest); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				return errors.New(dest + " already exists and isn't empty")
+			}
+			return err
+		}
 		return nil
-	}
-	if created {
-		os.RemoveAll(dest)
 	}
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
