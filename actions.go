@@ -34,7 +34,7 @@ func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed
 	a.pluginComponent(c, "message.toolbar", &t, componentCopy{
 		key: e.key,
 		box: func() ui.Element {
-			bar := ui.Row(c).Key("actions").Absolute().Bottom(-22).Padding(2, 0, 0)
+			bar := ui.Row(c).Key("actions").Absolute().Bottom(-22).MinHeight(22).AlignItems(ui.End).Padding(2, 0, 0)
 			if e.kind == entryUser {
 				bar.Right(0)
 			} else {
