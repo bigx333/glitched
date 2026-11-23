@@ -35,6 +35,7 @@ type Host struct {
 	name      string
 	mcp       *mcp.Launcher        // how each run's agent starts glitched mcp; nil runs it without
 	servers   []provider.MCPServer // the engine's own MCP servers, which every run's agent gets after glitched mcp
+	worktrees string               // where the threads' worktrees go; "" makes none
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -129,7 +130,29 @@ func (h *Host) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 	return h.store.Read(ctx, q)
 }
 
+// Submit commits c. A create in a new worktree makes the worktree first,
+// and a delete that removes one removes it once the delete commits.
 func (h *Host) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
+	switch b := c.Body.(type) {
+	case api.ThreadCreate:
+		if b.Worktree == nil {
+			break
+		}
+		in, undo, err := h.makeWorktree(ctx, c.Target, b)
+		if err != nil {
+			return api.Receipt{}, err
+		}
+		c.Body = in
+		r, err := h.store.Submit(ctx, c, time.Now())
+		if errors.As(err, new(*api.RejectedError)) {
+			undo()
+		}
+		return r, err
+	case api.ThreadDelete:
+		if b.Worktree != api.KeepWorktree {
+			return h.deleteInWorktree(ctx, c, b.Worktree)
+		}
+	}
 	return h.store.Submit(ctx, c, time.Now())
 }
 

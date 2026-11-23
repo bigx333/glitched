@@ -554,6 +554,9 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 	if version < 9 {
 		sqlText = threadsV8 + sqlText
 	}
+	if version < 10 {
+		sqlText = threadsV9 + sqlText
+	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
@@ -569,6 +572,13 @@ const runsV6 = `
 // session.
 const threadsV8 = `
 	ALTER TABLE threads DROP COLUMN session;
+`
+
+// The threads table up to version 9, before a thread in a worktree kept
+// its project and branch.
+const threadsV9 = `
+	ALTER TABLE threads DROP COLUMN project;
+	ALTER TABLE threads DROP COLUMN branch;
 `
 
 // The commands table up to version 7, before a receipt kept its thread's
@@ -1020,6 +1030,41 @@ func TestAVersion8DatabaseUpgradesWithASessionPerThread(t *testing.T) {
 		t.Errorf("after a reopen the thread has session %q, want sess-1", th.Session)
 	}
 	s.Close()
+	fresh := filepath.Join(t.TempDir(), "host.db")
+	open(t, fresh).Close()
+	if got, want := tableOf(t, path, "threads"), tableOf(t, fresh, "threads"); !reflect.DeepEqual(got, want) {
+		t.Errorf("the threads table\n%+v\nwant a new database's\n%+v", got, want)
+	}
+}
+
+// A version 9 database upgrades with no project or branch on its threads,
+// and a thread in a worktree created after keeps both across a reopen.
+func TestAVersion9DatabaseUpgradesWithAProjectAndBranchPerThread(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	old := api.NewID()
+	if _, err := s.Submit(ctx, create(old), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	downgrade(t, path, "", 9)
+
+	s = open(t, path)
+	if th := threadOf(t, s, old); th.Project != "" || th.Branch != "" {
+		t.Errorf("an upgraded thread has project %q and branch %q, want neither", th.Project, th.Branch)
+	}
+	wt := api.NewID()
+	body := api.ThreadCreate{Workspace: "/wt/glitched/fix-1", Project: "/src/glitched", Branch: "glitched/fix-1", Title: "fix", Model: api.ModelRef{Provider: "fake"}}
+	if _, err := s.Submit(ctx, api.Command{ID: wt, Target: wt, Body: body}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s = open(t, path)
+	defer s.Close()
+	if th := threadOf(t, s, wt); th.Workspace != body.Workspace || th.Project != body.Project || th.Branch != body.Branch {
+		t.Errorf("after a reopen the thread is in %q of %q on %q, want %q of %q on %q", th.Workspace, th.Project, th.Branch, body.Workspace, body.Project, body.Branch)
+	}
 	fresh := filepath.Join(t.TempDir(), "host.db")
 	open(t, fresh).Close()
 	if got, want := tableOf(t, path, "threads"), tableOf(t, fresh, "threads"); !reflect.DeepEqual(got, want) {

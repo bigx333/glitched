@@ -70,14 +70,29 @@ type Intent interface{ intentType() string }
 // its parent's access or less. Only an agent starts a child: Run is the
 // parent's live run that asks. Text, when given, is the thread's first
 // message, which starts its first turn in the create's commit.
+//
+// With a Worktree, the host first makes a git worktree of Workspace's
+// repository and creates the thread in it: Workspace becomes the folder
+// in the worktree, Project the Workspace asked for, and Branch the
+// worktree's new branch. Project and Branch given without a Worktree
+// are a child's, which runs in its parent's worktree.
 type ThreadCreate struct {
-	Workspace string   `json:"workspace"`
-	Title     string   `json:"title"`
-	Model     ModelRef `json:"model"`
-	Access    Access   `json:"access"`
-	Parent    ID       `json:"parent,omitzero"`
-	Run       ID       `json:"run,omitzero"`
-	Text      string   `json:"text,omitempty"`
+	Workspace string       `json:"workspace"`
+	Title     string       `json:"title"`
+	Model     ModelRef     `json:"model"`
+	Access    Access       `json:"access"`
+	Parent    ID           `json:"parent,omitzero"`
+	Run       ID           `json:"run,omitzero"`
+	Text      string       `json:"text,omitempty"`
+	Worktree  *NewWorktree `json:"worktree,omitempty"`
+	Project   string       `json:"project,omitempty"`
+	Branch    string       `json:"branch,omitempty"`
+}
+
+// NewWorktree asks for a thread in a worktree of its own, on a new branch
+// from Base, a branch or commit of the repository; "" is its HEAD.
+type NewWorktree struct {
+	Base string `json:"base,omitempty"`
 }
 
 // MaxDepth is how far below a thread of the user's a child may be: a
@@ -107,8 +122,23 @@ type InboxSet struct {
 }
 
 // ThreadDelete deletes the thread. Its events stay in the log, but no
-// command or read reaches it again.
-type ThreadDelete struct{}
+// command or read reaches it again. Worktree says what becomes of the
+// worktree of a thread in one; the threads under it share it.
+type ThreadDelete struct {
+	Worktree WorktreeEnd `json:"worktree,omitzero"`
+}
+
+type WorktreeEnd uint8
+
+const (
+	// KeepWorktree leaves the worktree and its branch as they are.
+	KeepWorktree WorktreeEnd = iota
+	// RemoveWorktree removes the worktree, and is refused while it has
+	// changes git doesn't ignore, which only RemoveWorktreeChanges
+	// throws away. Either keeps a branch with commits that aren't merged.
+	RemoveWorktree
+	RemoveWorktreeChanges
+)
 
 // ThreadRename retitles the thread. The engine trims the title and refuses
 // an empty one.
@@ -302,8 +332,13 @@ type Turn struct {
 // Thread is the projection a client reads. Working is derived from Run and
 // never stored.
 type Thread struct {
-	ID          ID          `json:"id"`
-	Workspace   string      `json:"workspace"`
+	ID        ID     `json:"id"`
+	Workspace string `json:"workspace"`
+	// Project is the folder a thread in a worktree was started from, and
+	// Branch the worktree's; both "" for a thread that runs in its
+	// project's folder.
+	Project     string      `json:"project,omitempty"`
+	Branch      string      `json:"branch,omitempty"`
 	Title       string      `json:"title"`
 	Revision    uint64      `json:"revision"`
 	OwnerEpoch  uint64      `json:"ownerEpoch"`

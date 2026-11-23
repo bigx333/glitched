@@ -114,6 +114,8 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 		Target: child,
 		Body: api.ThreadCreate{
 			Workspace: parent.Workspace,
+			Project:   parent.Project,
+			Branch:    parent.Branch,
 			Title:     title,
 			Model: api.ModelRef{
 				Provider: model.Provider,

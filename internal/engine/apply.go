@@ -37,7 +37,7 @@ func apply(t Thread, e Event) (Thread, error) {
 		if t.Exists() {
 			return t, &TransitionError{"thread", "created", "created"}
 		}
-		t = Thread{ID: e.Thread, Workspace: b.Workspace, Title: b.Title, Model: b.Model, Access: b.Access, OwnerEpoch: 1, Parent: b.Parent}
+		t = Thread{ID: e.Thread, Workspace: b.Workspace, Project: b.Project, Branch: b.Branch, Title: b.Title, Model: b.Model, Access: b.Access, OwnerEpoch: 1, Parent: b.Parent}
 	case api.DispositionChanged:
 		t.Disposition = b.Disposition
 	case api.ThreadRenamed:

@@ -281,7 +281,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	} else {
 		slog.Warn("agents run without glitched mcp, so they start no child threads", "err", errors.Join(err, absErr))
 	}
-	opts = append(opts, runtime.WithMCPServers(cfg.MCP...))
+	opts = append(opts, runtime.WithMCPServers(cfg.MCP...), runtime.WithWorktrees(filepath.Join(cfg.Dir, "worktrees")))
 	// An adapter that keeps agents between runs stops them once the host
 	// that ran them has.
 	closers := map[io.Closer]bool{}
