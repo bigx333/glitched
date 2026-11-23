@@ -100,7 +100,7 @@ func TestAnACPThreadRunsEndToEnd(t *testing.T) {
 		if end.Outcome != api.OutcomeCompleted || text.String() != "Answer: "+want {
 			t.Fatalf("turn %d ended %+v with text %q", i, end, text.String())
 		}
-		var card map[string]string
+		var card map[string]any
 		if len(asked) != 1 || json.Unmarshal(asked[0].Body, &card) != nil || card["operation"] != "edit" || card["path"] != "notes.txt" {
 			t.Fatalf("turn %d asked %+v", i, asked)
 		}
