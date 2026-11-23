@@ -99,6 +99,10 @@ func (c *commandLists) Providers(ctx context.Context, fresh bool) []transport.Pr
 	return out
 }
 
+func (c *commandLists) Ask(ctx context.Context, name string, spec provider.AskSpec) (provider.AskResult, error) {
+	return c.mux.Ask(ctx, name, spec)
+}
+
 func (c *commandLists) list(k listKey, l *listing) {
 	l.cmds, l.err = c.mux.Commands(c.ctx, k.provider, k.workspace)
 	l.at = c.now()

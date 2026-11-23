@@ -65,3 +65,16 @@ func (m Mux) Commands(ctx context.Context, name, workspace string) ([]Command, e
 	}
 	return nil, nil
 }
+
+// Ask asks name's adapter for one answer, ErrUnsupported from one that
+// can't.
+func (m Mux) Ask(ctx context.Context, name string, spec AskSpec) (AskResult, error) {
+	a, err := m.adapter(name)
+	if err != nil {
+		return AskResult{}, err
+	}
+	if q, ok := a.(Asker); ok {
+		return q.Ask(ctx, spec)
+	}
+	return AskResult{}, fmt.Errorf("%w: %s can't answer a prompt on its own", ErrUnsupported, name)
+}

@@ -141,6 +141,7 @@ var Events = map[string]string{
 	"setting.changed":      "",
 	"theme.changed":        "",
 	"window.focused":       "",
+	"place.shown":          "",
 }
 
 // MinEvery is the shortest a timer may be, in seconds.

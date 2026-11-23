@@ -34,6 +34,7 @@ var Capabilities = []Capability{
 	{"service", true, "Run in the background, with no window"},
 	{"commands", true, "Run Glitched's actions, the ones its command palette offers you"},
 	{"settings:write", true, "Change Glitched's settings: the theme, the accent, defaults for new threads and how the app behaves"},
+	{"models:ask", true, "Ask an AI model to write text, on your account's usage"},
 }
 
 // Network is the grant that lets a plugin reach the hosts its

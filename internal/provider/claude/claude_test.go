@@ -38,6 +38,8 @@ const (
 	envEngine = "GLITCHED_FAKE_ENGINE"        // the store a test binary serves, as an engine a test can kill
 	envHide   = "GLITCHED_FAKE_HIDE"          // a file a test binary writes its PID to, as a tool that hides its environment
 	envSleep  = "GLITCHED_FAKE_SLEEP"         // how long a test binary sleeps, as sleep where there is none
+	envAsked  = "GLITCHED_FAKE_CLAUDE_ASKED"  // a file a one-shot run writes its argv, folder and stdin to
+	envAnswer = "GLITCHED_FAKE_CLAUDE_ANSWER" // what a one-shot run prints
 )
 
 func TestMain(m *testing.M) {
@@ -67,6 +69,9 @@ func TestMain(m *testing.M) {
 	}
 	if path := os.Getenv(envEngine); path != "" {
 		os.Exit(engine(path))
+	}
+	if path := os.Getenv(envAsked); path != "" {
+		os.Exit(fakeOneShot(path))
 	}
 	if path := os.Getenv(envFake); path != "" {
 		os.Exit(fakeClaude(path))

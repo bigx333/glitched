@@ -316,6 +316,7 @@ type Plugins interface {
 type Providers interface {
 	Commands(ctx context.Context, provider, workspace string) ([]provider.Command, error)
 	Providers(ctx context.Context, fresh bool) []ProviderInfo
+	Ask(ctx context.Context, provider string, spec provider.AskSpec) (provider.AskResult, error)
 }
 
 // ProviderInfo is one provider the engine serves: what it said of itself,
@@ -350,6 +351,12 @@ type commandsQuery struct {
 	Workspace string `json:"workspace"`
 }
 
+// askQuery asks Provider for one answer.
+type askQuery struct {
+	Provider string           `json:"provider"`
+	Spec     provider.AskSpec `json:"spec"`
+}
+
 // A handler answers one request with every message for its id.
 type handler func(ctx context.Context, params json.RawMessage, o *op)
 
@@ -374,6 +381,9 @@ func (s *Server) methods() map[string]handler {
 		})
 		m["providers"] = callHandler(func(ctx context.Context, q providersQuery) ([]ProviderInfo, error) {
 			return p.Providers(ctx, q.Fresh), nil
+		})
+		m["provider.ask"] = callHandler(func(ctx context.Context, q askQuery) (provider.AskResult, error) {
+			return p.Ask(ctx, q.Provider, q.Spec)
 		})
 	}
 	if h := s.Hub; h != nil {

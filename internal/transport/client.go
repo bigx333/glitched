@@ -578,6 +578,13 @@ func (e *EndpointClient) ProviderCommands(ctx context.Context, name, workspace s
 	return out, e.c.call(ctx, "provider.commands", commandsQuery{Provider: name, Workspace: workspace}, &out)
 }
 
+// ProviderAsk asks the engine's provider name for one answer, as
+// provider.Asker does.
+func (e *EndpointClient) ProviderAsk(ctx context.Context, name string, spec provider.AskSpec) (provider.AskResult, error) {
+	var out provider.AskResult
+	return out, e.c.call(ctx, "provider.ask", askQuery{Provider: name, Spec: spec}, &out)
+}
+
 // Providers are every provider the engine serves, each with the models
 // its sessions can run, or why it couldn't say. One it doesn't list it
 // has no adapter for. Fresh has each ask its program again, rather than

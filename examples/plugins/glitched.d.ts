@@ -438,6 +438,8 @@ interface ThreadRecord {
   requests?: number;
   /** What its own runs used. */
   tokens?: number;
+  /** Its workspace is on this machine, where glitched.run runs. */
+  local?: boolean;
 }
 
 interface Disposition {
@@ -501,6 +503,7 @@ type AppEvent =
   | { kind: "app"; type: "setting.changed"; data: { id: string; value: unknown; was: unknown } }
   | { kind: "app"; type: "theme.changed"; data: { appearance: "light" | "dark" } }
   | { kind: "app"; type: "window.focused"; data: { focused: boolean } }
+  | { kind: "app"; type: "place.shown"; data: { id: string; at: Slot; key: string; context?: ThreadRecord } }
   | { kind: "app"; type: "command"; data: { id: string } }
   | { kind: "app"; type: "grant.changed"; data: { capability: string; granted: boolean } }
   | { kind: "timer"; id: string };
@@ -938,6 +941,15 @@ declare const glitched: {
   models: {
     /** The models the composer's picker offers, and the efforts. */
     list(): Promise<{ models: { provider: string; id: string; name: string; family: string; description: string; efforts: string[] }[]; efforts: string[] }>;
+    /**
+     * One answer from a model, with no tools, on this machine's engine.
+     * Without provider, the provider of the model new threads take; without
+     * model, a cheap one of that provider's. Needs models:ask. Fails with
+     * err.code "unsupported" (the provider can't), "unavailable" (its CLI
+     * isn't installed), "busy" (the plugin's last ask isn't answered),
+     * "too_large" (over 200 KB) or "timeout" (120 s).
+     */
+    ask(prompt: string, options?: { system?: string; provider?: string; model?: string }): Promise<{ text: string; provider: string; model: string }>;
   };
   projects: {
     /** In the sidebar's order. Needs threads:read. */

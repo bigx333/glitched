@@ -482,8 +482,9 @@ A plugin hears the events its manifest lists, if it may:
 | `setting.changed` | `{id, value, was}` | |
 | `theme.changed` | `{appearance}` | |
 | `window.focused` | `{focused}`, as the window comes to the front or goes behind | |
+| `place.shown` | `{id, at, key, context}`, as a copy of one of its places comes into view: a row scrolls in, or a header shows another thread. A copy whose context changes isn't told again | |
 
-`command` (a command of its own ran), `grant.changed` (`{capability, granted}`, a grant of its own given or taken back) and `timer` reach the plugin's sessions with `update`; `grant.changed` reaches its pages and tabs too, so what they show follows at once. A thread record is `{id, title, workspace, status, machine, updatedAt, section, disposition, unread, parent, ancestors, children, requests, tokens}`. `section` is where the sidebar files it: `working` while its agent runs, else `snoozed`, `settled` or `inbox`. `disposition` is how the user left it, `{state, until?}` with `state` `inbox`, `snoozed` or `settled`, counting what was just done here before the engine has it, so a plugin's view follows an action at once. `parent` is the thread that started it, `ancestors` that one's line, the furthest first, and `children` the threads it started, newest first. `requests` counts the approvals and questions it waits on, and `tokens` what its own runs used. Fields that are empty, false or zero are left out. Without `threads:read` it is `{id}` alone, in places and tabs too.
+`command` (a command of its own ran), `grant.changed` (`{capability, granted}`, a grant of its own given or taken back) and `timer` reach the plugin's sessions with `update`; `grant.changed` reaches its pages and tabs too, so what they show follows at once. A thread record is `{id, title, workspace, status, machine, updatedAt, section, disposition, unread, parent, ancestors, children, requests, tokens, local}`. `section` is where the sidebar files it: `working` while its agent runs, else `snoozed`, `settled` or `inbox`. `disposition` is how the user left it, `{state, until?}` with `state` `inbox`, `snoozed` or `settled`, counting what was just done here before the engine has it, so a plugin's view follows an action at once. `parent` is the thread that started it, `ancestors` that one's line, the furthest first, and `children` the threads it started, newest first. `requests` counts the approvals and questions it waits on, and `tokens` what its own runs used. `local` says its workspace is on this machine, where `glitched.run` runs. Fields that are empty, false or zero are left out. Without `threads:read` it is `{id}` alone, in places and tabs too.
 
 ## Calling the app
 
@@ -525,6 +526,7 @@ Each call runs on the UI thread (the engine's queue, for a service), checked as 
 | `glitched.threads.setAccess(thread, access)` | | `threads:access` |
 | `glitched.composer.submit(thread)` | | `threads:write` |
 | `glitched.models.list()` | `{models: [{provider, id, name, family, description, efforts}], efforts}` | |
+| `glitched.models.ask(prompt, {system?, provider?, model?})` | `{text, provider, model}`: see [The glitched global](#the-glitched-global) | `models:ask` |
 | `glitched.commands.list()` | `[{id, section, label, hint?, icon, also?}]`, the palette's actions, in its order | `commands` |
 | `glitched.commands.run(id, palette?)` | | `commands` |
 | `glitched.projects.list()` | `[{key, workspace, machine, name, icon, color, filtered}]`, in the sidebar's order | `threads:read` |
@@ -571,6 +573,8 @@ const status = await glitched.service.call("status", { cwd: folder });
 **`glitched.db`** is the plugin's own SQLite file (pure Go): 100 MB, up to 10,000 rows and 100 MB a query, parameters always bound. SQLite's authorizer refuses `ATTACH`, `DETACH`, `PRAGMA`, `VACUUM INTO` and loading extensions, however a statement is written. It goes with the plugin.
 
 **`glitched.service.call(method, args, {timeout})`**, with `service`, calls the plugin's service in this machine's engine (30 s, at most 300).
+
+**`glitched.models.ask(prompt, {system, provider, model})`**, with `models:ask`, asks a model for one answer, `{text, provider, model}`, where `provider` and `model` name what wrote it as `models.list` names them. This machine's engine asks the provider, even for a thread on another machine, with no tools, no MCP servers and no session left behind, in the plugin's data folder. Without `provider` it is the provider of the model new threads take; without `model`, a cheap model of that provider's (Claude Code's `haiku`). The prompt and the system prompt are 200 KB together at most, and an ask waits 120 s; one awaited in `update` also has that call's 30 s. A plugin asks one at a time. It fails with `err.code` `unsupported` for a provider that can't answer a prompt on its own (only Claude Code can, so far), `unavailable` when the provider's CLI isn't installed, `busy` while the plugin's last ask runs, `too_large` or `timeout`. A service's asks are `unavailable` for now.
 
 **fetch** (mygo-plugin's) reaches the hosts `permissions.network` names, with the `network` grant, through the guard: a name that resolves to a private address is reached only when named exactly, and metadata and link-local addresses never. `"*"` is any public address.
 
@@ -654,9 +658,10 @@ Your plugins and others' plugins share one rule: the manifest says what a plugin
 | `service` | run in the background, with no window | yes |
 | `settings:write` | change Glitched's settings: the theme, the accent, defaults for new threads and how the app behaves | yes |
 | `commands` | run the actions the command palette offers you | yes |
+| `models:ask` | ask an AI model to write text, on your account's usage | yes |
 | `network` | reach the hosts `permissions.network` names | yes |
 
-Grants start off, except a built-in plugin's, which start on. **Settings › Plugins** has a switch for each one a plugin declares, in the plugin's row. The ones that let a plugin act as you, send what it reads away, or draw Glitched's own UI (`programs`, `network`, `threads:write`, `threads:access`, `settings:write`, `commands`, `ui.replace`) come first and say what they risk. A built-in Glitched's release key signed draws Glitched's own UI, so its `ui.replace` has no switch there while granted; a copy of it, or a built-in that fails its signature, has one. A grant holds at once: the plugin's runtime asks for its grants as it uses them, so it goes on running, with what its pages hold, and its sessions hear `grant.changed`. `host.capability(name)` answers whether it has one now. In the engine, only the `service` grant reloads the plugin, as it decides which module runs.
+Grants start off, except a built-in plugin's, which start on. **Settings › Plugins** has a switch for each one a plugin declares, in the plugin's row. The ones that let a plugin act as you, send what it reads away, or draw Glitched's own UI (`programs`, `network`, `threads:write`, `threads:access`, `settings:write`, `commands`, `models:ask`, `ui.replace`) come first and say what they risk. A built-in Glitched's release key signed draws Glitched's own UI, so its `ui.replace` has no switch there while granted; a copy of it, or a built-in that fails its signature, has one. A grant holds at once: the plugin's runtime asks for its grants as it uses them, so it goes on running, with what its pages hold, and its sessions hear `grant.changed`. `host.capability(name)` answers whether it has one now. In the engine, only the `service` grant reloads the plugin, as it decides which module runs.
 
 A plugin can never reach the UI tree, call Go beyond `glitched`, read files outside its data folder, share another plugin's runtime or storage, or hold the window.
 
@@ -697,6 +702,7 @@ Glitched checks the signature over every file before it writes anything, then in
 | Events waiting | 64 |
 | A timer | every 30 s at least |
 | A program run | 60 s (at most 300), 16 MiB per stream |
+| An ask | 200 KB of prompt, 120 s, one at a time per plugin |
 | The database / a query | 100 MB / 10,000 rows |
 | A signed plugin | 8 MiB a file, 32 MiB, 2000 files |
 
@@ -711,6 +717,7 @@ Glitched checks the signature over every file before it writes anything, then in
 | `view` or `place` fails or is refused | the error; the last good drawing stays | the next event or change |
 | A call times out | a stuck runtime is restarted | state survives |
 | A service call fails | `err.code`: `denied`, `no_service`, `offline`, or the service's own error | the page decides |
+| An ask fails | `err.code`: `denied`, `unsupported`, `unavailable`, `busy`, `too_large`, `timeout`, or the provider's own error | the plugin decides |
 | A plugin misbehaves | | turn it off in Settings: its runtimes stop and its pages, places, tabs, commands and tools go |
 
 ## Not supported yet
@@ -728,7 +735,7 @@ Glitched pins `github.com/bigx333/mygo-plugin` by a `replace` of `github.com/yxx
 
 | Change | Why |
 | --- | --- |
-| `Options.Functions`, `host.call`, `host.functions` | upstream lets a host add no functions; `glitched.run`, `glitched.db` and `glitched.service` are host functions |
+| `Options.Functions`, `host.call`, `host.functions` | upstream lets a host add no functions; `glitched.run`, `glitched.db`, `glitched.service` and `glitched.models.ask` are host functions |
 | `Options.Prelude` | defines the `glitched` global in every runtime |
 | `Options.LoadTimeout`, `Close` ending a start | upstream runs a module's top level with no limit, holding the plugin's lock |
 | `Options.Main` | the engine loads a plugin's service module as a runtime of its own |

@@ -65,6 +65,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/hub"
+	"glitched/internal/provider"
 )
 
 const protocolHeader = "Glitched-Protocol"
@@ -134,6 +135,8 @@ var sentinels = []struct {
 	{"protocol", api.ErrProtocol},
 	{"foreign_log", hub.ErrForeignLog},
 	{"rewound", hub.ErrRewound},
+	{"unsupported", provider.ErrUnsupported},
+	{"unavailable", provider.ErrUnavailable},
 }
 
 func toWire(err error) *wireError {

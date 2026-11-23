@@ -24,6 +24,7 @@ import (
 	"glitched/internal/plugins/bundled"
 	"glitched/internal/plugins/render"
 	"glitched/internal/plugins/widget"
+	"glitched/internal/provider"
 	"glitched/internal/transport"
 )
 
@@ -95,6 +96,9 @@ func (a *app) openPlugins(dir string) {
 		Reloaded: func(string) {
 			clear(a.pluginAssets)
 			forgetPluginTerminals()
+		},
+		Ask: func(ctx context.Context, id string, q plugins.AskRequest) (plugins.AskAnswer, error) {
+			return a.askModel(ctx, dir, id, q)
 		},
 		ServiceCall: func(ctx context.Context, id, method string, args json.RawMessage) (any, error) {
 			call, _ := json.Marshal(plugins.ServiceCall{Plugin: id, Method: method, Args: args})
@@ -710,6 +714,28 @@ func pluginWorkspace(ws string) (string, error) {
 		return "", fmt.Errorf("workspace %q is not a folder", ws)
 	}
 	return filepath.Clean(ws), nil
+}
+
+// askModel is glitched.models.ask: this machine's engine asks the
+// provider, by default that of the model new threads take, from the
+// plugin's data folder, which holds no project for it to read.
+func (a *app) askModel(ctx context.Context, dir, id string, q plugins.AskRequest) (plugins.AskAnswer, error) {
+	name := q.Provider
+	if name == "" {
+		got := make(chan string, 1)
+		a.post(func() { got <- a.savedChoice.Model.Provider })
+		select {
+		case name = <-got:
+		case <-ctx.Done():
+			return plugins.AskAnswer{}, ctx.Err()
+		}
+	}
+	data := filepath.Join(plugins.DataDir(dir), id)
+	if err := os.MkdirAll(data, 0o700); err != nil {
+		return plugins.AskAnswer{}, err
+	}
+	r, err := a.serviceClient(dir).ProviderAsk(ctx, name, provider.AskSpec{Model: q.Model, System: q.System, Prompt: q.Prompt, Dir: data})
+	return plugins.AskAnswer{Text: r.Text, Provider: name, Model: r.Model}, err
 }
 
 // serviceClient reaches the plugins' services where this machine's engine

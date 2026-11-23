@@ -87,6 +87,9 @@ type Options struct {
 	// ServiceCall calls a method of the plugin id's service, as
 	// glitched.service.call asks. Nil reaches none.
 	ServiceCall func(ctx context.Context, id, method string, args json.RawMessage) (any, error)
+	// Ask asks a model for the plugin id, as glitched.models.ask does,
+	// with the host's limits checked. Nil answers none.
+	Ask func(ctx context.Context, id string, q AskRequest) (AskAnswer, error)
 	// Bundled holds the plugins built into the app, a folder each at its
 	// root. Each is verified as a plugin in the plugins folder is, and
 	// runs when signed by one of ReleaseKeys (base64 public keys), with
@@ -128,6 +131,8 @@ type Host struct {
 	// stopping are the runtimes and databases on their way to stop, which
 	// Close and Remove wait for.
 	stopping sync.WaitGroup
+	// asking holds the plugins with an ask under way, by id: one each.
+	asking sync.Map
 }
 
 type installed struct {
