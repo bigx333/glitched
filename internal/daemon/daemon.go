@@ -27,6 +27,7 @@ import (
 	"glitched/internal/provider"
 	"glitched/internal/provider/acp"
 	"glitched/internal/provider/claude"
+	"glitched/internal/provider/codex"
 	"glitched/internal/provider/fake"
 	"glitched/internal/runtime"
 	"glitched/internal/store"
@@ -71,6 +72,9 @@ type Config struct {
 	// AgyPath is the agy binary an engine with WithAgents runs Antigravity
 	// threads with, when it is not on PATH or in ~/.local/bin.
 	AgyPath string `json:"agy_path,omitempty"`
+	// CodexPath is the codex binary an engine with WithAgents runs Codex
+	// threads with, when it is not on PATH or in ~/.local/bin.
+	CodexPath string `json:"codex_path,omitempty"`
 	// Children caps the child threads agents start. Its zero fields take
 	// engine.DefaultLimits'.
 	Children engine.Limits `json:"children,omitzero"`
@@ -120,10 +124,14 @@ func (cfg *Config) WithClaude() {
 }
 
 // WithAgents has the engine run every agent of the user's it knows: Claude
-// Code, as WithClaude has it, and each ACP agent whose binary it finds, as
-// `glitched serve` and the GUI's own engine do.
+// Code, as WithClaude has it, and Codex and each ACP agent whose binary it
+// finds, as `glitched serve` and the GUI's own engine do.
 func (cfg *Config) WithAgents() {
 	cfg.WithClaude()
+	cx := &codex.Adapter{Path: cfg.CodexPath}
+	if _, err := cx.Binary(); err == nil {
+		cfg.Providers[codex.Provider] = cx
+	}
 	paths := map[string]string{acp.Antigravity.Provider: cfg.AgyPath}
 	for _, p := range acp.Profiles {
 		ad := &acp.Adapter{Profile: p, Path: paths[p.Provider]}
