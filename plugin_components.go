@@ -336,7 +336,7 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 			ui.Text(c, ago(t.View.UpdatedAt, a.now)).FontSize(11).TextColor(palette.faint).Shrink(0)
 		}
 	case "thread.slot":
-		a.pluginSlot(c, "thread.row", t.id().String(), t, false)
+		a.pluginSlot(c, "thread.row", t.id().String(), t, false, true)
 	case "thread.machine":
 		if len(a.backend.Envs()) > 1 {
 			a.machineBadge(c, t.env)
@@ -563,24 +563,22 @@ var openInApp = func(app, folder string) error {
 	return nil
 }
 
-// componentAnswered is whether the plugin drawing the copy cp of the
-// component name has drawn it as it is now: the first replacer that runs
-// and hasn't failed, as pluginComponent picks it.
-func (a *app) componentAnswered(name string, t *thread, cp componentCopy) bool {
+// headerActionsDrawn is whether the plugin drawing the header's actions
+// for key, the first replacer with a good drawing as pluginComponent picks
+// it, has drawn them narrow or not as asked: a thread record that changes
+// as the thread runs doesn't count.
+func (a *app) headerActionsDrawn(key string, narrow bool) bool {
 	if a.plugins == nil {
 		return true
 	}
-	var full plugins.ThreadRecord
-	if t != nil {
-		full = a.threadRecord(*t)
-	}
-	for _, pl := range a.plugins.Replacers(name) {
+	for _, pl := range a.plugins.Replacers("thread.header.actions") {
 		app := a.plugins.App(pl.Plugin)
-		if app == nil || app.Err != nil {
+		if app == nil || app.Err != nil || app.PlaceView(pl.Place.ID, key) == nil {
 			continue
 		}
-		version, _ := json.Marshal(cp.context(a.plugins.Record(pl.Plugin, full)))
-		return app.Answered(pl.Place.ID, cp.key) == string(version)
+		var drawn struct{ Narrow *bool }
+		json.Unmarshal([]byte(app.Answered(pl.Place.ID, key)), &drawn)
+		return drawn.Narrow != nil && *drawn.Narrow == narrow
 	}
 	return true
 }

@@ -254,7 +254,7 @@ func (a *app) threadsNav(c *ui.Context) {
 	a.pluginComponent(c, "sidebar.body", nil, body...)
 	ui.Column(c).Padding(8).Gap(1).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
 		a.cliUpdatesButton(c)
-		a.pluginSlot(c, "sidebar.footer", "", nil, false)
+		a.pluginSlot(c, "sidebar.footer", "", nil, false, true)
 		a.pluginNav(c)
 		if ghost(c, "settings", false).Padding(7, 8).Children(func() {
 			ui.Icon(c, icSettings).FontSize(15)
@@ -396,7 +396,7 @@ func (a *app) inboxRow(c *ui.Context, it inboxItem, cat category) {
 			return
 		}
 		a.rowTitle(c, t)
-		a.pluginSlot(c, "thread.row", t.id().String(), &t, false)
+		a.pluginSlot(c, "thread.row", t.id().String(), &t, false, true)
 		if len(a.backend.Envs()) > 1 {
 			a.machineBadge(c, t.env)
 		}

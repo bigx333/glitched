@@ -160,7 +160,8 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 	left := 16 + bar.Left*(1-a.sidebarOpen)
 	// Narrow, beside a panel, the header keeps to icons, and never draws
 	// past the chat's edge.
-	narrow := a.chatWidth < 700
+	chat := a.chatRoom()
+	narrow := chat < 700
 	// Clear of the window buttons on the right (Windows, Linux) unless a
 	// panel takes that edge.
 	right := float32(12)
@@ -175,72 +176,98 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 				a.toggleSidebar(false)
 			}
 		}
-		// The title, and a child's way back up before it.
-		heading := a.heading(c, t, narrow)
-		g := &a.headerGive
-		give := g.of(t.id(), narrow)
 		project, branch := a.projectOf(t).name(), t.View.Branch
 		machine := len(a.backend.Envs()) > 1 && t.env != nil
+		text := func(s string, size float32) float32 {
+			w, _ := c.MeasureText(0, ui.Span{Text: s, Size: size})
+			return w
+		}
+		pills := headerPills{project: text(project, 11) + 2*pillPadX + 2 + headerGap}
+		if machine {
+			pills.project += text(t.env.Name, 10.5) + machinePillChrome + headerGap
+		}
+		if branch != "" {
+			pills.branch = text(branch, 11) + 2*pillPadX + 2 + headerGap
+		}
+		if !a.showSidebar {
+			pills.sidebar = headerIconW + headerGap
+		}
+		natural, _ := c.MeasureText(0, ui.Span{Text: title(t), Weight: 600})
+		g := &a.headerGive
+		give := g.choose(t.id(), narrow, chat-left-right, min(natural, headerTitleRoom), pills)
+		w := g.widths()
+		// The title, and a child's way back up before it.
+		heading := a.heading(c, t, narrow)
 		if give < giveProject {
-			pill(c, project).Shrink(0)
+			pill(c, project).Key("header-project").Shrink(0)
 		}
 		if give < giveBranch && branch != "" {
-			pill(c, branch).Shrink(0)
+			pill(c, branch).Key("header-branch").Shrink(0)
 		}
-		var machineAt ui.Rect
 		if give < giveProject && machine {
-			machineAt = a.machinePill(c, t.env).Bounds()
+			a.machinePill(c, t.env)
 		}
 		if !narrow {
 			a.usagePill(c, t)
 		}
-		slot, slotDrawn := float32(0), true
+		drew := headerDrew{thread: t.id(), narrow: narrow, step: give, left: left, right: right, pills: pills}
+		var slot float32
 		switch {
 		case t.id().IsZero():
 		case give < givePlaces:
-			slot, slotDrawn = a.pluginSlot(c, "thread.header", t.id().String(), &t, give >= giveCompactPlaces)
+			drew.slotV = min(give/giveCompactPlaces, 1)
+			slot, drew.slotDrawn, drew.slotShown = a.pluginSlot(c, "thread.header", t.id().String(), &t, drew.slotV == 1, w.slot[drew.slotV] >= 0)
 		default:
 			// Its copies are left out: the plugins hear they went.
 			a.frameOf("thread.header")
 		}
-		spacer := ui.Spacer(c)
+		spacer := ui.Spacer(c).Key("header-spacer")
 		a.tabButtons(c)
 		// The rest of the row is a plugin's: the built-in Header actions,
 		// or one of the user's that replaces it.
 		state := headerActions{Local: t.local(), Narrow: give >= giveActions, Panels: a.panels(), ChangedFiles: len(files)}
-		var actions ui.Element
-		box := func() ui.Element {
-			actions = ui.Row(c).Key("component:thread.header.actions").Shrink(0).AlignItems(ui.Center)
-			return actions
-		}
-		cp := componentCopy{key: t.id().String(), box: box, context: func(r plugins.ThreadRecord) any {
+		cp := componentCopy{key: t.id().String(), context: func(r plugins.ThreadRecord) any {
 			state.Thread = r
 			return state
 		}}
+		drew.actionsV = min(give, giveActions)
+		drew.actionsDrawn = a.headerActionsDrawn(cp.key, state.Narrow)
+		drew.actionsShown = drew.actionsDrawn && w.actions[drew.actionsV] >= 0
+		var actions ui.Element
+		cp.box = func() ui.Element {
+			actions = ui.Row(c).Key("component:thread.header.actions").Shrink(0).AlignItems(ui.Center)
+			// Drawn for another width, or at one not measured yet, they
+			// are measured out of the row, which never holds more than
+			// fits it.
+			if !drew.actionsShown {
+				actions = actions.Absolute().Invisible()
+			}
+			return actions
+		}
 		a.pluginComponent(c, "thread.header.actions", &t, cp)
-		h, ti, sp, ac := head.Bounds(), heading.Bounds(), spacer.Bounds(), actions.Bounds()
-		room := h.W - left - right
-		over := max(0, ac.X+ac.W-(h.X+h.W-right))
-		natural, _ := c.MeasureText(0, ui.Span{Text: title(t), Weight: 600})
-		pillW := func(s string) float32 {
-			w, _ := c.MeasureText(0, ui.Span{Text: s, Size: 11})
-			return w + 2*pillPadX + 2 + headerGap
-		}
-		if !g.measured(slotDrawn && a.componentAnswered("thread.header.actions", &t, cp)) {
-			return
-		}
-		g.drawn(ac.W, slot, machineAt.W)
-		back := map[int]float32{giveProject: pillW(project), giveBranch: 0}
-		if machine {
-			back[giveProject] += g.machine + headerGap
-		}
-		if branch != "" {
-			back[giveBranch] = pillW(branch)
-		}
-		if g.fit(room, room+over-ti.W-sp.W, min(natural, headerTitleRoom), back) {
+		// What this frame lays out but the header hasn't measured, the next
+		// frame measures, and draws with: the window may not ask for one.
+		unmeasured := w.base[b2i(narrow)] < 0 || drew.actionsDrawn && !drew.actionsShown || drew.slotDrawn && !drew.slotShown
+		if g.measure(head.Bounds(), heading.Bounds().W, spacer.Bounds().W, actions.Bounds(), slot) || unmeasured {
 			c.Invalidate()
 		}
+		g.drew = drew
 	})
+}
+
+// chatRoom is the chat's width in this frame: the room beside the
+// sidebar, less the panel's beside it.
+func (a *app) chatRoom() float32 {
+	w := a.roomBeside
+	switch {
+	case a.showDiff:
+		w -= a.diffWidth()
+	case a.showPreview:
+		w -= a.previewWidth()
+	case a.showPluginTab:
+		w -= a.diffWidth()
+	}
+	return max(w, minChatWidth)
 }
 
 // headerTitleRoom is the most of its title's width the header keeps
@@ -251,6 +278,14 @@ const headerTitleRoom = 160
 const (
 	headerGap = 8
 	pillPadX  = 7
+)
+
+// headerIconW is an icon button's width, its icon and its padding, and
+// machinePillChrome what a machine's pill adds to its name: its dot, the
+// dot's gap, its padding and its border.
+const (
+	headerIconW       = 15 + 2*6
+	machinePillChrome = 5 + 4 + 2*6 + 2
 )
 
 // What the header gives way, in order, while its row doesn't fit: the
@@ -266,93 +301,153 @@ const (
 	givePlaces
 )
 
-// headerGive is what the header of a thread gives way. It measures its
-// row only once the plugins have drawn their copies for the step, and a
-// frame after, as a frame lays out what the one before it drew. actions
-// and slot are the widths of the actions and of the slot's copies, full
-// and smallest, as they were last drawn; -1 is one not drawn yet.
+// headerPills are the widths, gaps included, of what the header draws
+// itself and its steps take away, the project's pill with the machine's
+// and the branch's, and of the sidebar's button.
+type headerPills struct{ project, branch, sidebar float32 }
+
+// headerGive is what the header gives way. It picks the step in the frame
+// that draws it, from the chat's width in that frame and from what it has
+// measured of each thread's row, so that no frame lays the row out past
+// the window or one control under another. A plugin's drawing it hasn't
+// measured at its width is drawn out of the row and measured there.
 type headerGive struct {
-	thread  api.ID
-	narrow  bool
-	step    int
-	wait    int
-	actions [2]float32
+	thread api.ID
+	step   int
+	// tight is the room the header had as it last gave a step way: it
+	// takes one back only with more, so that a copy drawn wider for
+	// being shown again doesn't keep it going back and forth.
+	tight float32
+	seen  map[api.ID]*headerWidths
+	// drew is what the last frame drew, which this frame's bounds lay out.
+	drew headerDrew
+}
+
+// headerWidths are what the header measured of a thread's row, -1 for
+// what it hasn't: base, the row but its title, pills, copies and actions,
+// narrow and not; the slot's copies full and smallest, gaps included; the
+// actions with their labels and as icons, with the gap before them.
+type headerWidths struct {
+	base    [2]float32
 	slot    [2]float32
-	machine float32
+	actions [2]float32
 }
 
-// of is the step the header of thread draws at, from the start for a
-// thread or a width it hasn't drawn, whose first frame measures the
-// header before it.
-func (g *headerGive) of(thread api.ID, narrow bool) int {
-	if g.thread != thread || g.narrow != narrow {
-		*g = headerGive{thread: thread, narrow: narrow, wait: 1, actions: [2]float32{-1, -1}, slot: [2]float32{-1, -1}}
-		if narrow {
-			g.step = giveBranch
+// headerDrew is what a frame drew of the header: the copies and the
+// actions at which of their widths, whether drawn for it, and whether in
+// the row.
+type headerDrew struct {
+	thread                     api.ID
+	narrow                     bool
+	step                       int
+	left, right                float32
+	pills                      headerPills
+	slotV, actionsV            int
+	slotDrawn, slotShown       bool
+	actionsDrawn, actionsShown bool
+}
+
+func (g *headerGive) widths() *headerWidths { return g.seen[g.thread] }
+
+// row is how wide the header's row is at step k but its title, as far as
+// it knows: a drawing it hasn't measured is drawn out of the row.
+func (w *headerWidths) row(k int, narrow bool, p headerPills) float32 {
+	r := max(w.base[b2i(narrow)], 0) + p.sidebar
+	if k < giveProject {
+		r += p.project
+	}
+	if k < giveBranch {
+		r += p.branch
+	}
+	if k < givePlaces {
+		r += max(w.slot[min(k/giveCompactPlaces, 1)], 0)
+	}
+	return r + max(w.actions[min(k, giveActions)], 0)
+}
+
+// choose is the step the header of thread draws at in room points, with
+// title as much as its title keeps: the least it gives way and fits. It
+// takes a step back only with room to spare, and under 700 points
+// (narrow) gives the pills and the actions' labels way whatever the room.
+// What it hasn't measured it counts as nothing: that is drawn out of the
+// row till it has.
+func (g *headerGive) choose(thread api.ID, narrow bool, room, title float32, p headerPills) int {
+	if g.thread != thread {
+		g.thread, g.step, g.tight = thread, giveNone, 0
+	}
+	if g.seen[thread] == nil {
+		if len(g.seen) >= 64 || g.seen == nil {
+			g.seen = map[api.ID]*headerWidths{}
+		}
+		g.seen[thread] = &headerWidths{base: [2]float32{-1, -1}, slot: [2]float32{-1, -1}, actions: [2]float32{-1, -1}}
+	}
+	w := g.seen[thread]
+	least := giveNone
+	if narrow {
+		least = giveBranch
+	}
+	k := givePlaces
+	for s := least; s < givePlaces; s++ {
+		spare := float32(0)
+		if s < g.step {
+			spare = 16
+		}
+		if w.row(s, narrow, p)+title+spare <= room {
+			k = s
+			break
 		}
 	}
-	return g.step
-}
-
-// measured says whether this frame's layout is of the step, as drawn
-// says the plugins drew their copies for it.
-func (g *headerGive) measured(drawn bool) bool {
 	switch {
-	case !drawn:
-		g.wait = 1
-	case g.wait > 0:
-		g.wait--
-	default:
-		return true
+	case k > g.step:
+		g.tight = room
+	case k < g.step && room <= g.tight:
+		k = g.step
 	}
-	return false
+	g.step = k
+	return k
 }
 
-// drawn keeps the widths the step drew of the actions, the slot's copies
-// and the machine's pill, to know what taking a step back adds.
-func (g *headerGive) drawn(actions, slot, machine float32) {
-	g.actions[min(g.step, giveActions)] = actions
-	if g.step < givePlaces {
-		g.slot[min(g.step/giveCompactPlaces, 1)] = slot
-	}
-	if g.step < giveProject && machine > 0 {
-		g.machine = machine
-	}
-}
-
-// fit takes the room of the row, the width of all in it but the title,
-// the title's, and what the pills' steps take away: it gives one more
-// step way while the row doesn't fit, and takes one back where what the
-// step took away fits again. It says whether the step changed.
-func (g *headerGive) fit(room, rest, title float32, pills map[int]float32) bool {
-	if room <= 0 {
+// measure keeps what the last frame's layout says of the row it drew: h,
+// the row's bounds, title and spacer the widths of its title and of its
+// spacer, actions the actions' bounds, and slot the slot's copies' width.
+// It says whether that changed what the header knows.
+func (g *headerGive) measure(h ui.Rect, title, spacer float32, actions ui.Rect, slot float32) bool {
+	d := g.drew
+	w := g.seen[d.thread]
+	if w == nil || d.thread != g.thread || h.W <= 0 {
 		return false
 	}
-	back := float32(-1)
-	switch g.step {
-	case giveActions:
-		if g.actions[0] >= 0 && g.actions[1] >= 0 {
-			back = g.actions[0] - g.actions[1]
+	changed := false
+	set := func(at *float32, v float32) {
+		if *at != v {
+			*at, changed = v, true
 		}
-	case giveProject, giveBranch:
-		back = pills[g.step]
-	case giveCompactPlaces:
-		if g.slot[0] >= 0 && g.slot[1] >= 0 {
-			back = g.slot[0] - g.slot[1]
-		}
-	case givePlaces:
-		back = g.slot[1]
 	}
-	switch {
-	case rest+title > room && g.step < givePlaces:
-		g.step++
-	case g.step > giveNone && !(g.narrow && g.step == giveBranch) && back >= 0 && rest+back+title+16 <= room:
-		g.step--
-	default:
-		return false
+	if d.actionsDrawn {
+		set(&w.actions[d.actionsV], actions.W+headerGap)
 	}
-	g.wait = 1
-	return true
+	if d.slotDrawn && d.step < givePlaces {
+		set(&w.slot[d.slotV], slot)
+	}
+	end := h.X + h.W - d.right
+	if d.actionsShown {
+		end = max(end, actions.X+actions.W)
+	}
+	base := end - h.X - d.left - title - spacer - d.pills.sidebar
+	if d.step < giveProject {
+		base -= d.pills.project
+	}
+	if d.step < giveBranch {
+		base -= d.pills.branch
+	}
+	if d.slotShown && d.step < givePlaces {
+		base -= slot
+	}
+	if d.actionsShown {
+		base -= actions.W + headerGap
+	}
+	set(&w.base[b2i(d.narrow)], max(base, 0))
+	return changed
 }
 
 // headerButton is a button of the header's glass bar: a hairline pill,
@@ -1958,4 +2053,12 @@ func threadTitle(text, about string) string {
 		title = string(r[:48]) + "…"
 	}
 	return title
+}
+
+// b2i is 1 for true and 0 for false.
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

@@ -346,7 +346,7 @@ func breadcrumbRow(b headerBreadcrumb) *widget.Node {
 
 // headingTitle is the thread's title in the header.
 func headingTitle(c *ui.Context, t thread) ui.Element {
-	return ui.Text(c, title(t)).FontWeight(600).SingleLine().Shrink(1).MinWidth(80)
+	return ui.Text(c, title(t)).Key("heading-title").FontWeight(600).SingleLine().Shrink(1).MinWidth(80)
 }
 
 // crumb is the nth button back to x, an ancestor of the thread shown, in

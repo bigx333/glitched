@@ -930,9 +930,6 @@ func (a *app) view(c *ui.Context) {
 	a.pruneThreadState()
 	// A steer to a server removed since never lands.
 	maps.DeleteFunc(a.steers, func(_ api.ID, s steer) bool { return !slices.Contains(a.backend.Envs(), s.env) })
-	if w, _ := c.Size(); w > 0 {
-		a.roomBeside = w - a.sidebarWidth*a.sidebarOpen
-	}
 	// Jokes over are gone, whether or not their rows show: a row in a
 	// closed section isn't built to see its own end.
 	for id, fx := range a.rowFx {
@@ -972,6 +969,11 @@ func (a *app) view(c *ui.Context) {
 		a.sidebarOpen = root.Jump("sidebar", target)
 	} else {
 		a.sidebarOpen = root.AnimateTo("sidebar", target, sidebarSlide)
+	}
+	// Of this frame's sidebar, so that what lays itself out beside it, as
+	// the header, fits the room it has in this frame.
+	if w, _ := c.Size(); w > 0 {
+		a.roomBeside = w - a.sidebarWidth*a.sidebarOpen
 	}
 	root.Children(func() {
 		a.sidebarFrame(c)
