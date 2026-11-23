@@ -83,7 +83,7 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				commit(engine.Work{Item: api.WorkItem{Run: run, Item: ev.Item, Kind: ev.Kind, Title: redact(ev.Title), Status: ev.Status,
 					Path: redact(ev.Path), Exit: ev.Exit, Output: output}})
 			case provider.Context:
-				commit(engine.Context{Run: run, Used: ev.Used, Window: ev.Window, Model: ev.Model, Compacted: ev.Compacted})
+				commit(engine.Context{Run: run, Used: ev.Used, Window: ev.Window, Model: redact(ev.Model), Compacted: ev.Compacted})
 			case provider.RequestOpened:
 				flushText()
 				commit(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: ev.ID, Kind: ev.Kind, Body: secrets.RedactJSON(ev.Body, h.credentials(thread))})

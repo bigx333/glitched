@@ -276,3 +276,41 @@ func TestCredentialsReplaceAndGoWithTheThread(t *testing.T) {
 		}
 	}
 }
+
+// A context report's model label, which the provider writes, is masked
+// as its text is: neither the event log nor the thread shows a credential.
+func TestAContextReportKeepsCredentialsOut(t *testing.T) {
+	st, err := store.Open(dbPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	vault := secrets.New(t.TempDir())
+	ad := fake.New([]provider.Event{
+		provider.Context{Used: 10, Window: 100, Model: probe},
+		provider.TextDelta{Text: probe},
+	})
+	h, err := runtime.New(ctx, st, provider.Mux{"fake": ad}, runtime.WithVault(vault))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Kill()
+	thread := newThread(t, h)
+	if err := vault.Put(thread, map[string]string{"GLX_PROBE": probe}); err != nil {
+		t.Fatal(err)
+	}
+	submit(t, h, thread, dispatch("go", api.StartNow))
+	v := until(t, h, thread, "the turn", idle)
+	if v.Context == nil || v.Context.Used != 10 {
+		t.Fatalf("no context report: %+v", v.Context)
+	}
+	for _, e := range events(t, h, thread) {
+		b, _ := json.Marshal(e)
+		if strings.Contains(string(b), probe) {
+			t.Errorf("%s holds the credential", e.Type)
+		}
+	}
+	if strings.Contains(v.Context.Model, probe) {
+		t.Errorf("the thread's context model holds the credential: %q", v.Context.Model)
+	}
+}
