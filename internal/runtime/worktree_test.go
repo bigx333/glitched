@@ -454,3 +454,45 @@ func TestAFolderTheCheckoutMovedOutIsRefused(t *testing.T) {
 	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: api.NewID(), Body: inWorktree(sub, "")})
 	refusal(t, err, "isn't a folder of it")
 }
+
+// A checkout git added at the worktree's place after it pruned the
+// thread's, on the thread's branch, is not the thread's worktree, though
+// git gives it the same git folder.
+func TestACheckoutAddedWhereThePrunedWorktreeWasIsNotRemoved(t *testing.T) {
+	w := serveWorktrees(t)
+	project := repo(t)
+	thread := api.NewID()
+	submit(t, w.h, thread, inWorktree(project, ""))
+	th := until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
+	if err := os.Rename(th.Workspace, filepath.Join(t.TempDir(), "moved")); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, project, "worktree", "prune", "--expire", "now")
+	gitIn(t, project, "worktree", "add", "-q", th.Workspace, th.Branch)
+	note := filepath.Join(th.Workspace, "theirs.txt")
+	os.WriteFile(note, []byte("theirs\n"), 0o644)
+	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadDelete{RemoveWorktree: true}})
+	refusal(t, err, "is no longer the thread's worktree")
+	if _, err := os.Stat(note); err != nil {
+		t.Fatalf("the new checkout lost its file: %v", err)
+	}
+}
+
+// A lock is seen in a worktree whose path holds a newline, from a
+// project whose folder's name does.
+func TestALockedWorktreeStaysWhateverItsPath(t *testing.T) {
+	w := serveWorktrees(t)
+	project := filepath.Join(repo(t), "two\nlines")
+	os.Mkdir(project, 0o755)
+	gitIn(t, project, "init", "-q", "-b", "main")
+	gitIn(t, project, "commit", "-q", "--allow-empty", "-m", "start")
+	thread := api.NewID()
+	submit(t, w.h, thread, inWorktree(project, ""))
+	locked := until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
+	gitIn(t, project, "worktree", "lock", locked.Workspace)
+	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadDelete{RemoveWorktree: true}})
+	refusal(t, err, "it is locked")
+	if view(t, w.h, thread).Deleted {
+		t.Fatal("a refused delete of a locked worktree deleted the thread")
+	}
+}
