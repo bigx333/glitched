@@ -1,0 +1,107 @@
+package main
+
+import (
+	"image/png"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"glitched/internal/daemon"
+	"glitched/internal/provider/fake"
+)
+
+// writeSkill puts a skill named name in root, as the user would.
+func writeSkill(t *testing.T, root, name, description string) {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	md := "---\nname: " + name + "\ndescription: " + description + "\n---\n\nDo it well.\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(md), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// skillsHeader is the app on a thread whose engine finds the skills set
+// puts in its home and project folders, with the built-in Skills drawing
+// the header's pill, and the pill's label once it shows.
+func skillsHeader(t *testing.T, set func(home, project string), want string) *harness {
+	t.Helper()
+	dir, work := tempDir(t), t.TempDir()
+	set(filepath.Join(dir, "skills"), filepath.Join(work, ".glitched", "skills"))
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(nil))
+	seed(t, d, work, "Fix the flaky test")
+	installOwn(t, dir, "skills")
+	h := start(t, dir)
+	if err := h.a.plugins.SetGranted("skills", "threads:read", true); err != nil {
+		t.Fatal(err)
+	}
+	h.a.select_(h.thread("Fix the flaky test"))
+	h.until("the skills pill", func() bool { h.tt.Frame(); return h.tt.HasText(want) })
+	return h
+}
+
+func clashingSkills(t *testing.T) func(home, project string) {
+	return func(home, project string) {
+		writeSkill(t, home, "deploy", "Ship the app to staging.")
+		writeSkill(t, home, "review", "Review a diff the way I like.")
+		writeSkill(t, project, "review", "Review the diff as this project does.")
+		writeSkill(t, project, "Bad_Name", "Never shown.")
+	}
+}
+
+// The header of a thread shows the skills its engine finds for it, as the
+// built-in Skills draws them, the project's replacing the user's own of
+// a name, and one the engine skips with why; a click opens the popover.
+func TestTheHeaderShowsTheThreadsSkills(t *testing.T) {
+	h := skillsHeader(t, clashingSkills(t), "Skills 2")
+	if h.tt.HasText("replaces yours") {
+		t.Fatal("the popover shows before a click")
+	}
+	if err := h.tt.Click("Skills 2"); err != nil {
+		t.Fatal(err)
+	}
+	settleTester(h.tt)
+	h.until("the popover", func() bool { h.tt.Frame(); return h.tt.HasText("replaces yours") })
+	for _, want := range []string{"deploy", "Ship the app to staging.", "Yours", "review", "Review the diff as this project does.", "Project", "Skipped", "Bad_Name"} {
+		if !h.tt.HasText(want) {
+			t.Errorf("the popover doesn't say %q: %q", want, h.tt.Texts())
+		}
+	}
+	if h.tt.HasText("Review a diff the way I like.") {
+		t.Errorf("the popover lists the user's review the project's replaces: %q", h.tt.Texts())
+	}
+}
+
+// TestSkillsShot writes PNGs of the Skills pill's popover to the folder
+// SKILLSHOT names: the user's skills alone, and the user's and the
+// project's with a clash and a skipped one.
+func TestSkillsShot(t *testing.T) {
+	out := os.Getenv("SKILLSHOT")
+	if out == "" {
+		t.Skip()
+	}
+	os.MkdirAll(out, 0o755)
+	home := func(home, _ string) {
+		writeSkill(t, home, "deploy", "Ship the app to staging.")
+		writeSkill(t, home, "release-notes", "Write the release notes from the merged pull requests since the last tag.")
+	}
+	for name, set := range map[string]func(string, string){"home": home, "clash": clashingSkills(t)} {
+		h := skillsHeader(t, set, "Skills 2")
+		h.a.settings.theme = darkTheme.name
+		if err := h.tt.Click("Skills 2"); err != nil {
+			t.Fatal(err)
+		}
+		settleTester(h.tt)
+		h.until("the popover", func() bool { h.tt.Frame(); return h.tt.HasText("Ship the app to staging.") })
+		h.tt.Advance(time.Second)
+		f, err := os.Create(filepath.Join(out, name+".png"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		png.Encode(f, h.tt.Image())
+		f.Close()
+	}
+}
