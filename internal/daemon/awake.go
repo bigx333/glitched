@@ -17,12 +17,13 @@ var awakeGrace = time.Minute
 type awake struct {
 	hold             func(context.Context) error
 	grace            time.Duration
+	after            func(time.Duration) <-chan time.Time
 	working, enabled atomic.Bool
 	poke             chan struct{}
 }
 
 func newAwake(hold func(context.Context) error, enabled bool) *awake {
-	w := &awake{hold: hold, grace: awakeGrace, poke: make(chan struct{}, 1)}
+	w := &awake{hold: hold, grace: awakeGrace, after: time.After, poke: make(chan struct{}, 1)}
 	w.enabled.Store(enabled)
 	return w
 }
@@ -69,7 +70,7 @@ func (w *awake) run(ctx context.Context) {
 		case release != nil && !on:
 			letGo()
 		case release != nil && grace == nil:
-			grace = time.After(w.grace)
+			grace = w.after(w.grace)
 		}
 		select {
 		case <-ctx.Done():
@@ -79,7 +80,10 @@ func (w *awake) run(ctx context.Context) {
 			return
 		case <-w.poke:
 		case <-grace:
-			letGo()
+			grace = nil
+			if !w.enabled.Load() || !w.working.Load() {
+				letGo()
+			}
 		}
 	}
 }
