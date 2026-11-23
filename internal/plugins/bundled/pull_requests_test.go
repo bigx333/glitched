@@ -70,7 +70,12 @@ func (g *github) run(args []string, stdin string, env map[string]string) (any, e
 		if g.listErr != "" {
 			return fail(g.listErr)
 		}
-		prs := g.prs
+		var prs []map[string]any
+		for _, p := range g.prs {
+			if args[slices.Index(args, "--state")+1] != "open" || p["state"] == "OPEN" {
+				prs = append(prs, p)
+			}
+		}
 		if i := slices.Index(args, "--limit"); i >= 0 {
 			n, _ := strconv.Atoi(args[i+1])
 			prs = prs[:min(n, len(prs))]
@@ -92,6 +97,14 @@ func (g *github) run(args []string, stdin string, env map[string]string) (any, e
 			return fail("Post \"https://api.github.com/graphql\": EOF")
 		}
 		return ok("https://github.com/acme/widgets/pull/7\n")
+	case "pr view":
+		for _, p := range g.prs {
+			if fmt.Sprint(p["number"]) == args[2] {
+				b, _ := json.Marshal(p)
+				return ok(string(b))
+			}
+		}
+		return fail("GraphQL: Could not resolve to a PullRequest with the number of " + args[2] + ". (repository.pullRequest)")
 	case "pr ready":
 		for _, p := range g.prs {
 			if fmt.Sprint(p["number"]) == args[2] {
@@ -135,9 +148,10 @@ type pullRequests struct {
 	asks   []time.Time // each ask's deadline
 	// before runs ahead of each program the plugin runs; a result it
 	// gives is the program's instead.
-	before   func(args []string) any
-	effects  []string      // the app calls the plugin made, by type
-	toastLag time.Duration // how long the app takes to show a toast
+	before    func(args []string) any
+	effects   []string      // the app calls the plugin made, by type
+	toastLag  time.Duration // how long the app takes to show a toast
+	modelsLag time.Duration // how long the app takes to list the models
 }
 
 // run is a program the plugin ran: when, where, and the seconds it gave it.
@@ -268,6 +282,7 @@ func (p *pullRequests) do(_ string, e plugins.Effect) (any, error) {
 	case "clipboard.write":
 		p.copied = append(p.copied, str("text"))
 	case "models.list":
+		time.Sleep(p.modelsLag)
 		return map[string]any{"models": []map[string]any{{"provider": "claude", "id": "claude-haiku-5-5", "name": "Haiku 5.5", "family": "Claude"}}}, nil
 	}
 	return nil, nil
@@ -452,8 +467,8 @@ func TestTheHeaderShowsNothingWithNoPullRequestToShowOrMake(t *testing.T) {
 			if v := p.view(); v != nil || len(p.toasts) != 0 {
 				t.Errorf("the header shows %q, told %q", p.text(), p.toasts)
 			}
-			if c.name == "nothing ahead and clean" && len(gh.ran("pr", "list")) != 1 {
-				t.Errorf("gh ran %+v, want one pr list", gh.calls)
+			if lists := gh.ran("pr", "list"); c.name == "nothing ahead and clean" && (len(lists) != 2 || !slices.Contains(lists[0].Args, "open") || !slices.Contains(lists[1].Args, "all")) {
+				t.Errorf("gh ran %+v, want a pr list of the open ones, then of all", gh.calls)
 			}
 		})
 	}
@@ -531,7 +546,7 @@ func TestAPullRequestShowsItsStateReviewAndChecks(t *testing.T) {
 	if strings.Index(text, "lint") > strings.Index(text, "build") || strings.Contains(text, "test · Passed") || v.Find("ready") != nil {
 		t.Errorf("failed first, passed hidden, no Ready for review on an open one: %s", text)
 	}
-	if call := gh.ran("pr", "list"); len(call) != 1 || !slices.Equal(call[0].Args, []string{"pr", "list", "--repo", "acme/widgets", "--head", "fix-flaky", "--state", "all", "--limit", "10",
+	if call := gh.ran("pr", "list"); len(call) != 1 || !slices.Equal(call[0].Args, []string{"pr", "list", "--repo", "acme/widgets", "--head", "fix-flaky", "--state", "open", "--limit", "10",
 		"--json", "number,title,url,state,isDraft,reviewDecision,mergeable,statusCheckRollup,headRefName,headRepository,headRepositoryOwner,baseRefName"}) {
 		t.Errorf("gh pr list: %+v", call)
 	}
@@ -1337,4 +1352,144 @@ func TestTheDialogLeavesNoGap(t *testing.T) {
 			t.Errorf("a spacer %q holds a gap in the dialog", n.ID)
 		}
 	})
+}
+
+// Create pushes to the URL its dialog showed, not to its remote's name: a
+// remote that points elsewhere by the push doesn't take it, and git still
+// shows the remote's ref at the commit, the branch tracking it.
+func TestCreatePRPushesToTheURLItShowed(t *testing.T) {
+	p, work, origin := createDialog(t, &github{})
+	p.mu.Lock()
+	p.before = func(args []string) any {
+		if args[1] == "push" {
+			gitIn(work, "remote", "set-url", "--push", "origin", "https://github.com/acme/another.git")
+		}
+		return nil
+	}
+	p.mu.Unlock()
+	p.click("create.go", "go", nil)
+	var push []string
+	for _, r := range p.runs {
+		if r.Args[1] == "push" {
+			push = r.Args
+		}
+	}
+	head := gitIn(work, "rev-parse", "HEAD")
+	if len(push) < 2 || push[len(push)-2] != "https://github.com/acme/widgets.git" || gitIn(origin, "rev-parse", "fix-flaky") != head {
+		t.Errorf("pushed with %q; want %s pushed to the URL the dialog showed", push, head)
+	}
+	if gitIn(work, "rev-parse", "refs/remotes/origin/fix-flaky") != head || gitIn(work, "rev-parse", "--abbrev-ref", "fix-flaky@{upstream}") != "origin/fix-flaky" || !strings.Contains(p.text(), "#7|") {
+		t.Errorf("after the push: %q", p.text())
+	}
+}
+
+// Create PR opens its dialog without asking the app anything: the models'
+// names, for Write with AI to say which wrote it, were read with the
+// header, so a slow app doesn't hold the dialog up.
+func TestCreatePROpensWithoutAskingTheApp(t *testing.T) {
+	was := callTimeout
+	callTimeout = 2 * time.Second
+	t.Cleanup(func() { callTimeout = was })
+	work, origin := repo(t)
+	onGitHub(t, work, origin, "fix-flaky")
+	p := openPullRequests(t, work, &github{})
+	p.mu.Lock()
+	p.effects = nil
+	p.modelsLag = 3 * time.Second
+	p.mu.Unlock()
+	p.click("create.open", "create", nil)
+	if v := p.view(); v == nil || v.Find("go") == nil || p.s.Err != nil || slices.Contains(p.effects, "models.list") {
+		t.Errorf("Create PR with a slow app: %q, failed %v, asked %q", p.text(), p.s.Err, p.effects)
+	}
+}
+
+// A commit or a push is told as done once git says so: a git after it that
+// runs out of time doesn't hide it, nor offer the commit again.
+func TestCreatePRTellsOfWhatItDidBeforeAGitRanOutOfTime(t *testing.T) {
+	late := map[string]any{"status": -1, "stdout": "", "stderr": ""}
+	p, work, origin := createDialog(t, &github{})
+	p.mu.Lock()
+	p.before = func(args []string) any {
+		if slices.Equal(args, []string{"git", "rev-parse", "HEAD"}) {
+			return late
+		}
+		return nil
+	}
+	p.mu.Unlock()
+	p.click("create.go", "go", nil)
+	v := p.view()
+	if e := v.Find("error"); e == nil || !strings.HasPrefix(e.Text, "Committed; ") || v.Find("commit") != nil || gitIn(work, "log", "-1", "--format=%s") != "Fix the flaky test" {
+		t.Errorf("after a rev-parse that ran out of time: %q", p.text())
+	}
+	if refs := gitIn(origin, "for-each-ref", "refs/heads/fix-flaky"); refs != "" {
+		t.Errorf("pushed %s", refs)
+	}
+
+	p, work, origin = createDialog(t, &github{})
+	p.mu.Lock()
+	p.before = func(args []string) any {
+		if args[1] == "branch" {
+			return late
+		}
+		return nil
+	}
+	p.mu.Unlock()
+	p.click("create.go", "go", nil)
+	if len(p.toasts) != 1 || !strings.Contains(p.toasts[0], "Fix-flaky doesn't track origin/fix-flaky yet: git branch didn't finish in time") || !strings.Contains(p.text(), "#7|") || gitIn(origin, "rev-parse", "fix-flaky") != gitIn(work, "rev-parse", "HEAD") {
+		t.Errorf("after a git branch that ran out of time: told %q, showing %q", p.toasts, p.text())
+	}
+}
+
+// A pull request Create opened, or a list showed, stays till a read of it
+// by its number says otherwise: a list that leaves it out doesn't bring
+// Create PR back.
+func TestAPullRequestStaysTillItsReadSaysOtherwise(t *testing.T) {
+	gh := &github{}
+	p, _, _ := createDialog(t, gh)
+	p.click("create.go", "go", nil)
+	p.mu.Lock()
+	p.before = func(args []string) any {
+		if slices.Equal(args[:3], []string{"gh", "pr", "list"}) {
+			return map[string]any{"status": 0, "stdout": "[]", "stderr": ""}
+		}
+		return nil
+	}
+	p.mu.Unlock()
+	p.s.Notify(plugins.AppEvent{Kind: "app", Type: "window.focused", Data: map[string]bool{"focused": true}})
+	p.settle()
+	if text := p.text(); !strings.Contains(text, "#7|") || len(gh.ran("pr", "view", "7")) != 1 {
+		t.Errorf("after a list that left #7 out: %q", text)
+	}
+	gh.mu.Lock()
+	gh.prs = nil
+	gh.mu.Unlock()
+	p.click("refresh", "refresh", nil)
+	if text := p.text(); !strings.Contains(text, "Create PR|") {
+		t.Errorf("after GitHub said #7 isn't there: %q", text)
+	}
+}
+
+// The branch's open pull request is found before its old ones: the open
+// ones are listed first, and the rest only when none is open.
+func TestAnOpenPullRequestIsFoundBeforeOldOnes(t *testing.T) {
+	work, origin := repo(t)
+	onGitHub(t, work, origin, "fix-flaky")
+	closed := openPR(119, false)
+	closed["state"] = "CLOSED"
+	prs := []map[string]any{closed}
+	for i := range 9 {
+		fork := openPR(110+i, false)
+		fork["headRepositoryOwner"] = map[string]any{"login": fmt.Sprintf("fork%d", i)}
+		prs = append(prs, fork)
+	}
+	if p := openPullRequests(t, work, &github{prs: append(prs, openPR(11, false))}); !strings.Contains(p.text(), "#11|") {
+		t.Errorf("past an old one of the branch's and nine forks': %q", p.text())
+	}
+
+	work, origin = repo(t)
+	onGitHub(t, work, origin, "fix-flaky")
+	gh := &github{prs: []map[string]any{closed}}
+	if p := openPullRequests(t, work, gh); !strings.Contains(p.text(), "#119|") || len(gh.ran("pr", "list")) != 2 {
+		t.Errorf("with only an old one: %q after %+v", p.text(), gh.ran("pr", "list"))
+	}
 }

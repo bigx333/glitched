@@ -66,20 +66,21 @@ func (m Mux) Commands(ctx context.Context, name, workspace string) ([]Command, e
 	return nil, nil
 }
 
-// Ask asks name's adapter for one answer, ErrUnsupported from one that
-// can't.
+// Ask asks name's adapter for one answer within spec's timeout,
+// ErrUnsupported from one that can't.
 func (m Mux) Ask(ctx context.Context, name string, spec AskSpec) (AskResult, error) {
 	a, err := m.adapter(name)
 	if err != nil {
 		return AskResult{}, err
 	}
-	if q, ok := a.(Asker); ok {
-		if spec.Timeout > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, spec.Timeout)
-			defer cancel()
-		}
-		return q.Ask(ctx, spec)
+	q, ok := a.(Asker)
+	if !ok {
+		return AskResult{}, fmt.Errorf("%w: %s can't answer a prompt on its own", ErrUnsupported, name)
 	}
-	return AskResult{}, fmt.Errorf("%w: %s can't answer a prompt on its own", ErrUnsupported, name)
+	if spec.Timeout <= 0 {
+		return AskResult{}, fmt.Errorf("an ask's timeout is %s; it needs time to run", spec.Timeout)
+	}
+	ctx, cancel := context.WithTimeout(ctx, spec.Timeout)
+	defer cancel()
+	return q.Ask(ctx, spec)
 }
