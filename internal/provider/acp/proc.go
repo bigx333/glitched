@@ -63,6 +63,7 @@ type proc struct {
 	stdin   *os.File
 	stderr  *tail
 	heard   chan struct{} // closed once stderr is read to its end
+	read    chan struct{} // closed once stdout is read to its end and let go
 	reaped  chan struct{} // closed once the process is reaped
 	exitErr error         // set before reaped closes
 	left    map[int]int64 // what ran in its process group as it was reaped; set before reaped closes
@@ -113,7 +114,7 @@ func launch(ctx context.Context, profile Profile, bin, dir, mark string) (*proc,
 	}
 	cmd.Env = append(cmd.Env, procEnv+"="+mark)
 	cmd.SysProcAttr = sysProcAttr()
-	p := &proc{profile: profile, cmd: cmd, mark: mark, stderr: &tail{}, heard: make(chan struct{}), reaped: make(chan struct{})}
+	p := &proc{profile: profile, cmd: cmd, mark: mark, stderr: &tail{}, heard: make(chan struct{}), read: make(chan struct{}), reaped: make(chan struct{})}
 	// The adapter's own pipes, unlike exec's, leave Wait nothing to wait
 	// for once the agent exits, whoever else still holds them.
 	inR, inW, err1 := os.Pipe()
@@ -444,6 +445,7 @@ func (p *proc) readStdout(stdout *os.File, wire io.Writer) *io.PipeReader {
 		stdout.SetReadDeadline(time.Now().Add(drainGrace))
 	}()
 	go func() {
+		defer close(p.read)
 		defer stdout.Close()
 		lines := bufio.NewReader(stdout)
 		for {
@@ -575,7 +577,8 @@ func (p *proc) Done() <-chan struct{} { return p.reaped }
 // Close ends stdin, which ends an idle agent, and stops one still there
 // after closeGrace, with whatever it left running. What it started is
 // read first: once it exits, a tool it left that shows no mark, as a
-// platform binary on macOS, has no marked ancestor to be found by.
+// platform binary on macOS, has no marked ancestor to be found by. It
+// returns once the bridge from the agent's stdout has let go of it.
 func (p *proc) Close(ctx context.Context) error {
 	seen := map[int]int64{}
 	scan(p.mark, seen)
@@ -586,7 +589,15 @@ func (p *proc) Close(ctx context.Context) error {
 	case <-ctx.Done():
 	}
 	p.halted.Store(true)
-	return p.stop(ctx, seen)
+	if err := p.stop(ctx, seen); err != nil {
+		return err
+	}
+	select {
+	case <-p.read:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // expectPrompt has prompt close once the next prompt is written to the
