@@ -71,12 +71,12 @@ func (a *app) chatPage(c *ui.Context) {
 					ui.Box(c).Key("wind").Absolute().Top(0).Left(0).Right(0).Bottom(0).PassThrough().Draw(a.windDraw)
 				}
 				a.ambient(c)
-				a.timeline(c, t, rs)
+				laid := a.timeline(c, t, rs)
 				// After the timeline, whose replies note where the
 				// selection is.
 				a.selectionBar(c, t)
 				// After the timeline, which says whether the end shows.
-				a.composerMorph(pane, t)
+				a.composerMorph(pane, t, laid)
 				// What scrolls fades out under the composer.
 				ui.Box(c).Absolute().Bottom(0).Left(0).Right(0).Height(composerRoom - 40).PassThrough().
 					Material(glass.ScrollEdge{Bottom: true, Background: palette.bg})
@@ -480,7 +480,7 @@ func (a *app) listFor(id api.ID) *ui.ListState {
 // as the pane, so that the wheel scrolls it wherever the pointer is. It
 // fades in as the composer docks from the hero; into a hero, the thread
 // left fades out, sliding up, out of the pointer's way.
-func (a *app) timeline(c *ui.Context, t thread, rs rows) {
+func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 	tr := transcriptK(a.dockK)
 	from, leaving := a.departing(t)
 	if leaving {
@@ -522,6 +522,7 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) {
 		}
 	})
 	a.turnMarkers(c, t.id(), rs, l)
+	return !leaving && list.Bounds().H > 0
 }
 
 // thinkingAt is the entry under which the transcript says the agent is at
@@ -1126,16 +1127,16 @@ func counts(c *ui.Context, add, del int) {
 // scrolling up folds it, and either, mid-way, turns it round from where it
 // is. Jump to latest comes and goes with the end. With less motion asked
 // for, both are there at once (AnimateTo).
-func (a *app) composerMorph(host ui.Element, t thread) {
+func (a *app) composerMorph(host ui.Element, t thread, laid bool) {
 	id := t.id()
-	// A thread's list starts at its end, which it only knows once laid
-	// out: until then the composer is full, rather than folding at first.
-	// The passes after the first, before it's laid out, start from full.
 	if !a.composerSeen[id] {
+		if !laid && !a.listFor(id).AtEnd() {
+			a.composerRest, a.composerK, a.jumpK = false, 1, 0
+			host.Jump("composer:"+id.String(), 1)
+			host.Jump("jump:"+id.String(), 0)
+			return
+		}
 		a.composerSeen[id] = true
-		a.composerRest, a.composerK, a.jumpK = false, 1, 0
-		host.Jump("composer:"+id.String(), 1)
-		return
 	}
 	target, anim := float32(1), composerOpen
 	if a.composerCompact(t) {
@@ -1186,7 +1187,7 @@ func clamp01(v float32) float32 { return min(1, max(0, v)) }
 // composerCompact reports whether the composer is compact: away from the
 // end of the thread, not clicked open, holding nothing.
 func (a *app) composerCompact(t thread) bool {
-	if a.listFor(t.id()).AtEnd() {
+	if !a.composerSeen[t.id()] || a.listFor(t.id()).AtEnd() {
 		a.composerOpened = false
 		return false
 	}

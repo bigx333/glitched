@@ -13,6 +13,8 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
 )
@@ -450,6 +452,43 @@ func TestComposerStaysFullOnAThreadsFirstClick(t *testing.T) {
 	h.tt.Advance(time.Second)
 	if h.a.composerK != 0 || h.a.jumpK != 1 || !h.tt.HasText("Jump to latest") {
 		t.Fatalf("scrolled up: k %v, jump %v, Jump to latest %v; want 0, 1, true", h.a.composerK, h.a.jumpK, h.tt.HasText("Jump to latest"))
+	}
+}
+
+func TestComposerStaysFullARefreshAfterTheClick(t *testing.T) {
+	a := &app{composerSeen: map[api.ID]bool{}, lists: map[api.ID]*ui.ListState{}}
+	ths := [2]thread{{Thread: &client.Thread{View: api.Thread{ID: api.NewID()}}}, {Thread: &client.Thread{View: api.Thread{ID: api.NewID()}}}}
+	shown := 0
+	minK, maxJump := float32(1), float32(0)
+	tt := ui.NewTester(func(c *ui.Context) {
+		if ui.Button(c.Key("switch"), "Switch").Clicked() {
+			shown = 1
+		}
+		th := ths[shown]
+		pane := ui.Box(c).Key("pane").Grow(1)
+		pane.Children(func() {
+			l := a.listFor(th.id())
+			l.FollowEnd = true
+			list := ui.List(c.Key(th.id()), l, 40, func(i int) { ui.Textf(c, "Row %d", i).Padding(10) }).Fill()
+			a.composerMorph(pane, th, list.Bounds().H > 0)
+		})
+		minK, maxJump = min(minK, a.composerK), max(maxJump, a.jumpK)
+	}, 600, 400)
+	tt.Advance(time.Second)
+	minK, maxJump = 1, 0
+	clickThenRefresh := func(label string) {
+		t.Helper()
+		tt.SetWindowHidden(true)
+		if err := tt.Click(label); err != nil {
+			t.Fatal(err)
+		}
+		tt.Advance(16 * time.Millisecond)
+		tt.SetWindowHidden(false)
+	}
+	clickThenRefresh("Switch")
+	tt.Advance(time.Second)
+	if shown != 1 || minK != 1 || maxJump != 0 {
+		t.Fatalf("switched %v: k down to %v, jump up to %v; want 1, 0", shown == 1, minK, maxJump)
 	}
 }
 
