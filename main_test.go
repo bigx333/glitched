@@ -1112,7 +1112,9 @@ func TestPastedImagesStay(t *testing.T) {
 	if send() == nothing {
 		t.Fatal("with a draft Send still looks like nothing to send")
 	}
-	h.click("Send")
+	if err := h.tt.Click("Send"); err != nil {
+		t.Fatal(err)
+	}
 	es := entriesOf(a.current())
 	if len(es) != 1 || es[0].text != "look" || len(a.attachments) != 1 {
 		t.Errorf("sent %q, keeping %d attachments: the image should stay", texts(es), len(a.attachments))
