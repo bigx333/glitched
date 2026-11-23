@@ -141,6 +141,13 @@ func (a *app) agentsCard(c *ui.Context, m client.Machine) {
 				a.configure(func(cfg *daemon.Config) { cfg.CompactBeforeExpire = &v })
 			}
 		})
+		awakeOn := m.Config.KeepAwakeEnabled()
+		settingRow(c, "Keep awake while agents work", "On a Mac, this machine doesn't sleep on its own while an agent on it works, and for a minute after. The display still sleeps.", func() {
+			if ui.Switch(c.Key("keep-awake"), &awakeOn).Label("Enable keep awake while agents work").Changed() {
+				v := awakeOn
+				a.configure(func(cfg *daemon.Config) { cfg.KeepAwake = &v })
+			}
+		})
 		if !m.Embedded && m.Engine != nil {
 			ui.Text(c, "glitched serve applies a change here when it next starts.").Key("limits-later").Padding(14, 16).FontSize(12).TextColor(palette.muted)
 		}

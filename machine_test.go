@@ -240,3 +240,26 @@ func TestTheAgentsCardTogglesCompactBeforeExpire(t *testing.T) {
 		t.Fatalf("after toggle on: enabled=%v embedded=%v, want true, true", cfg.CompactBeforeExpireEnabled(), h.a.backend.Machine().Embedded)
 	}
 }
+
+// Keep awake while agents work defaults to on, saves to engine.json when
+// toggled in the Agents card, and applies without restarting the engine.
+func TestTheAgentsCardTogglesKeepAwake(t *testing.T) {
+	dir := tempDir(t)
+	h := start(t, dir)
+	h.tt.SetSize(1280, 1400)
+	ticking(t, h)
+	h.click("Settings")
+	h.click("This machine")
+	h.until("the Agents card", func() bool { return h.tt.HasText("Keep awake while agents work") && h.a.backend.Machine().Embedded })
+	for _, want := range []bool{true, false, true} {
+		cfg, err := daemon.Defaults(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.KeepAwakeEnabled() != want || !h.a.backend.Machine().Embedded {
+			t.Fatalf("keep awake %v, embedded %v; want %v, true", cfg.KeepAwakeEnabled(), h.a.backend.Machine().Embedded, want)
+		}
+		h.click("Enable keep awake while agents work")
+		h.tt.Advance(time.Second)
+	}
+}

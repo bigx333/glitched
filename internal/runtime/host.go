@@ -44,7 +44,11 @@ type Host struct {
 	skills    *skillStage          // the skills Glitched gives agents; nil gives none
 	now       func() time.Time     // wall clock; defaults to time.Now
 
-	idleCompact   atomic.Bool
+	idleCompact atomic.Bool
+	// awake hears whether any agent of the host's works, each time that
+	// changes; working is the threads whose run does.
+	awake         func(bool)
+	working       map[api.ID]bool
 	compactCheck  chan api.ID
 	compactRescan chan struct{}
 	compactDue    chan compactDue
@@ -107,6 +111,13 @@ func WithIdleCompaction(enabled bool) Option {
 	return func(h *Host) { h.idleCompact.Store(enabled) }
 }
 
+// WithAwake has awake told whether any of the host's agents works, each
+// time that changes, in commit order: a run starting, running or stopping
+// works; one waiting on the user, uncertain or ended doesn't.
+func WithAwake(awake func(bool)) Option {
+	return func(h *Host) { h.awake = awake }
+}
+
 // WithClock overrides the host's wall clock, for deterministic tests.
 func WithClock(now func() time.Time) Option {
 	return func(h *Host) { h.now = now }
@@ -127,6 +138,7 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		asks:          map[askKey]chan json.RawMessage{},
 		held:          map[string]chan struct{}{},
 		sent:          map[api.ID]bool{},
+		working:       map[api.ID]bool{},
 		compactCheck:  make(chan api.ID, 64),
 		compactRescan: make(chan struct{}, 1),
 		compactDue:    make(chan compactDue, 64),
@@ -217,11 +229,31 @@ func (h *Host) committed(c store.Commit) {
 	for _, e := range c.Events {
 		h.follow(e)
 	}
+	for _, th := range c.Threads {
+		h.noteWorking(th.ID, works[th.Run])
+	}
 	h.mu.Unlock()
 	for _, th := range c.Threads {
 		h.noteCompact(th.ID)
 	}
 	h.poke()
+}
+
+// works is the run states whose agent works.
+var works = map[api.RunState]bool{api.RunStarting: true, api.RunRunning: true, api.RunStopping: true}
+
+// noteWorking notes whether thread's agent works, and tells awake whether
+// any does when that changes. h.mu is held.
+func (h *Host) noteWorking(thread api.ID, working bool) {
+	was := len(h.working) > 0
+	if working {
+		h.working[thread] = true
+	} else {
+		delete(h.working, thread)
+	}
+	if now := len(h.working) > 0; now != was && h.awake != nil {
+		h.awake(now)
+	}
 }
 
 func (h *Host) poke() {
@@ -331,6 +363,9 @@ func (h *Host) boot(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		h.mu.Lock()
+		h.noteWorking(id, works[engine.View(t).Run])
+		h.mu.Unlock()
 		r := t.Live()
 		lease, attempted := starts[r.ID]
 		if r.State == engine.RunUncertain {
