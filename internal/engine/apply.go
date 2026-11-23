@@ -60,6 +60,14 @@ func apply(t Thread, e Event) (Thread, error) {
 			c.Window = t.Context.Window
 		}
 		t.Context = c
+	case api.AccessGranted:
+		if i := t.runAt(b.Run); i >= 0 {
+			t.Confirmed.Access = &api.ConfirmedAccess{Run: b.Run, Asked: t.Runs[i].Access, Access: b.Access, Mode: b.Mode, Why: b.Why}
+		}
+	case api.ModelConfirmed:
+		if i := t.runAt(b.Run); i >= 0 {
+			t.Confirmed.Model = &api.ConfirmedModel{Run: b.Run, Asked: t.Runs[i].Model, Model: b.Model, Effort: b.Effort, Why: b.Why}
+		}
 	case api.ThreadConfigured:
 		// The window known was the last model's, for a report that leaves
 		// its model out.

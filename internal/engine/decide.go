@@ -578,6 +578,8 @@ func (d *decision) configure(b api.ThreadConfigure) error {
 	return d.emit(api.ThreadConfigured{Model: m, Access: access})
 }
 
+func holds[T comparable](held *T, v T) bool { return held != nil && *held == v }
+
 func (d *decision) observe(o Observation) error {
 	live := d.t.Live()
 	isLive := func(run api.ID) bool { return live != nil && live.ID == run }
@@ -625,6 +627,15 @@ func (d *decision) observe(o Observation) error {
 	case Context:
 		if isLive(o.Run) {
 			return d.emit(api.ContextReported{Run: o.Run, Used: o.Used, Window: o.Window, Model: o.Model, Compacted: o.Compacted})
+		}
+	case Granted:
+		// A confirmation the thread holds already says nothing new.
+		if isLive(o.Run) && !holds(d.t.Confirmed.Access, api.ConfirmedAccess{Run: o.Run, Asked: live.Access, Access: o.Access, Mode: o.Mode, Why: o.Why}) {
+			return d.emit(api.AccessGranted{Run: o.Run, Access: o.Access, Mode: o.Mode, Why: o.Why})
+		}
+	case Ran:
+		if isLive(o.Run) && !holds(d.t.Confirmed.Model, api.ConfirmedModel{Run: o.Run, Asked: live.Model, Model: o.Model, Effort: o.Effort, Why: o.Why}) {
+			return d.emit(api.ModelConfirmed{Run: o.Run, Model: o.Model, Effort: o.Effort, Why: o.Why})
 		}
 	case Work:
 		if isLive(o.Item.Run) {

@@ -66,6 +66,9 @@ type Adapter struct {
 	// Models are what Describe reports it runs: none, as a provider
 	// that's only a placeholder.
 	Models []provider.Model
+	// Confirms is what each run's agent says it runs at as its turn
+	// starts: nil confirms the run's own access and model.
+	Confirms func(provider.SessionSpec) []provider.Event
 
 	mu     sync.Mutex
 	agents map[api.ID]*Agent
@@ -181,6 +184,19 @@ func (a *Adapter) Reconcile(_ context.Context, id provider.RuntimeIdentity) (pro
 	return provider.Restored{Agent: g}, nil
 }
 
+func (a *Adapter) confirms(spec provider.SessionSpec) []provider.Event {
+	if a.Confirms != nil {
+		return a.Confirms(spec)
+	}
+	return []provider.Event{
+		provider.Granted{Access: spec.Access, Mode: Modes[spec.Access]},
+		provider.Ran{Model: spec.Model.Model, Effort: spec.Model.Effort},
+	}
+}
+
+// Modes are the fake's names for the access levels' modes.
+var Modes = map[api.Access]string{api.AccessAsk: "ask", api.AccessAutoEdits: "auto", api.AccessFull: "full"}
+
 func (a *Adapter) countStart() {
 	a.mu.Lock()
 	a.starts++
@@ -235,6 +251,7 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 		}
 		g.a.countStart()
 		g.phase, g.script, g.tokens = running, slices.Clone(g.a.script), g.a.Tokens
+		g.out = append(g.out, g.a.confirms(g.spec)...)
 		g.a.mu.Lock()
 		if kids, ok := g.a.spawns[act.Text]; ok {
 			g.script, g.tokens, g.kids = nil, 0, slices.Clone(kids)

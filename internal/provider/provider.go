@@ -287,7 +287,34 @@ type TurnEnded struct {
 	Tokens  int64 // what the turn used, where the provider says
 }
 
+// Granted is the access the run's agent runs at, as its provider
+// confirmed it: in the session's permission mode the provider reports,
+// Mode, or as the program it started took the arguments it was given.
+// Access is the Glitched level that mode makes. Why says, in the
+// provider's words, why it runs short of the run's access, "" when it
+// doesn't. An adapter sends it once it knows, before the turn's first
+// work, and again if the provider changes it; it never sends a level the
+// provider didn't confirm.
+type Granted struct {
+	Access api.Access
+	Mode   string
+	Why    string
+}
+
+// Ran is the model and effort the run's agent runs, as its provider
+// confirmed them, by the ids an api.ModelRef names them by: the run's
+// own where the provider runs those. Effort is "" where the provider
+// doesn't say. Why says why they aren't the run's, as when the provider
+// substituted another model, "" when they are.
+type Ran struct {
+	Model  string
+	Effort string
+	Why    string
+}
+
 func (TextDelta) event()        {}
+func (Granted) event()          {}
+func (Ran) event()              {}
 func (Work) event()             {}
 func (RequestOpened) event()    {}
 func (RequestWithdrawn) event() {}

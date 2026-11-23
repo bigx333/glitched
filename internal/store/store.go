@@ -174,6 +174,7 @@ CREATE TABLE threads (
 	context_window INTEGER NOT NULL DEFAULT 0,
 	context_stale  INTEGER NOT NULL DEFAULT 0 CHECK (context_stale IN (0, 1)),
 	context_model  TEXT NOT NULL DEFAULT '',
+	granted     TEXT,
 	CHECK ((disposition = 1) = (until IS NOT NULL))
 ) STRICT;
 
@@ -236,7 +237,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 11
+const schemaVersion = 12
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -338,6 +339,10 @@ ALTER TABLE threads ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE threads ADD COLUMN context_stale INTEGER NOT NULL DEFAULT 0 CHECK (context_stale IN (0, 1));
 ALTER TABLE threads ADD COLUMN context_model TEXT NOT NULL DEFAULT '';
 `,
+	// What each thread's provider last confirmed its agent runs at
+	// (AccessGranted, ModelConfirmed), as api.Confirmed's JSON. A thread
+	// upgraded has none: nothing confirmed what its runs ran at.
+	11: `ALTER TABLE threads ADD COLUMN granted TEXT;`,
 }
 
 func (s *Store) migrate() error {
