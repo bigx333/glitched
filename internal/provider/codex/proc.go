@@ -72,9 +72,9 @@ type proc struct {
 	closing sync.Once
 
 	version string
-	// total is the thread's tokens as Codex last reported them: a report
-	// of the same total holds no request since.
-	total atomic.Int64
+	// usage is what Codex last said the thread spent: a reading the same
+	// as that one's is no request since.
+	usage atomic.Pointer[tokenUsage]
 
 	mu     sync.Mutex
 	thread string          // Codex's id of the thread it runs

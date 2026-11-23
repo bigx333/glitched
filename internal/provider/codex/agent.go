@@ -295,6 +295,24 @@ func (g *Agent) interrupt(ctx context.Context) error {
 	return nil
 }
 
+// tokens is a count of Codex's, by kind.
+type tokens struct {
+	Total      int64 `json:"totalTokens"`
+	Input      int64 `json:"inputTokens"`
+	Cached     int64 `json:"cachedInputTokens"`
+	CacheWrite int64 `json:"cacheWriteInputTokens"`
+	Output     int64 `json:"outputTokens"`
+	Reasoning  int64 `json:"reasoningOutputTokens"`
+}
+
+// tokenUsage is what Codex says the thread has spent, all told and on its
+// last reading, and its model's window.
+type tokenUsage struct {
+	Total  tokens `json:"total"`
+	Last   tokens `json:"last"`
+	Window int64  `json:"modelContextWindow"`
+}
+
 // notify is what a notification of the thread's means for the run.
 func (g *Agent) notify(m message) {
 	var n struct {
@@ -308,17 +326,7 @@ func (g *Agent) notify(m message) {
 		Error     *struct {
 			Message string `json:"message"`
 		} `json:"error"`
-		TokenUsage struct {
-			Total struct {
-				TotalTokens int64 `json:"totalTokens"`
-				InputTokens int64 `json:"inputTokens"`
-			} `json:"total"`
-			Last struct {
-				TotalTokens int64 `json:"totalTokens"`
-				InputTokens int64 `json:"inputTokens"`
-			} `json:"last"`
-			ModelContextWindow int64 `json:"modelContextWindow"`
-		} `json:"tokenUsage"`
+		TokenUsage tokenUsage `json:"tokenUsage"`
 	}
 	json.Unmarshal(m.Params, &n)
 	var turn struct {
@@ -337,23 +345,26 @@ func (g *Agent) notify(m message) {
 		// of the thread's, which this run reports while its turn is on.
 		live := g.started && !g.ended && (n.TurnID == "" || n.TurnID == g.turn)
 		usage := m.Method == "thread/tokenUsage/updated"
-		u := n.TokenUsage
-		var spent int64
+		u, prev := n.TokenUsage, tokenUsage{}
+		if p := g.p.usage.Load(); usage && p != nil {
+			prev = *p
+		}
 		if usage {
-			spent = u.Total.TotalTokens - g.p.total.Swap(u.Total.TotalTokens)
+			g.p.usage.Store(&u)
 		}
 		// Codex sends its last reading again, as after a rate-limit
 		// update or a response cut short, with whatever was spent since:
-		// a request's own reading is all that was spent, and holds its
-		// input. A request too big for the window has Codex fill it,
-		// emptying every count but the window's.
-		filled := u.ModelContextWindow > 0 && u.Total.TotalTokens == u.ModelContextWindow && u.Total.InputTokens == 0 && u.Last.InputTokens == 0
+		// a request's own reading is new, is all that was spent, and
+		// holds its input. A request too big for the window has Codex
+		// fill it, emptying every count but the totals.
+		fresh := u.Last.Input > 0 && u.Last != prev.Last && u.Total.Total-prev.Total.Total == u.Last.Total
+		filled := u.Window > 0 && u.Total == tokens{Total: u.Window} && u.Last == tokens{Total: u.Last.Total}
 		switch {
 		case !live:
 		case usage && filled:
-			g.queueLocked(provider.Context{Used: u.ModelContextWindow, Window: u.ModelContextWindow})
-		case usage && u.Last.InputTokens > 0 && spent == u.Last.TotalTokens:
-			g.queueLocked(provider.Context{Used: u.Last.TotalTokens, Window: u.ModelContextWindow})
+			g.queueLocked(provider.Context{Used: u.Window, Window: u.Window})
+		case usage && fresh:
+			g.queueLocked(provider.Context{Used: u.Last.Total, Window: u.Window})
 		case m.Method == "thread/compacted":
 			g.queueLocked(provider.Context{Compacted: true})
 		}
