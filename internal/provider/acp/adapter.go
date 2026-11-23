@@ -85,7 +85,7 @@ func (a *Adapter) Binary() (string, error) {
 		if p, err := exec.LookPath(a.Path); err == nil {
 			return filepath.Abs(p)
 		}
-		return "", errors.New(a.Profile.Install)
+		return "", a.notInstalled()
 	}
 	for _, name := range a.Profile.Binaries {
 		if p, err := exec.LookPath(name); err == nil {
@@ -99,7 +99,19 @@ func (a *Adapter) Binary() (string, error) {
 			}
 		}
 	}
-	return "", errors.New(a.Profile.Install)
+	return "", a.notInstalled()
+}
+
+func (a *Adapter) notInstalled() error {
+	return provider.Needs{Kind: provider.ErrNotInstalled, Help: a.Profile.Install}
+}
+
+// Forget has the next Describe probe the agent again, as after its user
+// signed in or out.
+func (a *Adapter) Forget() {
+	a.cmu.Lock()
+	a.until = time.Time{}
+	a.cmu.Unlock()
 }
 
 func isExecutable(path string) bool {
@@ -146,7 +158,7 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 	if p.caps.close {
 		p.conn.CloseSession(ctx, acpsdk.CloseSessionRequest{SessionId: p.session})
 	}
-	return provider.Info{Name: a.Profile.Name, Version: p.version, Models: models}, nil
+	return provider.Info{Name: a.Profile.Name, Version: p.version, Models: models, Path: bin}, nil
 }
 
 // Open runs the run on the thread's agent: the one its last run left,

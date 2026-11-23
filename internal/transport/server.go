@@ -315,7 +315,7 @@ type Plugins interface {
 // Providers are what the engine's providers offer a session.
 type Providers interface {
 	Commands(ctx context.Context, provider, workspace string) ([]provider.Command, error)
-	Providers(ctx context.Context) []ProviderInfo
+	Providers(ctx context.Context, fresh bool) []ProviderInfo
 }
 
 // ProviderInfo is one provider the engine serves: what it said of itself,
@@ -324,6 +324,23 @@ type ProviderInfo struct {
 	Name  string        `json:"name"`
 	Info  provider.Info `json:"info"`
 	Error string        `json:"error,omitempty"`
+	// State is what the user must do before the provider runs, where
+	// Error is what to do: install it, or sign in. "" otherwise.
+	State ProviderState `json:"state,omitempty"`
+}
+
+// ProviderState is what stands between the user and a provider.
+type ProviderState string
+
+const (
+	ProviderNotInstalled ProviderState = "notInstalled"
+	ProviderSignedOut    ProviderState = "signedOut"
+)
+
+// providersQuery asks for every provider, each asked again, not answered
+// from what it last said, when Fresh.
+type providersQuery struct {
+	Fresh bool `json:"fresh,omitempty"`
 }
 
 // commandsQuery asks for the slash commands of Provider's sessions in
@@ -355,8 +372,8 @@ func (s *Server) methods() map[string]handler {
 		m["provider.commands"] = callHandler(func(ctx context.Context, q commandsQuery) ([]provider.Command, error) {
 			return p.Commands(ctx, q.Provider, q.Workspace)
 		})
-		m["providers"] = callHandler(func(ctx context.Context, _ struct{}) ([]ProviderInfo, error) {
-			return p.Providers(ctx), nil
+		m["providers"] = callHandler(func(ctx context.Context, q providersQuery) ([]ProviderInfo, error) {
+			return p.Providers(ctx, q.Fresh), nil
 		})
 	}
 	if h := s.Hub; h != nil {

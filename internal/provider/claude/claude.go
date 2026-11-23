@@ -28,7 +28,7 @@ import (
 )
 
 // ErrNotInstalled is Open's error when no claude binary can be found.
-var ErrNotInstalled = errors.New("Claude Code is not installed.\nInstall it, or set claude_path in engine.json.")
+var ErrNotInstalled error = provider.Needs{Kind: provider.ErrNotInstalled, Help: "Claude Code is not installed.\nInstall it, or set claude_path in engine.json."}
 
 // Adapter starts Claude Code with the user's own login and settings, as
 // claude in a terminal would. Glitched holds no token.
@@ -82,7 +82,8 @@ func (a *Adapter) Describe(ctx context.Context) (provider.Info, error) {
 		// account ran before stands.
 		return provider.Info{}, fmt.Errorf("Claude Code %s doesn't say what models the account runs", r.Version)
 	}
-	return provider.Info{Name: "claude", Version: r.Version, Models: r.models()}, nil
+	bin, _ := a.binary()
+	return provider.Info{Name: "claude", Version: r.Version, Models: r.models(), Path: bin}, nil
 }
 
 // Open runs the run on the thread's claude: the one its last run left,

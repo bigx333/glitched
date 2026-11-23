@@ -124,8 +124,10 @@ func (cfg *Config) WithClaude() {
 }
 
 // WithAgents has the engine run every agent of the user's it knows: Claude
-// Code, as WithClaude has it, and Codex and each ACP agent whose binary it
-// finds, as `glitched serve` and the GUI's own engine do.
+// Code, as WithClaude has it, Codex where its binary is found, and each
+// ACP agent, as `glitched serve` and the GUI's own engine do. An ACP agent
+// that isn't installed is served too: it says how to install it, offers
+// no models, and still stops what a run of it left when it was.
 func (cfg *Config) WithAgents() {
 	cfg.WithClaude()
 	cx := &codex.Adapter{Path: cfg.CodexPath}
@@ -134,10 +136,7 @@ func (cfg *Config) WithAgents() {
 	}
 	paths := map[string]string{acp.Antigravity.Provider: cfg.AgyPath}
 	for _, p := range acp.Profiles {
-		ad := &acp.Adapter{Profile: p, Path: paths[p.Provider]}
-		if _, err := ad.Binary(); err == nil {
-			cfg.Providers[p.Provider] = ad
-		}
+		cfg.Providers[p.Provider] = &acp.Adapter{Profile: p, Path: paths[p.Provider]}
 	}
 }
 

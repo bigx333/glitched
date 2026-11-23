@@ -360,44 +360,7 @@ func (a *app) glassDemo(c *ui.Context) {
 	})
 }
 
-// --- Providers
-
-func (a *app) providers(c *ui.Context) {
-	s := &a.settings
-	a.provider(c, "Claude Code", icClaude, ui.Hex("#d97757"), "v2.4.1", &s.claudeEnabled, &s.claudePath, &s.claudeModel, &s.claudeCustom, claudeModels)
-	a.provider(c, "Codex", icOpenAI, ui.Hex("#10a37f"), "v0.98.0", &s.codexEnabled, &s.codexPath, &s.codexModel, &s.codexCustom, codexModels)
-}
-
-func (a *app) provider(c *ui.Context, name string, mark *ui.SVG, brand ui.Color, version string, enabled *bool, path, model *string, custom *[]string, models []string) {
-	ui.Column(c).Key(name).Radius(12).Border(1, palette.border).Background(palette.surface).Clip().
-		Transition(ui.ElementTransition{Size: true, Duration: 200 * time.Millisecond, Ease: easeOut}).Children(func() {
-		ui.Row(c).Padding(14, 16).Gap(12).AlignItems(ui.Center).Children(func() {
-			modelTile(c, mark, brand, 32)
-			ui.Column(c).Grow(1).Gap(2).Children(func() {
-				ui.Text(c, name).FontWeight(600)
-				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					col, label := palette.green, "Installed · "+version
-					if !*enabled {
-						col, label = palette.faint, "Disabled"
-					}
-					ui.Box(c).Size(6, 6).Radius(3).Background(col)
-					ui.Text(c, label).FontSize(12).TextColor(palette.muted)
-				})
-			})
-			ui.Switch(c, enabled).Label("Enable " + name)
-		})
-		if !*enabled {
-			return
-		}
-		ui.Column(c).Key("fields").Padding(4, 16, 16).Gap(14).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).
-			ClipY().Transition(fold).Children(func() {
-			ui.Box(c).Height(4)
-			ui.Field(c, "Binary path", func() { ui.TextInput(c, path).Font("monospace") }).Description("Leave empty to find it on your PATH.")
-			ui.Field(c, "Default model", func() { ui.Select(c, model, models) })
-			ui.Field(c, "Custom models", func() { ui.TokenField(c, custom, nil) }).Description("Model ids to offer in the picker, as the CLI takes them.")
-		})
-	})
-}
+// --- Providers: providers.go
 
 // --- Servers
 
