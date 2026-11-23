@@ -3,6 +3,7 @@ package codex
 import (
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"glitched/internal/api"
@@ -57,6 +58,10 @@ func TestCodex0171TurnsReplay(t *testing.T) {
 		}
 		if end := ended(events); end.Tokens != want.tokens {
 			t.Errorf("the turn used %d tokens, want Codex's %d", end.Tokens, want.tokens)
+		}
+		reports, _ := confirmed(events)
+		if want := []provider.Event{provider.Granted{Access: api.AccessAsk, Mode: "read-only, on-request, user"}, provider.Ran{Model: "gpt-6-luna", Effort: "low"}}; !slices.Equal(reports, want) {
+			t.Errorf("the turn reported %+v, want %+v", reports, want)
 		}
 	}
 }

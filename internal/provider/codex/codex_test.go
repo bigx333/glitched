@@ -1300,3 +1300,190 @@ func TestAParkedAppServerSaysWhatItsThreadHad(t *testing.T) {
 		t.Errorf("Codex described its auto-review as %q, want the fallback, nothing, the fallback", said)
 	}
 }
+
+// confirmed is the run's Granted and Ran reports, in order, and how many
+// of its events came before the first of them.
+func confirmed(events []provider.Event) (out []provider.Event, before int) {
+	before = -1
+	for i, e := range events {
+		switch e.(type) {
+		case provider.Granted, provider.Ran:
+			if before < 0 {
+				before = i
+			}
+			out = append(out, e)
+		}
+	}
+	return out, before
+}
+
+// A run reports the access, model and effort Codex says the thread runs
+// at, before any of the turn's work: what it asked, at each level.
+func TestARunReportsWhatCodexRunsAt(t *testing.T) {
+	for _, tc := range []struct {
+		access api.Access
+		mode   string
+	}{
+		{api.AccessAsk, "read-only, on-request, user"},
+		{api.AccessAutoEdits, "workspace-write, on-request, auto_review"},
+		{api.AccessFull, "danger-full-access, never, user"},
+	} {
+		a, _ := fake(t, "hi")
+		s := spec(t)
+		s.Access = tc.access
+		g := open(t, a, s)
+		do(t, g, provider.Start{Text: "hi"})
+		events := turn(t, g)
+		closeRun(t, g)
+		got, before := confirmed(events)
+		want := []provider.Event{provider.Granted{Access: tc.access, Mode: tc.mode}, provider.Ran{Model: "gpt-6-luna", Effort: "low"}}
+		if !slices.Equal(got, want) || before != 0 {
+			t.Errorf("access %d: reported %+v after %d events, want %+v first", tc.access, got, before, want)
+		}
+	}
+}
+
+// Approve for me on a Codex that keeps the approvals with the user
+// reports the level with the user's approvals, and Codex's reason.
+func TestApproveForMeFallingBackSaysSo(t *testing.T) {
+	a, _ := fake(t, "no-auto")
+	s := spec(t)
+	s.Access = api.AccessAutoEdits
+	g := open(t, a, s)
+	do(t, g, provider.Start{Text: "hi"})
+	got, _ := confirmed(turn(t, g))
+	closeRun(t, g)
+	want := provider.Granted{Access: api.AccessAutoEdits, Mode: "workspace-write, on-request, user", Why: "Codex 0.171.0 kept the thread's approvals with you, not its auto-review"}
+	if len(got) == 0 || got[0] != want {
+		t.Errorf("reported %+v, want %+v", got, want)
+	}
+}
+
+// Each run reports again, on the thread's kept app-server too: a model
+// changed for the next run is the one reported once Codex takes it, and
+// an access changed is reported from the app-server it starts.
+func TestEachRunReportsWhatItRunsAt(t *testing.T) {
+	a, log := fake(t, "hi")
+	s := spec(t)
+	ask := provider.Granted{Access: api.AccessAsk, Mode: "read-only, on-request, user"}
+	for i, step := range []struct {
+		model  api.ModelRef
+		access api.Access
+		want   []provider.Event
+	}{
+		{s.Model, api.AccessAsk, []provider.Event{ask, provider.Ran{Model: "gpt-6-luna", Effort: "low"}}},
+		{api.ModelRef{Provider: "codex", Model: "gpt-6.2-sol", Effort: "high"}, api.AccessAsk, []provider.Event{ask, provider.Ran{Model: "gpt-6.2-sol", Effort: "high"}}},
+		{api.ModelRef{Provider: "codex", Model: "gpt-6.2-sol", Effort: "high"}, api.AccessAsk, []provider.Event{ask, provider.Ran{Model: "gpt-6.2-sol", Effort: "high"}}},
+		{api.ModelRef{Provider: "codex", Model: "gpt-6.2-sol", Effort: "high"}, api.AccessFull, []provider.Event{provider.Granted{Access: api.AccessFull, Mode: "danger-full-access, never, user"}, provider.Ran{Model: "gpt-6.2-sol", Effort: "high"}}},
+	} {
+		s.Run, s.Model, s.Access = api.NewID(), step.model, step.access
+		g := open(t, a, s)
+		s.Session = g.(provider.Sessioned).Session()
+		do(t, g, provider.Start{Text: "hi"})
+		got, _ := confirmed(turn(t, g))
+		closeRun(t, g)
+		if !slices.Equal(got, step.want) {
+			t.Errorf("run %d reported %+v, want %+v", i+1, got, step.want)
+		}
+	}
+	if n, m := len(sent(t, log, "thread/start")), len(sent(t, log, "thread/resume")); n != 1 || m != 1 {
+		t.Errorf("%d threads started and %d resumed, want the first three runs on one app-server", n, m)
+	}
+}
+
+// A model Codex runs in place of the one asked is reported as Codex's,
+// with why.
+func TestAModelCodexSubstitutesIsReportedAsItsOwn(t *testing.T) {
+	a, _ := fake(t, "substitute")
+	g := open(t, a, spec(t))
+	do(t, g, provider.Start{Text: "hi"})
+	got, _ := confirmed(turn(t, g))
+	closeRun(t, g)
+	want := provider.Ran{Model: "gpt-6.2-sol", Effort: "low", Why: "Codex runs gpt-6.2-sol at low"}
+	if len(got) != 2 || got[1] != want {
+		t.Errorf("reported %+v, want %+v", got, want)
+	}
+}
+
+// A model Codex changes mid-turn is reported again as it changes.
+func TestAModelChangedMidTurnIsReported(t *testing.T) {
+	a, _ := fake(t, "switch")
+	g := open(t, a, spec(t))
+	do(t, g, provider.Start{Text: "hi"})
+	events := turn(t, g)
+	closeRun(t, g)
+	var ran []provider.Ran
+	texted := false
+	for _, e := range events {
+		switch e := e.(type) {
+		case provider.TextDelta:
+			texted = true
+		case provider.Ran:
+			if len(ran) == 1 && !texted {
+				t.Errorf("the change was reported before the turn's first text")
+			}
+			ran = append(ran, e)
+		}
+	}
+	want := []provider.Ran{{Model: "gpt-6-luna", Effort: "low"}, {Model: "gpt-6.2-sol", Effort: "high", Why: "Codex runs gpt-6.2-sol at high"}}
+	if !slices.Equal(ran, want) {
+		t.Errorf("reported %+v, want %+v", ran, want)
+	}
+}
+
+// What Codex doesn't say goes unreported: all of it from a Codex too old
+// to say, and an effort the turn changed from one that says nothing of
+// the change, or says it unset.
+func TestWhatCodexDoesntSayIsNotReported(t *testing.T) {
+	for _, tc := range []struct {
+		scenario string
+		want     []provider.Event
+	}{
+		{"old-codex", nil},
+		{"silent", []provider.Event{provider.Granted{Access: api.AccessAsk, Mode: "read-only, on-request, user"}, provider.Ran{Model: "gpt-6-luna"}}},
+		{"effort-null", []provider.Event{provider.Granted{Access: api.AccessAsk, Mode: "read-only, on-request, user"}, provider.Ran{Model: "gpt-6-luna"}}},
+	} {
+		a, _ := fake(t, tc.scenario)
+		g := open(t, a, spec(t))
+		do(t, g, provider.Start{Text: "hi"})
+		got, _ := confirmed(turn(t, g))
+		closeRun(t, g)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: reported %+v, want %+v", tc.scenario, got, tc.want)
+		}
+	}
+}
+
+// A model Codex answers the run's thread/start with in place of the one
+// asked is reported, though no turn update follows.
+func TestAModelCodexStartsWithInPlaceOfTheAskedIsReported(t *testing.T) {
+	a, _ := fake(t, "substitute-silent")
+	g := open(t, a, spec(t))
+	do(t, g, provider.Start{Text: "hi"})
+	got, _ := confirmed(turn(t, g))
+	closeRun(t, g)
+	want := provider.Ran{Model: "gpt-6.2-sol", Why: "Codex runs gpt-6.2-sol"}
+	if len(got) != 2 || got[1] != want {
+		t.Errorf("reported %+v, want %+v", got, want)
+	}
+}
+
+// An update of a turn that is over reaches no later run: the next run on
+// the kept app-server, asking another model that Codex says nothing of,
+// reports no model.
+func TestAnOldTurnsSettingsReachNoLaterRun(t *testing.T) {
+	a, _ := fake(t, "stale-settings")
+	s := spec(t)
+	var got [][]provider.Event
+	for _, m := range []api.ModelRef{s.Model, {Provider: "codex", Model: "gpt-6.2-sol", Effort: "high"}} {
+		s.Run, s.Model = api.NewID(), m
+		g := open(t, a, s)
+		do(t, g, provider.Start{Text: "hi"})
+		reports, _ := confirmed(turn(t, g))
+		closeRun(t, g)
+		got = append(got, reports)
+	}
+	if want := []provider.Event{provider.Granted{Access: api.AccessAsk, Mode: "read-only, on-request, user"}}; !slices.Equal(got[1], want) {
+		t.Errorf("the second run reported %+v, want %+v", got[1], want)
+	}
+}
