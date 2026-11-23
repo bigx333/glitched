@@ -683,7 +683,7 @@ func (a *app) current() thread {
 	if d.env == nil && len(envs) > 0 {
 		d.env = envs[0]
 	}
-	if last, ok := a.lastDraft(d.env); ok && d.workspace == "" {
+	if last, ok := a.lastDraft(d.env); d.workspace == "" && ok {
 		d.workspace = last.workspace
 	}
 	if d.workspace == "" {

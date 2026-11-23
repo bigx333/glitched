@@ -120,6 +120,7 @@ func (a *app) quickView(c *ui.Context) {
 // the last thread on this machine was started in, else the shown thread's.
 func (a *app) quickProject() int {
 	k := a.projectOf(a.current()).key
+	a.loadLastProject()
 	if d, ok := a.lastDraft(a.localEnv()); ok {
 		k = keyOf(d.env, d.workspace)
 	}
