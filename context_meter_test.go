@@ -137,7 +137,7 @@ func TestContextTokensAreWrittenShort(t *testing.T) {
 		999499: "999k", 999500: "1m", 1000000: "1m", 1048576: "1m", 1250000: "1.3m", 2000000: "2m",
 	} {
 		if got := contextTokens(n); got != want {
-			t.Errorf("%d is written %q, want %q", n, got, want)
+			t.Errorf("%v is written %q, want %q", n, got, want)
 		}
 	}
 }
