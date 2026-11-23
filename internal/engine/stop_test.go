@@ -143,6 +143,10 @@ func TestResumeIsOfferedWhenItStartsSomething(t *testing.T) {
 	if !engine.View(g.th).Resumable {
 		t.Fatal("an idle thread holding a Defer is not resumable")
 	}
+	g.must(api.ThreadDelete{})
+	if engine.View(g.th).Resumable {
+		t.Fatal("a deleted thread is resumable")
+	}
 }
 
 // A restore cancels what a stop held on an idle thread too: it may have

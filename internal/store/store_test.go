@@ -410,6 +410,22 @@ func TestARestoreCancelsWhatAStopHeld(t *testing.T) {
 	}
 }
 
+// A deleted thread's held Defer is nothing a restore can run again: the
+// rewind leaves the tombstone alone, and the store opens.
+func TestARewindLeavesADeletedThreadsHeldMessage(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, filepath.Join(t.TempDir(), "host.db"))
+	thread := api.NewID()
+	for _, body := range []api.Intent{create(thread).Body, api.MessageDispatch{Text: "later", Mode: api.Defer}, api.ThreadDelete{}} {
+		if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: body}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Rewind(ctx); err != nil {
+		t.Fatalf("rewind with a deleted thread holding a Defer: %v", err)
+	}
+}
+
 // A rename is in the projection that a reopened store reads.
 func TestRenameIsKept(t *testing.T) {
 	ctx := context.Background()
