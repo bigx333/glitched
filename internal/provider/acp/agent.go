@@ -172,6 +172,9 @@ func (g *Agent) finish(r acpsdk.PromptResponse, err error) {
 		g.failed = fmt.Errorf("stop reason %q", r.StopReason)
 		end.Outcome, end.Error = api.OutcomeFailed, fmt.Sprintf("%s ended the turn for a reason Glitched doesn't know: %q.", g.p.profile.Name, r.StopReason)
 	}
+	if err == nil && r.Usage != nil && g.p.profile.TurnUsage {
+		end.Tokens = r.Usage.TotalTokens
+	}
 	for _, id := range g.order {
 		if s := g.steps[id]; s.open() {
 			s.status = map[bool]acpsdk.ToolCallStatus{true: acpsdk.ToolCallStatusCompleted, false: acpsdk.ToolCallStatusFailed}[end.Outcome == api.OutcomeCompleted]
@@ -254,7 +257,8 @@ func (g *Agent) permission(ctx context.Context, r acpsdk.RequestPermissionReques
 	}
 	merged := *s
 	merged.apply(r.ToolCall)
-	g.queueLocked(provider.RequestOpened{ID: id, Kind: api.KindApproval, Body: merged.approval(g.spec.Workspace, g.p.profile.Name)})
+	_, always := pick(r.Options, acpsdk.PermissionOptionKindAllowAlways)
+	g.queueLocked(provider.RequestOpened{ID: id, Kind: api.KindApproval, Body: merged.approval(g.spec.Workspace, g.p.profile.Name, always)})
 	// Glitched allows a call only once. A request that can't be allowed
 	// so is declined, and the card says why, so the turn goes on.
 	if _, ok := pick(r.Options, acpsdk.PermissionOptionKindAllowOnce); !ok {
@@ -349,9 +353,10 @@ func pick(options []acpsdk.PermissionOption, kind acpsdk.PermissionOptionKind) (
 
 // respond sends a request's one reply: a question's answers in its form's
 // fields, or for a permission request, allow picks the agent's allow-once
-// option and deny its reject-once one; Glitched never picks an option that
-// lasts past the call. A request already answered takes nothing more, and
-// one the agent stopped waiting on takes no answer.
+// option, or its allow-always one where the user chose Always allow, and
+// deny its reject-once one: Glitched never picks an option that lasts
+// past the call on its own. A request already answered takes nothing
+// more, and one the agent stopped waiting on takes no answer.
 func (g *Agent) respond(r provider.Respond) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -382,7 +387,8 @@ func (g *Agent) respond(r provider.Respond) error {
 // allow is the outcome of a permission request the answer gives.
 func (g *Agent) allow(a *ask, raw json.RawMessage) (acpsdk.RequestPermissionOutcome, error) {
 	var answer struct {
-		Allow bool `json:"allow"`
+		Allow  bool `json:"allow"`
+		Always bool `json:"always"`
 	}
 	if err := json.Unmarshal(raw, &answer); err != nil {
 		return acpsdk.RequestPermissionOutcome{}, fmt.Errorf("acp: an answer the agent can't take: %w", err)
@@ -392,6 +398,13 @@ func (g *Agent) allow(a *ask, raw json.RawMessage) (acpsdk.RequestPermissionOutc
 			return acpsdk.NewRequestPermissionOutcomeSelected(id), nil
 		}
 		return acpsdk.NewRequestPermissionOutcomeCancelled(), nil
+	}
+	if answer.Always {
+		id, ok := pick(a.options, acpsdk.PermissionOptionKindAllowAlways)
+		if !ok {
+			return acpsdk.RequestPermissionOutcome{}, fmt.Errorf("%s offers no way to always allow this. Allow it once, or deny it.", g.p.profile.Name)
+		}
+		return acpsdk.NewRequestPermissionOutcomeSelected(id), nil
 	}
 	id, ok := pick(a.options, acpsdk.PermissionOptionKindAllowOnce)
 	if !ok {

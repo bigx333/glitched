@@ -47,6 +47,17 @@ type Forgetter interface{ Forget() }
 // and gives it back in SessionSpec.Session to the thread's later runs.
 type Sessioned interface{ Session() string }
 
+// Grant is how one of Glitched's access levels reaches an agent: the
+// permission mode its session runs in, "" for the agent's own, and what
+// its program starts with besides. Each adapter keeps Grants for its
+// agent, a Grant per level, as the agent names its own controls.
+type Grant struct {
+	Mode string
+	Args []string
+}
+
+type Grants map[api.Access]Grant
+
 // Info is what a provider is and offers. Models are those its sessions can
 // run, as the provider reports them for the user's own account, in its
 // order: none for a provider that runs nothing yet.

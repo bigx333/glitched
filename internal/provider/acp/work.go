@@ -119,7 +119,7 @@ func (s *step) said() string {
 // approval is the card's body for a request to run s: the command to run
 // where, or the operation on every path it names, and every argument an
 // allow approves.
-func (s *step) approval(workspace, agent string) json.RawMessage {
+func (s *step) approval(workspace, agent string, always bool) json.RawMessage {
 	var b struct {
 		Operation string `json:"operation,omitempty"`
 		Path      string `json:"path,omitempty"`
@@ -127,7 +127,11 @@ func (s *step) approval(workspace, agent string) json.RawMessage {
 		Cwd       string `json:"cwd,omitempty"`
 		Reason    string `json:"reason,omitempty"`
 		Args      string `json:"args,omitempty"`
+		// Always is that the agent offers to allow such calls from now
+		// on, by its own rules.
+		Always bool `json:"always,omitempty"`
 	}
+	b.Always = always
 	// agy names a command CommandLine, and says why in toolSummary.
 	var input struct {
 		Command     json.RawMessage

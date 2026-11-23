@@ -133,3 +133,42 @@ func TestAnAntigravityModelSharingAClaudeID(t *testing.T) {
 		t.Fatalf("the thread runs on %q", th.View.Model.Provider)
 	}
 }
+
+
+// The card offers Always allow where agy offers to keep the grant, and
+// it goes back as agy's own allow-always; where agy offers only once, or
+// on a Claude card, there is no Always allow.
+func TestAlwaysAllowOnTheCard(t *testing.T) {
+	for _, tc := range []struct {
+		scenario string
+		offered  bool
+	}{{"gui", true}, {"gui-once", false}} {
+		t.Run(tc.scenario, func(t *testing.T) {
+			h := startWith(t, tempDir(t), withAntigravity(t, tc.scenario))
+			allAnswered(h)
+			h.until("agy's models", func() bool { return len(h.a.models.reported["antigravity"]) == 2 })
+			h.a.model = modelKey{"antigravity", "fake-pro"}
+			h.tt.Frame()
+			sendNew(h, "Add a line to the notes.")
+			h.until("the card", func() bool { return h.tt.HasText("Antigravity wants to") })
+			for range 50 {
+				h.tt.Advance(100 * time.Millisecond)
+			}
+			if got := h.tt.HasText("Always allow"); got != tc.offered {
+				t.Fatalf("the card shows Always allow %v, want %v: %q", got, tc.offered, h.tt.Texts())
+			}
+			shoot(t, h, "always-"+tc.scenario)
+			if !tc.offered {
+				return
+			}
+			h.click("Always allow")
+			h.until("the turn's end", func() bool { return !h.tt.HasText("Stop") })
+			for range 50 {
+				h.tt.Advance(100 * time.Millisecond)
+			}
+			if !h.tt.HasText("Answer: allow-always") || !h.tt.HasText("Always allowed") {
+				t.Fatalf("after Always allow, the thread shows %q", h.tt.Texts())
+			}
+		})
+	}
+}

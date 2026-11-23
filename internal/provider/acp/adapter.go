@@ -143,7 +143,7 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 		return provider.Info{}, err
 	}
 	home, _ := os.UserHomeDir()
-	p, err := launch(ctx, a.Profile, bin, home, "probe-"+api.NewID().String())
+	p, err := launch(ctx, a.Profile, bin, home, "probe-"+api.NewID().String(), nil)
 	if err != nil {
 		return provider.Info{}, err
 	}
@@ -186,8 +186,9 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		p.discard()
 		ok = false
 	}
+	mode := a.Profile.Access[spec.Access].Mode
 	if ok {
-		err = p.configure(ctx, spec.Model)
+		err = p.configure(ctx, spec.Model, mode)
 		if p.halted.Load() {
 			p.discard()
 			ok = false
@@ -197,14 +198,14 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	}
 	lost := false
 	if !ok {
-		if p, err = launch(ctx, a.Profile, bin, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String()); err != nil {
+		if p, err = launch(ctx, a.Profile, bin, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String(), a.Profile.Access[spec.Access].Args); err != nil {
 			return nil, err
 		}
 		if lost, err = p.open(ctx, spec.Workspace, spec.MCP, spec.Session); err != nil {
 			p.discard()
 			return nil, err
 		}
-		if err := p.configure(ctx, spec.Model); err != nil {
+		if err := p.configure(ctx, spec.Model, mode); err != nil {
 			return nil, a.refused(p, keep, err)
 		}
 	}
