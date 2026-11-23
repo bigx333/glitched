@@ -2,8 +2,9 @@
 // of its natives, each the button Glitched draws and does. message.copy
 // copies the message; message.edit (a message of yours) puts it back in
 // the composer; message.retry (a turn that failed or was stopped) asks
-// the agent again; and message.item draws the command a plugin put in
-// message.actions at its index, of the context's items. A native with
+// the agent again; message.item draws the command a plugin put in
+// message.actions at its index, of the context's items; and message.time,
+// last, says when the message was sent. A native with
 // nothing to do under a message draws nothing and leaves no gap. Copy it
 // in Settings › Plugins to reorder, space or drop them. Glitched keeps
 // where the toolbar sits and when it shows.
@@ -22,6 +23,7 @@ export function place({ items }) {
         name: "message.item",
         props: { index: i },
       })),
+      { type: "native", id: "time", name: "message.time" },
     ],
   }));
 }

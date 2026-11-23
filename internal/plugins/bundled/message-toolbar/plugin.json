@@ -1,7 +1,7 @@
 {
   "id": "message-toolbar",
   "name": "Message toolbar",
-  "description": "The actions under a message, shown while it's pointed at: Copy, Edit & resend, Retry under a turn that failed or was stopped, and plugins' commands. Built into Glitched; make a copy in Settings › Plugins to change it.",
+  "description": "The actions under a message, shown while it's pointed at: Copy, Edit & resend, Retry under a turn that failed or was stopped, plugins' commands and when the message was sent. Built into Glitched; make a copy in Settings › Plugins to change it.",
   "version": "1.0.0",
   "main": "main.js",
   "contract": "glitched",

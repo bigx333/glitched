@@ -128,6 +128,9 @@ var Natives = map[string]Native{
 	"message.edit":  {In: []string{"message.toolbar"}, Thread: true},
 	"message.retry": {In: []string{"message.toolbar"}, Thread: true},
 	"message.item":  {Props: map[string]string{"index": "number"}, In: []string{"message.toolbar"}, Thread: true},
+	// message.time is when the message was sent or the reply came, and
+	// how long a turn ran under its last reply, in the user's formats.
+	"message.time": {In: []string{"message.toolbar"}, Thread: true},
 	// thread.crumb is the header's button back to a thread above the one
 	// shown, by its id.
 	"thread.crumb": {Props: map[string]string{"thread": "string"}, In: []string{"thread.header.breadcrumb"}, Thread: true, Inline: true},

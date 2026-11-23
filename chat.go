@@ -535,7 +535,7 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 		a.reportCard(c, t, e.key, e)
 		return
 	}
-	m := timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil}
+	m := timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil, At: e.at}
 	acted := false
 	a.pluginComponent(c, "timeline.message", &t, componentCopy{
 		key:     e.key,
@@ -600,6 +600,8 @@ type timelineMessage struct {
 	Streaming bool   `json:"streaming,omitempty"`
 	Note      string `json:"note,omitempty"`
 	Failed    bool   `json:"failed,omitempty"`
+	// At is when a message was sent or a reply's words came.
+	At time.Time `json:"at,omitzero"`
 }
 
 var entryKindNames = map[entryKind]string{entryUser: "user", entryAssistant: "assistant", entryWork: "work", entryFailed: "failed", entryError: "error"}

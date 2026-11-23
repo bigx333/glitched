@@ -123,6 +123,11 @@ type entry struct {
 	// failed is the command a failed entry, or a message whose send
 	// failed, stands for.
 	failed client.Pending
+	// at is when a message was sent or a reply's words came; zero for a
+	// message not sent yet. ran is how long the turn ran, on its last
+	// reply.
+	at  time.Time
+	ran time.Duration
 	// retry is a turn's last reply, or its message when it said nothing,
 	// when the turn failed or was stopped: there is something to ask
 	// again.
@@ -194,7 +199,7 @@ func (d *deriving) add(e client.Entry) {
 		d.listed[e.Message] = true
 		d.es = append(d.es, userEntry(e))
 	case *client.AssistantEntry:
-		d.es = append(d.es, entry{key: d.key("a", e.Run), kind: entryAssistant, text: e.Text, streaming: e.Streaming, retry: unfinished(e.End)})
+		d.es = append(d.es, entry{key: d.key("a", e.Run), kind: entryAssistant, text: e.Text, streaming: e.Streaming, at: e.At, ran: ranFor(e.End), retry: unfinished(e.End)})
 	case *client.WorkEntry:
 		d.es = append(d.es, workEntry(d.key("w", e.Run), e))
 	case *client.RequestEntry:
@@ -497,13 +502,21 @@ func userEntry(u *client.UserEntry) entry {
 	if u.Reason != "" {
 		note += ": " + u.Reason
 	}
-	return entry{key: "m/" + u.Message.String(), kind: entryUser, text: u.Text, note: note, retry: unfinished(u.End)}
+	return entry{key: "m/" + u.Message.String(), kind: entryUser, text: u.Text, note: note, at: u.At, retry: unfinished(u.End)}
+}
+
+// ranFor is how long a turn that ended so ran, zero while it runs.
+func ranFor(end *client.TurnEnd) time.Duration {
+	if end == nil {
+		return 0
+	}
+	return end.Took
 }
 
 // unfinished is whether a turn that ended so left something to ask again:
-// it failed, was stopped, or was given up on.
+// a message of the user's it failed, was stopped, or was given up on.
 func unfinished(end *client.TurnEnd) bool {
-	return end != nil && end.Outcome != api.OutcomeCompleted
+	return end != nil && end.Asked && end.Outcome != api.OutcomeCompleted
 }
 
 func workEntry(key string, w *client.WorkEntry) entry {
