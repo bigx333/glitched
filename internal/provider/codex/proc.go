@@ -367,6 +367,14 @@ func (p *proc) handle(m message) {
 		run.request(m)
 	case run != nil:
 		run.notify(m)
+	case m.Method == "thread/tokenUsage/updated":
+		// What Codex spent between runs is no run's, and a reading it
+		// sends again in the next run is no news.
+		var u struct {
+			TokenUsage tokenUsage `json:"tokenUsage"`
+		}
+		json.Unmarshal(m.Params, &u)
+		p.usage.Store(&u.TokenUsage)
 	case request:
 		p.quiet(m.Method)
 		p.conn.refuse(m.ID, -32601, "no turn is running")

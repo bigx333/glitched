@@ -86,6 +86,7 @@ type fake struct {
 	spent   int           // the thread's tokens so far
 	stop    chan struct{} // takes an interrupt of the active turn
 	steers  chan string
+	parked  map[string]any // a usage reading sent while no turn ran
 
 	replay *replay
 	// glitched is the glitched MCP server thread/start configured.
@@ -386,6 +387,9 @@ func (f *fake) complete(status string, turnErr any) {
 	thread, turn := f.ids()
 	f.mu.Lock()
 	f.active = false
+	if f.scenario == "parked-usage" && f.parked != nil {
+		f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": f.parked["tokenUsage"]})
+	}
 	if f.scenario == "usage-again" {
 		f.spent += 40
 		first := map[string]any{"totalTokens": f.spent, "inputTokens": 30, "cachedInputTokens": 0, "outputTokens": 10, "reasoningOutputTokens": 0}
@@ -399,6 +403,17 @@ func (f *fake) complete(status string, turnErr any) {
 	f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": usage(spent, spent)})
 	f.notify("turn/completed", map[string]any{"threadId": thread, "turn": map[string]any{"id": turn, "status": status, "error": turnErr, "items": []any{}}})
 	f.notify("thread/status/changed", map[string]any{"threadId": thread, "status": map[string]any{"type": "idle"}})
+	if f.scenario == "parked-usage" {
+		f.mu.Lock()
+		f.spent += 40
+		f.parked = map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": map[string]any{"totalTokens": f.spent, "inputTokens": 30, "cachedInputTokens": 0, "outputTokens": 10, "reasoningOutputTokens": 0}, "last": map[string]any{"totalTokens": 40, "inputTokens": 30, "cachedInputTokens": 0, "outputTokens": 10, "reasoningOutputTokens": 0}, "modelContextWindow": 258400}}
+		parked := f.parked
+		f.mu.Unlock()
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			f.notify("thread/tokenUsage/updated", parked)
+		}()
+	}
 	if f.scenario == "usage-again" {
 		late := map[string]any{"totalTokens": 7, "inputTokens": 0, "cachedInputTokens": 0, "outputTokens": 7, "reasoningOutputTokens": 0}
 		f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": map[string]any{"totalTokens": 1107}, "last": late, "modelContextWindow": 258400}})
