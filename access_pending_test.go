@@ -206,3 +206,23 @@ func TestAnApprovalCardNamesTheLevelItsTurnFellBackTo(t *testing.T) {
 		t.Errorf("the card and control don't name the level the turn fell back to: %q", h.tt.Texts())
 	}
 }
+
+// The composer shows a change pending from the moment it is chosen, before
+// the engine has taken it: what it marks is what it shows.
+func TestAChangeIsPendingBeforeTheEngineTakesIt(t *testing.T) {
+	h, _, _ := confirming(t, fake.Turn(false), nil)
+	h.until("idle", func() bool { h.tt.Frame(); return !h.a.current().View.Live() })
+	th := h.a.current()
+	h.a.access = accessFull
+	if p := h.a.accessPending(th); p.standing != api.NextTurn {
+		t.Errorf("Full access chosen and not yet sent stands %d, want for the next turn", p.standing)
+	}
+	h.a.access = accessAsk
+	if p := h.a.accessPending(th); p.on() {
+		t.Errorf("the access the thread has stands %d", p.standing)
+	}
+	h.a.effort = "low"
+	if p := h.a.modelPending(th); p.standing != api.NextTurn || p.note != "Applies on the next turn" {
+		t.Errorf("a lower effort chosen and not yet sent stands %d %q", p.standing, p.note)
+	}
+}

@@ -19,7 +19,7 @@ type pending struct {
 
 func (p pending) on() bool { return p.standing != api.InEffect }
 
-// short is whether the provider runs something other than the value.
+// short is whether the provider runs other than the value, or never took it.
 func (p pending) short() bool { return p.standing == api.Short || p.standing == api.Unapplied }
 
 // providerName is the provider's family's name, as the picker shows it.
@@ -40,13 +40,35 @@ func accessLevelName(level api.Access) string {
 	return accessAsk
 }
 
-// accessPending is how the thread's access stands. A draft's is in effect:
-// nothing runs it yet.
-func accessPending(t thread) pending {
+// chosenView is t's view with the access, model and effort its composer
+// shows: the engine's view lags a configure it hasn't taken yet. A
+// composer that shows what the view has leaves it as it is, though it
+// names it otherwise, as a model by its name for one by its id.
+func (a *app) chosenView(t thread) api.Thread {
+	v := t.View
+	if l, ok := accessOf[a.access]; ok {
+		v.Access = l
+	}
+	if a.cliDecides(t) {
+		return v
+	}
+	if keyOfThread(v.Model.Provider, v.Model.Model) != a.model {
+		v.Model.Model = a.model.ID
+	}
+	m, _ := a.modelOf(a.model)
+	if e := effortFor(m, a.effort); e != effortFor(m, v.Model.Effort) {
+		v.Model.Effort = e
+	}
+	return v
+}
+
+// accessPending is how the thread's access stands, as the composer shows
+// it. A draft's is in effect: nothing runs it yet.
+func (a *app) accessPending(t thread) pending {
 	if t.id().IsZero() {
 		return pending{}
 	}
-	v := t.View
+	v := a.chosenView(t)
 	p := pending{standing: v.AccessStanding()}
 	name := providerName(v.Model.Provider)
 	switch p.standing {
@@ -71,22 +93,22 @@ func accessPending(t thread) pending {
 	return p
 }
 
-// shortAccessName is the name of what a provider that runs short of the
-// access asked runs: a level below it by its name, and Approve for me
-// fallen back from the provider's own auto mode as what it then does.
+// shortAccessName is the name of what a provider that runs other than the
+// access asked runs: another level by its name, and Approve for me fallen
+// back from the provider's own auto mode as what it then does.
 func shortAccessName(g api.ConfirmedAccess) string {
-	if g.Access == api.AccessAutoEdits && g.Asked == api.AccessAutoEdits {
+	if g.Access == api.AccessAutoEdits && g.Asked == api.AccessAutoEdits && g.Why != "" {
 		return "Approve edits only"
 	}
 	return accessLevelName(g.Access)
 }
 
-// shownAccess is the level the composer's access control shows for t,
+// accessShown is the level the composer's access control shows for t,
 // for its icon and color, and what it says of it: the chosen level, or
-// what the provider really runs when it runs short of it.
-func shownAccess(t thread, chosen string) (level, label string) {
-	if accessPending(t).standing != api.Short {
-		return chosen, chosen
+// what the provider really runs when it runs other than it.
+func (a *app) accessShown(t thread) (level, label string) {
+	if a.accessPending(t).standing != api.Short {
+		return a.access, a.access
 	}
 	g := *t.View.Confirmed.Access
 	return accessLevelName(g.Access), shortAccessName(g)
@@ -98,7 +120,7 @@ func (a *app) modelPending(t thread) pending {
 	if t.id().IsZero() {
 		return pending{}
 	}
-	v := t.View
+	v := a.chosenView(t)
 	name := providerName(v.Model.Provider)
 	modelName := func(m api.ModelRef) string {
 		info, _ := a.modelOf(keyOfThread(m.Provider, m.Model))
@@ -176,15 +198,16 @@ func (a *app) unconfirmedMark(c *ui.Context, p pending) {
 // for t: the chosen ones, or what its provider really runs where it runs
 // another.
 func (a *app) runningModel(t thread, name, effort string) (string, string) {
-	if t.id().IsZero() || t.View.Confirmed.Model == nil {
+	v := a.chosenView(t)
+	if t.id().IsZero() || v.Confirmed.Model == nil {
 		return name, effort
 	}
-	g := t.View.Confirmed.Model
-	info, _ := a.modelOf(keyOfThread(t.View.Model.Provider, g.Model))
-	if t.View.ModelStanding() == api.Short {
+	g := v.Confirmed.Model
+	info, _ := a.modelOf(keyOfThread(v.Model.Provider, g.Model))
+	if v.ModelStanding() == api.Short {
 		name = cmp.Or(info.name, g.Model)
 	}
-	if t.View.EffortStanding() == api.Short {
+	if v.EffortStanding() == api.Short {
 		effort = g.Effort
 		for _, e := range effortsOf(info) {
 			if e.id == g.Effort {

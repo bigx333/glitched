@@ -23,8 +23,9 @@ type ConfirmedAccess struct {
 	Why    string `json:"why,omitempty"`
 }
 
-// Short is whether the provider runs less than the run asked.
-func (c ConfirmedAccess) Short() bool { return c.Why != "" || c.Access < c.Asked }
+// Short is whether the provider runs other than the run asked: a level
+// below it or above it, or Asked's level in a mode that does less.
+func (c ConfirmedAccess) Short() bool { return c.Why != "" || c.Access != c.Asked }
 
 // ConfirmedModel is the model and effort a run's agent runs, as its
 // provider confirmed them. Asked is the run's own. Model and Effort are
@@ -70,11 +71,12 @@ type confirmation[T comparable] struct {
 }
 
 // standing is how chosen stands, given what the live run asked, if one is
-// live, what the last run to end asked, if one has, and the provider's
-// last confirmation, if any. A run unconfirmed leaves the last
-// confirmation standing while it asked the same, so that a turn of an
-// unchanged thread shows no change.
-func standing[T comparable](chosen T, live, last *T, liveRun, lastRun ID, c *confirmation[T]) Standing {
+// live, what the last run to end asked, if one has, and whether it failed,
+// and the provider's last confirmation, if any. A run unconfirmed leaves
+// the last confirmation standing while it asked the same, so that a turn
+// of an unchanged thread shows no change; one that failed with nothing
+// confirmed before it took nothing.
+func standing[T comparable](chosen T, live, last *T, liveRun, lastRun ID, lastFailed bool, c *confirmation[T]) Standing {
 	if live != nil && *live != chosen {
 		return Held
 	}
@@ -104,6 +106,8 @@ func standing[T comparable](chosen T, live, last *T, liveRun, lastRun ID, c *con
 		before = &confirmation[T]{asked: *last}
 	}
 	switch {
+	case before == nil && live == nil && lastFailed:
+		return Unapplied
 	case before == nil:
 		return InEffect
 	case before.asked == chosen && before.short:
@@ -131,7 +135,7 @@ func (t Thread) AccessStanding() Standing {
 	if g := t.Confirmed.Access; g != nil {
 		c = &confirmation[Access]{run: g.Run, asked: g.Asked, short: g.Short()}
 	}
-	return standing(t.Access, live, last, liveRun, lastRun, c)
+	return standing(t.Access, live, last, liveRun, lastRun, t.lastFailed(), c)
 }
 
 // ModelStanding is how the thread's model stands against the model its
@@ -161,5 +165,7 @@ func (t Thread) modelPart(of func(ModelRef) string, short func(ConfirmedModel) b
 	if g := t.Confirmed.Model; g != nil {
 		c = &confirmation[string]{run: g.Run, asked: of(g.Asked), short: short(*g)}
 	}
-	return standing(of(t.Model), live, last, liveRun, lastRun, c)
+	return standing(of(t.Model), live, last, liveRun, lastRun, t.lastFailed(), c)
 }
+
+func (t Thread) lastFailed() bool { return t.LastTurn != nil && t.LastTurn.Outcome == OutcomeFailed }
