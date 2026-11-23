@@ -1111,3 +1111,25 @@ func TestUsageCodexRepeatsCountsOnce(t *testing.T) {
 		t.Errorf("%d app-servers started, want the one", n)
 	}
 }
+
+// What Codex spends while the thread's app-server waits for its next run
+// is no run's: the same reading sent again in that run adds nothing.
+func TestUsageBetweenRunsChargesNoRun(t *testing.T) {
+	a, log := fake(t, "parked-usage")
+	s := spec(t)
+	var used []int64
+	for range 2 {
+		s.Run = api.NewID()
+		g := open(t, a, s)
+		do(t, g, provider.Start{Text: "hi"})
+		used = append(used, ended(turn(t, g)).Tokens)
+		closeRun(t, g)
+		time.Sleep(200 * time.Millisecond)
+	}
+	if used[0] != 100 || used[1] != 100 {
+		t.Errorf("the turns used %v tokens, want 100 each", used)
+	}
+	if n := len(sent(t, log, "initialize")); n != 1 {
+		t.Errorf("%d app-servers started, want the one", n)
+	}
+}
