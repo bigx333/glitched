@@ -636,14 +636,14 @@ func (th *Thread) shown() {
 	})
 }
 
-// configured drops the configures the engine took once the view has them:
+// configured drops the changes the engine took once the view has them:
 // a view of the log that took them, at the revision their receipt gave or
 // a later one. A view of another log, as a restored database's snapshot
 // sends, has none of that log's revisions, so they go for the thread to
 // show what the view does.
 func (th *Thread) configured(log api.ID) {
 	th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool {
-		return configures(p) && p.sent && (p.log != log || p.at <= th.View.Revision)
+		return inView(p.Body) && p.sent && (p.log != log || p.at <= th.View.Revision)
 	})
 }
 

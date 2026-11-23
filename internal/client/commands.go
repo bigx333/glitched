@@ -14,9 +14,11 @@ import (
 // stays pending until its thread's open transcript shows it, so the row
 // never blinks out before the entry replaces it, and an answer the engine
 // took until its request stops waiting, so the request never shows
-// waiting again in between. A configure the engine took stays until the
-// thread's view is at the revision its receipt gives, so the thread shows
-// what was chosen of its model and access from when it's chosen. Err is
+// waiting again in between. A configure, a rename or a move between the
+// inbox's sections the engine took stays until the thread's view is at
+// the revision its receipt gives, so the thread shows what was chosen from
+// when it's chosen, not what it was for as long as its receipt comes
+// before that view. Err is
 // why the submit failed. A failed row stays until Retry sends the command
 // again under the same ID, or Dismiss drops it, or, for an answer, its
 // request stops waiting, or, for a configure, another is chosen of
@@ -27,7 +29,7 @@ type Pending struct {
 	Body    api.Intent
 	Err     error
 	sent    bool   // committed; waiting for the thread to show it
-	log     api.ID // of a committed configure: the log that took it,
+	log     api.ID // of a committed change the view shows: the log that took it,
 	at      uint64 // and the thread's revision there that has it
 }
 
@@ -125,9 +127,13 @@ func (m *Manager) ConfigureThread(e *Env, thread api.ID, c api.ThreadConfigure) 
 	return m.submit(e, thread, c)
 }
 
-func configures(p Pending) bool {
-	_, ok := p.Body.(api.ThreadConfigure)
-	return ok
+// inView is whether what body does shows in its thread's view.
+func inView(body api.Intent) bool {
+	switch body.(type) {
+	case api.ThreadConfigure, api.InboxSet, api.ThreadRename:
+		return true
+	}
+	return false
 }
 
 // overlaps is whether p is a configure that gives anything c gives: of
@@ -269,9 +275,9 @@ func (m *Manager) submitted(e *Env, cmd api.Command, receipt api.Receipt, err er
 		th.Pending[i].sent = true
 	case taken && answer && th.asks(r.Request):
 		th.Pending[i].sent = true
-	case err == nil && configure && receipt.Committed.Log == e.log && receipt.Revision > th.View.Revision:
-		// The receipt came before the view that has the configure: until
-		// that view, the thread shows what the configure gave, as the
+	case err == nil && inView(cmd.Body) && receipt.Committed.Log == e.log && receipt.Revision > th.View.Revision:
+		// The receipt came before the view that has the change: until
+		// that view, the thread shows what the change gave, as the
 		// engine took it, unless one chosen after gives the same. A
 		// receipt of another log than the views held, or one stored
 		// without its revision, names no view to wait for.
