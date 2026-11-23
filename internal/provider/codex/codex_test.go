@@ -1163,3 +1163,24 @@ func TestAnOverflowSpendsOnlyWhatWasSent(t *testing.T) {
 		t.Errorf("the turn used %d tokens, want 100", end.Tokens)
 	}
 }
+
+// A reading of a turn past that Codex sends again in the next turn says
+// nothing new: the next turn counts from its own readings, even after a
+// compaction set the thread's totals back.
+func TestAnOldTurnsRepeatMovesNoCount(t *testing.T) {
+	for scenario, want := range map[string]int64{"old-repeat": 170, "old-repeat-reset": 120} {
+		a, _ := fake(t, scenario)
+		s := spec(t)
+		var used []int64
+		for range 2 {
+			s.Run = api.NewID()
+			g := open(t, a, s)
+			do(t, g, provider.Start{Text: "hi"})
+			used = append(used, ended(turn(t, g)).Tokens)
+			closeRun(t, g)
+		}
+		if used[0] != 100 || used[1] != want {
+			t.Errorf("%s: the turns used %v tokens, want [100 %d]", scenario, used, want)
+		}
+	}
+}

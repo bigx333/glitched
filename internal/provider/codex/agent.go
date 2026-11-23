@@ -348,12 +348,12 @@ func (g *Agent) notify(m message) {
 		live := g.started && !g.ended && (n.TurnID == "" || n.TurnID == g.turn)
 		usage := m.Method == "thread/tokenUsage/updated"
 		u, prev := n.TokenUsage, tokenUsage{}
-		p := g.p.usage.Load()
-		if usage && p != nil {
-			prev = *p
-		}
+		var p *tokenUsage
 		if usage {
-			g.p.usage.Store(&u)
+			p = g.p.reading(n.TurnID, u, live)
+		}
+		if p != nil {
+			prev = *p
 		}
 		// Codex sends its last reading again, as after a rate-limit
 		// update or a response cut short, with whatever was spent since:

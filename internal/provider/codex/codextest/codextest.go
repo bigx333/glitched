@@ -384,6 +384,15 @@ func usage(spent, at int) map[string]any {
 	return map[string]any{"total": total, "last": last, "modelContextWindow": 258400}
 }
 
+// reading is a usage update of total tokens spent, last of them by the
+// last request.
+func reading(total, last int) map[string]any {
+	count := func(n int) map[string]any {
+		return map[string]any{"totalTokens": n, "inputTokens": n * 2 / 3, "cachedInputTokens": 0, "outputTokens": n / 3, "reasoningOutputTokens": 0}
+	}
+	return map[string]any{"total": count(total), "last": count(last), "modelContextWindow": 258400}
+}
+
 func (f *fake) complete(status string, turnErr any) {
 	thread, turn := f.ids()
 	f.mu.Lock()
@@ -528,12 +537,26 @@ func (f *fake) play(n int, turn, said string) {
 		f.mu.Lock()
 		f.spent = 90
 		f.mu.Unlock()
-		count := func(n int) map[string]any {
-			return map[string]any{"totalTokens": n, "inputTokens": n * 2 / 3, "cachedInputTokens": 0, "outputTokens": n / 3, "reasoningOutputTokens": 0}
-		}
-		f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": count(60), "last": count(60), "modelContextWindow": 258400}})
-		f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": count(90), "last": count(60), "modelContextWindow": 258400}})
+		f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": reading(60, 60)})
+		f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": reading(90, 60)})
 		f.message("msg-"+turn, "cut short")
+	case "old-repeat", "old-repeat-reset":
+		if n == 2 {
+			f.mu.Lock()
+			f.spent = 170
+			f.mu.Unlock()
+			now := reading(170, 70)
+			if f.scenario == "old-repeat-reset" {
+				f.notify("thread/compacted", map[string]any{"threadId": thread, "turnId": turn})
+				f.mu.Lock()
+				f.spent = 20
+				f.mu.Unlock()
+				now = reading(20, 20)
+			}
+			f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": now})
+			f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": "turn-1", "tokenUsage": usage(100, 100)})
+		}
+		f.message("msg-"+turn, "old repeat")
 	case "resent":
 		if n == 2 {
 			f.mu.Lock()
