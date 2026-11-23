@@ -168,7 +168,7 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 		right += bar.Right
 	}
 	head := ui.Row(c).Height(max(bar.Height, headerHeight)).Shrink(0).
-		Padding(0, right, 0, left).Gap(8).AlignItems(ui.Center).ClipX()
+		Padding(0, right, 0, left).Gap(headerGap).AlignItems(ui.Center).ClipX()
 	head.DragWindow().Children(func() {
 		if !a.showSidebar {
 			if a.iconButton(c, "show-sidebar", icPanelLeft, "Show sidebar  ⌘B", false).Clicked() {
@@ -177,24 +177,31 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 		}
 		// The title, and a child's way back up before it.
 		heading := a.heading(c, t, narrow)
-		give := a.headerGive.of(t.id(), narrow)
-		// The step changed last frame: the plugins draw their copies for
-		// it before this frame shows, so the next one measures it whole.
-		moved := a.headerGive.wait > 0
+		g := &a.headerGive
+		give := g.of(t.id(), narrow)
+		project, branch := a.projectOf(t).name(), t.View.Branch
+		machine := len(a.backend.Envs()) > 1 && t.env != nil
 		if give < giveProject {
-			pill(c, a.projectOf(t).name()).Shrink(0)
-			if len(a.backend.Envs()) > 1 && t.env != nil {
-				a.machinePill(c, t.env)
-			}
+			pill(c, project).Shrink(0)
 		}
-		if give < giveBranch && t.View.Branch != "" {
-			pill(c, t.View.Branch).Shrink(0)
+		if give < giveBranch && branch != "" {
+			pill(c, branch).Shrink(0)
+		}
+		var machineAt ui.Rect
+		if give < giveProject && machine {
+			machineAt = a.machinePill(c, t.env).Bounds()
 		}
 		if !narrow {
 			a.usagePill(c, t)
 		}
-		if give < givePlaces && !t.id().IsZero() {
-			a.pluginSlot(c, "thread.header", t.id().String(), &t, slotAsk{compact: give >= giveCompactPlaces, wait: moved})
+		slot, slotDrawn := float32(0), true
+		switch {
+		case t.id().IsZero():
+		case give < givePlaces:
+			slot, slotDrawn = a.pluginSlot(c, "thread.header", t.id().String(), &t, give >= giveCompactPlaces)
+		default:
+			// Its copies are left out: the plugins hear they went.
+			a.frameOf("thread.header")
 		}
 		spacer := ui.Spacer(c)
 		a.tabButtons(c)
@@ -206,15 +213,31 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 			actions = ui.Row(c).Key("component:thread.header.actions").Shrink(0).AlignItems(ui.Center)
 			return actions
 		}
-		a.pluginComponent(c, "thread.header.actions", &t, componentCopy{key: t.id().String(), box: box, current: moved, context: func(r plugins.ThreadRecord) any {
+		cp := componentCopy{key: t.id().String(), box: box, context: func(r plugins.ThreadRecord) any {
 			state.Thread = r
 			return state
-		}})
+		}}
+		a.pluginComponent(c, "thread.header.actions", &t, cp)
 		h, ti, sp, ac := head.Bounds(), heading.Bounds(), spacer.Bounds(), actions.Bounds()
 		room := h.W - left - right
 		over := max(0, ac.X+ac.W-(h.X+h.W-right))
 		natural, _ := c.MeasureText(0, ui.Span{Text: title(t), Weight: 600})
-		if a.headerGive.fit(room, room+over-ti.W-sp.W, min(natural, headerTitleRoom)) {
+		pillW := func(s string) float32 {
+			w, _ := c.MeasureText(0, ui.Span{Text: s, Size: 11})
+			return w + 2*pillPadX + 2 + headerGap
+		}
+		if !g.measured(slotDrawn && a.componentAnswered("thread.header.actions", &t, cp)) {
+			return
+		}
+		g.drawn(ac.W, slot, machineAt.W)
+		back := map[int]float32{giveProject: pillW(project), giveBranch: 0}
+		if machine {
+			back[giveProject] += g.machine + headerGap
+		}
+		if branch != "" {
+			back[giveBranch] = pillW(branch)
+		}
+		if g.fit(room, room+over-ti.W-sp.W, min(natural, headerTitleRoom), back) {
 			c.Invalidate()
 		}
 	})
@@ -224,10 +247,16 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 // before it gives anything else way.
 const headerTitleRoom = 160
 
+// The header's gap between its controls, and a pill's padding at its sides.
+const (
+	headerGap = 8
+	pillPadX  = 7
+)
+
 // What the header gives way, in order, while its row doesn't fit: the
-// actions to their icons, the project's pill, the branch's, the
-// plugins' copies to their smallest, then those copies. Under 700 points
-// it starts with the pills gone and the actions as icons.
+// actions to their icons, the project's and the machine's pills, the
+// branch's, the plugins' copies to their smallest, then those copies.
+// Under 700 points it starts with the pills gone and the actions as icons.
 const (
 	giveNone = iota
 	giveActions
@@ -235,19 +264,21 @@ const (
 	giveBranch
 	giveCompactPlaces
 	givePlaces
-	giveAll
 )
 
-// headerGive is what the header of a thread gives way, and how wide the
-// rest of its row was at each step, as the last frames laid it out. wait
-// counts the frames whose layout is still of the step before: a frame
-// measures the one before it.
+// headerGive is what the header of a thread gives way. It measures its
+// row only once the plugins have drawn their copies for the step, and a
+// frame after, as a frame lays out what the one before it drew. actions
+// and slot are the widths of the actions and of the slot's copies, full
+// and smallest, as they were last drawn; -1 is one not drawn yet.
 type headerGive struct {
-	thread api.ID
-	narrow bool
-	step   int
-	wait   int
-	rest   [giveAll]float32
+	thread  api.ID
+	narrow  bool
+	step    int
+	wait    int
+	actions [2]float32
+	slot    [2]float32
+	machine float32
 }
 
 // of is the step the header of thread draws at, from the start for a
@@ -255,7 +286,7 @@ type headerGive struct {
 // header before it.
 func (g *headerGive) of(thread api.ID, narrow bool) int {
 	if g.thread != thread || g.narrow != narrow {
-		*g = headerGive{thread: thread, narrow: narrow, wait: 1}
+		*g = headerGive{thread: thread, narrow: narrow, wait: 1, actions: [2]float32{-1, -1}, slot: [2]float32{-1, -1}}
 		if narrow {
 			g.step = giveBranch
 		}
@@ -263,23 +294,59 @@ func (g *headerGive) of(thread api.ID, narrow bool) int {
 	return g.step
 }
 
+// measured says whether this frame's layout is of the step, as drawn
+// says the plugins drew their copies for it.
+func (g *headerGive) measured(drawn bool) bool {
+	switch {
+	case !drawn:
+		g.wait = 1
+	case g.wait > 0:
+		g.wait--
+	default:
+		return true
+	}
+	return false
+}
+
+// drawn keeps the widths the step drew of the actions, the slot's copies
+// and the machine's pill, to know what taking a step back adds.
+func (g *headerGive) drawn(actions, slot, machine float32) {
+	g.actions[min(g.step, giveActions)] = actions
+	if g.step < givePlaces {
+		g.slot[min(g.step/giveCompactPlaces, 1)] = slot
+	}
+	if g.step < giveProject && machine > 0 {
+		g.machine = machine
+	}
+}
+
 // fit takes the room of the row, the width of all in it but the title,
-// and the title's: it gives one more step way while that doesn't fit,
-// and takes one back once the last step's rest left room. It says
-// whether the step changed.
-func (g *headerGive) fit(room, rest, title float32) bool {
+// the title's, and what the pills' steps take away: it gives one more
+// step way while the row doesn't fit, and takes one back where what the
+// step took away fits again. It says whether the step changed.
+func (g *headerGive) fit(room, rest, title float32, pills map[int]float32) bool {
 	if room <= 0 {
 		return false
 	}
-	if g.wait > 0 {
-		g.wait--
-		return false
+	back := float32(-1)
+	switch g.step {
+	case giveActions:
+		if g.actions[0] >= 0 && g.actions[1] >= 0 {
+			back = g.actions[0] - g.actions[1]
+		}
+	case giveProject, giveBranch:
+		back = pills[g.step]
+	case giveCompactPlaces:
+		if g.slot[0] >= 0 && g.slot[1] >= 0 {
+			back = g.slot[0] - g.slot[1]
+		}
+	case givePlaces:
+		back = g.slot[1]
 	}
-	g.rest[g.step] = rest
 	switch {
 	case rest+title > room && g.step < givePlaces:
 		g.step++
-	case g.step > giveNone && !(g.narrow && g.step == giveBranch) && g.rest[g.step-1] > 0 && g.rest[g.step-1]+title+16 <= room:
+	case g.step > giveNone && !(g.narrow && g.step == giveBranch) && back >= 0 && rest+back+title+16 <= room:
 		g.step--
 	default:
 		return false
@@ -303,7 +370,7 @@ func (a *app) glassButton(c *ui.Context, key any) ui.Element {
 
 func pill(c *ui.Context, label string) ui.Element {
 	return ui.Text(c, label).FontSize(11).TextColor(palette.muted).SingleLine().
-		Padding(2, 7).Radius(999).Border(1, palette.border)
+		Padding(2, pillPadX).Radius(999).Border(1, palette.border)
 }
 
 // listFor is the thread's list of entries, kept per thread so that each

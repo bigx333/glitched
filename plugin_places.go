@@ -141,11 +141,16 @@ func (a *app) frameOf(at string) *placeFrame {
 
 // pluginSlot draws what every running plugin puts at the slot at, for the
 // copy key: a thread's id, or "" for a slot drawn once. t is the thread it
-// is about, nil for none. The header's copies never shrink: it gives way
-// in steps, so that no copy is clipped under its neighbours.
-func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread, ask slotAsk) {
+// is about, nil for none. compact asks the copies for their smallest
+// drawing, as a narrow header does. The header's copies never shrink: it
+// gives way in steps, so that no copy is clipped under its neighbours. It
+// says how much of its row the copies took, gaps included, as the last
+// frame laid them out, and whether each plugin has drawn its copy as it is
+// now.
+func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread, compact bool) (room float32, drawn bool) {
+	drawn = true
 	if a.plugins == nil {
-		return
+		return 0, drawn
 	}
 	f := a.frameOf(at)
 	var full plugins.ThreadRecord
@@ -159,18 +164,16 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread, ask slotAsk) 
 			r := a.plugins.Record(pl.Plugin, full)
 			ctx, version = r, recordVersion(r)
 		}
-		if ask.compact {
+		if compact {
 			version += " compact"
 		}
 		fk := [2]string{pl.Plugin, pl.Place.ID}
-		f.items[fk] = append(f.items[fk], plugins.PlaceItem{Key: key, Version: version, Context: ctx, Compact: ask.compact})
+		f.items[fk] = append(f.items[fk], plugins.PlaceItem{Key: key, Version: version, Context: ctx, Compact: compact})
 		app := a.plugins.App(pl.Plugin)
 		if app == nil {
 			continue
 		}
-		if ask.wait {
-			app.DrawFirst(pl.Place.ID, f.items[fk], []string{key}, time.Now().Add(firstDrawWait))
-		}
+		drawn = drawn && (app.Err != nil || app.Answered(pl.Place.ID, key) == version)
 		node := app.PlaceView(pl.Place.ID, key)
 		if node == nil {
 			continue
@@ -179,8 +182,11 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread, ask slotAsk) 
 		if at == "thread.header" {
 			shrink = 0
 		}
-		a.drawPlace(c, ui.Row(c).Key("plugin:"+pl.Plugin+":"+pl.Place.ID).Shrink(shrink).AlignItems(ui.Center).ClipX(), pl, key, ctx, app, node, nil, nil, nil, nil, nil)
+		row := ui.Row(c).Key("plugin:" + pl.Plugin + ":" + pl.Place.ID).Shrink(shrink).AlignItems(ui.Center).ClipX()
+		room += row.Bounds().W + headerGap
+		a.drawPlace(c, row, pl, key, ctx, app, node, nil, nil, nil, nil, nil)
 	}
+	return room, drawn
 }
 
 // sessionControls are the controls of what a plugin's app session draws,
@@ -544,11 +550,4 @@ func (a *app) pluginShortcuts(c *ui.Context) {
 			})
 		}
 	}
-}
-
-// slotAsk is what a slot asks of its copies: compact, their smallest
-// drawing, as a narrow header does; wait, that each is drawn for it
-// before the frame shows.
-type slotAsk struct {
-	compact, wait bool
 }
