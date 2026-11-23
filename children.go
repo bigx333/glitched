@@ -177,11 +177,11 @@ func (a *app) settleTree(t thread) {
 // the same commit, ending their runs, a child no GUI has seen yet
 // included. The chat shows a deleted thread until the delete lands, so a
 // refused one leaves it shown with why, and then shows a new thread in
-// its workspace.
+// its project.
 func (a *app) deleteTree(t thread, removeWorktree bool) {
 	for _, n := range append(a.below(t), node{t, 0}) {
 		if a.selected == n.t.id() {
-			a.newDraft(draft{env: n.t.env, workspace: n.t.project()})
+			a.newDraft(draft{env: n.t.env, workspace: a.projectOf(n.t).key.workspace})
 		}
 	}
 	a.backend.Delete(t.env, t.id(), removeWorktree)

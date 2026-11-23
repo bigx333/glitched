@@ -61,8 +61,13 @@ func (a *app) actions() []command {
 		return command{id: id, section: "Actions", label: label, hint: hint, icon: icon, run: run}
 	}
 	cmds := []command{action("thread.new", "New thread", "⌘N", "pen-new-square", a.newThread)}
+	if e := a.localEnv(); e != nil {
+		cmds = append(cmds, action("thread.new.scratch", "New thread without a project", "", "pen-new-square", func() { a.startIn(draft{e, a.scratchRoot()}) }))
+	}
 	for _, p := range a.projects {
-		cmds = append(cmds, action("thread.new:"+p.key.id(), "New thread in "+a.projectLabel(p), "", "pen-new-square", func() { a.startThread(p) }))
+		if !p.noProject {
+			cmds = append(cmds, action("thread.new:"+p.key.id(), "New thread in "+a.projectLabel(p), "", "pen-new-square", func() { a.startThread(p) }))
+		}
 	}
 	if !a.picking {
 		add := action("project.add", "Add project…", "", "folder-open", a.addProject)
@@ -72,7 +77,11 @@ func (a *app) actions() []command {
 	// Each is listed while an agent works in it too, lest the rows shift
 	// under the one chosen as a run starts; its alert says to stop it.
 	for _, p := range a.projects {
-		rm := action("project.remove:"+p.key.id(), "Remove project "+a.projectLabel(p)+"…", "", "folder", func() { a.askRemove(p) })
+		label := "Remove project " + a.projectLabel(p) + "…"
+		if p.noProject {
+			label = "Remove threads without a project…"
+		}
+		rm := action("project.remove:"+p.key.id(), label, "", "folder", func() { a.askRemove(p) })
 		rm.also = "workspace delete"
 		cmds = append(cmds, rm)
 	}
