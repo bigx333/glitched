@@ -657,6 +657,13 @@ func (e *EndpointClient) Folders(ctx context.Context, q api.FolderQuery) (api.Fo
 	return out, e.c.call(ctx, "projects.folders", q, &out)
 }
 
+// Skills says what skills Glitched gives a thread's agent on the
+// engine's machine.
+func (e *EndpointClient) Skills(ctx context.Context, q api.SkillQuery) (api.SkillList, error) {
+	var out api.SkillList
+	return out, e.c.call(ctx, "skills.list", q, &out)
+}
+
 // Clone clones a repository onto the engine's machine, saying each line
 // the clone prints to progress. Its ctx ending stops the clone there.
 func (e *EndpointClient) Clone(ctx context.Context, req api.CloneRequest, progress func(string)) (api.Cloned, error) {

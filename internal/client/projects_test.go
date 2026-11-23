@@ -27,6 +27,23 @@ func TestProjectsOfAnOlderEngineAreTooOld(t *testing.T) {
 	}
 }
 
+// An engine older than skills.list answers that it doesn't know the call,
+// which the GUI hears as ErrTooOld.
+func TestSkillsOfAnOlderEngineAreTooOld(t *testing.T) {
+	dir := stateDir(t)
+	serveOn(t, dir, &longThread{view: api.Thread{ID: api.NewID(), Title: "older"}})
+	m, g := manager(t, dir)
+	env := m.Envs()[0]
+	online(t, g, env)
+	var got error
+	ended := false
+	m.Skills(env, api.NewID(), func(_ api.SkillList, err error) { got, ended = err, true })
+	g.until(t, "the answer", func() bool { return ended })
+	if !errors.Is(got, ErrTooOld) {
+		t.Fatalf("an older engine's skills: %v, want ErrTooOld", got)
+	}
+}
+
 // The engine this GUI embeds or attaches to lists its folders.
 func TestFoldersOfTheLocalEngine(t *testing.T) {
 	dir := stateDir(t)

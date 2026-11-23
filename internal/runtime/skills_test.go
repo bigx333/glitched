@@ -147,3 +147,47 @@ func TestARunWhoseSkillsCantBeCopiedRunsWithoutThem(t *testing.T) {
 		t.Errorf("the run got %+v and ended %+v", got, end)
 	}
 }
+
+// delivered is a fake that says how it gets skills.
+type delivered struct{ *fake.Adapter }
+
+func (delivered) SkillDelivery() string { return "Fake: by magic" }
+
+// A thread's skills say what its next run gets: the user's and its
+// project's, which replace the user's of their name, what was skipped and
+// why, and how its provider takes them.
+func TestSkillsSaysWhatAThreadsNextRunGets(t *testing.T) {
+	state, ws := t.TempDir(), t.TempDir()
+	skillAt(t, filepath.Join(state, "skills"), "mine")
+	skillAt(t, filepath.Join(state, "skills"), "review")
+	skillAt(t, filepath.Join(ws, ".glitched", "skills"), "review")
+	skillAt(t, filepath.Join(ws, ".glitched", "skills"), "Upper")
+	st, err := store.Open(dbPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := runtime.New(ctx, st, provider.Mux{"fake": delivered{fake.New(fake.Turn(false))}}, runtime.WithSkills(state))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Close(); st.Close() })
+	id := api.NewID()
+	submit(t, h, id, api.ThreadCreate{Workspace: ws, Title: "t", Model: api.ModelRef{Provider: "fake", Model: "fake"}})
+	list, err := h.Skills(ctx, api.SkillQuery{Thread: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, sk := range list.Skills {
+		got = append(got, sk.Source+":"+sk.Name+":"+sk.Description+map[bool]string{true: ":overrides"}[sk.Overrides])
+	}
+	if want := []string{"home:mine:The mine skill.", "project:review:The review skill.:overrides"}; !slices.Equal(got, want) {
+		t.Errorf("skills %q, want %q", got, want)
+	}
+	if len(list.Skipped) != 1 || list.Skipped[0].Name != "Upper" || list.Skipped[0].Source != "project" || list.Skipped[0].Why == "" || list.Delivery != "Fake: by magic" {
+		t.Errorf("skipped %+v, delivery %q", list.Skipped, list.Delivery)
+	}
+	if _, err := h.Skills(ctx, api.SkillQuery{Thread: api.NewID()}); err == nil {
+		t.Error("a thread the engine doesn't have has skills")
+	}
+}

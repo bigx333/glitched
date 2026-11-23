@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"maps"
 	"slices"
@@ -82,4 +84,35 @@ func (s *skillStage) clear() {
 	if err := skills.Clear(s.dir); err != nil {
 		slog.Warn("skills: the last engine's overlays stay", "err", err)
 	}
+}
+
+// Skills is what Glitched gives the agent of q's thread now, as its next
+// run would get it, and how its provider takes it.
+func (h *Host) Skills(ctx context.Context, q api.SkillQuery) (api.SkillList, error) {
+	t, err := h.store.Thread(ctx, q.Thread)
+	if err != nil {
+		return api.SkillList{}, err
+	}
+	if t.ID != q.Thread || t.Deleted {
+		return api.SkillList{}, errors.New("no such thread")
+	}
+	list := api.SkillList{Skills: []api.Skill{}}
+	if h.skills == nil {
+		return list, nil
+	}
+	set := skills.Find(h.skills.dir, t.Workspace, t.Project)
+	shadowed := map[string]bool{}
+	for _, sk := range set.Shadowed {
+		shadowed[sk.Name] = true
+	}
+	for _, sk := range set.Skills {
+		list.Skills = append(list.Skills, api.Skill{Name: sk.Name, Description: sk.Description, Source: string(sk.Source), Shown: sk.Shown, Overrides: shadowed[sk.Name]})
+	}
+	for _, s := range set.Skipped {
+		list.Skipped = append(list.Skipped, api.SkippedSkill{Source: string(s.Source), Name: s.Name, Why: s.Why})
+	}
+	if d, ok := h.providers[t.Model.Provider].(provider.Skilled); ok {
+		list.Delivery = d.SkillDelivery()
+	}
+	return list, nil
 }
