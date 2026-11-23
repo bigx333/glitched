@@ -24,8 +24,9 @@ const (
 
 // List lists the folders in path on this machine, a symlink among them
 // when it points at a folder, sorted by name whatever its case, at most
-// maxFolders of them. A folder hide names is never listed or entered.
-func List(ctx context.Context, path string, hide []string) (api.FolderList, error) {
+// maxFolders of them. A folder hide names is never listed or entered, but
+// for a folder allow names in it, and what is in that, which is.
+func List(ctx context.Context, path string, hide, allow []string) (api.FolderList, error) {
 	dir, err := Expand(path)
 	if err != nil {
 		return api.FolderList{}, err
@@ -44,7 +45,7 @@ func List(ctx context.Context, path string, hide []string) (api.FolderList, erro
 	// its own and its answer goes nowhere.
 	done := make(chan listed, 1)
 	go func() {
-		list, err := list(ctx, dir, resolveHidden(hide))
+		list, err := list(ctx, dir, resolveHidden(hide), resolveHidden(allow))
 		done <- listed{list, err}
 	}()
 	select {
@@ -59,12 +60,13 @@ func List(ctx context.Context, path string, hide []string) (api.FolderList, erro
 	}
 }
 
-func list(ctx context.Context, dir string, hidden []hiddenDir) (api.FolderList, error) {
+func list(ctx context.Context, dir string, hidden, allowed []hiddenDir) (api.FolderList, error) {
+	shown := func(p string) bool { return !covers(hidden, p) || covers(allowed, p) }
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return api.FolderList{}, err
 	}
-	if covers(hidden, real) {
+	if !shown(real) {
 		return api.FolderList{}, fmt.Errorf("projects: %s: %w", dir, errHidden)
 	}
 	entries, err := os.ReadDir(real)
@@ -90,7 +92,7 @@ func list(ctx context.Context, dir string, hidden []hiddenDir) (api.FolderList, 
 		} else if !e.IsDir() {
 			continue
 		}
-		if !covers(hidden, at) {
+		if shown(at) {
 			list.Folders = append(list.Folders, api.Folder{Name: e.Name()})
 		}
 	}
@@ -128,8 +130,9 @@ func Expand(p string) (string, error) {
 
 var errHidden = errors.New("it holds the engine's state, so it isn't shown")
 
-// hiddenDir is a folder no listing shows or enters: its path with every
-// symlink resolved, and what it is on disk, nil while it isn't there.
+// hiddenDir is a folder no listing shows or enters, or one allowed in
+// one: its path with every symlink resolved, and what it is on disk, nil
+// while it isn't there.
 type hiddenDir struct {
 	path string
 	info fs.FileInfo
