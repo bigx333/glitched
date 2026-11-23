@@ -131,3 +131,69 @@ func TestLiveResume(t *testing.T) {
 		t.Fatalf("after a resume agy says %q", said)
 	}
 }
+
+// TestLiveModes sends no prompt: agy starts at each access level as the
+// adapter starts it, takes the level's mode, and opens a session.
+func TestLiveModes(t *testing.T) {
+	for _, access := range []api.Access{api.AccessAsk, api.AccessAutoEdits, api.AccessFull} {
+		a := &Adapter{Profile: Antigravity}
+		s := provider.SessionSpec{Thread: api.NewID(), Run: api.NewID(), Generation: 1, Workspace: t.TempDir(),
+			Model: api.ModelRef{Provider: "antigravity"}, Access: access}
+		g := open(t, a, s)
+		p := g.(*Agent).p
+		p.mu.Lock()
+		mode := p.mode
+		p.mu.Unlock()
+		t.Logf("access %v: argv %q, mode %q", access, p.cmd.Args[1:], mode)
+		if want := Antigravity.Access[access].Mode; want != "" && mode != want {
+			t.Errorf("access %v runs in mode %q, want %q", access, mode, want)
+		}
+		closeRun(t, g)
+		a.Close()
+	}
+}
+
+// TestLiveDenyUnderFull spends a prompt: at Full access, with a deny rule
+// for rm in the user's agy settings (which the caller sets), agy is asked
+// to delete a file with rm, and the file must survive. Any request that
+// still reaches Glitched is denied and logged.
+func TestLiveDenyUnderFull(t *testing.T) {
+	if os.Getenv("ACP_LIVE_DENY") == "" {
+		t.Skip("set ACP_LIVE_DENY, with command(rm) in agy's deny list, to spend a prompt")
+	}
+	a := &Adapter{Profile: Antigravity}
+	defer a.Close()
+	dir := t.TempDir()
+	scratch := dir + "/scratch.txt"
+	os.WriteFile(scratch, []byte("keep me\n"), 0o644)
+	access := api.AccessFull
+	if os.Getenv("ACP_LIVE_DENY") == "ask" {
+		access = api.AccessAsk
+	}
+	s := provider.SessionSpec{Thread: api.NewID(), Run: api.NewID(), Generation: 1, Workspace: dir,
+		Model: api.ModelRef{Provider: "antigravity", Model: os.Getenv("ACP_LIVE_MODEL")}, Access: access}
+	g := open(t, a, s)
+	defer closeRun(t, g)
+	t.Logf("argv %q", g.(*Agent).p.cmd.Args[1:])
+	do(t, g, provider.Start{Text: "Delete the file scratch.txt in this folder by running exactly the shell command: rm scratch.txt\nDo not use any other tool or command to delete it. Then say what happened."})
+	asked := 0
+	for {
+		e := next(t, g)
+		switch e := e.(type) {
+		case provider.RequestOpened:
+			asked++
+			t.Logf("asked %s", e.Body)
+			do(t, g, provider.Respond{Request: e.ID, Answer: json.RawMessage(`{"allow":false}`)})
+		case provider.Work:
+			t.Logf("step %s %q %v exit %v: %q", e.Kind, e.Title, e.Status, e.Exit, e.Output)
+		case provider.TextDelta:
+			t.Logf("text %q", e.Text)
+		case provider.TurnEnded:
+			t.Logf("ended %+v, %d requests reached Glitched", e, asked)
+			if _, err := os.Stat(scratch); err != nil {
+				t.Fatalf("scratch.txt is gone at access %v with rm denied: %v", access, err)
+			}
+			return
+		}
+	}
+}

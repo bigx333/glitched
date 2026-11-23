@@ -134,7 +134,6 @@ func TestAnAntigravityModelSharingAClaudeID(t *testing.T) {
 	}
 }
 
-
 // The card offers Always allow where agy offers to keep the grant, and
 // it goes back as agy's own allow-always; where agy offers only once, or
 // on a Claude card, there is no Always allow.
