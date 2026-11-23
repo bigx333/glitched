@@ -696,6 +696,9 @@ func (a *app) current() thread {
 	if d.env == nil && len(envs) > 0 {
 		d.env = envs[0]
 	}
+	if last, ok := a.lastDraft(d.env); ok && d.workspace == "" {
+		d.workspace = last.workspace
+	}
 	if d.workspace == "" {
 		d.workspace = a.scratchRoot()
 		if d.env != nil && d.env.Kind == client.Remote {

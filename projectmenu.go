@@ -160,13 +160,17 @@ func (a *app) removeProject(p *project) {
 	}
 }
 
-// defaultDraft is where a draft on e starts over: on this machine with no
-// project, or on a server the workspace of its newest project left. The
+// defaultDraft is where a draft on e starts over: in the project the last
+// thread on e was started in, while it can be; else on this machine with
+// no project, or on a server the workspace of its newest project left. The
 // app doesn't know a server's home, and its engine runs an agent in the
 // workspace as written, so "~" there is no folder; with no project left on
 // the server, the draft goes to the app's default, this machine's No
 // project.
 func (a *app) defaultDraft(e *client.Env) draft {
+	if d, ok := a.lastDraft(e); ok {
+		return d
+	}
 	if e == nil || e.Kind != client.Remote {
 		return draft{e, a.scratchRoot()}
 	}
