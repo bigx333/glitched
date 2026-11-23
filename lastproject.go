@@ -46,8 +46,9 @@ func (a *app) rememberProject(k projectKey) {
 }
 
 // lastDraft is a draft on e in the project last started in there, while it
-// is still one the workspace menu offers and, on this machine, its folder
-// is still there.
+// is still a project on e and, on this machine, its folder is still there;
+// No project on this machine always is. A server's home row is no project
+// of its own until a thread runs there.
 func (a *app) lastDraft(e *client.Env) (draft, bool) {
 	if e == nil {
 		return draft{}, false
@@ -56,14 +57,36 @@ func (a *app) lastDraft(e *client.Env) (draft, bool) {
 	if !ok {
 		return draft{}, false
 	}
+	local := e.Kind != client.Remote
+	if local && ws == a.scratchRoot() {
+		return draft{e, ws}, true
+	}
 	k := keyOf(e, ws)
-	if !slices.ContainsFunc(a.workspacesOn(e), func(p *project) bool { return p.key == k }) {
+	if !slices.ContainsFunc(a.projects, func(p *project) bool { return p.env == e && p.key == k }) {
 		return draft{}, false
 	}
-	if e.Kind != client.Remote && ws != a.scratchRoot() {
-		if fi, err := os.Stat(ws); err != nil || !fi.IsDir() {
-			return draft{}, false
-		}
+	if fi, err := os.Stat(ws); local && (err != nil || !fi.IsDir()) {
+		return draft{}, false
 	}
 	return draft{e, ws}, true
+}
+
+// forgetLastProject drops k from where the last threads were started, so
+// that a project removed doesn't come back with the next new thread.
+func (a *app) forgetLastProject(k projectKey) {
+	if a.lastProject[k.server] != k.workspace {
+		return
+	}
+	m, err := jsonfile.EditOrReset(a.lastProjectPath(), func(m *map[string]string) error {
+		if (*m)[k.server] == k.workspace {
+			delete(*m, k.server)
+		}
+		return nil
+	})
+	if err != nil {
+		log.Printf("glitched: last project: %v", err)
+		delete(a.lastProject, k.server)
+		return
+	}
+	a.lastProject = m
 }
