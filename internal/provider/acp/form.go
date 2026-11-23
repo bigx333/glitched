@@ -72,18 +72,23 @@ func parseForm(f acpsdk.CreateElicitationForm) (*form, json.RawMessage, error) {
 
 // fieldQuestion is the question a form field asks and the value each of its
 // options sends: a string of one of its options, or an array of them,
-// that takes any of its options and no more limits.
+// that takes any of its options and no more limits. Its options are all
+// enum or all oneOf, each sending a value of its own.
 func fieldQuestion(p acpsdk.ElicitationPropertySchema) (q api.Question, values map[string]string, ok bool) {
 	values = map[string]string{}
+	sent := map[string]bool{}
 	add := func(label, value string) {
 		q.Options = append(q.Options, api.Option{Label: label})
 		values[label] = value
+		ok = ok && !sent[value]
+		sent[value] = true
 	}
+	ok = true
 	var title, about *string
 	switch {
 	case p.String != nil:
 		s := p.String
-		if s.Format != nil || s.MinLength != nil || s.MaxLength != nil || s.Pattern != nil {
+		if s.Format != nil || s.MinLength != nil || s.MaxLength != nil || s.Pattern != nil || len(s.Enum) > 0 && len(s.OneOf) > 0 {
 			return q, nil, false
 		}
 		for _, v := range s.Enum {
@@ -110,7 +115,7 @@ func fieldQuestion(p acpsdk.ElicitationPropertySchema) (q api.Question, values m
 		}
 		q.Multi, title, about = true, a.Title, a.Description
 	}
-	if len(q.Options) == 0 {
+	if !ok || len(q.Options) == 0 {
 		return q, nil, false
 	}
 	q.Text = cmp.Or(deref(title), deref(about))

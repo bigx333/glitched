@@ -52,6 +52,9 @@ func TestAFormTheCardCantAnswerIsCancelled(t *testing.T) {
 		"a limit on picks":    `"properties":{"q1":{"type":"array","maxItems":1,"items":{"anyOf":[{"const":"1","title":"A"},{"const":"2","title":"B"}]}},"q1_other":` + words + `}`,
 		"a limit on words":    `"properties":{"q1":` + colours + `,"q1_other":{"type":"string","maxLength":2}}`,
 		"a type of its own":   `"properties":{"q1":{"type":"_calendar","enum":["A","B"]},"q1_other":` + words + `}`,
+		"enum and oneOf":      `"properties":{"q1":{"type":"string","enum":["A","B"],"oneOf":[{"const":"Z","title":"Z"},{"const":"A","title":"A"}]},"q1_other":` + words + `}`,
+		"one value twice":     `"properties":{"q1":{"type":"string","oneOf":[{"const":"B","title":"Bee"},{"const":"B","title":"Be"}]},"q1_other":` + words + `}`,
+		"one pick twice":      `"properties":{"q1":{"type":"array","items":{"anyOf":[{"const":"B","title":"Bee"},{"const":"B","title":"Be"}]}},"q1_other":` + words + `}`,
 		"words that also ask": `"properties":{"q1":` + colours + `,"q1_other":{"type":"string","enum":["X","Y"]}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
