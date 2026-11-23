@@ -647,6 +647,11 @@ func (d *decision) observe(o Observation) error {
 		}
 	case Surfaced:
 		dup := index(d.t.Requests, func(r Request) bool { return r.Run == o.Run && r.Dedup == o.Dedup }) >= 0
+		if isLive(o.Run) && !dup && live.Silent {
+			// Nobody watches a maintenance run to answer it, and the
+			// user's next message waits behind it: it stops instead.
+			return d.stop(*live)
+		}
 		if isLive(o.Run) && !dup {
 			if err := d.emit(api.RequestOpened{
 				Request: o.Request, Run: o.Run, Generation: live.Generation, Dedup: o.Dedup, Kind: o.Kind, Body: o.Body,
@@ -701,6 +706,11 @@ func (d *decision) observe(o Observation) error {
 		}
 		if o.Failed {
 			d.effects = append(d.effects, CloseAgent{Run: o.Run, Generation: live.Generation})
+		}
+		// A maintenance run resumed the conversation and asked the user
+		// nothing, so there is nothing for them to decide: it ends.
+		if live.Silent {
+			return d.emit(api.TurnEnded{Run: o.Run, Outcome: api.OutcomeFailed, Error: "the engine restarted during the compaction"})
 		}
 		return d.emit(api.TurnUncertain{Run: o.Run})
 	case Rewound:

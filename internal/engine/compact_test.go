@@ -11,14 +11,14 @@ import (
 
 func TestIsAntigravityGeminiModel(t *testing.T) {
 	for model, want := range map[string]bool{
-		"gemini-3.8-flash":          true,
-		"gemini-4-neon":             true,
-		"GEMINI-2.5-PRO":            true,
-		"gemini":                    true,
-		"claude-opus-4-6-thinking":  false,
-		"claude-sonnet-4-6":         false,
-		"gpt-oss-120b":              false,
-		"":                          false,
+		"gemini-3.8-flash":         true,
+		"gemini-4-neon":            true,
+		"GEMINI-2.5-PRO":           true,
+		"gemini":                   true,
+		"claude-opus-4-6-thinking": false,
+		"claude-sonnet-4-6":        false,
+		"gpt-oss-120b":             false,
+		"":                         false,
 	} {
 		if got := engine.IsAntigravityGeminiModel(model); got != want {
 			t.Errorf("IsAntigravityGeminiModel(%q) = %v, want %v", model, got, want)
@@ -53,59 +53,56 @@ func makeIdleThread(provider, model, session string, used int64, ended, cacheExp
 func TestIdleCompactWindowClaude(t *testing.T) {
 	base := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	expires := base.Add(time.Hour)
-	th, run := makeIdleThread("claude", "claude-opus-4-6", "sess-1", engine.MinIdleCompactTokens, base, expires)
+	th, run := makeIdleThread("claude", "claude-opus-4-6", "", 150_000, base, expires)
 
+	wantStart := expires.Add(-6 * time.Minute)
 	after, start, end, ok := engine.IdleCompactWindow(th, base.Add(time.Minute))
-	if !ok || after != run || !start.Equal(expires.Add(-engine.ClaudeCompactLead)) || !end.Equal(expires) {
-		t.Fatalf("claude window = (%v, %v, %v, %v), want (%v, %v, %v, true)", after, start, end, ok, run, expires.Add(-engine.ClaudeCompactLead), expires)
+	if !ok || after != run || !start.Equal(wantStart) || !end.Equal(wantStart.Add(time.Minute)) {
+		t.Fatalf("claude window = (%v, %v, %v, %v), want (%v, %v, %v, true): 90%% of the hour, for a minute, with no stored session and the CLI's own threshold", after, start, end, ok, run, wantStart, wantStart.Add(time.Minute))
 	}
-
-	// Past expiry is ineligible.
-	if _, _, _, ok := engine.IdleCompactWindow(th, expires); ok {
-		t.Error("expired cache was eligible")
+	if _, _, _, ok := engine.IdleCompactWindow(th, wantStart.Add(time.Minute)); ok {
+		t.Error("a compaction more than a minute late was eligible")
 	}
-	// Pure cache hit (no CacheExpires) is ineligible.
-	noCache, _ := makeIdleThread("claude", "claude-opus-4-6", "sess-1", engine.MinIdleCompactTokens, base, time.Time{})
+	noCache, _ := makeIdleThread("claude", "claude-opus-4-6", "", engine.MinIdleCompactTokens, base, time.Time{})
 	if _, _, _, ok := engine.IdleCompactWindow(noCache, base.Add(time.Minute)); ok {
-		t.Error("pure cache hit with zero CacheExpires was eligible")
+		t.Error("a thread its provider reported no cache expiry for was eligible")
 	}
-	// Below threshold is ineligible.
-	small, _ := makeIdleThread("claude", "claude-opus-4-6", "sess-1", engine.MinIdleCompactTokens-1, base, expires)
-	if _, _, _, ok := engine.IdleCompactWindow(small, base.Add(time.Minute)); ok {
-		t.Error("thread below 200k tokens was eligible")
-	}
-	// Missing session is ineligible.
-	noSess, _ := makeIdleThread("claude", "claude-opus-4-6", "", engine.MinIdleCompactTokens, base, expires)
-	if _, _, _, ok := engine.IdleCompactWindow(noSess, base.Add(time.Minute)); ok {
-		t.Error("thread without session was eligible")
-	}
-	// Stale context (already compacted) is ineligible.
 	stale := th
 	stale.Context.Stale = true
 	if _, _, _, ok := engine.IdleCompactWindow(stale, base.Add(time.Minute)); ok {
 		t.Error("stale context was eligible")
 	}
-	// Settled / snoozed / child threads are ineligible.
 	settled := th
 	settled.Disposition = api.Disposition{State: api.Settled}
 	if _, _, _, ok := engine.IdleCompactWindow(settled, base.Add(time.Minute)); ok {
 		t.Error("settled thread was eligible")
-	}
-	snoozed := th
-	snoozed.Disposition = api.Disposition{State: api.Snoozed, Until: base.Add(2 * time.Hour)}
-	if _, _, _, ok := engine.IdleCompactWindow(snoozed, base.Add(time.Minute)); ok {
-		t.Error("snoozed thread was eligible")
 	}
 	child := th
 	child.Parent = api.NewID()
 	if _, _, _, ok := engine.IdleCompactWindow(child, base.Add(time.Minute)); ok {
 		t.Error("child thread was eligible")
 	}
-	// Thread whose last message was manual /compact is ineligible.
 	manual := th
 	manual.Queue = append(append([]engine.Message(nil), th.Queue[:len(th.Queue)-1]...), engine.Message{ID: run, Text: "/compact", State: engine.QueueDispatched})
 	if _, _, _, ok := engine.IdleCompactWindow(manual, base.Add(time.Minute)); ok {
 		t.Error("thread whose last run was manual /compact was eligible")
+	}
+}
+
+// A snooze defers the window to its end, and one that outlasts the
+// window leaves the thread to lapse.
+func TestIdleCompactWindowWaitsForASnooze(t *testing.T) {
+	base := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	expires := base.Add(time.Hour)
+	th, _ := makeIdleThread("claude", "claude-opus-4-6", "", engine.MinIdleCompactTokens, base, expires)
+	until := expires.Add(-5*time.Minute - 30*time.Second)
+	th.Disposition = api.Disposition{State: api.Snoozed, Until: until}
+	if _, start, _, ok := engine.IdleCompactWindow(th, base.Add(time.Minute)); !ok || !start.Equal(until) {
+		t.Errorf("snoozed until %v: window opens %v (ok=%v), want at the snooze's end", until, start, ok)
+	}
+	th.Disposition.Until = expires
+	if _, _, _, ok := engine.IdleCompactWindow(th, base.Add(time.Minute)); ok {
+		t.Error("a thread snoozed past its window was eligible")
 	}
 }
 
@@ -114,16 +111,26 @@ func TestIdleCompactWindowAntigravityGeminiOnly(t *testing.T) {
 
 	gemini, run := makeIdleThread("antigravity", "gemini-3.8-flash", "ag-1", engine.MinIdleCompactTokens, base, time.Time{})
 	after, start, end, ok := engine.IdleCompactWindow(gemini, base.Add(5*time.Minute))
-	wantStart := base.Add(engine.AntigravityIdleDelay)
-	wantEnd := wantStart.Add(engine.AntigravityGrace)
+	wantStart := base.Add(engine.AntigravityCacheTTL * 9 / 10)
+	wantEnd := wantStart.Add(engine.CompactLapse)
 	if !ok || after != run || !start.Equal(wantStart) || !end.Equal(wantEnd) {
 		t.Fatalf("antigravity gemini window = (%v, %v, %v, %v), want (%v, %v, %v, true)", after, start, end, ok, run, wantStart, wantEnd)
 	}
+	if !wantEnd.Before(base.Add(engine.AntigravityCacheTTL)) {
+		t.Errorf("the window closes at %v, after the cache lapses at %v", wantEnd, base.Add(engine.AntigravityCacheTTL))
+	}
 	if _, _, _, ok := engine.IdleCompactWindow(gemini, wantEnd); ok {
-		t.Error("antigravity gemini past grace window was eligible")
+		t.Error("antigravity gemini past its window was eligible")
+	}
+	small, _ := makeIdleThread("antigravity", "gemini-3.8-flash", "ag-1", engine.MinIdleCompactTokens-1, base, time.Time{})
+	if _, _, _, ok := engine.IdleCompactWindow(small, base.Add(5*time.Minute)); ok {
+		t.Error("antigravity thread below 200k tokens was eligible")
+	}
+	noSess, _ := makeIdleThread("antigravity", "gemini-3.8-flash", "", engine.MinIdleCompactTokens, base, time.Time{})
+	if _, _, _, ok := engine.IdleCompactWindow(noSess, base.Add(5*time.Minute)); ok {
+		t.Error("antigravity thread without a session was eligible")
 	}
 
-	// Claude models and non-Gemini models on Antigravity must NOT be eligible.
 	for _, model := range []string{"claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b", ""} {
 		th, _ := makeIdleThread("antigravity", model, "ag-2", engine.MinIdleCompactTokens, base, time.Time{})
 		if _, _, _, ok := engine.IdleCompactWindow(th, base.Add(5*time.Minute)); ok {
@@ -131,7 +138,6 @@ func TestIdleCompactWindowAntigravityGeminiOnly(t *testing.T) {
 		}
 	}
 
-	// Switching a Gemini thread to Claude (or vice versa) excludes it until a Gemini turn completes.
 	switched := gemini
 	switched.Model.Model = "claude-sonnet-4-6"
 	if _, _, _, ok := engine.IdleCompactWindow(switched, base.Add(5*time.Minute)); ok {
@@ -141,6 +147,19 @@ func TestIdleCompactWindowAntigravityGeminiOnly(t *testing.T) {
 	fromClaude.Model.Model = "gemini-3.8-flash"
 	if _, _, _, ok := engine.IdleCompactWindow(fromClaude, base.Add(5*time.Minute)); ok {
 		t.Error("antigravity thread whose last run was claude was eligible")
+	}
+}
+
+// A thread on agy's default model names none; the model agy confirmed
+// it ran decides.
+func TestIdleCompactWindowAntigravityDefaultModelUsesTheConfirmedOne(t *testing.T) {
+	base := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	for confirmed, want := range map[string]bool{"gemini-3.8-flash-high": true, "claude-sonnet-4-6": false} {
+		th, run := makeIdleThread("antigravity", "", "ag-1", engine.MinIdleCompactTokens, base, time.Time{})
+		th = engine.Apply(th, engine.Event{Thread: th.ID, Seq: th.Revision + 1, At: base, Body: api.ModelConfirmed{Run: run, Model: confirmed}})
+		if _, _, _, ok := engine.IdleCompactWindow(th, base.Add(5*time.Minute)); ok != want {
+			t.Errorf("default model confirmed as %q: eligible=%v, want %v", confirmed, ok, want)
+		}
 	}
 }
 
@@ -159,16 +178,16 @@ func TestIdleCompactSilentLifecycleAndUserQueueing(t *testing.T) {
 
 	// Refused before window opens.
 	compactRun := api.NewID()
-	if _, _, err := engine.Observe(th, engine.IdleCompact{Run: compactRun, AfterRun: firstRun}, expires.Add(-3*time.Minute)); !errors.Is(err, engine.ErrRefused) {
+	if _, _, err := engine.Observe(th, engine.IdleCompact{Run: compactRun, AfterRun: firstRun}, expires.Add(-7*time.Minute)); !errors.Is(err, engine.ErrRefused) {
 		t.Fatalf("early IdleCompact: %v, want ErrRefused", err)
 	}
 	// Refused with wrong AfterRun.
-	if _, _, err := engine.Observe(th, engine.IdleCompact{Run: compactRun, AfterRun: api.NewID()}, expires.Add(-time.Minute)); !errors.Is(err, engine.ErrRefused) {
+	if _, _, err := engine.Observe(th, engine.IdleCompact{Run: compactRun, AfterRun: api.NewID()}, expires.Add(-6*time.Minute+30*time.Second)); !errors.Is(err, engine.ErrRefused) {
 		t.Fatalf("stale AfterRun: %v, want ErrRefused", err)
 	}
 
-	// Accepted inside [expires-2m, expires).
-	atCompact := expires.Add(-time.Minute)
+	// Accepted inside the minute from 90% of the hour.
+	atCompact := expires.Add(-6*time.Minute + 30*time.Second)
 	evs, effects, err := engine.Observe(th, engine.IdleCompact{Run: compactRun, AfterRun: firstRun}, atCompact)
 	if err != nil {
 		t.Fatalf("IdleCompact inside window: %v", err)
@@ -243,5 +262,139 @@ func TestIdleCompactSilentLifecycleAndUserQueueing(t *testing.T) {
 	// LastTurn still points to firstRun's end (silent run excluded from LastTurn).
 	if v := engine.View(th); v.LastTurn == nil || !v.LastTurn.Ended.Equal(base) {
 		t.Errorf("LastTurn after silent run = %+v, want Ended=%v", v.LastTurn, base)
+	}
+}
+
+// admitCompaction admits a silent /compact after th's only run, inside
+// its window, and returns the thread and the run.
+func admitCompaction(t *testing.T, th engine.Thread, after api.ID, at time.Time) (engine.Thread, api.ID) {
+	t.Helper()
+	run := api.NewID()
+	evs, _, err := engine.Observe(th, engine.IdleCompact{Run: run, AfterRun: after}, at)
+	if err != nil {
+		t.Fatalf("IdleCompact: %v", err)
+	}
+	for _, e := range evs {
+		e.Seq = th.Revision + 1
+		th = engine.Apply(th, e)
+	}
+	return th, run
+}
+
+func applied(th engine.Thread, evs []engine.Event) engine.Thread {
+	for _, e := range evs {
+		e.Seq = th.Revision + 1
+		th = engine.Apply(th, e)
+	}
+	return th
+}
+
+// An admitted compaction is still due only while nothing the user did
+// since changed the thread and its window is open.
+func TestCompactDueOnlyWhileNothingChanged(t *testing.T) {
+	base := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	expires := base.Add(time.Hour)
+	at := expires.Add(-6*time.Minute + 10*time.Second)
+	idle, first := makeIdleThread("claude", "claude-opus-4-6", "", engine.MinIdleCompactTokens, base, expires)
+	th, run := admitCompaction(t, idle, first, at)
+	if !engine.CompactDue(th, run, at.Add(time.Second)) {
+		t.Fatal("a compaction just admitted is not due")
+	}
+	if engine.CompactDue(th, run, at.Add(time.Minute)) {
+		t.Error("a compaction past its window is still due")
+	}
+	for name, change := range map[string]api.EventBody{
+		"model":   api.ThreadConfigured{Model: api.ModelRef{Provider: "claude", Model: "claude-sonnet-4-6"}, Access: th.Access},
+		"access":  api.ThreadConfigured{Model: th.Model, Access: api.AccessFull},
+		"snooze":  api.DispositionChanged{Disposition: api.Disposition{State: api.Snoozed, Until: expires.Add(time.Hour)}},
+		"settle":  api.DispositionChanged{Disposition: api.Disposition{State: api.Settled}},
+		"message": api.MessageQueued{Message: api.NewID(), Text: "next", Mode: api.AfterActive, Pos: 99},
+	} {
+		changed := engine.Apply(th, engine.Event{Thread: th.ID, Seq: th.Revision + 1, At: at, Body: change})
+		if engine.CompactDue(changed, run, at.Add(time.Second)) {
+			t.Errorf("after a %s change the compaction is still due", name)
+		}
+	}
+	evs, _, err := engine.Observe(th, engine.Started{Run: run}, at.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if engine.CompactDue(applied(th, evs), run, at.Add(2*time.Second)) {
+		t.Error("a compaction already sent is due again")
+	}
+}
+
+// A restart that loses a compaction ends it: the user has nothing to
+// decide about it, and their next message must not wait behind it.
+func TestALostCompactionEndsAndReleasesTheQueue(t *testing.T) {
+	base := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	expires := base.Add(time.Hour)
+	at := expires.Add(-6*time.Minute + 10*time.Second)
+	idle, first := makeIdleThread("claude", "claude-opus-4-6", "", engine.MinIdleCompactTokens, base, expires)
+	th, run := admitCompaction(t, idle, first, at)
+	evs, _, err := engine.Observe(th, engine.Started{Run: run}, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	th = applied(th, evs)
+	next := api.NewID()
+	evs, _, err = engine.Decide(th, api.Command{ID: next, Target: th.ID, Body: api.MessageDispatch{Text: "next", Mode: api.StartNow}}, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	th = applied(th, evs)
+	evs, effects, err := engine.Observe(th, engine.Reconciled{Run: run}, at.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	th = applied(th, evs)
+	for _, r := range th.Runs {
+		if r.ID == run && (r.State != engine.RunFinished || r.Outcome != api.OutcomeFailed) {
+			t.Errorf("the lost compaction is %v/%v, want finished and failed", r.State, r.Outcome)
+		}
+	}
+	var started bool
+	for _, e := range effects {
+		if s, ok := e.(engine.StartTurn); ok && s.Run == next {
+			started = true
+		}
+	}
+	if !started {
+		t.Errorf("the queued message did not start after the lost compaction ended: effects %+v", effects)
+	}
+}
+
+// A compaction that asks for permission stops: nobody watches it to
+// answer, and no card for it shows.
+func TestACompactionThatAsksStops(t *testing.T) {
+	base := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	expires := base.Add(time.Hour)
+	at := expires.Add(-6*time.Minute + 10*time.Second)
+	idle, first := makeIdleThread("claude", "claude-opus-4-6", "", engine.MinIdleCompactTokens, base, expires)
+	th, run := admitCompaction(t, idle, first, at)
+	evs, _, err := engine.Observe(th, engine.Started{Run: run}, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	th = applied(th, evs)
+	evs, effects, err := engine.Observe(th, engine.Surfaced{Run: run, Request: api.NewID(), Dedup: "q1", Kind: "approval"}, at.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	th = applied(th, evs)
+	if len(th.Requests) != 0 {
+		t.Errorf("a compaction's request opened: %+v", th.Requests)
+	}
+	if r := th.Live(); r == nil || r.State != engine.RunStopping {
+		t.Errorf("the compaction is %+v, want stopping", r)
+	}
+	var interrupted bool
+	for _, e := range effects {
+		if i, ok := e.(engine.InterruptTurn); ok && i.Run == run {
+			interrupted = true
+		}
+	}
+	if !interrupted {
+		t.Errorf("effects %+v, want an interrupt of the compaction", effects)
 	}
 }
