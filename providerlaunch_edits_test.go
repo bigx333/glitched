@@ -62,15 +62,15 @@ func heldRow(t *testing.T, holdOn string) (*harness, launchKey, *heldVersion, fu
 	return h, launchKey{h.local().ID, "claude"}, p, release
 }
 
-func begun(h *harness, p *heldVersion) {
-	h.until("the held --version", func() bool {
-		select {
-		case <-p.begun:
-			return true
-		default:
-			return false
-		}
-	})
+func begun(t *testing.T, p *heldVersion) {
+	t.Helper()
+	// Not h.until: nothing posts to the app while the check is held, so
+	// a wait for the app's next wake would last until the check times out.
+	select {
+	case <-p.begun:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the --version check never began")
+	}
 }
 
 // An answer the engine gave before a save doesn't replace the save's.
@@ -80,7 +80,7 @@ func TestALaunchReadFromBeforeASaveIsDropped(t *testing.T) {
 	r := s.read[k.engine]
 	r.at = time.Time{}
 	h.tt.Frame()
-	begun(h, p)
+	begun(t, p)
 	next := r.infos[k.provider].Launch
 	next.Args = "--new"
 	s.drafts[k] = next
@@ -103,7 +103,7 @@ func TestTypingWhileASaveIsCheckedKeepsTheNewDraft(t *testing.T) {
 	s.drafts[k] = next
 	h.tt.Frame()
 	h.click("Save")
-	begun(h, p)
+	begun(t, p)
 	newer := next
 	newer.Args = "--newer"
 	s.drafts[k] = newer
