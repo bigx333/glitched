@@ -88,6 +88,7 @@ type proc struct {
 	options  []acpsdk.SessionConfigOption // the session's, as the agent last said
 	mode     string                       // the session's mode, as the agent last said
 	moded    bool                         // the session has modes, as the agent said
+	offered  []string                     // the modes the session offers, as the agent said
 	run      *Agent                       // the run the agent serves, if any
 	prompt   chan struct{}                // closes once the run's prompt is written
 	parked   bool                         // it waits for its thread's next run
@@ -253,9 +254,12 @@ func (p *proc) open(ctx context.Context, dir string, servers []provider.MCPServe
 		id, options, modes = r.SessionId, r.ConfigOptions, r.Modes
 	}
 	p.mu.Lock()
-	p.session, p.options, p.mode, p.moded = id, options, "", modes != nil
+	p.session, p.options, p.mode, p.moded, p.offered = id, options, "", modes != nil, nil
 	if modes != nil {
 		p.mode = string(modes.CurrentModeId)
+		for _, m := range modes.AvailableModes {
+			p.offered = append(p.offered, string(m.Id))
+		}
 	}
 	p.mu.Unlock()
 	return lost, nil
@@ -342,9 +346,10 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 }
 
 // configure sets the session's model and effort to ref's, and its mode
-// to mode, where they differ. A ref without either, or no mode, leaves
-// the agent's own.
-func (p *proc) configure(ctx context.Context, ref api.ModelRef, mode string) error {
+// to g's, where they differ: its Else where the session doesn't offer its
+// Mode, saying so. A ref without either, or no mode, leaves the agent's
+// own.
+func (p *proc) configure(ctx context.Context, ref api.ModelRef, g provider.Grant) (refused string, err error) {
 	stop := context.AfterFunc(ctx, p.halt)
 	defer stop()
 	// ACP picks a mode of those the session lists: one that lists none
@@ -352,11 +357,15 @@ func (p *proc) configure(ctx context.Context, ref api.ModelRef, mode string) err
 	// mode is the one the agent last said, never the one asked, so a mode
 	// it moved to since is set again.
 	p.mu.Lock()
-	current, moded := p.mode, p.moded
+	current, moded, offered := p.mode, p.moded, p.offered
 	p.mu.Unlock()
+	mode := g.Mode
+	if g.Else != "" && moded && !slices.Contains(offered, mode) {
+		refused, mode = p.profile.Name+" doesn't offer its "+mode+" mode", g.Else
+	}
 	if mode != "" && mode != current && moded {
 		if _, err := p.conn.SetSessionMode(ctx, acpsdk.SetSessionModeRequest{SessionId: p.session, ModeId: acpsdk.SessionModeId(mode)}); err != nil {
-			return p.failure("run at this access level, as its mode "+mode, err)
+			return "", p.failure("run at this access level, as its mode "+mode, err)
 		}
 	}
 	for _, want := range []struct {
@@ -373,17 +382,17 @@ func (p *proc) configure(ctx context.Context, ref api.ModelRef, mode string) err
 				slog.Info("acp: the model runs at no such effort; it keeps its own", "agent", p.profile.Name, "effort", want.value)
 				continue
 			}
-			return fmt.Errorf("%s doesn't offer the model %s.", p.profile.Name, want.value)
+			return "", fmt.Errorf("%s doesn't offer the model %s.", p.profile.Name, want.value)
 		}
 		r, err := p.conn.SetSessionConfigOption(ctx, acpsdk.SetSessionConfigOptionRequest{ValueId: &acpsdk.SetSessionConfigOptionValueId{
 			SessionId: p.session, ConfigId: o.Id, Value: acpsdk.SessionConfigValueId(want.value),
 		}})
 		if err != nil {
-			return p.failure("set the "+string(want.category), err)
+			return "", p.failure("set the "+string(want.category), err)
 		}
 		p.setOptions(r.ConfigOptions)
 	}
-	return nil
+	return refused, nil
 }
 
 func option(options []acpsdk.SessionConfigOption, category acpsdk.SessionConfigOptionCategory) (acpsdk.SessionConfigOptionSelect, bool) {

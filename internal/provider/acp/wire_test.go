@@ -76,7 +76,7 @@ func runWireFake(mode string) {
 		case "session/new":
 			if mode == "mode-updates-before-reply" {
 				re(req.ID, map[string]any{"sessionId": "ours", "configOptions": options("a"), "modes": map[string]any{
-					"currentModeId": currentMode, "availableModes": []any{map[string]any{"id": "default", "name": "Default"}, map[string]any{"id": "accept-edits", "name": "Accept edits"}},
+					"currentModeId": currentMode, "availableModes": []any{map[string]any{"id": "default", "name": "Default"}, map[string]any{"id": "accept-edits", "name": "Accept edits"}, map[string]any{"id": "auto", "name": "Auto"}},
 				}})
 				continue
 			}

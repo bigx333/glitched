@@ -41,6 +41,8 @@ const (
 	envAsked  = "GLITCHED_FAKE_CLAUDE_ASKED"  // a file a one-shot run writes its argv, folder and stdin to
 	envAnswer = "GLITCHED_FAKE_CLAUDE_ANSWER" // what a one-shot run prints
 	envHang   = "GLITCHED_FAKE_CLAUDE_HANG"   // a one-shot run, having printed, waits to be killed
+	envModes  = "GLITCHED_FAKE_CLAUDE_MODES"  // a file each run appends the permission modes it was switched to, and how it answered, to
+	envNoAuto = "GLITCHED_FAKE_CLAUDE_NOAUTO" // why a run refuses its auto mode, as Claude Code says it
 )
 
 func TestMain(m *testing.M) {
@@ -133,6 +135,12 @@ func fakeClaude(path string) int {
 		switch {
 		case e["sent"] != nil:
 			got, err := in.ReadBytes('\n')
+			// Claude Code answers a switch of its permission mode at once,
+			// whatever its transcript says next.
+			for err == nil && kind(got) == "control_request set_permission_mode" && kind(e["sent"]) != kind(got) {
+				switchMode(got)
+				got, err = in.ReadBytes('\n')
+			}
 			if err != nil {
 				return 0
 			}
@@ -380,6 +388,27 @@ func uuidIn(line []byte) string {
 	var m struct{ UUID string }
 	json.Unmarshal(line, &m)
 	return m.UUID
+}
+
+// switchMode answers a set_permission_mode as Claude Code does: it takes
+// any mode, but auto where envNoAuto says why not.
+func switchMode(line []byte) {
+	var m struct {
+		RequestID string `json:"request_id"`
+		Request   struct{ Mode string }
+	}
+	json.Unmarshal(line, &m)
+	response := map[string]any{"subtype": "success", "request_id": m.RequestID, "response": map[string]any{"mode": m.Request.Mode}}
+	if why := os.Getenv(envNoAuto); why != "" && m.Request.Mode == "auto" {
+		response = map[string]any{"subtype": "error", "request_id": m.RequestID, "error": "Cannot set permission mode to auto: " + why}
+	}
+	if f := os.Getenv(envModes); f != "" {
+		log, _ := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		fmt.Fprintln(log, m.Request.Mode, response["subtype"])
+		log.Close()
+	}
+	b, _ := json.Marshal(map[string]any{"type": "control_response", "response": response})
+	os.Stdout.Write(append(b, '\n'))
 }
 
 func kind(line []byte) string {
@@ -636,6 +665,8 @@ func TestAMissingClaudeSaysToInstallIt(t *testing.T) {
 
 func TestAccessPicksThePermissionMode(t *testing.T) {
 	argv := replay(t, "hi", "")
+	switched := filepath.Join(t.TempDir(), "modes")
+	t.Setenv(envModes, switched)
 	h := host(t, nil)
 	for _, access := range []api.Access{api.AccessAsk, api.AccessAutoEdits, api.AccessFull} {
 		turn(t, h, newThread(t, h, access), "Say hi in three words.")
@@ -656,8 +687,47 @@ func TestAccessPicksThePermissionMode(t *testing.T) {
 			t.Errorf("claude ran with %q, want every tool allowed to ask", args)
 		}
 	}
-	if want := []string{"default", "acceptEdits", "bypassPermissions"}; !slices.Equal(modes, want) {
+	if want := []string{"default", "auto", "bypassPermissions"}; !slices.Equal(modes, want) {
 		t.Errorf("permission modes %v, want %v", modes, want)
+	}
+	// Approve for me alone checks, before its first message, that Claude
+	// Code runs it.
+	if got, want := strings.TrimSpace(string(must(os.ReadFile(switched)))), "auto success"; got != want {
+		t.Errorf("claude was switched to %q, want %q", got, want)
+	}
+}
+
+// A claude that can't run its auto mode, for its settings or its model,
+// runs Approve for me in acceptEdits, as before auto, and Claude then says
+// why as it describes itself; once a claude runs auto again, it says
+// nothing of it.
+func TestApproveForMeWithoutAutoAcceptsEdits(t *testing.T) {
+	ad := &claude.Adapter{Path: must(os.Executable())}
+	h := host(t, ad)
+	describe := func() string {
+		t.Helper()
+		describing(t, `{"models":[{"value":"sonnet","resolvedModel":"claude-sonnet-5-5","displayName":"Sonnet","description":"Sonnet 5.5"}]}`)
+		info, err := ad.Describe(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.NoAuto
+	}
+	for _, tc := range []struct{ why, switched, noAuto string }{
+		{"auto mode unavailable for this model", "auto error\nacceptEdits success", "Cannot set permission mode to auto: auto mode unavailable for this model"},
+		{"", "auto success", ""},
+	} {
+		replay(t, "hi", "")
+		switched := filepath.Join(t.TempDir(), "modes")
+		t.Setenv(envModes, switched)
+		t.Setenv(envNoAuto, tc.why)
+		turn(t, h, newThread(t, h, api.AccessAutoEdits), "Say hi in three words.")
+		if got := strings.TrimSpace(string(must(os.ReadFile(switched)))); got != tc.switched {
+			t.Errorf("refusing auto for %q, claude was switched to %q, want %q", tc.why, got, tc.switched)
+		}
+		if got := describe(); got != tc.noAuto {
+			t.Errorf("refusing auto for %q, claude describes its auto mode as %q, want %q", tc.why, got, tc.noAuto)
+		}
 	}
 }
 

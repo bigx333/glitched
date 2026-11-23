@@ -1039,10 +1039,10 @@ func TestAResumeCodexRefusesKeepsTheConversation(t *testing.T) {
 // Each access level reaches Codex as its approval policy and sandbox, at
 // the thread's start and on each turn: Full access is Codex's own bypass.
 func TestEachAccessLevelReachesCodex(t *testing.T) {
-	for access, want := range map[api.Access][3]string{
-		api.AccessAsk:       {"on-request", "read-only", "readOnly"},
-		api.AccessAutoEdits: {"on-request", "workspace-write", "workspaceWrite"},
-		api.AccessFull:      {"never", "danger-full-access", "dangerFullAccess"},
+	for access, want := range map[api.Access][4]string{
+		api.AccessAsk:       {"on-request", "read-only", "readOnly", "user"},
+		api.AccessAutoEdits: {"on-request", "workspace-write", "workspaceWrite", "auto_review"},
+		api.AccessFull:      {"never", "danger-full-access", "dangerFullAccess", "user"},
 	} {
 		a, log := fake(t, "hi")
 		s := spec(t)
@@ -1051,15 +1051,15 @@ func TestEachAccessLevelReachesCodex(t *testing.T) {
 		do(t, g, provider.Start{Text: "hi"})
 		turn(t, g)
 		closeRun(t, g)
-		var start struct{ ApprovalPolicy, Sandbox string }
+		var start struct{ ApprovalPolicy, Sandbox, ApprovalsReviewer string }
 		json.Unmarshal(sent(t, log, "thread/start")[0], &start)
 		var ts struct {
-			ApprovalPolicy string
-			SandboxPolicy  struct{ Type string }
+			ApprovalPolicy, ApprovalsReviewer string
+			SandboxPolicy                     struct{ Type string }
 		}
 		json.Unmarshal(sent(t, log, "turn/start")[0], &ts)
-		if got := [3]string{start.ApprovalPolicy, start.Sandbox, ts.SandboxPolicy.Type}; got != want || ts.ApprovalPolicy != want[0] {
-			t.Errorf("access %v: %q and turn policy %q, want %q", access, got, ts.ApprovalPolicy, want)
+		if got := [4]string{start.ApprovalPolicy, start.Sandbox, ts.SandboxPolicy.Type, start.ApprovalsReviewer}; got != want || ts.ApprovalPolicy != want[0] || ts.ApprovalsReviewer != want[3] {
+			t.Errorf("access %v: %q and turn policy %q, reviewer %q, want %q", access, got, ts.ApprovalPolicy, ts.ApprovalsReviewer, want)
 		}
 	}
 }
@@ -1182,5 +1182,64 @@ func TestAnOldTurnsRepeatMovesNoCount(t *testing.T) {
 		if used[0] != 100 || used[1] != want {
 			t.Errorf("%s: the turns used %v tokens, want [100 %d]", scenario, used, want)
 		}
+	}
+}
+
+// A Codex that keeps Approve for me's approvals with the user, as an
+// account without auto-review or a Codex too old to say does, runs its
+// turns so too, which asks as before auto-review; Codex then says why as
+// it describes itself, and once a thread takes auto-review, it says
+// nothing of it.
+func TestApproveForMeWithoutAutoReviewAsksTheUser(t *testing.T) {
+	for _, tc := range []struct{ scenario, reviewer, noAuto string }{
+		{"no-auto", "user", "Codex 0.171.0 kept the thread's approvals with you, not its auto-review"},
+		{"old-codex", "user", "Codex 0.171.0 kept the thread's approvals with you, not its auto-review"},
+		{"hi", "auto_review", ""},
+	} {
+		a, log := fake(t, tc.scenario)
+		s := spec(t)
+		s.Access = api.AccessAutoEdits
+		g := open(t, a, s)
+		do(t, g, provider.Start{Text: "hi"})
+		turn(t, g)
+		closeRun(t, g)
+		var ts struct{ ApprovalsReviewer string }
+		json.Unmarshal(sent(t, log, "turn/start")[0], &ts)
+		if ts.ApprovalsReviewer != tc.reviewer {
+			t.Errorf("%s: the turn's reviewer is %q, want %q", tc.scenario, ts.ApprovalsReviewer, tc.reviewer)
+		}
+		info, err := a.Describe(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.NoAuto != tc.noAuto {
+			t.Errorf("%s: Codex describes its auto-review as %q, want %q", tc.scenario, info.NoAuto, tc.noAuto)
+		}
+	}
+}
+
+// Approve for me chosen mid-thread holds from the thread's next turn: a
+// new app-server resumes the thread with auto-review.
+func TestApproveForMeChosenMidThreadReviewsNextTurn(t *testing.T) {
+	a, log := fake(t, "hi")
+	s := spec(t)
+	for _, access := range []api.Access{api.AccessAsk, api.AccessAutoEdits} {
+		s.Run, s.Access = api.NewID(), access
+		g := open(t, a, s)
+		s.Session = g.(provider.Sessioned).Session()
+		do(t, g, provider.Start{Text: "hi"})
+		turn(t, g)
+		closeRun(t, g)
+	}
+	var reviewers []string
+	for _, m := range []string{"thread/start", "thread/resume", "turn/start"} {
+		for _, p := range sent(t, log, m) {
+			var v struct{ ApprovalsReviewer string }
+			json.Unmarshal(p, &v)
+			reviewers = append(reviewers, m+" "+v.ApprovalsReviewer)
+		}
+	}
+	if want := []string{"thread/start user", "thread/resume auto_review", "turn/start user", "turn/start auto_review"}; !slices.Equal(reviewers, want) {
+		t.Errorf("reviewers %q, want %q", reviewers, want)
 	}
 }

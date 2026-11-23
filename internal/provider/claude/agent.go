@@ -44,6 +44,7 @@ const drainGrace = 250 * time.Millisecond
 const (
 	initRequest      = "glitched-init"
 	interruptRequest = "glitched-interrupt"
+	modeRequest      = "glitched-mode"
 )
 
 // cancelQueued is the capability of an interrupt that cancels the messages
@@ -240,25 +241,52 @@ func (d drain) Read(b []byte) (int, error) {
 }
 
 func (p *proc) handshake(ctx context.Context) error {
+	r, err := p.control(ctx, initRequest, map[string]string{"subtype": "initialize"})
+	if err != nil {
+		return err
+	}
+	if r.Subtype != "success" {
+		return fmt.Errorf("Claude Code refused to start: %s", r.Error)
+	}
+	p.learn(r.Response.Capabilities)
+	return nil
+}
+
+// switchMode has claude run in g's Mode, or in its Else where Claude Code
+// refuses that, and says why it refused. Only a claude that has read no
+// message yet is switched: before its first turn, nothing else is said.
+func (p *proc) switchMode(ctx context.Context, g provider.Grant) (refused string, err error) {
+	r, err := p.control(ctx, modeRequest, map[string]string{"subtype": "set_permission_mode", "mode": g.Mode})
+	if err != nil || r.Subtype == "success" {
+		return "", err
+	}
+	refused = cmp.Or(r.Error, "Claude Code refused it")
+	if r, err = p.control(ctx, modeRequest, map[string]string{"subtype": "set_permission_mode", "mode": g.Else}); err != nil {
+		return "", err
+	}
+	if r.Subtype != "success" {
+		return "", fmt.Errorf("Claude Code refused its %s mode too: %s", g.Else, r.Error)
+	}
+	return refused, nil
+}
+
+// control sends claude a control request and waits for its answer, which
+// a claude that has read no message yet gives before anything else.
+func (p *proc) control(ctx context.Context, id string, request any) (*response, error) {
 	// A process that already failed refuses the write; its exit says why.
-	p.send(ctx, map[string]any{"type": "control_request", "request_id": initRequest, "request": map[string]string{"subtype": "initialize"}})
+	p.send(ctx, map[string]any{"type": "control_request", "request_id": id, "request": request})
 	for {
 		select {
 		case line, ok := <-p.lines:
 			if !ok {
-				return p.exited()
+				return nil, p.exited()
 			}
 			var m message
-			if json.Unmarshal(line, &m) != nil || m.Type != "control_response" || m.Response == nil || m.Response.RequestID != initRequest {
-				continue
+			if json.Unmarshal(line, &m) == nil && m.Type == "control_response" && m.Response != nil && m.Response.RequestID == id {
+				return m.Response, nil
 			}
-			if m.Response.Subtype != "success" {
-				return fmt.Errorf("Claude Code refused to start: %s", m.Response.Error)
-			}
-			p.learn(m.Response.Response.Capabilities)
-			return nil
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
 	}
 }

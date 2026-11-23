@@ -127,7 +127,7 @@ func (a *app) providerDetail(c *ui.Context, r providerRow) {
 			}, func() { a.checkAgain(c) })
 		}
 		a.providerDefault(c, r)
-		if r.info.Info.Path != "" || r.version() != "" || r.info.Info.RulesIgnored {
+		if r.info.Info.Path != "" || r.version() != "" || r.info.Info.NoAuto != "" {
 			inset(c, "PROGRAM", func() {
 				if r.info.Info.Path != "" {
 					optionRow(c, "Path", "The program Glitched runs.", func() {
@@ -139,8 +139,8 @@ func (a *app) providerDetail(c *ui.Context, r providerRow) {
 						ui.Text(c, v).Selectable().FontSize(12).TextColor(palette.muted)
 					})
 				}
-				if r.info.Info.RulesIgnored {
-					optionRow(c, "Deny rules", r.family.name+"'s own deny rules don't apply to its runs in Glitched.", func() {})
+				if s := r.info.Info.NoAuto; s != "" {
+					optionRow(c, accessAuto, s+", so Approve for me approves file edits and asks before the rest.", func() {})
 				}
 			})
 		}

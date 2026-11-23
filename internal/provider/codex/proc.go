@@ -73,6 +73,9 @@ type proc struct {
 	closing sync.Once
 
 	version string
+	// reviewer is who reviews the thread's approvals, as Codex said when
+	// it started or resumed the thread: every turn asks for the same.
+	reviewer string
 
 	mu     sync.Mutex
 	usage  *tokenUsage      // what Codex last said the thread spent
@@ -266,7 +269,7 @@ func (p *proc) startThread(ctx context.Context, spec provider.SessionSpec) (lost
 	params := map[string]any{
 		"cwd":               spec.Workspace,
 		"approvalPolicy":    levels[spec.Access].approval,
-		"approvalsReviewer": "user",
+		"approvalsReviewer": levels[spec.Access].reviewer,
 		"sandbox":           levels[spec.Access].sandbox,
 		"config":            map[string]any{"mcp_servers": servers},
 	}
@@ -280,7 +283,11 @@ func (p *proc) startThread(ctx context.Context, spec provider.SessionSpec) (lost
 		Thread struct {
 			ID string `json:"id"`
 		} `json:"thread"`
+		ApprovalsReviewer string `json:"approvalsReviewer"`
 	}
+	// The thread's reviewer is the one Codex says it took, the user for a
+	// Codex too old to say.
+	defer func() { p.reviewer = cmp.Or(r.ApprovalsReviewer, "user") }()
 	if spec.Session != "" {
 		resume := maps.Clone(params)
 		resume["threadId"], resume["excludeTurns"] = spec.Session, true
@@ -323,18 +330,24 @@ func (p *proc) bind(id string) error {
 }
 
 // level is how one of Glitched's access levels reaches Codex: the
-// approval policy and sandbox a thread starts with, and the sandbox each
-// turn sends. Full access is Codex's own bypass, as
-// --dangerously-bypass-approvals-and-sandbox.
+// approval policy, sandbox and reviewer of approvals a thread starts
+// with, and the sandbox each turn sends. Approve for me is Codex's own
+// auto-review, where a reviewer agent of Codex's decides what the sandbox
+// asks, and escalates to the user what it won't. Full access is Codex's
+// own bypass, as --dangerously-bypass-approvals-and-sandbox.
 type level struct {
-	approval, sandbox string
-	policy            map[string]any
+	approval, sandbox, reviewer string
+	policy                      map[string]any
 }
 
+// autoReview is the reviewer of Codex's auto-review. A thread whose Codex
+// doesn't offer it says its reviewer is the user instead.
+const autoReview = "auto_review"
+
 var levels = map[api.Access]level{
-	api.AccessAsk:       {"on-request", "read-only", map[string]any{"type": "readOnly", "networkAccess": false}},
-	api.AccessAutoEdits: {"on-request", "workspace-write", map[string]any{"type": "workspaceWrite", "writableRoots": []string{}, "networkAccess": false, "excludeTmpdirEnvVar": false, "excludeSlashTmp": false}},
-	api.AccessFull:      {"never", "danger-full-access", map[string]any{"type": "dangerFullAccess"}},
+	api.AccessAsk:       {"on-request", "read-only", "user", map[string]any{"type": "readOnly", "networkAccess": false}},
+	api.AccessAutoEdits: {"on-request", "workspace-write", autoReview, map[string]any{"type": "workspaceWrite", "writableRoots": []string{}, "networkAccess": false, "excludeTmpdirEnvVar": false, "excludeSlashTmp": false}},
+	api.AccessFull:      {"never", "danger-full-access", "user", map[string]any{"type": "dangerFullAccess"}},
 }
 
 func (p *proc) threadID() string {
