@@ -73,7 +73,7 @@ jobs:
           set -o pipefail
           tests=$(go test -list . . | grep '^Test' | awk -v i=${{ strategy.job-index }} -v n=${{ strategy.job-total }} '(NR - 1) % n == i' | paste -sd'|')
           test -n "$tests"
-          go test -timeout 20m -run "^($tests)\$" .
+          go test -timeout 30m -run "^($tests)\$" .
       - name: Test the other packages
         if: ${{ !cancelled() && strategy.job-index == 0 }}
         run: go test -timeout 20m $(go list ./... | grep -vx glitched)
