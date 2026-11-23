@@ -606,6 +606,8 @@ type app struct {
 	// steers are the messages sent from the composer, until each lands
 	// or fails, by command.
 	steers map[api.ID]steer
+	// continues are the threads Continue all continues, in order.
+	continues []continuing
 	// snoozeFor is the thread whose snooze popover is open; popoverOpen
 	// says a plugin's popover drew open, as its row's actions are drawn.
 	snoozeFor   api.ID
@@ -949,6 +951,7 @@ func (a *app) view(c *ui.Context) {
 	a.sortThreads()
 	a.pruneDiffs()
 	a.pruneThreadState()
+	a.paceContinues()
 	// A steer to a server removed since never lands.
 	maps.DeleteFunc(a.steers, func(_ api.ID, s steer) bool { return !slices.Contains(a.backend.Envs(), s.env) })
 	// Jokes over are gone, whether or not their rows show: a row in a

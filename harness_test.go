@@ -632,19 +632,85 @@ func checked(t *testing.T) (*harness, thread) {
 // request, and the next found no agent to take the run back.
 func uncertainDir(t *testing.T) string {
 	t.Helper()
+	dir, _ := lostDir(t, fake.New(fake.Turn(true)), "Stuck")
+	return dir
+}
+
+// lostDir is a state directory whose engine, returned, holds a thread of
+// each title whose run it lost, as uncertainDir's, and runs the turns
+// after on next.
+func lostDir(t *testing.T, next provider.Adapter, titles ...string) (string, *daemon.Daemon) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(true)))
-	id := api.NewID()
-	for _, b := range []api.Intent{api.ThreadCreate{Workspace: "/work/t3code", Title: "Stuck", Model: fakeModel}, api.MessageDispatch{Text: "Edit main.go.", Mode: api.StartNow}} {
-		if _, err := d.Endpoint().Submit(ctx, api.Command{ID: api.NewID(), Target: id, Body: b}); err != nil {
-			t.Fatal(err)
+	ids := make([]api.ID, len(titles))
+	for i, title := range titles {
+		ids[i] = api.NewID()
+		for _, b := range []api.Intent{api.ThreadCreate{Workspace: "/work/t3code", Title: title, Model: fakeModel}, api.MessageDispatch{Text: "Edit main.go.", Mode: api.StartNow}} {
+			if _, err := d.Endpoint().Submit(ctx, api.Command{ID: api.NewID(), Target: ids[i], Body: b}); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	runIs := func(d *daemon.Daemon, want api.RunState) {
+		for _, id := range ids {
+			for {
+				if snap, err := d.Endpoint().Read(ctx, api.Query{Thread: id}); err == nil && snap.Threads[0].Run == want {
+					break
+				}
+				if ctx.Err() != nil {
+					t.Fatalf("the run never got to %v", want)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}
+	runIs(d, api.RunWaiting)
+	d.Close()
+	d = engine(t, daemon.Config{Dir: dir}, next)
+	runIs(d, api.RunUncertain)
+	return dir, d
+}
+
+// deaf is an adapter whose agents never hear a Stop, as a CLI that hangs.
+type deaf struct{ *fake.Adapter }
+
+type deafAgent struct{ provider.Agent }
+
+func (d deaf) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	ag, err := d.Adapter.Open(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	return deafAgent{ag}, nil
+}
+
+func (g deafAgent) Do(ctx context.Context, act provider.Action) error {
+	if _, ok := act.(provider.Interrupt); ok {
+		return nil
+	}
+	return g.Agent.Do(ctx, act)
+}
+
+// stoppingDir is a state directory whose engine holds a thread, Stuck,
+// stopped while its agent waited on a request, whose agent never stops:
+// the run stays stopping, which refuses a steer.
+func stoppingDir(t *testing.T) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	dir := tempDir(t)
+	ep, id := engine(t, daemon.Config{Dir: dir}, deaf{fake.New(fake.Turn(true))}).Endpoint(), api.NewID()
+	submit := func(b api.Intent) {
+		if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: id, Body: b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runIs := func(want api.RunState) {
 		for {
-			if snap, err := d.Endpoint().Read(ctx, api.Query{Thread: id}); err == nil && snap.Threads[0].Run == want {
+			if snap, err := ep.Read(ctx, api.Query{Thread: id}); err == nil && snap.Threads[0].Run == want {
 				return
 			}
 			if ctx.Err() != nil {
@@ -653,9 +719,11 @@ func uncertainDir(t *testing.T) string {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	runIs(d, api.RunWaiting)
-	d.Close()
-	runIs(engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(true))), api.RunUncertain)
+	submit(api.ThreadCreate{Workspace: "/work/t3code", Title: "Stuck", Model: fakeModel})
+	submit(api.MessageDispatch{Text: "Edit main.go.", Mode: api.StartNow})
+	runIs(api.RunWaiting)
+	submit(api.TurnInterrupt{})
+	runIs(api.RunStopping)
 	return dir
 }
 

@@ -211,10 +211,10 @@ func TestRetryWaitsWhileTheRunIsLive(t *testing.T) {
 	}
 }
 
-// A message the engine refuses to steer in comes back to the composer,
-// and a toast says why.
+// A message the engine refuses to steer in, as a run stopping does, comes
+// back to the composer, and a toast says why.
 func TestARefusedSteerComesBackToTheComposer(t *testing.T) {
-	h := start(t, uncertainDir(t))
+	h := start(t, stoppingDir(t))
 	th := h.thread("Stuck")
 	h.a.select_(th)
 	h.a.draft = "Keep going."
@@ -222,7 +222,7 @@ func TestARefusedSteerComesBackToTheComposer(t *testing.T) {
 	h.click("Send")
 	h.until("the refusal", func() bool { h.tt.Frame(); return h.a.draft == "Keep going." && len(th.Pending) == 0 })
 	h.tt.Frame()
-	if !h.tt.HasText("the agent is uncertain and can't take a message; send it once the run ends") || h.tt.HasText("Not sent: api: rejected: the agent is uncertain and can't take a message; send it once the run ends") {
+	if !h.tt.HasText("the agent is stopping and can't take a message; send it once the run ends") || h.tt.HasText("Not sent: api: rejected: the agent is stopping and can't take a message; send it once the run ends") {
 		t.Fatalf("after a refused steer: %q", h.tt.Texts())
 	}
 }
@@ -240,7 +240,7 @@ func TestARefusedSteerStaysInTheTimeline(t *testing.T) {
 		{"from another thread", func(h *harness) { h.a.selected = api.ID{}; h.a.follow() }, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := start(t, uncertainDir(t))
+			h := start(t, stoppingDir(t))
 			th := h.thread("Stuck")
 			h.a.select_(th)
 			h.a.draft = "Keep going."
@@ -265,7 +265,7 @@ func TestARefusedSteerStaysInTheTimeline(t *testing.T) {
 // Every steer refused is kept, not just the last: over a newer draft,
 // each stays in the timeline.
 func TestTwoRefusedSteersAreBothKept(t *testing.T) {
-	h := start(t, uncertainDir(t))
+	h := start(t, stoppingDir(t))
 	th := h.thread("Stuck")
 	h.a.select_(th)
 	for _, m := range []string{"First.", "Second."} {

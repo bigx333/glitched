@@ -1823,6 +1823,9 @@ func (a *app) stopButton(c *ui.Context, t thread) ui.Element {
 // never takes away the way to stop a run, and one that fails gives way to
 // Glitched's Send.
 func (a *app) sendControl(c *ui.Context, t thread, keys bool) {
+	if a.message(t) == "" && continuable(t) {
+		a.continueButton(c, t)
+	}
 	// The plugin's gives up its room first: however wide it draws, Stop
 	// keeps its own.
 	box := func() ui.Element {
@@ -2003,6 +2006,10 @@ func (a *app) sendAs(t thread, text, about string, mode api.DispatchMode) bool {
 		if e := effortFor(model, m.Effort); m.Model != "" && !strings.EqualFold(e, m.Effort) {
 			a.backend.ConfigureThread(t.env, id, api.ThreadConfigure{Effort: &e})
 		}
+	}
+	// One to a run left uncertain replaces it.
+	if continuable(t) {
+		mode = api.RestartActive
 	}
 	cmd := a.backend.Send(t.env, id, text, mode)
 	if cmd.IsZero() {
