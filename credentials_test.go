@@ -26,11 +26,21 @@ var stripeKey = api.Credentials{
 // engine's state dir.
 func credentialing(t *testing.T, c api.Credentials) (*harness, thread, string) {
 	t.Helper()
+	return credentialingAt(t, c, "")
+}
+
+// credentialingAt is credentialing with the thread started at access, or
+// at the default with none.
+func credentialingAt(t *testing.T, c api.Credentials, access string) (*harness, thread, string) {
+	t.Helper()
 	dir := tempDir(t)
 	fk := fake.New(nil)
 	d := engine(t, daemon.Config{Dir: dir}, fk)
 	fk.Asks(d.Endpoint().(fake.Asker), "Set up billing.", c)
 	h := start(t, dir)
+	if access != "" {
+		h.a.access = access
+	}
 	h.a.draft = "Set up billing."
 	h.tt.Frame()
 	h.click("Send")
@@ -216,49 +226,26 @@ func TestCredentialsForget(t *testing.T) {
 	}
 }
 
-// The credentials card names no access level, whatever the thread's: it
-// asks for a value only the user has, which no level answers.
+// The credentials card names no access level, whatever its turn runs at:
+// it asks for a value only the user has, which no level answers.
 func TestCredentialsCardNamesNoAccess(t *testing.T) {
-	h, th, _ := credentialing(t, stripeKey)
-	inCard := func() []string {
-		t.Helper()
-		card := h.a.drawn[lastRequest(th).Request].card
-		var named []string
-		for _, n := range h.tt.AccessAll() {
-			b := n.Bounds
-			if _, ok := accessOf[n.Name]; ok && b.X >= card.X && b.Y >= card.Y && b.X+b.W <= card.X+card.W && b.Y+b.H <= card.Y+card.H {
-				named = append(named, n.Name)
+	for _, level := range []string{accessAsk, accessAuto, accessFull} {
+		t.Run(level, func(t *testing.T) {
+			h, th, _ := credentialingAt(t, stripeKey, level)
+			if turn := th.View.Turn; turn == nil || accessLabel(turn.Access) != level {
+				t.Fatalf("the turn runs at %+v, want %s", turn, level)
 			}
-		}
-		return named
-	}
-	for _, level := range []string{accessAuto, accessAsk, accessFull} {
-		switch level {
-		case accessAsk:
-			h.click("Access")
-			h.tt.Advance(time.Second)
-			h.click(level)
-		case accessFull:
-			// Full access is granted by holding its row.
-			h.click("Access")
-			h.tt.Advance(time.Second)
-			r, ok := h.tt.Find(accessFull)
-			if !ok {
-				t.Fatalf("no Full access row: %q", h.tt.Texts())
+			card := h.a.drawn[lastRequest(th).Request].card
+			if card.W == 0 || card.H == 0 || !h.tt.HasText("Claude asks for credentials") {
+				t.Fatalf("the card isn't drawn: %+v", card)
 			}
-			h.tt.Press(r.X+r.W/2, r.Y+r.H/2)
-			h.tt.Advance(2 * holdTime)
-			h.tt.Release(r.X+r.W/2, r.Y+r.H/2)
-		}
-		if level != accessAuto {
-			h.until("the thread at "+level, func() bool { return accessLabel(h.a.current().View.Access) == level })
-			h.tt.Advance(time.Second)
-		}
-		if lastRequest(th).State != api.RequestPending {
-			t.Fatalf("at %s the card no longer waits", level)
-		}
-		if got := inCard(); len(got) != 0 {
-			t.Errorf("at %s the card names %q", level, got)
-		}
+			for _, n := range h.tt.AccessAll() {
+				b := n.Bounds
+				overlaps := b.X < card.X+card.W && card.X < b.X+b.W && b.Y < card.Y+card.H && card.Y < b.Y+b.H
+				if _, ok := accessOf[n.Name]; ok && overlaps {
+					t.Errorf("the card names %q at %+v", n.Name, b)
+				}
+			}
+		})
 	}
 }
