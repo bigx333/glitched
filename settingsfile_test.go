@@ -26,8 +26,6 @@ func TestSettingsOutliveARestart(t *testing.T) {
 	s := &a.settings
 	s.confirmDelete, s.theme, s.accent, s.glass, s.vibrancy, s.wind, s.fontSize = false, "Light", 3, false, 0.25, false, 15
 	s.timeFormat, s.streaming, s.newThreadMode, s.notifications = "24-hour", false, 1, false
-	s.claudeEnabled, s.claudePath, s.claudeModel, s.claudeCustom = false, "/usr/local/bin/claude", "Claude Haiku 5.5", []string{"x", "y"}
-	s.codexEnabled, s.codexPath, s.codexModel, s.codexCustom = false, "", "GPT-5.5 mini", []string{"z"}
 	tt.Frame()
 	a.settingsOut.wait()
 	want := fileOf(a.settings)
@@ -108,15 +106,15 @@ func TestTwoWindowsKeepEachOthersSettings(t *testing.T) {
 	one.settings.theme = "Dark"
 	one.saveSettings()
 	one.settingsOut.wait()
-	one.settings.claudePath = "/usr/bin/claude"
+	one.settings.timeFormat = "24-hour"
 	one.saveSettings()
 	one.settingsOut.wait()
-	two.settings.fontSize, two.settings.claudeModel = 14, "Claude Haiku 5.5"
+	two.settings.fontSize, two.settings.notifications = 14, false
 	two.saveSettings()
 	two.settingsOut.wait()
 	again := testApp(t, dir, nil, func(func()) {}).settings
-	if again.theme != "Dark" || again.fontSize != 14 || again.claudePath != "/usr/bin/claude" || again.claudeModel != "Claude Haiku 5.5" {
-		t.Fatalf("after both saved, theme %q, font size %v, Claude at %q on %q", again.theme, again.fontSize, again.claudePath, again.claudeModel)
+	if again.theme != "Dark" || again.fontSize != 14 || again.timeFormat != "24-hour" || again.notifications {
+		t.Fatalf("after both saved, theme %q, font size %v, times %q, notifications %v", again.theme, again.fontSize, again.timeFormat, again.notifications)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil || !strings.Contains(string(b), `"fromANewerVersion": 42`) {

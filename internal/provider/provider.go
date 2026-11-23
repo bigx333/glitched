@@ -23,6 +23,25 @@ var ErrWithdrawn = errors.New("The agent stopped waiting before the answer reach
 // models, it says nothing of what the account runs.
 var ErrSignedOut = errors.New("signed out")
 
+// ErrNotInstalled is what Describe and Open return, wrapped with how to
+// install it, when the provider's program isn't there.
+var ErrNotInstalled = errors.New("not installed")
+
+// Needs is an error its user must act on before the provider runs: Kind
+// is ErrSignedOut or ErrNotInstalled, Help what to do, in the provider's
+// words, which is all the error says.
+type Needs struct {
+	Kind error
+	Help string
+}
+
+func (n Needs) Error() string { return n.Help }
+func (n Needs) Unwrap() error { return n.Kind }
+
+// Forgetter is an Adapter that keeps what Describe said: Forget has the
+// next Describe ask the provider again, as after the user signed in.
+type Forgetter interface{ Forget() }
+
 // Sessioned is an Agent whose provider chose its own id for the thread's
 // conversation. The host reads it after Open and stores it before Start,
 // and gives it back in SessionSpec.Session to the thread's later runs.
@@ -35,6 +54,8 @@ type Info struct {
 	Name    string  `json:"name"`
 	Version string  `json:"version"`
 	Models  []Model `json:"models"`
+	// Path is the program Glitched runs for the provider.
+	Path string `json:"path,omitempty"`
 }
 
 // Model is one a provider's sessions can run. ID is what a session's

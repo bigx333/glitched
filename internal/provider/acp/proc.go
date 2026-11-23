@@ -407,7 +407,7 @@ func (p *proc) failure(doing string, err error) error {
 	}
 	var re *acpsdk.RequestError
 	if p.stale.Load() || errors.As(err, &re) && re.Code == -32000 {
-		return fmt.Errorf("%w: %s", provider.ErrSignedOut, p.profile.SignIn)
+		return provider.Needs{Kind: provider.ErrSignedOut, Help: p.profile.SignIn}
 	}
 	if gone {
 		return p.exited()

@@ -16,33 +16,23 @@ import (
 // pages edit, by name. The default model and access are composer.json's,
 // the servers gui.json's and This machine's engine.json's.
 type settingsFile struct {
-	Theme         string   `json:"theme"`
-	Accent        string   `json:"accent"`
-	Glass         bool     `json:"glass"`
-	GlassTint     float64  `json:"glassTint"`
-	TintPanels    bool     `json:"tintPanels"`
-	Wind          bool     `json:"wind"`
-	FontSize      float64  `json:"fontSize"`
-	Timestamps    string   `json:"timestamps"`
-	ConfirmDelete bool     `json:"confirmDelete"`
-	Streaming     bool     `json:"streaming"`
-	NewThread     string   `json:"newThread"`
-	Notifications bool     `json:"notifications"`
-	ClaudeEnabled bool     `json:"claudeEnabled"`
-	ClaudePath    string   `json:"claudePath"`
-	ClaudeModel   string   `json:"claudeModel"`
-	ClaudeCustom  []string `json:"claudeCustom"`
-	CodexEnabled  bool     `json:"codexEnabled"`
-	CodexPath     string   `json:"codexPath"`
-	CodexModel    string   `json:"codexModel"`
-	CodexCustom   []string `json:"codexCustom"`
+	Theme         string  `json:"theme"`
+	Accent        string  `json:"accent"`
+	Glass         bool    `json:"glass"`
+	GlassTint     float64 `json:"glassTint"`
+	TintPanels    bool    `json:"tintPanels"`
+	Wind          bool    `json:"wind"`
+	FontSize      float64 `json:"fontSize"`
+	Timestamps    string  `json:"timestamps"`
+	ConfirmDelete bool    `json:"confirmDelete"`
+	Streaming     bool    `json:"streaming"`
+	NewThread     string  `json:"newThread"`
+	Notifications bool    `json:"notifications"`
 }
 
 var (
 	timeFormats    = []string{"Relative", "12-hour", "24-hour"}
 	newThreadModes = []string{"Local", "New worktree"}
-	claudeModels   = []string{"Claude Opus 5.5", "Claude Sonnet 5.5", "Claude Haiku 5.5"}
-	codexModels    = []string{"GPT-5.5 Codex", "GPT-5.5", "GPT-5.5 mini"}
 )
 
 // fileOf is s as settings.json holds it. Its custom models are s's own.
@@ -60,14 +50,6 @@ func fileOf(s settings) settingsFile {
 		Streaming:     s.streaming,
 		NewThread:     newThreadModes[s.newThreadMode],
 		Notifications: s.notifications,
-		ClaudeEnabled: s.claudeEnabled,
-		ClaudePath:    s.claudePath,
-		ClaudeModel:   s.claudeModel,
-		ClaudeCustom:  s.claudeCustom,
-		CodexEnabled:  s.codexEnabled,
-		CodexPath:     s.codexPath,
-		CodexModel:    s.codexModel,
-		CodexCustom:   s.codexCustom,
 	}
 }
 
@@ -103,10 +85,6 @@ func settingsFrom(s settings, f settingsFile) settings {
 		s.newThreadMode = i
 	}
 	s.notifications = f.Notifications
-	s.claudeEnabled, s.claudePath, s.claudeCustom = f.ClaudeEnabled, f.ClaudePath, f.ClaudeCustom
-	pick(&s.claudeModel, claudeModels, f.ClaudeModel)
-	s.codexEnabled, s.codexPath, s.codexCustom = f.CodexEnabled, f.CodexPath, f.CodexCustom
-	pick(&s.codexModel, codexModels, f.CodexModel)
 	return s
 }
 
@@ -127,12 +105,9 @@ func (a *app) loadSettings() {
 	a.keepSaved()
 }
 
-// keepSaved notes the settings as saved, apart from the slices the pages
-// edit in place.
+// keepSaved notes the settings as saved.
 func (a *app) keepSaved() {
 	a.savedSettings = fileOf(a.settings)
-	a.savedSettings.ClaudeCustom = slices.Clone(a.savedSettings.ClaudeCustom)
-	a.savedSettings.CodexCustom = slices.Clone(a.savedSettings.CodexCustom)
 }
 
 // saveSettings hands what changed since the last save to the writer,

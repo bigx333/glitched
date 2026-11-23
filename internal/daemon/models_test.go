@@ -11,6 +11,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
+	"glitched/internal/provider/acp"
 	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
 )
@@ -35,7 +36,7 @@ func TestTheSocketSaysWhatModelsEachProviderRuns(t *testing.T) {
 	t.Cleanup(func() { d.Close() })
 	local := transport.NewEndpointClient(Socket(dir), api.ID{})
 	defer local.Close()
-	served, err := local.Providers(context.Background())
+	served, err := local.Providers(context.Background(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,25 +61,33 @@ func TestTheSocketSaysWhatModelsEachProviderRuns(t *testing.T) {
 	}
 }
 
-// A real build's engine serves each ACP agent whose binary it finds, as
-// the user installed it or engine.json's path names it, beside Claude
-// Code; one it can't find, it doesn't offer.
-func TestWithAgentsServesTheInstalledACPAgents(t *testing.T) {
+// A real build's engine serves each ACP agent beside Claude Code, found as
+// the user installed it or engine.json's path names it. One it can't find
+// is served too, and says how to install it.
+func TestWithAgentsServesEveryACPAgent(t *testing.T) {
 	home, bin := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", bin)
-	serves := func(agyPath string) []string {
+	agyOf := func(agyPath string) *acp.Adapter {
 		cfg, err := Defaults(stateDir(t))
 		if err != nil {
 			t.Fatal(err)
 		}
 		cfg.AgyPath = agyPath
 		cfg.WithAgents()
-		return cfg.Providers.Names()
+		if got := cfg.Providers.Names(); !slices.Equal(got, []string{"antigravity", "claude"}) {
+			t.Errorf("with agy_path %q, serves %q", agyPath, got)
+		}
+		return cfg.Providers["antigravity"].(*acp.Adapter)
 	}
-	if got := serves(""); !slices.Equal(got, []string{"claude"}) {
-		t.Errorf("with no agy, serves %q", got)
+	missing := func(agyPath string) {
+		_, err := agyOf(agyPath).Describe(context.Background())
+		if !errors.Is(err, provider.ErrNotInstalled) || err.Error() != acp.Antigravity.Install {
+			t.Errorf("with agy_path %q and no agy, Describe = %v, want not installed with how to install it", agyPath, err)
+		}
 	}
+	missing("")
+	missing(filepath.Join(bin, "no-agy"))
 	agy := filepath.Join(home, ".local", "bin", "agy")
 	if err := os.MkdirAll(filepath.Dir(agy), 0o755); err != nil {
 		t.Fatal(err)
@@ -86,11 +95,66 @@ func TestWithAgentsServesTheInstalledACPAgents(t *testing.T) {
 	if err := os.WriteFile(agy, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if got := serves(""); !slices.Equal(got, []string{"antigravity", "claude"}) {
-		t.Errorf("with agy in ~/.local/bin, serves %q", got)
+	if got, err := agyOf("").Binary(); got != agy || err != nil {
+		t.Errorf("with agy in ~/.local/bin, runs %q (%v)", got, err)
 	}
-	if got := serves(filepath.Join(bin, "no-agy")); !slices.Equal(got, []string{"claude"}) {
-		t.Errorf("with agy_path naming nothing, serves %q", got)
+}
+
+// needing is a provider whose user must act before it runs.
+type needing struct {
+	provider.Adapter
+	kind   error
+	forgot *bool
+}
+
+func (n needing) Describe(context.Context) (provider.Info, error) {
+	return provider.Info{}, provider.Needs{Kind: n.kind, Help: "do this first"}
+}
+
+func (n needing) Forget() { *n.forgot = true }
+
+// The socket says what a provider's user must do before it runs: install
+// it, or sign in, in the provider's words. A fresh ask has each provider
+// that keeps its answer ask its program again.
+func TestTheSocketSaysWhatAProviderNeeds(t *testing.T) {
+	var forgot bool
+	cfg, err := Defaults(stateDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := fake.New(nil)
+	cfg.Providers = provider.Mux{
+		"fake":   fake,
+		"out":    needing{fake, provider.ErrSignedOut, &forgot},
+		"absent": needing{fake, provider.ErrNotInstalled, &forgot},
+		"broken": undescribed{fake},
+	}
+	d, err := Start(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	local := transport.NewEndpointClient(Socket(cfg.Dir), api.ID{})
+	defer local.Close()
+	for _, fresh := range []bool{false, true} {
+		served, err := local.Providers(context.Background(), fresh)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]transport.ProviderInfo{
+			"absent": {State: transport.ProviderNotInstalled, Error: "do this first"},
+			"out":    {State: transport.ProviderSignedOut, Error: "do this first"},
+			"broken": {Error: "no answer"},
+			"fake":   {},
+		}
+		for _, p := range served {
+			if w := want[p.Name]; p.State != w.State || p.Error != w.Error {
+				t.Errorf("fresh %v: %s says %q, %q; want %q, %q", fresh, p.Name, p.State, p.Error, w.State, w.Error)
+			}
+		}
+		if forgot != fresh {
+			t.Errorf("after an ask with fresh %v, the providers forgot their answers: %v", fresh, forgot)
+		}
 	}
 }
 

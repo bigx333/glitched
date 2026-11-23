@@ -215,15 +215,6 @@ type settings struct {
 	newThreadMode int // Local, Worktree
 	notifications bool
 
-	claudeEnabled bool
-	claudePath    string
-	claudeModel   string
-	claudeCustom  []string
-	codexEnabled  bool
-	codexPath     string
-	codexModel    string
-	codexCustom   []string
-
 	checking bool
 }
 
@@ -685,7 +676,11 @@ type app struct {
 	// or the parts of Glitched; pluginsQuery the filter's words;
 	// pluginsOpen the rows opened or closed, by folder; pluginsReveal the
 	// folder of a row to scroll to once.
-	pluginsView   int
+	pluginsView int
+	// providersOpen are Settings › Providers' rows opened, by provider;
+	// providersTab its chosen tab.
+	providersOpen map[string]bool
+	providersTab  int
 	pluginsQuery  string
 	pluginsOpen   map[string]bool
 	pluginsReveal string
@@ -749,6 +744,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		pluginAssets:   map[string]asset{},
 		settingDrafts:  map[string]string{},
 		pluginsOpen:    map[string]bool{},
+		providersOpen:  map[string]bool{},
 		pluginRecords:  map[string]string{},
 		pluginSections: map[string]string{},
 		pluginMessages: map[string]*toldMessages{},
@@ -763,13 +759,6 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 			confirmDelete: true,
 			streaming:     true,
 			notifications: true,
-			claudeEnabled: true,
-			claudePath:    "/opt/homebrew/bin/claude",
-			claudeModel:   "Claude Opus 5.5",
-			claudeCustom:  []string{"claude-opus-5-5[1m]"},
-			codexEnabled:  true,
-			codexPath:     "/opt/homebrew/bin/codex",
-			codexModel:    "GPT-5.5 Codex",
 		},
 	}
 	a.userMD.Extensions, a.userMD.WrapCode = parser.ExtStrikethrough, true

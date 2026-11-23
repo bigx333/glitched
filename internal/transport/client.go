@@ -580,10 +580,11 @@ func (e *EndpointClient) ProviderCommands(ctx context.Context, name, workspace s
 
 // Providers are every provider the engine serves, each with the models
 // its sessions can run, or why it couldn't say. One it doesn't list it
-// has no adapter for.
-func (e *EndpointClient) Providers(ctx context.Context) ([]ProviderInfo, error) {
+// has no adapter for. Fresh has each ask its program again, rather than
+// answer from what it last said.
+func (e *EndpointClient) Providers(ctx context.Context, fresh bool) ([]ProviderInfo, error) {
 	var out []ProviderInfo
-	return out, e.c.call(ctx, "providers", struct{}{}, &out)
+	return out, e.c.call(ctx, "providers", providersQuery{Fresh: fresh}, &out)
 }
 
 func (e *EndpointClient) Submit(ctx context.Context, cmd api.Command) (api.Receipt, error) {

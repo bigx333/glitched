@@ -51,8 +51,12 @@ func (k *modelKey) UnmarshalJSON(b []byte) error {
 // for; one its engine never answered for offers none yet.
 type modelLists struct {
 	reported map[string][]provider.Model // by provider
-	asking   bool
-	next     time.Time // when to ask again
+	// served is what each provider the engine serves last said of
+	// itself, or why it couldn't: none before the engine first answers.
+	served map[string]transport.ProviderInfo
+	asking bool
+	fresh  bool      // the next ask has each provider ask its program again
+	next   time.Time // when to ask again
 	// changed is set as an answer comes, till the draft's default takes
 	// it (saveComposer).
 	changed bool
@@ -89,12 +93,14 @@ func (a *app) askModels() {
 		return // an engine coming online builds the picker again
 	}
 	l.asking = true
+	fresh := l.fresh
+	l.fresh = false
 	engine := a.serviceClient(a.dir)
 	go func() {
 		// Claude Code's answer takes several seconds, and up to its own
 		// timeout when claude hangs.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		served, err := engine.Providers(ctx)
+		served, err := engine.Providers(ctx, fresh)
 		cancel()
 		a.post(func() {
 			l.asking = false
@@ -113,7 +119,13 @@ func (a *app) askModels() {
 				}
 			}
 			failed := false
+			l.served = map[string]transport.ProviderInfo{}
 			for _, p := range served {
+				l.served[p.Name] = p
+				if p.State == transport.ProviderNotInstalled {
+					l.reported[p.Name] = []provider.Model{}
+					continue
+				}
 				if p.Error != "" {
 					log.Printf("glitched: models: %s: %s", p.Name, p.Error)
 					failed = true
@@ -130,6 +142,14 @@ func (a *app) askModels() {
 			l.changed = true
 		})
 	}()
+}
+
+// checkProviders asks the engine again now, and each provider its
+// program, rather than what it last said: the user signed in, or
+// installed one.
+func (a *app) checkProviders() {
+	a.models.fresh, a.models.next = true, time.Time{}
+	a.askModels()
 }
 
 // providerFamilies are the families of Glitched's table, then those of
