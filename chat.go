@@ -1552,7 +1552,10 @@ func (a *app) sendText(t thread, text, about string) bool {
 		a.selected = id
 		a.follow()
 	} else {
-		if disposition(t).State == api.Snoozed {
+		// Either may be what the engine ends with: the view's, if what
+		// was chosen here fails, or what was chosen, which the view
+		// shows once it comes.
+		if t.View.Disposition.State == api.Snoozed || disposition(t).State == api.Snoozed {
 			a.backend.SetDisposition(t.env, id, api.Disposition{})
 		}
 		// A thread runs at the effort its picker shows: one its model
