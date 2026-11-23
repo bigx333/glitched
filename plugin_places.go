@@ -51,6 +51,9 @@ func (a *app) threadRecord(t thread) plugins.ThreadRecord {
 	for _, k := range a.kids[t.id()] {
 		r.Children = append(r.Children, k.id().String())
 	}
+	if a.folderless(t) {
+		r.Workspace = ""
+	}
 	return r
 }
 

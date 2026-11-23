@@ -20,6 +20,13 @@ import (
 // folders, and the workspace of a draft with none.
 func (a *app) scratchRoot() string { return filepath.Join(a.dir, "scratch") }
 
+// folderless is whether t is a draft with no project, whose folder is made
+// only as it's sent: until then its workspace is the scratch root, which
+// holds other threads' folders, so nothing is to run, list or show there.
+func (a *app) folderless(t thread) bool {
+	return t.id().IsZero() && t.local() && t.View.Workspace == a.scratchRoot()
+}
+
 // scratchFolder makes the folder of a thread whose first message is text:
 // the day, the message's first words and a random suffix, as
 // 2026-11-23-fix-the-flicker-1a2b3c4d. A name another thread took first is
