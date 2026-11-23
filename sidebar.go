@@ -73,7 +73,11 @@ func (a *app) sidebarFrame(c *ui.Context) {
 	w := a.sidebarWidth * a.sidebarOpen
 	ui.Row(c).Key("sidebar").Width(w).Shrink(0).AlignItems(ui.Stretch).Clip().Children(func() {
 		side := ui.Column(c).Width(a.sidebarWidth).Shrink(0).Margin(0, 0, 0, w-a.sidebarWidth)
-		a.sidebarTall = side.Bounds().H
+		// A window's first frame lays the sidebar out for the first
+		// time: it is as tall as the window, which it fills.
+		if a.sidebarTall = side.Bounds().H; a.sidebarTall == 0 {
+			_, a.sidebarTall = c.Size()
+		}
 		switch {
 		case !a.vibrant:
 			side.Background(palette.sidebar)
