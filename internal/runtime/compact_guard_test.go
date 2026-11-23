@@ -48,6 +48,25 @@ func idleSeed(t *testing.T, st *store.Store, expires time.Time) (api.ID, api.ID)
 	return thread, run
 }
 
+// seeded is a new store holding an idle thread for each expiry, as
+// idleSeed leaves one, closed for a host to serve: idleSeed leases its
+// thread's start itself, which a host already serving the store races it
+// for.
+func seeded(t *testing.T, expires ...time.Time) (path string, threads []api.ID) {
+	t.Helper()
+	path = dbPath(t)
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, e := range expires {
+		id, _ := idleSeed(t, st, e)
+		threads = append(threads, id)
+	}
+	return path, threads
+}
+
 // windowOf is when a thread whose cache expires then may compact.
 func windowOf(expires time.Time) time.Time { return expires.Add(-engine.ClaudeCacheTTL / 10) }
 
@@ -78,7 +97,8 @@ func (ad blockedOpen) Open(ctx context.Context, spec provider.SessionSpec) (prov
 func TestALostCompactionDoesNotHoldTheQueue(t *testing.T) {
 	expires := time.Now().UTC().Add(time.Hour)
 	now := windowOf(expires).Add(time.Second)
-	path := dbPath(t)
+	path, seeds := seeded(t, expires)
+	thread := seeds[0]
 	release := make(chan struct{})
 	defer close(release)
 	ad := &compactAdapter{onStart: func(spec provider.SessionSpec, text string) ([]provider.Event, <-chan struct{}) {
@@ -88,7 +108,6 @@ func TestALostCompactionDoesNotHoldTheQueue(t *testing.T) {
 		return nil, nil
 	}}
 	n := serveOpts(t, path, provider.Mux{"claude": ad}, runtime.WithClock(func() time.Time { return now }), runtime.WithIdleCompaction(false))
-	thread, _ := idleSeed(t, n.st, expires)
 	n.h.SetIdleCompaction(true)
 	until(t, n.h, thread, "the compaction to run", func(v api.Thread) bool {
 		return v.Run == api.RunRunning && v.Turn != nil && v.Turn.Silent
@@ -144,8 +163,9 @@ func TestAChangeWhileACompactionOpensCancelsIt(t *testing.T) {
 			var shift atomic.Int64
 			clock := func() time.Time { return windowOf(expires).Add(time.Second + time.Duration(shift.Load())) }
 			ad := blockedOpen{compactAdapter: &compactAdapter{}, opening: make(chan struct{}), release: make(chan struct{})}
-			n := serveOpts(t, dbPath(t), provider.Mux{"claude": ad}, runtime.WithClock(clock), runtime.WithIdleCompaction(false))
-			thread, _ := idleSeed(t, n.st, expires)
+			path, seeds := seeded(t, expires)
+			thread := seeds[0]
+			n := serveOpts(t, path, provider.Mux{"claude": ad}, runtime.WithClock(clock), runtime.WithIdleCompaction(false))
 			n.h.SetIdleCompaction(true)
 			select {
 			case <-ad.opening:
@@ -279,9 +299,9 @@ func TestAHoldStopsACompaction(t *testing.T) {
 	ad := &compactAdapter{onStart: func(spec provider.SessionSpec, text string) ([]provider.Event, <-chan struct{}) {
 		return nil, make(chan struct{})
 	}}
-	n := serveOpts(t, dbPath(t), provider.Mux{"claude": ad}, runtime.WithClock(func() time.Time { return now }), runtime.WithIdleCompaction(false))
-	thread, _ := idleSeed(t, n.st, expires)
-	other, _ := idleSeed(t, n.st, expires)
+	path, seeds := seeded(t, expires, expires)
+	thread, other := seeds[0], seeds[1]
+	n := serveOpts(t, path, provider.Mux{"claude": ad}, runtime.WithClock(func() time.Time { return now }), runtime.WithIdleCompaction(false))
 	n.h.SetIdleCompaction(true)
 	until(t, n.h, thread, "the compaction to run", func(v api.Thread) bool { return v.Run == api.RunRunning })
 	hctx, cancel := context.WithTimeout(ctx, 20*time.Second)
