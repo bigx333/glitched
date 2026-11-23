@@ -310,7 +310,7 @@ func (p *proc) park() {
 				if json.Unmarshal(line, &m) == nil && m.Type == "command_lifecycle" && m.State == "completed" {
 					continue
 				}
-				slog.Warn("claude: a parked claude spoke, so it is stopped", "line", string(bytes.TrimSpace(line[:min(len(line), 200)])))
+				slog.Warn("claude: a parked claude spoke, so it is stopped", "type", m.Type, "bytes", len(line))
 				p.halt()
 				p.woke <- false
 				return

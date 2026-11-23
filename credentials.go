@@ -224,11 +224,15 @@ func (a *app) credentialsSummary(c *ui.Context, t thread, r *client.RequestEntry
 			ui.Text(c, shown(cmp.Or(r.Reason, "The turn stopped."), true)).FontSize(12).TextColor(palette.faint)
 		case r.State == api.RequestDelivered && len(provided.Names) > 0:
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				copied := ""
+				if q.EnvFile != "" {
+					copied = " " + shown(q.EnvFile, false) + " keeps its copy until you delete it."
+				}
 				if a.forgotten[t.id()] {
-					ui.Text(c, "Forgotten: this thread holds no credentials.").FontSize(11.5).TextColor(palette.faint)
+					ui.Text(c, "Forgotten: this thread holds no credentials."+copied).FontSize(11.5).TextColor(palette.faint).Shrink(1)
 					return
 				}
-				ui.Text(c, "Kept for this thread.").FontSize(11.5).TextColor(palette.faint)
+				ui.Text(c, "Kept for this thread."+copied).FontSize(11.5).TextColor(palette.faint).Shrink(1)
 				if ghost(c, "forget", false).Padding(3, 8).Children(func() { ui.Text(c, "Forget").FontSize(12) }).Clicked() {
 					a.forgetCredentials(t)
 				}
@@ -249,10 +253,11 @@ func (a *app) provideCredentials(t thread, r *client.RequestEntry, q api.Credent
 		values[x.Name] = strings.TrimSpace(f.values[i])
 	}
 	f.saving, f.err = true, ""
-	request := r.Request
-	a.backend.ProvideCredentials(t.env, t.id(), request, values, func(err error) {
+	request, id := r.Request, t.id()
+	a.backend.ProvideCredentials(t.env, id, request, values, func(err error) {
 		if err == nil {
 			delete(a.credentials, request)
+			delete(a.forgotten, id)
 			return
 		}
 		if g := a.credentials[request]; g != nil {

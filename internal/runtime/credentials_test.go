@@ -182,6 +182,22 @@ func TestCredentialsAnswerWithoutValuesProvidesNothing(t *testing.T) {
 	}
 }
 
+// An answer is kept as the names it gives: whatever else its JSON held,
+// as a value under a repeated key, is not.
+func TestCredentialsAnswerIsKeptAsItsNames(t *testing.T) {
+	v := startVaulted(t)
+	r, done := v.ask(t, ctx, "call-1")
+	submit(t, v.h, v.thread, api.RequestRespond{Request: r.ID, Generation: r.Generation,
+		Answer: json.RawMessage(`{"provided":["` + probe + `"],"provided":[]}`)})
+	if got := wait(t, done); got.err != nil || got.asked.Status != api.AskDeclined {
+		t.Fatalf("the ask returned %+v, %v, want declined", got.asked, got.err)
+	}
+	b, _ := json.Marshal(events(t, v.h, v.thread))
+	if strings.Contains(string(b), probe) {
+		t.Errorf("the thread's events keep the value: %s", b)
+	}
+}
+
 // Stopping the turn cancels the ask; an agent that stops waiting withdraws
 // its card, and a provide after it is refused and keeps nothing.
 func TestCredentialsEndWithTheTurnOrTheCall(t *testing.T) {

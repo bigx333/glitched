@@ -463,6 +463,10 @@ func (d *decision) respond(b api.RequestRespond) error {
 	if err := fits(r, b.Answer); err != nil {
 		return rejected(err.Error())
 	}
+	if r.Kind == api.KindCredentials {
+		p, _ := api.ParseProvided(b.Answer)
+		b.Answer, _ = json.Marshal(p)
+	}
 	if err := d.emit(api.RequestAnswer{Request: r.ID, Answer: b.Answer}); err != nil {
 		if r.State == api.RequestAnswered || r.State == api.RequestDelivered {
 			return api.ErrAlreadyAnswered
