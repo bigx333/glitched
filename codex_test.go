@@ -80,3 +80,28 @@ func TestACodexThread(t *testing.T) {
 	}
 	shoot(t, h, "codex-answered")
 }
+
+// Settings › Providers has a row for Codex from Codex's own answer: its
+// version and the program Glitched runs, or, signed out, how to sign in.
+func TestCodexsRowInSettings(t *testing.T) {
+	for scenario, want := range map[string][]string{
+		"hi":         {"Codex", "Ready", "v0.171.0", "2 models", "The program Glitched runs."},
+		"signed-out": {"Codex", "Signed out", "Sign in to Codex", "Codex is signed out. Run codex login in Terminal to sign in.", "Check again"},
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			h := startWith(t, tempDir(t), withCodex(t, scenario))
+			allAnswered(h)
+			h.until("Codex's answer", func() bool {
+				info, ok := h.a.models.served["codex"]
+				return ok && (info.State != "" || len(info.Info.Models) > 0)
+			})
+			openProviders(h, "codex")
+			for _, s := range want {
+				if !h.tt.HasText(s) {
+					t.Errorf("the page doesn't show %q: %q", s, h.tt.Texts())
+				}
+			}
+			shoot(t, h, "codex-settings-"+scenario)
+		})
+	}
+}

@@ -33,9 +33,10 @@ func TestCodex0171TurnsReplay(t *testing.T) {
 	for _, want := range []struct {
 		text    string
 		context provider.Context
+		tokens  int64
 	}{
-		{"The glitched tools are for handing tasks to another agent; kumquat.", provider.Context{Used: 21929, Window: 258400}},
-		{"kumquat", provider.Context{Used: 21958, Window: 258400}},
+		{"The glitched tools are for handing tasks to another agent; kumquat.", provider.Context{Used: 21929, Window: 258400}, 21929},
+		{"kumquat", provider.Context{Used: 21958, Window: 258400}, 21958},
 	} {
 		s.Run = api.NewID()
 		g := open(t, a, s)
@@ -53,6 +54,9 @@ func TestCodex0171TurnsReplay(t *testing.T) {
 		}
 		if len(got) != 1 || got[0] != want.context {
 			t.Errorf("the turn reported its context as %+v, want %+v", got, want.context)
+		}
+		if end := ended(events); end.Tokens != want.tokens {
+			t.Errorf("the turn used %d tokens, want Codex's %d", end.Tokens, want.tokens)
 		}
 	}
 }

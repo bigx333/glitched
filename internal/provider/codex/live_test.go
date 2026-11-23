@@ -149,3 +149,27 @@ func TestLiveResume(t *testing.T) {
 	t.Logf("an unknown thread: %+v, session %s", ev, lost.(provider.Sessioned).Session())
 	lost.Close(ctx)
 }
+
+// Approve for me and Full access write a file in the workspace with no
+// card, and each turn says what it used.
+func TestLiveAccess(t *testing.T) {
+	a, m := real(t)
+	for _, access := range []api.Access{api.AccessAutoEdits, api.AccessFull} {
+		s := liveSpec(t, m)
+		s.Access = access
+		g := open(t, a, s)
+		do(t, g, provider.Start{Text: "Create a file named hello.txt in the current directory containing exactly: hi. Do nothing else."})
+		events := turn(t, g)
+		closeRun(t, g)
+		for _, e := range events {
+			if r, ok := e.(provider.RequestOpened); ok {
+				t.Errorf("access %v asked: %s", access, r.Body)
+			}
+		}
+		b, err := os.ReadFile(filepath.Join(s.Workspace, "hello.txt"))
+		t.Logf("access %v: hello.txt %q, %v; tokens %d", access, b, err, ended(events).Tokens)
+		if err != nil || ended(events).Tokens == 0 {
+			t.Errorf("access %v: no file or no tokens", access)
+		}
+	}
+}

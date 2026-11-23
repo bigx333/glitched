@@ -386,12 +386,23 @@ func (f *fake) complete(status string, turnErr any) {
 	thread, turn := f.ids()
 	f.mu.Lock()
 	f.active = false
+	if f.scenario == "usage-again" {
+		f.spent += 40
+		first := map[string]any{"totalTokens": f.spent, "inputTokens": 30, "cachedInputTokens": 0, "outputTokens": 10, "reasoningOutputTokens": 0}
+		again := map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": first, "last": map[string]any{"totalTokens": 40, "inputTokens": 30, "cachedInputTokens": 0, "outputTokens": 10, "reasoningOutputTokens": 0}, "modelContextWindow": 258400}}
+		f.notify("thread/tokenUsage/updated", again)
+		f.notify("thread/tokenUsage/updated", again)
+	}
 	f.spent += 100
 	spent := f.spent
 	f.mu.Unlock()
 	f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": usage(spent, spent)})
 	f.notify("turn/completed", map[string]any{"threadId": thread, "turn": map[string]any{"id": turn, "status": status, "error": turnErr, "items": []any{}}})
 	f.notify("thread/status/changed", map[string]any{"threadId": thread, "status": map[string]any{"type": "idle"}})
+	if f.scenario == "usage-again" {
+		late := map[string]any{"totalTokens": 7, "inputTokens": 0, "cachedInputTokens": 0, "outputTokens": 7, "reasoningOutputTokens": 0}
+		f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": map[string]any{"totalTokens": 1107}, "last": late, "modelContextWindow": 258400}})
+	}
 }
 
 func decision(m message) string {
