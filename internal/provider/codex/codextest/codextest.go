@@ -247,11 +247,22 @@ func (f *fake) take(m message, raw []byte) {
 		case "configured":
 			config = map[string]any{"model": "gpt-6-luna", "model_reasoning_effort": "low"}
 		case "configured-unlisted":
-			config = map[string]any{"model": "gpt-7-preview"}
+			config = map[string]any{"model": "gpt-7-preview", "model_reasoning_effort": "xhigh"}
 		}
-		// Codex reads the config.toml of its CODEX_HOME: a model line
-		// there is the config's.
-		if b, err := os.ReadFile(filepath.Join(os.Getenv("CODEX_HOME"), "config.toml")); err == nil {
+		// Codex reads the config.toml of its CODEX_HOME, then a project's
+		// .codex/config.toml where it's asked of a cwd: a model line there
+		// is the config's.
+		var p struct{ Cwd string }
+		json.Unmarshal(m.Params, &p)
+		files := []string{filepath.Join(os.Getenv("CODEX_HOME"), "config.toml")}
+		if p.Cwd != "" {
+			files = append(files, filepath.Join(p.Cwd, ".codex", "config.toml"))
+		}
+		for _, file := range files {
+			b, err := os.ReadFile(file)
+			if err != nil {
+				continue
+			}
 			for line := range strings.Lines(string(b)) {
 				if v, ok := strings.CutPrefix(strings.TrimSpace(line), "model = "); ok {
 					config["model"] = strings.Trim(v, `"`)

@@ -229,7 +229,7 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 					ui.Row(c).AlignItems(ui.Stretch).Children(func() {
 						a.pickerFamilies(c)
 						ui.Box(c).Width(1).Background(palette.border)
-						a.pickerModels(c, a.pickedIn(t))
+						a.pickerModels(c, t)
 					})
 					ui.Divider(c).Background(palette.border)
 					a.effortSlider(c)
@@ -313,7 +313,7 @@ func (a *app) composerModelOf(c *ui.Context, t thread, r plugins.ThreadRecord, p
 	for _, f := range a.modelFamilies() {
 		out.Families = append(out.Families, modelFamily{f.provider, f.name, f.desc})
 		for _, m := range a.pickerRows(f) {
-			out.Models = append(out.Models, modelChoice{m.key.String(), m.name, m.short, a.rowAbout(m), f.provider, f.name})
+			out.Models = append(out.Models, modelChoice{m.key.String(), m.name, m.short, a.rowAbout(t, m), f.provider, f.name})
 		}
 	}
 	return out
@@ -340,10 +340,11 @@ func (a *app) pickedIn(t thread) modelKey {
 	return a.model
 }
 
-// rowAbout is what a model's row says of it: that its provider's program
-// runs it where given none, and what it's for.
-func (a *app) rowAbout(m modelInfo) string {
-	if def, ok := a.cliDefault(m.key.Provider); !ok || def.key != m.key {
+// rowAbout is what a model's row in t's composer says of it: that its
+// provider's program runs it where given none, where this machine's
+// engine knows that program (cliDecides), and what it's for.
+func (a *app) rowAbout(t thread, m modelInfo) string {
+	if def, ok := a.cliDefault(m.key.Provider); !ok || def.key != m.key || a.cliDecides(t) {
 		return m.desc
 	}
 	return strings.Join(slices.DeleteFunc([]string{"CLI default", m.desc}, func(s string) bool { return s == "" }), " · ")
@@ -501,7 +502,8 @@ func (a *app) pickerFamilies(c *ui.Context) {
 // as tall as the longest list whichever shows: the popover keeps its size,
 // and the families stay put under the pointer as it moves between them.
 // Past modelsMaxHeight the lists scroll.
-func (a *app) pickerModels(c *ui.Context, picked modelKey) {
+func (a *app) pickerModels(c *ui.Context, t thread) {
+	picked := a.pickedIn(t)
 	ui.Scroll(c).Key("models").Grow(1).MaxHeight(a.modelsMaxHeight(c)).Children(func() {
 		ui.Grid(c).Columns(1).Children(func() {
 			for _, f := range a.shownFamilies() {
@@ -511,7 +513,7 @@ func (a *app) pickerModels(c *ui.Context, picked modelKey) {
 				}
 				list.Children(func() {
 					for _, m := range a.pickerRows(f) {
-						a.pickerModel(c, m, picked)
+						a.pickerModel(c, t, m, picked)
 					}
 				})
 			}
@@ -519,12 +521,12 @@ func (a *app) pickerModels(c *ui.Context, picked modelKey) {
 	})
 }
 
-func (a *app) pickerModel(c *ui.Context, m modelInfo, picked modelKey) {
+func (a *app) pickerModel(c *ui.Context, t thread, m modelInfo, picked modelKey) {
 	selected := m.key == picked
 	if row(c, m.key.String(), selected).Padding(7, 10).Gap(10).Children(func() {
 		ui.Column(c).Grow(1).Shrink(1).Gap(1).Children(func() {
 			ui.Text(c, m.short).FontWeight(500).TextColor(palette.text).SingleLine()
-			ui.Text(c, a.rowAbout(m)).FontSize(11.5).TextColor(palette.muted).SingleLine()
+			ui.Text(c, a.rowAbout(t, m)).FontSize(11.5).TextColor(palette.muted).SingleLine()
 		})
 		if selected {
 			ui.Icon(c, icCheck).FontSize(14).TextColor(palette.accent)

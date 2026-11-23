@@ -3,15 +3,18 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/jsonfile"
@@ -247,8 +250,13 @@ func TestARemoteDraftLeavesTheModelToItsProgram(t *testing.T) {
 			if picker.Model != "CLI default" || picker.Key != (modelKey{}).String() {
 				t.Errorf("a remote draft's picker shows %q and checks %q", picker.Model, picker.Key)
 			}
-			if got := h.a.newThreadRef(h.a.current()); got.Model != "beta" || got.Effort != "low" {
-				t.Errorf("this machine's draft's thread starts on %+v", got)
+			for _, m := range picker.Models {
+				if strings.Contains(m.About, "CLI default") {
+					t.Errorf("a remote draft's picker says %s is %q, though this machine's default needn't be the other's", m.Key, m.About)
+				}
+			}
+			if got := h.a.newThreadRef(h.a.current()); got.Model != "" || got.Effort != "" {
+				t.Errorf("this machine's draft's thread starts on %+v, want no model and no effort", got)
 			}
 			h.a.effort = "high"
 			h.a.saveComposer()
@@ -369,8 +377,8 @@ func TestADraftsWorkspaceNamesTheProgramsDefault(t *testing.T) {
 	h.a.draft = "Say hi."
 	h.a.send(h.a.current())
 	h.until("the thread", func() bool { return !h.a.current().id().IsZero() })
-	if got := h.a.current().View.Model; got.Model != "gamma" {
-		t.Errorf("the thread runs %+v, want the Gamma the picker shows", got)
+	if got := h.a.current().View.Model; got.Model != "" || got.Effort != "" {
+		t.Errorf("the thread starts on %+v, want no model and no effort, for claude to run its own there", got)
 	}
 	h.a.startIn(draft{h.local(), t.TempDir()})
 	h.until("another workspace's default", func() bool {
@@ -394,11 +402,44 @@ func TestCodexsConfiguredModelIsTheOneItRuns(t *testing.T) {
 		t.Fatalf("the picker doesn't show the configured GPT-6 Luna at Low: %q", h.tt.Texts())
 	}
 	sendNew(h, "Say hi.")
-	h.until("the turn", func() bool { return len(wireEntries(t, os.Getenv(codextest.Log), "turn/start")) > 0 })
-	var turn struct{ Model, Effort string }
-	json.Unmarshal(wireEntries(t, os.Getenv(codextest.Log), "turn/start")[0], &turn)
-	if turn.Model != "gpt-6-luna" || turn.Effort != "low" {
-		t.Errorf("Codex's turn runs %+v, want the GPT-6 Luna at low the picker shows", turn)
+	namesNoModel(t, 1)
+	h.until("the first turn's end", func() bool { return h.tt.HasText("hi") })
+	h.a.draft = "Say it again."
+	h.a.send(h.a.current())
+	namesNoModel(t, 2)
+}
+
+// namesNoModel fails the test where Codex's thread/start or turn/start
+// named a model or an effort: a thread following Codex's own default
+// leaves both to Codex, which runs its config's where the thread runs.
+func namesNoModel(t *testing.T, turns int) {
+	t.Helper()
+	log := os.Getenv(codextest.Log)
+	until := func(cond func() bool) {
+		deadline := time.Now().Add(10 * time.Second)
+		for !cond() && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	until(func() bool { return len(wireEntries(t, log, "turn/start")) >= turns })
+	if n := len(wireEntries(t, log, "turn/start")); n < turns {
+		t.Fatalf("Codex got %d turn/start, want %d", n, turns)
+	}
+	for _, m := range []string{"thread/start", "turn/start"} {
+		got := wireEntries(t, log, m)
+		if len(got) == 0 {
+			t.Fatalf("Codex got no %s", m)
+		}
+		for _, p := range got {
+			var params map[string]any
+			json.Unmarshal(p, &params)
+			if _, ok := params["model"]; ok {
+				t.Errorf("%s named model %v, want none", m, params["model"])
+			}
+			if _, ok := params["effort"]; ok {
+				t.Errorf("%s named effort %v, want none", m, params["effort"])
+			}
+		}
 	}
 }
 
@@ -434,12 +475,7 @@ func TestCodexsOwnDefaultIsTheModelItRuns(t *testing.T) {
 		t.Fatalf("the picker doesn't show Codex's default at Medium: %q", h.tt.Texts())
 	}
 	sendNew(h, "Say hi.")
-	h.until("the turn", func() bool { return len(wireEntries(t, os.Getenv(codextest.Log), "turn/start")) > 0 })
-	var turn struct{ Model, Effort string }
-	json.Unmarshal(wireEntries(t, os.Getenv(codextest.Log), "turn/start")[0], &turn)
-	if turn.Model != "gpt-6.2-sol" || turn.Effort != "medium" {
-		t.Errorf("Codex's turn runs %+v, want the GPT-6.2 Sol at medium the picker shows", turn)
-	}
+	namesNoModel(t, 1)
 }
 
 // The model the picker shows of Antigravity's own default is the one its
@@ -460,8 +496,8 @@ func TestAntigravitysOwnDefaultIsTheModelItRuns(t *testing.T) {
 	probes := len(wireEntries(t, os.Getenv(acptest.Log), "session/set_config_option"))
 	sendNew(h, "Add a line to the notes.")
 	h.until("the card", func() bool { return h.tt.HasText("Antigravity wants to") })
-	if got := h.a.current().View.Model; got.Model != "fake-pro" || got.Effort != "high" {
-		t.Errorf("the thread runs %+v", got)
+	if got := h.a.current().View.Model; got.Model != "" || got.Effort != "" {
+		t.Errorf("the thread starts on %+v, want no model and no effort", got)
 	}
 	if set := wireEntries(t, os.Getenv(acptest.Log), "session/set_config_option")[probes:]; len(set) > 0 {
 		t.Errorf("the run moved the session off the model it starts on: %s", set)
@@ -477,7 +513,114 @@ func TestClaudesOwnDefaultIsTheModelItRuns(t *testing.T) {
 	}
 	sendNew(h, "Say hi.")
 	h.until("the thread", func() bool { return !h.a.current().id().IsZero() })
-	if got := h.a.current().View.Model; got.Provider != "claude" || got.Model != "beta" || got.Effort != "low" {
-		t.Errorf("the thread runs %+v, want the Beta at low the picker shows", got)
+	if got := h.a.current().View.Model; got.Provider != "claude" || got.Model != "" || got.Effort != "" {
+		t.Errorf("the thread starts on %+v, want claude naming no model and no effort", got)
+	}
+	var picker composerModel
+	ui.NewTester(func(c *ui.Context) { picker = h.a.composerModelOf(c, h.a.current(), plugins.ThreadRecord{}, "panel") }, 500, 500).Frame()
+	if picker.Model != "Claude Beta" || picker.Effort != "Low" {
+		t.Errorf("the thread's picker shows %q at %q, want the Claude Beta at Low claude runs", picker.Model, picker.Effort)
+	}
+}
+
+// gated is a program whose default in a workspace is what answer says,
+// once it answers.
+type gated struct {
+	shifting
+	answer func(workspace string) (string, error)
+}
+
+func (g gated) DefaultModel(_ context.Context, workspace string) (string, error) {
+	return g.answer(workspace)
+}
+
+// startGated is a harness whose Claude's default in a workspace is what
+// answer says, and a draft in a new workspace.
+func startGated(t *testing.T, answer func(string) (string, error)) (*harness, string) {
+	t.Helper()
+	ws := t.TempDir()
+	models := cliModels(true)
+	var now atomic.Pointer[[]provider.Model]
+	now.Store(&models)
+	h := startWith(t, tempDir(t), func(c *daemon.Config) {
+		engineReportsBy(nil)(c)
+		c.Providers["claude"] = gated{shifting{c.Providers["claude"], &now}, answer}
+	})
+	allAnswered(h)
+	return h, ws
+}
+
+// An answer the engine gave of a workspace's default before Check again
+// is not the one after: it doesn't replace what Check again found.
+func TestAWorkspacesDefaultFromBeforeCheckAgainIsDropped(t *testing.T) {
+	release := make(chan struct{})
+	var asks atomic.Int32
+	var ws string
+	h, ws := startGated(t, func(in string) (string, error) {
+		if in != ws {
+			return "", nil
+		}
+		if asks.Add(1) == 1 {
+			<-release
+			return "gamma", nil
+		}
+		return "alpha", nil
+	})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	h.a.startIn(draft{h.local(), ws})
+	h.until("the first ask", func() bool { h.tt.Frame(); return asks.Load() == 1 })
+	h.a.checkProviders()
+	allAnswered(h)
+	h.until("the ask after Check again", func() bool {
+		h.tt.Frame()
+		return h.a.modelRef().Model == "alpha"
+	})
+	once.Do(func() { close(release) })
+	time.Sleep(200 * time.Millisecond)
+	for range 5 {
+		h.tt.Frame()
+	}
+	if got := h.a.modelRef().Model; got != "alpha" {
+		t.Errorf("the draft's default is %q after the earlier answer came, want the alpha Check again found", got)
+	}
+}
+
+// A workspace's default the engine couldn't say is asked again a while
+// after, rather than taken as none for good.
+func TestAWorkspacesDefaultTheEngineCouldntSayIsAskedAgain(t *testing.T) {
+	var asks atomic.Int32
+	var ws string
+	h, ws := startGated(t, func(in string) (string, error) {
+		if in != ws {
+			return "", nil
+		}
+		if asks.Add(1) == 1 {
+			return "", errors.New("the engine isn't up")
+		}
+		return "gamma", nil
+	})
+	h.a.startIn(draft{h.local(), ws})
+	h.until("the ask after the failed one", func() bool {
+		h.tt.Frame()
+		return h.a.modelRef().Model == "gamma"
+	})
+	if n := asks.Load(); n > 3 {
+		t.Errorf("the engine was asked %d times, want it asked again only after a while", n)
+	}
+}
+
+// A thread that follows its program's default shows what the program
+// reported it ran once it has, over the picker's guess.
+func TestAThreadFollowingTheDefaultShowsWhatItsProgramRan(t *testing.T) {
+	h, _ := startReporting(t, tempDir(t), "claude", "", cliModels(true))
+	run := api.NewID()
+	th := thread{env: h.local(), Thread: &client.Thread{View: api.Thread{ID: api.NewID(), Workspace: "/work",
+		Model:     api.ModelRef{Provider: "claude"},
+		LastTurn:  &api.TurnResult{Run: run, Model: api.ModelRef{Provider: "claude"}},
+		Confirmed: api.Confirmed{Model: &api.ConfirmedModel{Run: run, Asked: api.ModelRef{Provider: "claude"}, Model: "gamma", Effort: "high"}},
+	}}}
+	if name, effort := h.a.runningModel(th, "Claude Beta"); name != "Claude Gamma" || effort.label != "High" {
+		t.Errorf("the thread's button names %q at %q, want the Claude Gamma at High its program ran", name, effort.label)
 	}
 }
