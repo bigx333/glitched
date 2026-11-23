@@ -34,6 +34,9 @@ type Spec struct {
 	Env     map[string]string
 	Timeout time.Duration
 	Allowed []string
+	// Denied are folders no run reads: none is its cwd, and no arg names
+	// a path inside one, as itself or after a flag's "=".
+	Denied []string
 }
 
 // Result is what the program did. Status is -1 when the run was stopped at
@@ -59,6 +62,9 @@ func run(ctx context.Context, s Spec, path string) (Result, error) {
 	}
 	if info, err := os.Stat(s.Cwd); !filepath.IsAbs(s.Cwd) || err != nil || !info.IsDir() {
 		return Result{}, refuse("a run's cwd is an absolute path to a folder, not %q", s.Cwd)
+	}
+	if err := checkDenied(s.Denied, s.Args, s.Cwd); err != nil {
+		return Result{}, err
 	}
 	env, err := envOf(s.Env)
 	if err != nil {

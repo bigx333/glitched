@@ -37,6 +37,9 @@ type Vault struct {
 	loaded map[api.ID]map[string]string
 }
 
+// Under is the vault's folder in an engine's state directory.
+func Under(stateDir string) string { return filepath.Join(stateDir, "secrets") }
+
 func New(dir string) *Vault {
 	return &Vault{dir: dir, loaded: map[api.ID]map[string]string{}}
 }
