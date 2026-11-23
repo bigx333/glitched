@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -175,7 +174,7 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 		// The title, and a child's way back up before it.
 		a.heading(c, t, narrow)
 		if !narrow {
-			pill(c, filepath.Base(t.project())).Shrink(0)
+			pill(c, a.projectOf(t).name()).Shrink(0)
 			if t.View.Branch != "" {
 				pill(c, t.View.Branch).Shrink(0)
 			}
@@ -1260,7 +1259,7 @@ func (a *app) composerInput(c *ui.Context, t thread, rs rows, fullW, frameW floa
 // of the plugin's menu. A plugin's that fails gives way to Glitched's.
 func (a *app) workspaceControl(c *ui.Context, t thread) {
 	box := func() ui.Element { return ui.Row(c).Key("workspace-plugin").AlignItems(ui.Center) }
-	w := composerWorkspace{Workspace: filepath.Base(t.project()), Worktree: a.worktreeLabel(t), Draft: t.id().IsZero()}
+	w := composerWorkspace{Workspace: a.projectOf(t).name(), Worktree: a.worktreeLabel(t), Draft: t.id().IsZero()}
 	if len(a.backend.Envs()) > 1 && t.env != nil {
 		w.Machine = t.env.Name
 	}
@@ -1299,7 +1298,7 @@ func (a *app) workspaceButton(c *ui.Context, t thread) {
 	several := len(a.backend.Envs()) > 1
 	b := ghost(c, "workspace", false).Padding(3, 6).Label("Workspace").Children(func() {
 		ui.Icon(c, icFolder).FontSize(12)
-		ui.Text(c, filepath.Base(t.project())).FontSize(11.5)
+		ui.Text(c, a.projectOf(t).name()).FontSize(11.5)
 		if several && t.env != nil {
 			ui.Text(c, "on "+t.env.Name).FontSize(11.5).TextColor(palette.faint)
 		}
@@ -1325,17 +1324,13 @@ func (a *app) workspaceMenu(m *ui.Menu, t thread) {
 		if a.duplicate(e) {
 			continue
 		}
-		home := homeDir()
-		if e.Kind == client.Remote {
-			home = "~"
-		}
-		for _, d := range a.workspacesOn(e, home) {
-			label := filepath.Base(d.workspace)
+		for _, p := range a.workspacesOn(e) {
+			label := p.name()
 			if several {
 				label += " on " + e.Name
 			}
-			if m.Item(label).Checked(t.env == e && t.View.Workspace == d.workspace).Chosen() {
-				a.fresh, a.repos = d, nil
+			if m.Item(label).Checked(t.env == e && t.View.Workspace == p.key.workspace).Chosen() {
+				a.fresh, a.repos = draft{e, p.key.workspace}, nil
 			}
 		}
 	}
@@ -1343,16 +1338,21 @@ func (a *app) workspaceMenu(m *ui.Menu, t thread) {
 	a.workspaceItems(m)
 }
 
-// workspacesOn are where a draft on e could start: e's projects, those
-// with no thread too, and home.
-func (a *app) workspacesOn(e *client.Env, home string) []draft {
-	ds := []draft{{e, home}}
+// workspacesOn are where a draft on e could start: No project on this
+// machine, or home on a server, then e's projects, those with no thread
+// too.
+func (a *app) workspacesOn(e *client.Env) []*project {
+	first := a.newProject(e, keyOf(e, a.scratchRoot()))
+	if e.Kind == client.Remote {
+		first = a.newProject(e, keyOf(e, "~"))
+	}
+	ps := []*project{first}
 	for _, p := range a.projects {
-		if p.env == e && p.key.workspace != home {
-			ds = append(ds, draft{e, p.key.workspace})
+		if p.env == e && p.key != first.key {
+			ps = append(ps, p)
 		}
 	}
-	return ds
+	return ps
 }
 
 // sendButton presses in as it's pressed; its color says whether there is
@@ -1553,8 +1553,17 @@ func (a *app) sendText(t thread, text, about string) bool {
 	}
 	id := t.id()
 	if id.IsZero() {
+		ws := t.View.Workspace
+		if t.local() && ws == a.scratchRoot() {
+			dir, err := a.scratchFolder(text)
+			if err != nil {
+				a.pluginNotice(ui.Toast{Title: "Couldn't make the thread's folder", Description: err.Error()})
+				return false
+			}
+			ws = dir
+		}
 		title := threadTitle(text, about)
-		if id = a.backend.Create(t.env, t.View.Workspace, title, a.modelRef(), accessOf[a.access], a.newWorktree(t)); id.IsZero() {
+		if id = a.backend.Create(t.env, ws, title, a.modelRef(), accessOf[a.access], a.newWorktree(t)); id.IsZero() {
 			return false
 		}
 		a.worktree, a.repos = worktreeChoice{}, nil

@@ -56,6 +56,9 @@ type project struct {
 	key     projectKey
 	env     *client.Env
 	threads []thread // the most recently updated first
+	// noProject is whether it holds the threads started with no project,
+	// each in a folder Glitched made for it under the scratch root.
+	noProject bool
 }
 
 type projectKey struct {
@@ -70,7 +73,28 @@ func keyOf(e *client.Env, workspace string) projectKey {
 	return projectKey{workspace: workspace}
 }
 
-func (p *project) name() string { return filepath.Base(p.key.workspace) }
+// newProject is e's project at k, with no thread yet.
+func (a *app) newProject(e *client.Env, k projectKey) *project {
+	return &project{key: k, env: e, noProject: k == keyOf(nil, a.scratchRoot())}
+}
+
+// threadKey is the project t is in: its workspace's, but for a thread with
+// no project, whose workspace is a folder of its own under the scratch
+// root, where all of them are one project.
+func (a *app) threadKey(t thread) projectKey {
+	ws := t.project()
+	if t.local() && filepath.Dir(ws) == a.scratchRoot() {
+		ws = a.scratchRoot()
+	}
+	return keyOf(t.env, ws)
+}
+
+func (p *project) name() string {
+	if p.noProject {
+		return "No project"
+	}
+	return filepath.Base(p.key.workspace)
+}
 
 var (
 	projectIcons  = []string{"terminal", "wind", "phone", "code", "global", "magic-stick-3", "fast-tier", "folder"}
@@ -86,6 +110,9 @@ func (p *project) mark() (*ui.SVG, ui.Color) {
 
 // markNames are the project's icon, by name, and color, as #rrggbb.
 func (p *project) markNames() (string, string) {
+	if p.noProject {
+		return "chat-round-line", "#8e8e93"
+	}
 	h := fnv.New32a()
 	h.Write([]byte(p.name()))
 	n := h.Sum32()
@@ -96,7 +123,7 @@ func (p *project) markNames() (string, string) {
 // workspace on it.
 type draft struct {
 	env       *client.Env // nil: this machine's
-	workspace string      // "": the home directory
+	workspace string      // "": no project, on this machine
 }
 
 type entryKind int
@@ -546,24 +573,24 @@ func addFiles(files []fileChange, at map[string]int, es []entry) []fileChange {
 // server's, each machine's by name.
 func (a *app) gather() []*project {
 	byKey := map[envProject]*project{}
-	at := func(e *client.Env, workspace string) *project {
-		k := envProject{e, keyOf(e, workspace)}
+	at := func(e *client.Env, key projectKey) *project {
+		k := envProject{e, key}
 		p := byKey[k]
 		if p == nil {
-			p = &project{key: k.key, env: e}
+			p = a.newProject(e, key)
 			byKey[k] = p
 		}
 		return p
 	}
 	for _, t := range a.recent() {
 		if !deleting(t) {
-			p := at(t.env, t.project())
+			p := at(t.env, a.threadKey(t))
 			p.threads = append(p.threads, t)
 		}
 	}
 	if e := a.localEnv(); e != nil {
 		for _, ap := range a.added {
-			at(e, ap.Workspace)
+			at(e, keyOf(e, ap.Workspace))
 		}
 	}
 	var all []*project
@@ -656,7 +683,10 @@ func (a *app) current() thread {
 		d.env = envs[0]
 	}
 	if d.workspace == "" {
-		d.workspace = homeDir()
+		d.workspace = a.scratchRoot()
+		if d.env != nil && d.env.Kind == client.Remote {
+			d.workspace = homeDir()
+		}
 	}
 	return thread{d.env, &client.Thread{View: api.Thread{Title: "New thread", Workspace: d.workspace}}}
 }
@@ -666,13 +696,13 @@ func (a *app) current() thread {
 func (a *app) duplicate(e *client.Env) bool { return a.backend.ShownBy(e) != e }
 
 func (a *app) projectOf(t thread) *project {
-	k := keyOf(t.env, t.project())
+	k := a.threadKey(t)
 	for _, p := range a.projects {
 		if p.key == k {
 			return p
 		}
 	}
-	return &project{key: k, env: t.env}
+	return a.newProject(t.env, k)
 }
 
 func (a *app) statusOf(t thread) status {

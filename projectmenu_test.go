@@ -277,8 +277,9 @@ func TestRemoveProjectResetsADraftOnAServer(t *testing.T) {
 }
 
 // A draft on a server whose last project is removed goes to the app's
-// default, this machine's home, rather than a folder the server lacks.
-func TestRemoveAServersLastProjectMovesItsDraftHome(t *testing.T) {
+// default, this machine's No project, rather than a folder the server
+// lacks.
+func TestRemoveAServersLastProjectMovesItsDraftToNoProject(t *testing.T) {
 	h := machines(t)
 	devbox := h.thread("Retry failed invoice webhooks").env
 	for _, ws := range []string{"/srv/billing", "/srv/api"} {
@@ -296,8 +297,8 @@ func TestRemoveAServersLastProjectMovesItsDraftHome(t *testing.T) {
 	if h.a.fresh != (draft{}) {
 		t.Fatalf("the draft is %+v, want the default draft: devbox has no project left", h.a.fresh)
 	}
-	if d := h.a.current(); d.env != h.local() || d.View.Workspace != homeDir() {
-		t.Fatalf("the draft shows %q, want this machine's home", d.View.Workspace)
+	if d := h.a.current(); d.env != h.local() || d.View.Workspace != h.a.scratchRoot() {
+		t.Fatalf("the draft shows %q, want this machine's No project", d.View.Workspace)
 	}
 }
 
@@ -398,8 +399,8 @@ func TestPaletteFindsByWholeWordsOnly(t *testing.T) {
 }
 
 // A draft the delete leaves in another workspace whose threads all went
-// with the trees, as the shown thread's, starts over in the home folder
-// too, lest that project come back with the next thread.
+// with the trees, as the shown thread's, starts over with no project too,
+// lest that project come back with the next thread.
 func TestRemoveProjectResetsADraftItsTreesEmptied(t *testing.T) {
 	h := crossTree(t)
 	mid := h.thread("Patch the table") // mygo's only thread, under t3code's
@@ -410,7 +411,7 @@ func TestRemoveProjectResetsADraftItsTreesEmptied(t *testing.T) {
 		t.Fatal("mygo's thread isn't under t3code's")
 	}
 	h.a.removeProject(p)
-	if h.a.fresh != (draft{h.local(), homeDir()}) {
-		t.Fatalf("the draft is %+v, want the home folder: mygo went with t3code's trees", h.a.fresh)
+	if h.a.fresh != (draft{h.local(), h.a.scratchRoot()}) {
+		t.Fatalf("the draft is %+v, want No project: mygo went with t3code's trees", h.a.fresh)
 	}
 }
