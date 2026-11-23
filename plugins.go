@@ -735,8 +735,8 @@ func pluginWorkspace(ws string) (string, error) {
 var runPluginProgram = plugins.RunProgram
 
 // askModel is glitched.models.ask: this machine's engine asks the
-// provider, by default that of the model new threads take, from the
-// plugin's data folder, which holds no project for it to read.
+// provider, by default that of the model new threads take, within the
+// host's deadline for the ask.
 func (a *app) askModel(ctx context.Context, dir, id string, q plugins.AskRequest) (plugins.AskAnswer, error) {
 	name := q.Provider
 	if name == "" {
@@ -748,11 +748,11 @@ func (a *app) askModel(ctx context.Context, dir, id string, q plugins.AskRequest
 			return plugins.AskAnswer{}, ctx.Err()
 		}
 	}
-	data := filepath.Join(plugins.DataDir(dir), id)
-	if err := os.MkdirAll(data, 0o700); err != nil {
-		return plugins.AskAnswer{}, err
+	spec := provider.AskSpec{Model: q.Model, System: q.System, Prompt: q.Prompt}
+	if d, ok := ctx.Deadline(); ok {
+		spec.Timeout = time.Until(d)
 	}
-	r, err := a.serviceClient(dir).ProviderAsk(ctx, name, provider.AskSpec{Model: q.Model, System: q.System, Prompt: q.Prompt, Dir: data})
+	r, err := a.serviceClient(dir).ProviderAsk(ctx, name, spec)
 	return plugins.AskAnswer{Text: r.Text, Provider: name, Model: r.Model}, err
 }
 

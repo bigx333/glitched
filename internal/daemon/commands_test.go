@@ -96,10 +96,15 @@ func TestTheSocketListsAProvidersCommandsOncePerWorkspace(t *testing.T) {
 	}
 }
 
-// answering is the fake, answering every ask with its prompt.
+// answering is the fake, answering every ask with its prompt, but for
+// "wait", which it never answers.
 type answering struct{ *fake.Adapter }
 
-func (answering) Ask(_ context.Context, spec provider.AskSpec) (provider.AskResult, error) {
+func (answering) Ask(ctx context.Context, spec provider.AskSpec) (provider.AskResult, error) {
+	if spec.Prompt == "wait" {
+		<-ctx.Done()
+		return provider.AskResult{}, ctx.Err()
+	}
 	return provider.AskResult{Text: "re: " + spec.Prompt, Model: "cheap"}, nil
 }
 
@@ -120,6 +125,21 @@ func TestTheSocketAsksTheProviderNamed(t *testing.T) {
 	}
 	if _, err := local.ProviderAsk(ctx, "fake", provider.AskSpec{Prompt: "hi"}); !errors.Is(err, provider.ErrUnsupported) {
 		t.Errorf("a provider that can't answer: %v, want ErrUnsupported across the socket", err)
+	}
+	// The engine ends an ask at its timeout, which the caller's deadline
+	// doesn't carry across the socket.
+	waited := make(chan error, 1)
+	go func() {
+		_, err := local.ProviderAsk(ctx, "answering", provider.AskSpec{Prompt: "wait", Timeout: 50 * time.Millisecond})
+		waited <- err
+	}()
+	select {
+	case err := <-waited:
+		if err == nil {
+			t.Error("an ask past its timeout was answered")
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("an ask ran past its timeout")
 	}
 	// An ask spends the user's account, so the tailnet's callers don't get one.
 	token, err := Pair(dir, "laptop")

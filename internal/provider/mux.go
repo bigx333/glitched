@@ -74,6 +74,11 @@ func (m Mux) Ask(ctx context.Context, name string, spec AskSpec) (AskResult, err
 		return AskResult{}, err
 	}
 	if q, ok := a.(Asker); ok {
+		if spec.Timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, spec.Timeout)
+			defer cancel()
+		}
 		return q.Ask(ctx, spec)
 	}
 	return AskResult{}, fmt.Errorf("%w: %s can't answer a prompt on its own", ErrUnsupported, name)
