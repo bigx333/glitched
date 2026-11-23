@@ -90,6 +90,8 @@ func within(dir, path string) bool {
 // one refused after leaves the worktree for its changes, unless it has
 // none.
 func (h *Host) createInWorktree(ctx context.Context, c api.Command, b api.ThreadCreate) (api.Receipt, error) {
+	h.making.Lock()
+	defer h.making.Unlock()
 	if done, err := h.store.Committed(ctx, c.ID); err != nil || done {
 		if err != nil {
 			return api.Receipt{}, err
@@ -118,8 +120,6 @@ func (h *Host) createInWorktree(ctx context.Context, c api.Command, b api.Thread
 	if ws, err := filepath.EvalSymlinks(b.Workspace); err == nil && within(top, ws) {
 		rel, _ = filepath.Rel(top, ws)
 	}
-	h.making.Lock()
-	defer h.making.Unlock()
 	short, long, dir := worktreeNames(h.worktrees, top, c.Target, b.Title)
 	branch := ""
 	if _, err := os.Stat(dir); err == nil {
@@ -166,8 +166,15 @@ func (h *Host) createInWorktree(ctx context.Context, c api.Command, b api.Thread
 			return refuse("%v", err)
 		}
 	}
+	workspace := filepath.Join(dir, rel)
+	realDir, _ := filepath.EvalSymlinks(dir)
+	if real, err := filepath.EvalSymlinks(workspace); err != nil || !within(realDir, real) {
+		return refuse("%s in the worktree at %s isn't a folder of it; the worktree stays for what is in it", rel, dir)
+	} else if fi, err := os.Stat(real); err != nil || !fi.IsDir() {
+		return refuse("%s in the worktree at %s isn't a folder; the worktree stays for what is in it", rel, dir)
+	}
 	in := b
-	in.Project, in.Branch, in.Workspace, in.Worktree = b.Workspace, branch, filepath.Join(dir, rel), nil
+	in.Project, in.Branch, in.Workspace, in.Worktree = b.Workspace, branch, workspace, nil
 	r, err := h.store.SubmitResolved(ctx, c, in, time.Now())
 	if err != nil {
 		slog.Warn("runtime: a refused thread's worktree stays for what is in it", "worktree", dir, "err", err)
@@ -209,17 +216,13 @@ func registered(ctx context.Context, top, dir string) (worktreeEntry, bool) {
 }
 
 // deleteInWorktree deletes the thread c names and, once the delete
-// commits, removes its worktree as end says. It removes only the worktree
-// Glitched made for the thread, still on the thread's branch, and with
-// RemoveWorktree only one git shows no change in, untracked files and
-// submodules' changes included; ignored files go with it. A branch with
-// commits that aren't merged stays.
-func (h *Host) deleteInWorktree(ctx context.Context, c api.Command, end api.WorktreeEnd) (api.Receipt, error) {
+// commits, removes its worktree with what is in it: only the worktree
+// Glitched made for the thread, in its project's repository and on its
+// branch, then as now, and never one git won't remove, as a locked one.
+// A branch with commits that aren't merged stays.
+func (h *Host) deleteInWorktree(ctx context.Context, c api.Command) (api.Receipt, error) {
 	refuse := func(format string, args ...any) (api.Receipt, error) {
 		return api.Receipt{}, &api.RejectedError{Reason: "Can't remove the worktree: " + fmt.Sprintf(format, args...)}
-	}
-	if end > api.RemoveWorktreeChanges {
-		return refuse("unknown worktree end %d", end)
 	}
 	t, err := h.store.Thread(ctx, c.Target)
 	if err != nil {
@@ -242,42 +245,32 @@ func (h *Host) deleteInWorktree(ctx context.Context, c api.Command, end api.Work
 	}
 	common, err := git(ctx, t.Project, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
-		if common, err = git(ctx, dir, "rev-parse", "--path-format=absolute", "--git-common-dir"); err != nil {
-			return refuse("neither its project's repository at %s nor the worktree can be read", t.Project)
-		}
+		return refuse("its project's repository at %s can't be read, so the worktree can't be told apart from another", t.Project)
 	}
-	if _, err := os.Stat(dir); err == nil {
-		top, err := git(ctx, dir, "rev-parse", "--show-toplevel")
-		if err != nil {
-			return refuse("%v", err)
+	// ours is whether dir is still the thread's worktree, or gone.
+	ours := func(ctx context.Context) bool {
+		if _, err := os.Stat(dir); err != nil {
+			return true
 		}
+		top, err := git(ctx, dir, "rev-parse", "--show-toplevel")
 		theirs, _ := git(ctx, dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
 		cur, _ := git(ctx, dir, "branch", "--show-current")
-		if real, _ := filepath.EvalSymlinks(dir); top != real || theirs != common || cur != t.Branch {
-			return refuse("%s is no longer the thread's worktree on %s", dir, t.Branch)
-		}
-		if end == api.RemoveWorktree {
-			if n, err := changes(ctx, dir); err != nil || n > 0 {
-				if err != nil {
-					return refuse("%v", err)
-				}
-				return refuse("it has %d uncommitted %s", n, map[bool]string{true: "change", false: "changes"}[n == 1])
-			}
-		}
+		real, _ := filepath.EvalSymlinks(dir)
+		return err == nil && top == real && theirs == common && cur == t.Branch
+	}
+	if !ours(ctx) {
+		return refuse("%s is no longer the thread's worktree on %s", dir, t.Branch)
 	}
 	r, err := h.store.Submit(ctx, c, time.Now())
 	if err != nil {
 		return r, err
 	}
 	ctx = context.WithoutCancel(ctx)
-	if _, err := os.Stat(dir); err != nil {
-		if _, err := git(ctx, common, "worktree", "prune"); err != nil {
-			slog.Warn("runtime: the deleted thread's worktree stays registered", "thread", c.Target, "worktree", dir, "err", err)
-		}
-	} else if n, err := changes(ctx, dir); end == api.RemoveWorktree && (err != nil || n > 0) {
-		slog.Warn("runtime: the deleted thread's worktree stays: it changed as the thread was deleted", "thread", c.Target, "worktree", dir, "changes", n, "err", err)
+	if !ours(ctx) {
+		slog.Warn("runtime: the deleted thread's worktree stays: another took its place", "thread", c.Target, "worktree", dir)
 		return r, nil
-	} else if _, err := git(ctx, common, "worktree", "remove", "--force", dir); err != nil {
+	}
+	if _, err := git(ctx, common, "worktree", "remove", "--force", dir); err != nil {
 		slog.Warn("runtime: the deleted thread's worktree stays", "thread", c.Target, "worktree", dir, "err", err)
 		return r, nil
 	}
@@ -285,28 +278,4 @@ func (h *Host) deleteInWorktree(ctx context.Context, c api.Command, end api.Work
 		slog.Info("runtime: the deleted thread's branch stays", "thread", c.Target, "branch", t.Branch, "err", err)
 	}
 	return r, nil
-}
-
-// changes counts what in the worktree at dir isn't committed: what git
-// shows, whatever its settings hide, and every file git was told not to
-// look at, as one change each.
-func changes(ctx context.Context, dir string) (int, error) {
-	status, err := git(ctx, dir, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none")
-	if err != nil {
-		return 0, err
-	}
-	n := 0
-	if status != "" {
-		n = strings.Count(status, "\n") + 1
-	}
-	flags, err := git(ctx, dir, "ls-files", "-v")
-	if err != nil {
-		return 0, err
-	}
-	for _, line := range strings.Split(flags, "\n") {
-		if len(line) > 1 && (line[0] == 'S' || unicode.IsLower(rune(line[0]))) {
-			n++
-		}
-	}
-	return n, nil
 }

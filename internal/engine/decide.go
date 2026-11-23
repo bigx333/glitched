@@ -519,10 +519,7 @@ func (d *decision) inbox(b api.InboxSet) error {
 // One that removes the worktree waits for the tree to be still: an agent
 // closing may still write there, after the host looked for changes.
 func (d *decision) delete(b api.ThreadDelete) error {
-	if b.Worktree > api.RemoveWorktreeChanges {
-		return rejected("unknown worktree end")
-	}
-	if b.Worktree != api.KeepWorktree && d.t.Live() != nil {
+	if b.RemoveWorktree && d.t.Live() != nil {
 		return rejected("stop the thread, and every thread under it, before its worktree goes")
 	}
 	if r := d.t.Live(); r != nil {
