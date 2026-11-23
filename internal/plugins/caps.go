@@ -76,6 +76,7 @@ var Effects = map[string]string{
 	"threads.setAccess":      "threads:access",
 	"composer.submit":        "threads:write",
 	"models.list":            "",
+	"skills.list":            "threads:read",
 	"projects.remove":        "threads:write",
 	"projects.list":          "threads:read",
 	"projects.filter":        "threads:read",
@@ -91,6 +92,11 @@ type Effect struct {
 	Type string
 	Args json.RawMessage
 }
+
+// Pending is an effect's answer the app gives later, as one the engine
+// gives: Do returns one, and the host hands it done, which the app calls
+// once, on the UI thread.
+type Pending func(done func(any, error))
 
 // UnmarshalJSON reads an effect as one object: {"type": ..., and its own
 // fields}.

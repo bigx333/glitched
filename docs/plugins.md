@@ -536,6 +536,7 @@ Each call runs on the UI thread (the engine's queue, for a service), checked as 
 | `glitched.composer.submit(thread)` | | `threads:write` |
 | `glitched.models.list()` | `{models: [{provider, id, name, family, description, efforts}], efforts}` | |
 | `glitched.models.ask(prompt, {system?, provider?, model?, timeout?})` | `{text, provider, model}`: see [The glitched global](#the-glitched-global) | `models:ask` |
+| `glitched.skills.list(thread)` | `{skills: [{name, description, source, shown, overrides?}], skipped?: [{source, name?, why}], delivery?}`, the skills Glitched gives the thread's agent on its next run: `source` is `home` or `project`, `overrides` says a project's skill replaces the user's own of its name, and `delivery` how the thread's provider gets them. It rejects when the thread's engine is too old to say | `threads:read` |
 | `glitched.commands.list()` | `[{id, section, label, hint?, icon, also?}]`, the palette's actions, in its order | `commands` |
 | `glitched.commands.run(id, palette?)` | | `commands` |
 | `glitched.projects.list()` | `[{key, workspace, machine, name, icon, color, filtered}]`, in the sidebar's order | `threads:read` |

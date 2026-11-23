@@ -796,7 +796,12 @@ func (h *Host) effect(ctx context.Context, alive *atomic.Bool, id string, e Effe
 			done(nil, errors.New("this app runs no effects"))
 			return
 		}
-		done(h.opts.Do(id, e))
+		v, err := h.opts.Do(id, e)
+		if later, ok := v.(Pending); ok && err == nil {
+			later(done)
+			return
+		}
+		done(v, err)
 	})
 }
 
