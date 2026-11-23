@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"testing"
+	"time"
 
 	"glitched/internal/api"
 )
@@ -113,6 +114,46 @@ func TestAThreadShowsItsSettleAndRenameUntilTheViewHasThem(t *testing.T) {
 	close(b.hold)
 	if v := settled(t, b, g, th); v.Disposition.State != api.Settled || v.Title != "Renamed" {
 		t.Errorf("the engine has %v, %q", v.Disposition.State, v.Title)
+	}
+}
+
+// A settle or a rename that failed leaves no row once another is chosen:
+// its Retry would undo the later one, which the thread shows meanwhile.
+func TestAFailedSettleOrRenameGoesWithTheNextChosen(t *testing.T) {
+	for name, tc := range map[string]struct {
+		first, next func(m *Manager, e *Env, id api.ID) api.ID
+		want        func(v api.Thread) bool
+	}{
+		"settle, then snooze": {
+			func(m *Manager, e *Env, id api.ID) api.ID {
+				return m.SetDisposition(e, id, api.Disposition{State: api.Settled})
+			},
+			func(m *Manager, e *Env, id api.ID) api.ID {
+				return m.SetDisposition(e, id, api.Disposition{State: api.Snoozed, Until: time.Now().Add(time.Hour)})
+			},
+			func(v api.Thread) bool { return v.Disposition.State == api.Snoozed },
+		},
+		"two renames": {
+			func(m *Manager, e *Env, id api.ID) api.ID { return m.Rename(e, id, "First") },
+			func(m *Manager, e *Env, id api.ID) api.ID { return m.Rename(e, id, "Second") },
+			func(v api.Thread) bool { return v.Title == "Second" },
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b, _, m, g, e, top := treeFixture(t)
+			th := e.Threads[top]
+			set(b, &b.fail)
+			first := tc.first(m, e, top)
+			g.until(t, "the failure", func() bool { return len(th.Pending) == 1 && th.Pending[0].Err != nil })
+			tc.next(m, e, top)
+			if slices.ContainsFunc(th.Pending, func(p Pending) bool { return p.Command == first }) {
+				t.Fatalf("the failed one keeps its row beside the one chosen after: %+v", th.Pending)
+			}
+			close(b.hold)
+			if v := settled(t, b, g, th); !tc.want(v) {
+				t.Errorf("the engine has %v, %q", v.Disposition.State, v.Title)
+			}
+		})
 	}
 }
 
