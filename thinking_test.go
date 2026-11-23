@@ -117,14 +117,29 @@ func TestThinkingShowsAboveAQueuedMessage(t *testing.T) {
 	sendNew(h, "Plan it.")
 	h.until("the run", func() bool { return h.a.current().View.Working() })
 	th := h.a.current()
-	h.a.backend.Send(th.env, th.id(), "Then build it.", api.AfterActive)
-	h.until("the queued message", func() bool { return shows(h, "Then build it.") && shows(h, "Queued") })
-	thinking, ok := h.tt.Find("Thinking…")
-	queued, _ := h.tt.Find("Then build it.")
-	if !ok || thinking.Y >= queued.Y {
-		t.Fatalf("Thinking… at %v, the queued message at %v; want it above: %q", thinking, queued, h.tt.Texts())
+	above := func(when string, messages ...string) {
+		t.Helper()
+		thinking, ok := h.tt.Find("Thinking…")
+		for _, m := range messages {
+			queued, _ := h.tt.Find(m)
+			if !ok || thinking.Y >= queued.Y {
+				t.Fatalf("%s, Thinking… at %v and %q at %v; want it above: %q", when, thinking, m, queued, h.tt.Texts())
+			}
+		}
 	}
+	h.a.backend.Send(th.env, th.id(), "Then build it.", api.AfterActive)
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if !h.tt.HasText("Sending…") {
+		t.Fatalf("the message on its way says nothing of it: %q", h.tt.Texts())
+	}
+	above("before the engine takes it", "Then build it.")
+	h.until("the queued message", func() bool { return shows(h, "Then build it.") && shows(h, "Queued") })
+	above("once queued", "Then build it.")
 	shoot(t, h, "claude-thinking-queued")
+	h.a.backend.Send(th.env, th.id(), "Then ship it.", api.AfterActive)
+	h.until("both queued", func() bool { return len(th.Transcript.Queue) == 2 && shows(h, "Then ship it.") })
+	above("with two queued", "Then build it.", "Then ship it.")
 }
 
 // An Antigravity thread says it is thinking from its message until its turn
