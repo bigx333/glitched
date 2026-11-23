@@ -98,6 +98,7 @@ func (g *compactAgent) Do(_ context.Context, act provider.Action) error {
 		g.a.mu.Lock()
 		g.a.stops++
 		g.a.mu.Unlock()
+		go func() { g.evs <- provider.TurnEnded{Outcome: api.OutcomeInterrupted} }()
 	}
 	return nil
 }
@@ -146,7 +147,7 @@ func TestClaudeThreadCompactsBeforeCacheExpires(t *testing.T) {
 		defer clockMu.Unlock()
 		return now
 	}
-	expires := now.Add(engine.ClaudeCompactLead + 60*time.Millisecond)
+	expires := now.Add(time.Hour)
 
 	ad := &compactAdapter{
 		session: func(provider.SessionSpec) string { return "sess-claude-1" },
@@ -174,7 +175,7 @@ func TestClaudeThreadCompactsBeforeCacheExpires(t *testing.T) {
 
 	// Advance clock into the compaction window so compactLoop fires promptly.
 	clockMu.Lock()
-	now = expires.Add(-engine.ClaudeCompactLead + 10*time.Millisecond)
+	now = expires.Add(-engine.ClaudeCacheTTL/10 + time.Second)
 	clockMu.Unlock()
 	// Re-arm timers at the new clock time.
 	n.h.SetIdleCompaction(false)
@@ -231,9 +232,9 @@ func TestAntigravityGeminiCompactsAndClaudeDoesNot(t *testing.T) {
 	until(t, n.h, gemini, "gemini first turn", func(v api.Thread) bool { return v.Run == api.RunIdle && v.LastTurn != nil })
 	until(t, n.h, claudeOnAgy, "claude-agy first turn", func(v api.Thread) bool { return v.Run == api.RunIdle && v.LastTurn != nil })
 
-	// Move clock to 15m after turn end.
+	// Move the clock to 90% of the 15 minutes agy keeps its cache.
 	clockMu.Lock()
-	now = now.Add(engine.AntigravityIdleDelay + time.Second)
+	now = now.Add(engine.AntigravityCacheTTL*9/10 + time.Second)
 	clockMu.Unlock()
 	n.h.SetIdleCompaction(false)
 	n.h.SetIdleCompaction(true)
@@ -288,7 +289,7 @@ func TestIdleCompactionToggleAndRestart(t *testing.T) {
 
 	// Advance into the window while disabled: nothing should fire.
 	clockMu.Lock()
-	now = expires.Add(-time.Minute)
+	now = expires.Add(-engine.ClaudeCacheTTL/10 + time.Second)
 	clockMu.Unlock()
 	time.Sleep(50 * time.Millisecond)
 	if len(ad.recorded()) != 1 {
@@ -339,7 +340,7 @@ func TestUserMessageQueuesBehindSilentCompaction(t *testing.T) {
 	until(t, n.h, thread, "first turn", func(v api.Thread) bool { return v.Run == api.RunIdle && v.LastTurn != nil })
 
 	clockMu.Lock()
-	now = expires.Add(-time.Minute)
+	now = expires.Add(-engine.ClaudeCacheTTL/10 + time.Second)
 	clockMu.Unlock()
 	n.h.SetIdleCompaction(false)
 	n.h.SetIdleCompaction(true)

@@ -1270,7 +1270,7 @@ func TestAVersion12DatabaseUpgradesWithIdleCompactionFields(t *testing.T) {
 	}
 
 	compactRun := api.NewID()
-	if _, err := s.Observe(ctx, thread, engine.IdleCompact{Run: compactRun, AfterRun: run}, expires.Add(-time.Minute), 0); err != nil {
+	if _, err := s.Observe(ctx, thread, engine.IdleCompact{Run: compactRun, AfterRun: run}, expires.Add(-engine.ClaudeCacheTTL/10+time.Second), 0); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
