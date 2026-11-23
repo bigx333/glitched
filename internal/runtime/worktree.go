@@ -169,6 +169,7 @@ func (h *Host) deleteInWorktree(ctx context.Context, c api.Command, end api.Work
 	if err != nil {
 		return r, err
 	}
+	ctx = context.WithoutCancel(ctx)
 	if _, err := git(ctx, common, "worktree", "remove", "--force", top); err != nil {
 		slog.Warn("runtime: the deleted thread's worktree stays", "thread", c.Target, "worktree", top, "err", err)
 		return r, nil
