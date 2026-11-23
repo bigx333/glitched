@@ -145,7 +145,8 @@ var Natives = map[string]Native{
 	"thread.rename":      {In: []string{"sidebar.body"}, Row: true},
 	"thread.tile":        {In: []string{"sidebar.body"}, Row: true},
 	// The model picker's parts: a model's or, with family, a family's
-	// tile; the name of the effort the thread runs at, in its color; fast mode's lightning while
+	// tile; the effort's name in its color as the button shows it, what
+	// runs where the provider runs another; fast mode's lightning while
 	// it's on; and the effort slider with fast mode's switch.
 	"model.tile":    {Props: map[string]string{"family": "string", "size": "number"}, In: []string{"composer.model"}, InRow: true},
 	"model.level":   {In: []string{"composer.model"}, Thread: true},
