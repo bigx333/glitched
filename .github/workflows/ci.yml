@@ -14,6 +14,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Tests run with -count=1: setup-go's cache restores compiled packages, and
+# must never hand a job a test result from an earlier run.
+
 jobs:
   # With cgo off, so vet also proves every package builds without it.
   vet:
@@ -71,12 +74,16 @@ jobs:
       - name: Test part ${{ matrix.part }} of the root package
         run: |
           set -o pipefail
-          tests=$(go test -list . . | grep '^Test' | awk -v i=${{ strategy.job-index }} -v n=${{ strategy.job-total }} '(NR - 1) % n == i' | paste -sd'|')
+          tests=$(go test -list . . | grep -E '^(Test|Example|Fuzz)' | awk -v i=${{ strategy.job-index }} -v n=${{ strategy.job-total }} '(NR - 1) % n == i' | paste -sd'|')
           test -n "$tests"
-          go test -timeout 30m -run "^($tests)\$" .
+          go test -count=1 -timeout 30m -run "^($tests)\$" .
       - name: Test the other packages
         if: ${{ !cancelled() && strategy.job-index == 0 }}
-        run: go test -timeout 20m $(go list ./... | grep -vx glitched)
+        run: |
+          set -eo pipefail
+          packages=$(go list ./...)
+          others=$(grep -vx glitched <<<"$packages")
+          go test -count=1 -timeout 20m $others
 
   # The race detector needs cgo on Linux; nothing else does.
   race:
@@ -90,10 +97,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - run: go test -race -timeout 10m ./internal/client ./internal/daemon ./internal/transport
+      - run: go test -race -count=1 -timeout 10m ./internal/client ./internal/daemon ./internal/transport
       # A step of its own: the plugins' runtimes, run beside the client's
       # timed tests, would starve them of the runner's CPU.
-      - run: go test -race -timeout 10m ./internal/plugins/... ./internal/mcp
+      - run: go test -race -count=1 -timeout 10m ./internal/plugins/... ./internal/mcp
       # Verbose, so the log says whether this runner has the user systemd
       # manager these tests need, or skips them.
-      - run: go test -race -v -run 'MarkerBehind|WithoutScopes' ./internal/provider/claude
+      - run: go test -race -count=1 -v -run 'MarkerBehind|WithoutScopes' ./internal/provider/claude
