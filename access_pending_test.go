@@ -6,6 +6,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +59,7 @@ func tipOn(t *testing.T, h *harness, s, want string) {
 	if !has(hover(t, h, s), want) {
 		t.Errorf("hovering %q doesn't say %q: %q", s, want, h.tt.Texts())
 	}
+	accessShot(t, h, "hover-"+strings.NewReplacer(" ", "-", ":", "").Replace(want[:min(len(want), 44)]))
 	h.tt.Move(0, 0)
 	h.tt.Advance(time.Second)
 }
