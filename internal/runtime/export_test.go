@@ -14,6 +14,13 @@ func SetAskTimeout(d time.Duration) func() {
 	return func() { askTimeout = old }
 }
 
+// SetAwaitingStart calls f as an ask begins to wait for its run's start.
+func SetAwaitingStart(f func()) func() {
+	old := awaitingStart
+	awaitingStart = f
+	return func() { awaitingStart = old }
+}
+
 func SetCloseGrace(d time.Duration) func() {
 	old := closeGrace
 	closeGrace = d

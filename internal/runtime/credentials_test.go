@@ -320,19 +320,22 @@ func TestAContextReportKeepsCredentialsOut(t *testing.T) {
 // host is still recording the run's start.
 type quickAsker struct {
 	provider.Adapter
-	h     *runtime.Host
-	asked chan askResult
+	h       *runtime.Host
+	asked   chan askResult
+	waiting chan struct{}
+	// returned is closed once the ask Open started has returned.
+	returned chan struct{}
 }
 
 func (q *quickAsker) Open(c context.Context, spec provider.SessionSpec) (provider.Agent, error) {
 	go func() {
 		a, err := q.h.AskCredentials(ctx, api.Ask{Thread: spec.Thread, Access: spec.Access, Call: "call-1", Credentials: probeAsk})
 		q.asked <- askResult{a, err}
+		close(q.returned)
 	}()
 	select {
-	case r := <-q.asked:
-		q.asked <- r
-	case <-time.After(time.Second):
+	case <-q.waiting:
+	case <-q.returned:
 	}
 	return q.Adapter.Open(c, spec)
 }
@@ -345,7 +348,8 @@ func TestCredentialsAskedBeforeTheStartIsRecordedWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	vault := secrets.New(t.TempDir())
-	q := &quickAsker{Adapter: fake.New(fake.Turn(true)), asked: make(chan askResult, 1)}
+	q := &quickAsker{Adapter: fake.New(fake.Turn(true)), asked: make(chan askResult, 1), waiting: make(chan struct{}), returned: make(chan struct{})}
+	t.Cleanup(runtime.SetAwaitingStart(func() { close(q.waiting) }))
 	h, err := runtime.New(ctx, st, provider.Mux{"fake": q}, runtime.WithVault(vault))
 	if err != nil {
 		st.Close()
@@ -364,5 +368,28 @@ func TestCredentialsAskedBeforeTheStartIsRecordedWait(t *testing.T) {
 	}
 	if got := wait(t, q.asked); got.err != nil || got.asked.Status != api.AskProvided {
 		t.Fatalf("the ask returned %+v, %v", got.asked, got.err)
+	}
+}
+
+// An ask still waiting for its run's start gives up at the ask's own
+// timeout, as one waiting for its answer does.
+func TestCredentialsAskWaitingForTheStartTimesOut(t *testing.T) {
+	t.Cleanup(runtime.SetAskTimeout(50 * time.Millisecond))
+	st, err := store.Open(dbPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := &quickAsker{Adapter: fake.New(fake.Turn(true)), asked: make(chan askResult, 1), waiting: make(chan struct{}), returned: make(chan struct{})}
+	h, err := runtime.New(ctx, st, provider.Mux{"fake": q}, runtime.WithVault(secrets.New(t.TempDir())))
+	if err != nil {
+		st.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Kill(); st.Close() })
+	q.h = h
+	thread := newThread(t, h)
+	submit(t, h, thread, dispatch("go", api.StartNow))
+	if got := wait(t, q.asked); got.err != nil || got.asked.Status != api.AskTimedOut {
+		t.Fatalf("the ask returned %+v, %v, want it timed out", got.asked, got.err)
 	}
 }
