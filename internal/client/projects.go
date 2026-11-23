@@ -73,9 +73,14 @@ func projectsOf(e *Env) (transport.Projects, error) {
 	return p, nil
 }
 
+// tooOld is err as the user reads it: ErrTooOld for an engine that
+// doesn't know the call, and the engine's own words for its failure.
 func tooOld(err error) error {
 	if errors.Is(err, transport.ErrUnknownMethod) {
 		return ErrTooOld
+	}
+	if re := (*transport.RemoteError)(nil); errors.As(err, &re) {
+		return errors.New(re.Message)
 	}
 	return err
 }

@@ -190,5 +190,11 @@ func (we *wireError) err() error {
 	if we.Code == "bad_request" && strings.HasPrefix(we.Message, unknownMethod) {
 		return fmt.Errorf("%w: %s", ErrUnknownMethod, we.Message)
 	}
-	return fmt.Errorf("transport: remote %s: %s", we.Code, we.Message)
+	return &RemoteError{Code: we.Code, Message: we.Message}
 }
+
+// RemoteError is an error the server sent that has no type of its own
+// here: its code, and the message the server's error said.
+type RemoteError struct{ Code, Message string }
+
+func (e *RemoteError) Error() string { return "transport: remote " + e.Code + ": " + e.Message }
