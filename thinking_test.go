@@ -8,17 +8,19 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider"
 	"glitched/internal/provider/acp/acptest"
 	"glitched/internal/provider/fake"
 )
 
-// held plays a provider whose agents say nothing until gate closes, as a
-// model does while it thinks before its first word.
+// held plays a provider whose agents say their first free events, then
+// nothing until gate closes, as a model does while it thinks.
 type held struct {
 	*fake.Adapter
 	gate chan struct{}
+	free int
 }
 
 func (h held) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
@@ -26,15 +28,20 @@ func (h held) Open(ctx context.Context, spec provider.SessionSpec) (provider.Age
 	if err != nil {
 		return nil, err
 	}
-	return &heldAgent{Agent: ag, gate: h.gate}, nil
+	return &heldAgent{Agent: ag, gate: h.gate, free: h.free}, nil
 }
 
 type heldAgent struct {
 	provider.Agent
 	gate chan struct{}
+	free int
 }
 
 func (g *heldAgent) Next(ctx context.Context) (provider.Event, error) {
+	if g.free > 0 {
+		g.free--
+		return g.Agent.Next(ctx)
+	}
 	select {
 	case <-g.gate:
 	case <-ctx.Done():
@@ -43,44 +50,81 @@ func (g *heldAgent) Next(ctx context.Context) (provider.Event, error) {
 	return g.Agent.Next(ctx)
 }
 
-// thinks is whether the thread's transcript says the agent is at work.
-func thinks(h *harness) bool {
+// holding starts an app whose Claude threads play script, the first free
+// events of it at once and the rest once gate closes.
+func holding(t *testing.T, script []provider.Event, free int) (*harness, chan struct{}) {
+	gate := make(chan struct{})
+	h := startWith(t, tempDir(t), func(cfg *daemon.Config) {
+		cfg.Providers["claude"] = held{fake.New(script), gate, free}
+	})
+	return h, gate
+}
+
+// shows is whether the window shows text, after the frames a row takes to
+// rise in.
+func shows(h *harness, text string) bool {
 	for range 5 {
 		h.tt.Advance(100 * time.Millisecond)
 	}
-	return h.tt.HasText("Thinking…")
+	return h.tt.HasText(text)
 }
 
 // A Claude thread says it is thinking from the moment its message is taken
 // until the turn ends, though the agent says nothing for a while, and that
 // it is stopping once stopped, until the agent hears it.
 func TestAClaudeThreadShowsItThinksBeforeItsFirstWord(t *testing.T) {
-	gate := make(chan struct{})
-	h := startWith(t, tempDir(t), func(cfg *daemon.Config) {
-		cfg.Providers["claude"] = held{fake.New([]provider.Event{provider.TextDelta{Text: "Here is the plan."}}), gate}
-	})
+	h, gate := holding(t, []provider.Event{provider.TextDelta{Text: "Here is the plan."}}, 0)
 	sendNew(h, "Plan it.")
 	h.until("the run", func() bool { return h.a.current().View.Working() })
 	if p := h.a.current().View.Model.Provider; p != "claude" {
 		t.Fatalf("the turn runs on %q", p)
 	}
-	if !thinks(h) {
+	if !shows(h, "Thinking…") {
 		t.Fatalf("a Claude thread with no word yet shows no sign of work: %q", h.tt.Texts())
 	}
 	shoot(t, h, "claude-thinking")
 	h.click("Stop")
 	h.until("the run stopping", func() bool { return h.a.current().View.Run == api.RunStopping })
-	for range 5 {
-		h.tt.Advance(100 * time.Millisecond)
-	}
-	if !h.tt.HasText("Stopping…") {
+	if !shows(h, "Stopping…") {
 		t.Fatalf("a thread whose run stops shows no sign of it: %q", h.tt.Texts())
 	}
 	close(gate)
 	h.until("the turn's end", func() bool { return !h.a.current().View.Working() })
-	if thinks(h) {
-		t.Fatalf("the thread still says it thinks after its turn: %q", h.tt.Texts())
+	if shows(h, "Thinking…") || shows(h, "Stopping…") {
+		t.Fatalf("the thread still says it works after its turn: %q", h.tt.Texts())
 	}
+}
+
+// Stopped while a step runs, the thread says it is stopping, whatever the
+// steps card says.
+func TestAThreadStoppedMidStepSaysItIsStopping(t *testing.T) {
+	h, gate := holding(t, []provider.Event{provider.Work{Item: "run-1", Kind: "command", Title: "make", Status: api.WorkStarted}}, 1)
+	defer close(gate)
+	sendNew(h, "Build it.")
+	h.until("the step", func() bool { return shows(h, "make") })
+	h.click("Stop")
+	h.until("the run stopping", func() bool { return h.a.current().View.Run == api.RunStopping })
+	if !shows(h, "Stopping…") {
+		t.Fatalf("a thread stopped mid-step shows no sign of it: %q", h.tt.Texts())
+	}
+}
+
+// The thread says it is thinking under the turn it works on, above a
+// message queued for the next one.
+func TestThinkingShowsAboveAQueuedMessage(t *testing.T) {
+	h, gate := holding(t, []provider.Event{provider.TextDelta{Text: "Here is the plan."}}, 0)
+	defer close(gate)
+	sendNew(h, "Plan it.")
+	h.until("the run", func() bool { return h.a.current().View.Working() })
+	th := h.a.current()
+	h.a.backend.Send(th.env, th.id(), "Then build it.", api.AfterActive)
+	h.until("the queued message", func() bool { return shows(h, "Then build it.") && shows(h, "Queued") })
+	thinking, ok := h.tt.Find("Thinking…")
+	queued, _ := h.tt.Find("Then build it.")
+	if !ok || thinking.Y >= queued.Y {
+		t.Fatalf("Thinking… at %v, the queued message at %v; want it above: %q", thinking, queued, h.tt.Texts())
+	}
+	shoot(t, h, "claude-thinking-queued")
 }
 
 // An Antigravity thread says it is thinking from its message until its turn
@@ -100,7 +144,7 @@ func TestAnAntigravityThreadShowsItThinks(t *testing.T) {
 			if scenario == "thinking-tools" {
 				h.until("the first step", func() bool { return h.tt.HasText("Read notes.txt") || h.tt.HasText("Worked for 0s") })
 			}
-			if !thinks(h) {
+			if !shows(h, "Thinking…") {
 				t.Fatalf("an Antigravity thread at work shows no sign of it: %q", h.tt.Texts())
 			}
 			shoot(t, h, "antigravity-"+scenario)
@@ -108,9 +152,43 @@ func TestAnAntigravityThreadShowsItThinks(t *testing.T) {
 				t.Fatal(err)
 			}
 			h.until("the turn's end", func() bool { return !h.a.current().View.Working() })
-			if thinks(h) {
+			if shows(h, "Thinking…") {
 				t.Fatalf("the thread still says it thinks after its turn: %q", h.tt.Texts())
 			}
 		})
+	}
+}
+
+// A remote thread whose engine refuses this app any longer says nothing of
+// work it can no longer see end.
+func TestAThreadOutOfReachShowsNoWork(t *testing.T) {
+	dir := tempDir(t)
+	token, err := daemon.Pair(dir, "box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := make(chan struct{})
+	defer close(gate)
+	r := engine(t, daemon.Config{Dir: dir, Listen: []string{"127.0.0.1:0"}}, held{fake.New(nil), gate, 0})
+	id := seed(t, r, "/srv", "Remote")
+	h := start(t, tempDir(t))
+	if err := h.addServer(client.Server{Label: "box", Addr: r.Addrs()[0].String(), Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	th := h.thread("Remote")
+	h.a.select_(th)
+	if _, err := r.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: "Go.", Mode: api.AfterActive}}); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the remote run", func() bool { return th.View.Working() && h.tt.HasText("Go.") })
+	if !shows(h, "Thinking…") {
+		t.Fatalf("a remote thread at work shows no sign of it: %q", h.tt.Texts())
+	}
+	if err := daemon.Revoke(dir, "box"); err != nil {
+		t.Fatal(err)
+	}
+	h.until("refused", func() bool { return th.env.Status == client.Status(client.Refused{}) })
+	if shows(h, "Thinking…") {
+		t.Fatalf("a thread out of reach still says it thinks: %q", h.tt.Texts())
 	}
 }
