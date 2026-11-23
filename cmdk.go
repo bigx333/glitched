@@ -133,8 +133,8 @@ func (a *app) threadCommands() []command {
 // actions, then the threads, the most recently active first. RowHeight,
 // HeaderHeight and NoneHeight are how tall Glitched's own palette draws a
 // row, a section's header and No results, in points: they follow the
-// font's lines on each platform, a row's the taller of its label's and
-// its 11.5 point hint's.
+// font's lines on each platform, a row's the tallest of its 14 point
+// icon, its label's and its 11.5 point hint's.
 type paletteContext struct {
 	Query        string          `json:"query"`
 	Actions      []commandRecord `json:"actions"`
@@ -163,7 +163,7 @@ func lineHeight(c *ui.Context, size float32, weight int) float32 {
 func (a *app) paletteContext(c *ui.Context) paletteContext {
 	size := c.Theme().FontSize
 	ctx := paletteContext{Query: a.cmdkQuery, Actions: a.commandRecords(), Threads: []paletteThread{},
-		RowHeight:    16 + max(lineHeight(c, size, 0), lineHeight(c, 11.5, 0)),
+		RowHeight:    16 + max(14, lineHeight(c, size, 0), lineHeight(c, 11.5, 0)),
 		HeaderHeight: 12 + lineHeight(c, 11, 600),
 		NoneHeight:   48 + lineHeight(c, size, 0),
 	}
