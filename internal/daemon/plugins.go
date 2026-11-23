@@ -76,9 +76,19 @@ func (d *Daemon) pluginEffect(_ string, e plugins.Effect) (any, error) {
 		slices.SortFunc(out, func(x, y plugins.ThreadRecord) int { return strings.Compare(y.UpdatedAt, x.UpdatedAt) })
 		return out, nil
 	case "threads.create":
-		var a struct{ Prompt, Title, Workspace string }
-		if err := json.Unmarshal(e.Args, &a); err != nil || strings.TrimSpace(a.Prompt) == "" {
+		var a struct {
+			Prompt, Title, Workspace string
+			Access                   *string
+		}
+		if err := json.Unmarshal(e.Args, &a); err != nil {
+			return nil, fmt.Errorf("threads.create: %v", err)
+		}
+		if strings.TrimSpace(a.Prompt) == "" {
 			return nil, errors.New("threads.create needs a prompt")
+		}
+		access, err := plugins.CreateAccess(a.Access)
+		if err != nil {
+			return nil, err
 		}
 		ws := a.Workspace
 		if ws == "" {
@@ -87,8 +97,8 @@ func (d *Daemon) pluginEffect(_ string, e plugins.Effect) (any, error) {
 		if !filepath.IsAbs(ws) {
 			return nil, fmt.Errorf("workspace %q is not an absolute path", ws)
 		}
-		// The model and access of the thread the user worked in last: a
-		// service has no composer to read them from.
+		// The model of the thread the user worked in last: a service has
+		// no composer to read it from.
 		snap, err := ep.Read(ctx, api.Query{})
 		if err != nil {
 			return nil, err
@@ -110,7 +120,7 @@ func (d *Daemon) pluginEffect(_ string, e plugins.Effect) (any, error) {
 		if r := []rune(title); len(r) > 48 {
 			title = string(r[:48]) + "…"
 		}
-		for _, body := range []api.Intent{api.ThreadCreate{Workspace: ws, Title: title, Model: last.Model, Access: last.Access}, api.MessageDispatch{Text: a.Prompt, Mode: api.SteerActive}} {
+		for _, body := range []api.Intent{api.ThreadCreate{Workspace: ws, Title: title, Model: last.Model, Access: access}, api.MessageDispatch{Text: a.Prompt, Mode: api.SteerActive}} {
 			if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: id, Body: body}); err != nil {
 				return nil, err
 			}

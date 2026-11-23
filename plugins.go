@@ -595,6 +595,9 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 	case "threads.setAccess":
 		return a.setAccessEffect(e.Args)
 	case "composer.submit":
+		if a.current().id().IsZero() && accessOf[a.access] != api.AccessAsk && !a.plugins.Allowed(id, "threads:access") {
+			return nil, fmt.Errorf("%w: composer.submit would start a thread at %s, which needs the threads:access capability", plugins.ErrDenied, a.access)
+		}
 		return a.submitEffect(e.Args)
 	case "threads.markRead":
 		t, err := a.pluginFind(e.Args)
@@ -672,9 +675,19 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		}
 		return map[string]string{"message": cmd.String()}, nil
 	case "threads.create":
-		var args struct{ Prompt, Title, Workspace string }
-		if err := json.Unmarshal(e.Args, &args); err != nil || strings.TrimSpace(args.Prompt) == "" {
+		var args struct {
+			Prompt, Title, Workspace string
+			Access                   *string
+		}
+		if err := json.Unmarshal(e.Args, &args); err != nil {
+			return nil, fmt.Errorf("threads.create: %v", err)
+		}
+		if strings.TrimSpace(args.Prompt) == "" {
 			return nil, errors.New("threads.create needs a prompt")
+		}
+		access, err := plugins.CreateAccess(args.Access)
+		if err != nil {
+			return nil, err
 		}
 		ws, err := pluginWorkspace(args.Workspace)
 		if err != nil {
@@ -688,7 +701,7 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		if r := []rune(title); len(r) > 48 {
 			title = string(r[:48]) + "…"
 		}
-		tid := a.backend.Create(envs[0], ws, title, a.modelRef(), accessOf[a.access], nil)
+		tid := a.backend.Create(envs[0], ws, title, a.modelRef(), access, nil)
 		if tid.IsZero() {
 			return nil, errors.New("this machine's engine isn't reached")
 		}
