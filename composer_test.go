@@ -406,6 +406,53 @@ func TestComposerKeepsCaretAsPillShows(t *testing.T) {
 	}
 }
 
+func TestComposerStaysFullOnAThreadsFirstClick(t *testing.T) {
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	titles := []string{"First thread", "Second thread", "Third thread"}
+	last := func(title string) string { return title + ", step 8: look at main.go again." }
+	for _, title := range titles {
+		var msgs []string
+		for i := range 8 {
+			msgs = append(msgs, fmt.Sprintf("%s, step %d: look at main.go again.", title, i+1))
+		}
+		seed(t, d, "/work/t3code", title, msgs...)
+	}
+	h := start(t, dir)
+	h.a.select_(h.thread(titles[0]))
+	h.until("its transcript", func() bool { return h.tt.HasText(last(titles[0])) })
+	h.tt.Advance(time.Second)
+	for _, title := range titles[1:] {
+		th := h.thread(title)
+		if err := h.tt.Click(title); err != nil {
+			t.Fatal(err)
+		}
+		if h.a.current().id() != th.id() {
+			t.Fatalf("clicking %s didn't choose it", title)
+		}
+		minK, maxJump, jump := float32(1), float32(0), false
+		see := func() bool {
+			minK, maxJump = min(minK, h.a.composerK), max(maxJump, h.a.jumpK)
+			jump = jump || h.tt.HasText("Jump to latest")
+			return h.tt.HasText(last(title))
+		}
+		h.until(title+"'s transcript", see)
+		for range 30 {
+			see()
+			h.tt.Advance(16 * time.Millisecond)
+		}
+		if jump || minK != 1 || maxJump != 0 {
+			t.Fatalf("clicked first, %s: Jump to latest %v, k down to %v, jump up to %v; want false, 1, 0", title, jump, minK, maxJump)
+		}
+	}
+	h.a.listFor(h.a.current().id()).ScrollTo(0, ui.Start)
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if h.a.composerK != 0 || h.a.jumpK != 1 || !h.tt.HasText("Jump to latest") {
+		t.Fatalf("scrolled up: k %v, jump %v, Jump to latest %v; want 0, 1, true", h.a.composerK, h.a.jumpK, h.tt.HasText("Jump to latest"))
+	}
+}
+
 // foldComposer scrolls th's chat up from its end, the composer folding,
 // and waits for it to be at rest, compact and measured.
 func foldComposer(t *testing.T, a *app, tt *ui.Tester, th thread) {
