@@ -296,3 +296,44 @@ func TestAHeldTurnIsNamedByWhatItRuns(t *testing.T) {
 		t.Errorf("an explicit Medium where the thread left its effort to its provider stands %d", p.standing)
 	}
 }
+
+// The model button names the effort the provider runs at where it runs
+// another than the one asked, in the built-in's drawing and in Glitched's
+// own, while the picker keeps the one chosen.
+func TestTheModelButtonNamesTheEffortThatRuns(t *testing.T) {
+	h, _, id := confirming(t, fake.Turn(false), func(s provider.SessionSpec) []provider.Event {
+		return []provider.Event{
+			provider.Granted{Access: s.Access, Mode: "default"},
+			provider.Ran{Model: s.Model.Model, Effort: "low", Why: "High is unavailable for this account"},
+		}
+	})
+	h.until("idle", func() bool {
+		h.tt.Frame()
+		return !h.a.current().View.Live() && h.a.current().View.Confirmed.Model != nil
+	})
+	pickerSettle(t, h)
+	shows := func(drawn string) {
+		t.Helper()
+		if !h.tt.HasText("Low") || h.tt.HasText("High") {
+			t.Errorf("%s button doesn't name the effort that runs: %q", drawn, h.tt.Texts())
+		}
+		if h.a.effort != "high" {
+			t.Errorf("%s picker's chosen effort is %q, want high", drawn, h.a.effort)
+		}
+	}
+	if app := h.a.plugins.App("model-picker"); app == nil || app.PlaceView("picker", id.String()+"/button") == nil {
+		t.Fatalf("the built-in doesn't draw the model button: %q", h.tt.Texts())
+	}
+	shows("the built-in's")
+	accessShot(t, h, "effort-fallback")
+
+	if err := h.a.plugins.SetEnabled("model-picker", false); err != nil {
+		t.Fatal(err)
+	}
+	h.a.pluginsChanged(nil)
+	pickerSettle(t, h)
+	if len(h.a.plugins.Replacers("composer.model")) > 0 {
+		t.Fatal("a plugin still draws the model button")
+	}
+	shows("Glitched's own")
+}

@@ -184,10 +184,10 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 				return ui.Row(c).Key("component:composer.model/button").Gap(6).AlignItems(ui.Center)
 			},
 			native: func(*widget.Node) {
-				name, effortLabel := a.runningModel(t, m.name, effort.label)
+				name, runs := a.runningModel(t, m.name)
 				modelTile(c, m.icon, m.color, 18)
 				ui.Text(c, name).FontSize(12).SingleLine()
-				ui.Text(c, effortLabel).FontSize(11).FontWeight(600).TextColor(effort.color)
+				ui.Text(c, runs.label).FontSize(11).FontWeight(600).TextColor(runs.color)
 				if a.fast {
 					a.zapIcon(c, "trigger-zap", 12)
 				}
@@ -196,7 +196,9 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 			current: true,
 			context: func(r plugins.ThreadRecord) any {
 				m := a.composerModelOf(c, t, r, "button")
-				m.Model, m.Effort = a.runningModel(t, m.Model, m.Effort)
+				var runs effortInfo
+				m.Model, runs = a.runningModel(t, m.Model)
+				m.Effort = runs.label
 				return m
 			},
 		})

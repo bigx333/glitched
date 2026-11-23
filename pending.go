@@ -205,10 +205,12 @@ func (a *app) unconfirmedMark(c *ui.Context, p choiceStanding) {
 	}
 }
 
-// runningModel is the model's and effort's names the model button shows
+// runningModel is the model's name and the effort the model button shows
 // for t: the chosen ones, or what its provider really runs where it runs
-// another.
-func (a *app) runningModel(t thread, name, effort string) (string, string) {
+// another, an effort Glitched doesn't know by its id in the chosen one's
+// color.
+func (a *app) runningModel(t thread, name string) (string, effortInfo) {
+	effort := a.efforts()[a.effortLevel()]
 	v := a.chosenView(t)
 	if t.id().IsZero() || v.Confirmed.Model == nil {
 		return name, effort
@@ -219,10 +221,10 @@ func (a *app) runningModel(t thread, name, effort string) (string, string) {
 		name = cmp.Or(info.name, g.Model)
 	}
 	if v.EffortStanding() == api.Short {
-		effort = g.Effort
+		effort = effortInfo{id: g.Effort, label: g.Effort, color: effort.color}
 		for _, e := range effortsOf(info) {
 			if e.id == g.Effort {
-				effort = e.label
+				effort = e
 			}
 		}
 	}
