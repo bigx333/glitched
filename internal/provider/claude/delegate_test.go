@@ -72,7 +72,7 @@ func delegateHost(t *testing.T, ad *claude.Adapter) *runtime.Host {
 	if ad == nil {
 		ad = &claude.Adapter{Path: must(os.Executable())}
 	}
-	sock := transport.Loopback{Network: "unix", Address: filepath.Join(dir, "engine.sock")}
+	sock := transport.Loopback{Network: "unix", Address: socketPath(t)}
 	mux := provider.Mux{"claude": &firstOnClaude{claude: ad, rest: fake.New(fake.Turn(false))}}
 	h, err := runtime.New(ctx, st, mux, runtime.WithMCP(mcp.Launcher{Command: must(os.Executable()), Engine: sock.Address}))
 	if err != nil {

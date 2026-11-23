@@ -93,10 +93,12 @@ func TestApprovalCardShowsWhatAnAllowApproves(t *testing.T) {
 }
 
 // onScreen reports whether the last frame draws a text containing s
-// where the window shows at least a line of it.
+// where the window shows at least a line of it: as high as a line of
+// Allow once, the smallest of the texts it looks for.
 func onScreen(tt *ui.Tester, s string) bool {
+	m := ui.Font{Size: 12.5, Weight: 500}.Metrics()
 	for _, text := range tt.Texts() {
-		if r, _ := tt.Find(text); strings.Contains(text, s) && r.H >= 15 {
+		if r, _ := tt.Find(text); strings.Contains(text, s) && r.H >= m.Ascent+m.Descent+m.LineGap-0.5 {
 			return true
 		}
 	}
@@ -1122,9 +1124,10 @@ func pressUntil(h *harness, r *client.RequestEntry, answer func(*harness)) bool 
 }
 
 // A draft grows the composer over the timeline, and a line of the card
-// under its glass is not read: the user who scrolls the card's texts to their
-// end and back while writing a tall draft never saw the last args line,
-// and once the draft is gone, no answer passes it until it is drawn.
+// under its glass is not read: the user who scrolls the card's texts until
+// the last args line is under the composer, and back, while writing a tall
+// draft never saw that line, and once the draft is gone, no answer passes
+// it until it is drawn.
 func TestAnAnswerNeedsLinesTheComposerLeaves(t *testing.T) {
 	const needle = `sql: "DROP TABLE users"`
 	args := "note: \"list\"\nlimit: 10\nschema: \"public\"\nmode: \"rw\"\ntimeout: 30\nretry: false\nlabel: \"x\"\n" + needle
@@ -1141,7 +1144,7 @@ func TestAnAnswerNeedsLinesTheComposerLeaves(t *testing.T) {
 				h.tt.Frame()
 				h.tt.Advance(time.Second)
 				drawn := legibleNow(h, r, "args", needle)
-				scrollTexts(h, 10000)
+				scrollTexts(h, h.a.reads[r.Request].last.Y-h.a.composerAt.Y)
 				drawn = drawn || legibleNow(h, r, "args", needle)
 				scrollTexts(h, -10000)
 				h.a.draft = ""

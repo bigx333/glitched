@@ -413,6 +413,19 @@ var ctx = context.Background()
 // is not.
 var turnWait = 10 * time.Second
 
+// socketPath is where a test's unix socket listens. macOS holds a socket's
+// path in 104 bytes, and t.TempDir's paths there, which carry the test's
+// name, can run past them.
+func socketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "gl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, "s")
+}
+
 // host is a real engine on ad, the fake claude when nil.
 func host(t *testing.T, ad *claude.Adapter, opts ...runtime.Option) *runtime.Host {
 	t.Helper()

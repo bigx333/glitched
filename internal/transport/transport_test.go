@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -21,11 +22,24 @@ import (
 	"glitched/internal/hub"
 )
 
+// socketPath is where a test's unix socket listens. macOS holds a socket's
+// path in 104 bytes, and t.TempDir's paths there, which carry the test's
+// name, can run past them.
+func socketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "gl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, "s")
+}
+
 func start(t *testing.T, network string, srv *Server) Loopback {
 	t.Helper()
 	addr := "127.0.0.1:0"
 	if network == "unix" {
-		addr = filepath.Join(t.TempDir(), "g.sock")
+		addr = socketPath(t)
 	}
 	ln, err := Loopback{Network: network, Address: addr}.Listen(context.Background())
 	if err != nil {
@@ -522,7 +536,7 @@ func TestPanickingHandlerAnswersWithAnError(t *testing.T) {
 // A hub of protocol 1 acks with no protocol, and would keep a deleted
 // thread readable: the hub client refuses it.
 func TestAHubOfAnotherProtocolIsRefused(t *testing.T) {
-	ln, err := Loopback{Network: "unix", Address: filepath.Join(t.TempDir(), "g.sock")}.Listen(context.Background())
+	ln, err := Loopback{Network: "unix", Address: socketPath(t)}.Listen(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -40,8 +40,21 @@ func TestTheHostRunsAReadOnlySnapshotNotTheFolder(t *testing.T) {
 			t.Fatalf("%s was copied", rel)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(snap, "index.js"), []byte("evil()"), 0o644); err == nil {
-		t.Fatal("a snapshot's file can be written")
+	// Anything running as the user can make a snapshot's file writable
+	// again, and root writes it as it is: the next Snapshot makes a
+	// snapshot so edited again.
+	edited := filepath.Join(snap, "index.js")
+	if err := os.Chmod(edited, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(edited, []byte("evil()"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Snapshot(folder, into); err != nil {
+		t.Fatal(err)
+	}
+	if readFile(t, edited) == "evil()" {
+		t.Fatal("an edit to the snapshot stayed")
 	}
 
 	p := plugintest.New(t, snap, plugin.Options{Contract: "glitched", ContractVersion: 1})

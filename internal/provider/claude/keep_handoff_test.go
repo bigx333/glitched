@@ -71,7 +71,7 @@ func TestAnEarlierTurnsClaudeCannotDelegateBeforeTheNextOpens(t *testing.T) {
 	t.Setenv(envResume, filepath.Join(must(os.Getwd()), "testdata", "again-resume.jsonl"))
 	ad := &gatedAdapter{&claude.Adapter{Path: must(os.Executable())}, &closeGate{entered: make(chan struct{}), proceed: make(chan struct{})}}
 	st := must(store.Open(filepath.Join(dir, "db")))
-	sock := transport.Loopback{Network: "unix", Address: filepath.Join(dir, "s")}
+	sock := transport.Loopback{Network: "unix", Address: socketPath(t)}
 	opened := make(chan struct{})
 	active := &gateNextOpen{gatedAdapter: ad, opened: opened}
 	mux := provider.Mux{"claude": &firstOnClaude{claude: active, rest: fake.New(fake.Turn(false))}}
