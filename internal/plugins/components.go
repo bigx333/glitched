@@ -62,6 +62,7 @@ var Components = []Component{
 	{Name: "message.toolbar", Provides: "messageToolbar", Native: true, About: "The actions under a message, shown while it's pointed at: Copy, Edit & resend, Retry under a turn that failed or was stopped, plugins' commands and when the message was sent, each the native Glitched draws. Glitched keeps where the toolbar sits and when it shows."},
 	{Name: "approval.card", Locked: widget.Locked["approval.card"]},
 	{Name: "question.card", Locked: widget.Locked["question.card"]},
+	{Name: "credentials.card", Locked: widget.Locked["credentials.card"]},
 	{Name: "settings.plugins", Locked: widget.Locked["settings.plugins"]},
 	{Name: "settings.servers", Locked: widget.Locked["settings.servers"]},
 	{Name: "settings.providers", Locked: widget.Locked["settings.providers"]},

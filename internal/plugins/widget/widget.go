@@ -173,6 +173,7 @@ var Natives = map[string]Native{
 var Locked = map[string]string{
 	"approval.card":       "an approval answers for you, so only Glitched draws it",
 	"question.card":       "an answer to an agent's question is yours, so only Glitched draws it",
+	"credentials.card":    "what you type there is a secret for the agent's commands alone, so only Glitched draws it",
 	"settings.plugins":    "it is where you turn plugins off, so no plugin draws it",
 	"settings.servers":    "pairing an engine trusts a machine, so only Glitched draws it",
 	"settings.providers":  "it chooses the program Glitched runs as an agent, so only Glitched draws it",

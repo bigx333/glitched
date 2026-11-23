@@ -1207,6 +1207,8 @@ func (a *app) composerInput(c *ui.Context, t thread, rs rows, fullW, frameW floa
 			switch r := waitingRequest(t, rs); {
 			case r != nil && r.Kind == api.KindQuestion:
 				placeholder = "Reply to steer, or answer the questions above"
+			case r != nil && r.Kind == api.KindCredentials:
+				placeholder = "Reply to steer, or fill in the credentials above"
 			case r != nil:
 				placeholder = "Reply to steer, or answer the approval above"
 			}

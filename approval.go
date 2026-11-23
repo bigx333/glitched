@@ -85,8 +85,12 @@ var answerTitles = map[client.Answer]string{client.Deny: "Denied", client.AllowO
 // Answered, it keeps the answer; voided, it says so.
 func (a *app) requestCard(c *ui.Context, t thread, e entry) {
 	r := e.request
-	if r.Kind == api.KindQuestion {
+	switch r.Kind {
+	case api.KindQuestion:
 		a.questionCard(c, t, e)
+		return
+	case api.KindCredentials:
+		a.credentialsCard(c, t, e)
 		return
 	}
 	b, known := askOf(r.Body)
@@ -791,8 +795,12 @@ func (a *app) approvalKeys(c *ui.Context, in ui.Element, t thread, rs rows) {
 	if r == nil || a.drafting() {
 		return
 	}
-	if r.Kind == api.KindQuestion {
+	switch r.Kind {
+	case api.KindQuestion:
 		a.questionKeys(c, in, t, r)
+		return
+	case api.KindCredentials:
+		a.credentialsKeys(c, in, t, r)
 		return
 	}
 	answer := client.AllowOnce
