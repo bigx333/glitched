@@ -93,6 +93,10 @@ type queued struct {
 	// change is the widget of a change event, which a later change of the
 	// same widget replaces while it waits.
 	change string
+	// copy is the place and key of a place.shown or place.hidden, which a
+	// later one of the same copy replaces while it waits: only what the
+	// copy is now matters.
+	copy [2]string
 }
 
 // UIEvent is what the user did to a widget, as update gets it.
@@ -254,6 +258,9 @@ func (s *Session) push(q queued) bool {
 	if n := len(s.queue); q.change != "" && n > 0 && s.queue[n-1].change == q.change {
 		s.queue[n-1] = q
 		return true
+	}
+	if q.copy != ([2]string{}) {
+		s.queue = slices.DeleteFunc(s.queue, func(w queued) bool { return w.copy == q.copy })
 	}
 	if len(s.queue) >= MaxQueued {
 		s.h.opts.Post(func() { s.fail(fmt.Errorf("the plugin is %d events behind; dropped one", MaxQueued)) })

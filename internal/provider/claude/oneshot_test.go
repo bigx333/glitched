@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"glitched/internal/provider"
 	"glitched/internal/provider/claude"
@@ -37,6 +38,9 @@ func fakeOneShot(path string) int {
 	b, _ := json.Marshal(asked{Argv: os.Args[1:], Dir: wd, Entries: entries, Stdin: string(in)})
 	os.WriteFile(path, b, 0o644)
 	os.Stdout.WriteString(os.Getenv(envAnswer))
+	if os.Getenv(envHang) != "" {
+		time.Sleep(time.Minute)
+	}
 	return 0
 }
 
@@ -59,7 +63,7 @@ func TestAnAskRunsOneClaudeWithNoToolsAndThePromptOnStdin(t *testing.T) {
 	if err != nil || got != (provider.AskResult{Text: "A title", Model: "claude-haiku-5-5"}) {
 		t.Fatalf("Ask = %+v, %v; want the result and the model that ran", got, err)
 	}
-	want := []string{"-p", "--no-session-persistence", "--tools", "", "--strict-mcp-config", "--setting-sources", "user", "--output-format", "json", "--model", "haiku", "--system-prompt", "Answer in one line."}
+	want := []string{"-p", "--no-session-persistence", "--tools", "", "--strict-mcp-config", "--setting-sources", "user", "--settings", `{"disableAllHooks":true}`, "--output-format", "json", "--model", "haiku", "--system-prompt", "Answer in one line."}
 	if !slices.Equal(a.Argv, want) {
 		t.Errorf("claude ran with %q, want %q", a.Argv, want)
 	}
@@ -78,6 +82,9 @@ func TestAnAskRunsInAnEmptyFolderWithTheUsersSettingsOnly(t *testing.T) {
 	}
 	if i := slices.Index(a.Argv, "--setting-sources"); i < 0 || a.Argv[i+1] != "user" || slices.Contains(a.Argv, "--bare") {
 		t.Errorf("claude ran with %q, want --setting-sources user and no --bare, which drops its sign-in", a.Argv)
+	}
+	if i := slices.Index(a.Argv, "--settings"); i < 0 || a.Argv[i+1] != `{"disableAllHooks":true}` {
+		t.Errorf("claude ran with %q, want the user's hooks off", a.Argv)
 	}
 	tmp, _ := filepath.EvalSymlinks(os.TempDir())
 	if real, _ := filepath.EvalSymlinks(filepath.Dir(a.Dir)); real != tmp || !strings.HasPrefix(filepath.Base(a.Dir), "glitched-ask-") || len(a.Entries) != 0 {
@@ -107,6 +114,20 @@ func TestAnAskClaudeRefusesSaysWhy(t *testing.T) {
 	}
 	if _, _, err := oneShotAsk(t, "not json", provider.AskSpec{Prompt: "p"}); err == nil {
 		t.Fatal("an answer that isn't JSON was taken")
+	}
+}
+
+// An ask whose claude is stopped at its deadline fails, though it printed
+// an answer first.
+func TestAnAskKilledAtItsDeadlineFails(t *testing.T) {
+	t.Setenv(envAsked, filepath.Join(t.TempDir(), "asked.json"))
+	t.Setenv(envAnswer, `{"result":"printed before the deadline"}`)
+	t.Setenv(envHang, "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	got, err := (&claude.Adapter{Path: must(os.Executable())}).Ask(ctx, provider.AskSpec{Prompt: "p"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Ask = %+v, %v; want the deadline's error", got, err)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -248,14 +249,31 @@ func (h *Host) ask(ctx context.Context, id string, args json.RawMessage) (any, e
 	if _, busy := h.asking.LoadOrStore(id, true); busy {
 		return nil, coded{"busy", errors.New("the plugin's last ask isn't answered yet")}
 	}
-	defer h.asking.Delete(id)
 	timeout := AskTimeout
 	if q.Timeout > 0 {
 		timeout = min(time.Duration(q.Timeout*float64(time.Second)), AskTimeout)
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	a, err := h.opts.Ask(ctx, id, q)
+	type answer struct {
+		a   AskAnswer
+		err error
+	}
+	done := make(chan answer, 1)
+	// The plugin hears of its deadline at once, but its next ask waits for
+	// this one to end where it runs, which may be a while after.
+	go func() {
+		defer h.asking.Delete(id)
+		defer cancel()
+		a, err := h.opts.Ask(ctx, id, q)
+		done <- answer{a, err}
+	}()
+	var got answer
+	select {
+	case got = <-done:
+	case <-ctx.Done():
+		got.err = ctx.Err()
+	}
+	a, err := got.a, got.err
 	switch {
 	case err == nil:
 		return a, nil
@@ -266,8 +284,17 @@ func (h *Host) ask(ctx context.Context, id string, args json.RawMessage) (any, e
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return nil, coded{"timeout", fmt.Errorf("the model didn't answer within %s", timeout.Round(100*time.Millisecond))}
 	}
-	return nil, err
+	msg := remoteError.ReplaceAllString(err.Error(), "")
+	if a.Provider != "" {
+		msg = strings.TrimPrefix(msg, a.Provider+": ")
+	}
+	return nil, errors.New(msg)
 }
+
+// remoteError is how an error that crossed the engine's socket starts: an
+// ask's failure reaches the plugin in the provider's own words, without
+// that, and without the provider's name for itself.
+var remoteError = regexp.MustCompile(`^transport: remote [a-z_]+: `)
 
 // RunProgram is glitched.run: a program the plugin's manifest names, run
 // as the user under the guard's rules, its output as text.

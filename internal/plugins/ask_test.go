@@ -148,6 +148,93 @@ func TestAnAskWaitsItsTimeout(t *testing.T) {
 	}
 }
 
+// An ask past its deadline fails at once, but the plugin's next ask is
+// busy till the first has ended where it ran.
+func TestAnAskHoldsItsSlotTillItEnds(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "writer", `"capabilities": ["models:ask"], `, `
+export async function init() {
+	const out = []
+	for (const p of ["first", "second"]) {
+		try { out.push((await glitched.models.ask(p, { timeout: 0.2 })).text) } catch (e) { out.push(e.code) }
+	}
+	return { state: out }
+}
+export function view({ state }) { return { body: { type: "text", text: state.join(" | ") } } }`)
+	release := make(chan struct{})
+	defer close(release)
+	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf, Ask: func(_ context.Context, _ string, q AskRequest) (AskAnswer, error) {
+		<-release
+		return AskAnswer{Text: q.Prompt}, nil
+	}})
+	t.Cleanup(h.Close)
+	h.SetGranted("writer", "models:ask", true)
+	w := session(t, h, "writer")
+	u.until(t, "both asked", func() bool { return strings.Contains(texts(w), " | ") })
+	if got := strings.TrimSuffix(texts(w), "||"); got != "timeout | busy" {
+		t.Errorf("an ask after one that timed out but runs on: %q, want timeout | busy", got)
+	}
+}
+
+// An ask that fails says why in the provider's own words, not the
+// engine's socket's or the adapter's name for itself.
+func TestAnAskFailsInTheProvidersOwnWords(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "writer", `"capabilities": ["models:ask"], `, askModule(`[["Title it"]]`))
+	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf, Ask: func(context.Context, string, AskRequest) (AskAnswer, error) {
+		return AskAnswer{Provider: "claude"}, errors.New("transport: remote internal: claude: Not logged in · Please run /login")
+	}})
+	t.Cleanup(h.Close)
+	h.SetGranted("writer", "models:ask", true)
+	w := session(t, h, "writer")
+	u.until(t, "the failure", func() bool { return texts(w) != "" })
+	if got := texts(w); got != "undefined: Not logged in · Please run /login||" {
+		t.Errorf("the plugin heard %q", got)
+	}
+}
+
+// A copy shown and hidden while the plugin is busy is told as what it is
+// now: its last event replaces those waiting before it, so a hide is never
+// lost behind a run of context changes.
+func TestPlaceEventsOfACopyKeepOnlyTheLatest(t *testing.T) {
+	state, u := t.TempDir(), newUIThread()
+	writeModule(t, state, "shown", `"capabilities": ["ui.place", "programs"], "glitched": { "programs": ["git"], "places": [{ "id": "badge", "at": "thread.header" }], "events": ["place.shown", "place.hidden", "window.focused"] }, `, `
+export function init() { return { state: { visible: false, told: 0 } } }
+export function place({ items }) { return items.map(() => ({ type: "badge", text: "here" })) }
+export async function update({ state, event }) {
+	if (event.type === "window.focused") { await glitched.run("git", ["status"], { cwd: "/" }); return {} }
+	if (event.type === "place.shown") return { state: { visible: true, told: state.told + 1 } }
+	if (event.type === "place.hidden") return { state: { visible: false, told: state.told + 1 } }
+	return {}
+}`)
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	h := Open(state, Options{Post: u.post, Run: func(ctx context.Context, _ string, _ []string, _ json.RawMessage) (any, error) {
+		started <- struct{}{}
+		<-release
+		return map[string]any{"status": 0, "stdout": "", "stderr": ""}, nil
+	}})
+	t.Cleanup(h.Close)
+	h.SetGranted("shown", "programs", true)
+	s := h.App("shown")
+	s.SetItems("badge", []PlaceItem{{Key: "t1", Version: "1", Context: map[string]int{"tokens": 0}}})
+	u.until(t, "t1 drawn", func() bool { return s.PlaceView("badge", "t1") != nil })
+	s.Notify(AppEvent{Kind: "app", Type: "window.focused", Data: map[string]bool{"focused": true}})
+	<-started
+	for i := 2; i < MaxQueued+6; i++ {
+		s.SetItems("badge", []PlaceItem{{Key: "t1", Version: fmt.Sprint(i), Context: map[string]int{"tokens": i}}})
+	}
+	s.SetItems("badge", nil)
+	close(release)
+	u.until(t, "the queue drained", func() bool { return h.Idle() && s.PlaceView("badge", "t1") == nil })
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var got struct{ Visible bool }
+	json.Unmarshal(s.state, &got)
+	if got.Visible || s.Err != nil {
+		t.Errorf("the plugin holds %s, failed %v; want t1 hidden", s.state, s.Err)
+	}
+}
+
 // A plugin's second ask, while its first is under way, is refused.
 func TestAPluginAsksOneAtATime(t *testing.T) {
 	state, u, fx := t.TempDir(), newUIThread(), &effects{}
@@ -229,6 +316,7 @@ export function update({ state, event }) {
 	s.SetItems("badge", []PlaceItem{{Key: "t1", Version: "1", Context: map[string]string{"title": "One"}}})
 	u.until(t, "t1 shown", func() bool { return text("t1") == "badge@thread.header:t1=One" })
 	s.SetItems("badge", []PlaceItem{{Key: "t1", Version: "2", Context: map[string]string{"title": "Uno"}}})
+	u.until(t, "t1 changed", func() bool { return strings.HasSuffix(text("t1"), "t1=Uno") })
 	s.SetItems("badge", []PlaceItem{{Key: "t2", Version: "1", Context: map[string]string{"title": "Two"}}})
 	u.until(t, "t2 shown", func() bool {
 		return text("t2") == "badge@thread.header:t1=One,badge@thread.header:t1=Uno,-t1,badge@thread.header:t2=Two"

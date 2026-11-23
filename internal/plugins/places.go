@@ -140,10 +140,16 @@ func (s *Session) shown(place string, old, items []PlaceItem) {
 		return
 	}
 	at := s.places.places[i].At
+	s.mu.Lock()
+	gen := s.gen
+	s.mu.Unlock()
+	tell := func(typ, key string, data map[string]any) {
+		s.push(queued{gen: gen, event: AppEvent{Kind: "app", Type: typ, Data: data}, copy: [2]string{place, key}})
+	}
 	if slices.Contains(events, "place.hidden") {
 		for _, o := range old {
 			if !slices.ContainsFunc(items, func(it PlaceItem) bool { return it.Key == o.Key }) {
-				s.Notify(AppEvent{Kind: "app", Type: "place.hidden", Data: map[string]any{"id": place, "at": at, "key": o.Key}})
+				tell("place.hidden", o.Key, map[string]any{"id": place, "at": at, "key": o.Key})
 			}
 		}
 	}
@@ -153,7 +159,7 @@ func (s *Session) shown(place string, old, items []PlaceItem) {
 	for _, it := range items {
 		j := slices.IndexFunc(old, func(o PlaceItem) bool { return o.Key == it.Key })
 		if j < 0 || !reflect.DeepEqual(old[j].Context, it.Context) {
-			s.Notify(AppEvent{Kind: "app", Type: "place.shown", Data: map[string]any{"id": place, "at": at, "key": it.Key, "context": it.Context}})
+			tell("place.shown", it.Key, map[string]any{"id": place, "at": at, "key": it.Key, "context": it.Context})
 		}
 	}
 }
