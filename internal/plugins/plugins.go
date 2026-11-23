@@ -773,7 +773,7 @@ func (h *Host) effect(ctx context.Context, alive *atomic.Bool, id string, e Effe
 			done(nil, fmt.Errorf("%w: the plugin's code was replaced or stopped", ErrDenied))
 			return
 		}
-		if err := h.check(id, e.Type); err != nil {
+		if err := h.check(id, e); err != nil {
 			done(nil, err)
 			return
 		}
@@ -800,10 +800,10 @@ func (h *Host) effect(ctx context.Context, alive *atomic.Bool, id string, e Effe
 	})
 }
 
-// check says why the running plugin id may not ask the app for effect,
-// or nil.
-func (h *Host) check(id string, effect string) error {
-	need, known := Effects[effect]
+// check says why the running plugin id may not ask the app for effect
+// e, or nil.
+func (h *Host) check(id string, e Effect) error {
+	_, known := Effects[e.Type]
 	in := h.running1(id)
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -811,11 +811,15 @@ func (h *Host) check(id string, effect string) error {
 	case in == nil:
 		return fmt.Errorf("%w: plugin %s stopped", ErrDenied, id)
 	case !known:
-		return fmt.Errorf("unknown effect %q", effect)
-	case need != "" && !slices.Contains(in.manifest.Capabilities, need):
-		return fmt.Errorf("%w: %s needs the %s capability, which the plugin doesn't declare", ErrDenied, effect, need)
-	case need != "" && !h.allowed(id, need):
-		return fmt.Errorf("%w: %s needs the %s capability, which isn't granted in Settings › Plugins", ErrDenied, effect, need)
+		return fmt.Errorf("unknown effect %q", e.Type)
+	}
+	for _, need := range needs(e) {
+		switch {
+		case need != "" && !slices.Contains(in.manifest.Capabilities, need):
+			return fmt.Errorf("%w: %s needs the %s capability, which the plugin doesn't declare", ErrDenied, e.Type, need)
+		case need != "" && !h.allowed(id, need):
+			return fmt.Errorf("%w: %s needs the %s capability, which isn't granted in Settings › Plugins", ErrDenied, e.Type, need)
+		}
 	}
 	return nil
 }
