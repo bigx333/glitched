@@ -21,7 +21,7 @@ func TestAddProject(t *testing.T) {
 	h := start(t, inboxDir(t))
 	h.thread("SIP re-INVITE handling")
 	h.tt.Advance(time.Second)
-	h.click("Add project")
+	addFromStrip(h, "Add folder…")
 	h.until("the draft in the folder", func() bool {
 		cur := h.a.current()
 		return cur.id().IsZero() && cur.View.Workspace == dir && cur.local()
@@ -50,7 +50,7 @@ func TestAddProjectCancelled(t *testing.T) {
 	th := h.thread("SIP re-INVITE handling")
 	h.a.select_(th)
 	h.tt.Advance(time.Second)
-	h.click("Add project")
+	addFromStrip(h, "Add folder…")
 	select {
 	case <-picked:
 	case <-time.After(10 * time.Second):
@@ -110,7 +110,7 @@ func addAndLeave(h *harness, dir string) {
 	h.t.Helper()
 	th := h.thread("SIP re-INVITE handling")
 	h.tt.Advance(time.Second)
-	h.click("Add project")
+	addFromStrip(h, "Add folder…")
 	h.until("the draft in the folder", func() bool { return h.a.current().View.Workspace == dir })
 	h.a.select_(th)
 	h.tt.Advance(time.Second)
@@ -212,4 +212,23 @@ func TestRemoveAnAddedProjectWithNoThread(t *testing.T) {
 	if n := newThreadsIn(t, again, "lighthouse"); n != 0 {
 		t.Fatalf("after a restart the palette has %d New thread in lighthouse", n)
 	}
+}
+
+// addFromStrip chooses item from the project strip's Add project menu.
+func addFromStrip(h *harness, item string) {
+	h.t.Helper()
+	h.click("Add project")
+	if err := h.tt.ChooseMenuItem(item); err != nil {
+		h.t.Fatalf("Add project's menu is %q: %v", h.tt.Menu(), err)
+	}
+	settlePlugins(h.t, h.a, h.tt, h.p)
+}
+
+// The strip's Add project menu also clones a repository.
+func TestTheStripClonesARepository(t *testing.T) {
+	h := start(t, inboxDir(t))
+	h.thread("SIP re-INVITE handling")
+	h.tt.Advance(time.Second)
+	addFromStrip(h, "Clone repository…")
+	h.untilShown("the clone sheet", "Clone a repository")
 }
