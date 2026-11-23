@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -87,6 +88,9 @@ type fake struct {
 	stop    chan struct{} // takes an interrupt of the active turn
 	steers  chan string
 	parked  map[string]any // a usage reading sent while no turn ran
+	// settings are what the fake says the thread runs at, as
+	// thread/settings/updated says them.
+	settings map[string]any
 
 	replay *replay
 	// glitched is the glitched MCP server thread/start configured.
@@ -310,6 +314,7 @@ func (f *fake) take(m message, raw []byte) {
 			thread, _ := f.ids()
 			f.notify("item/agentMessage/delta", map[string]any{"threadId": thread, "turnId": "turn-1", "itemId": "msg-turn-1", "delta": "old text"})
 		}
+		f.settle(m.Params)
 		f.reply(m.ID, map[string]any{"turn": map[string]any{"id": turn, "status": "inProgress", "items": []any{}}})
 		thread, _ := f.ids()
 		said, _ := os.ReadFile(f.rollout(thread))
@@ -346,23 +351,88 @@ func (f *fake) take(m message, raw []byte) {
 	}
 }
 
-// reviewed is a thread's start or resume answer, with the reviewer of
-// approvals the thread took: the one asked, but the user's in place of
-// auto-review for an account without it, and none from a Codex too old
-// to say.
+// reviewed is a thread's start or resume answer, with what the thread
+// runs at: the reviewer of approvals asked, but the user's in place of
+// auto-review for an account without it and guardian_subagent for
+// "guardian", the approval policy and sandbox
+// asked, the model asked, but gpt-6.2-sol for "substitute" and for none,
+// and the effort of Codex's config. A Codex too old says none of it.
 func (f *fake) reviewed(params json.RawMessage, answer map[string]any) map[string]any {
-	var p struct{ ApprovalsReviewer string }
+	var p struct{ ApprovalsReviewer, ApprovalPolicy, Sandbox, Model string }
 	json.Unmarshal(params, &p)
-	switch {
-	case f.scenario == "old-codex":
-	case f.scenario == "guardian":
-		answer["approvalsReviewer"] = "guardian_subagent"
-	case f.scenario == "no-auto" && p.ApprovalsReviewer == "auto_review":
-		answer["approvalsReviewer"] = "user"
-	default:
-		answer["approvalsReviewer"] = p.ApprovalsReviewer
+	if f.scenario == "old-codex" {
+		delete(answer, "model")
+		return answer
 	}
+	reviewer := p.ApprovalsReviewer
+	switch {
+	case f.scenario == "guardian":
+		reviewer = "guardian_subagent"
+	case f.scenario == "no-auto" && reviewer == "auto_review":
+		reviewer = "user"
+	}
+	model := p.Model
+	if strings.HasPrefix(f.scenario, "substitute") || model == "" {
+		model = "gpt-6.2-sol"
+	}
+	sandbox := map[string]string{"read-only": "readOnly", "workspace-write": "workspaceWrite", "danger-full-access": "dangerFullAccess"}[p.Sandbox]
+	f.mu.Lock()
+	f.settings = map[string]any{"approvalPolicy": p.ApprovalPolicy, "approvalsReviewer": reviewer, "sandboxPolicy": map[string]any{"type": sandbox}, "model": model, "effort": "xhigh"}
+	f.mu.Unlock()
+	answer["approvalsReviewer"], answer["approvalPolicy"], answer["sandbox"] = reviewer, p.ApprovalPolicy, map[string]any{"type": sandbox}
+	answer["model"], answer["reasoningEffort"] = model, "xhigh"
 	return answer
+}
+
+// settle takes what a turn/start asks the thread to run at, as Codex
+// does, and says so with thread/settings/updated before it answers, when
+// that changed anything. A Codex too old, or "silent", says nothing.
+// "effort-null" says the effort is unset. "stale-settings" says, on its
+// second turn, only an update of its first turn's and one of the
+// approval policy alone.
+func (f *fake) settle(params json.RawMessage) {
+	if f.scenario == "old-codex" || strings.HasSuffix(f.scenario, "silent") {
+		return
+	}
+	f.mu.Lock()
+	thread, n := f.thread, f.turns
+	f.mu.Unlock()
+	if f.scenario == "stale-settings" && n == 2 {
+		f.notify("thread/settings/updated", map[string]any{"threadId": thread, "turnId": "turn-1", "threadSettings": map[string]any{"model": "old-model", "effort": "low"}})
+		f.notify("thread/settings/updated", map[string]any{"threadId": thread, "threadSettings": map[string]any{"approvalPolicy": "on-request"}})
+		return
+	}
+	var p struct {
+		ApprovalPolicy, ApprovalsReviewer, Model, Effort string
+		SandboxPolicy                                    struct{ Type string }
+	}
+	json.Unmarshal(params, &p)
+	f.mu.Lock()
+	was := fmt.Sprint(f.settings)
+	s := maps.Clone(f.settings)
+	if p.ApprovalPolicy != "" {
+		s["approvalPolicy"] = p.ApprovalPolicy
+	}
+	if p.ApprovalsReviewer != "" {
+		s["approvalsReviewer"] = p.ApprovalsReviewer
+	}
+	if p.SandboxPolicy.Type != "" {
+		s["sandboxPolicy"] = map[string]any{"type": p.SandboxPolicy.Type}
+	}
+	if p.Model != "" && f.scenario != "substitute" {
+		s["model"] = p.Model
+	}
+	if p.Effort != "" {
+		s["effort"] = p.Effort
+	}
+	if f.scenario == "effort-null" {
+		s["effort"] = nil
+	}
+	f.settings = s
+	f.mu.Unlock()
+	if fmt.Sprint(s) != was {
+		f.notify("thread/settings/updated", map[string]any{"threadId": thread, "threadSettings": s})
+	}
 }
 
 func (f *fake) ids() (thread, turn string) {
@@ -666,6 +736,16 @@ func (f *fake) play(n int, turn, said string) {
 	case "unauthorized":
 		f.complete("failed", map[string]any{"message": "401 Unauthorized", "codexErrorInfo": "unauthorized", "additionalDetails": nil})
 		return
+	case "switch":
+		// Codex moves the thread to another model mid-turn.
+		f.message("msg-a", "on the first model")
+		f.mu.Lock()
+		s := maps.Clone(f.settings)
+		s["model"], s["effort"] = "gpt-6.2-sol", "high"
+		f.settings = s
+		f.mu.Unlock()
+		f.notify("thread/settings/updated", map[string]any{"threadId": thread, "threadSettings": s})
+		f.message("msg-b", "on the second")
 	default:
 		f.message("msg-"+turn, "hi ", strconv.Itoa(n), " from ", strconv.Itoa(f.pid))
 	}

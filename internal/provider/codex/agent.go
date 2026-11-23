@@ -2,6 +2,7 @@ package codex
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -52,6 +53,14 @@ type Agent struct {
 	tokens      int64 // what the turn's model requests used, so far
 	asks        map[string]*ask
 	asked       int
+	// since is how many times Codex had said what the thread runs at as
+	// the run took its app-server, none for one it started, and asked as
+	// it sent the turn, which asks for the effort. told is whether the run
+	// has reported it.
+	since, effortSince int
+	told               bool
+	granted            *provider.Granted
+	ran                *provider.Ran
 }
 
 var (
@@ -150,6 +159,7 @@ func (g *Agent) start(text string) error {
 		return errors.New("codex: the run already started")
 	}
 	g.started = true
+	_, g.effortSince = g.p.settled()
 	g.mu.Unlock()
 	params := map[string]any{
 		"threadId":          g.p.threadID(),
@@ -185,6 +195,9 @@ func (g *Agent) start(text string) error {
 		}
 		if g.turn == "" {
 			g.turn = r.Turn.ID
+		}
+		if !g.ended {
+			g.tellLocked()
 		}
 		if g.ended && g.turn != "" {
 			g.p.ended(g.turn)
@@ -380,6 +393,8 @@ func (g *Agent) notify(m message) {
 			g.queueLocked(provider.Context{Used: u.Last.Total, Window: u.Window})
 		case m.Method == "thread/compacted":
 			g.queueLocked(provider.Context{Compacted: true})
+		case m.Method == "thread/settings/updated" && g.told:
+			g.tellLocked()
 		}
 		return
 	}
@@ -395,6 +410,7 @@ func (g *Agent) notify(m message) {
 		if g.turn == "" {
 			g.turn = n.TurnID
 		}
+		g.tellLocked()
 		select {
 		case <-g.announced:
 		default:
@@ -460,6 +476,83 @@ func (g *Agent) notify(m message) {
 		}
 		g.endLocked(end)
 	}
+}
+
+// tellLocked reports the access, model and effort Codex says the thread
+// runs at, each part that changed since the run last did. Codex says them
+// as it starts or resumes the thread, and again whenever a turn changes
+// them, before it answers turn/start. A part is confirmed where Codex
+// said it after the run asked for it, or where what it last said is what
+// the run asks; any other goes unreported. g.mu is held.
+func (g *Agent) tellLocked() {
+	g.told = true
+	s, _ := g.p.settled()
+	if gr, ok := g.grantedOf(s); ok && (g.granted == nil || *g.granted != gr) {
+		g.granted = &gr
+		g.queueLocked(gr)
+	}
+	if r, ok := g.ranOf(s); ok && (g.ran == nil || *g.ran != r) {
+		g.ran = &r
+		g.queueLocked(r)
+	}
+}
+
+// holds is whether x is confirmed for a run that asked for want,
+// "" for anything, by Codex's saying since.
+func holds(x part, want string, since int) bool {
+	return x.said > since || want == "" || x.value == want
+}
+
+// grantedOf is the access s makes, read back through levels by its
+// sandbox, with why it falls short of the run's. A reviewer Codex doesn't
+// name is the user, as before Codex had auto-review.
+func (g *Agent) grantedOf(s settings) (provider.Granted, bool) {
+	asked := levels[g.spec.Access]
+	approval, sandbox, reviewer := s.approval.value, s.sandbox.value, cmp.Or(s.reviewer.value, "user")
+	if approval == "" || !holds(s.approval, asked.approval, g.since) || !holds(s.sandbox, asked.policy["type"].(string), g.since) ||
+		s.reviewer.said <= g.since && reviewer != g.p.reviewer {
+		return provider.Granted{}, false
+	}
+	access, found := api.Access(0), false
+	for a, l := range levels {
+		if l.policy["type"] == sandbox {
+			access, found = a, true
+		}
+	}
+	if !found {
+		return provider.Granted{}, false
+	}
+	gr := provider.Granted{Access: access, Mode: strings.Join([]string{levels[access].sandbox, approval, reviewer}, ", ")}
+	same := approval == asked.approval && reviewer == asked.reviewer
+	switch {
+	case access > g.spec.Access || access == g.spec.Access && same:
+	case access == g.spec.Access && approval == asked.approval && asked.reviewer == autoReview:
+		gr.Why = noAuto(g.p.version)
+	default:
+		gr.Why = "Codex runs " + gr.Mode
+	}
+	return gr, true
+}
+
+// ranOf is the model and effort s names, with why they aren't the run's.
+// The turn asks for the effort, so Codex confirms it only from then: an
+// effort it doesn't confirm is one it doesn't say.
+func (g *Agent) ranOf(s settings) (provider.Ran, bool) {
+	want := g.spec.Model
+	if s.model.value == "" || !holds(s.model, want.Model, g.since) {
+		return provider.Ran{}, false
+	}
+	r := provider.Ran{Model: s.model.value}
+	if holds(s.effort, want.Effort, g.effortSince) {
+		r.Effort = s.effort.value
+	}
+	if r.Model != want.Model || want.Effort != "" && r.Effort != "" && r.Effort != want.Effort {
+		r.Why = "Codex runs " + r.Model
+		if r.Effort != "" {
+			r.Why += " at " + r.Effort
+		}
+	}
+	return r, true
 }
 
 // textLocked hands out text of the agent message itemID. Codex puts

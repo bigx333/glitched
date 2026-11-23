@@ -82,6 +82,8 @@ type proc struct {
 	peaks  map[string]int64 // the most each turn's readings said it had spent
 	thread string           // Codex's id of the thread it runs
 	over   map[string]bool  // Codex's ids of the turns its runs ended
+	set    settings         // what Codex last said the thread runs at
+	says   int              // how many times Codex has said any of it
 	run    *Agent           // the run it serves, if any
 	parked bool             // it waits for its thread's next run
 	spoke  bool             // it spoke while parked
@@ -286,15 +288,16 @@ func (p *proc) startThread(ctx context.Context, spec provider.SessionSpec) (lost
 		Thread struct {
 			ID string `json:"id"`
 		} `json:"thread"`
-		ApprovalsReviewer string `json:"approvalsReviewer"`
+		said
 	}
 	// The thread's reviewer is the level's, but the user's for an
 	// auto-review Codex says it didn't take, or is too old to say it did.
 	defer func() {
 		p.reviewer = levels[spec.Access].reviewer
-		if p.reviewer == autoReview && r.ApprovalsReviewer != autoReview {
+		if p.reviewer == autoReview && str(r.ApprovalsReviewer) != autoReview {
 			p.reviewer = "user"
 		}
+		p.settle(r.said)
 	}()
 	if spec.Session != "" {
 		resume := maps.Clone(params)
@@ -337,6 +340,90 @@ func (p *proc) bind(id string) error {
 	return nil
 }
 
+// settings are what Codex says a thread runs at: its approval policy,
+// reviewer of approvals and sandbox's type, as readOnly, and its model
+// and effort.
+type settings struct {
+	approval, reviewer, sandbox, model, effort part
+}
+
+// part is one of the settings: its value, "" while unset, and which of
+// Codex's sayings last said it, 0 for none.
+type part struct {
+	value string
+	said  int
+}
+
+// said is the settings as a thread/start or thread/resume answer, or a
+// thread/settings/updated, says them: a part absent is one it didn't
+// say, and null one it says is unset.
+type said struct {
+	ApprovalPolicy    json.RawMessage `json:"approvalPolicy"`
+	ApprovalsReviewer json.RawMessage `json:"approvalsReviewer"`
+	Sandbox           json.RawMessage `json:"sandbox"`
+	SandboxPolicy     json.RawMessage `json:"sandboxPolicy"`
+	Model             json.RawMessage `json:"model"`
+	ReasoningEffort   json.RawMessage `json:"reasoningEffort"`
+	Effort            json.RawMessage `json:"effort"`
+}
+
+// settle keeps what Codex said the thread runs at, part by part: a part
+// it didn't say stays as it last said it.
+func (p *proc) settle(s said) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.says++
+	take := func(x *part, raw json.RawMessage, name func(json.RawMessage) string) {
+		if len(raw) > 0 {
+			*x = part{name(raw), p.says}
+		}
+	}
+	take(&p.set.approval, s.ApprovalPolicy, policyName)
+	take(&p.set.reviewer, s.ApprovalsReviewer, str)
+	take(&p.set.sandbox, s.Sandbox, sandboxType)
+	take(&p.set.sandbox, s.SandboxPolicy, sandboxType)
+	take(&p.set.model, s.Model, str)
+	take(&p.set.effort, s.ReasoningEffort, str)
+	take(&p.set.effort, s.Effort, str)
+}
+
+// settled is what Codex last said the thread runs at, and how many times
+// it has said any of it.
+func (p *proc) settled() (settings, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.set, p.says
+}
+
+// str is a JSON string's value, "" for null.
+func str(raw json.RawMessage) string {
+	var s string
+	json.Unmarshal(raw, &s)
+	return s
+}
+
+func sandboxType(raw json.RawMessage) string {
+	var s struct {
+		Type string `json:"type"`
+	}
+	json.Unmarshal(raw, &s)
+	return s.Type
+}
+
+// policyName is an approval policy's name: Codex's own for one of its
+// presets, as on-request, or the policy as Codex wrote it.
+func policyName(raw json.RawMessage) string {
+	var name string
+	if json.Unmarshal(raw, &name) == nil {
+		return name
+	}
+	var c bytes.Buffer
+	if json.Compact(&c, raw) != nil || c.String() == "null" {
+		return ""
+	}
+	return c.String()
+}
+
 // level is how one of Glitched's access levels reaches Codex: the
 // approval policy, sandbox and reviewer of approvals a thread starts
 // with, and the sandbox each turn sends. Approve for me is Codex's own
@@ -370,7 +457,9 @@ func (p *proc) threadID() string {
 // refused, so Codex never waits on it.
 func (p *proc) handle(m message) {
 	var scope struct {
-		ThreadID string `json:"threadId"`
+		ThreadID       string `json:"threadId"`
+		TurnID         string `json:"turnId"`
+		ThreadSettings said   `json:"threadSettings"`
 	}
 	json.Unmarshal(m.Params, &scope)
 	request := len(m.ID) > 0
@@ -378,6 +467,10 @@ func (p *proc) handle(m message) {
 	run := p.run
 	ours := scope.ThreadID == "" || scope.ThreadID == p.thread
 	p.mu.Unlock()
+	// An update of a turn that is over says nothing of the thread's now.
+	if ours && m.Method == "thread/settings/updated" && (scope.TurnID == "" || !p.isOver(scope.TurnID)) {
+		p.settle(scope.ThreadSettings)
+	}
 	switch {
 	case !ours:
 		if request {

@@ -194,17 +194,28 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	if levels[spec.Access].reviewer == autoReview {
 		refused := ""
 		if p.reviewer != autoReview {
-			refused = "Codex " + p.version + " kept the thread's approvals with you, not its auto-review"
+			refused = noAuto(p.version)
 		}
 		a.noAuto.Store(&refused)
 	}
 	g := newAgent(spec, p, keep)
+	// What a kept app-server said before this run is confirmed for it only
+	// where it is what the run asks.
+	if ok {
+		_, g.since = p.settled()
+	}
 	if lost {
 		g.mu.Lock()
 		g.noticeLocked("Codex no longer has this thread's earlier conversation, so this turn starts a new one.")
 		g.mu.Unlock()
 	}
 	return g, nil
+}
+
+// noAuto is why a thread of Codex version's at Approve for me asks the
+// user what auto-review would decide.
+func noAuto(version string) string {
+	return "Codex " + version + " kept the thread's approvals with you, not its auto-review"
 }
 
 func launchKey(prog provider.Program, spec provider.SessionSpec) string {
