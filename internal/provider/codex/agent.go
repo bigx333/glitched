@@ -155,7 +155,7 @@ func (g *Agent) start(text string) error {
 		"threadId":          g.p.threadID(),
 		"input":             input(text),
 		"approvalPolicy":    levels[g.spec.Access].approval,
-		"approvalsReviewer": "user",
+		"approvalsReviewer": g.p.reviewer,
 		"sandboxPolicy":     levels[g.spec.Access].policy,
 		"summary":           "auto",
 		"serviceTier":       nil,

@@ -234,20 +234,20 @@ func TestTheProvidersPageShowsTheEffortThePickerRuns(t *testing.T) {
 	}
 }
 
-// unruled is a provider whose own deny rules don't hold in Glitched.
-type unruled struct{ provider.Adapter }
+// unautomatic is a provider whose own auto mode was last not on offer.
+type unautomatic struct{ provider.Adapter }
 
-func (u unruled) Describe(ctx context.Context) (provider.Info, error) {
+func (u unautomatic) Describe(ctx context.Context) (provider.Info, error) {
 	info, err := u.Adapter.Describe(ctx)
-	info.RulesIgnored = true
+	info.NoAuto = "Antigravity doesn't offer its auto mode"
 	return info, err
 }
 
-// A provider whose own deny rules don't apply says so, once, in its row:
-// Claude's says nothing of them.
-func TestAProviderWhoseRulesDontApplySaysSo(t *testing.T) {
+// A provider without its own auto mode says, once, in its row, what
+// Approve for me does instead: Claude's, which has it, says nothing.
+func TestAProviderWithoutItsAutoModeSaysSo(t *testing.T) {
 	h := startWith(t, tempDir(t), func(c *daemon.Config) {
-		c.Providers["antigravity"] = unruled{c.Providers["fake"]}
+		c.Providers["antigravity"] = unautomatic{c.Providers["fake"]}
 		engineReportsBy(map[string][]provider.Model{
 			"claude":      {{ID: "claude-opus-5-5"}},
 			"antigravity": {{ID: "gemini-3.8-flash", Name: "Gemini 3.8 Flash"}},
@@ -256,10 +256,13 @@ func TestAProviderWhoseRulesDontApplySaysSo(t *testing.T) {
 	allAnswered(h)
 	h.until("Antigravity's models", func() bool { return len(h.a.models.reported["antigravity"]) == 1 })
 	openProviders(h, "claude", "antigravity")
-	if !h.tt.HasText("Antigravity's own deny rules don't apply to its runs in Glitched.") {
-		t.Errorf("Antigravity's row doesn't say its rules don't apply: %q", h.tt.Texts())
+	if !h.tt.HasText("Antigravity doesn't offer its auto mode, so Approve for me approves file edits and asks before the rest.") {
+		t.Errorf("Antigravity's row doesn't say it has no auto mode: %q", h.tt.Texts())
 	}
-	if n := strings.Count(strings.Join(h.tt.Texts(), "\n"), "deny rules"); n != 1 {
-		t.Errorf("the page speaks of deny rules %d times, want once, for Antigravity alone: %q", n, h.tt.Texts())
+	if n := strings.Count(strings.Join(h.tt.Texts(), "\n"), "auto mode"); n != 1 {
+		t.Errorf("the page speaks of auto mode %d times, want once, for Antigravity alone: %q", n, h.tt.Texts())
+	}
+	if h.tt.HasText("deny rules") {
+		t.Errorf("the page still speaks of deny rules: %q", h.tt.Texts())
 	}
 }

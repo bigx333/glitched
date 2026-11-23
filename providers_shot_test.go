@@ -36,7 +36,7 @@ func providersFixture(a *app, state string) {
 		return
 	}
 	a.models.reported["antigravity"] = agyModels
-	a.models.served["antigravity"] = transport.ProviderInfo{Name: "antigravity", Info: provider.Info{Name: "Antigravity", Version: "1.5.14", Models: agyModels, Path: filepath.Join(home, ".local/bin/agy"), RulesIgnored: true}}
+	a.models.served["antigravity"] = transport.ProviderInfo{Name: "antigravity", Info: provider.Info{Name: "Antigravity", Version: "1.5.14", Models: agyModels, Path: filepath.Join(home, ".local/bin/agy")}}
 	if state == "two" || state == "gone" || state == "agy" {
 		return
 	}

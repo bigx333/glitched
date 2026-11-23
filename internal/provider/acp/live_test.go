@@ -173,9 +173,9 @@ func TestLiveDenyUnderFull(t *testing.T) {
 	dir := t.TempDir()
 	scratch := dir + "/scratch.txt"
 	os.WriteFile(scratch, []byte("keep me\n"), 0o644)
-	access := api.AccessFull
-	if os.Getenv("ACP_LIVE_DENY") == "ask" {
-		access = api.AccessAsk
+	access := map[string]api.Access{"ask": api.AccessAsk, "auto": api.AccessAutoEdits}[os.Getenv("ACP_LIVE_DENY")]
+	if os.Getenv("ACP_LIVE_DENY") == "1" {
+		access = api.AccessFull
 	}
 	s := provider.SessionSpec{Thread: api.NewID(), Run: api.NewID(), Generation: 1, Workspace: dir,
 		Model: api.ModelRef{Provider: "antigravity", Model: os.Getenv("ACP_LIVE_MODEL")}, Access: access}

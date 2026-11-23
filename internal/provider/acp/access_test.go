@@ -21,7 +21,7 @@ func TestEachAccessLevelRunsAtItsOwnModeAndFlags(t *testing.T) {
 		flag   bool
 	}{
 		{api.AccessAsk, "", false},
-		{api.AccessAutoEdits, "accept-edits", false},
+		{api.AccessAutoEdits, "auto", false},
 		{api.AccessFull, "", true},
 	} {
 		a, log := fake(t, "hi")
@@ -60,7 +60,7 @@ func TestARefusedModeFailsTheRun(t *testing.T) {
 	s := spec(t)
 	s.Access = api.AccessAutoEdits
 	_, err := a.Open(context.Background(), s)
-	if err == nil || !strings.Contains(err.Error(), "Unknown mode: accept-edits") {
+	if err == nil || !strings.Contains(err.Error(), "Unknown mode: auto") {
 		t.Fatalf("open with a refused mode = %v, want the agent's refusal", err)
 	}
 	if slices.Contains(methods(wire(t, log)), "session/prompt") {
@@ -174,22 +174,41 @@ func TestATurnReportsItsOwnTokens(t *testing.T) {
 	closeRun(t, g)
 }
 
-// An agent that ignores the user's own deny rules over ACP says so as it
-// describes itself, and one that keeps them doesn't.
-func TestAnAgentSaysItsRulesDontApply(t *testing.T) {
-	for _, ignored := range []bool{true, false} {
-		a, _ := fake(t, "hi")
-		a.Profile.RulesIgnored = ignored
+// A session that doesn't list agy's auto mode runs Approve for me in
+// accept-edits, as before auto, and agy then says why as it describes
+// itself; once a session lists auto again, it says nothing of it.
+func TestASessionWithoutAutoRunsInAcceptEdits(t *testing.T) {
+	for _, tc := range []struct {
+		scenario, mode, noAuto string
+	}{
+		{"no-auto", "accept-edits", "Antigravity doesn't offer its auto mode"},
+		{"hi", "auto", ""},
+	} {
+		a, log := fake(t, tc.scenario)
+		s := spec(t)
+		s.Access = api.AccessAutoEdits
+		g := open(t, a, s)
+		do(t, g, provider.Start{Text: "hi"})
+		turn(t, g)
+		closeRun(t, g)
+		var modes []string
+		for _, e := range wire(t, log) {
+			if e.Method == "session/set_mode" {
+				var p struct{ ModeId string }
+				json.Unmarshal(e.Params, &p)
+				modes = append(modes, p.ModeId)
+			}
+		}
+		if !slices.Equal(modes, []string{tc.mode}) {
+			t.Errorf("%s: set_mode %q, want %q", tc.scenario, modes, tc.mode)
+		}
 		info, err := a.Describe(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.RulesIgnored != ignored {
-			t.Errorf("a profile whose rules are ignored %v describes itself as %v", ignored, info.RulesIgnored)
+		if info.NoAuto != tc.noAuto {
+			t.Errorf("%s: agy describes its auto mode as %q, want %q", tc.scenario, info.NoAuto, tc.noAuto)
 		}
-	}
-	if !Antigravity.RulesIgnored {
-		t.Error("Antigravity's profile keeps agy's deny rules, which agy acp ignores")
 	}
 }
 
@@ -207,7 +226,7 @@ func TestTheAgentsLatestModeWinsOnTheNextRun(t *testing.T) {
 		closeRun(t, g)
 		s.Run, s.Generation = api.NewID(), s.Generation+1
 	}
-	if want := []string{"default", "accept-edits"}; !slices.Equal(modes, want) {
+	if want := []string{"default", "auto"}; !slices.Equal(modes, want) {
 		t.Fatalf("the agent ran its turns in modes %q, want %q", modes, want)
 	}
 }

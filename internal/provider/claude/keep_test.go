@@ -206,3 +206,25 @@ func TestDeletingAThreadStopsItsKeptClaude(t *testing.T) {
 	submit(t, h, thread, api.ThreadDelete{})
 	waitGone(t, started("claude")[0], "a deleted thread's kept claude")
 }
+
+// Approve for me chosen mid-thread holds from the thread's next turn: its
+// claude starts in auto, and is switched to it before its first message.
+func TestApproveForMeChosenMidThreadRunsAutoNextTurn(t *testing.T) {
+	argv, _ := keep(t, []string{"hi"}, []string{"again-resume"})
+	switched := filepath.Join(t.TempDir(), "modes")
+	t.Setenv(envModes, switched)
+	h := host(t, nil)
+	thread := newThread(t, h, api.AccessAsk)
+	turn(t, h, thread, firstAsk)
+	submit(t, h, thread, api.ThreadConfigure{Access: new(api.AccessAutoEdits)})
+	if got := turn(t, h, thread, againAsk); got.ended.Outcome != api.OutcomeCompleted {
+		t.Fatalf("second turn %+v", got)
+	}
+	args := strings.Split(strings.TrimSpace(string(must(os.ReadFile(argv)))), "\n")
+	if len(args) != 2 || !strings.Contains(args[0], `"default"`) || !strings.Contains(args[1], `"auto"`) {
+		t.Errorf("claude ran with %q, want default, then auto", args)
+	}
+	if got := strings.TrimSpace(string(must(os.ReadFile(switched)))); got != "auto success" {
+		t.Errorf("claude was switched to %q, want auto once, for the second turn", got)
+	}
+}

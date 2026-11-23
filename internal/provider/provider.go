@@ -77,10 +77,13 @@ type Sessioned interface{ Session() string }
 
 // Grant is how one of Glitched's access levels reaches an agent: the
 // permission mode its session runs in, "" for the agent's own, and what
-// its program starts with besides. Each adapter keeps Grants for its
-// agent, a Grant per level, as the agent names its own controls.
+// its program starts with besides. Else is the mode it runs in where the
+// agent doesn't offer Mode, as an older version or another account may
+// not. Each adapter keeps Grants for its agent, a Grant per level, as the
+// agent names its own controls.
 type Grant struct {
 	Mode string
+	Else string
 	Args []string
 }
 
@@ -95,9 +98,10 @@ type Info struct {
 	Models  []Model `json:"models"`
 	// Path is the program Glitched runs for the provider.
 	Path string `json:"path,omitempty"`
-	// RulesIgnored is that the provider's own deny rules don't hold in
-	// its Glitched runs: at Full access nothing stops a call it makes.
-	RulesIgnored bool `json:"rulesIgnored,omitempty"`
+	// NoAuto is why the provider's own auto mode, Approve for me, was
+	// last not on offer, so that its run approved edits and asked for the
+	// rest instead; "" while it is.
+	NoAuto string `json:"noAuto,omitempty"`
 }
 
 // Model is one a provider's sessions can run. ID is what a session's

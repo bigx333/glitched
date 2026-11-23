@@ -35,9 +35,6 @@ type Profile struct {
 	// the whole session, so an agent not seen to report a turn's own
 	// reports none.
 	TurnUsage bool
-	// RulesIgnored is that the agent doesn't apply the user's own deny
-	// rules to a session over ACP.
-	RulesIgnored bool
 }
 
 // Antigravity is Google's Antigravity CLI, agy, from the user's own
@@ -52,15 +49,15 @@ var Antigravity = Profile{
 	Install: "Antigravity is not installed.\nInstall its CLI with: curl -fsSL https://antigravity.google/cli/install.sh | bash\nor set agy_path in engine.json.",
 	SignIn:  "Antigravity is signed out. Run agy in Terminal to sign in.",
 	// agy's own modes, as `session/new` lists them; it refuses yolo, and
-	// skips its asking only for a process started so.
+	// skips its asking only for a process started so. Approve for me is
+	// its auto mode, which approves edits and safe commands and asks
+	// before irreversible ones; a session that doesn't list auto runs in
+	// accept-edits, which approves only edits.
 	Access: provider.Grants{
 		api.AccessAsk:       {Mode: "default"},
-		api.AccessAutoEdits: {Mode: "accept-edits"},
+		api.AccessAutoEdits: {Mode: "auto", Else: "accept-edits"},
 		api.AccessFull:      {Args: []string{"--dangerously-skip-permissions"}},
 	},
-	// agy 1.5.14 as `agy acp` ran rm under a command(rm) deny rule at
-	// Full access, and asked at Ask, where `agy -p` denied it at both.
-	RulesIgnored: true,
 	// agy 1.5.14 answered two turns of a session with 22225 and 11858.
 	TurnUsage: true,
 	SignedOut: []string{

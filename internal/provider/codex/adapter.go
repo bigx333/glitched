@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"glitched/internal/api"
@@ -45,6 +46,10 @@ type Adapter struct {
 	catalog   provider.Info
 	catalogOf error
 	until     time.Time
+
+	// noAuto is why Codex last kept a thread's approvals with the user at
+	// Approve for me, "" since one took its auto-review.
+	noAuto atomic.Pointer[string]
 }
 
 // keepIdle and keepMax are how long a thread's app-server waits for its
@@ -112,6 +117,14 @@ func (a *Adapter) Binary() (string, error) {
 // efforts each runs at. It sends no prompt. It answers from the last
 // probe while that stands.
 func (a *Adapter) Describe(ctx context.Context) (provider.Info, error) {
+	info, err := a.described(ctx)
+	if s := a.noAuto.Load(); s != nil && err == nil {
+		info.NoAuto = *s
+	}
+	return info, err
+}
+
+func (a *Adapter) described(ctx context.Context) (provider.Info, error) {
 	a.cmu.Lock()
 	defer a.cmu.Unlock()
 	if time.Now().Before(a.until) {
@@ -183,6 +196,13 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		if err != nil {
 			p.discard()
 			return nil, err
+		}
+		if levels[spec.Access].reviewer == autoReview {
+			refused := ""
+			if p.reviewer != autoReview {
+				refused = "Codex " + p.version + " kept the thread's approvals with you, not its auto-review"
+			}
+			a.noAuto.Store(&refused)
 		}
 	}
 	g := newAgent(spec, p, keep)

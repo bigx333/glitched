@@ -331,6 +331,9 @@ func (f *fake) modes() *acp.SessionModeState {
 	defer f.mu.Unlock()
 	s := &acp.SessionModeState{CurrentModeId: acp.SessionModeId(f.mode), AvailableModes: []acp.SessionMode{}}
 	for _, m := range Modes {
+		if m == "auto" && f.is("no-auto") {
+			continue
+		}
 		s.AvailableModes = append(s.AvailableModes, acp.SessionMode{Id: acp.SessionModeId(m), Name: m})
 	}
 	return s

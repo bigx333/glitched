@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"glitched/internal/api"
@@ -39,6 +40,9 @@ type Adapter struct {
 
 	once sync.Once
 	pool *park.Pool[*proc]
+	// noAuto is why Claude Code last refused its auto mode, "" since one
+	// took it.
+	noAuto atomic.Pointer[string]
 }
 
 // keepIdle and keepMax are how long a thread's claude waits for its next
@@ -83,7 +87,11 @@ func (a *Adapter) Describe(ctx context.Context) (provider.Info, error) {
 		return provider.Info{}, fmt.Errorf("Claude Code %s doesn't say what models the account runs", r.Version)
 	}
 	bin, _ := a.binary()
-	return provider.Info{Name: "claude", Version: r.Version, Models: r.models(), Path: bin}, nil
+	info := provider.Info{Name: "claude", Version: r.Version, Models: r.models(), Path: bin}
+	if s := a.noAuto.Load(); s != nil {
+		info.NoAuto = *s
+	}
+	return info, nil
 }
 
 // Open runs the run on the thread's claude: the one its last run left,
@@ -119,6 +127,14 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	}
 	if err != nil {
 		return nil, err
+	}
+	if g := grants[spec.Access]; g.Else != "" {
+		refused, err := p.switchMode(ctx, g)
+		if err != nil {
+			p.Close(context.Background())
+			return nil, err
+		}
+		a.noAuto.Store(&refused)
 	}
 	return newAgent(spec, p, keep), nil
 }
@@ -260,9 +276,13 @@ func mcpConfig(s provider.MCPServer) string {
 }
 
 // grants are Claude Code's permission modes for Glitched's levels.
+// Approve for me is its auto mode, where its own classifier approves what
+// is safe and asks for the rest. A claude that can't run it, for its
+// settings or its model, starts in default instead and refuses a switch
+// to auto; it then runs in acceptEdits, as before auto.
 var grants = provider.Grants{
 	api.AccessAsk:       {Mode: "default"},
-	api.AccessAutoEdits: {Mode: "acceptEdits"},
+	api.AccessAutoEdits: {Mode: "auto", Else: "acceptEdits"},
 	api.AccessFull:      {Mode: "bypassPermissions"},
 }
 

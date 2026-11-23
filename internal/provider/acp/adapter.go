@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -42,6 +43,10 @@ type Adapter struct {
 	catalog   provider.Info
 	catalogOf error
 	until     time.Time
+
+	// noAuto is why the agent's session last didn't offer the mode an
+	// access level runs in, "" since one did.
+	noAuto atomic.Pointer[string]
 }
 
 // keepIdle and keepMax are how long a thread's agent waits for its next
@@ -123,6 +128,14 @@ func isExecutable(path string) bool {
 // efforts each runs at, as a new session of the agent's lists them. It
 // sends no prompt. It answers from the last probe while that stands.
 func (a *Adapter) Describe(ctx context.Context) (provider.Info, error) {
+	info, err := a.described(ctx)
+	if s := a.noAuto.Load(); s != nil && err == nil {
+		info.NoAuto = *s
+	}
+	return info, err
+}
+
+func (a *Adapter) described(ctx context.Context) (provider.Info, error) {
 	a.cmu.Lock()
 	defer a.cmu.Unlock()
 	if time.Now().Before(a.until) {
@@ -158,7 +171,7 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 	if p.caps.close {
 		p.conn.CloseSession(ctx, acpsdk.CloseSessionRequest{SessionId: p.session})
 	}
-	return provider.Info{Name: a.Profile.Name, Version: p.version, Models: models, Path: bin, RulesIgnored: a.Profile.RulesIgnored}, nil
+	return provider.Info{Name: a.Profile.Name, Version: p.version, Models: models, Path: bin}, nil
 }
 
 // Open runs the run on the thread's agent: the one its last run left,
@@ -186,9 +199,16 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		p.discard()
 		ok = false
 	}
-	mode := a.Profile.Access[spec.Access].Mode
+	grant := a.Profile.Access[spec.Access]
+	configure := func() error {
+		refused, err := p.configure(ctx, spec.Model, grant)
+		if err == nil && grant.Else != "" {
+			a.noAuto.Store(&refused)
+		}
+		return err
+	}
 	if ok {
-		err = p.configure(ctx, spec.Model, mode)
+		err = configure()
 		if p.halted.Load() {
 			p.discard()
 			ok = false
@@ -205,7 +225,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 			p.discard()
 			return nil, err
 		}
-		if err := p.configure(ctx, spec.Model, mode); err != nil {
+		if err := configure(); err != nil {
 			return nil, a.refused(p, keep, err)
 		}
 	}

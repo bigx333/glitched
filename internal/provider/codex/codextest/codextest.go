@@ -276,7 +276,7 @@ func (f *fake) take(m message, raw []byte) {
 		f.thread = p.ThreadID
 		f.spent = 500
 		f.mu.Unlock()
-		f.reply(m.ID, map[string]any{"thread": map[string]any{"id": p.ThreadID}, "model": "gpt-6.2-sol"})
+		f.reply(m.ID, f.reviewed(m.Params, map[string]any{"thread": map[string]any{"id": p.ThreadID}, "model": "gpt-6.2-sol"}))
 	case "thread/start":
 		var p struct {
 			Config struct {
@@ -290,7 +290,7 @@ func (f *fake) take(m message, raw []byte) {
 		thread := f.thread
 		os.WriteFile(f.rollout(thread), nil, 0o600)
 		f.mu.Unlock()
-		f.reply(m.ID, map[string]any{"thread": map[string]any{"id": thread}, "model": "gpt-6.2-sol"})
+		f.reply(m.ID, f.reviewed(m.Params, map[string]any{"thread": map[string]any{"id": thread}, "model": "gpt-6.2-sol"}))
 		f.notify("thread/started", map[string]any{"thread": map[string]any{"id": thread}})
 		f.notify("mcpServer/startupStatus/updated", map[string]any{"name": "glitched", "status": "starting"})
 	case "turn/start":
@@ -344,6 +344,23 @@ func (f *fake) take(m message, raw []byte) {
 	default:
 		f.refuse(m.ID, -32601, "unsupported method "+m.Method)
 	}
+}
+
+// reviewed is a thread's start or resume answer, with the reviewer of
+// approvals the thread took: the one asked, but the user's in place of
+// auto-review for an account without it, and none from a Codex too old
+// to say.
+func (f *fake) reviewed(params json.RawMessage, answer map[string]any) map[string]any {
+	var p struct{ ApprovalsReviewer string }
+	json.Unmarshal(params, &p)
+	switch {
+	case f.scenario == "old-codex":
+	case f.scenario == "no-auto" && p.ApprovalsReviewer == "auto_review":
+		answer["approvalsReviewer"] = "user"
+	default:
+		answer["approvalsReviewer"] = p.ApprovalsReviewer
+	}
+	return answer
 }
 
 func (f *fake) ids() (thread, turn string) {

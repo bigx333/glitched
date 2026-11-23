@@ -418,7 +418,7 @@ func TestDescribeListsModelsAndEfforts(t *testing.T) {
 		want := provider.Info{Name: "Antigravity", Version: "9.9.9", Models: []provider.Model{
 			{ID: "fake-pro", Name: "Fake Pro", Efforts: []provider.Effort{{ID: "low", Label: "Low"}, {ID: "high", Label: "High"}}},
 			{ID: "fake-flash", Name: "Fake Flash"},
-		}, Path: a.Path, RulesIgnored: true}
+		}, Path: a.Path}
 		got, _ := json.Marshal(info)
 		wantJSON, _ := json.Marshal(want)
 		if string(got) != string(wantJSON) {
