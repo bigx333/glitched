@@ -496,3 +496,45 @@ func TestALockedWorktreeStaysWhateverItsPath(t *testing.T) {
 		t.Fatal("a refused delete of a locked worktree deleted the thread")
 	}
 }
+
+// Delete asks git to remove nothing when the thread's worktree isn't at
+// its path any more, though git still registers another checkout there.
+func TestAWorktreeGoneFromItsPathLeavesWhatGitRegistersThere(t *testing.T) {
+	w := serveWorktrees(t)
+	project := repo(t)
+	thread := api.NewID()
+	submit(t, w.h, thread, inWorktree(project, ""))
+	th := until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
+	gitIn(t, project, "worktree", "move", th.Workspace, filepath.Join(t.TempDir(), "moved"))
+	gitIn(t, project, "worktree", "add", "-q", "-b", "theirs", th.Workspace)
+	os.WriteFile(filepath.Join(th.Workspace, "staged.txt"), []byte("theirs\n"), 0o644)
+	gitIn(t, th.Workspace, "add", "staged.txt")
+	aside := filepath.Join(t.TempDir(), "aside")
+	if err := os.Rename(th.Workspace, aside); err != nil {
+		t.Fatal(err)
+	}
+	submit(t, w.h, thread, api.ThreadDelete{RemoveWorktree: true})
+	if got := gitIn(t, aside, "show", ":staged.txt"); got != "theirs" {
+		t.Fatalf("the other checkout's staged file is %q", got)
+	}
+}
+
+// A copy of a moved worktree put back at its path is not the worktree git
+// registers, so Delete refuses it before it deletes the thread.
+func TestACopyOfAMovedWorktreeIsRefused(t *testing.T) {
+	w := serveWorktrees(t)
+	project := repo(t)
+	thread := api.NewID()
+	submit(t, w.h, thread, inWorktree(project, ""))
+	th := until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
+	moved := filepath.Join(t.TempDir(), "moved")
+	gitIn(t, project, "worktree", "move", th.Workspace, moved)
+	if out, err := osexec.Command("cp", "-R", moved, th.Workspace).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadDelete{RemoveWorktree: true}})
+	refusal(t, err, "is no longer the thread's worktree")
+	if view(t, w.h, thread).Deleted {
+		t.Fatal("a refused delete deleted the thread")
+	}
+}

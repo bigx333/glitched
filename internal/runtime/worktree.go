@@ -201,7 +201,8 @@ func (h *Host) createInWorktree(ctx context.Context, c api.Command, b api.Thread
 const ownerFile = "glitched-thread"
 
 // ownedBy is whether dir is a worktree of the repository whose git folder
-// is common, made for thread, and its own git folder.
+// is common, made for thread and registered by git at dir, and its own
+// git folder.
 func ownedBy(ctx context.Context, dir, common string, thread api.ID) (string, bool) {
 	top, err := git(ctx, dir, "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -211,7 +212,9 @@ func ownedBy(ctx context.Context, dir, common string, thread api.ID) (string, bo
 	theirs, _ := git(ctx, dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	real, _ := filepath.EvalSymlinks(dir)
 	owner, _ := os.ReadFile(filepath.Join(own, ownerFile))
-	return own, top == real && theirs == common && string(owner) == thread.String()
+	at, _ := os.ReadFile(filepath.Join(own, "gitdir"))
+	registered, _ := filepath.EvalSymlinks(filepath.Dir(strings.TrimSpace(string(at))))
+	return own, top == real && theirs == common && registered == real && string(owner) == thread.String()
 }
 
 // deleteInWorktree deletes the thread c names and, once the delete
@@ -247,7 +250,8 @@ func (h *Host) deleteInWorktree(ctx context.Context, c api.Command) (api.Receipt
 		return refuse("its project's repository at %s can't be read, so the worktree can't be told apart from another", t.Project)
 	}
 	// ours is whether dir is still the worktree made for the thread, in
-	// its project's repository and on its branch, or gone.
+	// its project's repository and on its branch, or gone, in which case
+	// git is never asked to remove what it registered there.
 	ours := func(ctx context.Context) bool {
 		if _, err := os.Stat(dir); err != nil {
 			return true
@@ -269,11 +273,12 @@ func (h *Host) deleteInWorktree(ctx context.Context, c api.Command) (api.Receipt
 		return r, err
 	}
 	ctx = context.WithoutCancel(ctx)
-	if !ours(ctx) {
+	if _, err := os.Stat(dir); err != nil {
+		slog.Info("runtime: the deleted thread's worktree was already gone", "thread", c.Target, "worktree", dir)
+	} else if !ours(ctx) {
 		slog.Warn("runtime: the deleted thread's worktree stays: another took its place", "thread", c.Target, "worktree", dir)
 		return r, nil
-	}
-	if _, err := git(ctx, common, "worktree", "remove", "--force", dir); err != nil {
+	} else if _, err := git(ctx, common, "worktree", "remove", "--force", dir); err != nil {
 		slog.Warn("runtime: the deleted thread's worktree stays", "thread", c.Target, "worktree", dir, "err", err)
 		return r, nil
 	}
