@@ -494,7 +494,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 	case "markdown":
 		ui.Column(kc).LineHeight(1.55).Children(func() { markdown.View(c, n.Text, r.md) })
 	case "badge":
-		if n.Style == "pill" && len(n.Value) > 0 {
+		if n.Style == "pill" && len(n.Value) > 0 && string(n.Value) != "null" {
 			r.tip(c, meter(kc, n, st), n.Tooltip)
 			return
 		}

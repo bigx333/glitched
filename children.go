@@ -412,15 +412,19 @@ func usageBadge(u headerUsage) *widget.Node {
 	if u.Total == u.Tokens {
 		tip = "This thread's tokens " + fmtTokens(u.Tokens)
 	}
+	// In float64, as main.js counts, so both draw the same.
+	used, window := max(0, float64(c.Used)), float64(c.Window)
 	switch {
 	case c.Stale:
 		return &widget.Node{Type: "badge", Style: "pill", Text: "Compacted", Value: json.RawMessage("0"), Color: "$text.faint",
 			Tooltip: "Context compacted. Its size shows after the next reply.\n" + tip}
-	case c.Window == 0:
-		return &widget.Node{Type: "badge", Style: "pill", Text: contextTokens(c.Used) + " in context",
-			Tooltip: contextTokens(c.Used) + " tokens in context. Context limit not reported.\n" + tip}
+	case window <= 0:
+		return &widget.Node{Type: "badge", Style: "pill", Text: contextTokens(used) + " in context",
+			Tooltip: contextTokens(used) + " tokens in context. Context limit not reported.\n" + tip}
 	}
-	pct := (c.Used*100 + c.Window/2) / c.Window
+	// The color follows the share as the label rounds it, as bb's does,
+	// so a pill that says 75% is amber.
+	share, pct := used/window, math.Floor((used*100+math.Floor(window/2))/window)
 	color := ""
 	switch {
 	case pct >= 90:
@@ -428,25 +432,27 @@ func usageBadge(u headerUsage) *widget.Node {
 	case pct >= 75:
 		color = "$warning"
 	}
-	share := strconv.FormatFloat(math.Round(min(1, float64(c.Used)/float64(c.Window))*1e4)/1e4, 'f', -1, 64)
-	return &widget.Node{Type: "badge", Style: "pill", Text: fmt.Sprintf("%d%%", pct), Value: json.RawMessage(share), Color: color,
-		Tooltip: fmt.Sprintf("Context window %s / %s tokens, %d%% left\n", contextTokens(c.Used), contextTokens(c.Window), max(0, 100-pct)) + tip}
+	return &widget.Node{Type: "badge", Style: "pill", Text: num(pct) + "%", Value: json.RawMessage(num(math.Round(min(1, share)*1e4) / 1e4)), Color: color,
+		Tooltip: "Context window " + contextTokens(used) + " / " + contextTokens(window) + " tokens, " + num(max(0, 100-pct)) + "% left\n" + tip}
 }
+
+// num is n as JavaScript writes a whole number or a short fraction.
+func num(n float64) string { return strconv.FormatFloat(n, 'f', -1, 64) }
 
 // contextTokens is n as the meter writes it: whole under a thousand, else
 // in whole thousands, else in millions to a tenth, a half rounded up.
-func contextTokens(n int64) string {
-	switch k := (n + 500) / 1000; {
-	case n < 1000:
-		return strconv.FormatInt(n, 10)
-	case k < 1000:
-		return strconv.FormatInt(k, 10) + "k"
+func contextTokens(n float64) string {
+	if n < 1000 {
+		return num(n)
 	}
-	tenths := (n + 50000) / 100000
-	if tenths%10 == 0 {
-		return strconv.FormatInt(tenths/10, 10) + "m"
+	if k := math.Floor((n + 500) / 1000); k < 1000 {
+		return num(k) + "k"
 	}
-	return fmt.Sprintf("%d.%dm", tenths/10, tenths%10)
+	tenths := math.Floor((n + 50000) / 100000)
+	if math.Mod(tenths, 10) == 0 {
+		return num(tenths/10) + "m"
+	}
+	return num(math.Floor(tenths/10)) + "." + num(math.Mod(tenths, 10)) + "m"
 }
 
 // stillBlocked is whether a blocked report of child's, in t's transcript,
