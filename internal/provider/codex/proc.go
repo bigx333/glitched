@@ -73,16 +73,15 @@ type proc struct {
 	closing sync.Once
 
 	version string
-	// usage is what Codex last said the thread spent: a reading the same
-	// as that one's is no request since.
-	usage atomic.Pointer[tokenUsage]
 
 	mu     sync.Mutex
-	thread string          // Codex's id of the thread it runs
-	over   map[string]bool // Codex's ids of the turns its runs ended
-	run    *Agent          // the run it serves, if any
-	parked bool            // it waits for its thread's next run
-	spoke  bool            // it spoke while parked
+	usage  *tokenUsage      // what Codex last said the thread spent
+	peaks  map[string]int64 // the most each turn's readings said it had spent
+	thread string           // Codex's id of the thread it runs
+	over   map[string]bool  // Codex's ids of the turns its runs ended
+	run    *Agent           // the run it serves, if any
+	parked bool             // it waits for its thread's next run
+	spoke  bool             // it spoke while parked
 }
 
 var _ park.Process = (*proc)(nil)
@@ -371,10 +370,11 @@ func (p *proc) handle(m message) {
 		// What Codex spent between runs is no run's, and a reading it
 		// sends again in the next run is no news.
 		var u struct {
+			TurnID     string     `json:"turnId"`
 			TokenUsage tokenUsage `json:"tokenUsage"`
 		}
 		json.Unmarshal(m.Params, &u)
-		p.usage.Store(&u.TokenUsage)
+		p.reading(u.TurnID, u.TokenUsage, false)
 	case request:
 		p.quiet(m.Method)
 		p.conn.refuse(m.ID, -32601, "no turn is running")
@@ -612,4 +612,23 @@ func (p *proc) park() {
 	p.mu.Lock()
 	p.run, p.parked = nil, true
 	p.mu.Unlock()
+}
+
+// reading keeps u, turn's, as the thread's latest reading of what it
+// spent, and returns the one before, nil if none. A reading of a turn not
+// live that says no more than that turn's did before is one Codex sent
+// again: it is kept for nothing.
+func (p *proc) reading(turn string, u tokenUsage, live bool) *tokenUsage {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	prev := p.usage
+	if peak, seen := p.peaks[turn]; !live && seen && u.Total.Total <= peak {
+		return prev
+	}
+	if p.peaks == nil {
+		p.peaks = map[string]int64{}
+	}
+	p.peaks[turn] = max(p.peaks[turn], u.Total.Total)
+	p.usage = &u
+	return prev
 }
