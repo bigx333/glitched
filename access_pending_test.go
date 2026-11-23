@@ -226,3 +226,73 @@ func TestAChangeIsPendingBeforeTheEngineTakesIt(t *testing.T) {
 		t.Errorf("a lower effort chosen and not yet sent stands %d %q", p.standing, p.note)
 	}
 }
+
+// In a narrow window, the sidebar's Update control and the composer's
+// marked controls keep apart.
+func TestTheMarkedControlsKeepClearOfTheSidebarsUpdate(t *testing.T) {
+	h, _, _ := confirming(t, fake.Turn(true), nil)
+	h.until("the approval", func() bool { h.tt.Frame(); return len(h.a.current().View.Requests) == 1 })
+	h.configure(api.ThreadConfigure{Access: new(api.AccessFull), Effort: new("low")})
+	pending(h, "claude")
+	h.tt.SetSize(760, 860)
+	h.tt.Advance(time.Second)
+	update, ok := h.tt.Find("Update Claude")
+	if !ok {
+		t.Fatalf("no Update control: %q", h.tt.Texts())
+	}
+	for _, label := range []string{"Model", "Access"} {
+		r, ok := h.tt.Find(label)
+		if !ok {
+			t.Fatalf("no %s control: %q", label, h.tt.Texts())
+		}
+		if r.X < update.X+update.W && update.X < r.X+r.W && r.Y < update.Y+update.H && update.Y < r.Y+r.H {
+			t.Errorf("the %s control %+v overlaps the Update control %+v", label, r, update)
+		}
+	}
+	accessShot(t, h, "narrow-with-update")
+}
+
+// A turn whose provider confirmed a level other than the one it asked
+// for is named by what it runs, though another level is chosen since; and
+// an explicit effort chosen where the thread left it to its provider is
+// pending though the provider's shows as the same level.
+func TestAHeldTurnIsNamedByWhatItRuns(t *testing.T) {
+	h, d, id := confirming(t, fake.Turn(true), func(s provider.SessionSpec) []provider.Event {
+		return []provider.Event{provider.Granted{Access: api.AccessFull, Mode: "bypassPermissions"}}
+	})
+	h.until("the approval", func() bool { h.tt.Frame(); return len(h.a.current().View.Requests) == 1 })
+	h.configure(api.ThreadConfigure{Access: new(api.AccessAutoEdits)})
+	tipOn(t, h, accessAuto, "This turn is still running at "+accessFull)
+
+	r := h.a.current().View.Requests[0]
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.RequestRespond{Request: r.ID, Generation: r.Generation, Answer: json.RawMessage(`{"allow":true}`)}}); err != nil {
+		t.Fatal(err)
+	}
+	h.until("idle", func() bool { h.tt.Frame(); return !h.a.current().View.Live() })
+	h.configure(api.ThreadConfigure{Effort: new("")})
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: "Again.", Mode: api.StartNow}}); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the turn at the provider's effort", func() bool {
+		h.tt.Frame()
+		v := h.a.current().View
+		return len(v.Requests) == 1 && v.Turn != nil && v.Turn.Model.Effort == ""
+	})
+	r = h.a.current().View.Requests[0]
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.RequestRespond{Request: r.ID, Generation: r.Generation, Answer: json.RawMessage(`{"allow":true}`)}}); err != nil {
+		t.Fatal(err)
+	}
+	h.until("idle again", func() bool { h.tt.Frame(); return !h.a.current().View.Live() })
+	th := h.a.current()
+	if th.View.Model.Effort != "" {
+		t.Fatalf("the thread's effort is %q, want its provider's", th.View.Model.Effort)
+	}
+	h.a.show(h.a.threadChoice(th))
+	if p := h.a.modelPending(th); p.on() {
+		t.Fatalf("the provider's effort it ran at, shown as %q, stands %d", h.a.effort, p.standing)
+	}
+	h.a.effort = "medium"
+	if p := h.a.modelPending(th); !p.on() {
+		t.Errorf("an explicit Medium where the thread left its effort to its provider stands %d", p.standing)
+	}
+}

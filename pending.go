@@ -9,18 +9,18 @@ import (
 	"glitched/internal/api"
 )
 
-// pending is how a composer control's value stands for its thread against
+// choiceStanding is how a composer control's value stands for its thread against
 // what the thread's provider runs, and what its tooltip says of it: ""
 // while the value is in effect.
-type pending struct {
+type choiceStanding struct {
 	standing api.Standing
 	note     string
 }
 
-func (p pending) on() bool { return p.standing != api.InEffect }
+func (p choiceStanding) on() bool { return p.standing != api.InEffect }
 
 // short is whether the provider runs other than the value, or never took it.
-func (p pending) short() bool { return p.standing == api.Short || p.standing == api.Unapplied }
+func (p choiceStanding) short() bool { return p.standing == api.Short || p.standing == api.Unapplied }
 
 // providerName is the provider's family's name, as the picker shows it.
 func providerName(provider string) string {
@@ -55,8 +55,10 @@ func (a *app) chosenView(t thread) api.Thread {
 	if keyOfThread(v.Model.Provider, v.Model.Model) != a.model {
 		v.Model.Model = a.model.ID
 	}
+	// An effort the thread leaves to its provider is no explicit one,
+	// though it shows as the same level.
 	m, _ := a.modelOf(a.model)
-	if e := effortFor(m, a.effort); e != effortFor(m, v.Model.Effort) {
+	if e := effortFor(m, a.effort); v.Model.Effort == "" && a.effort != "" || v.Model.Effort != "" && e != effortFor(m, v.Model.Effort) {
 		v.Model.Effort = e
 	}
 	return v
@@ -64,18 +66,22 @@ func (a *app) chosenView(t thread) api.Thread {
 
 // accessPending is how the thread's access stands, as the composer shows
 // it. A draft's is in effect: nothing runs it yet.
-func (a *app) accessPending(t thread) pending {
+func (a *app) accessPending(t thread) choiceStanding {
 	if t.id().IsZero() {
-		return pending{}
+		return choiceStanding{}
 	}
 	v := a.chosenView(t)
-	p := pending{standing: v.AccessStanding()}
+	p := choiceStanding{standing: v.AccessStanding()}
 	name := providerName(v.Model.Provider)
 	switch p.standing {
 	case api.NextTurn:
 		p.note = "Applies on the next turn"
 	case api.Held:
-		p.note = "This turn is still running at " + accessLevelName(v.Turn.Access)
+		held := accessLevelName(v.Turn.Access)
+		if g := v.Confirmed.Access; g != nil && g.Run == v.Turn.Run {
+			held = shortAccessName(*g)
+		}
+		p.note = "This turn is still running at " + held
 	case api.Applying:
 		p.note = "Waiting for " + name + " to confirm it"
 	case api.Unapplied:
@@ -116,9 +122,9 @@ func (a *app) accessShown(t thread) (level, label string) {
 
 // modelPending is how the thread's model and effort stand, the model's
 // first: the button shows both.
-func (a *app) modelPending(t thread) pending {
+func (a *app) modelPending(t thread) choiceStanding {
 	if t.id().IsZero() {
-		return pending{}
+		return choiceStanding{}
 	}
 	v := a.chosenView(t)
 	name := providerName(v.Model.Provider)
@@ -138,7 +144,7 @@ func (a *app) modelPending(t thread) pending {
 		}
 		return effort
 	}
-	p := pending{standing: v.ModelStanding()}
+	p := choiceStanding{standing: v.ModelStanding()}
 	what := func(m api.ModelRef) string { return modelName(m) }
 	if !p.on() {
 		p.standing = v.EffortStanding()
@@ -148,7 +154,12 @@ func (a *app) modelPending(t thread) pending {
 	case api.NextTurn:
 		p.note = "Applies on the next turn"
 	case api.Held:
-		p.note = "This turn is still running " + what(v.Turn.Model)
+		held := v.Turn.Model
+		if g := v.Confirmed.Model; g != nil && g.Run == v.Turn.Run {
+			held.Model = g.Model
+			held.Effort = cmp.Or(g.Effort, held.Effort)
+		}
+		p.note = "This turn is still running " + what(held)
 	case api.Applying:
 		p.note = "Waiting for " + name + " to confirm it"
 	case api.Unapplied:
@@ -166,7 +177,7 @@ func (a *app) modelPending(t thread) pending {
 
 // tipOf is the tooltip of a control whose value stands as p: why it is
 // pending or short, else the control's own.
-func tipOf(p pending, own string) string {
+func tipOf(p choiceStanding, own string) string {
 	if p.on() {
 		return p.note
 	}
@@ -180,7 +191,7 @@ func tipOf(p pending, own string) string {
 // control's corner, which takes no room: muted while pending, breathing
 // while the provider applies it, amber where the provider runs something
 // else.
-func (a *app) unconfirmedMark(c *ui.Context, p pending) {
+func (a *app) unconfirmedMark(c *ui.Context, p choiceStanding) {
 	if !p.on() {
 		return
 	}
