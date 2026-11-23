@@ -83,7 +83,8 @@ func (a *app) newProject(e *client.Env, k projectKey) *project {
 // root, where all of them are one project.
 func (a *app) threadKey(t thread) projectKey {
 	ws := t.project()
-	if t.local() && filepath.Dir(ws) == a.scratchRoot() {
+	added := slices.ContainsFunc(a.added, func(p addedProject) bool { return p.Workspace == ws })
+	if t.local() && filepath.Dir(ws) == a.scratchRoot() && !added {
 		ws = a.scratchRoot()
 	}
 	return keyOf(t.env, ws)

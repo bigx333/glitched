@@ -139,7 +139,7 @@ func TestRemovingThreadsWithNoProjectLeavesTheirFolders(t *testing.T) {
 	h.until("the turns to end", func() bool {
 		a, _ := h.a.find(first.id())
 		b, _ := h.a.find(second.id())
-		return !a.View.Live() && !b.View.Live()
+		return a.View.LastTurn != nil && !a.View.Live() && b.View.LastTurn != nil && !b.View.Live()
 	})
 	h.tt.Advance(time.Second)
 	if err := h.tt.RightClick("First thing"); err != nil {
@@ -165,5 +165,66 @@ func TestRemovingThreadsWithNoProjectLeavesTheirFolders(t *testing.T) {
 	h.until("the threads removed", func() bool { _, ok := h.a.find(second.id()); return !ok })
 	if dirs := scratchFolders(t, state); len(dirs) != 2 {
 		t.Fatalf("the scratch root holds %q after the threads went, want both folders", dirs)
+	}
+}
+
+// Quick ask offers No project first, before any thread has none, and
+// starting there makes the thread its folder.
+func TestQuickAskOffersNoProjectFirst(t *testing.T) {
+	state := tempDir(t)
+	inbox(t, state)
+	h := start(t, state)
+	h.thread("SIP re-INVITE handling")
+	ps := h.a.localProjects()
+	if len(ps) == 0 || ps[0].name() != "No project" {
+		t.Fatalf("quick ask offers %v first, want No project", ps)
+	}
+	h.a.quick.project = 0
+	h.a.quick.query = "Rename the photos by date"
+	h.a.startQuickThread()
+	th := h.thread("Rename the photos by date")
+	if filepath.Dir(th.View.Workspace) != filepath.Join(state, "scratch") {
+		t.Fatalf("quick ask started in %q, want a folder of its own under the scratch root", th.View.Workspace)
+	}
+}
+
+// Until it's sent, a draft with no project has no folder: its terminal
+// opens in the home folder, not the scratch root, and plugins are told no
+// workspace.
+func TestADraftWithNoProjectShowsNoFolder(t *testing.T) {
+	state := tempDir(t)
+	h := start(t, state)
+	h.untilShown("the composer's workspace", "No project")
+	d := h.a.current()
+	if d.View.Workspace != filepath.Join(state, "scratch") {
+		t.Fatalf("the draft is in %q, want the scratch root", d.View.Workspace)
+	}
+	if ws := h.a.threadRecord(d).Workspace; ws != "" {
+		t.Fatalf("plugins see the draft's workspace as %q, want none", ws)
+	}
+	h.a.showTerminal = true
+	h.tt.Advance(time.Second)
+	if _, ok := h.a.shells[d.View.Workspace]; ok {
+		t.Fatal("a shell opened in the scratch root")
+	}
+}
+
+// A folder added as a project stays its own project, even under the
+// scratch root.
+func TestAnAddedFolderUnderTheScratchRootStaysItsOwnProject(t *testing.T) {
+	state := tempDir(t)
+	dir := filepath.Join(state, "scratch", "kept")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	was := chooseFolder
+	chooseFolder = func(*app) string { return dir }
+	t.Cleanup(func() { chooseFolder = was })
+	h := start(t, state)
+	h.a.addProject()
+	h.until("the draft in the added folder", func() bool { return h.a.current().View.Workspace == dir })
+	th := sendInDraft(h, "Keep me in the added folder")
+	if p := h.a.projectOf(th); p.noProject || p.key.workspace != dir {
+		t.Fatalf("the thread is in %q (no project %v), want the added folder's project", p.key.workspace, p.noProject)
 	}
 }
