@@ -14,12 +14,14 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"glitched/internal/mcp/mcptest"
+	"glitched/internal/skills/skillstest"
 )
 
 const (
@@ -93,6 +95,8 @@ type fake struct {
 	settings map[string]any
 
 	replay *replay
+	// extraRoots are the skill roots skills/extraRoots/set gave.
+	extraRoots []string
 	// glitched is the glitched MCP server thread/start configured.
 	glitched glitchedServer
 }
@@ -332,11 +336,27 @@ func (f *fake) take(m message, raw []byte) {
 		f.reply(m.ID, f.reviewed(m.Params, map[string]any{"thread": map[string]any{"id": thread}, "model": "gpt-6.2-sol"}))
 		f.notify("thread/started", map[string]any{"thread": map[string]any{"id": thread}})
 		f.notify("mcpServer/startupStatus/updated", map[string]any{"name": "glitched", "status": "starting"})
+	case "skills/extraRoots/set":
+		switch f.scenario {
+		case "no-skills-call":
+			f.refuse(m.ID, -32601, "unsupported method skills/extraRoots/set")
+			return
+		case "skills-refused":
+			f.refuse(m.ID, -32602, "extraRoots must be absolute")
+			return
+		}
+		var p struct{ ExtraRoots []string }
+		json.Unmarshal(m.Params, &p)
+		f.mu.Lock()
+		f.extraRoots = p.ExtraRoots
+		f.mu.Unlock()
+		f.reply(m.ID, map[string]any{})
 	case "turn/start":
 		var p struct {
 			Input []struct{ Text string } `json:"input"`
 		}
 		json.Unmarshal(m.Params, &p)
+		f.record("skills", f.skills())
 		f.mu.Lock()
 		f.turns++
 		n := f.turns
@@ -384,6 +404,20 @@ func (f *fake) take(m message, raw []byte) {
 	default:
 		f.refuse(m.ID, -32601, "unsupported method "+m.Method)
 	}
+}
+
+// skills are the skills a turn's Codex lists, as Codex finds them: its
+// own, the user's and the workspace's, by name, and those of the extra
+// roots it was given as extra:<name>.
+func (f *fake) skills() []string {
+	home, _ := os.UserHomeDir()
+	codexHome := cmp.Or(os.Getenv("CODEX_HOME"), filepath.Join(home, ".codex"))
+	seen := skillstest.Seen("", filepath.Join(home, ".agents", "skills"), filepath.Join(codexHome, "skills"), filepath.Join(f.cwd, ".agents", "skills"))
+	f.mu.Lock()
+	seen = append(seen, skillstest.Seen("extra:", f.extraRoots...)...)
+	f.mu.Unlock()
+	slices.Sort(seen)
+	return seen
 }
 
 // reviewed is a thread's start or resume answer, with what the thread
