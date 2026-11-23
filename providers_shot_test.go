@@ -36,8 +36,8 @@ func providersFixture(a *app, state string) {
 		return
 	}
 	a.models.reported["antigravity"] = agyModels
-	a.models.served["antigravity"] = transport.ProviderInfo{Name: "antigravity", Info: provider.Info{Name: "Antigravity", Version: "1.5.14", Models: agyModels, Path: filepath.Join(home, ".local/bin/agy")}}
-	if state == "two" || state == "gone" {
+	a.models.served["antigravity"] = transport.ProviderInfo{Name: "antigravity", Info: provider.Info{Name: "Antigravity", Version: "1.5.14", Models: agyModels, Path: filepath.Join(home, ".local/bin/agy"), RulesIgnored: true}}
+	if state == "two" || state == "gone" || state == "agy" {
 		return
 	}
 	a.models.reported["codex"] = []provider.Model{{ID: "gpt-5.5-codex", Name: "GPT-5.5 Codex"}, {ID: "gpt-5.5", Name: "GPT-5.5"}}
@@ -54,7 +54,7 @@ func TestProvidersShot(t *testing.T) {
 		t.Skip()
 	}
 	os.MkdirAll(out, 0o755)
-	for _, state := range []string{"one", "two", "four", "gone"} {
+	for _, state := range []string{"one", "two", "four", "gone", "agy"} {
 		a := offline(t)
 		providersFixture(a, state)
 		a.model, a.effort = modelKey{"claude", "claude-opus-5-5"}, "high"
@@ -86,6 +86,9 @@ func TestProvidersShot(t *testing.T) {
 				a.providersOpen["claude"] = true
 				if state == "four" {
 					a.providersOpen["claude"], a.providersOpen["codex"] = false, true
+				}
+				if state == "agy" {
+					a.providersOpen["claude"], a.providersOpen["antigravity"] = false, true
 				}
 			}
 			a.settings.theme = darkTheme.name
