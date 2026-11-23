@@ -7,6 +7,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
+	"glitched/internal/provider/acp/acptest"
 )
 
 // reports are the run's Granted and Ran, in order.
@@ -64,13 +65,43 @@ func TestARunReportsWhatItsAgentConfirmed(t *testing.T) {
 // Approve for me in a session without agy's auto mode is reported in the
 // mode it fell back to, with why.
 func TestApproveForMeFallingBackReportsTheFallback(t *testing.T) {
-	a, _ := fake(t, "no-auto")
+	t.Setenv(acptest.Offered, "default,accept-edits,plan")
+	a, _ := fake(t, "hi")
 	s := spec(t)
 	s.Access = api.AccessAutoEdits
 	got, _ := reported(t, a, s)
 	want := provider.Granted{Access: api.AccessAutoEdits, Mode: "accept-edits", Why: "Antigravity doesn't offer its auto mode"}
 	if len(got) == 0 || got[0] != want {
 		t.Fatalf("reported %+v, want %+v first", got, want)
+	}
+}
+
+// A thread that moves from Ask for approval to Approve for me and back
+// reports, on each run, the mode agy says it moved to, the fallback's
+// reason included, while the conversation goes on.
+func TestEachAccessChangeReportsItsMode(t *testing.T) {
+	for offered, auto := range map[string]provider.Granted{
+		"":                          {Access: api.AccessAutoEdits, Mode: "auto"},
+		"default,accept-edits,plan": {Access: api.AccessAutoEdits, Mode: "accept-edits", Why: "Antigravity doesn't offer its auto mode"},
+	} {
+		t.Setenv(acptest.Offered, offered)
+		a, _ := fake(t, "memory")
+		s := spec(t)
+		ask := provider.Granted{Access: api.AccessAsk, Mode: "default"}
+		for i, step := range []struct {
+			access api.Access
+			want   provider.Granted
+		}{{api.AccessAsk, ask}, {api.AccessAutoEdits, auto}, {api.AccessAsk, ask}} {
+			s.Access, s.Run, s.Generation = step.access, api.NewID(), s.Generation+1
+			g := open(t, a, s)
+			s.Session = g.(provider.Sessioned).Session()
+			do(t, g, provider.Start{Text: "hi"})
+			got := reports(turn(t, g))
+			closeRun(t, g)
+			if len(got) == 0 || got[0] != step.want {
+				t.Errorf("offered %q, run %d: reported %+v, want %+v first", offered, i+1, got, step.want)
+			}
+		}
 	}
 }
 
