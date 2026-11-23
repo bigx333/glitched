@@ -242,6 +242,11 @@ type app struct {
 	ended map[api.ID]time.Time
 	// questions are the picks on the question cards that wait.
 	questions map[api.ID]*questionForm
+	// credentials are the values typed on the credentials cards that wait,
+	// until they go to the engine.
+	credentials map[api.ID]*credentialsForm
+	// forgotten are the threads whose credentials were forgotten from here.
+	forgotten map[api.ID]bool
 	// notify shows a desktop notification: nil until the window is.
 	notify   func(mygo.NotificationOptions)
 	settings settings
@@ -717,6 +722,8 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		wind:           wind.New(rand.Uint32(), nil),
 		ended:          map[api.ID]time.Time{},
 		questions:      map[api.ID]*questionForm{},
+		credentials:    map[api.ID]*credentialsForm{},
+		forgotten:      map[api.ID]bool{},
 		showSidebar:    true,
 		sidebarWidth:   272,
 		collapsed:      map[string]bool{},

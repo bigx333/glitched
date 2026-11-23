@@ -104,15 +104,73 @@ func (m *Manager) respond(e *Env, thread, request api.ID, answer json.RawMessage
 	if th == nil {
 		return api.ID{}
 	}
-	var gen uint64
+	return m.submit(e, thread, api.RequestRespond{Request: request, Generation: th.generation(request), Answer: answer})
+}
+
+// generation is the run generation request belongs to, as the thread shows
+// it.
+func (th *Thread) generation(request api.ID) uint64 {
 	if i := slices.IndexFunc(th.View.Requests, func(r api.Request) bool { return r.ID == request }); i >= 0 {
-		gen = th.View.Requests[i].Generation
-	} else if th.Transcript != nil {
+		return th.View.Requests[i].Generation
+	}
+	if th.Transcript != nil {
 		if r := th.Transcript.request(request); r != nil {
-			gen = r.Generation
+			return r.Generation
 		}
 	}
-	return m.submit(e, thread, api.RequestRespond{Request: request, Generation: gen, Answer: answer})
+	return 0
+}
+
+// credentialer is an engine that keeps the credentials users give agents.
+type credentialer interface {
+	ProvideCredentials(ctx context.Context, p api.Provide) error
+	ForgetCredentials(ctx context.Context, thread api.ID) error
+}
+
+var errNoVault = errors.New("client: this engine keeps no credentials")
+
+// ProvideCredentials hands the values the user typed for a credentials
+// request to its thread's engine, which keeps them in the thread's vault
+// and answers the request with their names. Unlike a command, nothing of
+// it is kept here to retry: done gets how it went, on the UI thread.
+func (m *Manager) ProvideCredentials(e *Env, thread, request api.ID, values map[string]string, done func(error)) {
+	th := e.Threads[thread]
+	if th == nil {
+		done(api.ErrNotFound)
+		return
+	}
+	p := api.Provide{Thread: thread, Request: request, Generation: th.generation(request), Values: values}
+	m.credentials(e, done, func(ctx context.Context, c credentialer) error { return c.ProvideCredentials(ctx, p) })
+}
+
+// DeclineCredentials answers a credentials request with no values.
+func (m *Manager) DeclineCredentials(e *Env, thread, request api.ID) api.ID {
+	return m.respond(e, thread, request, json.RawMessage(`{}`))
+}
+
+// ForgetCredentials deletes the values thread's vault holds.
+func (m *Manager) ForgetCredentials(e *Env, thread api.ID, done func(error)) {
+	m.credentials(e, done, func(ctx context.Context, c credentialer) error { return c.ForgetCredentials(ctx, thread) })
+}
+
+func (m *Manager) credentials(e *Env, done func(error), call func(context.Context, credentialer) error) {
+	s := e.session
+	if s == nil {
+		done(errNoEngine)
+		return
+	}
+	c, ok := s.ep.(credentialer)
+	if !ok {
+		done(errNoVault)
+		return
+	}
+	ectx := e.ctx
+	m.wg.Go(func() {
+		ctx, cancel := context.WithTimeout(ectx, submitTimeout)
+		defer cancel()
+		err := call(ctx, c)
+		m.post(ectx, func() { done(err) })
+	})
 }
 
 func (m *Manager) SetDisposition(e *Env, thread api.ID, d api.Disposition) api.ID {
