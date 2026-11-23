@@ -60,6 +60,33 @@ func (m *Manager) Clone(e *Env, req api.CloneRequest, progress func(string), don
 	return cancel
 }
 
+// skillsTimeout bounds a read of a thread's skills, which a folder on a
+// hung network mount would otherwise hold.
+const skillsTimeout = 10 * time.Second
+
+// Skills is what Glitched gives the agent of thread on e's machine, by
+// that machine's engine; done gets it, or why not, on the UI thread.
+func (m *Manager) Skills(e *Env, thread api.ID, done func(api.SkillList, error)) {
+	s := e.session
+	if s == nil {
+		done(api.SkillList{}, errNoEngine)
+		return
+	}
+	k, ok := s.ep.(transport.Skills)
+	if !ok {
+		done(api.SkillList{}, ErrTooOld)
+		return
+	}
+	ectx := e.ctx
+	m.wg.Go(func() {
+		ctx, cancel := context.WithTimeout(ectx, skillsTimeout)
+		defer cancel()
+		list, err := k.Skills(ctx, api.SkillQuery{Thread: thread})
+		err = tooOld(err)
+		m.post(ectx, func() { done(list, err) })
+	})
+}
+
 // projectsOf is the engine e is connected to, as Projects.
 func projectsOf(e *Env) (transport.Projects, error) {
 	s := e.session

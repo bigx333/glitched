@@ -54,6 +54,9 @@ type Server struct {
 	// Projects lists the folders on the engine's machine and clones
 	// repositories onto it, for any client the server admits.
 	Projects Projects
+	// Skills says what skills Glitched gives a thread's agent, for any
+	// client the server admits.
+	Skills Skills
 	// Authorize admits a socket whose client proved, in the handshake, that
 	// it holds one of the keys Authorize knows. proved reports whether the
 	// proof was made with a key; Authorize asks it of every key it knows,
@@ -353,6 +356,12 @@ type Projects interface {
 	Clone(ctx context.Context, req api.CloneRequest, progress func(string)) (api.Cloned, error)
 }
 
+// Skills are what a client shows of the skills Glitched gives a thread's
+// agent on the engine's machine.
+type Skills interface {
+	Skills(ctx context.Context, q api.SkillQuery) (api.SkillList, error)
+}
+
 // cloneItem is one item of a projects.clone stream: a line the clone
 // printed, or, last, where it went.
 type cloneItem struct {
@@ -594,6 +603,9 @@ func (s *Server) methods() map[string]handler {
 		m["projects.clone"] = streamHandler(func(ctx context.Context, req api.CloneRequest) (source[cloneItem], error) {
 			return startClone(ctx, p, req), nil
 		})
+	}
+	if k := s.Skills; k != nil {
+		m["skills.list"] = callHandler(k.Skills)
 	}
 	if h := s.Hub; h != nil {
 		m["hub.append"] = callHandler(h.Append)
