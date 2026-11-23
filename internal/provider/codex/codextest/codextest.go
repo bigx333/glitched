@@ -255,6 +255,10 @@ func (f *fake) take(m message, raw []byte) {
 		f.stop = make(chan struct{}, 1)
 		f.active = f.scenario != "late-started"
 		f.mu.Unlock()
+		if f.scenario == "stale" && n == 2 {
+			thread, _ := f.ids()
+			f.notify("item/agentMessage/delta", map[string]any{"threadId": thread, "turnId": "turn-1", "itemId": "msg-turn-1", "delta": "old text"})
+		}
 		f.reply(m.ID, map[string]any{"turn": map[string]any{"id": turn, "status": "inProgress", "items": []any{}}})
 		go f.play(n, turn)
 	case "turn/interrupt":
@@ -350,6 +354,22 @@ func (f *fake) play(n int, turn string) {
 	}
 	f.started()
 	switch f.scenario {
+	case "stale":
+		if n == 2 {
+			d := decision(f.answer("item/commandExecution/requestApproval", map[string]any{"threadId": thread, "turnId": "turn-1", "itemId": "cmd-old", "command": "rm -rf old", "cwd": f.cwd, "startedAtMs": 1}))
+			f.message("msg-"+turn, "new text, old ask "+d)
+		} else {
+			f.message("msg-"+turn, "first turn")
+		}
+	case "network":
+		cmd := map[string]any{"type": "commandExecution", "id": "cmd-n", "command": "curl status.example", "cwd": f.cwd, "status": "inProgress", "commandActions": []any{}}
+		f.item("item/started", cmd)
+		d := decision(f.answer("item/commandExecution/requestApproval", map[string]any{"threadId": thread, "turnId": turn, "itemId": "cmd-n", "command": "curl status.example", "cwd": f.cwd, "reason": "check status", "startedAtMs": 1,
+			"networkApprovalContext": map[string]any{"host": "status.example", "protocol": "https"},
+			"availableDecisions":     []any{"accept", map[string]any{"acceptWithExecpolicyAmendment": map[string]any{"execpolicy_amendment": []any{"curl"}}}, "cancel"}}))
+		cmd["status"] = map[bool]string{true: "completed", false: "declined"}[d == "accept"]
+		f.item("item/completed", cmd)
+		f.message("msg-"+turn, "decision "+d)
 	case "two-messages":
 		f.message("msg-a", "first")
 		f.message("msg-b", "second")
@@ -385,13 +405,13 @@ func (f *fake) play(n int, turn string) {
 		call["status"] = "completed"
 		f.item("item/completed", call)
 		f.message("msg-"+turn, "used the tool")
-	case "question", "question-unshowable":
+	case "question", "question-unshowable", "question-fixed":
 		options := []any{map[string]any{"label": "Red", "description": "warm"}, map[string]any{"label": "Blue", "description": "cool"}}
 		if f.scenario == "question-unshowable" {
 			options = options[:1]
 		}
 		a := f.answer("item/tool/requestUserInput", map[string]any{"threadId": thread, "turnId": turn, "itemId": "q-1", "isBlocking": true, "autoResolutionMs": nil, "questions": []any{map[string]any{
-			"id": "color", "header": "Color", "question": "Which color?", "isOther": true, "isSecret": false, "options": options}}})
+			"id": "color", "header": "Color", "question": "Which color?", "isOther": f.scenario != "question-fixed", "isSecret": false, "options": options}}})
 		f.message("msg-"+turn, "answered "+string(a.Result))
 	case "elicitation", "elicitation-fields":
 		schema := map[string]any{"type": "object", "properties": map[string]any{}}

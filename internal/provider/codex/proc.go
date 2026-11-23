@@ -74,10 +74,11 @@ type proc struct {
 	version string
 
 	mu     sync.Mutex
-	thread string // Codex's id of the thread it runs
-	run    *Agent // the run it serves, if any
-	parked bool   // it waits for its thread's next run
-	spoke  bool   // it spoke while parked
+	thread string          // Codex's id of the thread it runs
+	over   map[string]bool // Codex's ids of the turns its runs ended
+	run    *Agent          // the run it serves, if any
+	parked bool            // it waits for its thread's next run
+	spoke  bool            // it spoke while parked
 }
 
 var _ park.Process = (*proc)(nil)
@@ -132,6 +133,11 @@ func launch(ctx context.Context, bin, dir, mark string) (*proc, error) {
 	p.conn = newConn(tap{inW, wire, ">> "}, p.handle)
 	go p.watchStderr(errR, wire)
 	go p.readStdout(outR, wire)
+	go func() {
+		<-p.heard
+		<-p.conn.Done()
+		wire.Close()
+	}()
 
 	// A call ends with ctx, but app-server would not: it is stopped.
 	stop := context.AfterFunc(ctx, p.halt)
@@ -250,10 +256,11 @@ func (p *proc) startThread(ctx context.Context, spec provider.SessionSpec) error
 		}
 	}
 	params := map[string]any{
-		"cwd":            spec.Workspace,
-		"approvalPolicy": askPolicy,
-		"sandbox":        "read-only",
-		"config":         map[string]any{"mcp_servers": servers},
+		"cwd":               spec.Workspace,
+		"approvalPolicy":    askPolicy,
+		"approvalsReviewer": "user",
+		"sandbox":           "read-only",
+		"config":            map[string]any{"mcp_servers": servers},
 	}
 	if spec.Model.Model != "" {
 		params["model"] = spec.Model.Model
@@ -339,6 +346,24 @@ func (p *proc) quiet(what string) {
 	p.halt()
 }
 
+// ended records that turn is over: what Codex says of it after reaches
+// no later run.
+func (p *proc) ended(turn string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.over == nil {
+		p.over = map[string]bool{}
+	}
+	p.over[turn] = true
+}
+
+// isOver is whether turn is one a run of p's ended.
+func (p *proc) isOver(turn string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.over[turn]
+}
+
 // retire keeps app-server from its thread's next run: it spoke of a turn
 // that is over.
 func (p *proc) retire(what string) {
@@ -397,7 +422,7 @@ func (p *proc) readStdout(stdout *os.File, wire io.Writer) {
 			}
 		}
 		if err != nil {
-			p.conn.end(errClosed)
+			p.conn.end()
 			return
 		}
 	}

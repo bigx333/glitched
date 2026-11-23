@@ -680,3 +680,141 @@ func TestATestCantRunTheRealCodex(t *testing.T) {
 	}()
 	guard("/bin/sh")
 }
+
+// What Codex says of a turn that ended reaches no later run on the same
+// app-server: an old ask is cancelled, unseen, and old text is dropped,
+// though both come before Codex names the new turn.
+func TestAnOldTurnReachesNoLaterRun(t *testing.T) {
+	a, log := fake(t, "stale")
+	s := spec(t)
+	var second []provider.Event
+	for i := range 2 {
+		s.Run = api.NewID()
+		g := open(t, a, s)
+		do(t, g, provider.Start{Text: "go"})
+		events := turn(t, g)
+		closeRun(t, g)
+		if i == 1 {
+			second = events
+		}
+	}
+	for _, e := range second {
+		if _, ok := e.(provider.RequestOpened); ok {
+			t.Fatalf("the second run showed the first turn's ask: %+v", e)
+		}
+	}
+	if got := text(second); got != "new text, old ask cancel" {
+		t.Errorf("the second run said %q", got)
+	}
+	if got := answers(t, log); len(got) != 1 || compact(got[0]) != `{"decision":"cancel"}` {
+		t.Errorf("answered %s", got)
+	}
+}
+
+// A command that asks for more than the sandbox gives shows what on the
+// card, and Deny is the denial Codex offers.
+func TestACommandShowsTheAccessItAsksFor(t *testing.T) {
+	b, _, answer := approvalRun(t, "network", false)
+	if !strings.Contains(b["args"], "status.example") {
+		t.Errorf("card %+v", b)
+	}
+	if answer != `{"decision":"cancel"}` {
+		t.Errorf("denied with %s", answer)
+	}
+}
+
+// Fast is Codex's priority tier, and off is no tier, on every turn.
+func TestFastIsCodexsPriorityTier(t *testing.T) {
+	a, log := fake(t, "hi")
+	s := spec(t)
+	for _, fast := range []bool{true, false} {
+		s.Run, s.Model.Fast = api.NewID(), fast
+		g := open(t, a, s)
+		do(t, g, provider.Start{Text: "hi"})
+		turn(t, g)
+		closeRun(t, g)
+	}
+	var tiers []string
+	for _, p := range sent(t, log, "turn/start") {
+		var v struct {
+			ServiceTier       *string `json:"serviceTier"`
+			ApprovalsReviewer string  `json:"approvalsReviewer"`
+		}
+		json.Unmarshal(p, &v)
+		if !strings.Contains(string(p), `"serviceTier"`) || v.ApprovalsReviewer != "user" {
+			t.Errorf("turn/start %s", p)
+		}
+		tier := "null"
+		if v.ServiceTier != nil {
+			tier = *v.ServiceTier
+		}
+		tiers = append(tiers, tier)
+	}
+	if strings.Join(tiers, " ") != "priority null" {
+		t.Errorf("tiers %q", tiers)
+	}
+}
+
+// A question that takes only Codex's own options refuses an answer of the
+// user's own, and Codex is told nothing of it.
+func TestAFixedQuestionRefusesItsOwnAnswer(t *testing.T) {
+	a, log := fake(t, "question-fixed")
+	g := open(t, a, spec(t))
+	do(t, g, provider.Start{Text: "go"})
+	_, req := until[provider.RequestOpened](t, g)
+	if err := g.Do(context.Background(), provider.Respond{Request: req.ID, Answer: json.RawMessage(`{"answers":[{"other":"Orange"}]}`)}); err == nil {
+		t.Fatal("an answer of the user's own was taken")
+	}
+	do(t, g, provider.Respond{Request: req.ID, Answer: json.RawMessage(`{"answers":[{"picked":["Red"]}]}`)})
+	turn(t, g)
+	closeRun(t, g)
+	if got := answers(t, log); len(got) != 1 || compact(got[0]) != `{"answers":{"color":{"answers":["Red"]}}}` {
+		t.Errorf("answered %s", got)
+	}
+}
+
+// An answer whose context ended before it went reaches Codex not at all,
+// and the card still waits on one.
+func TestAnAnswerTooLateIsNotSent(t *testing.T) {
+	a, log := fake(t, "command")
+	g := open(t, a, spec(t))
+	do(t, g, provider.Start{Text: "go"})
+	_, req := until[provider.RequestOpened](t, g)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := g.Do(ctx, provider.Respond{Request: req.ID, Answer: json.RawMessage(`{"allow":true}`)}); err == nil {
+		t.Fatal("a cancelled answer was taken")
+	}
+	do(t, g, provider.Respond{Request: req.ID, Answer: json.RawMessage(`{"allow":false}`)})
+	turn(t, g)
+	closeRun(t, g)
+	if got := answers(t, log); len(got) != 1 || compact(got[0]) != `{"decision":"decline"}` {
+		t.Errorf("answered %s", got)
+	}
+}
+
+// Nothing waits on app-server reading what it is sent: a reply to one
+// that stopped reading returns at once.
+func TestSendingNeverWaitsOnAppServer(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	c := newConn(w, func(message) {})
+	defer c.end()
+	big := strings.Repeat("x", 1<<20)
+	done := make(chan struct{})
+	go func() {
+		for range 4 {
+			c.reply(json.RawMessage("1"), big)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a reply waited on a pipe nobody reads")
+	}
+}
