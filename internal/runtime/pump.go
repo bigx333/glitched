@@ -82,6 +82,15 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				}
 				commit(engine.Work{Item: api.WorkItem{Run: run, Item: ev.Item, Kind: ev.Kind, Title: redact(ev.Title), Status: ev.Status,
 					Path: redact(ev.Path), Exit: ev.Exit, Output: output}})
+			case provider.Plan:
+				// What could be the start of a credential stays held, as a
+				// timed flush keeps it: the plan reveals nothing that ends it.
+				flushSome(false)
+				steps := make([]api.PlanStep, len(ev.Steps))
+				for i, s := range ev.Steps {
+					steps[i] = api.PlanStep{Text: redact(s.Text), Status: s.Status}
+				}
+				commit(engine.Plan{Plan: api.PlanUpdated{Run: run, Steps: steps}})
 			case provider.Granted:
 				commit(engine.Granted{Run: run, Access: ev.Access, Mode: ev.Mode, Why: redact(ev.Why)})
 			case provider.Ran:

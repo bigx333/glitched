@@ -103,12 +103,14 @@ func TestAChildReportsBackToItsParent(t *testing.T) {
 }
 
 // A child's done report starts its parent's next turn, with what the child
-// said last, past its tool calls, and that turn's end starts no other.
+// said last, past its tool calls and plans, and that turn's end starts no
+// other.
 func TestAReportStartsItsParentsTurn(t *testing.T) {
 	ad := fake.New([]provider.Event{
 		provider.TextDelta{Text: "Looking at the tests."},
 		provider.Work{Item: "w", Kind: "command", Title: "go test ./...", Status: api.WorkCompleted},
 		provider.TextDelta{Text: "Added 9 table tests. All pass."},
+		provider.Plan{Steps: []api.PlanStep{{Text: "Write the tests", Status: api.PlanDone}}},
 	})
 	n := start(t, dbPath(t), ad)
 	parent := newThread(t, n.h)

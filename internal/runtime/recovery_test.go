@@ -43,6 +43,34 @@ func crashDuring(t *testing.T, path string, g *gated, a provider.Action, body fu
 	return thread
 }
 
+// A run's plans reach the log once each as its agent said them, across a
+// crash while it waits on the user, and the log folds to the projection
+// the store holds.
+func TestPlansOutliveACrash(t *testing.T) {
+	plan := func(first, second api.PlanStatus) provider.Plan {
+		return provider.Plan{Steps: []api.PlanStep{{Text: "Read main.go", Status: first}, {Text: "Edit main.go", Status: second}}}
+	}
+	script := append([]provider.Event{plan(api.PlanActive, api.PlanPending)}, fake.Turn(true)...)
+	script = append(script, plan(api.PlanDone, api.PlanDone))
+	path, g := dbPath(t), newGated(script)
+	thread := crashDuring(t, path, g, provider.Respond{}, func(n node, thread api.ID) {
+		respond(t, n.h, thread, until(t, n.h, thread, "approval", waiting).Requests[0])
+	})
+	n := start(t, path, g)
+	until(t, n.h, thread, "turn end", idle)
+	var got [][]api.PlanStep
+	for _, e := range events(t, n.h, thread) {
+		if b, _ := e.Decode(); e.Type == "plan.updated" {
+			got = append(got, b.(api.PlanUpdated).Steps)
+		}
+	}
+	want := [][]api.PlanStep{plan(api.PlanActive, api.PlanPending).Steps, plan(api.PlanDone, api.PlanDone).Steps}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("the log's plans %+v, want %+v", got, want)
+	}
+	assertReplay(t, n.st)
+}
+
 func TestCrashWithALeasedEffect(t *testing.T) {
 	t.Run("steer becomes uncertain and is never sent again", func(t *testing.T) {
 		path, g := dbPath(t), newGated(fake.Turn(true))

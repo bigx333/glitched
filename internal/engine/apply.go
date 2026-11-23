@@ -42,6 +42,12 @@ func apply(t Thread, e Event) (Thread, error) {
 			t.UpdatedAt = e.At
 		}
 		return t, nil
+	case api.PlanUpdated:
+		// Transcript only, as a work item is.
+		if !t.silentRun(b.Run) {
+			t.UpdatedAt = e.At
+		}
+		return t, nil
 	case api.ThreadCreated:
 		if t.Exists() {
 			return t, &TransitionError{"thread", "created", "created"}

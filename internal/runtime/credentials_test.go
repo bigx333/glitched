@@ -315,6 +315,47 @@ func TestAContextReportKeepsCredentialsOut(t *testing.T) {
 	}
 }
 
+// A plan's steps are shown redacted of the thread's credentials, and a
+// plan between two halves of one in the text keeps its start held.
+func TestAPlanKeepsCredentialsOut(t *testing.T) {
+	st, err := store.Open(dbPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	vault := secrets.New(t.TempDir())
+	ad := fake.New([]provider.Event{
+		provider.TextDelta{Text: "Exporting " + probe[:8]},
+		provider.Plan{Steps: []api.PlanStep{{Text: "Export GLX_PROBE=" + probe, Status: api.PlanActive}, {Text: "Deploy"}}},
+		provider.TextDelta{Text: probe[8:] + " now."},
+	})
+	h, err := runtime.New(ctx, st, provider.Mux{"fake": ad}, runtime.WithVault(vault))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Kill()
+	thread := newThread(t, h)
+	if err := vault.Put(thread, map[string]string{"GLX_PROBE": probe}); err != nil {
+		t.Fatal(err)
+	}
+	submit(t, h, thread, dispatch("go", api.StartNow))
+	until(t, h, thread, "the turn", idle)
+	evs := events(t, h, thread)
+	if text := transcript(t, evs); strings.Contains(text, probe) || !strings.HasPrefix(text, "Exporting ") {
+		t.Errorf("the transcript %q, want the credential redacted", text)
+	}
+	var plans []api.PlanUpdated
+	for _, e := range evs {
+		if b, _ := e.Decode(); e.Type == "plan.updated" {
+			plans = append(plans, b.(api.PlanUpdated))
+		}
+	}
+	if len(plans) != 1 || len(plans[0].Steps) != 2 || strings.Contains(plans[0].Steps[0].Text, probe) ||
+		!strings.HasPrefix(plans[0].Steps[0].Text, "Export GLX_PROBE=") || plans[0].Steps[1] != (api.PlanStep{Text: "Deploy"}) {
+		t.Fatalf("the log's plans %+v, want the one plan with the credential redacted", plans)
+	}
+}
+
 // quickAsker is a provider whose agent asks for credentials through
 // glitched mcp before its Open returns, as a quick agent may while the
 // host is still recording the run's start.

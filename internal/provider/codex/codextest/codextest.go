@@ -650,6 +650,17 @@ func (f *fake) play(n int, turn, said string) {
 		f.message("msg-b", "second")
 	case "whole":
 		f.item("item/completed", map[string]any{"type": "agentMessage", "id": "msg-w", "text": "all at once"})
+	case "plan":
+		// update_plan, as Codex 0.171 reports it: the whole plan each
+		// time, and the plan's own item, which is no step.
+		step := func(text, status string) map[string]any { return map[string]any{"step": text, "status": status} }
+		f.notify("turn/plan/updated", map[string]any{"threadId": thread, "turnId": turn, "explanation": nil,
+			"plan": []any{step("Read the code", "inProgress"), step("Fix the bug", "pending")}})
+		f.item("item/started", map[string]any{"type": "plan", "id": "plan-1", "text": ""})
+		f.item("item/completed", map[string]any{"type": "plan", "id": "plan-1", "text": "- Read the code\n- Fix the bug"})
+		f.notify("turn/plan/updated", map[string]any{"threadId": thread, "turnId": turn, "explanation": "read it",
+			"plan": []any{step("Read the code", "completed"), step("Fix the bug", "inProgress")}})
+		f.message("msg-"+turn, "planned")
 	case "overflow":
 		f.mu.Lock()
 		f.spent = 258400

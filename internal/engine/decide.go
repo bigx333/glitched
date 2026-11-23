@@ -656,6 +656,10 @@ func (d *decision) observe(o Observation) error {
 		if isLive(o.Item.Run) {
 			return d.emit(o.Item)
 		}
+	case Plan:
+		if isLive(o.Plan.Run) {
+			return d.emit(o.Plan)
+		}
 	case Surfaced:
 		dup := index(d.t.Requests, func(r Request) bool { return r.Run == o.Run && r.Dedup == o.Dedup }) >= 0
 		if isLive(o.Run) && !dup && live.Silent {

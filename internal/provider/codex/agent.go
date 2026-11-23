@@ -342,6 +342,10 @@ func (g *Agent) notify(m message) {
 			Message string `json:"message"`
 		} `json:"error"`
 		TokenUsage tokenUsage `json:"tokenUsage"`
+		Plan       []struct {
+			Step   string `json:"step"`
+			Status string `json:"status"`
+		} `json:"plan"`
 	}
 	json.Unmarshal(m.Params, &n)
 	var turn struct {
@@ -418,6 +422,13 @@ func (g *Agent) notify(m message) {
 		}
 	case "item/agentMessage/delta":
 		g.textLocked(n.ItemID, n.Delta)
+	case "turn/plan/updated":
+		// Codex's update_plan: the whole plan, each time.
+		p := provider.Plan{Steps: make([]api.PlanStep, len(n.Plan))}
+		for i, s := range n.Plan {
+			p.Steps[i] = api.PlanStep{Text: s.Step, Status: provider.PlanStatus(s.Status)}
+		}
+		g.queueLocked(p)
 	case "item/started", "item/completed":
 		it := n.Item
 		if it.Type == "agentMessage" && m.Method == "item/completed" {

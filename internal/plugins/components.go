@@ -59,6 +59,7 @@ var Components = []Component{
 	{Name: "palette", Provides: "palette", Needs: "threads:read", Own: true, About: "The command palette's search field, its results, the actions and the threads it finds, and its keys. Glitched keeps the dialog of glass it sits in."},
 	{Name: "thread.header.breadcrumb", Provides: "headerBreadcrumb", Needs: "threads:read", Native: true, Requires: "thread.heading", About: "A child thread's way back up in the header, around its native thread.heading, the title: the threads above it, each the native thread.crumb Glitched draws."},
 	{Name: "thread.header.usage", Provides: "headerUsage", Needs: "threads:read", Native: true, About: "The header's pill of a thread's tokens, and with children, everything under it rolled up."},
+	{Name: "thread.header.plan", Provides: "headerPlan", Needs: "messages:read", Native: true, About: "The header's pill of the plan the thread's agent works to: how many of its steps are done, and the one it is at."},
 	{Name: "message.toolbar", Provides: "messageToolbar", Native: true, About: "The actions under a message, shown while it's pointed at: Copy, Edit & resend, Retry under a turn that failed or was stopped, plugins' commands and when the message was sent, each the native Glitched draws. Glitched keeps where the toolbar sits and when it shows."},
 	{Name: "approval.card", Locked: widget.Locked["approval.card"]},
 	{Name: "question.card", Locked: widget.Locked["question.card"]},

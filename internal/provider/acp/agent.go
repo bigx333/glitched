@@ -554,6 +554,13 @@ func (g *Agent) update(u acpsdk.SessionUpdate) {
 		if s.shown() {
 			g.queueLocked(s.work(g.spec.Workspace))
 		}
+	case u.Plan != nil:
+		// The whole plan, each time.
+		p := provider.Plan{Steps: make([]api.PlanStep, len(u.Plan.Entries))}
+		for i, e := range u.Plan.Entries {
+			p.Steps[i] = api.PlanStep{Text: e.Content, Status: provider.PlanStatus(string(e.Status))}
+		}
+		g.queueLocked(p)
 	case u.ToolCallUpdate != nil:
 		c := u.ToolCallUpdate
 		s := g.steps[c.ToolCallId]

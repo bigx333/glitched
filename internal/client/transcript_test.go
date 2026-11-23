@@ -67,6 +67,8 @@ func describe(e Entry) string {
 		return "work " + strings.Join(items, " ")
 	case *RequestEntry:
 		return words("request", e.Kind, requestStates[e.State], string(e.Answer), e.Reason)
+	case *PlanEntry:
+		return "plan " + planOf(e.Steps)
 	case *CompactionEntry:
 		state := "done"
 		if e.Running {
@@ -103,6 +105,25 @@ func expect(t *testing.T, tr *Transcript, want ...string) {
 	if got := lines(tr); !slices.Equal(got, want) {
 		t.Fatalf("transcript:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
 	}
+}
+
+var planMarks = map[api.PlanStatus]string{api.PlanPending: "[ ]", api.PlanActive: "[>]", api.PlanDone: "[x]"}
+
+func planOf(steps []api.PlanStep) string {
+	var out []string
+	for _, s := range steps {
+		out = append(out, planMarks[s.Status]+s.Text)
+	}
+	return strings.Join(out, " ")
+}
+
+func steps(spec ...string) []api.PlanStep {
+	var out []api.PlanStep
+	for _, s := range spec {
+		st := map[string]api.PlanStatus{"[ ]": api.PlanPending, "[>]": api.PlanActive, "[x]": api.PlanDone}[s[:3]]
+		out = append(out, api.PlanStep{Text: s[3:], Status: st})
+	}
+	return out
 }
 
 func work(run api.ID, item string, s api.WorkStatus) api.WorkItem {
@@ -151,6 +172,47 @@ func TestFoldInterleavesTextAndWorkInTheOrderTheyHappened(t *testing.T) {
 	}
 	if tr.Cursor != (api.Cursor{Log: testLog, Seq: uint64(len(evs) + 1)}) {
 		t.Fatalf("cursor %+v, want the last event's", tr.Cursor)
+	}
+}
+
+// A run's plans are one entry, where it first said one, holding the last;
+// the thread's plan is the latest, until it is cleared or its run ends
+// with every step done. The next run's plan is an entry of its own.
+func TestFoldKeepsEachRunsLatestPlan(t *testing.T) {
+	a, b := api.NewID(), api.NewID()
+	tr := play(slices.Concat(start(a, "go", 0), []api.EventBody{
+		api.PlanUpdated{Run: a, Steps: steps("[>]Read", "[ ]Fix")},
+		work(a, "read-1", api.WorkCompleted),
+		api.PlanUpdated{Run: a, Steps: steps("[x]Read", "[>]Fix")},
+		api.AssistantDelta{Run: a, Text: "Fixing."},
+	})...)
+	expect(t, tr,
+		`user "go" sent`,
+		`plan [x]Read [>]Fix`,
+		`work read-1:completed`,
+		`assistant "Fixing." streaming`,
+	)
+	if tr.Plan == nil || planOf(tr.Plan.Steps) != "[x]Read [>]Fix" || tr.Plan.Done() != 1 {
+		t.Fatalf("the thread's plan is %+v, want the run's latest, one of two done", tr.Plan)
+	}
+	next := 8
+	for i, ev := range slices.Concat([]api.EventBody{api.TurnEnded{Run: a, Outcome: api.OutcomeInterrupted}}, start(b, "more", 1),
+		[]api.EventBody{api.PlanUpdated{Run: b, Steps: steps("[x]Test")}}) {
+		tr.apply(event(next+i, ev))
+	}
+	if tr.Plan == nil || planOf(tr.Plan.Steps) != "[x]Test" || describe(tr.last()) != "plan [x]Test" {
+		t.Fatalf("after the next run's plan the thread's is %+v and its last entry %s, want the next run's in an entry of its own", tr.Plan, describe(tr.last()))
+	}
+	tr.apply(event(next+5, api.TurnEnded{Run: b, Outcome: api.OutcomeCompleted}))
+	if tr.Plan != nil {
+		t.Fatalf("a run that ended with its plan done leaves the thread's plan %+v, want none", tr.Plan)
+	}
+	cleared := play(slices.Concat(start(a, "go", 0), []api.EventBody{
+		api.PlanUpdated{Run: a, Steps: steps("[>]Read")},
+		api.PlanUpdated{Run: a},
+	})...)
+	if cleared.Plan != nil || describe(cleared.Entries[1]) != "plan [>]Read" {
+		t.Fatalf("a cleared plan leaves the thread's %+v and the entry %s, want none and the entry as it last said", cleared.Plan, describe(cleared.Entries[1]))
 	}
 }
 
