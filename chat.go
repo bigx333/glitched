@@ -1570,6 +1570,7 @@ func (a *app) sendText(t thread, text, about string) bool {
 		if id = a.backend.Create(t.env, ws, title, a.modelRef(), accessOf[a.access], a.newWorktree(t)); id.IsZero() {
 			return false
 		}
+		a.rememberProject(a.threadKey(t))
 		a.worktree, a.repos = worktreeChoice{}, nil
 		if hero(t) {
 			a.sentFromHero(id)

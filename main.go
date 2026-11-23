@@ -492,6 +492,10 @@ type app struct {
 	// the sidebar's projects follow.
 	added      []addedProject
 	addedEdits uint64
+	// lastProject is the folder of the project the last thread on each
+	// machine was started in, by its server's label, as last-project.json
+	// holds it.
+	lastProject map[string]string
 	// The diff panel: each file's viewer, by thread and path, and their
 	// layout.
 	diffs      map[diffKey]*fileDiff
@@ -770,6 +774,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 	a.loadModels()
 	a.loadComposer()
 	a.loadProjects()
+	a.loadLastProject()
 	a.loadSettings()
 	a.openPlugins(dir)
 	a.backend = client.New(client.Config{Dir: dir, Post: func(fn func()) {

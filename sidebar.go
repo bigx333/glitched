@@ -231,11 +231,16 @@ func (a *app) settingsNav(c *ui.Context) {
 	})
 }
 
-// newThread shows the draft, in the shown thread's project, as the hero,
+// newThread shows the draft, in the project the last thread on the shown
+// thread's machine was started in, else in the shown thread's, as the hero,
 // its text area taking the focus from wherever the press left it.
 func (a *app) newThread() {
 	t := a.current()
-	a.startIn(draft{env: t.env, workspace: a.projectOf(t).key.workspace})
+	d, ok := a.lastDraft(t.env)
+	if !ok {
+		d = draft{env: t.env, workspace: a.projectOf(t).key.workspace}
+	}
+	a.startIn(d)
 	a.focusBack()
 }
 
