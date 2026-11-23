@@ -55,19 +55,20 @@ function usage({ tokens: own, total, context: c }) {
     };
   }
   const tip = children ? "This thread " + tokens(own) + ", its child threads " + tokens(total - own) : "This thread's tokens " + tokens(own);
-  const used = c.used || 0;
+  const used = Math.max(0, c.used || 0);
   if (c.stale) {
     return { type: "badge", style: "pill", text: "Compacted", value: 0, color: "$text.faint", tooltip: "Context compacted. Its size shows after the next reply.\n" + tip };
   }
-  if (!c.window) {
+  if (!(c.window > 0)) {
     return { type: "badge", style: "pill", text: contextTokens(used) + " in context", tooltip: contextTokens(used) + " tokens in context. Context limit not reported.\n" + tip };
   }
+  const share = used / c.window;
   const pct = Math.floor((used * 100 + Math.floor(c.window / 2)) / c.window);
   const node = {
     type: "badge",
     style: "pill",
     text: pct + "%",
-    value: Math.round(Math.min(1, used / c.window) * 1e4) / 1e4,
+    value: Math.round(Math.min(1, share) * 1e4) / 1e4,
     tooltip: "Context window " + contextTokens(used) + " / " + contextTokens(c.window) + " tokens, " + Math.max(0, 100 - pct) + "% left\n" + tip,
   };
   if (pct >= 90) node.color = "$danger";
