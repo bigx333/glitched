@@ -422,3 +422,25 @@ func TestAMachinePairedAgainForgetsTheOldEnginesUpdates(t *testing.T) {
 		t.Errorf("another engine under the label kept the old one's update: %+v", p)
 	}
 }
+
+// A paired machine whose engine can't say its providers is asked again
+// after modelsRetry, not on every frame: the window settles meanwhile.
+func TestAMachineThatCantSayItsCLIsIsAskedAgainLater(t *testing.T) {
+	dir := tempDir(t)
+	_, addr := serverNode(t)
+	listServers(t, dir, client.Server{Label: "build-box", Addr: addr, Token: "any"})
+	h := start(t, dir)
+	var asked time.Time
+	h.until("build-box's providers to fail", func() bool {
+		e := h.a.serverEnv("build-box")
+		asked = h.a.clis.next[e]
+		return e != nil && !h.a.clis.asking[e] && !asked.IsZero() && h.a.clis.engine[e] == api.ID{}
+	})
+	for range 5 {
+		h.tt.Frame()
+		settleTester(h.tt)
+	}
+	if next := h.a.clis.next[h.a.serverEnv("build-box")]; !next.Equal(asked) {
+		t.Errorf("build-box was asked again at once: next %v, then %v", asked, next)
+	}
+}
