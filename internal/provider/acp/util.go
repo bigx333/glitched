@@ -48,6 +48,12 @@ func openWire() io.Writer {
 	if path == "" {
 		return io.Discard
 	}
+	// A capture only a reader drains, as a FIFO, would hold the bridge
+	// from the agent's stdout, and Close with it.
+	if fi, err := os.Stat(path); err == nil && !fi.Mode().IsRegular() {
+		slog.Warn("acp: no wire capture, as it goes only to a regular file", "path", path)
+		return io.Discard
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		slog.Warn("acp: no wire capture", "err", err)
