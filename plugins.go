@@ -570,6 +570,12 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		a.addProject()
 		return nil, nil
 	case "projects.clone":
+		switch {
+		case a.modal || a.removeOpen || a.deleteOpen:
+			return nil, errors.New("a dialog waits for the user")
+		case a.localEnv() == nil:
+			return nil, errors.New("this machine's engine isn't reached")
+		}
 		a.openClone()
 		return nil, nil
 	case "threads.setDisposition":
