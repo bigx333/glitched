@@ -256,7 +256,7 @@ func TestASlowWorkspaceButtonGivesWayToGlitchedsUntilItDraws(t *testing.T) {
 	if h.a.current().View.Workspace == next.workspace {
 		next.workspace = homeDir()
 	}
-	before := filepath.Base(h.a.current().View.Workspace)
+	before := h.a.projectOf(h.a.current()).name()
 	module := fmt.Sprintf(`export function place({ items }) {
 	return items.map(({ context }) => {
 		if (context.workspace === %q) {
@@ -307,7 +307,7 @@ func TestANewDraftsWorkspaceButtonIsNeverTheLastDrafts(t *testing.T) {
 	h.tt.Advance(time.Second)
 	other := ""
 	for _, it := range h.tt.Menu() {
-		if it != here && it != "" && !strings.Contains(it, "project") {
+		if it != here && it != "" && !strings.HasSuffix(it, "project…") && it != "Remove project" {
 			other = it
 			break
 		}

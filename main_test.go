@@ -149,8 +149,8 @@ func TestSendStartsAThread(t *testing.T) {
 	h.tt.Frame()
 	h.click("Send")
 	th := h.a.current()
-	if th.id().IsZero() || th.env != h.local() || th.View.Title != "Fix the flicker" || th.View.Workspace != homeDir() {
-		t.Fatalf("after Send the chat shows %+v on %v, want the new thread on this machine", th.View, th.env)
+	if th.id().IsZero() || th.env != h.local() || th.View.Title != "Fix the flicker" || filepath.Dir(th.View.Workspace) != h.a.scratchRoot() {
+		t.Fatalf("after Send the chat shows %+v on %v, want the new thread on this machine, in a folder of its own", th.View, th.env)
 	}
 	if h.a.draft != "" || !h.tt.HasText("Fix the flicker") {
 		t.Errorf("draft %q, window %q: the message should have left the composer for the timeline", h.a.draft, h.tt.Texts())

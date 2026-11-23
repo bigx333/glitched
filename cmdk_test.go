@@ -617,7 +617,7 @@ func TestThePalettesChoiceFollowsThePointerAsItMoves(t *testing.T) {
 		t.Fatalf("the palette opened under the pointer chose %q, want the first", got)
 	}
 	h.tt.Key(0, ui.KeyDown)
-	if got := chosen(); got != "New thread in agent-phone" {
+	if got := chosen(); got != "New thread without a project" {
 		t.Fatalf("Down chose %q", got)
 	}
 	r, ok := h.tt.Find("Switch model")

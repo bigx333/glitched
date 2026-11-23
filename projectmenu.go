@@ -130,9 +130,8 @@ func (a *app) projectTrees(p *project) (tops []thread, all []node) {
 
 // removeProject deletes every thread of the project, and with them the
 // threads under them, and forgets the folder if it was added here. A draft
-// in its workspace starts over in the home folder, so that the project
-// doesn't come back with the next thread, unless the project is the home
-// folder's, where every new thread starts.
+// in its workspace starts over with no project, so that the project
+// doesn't come back with the next thread.
 func (a *app) removeProject(p *project) {
 	tops, all := a.projectTrees(p)
 	for _, t := range tops {
@@ -154,21 +153,22 @@ func (a *app) removeProject(p *project) {
 	// So does one in a workspace whose every thread went with the trees,
 	// as the shown thread's does when the delete leaves the draft there.
 	k := keyOf(e, a.fresh.workspace)
-	emptied := k != p.key && slices.ContainsFunc(all, func(n node) bool { return keyOf(n.t.env, n.t.project()) == k }) &&
+	emptied := k != p.key && slices.ContainsFunc(all, func(n node) bool { return a.threadKey(n.t) == k }) &&
 		!slices.ContainsFunc(a.gather(), func(x *project) bool { return x.key == k })
 	if k == p.key || emptied {
-		a.newDraft(a.homeDraft(e))
+		a.newDraft(a.defaultDraft(e))
 	}
 }
 
-// homeDraft is where a draft on e starts over: this machine's home folder,
-// or on a server the workspace of its newest project left. The app doesn't
-// know a server's home, and its engine runs an agent in the workspace as
-// written, so "~" there is no folder; with no project left on the server,
-// the draft goes to the app's default, this machine's home.
-func (a *app) homeDraft(e *client.Env) draft {
+// defaultDraft is where a draft on e starts over: on this machine with no
+// project, or on a server the workspace of its newest project left. The
+// app doesn't know a server's home, and its engine runs an agent in the
+// workspace as written, so "~" there is no folder; with no project left on
+// the server, the draft goes to the app's default, this machine's No
+// project.
+func (a *app) defaultDraft(e *client.Env) draft {
 	if e == nil || e.Kind != client.Remote {
-		return draft{e, homeDir()}
+		return draft{e, a.scratchRoot()}
 	}
 	var newest *project
 	for _, p := range a.gather() {
