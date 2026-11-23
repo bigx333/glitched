@@ -21,7 +21,7 @@ func TestAddProject(t *testing.T) {
 	h := start(t, inboxDir(t))
 	h.thread("SIP re-INVITE handling")
 	h.tt.Advance(time.Second)
-	addFromStrip(h, "Add folder…")
+	addFolder(h)
 	h.until("the draft in the folder", func() bool {
 		cur := h.a.current()
 		return cur.id().IsZero() && cur.View.Workspace == dir && cur.local()
@@ -40,7 +40,7 @@ func TestAddProject(t *testing.T) {
 	})
 }
 
-// A pick cancelled leaves the chat as it was.
+// A pick cancelled leaves the wizard on Source, and the chat as it was.
 func TestAddProjectCancelled(t *testing.T) {
 	was := chooseFolder
 	picked := make(chan struct{})
@@ -50,7 +50,8 @@ func TestAddProjectCancelled(t *testing.T) {
 	th := h.thread("SIP re-INVITE handling")
 	h.a.select_(th)
 	h.tt.Advance(time.Second)
-	addFromStrip(h, "Add folder…")
+	newProject(h)
+	h.click("Existing folder")
 	select {
 	case <-picked:
 	case <-time.After(10 * time.Second):
@@ -58,12 +59,15 @@ func TestAddProjectCancelled(t *testing.T) {
 	}
 	h.until("the picker closed", func() bool { return !h.a.picking })
 	h.tt.Advance(time.Second)
+	if !h.tt.Focused("Existing folder") || !h.a.wizard.open {
+		t.Fatalf("a cancelled pick left Source: %q", h.tt.Texts())
+	}
 	if h.a.current().id() != th.id() {
 		t.Fatalf("after a cancelled pick the chat shows %q", h.a.current().View.Title)
 	}
 }
 
-// While the picker is open, Add project opens no second one.
+// While the picker is open, Existing folder opens no second one.
 func TestAddProjectOpensOnePicker(t *testing.T) {
 	was := chooseFolder
 	var opened atomic.Int32
@@ -73,14 +77,15 @@ func TestAddProjectOpensOnePicker(t *testing.T) {
 	h := start(t, inboxDir(t))
 	h.thread("SIP re-INVITE handling")
 	h.tt.Advance(time.Second)
-	h.a.addProject()
+	h.a.openWizard(sourceNone)
+	h.a.chooseSource(sourceFolder)
 	for deadline := time.Now().Add(10 * time.Second); opened.Load() == 0; {
 		if time.Now().After(deadline) {
 			t.Fatal("Add project opened no picker")
 		}
 		time.Sleep(time.Millisecond) // the picker opening, off the main thread
 	}
-	h.a.addProject()
+	h.a.chooseSource(sourceFolder)
 	close(release)
 	h.until("the picker closed", func() bool { return !h.a.picking })
 	time.Sleep(100 * time.Millisecond) // time for a second picker to open
@@ -90,7 +95,7 @@ func TestAddProjectOpensOnePicker(t *testing.T) {
 	}
 }
 
-// pickFolder has Add project's picker give a new folder named name.
+// pickFolder has Existing folder's picker give a new folder named name.
 func pickFolder(t *testing.T, name string) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), name)
@@ -110,7 +115,7 @@ func addAndLeave(h *harness, dir string) {
 	h.t.Helper()
 	th := h.thread("SIP re-INVITE handling")
 	h.tt.Advance(time.Second)
-	addFromStrip(h, "Add folder…")
+	addFolder(h)
 	h.until("the draft in the folder", func() bool { return h.a.current().View.Workspace == dir })
 	h.a.select_(th)
 	h.tt.Advance(time.Second)
@@ -214,21 +219,15 @@ func TestRemoveAnAddedProjectWithNoThread(t *testing.T) {
 	}
 }
 
-// addFromStrip chooses item from the project strip's Add project menu.
-func addFromStrip(h *harness, item string) {
-	h.t.Helper()
-	h.click("Add project")
-	if err := h.tt.ChooseMenuItem(item); err != nil {
-		h.t.Fatalf("Add project's menu is %q: %v", h.tt.Menu(), err)
-	}
-	settlePlugins(h.t, h.a, h.tt, h.p)
-}
-
-// The strip's Add project menu also clones a repository.
-func TestTheStripClonesARepository(t *testing.T) {
+// The strip's New project is one button, which opens the wizard.
+func TestTheStripsNewProjectOpensTheWizard(t *testing.T) {
 	h := start(t, inboxDir(t))
 	h.thread("SIP re-INVITE handling")
 	h.tt.Advance(time.Second)
-	addFromStrip(h, "Clone repository…")
-	h.untilShown("the clone sheet", "Clone a repository")
+	h.click("New project")
+	if m := h.tt.Menu(); len(m) > 0 {
+		t.Fatalf("New project opened a menu, %q", m)
+	}
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.untilShown("the wizard", "New project on this machine")
 }

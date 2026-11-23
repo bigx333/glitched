@@ -25,7 +25,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|credentials (CRED=typed|provided|declined)|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)
+// SCENE=empty|running|approval|credentials (CRED=typed|provided|declined)|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)|wizard (WIZARD=machine|source|browse|clone|confirm|cloning|failed|offline)
 // for the engines' threads (none started without one; question takes
 // ASK=<request body>, PICK=<label>,…, OTHER=<text> typed into the Other
 // field named OTHERIN, and QUESTION=answer|dismiss|stop;
@@ -565,6 +565,8 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		h = machines(t)
 		h.a.select_(h.thread("Rotate the API keys"))
 		h.until("the server's transcript", func() bool { return h.tt.HasText("Which keys are older than 90 days?") })
+	case "wizard":
+		h = wizardShot(t, os.Getenv("WIZARD"))
 	default:
 		t.Fatalf("no scene %q", name)
 	}

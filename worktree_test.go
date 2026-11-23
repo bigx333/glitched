@@ -362,7 +362,7 @@ func TestAddProjectKeepsTheDraftsWorktreeChoice(t *testing.T) {
 	h.a.startIn(draft{env: h.local(), workspace: gitWorkspace(t)})
 	h.tt.Advance(time.Second)
 	h.a.worktree.picked, h.a.worktree.on = true, true
-	addFromStrip(h, "Add folder…")
+	addFolder(h)
 	h.until("the added project's draft", func() bool { return h.a.current().View.Workspace == other })
 	if w := h.a.newWorktree(h.a.current()); w == nil {
 		t.Error("Add project dropped New worktree")

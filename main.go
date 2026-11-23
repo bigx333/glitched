@@ -614,11 +614,11 @@ type app struct {
 	// that it removes the threads the project has as it's confirmed.
 	removing   projectKey
 	removeOpen bool
-	// picking is while a folder picker is open: Add project's, or the
-	// clone sheet's Choose….
+	// picking is while a folder picker is open: the New project wizard's
+	// Existing folder or its Choose….
 	picking bool
-	// clone is the Clone a repository sheet (clone.go).
-	clone cloneSheet
+	// wizard is the New project wizard (wizard.go).
+	wizard wizard
 	// now is the frame's time, as the view builds it.
 	now time.Time
 	// clock and zone are what a message's time is told against: the day
@@ -978,7 +978,7 @@ func (a *app) view(c *ui.Context) {
 	a.commandPalette(c)
 	a.deleteAlert(c)
 	a.removeAlert(c)
-	a.cloneDialog(c)
+	a.wizardDialog(c)
 	for _, fn := range a.pluginLater {
 		fn(c)
 	}

@@ -221,7 +221,9 @@ func TestAnAddedFolderUnderTheScratchRootStaysItsOwnProject(t *testing.T) {
 	chooseFolder = func(*app) string { return dir }
 	t.Cleanup(func() { chooseFolder = was })
 	h := start(t, state)
-	h.a.addProject()
+	h.a.openWizard(sourceNone)
+	h.tt.Frame()
+	pickAndCreate(h)
 	h.until("the draft in the added folder", func() bool { return h.a.current().View.Workspace == dir })
 	th := sendInDraft(h, "Keep me in the added folder")
 	if p := h.a.projectOf(th); p.noProject || p.key.workspace != dir {

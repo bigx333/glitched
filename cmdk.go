@@ -31,7 +31,7 @@ type command struct {
 }
 
 func (a *app) openCommandPalette() {
-	if a.clone.open {
+	if a.wizard.open {
 		return
 	}
 	a.cmdkOpen, a.cmdkQuery, a.cmdkIndex = true, "", 0
@@ -72,13 +72,11 @@ func (a *app) actions() []command {
 			cmds = append(cmds, action("thread.new:"+p.key.id(), "New thread in "+a.projectLabel(p), "", "pen-new-square", func() { a.startThread(p) }))
 		}
 	}
-	if !a.picking {
-		add := action("project.add", "Add project…", "", "folder-open", a.addProject)
+	if len(a.backend.Envs()) > 0 && !a.wizard.open {
+		add := action("project.add", "Add project…", "", "folder-open", func() { a.openWizard(sourceNone) })
 		add.also = "workspace folder"
 		cmds = append(cmds, add)
-	}
-	if a.localEnv() != nil && !a.clone.open {
-		clone := action("project.clone", "Clone repository…", "", "git-branch", a.openClone)
+		clone := action("project.clone", "Clone repository…", "", "git-branch", func() { a.openWizard(sourceClone) })
 		clone.also = "git github repo url"
 		cmds = append(cmds, clone)
 	}

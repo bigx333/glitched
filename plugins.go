@@ -573,17 +573,18 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		return a.projectRecords(), nil
 	case "projects.filter":
 		return a.filterEffect(e.Args)
-	case "projects.add":
-		a.addProject()
-		return nil, nil
-	case "projects.clone":
+	case "projects.add", "projects.clone":
 		switch {
 		case a.modal || a.removeOpen || a.deleteOpen:
 			return nil, errors.New("a dialog waits for the user")
-		case a.localEnv() == nil:
-			return nil, errors.New("this machine's engine isn't reached")
+		case len(a.backend.Envs()) == 0:
+			return nil, errors.New("no machine's engine is reached")
 		}
-		a.openClone()
+		src := sourceNone
+		if e.Type == "projects.clone" {
+			src = sourceClone
+		}
+		a.openWizard(src)
 		return nil, nil
 	case "threads.setDisposition":
 		return a.setDispositionEffect(e.Args)
@@ -622,7 +623,7 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 			return nil, errors.New("the thread's agent runs: stop it first")
 		}
 		// A confirm stays about the thread it asked about till it closes.
-		if a.deleteOpen || a.deleting.Thread != nil || a.clone.open {
+		if a.deleteOpen || a.deleting.Thread != nil || a.wizard.open {
 			return nil, errors.New("another delete waits for the user")
 		}
 		a.deleting, a.deleteOpen = t, true
@@ -651,8 +652,8 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 			return nil, errors.New("an agent runs in the project: stop it first")
 		case a.removeOpen:
 			return nil, errors.New("another removal waits for the user")
-		case a.clone.open:
-			return nil, errors.New("the Clone a repository sheet waits for the user")
+		case a.wizard.open:
+			return nil, errors.New("the New project wizard waits for the user")
 		}
 		a.askRemove(found[0])
 		return nil, nil

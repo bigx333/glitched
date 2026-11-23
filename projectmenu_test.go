@@ -140,6 +140,8 @@ func TestWorkspaceMenuAddsAndRemoves(t *testing.T) {
 	if err := h.tt.ChooseMenuItem("Add project…"); err != nil {
 		t.Fatalf("%v; the menu has %q", err, h.tt.Menu())
 	}
+	h.tt.Frame()
+	pickAndCreate(h)
 	h.until("the draft in the folder", func() bool { return h.a.current().View.Workspace == dir })
 }
 
