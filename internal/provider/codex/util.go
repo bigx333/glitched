@@ -7,8 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 )
@@ -123,22 +121,4 @@ func argsText(input json.RawMessage) string {
 		lines = append(lines, fmt.Sprintf("%s: %s", k, c.String()))
 	}
 	return strings.Join(lines, "\n")
-}
-
-// rel is path inside workspace, as the card and the steps show it, or as
-// it is outside. Codex may name the workspace by the path its links
-// resolve to, as macOS's /var is /private/var.
-func rel(workspace, path string) string {
-	// Past a symlink, .. leaves the link's target, not its directory: such
-	// a path is shown as Codex gave it.
-	if slices.Contains(strings.Split(filepath.ToSlash(path), "/"), "..") {
-		return path
-	}
-	resolved, _ := filepath.EvalSymlinks(workspace)
-	for _, w := range []string{workspace, resolved} {
-		if r, err := filepath.Rel(w, path); w != "" && err == nil && filepath.IsLocal(r) {
-			return r
-		}
-	}
-	return path
 }

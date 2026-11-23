@@ -53,7 +53,7 @@ func (it *item) open() bool { return it.shown() && it.Status == "inProgress" }
 func (it *item) paths(workspace string) []string {
 	var out []string
 	for _, c := range it.Changes {
-		out = append(out, rel(workspace, c.Path))
+		out = append(out, provider.Rel(workspace, c.Path))
 	}
 	return out
 }
@@ -89,7 +89,7 @@ func (it *item) work(workspace string) provider.Work {
 	case "webSearch":
 		w.Title = "Search the web for " + it.Query
 	case "imageView":
-		w.Title, w.Path = "View "+filepath.Base(it.Path), rel(workspace, it.Path)
+		w.Title, w.Path = "View "+filepath.Base(it.Path), provider.Rel(workspace, it.Path)
 	default:
 		w.Title = it.Tool
 	}
