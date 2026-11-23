@@ -127,7 +127,7 @@ func (a *app) providerDetail(c *ui.Context, r providerRow) {
 			}, func() { a.checkAgain(c) })
 		}
 		a.providerDefault(c, r)
-		if r.info.Info.Path != "" || r.version() != "" {
+		if r.info.Info.Path != "" || r.version() != "" || r.info.Info.RulesIgnored {
 			inset(c, "PROGRAM", func() {
 				if r.info.Info.Path != "" {
 					optionRow(c, "Path", "The program Glitched runs.", func() {
@@ -138,6 +138,9 @@ func (a *app) providerDetail(c *ui.Context, r providerRow) {
 					optionRow(c, "Version", "", func() {
 						ui.Text(c, v).Selectable().FontSize(12).TextColor(palette.muted)
 					})
+				}
+				if r.info.Info.RulesIgnored {
+					optionRow(c, "Deny rules", r.family.name+"'s own deny rules don't apply to its runs in Glitched.", func() {})
 				}
 			})
 		}

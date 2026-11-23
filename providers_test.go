@@ -233,3 +233,33 @@ func TestTheProvidersPageShowsTheEffortThePickerRuns(t *testing.T) {
 		t.Errorf("after the engine offers only Low, the page shows %q; the picker runs %q", h.tt.Texts(), h.a.modelRef().Effort)
 	}
 }
+
+// unruled is a provider whose own deny rules don't hold in Glitched.
+type unruled struct{ provider.Adapter }
+
+func (u unruled) Describe(ctx context.Context) (provider.Info, error) {
+	info, err := u.Adapter.Describe(ctx)
+	info.RulesIgnored = true
+	return info, err
+}
+
+// A provider whose own deny rules don't apply says so, once, in its row:
+// Claude's says nothing of them.
+func TestAProviderWhoseRulesDontApplySaysSo(t *testing.T) {
+	h := startWith(t, tempDir(t), func(c *daemon.Config) {
+		c.Providers["antigravity"] = unruled{c.Providers["fake"]}
+		engineReportsBy(map[string][]provider.Model{
+			"claude":      {{ID: "claude-opus-5-5"}},
+			"antigravity": {{ID: "gemini-3.8-flash", Name: "Gemini 3.8 Flash"}},
+		})(c)
+	})
+	allAnswered(h)
+	h.until("Antigravity's models", func() bool { return len(h.a.models.reported["antigravity"]) == 1 })
+	openProviders(h, "claude", "antigravity")
+	if !h.tt.HasText("Antigravity's own deny rules don't apply to its runs in Glitched.") {
+		t.Errorf("Antigravity's row doesn't say its rules don't apply: %q", h.tt.Texts())
+	}
+	if n := strings.Count(strings.Join(h.tt.Texts(), "\n"), "deny rules"); n != 1 {
+		t.Errorf("the page speaks of deny rules %d times, want once, for Antigravity alone: %q", n, h.tt.Texts())
+	}
+}
