@@ -435,16 +435,22 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 		return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
 	case "thinking":
 		f.send(ctx, sid, acp.UpdateAgentThoughtText("The user wants a plan."))
-		gate()
+		if !gate(ctx) {
+			return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+		}
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Here is the plan."))
 	case "thinking-silent":
-		gate()
+		if !gate(ctx) {
+			return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+		}
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Here is the plan."))
 	case "thinking-tools":
 		f.send(ctx, sid, acp.UpdateAgentThoughtText("First the notes."))
 		f.send(ctx, sid, acp.StartToolCall("read-1", "Read notes.txt", acp.WithStartKind(acp.ToolKindRead), acp.WithStartStatus(acp.ToolCallStatusCompleted)))
 		f.send(ctx, sid, acp.UpdateAgentThoughtText("Then the code."))
-		gate()
+		if !gate(ctx) {
+			return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+		}
 		f.send(ctx, sid, acp.StartToolCall("read-2", "Read main.go", acp.WithStartKind(acp.ToolKindRead), acp.WithStartStatus(acp.ToolCallStatusCompleted)))
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Read both."))
 	case "crash-mid-turn":
@@ -478,13 +484,18 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 	return end, nil
 }
 
-// gate waits for the file Gate names to exist.
-func gate() {
+// gate waits for the file Gate names to exist, and says false if the
+// turn was cancelled first.
+func gate(ctx context.Context) bool {
 	for {
 		if _, err := os.Stat(os.Getenv(Gate)); err == nil {
-			return
+			return true
 		}
-		time.Sleep(20 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 }
 
