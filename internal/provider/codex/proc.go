@@ -13,6 +13,7 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -291,6 +292,27 @@ func (p *proc) configured(ctx context.Context, cwd string) (codexConfig, error) 
 		return codexConfig{}, p.failure("read its config", err)
 	}
 	return r.Config, nil
+}
+
+// skillRoots has app-server list Glitched's skills, in s.Root's skills
+// folder, beside its own, for its life. A Codex that refuses them, as one
+// too old for the call, runs the turn without them: refused says so to
+// the user. Only an app-server that can't answer fails the run.
+func (p *proc) skillRoots(ctx context.Context, s provider.Skills) (refused string, err error) {
+	if s.Root == "" {
+		return "", nil
+	}
+	err = p.conn.call(ctx, "skills/extraRoots/set", map[string]any{"extraRoots": []string{filepath.Join(s.Root, "skills")}}, nil)
+	var rpc *rpcError
+	switch {
+	case err == nil:
+		return "", nil
+	case errors.As(err, &rpc) && rpc.Code == -32601:
+		return "Codex " + p.version + " can't take Glitched's skills, so it runs without them.", nil
+	case errors.As(err, &rpc):
+		return "Codex refused Glitched's skills (" + rpc.Message + "), so it runs without them.", nil
+	}
+	return "", p.failure("take Glitched's skills", err)
 }
 
 // startThread opens the Codex thread the Glitched thread's runs go to,

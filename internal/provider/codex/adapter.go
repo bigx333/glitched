@@ -177,7 +177,8 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		return nil, err
 	}
 	// The MCP servers, with the access glitched mcp acts at, go to
-	// thread/start and stay with the thread for its life here.
+	// thread/start and stay with the thread for its life here, and the
+	// skills' root with the app-server for its own.
 	key := launchKey(prog, spec)
 	keep := func(p *proc) { a.parked().Park(spec.Thread, key, p) }
 	p, ok, err := a.parked().Take(ctx, spec.Thread, key)
@@ -192,12 +193,15 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		}
 		ok = false
 	}
-	lost := false
+	lost, refused := false, ""
 	if !ok {
 		if p, err = launch(ctx, prog, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String()); err != nil {
 			return nil, err
 		}
 		err = p.signedIn(ctx)
+		if err == nil {
+			refused, err = p.skillRoots(ctx, spec.Skills)
+		}
 		if err == nil {
 			lost, err = p.startThread(ctx, spec)
 		}
@@ -221,13 +225,20 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	if ok {
 		_, g.since = p.settled()
 	}
+	g.mu.Lock()
 	if lost {
-		g.mu.Lock()
 		g.noticeLocked("Codex no longer has this thread's earlier conversation, so this turn starts a new one.")
-		g.mu.Unlock()
 	}
+	if refused != "" {
+		g.noticeLocked(refused)
+	}
+	g.mu.Unlock()
 	return g, nil
 }
+
+// SkillDelivery is how Codex gets Glitched's skills: an extra root of its
+// skills, which it lists beside its own.
+func (a *Adapter) SkillDelivery() string { return "Codex: in its skill list" }
 
 // noAuto is why a thread of Codex version's at Approve for me asks the
 // user what auto-review would decide.
@@ -239,7 +250,8 @@ func launchKey(prog provider.Program, spec provider.SessionSpec) string {
 	servers, _ := json.Marshal(struct {
 		Program provider.Program
 		MCP     []provider.MCPServer
-	}{prog, spec.MCP})
+		Skills  string
+	}{prog, spec.MCP, spec.Skills.Root})
 	sum := sha256.Sum256(servers)
 	return strings.Join([]string{prog.Path, spec.Workspace, strconv.Itoa(int(spec.Access)), hex.EncodeToString(sum[:])}, "\x00")
 }
