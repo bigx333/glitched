@@ -40,6 +40,7 @@ func TestTheBuiltInMeterIsItsNativeCopy(t *testing.T) {
 		{Tokens: 1, Total: 1, Context: &api.Context{Used: math.MaxInt64}},
 		{Tokens: 1, Total: 1, Context: &api.Context{Used: -1, Window: 1000000}},
 		{Tokens: 1, Total: 1, Context: &api.Context{Used: -5001, Window: 1000000}},
+		{Tokens: 9007199254740992, Total: 9007199254740993, Context: &api.Context{Used: 25041, Window: 1000000}},
 	} {
 		key := string(rune('a' + i))
 		s.SetItems("usage", []plugins.PlaceItem{{Key: key, Version: key, Context: u}})
