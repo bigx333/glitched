@@ -71,6 +71,18 @@ type MessageCancelled struct {
 	Reason  string `json:"reason"`
 }
 
+// MessageHeld holds a ready message of the user's as a Defer, until they
+// send another or resume the queue: what their stop does to what waits.
+type MessageHeld struct {
+	Message ID `json:"message"`
+}
+
+// MessageReleased readies a held message of the user's again, after the
+// messages ahead of it.
+type MessageReleased struct {
+	Message ID `json:"message"`
+}
+
 // MessageUncertain: handing the message to the agent was cut off, so nobody
 // knows if it arrived.
 type MessageUncertain struct {
@@ -276,6 +288,8 @@ func (MessageClaimed) eventType() string      { return "message.claimed" }
 func (MessageDispatched) eventType() string   { return "message.dispatched" }
 func (MessageCancelled) eventType() string    { return "message.cancelled" }
 func (MessageUncertain) eventType() string    { return "message.uncertain" }
+func (MessageHeld) eventType() string         { return "message.held" }
+func (MessageReleased) eventType() string     { return "message.released" }
 func (TurnAdmitted) eventType() string        { return "turn.admitted" }
 func (TurnStarted) eventType() string         { return "turn.started" }
 func (TurnStopping) eventType() string        { return "turn.stopping" }
@@ -309,6 +323,8 @@ func init() {
 	register[MessageDispatched]()
 	register[MessageCancelled]()
 	register[MessageUncertain]()
+	register[MessageHeld]()
+	register[MessageReleased]()
 	register[TurnAdmitted]()
 	register[TurnStarted]()
 	register[TurnStopping]()

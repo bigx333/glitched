@@ -237,6 +237,7 @@ func TestAnInterruptThatTimesOutLeavesTheRunUncertain(t *testing.T) {
 
 	ad.setGate(nil)
 	submit(t, n.h, thread, api.TurnInterrupt{})
+	submit(t, n.h, thread, api.QueueResume{})
 	until(t, n.h, thread, "the next run asks", func(th api.Thread) bool { return waiting(th) && th.Requests[0].Run == second })
 	if closed, opened := ad.at("closed "+first.String()), ad.at("open "+second.String()); closed < 0 || opened < closed {
 		t.Fatalf("the next agent opened before the last one closed: %v", ad.log)
@@ -276,7 +277,7 @@ func (s *stuckClose) Close(ctx context.Context) error {
 }
 
 // abandonForNext leaves first uncertain behind an interrupt it never takes,
-// then abandons it, which admits second.
+// then abandons it and resumes the queue the stop held, which admits second.
 func abandonForNext(t *testing.T, n node, ad *stuckCloser, thread, first, second api.ID) {
 	t.Helper()
 	if _, err := n.h.Submit(ctx, api.Command{ID: first, Target: thread, Body: dispatch("first", api.StartNow)}); err != nil {
@@ -297,6 +298,7 @@ func abandonForNext(t *testing.T, n node, ad *stuckCloser, thread, first, second
 	until(t, n.h, thread, "uncertain", uncertain)
 	ad.setGate(nil)
 	submit(t, n.h, thread, api.TurnInterrupt{})
+	submit(t, n.h, thread, api.QueueResume{})
 	until(t, n.h, thread, "the next run is admitted", func(th api.Thread) bool { return th.Run == api.RunStarting })
 }
 

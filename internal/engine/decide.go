@@ -51,6 +51,8 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 		err = d.delete(b)
 	case api.ThreadConfigure:
 		err = d.configure(b)
+	case api.QueueResume:
+		err = d.resume()
 	default:
 		err = rejected("unknown intent")
 	}
@@ -141,6 +143,7 @@ type decision struct {
 	at      time.Time
 	events  []Event
 	effects []Effect
+	resumed bool // the user resumed the queue: settle starts the wakes after a stop
 }
 
 func (d *decision) emit(b api.EventBody) error {
@@ -282,6 +285,12 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 			return err
 		}
 	}
+	// The user sending again is their go-ahead for what their stop held.
+	if m.Mode != api.Defer {
+		if err := d.release(); err != nil {
+			return err
+		}
+	}
 	q := api.MessageQueued{Message: id, Text: m.Text, Mode: m.Mode, Pos: d.t.pos(false), Held: m.Mode == api.Defer}
 	if m.Mode == api.RestartActive {
 		q.Pos = d.t.pos(true)
@@ -374,7 +383,8 @@ func (d *decision) sent(run api.ID) error {
 // admission happens in the same commit as whatever freed the thread. A
 // settled or deleted thread starts nothing. With no ready message, a wake
 // starts a turn of its own, unless the last run was stopped: a stop stays
-// a stop, and the wakes go in with the next message the user sends.
+// a stop, and the wakes go in with the next message the user sends, or
+// start once they resume the queue.
 func (d *decision) settle() error {
 	if d.t.Live() != nil || d.t.settled() || d.t.Deleted {
 		return nil
@@ -382,7 +392,7 @@ func (d *decision) settle() error {
 	if m := d.t.next(); m != nil {
 		return d.admit(m.ID)
 	}
-	if d.t.stopped() {
+	if d.t.stopped() && !d.resumed {
 		return nil
 	}
 	if i := index(d.t.Queue, Message.waking); i >= 0 {
@@ -395,6 +405,10 @@ func (d *decision) settle() error {
 // interrupt, the user gives up waiting on a run that ignores it; nobody can
 // say what that run is doing. Asked again before, it changes nothing.
 //
+// A stop goes quiet: what waits its turn is held until the user sends again
+// or resumes the queue. One of a silent run holds nothing, as the user's
+// messages wait behind it, not on it.
+//
 // A halt, with drop, cancels what waits its turn and stops the run. It is
 // not the user giving up on a run: on one already stopping it waits for
 // the run's end, as the first stop does. Settling a thread halts it.
@@ -405,6 +419,11 @@ func (d *decision) interrupt(drop bool) error {
 		}
 	}
 	r := d.t.Live()
+	if r != nil && !r.Silent && !drop {
+		if err := d.hold(); err != nil {
+			return err
+		}
+	}
 	switch {
 	case r == nil:
 		return nil
@@ -440,6 +459,44 @@ func (d *decision) stop(r Run) error {
 	}
 	d.effects = append(d.effects, InterruptTurn{Run: r.ID})
 	return nil
+}
+
+// hold holds the ready messages, so settle starts none of them.
+func (d *decision) hold() error {
+	var ready []api.ID
+	for _, m := range d.t.Queue {
+		if m.State == QueueReady {
+			ready = append(ready, m.ID)
+		}
+	}
+	for _, id := range ready {
+		if err := d.emit(api.MessageHeld{Message: id}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// release readies the messages of the user's that are held: those a stop
+// held, and those sent as a Defer.
+func (d *decision) release() error {
+	var held []api.ID
+	for _, m := range d.t.Queue {
+		if m.State == QueueHeld && m.Mode == api.Defer {
+			held = append(held, m.ID)
+		}
+	}
+	for _, id := range held {
+		if err := d.emit(api.MessageReleased{Message: id}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *decision) resume() error {
+	d.resumed = true
+	return d.release()
 }
 
 // drop cancels the messages waiting their turn, held or ready, so settle

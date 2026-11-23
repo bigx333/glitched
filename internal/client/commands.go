@@ -73,6 +73,11 @@ func (m *Manager) Interrupt(e *Env, thread api.ID) api.ID {
 	return m.submit(e, thread, api.TurnInterrupt{})
 }
 
+// Resume starts what a stop held.
+func (m *Manager) Resume(e *Env, thread api.ID) api.ID {
+	return m.submit(e, thread, api.QueueResume{})
+}
+
 // Answer is how the user answers an approval.
 type Answer uint8
 

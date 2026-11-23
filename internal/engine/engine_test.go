@@ -466,7 +466,7 @@ func TestASteerIsNeverQueued(t *testing.T) {
 
 // A halt stops the run and cancels what waits its turn, a held message
 // too, so no turn starts once the run ends, and the thread can be deleted.
-// A plain interrupt leaves the queue to start once the run ends.
+// A plain interrupt holds the queue instead, for the user to resume.
 func TestAHaltStartsNothingAfter(t *testing.T) {
 	f, run := running(t)
 	next := f.must(dispatch("next", api.AfterActive))
@@ -489,8 +489,8 @@ func TestAHaltStartsNothingAfter(t *testing.T) {
 	next = g.must(dispatch("next", api.AfterActive))
 	g.must(api.TurnInterrupt{})
 	g.observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted})
-	if r := g.th.Live(); r == nil || r.ID != next {
-		t.Fatalf("after a plain interrupt the live run is %+v, want the queued message's", r)
+	if m, _ := g.th.Message(next); g.th.Live() != nil || m.State != engine.QueueHeld {
+		t.Fatalf("after a plain interrupt the live run is %+v and the queued message %v, want none and held", g.th.Live(), m.State)
 	}
 }
 

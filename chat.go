@@ -873,8 +873,11 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 		context: func(plugins.ThreadRecord) any { return m },
 		native:  func(body *widget.Node) { acted = a.transcriptBody(c, t, rs, i, body) },
 		retry: func() {
-			if e.failed.Err != nil {
+			switch {
+			case e.failed.Err != nil:
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(0, 0, 0, 8).Children(func() { a.failedActions(c, t, e.failed) })
+			case e.held:
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(0, 0, 0, 8).Children(func() { a.resumeButton(c, t) })
 			}
 		},
 		over: func(box ui.Element) {
@@ -1027,7 +1030,20 @@ func (a *app) messageNote(c *ui.Context, t thread, e entry) {
 		if e.failed.Err != nil {
 			a.failedActions(c, t, e.failed)
 		}
+		if e.held {
+			a.resumeButton(c, t)
+		}
 	})
+}
+
+// resumeButton starts what a stop held, or what was deferred.
+func (a *app) resumeButton(c *ui.Context, t thread) {
+	if ghost(c, "resume", false).Padding(2, 8).Children(func() {
+		ui.Icon(c, icRotate).FontSize(12)
+		ui.Text(c, "Resume").FontSize(11.5)
+	}).Clicked() {
+		a.backend.Resume(t.env, t.id())
+	}
 }
 
 // failedActions are a failed command's buttons: Retry, unless sending it
