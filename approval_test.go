@@ -605,18 +605,35 @@ func TestALongCommandIsAnsweredOnceDrawn(t *testing.T) {
 	}
 }
 
-// A command that draws no mark is as tall as a line of its font: only a
-// text that wraps or shows a space mark takes the taller height a mark
+// A card's texts that fit on a line, a space mark included, draw as tall
+// as what they show: only a text that wraps takes the taller height a ↩
 // needs.
-func TestAShortCommandIsAsTallAsItsFontsLine(t *testing.T) {
-	h := askedAll(t, commandAsk("ask", "ls -la"))
-	h.tt.Advance(time.Second)
-	var want float32
-	ui.NewTester(func(c *ui.Context) {
-		_, want = c.MeasureText(0, ui.Span{Text: "ls -la", Font: "monospace", Size: 12.5})
-	}, 100, 40).Frame()
-	if r, ok := h.tt.Find("ls -la"); !ok || r.H != want {
-		t.Fatalf("the command drew %v high, want %.4f, a line of its font; texts %q", r, want, h.tt.Texts())
+func TestAShortCardsTextsAreAsTallAsTheirLine(t *testing.T) {
+	shown := func(s string) string {
+		t := strings.TrimRight(s, " ")
+		return t + strings.Repeat(string(spaceMark), len(s)-len(t))
+	}
+	for _, tc := range [][3]string{
+		{"ls -la", "/w", "List files"},
+		{"ls -la ", "/w", "List files"},
+		{"ls -la", "/w ", "List files"},
+		{"ls -la", "/w", "List files "},
+	} {
+		t.Run(fmt.Sprintf("%q", tc), func(t *testing.T) {
+			body, _ := json.Marshal(map[string]string{"command": tc[0], "cwd": tc[1], "reason": tc[2]})
+			h := askedAll(t, provider.RequestOpened{ID: "ask", Kind: "approval", Body: body})
+			h.tt.Advance(time.Second)
+			for i, size := range []float32{12.5, 12, 12} {
+				text := shown(tc[i])
+				var want float32
+				ui.NewTester(func(c *ui.Context) {
+					_, want = c.MeasureText(0, ui.Span{Text: text, Font: "monospace", Size: size})
+				}, 100, 40).Frame()
+				if r, ok := h.tt.Find(text); !ok || r.H != want {
+					t.Errorf("%q drew %v high, want %.4f, the height of its line; texts %q", text, r, want, h.tt.Texts())
+				}
+			}
+		})
 	}
 }
 
