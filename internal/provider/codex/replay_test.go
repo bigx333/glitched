@@ -24,18 +24,35 @@ func replay(t *testing.T, capture string) *Adapter {
 }
 
 // Two turns of codex 0.171.0 on gpt-6-luna, captured on Praetor: the
-// second goes to the same app-server and remembers the first.
+// second goes to the same app-server and remembers the first. Each says
+// how full the context is as of its last request, 21,958 of the second's
+// thread total of 43,887.
 func TestCodex0171TurnsReplay(t *testing.T) {
 	a := replay(t, "codex-0.171.0-turns.wire")
 	s := spec(t)
-	for _, want := range []string{"The glitched tools are for handing tasks to another agent; kumquat.", "kumquat"} {
+	for _, want := range []struct {
+		text    string
+		context provider.Context
+	}{
+		{"The glitched tools are for handing tasks to another agent; kumquat.", provider.Context{Used: 21929, Window: 258400}},
+		{"kumquat", provider.Context{Used: 21958, Window: 258400}},
+	} {
 		s.Run = api.NewID()
 		g := open(t, a, s)
 		do(t, g, provider.Start{Text: "the captured prompt"})
 		events := turn(t, g)
 		closeRun(t, g)
-		if end := ended(events); end.Outcome != api.OutcomeCompleted || text(events) != want {
-			t.Errorf("the turn said %q and ended %+v, want %q", text(events), end, want)
+		if end := ended(events); end.Outcome != api.OutcomeCompleted || text(events) != want.text {
+			t.Errorf("the turn said %q and ended %+v, want %q", text(events), end, want.text)
+		}
+		var got []provider.Context
+		for _, e := range events {
+			if c, ok := e.(provider.Context); ok {
+				got = append(got, c)
+			}
+		}
+		if len(got) != 1 || got[0] != want.context {
+			t.Errorf("the turn reported its context as %+v, want %+v", got, want.context)
 		}
 	}
 }
