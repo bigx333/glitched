@@ -3,17 +3,17 @@
 // copies the message; message.edit (a message of yours) puts it back in
 // the composer; message.retry (a turn that failed or was stopped) asks
 // the agent again; message.item draws the command a plugin put in
-// message.actions at its index, of the context's items; and message.time,
-// last, says when the message was sent. A native with
+// message.actions at its index, of the context's items; and message.time
+// says when the message was sent, on the toolbar's outer side: before the
+// actions under a message of yours, after them under a reply. A native with
 // nothing to do under a message draws nothing and leaves no gap. Copy it
 // in Settings › Plugins to reorder, space or drop them. Glitched keeps
 // where the toolbar sits and when it shows.
 
 export function place({ items }) {
-  return items.map(({ context }) => ({
-    type: "row",
-    gap: 2,
-    children: [
+  return items.map(({ context }) => {
+    const time = { type: "native", id: "time", name: "message.time" };
+    const actions = [
       { type: "native", id: "copy", name: "message.copy" },
       { type: "native", id: "edit", name: "message.edit" },
       { type: "native", id: "retry", name: "message.retry" },
@@ -23,7 +23,11 @@ export function place({ items }) {
         name: "message.item",
         props: { index: i },
       })),
-      { type: "native", id: "time", name: "message.time" },
-    ],
-  }));
+    ];
+    return {
+      type: "row",
+      gap: 2,
+      children: context.role === "user" ? [time, ...actions] : [...actions, time],
+    };
+  });
 }
