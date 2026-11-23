@@ -672,10 +672,8 @@ type app struct {
 	// pluginsOpen the rows opened or closed, by folder; pluginsReveal the
 	// folder of a row to scroll to once.
 	pluginsView int
-	// providersOpen are Settings › Providers' rows opened, by provider;
-	// providersTab its chosen tab.
+	// providersOpen are Settings › Providers' rows opened, by provider.
 	providersOpen map[string]bool
-	providersTab  int
 	pluginsQuery  string
 	pluginsOpen   map[string]bool
 	pluginsReveal string

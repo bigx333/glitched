@@ -3,7 +3,6 @@ package main
 import (
 	"cmp"
 	"fmt"
-	"slices"
 
 	"github.com/egoist/mygo/ui"
 
@@ -115,11 +114,11 @@ func (a *app) providerDetail(c *ui.Context, r providerRow) {
 	ui.Column(c).Gap(18).Padding(16).Children(func() {
 		switch {
 		case r.info.State == transport.ProviderNotInstalled:
-			pluginNotice(c, "needs", toneWarn, r.family.name+" is not installed", func() {
+			pluginNotice(c, "needs", toneWarn, "Install "+r.family.name, func() {
 				ui.Text(c, r.info.Error).Selectable().FontSize(12).TextColor(palette.muted)
 			}, func() { a.checkAgain(c) })
 		case r.info.State == transport.ProviderSignedOut:
-			pluginNotice(c, "needs", toneWarn, r.family.name+" is signed out", func() {
+			pluginNotice(c, "needs", toneWarn, "Sign in to "+r.family.name, func() {
 				ui.Text(c, r.info.Error).Selectable().FontSize(12).TextColor(palette.muted)
 			}, func() { a.checkAgain(c) })
 		case r.heard && r.served && r.info.Error != "":
@@ -127,7 +126,7 @@ func (a *app) providerDetail(c *ui.Context, r providerRow) {
 				ui.Text(c, clip(r.info.Error, 1200)).Selectable().Font("monospace").FontSize(11.5).TextColor(palette.text).MaxLines(12)
 			}, func() { a.checkAgain(c) })
 		}
-		a.providerModels(c, r)
+		a.providerDefault(c, r)
 		if r.info.Info.Path != "" || r.version() != "" {
 			inset(c, "PROGRAM", func() {
 				if r.info.Info.Path != "" {
@@ -153,51 +152,94 @@ func (a *app) checkAgain(c *ui.Context) {
 	ui.Button(c.Key("check"), label).Disabled(a.models.asking).OnClick(a.checkProviders)
 }
 
-// providerModels are the models the provider's engine offers, each a
-// choice of the default for new threads: the same one the picker and
-// General choose, model and effort together.
-func (a *app) providerModels(c *ui.Context, r providerRow) {
-	models, _ := a.rowModels(r)
+// defaultChoice is a model with the effort it runs at: what the default
+// for new threads is, and what one item of a provider's control picks.
+type defaultChoice struct {
+	model  modelKey
+	effort string
+}
+
+// providerDefault is the provider's one control of the default for new
+// threads: the same one the picker and General choose, model and effort
+// together, from the models its engine reports. Its menu lists them, and
+// the efforts of the default where it is the provider's.
+func (a *app) providerDefault(c *ui.Context, r providerRow) {
+	models, gone := a.rowModels(r)
 	if len(models) == 0 {
 		return
 	}
-	inset(c, "MODELS", func() {
-		chosen := a.model
-		ui.RadioGroup(c, func() {
-			for _, m := range models {
-				_, offered := a.modelOf(m.key)
-				ui.Row(c).Key(m.key.String()).Padding(10, 12).GapY(8).GapX(12).AlignItems(ui.Center).Wrap().Children(func() {
-					ui.Row(c).Grow(1).Shrink(1).Basis(220).Gap(10).AlignItems(ui.Center).Children(func() {
-						ui.Radio(c.Key("default"), &chosen, m.key, "").Label("Default model: " + m.name)
-						ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
-							ui.Text(c, m.short).FontWeight(500)
-							if m.desc != "" {
-								ui.Text(c, m.desc).FontSize(12).TextColor(palette.muted)
+	ours := a.model.Provider == r.family.provider
+	inset(c, "DEFAULT FOR NEW THREADS", func() {
+		optionRow(c, "Default model", "New threads start on it. The composer's picker chooses the same one.", func() {
+			chosen := defaultChoice{a.model, a.effort}
+			sel := ui.SelectBase(c.Key("default"), &chosen)
+			m, _ := a.modelOf(a.model)
+			label := "Choose a model"
+			if ours {
+				label = m.short + " · " + cmp.Or(effortLabel(m, a.effort), a.effort)
+			}
+			sel.Trigger.Label("Default model for new threads").Description(a.defaultLine(r)).Padding(5, 8, 5, 10).Gap(6).AlignItems(ui.Center).
+				Radius(6).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Cursor(ui.CursorPointer).Children(func() {
+				col := palette.text
+				if !ours {
+					col = palette.muted
+				}
+				ui.Text(c, label).FontSize(12.5).TextColor(col).SingleLine()
+				if ours && gone {
+					ui.Text(c, "No longer offered").FontSize(11.5).FontWeight(550).TextColor(palette.amber).SingleLine()
+				}
+				ui.Icon(c, icChevronD).FontSize(11).TextColor(palette.muted)
+			})
+			sel.Popup(func(panel ui.Element) {
+				panel.Padding(4).MinWidth(240).Radius(10).Border(1, palette.border).Background(palette.surface).Shadow(0, 12, 32, 0, ui.RGBA(0, 0, 0, 0.3))
+				item := func(v defaultChoice, text, note string, checked bool) {
+					it := sel.Item(v).Padding(6, 10).Gap(8).Radius(6).AlignItems(ui.Center)
+					if it.Highlighted() {
+						it.Background(palette.hover)
+					}
+					it.Children(func() {
+						ui.Box(c).Width(14).Shrink(0).Children(func() {
+							if checked {
+								ui.Icon(c, icCheck).FontSize(12).TextColor(palette.accent)
 							}
 						})
+						ui.Text(c, text).FontSize(12.5).Grow(1).SingleLine()
+						if note != "" {
+							ui.Text(c, note).FontSize(11.5).TextColor(palette.amber).SingleLine()
+						}
 					})
-					if !offered {
-						statePill(c, "No longer offered", toneWarn)
+				}
+				popupLabel(c, "MODEL")
+				for _, o := range models {
+					note := ""
+					if _, offered := a.modelOf(o.key); !offered {
+						note = "No longer offered"
 					}
-					if m.key == a.model {
-						es := effortsOf(m)
-						labels := make([]string, len(es))
-						for i, e := range es {
-							labels[i] = e.label
-						}
-						shown := cmp.Or(effortLabel(m, a.effort), labels[0])
-						if ui.Select(c.Key("effort"), &shown, labels).Label("Effort of " + m.name).Width(150).Changed() {
-							a.effort = es[slices.Index(labels, shown)].id
-						}
-					}
-				})
+					item(defaultChoice{o.key, effortFor(o, a.effort)}, o.short, note, o.key == a.model)
+				}
+				if !ours {
+					return
+				}
+				ui.Divider(c).Background(palette.border).Margin(4, 0)
+				popupLabel(c, "EFFORT")
+				for _, e := range effortsOf(m) {
+					item(defaultChoice{a.model, e.id}, e.label, "", e.id == a.effort)
+				}
+			})
+			if chosen != (defaultChoice{a.model, a.effort}) {
+				if chosen.model != a.model {
+					a.chooseModel(chosen.model)
+				}
+				a.effort = chosen.effort
+				a.saveComposer()
 			}
-		}).Label("Default model for new threads").Dividers(1, palette.border)
-		if chosen != a.model {
-			a.chooseModel(chosen)
-		}
-		a.saveComposer()
+		})
 	})
+}
+
+// popupLabel heads a group of a menu's items, in line with their text.
+func popupLabel(c *ui.Context, s string) {
+	ui.Text(c, s).FontSize(10.5).FontWeight(600).LetterSpacing(0.6).TextColor(palette.faint).Padding(6, 10, 2, 32)
 }
 
 // providerHead is a provider in a line: its mark, name and version, what
@@ -217,19 +259,12 @@ func (a *app) providerHead(c *ui.Context, r providerRow) {
 	statePill(c, state, t)
 }
 
-// providersVariant picks the layout of Settings › Providers being tried.
-var providersVariant = "A"
-
 // providers is Settings › Providers: every provider the engine serves.
 func (a *app) providers(c *ui.Context) {
 	a.askModels()
 	rows := a.providerRows()
 	if len(rows) == 0 {
 		ui.Text(c, "Waiting for the engine to say what it runs.").Key("none").TextColor(palette.muted).Padding(0, 4)
-		return
-	}
-	if providersVariant == "B" {
-		a.providerTabs(c, rows)
 		return
 	}
 	ui.Column(c).Radius(12).Border(1, palette.border).Background(palette.surface).Clip().Dividers(1, palette.border).Children(func() {
@@ -266,22 +301,5 @@ func (a *app) providerRowA(c *ui.Context, r providerRow) {
 		if panel.Valid() {
 			panel.BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Background(palette.bg.Alpha(0.45))
 		}
-	})
-}
-
-// providerTabs is a tab per provider over the chosen one's detail.
-func (a *app) providerTabs(c *ui.Context, rows []providerRow) {
-	names := make([]string, len(rows))
-	for i, r := range rows {
-		names[i] = r.family.name
-	}
-	a.providersTab = min(a.providersTab, len(rows)-1)
-	ui.Row(c).Gap(12).AlignItems(ui.Center).Wrap().Children(func() {
-		ui.Segmented(c.Key("tabs"), &a.providersTab, names...).Label("Provider")
-	})
-	r := rows[a.providersTab]
-	ui.Column(c).Key("provider:"+r.family.provider).Radius(12).Border(1, palette.border).Background(palette.surface).Clip().Children(func() {
-		ui.Row(c).Padding(12, 16, 12, 14).Gap(12).AlignItems(ui.Center).Children(func() { a.providerHead(c, r) })
-		ui.Column(c).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Background(palette.bg.Alpha(0.45)).Children(func() { a.providerDetail(c, r) })
 	})
 }

@@ -47,12 +47,14 @@ func TestTheProvidersPageListsWhatTheEngineReports(t *testing.T) {
 	))
 	allAnswered(h)
 	openProviders(h, "claude")
-	for _, s := range []string{"Claude", "Ready", "Default · Opus 5.5 · High", "Opus 5.5", "Fable 5.2", "Most capable for your hardest tasks"} {
+	h.click("Default model for new threads")
+	h.tt.Advance(time.Second)
+	for _, s := range []string{"Claude", "Ready", "Default · Opus 5.5 · High", "Opus 5.5 · High", "Opus 5.5", "Fable 5.2"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("the page doesn't show %q: %q", s, h.tt.Texts())
 		}
 	}
-	for _, s := range []string{"Sonnet 5.5", "Codex", "Gemini", "Grok", "Claude Code", "v2.4.1"} {
+	for _, s := range []string{"Sonnet 5.5", "Codex", "Gemini", "Grok", "Claude Code", "v2.4.1", "Custom models"} {
 		if h.tt.HasText(s) {
 			t.Errorf("the page shows %q, which no engine reports", s)
 		}
@@ -67,7 +69,14 @@ func TestTheProvidersPageKeepsADefaultNoLongerOffered(t *testing.T) {
 	h := startWith(t, dir, engineReports("claude", provider.Model{ID: "claude-fable-5-2", Name: "Fable 5.2"}))
 	allAnswered(h)
 	openProviders(h, "claude")
-	for _, s := range []string{"Default · Sonnet 5.5 · High · No longer offered", "Fable 5.2", "No longer offered"} {
+	for _, s := range []string{"Default · Sonnet 5.5 · High · No longer offered", "Sonnet 5.5 · High", "No longer offered"} {
+		if !h.tt.HasText(s) {
+			t.Errorf("the page doesn't show %q: %q", s, h.tt.Texts())
+		}
+	}
+	h.click("Default model for new threads")
+	h.tt.Advance(time.Second)
+	for _, s := range []string{"Fable 5.2", "Sonnet 5.5"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("the page doesn't show %q: %q", s, h.tt.Texts())
 		}
@@ -87,7 +96,9 @@ func TestTheProvidersPageAndThePickerChooseOneDefault(t *testing.T) {
 	))
 	allAnswered(h)
 	openProviders(h, "claude")
-	h.click("Default model: Claude Fable 5.2")
+	h.click("Default model for new threads")
+	h.tt.Advance(time.Second)
+	h.click("Fable 5.2")
 	h.tt.Frame()
 	if got := h.a.modelRef(); got.Model != "claude-fable-5-2" || got.Effort != "medium" {
 		t.Fatalf("after choosing Fable on the page, a new thread is on %+v, want Fable at medium", got)
@@ -106,7 +117,7 @@ func TestTheProvidersPageAndThePickerChooseOneDefault(t *testing.T) {
 	h.click("Opus 5.5")
 	pickerSettle(t, h)
 	openProviders(h)
-	if !h.tt.HasText("Default · Opus 5.5 · Low") {
+	if !h.tt.HasText("Default · Opus 5.5 · Low") || !h.tt.HasText("Opus 5.5 · Low") {
 		t.Errorf("after choosing Opus in the picker, the page doesn't show it as the default: %q", h.tt.Texts())
 	}
 }
@@ -124,11 +135,18 @@ func TestTheProvidersPageSaysWhatAProviderNeeds(t *testing.T) {
 	if got := h.a.models.served["grok"].State; got != transport.ProviderNotInstalled {
 		t.Errorf("grok's state is %q, want not installed", got)
 	}
-	openProviders(h, "antigravity", "grok")
-	for _, s := range []string{"Signed out", "Antigravity is signed out", "Antigravity is signed out. Run agy in Terminal to sign in.", "Not installed", "Grok is not installed.", "Check again"} {
+	openProviders(h, "claude", "antigravity", "grok")
+	for _, s := range []string{"Signed out", "Sign in to Antigravity", "Antigravity is signed out. Run agy in Terminal to sign in.", "Not installed", "Install Grok", "Grok is not installed.", "Check again"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("the page doesn't show %q: %q", s, h.tt.Texts())
 		}
+	}
+	h.click("Default model for new threads")
+	h.tt.Advance(time.Second)
+	h.click("High")
+	h.tt.Frame()
+	if got := h.a.modelRef(); got.Model != "claude-opus-5-5" || got.Effort != "high" {
+		t.Errorf("choosing High in the control made the default %+v", got)
 	}
 	if got := h.a.models.reported["grok"]; len(got) != 0 {
 		t.Errorf("grok, not installed, offers %+v", got)
