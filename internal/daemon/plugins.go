@@ -71,7 +71,7 @@ func (d *Daemon) pluginEffect(_ string, e plugins.Effect) (any, error) {
 		}
 		out := []plugins.ThreadRecord{}
 		for _, t := range snap.Threads {
-			out = append(out, plugins.ThreadRecord{ID: t.ID.String(), Title: t.Title, Workspace: t.Workspace, Status: status(t), UpdatedAt: t.UpdatedAt.UTC().Format(time.RFC3339)})
+			out = append(out, plugins.ThreadRecord{ID: t.ID.String(), Title: t.Title, Workspace: t.Workspace, Status: status(t), UpdatedAt: t.UpdatedAt.UTC().Format(time.RFC3339), Local: true})
 		}
 		slices.SortFunc(out, func(x, y plugins.ThreadRecord) int { return strings.Compare(y.UpdatedAt, x.UpdatedAt) })
 		return out, nil

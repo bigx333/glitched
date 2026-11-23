@@ -96,6 +96,41 @@ func TestTheSocketListsAProvidersCommandsOncePerWorkspace(t *testing.T) {
 	}
 }
 
+// answering is the fake, answering every ask with its prompt.
+type answering struct{ *fake.Adapter }
+
+func (answering) Ask(_ context.Context, spec provider.AskSpec) (provider.AskResult, error) {
+	return provider.AskResult{Text: "re: " + spec.Prompt, Model: "cheap"}, nil
+}
+
+func TestTheSocketAsksTheProviderNamed(t *testing.T) {
+	dir := stateDir(t)
+	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Listen: []string{"127.0.0.1:0"},
+		Providers: provider.Mux{"fake": fake.New(nil), "answering": answering{fake.New(nil)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	local := transport.NewEndpointClient(Socket(dir), api.ID{})
+	defer local.Close()
+	ctx := context.Background()
+
+	if got, err := local.ProviderAsk(ctx, "answering", provider.AskSpec{Prompt: "hi"}); err != nil || got != (provider.AskResult{Text: "re: hi", Model: "cheap"}) {
+		t.Errorf("ask: %+v, %v", got, err)
+	}
+	if _, err := local.ProviderAsk(ctx, "fake", provider.AskSpec{Prompt: "hi"}); !errors.Is(err, provider.ErrUnsupported) {
+		t.Errorf("a provider that can't answer: %v, want ErrUnsupported across the socket", err)
+	}
+	// An ask spends the user's account, so the tailnet's callers don't get one.
+	token, err := Pair(dir, "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remote(t, d, token).ProviderAsk(ctx, "answering", provider.AskSpec{Prompt: "hi"}); err == nil {
+		t.Error("a paired token over TCP was answered")
+	}
+}
+
 func TestAListingIsAskedAgainOnceStaleOrFailed(t *testing.T) {
 	ad := &counted{Adapter: fake.New(nil), asked: map[string]int{}, fail: errors.New("claude: not found")}
 	at := time.Now()

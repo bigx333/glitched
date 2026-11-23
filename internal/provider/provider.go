@@ -43,6 +43,31 @@ func (n Needs) Unwrap() error { return n.Kind }
 // next Describe ask the provider again, as after the user signed in.
 type Forgetter interface{ Forget() }
 
+// ErrUnavailable is what Ask returns when the provider's CLI isn't on this
+// machine.
+var ErrUnavailable = errors.New("provider: not installed")
+
+// Asker is an Adapter that answers one prompt with text: no session, no
+// tools, no thread.
+type Asker interface {
+	Ask(ctx context.Context, spec AskSpec) (AskResult, error)
+}
+
+// AskSpec is one prompt. Model "" is the adapter's own cheap model. Dir is
+// the folder the provider runs in, whose project files it may read.
+type AskSpec struct {
+	Model  string `json:"model,omitempty"`
+	System string `json:"system,omitempty"`
+	Prompt string `json:"prompt"`
+	Dir    string `json:"dir,omitempty"`
+}
+
+// AskResult is the answer, and the model that wrote it.
+type AskResult struct {
+	Text  string `json:"text"`
+	Model string `json:"model"`
+}
+
 // Sessioned is an Agent whose provider chose its own id for the thread's
 // conversation. The host reads it after Open and stores it before Start,
 // and gives it back in SessionSpec.Session to the thread's later runs.

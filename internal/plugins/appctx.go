@@ -33,6 +33,9 @@ type ThreadRecord struct {
 	// what its own runs used.
 	Requests int   `json:"requests,omitempty"`
 	Tokens   int64 `json:"tokens,omitempty"`
+	// Local says the workspace is on this machine, where glitched.run
+	// runs.
+	Local bool `json:"local,omitempty"`
 }
 
 // Disposition is a thread's inbox state: inbox, snoozed till Until (RFC

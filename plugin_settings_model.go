@@ -75,6 +75,7 @@ var capRisks = map[string]string{
 	"ui.replace":     "What you see in those parts is the plugin's, not Glitched's.",
 	"commands":       "It does what choosing them in the palette does, unasked: it can start threads, switch the theme and open your settings.",
 	"threads:access": "It draws the control that sets what agents may do, and can give them Full access to your computer without the hold Glitched asks for.",
+	"models:ask":     "What it asks goes to the model's provider, on your account's usage.",
 }
 
 // capRisk is what granting the capability risks, "" for a lighter grant.

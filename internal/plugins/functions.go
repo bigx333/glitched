@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,12 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	plugin "github.com/yxxbc/mygo-plugin"
 
 	"glitched/internal/plugins/guard"
+	"glitched/internal/provider"
 	"glitched/internal/secrets"
 )
 
@@ -65,7 +68,10 @@ globalThis.glitched = Object.freeze({
     configure: (thread, options = {}) => app("threads.configure", { ...options, thread }),
     setAccess: (thread, access) => app("threads.setAccess", { thread: thread ?? "", access }),
   }),
-  models: Object.freeze({ list: () => app("models.list") }),
+  models: Object.freeze({
+    list: () => app("models.list"),
+    ask: (prompt, options = {}) => host.call("models.ask", { ...options, prompt }),
+  }),
   commands: Object.freeze({
     list: () => app("commands.list"),
     run: (id, palette) => app("commands.run", { id, palette: palette ?? "" }),
@@ -168,6 +174,9 @@ func (h *Host) functions(in *installed) map[string]plugin.Function {
 			}
 			return run(ctx, id, in.ext.Programs, args)
 		},
+		"models.ask": func(ctx context.Context, args json.RawMessage) (any, error) {
+			return h.ask(ctx, id, args)
+		},
 		"service.call": func(ctx context.Context, args json.RawMessage) (any, error) {
 			if in.ext.Service == "" {
 				return nil, coded{"no_service", errors.New("the plugin has no service")}
@@ -196,6 +205,67 @@ func (h *Host) functions(in *installed) map[string]plugin.Function {
 		},
 	}
 	return fns
+}
+
+// The bounds of an ask.
+const (
+	MaxAsk     = 200 << 10 // the prompt and the system prompt together, in bytes
+	AskTimeout = 120 * time.Second
+)
+
+// AskRequest is what glitched.models.ask asks: the prompt, a system prompt,
+// and the provider and model to run it on, "" for the defaults.
+type AskRequest struct {
+	Prompt   string `json:"prompt"`
+	System   string `json:"system,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+}
+
+// AskAnswer is the text, and the provider and model that wrote it, as
+// models.list names them.
+type AskAnswer struct {
+	Text     string `json:"text"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// ask is glitched.models.ask: one at a time per plugin, as each spends
+// the user's account.
+func (h *Host) ask(ctx context.Context, id string, args json.RawMessage) (any, error) {
+	if !h.Allowed(id, "models:ask") {
+		return nil, denied("asking a model needs the models:ask capability, granted in Settings › Plugins")
+	}
+	var q AskRequest
+	d := json.NewDecoder(bytes.NewReader(args))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&q); err != nil || strings.TrimSpace(q.Prompt) == "" {
+		return nil, errors.New("glitched.models.ask takes a prompt, and options of system, provider and model only")
+	}
+	if len(q.Prompt)+len(q.System) > MaxAsk {
+		return nil, coded{"too_large", fmt.Errorf("an ask's prompt and system prompt are %d KB at most", MaxAsk>>10)}
+	}
+	if h.opts.Ask == nil {
+		return nil, coded{"unavailable", errors.New("no model answers here")}
+	}
+	if _, busy := h.asking.LoadOrStore(id, true); busy {
+		return nil, coded{"busy", errors.New("the plugin's last ask isn't answered yet")}
+	}
+	defer h.asking.Delete(id)
+	ctx, cancel := context.WithTimeout(ctx, AskTimeout)
+	defer cancel()
+	a, err := h.opts.Ask(ctx, id, q)
+	switch {
+	case err == nil:
+		return a, nil
+	case errors.Is(err, provider.ErrUnsupported):
+		return nil, coded{"unsupported", err}
+	case errors.Is(err, provider.ErrUnavailable):
+		return nil, coded{"unavailable", err}
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return nil, coded{"timeout", fmt.Errorf("the model didn't answer within %s", AskTimeout)}
+	}
+	return nil, err
 }
 
 // RunProgram is glitched.run: a program the plugin's manifest names, run

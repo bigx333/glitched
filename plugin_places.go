@@ -41,6 +41,7 @@ func (a *app) threadRecord(t thread) plugins.ThreadRecord {
 		Unread:      a.backend.Unread(t.Thread),
 		Requests:    len(t.View.Requests),
 		Tokens:      t.View.Tokens,
+		Local:       t.local(),
 	}
 	if p, ok := a.parentOf(t); ok {
 		r.Parent = p.id().String()
@@ -70,7 +71,7 @@ func recordVersion(r plugins.ThreadRecord) string {
 		d = r.Disposition.State + " " + r.Disposition.Until
 	}
 	return strings.Join([]string{r.Title, r.Workspace, r.Status, r.Machine, r.UpdatedAt, r.Section, d, strconv.FormatBool(r.Unread),
-		r.Parent, strings.Join(r.Ancestors, ","), strings.Join(r.Children, ","), strconv.Itoa(r.Requests), strconv.FormatInt(r.Tokens, 10)}, "\x00")
+		r.Parent, strings.Join(r.Ancestors, ","), strings.Join(r.Children, ","), strconv.Itoa(r.Requests), strconv.FormatInt(r.Tokens, 10), strconv.FormatBool(r.Local)}, "\x00")
 }
 
 // placeKey names one copy of a plugin's place.
