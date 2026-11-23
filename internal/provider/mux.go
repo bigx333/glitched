@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 )
 
 // ErrNoAdapter is what a Mux returns for a provider it has no adapter for.
@@ -19,7 +20,7 @@ func (m Mux) adapter(name string) (Adapter, error) {
 	if a, ok := m[name]; ok {
 		return a, nil
 	}
-	return nil, fmt.Errorf("%w for %q on this engine", ErrNoAdapter, name)
+	return nil, fmt.Errorf("%w for %q on this engine, which has %s", ErrNoAdapter, name, strings.Join(m.Names(), ", "))
 }
 
 // Names are the providers m serves, sorted.

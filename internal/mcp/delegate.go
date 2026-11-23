@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
-	"glitched/internal/transport"
 )
 
 // Tools are the tools glitched mcp serves, for Origin, on Engine.
@@ -25,17 +25,21 @@ type Tools struct {
 	Plugins PluginTools
 	// Secrets asks the user for credentials; nil can't.
 	Secrets Asker
-	// Providers lists the engine's providers and their models, which a
-	// delegate that names a provider, model or effort is checked against;
-	// nil checks nothing, and refuses a provider other than the caller's.
+	// Providers are the engine's providers, which a delegate that names a
+	// provider, model or effort is checked against; nil checks nothing,
+	// and refuses a provider other than the caller's.
 	Providers Providers
 }
 
-// Providers are the engine's providers, as transport.EndpointClient lists
-// them.
+// Providers are the engine's providers, as provider.Mux serves them: each
+// asked alone, so one that doesn't answer holds up no other.
 type Providers interface {
-	Providers(ctx context.Context, fresh, check bool) ([]transport.ProviderInfo, error)
+	Describe(ctx context.Context, name string) (provider.Info, error)
+	DefaultModel(ctx context.Context, name, workspace string) (string, error)
 }
+
+// providerAsk bounds what a delegate asks of a provider about itself.
+const providerAsk = 20 * time.Second
 
 // PluginTools are the engine's plugin tools, as transport.EndpointClient
 // reaches them.
@@ -123,7 +127,12 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 		}
 		return TaskView{}, errors.New("delegate_task: this agent was started for an earlier turn of the thread, so it can't delegate for the current one")
 	}
-	model, err := t.childModel(ctx, turn.Model, in)
+	// A retry finds the child its first try made before anything about the
+	// providers is asked again: what they say may have changed since.
+	if th, task, ok := t.child(ctx, child); ok && th.Parent == t.Origin.Thread && task == in.Task {
+		return TaskView{TaskID: child.String(), Title: th.Title, Status: "working"}, nil
+	}
+	model, err := t.childModel(ctx, turn.Model, parent.Workspace, in)
 	if err != nil {
 		return TaskView{}, err
 	}
@@ -161,13 +170,14 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 	return TaskView{TaskID: child.String(), Title: title, Status: "working"}, nil
 }
 
-// childModel is the model a child of a turn at turn runs at, as in asks.
-// On the turn's provider, what in leaves out is the turn's; on another,
-// the turn's model, effort and Fast are that provider's to choose, so
-// they are left out too and its program runs its own default, as a
-// thread that follows it does. What in names is checked against what the
-// engine's providers offer.
-func (t *Tools) childModel(ctx context.Context, turn api.ModelRef, in delegateArgs) (api.ModelRef, error) {
+// childModel is the model a child of a turn at turn, in workspace, runs
+// at, as in asks. On the turn's provider, what in leaves out is the
+// turn's; on another, the turn's model, effort and Fast are that
+// provider's to choose, so they are left out too and its program runs its
+// own default, as a thread that follows it does. What in names is checked
+// against what the provider offers, and an effort only where the provider
+// says the model's efforts.
+func (t *Tools) childModel(ctx context.Context, turn api.ModelRef, workspace string, in delegateArgs) (api.ModelRef, error) {
 	m := turn
 	if in.Provider != "" && in.Provider != turn.Provider {
 		m = api.ModelRef{Provider: in.Provider}
@@ -182,42 +192,45 @@ func (t *Tools) childModel(ctx context.Context, turn api.ModelRef, in delegateAr
 		}
 		return m, nil
 	}
-	all, err := t.Providers.Providers(ctx, false, false)
+	ctx, cancel := context.WithTimeout(ctx, providerAsk)
+	defer cancel()
+	info, err := t.Providers.Describe(ctx, m.Provider)
 	if err != nil {
-		return api.ModelRef{}, fmt.Errorf("delegate_task: the engine couldn't list its providers: %w", err)
+		return api.ModelRef{}, fmt.Errorf("delegate_task: %s can't run a child: %w", m.Provider, err)
 	}
-	i := slices.IndexFunc(all, func(p transport.ProviderInfo) bool { return p.Name == m.Provider })
-	if i < 0 {
-		names := make([]string, len(all))
-		for i, p := range all {
-			names[i] = p.Name
+	ids := func(n int, id func(int) string) string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = id(i)
 		}
-		return api.ModelRef{}, fmt.Errorf("delegate_task: this engine has no provider %q; it has %s", m.Provider, strings.Join(names, ", "))
+		return strings.Join(out, ", ")
 	}
-	if all[i].Error != "" {
-		return api.ModelRef{}, fmt.Errorf("delegate_task: %s can't run a child now: %s", m.Provider, all[i].Error)
+	name := m.Model
+	if name == "" {
+		// The program's default where the child runs, as its settings
+		// there may name one, else the one the provider marks.
+		if name, err = t.Providers.DefaultModel(ctx, m.Provider, workspace); err != nil || name == "" {
+			if i := slices.IndexFunc(info.Models, func(x provider.Model) bool { return x.Default }); i >= 0 {
+				name = info.Models[i].ID
+			}
+		}
 	}
-	models := all[i].Info.Models
-	j := slices.IndexFunc(models, func(x provider.Model) bool { return x.ID == m.Model })
-	if m.Model == "" {
-		j = slices.IndexFunc(models, func(x provider.Model) bool { return x.Default })
-	}
-	if in.Model != "" && j < 0 && len(models) == 0 {
+	j := slices.IndexFunc(info.Models, func(x provider.Model) bool { return x.ID == name })
+	switch {
+	case in.Model != "" && len(info.Models) == 0:
 		return api.ModelRef{}, fmt.Errorf("delegate_task: %s lists no models, so it runs only its own default: leave model out", m.Provider)
+	case in.Model != "" && j < 0:
+		return api.ModelRef{}, fmt.Errorf("delegate_task: %s has no model %q; its models are %s", m.Provider, in.Model, ids(len(info.Models), func(i int) string { return info.Models[i].ID }))
+	case in.Effort == "":
+		return m, nil
+	case j < 0:
+		return api.ModelRef{}, fmt.Errorf("delegate_task: %s can't say which model it runs by default, so the effort %q can't be checked: name a model, or leave effort out", m.Provider, in.Effort)
+	case len(info.Models[j].Efforts) == 0:
+		return api.ModelRef{}, fmt.Errorf("delegate_task: %s offers no efforts for %s, so it would run at its own: leave effort out", m.Provider, name)
 	}
-	if in.Model != "" && j < 0 {
-		ids := make([]string, len(models))
-		for i, x := range models {
-			ids[i] = x.ID
-		}
-		return api.ModelRef{}, fmt.Errorf("delegate_task: %s has no model %q; its models are %s", m.Provider, in.Model, strings.Join(ids, ", "))
-	}
-	if in.Effort != "" && j >= 0 && len(models[j].Efforts) > 0 && !slices.ContainsFunc(models[j].Efforts, func(e provider.Effort) bool { return e.ID == in.Effort }) {
-		ids := make([]string, len(models[j].Efforts))
-		for i, e := range models[j].Efforts {
-			ids[i] = e.ID
-		}
-		return api.ModelRef{}, fmt.Errorf("delegate_task: %s runs at no effort %q; its efforts are %s", models[j].ID, in.Effort, strings.Join(ids, ", "))
+	efforts := info.Models[j].Efforts
+	if !slices.ContainsFunc(efforts, func(e provider.Effort) bool { return e.ID == in.Effort }) {
+		return api.ModelRef{}, fmt.Errorf("delegate_task: %s runs at no effort %q; its efforts are %s", name, in.Effort, ids(len(efforts), func(i int) string { return efforts[i].ID }))
 	}
 	return m, nil
 }

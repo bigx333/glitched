@@ -98,7 +98,18 @@ func Main(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	}
 	ep := transport.NewEndpointClient(transport.Loopback{Network: "unix", Address: engine}, api.ID{})
 	defer ep.Close()
-	return Serve(ctx, stdin, stdout, &Tools{Engine: ep, Origin: o, Plugins: ep, Secrets: ep, Providers: ep})
+	return Serve(ctx, stdin, stdout, &Tools{Engine: ep, Origin: o, Plugins: ep, Secrets: ep, Providers: engineProviders{ep}})
+}
+
+// engineProviders are the providers of the engine ep reaches.
+type engineProviders struct{ ep *transport.EndpointClient }
+
+func (p engineProviders) Describe(ctx context.Context, name string) (provider.Info, error) {
+	return p.ep.ProviderDescribe(ctx, name)
+}
+
+func (p engineProviders) DefaultModel(ctx context.Context, name, workspace string) (string, error) {
+	return p.ep.ProviderDefault(ctx, name, workspace)
 }
 
 func fromEnv() (Origin, string, error) {

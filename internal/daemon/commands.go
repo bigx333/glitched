@@ -69,6 +69,10 @@ func (c *commandLists) stale(l *listing) bool {
 	}
 }
 
+func (c *commandLists) Describe(ctx context.Context, name string) (provider.Info, error) {
+	return c.mux.Describe(ctx, name)
+}
+
 func (c *commandLists) DefaultModel(ctx context.Context, name, workspace string) (string, error) {
 	return c.mux.DefaultModel(ctx, name, workspace)
 }
