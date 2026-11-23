@@ -37,17 +37,23 @@ type heldAgent struct {
 	free int
 }
 
+// Next plays the script's first free events, and holds the rest until the
+// gate opens; what the agent confirms it runs at plays free.
 func (g *heldAgent) Next(ctx context.Context) (provider.Event, error) {
-	if g.free > 0 {
-		g.free--
-		return g.Agent.Next(ctx)
+	if g.free == 0 {
+		select {
+		case <-g.gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	select {
-	case <-g.gate:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	e, err := g.Agent.Next(ctx)
+	switch e.(type) {
+	case provider.Granted, provider.Ran:
+	default:
+		g.free = max(g.free-1, 0)
 	}
-	return g.Agent.Next(ctx)
+	return e, err
 }
 
 // holding starts an app whose Claude threads play script, the first free
