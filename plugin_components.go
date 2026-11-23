@@ -572,7 +572,9 @@ func (a *app) headerActionsDrawn(key string, narrow bool) bool {
 		return true
 	}
 	for _, pl := range a.plugins.Replacers("thread.header.actions") {
-		app := a.plugins.App(pl.Plugin)
+		// Live, not App: asking before pluginComponent draws them
+		// mustn't start a session it hasn't yet.
+		app := a.plugins.Live(pl.Plugin)
 		if app == nil || app.Err != nil || app.PlaceView(pl.Place.ID, key) == nil {
 			continue
 		}
