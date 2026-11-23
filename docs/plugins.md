@@ -566,6 +566,7 @@ const status = await glitched.service.call("status", { cwd: folder });
 - No shell: args reach the program as given. `cwd` is an absolute folder (your home without one).
 - `env` sets only harmless variables (`LANG`, `TZ`, `NO_COLOR`, git's identity, gh's quiet switches, `GLITCHED_PLUGIN_…`), never what changes what runs (`PATH`, `GIT_SSH_COMMAND`, `NODE_OPTIONS`, …).
 - git runs its own commands only, with `-c` only for how it prints, `-C` inside `cwd`, `git config` read only, and never its hooks, fsmonitor, `ext::` transport, pager, editor or prompt. gh never runs `alias`, `extension`, `codespace`, `auth` (but `auth status`) or `config` (but reading).
+- No run reads the folder that keeps the credentials agents were given (`secrets` in Glitched's state folder): its `cwd` can't be inside it, and no arg can name a path inside it, as itself, after a flag's `=`, or through a link. A program that reads a whole tree, as `grep -r` of your home does, still reaches it, so a shell or such a program can do anything you can.
 - A run waits `timeout` seconds (60, at most 300), then its process group is killed (`status` -1). 16 MiB of output is kept per stream.
 - The consent sheet names each program, and says that git, gh, a shell or an interpreter can do anything you can.
 
