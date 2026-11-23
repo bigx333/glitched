@@ -10,6 +10,7 @@ require (
 	github.com/ebitengine/purego v0.11.1
 	github.com/egoist/mygo v0.10.0
 	github.com/yxxbc/mygo-plugin v0.6.1-0.20261107072211-4cef697878f0
+	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.61.0
 	tailscale.com v1.104.2
