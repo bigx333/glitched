@@ -135,19 +135,9 @@ func (h *Host) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 func (h *Host) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
 	switch b := c.Body.(type) {
 	case api.ThreadCreate:
-		if b.Worktree == nil {
-			break
+		if b.Worktree != nil {
+			return h.createInWorktree(ctx, c, b)
 		}
-		in, undo, err := h.makeWorktree(ctx, c.Target, b)
-		if err != nil {
-			return api.Receipt{}, err
-		}
-		c.Body = in
-		r, err := h.store.Submit(ctx, c, time.Now())
-		if errors.As(err, new(*api.RejectedError)) {
-			undo()
-		}
-		return r, err
 	case api.ThreadDelete:
 		if b.Worktree != api.KeepWorktree {
 			return h.deleteInWorktree(ctx, c, b.Worktree)

@@ -22,12 +22,21 @@ import (
 // target too, in the same commit, so a child started a moment before goes
 // with it, and the engine starts none under a settled or deleted thread.
 func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.Receipt, error) {
+	return s.SubmitResolved(ctx, c, c.Body, now)
+}
+
+// SubmitResolved is Submit of c, decided as body: what the host made of
+// c's body, as a create in the worktree it made for c. The receipt is
+// c's, so the same c sent again gets it, and another body under c's ID
+// conflicts.
+func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Intent, now time.Time) (api.Receipt, error) {
 	c.Expires = c.Expires.UTC()
-	body, err := json.Marshal(c)
+	wire, err := json.Marshal(c)
 	if err != nil {
 		return api.Receipt{}, &api.RejectedError{Reason: err.Error()}
 	}
-	hash := sha256.Sum256(body)
+	hash := sha256.Sum256(wire)
+	c.Body = body
 	top := step{c.Target, func(q querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
 		if b, ok := c.Body.(api.ThreadCreate); ok && !b.Parent.IsZero() && !t.Exists() {
 			line, err := lineOf(ctx, q, b.Parent)
@@ -71,6 +80,13 @@ func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.R
 		return append(steps, top), nil
 	})
 	return api.Receipt{Command: c.ID, Committed: at, Revision: r.revision}, err
+}
+
+// Committed is whether a command under id was committed.
+func (s *Store) Committed(ctx context.Context, id api.ID) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM commands WHERE id = ?`, id[:]).Scan(&n)
+	return n > 0, err
 }
 
 // treeOf is every thread under top that isn't deleted, each before the

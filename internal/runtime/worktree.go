@@ -16,6 +16,7 @@ import (
 	"unicode"
 
 	"glitched/internal/api"
+	"glitched/internal/engine"
 )
 
 // WithWorktrees has the host make the worktrees threads ask for under
@@ -37,9 +38,9 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// worktreeNames are the branch and the folder of thread's worktree,
-// from its title and its ID alone, so that a create sent again finds
-// the worktree the first one made.
+// worktreeNames are the branch and the folder of thread's worktree. The
+// folder is named by the whole of the thread's ID, so no other thread's
+// is ever taken for it; the branch by the title and the ID's end.
 func worktreeNames(root, top string, thread api.ID, title string) (branch, dir string) {
 	var b strings.Builder
 	for _, r := range strings.ToLower(title) {
@@ -57,88 +58,130 @@ func worktreeNames(root, top string, thread api.ID, title string) (branch, dir s
 	if slug == "" {
 		slug = "thread"
 	}
-	id := thread.String()
-	leaf := slug + "-" + strings.ToLower(id[len(id)-6:])
+	id := strings.ToLower(thread.String())
 	sum := sha256.Sum256([]byte(top))
-	return "glitched/" + leaf, filepath.Join(root, filepath.Base(top)+"-"+hex.EncodeToString(sum[:4]), leaf)
+	return "glitched/" + slug + "-" + id[len(id)-6:], filepath.Join(root, filepath.Base(top)+"-"+hex.EncodeToString(sum[:4]), id)
 }
 
-// makeWorktree makes the worktree c asks for and returns the create of a
-// thread in it, and undo, which takes back a worktree this call made, or
-// why it can't.
-func (h *Host) makeWorktree(ctx context.Context, thread api.ID, c api.ThreadCreate) (api.ThreadCreate, func(), error) {
-	refuse := func(format string, args ...any) (api.ThreadCreate, func(), error) {
-		return c, nil, &api.RejectedError{Reason: "Can't make a worktree: " + fmt.Sprintf(format, args...)}
+// worktreeDir is the folder of the worktree a thread in one runs in: the
+// one under root its workspace is in, "" for a workspace not under root.
+func worktreeDir(root, workspace string) string {
+	rel, err := filepath.Rel(root, workspace)
+	if err != nil {
+		return ""
+	}
+	parts := strings.SplitN(rel, string(filepath.Separator), 3)
+	if len(parts) < 2 || parts[0] == ".." {
+		return ""
+	}
+	return filepath.Join(root, parts[0], parts[1])
+}
+
+// within is whether path is dir or in it.
+func within(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// createInWorktree makes the worktree c asks for and commits the thread
+// in it under c's receipt. A create already committed gets its receipt
+// with no git. One the engine would refuse is refused before git runs;
+// one refused after leaves the worktree for its changes, unless it has
+// none.
+func (h *Host) createInWorktree(ctx context.Context, c api.Command, b api.ThreadCreate) (api.Receipt, error) {
+	if done, err := h.store.Committed(ctx, c.ID); err != nil || done {
+		if err != nil {
+			return api.Receipt{}, err
+		}
+		return h.store.Submit(ctx, c, time.Now())
+	}
+	refuse := func(format string, args ...any) (api.Receipt, error) {
+		return api.Receipt{}, &api.RejectedError{Reason: "Can't make a worktree: " + fmt.Sprintf(format, args...)}
 	}
 	if h.worktrees == "" {
 		return refuse("this engine makes none")
 	}
-	if !c.Parent.IsZero() || c.Project != "" {
+	if !b.Parent.IsZero() || b.Project != "" || b.Branch != "" {
 		return refuse("a child runs in its parent's folder")
 	}
-	top, err := git(ctx, c.Workspace, "rev-parse", "--show-toplevel")
+	dry := b
+	dry.Worktree, dry.Project, dry.Branch = nil, b.Workspace, "glitched/dry"
+	if _, _, err := engine.Decide(engine.Thread{}, api.Command{ID: c.ID, Target: c.Target, Revision: c.Revision, Expires: c.Expires, Body: dry}, time.Now()); err != nil {
+		return api.Receipt{}, err
+	}
+	top, err := git(ctx, b.Workspace, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return refuse("%s is not in a git repository", c.Workspace)
-	}
-	if _, err := git(ctx, top, "rev-parse", "--verify", "--quiet", "HEAD"); err != nil {
-		return refuse("the repository at %s has no commits yet", top)
-	}
-	base := baseOf(c.Worktree)
-	if _, err := git(ctx, top, "rev-parse", "--verify", "--quiet", base+"^{commit}"); err != nil {
-		return refuse("the repository has no branch or commit %q", base)
+		return refuse("%s is not in a git repository", b.Workspace)
 	}
 	rel := "."
-	if ws, err := filepath.EvalSymlinks(c.Workspace); err == nil {
-		if r, err := filepath.Rel(top, ws); err == nil && !strings.HasPrefix(r, "..") {
-			rel = r
-		}
+	if ws, err := filepath.EvalSymlinks(b.Workspace); err == nil && within(top, ws) {
+		rel, _ = filepath.Rel(top, ws)
 	}
-	branch, dir := worktreeNames(h.worktrees, top, thread, c.Title)
-	undo := func() {}
+	branch, dir := worktreeNames(h.worktrees, top, c.Target, b.Title)
+	made := false
 	if _, err := os.Stat(dir); err == nil {
 		if cur, err := git(ctx, dir, "branch", "--show-current"); err != nil || cur != branch {
 			return refuse("%s is already there and isn't on %s", dir, branch)
 		}
 	} else {
+		if _, err := git(ctx, top, "rev-parse", "--verify", "--quiet", "HEAD"); err != nil {
+			return refuse("the repository at %s has no commits yet", top)
+		}
+		base := b.Worktree.Base
+		if base == "" {
+			base = "HEAD"
+		}
+		if _, err := git(ctx, top, "rev-parse", "--verify", "--quiet", base+"^{commit}"); err != nil {
+			return refuse("the repository has no branch or commit %q", base)
+		}
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 			return refuse("%v", err)
 		}
 		if _, err := git(ctx, top, "worktree", "add", "--no-track", "-b", branch, dir, base); err != nil {
 			return refuse("%v", err)
 		}
-		undo = func() {
-			_, err := git(context.WithoutCancel(ctx), top, "worktree", "remove", "--force", dir)
-			if err == nil {
-				_, err = git(context.WithoutCancel(ctx), top, "branch", "-D", branch)
-			}
-			if err != nil {
-				slog.Warn("runtime: a refused thread's worktree stays", "worktree", dir, "err", err)
-			}
+		made = true
+	}
+	workspace := filepath.Join(dir, rel)
+	var r api.Receipt
+	realDir, _ := filepath.EvalSymlinks(dir)
+	if real, rerr := filepath.EvalSymlinks(workspace); rerr != nil || !within(realDir, real) {
+		r, err = refuse("%s is not a folder of the worktree on that base", rel)
+	} else {
+		in := b
+		in.Project, in.Branch, in.Workspace, in.Worktree = b.Workspace, branch, workspace, nil
+		r, err = h.store.SubmitResolved(ctx, c, in, time.Now())
+	}
+	if made && err != nil && !errors.Is(err, ctx.Err()) {
+		ctx := context.WithoutCancel(ctx)
+		if _, rmErr := git(ctx, top, "worktree", "remove", dir); rmErr == nil {
+			git(ctx, top, "branch", "-d", branch)
+		} else {
+			slog.Warn("runtime: a refused thread's worktree stays for what is in it", "worktree", dir, "err", rmErr)
 		}
 	}
-	c.Project, c.Branch, c.Workspace, c.Worktree = c.Workspace, branch, filepath.Join(dir, rel), nil
-	return c, undo, nil
+	return r, err
 }
 
-// baseOf is the branch or commit w starts from.
-func baseOf(w *api.NewWorktree) string {
-	if w.Base == "" {
-		return "HEAD"
-	}
-	return w.Base
-}
-
-// deleteInWorktree deletes the thread c names and, after the delete
-// commits, removes its worktree as end says: never one with changes
-// unless end throws them away, and never its branch while that has
-// commits that aren't merged.
+// deleteInWorktree deletes the thread c names and, once the delete
+// commits, removes its worktree as end says. It removes only the worktree
+// Glitched made for the thread, still on the thread's branch, and with
+// RemoveWorktree only one git shows no change in, untracked files and
+// submodules' changes included; ignored files go with it. A branch with
+// commits that aren't merged stays.
 func (h *Host) deleteInWorktree(ctx context.Context, c api.Command, end api.WorktreeEnd) (api.Receipt, error) {
 	refuse := func(format string, args ...any) (api.Receipt, error) {
 		return api.Receipt{}, &api.RejectedError{Reason: "Can't remove the worktree: " + fmt.Sprintf(format, args...)}
 	}
+	if end > api.RemoveWorktreeChanges {
+		return refuse("unknown worktree end %d", end)
+	}
 	t, err := h.store.Thread(ctx, c.Target)
 	if err != nil {
 		return api.Receipt{}, err
+	}
+	if !t.Exists() || t.Deleted {
+		return h.store.Submit(ctx, c, time.Now())
 	}
 	if t.Branch == "" {
 		return refuse("the thread runs in its project's folder")
@@ -148,21 +191,33 @@ func (h *Host) deleteInWorktree(ctx context.Context, c api.Command, end api.Work
 			return refuse("it is the worktree of the thread above this one too")
 		}
 	}
-	top, err := git(ctx, t.Workspace, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return h.store.Submit(ctx, c, time.Now())
+	dir := worktreeDir(h.worktrees, t.Workspace)
+	if h.worktrees == "" || dir == "" {
+		return refuse("it isn't one this engine made")
 	}
-	common, err := git(ctx, top, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	common, err := git(ctx, t.Project, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
-		return refuse("%v", err)
+		return refuse("its project's repository at %s can't be read: %v", t.Project, err)
 	}
-	if end == api.RemoveWorktree {
-		status, err := git(ctx, top, "status", "--porcelain")
+	if _, err := os.Stat(dir); err == nil {
+		top, err := git(ctx, dir, "rev-parse", "--show-toplevel")
 		if err != nil {
 			return refuse("%v", err)
 		}
-		if n := len(strings.Split(status, "\n")); status != "" {
-			return refuse("it has %d uncommitted %s", n, plural(n, "change", "changes"))
+		theirs, _ := git(ctx, dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		cur, _ := git(ctx, dir, "branch", "--show-current")
+		if real, _ := filepath.EvalSymlinks(dir); top != real || theirs != common || cur != t.Branch {
+			return refuse("%s is no longer the thread's worktree on %s", dir, t.Branch)
+		}
+		if end == api.RemoveWorktree {
+			status, err := git(ctx, dir, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none")
+			if err != nil {
+				return refuse("%v", err)
+			}
+			if status != "" {
+				n := strings.Count(status, "\n") + 1
+				return refuse("it has %d uncommitted %s", n, map[bool]string{true: "change", false: "changes"}[n == 1])
+			}
 		}
 	}
 	r, err := h.store.Submit(ctx, c, time.Now())
@@ -170,19 +225,14 @@ func (h *Host) deleteInWorktree(ctx context.Context, c api.Command, end api.Work
 		return r, err
 	}
 	ctx = context.WithoutCancel(ctx)
-	if _, err := git(ctx, common, "worktree", "remove", "--force", top); err != nil {
-		slog.Warn("runtime: the deleted thread's worktree stays", "thread", c.Target, "worktree", top, "err", err)
-		return r, nil
+	if _, err := git(ctx, common, "worktree", "remove", "--force", dir); err != nil {
+		os.RemoveAll(dir)
+		if _, err := git(ctx, common, "worktree", "prune"); err != nil {
+			slog.Warn("runtime: the deleted thread's worktree stays registered", "thread", c.Target, "worktree", dir, "err", err)
+		}
 	}
 	if _, err := git(ctx, common, "branch", "-d", t.Branch); err != nil {
 		slog.Info("runtime: the deleted thread's branch stays", "thread", c.Target, "branch", t.Branch, "err", err)
 	}
 	return r, nil
-}
-
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return one
-	}
-	return many
 }

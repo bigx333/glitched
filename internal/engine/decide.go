@@ -48,7 +48,7 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 	case api.ThreadRename:
 		err = d.rename(b)
 	case api.ThreadDelete:
-		err = d.delete()
+		err = d.delete(b)
 	case api.ThreadConfigure:
 		err = d.configure(b)
 	default:
@@ -515,7 +515,16 @@ func (d *decision) inbox(b api.InboxSet) error {
 // shutdown leaves for the next host: whatever a client last saw of the
 // thread, nothing of it is left running. An idle thread's last run gets the
 // close too, for an agent its provider kept for the next run.
-func (d *decision) delete() error {
+//
+// One that removes the worktree waits for the tree to be still: an agent
+// closing may still write there, after the host looked for changes.
+func (d *decision) delete(b api.ThreadDelete) error {
+	if b.Worktree > api.RemoveWorktreeChanges {
+		return rejected("unknown worktree end")
+	}
+	if b.Worktree != api.KeepWorktree && d.t.Live() != nil {
+		return rejected("stop the thread, and every thread under it, before its worktree goes")
+	}
 	if r := d.t.Live(); r != nil {
 		if err := d.emit(api.TurnEnded{Run: r.ID, Outcome: api.OutcomeAbandoned}); err != nil {
 			return err
