@@ -305,29 +305,6 @@ func TestARelativeAgentPathRunsFromTheWorkspace(t *testing.T) {
 	}
 }
 
-func TestAPathThroughASymlinkIsShownAsGiven(t *testing.T) {
-	ws, outside := t.TempDir(), t.TempDir()
-	if err := os.Mkdir(filepath.Join(outside, "sub"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Join(outside, "sub"), filepath.Join(ws, "via")); err != nil {
-		t.Fatal(err)
-	}
-	for dir, contents := range map[string]string{ws: "workspace", outside: "outside"} {
-		if err := os.WriteFile(filepath.Join(dir, "note"), []byte(contents), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	target := ws + "/via/../note"
-	f, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if shown := rel(ws, target); shown != target {
-		t.Fatalf("the OS opens %q for %q, but rel shows it as %q", f, target, shown)
-	}
-}
-
 func TestARunStartedOtherwiseGetsItsOwnAgent(t *testing.T) {
 	for _, change := range []string{"MCP", "access", "workspace"} {
 		t.Run(change, func(t *testing.T) {

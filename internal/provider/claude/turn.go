@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -213,10 +212,7 @@ func (t *turn) open(b block) provider.Work {
 
 // rel is path as the workspace sees it, when it is inside.
 func (t *turn) rel(path string) string {
-	if r, err := filepath.Rel(t.workspace, path); err == nil && filepath.IsLocal(r) {
-		return r
-	}
-	return path
+	return provider.Rel(t.workspace, path)
 }
 
 // tally counts a result that did not end the turn, as when a message sent

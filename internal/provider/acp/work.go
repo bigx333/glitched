@@ -5,8 +5,6 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
-	"slices"
 	"strings"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -85,7 +83,7 @@ func (s *step) work(workspace string) provider.Work {
 		w.Status = api.WorkFailed
 	}
 	if (kind == "edit" || kind == "read") && len(s.locations) > 0 {
-		w.Path = rel(workspace, s.locations[0].Path)
+		w.Path = provider.Rel(workspace, s.locations[0].Path)
 	}
 	if w.Status != api.WorkStarted {
 		w.Output = s.said()
@@ -140,7 +138,7 @@ func (s *step) approval(workspace, agent string) json.RawMessage {
 	json.Unmarshal(s.input, &input)
 	var paths []string
 	for _, l := range s.locations {
-		paths = append(paths, rel(workspace, l.Path))
+		paths = append(paths, provider.Rel(workspace, l.Path))
 	}
 	b.Path = strings.Join(paths, ", ")
 	b.Reason = cmp.Or(input.ToolSummary, s.title)
@@ -217,24 +215,6 @@ func argsText(input json.RawMessage) string {
 		lines = append(lines, fmt.Sprintf("%s: %s", k, c.String()))
 	}
 	return strings.Join(lines, "\n")
-}
-
-// rel is path inside workspace, as the card and the steps show it, or as
-// it is outside. The agent may name the workspace by the path its links
-// resolve to, as macOS's /var is /private/var.
-func rel(workspace, path string) string {
-	// Past a symlink, .. leaves the link's target, not its directory: such
-	// a path is shown as the agent gave it.
-	if slices.Contains(strings.Split(filepath.ToSlash(path), "/"), "..") {
-		return path
-	}
-	resolved, _ := filepath.EvalSymlinks(workspace)
-	for _, w := range []string{workspace, resolved} {
-		if r, err := filepath.Rel(w, path); w != "" && err == nil && filepath.IsLocal(r) {
-			return r
-		}
-	}
-	return path
 }
 
 // kindOf names an update for the log.
