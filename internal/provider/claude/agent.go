@@ -665,6 +665,9 @@ func (g *Agent) read(ctx context.Context, m message) []provider.Event {
 	case "system":
 		if m.Subtype == "init" {
 			g.p.learn(m.Capabilities)
+			if e := string(m.PluginErrors); e != "" && e != "null" && e != "[]" {
+				slog.Warn("claude: plugins didn't load, so the run may lack Glitched's skills", "errors", e)
+			}
 		}
 		if m.ParentToolUseID == nil {
 			return append(g.confirm(m), g.turn.read(m)...)

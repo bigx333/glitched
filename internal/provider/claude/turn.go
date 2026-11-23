@@ -33,7 +33,10 @@ type message struct {
 	// UserMessageUUIDs is, on a result, the user messages it finished.
 	UserMessageUUIDs []string `json:"user_message_uuids"`
 	Capabilities     []string `json:"capabilities"` // system init
-	CompactMetadata  *struct {
+	// PluginErrors is, on a system init, why plugins didn't load, as
+	// Glitched's skills may not.
+	PluginErrors    json.RawMessage `json:"plugin_errors"`
+	CompactMetadata *struct {
 		PreTokens  int64 `json:"pre_tokens"`
 		PostTokens int64 `json:"post_tokens"`
 	} `json:"compact_metadata"` // system compact_boundary
