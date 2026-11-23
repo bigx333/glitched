@@ -591,10 +591,18 @@ func (e *EndpointClient) ProviderAsk(ctx context.Context, name string, spec prov
 // Providers are every provider the engine serves, each with the models
 // its sessions can run, or why it couldn't say. One it doesn't list it
 // has no adapter for. Fresh has each ask its program again, rather than
-// answer from what it last said.
-func (e *EndpointClient) Providers(ctx context.Context, fresh bool) ([]ProviderInfo, error) {
+// answer from what it last said; check has the engine look up whether
+// each CLI has a newer version.
+func (e *EndpointClient) Providers(ctx context.Context, fresh, check bool) ([]ProviderInfo, error) {
 	var out []ProviderInfo
-	return out, e.c.call(ctx, "providers", providersQuery{Fresh: fresh}, &out)
+	return out, e.c.call(ctx, "providers", providersQuery{Fresh: fresh, Check: check}, &out)
+}
+
+// UpdateProvider runs the updater of the CLI of the engine's provider
+// name, on the engine's machine.
+func (e *EndpointClient) UpdateProvider(ctx context.Context, name string, whenIdle bool) (UpdateResult, error) {
+	var out UpdateResult
+	return out, e.c.call(ctx, "provider.update", updateQuery{Provider: name, WhenIdle: whenIdle}, &out)
 }
 
 // Launches are how each of the engine's providers' programs starts.

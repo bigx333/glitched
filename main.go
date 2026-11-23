@@ -214,6 +214,7 @@ type settings struct {
 	streaming     bool
 	newThreadMode int // Local, Worktree
 	notifications bool
+	checkCLIs     bool // ask each machine's engine whether its CLIs have newer versions
 
 	checking bool
 }
@@ -707,6 +708,12 @@ type app struct {
 	// providersOpen are Settings › Providers' rows opened, by provider.
 	providersOpen map[string]bool
 	launches      launchState
+	// clis are the remote machines' providers, and the CLI updates the
+	// user ran on any machine.
+	clis cliLists
+	// updateRunner, when set, runs a CLI's update in the engine's place,
+	// as a test has it.
+	updateRunner  func(e *client.Env, name string, whenIdle bool, done func(transport.UpdateResult, error)) (cancel func())
 	pluginsQuery  string
 	pluginsOpen   map[string]bool
 	pluginsReveal string
@@ -773,6 +780,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		settingDrafts:  map[string]string{},
 		pluginsOpen:    map[string]bool{},
 		providersOpen:  map[string]bool{},
+		clis:           newCLILists(),
 		pluginRecords:  map[string]string{},
 		pluginSections: map[string]string{},
 		pluginMessages: map[string]*toldMessages{},
@@ -787,6 +795,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 			confirmDelete: true,
 			streaming:     true,
 			notifications: true,
+			checkCLIs:     true,
 		},
 	}
 	a.userMD.Extensions, a.userMD.WrapCode = parser.ExtStrikethrough, true

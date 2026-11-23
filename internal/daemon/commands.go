@@ -2,12 +2,10 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
 	"glitched/internal/provider"
-	"glitched/internal/transport"
 )
 
 // commandsFresh is how long one listing of a provider's slash commands
@@ -69,34 +67,6 @@ func (c *commandLists) stale(l *listing) bool {
 	default:
 		return false
 	}
-}
-
-// Providers asks every provider at once, each time: the app asks seldom,
-// and keeps what it was told.
-func (c *commandLists) Providers(ctx context.Context, fresh bool) []transport.ProviderInfo {
-	names := c.mux.Names()
-	out := make([]transport.ProviderInfo, len(names))
-	var wg sync.WaitGroup
-	for i, name := range names {
-		wg.Go(func() {
-			if f, ok := c.mux[name].(provider.Forgetter); ok && fresh {
-				f.Forget()
-			}
-			info, err := c.mux.Describe(ctx, name)
-			out[i] = transport.ProviderInfo{Name: name, Info: info}
-			switch {
-			case errors.Is(err, provider.ErrNotInstalled):
-				out[i].State = transport.ProviderNotInstalled
-			case errors.Is(err, provider.ErrSignedOut):
-				out[i].State = transport.ProviderSignedOut
-			}
-			if err != nil {
-				out[i].Error = err.Error()
-			}
-		})
-	}
-	wg.Wait()
-	return out
 }
 
 func (c *commandLists) Ask(ctx context.Context, name string, spec provider.AskSpec) (provider.AskResult, error) {

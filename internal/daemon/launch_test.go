@@ -138,7 +138,7 @@ func TestALaunchIsCheckedKeptAndRun(t *testing.T) {
 	if cfg, _ := Defaults(dir); !reflect.DeepEqual(cfg.Launch, map[string]provider.Launch{"codex": l}) {
 		t.Errorf("engine.json keeps %+v", cfg.Launch)
 	}
-	served, err := ep.Providers(ctx, true)
+	served, err := ep.Providers(ctx, true, false)
 	if err != nil || len(served) != 1 || served[0].Info.Path != bin {
 		t.Errorf("the probe after ran %+v, %v; want %s", served, err, bin)
 	}
