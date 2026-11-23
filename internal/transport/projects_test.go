@@ -26,7 +26,7 @@ type machine struct {
 
 func (m *machine) Folders(ctx context.Context, q api.FolderQuery) (api.FolderList, error) {
 	m.calls.Add(1)
-	return projects.List(ctx, q.Path, m.hide)
+	return projects.List(ctx, q.Path, m.hide, nil)
 }
 
 func (m *machine) Clone(ctx context.Context, req api.CloneRequest, progress func(string)) (api.Cloned, error) {

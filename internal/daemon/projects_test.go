@@ -17,16 +17,23 @@ import (
 // The engine lists folders to a paired client on the tailnet, to one on
 // its unix socket and to the GUI that embeds it, and to none of them its
 // state folder, which holds its secrets: the folder it's in lists without
-// it, and it isn't entered or cloned into by any name for it.
+// it, and it isn't entered or cloned into by any name for it. Its scratch
+// folder, which holds the folders of threads with no project, is listed,
+// but for a link out of it into the rest of the state, and isn't cloned
+// into.
 func TestEveryWayInListsFoldersButNeverTheStateFolder(t *testing.T) {
 	home := stateDir(t)
 	dir := filepath.Join(home, "state")
-	for _, p := range []string{filepath.Join(secrets.Under(dir), "thread"), filepath.Join(dir, "worktrees"), filepath.Join(home, "kept")} {
+	scratch := filepath.Join(dir, "scratch")
+	for _, p := range []string{filepath.Join(secrets.Under(dir), "thread"), filepath.Join(dir, "worktrees"), filepath.Join(home, "kept"), filepath.Join(scratch, "x", "inner")} {
 		if err := os.MkdirAll(p, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := os.Symlink(dir, filepath.Join(home, "to-state")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secrets.Under(dir), filepath.Join(scratch, "x", "to-secrets")); err != nil {
 		t.Fatal(err)
 	}
 	token, err := Pair(dir, "laptop")
@@ -47,6 +54,7 @@ func TestEveryWayInListsFoldersButNeverTheStateFolder(t *testing.T) {
 		home + "/kept/../state",
 		filepath.Join(home, "to-state"),
 		filepath.Join(home, "to-state", "worktrees"),
+		filepath.Join(scratch, "x", "to-secrets"),
 	}
 	if upper := strings.ToUpper(dir); upper != dir {
 		if _, err := os.Stat(upper); err == nil {
@@ -77,7 +85,17 @@ func TestEveryWayInListsFoldersButNeverTheStateFolder(t *testing.T) {
 				t.Errorf("%s lists %s: %+v", name, path, list)
 			}
 		}
-		for _, dest := range []string{filepath.Join(dir, "lighthouse"), filepath.Join(home, "to-state", "lighthouse"), filepath.Join(secrets.Under(dir), "lighthouse")} {
+		for path, want := range map[string][]string{scratch: {"x"}, filepath.Join(scratch, "x"): {"inner"}, filepath.Join(home, "to-state", "scratch", "x"): {"inner"}} {
+			list, err := p.Folders(ctx, api.FolderQuery{Path: path})
+			var got []string
+			for _, f := range list.Folders {
+				got = append(got, f.Name)
+			}
+			if err != nil || !slices.Equal(got, want) {
+				t.Errorf("%s lists %q in %s, %v; want %q", name, got, path, err, want)
+			}
+		}
+		for _, dest := range []string{filepath.Join(scratch, "y"), filepath.Join(dir, "lighthouse"), filepath.Join(home, "to-state", "lighthouse"), filepath.Join(secrets.Under(dir), "lighthouse")} {
 			if _, err := p.Clone(ctx, api.CloneRequest{Source: "o/lighthouse", Dest: dest}, func(string) {}); err == nil {
 				t.Errorf("%s cloned into %s", name, dest)
 			}

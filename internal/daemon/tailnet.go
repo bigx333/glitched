@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -52,9 +53,11 @@ func (e endpoint) Info(ctx context.Context) (api.Environment, error) {
 var _ transport.Projects = endpoint{}
 
 // Folders lists a folder on this machine, never the engine's state
-// folder, which holds its secrets.
+// folder, which holds its secrets, but for its scratch folder, where the
+// GUI makes the folders of threads with no project, one of which may be
+// added as a project.
 func (e endpoint) Folders(ctx context.Context, q api.FolderQuery) (api.FolderList, error) {
-	return projects.List(ctx, q.Path, []string{e.d.stateDir})
+	return projects.List(ctx, q.Path, []string{e.d.stateDir}, []string{filepath.Join(e.d.stateDir, "scratch")})
 }
 
 // Clone clones a repository onto this machine, never into the engine's

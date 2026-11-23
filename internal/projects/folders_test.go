@@ -54,7 +54,7 @@ func names(l api.FolderList) []string {
 
 func listed(t *testing.T, path string, hide ...string) api.FolderList {
 	t.Helper()
-	l, err := List(context.Background(), path, hide)
+	l, err := List(context.Background(), path, hide, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestListStopsAtAThousandFolders(t *testing.T) {
 
 func TestListRefusesARelativePath(t *testing.T) {
 	for _, p := range []string{"Projects", "./Projects", "../x", "~nobody/x"} {
-		if l, err := List(context.Background(), p, nil); err == nil {
+		if l, err := List(context.Background(), p, nil, nil); err == nil {
 			t.Errorf("List(%q) = %+v, want it refused", p, l)
 		}
 	}
@@ -136,7 +136,7 @@ func TestListOfAnUnreadableFolderFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(locked, 0o755) })
-	if l, err := List(context.Background(), locked, nil); !errors.Is(err, fs.ErrPermission) {
+	if l, err := List(context.Background(), locked, nil, nil); !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("an unreadable folder listed %+v, %v; want a permission error", l, err)
 	}
 }
@@ -165,14 +165,14 @@ func TestListNeverEntersTheSecrets(t *testing.T) {
 		filepath.Join(other, "to-thread"),
 		filepath.Join(other, "to-state", "secrets"),
 	} {
-		if l, err := List(context.Background(), p, hide); !errors.Is(err, errHidden) {
+		if l, err := List(context.Background(), p, hide, nil); !errors.Is(err, errHidden) {
 			t.Errorf("List(%q) = %+v, %v; want it refused as the secrets", p, l, err)
 		}
 	}
 	// A disk that ignores case finds the folder by another case of its
 	// name; one that doesn't finds no such folder.
 	upper := filepath.Join(st, "SECRETS")
-	_, err := List(context.Background(), upper, hide)
+	_, err := List(context.Background(), upper, hide, nil)
 	if _, there := os.Stat(upper); there == nil && !errors.Is(err, errHidden) || err == nil {
 		t.Errorf("List(%q): %v; want it refused", upper, err)
 	}
@@ -199,7 +199,7 @@ func TestListHidesASecretsFolderNamedThroughASymlink(t *testing.T) {
 	st, hide := state(t)
 	via := filepath.Join(t.TempDir(), "via")
 	link(t, st, via)
-	if _, err := List(context.Background(), hide[0], []string{filepath.Join(via, "secrets")}); !errors.Is(err, errHidden) {
+	if _, err := List(context.Background(), hide[0], []string{filepath.Join(via, "secrets")}, nil); !errors.Is(err, errHidden) {
 		t.Errorf("the secrets, hidden through a symlink: %v; want them refused", err)
 	}
 }
@@ -216,7 +216,7 @@ func TestListHidesTheSecretsByAnotherPathToThem(t *testing.T) {
 	if info, err := os.Stat(other); err != nil || !info.IsDir() {
 		t.Skip("no second path to the folder here")
 	}
-	if _, err := List(context.Background(), other, hide); !errors.Is(err, errHidden) {
+	if _, err := List(context.Background(), other, hide, nil); !errors.Is(err, errHidden) {
 		t.Errorf("List(%q): %v; want it refused as the secrets", other, err)
 	}
 	if got := names(listed(t, filepath.Join("/System/Volumes/Data", filepath.Dir(real)), hide...)); slices.Contains(got, "secrets") {
