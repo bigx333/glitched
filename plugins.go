@@ -606,7 +606,7 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 			return nil, errors.New("the thread's agent runs: stop it first")
 		}
 		// A confirm stays about the thread it asked about till it closes.
-		if a.deleteOpen || a.deleting.Thread != nil {
+		if a.deleteOpen || a.deleting.Thread != nil || a.clone.open {
 			return nil, errors.New("another delete waits for the user")
 		}
 		a.deleting, a.deleteOpen = t, true
@@ -635,6 +635,8 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 			return nil, errors.New("an agent runs in the project: stop it first")
 		case a.removeOpen:
 			return nil, errors.New("another removal waits for the user")
+		case a.clone.open:
+			return nil, errors.New("the Clone a repository sheet waits for the user")
 		}
 		a.askRemove(found[0])
 		return nil, nil
