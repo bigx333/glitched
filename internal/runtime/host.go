@@ -41,6 +41,7 @@ type Host struct {
 	worktrees string               // where the threads' worktrees go; "" makes none
 	making    sync.Mutex           // held while a worktree is made, so a create sent twice at once makes one
 	vault     *secrets.Vault       // the credentials users give agents; nil keeps none
+	skills    *skillStage          // the skills Glitched gives agents; nil gives none
 	now       func() time.Time     // wall clock; defaults to time.Now
 
 	idleCompact   atomic.Bool
@@ -141,6 +142,7 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		h.Close()
 		return nil, err
 	}
+	h.skills.clear()
 	h.wg.Add(2)
 	go h.work()
 	go h.compactLoop()
@@ -229,8 +231,11 @@ var (
 // steer or answer still in flight, and an uncertain or finished run gets no
 // more calls. h.mu is held.
 func (h *Host) follow(e api.Event) {
-	if e.Type == threadDeleted && h.vault != nil {
-		go h.vault.Forget(e.Thread)
+	if e.Type == threadDeleted {
+		h.skills.forget(e.Thread)
+		if h.vault != nil {
+			go h.vault.Forget(e.Thread)
+		}
 		return
 	}
 	if e.Type != turnStopping && e.Type != turnUncertain && e.Type != turnEnded {
@@ -607,6 +612,7 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		s.Args, s.Env = slices.Clone(s.Args), maps.Clone(s.Env)
 		spec.MCP = append(spec.MCP, s)
 	}
+	spec.Skills = h.skills.stage(thread, b.Workspace, t.Project)
 	ag, err := h.providers.Open(ctx, spec)
 	if errors.Is(err, provider.ErrDeclined) {
 		return nil, errCompactNotDue
@@ -632,6 +638,9 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	}
 	if err != nil && h.ctx.Err() == nil {
 		h.closeAgent(ag)
+	}
+	if err == nil {
+		h.skills.sweep()
 	}
 	return ag, err
 }

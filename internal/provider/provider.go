@@ -180,7 +180,27 @@ type SessionSpec struct {
 	// CacheExpires is when the thread's prompt cache expires, as its last
 	// run reported; zero when none did.
 	CacheExpires time.Time
+	// Skills are Glitched's skills the run's agent gets, which each
+	// adapter hands its agent its own way; none adds nothing to its start.
+	Skills Skills
 }
+
+// Skills are Glitched's skills a run's agent gets. Root is a Claude Code
+// plugin folder that holds them, each in skills/<name>, named by what they
+// are, so that another set of skills is another Root; "" for none.
+type Skills struct {
+	Root string
+	List []Skill
+}
+
+// Skill is one of Skills: Path is its SKILL.md in Root.
+type Skill struct {
+	Name, Description, Path string
+}
+
+// Skilled is an Adapter that hands its agents Glitched's skills: Delivery
+// says how, in words for its user.
+type Skilled interface{ SkillDelivery() string }
 
 // MCPServer is a stdio MCP server an agent starts for itself: Command with
 // Args and Env. Instructions tell the agent what the server is for. A
