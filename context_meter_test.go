@@ -104,8 +104,8 @@ func TestTheMeterSaysWhatItDoesntKnow(t *testing.T) {
 	}
 }
 
-// The meter turns amber from 75% and red from 90%, as T3 Code's
-// neighbours bb and Zeron do.
+// The meter turns amber from 75% and red from 90%, as bb and Zeron do,
+// by the share its text says.
 func TestTheMeterWarnsNearTheLimit(t *testing.T) {
 	for _, c := range []struct {
 		used  int64
@@ -132,7 +132,7 @@ func TestTheMeterWarnsNearTheLimit(t *testing.T) {
 }
 
 func TestContextTokensAreWrittenShort(t *testing.T) {
-	for n, want := range map[int64]string{
+	for n, want := range map[float64]string{
 		0: "0", 999: "999", 1000: "1k", 25041: "25k", 32500: "33k", 258400: "258k",
 		999499: "999k", 999500: "1m", 1000000: "1m", 1048576: "1m", 1250000: "1.3m", 2000000: "2m",
 	} {
