@@ -734,6 +734,10 @@ func pluginWorkspace(ws string) (string, error) {
 // gh with it, so that no test reaches the user's own.
 var runPluginProgram = plugins.RunProgram
 
+// askGrace is how long past its timeout an ask's provider may take to
+// stop before the window stops waiting for the engine's answer.
+const askGrace = 10 * time.Second
+
 // askModel is glitched.models.ask: this machine's engine asks the
 // provider, by default that of the model new threads take, within the
 // host's deadline for the ask.
@@ -749,10 +753,17 @@ func (a *app) askModel(ctx context.Context, dir, id string, q plugins.AskRequest
 		}
 	}
 	spec := provider.AskSpec{Model: q.Model, System: q.System, Prompt: q.Prompt}
+	wait := ctx
 	if d, ok := ctx.Deadline(); ok {
 		spec.Timeout = time.Until(d)
+		// The engine ends the ask at its timeout and answers once the
+		// provider has stopped: waiting for that, past ctx, keeps the
+		// plugin's next ask from reaching the engine before.
+		var cancel context.CancelFunc
+		wait, cancel = context.WithTimeout(context.WithoutCancel(ctx), spec.Timeout+askGrace)
+		defer cancel()
 	}
-	r, err := a.serviceClient(dir).ProviderAsk(ctx, name, spec)
+	r, err := a.serviceClient(dir).ProviderAsk(wait, name, spec)
 	return plugins.AskAnswer{Text: r.Text, Provider: name, Model: r.Model}, err
 }
 
