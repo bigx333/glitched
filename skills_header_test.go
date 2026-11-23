@@ -24,12 +24,12 @@ func writeSkill(t *testing.T, root, name, description string) {
 	}
 }
 
-// skillsHeader is the app on a thread whose engine finds the skills set
-// puts in its home and project folders, with the built-in Skills drawing
-// the header's pill, and the pill's label once it shows.
-func skillsHeader(t *testing.T, set func(home, project string), want string) *harness {
+// skillsHeader is the app with its state in dir, on a thread in work whose
+// engine finds the skills set puts in its home and project folders, with
+// the built-in Skills drawing the header's pill, and the pill's label once
+// it shows.
+func skillsHeader(t *testing.T, dir, work string, set func(home, project string), want string) *harness {
 	t.Helper()
-	dir, work := tempDir(t), t.TempDir()
 	set(filepath.Join(dir, "skills"), filepath.Join(work, ".glitched", "skills"))
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(nil))
 	seed(t, d, work, "Fix the flaky test")
@@ -56,7 +56,7 @@ func clashingSkills(t *testing.T) func(home, project string) {
 // built-in Skills draws them, the project's replacing the user's own of
 // a name, and one the engine skips with why; a click opens the popover.
 func TestTheHeaderShowsTheThreadsSkills(t *testing.T) {
-	h := skillsHeader(t, clashingSkills(t), "Skills 2")
+	h := skillsHeader(t, tempDir(t), t.TempDir(), clashingSkills(t), "Skills 2")
 	if h.tt.HasText("replaces yours") {
 		t.Fatal("the popover shows before a click")
 	}
@@ -77,7 +77,8 @@ func TestTheHeaderShowsTheThreadsSkills(t *testing.T) {
 
 // TestSkillsShot writes PNGs of the Skills pill's popover to the folder
 // SKILLSHOT names: the user's skills alone, and the user's and the
-// project's with a clash and a skipped one.
+// project's with a clash and a skipped one. Glitched's folder and the
+// project are in a home of the test's, so no path of this machine shows.
 func TestSkillsShot(t *testing.T) {
 	out := os.Getenv("SKILLSHOT")
 	if out == "" {
@@ -89,7 +90,9 @@ func TestSkillsShot(t *testing.T) {
 		writeSkill(t, home, "release-notes", "Write the release notes from the merged pull requests since the last tag.")
 	}
 	for name, set := range map[string]func(string, string){"home": home, "clash": clashingSkills(t)} {
-		h := skillsHeader(t, set, "Skills 2")
+		user := t.TempDir()
+		t.Setenv("HOME", user)
+		h := skillsHeader(t, filepath.Join(user, ".glitched"), filepath.Join(user, "widgets"), set, "Skills 2")
 		h.a.settings.theme = darkTheme.name
 		if err := h.tt.Click("Skills 2"); err != nil {
 			t.Fatal(err)
