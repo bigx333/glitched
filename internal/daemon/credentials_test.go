@@ -3,10 +3,12 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -37,9 +39,10 @@ func TestAnACPAgentAsksForCredentials(t *testing.T) {
 		api.ModelRef{Provider: "antigravity", Model: "fake-pro", Effort: "low"}, wire, 0)
 }
 
-// A Codex agent does the same, and waits for the user past Codex's 60 s
-// default for a tool call: the fake's second is 10 ms, and the user takes
-// a second, a hundred of them, to answer.
+// A Codex agent does the same, and waits for the user past Codex's 300 s
+// default for a tool call: the fake's second is 1 ms, and the user takes
+// a second, a thousand of them, to answer. Codex is told to wait longer
+// than the engine's own 30 minutes for an ask.
 func TestACodexAgentAsksForCredentials(t *testing.T) {
 	self, err := os.Executable()
 	if err != nil {
@@ -48,9 +51,20 @@ func TestACodexAgentAsksForCredentials(t *testing.T) {
 	wire := filepath.Join(t.TempDir(), "wire.jsonl")
 	t.Setenv(codextest.Scenario, "credentials")
 	t.Setenv(codextest.Log, wire)
-	t.Setenv(codextest.Second, "10ms")
+	t.Setenv(codextest.Second, "1ms")
 	asksForCredentials(t, provider.Mux{"codex": &codex.Adapter{Path: self}},
 		api.ModelRef{Provider: "codex", Model: "gpt-6-luna", Effort: "low"}, wire, time.Second)
+	b, _ := os.ReadFile(wire)
+	for line := range strings.Lines(string(b)) {
+		var e codextest.Entry
+		if json.Unmarshal([]byte(line), &e) == nil && e.Method == "tool_timeout_sec" {
+			if s, _ := strconv.ParseFloat(string(e.Params), 64); s <= 30*60 {
+				t.Errorf("Codex waits %v s on glitched mcp, not past the engine's 30 minutes", s)
+			}
+			return
+		}
+	}
+	t.Error("the fake Codex never asked")
 }
 
 // asksForCredentials runs a turn on an engine of providers whose agent
