@@ -83,6 +83,39 @@ func TestAThreadShowsItsLastConfigureUntilTheViewHasIt(t *testing.T) {
 	}
 }
 
+// A thread settled and renamed shows as settled under its new title from
+// when it's asked, though their receipts come before the views that have
+// them: it doesn't go back to its section and title in between.
+func TestAThreadShowsItsSettleAndRenameUntilTheViewHasThem(t *testing.T) {
+	b, _, m, g, e, top := treeFixture(t)
+	th := e.Threads[top]
+	shows := func() (api.DispositionState, string) {
+		d, title := th.View.Disposition.State, th.View.Title
+		for _, p := range th.Pending {
+			switch c := p.Body.(type) {
+			case api.InboxSet:
+				d = c.Disposition.State
+			case api.ThreadRename:
+				title = c.Title
+			}
+		}
+		return d, title
+	}
+	m.SetDisposition(e, top, api.Disposition{State: api.Settled})
+	m.Rename(e, top, "Renamed")
+	g.until(t, "the receipts", func() bool { return answered(th) })
+	if th.View.Disposition.State == api.Settled || th.View.Title == "Renamed" {
+		t.Fatalf("the held shell sent a view: %v, %q", th.View.Disposition.State, th.View.Title)
+	}
+	if d, title := shows(); d != api.Settled || title != "Renamed" {
+		t.Errorf("with its receipts ahead of its views the thread shows %v, %q", d, title)
+	}
+	close(b.hold)
+	if v := settled(t, b, g, th); v.Disposition.State != api.Settled || v.Title != "Renamed" {
+		t.Errorf("the engine has %v, %q", v.Disposition.State, v.Title)
+	}
+}
+
 // Widened to Full and put back to Ask before a view of either comes, the
 // thread shows Ask, as the engine has it, and not the Full its view never
 // showed.
