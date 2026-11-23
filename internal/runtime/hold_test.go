@@ -282,3 +282,71 @@ func TestHoldFindsAnAgentStillStartingAfterItsRunIsDeleted(t *testing.T) {
 		t.Fatal("Hold never returned")
 	}
 }
+
+// interruptFails is the fake, whose agents take no interrupt and never
+// close, as a CLI that hangs.
+type interruptFails struct {
+	*fake.Adapter
+	closing chan struct{}
+	once    sync.Once
+}
+
+func (a *interruptFails) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	ag, err := a.Adapter.Open(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	return unclosed{ag, a}, nil
+}
+
+type unclosed struct {
+	provider.Agent
+	a *interruptFails
+}
+
+func (g unclosed) Do(ctx context.Context, action provider.Action) error {
+	if _, ok := action.(provider.Interrupt); ok {
+		return errors.New("the agent took no interrupt")
+	}
+	return g.Agent.Do(ctx, action)
+}
+
+func (g unclosed) Close(context.Context) error {
+	g.a.once.Do(func() { close(g.a.closing) })
+	return errors.New("the agent's process still runs")
+}
+
+// A run left uncertain by an interrupt that failed has no close in the
+// store: after a restart, which doesn't reconcile it, Hold asks its
+// adapter whether its agent still runs.
+func TestHoldAsksAfterARestartWhetherAnUncertainRunsAgentRuns(t *testing.T) {
+	path := dbPath(t)
+	ad := &interruptFails{Adapter: fake.New(fake.Turn(true)), closing: make(chan struct{})}
+	n := start(t, path, ad)
+	thread := newThread(t, n.h)
+	submit(t, n.h, thread, dispatch("work", api.StartNow))
+	until(t, n.h, thread, "approval", waiting)
+	submit(t, n.h, thread, api.TurnInterrupt{})
+	until(t, n.h, thread, "uncertain", uncertain)
+	select {
+	case <-ad.closing:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the agent's close was never tried")
+	}
+	n.kill()
+
+	n = start(t, path, ad)
+	if release, err := n.h.Hold(ctx, "fake", false); !errors.Is(err, runtime.ErrBusy) {
+		if release != nil {
+			release()
+		}
+		t.Fatalf("Hold with the uncertain run's agent still running: %v, want ErrBusy", err)
+	}
+	c, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	release, err := n.h.Hold(c, "fake", true)
+	if err != nil {
+		t.Fatalf("Hold once the agent nobody drove was closed: %v", err)
+	}
+	release()
+}

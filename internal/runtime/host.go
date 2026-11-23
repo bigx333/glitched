@@ -687,13 +687,11 @@ func (h *Host) Hold(ctx context.Context, provider string, wait bool) (release fu
 	}
 }
 
-// unsettled is whether the store holds a run of provider that may be
-// running, or an agent's close of it not done. The close counts what this
-// host doesn't drive but whose process may still run: a run whose
-// reconcile failed at boot, before and after it is stopped. An uncertain
-// run with no close is one whose process the reconcile found gone, or
-// one this host drives, which its agents count.
-func (h *Host) unsettled(ctx context.Context, provider string) (bool, error) {
+// unsettled is whether the store holds a run of provider name that may
+// be running, or an agent's close of it not done. The close counts what
+// this host doesn't drive but whose process may still run: a run whose
+// reconcile failed at boot, before and after it is stopped.
+func (h *Host) unsettled(ctx context.Context, name string) (bool, error) {
 	live, err := h.store.LiveThreads(ctx)
 	if err != nil {
 		return false, err
@@ -709,16 +707,44 @@ func (h *Host) unsettled(ctx context.Context, provider string) (bool, error) {
 		}
 		p := t.Model.Provider
 		if r := t.Live(); r != nil {
-			if r.State == engine.RunUncertain && !slices.Contains(closing, id) {
-				continue
-			}
 			p = r.Model.Provider
+			if p == name && r.State == engine.RunUncertain && !slices.Contains(closing, id) {
+				if h.gone(ctx, id, *r) {
+					continue
+				}
+			}
 		}
-		if p == provider {
+		if p == name {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+// gone is whether the process of r, an uncertain run with no close to
+// stop it, is gone, as far as the store's runs go: one this host drives
+// is its agents' to count. Any other is one an earlier host left that
+// boot didn't reconcile, as one whose interrupt failed before that host
+// stopped, so its adapter is asked. An agent it restores is one nobody
+// drives, so it is closed.
+func (h *Host) gone(ctx context.Context, thread api.ID, r engine.Run) bool {
+	h.mu.Lock()
+	driven := slices.ContainsFunc(slices.Collect(maps.Keys(h.agents)), func(lr *liveRun) bool { return lr.run == r.ID })
+	h.mu.Unlock()
+	if driven {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	rec, err := h.providers.Reconcile(ctx, provider.RuntimeIdentity{Thread: thread, Run: r.ID, Generation: r.Generation, Provider: r.Model.Provider})
+	if err != nil {
+		return false
+	}
+	if restored, ok := rec.(provider.Restored); ok {
+		restored.Agent.Close(ctx)
+		return false
+	}
+	return true
 }
 
 func (h *Host) attach(thread api.ID, lr *liveRun) {

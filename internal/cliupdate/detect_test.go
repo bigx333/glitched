@@ -87,6 +87,28 @@ func TestDetect(t *testing.T) {
 			},
 		},
 		{
+			name: "claude from a global npm inside the native install's folder", provider: "claude",
+			layout: func(t *testing.T, home string) string {
+				file(t, filepath.Join(home, ".local/share/claude/bin/npm"))
+				return file(t, filepath.Join(home, ".local/share/claude/lib/node_modules/@anthropic-ai/claude-code/cli.js"))
+			},
+			source: Source{URL: "https://registry.npmjs.org/@anthropic-ai%2fclaude-code/latest", Field: "version"},
+			command: func(home, path string) []string {
+				prefix := filepath.Join(home, ".local/share/claude")
+				return []string{filepath.Join(prefix, "bin/npm"), "install", "-g", "--prefix", prefix, "@anthropic-ai/claude-code@latest"}
+			},
+		},
+		{
+			name: "agy that isn't a program", provider: "antigravity",
+			layout: func(t *testing.T, home string) string {
+				path := filepath.Join(home, ".local/bin/agy")
+				os.MkdirAll(path, 0o755)
+				return path
+			},
+			command: func(home, path string) []string { return []string{path, "update"} },
+			manual:  "isn't a program",
+		},
+		{
 			name: "codex in a project's node_modules", provider: "codex",
 			layout: func(t *testing.T, home string) string {
 				return file(t, filepath.Join(home, "project/node_modules/@openai/codex/bin/codex.js"))
@@ -227,7 +249,7 @@ func TestDetect(t *testing.T) {
 			if goos == "" {
 				goos = "darwin"
 			}
-			in := Detect(c.provider, path, home, goos, "arm64")
+			in := Detect(c.provider, path, home, "", goos, "arm64")
 			if in.Source != c.source {
 				t.Errorf("source %+v, want %+v", in.Source, c.source)
 			}
@@ -256,7 +278,7 @@ func TestDetectAnInstallOnlyAnAdministratorCanWrite(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(pkg, 0o755) })
 
-	in := Detect("codex", path, home, "linux", "amd64")
+	in := Detect("codex", path, home, "", "linux", "amd64")
 	if want := []string{"sudo", npm, "install", "-g", "--prefix", filepath.Join(home, "node"), "@openai/codex@latest"}; !slices.Equal(in.Command, want) {
 		t.Errorf("command %q, want %q", in.Command, want)
 	}
@@ -283,7 +305,7 @@ func TestDetectAPackageInAParentOnlyAnAdministratorCanWrite(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(parent, 0o755) })
 
-	in := Detect("codex", path, home, "darwin", "arm64")
+	in := Detect("codex", path, home, "", "darwin", "arm64")
 	if want := []string{"sudo", npm, "install", "-g", "--prefix", filepath.Join(home, "node"), "@openai/codex@latest"}; !slices.Equal(in.Command, want) || !strings.Contains(in.Manual, "administrator") {
 		t.Errorf("%q, %q; want the sudo command, for an administrator", in.Command, in.Manual)
 	}
@@ -304,7 +326,7 @@ func TestDetectAHomebrewAnotherUserOwns(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(cellar, 0o755) })
 
-	in := Detect("codex", path, home, "darwin", "arm64")
+	in := Detect("codex", path, home, "", "darwin", "arm64")
 	if want := []string{brew, "upgrade", "codex"}; !slices.Equal(in.Command, want) || !strings.Contains(in.Manual, "another user's") {
 		t.Errorf("%q, %q; want the brew command, for the user who owns it", in.Command, in.Manual)
 	}
@@ -318,8 +340,33 @@ func TestDetectNamesTheNpmPrefix(t *testing.T) {
 	npm := file(t, filepath.Join(prefix, "bin/npm"))
 	path := file(t, filepath.Join(prefix, "lib/node_modules/@openai/codex/bin/codex.js"))
 	t.Setenv("NPM_CONFIG_PREFIX", filepath.Join(home, "other-npm"))
-	in := Detect("codex", path, home, "darwin", "arm64")
+	in := Detect("codex", path, home, "", "darwin", "arm64")
 	if want := []string{npm, "install", "-g", "--prefix", prefix, "@openai/codex@latest"}; !slices.Equal(in.Command, want) || in.Manual != "" {
 		t.Errorf("%q, %q; want %q", in.Command, in.Manual, want)
+	}
+}
+
+// A launch that moves the CLI's folder moves where Detect reads it: Claude
+// Code's channel from that folder's settings, Codex's standalone install
+// under it.
+func TestDetectReadsTheFolderTheLaunchMoves(t *testing.T) {
+	home := tempHome(t)
+	folder := filepath.Join(home, "work-claude")
+	file(t, filepath.Join(home, ".claude/settings.json"))
+	os.WriteFile(filepath.Join(home, ".claude/settings.json"), []byte(`{"autoUpdatesChannel":"latest"}`), 0o600)
+	file(t, filepath.Join(folder, "settings.json"))
+	os.WriteFile(filepath.Join(folder, "settings.json"), []byte(`{"autoUpdatesChannel":"stable"}`), 0o600)
+	claude := link(t, file(t, filepath.Join(home, ".local/share/claude/versions/2.1.323")), filepath.Join(home, ".local/bin/claude"))
+	if in := Detect("claude", claude, home, folder, "darwin", "arm64"); !strings.HasSuffix(in.Source.URL, "/stable") || in.Manual != "" {
+		t.Errorf("claude with its folder at %s: %+v, want the stable channel its settings there name", folder, in)
+	}
+
+	codexHome := filepath.Join(home, "work-codex")
+	codex := link(t, file(t, filepath.Join(codexHome, "packages/standalone/0.170.0/codex")), filepath.Join(home, ".local/bin/codex"))
+	if in := Detect("codex", codex, home, codexHome, "darwin", "arm64"); in.Source.Field != "tag_name" || in.Manual != "" {
+		t.Errorf("codex standalone under CODEX_HOME %s: %+v, want its releases channel", codexHome, in)
+	}
+	if in := Detect("codex", codex, home, "", "darwin", "arm64"); in.Manual == "" {
+		t.Errorf("codex standalone outside ~/.codex, with no CODEX_HOME: %+v, want Manual", in)
 	}
 }

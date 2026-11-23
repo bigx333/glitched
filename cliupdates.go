@@ -48,11 +48,14 @@ type cliLists struct {
 	// program, and look versions up again.
 	fresh map[*client.Env]bool
 	runs  map[cliKey]*cliRun
-	open  bool // the sidebar's list of updates
+	// updated is when each CLI's last update came back: an answer asked
+	// for before it says what was there before it.
+	updated map[cliKey]time.Time
+	open    bool // the sidebar's list of updates
 }
 
 func newCLILists() cliLists {
-	return cliLists{served: map[*client.Env][]transport.ProviderInfo{}, engine: map[*client.Env]api.ID{}, asking: map[*client.Env]bool{}, next: map[*client.Env]time.Time{}, fresh: map[*client.Env]bool{}, runs: map[cliKey]*cliRun{}}
+	return cliLists{served: map[*client.Env][]transport.ProviderInfo{}, engine: map[*client.Env]api.ID{}, asking: map[*client.Env]bool{}, next: map[*client.Env]time.Time{}, fresh: map[*client.Env]bool{}, runs: map[cliKey]*cliRun{}, updated: map[cliKey]time.Time{}}
 }
 
 // cliEntry is a provider's CLI on a machine, as its engine said.
@@ -77,6 +80,7 @@ func (a *app) askCLIs() {
 		}
 		l.asking[e] = true
 		delete(l.fresh, e)
+		asked := time.Now()
 		a.backend.Providers(e, fresh, a.settings.checkCLIs, func(served []transport.ProviderInfo, err error) {
 			l.asking[e] = false
 			if err != nil {
@@ -91,7 +95,7 @@ func (a *app) askCLIs() {
 			}
 			for i, p := range served {
 				if j := slices.IndexFunc(old, func(o transport.ProviderInfo) bool { return o.Name == p.Name }); j >= 0 {
-					served[i] = keptUpdate(old[j], p)
+					served[i] = a.newer(cliKey{e, p.Name}, asked, old[j], p)
 				}
 			}
 			l.served[e], l.engine[e] = served, e.ID
@@ -109,13 +113,30 @@ func (l *cliLists) prune(envs []*client.Env) {
 	maps.DeleteFunc(l.fresh, func(e *client.Env, _ bool) bool { return !listed(e) })
 	maps.DeleteFunc(l.runs, func(k cliKey, _ *cliRun) bool { return !listed(k.env) })
 	maps.DeleteFunc(l.engine, func(e *client.Env, _ api.ID) bool { return !listed(e) })
+	maps.DeleteFunc(l.updated, func(k cliKey, _ time.Time) bool { return !listed(k.env) })
+}
+
+// newer is what to keep of a provider an engine was asked of at asked:
+// what it said before, when an update of it came back since, else what
+// it says now, with keptUpdate's update.
+func (a *app) newer(k cliKey, asked time.Time, old, now transport.ProviderInfo) transport.ProviderInfo {
+	if old.Name != "" && a.clis.updated[k].After(asked) {
+		return old
+	}
+	return keptUpdate(old, now)
 }
 
 // keptUpdate is what an engine now says of a provider, but for an update
 // it said of it before: an answer that doesn't know the version
-// installed, as when its probe failed, doesn't say the update is done.
+// installed, as when its probe failed, or knows it but not the latest,
+// as when offline, doesn't say the update is done.
 func keptUpdate(old, now transport.ProviderInfo) transport.ProviderInfo {
-	if now.Info.Version == "" && now.State != transport.ProviderNotInstalled && old.Update != nil {
+	if old.Update == nil || now.State == transport.ProviderNotInstalled {
+		return now
+	}
+	unknown := now.Info.Version == ""
+	unchecked := now.Info.Version == old.Update.Installed && (now.Update == nil || now.Update.Latest == "")
+	if unknown || unchecked {
 		now.Update = old.Update
 	}
 	return now
@@ -165,7 +186,8 @@ func (a *app) pendingCLIs() []cliEntry {
 	}
 	var out []cliEntry
 	for _, en := range a.cliEntries() {
-		if u := en.info.Update; u != nil && u.Available {
+		r := a.clis.runs[en.key]
+		if u := en.info.Update; u != nil && u.Available || r != nil && r.running {
 			out = append(out, en)
 		}
 	}
@@ -185,7 +207,12 @@ func (a *app) updateCLI(en cliEntry, whenIdle bool) {
 		return
 	}
 	*r = cliRun{running: true, waiting: whenIdle}
+	engine := en.env.ID
 	r.cancel = a.runUpdate(en.env, en.key.provider, whenIdle, func(res transport.UpdateResult, err error) {
+		if en.env.ID != engine {
+			*r = cliRun{}
+			return // another engine answers for the machine now
+		}
 		*r = cliRun{output: res.Output, busy: res.Busy}
 		switch {
 		case errors.Is(err, context.Canceled):
@@ -200,16 +227,17 @@ func (a *app) updateCLI(en cliEntry, whenIdle bool) {
 		if r.failed != "" || r.busy || res.Provider.Name == "" {
 			return
 		}
+		a.clis.updated[en.key] = time.Now()
 		if envs := a.backend.Envs(); len(envs) > 0 && en.env == envs[0] {
 			if a.models.served == nil {
 				a.models.served = map[string]transport.ProviderInfo{}
 			}
-			a.models.served[res.Provider.Name] = res.Provider
+			a.models.served[res.Provider.Name] = keptUpdate(a.models.served[res.Provider.Name], res.Provider)
 			return
 		}
 		for i, p := range a.clis.served[en.env] {
 			if p.Name == res.Provider.Name {
-				a.clis.served[en.env][i] = res.Provider
+				a.clis.served[en.env][i] = keptUpdate(p, res.Provider)
 			}
 		}
 	})
@@ -233,7 +261,7 @@ func (a *app) cliUpdate(c *ui.Context, en cliEntry) {
 	u, r := en.info.Update, a.clis.runs[en.key]
 	name := familyOf(en.key.provider).name
 	ui.Column(c).Key("update:" + en.key.provider).Gap(8).Children(func() {
-		if u.Available {
+		if u.Available || r != nil && r.running {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 				ui.Text(c, fmt.Sprintf("Update available: %s → %s", u.Installed, u.Latest)).Key("available").FontSize(12.5).FontWeight(550).TextColor(palette.blue).Grow(1)
 				switch {
@@ -246,9 +274,9 @@ func (a *app) cliUpdate(c *ui.Context, en cliEntry) {
 					ui.Text(c, "Updating…").FontSize(12).TextColor(palette.muted)
 				case u.Manual != "":
 				case r != nil && r.busy:
-					ui.Button(c.Key("later"), "Update when it ends").OnClick(func() { a.updateCLI(en, true) })
+					ui.Button(c.Key("later"), "Update when it ends").Disabled(!online(en.env)).OnClick(func() { a.updateCLI(en, true) })
 				default:
-					ui.Button(c.Key("update"), "Update").OnClick(func() { a.updateCLI(en, false) })
+					ui.Button(c.Key("update"), "Update").Disabled(!online(en.env)).OnClick(func() { a.updateCLI(en, false) })
 				}
 			})
 		}
@@ -282,7 +310,7 @@ func (a *app) cliUpdate(c *ui.Context, en cliEntry) {
 // update, or how the last one went.
 func (a *app) cliUpdateShows(en cliEntry) bool {
 	u, r := en.info.Update, a.clis.runs[en.key]
-	return u != nil && (u.Available || r != nil && (r.failed != "" || r.output != ""))
+	return u != nil && (u.Available || r != nil && (r.running || r.failed != "" || r.output != ""))
 }
 
 // cliUpdatesButton, at the foot of the sidebar, says a CLI on a machine
@@ -332,7 +360,7 @@ func (a *app) cliUpdatesButton(c *ui.Context) {
 			}
 			var runnable []cliEntry
 			for _, en := range pending {
-				if r := a.clis.runs[en.key]; en.info.Update.Manual == "" && (r == nil || !r.running) {
+				if r := a.clis.runs[en.key]; en.info.Update.Manual == "" && online(en.env) && (r == nil || !r.running) {
 					runnable = append(runnable, en)
 				}
 			}
@@ -360,3 +388,5 @@ func (a *app) cliUpdatesButton(c *ui.Context) {
 	})
 }
 
+// online is whether e's engine answers now, as an update needs.
+func online(e *client.Env) bool { return e.Status == client.Status(client.Online{}) }

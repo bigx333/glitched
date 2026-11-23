@@ -339,7 +339,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	}
 	svc := d.startPlugins(cfg.Dir, cfg.PluginRun)
 	d.undo = append(d.undo, func() error { svc.Close(); return nil })
-	d.clis = newCLIs(ctx, cfg.Providers, h, cliupdate.NewChecker(cfg.Versions, filepath.Join(cfg.Dir, "cli-versions.json")))
+	d.clis = newCLIs(ctx, cfg.Dir, cfg.Providers, h, cliupdate.NewChecker(cfg.Versions, filepath.Join(cfg.Dir, "cli-versions.json")))
 	cmds := newCommandLists(ctx, cfg.Providers)
 	ls := &launches{dir: cfg.Dir, mux: cfg.Providers, commands: cmds}
 	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: cmds, Launches: ls, CLIs: d.clis, Asks: h, Secrets: h, Projects: endpoint{h, d, false}}}

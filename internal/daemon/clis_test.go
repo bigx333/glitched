@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -234,7 +235,7 @@ func hostFor(t *testing.T, ad provider.Adapter) (*clis, *runtime.Host) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { h.Close() })
-	return newCLIs(context.Background(), mux, h, cliupdate.NewChecker(nil, "")), h
+	return newCLIs(context.Background(), t.TempDir(), mux, h, cliupdate.NewChecker(nil, "")), h
 }
 
 // An updater stopped at its timeout takes the installer it started with
@@ -326,5 +327,113 @@ func threadUntil(t *testing.T, ep api.Endpoint, thread api.ID, ok func(api.Threa
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out: %+v %v", snap.Threads, err)
 		}
+	}
+}
+
+// Two windows that showed the same Update run its updater once: the
+// second finds the CLI at the latest version and runs nothing.
+func TestAnUpdateOfACurrentCLIRunsNothing(t *testing.T) {
+	ad := nativeClaude(t, updates)
+	c, _ := hostFor(t, ad)
+	c.checker = cliupdate.NewChecker(&versions{latest: "2.1.330"}, filepath.Join(t.TempDir(), "cli-versions.json"))
+	for i := range 2 {
+		res, err := c.UpdateProvider(context.Background(), "claude", false)
+		if err != nil || res.Error != "" || res.Provider.Update == nil || res.Provider.Update.Available {
+			t.Fatalf("update %d: %+v, %v; want the CLI current", i+1, res, err)
+		}
+	}
+	if got := ran(t); got != "update\n" {
+		t.Errorf("the updater ran %q, want once", got)
+	}
+}
+
+// An update that waited for a turn plans again once it holds the
+// provider: the CLI may have been installed another way meanwhile.
+func TestAnUpdateThatWaitedPlansAgain(t *testing.T) {
+	ad := nativeClaude(t, updates)
+	c, h := hostFor(t, ad)
+	planned := asked{done: make(chan struct{})}
+	c.checker = cliupdate.NewChecker(&planned, filepath.Join(t.TempDir(), "cli-versions.json"))
+	thread := api.NewID()
+	submitTo(t, h, thread, api.ThreadCreate{Workspace: t.TempDir(), Title: "t", Model: api.ModelRef{Provider: "claude", Model: "fake"}})
+	submitTo(t, h, thread, api.MessageDispatch{Text: "look", Mode: api.StartNow})
+	th := threadUntil(t, h, thread, func(th api.Thread) bool { return len(th.Requests) == 1 })
+
+	type answer struct {
+		res transport.UpdateResult
+		err error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		res, err := c.UpdateProvider(context.Background(), "claude", true)
+		done <- answer{res, err}
+	}()
+	select {
+	case <-planned.done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the update never planned")
+	}
+	home := os.Getenv("HOME")
+	other := filepath.Join(home, "opt/claude")
+	os.MkdirAll(filepath.Dir(other), 0o755)
+	os.WriteFile(other, []byte("#!/bin/sh\necho ran > \"$HOME/other-ran\"\n"), 0o755)
+	os.Remove(ad.path)
+	if err := os.Symlink(other, ad.path); err != nil {
+		t.Fatal(err)
+	}
+	submitTo(t, h, thread, api.RequestRespond{Request: th.Requests[0].ID, Generation: th.Requests[0].Generation, Answer: []byte(`{"allow":true}`)})
+	got := <-done
+	if _, err := os.Stat(filepath.Join(home, "other-ran")); err == nil || ran(t) != "" {
+		t.Fatalf("the update ran the plan from before its wait: %+v", got.res)
+	}
+	if got.err != nil || !strings.Contains(got.res.Error, "can't tell how Claude Code was installed") {
+		t.Errorf("%+v, %v; want the install as it is now refused", got.res, got.err)
+	}
+}
+
+// asked tells when the first plan of an update has detected the install
+// and looks up the latest version; it knows none.
+type asked struct {
+	once sync.Once
+	done chan struct{}
+}
+
+func (a *asked) Latest(context.Context, cliupdate.Source) (string, error) {
+	a.once.Do(func() { close(a.done) })
+	return "", errors.New("offline")
+}
+
+// placed is installed as a provider whose launch moves its folder by
+// CLAUDE_CONFIG_DIR, as Claude Code's does.
+type placed struct{ *installed }
+
+func (placed) Placement() provider.Placement {
+	return provider.Placement{Names: []string{"claude"}, HomeVar: "CLAUDE_CONFIG_DIR", DefaultHome: "~/.claude"}
+}
+func (placed) Place(provider.Launch)                                     {}
+func (placed) Version(context.Context, provider.Program) (string, error) { return "2.1.323", nil }
+func (placed) Command(prog provider.Program) []string                    { return []string{prog.Path} }
+
+// The updater runs with the CLI's folder as engine.json's launch moves it,
+// so it updates the install that launch runs.
+func TestTheUpdaterRunsWithTheLaunchsFolder(t *testing.T) {
+	ad := nativeClaude(t, `echo "$CLAUDE_CONFIG_DIR" > "$HOME/config-dir"
+`+updates)
+	c, _ := hostFor(t, placed{ad})
+	c.dir = t.TempDir()
+	folder := filepath.Join(os.Getenv("HOME"), "work-claude")
+	os.MkdirAll(folder, 0o755)
+	if _, err := Edit(c.dir, func(cfg *Config) error {
+		cfg.Launch = map[string]provider.Launch{"claude": {Home: folder}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(os.Getenv("HOME"), "elsewhere"))
+	if res, err := c.UpdateProvider(context.Background(), "claude", false); err != nil || res.Error != "" {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(os.Getenv("HOME"), "config-dir")); strings.TrimSpace(string(b)) != folder {
+		t.Errorf("the updater ran with CLAUDE_CONFIG_DIR %q, want the launch's %q", strings.TrimSpace(string(b)), folder)
 	}
 }

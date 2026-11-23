@@ -32,6 +32,10 @@ func Name(provider string) string {
 	return provider
 }
 
+// folders are the CLIs' own folders under home, where a launch that
+// moves none leaves them.
+var folders = map[string]string{"claude": ".claude", "codex": ".codex"}
+
 const (
 	claudePackage = "@anthropic-ai/claude-code"
 	codexPackage  = "@openai/codex"
@@ -39,23 +43,34 @@ const (
 
 // Detect reads how provider's CLI at path was installed, for a user whose
 // home is home on a goos and goarch machine: where its own updater looks
-// for a newer version, and how it updates.
-func Detect(provider, path, home, goos, goarch string) Install {
+// for a newer version, and how it updates. folder is the CLI's own folder
+// as its launch moves it, CLAUDE_CONFIG_DIR's or CODEX_HOME's; "" is its
+// default under home.
+func Detect(provider, path, home, folder, goos, goarch string) Install {
 	name := Name(provider)
 	if path == "" {
 		return Install{Manual: fmt.Sprintf("Glitched can't tell how %s was installed, so it won't run its updater for you.", name)}
 	}
 	real, err := filepath.EvalSymlinks(path)
-	if err != nil {
+	switch {
+	case err != nil:
 		return Install{Path: path, Command: []string{path, "update"}, Manual: fmt.Sprintf("%s isn't at %s any more, so Glitched won't run its updater.", name, path)}
+	case !executable(real):
+		return Install{Path: real, Command: []string{path, "update"}, Manual: fmt.Sprintf("%s at %s isn't a program, so Glitched won't run its updater.", name, real)}
 	}
 	// A home behind a symlink, as macOS's /var is, still holds real.
 	if h, err := filepath.EvalSymlinks(home); err == nil {
 		home = h
 	}
+	if folder == "" {
+		folder = filepath.Join(home, folders[provider])
+	} else if f, err := filepath.EvalSymlinks(folder); err == nil {
+		folder = f
+	}
 	in := Install{Path: real, Command: []string{path, "update"}}
 	slash := filepath.ToSlash(real)
-	under := func(dir string) bool { return strings.HasPrefix(slash, filepath.ToSlash(filepath.Join(home, dir))+"/") }
+	under := func(dir string) bool { return strings.HasPrefix(slash, filepath.ToSlash(dir)+"/") }
+	global := func(pkg string) bool { return strings.Contains(slash, "/lib/node_modules/"+pkg+"/") }
 
 	if prefix, kind, token, ok := homebrew(slash); ok {
 		brew := filepath.Join(filepath.FromSlash(prefix), "bin", "brew")
@@ -77,15 +92,23 @@ func Detect(provider, path, home, goos, goarch string) Install {
 		return in
 	}
 
+	// A global npm package is npm's wherever its prefix is, even inside a
+	// native install's folder.
 	switch {
-	case provider == "claude" && (under(".local/share/claude") || under(".claude/local")):
-		in.Source = npm(claudePackage, claudeChannel(home))
+	case provider == "claude" && global(claudePackage):
+		return npmGlobal(in, slash, claudePackage, claudeChannel(folder), name)
+
+	case provider == "claude" && (under(filepath.Join(home, ".local", "share", "claude")) || under(filepath.Join(folder, "local"))):
+		in.Source = npm(claudePackage, claudeChannel(folder))
 		return adminOnly(in, name, filepath.Dir(real))
 
 	case provider == "claude" && strings.Contains(slash, "/node_modules/"+claudePackage+"/"):
-		return npmGlobal(in, slash, claudePackage, claudeChannel(home), name)
+		return npmGlobal(in, slash, claudePackage, claudeChannel(folder), name)
 
-	case provider == "codex" && under(".codex/packages/standalone"):
+	case provider == "codex" && global(codexPackage):
+		return npmGlobal(in, slash, codexPackage, "latest", name)
+
+	case provider == "codex" && under(filepath.Join(folder, "packages", "standalone")):
 		in.Source = Source{URL: "https://releases.openai.com/codex/channels/latest", Field: "tag_name", Trim: "rust-v"}
 		return adminOnly(in, name, filepath.Dir(real))
 
@@ -108,12 +131,13 @@ func npm(pkg, tag string) Source {
 }
 
 // claudeChannel is the release channel Claude Code updates from: the
-// autoUpdatesChannel of its settings, "latest" unless it says "stable".
-func claudeChannel(home string) string {
+// autoUpdatesChannel of the settings in its folder, "latest" unless it
+// says "stable".
+func claudeChannel(folder string) string {
 	var settings struct {
 		Channel string `json:"autoUpdatesChannel"`
 	}
-	jsonfile.Load(filepath.Join(home, ".claude", "settings.json"), &settings)
+	jsonfile.Load(filepath.Join(folder, "settings.json"), &settings)
 	if settings.Channel == "stable" {
 		return "stable"
 	}
