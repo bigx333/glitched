@@ -218,8 +218,12 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 			drew.slotV = min(give/giveCompactPlaces, 1)
 			slot, drew.slotDrawn, drew.slotShown = a.pluginSlot(c, "thread.header", t.id().String(), &t, drew.slotV == 1, w.slot[drew.slotV] >= 0)
 		default:
-			// Its copies are left out: the plugins hear they went.
+			// Its copies are left out: the plugins hear they went. What
+			// the last frame drew of them is what it last measured.
 			a.frameOf("thread.header")
+			if g.drew.step < givePlaces {
+				slot = max(w.slot[g.drew.slotV], 0)
+			}
 		}
 		spacer := ui.Spacer(c).Key("header-spacer")
 		a.tabButtons(c)
@@ -314,11 +318,7 @@ type headerPills struct{ project, branch, sidebar float32 }
 type headerGive struct {
 	thread api.ID
 	step   int
-	// tight is the room the header had as it last gave a step way: it
-	// takes one back only with more, so that a copy drawn wider for
-	// being shown again doesn't keep it going back and forth.
-	tight float32
-	seen  map[api.ID]*headerWidths
+	seen   map[api.ID]*headerWidths
 	// drew is what the last frame drew, which this frame's bounds lay out.
 	drew headerDrew
 }
@@ -373,7 +373,7 @@ func (w *headerWidths) row(k int, narrow bool, p headerPills) float32 {
 // row till it has.
 func (g *headerGive) choose(thread api.ID, narrow bool, room, title float32, p headerPills) int {
 	if g.thread != thread {
-		g.thread, g.step, g.tight = thread, giveNone, 0
+		g.thread, g.step = thread, giveNone
 	}
 	if g.seen[thread] == nil {
 		if len(g.seen) >= 64 || g.seen == nil {
@@ -396,12 +396,6 @@ func (g *headerGive) choose(thread api.ID, narrow bool, room, title float32, p h
 			k = s
 			break
 		}
-	}
-	switch {
-	case k > g.step:
-		g.tight = room
-	case k < g.step && room <= g.tight:
-		k = g.step
 	}
 	g.step = k
 	return k
