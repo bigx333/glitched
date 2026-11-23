@@ -121,12 +121,13 @@ func (a *app) quickView(c *ui.Context) {
 	})
 }
 
-// localProjects are this machine's projects, where quick ask starts its
-// threads.
+// localProjects are where quick ask starts its threads: No project, then
+// this machine's projects.
 func (a *app) localProjects() []*project {
-	var ps []*project
+	none := a.newProject(a.localEnv(), keyOf(nil, a.scratchRoot()))
+	ps := []*project{none}
 	for _, p := range a.gather() {
-		if p.key.server == "" {
+		if p.key.server == "" && p.key != none.key {
 			ps = append(ps, p)
 		}
 	}

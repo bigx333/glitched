@@ -89,8 +89,12 @@ func (a *app) chatPage(c *ui.Context) {
 			// A server's workspace isn't here for a shell. The diff panel,
 			// opened from an edit, says its files are there.
 			if a.showTerminal && t.local() {
+				dir := t.View.Workspace
+				if a.folderless(t) {
+					dir = homeDir()
+				}
 				drawer := ui.Column(c).Key("terminal").Height(220).Transition(panel(0, 16))
-				drawer.Children(func() { a.terminal(c, t.View.Workspace) })
+				drawer.Children(func() { a.terminal(c, dir) })
 				a.terminalFocused = drawer.FocusWithin()
 			}
 		})
@@ -1593,7 +1597,7 @@ func (a *app) sendText(t thread, text, about string) bool {
 	id := t.id()
 	if id.IsZero() {
 		ws := t.View.Workspace
-		if t.local() && ws == a.scratchRoot() {
+		if a.folderless(t) {
 			dir, err := a.scratchFolder(text)
 			if err != nil {
 				a.pluginNotice(ui.Toast{Title: "Couldn't make the thread's folder", Description: err.Error()})
