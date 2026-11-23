@@ -165,7 +165,9 @@ func TestSettingsReadAsDeclaredAndTellThePlugin(t *testing.T) {
 	if err := h.setStatus("badges", json.RawMessage(`{"setting": "show", "status": {"badge": "x", "tone": "pink"}}`)); err == nil {
 		t.Fatal("a tone that isn't one took")
 	}
-	if Open(state, Options{}).SettingValues("badges")["size"] != 4.0 {
+	again := Open(state, Options{})
+	defer again.Close()
+	if again.SettingValues("badges")["size"] != 4.0 {
 		t.Fatal("a setting didn't outlast a restart")
 	}
 }

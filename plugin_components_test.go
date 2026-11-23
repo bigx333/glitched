@@ -229,6 +229,26 @@ func TestAPluginLoadedAgainDrawsItsNewControls(t *testing.T) {
 	"capabilities": ["ui.place", "ui.replace"], "glitched": {"places": [{"id": "a", "at": "thread.header.actions", "replaces": true}]}}`
 	writeOwnPlugin(t, h.a, "mine", manifest, mineModule)
 	h.a.plugins.SetGranted("mine", "ui.replace", true)
+	// What this tries is a new load's view of the last one's number. A
+	// load's first view, drawn before any frame gives it the header's
+	// copies, is apart from the one that draws them only when the start
+	// is quick, so each load's first is drawn before the window asks.
+	started := func() {
+		t.Helper()
+		app := h.a.plugins.App("mine")
+		deadline := time.After(20 * time.Second)
+		for app.Rev < 1 {
+			if h.p.run() {
+				continue
+			}
+			select {
+			case <-h.p.wake:
+			case <-deadline:
+				t.Fatal("the plugin's first view never came")
+			}
+		}
+	}
+	started()
 	settlePlugins(t, h.a, h.tt, h.p)
 	if !h.tt.HasText("Mine") {
 		t.Fatalf("yours doesn't draw the header's actions: %q", h.tt.Texts())
@@ -238,6 +258,7 @@ func TestAPluginLoadedAgainDrawsItsNewControls(t *testing.T) {
 	return items.map(() => ({ type: "list", id: "l", label: "Mine", height: 40, items: [{ key: "a", label: "Row a" }] }))
 }
 export function rows({ keys }) { return keys.map(() => ({ type: "text", text: "Row a drawn" })) }`)
+	started()
 	settlePlugins(t, h.a, h.tt, h.p)
 	if got := h.a.plugins.App("mine").Rev; got != rev {
 		t.Fatalf("the new load drew view %d, the last %d: this no longer tries what it means to", got, rev)

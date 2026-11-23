@@ -23,6 +23,7 @@ func TestAWindowsFirstFrameGivesSettledRoomToScroll(t *testing.T) {
 	for !h.a.plugins.Idle() {
 		select {
 		case <-h.p.wake:
+		case <-time.After(10 * time.Millisecond): // Idle changes with nothing posted
 		case <-deadline:
 			t.Fatal("the plugins never settled")
 		}
