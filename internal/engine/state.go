@@ -196,7 +196,7 @@ func (t Thread) holding() bool {
 // resumable is whether a resume would start something: the thread is
 // idle and holds a message of the user's, or wakes a stop held.
 func (t Thread) resumable() bool {
-	if t.Live() != nil || t.settled() {
+	if t.Live() != nil || t.settled() || t.Deleted {
 		return false
 	}
 	return t.holding() || t.stopped() && index(t.Queue, Message.waking) >= 0

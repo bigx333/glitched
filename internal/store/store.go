@@ -463,7 +463,8 @@ func (s *Store) rewind(ctx context.Context, tx *sql.Tx) (uint64, error) {
 		return 0, err
 	}
 	threads, err := ids(ctx, tx, `SELECT thread FROM runs WHERE state <> 'finished'
-		UNION SELECT thread FROM messages WHERE state = 'held' AND mode = ? ORDER BY thread`, api.Defer)
+		UNION SELECT m.thread FROM messages m JOIN threads t ON t.id = m.thread
+		WHERE m.state = 'held' AND m.mode = ? AND NOT t.deleted ORDER BY 1`, api.Defer)
 	if err != nil {
 		return 0, err
 	}
