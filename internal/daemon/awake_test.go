@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -59,6 +60,43 @@ func TestTheEngineHoldsTheMachineAwakeWhileAnAgentWorks(t *testing.T) {
 		t.Fatal(err)
 	}
 	in.next(t, false)
+}
+
+// Work that comes back as the grace ends, before the loop hears of it,
+// keeps the same hold.
+func TestWorkBackAsTheGraceEndsKeepsTheHold(t *testing.T) {
+	in := make(inhibitor, 4)
+	w := newAwake(in.hold, true)
+	arms := make(chan chan time.Time, 1)
+	w.after = func(time.Duration) <-chan time.Time {
+		c := make(chan time.Time)
+		arms <- c
+		return c
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); w.run(ctx) }()
+	w.work(true)
+	in.next(t, true)
+	w.work(false)
+	var ends chan time.Time
+	select {
+	case ends = <-arms:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the grace never started")
+	}
+	w.working.Store(true)
+	ends <- time.Now()
+	cancel()
+	<-done
+	close(in)
+	var went []bool
+	for got := range in {
+		went = append(went, got)
+	}
+	if !slices.Equal(went, []bool{false}) {
+		t.Fatalf("after the hold, the inhibitor went %v, want only the one let go as the engine stopped", went)
+	}
 }
 
 // Once no agent works, the hold lasts its grace and then goes.
