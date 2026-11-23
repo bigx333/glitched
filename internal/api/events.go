@@ -32,6 +32,8 @@ const (
 
 type ThreadCreated struct {
 	Workspace string   `json:"workspace"`
+	Project   string   `json:"project,omitempty"`
+	Branch    string   `json:"branch,omitempty"`
 	Title     string   `json:"title"`
 	Model     ModelRef `json:"model"`
 	Access    Access   `json:"access"`

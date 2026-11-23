@@ -168,6 +168,8 @@ CREATE TABLE threads (
 	reported    INTEGER,
 	report      TEXT,
 	session     TEXT NOT NULL DEFAULT '',
+	project     TEXT NOT NULL DEFAULT '',
+	branch      TEXT NOT NULL DEFAULT '',
 	CHECK ((disposition = 1) = (until IS NOT NULL))
 ) STRICT;
 
@@ -230,7 +232,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 9
+const schemaVersion = 10
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -320,6 +322,11 @@ WHERE a.thread = runs.thread AND a.generation = runs.generation;
 	7: `ALTER TABLE commands ADD COLUMN revision INTEGER;`,
 	// The provider's id for each thread's conversation (SessionBound).
 	8: `ALTER TABLE threads ADD COLUMN session TEXT NOT NULL DEFAULT '';`,
+	// The folder a thread in a worktree came from, and its branch.
+	9: `
+ALTER TABLE threads ADD COLUMN project TEXT NOT NULL DEFAULT '';
+ALTER TABLE threads ADD COLUMN branch TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func (s *Store) migrate() error {

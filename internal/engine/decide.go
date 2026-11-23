@@ -165,7 +165,13 @@ func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 	if !c.Run.IsZero() && c.Parent.IsZero() {
 		return rejected("a run starts only a child thread")
 	}
-	if err := d.emit(api.ThreadCreated{Workspace: c.Workspace, Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent}); err != nil {
+	if c.Worktree != nil {
+		return rejected("this engine makes no worktrees")
+	}
+	if (c.Project == "") != (c.Branch == "") {
+		return rejected("a thread in a worktree has both its project and its branch")
+	}
+	if err := d.emit(api.ThreadCreated{Workspace: c.Workspace, Project: c.Project, Branch: c.Branch, Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent}); err != nil {
 		return err
 	}
 	if c.Text == "" {

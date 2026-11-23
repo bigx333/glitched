@@ -40,6 +40,8 @@ const (
 type Thread struct {
 	ID          api.ID
 	Workspace   string
+	Project     string // the folder a thread in a worktree came from; "" in its own
+	Branch      string // the worktree's
 	Title       string
 	Model       api.ModelRef
 	Access      api.Access
@@ -197,6 +199,8 @@ func View(t Thread) api.Thread {
 	v := api.Thread{
 		ID:          t.ID,
 		Workspace:   t.Workspace,
+		Project:     t.Project,
+		Branch:      t.Branch,
 		Title:       t.Title,
 		Revision:    t.Revision,
 		OwnerEpoch:  t.OwnerEpoch,
