@@ -95,6 +95,7 @@ func (a *app) askModels() {
 	l.asking = true
 	fresh := l.fresh
 	l.fresh = false
+	asked := time.Now()
 	// Claude Code's answer takes several seconds, and up to its own
 	// timeout when claude hangs.
 	a.backend.Providers(envs[0], fresh, a.settings.checkCLIs, func(served []transport.ProviderInfo, err error) {
@@ -122,7 +123,7 @@ func (a *app) askModels() {
 		had := l.served
 		l.served = map[string]transport.ProviderInfo{}
 		for _, p := range served {
-			l.served[p.Name] = keptUpdate(had[p.Name], p)
+			l.served[p.Name] = a.newer(cliKey{envs[0], p.Name}, asked, had[p.Name], p)
 			if p.State == transport.ProviderNotInstalled {
 				l.reported[p.Name] = []provider.Model{}
 				continue

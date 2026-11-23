@@ -27,6 +27,7 @@ const maxOutput = 64 << 10
 // machine: what each said of itself, its versions, and its update.
 type clis struct {
 	ctx     context.Context // the engine's: an update runs until it ends, whoever waits for it
+	dir     string          // the engine's, whose engine.json says how each program starts
 	mux     provider.Mux
 	host    *runtime.Host
 	checker *cliupdate.Checker
@@ -35,8 +36,8 @@ type clis struct {
 	updating map[string]chan struct{} // by provider, held while its update runs
 }
 
-func newCLIs(ctx context.Context, mux provider.Mux, host *runtime.Host, checker *cliupdate.Checker) *clis {
-	return &clis{ctx: ctx, mux: mux, host: host, checker: checker, updating: map[string]chan struct{}{}}
+func newCLIs(ctx context.Context, dir string, mux provider.Mux, host *runtime.Host, checker *cliupdate.Checker) *clis {
+	return &clis{ctx: ctx, dir: dir, mux: mux, host: host, checker: checker, updating: map[string]chan struct{}{}}
 }
 
 // Providers asks every provider at once, each time: the app asks seldom,
@@ -71,16 +72,59 @@ func (c *clis) describe(ctx context.Context, name string, check, force bool) tra
 		p.Error = err.Error()
 	}
 	if check && info.Path != "" {
-		st := c.checker.Check(ctx, name, info.Version, installOf(name, info.Path), force)
+		in, _ := c.installOf(name, info.Path)
+		st := c.checker.Check(ctx, name, info.Version, in, force)
 		p.Update = &st
 	}
 	return p
 }
 
-// installOf is how name's CLI at path was installed on this machine.
-func installOf(name, path string) cliupdate.Install {
+// installOf is how name's CLI at path, the program its adapter runs, was
+// installed on this machine, and what its updater runs with over the
+// engine's environment: the CLI's folder as engine.json's launch moves it.
+func (c *clis) installOf(name, path string) (cliupdate.Install, []string) {
+	var env []string
+	var folder string
+	if p, ok := c.mux[name].(provider.Placed); ok {
+		cfg, err := Defaults(c.dir)
+		pl := p.Placement()
+		// The path is given, so nothing is looked for on PATH: only the
+		// launch's folder is read of it.
+		if prog, perr := pl.Program(provider.Launch{Path: path, Home: cfg.Launch[name].Home}); err == nil && perr == nil {
+			env = prog.Env
+			for _, kv := range env {
+				if k, v, _ := strings.Cut(kv, "="); k == pl.HomeVar {
+					folder = v
+				}
+			}
+		}
+	}
 	home, _ := os.UserHomeDir()
-	return cliupdate.Detect(name, path, home, goruntime.GOOS, goruntime.GOARCH)
+	return cliupdate.Detect(name, path, home, folder, goruntime.GOOS, goruntime.GOARCH), env
+}
+
+// plan is how name's CLI updates as it is now, or, when it won't, what
+// UpdateProvider answers: why, or that it is already current.
+func (c *clis) plan(ctx context.Context, name string) (cliupdate.Install, []string, *transport.UpdateResult, error) {
+	info, err := c.mux.Describe(ctx, name)
+	switch {
+	case errors.Is(err, provider.ErrNoAdapter):
+		return cliupdate.Install{}, nil, nil, err
+	case err != nil && info.Path == "":
+		return cliupdate.Install{}, nil, &transport.UpdateResult{Error: err.Error(), Provider: c.describe(ctx, name, true, false)}, nil
+	}
+	in, env := c.installOf(name, info.Path)
+	if in.Manual != "" {
+		return in, env, &transport.UpdateResult{Error: in.Manual, Provider: c.describe(ctx, name, true, false)}, nil
+	}
+	// An Update a window showed before another's ran is stale: it runs
+	// nothing once the CLI is at the latest version known.
+	st := c.checker.Check(ctx, name, info.Version, in, false)
+	if _, known := cliupdate.Newer(info.Version, st.Latest); known && !st.Available {
+		out := fmt.Sprintf("%s is already at %s.", cliupdate.Name(name), info.Version)
+		return in, env, &transport.UpdateResult{Output: out, Provider: c.describe(ctx, name, true, false)}, nil
+	}
+	return in, env, nil, nil
 }
 
 // UpdateProvider runs the updater of name's CLI, the way it was
@@ -103,16 +147,8 @@ func (c *clis) UpdateProvider(ctx context.Context, name string, whenIdle bool) (
 	}
 	defer func() { <-running }()
 
-	info, err := c.mux.Describe(ctx, name)
-	switch {
-	case errors.Is(err, provider.ErrNoAdapter):
-		return transport.UpdateResult{}, err
-	case err != nil && info.Path == "":
-		return transport.UpdateResult{Error: err.Error(), Provider: c.describe(ctx, name, true, false)}, nil
-	}
-	in := installOf(name, info.Path)
-	if in.Manual != "" {
-		return transport.UpdateResult{Error: in.Manual, Provider: c.describe(ctx, name, true, false)}, nil
+	if _, _, res, err := c.plan(ctx, name); err != nil || res != nil {
+		return deref(res), err
 	}
 	release, err := c.host.Hold(ctx, name, whenIdle)
 	if errors.Is(err, runtime.ErrBusy) {
@@ -125,29 +161,37 @@ func (c *clis) UpdateProvider(ctx context.Context, name string, whenIdle bool) (
 	if err != nil {
 		return transport.UpdateResult{}, err
 	}
+	// What was planned before the wait may be stale: the CLI may have been
+	// updated, or installed another way, meanwhile.
+	in, env, res, err := c.plan(ctx, name)
+	if err != nil || res != nil {
+		release()
+		return deref(res), err
+	}
 	// The caller may have gone while the provider was asked.
 	if err := ctx.Err(); err != nil {
 		release()
 		return transport.UpdateResult{}, err
 	}
-	out, err := run(c.ctx, in.Command)
+	out, err := run(c.ctx, in.Command, env)
 	release()
 	if f, ok := c.mux[name].(provider.Forgetter); ok {
 		f.Forget()
 	}
-	res := transport.UpdateResult{Output: out, Provider: c.describe(ctx, name, true, false)}
+	ran := transport.UpdateResult{Output: out, Provider: c.describe(ctx, name, true, false)}
 	if err != nil {
-		res.Error = err.Error()
+		ran.Error = err.Error()
 	}
-	return res, nil
+	return ran, nil
 }
 
 // run runs command with no input, for updateTimeout at most, and returns
 // the end of what it printed.
-func run(ctx context.Context, command []string) (string, error) {
+func run(ctx context.Context, command, env []string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, updateTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	cmd.Env = provider.Program{Env: env}.Environ(os.Environ())
 	var out tail
 	cmd.Stdout, cmd.Stderr = &out, &out
 	// A child the updater leaves holding its output would hold Wait.
@@ -165,6 +209,13 @@ func run(ctx context.Context, command []string) (string, error) {
 		err = fmt.Errorf("%s failed: %v.", shown, err)
 	}
 	return string(out), err
+}
+
+func deref(res *transport.UpdateResult) transport.UpdateResult {
+	if res == nil {
+		return transport.UpdateResult{}
+	}
+	return *res
 }
 
 // tail keeps the last maxOutput bytes written to it.
