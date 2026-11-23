@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"glitched/internal/api"
@@ -104,20 +105,20 @@ func TestWithAgentsServesEveryACPAgent(t *testing.T) {
 type needing struct {
 	provider.Adapter
 	kind   error
-	forgot *bool
+	forgot *atomic.Bool
 }
 
 func (n needing) Describe(context.Context) (provider.Info, error) {
 	return provider.Info{}, provider.Needs{Kind: n.kind, Help: "do this first"}
 }
 
-func (n needing) Forget() { *n.forgot = true }
+func (n needing) Forget() { n.forgot.Store(true) }
 
 // The socket says what a provider's user must do before it runs: install
 // it, or sign in, in the provider's words. A fresh ask has each provider
 // that keeps its answer ask its program again.
 func TestTheSocketSaysWhatAProviderNeeds(t *testing.T) {
-	var forgot bool
+	var out, absent atomic.Bool
 	cfg, err := Defaults(stateDir(t))
 	if err != nil {
 		t.Fatal(err)
@@ -125,8 +126,8 @@ func TestTheSocketSaysWhatAProviderNeeds(t *testing.T) {
 	fake := fake.New(nil)
 	cfg.Providers = provider.Mux{
 		"fake":   fake,
-		"out":    needing{fake, provider.ErrSignedOut, &forgot},
-		"absent": needing{fake, provider.ErrNotInstalled, &forgot},
+		"out":    needing{fake, provider.ErrSignedOut, &out},
+		"absent": needing{fake, provider.ErrNotInstalled, &absent},
 		"broken": undescribed{fake},
 	}
 	d, err := Start(context.Background(), cfg)
@@ -152,8 +153,8 @@ func TestTheSocketSaysWhatAProviderNeeds(t *testing.T) {
 				t.Errorf("fresh %v: %s says %q, %q; want %q, %q", fresh, p.Name, p.State, p.Error, w.State, w.Error)
 			}
 		}
-		if forgot != fresh {
-			t.Errorf("after an ask with fresh %v, the providers forgot their answers: %v", fresh, forgot)
+		if out.Load() != fresh || absent.Load() != fresh {
+			t.Errorf("after an ask with fresh %v, the providers forgot their answers: %v, %v", fresh, out.Load(), absent.Load())
 		}
 	}
 }
