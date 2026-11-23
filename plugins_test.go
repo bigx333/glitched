@@ -391,6 +391,9 @@ func TestAPluginLoadedAgainAsAnotherGoesShowsItsOwnState(t *testing.T) {
 	if now, err := h.a.plugins.Session("counter", "home"); err != nil || now == old {
 		t.Fatalf("the counter didn't load again as hello went: %v, the same session %v", err, now == old)
 	}
+	// The page's new session draws on its own goroutine, which settling
+	// the plugins doesn't wait for: Idle leaves pages out.
+	h.until("the counter's page to draw again", func() bool { return !h.tt.HasText("Loading…") })
 	// The counter starts again with no name, and its field says so, not
 	// the name its last load had.
 	if v, ok := h.tt.AccessByRole(ui.RoleTextField, "Name"); !ok || v.Value != "" || !h.tt.HasText("Type a name.") {
