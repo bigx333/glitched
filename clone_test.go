@@ -384,4 +384,3 @@ func TestCloneFailureKeepsAFolderItDidNotMake(t *testing.T) {
 		t.Fatalf("the failed clone took away the folder it found: %v", err)
 	}
 }
-
