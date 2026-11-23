@@ -257,11 +257,13 @@ func (g *Agent) permission(ctx context.Context, r acpsdk.RequestPermissionReques
 	}
 	merged := *s
 	merged.apply(r.ToolCall)
+	_, once := pick(r.Options, acpsdk.PermissionOptionKindAllowOnce)
 	_, always := pick(r.Options, acpsdk.PermissionOptionKindAllowAlways)
-	g.queueLocked(provider.RequestOpened{ID: id, Kind: api.KindApproval, Body: merged.approval(g.spec.Workspace, g.p.profile.Name, always)})
-	// Glitched allows a call only once. A request that can't be allowed
-	// so is declined, and the card says why, so the turn goes on.
-	if _, ok := pick(r.Options, acpsdk.PermissionOptionKindAllowOnce); !ok {
+	g.queueLocked(provider.RequestOpened{ID: id, Kind: api.KindApproval, Body: merged.approval(g.spec.Workspace, g.p.profile.Name, once && always)})
+	// Glitched allows a call only once unless the user says always. A
+	// request that can't be allowed once is declined, and the card says
+	// why, so the turn goes on.
+	if !once {
 		g.queueLocked(provider.RequestWithdrawn{ID: id, Reason: fmt.Sprintf("%s offers no way to allow this only once, so Glitched declined it. Allow it in %s itself to let it run.", g.p.profile.Name, g.p.profile.Name)})
 		g.mu.Unlock()
 		if reject, ok := pick(r.Options, acpsdk.PermissionOptionKindRejectOnce); ok {
