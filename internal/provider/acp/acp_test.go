@@ -17,6 +17,13 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if path := os.Getenv(envLaunch); path != "" {
+		noteLaunch(path)
+		if slices.Contains(os.Args[1:], "--version") {
+			os.Stdout.WriteString("1.5.14\n")
+			os.Exit(0)
+		}
+	}
 	if len(os.Args) >= 3 && os.Args[1] == "wire-fake" {
 		runWireFake(os.Args[2])
 		return

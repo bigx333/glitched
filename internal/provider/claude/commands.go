@@ -23,7 +23,11 @@ const commandsTimeout = 30 * time.Second
 // include the user's and the project's skills and those of the user's
 // plugins.
 func (a *Adapter) Commands(ctx context.Context, workspace string) ([]provider.Command, error) {
-	r, err := a.initialize(ctx, workspace)
+	prog, err := a.program()
+	if err != nil {
+		return nil, err
+	}
+	r, err := a.initialize(ctx, prog, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -86,17 +90,13 @@ func (r initialized) models() []provider.Model {
 	return out
 }
 
-// initialize starts a claude in dir, has it answer initialize, then stops
+// initialize starts prog's claude in dir, has it answer initialize, then stops
 // it. It never sends a prompt, so no model is called and, with persistence
 // off, no session is left behind.
-func (a *Adapter) initialize(ctx context.Context, dir string) (initialized, error) {
-	bin, err := a.binary()
-	if err != nil {
-		return initialized{}, err
-	}
+func (a *Adapter) initialize(ctx context.Context, prog provider.Program, dir string) (initialized, error) {
 	ctx, cancel := context.WithTimeout(ctx, commandsTimeout)
 	defer cancel()
-	cmd := Command(ctx, bin, "-p", "--verbose", "--no-session-persistence",
+	cmd := command(ctx, prog, "-p", "--verbose", "--no-session-persistence",
 		"--input-format", "stream-json", "--output-format", "stream-json")
 	cmd.Dir = dir
 	in, err := cmd.StdinPipe()

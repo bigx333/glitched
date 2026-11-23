@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"glitched/internal/daemon"
+	"glitched/internal/provider"
 )
 
 // tripwire puts an agent named name on PATH and in ~/.local/bin, where
@@ -77,7 +78,7 @@ func TestTheGUIsTestsNeverRunAgy(t *testing.T) {
 // fails the turn with what to do, in the thread.
 func TestAMissingClaudeSaysSoInTheThread(t *testing.T) {
 	h := startWith(t, tempDir(t), func(cfg *daemon.Config) {
-		cfg.ClaudePath = filepath.Join(t.TempDir(), "claude")
+		cfg.Launch = map[string]provider.Launch{"claude": {Path: filepath.Join(t.TempDir(), "claude")}}
 		cfg.WithClaude()
 	})
 	sendNew(h, "Say hi.")

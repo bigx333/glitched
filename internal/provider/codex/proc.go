@@ -91,18 +91,18 @@ var _ park.Process = (*proc)(nil)
 
 // launch starts app-server in dir under mark and initializes it. ctx
 // bounds only the start; the process lives until Close.
-func launch(ctx context.Context, bin, dir, mark string) (*proc, error) {
-	if err := guard(bin); err != nil {
+func launch(ctx context.Context, prog provider.Program, dir, mark string) (*proc, error) {
+	if err := guard(prog.Path); err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(bin, "app-server")
+	cmd := exec.Command(prog.Path, append([]string{"app-server"}, prog.Args...)...)
 	cmd.Dir = dir
 	cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		k, _, _ := strings.Cut(kv, "=")
 		return k == "BROWSER" || k == procEnv || mcp.Routing(k)
 	})
 	// A stale login must never open a browser tab in the middle of a turn.
-	cmd.Env = append(cmd.Env, "BROWSER=true", procEnv+"="+mark)
+	cmd.Env = prog.Environ(append(cmd.Env, "BROWSER=true", procEnv+"="+mark))
 	cmd.SysProcAttr = sweep.SysProcAttr()
 	p := &proc{cmd: cmd, mark: mark, stderr: &tail{}, heard: make(chan struct{}), reaped: make(chan struct{})}
 	// The adapter's own pipes, unlike exec's, leave Wait nothing to wait

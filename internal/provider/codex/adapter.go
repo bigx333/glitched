@@ -11,8 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,13 +27,15 @@ import (
 const Provider = "codex"
 
 // errNotInstalled is what Describe and Open say when no codex is found.
-var errNotInstalled error = provider.Needs{Kind: provider.ErrNotInstalled, Help: "Codex is not installed.\nInstall it with: npm install -g @openai/codex\nor set codex_path in engine.json."}
+var errNotInstalled error = provider.Needs{Kind: provider.ErrNotInstalled, Help: "Codex is not installed.\nInstall it with: npm install -g @openai/codex\nor set its path in Settings › Providers."}
 
 // Adapter runs Codex threads.
 type Adapter struct {
-	// Path is the codex binary. Empty looks for codex on PATH, then in
-	// ~/.local/bin.
-	Path string
+	// Path, Home and Args are how codex starts, as provider.Launch has
+	// them: set them before the first run, or with Place.
+	Path, Home, Args string
+
+	mu sync.Mutex // guards Path, Home and Args against Place
 
 	once sync.Once
 	pool *park.Pool[*proc]
@@ -92,25 +92,16 @@ func (a *Adapter) Close() error {
 	return a.parked().Close(ctx)
 }
 
-// Binary is the codex program, or how to install it when there is none.
-func (a *Adapter) Binary() (string, error) {
-	if a.Path != "" {
-		// app-server starts in the run's workspace, where a relative path
-		// names another file.
-		if p, err := exec.LookPath(a.Path); err == nil {
-			return filepath.Abs(p)
-		}
-		return "", errNotInstalled
+// program is the codex a launch starts now, or what stops one starting.
+func (a *Adapter) program() (provider.Program, error) {
+	a.mu.Lock()
+	l := provider.Launch{Path: a.Path, Home: a.Home, Args: a.Args}
+	a.mu.Unlock()
+	prog, err := placement.Program(l)
+	if err != nil {
+		return provider.Program{}, provider.Unplaced(err, "Codex", errNotInstalled.Error())
 	}
-	if p, err := exec.LookPath("codex"); err == nil {
-		return p, nil
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		if p, err := exec.LookPath(filepath.Join(home, ".local", "bin", "codex")); err == nil {
-			return p, nil
-		}
-	}
-	return "", errNotInstalled
+	return prog, nil
 }
 
 // Describe is the models Codex offers the user's account, with the
@@ -140,22 +131,22 @@ func (a *Adapter) described(ctx context.Context) (provider.Info, error) {
 }
 
 func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
-	bin, err := a.Binary()
+	prog, err := a.program()
 	if err != nil {
 		return provider.Info{}, err
 	}
 	home, _ := os.UserHomeDir()
-	p, err := launch(ctx, bin, home, "probe-"+api.NewID().String())
+	p, err := launch(ctx, prog, home, "probe-"+api.NewID().String())
 	if err != nil {
 		return provider.Info{}, err
 	}
 	defer p.discard()
-	info := provider.Info{Name: "Codex", Version: p.version, Path: bin}
+	info := provider.Info{Name: "Codex", Version: p.version, Path: prog.Path}
 	if err := p.signedIn(ctx); err != nil {
 		return info, err
 	}
 	if info.Models, err = p.models(ctx); err != nil {
-		return provider.Info{Name: "Codex", Version: p.version, Path: bin}, err
+		return provider.Info{Name: "Codex", Version: p.version, Path: prog.Path}, err
 	}
 	return info, nil
 }
@@ -164,13 +155,13 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 // left, when that one was started as this run would start one, or else a
 // new one with a new Codex thread.
 func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
-	bin, err := a.Binary()
+	prog, err := a.program()
 	if err != nil {
 		return nil, err
 	}
 	// The MCP servers, with the access glitched mcp acts at, go to
 	// thread/start and stay with the thread for its life here.
-	key := launchKey(bin, spec)
+	key := launchKey(prog, spec)
 	keep := func(p *proc) { a.parked().Park(spec.Thread, key, p) }
 	p, ok, err := a.parked().Take(ctx, spec.Thread, key)
 	if err != nil {
@@ -186,7 +177,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	}
 	lost := false
 	if !ok {
-		if p, err = launch(ctx, bin, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String()); err != nil {
+		if p, err = launch(ctx, prog, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String()); err != nil {
 			return nil, err
 		}
 		err = p.signedIn(ctx)
@@ -214,10 +205,13 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	return g, nil
 }
 
-func launchKey(bin string, spec provider.SessionSpec) string {
-	servers, _ := json.Marshal(spec.MCP)
+func launchKey(prog provider.Program, spec provider.SessionSpec) string {
+	servers, _ := json.Marshal(struct {
+		Program provider.Program
+		MCP     []provider.MCPServer
+	}{prog, spec.MCP})
 	sum := sha256.Sum256(servers)
-	return strings.Join([]string{bin, spec.Workspace, strconv.Itoa(int(spec.Access)), hex.EncodeToString(sum[:])}, "\x00")
+	return strings.Join([]string{prog.Path, spec.Workspace, strconv.Itoa(int(spec.Access)), hex.EncodeToString(sum[:])}, "\x00")
 }
 
 // Reconcile stops what is left of the run's thread: nothing can reattach

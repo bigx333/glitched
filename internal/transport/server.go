@@ -34,6 +34,11 @@ type Server struct {
 	// callers only, as Plugins: a listing runs the provider's CLI in the
 	// folder the caller names.
 	Providers Providers
+	// Launches reads and sets how each provider's program starts on this
+	// machine, to any client the server admits: what a paired client may
+	// already run there, a thread at Full access in any folder, is no
+	// less than a program it names.
+	Launches Launches
 	// Asks opens credentials requests for this machine's agents, to its
 	// own callers only, as Plugins: glitched mcp asks for its agent.
 	Asks Asks
@@ -342,6 +347,45 @@ type Providers interface {
 	Ask(ctx context.Context, provider string, spec provider.AskSpec) (provider.AskResult, error)
 }
 
+// Launches are how the engine's providers' programs start, as
+// Settings › Providers sets them up.
+type Launches interface {
+	Launches(ctx context.Context) ([]LaunchInfo, error)
+	// SetLaunch checks l and, when nothing is wrong with it, keeps it in
+	// engine.json and starts the provider's next launches as it says.
+	SetLaunch(ctx context.Context, provider string, l provider.Launch) (LaunchInfo, error)
+}
+
+// LaunchInfo is how one provider's program starts on the engine's
+// machine, and what is wrong with that.
+type LaunchInfo struct {
+	Provider string          `json:"provider"`
+	Launch   provider.Launch `json:"launch"` // as engine.json keeps it
+	// HomeVar is the variable Launch.Home sets, and DefaultHome the
+	// folder the program uses without it; "" when it takes no Home.
+	HomeVar     string   `json:"homeVar,omitempty"`
+	DefaultHome string   `json:"defaultHome,omitempty"`
+	Reserved    []string `json:"reserved,omitempty"` // flags Launch.Args may not set
+	// Path is the program it runs: Launch's, or the one found when Launch
+	// names none; "" when there is none.
+	Path    string `json:"path,omitempty"`
+	Version string `json:"version,omitempty"` // what it answers to --version
+	// Env and Command are how a new thread starts it, less what each
+	// thread adds of its own.
+	Env     []string `json:"env,omitempty"`
+	Command []string `json:"command,omitempty"`
+	// Errors is what is wrong with Launch, setting by setting.
+	Errors provider.LaunchError `json:"errors,omitzero"`
+	// Saved is that SetLaunch kept it, as it does only when Errors has none.
+	Saved bool `json:"saved,omitempty"`
+}
+
+// launchQuery sets Provider's launch.
+type launchQuery struct {
+	Provider string          `json:"provider"`
+	Launch   provider.Launch `json:"launch"`
+}
+
 // ProviderInfo is one provider the engine serves: what it said of itself,
 // or why it couldn't say.
 type ProviderInfo struct {
@@ -407,6 +451,12 @@ func (s *Server) methods() map[string]handler {
 		})
 		m["provider.ask"] = callHandler(func(ctx context.Context, q askQuery) (provider.AskResult, error) {
 			return p.Ask(ctx, q.Provider, q.Spec)
+		})
+	}
+	if l := s.Launches; l != nil {
+		m["provider.launches"] = callHandler(func(ctx context.Context, _ struct{}) ([]LaunchInfo, error) { return l.Launches(ctx) })
+		m["provider.launch"] = callHandler(func(ctx context.Context, q launchQuery) (LaunchInfo, error) {
+			return l.SetLaunch(ctx, q.Provider, q.Launch)
 		})
 	}
 	if a := s.Asks; a != nil {

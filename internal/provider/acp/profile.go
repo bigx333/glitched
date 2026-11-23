@@ -22,6 +22,9 @@ type Profile struct {
 	Env map[string]string
 	// Install is what Open says when no binary is found.
 	Install string
+	// Reserved are the flags Glitched starts the agent with itself, which
+	// the user's own launch arguments may not set.
+	Reserved []provider.Reserved
 	// SignIn is what a turn says when the agent needs its user to sign in.
 	SignIn string
 	// SignedOut are words the agent prints, outside ACP, when its login
@@ -46,8 +49,11 @@ var Antigravity = Profile{
 	Args:     []string{"acp", "--disable-telemetry"},
 	// A stale login must never open a browser tab in the middle of a turn.
 	Env:     map[string]string{"BROWSER": "true"},
-	Install: "Antigravity is not installed.\nInstall its CLI with: curl -fsSL https://antigravity.google/cli/install.sh | bash\nor set agy_path in engine.json.",
-	SignIn:  "Antigravity is signed out. Run agy in Terminal to sign in.",
+	Install: "Antigravity is not installed.\nInstall its CLI with: curl -fsSL https://antigravity.google/cli/install.sh | bash\nor set its path in Settings › Providers.",
+	// The access level chooses the mode and the skip flag, and the ACP
+	// server is on stdio; --login signs in and exits.
+	Reserved: []provider.Reserved{{Flags: []string{"--dangerously-skip-permissions", "--mode", "--login", "--stdio"}}},
+	SignIn:   "Antigravity is signed out. Run agy in Terminal to sign in.",
 	// agy's own modes, as `session/new` lists them; it refuses yolo, and
 	// skips its asking only for a process started so. Approve for me is
 	// its auto mode, which approves edits and safe commands and asks

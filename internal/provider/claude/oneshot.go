@@ -33,7 +33,7 @@ type oneShot struct {
 // settings reach it. The user's settings stay: they may hold how claude
 // signs in, which --bare and an empty --setting-sources both drop.
 func (a *Adapter) Ask(ctx context.Context, spec provider.AskSpec) (provider.AskResult, error) {
-	bin, err := a.binary()
+	prog, err := a.program()
 	if err != nil {
 		return provider.AskResult{}, fmt.Errorf("%w: %w", provider.ErrUnavailable, err)
 	}
@@ -47,7 +47,7 @@ func (a *Adapter) Ask(ctx context.Context, spec provider.AskSpec) (provider.AskR
 	if spec.System != "" {
 		args = append(args, "--system-prompt", spec.System)
 	}
-	cmd := Command(ctx, bin, args...)
+	cmd := command(ctx, prog, args...)
 	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(spec.Prompt)
 	var stderr bytes.Buffer

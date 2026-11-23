@@ -114,10 +114,10 @@ func newAgent(spec provider.SessionSpec, p *proc, keep func(*proc)) *Agent {
 
 // launch runs claude with args for spec's thread and waits for its answer
 // to initialize, which it gives only after it has checked the session flag.
-func launch(ctx context.Context, bin string, spec provider.SessionSpec, args []string) (*proc, error) {
+func launch(ctx context.Context, prog provider.Program, spec provider.SessionSpec, args []string) (*proc, error) {
 	// Open's ctx bounds only the start; the process lives until Close.
 	life, stop := context.WithCancel(context.Background())
-	cmd := Command(life, bin, args...)
+	cmd := command(life, prog, args...)
 	cmd.Dir = spec.Workspace
 	m := launchMark(spec.Thread, api.NewID())
 	cmd.Env = append(slices.DeleteFunc(cmd.Env, func(kv string) bool { return strings.HasPrefix(kv, procEnv+"=") }),

@@ -27,6 +27,11 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
+	// The test binary plays a provider's program answering --version.
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		os.Stdout.WriteString("codex-cli 0.200.0\n")
+		os.Exit(0)
+	}
 	if acptest.Main() || codextest.Main() {
 		return
 	}

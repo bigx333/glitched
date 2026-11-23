@@ -594,6 +594,19 @@ func (e *EndpointClient) Providers(ctx context.Context, fresh bool) ([]ProviderI
 	return out, e.c.call(ctx, "providers", providersQuery{Fresh: fresh}, &out)
 }
 
+// Launches are how each of the engine's providers' programs starts.
+func (e *EndpointClient) Launches(ctx context.Context) ([]LaunchInfo, error) {
+	var out []LaunchInfo
+	return out, e.c.call(ctx, "provider.launches", struct{}{}, &out)
+}
+
+// SetLaunch has the engine start provider's program as l says, when
+// nothing is wrong with l: the answer says what is, and whether it kept l.
+func (e *EndpointClient) SetLaunch(ctx context.Context, provider string, l provider.Launch) (LaunchInfo, error) {
+	var out LaunchInfo
+	return out, e.c.call(ctx, "provider.launch", launchQuery{Provider: provider, Launch: l}, &out)
+}
+
 // AskCredentials opens a credentials request for an agent and waits for
 // its answer.
 func (e *EndpointClient) AskCredentials(ctx context.Context, a api.Ask) (api.Asked, error) {

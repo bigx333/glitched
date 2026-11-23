@@ -315,7 +315,9 @@ func TestACommandsWordsStayApartOnItsCard(t *testing.T) {
 	}
 }
 
-func TestARelativeAgentPathRunsFromTheWorkspace(t *testing.T) {
+// A relative path names one file from the engine's folder and another
+// from each run's workspace, so it is refused, saying so, before any run.
+func TestARelativeAgentPathIsRefused(t *testing.T) {
 	engineWD := t.TempDir()
 	t.Chdir(engineWD)
 	a := wireFake(t, "plain")
@@ -323,16 +325,12 @@ func TestARelativeAgentPathRunsFromTheWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.Path = "./fake-agent"
-	bin, err := a.Binary()
-	if err != nil {
-		t.Fatal(err)
-	}
 	g, err := a.Open(context.Background(), spec(t))
 	if g != nil {
 		closeRun(t, g)
 	}
-	if err != nil {
-		t.Fatalf("Binary found %q from the engine directory, but Open could not run it from the workspace: %v", bin, err)
+	if !errors.Is(err, provider.ErrNotInstalled) || !strings.Contains(err.Error(), "is relative") {
+		t.Fatalf("Open with the agent at %s = %v, want it refused as relative", a.Path, err)
 	}
 }
 

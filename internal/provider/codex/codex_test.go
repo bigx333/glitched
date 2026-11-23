@@ -19,6 +19,13 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if path := os.Getenv(envLaunch); path != "" {
+		noteLaunch(path)
+		if slices.Contains(os.Args[1:], "--version") {
+			fmt.Println("codex-cli 0.200.0")
+			os.Exit(0)
+		}
+	}
 	if codextest.Main() {
 		return
 	}

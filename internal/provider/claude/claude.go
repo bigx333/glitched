@@ -14,7 +14,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -29,14 +28,16 @@ import (
 )
 
 // ErrNotInstalled is Open's error when no claude binary can be found.
-var ErrNotInstalled error = provider.Needs{Kind: provider.ErrNotInstalled, Help: "Claude Code is not installed.\nInstall it, or set claude_path in engine.json."}
+var ErrNotInstalled error = provider.Needs{Kind: provider.ErrNotInstalled, Help: "Claude Code is not installed.\nInstall it, or set its path in Settings › Providers."}
 
 // Adapter starts Claude Code with the user's own login and settings, as
 // claude in a terminal would. Glitched holds no token.
 type Adapter struct {
-	// Path is the claude binary. Empty looks on PATH, then in ~/.local/bin,
-	// where Claude Code's installer puts it.
-	Path string
+	// Path, Home and Args are how claude starts, as provider.Launch has
+	// them: set them before the first run, or with Place.
+	Path, Home, Args string
+
+	mu sync.Mutex // guards Path, Home and Args against Place
 
 	once sync.Once
 	pool *park.Pool[*proc]
@@ -76,8 +77,12 @@ var (
 // /model lists them. It starts in the home directory: the models are the
 // account's, not a project's.
 func (a *Adapter) Describe(ctx context.Context) (provider.Info, error) {
+	prog, err := a.program()
+	if err != nil {
+		return provider.Info{}, err
+	}
 	home, _ := os.UserHomeDir()
-	r, err := a.initialize(ctx, home)
+	r, err := a.initialize(ctx, prog, home)
 	if err != nil {
 		return provider.Info{}, err
 	}
@@ -86,8 +91,7 @@ func (a *Adapter) Describe(ctx context.Context) (provider.Info, error) {
 		// account ran before stands.
 		return provider.Info{}, fmt.Errorf("Claude Code %s doesn't say what models the account runs", r.Version)
 	}
-	bin, _ := a.binary()
-	info := provider.Info{Name: "claude", Version: r.Version, Models: r.models(), Path: bin}
+	info := provider.Info{Name: "claude", Version: r.Version, Models: r.models(), Path: prog.Path}
 	if s := a.noAuto.Load(); s != nil {
 		info.NoAuto = *s
 	}
@@ -100,14 +104,15 @@ func (a *Adapter) Describe(ctx context.Context) (provider.Info, error) {
 // resumes it; a session that turns out to exist, or not to, takes the
 // other flag. Both answers come before any model call.
 func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
-	bin, err := a.binary()
+	prog, err := a.program()
 	if err != nil {
 		return nil, err
 	}
 	args := a.argv(spec)
 	// What a claude is started with is fixed for its life: a run that
 	// would start it otherwise needs another one.
-	key := strings.Join(slices.Concat([]string{bin, spec.Workspace}, args), "\x00")
+	id, _ := json.Marshal([]any{prog.Path, spec.Workspace, prog.Env, prog.Args, args})
+	key := string(id)
 	keep := func(p *proc) { a.parked().Park(spec.Thread, key, p) }
 	p, ok, err := a.parked().Take(ctx, spec.Thread, key)
 	switch {
@@ -121,9 +126,9 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	if spec.Generation > 1 {
 		slices.Reverse(flags)
 	}
-	p, err = launch(ctx, bin, spec, slices.Concat(args, []string{flags[0], session}))
+	p, err = launch(ctx, prog, spec, slices.Concat(args, []string{flags[0], session}))
 	if errors.Is(err, errSessionInUse) || errors.Is(err, errNoSession) {
-		p, err = launch(ctx, bin, spec, slices.Concat(args, []string{flags[1], session}))
+		p, err = launch(ctx, prog, spec, slices.Concat(args, []string{flags[1], session}))
 	}
 	if err != nil {
 		return nil, err
@@ -193,29 +198,25 @@ func Command(ctx context.Context, bin string, args ...string) *exec.Cmd {
 // killed.
 const killGrace = 2 * time.Second
 
-func (a *Adapter) binary() (string, error) {
-	if a.Path != "" {
-		if isExecutable(a.Path) {
-			return a.Path, nil
-		}
-		return "", ErrNotInstalled
+// program is the claude a launch starts now, or what stops one starting.
+func (a *Adapter) program() (provider.Program, error) {
+	a.mu.Lock()
+	l := provider.Launch{Path: a.Path, Home: a.Home, Args: a.Args}
+	a.mu.Unlock()
+	prog, err := placement.Program(l)
+	if err != nil {
+		return provider.Program{}, provider.Unplaced(err, "Claude Code", ErrNotInstalled.Error())
 	}
-	if p, err := exec.LookPath("claude"); err == nil {
-		return p, nil
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		if p := filepath.Join(home, ".local", "bin", "claude"+exeSuffix); isExecutable(p) {
-			return p, nil
-		}
-	}
-	return "", ErrNotInstalled
+	return prog, nil
 }
 
-// isExecutable is whether path is a program exec can start. Windows has
-// no execute bit: there a program is a file whose extension is in PATHEXT.
-func isExecutable(path string) bool {
-	_, err := exec.LookPath(path)
-	return err == nil
+// command is Command for prog: in its environment, with its user's
+// arguments ahead of args, so that a flag Glitched sets wins over a
+// repeat of it.
+func command(ctx context.Context, prog provider.Program, args ...string) *exec.Cmd {
+	cmd := Command(ctx, prog.Path, slices.Concat(prog.Args, args)...)
+	cmd.Env = prog.Environ(cmd.Env)
+	return cmd
 }
 
 // exeSuffix is what a program's name ends in: Claude Code's native

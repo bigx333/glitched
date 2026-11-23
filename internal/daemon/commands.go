@@ -103,6 +103,19 @@ func (c *commandLists) Ask(ctx context.Context, name string, spec provider.AskSp
 	return c.mux.Ask(ctx, name, spec)
 }
 
+// forget has the next ask for name's commands list them again, as its
+// program now starts: a listing that is under way answers only those
+// already waiting on it.
+func (c *commandLists) forget(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k := range c.lists {
+		if k.provider == name {
+			delete(c.lists, k)
+		}
+	}
+}
+
 func (c *commandLists) list(k listKey, l *listing) {
 	l.cmds, l.err = c.mux.Commands(c.ctx, k.provider, k.workspace)
 	l.at = c.now()

@@ -67,15 +67,11 @@ type Config struct {
 	// MCP are the engine's own MCP servers, which every run's agent gets
 	// after glitched mcp, as the app's browser.
 	MCP []provider.MCPServer `json:"-"`
-	// ClaudePath is the claude binary an engine with WithClaude runs Claude
-	// Code threads with, when it is not on PATH or in ~/.local/bin.
-	ClaudePath string `json:"claude_path,omitempty"`
-	// AgyPath is the agy binary an engine with WithAgents runs Antigravity
-	// threads with, when it is not on PATH or in ~/.local/bin.
-	AgyPath string `json:"agy_path,omitempty"`
-	// CodexPath is the codex binary an engine with WithAgents runs Codex
-	// threads with, when it is not on PATH or in ~/.local/bin.
-	CodexPath string `json:"codex_path,omitempty"`
+	// Launch is how each provider's program starts, by provider: where it
+	// is, its own folder and more arguments. One not here runs the
+	// program on PATH as it is. The claude_path, codex_path and agy_path
+	// of older files are read as its Paths.
+	Launch map[string]provider.Launch `json:"providers,omitempty"`
 	// Children caps the child threads agents start. Its zero fields take
 	// engine.DefaultLimits'.
 	Children engine.Limits `json:"children,omitzero"`
@@ -94,8 +90,15 @@ func Defaults(dir string) (Config, error) {
 	ad := fake.New(fake.Turn(true))
 	ad.Tokens = 1800 // a turn's usage, for the GUI to show
 	cfg := Config{Dir: dir, Hub: true, Epoch: 1, Providers: FakeProviders(ad)}
-	if err := jsonfile.Load(filepath.Join(dir, configFile), &cfg); err != nil {
-		return Config{}, err
+	b, err := os.ReadFile(filepath.Join(dir, configFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return cfg, nil
+	}
+	if err == nil {
+		err = cfg.read(b)
+	}
+	if err != nil {
+		return Config{}, fmt.Errorf("%s: %w", filepath.Join(dir, configFile), err)
 	}
 	return cfg, nil
 }
@@ -118,7 +121,8 @@ func FakeProviders(ad provider.Adapter) provider.Mux {
 // Each run gets the browser of the app on the engine's state directory
 // as an MCP server (package browsermcp), as this program's browser-mcp.
 func (cfg *Config) WithClaude() {
-	cfg.Providers = provider.Mux{"claude": &claude.Adapter{Path: cfg.ClaudePath}}
+	l := cfg.Launch["claude"]
+	cfg.Providers = provider.Mux{"claude": &claude.Adapter{Path: l.Path, Home: l.Home, Args: l.Args}}
 	if s, ok := browsermcp.Server(cfg.Dir); ok {
 		cfg.MCP = []provider.MCPServer{s}
 	}
@@ -131,16 +135,21 @@ func (cfg *Config) WithClaude() {
 // stops what a run of it left when it was.
 func (cfg *Config) WithAgents() {
 	cfg.WithClaude()
-	cfg.Providers[codex.Provider] = &codex.Adapter{Path: cfg.CodexPath}
-	paths := map[string]string{acp.Antigravity.Provider: cfg.AgyPath}
+	l := cfg.Launch[codex.Provider]
+	cfg.Providers[codex.Provider] = &codex.Adapter{Path: l.Path, Home: l.Home, Args: l.Args}
 	for _, p := range acp.Profiles {
-		cfg.Providers[p.Provider] = &acp.Adapter{Profile: p, Path: paths[p.Provider]}
+		l := cfg.Launch[p.Provider]
+		cfg.Providers[p.Provider] = &acp.Adapter{Profile: p, Path: l.Path, Home: l.Home, Args: l.Args}
 	}
 }
 
-// Save records cfg in engine.json under its Dir, for Defaults.
+// Save records cfg in engine.json under its Dir, for Defaults. Keys of
+// the file's that Config doesn't know stay as they were.
 func (cfg Config) Save() error {
-	return jsonfile.Write(filepath.Join(cfg.Dir, configFile), cfg)
+	_, err := jsonfile.Edit(filepath.Join(cfg.Dir, configFile), func(raw *map[string]json.RawMessage) error {
+		return cfg.write(raw)
+	})
+	return err
 }
 
 // A Daemon is a started engine. It serves until Start's ctx ends, Close is
@@ -321,10 +330,12 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	}
 	svc := d.startPlugins(cfg.Dir, cfg.PluginRun)
 	d.undo = append(d.undo, func() error { svc.Close(); return nil })
-	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: newCommandLists(ctx, cfg.Providers), Asks: h, Secrets: h}}
+	cmds := newCommandLists(ctx, cfg.Providers)
+	ls := &launches{dir: cfg.Dir, mux: cfg.Providers, commands: cmds}
+	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: cmds, Launches: ls, Asks: h, Secrets: h}}
 	g := &grants{dir: cfg.Dir, base: ctx}
 	tailnetServer := func(tn transport.Transport) *transport.Server {
-		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Secrets: h, Authorize: g.authorize}
+		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Launches: ls, Secrets: h, Authorize: g.authorize}
 	}
 	type unbound struct {
 		tn  transport.Tailnet
