@@ -267,6 +267,9 @@ func TestNoAllowOnceCannotBeAllowed(t *testing.T) {
 		switch e := e.(type) {
 		case provider.RequestOpened:
 			opened = e.ID
+			if strings.Contains(string(e.Body), "always") {
+				t.Errorf("a card that can only be declined offers Always allow: %s", e.Body)
+			}
 		case provider.RequestWithdrawn:
 			if e.ID == opened && strings.Contains(e.Reason, "only once") {
 				withdrawn = e.ID

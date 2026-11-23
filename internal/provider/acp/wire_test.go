@@ -30,6 +30,8 @@ import (
 func runWireFake(mode string) {
 	w := json.NewEncoder(os.Stdout)
 	turns := 0
+	currentMode := "default"
+	modeChanges := 0
 	re := func(id json.RawMessage, result any) {
 		w.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
 	}
@@ -72,6 +74,12 @@ func runWireFake(mode string) {
 			}
 			re(req.ID, map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{}})
 		case "session/new":
+			if mode == "mode-updates-before-reply" {
+				re(req.ID, map[string]any{"sessionId": "ours", "configOptions": options("a"), "modes": map[string]any{
+					"currentModeId": currentMode, "availableModes": []any{map[string]any{"id": "default", "name": "Default"}, map[string]any{"id": "accept-edits", "name": "Accept edits"}},
+				}})
+				continue
+			}
 			if mode == "late-auth" {
 				os.Stdout.Close()
 				time.Sleep(400 * time.Millisecond)
@@ -80,6 +88,27 @@ func runWireFake(mode string) {
 				return
 			}
 			re(req.ID, map[string]any{"sessionId": "ours", "configOptions": options("a")})
+		case "session/set_mode":
+			if mode == "mode-updates-before-reply" {
+				var change struct {
+					Params struct {
+						ModeID string `json:"modeId"`
+					}
+				}
+				json.Unmarshal(r.Bytes(), &change)
+				modeChanges++
+				changed := func(id string) {
+					currentMode = id
+					w.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{
+						"sessionId": "ours", "update": map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": currentMode},
+					}})
+				}
+				changed(change.Params.ModeID)
+				if modeChanges == 1 {
+					changed("default")
+				}
+				re(req.ID, map[string]any{})
+			}
 		case "session/set_config_option":
 			if mode == "handoff" && turns > 0 {
 				note("ours", "I kept going on my own.")
@@ -128,6 +157,8 @@ func runWireFake(mode string) {
 				continue
 			}
 			switch mode {
+			case "mode-updates-before-reply":
+				note("ours", currentMode)
 			case "system-child":
 				child := exec.Command("/bin/sleep", "60")
 				if err := child.Start(); err != nil {
