@@ -107,9 +107,13 @@ func (h *Host) createInWorktree(ctx context.Context, c api.Command, b api.Thread
 	if !b.Parent.IsZero() || b.Project != "" || b.Branch != "" {
 		return refuse("a child runs in its parent's folder")
 	}
+	target, err := h.store.Thread(ctx, c.Target)
+	if err != nil {
+		return api.Receipt{}, err
+	}
 	dry := b
 	dry.Worktree, dry.Project, dry.Branch = nil, b.Workspace, "glitched/dry"
-	if _, _, err := engine.Decide(engine.Thread{}, api.Command{ID: c.ID, Target: c.Target, Revision: c.Revision, Expires: c.Expires, Body: dry}, time.Now()); err != nil {
+	if _, _, err := engine.Decide(target, api.Command{ID: c.ID, Target: c.Target, Revision: c.Revision, Expires: c.Expires, Body: dry}, time.Now()); err != nil {
 		return api.Receipt{}, err
 	}
 	top, err := git(ctx, b.Workspace, "rev-parse", "--show-toplevel")
@@ -188,7 +192,8 @@ type worktreeEntry struct {
 	locked bool
 }
 
-// registered is dir as a worktree of the repository at top lists it.
+// registered is dir as a worktree of the repository at top, or its git
+// folder, lists it.
 func registered(ctx context.Context, top, dir string) (worktreeEntry, bool) {
 	out, err := git(ctx, top, "worktree", "list", "--porcelain")
 	if err != nil {
@@ -247,19 +252,25 @@ func (h *Host) deleteInWorktree(ctx context.Context, c api.Command) (api.Receipt
 	if err != nil {
 		return refuse("its project's repository at %s can't be read, so the worktree can't be told apart from another", t.Project)
 	}
-	// ours is whether dir is still the thread's worktree, or gone.
+	// ours is whether dir is still the thread's worktree, or gone: the
+	// worktree git registered under the folder's name when it made it,
+	// in the project's repository, on the thread's branch.
 	ours := func(ctx context.Context) bool {
 		if _, err := os.Stat(dir); err != nil {
 			return true
 		}
 		top, err := git(ctx, dir, "rev-parse", "--show-toplevel")
-		theirs, _ := git(ctx, dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		own, _ := git(ctx, dir, "rev-parse", "--absolute-git-dir")
 		cur, _ := git(ctx, dir, "branch", "--show-current")
 		real, _ := filepath.EvalSymlinks(dir)
-		return err == nil && top == real && theirs == common && cur == t.Branch
+		registered, _ := filepath.EvalSymlinks(filepath.Join(common, "worktrees", filepath.Base(dir)))
+		return err == nil && top == real && own == registered && cur == t.Branch
 	}
 	if !ours(ctx) {
 		return refuse("%s is no longer the thread's worktree on %s", dir, t.Branch)
+	}
+	if w, ok := registered(ctx, common, dir); ok && w.locked {
+		return refuse("it is locked; unlock it with git worktree unlock %s first", dir)
 	}
 	r, err := h.store.Submit(ctx, c, time.Now())
 	if err != nil {

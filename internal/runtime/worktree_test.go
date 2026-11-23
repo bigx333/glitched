@@ -314,7 +314,8 @@ func TestThreadsWhoseIDsEndAlikeGetWorktreesOfTheirOwn(t *testing.T) {
 	}
 }
 
-// A worktree git won't remove, as a locked one, stays.
+// A locked worktree is refused with the thread kept, so the delete can
+// be sent again once it's unlocked.
 func TestALockedWorktreeStays(t *testing.T) {
 	w := serveWorktrees(t)
 	project := repo(t)
@@ -322,9 +323,51 @@ func TestALockedWorktreeStays(t *testing.T) {
 	submit(t, w.h, thread, inWorktree(project, ""))
 	locked := until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
 	gitIn(t, project, "worktree", "lock", locked.Workspace)
-	submit(t, w.h, locked.ID, api.ThreadDelete{RemoveWorktree: true})
-	if _, err := os.Stat(locked.Workspace); err != nil {
-		t.Fatalf("a locked worktree went: %v", err)
+	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadDelete{RemoveWorktree: true}})
+	refusal(t, err, "it is locked")
+	if _, err := os.Stat(locked.Workspace); err != nil || view(t, w.h, thread).Deleted {
+		t.Fatalf("a refused delete of a locked worktree took it or the thread: %v", err)
+	}
+	gitIn(t, project, "worktree", "unlock", locked.Workspace)
+	submit(t, w.h, thread, api.ThreadDelete{RemoveWorktree: true})
+	if _, err := os.Stat(locked.Workspace); err == nil {
+		t.Errorf("the delete after the unlock left the worktree")
+	}
+}
+
+// Another checkout of the same repository at the worktree's place, on
+// the thread's branch, is still not the thread's worktree.
+func TestAnotherCheckoutOnTheThreadsBranchIsNotRemoved(t *testing.T) {
+	w := serveWorktrees(t)
+	project := repo(t)
+	thread := api.NewID()
+	submit(t, w.h, thread, inWorktree(project, ""))
+	th := until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
+	moved := filepath.Join(t.TempDir(), "moved")
+	gitIn(t, project, "worktree", "move", th.Workspace, moved)
+	gitIn(t, moved, "switch", "-q", "--detach")
+	gitIn(t, project, "worktree", "add", "-q", th.Workspace, th.Branch)
+	note := filepath.Join(th.Workspace, "theirs.txt")
+	os.WriteFile(note, []byte("theirs\n"), 0o644)
+	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadDelete{RemoveWorktree: true}})
+	refusal(t, err, "is no longer the thread's worktree")
+	if _, err := os.Stat(note); err != nil {
+		t.Fatalf("the other checkout lost its file: %v", err)
+	}
+}
+
+// A create for a thread that exists already runs no git.
+func TestACreateForAThreadThatExistsRunsNoGit(t *testing.T) {
+	w := serveWorktrees(t)
+	thread := api.NewID()
+	submit(t, w.h, thread, inWorktree(repo(t), ""))
+	other := repo(t)
+	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: inWorktree(other, "")})
+	if err == nil {
+		t.Fatal("a second create of the thread went")
+	}
+	if out := gitIn(t, other, "worktree", "list", "--porcelain"); strings.Count(out, "worktree ") != 1 {
+		t.Errorf("the refused create made a worktree:\n%s", out)
 	}
 }
 
