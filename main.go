@@ -362,12 +362,16 @@ type app struct {
 	// is dropped.
 	cliDefaults map[[2]string]string
 	cliAsking   map[[2]string]bool
-	defaultsIn  string
-	cliEpoch    int
-	effort      string
-	access      string // one of accessLevels
-	accessOpen  bool
-	accessAt    time.Time // when the level last changed, for its effect
+	// guessed is the model and effort the picker expected each thread
+	// sent from here to run, by its id, where it left the model to its
+	// program: the thread shows them till the program reports its own.
+	guessed    map[api.ID]choice
+	defaultsIn string
+	cliEpoch   int
+	effort     string
+	access     string // one of accessLevels
+	accessOpen bool
+	accessAt   time.Time // when the level last changed, for its effect
 	// savedChoice is the default for a new thread as composer.json last
 	// gave it, triedChoice the one last saved or tried (saveComposer),
 	// and pickerLock the only family the model picker offers, a thread's
@@ -792,6 +796,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		clis:           newCLILists(),
 		cliDefaults:    map[[2]string]string{},
 		cliAsking:      map[[2]string]bool{},
+		guessed:        map[api.ID]choice{},
 		pluginRecords:  map[string]string{},
 		pluginSections: map[string]string{},
 		pluginMessages: map[string]*toldMessages{},

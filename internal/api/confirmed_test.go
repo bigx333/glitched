@@ -54,6 +54,10 @@ func TestWhatWasChosenStandsAgainstWhatTheProviderConfirmed(t *testing.T) {
 		{"a substituted model", Thread{Model: opus, LastTurn: &TurnResult{Run: r1, Model: opus}, Confirmed: Confirmed{Model: &ConfirmedModel{Run: r1, Asked: opus, Model: "claude-sonnet-5-5", Why: "Claude Code runs claude-sonnet-5-5"}}}, Short, InEffect},
 		{"an effort unsaid", Thread{Model: opus, LastTurn: &TurnResult{Run: r1, Model: opus}, Confirmed: Confirmed{Model: &ConfirmedModel{Run: r1, Asked: opus, Model: opus.Model}}}, InEffect, InEffect},
 		{"another effort", Thread{Model: opus, LastTurn: &TurnResult{Run: r1, Model: opus}, Confirmed: Confirmed{Model: &ConfirmedModel{Run: r1, Asked: opus, Model: opus.Model, Effort: "medium"}}}, InEffect, Short},
+		{"the provider's own, failed before it said", Thread{Model: ModelRef{Provider: "claude"}, LastTurn: &TurnResult{Run: r1, Model: ModelRef{Provider: "claude"}, Outcome: OutcomeFailed}}, InEffect, InEffect},
+		{"the provider's own model at a chosen effort, failed", Thread{Model: ModelRef{Provider: "claude", Effort: "low"}, LastTurn: &TurnResult{Run: r1, Model: ModelRef{Provider: "claude", Effort: "low"}, Outcome: OutcomeFailed}}, InEffect, Unapplied},
+		{"an effort left to the provider again while a turn runs at High", Thread{Model: ModelRef{Provider: "claude"}, Turn: &Turn{Run: r2, Model: ModelRef{Provider: "claude", Effort: "high"}}}, InEffect, Held},
+		{"an effort left to the provider again after a turn at High", Thread{Model: ModelRef{Provider: "claude"}, LastTurn: &TurnResult{Run: r1, Model: ModelRef{Provider: "claude", Effort: "high"}}}, InEffect, NextTurn},
 	} {
 		if got := c.t.ModelStanding(); got != c.model {
 			t.Errorf("%s: the model stands %d, want %d", c.name, got, c.model)

@@ -152,6 +152,9 @@ func (t Thread) EffortStanding() Standing {
 	})
 }
 
+// modelPart is how the part of the thread's model of reads stands. One
+// the thread leaves to its provider asks for nothing, so no turn fails to
+// apply it.
 func (t Thread) modelPart(of func(ModelRef) string, short func(ConfirmedModel) bool) Standing {
 	var live, last *string
 	var liveRun, lastRun ID
@@ -165,7 +168,11 @@ func (t Thread) modelPart(of func(ModelRef) string, short func(ConfirmedModel) b
 	if g := t.Confirmed.Model; g != nil {
 		c = &confirmation[string]{run: g.Run, asked: of(g.Asked), short: short(*g)}
 	}
-	return standing(of(t.Model), live, last, liveRun, lastRun, t.lastFailed(), c)
+	s := standing(of(t.Model), live, last, liveRun, lastRun, t.lastFailed(), c)
+	if s == Unapplied && of(t.Model) == "" {
+		return InEffect
+	}
+	return s
 }
 
 func (t Thread) lastFailed() bool { return t.LastTurn != nil && t.LastTurn.Outcome == OutcomeFailed }

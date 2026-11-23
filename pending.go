@@ -44,7 +44,8 @@ func accessLevelName(level api.Access) string {
 // chosenView is t's view with the access, model and effort its composer
 // shows: the engine's view lags a configure it hasn't taken yet. A
 // composer that shows what the view has leaves it as it is, though it
-// names it otherwise, as a model by its name for one by its id.
+// names it otherwise, as a model by its name for one by its id, or a
+// default the thread follows by the model expected to run it.
 func (a *app) chosenView(t thread) api.Thread {
 	v := t.View
 	if l, ok := accessOf[a.access]; ok {
@@ -53,7 +54,9 @@ func (a *app) chosenView(t thread) api.Thread {
 	if a.cliDecides(t) {
 		return v
 	}
-	if keyOfThread(v.Model.Provider, v.Model.Model) != a.model {
+	// A thread that leaves its model to its provider asks for none,
+	// though the picker names the one its program reported it ran.
+	if a.followsCLI != (v.Model.Model == "") || threadModel(t, v.Model) != a.model {
 		v.Model.Model = a.model.ID
 	}
 	// An effort the thread leaves to its provider is no explicit one,
@@ -208,12 +211,35 @@ func (a *app) unconfirmedMark(c *ui.Context, p choiceStanding) {
 
 // runningModel is the model's name and the effort the model button shows
 // for t: the chosen ones, or what its provider really runs where it runs
-// another.
+// another. A thread that leaves them to its provider shows, till its
+// program reports what it ran, the ones its draft expected (guessed).
 func (a *app) runningModel(t thread, name string) (string, effortInfo) {
 	effort := a.efforts()[a.effortLevel()]
 	v := a.chosenView(t)
-	if t.id().IsZero() || v.Confirmed.Model == nil {
+	if t.id().IsZero() {
 		return name, effort
+	}
+	if v.Confirmed.Model == nil {
+		g, ok := a.guessed[t.id()]
+		switch {
+		case v.Model.Model != "":
+			return name, effort
+		case !ok && v.Model.Effort == "":
+			// No one here expected the effort its program runs at.
+			return name, effortInfo{}
+		case !ok:
+			return name, effort
+		}
+		info, _ := a.modelOf(g.Model)
+		if v.Model.Effort == "" {
+			effort = effortOf(provider.Effort{ID: g.Effort})
+			for _, e := range effortsOf(info) {
+				if e.id == g.Effort {
+					effort = e
+				}
+			}
+		}
+		return info.name, effort
 	}
 	g := v.Confirmed.Model
 	info, _ := a.modelOf(keyOfThread(v.Model.Provider, g.Model))

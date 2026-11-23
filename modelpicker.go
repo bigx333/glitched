@@ -172,7 +172,11 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 	level := a.effortLevel()
 	effort := a.efforts()[level]
 	p := a.modelPending(t)
-	b := a.tip(c, ghost(c, "model", a.pickerOpen).Padding(4, 8, 4, 4).Gap(6).Label("Model"), tipOf(p, "Model and effort"))
+	own := "Model and effort"
+	if !t.id().IsZero() && a.followsCLI {
+		own += " · the CLI's default model"
+	}
+	b := a.tip(c, ghost(c, "model", a.pickerOpen).Padding(4, 8, 4, 4).Gap(6).Label("Model"), tipOf(p, own))
 	if b.Children(func() {
 		a.unconfirmedMark(c, p)
 		a.pickerGlow(c, b, effort)
@@ -320,11 +324,12 @@ func (a *app) composerModelOf(c *ui.Context, t thread, r plugins.ThreadRecord, p
 }
 
 // shownModel is the model the picker shows in t's composer: the chosen
-// one, or, where t's provider's program chooses it (cliDecides), its
-// default by that name alone.
+// one, or, where t's provider's program chooses it (cliDecides), or t
+// follows a default no one here expected or reported, its default by
+// that name alone.
 func (a *app) shownModel(t thread) modelInfo {
 	m, _ := a.modelOf(a.model)
-	if a.cliDecides(t) {
+	if a.cliDecides(t) || a.followsCLI && a.model.ID == "" {
 		m.name = "CLI default"
 	}
 	return m

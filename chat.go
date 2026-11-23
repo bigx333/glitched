@@ -1848,6 +1848,9 @@ func (a *app) sendText(t thread, text, about string) bool {
 		if id = a.backend.Create(t.env, ws, title, a.newThreadRef(t), accessOf[a.access], a.newWorktree(t)); id.IsZero() {
 			return false
 		}
+		if a.followsCLI && !a.cliDecides(t) {
+			a.guessed[id] = choice{Model: a.model, Effort: a.effort}
+		}
 		a.rememberProject(t.env, a.threadKey(t).workspace)
 		a.worktree, a.repos = worktreeChoice{}, nil
 		if hero(t) {
