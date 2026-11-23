@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -71,13 +72,7 @@ func (a *app) toggleQuickAsk() {
 	w, h := q.panel.Size()
 	q.panel.SetPosition(d.WorkArea.X+(d.WorkArea.Width-w)/2, d.WorkArea.Y+(d.WorkArea.Height-h)/3)
 	q.query = ""
-	q.project = 0
-	k := a.projectOf(a.current()).key
-	for i, p := range a.localProjects() {
-		if p.key == k {
-			q.project = i
-		}
-	}
+	q.project = a.quickProject()
 	q.input.Focus()
 	q.panel.Show()
 }
@@ -119,6 +114,16 @@ func (a *app) quickView(c *ui.Context) {
 			ui.Text(c, "↵ start thread   esc close").FontSize(11).TextColor(palette.faint)
 		})
 	})
+}
+
+// quickProject is the row of localProjects quick ask opens on: the project
+// the last thread on this machine was started in, else the shown thread's.
+func (a *app) quickProject() int {
+	k := a.projectOf(a.current()).key
+	if d, ok := a.lastDraft(a.localEnv()); ok {
+		k = keyOf(d.env, d.workspace)
+	}
+	return max(0, slices.IndexFunc(a.localProjects(), func(p *project) bool { return p.key == k }))
 }
 
 // localProjects are where quick ask starts its threads: No project, then
