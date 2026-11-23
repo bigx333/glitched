@@ -74,15 +74,18 @@ func compactions(ad *compactAdapter) []recordedStart {
 	return slices.DeleteFunc(ad.recorded(), func(r recordedStart) bool { return r.text != "/compact" })
 }
 
+// blockedOpen holds a compaction's agent open until release, and says so
+// on opening: the first time, as the thread may compact again later.
 type blockedOpen struct {
 	*compactAdapter
 	opening chan struct{}
+	opened  *sync.Once
 	release chan struct{}
 }
 
 func (ad blockedOpen) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
 	if spec.ResumeOnly {
-		close(ad.opening)
+		ad.opened.Do(func() { close(ad.opening) })
 		select {
 		case <-ad.release:
 		case <-ctx.Done():
@@ -162,7 +165,15 @@ func TestAChangeWhileACompactionOpensCancelsIt(t *testing.T) {
 			expires := time.Now().UTC().Add(time.Hour)
 			var shift atomic.Int64
 			clock := func() time.Time { return windowOf(expires).Add(time.Second + time.Duration(shift.Load())) }
-			ad := blockedOpen{compactAdapter: &compactAdapter{}, opening: make(chan struct{}), release: make(chan struct{})}
+			// The message's turn reports the cache it made, as Claude's
+			// does each turn, so the thread isn't due again in this window.
+			fresh := func(_ provider.SessionSpec, text string) ([]provider.Event, <-chan struct{}) {
+				if text == "next" {
+					return []provider.Event{provider.Context{Model: "haiku", Used: 250_000, Window: 1_000_000, CacheExpires: expires.Add(time.Hour)}}, nil
+				}
+				return nil, nil
+			}
+			ad := blockedOpen{compactAdapter: &compactAdapter{onStart: fresh}, opening: make(chan struct{}), opened: new(sync.Once), release: make(chan struct{})}
 			path, seeds := seeded(t, expires)
 			thread := seeds[0]
 			n := serveOpts(t, path, provider.Mux{"claude": ad}, runtime.WithClock(clock), runtime.WithIdleCompaction(false))
