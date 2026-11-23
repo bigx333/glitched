@@ -75,16 +75,26 @@ func compactions(ad *compactAdapter) []recordedStart {
 }
 
 // blockedOpen holds a compaction's agent open until release, and says so
-// on opening: the first time, as the thread may compact again later.
+// on opening: the first time, as the thread may compact again later. A
+// run it opens twice is the host's mistake, which repeated keeps.
 type blockedOpen struct {
 	*compactAdapter
-	opening chan struct{}
-	opened  *sync.Once
-	release chan struct{}
+	opening  chan struct{}
+	opened   *sync.Once
+	release  chan struct{}
+	mu       *sync.Mutex
+	runs     map[api.ID]bool
+	repeated *api.ID
 }
 
 func (ad blockedOpen) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
 	if spec.ResumeOnly {
+		ad.mu.Lock()
+		if ad.runs[spec.Run] {
+			*ad.repeated = spec.Run
+		}
+		ad.runs[spec.Run] = true
+		ad.mu.Unlock()
 		ad.opened.Do(func() { close(ad.opening) })
 		select {
 		case <-ad.release:
@@ -173,7 +183,8 @@ func TestAChangeWhileACompactionOpensCancelsIt(t *testing.T) {
 				}
 				return nil, nil
 			}
-			ad := blockedOpen{compactAdapter: &compactAdapter{onStart: fresh}, opening: make(chan struct{}), opened: new(sync.Once), release: make(chan struct{})}
+			ad := blockedOpen{compactAdapter: &compactAdapter{onStart: fresh}, opening: make(chan struct{}), opened: new(sync.Once), release: make(chan struct{}),
+				mu: new(sync.Mutex), runs: map[api.ID]bool{}, repeated: new(api.ID)}
 			path, seeds := seeded(t, expires)
 			thread := seeds[0]
 			n := serveOpts(t, path, provider.Mux{"claude": ad}, runtime.WithClock(clock), runtime.WithIdleCompaction(false))
@@ -203,6 +214,12 @@ func TestAChangeWhileACompactionOpensCancelsIt(t *testing.T) {
 			})
 			if got := compactions(ad.compactAdapter); len(got) != 0 {
 				t.Errorf("after a change (%s) while it opened, the compaction sent %+v", tc, got)
+			}
+			ad.mu.Lock()
+			repeated := *ad.repeated
+			ad.mu.Unlock()
+			if !repeated.IsZero() {
+				t.Errorf("after a change (%s) while it opened, the host opened compaction %v twice", tc, repeated)
 			}
 		})
 	}
