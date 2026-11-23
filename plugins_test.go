@@ -326,6 +326,15 @@ func TestInstallingSomeoneElsesPluginAsksForConsent(t *testing.T) {
 	if len(h.a.plugins.Entries()) != 0 {
 		t.Fatal("someone else's plugin ran before it was allowed")
 	}
+	// The sheet opens in its plugin's row, which the list of built-ins
+	// pushed above the view on the way down to Install.
+	for i := 0; i < 40; i++ {
+		if r, ok := h.tt.Find("Allow"); ok && r.H > 0 {
+			break
+		}
+		h.tt.Scroll(800, 500, 0, -120)
+		h.tt.Advance(100 * time.Millisecond)
+	}
 	h.click("Allow")
 	h.tt.Frame()
 	if len(h.a.plugins.Entries()) != 1 || !h.tt.HasText("Someone else's, allowed") {
