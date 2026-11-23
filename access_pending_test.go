@@ -236,7 +236,7 @@ func TestTheMarkedControlsKeepClearOfTheSidebarsUpdate(t *testing.T) {
 	pending(h, "claude")
 	h.tt.SetSize(760, 860)
 	h.tt.Advance(time.Second)
-	update, ok := h.tt.Find("Update Claude")
+	update, ok := h.tt.Find("Agent CLI updates")
 	if !ok {
 		t.Fatalf("no Update control: %q", h.tt.Texts())
 	}
