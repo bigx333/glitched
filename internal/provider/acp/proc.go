@@ -108,9 +108,9 @@ var (
 // launch starts the agent in dir under mark, with args after the
 // profile's, and initializes it. ctx bounds only the start; the process
 // lives until Close.
-func launch(ctx context.Context, profile Profile, bin, dir, mark string, args []string) (*proc, error) {
-	cmd := exec.Command(bin, slices.Concat(profile.Args, args)...)
-	if err := guard(bin); err != nil {
+func launch(ctx context.Context, profile Profile, prog provider.Program, dir, mark string, args []string) (*proc, error) {
+	cmd := exec.Command(prog.Path, slices.Concat(profile.Args, prog.Args, args)...)
+	if err := guard(prog.Path); err != nil {
 		return nil, err
 	}
 	cmd.Dir = dir
@@ -122,7 +122,7 @@ func launch(ctx context.Context, profile Profile, bin, dir, mark string, args []
 	for k, v := range profile.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	cmd.Env = append(cmd.Env, procEnv+"="+mark)
+	cmd.Env = prog.Environ(append(cmd.Env, procEnv+"="+mark))
 	cmd.SysProcAttr = sweep.SysProcAttr()
 	p := &proc{profile: profile, cmd: cmd, mark: mark, stderr: &tail{}, heard: make(chan struct{}), read: make(chan struct{}), reaped: make(chan struct{})}
 	// The adapter's own pipes, unlike exec's, leave Wait nothing to wait

@@ -174,37 +174,42 @@ func serve(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	if set["hub"] || set["hub-dir"] || set["hub-server"] {
-		cfg.Hub = *hub && *hubDir == "" && *hubServer == ""
-		cfg.HubDir, cfg.HubServer, cfg.HubToken = *hubDir, *hubServer, *hubToken
+	// Only what the flags set is kept: what a client saves meanwhile, as
+	// Settings › Providers does, stays.
+	flags := func(cfg *daemon.Config) {
+		if set["hub"] || set["hub-dir"] || set["hub-server"] {
+			cfg.Hub = *hub && *hubDir == "" && *hubServer == ""
+			cfg.HubDir, cfg.HubServer, cfg.HubToken = *hubDir, *hubServer, *hubToken
+		}
+		if set["epoch"] {
+			cfg.Epoch = *epoch
+		}
+		if set["listen"] {
+			cfg.Listen = slices.DeleteFunc(listen, func(addr string) bool { return addr == "" })
+		}
+		if set["tailnet"] {
+			cfg.Tailnet = *tailnetOn
+		}
+		if set["control"] {
+			cfg.Control = *control
+		}
+		if set["max-working"] {
+			cfg.Children.Working = *maxWorking
+		}
+		if set["max-children"] {
+			cfg.Children.All = *maxChildren
+		}
+		if set["max-depth"] {
+			cfg.Children.Depth = *maxDepth
+		}
 	}
-	if set["epoch"] {
-		cfg.Epoch = *epoch
-	}
-	if set["listen"] {
-		cfg.Listen = slices.DeleteFunc(listen, func(addr string) bool { return addr == "" })
-	}
-	if set["tailnet"] {
-		cfg.Tailnet = *tailnetOn
-	}
-	if set["control"] {
-		cfg.Control = *control
-	}
-	if set["max-working"] {
-		cfg.Children.Working = *maxWorking
-	}
-	if set["max-children"] {
-		cfg.Children.All = *maxChildren
-	}
-	if set["max-depth"] {
-		cfg.Children.Depth = *maxDepth
-	}
+	flags(&cfg)
 	cfg.WithAgents()
 	d, err := daemon.Start(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	if err := cfg.Save(); err != nil {
+	if _, err := daemon.Edit(cfg.Dir, func(c *daemon.Config) error { flags(c); return nil }); err != nil {
 		return errors.Join(err, d.Close())
 	}
 	return d.Wait()

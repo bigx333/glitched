@@ -706,6 +706,7 @@ type app struct {
 	pluginsView int
 	// providersOpen are Settings › Providers' rows opened, by provider.
 	providersOpen map[string]bool
+	launches      launchState
 	pluginsQuery  string
 	pluginsOpen   map[string]bool
 	pluginsReveal string

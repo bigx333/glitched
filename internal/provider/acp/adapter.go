@@ -11,8 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,9 +28,12 @@ import (
 // and settings, as the agent in a terminal would. Glitched holds no token.
 type Adapter struct {
 	Profile Profile
-	// Path is the agent's binary. Empty looks for Profile.Binaries on
-	// PATH, then in ~/.local/bin.
-	Path string
+	// Path, Home and Args are how the agent starts, as provider.Launch
+	// has them: set them before the first run, or with Place. No Profile
+	// takes a Home, so one that is set stops the agent starting.
+	Path, Home, Args string
+
+	mu sync.Mutex // guards Path, Home and Args against Place
 
 	once sync.Once
 	pool *park.Pool[*proc]
@@ -81,34 +82,16 @@ func (a *Adapter) Close() error {
 	return a.parked().Close(ctx)
 }
 
-// Binary is the agent's program, or the Profile's install instructions
-// when there is none.
-func (a *Adapter) Binary() (string, error) {
-	if a.Path != "" {
-		// The agent starts in the run's workspace, where a relative path
-		// names another file.
-		if p, err := exec.LookPath(a.Path); err == nil {
-			return filepath.Abs(p)
-		}
-		return "", a.notInstalled()
+// program is the agent a launch starts now, or what stops one starting.
+func (a *Adapter) program() (provider.Program, error) {
+	a.mu.Lock()
+	l := provider.Launch{Path: a.Path, Home: a.Home, Args: a.Args}
+	a.mu.Unlock()
+	prog, err := a.Placement().Program(l)
+	if err != nil {
+		return provider.Program{}, provider.Unplaced(err, a.Profile.Name, a.Profile.Install)
 	}
-	for _, name := range a.Profile.Binaries {
-		if p, err := exec.LookPath(name); err == nil {
-			return p, nil
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		for _, name := range a.Profile.Binaries {
-			if p := filepath.Join(home, ".local", "bin", name); isExecutable(p) {
-				return p, nil
-			}
-		}
-	}
-	return "", a.notInstalled()
-}
-
-func (a *Adapter) notInstalled() error {
-	return provider.Needs{Kind: provider.ErrNotInstalled, Help: a.Profile.Install}
+	return prog, nil
 }
 
 // Forget has the next Describe probe the agent again, as after its user
@@ -117,11 +100,6 @@ func (a *Adapter) Forget() {
 	a.cmu.Lock()
 	a.until = time.Time{}
 	a.cmu.Unlock()
-}
-
-func isExecutable(path string) bool {
-	_, err := exec.LookPath(path)
-	return err == nil
 }
 
 // Describe is the models the agent offers the user's account, with the
@@ -151,12 +129,12 @@ func (a *Adapter) described(ctx context.Context) (provider.Info, error) {
 }
 
 func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
-	bin, err := a.Binary()
+	prog, err := a.program()
 	if err != nil {
 		return provider.Info{}, err
 	}
 	home, _ := os.UserHomeDir()
-	p, err := launch(ctx, a.Profile, bin, home, "probe-"+api.NewID().String(), nil)
+	p, err := launch(ctx, a.Profile, prog, home, "probe-"+api.NewID().String(), nil)
 	if err != nil {
 		return provider.Info{}, err
 	}
@@ -171,7 +149,7 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 	if p.caps.close {
 		p.conn.CloseSession(ctx, acpsdk.CloseSessionRequest{SessionId: p.session})
 	}
-	return provider.Info{Name: a.Profile.Name, Version: p.version, Models: models, Path: bin}, nil
+	return provider.Info{Name: a.Profile.Name, Version: p.version, Models: models, Path: prog.Path}, nil
 }
 
 // Open runs the run on the thread's agent: the one its last run left,
@@ -179,14 +157,14 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 // one with a new session. The run's model and effort are set on the
 // session before Open returns.
 func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
-	bin, err := a.Binary()
+	prog, err := a.program()
 	if err != nil {
 		return nil, err
 	}
 	// What an agent and its session are started with is fixed for their
 	// life: the MCP servers, with the access glitched mcp acts at, go to
 	// session/new and can't change after.
-	key := launchKey(bin, spec)
+	key := launchKey(prog, spec)
 	keep := func(p *proc) { a.parked().Park(spec.Thread, key, p) }
 	p, ok, err := a.parked().Take(ctx, spec.Thread, key)
 	if err != nil {
@@ -218,7 +196,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	}
 	lost := false
 	if !ok {
-		if p, err = launch(ctx, a.Profile, bin, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String(), a.Profile.Access[spec.Access].Args); err != nil {
+		if p, err = launch(ctx, a.Profile, prog, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String(), a.Profile.Access[spec.Access].Args); err != nil {
 			return nil, err
 		}
 		if lost, err = p.open(ctx, spec.Workspace, spec.MCP, spec.Session); err != nil {
@@ -254,10 +232,13 @@ func (a *Adapter) refused(p *proc, keep func(*proc), err error) error {
 	return err
 }
 
-func launchKey(bin string, spec provider.SessionSpec) string {
-	servers, _ := json.Marshal(spec.MCP)
+func launchKey(prog provider.Program, spec provider.SessionSpec) string {
+	servers, _ := json.Marshal(struct {
+		Program provider.Program
+		MCP     []provider.MCPServer
+	}{prog, spec.MCP})
 	sum := sha256.Sum256(servers)
-	return strings.Join([]string{bin, spec.Workspace, strconv.Itoa(int(spec.Access)), hex.EncodeToString(sum[:])}, "\x00")
+	return strings.Join([]string{prog.Path, spec.Workspace, strconv.Itoa(int(spec.Access)), hex.EncodeToString(sum[:])}, "\x00")
 }
 
 // Reconcile stops what is left of the run's thread: nothing can reattach

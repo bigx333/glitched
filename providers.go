@@ -147,6 +147,7 @@ func (a *app) providerDetail(c *ui.Context, r providerRow) {
 				}
 			})
 		}
+		a.providerLaunch(c, r)
 	})
 }
 

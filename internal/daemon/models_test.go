@@ -74,7 +74,7 @@ func TestWithAgentsServesEveryACPAgent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		cfg.AgyPath = agyPath
+		cfg.Launch = map[string]provider.Launch{"antigravity": {Path: agyPath}}
 		cfg.WithAgents()
 		if got := cfg.Providers.Names(); !slices.Equal(got, []string{"antigravity", "claude", "codex"}) {
 			t.Errorf("with agy_path %q, serves %q", agyPath, got)
@@ -83,7 +83,7 @@ func TestWithAgentsServesEveryACPAgent(t *testing.T) {
 	}
 	missing := func(agyPath string) {
 		_, err := agyOf(agyPath).Describe(context.Background())
-		if !errors.Is(err, provider.ErrNotInstalled) || err.Error() != acp.Antigravity.Install {
+		if !errors.Is(err, provider.ErrNotInstalled) || !strings.HasSuffix(err.Error(), acp.Antigravity.Install) {
 			t.Errorf("with agy_path %q and no agy, Describe = %v, want not installed with how to install it", agyPath, err)
 		}
 	}
@@ -96,7 +96,7 @@ func TestWithAgentsServesEveryACPAgent(t *testing.T) {
 	if err := os.WriteFile(agy, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := agyOf("").Binary(); got != agy || err != nil {
+	if got, err := agyOf("").Placement().Program(provider.Launch{}); got.Path != agy || err != nil {
 		t.Errorf("with agy in ~/.local/bin, runs %q (%v)", got, err)
 	}
 }

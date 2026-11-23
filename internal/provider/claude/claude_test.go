@@ -33,6 +33,7 @@ const (
 	envResume = "GLITCHED_FAKE_CLAUDE_RESUME" // the transcripts a --resume run replays
 	envArgv   = "GLITCHED_FAKE_CLAUDE_ARGV"   // a file each run appends its argv to
 	envEntry  = "GLITCHED_FAKE_CLAUDE_ENTRY"  // a file each run appends its entrypoint entries to
+	envLaunch = "GLITCHED_FAKE_CLAUDE_LAUNCH" // a file each start appends how it was started to, which answers --version
 	envPids   = "GLITCHED_FAKE_CLAUDE_PIDS"   // a file each run appends its processes to, by role
 	envAfter  = "GLITCHED_FAKE_CLAUDE_AFTER"  // a file a run appends what comes on stdin past its transcript's end to, by kind
 	envEngine = "GLITCHED_FAKE_ENGINE"        // the store a test binary serves, as an engine a test can kill
@@ -72,6 +73,13 @@ func TestMain(m *testing.M) {
 	}
 	if path := os.Getenv(envEngine); path != "" {
 		os.Exit(engine(path))
+	}
+	if path := os.Getenv(envLaunch); path != "" {
+		noteLaunch(path)
+		if slices.Contains(os.Args[1:], "--version") {
+			fmt.Println("2.1.330 (Claude Code)")
+			os.Exit(0)
+		}
 	}
 	if path := os.Getenv(envAsked); path != "" {
 		os.Exit(fakeOneShot(path))
@@ -653,8 +661,13 @@ func TestAMissingClaudeSaysToInstallIt(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir()) // the home Windows reads
-	want := "Claude Code is not installed.\nInstall it, or set claude_path in engine.json."
-	for _, ad := range []*claude.Adapter{{}, {Path: filepath.Join(t.TempDir(), "claude")}} {
+	install := "Claude Code is not installed.\nInstall it, or set its path in Settings › Providers."
+	missing := filepath.Join(t.TempDir(), "claude")
+	for _, ad := range []*claude.Adapter{{}, {Path: missing}} {
+		want := install
+		if ad.Path != "" {
+			want = "Claude Code can't start as Settings › Providers sets it up: path: there is no file at " + missing + ".\n" + install
+		}
 		h := host(t, ad)
 		got := turn(t, h, newThread(t, h, api.AccessAsk), "say hi")
 		if got.ended.Outcome != api.OutcomeFailed || got.ended.Error != want {

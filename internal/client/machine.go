@@ -1,7 +1,9 @@
 package client
 
 import (
+	"errors"
 	"log/slog"
+	"maps"
 	"reflect"
 	"slices"
 	"time"
@@ -52,17 +54,21 @@ func (m *Manager) Inspect() {
 // applies at once. An engine another process runs applies it when it next
 // starts.
 func (m *Manager) Configure(change func(*daemon.Config)) error {
-	cfg, err := daemon.Defaults(m.cfg.Dir)
-	if err != nil {
-		return err
-	}
-	was := cfg
-	was.Listen = slices.Clone(cfg.Listen)
-	change(&cfg)
-	if reflect.DeepEqual(cfg, was) {
+	var was daemon.Config
+	cfg, err := daemon.Edit(m.cfg.Dir, func(cfg *daemon.Config) error {
+		was = *cfg
+		was.Listen = slices.Clone(cfg.Listen)
+		was.Launch = maps.Clone(cfg.Launch)
+		change(cfg)
+		if reflect.DeepEqual(*cfg, was) {
+			return daemon.ErrUnchanged
+		}
 		return nil
-	}
-	if err := cfg.Save(); err != nil {
+	})
+	switch {
+	case errors.Is(err, daemon.ErrUnchanged):
+		return nil
+	case err != nil:
 		return err
 	}
 	m.changes++
