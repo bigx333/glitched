@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"slices"
 
 	"github.com/egoist/mygo/ui"
@@ -119,9 +120,11 @@ func (a *app) paceContinues() {
 
 // live is whether the run j's Continue started is live, waiting on the
 // user's answer too, as an answer resumes it without asking for a place;
-// or whether its Continue is on its way: the thread still shows the
-// uncertain run it replaces, and the Continue hasn't failed. A Continue
-// whose run shows started it, whatever became of its reply.
+// or whether its Continue may be: the thread still shows the uncertain run
+// it replaces, and the engine hasn't refused the Continue: one on its way,
+// or one that failed short of the engine's answer, as a reply lost on the
+// way back, may have started it. A Continue whose run shows started it,
+// whatever became of its reply.
 func (j continuing) live(t thread) bool {
 	v := t.View
 	switch {
@@ -130,5 +133,8 @@ func (j continuing) live(t thread) bool {
 	case v.Run != api.RunUncertain || v.Turn == nil || v.Turn.Run != j.replaces:
 		return false
 	}
-	return !slices.ContainsFunc(t.Pending, func(p client.Pending) bool { return p.Command == j.sent && p.Err != nil })
+	return !slices.ContainsFunc(t.Pending, func(p client.Pending) bool {
+		_, refused := errors.AsType[*api.RejectedError](p.Err)
+		return p.Command == j.sent && refused
+	})
 }
