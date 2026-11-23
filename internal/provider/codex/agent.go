@@ -311,6 +311,7 @@ func (g *Agent) notify(m message) {
 		TokenUsage struct {
 			Total struct {
 				TotalTokens int64 `json:"totalTokens"`
+				InputTokens int64 `json:"inputTokens"`
 			} `json:"total"`
 			Last struct {
 				TotalTokens int64 `json:"totalTokens"`
@@ -335,18 +336,24 @@ func (g *Agent) notify(m message) {
 		// How full the context is, as of the turn's last request: news
 		// of the thread's, which this run reports while its turn is on.
 		live := g.started && !g.ended && (n.TurnID == "" || n.TurnID == g.turn)
+		usage := m.Method == "thread/tokenUsage/updated"
 		u := n.TokenUsage
+		var spent int64
+		if usage {
+			spent = u.Total.TotalTokens - g.p.total.Swap(u.Total.TotalTokens)
+		}
+		// Codex sends its last reading again, as after a rate-limit
+		// update or a response cut short, with whatever was spent since:
+		// a request's own reading is all that was spent, and holds its
+		// input. A request too big for the window has Codex fill it,
+		// emptying every count but the window's.
+		filled := u.ModelContextWindow > 0 && u.Total.TotalTokens == u.ModelContextWindow && u.Total.InputTokens == 0 && u.Last.InputTokens == 0
 		switch {
 		case !live:
-		case m.Method == "thread/tokenUsage/updated" && g.p.total.Swap(u.Total.TotalTokens) != u.Total.TotalTokens:
-			// A request's usage holds its input. With none, Codex fills
-			// the window for a request that no longer fits in it.
-			switch {
-			case u.Last.InputTokens > 0:
-				g.queueLocked(provider.Context{Used: u.Last.TotalTokens, Window: u.ModelContextWindow})
-			case u.ModelContextWindow > 0 && u.Total.TotalTokens == u.ModelContextWindow:
-				g.queueLocked(provider.Context{Used: u.ModelContextWindow, Window: u.ModelContextWindow})
-			}
+		case usage && filled:
+			g.queueLocked(provider.Context{Used: u.ModelContextWindow, Window: u.ModelContextWindow})
+		case usage && u.Last.InputTokens > 0 && spent == u.Last.TotalTokens:
+			g.queueLocked(provider.Context{Used: u.Last.TotalTokens, Window: u.ModelContextWindow})
 		case m.Method == "thread/compacted":
 			g.queueLocked(provider.Context{Compacted: true})
 		}

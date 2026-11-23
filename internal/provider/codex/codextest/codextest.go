@@ -432,6 +432,13 @@ func (f *fake) play(n int, turn, said string) {
 			f.mu.Unlock()
 			cached := map[string]any{"totalTokens": spent, "inputTokens": spent, "cachedInputTokens": 0, "outputTokens": 0, "reasoningOutputTokens": 0}
 			f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": cached, "last": cached, "modelContextWindow": 258400}})
+			f.mu.Lock()
+			f.spent += 512
+			spent = f.spent
+			f.mu.Unlock()
+			last := map[string]any{"totalTokens": 100, "inputTokens": 80, "cachedInputTokens": 0, "outputTokens": 20, "reasoningOutputTokens": 0}
+			cut := map[string]any{"totalTokens": spent, "inputTokens": spent, "cachedInputTokens": 0, "outputTokens": 0, "reasoningOutputTokens": 0}
+			f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": cut, "last": last, "modelContextWindow": 258400}})
 		}
 		f.message("msg-"+turn, "resent")
 	case "compacted":
