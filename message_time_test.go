@@ -170,3 +170,72 @@ func TestYourToolbarIsToldWhenTheMessageWasSent(t *testing.T) {
 		t.Errorf("the reply's toolbar was told %q", h.tt.Texts())
 	}
 }
+
+// The time is on the toolbar's outer side, so the actions keep the place
+// they have without it: before them under a message of yours, which
+// keeps to the right edge, and after them under a reply.
+func TestAMessagesTimeLeavesItsActionsWhereTheyWere(t *testing.T) {
+	const msg, reply = "Sort them by most recent activity.", "One test fails."
+	sent := time.Date(2026, 11, 22, 14, 32, 0, 0, sast)
+	place := func(sent, came time.Time, at string, labels ...string) map[string]float32 {
+		h := stamped(t, britain, sent, came, 72*time.Second)
+		pointAt(t, h, at)
+		xs := map[string]float32{}
+		for _, l := range labels {
+			r, ok := h.tt.Find(l)
+			if !ok {
+				t.Fatalf("pointing at %q shows no %q: %q", at, l, h.tt.Texts())
+			}
+			xs[l] = r.X
+			if l == "Copy" {
+				xs["copy end"] = r.X + r.W
+			}
+		}
+		return xs
+	}
+	without := place(time.Time{}, time.Time{}, msg, "Copy", "Edit & resend")
+	with := place(sent, time.Time{}, msg, "Copy", "Edit & resend", "14:32")
+	for _, l := range []string{"Copy", "Edit & resend"} {
+		if with[l] != without[l] {
+			t.Errorf("your message's %q is at x %v with a time, %v without", l, with[l], without[l])
+		}
+	}
+	if with["14:32"] >= with["Copy"] {
+		t.Errorf("your message's time is at x %v, not before Copy at %v", with["14:32"], with["Copy"])
+	}
+	without = place(sent, time.Time{}, reply, "Copy")
+	with = place(sent, sent.Add(9*time.Second), reply, "Copy", "14:32 · 1m12s")
+	if with["Copy"] != without["Copy"] {
+		t.Errorf("the reply's Copy is at x %v with a time, %v without", with["Copy"], without["Copy"])
+	}
+	if with["14:32 · 1m12s"] < with["copy end"] {
+		t.Errorf("the reply's time is at x %v, not after Copy", with["14:32 · 1m12s"])
+	}
+}
+
+// A turn says how long it ran only once that is a second or more: one of
+// 600ms says nothing of it, rather than a second it didn't take.
+func TestATurnUnderASecondTellsNoDuration(t *testing.T) {
+	sent := time.Date(2026, 11, 22, 14, 32, 0, 0, sast)
+	for ran, want := range map[time.Duration]string{600 * time.Millisecond: "14:33", 999 * time.Millisecond: "14:33", 1500 * time.Millisecond: "14:33 · 2s"} {
+		h := stamped(t, britain, sent, sent.Add(time.Minute), ran)
+		pointAt(t, h, "One test fails.")
+		said := strings.Contains(want, "·")
+		if got := times(h); !slices.Contains(got, want) || !said && slices.ContainsFunc(got, func(s string) bool { return strings.Contains(s, "·") || strings.Contains(s, "took") }) {
+			t.Errorf("a turn of %v tells %q, want %q", ran, got, want)
+		}
+	}
+}
+
+// Assistive technology reads the time once, as its day written out.
+func TestAMessagesTimeIsReadOutInFull(t *testing.T) {
+	h := stamped(t, britain, time.Date(2026, 11, 22, 14, 32, 0, 0, sast), time.Date(2026, 11, 22, 14, 33, 0, 0, sast), 0)
+	pointAt(t, h, "Sort them by most recent activity.")
+	const full = "Sunday, 22 November 2026 at 14:32"
+	if n, ok := h.tt.Access(full); !ok || n.Name != full || n.Focusable {
+		t.Errorf("the time is read as %q, focusable %v, want %q and not focusable", n.Name, n.Focusable, full)
+	}
+	if _, ok := h.tt.Access("14:32"); ok {
+		t.Error("assistive technology reads the time twice, short too")
+	}
+}

@@ -65,7 +65,9 @@ func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed
 				}
 			case "message.time":
 				short, full := a.messageTime(c, e)
-				a.tip(c, ui.Text(c, short).FontSize(11).TextColor(palette.faint).Padding(2, 6), full)
+				a.tip(c, ui.Box(c).Label(full).Padding(2, 6).Children(func() {
+					ui.Text(c, short).FontSize(11).TextColor(palette.faint).AccessHidden(true)
+				}), full)
 			case "message.item":
 				it := items[itemIndex(n)]
 				icon := appIconNamed(it.Icon)
@@ -112,18 +114,26 @@ type messageToolbar struct {
 
 // messageToolbarRow is the built-in Message toolbar's drawing of the
 // toolbar m, as its main.js draws it. Glitched draws the same while no
-// plugin has drawn it.
+// plugin has drawn it. The time is on the outer side, so the actions sit
+// where they would without it.
 func messageToolbarRow(m messageToolbar) *widget.Node {
-	row := &widget.Node{Type: "row", Gap: 2, Children: []*widget.Node{
-		{Type: "native", ID: "copy", Name: "message.copy"},
-		{Type: "native", ID: "edit", Name: "message.edit"},
-		{Type: "native", ID: "retry", Name: "message.retry"},
-	}}
+	stamp := &widget.Node{Type: "native", ID: "time", Name: "message.time"}
+	row := &widget.Node{Type: "row", Gap: 2}
+	if m.Role == "user" {
+		row.Children = append(row.Children, stamp)
+	}
+	row.Children = append(row.Children,
+		&widget.Node{Type: "native", ID: "copy", Name: "message.copy"},
+		&widget.Node{Type: "native", ID: "edit", Name: "message.edit"},
+		&widget.Node{Type: "native", ID: "retry", Name: "message.retry"},
+	)
 	for i := range m.Items {
 		index, _ := json.Marshal(i)
 		row.Children = append(row.Children, &widget.Node{Type: "native", ID: "item-" + string(index), Name: "message.item", Props: map[string]json.RawMessage{"index": index}})
 	}
-	row.Children = append(row.Children, &widget.Node{Type: "native", ID: "time", Name: "message.time"})
+	if m.Role != "user" {
+		row.Children = append(row.Children, stamp)
+	}
 	return row
 }
 
@@ -165,7 +175,8 @@ func (a *app) messageTime(c *ui.Context, e entry) (short, full string) {
 	locale := r.FormatLocale(lang)
 	short = i18n.FormatDate(locale, at, i18n.DateOptions{Skeleton: skeleton, HourCycle: r.HourCycle})
 	full = i18n.FormatDate(locale, at, i18n.DateOptions{Date: i18n.FullStyle, Time: i18n.ShortStyle, HourCycle: r.HourCycle})
-	if took := e.ran.Round(time.Second); took > 0 {
+	if e.ran >= time.Second {
+		took := e.ran.Round(time.Second)
 		short += " · " + took.String()
 		full += ", took " + took.String()
 	}
