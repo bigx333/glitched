@@ -82,7 +82,7 @@ func (a *app) newWorktree(t thread) *api.NewWorktree {
 	if !a.worktree.picked {
 		on = a.settings.newThreadMode == 1
 	}
-	if !on || !t.local() || t.View.Workspace == a.scratchRoot() || !a.repoAt(t.View.Workspace).ok {
+	if !on || !t.local() || a.folderless(t) || !a.repoAt(t.View.Workspace).ok {
 		return nil
 	}
 	b := a.baseOf(t.View.Workspace)
@@ -166,7 +166,7 @@ func gitBranch(dir string) string {
 // worktreeItems are the workspace menu's choice of where the draft t
 // runs, after its folders, for a repository on this machine only.
 func (a *app) worktreeItems(m *ui.Menu, t thread) {
-	if !t.local() || t.View.Workspace == a.scratchRoot() {
+	if !t.local() || a.folderless(t) {
 		return
 	}
 	r := a.repoAt(t.View.Workspace)
