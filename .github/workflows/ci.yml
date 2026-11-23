@@ -17,7 +17,7 @@ concurrency:
 jobs:
   # With cgo off, so vet also proves every package builds without it.
   vet:
-    runs-on: [self-hosted, ferrum, garm]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       CGO_ENABLED: "0"
@@ -32,10 +32,10 @@ jobs:
 
   # The root package's UI tests take most of the run, so each of three
   # runners takes every third of them; the first also tests the rest.
-  # 40 minutes: part 1 takes about 23, and Install Pango may wait up to 11
-  # on a runner whose unattended-upgrades holds apt's locks.
+  # 40 minutes: part 1 took about 23 on the self-hosted runners, and
+  # Install Pango may wait up to 11 if another apt run holds its locks.
   test:
-    runs-on: [self-hosted, ferrum, garm]
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -50,11 +50,11 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       # mygo lays out text with Pango, loaded at run time. Without it the
-      # root package's UI tests click on a fallback layout and fail. A
-      # runner's unattended-upgrades may hold apt's locks as the job starts:
-      # install waits for dpkg's (DPkg::Lock::Timeout), and update, which
-      # that option doesn't cover, tries again until the same 10 minutes
-      # are up.
+      # root package's UI tests click on a fallback layout and fail. If the
+      # runner's image already has it, the step installs nothing. Should
+      # another apt run hold the locks as the job starts, install waits for
+      # dpkg's (DPkg::Lock::Timeout), and update, which that option doesn't
+      # cover, tries again until the same 10 minutes are up.
       - name: Install Pango
         timeout-minutes: 11
         run: |
@@ -80,7 +80,7 @@ jobs:
 
   # The race detector needs cgo on Linux; nothing else does.
   race:
-    runs-on: [self-hosted, ferrum, garm]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       CGO_ENABLED: "1"
