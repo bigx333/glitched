@@ -278,3 +278,49 @@ func TestCloneIntoExpandsHome(t *testing.T) {
 		}
 	}
 }
+
+// A clone through a symlink never makes anything in the state folder: not
+// into a link that points there from a folder it may go in, not under a
+// folder that links there, and not beside a link in it that points out.
+func TestCloneThroughASymlinkMakesNothingInTheState(t *testing.T) {
+	st, _ := state(t)
+	hide := []string{st}
+	other := filepath.Join(filepath.Dir(st), "other")
+	out := tree(t, t.TempDir(), "empty")
+	link(t, filepath.Join(st, "worktrees"), filepath.Join(other, "lighthouse"))
+	link(t, st, filepath.Join(other, "to-state"))
+	link(t, filepath.Join(out, "empty"), filepath.Join(st, "out"))
+	bin := fakes(t, map[string]string{"git": ": > \"$5/README\""})
+	before := walk(t, st)
+	for _, dest := range []string{
+		filepath.Join(other, "lighthouse"),
+		filepath.Join(other, "to-state", "lighthouse"),
+		filepath.Join(st, "out"),
+	} {
+		if _, err := CloneInto(context.Background(), api.CloneRequest{Source: "https://example.com/lighthouse.git", Dest: dest}, hide, bin, func(string) {}); err == nil {
+			t.Errorf("a clone into %q went ahead", dest)
+		}
+		if after := walk(t, st); !slices.Equal(after, before) {
+			t.Fatalf("a clone into %q made %q in the state folder", dest, slices.DeleteFunc(after, func(p string) bool { return slices.Contains(before, p) }))
+		}
+	}
+	if args := argsOf(t, bin, "git"); args != nil {
+		t.Errorf("git ran with %q", args)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(out, "empty")); len(entries) > 0 {
+		t.Errorf("the folder out of the state holds %v", entries)
+	}
+}
+
+// walk is every path under dir, without following symlinks.
+func walk(t *testing.T, dir string) []string {
+	t.Helper()
+	var paths []string
+	if err := filepath.WalkDir(dir, func(p string, _ fs.DirEntry, err error) error {
+		paths = append(paths, p)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return paths
+}

@@ -151,19 +151,6 @@ func resolveHidden(paths []string) []hiddenDir {
 	return hidden
 }
 
-// refuseHidden refuses p, an absolute path that may not be there yet,
-// when it resolves to a folder hide names or one in it.
-func refuseHidden(p string, hide []string) error {
-	real, err := resolve(p)
-	if err != nil {
-		return err
-	}
-	if covers(resolveHidden(hide), real) {
-		return fmt.Errorf("projects: %s: %w", p, errHidden)
-	}
-	return nil
-}
-
 // resolve is p, absolute, with every symlink in the part of it that is
 // there resolved; the rest, which isn't there yet, is kept as it is.
 func resolve(p string) (string, error) {

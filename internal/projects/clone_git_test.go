@@ -81,13 +81,18 @@ func TestCloneOwnerName(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			bin := fakes(t, tc.scripts)
 			dest := filepath.Join(t.TempDir(), "lighthouse")
-			if err := Clone(context.Background(), source(t, "o/lighthouse"), dest, bin, func(string) {}); err != nil {
+			if err := Clone(context.Background(), source(t, "o/lighthouse"), dest, nil, bin, func(string) {}); err != nil {
 				t.Fatal(err)
 			}
-			// It clones into a folder beside dest, which becomes dest.
+			// It clones into a folder beside dest, in the folder dest is in
+			// as it resolves, which becomes dest.
+			parent, err := filepath.EvalSymlinks(filepath.Dir(dest))
+			if err != nil {
+				t.Fatal(err)
+			}
 			got := argsOf(t, bin, tc.ran)
 			i := slices.IndexFunc(got, func(a string) bool {
-				return strings.HasPrefix(a, filepath.Join(filepath.Dir(dest), ".lighthouse.glitched-clone-"))
+				return strings.HasPrefix(a, filepath.Join(parent, ".lighthouse.glitched-clone-"))
 			})
 			if i < 0 {
 				t.Fatalf("%s ran with %q, into no folder beside %s", tc.ran, got, dest)
@@ -116,7 +121,7 @@ func TestCloneRefusedSaysHowToSignIn(t *testing.T) {
 		"echo \"fatal: repository 'https://ghp_secret@github.com/o/n.git/' not found\" >&2",
 		"exit 128",
 	}, "\n")})
-	err := Clone(context.Background(), source(t, "https://ghp_secret@github.com/o/n.git"), filepath.Join(t.TempDir(), "n"), bin, func(string) {})
+	err := Clone(context.Background(), source(t, "https://ghp_secret@github.com/o/n.git"), filepath.Join(t.TempDir(), "n"), nil, bin, func(string) {})
 	if err == nil {
 		t.Fatal("the refused clone didn't fail")
 	}
@@ -139,7 +144,7 @@ func TestCloneRefusesAFolderNotEmpty(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dest, "notes.txt"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := Clone(context.Background(), source(t, "https://example.com/lighthouse.git"), dest, bin, func(string) {})
+	err := Clone(context.Background(), source(t, "https://example.com/lighthouse.git"), dest, nil, bin, func(string) {})
 	if err == nil || err.Error() != dest+" already exists and isn't empty" {
 		t.Fatalf("the clone into a full folder: %v", err)
 	}
@@ -161,7 +166,7 @@ func TestCloneFailureTakesOnlyTheFolderItMade(t *testing.T) {
 	missing := source(t, "file://"+filepath.ToSlash(filepath.Join(t.TempDir(), "missing.git")))
 	parent := t.TempDir()
 	made := filepath.Join(parent, "made")
-	if err := Clone(context.Background(), missing, made, filepath.Dir(git), func(string) {}); err == nil || strings.Contains(err.Error(), CloneHint) {
+	if err := Clone(context.Background(), missing, made, nil, filepath.Dir(git), func(string) {}); err == nil || strings.Contains(err.Error(), CloneHint) {
 		t.Fatalf("the clone of a missing repository: %v", err)
 	}
 	if _, err := os.Stat(made); !os.IsNotExist(err) {
@@ -171,7 +176,7 @@ func TestCloneFailureTakesOnlyTheFolderItMade(t *testing.T) {
 	if err := os.Mkdir(found, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := Clone(context.Background(), missing, found, filepath.Dir(git), func(string) {}); err == nil {
+	if err := Clone(context.Background(), missing, found, nil, filepath.Dir(git), func(string) {}); err == nil {
 		t.Fatal("the clone of a missing repository didn't fail")
 	}
 	if _, err := os.Stat(found); err != nil {
@@ -205,11 +210,11 @@ func TestCloneSecondIntoAFolderLeavesTheFirst(t *testing.T) {
 	slow := fakes(t, map[string]string{"git": held(sig, "echo second > \"$5/who\"")})
 	errs := make(chan error, 1)
 	go func() {
-		errs <- Clone(context.Background(), source(t, "https://example.com/lighthouse.git"), dest, slow, func(string) {})
+		errs <- Clone(context.Background(), source(t, "https://example.com/lighthouse.git"), dest, nil, slow, func(string) {})
 	}()
 	waitFor(t, filepath.Join(sig, "started"))
 	fast := fakes(t, map[string]string{"git": "echo first > \"$5/who\""})
-	if err := Clone(context.Background(), source(t, "https://example.com/lighthouse.git"), dest, fast, func(string) {}); err != nil {
+	if err := Clone(context.Background(), source(t, "https://example.com/lighthouse.git"), dest, nil, fast, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(sig, "release"), nil, 0o644); err != nil {
@@ -234,7 +239,7 @@ func TestCloneFailureLeavesWhatTheUserAdded(t *testing.T) {
 	bin := fakes(t, map[string]string{"git": held(sig, "echo 'fatal: the remote hung up' >&2\nexit 128")})
 	errs := make(chan error, 1)
 	go func() {
-		errs <- Clone(context.Background(), source(t, "https://example.com/lighthouse.git"), dest, bin, func(string) {})
+		errs <- Clone(context.Background(), source(t, "https://example.com/lighthouse.git"), dest, nil, bin, func(string) {})
 	}()
 	waitFor(t, filepath.Join(sig, "started"))
 	if err := os.MkdirAll(dest, 0o755); err != nil {
@@ -260,7 +265,7 @@ func TestCloneFailureLeavesWhatTheUserAdded(t *testing.T) {
 // With no git a clone makes no folder, not even the one dest is in.
 func TestCloneWithNoGitMakesNoFolder(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "Projects")
-	err := Clone(context.Background(), source(t, "https://example.com/lighthouse.git"), filepath.Join(parent, "lighthouse"), t.TempDir(), func(string) {})
+	err := Clone(context.Background(), source(t, "https://example.com/lighthouse.git"), filepath.Join(parent, "lighthouse"), nil, t.TempDir(), func(string) {})
 	if err == nil || err.Error() != noGit {
 		t.Fatalf("the clone with no git: %v", err)
 	}
@@ -279,7 +284,7 @@ func TestCloneProgressHasNoCredentials(t *testing.T) {
 	}, "\n")})
 	dest := filepath.Join(t.TempDir(), "r")
 	var said []string
-	if err := Clone(context.Background(), source(t, "https://me:tok_secret@example.com/r.git"), dest, bin, func(line string) { said = append(said, line) }); err != nil {
+	if err := Clone(context.Background(), source(t, "https://me:tok_secret@example.com/r.git"), dest, nil, bin, func(line string) { said = append(said, line) }); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"Cloning into '" + dest + "'...", "remote: fetching https://example.com/r.git", "Receiving objects:  10% (1/10) https://example.com"}
