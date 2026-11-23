@@ -283,7 +283,7 @@ func (g *Agent) question(ctx context.Context, f acpsdk.CreateElicitationForm) ac
 		return cancelled
 	}
 	g.mu.Lock()
-	if g.ended || g.interrupted {
+	if !g.started || g.ended || g.interrupted {
 		g.mu.Unlock()
 		return cancelled
 	}
@@ -297,7 +297,9 @@ func (g *Agent) question(ctx context.Context, f acpsdk.CreateElicitationForm) ac
 }
 
 // await opens a and waits for its reply, which is nil when the agent
-// withdrew the request or the connection ended. g.mu is held, and released.
+// withdrew the request or the connection ended. A reply respond took as
+// ctx ended is the one sent, as respond told its caller it was. g.mu is
+// held, and released.
 func (g *Agent) await(ctx context.Context, id string, a *ask) any {
 	a.reply = make(chan any, 1)
 	g.asks[id] = a
@@ -309,7 +311,10 @@ func (g *Agent) await(ctx context.Context, id string, a *ask) any {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if a.state == asking {
+	switch a.state {
+	case answered:
+		return <-a.reply
+	case asking:
 		a.state = gone
 		g.queueLocked(provider.RequestWithdrawn{ID: id, Reason: g.p.profile.Name + " no longer asks."})
 	}
