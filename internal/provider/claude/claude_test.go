@@ -700,20 +700,21 @@ func TestAccessPicksThePermissionMode(t *testing.T) {
 			t.Errorf("claude ran with %q, want every tool allowed to ask", args)
 		}
 	}
-	if want := []string{"default", "auto", "bypassPermissions"}; !slices.Equal(modes, want) {
+	// Approve for me starts in acceptEdits, which every Claude Code takes:
+	// some builds refuse auto as an argument, before any fallback could run.
+	if want := []string{"default", "acceptEdits", "bypassPermissions"}; !slices.Equal(modes, want) {
 		t.Errorf("permission modes %v, want %v", modes, want)
 	}
-	// Approve for me alone checks, before its first message, that Claude
-	// Code runs it.
+	// Approve for me alone is switched to auto, before its first message.
 	if got, want := strings.TrimSpace(string(must(os.ReadFile(switched)))), "auto success"; got != want {
 		t.Errorf("claude was switched to %q, want %q", got, want)
 	}
 }
 
 // A claude that can't run its auto mode, for its settings or its model,
-// runs Approve for me in acceptEdits, as before auto, and Claude then says
-// why as it describes itself; once a claude runs auto again, it says
-// nothing of it.
+// refuses the switch and runs Approve for me in acceptEdits, as it
+// started and as before auto, and Claude then says why as it describes
+// itself; once a claude runs auto again, it says nothing of it.
 func TestApproveForMeWithoutAutoAcceptsEdits(t *testing.T) {
 	ad := &claude.Adapter{Path: must(os.Executable())}
 	h := host(t, ad)
@@ -727,7 +728,7 @@ func TestApproveForMeWithoutAutoAcceptsEdits(t *testing.T) {
 		return info.NoAuto
 	}
 	for _, tc := range []struct{ why, switched, noAuto string }{
-		{"auto mode unavailable for this model", "auto error\nacceptEdits success", "Cannot set permission mode to auto: auto mode unavailable for this model"},
+		{"auto mode unavailable for this model", "auto error", "Cannot set permission mode to auto: auto mode unavailable for this model"},
 		{"", "auto success", ""},
 	} {
 		replay(t, "hi", "")

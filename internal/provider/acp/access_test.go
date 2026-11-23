@@ -9,6 +9,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
+	"glitched/internal/provider/acp/acptest"
 )
 
 // Each access level reaches agy by its own controls: Ask for approval
@@ -179,12 +180,14 @@ func TestATurnReportsItsOwnTokens(t *testing.T) {
 // itself; once a session lists auto again, it says nothing of it.
 func TestASessionWithoutAutoRunsInAcceptEdits(t *testing.T) {
 	for _, tc := range []struct {
-		scenario, mode, noAuto string
+		offered, mode, noAuto string
 	}{
-		{"no-auto", "accept-edits", "Antigravity doesn't offer its auto mode"},
-		{"hi", "auto", ""},
+		{"default,accept-edits,plan", "accept-edits", "Antigravity doesn't offer its auto mode"},
+		{"none", "", "Antigravity's session offers no modes"},
+		{"", "auto", ""},
 	} {
-		a, log := fake(t, tc.scenario)
+		t.Setenv(acptest.Offered, tc.offered)
+		a, log := fake(t, "hi")
 		s := spec(t)
 		s.Access = api.AccessAutoEdits
 		g := open(t, a, s)
@@ -199,15 +202,15 @@ func TestASessionWithoutAutoRunsInAcceptEdits(t *testing.T) {
 				modes = append(modes, p.ModeId)
 			}
 		}
-		if !slices.Equal(modes, []string{tc.mode}) {
-			t.Errorf("%s: set_mode %q, want %q", tc.scenario, modes, tc.mode)
+		if want := []string{tc.mode}; tc.mode == "" && len(modes) != 0 || tc.mode != "" && !slices.Equal(modes, want) {
+			t.Errorf("%s: set_mode %q, want %q", tc.offered, modes, tc.mode)
 		}
 		info, err := a.Describe(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
 		if info.NoAuto != tc.noAuto {
-			t.Errorf("%s: agy describes its auto mode as %q, want %q", tc.scenario, info.NoAuto, tc.noAuto)
+			t.Errorf("%s: agy describes its auto mode as %q, want %q", tc.offered, info.NoAuto, tc.noAuto)
 		}
 	}
 }
@@ -228,5 +231,52 @@ func TestTheAgentsLatestModeWinsOnTheNextRun(t *testing.T) {
 	}
 	if want := []string{"default", "auto"}; !slices.Equal(modes, want) {
 		t.Fatalf("the agent ran its turns in modes %q, want %q", modes, want)
+	}
+}
+
+// A thread changes its access level between runs and keeps its
+// conversation. Ask for approval and Approve for me take the same agy, its
+// session set to the level's mode. Full access, which agy takes only as it
+// starts, takes an agy of its own, and so does the next level after it.
+// Each resumes the thread's session. A session without auto runs Approve
+// for me in accept-edits the same way.
+func TestAThreadChangesItsAccessMidConversation(t *testing.T) {
+	for offered, auto := range map[string]string{"": "auto", "default,accept-edits,plan": "accept-edits"} {
+		t.Setenv(acptest.Offered, offered)
+		a, log := fake(t, "memory")
+		s := spec(t)
+		prompt := "Remember the word kumquat."
+		var sessions []string
+		var said string
+		for i, level := range []api.Access{api.AccessAsk, api.AccessAutoEdits, api.AccessAsk, api.AccessFull, api.AccessAutoEdits, api.AccessAsk} {
+			s.Run, s.Generation, s.Access = api.NewID(), uint64(i+1), level
+			g := open(t, a, s)
+			s.Session = g.(provider.Sessioned).Session()
+			sessions = append(sessions, s.Session)
+			do(t, g, provider.Start{Text: prompt})
+			said = text(turn(t, g))
+			closeRun(t, g)
+			prompt = "What word did I ask you to remember?"
+		}
+		if slices.ContainsFunc(sessions, func(id string) bool { return id != sessions[0] }) || !strings.Contains(said, "kumquat") {
+			t.Errorf("modes %q: sessions %q, last said %q, want one conversation throughout", offered, sessions, said)
+		}
+		entries := wire(t, log)
+		var flags []bool
+		for _, e := range find(t, entries, "initialize") {
+			flags = append(flags, slices.Contains(e.Argv, "--dangerously-skip-permissions"))
+		}
+		var modes []string
+		for _, e := range find(t, entries, "session/set_mode") {
+			var p struct{ ModeId string }
+			json.Unmarshal(e.Params, &p)
+			modes = append(modes, p.ModeId)
+		}
+		if !slices.Equal(flags, []bool{false, true, false}) || len(find(t, entries, "session/new")) != 1 || len(find(t, entries, "session/resume")) != 2 {
+			t.Errorf("modes %q: agy started %v with the skip flag, and %q", offered, flags, methods(entries))
+		}
+		if want := []string{auto, "default", auto, "default"}; !slices.Equal(modes, want) {
+			t.Errorf("modes %q: set_mode %q, want %q", offered, modes, want)
+		}
 	}
 }

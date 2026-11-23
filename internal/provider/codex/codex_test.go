@@ -1252,3 +1252,51 @@ func TestApproveForMeChosenMidThreadReviewsNextTurn(t *testing.T) {
 		t.Errorf("reviewers %q, want %q", reviewers, want)
 	}
 }
+
+// A reviewer Codex reports other than the one asked for reaches no turn:
+// Ask for approval and Full access keep theirs with the user, and Approve
+// for me without auto-review does too.
+func TestATurnSendsItsLevelsReviewer(t *testing.T) {
+	for access, want := range map[api.Access]string{api.AccessAsk: "user", api.AccessAutoEdits: "user", api.AccessFull: "user"} {
+		a, log := fake(t, "guardian")
+		s := spec(t)
+		s.Access = access
+		g := open(t, a, s)
+		do(t, g, provider.Start{Text: "hi"})
+		turn(t, g)
+		closeRun(t, g)
+		var ts struct{ ApprovalsReviewer string }
+		json.Unmarshal(sent(t, log, "turn/start")[0], &ts)
+		if ts.ApprovalsReviewer != want {
+			t.Errorf("access %v: the turn's reviewer is %q, want %q", access, ts.ApprovalsReviewer, want)
+		}
+	}
+}
+
+// What Settings says of auto-review is what the last Approve for me run
+// had, on a parked app-server as on a new one.
+func TestAParkedAppServerSaysWhatItsThreadHad(t *testing.T) {
+	a, _ := fake(t, "no-auto")
+	fellBack, took := spec(t), spec(t)
+	fellBack.Access, took.Access = api.AccessAutoEdits, api.AccessAutoEdits
+	var said []string
+	for _, s := range []*provider.SessionSpec{&fellBack, &took, &fellBack} {
+		if s == &took {
+			t.Setenv(codextest.Scenario, "hi")
+		}
+		s.Run = api.NewID()
+		g := open(t, a, *s)
+		s.Session = g.(provider.Sessioned).Session()
+		do(t, g, provider.Start{Text: "hi"})
+		turn(t, g)
+		closeRun(t, g)
+		info, err := a.Describe(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		said = append(said, info.NoAuto)
+	}
+	if said[0] == "" || said[1] != "" || said[2] != said[0] {
+		t.Errorf("Codex described its auto-review as %q, want the fallback, nothing, the fallback", said)
+	}
+}

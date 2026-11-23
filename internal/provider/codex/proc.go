@@ -73,8 +73,8 @@ type proc struct {
 	closing sync.Once
 
 	version string
-	// reviewer is who reviews the thread's approvals, as Codex said when
-	// it started or resumed the thread: every turn asks for the same.
+	// reviewer is who reviews the thread's approvals, as the thread started
+	// or resumed: every turn asks for the same.
 	reviewer string
 
 	mu     sync.Mutex
@@ -288,9 +288,14 @@ func (p *proc) startThread(ctx context.Context, spec provider.SessionSpec) (lost
 		} `json:"thread"`
 		ApprovalsReviewer string `json:"approvalsReviewer"`
 	}
-	// The thread's reviewer is the one Codex says it took, the user for a
-	// Codex too old to say.
-	defer func() { p.reviewer = cmp.Or(r.ApprovalsReviewer, "user") }()
+	// The thread's reviewer is the level's, but the user's for an
+	// auto-review Codex says it didn't take, or is too old to say it did.
+	defer func() {
+		p.reviewer = levels[spec.Access].reviewer
+		if p.reviewer == autoReview && r.ApprovalsReviewer != autoReview {
+			p.reviewer = "user"
+		}
+	}()
 	if spec.Session != "" {
 		resume := maps.Clone(params)
 		resume["threadId"], resume["excludeTurns"] = spec.Session, true

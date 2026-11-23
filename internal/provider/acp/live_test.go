@@ -204,3 +204,40 @@ func TestLiveDenyUnderFull(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveModesAfterResume spends a prompt: a session agy resumes in a
+// new process, as after a change into or out of Full access, takes the
+// level's mode as a new one does.
+func TestLiveModesAfterResume(t *testing.T) {
+	a := &Adapter{Profile: Antigravity}
+	s := provider.SessionSpec{Thread: api.NewID(), Run: api.NewID(), Generation: 1, Workspace: t.TempDir(),
+		Model: api.ModelRef{Provider: "antigravity", Model: os.Getenv("ACP_LIVE_MODEL")}, Access: api.AccessFull}
+	g := open(t, a, s)
+	do(t, g, provider.Start{Text: "Reply with only: ok"})
+	t.Logf("first: %q", text(turn(t, g)))
+	closeRun(t, g)
+	s.Session = g.(provider.Sessioned).Session()
+	a.Close()
+	b := &Adapter{Profile: Antigravity}
+	defer b.Close()
+	s.Run, s.Generation, s.Access = api.NewID(), 2, api.AccessAutoEdits
+	h := open(t, b, s)
+	p := h.(*Agent).p
+	mode := ""
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		p.mu.Lock()
+		mode = p.mode
+		p.mu.Unlock()
+		if mode == "auto" || time.Now().After(deadline) {
+			break
+		}
+	}
+	session := h.(provider.Sessioned).Session()
+	p.mu.Lock()
+	t.Logf("resumed %s of %s: argv %q, mode %q, moded %v, offered %q", session, s.Session, p.cmd.Args[1:], mode, p.moded, p.offered)
+	p.mu.Unlock()
+	if mode != "auto" {
+		t.Errorf("the resumed session runs in mode %q, want auto", mode)
+	}
+	closeRun(t, h)
+}

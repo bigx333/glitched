@@ -7,6 +7,7 @@
 package claude
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -119,6 +120,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	case err != nil:
 		return nil, fmt.Errorf("claude: the thread's earlier claude may still run: %w", err)
 	case ok:
+		a.told(spec, p)
 		return newAgent(spec, p, keep), nil
 	}
 	session := uuidOf(spec.Thread)
@@ -134,14 +136,21 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		return nil, err
 	}
 	if g := grants[spec.Access]; g.Else != "" {
-		refused, err := p.switchMode(ctx, g)
-		if err != nil {
+		if p.noAuto, err = p.switchMode(ctx, g); err != nil {
 			p.Close(context.Background())
 			return nil, err
 		}
-		a.noAuto.Store(&refused)
 	}
+	a.told(spec, p)
 	return newAgent(spec, p, keep), nil
+}
+
+// told keeps what the run's claude said of its auto mode as Claude
+// Code's latest word on it, for a level that asks for it.
+func (a *Adapter) told(spec provider.SessionSpec, p *proc) {
+	if grants[spec.Access].Else != "" {
+		a.noAuto.Store(&p.noAuto)
+	}
 }
 
 // Reconcile stops what is left of the run: nothing can reattach to a
@@ -235,7 +244,7 @@ func (ad *Adapter) argv(spec provider.SessionSpec) []string {
 	a := []string{"-p", "--verbose",
 		"--input-format", "stream-json", "--output-format", "stream-json",
 		"--include-partial-messages",
-		"--permission-mode", grants[spec.Access].Mode, "--permission-prompt-tool", "stdio",
+		"--permission-mode", cmp.Or(grants[spec.Access].Else, grants[spec.Access].Mode), "--permission-prompt-tool", "stdio",
 	}
 	var trusted, instructions []string
 	for i, s := range spec.MCP {
@@ -278,9 +287,10 @@ func mcpConfig(s provider.MCPServer) string {
 
 // grants are Claude Code's permission modes for Glitched's levels.
 // Approve for me is its auto mode, where its own classifier approves what
-// is safe and asks for the rest. A claude that can't run it, for its
-// settings or its model, starts in default instead and refuses a switch
-// to auto; it then runs in acceptEdits, as before auto.
+// is safe and asks for the rest. Its claude starts in acceptEdits, which
+// every Claude Code takes, and is switched to auto before its first turn:
+// one that can't run auto, for its version, settings or model, refuses
+// the switch and runs in acceptEdits, as before auto.
 var grants = provider.Grants{
 	api.AccessAsk:       {Mode: "default"},
 	api.AccessAutoEdits: {Mode: "auto", Else: "acceptEdits"},
