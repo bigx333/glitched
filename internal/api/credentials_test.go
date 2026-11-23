@@ -12,6 +12,8 @@ func TestParseCredentialsRefusesWhatACardCantShow(t *testing.T) {
 		`{"reason":"","fields":[{"name":"A"}]}`,
 		`{"reason":"r","fields":[]}`,
 		`{"reason":"r","fields":[{"name":"1A"}]}`,
+		`{"reason":"r","fields":[{"name":"env"}]}`,
+		`{"reason":"r","fields":[{"name":"KEY"},{"name":"key"}]}`,
 		`{"reason":"r","fields":[{"name":"A"},{"name":"A"}]}`,
 		`{"reason":"r","fields":[{"name":"A","url":"javascript:alert(1)"}]}`,
 		`{"reason":"r","fields":[{"name":"A"},{"name":"B"},{"name":"C"},{"name":"D"},{"name":"E"},{"name":"F"},{"name":"G"},{"name":"H"},{"name":"I"}]}`,

@@ -44,7 +44,7 @@ type Field struct {
 	URL   string `json:"url,omitempty"`
 }
 
-var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var envName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 // ValidName is whether s may name a credential: an environment variable's
 // name.
@@ -71,7 +71,7 @@ func (c Credentials) Check() error {
 	}
 	for i, f := range c.Fields {
 		if !ValidName(f.Name) {
-			return fmt.Errorf("credentials: field %d's name %q is not an environment variable's", i+1, f.Name)
+			return fmt.Errorf("credentials: field %d's name %q is not an upper-case environment variable's", i+1, f.Name)
 		}
 		if slices.ContainsFunc(c.Fields[:i], func(g Field) bool { return g.Name == f.Name }) {
 			return fmt.Errorf("credentials: %s is asked for twice", f.Name)

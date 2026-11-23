@@ -1,7 +1,9 @@
 package secrets
 
 import (
+	"bytes"
 	"cmp"
+	"encoding/json"
 	"maps"
 	"slices"
 	"strings"
@@ -70,4 +72,49 @@ func redact(s string, values map[string]string, hold bool) (string, string) {
 // starts, so more text could complete it.
 func couldStart(rest string, hidden []secret) bool {
 	return slices.ContainsFunc(hidden, func(h secret) bool { return len(rest) < len(h.value) && strings.HasPrefix(h.value, rest) })
+}
+
+// RedactJSON is Redact for a JSON document: it redacts each string and key
+// as decoded, so a value written with escapes is found too, and gives raw
+// back as it was when it held none.
+func RedactJSON(raw json.RawMessage, values map[string]string) json.RawMessage {
+	var v any
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.UseNumber()
+	if len(raw) == 0 || d.Decode(&v) != nil {
+		if s := Redact(string(raw), values); s != string(raw) {
+			return json.RawMessage(s)
+		}
+		return raw
+	}
+	changed := false
+	var walk func(any) any
+	walk = func(v any) any {
+		switch v := v.(type) {
+		case string:
+			s := Redact(v, values)
+			changed = changed || s != v
+			return s
+		case []any:
+			for i := range v {
+				v[i] = walk(v[i])
+			}
+		case map[string]any:
+			out := make(map[string]any, len(v))
+			for k, x := range v {
+				out[walk(k).(string)] = walk(x)
+			}
+			return out
+		}
+		return v
+	}
+	v = walk(v)
+	if !changed {
+		return raw
+	}
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	enc.Encode(v)
+	return json.RawMessage(bytes.TrimSpace(b.Bytes()))
 }

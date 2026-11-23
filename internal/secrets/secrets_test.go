@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,5 +109,26 @@ func TestRedactStreamCatchesAValueSplitAcrossDeltas(t *testing.T) {
 	shown.WriteString(out)
 	if got, want := shown.String(), "the key is [KEY], done. sk-nothing"; got != want {
 		t.Errorf("shown %q, want %q", got, want)
+	}
+}
+
+// A value inside JSON is found however the JSON escapes it, and a document
+// that holds none comes back as it was.
+func TestRedactJSONFindsEscapedValues(t *testing.T) {
+	values := map[string]string{"KEY": "a<b>\"c\\d-12345"}
+	for _, raw := range []string{
+		`{"command":"echo a\u003cb\u003e\"c\\d-12345"}`,
+		`{"command":"echo \u0061<b>\"c\\d-12345"}`,
+		`{"args":["x",{"a<b>\"c\\d-12345":1}]}`,
+	} {
+		got := string(RedactJSON(json.RawMessage(raw), values))
+		if strings.Contains(got, "d-12345") || !strings.Contains(got, "[KEY]") || !json.Valid([]byte(got)) {
+			t.Errorf("RedactJSON(%s) = %s", raw, got)
+		}
+	}
+	for _, raw := range []string{"", "null", `{"a":  "b"}`, "not json"} {
+		if got := string(RedactJSON(json.RawMessage(raw), values)); got != raw {
+			t.Errorf("RedactJSON(%q) = %q, want it unchanged", raw, got)
+		}
 	}
 }
