@@ -725,7 +725,7 @@ func TestAPluginConfiguresAThreadsModelButNeverItsAccess(t *testing.T) {
 	}
 	h.a.router.Push("/settings/providers")
 	h.tt.Frame()
-	if !h.tt.HasText("Claude Code") || h.tt.HasText("Mine") {
+	if !h.tt.HasText("The coding agents Glitched runs, and their models.") || h.tt.HasText("Mine") {
 		t.Errorf("the Providers page isn't Glitched's: %q", h.tt.Texts())
 	}
 }
