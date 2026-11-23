@@ -345,7 +345,9 @@ func (p *proc) configure(ctx context.Context, ref api.ModelRef, mode string) err
 	stop := context.AfterFunc(ctx, p.halt)
 	defer stop()
 	// ACP picks a mode of those the session lists: one that lists none
-	// has none to pick, and runs as it starts, which asks the most.
+	// has none to pick, and runs as it starts, which asks the most. The
+	// mode is the one the agent last said, never the one asked, so a mode
+	// it moved to since is set again.
 	p.mu.Lock()
 	current, moded := p.mode, p.moded
 	p.mu.Unlock()
@@ -353,9 +355,6 @@ func (p *proc) configure(ctx context.Context, ref api.ModelRef, mode string) err
 		if _, err := p.conn.SetSessionMode(ctx, acpsdk.SetSessionModeRequest{SessionId: p.session, ModeId: acpsdk.SessionModeId(mode)}); err != nil {
 			return p.failure("run at this access level, as its mode "+mode, err)
 		}
-		p.mu.Lock()
-		p.mode = mode
-		p.mu.Unlock()
 	}
 	for _, want := range []struct {
 		category acpsdk.SessionConfigOptionCategory

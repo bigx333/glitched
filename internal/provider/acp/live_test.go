@@ -141,11 +141,18 @@ func TestLiveModes(t *testing.T) {
 			Model: api.ModelRef{Provider: "antigravity"}, Access: access}
 		g := open(t, a, s)
 		p := g.(*Agent).p
-		p.mu.Lock()
-		mode := p.mode
-		p.mu.Unlock()
+		want := Antigravity.Access[access].Mode
+		mode := ""
+		for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+			p.mu.Lock()
+			mode = p.mode
+			p.mu.Unlock()
+			if want == "" || mode == want || time.Now().After(deadline) {
+				break
+			}
+		}
 		t.Logf("access %v: argv %q, mode %q", access, p.cmd.Args[1:], mode)
-		if want := Antigravity.Access[access].Mode; want != "" && mode != want {
+		if want != "" && mode != want {
 			t.Errorf("access %v runs in mode %q, want %q", access, mode, want)
 		}
 		closeRun(t, g)

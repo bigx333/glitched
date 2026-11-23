@@ -192,3 +192,22 @@ func TestAnAgentSaysItsRulesDontApply(t *testing.T) {
 		t.Error("Antigravity's profile keeps agy's deny rules, which agy acp ignores")
 	}
 }
+
+// A mode the agent reports after Glitched set one wins: the next run sets
+// the access level's mode again rather than trust what it last asked.
+func TestTheAgentsLatestModeWinsOnTheNextRun(t *testing.T) {
+	a := wireFake(t, "mode-updates-before-reply")
+	s := spec(t)
+	s.Access = api.AccessAutoEdits
+	var modes []string
+	for range 2 {
+		g := open(t, a, s)
+		do(t, g, provider.Start{Text: "hi"})
+		modes = append(modes, text(turn(t, g)))
+		closeRun(t, g)
+		s.Run, s.Generation = api.NewID(), s.Generation+1
+	}
+	if want := []string{"default", "accept-edits"}; !slices.Equal(modes, want) {
+		t.Fatalf("the agent ran its turns in modes %q, want %q", modes, want)
+	}
+}
