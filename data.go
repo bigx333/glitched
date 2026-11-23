@@ -119,6 +119,10 @@ type entry struct {
 	// failed is the command a failed entry, or a message whose send
 	// failed, stands for.
 	failed client.Pending
+	// retry is a turn's last reply, or its message when it said nothing,
+	// when the turn failed or was stopped: there is something to ask
+	// again.
+	retry bool
 	// A run's work: whether some of it is still going, and for how long it
 	// went.
 	working bool
@@ -186,7 +190,7 @@ func (d *deriving) add(e client.Entry) {
 		d.listed[e.Message] = true
 		d.es = append(d.es, userEntry(e))
 	case *client.AssistantEntry:
-		d.es = append(d.es, entry{key: d.key("a", e.Run), kind: entryAssistant, text: e.Text, streaming: e.Streaming})
+		d.es = append(d.es, entry{key: d.key("a", e.Run), kind: entryAssistant, text: e.Text, streaming: e.Streaming, retry: unfinished(e.End)})
 	case *client.WorkEntry:
 		d.es = append(d.es, workEntry(d.key("w", e.Run), e))
 	case *client.RequestEntry:
@@ -489,7 +493,13 @@ func userEntry(u *client.UserEntry) entry {
 	if u.Reason != "" {
 		note += ": " + u.Reason
 	}
-	return entry{key: "m/" + u.Message.String(), kind: entryUser, text: u.Text, note: note}
+	return entry{key: "m/" + u.Message.String(), kind: entryUser, text: u.Text, note: note, retry: unfinished(u.End)}
+}
+
+// unfinished is whether a turn that ended so left something to ask again:
+// it failed, was stopped, or was given up on.
+func unfinished(end *client.TurnEnd) bool {
+	return end != nil && end.Outcome != api.OutcomeCompleted
 }
 
 func workEntry(key string, w *client.WorkEntry) entry {

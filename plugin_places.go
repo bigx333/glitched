@@ -164,7 +164,7 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread) {
 		if node == nil {
 			continue
 		}
-		a.drawPlace(c, ui.Row(c).Key("plugin:"+pl.Plugin+":"+pl.Place.ID).Shrink(1).AlignItems(ui.Center).ClipX(), pl, key, ctx, app, node, nil, nil, nil, nil)
+		a.drawPlace(c, ui.Row(c).Key("plugin:"+pl.Plugin+":"+pl.Place.ID).Shrink(1).AlignItems(ui.Center).ClipX(), pl, key, ctx, app, node, nil, nil, nil, nil, nil)
 	}
 }
 
@@ -197,10 +197,11 @@ func controlsOf[K comparable](m map[K]*sessionControls, k K, s *plugins.Session)
 // and hands what the user does there to its app session.
 //
 // native draws the native widgets of a component's copy, nil elsewhere,
+// absent says which of them build nothing there, nil for none,
 // listRow does to its lists' rows what the app does to its own, and
 // after what Glitched draws over the drawing in box, as a message's
 // actions, nil for nothing.
-func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key string, ctx any, app *plugins.Session, node *widget.Node, native func(c *ui.Context, n *widget.Node, row string, fire func(any)), listRow func(c *ui.Context, list *widget.Node, i int, e ui.Element) bool, reveal func(thread string) bool, after func()) {
+func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key string, ctx any, app *plugins.Session, node *widget.Node, native func(c *ui.Context, n *widget.Node, row string, fire func(any)), absent func(n *widget.Node) bool, listRow func(c *ui.Context, list *widget.Node, i int, e ui.Element) bool, reveal func(thread string) bool, after func()) {
 	pk := placeKey{pl.Plugin, pl.Place.ID, key}
 	a.placeFrame.keys[pk] = true
 	cs := controlsOf(a.placeControls, pk, app)
@@ -210,7 +211,7 @@ func (a *app) drawPlace(c *ui.Context, box ui.Element, pl plugins.PlaceAt, key s
 	box.Children(func() {
 		st := a.pluginStyle(pl.Plugin)
 		st.Scope = pl.Plugin + "/" + pl.Place.ID + "/" + key
-		st.Native = native
+		st.Native, st.Absent = native, absent
 		if w, ok := ctx.(composerWorkspace); ok {
 			st.MenuEnd = w.menu
 		}

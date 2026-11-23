@@ -63,6 +63,10 @@ type Style struct {
 	// the plugin a change. Nil, outside a component, says it draws only in
 	// one.
 	Native func(c *ui.Context, n *widget.Node, thread string, fire func(value any))
+	// Absent says the native n has nothing to draw where it is placed, so
+	// it builds nothing: no room, no gap between its siblings, no key.
+	// Nil: every native draws.
+	Absent func(n *widget.Node) bool
 	// ListRow does to the row e of a list's item i what the app does to
 	// its own rows, as their transitions and the jokes played on them; it
 	// says whether the row stays as though pointed at, as while a popover
@@ -342,7 +346,8 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 	// identity, as a dialog the user closed, which the plugin draws till
 	// it hears of it, gave the app's composer, whose text area, new, took
 	// the focus.
-	if n.When == "hover" && !r.hovered || n.When == "idle" && r.hovered || n.Type == "dialog" && (!n.Open || r.cs.dismissed[n.ID]) {
+	if n.When == "hover" && !r.hovered || n.When == "idle" && r.hovered || n.Type == "dialog" && (!n.Open || r.cs.dismissed[n.ID]) ||
+		n.Type == "native" && st.Absent != nil && st.Absent(n) {
 		return
 	}
 	// Stateful widgets take their key before they're built: a key set

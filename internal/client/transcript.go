@@ -112,15 +112,27 @@ type UserEntry struct {
 	Text    string
 	State   MessageState
 	Reason  string // why it was cancelled, when the engine said
-	pos     int64
-	run     api.ID // the run that claimed it
+	// End is how the message's own run ended, when it ended saying
+	// nothing; the run's last reply holds it otherwise.
+	End *TurnEnd
+	pos int64
+	run api.ID // the run that claimed it
 }
 
 type AssistantEntry struct {
 	Run       api.ID
 	Text      string
 	Streaming bool // more text may follow
-	text      strings.Builder
+	// End is how the run ended, on its last reply that says something,
+	// and only for a run of a message of the user's; nil while it runs.
+	End  *TurnEnd
+	text strings.Builder
+}
+
+// TurnEnd is how a run ended: its outcome, and when.
+type TurnEnd struct {
+	Outcome api.Outcome
+	At      time.Time
 }
 
 // write appends s. Text shares the builder's bytes, so a long run's deltas
@@ -303,6 +315,7 @@ func (t *Transcript) apply(e api.Event) {
 	case api.TurnEnded:
 		t.end(b.Run, Cancelled, e.At)
 		t.Ended = e.At
+		t.ended(b.Run, TurnEnd{Outcome: b.Outcome, At: e.At})
 		if b.Outcome == api.OutcomeFailed && b.Error != "" {
 			t.add(&ErrorEntry{Run: b.Run, Error: b.Error})
 		}
@@ -457,6 +470,27 @@ func (t *Transcript) work(w api.WorkItem, at time.Time) {
 		into.Ended = at
 	}
 	t.edited(into)
+}
+
+// ended keeps how run ended on its last reply that says something, or on
+// its own message when it said nothing. A run with no message of its own,
+// as a child's report waking the agent, keeps it nowhere: there is no
+// message of the user's to ask again.
+func (t *Transcript) ended(run api.ID, end TurnEnd) {
+	u := t.message(run)
+	if u == nil {
+		return
+	}
+	since := t.since(run)
+	for i := len(since) - 1; i >= 0; i-- {
+		if a, ok := since[i].(*AssistantEntry); ok && a.Run == run && strings.TrimSpace(a.Text) != "" {
+			a.End = &end
+			t.edited(a)
+			return
+		}
+	}
+	u.End = &end
+	t.edited(u)
 }
 
 // void invalidates the run's open requests, as the engine does once the run

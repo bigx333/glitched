@@ -25,7 +25,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|refused|plain|stuck|children|blocked|held (SEND=<text>)
+// SCENE=empty|running|approval|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)
 // for the engines' threads (none started without one; question takes
 // ASK=<request body>, PICK=<label>,… and QUESTION=answer|dismiss|stop;
 // both is an approval and questions waiting at once, the questions first
@@ -446,6 +446,15 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 			h.click("Edit " + sidebarPath)
 			h.diffsRead()
 		}
+	case "broke":
+		// A turn that failed after some of its reply.
+		h = playedOnce(t, []provider.Event{
+			provider.TextDelta{Text: "Half of it is sorted."},
+			provider.TurnEnded{Outcome: api.OutcomeFailed, Error: "The agent stopped answering."},
+		})
+	case "silent":
+		// A turn that failed saying nothing.
+		h = playedOnce(t, []provider.Event{provider.TurnEnded{Outcome: api.OutcomeFailed, Error: "Claude Code is not signed in."}})
 	case "plain":
 		// An edit in a workspace with no git, whose HEAD is unknown.
 		ws := filepath.Join(t.TempDir(), "notes")

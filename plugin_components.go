@@ -37,8 +37,10 @@ type componentCopy struct {
 	context func(plugins.ThreadRecord) any
 	native  func(body *widget.Node)
 	retry   func()
-	// action draws the message.* native n, one of a message's actions.
+	// action draws the message.* native n, one of a message's actions,
+	// unless absent says it has nothing to do under the message.
 	action  func(n *widget.Node)
+	absent  func(n *widget.Node) bool
 	over    func(box ui.Element)
 	builtin func() *widget.Node
 	// listRow does to the rows of the copy's lists what the app does to
@@ -70,6 +72,7 @@ func (a *app) fallback(c *ui.Context, name string, t *thread, cp componentCopy) 
 			st.Native = func(c *ui.Context, n *widget.Node, row string, fire func(any)) {
 				a.drawNative(c, name, t, row, n, fire, cp)
 			}
+			st.Absent = cp.absent
 			render.View(c, &widget.View{Body: cp.builtin()}, &render.Controls{}, st, &a.pluginMD, nil)
 		}
 		if cp.over != nil {
@@ -219,7 +222,7 @@ func (a *app) pluginComponent(c *ui.Context, name string, t *thread, copies ...c
 		box := cp.box()
 		a.drawPlace(c, box, d.pl, cp.key, d.ctx, d.app, d.node, func(c *ui.Context, n *widget.Node, row string, fire func(any)) {
 			a.drawNative(c, name, t, row, n, fire, cp)
-		}, func(c *ui.Context, list *widget.Node, i int, e ui.Element) bool {
+		}, cp.absent, func(c *ui.Context, list *widget.Node, i int, e ui.Element) bool {
 			return cp.listRow != nil && cp.listRow(c, list, i, e, d.app.Builtin)
 		}, cp.reveal, func() {
 			if cp.over != nil {

@@ -330,7 +330,7 @@ type NativeWidget = {
       name: "transcript.retry";
     }
   | {
-      /** A message's actions, in message.toolbar, as Glitched draws them: Copy; Edit & resend, a message of yours'; Retry, a reply's. Nothing where the message has no such action. */
+      /** A message's actions, in message.toolbar, as Glitched draws them: Copy; Edit & resend, a message of yours'; Retry, under the last reply that says something of a turn of yours that failed, was stopped or was given up on, or under your message when the turn said nothing. Nothing, and no room or gap, where the message has no such action. */
       name: "message.copy" | "message.edit" | "message.retry";
     }
   | {
