@@ -64,6 +64,9 @@ type proc struct {
 	stderr  *tail
 	heard   chan struct{} // closed once stderr is read to its end
 	read    chan struct{} // closed once stdout is read to its end and let go
+	// release has the bridge from stdout let go now, sending the SDK
+	// nothing more, once the agent is stopped.
+	release func()
 	reaped  chan struct{} // closed once the process is reaped
 	exitErr error         // set before reaped closes
 	left    map[int]int64 // what ran in its process group as it was reaped; set before reaped closes
@@ -440,6 +443,10 @@ func (p *proc) exited() error {
 // stale marks the agent signed out.
 func (p *proc) readStdout(stdout *os.File, wire io.Writer) *io.PipeReader {
 	r, w := io.Pipe()
+	p.release = sync.OnceFunc(func() {
+		r.CloseWithError(io.ErrClosedPipe)
+		stdout.SetReadDeadline(time.Now())
+	})
 	go func() {
 		<-p.reaped
 		stdout.SetReadDeadline(time.Now().Add(drainGrace))
@@ -578,7 +585,9 @@ func (p *proc) Done() <-chan struct{} { return p.reaped }
 // after closeGrace, with whatever it left running. What it started is
 // read first: once it exits, a tool it left that shows no mark, as a
 // platform binary on macOS, has no marked ancestor to be found by. It
-// returns once the bridge from the agent's stdout has let go of it.
+// returns once the bridge from the agent's stdout has let go of it, and
+// has it let go at once: the SDK may have stopped reading, and a process
+// the agent left may hold stdout open.
 func (p *proc) Close(ctx context.Context) error {
 	seen := map[int]int64{}
 	scan(p.mark, seen)
@@ -591,6 +600,12 @@ func (p *proc) Close(ctx context.Context) error {
 	p.halted.Store(true)
 	if err := p.stop(ctx, seen); err != nil {
 		return err
+	}
+	p.release()
+	select {
+	case <-p.read:
+		return nil
+	default:
 	}
 	select {
 	case <-p.read:
