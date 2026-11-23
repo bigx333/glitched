@@ -401,7 +401,9 @@ type headerUsage struct {
 // the tokens, and with children, everything under the thread rolled up.
 func usageBadge(u headerUsage) *widget.Node {
 	label, tip := fmtTokens(u.Tokens)+" tokens", "This thread's tokens"
-	if u.Total != u.Tokens {
+	// Compared as main.js compares them, past 2^53 too.
+	children := float64(u.Total) != float64(u.Tokens)
+	if children {
 		label = fmtTokens(u.Tokens) + " · " + fmtTokens(u.Total) + " with children"
 		tip = fmt.Sprintf("This thread %s, its child threads %s", fmtTokens(u.Tokens), fmtTokens(u.Total-u.Tokens))
 	}
@@ -409,7 +411,7 @@ func usageBadge(u headerUsage) *widget.Node {
 	if c == nil {
 		return &widget.Node{Type: "badge", Style: "pill", Text: label, Tooltip: tip}
 	}
-	if u.Total == u.Tokens {
+	if !children {
 		tip = "This thread's tokens " + fmtTokens(u.Tokens)
 	}
 	// In float64, as main.js counts, so both draw the same.
