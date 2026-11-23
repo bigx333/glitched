@@ -306,7 +306,8 @@ func TestServeKeepsHubDirFromWhereItRan(t *testing.T) {
 }
 
 // A claude thread on a standalone engine runs Claude Code, found where
-// engine.json's claude_path says. Here nothing is there to run.
+// engine.json's older claude_path says. Here nothing is there to run, and
+// the turn says what's wrong with the setting.
 func TestServeRunsClaudeThreadsOnClaudeCode(t *testing.T) {
 	dir, err := os.MkdirTemp("", "gl")
 	if err != nil {
@@ -351,7 +352,7 @@ func TestServeRunsClaudeThreadsOnClaudeCode(t *testing.T) {
 			}
 		}
 	}
-	if want := "Claude Code is not installed.\nInstall it, or set claude_path in engine.json."; ended == nil || ended.Outcome != api.OutcomeFailed || ended.Error != want {
+	if want := "Claude Code can't start as Settings › Providers sets it up: path: there is no file at /nonexistent/claude.\nClaude Code is not installed.\nInstall it, or set its path in Settings › Providers."; ended == nil || ended.Outcome != api.OutcomeFailed || ended.Error != want {
 		t.Errorf("the claude turn ended %+v, want it failed with\n%s", ended, want)
 	}
 	cancel()
