@@ -50,8 +50,14 @@ const (
 	connectTimeout = 10 * time.Second
 	addTimeout     = 5 * time.Second
 	submitTimeout  = 10 * time.Second
-	minBackoff     = time.Second
-	maxBackoff     = 30 * time.Second
+	// submitsAtOnce is how many of an env's commands wait on its engine
+	// at once. The engine commits one at a time, so a command sent beside
+	// many others waits behind them there; with this many at most, its
+	// submitTimeout covers its own commit and a few others', not a queue
+	// as long as the commands sent.
+	submitsAtOnce = 8
+	minBackoff    = time.Second
+	maxBackoff    = 30 * time.Second
 )
 
 // Manager owns the environments. Call its methods and read what they
@@ -218,6 +224,7 @@ type Env struct {
 	session *session           // the live shell stream; nil while there is none
 	log     api.ID             // the log of the last shell snapshot; zero before one
 	waiting []chan<- *session  // commands waiting for the next session
+	slots   chan struct{}      // a command's while it waits on the engine; submitsAtOnce of them
 	server  Server             // a remote's entry in gui.json
 }
 
@@ -255,7 +262,7 @@ const (
 type sub struct{ cancel context.CancelFunc }
 
 func (m *Manager) launch(e *Env, r route) *Env {
-	e.Status, e.Threads = Connecting{}, map[api.ID]*Thread{}
+	e.Status, e.Threads, e.slots = Connecting{}, map[api.ID]*Thread{}, make(chan struct{}, submitsAtOnce)
 	e.Membership++
 	e.ctx, e.stop = context.WithCancel(m.ctx)
 	m.connect(e, r)
