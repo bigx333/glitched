@@ -128,6 +128,9 @@ func (a *app) newer(k cliKey, asked time.Time, old, now transport.ProviderInfo) 
 	if old.Name != "" && a.clis.updated[k].After(asked) {
 		return old
 	}
+	if r := a.clis.runs[k]; r != nil && r.running && now.Update == nil {
+		now.Update = old.Update
+	}
 	return keptUpdate(old, now)
 }
 
@@ -277,7 +280,7 @@ func (a *app) cliUpdate(c *ui.Context, en cliEntry) {
 				case r != nil && r.running:
 					ui.Spinner(c)
 					ui.Text(c, "Updating…").FontSize(12).TextColor(palette.muted)
-				case u.Manual != "":
+				case u != nil && u.Manual != "":
 				case r != nil && r.busy:
 					ui.Button(c.Key("later"), "Update when it ends").Disabled(!online(en.env)).OnClick(func() { a.updateCLI(en, true) })
 				default:
@@ -295,7 +298,7 @@ func (a *app) cliUpdate(c *ui.Context, en cliEntry) {
 		if manual {
 			ui.Text(c, u.Manual+" Run this in Terminal on "+machineWords(en.env)+":").Key("manual").FontSize(12).TextColor(palette.muted)
 		}
-		if command := strings.Join(u.Command, " "); command != "" && (manual || r != nil && r.running) {
+		if command := strings.Join(u.Command, " "); command != "" && (u.Available || r != nil && r.running) {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, command).Key("command").Selectable().Font("monospace").FontSize(11.5).TextColor(palette.text).Grow(1).Shrink(1)
 				if manual {
@@ -335,7 +338,7 @@ func (a *app) cliUpdatesButton(c *ui.Context) {
 		r := a.clis.runs[en.key]
 		running = running || r != nil && r.running
 		failed = failed || r != nil && r.failed != ""
-		needed = needed || r != nil && r.busy || en.info.Update.Manual != ""
+		needed = needed || r != nil && r.busy || en.info.Update != nil && en.info.Update.Manual != ""
 	}
 	tone, icon, label := palette.blue, icArrowDown, "Updates"
 	switch {
@@ -348,7 +351,7 @@ func (a *app) cliUpdatesButton(c *ui.Context) {
 		label = "Updating"
 	}
 	b := ui.ButtonBase(c.Key("cli-updates")).Gap(5).AlignItems(ui.Center).Padding(4, 7).Radius(6).Shrink(0).
-		TextColor(tone).Background(tone.Alpha(0.14)).Cursor(ui.CursorPointer).Transition(hoverFade).Label("Agent CLI updates")
+		TextColor(palette.text).Background(tone.Alpha(0.14)).Cursor(ui.CursorPointer).Transition(hoverFade).Label("Agent CLI updates")
 	if a.clis.open || b.Hovered() {
 		b.Background(tone.Alpha(0.22))
 	}
@@ -357,7 +360,7 @@ func (a *app) cliUpdatesButton(c *ui.Context) {
 		if running {
 			ui.Spinner(c).Size(13, 13)
 		} else {
-			ui.Icon(c, icon).FontSize(14)
+			ui.Icon(c, icon).FontSize(14).TextColor(tone)
 		}
 		ui.Text(c, label).FontSize(12.5).FontWeight(550).SingleLine()
 		if len(pending) > 1 {
@@ -378,7 +381,7 @@ func (a *app) cliUpdatesButton(c *ui.Context) {
 			}
 			var runnable []cliEntry
 			for _, en := range pending {
-				if r := a.clis.runs[en.key]; en.info.Update.Manual == "" && online(en.env) && (r == nil || !r.running) {
+				if r := a.clis.runs[en.key]; en.info.Update != nil && en.info.Update.Manual == "" && online(en.env) && (r == nil || !r.running) {
 					runnable = append(runnable, en)
 				}
 			}
@@ -419,14 +422,20 @@ func (a *app) cliUpdatesTip(pending []cliEntry) string {
 				lines = append(lines, "")
 			}
 			m := en.env.Name
-			if en.env.Kind == client.Local {
+			switch {
+			case en.env.Kind == client.Local:
 				m = "This machine"
+			case m == "":
+				m = "A machine with no name"
 			}
 			lines = append(lines, m)
 			machine = en.env
 		}
 		u := en.info.Update
-		line := fmt.Sprintf("%s %s → %s", cliupdate.Name(en.key.provider), u.Installed, u.Latest)
+		line := cliupdate.Name(en.key.provider)
+		if u != nil {
+			line += fmt.Sprintf(" %s → %s", u.Installed, u.Latest)
+		}
 		r := a.clis.runs[en.key]
 		switch {
 		case r != nil && r.waiting:

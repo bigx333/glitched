@@ -95,6 +95,10 @@ func TestACLIAtItsLatestShowsNoUpdate(t *testing.T) {
 	_, engine := agyAt(t, "1.5.15", "1.5.15")
 	h := startWith(t, tempDir(t), engine)
 	h.until("antigravity's versions", func() bool { return h.a.models.served["antigravity"].Update != nil })
+	h.tt.Frame()
+	if showing(h, "Agent CLI updates") {
+		t.Errorf("a current CLI shows the sidebar's update button: %q", h.tt.Texts())
+	}
 	openProviders(h, "antigravity")
 	for _, s := range []string{"Agent CLI updates", "Update available"} {
 		if h.tt.HasText(s) {
@@ -115,6 +119,10 @@ func TestTheCLICheckTurnsOff(t *testing.T) {
 	allAnswered(h)
 	if u := h.a.models.served["antigravity"].Update; u != nil {
 		t.Fatalf("the check is off, and the engine checked: %+v", u)
+	}
+	h.tt.Frame()
+	if showing(h, "Agent CLI updates") {
+		t.Errorf("the check is off, and the sidebar shows its update button: %q", h.tt.Texts())
 	}
 	openProviders(h, "antigravity")
 	if showing(h, "Agent CLI updates") || h.tt.HasText("Update available") {
@@ -460,7 +468,7 @@ func hoverCLIButton(h *harness) string {
 	h.tt.Move(r.X+r.W/2, r.Y+r.H/2)
 	h.tt.Advance(2 * time.Second)
 	for _, s := range h.tt.Texts() {
-		if strings.Contains(s, " → ") && !strings.HasPrefix(s, "Update available") {
+		if strings.Contains(s, "Claude Code") || strings.Contains(s, "Codex ") || strings.Contains(s, "This machine") {
 			return s
 		}
 	}
@@ -524,5 +532,42 @@ func TestTheCLIUpdateButtonSaysWhichUpdateRunsFailedOrNeedsYou(t *testing.T) {
 	}
 	if tip, want := hoverCLIButton(h), "Claude Code 1.0.0 → 1.1.0 · update failed\nCodex 1.0.0 → 1.1.0 · update it yourself"; tip != want {
 		t.Errorf("the tooltip says %q, want %q", tip, want)
+	}
+}
+
+// A CLI whose engine, asked again mid-update, can't say its versions
+// stays on the button as updating, with no versions to name.
+func TestAnUpdatingCLIWithNoVersionsStaysOnTheButton(t *testing.T) {
+	h := start(t, tempDir(t))
+	allAnswered(h)
+	pending(h, "claude")
+	h.a.clis.runs[cliKey{h.a.backend.Envs()[0], "claude"}] = &cliRun{running: true}
+	p := h.a.models.served["claude"]
+	p.Update = nil
+	h.a.models.served["claude"] = p
+	h.tt.Frame()
+	if !showing(h, "Updating") {
+		t.Errorf("the update running doesn't show: %q", h.tt.Texts())
+	}
+	if tip := hoverCLIButton(h); tip != "Claude Code · updating" {
+		t.Errorf("the tooltip says %q", tip)
+	}
+}
+
+// An update Glitched runs shows the command it will run before the click,
+// in Settings › Providers and in the sidebar's list.
+func TestAnUpdateShowsItsCommandBeforeItRuns(t *testing.T) {
+	h := start(t, tempDir(t))
+	allAnswered(h)
+	pending(h, "claude")
+	h.click("Agent CLI updates")
+	h.tt.Advance(time.Second)
+	if !showing(h, "/bin/claude update") || !showing(h, "Update") {
+		t.Errorf("the list doesn't show the command beside Update: %q", h.tt.Texts())
+	}
+	h.click("Agent CLI updates")
+	openProviders(h, "claude")
+	if !showing(h, "/bin/claude update") || !showing(h, "Update") {
+		t.Errorf("the Providers row doesn't show the command beside Update: %q", h.tt.Texts())
 	}
 }

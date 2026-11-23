@@ -256,10 +256,13 @@ func (a *app) threadsNav(c *ui.Context) {
 		a.pluginSlot(c, "sidebar.footer", "", nil, false, true)
 		a.pluginNav(c)
 		ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+			updates := len(a.pendingCLIs()) > 0
 			if ghost(c, "settings", false).Padding(7, 8).Grow(1).Shrink(1).Children(func() {
 				ui.Icon(c, icSettings).FontSize(15)
 				ui.Text(c, "Settings").Grow(1).SingleLine()
-				shortcutHint(c, "⌘", ",")
+				if !updates {
+					shortcutHint(c, "⌘", ",")
+				}
 			}).Clicked() {
 				a.router.Push("/settings/general")
 			}
