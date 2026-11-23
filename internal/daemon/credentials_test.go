@@ -15,6 +15,8 @@ import (
 	"glitched/internal/provider"
 	"glitched/internal/provider/acp"
 	"glitched/internal/provider/acp/acptest"
+	"glitched/internal/provider/codex"
+	"glitched/internal/provider/codex/codextest"
 	"glitched/internal/transport"
 )
 
@@ -24,22 +26,46 @@ import (
 // though it came split across two messages. Nothing the engine keeps or
 // logs outside the vault holds the value.
 func TestAnACPAgentAsksForCredentials(t *testing.T) {
-	const value = "probe-value-0123"
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
+	wire := filepath.Join(t.TempDir(), "wire.jsonl")
+	t.Setenv(acptest.Scenario, "credentials")
+	t.Setenv(acptest.Log, wire)
+	asksForCredentials(t, provider.Mux{"antigravity": &acp.Adapter{Profile: acp.Antigravity, Path: self}},
+		api.ModelRef{Provider: "antigravity", Model: "fake-pro", Effort: "low"}, wire, 0)
+}
+
+// A Codex agent does the same, and waits for the user past Codex's 60 s
+// default for a tool call: the fake's second is 10 ms, and the user takes
+// a second, a hundred of them, to answer.
+func TestACodexAgentAsksForCredentials(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := filepath.Join(t.TempDir(), "wire.jsonl")
+	t.Setenv(codextest.Scenario, "credentials")
+	t.Setenv(codextest.Log, wire)
+	t.Setenv(codextest.Second, "10ms")
+	asksForCredentials(t, provider.Mux{"codex": &codex.Adapter{Path: self}},
+		api.ModelRef{Provider: "codex", Model: "gpt-6-luna", Effort: "low"}, wire, time.Second)
+}
+
+// asksForCredentials runs a turn on an engine of providers whose agent
+// asks for GLX_PROBE, provides it after delay, and checks where the value
+// went: to the vault and the agent's file, and redacted everywhere else,
+// the agent's wire included.
+func asksForCredentials(t *testing.T, providers provider.Mux, model api.ModelRef, wire string, delay time.Duration) {
+	t.Helper()
+	const value = "probe-value-0123"
 	var logs bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
-	wire := filepath.Join(t.TempDir(), "wire.jsonl")
-	t.Setenv(acptest.Scenario, "credentials")
-	t.Setenv(acptest.Log, wire)
 	dir := stateDir(t)
-	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Providers: provider.Mux{
-		"antigravity": &acp.Adapter{Profile: acp.Antigravity, Path: self},
-	}})
+	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Providers: providers})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +76,7 @@ func TestAnACPAgentAsksForCredentials(t *testing.T) {
 	defer cancel()
 	thread := api.NewID()
 	if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{
-		Workspace: t.TempDir(), Title: "t", Model: api.ModelRef{Provider: "antigravity", Model: "fake-pro", Effort: "low"},
+		Workspace: t.TempDir(), Title: "t", Model: model,
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +108,7 @@ func TestAnACPAgentAsksForCredentials(t *testing.T) {
 			text.WriteString(b.Text)
 		case api.RequestOpened:
 			asked = append(asked, b)
+			time.Sleep(delay)
 			if err := ep.ProvideCredentials(ctx, api.Provide{Thread: thread, Request: b.Request, Generation: b.Generation,
 				Values: map[string]string{"GLX_PROBE": value}}); err != nil {
 				t.Fatal(err)

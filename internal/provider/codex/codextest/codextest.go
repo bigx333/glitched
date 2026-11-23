@@ -7,6 +7,8 @@ package codextest
 import (
 	"bufio"
 	"bytes"
+	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"glitched/internal/mcp/mcptest"
 )
 
 const (
@@ -83,7 +87,21 @@ type fake struct {
 	steers  chan string
 
 	replay *replay
+	// glitched is the glitched MCP server thread/start configured.
+	glitched glitchedServer
 }
+
+// glitchedServer is an mcp_servers entry, as Codex's config takes it.
+type glitchedServer struct {
+	Command        string            `json:"command"`
+	Args           []string          `json:"args"`
+	Env            map[string]string `json:"env"`
+	ToolTimeoutSec float64           `json:"tool_timeout_sec"`
+}
+
+// Second is how long one of Codex's seconds is in the fake, so that its
+// 60 s default for a tool call can be met in a test: a duration, 1s unset.
+const Second = "GLITCHED_FAKE_CODEX_SECOND"
 
 // Main plays the fake app-server, until its stdin closes, when the
 // environment names a scenario, and reports whether it did. A test binary
@@ -257,7 +275,14 @@ func (f *fake) take(m message, raw []byte) {
 		f.mu.Unlock()
 		f.reply(m.ID, map[string]any{"thread": map[string]any{"id": p.ThreadID}, "model": "gpt-6.2-sol"})
 	case "thread/start":
+		var p struct {
+			Config struct {
+				Servers map[string]glitchedServer `json:"mcp_servers"`
+			} `json:"config"`
+		}
+		json.Unmarshal(m.Params, &p)
 		f.mu.Lock()
+		f.glitched = p.Config.Servers["glitched"]
 		f.thread = fmt.Sprintf("019a0000-0000-7000-8000-%012d", f.pid)
 		thread := f.thread
 		os.WriteFile(f.rollout(thread), nil, 0o600)
@@ -409,6 +434,47 @@ func (f *fake) play(n int, turn, said string) {
 		f.message("msg-"+turn, "decision "+d)
 	case "memory":
 		f.message("msg-"+turn, "earlier you said: "+strings.ReplaceAll(strings.TrimSpace(said), "\n", " | "))
+	case "credentials":
+		// The agent asks for GLX_PROBE through glitched mcp, giving up
+		// at its tool timeout as Codex does (60 s unless configured), then
+		// echoes the value it read, split across two deltas a flush apart.
+		f.mu.Lock()
+		srv := f.glitched
+		f.mu.Unlock()
+		f.record("tool_timeout_sec", srv.ToolTimeoutSec)
+		second, err := time.ParseDuration(os.Getenv(Second))
+		if err != nil {
+			second = time.Second
+		}
+		timeout := cmp.Or(srv.ToolTimeoutSec, 60)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout*float64(second)))
+		var env []string
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, Scenario+"=") {
+				env = append(env, kv)
+			}
+		}
+		for k, v := range srv.Env {
+			env = append(env, k+"="+v)
+		}
+		result, err := mcptest.RequestCredentials(ctx, srv.Command, srv.Args, env)
+		cancel()
+		if err != nil {
+			f.message("msg-"+turn, "The ask failed: "+err.Error())
+			break
+		}
+		var r struct {
+			Status string
+			Files  map[string]string
+		}
+		json.Unmarshal(result, &r)
+		v, _ := os.ReadFile(r.Files["GLX_PROBE"])
+		id := "msg-" + turn
+		f.item("item/started", map[string]any{"type": "agentMessage", "id": id, "text": ""})
+		f.notify("item/agentMessage/delta", map[string]any{"threadId": thread, "turnId": turn, "itemId": id, "delta": r.Status + ": the key is " + string(v[:len(v)/2])})
+		time.Sleep(150 * time.Millisecond)
+		f.notify("item/agentMessage/delta", map[string]any{"threadId": thread, "turnId": turn, "itemId": id, "delta": string(v[len(v)/2:]) + "."})
+		f.item("item/completed", map[string]any{"type": "agentMessage", "id": id, "text": r.Status + ": the key is " + string(v) + ".", "phase": "final_answer"})
 	case "two-messages":
 		f.message("msg-a", "first")
 		f.message("msg-b", "second")

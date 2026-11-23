@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"glitched/internal/api"
 )
@@ -136,6 +137,9 @@ type MCPServer struct {
 	Env          map[string]string
 	Instructions string
 	Trusted      bool
+	// ToolTimeout is how long the agent waits on one of its tools' calls,
+	// where the agent takes one: 0 leaves its default.
+	ToolTimeout time.Duration
 }
 
 // RuntimeIdentity is what the engine persisted about a run. The adapter tags
