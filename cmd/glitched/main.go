@@ -357,7 +357,7 @@ func run(ctx context.Context, args []string) error {
 	threadFlag := fs.String("thread", "", "thread to send to; a new one when empty")
 	yes := fs.Bool("yes", false, "approve every request, and dismiss every question, without asking")
 	modeFlag := fs.String("mode", "after", "now, after, steer, restart or defer; restart also ends an uncertain run")
-	providerFlag := fs.String("provider", "fake", "the provider a new thread runs, by the engine's name for it, such as fake, claude or antigravity")
+	providerFlag := fs.String("provider", "fake", "the provider a new thread runs, by the engine's name for it, such as fake, claude, codex or antigravity")
 	modelFlag := fs.String("model", "", "the model a new thread runs, by its provider's id for it; empty is the provider's default")
 	fs.Parse(args)
 	mode, ok := modes[*modeFlag]

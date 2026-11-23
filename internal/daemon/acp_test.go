@@ -14,11 +14,12 @@ import (
 	"glitched/internal/provider"
 	"glitched/internal/provider/acp"
 	"glitched/internal/provider/acp/acptest"
+	"glitched/internal/provider/codex/codextest"
 	"glitched/internal/transport"
 )
 
 func TestMain(m *testing.M) {
-	if acptest.Main() {
+	if acptest.Main() || codextest.Main() {
 		return
 	}
 	os.Exit(m.Run())
