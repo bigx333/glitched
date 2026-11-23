@@ -235,7 +235,7 @@ func (a *Adapter) Reconcile(ctx context.Context, id provider.RuntimeIdentity) (p
 	if err := a.parked().Drop(ctx, id.Thread); err != nil {
 		return nil, err
 	}
-	found, err := stopMarked(ctx, id.Thread.String()+"-", nil)
+	found, err := marked.Stop(ctx, id.Thread.String()+"-", nil)
 	switch {
 	case err != nil:
 		return nil, err

@@ -1,4 +1,4 @@
-package acp
+package sweep
 
 import (
 	"bytes"
@@ -24,10 +24,10 @@ func processes() []process {
 	return out
 }
 
-// carries is whether pid's environment holds a mark under prefix. The
+// Carries is whether pid's environment holds a mark under prefix. The
 // kernel lays it out as argc, the executable's path, NUL padding, argc
 // arguments, then the environment up to an empty string.
-func carries(pid int, prefix string) bool {
+func (m Mark) Carries(pid int, prefix string) bool {
 	args, err := unix.SysctlRaw("kern.procargs2", pid)
 	if err != nil || len(args) < 4 {
 		return false
@@ -50,7 +50,7 @@ func carries(pid int, prefix string) bool {
 		if len(kv) == 0 {
 			return false
 		}
-		if marks(string(kv), prefix) {
+		if m.marks(string(kv), prefix) {
 			return true
 		}
 	}

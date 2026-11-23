@@ -189,7 +189,7 @@ func TestCloseStopsAToolItsAgentLeftWithNoMark(t *testing.T) {
 	}
 	t.Cleanup(func() { syscall.Kill(child, syscall.SIGKILL) })
 	p := g.(*Agent).p
-	t.Logf("before close: parent %d, live child %d, visible ACP mark %v", p.cmd.Process.Pid, child, carries(child, p.mark))
+	t.Logf("before close: parent %d, live child %d, visible ACP mark %v", p.cmd.Process.Pid, child, marked.Carries(child, p.mark))
 	closeRun(t, g)
 	if err := a.Close(); err != nil {
 		t.Fatal(err)

@@ -25,12 +25,15 @@ import (
 	"glitched/internal/mcp"
 	"glitched/internal/provider"
 	"glitched/internal/provider/park"
+	"glitched/internal/provider/sweep"
 )
 
 // procEnv names, in the environment of an agent, its mark: the thread it
 // serves and the launch. Every process the agent starts inherits it, so
 // the engine can find them all after the engine that started them is gone.
 const procEnv = "GLITCHED_ACP_PROCESS"
+
+var marked = sweep.Mark{Env: procEnv}
 
 // wireEnv names a file every line to and from an agent is appended to,
 // for a capture of the wire. Unset, nothing is written.
@@ -46,7 +49,7 @@ var (
 )
 
 // killGrace is how long a process asked to stop has before it is killed.
-const killGrace = 2 * time.Second
+const killGrace = sweep.KillGrace
 
 // drainGrace is how long, once the agent has exited, its output may stay
 // quiet before the adapter stops reading it: a process it left behind can
@@ -116,7 +119,7 @@ func launch(ctx context.Context, profile Profile, bin, dir, mark string) (*proc,
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	cmd.Env = append(cmd.Env, procEnv+"="+mark)
-	cmd.SysProcAttr = sysProcAttr()
+	cmd.SysProcAttr = sweep.SysProcAttr()
 	p := &proc{profile: profile, cmd: cmd, mark: mark, stderr: &tail{}, heard: make(chan struct{}), read: make(chan struct{}), reaped: make(chan struct{})}
 	// The adapter's own pipes, unlike exec's, leave Wait nothing to wait
 	// for once the agent exits, whoever else still holds them.
@@ -145,7 +148,7 @@ func launch(ctx context.Context, profile Profile, bin, dir, mark string) (*proc,
 	p.stdin = inW
 	go func() {
 		p.exitErr = cmd.Wait()
-		p.left = group(cmd.Process.Pid)
+		p.left = sweep.Group(cmd.Process.Pid)
 		close(p.reaped)
 	}()
 	wire := openWire()
@@ -530,7 +533,7 @@ func (p *proc) stop(ctx context.Context, seen map[int]int64) error {
 		maps.Copy(seen, p.left)
 	default:
 	}
-	if _, err := stopMarked(ctx, p.mark, seen); err != nil {
+	if _, err := marked.Stop(ctx, p.mark, seen); err != nil {
 		return err
 	}
 	select {
@@ -590,7 +593,7 @@ func (p *proc) Done() <-chan struct{} { return p.reaped }
 // the agent left may hold stdout open.
 func (p *proc) Close(ctx context.Context) error {
 	seen := map[int]int64{}
-	scan(p.mark, seen)
+	marked.Scan(p.mark, seen)
 	p.closing.Do(func() { p.stdin.Close() })
 	select {
 	case <-p.reaped:
