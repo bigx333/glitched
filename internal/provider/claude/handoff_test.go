@@ -187,7 +187,7 @@ func TestAClosingClaudeCannotDelegateForTheNextTurn(t *testing.T) {
 	t.Setenv(envResume, filepath.Join(must(os.Getwd()), "testdata", "again-resume.jsonl"))
 	ad := &gatedAdapter{&claude.Adapter{Path: must(os.Executable())}, &closeGate{entered: make(chan struct{}), proceed: make(chan struct{})}}
 	st := must(store.Open(filepath.Join(dir, "db")))
-	sock := transport.Loopback{Network: "unix", Address: filepath.Join(dir, "s")}
+	sock := transport.Loopback{Network: "unix", Address: socketPath(t)}
 	mux := provider.Mux{"claude": &firstOnClaude{claude: ad, rest: fake.New(fake.Turn(false))}}
 	h := must(runtime.New(ctx, st, mux, runtime.WithMCP(mcp.Launcher{Command: must(os.Executable()), Engine: sock.Address})))
 	ln := must(sock.Listen(ctx))

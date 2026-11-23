@@ -84,7 +84,10 @@ func TestNoAnswerApprovesALineAGrowingDraftCovered(t *testing.T) {
 				}
 				h.a.draft = tallDraft
 				header, _ := h.tt.Find("Approval needed")
-				h.tt.Scroll(header.X+60, header.Y+header.H+40, 0, 80)
+				// The args' last line, which no frame drew, scrolled to the
+				// box's end, the last place the composer grows over in it.
+				s, rd := h.a.drawn[r.Request], h.a.reads[r.Request]
+				h.tt.Scroll(header.X+60, header.Y+header.H+40, 0, rd.last.Y+rd.last.H-s.texts.Y-s.texts.H)
 				h.tt.Frame()
 				h.tt.Advance(time.Second)
 				if legibleNow(h, r, "args", dropNeedle) {
@@ -168,8 +171,8 @@ func TestNoAnswerApprovesALineTheAgentsPanelCovered(t *testing.T) {
 	// shows only scrolled to.
 	body, _ := json.Marshal(map[string]string{"operation": "use mcp__db__exec", "args": dropTable,
 		"reason": strings.Repeat("Check the users table.\n", 7) + dropNeedle})
-	for _, ht := range []int{660, 700} {
-		t.Run(fmt.Sprintf("1320x%d", ht), func(t *testing.T) {
+	for _, by := range []int{0, 40} {
+		t.Run(fmt.Sprintf("box ends %d above it", by), func(t *testing.T) {
 			dir := tempDir(t)
 			d := engine(t, daemon.Config{Dir: dir}, burst{[]provider.Event{provider.RequestOpened{ID: "ask", Kind: "approval", Body: body}}})
 			top := seed(t, d, "/work/t3code", "Top")
@@ -177,7 +180,7 @@ func TestNoAnswerApprovesALineTheAgentsPanelCovered(t *testing.T) {
 				seedChild(t, d, top, fmt.Sprint("Kid ", i))
 			}
 			h := start(t, dir)
-			h.tt.SetSize(1320, ht)
+			h.tt.SetSize(1320, 660)
 			h.a.select_(h.thread("Top"))
 			h.tt.Advance(time.Second)
 			h.click("Agents")
@@ -193,6 +196,11 @@ func TestNoAnswerApprovesALineTheAgentsPanelCovered(t *testing.T) {
 			h.until("the approval card", func() bool { return h.tt.HasText("Approval needed") })
 			h.tt.Advance(time.Second)
 			r := lastRequest(h.a.current())
+			// The window as tall as ends the box by above the reason's last
+			// line, which the panel's glass hid from every frame.
+			s, rd := h.a.drawn[r.Request], h.a.reads[r.Request]
+			h.tt.SetSize(1320, 660+int(rd.last.Y-s.texts.Y-s.texts.H)-by)
+			h.tt.Advance(time.Second)
 			// Its last line at the box's end, under the panel's glass.
 			scrollTexts(h, 10000)
 			scrollTexts(h, -10000)

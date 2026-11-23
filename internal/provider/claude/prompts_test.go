@@ -345,7 +345,8 @@ type reply struct {
 // the answers s replied.
 func checkReplies(t *testing.T, s promptScenario, l promptLog, got map[string][]reply, tape string) {
 	t.Helper()
-	asked := inputs(tape, l.workspace)
+	// Claude Code names the workspace by the path it resolves to.
+	asked := inputs(tape, must(filepath.EvalSymlinks(l.workspace)))
 	for _, r := range l.requests {
 		replies := got[r.opened.Dedup]
 		if r.answer == nil {

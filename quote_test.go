@@ -846,12 +846,15 @@ func TestSelectionBarLeavesJumpToLatest(t *testing.T) {
 	}
 	// The lowest paragraph wholly over the pill.
 	var para ui.Rect
+	var text string
 	for _, s := range h.tt.Texts() {
 		if r, ok := h.tt.Find(s); ok && strings.HasPrefix(s, "Paragraph ") && r.Y+r.H < jump.Y-4 && r.Y > para.Y {
-			para = r
+			para, text = r, s
 		}
 	}
-	doubleClickAt(h, para.X+200, para.Y+para.H/2)
+	// Its word "goes", where the reply's font lays it out.
+	goes := ui.Shape(text, ui.Font{Size: ui.LightTheme().FontSize})[strings.Index(text, "goes")]
+	doubleClickAt(h, para.X+goes.X+goes.Advance/2, para.Y+para.H/2)
 	h.tt.Move(1, 1)
 	h.tt.Advance(time.Second)
 	if !barShown(h) {

@@ -96,7 +96,7 @@ func TestRunTakesStdinCwdAndStatus(t *testing.T) {
 }
 
 func TestRunSetsOnlyHarmlessVariables(t *testing.T) {
-	s := spec("printenv", "GLITCHED_PLUGIN_WORD", "LC_ALL")
+	s := spec("sh", "-c", `printf "%s\n" "$GLITCHED_PLUGIN_WORD" "$LC_ALL"`)
 	s.Env = map[string]string{"GLITCHED_PLUGIN_WORD": "hello", "LC_ALL": "C"}
 	if res := mustRun(t, s); string(res.Stdout) != "hello\nC\n" {
 		t.Fatalf("got %q", res.Stdout)
