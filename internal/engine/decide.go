@@ -494,7 +494,13 @@ func (d *decision) release() error {
 	return nil
 }
 
+// resume is the user's go-ahead after a stop. A live run holds the
+// wakes until it ends, and a resume can't wait for that: with nothing of
+// the user's held, it's refused, for them to resume once the run ends.
 func (d *decision) resume() error {
+	if d.t.Live() != nil && !d.t.holding() {
+		return rejected("the agent is still at work; resume once its run ends")
+	}
 	d.resumed = true
 	return d.release()
 }
@@ -882,22 +888,18 @@ func (d *decision) report(run api.ID, kind api.ReportKind, failure string, ask j
 }
 
 func (d *decision) rewound() error {
-	live := d.t.Live()
-	if live == nil {
-		return nil
-	}
-	if live.State != RunUncertain {
+	if live := d.t.Live(); live != nil && live.State != RunUncertain {
 		if err := d.emit(api.TurnUncertain{Run: live.ID}); err != nil {
 			return err
 		}
 	}
-	var ready []api.ID
+	var queued []api.ID
 	for _, m := range d.t.Queue {
-		if m.State == QueueReady {
-			ready = append(ready, m.ID)
+		if m.State == QueueReady || m.State == QueueHeld && m.Mode == api.Defer {
+			queued = append(queued, m.ID)
 		}
 	}
-	for _, id := range ready {
+	for _, id := range queued {
 		if err := d.emit(api.MessageCancelled{Message: id, Reason: "the database was restored; send again if it never ran"}); err != nil {
 			return err
 		}

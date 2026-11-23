@@ -452,16 +452,18 @@ func upgradeOnce(ctx context.Context, conn *sql.Conn, version int) error {
 }
 
 // rewind gives the log a new id, for a database that is behind what its
-// clients saw. Every run it left live becomes uncertain and every ready
-// message behind one is cancelled: what it holds in flight may already have
-// reached the agent in the history it lost, and what it holds queued may
-// already have run there. It returns the new head.
+// clients saw. Every run it left live becomes uncertain and every message
+// of the user's waiting its turn, ready or held, is cancelled: what it
+// holds in flight may already have reached the agent in the history it
+// lost, and what it holds queued may already have run there, after a send
+// or a resume. It returns the new head.
 func (s *Store) rewind(ctx context.Context, tx *sql.Tx) (uint64, error) {
 	s.log = api.NewID()
 	if _, err := tx.ExecContext(ctx, `UPDATE meta SET value = ? WHERE key = 'log'`, s.log[:]); err != nil {
 		return 0, err
 	}
-	threads, err := ids(ctx, tx, `SELECT thread FROM runs WHERE state <> 'finished' ORDER BY thread`)
+	threads, err := ids(ctx, tx, `SELECT thread FROM runs WHERE state <> 'finished'
+		UNION SELECT thread FROM messages WHERE state = 'held' AND mode = ? ORDER BY thread`, api.Defer)
 	if err != nil {
 		return 0, err
 	}

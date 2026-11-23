@@ -374,6 +374,9 @@ type Thread struct {
 	// Confirmed is what the thread's provider last confirmed its agent
 	// runs at, which Model and Access may be ahead of.
 	Confirmed Confirmed `json:"confirmed,omitzero"`
+	// Resumable is whether QueueResume would start something: the thread is
+	// idle and holds what a stop held, a Defer, or the wakes a stop held.
+	Resumable bool `json:"resumable,omitempty"`
 	// Deleted is the tombstone: the last view a deleted thread has, which
 	// the shell stream sends once so that clients drop it. No read returns
 	// one.
