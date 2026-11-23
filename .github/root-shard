@@ -54,7 +54,7 @@ run)
 	for p in $(seq 1 "$4"); do
 		run=$(split "$4" <<<"$shard" | part "$p" | paste -sd'|' -)
 		[ -n "$run" ] || continue
-		( set -o pipefail; "$bin" -test.count=1 -test.timeout 20m -test.run "^($run)\$" 2>&1 | sed -u "s/^/[$p] /" ) &
+		( set -o pipefail; "$bin" -test.count=1 -test.paniconexit0 -test.timeout 20m -test.run "^($run)\$" 2>&1 | sed -u "s/^/[$p] /" ) &
 		pids+=($!)
 	done
 	failed=0
@@ -64,6 +64,12 @@ run)
 check)
 	n=$2
 	all=$(tests)
+	dups=$(sort <<<"$all" | uniq -d)
+	if [ -n "$dups" ]; then
+		echo "these names are two tests each, so a shard's -test.run would run both, and every shard that names one runs it again:"
+		echo "$dups"
+		exit 1
+	fi
 	split=$(split "$n" <<<"$all")
 	for i in $(seq 1 "$n"); do
 		[ -n "$(part "$i" <<<"$split")" ] || { echo "shard $i of $n is empty"; exit 1; }
