@@ -281,12 +281,16 @@ func (p *proc) startThread(ctx context.Context, spec provider.SessionSpec) (lost
 		err := p.conn.call(ctx, "thread/resume", resume, &r)
 		var re *rpcError
 		switch {
+		case err == nil && r.Thread.ID != spec.Session:
+			return false, fmt.Errorf("Codex resumed thread %q for %q.", r.Thread.ID, spec.Session)
 		case err == nil:
 			return false, p.bind(r.Thread.ID)
-		case errors.As(err, &re) && strings.Contains(re.Message, "active writer"):
-			return false, errors.New(inUse)
 		case !errors.As(err, &re):
 			return false, p.failure("resume the thread", err)
+		case strings.Contains(re.Message, "active writer"):
+			return false, errors.New(inUse)
+		case !strings.Contains(re.Message, "no rollout found"):
+			return false, fmt.Errorf("Codex didn't resume the thread's conversation: %s", re.Message)
 		}
 		slog.Info("codex: Codex no longer has the thread", "thread", spec.Session, "err", re.Message)
 		lost = true

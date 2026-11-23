@@ -237,8 +237,15 @@ func (f *fake) take(m message, raw []byte) {
 	case "thread/resume":
 		var p struct{ ThreadID string }
 		json.Unmarshal(m.Params, &p)
-		if f.scenario == "writer" {
+		switch f.scenario {
+		case "writer":
 			f.refuse(m.ID, -32600, "thread "+p.ThreadID+" already has an active writer")
+			return
+		case "closing":
+			f.refuse(m.ID, -32600, "thread "+p.ThreadID+" is closing; try again")
+			return
+		case "other-id":
+			f.reply(m.ID, map[string]any{"thread": map[string]any{"id": p.ThreadID + "-other"}})
 			return
 		}
 		if _, err := os.Stat(f.rollout(p.ThreadID)); err != nil {
