@@ -79,6 +79,7 @@ var Effects = map[string]string{
 	"projects.list":          "threads:read",
 	"projects.filter":        "threads:read",
 	"projects.add":           "threads:write",
+	"projects.clone":         "threads:write",
 	"commands.list":          "commands",
 	"commands.run":           "commands",
 }
