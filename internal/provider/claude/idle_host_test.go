@@ -1,8 +1,11 @@
 package claude_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -115,5 +118,35 @@ func TestClaudeSettingsTurnIdleCompactionOff(t *testing.T) {
 				t.Errorf("runs %+v, cache expiry %v: want one run and none", th.Runs, th.Context.CacheExpires)
 			}
 		})
+	}
+}
+
+// A thread that follows the CLI's default sends no model when it
+// compacts, as when it runs a turn: no claude it starts gets --model.
+func TestAFollowingThreadCompactsOnTheDefault(t *testing.T) {
+	argv := filepath.Join(t.TempDir(), "argv")
+	t.Setenv(envArgv, argv)
+	h, st := idleHost(t, "")
+	thread := api.NewID()
+	submit(t, h, thread, api.ThreadCreate{Workspace: t.TempDir(), Title: "hi", Access: api.AccessAsk, Model: api.ModelRef{Provider: "claude"}})
+	turn(t, h, thread, "work")
+	for deadline := time.Now().Add(turnWait); ; time.Sleep(10 * time.Millisecond) {
+		th := must(st.Thread(ctx, thread))
+		if len(th.Runs) == 2 && th.Runs[1].Silent && th.Runs[1].State == eng.RunFinished {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no idle compaction: runs %+v", th.Runs)
+		}
+	}
+	data := must(os.ReadFile(argv))
+	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var args []string
+		if err := json.Unmarshal([]byte(l), &args); err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(args, "--model") || slices.Contains(args, "--effort") {
+			t.Errorf("a following thread's claude started with %q", args)
+		}
 	}
 }
