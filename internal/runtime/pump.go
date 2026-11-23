@@ -85,7 +85,11 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 					Path: ev.Path, Exit: ev.Exit, Output: redact(output)}})
 			case provider.RequestOpened:
 				flushText()
-				commit(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: ev.ID, Kind: ev.Kind, Body: json.RawMessage(redact(string(ev.Body)))})
+				body := ev.Body
+				if s := redact(string(body)); s != string(body) {
+					body = json.RawMessage(s)
+				}
+				commit(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: ev.ID, Kind: ev.Kind, Body: body})
 			case provider.RequestWithdrawn:
 				flushText()
 				commit(engine.Withdrawn{Run: run, Dedup: ev.ID, Reason: ev.Reason})
