@@ -318,16 +318,58 @@ func TestAReplacedWorktreeIsNotRemoved(t *testing.T) {
 	}
 }
 
-// Two threads whose IDs end alike get worktrees of their own.
+// Two threads whose IDs end alike get worktrees and branches of their
+// own.
 func TestThreadsWhoseIDsEndAlikeGetWorktreesOfTheirOwn(t *testing.T) {
 	w := serveWorktrees(t)
 	project := repo(t)
 	a, b := api.ID{6: 1}, api.ID{6: 2}
 	submit(t, w.h, a, inWorktree(project, ""))
-	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: b, Body: inWorktree(project, "")})
-	if err == nil && view(t, w.h, b).Workspace == view(t, w.h, a).Workspace {
-		t.Fatalf("two threads share the worktree %q", view(t, w.h, a).Workspace)
+	submit(t, w.h, b, inWorktree(project, ""))
+	x, y := view(t, w.h, a), view(t, w.h, b)
+	if x.Workspace == y.Workspace || x.Branch == y.Branch {
+		t.Fatalf("two threads share %q on %q", x.Workspace, x.Branch)
 	}
+}
+
+// Files git was told not to look at keep a worktree from a plain
+// removal, and one git won't remove, as a locked one, stays.
+func TestAWorktreeGitWontVouchForStays(t *testing.T) {
+	w := serveWorktrees(t)
+	project := repo(t)
+	make := func() api.Thread {
+		thread := api.NewID()
+		submit(t, w.h, thread, inWorktree(project, ""))
+		return until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
+	}
+	flagged := make()
+	gitIn(t, flagged.Workspace, "update-index", "--skip-worktree", "README")
+	os.WriteFile(filepath.Join(flagged.Workspace, "README"), []byte("mine\n"), 0o644)
+	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: flagged.ID, Body: api.ThreadDelete{Worktree: api.RemoveWorktree}})
+	refusal(t, err, "uncommitted change")
+
+	locked := make()
+	gitIn(t, project, "worktree", "lock", locked.Workspace)
+	submit(t, w.h, locked.ID, api.ThreadDelete{Worktree: api.RemoveWorktreeChanges})
+	if _, err := os.Stat(locked.Workspace); err != nil {
+		t.Fatalf("a locked worktree went: %v", err)
+	}
+}
+
+// A worktree git didn't finish making, as one whose checkout hook
+// failed, is kept, and a retry of its create is refused, not given it.
+func TestAWorktreeLeftUnfinishedIsNeverTakenForMade(t *testing.T) {
+	w := serveWorktrees(t)
+	project := repo(t)
+	hook := filepath.Join(project, ".git", "hooks", "post-checkout")
+	os.WriteFile(hook, []byte("#!/bin/sh\necho made > half.txt\nexit 1\n"), 0o755)
+	c := api.Command{ID: api.NewID(), Target: api.NewID(), Body: inWorktree(project, "")}
+	if _, err := w.h.Submit(ctx, c); err == nil {
+		t.Fatal("a create whose checkout hook failed went")
+	}
+	os.Remove(hook)
+	_, err := w.h.Submit(ctx, c)
+	refusal(t, err, "was never finished")
 }
 
 // A create the engine would refuse runs no git, and the same command ID
@@ -374,7 +416,7 @@ func TestAFolderTheBaseLacksIsRefused(t *testing.T) {
 	sub := filepath.Join(project, "scratch")
 	os.Mkdir(sub, 0o755)
 	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: api.NewID(), Body: inWorktree(sub, "")})
-	refusal(t, err, "is not a folder of the worktree")
+	refusal(t, err, "is not a folder on HEAD")
 	if out := gitIn(t, project, "worktree", "list", "--porcelain"); strings.Count(out, "worktree ") != 1 {
 		t.Errorf("the refused create left a worktree:\n%s", out)
 	}

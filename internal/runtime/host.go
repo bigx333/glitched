@@ -36,6 +36,7 @@ type Host struct {
 	mcp       *mcp.Launcher        // how each run's agent starts glitched mcp; nil runs it without
 	servers   []provider.MCPServer // the engine's own MCP servers, which every run's agent gets after glitched mcp
 	worktrees string               // where the threads' worktrees go; "" makes none
+	making    sync.Mutex           // held while a worktree is made, so a create sent twice at once makes one
 
 	ctx    context.Context
 	cancel context.CancelFunc
