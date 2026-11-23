@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/ui"
+
 	"glitched/internal/api"
 	"glitched/internal/daemon"
 	"glitched/internal/provider"
@@ -317,9 +319,13 @@ func TestTheModelButtonNamesTheEffortThatRuns(t *testing.T) {
 		if !h.tt.HasText("Low") || h.tt.HasText("High") {
 			t.Errorf("%s button doesn't name the effort that runs: %q", drawn, h.tt.Texts())
 		}
-		if h.a.effort != "high" {
-			t.Errorf("%s picker's chosen effort is %q, want high", drawn, h.a.effort)
+		h.click("Model")
+		pickerSettle(t, h)
+		if s, ok := h.tt.AccessByRole(ui.RoleSlider, "Effort"); !ok || s.Now != 2 || h.a.current().View.Model.Effort != "high" {
+			t.Errorf("%s picker doesn't keep High chosen: slider found %v at %v, thread at %q", drawn, ok, s.Now, h.a.current().View.Model.Effort)
 		}
+		h.click("Model")
+		pickerSettle(t, h)
 	}
 	if app := h.a.plugins.App("model-picker"); app == nil || app.PlaceView("picker", id.String()+"/button") == nil {
 		t.Fatalf("the built-in doesn't draw the model button: %q", h.tt.Texts())

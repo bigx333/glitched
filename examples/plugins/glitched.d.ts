@@ -372,7 +372,9 @@ type NativeWidget = {
     }
   | {
       /**
-       * In composer.model: the name of the effort the thread runs at, in its color; fast mode's
+       * In composer.model: the effort's name in its color, as the button shows
+       * it: what the thread's provider runs at where it runs another than
+       * the one chosen, though the slider keeps the choice; fast mode's
        * lightning while it's on, nothing while it's off; or the effort's
        * slider under its name and fast mode's switch.
        */

@@ -7,6 +7,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/provider"
 )
 
 // choiceStanding is how a composer control's value stands for its thread against
@@ -207,8 +208,7 @@ func (a *app) unconfirmedMark(c *ui.Context, p choiceStanding) {
 
 // runningModel is the model's name and the effort the model button shows
 // for t: the chosen ones, or what its provider really runs where it runs
-// another, an effort Glitched doesn't know by its id in the chosen one's
-// color.
+// another.
 func (a *app) runningModel(t thread, name string) (string, effortInfo) {
 	effort := a.efforts()[a.effortLevel()]
 	v := a.chosenView(t)
@@ -221,7 +221,7 @@ func (a *app) runningModel(t thread, name string) (string, effortInfo) {
 		name = cmp.Or(info.name, g.Model)
 	}
 	if v.EffortStanding() == api.Short {
-		effort = effortInfo{id: g.Effort, label: g.Effort, color: effort.color}
+		effort = effortOf(provider.Effort{ID: g.Effort})
 		for _, e := range effortsOf(info) {
 			if e.id == g.Effort {
 				effort = e
