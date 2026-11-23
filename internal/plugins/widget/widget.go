@@ -787,6 +787,11 @@ func (c *checker) value(n *Node) error {
 		if !found {
 			return fmt.Errorf("value %q is none of the options", s)
 		}
+	case "badge":
+		var v float64
+		if n.Style != "pill" || json.Unmarshal(n.Value, &v) != nil || v < 0 || v > 1 {
+			return fmt.Errorf("a badge's value is a pill's, a number from 0 to 1")
+		}
 	case "list":
 		var s string
 		if json.Unmarshal(n.Value, &s) != nil {

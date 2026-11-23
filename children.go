@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 
@@ -366,8 +367,8 @@ func (a *app) crumb(c *ui.Context, x thread, nth int) {
 // rolled up. It is a copy of thread.header.usage, which the built-in Child
 // threads draws.
 func (a *app) usagePill(c *ui.Context, t thread) {
-	u := headerUsage{Tokens: t.View.Tokens, Total: a.usage(t)}
-	if u.Total == 0 {
+	u := headerUsage{Tokens: t.View.Tokens, Total: a.usage(t), Context: t.View.Context}
+	if u.Total == 0 && u.Context == nil {
 		return
 	}
 	a.pluginComponent(c, "thread.header.usage", &t, componentCopy{
@@ -384,23 +385,68 @@ func (a *app) usagePill(c *ui.Context, t thread) {
 }
 
 // headerUsage is the context of thread.header.usage: the thread's own
-// tokens, and its and every thread's under it.
+// tokens, its and every thread's under it, and how full its context is,
+// nil before its agent said.
 type headerUsage struct {
-	Thread plugins.ThreadRecord `json:"thread"`
-	Tokens int64                `json:"tokens"`
-	Total  int64                `json:"total"`
+	Thread  plugins.ThreadRecord `json:"thread"`
+	Tokens  int64                `json:"tokens"`
+	Total   int64                `json:"total"`
+	Context *api.Context         `json:"context,omitempty"`
 }
 
 // usageBadge is the built-in Child threads' drawing of the usage u, as its
-// main.js draws it: a pill of the tokens, and with children, everything
-// under the thread rolled up.
+// main.js draws it. Once the agent said how full the context is, a meter
+// of it: a ring and the share used, amber from 75% and red from 90%, or
+// what is known of it; the tokens move to its tooltip. Before, a pill of
+// the tokens, and with children, everything under the thread rolled up.
 func usageBadge(u headerUsage) *widget.Node {
 	label, tip := fmtTokens(u.Tokens)+" tokens", "This thread's tokens"
 	if u.Total != u.Tokens {
 		label = fmtTokens(u.Tokens) + " · " + fmtTokens(u.Total) + " with children"
 		tip = fmt.Sprintf("This thread %s, its child threads %s", fmtTokens(u.Tokens), fmtTokens(u.Total-u.Tokens))
 	}
-	return &widget.Node{Type: "badge", Style: "pill", Text: label, Tooltip: tip}
+	c := u.Context
+	if c == nil {
+		return &widget.Node{Type: "badge", Style: "pill", Text: label, Tooltip: tip}
+	}
+	if u.Total == u.Tokens {
+		tip = "This thread's tokens " + fmtTokens(u.Tokens)
+	}
+	switch {
+	case c.Stale:
+		return &widget.Node{Type: "badge", Style: "pill", Text: "Compacted", Value: json.RawMessage("0"), Color: "$text.faint",
+			Tooltip: "Context compacted. Its size shows after the next reply.\n" + tip}
+	case c.Window == 0:
+		return &widget.Node{Type: "badge", Style: "pill", Text: contextTokens(c.Used) + " in context",
+			Tooltip: contextTokens(c.Used) + " tokens in context. Context limit not reported.\n" + tip}
+	}
+	pct := (c.Used*100 + c.Window/2) / c.Window
+	color := ""
+	switch {
+	case pct >= 90:
+		color = "$danger"
+	case pct >= 75:
+		color = "$warning"
+	}
+	share := strconv.FormatFloat(math.Round(min(1, float64(c.Used)/float64(c.Window))*1e4)/1e4, 'f', -1, 64)
+	return &widget.Node{Type: "badge", Style: "pill", Text: fmt.Sprintf("%d%%", pct), Value: json.RawMessage(share), Color: color,
+		Tooltip: fmt.Sprintf("Context window %s / %s tokens, %d%% left\n", contextTokens(c.Used), contextTokens(c.Window), max(0, 100-pct)) + tip}
+}
+
+// contextTokens is n as the meter writes it: whole under a thousand, else
+// in whole thousands, else in millions to a tenth, a half rounded up.
+func contextTokens(n int64) string {
+	switch k := (n + 500) / 1000; {
+	case n < 1000:
+		return strconv.FormatInt(n, 10)
+	case k < 1000:
+		return strconv.FormatInt(k, 10) + "k"
+	}
+	tenths := (n + 50000) / 100000
+	if tenths%10 == 0 {
+		return strconv.FormatInt(tenths/10, 10) + "m"
+	}
+	return fmt.Sprintf("%d.%dm", tenths/10, tenths%10)
 }
 
 // stillBlocked is whether a blocked report of child's, in t's transcript,
