@@ -24,6 +24,7 @@ import (
 	"glitched/internal/provider/claude"
 	"glitched/internal/provider/claude/transcript"
 	"glitched/internal/runtime"
+	"glitched/internal/skills/skillstest"
 	"glitched/internal/store"
 )
 
@@ -45,6 +46,7 @@ const (
 	envHang   = "GLITCHED_FAKE_CLAUDE_HANG"   // a one-shot run, having printed, waits to be killed
 	envModes  = "GLITCHED_FAKE_CLAUDE_MODES"  // a file each run appends the permission modes it was switched to, and how it answered, to
 	envNoAuto = "GLITCHED_FAKE_CLAUDE_NOAUTO" // why a run refuses its auto mode, as Claude Code says it
+	envSkills = "GLITCHED_FAKE_CLAUDE_SKILLS" // a file each run appends the skills it sees to, a JSON list
 )
 
 func TestMain(m *testing.M) {
@@ -100,6 +102,9 @@ func fakeClaude(path string) int {
 		out, _ := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		out.Write(append(b, '\n'))
 		out.Close()
+	}
+	if f := os.Getenv(envSkills); f != "" {
+		noteSkills(f)
 	}
 	if f := os.Getenv(envEntry); f != "" {
 		var entries []string
@@ -286,6 +291,28 @@ func fakeClaude(path string) int {
 // them. A later transcript starts at its first user message, past the
 // start its own process made, and every one but the last waits, parked,
 // for the next turn's message where it would have waited for stdin's end.
+// noteSkills appends to f the skills a claude started so sees, as Claude
+// Code finds them: the user's and the workspace's own by name, and each
+// --plugin-dir's as <plugin>:<name>.
+func noteSkills(f string) {
+	home, _ := os.UserHomeDir()
+	wd, _ := os.Getwd()
+	seen := skillstest.Seen("", filepath.Join(home, ".claude", "skills"), filepath.Join(wd, ".claude", "skills"))
+	for i, a := range os.Args {
+		if a != "--plugin-dir" || i+1 == len(os.Args) {
+			continue
+		}
+		var manifest struct{ Name string }
+		json.Unmarshal(must(os.ReadFile(filepath.Join(os.Args[i+1], ".claude-plugin", "plugin.json"))), &manifest)
+		seen = append(seen, skillstest.Seen(manifest.Name+":", filepath.Join(os.Args[i+1], "skills"))...)
+	}
+	slices.Sort(seen)
+	b, _ := json.Marshal(seen)
+	out, _ := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	out.Write(append(b, '\n'))
+	out.Close()
+}
+
 func tapes(path string) ([]string, error) {
 	paths := filepath.SplitList(path)
 	var lines []string

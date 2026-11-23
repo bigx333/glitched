@@ -272,7 +272,8 @@ var exeSuffix = map[bool]string{true: ".exe"}[runtime.GOOS == "windows"]
 
 // argv is how a run starts Claude Code. A tool call that the user's own
 // rules, hooks and the run's mode leave undecided comes to the run as a
-// can_use_tool control request on stdout.
+// can_use_tool control request on stdout. Glitched's skills are a plugin
+// for the session alone, which a claude the user starts never loads.
 //
 // The run's MCP servers go beside the user's own, which --mcp-config
 // without --strict-mcp-config merges with. One --mcp-config takes them
@@ -309,8 +310,15 @@ func (ad *Adapter) argv(spec provider.SessionSpec) []string {
 	if e := spec.Model.Effort; e != "" {
 		a = append(a, "--effort", e)
 	}
+	if r := spec.Skills.Root; r != "" {
+		a = append(a, "--plugin-dir", r)
+	}
 	return a
 }
+
+// SkillDelivery is how a claude gets Glitched's skills: as the plugin
+// glitched, whose skills Claude Code names glitched:<name>.
+func (a *Adapter) SkillDelivery() string { return "Claude Code: as /glitched:<name>" }
 
 // mcpConfig is s as Claude Code reads an --mcp-config, with no env where
 // s adds none.
