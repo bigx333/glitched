@@ -311,6 +311,8 @@ func (p *proc) currentOptions() []acpsdk.SessionConfigOption {
 
 // models are the session's models, by its model option, each with the
 // efforts its thought-level option offers once it is the session's model.
+// The Default is the model a new session starts on, the option's current
+// value, and a model's DefaultEffort the level's once it is the model.
 func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 	stop := context.AfterFunc(ctx, p.halt)
 	defer stop()
@@ -321,7 +323,7 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 	}
 	var out []provider.Model
 	for _, o := range choices(model) {
-		m := provider.Model{ID: string(o.Value), Name: o.Name}
+		m := provider.Model{ID: string(o.Value), Name: o.Name, Default: o.Value == model.CurrentValue}
 		if o.Description != nil {
 			m.Description = *o.Description
 		}
@@ -336,6 +338,7 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 			options = r.ConfigOptions
 		}
 		if level, ok := option(options, acpsdk.SessionConfigOptionCategoryThoughtLevel); ok {
+			m.DefaultEffort = string(level.CurrentValue)
 			for _, e := range choices(level) {
 				m.Efforts = append(m.Efforts, provider.Effort{ID: string(e.Value), Label: e.Name})
 			}

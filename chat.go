@@ -1756,7 +1756,7 @@ func (a *app) sendText(t thread, text, about string) bool {
 			ws = dir
 		}
 		title := threadTitle(text, about)
-		if id = a.backend.Create(t.env, ws, title, a.modelRef(), accessOf[a.access], a.newWorktree(t)); id.IsZero() {
+		if id = a.backend.Create(t.env, ws, title, a.newThreadRef(t), accessOf[a.access], a.newWorktree(t)); id.IsZero() {
 			return false
 		}
 		a.rememberProject(a.threadKey(t))
@@ -1863,6 +1863,23 @@ func (a *app) said(t thread) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+}
+
+// cliDecides is whether a new thread in the draft t names no model, as
+// its provider's program then runs its own default: the default follows
+// it, and t's engine is another machine's, whose program and default
+// this machine's engine doesn't know.
+func (a *app) cliDecides(t thread) bool { return a.followsCLI && t.id().IsZero() && !t.local() }
+
+// newThreadRef is the model a new thread in the draft t starts on: the
+// pickers' (modelRef), but none where its provider's program chooses
+// (cliDecides).
+func (a *app) newThreadRef(t thread) api.ModelRef {
+	ref := a.modelRef()
+	if a.cliDecides(t) {
+		ref.Model = ""
+	}
+	return ref
 }
 
 // modelRef is the model the pickers chose, for a new thread, at the

@@ -1,0 +1,333 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"glitched/internal/client"
+	"glitched/internal/daemon"
+	"glitched/internal/jsonfile"
+	"glitched/internal/provider"
+	"glitched/internal/provider/acp/acptest"
+	"glitched/internal/provider/codex/codextest"
+)
+
+// shifting is an adapter whose provider reports what models holds as it's
+// asked: its program's default can move between two asks.
+type shifting struct {
+	provider.Adapter
+	models *atomic.Pointer[[]provider.Model]
+}
+
+func (s shifting) Describe(ctx context.Context) (provider.Info, error) {
+	info, err := s.Adapter.Describe(ctx)
+	info.Models = *s.models.Load()
+	return info, err
+}
+
+func (s shifting) Commands(context.Context, string) ([]provider.Command, error) { return nil, nil }
+
+// cliModels are what a provider's engine reports in these tests: Beta is
+// its program's own default, which it runs at Low, unless known is false,
+// when the engine can't say which it runs.
+func cliModels(known bool) []provider.Model {
+	efforts := []provider.Effort{{ID: "low"}, {ID: "high"}}
+	ms := []provider.Model{
+		{ID: "alpha", Name: "Alpha", Efforts: efforts},
+		{ID: "beta", Name: "Beta", Efforts: efforts},
+		{ID: "gamma", Name: "Gamma", Efforts: efforts},
+	}
+	if known {
+		ms[1].Default, ms[1].DefaultEffort = true, "low"
+	}
+	return ms
+}
+
+// startReporting starts the app on dir, whose composer.json holds file,
+// "" for none, with provider p's engine reporting models, which a test
+// may change.
+func startReporting(t *testing.T, dir, p, file string, models []provider.Model) (*harness, *atomic.Pointer[[]provider.Model]) {
+	t.Helper()
+	if file != "" {
+		os.WriteFile(filepath.Join(dir, "composer.json"), []byte(file), 0o600)
+	}
+	var now atomic.Pointer[[]provider.Model]
+	now.Store(&models)
+	h := startWith(t, dir, func(c *daemon.Config) {
+		engineReportsBy(nil)(c)
+		c.Providers[p] = shifting{c.Providers[p], &now}
+	})
+	allAnswered(h)
+	h.until("the default to take the engine's answer", func() bool {
+		h.tt.Frame()
+		return !h.a.models.changed
+	})
+	return h, &now
+}
+
+func composerFile(t *testing.T, dir string) choice {
+	t.Helper()
+	var f choice
+	if err := jsonfile.Load(filepath.Join(dir, "composer.json"), &f); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// providersFollowed are the providers whose own default a test follows,
+// each as composer.json holds it: Claude Code's also with no file, a
+// user who never chose.
+var providersFollowed = []struct{ name, provider, file string }{
+	{"claude, never chosen", "claude", ""},
+	{"claude", "claude", `{"model":{"provider":"claude","id":""}}`},
+	{"codex", "codex", `{"model":{"provider":"codex","id":""}}`},
+	{"antigravity", "antigravity", `{"model":{"provider":"antigravity","id":""}}`},
+}
+
+// While the user hasn't chosen, a new thread starts on the provider's own
+// default, at the effort its program runs it at: the picker shows it, and
+// Settings › Providers fills it in. Check again takes a default that
+// moved since.
+func TestANewThreadStartsOnTheProgramsOwnDefault(t *testing.T) {
+	for _, tc := range providersFollowed {
+		t.Run(tc.name, func(t *testing.T) {
+			h, now := startReporting(t, tempDir(t), tc.provider, tc.file, cliModels(true))
+			if got := h.a.modelRef(); got.Provider != tc.provider || got.Model != "beta" || got.Effort != "low" {
+				t.Fatalf("a new thread starts on %+v, want %s's beta at low", got, tc.provider)
+			}
+			if !h.tt.HasText("Beta") {
+				t.Errorf("the picker doesn't show Beta: %q", h.tt.Texts())
+			}
+			openProviders(h, tc.provider)
+			for _, s := range []string{"Beta · CLI default", "Default · Beta · Low · CLI default"} {
+				if !h.tt.HasText(s) {
+					t.Errorf("the page doesn't show %q: %q", s, h.tt.Texts())
+				}
+			}
+			moved := cliModels(true)
+			moved[1].Default, moved[2].Default, moved[2].DefaultEffort = false, true, "high"
+			now.Store(&moved)
+			h.a.router.Push("/")
+			h.a.checkProviders()
+			h.until("the moved default", func() bool {
+				h.tt.Frame()
+				return h.a.modelRef().Model == "gamma"
+			})
+			if got := h.a.modelRef(); got.Effort != "high" {
+				t.Errorf("after the default moved, a new thread starts on %+v, want gamma at high", got)
+			}
+			if f := composerFile(t, h.a.dir); f.Model.ID != "" {
+				t.Errorf("following the default wrote %+v to composer.json", f)
+			}
+		})
+	}
+}
+
+// A model the user picks is theirs, though it's the program's default
+// too: it stays as the engine's default moves, and through a restart.
+func TestAModelThePickerChoosesWinsOverTheProgramsDefault(t *testing.T) {
+	for _, tc := range providersFollowed {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := tempDir(t)
+			h, now := startReporting(t, dir, tc.provider, tc.file, cliModels(true))
+			h.click("Model")
+			pickerSettle(t, h)
+			h.tt.Move(0, 0)
+			h.click(familyOf(tc.provider).name)
+			pickerSettle(t, h)
+			h.click("Beta")
+			pickerSettle(t, h)
+			if f := composerFile(t, dir); f.Model != (modelKey{tc.provider, "beta"}) {
+				t.Fatalf("after picking Beta, composer.json holds %+v", f)
+			}
+			moved := cliModels(true)
+			moved[1].Default, moved[2].Default = false, true
+			now.Store(&moved)
+			h.a.checkProviders()
+			allAnswered(h)
+			h.tt.Frame()
+			if got := h.a.modelRef(); got.Model != "beta" {
+				t.Errorf("after the program's default moved, the user's pick became %+v", got)
+			}
+			openProviders(h, tc.provider)
+			if h.tt.HasText("Default · Beta · Low · CLI default") || !h.tt.HasText("Default · Beta · Low") {
+				t.Errorf("the page shows the user's pick as the program's own: %q", h.tt.Texts())
+			}
+			h.a.backend.Close()
+			again, _ := startReporting(t, dir, tc.provider, "", moved)
+			if got := again.a.modelRef(); got.Model != "beta" {
+				t.Errorf("after a restart the user's pick became %+v", got)
+			}
+		})
+	}
+}
+
+// Settings › Providers' control goes back to the program's own default,
+// and its effort, from a model the user chose, for any provider's row.
+func TestTheProvidersPageGoesBackToTheProgramsDefault(t *testing.T) {
+	for _, tc := range providersFollowed[1:] {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := tempDir(t)
+			h, _ := startReporting(t, dir, tc.provider, `{"model":{"provider":"claude","id":"claude-opus-5-5"},"effort":"max"}`, cliModels(true))
+			if got := h.a.modelRef(); got.Model != "claude-opus-5-5" {
+				t.Fatalf("the user's choice became %+v", got)
+			}
+			openProviders(h, tc.provider)
+			if tc.provider != "claude" && !h.tt.HasText("Beta · CLI default") {
+				t.Errorf("another provider's row doesn't fill in its default: %q", h.tt.Texts())
+			}
+			h.click("Default model for new threads")
+			h.tt.Advance(time.Second)
+			h.click("CLI default · Beta")
+			h.tt.Frame()
+			if got := h.a.modelRef(); got.Provider != tc.provider || got.Model != "beta" || got.Effort != "low" {
+				t.Errorf("back to the program's default, a new thread starts on %+v", got)
+			}
+			if f := composerFile(t, dir); f.Model != (modelKey{Provider: tc.provider}) || f.Effort != "" {
+				t.Errorf("back to the program's default, composer.json holds %+v", f)
+			}
+			if !h.tt.HasText("Default · Beta · Low · CLI default") {
+				t.Errorf("the page doesn't show the program's default: %q", h.tt.Texts())
+			}
+		})
+	}
+}
+
+// An engine that can't say which model its program runs leaves the
+// default as it was before Glitched asked: Opus 5.5 at High where Claude
+// Code offers it, else the provider's first, at the app's own effort, and
+// nothing reads as the program's own.
+func TestAProgramsDefaultTheEngineCantSayIsTheAppsOwn(t *testing.T) {
+	for _, tc := range providersFollowed {
+		t.Run(tc.name, func(t *testing.T) {
+			models := cliModels(false)
+			if tc.provider == "claude" {
+				models = append(models, provider.Model{ID: "claude-opus-5-5", Name: "Opus 5.5", Efforts: []provider.Effort{{ID: "low"}, {ID: "high"}}})
+			}
+			h, _ := startReporting(t, tempDir(t), tc.provider, tc.file, models)
+			want := modelKey{tc.provider, "alpha"}
+			if tc.provider == "claude" {
+				want = ownChoice.Model
+			}
+			if got := h.a.modelRef(); got.Provider != want.Provider || got.Model != want.ID || got.Effort != "high" {
+				t.Errorf("a new thread starts on %+v, want %+v at high", got, want)
+			}
+			openProviders(h, tc.provider)
+			if strings.Contains(strings.Join(h.tt.Texts(), "\n"), "CLI default") {
+				t.Errorf("the page reads a default no engine said: %q", h.tt.Texts())
+			}
+		})
+	}
+}
+
+// A draft on another machine's engine names no model where the default
+// follows the program's own: that machine's program runs its own, which
+// this machine's engine doesn't know, and the picker says so. A model the
+// user picked goes as it is.
+func TestARemoteDraftLeavesTheModelToItsProgram(t *testing.T) {
+	for _, tc := range providersFollowed {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := startReporting(t, tempDir(t), tc.provider, tc.file, cliModels(true))
+			remote := thread{env: &client.Env{Kind: client.Remote}, Thread: &client.Thread{}}
+			if got := h.a.newThreadRef(remote); got.Provider != tc.provider || got.Model != "" || got.Effort != "low" {
+				t.Errorf("a remote draft's thread starts on %+v, want %s naming no model", got, tc.provider)
+			}
+			if got := h.a.shownModel(remote).name; got != "CLI default" {
+				t.Errorf("a remote draft's picker shows %q", got)
+			}
+			if got := h.a.newThreadRef(h.a.current()); got.Model != "beta" {
+				t.Errorf("this machine's draft's thread starts on %+v", got)
+			}
+			h.a.chooseModel(modelKey{tc.provider, "alpha"})
+			if got := h.a.newThreadRef(remote); got.Model != "alpha" {
+				t.Errorf("a remote draft's thread on the user's pick starts on %+v", got)
+			}
+		})
+	}
+}
+
+// wireEntries are what a fake program received of method, by its log.
+func wireEntries(t *testing.T, log, method string) []json.RawMessage {
+	t.Helper()
+	b, _ := os.ReadFile(log)
+	var out []json.RawMessage
+	for line := range strings.Lines(string(b)) {
+		var e struct {
+			Method string
+			Params json.RawMessage
+		}
+		if json.Unmarshal([]byte(line), &e) == nil && e.Method == method {
+			out = append(out, e.Params)
+		}
+	}
+	return out
+}
+
+// The model the picker shows of Codex's own default is the one Codex
+// runs: the thread's turn names it, at the effort shown.
+func TestCodexsOwnDefaultIsTheModelItRuns(t *testing.T) {
+	dir := tempDir(t)
+	os.WriteFile(filepath.Join(dir, "composer.json"), []byte(`{"model":{"provider":"codex","id":""}}`), 0o600)
+	h := startWith(t, dir, withCodex(t, "hi"))
+	allAnswered(h)
+	h.until("Codex's default", func() bool {
+		h.tt.Frame()
+		return h.a.modelRef().Model == "gpt-6.2-sol"
+	})
+	if !h.tt.HasText("GPT-6.2 Sol") || !h.tt.HasText("Medium") {
+		t.Fatalf("the picker doesn't show Codex's default at Medium: %q", h.tt.Texts())
+	}
+	sendNew(h, "Say hi.")
+	h.until("the turn", func() bool { return len(wireEntries(t, os.Getenv(codextest.Log), "turn/start")) > 0 })
+	var turn struct{ Model, Effort string }
+	json.Unmarshal(wireEntries(t, os.Getenv(codextest.Log), "turn/start")[0], &turn)
+	if turn.Model != "gpt-6.2-sol" || turn.Effort != "medium" {
+		t.Errorf("Codex's turn runs %+v, want the GPT-6.2 Sol at medium the picker shows", turn)
+	}
+}
+
+// The model the picker shows of Antigravity's own default is the one its
+// session runs: the thread is on it, and nothing moves the session off
+// the model and level it starts on.
+func TestAntigravitysOwnDefaultIsTheModelItRuns(t *testing.T) {
+	dir := tempDir(t)
+	os.WriteFile(filepath.Join(dir, "composer.json"), []byte(`{"model":{"provider":"antigravity","id":""}}`), 0o600)
+	h := startWith(t, dir, withAntigravity(t, "gui"))
+	allAnswered(h)
+	h.until("agy's default", func() bool {
+		h.tt.Frame()
+		return h.a.modelRef().Model == "fake-pro"
+	})
+	if got := h.a.modelRef(); got.Effort != "high" || !h.tt.HasText("Fake Pro") || !h.tt.HasText("High") {
+		t.Fatalf("the picker shows %q, a thread starts on %+v; want Fake Pro at High", h.tt.Texts(), got)
+	}
+	probes := len(wireEntries(t, os.Getenv(acptest.Log), "session/set_config_option"))
+	sendNew(h, "Add a line to the notes.")
+	h.until("the card", func() bool { return h.tt.HasText("Antigravity wants to") })
+	if got := h.a.current().View.Model; got.Model != "fake-pro" || got.Effort != "high" {
+		t.Errorf("the thread runs %+v", got)
+	}
+	if set := wireEntries(t, os.Getenv(acptest.Log), "session/set_config_option")[probes:]; len(set) > 0 {
+		t.Errorf("the run moved the session off the model it starts on: %s", set)
+	}
+}
+
+// The model the picker shows of Claude Code's own default is the one the
+// thread runs.
+func TestClaudesOwnDefaultIsTheModelItRuns(t *testing.T) {
+	h, _ := startReporting(t, tempDir(t), "claude", "", cliModels(true))
+	if !h.tt.HasText("Beta") {
+		t.Fatalf("the picker doesn't show Beta: %q", h.tt.Texts())
+	}
+	sendNew(h, "Say hi.")
+	h.until("the thread", func() bool { return !h.a.current().id().IsZero() })
+	if got := h.a.current().View.Model; got.Provider != "claude" || got.Model != "beta" || got.Effort != "low" {
+		t.Errorf("the thread runs %+v, want the Beta at low the picker shows", got)
+	}
+}

@@ -14,7 +14,8 @@ import (
 
 // providersFixture has a's engine report the providers of state: one
 // (Claude Code), two (and Antigravity) or four (and a signed-out Codex
-// and a Grok that isn't installed).
+// and a Grok that isn't installed); cli and chosen are Claude Code and
+// Codex, each saying its program's own default.
 func providersFixture(a *app, state string) {
 	home := homeDir()
 	claudeModels := []provider.Model{
@@ -28,11 +29,21 @@ func providersFixture(a *app, state string) {
 		{ID: "claude-opus-4-6", Name: "Claude Opus 4.6 (Thinking)"},
 		{ID: "gpt-oss-120b-medium", Name: "GPT-OSS 120B (Medium)"},
 	}
+	cli := state == "cli" || state == "chosen"
+	claudeModels[0].Default = cli
 	a.models.reported = map[string][]provider.Model{"claude": claudeModels}
 	a.models.served = map[string]transport.ProviderInfo{
 		"claude": {Name: "claude", Info: provider.Info{Name: "claude", Version: "2.1.317", Models: claudeModels, Path: filepath.Join(home, ".local/bin/claude")}},
 	}
-	if state == "one" {
+	if cli {
+		codexModels := []provider.Model{
+			{ID: "gpt-6.2-sol", Name: "gpt-6.2-sol", Description: "Frontier agentic coding", Default: true, DefaultEffort: "medium", Efforts: []provider.Effort{{ID: "low"}, {ID: "medium"}, {ID: "high"}, {ID: "xhigh"}}},
+			{ID: "gpt-6-luna", Name: "gpt-6-luna", Description: "Fast and cheap", Efforts: []provider.Effort{{ID: "low"}, {ID: "medium"}}},
+		}
+		a.models.reported["codex"] = codexModels
+		a.models.served["codex"] = transport.ProviderInfo{Name: "codex", Info: provider.Info{Name: "Codex", Version: "0.171.0", Models: codexModels, Path: filepath.Join(home, ".local/bin/codex")}}
+	}
+	if state == "one" || cli {
 		return
 	}
 	a.models.reported["antigravity"] = agyModels
@@ -54,12 +65,17 @@ func TestProvidersShot(t *testing.T) {
 		t.Skip()
 	}
 	os.MkdirAll(out, 0o755)
-	for _, state := range []string{"one", "two", "four", "gone", "agy"} {
+	for _, state := range []string{"one", "two", "four", "gone", "agy", "cli", "chosen"} {
 		a := offline(t)
 		providersFixture(a, state)
 		a.model, a.effort = modelKey{"claude", "claude-opus-5-5"}, "high"
-		if state == "gone" {
+		switch state {
+		case "gone":
 			a.model = modelKey{"claude", "claude-opus-5"}
+		case "cli":
+			a.followsCLI = true
+		case "chosen":
+			a.chooseModel(modelKey{"claude", "claude-sonnet-5-5"})
 		}
 		tt := newTester(t, a, 1320, 860)
 		settleTester(tt)
@@ -89,6 +105,9 @@ func TestProvidersShot(t *testing.T) {
 				}
 				if state == "agy" {
 					a.providersOpen["claude"], a.providersOpen["antigravity"] = false, true
+				}
+				if state == "cli" || state == "chosen" {
+					a.providersOpen["codex"] = true
 				}
 			}
 			a.settings.theme = darkTheme.name

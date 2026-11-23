@@ -84,6 +84,9 @@ func (a *app) defaultLine(r providerRow) string {
 		if e := effortLabel(m, effortFor(m, a.effort)); e != "" {
 			line += " · " + e
 		}
+		if a.prefilled(r) {
+			line += " · CLI default"
+		}
 		if gone {
 			line += " · No longer offered"
 		}
@@ -162,30 +165,50 @@ type defaultChoice struct {
 	effort string
 }
 
+// prefilled is whether the default is r's provider's program's own,
+// which its engine reported (followCLI): the control shows it as a value
+// filled in for the user, not one they chose.
+func (a *app) prefilled(r providerRow) bool {
+	def, known := a.cliDefault(r.family.provider)
+	return a.followsCLI && known && def.key == a.model
+}
+
 // providerDefault is the provider's one control of the default for new
 // threads: the same one the picker and General choose, model and effort
-// together, from the models its engine reports. Its menu lists them, and
-// the efforts of the default where it is the provider's.
+// together, from the models its engine reports. Its menu lists them, its
+// program's own default first where its engine reported one, and the
+// efforts of the default where it is the provider's. The program's own
+// is how the control reads till the user chooses: a value filled in.
 func (a *app) providerDefault(c *ui.Context, r providerRow) {
 	models, gone := a.rowModels(r)
 	if len(models) == 0 {
 		return
 	}
 	ours := a.model.Provider == r.family.provider
+	def, known := a.cliDefault(r.family.provider)
+	cli := modelKey{Provider: r.family.provider}
 	inset(c, "DEFAULT FOR NEW THREADS", func() {
 		optionRow(c, "Default model", "New threads start on it. The composer's picker chooses the same one.", func() {
 			m, _ := a.modelOf(a.model)
 			effort := effortFor(m, a.effort)
-			chosen := defaultChoice{a.model, effort}
+			prefilled := a.prefilled(r)
+			shown := defaultChoice{a.model, effort}
+			if prefilled {
+				shown.model = cli
+			}
+			chosen := shown
 			sel := ui.SelectBase(c.Key("default"), &chosen)
 			label := "Choose a model"
-			if ours {
+			switch {
+			case prefilled || !ours && known:
+				label = def.short + " · CLI default"
+			case ours:
 				label = m.short + " · " + cmp.Or(effortLabel(m, effort), effort)
 			}
 			sel.Trigger.Label("Default model for new threads").Description(a.defaultLine(r)).Padding(5, 8, 5, 10).Gap(6).AlignItems(ui.Center).
 				Radius(6).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Cursor(ui.CursorPointer).Children(func() {
 				col := palette.text
-				if !ours {
+				if !ours || prefilled {
 					col = palette.muted
 				}
 				ui.Text(c, label).FontSize(12.5).TextColor(col).SingleLine()
@@ -214,12 +237,15 @@ func (a *app) providerDefault(c *ui.Context, r providerRow) {
 					})
 				}
 				popupLabel(c, "MODEL")
+				if known {
+					item(defaultChoice{cli, effortFor(def, def.defaultEffort)}, "CLI default · "+def.short, "", prefilled)
+				}
 				for _, o := range models {
 					note := ""
 					if _, offered := a.modelOf(o.key); !offered {
 						note = "No longer offered"
 					}
-					item(defaultChoice{o.key, effortFor(o, a.effort)}, o.short, note, o.key == a.model)
+					item(defaultChoice{o.key, effortFor(o, a.effort)}, o.short, note, o.key == shown.model)
 				}
 				if !ours {
 					return
@@ -227,14 +253,19 @@ func (a *app) providerDefault(c *ui.Context, r providerRow) {
 				ui.Divider(c).Background(palette.border).Margin(4, 0)
 				popupLabel(c, "EFFORT")
 				for _, e := range effortsOf(m) {
-					item(defaultChoice{a.model, e.id}, e.label, "", e.id == effort)
+					item(defaultChoice{shown.model, e.id}, e.label, "", e.id == effort)
 				}
 			})
-			if chosen != (defaultChoice{a.model, effort}) {
-				if chosen.model != a.model {
+			if chosen != shown {
+				switch {
+				case chosen.model == cli && shown.model != cli:
+					a.followCLI(cli.Provider)
+				case chosen.model != shown.model:
 					a.chooseModel(chosen.model)
+					a.effort = chosen.effort
+				default:
+					a.effort = chosen.effort
 				}
-				a.effort = chosen.effort
 				a.saveComposer()
 			}
 		})

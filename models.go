@@ -204,6 +204,8 @@ func (a *app) offeredModels() []modelInfo {
 			for _, e := range r.Efforts {
 				m.efforts = append(m.efforts, effortOf(e))
 			}
+			m.cliDefault = r.Default && !slices.ContainsFunc(out, func(o modelInfo) bool { return o.key.Provider == f.provider && o.cliDefault })
+			m.defaultEffort = r.DefaultEffort
 			out = append(out, m)
 		}
 	}
@@ -337,9 +339,26 @@ func effortFor(m modelInfo, want string) string {
 }
 
 // chooseModel chooses the model k, at the effort chosen where k runs at
-// it, else at the one it shows (effortFor).
+// it, else at the one it shows (effortFor): the user's own, though it is
+// its provider's program's default too.
 func (a *app) chooseModel(k modelKey) {
-	a.model = k
+	a.model, a.followsCLI = k, false
 	m, _ := a.modelOf(k)
 	a.effort = effortFor(m, a.effort)
+}
+
+// followCLI has the default be provider p's program's own, at the effort
+// it runs it at (starting).
+func (a *app) followCLI(p string) {
+	a.show(a.starting(choice{Model: modelKey{Provider: p}, Fast: a.fast, Access: a.access}))
+}
+
+// cliDefault is the model provider p's engine last reported its program
+// runs where given none, and whether it reported one.
+func (a *app) cliDefault(p string) (modelInfo, bool) {
+	i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.key.Provider == p && m.cliDefault })
+	if i < 0 {
+		return modelInfo{}, false
+	}
+	return a.offeredModels()[i], true
 }

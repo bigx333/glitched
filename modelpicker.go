@@ -21,6 +21,11 @@ type modelInfo struct {
 	color             ui.Color
 	icon              *ui.SVG
 	efforts           []effortInfo
+	// cliDefault is that its provider's program runs it where it is
+	// given no model, and defaultEffort the effort it runs it at where
+	// it is given none, as its engine reported (provider.Model).
+	cliDefault    bool
+	defaultEffort string
 }
 
 // family is how the picker shows the models of a provider, which names
@@ -162,7 +167,7 @@ func (a *app) effortLevel() int {
 // glow and electricity, the popover, and what a row does (modelListRow).
 func (a *app) modelPicker(c *ui.Context, t thread) {
 	a.askModels()
-	m, _ := a.modelOf(a.model)
+	m := a.shownModel(t)
 	level := a.effortLevel()
 	effort := a.efforts()[level]
 	b := a.tip(c, ghost(c, "model", a.pickerOpen).Padding(4, 8, 4, 4).Gap(6).Label("Model"), "Model and effort")
@@ -186,7 +191,7 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 				ui.Icon(c, icChevronD).FontSize(11)
 			},
 			current: true,
-			context: func(r plugins.ThreadRecord) any { return a.composerModelOf(c, r, "button") },
+			context: func(r plugins.ThreadRecord) any { return a.composerModelOf(c, t, r, "button") },
 		})
 	}).Clicked() {
 		a.pickerOpen = !a.pickerOpen
@@ -218,7 +223,7 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 					a.effortSlider(c)
 				},
 				current: true,
-				context: func(r plugins.ThreadRecord) any { return a.composerModelOf(c, r, "panel") },
+				context: func(r plugins.ThreadRecord) any { return a.composerModelOf(c, t, r, "panel") },
 				listRow: func(c *ui.Context, list *widget.Node, i int, e ui.Element, _ bool) bool {
 					a.modelListRow(list.ID, list.Items[i].Key, e)
 					return false
@@ -280,9 +285,9 @@ type modelChoice struct {
 	Family    string `json:"family"`
 }
 
-func (a *app) composerModelOf(c *ui.Context, r plugins.ThreadRecord, part string) composerModel {
+func (a *app) composerModelOf(c *ui.Context, t thread, r plugins.ThreadRecord, part string) composerModel {
 	size := c.Theme().FontSize
-	m, _ := a.modelOf(a.model)
+	m := a.shownModel(t)
 	out := composerModel{Thread: r, Part: part, Model: m.name, Key: a.model.String(), Effort: a.efforts()[a.effortLevel()].label, Fast: a.fast, FamilyKey: a.pickerFamily, LockKey: a.pickerLock,
 		FamilyRowHeight: familyRowHeight(c),
 		ModelRowHeight:  modelRowHeight(c, size),
@@ -296,10 +301,30 @@ func (a *app) composerModelOf(c *ui.Context, r plugins.ThreadRecord, part string
 	for _, f := range a.modelFamilies() {
 		out.Families = append(out.Families, modelFamily{f.provider, f.name, f.desc})
 		for _, m := range a.pickerRows(f) {
-			out.Models = append(out.Models, modelChoice{m.key.String(), m.name, m.short, m.desc, f.provider, f.name})
+			out.Models = append(out.Models, modelChoice{m.key.String(), m.name, m.short, about(m), f.provider, f.name})
 		}
 	}
 	return out
+}
+
+// shownModel is the model the picker shows in t's composer: the chosen
+// one, or, where t's provider's program chooses it (cliDecides), its
+// default by that name alone.
+func (a *app) shownModel(t thread) modelInfo {
+	m, _ := a.modelOf(a.model)
+	if a.cliDecides(t) {
+		m.name = "CLI default"
+	}
+	return m
+}
+
+// about is what a model's row says of it: that its provider's program
+// runs it where given none, and what it's for.
+func about(m modelInfo) string {
+	if !m.cliDefault {
+		return m.desc
+	}
+	return strings.Join(slices.DeleteFunc([]string{"CLI default", m.desc}, func(s string) bool { return s == "" }), " · ")
 }
 
 func familyRowHeight(c *ui.Context) float32 {
@@ -477,7 +502,7 @@ func (a *app) pickerModel(c *ui.Context, m modelInfo) {
 	if row(c, m.key.String(), selected).Padding(7, 10).Gap(10).Children(func() {
 		ui.Column(c).Grow(1).Shrink(1).Gap(1).Children(func() {
 			ui.Text(c, m.short).FontWeight(500).TextColor(palette.text).SingleLine()
-			ui.Text(c, m.desc).FontSize(11.5).TextColor(palette.muted).SingleLine()
+			ui.Text(c, about(m)).FontSize(11.5).TextColor(palette.muted).SingleLine()
 		})
 		if selected {
 			ui.Icon(c, icCheck).FontSize(14).TextColor(palette.accent)

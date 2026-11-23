@@ -407,7 +407,8 @@ func TestSignedOut(t *testing.T) {
 
 // Describe lists the agent's models with each one's efforts, from a
 // session it opens and closes without a prompt, and answers again from
-// what it found.
+// what it found. The model and level the session starts on are its
+// defaults.
 func TestDescribeListsModelsAndEfforts(t *testing.T) {
 	a, log := fake(t, "hi")
 	for range 2 {
@@ -416,7 +417,7 @@ func TestDescribeListsModelsAndEfforts(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := provider.Info{Name: "Antigravity", Version: "9.9.9", Models: []provider.Model{
-			{ID: "fake-pro", Name: "Fake Pro", Efforts: []provider.Effort{{ID: "low", Label: "Low"}, {ID: "high", Label: "High"}}},
+			{ID: "fake-pro", Name: "Fake Pro", Efforts: []provider.Effort{{ID: "low", Label: "Low"}, {ID: "high", Label: "High"}}, Default: true, DefaultEffort: "high"},
 			{ID: "fake-flash", Name: "Fake Flash"},
 		}, Path: a.Path}
 		got, _ := json.Marshal(info)

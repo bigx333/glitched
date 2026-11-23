@@ -54,12 +54,15 @@ func (r initialized) commands() []provider.Command {
 
 // models are the ones the account can run, each by its full id, as the
 // session pins it, with Claude Code's words for it less its price, and the
-// efforts --effort takes for it. The default is left out: it is one of
-// the others, which it names.
+// efforts --effort takes for it. The default's entry is left out: it is
+// one of the others, which it names by its resolvedModel, and that one is
+// the Default; a long-context "[1m]" default not listed is its base's.
 func (r initialized) models() []provider.Model {
 	out := []provider.Model{}
+	def := ""
 	for _, m := range r.Models {
 		if m.Value == "default" {
+			def = m.ResolvedModel
 			continue
 		}
 		// "Fable 5.2 · Most capable for … · $4/$20 per Mtok"
@@ -73,6 +76,12 @@ func (r initialized) models() []provider.Model {
 			efforts = append(efforts, provider.Effort{ID: e})
 		}
 		out = append(out, provider.Model{ID: cmp.Or(m.ResolvedModel, m.Value), Name: name, Description: strings.Join(parts, " · "), Efforts: efforts})
+	}
+	for _, id := range []string{def, strings.TrimSuffix(def, "[1m]")} {
+		if i := slices.IndexFunc(out, func(m provider.Model) bool { return id != "" && m.ID == id }); i >= 0 {
+			out[i].Default = true
+			break
+		}
 	}
 	return out
 }
