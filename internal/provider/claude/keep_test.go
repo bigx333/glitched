@@ -208,7 +208,8 @@ func TestDeletingAThreadStopsItsKeptClaude(t *testing.T) {
 }
 
 // Approve for me chosen mid-thread holds from the thread's next turn: its
-// claude starts in auto, and is switched to it before its first message.
+// claude starts in acceptEdits, and is switched to auto before its first
+// message.
 func TestApproveForMeChosenMidThreadRunsAutoNextTurn(t *testing.T) {
 	argv, _ := keep(t, []string{"hi"}, []string{"again-resume"})
 	switched := filepath.Join(t.TempDir(), "modes")
@@ -221,10 +222,45 @@ func TestApproveForMeChosenMidThreadRunsAutoNextTurn(t *testing.T) {
 		t.Fatalf("second turn %+v", got)
 	}
 	args := strings.Split(strings.TrimSpace(string(must(os.ReadFile(argv)))), "\n")
-	if len(args) != 2 || !strings.Contains(args[0], `"default"`) || !strings.Contains(args[1], `"auto"`) {
-		t.Errorf("claude ran with %q, want default, then auto", args)
+	if len(args) != 2 || !strings.Contains(args[0], `"default"`) || !strings.Contains(args[1], `"acceptEdits"`) {
+		t.Errorf("claude ran with %q, want default, then acceptEdits", args)
 	}
 	if got := strings.TrimSpace(string(must(os.ReadFile(switched)))); got != "auto success" {
 		t.Errorf("claude was switched to %q, want auto once, for the second turn", got)
+	}
+}
+
+// A thread whose claude fell back from auto goes on to Ask for approval
+// and Full access as any thread does: each turn's claude starts in the
+// level's own mode and resumes the session, and only Approve for me is
+// switched.
+func TestAThreadThatFellBackSwitchesToTheOtherLevels(t *testing.T) {
+	argv, _ := keep(t, []string{"hi"}, []string{"again-resume", "again-resume"})
+	switched := filepath.Join(t.TempDir(), "modes")
+	t.Setenv(envModes, switched)
+	t.Setenv(envNoAuto, "auto mode unavailable for this model")
+	h := host(t, nil)
+	thread := newThread(t, h, api.AccessAutoEdits)
+	turn(t, h, thread, firstAsk)
+	for _, level := range []api.Access{api.AccessAsk, api.AccessFull} {
+		submit(t, h, thread, api.ThreadConfigure{Access: &level})
+		if got := turn(t, h, thread, againAsk); got.ended.Outcome != api.OutcomeCompleted || !strings.Contains(got.text, "say hi") {
+			t.Fatalf("at access %v the turn %+v, want Claude to answer from the session", level, got)
+		}
+	}
+	var modes []string
+	for _, l := range strings.Split(strings.TrimSpace(string(must(os.ReadFile(argv)))), "\n") {
+		var args []string
+		json.Unmarshal([]byte(l), &args)
+		modes = append(modes, args[slices.Index(args, "--permission-mode")+1])
+	}
+	if want := []string{"acceptEdits", "default", "bypassPermissions"}; !slices.Equal(modes, want) {
+		t.Errorf("claude ran in %q, want %q", modes, want)
+	}
+	if l := launches(t, argv); len(l) != 3 || !resumed(l[:2]) || l[2] != l[1] {
+		t.Errorf("claude ran with sessions %v, want the session created, then resumed twice", l)
+	}
+	if got := strings.TrimSpace(string(must(os.ReadFile(switched)))); got != "auto error" {
+		t.Errorf("claude was switched to %q, want auto once, refused", got)
 	}
 }

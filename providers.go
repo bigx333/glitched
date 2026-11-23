@@ -143,7 +143,7 @@ func (a *app) providerDetail(c *ui.Context, r providerRow) {
 					})
 				}
 				if s := r.info.Info.NoAuto; s != "" {
-					optionRow(c, accessAuto, s+", so Approve for me approves file edits and asks before the rest.", func() {})
+					optionRow(c, accessAuto, s+", so Approve for me ran without it and asked you more.", func() {})
 				}
 			})
 		}

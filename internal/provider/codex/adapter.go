@@ -188,13 +188,15 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 			p.discard()
 			return nil, err
 		}
-		if levels[spec.Access].reviewer == autoReview {
-			refused := ""
-			if p.reviewer != autoReview {
-				refused = "Codex " + p.version + " kept the thread's approvals with you, not its auto-review"
-			}
-			a.noAuto.Store(&refused)
+	}
+	// What the run's app-server said of auto-review is Codex's latest word
+	// on it, at a level that asks for it.
+	if levels[spec.Access].reviewer == autoReview {
+		refused := ""
+		if p.reviewer != autoReview {
+			refused = "Codex " + p.version + " kept the thread's approvals with you, not its auto-review"
 		}
+		a.noAuto.Store(&refused)
 	}
 	g := newAgent(spec, p, keep)
 	if lost {

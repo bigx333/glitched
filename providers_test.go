@@ -256,7 +256,7 @@ func TestAProviderWithoutItsAutoModeSaysSo(t *testing.T) {
 	allAnswered(h)
 	h.until("Antigravity's models", func() bool { return len(h.a.models.reported["antigravity"]) == 1 })
 	openProviders(h, "claude", "antigravity")
-	if !h.tt.HasText("Antigravity doesn't offer its auto mode, so Approve for me approves file edits and asks before the rest.") {
+	if !h.tt.HasText("Antigravity doesn't offer its auto mode, so Approve for me ran without it and asked you more.") {
 		t.Errorf("Antigravity's row doesn't say it has no auto mode: %q", h.tt.Texts())
 	}
 	if n := strings.Count(strings.Join(h.tt.Texts(), "\n"), "auto mode"); n != 1 {

@@ -29,6 +29,9 @@ const (
 	Scenario = "GLITCHED_FAKE_ACP"
 	// Log names the file the fake appends what it received to.
 	Log = "GLITCHED_FAKE_ACP_LOG"
+	// Offered, where set, is the modes a session lists, by comma, in
+	// place of Modes; "none" lists none.
+	Offered = "GLITCHED_FAKE_ACP_MODES"
 	// Replay names, for the scenario "replay", a wire capture the fake
 	// answers from as the agent that made it did: lines ">> " the client
 	// sent and "<< " the agent did, a JSON-RPC message each.
@@ -329,11 +332,16 @@ var Modes = []string{"default", "accept-edits", "auto", "plan"}
 func (f *fake) modes() *acp.SessionModeState {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	offered := Modes
+	switch v := os.Getenv(Offered); v {
+	case "":
+	case "none":
+		return nil
+	default:
+		offered = strings.Split(v, ",")
+	}
 	s := &acp.SessionModeState{CurrentModeId: acp.SessionModeId(f.mode), AvailableModes: []acp.SessionMode{}}
-	for _, m := range Modes {
-		if m == "auto" && f.is("no-auto") {
-			continue
-		}
+	for _, m := range offered {
 		s.AvailableModes = append(s.AvailableModes, acp.SessionMode{Id: acp.SessionModeId(m), Name: m})
 	}
 	return s
@@ -649,7 +657,7 @@ func (f *fake) ResumeSession(ctx context.Context, p acp.ResumeSessionRequest) (a
 		return acp.ResumeSessionResponse{}, acp.NewMethodNotFound("session/resume")
 	}
 	options, _, err := f.takeUp(p.SessionId, false)
-	return acp.ResumeSessionResponse{ConfigOptions: options}, err
+	return acp.ResumeSessionResponse{ConfigOptions: options, Modes: f.modes()}, err
 }
 
 // LoadSession replays the session's conversation, as ACP has an agent
@@ -667,7 +675,7 @@ func (f *fake) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (acp.L
 		f.send(ctx, p.SessionId, acp.UpdateUserMessageText(s))
 		f.send(ctx, p.SessionId, acp.UpdateAgentMessageText("replayed: "+s))
 	}
-	return acp.LoadSessionResponse{ConfigOptions: options}, err
+	return acp.LoadSessionResponse{ConfigOptions: options, Modes: f.modes()}, err
 }
 
 // SetSessionMode takes one of Modes, as agy does, and tells of it before

@@ -355,6 +355,8 @@ func (f *fake) reviewed(params json.RawMessage, answer map[string]any) map[strin
 	json.Unmarshal(params, &p)
 	switch {
 	case f.scenario == "old-codex":
+	case f.scenario == "guardian":
+		answer["approvalsReviewer"] = "guardian_subagent"
 	case f.scenario == "no-auto" && p.ApprovalsReviewer == "auto_review":
 		answer["approvalsReviewer"] = "user"
 	default:

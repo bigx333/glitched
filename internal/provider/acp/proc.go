@@ -363,7 +363,10 @@ func (p *proc) configure(ctx context.Context, ref api.ModelRef, g provider.Grant
 	current, moded, offered := p.mode, p.moded, p.offered
 	p.mu.Unlock()
 	mode := g.Mode
-	if g.Else != "" && moded && !slices.Contains(offered, mode) {
+	switch {
+	case g.Else != "" && !moded:
+		refused = p.profile.Name + "'s session offers no modes"
+	case g.Else != "" && !slices.Contains(offered, mode):
 		refused, mode = p.profile.Name+" doesn't offer its "+mode+" mode", g.Else
 	}
 	if mode != "" && mode != current && moded {

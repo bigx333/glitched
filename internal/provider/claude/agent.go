@@ -62,6 +62,7 @@ var interruptGrace = 10 * time.Second
 type proc struct {
 	cmd     *exec.Cmd
 	mark    mark               // its processes' mark
+	noAuto  string             // why Claude Code refused its auto mode, set before its first run
 	stop    context.CancelFunc // asks claude to stop, as Command says
 	halted  atomic.Bool        // stop was called: it takes no more runs
 	stderr  *tail
@@ -252,22 +253,16 @@ func (p *proc) handshake(ctx context.Context) error {
 	return nil
 }
 
-// switchMode has claude run in g's Mode, or in its Else where Claude Code
-// refuses that, and says why it refused. Only a claude that has read no
-// message yet is switched: before its first turn, nothing else is said.
+// switchMode has a claude started in g's Else run in its Mode, and says
+// why Claude Code refused that, which leaves it in Else. Only a claude
+// that has read no message yet is switched: before its first turn,
+// nothing else is said.
 func (p *proc) switchMode(ctx context.Context, g provider.Grant) (refused string, err error) {
 	r, err := p.control(ctx, modeRequest, map[string]string{"subtype": "set_permission_mode", "mode": g.Mode})
 	if err != nil || r.Subtype == "success" {
 		return "", err
 	}
-	refused = cmp.Or(r.Error, "Claude Code refused it")
-	if r, err = p.control(ctx, modeRequest, map[string]string{"subtype": "set_permission_mode", "mode": g.Else}); err != nil {
-		return "", err
-	}
-	if r.Subtype != "success" {
-		return "", fmt.Errorf("Claude Code refused its %s mode too: %s", g.Else, r.Error)
-	}
-	return refused, nil
+	return cmp.Or(r.Error, "Claude Code refused it"), nil
 }
 
 // control sends claude a control request and waits for its answer, which
