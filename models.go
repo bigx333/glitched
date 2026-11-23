@@ -2,7 +2,6 @@ package main
 
 import (
 	"cmp"
-	"context"
 	"encoding/json"
 	"log"
 	"path/filepath"
@@ -89,59 +88,60 @@ func (a *app) loadModels() {
 // that couldn't say keeps what it said before.
 func (a *app) askModels() {
 	l := &a.models
-	if envs := a.backend.Envs(); l.asking || time.Now().Before(l.next) || len(envs) == 0 || envs[0].Status != client.Status(client.Online{}) {
+	envs := a.backend.Envs()
+	if l.asking || time.Now().Before(l.next) || len(envs) == 0 || envs[0].Status != client.Status(client.Online{}) {
 		return // an engine coming online builds the picker again
 	}
 	l.asking = true
 	fresh := l.fresh
 	l.fresh = false
-	engine := a.serviceClient(a.dir)
-	go func() {
-		// Claude Code's answer takes several seconds, and up to its own
-		// timeout when claude hangs.
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		served, err := engine.Providers(ctx, fresh)
-		cancel()
-		a.post(func() {
-			l.asking = false
-			retry := func() {
-				l.next = time.Now().Add(modelsRetry)
-				time.AfterFunc(modelsRetry, func() { a.post(func() {}) })
+	// Claude Code's answer takes several seconds, and up to its own
+	// timeout when claude hangs.
+	a.backend.Providers(envs[0], fresh, a.settings.checkCLIs, func(served []transport.ProviderInfo, err error) {
+		l.asking = false
+		retry := func() {
+			l.next = time.Now().Add(modelsRetry)
+			time.AfterFunc(modelsRetry, func() { a.post(func() {}) })
+		}
+		if err != nil {
+			retry()
+			return
+		}
+		l.next = time.Now().Add(modelsRecheck)
+		if l.fresh {
+			// Check again, or the check turned on, while this ask ran.
+			l.next = time.Time{}
+			a.post(func() {})
+		}
+		for _, f := range a.providerFamilies() {
+			if !slices.ContainsFunc(served, func(p transport.ProviderInfo) bool { return p.Name == f.provider }) {
+				l.reported[f.provider] = []provider.Model{}
 			}
-			if err != nil {
-				retry()
-				return
+		}
+		failed := false
+		had := l.served
+		l.served = map[string]transport.ProviderInfo{}
+		for _, p := range served {
+			l.served[p.Name] = keptUpdate(had[p.Name], p)
+			if p.State == transport.ProviderNotInstalled {
+				l.reported[p.Name] = []provider.Model{}
+				continue
 			}
-			l.next = time.Now().Add(modelsRecheck)
-			for _, f := range a.providerFamilies() {
-				if !slices.ContainsFunc(served, func(p transport.ProviderInfo) bool { return p.Name == f.provider }) {
-					l.reported[f.provider] = []provider.Model{}
-				}
+			if p.Error != "" {
+				log.Printf("glitched: models: %s: %s", p.Name, p.Error)
+				failed = true
+				continue
 			}
-			failed := false
-			l.served = map[string]transport.ProviderInfo{}
-			for _, p := range served {
-				l.served[p.Name] = p
-				if p.State == transport.ProviderNotInstalled {
-					l.reported[p.Name] = []provider.Model{}
-					continue
-				}
-				if p.Error != "" {
-					log.Printf("glitched: models: %s: %s", p.Name, p.Error)
-					failed = true
-					continue
-				}
-				l.reported[p.Name] = append([]provider.Model{}, p.Info.Models...)
-			}
-			if failed {
-				retry()
-			}
-			if err := jsonfile.Write(a.modelsPath(), l.reported); err != nil {
-				log.Printf("glitched: models: %v", err)
-			}
-			l.changed = true
-		})
-	}()
+			l.reported[p.Name] = append([]provider.Model{}, p.Info.Models...)
+		}
+		if failed {
+			retry()
+		}
+		if err := jsonfile.Write(a.modelsPath(), l.reported); err != nil {
+			log.Printf("glitched: models: %v", err)
+		}
+		l.changed = true
+	})
 }
 
 // checkProviders asks the engine again now, and each provider its

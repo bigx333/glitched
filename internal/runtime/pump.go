@@ -110,6 +110,7 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 	}
 	h.forget(run)
 	if h.closeAgent(ag) {
+		h.closedAgent(lr)
 		h.closed(thread)
 	}
 }

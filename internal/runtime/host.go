@@ -56,12 +56,17 @@ type Host struct {
 	closing map[api.ID]bool     // threads whose run is over but whose agent is not closed yet
 	subs    map[*stream]struct{}
 	asks    map[askKey]chan json.RawMessage // credentials requests glitched mcp waits on
+	held    map[string]chan struct{}        // providers Hold holds, each closed on its release
+	// agents are the runs whose agent may run here: from their start until
+	// it is closed, on past the run's own end.
+	agents map[*liveRun]bool
 }
 
 // liveRun is a run this host drives. Cancelling ctx ends the run's provider
 // calls and its pump; cancelling steering ends only its steers and answers.
 type liveRun struct {
 	run          api.ID
+	provider     string
 	ctx          context.Context
 	cancel       context.CancelFunc
 	steering     context.Context
@@ -93,8 +98,10 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		busy:    map[api.ID]bool{},
 		runs:    map[api.ID]*liveRun{},
 		closing: map[api.ID]bool{},
+		agents:  map[*liveRun]bool{},
 		subs:    map[*stream]struct{}{},
 		asks:    map[askKey]chan json.RawMessage{},
+		held:    map[string]chan struct{}{},
 	}
 	for _, o := range opts {
 		o(h)
@@ -285,7 +292,7 @@ func (h *Host) boot(ctx context.Context) error {
 			return err
 		}
 		if ok {
-			h.attach(id, h.track(r.ID, restored.Agent))
+			h.attach(id, h.track(r.ID, t.Model.Provider, restored.Agent))
 		}
 	}
 	return nil
@@ -347,7 +354,7 @@ func (h *Host) perform(e store.Effect) {
 	if b, ok := e.Body.(engine.StartTurn); ok {
 		// Tracked before the check, so a stop that commits after it still
 		// cancels the start.
-		lr = h.track(b.Run, nil)
+		lr = h.track(b.Run, b.Model.Provider, nil)
 	}
 	var t engine.Thread
 	loaded := retry(h.ctx, "load thread", func(ctx context.Context) (err error) {
@@ -362,6 +369,7 @@ func (h *Host) perform(e store.Effect) {
 	if !due {
 		if lr != nil {
 			h.forget(lr.run)
+			h.closedAgent(lr)
 		}
 		if !loaded {
 			retry(h.drain, "release effect", func(ctx context.Context) error { return h.store.Release(ctx, e.ID) })
@@ -397,6 +405,7 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 			outcome = api.OutcomeInterrupted
 		}
 		h.forget(b.Run)
+		h.closedAgent(lr)
 		o = engine.Ended{Run: b.Run, Outcome: outcome, Error: err.Error()}
 
 	case engine.SteerTurn:
@@ -515,6 +524,18 @@ func retry(ctx context.Context, what string, fn func(context.Context) error) boo
 // open starts the run's agent. A start that fails while the host is up
 // closes what it opened.
 func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (provider.Agent, error) {
+	// Before the call's timeout: an update holds the provider for as long
+	// as its CLI takes to replace itself.
+	h.mu.Lock()
+	held := h.held[b.Model.Provider]
+	h.mu.Unlock()
+	if held != nil {
+		select {
+		case <-held:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	thread := t.ID
@@ -596,14 +617,108 @@ func (h *Host) closeAgent(ag provider.Agent) bool {
 	})
 }
 
-func (h *Host) track(run api.ID, ag provider.Agent) *liveRun {
-	lr := &liveRun{run: run, agent: ag}
+func (h *Host) track(run api.ID, provider string, ag provider.Agent) *liveRun {
+	lr := &liveRun{run: run, provider: provider, agent: ag}
 	lr.ctx, lr.cancel = context.WithCancel(h.ctx)
 	lr.steering, lr.stopSteering = context.WithCancel(lr.ctx)
 	h.mu.Lock()
 	h.runs[run] = lr
+	h.agents[lr] = true
 	h.mu.Unlock()
 	return lr
+}
+
+// closedAgent is that lr's agent, if it opened one, is closed.
+func (h *Host) closedAgent(lr *liveRun) {
+	h.mu.Lock()
+	delete(h.agents, lr)
+	h.mu.Unlock()
+}
+
+// ErrBusy is Hold's error while a run of the provider is live.
+var ErrBusy = errors.New("runtime: a run of the provider is live")
+
+// holdPoll is how often a Hold that waits looks for the provider's runs to
+// end.
+var holdPoll = 250 * time.Millisecond
+
+// Hold has the host start no run of provider until release, once none is
+// live: at once, else ErrBusy, unless wait has it wait for them to end
+// while ctx lasts. A run that starts while held waits for release before
+// its agent opens. One Hold of a provider at a time: another waits for
+// its release.
+func (h *Host) Hold(ctx context.Context, provider string, wait bool) (release func(), err error) {
+	t := time.NewTicker(holdPoll)
+	defer t.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		live, err := h.unsettled(ctx, provider)
+		if err != nil {
+			return nil, err
+		}
+		h.mu.Lock()
+		held := h.held[provider]
+		for lr := range h.agents {
+			live = live || lr.provider == provider
+		}
+		if held == nil && !live {
+			done := make(chan struct{})
+			h.held[provider] = done
+			h.mu.Unlock()
+			return sync.OnceFunc(func() {
+				h.mu.Lock()
+				delete(h.held, provider)
+				h.mu.Unlock()
+				close(done)
+			}), nil
+		}
+		h.mu.Unlock()
+		if live && !wait {
+			return nil, ErrBusy
+		}
+		select {
+		case <-held:
+		case <-t.C:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// unsettled is whether the store holds a run of provider that may be
+// running, or an agent's close of it not done. The close counts what this
+// host doesn't drive but whose process may still run: a run whose
+// reconcile failed at boot, before and after it is stopped. An uncertain
+// run with no close is one whose process the reconcile found gone, or
+// one this host drives, which its agents count.
+func (h *Host) unsettled(ctx context.Context, provider string) (bool, error) {
+	live, err := h.store.LiveThreads(ctx)
+	if err != nil {
+		return false, err
+	}
+	closing, err := h.store.Closing(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, id := range append(live, closing...) {
+		t, err := h.store.Thread(ctx, id)
+		if err != nil {
+			return false, err
+		}
+		p := t.Model.Provider
+		if r := t.Live(); r != nil {
+			if r.State == engine.RunUncertain && !slices.Contains(closing, id) {
+				continue
+			}
+			p = r.Model.Provider
+		}
+		if p == provider {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (h *Host) attach(thread api.ID, lr *liveRun) {

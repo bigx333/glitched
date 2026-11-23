@@ -62,6 +62,18 @@ func (e endpoint) Clone(ctx context.Context, req api.CloneRequest, progress func
 	return projects.CloneInto(ctx, req, []string{e.d.vault}, guard.UserPath(), progress)
 }
 
+// Providers is every provider the engine serves, as its socket's
+// "providers" says, for a window that embeds the engine.
+func (e endpoint) Providers(ctx context.Context, fresh, check bool) ([]transport.ProviderInfo, error) {
+	return e.d.clis.Providers(ctx, fresh, check), nil
+}
+
+// UpdateProvider updates the CLI of the engine's provider name, as its
+// socket's "provider.update" does.
+func (e endpoint) UpdateProvider(ctx context.Context, name string, whenIdle bool) (transport.UpdateResult, error) {
+	return e.d.clis.UpdateProvider(ctx, name, whenIdle)
+}
+
 // tailnet is how this machine is on the tailnet: through the engine's own
 // node, else an installed Tailscale, else not at all.
 func (d *Daemon) tailnet(ctx context.Context) api.Tailnet {

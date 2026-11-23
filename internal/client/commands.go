@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/transport"
 )
 
 // Pending is a command sent from here that hasn't landed yet. A message
@@ -171,6 +172,64 @@ func (m *Manager) credentials(e *Env, done func(error), call func(context.Contex
 		err := call(ctx, c)
 		m.post(ectx, func() { done(err) })
 	})
+}
+
+// cliEngine is an engine that says what its providers are and updates
+// their CLIs.
+type cliEngine interface {
+	Providers(ctx context.Context, fresh, check bool) ([]transport.ProviderInfo, error)
+	UpdateProvider(ctx context.Context, name string, whenIdle bool) (transport.UpdateResult, error)
+}
+
+var errNoCLIs = errors.New("client: this engine can't say what its providers are")
+
+const (
+	providersTimeout = time.Minute
+	// An update when idle waits for the provider's turn to end first.
+	updateTimeout = 30 * time.Minute
+)
+
+// Providers asks e's engine for every provider it serves, each asked its
+// program again when fresh, and, when check, whether its CLI has a newer
+// version. done gets the answer on the UI thread.
+func (m *Manager) Providers(e *Env, fresh, check bool, done func([]transport.ProviderInfo, error)) {
+	cliCall(m, e, providersTimeout, done, func(ctx context.Context, c cliEngine) ([]transport.ProviderInfo, error) {
+		return c.Providers(ctx, fresh, check)
+	})
+}
+
+// UpdateProvider has e's engine update the CLI of its provider name,
+// refused while a turn of it runs there unless whenIdle has the engine
+// wait for its end. done gets how it went on the UI thread.
+func (m *Manager) UpdateProvider(e *Env, name string, whenIdle bool, done func(transport.UpdateResult, error)) (cancel func()) {
+	return cliCall(m, e, updateTimeout, done, func(ctx context.Context, c cliEngine) (transport.UpdateResult, error) {
+		return c.UpdateProvider(ctx, name, whenIdle)
+	})
+}
+
+// cliCall calls the env's engine off the Post thread and hands done what
+// it said. cancel gives up the call, as the env's removal does: done then
+// gets the context's error.
+func cliCall[T any](m *Manager, e *Env, timeout time.Duration, done func(T, error), call func(context.Context, cliEngine) (T, error)) (cancel func()) {
+	var zero T
+	s := e.session
+	if s == nil {
+		done(zero, errNoEngine)
+		return func() {}
+	}
+	c, ok := s.ep.(cliEngine)
+	if !ok {
+		done(zero, errNoCLIs)
+		return func() {}
+	}
+	ectx := e.ctx
+	ctx, stop := context.WithTimeout(ectx, timeout)
+	m.wg.Go(func() {
+		defer stop()
+		out, err := call(ctx, c)
+		m.post(ectx, func() { done(out, err) })
+	})
+	return stop
 }
 
 func (m *Manager) SetDisposition(e *Env, thread api.ID, d api.Disposition) api.ID {

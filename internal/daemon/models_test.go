@@ -37,7 +37,7 @@ func TestTheSocketSaysWhatModelsEachProviderRuns(t *testing.T) {
 	t.Cleanup(func() { d.Close() })
 	local := transport.NewEndpointClient(Socket(dir), api.ID{})
 	defer local.Close()
-	served, err := local.Providers(context.Background(), false)
+	served, err := local.Providers(context.Background(), false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestTheSocketSaysWhatAProviderNeeds(t *testing.T) {
 	local := transport.NewEndpointClient(Socket(cfg.Dir), api.ID{})
 	defer local.Close()
 	for _, fresh := range []bool{false, true} {
-		served, err := local.Providers(context.Background(), fresh)
+		served, err := local.Providers(context.Background(), fresh, false)
 		if err != nil {
 			t.Fatal(err)
 		}

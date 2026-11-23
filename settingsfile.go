@@ -28,6 +28,7 @@ type settingsFile struct {
 	Streaming     bool    `json:"streaming"`
 	NewThread     string  `json:"newThread"`
 	Notifications bool    `json:"notifications"`
+	CheckCLIs     bool    `json:"checkCLIUpdates"`
 }
 
 var (
@@ -50,6 +51,7 @@ func fileOf(s settings) settingsFile {
 		Streaming:     s.streaming,
 		NewThread:     newThreadModes[s.newThreadMode],
 		Notifications: s.notifications,
+		CheckCLIs:     s.checkCLIs,
 	}
 }
 
@@ -85,6 +87,7 @@ func settingsFrom(s settings, f settingsFile) settings {
 		s.newThreadMode = i
 	}
 	s.notifications = f.Notifications
+	s.checkCLIs = f.CheckCLIs
 	return s
 }
 

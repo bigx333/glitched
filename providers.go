@@ -3,9 +3,11 @@ package main
 import (
 	"cmp"
 	"fmt"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/client"
 	"glitched/internal/transport"
 )
 
@@ -130,7 +132,7 @@ func (a *app) providerDetail(c *ui.Context, r providerRow) {
 			}, func() { a.checkAgain(c) })
 		}
 		a.providerDefault(c, r)
-		if r.info.Info.Path != "" || r.version() != "" || r.info.Info.NoAuto != "" {
+		if r.info.Info.Path != "" || r.version() != "" || r.info.Info.NoAuto != "" || r.info.Update != nil {
 			inset(c, "PROGRAM", func() {
 				if r.info.Info.Path != "" {
 					optionRow(c, "Path", "The program Glitched runs.", func() {
@@ -141,6 +143,9 @@ func (a *app) providerDetail(c *ui.Context, r providerRow) {
 					optionRow(c, "Version", "", func() {
 						ui.Text(c, v).Selectable().FontSize(12).TextColor(palette.muted)
 					})
+				}
+				if en, ok := a.localCLI(r); ok && a.cliUpdateShows(en) {
+					ui.Column(c).Padding(0, 16, 12).Children(func() { a.cliUpdate(c, en) })
 				}
 				if s := r.info.Info.NoAuto; s != "" {
 					optionRow(c, accessAuto, s+", so Approve for me ran without it and asked you more.", func() {})
@@ -156,7 +161,7 @@ func (a *app) checkAgain(c *ui.Context) {
 	if a.models.asking {
 		label = "Checking…"
 	}
-	ui.Button(c.Key("check"), label).Disabled(a.models.asking).OnClick(a.checkProviders)
+	ui.Button(c.Key("check"), label).Disabled(a.models.asking).OnClick(a.checkCLIs)
 }
 
 // defaultChoice is a model with the effort it runs at: what the default
@@ -292,7 +297,20 @@ func (a *app) providerHead(c *ui.Context, r providerRow) {
 		})
 		ui.Text(c, a.defaultLine(r)).FontSize(12).TextColor(palette.muted).SingleLine()
 	})
+	if u := r.info.Update; a.settings.checkCLIs && u != nil && u.Available {
+		statePill(c, "Update available", toneNews)
+	}
 	statePill(c, state, t)
+}
+
+// localCLI is the row's provider as this machine's engine said, while it
+// says anything of its versions.
+func (a *app) localCLI(r providerRow) (cliEntry, bool) {
+	envs := a.backend.Envs()
+	if len(envs) == 0 || r.info.Update == nil || !a.settings.checkCLIs {
+		return cliEntry{}, false
+	}
+	return cliEntry{cliKey{envs[0], r.family.provider}, envs[0], r.info}, true
 }
 
 // providers is Settings › Providers: every provider the engine serves.
@@ -303,10 +321,81 @@ func (a *app) providers(c *ui.Context) {
 		ui.Text(c, "Waiting for the engine to say what it runs.").Key("none").TextColor(palette.muted).Padding(0, 4)
 		return
 	}
-	ui.Column(c).Radius(12).Border(1, palette.border).Background(palette.surface).Clip().Dividers(1, palette.border).Children(func() {
-		for _, r := range rows {
-			a.providerRowA(c, r)
+	remotes := a.remoteEnvs()
+	ui.Column(c).Gap(8).Children(func() {
+		if len(remotes) > 0 {
+			ui.Box(c).Padding(0, 4).Children(func() { sectionLabel(c, strings.ToUpper(a.backend.Envs()[0].Name)) })
 		}
+		ui.Column(c).Radius(12).Border(1, palette.border).Background(palette.surface).Clip().Dividers(1, palette.border).Children(func() {
+			for _, r := range rows {
+				a.providerRowA(c, r)
+			}
+		})
+	})
+	for _, e := range remotes {
+		a.remoteProviders(c, e)
+	}
+	card(c, "UPDATES", func() {
+		settingRow(c, "CLI updates", "Once a day, each machine's engine asks where its agent CLIs are published whether a newer version is out. It sends nothing about you or your machine.", func() {
+			if ui.Switch(c.Key("check-clis"), &a.settings.checkCLIs).Label("Check for CLI updates").Changed() && a.settings.checkCLIs {
+				a.checkCLIs()
+			}
+		})
+		settingRow(c, "Check now", "Ask every machine's providers again, and where their CLIs are published.", func() { a.checkAgain(c) })
+	})
+}
+
+// remoteEnvs are the paired machines shown, in gui.json's order.
+func (a *app) remoteEnvs() []*client.Env {
+	var out []*client.Env
+	for _, e := range a.backend.Envs() {
+		if e.Kind == client.Remote && a.backend.ShownBy(e) == e {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// remoteProviders are a paired machine's providers, as its engine says:
+// each one's state and version there, and its update. Their models and
+// the default are this machine's to choose.
+func (a *app) remoteProviders(c *ui.Context, e *client.Env) {
+	a.askCLIs()
+	served, heard := a.clis.served[e]
+	ui.Column(c).Key(fmt.Sprintf("machine:%p", e)).Gap(8).Children(func() {
+		ui.Box(c).Padding(0, 4).Children(func() { sectionLabel(c, strings.ToUpper(e.Name)) })
+		ui.Column(c).Radius(12).Border(1, palette.border).Background(palette.surface).Clip().Dividers(1, palette.border).Children(func() {
+			if !heard {
+				_, status := a.envStatus(e)
+				if e.Status == client.Status(client.Online{}) {
+					status = "Asking its engine…"
+				}
+				ui.Text(c, status).Key("none").FontSize(12.5).TextColor(palette.muted).Padding(12, 16)
+				return
+			}
+			for _, p := range served {
+				r := providerRow{family: familyOf(p.Name), info: p, heard: true, served: true}
+				state, t := r.standing()
+				ui.Column(c).Key("provider:"+p.Name).Padding(12, 16, 12, 14).Gap(10).Children(func() {
+					ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+						modelTile(c, r.family.icon, r.family.color, 28)
+						ui.Row(c).Grow(1).Shrink(1).Gap(8).AlignItems(ui.Center).Children(func() {
+							ui.Text(c, r.family.name).FontWeight(600).SingleLine().Shrink(1)
+							if v := r.version(); v != "" {
+								ui.Text(c, v).FontSize(11.5).TextColor(palette.faint).SingleLine().Shrink(0)
+							}
+						})
+						if u := p.Update; a.settings.checkCLIs && u != nil && u.Available {
+							statePill(c, "Update available", toneNews)
+						}
+						statePill(c, state, t)
+					})
+					if a.settings.checkCLIs {
+						a.cliUpdate(c, cliEntry{cliKey{e, p.Name}, e, p})
+					}
+				})
+			}
+		})
 	})
 }
 

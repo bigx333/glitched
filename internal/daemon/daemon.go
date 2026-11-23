@@ -20,6 +20,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/browsermcp"
+	"glitched/internal/cliupdate"
 	"glitched/internal/engine"
 	"glitched/internal/hub"
 	"glitched/internal/jsonfile"
@@ -75,6 +76,9 @@ type Config struct {
 	// Children caps the child threads agents start. Its zero fields take
 	// engine.DefaultLimits'.
 	Children engine.Limits `json:"children,omitzero"`
+	// Versions looks up the latest versions of the providers' CLIs; nil, as
+	// a test's engine has, looks up none.
+	Versions cliupdate.Lookup `json:"-"`
 	// PluginRun runs the programs plugins' services ask for; nil runs them with RunProgram.
 	PluginRun func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error) `json:"-"`
 }
@@ -123,6 +127,7 @@ func FakeProviders(ad provider.Adapter) provider.Mux {
 func (cfg *Config) WithClaude() {
 	l := cfg.Launch["claude"]
 	cfg.Providers = provider.Mux{"claude": &claude.Adapter{Path: l.Path, Home: l.Home, Args: l.Args}}
+	cfg.Versions = cliupdate.HTTP{}
 	if s, ok := browsermcp.Server(cfg.Dir); ok {
 		cfg.MCP = []provider.MCPServer{s}
 	}
@@ -157,6 +162,7 @@ func (cfg Config) Save() error {
 // backup.
 type Daemon struct {
 	host  *runtime.Host
+	clis  *clis
 	store *store.Store
 	node  *tailnet.Node // the engine's own, when it needs the tailnet and Tailscale isn't installed
 	// nodeServes: the engine listens on its own node, as it does when
@@ -333,12 +339,13 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	}
 	svc := d.startPlugins(cfg.Dir, cfg.PluginRun)
 	d.undo = append(d.undo, func() error { svc.Close(); return nil })
+	d.clis = newCLIs(ctx, cfg.Providers, h, cliupdate.NewChecker(cfg.Versions, filepath.Join(cfg.Dir, "cli-versions.json")))
 	cmds := newCommandLists(ctx, cfg.Providers)
 	ls := &launches{dir: cfg.Dir, mux: cfg.Providers, commands: cmds}
-	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: cmds, Launches: ls, Asks: h, Secrets: h, Projects: endpoint{h, d, false}}}
+	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: cmds, Launches: ls, CLIs: d.clis, Asks: h, Secrets: h, Projects: endpoint{h, d, false}}}
 	g := &grants{dir: cfg.Dir, base: ctx}
 	tailnetServer := func(tn transport.Transport) *transport.Server {
-		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Launches: ls, Secrets: h, Projects: endpoint{h, d, true}, Authorize: g.authorize}
+		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Launches: ls, CLIs: d.clis, Secrets: h, Projects: endpoint{h, d, true}, Authorize: g.authorize}
 	}
 	type unbound struct {
 		tn  transport.Tailnet

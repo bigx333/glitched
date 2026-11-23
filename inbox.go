@@ -253,6 +253,7 @@ func (a *app) threadsNav(c *ui.Context) {
 	}
 	a.pluginComponent(c, "sidebar.body", nil, body...)
 	ui.Column(c).Padding(8).Gap(1).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
+		a.cliUpdatesButton(c)
 		a.pluginSlot(c, "sidebar.footer", "", nil, false)
 		a.pluginNav(c)
 		if ghost(c, "settings", false).Padding(7, 8).Children(func() {

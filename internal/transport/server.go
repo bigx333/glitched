@@ -18,6 +18,7 @@ import (
 	"github.com/coder/websocket"
 
 	"glitched/internal/api"
+	"glitched/internal/cliupdate"
 	"glitched/internal/hub"
 	"glitched/internal/provider"
 )
@@ -40,6 +41,10 @@ type Server struct {
 	// already run there, a thread at Full access in any folder, is no
 	// less than a program it names.
 	Launches Launches
+	// CLIs says what the providers are on this machine and updates their
+	// CLIs, from any client the server admits: a window on another machine
+	// shows this one's.
+	CLIs CLIs
 	// Asks opens credentials requests for this machine's agents, to its
 	// own callers only, as Plugins: glitched mcp asks for its agent.
 	Asks Asks
@@ -413,7 +418,6 @@ type forgetQuery struct {
 // Providers are what the engine's providers offer a session.
 type Providers interface {
 	Commands(ctx context.Context, provider, workspace string) ([]provider.Command, error)
-	Providers(ctx context.Context, fresh bool) []ProviderInfo
 	Ask(ctx context.Context, provider string, spec provider.AskSpec) (provider.AskResult, error)
 }
 
@@ -456,6 +460,16 @@ type launchQuery struct {
 	Launch   provider.Launch `json:"launch"`
 }
 
+// CLIs are the engine's providers and the CLIs they run on its machine.
+type CLIs interface {
+	// Providers is every provider the engine serves, each asked again
+	// when fresh. Only check looks up whether its CLI has a newer version.
+	Providers(ctx context.Context, fresh, check bool) []ProviderInfo
+	// UpdateProvider runs the updater of name's CLI, refused while a turn
+	// of it runs, unless whenIdle has it wait for none to.
+	UpdateProvider(ctx context.Context, name string, whenIdle bool) (UpdateResult, error)
+}
+
 // ProviderInfo is one provider the engine serves: what it said of itself,
 // or why it couldn't say.
 type ProviderInfo struct {
@@ -465,6 +479,20 @@ type ProviderInfo struct {
 	// State is what the user must do before the provider runs, where
 	// Error is what to do: install it, or sign in. "" otherwise.
 	State ProviderState `json:"state,omitempty"`
+	// Update is what the engine knows of the CLI's versions, when it was
+	// asked to check.
+	Update *cliupdate.Status `json:"update,omitempty"`
+}
+
+// UpdateResult is how an update went: the updater's Output, the end of it
+// when long, and Error when it failed or didn't run. Busy is that it
+// didn't, as a turn of the provider runs. Provider is the provider as it
+// is after.
+type UpdateResult struct {
+	Output   string       `json:"output,omitempty"`
+	Error    string       `json:"error,omitempty"`
+	Busy     bool         `json:"busy,omitempty"`
+	Provider ProviderInfo `json:"provider"`
 }
 
 // ProviderState is what stands between the user and a provider.
@@ -476,9 +504,16 @@ const (
 )
 
 // providersQuery asks for every provider, each asked again, not answered
-// from what it last said, when Fresh.
+// from what it last said, when Fresh, and its CLI's versions when Check.
 type providersQuery struct {
 	Fresh bool `json:"fresh,omitempty"`
+	Check bool `json:"check,omitempty"`
+}
+
+// updateQuery asks for an update of Provider's CLI.
+type updateQuery struct {
+	Provider string `json:"provider"`
+	WhenIdle bool   `json:"whenIdle,omitempty"`
 }
 
 // commandsQuery asks for the slash commands of Provider's sessions in
@@ -516,9 +551,6 @@ func (s *Server) methods() map[string]handler {
 		m["provider.commands"] = callHandler(func(ctx context.Context, q commandsQuery) ([]provider.Command, error) {
 			return p.Commands(ctx, q.Provider, q.Workspace)
 		})
-		m["providers"] = callHandler(func(ctx context.Context, q providersQuery) ([]ProviderInfo, error) {
-			return p.Providers(ctx, q.Fresh), nil
-		})
 		m["provider.ask"] = callHandler(func(ctx context.Context, q askQuery) (provider.AskResult, error) {
 			return p.Ask(ctx, q.Provider, q.Spec)
 		})
@@ -527,6 +559,14 @@ func (s *Server) methods() map[string]handler {
 		m["provider.launches"] = callHandler(func(ctx context.Context, _ struct{}) ([]LaunchInfo, error) { return l.Launches(ctx) })
 		m["provider.launch"] = callHandler(func(ctx context.Context, q launchQuery) (LaunchInfo, error) {
 			return l.SetLaunch(ctx, q.Provider, q.Launch)
+		})
+	}
+	if c := s.CLIs; c != nil {
+		m["providers"] = callHandler(func(ctx context.Context, q providersQuery) ([]ProviderInfo, error) {
+			return c.Providers(ctx, q.Fresh, q.Check), nil
+		})
+		m["provider.update"] = callHandler(func(ctx context.Context, q updateQuery) (UpdateResult, error) {
+			return c.UpdateProvider(ctx, q.Provider, q.WhenIdle)
 		})
 	}
 	if a := s.Asks; a != nil {
