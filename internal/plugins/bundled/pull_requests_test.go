@@ -431,6 +431,7 @@ func TestTheHeaderShowsNothingWithNoPullRequestToShowOrMake(t *testing.T) {
 			return work, false
 		}},
 		{"not a repository", func(t *testing.T) (string, bool) { repo(t); return t.TempDir(), true }},
+		{"not a folder", func(t *testing.T) (string, bool) { return filepath.Join(t.TempDir(), "gone"), true }},
 		{"not on GitHub", func(t *testing.T) (string, bool) {
 			work, _ := repo(t)
 			git(t, work, "checkout", "-q", "-b", "fix-flaky")
