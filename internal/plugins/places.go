@@ -124,6 +124,24 @@ func (s *Session) SetItems(place string, items []PlaceItem) {
 		gen := s.gen
 		s.mu.Unlock()
 		s.push(queued{gen: gen, refresh: true, items: true})
+		s.shown(place, old, items)
+	}
+}
+
+// shown tells a plugin that hears place.shown of each copy of the place
+// that came: one a drawing alone can't fetch for, as a thread's header.
+func (s *Session) shown(place string, old, items []PlaceItem) {
+	if !slices.Contains(s.h.Ext(s.plugin).Events, "place.shown") {
+		return
+	}
+	i := slices.IndexFunc(s.places.places, func(p Place) bool { return p.ID == place })
+	if i < 0 {
+		return
+	}
+	for _, it := range items {
+		if !slices.ContainsFunc(old, func(o PlaceItem) bool { return o.Key == it.Key }) {
+			s.Notify(AppEvent{Kind: "app", Type: "place.shown", Data: map[string]any{"id": place, "at": s.places.places[i].At, "key": it.Key, "context": it.Context}})
+		}
 	}
 }
 

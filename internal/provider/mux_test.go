@@ -19,6 +19,16 @@ func (n named) Describe(context.Context) (provider.Info, error) {
 	return provider.Info{Name: n.name}, nil
 }
 
+func TestMuxAsksOnlyAnAdapterThatAnswers(t *testing.T) {
+	m := provider.Mux{"fake": fake.New(nil)}
+	if _, err := m.Ask(context.Background(), "fake", provider.AskSpec{Prompt: "p"}); !errors.Is(err, provider.ErrUnsupported) {
+		t.Errorf("Ask of an adapter with no Ask: %v, want ErrUnsupported", err)
+	}
+	if _, err := m.Ask(context.Background(), "nope", provider.AskSpec{Prompt: "p"}); !errors.Is(err, provider.ErrNoAdapter) {
+		t.Errorf("Ask of an unknown provider: %v, want ErrNoAdapter", err)
+	}
+}
+
 func TestMuxRoutesByProviderName(t *testing.T) {
 	ctx := context.Background()
 	m := provider.Mux{"a": named{fake.New(nil), "A"}, "b": named{fake.New(nil), "B"}}
