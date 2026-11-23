@@ -333,6 +333,25 @@ func TestMessagesStayApart(t *testing.T) {
 	}
 }
 
+// A compaction leaves what the context holds unknown until Codex next
+// says, whether it shows as an item or as the thread's news.
+func TestACompactionReportsTheContextUnknown(t *testing.T) {
+	a, _ := fake(t, "compacted")
+	g := open(t, a, spec(t))
+	do(t, g, provider.Start{Text: "hi"})
+	var got []provider.Context
+	for _, e := range turn(t, g) {
+		if c, ok := e.(provider.Context); ok {
+			got = append(got, c)
+		}
+	}
+	closeRun(t, g)
+	want := []provider.Context{{Compacted: true}, {Compacted: true}, {Used: 100, Window: 258400}}
+	if !slices.Equal(got, want) {
+		t.Errorf("the turn reported %+v, want %+v", got, want)
+	}
+}
+
 // What Codex answered a request of the fake's, as the log has it.
 func answers(t *testing.T, log string) []json.RawMessage {
 	t.Helper()

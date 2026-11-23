@@ -414,6 +414,11 @@ func (f *fake) play(n int, turn, said string) {
 		f.message("msg-b", "second")
 	case "whole":
 		f.item("item/completed", map[string]any{"type": "agentMessage", "id": "msg-w", "text": "all at once"})
+	case "compacted":
+		f.item("item/started", map[string]any{"type": "contextCompaction", "id": "compact-1"})
+		f.item("item/completed", map[string]any{"type": "contextCompaction", "id": "compact-1"})
+		f.notify("thread/compacted", map[string]any{"threadId": thread, "turnId": turn})
+		f.message("msg-"+turn, "compacted")
 	case "command":
 		cmd := map[string]any{"type": "commandExecution", "id": "cmd-1", "command": "ls -a", "cwd": f.cwd, "status": "inProgress", "commandActions": []any{}}
 		f.item("item/started", cmd)
