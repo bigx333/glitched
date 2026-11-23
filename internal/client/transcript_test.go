@@ -624,9 +624,9 @@ func TestAWakeShowsOnItsReport(t *testing.T) {
 	}
 }
 
-// A turn's end is kept on its last reply that says something, or on its
-// message when it said nothing; a run of no message of the user's, as a
-// child's report waking the agent, keeps it nowhere.
+// A turn's end, and how long it ran, is kept on its last reply that says
+// something, or on its message when it said nothing; a run of no message
+// of the user's, as a child's report waking the agent, keeps it unasked.
 func TestFoldKeepsHowATurnEndedOnWhatItSaidLast(t *testing.T) {
 	a, b, wake := api.NewID(), api.NewID(), api.NewID()
 	evs := slices.Concat(start(a, "one", 0), []api.EventBody{
@@ -658,21 +658,23 @@ func TestFoldKeepsHowATurnEndedOnWhatItSaidLast(t *testing.T) {
 		}
 		s := describe(e)
 		if end != nil {
-			s += fmt.Sprintf(" ended %d at %s", end.Outcome, end.At.Format("15:04:05"))
+			s += fmt.Sprintf(" ended %d at %s after %s", end.Outcome, end.At.Format("15:04:05"), end.Took)
+			if !end.Asked {
+				s += " unasked"
+			}
 		}
 		got = append(got, s)
 	}
 	want := []string{
 		`user "one" sent`,
 		`assistant "Looking."`,
-		`assistant "Done." ended 0 at 09:00:06`,
+		`assistant "Done." ended 0 at 09:00:06 after 4s`,
 		`user "two" sent`,
-		`assistant "Half" ended 2 at 09:00:13`,
+		`assistant "Half" ended 2 at 09:00:13 after 4s`,
 		`assistant " \n "`,
-		`assistant "The child is done."`,
+		`assistant "The child is done." ended 2 at 09:00:17 after 2s unasked`,
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
-

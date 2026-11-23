@@ -339,6 +339,10 @@ type NativeWidget = {
       props: { index: number };
     }
   | {
+      /** When the message was sent, or the reply came, in message.toolbar, in the user's formats: the time today, the day too before, the year too in another year, and how long a turn ran under its last reply; the day written out in its tooltip. Nothing for a message not sent yet. */
+      name: "message.time";
+    }
+  | {
       /** The header's button back to a thread above the one shown, in thread.header.breadcrumb; nothing for a thread not among the context's ancestors. */
       name: "thread.crumb";
       props: { thread: string };
@@ -634,12 +638,15 @@ interface TimelineMessageContext {
   note?: string;
   /** The message's send failed. */
   failed?: boolean;
+  /** When you sent a message of yours (as the engine took it in, even while it waits, is held or was cancelled), or a reply's first words came, in ISO 8601; left out before the engine takes a message in and for other rows. */
+  at?: string;
 }
 
 /**
  * The context of message.toolbar: which message's toolbar a copy is and
  * whose message it is, never what it says. Its actions are the natives
- * message.copy, message.edit, message.retry and message.item.
+ * message.copy, message.edit, message.retry and message.item, and
+ * message.time says when it was sent.
  */
 interface MessageToolbarContext {
   /** The message's row's key. */
@@ -647,6 +654,10 @@ interface MessageToolbarContext {
   role: "user" | "assistant";
   /** How many commands plugins put in message.actions, which message.item draws by index. */
   items?: number;
+  /** When you sent the message (as the engine took it in), or the reply's first words came, in ISO 8601; left out before the engine takes a message in. */
+  at?: string;
+  /** How long the turn ran, in milliseconds, under its last reply; left out elsewhere and where its start wasn't seen. */
+  took?: number;
 }
 
 /** The context of thread.header.breadcrumb, a child thread's way back up around its title: its layout must place the native thread.heading once. Needs threads:read. */

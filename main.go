@@ -604,6 +604,12 @@ type app struct {
 	picking bool
 	// now is the frame's time, as the view builds it.
 	now time.Time
+	// clock and zone are what a message's time is told against: the day
+	// it is, and where. Nil: the frame's time, and the system's zone.
+	clock func() time.Time
+	zone  *time.Location
+	// stamps are messages' times as their toolbars write them.
+	stamps map[stampKey][2]string
 
 	cmdkOpen  bool
 	cmdkQuery string

@@ -25,7 +25,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)
+// SCENE=empty|running|approval|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)
 // for the engines' threads (none started without one; question takes
 // ASK=<request body>, PICK=<label>,… and QUESTION=answer|dismiss|stop;
 // both is an approval and questions waiting at once, the questions first
@@ -452,6 +452,12 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 			provider.TextDelta{Text: "Half of it is sorted."},
 			provider.TurnEnded{Outcome: api.OutcomeFailed, Error: "The agent stopped answering."},
 		})
+	case "stamped":
+		// The checks thread, its message sent at 14:32 today and its
+		// turn 1m12s long, told in British formats.
+		h = stamped(t, britain, time.Date(2026, 11, 22, 14, 32, 0, 0, sast), time.Date(2026, 11, 22, 14, 32, 9, 0, sast), 72*time.Second)
+	case "twodays":
+		h = twoDays(t, britain)
 	case "silent":
 		// A turn that failed saying nothing.
 		h = playedOnce(t, []provider.Event{provider.TurnEnded{Outcome: api.OutcomeFailed, Error: "Claude Code is not signed in."}})

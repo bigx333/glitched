@@ -1,8 +1,11 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
+	"time"
 
+	"github.com/egoist/mygo/i18n"
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
@@ -24,7 +27,7 @@ import (
 func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed bool) {
 	e := es[i]
 	items := a.plugins.MenuItems("message.actions")
-	m := messageToolbar{Key: e.key, Role: "assistant", Items: len(items)}
+	m := messageToolbar{Key: e.key, Role: "assistant", Items: len(items), At: e.at, Took: e.ran.Milliseconds()}
 	if e.kind == entryUser {
 		m.Role = "user"
 	}
@@ -60,6 +63,9 @@ func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed
 					a.backend.Send(t.env, t.id(), asked, api.SteerActive)
 					a.listFor(t.id()).ScrollToEnd()
 				}
+			case "message.time":
+				short, full := a.messageTime(c, e)
+				a.tip(c, ui.Text(c, short).FontSize(11).TextColor(palette.faint).Padding(2, 6), full)
 			case "message.item":
 				it := items[itemIndex(n)]
 				icon := appIconNamed(it.Icon)
@@ -84,6 +90,8 @@ func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed
 			case "message.item":
 				at := itemIndex(n)
 				return at < 0 || at >= len(items)
+			case "message.time":
+				return e.at.IsZero()
 			}
 			return false
 		},
@@ -95,9 +103,11 @@ func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed
 // is under, whose it is, and how many commands plugins put in the
 // toolbar, which message.item draws by index. Never what it says.
 type messageToolbar struct {
-	Key   string `json:"key"`
-	Role  string `json:"role"`
-	Items int    `json:"items,omitempty"`
+	Key   string    `json:"key"`
+	Role  string    `json:"role"`
+	Items int       `json:"items,omitempty"`
+	At    time.Time `json:"at,omitzero"`
+	Took  int64     `json:"took,omitempty"` // ms
 }
 
 // messageToolbarRow is the built-in Message toolbar's drawing of the
@@ -113,6 +123,7 @@ func messageToolbarRow(m messageToolbar) *widget.Node {
 		index, _ := json.Marshal(i)
 		row.Children = append(row.Children, &widget.Node{Type: "native", ID: "item-" + string(index), Name: "message.item", Props: map[string]json.RawMessage{"index": index}})
 	}
+	row.Children = append(row.Children, &widget.Node{Type: "native", ID: "time", Name: "message.time"})
 	return row
 }
 
@@ -121,6 +132,58 @@ func action(c *ui.Context, key any, icon *ui.SVG, label string, disabled bool) u
 		ui.Icon(c, icon).FontSize(11)
 		ui.Text(c, label).FontSize(11)
 	})
+}
+
+// messageTime is when e was sent, or its words came, as its toolbar says
+// it, in the user's formats: the time today, the day too before today,
+// the year too in another year; and, under a turn's last reply, how long
+// the turn ran. full writes the day out, for the tooltip and assistive
+// technology. A toolbar is built each frame, so each is written once.
+func (a *app) messageTime(c *ui.Context, e entry) (short, full string) {
+	lang := cmp.Or(c.Locale(), "en")
+	r := c.Region()
+	if r.HourCycle != 12 && r.HourCycle != 24 {
+		r = i18n.RegionFor(lang)
+		r.Locale = ""
+	}
+	zone, now := cmp.Or(a.zone, time.Local), a.now
+	if a.clock != nil {
+		now = a.clock()
+	}
+	at, now := e.at.In(zone), now.In(zone)
+	skeleton := "jm"
+	switch {
+	case at.Year() != now.Year():
+		skeleton = "yMMMdjm"
+	case at.YearDay() != now.YearDay():
+		skeleton = "MMMdjm"
+	}
+	k := stampKey{at: e.at.UnixNano(), ran: e.ran, zone: zone, skeleton: skeleton, lang: lang, region: r}
+	if s, ok := a.stamps[k]; ok {
+		return s[0], s[1]
+	}
+	locale := r.FormatLocale(lang)
+	short = i18n.FormatDate(locale, at, i18n.DateOptions{Skeleton: skeleton, HourCycle: r.HourCycle})
+	full = i18n.FormatDate(locale, at, i18n.DateOptions{Date: i18n.FullStyle, Time: i18n.ShortStyle, HourCycle: r.HourCycle})
+	if took := e.ran.Round(time.Second); took > 0 {
+		short += " · " + took.String()
+		full += ", took " + took.String()
+	}
+	if a.stamps == nil || len(a.stamps) >= 4096 {
+		a.stamps = map[stampKey][2]string{}
+	}
+	a.stamps[k] = [2]string{short, full}
+	return short, full
+}
+
+// stampKey is what a message's time is written from.
+type stampKey struct {
+	at       int64
+	ran      time.Duration
+	zone     *time.Location
+	skeleton string
+	lang     string
+	region   i18n.Region
 }
 
 // itemIndex is the index of the message.item n, -1 without a whole

@@ -18,11 +18,12 @@ import (
 type Transcript struct {
 	Entries  []Entry
 	Queue    []*UserEntry
-	Cursor   api.Cursor // the last event folded in
-	Ended    time.Time  // when the last turn folded in ended
-	Reported time.Time  // when the last child's report folded in came
-	Deleted  bool       // the thread's tombstone is folded in; nothing follows it
-	starting api.ID     // the run admitted and not yet started, stopped or ended
+	Cursor   api.Cursor           // the last event folded in
+	Ended    time.Time            // when the last turn folded in ended
+	Reported time.Time            // when the last child's report folded in came
+	Deleted  bool                 // the thread's tombstone is folded in; nothing follows it
+	starting api.ID               // the run admitted and not yet started, stopped or ended
+	began    map[api.ID]time.Time // when each run not yet ended started
 	wakes    map[api.ID]*wake
 	// edits are the indexes of Entries changed in place, in the order
 	// they changed, but for the first editsBase, dropped: Edits reads
@@ -112,6 +113,8 @@ type UserEntry struct {
 	Text    string
 	State   MessageState
 	Reason  string // why it was cancelled, when the engine said
+	// At is when it was sent.
+	At time.Time
 	// End is how the message's own run ended, when it ended saying
 	// nothing; the run's last reply holds it otherwise.
 	End *TurnEnd
@@ -122,17 +125,22 @@ type UserEntry struct {
 type AssistantEntry struct {
 	Run       api.ID
 	Text      string
-	Streaming bool // more text may follow
-	// End is how the run ended, on its last reply that says something,
-	// and only for a run of a message of the user's; nil while it runs.
+	Streaming bool      // more text may follow
+	At        time.Time // when its first words came
+	// End is how the run ended, on its last reply that says something;
+	// nil while it runs.
 	End  *TurnEnd
 	text strings.Builder
 }
 
-// TurnEnd is how a run ended: its outcome, and when.
+// TurnEnd is how a run ended: its outcome, when, how long it ran, zero
+// when the transcript didn't see it start, and whether it answered a
+// message of the user's, which asking again would send again.
 type TurnEnd struct {
 	Outcome api.Outcome
 	At      time.Time
+	Took    time.Duration
+	Asked   bool
 }
 
 // write appends s. Text shares the builder's bytes, so a long run's deltas
@@ -249,7 +257,7 @@ func (t *Transcript) apply(e api.Event) {
 		if i < 0 {
 			i = len(t.Queue)
 		}
-		t.Queue = slices.Insert(t.Queue, i, &UserEntry{Message: b.Message, Text: b.Text, State: state, pos: b.Pos})
+		t.Queue = slices.Insert(t.Queue, i, &UserEntry{Message: b.Message, Text: b.Text, State: state, At: e.At, pos: b.Pos})
 	case api.MessageClaimed:
 		if i := t.waiting(b.Message); i >= 0 {
 			t.Queue[i].State, t.Queue[i].run = Claimed, b.Run
@@ -269,6 +277,10 @@ func (t *Transcript) apply(e api.Event) {
 		t.starting = b.Run
 	case api.TurnStarted:
 		t.started(b.Run)
+		if t.began == nil {
+			t.began = map[api.ID]time.Time{}
+		}
+		t.began[b.Run] = e.At
 	case api.TurnRestored:
 		// A run restored past starting is unchanged.
 		if b.Run == t.starting {
@@ -283,7 +295,7 @@ func (t *Transcript) apply(e api.Event) {
 	case api.AssistantDelta:
 		a, ok := t.last().(*AssistantEntry)
 		if !ok || a.Run != b.Run {
-			a = &AssistantEntry{Run: b.Run, Streaming: true}
+			a = &AssistantEntry{Run: b.Run, Streaming: true, At: e.At}
 			t.add(a)
 		}
 		a.write(b.Text)
@@ -315,7 +327,12 @@ func (t *Transcript) apply(e api.Event) {
 	case api.TurnEnded:
 		t.end(b.Run, Cancelled, e.At)
 		t.Ended = e.At
-		t.ended(b.Run, TurnEnd{Outcome: b.Outcome, At: e.At})
+		end := TurnEnd{Outcome: b.Outcome, At: e.At}
+		if began, ok := t.began[b.Run]; ok {
+			end.Took = e.At.Sub(began)
+			delete(t.began, b.Run)
+		}
+		t.ended(b.Run, end)
 		if b.Outcome == api.OutcomeFailed && b.Error != "" {
 			t.add(&ErrorEntry{Run: b.Run, Error: b.Error})
 		}
@@ -474,13 +491,11 @@ func (t *Transcript) work(w api.WorkItem, at time.Time) {
 
 // ended keeps how run ended on its last reply that says something, or on
 // its own message when it said nothing. A run with no message of its own,
-// as a child's report waking the agent, keeps it nowhere: there is no
-// message of the user's to ask again.
+// as a child's report waking the agent, keeps it on its last reply alone,
+// not asked.
 func (t *Transcript) ended(run api.ID, end TurnEnd) {
 	u := t.message(run)
-	if u == nil {
-		return
-	}
+	end.Asked = u != nil
 	since := t.since(run)
 	for i := len(since) - 1; i >= 0; i-- {
 		if a, ok := since[i].(*AssistantEntry); ok && a.Run == run && strings.TrimSpace(a.Text) != "" {
@@ -489,8 +504,10 @@ func (t *Transcript) ended(run api.ID, end TurnEnd) {
 			return
 		}
 	}
-	u.End = &end
-	t.edited(u)
+	if u != nil {
+		u.End = &end
+		t.edited(u)
+	}
 }
 
 // void invalidates the run's open requests, as the engine does once the run
