@@ -28,11 +28,17 @@ var ctx = context.Background()
 // stays live for its agent's calls.
 func engine(t *testing.T) *runtime.Host {
 	t.Helper()
+	return engineOf(t, provider.Mux{"fake": fake.New(fake.Turn(true))})
+}
+
+// engineOf is engine on mux's providers.
+func engineOf(t *testing.T, mux provider.Mux) *runtime.Host {
+	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "host.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := runtime.New(ctx, st, provider.Mux{"fake": fake.New(fake.Turn(true))})
+	h, err := runtime.New(ctx, st, mux)
 	if err != nil {
 		st.Close()
 		t.Fatal(err)
@@ -53,9 +59,15 @@ func working(t *testing.T, h *runtime.Host) mcp.Origin {
 // workingAt is working, its thread created at access.
 func workingAt(t *testing.T, h *runtime.Host, access api.Access) mcp.Origin {
 	t.Helper()
+	return workingOn(t, h, api.ModelRef{Provider: "fake", Model: "fake"}, access)
+}
+
+// workingOn is working, its thread created at model and access.
+func workingOn(t *testing.T, h *runtime.Host, model api.ModelRef, access api.Access) mcp.Origin {
+	t.Helper()
 	thread := api.NewID()
 	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{
-		Workspace: "/src/app", Title: "fix it", Model: api.ModelRef{Provider: "fake", Model: "fake"}, Access: access,
+		Workspace: "/src/app", Title: "fix it", Model: model, Access: access,
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -91,8 +103,14 @@ type reply struct {
 // and returns its replies by id.
 func serve(t *testing.T, h *runtime.Host, o mcp.Origin, lines ...string) map[int]reply {
 	t.Helper()
+	return serveTools(t, &mcp.Tools{Engine: h, Origin: o}, lines...)
+}
+
+// serveTools is serve, for tools.
+func serveTools(t *testing.T, tools *mcp.Tools, lines ...string) map[int]reply {
+	t.Helper()
 	var out bytes.Buffer
-	if err := mcp.Serve(ctx, strings.NewReader(strings.Join(lines, "\n")+"\n"), &out, &mcp.Tools{Engine: h, Origin: o}); err != nil {
+	if err := mcp.Serve(ctx, strings.NewReader(strings.Join(lines, "\n")+"\n"), &out, tools); err != nil {
 		t.Fatal(err)
 	}
 	got := map[int]reply{}
