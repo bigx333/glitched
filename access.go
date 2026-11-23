@@ -194,8 +194,8 @@ func (a *app) accessControl(c *ui.Context, t thread) {
 		a.accessPicker(c, t)
 		return
 	}
-	p := accessPending(t)
-	shown, label := shownAccess(t, a.access)
+	p := a.accessPending(t)
+	shown, label := a.accessShown(t)
 	sign := a.tip(c, ui.Row(c).Key("access-sign").Label("Access: "+label).Padding(0, 6).AlignItems(ui.Center).Shrink(0), tipOf(p, "Access: "+label))
 	sign.Children(func() {
 		ui.Icon(c, accessIconOf(shown)).FontSize(13).TextColor(accessColor(shown))
@@ -232,8 +232,8 @@ func accessIconOf(level string) *ui.SVG {
 // opens. Full access is held to be granted, as hazard tape fills the row,
 // and it keeps the button striped while it's on.
 func (a *app) accessPicker(c *ui.Context, t thread) {
-	p := accessPending(t)
-	shown, label := shownAccess(t, a.access)
+	p := a.accessPending(t)
+	shown, label := a.accessShown(t)
 	full := shown == accessFull
 	icon := accessIconOf(shown)
 	b := a.tip(c, ghost(c, "access", a.accessOpen).Label("Access").TextColor(accessColor(shown)), tipOf(p, "How freely the agent acts"))

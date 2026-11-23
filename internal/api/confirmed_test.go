@@ -32,6 +32,8 @@ func TestWhatWasChosenStandsAgainstWhatTheProviderConfirmed(t *testing.T) {
 		{"a thread from before confirmations", Thread{Access: AccessAsk, LastTurn: ran(r1, AccessAsk)}, InEffect},
 		{"a thread from before confirmations, changed", Thread{Access: AccessFull, LastTurn: ran(r1, AccessAsk)}, NextTurn},
 		{"a thread from before confirmations, its new turn", Thread{Access: AccessFull, Turn: &Turn{Run: r2, Access: AccessFull}, LastTurn: ran(r1, AccessAsk)}, Applying},
+		{"a thread from before confirmations, its new turn failed", Thread{Access: AccessFull, LastTurn: failed(r2, AccessFull)}, Unapplied},
+		{"the provider runs a level above", Thread{Access: AccessAsk, LastTurn: ran(r1, AccessAsk), Confirmed: granted(r1, AccessAsk, AccessFull, "")}, Short},
 	} {
 		if got := c.t.AccessStanding(); got != c.want {
 			t.Errorf("%s: the access stands %d, want %d", c.name, got, c.want)
