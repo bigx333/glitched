@@ -51,24 +51,17 @@ func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed
 					c.AddToast(ui.Toast{Title: "Copied"})
 				}
 			case "message.edit":
-				if e.kind == entryUser && action(c, "edit", icPencil, "Edit & resend", false).Clicked() {
+				if action(c, "edit", icPencil, "Edit & resend", false).Clicked() {
 					a.draft, a.code, a.composerOpened = e.text, codeBlock{}, true
 				}
 			case "message.retry":
-				if e.kind != entryAssistant {
-					return
-				}
 				asked, ok := askedBefore(es, i)
 				if action(c, "retry", icRotate, "Retry", !ok || t.View.Live()).Clicked() {
 					a.backend.Send(t.env, t.id(), asked, api.SteerActive)
 					a.listFor(t.id()).ScrollToEnd()
 				}
 			case "message.item":
-				var at int
-				if json.Unmarshal(n.Props["index"], &at) != nil || at < 0 || at >= len(items) {
-					return
-				}
-				it := items[at]
+				it := items[itemIndex(n)]
 				icon := appIconNamed(it.Icon)
 				if icon == nil {
 					icon = icPlug
@@ -81,6 +74,18 @@ func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed
 					a.runMenuItem(it, map[string]any{"thread": a.plugins.Record(it.Plugin, a.threadRecord(t)), "message": message})
 				}
 			}
+		},
+		absent: func(n *widget.Node) bool {
+			switch n.Name {
+			case "message.edit":
+				return e.kind != entryUser
+			case "message.retry":
+				return !e.retry
+			case "message.item":
+				at := itemIndex(n)
+				return at < 0 || at >= len(items)
+			}
+			return false
 		},
 		builtin: func() *widget.Node { return messageToolbarRow(m) },
 	})
@@ -99,12 +104,11 @@ type messageToolbar struct {
 // toolbar m, as its main.js draws it. Glitched draws the same while no
 // plugin has drawn it.
 func messageToolbarRow(m messageToolbar) *widget.Node {
-	row := &widget.Node{Type: "row", Gap: 2, Children: []*widget.Node{{Type: "native", ID: "copy", Name: "message.copy"}}}
-	if m.Role == "user" {
-		row.Children = append(row.Children, &widget.Node{Type: "native", ID: "edit", Name: "message.edit"})
-	} else {
-		row.Children = append(row.Children, &widget.Node{Type: "native", ID: "retry", Name: "message.retry"})
-	}
+	row := &widget.Node{Type: "row", Gap: 2, Children: []*widget.Node{
+		{Type: "native", ID: "copy", Name: "message.copy"},
+		{Type: "native", ID: "edit", Name: "message.edit"},
+		{Type: "native", ID: "retry", Name: "message.retry"},
+	}}
 	for i := range m.Items {
 		index, _ := json.Marshal(i)
 		row.Children = append(row.Children, &widget.Node{Type: "native", ID: "item-" + string(index), Name: "message.item", Props: map[string]json.RawMessage{"index": index}})
@@ -117,6 +121,16 @@ func action(c *ui.Context, key any, icon *ui.SVG, label string, disabled bool) u
 		ui.Icon(c, icon).FontSize(11)
 		ui.Text(c, label).FontSize(11)
 	})
+}
+
+// itemIndex is the index of the message.item n, -1 without a whole
+// number.
+func itemIndex(n *widget.Node) int {
+	at := -1
+	if json.Unmarshal(n.Props["index"], &at) != nil {
+		return -1
+	}
+	return at
 }
 
 // askedBefore is the message the reply es[i] answers: the last one sent

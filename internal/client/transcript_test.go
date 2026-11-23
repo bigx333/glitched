@@ -623,3 +623,56 @@ func TestAWakeShowsOnItsReport(t *testing.T) {
 		t.Errorf("a cancelled wake: %v, wake %d; want the report alone, lost", lines(tr), r.Wake)
 	}
 }
+
+// A turn's end is kept on its last reply that says something, or on its
+// message when it said nothing; a run of no message of the user's, as a
+// child's report waking the agent, keeps it nowhere.
+func TestFoldKeepsHowATurnEndedOnWhatItSaidLast(t *testing.T) {
+	a, b, wake := api.NewID(), api.NewID(), api.NewID()
+	evs := slices.Concat(start(a, "one", 0), []api.EventBody{
+		api.AssistantDelta{Run: a, Text: "Looking."},
+		work(a, "read", api.WorkCompleted),
+		api.AssistantDelta{Run: a, Text: "Done."},
+		api.TurnEnded{Run: a, Outcome: api.OutcomeCompleted},
+	}, start(b, "two", 1), []api.EventBody{
+		api.AssistantDelta{Run: b, Text: "Half"},
+		work(b, "edit", api.WorkCompleted),
+		api.AssistantDelta{Run: b, Text: " \n "},
+		api.TurnEnded{Run: b, Outcome: api.OutcomeFailed, Error: "boom"},
+		api.TurnAdmitted{Run: wake, Generation: 3},
+		api.TurnStarted{Run: wake},
+		api.AssistantDelta{Run: wake, Text: "The child is done."},
+		api.TurnEnded{Run: wake, Outcome: api.OutcomeFailed, Error: "boom"},
+	})
+	tr := play(evs...)
+	var got []string
+	for _, e := range tr.Entries {
+		var end *TurnEnd
+		switch e := e.(type) {
+		case *UserEntry:
+			end = e.End
+		case *AssistantEntry:
+			end = e.End
+		default:
+			continue
+		}
+		s := describe(e)
+		if end != nil {
+			s += fmt.Sprintf(" ended %d at %s", end.Outcome, end.At.Format("15:04:05"))
+		}
+		got = append(got, s)
+	}
+	want := []string{
+		`user "one" sent`,
+		`assistant "Looking."`,
+		`assistant "Done." ended 0 at 09:00:06`,
+		`user "two" sent`,
+		`assistant "Half" ended 2 at 09:00:13`,
+		`assistant " \n "`,
+		`assistant "The child is done."`,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+

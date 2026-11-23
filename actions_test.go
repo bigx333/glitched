@@ -6,8 +6,8 @@ import (
 )
 
 // Pointing at a message shows its actions, which take no room. Copy
-// copies it, Edit & resend puts it back in the composer, and Retry on a
-// reply sends the message it answered again.
+// copies it and Edit & resend puts it back in the composer. A reply whose
+// turn completed has nothing to retry.
 func TestMessageActions(t *testing.T) {
 	h, th := checked(t)
 	const msg = "Sort them by most recent activity."
@@ -33,16 +33,12 @@ func TestMessageActions(t *testing.T) {
 
 	h.hover("One test fails.")
 	h.tt.Advance(time.Second)
-	h.click("Retry")
-	h.until("the message sent again", func() bool {
-		n := 0
-		for _, e := range entriesOf(th) {
-			if e.kind == entryUser && e.text == msg {
-				n++
-			}
-		}
-		return n == 2
-	})
+	if !h.tt.HasText("Copy") || h.tt.HasText("Retry") {
+		t.Errorf("a completed reply's actions are %q, want Copy and no Retry", h.tt.Texts())
+	}
+	if len(th.Pending) != 0 {
+		t.Errorf("pointing at messages sent %d commands", len(th.Pending))
+	}
 }
 
 // A command's step says how it went and how long it took, a failed one

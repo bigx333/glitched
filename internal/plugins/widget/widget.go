@@ -121,8 +121,9 @@ var Natives = map[string]Native{
 	// row's error or under its message's note.
 	"transcript.retry": {In: []string{"timeline.message"}, Thread: true},
 	// A message's actions, as Glitched draws them under it: Copy, Edit &
-	// resend (a message of yours), Retry (a reply), and the command a
-	// plugin put in message.actions at index.
+	// resend (a message of yours), Retry (a turn that failed or was
+	// stopped), and the command a plugin put in message.actions at index.
+	// One with nothing to do under a message takes no room.
 	"message.copy":  {In: []string{"message.toolbar"}, Thread: true},
 	"message.edit":  {In: []string{"message.toolbar"}, Thread: true},
 	"message.retry": {In: []string{"message.toolbar"}, Thread: true},

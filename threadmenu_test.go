@@ -193,8 +193,8 @@ func TestAFailedDeleteKeepsTheThreadShown(t *testing.T) {
 	}
 }
 
-// A reply's Retry waits while the run is live, an uncertain one too,
-// which would refuse the message.
+// A run still live, an uncertain one too, which would refuse the
+// message, has ended in nothing to retry: its reply has no Retry.
 func TestRetryWaitsWhileTheRunIsLive(t *testing.T) {
 	h := start(t, uncertainDir(t))
 	th := h.thread("Stuck")
@@ -203,8 +203,9 @@ func TestRetryWaitsWhileTheRunIsLive(t *testing.T) {
 	h.tt.Advance(time.Second) // the composer docked from the hero the app opened on
 	h.hover("Looking at the code.")
 	h.tt.Advance(time.Second)
-	h.click("Retry")
-	h.tt.Advance(time.Second)
+	if !h.tt.HasText("Copy") || h.tt.HasText("Retry") {
+		t.Errorf("an uncertain run's reply shows %q, want Copy and no Retry", h.tt.Texts())
+	}
 	if len(th.Pending) != 0 {
 		t.Fatalf("Retry sent %d commands to an uncertain run", len(th.Pending))
 	}
