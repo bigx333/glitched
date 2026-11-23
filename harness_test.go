@@ -77,6 +77,22 @@ func offline(t *testing.T) *app {
 	return a
 }
 
+// Root tests never run the real gh. A thread's workspace may be a real
+// folder, as the home folder some tests' threads are in, and the Pull
+// requests built-in reads it with git and gh as you: there gh is as though
+// it weren't installed, unless a test plays it (playGh).
+func init() {
+	run := runPluginProgram
+	runPluginProgram = func(ctx context.Context, id string, allowed []string, raw json.RawMessage) (any, error) {
+		var a struct{ Program string }
+		json.Unmarshal(raw, &a)
+		if a.Program == "gh" {
+			return nil, fmt.Errorf("%q isn't installed on this device (or isn't on your PATH)", "gh")
+		}
+		return run(ctx, id, allowed, raw)
+	}
+}
+
 // testApp is newApp for a test, which it outlives by nothing: its
 // plugins' runtimes stop as the test ends, as the app's do as it quits.
 // A runtime left running holds the app, and with it the window the test
