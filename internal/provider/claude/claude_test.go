@@ -500,6 +500,39 @@ func streamed(t *testing.T, name string) string {
 	return text.String()
 }
 
+// Claude Code names a file by the path its workspace resolves to, as
+// macOS's /var is /private/var. The card and the steps still show it
+// inside the workspace.
+func TestAWorkspaceThroughALinkShowsItsFilesInside(t *testing.T) {
+	replay(t, "tools", "")
+	h := host(t, nil)
+	ws := filepath.Join(t.TempDir(), "ws")
+	if err := os.Symlink(t.TempDir(), ws); err != nil {
+		t.Fatal(err)
+	}
+	thread := api.NewID()
+	submit(t, h, thread, api.ThreadCreate{Workspace: ws, Title: "hi", Access: api.AccessAsk,
+		Model: api.ModelRef{Provider: "claude", Model: "haiku"}})
+
+	var asked []string
+	got := playOn(t, h, thread, "Read hello.txt. Then use the Write tool to create out.txt containing ok. Then reply done.", func(r requestLog) bool {
+		asked = append(asked, r.ask.Path)
+		race(t, h, thread, r.opened, func(int) json.RawMessage { return allowed(false) })
+		return false
+	})
+
+	if !slices.Equal(asked, []string{"out.txt"}) {
+		t.Errorf("the cards asked about %q, want out.txt", asked)
+	}
+	var paths []string
+	for _, w := range got.work {
+		paths = append(paths, w.Path)
+	}
+	if !slices.Equal(paths, []string{"hello.txt", "hello.txt", "out.txt", "out.txt"}) {
+		t.Errorf("the steps name %q, want hello.txt and out.txt", paths)
+	}
+}
+
 func TestATurnStreamsIntoTheThread(t *testing.T) {
 	replay(t, "tools", "")
 	h := host(t, nil)
