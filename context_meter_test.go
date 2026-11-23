@@ -33,15 +33,23 @@ func metered(t *testing.T, name string, reports ...provider.Context) *harness {
 	h.a.select_(h.thread("Meter the context"))
 	h.until("the turn's context", func() bool { h.tt.Frame(); return h.a.current().View.Context != nil })
 	settlePlugins(t, h.a, h.tt, h.p)
-	if out := os.Getenv("METERSHOTS"); out != "" {
-		f, err := os.Create(filepath.Join(out, name+".png"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer f.Close()
-		png.Encode(f, h.tt.Image())
-	}
+	meterShot(t, h, name)
 	return h
+}
+
+// meterShot writes the window to METERSHOTS as name.png, where that is set.
+func meterShot(t *testing.T, h *harness, name string) {
+	t.Helper()
+	out := os.Getenv("METERSHOTS")
+	if out == "" {
+		return
+	}
+	f, err := os.Create(filepath.Join(out, name+".png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	png.Encode(f, h.tt.Image())
 }
 
 // hover points at the header's text s and says what shows once the
@@ -73,6 +81,7 @@ func TestTheHeaderMetersTheThreadsContext(t *testing.T) {
 		t.Error("the token pill still shows beside the meter")
 	}
 	texts := hover(t, h, "3%")
+	meterShot(t, h, "low-hover")
 	for _, want := range []string{"Context window 25k / 1m tokens, 97% left", "This thread's tokens 48.2k"} {
 		if !has(texts, want) {
 			t.Errorf("the meter's tooltip doesn't say %q: %q", want, texts)
@@ -88,6 +97,7 @@ func TestTheMeterSaysWhatItDoesntKnow(t *testing.T) {
 	if !has(hover(t, h, "Compacted"), "Context compacted. Its size shows after the next reply.") {
 		t.Errorf("a compacted context's tooltip: %q", h.tt.Texts())
 	}
+	meterShot(t, h, "compacted-hover")
 	h = metered(t, "no-window", provider.Context{Used: 25041})
 	if !has(hover(t, h, "25k in context"), "25k tokens in context. Context limit not reported.") {
 		t.Errorf("a context with no window's tooltip: %q", h.tt.Texts())

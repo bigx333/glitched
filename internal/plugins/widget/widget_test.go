@@ -155,7 +155,8 @@ func TestTheChromeWidgetsAreChecked(t *testing.T) {
 		{"type": "input", "id": "q", "style": "search"},
 		{"type": "button", "id": "b", "label": "Check", "style": "bordered", "icon": "refresh"},
 		{"type": "button", "id": "g", "label": "Go", "progress": true},
-		{"type": "menu", "id": "m", "label": "M", "options": ["a", {"separator": true}, "b"]}
+		{"type": "menu", "id": "m", "label": "M", "options": ["a", {"separator": true}, "b"]},
+		{"type": "badge", "style": "pill", "text": "76%", "value": 0.76, "color": "$warning", "tooltip": "Context"}
 	]}}`
 	if _, err := Decode([]byte(good)); err != nil {
 		t.Fatal(err)
@@ -170,6 +171,8 @@ func TestTheChromeWidgetsAreChecked(t *testing.T) {
 		`{"body": {"type": "image", "src": "app:secrets"}}`:                                                      "or app:icon",
 		`{"body": {"type": "select", "id": "s", "options": [{"separator": true}]}}`:                              "only a menu has separators",
 		`{"body": {"type": "button", "id": "b", "label": "B", "style": "ghost", "icon": "x", "progress": true}}`: "progress is a plain button's",
+		`{"body": {"type": "badge", "style": "pill", "text": "x", "value": 1.5}}`:                                "a number from 0 to 1",
+		`{"body": {"type": "badge", "text": "x", "value": 0.5}}`:                                                 "a badge's value is a pill's",
 	}
 	for s, want := range bad {
 		_, err := Decode([]byte(s))
