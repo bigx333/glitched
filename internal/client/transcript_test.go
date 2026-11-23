@@ -67,6 +67,14 @@ func describe(e Entry) string {
 		return "work " + strings.Join(items, " ")
 	case *RequestEntry:
 		return words("request", e.Kind, requestStates[e.State], string(e.Answer), e.Reason)
+	case *CompactionEntry:
+		state := "done"
+		if e.Running {
+			state = "running"
+		} else if !e.Compacted {
+			state = "skipped"
+		}
+		return fmt.Sprintf("compact %s %d->%d", state, e.PreTokens, e.PostTokens)
 	}
 	return fmt.Sprintf("%T", e)
 }
@@ -676,5 +684,35 @@ func TestFoldKeepsHowATurnEndedOnWhatItSaidLast(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A silent idle compaction folds into a single CompactionEntry without
+// showing a /compact user bubble, assistant noise, or failure errors, and
+// leaves Transcript.Ended on the last real turn.
+func TestFoldFoldsSilentCompaction(t *testing.T) {
+	a, c1, c2 := api.NewID(), api.NewID(), api.NewID()
+	evs := slices.Concat(start(a, "one", 0), []api.EventBody{
+		api.AssistantDelta{Run: a, Text: "Done."},
+		api.TurnEnded{Run: a, Outcome: api.OutcomeCompleted},
+		api.MessageQueued{Message: c1, Text: "/compact", Mode: api.AfterActive, Pos: 1, Silent: true},
+		api.TurnAdmitted{Run: c1, Generation: 2, Silent: true},
+		api.TurnStarted{Run: c1},
+		api.AssistantDelta{Run: c1, Text: "Compacted."},
+		api.ContextReported{Run: c1, Compacted: true, PreTokens: 250000, PostTokens: 32000},
+		api.TurnEnded{Run: c1, Outcome: api.OutcomeCompleted},
+		api.MessageQueued{Message: c2, Text: "/compact", Mode: api.AfterActive, Pos: 2, Silent: true},
+		api.TurnAdmitted{Run: c2, Generation: 3, Silent: true},
+		api.TurnEnded{Run: c2, Outcome: api.OutcomeFailed, Error: "session gone"},
+	})
+	tr := play(evs...)
+	expect(t, tr,
+		`user "one" sent`,
+		`assistant "Done."`,
+		`compact done 250000->32000`,
+		`compact skipped 0->0`,
+	)
+	if !tr.Ended.Equal(at(5)) {
+		t.Errorf("Transcript.Ended = %v, want %v (last non-silent turn)", tr.Ended, at(5))
 	}
 }

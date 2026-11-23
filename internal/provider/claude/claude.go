@@ -140,13 +140,17 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		return newAgent(spec, p, keep), nil
 	}
 	session := uuidOf(spec.Thread)
-	flags := []string{"--session-id", "--resume"}
-	if spec.Generation > 1 {
-		slices.Reverse(flags)
-	}
-	p, err = launch(ctx, prog, spec, slices.Concat(args, []string{flags[0], session}))
-	if errors.Is(err, errSessionInUse) || errors.Is(err, errNoSession) {
-		p, err = launch(ctx, prog, spec, slices.Concat(args, []string{flags[1], session}))
+	if spec.ResumeOnly {
+		p, err = launch(ctx, prog, spec, slices.Concat(args, []string{"--resume", session}))
+	} else {
+		flags := []string{"--session-id", "--resume"}
+		if spec.Generation > 1 {
+			slices.Reverse(flags)
+		}
+		p, err = launch(ctx, prog, spec, slices.Concat(args, []string{flags[0], session}))
+		if errors.Is(err, errSessionInUse) || errors.Is(err, errNoSession) {
+			p, err = launch(ctx, prog, spec, slices.Concat(args, []string{flags[1], session}))
+		}
 	}
 	if err != nil {
 		return nil, err

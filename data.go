@@ -151,6 +151,7 @@ const (
 	entryFailed
 	entryReport
 	entryError // why a run failed
+	entryCompact
 )
 
 // An entry is a row of the timeline. Its key stays the same while it
@@ -248,6 +249,11 @@ func (d *deriving) add(e client.Entry) {
 		d.es = append(d.es, entry{key: "r/" + e.Request.String(), kind: entryRequest, request: e})
 	case *client.ErrorEntry:
 		d.es = append(d.es, entry{key: d.key("e", e.Run), kind: entryError, text: e.Error})
+	case *client.CompactionEntry:
+		if !e.Running && !e.Compacted {
+			return
+		}
+		d.es = append(d.es, entry{key: "k/" + e.Run.String(), kind: entryCompact, text: compactLabel(e), working: e.Running, at: e.At})
 	case *client.ReportEntry:
 		// One after another, they're one card, keyed by its first and
 		// its order among the cards a run's report starts: a run that
@@ -738,12 +744,23 @@ func (a *app) projectOf(t thread) *project {
 	return a.newProject(t.env, k)
 }
 
+func compactLabel(e *client.CompactionEntry) string {
+	if e.Running {
+		return "Compacting before cache expires…"
+	}
+	if e.PreTokens > 0 && e.PostTokens > 0 {
+		return fmt.Sprintf("Auto-compacted before cache expiry · %s → %s tokens",
+			contextTokens(float64(e.PreTokens)), contextTokens(float64(e.PostTokens)))
+	}
+	return "Auto-compacted before cache expiry"
+}
+
 func (a *app) statusOf(t thread) status {
 	v := t.View
 	switch {
 	case len(v.Requests) > 0 || v.Run == api.RunWaiting:
 		return statusApproval
-	case v.Working():
+	case v.Working() && (v.Turn == nil || !v.Turn.Silent):
 		return statusWorking
 	case a.backend.Unread(t.Thread):
 		return statusCompleted

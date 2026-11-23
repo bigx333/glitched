@@ -168,6 +168,10 @@ type SessionSpec struct {
 	// host keeps none. An adapter whose agent can source a script before
 	// each command hands it secrets.ClaudeEnv's kind there.
 	Credentials string
+	// ResumeOnly requires the adapter to resume the existing conversation
+	// and fail if it cannot, rather than starting a fresh session. Used for
+	// background maintenance such as idle compaction.
+	ResumeOnly bool
 }
 
 // MCPServer is a stdio MCP server an agent starts for itself: Command with
@@ -283,11 +287,16 @@ type RequestWithdrawn struct {
 // request to its model: Used tokens of a Window, 0 where the provider
 // doesn't say, and the Model the request went to, "" where it doesn't.
 // Compacted says the provider just compacted the session, so what it
-// holds is unknown until the next report; the rest are then unset.
+// holds is unknown until the next report; PreTokens and PostTokens are
+// its token counts before and after when the provider reports them.
+// CacheExpires is when the prompt cache created by the request expires,
+// zero when the provider didn't report a TTL.
 type Context struct {
-	Used, Window int64
-	Model        string
-	Compacted    bool
+	Used, Window          int64
+	Model                 string
+	Compacted             bool
+	CacheExpires          time.Time
+	PreTokens, PostTokens int64
 }
 
 type TurnEnded struct {

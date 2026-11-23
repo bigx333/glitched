@@ -25,6 +25,7 @@ type Transcript struct {
 	starting api.ID               // the run admitted and not yet started, stopped or ended
 	began    map[api.ID]time.Time // when each run not yet ended started
 	wakes    map[api.ID]*wake
+	silent   map[api.ID]*CompactionEntry // silent idle-compaction runs, by run id
 	// edits are the indexes of Entries changed in place, in the order
 	// they changed, but for the first editsBase, dropped: Edits reads
 	// them. An entry changed again before a reader was told of its last
@@ -211,12 +212,24 @@ type ErrorEntry struct {
 	Error string
 }
 
-func (*ErrorEntry) entry()     {}
-func (*ReportEntry) entry()    {}
-func (*UserEntry) entry()      {}
-func (*AssistantEntry) entry() {}
-func (*WorkEntry) entry()      {}
-func (*RequestEntry) entry()   {}
+// CompactionEntry represents a quiet background idle-compaction run as one
+// divider row instead of a user /compact bubble and reply.
+type CompactionEntry struct {
+	Run        api.ID
+	Running    bool
+	Compacted  bool
+	PreTokens  int64
+	PostTokens int64
+	At         time.Time
+}
+
+func (*ErrorEntry) entry()      {}
+func (*CompactionEntry) entry() {}
+func (*ReportEntry) entry()     {}
+func (*UserEntry) entry()       {}
+func (*AssistantEntry) entry()  {}
+func (*WorkEntry) entry()       {}
+func (*RequestEntry) entry()    {}
 
 // fold builds a transcript from a thread snapshot, which holds every event.
 func fold(snap api.Snapshot) Transcript {
@@ -245,6 +258,9 @@ func (t *Transcript) apply(e api.Event) {
 	}
 	switch b := body.(type) {
 	case api.MessageQueued:
+		if b.Silent {
+			break
+		}
 		if !b.Report.IsZero() {
 			t.queueWake(b)
 			break
@@ -266,6 +282,16 @@ func (t *Transcript) apply(e api.Event) {
 			w.run = b.Run
 		}
 	case api.TurnAdmitted:
+		if b.Silent {
+			ce := &CompactionEntry{Run: b.Run, Running: true, At: e.At}
+			if t.silent == nil {
+				t.silent = map[api.ID]*CompactionEntry{}
+			}
+			t.silent[b.Run] = ce
+			t.add(ce)
+			t.starting = b.Run
+			break
+		}
 		if w := t.wakes[b.Run]; w != nil {
 			w.run = b.Run
 		}
@@ -292,7 +318,21 @@ func (t *Transcript) apply(e api.Event) {
 		t.settle(b.Message, Cancelled, b.Reason)
 	case api.MessageUncertain:
 		t.settle(b.Message, Uncertain, "")
+	case api.ContextReported:
+		if ce := t.silent[b.Run]; ce != nil && b.Compacted {
+			ce.Compacted = true
+			if b.PreTokens > 0 {
+				ce.PreTokens = b.PreTokens
+			}
+			if b.PostTokens > 0 {
+				ce.PostTokens = b.PostTokens
+			}
+			t.edited(ce)
+		}
 	case api.AssistantDelta:
+		if t.silent[b.Run] != nil {
+			break
+		}
 		a, ok := t.last().(*AssistantEntry)
 		if !ok || a.Run != b.Run {
 			a = &AssistantEntry{Run: b.Run, Streaming: true, At: e.At}
@@ -301,8 +341,14 @@ func (t *Transcript) apply(e api.Event) {
 		a.write(b.Text)
 		t.edited(a)
 	case api.WorkItem:
+		if t.silent[b.Run] != nil {
+			break
+		}
 		t.work(b, e.At)
 	case api.RequestOpened:
+		if t.silent[b.Run] != nil {
+			break
+		}
 		t.add(&RequestEntry{Run: b.Run, Request: b.Request, Generation: b.Generation, Kind: b.Kind, Body: b.Body, State: api.RequestPending, Opened: e.At})
 	case api.RequestAnswer:
 		if r := t.request(b.Request); r != nil {
@@ -324,8 +370,21 @@ func (t *Transcript) apply(e api.Event) {
 		t.void(b.Run)
 	case api.TurnUncertain:
 		t.end(b.Run, Uncertain, e.At)
+		if ce := t.silent[b.Run]; ce != nil {
+			ce.Running = false
+			t.edited(ce)
+		}
 	case api.TurnEnded:
 		t.end(b.Run, Cancelled, e.At)
+		if ce := t.silent[b.Run]; ce != nil {
+			ce.Running = false
+			if b.Outcome == api.OutcomeCompleted {
+				ce.Compacted = true
+			}
+			delete(t.began, b.Run)
+			t.edited(ce)
+			break
+		}
 		t.Ended = e.At
 		end := TurnEnd{Outcome: b.Outcome, At: e.At}
 		if began, ok := t.began[b.Run]; ok {

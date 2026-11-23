@@ -139,7 +139,7 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 		return provider.Info{}, err
 	}
 	defer p.discard()
-	if _, err := p.open(ctx, home, nil, ""); err != nil {
+	if _, err := p.open(ctx, home, nil, "", false); err != nil {
 		return provider.Info{}, err
 	}
 	models, err := p.models(ctx)
@@ -157,6 +157,9 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 // one with a new session. The run's model and effort are set on the
 // session before Open returns.
 func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	if spec.ResumeOnly && spec.Session == "" {
+		return nil, fmt.Errorf("%s has no session to resume", a.Profile.Name)
+	}
 	prog, err := a.program()
 	if err != nil {
 		return nil, err
@@ -199,7 +202,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		if p, err = launch(ctx, a.Profile, prog, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String(), a.Profile.Access[spec.Access].Args); err != nil {
 			return nil, err
 		}
-		if lost, err = p.open(ctx, spec.Workspace, spec.MCP, spec.Session); err != nil {
+		if lost, err = p.open(ctx, spec.Workspace, spec.MCP, spec.Session, spec.ResumeOnly); err != nil {
 			p.discard()
 			return nil, err
 		}

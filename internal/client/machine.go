@@ -78,8 +78,10 @@ func (m *Manager) Configure(change func(*daemon.Config)) error {
 		m.machine.Listeners = append(m.machine.Listeners, daemon.Listener{Addr: a})
 	}
 	was.Children = cfg.Children
+	was.CompactBeforeExpire = cfg.CompactBeforeExpire
 	if reflect.DeepEqual(cfg, was) && m.embedded != nil {
 		m.embedded.SetLimits(cfg.Children)
+		m.embedded.SetIdleCompaction(cfg.CompactBeforeExpireEnabled())
 	} else {
 		m.Restart()
 	}

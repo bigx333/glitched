@@ -134,6 +134,13 @@ func (a *app) agentsCard(c *ui.Context, m client.Machine) {
 				}
 			})
 		}
+		compactOn := m.Config.CompactBeforeExpireEnabled()
+		settingRow(c, "Compact before cache expires", "Compact idle threads over 200k tokens automatically: Claude before its prompt cache expires, and Gemini on Antigravity after 15 minutes idle.", func() {
+			if ui.Switch(c.Key("compact-before-expire"), &compactOn).Label("Enable compact before cache expires").Changed() {
+				v := compactOn
+				a.configure(func(cfg *daemon.Config) { cfg.CompactBeforeExpire = &v })
+			}
+		})
 		if !m.Embedded && m.Engine != nil {
 			ui.Text(c, "glitched serve applies a change here when it next starts.").Key("limits-later").Padding(14, 16).FontSize(12).TextColor(palette.muted)
 		}

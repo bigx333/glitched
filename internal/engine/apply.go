@@ -28,10 +28,19 @@ func Apply(t Thread, e Event) Thread {
 // apply never writes through t's slices: callers keep the old state to diff.
 func apply(t Thread, e Event) (Thread, error) {
 	var err error
+	var silent bool
 	switch b := e.Body.(type) {
-	case api.AssistantDelta, api.WorkItem:
+	case api.AssistantDelta:
 		// Transcript only: no projection changes, so no revision either.
-		t.UpdatedAt = e.At
+		if !t.silentRun(b.Run) {
+			t.UpdatedAt = e.At
+		}
+		return t, nil
+	case api.WorkItem:
+		// Transcript only: no projection changes, so no revision either.
+		if !t.silentRun(b.Run) {
+			t.UpdatedAt = e.At
+		}
 		return t, nil
 	case api.ThreadCreated:
 		if t.Exists() {
@@ -43,19 +52,21 @@ func apply(t Thread, e Event) (Thread, error) {
 	case api.ThreadRenamed:
 		t.Title = b.Title
 	case api.SessionBound:
+		silent = t.silentRun(b.Run)
 		// Another conversation holds none of what the last one did.
 		if t.Session != "" && b.Session != t.Session {
 			t.Context = api.Context{}
 		}
 		t.Session = b.Session
 	case api.ContextReported:
+		silent = t.silentRun(b.Run)
 		// A report that leaves the window out keeps the one known, if it
 		// names the same model: another's, or an unnamed one's, is not
 		// this one's.
-		c := api.Context{Used: b.Used, Window: b.Window, Model: b.Model}
+		c := api.Context{Used: b.Used, Window: b.Window, Model: b.Model, CacheExpires: b.CacheExpires}
 		switch {
 		case b.Compacted:
-			c, c.Stale = t.Context, true
+			c, c.Stale, c.CacheExpires = t.Context, true, time.Time{}
 		case b.Window == 0 && b.Model != "" && b.Model == t.Context.Model:
 			c.Window = t.Context.Window
 		}
@@ -69,10 +80,11 @@ func apply(t Thread, e Event) (Thread, error) {
 			t.Confirmed.Model = &api.ConfirmedModel{Run: b.Run, Asked: t.Runs[i].Model, Model: b.Model, Effort: b.Effort, Why: b.Why}
 		}
 	case api.ThreadConfigured:
-		// The window known was the last model's, for a report that leaves
-		// its model out.
+		// The window and prompt cache known were the last model's, for a
+		// report that leaves its model out.
 		if b.Model.Provider != t.Model.Provider || b.Model.Model != t.Model.Model {
 			t.Context.Window = 0
+			t.Context.CacheExpires = time.Time{}
 		}
 		t.Model, t.Access = b.Model, b.Access
 	case api.ChildReported:
@@ -84,6 +96,7 @@ func apply(t Thread, e Event) (Thread, error) {
 		}
 		t.Deleted = true
 	case api.MessageQueued:
+		silent = b.Silent
 		state := QueueReady
 		if b.Held {
 			state = QueueHeld
@@ -93,12 +106,22 @@ func apply(t Thread, e Event) (Thread, error) {
 		if r := t.Live(); r == nil || r.ID != b.Run || !steerable[r.State] {
 			return t, &TransitionError{"message", "unclaimed", "claimed by a run that cannot be steered"}
 		}
+		silent = t.silentRun(b.Run)
 		err = t.claim(b.Message, b.Run)
 	case api.MessageDispatched:
+		if m, ok := t.Message(b.Message); ok {
+			silent = t.silentRun(m.Run)
+		}
 		err = t.setMessage(b.Message, QueueDispatched)
 	case api.MessageCancelled:
+		if m, ok := t.Message(b.Message); ok {
+			silent = t.silentRun(m.Run)
+		}
 		err = t.setMessage(b.Message, QueueCancelled)
 	case api.MessageUncertain:
+		if m, ok := t.Message(b.Message); ok {
+			silent = t.silentRun(m.Run)
+		}
 		err = t.setMessage(b.Message, QueueUncertain)
 	case api.TurnAdmitted:
 		if err = runEdges.check("run", t.slot(), RunStarting); err != nil {
@@ -107,9 +130,11 @@ func apply(t Thread, e Event) (Thread, error) {
 		if err = t.claim(b.Run, b.Run); err != nil {
 			break
 		}
-		t.Runs = append(slices.Clip(t.Runs), Run{ID: b.Run, Generation: b.Generation, Model: t.Model, Access: t.Access, State: RunStarting})
+		silent = b.Silent
+		t.Runs = append(slices.Clip(t.Runs), Run{ID: b.Run, Generation: b.Generation, Model: t.Model, Access: t.Access, Silent: b.Silent, State: RunStarting})
 		t.Generation = b.Generation
 	case api.TurnStarted:
+		silent = t.silentRun(b.Run)
 		if err = t.setRun(b.Run, RunRunning); err == nil {
 			err = t.setMessage(b.Run, QueueDispatched)
 		}
@@ -119,10 +144,12 @@ func apply(t Thread, e Event) (Thread, error) {
 		if i := t.runAt(b.Run); i < 0 || t.Runs[i].State != RunStarting {
 			return t, nil
 		}
+		silent = t.silentRun(b.Run)
 		if err = t.setRun(b.Run, RunRunning); err == nil {
 			err = t.setMessage(b.Run, QueueDispatched)
 		}
 	case api.TurnStopping:
+		silent = t.silentRun(b.Run)
 		if err = t.setRun(b.Run, RunStopping); err == nil {
 			err = t.voidRequests(b.Run)
 		}
@@ -130,9 +157,11 @@ func apply(t Thread, e Event) (Thread, error) {
 		if r := t.Live(); r == nil || r.ID != b.Run || r.State != RunStopping {
 			return t, &TransitionError{"run", "not stopping", "signalled"}
 		}
+		silent = t.silentRun(b.Run)
 		t.Runs = slices.Clone(t.Runs)
 		t.Runs[len(t.Runs)-1].Signalled = true
 	case api.TurnUncertain:
+		silent = t.silentRun(b.Run)
 		if err = t.setRun(b.Run, RunUncertain); err == nil {
 			err = t.release(b.Run, QueueUncertain)
 		}
@@ -140,6 +169,7 @@ func apply(t Thread, e Event) (Thread, error) {
 			err = t.voidRequests(b.Run)
 		}
 	case api.TurnEnded:
+		silent = t.silentRun(b.Run)
 		if err = t.setRun(b.Run, RunFinished); err == nil {
 			i := t.runAt(b.Run)
 			t.Runs[i].Outcome, t.Runs[i].Error, t.Runs[i].Ended = b.Outcome, b.Error, e.At
@@ -178,7 +208,9 @@ func apply(t Thread, e Event) (Thread, error) {
 		return t, err
 	}
 	t.Revision++
-	t.UpdatedAt = e.At
+	if !silent {
+		t.UpdatedAt = e.At
+	}
 	return t, nil
 }
 

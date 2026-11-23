@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"glitched/internal/api"
 )
@@ -18,6 +19,7 @@ type StartTurn struct {
 	Workspace  string
 	Model      api.ModelRef
 	Access     api.Access
+	ResumeOnly bool `json:"resumeOnly,omitempty"`
 }
 
 type SteerTurn struct {
@@ -156,10 +158,12 @@ type Delta struct {
 
 // Context is how full the run's context is, as provider.Context has it.
 type Context struct {
-	Run          api.ID
-	Used, Window int64
-	Model        string
-	Compacted    bool
+	Run                   api.ID
+	Used, Window          int64
+	Model                 string
+	Compacted             bool
+	CacheExpires          time.Time
+	PreTokens, PostTokens int64
 }
 
 // Granted is the access the run's agent runs at, as provider.Granted
@@ -249,6 +253,14 @@ type Reported struct {
 	Reply  string
 }
 
+// IdleCompact asks the engine to start a silent /compact run on an idle
+// thread whose latest finished run is AfterRun, if it is still within its
+// idle compaction window.
+type IdleCompact struct {
+	Run      api.ID
+	AfterRun api.ID
+}
+
 func (Started) observed()        {}
 func (Bound) observed()          {}
 func (Ended) observed()          {}
@@ -270,3 +282,4 @@ func (InterruptLost) observed()  {}
 func (Reconciled) observed()     {}
 func (Rewound) observed()        {}
 func (Reported) observed()       {}
+func (IdleCompact) observed()    {}

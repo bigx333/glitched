@@ -75,6 +75,9 @@ type Run struct {
 	// configure since changes the thread's, and leaves the run's.
 	Model  api.ModelRef
 	Access api.Access
+	// Silent marks a background maintenance run, such as idle compaction,
+	// that should not mark the thread unread, notify, or bump UpdatedAt.
+	Silent bool
 }
 
 type Message struct {
@@ -135,6 +138,11 @@ func (t Thread) slot() RunState {
 }
 
 func (t Thread) runAt(id api.ID) int { return index(t.Runs, func(r Run) bool { return r.ID == id }) }
+
+func (t Thread) silentRun(id api.ID) bool {
+	i := t.runAt(id)
+	return i >= 0 && t.Runs[i].Silent
+}
 
 func (t Thread) messageAt(id api.ID) int {
 	return index(t.Queue, func(m Message) bool { return m.ID == id })
@@ -222,14 +230,14 @@ func View(t Thread) api.Thread {
 		v.Context = &c
 	}
 	if r := t.Live(); r != nil {
-		v.Turn = &api.Turn{Run: r.ID, Model: r.Model, Access: r.Access}
+		v.Turn = &api.Turn{Run: r.ID, Model: r.Model, Access: r.Access, Silent: r.Silent}
 	}
 	if t.LastReport != nil {
 		r := *t.LastReport
 		v.LastReport = &r
 	}
 	for i := len(t.Runs) - 1; i >= 0; i-- {
-		if r := t.Runs[i]; r.State == RunFinished {
+		if r := t.Runs[i]; r.State == RunFinished && !r.Silent {
 			v.LastTurn = &api.TurnResult{Run: r.ID, Model: r.Model, Access: r.Access, Outcome: r.Outcome, Ended: r.Ended}
 			break
 		}

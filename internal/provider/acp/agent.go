@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -209,9 +210,15 @@ func (g *Agent) start(text string) error {
 	if g.started {
 		return errors.New("acp: the run already started")
 	}
+	trimmed := strings.TrimSpace(text)
+	if strings.EqualFold(trimmed, "/compact") && g.p.lacksCommand("compact") {
+		return fmt.Errorf("%s does not advertise /compact in this session", g.p.profile.Name)
+	}
 	g.started = true
 	g.reportLocked()
-	if !g.p.briefed {
+	// Never prepend MCP instructions to a slash command (such as /compact),
+	// or the agent would read it as plain text instead of invoking the command.
+	if !g.p.briefed && !strings.HasPrefix(trimmed, "/") {
 		g.p.briefed = true
 		for i := len(g.spec.MCP) - 1; i >= 0; i-- {
 			if s := g.spec.MCP[i].Instructions; s != "" {
@@ -549,6 +556,16 @@ func (g *Agent) usage(u acpsdk.SessionUsageUpdate) {
 	defer g.mu.Unlock()
 	if g.started && !g.ended && u.Used > 0 {
 		g.queueLocked(provider.Context{Used: u.Used, Window: u.Size})
+	}
+}
+
+// compaction notes when the ACP agent finished compacting the session's
+// context.
+func (g *Agent) compaction(u acpsdk.SessionCompactionUpdate) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.started && !g.ended && u.Status == acpsdk.CompactionStatusCompleted {
+		g.queueLocked(provider.Context{Compacted: true})
 	}
 }
 

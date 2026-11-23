@@ -220,7 +220,7 @@ func (f *fake) Initialize(ctx context.Context, p acp.InitializeRequest) (acp.Ini
 	}
 	caps := acp.AgentCapabilities{SessionCapabilities: acp.SessionCapabilities{Close: &acp.SessionCloseCapabilities{}}}
 	switch f.scenario {
-	case "memory", "memory-reject-model", "memory-resume-fails", "memory-load-metadata":
+	case "memory", "memory-reject-model", "memory-resume-fails", "memory-load-metadata", "compact", "compact-no-cmd":
 		caps.LoadSession = true
 		caps.SessionCapabilities.Resume = &acp.SessionResumeCapabilities{}
 	case "memory-load-only":
@@ -236,7 +236,9 @@ func (f *fake) Initialize(ctx context.Context, p acp.InitializeRequest) (acp.Ini
 
 // The memory scenarios keep each session's prompts in a file beside the
 // log, so another process of the fake can take the session up again.
-func (f *fake) remembers() bool { return strings.HasPrefix(f.scenario, "memory") }
+func (f *fake) remembers() bool {
+	return strings.HasPrefix(f.scenario, "memory") || strings.HasPrefix(f.scenario, "compact")
+}
 
 func memory() map[acp.SessionId][]string {
 	m := map[acp.SessionId][]string{}
@@ -326,7 +328,21 @@ func (f *fake) NewSession(ctx context.Context, p acp.NewSessionRequest) (acp.New
 		f.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: id, Update: acp.UpdateAgentMessageText("history the run must not show")})
 		f.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: id, Update: acp.SessionUpdate{AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{AvailableCommands: []acp.AvailableCommand{}}}})
 	}
+	f.sendCommands(ctx, id)
 	return acp.NewSessionResponse{SessionId: id, ConfigOptions: options, Modes: f.modes()}, nil
+}
+
+func (f *fake) sendCommands(ctx context.Context, id acp.SessionId) {
+	switch f.scenario {
+	case "compact":
+		f.send(ctx, id, acp.SessionUpdate{AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
+			AvailableCommands: []acp.AvailableCommand{{Name: "compact", Description: "Compact conversation"}},
+		}})
+	case "compact-no-cmd":
+		f.send(ctx, id, acp.SessionUpdate{AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
+			AvailableCommands: []acp.AvailableCommand{{Name: "help", Description: "Show help"}},
+		}})
+	}
 }
 
 // Modes are agy's, as `session/new` lists them.
@@ -405,6 +421,11 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 	sid := p.SessionId
 	end := acp.PromptResponse{StopReason: acp.StopReasonEndTurn}
 	switch {
+	case f.is("compact") && len(p.Prompt) == 1 && p.Prompt[0].Text != nil && p.Prompt[0].Text.Text == "/compact":
+		f.send(ctx, sid, acp.SessionUpdate{CompactionUpdate: &acp.SessionCompactionUpdate{CompactionId: "cmp-1", Status: acp.CompactionStatusInProgress}})
+		f.send(ctx, sid, acp.SessionUpdate{CompactionSummaryChunk: &acp.SessionUpdateCompactionSummaryChunk{CompactionId: "cmp-1", Content: acp.TextBlock("Summary")}})
+		f.send(ctx, sid, acp.SessionUpdate{CompactionUpdate: &acp.SessionCompactionUpdate{CompactionId: "cmp-1", Status: acp.CompactionStatusCompleted}})
+		return end, nil
 	case f.remembers():
 		var said []string
 		for _, b := range p.Prompt {
@@ -665,13 +686,16 @@ func (f *fake) ListSessions(context.Context, acp.ListSessionsRequest) (acp.ListS
 func (f *fake) ResumeSession(ctx context.Context, p acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
 	f.record("session/resume", p)
 	switch f.scenario {
-	case "memory", "memory-reject-model", "memory-load-metadata":
+	case "memory", "memory-reject-model", "memory-load-metadata", "compact", "compact-no-cmd":
 	case "memory-resume-fails":
 		return acp.ResumeSessionResponse{}, acp.NewInternalError(map[string]any{"message": "Failed to read session " + string(p.SessionId) + "; retry, or load it with session/load"})
 	default:
 		return acp.ResumeSessionResponse{}, acp.NewMethodNotFound("session/resume")
 	}
 	options, _, err := f.takeUp(p.SessionId, false)
+	if err == nil {
+		f.sendCommands(ctx, p.SessionId)
+	}
 	return acp.ResumeSessionResponse{ConfigOptions: options, Modes: f.modes()}, err
 }
 

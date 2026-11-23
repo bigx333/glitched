@@ -79,8 +79,18 @@ type Config struct {
 	// Versions looks up the latest versions of the providers' CLIs; nil, as
 	// a test's engine has, looks up none.
 	Versions cliupdate.Lookup `json:"-"`
+	// CompactBeforeExpire enables automatic idle compaction before prompt
+	// cache expiry (Claude via reported cache TTL, Antigravity Gemini after
+	// 15 minutes idle). Nil defaults to true.
+	CompactBeforeExpire *bool `json:"compact_before_expire,omitempty"`
 	// PluginRun runs the programs plugins' services ask for; nil runs them with RunProgram.
 	PluginRun func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error) `json:"-"`
+}
+
+// CompactBeforeExpireEnabled reports whether automatic idle compaction is
+// enabled in cfg. It defaults to true when unset.
+func (cfg Config) CompactBeforeExpireEnabled() bool {
+	return cfg.CompactBeforeExpire == nil || *cfg.CompactBeforeExpire
 }
 
 const configFile = "engine.json"
@@ -305,7 +315,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	} else {
 		slog.Warn("agents run without glitched mcp, so they start no child threads", "err", errors.Join(err, absErr))
 	}
-	opts = append(opts, runtime.WithMCPServers(cfg.MCP...), runtime.WithWorktrees(filepath.Join(cfg.Dir, "worktrees")), runtime.WithVault(secrets.New(secrets.Under(cfg.Dir))))
+	opts = append(opts, runtime.WithMCPServers(cfg.MCP...), runtime.WithWorktrees(filepath.Join(cfg.Dir, "worktrees")), runtime.WithVault(secrets.New(secrets.Under(cfg.Dir))), runtime.WithIdleCompaction(cfg.CompactBeforeExpireEnabled()))
 	// An adapter that keeps agents between runs stops them once the host
 	// that ran them has.
 	closers := map[io.Closer]bool{}
@@ -485,6 +495,10 @@ func (d *Daemon) Endpoint() api.Endpoint { return endpoint{d.host, d, false} }
 // SetLimits applies new child limits at once, as engine.json's Children
 // does at the next start.
 func (d *Daemon) SetLimits(l engine.Limits) { d.store.SetLimits(l) }
+
+// SetIdleCompaction applies the compact-before-expire toggle at once, as
+// engine.json's CompactBeforeExpire does at the next start.
+func (d *Daemon) SetIdleCompaction(enabled bool) { d.host.SetIdleCompaction(enabled) }
 
 // Node is the engine's own tailnet node, which reaches other machines'
 // engines when Tailscale isn't installed; nil when it runs none.
