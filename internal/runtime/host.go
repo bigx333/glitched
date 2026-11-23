@@ -82,6 +82,7 @@ type liveRun struct {
 	// started is closed once the run's start is recorded: its agent may
 	// call back through glitched mcp before then.
 	started chan struct{}
+	silent  bool // it runs a compaction; set under h.mu
 }
 
 var _ api.Endpoint = (*Host)(nil)
@@ -115,14 +116,14 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 	name, _ := os.Hostname()
 	h := &Host{
 		store: st, providers: providers, name: name,
-		wake:    make(chan struct{}, 1),
-		busy:    map[api.ID]bool{},
-		runs:    map[api.ID]*liveRun{},
-		closing: map[api.ID]bool{},
-		agents:  map[*liveRun]bool{},
-		subs:    map[*stream]struct{}{},
-		asks:    map[askKey]chan json.RawMessage{},
-		held:    map[string]chan struct{}{},
+		wake:          make(chan struct{}, 1),
+		busy:          map[api.ID]bool{},
+		runs:          map[api.ID]*liveRun{},
+		closing:       map[api.ID]bool{},
+		agents:        map[*liveRun]bool{},
+		subs:          map[*stream]struct{}{},
+		asks:          map[askKey]chan json.RawMessage{},
+		held:          map[string]chan struct{}{},
 		compactCheck:  make(chan api.ID, 64),
 		compactRescan: make(chan struct{}, 1),
 		compactDue:    make(chan compactDue, 64),
@@ -391,6 +392,9 @@ func (h *Host) perform(e store.Effect) {
 		// Tracked before the check, so a stop that commits after it still
 		// cancels the start.
 		lr = h.track(b.Run, b.Model.Provider, nil)
+		h.mu.Lock()
+		lr.silent = b.ResumeOnly
+		h.mu.Unlock()
 	}
 	var t engine.Thread
 	loaded := retry(h.ctx, "load thread", func(ctx context.Context) (err error) {
@@ -401,6 +405,9 @@ func (h *Host) perform(e store.Effect) {
 	var skip engine.Observation
 	if loaded {
 		due, skip = engine.Due(t, e.Body)
+		if b, ok := e.Body.(engine.StartTurn); ok && due && b.ResumeOnly && !h.stillCompacting(t, b) {
+			due, skip = false, engine.Ended{Run: b.Run, Outcome: api.OutcomeInterrupted, Error: errCompactNotDue.Error()}
+		}
 	}
 	if !due {
 		if lr != nil {
@@ -438,7 +445,7 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 			return engine.Started{Run: b.Run}, true
 		}
 		outcome := api.OutcomeFailed
-		if lr.ctx.Err() != nil {
+		if lr.ctx.Err() != nil || errors.Is(err, errCompactNotDue) {
 			outcome = api.OutcomeInterrupted
 		}
 		h.forget(b.Run)
@@ -566,6 +573,10 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	h.mu.Lock()
 	held := h.held[b.Model.Provider]
 	h.mu.Unlock()
+	// A compaction waits for nothing: it is due now or not at all.
+	if held != nil && b.ResumeOnly {
+		return nil, errCompactNotDue
+	}
 	if held != nil {
 		select {
 		case <-held:
@@ -602,6 +613,14 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	// it still has the conversation to resume.
 	if s, ok := ag.(provider.Sessioned); ok && s.Session() != "" && s.Session() != t.Session {
 		err = h.observe(ctx, thread, engine.Bound{Run: b.Run, Session: s.Session()}, 0)
+	}
+	// What the user did while the agent opened, or the time it took,
+	// may have made a compaction due no longer.
+	if err == nil && b.ResumeOnly {
+		var now engine.Thread
+		if now, err = h.store.Thread(ctx, thread); err == nil && !h.stillCompacting(now, b) {
+			err = errCompactNotDue
+		}
 	}
 	if err == nil {
 		err = ag.Do(ctx, provider.Start{Text: b.Text})
@@ -686,7 +705,8 @@ var holdPoll = 250 * time.Millisecond
 // live: at once, else ErrBusy, unless wait has it wait for them to end
 // while ctx lasts. A run that starts while held waits for release before
 // its agent opens. One Hold of a provider at a time: another waits for
-// its release.
+// its release. A compaction outranks no update: Hold stops one and waits
+// for it to end, wait or not, and starts none while it holds.
 func (h *Host) Hold(ctx context.Context, provider string, wait bool) (release func(), err error) {
 	t := time.NewTicker(holdPoll)
 	defer t.Stop()
@@ -694,16 +714,22 @@ func (h *Host) Hold(ctx context.Context, provider string, wait bool) (release fu
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		live, err := h.unsettled(ctx, provider)
+		busy, compacting, err := h.unsettled(ctx, provider)
 		if err != nil {
 			return nil, err
 		}
 		h.mu.Lock()
 		held := h.held[provider]
 		for lr := range h.agents {
-			live = live || lr.provider == provider
+			switch {
+			case lr.provider != provider:
+			case lr.silent:
+				compacting[lr.run] = true
+			default:
+				busy = busy || !compacting[lr.run]
+			}
 		}
-		if held == nil && !live {
+		if held == nil && !busy && len(compacting) == 0 {
 			done := make(chan struct{})
 			h.held[provider] = done
 			h.mu.Unlock()
@@ -715,7 +741,7 @@ func (h *Host) Hold(ctx context.Context, provider string, wait bool) (release fu
 			}), nil
 		}
 		h.mu.Unlock()
-		if live && !wait {
+		if busy && !wait {
 			return nil, ErrBusy
 		}
 		select {
@@ -728,22 +754,24 @@ func (h *Host) Hold(ctx context.Context, provider string, wait bool) (release fu
 }
 
 // unsettled is whether the store holds a run of provider name that may
-// be running, or an agent's close of it not done. The close counts what
-// this host doesn't drive but whose process may still run: a run whose
-// reconcile failed at boot, before and after it is stopped.
-func (h *Host) unsettled(ctx context.Context, name string) (bool, error) {
+// be running, or an agent's close of it not done, and the compactions of
+// name's that are live, which it stops. The close counts what this host
+// doesn't drive but whose process may still run: a run whose reconcile
+// failed at boot, before and after it is stopped.
+func (h *Host) unsettled(ctx context.Context, name string) (busy bool, compacting map[api.ID]bool, err error) {
 	live, err := h.store.LiveThreads(ctx)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	closing, err := h.store.Closing(ctx)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
+	compacting = map[api.ID]bool{}
 	for _, id := range append(live, closing...) {
 		t, err := h.store.Thread(ctx, id)
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
 		p := t.Model.Provider
 		if r := t.Live(); r != nil {
@@ -753,12 +781,21 @@ func (h *Host) unsettled(ctx context.Context, name string) (bool, error) {
 					continue
 				}
 			}
+			if p == name && r.Silent && !slices.Contains(closing, id) {
+				compacting[r.ID] = true
+				if r.State != engine.RunStopping {
+					if _, err := h.store.Submit(ctx, api.Command{ID: api.NewID(), Target: id, Body: api.TurnInterrupt{}}, h.clock()); err != nil && !errors.Is(err, engine.ErrRefused) {
+						return false, nil, err
+					}
+				}
+				continue
+			}
 		}
 		if p == name {
-			return true, nil
+			busy = true
 		}
 	}
-	return false, nil
+	return busy, compacting, nil
 }
 
 // gone is whether the process of r, an uncertain run with no close to
