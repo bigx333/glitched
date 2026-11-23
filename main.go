@@ -494,6 +494,11 @@ type app struct {
 	// project filter and the rows' jokes, which move threads too.
 	sorted               sortedThreads
 	filterEdits, fxEdits uint64
+	// added are the folders added as projects on this machine, as
+	// projects.json holds them; addedEdits counts their changes, which
+	// the sidebar's projects follow.
+	added      []addedProject
+	addedEdits uint64
 	// The diff panel: each file's viewer, by thread and path, and their
 	// layout.
 	diffs      map[diffKey]*fileDiff
@@ -772,6 +777,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 	a.loadLayout()
 	a.loadModels()
 	a.loadComposer()
+	a.loadProjects()
 	a.loadSettings()
 	a.openPlugins(dir)
 	a.backend = client.New(client.Config{Dir: dir, Post: func(fn func()) {

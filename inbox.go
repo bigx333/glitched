@@ -80,11 +80,11 @@ type inboxItem struct {
 
 // sortedAt is what sortThreads sorted the threads after: the changes
 // posted and those made here, the threads, and the changes to the project
-// filter and the rows' jokes.
+// filter, the rows' jokes and the projects added.
 type sortedAt struct {
-	posts, edits, filter, fx uint64
-	threads                  int
-	recent                   *thread
+	posts, edits, filter, fx, added uint64
+	threads                         int
+	recent                          *thread
 }
 
 // sortedThreads are the threads of each section, of the projects filtered
@@ -106,7 +106,7 @@ type sortedThreads struct {
 // 50,000 threads that took most of one.
 func (a *app) sortThreads() {
 	recent := a.recent()
-	at := sortedAt{posts: a.posts, edits: a.backend.Edits(), filter: a.filterEdits, fx: a.fxEdits, threads: len(recent)}
+	at := sortedAt{posts: a.posts, edits: a.backend.Edits(), filter: a.filterEdits, fx: a.fxEdits, added: a.addedEdits, threads: len(recent)}
 	if len(recent) > 0 {
 		at.recent = &recent[0]
 	}

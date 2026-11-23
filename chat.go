@@ -1332,8 +1332,8 @@ func (a *app) workspaceMenu(m *ui.Menu, t thread) {
 	a.workspaceItems(m)
 }
 
-// workspacesOn are where a draft on e could start: the workspaces of e's
-// threads, and home.
+// workspacesOn are where a draft on e could start: e's projects, those
+// with no thread too, and home.
 func (a *app) workspacesOn(e *client.Env, home string) []draft {
 	ds := []draft{{e, home}}
 	for _, p := range a.projects {
