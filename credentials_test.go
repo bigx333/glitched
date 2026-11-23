@@ -215,3 +215,50 @@ func TestCredentialsForget(t *testing.T) {
 		t.Errorf("STRIPE_KEY is still held after Forget: %v", err)
 	}
 }
+
+// The credentials card names no access level, whatever the thread's: it
+// asks for a value only the user has, which no level answers.
+func TestCredentialsCardNamesNoAccess(t *testing.T) {
+	h, th, _ := credentialing(t, stripeKey)
+	inCard := func() []string {
+		t.Helper()
+		card := h.a.drawn[lastRequest(th).Request].card
+		var named []string
+		for _, n := range h.tt.AccessAll() {
+			b := n.Bounds
+			if _, ok := accessOf[n.Name]; ok && b.X >= card.X && b.Y >= card.Y && b.X+b.W <= card.X+card.W && b.Y+b.H <= card.Y+card.H {
+				named = append(named, n.Name)
+			}
+		}
+		return named
+	}
+	for _, level := range []string{accessAuto, accessAsk, accessFull} {
+		switch level {
+		case accessAsk:
+			h.click("Access")
+			h.tt.Advance(time.Second)
+			h.click(level)
+		case accessFull:
+			// Full access is granted by holding its row.
+			h.click("Access")
+			h.tt.Advance(time.Second)
+			r, ok := h.tt.Find(accessFull)
+			if !ok {
+				t.Fatalf("no Full access row: %q", h.tt.Texts())
+			}
+			h.tt.Press(r.X+r.W/2, r.Y+r.H/2)
+			h.tt.Advance(2 * holdTime)
+			h.tt.Release(r.X+r.W/2, r.Y+r.H/2)
+		}
+		if level != accessAuto {
+			h.until("the thread at "+level, func() bool { return accessLabel(h.a.current().View.Access) == level })
+			h.tt.Advance(time.Second)
+		}
+		if lastRequest(th).State != api.RequestPending {
+			t.Fatalf("at %s the card no longer waits", level)
+		}
+		if got := inCard(); len(got) != 0 {
+			t.Errorf("at %s the card names %q", level, got)
+		}
+	}
+}

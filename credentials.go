@@ -189,11 +189,6 @@ func (a *app) credentialsButtons(c *ui.Context, t thread, r *client.RequestEntry
 			kbd(c, "⇧⌘D")
 		}
 	})
-	ui.Spacer(c)
-	ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-		ui.Icon(c, icHand).FontSize(12).TextColor(palette.faint)
-		ui.Text(c, askedAt(t, r)).FontSize(11.5).TextColor(palette.faint)
-	})
 	if provide.Clicked() {
 		a.provideCredentials(t, r, q)
 	}
