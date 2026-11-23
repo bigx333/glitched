@@ -26,6 +26,9 @@ var askTimeout = 30 * time.Minute
 
 var errNoVault = errors.New("this engine keeps no credentials")
 
+// awaitingStart is called as an ask begins to wait for its run's start.
+var awaitingStart = func() {}
+
 var errNotHere = errors.New("this turn does not run on this engine, or the same call is asking already")
 
 type askKey struct {
@@ -78,11 +81,16 @@ func (h *Host) AskCredentials(ctx context.Context, a api.Ask) (api.Asked, error)
 	if lr == nil {
 		return api.Asked{}, errNotHere
 	}
+	timeout := time.NewTimer(askTimeout)
+	defer timeout.Stop()
 	// A quick agent asks while its start is still being recorded.
+	awaitingStart()
 	select {
 	case <-lr.started:
-	case <-lr.ctx.Done():
-		return api.Asked{}, errNotHere
+	case <-lr.steering.Done():
+		return api.Asked{Status: api.AskCanceled}, nil
+	case <-timeout.C:
+		return api.Asked{Status: api.AskTimedOut}, nil
 	case <-ctx.Done():
 		return api.Asked{}, ctx.Err()
 	}
@@ -107,8 +115,6 @@ func (h *Host) AskCredentials(ctx context.Context, a api.Ask) (api.Asked, error)
 	withdraw := func(reason string) {
 		h.record(a.Thread, engine.Withdrawn{Run: key.run, Dedup: key.dedup, Reason: reason}, 0)
 	}
-	timeout := time.NewTimer(askTimeout)
-	defer timeout.Stop()
 	select {
 	case answer := <-answered:
 		return h.asked(a.Thread, answer)
