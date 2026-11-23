@@ -170,8 +170,10 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 	m := a.shownModel(t)
 	level := a.effortLevel()
 	effort := a.efforts()[level]
-	b := a.tip(c, ghost(c, "model", a.pickerOpen).Padding(4, 8, 4, 4).Gap(6).Label("Model"), "Model and effort")
+	p := a.modelPending(t)
+	b := a.tip(c, ghost(c, "model", a.pickerOpen).Padding(4, 8, 4, 4).Gap(6).Label("Model"), tipOf(p, "Model and effort"))
 	if b.Children(func() {
+		a.unconfirmedMark(c, p)
 		a.pickerGlow(c, b, effort)
 		if a.fast {
 			a.electricBorder(c)
@@ -182,16 +184,21 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 				return ui.Row(c).Key("component:composer.model/button").Gap(6).AlignItems(ui.Center)
 			},
 			native: func(*widget.Node) {
+				name, effortLabel := a.runningModel(t, m.name, effort.label)
 				modelTile(c, m.icon, m.color, 18)
-				ui.Text(c, m.name).FontSize(12).SingleLine()
-				ui.Text(c, effort.label).FontSize(11).FontWeight(600).TextColor(effort.color)
+				ui.Text(c, name).FontSize(12).SingleLine()
+				ui.Text(c, effortLabel).FontSize(11).FontWeight(600).TextColor(effort.color)
 				if a.fast {
 					a.zapIcon(c, "trigger-zap", 12)
 				}
 				ui.Icon(c, icChevronD).FontSize(11)
 			},
 			current: true,
-			context: func(r plugins.ThreadRecord) any { return a.composerModelOf(c, t, r, "button") },
+			context: func(r plugins.ThreadRecord) any {
+				m := a.composerModelOf(c, t, r, "button")
+				m.Model, m.Effort = a.runningModel(t, m.Model, m.Effort)
+				return m
+			},
 		})
 	}).Clicked() {
 		a.pickerOpen = !a.pickerOpen

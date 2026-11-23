@@ -61,11 +61,15 @@ func accessLabel(a api.Access) string {
 }
 
 // askedAt is the access level r is asked at, which its card names: the
-// one its turn was admitted at, where that is the thread's live turn. The
-// thread's own, which a configure since may have changed, is its next
-// turn's; it names a request with no live turn of its own.
+// one its turn was admitted at, where that is the thread's live turn, or
+// what the turn's provider confirmed it runs instead. The thread's own,
+// which a configure since may have changed, is its next turn's; it names a
+// request with no live turn of its own.
 func askedAt(t thread, r *client.RequestEntry) string {
 	if turn := t.View.Turn; turn != nil && turn.Run == r.Run {
+		if g := t.View.Confirmed.Access; g != nil && g.Run == turn.Run && g.Short() {
+			return shortAccessName(*g)
+		}
 		return accessLabel(turn.Access)
 	}
 	return accessLabel(t.View.Access)
