@@ -53,7 +53,13 @@ type Agent struct {
 	asked       int
 }
 
-var _ provider.Agent = (*Agent)(nil)
+var (
+	_ provider.Agent     = (*Agent)(nil)
+	_ provider.Sessioned = (*Agent)(nil)
+)
+
+// Session is Codex's id of the thread's conversation.
+func (g *Agent) Session() string { return g.p.threadID() }
 
 // ask is a request Codex waits on. It gets one reply: the user's answer,
 // or cancel once the turn stops waiting.

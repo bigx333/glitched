@@ -234,10 +234,12 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 	return append(out, rest...), nil
 }
 
-// startThread starts the Codex thread the Glitched thread's runs go to,
-// in dir, with the run's MCP servers and their instructions. A trusted
-// server's tools run without asking, as its engine decides each call.
-func (p *proc) startThread(ctx context.Context, spec provider.SessionSpec) error {
+// startThread opens the Codex thread the Glitched thread's runs go to,
+// in dir, with the run's MCP servers and their instructions: the one its
+// earlier runs had, when Codex still has it, or else a new one, which
+// lost reports. A trusted server's tools run without asking, as its
+// engine decides each call.
+func (p *proc) startThread(ctx context.Context, spec provider.SessionSpec) (lost bool, err error) {
 	stop := context.AfterFunc(ctx, p.halt)
 	defer stop()
 	servers := map[string]any{}
@@ -273,14 +275,39 @@ func (p *proc) startThread(ctx context.Context, spec provider.SessionSpec) error
 			ID string `json:"id"`
 		} `json:"thread"`
 	}
-	if err := p.conn.call(ctx, "thread/start", params, &r); err != nil {
-		return p.failure("start a thread", err)
+	if spec.Session != "" {
+		resume := maps.Clone(params)
+		resume["threadId"], resume["excludeTurns"] = spec.Session, true
+		err := p.conn.call(ctx, "thread/resume", resume, &r)
+		var re *rpcError
+		switch {
+		case err == nil:
+			return false, p.bind(r.Thread.ID)
+		case errors.As(err, &re) && strings.Contains(re.Message, "active writer"):
+			return false, errors.New(inUse)
+		case !errors.As(err, &re):
+			return false, p.failure("resume the thread", err)
+		}
+		slog.Info("codex: Codex no longer has the thread", "thread", spec.Session, "err", re.Message)
+		lost = true
 	}
-	if r.Thread.ID == "" {
-		return errors.New("Codex started a thread with no id.")
+	if err := p.conn.call(ctx, "thread/start", params, &r); err != nil {
+		return false, p.failure("start a thread", err)
+	}
+	return lost, p.bind(r.Thread.ID)
+}
+
+// inUse is why a run can't go on with a conversation another Codex
+// client has open (T3's wording).
+const inUse = "This conversation is open in another Codex client, such as the Codex app, the Codex CLI, or an IDE extension. Codex lets one client write to a conversation at a time."
+
+// bind makes id the thread p runs.
+func (p *proc) bind(id string) error {
+	if id == "" {
+		return errors.New("Codex opened a thread with no id.")
 	}
 	p.mu.Lock()
-	p.thread = r.Thread.ID
+	p.thread = id
 	p.mu.Unlock()
 	return nil
 }

@@ -156,3 +156,96 @@ func TestWithAgentsServesAnInstalledCodex(t *testing.T) {
 		t.Errorf("with codex_path naming nothing, serves %q", got)
 	}
 }
+
+// A Codex thread remembers across an engine restart: the engine stores
+// the Codex thread its first turn bound, and the next engine's app-server
+// resumes it.
+func TestACodexThreadRemembersAcrossARestart(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(t.TempDir(), "wire.jsonl")
+	t.Setenv(codextest.Scenario, "memory")
+	t.Setenv(codextest.Log, log)
+	dir := stateDir(t)
+	thread := api.NewID()
+	workspace := t.TempDir()
+	turn := func(text string, create bool) string {
+		t.Helper()
+		d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Providers: provider.Mux{
+			"codex": &codex.Adapter{Path: self},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
+		ep := transport.NewEndpointClient(Socket(dir), api.ID{})
+		defer ep.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if create {
+			if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{
+				Workspace: workspace, Title: "t", Model: api.ModelRef{Provider: "codex", Model: "gpt-6-luna", Effort: "low"},
+			}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		stream, err := ep.Open(ctx, api.Subscription{Thread: thread})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer stream.Close()
+		sent := api.NewID()
+		if _, err := ep.Submit(ctx, api.Command{ID: sent, Target: thread, Body: api.MessageDispatch{Text: text, Mode: api.StartNow}}); err != nil {
+			t.Fatal(err)
+		}
+		var said strings.Builder
+		for {
+			item, err := stream.Next(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if item.Kind != api.StreamEvent {
+				continue
+			}
+			body, err := item.Event.Decode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch b := body.(type) {
+			case api.AssistantDelta:
+				if b.Run == sent {
+					said.WriteString(b.Text)
+				}
+			case api.TurnEnded:
+				if b.Run == sent {
+					if b.Outcome != api.OutcomeCompleted {
+						t.Fatalf("turn %q ended %+v", text, b)
+					}
+					return said.String()
+				}
+			}
+		}
+	}
+	turn("Remember the word kumquat.", true)
+	if got := turn("What word did I ask you to remember?", false); !strings.Contains(got, "kumquat") {
+		t.Fatalf("after a restart the thread answers %q", got)
+	}
+	entries, err := codextest.Read(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var news, resumes int
+	for _, e := range entries {
+		switch e.Method {
+		case "thread/start":
+			news++
+		case "thread/resume":
+			resumes++
+		}
+	}
+	if news != 1 || resumes != 1 {
+		t.Fatalf("%d new threads and %d resumes, want one of each", news, resumes)
+	}
+}
