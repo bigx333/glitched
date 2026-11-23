@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,15 +73,15 @@ func updated(p string) transport.ProviderInfo {
 func TestAPendingCLIUpdateShowsInTheSidebar(t *testing.T) {
 	_, engine := agyAt(t, "1.5.14", "1.5.15")
 	h := startWith(t, tempDir(t), engine)
-	h.until("the update", func() bool { return h.tt.HasText("Update Antigravity") })
-	h.click("Update Antigravity")
+	h.until("the update", func() bool { return showing(h, "Agent CLI updates") })
+	h.click("Agent CLI updates")
 	h.tt.Advance(time.Second)
 	for _, s := range []string{"CLI updates", "Update available: 1.5.14 → 1.5.15", "Update"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("the list doesn't show %q: %q", s, h.tt.Texts())
 		}
 	}
-	h.click("Update Antigravity")
+	h.click("Agent CLI updates")
 	openProviders(h, "antigravity")
 	for _, s := range []string{"Update available", "Update available: 1.5.14 → 1.5.15"} {
 		if !h.tt.HasText(s) {
@@ -95,7 +96,7 @@ func TestACLIAtItsLatestShowsNoUpdate(t *testing.T) {
 	h := startWith(t, tempDir(t), engine)
 	h.until("antigravity's versions", func() bool { return h.a.models.served["antigravity"].Update != nil })
 	openProviders(h, "antigravity")
-	for _, s := range []string{"Update Antigravity", "Update available"} {
+	for _, s := range []string{"Agent CLI updates", "Update available"} {
 		if h.tt.HasText(s) {
 			t.Errorf("a current CLI shows %q", s)
 		}
@@ -116,7 +117,7 @@ func TestTheCLICheckTurnsOff(t *testing.T) {
 		t.Fatalf("the check is off, and the engine checked: %+v", u)
 	}
 	openProviders(h, "antigravity")
-	if h.tt.HasText("Update Antigravity") || h.tt.HasText("Update available") {
+	if showing(h, "Agent CLI updates") || h.tt.HasText("Update available") {
 		t.Error("the check is off, and an update shows")
 	}
 	h.click("Check for CLI updates")
@@ -144,14 +145,17 @@ func TestTheSidebarsUpdateStaysTillTheLastCLIIsCurrent(t *testing.T) {
 	})
 	pending(h, "claude", "codex")
 	answer["claude"] = transport.UpdateResult{Error: "/bin/claude update failed: exit status 1.", Output: "no space left on device", Provider: h.a.models.served["claude"]}
-	if !h.tt.HasText("Updates for 2 CLIs") {
+	if !showing(h, "Agent CLI updates") || !showing(h, "2") {
 		t.Fatalf("two pending updates don't show: %q", h.tt.Texts())
 	}
-	h.click("Updates for 2 CLIs")
+	h.click("Agent CLI updates")
 	h.tt.Advance(time.Second)
 	h.click("Update all")
 	h.until("both updates", func() bool { return len(calls) == 2 && !h.tt.HasText("Updating…") })
-	for _, s := range []string{"Update Claude", "The update failed: /bin/claude update failed: exit status 1.", "no space left on device"} {
+	if !showing(h, "Agent CLI updates") {
+		t.Errorf("after one failed, the sidebar's update went: %q", h.tt.Texts())
+	}
+	for _, s := range []string{"The update failed: /bin/claude update failed: exit status 1.", "no space left on device"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("after one failed, %q doesn't show: %q", s, h.tt.Texts())
 		}
@@ -161,7 +165,7 @@ func TestTheSidebarsUpdateStaysTillTheLastCLIIsCurrent(t *testing.T) {
 	}
 	answer["claude"] = transport.UpdateResult{Output: "updated to 1.1.0", Provider: updated("claude")}
 	h.click("Update")
-	h.until("the last update", func() bool { return !h.tt.HasText("Update Claude") })
+	h.until("the last update", func() bool { return !showing(h, "Agent CLI updates") })
 	if len(h.a.pendingCLIs()) != 0 {
 		t.Errorf("updates still pend: %+v", h.a.pendingCLIs())
 	}
@@ -187,7 +191,7 @@ func TestAnUpdateRefusedForARunningTurnOffersToWait(t *testing.T) {
 		h.a.post(func() { done(res, nil) })
 	})
 	pending(h, "claude")
-	h.click("Update Claude")
+	h.click("Agent CLI updates")
 	h.tt.Advance(time.Second)
 	h.click("Update")
 	h.until("the refusal", func() bool { return h.tt.HasText("Update when it ends") })
@@ -195,7 +199,7 @@ func TestAnUpdateRefusedForARunningTurnOffersToWait(t *testing.T) {
 		t.Errorf("the refusal doesn't say why: %q", h.tt.Texts())
 	}
 	h.click("Update when it ends")
-	h.until("the update", func() bool { return !h.tt.HasText("Update Claude") })
+	h.until("the update", func() bool { return !showing(h, "Agent CLI updates") })
 	if len(idle) != 2 || idle[0] || !idle[1] {
 		t.Errorf("the updates asked were when idle %v, want [false true]", idle)
 	}
@@ -213,7 +217,7 @@ func TestAnUpdateGlitchedWontRunShowsTheCommand(t *testing.T) {
 		Manual:  "Codex is installed where only an administrator can change it.",
 	}}
 	h.tt.Frame()
-	h.click("Update Codex")
+	h.click("Agent CLI updates")
 	h.tt.Advance(time.Second)
 	for _, s := range []string{"sudo npm install -g @openai/codex@latest", "Copy", "Codex is installed where only an administrator can change it. Run this in Terminal on this machine:"} {
 		if !h.tt.HasText(s) {
@@ -245,7 +249,7 @@ func TestAPairedMachineShowsItsOwnCLIVersions(t *testing.T) {
 	if err := h.addServer(client.Server{Label: "devbox", Addr: r.Addrs()[0].String(), Token: token}); err != nil {
 		t.Fatal(err)
 	}
-	h.until("devbox's update", func() bool { return h.tt.HasText("Update Antigravity") })
+	h.until("devbox's update", func() bool { return showing(h, "Agent CLI updates") })
 	openProviders(h)
 	h.until("devbox's rows", func() bool { return h.tt.HasText("DEVBOX") })
 	for _, s := range []string{"DEVBOX", "v1.5.14", "Update available: 1.5.14 → 1.5.15"} {
@@ -373,7 +377,7 @@ func TestAnUpdateWaitingForATurnCanBeCancelled(t *testing.T) {
 		}
 	}
 	pending(h, "claude")
-	h.click("Update Claude")
+	h.click("Agent CLI updates")
 	h.tt.Advance(time.Second)
 	h.click("Update")
 	h.until("the refusal", func() bool { return h.tt.HasText("Update when it ends") })
@@ -397,7 +401,7 @@ func TestAProbeThatCantSayItsVersionKeepsTheUpdate(t *testing.T) {
 	h.a.checkProviders()
 	h.until("the answer", func() bool { return !h.a.models.asking && !h.a.models.next.IsZero() })
 	h.tt.Frame()
-	if !h.tt.HasText("Update Claude") {
+	if !showing(h, "Agent CLI updates") {
 		t.Errorf("an answer without a version took the update away: %q", h.tt.Texts())
 	}
 }
@@ -442,5 +446,83 @@ func TestAMachineThatCantSayItsCLIsIsAskedAgainLater(t *testing.T) {
 	}
 	if next := h.a.clis.next[h.a.serverEnv("build-box")]; !next.Equal(asked) {
 		t.Errorf("build-box was asked again at once: next %v, then %v", asked, next)
+	}
+}
+
+// hoverCLIButton rests the pointer on the sidebar's CLI update button
+// till its tooltip shows, and returns the tooltip's text.
+func hoverCLIButton(h *harness) string {
+	h.t.Helper()
+	r, ok := h.tt.Find("Agent CLI updates")
+	if !ok {
+		h.t.Fatalf("no CLI update button: %q", h.tt.Texts())
+	}
+	h.tt.Move(r.X+r.W/2, r.Y+r.H/2)
+	h.tt.Advance(2 * time.Second)
+	for _, s := range h.tt.Texts() {
+		if strings.Contains(s, " → ") && !strings.HasPrefix(s, "Update available") {
+			return s
+		}
+	}
+	h.t.Fatalf("the button shows no tooltip: %q", h.tt.Texts())
+	return ""
+}
+
+// The sidebar has one compact update button however many CLIs are
+// behind, with their count when more than one is, and its tooltip names
+// each, under its machine when the user has more than one.
+func TestTheCLIUpdateButtonIsOneButtonHoweverManyArePending(t *testing.T) {
+	dir := tempDir(t)
+	h := start(t, dir)
+	allAnswered(h)
+	pending(h, "claude")
+	if !showing(h, "Updates") || showing(h, "1") {
+		t.Errorf("one pending CLI doesn't show a plain Updates: %q", h.tt.Texts())
+	}
+	if tip := hoverCLIButton(h); tip != "Claude Code 1.0.0 → 1.1.0" {
+		t.Errorf("the tooltip says %q", tip)
+	}
+
+	dir = tempDir(t)
+	listServers(t, dir, client.Server{Label: "build-box", Addr: "missing port"})
+	h = start(t, dir)
+	allAnswered(h)
+	remote := h.a.serverEnv("build-box")
+	h.a.clis.served[remote] = []transport.ProviderInfo{{Name: "antigravity", Info: provider.Info{Version: "1.5.14"}, Update: &cliupdate.Status{Installed: "1.5.14", Latest: "1.5.15", Available: true}}}
+	h.a.clis.engine[remote] = remote.ID
+	pending(h, "claude", "codex")
+	if !showing(h, "Updates") || !showing(h, "3") || h.tt.HasText("Updates for") {
+		t.Errorf("three pending CLIs don't show one Updates with their count: %q", h.tt.Texts())
+	}
+	want := "This machine\nClaude Code 1.0.0 → 1.1.0\nCodex 1.0.0 → 1.1.0\n\nbuild-box\nAntigravity 1.5.14 → 1.5.15"
+	if tip := hoverCLIButton(h); tip != want {
+		t.Errorf("the tooltip says\n%s\nwant\n%s", tip, want)
+	}
+}
+
+// The button shows an update running, and one that failed or needs the
+// user, and its tooltip says which.
+func TestTheCLIUpdateButtonSaysWhichUpdateRunsFailedOrNeedsYou(t *testing.T) {
+	h := start(t, tempDir(t))
+	allAnswered(h)
+	pending(h, "claude", "codex")
+	local := h.a.backend.Envs()[0]
+	h.a.models.served["codex"].Update.Manual = "Codex is installed where only an administrator can change it."
+	h.a.clis.runs[cliKey{local, "claude"}] = &cliRun{running: true}
+	h.tt.Frame()
+	if !showing(h, "Updating") {
+		t.Errorf("an update running doesn't show: %q", h.tt.Texts())
+	}
+	if tip, want := hoverCLIButton(h), "Claude Code 1.0.0 → 1.1.0 · updating\nCodex 1.0.0 → 1.1.0 · update it yourself"; tip != want {
+		t.Errorf("the tooltip says %q, want %q", tip, want)
+	}
+	h.a.clis.runs[cliKey{local, "claude"}] = &cliRun{failed: "claude update failed: exit status 1."}
+	h.tt.Move(0, 0)
+	h.tt.Frame()
+	if showing(h, "Updating") || !showing(h, "Updates") {
+		t.Errorf("a failed update still shows as running: %q", h.tt.Texts())
+	}
+	if tip, want := hoverCLIButton(h), "Claude Code 1.0.0 → 1.1.0 · update failed\nCodex 1.0.0 → 1.1.0 · update it yourself"; tip != want {
+		t.Errorf("the tooltip says %q, want %q", tip, want)
 	}
 }

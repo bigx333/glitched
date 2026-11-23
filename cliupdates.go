@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/client"
+	"glitched/internal/cliupdate"
 	"glitched/internal/transport"
 )
 
@@ -317,8 +319,10 @@ func (a *app) cliUpdateShows(en cliEntry) bool {
 }
 
 // cliUpdatesButton, at the foot of the sidebar, says a CLI on a machine
-// of the user's has a newer version. It stays while any has, and opens
-// the list of them, each with its update, and Update all.
+// of the user's has a newer version: one button however many have, with
+// their count when more than one, and a tooltip naming each. It stays
+// while any has, shows when one updates, failed or needs the user, and
+// opens the list of them, each with its update, and Update all.
 func (a *app) cliUpdatesButton(c *ui.Context) {
 	a.askCLIs()
 	pending := a.pendingCLIs()
@@ -326,30 +330,41 @@ func (a *app) cliUpdatesButton(c *ui.Context) {
 		a.clis.open = false
 		return
 	}
-	label := "Update " + familyOf(pending[0].key.provider).name
-	if len(pending) > 1 {
-		label = fmt.Sprintf("Updates for %d CLIs", len(pending))
-	}
-	failed, running := false, false
+	running, failed, needed := false, false, false
 	for _, en := range pending {
-		if r := a.clis.runs[en.key]; r != nil {
-			failed = failed || r.failed != "" || r.busy
-			running = running || r.running
-		}
+		r := a.clis.runs[en.key]
+		running = running || r != nil && r.running
+		failed = failed || r != nil && r.failed != ""
+		needed = needed || r != nil && r.busy || en.info.Update.Manual != ""
 	}
-	b := ghost(c, "cli-updates", a.clis.open).Padding(7, 8).Label(label)
+	tone, icon, label := palette.blue, icArrowDown, "Updates"
+	switch {
+	case failed:
+		tone, icon = palette.red, icInfo
+	case needed:
+		tone, icon = palette.amber, icInfo
+	}
+	if running {
+		label = "Updating"
+	}
+	b := ui.ButtonBase(c.Key("cli-updates")).Gap(5).AlignItems(ui.Center).Padding(4, 7).Radius(6).Shrink(0).
+		TextColor(tone).Background(tone.Alpha(0.14)).Cursor(ui.CursorPointer).Transition(hoverFade).Label("Agent CLI updates")
+	if a.clis.open || b.Hovered() {
+		b.Background(tone.Alpha(0.22))
+	}
+	a.tip(c, b, a.cliUpdatesTip(pending))
 	b.Children(func() {
 		if running {
-			ui.Spinner(c)
+			ui.Spinner(c).Size(13, 13)
 		} else {
-			ui.Icon(c, icArrowDown).FontSize(15).TextColor(palette.blue)
+			ui.Icon(c, icon).FontSize(14)
 		}
-		ui.Text(c, label).Grow(1).SingleLine()
-		dot := palette.blue
-		if failed {
-			dot = palette.red
+		ui.Text(c, label).FontSize(12.5).FontWeight(550).SingleLine()
+		if len(pending) > 1 {
+			ui.Box(c).MinWidth(16).Height(16).Padding(0, 4).Radius(8).Background(tone.Alpha(0.22)).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
+				ui.Text(c, strconv.Itoa(len(pending))).FontSize(11).FontWeight(650)
+			})
 		}
-		ui.Box(c).Size(7, 7).Radius(4).Background(dot)
 	})
 	if b.Clicked() {
 		a.clis.open = !a.clis.open
@@ -389,6 +404,45 @@ func (a *app) cliUpdatesButton(c *ui.Context) {
 			})
 		}
 	})
+}
+
+// cliUpdatesTip names each pending CLI as "Claude Code 2.1.0 → 2.2.0",
+// under its machine when the user has more than one, and says of each
+// that updates, waits, failed or needs the user.
+func (a *app) cliUpdatesTip(pending []cliEntry) string {
+	several := len(a.backend.Envs()) > 1
+	var lines []string
+	var machine *client.Env
+	for _, en := range pending {
+		if several && en.env != machine {
+			if machine != nil {
+				lines = append(lines, "")
+			}
+			m := en.env.Name
+			if en.env.Kind == client.Local {
+				m = "This machine"
+			}
+			lines = append(lines, m)
+			machine = en.env
+		}
+		u := en.info.Update
+		line := fmt.Sprintf("%s %s → %s", cliupdate.Name(en.key.provider), u.Installed, u.Latest)
+		r := a.clis.runs[en.key]
+		switch {
+		case r != nil && r.waiting:
+			line += " · waits for its turn to end"
+		case r != nil && r.running:
+			line += " · updating"
+		case r != nil && r.failed != "":
+			line += " · update failed"
+		case r != nil && r.busy:
+			line += " · a turn is running"
+		case u.Manual != "":
+			line += " · update it yourself"
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // online is whether e's engine answers now, as an update needs.
