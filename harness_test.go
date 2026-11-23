@@ -246,8 +246,11 @@ func (h *harness) until(what string, ok func() bool) {
 		if ok() {
 			return
 		}
+		// Not only the app's next post: what ok reads may change off the
+		// UI thread, as a file or a channel does, with nothing posted.
 		select {
 		case <-h.p.wake:
+		case <-time.After(10 * time.Millisecond):
 		case <-deadline:
 			h.t.Fatalf("timed out waiting for %s; the window shows %q", what, h.tt.Texts())
 		}
