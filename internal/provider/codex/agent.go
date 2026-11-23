@@ -64,7 +64,9 @@ type ask struct {
 	ids       []string        // Codex's ids of the questions, in order
 	tool      bool            // an MCP tool's approval, asked as a question
 	questions api.Questions   // what the card shows, for a question
+	others    []bool          // whether each question takes an answer of the user's own
 	wanted    json.RawMessage // the permissions asked, for a permissions request
+	deny      string          // the decision that denies a command, of those Codex offers
 	state     askState
 }
 
@@ -123,7 +125,7 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 	case provider.Interrupt:
 		return g.interrupt(ctx)
 	case provider.Respond:
-		return g.respond(a)
+		return g.respond(ctx, a)
 	}
 	return provider.ErrUnsupported
 }
@@ -144,11 +146,16 @@ func (g *Agent) start(text string) error {
 	g.started = true
 	g.mu.Unlock()
 	params := map[string]any{
-		"threadId":       g.p.threadID(),
-		"input":          input(text),
-		"approvalPolicy": askPolicy,
-		"sandboxPolicy":  map[string]any{"type": "readOnly", "networkAccess": false},
-		"summary":        "auto",
+		"threadId":          g.p.threadID(),
+		"input":             input(text),
+		"approvalPolicy":    askPolicy,
+		"approvalsReviewer": "user",
+		"sandboxPolicy":     map[string]any{"type": "readOnly", "networkAccess": false},
+		"summary":           "auto",
+		"serviceTier":       nil,
+	}
+	if g.spec.Model.Fast {
+		params["serviceTier"] = fastTier
 	}
 	if m := g.spec.Model.Model; m != "" {
 		params["model"] = m
@@ -173,9 +180,16 @@ func (g *Agent) start(text string) error {
 		if g.turn == "" {
 			g.turn = r.Turn.ID
 		}
+		if g.ended && g.turn != "" {
+			g.p.ended(g.turn)
+		}
 	}()
 	return nil
 }
+
+// fastTier is the service tier of Glitched's Fast: every model Codex
+// lists offers it, by this id.
+const fastTier = "priority"
 
 // watch fails the turn when app-server goes before it ends.
 func (g *Agent) watch() {
@@ -211,6 +225,9 @@ func (g *Agent) endLocked(end provider.TurnEnded) {
 		}
 	}
 	g.ended = true
+	if g.turn != "" {
+		g.p.ended(g.turn)
+	}
 	if g.deadline != nil {
 		g.deadline.Stop()
 	}
@@ -250,8 +267,8 @@ func (g *Agent) interrupt(ctx context.Context) error {
 		return nil
 	}
 	g.interrupted = true
-	g.withdrawLocked("The turn was stopped.")
 	g.deadline = time.AfterFunc(interruptGrace, g.p.halt)
+	g.withdrawLocked("The turn was stopped.")
 	g.mu.Unlock()
 	// Codex answers an interrupt before the turn started with "no active
 	// turn", and the turn then runs on.
@@ -305,7 +322,7 @@ func (g *Agent) notify(m message) {
 	if n.TurnID == "" {
 		n.TurnID = turn.ID
 	}
-	if g.ended || !g.started || g.turn != "" && n.TurnID != "" && n.TurnID != g.turn {
+	if g.ended || !g.started || n.TurnID != "" && (g.p.isOver(n.TurnID) || g.turn != "" && n.TurnID != g.turn) {
 		g.p.retire(m.Method)
 		return
 	}
@@ -412,15 +429,20 @@ func cancelled(method string) any {
 // it until respond answers, or the turn stops waiting.
 func (g *Agent) request(m message) {
 	var r struct {
-		ItemID      string          `json:"itemId"`
-		Command     string          `json:"command"`
-		Cwd         string          `json:"cwd"`
-		Reason      string          `json:"reason"`
-		Permissions json.RawMessage `json:"permissions"`
+		TurnID      string            `json:"turnId"`
+		ItemID      string            `json:"itemId"`
+		Command     string            `json:"command"`
+		Cwd         string            `json:"cwd"`
+		Reason      string            `json:"reason"`
+		Permissions json.RawMessage   `json:"permissions"`
+		Network     json.RawMessage   `json:"networkApprovalContext"`
+		Additional  json.RawMessage   `json:"additionalPermissions"`
+		Decisions   []json.RawMessage `json:"availableDecisions"`
 		Questions   []struct {
 			ID       string `json:"id"`
 			Header   string `json:"header"`
 			Question string `json:"question"`
+			IsOther  bool   `json:"isOther"`
 			IsSecret bool   `json:"isSecret"`
 			Options  []struct {
 				Label       string `json:"label"`
@@ -442,7 +464,12 @@ func (g *Agent) request(m message) {
 		g.p.conn.refuse(m.ID, -32601, "Glitched can't answer "+m.Method)
 		return
 	}
-	if g.ended || g.interrupted {
+	if r.TurnID != "" && g.p.isOver(r.TurnID) {
+		g.p.retire(m.Method)
+		g.p.conn.reply(m.ID, cancelled(m.Method))
+		return
+	}
+	if !g.started || g.ended || g.interrupted {
 		g.p.conn.reply(m.ID, cancelled(m.Method))
 		return
 	}
@@ -457,6 +484,8 @@ func (g *Agent) request(m message) {
 		if b.Command == "" {
 			b.Command = "a command Codex didn't name"
 		}
+		b.Args = extraAccess(r.Network, r.Additional)
+		a.deny = denial(r.Decisions)
 	case "item/fileChange/requestApproval":
 		b = body{Operation: "edit", Reason: r.Reason}
 		if it := g.items[r.ItemID]; it != nil {
@@ -494,6 +523,7 @@ func (g *Agent) request(m message) {
 			}
 			a.questions.Questions = append(a.questions.Questions, x)
 			a.ids = append(a.ids, q.ID)
+			a.others = append(a.others, q.IsOther)
 		}
 		raw, _ := json.Marshal(a.questions)
 		_, err := api.ParseQuestions(raw)
@@ -539,7 +569,10 @@ func (g *Agent) withdrawLocked(reason string) {
 // Glitched never picks an answer that lasts past the call. A request
 // already answered takes nothing more, and one Codex stopped waiting on
 // takes no answer.
-func (g *Agent) respond(r provider.Respond) error {
+func (g *Agent) respond(ctx context.Context, r provider.Respond) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	a, ok := g.asks[r.Request]
@@ -564,6 +597,9 @@ func (g *Agent) respond(r provider.Respond) error {
 		for i, x := range answers.Answers {
 			picked := append([]string{}, x.Picked...)
 			if strings.TrimSpace(x.Other) != "" {
+				if !a.others[i] {
+					return fmt.Errorf("Codex takes only one of its own answers to %q.", a.questions.Questions[i].Text)
+				}
 				picked = append(picked, x.Other)
 			}
 			out[a.ids[i]] = map[string]any{"answers": picked}
@@ -600,7 +636,48 @@ func approve(a *ask, allow bool) any {
 		}
 		return map[string]any{"action": "decline", "content": nil}
 	}
+	if !allow && a.deny != "" {
+		return map[string]any{"decision": a.deny}
+	}
 	return map[string]any{"decision": map[bool]string{true: "accept", false: "decline"}[allow]}
+}
+
+// denial is the decision that denies a command once: decline, unless
+// Codex offers only cancel, which also ends the turn.
+func denial(offered []json.RawMessage) string {
+	var cancel bool
+	for _, d := range offered {
+		switch string(bytes.TrimSpace(d)) {
+		case `"decline"`:
+			return "decline"
+		case `"cancel"`:
+			cancel = true
+		}
+	}
+	if cancel {
+		return "cancel"
+	}
+	return ""
+}
+
+// extraAccess is the access a command asks for beyond the sandbox's, as
+// the card shows it.
+func extraAccess(network, additional json.RawMessage) string {
+	var lines []string
+	for _, f := range []struct {
+		name string
+		raw  json.RawMessage
+	}{{"network", network}, {"permissions", additional}} {
+		if len(f.raw) == 0 || string(f.raw) == "null" {
+			continue
+		}
+		var c bytes.Buffer
+		if json.Compact(&c, f.raw) != nil {
+			continue
+		}
+		lines = append(lines, f.name+": "+c.String())
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (g *Agent) Next(ctx context.Context) (provider.Event, error) {

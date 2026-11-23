@@ -46,28 +46,48 @@ func (t *tail) last() string {
 }
 
 // openWire is the file wireEnv names, or a writer that keeps nothing.
-func openWire() io.Writer {
+// What is written once it is closed is dropped.
+func openWire() io.WriteCloser {
 	path := os.Getenv(wireEnv)
 	if path == "" {
-		return io.Discard
+		return nopWire{}
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		slog.Warn("codex: no wire capture", "err", err)
-		return io.Discard
+		return nopWire{}
 	}
-	return &lockedWriter{w: f}
+	return &lockedWriter{f: f}
 }
+
+type nopWire struct{}
+
+func (nopWire) Write(p []byte) (int, error) { return len(p), nil }
+func (nopWire) Close() error                { return nil }
 
 type lockedWriter struct {
 	mu sync.Mutex
-	w  io.Writer
+	f  *os.File // nil once closed
+}
+
+func (l *lockedWriter) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	f := l.f
+	l.f = nil
+	if f == nil {
+		return nil
+	}
+	return f.Close()
 }
 
 func (l *lockedWriter) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.w.Write(p)
+	if l.f == nil {
+		return len(p), nil
+	}
+	return l.f.Write(p)
 }
 
 // tap writes what goes to w to wire too, each write after prefix.
@@ -78,7 +98,7 @@ type tap struct {
 }
 
 func (t tap) Write(p []byte) (int, error) {
-	if t.wire != io.Discard {
+	if t.wire != (nopWire{}) {
 		t.wire.Write(append([]byte(t.prefix), p...))
 	}
 	return t.w.Write(p)

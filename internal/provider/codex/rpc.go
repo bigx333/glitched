@@ -13,15 +13,17 @@ import (
 // conn is a JSON-RPC 2.0 connection to app-server, one message a line on
 // stdio, without the "jsonrpc" member, as app-server speaks it. Calls go
 // one way and server requests the other, each side with its own ids.
+// What it sends is queued, and written in order by its own goroutine: an
+// app-server that stops reading holds up no caller, Stop's included.
 type conn struct {
-	w   io.Writer
-	wmu sync.Mutex
+	w     io.Writer
+	queue chan struct{} // has a value while out has lines to write
 
 	mu    sync.Mutex
+	out   [][]byte
 	next  int64
 	calls map[int64]chan message
 	done  chan struct{}
-	err   error // why the connection ended; set before done closes
 
 	// handle takes every notification and server request, in the order
 	// app-server sent them, on the goroutine that reads. It must not
@@ -50,7 +52,29 @@ func (e *rpcError) Error() string { return fmt.Sprintf("%s (%d)", e.Message, e.C
 var errClosed = errors.New("codex: the connection to app-server ended")
 
 func newConn(w io.Writer, handle func(message)) *conn {
-	return &conn{w: w, calls: map[int64]chan message{}, done: make(chan struct{}), handle: handle}
+	c := &conn{w: w, queue: make(chan struct{}, 1), calls: map[int64]chan message{}, done: make(chan struct{}), handle: handle}
+	go c.write()
+	return c
+}
+
+func (c *conn) write() {
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-c.queue:
+		}
+		c.mu.Lock()
+		lines := c.out
+		c.out = nil
+		c.mu.Unlock()
+		for _, line := range lines {
+			if _, err := c.w.Write(line); err != nil {
+				c.end()
+				return
+			}
+		}
+	}
 }
 
 // line takes one message app-server sent.
@@ -79,7 +103,7 @@ func (c *conn) dispatch(m message) {
 	}
 }
 
-func (c *conn) end(err error) {
+func (c *conn) end() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	select {
@@ -87,7 +111,6 @@ func (c *conn) end(err error) {
 		return
 	default:
 	}
-	c.err = err
 	close(c.done)
 }
 
@@ -163,11 +186,17 @@ func (c *conn) send(m any) error {
 	if err != nil {
 		return err
 	}
-	c.wmu.Lock()
-	defer c.wmu.Unlock()
-	if _, err := c.w.Write(append(line, '\n')); err != nil {
-		c.end(errClosed)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	select {
+	case <-c.done:
 		return errClosed
+	default:
+	}
+	c.out = append(c.out, append(line, '\n'))
+	select {
+	case c.queue <- struct{}{}:
+	default:
 	}
 	return nil
 }
