@@ -3,10 +3,15 @@ package plugins
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"glitched/internal/secrets"
 )
 
 const badgeModule = `
@@ -289,5 +294,30 @@ func TestAThemeNameWithSpacesLoads(t *testing.T) {
 	}
 	if th := h.Themes(); len(th) != 1 || th[0].Name != "Solarized Dark" {
 		t.Fatalf("themes %+v", th)
+	}
+}
+
+// A plugin granted cat can't read the credentials agents were given: the
+// engine's vault under the same state directory is denied to its runs.
+func TestRunCantReadTheVault(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	held := filepath.Join(secrets.Under(state), "thread", "KEY")
+	os.MkdirAll(filepath.Dir(held), 0o700)
+	os.WriteFile(held, []byte("probe-value-0123"), 0o600)
+	writeModule(t, state, "reader", `"capabilities": ["programs"], "glitched": { "programs": ["cat"] }, `, `
+		export async function init() {
+			let out
+			try { out = (await glitched.run("cat", [`+strconv.Quote(held)+`])).stdout } catch (e) { out = e.code + ": " + e.message }
+			return { state: out }
+		}
+		export function view({ state }) { return { body: { type: "text", text: state } } }`)
+	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf})
+	t.Cleanup(h.Close)
+	h.SetGranted("reader", "programs", true)
+	s := session(t, h, "reader")
+	s.Retry()
+	u.until(t, "the refusal", func() bool { return strings.Contains(texts(s), "refused") })
+	if strings.Contains(texts(s), "probe-value") {
+		t.Fatalf("the plugin read the vault: %s", texts(s))
 	}
 }
