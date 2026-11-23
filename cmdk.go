@@ -74,6 +74,11 @@ func (a *app) actions() []command {
 		add.also = "workspace folder"
 		cmds = append(cmds, add)
 	}
+	if a.localEnv() != nil && !a.clone.open {
+		clone := action("project.clone", "Clone repository…", "", "git-branch", a.openClone)
+		clone.also = "git github repo url"
+		cmds = append(cmds, clone)
+	}
 	// Each is listed while an agent works in it too, lest the rows shift
 	// under the one chosen as a run starts; its alert says to stop it.
 	for _, p := range a.projects {

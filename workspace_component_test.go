@@ -115,7 +115,7 @@ func TestTheWorkspaceButtonIsTheBuiltInsDrawnAsGlitchedsOwn(t *testing.T) {
 		show func()
 		want []string
 	}{
-		{"a new thread's", func() {}, []string{"user", "t3code", "-", "Add project…", "Remove project"}},
+		{"a new thread's", func() {}, []string{"user", "t3code", "-", "Add project…", "Clone repository…", "Remove project"}},
 		{"a thread's", func() {
 			h.a.select_(th)
 			h.until("the edit's counts", func() bool { return h.tt.HasText("+10") })
@@ -210,8 +210,8 @@ func TestYourWorkspaceButtonReplacesTheBuiltIns(t *testing.T) {
 	h.click("Where")
 	h.tt.Advance(time.Second)
 	items := h.tt.Menu()
-	if len(items) != 5 || !slices.Equal(items[1:], []string{"t3code", "-", "Add project…", "Remove project"}) {
-		t.Fatalf("your workspace menu is %q, want Glitched's choices, Add project and Remove project", items)
+	if len(items) != 6 || !slices.Equal(items[1:], []string{"t3code", "-", "Add project…", "Clone repository…", "Remove project"}) {
+		t.Fatalf("your workspace menu is %q, want Glitched's choices, Add project, Clone repository and Remove project", items)
 	}
 	if err := h.tt.ChooseMenuItem("t3code"); err != nil {
 		t.Fatal(err)
