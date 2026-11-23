@@ -143,20 +143,29 @@ func (a *app) frameOf(at string) *placeFrame {
 // copy key: a thread's id, or "" for a slot drawn once. t is the thread it
 // is about, nil for none. compact asks the copies for their smallest
 // drawing, as a narrow header does. The header's copies never shrink: it
-// gives way in steps, so that no copy is clipped under its neighbours. It
-// says how much of its row the copies took, gaps included, as the last
-// frame laid them out, and whether each plugin has drawn its copy as it is
-// now.
-func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread, compact bool) (room float32, drawn bool) {
+// gives way in steps, so that no copy is clipped under its neighbours, and
+// holds them in its row only once each is drawn at the width asked and
+// known, the header having measured them at it: out of the row till then.
+// It says how much of its row the copies took, gaps included, as the last
+// frame laid them out, whether each plugin has drawn its copy at the width
+// asked, and whether they are in the row.
+func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread, compact, known bool) (room float32, drawn, shown bool) {
 	drawn = true
 	if a.plugins == nil {
-		return 0, drawn
+		return 0, drawn, true
 	}
 	f := a.frameOf(at)
 	var full plugins.ThreadRecord
 	if t != nil {
 		full = a.threadRecord(*t)
 	}
+	type drawing struct {
+		pl   plugins.PlaceAt
+		ctx  any
+		app  *plugins.Session
+		node *widget.Node
+	}
+	var copies []drawing
 	for _, pl := range a.plugins.PlacesAt(at) {
 		var ctx any
 		version := ""
@@ -173,20 +182,28 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread, compact bool)
 		if app == nil {
 			continue
 		}
-		drawn = drawn && (app.Err != nil || app.Answered(pl.Place.ID, key) == version)
-		node := app.PlaceView(pl.Place.ID, key)
-		if node == nil {
-			continue
+		// Drawn at this width: a record that changes as the thread runs
+		// doesn't count.
+		v := app.Answered(pl.Place.ID, key)
+		drawn = drawn && (app.Err != nil || v != "" && strings.HasSuffix(v, " compact") == compact)
+		if node := app.PlaceView(pl.Place.ID, key); node != nil {
+			copies = append(copies, drawing{pl, ctx, app, node})
 		}
-		shrink := float32(1)
-		if at == "thread.header" {
-			shrink = 0
-		}
-		row := ui.Row(c).Key("plugin:" + pl.Plugin + ":" + pl.Place.ID).Shrink(shrink).AlignItems(ui.Center).ClipX()
-		room += row.Bounds().W + headerGap
-		a.drawPlace(c, row, pl, key, ctx, app, node, nil, nil, nil, nil, nil)
 	}
-	return room, drawn
+	header := at == "thread.header"
+	shown = !header || known && drawn
+	for _, d := range copies {
+		row := ui.Row(c).Key("plugin:" + d.pl.Plugin + ":" + d.pl.Place.ID).AlignItems(ui.Center).ClipX()
+		if header {
+			row = row.Shrink(0)
+		}
+		if !shown {
+			row = row.Absolute().Invisible()
+		}
+		room += row.Bounds().W + headerGap
+		a.drawPlace(c, row, d.pl, key, d.ctx, d.app, d.node, nil, nil, nil, nil, nil)
+	}
+	return room, drawn, shown
 }
 
 // sessionControls are the controls of what a plugin's app session draws,

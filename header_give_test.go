@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,23 +84,32 @@ func (h *harness) inHeader(s string) (ui.Rect, bool) {
 // wide: missing, past the window, or under another.
 func (h *harness) fitsHeader(w int, controls ...string) {
 	h.t.Helper()
+	for _, p := range h.misfits(w, controls...) {
+		h.t.Error(p)
+	}
+}
+
+// misfits are how each of controls doesn't fit the header w points wide.
+func (h *harness) misfits(w int, controls ...string) []string {
+	var problems []string
 	var shown []ui.Rect
 	for _, s := range controls {
 		r, ok := h.inHeader(s)
 		if !ok {
-			h.t.Errorf("at %d points the header doesn't show %q: %q", w, s, h.tt.Texts())
+			problems = append(problems, fmt.Sprintf("at %d points the header doesn't show %q: %q", w, s, h.tt.Texts()))
 			continue
 		}
 		if r.X < 0 || r.X+r.W > float32(w) {
-			h.t.Errorf("at %d points %q is past the window: %+v", w, s, r)
+			problems = append(problems, fmt.Sprintf("at %d points %q is past the window: %+v", w, s, r))
 		}
 		for i, o := range shown {
 			if r.X < o.X+o.W && o.X < r.X+r.W {
-				h.t.Errorf("at %d points %q is under %q: %+v, %+v", w, s, controls[i], r, o)
+				problems = append(problems, fmt.Sprintf("at %d points %q is under %q: %+v, %+v", w, s, controls[i], r, o))
 			}
 		}
 		shown = append(shown, r)
 	}
+	return problems
 }
 
 var headerControls = []string{"Show sidebar  ⌘B", "Open in", "Commit & push", "Toggle terminal  ⌘J", "Toggle diff  ⌘D", "Toggle preview  ⇧⌘P"}
