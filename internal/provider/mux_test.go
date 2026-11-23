@@ -32,10 +32,12 @@ func TestMuxAsksOnlyAnAdapterThatAnswers(t *testing.T) {
 
 type deadlined struct {
 	*fake.Adapter
-	left time.Duration
+	left  time.Duration
+	asked bool
 }
 
 func (d *deadlined) Ask(ctx context.Context, _ provider.AskSpec) (provider.AskResult, error) {
+	d.asked = true
 	if at, ok := ctx.Deadline(); ok {
 		d.left = time.Until(at)
 	}
@@ -52,6 +54,16 @@ func TestMuxBoundsAnAskByItsTimeout(t *testing.T) {
 	}
 	if d.left > 7*time.Second || d.left < 6*time.Second {
 		t.Errorf("the ask may take %s, want 7s", d.left)
+	}
+}
+
+// An ask with no time left isn't run with no deadline: it's refused.
+func TestMuxRefusesAnAskWithNoTimeToRun(t *testing.T) {
+	for _, timeout := range []time.Duration{0, -3 * time.Millisecond} {
+		d := &deadlined{Adapter: fake.New(nil)}
+		if _, err := (provider.Mux{"d": d}).Ask(context.Background(), "d", provider.AskSpec{Prompt: "p", Timeout: timeout}); err == nil || d.asked {
+			t.Errorf("an ask of %s: %v, run %v", timeout, err, d.asked)
+		}
 	}
 }
 

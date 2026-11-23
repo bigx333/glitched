@@ -752,17 +752,24 @@ func (a *app) askModel(ctx context.Context, dir, id string, q plugins.AskRequest
 			return plugins.AskAnswer{}, ctx.Err()
 		}
 	}
-	spec := provider.AskSpec{Model: q.Model, System: q.System, Prompt: q.Prompt}
-	wait := ctx
-	if d, ok := ctx.Deadline(); ok {
-		spec.Timeout = time.Until(d)
-		// The engine ends the ask at its timeout and answers once the
-		// provider has stopped: waiting for that, past ctx, keeps the
-		// plugin's next ask from reaching the engine before.
-		var cancel context.CancelFunc
-		wait, cancel = context.WithTimeout(context.WithoutCancel(ctx), spec.Timeout+askGrace)
-		defer cancel()
+	// An ask that's over before it reaches the engine isn't sent: the
+	// engine would run it with no time to take.
+	if err := ctx.Err(); err != nil {
+		return plugins.AskAnswer{}, err
 	}
+	d, ok := ctx.Deadline()
+	if !ok {
+		return plugins.AskAnswer{}, errors.New("an ask needs a deadline")
+	}
+	spec := provider.AskSpec{Model: q.Model, System: q.System, Prompt: q.Prompt, Timeout: time.Until(d)}
+	if spec.Timeout <= 0 {
+		return plugins.AskAnswer{}, context.DeadlineExceeded
+	}
+	// The engine ends the ask at its timeout and answers once the provider
+	// has stopped: waiting for that, past ctx, keeps the plugin's next ask
+	// from reaching the engine before.
+	wait, cancel := context.WithTimeout(context.WithoutCancel(ctx), spec.Timeout+askGrace)
+	defer cancel()
 	r, err := a.serviceClient(dir).ProviderAsk(wait, name, spec)
 	return plugins.AskAnswer{Text: r.Text, Provider: name, Model: r.Model}, err
 }

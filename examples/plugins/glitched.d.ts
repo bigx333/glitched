@@ -960,7 +960,8 @@ declare const glitched: {
      * take, 120 at most and by default. Needs models:ask. Fails with
      * err.code "unsupported" (the provider can't), "unavailable" (its CLI
      * isn't installed), "busy" (the plugin's last ask isn't answered),
-     * "too_large" (over 200 KB) or "timeout".
+     * "too_large" (over 200 KB) or "timeout", as does one with no time
+     * left, which is never sent.
      */
     ask(prompt: string, options?: { system?: string; provider?: string; model?: string; timeout?: number }): Promise<{ text: string; provider: string; model: string }>;
   };
