@@ -365,6 +365,15 @@ func (a *app) sectionHead(c *ui.Context, cat category, count int) {
 			ui.Spacer(c)
 			chevron(c, open).TextColor(palette.faint)
 		}
+		if lost := a.lostIn(cat); len(lost) > 0 {
+			ui.Spacer(c)
+			b := a.tip(c, ghost(c, "continue-all", false).Padding(2, 8).Label("Continue all"),
+				"Continue "+plural(len(lost), "thread")+" whose agent was cut off, two at a time")
+			if b.Children(func() { ui.Text(c, "Continue all").FontSize(11.5) }).Clicked() {
+				a.continueAll(lost)
+				c.AddToast(ui.Toast{Title: "Continuing", Description: plural(len(lost), "thread"), Type: "info"})
+			}
+		}
 	})
 	if collapsible && head.Clicked() {
 		a.sectionClosed[cat] = open

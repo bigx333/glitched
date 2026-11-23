@@ -33,8 +33,8 @@ import (
 // with QFIRST, and takes PICK;
 // blocked is a parent whose child asks ASK;
 // refused is a thread whose delete the engine refused; plain is an edit in a workspace with no
-// git; stuck is a run left uncertain, with STEER for a
-// steer it refused over a draft and DRAFT=<text> for the composer's), PAGE
+// git; stuck is a run left uncertain, with STEER one stopping and a
+// steer it refused over a draft, and DRAFT=<text> for the composer's), PAGE
 // for a path, and for what to show: DIFF,
 // SPLIT, TERM2, CMDK with CMDKQ=<query>, LIGHT, THEME=<name>,
 // RENAME=<title>, ALERT=<title>, MENU=<title> (its items to
@@ -506,8 +506,13 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		h.click("Edit plan.md")
 		h.diffsRead()
 	case "stuck":
-		// A run left uncertain, which refuses a steer.
-		h = start(t, uncertainDir(t))
+		// A run left uncertain, or with STEER stopping, which refuses a
+		// steer.
+		dir := uncertainDir
+		if os.Getenv("STEER") != "" {
+			dir = stoppingDir
+		}
+		h = start(t, dir(t))
 		th := h.thread("Stuck")
 		h.a.select_(th)
 		h.until("its transcript", func() bool { return h.tt.HasText("May I edit it?") })

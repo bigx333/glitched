@@ -52,6 +52,11 @@ const (
 	Defer
 )
 
+// ContinueText is the message that continues a run left uncertain, sent
+// RestartActive: the agent picks up where it left off, and checks first
+// that what its last turn started did not already take effect.
+const ContinueText = "Continue where you left off. Your last turn was cut short, so a command or other action it started may have finished or may still be running. Before you repeat one that changes state, confirm it did not take effect and is not still running; if you cannot tell, say so instead of repeating it."
+
 // Command is a client intent. The same ID always returns the same receipt; a
 // changed body under a known ID is a conflict.
 type Command struct {
