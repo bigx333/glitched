@@ -21,6 +21,8 @@ type Tools struct {
 	// Plugins reaches the tools of the plugins the engine runs; nil offers
 	// none.
 	Plugins PluginTools
+	// Secrets asks the user for credentials; nil can't.
+	Secrets Asker
 }
 
 // PluginTools are the engine's plugin tools, as transport.EndpointClient

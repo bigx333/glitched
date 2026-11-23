@@ -8,6 +8,12 @@ func SetCallTimeout(d time.Duration) func() {
 	return func() { callTimeout = old }
 }
 
+func SetAskTimeout(d time.Duration) func() {
+	old := askTimeout
+	askTimeout = d
+	return func() { askTimeout = old }
+}
+
 func SetCloseGrace(d time.Duration) func() {
 	old := closeGrace
 	closeGrace = d

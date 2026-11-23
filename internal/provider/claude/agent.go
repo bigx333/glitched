@@ -13,6 +13,7 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/provider"
 	"glitched/internal/provider/park"
+	"glitched/internal/secrets"
 )
 
 var (
@@ -119,6 +121,13 @@ func launch(ctx context.Context, bin string, spec provider.SessionSpec, args []s
 	m := launchMark(spec.Thread, api.NewID())
 	cmd.Env = append(slices.DeleteFunc(cmd.Env, func(kv string) bool { return strings.HasPrefix(kv, procEnv+"=") }),
 		procEnv+"="+string(m))
+	// Claude Code sources CLAUDE_ENV_FILE before each Bash command, so the
+	// thread's credentials are set in its commands from when the user gives
+	// them, in the turn that asked too.
+	if spec.Credentials != "" {
+		cmd.Env = append(slices.DeleteFunc(cmd.Env, func(kv string) bool { return strings.HasPrefix(kv, "CLAUDE_ENV_FILE=") }),
+			"CLAUDE_ENV_FILE="+filepath.Join(spec.Credentials, secrets.ClaudeEnv))
+	}
 	contain(cmd, m)
 	p := &proc{
 		cmd: cmd, mark: m, stop: stop, stderr: &tail{},

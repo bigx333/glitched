@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/mcp"
 	"glitched/internal/provider"
 	"glitched/internal/provider/acp"
 	"glitched/internal/provider/acp/acptest"
@@ -19,6 +20,13 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	// The test binary plays glitched mcp for the agents an engine starts.
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		if err := mcp.Main(context.Background(), os.Stdin, os.Stdout); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if acptest.Main() || codextest.Main() {
 		return
 	}

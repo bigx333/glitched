@@ -62,7 +62,7 @@ func (a *firstOnClaude) Reconcile(ctx context.Context, id provider.RuntimeIdenti
 // delegateHost is a real engine whose runs get glitched mcp, played by the
 // test binary, and which serves its socket for it. Its first thread runs
 // on ad, the fake claude when nil.
-func delegateHost(t *testing.T, ad *claude.Adapter) *runtime.Host {
+func delegateHost(t *testing.T, ad *claude.Adapter, opts ...runtime.Option) *runtime.Host {
 	t.Helper()
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "host.db"))
@@ -74,7 +74,7 @@ func delegateHost(t *testing.T, ad *claude.Adapter) *runtime.Host {
 	}
 	sock := transport.Loopback{Network: "unix", Address: socketPath(t)}
 	mux := provider.Mux{"claude": &firstOnClaude{claude: ad, rest: fake.New(fake.Turn(false))}}
-	h, err := runtime.New(ctx, st, mux, runtime.WithMCP(mcp.Launcher{Command: must(os.Executable()), Engine: sock.Address}))
+	h, err := runtime.New(ctx, st, mux, append([]runtime.Option{runtime.WithMCP(mcp.Launcher{Command: must(os.Executable()), Engine: sock.Address})}, opts...)...)
 	if err != nil {
 		st.Close()
 		t.Fatal(err)
@@ -87,7 +87,7 @@ func delegateHost(t *testing.T, ad *claude.Adapter) *runtime.Host {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		(&transport.Server{Transport: sock, Endpoint: h}).Serve(serving, ln)
+		(&transport.Server{Transport: sock, Endpoint: h, Asks: h, Secrets: h}).Serve(serving, ln)
 	}()
 	t.Cleanup(func() {
 		stop()

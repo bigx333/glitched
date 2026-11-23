@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"glitched/internal/engine"
 	"glitched/internal/mcp"
 	"glitched/internal/provider"
+	"glitched/internal/secrets"
 	"glitched/internal/store"
 )
 
@@ -37,6 +39,7 @@ type Host struct {
 	servers   []provider.MCPServer // the engine's own MCP servers, which every run's agent gets after glitched mcp
 	worktrees string               // where the threads' worktrees go; "" makes none
 	making    sync.Mutex           // held while a worktree is made, so a create sent twice at once makes one
+	vault     *secrets.Vault       // the credentials users give agents; nil keeps none
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -52,6 +55,7 @@ type Host struct {
 	runs    map[api.ID]*liveRun // by run
 	closing map[api.ID]bool     // threads whose run is over but whose agent is not closed yet
 	subs    map[*stream]struct{}
+	asks    map[askKey]chan json.RawMessage // credentials requests glitched mcp waits on
 }
 
 // liveRun is a run this host drives. Cancelling ctx ends the run's provider
@@ -90,6 +94,7 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		runs:    map[api.ID]*liveRun{},
 		closing: map[api.ID]bool{},
 		subs:    map[*stream]struct{}{},
+		asks:    map[askKey]chan json.RawMessage{},
 	}
 	for _, o := range opts {
 		o(h)
@@ -171,12 +176,17 @@ var (
 	turnStopping  = api.EventType(api.TurnStopping{})
 	turnUncertain = api.EventType(api.TurnUncertain{})
 	turnEnded     = api.EventType(api.TurnEnded{})
+	threadDeleted = api.EventType(api.ThreadDeleted{})
 )
 
 // follow stops driving a run the log moved past: a stop cancels a start,
 // steer or answer still in flight, and an uncertain or finished run gets no
 // more calls. h.mu is held.
 func (h *Host) follow(e api.Event) {
+	if e.Type == threadDeleted && h.vault != nil {
+		go h.vault.Forget(e.Thread)
+		return
+	}
 	if e.Type != turnStopping && e.Type != turnUncertain && e.Type != turnEnded {
 		return
 	}
@@ -447,6 +457,9 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 		return nil, true
 
 	case engine.DeliverAnswer:
+		if isAsk(b.Dedup) {
+			return h.answerAsk(b), true
+		}
 		o = engine.Delivered{Request: b.Request}
 		switch err = h.act(b.Run, provider.Respond{Request: b.Dedup, Answer: b.Answer}); {
 		case errors.Is(err, provider.ErrWithdrawn):
@@ -511,6 +524,13 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	}
 	if h.mcp != nil {
 		spec.MCP = append(spec.MCP, h.mcp.For(thread, b.Access))
+	}
+	if h.vault != nil {
+		dir, err := h.vault.Prepare(thread)
+		if err != nil {
+			return nil, err
+		}
+		spec.Credentials = dir
 	}
 	for _, s := range h.servers {
 		s.Args, s.Env = slices.Clone(s.Args), maps.Clone(s.Env)
