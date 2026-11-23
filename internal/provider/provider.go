@@ -117,6 +117,11 @@ type SessionSpec struct {
 	// Session is the thread's conversation as a Sessioned agent of the
 	// provider's last bound it; "" when none has.
 	Session string
+	// Credentials is the thread's vault, the folder of the values its user
+	// gave its agents, which the agent's commands may read; "" when the
+	// host keeps none. An adapter whose agent can source a script before
+	// each command hands it secrets.ClaudeEnv's kind there.
+	Credentials string
 }
 
 // MCPServer is a stdio MCP server an agent starts for itself: Command with

@@ -30,6 +30,7 @@ import (
 	"glitched/internal/provider/codex"
 	"glitched/internal/provider/fake"
 	"glitched/internal/runtime"
+	"glitched/internal/secrets"
 	"glitched/internal/store"
 	"glitched/internal/tailnet"
 	"glitched/internal/transport"
@@ -288,7 +289,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	} else {
 		slog.Warn("agents run without glitched mcp, so they start no child threads", "err", errors.Join(err, absErr))
 	}
-	opts = append(opts, runtime.WithMCPServers(cfg.MCP...), runtime.WithWorktrees(filepath.Join(cfg.Dir, "worktrees")))
+	opts = append(opts, runtime.WithMCPServers(cfg.MCP...), runtime.WithWorktrees(filepath.Join(cfg.Dir, "worktrees")), runtime.WithVault(secrets.New(filepath.Join(cfg.Dir, "secrets"))))
 	// An adapter that keeps agents between runs stops them once the host
 	// that ran them has.
 	closers := map[io.Closer]bool{}
@@ -323,10 +324,10 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	}
 	svc := d.startPlugins(cfg.Dir, cfg.PluginRun)
 	d.undo = append(d.undo, func() error { svc.Close(); return nil })
-	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: newCommandLists(ctx, cfg.Providers)}}
+	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: newCommandLists(ctx, cfg.Providers), Asks: h, Secrets: h}}
 	g := &grants{dir: cfg.Dir, base: ctx}
 	tailnetServer := func(tn transport.Transport) *transport.Server {
-		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Authorize: g.authorize}
+		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Secrets: h, Authorize: g.authorize}
 	}
 	type unbound struct {
 		tn  transport.Tailnet

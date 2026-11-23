@@ -101,7 +101,7 @@ func handle(ctx context.Context, tools *Tools, m message) reply {
 	case "ping":
 		r.Result = struct{}{}
 	case "tools/list":
-		r.Result = map[string]any{"tools": append(slices.Clone(catalog), tools.pluginCatalog(ctx)...)}
+		r.Result = map[string]any{"tools": append(append(slices.Clone(catalog), credentialsTool), tools.pluginCatalog(ctx)...)}
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
@@ -123,6 +123,16 @@ func handle(ctx context.Context, tools *Tools, m message) reply {
 				return r
 			}
 			r.Result = map[string]any{"content": []any{text(string(out))}, "isError": false}
+			return r
+		}
+		if p.Name == requestCredentials {
+			v, err := tools.credentials(ctx, p.Arguments, p.Meta.ToolUseID)
+			if err != nil {
+				r.Result = map[string]any{"content": []any{text(err.Error())}, "isError": true}
+				return r
+			}
+			b, _ := json.MarshalIndent(v, "", "  ")
+			r.Result = map[string]any{"content": []any{text(string(b))}, "structuredContent": v, "isError": false}
 			return r
 		}
 		if p.Name != delegateTask {

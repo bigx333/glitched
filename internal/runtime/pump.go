@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -8,6 +9,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/engine"
 	"glitched/internal/provider"
+	"glitched/internal/secrets"
 )
 
 // deltaWindow batches text deltas into one event. Any other event flushes
@@ -39,20 +41,27 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 	}()
 
 	commit := func(o engine.Observation) bool { return h.record(thread, o, 0) }
+	redact := func(s string) string { return secrets.Redact(s, h.credentials(thread)) }
+	// Text is shown redacted of the thread's credentials. A timed flush
+	// keeps back an end that could be the start of one; any other shows
+	// it all.
 	var text strings.Builder
 	var flush <-chan time.Time
-	flushText := func() {
-		if text.Len() > 0 {
-			commit(engine.Delta{Run: run, Text: text.String()})
-			text.Reset()
+	flushSome := func(final bool) {
+		shown, kept := secrets.RedactStream(text.String(), h.credentials(thread), final)
+		if shown != "" {
+			commit(engine.Delta{Run: run, Text: shown})
 		}
+		text.Reset()
+		text.WriteString(kept)
 		flush = nil
 	}
+	flushText := func() { flushSome(true) }
 	ended := false
 	for done := false; !done; {
 		select {
 		case <-flush:
-			flushText()
+			flushSome(false)
 		case ev, ok := <-events:
 			if !ok {
 				done = true
@@ -72,17 +81,17 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				if ev.Status == api.WorkFailed || ev.Exit != nil && *ev.Exit != 0 {
 					output = tail(ev.Output, api.OutputLimit)
 				}
-				commit(engine.Work{Item: api.WorkItem{Run: run, Item: ev.Item, Kind: ev.Kind, Title: ev.Title, Status: ev.Status,
-					Path: ev.Path, Exit: ev.Exit, Output: output}})
+				commit(engine.Work{Item: api.WorkItem{Run: run, Item: ev.Item, Kind: ev.Kind, Title: redact(ev.Title), Status: ev.Status,
+					Path: ev.Path, Exit: ev.Exit, Output: redact(output)}})
 			case provider.RequestOpened:
 				flushText()
-				commit(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: ev.ID, Kind: ev.Kind, Body: ev.Body})
+				commit(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: ev.ID, Kind: ev.Kind, Body: json.RawMessage(redact(string(ev.Body)))})
 			case provider.RequestWithdrawn:
 				flushText()
 				commit(engine.Withdrawn{Run: run, Dedup: ev.ID, Reason: ev.Reason})
 			case provider.TurnEnded:
 				flushText()
-				if ended = commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: ev.Error, Tokens: ev.Tokens}); ended {
+				if ended = commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: redact(ev.Error), Tokens: ev.Tokens}); ended {
 					h.forget(run)
 				}
 			}

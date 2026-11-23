@@ -34,6 +34,12 @@ type Server struct {
 	// callers only, as Plugins: a listing runs the provider's CLI in the
 	// folder the caller names.
 	Providers Providers
+	// Asks opens credentials requests for this machine's agents, to its
+	// own callers only, as Plugins: glitched mcp asks for its agent.
+	Asks Asks
+	// Secrets takes the credentials users type for a request, from any
+	// client the server admits.
+	Secrets Secrets
 	// Authorize admits a socket whose client proved, in the handshake, that
 	// it holds one of the keys Authorize knows. proved reports whether the
 	// proof was made with a key; Authorize asks it of every key it knows,
@@ -312,6 +318,23 @@ type Plugins interface {
 	PluginCall(ctx context.Context, call json.RawMessage) (json.RawMessage, error)
 }
 
+// Asks are what glitched mcp asks of the engine for request_credentials.
+type Asks interface {
+	AskCredentials(ctx context.Context, a api.Ask) (api.Asked, error)
+}
+
+// Secrets keep the credentials users give agents. Their values travel in
+// no other request and are never logged.
+type Secrets interface {
+	ProvideCredentials(ctx context.Context, p api.Provide) error
+	ForgetCredentials(ctx context.Context, thread api.ID) error
+}
+
+// forgetQuery names the thread whose credentials to forget.
+type forgetQuery struct {
+	Thread api.ID `json:"thread"`
+}
+
 // Providers are what the engine's providers offer a session.
 type Providers interface {
 	Commands(ctx context.Context, provider, workspace string) ([]provider.Command, error)
@@ -374,6 +397,17 @@ func (s *Server) methods() map[string]handler {
 		})
 		m["providers"] = callHandler(func(ctx context.Context, q providersQuery) ([]ProviderInfo, error) {
 			return p.Providers(ctx, q.Fresh), nil
+		})
+	}
+	if a := s.Asks; a != nil {
+		m["credentials.ask"] = callHandler(a.AskCredentials)
+	}
+	if c := s.Secrets; c != nil {
+		m["credentials.provide"] = callHandler(func(ctx context.Context, p api.Provide) (struct{}, error) {
+			return struct{}{}, c.ProvideCredentials(ctx, p)
+		})
+		m["credentials.forget"] = callHandler(func(ctx context.Context, q forgetQuery) (struct{}, error) {
+			return struct{}{}, c.ForgetCredentials(ctx, q.Thread)
 		})
 	}
 	if h := s.Hub; h != nil {

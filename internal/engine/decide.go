@@ -475,8 +475,20 @@ func (d *decision) respond(b api.RequestRespond) error {
 
 // fits is nil when answer answers r. A question takes its answers or a
 // dismissal, and refuses a misfit before the race for the request, which
-// it would win; an approval takes any JSON.
+// it would win; credentials take the names provided, never values, or
+// none; an approval takes any JSON.
 func fits(r Request, answer json.RawMessage) error {
+	if r.Kind == api.KindCredentials {
+		p, err := api.ParseProvided(answer)
+		if err != nil {
+			return err
+		}
+		c, err := api.ParseCredentials(r.Body)
+		if err != nil {
+			return err
+		}
+		return p.Fit(c)
+	}
 	if r.Kind != api.KindQuestion {
 		return nil
 	}

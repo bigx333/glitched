@@ -87,7 +87,7 @@ func fakeClaude(path string) int {
 	if f := os.Getenv(envEntry); f != "" {
 		var entries []string
 		for _, kv := range os.Environ() {
-			if k, _, _ := strings.Cut(kv, "="); strings.EqualFold(k, "CLAUDE_CODE_ENTRYPOINT") || mcp.Routing(k) {
+			if k, _, _ := strings.Cut(kv, "="); strings.EqualFold(k, "CLAUDE_CODE_ENTRYPOINT") || k == "CLAUDE_ENV_FILE" || mcp.Routing(k) {
 				entries = append(entries, kv)
 			}
 		}
