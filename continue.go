@@ -47,11 +47,12 @@ func (a *app) continueButton(c *ui.Context, t thread) {
 const continuesAtOnce = 2
 
 // continuing is a thread Continue all continues, once its turn comes:
-// sent is the Continue's command, and the run it starts.
+// sent is the Continue's command, and the run it starts; replaces, the
+// uncertain run it replaces.
 type continuing struct {
-	env    *client.Env
-	thread api.ID
-	sent   api.ID
+	env            *client.Env
+	thread         api.ID
+	sent, replaces api.ID
 }
 
 // lostIn is the threads of the user's own a Continue all in cat's head
@@ -109,7 +110,8 @@ func (a *app) paceContinues() {
 		// One on an engine offline waits for it to come back.
 		_, online := a.continues[i].env.Status.(client.Online)
 		if j := &a.continues[i]; online && j.sent.IsZero() && busy[j.env] < continuesAtOnce {
-			j.sent = a.continueRun(thread{j.env, j.env.Threads[j.thread]})
+			t := thread{j.env, j.env.Threads[j.thread]}
+			j.sent, j.replaces = a.continueRun(t), t.View.Turn.Run
 			busy[j.env]++
 		}
 	}
@@ -118,14 +120,15 @@ func (a *app) paceContinues() {
 // live is whether the run j's Continue started is live, waiting on the
 // user's answer too, as an answer resumes it without asking for a place;
 // or whether its Continue is on its way: the thread still shows the
-// uncertain run it replaces. A Continue the engine refused started none.
+// uncertain run it replaces, and the Continue hasn't failed. A Continue
+// whose run shows started it, whatever became of its reply.
 func (j continuing) live(t thread) bool {
-	if slices.ContainsFunc(t.Pending, func(p client.Pending) bool { return p.Command == j.sent && p.Err != nil }) {
+	v := t.View
+	switch {
+	case v.Turn != nil && v.Turn.Run == j.sent:
+		return v.Run != api.RunUncertain
+	case v.Run != api.RunUncertain || v.Turn == nil || v.Turn.Run != j.replaces:
 		return false
 	}
-	v := t.View
-	if v.Turn != nil && v.Turn.Run == j.sent {
-		return v.Run != api.RunUncertain
-	}
-	return v.Run == api.RunUncertain && (v.LastTurn == nil || v.LastTurn.Run != j.sent)
+	return !slices.ContainsFunc(t.Pending, func(p client.Pending) bool { return p.Command == j.sent && p.Err != nil })
 }

@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/daemon"
+	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 )
 
@@ -166,5 +168,159 @@ func TestContinueAllContinuesTwoAtATime(t *testing.T) {
 	h.until("the third continued", func() bool { return len(in(api.RunUncertain)) == 0 })
 	if len(h.a.continues) != 2 {
 		t.Fatalf("%d threads held to continue, want the two live", len(h.a.continues))
+	}
+}
+
+// eventsOn is thread's log on d.
+func eventsOn(t *testing.T, d *daemon.Daemon, thread api.ID) []api.Event {
+	t.Helper()
+	snap, err := d.Endpoint().Read(context.Background(), api.Query{Thread: thread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snap.Events
+}
+
+// engineView waits for thread's view on d to satisfy ok.
+func engineView(t *testing.T, d *daemon.Daemon, thread api.ID, what string, ok func(api.Thread) bool) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if v, _ := viewOn(t, d, thread); ok(v) {
+			return
+		}
+		if time.Now().After(deadline) {
+			v, _ := viewOn(t, d, thread)
+			t.Fatalf("%s never came: %+v", what, v)
+		}
+	}
+}
+
+// laterSlow runs turns on the fake, and once slow is set on slowStop's
+// agents, which stop only once release closes.
+type laterSlow struct {
+	*fake.Adapter
+	slow    atomic.Bool
+	release chan struct{}
+}
+
+func (g *laterSlow) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	if g.slow.Load() {
+		return slowStop{Adapter: g.Adapter, release: g.release}.Open(ctx, spec)
+	}
+	return g.Adapter.Open(ctx, spec)
+}
+
+// A Continue all's place frees once the run its Continue started is over,
+// even when the thread is uncertain again by the time the app looks, in a
+// run after the next.
+func TestContinueAllFreesAPlaceOnceItsRunIsOver(t *testing.T) {
+	g := &laterSlow{Adapter: fake.New(fake.Turn(false)), release: make(chan struct{})}
+	dir, d := lostDir(t, g, "One", "Two", "Three")
+	h := start(t, dir)
+	one, two, three := h.thread("One"), h.thread("Two"), h.thread("Three")
+	h.a.continueAll([]thread{one, two, three})
+	for _, th := range []thread{one, two} {
+		engineView(t, d, th.id(), "the continued run's end", func(v api.Thread) bool { return v.Run == api.RunIdle && len(queuedOn(t, d, th.id())) == 2 })
+	}
+	for _, th := range []thread{one, two} {
+		if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: th.id(), Body: api.MessageDispatch{Text: "Once more.", Mode: api.StartNow}}); err != nil {
+			t.Fatal(err)
+		}
+		engineView(t, d, th.id(), "a run after the continued one", func(v api.Thread) bool { return v.Run == api.RunIdle && len(queuedOn(t, d, th.id())) == 3 })
+	}
+	g.slow.Store(true)
+	laters := map[api.ID]api.ID{}
+	for _, th := range []thread{one, two} {
+		later := api.NewID()
+		laters[th.id()] = later
+		for _, b := range []api.Intent{api.MessageDispatch{Text: "Again.", Mode: api.StartNow}, api.TurnInterrupt{}} {
+			engineView(t, d, th.id(), "a run to steer", func(v api.Thread) bool {
+				return v.Run == api.RunIdle || v.Turn != nil && v.Turn.Run == later && v.Run == api.RunRunning
+			})
+			id := api.NewID()
+			if _, ok := b.(api.MessageDispatch); ok {
+				id = later
+			}
+			if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: id, Target: th.id(), Body: b}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		engineView(t, d, th.id(), "the later run told to stop", func(v api.Thread) bool {
+			return v.Run == api.RunStopping && slices.ContainsFunc(eventsOn(t, d, th.id()), func(e api.Event) bool {
+				b, _ := e.Decode()
+				s, ok := b.(api.TurnSignalled)
+				return ok && s.Run == later
+			})
+		})
+		if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: th.id(), Body: api.TurnInterrupt{}}); err != nil {
+			t.Fatal(err)
+		}
+		engineView(t, d, th.id(), "the later run uncertain", func(v api.Thread) bool { return v.Run == api.RunUncertain && v.Turn != nil && v.Turn.Run == later })
+	}
+	shown := func() bool {
+		for _, th := range []thread{one, two} {
+			if th.View.Run != api.RunUncertain || th.View.Turn == nil || th.View.Turn.Run != laters[th.id()] {
+				return false
+			}
+		}
+		return true
+	}
+	for deadline := time.After(10 * time.Second); !shown(); {
+		if !h.p.run() {
+			select {
+			case <-h.p.wake:
+			case <-deadline:
+				t.Fatal("the app never saw the later runs uncertain")
+			}
+		}
+	}
+	h.tt.Frame()
+	h.until("the third continued", func() bool { return len(queuedOn(t, d, three.id())) == 2 })
+}
+
+// lostReply loses the reply to every replace of target's run the engine
+// took, once late closes.
+type lostReply struct {
+	api.Endpoint
+	target api.ID
+	late   chan struct{}
+}
+
+func (e lostReply) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
+	r, err := e.Endpoint.Submit(ctx, c)
+	if b, ok := c.Body.(api.MessageDispatch); err == nil && ok && b.Replaces != (api.ID{}) && c.Target == e.target {
+		<-e.late
+		return api.Receipt{}, errors.New("the reply was lost")
+	}
+	return r, err
+}
+
+// A Continue whose reply was lost holds its place once its run shows.
+func TestContinueAllHoldsAPlaceWhoseReplyWasLost(t *testing.T) {
+	held := fake.New(fake.Turn(false))
+	held.HoldStart = true
+	_, d := lostDir(t, held, "One", "Two", "Three")
+	snap, err := d.Endpoint().Read(context.Background(), api.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lost api.ID
+	for _, v := range snap.Threads {
+		if v.Title == "One" {
+			lost = v.ID
+		}
+	}
+	late := make(chan struct{})
+	h := serveApp(t, lostReply{d.Endpoint(), lost, late})
+	one, two, three := h.thread("One"), h.thread("Two"), h.thread("Three")
+	h.a.continueAll([]thread{one, two, three})
+	h.until("the first two starting", func() bool { return one.View.Run == api.RunStarting && two.View.Run == api.RunStarting })
+	close(late)
+	h.until("the first's reply lost", func() bool {
+		return slices.ContainsFunc(one.Pending, func(p client.Pending) bool { return p.Err != nil })
+	})
+	h.tt.Frame()
+	if len(three.Pending) != 0 || held.Starts() != 2 {
+		t.Fatalf("the third was continued (%d sent, %d started) with both places held", len(three.Pending), held.Starts())
 	}
 }
