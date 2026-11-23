@@ -187,7 +187,7 @@ func TestTurnStreamsIntoTheLog(t *testing.T) {
 			got = append(got, e.Type)
 		}
 	}
-	want := []string{"thread.created", "message.queued", "turn.admitted", "turn.started", "turn.ended"}
+	want := []string{"thread.created", "message.queued", "turn.admitted", "turn.started", "access.granted", "model.confirmed", "turn.ended"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("lifecycle events %v, want %v", got, want)
 	}

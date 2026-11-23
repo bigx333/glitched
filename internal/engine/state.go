@@ -57,6 +57,7 @@ type Thread struct {
 	Session     string      // the provider's id for the thread's conversation; "" until a run binds one
 	Reported    time.Time   // when a child last reported back
 	LastReport  *api.Report // never written through; its Cursor has no Log
+	Confirmed   api.Confirmed
 	Runs        []Run
 	Queue       []Message
 	Requests    []Request
@@ -214,6 +215,7 @@ func View(t Thread) api.Thread {
 		Parent:      t.Parent,
 		Tokens:      t.Tokens,
 		Reported:    t.Reported,
+		Confirmed:   t.Confirmed,
 	}
 	if t.Context != (api.Context{}) {
 		c := t.Context
@@ -228,7 +230,7 @@ func View(t Thread) api.Thread {
 	}
 	for i := len(t.Runs) - 1; i >= 0; i-- {
 		if r := t.Runs[i]; r.State == RunFinished {
-			v.LastTurn = &api.TurnResult{Outcome: r.Outcome, Ended: r.Ended}
+			v.LastTurn = &api.TurnResult{Run: r.ID, Model: r.Model, Access: r.Access, Outcome: r.Outcome, Ended: r.Ended}
 			break
 		}
 	}

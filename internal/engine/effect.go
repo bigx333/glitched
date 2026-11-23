@@ -162,6 +162,24 @@ type Context struct {
 	Compacted    bool
 }
 
+// Granted is the access the run's agent runs at, as provider.Granted
+// has it.
+type Granted struct {
+	Run    api.ID
+	Access api.Access
+	Mode   string
+	Why    string
+}
+
+// Ran is the model and effort the run's agent runs, as provider.Ran has
+// them.
+type Ran struct {
+	Run    api.ID
+	Model  string
+	Effort string
+	Why    string
+}
+
 type Work struct{ Item api.WorkItem }
 
 // Surfaced is a request the agent raised. Request is freshly minted; Dedup is
@@ -237,6 +255,8 @@ func (Ended) observed()          {}
 func (Delta) observed()          {}
 func (Context) observed()        {}
 func (Work) observed()           {}
+func (Granted) observed()        {}
+func (Ran) observed()            {}
 func (Surfaced) observed()       {}
 func (Withdrawn) observed()      {}
 func (Delivered) observed()      {}

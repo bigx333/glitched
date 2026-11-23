@@ -194,6 +194,24 @@ type ThreadConfigured struct {
 	Access Access   `json:"access"`
 }
 
+// AccessGranted is the access the run's agent runs at, as its provider
+// confirmed it: ConfirmedAccess's Access, Mode and Why.
+type AccessGranted struct {
+	Run    ID     `json:"run"`
+	Access Access `json:"access"`
+	Mode   string `json:"mode,omitempty"`
+	Why    string `json:"why,omitempty"`
+}
+
+// ModelConfirmed is the model and effort the run's agent runs, as its
+// provider confirmed them: ConfirmedModel's Model, Effort and Why.
+type ModelConfirmed struct {
+	Run    ID     `json:"run"`
+	Model  string `json:"model"`
+	Effort string `json:"effort,omitempty"`
+	Why    string `json:"why,omitempty"`
+}
+
 // ThreadDeleted is a thread's tombstone, its last event.
 type ThreadDeleted struct{}
 
@@ -248,6 +266,8 @@ func (ThreadConfigured) eventType() string    { return "thread.configured" }
 func (ChildReported) eventType() string       { return "child.reported" }
 func (SessionBound) eventType() string        { return "session.bound" }
 func (ContextReported) eventType() string     { return "context.reported" }
+func (AccessGranted) eventType() string       { return "access.granted" }
+func (ModelConfirmed) eventType() string      { return "model.confirmed" }
 
 var eventBodies = map[string]func([]byte) (EventBody, error){}
 
@@ -278,6 +298,8 @@ func init() {
 	register[ChildReported]()
 	register[SessionBound]()
 	register[ContextReported]()
+	register[AccessGranted]()
+	register[ModelConfirmed]()
 }
 
 func register[B EventBody]() {

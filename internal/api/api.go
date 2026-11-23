@@ -303,8 +303,12 @@ type Request struct {
 	State      RequestState    `json:"state"`
 }
 
-// TurnResult is how a turn ended.
+// TurnResult is how a turn ended, and the model and access it was
+// admitted at.
 type TurnResult struct {
+	Run     ID        `json:"run,omitzero"`
+	Model   ModelRef  `json:"model,omitzero"`
+	Access  Access    `json:"access,omitempty"`
 	Outcome Outcome   `json:"outcome"`
 	Ended   time.Time `json:"ended"`
 }
@@ -356,6 +360,9 @@ type Thread struct {
 	LastReport *Report `json:"lastReport,omitempty"`
 	// Turn is the live run, nil while there is none.
 	Turn *Turn `json:"turn,omitempty"`
+	// Confirmed is what the thread's provider last confirmed its agent
+	// runs at, which Model and Access may be ahead of.
+	Confirmed Confirmed `json:"confirmed,omitzero"`
 	// Deleted is the tombstone: the last view a deleted thread has, which
 	// the shell stream sends once so that clients drop it. No read returns
 	// one.

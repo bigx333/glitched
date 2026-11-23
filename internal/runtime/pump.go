@@ -82,6 +82,10 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				}
 				commit(engine.Work{Item: api.WorkItem{Run: run, Item: ev.Item, Kind: ev.Kind, Title: redact(ev.Title), Status: ev.Status,
 					Path: redact(ev.Path), Exit: ev.Exit, Output: output}})
+			case provider.Granted:
+				commit(engine.Granted{Run: run, Access: ev.Access, Mode: ev.Mode, Why: redact(ev.Why)})
+			case provider.Ran:
+				commit(engine.Ran{Run: run, Model: redact(ev.Model), Effort: ev.Effort, Why: redact(ev.Why)})
 			case provider.Context:
 				commit(engine.Context{Run: run, Used: ev.Used, Window: ev.Window, Model: redact(ev.Model), Compacted: ev.Compacted})
 			case provider.RequestOpened:

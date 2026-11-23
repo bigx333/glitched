@@ -560,6 +560,9 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 	if version < 11 {
 		sqlText = threadsV10 + sqlText
 	}
+	if version < 12 {
+		sqlText = threadsV11 + sqlText
+	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
@@ -584,6 +587,12 @@ const threadsV10 = `
 	ALTER TABLE threads DROP COLUMN context_window;
 	ALTER TABLE threads DROP COLUMN context_stale;
 	ALTER TABLE threads DROP COLUMN context_model;
+`
+
+// The threads table up to version 11, before a thread kept what its
+// provider confirmed it runs at.
+const threadsV11 = `
+	ALTER TABLE threads DROP COLUMN granted;
 `
 
 // The threads table up to version 9, before a thread in a worktree kept
@@ -1149,6 +1158,56 @@ func TestAVersion10DatabaseUpgradesWithAContextPerThread(t *testing.T) {
 	s = open(t, path)
 	if th, want := threadOf(t, s, thread), (api.Context{Used: 41000, Window: 200000, Model: "claude-haiku-5-5", Stale: true}); th.Context != want {
 		t.Errorf("after a reopen the thread's context is %+v, want %+v", th.Context, want)
+	}
+	s.Close()
+	fresh := filepath.Join(t.TempDir(), "host.db")
+	open(t, fresh).Close()
+	if got, want := tableOf(t, path, "threads"), tableOf(t, fresh, "threads"); !reflect.DeepEqual(got, want) {
+		t.Errorf("the threads table\n%+v\nwant a new database's\n%+v", got, want)
+	}
+}
+
+// A database from before threads kept what their provider confirmed
+// upgrades to the threads table a new one has. Its threads have nothing
+// confirmed; what a live run's provider confirms after is kept across a
+// reopen, with what the run asked, and a confirmation of a run that isn't
+// the thread's is dropped.
+func TestAVersion11DatabaseUpgradesWithWhatEachThreadsProviderConfirmed(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	downgrade(t, path, "", 11)
+
+	s = open(t, path)
+	if th := threadOf(t, s, thread); th.Confirmed != (api.Confirmed{}) {
+		t.Errorf("an upgraded thread has %+v confirmed, want nothing", th.Confirmed)
+	}
+	run := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{ID: run, Target: thread, Body: api.MessageDispatch{Text: "go", Mode: api.StartNow}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range []engine.Observation{
+		engine.Granted{Run: run, Access: api.AccessAutoEdits, Mode: "acceptEdits", Why: "auto mode unavailable for this model"},
+		engine.Ran{Run: run, Model: "claude-sonnet-5-5", Effort: "high"},
+		engine.Granted{Run: api.NewID(), Access: api.AccessFull},
+	} {
+		if _, err := s.Observe(ctx, thread, o, time.Now(), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	s = open(t, path)
+	th := threadOf(t, s, thread)
+	if want := (api.ConfirmedAccess{Run: run, Asked: th.Access, Access: api.AccessAutoEdits, Mode: "acceptEdits", Why: "auto mode unavailable for this model"}); th.Confirmed.Access == nil || *th.Confirmed.Access != want {
+		t.Errorf("after a reopen the confirmed access is %+v, want %+v", th.Confirmed.Access, want)
+	}
+	if want := (api.ConfirmedModel{Run: run, Asked: th.Model, Model: "claude-sonnet-5-5", Effort: "high"}); th.Confirmed.Model == nil || *th.Confirmed.Model != want {
+		t.Errorf("after a reopen the confirmed model is %+v, want %+v", th.Confirmed.Model, want)
 	}
 	s.Close()
 	fresh := filepath.Join(t.TempDir(), "host.db")
