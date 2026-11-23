@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"glitched/internal/api"
 )
@@ -52,13 +53,14 @@ type Asker interface {
 	Ask(ctx context.Context, spec AskSpec) (AskResult, error)
 }
 
-// AskSpec is one prompt. Model "" is the adapter's own cheap model. Dir is
-// the folder the provider runs in, whose project files it may read.
+// AskSpec is one prompt. Model "" is the adapter's own cheap model.
+// Timeout bounds the ask in the engine that runs it, as a caller's
+// deadline doesn't cross the transport; 0 leaves it to ctx.
 type AskSpec struct {
-	Model  string `json:"model,omitempty"`
-	System string `json:"system,omitempty"`
-	Prompt string `json:"prompt"`
-	Dir    string `json:"dir,omitempty"`
+	Model   string        `json:"model,omitempty"`
+	System  string        `json:"system,omitempty"`
+	Prompt  string        `json:"prompt"`
+	Timeout time.Duration `json:"timeout,omitempty"`
 }
 
 // AskResult is the answer, and the model that wrote it.

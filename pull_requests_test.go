@@ -19,7 +19,7 @@ import (
 )
 
 // githubBranch is a checkout on fix-flaky whose origin is a GitHub
-// repository, its pushes landing in a bare repository here.
+// repository, holding main as a bare repository here does.
 func githubBranch(t *testing.T) string {
 	t.Helper()
 	cfg := filepath.Join(t.TempDir(), "gitconfig")
@@ -38,8 +38,7 @@ func githubBranch(t *testing.T) string {
 	git(work, "add", "a.txt")
 	git(work, "commit", "-qm", "first")
 	git(work, "remote", "add", "origin", "https://github.com/acme/widgets.git")
-	git(work, "config", "url."+origin+".pushInsteadOf", "https://github.com/acme/widgets.git")
-	git(work, "push", "-q", "origin", "main")
+	git(work, "-c", "url."+origin+".pushInsteadOf=https://github.com/acme/widgets.git", "push", "-q", "origin", "main")
 	git(work, "checkout", "-q", "-b", "fix-flaky")
 	return work
 }
@@ -101,7 +100,7 @@ func playGh(t *testing.T) func() []string {
 			out = `{"defaultBranchRef":{"name":"main"}}`
 		case "pr list":
 			out = `[{"number":12,"title":"Fix the flaky test","url":"https://github.com/acme/widgets/pull/12","state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","mergeable":"MERGEABLE","headRefName":"fix-flaky",
-				"statusCheckRollup":[{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/acme/widgets/actions/runs/1"}]}]`
+				"headRepository":{"name":"widgets"},"headRepositoryOwner":{"login":"acme"},"statusCheckRollup":[{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/acme/widgets/actions/runs/1"}]}]`
 		}
 		return map[string]any{"status": 0, "stdout": out, "stderr": ""}, nil
 	}
@@ -144,7 +143,7 @@ func TestTheHeaderShowsTheBranchsPullRequest(t *testing.T) {
 			t.Errorf("the popover doesn't say %q: %q", want, h.tt.Texts())
 		}
 	}
-	if got := ran(); len(got) < 3 || got[0] != "auth status --hostname github.com" {
+	if got := ran(); len(got) < 3 || got[0] != "auth status --active --hostname github.com" {
 		t.Errorf("gh ran %q", got)
 	}
 }

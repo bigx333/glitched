@@ -209,12 +209,14 @@ const (
 )
 
 // AskRequest is what glitched.models.ask asks: the prompt, a system prompt,
-// and the provider and model to run it on, "" for the defaults.
+// the provider and model to run it on, "" for the defaults, and the
+// seconds it may take, 0 for AskTimeout.
 type AskRequest struct {
-	Prompt   string `json:"prompt"`
-	System   string `json:"system,omitempty"`
-	Provider string `json:"provider,omitempty"`
-	Model    string `json:"model,omitempty"`
+	Prompt   string  `json:"prompt"`
+	System   string  `json:"system,omitempty"`
+	Provider string  `json:"provider,omitempty"`
+	Model    string  `json:"model,omitempty"`
+	Timeout  float64 `json:"timeout,omitempty"`
 }
 
 // AskAnswer is the text, and the provider and model that wrote it, as
@@ -235,7 +237,7 @@ func (h *Host) ask(ctx context.Context, id string, args json.RawMessage) (any, e
 	d := json.NewDecoder(bytes.NewReader(args))
 	d.DisallowUnknownFields()
 	if err := d.Decode(&q); err != nil || strings.TrimSpace(q.Prompt) == "" {
-		return nil, errors.New("glitched.models.ask takes a prompt, and options of system, provider and model only")
+		return nil, errors.New("glitched.models.ask takes a prompt, and options of system, provider, model and timeout only")
 	}
 	if len(q.Prompt)+len(q.System) > MaxAsk {
 		return nil, coded{"too_large", fmt.Errorf("an ask's prompt and system prompt are %d KB at most", MaxAsk>>10)}
@@ -247,7 +249,11 @@ func (h *Host) ask(ctx context.Context, id string, args json.RawMessage) (any, e
 		return nil, coded{"busy", errors.New("the plugin's last ask isn't answered yet")}
 	}
 	defer h.asking.Delete(id)
-	ctx, cancel := context.WithTimeout(ctx, AskTimeout)
+	timeout := AskTimeout
+	if q.Timeout > 0 {
+		timeout = min(time.Duration(q.Timeout*float64(time.Second)), AskTimeout)
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	a, err := h.opts.Ask(ctx, id, q)
 	switch {
@@ -258,7 +264,7 @@ func (h *Host) ask(ctx context.Context, id string, args json.RawMessage) (any, e
 	case errors.Is(err, provider.ErrUnavailable):
 		return nil, coded{"unavailable", err}
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		return nil, coded{"timeout", fmt.Errorf("the model didn't answer within %s", AskTimeout)}
+		return nil, coded{"timeout", fmt.Errorf("the model didn't answer within %s", timeout.Round(100*time.Millisecond))}
 	}
 	return nil, err
 }

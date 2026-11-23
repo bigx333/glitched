@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"time"
 
@@ -129,18 +130,30 @@ func (s *Session) SetItems(place string, items []PlaceItem) {
 }
 
 // shown tells a plugin that hears place.shown of each copy of the place
-// that came: one a drawing alone can't fetch for, as a thread's header.
+// that came or whose context changed: one a drawing alone can't fetch
+// for, as a thread's header. One that hears place.hidden is told of each
+// copy that went.
 func (s *Session) shown(place string, old, items []PlaceItem) {
-	if !slices.Contains(s.h.Ext(s.plugin).Events, "place.shown") {
-		return
-	}
+	events := s.h.Ext(s.plugin).Events
 	i := slices.IndexFunc(s.places.places, func(p Place) bool { return p.ID == place })
 	if i < 0 {
 		return
 	}
+	at := s.places.places[i].At
+	if slices.Contains(events, "place.hidden") {
+		for _, o := range old {
+			if !slices.ContainsFunc(items, func(it PlaceItem) bool { return it.Key == o.Key }) {
+				s.Notify(AppEvent{Kind: "app", Type: "place.hidden", Data: map[string]any{"id": place, "at": at, "key": o.Key}})
+			}
+		}
+	}
+	if !slices.Contains(events, "place.shown") {
+		return
+	}
 	for _, it := range items {
-		if !slices.ContainsFunc(old, func(o PlaceItem) bool { return o.Key == it.Key }) {
-			s.Notify(AppEvent{Kind: "app", Type: "place.shown", Data: map[string]any{"id": place, "at": s.places.places[i].At, "key": it.Key, "context": it.Context}})
+		j := slices.IndexFunc(old, func(o PlaceItem) bool { return o.Key == it.Key })
+		if j < 0 || !reflect.DeepEqual(old[j].Context, it.Context) {
+			s.Notify(AppEvent{Kind: "app", Type: "place.shown", Data: map[string]any{"id": place, "at": at, "key": it.Key, "context": it.Context}})
 		}
 	}
 }

@@ -504,6 +504,7 @@ type AppEvent =
   | { kind: "app"; type: "theme.changed"; data: { appearance: "light" | "dark" } }
   | { kind: "app"; type: "window.focused"; data: { focused: boolean } }
   | { kind: "app"; type: "place.shown"; data: { id: string; at: Slot; key: string; context?: ThreadRecord } }
+  | { kind: "app"; type: "place.hidden"; data: { id: string; at: Slot; key: string } }
   | { kind: "app"; type: "command"; data: { id: string } }
   | { kind: "app"; type: "grant.changed"; data: { capability: string; granted: boolean } }
   | { kind: "timer"; id: string };
@@ -944,12 +945,13 @@ declare const glitched: {
     /**
      * One answer from a model, with no tools, on this machine's engine.
      * Without provider, the provider of the model new threads take; without
-     * model, a cheap one of that provider's. Needs models:ask. Fails with
+     * model, a cheap one of that provider's. timeout is the seconds it may
+     * take, 120 at most and by default. Needs models:ask. Fails with
      * err.code "unsupported" (the provider can't), "unavailable" (its CLI
      * isn't installed), "busy" (the plugin's last ask isn't answered),
-     * "too_large" (over 200 KB) or "timeout" (120 s).
+     * "too_large" (over 200 KB) or "timeout".
      */
-    ask(prompt: string, options?: { system?: string; provider?: string; model?: string }): Promise<{ text: string; provider: string; model: string }>;
+    ask(prompt: string, options?: { system?: string; provider?: string; model?: string; timeout?: number }): Promise<{ text: string; provider: string; model: string }>;
   };
   projects: {
     /** In the sidebar's order. Needs threads:read. */

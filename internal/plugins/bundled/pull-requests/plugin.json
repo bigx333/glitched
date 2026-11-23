@@ -11,6 +11,6 @@
     "places": [{ "id": "pr", "at": "thread.header" }],
     "programs": ["git", "gh"],
     "timers": [{ "id": "refresh", "every": 60 }],
-    "events": ["place.shown", "thread.files.changed", "window.focused"]
+    "events": ["place.shown", "place.hidden", "thread.files.changed", "window.focused"]
   }
 }
