@@ -111,6 +111,11 @@ type TurnInterrupt struct {
 	Drop bool `json:"drop,omitzero"`
 }
 
+// QueueResume releases the messages a Stop held, and with none, has the
+// wakes that wait start a turn: the user's go-ahead after a stop. Any
+// message the user sends, but a Defer, does it too.
+type QueueResume struct{}
+
 type RequestRespond struct {
 	Request    ID              `json:"request"`
 	Generation uint64          `json:"generation"`
@@ -177,6 +182,7 @@ func (InboxSet) intentType() string        { return "inbox.set" }
 func (ThreadRename) intentType() string    { return "thread.rename" }
 func (ThreadDelete) intentType() string    { return "thread.delete" }
 func (ThreadConfigure) intentType() string { return "thread.configure" }
+func (QueueResume) intentType() string     { return "queue.resume" }
 
 var intents = map[string]func() Intent{
 	"thread.create":    func() Intent { return new(ThreadCreate) },
@@ -187,6 +193,7 @@ var intents = map[string]func() Intent{
 	"thread.rename":    func() Intent { return new(ThreadRename) },
 	"thread.delete":    func() Intent { return new(ThreadDelete) },
 	"thread.configure": func() Intent { return new(ThreadConfigure) },
+	"queue.resume":     func() Intent { return new(QueueResume) },
 }
 
 func IntentType(i Intent) string { return i.intentType() }
@@ -241,6 +248,8 @@ func (c *Command) UnmarshalJSON(b []byte) error {
 	case *ThreadDelete:
 		c.Body = *v
 	case *ThreadConfigure:
+		c.Body = *v
+	case *QueueResume:
 		c.Body = *v
 	}
 	c.ID, c.Target, c.Revision, c.Expires = w.ID, w.Target, w.Revision, w.Expires
@@ -420,8 +429,11 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // tree with it, so a version 5 GUI would send a command per thread the
 // engine already took, and a version 5 engine would leave a child of a
 // settled or deleted thread at work; version 7 changes a thread's model
-// and access, which a version 6 engine refuses as an unknown command.
-const Protocol = 7
+// and access, which a version 6 engine refuses as an unknown command;
+// version 8 has a stop hold the queue, which a version 7 GUI would show as
+// queued with no way to resume it, and a version 7 engine would refuse
+// the resume as an unknown command.
+const Protocol = 8
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host

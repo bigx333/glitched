@@ -551,7 +551,7 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO messages (thread, ord, id, text, mode, pos, state, run) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (thread, ord) DO UPDATE SET state = excluded.state, run = excluded.run`,
+			ON CONFLICT (thread, ord) DO UPDATE SET mode = excluded.mode, state = excluded.state, run = excluded.run`,
 			t.ID[:], i, m.ID[:], m.Text, m.Mode, m.Pos, m.State, nullID(m.Run)); err != nil {
 			return fmt.Errorf("store: message %s: %w", m.ID, err)
 		}

@@ -103,7 +103,7 @@ type MessageState uint8
 
 const (
 	Queued MessageState = iota
-	Held                // deferred until something promotes it
+	Held                // held by a stop, or deferred, until the user sends or resumes
 	// Claimed: admitted as its run's message, or bound to a live run that
 	// it will be steered into.
 	Claimed
@@ -340,6 +340,14 @@ func (t *Transcript) apply(e api.Event) {
 		t.settle(b.Message, Cancelled, b.Reason)
 	case api.MessageUncertain:
 		t.settle(b.Message, Uncertain, "")
+	case api.MessageHeld:
+		if i := t.waiting(b.Message); i >= 0 {
+			t.Queue[i].State = Held
+		}
+	case api.MessageReleased:
+		if i := t.waiting(b.Message); i >= 0 {
+			t.Queue[i].State = Queued
+		}
 	case api.ContextReported:
 		if ce := t.silent[b.Run]; ce != nil && b.Compacted {
 			ce.Compacted = true

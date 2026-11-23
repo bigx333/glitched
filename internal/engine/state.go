@@ -120,14 +120,15 @@ func (t Thread) settled() bool { return t.Disposition.State == api.Settled }
 
 // stopped is whether the thread's last run was stopped: by the user, or by
 // the engine when it couldn't deliver an answer. A stop reached a run that
-// completed as it landed too.
+// completed as it landed too. A silent run since, such as an idle
+// compaction, leaves it stopped: the user asked it nothing.
 func (t Thread) stopped() bool {
-	n := len(t.Runs)
-	if n == 0 || t.Runs[n-1].State != RunFinished {
-		return false
+	for i := len(t.Runs) - 1; i >= 0; i-- {
+		if r := t.Runs[i]; !r.Silent {
+			return r.State == RunFinished && (r.Signalled || r.Outcome == api.OutcomeInterrupted || r.Outcome == api.OutcomeAbandoned)
+		}
 	}
-	r := t.Runs[n-1]
-	return r.Signalled || r.Outcome == api.OutcomeInterrupted || r.Outcome == api.OutcomeAbandoned
+	return false
 }
 
 func (t Thread) slot() RunState {

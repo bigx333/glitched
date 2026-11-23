@@ -346,8 +346,8 @@ func driveModes(t *testing.T, ep api.Endpoint) api.ID {
 		return strings.Contains(transcript(t, events(t, ep, thread)), "steered: hurry")
 	})
 
-	submit(t, ep, thread, dispatch("later", api.Defer))
 	submit(t, ep, thread, dispatch("next", api.AfterActive))
+	submit(t, ep, thread, dispatch("later", api.Defer))
 	if th := until(t, ep, thread, "two queued", func(th api.Thread) bool { return th.Queued == 2 }); th.Run != api.RunWaiting {
 		t.Fatalf("queueing changed the run: %v", th.Run)
 	}
@@ -428,7 +428,11 @@ func TestCrashMidTurn(t *testing.T) {
 			t.Fatalf("an uncertain run let a turn start: %v, %d starts", th.Run, fresh.Starts())
 		}
 		submit(t, n.h, thread, api.TurnInterrupt{})
-		until(t, n.h, thread, "retry ran", func(th api.Thread) bool { return idle(th) && fresh.Starts() == 1 })
+		if th := until(t, n.h, thread, "retry held", func(th api.Thread) bool { return idle(th) && th.Queued == 1 }); fresh.Starts() != 0 {
+			t.Fatalf("ending the uncertain run started the retry: %d starts, %d queued", fresh.Starts(), th.Queued)
+		}
+		submit(t, n.h, thread, api.QueueResume{})
+		until(t, n.h, thread, "retry ran", func(th api.Thread) bool { return idle(th) && th.Queued == 0 && fresh.Starts() == 1 })
 		if ad.Starts() != 1 {
 			t.Fatalf("first turn started %d times", ad.Starts())
 		}

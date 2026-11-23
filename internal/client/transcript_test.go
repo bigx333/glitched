@@ -325,6 +325,33 @@ func TestFoldReleasesHeldBackAndCancelledMessages(t *testing.T) {
 	)
 }
 
+// A stop holds what waits behind the run, and a resume or a send makes it
+// queued again, in its place.
+func TestFoldHoldsWhatAStopHeld(t *testing.T) {
+	a, b, c := api.NewID(), api.NewID(), api.NewID()
+	evs := slices.Concat(start(a, "one", 0), []api.EventBody{
+		api.MessageQueued{Message: b, Text: "two", Mode: api.AfterActive, Pos: 1},
+		api.MessageQueued{Message: c, Text: "three", Mode: api.AfterActive, Pos: 2},
+		api.TurnStopping{Run: a},
+		api.MessageHeld{Message: b},
+		api.MessageHeld{Message: c},
+		api.TurnEnded{Run: a, Outcome: api.OutcomeInterrupted},
+	})
+	expect(t, play(evs...),
+		`user "one" sent`,
+		"--",
+		`user "two" held`,
+		`user "three" held`,
+	)
+	evs = append(evs, api.MessageReleased{Message: b}, api.MessageReleased{Message: c})
+	expect(t, play(evs...),
+		`user "one" sent`,
+		"--",
+		`user "two" queued`,
+		`user "three" queued`,
+	)
+}
+
 // A failed turn shows why it failed, whether its agent never started or
 // started and then failed; a turn that ended any other way shows no error.
 func TestFoldShowsWhyATurnFailed(t *testing.T) {

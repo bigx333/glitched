@@ -25,8 +25,8 @@ var runEdges = edges[RunState]{
 }
 
 var queueEdges = edges[QueueState]{
-	QueueReady:   {QueueClaimed, QueueCancelled},
-	QueueHeld:    {QueueClaimed, QueueCancelled},
+	QueueReady:   {QueueClaimed, QueueCancelled, QueueHeld},
+	QueueHeld:    {QueueClaimed, QueueCancelled, QueueReady},
 	QueueClaimed: {QueueDispatched, QueueCancelled, QueueUncertain},
 }
 

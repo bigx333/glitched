@@ -124,6 +124,19 @@ func apply(t Thread, e Event) (Thread, error) {
 			silent = t.silentRun(m.Run)
 		}
 		err = t.setMessage(b.Message, QueueCancelled)
+	case api.MessageHeld:
+		if err = t.setMessage(b.Message, QueueHeld); err == nil {
+			t.Queue[t.messageAt(b.Message)].Mode = api.Defer
+		}
+	case api.MessageReleased:
+		// Only a client's held message is released: a wake is held in
+		// AfterActive until a turn takes it.
+		if m, ok := t.Message(b.Message); ok && m.Mode != api.Defer {
+			return t, &TransitionError{"message", "a wake", "released"}
+		}
+		if err = t.setMessage(b.Message, QueueReady); err == nil {
+			t.Queue[t.messageAt(b.Message)].Mode = api.AfterActive
+		}
 	case api.MessageUncertain:
 		if m, ok := t.Message(b.Message); ok {
 			silent = t.silentRun(m.Run)

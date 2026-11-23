@@ -164,6 +164,8 @@ type entry struct {
 	streaming bool
 	// note is under a message: queued, sending, cancelled.
 	note string
+	// held is a message a stop held, or one deferred: Resume starts it.
+	held bool
 	// failed is the command a failed entry, or a message whose send
 	// failed, stands for.
 	failed client.Pending
@@ -555,7 +557,7 @@ func userEntry(u *client.UserEntry) entry {
 	if u.Reason != "" {
 		note += ": " + u.Reason
 	}
-	return entry{key: "m/" + u.Message.String(), kind: entryUser, text: u.Text, note: note, at: u.At, retry: unfinished(u.End)}
+	return entry{key: "m/" + u.Message.String(), kind: entryUser, text: u.Text, note: note, held: u.State == client.Held, at: u.At, retry: unfinished(u.End)}
 }
 
 // ranFor is how long a turn that ended so ran, zero while it runs.
@@ -823,6 +825,8 @@ func failedTo(p client.Pending) string {
 		return "create the thread"
 	case api.TurnInterrupt:
 		return "stop the agent"
+	case api.QueueResume:
+		return "resume the queue"
 	case api.InboxSet:
 		switch b.Disposition.State {
 		case api.Settled:
