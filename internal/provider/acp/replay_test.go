@@ -11,6 +11,16 @@ import (
 	"glitched/internal/provider/acp/acptest"
 )
 
+func contexts(events []provider.Event) []provider.Context {
+	var out []provider.Context
+	for _, e := range events {
+		if c, ok := e.(provider.Context); ok {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // A thread's two turns as agy 1.5.14 ran them, signed in, through
 // `glitched run -provider antigravity`: "say hi and list the files here",
 // whose ls asked, then a follow-up the same session remembers. The
@@ -57,6 +67,9 @@ func TestAgy1514Replays(t *testing.T) {
 	if e := ended(t, events); e.Outcome != api.OutcomeCompleted {
 		t.Fatalf("ended %+v", e)
 	}
+	if got, want := contexts(events), []provider.Context{{Used: 10756, Window: 1048576}, {Used: 11469, Window: 1048576}}; !slices.Equal(got, want) {
+		t.Fatalf("the first turn's context %+v, want %+v: the session's empty start reports nothing", got, want)
+	}
 	var answer string
 	json.Unmarshal(find(t, wire(t, log), "permission answered")[0].Params, &answer)
 	if answer != "allow" {
@@ -65,8 +78,12 @@ func TestAgy1514Replays(t *testing.T) {
 
 	g = open(t, a, s)
 	do(t, g, provider.Start{Text: "In one short sentence, which two files did you just list? Do not run any tool."})
-	if got, want := text(turn(t, g)), "I just listed [hello.txt](file:///work/ws/hello.txt) and [notes.md](file:///work/ws/notes.md)."; got != want {
+	second := turn(t, g)
+	if got, want := text(second), "I just listed [hello.txt](file:///work/ws/hello.txt) and [notes.md](file:///work/ws/notes.md)."; got != want {
 		t.Fatalf("second text %q, want %q", got, want)
+	}
+	if got, want := contexts(second), []provider.Context{{Used: 11858, Window: 1048576}}; !slices.Equal(got, want) {
+		t.Fatalf("the second turn's context %+v, want %+v", got, want)
 	}
 	closeRun(t, g)
 	if n := len(find(t, wire(t, log), "initialize")); n != 1 {

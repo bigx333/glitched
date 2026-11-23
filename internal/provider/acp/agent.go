@@ -455,6 +455,17 @@ func (g *Agent) update(u acpsdk.SessionUpdate) {
 	}
 }
 
+// usage is how full the session's context is, which the run reports
+// while its turn is on. A session not yet sent anything holds nothing the
+// model read.
+func (g *Agent) usage(u acpsdk.SessionUsageUpdate) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.started && !g.ended && u.Used > 0 {
+		g.queueLocked(provider.Context{Used: u.Used, Window: u.Size})
+	}
+}
+
 func (g *Agent) Next(ctx context.Context) (provider.Event, error) {
 	for {
 		g.mu.Lock()

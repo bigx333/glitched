@@ -43,8 +43,29 @@ func apply(t Thread, e Event) (Thread, error) {
 	case api.ThreadRenamed:
 		t.Title = b.Title
 	case api.SessionBound:
+		// Another conversation holds none of what the last one did.
+		if t.Session != "" && b.Session != t.Session {
+			t.Context = api.Context{}
+		}
 		t.Session = b.Session
+	case api.ContextReported:
+		// A report that leaves the window out keeps the one known, if it
+		// names the same model: another's, or an unnamed one's, is not
+		// this one's.
+		c := api.Context{Used: b.Used, Window: b.Window, Model: b.Model}
+		switch {
+		case b.Compacted:
+			c, c.Stale = t.Context, true
+		case b.Window == 0 && b.Model != "" && b.Model == t.Context.Model:
+			c.Window = t.Context.Window
+		}
+		t.Context = c
 	case api.ThreadConfigured:
+		// The window known was the last model's, for a report that leaves
+		// its model out.
+		if b.Model.Provider != t.Model.Provider || b.Model.Model != t.Model.Model {
+			t.Context.Window = 0
+		}
 		t.Model, t.Access = b.Model, b.Access
 	case api.ChildReported:
 		t.Reported = e.At

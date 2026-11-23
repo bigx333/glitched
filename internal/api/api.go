@@ -345,6 +345,9 @@ type Thread struct {
 	// Tokens is what the thread's own turns used, as their agents told;
 	// a parent's total with its children's is summed when read.
 	Tokens int64 `json:"tokens,omitempty"`
+	// Context is how full the thread's context is, as its agent last said;
+	// nil before any agent has.
+	Context *Context `json:"context,omitempty"`
 	// Reported is when a child last reported back to the thread, which
 	// wakes it as a finished turn does.
 	Reported time.Time `json:"reported,omitzero"`
@@ -357,6 +360,16 @@ type Thread struct {
 	// the shell stream sends once so that clients drop it. No read returns
 	// one.
 	Deleted bool `json:"deleted,omitempty"`
+}
+
+// Context is how full a thread's context is: Used tokens of Model's
+// Window, 0 or "" where no agent has said. Stale says the agent compacted
+// it since Used was read, so what it holds now is unknown.
+type Context struct {
+	Used   int64  `json:"used,omitempty"`
+	Window int64  `json:"window,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Stale  bool   `json:"stale,omitempty"`
 }
 
 // Report is a child's report as its parent's view carries it.

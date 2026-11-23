@@ -374,10 +374,10 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 	var report sql.NullString
 	var updated int64
 	err := q.QueryRowContext(ctx, `SELECT workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
-			parent, tokens, reported, report, session, project, branch
+			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model
 		FROM threads WHERE id = ?`, id[:]).Scan(&t.Workspace, &t.Title, &model, &t.Access, &t.Revision, &t.OwnerEpoch,
 		&t.Generation, &t.Disposition.State, &until, &updated, &t.Deleted, idScan{&t.Parent}, &t.Tokens, &reported, &report, &t.Session,
-		&t.Project, &t.Branch)
+		&t.Project, &t.Branch, &t.Context.Used, &t.Context.Window, &t.Context.Stale, &t.Context.Model)
 	if errors.Is(err, sql.ErrNoRows) {
 		return engine.Thread{}, nil
 	}
@@ -489,15 +489,18 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 		report = string(b)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO threads (id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
-			parent, tokens, reported, report, session, project, branch)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET workspace = excluded.workspace, title = excluded.title, model = excluded.model,
 			access = excluded.access, revision = excluded.revision, owner_epoch = excluded.owner_epoch, generation = excluded.generation,
 			disposition = excluded.disposition, until = excluded.until, updated_at = excluded.updated_at, deleted = excluded.deleted,
 			parent = excluded.parent, tokens = excluded.tokens, reported = excluded.reported,
-			report = excluded.report, session = excluded.session, project = excluded.project, branch = excluded.branch`,
+			report = excluded.report, session = excluded.session, project = excluded.project, branch = excluded.branch,
+			context_used = excluded.context_used, context_window = excluded.context_window, context_stale = excluded.context_stale,
+			context_model = excluded.context_model`,
 		t.ID[:], t.Workspace, t.Title, string(model), t.Access, t.Revision, t.OwnerEpoch, t.Generation, t.Disposition.State, until,
-		t.UpdatedAt.UnixNano(), t.Deleted, nullID(t.Parent), t.Tokens, reported, report, t.Session, t.Project, t.Branch); err != nil {
+		t.UpdatedAt.UnixNano(), t.Deleted, nullID(t.Parent), t.Tokens, reported, report, t.Session, t.Project, t.Branch,
+		t.Context.Used, t.Context.Window, t.Context.Stale, t.Context.Model); err != nil {
 		return err
 	}
 	for i, r := range t.Runs {
