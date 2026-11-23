@@ -596,7 +596,7 @@ func (s stalled) Open(ctx context.Context, spec provider.SessionSpec) (provider.
 
 type stalledAgent struct {
 	provider.Agent
-	left int // events still to play; only Next's reader counts them
+	left int // the script's events still to play; only Next's reader counts them
 	once sync.Once
 	stop chan struct{}
 }
@@ -608,10 +608,14 @@ func (g *stalledAgent) Next(ctx context.Context) (provider.Event, error) {
 			return nil, ctx.Err()
 		case <-g.stop:
 		}
-	} else {
-		g.left--
 	}
-	return g.Agent.Next(ctx)
+	e, err := g.Agent.Next(ctx)
+	switch e.(type) {
+	case provider.Granted, provider.Ran:
+	default:
+		g.left = max(g.left-1, 0)
+	}
+	return e, err
 }
 
 func (g *stalledAgent) Do(ctx context.Context, act provider.Action) error {

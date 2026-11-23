@@ -191,11 +191,16 @@ func (a *app) accessControl(c *ui.Context, t thread) {
 		return composerAccess{Thread: r, Access: a.access, Levels: levels}
 	}
 	if !a.pluginComponent(c, "composer.access", &t, componentCopy{key: composerKey(t), box: box, context: ctx}) {
-		a.accessPicker(c)
+		a.accessPicker(c, t)
 		return
 	}
-	a.tip(c, ui.Row(c).Key("access-sign").Label("Access: "+a.access).Padding(0, 6).AlignItems(ui.Center).Shrink(0), "Access: "+a.access).
-		Children(func() { ui.Icon(c, accessIconOf(a.access)).FontSize(13).TextColor(accessColor(a.access)) })
+	p := accessPending(t)
+	shown, label := shownAccess(t, a.access)
+	sign := a.tip(c, ui.Row(c).Key("access-sign").Label("Access: "+label).Padding(0, 6).AlignItems(ui.Center).Shrink(0), tipOf(p, "Access: "+label))
+	sign.Children(func() {
+		ui.Icon(c, accessIconOf(shown)).FontSize(13).TextColor(accessColor(shown))
+		a.unconfirmedMark(c, p)
+	})
 }
 
 // composerAccess is the context of composer.access.
@@ -226,10 +231,12 @@ func accessIconOf(level string) *ui.SVG {
 // accessPicker is the composer's autonomy button and the popover it
 // opens. Full access is held to be granted, as hazard tape fills the row,
 // and it keeps the button striped while it's on.
-func (a *app) accessPicker(c *ui.Context) {
-	full := a.access == accessFull
-	icon := accessIconOf(a.access)
-	b := a.tip(c, ghost(c, "access", a.accessOpen).Label("Access").TextColor(accessColor(a.access)), "How freely the agent acts")
+func (a *app) accessPicker(c *ui.Context, t thread) {
+	p := accessPending(t)
+	shown, label := shownAccess(t, a.access)
+	full := shown == accessFull
+	icon := accessIconOf(shown)
+	b := a.tip(c, ghost(c, "access", a.accessOpen).Label("Access").TextColor(accessColor(shown)), tipOf(p, "How freely the agent acts"))
 	if full {
 		b.TextColor(danger)
 		// Hazard tape, and a slow warning pulse: it's on.
@@ -241,9 +248,10 @@ func (a *app) accessPicker(c *ui.Context) {
 		a.accessIcon(c, icon)
 		// A narrow chat, beside a panel, keeps it to its icon.
 		if a.chatWidth == 0 || a.chatWidth >= narrowComposer {
-			ui.Text(c, a.access).FontSize(12).SingleLine()
+			ui.Text(c, label).FontSize(12).SingleLine()
 		}
 		ui.Icon(c, icChevronD).FontSize(11)
+		a.unconfirmedMark(c, p)
 	}).Clicked() {
 		a.accessOpen = !a.accessOpen
 	}
