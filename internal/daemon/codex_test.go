@@ -132,14 +132,14 @@ func TestWithAgentsServesAnInstalledCodex(t *testing.T) {
 		cfg.WithAgents()
 		return cfg.Providers.Names()
 	}
-	if got := serves(""); !slices.Equal(got, []string{"claude"}) {
+	if got := serves(""); !slices.Equal(got, []string{"antigravity", "claude"}) {
 		t.Errorf("with no codex, serves %q", got)
 	}
 	own := filepath.Join(t.TempDir(), "my-codex")
 	if err := os.WriteFile(own, []byte("#!/bin/sh\\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if got := serves(own); !slices.Equal(got, []string{"claude", "codex"}) {
+	if got := serves(own); !slices.Equal(got, []string{"antigravity", "claude", "codex"}) {
 		t.Errorf("with codex_path naming one, serves %q", got)
 	}
 	local := filepath.Join(home, ".local", "bin", "codex")
@@ -149,10 +149,10 @@ func TestWithAgentsServesAnInstalledCodex(t *testing.T) {
 	if err := os.WriteFile(local, []byte("#!/bin/sh\\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if got := serves(""); !slices.Equal(got, []string{"claude", "codex"}) {
+	if got := serves(""); !slices.Equal(got, []string{"antigravity", "claude", "codex"}) {
 		t.Errorf("with codex in ~/.local/bin, serves %q", got)
 	}
-	if got := serves(filepath.Join(bin, "no-codex")); !slices.Equal(got, []string{"claude"}) {
+	if got := serves(filepath.Join(bin, "no-codex")); !slices.Equal(got, []string{"antigravity", "claude"}) {
 		t.Errorf("with codex_path naming nothing, serves %q", got)
 	}
 }
