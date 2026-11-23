@@ -523,6 +523,7 @@ func doubleClickAt(h *harness, x, y float32) {
 func TestSelectionBarAboveNearComposer(t *testing.T) {
 	h, _ := quoteReady(t)
 	h.untilShown("the reply's end", "Done.")
+	h.until("the turn's end", func() bool { return !h.a.current().View.Working() })
 	h.tt.Advance(time.Second)
 	r := doubleClick(h, "Done.")
 	if !barShown(h) || h.a.quote.text != "Done" {
