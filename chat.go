@@ -873,11 +873,8 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 		context: func(plugins.ThreadRecord) any { return m },
 		native:  func(body *widget.Node) { acted = a.transcriptBody(c, t, rs, i, body) },
 		retry: func() {
-			switch {
-			case e.failed.Err != nil:
+			if e.failed.Err != nil {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(0, 0, 0, 8).Children(func() { a.failedActions(c, t, e.failed) })
-			case e.held:
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(0, 0, 0, 8).Children(func() { a.resumeButton(c, t) })
 			}
 		},
 		over: func(box ui.Element) {
@@ -1030,20 +1027,7 @@ func (a *app) messageNote(c *ui.Context, t thread, e entry) {
 		if e.failed.Err != nil {
 			a.failedActions(c, t, e.failed)
 		}
-		if e.held {
-			a.resumeButton(c, t)
-		}
 	})
-}
-
-// resumeButton starts what a stop held, or what was deferred.
-func (a *app) resumeButton(c *ui.Context, t thread) {
-	if ghost(c, "resume", false).Padding(2, 8).Children(func() {
-		ui.Icon(c, icRotate).FontSize(12)
-		ui.Text(c, "Resume").FontSize(11.5)
-	}).Clicked() {
-		a.backend.Resume(t.env, t.id())
-	}
 }
 
 // failedActions are a failed command's buttons: Retry, unless sending it
@@ -1762,6 +1746,25 @@ func (a *app) sendOrStop(t thread, clicked bool) {
 	}
 }
 
+// resumeButton starts what a stop held: the messages queued behind the
+// run, a Defer, or a child's report waiting for the agent. Beside Send,
+// Glitched's or a plugin's, so no timeline drawing can hide it.
+func (a *app) resumeButton(c *ui.Context, t thread) {
+	r := a.tip(c, ui.ButtonBase(c.Key("resume")).Label("Resume"), "Resume the queue").Height(30).Radius(15).Padding(0, 12).
+		Cursor(ui.CursorPointer).Border(1, palette.border).Margin(0, 4, 0, 0).Shrink(0)
+	if r.Hovered() {
+		r.Background(palette.hover)
+	}
+	if r.Children(func() {
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, icRotate).FontSize(12)
+			ui.Text(c, "Resume").FontSize(12)
+		})
+	}).Clicked() {
+		a.backend.Resume(t.env, t.id())
+	}
+}
+
 // stopButton stops the agent at work, beside Send while the composer holds
 // a message, or beside a plugin's Send whatever that draws.
 func (a *app) stopButton(c *ui.Context, t thread) ui.Element {
@@ -1789,6 +1792,9 @@ func (a *app) sendControl(c *ui.Context, t thread, keys bool) {
 	}
 	ctx := func(r plugins.ThreadRecord) any {
 		return composerSend{Thread: r, Draft: a.message(t) != "", Working: t.View.Stoppable()}
+	}
+	if t.View.Resumable {
+		a.resumeButton(c, t)
 	}
 	if !a.pluginComponent(c, "composer.send", &t, componentCopy{key: composerKey(t), box: box, context: ctx}) {
 		a.sendButton(c, t, keys)

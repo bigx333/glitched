@@ -187,6 +187,21 @@ func (t Thread) next() *Message {
 	return best
 }
 
+// holding is whether a message of the user's is held: by a stop, or sent
+// as a Defer.
+func (t Thread) holding() bool {
+	return index(t.Queue, func(m Message) bool { return m.State == QueueHeld && m.Mode == api.Defer }) >= 0
+}
+
+// resumable is whether a resume would start something: the thread is
+// idle and holds a message of the user's, or wakes a stop held.
+func (t Thread) resumable() bool {
+	if t.Live() != nil || t.settled() {
+		return false
+	}
+	return t.holding() || t.stopped() && index(t.Queue, Message.waking) >= 0
+}
+
 func (t Thread) openRequests(run api.ID) bool {
 	for _, r := range t.Requests {
 		if r.Run == run && r.State == api.RequestPending {
@@ -225,6 +240,7 @@ func View(t Thread) api.Thread {
 		Tokens:      t.Tokens,
 		Reported:    t.Reported,
 		Confirmed:   t.Confirmed,
+		Resumable:   t.resumable(),
 	}
 	if t.Context != (api.Context{}) {
 		c := t.Context

@@ -279,6 +279,8 @@ func TestARefusedObservationStillCompletesItsEffect(t *testing.T) {
 // the restore lost, so the restore must not leave it to start again. That
 // holds behind a run the restore makes uncertain and behind one that already
 // was.
+// A Defer is cancelled with them: a send or a resume releases it, so it
+// may have run in the history the rewind lost.
 func TestRewindCancelsReadyMessagesBehindLiveRuns(t *testing.T) {
 	ctx := context.Background()
 	s := open(t, filepath.Join(t.TempDir(), "host.db"))
@@ -322,13 +324,89 @@ func TestRewindCancelsReadyMessagesBehindLiveRuns(t *testing.T) {
 		if m, _ := th.Message(ready[i]); m.State != engine.QueueCancelled {
 			t.Errorf("thread %d: ready message is %s after the rewind, want cancelled", i, m.State)
 		}
-		if m, _ := th.Message(held[i]); m.State != engine.QueueHeld {
-			t.Errorf("thread %d: held message is %s after the rewind, want held", i, m.State)
+		if m, _ := th.Message(held[i]); m.State != engine.QueueCancelled {
+			t.Errorf("thread %d: deferred message is %s after the rewind, want cancelled", i, m.State)
 		}
 		submit(thread, api.TurnInterrupt{}) // the user moves on from the uncertain run
 	}
 	if e, ok, err := s.Lease(ctx, nil); err != nil || ok {
 		t.Fatalf("abandoning the uncertain runs leased %+v %v, want nothing to start", e.Body, err)
+	}
+}
+
+// What a stop held may have run in the history a restore lost, after a
+// resume: a restored backup, taken while the run stopped or once it ended,
+// cancels it, and the next send runs only what it sends.
+func TestARestoreCancelsWhatAStopHeld(t *testing.T) {
+	ctx := context.Background()
+	for _, idle := range []bool{false, true} {
+		t.Run(map[bool]string{false: "stopping", true: "idle"}[idle], func(t *testing.T) {
+			dir := t.TempDir()
+			path, backup := filepath.Join(dir, "host.db"), filepath.Join(dir, "backup.db")
+			s := open(t, path)
+			thread := api.NewID()
+			submit := func(body api.Intent) api.ID {
+				t.Helper()
+				c := api.Command{ID: api.NewID(), Target: thread, Body: body}
+				if _, err := s.Submit(ctx, c, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+				return c.ID
+			}
+			observe := func(o engine.Observation, effect int64) {
+				t.Helper()
+				if _, err := s.Observe(ctx, thread, o, time.Now(), effect); err != nil {
+					t.Fatal(err)
+				}
+			}
+			lease := func() int64 {
+				t.Helper()
+				e, ok, err := s.Lease(ctx, nil)
+				if !ok || err != nil {
+					t.Fatalf("lease: %v %v", ok, err)
+				}
+				return e.ID
+			}
+			submit(create(thread).Body)
+			run := submit(api.MessageDispatch{Text: "first", Mode: api.StartNow})
+			observe(engine.Started{Run: run}, lease())
+			next := submit(api.MessageDispatch{Text: "append to the release notes", Mode: api.AfterActive})
+			submit(api.TurnInterrupt{})
+			observe(engine.InterruptSent{Run: run}, lease())
+			if idle {
+				observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted}, 0)
+			}
+			s.Close()
+			copyDB(t, path, backup)
+			s = open(t, path)
+			if !idle {
+				observe(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted}, 0)
+			}
+			submit(api.QueueResume{})
+			observe(engine.Started{Run: next}, lease())
+			observe(engine.Ended{Run: next, Outcome: api.OutcomeCompleted}, 0)
+			s.Close()
+			copyDB(t, backup, path)
+			s = open(t, path)
+
+			th, err := s.Thread(ctx, thread)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m, _ := th.Message(next); m.State != engine.QueueCancelled {
+				t.Fatalf("after the restore the held message is %s, want cancelled", m.State)
+			}
+			if !idle {
+				submit(api.TurnInterrupt{})
+			}
+			sent := submit(api.MessageDispatch{Text: "What's the status?", Mode: api.AfterActive})
+			if th, err = s.Thread(ctx, thread); err != nil {
+				t.Fatal(err)
+			}
+			if r := th.Live(); r == nil || r.ID != sent {
+				t.Fatalf("the send after the restore runs %+v, want the new message's turn", r)
+			}
+		})
 	}
 }
 

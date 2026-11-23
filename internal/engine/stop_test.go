@@ -1,6 +1,7 @@
 package engine_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -90,8 +91,9 @@ func TestEndingAnUncertainRunHoldsTheQueue(t *testing.T) {
 	}
 }
 
-// A wake that came during a stop waits with the queue: resuming starts it
-// when no message waits, and a second resume changes nothing.
+// A wake that came during a stop waits with the queue, and resuming
+// starts it when no message waits. A second resume, its turn at work, is
+// refused and changes nothing.
 func TestAResumeStartsTheWakesAStopHeld(t *testing.T) {
 	f, run := running(t)
 	f.must(api.TurnInterrupt{})
@@ -104,11 +106,55 @@ func TestAResumeStartsTheWakesAStopHeld(t *testing.T) {
 		t.Fatalf("resume with a wake waiting: %+v, %v, %v; want the wake's turn", s, ok, err)
 	}
 	before := f.th.Revision
-	if evs, effects, err := engine.Decide(f.th, api.Command{ID: api.NewID(), Target: f.th.ID, Body: api.QueueResume{}}, now); err != nil || len(evs) != 0 || len(effects) != 0 {
-		t.Fatalf("a second resume: %v, %v, %v; want nothing", evs, effects, err)
+	evs, effects, err := engine.Decide(f.th, api.Command{ID: api.NewID(), Target: f.th.ID, Body: api.QueueResume{}}, now)
+	if rej := (*api.RejectedError)(nil); !errors.As(err, &rej) || len(evs) != 0 || len(effects) != 0 || f.th.Revision != before {
+		t.Fatalf("a second resume: %v, %v, %v; want it refused with nothing recorded", evs, effects, err)
 	}
-	if f.th.Revision != before {
-		t.Fatal("a resume that did nothing moved the revision")
+}
+
+// Resume is offered only when it starts something: on an idle thread
+// holding what a stop held, or only a wake. While the run still stops, a
+// resume with only a wake waiting is refused, not dropped, so the user
+// resumes once it ends.
+func TestResumeIsOfferedWhenItStartsSomething(t *testing.T) {
+	f, run := running(t)
+	if engine.View(f.th).Resumable {
+		t.Fatal("a running thread is resumable")
+	}
+	f.must(api.TurnInterrupt{})
+	f.see(report(api.ReportDone, "Write the tests", "Added 9 table tests."))
+	if _, _, err := f.submit(api.QueueResume{}); err == nil {
+		t.Fatal("a resume while the run stops, with only a wake waiting, was taken; want it refused")
+	}
+	if engine.View(f.th).Resumable {
+		t.Fatal("a stopping thread is resumable")
+	}
+	f.see(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted})
+	if !engine.View(f.th).Resumable {
+		t.Fatal("a stopped thread with a wake waiting is not resumable")
+	}
+	f.must(api.QueueResume{})
+	if engine.View(f.th).Resumable {
+		t.Fatal("a thread whose wake started is still resumable")
+	}
+
+	g := newThread(t)
+	g.must(dispatch("later", api.Defer))
+	if !engine.View(g.th).Resumable {
+		t.Fatal("an idle thread holding a Defer is not resumable")
+	}
+}
+
+// A restore cancels what a stop held on an idle thread too: it may have
+// run, after a resume, in the history the restore lost.
+func TestARewindCancelsWhatAStopHeld(t *testing.T) {
+	f, run := running(t)
+	held := f.must(dispatch("held", api.AfterActive))
+	f.must(api.TurnInterrupt{})
+	f.see(engine.Ended{Run: run, Outcome: api.OutcomeInterrupted})
+	f.see(engine.Rewound{})
+	if f.state(held) != engine.QueueCancelled || engine.View(f.th).Resumable {
+		t.Fatalf("after the rewind the held message is %v, want cancelled and nothing to resume", f.state(held))
 	}
 }
 
