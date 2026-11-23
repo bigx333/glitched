@@ -242,16 +242,52 @@ func TestTheAgentsCardTogglesCompactBeforeExpire(t *testing.T) {
 }
 
 // Keep awake while agents work defaults to on, saves to engine.json when
-// toggled in the Agents card, and applies without restarting the engine.
+// The Agents card's keep awake switch saves the setting and lets the
+// engine embedded here go of its hold on the machine at once, and take it
+// again, as an agent works, without restarting it.
 func TestTheAgentsCardTogglesKeepAwake(t *testing.T) {
 	dir := tempDir(t)
-	h := start(t, dir)
+	held := fake.New(fake.Turn(false))
+	held.HoldStart = true
+	holds := make(chan bool, 4)
+	h := startWith(t, dir, func(c *daemon.Config) {
+		c.Providers["fake"] = held
+		c.Inhibit = func(ctx context.Context) error {
+			holds <- true
+			<-ctx.Done()
+			holds <- false
+			return nil
+		}
+	})
 	h.tt.SetSize(1280, 1400)
 	ticking(t, h)
+	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
+	t.Cleanup(func() { ep.Close() })
+	id := api.NewID()
+	for _, b := range []api.Intent{api.ThreadCreate{Workspace: "/work/t3code", Title: "Busy", Model: fakeModel}, api.MessageDispatch{Text: "go", Mode: api.StartNow}} {
+		if _, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	holdIs := func(want bool) {
+		t.Helper()
+		select {
+		case got := <-holds:
+			if got != want {
+				t.Fatalf("the engine's hold went to %v, want %v", got, want)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("the engine's hold never went to %v", want)
+		}
+	}
+	holdIs(true)
 	h.click("Settings")
 	h.click("This machine")
 	h.until("the Agents card", func() bool { return h.tt.HasText("Keep awake while agents work") && h.a.backend.Machine().Embedded })
-	for _, want := range []bool{true, false, true} {
+	for _, want := range []bool{false, true} {
+		h.click("Enable keep awake while agents work")
+		h.tt.Advance(time.Second)
+		holdIs(want)
 		cfg, err := daemon.Defaults(dir)
 		if err != nil {
 			t.Fatal(err)
@@ -259,7 +295,8 @@ func TestTheAgentsCardTogglesKeepAwake(t *testing.T) {
 		if cfg.KeepAwakeEnabled() != want || !h.a.backend.Machine().Embedded {
 			t.Fatalf("keep awake %v, embedded %v; want %v, true", cfg.KeepAwakeEnabled(), h.a.backend.Machine().Embedded, want)
 		}
-		h.click("Enable keep awake while agents work")
-		h.tt.Advance(time.Second)
+	}
+	if held.Starts() != 1 {
+		t.Fatalf("the agent started %d times, want once: the switch restarted the engine", held.Starts())
 	}
 }
