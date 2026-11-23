@@ -588,6 +588,23 @@ func TestCmdEnterAllowsOnlyWhatTheWindowDraws(t *testing.T) {
 	}
 }
 
+// A command long enough to wrap three times is answered once the window
+// draws it. macOS draws the ↩ that ends each wrapped line in a taller font
+// than the command's, and those lines still read as drawn.
+func TestALongCommandIsAnsweredOnceDrawn(t *testing.T) {
+	long := "curl -s https://example.com/" + strings.Repeat("path/", 80)
+	for name, answer := range map[string]func(*harness) func(){
+		"⌘⏎":         cmdEnter,
+		"Allow once": func(h *harness) func() { return func() { h.click("Allow once") } },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := askedAll(t, commandAsk("ask", long))
+			h.tt.Advance(time.Second)
+			answerAsSeen(t, h, lastRequest(h.a.current()), answer(h))
+		})
+	}
+}
+
 // Allow once allows a request only once the window draws the first line
 // of what it runs; until then, a click brings that into view.
 func TestAllowOnceAllowsOnlyWhatTheWindowDraws(t *testing.T) {
