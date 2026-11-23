@@ -373,12 +373,19 @@ function sameHead(a, b) {
 }
 
 // read is the workspace's Repo, from the first answer that settles it. A
-// read GitHub fails throws Unread, one git times out in Late; one gh is
+// workspace git can't run in, as one whose folder is gone, shows nothing.
+// A read GitHub fails throws Unread, one git times out in Late; one gh is
 // signed out of says so. The last read's pull request, was, stays till a
 // read of it by number says it's gone or another head's: a list may leave
 // it out while GitHub's search catches up.
 async function read(ws, bases, was) {
-  const branch = await checkedOut(ws);
+  let branch;
+  try {
+    branch = await checkedOut(ws);
+  } catch (e) {
+    if (e.code === "refused") return HIDDEN;
+    throw e;
+  }
   if (!branch) return HIDDEN;
   const t = await pushTarget(ws, branch);
   if (t.why) return HIDDEN;
