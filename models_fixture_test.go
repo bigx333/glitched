@@ -45,7 +45,7 @@ func todaysModels(m provider.Mux) {
 	for _, f := range families {
 		p := f.provider
 		switch m[p].(type) {
-		case nil, reporting, undescribed, *claude.Adapter, *acp.Adapter, *codex.Adapter:
+		case nil, reporting, shifting, undescribed, *claude.Adapter, *acp.Adapter, *codex.Adapter:
 			continue
 		}
 		m[p] = reporting{m[p], knownOf(p)}

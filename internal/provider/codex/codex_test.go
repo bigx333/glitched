@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -254,7 +255,8 @@ func TestAThreadKeepsItsAppServer(t *testing.T) {
 }
 
 // Describe lists the account's models, Codex's default first, each with
-// its efforts, and none Codex hides, across every page.
+// its efforts and the one Codex runs it at where a thread names none, and
+// none Codex hides, across every page. Codex's default is the Default.
 func TestDescribeListsModelsAndEfforts(t *testing.T) {
 	a, log := fake(t, "hi")
 	info, err := a.Describe(context.Background())
@@ -270,9 +272,9 @@ func TestDescribeListsModelsAndEfforts(t *testing.T) {
 		for _, e := range m.Efforts {
 			efforts = append(efforts, e.ID)
 		}
-		got = append(got, m.ID+"="+m.Name+":"+strings.Join(efforts, ","))
+		got = append(got, fmt.Sprintf("%s=%s:%s@%s default=%t", m.ID, m.Name, strings.Join(efforts, ","), m.DefaultEffort, m.Default))
 	}
-	if want := []string{"gpt-6.2-sol=GPT-6.2 Sol:low,medium,high,xhigh", "gpt-6-luna=GPT-6 Luna:low,medium"}; !slices.Equal(got, want) {
+	if want := []string{"gpt-6.2-sol=GPT-6.2 Sol:low,medium,high,xhigh@medium default=true", "gpt-6-luna=GPT-6 Luna:low,medium@low default=false"}; !slices.Equal(got, want) {
 		t.Errorf("models %q, want %q", got, want)
 	}
 	if n := len(sent(t, log, "turn/start")); n != 0 {

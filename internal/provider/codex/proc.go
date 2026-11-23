@@ -189,7 +189,8 @@ func (p *proc) signedIn(ctx context.Context) error {
 }
 
 // models are what Codex offers the account, its default first, each with
-// the efforts it runs at, as Codex orders them.
+// the efforts it runs at, as Codex orders them, and the one it runs at
+// where a thread names none. The first default is the Default.
 func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 	var out, rest []provider.Model
 	cursor := ""
@@ -202,6 +203,7 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 			Data []struct {
 				ID, Model, DisplayName, Description string
 				Hidden, IsDefault                   bool
+				DefaultReasoningEffort              string `json:"defaultReasoningEffort"`
 				SupportedReasoningEfforts           []struct {
 					ReasoningEffort string `json:"reasoningEffort"`
 				} `json:"supportedReasoningEfforts"`
@@ -217,13 +219,14 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 				slices.ContainsFunc(rest, func(o provider.Model) bool { return o.ID == id }) {
 				continue
 			}
-			pm := provider.Model{ID: id, Name: cmp.Or(m.DisplayName, id), Description: m.Description}
+			pm := provider.Model{ID: id, Name: cmp.Or(m.DisplayName, id), Description: m.Description, DefaultEffort: m.DefaultReasoningEffort}
 			for _, e := range m.SupportedReasoningEfforts {
 				if e.ReasoningEffort != "" {
 					pm.Efforts = append(pm.Efforts, provider.Effort{ID: e.ReasoningEffort})
 				}
 			}
 			if m.IsDefault {
+				pm.Default = len(out) == 0
 				out = append(out, pm)
 			} else {
 				rest = append(rest, pm)

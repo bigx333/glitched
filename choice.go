@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,33 +20,57 @@ import (
 // effort by its id, fast mode and the access by the name its picker gives it. In a new
 // thread's draft it's the default a new thread takes; in a thread, that
 // thread's own. composer.json holds the default's fields the user chose:
-// one never chosen is the app's own.
+// one never chosen is the app's own. Follow is that the default's model
+// is its provider's program's own default, which composer.json holds as
+// the provider without an id, and none chosen as Claude Code's: the model
+// is the one its engine last reported the program runs where given none,
+// which moves with what the engine reports.
 type choice struct {
 	Model  modelKey `json:"model,omitzero"`
 	Effort string   `json:"effort,omitempty"`
 	Fast   bool     `json:"fast,omitempty"`
 	Access string   `json:"access,omitempty"`
+	Follow bool     `json:"-"`
 }
 
-// ownChoice is the default a new thread takes where the user chose none.
+// ownChoice is the default a new thread takes where the user chose none
+// and Claude Code's engine never said its own.
 var ownChoice = choice{Model: modelKey{"claude", "claude-opus-5-5"}, Effort: "high", Access: accessAuto}
 
 // starting is the default the app starts with from file, composer.json's
 // contents: the model file chose, though its engine no longer offers it
-// (goneModel), as the user chose it; with none, the app's own where its
-// engine offers it, else the first model the engines offer. The effort
-// is file's, or the app's own, as the model runs at it (effortFor).
+// (goneModel), as the user chose it. A provider's own default is the
+// model its engine reports its program runs where given none; else the
+// app's own, where it's that provider's and its engine offers it; else
+// its first model, else none, which the program chooses. With none
+// chosen, it's Claude Code's own default; else the app's own where its
+// engine offers it, else the first model the engines offer. The effort is
+// file's, else the one the program runs the model at where given none,
+// else the app's own, as the model runs at it (effortFor).
 func (a *app) starting(file choice) choice {
 	ch := ownChoice
-	if file.Model.Provider != "" && file.Model.ID != "" {
+	ch.Follow = file.Model.ID == ""
+	p := cmp.Or(file.Model.Provider, ownChoice.Model.Provider)
+	def, known := a.cliDefault(p)
+	_, ownOffered := a.modelOf(ownChoice.Model)
+	switch {
+	case !ch.Follow:
 		ch.Model = file.Model
-	} else if _, offered := a.modelOf(ch.Model); !offered {
+	case known:
+		ch.Model = def.key
+	case p == ownChoice.Model.Provider && ownOffered:
+	case file.Model.Provider != "":
+		ch.Model = file.Model
+		if ms := a.familyModels(familyOf(p)); len(ms) > 0 {
+			ch.Model = ms[0].key
+		}
+	default:
 		if ms := a.offeredModels(); len(ms) > 0 {
 			ch.Model = ms[0].key
 		}
 	}
 	m, _ := a.modelOf(ch.Model)
-	ch.Effort = effortFor(m, ownChoice.Effort)
+	ch.Effort = effortFor(m, cmp.Or(m.defaultEffort, ownChoice.Effort))
 	if e := effortFor(m, file.Effort); strings.EqualFold(e, file.Effort) {
 		ch.Effort = e
 	}
@@ -58,11 +83,11 @@ func (a *app) starting(file choice) choice {
 
 // choice is what the pickers show now.
 func (a *app) choice() choice {
-	return choice{Model: a.model, Effort: a.effort, Fast: a.fast, Access: a.access}
+	return choice{Model: a.model, Effort: a.effort, Fast: a.fast, Access: a.access, Follow: a.followsCLI}
 }
 
 func (a *app) show(ch choice) {
-	a.model, a.effort, a.fast, a.access = ch.Model, ch.Effort, ch.Fast, ch.Access
+	a.model, a.effort, a.fast, a.access, a.followsCLI = ch.Model, ch.Effort, ch.Fast, ch.Access, ch.Follow
 }
 
 func (a *app) composerPath() string { return filepath.Join(a.dir, "composer.json") }
@@ -110,12 +135,15 @@ func (a *app) saveComposer() {
 		return
 	}
 	file, err := jsonfile.Edit(a.composerPath(), func(f *choice) error {
-		if ch.Model != had.Model {
+		switch {
+		case ch.Follow && (!had.Follow || ch.Model.Provider != had.Model.Provider):
+			// A provider's own default goes with its own effort.
+			f.Model, f.Effort = modelKey{Provider: ch.Model.Provider}, ""
+		case !ch.Follow && (ch.Model != had.Model || had.Follow):
 			// The effort goes with the model: one the file holds that
 			// the last model didn't run at mustn't come back with this.
 			f.Model, f.Effort = ch.Model, ch.Effort
-		}
-		if ch.Effort != had.Effort {
+		case ch.Effort != had.Effort:
 			f.Effort = ch.Effort
 		}
 		if ch.Fast != had.Fast {

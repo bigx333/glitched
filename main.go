@@ -353,6 +353,7 @@ type app struct {
 	effortVoid bool
 	maxAt      time.Time
 	model      modelKey
+	followsCLI bool // the default's model is its provider's program's own (choice)
 	effort     string
 	access     string // one of accessLevels
 	accessOpen bool

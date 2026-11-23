@@ -103,12 +103,17 @@ type Info struct {
 // Model is one a provider's sessions can run. ID is what a session's
 // api.ModelRef names it by; Name and Description are the provider's own
 // words for it. Efforts are the levels it runs at, in order, least first:
-// none where the provider doesn't say.
+// none where the provider doesn't say. Default is that the provider's
+// program runs it where a session names no model, and DefaultEffort the
+// effort it runs it at where a session names none: "" where it doesn't
+// say. One model of a provider's at most is its Default.
 type Model struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Efforts     []Effort `json:"efforts,omitempty"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Description   string   `json:"description,omitempty"`
+	Efforts       []Effort `json:"efforts,omitempty"`
+	Default       bool     `json:"default,omitempty"`
+	DefaultEffort string   `json:"defaultEffort,omitempty"`
 }
 
 // Effort is a level of effort a model runs at: ID is what a session's
