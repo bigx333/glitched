@@ -800,3 +800,123 @@ func TestSendingNeverWaitsOnAppServer(t *testing.T) {
 		t.Fatal("a reply waited on a pipe nobody reads")
 	}
 }
+
+// A thread whose engine restarted goes on with its Codex conversation: a
+// new app-server resumes the thread its earlier runs had, and starts none.
+func TestAThreadResumesItsConversation(t *testing.T) {
+	a, log := fake(t, "memory")
+	s := spec(t)
+	g := open(t, a, s)
+	do(t, g, provider.Start{Text: "Remember kumquat."})
+	turn(t, g)
+	session := g.(provider.Sessioned).Session()
+	closeRun(t, g)
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b := &Adapter{Path: a.Path}
+	defer b.Close()
+	s.Run, s.Session = api.NewID(), session
+	g = open(t, b, s)
+	do(t, g, provider.Start{Text: "Which word?"})
+	events := turn(t, g)
+	closeRun(t, g)
+	if got := text(events); got != "earlier you said: Remember kumquat." {
+		t.Errorf("after a restart Codex said %q", got)
+	}
+	if len(works(events)) != 0 {
+		t.Errorf("steps %+v", works(events))
+	}
+	if got := g.(provider.Sessioned).Session(); got != session {
+		t.Errorf("the session went from %q to %q", session, got)
+	}
+	resumed := sent(t, log, "thread/resume")
+	if len(resumed) != 1 || len(sent(t, log, "thread/start")) != 1 {
+		t.Fatalf("resumed %s, started %d", resumed, len(sent(t, log, "thread/start")))
+	}
+	var p struct {
+		ThreadID       string
+		ExcludeTurns   bool
+		Cwd            string
+		ApprovalPolicy string
+		Config         struct {
+			MCPServers map[string]any `json:"mcp_servers"`
+		}
+		DeveloperInstructions string
+	}
+	json.Unmarshal(resumed[0], &p)
+	if p.ThreadID != session || !p.ExcludeTurns || p.Cwd != s.Workspace || p.ApprovalPolicy != askPolicy || len(p.Config.MCPServers) != 2 || p.DeveloperInstructions == "" {
+		t.Errorf("thread/resume %s", resumed[0])
+	}
+}
+
+// A conversation Codex no longer has starts a new one, and the turn says
+// so.
+func TestALostConversationStartsANewOne(t *testing.T) {
+	a, log := fake(t, "memory")
+	s := spec(t)
+	s.Session = "019a0000-0000-7000-8000-gone"
+	g := open(t, a, s)
+	do(t, g, provider.Start{Text: "hi"})
+	events := turn(t, g)
+	closeRun(t, g)
+	ws := works(events)
+	if len(ws) != 1 || !strings.Contains(ws[0].Title, "no longer has this thread's earlier conversation") {
+		t.Errorf("steps %+v", ws)
+	}
+	if got := g.(provider.Sessioned).Session(); got == s.Session || got == "" {
+		t.Errorf("the session is %q", got)
+	}
+	if len(sent(t, log, "thread/start")) != 1 {
+		t.Error("no new thread started")
+	}
+}
+
+// A conversation open in another Codex client fails the run, rather than
+// splitting it in two.
+func TestAConversationOpenElsewhereFailsTheRun(t *testing.T) {
+	a, log := fake(t, "writer")
+	s := spec(t)
+	s.Session = "019a0000-0000-7000-8000-elsewhere"
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	g, err := a.Open(ctx, s)
+	if err == nil {
+		g.Close(ctx)
+		t.Fatal("the run opened")
+	}
+	if err.Error() != inUse {
+		t.Errorf("Open: %v", err)
+	}
+	if len(sent(t, log, "thread/start")) != 0 {
+		t.Error("a new thread started")
+	}
+}
+
+// A parked app-server on another conversation than the run's is the
+// thread's no longer: a new one resumes the run's.
+func TestAParkedAppServerOnAnotherConversationIsLeft(t *testing.T) {
+	a, log := fake(t, "memory")
+	s := spec(t)
+	g := open(t, a, s)
+	do(t, g, provider.Start{Text: "one"})
+	turn(t, g)
+	first := g.(provider.Sessioned).Session()
+	closeRun(t, g)
+	other := open(t, a, spec(t))
+	do(t, other, provider.Start{Text: "two"})
+	turn(t, other)
+	second := other.(provider.Sessioned).Session()
+	closeRun(t, other)
+	s.Run, s.Session = api.NewID(), second
+	g = open(t, a, s)
+	do(t, g, provider.Start{Text: "three"})
+	got := text(turn(t, g))
+	closeRun(t, g)
+	if first == second || got != "earlier you said: two" {
+		t.Errorf("sessions %q %q, said %q", first, second, got)
+	}
+	if n := len(sent(t, log, "thread/resume")); n != 1 {
+		t.Errorf("%d resumes", n)
+	}
+}

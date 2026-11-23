@@ -234,10 +234,26 @@ func (f *fake) take(m message, raw []byte) {
 		f.reply(m.ID, map[string]any{"data": []map[string]any{
 			{"id": "gpt-6.2-sol", "model": "gpt-6.2-sol", "displayName": "GPT-6.2 Sol", "description": "The default", "hidden": false, "isDefault": true, "supportedReasoningEfforts": effort("low", "medium", "high", "xhigh")},
 		}, "nextCursor": nil})
+	case "thread/resume":
+		var p struct{ ThreadID string }
+		json.Unmarshal(m.Params, &p)
+		if f.scenario == "writer" {
+			f.refuse(m.ID, -32600, "thread "+p.ThreadID+" already has an active writer")
+			return
+		}
+		if _, err := os.Stat(f.rollout(p.ThreadID)); err != nil {
+			f.refuse(m.ID, -32600, "no rollout found for thread id "+p.ThreadID)
+			return
+		}
+		f.mu.Lock()
+		f.thread = p.ThreadID
+		f.mu.Unlock()
+		f.reply(m.ID, map[string]any{"thread": map[string]any{"id": p.ThreadID}, "model": "gpt-6.2-sol"})
 	case "thread/start":
 		f.mu.Lock()
 		f.thread = fmt.Sprintf("019a0000-0000-7000-8000-%012d", f.pid)
 		thread := f.thread
+		os.WriteFile(f.rollout(thread), nil, 0o600)
 		f.mu.Unlock()
 		f.reply(m.ID, map[string]any{"thread": map[string]any{"id": thread}, "model": "gpt-6.2-sol"})
 		f.notify("thread/started", map[string]any{"thread": map[string]any{"id": thread}})
@@ -260,7 +276,12 @@ func (f *fake) take(m message, raw []byte) {
 			f.notify("item/agentMessage/delta", map[string]any{"threadId": thread, "turnId": "turn-1", "itemId": "msg-turn-1", "delta": "old text"})
 		}
 		f.reply(m.ID, map[string]any{"turn": map[string]any{"id": turn, "status": "inProgress", "items": []any{}}})
-		go f.play(n, turn)
+		thread, _ := f.ids()
+		said, _ := os.ReadFile(f.rollout(thread))
+		if len(p.Input) > 0 {
+			os.WriteFile(f.rollout(thread), append(said, p.Input[0].Text+"\n"...), 0o600)
+		}
+		go f.play(n, turn, string(said))
 	case "turn/interrupt":
 		f.mu.Lock()
 		active, stop := f.active, f.stop
@@ -337,7 +358,16 @@ func decision(m message) string {
 	return r.Decision
 }
 
-func (f *fake) play(n int, turn string) {
+// rollout is where the fake keeps what the user said in thread, as Codex
+// keeps a thread's rollout under CODEX_HOME: beside the log, so a test's
+// fakes share it across restarts.
+func (f *fake) rollout(thread string) string {
+	return filepath.Join(filepath.Dir(os.Getenv(Log)), "rollout-"+thread)
+}
+
+// play plays turn n of the scenario; said is what the user said in the
+// thread's earlier turns.
+func (f *fake) play(n int, turn, said string) {
 	thread, _ := f.ids()
 	switch f.scenario {
 	case "late-started":
@@ -370,6 +400,8 @@ func (f *fake) play(n int, turn string) {
 		cmd["status"] = map[bool]string{true: "completed", false: "declined"}[d == "accept"]
 		f.item("item/completed", cmd)
 		f.message("msg-"+turn, "decision "+d)
+	case "memory":
+		f.message("msg-"+turn, "earlier you said: "+strings.ReplaceAll(strings.TrimSpace(said), "\n", " | "))
 	case "two-messages":
 		f.message("msg-a", "first")
 		f.message("msg-b", "second")

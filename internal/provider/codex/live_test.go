@@ -115,3 +115,37 @@ func TestLiveApproval(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(s.Workspace, "hello.txt"))
 	t.Logf("hello.txt: %q, %v", b, err)
 }
+
+// A thread goes on with its conversation on a new app-server, as after a
+// restart, and an id Codex never had starts a new one.
+func TestLiveResume(t *testing.T) {
+	a, m := real(t)
+	s := liveSpec(t, m)
+	g := open(t, a, s)
+	do(t, g, provider.Start{Text: "Remember the word kumquat. Reply with OK only."})
+	turn(t, g)
+	s.Session = g.(provider.Sessioned).Session()
+	closeRun(t, g)
+	a.Close()
+	b := &Adapter{}
+	defer b.Close()
+	s.Run = api.NewID()
+	g = open(t, b, s)
+	do(t, g, provider.Start{Text: "What word did I ask you to remember? Answer with that one word only."})
+	events := turn(t, g)
+	closeRun(t, g)
+	logEvents(t, events)
+	if got := text(events); !strings.Contains(strings.ToLower(got), "kumquat") || g.(provider.Sessioned).Session() != s.Session {
+		t.Errorf("after a new app-server Codex said %q on %s", got, g.(provider.Sessioned).Session())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	s.Run, s.Session = api.NewID(), "019a0000-0000-7000-8000-000000000000"
+	lost, err := b.Open(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := next(t, lost)
+	t.Logf("an unknown thread: %+v, session %s", ev, lost.(provider.Sessioned).Session())
+	lost.Close(ctx)
+}

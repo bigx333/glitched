@@ -155,20 +155,33 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	if err != nil {
 		return nil, fmt.Errorf("Codex: the thread's earlier app-server may still run: %w", err)
 	}
+	// One on another Codex thread than the thread's is the thread's no
+	// longer.
+	if ok && spec.Session != "" && p.threadID() != spec.Session {
+		p.discard()
+		ok = false
+	}
+	lost := false
 	if !ok {
 		if p, err = launch(ctx, bin, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String()); err != nil {
 			return nil, err
 		}
 		err = p.signedIn(ctx)
 		if err == nil {
-			err = p.startThread(ctx, spec)
+			lost, err = p.startThread(ctx, spec)
 		}
 		if err != nil {
 			p.discard()
 			return nil, err
 		}
 	}
-	return newAgent(spec, p, keep), nil
+	g := newAgent(spec, p, keep)
+	if lost {
+		g.mu.Lock()
+		g.noticeLocked("Codex no longer has this thread's earlier conversation, so this turn starts a new one.")
+		g.mu.Unlock()
+	}
+	return g, nil
 }
 
 func launchKey(bin string, spec provider.SessionSpec) string {
