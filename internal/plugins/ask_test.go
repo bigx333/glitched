@@ -114,6 +114,40 @@ func TestAnAskIsBoundedAndSaysWhyNot(t *testing.T) {
 	u.until(t, "no model here", func() bool { return strings.HasPrefix(texts(w), "unavailable: ") })
 }
 
+// An ask waits the seconds its timeout option gives, AskTimeout at most
+// and without one, and then fails with the code timeout.
+func TestAnAskWaitsItsTimeout(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "writer", `"capabilities": ["models:ask"], `, askModule(`[["short", { timeout: 5 }], ["long", { timeout: 500 }], ["plain"], ["late", { timeout: 0.2 }]]`))
+	var mu sync.Mutex
+	waits := map[string]time.Duration{}
+	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf, Ask: func(ctx context.Context, _ string, q AskRequest) (AskAnswer, error) {
+		d, _ := ctx.Deadline()
+		mu.Lock()
+		waits[q.Prompt] = time.Until(d)
+		mu.Unlock()
+		if q.Prompt == "late" {
+			<-ctx.Done()
+			return AskAnswer{}, ctx.Err()
+		}
+		return AskAnswer{Text: q.Prompt}, nil
+	}})
+	t.Cleanup(h.Close)
+	h.SetGranted("writer", "models:ask", true)
+	w := session(t, h, "writer")
+	u.until(t, "every ask answered", func() bool { return strings.Count(texts(w), " | ") == 3 })
+	if got := strings.Split(texts(w), " | ")[3]; !strings.HasPrefix(got, "timeout: the model didn't answer within 200ms") {
+		t.Errorf("the late ask: %q", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for prompt, want := range map[string]time.Duration{"short": 5 * time.Second, "long": AskTimeout, "plain": AskTimeout} {
+		if got := waits[prompt]; got > want || got < want-time.Second {
+			t.Errorf("the %s ask may wait %s, want %s", prompt, got, want)
+		}
+	}
+}
+
 // A plugin's second ask, while its first is under way, is refused.
 func TestAPluginAsksOneAtATime(t *testing.T) {
 	state, u, fx := t.TempDir(), newUIThread(), &effects{}
@@ -169,16 +203,18 @@ func TestARecordSaysItsWorkspaceIsLocal(t *testing.T) {
 	}
 }
 
-// A plugin that hears place.shown is told of each copy that comes, once,
-// and not as one it shows changes.
+// A plugin that hears place.shown is told of each copy that comes, and
+// again as one it shows changes its context; one that hears place.hidden
+// is told of each that goes.
 func TestPlaceShownTellsOfEachCopyThatComes(t *testing.T) {
 	state, u, fx := t.TempDir(), newUIThread(), &effects{}
-	writeModule(t, state, "shown", `"capabilities": ["ui.place"], "glitched": { "places": [{ "id": "badge", "at": "thread.header" }], "events": ["place.shown"] }, `, `
+	writeModule(t, state, "shown", `"capabilities": ["ui.place"], "glitched": { "places": [{ "id": "badge", "at": "thread.header" }], "events": ["place.shown", "place.hidden"] }, `, `
 export function init() { return { state: [] } }
 export function place({ state, items }) { return items.map(() => ({ type: "badge", text: state.join(",") })) }
 export function update({ state, event }) {
-	if (event.type !== "place.shown") return {}
 	const d = event.data
+	if (event.type === "place.hidden") return { state: [...state, "-" + d.key] }
+	if (event.type !== "place.shown") return {}
 	return { state: [...state, d.id + "@" + d.at + ":" + d.key + "=" + d.context.title] }
 }`)
 	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf})
@@ -194,5 +230,7 @@ export function update({ state, event }) {
 	u.until(t, "t1 shown", func() bool { return text("t1") == "badge@thread.header:t1=One" })
 	s.SetItems("badge", []PlaceItem{{Key: "t1", Version: "2", Context: map[string]string{"title": "Uno"}}})
 	s.SetItems("badge", []PlaceItem{{Key: "t2", Version: "1", Context: map[string]string{"title": "Two"}}})
-	u.until(t, "t2 shown", func() bool { return text("t2") == "badge@thread.header:t1=One,badge@thread.header:t2=Two" })
+	u.until(t, "t2 shown", func() bool {
+		return text("t2") == "badge@thread.header:t1=One,badge@thread.header:t1=Uno,-t1,badge@thread.header:t2=Two"
+	})
 }

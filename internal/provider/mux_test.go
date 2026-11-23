@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
@@ -26,6 +27,31 @@ func TestMuxAsksOnlyAnAdapterThatAnswers(t *testing.T) {
 	}
 	if _, err := m.Ask(context.Background(), "nope", provider.AskSpec{Prompt: "p"}); !errors.Is(err, provider.ErrNoAdapter) {
 		t.Errorf("Ask of an unknown provider: %v, want ErrNoAdapter", err)
+	}
+}
+
+type deadlined struct {
+	*fake.Adapter
+	left time.Duration
+}
+
+func (d *deadlined) Ask(ctx context.Context, _ provider.AskSpec) (provider.AskResult, error) {
+	if at, ok := ctx.Deadline(); ok {
+		d.left = time.Until(at)
+	}
+	return provider.AskResult{}, nil
+}
+
+// An ask's timeout bounds it in the engine, where the caller's deadline
+// doesn't reach.
+func TestMuxBoundsAnAskByItsTimeout(t *testing.T) {
+	d := &deadlined{Adapter: fake.New(nil)}
+	m := provider.Mux{"d": d}
+	if _, err := m.Ask(context.Background(), "d", provider.AskSpec{Prompt: "p", Timeout: 7 * time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if d.left > 7*time.Second || d.left < 6*time.Second {
+		t.Errorf("the ask may take %s, want 7s", d.left)
 	}
 }
 
