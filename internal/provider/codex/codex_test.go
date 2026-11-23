@@ -352,9 +352,10 @@ func TestACompactionReportsTheContextUnknown(t *testing.T) {
 	}
 }
 
-// Codex resends the thread's last usage, as after a rate-limit update,
-// with no request since: that is no news of the turn's, whose model may
-// not be the last one's.
+// Codex resends the thread's last usage, as after a rate-limit update
+// with no request since, or with a response cut short whose spending it
+// adds but whose reading it keeps: neither is news of the turn's, whose
+// model may not be the last one's.
 func TestResentUsageIsNoReport(t *testing.T) {
 	a, _ := fake(t, "resent")
 	s := spec(t)
