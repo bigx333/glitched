@@ -65,7 +65,7 @@ type Host struct {
 	mu      sync.Mutex
 	busy    map[api.ID]bool     // threads with an effect in flight
 	runs    map[api.ID]*liveRun // by run
-	closing map[api.ID]bool     // threads whose run is over but whose agent is not closed yet
+	closing map[api.ID]bool     // threads whose run is over but whose agent is not closed yet, true while that agent may still work
 	subs    map[*stream]struct{}
 	asks    map[askKey]chan json.RawMessage // credentials requests glitched mcp waits on
 	held    map[string]chan struct{}        // providers Hold holds, each closed on its release
@@ -242,16 +242,26 @@ func (h *Host) committed(c store.Commit) {
 // works is the run states whose agent works.
 var works = map[api.RunState]bool{api.RunStarting: true, api.RunRunning: true, api.RunStopping: true}
 
-// noteWorking notes whether thread's agent works, and tells awake whether
-// any does when that changes. h.mu is held.
+// noteWorking notes whether thread's run works, and tells awake whether
+// any agent does when that changes. h.mu is held.
 func (h *Host) noteWorking(thread api.ID, working bool) {
-	was := len(h.working) > 0
+	was := h.anyWorks()
 	if working {
 		h.working[thread] = true
 	} else {
 		delete(h.working, thread)
 	}
-	if now := len(h.working) > 0; now != was && h.awake != nil {
+	h.tellAwake(was)
+}
+
+// anyWorks is whether any run works, or any agent whose run ended while
+// it worked is not closed yet. h.mu is held.
+func (h *Host) anyWorks() bool {
+	return len(h.working) > 0 || slices.Contains(slices.Collect(maps.Values(h.closing)), true)
+}
+
+func (h *Host) tellAwake(was bool) {
+	if now := h.anyWorks(); now != was && h.awake != nil {
 		h.awake(now)
 	}
 }
@@ -928,14 +938,16 @@ func (h *Host) forgetLocked(run api.ID) {
 // admits from being leased first.
 func (h *Host) leaveLocked(thread, run api.ID) {
 	if lr := h.runs[run]; lr != nil && lr.agent != nil {
-		h.closing[thread] = true
+		h.closing[thread] = h.working[thread]
 	}
 	h.forgetLocked(run)
 }
 
 func (h *Host) closed(thread api.ID) {
 	h.mu.Lock()
+	was := h.anyWorks()
 	delete(h.closing, thread)
+	h.tellAwake(was)
 	h.mu.Unlock()
 	h.poke()
 }

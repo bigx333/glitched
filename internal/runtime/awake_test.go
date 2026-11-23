@@ -1,9 +1,11 @@
 package runtime_test
 
 import (
+	"context"
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
@@ -107,5 +109,67 @@ func TestAwakeAfterARestart(t *testing.T) {
 	until(t, n.h, thread, "turn end", idle)
 	if got := h.all(); !slices.Equal(got, []bool{true, false}) {
 		t.Fatalf("told %v once answered, want [true false]", got)
+	}
+}
+
+// lingering opens the fake's agents to play the first two events of a
+// turn and work on, and to close only once release closes; closing closes
+// as the first close begins.
+type lingering struct {
+	*fake.Adapter
+	closing, release chan struct{}
+	once             sync.Once
+}
+
+func (s *lingering) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	g, err := s.Adapter.Open(ctx, spec)
+	return &lingeringAgent{Agent: g, s: s, left: 2}, err
+}
+
+type lingeringAgent struct {
+	provider.Agent
+	s    *lingering
+	left int
+}
+
+func (g *lingeringAgent) Next(ctx context.Context) (provider.Event, error) {
+	if g.left == 0 {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	g.left--
+	return g.Agent.Next(ctx)
+}
+
+func (g *lingeringAgent) Close(ctx context.Context) error {
+	g.s.once.Do(func() { close(g.s.closing) })
+	select {
+	case <-g.s.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return g.Agent.Close(ctx)
+}
+
+// An agent whose thread is deleted as it works counts as working until it
+// closes, as it may work on until then.
+func TestAwakeUntilADeletedAgentCloses(t *testing.T) {
+	h := &heard{}
+	ad := &lingering{Adapter: fake.New(fake.Turn(false)), closing: make(chan struct{}), release: make(chan struct{})}
+	n := awakeHost(t, dbPath(t), ad, h)
+	thread := newThread(t, n.h)
+	submit(t, n.h, thread, dispatch("go", api.StartNow))
+	until(t, n.h, thread, "running", func(th api.Thread) bool { return th.Run == api.RunRunning })
+	submit(t, n.h, thread, api.ThreadDelete{})
+	<-ad.closing
+	if got := h.all(); !slices.Equal(got, []bool{true}) {
+		t.Fatalf("told %v with the deleted thread's agent still closing, want [true]", got)
+	}
+	close(ad.release)
+	for deadline := time.Now().Add(10 * time.Second); !slices.Equal(h.all(), []bool{true, false}); {
+		if time.Now().After(deadline) {
+			t.Fatalf("told %v once the agent closed, want [true false]", h.all())
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
