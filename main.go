@@ -278,7 +278,8 @@ type app struct {
 	// sidebarOpen is how far the sidebar has slid in this frame, from 0
 	// to 1; sidebarJump skips the slide, for ⌘B.
 	sidebarOpen float32
-	// sidebarTall is how tall the sidebar was as last laid out.
+	// sidebarTall is how tall the sidebar was as last laid out, or the
+	// window, before it was.
 	sidebarTall float32
 	// sidebarRows are the threads in the rows of each part of the
 	// sidebar's body, as last built.
