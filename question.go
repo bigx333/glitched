@@ -69,9 +69,6 @@ func (f *questionForm) done() bool {
 	return true
 }
 
-// lone is whether q is one question of one answer, which a pick answers.
-func lone(q api.Questions) bool { return len(q.Questions) == 1 && !q.Questions[0].Multi }
-
 // questionCard is a question request in the timeline: its questions, with
 // their options and an Other field, while it waits; what was answered once
 // it is; or that it is no longer asked. A body no card can show is shown as
@@ -123,7 +120,7 @@ func (a *app) questionCard(c *ui.Context, t thread, e entry) {
 				ui.Text(c, shown(string(r.Body), false)).Selectable().FontSize(12).Font("monospace")
 			})
 		case waiting:
-			lead = a.questionForm(c, t, r, q, keyed, !sending, shown)
+			lead = a.questionForm(c, r, q, keyed, !sending, shown)
 		default:
 			questionSummary(c, r, q, shown)
 		}
@@ -154,7 +151,7 @@ func (a *app) questionCard(c *ui.Context, t thread, e entry) {
 // user's picks while open, the agent's text as shown shows it, with ⌘1 to
 // ⌘4 on the options the keys pick while keyed. It returns where the last
 // frame drew the first question's line.
-func (a *app) questionForm(c *ui.Context, t thread, r *client.RequestEntry, q api.Questions, keyed, open bool, shown func(string, bool) string) (lead ui.Rect) {
+func (a *app) questionForm(c *ui.Context, r *client.RequestEntry, q api.Questions, keyed, open bool, shown func(string, bool) string) (lead ui.Rect) {
 	f := a.form(r, q)
 	ui.Column(c).Padding(12, 14, 12).Gap(14).Children(func() {
 		for i, x := range q.Questions {
@@ -175,8 +172,12 @@ func (a *app) questionForm(c *ui.Context, t thread, r *client.RequestEntry, q ap
 				})
 				for j, o := range x.Options {
 					on := slices.Contains(f.picked[i], o.Label)
-					b := ghost(c, j, on).Padding(5, 8).Disabled(!open).Children(func() {
-						ui.Text(c, optionMark(x.Multi, on)).FontSize(13).TextColor(palette.accent).Width(14)
+					role := ui.RoleRadio
+					if x.Multi {
+						role = ui.RoleCheckBox
+					}
+					b := ghost(c, j, on).Padding(5, 8).Disabled(!open).Role(role).Checked(on).Children(func() {
+						ui.Text(c, optionMark(x.Multi, on)).FontSize(13).TextColor(palette.accent).Width(14).AccessHidden(true)
 						ui.Text(c, shown(o.Label, false)).FontSize(12.5).TextColor(palette.text)
 						if o.About != "" {
 							ui.Text(c, shown(o.About, true)).FontSize(11.5).TextColor(palette.faint).Shrink(1)
@@ -187,7 +188,7 @@ func (a *app) questionForm(c *ui.Context, t thread, r *client.RequestEntry, q ap
 						}
 					})
 					if b.Clicked() {
-						a.pickOption(t, r, q, f, i, o.Label)
+						f.pick(q, i, o.Label)
 					}
 				}
 				ui.Row(c).Key("other").Gap(6).AlignItems(ui.Center).Padding(0, 8).Children(func() {
@@ -222,17 +223,19 @@ func optionMark(multi, on bool) string {
 	return "○"
 }
 
-// questionButtons are a waiting card's Answer, once each question has an
-// answer, and Dismiss; Dismiss only, for questions the card can't show.
-// Their keys show while keyed.
+// questionButtons are a waiting card's Submit, which sends the picks once
+// each question has an answer, and Dismiss; Dismiss only, for questions
+// the card can't show. Their keys show while keyed. Under an overlay of
+// the app neither sends, though one of them keeps the focus that Return
+// or Space would press.
 func (a *app) questionButtons(c *ui.Context, t thread, r *client.RequestEntry, q api.Questions, keyed bool) {
 	f := a.form(r, q)
 	var answer ui.Element
 	if len(q.Questions) > 0 {
-		answer = filled(c, "answer", palette.accent, ui.Hex("#ffffff")).Disabled(!f.done()).Children(func() {
-			ui.Text(c, "Answer").FontSize(12.5).FontWeight(500)
+		answer = filled(c, "submit", palette.accent, ui.Hex("#ffffff")).Disabled(!f.done()).Children(func() {
+			ui.Text(c, "Submit").FontSize(12.5).FontWeight(500)
 			if keyed {
-				ui.Text(c, "⌘⏎").FontSize(10.5).Padding(1, 4).Radius(4).Background(ui.Hex("#ffffff").Alpha(0.2))
+				ui.Text(c, "⌘⏎").FontSize(10.5).TextColor(ui.Hex("#ffffff").Alpha(0.9)).Padding(1, 4).Radius(4).Background(ui.Hex("#ffffff").Alpha(0.2))
 			}
 		})
 		if !f.done() {
@@ -250,6 +253,9 @@ func (a *app) questionButtons(c *ui.Context, t thread, r *client.RequestEntry, q
 		ui.Icon(c, icHand).FontSize(12).TextColor(palette.faint)
 		ui.Text(c, askedAt(t, r)).FontSize(11.5).TextColor(palette.faint)
 	})
+	if a.covered {
+		return
+	}
 	if answer.Clicked() && f.done() {
 		a.answerQuestions(t, r, f.answers())
 	}
@@ -302,14 +308,6 @@ func answerText(x api.Answer) string {
 	return strings.Join(parts, ", ")
 }
 
-// pickOption picks an option, which answers a lone question at once.
-func (a *app) pickOption(t thread, r *client.RequestEntry, q api.Questions, f *questionForm, i int, l string) {
-	f.pick(q, i, l)
-	if lone(q) {
-		a.answerQuestions(t, r, f.answers())
-	}
-}
-
 // answerQuestions sends the answers to r; none dismisses it.
 func (a *app) answerQuestions(t thread, r *client.RequestEntry, as api.Answers) {
 	if !a.backend.AnswerQuestions(t.env, t.id(), r.Request, as).IsZero() {
@@ -321,8 +319,8 @@ var pickKeys = []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4}
 
 // questionKeys answer the waiting questions from the keyboard while the
 // composer holds nothing, as approvalKeys do an approval: ⌘1 to ⌘4 pick
-// in the question the keys are at, ⌘⏎ answers once each question has an
-// answer, and ⇧⌘D or Escape dismisses. All but ⌘⏎ are in's keys the
+// in the question the keys are at and send nothing, ⌘⏎ submits once each
+// question has an answer, and ⇧⌘D or Escape dismisses. All but ⌘⏎ are in's keys the
 // focused element leaves: a shell in the terminal drawer keeps Escape, and
 // Control's chords, which ⌘ is on Linux and Windows. Escape in an Other
 // field is the field's. Under an overlay of the app, they all wait, and
@@ -342,7 +340,7 @@ func (a *app) questionKeys(c *ui.Context, in ui.Element, t thread, r *client.Req
 	dismiss := in.OverlayShortcut(ui.Cmd|ui.Shift, ui.KeyD) && shown || !typing && in.OverlayShortcut(0, ui.KeyEscape)
 	for j, k := range pickKeys {
 		if in.OverlayShortcut(ui.Cmd, k) && shown && f.at < len(q.Questions) && j < len(q.Questions[f.at].Options) {
-			a.pickOption(t, r, q, f, f.at, q.Questions[f.at].Options[j].Label)
+			f.pick(q, f.at, q.Questions[f.at].Options[j].Label)
 			return
 		}
 	}

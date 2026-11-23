@@ -27,7 +27,8 @@ import (
 // TestShot writes a PNG of the window: SHOT=out.png, with
 // SCENE=empty|running|approval|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)
 // for the engines' threads (none started without one; question takes
-// ASK=<request body>, PICK=<label>,… and QUESTION=answer|dismiss|stop;
+// ASK=<request body>, PICK=<label>,…, OTHER=<text> typed into the Other
+// field named OTHERIN, and QUESTION=answer|dismiss|stop;
 // both is an approval and questions waiting at once, the questions first
 // with QFIRST, and takes PICK;
 // blocked is a parent whose child asks ASK;
@@ -344,9 +345,15 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 				h.tt.Frame()
 			}
 		}
+		if s := os.Getenv("OTHER"); s != "" {
+			h.click(os.Getenv("OTHERIN"))
+			h.tt.Frame()
+			h.tt.Type(s)
+			h.tt.Frame()
+		}
 		switch os.Getenv("QUESTION") {
 		case "answer":
-			h.click("Answer")
+			h.click("Submit")
 			answered(t, h, th, "Answered")
 		case "dismiss":
 			h.click("Dismiss")

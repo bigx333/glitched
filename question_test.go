@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"runtime"
 	"slices"
@@ -65,17 +66,21 @@ func answered(t *testing.T, h *harness, th thread, title string) api.Answers {
 func picks(labels ...string) api.Answer { return api.Answer{Picked: labels} }
 
 // The card shows each question, its header and options, which the
-// multi-select one says, and Answer and Dismiss; not an approval's.
+// multi-select one says, and Submit, with ⌘⏎ beside it, and Dismiss; not
+// an approval's.
 func TestQuestionCardShowsTheQuestions(t *testing.T) {
 	h, _ := questioning(t, fake.Asking())
 	for _, s := range []string{
 		"Store", "Which store should the cache use?", "SQLite", "One file next to the log", "Memory",
 		"Tests", "Which suites gate the merge?", "pick any", "Unit", "Race", "GUI", "4 to 8 minutes",
-		"Answer", "Dismiss", "⇧⌘D", "⌘1", "⌘2",
+		"Submit", "Dismiss", "⇧⌘D", "⌘1", "⌘2",
 	} {
 		if !h.tt.HasText(s) {
 			t.Errorf("no %q on the waiting card; texts %q", s, h.tt.Texts())
 		}
+	}
+	if !chipAfter(h, "Submit", "⌘⏎") {
+		t.Errorf("no ⌘⏎ beside Submit; texts %q", h.tt.Texts())
 	}
 	for _, s := range []string{"Approval needed", "Allow once", "Deny", "⌘3"} {
 		if h.tt.HasText(s) {
@@ -106,14 +111,14 @@ func TestQuestionCardNamesTheAccessItsTurnAsksAt(t *testing.T) {
 }
 
 // Clicks pick: one option in a single question, any in a multi one, where
-// a second click takes a pick back. Answer sends them, by position.
+// a second click takes a pick back. Submit sends them, by position.
 func TestQuestionCardAnswersByClicks(t *testing.T) {
 	h, th := questioning(t, fake.Asking())
 	for _, s := range []string{"Memory", "SQLite", "Unit", "GUI", "Race", "GUI"} {
 		h.click(s)
 		h.tt.Frame()
 	}
-	h.click("Answer")
+	h.click("Submit")
 	got := answered(t, h, th, "Answered")
 	if want := (api.Answers{Answers: []api.Answer{picks("SQLite"), picks("Unit", "Race")}}); !reflect.DeepEqual(got, want) {
 		t.Errorf("sent %+v, want %+v", got, want)
@@ -123,13 +128,13 @@ func TestQuestionCardAnswersByClicks(t *testing.T) {
 	}
 }
 
-// Answer waits for each question to have an answer: until then neither it
+// Submit waits for each question to have an answer: until then neither it
 // nor ⌘⏎ sends, and ⌘⏎ doesn't stop the turn as the composer's would.
 func TestAnswerWaitsForEveryQuestion(t *testing.T) {
 	h, th := questioning(t, fake.Asking())
 	h.click("SQLite")
 	h.tt.Frame()
-	h.click("Answer")
+	h.click("Submit")
 	h.tt.Key(ui.Cmd, ui.KeyEnter)
 	for range 5 {
 		h.p.run()
@@ -178,7 +183,7 @@ func TestOtherSendsTheUsersWords(t *testing.T) {
 	if ts := h.tt.Texts(); ts[slices.Index(ts, "SQLite")-1] != "○" {
 		t.Errorf("SQLite still picked beside Other: %q", ts)
 	}
-	h.click("Answer")
+	h.click("Submit")
 	got := answered(t, h, th, "Answered")
 	want := api.Answers{Answers: []api.Answer{{Other: "Postgres"}, {Picked: []string{"GUI"}, Other: "Fuzz"}}}
 	if !reflect.DeepEqual(got, want) {
@@ -375,15 +380,175 @@ func TestDismissSendsNoAnswers(t *testing.T) {
 	}
 }
 
-// A lone question of one answer is answered by its pick.
-func TestALoneQuestionAnswersOnTheClick(t *testing.T) {
-	body, _ := json.Marshal(api.Questions{Questions: []api.Question{
-		{Text: "Which color?", Header: "Color", Options: []api.Option{{Label: "Red"}, {Label: "Teal"}}},
-	}})
-	h, th := questioning(t, []provider.Event{provider.RequestOpened{ID: "ask-1", Kind: api.KindQuestion, Body: body}})
+// lonely is the app waiting on one question of one answer, Red or Teal.
+func lonely(t *testing.T) (*harness, thread) {
+	t.Helper()
+	body := questionsOf(api.Question{Text: "Which color?", Header: "Color", Options: options("Red", "Teal")})
+	return questioning(t, []provider.Event{provider.RequestOpened{ID: "ask-1", Kind: api.KindQuestion, Body: body}})
+}
+
+// stillAsked fails t unless the questions still wait, with nothing sent
+// to them and the turn going.
+func stillAsked(t *testing.T, h *harness, th thread, after string) {
+	t.Helper()
+	settle(h)
+	if r := lastRequest(th); r.State != api.RequestPending || len(h.a.current().Pending) != 0 || !h.a.current().View.Live() {
+		t.Fatalf("after %s: request %v, %d sent, live %v; want it waiting, nothing sent, the turn going",
+			after, r.State, len(h.a.current().Pending), h.a.current().View.Live())
+	}
+}
+
+// readOf is what assistive technology reads of the card's element of
+// role whose name has the word w.
+func readOf(t *testing.T, h *harness, role ui.Role, w string) ui.AccessInfo {
+	t.Helper()
+	for _, x := range h.tt.AccessAll() {
+		if x.Role == role && slices.Contains(strings.Fields(x.Name), w) {
+			return x
+		}
+	}
+	t.Fatalf("no %v named with %q; the window has %q", role, w, h.tt.Texts())
+	return ui.AccessInfo{}
+}
+
+// A pick on a lone question of one answer sends nothing: it shows as
+// picked, a later pick takes its place, and Submit sends the last.
+func TestALonePickWaitsForSubmit(t *testing.T) {
+	h, th := lonely(t)
 	h.click("Teal")
+	stillAsked(t, h, th, "a click on Teal")
+	if !readOf(t, h, ui.RoleRadio, "Teal").Checked || readOf(t, h, ui.RoleRadio, "Red").Checked {
+		t.Errorf("Teal clicked doesn't read as the one selected")
+	}
+	h.click("Red")
+	stillAsked(t, h, th, "a click on Red")
+	if !readOf(t, h, ui.RoleRadio, "Red").Checked || readOf(t, h, ui.RoleRadio, "Teal").Checked {
+		t.Errorf("Red clicked after Teal doesn't read as the one selected")
+	}
+	h.click("Submit")
+	if got := answered(t, h, th, "Answered"); !reflect.DeepEqual(got, api.Answers{Answers: []api.Answer{picks("Red")}}) {
+		t.Errorf("sent %+v, want Red", got)
+	}
+}
+
+// With nothing picked, Submit is disabled: neither a click on it nor ⌘⏎
+// sends, and ⌘⏎ doesn't stop the turn as the composer's would.
+func TestSubmitWithNothingPickedSendsNothing(t *testing.T) {
+	h, th := lonely(t)
+	if s := readOf(t, h, ui.RoleButton, "Submit"); !s.Disabled || s.Focusable {
+		t.Errorf("Submit with nothing picked reads %+v; want it disabled", s)
+	}
+	h.click("Submit")
+	stillAsked(t, h, th, "a click on Submit")
+	h.tt.Key(ui.Cmd, ui.KeyEnter)
+	stillAsked(t, h, th, "⌘⏎")
+	h.click("Teal")
+	h.tt.Frame()
+	if s := readOf(t, h, ui.RoleButton, "Submit"); s.Disabled || !s.Focusable {
+		t.Errorf("Submit with Teal picked reads %+v; want it enabled", s)
+	}
+}
+
+// ⌘1 and ⌘2 pick on a lone question and send nothing; ⌘⏎ submits the
+// last pick.
+func TestPickKeysWaitForCmdEnter(t *testing.T) {
+	h, th := lonely(t)
+	h.tt.Key(ui.Cmd, ui.Key2)
+	stillAsked(t, h, th, "⌘2")
+	h.tt.Key(ui.Cmd, ui.Key1)
+	stillAsked(t, h, th, "⌘1")
+	if !readOf(t, h, ui.RoleRadio, "Red").Checked {
+		t.Errorf("⌘1 didn't select Red")
+	}
+	h.tt.Key(ui.Cmd, ui.KeyEnter)
+	if got := answered(t, h, th, "Answered"); !reflect.DeepEqual(got, api.Answers{Answers: []api.Answer{picks("Red")}}) {
+		t.Errorf("sent %+v, want Red", got)
+	}
+}
+
+// The options of a question of one answer read as radio buttons, those
+// of a question of any as check boxes, each saying whether it is picked.
+func TestOptionsReadAsPicked(t *testing.T) {
+	h, _ := questioning(t, fake.Asking())
+	h.click("Memory")
+	h.tt.Frame()
+	h.click("Unit")
+	h.tt.Frame()
+	for _, c := range []struct {
+		role ui.Role
+		name string
+		on   bool
+	}{{ui.RoleRadio, "SQLite", false}, {ui.RoleRadio, "Memory", true}, {ui.RoleCheckBox, "Unit", true}, {ui.RoleCheckBox, "Race", false}} {
+		got := readOf(t, h, c.role, c.name)
+		if got.Checked != c.on {
+			t.Errorf("%s reads checked %v, want %v", c.name, got.Checked, c.on)
+		}
+		if strings.ContainsAny(got.Name, "○◉☐☑") {
+			t.Errorf("%s is read as %q, its mark with it", c.name, got.Name)
+		}
+	}
+	h.click("Unit")
+	h.tt.Frame()
+	if readOf(t, h, ui.RoleCheckBox, "Unit").Checked {
+		t.Errorf("Unit clicked twice still reads checked")
+	}
+}
+
+// With Submit focused under the model picker, Return and Space send
+// nothing; with the picker closed, Return submits.
+func TestSubmitWaitsUnderAnOpenPicker(t *testing.T) {
+	h, th := lonely(t)
+	h.click("Teal")
+	h.tt.Frame()
+	for range 2 {
+		h.tt.Key(0, ui.KeyTab)
+		h.tt.Frame()
+	}
+	if !readOf(t, h, ui.RoleButton, "Submit").Focused {
+		t.Fatal("Tab from Teal didn't reach Submit")
+	}
+	h.tt.Key(ui.Cmd, ui.KeyK)
+	h.until("the palette", func() bool { return h.a.cmdkOpen })
+	h.tt.Type("Switch model")
+	h.until("Switch model", func() bool { return h.tt.HasText("Switch model") })
+	h.tt.Key(0, ui.KeyEnter)
+	h.until("the model picker", func() bool { return h.a.pickerOpen && !h.a.cmdkOpen })
+	h.tt.Advance(time.Second)
+	if !readOf(t, h, ui.RoleButton, "Submit").Focused {
+		t.Fatal("Submit lost the focus to the model picker")
+	}
+	for _, k := range []ui.Key{ui.KeyEnter, ui.KeySpace} {
+		h.tt.Key(0, k)
+		stillAsked(t, h, th, fmt.Sprintf("key %v on Submit under the model picker", k))
+	}
+	h.tt.Key(0, ui.KeyEscape)
+	h.until("the picker closed", func() bool { return !h.a.pickerOpen })
+	h.tt.Advance(time.Second)
+	h.tt.Key(0, ui.KeyEnter)
 	if got := answered(t, h, th, "Answered"); !reflect.DeepEqual(got, api.Answers{Answers: []api.Answer{picks("Teal")}}) {
 		t.Errorf("sent %+v, want Teal", got)
+	}
+}
+
+// Tab goes through a card's options, then its Other field, then Submit.
+func TestTabGoesThroughTheOptionsToSubmit(t *testing.T) {
+	h, _ := lonely(t)
+	h.click("Teal")
+	h.tt.Frame()
+	h.click("Red")
+	h.tt.Frame()
+	var order []string
+	for range 3 {
+		h.tt.Key(0, ui.KeyTab)
+		h.tt.Frame()
+		for _, x := range h.tt.AccessAll() {
+			if x.Focused {
+				order = append(order, x.Name)
+			}
+		}
+	}
+	if len(order) != 3 || !strings.Contains(order[0], "Teal") || order[1] != "Other answer to Color" || !strings.HasPrefix(order[2], "Submit") {
+		t.Errorf("Tab from Red went through %q; want Teal, Other, Submit", order)
 	}
 }
 
@@ -575,7 +740,7 @@ func TestAnsweredQuestionsShowTheirAnswerInASCII(t *testing.T) {
 	h.tt.Frame()
 	h.tt.Type("mine \u202eevil")
 	h.tt.Frame()
-	h.click("Answer")
+	h.click("Submit")
 	answered(t, h, th, "Answered")
 	if want := `Keep\u{200B}, "mine \u{202E}evil"`; !h.tt.HasText(want) || !h.tt.HasText(outsideASCII) {
 		t.Errorf("the answered card shows %q, want %q and the flag", h.tt.Texts(), want)
@@ -669,6 +834,8 @@ func TestQuestionKeysSendEachOfTwoLabelsThatEscapeAlike(t *testing.T) {
 		}
 		key := ts[at+1]
 		h.tt.Key(ui.Cmd, pickKeys[key[len(key)-1]-'1'])
+		h.tt.Frame()
+		h.tt.Key(ui.Cmd, ui.KeyEnter)
 		got := answered(t, h, th, "Answered")
 		if want := (api.Answers{Answers: []api.Answer{{Picked: []string{label}}}}); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s, shown beside %q, sent %+v, want %+v", key, reads, got, want)
@@ -806,7 +973,7 @@ func TestKeysAnswerOnlyTheCardThatShowsThem(t *testing.T) {
 			t.Run(order+", "+k.name, func(t *testing.T) {
 				h, approval, question := bothAsk(t, questionFirst)
 				onApproval := chipAfter(h, "Allow once", "⌘⏎") || chipAfter(h, "Deny", "⇧⌘D")
-				onQuestions := chipAfter(h, "Answer", "⌘⏎") || chipAfter(h, "Dismiss", "⇧⌘D") || h.tt.HasText("⌘1")
+				onQuestions := chipAfter(h, "Submit", "⌘⏎") || chipAfter(h, "Dismiss", "⇧⌘D") || h.tt.HasText("⌘1")
 				if onApproval == onQuestions || onQuestions == questionFirst {
 					t.Errorf("want the keys shown on the last card only, the %s; the window shows %q", last, h.tt.Texts())
 				}
