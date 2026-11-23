@@ -26,6 +26,8 @@ var askTimeout = 30 * time.Minute
 
 var errNoVault = errors.New("this engine keeps no credentials")
 
+var errNotHere = errors.New("this turn does not run on this engine, or the same call is asking already")
+
 type askKey struct {
 	run   api.ID
 	dedup string
@@ -72,9 +74,22 @@ func (h *Host) AskCredentials(ctx context.Context, a api.Ask) (api.Asked, error)
 	}
 	h.mu.Lock()
 	lr := h.runs[key.run]
-	if lr == nil || lr.agent == nil || h.asks[key] != nil {
+	h.mu.Unlock()
+	if lr == nil {
+		return api.Asked{}, errNotHere
+	}
+	// A quick agent asks while its start is still being recorded.
+	select {
+	case <-lr.started:
+	case <-lr.ctx.Done():
+		return api.Asked{}, errNotHere
+	case <-ctx.Done():
+		return api.Asked{}, ctx.Err()
+	}
+	h.mu.Lock()
+	if lr.agent == nil || h.asks[key] != nil {
 		h.mu.Unlock()
-		return api.Asked{}, errors.New("this turn does not run on this engine, or the same call is asking already")
+		return api.Asked{}, errNotHere
 	}
 	answered := make(chan json.RawMessage, 1)
 	h.asks[key] = answered
