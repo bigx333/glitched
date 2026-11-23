@@ -144,7 +144,13 @@ func (a *app) sidebar(c *ui.Context) {
 	ui.Row(c).Height(max(bar.Height, headerHeight)).Padding(0, 10, 0, max(bar.Left, 12)).
 		AlignItems(ui.Center).Gap(6).DragWindow().Children(func() {
 		ui.Spacer(c)
-		if a.iconButton(c, "hide-sidebar", icPanelLeft, "Hide sidebar  ⌘B", false).Clicked() {
+		hide := a.iconButton(c, "hide-sidebar", icPanelLeft, "Hide sidebar  ⌘B", false)
+		// As the sidebar slides, the button goes before it would pass under
+		// the window's buttons, and comes back once it has passed them.
+		if a.sidebarWidth*a.sidebarOpen-10-headerIconW < bar.Left {
+			hide.Invisible()
+		}
+		if hide.Clicked() {
 			a.toggleSidebar(false)
 		}
 	})
