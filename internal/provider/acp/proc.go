@@ -445,7 +445,7 @@ func (p *proc) readStdout(stdout *os.File, wire io.Writer) *io.PipeReader {
 	r, w := io.Pipe()
 	p.release = sync.OnceFunc(func() {
 		r.CloseWithError(io.ErrClosedPipe)
-		stdout.SetReadDeadline(time.Now())
+		stdout.Close()
 	})
 	go func() {
 		<-p.reaped

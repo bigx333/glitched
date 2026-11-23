@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -350,5 +352,39 @@ func TestARunStartedOtherwiseGetsItsOwnAgent(t *testing.T) {
 				t.Fatalf("reused PID %d after changing %s", second, change)
 			}
 		})
+	}
+}
+
+// Close has the bridge from stdout let go of a line the SDK stopped
+// reading partway.
+func TestCloseReleasesAStalledStdoutReader(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	p := &proc{mark: "test-" + api.NewID().String(), stdin: w, reaped: make(chan struct{}), read: make(chan struct{})}
+	sdk := p.readStdout(r, io.Discard)
+	defer sdk.Close()
+	reap := sync.OnceFunc(func() { close(p.reaped) })
+	defer reap()
+	if _, err := io.WriteString(w, "{}\n"); err != nil {
+		t.Fatal(err)
+	}
+	var first [1]byte
+	if _, err := io.ReadFull(sdk, first[:]); err != nil {
+		t.Fatal(err)
+	}
+	reap()
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := p.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-p.read:
+	default:
+		t.Fatal("Close returned with the bridge still holding a line")
 	}
 }
