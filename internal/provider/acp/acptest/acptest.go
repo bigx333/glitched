@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"glitched/internal/mcp/mcptest"
+	"glitched/internal/skills/skillstest"
 )
 
 const (
@@ -446,6 +448,7 @@ var allOptions = []acp.PermissionOption{
 
 func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResponse, error) {
 	f.record("session/prompt", p)
+	f.record("skills", skillsSeen(p))
 	sid := p.SessionId
 	end := acp.PromptResponse{StopReason: acp.StopReasonEndTurn}
 	switch {
@@ -698,6 +701,27 @@ func (f *fake) question(ctx context.Context, sid acp.SessionId) (acp.PromptRespo
 	f.send(ctx, sid, acp.UpdateToolCall(call, acp.WithUpdateStatus(acp.ToolCallStatusCompleted)))
 	f.send(ctx, sid, acp.UpdateAgentMessageText("Answer: "+string(b)))
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+}
+
+// skillsSeen is the skills an agent given prompt finds, as Antigravity
+// does: its own, the user's and the workspace's, by name, and those a
+// prompt lists as briefed:<name>, read from the SKILL.md it names.
+func skillsSeen(p acp.PromptRequest) []string {
+	home, _ := os.UserHomeDir()
+	seen := skillstest.Seen("", filepath.Join(home, ".gemini", "config", "skills"), filepath.Join(home, ".gemini", "skills"), filepath.Join(cwdOf(p), ".agents", "skills"))
+	for _, b := range p.Prompt {
+		if b.Text == nil {
+			continue
+		}
+		for line := range strings.Lines(b.Text.Text) {
+			_, path, ok := strings.Cut(strings.TrimSpace(line), "(SKILL.md: ")
+			if path, cut := strings.CutSuffix(path, ")"); ok && cut {
+				seen = append(seen, skillstest.Seen("briefed:", filepath.Dir(filepath.Dir(path)))...)
+			}
+		}
+	}
+	slices.Sort(seen)
+	return slices.Compact(seen)
 }
 
 // cwdOf is where the fake's session runs, from its first prompt's log.

@@ -166,7 +166,8 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	}
 	// What an agent and its session are started with is fixed for their
 	// life: the MCP servers, with the access glitched mcp acts at, go to
-	// session/new and can't change after.
+	// session/new and can't change after, and its first prompt lists the
+	// skills.
 	key := launchKey(prog, spec)
 	keep := func(p *proc) { a.parked().Park(spec.Thread, key, p) }
 	p, ok, err := a.parked().Take(ctx, spec.Thread, key)
@@ -250,9 +251,17 @@ func launchKey(prog provider.Program, spec provider.SessionSpec) string {
 	servers, _ := json.Marshal(struct {
 		Program provider.Program
 		MCP     []provider.MCPServer
-	}{prog, spec.MCP})
+		Skills  string
+	}{prog, spec.MCP, spec.Skills.Root})
 	sum := sha256.Sum256(servers)
 	return strings.Join([]string{prog.Path, spec.Workspace, strconv.Itoa(int(spec.Access)), hex.EncodeToString(sum[:])}, "\x00")
+}
+
+// SkillDelivery is how the agent gets Glitched's skills: listed in the
+// first prompt of each agent Glitched starts, whose SKILL.md files it
+// reads itself.
+func (a *Adapter) SkillDelivery() string {
+	return a.Profile.Name + ": listed in the first message each time Glitched starts it"
 }
 
 // Reconcile stops what is left of the run's thread: nothing can reattach
