@@ -259,6 +259,7 @@ func (h *Host) ask(ctx context.Context, id string, args json.RawMessage) (any, e
 		timeout = min(time.Duration(q.Timeout*float64(time.Second)), AskTimeout)
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	type answer struct {
 		a   AskAnswer
 		err error
@@ -268,7 +269,6 @@ func (h *Host) ask(ctx context.Context, id string, args json.RawMessage) (any, e
 	// this one to end where it runs, which may be a while after.
 	go func() {
 		defer h.asking.Delete(id)
-		defer cancel()
 		a, err := h.opts.Ask(ctx, id, q)
 		done <- answer{a, err}
 	}()
