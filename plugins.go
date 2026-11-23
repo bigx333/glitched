@@ -97,6 +97,9 @@ func (a *app) openPlugins(dir string) {
 			clear(a.pluginAssets)
 			forgetPluginTerminals()
 		},
+		Run: func(ctx context.Context, id string, allowed []string, args json.RawMessage) (any, error) {
+			return runPluginProgram(ctx, id, allowed, args)
+		},
 		Ask: func(ctx context.Context, id string, q plugins.AskRequest) (plugins.AskAnswer, error) {
 			return a.askModel(ctx, dir, id, q)
 		},
@@ -726,6 +729,10 @@ func pluginWorkspace(ws string) (string, error) {
 	}
 	return filepath.Clean(ws), nil
 }
+
+// runPluginProgram is what glitched.run runs in the window. A test plays
+// gh with it, so that no test reaches the user's own.
+var runPluginProgram = plugins.RunProgram
 
 // askModel is glitched.models.ask: this machine's engine asks the
 // provider, by default that of the model new threads take, from the
