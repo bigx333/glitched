@@ -43,6 +43,7 @@ var partTitles = map[string]string{
 	"thread.panel.diff":         "Diff panel",
 	"approval.card":             "Approval card",
 	"question.card":             "Question card",
+	"credentials.card":          "Credentials card",
 	"composer":                  "Composer",
 	"timeline.message":          "Timeline rows",
 	"message.toolbar":           "Message toolbar",

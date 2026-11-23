@@ -281,7 +281,7 @@ func TestNoPluginAnswersForTheUser(t *testing.T) {
 			}
 		}
 	}
-	for _, card := range []string{"approval.card", "question.card"} {
+	for _, card := range []string{"approval.card", "question.card", "credentials.card"} {
 		if widget.Locked[card] == "" {
 			t.Errorf("%s isn't locked", card)
 		}

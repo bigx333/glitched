@@ -427,7 +427,7 @@ func pauseAsked(es []entry, asks, marked []int) []int {
 				continue
 			}
 			if e.paused == "" {
-				e.paused = pausedFor[r.Kind == api.KindQuestion]
+				e.paused = pausedFor[r.Kind != api.KindApproval]
 				marked = append(marked, i)
 			}
 			break
@@ -470,8 +470,8 @@ func sameRows(x, y []entry) bool {
 	})
 }
 
-// pausedFor is what paused work says, by whether its run waits on
-// questions.
+// pausedFor is what paused work says, by whether its run waits on the
+// user's answer, to questions or for credentials, rather than an approval.
 var pausedFor = map[bool]string{false: "Paused for approval", true: "Paused for your answer"}
 
 // markPaused marks each run's last work entry paused while a request of
@@ -482,7 +482,7 @@ func markPaused(es []entry) {
 		e := &es[i]
 		switch {
 		case e.request != nil && e.request.State == api.RequestPending:
-			asking[e.request.Run] = pausedFor[e.request.Kind == api.KindQuestion]
+			asking[e.request.Run] = pausedFor[e.request.Kind != api.KindApproval]
 		case e.kind == entryWork && asking[e.run] != "":
 			e.paused = asking[e.run]
 			delete(asking, e.run)

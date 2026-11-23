@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strconv"
 	"sync"
@@ -72,6 +73,26 @@ type Adapter struct {
 	engine api.Endpoint
 	spawns map[string][]Child
 	made   map[api.ID]error // each kid's create, by its thread, once answered
+	asker  Asker
+	asks   map[string]api.Credentials
+}
+
+// An Asker opens a credentials request for an agent and waits for its
+// answer, as glitched mcp's request_credentials does.
+type Asker interface {
+	AskCredentials(ctx context.Context, a api.Ask) (api.Asked, error)
+}
+
+// Asks has every turn whose message is text ask ep for c, then say how it
+// went and echo each value it got from its file, as an agent that uses the
+// credential would; and end.
+func (a *Adapter) Asks(ep Asker, text string, c api.Credentials) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.asks == nil {
+		a.asks = map[string]api.Credentials{}
+	}
+	a.asker, a.asks[text] = ep, c
 }
 
 // A Child is an agent a turn starts on the engine, as a call to glitched
@@ -191,10 +212,11 @@ type Agent struct {
 	asking    *provider.RequestOpened
 	answered  map[string]bool
 	resurface bool
-	tokens    int64   // what the turn says it used
-	kids      []Child // still to start
-	spawned   int     // kids started or refused
-	spawning  bool    // a kid's create is in flight
+	tokens    int64            // what the turn says it used
+	kids      []Child          // still to start
+	spawned   int              // kids started or refused
+	spawning  bool             // a kid's create is in flight
+	creds     *api.Credentials // still to ask for
 }
 
 func (g *Agent) Do(ctx context.Context, act provider.Action) error {
@@ -216,6 +238,9 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 		g.a.mu.Lock()
 		if kids, ok := g.a.spawns[act.Text]; ok {
 			g.script, g.tokens, g.kids = nil, 0, slices.Clone(kids)
+		}
+		if c, ok := g.a.asks[act.Text]; ok {
+			g.script, g.tokens, g.creds = nil, 0, &c
 		}
 		g.a.mu.Unlock()
 	case provider.Steer:
@@ -282,6 +307,8 @@ func (g *Agent) step() (provider.Event, error) {
 		return nil, nil
 	case len(g.kids) > 0:
 		return g.spawn(), nil
+	case g.creds != nil:
+		return g.ask(), nil
 	case len(g.script) == 0:
 		g.phase = ended
 		return provider.TurnEnded{Outcome: api.OutcomeCompleted, Tokens: g.tokens}, nil
@@ -292,6 +319,39 @@ func (g *Agent) step() (provider.Event, error) {
 		g.asking = &r
 	}
 	return e, nil
+}
+
+// ask sends the turn's credentials request and returns its step. The
+// call runs apart from the agent, as an MCP server's does, and the step
+// ends once the user answers it.
+func (g *Agent) ask() provider.Event {
+	c := *g.creds
+	g.creds, g.spawning = nil, true
+	a := api.Ask{Thread: g.spec.Thread, Access: g.spec.Access, Call: derive(g.run, "ask", 0).String(), Credentials: c}
+	g.a.mu.Lock()
+	ep := g.a.asker
+	g.a.mu.Unlock()
+	const item = "ask-credentials"
+	go func() {
+		asked, err := ep.AskCredentials(context.Background(), a)
+		w := provider.Work{Item: item, Kind: "tool", Title: "Asked for credentials", Status: api.WorkCompleted, Output: asked.Status}
+		if err != nil {
+			w.Status, w.Output = api.WorkFailed, err.Error()
+		}
+		out := []provider.Event{w}
+		for _, name := range asked.Names {
+			b, _ := os.ReadFile(asked.Files[name])
+			out = append(out, provider.TextDelta{Text: name + " is " + string(b) + ". "})
+		}
+		g.mu.Lock()
+		if g.phase == running {
+			g.out = append(g.out, out...)
+		}
+		g.spawning = false
+		g.mu.Unlock()
+		g.signal()
+	}()
+	return provider.Work{Item: item, Kind: "tool", Title: "Asked for credentials", Status: api.WorkStarted}
 }
 
 // spawn sends the next kid's create and returns its step. The create runs

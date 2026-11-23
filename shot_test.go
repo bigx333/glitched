@@ -25,7 +25,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)
+// SCENE=empty|running|approval|credentials (CRED=typed|provided|declined)|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)
 // for the engines' threads (none started without one; question takes
 // ASK=<request body>, PICK=<label>,…, OTHER=<text> typed into the Other
 // field named OTHERIN, and QUESTION=answer|dismiss|stop;
@@ -329,6 +329,22 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		}
 	case "approval":
 		h, _ = asking(t, runTests)
+	case "credentials":
+		// A credentials card waiting; CRED=typed has a value typed, masked,
+		// and provided or declined answers it.
+		var th thread
+		h, th, _ = credentialing(t, stripeKey)
+		switch os.Getenv("CRED") {
+		case "typed":
+			typeInto(t, h, "Stripe test key", probeValue)
+		case "provided":
+			typeInto(t, h, "Stripe test key", probeValue)
+			h.click("Provide")
+			finished(t, h, th)
+		case "declined":
+			h.click("Decline")
+			finished(t, h, th)
+		}
 	case "asked":
 		// An approval whose body is ASK, as a provider's adapter gives it.
 		h, _ = asking(t, []provider.Event{provider.RequestOpened{ID: "ask-1", Kind: "approval", Body: json.RawMessage(os.Getenv("ASK"))}})
