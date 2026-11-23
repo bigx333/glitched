@@ -68,7 +68,7 @@ func TestCLIUpdatesShot(t *testing.T) {
 			h.a.router.Push("/")
 			h.tt.Advance(time.Second)
 			if state != "current" {
-				h.click("Update Claude")
+				h.click("Agent CLI updates")
 				if state == "updating" || state == "failed" {
 					h.tt.Advance(time.Second)
 					h.click("Update")
@@ -76,7 +76,7 @@ func TestCLIUpdatesShot(t *testing.T) {
 			}
 			shoot("sidebar-" + theme)
 			if state != "current" {
-				h.click("Update Claude")
+				h.click("Agent CLI updates")
 			}
 			openProviders(h, "claude")
 			shoot("providers-" + theme)
