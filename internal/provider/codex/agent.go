@@ -354,10 +354,10 @@ func (g *Agent) notify(m message) {
 		}
 		// Codex sends its last reading again, as after a rate-limit
 		// update or a response cut short, with whatever was spent since:
-		// a request's own reading is new, is all that was spent, and
-		// holds its input. A request too big for the window has Codex
+		// a request's own reading is new, or of another window, is all
+		// that was spent, and holds its input. A request too big for the window has Codex
 		// fill it, emptying every count but the totals.
-		fresh := u.Last.Input > 0 && u.Last != prev.Last && u.Total.Total-prev.Total.Total == u.Last.Total
+		fresh := u.Last.Input > 0 && (u.Last != prev.Last || u.Window != prev.Window) && u.Total.Total-prev.Total.Total == u.Last.Total
 		filled := u.Window > 0 && u.Total == tokens{Total: u.Window} && u.Last == tokens{Total: u.Last.Total}
 		switch {
 		case !live:
