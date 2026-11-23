@@ -29,8 +29,11 @@ const verbatimFirstW = 240
 func (a *app) verbatim(c *ui.Context, key any, s string, size float32, col ui.Color) []textLine {
 	box := ui.Box(c.Key(verbatimKey{key})).MinWidth(0).Selectable()
 	var text ui.Element
-	cell, line := c.MeasureText(0, ui.Span{Text: strings.Repeat("0", 64), Font: "monospace", Size: size})
+	cell, _ := c.MeasureText(0, ui.Span{Text: strings.Repeat("0", 64), Font: "monospace", Size: size})
 	mark, _ := c.MeasureText(0, ui.Span{Text: string(wrapMark), Font: "monospace", Size: size})
+	// A mark the font lacks draws in a taller one, as ↩ does on macOS, and
+	// a fixed line height only grows a line to fit it.
+	_, line := c.MeasureText(0, ui.Span{Text: "0…" + string(wrapMark) + string(spaceMark), Font: "monospace", Size: size})
 	w := box.Bounds().W
 	if w <= 0 {
 		// Not laid out yet: the next frame wraps it to its width.
