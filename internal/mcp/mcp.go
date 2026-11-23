@@ -16,6 +16,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
@@ -71,6 +72,9 @@ func (l Launcher) For(thread api.ID, access api.Access) provider.MCPServer {
 		},
 		Instructions: instructions,
 		Trusted:      true,
+		// request_credentials waits for the user up to the engine's 30
+		// minutes, past which the engine answers it itself.
+		ToolTimeout: 35 * time.Minute,
 	}
 }
 
