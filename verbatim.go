@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -42,14 +43,16 @@ func (a *app) verbatim(c *ui.Context, key any, s string, size float32, col ui.Co
 	spans := verbatimSpans(s, cols, ui.Span{Font: "monospace", Size: size, Color: col},
 		ui.Span{Font: "monospace", Size: size, Color: palette.muted})
 	// A mark or a cut's … the font lacks draws in a taller one, as ↩ does
-	// on macOS, and a fixed line height only grows the line holding it: a
-	// text that draws one takes a height that fits them all, and one that
-	// draws none keeps its font's.
-	for _, sp := range spans {
-		if strings.ContainsAny(sp.Text, "…"+string(wrapMark)+string(spaceMark)) {
-			_, line = c.MeasureText(0, ui.Span{Text: "0…" + string(wrapMark) + string(spaceMark), Font: "monospace", Size: size})
-			break
+	// on macOS, and a fixed line height only grows the line holding it:
+	// the lines are as tall as the font's with the marks the text draws.
+	var marks string
+	for _, r := range "…" + string(wrapMark) + string(spaceMark) {
+		if slices.ContainsFunc(spans, func(sp ui.Span) bool { return strings.ContainsRune(sp.Text, r) }) {
+			marks += string(r)
 		}
+	}
+	if marks != "" {
+		_, line = c.MeasureText(0, ui.Span{Text: "0" + marks, Font: "monospace", Size: size})
 	}
 	box.CopyData(func(parts []ui.SelectedText) transfer.Data {
 		var out []string
