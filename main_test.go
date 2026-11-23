@@ -1439,7 +1439,7 @@ func TestInboxShowsAThreadThatTookAnothersPlace(t *testing.T) {
 	e := a.backend.Envs()[0]
 	add := func(title string) api.ID {
 		t.Helper()
-		id := a.backend.Create(e, "/work/test", title, fakeModel, api.AccessFull)
+		id := a.backend.Create(e, "/work/test", title, fakeModel, api.AccessFull, nil)
 		if th := e.Threads[id]; th == nil || len(th.Pending) != 1 || th.Pending[0].Err == nil {
 			t.Fatalf("offline, the create should fail here at once: %+v", th)
 		}

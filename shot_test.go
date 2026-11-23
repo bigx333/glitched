@@ -438,7 +438,7 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		h.a.select_(th)
 		d.Close()
 		h.until("the engine gone", func() bool { return h.local().Status != client.Status(client.Online{}) })
-		h.a.deleteTree(th)
+		h.a.deleteTree(th, false)
 		h.until("the failure", func() bool { return len(th.Pending) == 1 && th.Pending[0].Err != nil })
 	case "checks":
 		h, _ = checked(t)

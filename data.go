@@ -46,6 +46,10 @@ func (t thread) id() api.ID { return t.View.ID }
 // terminal, the files and the diffs are.
 func (t thread) local() bool { return t.env == nil || t.env.Kind == client.Local }
 
+// project is the folder of the project the thread is under: the one a
+// thread in a worktree was started from, else where it runs.
+func (t thread) project() string { return cmp.Or(t.View.Project, t.View.Workspace) }
+
 // A project is a workspace on one machine: the threads the sidebar shows
 // under its tile.
 type project struct {
@@ -553,7 +557,7 @@ func (a *app) gather() []*project {
 	}
 	for _, t := range a.recent() {
 		if !deleting(t) {
-			p := at(t.env, t.View.Workspace)
+			p := at(t.env, t.project())
 			p.threads = append(p.threads, t)
 		}
 	}
@@ -662,7 +666,7 @@ func (a *app) current() thread {
 func (a *app) duplicate(e *client.Env) bool { return a.backend.ShownBy(e) != e }
 
 func (a *app) projectOf(t thread) *project {
-	k := keyOf(t.env, t.View.Workspace)
+	k := keyOf(t.env, t.project())
 	for _, p := range a.projects {
 		if p.key == k {
 			return p

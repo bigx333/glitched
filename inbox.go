@@ -148,7 +148,7 @@ func (a *app) sortThreads() {
 		if c == catSnoozed && !d.Until.IsZero() && (s.snoozed.IsZero() || d.Until.Before(s.snoozed)) {
 			s.snoozed = d.Until
 		}
-		p := shown[envProject{t.env, keyOf(t.env, t.View.Workspace)}]
+		p := shown[envProject{t.env, keyOf(t.env, t.project())}]
 		// A child shows under its parent, but for one lifted into
 		// Working.
 		if p == nil || a.nested(t) && !a.lifted(t) {

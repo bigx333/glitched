@@ -669,7 +669,7 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		if r := []rune(title); len(r) > 48 {
 			title = string(r[:48]) + "…"
 		}
-		tid := a.backend.Create(envs[0], ws, title, a.modelRef(), accessOf[a.access])
+		tid := a.backend.Create(envs[0], ws, title, a.modelRef(), accessOf[a.access], nil)
 		if tid.IsZero() {
 			return nil, errors.New("this machine's engine isn't reached")
 		}

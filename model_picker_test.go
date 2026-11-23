@@ -198,7 +198,7 @@ func TestTheModelPickersRowsKeepTheirWays(t *testing.T) {
 func TestAModelPickersCopyChoosesOnlyWhatThePickerOffers(t *testing.T) {
 	h := start(t, tempDir(t))
 	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
-	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk)
+	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk, nil)
 	h.thread("Mine")
 	h.a.selected = id
 	h.tt.Frame()

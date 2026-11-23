@@ -226,7 +226,7 @@ func act(m *Manager, e *Env, top api.ID, action string) {
 	if action == "settle" {
 		m.SetDisposition(e, top, api.Disposition{State: api.Settled})
 	} else {
-		m.Delete(e, top)
+		m.Delete(e, top, false)
 	}
 }
 

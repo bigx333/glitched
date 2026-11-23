@@ -49,15 +49,16 @@ var errNoEngine = errors.New("client: not connected to the engine")
 
 // Create adds a thread, shown at once with the given fields until the
 // engine's view of it arrives, and returns its ID. It returns the zero ID
-// on a duplicate, which shows no threads.
-func (m *Manager) Create(e *Env, workspace, title string, model api.ModelRef, access api.Access) api.ID {
+// on a duplicate, which shows no threads. With a worktree, the thread
+// shows under workspace's project until the engine has made it.
+func (m *Manager) Create(e *Env, workspace, title string, model api.ModelRef, access api.Access, worktree *api.NewWorktree) api.ID {
 	if m.ShownBy(e) != e {
 		return api.ID{}
 	}
 	id := api.NewID()
 	e.Threads[id] = &Thread{View: api.Thread{ID: id, Workspace: workspace, Title: title, Model: model, Access: access, UpdatedAt: time.Now()}}
 	e.Membership++
-	m.submit(e, id, api.ThreadCreate{Workspace: workspace, Title: title, Model: model, Access: access})
+	m.submit(e, id, api.ThreadCreate{Workspace: workspace, Title: title, Model: model, Access: access, Worktree: worktree})
 	return id
 }
 
@@ -152,8 +153,8 @@ func replaces(p Pending, body api.Intent) bool {
 }
 
 // Delete deletes the thread. The engine ends its run with it.
-func (m *Manager) Delete(e *Env, thread api.ID) api.ID {
-	return m.submit(e, thread, api.ThreadDelete{})
+func (m *Manager) Delete(e *Env, thread api.ID, removeWorktree bool) api.ID {
+	return m.submit(e, thread, api.ThreadDelete{RemoveWorktree: removeWorktree})
 }
 
 // Retry sends a failed command again under its ID, so one that did land

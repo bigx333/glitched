@@ -185,7 +185,7 @@ func TestAFailedDeleteKeepsTheThreadShown(t *testing.T) {
 	h.a.select_(th)
 	d.Close()
 	h.until("the engine gone", func() bool { return h.local().Status != client.Status(client.Online{}) })
-	h.a.deleteTree(th)
+	h.a.deleteTree(th, false)
 	h.until("the failure", func() bool { return len(th.Pending) == 1 && th.Pending[0].Err != nil })
 	h.tt.Advance(time.Second)
 	if h.a.current().id() != th.id() || !h.tt.HasText("Couldn't delete the thread: client: not connected to the engine") {

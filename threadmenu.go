@@ -98,9 +98,12 @@ func (a *app) settle(c *ui.Context, t thread, from category) {
 func (a *app) askDelete(t thread) {
 	if a.settings.confirmDelete {
 		a.deleting, a.deleteOpen = t, true
+		if a.ownsWorktree(t) {
+			a.deleteChanges = changesIn(t)
+		}
 		return
 	}
-	a.deleteTree(t)
+	a.deleteTree(t, false)
 }
 
 // deleteAlert asks before a thread is deleted, when the settings say to.
@@ -124,11 +127,34 @@ func (a *app) deleteAlert(c *ui.Context) {
 			body = fmt.Sprintf("%d of them %s still working and will be stopped. ", n, isAre(n)) + body
 		}
 	}
-	switch a.alert(c, &a.deleteOpen, head, body, "Cancel", "Delete") {
-	case 1:
-		a.deleteTree(a.deleting)
+	// The buttons after Cancel, and whether each removes the worktree. A
+	// thread's worktree stays unless the user says otherwise, and a
+	// button says when what is in it goes too.
+	buttons, removes := []string{"Delete"}, []bool{false}
+	if tree := append(a.below(a.deleting), node{a.deleting, 0}); a.ownsWorktree(a.deleting) {
+		body += "\n\nIts worktree on " + a.deleting.View.Branch + " stays unless you delete it too. The branch stays while it has commits of its own."
+		buttons = []string{"Keep worktree"}
+		if working(tree) > 0 {
+			body += " To delete the worktree, stop the work first."
+		} else {
+			remove := "Delete worktree and changes"
+			body += " Deleting it deletes everything in it, files git ignores included."
+			switch n := a.deleteChanges; {
+			case n == 0:
+				remove = "Delete worktree"
+			case n < 0:
+				body += " What is in it can't be counted."
+			default:
+				body += " It has " + plural(n, "uncommitted change") + "."
+			}
+			buttons, removes = []string{remove, "Keep worktree"}, []bool{true, false}
+		}
+	}
+	switch i := a.alert(c, &a.deleteOpen, head, body, append([]string{"Cancel"}, buttons...)...); {
+	case i > 0:
+		a.deleteTree(a.deleting, removes[i-1])
 		a.deleting = thread{}
-	case 0, ui.AlertDismissed:
+	case i == 0, i == ui.AlertDismissed:
 		a.deleting = thread{}
 	}
 }

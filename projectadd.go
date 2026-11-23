@@ -105,7 +105,11 @@ func (a *app) addProject() {
 			if e := a.localEnv(); dir != "" && e != nil {
 				dir = filepath.Clean(dir)
 				a.recordProject(dir)
+				w, onDraft := a.worktree, a.selected.IsZero()
 				a.startIn(draft{e, dir})
+				if onDraft {
+					a.worktree.picked, a.worktree.on = w.picked, w.on
+				}
 				a.draftArea.Focus()
 			}
 		})

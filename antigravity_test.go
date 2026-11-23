@@ -127,7 +127,7 @@ func TestAnAntigravityModelSharingAClaudeID(t *testing.T) {
 	if got := h.a.modelRef(); got.Provider != "antigravity" || got.Model != "claude-sonnet-4-6" {
 		t.Fatalf("picking Antigravity's Sonnet made %+v", got)
 	}
-	id := h.a.backend.Create(h.local(), t.TempDir(), "t", h.a.modelRef(), api.AccessAsk)
+	id := h.a.backend.Create(h.local(), t.TempDir(), "t", h.a.modelRef(), api.AccessAsk, nil)
 	h.until("the thread", func() bool { _, ok := h.a.find(id); return ok })
 	if th, _ := h.a.find(id); th.View.Model.Provider != "antigravity" {
 		t.Fatalf("the thread runs on %q", th.View.Model.Provider)

@@ -175,7 +175,10 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 		// The title, and a child's way back up before it.
 		a.heading(c, t, narrow)
 		if !narrow {
-			pill(c, filepath.Base(t.View.Workspace)).Shrink(0)
+			pill(c, filepath.Base(t.project())).Shrink(0)
+			if t.View.Branch != "" {
+				pill(c, t.View.Branch).Shrink(0)
+			}
 			if len(a.backend.Envs()) > 1 && t.env != nil {
 				a.machinePill(c, t.env)
 			}
@@ -1257,7 +1260,7 @@ func (a *app) composerInput(c *ui.Context, t thread, rs rows, fullW, frameW floa
 // of the plugin's menu. A plugin's that fails gives way to Glitched's.
 func (a *app) workspaceControl(c *ui.Context, t thread) {
 	box := func() ui.Element { return ui.Row(c).Key("workspace-plugin").AlignItems(ui.Center) }
-	w := composerWorkspace{Workspace: filepath.Base(t.View.Workspace), Draft: t.id().IsZero()}
+	w := composerWorkspace{Workspace: filepath.Base(t.project()), Worktree: a.worktreeLabel(t), Draft: t.id().IsZero()}
 	if len(a.backend.Envs()) > 1 && t.env != nil {
 		w.Machine = t.env.Name
 	}
@@ -1270,7 +1273,7 @@ func (a *app) workspaceControl(c *ui.Context, t thread) {
 	}
 	// The key is what the button says, with the workspace's whole path, so
 	// that a drawing of another workspace's never stands for this one's.
-	key := composerKey(t) + "\x00" + t.View.Workspace + "\x00" + w.Machine
+	key := composerKey(t) + "\x00" + t.View.Workspace + "\x00" + w.Machine + "\x00" + w.Worktree
 	a.pluginComponent(c, "composer.workspace", &t, componentCopy{key: key, box: box, context: ctx, native: func(*widget.Node) { a.workspaceButton(c, t) }})
 }
 
@@ -1281,6 +1284,9 @@ type composerWorkspace struct {
 	// while there is more than one.
 	Workspace string `json:"workspace"`
 	Machine   string `json:"machine,omitempty"`
+	// Worktree is the branch of a thread in a worktree of its own, or
+	// the worktree a draft asks for; "" in its folder.
+	Worktree string `json:"worktree,omitempty"`
 	// Draft is whether the composer is a new thread's, whose workspace the
 	// user chooses from the menu, which menu ends.
 	Draft bool `json:"draft"`
@@ -1293,9 +1299,13 @@ func (a *app) workspaceButton(c *ui.Context, t thread) {
 	several := len(a.backend.Envs()) > 1
 	b := ghost(c, "workspace", false).Padding(3, 6).Label("Workspace").Children(func() {
 		ui.Icon(c, icFolder).FontSize(12)
-		ui.Text(c, filepath.Base(t.View.Workspace)).FontSize(11.5)
+		ui.Text(c, filepath.Base(t.project())).FontSize(11.5)
 		if several && t.env != nil {
 			ui.Text(c, "on "+t.env.Name).FontSize(11.5).TextColor(palette.faint)
+		}
+		if w := a.worktreeLabel(t); w != "" {
+			ui.Icon(c, icBranch).FontSize(12)
+			ui.Text(c, w).FontSize(11.5).TextColor(palette.faint)
 		}
 		if t.id().IsZero() {
 			ui.Icon(c, icChevronD).FontSize(10)
@@ -1325,10 +1335,11 @@ func (a *app) workspaceMenu(m *ui.Menu, t thread) {
 				label += " on " + e.Name
 			}
 			if m.Item(label).Checked(t.env == e && t.View.Workspace == d.workspace).Chosen() {
-				a.fresh = d
+				a.fresh, a.repos = d, nil
 			}
 		}
 	}
+	a.worktreeItems(m, t)
 	a.workspaceItems(m)
 }
 
@@ -1543,9 +1554,10 @@ func (a *app) sendText(t thread, text, about string) bool {
 	id := t.id()
 	if id.IsZero() {
 		title := threadTitle(text, about)
-		if id = a.backend.Create(t.env, t.View.Workspace, title, a.modelRef(), accessOf[a.access]); id.IsZero() {
+		if id = a.backend.Create(t.env, t.View.Workspace, title, a.modelRef(), accessOf[a.access], a.newWorktree(t)); id.IsZero() {
 			return false
 		}
+		a.worktree, a.repos = worktreeChoice{}, nil
 		if hero(t) {
 			a.sentFromHero(id)
 		}

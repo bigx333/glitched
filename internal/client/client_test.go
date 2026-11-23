@@ -153,7 +153,7 @@ func TestStartEmbedsAnEngineWhenNoneAnswers(t *testing.T) {
 		t.Fatalf("the first env is %v, want the local one", env.Kind)
 	}
 	online(t, g, env)
-	id := m.Create(env, "/work", "open", fakeModel, api.AccessAsk)
+	id := m.Create(env, "/work", "open", fakeModel, api.AccessAsk, nil)
 	m.OpenThread(env, id)
 	g.until(t, "the open thread's transcript", func() bool { return env.Threads[id].Transcript.Cursor.Seq > 0 })
 
@@ -226,7 +226,7 @@ func TestStartAttachesToTheEngineThatAnswers(t *testing.T) {
 		t.Fatalf("attached to host %s, want the running engine %s", env.ID, info.ID)
 	}
 
-	id := m.Create(env, "/work", "attached", fakeModel, api.AccessAsk)
+	id := m.Create(env, "/work", "attached", fakeModel, api.AccessAsk, nil)
 	g.until(t, "the engine's view of the thread", func() bool {
 		th := env.Threads[id]
 		return th.View.Revision > 0 && len(th.Pending) == 0
@@ -271,7 +271,7 @@ func TestAnEmbeddedEngineUploadsToTheHubServeUsed(t *testing.T) {
 	m, g := manager(t, dir)
 	env := m.Envs()[0]
 	online(t, g, env)
-	id := m.Create(env, "/w", "embedded", fakeModel, api.AccessAsk)
+	id := m.Create(env, "/w", "embedded", fakeModel, api.AccessAsk, nil)
 	g.until(t, "the create confirmed", func() bool { th := env.Threads[id]; return th.known && len(th.Pending) == 0 })
 	waitUploaded(t, dir)
 }
@@ -313,7 +313,7 @@ func TestACommandWaitsForTheNextEngine(t *testing.T) {
 	m, g := manager(t, dir)
 	env := m.Envs()[0]
 	online(t, g, env)
-	id := m.Create(env, "/work", "hello", fakeModel, api.AccessAsk)
+	id := m.Create(env, "/work", "hello", fakeModel, api.AccessAsk, nil)
 	g.until(t, "the create confirmed", func() bool { th := env.Threads[id]; return th.known && len(th.Pending) == 0 })
 
 	d.Close()
@@ -475,7 +475,7 @@ func TestAnEngineWithNoIDShowsItsThreads(t *testing.T) {
 // the turn is over and the transcript shows all of it.
 func finishTurn(t *testing.T, m *Manager, g *gui, env *Env) api.ID {
 	t.Helper()
-	id := m.Create(env, "/work", "hello", fakeModel, api.AccessAsk)
+	id := m.Create(env, "/work", "hello", fakeModel, api.AccessAsk, nil)
 	th := env.Threads[id]
 	if th == nil || th.View.Title != "hello" || len(th.Pending) != 1 {
 		t.Fatalf("right after Create the thread is %+v, want it shown with its create pending", th)
@@ -591,7 +591,7 @@ func TestATurnRunsFromCreateThroughAnApproval(t *testing.T) {
 		th := env.Threads[id]
 		return th.View.Title == "Websocket loop" && len(th.Pending) == 0
 	})
-	m.Delete(env, id) // while its transcript is open
+	m.Delete(env, id, false) // while its transcript is open
 
 	g.until(t, "the delete", func() bool { return env.Threads[id] == nil })
 
@@ -603,7 +603,7 @@ func TestARefusedStartNowLandsOnRetryOnceTheRunEnds(t *testing.T) {
 	m, g := manager(t, stateDir(t))
 	env := m.Envs()[0]
 	online(t, g, env)
-	id := m.Create(env, "/work", "busy", fakeModel, api.AccessAsk)
+	id := m.Create(env, "/work", "busy", fakeModel, api.AccessAsk, nil)
 	m.Send(env, id, "first", api.AfterActive)
 	g.until(t, "the first run waiting on its approval", func() bool {
 		return env.Threads[id].View.Run == api.RunWaiting && len(env.Threads[id].Pending) == 0
@@ -628,7 +628,7 @@ func TestAnAnswerTooLateLeavesNoRow(t *testing.T) {
 	m, g := manager(t, stateDir(t))
 	env := m.Envs()[0]
 	online(t, g, env)
-	id := m.Create(env, "/work", "hello", fakeModel, api.AccessAsk)
+	id := m.Create(env, "/work", "hello", fakeModel, api.AccessAsk, nil)
 	m.OpenThread(env, id)
 	m.Send(env, id, "hello", api.AfterActive)
 	var req *RequestEntry
@@ -714,7 +714,7 @@ func TestATakenAnswerStaysUntilItsRequestStopsWaiting(t *testing.T) {
 func TestDismissingAFailedCreateDropsItsThread(t *testing.T) {
 	m, _ := manager(t, stateDir(t))
 	env := m.Envs()[0]
-	id := m.Create(env, "/work", "never", fakeModel, api.AccessAsk)
+	id := m.Create(env, "/work", "never", fakeModel, api.AccessAsk, nil)
 	p := env.Threads[id].Pending
 	if len(p) != 1 || p[0].Err == nil || p[0].Terminal() {
 		t.Fatalf("with no engine the create is %s, want failed and worth a retry", describePending(p))
