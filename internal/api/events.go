@@ -107,6 +107,18 @@ type TurnEnded struct {
 	Tokens  int64   `json:"tokens,omitempty"` // what the run used, where the agent said
 }
 
+// ContextReported is how full the run's context is, as its agent said:
+// Used tokens of a Window, 0 where the agent didn't say, as its request
+// to Model, "" where it didn't. Compacted says the agent compacted it,
+// and what it holds is unknown until the next.
+type ContextReported struct {
+	Run       ID     `json:"run"`
+	Used      int64  `json:"used,omitempty"`
+	Window    int64  `json:"window,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Compacted bool   `json:"compacted,omitempty"`
+}
+
 // TurnRestored: after a restart the adapter proved the agent is the same run.
 type TurnRestored struct {
 	Run ID `json:"run"`
@@ -235,6 +247,7 @@ func (ThreadDeleted) eventType() string       { return "thread.deleted" }
 func (ThreadConfigured) eventType() string    { return "thread.configured" }
 func (ChildReported) eventType() string       { return "child.reported" }
 func (SessionBound) eventType() string        { return "session.bound" }
+func (ContextReported) eventType() string     { return "context.reported" }
 
 var eventBodies = map[string]func([]byte) (EventBody, error){}
 
@@ -264,6 +277,7 @@ func init() {
 	register[ThreadConfigured]()
 	register[ChildReported]()
 	register[SessionBound]()
+	register[ContextReported]()
 }
 
 func register[B EventBody]() {

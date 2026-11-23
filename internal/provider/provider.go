@@ -211,6 +211,17 @@ type RequestWithdrawn struct {
 	Reason string
 }
 
+// Context is how full the session's context is, as of the agent's last
+// request to its model: Used tokens of a Window, 0 where the provider
+// doesn't say, and the Model the request went to, "" where it doesn't.
+// Compacted says the provider just compacted the session, so what it
+// holds is unknown until the next report; the rest are then unset.
+type Context struct {
+	Used, Window int64
+	Model        string
+	Compacted    bool
+}
+
 type TurnEnded struct {
 	Outcome api.Outcome
 	Error   string
@@ -222,3 +233,4 @@ func (Work) event()             {}
 func (RequestOpened) event()    {}
 func (RequestWithdrawn) event() {}
 func (TurnEnded) event()        {}
+func (Context) event()          {}

@@ -21,12 +21,15 @@ type message struct {
 	Event           *streamEvent `json:"event"` // stream_event
 	Message         *struct {
 		Content blocks `json:"content"`
+		request
 	} `json:"message"` // assistant, user
 	Error   string   `json:"error"` // assistant: why a synthetic reply stands in for the model's
 	IsError bool     `json:"is_error"`
 	Result  string   `json:"result"`
 	Errors  []string `json:"errors"`
 	Usage   usage    `json:"usage"`
+	// ModelUsage is, on a result, each model the session called, by id.
+	ModelUsage map[string]modelUsage `json:"modelUsage"`
 	// UserMessageUUIDs is, on a result, the user messages it finished.
 	UserMessageUUIDs []string  `json:"user_message_uuids"`
 	Capabilities     []string  `json:"capabilities"` // system init
@@ -39,8 +42,9 @@ type message struct {
 }
 
 type streamEvent struct {
-	Type         string `json:"type"`
-	ContentBlock *block `json:"content_block"`
+	Type         string   `json:"type"`
+	Message      *request `json:"message"` // message_start
+	ContentBlock *block   `json:"content_block"`
 	Delta        *struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
@@ -77,6 +81,73 @@ type usage struct {
 }
 
 func (u usage) total() int64 { return u.Input + u.CacheCreation + u.CacheRead + u.Output }
+
+// prompt is what the request sent the model: its context as the request
+// found it, which the request's output joins only from the next one.
+func (u usage) prompt() int64 { return u.Input + u.CacheCreation + u.CacheRead }
+
+// request is a model request's, as its message says: the model it went
+// to and what it used.
+type request struct {
+	Model string `json:"model"`
+	Usage usage  `json:"usage"`
+}
+
+type modelUsage struct {
+	Canonical     string `json:"canonicalModel"`
+	ContextWindow int64  `json:"contextWindow"`
+}
+
+// window is the context window of model, the model the turn's last
+// request went to, as the result's modelUsage gives it: by its id, else
+// by its canonical name where every entry of that name gives the same
+// window; 0 if none says, and none for a request that didn't say its
+// model. Another model's window is not this one's.
+func window(models map[string]modelUsage, model string) int64 {
+	if model == "" {
+		return 0
+	}
+	if u, ok := models[model]; ok {
+		return u.ContextWindow
+	}
+	w := int64(-1)
+	for _, u := range models {
+		switch {
+		case u.Canonical != model:
+		case w != -1 && w != u.ContextWindow:
+			return 0
+		default:
+			w = u.ContextWindow
+		}
+	}
+	return max(w, 0)
+}
+
+// sent is the context a request of the turn's sent, as its message_start
+// or its assistant message says, once.
+func (t *turn) sent(r *request) []provider.Event {
+	if r == nil {
+		return nil
+	}
+	used := r.Usage.prompt()
+	if used == 0 {
+		return nil
+	}
+	same := used == t.used && r.Model == t.model
+	t.used, t.model = used, r.Model
+	if same {
+		return nil
+	}
+	return []provider.Event{provider.Context{Used: used, Model: t.model}}
+}
+
+// measured is the turn's context with the window a result gives it.
+func (t *turn) measured(m message) []provider.Event {
+	if w := window(m.ModelUsage, t.model); t.used > 0 && w > 0 {
+		return []provider.Event{provider.Context{Used: t.used, Window: w, Model: t.model}}
+	}
+	return nil
+}
 
 type response struct {
 	Subtype   string `json:"subtype"`
@@ -115,6 +186,8 @@ type turn struct {
 	texted      bool            // a text block already streamed
 	signedOut   string          // what Claude Code said when the API refused its login
 	tokens      int64           // what the results before the last one used
+	used        int64           // the context the turn's last request sent; 0 before one, or since a compaction
+	model       string          // the model that request went to
 	interrupted bool            // the user stopped the turn
 }
 
@@ -138,6 +211,9 @@ func (t *turn) read(m message) []provider.Event {
 		}
 		// AskUserQuestion shows as its question card, not as a step.
 		var evs []provider.Event
+		if m.Message != nil {
+			evs = t.sent(&m.Message.request)
+		}
 		for _, b := range m.content() {
 			if b.Type == "tool_use" && b.Name != askTool {
 				w := t.open(b)
@@ -163,7 +239,13 @@ func (t *turn) read(m message) []provider.Event {
 		}
 		return evs
 	case "result":
-		return append(t.unfinished(), t.end(m))
+		evs := append(t.unfinished(), t.measured(m)...)
+		return append(evs, t.end(m))
+	case "system":
+		if m.Subtype == "compact_boundary" {
+			t.used = 0
+			return []provider.Event{provider.Context{Compacted: true}}
+		}
 	}
 	return nil
 }
@@ -183,6 +265,8 @@ func (t *turn) unfinished() []provider.Event {
 func (t *turn) stream(e *streamEvent) []provider.Event {
 	switch {
 	case e == nil:
+	case e.Type == "message_start":
+		return t.sent(e.Message)
 	case e.Type == "content_block_start" && e.ContentBlock != nil && e.ContentBlock.Type == "text" && t.texted:
 		return []provider.Event{provider.TextDelta{Text: "\n\n"}}
 	case e.Type == "content_block_delta" && e.Delta != nil && e.Delta.Type == "text_delta" && e.Delta.Text != "":
@@ -221,8 +305,9 @@ func (t *turn) rel(path string) string {
 
 // tally counts a result that did not end the turn, as when a message sent
 // mid-turn came too late for it and Claude Code took it after.
-func (t *turn) tally(m message) {
+func (t *turn) tally(m message) []provider.Event {
 	t.tokens += m.Usage.total()
+	return t.measured(m)
 }
 
 func (t *turn) end(m message) provider.TurnEnded {

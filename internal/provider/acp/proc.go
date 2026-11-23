@@ -707,7 +707,12 @@ func (p *proc) SessionUpdate(ctx context.Context, n acpsdk.SessionNotification) 
 	if u.ConfigOptionUpdate != nil {
 		p.setOptions(u.ConfigOptionUpdate.ConfigOptions)
 	}
-	if run := p.current(!quiet, kindOf(u)); run != nil && !quiet {
+	run := p.current(!quiet, kindOf(u))
+	switch {
+	case run == nil:
+	case u.UsageUpdate != nil:
+		run.usage(*u.UsageUpdate)
+	case !quiet:
 		run.update(u)
 	}
 	return nil

@@ -154,6 +154,14 @@ type Delta struct {
 	Text string
 }
 
+// Context is how full the run's context is, as provider.Context has it.
+type Context struct {
+	Run          api.ID
+	Used, Window int64
+	Model        string
+	Compacted    bool
+}
+
 type Work struct{ Item api.WorkItem }
 
 // Surfaced is a request the agent raised. Request is freshly minted; Dedup is
@@ -227,6 +235,7 @@ func (Started) observed()        {}
 func (Bound) observed()          {}
 func (Ended) observed()          {}
 func (Delta) observed()          {}
+func (Context) observed()        {}
 func (Work) observed()           {}
 func (Surfaced) observed()       {}
 func (Withdrawn) observed()      {}

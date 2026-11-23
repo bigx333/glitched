@@ -603,8 +603,7 @@ func (g *Agent) read(ctx context.Context, m message) []provider.Event {
 		g.pmu.Unlock()
 		over, interrupted := g.over(m)
 		if !over {
-			g.turn.tally(m)
-			return nil
+			return g.turn.tally(m)
 		}
 		g.turn.interrupted = interrupted
 	case "system":
