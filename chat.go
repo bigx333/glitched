@@ -1971,6 +1971,9 @@ func (a *app) newThreadRef(t thread) api.ModelRef {
 	ref := a.modelRef()
 	if a.followsCLI && t.id().IsZero() {
 		ref.Model, ref.Effort = "", a.composerFile.Effort
+		if m, _ := a.modelOf(a.model); strings.EqualFold(effortFor(m, ref.Effort), ref.Effort) {
+			ref.Effort = effortFor(m, ref.Effort)
+		}
 	}
 	return ref
 }
