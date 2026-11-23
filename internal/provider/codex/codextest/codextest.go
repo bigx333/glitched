@@ -100,7 +100,7 @@ type glitchedServer struct {
 }
 
 // Second is how long one of Codex's seconds is in the fake, so that its
-// 60 s default for a tool call can be met in a test: a duration, 1s unset.
+// 300 s default for a tool call can be met in a test: a duration, 1s unset.
 const Second = "GLITCHED_FAKE_CODEX_SECOND"
 
 // Main plays the fake app-server, until its stdin closes, when the
@@ -436,7 +436,7 @@ func (f *fake) play(n int, turn, said string) {
 		f.message("msg-"+turn, "earlier you said: "+strings.ReplaceAll(strings.TrimSpace(said), "\n", " | "))
 	case "credentials":
 		// The agent asks for GLX_PROBE through glitched mcp, giving up
-		// at its tool timeout as Codex does (60 s unless configured), then
+		// at its tool timeout as Codex does (300 s unless configured), then
 		// echoes the value it read, split across two deltas a flush apart.
 		f.mu.Lock()
 		srv := f.glitched
@@ -446,7 +446,7 @@ func (f *fake) play(n int, turn, said string) {
 		if err != nil {
 			second = time.Second
 		}
-		timeout := cmp.Or(srv.ToolTimeoutSec, 60)
+		timeout := cmp.Or(srv.ToolTimeoutSec, 300)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout*float64(second)))
 		var env []string
 		for _, kv := range os.Environ() {
