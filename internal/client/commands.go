@@ -21,9 +21,9 @@ import (
 // before that view. Err is
 // why the submit failed. A failed row stays until Retry sends the command
 // again under the same ID, or Dismiss drops it, or, for an answer, its
-// request stops waiting, or, for a configure, another is chosen of
-// something it gave: one that fails with such a one chosen after it
-// leaves no row.
+// request stops waiting, or, for a configure, a rename or a move, another
+// is chosen of something it gave: one that fails with such a one chosen
+// after it leaves no row.
 type Pending struct {
 	Command api.ID
 	Body    api.Intent
@@ -118,12 +118,8 @@ func (m *Manager) Rename(e *Env, thread api.ID, title string) api.ID {
 
 // ConfigureThread changes the model and access the thread's next turn runs
 // at: what c gives of them, which is what was chosen, the rest staying as
-// the engine has it. It drops the thread's failed configures of anything
-// c gives, whose Retry would undo this one.
+// the engine has it.
 func (m *Manager) ConfigureThread(e *Env, thread api.ID, c api.ThreadConfigure) api.ID {
-	if th := e.Threads[thread]; th != nil {
-		th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool { return p.Err != nil && overlaps(p, c) })
-	}
 	return m.submit(e, thread, c)
 }
 
@@ -136,12 +132,23 @@ func inView(body api.Intent) bool {
 	return false
 }
 
-// overlaps is whether p is a configure that gives anything c gives: of
-// the two, the one sent last undoes the other's choice of it.
-func overlaps(p Pending, c api.ThreadConfigure) bool {
-	b, ok := p.Body.(api.ThreadConfigure)
-	return ok && (b.Model != nil && c.Model != nil || b.Effort != nil && c.Effort != nil ||
-		b.Fast != nil && c.Fast != nil || b.Access != nil && c.Access != nil)
+// replaces is whether p chooses anything body chooses: of the two, the
+// one sent last undoes the other's choice of it. A configure chooses what
+// it gives; a move, the thread's section; a rename, its title.
+func replaces(p Pending, body api.Intent) bool {
+	switch c := body.(type) {
+	case api.ThreadConfigure:
+		b, ok := p.Body.(api.ThreadConfigure)
+		return ok && (b.Model != nil && c.Model != nil || b.Effort != nil && c.Effort != nil ||
+			b.Fast != nil && c.Fast != nil || b.Access != nil && c.Access != nil)
+	case api.InboxSet:
+		_, ok := p.Body.(api.InboxSet)
+		return ok
+	case api.ThreadRename:
+		_, ok := p.Body.(api.ThreadRename)
+		return ok
+	}
+	return false
 }
 
 // Delete deletes the thread. The engine ends its run with it.
@@ -190,6 +197,8 @@ func (m *Manager) submit(e *Env, thread api.ID, body api.Intent) api.ID {
 		return api.ID{}
 	}
 	cmd := api.Command{ID: api.NewID(), Target: thread, Body: body}
+	// A failed one of what this chooses would undo it by its Retry.
+	th.Pending = slices.DeleteFunc(th.Pending, func(p Pending) bool { return p.Err != nil && replaces(p, body) })
 	th.Pending = append(th.Pending, Pending{Command: cmd.ID, Body: body})
 	m.edits++
 	m.send(e, th, cmd)
@@ -268,7 +277,6 @@ func (m *Manager) submitted(e *Env, cmd api.Command, receipt api.Receipt, err er
 	}
 	_, message := cmd.Body.(api.MessageDispatch)
 	r, answer := cmd.Body.(api.RequestRespond)
-	c, configure := cmd.Body.(api.ThreadConfigure)
 	taken := err == nil || errors.Is(err, api.ErrAlreadyAnswered)
 	switch {
 	case err == nil && message && th.open && th.Transcript.message(cmd.ID) == nil:
@@ -282,11 +290,10 @@ func (m *Manager) submitted(e *Env, cmd api.Command, receipt api.Receipt, err er
 		// receipt of another log than the views held, or one stored
 		// without its revision, names no view to wait for.
 		th.Pending[i].sent, th.Pending[i].log, th.Pending[i].at = true, e.log, receipt.Revision
-	case taken, configure && slices.ContainsFunc(th.Pending[i+1:], func(p Pending) bool { return overlaps(p, c) }):
-		// A configure that fails with another chosen after it, of
-		// something it gave, leaves no row: its Retry would undo that
-		// one. With none such, its row stays: what it chose went with no
-		// other.
+	case taken, slices.ContainsFunc(th.Pending[i+1:], func(p Pending) bool { return replaces(p, cmd.Body) }):
+		// A change that fails with another chosen after it, of something
+		// it gave, leaves no row: its Retry would undo that one. With none
+		// such, its row stays: what it chose went with no other.
 		th.Pending = slices.Delete(th.Pending, i, i+1)
 	default:
 		th.Pending[i].Err = err
