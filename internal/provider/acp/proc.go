@@ -81,19 +81,21 @@ type proc struct {
 	caps    caps
 	briefed bool // the session's first prompt went out
 
-	mu       sync.Mutex
-	loading  acpsdk.SessionId // the session being loaded, whose replay is counted
-	replayed int
-	session  acpsdk.SessionId
-	options  []acpsdk.SessionConfigOption // the session's, as the agent last said
-	mode     string                       // the session's mode, as the agent last said
-	moded    bool                         // the session has modes, as the agent said
-	offered  []string                     // the modes the session offers, as the agent said
-	refused  string                       // why the session runs the access's Else, as configure last found
-	run      *Agent                       // the run the agent serves, if any
-	prompt   chan struct{}                // closes once the run's prompt is written
-	parked   bool                         // it waits for its thread's next run
-	spoke    bool                         // it spoke while parked
+	mu          sync.Mutex
+	loading     acpsdk.SessionId // the session being loaded, whose replay is counted
+	replayed    int
+	session     acpsdk.SessionId
+	options     []acpsdk.SessionConfigOption         // the session's, as the agent last said
+	mode        string                               // the session's mode, as the agent last said
+	moded       bool                                 // the session has modes, as the agent said
+	offered     []string                             // the modes the session offers, as the agent said
+	refused     string                               // why the session runs the access's Else, as configure last found
+	commands    map[string]bool                      // advertised slash commands; nil until first update
+	pendingCmds map[acpsdk.SessionId]map[string]bool // commands received before open() binds p.session
+	run         *Agent                               // the run the agent serves, if any
+	prompt      chan struct{}                        // closes once the run's prompt is written
+	parked      bool                                 // it waits for its thread's next run
+	spoke       bool                                 // it spoke while parked
 }
 
 // caps is what the agent said it can do, as the adapter reads it.
@@ -177,7 +179,11 @@ func launch(ctx context.Context, profile Profile, prog provider.Program, dir, ma
 		ClientInfo:      &acpsdk.Implementation{Name: "glitched", Version: "1"},
 		// An agent that can ask with a form asks on Glitched's question
 		// card. Without one, agy only prints its questions in the reply.
-		ClientCapabilities: acpsdk.ClientCapabilities{Elicitation: &acpsdk.ElicitationCapabilities{Form: &acpsdk.ElicitationFormCapabilities{}}},
+		// Advertising session.compaction lets agents emit compaction_update.
+		ClientCapabilities: acpsdk.ClientCapabilities{
+			Elicitation: &acpsdk.ElicitationCapabilities{Form: &acpsdk.ElicitationFormCapabilities{}},
+			Session:     &acpsdk.ClientSessionCapabilities{Compaction: &acpsdk.CompactionCapabilities{}},
+		},
 	})
 	if err != nil {
 		err = p.failure("start", err)
@@ -199,10 +205,12 @@ func launch(ctx context.Context, profile Profile, prog provider.Program, dir, ma
 
 // open takes up the thread's session in dir with servers: it resumes the
 // session the thread had, where the agent can, else loads it, and else
-// starts one, which lost reports. agy answers a resume of a session it
-// doesn't have with -32603 "Failed to read session", not -32002, so any
-// refusal falls through to the next way; only a sign-in ends it.
-func (p *proc) open(ctx context.Context, dir string, servers []provider.MCPServer, had string) (lost bool, err error) {
+// starts one, which lost reports. With resumeOnly set, failing to resume
+// or load returns an error instead of creating a new session. agy answers
+// a resume of a session it doesn't have with -32603 "Failed to read
+// session", not -32002, so any refusal falls through to the next way;
+// only a sign-in ends it.
+func (p *proc) open(ctx context.Context, dir string, servers []provider.MCPServer, had string, resumeOnly bool) (lost bool, err error) {
 	stop := context.AfterFunc(ctx, p.halt)
 	defer stop()
 	list := []acpsdk.McpServer{}
@@ -247,6 +255,9 @@ func (p *proc) open(ctx context.Context, dir string, servers []provider.MCPServe
 	// A session taken up again is briefed again: that it was bound says
 	// only that a run opened it, not that its first prompt went out.
 	if !taken {
+		if resumeOnly {
+			return false, fmt.Errorf("%s couldn't resume the thread's session", p.profile.Name)
+		}
 		lost = had != ""
 		r, err := p.conn.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: dir, McpServers: list})
 		if err != nil {
@@ -256,6 +267,7 @@ func (p *proc) open(ctx context.Context, dir string, servers []provider.MCPServe
 	}
 	p.mu.Lock()
 	p.session, p.options, p.mode, p.moded, p.offered = id, options, "", modes != nil, nil
+	p.commands, p.pendingCmds = p.pendingCmds[id], nil
 	if modes != nil {
 		p.mode = string(modes.CurrentModeId)
 		for _, m := range modes.AvailableModes {
@@ -729,23 +741,58 @@ func (p *proc) current(speaking bool, what string) *Agent {
 	return p.run
 }
 
+// lacksCommand is true once the session has advertised its slash commands
+// and name is not among them. Before any list arrives it is false.
+func (p *proc) lacksCommand(name string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.commands != nil && !p.commands[strings.ToLower(name)]
+}
+
+func (p *proc) recordCommands(id acpsdk.SessionId, u *acpsdk.SessionAvailableCommandsUpdate) {
+	cmds := make(map[string]bool, len(u.AvailableCommands))
+	for _, c := range u.AvailableCommands {
+		cmds[strings.ToLower(strings.TrimPrefix(strings.TrimSpace(c.Name), "/"))] = true
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.session != "" && id == p.session {
+		p.commands = cmds
+		return
+	}
+	if p.session == "" {
+		if p.pendingCmds == nil {
+			p.pendingCmds = map[acpsdk.SessionId]map[string]bool{}
+		}
+		p.pendingCmds[id] = cmds
+	}
+}
+
 func (p *proc) SessionUpdate(ctx context.Context, n acpsdk.SessionNotification) error {
+	if n.Update.AvailableCommandsUpdate != nil {
+		p.recordCommands(n.SessionId, n.Update.AvailableCommandsUpdate)
+	}
 	p.mu.Lock()
 	replay := p.loading != "" && n.SessionId == p.loading
 	if replay && (n.Update.UserMessageChunk != nil || n.Update.AgentMessageChunk != nil) {
 		p.replayed++
 	}
+	opening := p.session == ""
 	p.mu.Unlock()
 	if replay {
 		return nil
 	}
 	if !p.ours(n.SessionId) {
+		if opening && n.Update.AvailableCommandsUpdate != nil {
+			return nil
+		}
 		slog.Info("acp: an update for another session, which the agent's run drops", "agent", p.profile.Name, "update", kindOf(n.Update))
 		return nil
 	}
 	u := n.Update
 	quiet := u.AvailableCommandsUpdate != nil || u.CurrentModeUpdate != nil || u.ConfigOptionUpdate != nil ||
-		u.SessionInfoUpdate != nil || u.UsageUpdate != nil || u.UserMessageChunk != nil
+		u.SessionInfoUpdate != nil || u.UsageUpdate != nil || u.UserMessageChunk != nil ||
+		u.CompactionUpdate != nil || u.CompactionSummaryChunk != nil
 	if u.ConfigOptionUpdate != nil {
 		p.setOptions(u.ConfigOptionUpdate.ConfigOptions)
 	}
@@ -761,6 +808,8 @@ func (p *proc) SessionUpdate(ctx context.Context, n acpsdk.SessionNotification) 
 		run.report()
 	case u.UsageUpdate != nil:
 		run.usage(*u.UsageUpdate)
+	case u.CompactionUpdate != nil:
+		run.compaction(*u.CompactionUpdate)
 	case !quiet:
 		run.update(u)
 	}

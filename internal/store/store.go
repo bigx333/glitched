@@ -175,6 +175,7 @@ CREATE TABLE threads (
 	context_stale  INTEGER NOT NULL DEFAULT 0 CHECK (context_stale IN (0, 1)),
 	context_model  TEXT NOT NULL DEFAULT '',
 	granted     TEXT,
+	context_cache_expires INTEGER,
 	CHECK ((disposition = 1) = (until IS NOT NULL))
 ) STRICT;
 
@@ -190,6 +191,7 @@ CREATE TABLE runs (
 	ended      INTEGER,
 	model      TEXT,
 	access     INTEGER CHECK (access BETWEEN 0 AND 2),
+	silent     INTEGER NOT NULL DEFAULT 0 CHECK (silent IN (0, 1)),
 	PRIMARY KEY (thread, ord),
 	CHECK ((state = 'finished') = (outcome IS NOT NULL)),
 	CHECK ((state = 'finished') = (ended IS NOT NULL))
@@ -237,7 +239,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 12
+const schemaVersion = 13
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -343,6 +345,11 @@ ALTER TABLE threads ADD COLUMN context_model TEXT NOT NULL DEFAULT '';
 	// (AccessGranted, ModelConfirmed), as api.Confirmed's JSON. A thread
 	// upgraded has none: nothing confirmed what its runs ran at.
 	11: `ALTER TABLE threads ADD COLUMN granted TEXT;`,
+	// Prompt cache expiry on threads and silent maintenance runs (idle compaction).
+	12: `
+ALTER TABLE threads ADD COLUMN context_cache_expires INTEGER;
+ALTER TABLE runs ADD COLUMN silent INTEGER NOT NULL DEFAULT 0 CHECK (silent IN (0, 1));
+`,
 }
 
 func (s *Store) migrate() error {

@@ -85,3 +85,16 @@ func (s *Store) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 	snap.Events, err = s.events(ctx, tx, q.Thread, after, head, 0)
 	return snap, err
 }
+
+// IdleCompactCandidates returns top-level, non-deleted, non-settled idle
+// threads whose context is at or above minTokens and not already compacted.
+func (s *Store) IdleCompactCandidates(ctx context.Context, minTokens int64) ([]api.ID, error) {
+	return ids(ctx, s.db, `SELECT id FROM threads
+		WHERE deleted = 0
+			AND disposition <> 2
+			AND parent IS NULL
+			AND context_stale = 0
+			AND context_used >= ?
+			AND NOT EXISTS (SELECT 1 FROM runs WHERE runs.thread = threads.id AND runs.state <> 'finished')
+		ORDER BY id`, minTokens)
+}

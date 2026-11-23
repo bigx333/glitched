@@ -377,7 +377,7 @@ func TestAnOlderDatabaseUpgrades(t *testing.T) {
 			updated_at INTEGER NOT NULL, CHECK ((disposition = 1) = (until IS NOT NULL))) STRICT;
 		INSERT INTO threads_v1 SELECT id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at FROM threads;
 		DROP TABLE threads;
-		ALTER TABLE threads_v1 RENAME TO threads;` + runsV6 + commandsV7 + `
+		ALTER TABLE threads_v1 RENAME TO threads;` + runsV6 + runsV12 + commandsV7 + `
 		PRAGMA user_version = 1;`); err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +424,7 @@ func TestAnArchivedThreadUpgradesSettled(t *testing.T) {
 			disposition, until, updated_at, deleted FROM threads;
 		DROP TABLE threads;
 		ALTER TABLE threads_v3 RENAME TO threads;
-		UPDATE threads SET disposition = 3;` + runsV6 + commandsV7 + `
+		UPDATE threads SET disposition = 3;` + runsV6 + runsV12 + commandsV7 + `
 		PRAGMA user_version = 3;`); err != nil {
 		t.Fatal(err)
 	}
@@ -563,6 +563,9 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 	if version < 12 {
 		sqlText = threadsV11 + sqlText
 	}
+	if version < 13 {
+		sqlText = threadsV12 + sqlText + runsV12
+	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
@@ -593,6 +596,16 @@ const threadsV10 = `
 // provider confirmed it runs at.
 const threadsV11 = `
 	ALTER TABLE threads DROP COLUMN granted;
+`
+
+// The threads and runs tables up to version 12, before idle compaction
+// tracked cache expiry and silent runs.
+const threadsV12 = `
+	ALTER TABLE threads DROP COLUMN context_cache_expires;
+`
+
+const runsV12 = `
+	ALTER TABLE runs DROP COLUMN silent;
 `
 
 // The threads table up to version 9, before a thread in a worktree kept
@@ -1214,5 +1227,69 @@ func TestAVersion11DatabaseUpgradesWithWhatEachThreadsProviderConfirmed(t *testi
 	open(t, fresh).Close()
 	if got, want := tableOf(t, path, "threads"), tableOf(t, fresh, "threads"); !reflect.DeepEqual(got, want) {
 		t.Errorf("the threads table\n%+v\nwant a new database's\n%+v", got, want)
+	}
+}
+
+// A version 12 database upgrades to the threads and runs tables a new one
+// has: cache expiry and silent runs persist across reopen, and
+// IdleCompactCandidates finds eligible threads.
+func TestAVersion12DatabaseUpgradesWithIdleCompactionFields(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{
+		ID: api.NewID(), Target: thread,
+		Body: api.ThreadCreate{Workspace: "w", Title: "t", Model: api.ModelRef{Provider: "claude", Model: "claude-opus-4-6"}},
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	downgrade(t, path, "", 12)
+
+	s = open(t, path)
+	base := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	run := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{ID: run, Target: thread, Body: api.MessageDispatch{Text: "go", Mode: api.StartNow}}, base); err != nil {
+		t.Fatal(err)
+	}
+	expires := base.Add(time.Hour)
+	for _, o := range []engine.Observation{
+		engine.Started{Run: run},
+		engine.Bound{Run: run, Session: "sess-1"},
+		engine.Context{Run: run, Used: engine.MinIdleCompactTokens, Window: 1000000, Model: "claude-opus-4-6", CacheExpires: expires},
+		engine.Ended{Run: run, Outcome: api.OutcomeCompleted},
+	} {
+		if _, err := s.Observe(ctx, thread, o, base.Add(time.Second), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cands, err := s.IdleCompactCandidates(ctx, engine.MinIdleCompactTokens)
+	if err != nil || !slices.Equal(cands, []api.ID{thread}) {
+		t.Fatalf("candidates %v (%v), want [%v]", cands, err, thread)
+	}
+
+	compactRun := api.NewID()
+	if _, err := s.Observe(ctx, thread, engine.IdleCompact{Run: compactRun, AfterRun: run}, expires.Add(-time.Minute), 0); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	s = open(t, path)
+	th := threadOf(t, s, thread)
+	if !th.Context.CacheExpires.Equal(expires) {
+		t.Errorf("after reopen cache expires %v, want %v", th.Context.CacheExpires, expires)
+	}
+	if len(th.Runs) != 2 || !th.Runs[1].Silent {
+		t.Errorf("after reopen runs %+v, want second run silent", th.Runs)
+	}
+	s.Close()
+
+	fresh := filepath.Join(t.TempDir(), "host.db")
+	open(t, fresh).Close()
+	for _, tbl := range []string{"threads", "runs"} {
+		if got, want := tableOf(t, path, tbl), tableOf(t, fresh, tbl); !reflect.DeepEqual(got, want) {
+			t.Errorf("the %s table\n%+v\nwant a new database's\n%+v", tbl, got, want)
+		}
 	}
 }

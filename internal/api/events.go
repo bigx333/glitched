@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // EventSchema is the payload version every event below is written with.
@@ -52,6 +53,7 @@ type MessageQueued struct {
 	Pos     int64        `json:"pos"`
 	Held    bool         `json:"held,omitempty"`
 	Report  ID           `json:"report,omitzero"`
+	Silent  bool         `json:"silent,omitempty"`
 }
 
 // MessageClaimed binds a message to a live run it will be steered into.
@@ -76,10 +78,12 @@ type MessageUncertain struct {
 }
 
 // TurnAdmitted starts a run for the message with the same ID, so a message is
-// admitted at most once.
+// admitted at most once. Silent marks a background maintenance run, such as
+// idle compaction.
 type TurnAdmitted struct {
 	Run        ID     `json:"run"`
 	Generation uint64 `json:"generation"`
+	Silent     bool   `json:"silent,omitempty"`
 }
 
 // TurnStarted: the agent accepted the run's message.
@@ -110,13 +114,17 @@ type TurnEnded struct {
 // ContextReported is how full the run's context is, as its agent said:
 // Used tokens of a Window, 0 where the agent didn't say, as its request
 // to Model, "" where it didn't. Compacted says the agent compacted it,
-// and what it holds is unknown until the next.
+// and what it holds is unknown until the next. CacheExpires is when the
+// prompt cache created by that request expires, when reported.
 type ContextReported struct {
-	Run       ID     `json:"run"`
-	Used      int64  `json:"used,omitempty"`
-	Window    int64  `json:"window,omitempty"`
-	Model     string `json:"model,omitempty"`
-	Compacted bool   `json:"compacted,omitempty"`
+	Run          ID        `json:"run"`
+	Used         int64     `json:"used,omitempty"`
+	Window       int64     `json:"window,omitempty"`
+	Model        string    `json:"model,omitempty"`
+	Compacted    bool      `json:"compacted,omitempty"`
+	CacheExpires time.Time `json:"cacheExpires,omitzero"`
+	PreTokens    int64     `json:"preTokens,omitempty"`
+	PostTokens   int64     `json:"postTokens,omitempty"`
 }
 
 // TurnRestored: after a restart the adapter proved the agent is the same run.

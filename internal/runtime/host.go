@@ -12,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"glitched/internal/api"
@@ -40,6 +41,12 @@ type Host struct {
 	worktrees string               // where the threads' worktrees go; "" makes none
 	making    sync.Mutex           // held while a worktree is made, so a create sent twice at once makes one
 	vault     *secrets.Vault       // the credentials users give agents; nil keeps none
+	now       func() time.Time     // wall clock; defaults to time.Now
+
+	idleCompact   atomic.Bool
+	compactCheck  chan api.ID
+	compactRescan chan struct{}
+	compactDue    chan compactDue
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -91,6 +98,17 @@ func WithMCPServers(servers ...provider.MCPServer) Option {
 	return func(h *Host) { h.servers = servers }
 }
 
+// WithIdleCompaction enables or disables automatic idle compaction before
+// prompt cache expiry. Enabled by default.
+func WithIdleCompaction(enabled bool) Option {
+	return func(h *Host) { h.idleCompact.Store(enabled) }
+}
+
+// WithClock overrides the host's wall clock, for deterministic tests.
+func WithClock(now func() time.Time) Option {
+	return func(h *Host) { h.now = now }
+}
+
 // New reconciles what the last process left in flight, then starts the
 // effect worker. The caller keeps owning st.
 func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...Option) (*Host, error) {
@@ -105,7 +123,11 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		subs:    map[*stream]struct{}{},
 		asks:    map[askKey]chan json.RawMessage{},
 		held:    map[string]chan struct{}{},
+		compactCheck:  make(chan api.ID, 64),
+		compactRescan: make(chan struct{}, 1),
+		compactDue:    make(chan compactDue, 64),
 	}
+	h.idleCompact.Store(true)
 	for _, o := range opts {
 		o(h)
 	}
@@ -116,8 +138,9 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		h.Close()
 		return nil, err
 	}
-	h.wg.Add(1)
+	h.wg.Add(2)
 	go h.work()
+	go h.compactLoop()
 	return h, nil
 }
 
@@ -159,7 +182,14 @@ func (h *Host) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
 			return h.deleteInWorktree(ctx, c)
 		}
 	}
-	return h.store.Submit(ctx, c, time.Now())
+	return h.store.Submit(ctx, c, h.clock())
+}
+
+func (h *Host) clock() time.Time {
+	if h.now != nil {
+		return h.now()
+	}
+	return time.Now()
 }
 
 // committed runs inside the store's commit order.
@@ -172,6 +202,9 @@ func (h *Host) committed(c store.Commit) {
 		h.follow(e)
 	}
 	h.mu.Unlock()
+	for _, th := range c.Threads {
+		h.noteCompact(th.ID)
+	}
 	h.poke()
 }
 
@@ -222,7 +255,7 @@ func (h *Host) follow(e api.Event) {
 // observe commits o with the completion of the effect done. A refused o
 // arrived after the thread moved on: it is logged, and done is complete.
 func (h *Host) observe(ctx context.Context, thread api.ID, o engine.Observation, done int64) error {
-	_, err := h.store.Observe(ctx, thread, o, time.Now(), done)
+	_, err := h.store.Observe(ctx, thread, o, h.clock(), done)
 	if errors.Is(err, engine.ErrRefused) {
 		slog.Warn("runtime: observation refused", "thread", thread, "err", err)
 		return nil
@@ -545,7 +578,7 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	thread := t.ID
 	spec := provider.SessionSpec{
 		Thread: thread, Run: b.Run, Generation: b.Generation, Workspace: b.Workspace, Model: b.Model, Access: b.Access,
-		Session: t.Session,
+		Session: t.Session, ResumeOnly: b.ResumeOnly,
 	}
 	if h.mcp != nil {
 		spec.MCP = append(spec.MCP, h.mcp.For(thread, b.Access))

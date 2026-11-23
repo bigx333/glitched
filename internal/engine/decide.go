@@ -263,10 +263,10 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	if d.t.Access > ceiling() {
 		return rejected("thread access is above the client's ceiling")
 	}
-	// A run left on a settled thread is the one the settle stopped. A
-	// message there steers nothing and can't start before that run ends, so
-	// it waits for it.
-	if d.t.settled() && d.t.Live() != nil && (m.Mode == api.SteerActive || m.Mode == api.StartNow) {
+	// A run left on a settled thread is the one the settle stopped, and a
+	// silent maintenance run (such as idle compaction) cannot be steered.
+	// A message sent while either is live queues right behind it.
+	if live := d.t.Live(); live != nil && (d.t.settled() || live.Silent) && (m.Mode == api.SteerActive || m.Mode == api.StartNow) {
 		m.Mode = api.AfterActive
 	}
 	// A steer never waits its turn: one the live run can't take now would
@@ -608,12 +608,13 @@ func (d *decision) observe(o Observation) error {
 		// Only the user ends an uncertain run.
 		if isLive(o.Run) && live.State != RunUncertain {
 			stopped := live.State == RunStopping
+			silent := live.Silent
 			if err := d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error, Tokens: o.Tokens}); err != nil {
 				return err
 			}
-			// A run being stopped reports nothing, however it ends.
+			// A run being stopped or a silent maintenance run reports nothing.
 			switch {
-			case stopped:
+			case stopped || silent:
 			case o.Outcome == api.OutcomeCompleted:
 				d.report(o.Run, api.ReportDone, "", nil)
 			case o.Outcome == api.OutcomeFailed:
@@ -626,7 +627,10 @@ func (d *decision) observe(o Observation) error {
 		}
 	case Context:
 		if isLive(o.Run) {
-			return d.emit(api.ContextReported{Run: o.Run, Used: o.Used, Window: o.Window, Model: o.Model, Compacted: o.Compacted})
+			return d.emit(api.ContextReported{
+				Run: o.Run, Used: o.Used, Window: o.Window, Model: o.Model, Compacted: o.Compacted,
+				CacheExpires: o.CacheExpires, PreTokens: o.PreTokens, PostTokens: o.PostTokens,
+			})
 		}
 	case Granted:
 		// A confirmation the thread holds already says nothing new.
@@ -703,7 +707,32 @@ func (d *decision) observe(o Observation) error {
 		return d.rewound()
 	case Reported:
 		return d.reported(o)
+	case IdleCompact:
+		return d.idleCompact(o)
 	}
+	return nil
+}
+
+// idleCompact starts a silent /compact run when the thread is still idle,
+// unchanged since AfterRun, and inside its idle compaction window.
+func (d *decision) idleCompact(o IdleCompact) error {
+	afterRun, start, end, ok := IdleCompactWindow(d.t, d.at)
+	if !ok || afterRun != o.AfterRun || d.at.Before(start) || !d.at.Before(end) {
+		return fmt.Errorf("%w: thread is not eligible for idle compaction", ErrRefused)
+	}
+	if o.Run.IsZero() {
+		return fmt.Errorf("%w: idle compaction needs a run id", ErrRefused)
+	}
+	if err := d.emit(api.MessageQueued{Message: o.Run, Text: "/compact", Mode: api.StartNow, Pos: d.t.pos(false), Silent: true}); err != nil {
+		return err
+	}
+	gen := d.t.Generation + 1
+	if err := d.emit(api.TurnAdmitted{Run: o.Run, Generation: gen, Silent: true}); err != nil {
+		return err
+	}
+	d.effects = append(d.effects, StartTurn{
+		Run: o.Run, Generation: gen, Text: "/compact", Workspace: d.t.Workspace, Model: d.t.Model, Access: d.t.Access, ResumeOnly: true,
+	})
 	return nil
 }
 

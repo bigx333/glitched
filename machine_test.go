@@ -200,3 +200,43 @@ func TestTheAgentsCardAppliesALimitAtOnce(t *testing.T) {
 		return answered
 	})
 }
+
+// Compact before cache expires defaults to on, saves to engine.json when
+// toggled in the Agents card, and applies live without restarting the engine.
+func TestTheAgentsCardTogglesCompactBeforeExpire(t *testing.T) {
+	dir := tempDir(t)
+	h := start(t, dir)
+	h.tt.SetSize(1280, 1400)
+	ticking(t, h)
+	h.click("Settings")
+	h.click("This machine")
+	h.until("the Agents card", func() bool { return h.tt.HasText("Compact before cache expires") && h.a.backend.Machine().Embedded })
+
+	cfg, err := daemon.Defaults(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CompactBeforeExpireEnabled() {
+		t.Fatalf("CompactBeforeExpireEnabled() defaulted to false, want true")
+	}
+
+	h.click("Enable compact before cache expires")
+	h.tt.Frame()
+	cfg, err = daemon.Defaults(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CompactBeforeExpireEnabled() || !h.a.backend.Machine().Embedded {
+		t.Fatalf("after toggle off: enabled=%v embedded=%v, want false, true", cfg.CompactBeforeExpireEnabled(), h.a.backend.Machine().Embedded)
+	}
+
+	h.click("Enable compact before cache expires")
+	h.tt.Frame()
+	cfg, err = daemon.Defaults(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CompactBeforeExpireEnabled() || !h.a.backend.Machine().Embedded {
+		t.Fatalf("after toggle on: enabled=%v embedded=%v, want true, true", cfg.CompactBeforeExpireEnabled(), h.a.backend.Machine().Embedded)
+	}
+}

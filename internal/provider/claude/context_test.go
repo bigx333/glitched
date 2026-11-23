@@ -7,9 +7,12 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"glitched/internal/provider"
 )
+
+var fixedNow = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 
 // contexts is what a turn reads of the lines of a recorded run.
 func contexts(t *testing.T, path string) []provider.Context {
@@ -20,6 +23,7 @@ func contexts(t *testing.T, path string) []provider.Context {
 	}
 	defer f.Close()
 	tn := newTurn(t.TempDir())
+	tn.now = func() time.Time { return fixedNow }
 	var got []provider.Context
 	s := bufio.NewScanner(f)
 	s.Buffer(nil, 1<<20)
@@ -40,10 +44,11 @@ func contexts(t *testing.T, path string) []provider.Context {
 // Three runs of one haiku session on claude 2.1.330: a reply, /compact,
 // and a reply after it.
 func TestACompactionLeavesTheContextUnknownUntilTheNextRequest(t *testing.T) {
+	exp := fixedNow.Add(5 * time.Minute)
 	want := [][]provider.Context{
-		{{Used: 25041, Model: haiku}, {Used: 25041, Window: 1000000, Model: haiku}},
-		{{Compacted: true}},
-		{{Used: 25797, Model: haiku}, {Used: 25797, Window: 1000000, Model: haiku}},
+		{{Used: 25041, Model: haiku, CacheExpires: exp}, {Used: 25041, Window: 1000000, Model: haiku, CacheExpires: exp}},
+		{{Compacted: true, PreTokens: 25050, PostTokens: 5734}},
+		{{Used: 25797, Model: haiku, CacheExpires: exp}, {Used: 25797, Window: 1000000, Model: haiku, CacheExpires: exp}},
 	}
 	for i, w := range want {
 		path := filepath.Join("testdata", "compacted", string(rune('1'+i))+".jsonl")
@@ -150,6 +155,47 @@ func TestAResultBeforeTheLastGivesItsWindow(t *testing.T) {
 	}
 	if want := []provider.Context{{Used: 32002, Window: 1000000, Model: haiku}}; !slices.Equal(got, want) {
 		t.Errorf("an early result reported %+v, want %+v", got, want)
+	}
+}
+
+// Cache creation anchors CacheExpires to the request's first reading: 1h
+// takes priority over 5m, a pure cache read leaves CacheExpires zero, and
+// a later duplicate assistant message does not push the deadline out.
+func TestCacheCreationTTLAndPureCacheRead(t *testing.T) {
+	now := fixedNow
+	tn := newTurn(t.TempDir())
+	tn.now = func() time.Time { return now }
+
+	got := read(tn,
+		line(t, `{"type":"stream_event","event":{"type":"message_start","message":{"model":"claude-haiku-5-5","usage":{"input_tokens":10,"cache_creation_input_tokens":1000,"cache_read_input_tokens":200000,"cache_creation":{"ephemeral_1h_input_tokens":1000,"ephemeral_5m_input_tokens":500}}}}}`),
+	)
+	now = now.Add(30 * time.Second)
+	got = append(got, read(tn,
+		line(t, `{"type":"assistant","message":{"model":"claude-haiku-5-5","usage":{"input_tokens":10,"cache_creation_input_tokens":1000,"cache_read_input_tokens":200000,"cache_creation":{"ephemeral_1h_input_tokens":1000}}}}`),
+		line(t, twoModels),
+	)...)
+	want1h := fixedNow.Add(time.Hour)
+	want := []provider.Context{
+		{Used: 201010, Model: haiku, CacheExpires: want1h},
+		{Used: 201010, Window: 1000000, Model: haiku, CacheExpires: want1h},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("1h cache reported %+v, want %+v", got, want)
+	}
+
+	// Pure cache read (no cache_creation) leaves CacheExpires zero.
+	tn2 := newTurn(t.TempDir())
+	tn2.now = func() time.Time { return fixedNow }
+	got2 := read(tn2,
+		line(t, `{"type":"assistant","message":{"model":"claude-haiku-5-5","usage":{"input_tokens":5,"cache_read_input_tokens":250000}}}`),
+		line(t, twoModels),
+	)
+	want2 := []provider.Context{
+		{Used: 250005, Model: haiku},
+		{Used: 250005, Window: 1000000, Model: haiku},
+	}
+	if !slices.Equal(got2, want2) {
+		t.Errorf("pure cache read reported %+v, want %+v", got2, want2)
 	}
 }
 

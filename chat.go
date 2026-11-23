@@ -531,7 +531,7 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) {
 // while the run waits on the user, as the transcript may show before the
 // run's state does, or its engine can't be reached to say when it ends.
 func thinkingAt(t thread, rs rows) int {
-	if _, ok := thinkingLabels[t.View.Run]; !ok || len(rs.asks) > 0 || t.env != nil && t.env.Status != client.Status(client.Online{}) {
+	if _, ok := thinkingLabels[t.View.Run]; !ok || len(rs.asks) > 0 || t.View.Turn != nil && t.View.Turn.Silent || t.env != nil && t.env.Status != client.Status(client.Online{}) {
 		return -1
 	}
 	if t.View.Turn != nil {
@@ -550,6 +550,21 @@ func (a *app) thinkingRow(c *ui.Context, t thread) {
 	ui.Row(c).Key("thinking").Gap(6).AlignItems(ui.Center).Padding(0, 13).Transition(riseIn).Children(func() {
 		a.statusMark(c, statusWorking)
 		shimmerText(c, thinkingLabels[t.View.Run], 12, palette.muted, palette.text)
+	})
+}
+
+// compactDivider draws a quiet centered divider for an automatic idle
+// compaction run.
+func (a *app) compactDivider(c *ui.Context, e entry) {
+	ui.Row(c).Key(e.key).Gap(10).AlignItems(ui.Center).Padding(4, 12).Transition(riseIn).Children(func() {
+		ui.Box(c).Height(1).Grow(1).Background(palette.border)
+		if e.working {
+			a.statusMark(c, statusWorking)
+			shimmerText(c, e.text, 11.5, palette.muted, palette.text)
+		} else {
+			ui.Text(c, e.text).FontSize(11.5).TextColor(palette.faint).SingleLine()
+		}
+		ui.Box(c).Height(1).Grow(1).Background(palette.border)
 	})
 }
 
@@ -810,6 +825,9 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 		return
 	case entryReport:
 		a.reportCard(c, t, e.key, e)
+		return
+	case entryCompact:
+		a.compactDivider(c, e)
 		return
 	}
 	m := timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil, At: e.at}

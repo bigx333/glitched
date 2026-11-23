@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
@@ -32,6 +33,10 @@ type message struct {
 	// UserMessageUUIDs is, on a result, the user messages it finished.
 	UserMessageUUIDs []string  `json:"user_message_uuids"`
 	Capabilities     []string  `json:"capabilities"` // system init
+	CompactMetadata  *struct {
+		PreTokens  int64 `json:"pre_tokens"`
+		PostTokens int64 `json:"post_tokens"`
+	} `json:"compact_metadata"` // system compact_boundary
 	Response         *response `json:"response"`     // control_response
 	RequestID        string    `json:"request_id"`   // control_request, control_cancel_request
 	Request          *struct {
@@ -78,11 +83,32 @@ func (b *blocks) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type cacheCreation struct {
+	Ephemeral1h int64 `json:"ephemeral_1h_input_tokens"`
+	Ephemeral5m int64 `json:"ephemeral_5m_input_tokens"`
+}
+
 type usage struct {
-	Input         int64 `json:"input_tokens"`
-	CacheCreation int64 `json:"cache_creation_input_tokens"`
-	CacheRead     int64 `json:"cache_read_input_tokens"`
-	Output        int64 `json:"output_tokens"`
+	Input         int64          `json:"input_tokens"`
+	CacheCreation int64          `json:"cache_creation_input_tokens"`
+	CacheRead     int64          `json:"cache_read_input_tokens"`
+	Output        int64          `json:"output_tokens"`
+	Cache         *cacheCreation `json:"cache_creation"`
+}
+
+// cacheTTL is how long the prompt cache created by this request stays warm,
+// or 0 when no cache entry was created (such as a pure cache read).
+func (u usage) cacheTTL() time.Duration {
+	if u.Cache == nil {
+		return 0
+	}
+	if u.Cache.Ephemeral1h > 0 {
+		return time.Hour
+	}
+	if u.Cache.Ephemeral5m > 0 {
+		return 5 * time.Minute
+	}
+	return 0
 }
 
 func (u usage) total() int64 { return u.Input + u.CacheCreation + u.CacheRead + u.Output }
@@ -129,7 +155,8 @@ func window(models map[string]modelUsage, model string) int64 {
 }
 
 // sent is the context a request of the turn's sent, as its message_start
-// or its assistant message says, once.
+// or its assistant message says, once. The prompt cache's lifetime begins
+// with the request, so CacheExpires is anchored to the first reading.
 func (t *turn) sent(r *request) []provider.Event {
 	if r == nil {
 		return nil
@@ -138,20 +165,37 @@ func (t *turn) sent(r *request) []provider.Event {
 	if used == 0 {
 		return nil
 	}
+	ttl := r.Usage.cacheTTL()
 	same := used == t.used && r.Model == t.model
-	t.used, t.model = used, r.Model
 	if same {
-		return nil
+		if ttl == 0 || !t.cacheExpires.IsZero() {
+			return nil
+		}
+		t.cacheExpires = t.clock().UTC().Round(0).Add(ttl)
+		return []provider.Event{provider.Context{Used: used, Model: t.model, CacheExpires: t.cacheExpires}}
 	}
-	return []provider.Event{provider.Context{Used: used, Model: t.model}}
+	t.used, t.model = used, r.Model
+	if ttl > 0 {
+		t.cacheExpires = t.clock().UTC().Round(0).Add(ttl)
+	} else {
+		t.cacheExpires = time.Time{}
+	}
+	return []provider.Event{provider.Context{Used: used, Model: t.model, CacheExpires: t.cacheExpires}}
 }
 
 // measured is the turn's context with the window a result gives it.
 func (t *turn) measured(m message) []provider.Event {
 	if w := window(m.ModelUsage, t.model); t.used > 0 && w > 0 {
-		return []provider.Event{provider.Context{Used: t.used, Window: w, Model: t.model}}
+		return []provider.Event{provider.Context{Used: t.used, Window: w, Model: t.model, CacheExpires: t.cacheExpires}}
 	}
 	return nil
+}
+
+func (t *turn) clock() time.Time {
+	if t.now != nil {
+		return t.now()
+	}
+	return time.Now()
 }
 
 type response struct {
@@ -186,14 +230,16 @@ var tools = map[string]tool{
 // carry a parent tool use and stay out of the thread: their Task step
 // stands for them.
 type turn struct {
-	workspace   string
-	steps       []provider.Work // tool uses still open, in the order they opened
-	texted      bool            // a text block already streamed
-	signedOut   string          // what Claude Code said when the API refused its login
-	tokens      int64           // what the results before the last one used
-	used        int64           // the context the turn's last request sent; 0 before one, or since a compaction
-	model       string          // the model that request went to
-	interrupted bool            // the user stopped the turn
+	workspace    string
+	now          func() time.Time
+	steps        []provider.Work // tool uses still open, in the order they opened
+	texted       bool            // a text block already streamed
+	signedOut    string          // what Claude Code said when the API refused its login
+	tokens       int64           // what the results before the last one used
+	used         int64           // the context the turn's last request sent; 0 before one, or since a compaction
+	model        string          // the model that request went to
+	cacheExpires time.Time       // when that request's prompt cache expires; zero when unknown
+	interrupted  bool            // the user stopped the turn
 }
 
 func newTurn(workspace string) *turn {
@@ -249,7 +295,12 @@ func (t *turn) read(m message) []provider.Event {
 	case "system":
 		if m.Subtype == "compact_boundary" {
 			t.used = 0
-			return []provider.Event{provider.Context{Compacted: true}}
+			t.cacheExpires = time.Time{}
+			ev := provider.Context{Compacted: true}
+			if m.CompactMetadata != nil {
+				ev.PreTokens, ev.PostTokens = m.CompactMetadata.PreTokens, m.CompactMetadata.PostTokens
+			}
+			return []provider.Event{ev}
 		}
 	}
 	return nil

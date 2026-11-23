@@ -315,11 +315,13 @@ type TurnResult struct {
 
 // Turn is a thread's live run as its view carries it: the model and
 // access the run was admitted at, which a configure since leaves as they
-// were.
+// were. Silent is true for background maintenance runs such as idle
+// compaction.
 type Turn struct {
 	Run    ID       `json:"run"`
 	Model  ModelRef `json:"model"`
 	Access Access   `json:"access"`
+	Silent bool     `json:"silent,omitempty"`
 }
 
 // Thread is the projection a client reads. Working is derived from Run and
@@ -371,12 +373,15 @@ type Thread struct {
 
 // Context is how full a thread's context is: Used tokens of Model's
 // Window, 0 or "" where no agent has said. Stale says the agent compacted
-// it since Used was read, so what it holds now is unknown.
+// it since Used was read, so what it holds now is unknown. CacheExpires
+// is when the provider's prompt cache for the last request expires, when
+// the provider reported its TTL.
 type Context struct {
-	Used   int64  `json:"used,omitempty"`
-	Window int64  `json:"window,omitempty"`
-	Model  string `json:"model,omitempty"`
-	Stale  bool   `json:"stale,omitempty"`
+	Used         int64     `json:"used,omitempty"`
+	Window       int64     `json:"window,omitempty"`
+	Model        string    `json:"model,omitempty"`
+	Stale        bool      `json:"stale,omitempty"`
+	CacheExpires time.Time `json:"cacheExpires,omitzero"`
 }
 
 // Report is a child's report as its parent's view carries it.
