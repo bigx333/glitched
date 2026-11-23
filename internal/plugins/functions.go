@@ -265,10 +265,11 @@ func (h *Host) ask(ctx context.Context, id string, args json.RawMessage) (any, e
 	}
 	done := make(chan answer, 1)
 	// The plugin hears of its deadline at once, but its next ask waits for
-	// this one to end where it runs, which may be a while after.
+	// this one to end where it runs, which may be a while after. It ends
+	// before the plugin hears its answer, so an ask right after isn't busy.
 	go func() {
-		defer h.asking.Delete(id)
 		a, err := h.opts.Ask(ctx, id, q)
+		h.asking.Delete(id)
 		done <- answer{a, err}
 	}()
 	var got answer
