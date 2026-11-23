@@ -99,6 +99,25 @@ func TestAMultiSelectQuestionSendsEachPick(t *testing.T) {
 	}
 }
 
+// Each of agy's questions takes its own answer, in its own fields.
+func TestEachQuestionsAnswerGoesInItsOwnFields(t *testing.T) {
+	for _, c := range []struct {
+		answers []api.Answer
+		want    string
+	}{
+		{[]api.Answer{{Other: "teal"}, {Picked: []string{"(Recommended) Apple", "Orange"}}}, `{"q1_other":"teal","q2":["1","3"]}`},
+		{[]api.Answer{{Picked: []string{"Red"}}, {Picked: []string{"Banana"}, Other: "figs"}}, `{"q1":"2","q2":["2"],"q2_other":"figs"}`},
+	} {
+		g, r, q, _ := asked(t, "question-two")
+		if len(q.Questions) != 2 || q.Questions[0].Text != "What is your favourite colour?" || q.Questions[0].Multi || q.Questions[1].Text != "Which fruits do you like?" || !q.Questions[1].Multi {
+			t.Fatalf("the card asks %+v", q)
+		}
+		if said := reply(t, g, r, api.Answers{Answers: c.answers}); said != `Answer: {"action":"accept","content":`+c.want+"}" {
+			t.Errorf("for %+v the agent got %s", c.answers, said)
+		}
+	}
+}
+
 // A question the turn stops waiting on goes back cancelled, and its card
 // says it was withdrawn.
 func TestAStoppedTurnCancelsItsQuestion(t *testing.T) {
