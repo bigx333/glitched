@@ -49,7 +49,7 @@ func (p pluginServer) PluginCall(ctx context.Context, raw json.RawMessage) (json
 
 // startPlugins runs the plugins' services, whose effects act on the
 // engine itself.
-func (d *Daemon) startPlugins(dir string, run func(ctx context.Context, id string, allowed []string, args json.RawMessage) (any, error)) *plugins.Services {
+func (d *Daemon) startPlugins(dir string, run func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error)) *plugins.Services {
 	return plugins.StartServices(dir, plugins.ServiceOptions{
 		Logf: func(format string, args ...any) { slog.Info(fmt.Sprintf(format, args...)) },
 		Do:   d.pluginEffect,

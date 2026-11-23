@@ -82,8 +82,9 @@ type Options struct {
 	// reloaded, so that what the app keeps of it goes.
 	Reloaded func(id string)
 	// Run runs a program the plugin id may, as glitched.run asks: its
-	// manifest's programs are allowed. Nil runs none.
-	Run func(ctx context.Context, id string, allowed []string, args json.RawMessage) (any, error)
+	// manifest's programs are allowed, and the denied folders are kept
+	// from it. Nil runs it with RunProgram.
+	Run func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error)
 	// ServiceCall calls a method of the plugin id's service, as
 	// glitched.service.call asks. Nil reaches none.
 	ServiceCall func(ctx context.Context, id, method string, args json.RawMessage) (any, error)

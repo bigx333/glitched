@@ -83,13 +83,13 @@ func offline(t *testing.T) *app {
 // it weren't installed, unless a test plays it (playGh).
 func init() {
 	run := runPluginProgram
-	runPluginProgram = func(ctx context.Context, id string, allowed []string, raw json.RawMessage) (any, error) {
+	runPluginProgram = func(ctx context.Context, id string, allowed, denied []string, raw json.RawMessage) (any, error) {
 		var a struct{ Program string }
 		json.Unmarshal(raw, &a)
 		if a.Program == "gh" {
 			return nil, fmt.Errorf("%q isn't installed on this device (or isn't on your PATH)", "gh")
 		}
-		return run(ctx, id, allowed, raw)
+		return run(ctx, id, allowed, denied, raw)
 	}
 }
 

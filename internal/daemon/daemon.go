@@ -80,7 +80,7 @@ type Config struct {
 	// engine.DefaultLimits'.
 	Children engine.Limits `json:"children,omitzero"`
 	// PluginRun runs the programs plugins' services ask for; nil runs none.
-	PluginRun func(ctx context.Context, id string, allowed []string, args json.RawMessage) (any, error) `json:"-"`
+	PluginRun func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error) `json:"-"`
 }
 
 const configFile = "engine.json"

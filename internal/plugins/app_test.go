@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -244,7 +245,7 @@ func TestRunAndServiceNeedTheirGrants(t *testing.T) {
 		export function view({ state }) { return { body: { type: "text", text: state.join(" | ") } } }`)
 	var ran []string
 	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf,
-		Run: func(_ context.Context, id string, allowed []string, args json.RawMessage) (any, error) {
+		Run: func(_ context.Context, id string, allowed, _ []string, args json.RawMessage) (any, error) {
 			ran = append(ran, id+" "+strings.Join(allowed, ","))
 			return map[string]any{"status": 0}, nil
 		},
@@ -328,5 +329,33 @@ func TestRunCantReadTheVault(t *testing.T) {
 	u.until(t, "both runs", func() bool { return strings.Contains(texts(s), " | ") })
 	if !strings.HasPrefix(texts(s), "fine | refused: ") || strings.Contains(texts(s), "probe-value") {
 		t.Fatalf("the plugin read the vault: %s", texts(s))
+	}
+}
+
+// A runner the app gives, as the window's is, is told to keep the vault
+// out of a run as the host's own runner does.
+func TestAGivenRunnerKeepsTheVaultOut(t *testing.T) {
+	state, u, fx := t.TempDir(), newUIThread(), &effects{}
+	writeModule(t, state, "reader", `"capabilities": ["programs"], "glitched": { "programs": ["cat"] }, `, `
+		export async function init() { await glitched.run("cat", ["notes.txt"]); return { state: "ran" } }
+		export function view({ state }) { return { body: { type: "text", text: String(state) } } }`)
+	denied := make(chan []string, 1)
+	h := Open(state, Options{Post: u.post, Do: fx.do, Logf: t.Logf,
+		Run: func(_ context.Context, _ string, _, d []string, _ json.RawMessage) (any, error) {
+			denied <- d
+			return map[string]any{"status": 0}, nil
+		},
+	})
+	t.Cleanup(h.Close)
+	h.SetGranted("reader", "programs", true)
+	s := session(t, h, "reader")
+	s.Retry()
+	select {
+	case d := <-denied:
+		if !slices.Contains(d, secrets.Under(state)) {
+			t.Fatalf("denied %q, want the vault %s", d, secrets.Under(state))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no run")
 	}
 }

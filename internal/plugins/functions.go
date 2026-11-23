@@ -168,12 +168,11 @@ func (h *Host) functions(in *installed) map[string]plugin.Function {
 			}
 			run := h.opts.Run
 			if run == nil {
-				denied := []string{secrets.Under(h.state)}
-				run = func(ctx context.Context, id string, allowed []string, args json.RawMessage) (any, error) {
+				run = func(ctx context.Context, _ string, allowed, denied []string, args json.RawMessage) (any, error) {
 					return RunProgram(ctx, allowed, denied, args)
 				}
 			}
-			return run(ctx, id, in.ext.Programs, args)
+			return run(ctx, id, in.ext.Programs, []string{secrets.Under(h.state)}, args)
 		},
 		"models.ask": func(ctx context.Context, args json.RawMessage) (any, error) {
 			return h.ask(ctx, id, args)

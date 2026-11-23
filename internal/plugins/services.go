@@ -45,7 +45,7 @@ type ServiceOptions struct {
 	Logf func(format string, args ...any)
 	// Do runs a service's effect, as the GUI's Options.Do does a page's.
 	Do  func(plugin string, e Effect) (any, error)
-	Run func(ctx context.Context, id string, allowed []string, args json.RawMessage) (any, error)
+	Run func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error)
 	// Idle and TimerScale shorten the idle stop and timers, in tests.
 	Idle       time.Duration
 	TimerScale float64

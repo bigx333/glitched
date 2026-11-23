@@ -97,8 +97,8 @@ func (a *app) openPlugins(dir string) {
 			clear(a.pluginAssets)
 			forgetPluginTerminals()
 		},
-		Run: func(ctx context.Context, id string, allowed []string, args json.RawMessage) (any, error) {
-			return runPluginProgram(ctx, id, allowed, args)
+		Run: func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error) {
+			return runPluginProgram(ctx, id, allowed, denied, args)
 		},
 		Ask: func(ctx context.Context, id string, q plugins.AskRequest) (plugins.AskAnswer, error) {
 			return a.askModel(ctx, dir, id, q)
@@ -732,7 +732,9 @@ func pluginWorkspace(ws string) (string, error) {
 
 // runPluginProgram is what glitched.run runs in the window. A test plays
 // gh with it, so that no test reaches the user's own.
-var runPluginProgram = plugins.RunProgram
+var runPluginProgram = func(ctx context.Context, _ string, allowed, denied []string, raw json.RawMessage) (any, error) {
+	return plugins.RunProgram(ctx, allowed, denied, raw)
+}
 
 // askGrace is how long past its timeout an ask's provider may take to
 // stop before the window stops waiting for the engine's answer.
