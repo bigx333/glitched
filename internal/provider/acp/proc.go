@@ -86,6 +86,8 @@ type proc struct {
 	replayed int
 	session  acpsdk.SessionId
 	options  []acpsdk.SessionConfigOption // the session's, as the agent last said
+	mode     string                       // the session's mode, as the agent last said
+	moded    bool                         // the session has modes, as the agent said
 	run      *Agent                       // the run the agent serves, if any
 	prompt   chan struct{}                // closes once the run's prompt is written
 	parked   bool                         // it waits for its thread's next run
@@ -102,10 +104,11 @@ var (
 	_ acpsdk.Client = (*proc)(nil)
 )
 
-// launch starts the agent in dir under mark and initializes it. ctx bounds
-// only the start; the process lives until Close.
-func launch(ctx context.Context, profile Profile, bin, dir, mark string) (*proc, error) {
-	cmd := exec.Command(bin, profile.Args...)
+// launch starts the agent in dir under mark, with args after the
+// profile's, and initializes it. ctx bounds only the start; the process
+// lives until Close.
+func launch(ctx context.Context, profile Profile, bin, dir, mark string, args []string) (*proc, error) {
+	cmd := exec.Command(bin, slices.Concat(profile.Args, args)...)
 	if err := guard(bin); err != nil {
 		return nil, err
 	}
@@ -210,12 +213,13 @@ func (p *proc) open(ctx context.Context, dir string, servers []provider.MCPServe
 		list = append(list, acpsdk.McpServer{Stdio: &acpsdk.McpServerStdio{Name: s.Name, Command: s.Command, Args: args, Env: env}})
 	}
 	var options []acpsdk.SessionConfigOption
+	var modes *acpsdk.SessionModeState
 	id := acpsdk.SessionId(had)
 	taken := false
 	if had != "" && p.caps.resume {
 		r, err := p.conn.ResumeSession(ctx, acpsdk.ResumeSessionRequest{SessionId: id, Cwd: dir, McpServers: list})
 		if err == nil {
-			taken, options = true, r.ConfigOptions
+			taken, options, modes = true, r.ConfigOptions, r.Modes
 		} else if err := p.fatal("resume the thread's session", err); err != nil {
 			return false, err
 		}
@@ -233,7 +237,7 @@ func (p *proc) open(ctx context.Context, dir string, servers []provider.MCPServe
 		p.loading = ""
 		p.mu.Unlock()
 		if err == nil {
-			taken, options = replayed > 0, r.ConfigOptions
+			taken, options, modes = replayed > 0, r.ConfigOptions, r.Modes
 		} else if err := p.fatal("load the thread's session", err); err != nil {
 			return false, err
 		}
@@ -246,10 +250,13 @@ func (p *proc) open(ctx context.Context, dir string, servers []provider.MCPServe
 		if err != nil {
 			return false, p.failure("open a session", err)
 		}
-		id, options = r.SessionId, r.ConfigOptions
+		id, options, modes = r.SessionId, r.ConfigOptions, r.Modes
 	}
 	p.mu.Lock()
-	p.session, p.options = id, options
+	p.session, p.options, p.mode, p.moded = id, options, "", modes != nil
+	if modes != nil {
+		p.mode = string(modes.CurrentModeId)
+	}
 	p.mu.Unlock()
 	return lost, nil
 }
@@ -334,11 +341,25 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 	return out, nil
 }
 
-// configure sets the session's model and effort to ref's, where they
-// differ. A ref without either leaves the agent's own.
-func (p *proc) configure(ctx context.Context, ref api.ModelRef) error {
+// configure sets the session's model and effort to ref's, and its mode
+// to mode, where they differ. A ref without either, or no mode, leaves
+// the agent's own.
+func (p *proc) configure(ctx context.Context, ref api.ModelRef, mode string) error {
 	stop := context.AfterFunc(ctx, p.halt)
 	defer stop()
+	// ACP picks a mode of those the session lists: one that lists none
+	// has none to pick, and runs as it starts, which asks the most.
+	p.mu.Lock()
+	current, moded := p.mode, p.moded
+	p.mu.Unlock()
+	if mode != "" && mode != current && moded {
+		if _, err := p.conn.SetSessionMode(ctx, acpsdk.SetSessionModeRequest{SessionId: p.session, ModeId: acpsdk.SessionModeId(mode)}); err != nil {
+			return p.failure("run at this access level, as its mode "+mode, err)
+		}
+		p.mu.Lock()
+		p.mode = mode
+		p.mu.Unlock()
+	}
 	for _, want := range []struct {
 		category acpsdk.SessionConfigOptionCategory
 		value    string
@@ -709,6 +730,11 @@ func (p *proc) SessionUpdate(ctx context.Context, n acpsdk.SessionNotification) 
 		u.SessionInfoUpdate != nil || u.UsageUpdate != nil || u.UserMessageChunk != nil
 	if u.ConfigOptionUpdate != nil {
 		p.setOptions(u.ConfigOptionUpdate.ConfigOptions)
+	}
+	if u.CurrentModeUpdate != nil {
+		p.mu.Lock()
+		p.mode = string(u.CurrentModeUpdate.CurrentModeId)
+		p.mu.Unlock()
 	}
 	if run := p.current(!quiet, kindOf(u)); run != nil && !quiet {
 		run.update(u)

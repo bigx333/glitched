@@ -218,7 +218,7 @@ func (ad *Adapter) argv(spec provider.SessionSpec) []string {
 	a := []string{"-p", "--verbose",
 		"--input-format", "stream-json", "--output-format", "stream-json",
 		"--include-partial-messages",
-		"--permission-mode", modes[spec.Access], "--permission-prompt-tool", "stdio",
+		"--permission-mode", grants[spec.Access].Mode, "--permission-prompt-tool", "stdio",
 	}
 	var trusted, instructions []string
 	for i, s := range spec.MCP {
@@ -259,10 +259,11 @@ func mcpConfig(s provider.MCPServer) string {
 	return string(b)
 }
 
-var modes = map[api.Access]string{
-	api.AccessAsk:       "default",
-	api.AccessAutoEdits: "acceptEdits",
-	api.AccessFull:      "bypassPermissions",
+// grants are Claude Code's permission modes for Glitched's levels.
+var grants = provider.Grants{
+	api.AccessAsk:       {Mode: "default"},
+	api.AccessAutoEdits: {Mode: "acceptEdits"},
+	api.AccessFull:      {Mode: "bypassPermissions"},
 }
 
 // modelOf is the CLI's name for a model the GUI lists, as "Claude Opus 5.5"

@@ -17,7 +17,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if len(os.Args) == 3 && os.Args[1] == "wire-fake" {
+	if len(os.Args) >= 3 && os.Args[1] == "wire-fake" {
 		runWireFake(os.Args[2])
 		return
 	}
