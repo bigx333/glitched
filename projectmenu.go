@@ -136,7 +136,7 @@ func (a *app) projectTrees(p *project) (tops []thread, all []node) {
 func (a *app) removeProject(p *project) {
 	tops, all := a.projectTrees(p)
 	for _, t := range tops {
-		a.deleteTree(t)
+		a.deleteTree(t, false)
 	}
 	// Deletes that failed as they were sent, with no engine to take them,
 	// leave the project, and the draft in it.
@@ -154,10 +154,10 @@ func (a *app) removeProject(p *project) {
 	// So does one in a workspace whose every thread went with the trees,
 	// as the shown thread's does when the delete leaves the draft there.
 	k := keyOf(e, a.fresh.workspace)
-	emptied := k != p.key && slices.ContainsFunc(all, func(n node) bool { return keyOf(n.t.env, n.t.View.Workspace) == k }) &&
+	emptied := k != p.key && slices.ContainsFunc(all, func(n node) bool { return keyOf(n.t.env, n.t.project()) == k }) &&
 		!slices.ContainsFunc(a.gather(), func(x *project) bool { return x.key == k })
 	if k == p.key || emptied {
-		a.fresh = a.homeDraft(e)
+		a.newDraft(a.homeDraft(e))
 	}
 }
 

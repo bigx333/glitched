@@ -177,13 +177,13 @@ func (a *app) settleTree(t thread) {
 // included. The chat shows a deleted thread until the delete lands, so a
 // refused one leaves it shown with why, and then shows a new thread in
 // its workspace.
-func (a *app) deleteTree(t thread) {
+func (a *app) deleteTree(t thread, removeWorktree bool) {
 	for _, n := range append(a.below(t), node{t, 0}) {
 		if a.selected == n.t.id() {
-			a.fresh = draft{n.t.env, n.t.View.Workspace}
+			a.newDraft(draft{env: n.t.env, workspace: n.t.project()})
 		}
 	}
-	a.backend.Delete(t.env, t.id())
+	a.backend.Delete(t.env, t.id(), removeWorktree)
 }
 
 func isAre(n int) string {

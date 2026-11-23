@@ -230,6 +230,8 @@ type app struct {
 	projects []*project
 	selected api.ID // zero: the draft
 	fresh    draft
+	worktree worktreeChoice  // where the next new thread runs
+	repos    map[string]repo // what git said of the folders a new thread could start in
 	opened   opened
 	// kids are the threads by parent, as the frame being built shows them;
 	// childrenOpen the threads whose children the sidebar shows.
@@ -592,6 +594,9 @@ type app struct {
 	// deleting is the thread the alert asks about deleting.
 	deleting   thread
 	deleteOpen bool
+	// deleteChanges are the changes git doesn't ignore in the worktree
+	// of the thread the alert asks about, -1 where none can tell.
+	deleteChanges int
 	// removing is the project the alert asks about removing, by key, so
 	// that it removes the threads the project has as it's confirmed.
 	removing   projectKey

@@ -235,7 +235,7 @@ func (a *app) settingsNav(c *ui.Context) {
 // its text area taking the focus from wherever the press left it.
 func (a *app) newThread() {
 	t := a.current()
-	a.startIn(draft{t.env, t.View.Workspace})
+	a.startIn(draft{env: t.env, workspace: t.project()})
 	a.focusBack()
 }
 
@@ -244,7 +244,7 @@ func (a *app) startThread(p *project) { a.startIn(draft{p.env, p.key.workspace})
 
 func (a *app) startIn(d draft) {
 	a.leaveFor()
-	a.fresh = d
+	a.newDraft(d)
 	a.selected, a.dockJump = api.ID{}, false
 	a.follow()
 	if a.router.Path() != "/" {

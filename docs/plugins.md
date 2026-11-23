@@ -319,7 +319,7 @@ Your `place` export draws it as it draws any place.
 | `composer` | one, keyed `composer` | `{thread}` |
 | `composer.send` | the open composer, keyed by its thread's id, or `draft` for a new thread's | `{thread, draft, working}` |
 | `composer.access` | the open composer, keyed as `composer.send` | `{thread, access, levels: [{name, about}]}` |
-| `composer.workspace` | the open composer, keyed by its thread's id, or `draft` for a new thread's, and the workspace it shows, a new key when that changes | `{thread, workspace, machine?, draft}` |
+| `composer.workspace` | the open composer, keyed by its thread's id, or `draft` for a new thread's, and the workspace it shows, a new key when that changes | `{thread, workspace, machine?, worktree?, draft}`; `worktree` is the branch of a thread in a worktree of its own, or `New worktree from <branch>` for a new thread that asks for one |
 | `composer.model` | the open composer's two: `<key>/button`, and `<key>/panel` while the popover is open, `<key>` keyed as `composer.send` | `{thread, part, model, key, effort, fast, familyKey, lockKey, family, lock, families: [{key, name, about}], models: [{key, name, short, about, familyKey, family}], familyRowHeight, modelRowHeight, modelsMaxHeight}` |
 | `palette` | the open palette, keyed `palette:<n>`, a new key each time it opens | `{query, actions: [{id, section, label, hint?, icon, also?}], threads: [{id, title, project, ago}], rowHeight, headerHeight, noneHeight}` |
 | `timeline.message` | each row of the thread shown but its approval, question and report cards, keyed by the row's key | `{key, kind, streaming, note, failed}` |

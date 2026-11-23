@@ -213,7 +213,7 @@ func TestAPluginDrawsTheAccessPickerButGlitchedShowsTheAccess(t *testing.T) {
 func TestSetAccessTakesOnlyThePickersLevels(t *testing.T) {
 	h := start(t, tempDir(t))
 	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
-	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAutoEdits)
+	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAutoEdits, nil)
 	h.thread("Mine")
 	writeOwnPlugin(t, h.a, "my-access", strings.Replace(accessManifest, `"threads:access"`, `"threads:write", "threads:access"`, 1), strings.ReplaceAll(accessModule, "DRAWS", strconv.Quote("levels")))
 	settlePlugins(t, h.a, h.tt, h.p)

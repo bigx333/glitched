@@ -106,7 +106,7 @@ func TestAFamilyWhoseEngineReportsNoneIsntOffered(t *testing.T) {
 	draft := effort.Y - top.Y
 	h.click("Model")
 	codex := api.ModelRef{Provider: "codex", Model: "gpt-5.5-codex", Effort: "high"}
-	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", codex, api.AccessAsk)
+	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", codex, api.AccessAsk, nil)
 	h.thread("Mine")
 	h.a.selected = id
 	h.tt.Frame()
@@ -279,7 +279,7 @@ func TestAModelIDTwoProvidersShareGoesToTheOnePicked(t *testing.T) {
 		if got := h.a.modelRef(); got.Provider != pick.provider || got.Model != "shared" {
 			t.Errorf("picking %s made a thread on %+v, want %s's shared", pick.row, got, pick.provider)
 		}
-		id := h.a.backend.Create(h.local(), t.TempDir(), pick.row, h.a.modelRef(), api.AccessAsk)
+		id := h.a.backend.Create(h.local(), t.TempDir(), pick.row, h.a.modelRef(), api.AccessAsk, nil)
 		h.until("the thread", func() bool { _, ok := h.a.find(id); return ok })
 		if th, _ := h.a.find(id); h.a.threadChoice(th).Model != (modelKey{pick.provider, "shared"}) {
 			t.Errorf("the thread made on %s shows %+v", pick.row, h.a.threadChoice(th).Model)

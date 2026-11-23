@@ -108,7 +108,7 @@ func TestAThreadRunsAtTheEffortItsPickerShows(t *testing.T) {
 		provider.Model{ID: "small", Name: "Small", Efforts: []provider.Effort{{ID: "low"}, {ID: "medium"}}},
 	))
 	allAnswered(h)
-	h.a.backend.Create(h.local(), t.TempDir(), "Mine", api.ModelRef{Provider: "claude", Model: "small", Effort: "max"}, api.AccessAsk)
+	h.a.backend.Create(h.local(), t.TempDir(), "Mine", api.ModelRef{Provider: "claude", Model: "small", Effort: "max"}, api.AccessAsk, nil)
 	th := h.thread("Mine")
 	if !h.a.sendText(th, "Go.", "") {
 		t.Fatal("nothing sent")
@@ -123,7 +123,7 @@ func TestConfiguringTheModelAloneTakesAnEffortItRunsAt(t *testing.T) {
 		provider.Model{ID: "small", Name: "Small", Efforts: []provider.Effort{{ID: "low"}, {ID: "medium"}}},
 	))
 	allAnswered(h)
-	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", api.ModelRef{Provider: "claude", Model: "wide", Effort: "max"}, api.AccessAsk)
+	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", api.ModelRef{Provider: "claude", Model: "wide", Effort: "max"}, api.AccessAsk, nil)
 	h.thread("Mine")
 	if _, err := h.a.configureEffect([]byte(fmt.Sprintf(`{"thread":%q,"model":"small"}`, id))); err != nil {
 		t.Fatal(err)

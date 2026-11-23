@@ -49,7 +49,7 @@ func TestRemoteServersShowTheirThreadsAndComeBack(t *testing.T) {
 		t.Fatalf("the box shows %+v, want its thread", box.Threads)
 	}
 
-	here := m.Create(box, "/srv", "from the gui", fakeModel, api.AccessAsk)
+	here := m.Create(box, "/srv", "from the gui", fakeModel, api.AccessAsk, nil)
 	g.until(t, "the box to confirm the thread", func() bool {
 		th := box.Threads[here]
 		return th.View.Revision > 0 && len(th.Pending) == 0
@@ -290,7 +290,7 @@ func TestRepairingATokenKeepsTheServersThreads(t *testing.T) {
 	}
 	box := m.Envs()[1]
 	online(t, g, box)
-	id := m.Create(box, "/work", "draft", fakeModel, api.AccessAsk)
+	id := m.Create(box, "/work", "draft", fakeModel, api.AccessAsk, nil)
 	g.until(t, "the create confirmed", func() bool { th := box.Threads[id]; return th.known && len(th.Pending) == 0 })
 	if err := daemon.Revoke(rdir, "gui"); err != nil {
 		t.Fatal(err)
@@ -432,7 +432,7 @@ func TestNothingStartsOnADuplicateBetweenRetries(t *testing.T) {
 	isDup := func() bool { _, ok := again.Status.(Duplicate); return ok }
 	g.until(t, "box-again a duplicate", isDup, func() string { return describeStatus(again.Status) })
 	g.until(t, "box-again retrying", func() bool { return !isDup() }, func() string { return describeStatus(again.Status) })
-	if id := m.Create(again, "/srv", "started on the duplicate", fakeModel, api.AccessAsk); !id.IsZero() || len(again.Threads) != 0 {
+	if id := m.Create(again, "/srv", "started on the duplicate", fakeModel, api.AccessAsk, nil); !id.IsZero() || len(again.Threads) != 0 {
 		t.Fatalf("a thread started on box-again while it was %s", describeStatus(again.Status))
 	}
 }
@@ -483,7 +483,7 @@ func TestCommandsInFlightGoOutAfterAReconnect(t *testing.T) {
 	}
 	env := m.Envs()[1]
 	online(t, g, env)
-	id := m.Create(env, "/work", "t", fakeModel, api.AccessAsk)
+	id := m.Create(env, "/work", "t", fakeModel, api.AccessAsk, nil)
 	g.until(t, "the create confirmed", func() bool { th := env.Threads[id]; return th.known && len(th.Pending) == 0 })
 
 	for _, d := range []api.DispositionState{api.Settled, api.Open, api.Settled} {
@@ -548,7 +548,7 @@ func TestReconnectingOrRemovingAServerEndsItsGoroutines(t *testing.T) {
 	}
 	box := m.Envs()[1]
 	online(t, g, box)
-	id := m.Create(box, "/srv", "x", fakeModel, api.AccessAsk)
+	id := m.Create(box, "/srv", "x", fakeModel, api.AccessAsk, nil)
 	m.OpenThread(box, id)
 	g.until(t, "the transcript", func() bool { return box.Threads[id].Transcript.Cursor.Seq > 0 })
 	settles(t, g, "with the box's thread open", idle+2)

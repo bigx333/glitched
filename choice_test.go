@@ -145,7 +145,7 @@ func TestAComposerFileThatDoesNotParseIsReplaced(t *testing.T) {
 func TestAThreadsPickersAreItsOwn(t *testing.T) {
 	h := start(t, tempDir(t))
 	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
-	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAutoEdits)
+	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAutoEdits, nil)
 	h.thread("Mine")
 	h.a.selected = id
 	h.a.model, h.a.access = keyNamed("Claude Haiku 5.5"), accessFull
@@ -179,7 +179,7 @@ func TestAThreadsPickersAreItsOwn(t *testing.T) {
 // switch to: it keeps its provider.
 func TestAThreadOfAnUnlistedProviderIsOfferedNoModels(t *testing.T) {
 	h := start(t, tempDir(t))
-	id := h.a.backend.Create(h.local(), t.TempDir(), "Fake", api.ModelRef{Provider: "fake", Model: "fake"}, api.AccessAsk)
+	id := h.a.backend.Create(h.local(), t.TempDir(), "Fake", api.ModelRef{Provider: "fake", Model: "fake"}, api.AccessAsk, nil)
 	h.thread("Fake")
 	h.a.selected = id
 	h.tt.Frame()
@@ -201,7 +201,7 @@ func TestAThreadOfAnUnlistedProviderIsOfferedNoModels(t *testing.T) {
 func TestAThreadsEffortIsItsOwn(t *testing.T) {
 	h := start(t, tempDir(t))
 	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
-	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk)
+	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk, nil)
 	h.thread("Mine")
 	h.a.selected = id
 	h.tt.Frame()
@@ -379,7 +379,7 @@ func TestADefaultChosenByAThumbItsPickerClosedOnIsKept(t *testing.T) {
 func TestAPressItsPickerClosedOnChoosesNoEffort(t *testing.T) {
 	h := start(t, tempDir(t))
 	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
-	h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk)
+	h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk, nil)
 	th := h.thread("Mine")
 	h.until("the thread's view", func() bool { return th.View.Revision > 0 && len(th.Pending) == 0 })
 	h.tt.Frame()
@@ -413,7 +413,7 @@ func TestAPressItsPickerClosedOnChoosesNoEffort(t *testing.T) {
 func TestAThumbHeldInAThreadChoosesNothingInTheDraft(t *testing.T) {
 	h := start(t, tempDir(t))
 	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
-	h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk)
+	h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk, nil)
 	th := h.thread("Mine")
 	h.until("the thread's view", func() bool { return th.View.Revision > 0 && len(th.Pending) == 0 })
 	h.a.select_(th)
@@ -449,8 +449,8 @@ func TestAThumbHeldInAThreadChoosesNothingInTheDraft(t *testing.T) {
 func TestAThumbHeldInAThreadChoosesNothingInTheNextThread(t *testing.T) {
 	h := start(t, tempDir(t))
 	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
-	h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk)
-	h.a.backend.Create(h.local(), t.TempDir(), "Other", opus, api.AccessAsk)
+	h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk, nil)
+	h.a.backend.Create(h.local(), t.TempDir(), "Other", opus, api.AccessAsk, nil)
 	mine, other := h.thread("Mine"), h.thread("Other")
 	h.until("the threads' views", func() bool {
 		return mine.View.Revision > 0 && other.View.Revision > 0 && len(mine.Pending)+len(other.Pending) == 0
@@ -482,8 +482,8 @@ func TestAThumbHeldInAThreadChoosesNothingInTheNextThread(t *testing.T) {
 func TestAHoldOnFullAccessGrantsNothingToTheNextThread(t *testing.T) {
 	h := start(t, tempDir(t))
 	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
-	h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk)
-	h.a.backend.Create(h.local(), t.TempDir(), "Other", opus, api.AccessAsk)
+	h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk, nil)
+	h.a.backend.Create(h.local(), t.TempDir(), "Other", opus, api.AccessAsk, nil)
 	mine, other := h.thread("Mine"), h.thread("Other")
 	h.until("the threads' views", func() bool {
 		return mine.View.Revision > 0 && other.View.Revision > 0 && len(mine.Pending)+len(other.Pending) == 0
@@ -615,7 +615,7 @@ func TestADefaultChosenByAThumbTheDraftLostIsKept(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h := start(t, tempDir(t))
 			opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
-			h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk)
+			h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk, nil)
 			th := h.thread("Mine")
 			h.until("the thread's view", func() bool { return th.View.Revision > 0 && len(th.Pending) == 0 })
 			h.tt.Frame()
@@ -661,7 +661,7 @@ const configurerModule = `export async function command({ id, args }) {
 func TestAPluginConfiguresAThreadsModelButNeverItsAccess(t *testing.T) {
 	h := start(t, tempDir(t))
 	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
-	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAutoEdits)
+	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAutoEdits, nil)
 	h.thread("Mine")
 	writeOwnPlugin(t, h.a, "configurer", `{"id": "configurer", "name": "Configurer", "main": "index.js", "contract": "glitched", "contractVersion": 2,
 		"capabilities": ["threads:write"], "contributes": {"commands": [{"id": "list", "title": "l"}, {"id": "configure", "title": "c"}]}}`, configurerModule)

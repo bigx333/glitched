@@ -104,14 +104,14 @@ func TestPaletteSwitchModel(t *testing.T) {
 func TestPaletteSwitchModelOpensThePickerOfTheComposerShown(t *testing.T) {
 	h := start(t, tempDir(t))
 	opus := api.ModelRef{Provider: "claude", Model: "Claude Opus 5.5", Effort: "high"}
-	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk)
+	id := h.a.backend.Create(h.local(), t.TempDir(), "Mine", opus, api.AccessAsk, nil)
 	th := h.thread("Mine")
 	h.until("the thread's view", func() bool { return th.View.Revision > 0 && len(th.Pending) == 0 })
 	h.a.select_(th)
 	h.tt.Advance(time.Second)
 	h.a.router.Push("/settings/general")
 	h.tt.Frame()
-	h.a.backend.Delete(h.local(), id)
+	h.a.backend.Delete(h.local(), id, false)
 	h.until("the thread gone", func() bool { return h.local().Threads[id] == nil })
 	h.a.openCommandPalette()
 	h.tt.Frame()
