@@ -113,7 +113,7 @@ func parseCloneSource(s string) (cloneSource, bool) {
 	default:
 		return cloneSource{}, false
 	}
-	return named(cloneSource{url: s}, u.Path)
+	return named(cloneSource{url: u.Scheme + s[len(u.Scheme):]}, u.Path)
 }
 
 // named is src with the folder name p's last part gives it.
@@ -212,6 +212,11 @@ func (a *app) startClone() {
 		})
 		cancel()
 		a.post(func() {
+			// A clone that finished is a project, though the sheet was
+			// cancelled as it ended: its folder is there either way.
+			if err == nil {
+				a.recordProject(dest)
+			}
 			if a.clone.run != run {
 				return
 			}
@@ -222,7 +227,6 @@ func (a *app) startClone() {
 			}
 			a.clone.open = false
 			if e := a.localEnv(); e != nil {
-				a.recordProject(dest)
 				a.startIn(draft{e, dest})
 				a.draftArea.Focus()
 			}
@@ -244,13 +248,14 @@ func (a *app) cancelClone() {
 // that fails or is stopped takes away dest if it made it. Its error is
 // the last lines git said, with what to do if it was refused access.
 func clone(ctx context.Context, src cloneSource, dest, path string, progress func(string)) error {
-	entries, err := os.ReadDir(dest)
-	created := errors.Is(err, fs.ErrNotExist)
-	if !created && (err != nil || len(entries) > 0) {
-		return errors.New(dest + " already exists and isn't empty")
-	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
+	}
+	// Making dest here claims it: only a folder this clone made is taken
+	// away when it fails, never one the user made meanwhile.
+	created := os.Mkdir(dest, 0o755) == nil
+	if entries, err := os.ReadDir(dest); err != nil || len(entries) > 0 {
+		return errors.New(dest + " already exists and isn't empty")
 	}
 	env := append(os.Environ(), "PATH="+path, "GIT_TERMINAL_PROMPT=0", "GH_PROMPT_DISABLED=1", "GCM_INTERACTIVE=never")
 	command := func(program string, args ...string) *exec.Cmd {
@@ -320,11 +325,16 @@ func splitLines(data []byte, atEOF bool) (int, []byte, error) {
 	if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
 		return i + 1, data[:i], nil
 	}
-	if atEOF && len(data) > 0 {
-		return len(data), data, nil
+	if atEOF && len(data) > 0 || len(data) >= maxCloneLine {
+		n := min(len(data), maxCloneLine)
+		return n, data[:n], nil
 	}
 	return 0, nil, nil
 }
+
+// maxCloneLine is as much of one line as is kept: a longer one comes in
+// pieces, so that no line stops the reading, and git with it.
+const maxCloneLine = 4096
 
 // cloneDialog is the Clone a repository sheet, drawn as the app's alerts
 // are (MyGo's AlertDialog), with their measures: a field for the
