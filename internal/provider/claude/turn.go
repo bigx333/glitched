@@ -31,15 +31,18 @@ type message struct {
 	// ModelUsage is, on a result, each model the session called, by id.
 	ModelUsage map[string]modelUsage `json:"modelUsage"`
 	// UserMessageUUIDs is, on a result, the user messages it finished.
-	UserMessageUUIDs []string  `json:"user_message_uuids"`
-	Capabilities     []string  `json:"capabilities"` // system init
+	UserMessageUUIDs []string `json:"user_message_uuids"`
+	Capabilities     []string `json:"capabilities"` // system init
 	CompactMetadata  *struct {
 		PreTokens  int64 `json:"pre_tokens"`
 		PostTokens int64 `json:"post_tokens"`
 	} `json:"compact_metadata"` // system compact_boundary
-	Response         *response `json:"response"`     // control_response
-	RequestID        string    `json:"request_id"`   // control_request, control_cancel_request
-	Request          *struct {
+	RateLimit *struct {
+		Status string `json:"status"`
+	} `json:"rate_limit_info"` // rate_limit_event
+	Response  *response `json:"response"`   // control_response
+	RequestID string    `json:"request_id"` // control_request, control_cancel_request
+	Request   *struct {
 		Subtype string `json:"subtype"`
 		canUseTool
 	} `json:"request"` // control_request
@@ -96,16 +99,16 @@ type usage struct {
 	Cache         *cacheCreation `json:"cache_creation"`
 }
 
-// cacheTTL is how long the prompt cache created by this request stays warm,
-// or 0 when no cache entry was created (such as a pure cache read).
+// cacheTTL is how long the prompt cache this request wrote stays warm,
+// by the lifetime most of what it wrote has, or 0 when it wrote none, as
+// a pure cache read does.
 func (u usage) cacheTTL() time.Duration {
-	if u.Cache == nil {
+	switch {
+	case u.Cache == nil:
 		return 0
-	}
-	if u.Cache.Ephemeral1h > 0 {
+	case u.Cache.Ephemeral1h > 0 && u.Cache.Ephemeral1h >= u.Cache.Ephemeral5m:
 		return time.Hour
-	}
-	if u.Cache.Ephemeral5m > 0 {
+	case u.Cache.Ephemeral5m > 0:
 		return 5 * time.Minute
 	}
 	return 0
@@ -156,7 +159,8 @@ func window(models map[string]modelUsage, model string) int64 {
 
 // sent is the context a request of the turn's sent, as its message_start
 // or its assistant message says, once. The prompt cache's lifetime begins
-// with the request, so CacheExpires is anchored to the first reading.
+// with the request, so CacheExpires is anchored to the first reading. A
+// request that only read the cache refreshed it for the lifetime it had.
 func (t *turn) sent(r *request) []provider.Event {
 	if r == nil {
 		return nil
@@ -166,27 +170,30 @@ func (t *turn) sent(r *request) []provider.Event {
 		return nil
 	}
 	ttl := r.Usage.cacheTTL()
-	same := used == t.used && r.Model == t.model
-	if same {
-		if ttl == 0 || !t.cacheExpires.IsZero() {
-			return nil
+	if t.cache != nil {
+		switch {
+		case ttl > 0:
+			t.cache.ttl = ttl
+		case r.Usage.CacheRead > 0:
+			ttl = t.cache.ttl
+		default:
+			t.cache.ttl = 0
 		}
-		t.cacheExpires = t.clock().UTC().Round(0).Add(ttl)
-		return []provider.Event{provider.Context{Used: used, Model: t.model, CacheExpires: t.cacheExpires}}
 	}
-	t.used, t.model = used, r.Model
+	if used == t.used && r.Model == t.model && (ttl == 0 || !t.cacheExpires.IsZero()) {
+		return nil
+	}
+	t.used, t.model, t.cacheExpires = used, r.Model, time.Time{}
 	if ttl > 0 {
 		t.cacheExpires = t.clock().UTC().Round(0).Add(ttl)
-	} else {
-		t.cacheExpires = time.Time{}
 	}
-	return []provider.Event{provider.Context{Used: used, Model: t.model, CacheExpires: t.cacheExpires}}
+	return []provider.Event{provider.Context{Used: used, Model: t.model, CacheExpires: t.cache.compactable(used, t.cacheExpires)}}
 }
 
 // measured is the turn's context with the window a result gives it.
 func (t *turn) measured(m message) []provider.Event {
 	if w := window(m.ModelUsage, t.model); t.used > 0 && w > 0 {
-		return []provider.Event{provider.Context{Used: t.used, Window: w, Model: t.model, CacheExpires: t.cacheExpires}}
+		return []provider.Event{provider.Context{Used: t.used, Window: w, Model: t.model, CacheExpires: t.cache.compactable(t.used, t.cacheExpires)}}
 	}
 	return nil
 }
@@ -239,6 +246,7 @@ type turn struct {
 	used         int64           // the context the turn's last request sent; 0 before one, or since a compaction
 	model        string          // the model that request went to
 	cacheExpires time.Time       // when that request's prompt cache expires; zero when unknown
+	cache        *cacheState     // the process's, which outlives the turn; nil in tests that need none
 	interrupted  bool            // the user stopped the turn
 }
 
@@ -289,6 +297,10 @@ func (t *turn) read(m message) []provider.Event {
 			evs = append(evs, w)
 		}
 		return evs
+	case "rate_limit_event":
+		if t.cache != nil && m.RateLimit != nil {
+			t.cache.limited = m.RateLimit.Status != "allowed"
+		}
 	case "result":
 		evs := append(t.unfinished(), t.measured(m)...)
 		return append(evs, t.end(m))

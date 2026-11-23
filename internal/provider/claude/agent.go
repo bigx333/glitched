@@ -86,6 +86,8 @@ type proc struct {
 	// and sets them.
 	mode, refused   string
 	model, switched string
+
+	cache cacheState
 }
 
 var _ park.Process = (*proc)(nil)
@@ -124,6 +126,7 @@ var _ provider.Agent = (*Agent)(nil)
 func newAgent(spec provider.SessionSpec, p *proc, keep func(*proc)) *Agent {
 	g := &Agent{p: p, keep: keep, turn: newTurn(spec.Workspace), prompts: map[string]*prompt{}, outstanding: map[string]bool{},
 		access: spec.Access, asked: spec.Model.Model}
+	g.turn.cache = &p.cache
 	g.pending = g.confirmed()
 	return g
 }

@@ -155,6 +155,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	if err != nil {
 		return nil, err
 	}
+	p.cache = idleSettings(prog, spec.Workspace)
 	if g := grants[spec.Access]; g.Else != "" {
 		if p.noAuto, err = p.switchMode(ctx, g); err != nil {
 			p.Close(context.Background())
