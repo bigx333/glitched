@@ -11,10 +11,10 @@ import (
 	"time"
 )
 
-// ownGroup puts the program in a process group of its own, so stopping it
+// OwnGroup puts the program in a process group of its own, so stopping it
 // at its timeout also stops whatever it started (a git's ssh, a gh's git)
 // instead of leaving those running as the user.
-func ownGroup(cmd *exec.Cmd) {
+func OwnGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 }
@@ -32,7 +32,7 @@ func loginShellPath() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, shell, "-l", "-c", `printf '\000glitched-path\000%s' "$PATH"`)
-	ownGroup(cmd)
+	OwnGroup(cmd)
 	cmd.WaitDelay = 100 * time.Millisecond
 	out, err := cmd.Output()
 	if err != nil {
