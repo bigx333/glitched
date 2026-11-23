@@ -42,9 +42,9 @@ func contexts(t *testing.T, path string) []provider.Context {
 }
 
 // Three runs of one haiku session on claude 2.1.330: a reply, /compact,
-// and a reply after it.
+// and a reply after it. Their 5-minute cache is none to compact before.
 func TestACompactionLeavesTheContextUnknownUntilTheNextRequest(t *testing.T) {
-	exp := fixedNow.Add(5 * time.Minute)
+	var exp time.Time
 	want := [][]provider.Context{
 		{{Used: 25041, Model: haiku, CacheExpires: exp}, {Used: 25041, Window: 1000000, Model: haiku, CacheExpires: exp}},
 		{{Compacted: true, PreTokens: 25050, PostTokens: 5734}},
@@ -158,14 +158,20 @@ func TestAResultBeforeTheLastGivesItsWindow(t *testing.T) {
 	}
 }
 
-// Cache creation anchors CacheExpires to the request's first reading: 1h
-// takes priority over 5m, a pure cache read leaves CacheExpires zero, and
-// a later duplicate assistant message does not push the deadline out.
+// A request's cache lifetime is the one most of what it wrote has, a
+// pure read refreshes the lifetime the cache had, and only a one-hour
+// cache over the CLI's threshold, with idle compaction on and the account
+// clear of its limit, is reported as one to compact before.
 func TestCacheCreationTTLAndPureCacheRead(t *testing.T) {
 	now := fixedNow
-	tn := newTurn(t.TempDir())
-	tn.now = func() time.Time { return now }
-
+	cache := &cacheState{idle: true, min: 200_000}
+	turnOn := func() *turn {
+		tn := newTurn(t.TempDir())
+		tn.now = func() time.Time { return now }
+		tn.cache = cache
+		return tn
+	}
+	tn := turnOn()
 	got := read(tn,
 		line(t, `{"type":"stream_event","event":{"type":"message_start","message":{"model":"claude-haiku-5-5","usage":{"input_tokens":10,"cache_creation_input_tokens":1000,"cache_read_input_tokens":200000,"cache_creation":{"ephemeral_1h_input_tokens":1000,"ephemeral_5m_input_tokens":500}}}}}`),
 	)
@@ -183,19 +189,44 @@ func TestCacheCreationTTLAndPureCacheRead(t *testing.T) {
 		t.Errorf("1h cache reported %+v, want %+v", got, want)
 	}
 
-	// Pure cache read (no cache_creation) leaves CacheExpires zero.
-	tn2 := newTurn(t.TempDir())
-	tn2.now = func() time.Time { return fixedNow }
-	got2 := read(tn2,
+	now = fixedNow.Add(10 * time.Minute)
+	got = read(turnOn(),
 		line(t, `{"type":"assistant","message":{"model":"claude-haiku-5-5","usage":{"input_tokens":5,"cache_read_input_tokens":250000}}}`),
-		line(t, twoModels),
 	)
-	want2 := []provider.Context{
-		{Used: 250005, Model: haiku},
-		{Used: 250005, Window: 1000000, Model: haiku},
+	if want := []provider.Context{{Used: 250005, Model: haiku, CacheExpires: now.Add(time.Hour)}}; !slices.Equal(got, want) {
+		t.Errorf("a pure read of a 1h cache reported %+v, want %+v: the hit refreshes it", got, want)
 	}
-	if !slices.Equal(got2, want2) {
-		t.Errorf("pure cache read reported %+v, want %+v", got2, want2)
+
+	got = read(turnOn(),
+		line(t, `{"type":"assistant","message":{"model":"claude-haiku-5-5","usage":{"input_tokens":1,"cache_creation_input_tokens":250000,"cache_creation":{"ephemeral_1h_input_tokens":1000,"ephemeral_5m_input_tokens":249000}}}}`),
+	)
+	if want := []provider.Context{{Used: 250001, Model: haiku}}; !slices.Equal(got, want) {
+		t.Errorf("a request that wrote mostly a 5m cache reported %+v, want %+v", got, want)
+	}
+
+	for name, c := range map[string]cacheState{
+		"idle compaction off":  {idle: false, min: 200_000},
+		"below the threshold":  {idle: true, min: 300_000},
+		"near the usage limit": {idle: true, min: 200_000, limited: true},
+	} {
+		cache = &c
+		got = read(turnOn(),
+			line(t, `{"type":"assistant","message":{"model":"claude-haiku-5-5","usage":{"input_tokens":1,"cache_creation_input_tokens":250000,"cache_creation":{"ephemeral_1h_input_tokens":250000}}}}`),
+		)
+		if want := []provider.Context{{Used: 250001, Model: haiku}}; !slices.Equal(got, want) {
+			t.Errorf("%s: reported %+v, want %+v", name, got, want)
+		}
+	}
+
+	cache = &cacheState{idle: true, min: 200_000}
+	tn = turnOn()
+	read(tn, line(t, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning"}}`))
+	if !cache.limited {
+		t.Error("a rate_limit_event that isn't allowed left the account clear")
+	}
+	read(tn, line(t, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}`))
+	if cache.limited {
+		t.Error("an allowed rate_limit_event left the account limited")
 	}
 }
 
