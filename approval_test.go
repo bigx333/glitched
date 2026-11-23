@@ -605,6 +605,21 @@ func TestALongCommandIsAnsweredOnceDrawn(t *testing.T) {
 	}
 }
 
+// A command that draws no mark is as tall as a line of its font: only a
+// text that wraps or shows a space mark takes the taller height a mark
+// needs.
+func TestAShortCommandIsAsTallAsItsFontsLine(t *testing.T) {
+	h := askedAll(t, commandAsk("ask", "ls -la"))
+	h.tt.Advance(time.Second)
+	var want float32
+	ui.NewTester(func(c *ui.Context) {
+		_, want = c.MeasureText(0, ui.Span{Text: "ls -la", Font: "monospace", Size: 12.5})
+	}, 100, 40).Frame()
+	if r, ok := h.tt.Find("ls -la"); !ok || r.H != want {
+		t.Fatalf("the command drew %v high, want %.4f, a line of its font; texts %q", r, want, h.tt.Texts())
+	}
+}
+
 // Allow once allows a request only once the window draws the first line
 // of what it runs; until then, a click brings that into view.
 func TestAllowOnceAllowsOnlyWhatTheWindowDraws(t *testing.T) {
