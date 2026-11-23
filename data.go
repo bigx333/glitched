@@ -760,7 +760,7 @@ func (a *app) statusOf(t thread) status {
 	switch {
 	case len(v.Requests) > 0 || v.Run == api.RunWaiting:
 		return statusApproval
-	case v.Working() && (v.Turn == nil || !v.Turn.Silent):
+	case v.Working():
 		return statusWorking
 	case a.backend.Unread(t.Thread):
 		return statusCompleted

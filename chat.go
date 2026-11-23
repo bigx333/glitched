@@ -1451,7 +1451,7 @@ func (a *app) composerInput(c *ui.Context, t thread, rs rows, fullW, frameW floa
 		if k == 0 && !ahead {
 			// Compact, there's no Send to stop the agent with: ⌘⏎
 			// still does, as it does from the full composer.
-			if t.View.Live() && a.message(t) == "" && c.Shortcut(ui.Cmd, ui.KeyEnter) {
+			if t.View.Stoppable() && a.message(t) == "" && c.Shortcut(ui.Cmd, ui.KeyEnter) {
 				a.backend.Interrupt(t.env, t.id())
 			}
 			return
@@ -1663,7 +1663,7 @@ func (a *app) workspacesOn(e *client.Env) []*project {
 // laid out unseen, it's no more there to the keyboard than to the pointer.
 func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 	empty := a.message(t) == ""
-	live := t.View.Live()
+	live := t.View.Stoppable()
 	working := live && empty
 	if live && !empty {
 		a.stopButton(c, t)
@@ -1702,7 +1702,7 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 // block open, it doesn't stop the agent.
 func (a *app) sendOrStop(t thread, clicked bool) {
 	switch {
-	case !t.View.Live() || a.message(t) != "":
+	case !t.View.Stoppable() || a.message(t) != "":
 		a.send(t)
 	case clicked || !a.code.on:
 		a.backend.Interrupt(t.env, t.id())
@@ -1735,13 +1735,13 @@ func (a *app) sendControl(c *ui.Context, t thread, keys bool) {
 		return ui.Row(c).Key("send-plugin").AlignItems(ui.Center).Shrink(1).MinWidth(0).ClipX()
 	}
 	ctx := func(r plugins.ThreadRecord) any {
-		return composerSend{Thread: r, Draft: a.message(t) != "", Working: t.View.Live()}
+		return composerSend{Thread: r, Draft: a.message(t) != "", Working: t.View.Stoppable()}
 	}
 	if !a.pluginComponent(c, "composer.send", &t, componentCopy{key: composerKey(t), box: box, context: ctx}) {
 		a.sendButton(c, t, keys)
 		return
 	}
-	if t.View.Live() {
+	if t.View.Stoppable() {
 		a.stopButton(c, t).Shrink(0)
 	}
 	if keys && c.Shortcut(ui.Cmd, ui.KeyEnter) {

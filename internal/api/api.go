@@ -391,7 +391,16 @@ type Report struct {
 	Cursor Cursor     `json:"cursor"` // the child.reported event in the log
 }
 
-func (t Thread) Working() bool { return t.Run != RunIdle && t.Run != RunUncertain }
+// Working is whether the user sees the thread at work: a silent run, such
+// as idle compaction, shows nothing.
+func (t Thread) Working() bool { return t.Run != RunIdle && t.Run != RunUncertain && !t.Silent() }
+
+// Silent is whether the live run is a silent one.
+func (t Thread) Silent() bool { return t.Turn != nil && t.Turn.Silent }
+
+// Stoppable is whether the thread has a run the user can stop: a live
+// one that isn't silent.
+func (t Thread) Stoppable() bool { return t.Live() && !t.Silent() }
 
 // Live is whether the thread has a run, an uncertain one too. Only an
 // interrupt, a settle or a delete ends an uncertain run.
