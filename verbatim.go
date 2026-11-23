@@ -29,11 +29,8 @@ const verbatimFirstW = 240
 func (a *app) verbatim(c *ui.Context, key any, s string, size float32, col ui.Color) []textLine {
 	box := ui.Box(c.Key(verbatimKey{key})).MinWidth(0).Selectable()
 	var text ui.Element
-	cell, _ := c.MeasureText(0, ui.Span{Text: strings.Repeat("0", 64), Font: "monospace", Size: size})
+	cell, line := c.MeasureText(0, ui.Span{Text: strings.Repeat("0", 64), Font: "monospace", Size: size})
 	mark, _ := c.MeasureText(0, ui.Span{Text: string(wrapMark), Font: "monospace", Size: size})
-	// A mark the font lacks draws in a taller one, as ↩ does on macOS, and
-	// a fixed line height only grows a line to fit it.
-	_, line := c.MeasureText(0, ui.Span{Text: "0…" + string(wrapMark) + string(spaceMark), Font: "monospace", Size: size})
 	w := box.Bounds().W
 	if w <= 0 {
 		// Not laid out yet: the next frame wraps it to its width.
@@ -42,6 +39,18 @@ func (a *app) verbatim(c *ui.Context, key any, s string, size float32, col ui.Co
 	}
 	// A cell to spare, for a cut's … in a font of its own.
 	cols := max(8, int((w-mark)/(cell/64))-1)
+	spans := verbatimSpans(s, cols, ui.Span{Font: "monospace", Size: size, Color: col},
+		ui.Span{Font: "monospace", Size: size, Color: palette.muted})
+	// A mark or a cut's … the font lacks draws in a taller one, as ↩ does
+	// on macOS, and a fixed line height only grows the line holding it: a
+	// text that draws one takes a height that fits them all, and one that
+	// draws none keeps its font's.
+	for _, sp := range spans {
+		if strings.ContainsAny(sp.Text, "…"+string(wrapMark)+string(spaceMark)) {
+			_, line = c.MeasureText(0, ui.Span{Text: "0…" + string(wrapMark) + string(spaceMark), Font: "monospace", Size: size})
+			break
+		}
+	}
 	box.CopyData(func(parts []ui.SelectedText) transfer.Data {
 		var out []string
 		for _, p := range parts {
@@ -49,8 +58,7 @@ func (a *app) verbatim(c *ui.Context, key any, s string, size float32, col ui.Co
 		}
 		return transfer.TextData(strings.Join(out, "\n"))
 	}).Children(func() {
-		text = ui.RichText(c, verbatimSpans(s, cols, ui.Span{Font: "monospace", Size: size, Color: col},
-			ui.Span{Font: "monospace", Size: size, Color: palette.muted})...).FixedLineHeight(line)
+		text = ui.RichText(c, spans...).FixedLineHeight(line)
 	})
 	return textLines(text.Bounds(), line, wraps(s, cols))
 }
