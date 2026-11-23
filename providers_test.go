@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -228,7 +229,7 @@ func TestTheProvidersPageShowsTheEffortThePickerRuns(t *testing.T) {
 	h.a.checkProviders()
 	h.until("low", offers("low"))
 	h.tt.Frame()
-	if !h.tt.HasText("Test Model · Low") || h.tt.HasText("Test Model · High") {
+	if !h.tt.HasText("Test Model · Low") || slices.ContainsFunc(h.tt.Texts(), func(s string) bool { return strings.Contains(strings.ToLower(s), "test model · high") }) {
 		t.Errorf("after the engine offers only Low, the page shows %q; the picker runs %q", h.tt.Texts(), h.a.modelRef().Effort)
 	}
 }
