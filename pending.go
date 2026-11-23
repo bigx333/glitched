@@ -217,10 +217,13 @@ func (a *app) runningModel(t thread, name string) (string, effortInfo) {
 	}
 	g := v.Confirmed.Model
 	info, _ := a.modelOf(keyOfThread(v.Model.Provider, g.Model))
-	if v.ModelStanding() == api.Short {
+	// A thread that names no model or effort runs its program's own,
+	// which its report names, over the picker's guess.
+	asked, _ := configured(t)
+	if v.ModelStanding() == api.Short || asked.Model == "" {
 		name = cmp.Or(info.name, g.Model)
 	}
-	if v.EffortStanding() == api.Short {
+	if v.EffortStanding() == api.Short || asked.Model == "" && asked.Effort == "" && g.Effort != "" {
 		effort = effortOf(provider.Effort{ID: g.Effort})
 		for _, e := range effortsOf(info) {
 			if e.id == g.Effort {

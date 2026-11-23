@@ -1864,10 +1864,11 @@ func (a *app) sendText(t thread, text, about string) bool {
 		}
 		// A thread runs at the effort its picker shows: one its model
 		// doesn't run at, as since its engine stopped listing it, is
-		// set to that one before the turn.
+		// set to that one before the turn. One that names no model
+		// leaves its effort to its provider's program too.
 		m, _ := configured(t)
 		model, _ := a.modelOf(keyOfThread(m.Provider, m.Model))
-		if e := effortFor(model, m.Effort); !strings.EqualFold(e, m.Effort) {
+		if e := effortFor(model, m.Effort); m.Model != "" && !strings.EqualFold(e, m.Effort) {
 			a.backend.ConfigureThread(t.env, id, api.ThreadConfigure{Effort: &e})
 		}
 	}
@@ -1954,29 +1955,30 @@ func (a *app) said(t thread) string {
 	return strings.TrimSpace(strings.Join(parts, "\n\n"))
 }
 
-// cliDecides is whether a new thread in the draft t names no model, as
-// its provider's program then runs its own default: the default follows
-// it, and t's engine is another machine's, whose program and default
-// this machine's engine doesn't know.
+// cliDecides is whether the picker in the draft t names no model for the
+// default it follows: t's engine is another machine's, whose program and
+// default this machine's engine doesn't know.
 func (a *app) cliDecides(t thread) bool { return a.followsCLI && t.id().IsZero() && !t.local() }
 
 // newThreadRef is the model a new thread in the draft t starts on: the
-// pickers' (modelRef), but none where its provider's program chooses
-// (cliDecides), and no effort but one the user chose (cliEffort).
+// pickers' (modelRef), but none where the default follows its provider's
+// program, which then runs its own where the thread runs, as its settings
+// there say; and no effort there but one the user chose. The picker's
+// name for that default is the one the engine expects, until the
+// program's report of what it ran replaces it.
 func (a *app) newThreadRef(t thread) api.ModelRef {
 	ref := a.modelRef()
-	if a.cliDecides(t) {
+	if a.followsCLI && t.id().IsZero() {
 		ref.Model = ""
-	}
-	if a.cliEffort(t) {
-		ref.Effort = ""
+		if a.composerFile.Effort == "" {
+			ref.Effort = ""
+		}
 	}
 	return ref
 }
 
-// cliEffort is whether a new thread in the draft t names no effort, as its
-// provider's program then runs its own: it chooses the model
-// (cliDecides), and the user chose no effort.
+// cliEffort is whether the picker in the draft t names no effort: it
+// names no model (cliDecides), and the user chose no effort.
 func (a *app) cliEffort(t thread) bool { return a.cliDecides(t) && a.composerFile.Effort == "" }
 
 // modelRef is the model the pickers chose, for a new thread, at the

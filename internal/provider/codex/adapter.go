@@ -151,6 +151,22 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 	return info, nil
 }
 
+// DefaultModel is the model a Codex thread in workspace runs where it
+// names none, as its config there names it (configured); "" where it
+// names none, as Codex then runs model/list's default.
+func (a *Adapter) DefaultModel(ctx context.Context, workspace string) (string, error) {
+	prog, err := a.program()
+	if err != nil {
+		return "", err
+	}
+	p, err := launch(ctx, prog, workspace, "probe-"+api.NewID().String())
+	if err != nil {
+		return "", err
+	}
+	defer p.discard()
+	return p.configured(ctx, workspace).Model, nil
+}
+
 // Open runs the run on the thread's app-server: the one its last run
 // left, when that one was started as this run would start one, or else a
 // new one with a new Codex thread.

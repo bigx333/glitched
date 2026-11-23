@@ -854,3 +854,29 @@ func TestARunGetsGlitchedMCPAndTheEnginesMCPServers(t *testing.T) {
 		t.Errorf("--mcp-config is followed by %q, want %q", got, want)
 	}
 }
+
+// A thread that names no model or effort, as one following Claude Code's
+// own default does, starts claude with neither flag, so claude runs what
+// its environment and settings where the thread runs say.
+func TestAThreadNamingNoModelStartsClaudeWithNoModelFlag(t *testing.T) {
+	argv := replay(t, "tools", "")
+	h := host(t, nil)
+	thread := api.NewID()
+	submit(t, h, thread, api.ThreadCreate{Workspace: t.TempDir(), Title: "hi", Access: api.AccessAsk,
+		Model: api.ModelRef{Provider: "claude"}})
+	playOn(t, h, thread, "Read hello.txt. Then use the Write tool to create out.txt containing ok. Then reply done.", func(r requestLog) bool {
+		race(t, h, thread, r.opened, func(int) json.RawMessage { return allowed(false) })
+		return false
+	})
+	lines := strings.Split(strings.TrimSpace(string(must(os.ReadFile(argv)))), "\n")
+	for _, l := range lines {
+		var args []string
+		json.Unmarshal([]byte(l), &args)
+		if slices.Contains(args, "--model") || slices.Contains(args, "--effort") {
+			t.Errorf("claude started with %q, want no --model or --effort", args)
+		}
+	}
+	if len(lines) == 0 || lines[0] == "" {
+		t.Fatal("claude never started")
+	}
+}

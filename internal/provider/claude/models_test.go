@@ -55,7 +55,7 @@ func writeSettings(t *testing.T, path, settings string) {
 }
 
 // The Default is the model claude runs given no --model: ANTHROPIC_MODEL,
-// then its settings' env, then their model, local over project over
+// as settings' env sets it over claude's environment, then their model, local over project over
 // user, else /model's default; an alias as /model resolves it, a
 // long-context one as its base's with [1m]. One /model doesn't list is
 // listed by its id, a long-context one under its base's name.
@@ -84,7 +84,9 @@ func TestTheDefaultIsTheModelClaudeRunsGivenNone(t *testing.T) {
 		{name: "the user's alias", def: "claude-opus-5-5", user: `{"model":"sonnet"}`, want: "claude-sonnet-5-5"},
 		{name: "the user's long-context alias", def: "claude-haiku-5-5", user: `{"model":"opus[1m]"}`, want: "claude-opus-5-5[1m]", wantName: "Opus 5.5 (1M context)"},
 		{name: "settings' env over model", def: "claude-opus-5-5", user: `{"model":"sonnet","env":{"ANTHROPIC_MODEL":"haiku"}}`, want: "claude-haiku-5-5"},
-		{name: "the environment over settings", def: "claude-opus-5-5", env: "claude-fable-5-2", user: `{"env":{"ANTHROPIC_MODEL":"haiku"}}`, want: "claude-fable-5-2", wantName: "claude-fable-5-2"},
+		{name: "settings' env over the environment", def: "claude-opus-5-5", env: "claude-fable-5-2", user: `{"env":{"ANTHROPIC_MODEL":"haiku"}}`, want: "claude-haiku-5-5"},
+		{name: "the environment over settings' model", def: "claude-opus-5-5", env: "claude-fable-5-2", user: `{"model":"haiku"}`, want: "claude-fable-5-2", wantName: "claude-fable-5-2"},
+		{name: "an empty env in settings unsets the environment's", def: "claude-opus-5-5", env: "claude-fable-5-2", user: `{"env":{"ANTHROPIC_MODEL":"sonnet"}}`, local: `{"model":"haiku","env":{"ANTHROPIC_MODEL":""}}`, want: "claude-haiku-5-5"},
 		{name: "the project's over the user's", def: "claude-opus-5-5", user: `{"model":"sonnet"}`, project: `{"model":"haiku"}`, want: "claude-haiku-5-5"},
 		{name: "the local over the project's", def: "claude-opus-5-5", project: `{"model":"haiku"}`, local: `{"model":"sonnet[1m]"}`, want: "claude-sonnet-5-5[1m]"},
 		{name: "a project's env over the user's", def: "claude-opus-5-5", user: `{"env":{"ANTHROPIC_MODEL":"sonnet"}}`, project: `{"env":{"ANTHROPIC_MODEL":"haiku"}}`, want: "claude-haiku-5-5"},

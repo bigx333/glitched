@@ -110,8 +110,8 @@ func (r initialized) models(def string) []provider.Model {
 }
 
 // defaultModel is the model a claude in workspace runs where it's given
-// no --model, as Claude Code takes it: ANTHROPIC_MODEL in its
-// environment, then in its settings' env, then their model, a
+// no --model, as Claude Code takes it: ANTHROPIC_MODEL, as its settings'
+// env sets it over its own environment, then its settings' model, a
 // workspace's local settings over its project's over the user's; else
 // /model's default. An alias, as sonnet, is the model /model resolves it
 // to, and one /model doesn't list is its own name, which claude resolves
@@ -139,9 +139,6 @@ func (r initialized) defaultModel(getenv func(string) string, workspace string) 
 // order; "" for none. The user's settings are in CLAUDE_CONFIG_DIR, as
 // the provider's launch setting may set it, else in ~/.claude.
 func configuredModel(getenv func(string) string, workspace string) string {
-	if m := strings.TrimSpace(getenv("ANTHROPIC_MODEL")); m != "" {
-		return m
-	}
 	dir := getenv("CLAUDE_CONFIG_DIR")
 	if dir == "" {
 		home, _ := os.UserHomeDir()
@@ -151,7 +148,7 @@ func configuredModel(getenv func(string) string, workspace string) string {
 	if workspace != "" {
 		files = append(files, filepath.Join(workspace, ".claude", "settings.json"), filepath.Join(workspace, ".claude", "settings.local.json"))
 	}
-	var env, model string
+	env, model := getenv("ANTHROPIC_MODEL"), ""
 	for _, f := range files {
 		var s struct {
 			Model any            `json:"model"`
@@ -160,14 +157,16 @@ func configuredModel(getenv func(string) string, workspace string) string {
 		if b, err := os.ReadFile(f); err != nil || json.Unmarshal(b, &s) != nil {
 			continue
 		}
-		if m, ok := s.Env["ANTHROPIC_MODEL"].(string); ok && strings.TrimSpace(m) != "" {
-			env = strings.TrimSpace(m)
+		// Claude Code sets its settings' env over its own, an empty
+		// value too.
+		if m, ok := s.Env["ANTHROPIC_MODEL"].(string); ok {
+			env = m
 		}
 		if m, ok := s.Model.(string); ok && strings.TrimSpace(m) != "" {
 			model = strings.TrimSpace(m)
 		}
 	}
-	return cmp.Or(env, model)
+	return cmp.Or(strings.TrimSpace(env), model)
 }
 
 // initialize starts prog's claude in dir, has it answer initialize, then stops

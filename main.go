@@ -357,10 +357,13 @@ type app struct {
 	// cliDefaults are the models each provider's program runs where given
 	// none in a workspace, by provider and workspace, "" where it can't
 	// say (draftDefaults); cliAsking those being asked, and defaultsIn the
-	// workspace of the draft, "" for none or another machine's.
+	// workspace of the draft, "" for none or another machine's; cliEpoch
+	// counts the times they were cleared, so an answer to an ask before
+	// is dropped.
 	cliDefaults map[[2]string]string
 	cliAsking   map[[2]string]bool
 	defaultsIn  string
+	cliEpoch    int
 	effort      string
 	access      string // one of accessLevels
 	accessOpen  bool

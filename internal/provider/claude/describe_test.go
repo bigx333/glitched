@@ -99,3 +99,25 @@ func TestTheDefaultIsTheLaunchFoldersSettings(t *testing.T) {
 		t.Errorf("DefaultModel = %q, %v; want claude-sonnet-5-5", got, err)
 	}
 }
+
+// A workspace's settings may move what an alias names, as
+// ANTHROPIC_DEFAULT_OPUS_MODEL does: DefaultModel resolves the workspace's
+// model by what a claude there says, not by what Describe's claude said.
+func TestAWorkspacesAliasIsTheOneAClaudeThereResolves(t *testing.T) {
+	describing(t, `{"commands":[],"claude_code_version":"2.1.330","models":[`+
+		`{"value":"default","resolvedModel":"claude-opus-5-5","displayName":"Default (recommended)"},`+
+		`{"value":"opus","resolvedModel":"claude-opus-5-5","displayName":"Opus","description":"Opus 5.5 · Best"}]}`)
+	ad := &claude.Adapter{Path: must(os.Executable())}
+	if _, err := ad.Describe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ws := t.TempDir()
+	os.MkdirAll(filepath.Join(ws, ".claude"), 0o755)
+	os.WriteFile(filepath.Join(ws, ".claude", "settings.json"), []byte(`{"model":"opus","env":{"ANTHROPIC_DEFAULT_OPUS_MODEL":"claude-opus-4-8"}}`), 0o600)
+	describing(t, `{"commands":[],"claude_code_version":"2.1.330","models":[`+
+		`{"value":"default","resolvedModel":"claude-opus-5-5","displayName":"Default (recommended)"},`+
+		`{"value":"opus","resolvedModel":"claude-opus-4-8","displayName":"Opus","description":"Opus 4.8 · Best"}]}`)
+	if got, err := ad.DefaultModel(ctx, ws); err != nil || got != "claude-opus-4-8" {
+		t.Errorf("DefaultModel = %q, %v; want the claude-opus-4-8 a claude in the workspace resolves opus to", got, err)
+	}
+}

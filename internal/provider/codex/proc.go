@@ -200,14 +200,7 @@ func (p *proc) signedIn(ctx context.Context) error {
 // where it names one; else the first model/list marks isDefault. A model
 // the config names that Codex doesn't list is listed by its id.
 func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
-	var config struct {
-		Config struct {
-			Model  string `json:"model"`
-			Effort string `json:"model_reasoning_effort"`
-		} `json:"config"`
-	}
-	// A Codex without config/read runs model/list's default.
-	p.conn.call(ctx, "config/read", map[string]any{"includeLayers": false}, &config)
+	config := p.configured(ctx, "")
 	var out, rest []provider.Model
 	cursor := ""
 	for range 50 {
@@ -254,7 +247,7 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 		cursor = *r.NextCursor
 	}
 	all := append(out, rest...)
-	if id := config.Config.Model; id != "" {
+	if id := config.Model; id != "" {
 		if !slices.ContainsFunc(all, func(m provider.Model) bool { return m.ID == id }) {
 			all = append(all, provider.Model{ID: id, Name: id})
 		}
@@ -262,14 +255,39 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 			all[i].Default = all[i].ID == id
 		}
 	}
-	if e := config.Config.Effort; e != "" {
+	if e := config.Effort; e != "" {
 		for i := range all {
-			if all[i].Default {
-				all[i].DefaultEffort = e
+			if !all[i].Default {
+				continue
+			}
+			all[i].DefaultEffort = e
+			if !slices.ContainsFunc(all[i].Efforts, func(o provider.Effort) bool { return o.ID == e }) {
+				all[i].Efforts = append(all[i].Efforts, provider.Effort{ID: e})
 			}
 		}
 	}
 	return all, nil
+}
+
+// codexConfig is the model and effort Codex's config names, "" for none.
+type codexConfig struct {
+	Model  string `json:"model"`
+	Effort string `json:"model_reasoning_effort"`
+}
+
+// configured is the config a Codex thread in cwd runs by, as config/read
+// says it: a trusted project's over the user's; the user's where cwd is
+// "". A Codex without config/read names none.
+func (p *proc) configured(ctx context.Context, cwd string) codexConfig {
+	params := map[string]any{"includeLayers": false}
+	if cwd != "" {
+		params["cwd"] = cwd
+	}
+	var r struct {
+		Config codexConfig `json:"config"`
+	}
+	p.conn.call(ctx, "config/read", params, &r)
+	return r.Config
 }
 
 // startThread opens the Codex thread the Glitched thread's runs go to,

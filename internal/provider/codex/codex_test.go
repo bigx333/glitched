@@ -321,7 +321,7 @@ func TestDescribesDefaultIsTheLaunchFoldersConfig(t *testing.T) {
 func TestDescribesDefaultIsTheConfigs(t *testing.T) {
 	for scenario, want := range map[string]string{
 		"configured":          "gpt-6-luna@low",
-		"configured-unlisted": "gpt-7-preview@",
+		"configured-unlisted": "gpt-7-preview@xhigh",
 		"no-config-read":      "gpt-6.2-sol@medium",
 		"hi":                  "gpt-6.2-sol@medium",
 	} {
@@ -1538,5 +1538,38 @@ func TestAnOldTurnsSettingsReachNoLaterRun(t *testing.T) {
 	}
 	if want := []provider.Event{provider.Granted{Access: api.AccessAsk, Mode: "read-only, on-request, user"}}; !slices.Equal(got[1], want) {
 		t.Errorf("the second run reported %+v, want %+v", got[1], want)
+	}
+}
+
+// A trusted project's .codex/config.toml names the model a thread there
+// runs, over the user's: DefaultModel asks Codex's config of the
+// workspace.
+func TestAProjectsConfigIsItsDefault(t *testing.T) {
+	a, _ := fake(t, "hi")
+	home, ws := t.TempDir(), t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	os.WriteFile(filepath.Join(home, "config.toml"), []byte("model = \"gpt-6-luna\"\n"), 0o600)
+	os.MkdirAll(filepath.Join(ws, ".codex"), 0o755)
+	os.WriteFile(filepath.Join(ws, ".codex", "config.toml"), []byte("model = \"gpt-6.2-sol\"\n"), 0o600)
+	if got, err := a.DefaultModel(context.Background(), ws); err != nil || got != "gpt-6.2-sol" {
+		t.Errorf("in the project, DefaultModel = %q, %v; want its config's gpt-6.2-sol", got, err)
+	}
+	if got, err := a.DefaultModel(context.Background(), t.TempDir()); err != nil || got != "gpt-6-luna" {
+		t.Errorf("elsewhere, DefaultModel = %q, %v; want the user's gpt-6-luna", got, err)
+	}
+}
+
+// The effort Codex's config names is one its default runs at, though
+// Codex doesn't list that model, so the picker offers it.
+func TestAConfiguredEffortIsOneTheDefaultRunsAt(t *testing.T) {
+	a, _ := fake(t, "configured-unlisted")
+	info, err := a.Describe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range info.Models {
+		if m.Default && !slices.ContainsFunc(m.Efforts, func(e provider.Effort) bool { return e.ID == "xhigh" }) {
+			t.Errorf("the default %s runs at %+v, want xhigh among them", m.ID, m.Efforts)
+		}
 	}
 }

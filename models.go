@@ -143,8 +143,11 @@ func (a *app) askModels() {
 		if err := jsonfile.Write(a.modelsPath(), l.reported); err != nil {
 			log.Printf("glitched: models: %v", err)
 		}
-		// A workspace's own default is asked again.
+		// A workspace's own default is asked again, and an answer to an
+		// ask before dropped.
 		clear(a.cliDefaults)
+		clear(a.cliAsking)
+		a.cliEpoch++
 		l.changed = true
 		a.reconcile()
 	})
@@ -412,15 +415,27 @@ func (a *app) draftDefaults(t thread) {
 		return
 	}
 	a.cliAsking[k] = true
-	engine := a.serviceClient(a.dir)
+	engine, epoch := a.serviceClient(a.dir), a.cliEpoch
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		id, err := engine.ProviderDefault(ctx, k[0], k[1])
 		cancel()
 		if err != nil {
+			// Asked again a while after, as the engine may not be up yet.
 			log.Printf("glitched: %s's default in %s: %v", k[0], k[1], err)
+			time.AfterFunc(modelsRetry, func() {
+				a.post(func() {
+					if epoch == a.cliEpoch {
+						delete(a.cliAsking, k)
+					}
+				})
+			})
+			return
 		}
 		a.post(func() {
+			if epoch != a.cliEpoch {
+				return
+			}
 			delete(a.cliAsking, k)
 			a.cliDefaults[k] = id
 			if id != "" {
