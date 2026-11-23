@@ -166,7 +166,10 @@ func TestASubstitutedModelShowsWhatReallyRuns(t *testing.T) {
 			provider.Ran{Model: "Claude Sonnet 5.5", Effort: s.Model.Effort, Why: "Claude Opus 5.5 is unavailable for this account"},
 		}
 	})
-	h.until("idle", func() bool { h.tt.Frame(); return !h.a.current().View.Live() && h.a.current().View.Confirmed.Model != nil })
+	h.until("idle", func() bool {
+		h.tt.Frame()
+		return !h.a.current().View.Live() && h.a.current().View.Confirmed.Model != nil
+	})
 	tipOn(t, h, "Claude Sonnet 5.5", "Claude runs Claude Sonnet 5.5: Claude Opus 5.5 is unavailable for this account")
 	if h.tt.HasText("Claude Opus 5.5") {
 		t.Errorf("the button still shows the model asked for: %q", h.tt.Texts())
