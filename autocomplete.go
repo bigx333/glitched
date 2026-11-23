@@ -65,6 +65,9 @@ func (a *app) suggestionsFor(draft string) []suggestion {
 		if !t.local() {
 			return nil // its files are on the server
 		}
+		if t.View.Workspace == a.scratchRoot() {
+			return nil // its folder is made as it's sent, and the root's are other threads'
+		}
 		q := strings.ToLower(tok[1:])
 		var out []suggestion
 		for _, f := range a.projectFiles(t.View.Workspace) {
