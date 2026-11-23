@@ -50,7 +50,7 @@ const SYSTEM =
   'then "## Testing", how the change was checked, or "Not stated." when the changes don\'t say.';
 
 export function init() {
-  return { state: { shown: null, repos: {}, bases: {}, open: null, passed: false, note: null, dialog: null } };
+  return { state: { shown: null, repos: {}, bases: {}, models: null, open: null, passed: false, note: null, dialog: null } };
 }
 
 // header draws a copy from its workspace's Repo, and nothing until one is read.
@@ -374,8 +374,10 @@ function sameHead(a, b) {
 
 // read is the workspace's Repo, from the first answer that settles it. A
 // read GitHub fails throws Unread, one git times out in Late; one gh is
-// signed out of says so.
-async function read(ws, bases) {
+// signed out of says so. The last read's pull request, was, stays till a
+// read of it by number says it's gone or another head's: a list may leave
+// it out while GitHub's search catches up.
+async function read(ws, bases, was) {
   const branch = await checkedOut(ws);
   if (!branch) return HIDDEN;
   const t = await pushTarget(ws, branch);
@@ -403,12 +405,20 @@ async function read(ws, bases) {
   const base = bases[slug];
   if (ref === base) return HIDDEN;
   let pr = null;
-  for (const limit of PAGES) {
-    const list = await gh(ws, ["pr", "list", "--repo", slug, "--head", ref, "--state", "all", "--limit", String(limit), "--json", PR_FIELDS]);
-    if (!list.ok) return failed(list);
-    const prs = JSON.parse(list.out) ?? [];
-    pr = pick(prs, ref, slug);
-    if (pr || prs.length < limit) break;
+  lists: for (const state of ["open", "all"]) {
+    for (const limit of PAGES) {
+      const list = await gh(ws, ["pr", "list", "--repo", slug, "--head", ref, "--state", state, "--limit", String(limit), "--json", PR_FIELDS]);
+      if (!list.ok) return failed(list);
+      const prs = JSON.parse(list.out) ?? [];
+      pr = pick(prs, ref, slug);
+      if (pr) break lists;
+      if (prs.length < limit) break;
+    }
+  }
+  if (!pr && was?.kind === "pr" && sameHead(was, { branch, ref, slug })) {
+    const view = await gh(ws, ["pr", "view", String(was.pr.number), "--repo", slug, "--json", PR_FIELDS]);
+    if (!view.ok && !/Could not resolve to a PullRequest/i.test(view.err)) return failed(view);
+    pr = view.ok ? pick([JSON.parse(view.out)], ref, slug) : null;
   }
   const ahead = await count(ws, t.remote, base);
   const status = await git(ws, ["status", "--porcelain", "--untracked-files=all"]);
@@ -471,6 +481,8 @@ function check(c) {
 // still the workspace's. One git didn't answer keeps what it has, due to be
 // read at the next timer; so does too little of the update's time left to
 // read. A popover open on a header that changes kind, or has none, closes.
+// A workspace that can open a pull request reads the models' names too,
+// once, for Write with AI to say which wrote it.
 async function refresh(state, shown) {
   if (!shown || left() < 3) return { state };
   const ws = shown.workspace;
@@ -478,15 +490,23 @@ async function refresh(state, shown) {
   const was = state.repos[ws]?.repo;
   let repo;
   try {
-    repo = await read(ws, bases);
+    repo = await read(ws, bases, was);
   } catch (e) {
     if (e instanceof Late) return { state: was ? { ...state, repos: { ...state.repos, [ws]: { repo: was, at: 0 } } } : state };
     if (!(e instanceof Unread)) throw e;
     repo = !was || !sameHead(was, e.head) ? HIDDEN : was.kind === "pr" ? { ...was, stale: e.message } : was;
   }
+  const models = repo.kind === "ready" && !state.models ? await names() : state.models;
   const popover = repo.kind === was?.kind && (repo.kind === "pr" || repo.kind === "gh");
   const open = state.open === shown.key && !popover ? null : state.open;
-  return { state: { ...state, open, bases, repos: { ...state.repos, [ws]: { repo, at: Date.now() } } } };
+  return { state: { ...state, open, bases, models, repos: { ...state.repos, [ws]: { repo, at: Date.now() } } } };
+}
+
+// names is the models the model picker lists, as it names them, null when
+// the app doesn't say.
+async function names() {
+  const list = await glitched.models.list().catch(() => null);
+  return list?.models?.map((m) => ({ provider: m.provider, id: m.id, family: m.family, name: m.family && !m.name.startsWith(m.family) ? m.family + " " + m.name : m.name })) ?? null;
 }
 
 function shownBy(key, context) {
@@ -582,7 +602,7 @@ async function act({ state, event, values }) {
       const d = edited(state.dialog, values);
       if (!d) return {};
       try {
-        return { state: { ...state, dialog: await write(d, ctx.title) } };
+        return { state: { ...state, dialog: await write(d, ctx.title, state.models ?? []) } };
       } catch (e) {
         if (!(e instanceof Late)) throw e;
         return { state: { ...state, dialog: { ...d, by: null, error: "Reading the changes took too long: " + e.message + ". Try again." } } };
@@ -646,8 +666,7 @@ function edited(d, values) {
 
 // draft is the dialog as it opens: the only commit's subject as the
 // title, else the thread's title, and the commits under Summary. It holds
-// the Target it shows, which Create pushes to or to nothing, and the
-// models' names, for Write with AI to say which wrote it. why says why
+// the Target it shows, which Create pushes to or to nothing. why says why
 // there's none to draw.
 async function draft(key, ws, repo, threadTitle) {
   const target = await pushTarget(ws, repo.branch);
@@ -656,7 +675,6 @@ async function draft(key, ws, repo, threadTitle) {
   const subjects = log.ok ? log.out.split("\n").filter(Boolean) : [];
   const title = subjects.length === 1 ? subjects[0] : threadTitle || repo.branch;
   const body = "## Summary\n\n" + (subjects.length ? subjects : [title]).map((s) => "- " + s).join("\n") + "\n";
-  const list = await glitched.models.list().catch(() => null);
   return {
     key,
     workspace: ws,
@@ -666,7 +684,6 @@ async function draft(key, ws, repo, threadTitle) {
     pushed: repo.pushed,
     ahead: repo.ahead,
     dirty: repo.dirty,
-    models: (list?.models ?? []).map((m) => ({ provider: m.provider, id: m.id, family: m.family, name: m.family && !m.name.startsWith(m.family) ? m.family + " " + m.name : m.name })),
     title,
     body,
     draft: false,
@@ -682,8 +699,9 @@ function cut(s, n) {
 
 // write asks a model for the title and description, from what the pull
 // request would hold: its commits, its files and its diff from where it
-// leaves the base, uncommitted changes included.
-async function write(d, threadTitle) {
+// leaves the base, uncommitted changes included. models are the names the
+// model picker gave the last refresh.
+async function write(d, threadTitle, models) {
   const mb = await git(d.workspace, ["merge-base", "refs/remotes/" + d.target.remote + "/" + d.base, "HEAD"]);
   const from = mb.ok ? mb.out.trim() : "HEAD";
   const log = mb.ok ? await git(d.workspace, ["log", "--format=%s%n%n%b", from + "..HEAD"]) : { out: "" };
@@ -717,7 +735,7 @@ async function write(d, threadTitle) {
   if (!w) return failed("The model's answer wasn't a title and description. Try again, or write them yourself.");
   const over = bytes(w.title) > MAX_TITLE ? "title is over " + MAX_TITLE : bytes(w.body) > MAX_BODY ? "description is over " + MAX_BODY : "";
   if (over) return failed("The model's " + over + " bytes, so yours are kept. Try again, or write them yourself.");
-  return { ...d, title: w.title, body: w.body, by: "Written by " + modelName(a, d.models) };
+  return { ...d, title: w.title, body: w.body, by: "Written by " + modelName(a, models) };
 }
 
 // bytes is how long s is in UTF-8, as GitHub and the app's fields count it.
@@ -769,10 +787,12 @@ function modelName(a, models) {
 }
 
 // create commits if asked, on the dialog's branch only, pushes that one
-// commit to the Target the dialog showed, never forced and with no
-// submodules, then opens the pull request, its body on stdin. A step that
-// fails says what was done before it. A pull request GitHub may have
-// opened, as when gh's answer is lost, is looked for; pr is the one opened.
+// commit to the URL the dialog showed, not its remote's name, which may
+// point elsewhere by then, never forced and with no submodules, then opens
+// the pull request, its body on stdin. A step that fails says what was
+// done before it, each step done as soon as git says so. A pull request
+// GitHub may have opened, as when gh's answer is lost, is looked for; pr
+// is the one opened.
 async function create(d) {
   const title = d.title.trim();
   if (!title) return { error: "Write a title." };
@@ -780,6 +800,7 @@ async function create(d) {
   const t = d.target;
   const to = t.remote + "/" + t.ref;
   const done = [];
+  let committed = false;
   const away = async () => {
     const now = await checkedOut(ws);
     return now === d.branch ? "" : "the workspace is on " + (now || "no branch") + " now, not " + d.branch;
@@ -795,24 +816,22 @@ async function create(d) {
       if (why) return { error: said([], why + "; the changes are staged, not committed") };
       const commit = await git(ws, ["commit", "-q", "-m", title]);
       if (!commit.ok) return { error: "git commit: " + commit.err };
+      committed = true;
+      done.push("Committed");
       sha = (await git(ws, ["rev-parse", "HEAD"])).out.trim();
-      done.push("Committed " + sha.slice(0, 7));
+      done[0] = "Committed " + sha.slice(0, 7);
     } else {
       sha = (await git(ws, ["rev-parse", "--verify", "-q", "refs/heads/" + d.branch])).out.trim();
     }
-    const committed = done.length > 0;
     why = await drift(d);
     if (why) return { committed, error: said(done, why) };
     const tip = (await git(ws, ["rev-parse", "--verify", "-q", "refs/heads/" + d.branch])).out.trim();
     if (!sha || tip !== sha) return { committed, error: said(done, d.branch + " moved to " + (tip.slice(0, 7) || "nothing") + " meanwhile, so nothing was pushed") };
-    const pushed = await git(ws, ["push", "--no-follow-tags", "--no-recurse-submodules", t.remote, sha + ":refs/heads/" + t.ref], 20);
+    const pushed = await git(ws, ["push", "--no-follow-tags", "--no-recurse-submodules", t.url, sha + ":refs/heads/" + t.ref], 20);
     if (!pushed.ok) return { committed, error: said(done, "push to " + to + " failed: " + pushed.err) };
-    let tracking = "";
-    if (t.track) {
-      const up = await git(ws, ["branch", "--set-upstream-to=" + to, d.branch]);
-      if (!up.ok) tracking = d.branch + " doesn't track " + to + " yet: " + up.err;
-    }
-    done.push(tracking ? "pushed, though " + tracking : "pushed");
+    done.push("pushed");
+    const tracking = await follow(d, sha);
+    if (tracking) done[done.length - 1] = "pushed, though " + tracking;
     const wait = Math.min(30, left() - RECHECK);
     if (wait < 1) return { committed, error: said(done, "the time to open the pull request ran out; try again") };
     const r = await gh(ws, ["pr", "create", "--repo", t.slug, "--head", t.ref, "--base", d.base, "--title", title, "--body-file", "-", ...(d.draft ? ["--draft"] : [])], d.body, wait);
@@ -825,7 +844,26 @@ async function create(d) {
     return { committed, error: said(done, "GitHub didn't say whether it opened the pull request (" + (r.ok ? "gh said " + short(url) : ghReason(r)) + "), and doesn't list one; Refresh, then try again") };
   } catch (e) {
     if (!(e instanceof Late)) throw e;
-    return { committed: done.length > 0 && done[0].startsWith("Committed"), error: said(done, e.message) };
+    return { committed, error: said(done, e.message) };
+  }
+}
+
+// follow has git show the remote's ref at what was pushed, as a push by
+// the remote's name would, and the branch track it if the dialog said it
+// starts to. It says what it couldn't do, "" when it did it all.
+async function follow(d, sha) {
+  const t = d.target;
+  const to = t.remote + "/" + t.ref;
+  const not = (why) => (t.track ? d.branch + " doesn't track " + to + " yet: " : to + " isn't updated here: ") + why;
+  try {
+    const noted = await git(d.workspace, ["update-ref", "refs/remotes/" + to, sha]);
+    if (!noted.ok) return not(noted.err);
+    if (!t.track) return "";
+    const up = await git(d.workspace, ["branch", "--set-upstream-to=" + to, d.branch]);
+    return up.ok ? "" : not(up.err);
+  } catch (e) {
+    if (!(e instanceof Late)) throw e;
+    return not(e.message);
   }
 }
 

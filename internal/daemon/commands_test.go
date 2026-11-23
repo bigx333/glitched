@@ -120,7 +120,7 @@ func TestTheSocketAsksTheProviderNamed(t *testing.T) {
 	defer local.Close()
 	ctx := context.Background()
 
-	if got, err := local.ProviderAsk(ctx, "answering", provider.AskSpec{Prompt: "hi"}); err != nil || got != (provider.AskResult{Text: "re: hi", Model: "cheap"}) {
+	if got, err := local.ProviderAsk(ctx, "answering", provider.AskSpec{Prompt: "hi", Timeout: 5 * time.Second}); err != nil || got != (provider.AskResult{Text: "re: hi", Model: "cheap"}) {
 		t.Errorf("ask: %+v, %v", got, err)
 	}
 	if _, err := local.ProviderAsk(ctx, "fake", provider.AskSpec{Prompt: "hi"}); !errors.Is(err, provider.ErrUnsupported) {
@@ -146,7 +146,7 @@ func TestTheSocketAsksTheProviderNamed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := remote(t, d, token).ProviderAsk(ctx, "answering", provider.AskSpec{Prompt: "hi"}); err == nil {
+	if _, err := remote(t, d, token).ProviderAsk(ctx, "answering", provider.AskSpec{Prompt: "hi", Timeout: 5 * time.Second}); err == nil {
 		t.Error("a paired token over TCP was answered")
 	}
 }

@@ -55,7 +55,8 @@ type Asker interface {
 
 // AskSpec is one prompt. Model "" is the adapter's own cheap model.
 // Timeout bounds the ask in the engine that runs it, as a caller's
-// deadline doesn't cross the transport; 0 leaves it to ctx.
+// deadline doesn't cross the transport. An ask has one: the engine refuses
+// one that isn't positive.
 type AskSpec struct {
 	Model   string        `json:"model,omitempty"`
 	System  string        `json:"system,omitempty"`
