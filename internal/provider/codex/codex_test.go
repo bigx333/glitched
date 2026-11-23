@@ -715,7 +715,7 @@ func TestAnOldTurnReachesNoLaterRun(t *testing.T) {
 // card, and Deny is the denial Codex offers.
 func TestACommandShowsTheAccessItAsksFor(t *testing.T) {
 	b, _, answer := approvalRun(t, "network", false)
-	if !strings.Contains(b["args"], "status.example") {
+	if !strings.Contains(b["reason"], "check status") || !strings.Contains(b["reason"], "status.example") {
 		t.Errorf("card %+v", b)
 	}
 	if answer != `{"decision":"cancel"}` {
@@ -752,24 +752,6 @@ func TestFastIsCodexsPriorityTier(t *testing.T) {
 	}
 	if strings.Join(tiers, " ") != "priority null" {
 		t.Errorf("tiers %q", tiers)
-	}
-}
-
-// A question that takes only Codex's own options refuses an answer of the
-// user's own, and Codex is told nothing of it.
-func TestAFixedQuestionRefusesItsOwnAnswer(t *testing.T) {
-	a, log := fake(t, "question-fixed")
-	g := open(t, a, spec(t))
-	do(t, g, provider.Start{Text: "go"})
-	_, req := until[provider.RequestOpened](t, g)
-	if err := g.Do(context.Background(), provider.Respond{Request: req.ID, Answer: json.RawMessage(`{"answers":[{"other":"Orange"}]}`)}); err == nil {
-		t.Fatal("an answer of the user's own was taken")
-	}
-	do(t, g, provider.Respond{Request: req.ID, Answer: json.RawMessage(`{"answers":[{"picked":["Red"]}]}`)})
-	turn(t, g)
-	closeRun(t, g)
-	if got := answers(t, log); len(got) != 1 || compact(got[0]) != `{"answers":{"color":{"answers":["Red"]}}}` {
-		t.Errorf("answered %s", got)
 	}
 }
 

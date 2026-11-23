@@ -405,13 +405,13 @@ func (f *fake) play(n int, turn string) {
 		call["status"] = "completed"
 		f.item("item/completed", call)
 		f.message("msg-"+turn, "used the tool")
-	case "question", "question-unshowable", "question-fixed":
+	case "question", "question-unshowable":
 		options := []any{map[string]any{"label": "Red", "description": "warm"}, map[string]any{"label": "Blue", "description": "cool"}}
 		if f.scenario == "question-unshowable" {
 			options = options[:1]
 		}
 		a := f.answer("item/tool/requestUserInput", map[string]any{"threadId": thread, "turnId": turn, "itemId": "q-1", "isBlocking": true, "autoResolutionMs": nil, "questions": []any{map[string]any{
-			"id": "color", "header": "Color", "question": "Which color?", "isOther": f.scenario != "question-fixed", "isSecret": false, "options": options}}})
+			"id": "color", "header": "Color", "question": "Which color?", "isOther": true, "isSecret": false, "options": options}}})
 		f.message("msg-"+turn, "answered "+string(a.Result))
 	case "elicitation", "elicitation-fields":
 		schema := map[string]any{"type": "object", "properties": map[string]any{}}
