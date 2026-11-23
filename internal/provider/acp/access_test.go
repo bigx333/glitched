@@ -235,10 +235,9 @@ func TestTheAgentsLatestModeWinsOnTheNextRun(t *testing.T) {
 }
 
 // A thread changes its access level between runs and keeps its
-// conversation. Ask for approval and Approve for me take the same agy, its
-// session set to the level's mode. Full access, which agy takes only as it
-// starts, takes an agy of its own, and so does the next level after it.
-// Each resumes the thread's session. A session without auto runs Approve
+// conversation: each level takes an agy of its own, started with the
+// skip flag for Full access alone, which resumes the thread's session
+// and sets it to the level's mode. A session without auto runs Approve
 // for me in accept-edits the same way.
 func TestAThreadChangesItsAccessMidConversation(t *testing.T) {
 	for offered, auto := range map[string]string{"": "auto", "default,accept-edits,plan": "accept-edits"} {
@@ -272,10 +271,10 @@ func TestAThreadChangesItsAccessMidConversation(t *testing.T) {
 			json.Unmarshal(e.Params, &p)
 			modes = append(modes, p.ModeId)
 		}
-		if !slices.Equal(flags, []bool{false, true, false}) || len(find(t, entries, "session/new")) != 1 || len(find(t, entries, "session/resume")) != 2 {
+		if !slices.Equal(flags, []bool{false, false, false, true, false, false}) || len(find(t, entries, "session/new")) != 1 || len(find(t, entries, "session/resume")) != 5 {
 			t.Errorf("modes %q: agy started %v with the skip flag, and %q", offered, flags, methods(entries))
 		}
-		if want := []string{auto, "default", auto, "default"}; !slices.Equal(modes, want) {
+		if want := []string{auto, auto}; !slices.Equal(modes, want) {
 			t.Errorf("modes %q: set_mode %q, want %q", offered, modes, want)
 		}
 	}
