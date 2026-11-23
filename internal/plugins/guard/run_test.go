@@ -37,7 +37,7 @@ func mustRun(t *testing.T, s Spec) Result {
 
 func need(t *testing.T, program string) {
 	t.Helper()
-	if _, ok := find(program, testPath); !ok {
+	if _, ok := Find(program, testPath); !ok {
 		t.Skipf("%s isn't installed", program)
 	}
 }
@@ -364,7 +364,7 @@ func TestAPlantedRepositoryRunsNothing(t *testing.T) {
 // The rules follow the file that runs: a link named g to git is git.
 func TestAGitByAnotherNameIsStillGit(t *testing.T) {
 	need(t, "git")
-	real, _ := find("git", testPath)
+	real, _ := Find("git", testPath)
 	bin := t.TempDir()
 	if err := os.Symlink(real, filepath.Join(bin, "g")); err != nil {
 		t.Fatal(err)
@@ -429,7 +429,7 @@ func TestGhNeverGivesATokenOrRunsAProgram(t *testing.T) {
 
 func TestGitFamilyRunsGetTheHardenedEnvironment(t *testing.T) {
 	bin := t.TempDir()
-	printenv, ok := find("printenv", testPath)
+	printenv, ok := Find("printenv", testPath)
 	if !ok {
 		t.Skip("printenv isn't installed")
 	}
@@ -463,7 +463,7 @@ func TestRiskSaysWhatCanDoAnything(t *testing.T) {
 }
 
 func TestUserPathHasOnlyAbsoluteFolders(t *testing.T) {
-	for _, d := range filepath.SplitList(userPath()) {
+	for _, d := range filepath.SplitList(UserPath()) {
 		if !filepath.IsAbs(d) {
 			t.Errorf("relative folder %q on the PATH", d)
 		}

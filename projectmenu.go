@@ -35,12 +35,15 @@ func (a *app) projectMenu(m *ui.Menu, p *project) {
 	}
 }
 
-// workspaceItems end the draft's workspace menu: adding a project, and
-// removing one, each stopped first as the chip's menu has it.
+// workspaceItems end the draft's workspace menu: adding a project, from
+// a folder or a clone, and removing one, each stopped first as the chip's menu has it.
 func (a *app) workspaceItems(m *ui.Menu) {
 	m.Separator()
 	if m.Item("Add project…").Disabled(a.picking).Chosen() {
 		a.addProject()
+	}
+	if m.Item("Clone repository…").Disabled(a.clone.open).Chosen() {
+		a.openClone()
 	}
 	if len(a.projects) == 0 {
 		return

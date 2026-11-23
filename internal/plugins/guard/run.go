@@ -51,7 +51,7 @@ type Result struct {
 // it. Refusals match ErrRefused. A program that ran and failed is a Result
 // with its status, not an error.
 func Run(ctx context.Context, s Spec) (Result, error) {
-	return run(ctx, s, userPath())
+	return run(ctx, s, UserPath())
 }
 
 func run(ctx context.Context, s Spec, path string) (Result, error) {
@@ -77,7 +77,7 @@ func run(ctx context.Context, s Spec, path string) (Result, error) {
 	if err := checkArgs(fam, s.Args, s.Cwd); err != nil {
 		return Result{}, err
 	}
-	found, ok := find(s.Program, path)
+	found, ok := Find(s.Program, path)
 	if !ok {
 		return Result{}, fmt.Errorf("%q isn't installed on this device (or isn't on your PATH)", s.Program)
 	}
@@ -116,7 +116,7 @@ func run(ctx context.Context, s Spec, path string) (Result, error) {
 	}
 	var stdout, stderr capped
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	ownGroup(cmd)
+	OwnGroup(cmd)
 	// A grandchild that keeps a pipe open (in its own session, past the
 	// group kill) must not hold the run past its end.
 	cmd.WaitDelay = time.Second
@@ -229,11 +229,11 @@ func envName(key string) bool {
 	return true
 }
 
-// userPath is where programs are looked up: the login shell's PATH (what
+// UserPath is where programs are looked up: the login shell's PATH (what
 // the user's terminal finds), then the process's, then the usual install
 // folders, which a GUI app launched from a dock often lacks. Relative
 // entries are dropped: "." would run a file from the plugin's cwd.
-var userPath = sync.OnceValue(func() string {
+var UserPath = sync.OnceValue(func() string {
 	var dirs []string
 	add := func(list string) {
 		for _, d := range filepath.SplitList(list) {
@@ -253,10 +253,10 @@ var userPath = sync.OnceValue(func() string {
 	return strings.Join(dirs, string(os.PathListSeparator))
 })
 
-// find is the first executable file called name in path's folders. On
+// Find is the first executable file called name in path's folders. On
 // Windows only .exe counts: a .cmd or .bat runs through cmd.exe, a shell
 // that would reparse the args.
-func find(name, path string) (string, bool) {
+func Find(name, path string) (string, bool) {
 	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(name), ".exe") {
 		name += ".exe"
 	}
