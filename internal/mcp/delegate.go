@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"glitched/internal/api"
+	"glitched/internal/provider"
+	"glitched/internal/transport"
 )
 
 // Tools are the tools glitched mcp serves, for Origin, on Engine.
@@ -23,6 +25,16 @@ type Tools struct {
 	Plugins PluginTools
 	// Secrets asks the user for credentials; nil can't.
 	Secrets Asker
+	// Providers lists the engine's providers and their models, which a
+	// delegate that names a provider, model or effort is checked against;
+	// nil checks nothing, and refuses a provider other than the caller's.
+	Providers Providers
+}
+
+// Providers are the engine's providers, as transport.EndpointClient lists
+// them.
+type Providers interface {
+	Providers(ctx context.Context, fresh, check bool) ([]transport.ProviderInfo, error)
 }
 
 // PluginTools are the engine's plugin tools, as transport.EndpointClient
@@ -37,7 +49,7 @@ const delegateTask = "delegate_task"
 var catalog = []map[string]any{{
 	"name": delegateTask,
 	"description": "Delegate a self-contained task to a child agent, in a new thread under this one. " +
-		"The child starts at once and the call returns; each time its turn ends done or failed, its report comes to this thread as a new message, so do not wait or poll for it. Folder, permissions and model inherit unless you pick a model. " +
+		"The child starts at once and the call returns; each time its turn ends done or failed, its report comes to this thread as a new message, so do not wait or poll for it. Folder and permissions inherit. Provider, model and effort inherit unless you pick them; a child on another provider starts at that provider's own default model and effort unless you pick them. " +
 		"This thread's history is not copied, so the task must stand on its own. " +
 		"The user sees the child and can open it. A child cannot gain broader permissions. " +
 		"Reuse client_request_id to retry the same task safely; each new task needs a new one.",
@@ -46,8 +58,9 @@ var catalog = []map[string]any{{
 		"properties": map[string]any{
 			"task":              map[string]any{"type": "string", "minLength": 1, "maxLength": 120000, "description": "The child's first message: a complete brief."},
 			"title":             map[string]any{"type": "string", "maxLength": 512, "description": "A short name for the child's thread."},
-			"model":             map[string]any{"type": "string", "description": "The child's model, by the id this thread's agent knows it by; else this thread's."},
-			"effort":            map[string]any{"type": "string", "description": "The child's reasoning effort; else this thread's."},
+			"provider":          map[string]any{"type": "string", "description": "The child's provider, as claude or codex; else this thread's. An unknown one fails with the providers there are."},
+			"model":             map[string]any{"type": "string", "description": "The child's model, by its provider's id for it; else this thread's on this thread's provider, and the provider's default on another. An unknown one fails with the ids there are."},
+			"effort":            map[string]any{"type": "string", "description": "The child's reasoning effort; else this thread's on this thread's provider, and the model's default on another."},
 			"client_request_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 256},
 		},
 		"required":             []string{"task"},
@@ -58,6 +71,7 @@ var catalog = []map[string]any{{
 type delegateArgs struct {
 	Task      string `json:"task"`
 	Title     string `json:"title"`
+	Provider  string `json:"provider"`
 	Model     string `json:"model"`
 	Effort    string `json:"effort"`
 	RequestID string `json:"client_request_id"`
@@ -109,7 +123,11 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 		}
 		return TaskView{}, errors.New("delegate_task: this agent was started for an earlier turn of the thread, so it can't delegate for the current one")
 	}
-	model, access := turn.Model, min(turn.Access, parent.Access)
+	model, err := t.childModel(ctx, turn.Model, in)
+	if err != nil {
+		return TaskView{}, err
+	}
+	access := min(turn.Access, parent.Access)
 	title := cmp.Or(in.Title, firstLine(in.Task))
 	_, err = t.Engine.Submit(ctx, api.Command{
 		ID:     derive(t.Origin.Thread, "call", key),
@@ -119,16 +137,11 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 			Project:   parent.Project,
 			Branch:    parent.Branch,
 			Title:     title,
-			Model: api.ModelRef{
-				Provider: model.Provider,
-				Model:    cmp.Or(in.Model, model.Model),
-				Effort:   cmp.Or(in.Effort, model.Effort),
-				Fast:     model.Fast,
-			},
-			Access: access,
-			Parent: t.Origin.Thread,
-			Run:    turn.Run,
-			Text:   in.Task,
+			Model:     model,
+			Access:    access,
+			Parent:    t.Origin.Thread,
+			Run:       turn.Run,
+			Text:      in.Task,
 		},
 	})
 	if errors.Is(err, api.ErrConflict) {
@@ -146,6 +159,67 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 		return TaskView{}, refusal(err)
 	}
 	return TaskView{TaskID: child.String(), Title: title, Status: "working"}, nil
+}
+
+// childModel is the model a child of a turn at turn runs at, as in asks.
+// On the turn's provider, what in leaves out is the turn's; on another,
+// the turn's model, effort and Fast are that provider's to choose, so
+// they are left out too and its program runs its own default, as a
+// thread that follows it does. What in names is checked against what the
+// engine's providers offer.
+func (t *Tools) childModel(ctx context.Context, turn api.ModelRef, in delegateArgs) (api.ModelRef, error) {
+	m := turn
+	if in.Provider != "" && in.Provider != turn.Provider {
+		m = api.ModelRef{Provider: in.Provider}
+	}
+	m.Model, m.Effort = cmp.Or(in.Model, m.Model), cmp.Or(in.Effort, m.Effort)
+	if in.Provider == "" && in.Model == "" && in.Effort == "" {
+		return m, nil
+	}
+	if t.Providers == nil {
+		if m.Provider != turn.Provider {
+			return api.ModelRef{}, errors.New("delegate_task: this server can't start a child on another provider")
+		}
+		return m, nil
+	}
+	all, err := t.Providers.Providers(ctx, false, false)
+	if err != nil {
+		return api.ModelRef{}, fmt.Errorf("delegate_task: the engine couldn't list its providers: %w", err)
+	}
+	i := slices.IndexFunc(all, func(p transport.ProviderInfo) bool { return p.Name == m.Provider })
+	if i < 0 {
+		names := make([]string, len(all))
+		for i, p := range all {
+			names[i] = p.Name
+		}
+		return api.ModelRef{}, fmt.Errorf("delegate_task: this engine has no provider %q; it has %s", m.Provider, strings.Join(names, ", "))
+	}
+	if all[i].Error != "" {
+		return api.ModelRef{}, fmt.Errorf("delegate_task: %s can't run a child now: %s", m.Provider, all[i].Error)
+	}
+	models := all[i].Info.Models
+	j := slices.IndexFunc(models, func(x provider.Model) bool { return x.ID == m.Model })
+	if m.Model == "" {
+		j = slices.IndexFunc(models, func(x provider.Model) bool { return x.Default })
+	}
+	if in.Model != "" && j < 0 && len(models) == 0 {
+		return api.ModelRef{}, fmt.Errorf("delegate_task: %s lists no models, so it runs only its own default: leave model out", m.Provider)
+	}
+	if in.Model != "" && j < 0 {
+		ids := make([]string, len(models))
+		for i, x := range models {
+			ids[i] = x.ID
+		}
+		return api.ModelRef{}, fmt.Errorf("delegate_task: %s has no model %q; its models are %s", m.Provider, in.Model, strings.Join(ids, ", "))
+	}
+	if in.Effort != "" && j >= 0 && len(models[j].Efforts) > 0 && !slices.ContainsFunc(models[j].Efforts, func(e provider.Effort) bool { return e.ID == in.Effort }) {
+		ids := make([]string, len(models[j].Efforts))
+		for i, e := range models[j].Efforts {
+			ids[i] = e.ID
+		}
+		return api.ModelRef{}, fmt.Errorf("delegate_task: %s runs at no effort %q; its efforts are %s", models[j].ID, in.Effort, strings.Join(ids, ", "))
+	}
+	return m, nil
 }
 
 // thread is the origin's thread as the engine has it.

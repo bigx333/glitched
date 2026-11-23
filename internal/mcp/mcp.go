@@ -81,7 +81,7 @@ func (l Launcher) For(thread api.ID, access api.Access) provider.MCPServer {
 const instructions = `Glitched runs you in a thread. Its MCP server glitched gives you the tool delegate_task, which starts a child agent in a thread of its own, under this one.
 
 - Follow the user's delegation preferences and the repository's instructions. That the tool is there does not by itself call for delegating work.
-- The child starts at once, with this thread's folder, permissions and model unless you pick another model. It does not see this conversation, so give it a self-contained brief.
+- The child starts at once, with this thread's folder and permissions, and its provider and model unless you pick others: another provider (claude for codex, say) starts at its own default model unless you pick one. It does not see this conversation, so give it a self-contained brief.
 - Each time a child's turn ends done or failed, its report reaches this thread as a new message, in your next turn. Do not wait or poll for it: carry on, or end your turn.
 - A child that delegates in turn reports each turn it ends done or failed, so it can report before its own children finish and again after. Its latest report is the current one. If you delegate and end your turn while children still work, say so in your reply: that reply is your report to your parent.
 - The user sees each child and can open it. A child cannot get wider permissions than this thread.
@@ -98,7 +98,7 @@ func Main(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	}
 	ep := transport.NewEndpointClient(transport.Loopback{Network: "unix", Address: engine}, api.ID{})
 	defer ep.Close()
-	return Serve(ctx, stdin, stdout, &Tools{Engine: ep, Origin: o, Plugins: ep, Secrets: ep})
+	return Serve(ctx, stdin, stdout, &Tools{Engine: ep, Origin: o, Plugins: ep, Secrets: ep, Providers: ep})
 }
 
 func fromEnv() (Origin, string, error) {
