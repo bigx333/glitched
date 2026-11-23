@@ -20,8 +20,10 @@ import (
 // addedProject is a folder added as a project on this machine, as
 // projects.json holds it.
 type addedProject struct {
-	Workspace string    `json:"workspace"`
-	Added     time.Time `json:"added"`
+	Workspace string `json:"workspace"`
+	// Added is RFC 3339, kept as text so that one written wrong hides
+	// no project.
+	Added string `json:"added"`
 }
 
 func (a *app) projectsPath() string { return filepath.Join(a.dir, "projects.json") }
@@ -40,6 +42,9 @@ func (a *app) loadProjects() {
 func (a *app) editProjects(change func(*[]addedProject)) {
 	ps, err := jsonfile.EditOrReset(a.projectsPath(), func(ps *[]addedProject) error {
 		change(ps)
+		if *ps == nil {
+			*ps = []addedProject{}
+		}
 		return nil
 	})
 	if err != nil {
@@ -55,16 +60,14 @@ func (a *app) editProjects(change func(*[]addedProject)) {
 func (a *app) recordProject(dir string) {
 	a.editProjects(func(ps *[]addedProject) {
 		if !slices.ContainsFunc(*ps, func(p addedProject) bool { return p.Workspace == dir }) {
-			*ps = append(*ps, addedProject{dir, time.Now().UTC().Truncate(time.Second)})
+			*ps = append(*ps, addedProject{dir, time.Now().UTC().Format(time.RFC3339)})
 		}
 	})
 }
 
-// forgetProject drops dir from the projects added, if it is one.
+// forgetProject drops dir from the projects added. It reads the file, not
+// the list here: another window may have added dir since this one loaded.
 func (a *app) forgetProject(dir string) {
-	if !slices.ContainsFunc(a.added, func(p addedProject) bool { return p.Workspace == dir }) {
-		return
-	}
 	a.editProjects(func(ps *[]addedProject) {
 		*ps = slices.DeleteFunc(*ps, func(p addedProject) bool { return p.Workspace == dir })
 	})
