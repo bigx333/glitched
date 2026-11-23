@@ -433,7 +433,11 @@ func TestGitFamilyRunsGetTheHardenedEnvironment(t *testing.T) {
 	if !ok {
 		t.Skip("printenv isn't installed")
 	}
-	os.Symlink(printenv, filepath.Join(bin, "git-lfs"))
+	// A script, not a link: a multi-call printenv, as uutils' on Ubuntu
+	// 26.04, refuses to run under another name.
+	if err := os.WriteFile(filepath.Join(bin, "git-lfs"), []byte("#!/bin/sh\nexec '"+printenv+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	res, err := run(context.Background(), Spec{Program: "git-lfs", Cwd: bin, Allowed: []string{"git-lfs"}}, bin)
 	if err != nil {
 		t.Fatal(err)
