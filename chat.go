@@ -253,7 +253,7 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) {
 	l.FollowAnimation = &ui.Smooth
 	// The agents strip sits over the composer: the end clears it too.
 	room := composerRoom + a.agentsRoom(t)
-	at := thinkingAt(t, es)
+	at := thinkingAt(t, rs)
 	list := ui.List(c.Key(t.id()), l, len(es), func(i int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).MaxWidth(contentWidth).Gap(22).Children(func() {
@@ -284,17 +284,20 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) {
 
 // thinkingAt is the entry under which the transcript says the agent is at
 // work, from the moment its run takes a message until the turn ends: the
-// run's last, above the messages still queued. It is -1 while the run
-// waits on the user, or its engine can't be reached to say when it ends.
-func thinkingAt(t thread, es []entry) int {
+// transcript's last, above the messages still queued or on their way, or
+// the run's own message while the transcript has yet to list it. It is -1
+// while the run waits on the user, or its engine can't be reached to say
+// when it ends.
+func thinkingAt(t thread, rs rows) int {
 	if _, ok := thinkingLabels[t.View.Run]; !ok || t.env != nil && t.env.Status != client.Status(client.Online{}) {
 		return -1
 	}
-	i := len(es) - 1
-	for i >= 0 && es[i].queued {
-		i--
+	if t.View.Turn != nil {
+		if i := slices.IndexFunc(rs.es[rs.fixed:], func(e entry) bool { return e.key == "m/"+t.View.Turn.Run.String() }); i >= 0 {
+			return rs.fixed + i
+		}
 	}
-	return i
+	return rs.fixed - 1
 }
 
 var thinkingLabels = map[api.RunState]string{api.RunStarting: "Thinking…", api.RunRunning: "Thinking…", api.RunStopping: "Stopping…"}
