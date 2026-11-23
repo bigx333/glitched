@@ -352,6 +352,53 @@ func TestACompactionReportsTheContextUnknown(t *testing.T) {
 	}
 }
 
+// Codex resends the thread's last usage, as after a rate-limit update,
+// with no request since: that is no news of the turn's, whose model may
+// not be the last one's.
+func TestResentUsageIsNoReport(t *testing.T) {
+	a, _ := fake(t, "resent")
+	s := spec(t)
+	var got [][]provider.Context
+	for range 2 {
+		g := open(t, a, s)
+		do(t, g, provider.Start{Text: "hi"})
+		var c []provider.Context
+		for _, e := range turn(t, g) {
+			if r, ok := e.(provider.Context); ok {
+				c = append(c, r)
+			}
+		}
+		got = append(got, c)
+		closeRun(t, g)
+		s.Run = api.NewID()
+	}
+	want := []provider.Context{{Used: 100, Window: 258400}}
+	for i, c := range got {
+		if !slices.Equal(c, want) {
+			t.Errorf("turn %d reported %+v, want %+v", i+1, c, want)
+		}
+	}
+}
+
+// A run on a new app-server is a new Codex conversation, and says so: the
+// last one's context is not this one's.
+func TestANewAppServerIsANewSession(t *testing.T) {
+	a, _ := fake(t, "whole")
+	s := spec(t)
+	var sessions []string
+	for _, access := range []api.Access{api.AccessAsk, api.AccessAsk, api.AccessFull} {
+		s.Run, s.Access = api.NewID(), access
+		g := open(t, a, s)
+		sessions = append(sessions, g.(provider.Sessioned).Session())
+		do(t, g, provider.Start{Text: "hi"})
+		turn(t, g)
+		closeRun(t, g)
+	}
+	if sessions[0] == "" || sessions[1] != sessions[0] || sessions[2] == sessions[0] {
+		t.Errorf("sessions %q: want one kept by the parked app-server, then a new one", sessions)
+	}
+}
+
 // What Codex answered a request of the fake's, as the log has it.
 func answers(t *testing.T, log string) []json.RawMessage {
 	t.Helper()
