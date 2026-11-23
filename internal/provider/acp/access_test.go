@@ -173,3 +173,22 @@ func TestATurnReportsItsOwnTokens(t *testing.T) {
 	}
 	closeRun(t, g)
 }
+
+// An agent that ignores the user's own deny rules over ACP says so as it
+// describes itself, and one that keeps them doesn't.
+func TestAnAgentSaysItsRulesDontApply(t *testing.T) {
+	for _, ignored := range []bool{true, false} {
+		a, _ := fake(t, "hi")
+		a.Profile.RulesIgnored = ignored
+		info, err := a.Describe(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.RulesIgnored != ignored {
+			t.Errorf("a profile whose rules are ignored %v describes itself as %v", ignored, info.RulesIgnored)
+		}
+	}
+	if !Antigravity.RulesIgnored {
+		t.Error("Antigravity's profile keeps agy's deny rules, which agy acp ignores")
+	}
+}

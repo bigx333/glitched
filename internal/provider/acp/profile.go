@@ -35,6 +35,9 @@ type Profile struct {
 	// the whole session, so an agent not seen to report a turn's own
 	// reports none.
 	TurnUsage bool
+	// RulesIgnored is that the agent doesn't apply the user's own deny
+	// rules to a session over ACP.
+	RulesIgnored bool
 }
 
 // Antigravity is Google's Antigravity CLI, agy, from the user's own
@@ -55,6 +58,9 @@ var Antigravity = Profile{
 		api.AccessAutoEdits: {Mode: "accept-edits"},
 		api.AccessFull:      {Args: []string{"--dangerously-skip-permissions"}},
 	},
+	// agy 1.5.14 as `agy acp` ran rm under a command(rm) deny rule at
+	// Full access, and asked at Ask, where `agy -p` denied it at both.
+	RulesIgnored: true,
 	// agy 1.5.14 answered two turns of a session with 22225 and 11858.
 	TurnUsage: true,
 	SignedOut: []string{
