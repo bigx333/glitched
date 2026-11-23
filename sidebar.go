@@ -240,6 +240,7 @@ func (a *app) settingsNav(c *ui.Context) {
 // its text area taking the focus from wherever the press left it.
 func (a *app) newThread() {
 	t := a.current()
+	a.loadLastProject()
 	d, ok := a.lastDraft(t.env)
 	if !ok {
 		d = draft{env: t.env, workspace: a.projectOf(t).key.workspace}

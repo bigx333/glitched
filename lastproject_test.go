@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -152,5 +153,61 @@ func TestQuickAskOpensOnTheLastProject(t *testing.T) {
 	h.thread("Rename the photos by date")
 	if got := lastProjectFile(t, state); got != h.a.scratchRoot() {
 		t.Fatalf("after a quick ask with no project last-project.json holds %q, want the scratch root", got)
+	}
+}
+
+// Removing the project the last thread was started in, from a draft in
+// it, forgets it: neither that draft nor the next New thread brings it
+// back.
+func TestRemovingTheLastProjectForgetsIt(t *testing.T) {
+	state, proj := tempDir(t), t.TempDir()
+	rememberedState(t, state, []string{proj}, proj)
+	h := start(t, state)
+	h.a.startIn(draft{env: h.local(), workspace: proj})
+	h.tt.Advance(time.Second)
+	h.a.removeProject(h.a.projectOf(h.a.current()))
+	h.tt.Advance(time.Second)
+	if ws := h.a.current().View.Workspace; ws != h.a.scratchRoot() {
+		t.Fatalf("the draft is in %q after its project was removed, want No project", ws)
+	}
+	h.click("New thread")
+	if ws := h.a.current().View.Workspace; ws != h.a.scratchRoot() {
+		t.Fatalf("New thread starts in %q, a removed project, want No project", ws)
+	}
+	if got := lastProjectFile(t, state); got != "" {
+		t.Fatalf("last-project.json still holds %q", got)
+	}
+}
+
+// New thread reads where the last thread was started as the file has it
+// now, which another window on the state may have changed.
+func TestNewThreadFollowsAnotherWindowsLastProject(t *testing.T) {
+	state, a, b := tempDir(t), t.TempDir(), t.TempDir()
+	rememberedState(t, state, []string{a, b}, a)
+	h := start(t, state)
+	h.tt.Advance(time.Second)
+	if err := jsonfile.Write(filepath.Join(state, "last-project.json"), map[string]string{"": b}); err != nil {
+		t.Fatal(err)
+	}
+	h.click("New thread")
+	if ws := h.a.current().View.Workspace; ws != b {
+		t.Fatalf("New thread starts in %q, want %q, where the other window last started one", ws, b)
+	}
+}
+
+// A server's home row is no default while no thread runs there: removing
+// a project leaves the draft in the server's project left, not "~".
+func TestAServersHomeIsNoLastProjectWithoutAThread(t *testing.T) {
+	h := machines(t)
+	devbox := h.thread("Retry failed invoice webhooks").env
+	h.a.rememberProject(keyOf(devbox, "~"))
+	h.a.fresh = draft{devbox, "/srv/billing"}
+	h.a.removeProject(h.a.projectOf(h.thread("Retry failed invoice webhooks")))
+	h.until("billing gone", func() bool {
+		h.tt.Frame()
+		return !slices.ContainsFunc(h.a.projects, func(p *project) bool { return p.key.workspace == "/srv/billing" })
+	})
+	if h.a.fresh != (draft{devbox, "/srv/api"}) {
+		t.Fatalf("the draft is %+v, want devbox's api project, the one left", h.a.fresh)
 	}
 }
