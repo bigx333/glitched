@@ -95,7 +95,7 @@ func (a *app) openPlugins(dir string) {
 		WaitToStart: true,
 		Reloaded: func(string) {
 			clear(a.pluginAssets)
-			forgetPluginTerminals()
+			a.forgetPluginTerminals()
 		},
 		Run: func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error) {
 			return runPluginProgram(ctx, id, allowed, denied, args)
@@ -117,7 +117,7 @@ func (a *app) openPlugins(dir string) {
 // pluginsChanged forgets what the plugins' pages showed, as after a
 // reload, which closed them.
 func (a *app) pluginsChanged(err error) {
-	forgetPluginTerminals()
+	a.forgetPluginTerminals()
 	clear(a.pluginPages)
 	clear(a.pluginControls)
 	clear(a.pluginAssets)

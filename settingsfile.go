@@ -58,7 +58,7 @@ func fileOf(s settings) settingsFile {
 // settingsFrom is s with what f holds that the pages could have set: a
 // value they don't offer, as a theme since gone or a size off the slider,
 // keeps s's.
-func settingsFrom(s settings, f settingsFile) settings {
+func settingsFrom(s settings, f settingsFile, themeNames []string) settings {
 	pick := func(v *string, names []string, name string) {
 		if slices.Contains(names, name) {
 			*v = name
@@ -69,7 +69,7 @@ func settingsFrom(s settings, f settingsFile) settings {
 			*v = x
 		}
 	}
-	pick(&s.theme, themeNames(), f.Theme)
+	pick(&s.theme, themeNames, f.Theme)
 	for i, acc := range accents {
 		if acc.name == f.Accent {
 			s.accent = i
@@ -101,7 +101,7 @@ func (a *app) loadSettings() {
 	if err := jsonfile.Load(a.settingsPath(), &f); err != nil {
 		log.Printf("glitched: settings: %v", err)
 	}
-	a.settings = settingsFrom(a.settings, f)
+	a.settings = settingsFrom(a.settings, f, a.themeNames())
 	if f.Theme != "" && f.Theme != a.settings.theme {
 		a.pendingTheme = f.Theme
 	}

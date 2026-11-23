@@ -26,7 +26,7 @@ func (a *app) installMenu() {
 		return do(func() { a.chooseTheme(name) })
 	}
 	var appearance []*mygo.MenuItem
-	for _, name := range themeNames() {
+	for _, name := range a.themeNames() {
 		appearance = append(appearance, &mygo.MenuItem{Label: name, Type: mygo.MenuItemRadio, Checked: a.settings.theme == name, Click: theme(name)})
 	}
 	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{

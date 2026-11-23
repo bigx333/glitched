@@ -197,7 +197,7 @@ func (a *app) setAppSetting(args json.RawMessage) (any, error) {
 	if err := json.Unmarshal(b, &f); err != nil {
 		return nil, fmt.Errorf("%s: %v", in.Key, err)
 	}
-	s := settingsFrom(a.settings, f)
+	s := settingsFrom(a.settings, f, a.themeNames())
 	if got := fields(fileOf(s))[in.Key]; string(got) != string(fields(f)[in.Key]) {
 		return nil, fmt.Errorf("%s can't be %s", in.Key, in.Value)
 	}
@@ -218,7 +218,7 @@ type accentMatch struct{}
 // which is Glitched's own.
 func (a *app) appearance(c *ui.Context) {
 	s := &a.settings
-	ctx := appearancePage{Settings: a.appSettings(), Themes: themeNames()}
+	ctx := appearancePage{Settings: a.appSettings(), Themes: a.themeNames()}
 	for _, acc := range accents {
 		ctx.Accents = append(ctx.Accents, accentRecord{acc.name, fmt.Sprintf("#%02x%02x%02x", acc.color.R, acc.color.G, acc.color.B)})
 	}
@@ -289,7 +289,7 @@ func (a *app) swatch(c *ui.Context, key any, color ui.Color, on bool, label stri
 // colors under them; System's is half light, half dark. A click picks it.
 func (a *app) themeCard(c *ui.Context, name string, pick func()) {
 	s := &a.settings
-	th := themeFor(name, true)
+	th := a.themeFor(name, true)
 	cols := th.colors
 	b := ui.ButtonBase(c.Key(name)).Grow(1).Basis(0).Column().AlignItems(ui.Stretch).Gap(8).Cursor(ui.CursorPointer)
 	if b.Children(func() {
@@ -301,7 +301,7 @@ func (a *app) themeCard(c *ui.Context, name string, pick func()) {
 			ui.Row(c).Fill().Border(1, palette.border).Radius(10).Clip().AlignItems(ui.Stretch).Children(func() {
 				side, main := cols.sidebar, cols.bg
 				if name == systemTheme { // half and half
-					side, main = themeFor(name, false).colors.sidebar, cols.bg
+					side, main = a.themeFor(name, false).colors.sidebar, cols.bg
 				}
 				ui.Column(c).Width(44).Background(side).Padding(10, 8).Gap(5).Children(func() {
 					for range 4 {

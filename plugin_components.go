@@ -358,7 +358,7 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 	case "theme.card":
 		var name string
 		json.Unmarshal(n.Props["theme"], &name)
-		if !slices.Contains(themeNames(), name) {
+		if !slices.Contains(a.themeNames(), name) {
 			ui.Text(c, "No theme "+name+".").TextColor(palette.muted)
 			return
 		}
