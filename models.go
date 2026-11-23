@@ -163,6 +163,11 @@ func (a *app) providerFamilies() []family {
 			others = append(others, p)
 		}
 	}
+	for p := range a.models.served {
+		if _, ok := a.models.reported[p]; !ok && !slices.ContainsFunc(families, func(f family) bool { return f.provider == p }) {
+			others = append(others, p) // one that runs nothing yet, as signed out
+		}
+	}
 	if p := a.model.Provider; p != "" && !slices.Contains(others, p) && !slices.ContainsFunc(families, func(f family) bool { return f.provider == p }) {
 		others = append(others, p) // the chosen model's, which its engine no longer offers
 	}
