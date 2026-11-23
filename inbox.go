@@ -253,16 +253,18 @@ func (a *app) threadsNav(c *ui.Context) {
 	}
 	a.pluginComponent(c, "sidebar.body", nil, body...)
 	ui.Column(c).Padding(8).Gap(1).BorderWidth(1, 0, 0, 0).BorderColor(palette.border).Children(func() {
-		a.cliUpdatesButton(c)
 		a.pluginSlot(c, "sidebar.footer", "", nil, false, true)
 		a.pluginNav(c)
-		if ghost(c, "settings", false).Padding(7, 8).Children(func() {
-			ui.Icon(c, icSettings).FontSize(15)
-			ui.Text(c, "Settings").Grow(1)
-			shortcutHint(c, "⌘", ",")
-		}).Clicked() {
-			a.router.Push("/settings/general")
-		}
+		ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+			if ghost(c, "settings", false).Padding(7, 8).Grow(1).Shrink(1).Children(func() {
+				ui.Icon(c, icSettings).FontSize(15)
+				ui.Text(c, "Settings").Grow(1).SingleLine()
+				shortcutHint(c, "⌘", ",")
+			}).Clicked() {
+				a.router.Push("/settings/general")
+			}
+			a.cliUpdatesButton(c)
+		})
 	})
 }
 
