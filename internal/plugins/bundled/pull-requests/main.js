@@ -55,13 +55,15 @@ export function init() {
 
 // header draws a copy from its workspace's Repo, and nothing until one is read.
 export function place({ state, items }) {
-  return items.map(({ key, context }) => {
+  return items.map(({ key, context, compact }) => {
     const repo = context?.local && context.workspace ? state.repos[context.workspace]?.repo : null;
-    return repo ? header(repo, key, state) : null;
+    return repo ? header(repo, key, state, compact) : null;
   });
 }
 
-function header(repo, key, state) {
+// header is a copy's pill; compact, as a narrow header asks, it keeps to
+// its icon, and its label names it to assistive tools.
+function header(repo, key, state, compact) {
   const open = state.open === key;
   const popover = (width, children) => ({ active: open, open, onClick: "popover.toggle", onClose: "popover.close", popover: { type: "column", width, padding: 12, gap: 10, children } });
   switch (repo.kind) {
@@ -75,13 +77,13 @@ function header(repo, key, state) {
         gap: 4,
         children: [
           { type: "icon", name: "pull-request", color: "$warning" },
-          { type: "text", text: "PR", color: "$warning" },
+          ...(compact ? [] : [{ type: "text", text: "PR", color: "$warning" }]),
         ],
         ...popover(300, ghProblem(repo.problem)),
       };
     case "ready": {
       if (repo.ahead === 0 && repo.dirty === 0) return null;
-      const button = { type: "button", id: "create", style: "outline", icon: "pull-request", label: "Create PR", tooltip: "Create a pull request", onClick: "create.open" };
+      const button = { type: "button", id: "create", style: "outline", icon: "pull-request", label: "Create PR", tooltip: "Create a pull request", compact, onClick: "create.open" };
       const d = state.dialog;
       return d && d.key === key ? { type: "row", gap: 8, children: [button, createDialog(d)] } : button;
     }
@@ -98,7 +100,7 @@ function header(repo, key, state) {
         gap: 4,
         children: [
           { type: "icon", name: "pull-request", color: live && mark ? mark.color : STATES[pr.state].color },
-          { type: "text", text: "#" + pr.number },
+          ...(compact ? [] : [{ type: "text", text: "#" + pr.number }]),
         ],
         ...popover(360, prPopover(repo, state)),
       };

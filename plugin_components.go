@@ -336,7 +336,7 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 			ui.Text(c, ago(t.View.UpdatedAt, a.now)).FontSize(11).TextColor(palette.faint).Shrink(0)
 		}
 	case "thread.slot":
-		a.pluginSlot(c, "thread.row", t.id().String(), t)
+		a.pluginSlot(c, "thread.row", t.id().String(), t, slotAsk{})
 	case "thread.machine":
 		if len(a.backend.Envs()) > 1 {
 			a.machineBadge(c, t.env)
