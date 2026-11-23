@@ -538,3 +538,28 @@ func TestACopyOfAMovedWorktreeIsRefused(t *testing.T) {
 		t.Fatal("a refused delete deleted the thread")
 	}
 }
+
+// A repository that registers its worktrees by relative paths has its
+// thread's worktree removed on Delete.
+func TestAWorktreeRegisteredByARelativePathIsRemoved(t *testing.T) {
+	w := serveWorktrees(t)
+	project := repo(t)
+	gitIn(t, project, "config", "worktree.useRelativePaths", "true")
+	thread := api.NewID()
+	submit(t, w.h, thread, inWorktree(project, ""))
+	th := until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
+	submit(t, w.h, thread, api.ThreadDelete{RemoveWorktree: true})
+	if _, err := os.Stat(th.Workspace); err == nil {
+		t.Fatal("the worktree stayed")
+	}
+}
+
+// A project whose folder's name ends in a space starts a worktree.
+func TestAProjectWhoseNameEndsInASpaceStartsAWorktree(t *testing.T) {
+	w := serveWorktrees(t)
+	project := filepath.Join(t.TempDir(), "My project ")
+	gitIn(t, filepath.Dir(project), "clone", "-q", repo(t), project)
+	thread := api.NewID()
+	submit(t, w.h, thread, inWorktree(project, ""))
+	until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil && th.Branch != "" })
+}

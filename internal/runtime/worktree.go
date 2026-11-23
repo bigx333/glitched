@@ -35,7 +35,7 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 		}
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	return strings.TrimSuffix(string(out), "\n"), nil
 }
 
 // worktreeNames are the branches and the folder of thread's worktree.
@@ -213,7 +213,11 @@ func ownedBy(ctx context.Context, dir, common string, thread api.ID) (string, bo
 	real, _ := filepath.EvalSymlinks(dir)
 	owner, _ := os.ReadFile(filepath.Join(own, ownerFile))
 	at, _ := os.ReadFile(filepath.Join(own, "gitdir"))
-	registered, _ := filepath.EvalSymlinks(filepath.Dir(strings.TrimSpace(string(at))))
+	gitdir := strings.TrimSuffix(string(at), "\n")
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(own, gitdir)
+	}
+	registered, _ := filepath.EvalSymlinks(filepath.Dir(gitdir))
 	return own, top == real && theirs == common && registered == real && string(owner) == thread.String()
 }
 
