@@ -1,6 +1,7 @@
 package bundled_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -32,6 +34,9 @@ type github struct {
 	listErr   string // pr list's stderr, failing
 	createErr string // pr create's stderr, failing
 	createLag bool   // pr create opens the pull request but answers after its timeout
+	createEOF bool   // pr create opens the pull request but its answer is lost
+	createTo  string // the base pr create opens it into, whatever it's asked
+	base      string // the repository's default branch, "" for main
 	prs       []map[string]any
 }
 
@@ -60,12 +65,17 @@ func (g *github) run(args []string, stdin string, env map[string]string) (any, e
 		}
 		return ok("github.com\n  ✓ Logged in to github.com account octo\n")
 	case "repo view":
-		return ok(`{"defaultBranchRef":{"name":"main"}}`)
+		return ok(`{"defaultBranchRef":{"name":"` + cmp.Or(g.base, "main") + `"}}`)
 	case "pr list":
 		if g.listErr != "" {
 			return fail(g.listErr)
 		}
-		b, _ := json.Marshal(append([]map[string]any{}, g.prs...))
+		prs := g.prs
+		if i := slices.Index(args, "--limit"); i >= 0 {
+			n, _ := strconv.Atoi(args[i+1])
+			prs = prs[:min(n, len(prs))]
+		}
+		b, _ := json.Marshal(append([]map[string]any{}, prs...))
 		return ok(string(b))
 	case "pr create":
 		if g.createErr != "" {
@@ -73,9 +83,13 @@ func (g *github) run(args []string, stdin string, env map[string]string) (any, e
 		}
 		g.prs = append(g.prs, map[string]any{"number": 7, "title": args[slices.Index(args, "--title")+1], "url": "https://github.com/acme/widgets/pull/7",
 			"state": "OPEN", "isDraft": slices.Contains(args, "--draft"), "headRefName": args[slices.Index(args, "--head")+1], "statusCheckRollup": []any{},
-			"headRepository": map[string]any{"name": "widgets"}, "headRepositoryOwner": map[string]any{"login": "acme"}})
+			"headRepository": map[string]any{"name": "widgets"}, "headRepositoryOwner": map[string]any{"login": "acme"},
+			"baseRefName": cmp.Or(g.createTo, args[slices.Index(args, "--base")+1])})
 		if g.createLag {
 			return map[string]any{"status": -1, "stdout": "", "stderr": ""}, nil
+		}
+		if g.createEOF {
+			return fail("Post \"https://api.github.com/graphql\": EOF")
 		}
 		return ok("https://github.com/acme/widgets/pull/7\n")
 	case "pr ready":
@@ -119,6 +133,11 @@ type pullRequests struct {
 	answer func(plugins.AskRequest) (plugins.AskAnswer, error)
 	runs   []run
 	asks   []time.Time // each ask's deadline
+	// before runs ahead of each program the plugin runs; a result it
+	// gives is the program's instead.
+	before   func(args []string) any
+	effects  []string      // the app calls the plugin made, by type
+	toastLag time.Duration // how long the app takes to show a toast
 }
 
 // run is a program the plugin ran: when, where, and the seconds it gave it.
@@ -128,6 +147,10 @@ type run struct {
 	Cwd     string
 	Timeout float64
 }
+
+// callTimeout is how long the host waits for an update, the app's 30 s
+// but where a test waits less.
+var callTimeout = 30 * time.Second
 
 func signedCopy(t *testing.T) (fs.FS, string) {
 	t.Helper()
@@ -171,7 +194,7 @@ func openPullRequests(t *testing.T, work string, gh *github) *pullRequests {
 		Logf:        t.Logf,
 		Bundled:     fsys,
 		ReleaseKeys: []string{release},
-		CallTimeout: 30 * time.Second,
+		CallTimeout: callTimeout,
 		Do:          p.do,
 		Run: func(ctx context.Context, id string, allowed []string, raw json.RawMessage) (any, error) {
 			var a struct {
@@ -185,7 +208,13 @@ func openPullRequests(t *testing.T, work string, gh *github) *pullRequests {
 			json.Unmarshal(raw, &a)
 			p.mu.Lock()
 			p.runs = append(p.runs, run{time.Now(), append([]string{a.Program}, a.Args...), a.Cwd, a.Timeout})
+			before := p.before
 			p.mu.Unlock()
+			if before != nil {
+				if r := before(append([]string{a.Program}, a.Args...)); r != nil {
+					return r, nil
+				}
+			}
 			switch {
 			case !slices.Contains(allowed, a.Program):
 				t.Errorf("ran %s, which the manifest doesn't name", a.Program)
@@ -229,8 +258,10 @@ func (p *pullRequests) do(_ string, e plugins.Effect) (any, error) {
 	var m map[string]any
 	json.Unmarshal(e.Args, &m)
 	str := func(k string) string { s, _ := m[k].(string); return s }
+	p.effects = append(p.effects, e.Type)
 	switch e.Type {
 	case "toast":
+		time.Sleep(p.toastLag)
 		p.toasts = append(p.toasts, str("title")+": "+str("description"))
 	case "composer.draft":
 		p.drafts = append(p.drafts, map[string]string{"text": str("text"), "thread": str("thread")})
@@ -365,7 +396,7 @@ func pushToOrigin(ctx context.Context, cwd string, args []string, timeout float6
 func openPR(number int, draft bool, checks ...map[string]any) map[string]any {
 	return map[string]any{"number": number, "title": "Fix the flaky test", "url": fmt.Sprintf("https://github.com/acme/widgets/pull/%d", number),
 		"state": "OPEN", "isDraft": draft, "reviewDecision": "REVIEW_REQUIRED", "mergeable": "CONFLICTING", "headRefName": "fix-flaky", "statusCheckRollup": checks,
-		"headRepository": map[string]any{"name": "widgets"}, "headRepositoryOwner": map[string]any{"login": "acme"}}
+		"headRepository": map[string]any{"name": "widgets"}, "headRepositoryOwner": map[string]any{"login": "acme"}, "baseRefName": "main"}
 }
 
 var (
@@ -488,8 +519,8 @@ func TestAPullRequestShowsItsStateReviewAndChecks(t *testing.T) {
 	if v == nil || v.Body.Popover == nil || !strings.Contains(p.text(), "#12|") {
 		t.Fatalf("the header: %q", p.text())
 	}
-	if icons := v.Body.Children; len(icons) != 3 || icons[0].Color != "$success" || icons[2].Name != "close" || icons[2].Color != "$danger" {
-		t.Errorf("the pill: %+v", icons)
+	if pill := v.Body.Children; len(pill) != 2 || pill[0].Name != "pull-request" || pill[0].Color != "$danger" || pill[1].Text != "#12" {
+		t.Errorf("the pill: %+v, want the pull request icon in the failing checks' red, and #12", pill)
 	}
 	text := p.text()
 	for _, want := range []string{"Fix the flaky test|", "Open|", "Awaiting review|", "Has conflicts|", "lint · Failed|", "build · Running|", "Show 1 passed|", "Open on GitHub|", "Copy link|", "Refresh|", "Ask the agent to fix|"} {
@@ -501,7 +532,7 @@ func TestAPullRequestShowsItsStateReviewAndChecks(t *testing.T) {
 		t.Errorf("failed first, passed hidden, no Ready for review on an open one: %s", text)
 	}
 	if call := gh.ran("pr", "list"); len(call) != 1 || !slices.Equal(call[0].Args, []string{"pr", "list", "--repo", "acme/widgets", "--head", "fix-flaky", "--state", "all", "--limit", "10",
-		"--json", "number,title,url,state,isDraft,reviewDecision,mergeable,statusCheckRollup,headRefName,headRepository,headRepositoryOwner"}) {
+		"--json", "number,title,url,state,isDraft,reviewDecision,mergeable,statusCheckRollup,headRefName,headRepository,headRepositoryOwner,baseRefName"}) {
 		t.Errorf("gh pr list: %+v", call)
 	}
 	for _, c := range gh.calls {
@@ -1020,4 +1051,290 @@ func TestTheDefaultBranchShowsNothingWithoutAskingGh(t *testing.T) {
 	if p := openPullRequests(t, work, gh); p.view() != nil || len(gh.calls) != 0 {
 		t.Errorf("a clean default branch: %q, gh ran %+v", p.text(), gh.calls)
 	}
+}
+
+// gitIn runs git in dir for a test's hook, which can't fail the test.
+func gitIn(dir string, args ...string) string {
+	out, _ := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	return strings.TrimSpace(string(out))
+}
+
+// Create pushes the one commit it made, and to where its dialog said or
+// nowhere: an upstream that moves after the commit, or a branch that moves
+// past it, stops the push. Submodules are never pushed with it.
+func TestCreatePRPushesTheCommitItMadeWhereTheDialogSaid(t *testing.T) {
+	gh := &github{}
+	p, work, origin := createDialog(t, gh)
+	p.mu.Lock()
+	p.before = func(args []string) any {
+		if args[1] == "commit" {
+			gitIn(work, "config", "branch.fix-flaky.remote", "origin")
+			gitIn(work, "config", "branch.fix-flaky.merge", "refs/heads/release")
+		}
+		return nil
+	}
+	p.mu.Unlock()
+	p.click("create.go", "go", nil)
+	sha := gitIn(work, "rev-parse", "--short=7", "HEAD")
+	if e := p.view().Find("error"); e == nil || e.Text != "Committed "+sha+"; can't push: fix-flaky pushes to origin/release now, not origin/fix-flaky" {
+		t.Errorf("an upstream that moved after the commit: %q", p.text())
+	}
+	if refs := gitIn(origin, "for-each-ref", "refs/heads/fix-flaky", "refs/heads/release"); refs != "" {
+		t.Errorf("pushed %s", refs)
+	}
+
+	p, work, origin = createDialog(t, gh)
+	p.mu.Lock()
+	p.before = func(args []string) any {
+		if slices.Equal(args, []string{"git", "rev-parse", "--verify", "-q", "refs/heads/fix-flaky"}) {
+			gitIn(work, "commit", "-q", "--allow-empty", "-m", "Someone else's")
+		}
+		return nil
+	}
+	p.mu.Unlock()
+	p.click("create.go", "go", nil)
+	if e := p.view().Find("error"); e == nil || !strings.Contains(e.Text, "; fix-flaky moved to "+gitIn(work, "rev-parse", "--short=7", "HEAD")+" meanwhile, so nothing was pushed") {
+		t.Errorf("a branch that moved past the commit: %q", p.text())
+	}
+	if refs := gitIn(origin, "for-each-ref", "refs/heads/fix-flaky"); refs != "" {
+		t.Errorf("pushed %s", refs)
+	}
+
+	p, work, origin = createDialog(t, gh)
+	p.click("create.go", "go", nil)
+	var push []string
+	for _, r := range p.runs {
+		if r.Args[1] == "push" {
+			push = r.Args
+		}
+	}
+	head := gitIn(work, "rev-parse", "HEAD")
+	if !slices.Contains(push, "--no-recurse-submodules") || push[len(push)-1] != head+":refs/heads/fix-flaky" || gitIn(origin, "rev-parse", "fix-flaky") != head {
+		t.Errorf("pushed with %q; want the commit %s, and no submodules", push, head)
+	}
+}
+
+// A gh pr create whose answer is lost may still have opened the pull
+// request: Create looks for one from its head into its base, and shows the
+// one it finds at once, closing the dialog only then.
+func TestACreateGitHubMayHaveOpenedShowsThePullRequestItFinds(t *testing.T) {
+	gh := &github{createEOF: true}
+	p, _, _ := createDialog(t, gh)
+	lists := len(gh.ran("pr", "list"))
+	p.click("create.go", "go", nil)
+	if text := p.text(); !strings.Contains(text, "#7|") || p.view().Find("create-dialog") != nil {
+		t.Errorf("after an answer lost: %q", text)
+	}
+	if n := len(gh.ran("pr", "list")) - lists; n != 1 {
+		t.Errorf("listed pull requests %d times after Create, want once, to find it", n)
+	}
+
+	gh = &github{createEOF: true, createTo: "release"}
+	p, _, _ = createDialog(t, gh)
+	p.click("create.go", "go", nil)
+	if e := p.view().Find("error"); e == nil || !strings.Contains(e.Text, "GitHub didn't say whether it opened the pull request") || strings.Contains(p.text(), "#7|") {
+		t.Errorf("with only one into another base found: %q", p.text())
+	}
+}
+
+// Create answers before the app shows its toast: a slow toast doesn't
+// lose the pull request it opened.
+func TestCreatePRAnswersBeforeItsToast(t *testing.T) {
+	was := callTimeout
+	callTimeout = 2 * time.Second
+	t.Cleanup(func() { callTimeout = was })
+	p, _, _ := createDialog(t, &github{})
+	p.toastLag = 3 * time.Second
+	p.click("create.go", "go", nil)
+	if text := p.text(); !strings.Contains(text, "#7|") || p.s.Err != nil {
+		t.Errorf("with a slow toast: %q, failed %v", text, p.s.Err)
+	}
+}
+
+// A pull request is its head's: the branch, the ref it pushes to and the
+// repository. One whose branch now pushes elsewhere isn't marked ready,
+// nor kept when a refresh fails.
+func TestAPullRequestIsActedOnOnlyForItsHead(t *testing.T) {
+	work, origin := repo(t)
+	onGitHub(t, work, origin, "fix-flaky")
+	gh := &github{prs: []map[string]any{openPR(12, true)}}
+	p := openPullRequests(t, work, gh)
+	git(t, work, "config", "branch.fix-flaky.remote", "origin")
+	git(t, work, "config", "branch.fix-flaky.merge", "refs/heads/release")
+	p.click("popover.toggle", "pr", nil)
+	p.click("ready", "ready", nil)
+	if len(gh.ran("pr", "ready")) != 0 {
+		t.Errorf("marked #12 ready for a branch that pushes to release: %+v", gh.ran("pr", "ready"))
+	}
+
+	git(t, work, "config", "--unset", "branch.fix-flaky.merge")
+	git(t, work, "config", "--unset", "branch.fix-flaky.remote")
+	p.click("refresh", "refresh", nil)
+	git(t, work, "config", "branch.fix-flaky.remote", "origin")
+	git(t, work, "config", "branch.fix-flaky.merge", "refs/heads/release")
+	gh.mu.Lock()
+	gh.listErr = "GraphQL: API rate limit exceeded for user ID 1."
+	gh.mu.Unlock()
+	p.click("refresh", "refresh", nil)
+	if strings.Contains(p.text(), "#12") {
+		t.Errorf("a failed refresh after the upstream moved: %q", p.text())
+	}
+}
+
+// A branch the push leaves untracked, as a fetch config that maps only
+// main, says so.
+func TestCreatePRSaysWhenTheBranchIsntTracking(t *testing.T) {
+	p, work, _ := createDialog(t, &github{})
+	git(t, work, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
+	p.click("create.go", "go", nil)
+	if len(p.toasts) != 1 || !strings.Contains(p.toasts[0], "Fix-flaky doesn't track origin/fix-flaky yet") || !strings.Contains(p.text(), "#7|") {
+		t.Errorf("told %q, showing %q", p.toasts, p.text())
+	}
+}
+
+// The header reads enough to be right: the remote's default branch hides
+// a branch only when the remote fetches from where it pushes, the owned
+// pull request is found past a page of forks', and a git status or a git
+// that fails is unknown, not clean or hidden.
+func TestTheHeaderReadsEnoughToBeRight(t *testing.T) {
+	work, origin := repo(t)
+	onGitHub(t, work, origin, "main")
+	git(t, work, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	git(t, work, "remote", "set-url", "--push", "origin", "https://github.com/acme/fork.git")
+	if p := openPullRequests(t, work, &github{base: "develop"}); !strings.Contains(p.text(), "Create PR|") {
+		t.Errorf("main, pushed to a fork whose default is develop: %q", p.text())
+	}
+
+	work, origin = repo(t)
+	onGitHub(t, work, origin, "fix-flaky")
+	var prs []map[string]any
+	for i := range 10 {
+		fork := openPR(100+i, false)
+		fork["headRepositoryOwner"] = map[string]any{"login": fmt.Sprintf("fork%d", i)}
+		prs = append(prs, fork)
+	}
+	if p := openPullRequests(t, work, &github{prs: append(prs, openPR(11, false))}); !strings.Contains(p.text(), "#11|") {
+		t.Errorf("past ten forks' pull requests: %q", p.text())
+	}
+
+	work, origin = repo(t)
+	onGitHub(t, work, origin, "fix-flaky")
+	git(t, work, "checkout", "-q", "--", ".")
+	os.Remove(filepath.Join(work, "new.txt"))
+	p := openPullRequests(t, work, &github{})
+	p.mu.Lock()
+	p.before = func(args []string) any {
+		if args[1] == "status" {
+			return map[string]any{"status": 128, "stdout": "", "stderr": "fatal: index file corrupt"}
+		}
+		return nil
+	}
+	p.mu.Unlock()
+	p.click("refresh", "refresh", nil)
+	p.click("create.open", "create", nil)
+	if !strings.Contains(p.text(), "git couldn't say which files changed, so nothing is committed.") {
+		t.Errorf("a git status that fails: %q", p.text())
+	}
+
+	work, origin = repo(t)
+	onGitHub(t, work, origin, "fix-flaky")
+	p = openPullRequests(t, work, &github{prs: []map[string]any{openPR(12, false)}})
+	p.mu.Lock()
+	p.before = func(args []string) any {
+		if args[1] == "symbolic-ref" {
+			return map[string]any{"status": -1, "stdout": "", "stderr": ""}
+		}
+		return nil
+	}
+	p.mu.Unlock()
+	p.click("refresh", "refresh", nil)
+	if !strings.Contains(p.text(), "#12|") {
+		t.Errorf("after a git that timed out: %q", p.text())
+	}
+	p.mu.Lock()
+	p.before = nil
+	n := len(p.runs)
+	p.mu.Unlock()
+	p.s.Notify(plugins.AppEvent{Kind: "timer", ID: "refresh"})
+	p.settle()
+	if len(p.runs) == n {
+		t.Error("the next timer didn't read again after a git that timed out")
+	}
+}
+
+// The pill is the pull request's icon, tinted by its checks while it's
+// open and by its state after, and its number; its popover is padded, and
+// opens only on a click, never as the header comes back.
+func TestThePullRequestPillIsCompactAndItsPopoverWaitsForAClick(t *testing.T) {
+	work, origin := repo(t)
+	onGitHub(t, work, origin, "fix-flaky")
+	merged := openPR(12, false, lint)
+	merged["state"] = "MERGED"
+	gh := &github{prs: []map[string]any{merged}}
+	p := openPullRequests(t, work, gh)
+	v := p.view()
+	if pill := v.Body.Children; len(pill) != 2 || pill[0].Color != "$accent" {
+		t.Errorf("a merged pull request's pill: %+v, want its icon in merged's color", pill)
+	}
+	if len(v.Body.Popover.Padding) == 0 {
+		t.Error("the popover's column isn't padded")
+	}
+	p.click("popover.toggle", "pr", nil)
+	gh.mu.Lock()
+	gh.prs = nil
+	gh.mu.Unlock()
+	p.click("refresh", "refresh", nil)
+	gh.mu.Lock()
+	gh.prs = []map[string]any{openPR(12, false)}
+	gh.mu.Unlock()
+	p.s.Notify(plugins.AppEvent{Kind: "app", Type: "window.focused", Data: map[string]bool{"focused": true}})
+	p.settle()
+	if v := p.view(); v == nil || v.Body.Open {
+		t.Errorf("the pull request came back with its popover open: %q", p.text())
+	}
+}
+
+// Write with AI asks the app nothing, names a model the picker doesn't
+// list by its provider and id, and an error clears who wrote the last.
+func TestWriteWithAINamesTheModelAndAsksTheAppNothing(t *testing.T) {
+	p, _, _ := createDialog(t, &github{})
+	p.mu.Lock()
+	p.effects = nil
+	p.answer = func(plugins.AskRequest) (plugins.AskAnswer, error) {
+		return plugins.AskAnswer{Text: `{"title": "Retry it", "body": "Retries it."}`, Provider: "claude", Model: "claude-haiku-4-5-20251001"}, nil
+	}
+	p.mu.Unlock()
+	p.click("create.write", "write", nil)
+	if by := p.view().Find("by"); by == nil || by.Text != "Written by Claude (claude-haiku-4-5-20251001)" {
+		t.Errorf("says %q", p.text())
+	}
+	if slices.Contains(p.effects, "models.list") {
+		t.Errorf("Write with AI asked the app %q", p.effects)
+	}
+	p.mu.Lock()
+	p.answer = func(plugins.AskRequest) (plugins.AskAnswer, error) {
+		return plugins.AskAnswer{}, fmt.Errorf("Not logged in")
+	}
+	p.mu.Unlock()
+	p.click("create.write", "write", nil)
+	if v := p.view(); v.Find("by") != nil || v.Find("error") == nil {
+		t.Errorf("after an error: %q", p.text())
+	}
+}
+
+// The dialog draws nothing where it has nothing to show: no gap is left
+// where the commit toggle, who wrote it or an error would be.
+func TestTheDialogLeavesNoGap(t *testing.T) {
+	p, _, origin := createDialog(t, &github{})
+	os.RemoveAll(origin)
+	p.click("create.go", "go", nil)
+	v := p.view()
+	if v.Find("commit") != nil || v.Find("error") == nil {
+		t.Fatalf("after the commit: %q", p.text())
+	}
+	v.Find("create-dialog").Walk(func(n *widget.Node) {
+		if n.Type == "spacer" {
+			t.Errorf("a spacer %q holds a gap in the dialog", n.ID)
+		}
+	})
 }

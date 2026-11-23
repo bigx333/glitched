@@ -4,13 +4,17 @@
 //
 //   { kind: "hidden" }                       nothing to show
 //   { kind: "gh", problem }                  a GitHub remote gh can't answer for: "missing" or "signed-out"
-//   { kind: "ready", branch, base, slug, ahead, dirty, pushed }        no pull request yet
-//   { kind: "pr", branch, slug, ahead, dirty, pr, stale? }             its pull request
+//   { kind: "ready", branch, ref, slug, base, ahead, dirty, pushed }   no pull request yet
+//   { kind: "pr", branch, ref, slug, ahead, dirty, pr, stale? }        its pull request
 //
-// slug is the GitHub repository the branch pushes to, ahead null when the
-// base isn't fetched. pr is { number, title, url, state, review,
-// conflicts, checks }, each check { name, status, url? }; stale says why
-// the last read failed.
+// branch, ref and slug are its head: the local branch, the branch it
+// pushes to and the GitHub repository that's in. ahead is null when the
+// base isn't fetched, dirty when git status failed. pr is { number, title,
+// url, state, review, conflicts, checks }, each check { name, status,
+// url? }; stale says why the last read failed.
+//
+// A Target is where a push of a branch goes, as Create shows and pushes it:
+// { remote, url, ref, slug, track }, or { why } there's none.
 
 const GH_ENV = { GH_PROMPT_DISABLED: "1" };
 const HIDDEN = { kind: "hidden" };
@@ -18,7 +22,8 @@ const FRESH = 10 * 1000;
 const OPEN_EVERY = 55 * 1000;
 const IDLE_EVERY = 5 * 60 * 1000 - 5 * 1000;
 const MAX_ROWS = 12;
-const PR_FIELDS = "number,title,url,state,isDraft,reviewDecision,mergeable,statusCheckRollup,headRefName,headRepository,headRepositoryOwner";
+const PR_FIELDS = "number,title,url,state,isDraft,reviewDecision,mergeable,statusCheckRollup,headRefName,headRepository,headRepositoryOwner,baseRefName";
+const PAGES = [10, 100];
 const MAX_TITLE = 256;
 const MAX_BODY = 30000;
 
@@ -29,7 +34,11 @@ const MAX_BODY = 30000;
 const BUDGET = 27 * 1000;
 const RECHECK = 8;
 let deadline = 0;
-const LATE = { ok: false, out: "", err: "it ran out of time; try again", timedOut: false };
+const LATE = { ok: false, out: "", err: "it ran out of time; try again", timedOut: true };
+
+// Late is a git run that timed out, or had no time left to run: what it
+// would have read isn't known.
+class Late extends Error {}
 
 function left() {
   return (deadline - Date.now()) / 1000;
@@ -54,7 +63,7 @@ export function place({ state, items }) {
 
 function header(repo, key, state) {
   const open = state.open === key;
-  const popover = (width, children) => ({ active: open, open, onClick: "popover.toggle", onClose: "popover.close", popover: { type: "column", width, gap: 10, children } });
+  const popover = (width, children) => ({ active: open, open, onClick: "popover.toggle", onClose: "popover.close", popover: { type: "column", width, padding: 12, gap: 10, children } });
   switch (repo.kind) {
     case "gh":
       return {
@@ -79,6 +88,7 @@ function header(repo, key, state) {
     case "pr": {
       const pr = repo.pr;
       const mark = checksMark(pr.checks);
+      const live = pr.state === "open" || pr.state === "draft";
       return {
         type: "button",
         id: "pr",
@@ -87,9 +97,8 @@ function header(repo, key, state) {
         tooltip: "Pull request #" + pr.number + ": " + STATES[pr.state].label + (mark ? ", checks " + mark.word : ""),
         gap: 4,
         children: [
-          { type: "icon", name: "pull-request", color: STATES[pr.state].color },
+          { type: "icon", name: "pull-request", color: live && mark ? mark.color : STATES[pr.state].color },
           { type: "text", text: "#" + pr.number },
-          ...(mark ? [{ type: "icon", name: mark.icon, color: mark.color }] : []),
         ],
         ...popover(360, prPopover(repo, state)),
       };
@@ -115,10 +124,12 @@ const CHECKS = {
   skipped: { label: "Skipped", icon: "check", color: "$text.muted" },
 };
 
+// checksMark is what a pull request's checks come to, which tints its
+// pill while it's open.
 function checksMark(checks) {
-  if (checks.some((c) => c.status === "failed")) return { word: "failing", icon: "close", color: "$danger" };
-  if (checks.some((c) => c.status === "running" || c.status === "waiting")) return { word: "running", icon: "clock-circle", color: "$warning" };
-  if (checks.some((c) => c.status === "passed")) return { word: "passed", icon: "check-circle", color: "$success" };
+  if (checks.some((c) => c.status === "failed")) return { word: "failing", color: "$danger" };
+  if (checks.some((c) => c.status === "running" || c.status === "waiting")) return { word: "running", color: "$warning" };
+  if (checks.some((c) => c.status === "passed")) return { word: "passed", color: "$success" };
   return null;
 }
 
@@ -190,8 +201,12 @@ function prPopover(repo, state) {
 
 function createDialog(d) {
   const files = d.dirty === 1 ? "1 changed file" : d.dirty + " changed files";
-  const where = d.pushed && !d.dirty ? d.branch + " is pushed to " + d.to + "." : "Pushes " + d.branch + " to " + d.to + (d.track ? ", which it starts tracking." : ".");
-  const unknown = d.ahead === null ? " " + d.baseRef + " isn't fetched here, so the commits it adds aren't known." : "";
+  const t = d.target;
+  const to = t.remote + "/" + t.ref;
+  const where = d.pushed && !d.dirty ? d.branch + " is pushed to " + to + "." : "Pushes " + d.branch + " to " + to + (t.track ? ", which it starts tracking." : ".");
+  const unknown =
+    (d.ahead === null ? " " + t.remote + "/" + d.base + " isn't fetched here, so the commits it adds aren't known." : "") +
+    (d.dirty === null ? " git couldn't say which files changed, so nothing is committed." : "");
   return {
     type: "dialog",
     id: "create-dialog",
@@ -199,12 +214,12 @@ function createDialog(d) {
     open: true,
     onClose: "create.cancel",
     children: [
-      { type: "text", id: "what", text: "Opens a pull request on " + d.slug + " from " + d.branch + " into the base below. " + where + unknown, style: "muted" },
+      { type: "text", id: "what", text: "Opens a pull request on " + t.slug + " from " + d.branch + " into the base below. " + where + unknown, style: "muted" },
       { type: "input", id: "title", label: "Title", value: d.title },
       { type: "input", id: "body", label: "Description", value: d.body, multiline: true },
       { type: "input", id: "base", label: "Base", value: d.base },
       { type: "toggle", id: "draft", label: "Open as draft", value: d.draft },
-      d.dirty > 0 ? { type: "toggle", id: "commit", label: "Commit " + files + " first", value: d.commit } : { type: "spacer", id: "nocommit" },
+      ...(d.dirty > 0 ? [{ type: "toggle", id: "commit", label: "Commit " + files + " first", value: d.commit }] : []),
       {
         type: "row",
         id: "writing",
@@ -212,10 +227,10 @@ function createDialog(d) {
         align: "center",
         children: [
           { type: "button", id: "write", label: "Write with AI", progress: true, onClick: "create.write" },
-          d.by ? { type: "text", id: "by", text: d.by, style: "muted" } : { type: "spacer", id: "noby" },
+          ...(d.by ? [{ type: "text", id: "by", text: d.by, style: "muted" }] : []),
         ],
       },
-      d.error ? { type: "text", id: "error", text: d.error, style: "error", selectable: true } : { type: "spacer", id: "noerror" },
+      ...(d.error ? [{ type: "text", id: "error", text: d.error, style: "error", selectable: true }] : []),
       {
         type: "row",
         id: "buttons",
@@ -230,11 +245,14 @@ function createDialog(d) {
   };
 }
 
+// git runs git within the update's time, and throws Late for a run that
+// timed out or had none left.
 async function git(cwd, args, most = 5) {
   const timeout = Math.min(most, left());
-  if (timeout < 0.5) return LATE;
+  if (timeout < 0.5) throw new Late(LATE.err);
   const r = await glitched.run("git", args, { cwd, timeout });
-  return { ok: r.status === 0, out: r.stdout, err: reason(r.stderr || r.stdout, r.status), timedOut: r.status === -1 };
+  if (r.status === -1) throw new Late("git " + args[0] + " didn't finish in time");
+  return { ok: r.status === 0, out: r.stdout, err: reason(r.stderr || r.stdout, r.status) };
 }
 
 // gh answers missing when it isn't installed, as glitched.run says.
@@ -276,6 +294,7 @@ function short(s) {
 
 // ghReason is why a gh run failed, in a line.
 function ghReason(r) {
+  if (r === LATE) return LATE.err;
   if (r.timedOut) return "GitHub didn't answer in time";
   if (/rate limit/i.test(r.err)) return "GitHub's rate limit was reached; try again in a few minutes";
   const line = r.err.split(/[\r\n]+/).map((l) => l.trim()).find(Boolean);
@@ -297,30 +316,41 @@ async function checkedOut(ws) {
   return r.ok ? r.out.trim() : "";
 }
 
-// target is the one ref a push updates: the branch's upstream, or origin's
-// branch of the same name when it tracks none. The push names it in full,
-// with no +, so the repository's push config (pushRemote, push.default,
-// remote.*.push, a forced refspec) can't send it anywhere else, or force it.
-async function target(cwd, branch) {
-  const remote = await config(cwd, "branch." + branch + ".remote");
-  const merge = await config(cwd, "branch." + branch + ".merge");
-  if (remote === ".") return { noPush: "the branch tracks a local branch" };
-  if (remote && merge.startsWith("refs/heads/")) {
-    return { push: { remote, branch: merge.slice("refs/heads/".length), track: false } };
+// pushTarget is the Target of branch: the one ref a push updates, the
+// branch's upstream or origin's branch of the same name when it tracks
+// none, and the remote's one push URL as git resolves it, rewrites
+// included. The push names the ref in full, with no +, so the repository's
+// push config (pushRemote, push.default, remote.*.push, a forced refspec)
+// can't send it anywhere else, or force it.
+async function pushTarget(ws, branch) {
+  let remote = await config(ws, "branch." + branch + ".remote");
+  const merge = await config(ws, "branch." + branch + ".merge");
+  if (remote === ".") return { why: "the branch tracks a local branch" };
+  let ref = merge.startsWith("refs/heads/") ? merge.slice("refs/heads/".length) : "";
+  const track = !(remote && ref);
+  if (track) {
+    const remotes = await git(ws, ["remote"]);
+    if (!remotes.ok || !remotes.out.split("\n").includes("origin")) return { why: "the repository has no origin" };
+    [remote, ref] = ["origin", branch];
   }
-  const remotes = await git(cwd, ["remote"]);
-  if (!remotes.ok || !remotes.out.split("\n").includes("origin")) return { noPush: "the repository has no origin" };
-  return { push: { remote: "origin", branch, track: true } };
-}
-
-// destination is the GitHub repository a push to remote lands in: its one
-// push URL as git resolves it, rewrites included. why says why there's none.
-async function destination(ws, remote) {
   const r = await git(ws, ["remote", "get-url", "--push", "--all", remote]);
   const urls = r.ok ? r.out.split("\n").map((u) => u.trim()).filter(Boolean) : [];
   if (urls.length > 1) return { why: remote + " pushes to " + urls.length + " places, and Create pushes to one" };
   const slug = urls.length === 1 ? github(urls[0]) : null;
-  return slug ? { slug } : { why: remote + " doesn't push to github.com" };
+  if (!slug) return { why: remote + " doesn't push to github.com" };
+  return { remote, url: urls[0], ref, slug, track };
+}
+
+// drift says how where d's branch pushes now differs from the Target its
+// dialog showed, "" when it doesn't.
+async function drift(d) {
+  const was = d.target;
+  const now = await pushTarget(d.workspace, d.branch);
+  if (now.why) return "can't push: " + now.why;
+  if (now.slug !== was.slug) return "can't push: " + now.remote + " pushes to " + now.slug + " now, not " + was.slug;
+  if (now.remote !== was.remote || now.ref !== was.ref) return "can't push: " + d.branch + " pushes to " + now.remote + "/" + now.ref + " now, not " + was.remote + "/" + was.ref;
+  if (now.url !== was.url) return "can't push: " + now.remote + "'s push URL changed";
+  return "";
 }
 
 // github is the owner/name of a github.com remote, null for any other.
@@ -329,29 +359,36 @@ function github(url) {
   return m ? m[1] + "/" + m[2] : null;
 }
 
-// Unread is a read GitHub failed, of the branch and slug it got to.
+// Unread is a read GitHub failed, of the head it got to.
 class Unread extends Error {
-  constructor(message, branch, slug) {
+  constructor(message, head) {
     super(message);
-    this.branch = branch;
-    this.slug = slug;
+    this.head = head;
   }
 }
 
+// sameHead is whether two Repos, or Unread's head, are of one head.
+function sameHead(a, b) {
+  return a.branch === b.branch && a.ref === b.ref && a.slug === b.slug;
+}
+
 // read is the workspace's Repo, from the first answer that settles it. A
-// read GitHub fails throws Unread; one gh is signed out of says so.
+// read GitHub fails throws Unread, one git times out in Late; one gh is
+// signed out of says so.
 async function read(ws, bases) {
   const branch = await checkedOut(ws);
   if (!branch) return HIDDEN;
-  const { push } = await target(ws, branch);
-  if (!push) return HIDDEN;
-  const remoteHead = await git(ws, ["symbolic-ref", "--quiet", "--short", "refs/remotes/" + push.remote + "/HEAD"]);
-  if (remoteHead.ok && remoteHead.out.trim() === push.remote + "/" + push.branch) return HIDDEN;
-  const { slug } = await destination(ws, push.remote);
-  if (!slug) return HIDDEN;
+  const t = await pushTarget(ws, branch);
+  if (t.why) return HIDDEN;
+  const { ref, slug } = t;
+  const fetched = await git(ws, ["remote", "get-url", t.remote]);
+  if (fetched.ok && fetched.out.trim() === t.url) {
+    const remoteHead = await git(ws, ["symbolic-ref", "--quiet", "--short", "refs/remotes/" + t.remote + "/HEAD"]);
+    if (remoteHead.ok && remoteHead.out.trim() === t.remote + "/" + ref) return HIDDEN;
+  }
   const failed = (r) => {
     if (signedOut(r.err)) return { kind: "gh", problem: "signed-out" };
-    throw new Unread(ghReason(r), branch, slug);
+    throw new Unread(ghReason(r), { branch, ref, slug });
   };
   const auth = await gh(ws, ["auth", "status", "--active", "--hostname", "github.com"]);
   if (auth.missing) return { kind: "gh", problem: "missing" };
@@ -360,21 +397,26 @@ async function read(ws, bases) {
     const r = await gh(ws, ["repo", "view", slug, "--json", "defaultBranchRef"]);
     if (!r.ok) return failed(r);
     const name = JSON.parse(r.out).defaultBranchRef?.name;
-    if (!name) throw new Unread("GitHub didn't say the repository's default branch", branch, slug);
+    if (!name) throw new Unread("GitHub didn't say the repository's default branch", { branch, ref, slug });
     bases[slug] = name;
   }
   const base = bases[slug];
-  if (push.branch === base) return HIDDEN;
-  const list = await gh(ws, ["pr", "list", "--repo", slug, "--head", push.branch, "--state", "all", "--limit", "10", "--json", PR_FIELDS]);
-  if (!list.ok) return failed(list);
-  const pr = pick(JSON.parse(list.out) ?? [], push.branch, slug);
-  const ahead = await count(ws, push.remote, base);
+  if (ref === base) return HIDDEN;
+  let pr = null;
+  for (const limit of PAGES) {
+    const list = await gh(ws, ["pr", "list", "--repo", slug, "--head", ref, "--state", "all", "--limit", String(limit), "--json", PR_FIELDS]);
+    if (!list.ok) return failed(list);
+    const prs = JSON.parse(list.out) ?? [];
+    pr = pick(prs, ref, slug);
+    if (pr || prs.length < limit) break;
+  }
+  const ahead = await count(ws, t.remote, base);
   const status = await git(ws, ["status", "--porcelain", "--untracked-files=all"]);
-  const dirty = status.ok ? status.out.split("\n").filter(Boolean).length : 0;
-  if (pr) return { kind: "pr", branch, slug, ahead, dirty, pr };
-  const pushedTo = await git(ws, ["rev-parse", "--verify", "-q", "refs/remotes/" + push.remote + "/" + push.branch]);
+  const dirty = status.ok ? status.out.split("\n").filter(Boolean).length : null;
+  if (pr) return { kind: "pr", branch, ref, slug, ahead, dirty, pr };
+  const pushedTo = await git(ws, ["rev-parse", "--verify", "-q", "refs/remotes/" + t.remote + "/" + ref]);
   const local = await git(ws, ["rev-parse", "HEAD"]);
-  return { kind: "ready", branch, base, slug, ahead, dirty, pushed: pushedTo.ok && pushedTo.out.trim() === local.out.trim() };
+  return { kind: "ready", branch, ref, slug, base, ahead, dirty, pushed: pushedTo.ok && pushedTo.out.trim() === local.out.trim() };
 }
 
 // count is how many commits HEAD has that the base hasn't, by the remote's
@@ -425,22 +467,26 @@ function check(c) {
 }
 
 // refresh reads the shown workspace again. A failed read keeps the last
-// Repo, a pull request saying why it couldn't refresh, while the branch and
-// repository are still its. With too little of the update's time left to
-// read, it keeps what it has for the next event to read again.
+// Repo, a pull request saying why it couldn't refresh, while its head is
+// still the workspace's. One git didn't answer keeps what it has, due to be
+// read at the next timer; so does too little of the update's time left to
+// read. A popover open on a header that changes kind, or has none, closes.
 async function refresh(state, shown) {
   if (!shown || left() < 3) return { state };
+  const ws = shown.workspace;
   const bases = { ...state.bases };
-  const was = state.repos[shown.workspace]?.repo;
+  const was = state.repos[ws]?.repo;
   let repo;
   try {
-    repo = await read(shown.workspace, bases);
+    repo = await read(ws, bases);
   } catch (e) {
+    if (e instanceof Late) return { state: was ? { ...state, repos: { ...state.repos, [ws]: { repo: was, at: 0 } } } : state };
     if (!(e instanceof Unread)) throw e;
-    const same = was && was.branch === e.branch && was.slug === e.slug;
-    repo = !same ? HIDDEN : was.kind === "pr" ? { ...was, stale: e.message } : was;
+    repo = !was || !sameHead(was, e.head) ? HIDDEN : was.kind === "pr" ? { ...was, stale: e.message } : was;
   }
-  return { state: { ...state, bases, repos: { ...state.repos, [shown.workspace]: { repo, at: Date.now() } } } };
+  const popover = repo.kind === was?.kind && (repo.kind === "pr" || repo.kind === "gh");
+  const open = state.open === shown.key && !popover ? null : state.open;
+  return { state: { ...state, open, bases, repos: { ...state.repos, [ws]: { repo, at: Date.now() } } } };
 }
 
 function shownBy(key, context) {
@@ -463,7 +509,7 @@ export async function update(args) {
   try {
     return await act(args);
   } catch (e) {
-    await glitched.toast("Pull requests", e.message).catch(() => {});
+    glitched.toast("Pull requests", e.message).catch(() => {});
     return {};
   }
 }
@@ -479,8 +525,10 @@ async function act({ state, event, values }) {
         const r = shown && state.repos[shown.workspace];
         return !shown || (r && Date.now() - r.at < FRESH) ? { state: next } : refresh(next, shown);
       }
-      case "place.hidden":
-        return state.shown?.key === event.data.key ? { state: { ...state, shown: null } } : {};
+      case "place.hidden": {
+        const key = event.data.key;
+        return { state: { ...state, shown: state.shown?.key === key ? null : state.shown, open: state.open === key ? null : state.open } };
+      }
       case "thread.files.changed":
         return state.shown && event.data.thread === state.shown.key ? refresh(state, state.shown) : {};
       case "window.focused":
@@ -513,42 +561,61 @@ async function act({ state, event, values }) {
       return {};
     case "ready": {
       if (repo?.kind !== "pr") return {};
-      if ((await checkedOut(shown.workspace)) !== repo.branch) return moved(state, shown, repo);
+      if (!(await still(shown.workspace, repo))) return moved(state, shown);
       const r = await gh(shown.workspace, ["pr", "ready", String(repo.pr.number), "--repo", repo.slug]);
       if (!r.ok) return { state: { ...state, note: "gh pr ready failed: " + (r.missing ? r.err : ghReason(r)) } };
       return refresh({ ...state, note: null }, shown);
     }
     case "fix":
       if (repo?.kind !== "pr") return {};
-      if ((await checkedOut(shown.workspace)) !== repo.branch) return moved(state, shown, repo);
+      if (!(await still(shown.workspace, repo))) return moved(state, shown);
       await glitched.composer.draft(fixPrompt(repo.pr), { thread: key });
       return { state: { ...state, open: null } };
-    case "create.open":
+    case "create.open": {
       if (repo?.kind !== "ready") return {};
-      return { state: { ...state, dialog: await draft(key, shown.workspace, repo, ctx.title) } };
+      const d = await draft(key, shown.workspace, repo, ctx.title);
+      return d.why ? refresh(state, shown) : { state: { ...state, dialog: d } };
+    }
     case "create.cancel":
       return { state: { ...state, dialog: null } };
     case "create.write": {
       const d = edited(state.dialog, values);
-      return d ? { state: { ...state, dialog: await write(d, ctx.title) } } : {};
+      if (!d) return {};
+      try {
+        return { state: { ...state, dialog: await write(d, ctx.title) } };
+      } catch (e) {
+        if (!(e instanceof Late)) throw e;
+        return { state: { ...state, dialog: { ...d, by: null, error: "Reading the changes took too long: " + e.message + ". Try again." } } };
+      }
     }
     case "create.go": {
       const d = edited(state.dialog, values);
       if (!d) return {};
       const done = await create(d);
       if (done.error) return { state: { ...state, dialog: { ...d, error: done.error, ...(done.committed ? { dirty: 0, commit: false } : {}) } } };
-      const next = await refresh({ ...state, dialog: null }, shown);
-      if (done.url) await glitched.toast("Opened a pull request", done.url);
-      return next;
+      if (done.url || done.tracking) {
+        const said = [done.url, done.tracking && done.tracking[0].toUpperCase() + done.tracking.slice(1)].filter(Boolean).join("\n");
+        glitched.toast(done.url ? "Opened a pull request" : "Pull request", said).catch(() => {});
+      }
+      const t = d.target;
+      const repo = { kind: "pr", branch: d.branch, ref: t.ref, slug: t.slug, ahead: d.ahead, dirty: d.commit ? 0 : d.dirty, pr: done.pr };
+      return { state: { ...state, dialog: null, repos: { ...state.repos, [d.workspace]: { repo, at: Date.now() } } } };
     }
   }
   return {};
 }
 
-// moved reads a workspace again whose branch isn't the one its pull
-// request is of any more, saying so.
-function moved(state, shown, repo) {
-  return refresh({ ...state, note: "The workspace isn't on " + repo.branch + " any more." }, shown);
+// still is whether the workspace's head is repo's yet: the branch checked
+// out, the ref it pushes to and the repository that's in.
+async function still(ws, repo) {
+  const branch = await checkedOut(ws);
+  return branch !== "" && sameHead(repo, { branch, ...(await pushTarget(ws, branch)) });
+}
+
+// moved reads a workspace again whose head isn't its pull request's any
+// more, saying so.
+function moved(state, shown) {
+  return refresh({ ...state, note: "The workspace's branch isn't this pull request's any more." }, shown);
 }
 
 function fixPrompt(pr) {
@@ -578,25 +645,28 @@ function edited(d, values) {
 }
 
 // draft is the dialog as it opens: the only commit's subject as the
-// title, else the thread's title, and the commits under Summary.
+// title, else the thread's title, and the commits under Summary. It holds
+// the Target it shows, which Create pushes to or to nothing, and the
+// models' names, for Write with AI to say which wrote it. why says why
+// there's none to draw.
 async function draft(key, ws, repo, threadTitle) {
-  const { push } = await target(ws, repo.branch);
-  const log = await git(ws, ["log", "--format=%s", "refs/remotes/" + push.remote + "/" + repo.base + "..HEAD"]);
+  const target = await pushTarget(ws, repo.branch);
+  if (target.why || !sameHead(repo, { branch: repo.branch, ...target })) return { why: target.why ?? "the branch moved" };
+  const log = await git(ws, ["log", "--format=%s", "refs/remotes/" + target.remote + "/" + repo.base + "..HEAD"]);
   const subjects = log.ok ? log.out.split("\n").filter(Boolean) : [];
   const title = subjects.length === 1 ? subjects[0] : threadTitle || repo.branch;
   const body = "## Summary\n\n" + (subjects.length ? subjects : [title]).map((s) => "- " + s).join("\n") + "\n";
+  const list = await glitched.models.list().catch(() => null);
   return {
     key,
     workspace: ws,
-    slug: repo.slug,
     branch: repo.branch,
+    target,
     base: repo.base,
-    to: push.remote + "/" + push.branch,
-    track: push.track,
     pushed: repo.pushed,
     ahead: repo.ahead,
-    baseRef: push.remote + "/" + repo.base,
     dirty: repo.dirty,
+    models: (list?.models ?? []).map((m) => ({ provider: m.provider, id: m.id, family: m.family, name: m.family && !m.name.startsWith(m.family) ? m.family + " " + m.name : m.name })),
     title,
     body,
     draft: false,
@@ -614,13 +684,12 @@ function cut(s, n) {
 // request would hold: its commits, its files and its diff from where it
 // leaves the base, uncommitted changes included.
 async function write(d, threadTitle) {
-  const remote = d.to.slice(0, d.to.indexOf("/"));
-  const mb = await git(d.workspace, ["merge-base", "refs/remotes/" + remote + "/" + d.base, "HEAD"]);
+  const mb = await git(d.workspace, ["merge-base", "refs/remotes/" + d.target.remote + "/" + d.base, "HEAD"]);
   const from = mb.ok ? mb.out.trim() : "HEAD";
   const log = mb.ok ? await git(d.workspace, ["log", "--format=%s%n%n%b", from + "..HEAD"]) : { out: "" };
   const stat = await git(d.workspace, ["diff", "--stat", from]);
   const patch = await git(d.workspace, ["diff", from], 10);
-  const status = d.dirty > 0 ? await git(d.workspace, ["status", "--porcelain", "--untracked-files=all"]) : { out: "" };
+  const status = d.dirty !== 0 ? await git(d.workspace, ["status", "--porcelain", "--untracked-files=all"]) : { out: "" };
   const prompt = [
     "Write the title and description of a GitHub pull request from " + d.branch + " into " + d.base + ".",
     "The thread that made the changes is titled: " + (threadTitle || d.branch),
@@ -635,19 +704,20 @@ async function write(d, threadTitle) {
     "Diff:",
     cut(patch.out, 40000),
   ].join("\n");
+  const failed = (error) => ({ ...d, by: null, error });
   const wait = left() - 1;
-  if (wait < 1) return { ...d, error: "Reading the changes took the time there was to ask a model. Try again." };
+  if (wait < 1) return failed("Reading the changes took the time there was to ask a model. Try again.");
   let a;
   try {
     a = await glitched.models.ask(prompt, { system: SYSTEM, timeout: wait });
   } catch (e) {
-    return { ...d, error: unwritten(e) };
+    return failed(unwritten(e));
   }
   const w = written(a.text);
-  if (!w) return { ...d, error: "The model's answer wasn't a title and description. Try again, or write them yourself." };
+  if (!w) return failed("The model's answer wasn't a title and description. Try again, or write them yourself.");
   const over = bytes(w.title) > MAX_TITLE ? "title is over " + MAX_TITLE : bytes(w.body) > MAX_BODY ? "description is over " + MAX_BODY : "";
-  if (over) return { ...d, error: "The model's " + over + " bytes, so yours are kept. Try again, or write them yourself." };
-  return { ...d, title: w.title, body: w.body, by: "Written by " + (await modelName(a)) };
+  if (over) return failed("The model's " + over + " bytes, so yours are kept. Try again, or write them yourself.");
+  return { ...d, title: w.title, body: w.body, by: "Written by " + modelName(a, d.models) };
 }
 
 // bytes is how long s is in UTF-8, as GitHub and the app's fields count it.
@@ -690,60 +760,91 @@ function written(text) {
   }
 }
 
-// modelName is the model's name as the model picker shows it, else its id.
-async function modelName(a) {
-  const list = await glitched.models.list().catch(() => null);
-  const m = list?.models.find((m) => m.provider === a.provider && m.id === a.model);
-  if (!m) return a.model;
-  return m.family && !m.name.startsWith(m.family) ? m.family + " " + m.name : m.name;
+// modelName is the model's name as the model picker shows it, else its
+// provider's family and its id.
+function modelName(a, models) {
+  const m = models.find((m) => m.provider === a.provider && m.id === a.model);
+  if (m) return m.name;
+  return (models.find((m) => m.provider === a.provider)?.family || a.provider) + " (" + a.model + ")";
 }
 
-// create commits if asked, on the dialog's branch only, pushes that
-// commit to the one ref the branch pushes to, never forced, in the one
-// repository the dialog names, then opens the pull request, its body on
-// stdin. A step that fails says what was done before it.
+// create commits if asked, on the dialog's branch only, pushes that one
+// commit to the Target the dialog showed, never forced and with no
+// submodules, then opens the pull request, its body on stdin. A step that
+// fails says what was done before it. A pull request GitHub may have
+// opened, as when gh's answer is lost, is looked for; pr is the one opened.
 async function create(d) {
   const title = d.title.trim();
   if (!title) return { error: "Write a title." };
   const ws = d.workspace;
+  const t = d.target;
+  const to = t.remote + "/" + t.ref;
+  const done = [];
   const away = async () => {
     const now = await checkedOut(ws);
     return now === d.branch ? "" : "the workspace is on " + (now || "no branch") + " now, not " + d.branch;
   };
-  let why = await away();
-  if (why) return { error: said([], why) };
-  const { push, noPush } = await target(ws, d.branch);
-  if (!push) return { error: said([], "can't push: " + noPush) };
-  const dest = await destination(ws, push.remote);
-  if (dest.slug !== d.slug) return { error: said([], "can't push: " + (dest.why ?? push.remote + " pushes to " + dest.slug + " now, not " + d.slug)) };
-  const done = [];
-  if (d.commit && d.dirty > 0) {
-    const add = await git(ws, ["add", "-A"]);
-    if (!add.ok) return { error: "git add: " + add.err };
-    why = await away();
-    if (why) return { error: said([], why + "; the changes are staged, not committed") };
-    const commit = await git(ws, ["commit", "-q", "-m", title]);
-    if (!commit.ok) return { error: "git commit: " + commit.err };
-    done.push("Committed " + (await git(ws, ["rev-parse", "--short", "HEAD"])).out.trim());
+  try {
+    let why = (await away()) || (await drift(d));
+    if (why) return { error: said([], why) };
+    let sha;
+    if (d.commit && d.dirty > 0) {
+      const add = await git(ws, ["add", "-A"]);
+      if (!add.ok) return { error: "git add: " + add.err };
+      why = await away();
+      if (why) return { error: said([], why + "; the changes are staged, not committed") };
+      const commit = await git(ws, ["commit", "-q", "-m", title]);
+      if (!commit.ok) return { error: "git commit: " + commit.err };
+      sha = (await git(ws, ["rev-parse", "HEAD"])).out.trim();
+      done.push("Committed " + sha.slice(0, 7));
+    } else {
+      sha = (await git(ws, ["rev-parse", "--verify", "-q", "refs/heads/" + d.branch])).out.trim();
+    }
+    const committed = done.length > 0;
+    why = await drift(d);
+    if (why) return { committed, error: said(done, why) };
+    const tip = (await git(ws, ["rev-parse", "--verify", "-q", "refs/heads/" + d.branch])).out.trim();
+    if (!sha || tip !== sha) return { committed, error: said(done, d.branch + " moved to " + (tip.slice(0, 7) || "nothing") + " meanwhile, so nothing was pushed") };
+    const pushed = await git(ws, ["push", "--no-follow-tags", "--no-recurse-submodules", t.remote, sha + ":refs/heads/" + t.ref], 20);
+    if (!pushed.ok) return { committed, error: said(done, "push to " + to + " failed: " + pushed.err) };
+    let tracking = "";
+    if (t.track) {
+      const up = await git(ws, ["branch", "--set-upstream-to=" + to, d.branch]);
+      if (!up.ok) tracking = d.branch + " doesn't track " + to + " yet: " + up.err;
+    }
+    done.push(tracking ? "pushed, though " + tracking : "pushed");
+    const wait = Math.min(30, left() - RECHECK);
+    if (wait < 1) return { committed, error: said(done, "the time to open the pull request ran out; try again") };
+    const r = await gh(ws, ["pr", "create", "--repo", t.slug, "--head", t.ref, "--base", d.base, "--title", title, "--body-file", "-", ...(d.draft ? ["--draft"] : [])], d.body, wait);
+    const url = r.ok ? r.out.trim().split("\n").pop() : "";
+    const number = Number(/\/pull\/(\d+)$/.exec(url)?.[1]);
+    if (number) return { url, tracking, pr: { number, title, url, state: d.draft ? "draft" : "open", review: null, conflicts: null, checks: [] } };
+    if (!r.ok && (r.missing || refused(r))) return { committed, error: said(done, "gh pr create failed: " + (r.missing ? r.err : ghReason(r))) };
+    const pr = await opened(d);
+    if (pr) return { url, tracking, pr };
+    return { committed, error: said(done, "GitHub didn't say whether it opened the pull request (" + (r.ok ? "gh said " + short(url) : ghReason(r)) + "), and doesn't list one; Refresh, then try again") };
+  } catch (e) {
+    if (!(e instanceof Late)) throw e;
+    return { committed: done.length > 0 && done[0].startsWith("Committed"), error: said(done, e.message) };
   }
-  const committed = done.length > 0;
-  const tip = await git(ws, ["rev-parse", "--verify", "-q", "refs/heads/" + d.branch]);
-  if (!tip.ok) return { committed, error: said(done, "can't read " + d.branch + ": " + tip.err) };
-  const to = push.remote + "/" + push.branch;
-  const pushed = await git(ws, ["push", "--no-follow-tags", push.remote, tip.out.trim() + ":refs/heads/" + push.branch], 20);
-  if (!pushed.ok) return { committed, error: said(done, "push to " + to + " failed: " + (pushed.timedOut ? "it didn't finish in time" : pushed.err)) };
-  done.push("pushed");
-  if (push.track) await git(ws, ["branch", "--set-upstream-to=" + to, d.branch]); // target finds it without, by its name
-  const wait = Math.min(30, left() - RECHECK);
-  if (wait < 1) return { committed, error: said(done, "the time to open the pull request ran out; try again") };
-  const r = await gh(ws, ["pr", "create", "--repo", d.slug, "--head", push.branch, "--base", d.base, "--title", title, "--body-file", "-", ...(d.draft ? ["--draft"] : [])], d.body, wait);
-  if (r.ok) return { url: r.out.trim().split("\n").pop() };
-  if (/already exists/i.test(r.err)) return { exists: true };
-  if (r.timedOut) {
-    const list = await gh(ws, ["pr", "list", "--repo", d.slug, "--head", push.branch, "--state", "open", "--json", PR_FIELDS]);
-    if (list.ok && pick(JSON.parse(list.out) ?? [], push.branch, d.slug)) return { exists: true };
-  }
-  return { committed, error: said(done, "gh pr create failed: " + (r.missing ? r.err : ghReason(r))) };
+}
+
+// refused is whether a failed gh pr create is GitHub turning it down, as
+// against a failure that leaves unknown whether it opened one: a timeout,
+// a connection lost, GitHub failing on its side. One that exists already
+// is looked for too.
+function refused(r) {
+  if (r.timedOut || /already exists/i.test(r.err)) return false;
+  return /GraphQL: |HTTP 4\d\d|No commits between/i.test(r.err) && !/HTTP 5\d\d|EOF|timed? ?out|connection|something went wrong/i.test(r.err);
+}
+
+// opened is the open pull request from d's head into its base, if GitHub
+// lists one.
+async function opened(d) {
+  const t = d.target;
+  const list = await gh(d.workspace, ["pr", "list", "--repo", t.slug, "--head", t.ref, "--base", d.base, "--state", "open", "--json", PR_FIELDS]);
+  if (!list.ok) return null;
+  return pick((JSON.parse(list.out) ?? []).filter((p) => p.baseRefName === d.base), t.ref, t.slug);
 }
 
 // said joins what was done with what failed: "Committed abc1234 and

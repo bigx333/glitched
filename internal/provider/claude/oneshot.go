@@ -27,11 +27,11 @@ type oneShot struct {
 	ModelUsage map[string]json.RawMessage `json:"modelUsage"`
 }
 
-// Ask runs one claude -p with no tools, no MCP servers and no session
-// left behind, the prompt on stdin. It runs in an empty folder of its own
-// with the user's settings alone, so no project's CLAUDE.md, settings or
-// hooks reach it. The user's settings stay: they may hold how claude signs
-// in, which --bare and an empty --setting-sources both drop.
+// Ask runs one claude -p with no tools, no MCP servers, no hooks and no
+// session left behind, the prompt on stdin. It runs in an empty folder of
+// its own with the user's settings alone, so no project's CLAUDE.md or
+// settings reach it. The user's settings stay: they may hold how claude
+// signs in, which --bare and an empty --setting-sources both drop.
 func (a *Adapter) Ask(ctx context.Context, spec provider.AskSpec) (provider.AskResult, error) {
 	bin, err := a.binary()
 	if err != nil {
@@ -43,7 +43,7 @@ func (a *Adapter) Ask(ctx context.Context, spec provider.AskSpec) (provider.AskR
 	}
 	defer os.RemoveAll(dir)
 	model := cmp.Or(modelOf(spec.Model), askModel)
-	args := []string{"-p", "--no-session-persistence", "--tools", "", "--strict-mcp-config", "--setting-sources", "user", "--output-format", "json", "--model", model}
+	args := []string{"-p", "--no-session-persistence", "--tools", "", "--strict-mcp-config", "--setting-sources", "user", "--settings", `{"disableAllHooks":true}`, "--output-format", "json", "--model", model}
 	if spec.System != "" {
 		args = append(args, "--system-prompt", spec.System)
 	}
@@ -65,6 +65,9 @@ func (a *Adapter) Ask(ctx context.Context, spec provider.AskSpec) (provider.AskR
 	}
 	if r.IsError {
 		return provider.AskResult{}, fmt.Errorf("claude: %s", r.Result)
+	}
+	if err := cmp.Or(ctx.Err(), err); err != nil {
+		return provider.AskResult{}, fmt.Errorf("claude: %w", err)
 	}
 	ran := model
 	if keys := slices.Collect(maps.Keys(r.ModelUsage)); len(keys) == 1 {

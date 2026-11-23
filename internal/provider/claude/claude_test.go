@@ -40,6 +40,7 @@ const (
 	envSleep  = "GLITCHED_FAKE_SLEEP"         // how long a test binary sleeps, as sleep where there is none
 	envAsked  = "GLITCHED_FAKE_CLAUDE_ASKED"  // a file a one-shot run writes its argv, folder and stdin to
 	envAnswer = "GLITCHED_FAKE_CLAUDE_ANSWER" // what a one-shot run prints
+	envHang   = "GLITCHED_FAKE_CLAUDE_HANG"   // a one-shot run, having printed, waits to be killed
 )
 
 func TestMain(m *testing.M) {
