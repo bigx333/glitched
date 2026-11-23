@@ -66,6 +66,22 @@ func TestContinueShowsOnlyOnAnUncertainThread(t *testing.T) {
 	}
 }
 
+// Continue hides while the run that replaced the uncertain one works.
+func TestContinueHidesWhileTheReplacementRuns(t *testing.T) {
+	dir, _ := lostDir(t, slowStop{Adapter: fake.New(fake.Turn(false)), release: make(chan struct{})}, "Stuck")
+	h := start(t, dir)
+	th := h.thread("Stuck")
+	h.a.select_(th)
+	h.until("its transcript", func() bool { return h.tt.HasText("May I edit it?") })
+	h.tt.Advance(time.Second)
+	h.click("Continue")
+	h.until("the replacement running", func() bool { return th.View.Run == api.RunRunning })
+	h.tt.Advance(time.Second)
+	if _, ok := h.tt.Find("Continue"); ok {
+		t.Fatalf("Continue shows while the replacement runs: %q", h.tt.Texts())
+	}
+}
+
 // A message sent to a thread whose run was left uncertain replaces the run,
 // rather than being refused as a steer.
 func TestAMessageReplacesAnUncertainRun(t *testing.T) {
