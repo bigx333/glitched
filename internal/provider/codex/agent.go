@@ -308,6 +308,12 @@ func (g *Agent) notify(m message) {
 		Error     *struct {
 			Message string `json:"message"`
 		} `json:"error"`
+		TokenUsage struct {
+			Last struct {
+				TotalTokens int64 `json:"totalTokens"`
+			} `json:"last"`
+			ModelContextWindow int64 `json:"modelContextWindow"`
+		} `json:"tokenUsage"`
 	}
 	json.Unmarshal(m.Params, &n)
 	var turn struct {
@@ -322,6 +328,16 @@ func (g *Agent) notify(m message) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !speaks(m.Method) && m.Method != "serverRequest/resolved" {
+		// How full the context is, as of the turn's last request: news
+		// of the thread's, which this run reports while its turn is on.
+		live := g.started && !g.ended && (n.TurnID == "" || n.TurnID == g.turn)
+		switch {
+		case !live:
+		case m.Method == "thread/tokenUsage/updated" && n.TokenUsage.Last.TotalTokens > 0:
+			g.queueLocked(provider.Context{Used: n.TokenUsage.Last.TotalTokens, Window: n.TokenUsage.ModelContextWindow})
+		case m.Method == "thread/compacted":
+			g.queueLocked(provider.Context{Compacted: true})
+		}
 		return
 	}
 	if n.TurnID == "" {
@@ -351,6 +367,9 @@ func (g *Agent) notify(m message) {
 			if sent := g.texts[it.ID]; sent < len(it.Text) {
 				g.textLocked(it.ID, it.Text[sent:])
 			}
+		}
+		if it.Type == "contextCompaction" && m.Method == "item/completed" {
+			g.queueLocked(provider.Context{Compacted: true})
 		}
 		if !it.shown() || it.ID == "" {
 			return
