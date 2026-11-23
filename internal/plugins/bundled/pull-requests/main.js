@@ -787,8 +787,8 @@ function modelName(a, models) {
 }
 
 // create commits if asked, on the dialog's branch only, pushes that one
-// commit to the URL the dialog showed, not its remote's name, which may
-// point elsewhere by then, never forced and with no submodules, then opens
+// commit by the remote's name, so git resolves its push URL as the dialog's
+// read did, never forced and with no submodules, then opens
 // the pull request, its body on stdin. A step that fails says what was
 // done before it, each step done as soon as git says so. A pull request
 // GitHub may have opened, as when gh's answer is lost, is looked for; pr
@@ -827,7 +827,7 @@ async function create(d) {
     if (why) return { committed, error: said(done, why) };
     const tip = (await git(ws, ["rev-parse", "--verify", "-q", "refs/heads/" + d.branch])).out.trim();
     if (!sha || tip !== sha) return { committed, error: said(done, d.branch + " moved to " + (tip.slice(0, 7) || "nothing") + " meanwhile, so nothing was pushed") };
-    const pushed = await git(ws, ["push", "--no-follow-tags", "--no-recurse-submodules", t.url, sha + ":refs/heads/" + t.ref], 20);
+    const pushed = await git(ws, ["push", "--no-follow-tags", "--no-recurse-submodules", t.remote, sha + ":refs/heads/" + t.ref], 20);
     if (!pushed.ok) return { committed, error: said(done, "push to " + to + " failed: " + pushed.err) };
     done.push("pushed");
     const tracking = await follow(d, sha);
