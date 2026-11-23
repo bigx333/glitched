@@ -418,6 +418,7 @@ type forgetQuery struct {
 // Providers are what the engine's providers offer a session.
 type Providers interface {
 	Commands(ctx context.Context, provider, workspace string) ([]provider.Command, error)
+	DefaultModel(ctx context.Context, provider, workspace string) (string, error)
 	Ask(ctx context.Context, provider string, spec provider.AskSpec) (provider.AskResult, error)
 }
 
@@ -550,6 +551,9 @@ func (s *Server) methods() map[string]handler {
 	if p := s.Providers; p != nil {
 		m["provider.commands"] = callHandler(func(ctx context.Context, q commandsQuery) ([]provider.Command, error) {
 			return p.Commands(ctx, q.Provider, q.Workspace)
+		})
+		m["provider.default"] = callHandler(func(ctx context.Context, q commandsQuery) (string, error) {
+			return p.DefaultModel(ctx, q.Provider, q.Workspace)
 		})
 		m["provider.ask"] = callHandler(func(ctx context.Context, q askQuery) (provider.AskResult, error) {
 			return p.Ask(ctx, q.Provider, q.Spec)

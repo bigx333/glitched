@@ -45,6 +45,9 @@ type Adapter struct {
 	// noAuto is why Claude Code last refused its auto mode, "" since one
 	// took it.
 	noAuto atomic.Pointer[string]
+	// described is what the last Describe's claude answered initialize
+	// with, whose aliases DefaultModel resolves.
+	described atomic.Pointer[initialized]
 }
 
 // keepIdle and keepMax are how long a thread's claude waits for its next
@@ -71,6 +74,7 @@ func (a *Adapter) Close() error {
 var (
 	_ provider.Adapter   = (*Adapter)(nil)
 	_ provider.Commander = (*Adapter)(nil)
+	_ provider.Defaulter = (*Adapter)(nil)
 	_ io.Closer          = (*Adapter)(nil)
 )
 
@@ -92,11 +96,31 @@ func (a *Adapter) Describe(ctx context.Context) (provider.Info, error) {
 		// account ran before stands.
 		return provider.Info{}, fmt.Errorf("Claude Code %s doesn't say what models the account runs", r.Version)
 	}
-	info := provider.Info{Name: "claude", Version: r.Version, Models: r.models(), Path: prog.Path}
+	a.described.Store(&r)
+	info := provider.Info{Name: "claude", Version: r.Version, Models: r.models(r.defaultModel(prog.Getenv, "")), Path: prog.Path}
 	if s := a.noAuto.Load(); s != nil {
 		info.NoAuto = *s
 	}
 	return info, nil
+}
+
+// DefaultModel is the model a claude in workspace runs where it's given no
+// --model (defaultModel), by the models the last Describe found, else by
+// asking a claude in workspace.
+func (a *Adapter) DefaultModel(ctx context.Context, workspace string) (string, error) {
+	prog, err := a.program()
+	if err != nil {
+		return "", err
+	}
+	r := a.described.Load()
+	if r == nil {
+		got, err := a.initialize(ctx, prog, workspace)
+		if err != nil {
+			return "", err
+		}
+		r = &got
+	}
+	return r.defaultModel(prog.Getenv, workspace), nil
 }
 
 // Open runs the run on the thread's claude: the one its last run left,

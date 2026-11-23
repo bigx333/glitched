@@ -14,6 +14,8 @@ import (
 // note what else it's sent, and returns the file it notes it in.
 func describing(t *testing.T, response string) string {
 	t.Helper()
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("ANTHROPIC_MODEL", "")
 	tape := filepath.Join(t.TempDir(), "describe.jsonl")
 	os.WriteFile(tape, []byte(`{"sent":{"request":{"subtype":"initialize"},"request_id":"glitched-init","type":"control_request"}}
 {"recv":{"type":"control_response","response":{"subtype":"success","request_id":"glitched-init","response":`+response+`}}}
@@ -26,7 +28,8 @@ func describing(t *testing.T, response string) string {
 }
 
 // Describe says the models the account runs, as Claude Code's initialize
-// names them, and calls none: no prompt goes to claude.
+// names them, the default by its words where none else is it, and calls
+// none: no prompt goes to claude.
 func TestDescribeSaysTheAccountsModels(t *testing.T) {
 	after := describing(t, `{"commands":[],"claude_code_version":"2.1.330","models":[`+
 		`{"value":"default","resolvedModel":"claude-opus-5-5","displayName":"Default (recommended)","description":"Use the default model (currently Opus 5.5) · $4/$20 per Mtok"},`+
@@ -40,6 +43,7 @@ func TestDescribeSaysTheAccountsModels(t *testing.T) {
 	want := []provider.Model{
 		{ID: "claude-fable-5-2", Name: "Fable 5.2", Description: "Most capable for your hardest tasks", Efforts: []provider.Effort{{ID: "low"}, {ID: "high"}, {ID: "max"}}},
 		{ID: "claude-sonnet-5-5", Name: "Sonnet 5.5", Description: "Smart and fast"},
+		{ID: "claude-opus-5-5", Name: "Opus 5.5", Default: true},
 	}
 	if !reflect.DeepEqual(info.Models, want) || info.Name != "claude" || info.Version != "2.1.330" {
 		t.Errorf("Describe = %+v; want claude 2.1.330 running %+v", info, want)
@@ -60,5 +64,38 @@ func TestDescribeOfAnAnswerWithoutModelsFails(t *testing.T) {
 	describing(t, `{"commands":[],"claude_code_version":"2.1.330","models":[]}`)
 	if info, err := ad.Describe(ctx); err != nil || info.Models == nil || len(info.Models) != 0 {
 		t.Errorf("Describe of an account with no models = %+v, %v; want none and no error", info, err)
+	}
+}
+
+// A Claude Code whose launch setting names its folder runs the model that
+// folder's settings name, though the engine's own CLAUDE_CONFIG_DIR names
+// another: Describe's Default and DefaultModel are that one.
+func TestTheDefaultIsTheLaunchFoldersSettings(t *testing.T) {
+	describing(t, `{"commands":[],"claude_code_version":"2.1.330","models":[`+
+		`{"value":"default","resolvedModel":"claude-fable-5-2","displayName":"Default (recommended)"},`+
+		`{"value":"fable","resolvedModel":"claude-fable-5-2","displayName":"Fable","description":"Fable 5.2 · Most capable"},`+
+		`{"value":"sonnet","resolvedModel":"claude-sonnet-5-5","displayName":"Sonnet","description":"Sonnet 5.5 · Smart and fast"},`+
+		`{"value":"haiku","resolvedModel":"claude-haiku-5-5","displayName":"Haiku","description":"Haiku 5.5 · Fastest"}]}`)
+	engines := os.Getenv("CLAUDE_CONFIG_DIR")
+	os.WriteFile(filepath.Join(engines, "settings.json"), []byte(`{"model":"haiku"}`), 0o600)
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, "settings.json"), []byte(`{"model":"sonnet"}`), 0o600)
+	ad := &claude.Adapter{}
+	ad.Place(provider.Launch{Path: must(os.Executable()), Home: home})
+	info, err := ad.Describe(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var defaults []string
+	for _, m := range info.Models {
+		if m.Default {
+			defaults = append(defaults, m.ID)
+		}
+	}
+	if !reflect.DeepEqual(defaults, []string{"claude-sonnet-5-5"}) {
+		t.Errorf("with the launch folder's settings naming sonnet, the Default is %q", defaults)
+	}
+	if got, err := ad.DefaultModel(ctx, t.TempDir()); err != nil || got != "claude-sonnet-5-5" {
+		t.Errorf("DefaultModel = %q, %v; want claude-sonnet-5-5", got, err)
 	}
 }

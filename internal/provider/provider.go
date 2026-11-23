@@ -135,6 +135,15 @@ type Command struct {
 	ArgumentHint string `json:"argumentHint,omitempty"`
 }
 
+// Defaulter is an Adapter whose program's default model depends on the
+// workspace a session runs in, as its settings there may name one:
+// DefaultModel is the id of the model a session in workspace runs where
+// it names none, as Info's Default is where no workspace's settings do;
+// "" where it can't say.
+type Defaulter interface {
+	DefaultModel(ctx context.Context, workspace string) (string, error)
+}
+
 // Commander is an Adapter that can list the slash commands a session in
 // workspace would have, without a run.
 type Commander interface {

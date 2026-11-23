@@ -574,6 +574,14 @@ func (e *EndpointClient) PluginCall(ctx context.Context, call json.RawMessage) (
 	return out, e.c.call(ctx, "plugins.call", call, &out)
 }
 
+// ProviderDefault is the model a session of the engine's provider name
+// runs in workspace where it names none, "" where the provider can't say
+// one of its own there.
+func (e *EndpointClient) ProviderDefault(ctx context.Context, name, workspace string) (string, error) {
+	var out string
+	return out, e.c.call(ctx, "provider.default", commandsQuery{Provider: name, Workspace: workspace}, &out)
+}
+
 // ProviderCommands are the slash commands a session of the engine's
 // provider name would have in workspace.
 func (e *EndpointClient) ProviderCommands(ctx context.Context, name, workspace string) ([]provider.Command, error) {

@@ -66,12 +66,13 @@ func (r providerRow) version() string {
 }
 
 // rowModels are the provider's offered models, and the default where
-// its engine no longer offers it, which says so.
+// its engine no longer offers it, which says so, or where it is the
+// program's own, which a workspace's settings name.
 func (a *app) rowModels(r providerRow) (models []modelInfo, gone bool) {
 	models = a.familyModels(r.family)
 	if m, offered := a.modelOf(a.model); !offered && a.model.Provider == r.family.provider {
 		models = append(models, m)
-		gone = true
+		gone = !a.followsCLI
 	}
 	return models, gone
 }
@@ -169,6 +170,9 @@ func (a *app) checkAgain(c *ui.Context) {
 type defaultChoice struct {
 	model  modelKey
 	effort string
+	// cli is the item that has the default be the provider's program's
+	// own again, its effort with it (followCLI).
+	cli bool
 }
 
 // prefilled is whether the default is r's provider's program's own,
@@ -198,7 +202,7 @@ func (a *app) providerDefault(c *ui.Context, r providerRow) {
 			m, _ := a.modelOf(a.model)
 			effort := effortFor(m, a.effort)
 			prefilled := a.prefilled(r)
-			shown := defaultChoice{a.model, effort}
+			shown := defaultChoice{model: a.model, effort: effort}
 			if prefilled {
 				shown.model = cli
 			}
@@ -244,14 +248,14 @@ func (a *app) providerDefault(c *ui.Context, r providerRow) {
 				}
 				popupLabel(c, "MODEL")
 				if known {
-					item(defaultChoice{cli, effortFor(def, def.defaultEffort)}, "CLI default · "+def.short, "", prefilled)
+					item(defaultChoice{model: cli, cli: true}, "CLI default · "+def.short, "", prefilled)
 				}
 				for _, o := range models {
 					note := ""
 					if _, offered := a.modelOf(o.key); !offered {
 						note = "No longer offered"
 					}
-					item(defaultChoice{o.key, effortFor(o, a.effort)}, o.short, note, o.key == shown.model)
+					item(defaultChoice{model: o.key, effort: effortFor(o, a.effort)}, o.short, note, o.key == shown.model)
 				}
 				if !ours {
 					return
@@ -259,12 +263,12 @@ func (a *app) providerDefault(c *ui.Context, r providerRow) {
 				ui.Divider(c).Background(palette.border).Margin(4, 0)
 				popupLabel(c, "EFFORT")
 				for _, e := range effortsOf(m) {
-					item(defaultChoice{shown.model, e.id}, e.label, "", e.id == effort)
+					item(defaultChoice{model: shown.model, effort: e.id}, e.label, "", e.id == effort)
 				}
 			})
 			if chosen != shown {
 				switch {
-				case chosen.model == cli && shown.model != cli:
+				case chosen.cli:
 					a.followCLI(cli.Provider)
 				case chosen.model != shown.model:
 					a.chooseModel(chosen.model)

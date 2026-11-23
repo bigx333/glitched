@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -38,14 +39,18 @@ func (a *Adapter) Commands(ctx context.Context, workspace string) ([]provider.Co
 // reads it.
 type initialized struct {
 	Commands []provider.Command `json:"commands"`
-	Models   []struct {
-		Value         string   `json:"value"`
-		ResolvedModel string   `json:"resolvedModel"`
-		DisplayName   string   `json:"displayName"`
-		Description   string   `json:"description"`
-		Efforts       []string `json:"supportedEffortLevels"`
-	} `json:"models"`
-	Version string `json:"claude_code_version"`
+	Models   []modelEntry       `json:"models"`
+	Version  string             `json:"claude_code_version"`
+}
+
+// modelEntry is one of /model's entries: an alias, as Value names it, of
+// the model it resolves to.
+type modelEntry struct {
+	Value         string   `json:"value"`
+	ResolvedModel string   `json:"resolvedModel"`
+	DisplayName   string   `json:"displayName"`
+	Description   string   `json:"description"`
+	Efforts       []string `json:"supportedEffortLevels"`
 }
 
 // commands are the ones to type: a name starting with _ is Claude Code's
@@ -59,14 +64,14 @@ func (r initialized) commands() []provider.Command {
 // models are the ones the account can run, each by its full id, as the
 // session pins it, with Claude Code's words for it less its price, and the
 // efforts --effort takes for it. The default's entry is left out: it is
-// one of the others, which it names by its resolvedModel, and that one is
-// the Default; a long-context "[1m]" default not listed is its base's.
-func (r initialized) models() []provider.Model {
+// one of the others, which it names. def is the Default, a session's
+// model where it names none (defaultModel), listed where no entry is it:
+// by the default's words for it, a long-context "[1m]" one as its base,
+// so named, else by its id.
+func (r initialized) models(def string) []provider.Model {
 	out := []provider.Model{}
-	def := ""
 	for _, m := range r.Models {
 		if m.Value == "default" {
-			def = m.ResolvedModel
 			continue
 		}
 		// "Fable 5.2 · Most capable for … · $4/$20 per Mtok"
@@ -81,13 +86,88 @@ func (r initialized) models() []provider.Model {
 		}
 		out = append(out, provider.Model{ID: cmp.Or(m.ResolvedModel, m.Value), Name: name, Description: strings.Join(parts, " · "), Efforts: efforts})
 	}
-	for _, id := range []string{def, strings.TrimSuffix(def, "[1m]")} {
-		if i := slices.IndexFunc(out, func(m provider.Model) bool { return id != "" && m.ID == id }); i >= 0 {
-			out[i].Default = true
-			break
+	if def == "" {
+		return out
+	}
+	if i := slices.IndexFunc(out, func(m provider.Model) bool { return m.ID == def }); i >= 0 {
+		out[i].Default = true
+		return out
+	}
+	row := provider.Model{ID: def, Name: def, Default: true}
+	for _, m := range r.Models {
+		// "Use the default model (currently Opus 5.5) · $4/$20 per Mtok"
+		if _, rest, ok := strings.Cut(m.Description, "(currently "); ok && m.Value == "default" && m.ResolvedModel == def {
+			row.Name, _, _ = strings.Cut(rest, ")")
 		}
 	}
-	return out
+	if base, long := strings.CutSuffix(def, "[1m]"); long {
+		if i := slices.IndexFunc(out, func(m provider.Model) bool { return m.ID == base }); i >= 0 {
+			row = out[i]
+			row.ID, row.Name, row.Default = def, out[i].Name+" (1M context)", true
+		}
+	}
+	return append(out, row)
+}
+
+// defaultModel is the model a claude in workspace runs where it's given
+// no --model, as Claude Code takes it: ANTHROPIC_MODEL in its
+// environment, then in its settings' env, then their model, a
+// workspace's local settings over its project's over the user's; else
+// /model's default. An alias, as sonnet, is the model /model resolves it
+// to, and one /model doesn't list is its own name, which claude resolves
+// as it runs. "" where nothing names one.
+func (r initialized) defaultModel(getenv func(string) string, workspace string) string {
+	name := cmp.Or(configuredModel(getenv, workspace), "default")
+	for _, alias := range []string{name, strings.TrimSuffix(name, "[1m]")} {
+		i := slices.IndexFunc(r.Models, func(m modelEntry) bool { return m.Value == alias && m.ResolvedModel != "" })
+		if i < 0 {
+			continue
+		}
+		if alias != name && !strings.HasSuffix(r.Models[i].ResolvedModel, "[1m]") {
+			return r.Models[i].ResolvedModel + "[1m]"
+		}
+		return r.Models[i].ResolvedModel
+	}
+	if name == "default" {
+		return ""
+	}
+	return name
+}
+
+// configuredModel is the model Claude Code's environment, as getenv reads
+// it, or settings name for a claude in workspace, by defaultModel's
+// order; "" for none. The user's settings are in CLAUDE_CONFIG_DIR, as
+// the provider's launch setting may set it, else in ~/.claude.
+func configuredModel(getenv func(string) string, workspace string) string {
+	if m := strings.TrimSpace(getenv("ANTHROPIC_MODEL")); m != "" {
+		return m
+	}
+	dir := getenv("CLAUDE_CONFIG_DIR")
+	if dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".claude")
+	}
+	files := []string{filepath.Join(dir, "settings.json")}
+	if workspace != "" {
+		files = append(files, filepath.Join(workspace, ".claude", "settings.json"), filepath.Join(workspace, ".claude", "settings.local.json"))
+	}
+	var env, model string
+	for _, f := range files {
+		var s struct {
+			Model any            `json:"model"`
+			Env   map[string]any `json:"env"`
+		}
+		if b, err := os.ReadFile(f); err != nil || json.Unmarshal(b, &s) != nil {
+			continue
+		}
+		if m, ok := s.Env["ANTHROPIC_MODEL"].(string); ok && strings.TrimSpace(m) != "" {
+			env = strings.TrimSpace(m)
+		}
+		if m, ok := s.Model.(string); ok && strings.TrimSpace(m) != "" {
+			model = strings.TrimSpace(m)
+		}
+	}
+	return cmp.Or(env, model)
 }
 
 // initialize starts prog's claude in dir, has it answer initialize, then stops

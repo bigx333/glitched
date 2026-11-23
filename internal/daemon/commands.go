@@ -69,6 +69,10 @@ func (c *commandLists) stale(l *listing) bool {
 	}
 }
 
+func (c *commandLists) DefaultModel(ctx context.Context, name, workspace string) (string, error) {
+	return c.mux.DefaultModel(ctx, name, workspace)
+}
+
 func (c *commandLists) Ask(ctx context.Context, name string, spec provider.AskSpec) (provider.AskResult, error) {
 	return c.mux.Ask(ctx, name, spec)
 }

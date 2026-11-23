@@ -316,6 +316,17 @@ func (prog Program) Environ(env []string) []string {
 	return append(env, prog.Env...)
 }
 
+// Getenv is the value of k in prog's environment: its own, else the
+// engine's.
+func (prog Program) Getenv(k string) string {
+	for _, kv := range slices.Backward(prog.Env) {
+		if v, ok := strings.CutPrefix(kv, k+"="); ok {
+			return v
+		}
+	}
+	return os.Getenv(k)
+}
+
 // Placed is an Adapter whose program a Launch places.
 type Placed interface {
 	Adapter

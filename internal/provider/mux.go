@@ -66,6 +66,19 @@ func (m Mux) Commands(ctx context.Context, name, workspace string) ([]Command, e
 	return nil, nil
 }
 
+// DefaultModel is the model a session of name's in workspace runs where
+// it names none, "" where its adapter can't say (Defaulter).
+func (m Mux) DefaultModel(ctx context.Context, name, workspace string) (string, error) {
+	a, err := m.adapter(name)
+	if err != nil {
+		return "", err
+	}
+	if d, ok := a.(Defaulter); ok {
+		return d.DefaultModel(ctx, workspace)
+	}
+	return "", nil
+}
+
 // Ask asks name's adapter for one answer within spec's timeout,
 // ErrUnsupported from one that can't.
 func (m Mux) Ask(ctx context.Context, name string, spec AskSpec) (AskResult, error) {

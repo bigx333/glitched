@@ -1962,14 +1962,22 @@ func (a *app) cliDecides(t thread) bool { return a.followsCLI && t.id().IsZero()
 
 // newThreadRef is the model a new thread in the draft t starts on: the
 // pickers' (modelRef), but none where its provider's program chooses
-// (cliDecides).
+// (cliDecides), and no effort but one the user chose (cliEffort).
 func (a *app) newThreadRef(t thread) api.ModelRef {
 	ref := a.modelRef()
 	if a.cliDecides(t) {
 		ref.Model = ""
 	}
+	if a.cliEffort(t) {
+		ref.Effort = ""
+	}
 	return ref
 }
+
+// cliEffort is whether a new thread in the draft t names no effort, as its
+// provider's program then runs its own: it chooses the model
+// (cliDecides), and the user chose no effort.
+func (a *app) cliEffort(t thread) bool { return a.cliDecides(t) && a.composerFile.Effort == "" }
 
 // modelRef is the model the pickers chose, for a new thread, at the
 // effort they show (effortFor).

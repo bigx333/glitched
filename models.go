@@ -2,7 +2,9 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"path/filepath"
 	"slices"
@@ -141,7 +143,10 @@ func (a *app) askModels() {
 		if err := jsonfile.Write(a.modelsPath(), l.reported); err != nil {
 			log.Printf("glitched: models: %v", err)
 		}
+		// A workspace's own default is asked again.
+		clear(a.cliDefaults)
 		l.changed = true
+		a.reconcile()
 	})
 }
 
@@ -349,17 +354,79 @@ func (a *app) chooseModel(k modelKey) {
 }
 
 // followCLI has the default be provider p's program's own, at the effort
-// it runs it at (starting).
+// it runs it at (starting): composer.json holds p alone, and no effort,
+// whatever this window or another chose before.
 func (a *app) followCLI(p string) {
-	a.show(a.starting(choice{Model: modelKey{Provider: p}, Fast: a.fast, Access: a.access}))
+	file, err := jsonfile.Edit(a.composerPath(), func(f *choice) error {
+		f.Model, f.Effort = modelKey{Provider: p}, ""
+		return nil
+	})
+	syntax, kind := (*json.SyntaxError)(nil), (*json.UnmarshalTypeError)(nil)
+	if errors.As(err, &syntax) || errors.As(err, &kind) {
+		file = choice{Model: modelKey{Provider: p}, Fast: a.fast, Access: a.access}
+		err = jsonfile.Write(a.composerPath(), file)
+	}
+	if err != nil {
+		log.Printf("glitched: composer: %v", err)
+		return
+	}
+	a.composerFile = file
+	a.show(a.starting(file))
+	a.savedChoice, a.triedChoice = a.choice(), a.choice()
 }
 
-// cliDefault is the model provider p's engine last reported its program
-// runs where given none, and whether it reported one.
+// cliDefault is the model provider p's program runs where given none: in
+// the draft's workspace, as this machine's engine said of it
+// (askCLIDefault), else as its engine last reported; and whether either
+// said.
 func (a *app) cliDefault(p string) (modelInfo, bool) {
+	if id := a.cliDefaults[[2]string{p, a.defaultsIn}]; id != "" {
+		m, _ := a.modelOf(modelKey{p, id})
+		m.cliDefault = true
+		return m, true
+	}
 	i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.key.Provider == p && m.cliDefault })
 	if i < 0 {
 		return modelInfo{}, false
 	}
 	return a.offeredModels()[i], true
+}
+
+// draftDefaults has the default a new thread in the draft t takes follow
+// its workspace: a provider's program runs its own default by the
+// settings of the workspace it runs in, which this machine's engine
+// reads for one on this machine, once.
+func (a *app) draftDefaults(t thread) {
+	ws := ""
+	if t.local() {
+		ws = t.View.Workspace
+	}
+	k := [2]string{a.model.Provider, ws}
+	if ws != a.defaultsIn {
+		if a.cliDefaults[k] != a.cliDefaults[[2]string{k[0], a.defaultsIn}] {
+			a.models.changed = true
+		}
+		a.defaultsIn = ws
+	}
+	if _, asked := a.cliDefaults[k]; !a.followsCLI || ws == "" || asked || a.cliAsking[k] {
+		return
+	}
+	a.cliAsking[k] = true
+	engine := a.serviceClient(a.dir)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		id, err := engine.ProviderDefault(ctx, k[0], k[1])
+		cancel()
+		if err != nil {
+			log.Printf("glitched: %s's default in %s: %v", k[0], k[1], err)
+		}
+		a.post(func() {
+			delete(a.cliAsking, k)
+			a.cliDefaults[k] = id
+			if id != "" {
+				a.models.changed = true
+				a.reconcile()
+			}
+		})
+	}()
 }

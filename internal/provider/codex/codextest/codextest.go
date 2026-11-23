@@ -238,6 +238,27 @@ func (f *fake) take(m message, raw []byte) {
 			return
 		}
 		f.reply(m.ID, map[string]any{"account": map[string]any{"type": "chatgpt", "email": "user@example.com", "planType": "plus"}, "requiresOpenaiAuth": true})
+	case "config/read":
+		config := map[string]any{"model": nil, "model_reasoning_effort": nil}
+		switch f.scenario {
+		case "no-config-read":
+			f.refuse(m.ID, -32601, "unsupported method config/read")
+			return
+		case "configured":
+			config = map[string]any{"model": "gpt-6-luna", "model_reasoning_effort": "low"}
+		case "configured-unlisted":
+			config = map[string]any{"model": "gpt-7-preview"}
+		}
+		// Codex reads the config.toml of its CODEX_HOME: a model line
+		// there is the config's.
+		if b, err := os.ReadFile(filepath.Join(os.Getenv("CODEX_HOME"), "config.toml")); err == nil {
+			for line := range strings.Lines(string(b)) {
+				if v, ok := strings.CutPrefix(strings.TrimSpace(line), "model = "); ok {
+					config["model"] = strings.Trim(v, `"`)
+				}
+			}
+		}
+		f.reply(m.ID, map[string]any{"config": config})
 	case "model/list":
 		var p struct{ Cursor string }
 		json.Unmarshal(m.Params, &p)
@@ -250,7 +271,7 @@ func (f *fake) take(m message, raw []byte) {
 		}
 		if p.Cursor == "" {
 			f.reply(m.ID, map[string]any{"data": []map[string]any{
-				{"id": "gpt-6-luna", "model": "gpt-6-luna", "displayName": "GPT-6 Luna", "description": "Fast and cheap", "hidden": false, "isDefault": false, "defaultReasoningEffort": "low", "supportedReasoningEfforts": effort("low", "medium")},
+				{"id": "gpt-6-luna", "model": "gpt-6-luna", "displayName": "GPT-6 Luna", "description": "Fast and cheap", "hidden": false, "isDefault": false, "defaultReasoningEffort": "medium", "supportedReasoningEfforts": effort("low", "medium")},
 				{"id": "codex-auto-review", "model": "codex-auto-review", "displayName": "Auto review", "hidden": true, "isDefault": false},
 			}, "nextCursor": "2"})
 			return
