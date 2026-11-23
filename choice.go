@@ -203,11 +203,22 @@ func configured(t thread) (api.ModelRef, api.Access) {
 	return m, acc
 }
 
+// threadModel is the model t runs on m: the one m names, else, where t
+// leaves it to its provider's program, the one that program reported it
+// ran, whose efforts are the ones t runs at.
+func threadModel(t thread, m api.ModelRef) modelKey {
+	id := m.Model
+	if id == "" && t.View.Confirmed.Model != nil {
+		id = t.View.Confirmed.Model.Model
+	}
+	return keyOfThread(m.Provider, id)
+}
+
 // threadChoice is the thread's model and access as the pickers name them.
 // A model or effort the pickers don't list shows by its own name.
 func (a *app) threadChoice(t thread) choice {
 	m, acc := configured(t)
-	ch := choice{Model: keyOfThread(m.Provider, m.Model), Effort: m.Effort, Fast: m.Fast, Access: accessAuto}
+	ch := choice{Model: threadModel(t, m), Effort: m.Effort, Fast: m.Fast, Access: accessAuto}
 	for name, v := range accessOf {
 		if v == acc {
 			ch.Access = name
@@ -358,7 +369,7 @@ func (a *app) configureEffect(args json.RawMessage) (any, error) {
 	c := api.ThreadConfigure{Fast: in.Fast}
 	now, _ := configured(t)
 	// A thread keeps its provider: its session is that provider's.
-	m, _ := a.modelOf(keyOfThread(now.Provider, now.Model))
+	m, _ := a.modelOf(threadModel(t, now))
 	if in.Model != nil {
 		var offered bool
 		if m, offered = a.modelOf(modelKey{now.Provider, *in.Model}); !offered {

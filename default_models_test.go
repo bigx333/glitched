@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,7 @@ import (
 	"glitched/internal/provider"
 	"glitched/internal/provider/acp/acptest"
 	"glitched/internal/provider/codex/codextest"
+	"glitched/internal/provider/fake"
 )
 
 // shifting is an adapter whose provider reports what models holds as it's
@@ -622,5 +624,77 @@ func TestAThreadFollowingTheDefaultShowsWhatItsProgramRan(t *testing.T) {
 	}}}
 	if name, effort := h.a.runningModel(th, "Claude Beta"); name != "Claude Gamma" || effort.label != "High" {
 		t.Errorf("the thread's button names %q at %q, want the Claude Gamma at High its program ran", name, effort.label)
+	}
+}
+
+// An effort the user chose while following the program's default is the
+// one a new thread names, though the model the picker expects doesn't
+// run at it: the program may run another.
+func TestAnEffortChosenWithTheProgramsDefaultIsSentAsChosen(t *testing.T) {
+	dir := tempDir(t)
+	os.WriteFile(filepath.Join(dir, "composer.json"), []byte(`{"model":{"provider":"codex","id":""},"effort":"xhigh"}`), 0o600)
+	h := startWith(t, dir, withCodex(t, "configured"))
+	allAnswered(h)
+	sendNew(h, "Say hi.")
+	log := os.Getenv(codextest.Log)
+	h.until("Codex's turn", func() bool { return len(wireEntries(t, log, "turn/start")) > 0 })
+	var turn map[string]any
+	json.Unmarshal(wireEntries(t, log, "turn/start")[0], &turn)
+	if turn["model"] != nil || turn["effort"] != "xhigh" {
+		t.Errorf("turn/start names model %v at %v, want no model at the xhigh chosen", turn["model"], turn["effort"])
+	}
+}
+
+// A program that reports the model it ran but not the effort leaves the
+// effort unsaid on the button, rather than the picker's guess.
+func TestAReportWithoutAnEffortShowsNone(t *testing.T) {
+	h := startWith(t, tempDir(t), func(cfg *daemon.Config) {
+		ad := fake.New(fake.Turn(false))
+		ad.Confirms = func(provider.SessionSpec) []provider.Event {
+			return []provider.Event{provider.Ran{Model: "claude-sonnet-5-5"}}
+		}
+		cfg.Providers["claude"] = ad
+	})
+	sendNew(h, "Say hi.")
+	h.until("the report", func() bool {
+		v := h.a.current().View
+		return v.Confirmed.Model != nil && v.LastTurn != nil
+	})
+	pickerSettle(t, h)
+	for _, lane := range []string{"the plugin's", "the built-in"} {
+		if !h.tt.HasText("Claude Sonnet 5.5") || h.tt.HasText("Medium") {
+			t.Errorf("%s button shows %q, want Claude Sonnet 5.5 and no effort", lane, h.tt.Texts())
+		}
+		if err := h.a.plugins.SetEnabled("model-picker", false); err != nil {
+			t.Fatal(err)
+		}
+		h.a.pluginsChanged(nil)
+		pickerSettle(t, h)
+	}
+}
+
+// A thread that follows the program's default runs at the efforts of the
+// model the program reported: the picker and threads.configure offer them.
+func TestAFollowingThreadRunsAtItsReportedModelsEfforts(t *testing.T) {
+	dir := tempDir(t)
+	os.WriteFile(filepath.Join(dir, "composer.json"), []byte(`{"model":{"provider":"codex","id":""}}`), 0o600)
+	h := startWith(t, dir, withCodex(t, "hi"))
+	allAnswered(h)
+	sendNew(h, "Say hi.")
+	h.until("the report", func() bool {
+		v := h.a.current().View
+		return v.Confirmed.Model != nil && v.LastTurn != nil
+	})
+	v := h.a.current().View
+	if v.Confirmed.Model.Model != "gpt-6.2-sol" || v.Model.Model != "" {
+		t.Fatalf("the thread asked %q and ran %q, want none and gpt-6.2-sol", v.Model.Model, v.Confirmed.Model.Model)
+	}
+	h.a.threadControls(h.a.current(), func() {
+		if !slices.ContainsFunc(h.a.efforts(), func(e effortInfo) bool { return e.id == "xhigh" }) {
+			t.Errorf("the picker offers %v, not GPT-6.2 Sol's xhigh", h.a.efforts())
+		}
+	})
+	if _, err := h.a.configureEffect([]byte(`{"thread":"` + v.ID.String() + `","effort":"xhigh"}`)); err != nil {
+		t.Errorf("threads.configure refused GPT-6.2 Sol's xhigh: %v", err)
 	}
 }

@@ -188,7 +188,7 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 				name, runs := a.runningModel(t, m.name)
 				modelTile(c, m.icon, m.color, 18)
 				ui.Text(c, name).FontSize(12).SingleLine()
-				if !a.cliEffort(t) {
+				if !a.cliEffort(t) && runs.label != "" {
 					ui.Text(c, runs.label).FontSize(11).FontWeight(600).TextColor(runs.color)
 				}
 				if a.fast {
