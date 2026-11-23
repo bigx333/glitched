@@ -1,26 +1,20 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"io/fs"
 	"log"
-	"net/url"
 	"os"
-	"os/exec"
-	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/jsonfile"
 	"glitched/internal/plugins/guard"
+	"glitched/internal/projects"
 )
 
 // Cloning a repository makes a project of it on this machine: the user's
@@ -45,84 +39,6 @@ type cloneSheet struct {
 // cloneRun is one clone the sheet started. Its lines and its end show
 // only while it's the sheet's run.
 type cloneRun struct{ cancel context.CancelFunc }
-
-// cloneSource is what the field names: the URL git clones, and typed as
-// owner/name, the repository gh clones.
-type cloneSource struct {
-	url string
-	// repo is owner/name as typed, "" for a URL.
-	repo string
-	// name is the folder the clone makes.
-	name string
-}
-
-var (
-	ownerName = regexp.MustCompile(`^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$`)
-	scpLike   = regexp.MustCompile(`^[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+:(.+)$`)
-	// gitProgress is one of git's progress lines, which it redraws in
-	// place, and which say nothing of why a clone failed.
-	gitProgress = regexp.MustCompile(`^(remote: )?[A-Za-z][A-Za-z ]*:\s+\d+%`)
-	authFailure = regexp.MustCompile(`Authentication failed|could not read Username|Permission denied \(publickey\)|Repository not found`)
-	credentials = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@`)
-)
-
-const (
-	cloneTimeout = 15 * time.Minute
-	cloneHint    = "Sign in with gh auth login, or paste a clone URL your git can reach."
-)
-
-// parseCloneSource reads s as owner/name, a clone URL (https, http, ssh,
-// git or file, on any host, or user@host:path), or a GitHub page, which
-// clones its repository.
-func parseCloneSource(s string) (cloneSource, bool) {
-	s = strings.TrimSpace(s)
-	if m := ownerName.FindStringSubmatch(s); m != nil {
-		if dots(m[1]) || dots(m[2]) {
-			return cloneSource{}, false
-		}
-		repo := m[1] + "/" + strings.TrimSuffix(m[2], ".git")
-		return named(cloneSource{url: "https://github.com/" + repo + ".git", repo: repo}, repo)
-	}
-	if m := scpLike.FindStringSubmatch(s); m != nil && !strings.Contains(s, "://") {
-		return named(cloneSource{url: s}, m[1])
-	}
-	u, err := url.Parse(s)
-	if err != nil {
-		return cloneSource{}, false
-	}
-	switch u.Scheme {
-	case "https", "http":
-		if strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.") == "github.com" {
-			parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-			if len(parts) < 2 {
-				return cloneSource{}, false
-			}
-			owner, name := parts[0], strings.TrimSuffix(parts[1], ".git")
-			if !ownerName.MatchString(owner+"/"+name) || dots(owner) || dots(name) {
-				return cloneSource{}, false
-			}
-			u = &url.URL{Scheme: "https", User: u.User, Host: "github.com", Path: "/" + owner + "/" + name + ".git"}
-			return named(cloneSource{url: u.String()}, name)
-		}
-		fallthrough
-	case "ssh", "git":
-		if u.Host == "" {
-			return cloneSource{}, false
-		}
-	case "file":
-	default:
-		return cloneSource{}, false
-	}
-	return named(cloneSource{url: u.Scheme + s[len(u.Scheme):]}, u.Path)
-}
-
-// named is src with the folder name p's last part gives it.
-func named(src cloneSource, p string) (cloneSource, bool) {
-	src.name = strings.TrimSuffix(path.Base(strings.TrimRight(p, "/")), ".git")
-	return src, src.name != "" && src.name != "/" && !dots(src.name)
-}
-
-func dots(s string) bool { return s == "." || s == ".." }
 
 // clonePath is where a clone finds git and gh: what the user's terminal
 // finds, as the plugin guard looks.
@@ -194,16 +110,16 @@ func (a *app) chooseParent() {
 // main thread. Once it's cloned, the folder is a project, with a new
 // thread in it.
 func (a *app) startClone() {
-	src, ok := parseCloneSource(a.clone.input)
+	src, ok := projects.ParseSource(a.clone.input)
 	if !ok || a.clone.run != nil {
 		return
 	}
-	dest := filepath.Join(a.clone.parent, src.name)
-	ctx, cancel := context.WithTimeout(context.Background(), cloneTimeout)
+	dest := filepath.Join(a.clone.parent, src.Name)
+	ctx, cancel := context.WithTimeout(context.Background(), projects.CloneTimeout)
 	run := &cloneRun{cancel}
 	a.clone.run, a.clone.line, a.clone.failure = run, "", ""
 	go func() {
-		err := clone(ctx, src, dest, clonePath(), func(line string) {
+		err := projects.Clone(ctx, src, dest, clonePath(), func(line string) {
 			a.post(func() {
 				if a.clone.run == run {
 					a.clone.line = line
@@ -243,99 +159,6 @@ func (a *app) cancelClone() {
 	a.clone.open, a.clone.run = false, nil
 }
 
-// clone clones src into dest, a folder that isn't there yet or is empty,
-// with the programs path finds, and says each line they print. A clone
-// that fails or is stopped takes away dest if it made it. Its error is
-// the last lines git said, with what to do if it was refused access.
-func clone(ctx context.Context, src cloneSource, dest, path string, progress func(string)) error {
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
-	}
-	// Making dest here claims it: only a folder this clone made is taken
-	// away when it fails, never one the user made meanwhile.
-	created := os.Mkdir(dest, 0o755) == nil
-	if entries, err := os.ReadDir(dest); err != nil || len(entries) > 0 {
-		return errors.New(dest + " already exists and isn't empty")
-	}
-	env := append(os.Environ(), "PATH="+path, "GIT_TERMINAL_PROMPT=0", "GH_PROMPT_DISABLED=1", "GCM_INTERACTIVE=never")
-	command := func(program string, args ...string) *exec.Cmd {
-		cmd := exec.CommandContext(ctx, program, args...)
-		cmd.Env = env
-		guard.OwnGroup(cmd)
-		cmd.WaitDelay = time.Second
-		return cmd
-	}
-	var cmd *exec.Cmd
-	gh, hasGH := guard.Find("gh", path)
-	git, hasGit := guard.Find("git", path)
-	switch {
-	case src.repo != "" && hasGH && command(gh, "auth", "status", "--hostname", "github.com").Run() == nil:
-		cmd = command(gh, "repo", "clone", src.repo, dest, "--", "--progress")
-	case hasGit:
-		cmd = command(git, "clone", "--progress", "--", src.url, dest)
-	default:
-		return errors.New("git isn't installed on this machine (or isn't on your PATH)")
-	}
-	stderr, err := cmd.StderrPipe()
-	if err == nil {
-		err = cmd.Start()
-	}
-	if err != nil {
-		return err
-	}
-	var tail []string
-	refused := false
-	lines := bufio.NewScanner(stderr)
-	lines.Split(splitLines)
-	for lines.Scan() {
-		line := strings.TrimSpace(lines.Text())
-		if line == "" {
-			continue
-		}
-		progress(line)
-		if !gitProgress.MatchString(line) {
-			tail = append(tail[max(0, len(tail)-3):], credentials.ReplaceAllString(line, "$1"))
-			refused = refused || authFailure.MatchString(line)
-		}
-	}
-	err = cmd.Wait()
-	if err == nil {
-		return nil
-	}
-	if created {
-		os.RemoveAll(dest)
-	}
-	switch {
-	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		return errors.New("The clone took longer than 15 minutes, and was stopped.")
-	case ctx.Err() != nil:
-		return ctx.Err()
-	case len(tail) == 0:
-		tail = []string{"The repository couldn't be cloned."}
-	}
-	if refused {
-		tail = append(tail, cloneHint)
-	}
-	return errors.New(strings.Join(tail, "\n"))
-}
-
-// splitLines splits git's output at each \r as well as each \n: a
-// progress line redraws itself after a \r.
-func splitLines(data []byte, atEOF bool) (int, []byte, error) {
-	if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
-		return i + 1, data[:i], nil
-	}
-	if atEOF && len(data) > 0 || len(data) >= maxCloneLine {
-		n := min(len(data), maxCloneLine)
-		return n, data[:n], nil
-	}
-	return 0, nil, nil
-}
-
-// maxCloneLine is as much of one line as is kept: a longer one comes in
-// pieces, so that no line stops the reading, and git with it.
-const maxCloneLine = 4096
-
 // cloneDialog is the Clone a repository sheet, drawn as the app's alerts
 // are (MyGo's AlertDialog), with their measures but wider, for a URL and
 // a folder's path: a field for the repository, the folder it goes into,
@@ -344,7 +167,7 @@ func (a *app) cloneDialog(c *ui.Context) {
 	if !a.clone.open {
 		return
 	}
-	src, ok := parseCloneSource(a.clone.input)
+	src, ok := projects.ParseSource(a.clone.input)
 	running := a.clone.run != nil
 	a.dialog(c, &a.clone.open, func(backdrop, panel ui.Element) {
 		// A click outside does nothing, as outside an alert: it would
@@ -371,7 +194,7 @@ func (a *app) cloneDialog(c *ui.Context) {
 		}
 		dest := a.clone.parent
 		if ok {
-			dest = filepath.Join(dest, src.name)
+			dest = filepath.Join(dest, src.Name)
 		}
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "Into "+dest).TextColor(t.TextMuted).Width(0).Grow(1).Shrink(1)

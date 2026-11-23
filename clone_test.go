@@ -13,42 +13,8 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/jsonfile"
+	"glitched/internal/projects"
 )
-
-func TestParseCloneSource(t *testing.T) {
-	for _, tc := range []struct {
-		in, url, repo, name string
-	}{
-		{"bigx333/glitched", "https://github.com/bigx333/glitched.git", "bigx333/glitched", "glitched"},
-		{"  bigx333/glitched.git ", "https://github.com/bigx333/glitched.git", "bigx333/glitched", "glitched"},
-		{"o-1/my_repo.js", "https://github.com/o-1/my_repo.js.git", "o-1/my_repo.js", "my_repo.js"},
-		{"https://github.com/bigx333/glitched", "https://github.com/bigx333/glitched.git", "", "glitched"},
-		{"https://github.com/bigx333/glitched.git", "https://github.com/bigx333/glitched.git", "", "glitched"},
-		{"https://github.com/bigx333/glitched/tree/capy/branch", "https://github.com/bigx333/glitched.git", "", "glitched"},
-		{"https://www.github.com/bigx333/glitched/blob/main/README.md", "https://github.com/bigx333/glitched.git", "", "glitched"},
-		{"https://gitlab.com/group/sub/project.git", "https://gitlab.com/group/sub/project.git", "", "project"},
-		{"https://git.example.com/scm/repo/", "https://git.example.com/scm/repo/", "", "repo"},
-		{"ssh://git@example.com:2222/o/r.git", "ssh://git@example.com:2222/o/r.git", "", "r"},
-		{"git@github.com:bigx333/glitched.git", "git@github.com:bigx333/glitched.git", "", "glitched"},
-		{"git@gitlab.com:group/sub/thing", "git@gitlab.com:group/sub/thing", "", "thing"},
-		{"git://example.com/r.git", "git://example.com/r.git", "", "r"},
-		{"file:///srv/git/lighthouse.git", "file:///srv/git/lighthouse.git", "", "lighthouse"},
-	} {
-		got, ok := parseCloneSource(tc.in)
-		if want := (cloneSource{tc.url, tc.repo, tc.name}); !ok || got != want {
-			t.Errorf("parseCloneSource(%q) = %+v, %v; want %+v", tc.in, got, ok, want)
-		}
-	}
-	for _, in := range []string{
-		"", "glitched", "bigx333/", "/glitched", "./glitched", "bigx333/..", "../x", "o/n/x",
-		"o/n!", "o n/r", "https://github.com/bigx333", "https://github.com/", "https:///o/r.git",
-		"ftp://example.com/r.git", "ssh:///r.git", "file:///", "https://example.com/", "git@github.com:", "mailto:a@b",
-	} {
-		if got, ok := parseCloneSource(in); ok {
-			t.Errorf("parseCloneSource(%q) = %+v, want it refused", in, got)
-		}
-	}
-}
 
 // bareRepo is a bare repository, lighthouse.git, whose one commit holds
 // README.md, and its file:// URL.
@@ -239,7 +205,7 @@ func TestCloneFailureOffersRetry(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(parent, "missing")); !os.IsNotExist(err) {
 		t.Fatalf("the failed clone left its folder: %v", err)
 	}
-	if strings.Contains(h.a.clone.failure, cloneHint) {
+	if strings.Contains(h.a.clone.failure, projects.CloneHint) {
 		t.Fatalf("a missing repository has the sign-in hint: %q", h.a.clone.failure)
 	}
 }
@@ -256,7 +222,7 @@ func TestCloneRefusedSaysHowToSignIn(t *testing.T) {
 	openCloneSheet(h)
 	cloneFrom(h, "https://ghp_secret@github.com/o/n.git")
 	f := h.a.clone.failure
-	if !strings.Contains(f, "remote: Repository not found.") || !strings.HasSuffix(f, cloneHint) || !h.tt.HasText(f) {
+	if !strings.Contains(f, "remote: Repository not found.") || !strings.HasSuffix(f, projects.CloneHint) || !h.tt.HasText(f) {
 		t.Fatalf("the sheet says %q; the window shows %q", f, h.tt.Texts())
 	}
 	if strings.Contains(f, "ghp_secret") || !strings.Contains(f, "https://github.com/o/n.git/") {

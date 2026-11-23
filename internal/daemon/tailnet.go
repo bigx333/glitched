@@ -11,6 +11,8 @@ import (
 	"log/slog"
 
 	"glitched/internal/api"
+	"glitched/internal/plugins/guard"
+	"glitched/internal/projects"
 	"glitched/internal/runtime"
 	"glitched/internal/tailnet"
 	"glitched/internal/transport"
@@ -45,6 +47,19 @@ func (e endpoint) Info(ctx context.Context) (api.Environment, error) {
 		}
 	}
 	return env, err
+}
+
+var _ transport.Projects = endpoint{}
+
+// Folders lists a folder on this machine, never the engine's secrets.
+func (e endpoint) Folders(ctx context.Context, q api.FolderQuery) (api.FolderList, error) {
+	return projects.List(ctx, q.Path, []string{e.d.vault})
+}
+
+// Clone clones a repository onto this machine, never into the engine's
+// secrets, with the programs the user's terminal finds.
+func (e endpoint) Clone(ctx context.Context, req api.CloneRequest, progress func(string)) (api.Cloned, error) {
+	return projects.CloneInto(ctx, req, []string{e.d.vault}, guard.UserPath(), progress)
 }
 
 // tailnet is how this machine is on the tailnet: through the engine's own
