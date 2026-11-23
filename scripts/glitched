@@ -1,0 +1,644 @@
+#!/usr/bin/env bash
+# Build, install, and run Glitched with a persistent background daemon
+# (launchd on macOS, systemd --user on Linux) so active agent turns survive
+# GUI restarts and rebuilds.
+#
+# Usage:
+#   ./scripts/glitched                         Pull main, build daemon + GUI, restart daemon, open GUI
+#   ./scripts/glitched up [flags]              Same as above
+#   ./scripts/glitched gui [--no-pull]         Rebuild & relaunch GUI only (keeps daemon & running agents)
+#   ./scripts/glitched restart                 Restart the background daemon (glitched serve)
+#   ./scripts/glitched status                  Show daemon service & engine status
+#   ./scripts/glitched logs                    Follow daemon logs
+#   ./scripts/glitched daemon <action>         install | start | stop | restart | status | logs | uninstall
+#   ./scripts/glitched dev                     Build & run an isolated dev GUI (GLITCHED_DIR=~/.glitched-dev)
+#
+# Flags (for up / gui):
+#   --no-pull      Skip git pull even if clean on main
+#   --gui-only     Rebuild and relaunch only the GUI (keep daemon running)
+#   --daemon-only  Rebuild and restart only the daemon (do not launch GUI)
+#
+# Environment:
+#   GLITCHED_DIR       State directory (default: ~/.glitched; ~/.glitched-dev for `dev`)
+#   GLITCHED_BIN_DIR   Where to install the CLI/daemon binary (default: ~/.local/bin)
+#   GLITCHED_APP_DIR   Where to install Glitched.app on macOS (default: ~/Applications)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+OS="$(uname -s)"
+case "$OS" in
+  Darwin) GOOS="darwin" ;;
+  Linux)  GOOS="linux" ;;
+  *)
+    echo "glitched: unsupported OS: $OS (supports macOS and Linux)" >&2
+    exit 1
+    ;;
+esac
+
+ARCH="$(uname -m)"
+case "$ARCH" in
+  arm64|aarch64) GOARCH="arm64" ;;
+  x86_64|amd64)  GOARCH="amd64" ;;
+  *)
+    echo "glitched: unsupported architecture: $ARCH" >&2
+    exit 1
+    ;;
+esac
+
+GLITCHED_DIR="${GLITCHED_DIR:-$HOME/.glitched}"
+GLITCHED_BIN_DIR="${GLITCHED_BIN_DIR:-$HOME/.local/bin}"
+GLITCHED_CLI="$GLITCHED_BIN_DIR/glitched"
+GLITCHED_APP_DIR="${GLITCHED_APP_DIR:-$HOME/Applications}"
+
+LAUNCHD_LABEL="com.example.glitched.daemon"
+LAUNCHD_PLIST="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
+LAUNCHD_LOG_DIR="$HOME/Library/Logs/Glitched"
+LAUNCHD_LOG="$LAUNCHD_LOG_DIR/daemon.log"
+
+SYSTEMD_UNIT="glitched.service"
+SYSTEMD_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SYSTEMD_UNIT"
+
+log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+# Ensure Go and standard user bin paths are available.
+setup_path() {
+  local extra
+  for extra in /opt/homebrew/bin /usr/local/bin /usr/local/go/bin "$HOME/.local/go/bin" "$HOME/.local/bin"; do
+    if [ -d "$extra" ]; then
+      case ":$PATH:" in
+        *":$extra:"*) ;;
+        *) PATH="$extra:$PATH" ;;
+      esac
+    fi
+  done
+  export PATH
+}
+
+require_go() {
+  setup_path
+  command -v go >/dev/null 2>&1 || die "go not found on PATH"
+}
+
+# Build a clean PATH string for launchd / systemd so the daemon finds claude,
+# codex, agy, git, gh, node, etc.
+service_path() {
+  setup_path
+  local out="$PATH"
+  local p
+  for p in /opt/homebrew/bin /opt/homebrew/sbin /usr/local/bin /usr/bin /bin /usr/sbin /sbin; do
+    if [ -d "$p" ]; then
+      case ":$out:" in
+        *":$p:"*) ;;
+        *) out="$out:$p" ;;
+      esac
+    fi
+  done
+  printf '%s' "$out"
+}
+
+xml_escape() {
+  printf '%s' "$1" | sed \
+    -e 's/&/\&amp;/g' \
+    -e 's/</\&lt;/g' \
+    -e 's/>/\&gt;/g' \
+    -e 's/"/\&quot;/g' \
+    -e "s/'/\&apos;/g"
+}
+
+# Pull latest origin/main if the checkout is clean and on main.
+pull_latest() {
+  local branch dirty before after
+  branch="$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  dirty="$(git -C "$REPO_DIR" status --porcelain 2>/dev/null || true)"
+
+  if [ "$branch" != "main" ]; then
+    warn "on branch '${branch:-detached}', skipping git pull (building current checkout)"
+    return 0
+  fi
+  if [ -n "$dirty" ]; then
+    warn "working tree has uncommitted changes, skipping git pull (building current checkout)"
+    return 0
+  fi
+
+  before="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
+  log "Pulling latest origin/main"
+  git -C "$REPO_DIR" pull --ff-only origin main
+  after="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
+  if [ "$before" = "$after" ]; then
+    log "Already up to date ($after)"
+  else
+    log "Updated $before -> $after"
+  fi
+}
+
+build_daemon() {
+  require_go
+  mkdir -p "$GLITCHED_BIN_DIR"
+  local tmp="$GLITCHED_BIN_DIR/.glitched.tmp.$$"
+  log "Building daemon/CLI -> $GLITCHED_CLI"
+  (
+    cd "$REPO_DIR"
+    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$tmp" ./cmd/glitched
+  )
+  chmod +x "$tmp"
+  mv -f "$tmp" "$GLITCHED_CLI"
+}
+
+build_gui() {
+  require_go
+  local out_dir="$1"
+  log "Building GUI ($GOOS/$GOARCH)"
+  (
+    cd "$REPO_DIR"
+    CGO_ENABLED=0 go tool mygo build -skip-dmg -platform "$GOOS/$GOARCH" -o "$out_dir" .
+  )
+}
+
+installed_gui_exec() {
+  if [ "$GOOS" = "darwin" ]; then
+    printf '%s/Glitched.app/Contents/MacOS/Glitched' "$GLITCHED_APP_DIR"
+  else
+    printf '%s/.local/glitched.app/glitched' "$HOME"
+  fi
+}
+
+# List PIDs of the installed GUI window (never matching `mcp` or `browser-mcp`
+# stdio subprocesses spawned for running agents).
+gui_pids() {
+  local exe
+  exe="$(installed_gui_exec)"
+  ps -axo pid=,command= 2>/dev/null | awk -v exe="$exe" '
+    {
+      pid = $1
+      sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "")
+      if ($0 == exe || (index($0, exe " ") == 1 && $0 !~ / (mcp|browser-mcp)( |$)/)) {
+        print pid
+      }
+    }
+  '
+}
+
+quit_gui() {
+  local pids pid i
+  pids="$(gui_pids)"
+  if [ -z "$pids" ]; then
+    return 0
+  fi
+
+  log "Closing running Glitched window"
+  if [ "$GOOS" = "darwin" ]; then
+    osascript -e "tell application \"$GLITCHED_APP_DIR/Glitched.app\" to quit" >/dev/null 2>&1 || true
+  else
+    for pid in $pids; do
+      kill -TERM "$pid" 2>/dev/null || true
+    done
+  fi
+
+  i=0
+  while [ "$i" -lt 40 ]; do
+    pids="$(gui_pids)"
+    [ -z "$pids" ] && return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+
+  warn "Glitched window did not exit in time; sending SIGTERM"
+  for pid in $pids; do
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  sleep 0.5
+}
+
+swap_installed_gui() {
+  local build_out="$1"
+  if [ "$GOOS" = "darwin" ]; then
+    local src="$build_out/darwin-$GOARCH/Glitched.app"
+    local dst="$GLITCHED_APP_DIR/Glitched.app"
+    local stage="$GLITCHED_APP_DIR/.Glitched.app.staging.$$"
+    [ -d "$src" ] || die "expected bundle not found at $src"
+
+    mkdir -p "$GLITCHED_APP_DIR"
+    rm -rf "$stage"
+    # ditto preserves code signatures, symlinks, and bundle metadata on macOS.
+    ditto "$src" "$stage"
+    rm -rf "$dst"
+    mv "$stage" "$dst"
+    log "Installed $dst"
+  else
+    local installer="$build_out/linux-$GOARCH/install.sh"
+    [ -f "$installer" ] || die "expected installer not found at $installer"
+    sh "$installer"
+  fi
+}
+
+launch_gui() {
+  if [ "$GOOS" = "darwin" ]; then
+    local app="$GLITCHED_APP_DIR/Glitched.app"
+    [ -d "$app" ] || die "$app is not installed (run ./scripts/glitched first)"
+    log "Opening $app"
+    if [ "$GLITCHED_DIR" != "$HOME/.glitched" ]; then
+      open --env "GLITCHED_DIR=$GLITCHED_DIR" -a "$app"
+    else
+      open -a "$app"
+    fi
+  else
+    local bin="$HOME/.local/glitched.app/glitched"
+    [ -x "$bin" ] || die "$bin is not installed (run ./scripts/glitched first)"
+    log "Launching $bin"
+    nohup env GLITCHED_DIR="$GLITCHED_DIR" "$bin" >/dev/null 2>&1 &
+  fi
+}
+
+daemon_running() {
+  [ -x "$GLITCHED_CLI" ] || return 1
+  "$GLITCHED_CLI" status -dir "$GLITCHED_DIR" 2>/dev/null | grep -Eq '^engine[[:space:]]+serving as '
+}
+
+wait_for_daemon_stop() {
+  local i=0
+  while [ "$i" -lt 30 ]; do
+    if ! daemon_running; then
+      return 0
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+}
+
+wait_for_daemon() {
+  local i=0
+  while [ "$i" -lt 50 ]; do
+    if daemon_running; then
+      return 0
+    fi
+    sleep 0.2
+    i=$((i + 1))
+  done
+  warn "daemon did not report ready within 10s (check: ./scripts/glitched logs)"
+  return 1
+}
+
+# --- macOS launchd service ---
+
+write_launchd_plist() {
+  local svc_path esc_cli esc_dir esc_path esc_home esc_log
+  svc_path="$(service_path)"
+  esc_cli="$(xml_escape "$GLITCHED_CLI")"
+  esc_dir="$(xml_escape "$GLITCHED_DIR")"
+  esc_path="$(xml_escape "$svc_path")"
+  esc_home="$(xml_escape "$HOME")"
+  esc_log="$(xml_escape "$LAUNCHD_LOG")"
+
+  mkdir -p "$(dirname "$LAUNCHD_PLIST")" "$LAUNCHD_LOG_DIR" "$GLITCHED_DIR"
+  cat >"$LAUNCHD_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$LAUNCHD_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$esc_cli</string>
+    <string>serve</string>
+    <string>-dir</string>
+    <string>$esc_dir</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$esc_path</string>
+    <key>HOME</key>
+    <string>$esc_home</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>$esc_log</string>
+  <key>StandardErrorPath</key>
+  <string>$esc_log</string>
+</dict>
+</plist>
+EOF
+}
+
+launchd_target() {
+  printf 'gui/%s/%s' "$(id -u)" "$LAUNCHD_LABEL"
+}
+
+launchd_install() {
+  local domain="gui/$(id -u)"
+  local target
+  target="$(launchd_target)"
+  write_launchd_plist
+  if launchctl print "$target" >/dev/null 2>&1; then
+    launchctl bootout "$target" >/dev/null 2>&1 || true
+    wait_for_daemon_stop
+  fi
+  launchctl bootstrap "$domain" "$LAUNCHD_PLIST"
+  launchctl enable "$target" >/dev/null 2>&1 || true
+}
+
+# --- Linux systemd --user service ---
+
+require_systemd_user() {
+  command -v systemctl >/dev/null 2>&1 || die "systemctl not found"
+  systemctl --user show-environment >/dev/null 2>&1 || die "systemd user manager is not available in this session"
+}
+
+write_systemd_unit() {
+  local svc_path
+  svc_path="$(service_path)"
+  mkdir -p "$(dirname "$SYSTEMD_UNIT_PATH")" "$GLITCHED_DIR"
+  cat >"$SYSTEMD_UNIT_PATH" <<EOF
+[Unit]
+Description=Glitched Engine Daemon
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart="$GLITCHED_CLI" serve -dir "$GLITCHED_DIR"
+Environment="PATH=$svc_path"
+Restart=on-failure
+RestartPreventExitStatus=3
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
+systemd_install() {
+  require_systemd_user
+  write_systemd_unit
+  systemctl --user daemon-reload
+  systemctl --user enable "$SYSTEMD_UNIT" >/dev/null 2>&1 || true
+  systemctl --user restart "$SYSTEMD_UNIT"
+}
+
+# --- Cross-platform daemon commands ---
+
+daemon_install() {
+  [ -x "$GLITCHED_CLI" ] || build_daemon
+  log "Installing and starting daemon service"
+  if [ "$GOOS" = "darwin" ]; then
+    launchd_install
+  else
+    systemd_install
+  fi
+  wait_for_daemon || true
+}
+
+daemon_start() {
+  if [ "$GOOS" = "darwin" ]; then
+    if [ ! -f "$LAUNCHD_PLIST" ]; then
+      daemon_install
+      return
+    fi
+    local domain="gui/$(id -u)" target
+    target="$(launchd_target)"
+    if launchctl print "$target" >/dev/null 2>&1; then
+      launchctl kickstart "$target"
+    else
+      launchctl bootstrap "$domain" "$LAUNCHD_PLIST"
+    fi
+  else
+    if [ ! -f "$SYSTEMD_UNIT_PATH" ]; then
+      daemon_install
+      return
+    fi
+    require_systemd_user
+    systemctl --user start "$SYSTEMD_UNIT"
+  fi
+  wait_for_daemon || true
+}
+
+daemon_stop() {
+  log "Stopping daemon service"
+  if [ "$GOOS" = "darwin" ]; then
+    launchctl bootout "$(launchd_target)" >/dev/null 2>&1 || true
+    wait_for_daemon_stop
+  else
+    require_systemd_user
+    systemctl --user stop "$SYSTEMD_UNIT" 2>/dev/null || true
+  fi
+}
+
+daemon_restart() {
+  [ -x "$GLITCHED_CLI" ] || die "$GLITCHED_CLI not installed (run ./scripts/glitched first)"
+  log "Restarting daemon service"
+  if [ "$GOOS" = "darwin" ]; then
+    launchd_install
+  else
+    systemd_install
+  fi
+  wait_for_daemon || true
+  daemon_status
+}
+
+daemon_uninstall() {
+  log "Uninstalling daemon service (keeping $GLITCHED_DIR data)"
+  if [ "$GOOS" = "darwin" ]; then
+    launchctl bootout "$(launchd_target)" >/dev/null 2>&1 || true
+    rm -f "$LAUNCHD_PLIST"
+  else
+    if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+      systemctl --user disable --now "$SYSTEMD_UNIT" >/dev/null 2>&1 || true
+      rm -f "$SYSTEMD_UNIT_PATH"
+      systemctl --user daemon-reload >/dev/null 2>&1 || true
+    else
+      rm -f "$SYSTEMD_UNIT_PATH"
+    fi
+  fi
+}
+
+daemon_status() {
+  if [ "$GOOS" = "darwin" ]; then
+    if launchctl print "$(launchd_target)" >/dev/null 2>&1; then
+      printf '%-10s %s\n' "service" "launchd loaded ($LAUNCHD_LABEL)"
+    else
+      printf '%-10s %s\n' "service" "launchd not loaded ($LAUNCHD_LABEL)"
+    fi
+  else
+    if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+      local state
+      state="$(systemctl --user is-active "$SYSTEMD_UNIT" 2>/dev/null || true)"
+      printf '%-10s %s\n' "service" "systemd $state ($SYSTEMD_UNIT)"
+    else
+      printf '%-10s %s\n' "service" "systemd user manager unavailable"
+    fi
+  fi
+
+  if [ -x "$GLITCHED_CLI" ]; then
+    "$GLITCHED_CLI" status -dir "$GLITCHED_DIR"
+  else
+    printf '%-10s %s\n' "cli" "not installed at $GLITCHED_CLI"
+  fi
+}
+
+daemon_logs() {
+  if [ "$GOOS" = "darwin" ]; then
+    [ -f "$LAUNCHD_LOG" ] || die "no log file yet at $LAUNCHD_LOG"
+    exec tail -n 100 -f "$LAUNCHD_LOG"
+  else
+    require_systemd_user
+    exec journalctl --user -u "$SYSTEMD_UNIT" -n 100 -f
+  fi
+}
+
+# --- Top-level commands ---
+
+cmd_up() {
+  local no_pull=0 gui_only=0 daemon_only=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --no-pull)     no_pull=1 ;;
+      --gui-only)    gui_only=1 ;;
+      --daemon-only) daemon_only=1 ;;
+      -h|--help)     usage; exit 0 ;;
+      *)             die "unknown option for up: $1" ;;
+    esac
+    shift
+  done
+  if [ "$gui_only" -eq 1 ] && [ "$daemon_only" -eq 1 ]; then
+    die "--gui-only and --daemon-only cannot be used together"
+  fi
+
+  if [ "$no_pull" -eq 0 ]; then
+    pull_latest
+  fi
+
+  if [ "$gui_only" -eq 1 ]; then
+    local build_out="$REPO_DIR/build"
+    build_gui "$build_out"
+    quit_gui
+    swap_installed_gui "$build_out"
+    launch_gui
+    return 0
+  fi
+
+  if [ "$daemon_only" -eq 1 ]; then
+    build_daemon
+    daemon_install
+    daemon_status
+    return 0
+  fi
+
+  # Full update: build both first so a build error never leaves the running app down.
+  build_daemon
+  local build_out="$REPO_DIR/build"
+  build_gui "$build_out"
+
+  # Quit GUI before starting/restarting daemon so an embedded engine releases
+  # engine.lock cleanly.
+  quit_gui
+  swap_installed_gui "$build_out"
+  daemon_install
+  launch_gui
+  daemon_status
+
+  case ":$PATH:" in
+    *":$GLITCHED_BIN_DIR:"*) ;;
+    *)
+      echo ""
+      warn "$GLITCHED_BIN_DIR is not on your PATH; add it to run 'glitched' directly"
+      ;;
+  esac
+}
+
+cmd_dev() {
+  local dev_dir="$GLITCHED_DIR"
+  if [ "$dev_dir" = "$HOME/.glitched" ]; then
+    dev_dir="$HOME/.glitched-dev"
+  fi
+  local dev_out="$REPO_DIR/build/dev"
+  log "Building isolated dev GUI (GLITCHED_DIR=$dev_dir)"
+  build_gui "$dev_out"
+
+  if [ "$GOOS" = "darwin" ]; then
+    local bin="$dev_out/darwin-$GOARCH/Glitched.app/Contents/MacOS/Glitched"
+    [ -x "$bin" ] || die "dev binary not found at $bin"
+    log "Running dev GUI in foreground (Ctrl-C to stop)"
+    exec env GLITCHED_DIR="$dev_dir" "$bin"
+  else
+    local bin="$dev_out/linux-$GOARCH/glitched"
+    [ -x "$bin" ] || die "dev binary not found at $bin"
+    log "Running dev GUI in foreground (Ctrl-C to stop)"
+    exec env GLITCHED_DIR="$dev_dir" "$bin"
+  fi
+}
+
+cmd_daemon() {
+  local action="${1:-status}"
+  shift || true
+  case "$action" in
+    install)   daemon_install ;;
+    start)     daemon_start ;;
+    stop)      daemon_stop ;;
+    restart)   daemon_restart ;;
+    status)    daemon_status ;;
+    logs)      daemon_logs ;;
+    uninstall) daemon_uninstall ;;
+    -h|--help) usage ;;
+    *)         die "unknown daemon action: $action (use install|start|stop|restart|status|logs|uninstall)" ;;
+  esac
+}
+
+main() {
+  local cmd="${1:-up}"
+  case "$cmd" in
+    -h|--help|help)
+      usage
+      ;;
+    up)
+      shift || true
+      cmd_up "$@"
+      ;;
+    --*)
+      # Allow `./scripts/glitched --no-pull` without spelling `up`.
+      cmd_up "$@"
+      ;;
+    gui)
+      shift
+      cmd_up --gui-only "$@"
+      ;;
+    restart)
+      daemon_restart
+      ;;
+    status)
+      daemon_status
+      ;;
+    logs)
+      daemon_logs
+      ;;
+    daemon)
+      shift
+      cmd_daemon "$@"
+      ;;
+    dev)
+      shift
+      cmd_dev "$@"
+      ;;
+    *)
+      die "unknown command: $cmd (run with --help)"
+      ;;
+  esac
+}
+
+main "$@"
