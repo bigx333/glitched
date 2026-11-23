@@ -218,7 +218,7 @@ func threadModel(t thread, m api.ModelRef) modelKey {
 // A model or effort the pickers don't list shows by its own name.
 func (a *app) threadChoice(t thread) choice {
 	m, acc := configured(t)
-	ch := choice{Model: threadModel(t, m), Effort: m.Effort, Fast: m.Fast, Access: accessAuto}
+	ch := choice{Model: threadModel(t, m), Effort: m.Effort, Fast: m.Fast, Access: accessAuto, Follow: m.Model == ""}
 	for name, v := range accessOf {
 		if v == acc {
 			ch.Access = name
@@ -261,9 +261,10 @@ func (a *app) threadControls(t thread, build func()) {
 		return
 	}
 	var c api.ThreadConfigure
-	if after.Model != before.Model {
+	if after.Model != before.Model || before.Follow && !after.Follow {
 		// A model goes with its effort: the engine keeps an effort not
-		// sent, which another client may have changed since.
+		// sent, which another client may have changed since. One the
+		// thread ran as its program's own is the user's once picked.
 		m, _ := a.modelOf(after.Model)
 		c.Model, c.Effort = new(after.Model.ID), new(effortFor(m, after.Effort))
 	}

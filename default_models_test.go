@@ -698,3 +698,100 @@ func TestAFollowingThreadRunsAtItsReportedModelsEfforts(t *testing.T) {
 		t.Errorf("threads.configure refused GPT-6.2 Sol's xhigh: %v", err)
 	}
 }
+
+// Picking the model a following thread's program reported pins it: the
+// thread's later turns name it, in either picker.
+func TestPickingTheReportedModelPinsIt(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		lane := "built-in"
+		if native {
+			lane = "native"
+		}
+		t.Run(lane, func(t *testing.T) {
+			dir := tempDir(t)
+			if err := os.WriteFile(filepath.Join(dir, "composer.json"), []byte(`{"model":{"provider":"codex","id":""}}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			h := startWith(t, dir, withCodex(t, "hi"))
+			allAnswered(h)
+			sendNew(h, "first")
+			h.until("confirmed Sol", func() bool {
+				v := h.a.current().View
+				return v.LastTurn != nil && v.Confirmed.Model != nil && v.Confirmed.Model.Model == "gpt-6.2-sol"
+			})
+			if h.a.current().View.Model.Model != "" {
+				t.Fatal("fixture did not follow")
+			}
+			if native {
+				if err := h.a.plugins.SetEnabled("model-picker", false); err != nil {
+					t.Fatal(err)
+				}
+				h.a.pluginsChanged(nil)
+			}
+			pickerSettle(t, h)
+			h.click("Model")
+			pickerSettle(t, h)
+			h.click("GPT-6.2 Sol")
+			pickerSettle(t, h)
+			h.a.draft = "second"
+			h.a.send(h.a.current())
+			log := os.Getenv(codextest.Log)
+			h.until("next turn/start", func() bool { return len(wireEntries(t, log, "turn/start")) >= 2 })
+			var p map[string]any
+			json.Unmarshal(wireEntries(t, log, "turn/start")[1], &p)
+			if p["model"] != "gpt-6.2-sol" {
+				t.Errorf("clicked Sol; persisted model=%q, next turn model=%v effort=%v", h.a.current().View.Model.Model, p["model"], p["effort"])
+			}
+		})
+	}
+}
+
+// An effort saved in an older spelling runs as its id on a program that
+// matches ids exactly.
+func TestAnEffortSavedInAnOldSpellingRunsAsItsID(t *testing.T) {
+	dir := tempDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "composer.json"), []byte(`{"model":{"provider":"antigravity","id":""},"effort":"Low"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := startWith(t, dir, withAntigravity(t, "gui"))
+	allAnswered(h)
+	if got := h.a.modelRef().Effort; got != "low" {
+		t.Fatalf("picker did not recognize old Low value: %q", got)
+	}
+	sendNew(h, "local fixture")
+	h.until("provider confirmed effort", func() bool { return h.a.current().View.Confirmed.Model != nil })
+	v := h.a.current().View
+	if v.Confirmed.Model.Effort != "low" {
+		t.Errorf("legacy Low persisted as %q and Antigravity confirmed %q", v.Model.Effort, v.Confirmed.Model.Effort)
+	}
+	if len(wireEntries(t, os.Getenv(acptest.Log), "session/prompt")) < 1 {
+		h.until("ACP prompt", func() bool { return len(wireEntries(t, os.Getenv(acptest.Log), "session/prompt")) >= 1 })
+	}
+}
+
+// Changing only a following thread's effort leaves its model to its
+// program.
+func TestAnEffortChangeLeavesTheModelToTheProgram(t *testing.T) {
+	dir := tempDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "composer.json"), []byte(`{"model":{"provider":"codex","id":""}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := startWith(t, dir, withCodex(t, "hi"))
+	allAnswered(h)
+	sendNew(h, "first")
+	h.until("confirmed Sol", func() bool {
+		v := h.a.current().View
+		return v.LastTurn != nil && v.Confirmed.Model != nil && v.Confirmed.Model.Model == "gpt-6.2-sol"
+	})
+	h.a.threadControls(h.a.current(), func() { h.a.effort = "xhigh" })
+	h.until("effort saved", func() bool { return h.a.current().View.Model.Effort == "xhigh" })
+	h.a.draft = "second"
+	h.a.send(h.a.current())
+	log := os.Getenv(codextest.Log)
+	h.until("next turn/start", func() bool { return len(wireEntries(t, log, "turn/start")) >= 2 })
+	var p map[string]any
+	json.Unmarshal(wireEntries(t, log, "turn/start")[1], &p)
+	if p["model"] != nil || p["effort"] != "xhigh" {
+		t.Errorf("effort-only edit; actual model=%v effort=%v", p["model"], p["effort"])
+	}
+}
