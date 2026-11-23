@@ -127,16 +127,17 @@ func (h *Host) createInWorktree(ctx context.Context, c api.Command, b api.Thread
 	short, long, dir := worktreeNames(h.worktrees, top, c.Target, b.Title)
 	branch := ""
 	if _, err := os.Stat(dir); err == nil {
-		w, ok := registered(ctx, top, dir)
-		switch {
-		case !ok:
-			return refuse("%s is there, and isn't a worktree of %s", dir, top)
-		case w.locked:
+		common, _ := git(ctx, top, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		own, ok := ownedBy(ctx, dir, common, c.Target)
+		if _, err := os.Stat(filepath.Join(own, "locked")); own != "" && err == nil {
 			return refuse("the worktree at %s was never finished; it stays for what is in it", dir)
-		case w.branch != short && w.branch != long:
+		}
+		if !ok {
+			return refuse("%s is there, and isn't the thread's worktree of %s", dir, top)
+		}
+		if branch, _ = git(ctx, dir, "branch", "--show-current"); branch != short && branch != long {
 			return refuse("%s is already there and isn't on the thread's branch", dir)
 		}
-		branch = w.branch
 	} else {
 		if _, err := git(ctx, top, "rev-parse", "--verify", "--quiet", "HEAD"); err != nil {
 			return refuse("the repository at %s has no commits yet", top)
@@ -166,7 +167,14 @@ func (h *Host) createInWorktree(ctx context.Context, c api.Command, b api.Thread
 		if _, err := git(ctx, top, "worktree", "add", "--lock", "--reason", "glitched: making", "--no-track", "-b", branch, dir, commit); err != nil {
 			return refuse("%v", err)
 		}
-		if _, err := git(ctx, top, "worktree", "unlock", dir); err != nil {
+		own, err := git(ctx, dir, "rev-parse", "--absolute-git-dir")
+		if err == nil {
+			err = os.WriteFile(filepath.Join(own, ownerFile), []byte(c.Target.String()), 0o644)
+		}
+		if err == nil {
+			_, err = git(ctx, top, "worktree", "unlock", dir)
+		}
+		if err != nil {
 			return refuse("%v", err)
 		}
 	}
@@ -186,38 +194,24 @@ func (h *Host) createInWorktree(ctx context.Context, c api.Command, b api.Thread
 	return r, err
 }
 
-// worktreeEntry is a worktree as git lists it.
-type worktreeEntry struct {
-	branch string
-	locked bool
-}
+// ownerFile, in a worktree's own git folder, names the thread it was made
+// for. Git makes that folder anew for every worktree it adds, even at a
+// path it used before, so the file goes with the worktree it was written
+// for.
+const ownerFile = "glitched-thread"
 
-// registered is dir as a worktree of the repository at top, or its git
-// folder, lists it.
-func registered(ctx context.Context, top, dir string) (worktreeEntry, bool) {
-	out, err := git(ctx, top, "worktree", "list", "--porcelain")
+// ownedBy is whether dir is a worktree of the repository whose git folder
+// is common, made for thread, and its own git folder.
+func ownedBy(ctx context.Context, dir, common string, thread api.ID) (string, bool) {
+	top, err := git(ctx, dir, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return worktreeEntry{}, false
+		return "", false
 	}
-	want, _ := filepath.EvalSymlinks(dir)
-	for _, block := range strings.Split(out, "\n\n") {
-		var w worktreeEntry
-		var path string
-		for _, line := range strings.Split(block, "\n") {
-			switch {
-			case strings.HasPrefix(line, "worktree "):
-				path = strings.TrimPrefix(line, "worktree ")
-			case strings.HasPrefix(line, "branch refs/heads/"):
-				w.branch = strings.TrimPrefix(line, "branch refs/heads/")
-			case line == "locked" || strings.HasPrefix(line, "locked "):
-				w.locked = true
-			}
-		}
-		if real, _ := filepath.EvalSymlinks(path); path != "" && (path == dir || real == want) {
-			return w, true
-		}
-	}
-	return worktreeEntry{}, false
+	own, _ := git(ctx, dir, "rev-parse", "--absolute-git-dir")
+	theirs, _ := git(ctx, dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	real, _ := filepath.EvalSymlinks(dir)
+	owner, _ := os.ReadFile(filepath.Join(own, ownerFile))
+	return own, top == real && theirs == common && string(owner) == thread.String()
 }
 
 // deleteInWorktree deletes the thread c names and, once the delete
@@ -252,25 +246,23 @@ func (h *Host) deleteInWorktree(ctx context.Context, c api.Command) (api.Receipt
 	if err != nil {
 		return refuse("its project's repository at %s can't be read, so the worktree can't be told apart from another", t.Project)
 	}
-	// ours is whether dir is still the thread's worktree, or gone: the
-	// worktree git registered under the folder's name when it made it,
-	// in the project's repository, on the thread's branch.
+	// ours is whether dir is still the worktree made for the thread, in
+	// its project's repository and on its branch, or gone.
 	ours := func(ctx context.Context) bool {
 		if _, err := os.Stat(dir); err != nil {
 			return true
 		}
-		top, err := git(ctx, dir, "rev-parse", "--show-toplevel")
-		own, _ := git(ctx, dir, "rev-parse", "--absolute-git-dir")
+		_, ok := ownedBy(ctx, dir, common, t.ID)
 		cur, _ := git(ctx, dir, "branch", "--show-current")
-		real, _ := filepath.EvalSymlinks(dir)
-		registered, _ := filepath.EvalSymlinks(filepath.Join(common, "worktrees", filepath.Base(dir)))
-		return err == nil && top == real && own == registered && cur == t.Branch
+		return ok && cur == t.Branch
 	}
 	if !ours(ctx) {
 		return refuse("%s is no longer the thread's worktree on %s", dir, t.Branch)
 	}
-	if w, ok := registered(ctx, common, dir); ok && w.locked {
-		return refuse("it is locked; unlock it with git worktree unlock %s first", dir)
+	if own, err := git(ctx, dir, "rev-parse", "--absolute-git-dir"); err == nil {
+		if _, err := os.Stat(filepath.Join(own, "locked")); err == nil {
+			return refuse("it is locked; unlock it with git worktree unlock %s first", dir)
+		}
 	}
 	r, err := h.store.Submit(ctx, c, time.Now())
 	if err != nil {
