@@ -48,6 +48,9 @@ type Agent struct {
 	asked       int
 	granted     *provider.Granted // the last sent
 	ran         *provider.Ran     // the last sent
+	command     bool              // the run is /compact
+	spoke       bool              // the agent answered /compact with text
+	compacted   bool              // the agent said it compacted
 }
 
 var (
@@ -190,6 +193,15 @@ func (g *Agent) queueLocked(events ...provider.Event) {
 func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 	switch a := act.(type) {
 	case provider.Start:
+		if isCompact(a.Text) {
+			ok, err := g.p.offers(ctx, "compact")
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("%s does not offer /compact in this session", g.p.profile.Name)
+			}
+		}
 		return g.start(a.Text)
 	case provider.Interrupt:
 		return g.interrupt(ctx)
@@ -210,15 +222,11 @@ func (g *Agent) start(text string) error {
 	if g.started {
 		return errors.New("acp: the run already started")
 	}
-	trimmed := strings.TrimSpace(text)
-	if strings.EqualFold(trimmed, "/compact") && g.p.lacksCommand("compact") {
-		return fmt.Errorf("%s does not advertise /compact in this session", g.p.profile.Name)
-	}
 	g.started = true
+	g.command = isCompact(text)
 	g.reportLocked()
-	// Never prepend MCP instructions to a slash command (such as /compact),
-	// or the agent would read it as plain text instead of invoking the command.
-	if !g.p.briefed && !strings.HasPrefix(trimmed, "/") {
+	// The command goes as it is, or the agent would read it as text.
+	if !g.p.briefed && !g.command {
 		g.p.briefed = true
 		for i := len(g.spec.MCP) - 1; i >= 0; i-- {
 			if s := g.spec.MCP[i].Instructions; s != "" {
@@ -264,6 +272,15 @@ func (g *Agent) finish(r acpsdk.PromptResponse, err error) {
 	case r.StopReason != acpsdk.StopReasonEndTurn:
 		g.failed = fmt.Errorf("stop reason %q", r.StopReason)
 		end.Outcome, end.Error = api.OutcomeFailed, fmt.Sprintf("%s ended the turn for a reason Glitched doesn't know: %q.", g.p.profile.Name, r.StopReason)
+	}
+	// agy compacts on /compact and says nothing: a command that ends its
+	// turn with no answer did its work, and one it answered did none.
+	if g.command && end.Outcome == api.OutcomeCompleted && !g.compacted {
+		if g.spoke {
+			end.Outcome, end.Error = api.OutcomeFailed, g.p.profile.Name+" answered /compact instead of compacting."
+		} else {
+			g.queueLocked(provider.Context{Compacted: true})
+		}
 	}
 	if err == nil && r.Usage != nil && g.p.profile.TurnUsage {
 		end.Tokens = r.Usage.TotalTokens
@@ -520,6 +537,7 @@ func (g *Agent) update(u acpsdk.SessionUpdate) {
 	switch {
 	case u.AgentMessageChunk != nil:
 		if t := u.AgentMessageChunk.Content.Text; t != nil && t.Text != "" {
+			g.spoke = g.spoke || g.command
 			g.queueLocked(provider.TextDelta{Text: t.Text})
 		}
 	case u.ToolCall != nil:
@@ -554,7 +572,9 @@ func (g *Agent) update(u acpsdk.SessionUpdate) {
 func (g *Agent) usage(u acpsdk.SessionUsageUpdate) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.started && !g.ended && u.Used > 0 {
+	// A compaction's reading is of the request that summarized the
+	// session, not of what the session holds after it.
+	if g.started && !g.ended && u.Used > 0 && !g.command {
 		g.queueLocked(provider.Context{Used: u.Used, Window: u.Size})
 	}
 }
@@ -564,7 +584,8 @@ func (g *Agent) usage(u acpsdk.SessionUsageUpdate) {
 func (g *Agent) compaction(u acpsdk.SessionCompactionUpdate) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.started && !g.ended && u.Status == acpsdk.CompactionStatusCompleted {
+	if g.started && !g.ended && !g.compacted && u.Status == acpsdk.CompactionStatusCompleted {
+		g.compacted = true
 		g.queueLocked(provider.Context{Compacted: true})
 	}
 }
@@ -625,3 +646,7 @@ func (g *Agent) Close(ctx context.Context) error {
 	}
 	return g.p.Close(ctx)
 }
+
+// isCompact is whether text is the /compact command, the one command a
+// run sends as it is.
+func isCompact(text string) bool { return strings.EqualFold(strings.TrimSpace(text), "/compact") }
