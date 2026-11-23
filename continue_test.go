@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
 )
@@ -84,35 +87,63 @@ func TestAMessageReplacesAnUncertainRun(t *testing.T) {
 	}
 }
 
+// A Continue sent from a view the engine has moved past, as a second
+// client's or a stale Retry, is refused: it never stops the run the first
+// Continue started.
+func TestAStaleContinueIsRefused(t *testing.T) {
+	dir, d := lostDir(t, fake.New(fake.Turn(true)), "Stuck")
+	h := start(t, dir)
+	th := h.thread("Stuck")
+	first, second := h.a.continueRun(th), h.a.continueRun(th)
+	refused := func() bool {
+		rej := (*api.RejectedError)(nil)
+		i := slices.IndexFunc(th.Pending, func(p client.Pending) bool { return p.Command == second })
+		return i >= 0 && errors.As(th.Pending[i].Err, &rej)
+	}
+	h.until("the second refused", refused)
+	h.a.backend.Retry(th.env, th.id(), second)
+	h.until("the retry refused", refused)
+	h.until("the first Continue's run waiting on its approval", func() bool {
+		v := th.View
+		return v.Turn != nil && v.Turn.Run == first && v.Run == api.RunWaiting
+	})
+	if qs := queuedOn(t, d, th.id()); len(qs) != 2 {
+		t.Fatalf("queued %+v, want the first message and one Continue", qs)
+	}
+}
+
 // Continue all in the inbox's head continues every thread a restart left
-// uncertain, two at a time: the next starts once one of those at work
-// stops working.
+// uncertain, two at a time: a continued run holds its place while it's
+// live, waiting on the user's answer too, and the next starts once one
+// ends.
 func TestContinueAllContinuesTwoAtATime(t *testing.T) {
-	held := fake.New(fake.Turn(false))
-	held.HoldStart = true
 	titles := []string{"One", "Two", "Three"}
-	dir, _ := lostDir(t, held, titles...)
+	dir, d := lostDir(t, fake.New(fake.Turn(true)), titles...)
 	h := start(t, dir)
 	var ths []thread
 	for _, title := range titles {
 		ths = append(ths, h.thread(title))
 	}
-	state := func(s api.RunState) []thread {
+	in := func(s api.RunState) []thread {
 		return slices.DeleteFunc(slices.Clone(ths), func(th thread) bool { return th.View.Run != s })
 	}
 	h.tt.Advance(time.Second)
 	h.click("Continue all")
-	h.until("two continued", func() bool { return len(state(api.RunStarting)) == 2 })
+	h.until("two continued", func() bool { return len(in(api.RunWaiting)) == 2 })
 	h.tt.Advance(time.Second)
-	if left := state(api.RunUncertain); len(left) != 1 || held.Starts() != 2 {
-		t.Fatalf("%d left uncertain and %d starts, want 1 and 2", len(left), held.Starts())
+	if left := in(api.RunUncertain); len(left) != 1 || !continuable(left[0]) {
+		t.Fatalf("%d left uncertain with two continued runs waiting, want 1 not yet continued", len(left))
 	}
 	if _, ok := h.tt.Find("Continue all"); ok {
 		t.Fatal("Continue all still shows with every lost thread continuing")
 	}
-	h.a.backend.Interrupt(h.local(), state(api.RunStarting)[0].id())
-	h.until("the third continued", func() bool { return len(state(api.RunUncertain)) == 0 && held.Starts() == 3 })
-	if len(h.a.continues) > 2 {
-		t.Fatalf("%d threads still held to continue, want at most the two at work", len(h.a.continues))
+	answered := in(api.RunWaiting)[0]
+	r := answered.View.Requests[0]
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: answered.id(), Body: api.RequestRespond{Request: r.ID, Generation: r.Generation, Answer: json.RawMessage(`{"allow":true}`)}}); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the third continued", func() bool { return len(in(api.RunUncertain)) == 0 })
+	if len(h.a.continues) != 2 {
+		t.Fatalf("%d threads held to continue, want the two live", len(h.a.continues))
 	}
 }

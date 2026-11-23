@@ -100,7 +100,7 @@ func TestContinuingAnUncertainRunResumesItsSession(t *testing.T) {
 	second := &binding{Adapter: fake.New(fake.Turn(false)), id: "sess-1"}
 	n = start(t, path, second)
 	lost := until(t, n.h, thread, "uncertain", func(th api.Thread) bool { return th.Run == api.RunUncertain })
-	r := submit(t, n.h, thread, dispatch(api.ContinueText, api.RestartActive))
+	r := submit(t, n.h, thread, api.MessageDispatch{Text: api.ContinueText, Mode: api.RestartActive, Replaces: lost.Turn.Run})
 	th := until(t, n.h, thread, "the continued run", func(th api.Thread) bool { return idle(th) && th.LastTurn != nil && th.LastTurn.Run == r.Command })
 	if th.LastTurn.Outcome != api.OutcomeCompleted || th.Queued != 0 {
 		t.Fatalf("the continued run ended %+v with %d queued, want completed and none", th.LastTurn, th.Queued)

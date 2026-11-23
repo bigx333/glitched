@@ -110,6 +110,11 @@ const MaxDepth = 4
 type MessageDispatch struct {
 	Text string       `json:"text"`
 	Mode DispatchMode `json:"mode"`
+	// Replaces, with RestartActive, is the uncertain run the message is to
+	// replace: the engine refuses it once that run is no longer the live
+	// one, as when another message replaced it first, rather than stop a
+	// newer run.
+	Replaces ID `json:"replaces,omitzero"`
 }
 
 // TurnInterrupt stops the live run. With Drop, it also cancels the

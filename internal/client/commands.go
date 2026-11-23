@@ -69,6 +69,18 @@ func (m *Manager) Send(e *Env, thread api.ID, text string, mode api.DispatchMode
 	return m.submit(e, thread, api.MessageDispatch{Text: text, Mode: mode})
 }
 
+// Replace sends text in place of the thread's uncertain run as its view
+// shows it, RestartActive: the engine refuses it once that run is no
+// longer the live one, as when another client replaced it first, rather
+// than stop the newer run.
+func (m *Manager) Replace(e *Env, thread api.ID, text string) api.ID {
+	th := e.Threads[thread]
+	if th == nil || th.View.Turn == nil {
+		return api.ID{}
+	}
+	return m.submit(e, thread, api.MessageDispatch{Text: text, Mode: api.RestartActive, Replaces: th.View.Turn.Run})
+}
+
 func (m *Manager) Interrupt(e *Env, thread api.ID) api.ID {
 	return m.submit(e, thread, api.TurnInterrupt{})
 }

@@ -266,6 +266,9 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	if d.t.Access > ceiling() {
 		return rejected("thread access is above the client's ceiling")
 	}
+	if live := d.t.Live(); !m.Replaces.IsZero() && (m.Mode != api.RestartActive || live == nil || live.ID != m.Replaces || live.State != RunUncertain) {
+		return rejected("the run this was to replace has already ended")
+	}
 	// A run left on a settled thread is the one the settle stopped, and a
 	// silent maintenance run (such as idle compaction) cannot be steered.
 	// A message sent while either is live queues right behind it.
