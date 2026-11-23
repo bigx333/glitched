@@ -75,13 +75,17 @@ type worktreeHost struct {
 	root string
 }
 
-func serveWorktrees(t *testing.T) worktreeHost {
+func serveWorktrees(t *testing.T) worktreeHost { return serveWorktreesAsking(t, false) }
+
+// serveWorktreesAsking is serveWorktrees, with turns that wait on an
+// approval while ask.
+func serveWorktreesAsking(t *testing.T, ask bool) worktreeHost {
 	t.Helper()
 	st, err := store.Open(dbPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	ad := &opened{Adapter: fake.New(fake.Turn(false))}
+	ad := &opened{Adapter: fake.New(fake.Turn(ask))}
 	root := filepath.Join(t.TempDir(), "worktrees")
 	h, err := runtime.New(ctx, st, provider.Mux{"fake": ad}, runtime.WithWorktrees(root))
 	if err != nil {
@@ -154,6 +158,12 @@ func TestAWorktreeStartsFromItsBaseInItsSubfolder(t *testing.T) {
 	project := repo(t)
 	sub := filepath.Join(project, "app")
 	os.Mkdir(sub, 0o755)
+	os.WriteFile(filepath.Join(sub, "main.go"), []byte("package app\n"), 0o644)
+	gitIn(t, project, "add", "app")
+	gitIn(t, project, "commit", "-q", "-m", "app")
+	gitIn(t, project, "switch", "-q", "other")
+	gitIn(t, project, "merge", "-q", "main")
+	gitIn(t, project, "switch", "-q", "main")
 	thread := api.NewID()
 	submit(t, w.h, thread, inWorktree(sub, "other"))
 	th := view(t, w.h, thread)
@@ -239,5 +249,133 @@ func TestDeletingAThreadInAWorktree(t *testing.T) {
 	}
 	if !strings.Contains(branches(), dirty.Branch) {
 		t.Errorf("the branch with a commit of its own went:\n%s", branches())
+	}
+}
+
+func refusal(t *testing.T, err error, says string) {
+	t.Helper()
+	var rej *api.RejectedError
+	if !errors.As(err, &rej) || !strings.Contains(rej.Reason, says) {
+		t.Fatalf("got %v, want a refusal saying %q", err, says)
+	}
+}
+
+// Changes git hides by its settings still keep a worktree from a plain
+// removal, and an end the API doesn't name removes nothing.
+func TestAWorktreeWithHiddenChangesIsNotRemoved(t *testing.T) {
+	w := serveWorktrees(t)
+	project := repo(t)
+	gitIn(t, project, "config", "status.showUntrackedFiles", "no")
+	thread := api.NewID()
+	submit(t, w.h, thread, inWorktree(project, ""))
+	th := until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
+	note := filepath.Join(th.Workspace, "notes", "mine.txt")
+	os.MkdirAll(filepath.Dir(note), 0o755)
+	os.WriteFile(note, []byte("mine\n"), 0o644)
+	for _, end := range []api.WorktreeEnd{api.RemoveWorktree, 3} {
+		_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadDelete{Worktree: end}})
+		if err == nil {
+			t.Fatalf("a delete with worktree end %d went", end)
+		}
+		if _, err := os.Stat(note); err != nil || view(t, w.h, thread).Deleted {
+			t.Fatalf("a refused delete with end %d took the thread or its note: %v", end, err)
+		}
+	}
+}
+
+// The worktree of a thread still at work stays: its agent may write
+// there after the host looked.
+func TestTheWorktreeOfAThreadAtWorkIsNotRemoved(t *testing.T) {
+	w := serveWorktreesAsking(t, true)
+	project := repo(t)
+	thread := api.NewID()
+	submit(t, w.h, thread, inWorktree(project, ""))
+	th := until(t, w.h, thread, "the approval", waiting)
+	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadDelete{Worktree: api.RemoveWorktreeChanges}})
+	refusal(t, err, "stop the thread")
+	if _, err := os.Stat(th.Workspace); err != nil {
+		t.Fatalf("the refused delete took the worktree: %v", err)
+	}
+}
+
+// A folder at the worktree's place that isn't the thread's worktree, as
+// another repository's, is never removed for the thread.
+func TestAReplacedWorktreeIsNotRemoved(t *testing.T) {
+	w := serveWorktrees(t)
+	project := repo(t)
+	thread := api.NewID()
+	submit(t, w.h, thread, inWorktree(project, ""))
+	th := until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
+	gitIn(t, project, "worktree", "move", th.Workspace, filepath.Join(t.TempDir(), "moved"))
+	other := repo(t)
+	gitIn(t, other, "worktree", "add", "-q", "-b", th.Branch, th.Workspace)
+	note := filepath.Join(th.Workspace, "theirs.txt")
+	os.WriteFile(note, []byte("theirs\n"), 0o644)
+	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadDelete{Worktree: api.RemoveWorktreeChanges}})
+	refusal(t, err, "is no longer the thread's worktree")
+	if _, err := os.Stat(note); err != nil {
+		t.Fatalf("another repository's checkout lost its file: %v", err)
+	}
+}
+
+// Two threads whose IDs end alike get worktrees of their own.
+func TestThreadsWhoseIDsEndAlikeGetWorktreesOfTheirOwn(t *testing.T) {
+	w := serveWorktrees(t)
+	project := repo(t)
+	a, b := api.ID{6: 1}, api.ID{6: 2}
+	submit(t, w.h, a, inWorktree(project, ""))
+	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: b, Body: inWorktree(project, "")})
+	if err == nil && view(t, w.h, b).Workspace == view(t, w.h, a).Workspace {
+		t.Fatalf("two threads share the worktree %q", view(t, w.h, a).Workspace)
+	}
+}
+
+// A create the engine would refuse runs no git, and the same command ID
+// with another base is a conflict, sent again after the thread's delete
+// gets its receipt and makes no worktree again.
+func TestACreateIsCheckedBeforeGitAndKeepsItsReceipt(t *testing.T) {
+	w := serveWorktrees(t)
+	project := repo(t)
+	bad := inWorktree(project, "")
+	bad.Access = 9
+	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: api.NewID(), Body: bad})
+	refusal(t, err, "unknown access level")
+	if entries, _ := os.ReadDir(w.root); len(entries) != 0 {
+		t.Fatalf("a refused create made %d folders under the worktrees' root", len(entries))
+	}
+
+	thread := api.NewID()
+	c := api.Command{ID: api.NewID(), Target: thread, Body: inWorktree(project, "")}
+	first, err := w.h.Submit(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	th := until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
+	other := c
+	other.Body = inWorktree(project, "other")
+	if _, err := w.h.Submit(ctx, other); !errors.Is(err, api.ErrConflict) {
+		t.Errorf("the same ID with another base: %v, want a conflict", err)
+	}
+	submit(t, w.h, thread, api.ThreadDelete{Worktree: api.RemoveWorktree})
+	again, err := w.h.Submit(ctx, c)
+	if err != nil || again.Committed != first.Committed {
+		t.Errorf("the create again after the delete: %+v, %v; want the first receipt", again, err)
+	}
+	if _, err := os.Stat(th.Workspace); err == nil {
+		t.Errorf("the create again made the worktree again")
+	}
+}
+
+// A thread started from a folder the base doesn't have is refused, and
+// the worktree made for it goes.
+func TestAFolderTheBaseLacksIsRefused(t *testing.T) {
+	w := serveWorktrees(t)
+	project := repo(t)
+	sub := filepath.Join(project, "scratch")
+	os.Mkdir(sub, 0o755)
+	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: api.NewID(), Body: inWorktree(sub, "")})
+	refusal(t, err, "is not a folder of the worktree")
+	if out := gitIn(t, project, "worktree", "list", "--porcelain"); strings.Count(out, "worktree ") != 1 {
+		t.Errorf("the refused create left a worktree:\n%s", out)
 	}
 }
