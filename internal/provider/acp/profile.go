@@ -1,6 +1,8 @@
 package acp
 
 import (
+	"strings"
+
 	"glitched/internal/api"
 	"glitched/internal/provider"
 )
@@ -38,15 +40,20 @@ type Profile struct {
 	// the whole session, so an agent not seen to report a turn's own
 	// reports none.
 	TurnUsage bool
+	// IdleCompacts is whether idle compaction applies to a session on the
+	// model; nil applies it to none.
+	IdleCompacts func(model string) bool
 }
 
 // Antigravity is Google's Antigravity CLI, agy, from the user's own
 // install, with the user's own login and rules.
 var Antigravity = Profile{
 	Provider: "antigravity",
-	Name:     "Antigravity",
-	Binaries: []string{"agy"},
-	Args:     []string{"acp", "--disable-telemetry"},
+	// Its cache rule is Gemini's: a Claude model on agy never compacts.
+	IdleCompacts: func(model string) bool { return strings.HasPrefix(strings.ToLower(model), "gemini") },
+	Name:         "Antigravity",
+	Binaries:     []string{"agy"},
+	Args:         []string{"acp", "--disable-telemetry"},
 	// A stale login must never open a browser tab in the middle of a turn.
 	Env:     map[string]string{"BROWSER": "true"},
 	Install: "Antigravity is not installed.\nInstall its CLI with: curl -fsSL https://antigravity.google/cli/install.sh | bash\nor set its path in Settings › Providers.",

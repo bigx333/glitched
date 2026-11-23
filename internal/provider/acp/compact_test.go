@@ -10,6 +10,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
+	"glitched/internal/provider/acp/acptest"
 )
 
 // Initialize advertises session compaction so ACP agents emit compaction
@@ -77,6 +78,7 @@ func TestResumeOnlyDoesNotFallbackToNewSession(t *testing.T) {
 // prepending instructions, emits Context{Compacted: true}, and still briefs the
 // next normal prompt.
 func TestSlashCompactSkipsInstructionsAndEmitsCompacted(t *testing.T) {
+	t.Setenv(acptest.DefaultModel, "gemini-3-pro")
 	a, log := fake(t, "compact")
 	s := spec(t)
 	first := open(t, a, s)

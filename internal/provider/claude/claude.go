@@ -45,6 +45,9 @@ type Adapter struct {
 	// noAuto is why Claude Code last refused its auto mode, "" since one
 	// took it.
 	noAuto atomic.Pointer[string]
+	// limited is whether Claude Code last said the account nears its
+	// usage limit, which every thread on the account shares.
+	limited atomic.Bool
 }
 
 // keepIdle and keepMax are how long a thread's claude waits for its next
@@ -130,6 +133,14 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	// would start it otherwise needs another one.
 	id, _ := json.Marshal([]any{prog.Path, spec.Workspace, prog.Env, prog.Args, args})
 	key := string(id)
+	// Claude Code's own gates, read now: the user may have turned idle
+	// compaction off since the thread's last run, and the account may near
+	// its limit on another thread's word.
+	if spec.ResumeOnly {
+		if s := idleSettings(prog, spec.Workspace); !s.idle || a.limited.Load() {
+			return nil, provider.ErrDeclined
+		}
+	}
 	keep := func(p *proc) { a.parked().Park(spec.Thread, key, p) }
 	p, ok, err := a.parked().Take(ctx, spec.Thread, key)
 	switch {
@@ -156,6 +167,12 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		return nil, err
 	}
 	p.cache = idleSettings(prog, spec.Workspace)
+	p.cache.limited = &a.limited
+	// A resumed claude knows nothing of the cache its last one wrote: only
+	// a one-hour cache is reported, so one still warm is that.
+	if spec.CacheExpires.After(time.Now()) {
+		p.cache.ttl = time.Hour
+	}
 	if g := grants[spec.Access]; g.Else != "" {
 		if p.noAuto, err = p.switchMode(ctx, g); err != nil {
 			p.Close(context.Background())

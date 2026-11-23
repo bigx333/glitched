@@ -31,7 +31,8 @@ const (
 	Log = "GLITCHED_FAKE_ACP_LOG"
 	// Offered, where set, is the modes a session lists, by comma, in
 	// place of Modes; "none" lists none.
-	Offered = "GLITCHED_FAKE_ACP_MODES"
+	Offered      = "GLITCHED_FAKE_ACP_MODES"
+	DefaultModel = "GLITCHED_FAKE_ACP_DEFAULT_MODEL"
 	// Replay names, for the scenario "replay", a wire capture the fake
 	// answers from as the agent that made it did: lines ">> " the client
 	// sent and "<< " the agent did, a JSON-RPC message each.
@@ -220,7 +221,7 @@ func (f *fake) Initialize(ctx context.Context, p acp.InitializeRequest) (acp.Ini
 	}
 	caps := acp.AgentCapabilities{SessionCapabilities: acp.SessionCapabilities{Close: &acp.SessionCloseCapabilities{}}}
 	switch f.scenario {
-	case "memory", "memory-reject-model", "memory-resume-fails", "memory-load-metadata", "compact", "compact-no-cmd", "compact-agy", "compact-replies", "compact-unlisted":
+	case "memory", "memory-reject-model", "memory-resume-fails", "memory-load-metadata", "compact", "compact-no-cmd", "compact-agy", "compact-replies", "compact-unlisted", "compact-failed":
 		caps.LoadSession = true
 		caps.SessionCapabilities.Resume = &acp.SessionResumeCapabilities{}
 	case "memory-load-only":
@@ -265,12 +266,19 @@ func (f *fake) takeUp(id acp.SessionId, load bool) ([]acp.SessionConfigOption, [
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.model, f.level = Models[0].ID, "high"
+	f.model, f.level = defaultModel(), "high"
 	return f.options(), said, nil
 }
 
 // Models are the fake's: Pro runs at two efforts, Flash at none.
 var Models = []struct{ ID, Name string }{{"fake-pro", "Fake Pro"}, {"fake-flash", "Fake Flash"}}
+
+func defaultModel() string {
+	if m := os.Getenv(DefaultModel); m != "" {
+		return m
+	}
+	return Models[0].ID
+}
 
 func (f *fake) options() []acp.SessionConfigOption {
 	model := acp.SessionConfigOptionCategoryModel
@@ -278,6 +286,9 @@ func (f *fake) options() []acp.SessionConfigOption {
 	var models acp.SessionConfigSelectOptionsUngrouped
 	for _, m := range Models {
 		models = append(models, acp.SessionConfigSelectOption{Value: acp.SessionConfigValueId(m.ID), Name: m.Name})
+	}
+	if m := os.Getenv(DefaultModel); m != "" {
+		models = append(models, acp.SessionConfigSelectOption{Value: acp.SessionConfigValueId(m), Name: m})
 	}
 	out := []acp.SessionConfigOption{{Select: &acp.SessionConfigOptionSelect{
 		Id: "model", Name: "Model", Category: &model, Type: "select",
@@ -312,7 +323,7 @@ func (f *fake) NewSession(ctx context.Context, p acp.NewSessionRequest) (acp.New
 	if f.remembers() {
 		id = acp.SessionId(fmt.Sprintf("session-%d-%d", os.Getpid(), f.sessions))
 	}
-	f.model, f.level = Models[0].ID, "high"
+	f.model, f.level = defaultModel(), "high"
 	f.servers = p.McpServers
 	options := f.options()
 	f.mu.Unlock()
@@ -334,7 +345,7 @@ func (f *fake) NewSession(ctx context.Context, p acp.NewSessionRequest) (acp.New
 
 func (f *fake) sendCommands(ctx context.Context, id acp.SessionId) {
 	switch f.scenario {
-	case "compact":
+	case "compact", "compact-failed":
 		f.send(ctx, id, acp.SessionUpdate{AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
 			AvailableCommands: []acp.AvailableCommand{{Name: "compact", Description: "Compact conversation"}},
 		}})
@@ -346,7 +357,15 @@ func (f *fake) sendCommands(ctx context.Context, id acp.SessionId) {
 		// agy 1.5.15 lists its commands only after it answered the
 		// session's resume or creation.
 		go func() {
-			time.Sleep(200 * time.Millisecond)
+			if gate := os.Getenv(Gate); gate != "" {
+				for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+					if _, err := os.Stat(gate); err == nil {
+						break
+					}
+				}
+			} else {
+				time.Sleep(200 * time.Millisecond)
+			}
 			f.send(context.Background(), id, acp.SessionUpdate{AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
 				AvailableCommands: []acp.AvailableCommand{{Name: "goal"}, {Name: "compact", Description: "Compact the conversation now"}},
 			}})
@@ -430,6 +449,9 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 	sid := p.SessionId
 	end := acp.PromptResponse{StopReason: acp.StopReasonEndTurn}
 	switch {
+	case f.is("compact-failed") && len(p.Prompt) == 1 && p.Prompt[0].Text != nil && p.Prompt[0].Text.Text == "/compact":
+		f.send(ctx, sid, acp.SessionUpdate{CompactionUpdate: &acp.SessionCompactionUpdate{CompactionId: "cmp-1", Status: acp.CompactionStatusFailed}})
+		return end, nil
 	case f.is("compact") && len(p.Prompt) == 1 && p.Prompt[0].Text != nil && p.Prompt[0].Text.Text == "/compact":
 		f.send(ctx, sid, acp.SessionUpdate{CompactionUpdate: &acp.SessionCompactionUpdate{CompactionId: "cmp-1", Status: acp.CompactionStatusInProgress}})
 		f.send(ctx, sid, acp.SessionUpdate{CompactionSummaryChunk: &acp.SessionUpdateCompactionSummaryChunk{CompactionId: "cmp-1", Content: acp.TextBlock("Summary")}})
@@ -703,7 +725,7 @@ func (f *fake) ListSessions(context.Context, acp.ListSessionsRequest) (acp.ListS
 func (f *fake) ResumeSession(ctx context.Context, p acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
 	f.record("session/resume", p)
 	switch f.scenario {
-	case "memory", "memory-reject-model", "memory-load-metadata", "compact", "compact-no-cmd", "compact-agy", "compact-replies", "compact-unlisted":
+	case "memory", "memory-reject-model", "memory-load-metadata", "compact", "compact-no-cmd", "compact-agy", "compact-replies", "compact-unlisted", "compact-failed":
 	case "memory-resume-fails":
 		return acp.ResumeSessionResponse{}, acp.NewInternalError(map[string]any{"message": "Failed to read session " + string(p.SessionId) + "; retry, or load it with session/load"})
 	default:

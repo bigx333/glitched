@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"glitched/internal/provider"
@@ -18,7 +19,7 @@ type cacheState struct {
 	idle    bool          // the CLI's settings leave idle compaction on
 	min     int64         // the context idle compaction waits for
 	ttl     time.Duration // the cache's lifetime, as the last request that wrote it said
-	limited bool          // Claude Code said the account nears its usage limit
+	limited *atomic.Bool  // Claude Code said the account nears its usage limit; the adapter's, shared by its processes
 }
 
 // compactable is when a turn that sent used tokens may compact before
@@ -26,7 +27,7 @@ type cacheState struct {
 // Code's own idle compaction, and only where the user's settings would
 // let Claude Code do it. Zero otherwise.
 func (c *cacheState) compactable(used int64, expires time.Time) time.Time {
-	if c == nil || !c.idle || c.limited || c.ttl != time.Hour || used < c.min {
+	if c == nil || !c.idle || c.limited != nil && c.limited.Load() || c.ttl != time.Hour || used < c.min {
 		return time.Time{}
 	}
 	return expires

@@ -64,6 +64,7 @@ type Host struct {
 	subs    map[*stream]struct{}
 	asks    map[askKey]chan json.RawMessage // credentials requests glitched mcp waits on
 	held    map[string]chan struct{}        // providers Hold holds, each closed on its release
+	sent    map[api.ID]bool                 // compactions compactLoop started, until their start is performed
 	// agents are the runs whose agent may run here: from their start until
 	// it is closed, on past the run's own end.
 	agents map[*liveRun]bool
@@ -124,6 +125,7 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		subs:          map[*stream]struct{}{},
 		asks:          map[askKey]chan json.RawMessage{},
 		held:          map[string]chan struct{}{},
+		sent:          map[api.ID]bool{},
 		compactCheck:  make(chan api.ID, 64),
 		compactRescan: make(chan struct{}, 1),
 		compactDue:    make(chan compactDue, 64),
@@ -405,7 +407,7 @@ func (h *Host) perform(e store.Effect) {
 	var skip engine.Observation
 	if loaded {
 		due, skip = engine.Due(t, e.Body)
-		if b, ok := e.Body.(engine.StartTurn); ok && due && b.ResumeOnly && !h.stillCompacting(t, b) {
+		if b, ok := e.Body.(engine.StartTurn); ok && due && b.ResumeOnly && !h.ownCompaction(b.Run, t) {
 			due, skip = false, engine.Ended{Run: b.Run, Outcome: api.OutcomeInterrupted, Error: errCompactNotDue.Error()}
 		}
 	}
@@ -589,7 +591,7 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	thread := t.ID
 	spec := provider.SessionSpec{
 		Thread: thread, Run: b.Run, Generation: b.Generation, Workspace: b.Workspace, Model: b.Model, Access: b.Access,
-		Session: t.Session, ResumeOnly: b.ResumeOnly,
+		Session: t.Session, ResumeOnly: b.ResumeOnly, CacheExpires: t.Context.CacheExpires,
 	}
 	if h.mcp != nil {
 		spec.MCP = append(spec.MCP, h.mcp.For(thread, b.Access))
@@ -606,6 +608,9 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		spec.MCP = append(spec.MCP, s)
 	}
 	ag, err := h.providers.Open(ctx, spec)
+	if errors.Is(err, provider.ErrDeclined) {
+		return nil, errCompactNotDue
+	}
 	if err != nil {
 		return nil, err
 	}

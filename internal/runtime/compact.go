@@ -16,6 +16,17 @@ func (h *Host) stillCompacting(t engine.Thread, b engine.StartTurn) bool {
 	return h.idleCompact.Load() && engine.CompactDue(t, b.Run, h.clock())
 }
 
+// ownCompaction is whether run is a compaction this host's compactLoop
+// started and may still go out: one an engine left pending before a
+// restart was started outside the loop's count, so it ends unsent.
+func (h *Host) ownCompaction(run api.ID, t engine.Thread) bool {
+	h.mu.Lock()
+	sent := h.sent[run]
+	delete(h.sent, run)
+	h.mu.Unlock()
+	return sent && h.stillCompacting(t, engine.StartTurn{Run: run})
+}
+
 // maxCompactions is how many idle compactions run at once: each resumes
 // a CLI, and many due together, as at boot or after the Mac wakes, would
 // start them all.
@@ -157,10 +168,14 @@ func (h *Host) compactLoop() {
 			}
 			delete(due, next.thread)
 			run := api.NewID()
+			h.mu.Lock()
+			h.sent[run] = true
+			h.mu.Unlock()
 			_, err := h.store.Observe(h.ctx, next.thread, engine.IdleCompact{Run: run, AfterRun: next.afterRun}, h.clock(), 0)
 			switch {
 			case err == nil:
 				running[next.thread] = run
+				continue
 			case errors.Is(err, engine.ErrRefused):
 				// Not yet due by the clock now, as after it stepped back:
 				// the timer goes again.
@@ -168,6 +183,9 @@ func (h *Host) compactLoop() {
 			case h.ctx.Err() == nil:
 				slog.Warn("runtime: idle compact observe", "thread", next.thread, "err", err)
 			}
+			h.mu.Lock()
+			delete(h.sent, run)
+			h.mu.Unlock()
 		}
 	}
 

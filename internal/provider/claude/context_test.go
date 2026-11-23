@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -207,7 +208,7 @@ func TestCacheCreationTTLAndPureCacheRead(t *testing.T) {
 	for name, c := range map[string]cacheState{
 		"idle compaction off":  {idle: false, min: 200_000},
 		"below the threshold":  {idle: true, min: 300_000},
-		"near the usage limit": {idle: true, min: 200_000, limited: true},
+		"near the usage limit": {idle: true, min: 200_000, limited: limitedAccount()},
 	} {
 		cache = &c
 		got = read(turnOn(),
@@ -218,16 +219,22 @@ func TestCacheCreationTTLAndPureCacheRead(t *testing.T) {
 		}
 	}
 
-	cache = &cacheState{idle: true, min: 200_000}
+	cache = &cacheState{idle: true, min: 200_000, limited: new(atomic.Bool)}
 	tn = turnOn()
 	read(tn, line(t, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning"}}`))
-	if !cache.limited {
+	if !cache.limited.Load() {
 		t.Error("a rate_limit_event that isn't allowed left the account clear")
 	}
 	read(tn, line(t, `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}`))
-	if cache.limited {
+	if cache.limited.Load() {
 		t.Error("an allowed rate_limit_event left the account limited")
 	}
 }
 
 const haiku = "claude-haiku-5-5"
+
+func limitedAccount() *atomic.Bool {
+	l := new(atomic.Bool)
+	l.Store(true)
+	return l
+}

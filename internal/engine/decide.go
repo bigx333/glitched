@@ -411,9 +411,20 @@ func (d *decision) interrupt(drop bool) error {
 	case drop || r.State != RunStopping:
 		return d.stop(*r)
 	case r.Signalled:
-		return d.emit(api.TurnUncertain{Run: r.ID})
+		return d.lost(*r)
 	}
 	return nil
+}
+
+// lost is that r's agent no longer answers. The user decides what an
+// uncertain run did, but a silent one asked them nothing and resumed the
+// conversation: it ends, and its agent is closed.
+func (d *decision) lost(r Run) error {
+	if !r.Silent {
+		return d.emit(api.TurnUncertain{Run: r.ID})
+	}
+	d.effects = append(d.effects, CloseAgent{Run: r.ID, Generation: r.Generation})
+	return d.emit(api.TurnEnded{Run: r.ID, Outcome: api.OutcomeFailed, Error: "the compaction could not be stopped"})
 }
 
 func (d *decision) stop(r Run) error {
@@ -692,7 +703,7 @@ func (d *decision) observe(o Observation) error {
 		}
 	case InterruptLost:
 		if isLive(o.Run) && live.State == RunStopping {
-			return d.emit(api.TurnUncertain{Run: o.Run})
+			return d.lost(*live)
 		}
 	case Reconciled:
 		if !isLive(o.Run) {

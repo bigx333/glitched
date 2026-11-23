@@ -378,9 +378,6 @@ func (t *Transcript) apply(e api.Event) {
 		t.end(b.Run, Cancelled, e.At)
 		if ce := t.silent[b.Run]; ce != nil {
 			ce.Running = false
-			if b.Outcome == api.OutcomeCompleted {
-				ce.Compacted = true
-			}
 			delete(t.began, b.Run)
 			t.edited(ce)
 			break
