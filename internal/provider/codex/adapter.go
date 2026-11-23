@@ -237,8 +237,9 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 }
 
 // SkillDelivery is how Codex gets Glitched's skills: an extra root of its
-// skills, which it lists beside its own.
-func (a *Adapter) SkillDelivery() string { return "Codex: in its skill list" }
+// skills, which it lists beside its own, named glitched:<name> by the
+// plugin.json beside them.
+func (a *Adapter) SkillDelivery() string { return "Codex: as glitched:<name> in its skill list" }
 
 // noAuto is why a thread of Codex version's at Approve for me asks the
 // user what auto-review would decide.
