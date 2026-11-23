@@ -67,6 +67,9 @@ type Info struct {
 	Models  []Model `json:"models"`
 	// Path is the program Glitched runs for the provider.
 	Path string `json:"path,omitempty"`
+	// RulesIgnored is that the provider's own deny rules don't hold in
+	// its Glitched runs: at Full access nothing stops a call it makes.
+	RulesIgnored bool `json:"rulesIgnored,omitempty"`
 }
 
 // Model is one a provider's sessions can run. ID is what a session's

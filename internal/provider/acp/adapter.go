@@ -158,7 +158,7 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 	if p.caps.close {
 		p.conn.CloseSession(ctx, acpsdk.CloseSessionRequest{SessionId: p.session})
 	}
-	return provider.Info{Name: a.Profile.Name, Version: p.version, Models: models, Path: bin}, nil
+	return provider.Info{Name: a.Profile.Name, Version: p.version, Models: models, Path: bin, RulesIgnored: a.Profile.RulesIgnored}, nil
 }
 
 // Open runs the run on the thread's agent: the one its last run left,
