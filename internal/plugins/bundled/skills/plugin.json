@@ -1,0 +1,14 @@
+{
+  "id": "skills",
+  "name": "Skills",
+  "description": "The skills Glitched gives a thread's agent, in the thread's header: yours in ~/.glitched/skills and the project's in .glitched/skills, the ones skipped and why, and how the thread's agent gets them. Built into Glitched; make a copy in Settings › Plugins to change it.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "threads:read"],
+  "glitched": {
+    "places": [{ "id": "skills", "at": "thread.header" }],
+    "events": ["place.shown", "place.hidden", "window.focused"]
+  }
+}

@@ -166,14 +166,14 @@ type run struct {
 // but where a test waits less.
 var callTimeout = 30 * time.Second
 
-func signedCopy(t *testing.T) (fs.FS, string) {
+func signedCopy(t *testing.T, id string) (fs.FS, string) {
 	t.Helper()
 	root := t.TempDir()
-	sub, err := fs.Sub(bundled.FS, "pull-requests")
+	sub, err := fs.Sub(bundled.FS, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dst := filepath.Join(root, "pull-requests")
+	dst := filepath.Join(root, id)
 	err = fs.WalkDir(sub, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || p == pack.SignatureFile {
 			return err
@@ -202,7 +202,7 @@ func signedCopy(t *testing.T) (fs.FS, string) {
 func openPullRequests(t *testing.T, work string, gh *github) *pullRequests {
 	t.Helper()
 	p := &pullRequests{t: t, q: make(chan func(), 1024), gh: gh}
-	fsys, release := signedCopy(t)
+	fsys, release := signedCopy(t, "pull-requests")
 	p.h = plugins.Open(t.TempDir(), plugins.Options{
 		Post:        func(fn func()) { p.q <- fn },
 		Logf:        t.Logf,
