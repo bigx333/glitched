@@ -81,7 +81,7 @@ func (a *app) defaultLine(r providerRow) string {
 	if a.model.Provider == r.family.provider {
 		m, _ := a.modelOf(a.model)
 		line := "Default · " + m.short
-		if e := effortLabel(m, a.effort); e != "" {
+		if e := effortLabel(m, effortFor(m, a.effort)); e != "" {
 			line += " · " + e
 		}
 		if gone {
@@ -171,12 +171,13 @@ func (a *app) providerDefault(c *ui.Context, r providerRow) {
 	ours := a.model.Provider == r.family.provider
 	inset(c, "DEFAULT FOR NEW THREADS", func() {
 		optionRow(c, "Default model", "New threads start on it. The composer's picker chooses the same one.", func() {
-			chosen := defaultChoice{a.model, a.effort}
-			sel := ui.SelectBase(c.Key("default"), &chosen)
 			m, _ := a.modelOf(a.model)
+			effort := effortFor(m, a.effort)
+			chosen := defaultChoice{a.model, effort}
+			sel := ui.SelectBase(c.Key("default"), &chosen)
 			label := "Choose a model"
 			if ours {
-				label = m.short + " · " + cmp.Or(effortLabel(m, a.effort), a.effort)
+				label = m.short + " · " + cmp.Or(effortLabel(m, effort), effort)
 			}
 			sel.Trigger.Label("Default model for new threads").Description(a.defaultLine(r)).Padding(5, 8, 5, 10).Gap(6).AlignItems(ui.Center).
 				Radius(6).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Cursor(ui.CursorPointer).Children(func() {
@@ -223,10 +224,10 @@ func (a *app) providerDefault(c *ui.Context, r providerRow) {
 				ui.Divider(c).Background(palette.border).Margin(4, 0)
 				popupLabel(c, "EFFORT")
 				for _, e := range effortsOf(m) {
-					item(defaultChoice{a.model, e.id}, e.label, "", e.id == a.effort)
+					item(defaultChoice{a.model, e.id}, e.label, "", e.id == effort)
 				}
 			})
-			if chosen != (defaultChoice{a.model, a.effort}) {
+			if chosen != (defaultChoice{a.model, effort}) {
 				if chosen.model != a.model {
 					a.chooseModel(chosen.model)
 				}
