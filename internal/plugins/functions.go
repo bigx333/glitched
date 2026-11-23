@@ -76,6 +76,7 @@ globalThis.glitched = Object.freeze({
     list: () => app("projects.list"),
     filter: (keys) => app("projects.filter", { keys: keys ?? [] }),
     add: () => app("projects.add"),
+    clone: () => app("projects.clone"),
   }),
   settings: Object.freeze({
     get: () => host.call("settings"),

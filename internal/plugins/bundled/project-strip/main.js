@@ -1,5 +1,6 @@
 // The sidebar's project strip, as Glitched draws it by default: All, a
-// chip per project that filters the inbox to it, and Add project. The
+// chip per project that filters the inbox to it, and Add project, a menu
+// of adding a folder or cloning a repository. The
 // chips wrap, as many as there are. Copy it in Settings › Plugins, and the
 // copy draws the strip in its place.
 
@@ -43,7 +44,21 @@ function strip(s) {
         children: [{ type: "text", text: "All", fontSize: 11.5, weight: 500 }],
       },
       ...s.projects.map((p, i) => chip(p, i, s)),
-      { type: "button", id: "add", style: "ghost", icon: "plus", label: "Add project", tooltip: "Add project", padding: 4, disabled: s.picking, onClick: "add" },
+      {
+        type: "menu",
+        id: "add",
+        style: "ghost",
+        icon: "plus",
+        label: "Add project",
+        tooltip: "Add project",
+        padding: 4,
+        disabled: s.picking,
+        options: [
+          { value: "folder", label: "Add folder…" },
+          { value: "clone", label: "Clone repository…" },
+        ],
+        onChange: "add",
+      },
     ],
   };
 }
@@ -69,7 +84,8 @@ export async function update({ event }) {
       break;
     }
     case "add":
-      await glitched.projects.add();
+      if (event.value === "clone") await glitched.projects.clone();
+      else await glitched.projects.add();
       break;
   }
   return {};

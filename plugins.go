@@ -569,6 +569,9 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 	case "projects.add":
 		a.addProject()
 		return nil, nil
+	case "projects.clone":
+		a.openClone()
+		return nil, nil
 	case "threads.setDisposition":
 		return a.setDispositionEffect(e.Args)
 	case "models.list":
