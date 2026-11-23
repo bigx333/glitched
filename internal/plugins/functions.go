@@ -15,6 +15,7 @@ import (
 	plugin "github.com/yxxbc/mygo-plugin"
 
 	"glitched/internal/plugins/guard"
+	"glitched/internal/secrets"
 )
 
 // LoadTimeout bounds a module's top level as its runtime starts.
@@ -159,7 +160,10 @@ func (h *Host) functions(in *installed) map[string]plugin.Function {
 			}
 			run := h.opts.Run
 			if run == nil {
-				run = RunProgram
+				denied := []string{secrets.Under(h.state)}
+				run = func(ctx context.Context, id string, allowed []string, args json.RawMessage) (any, error) {
+					return RunProgram(ctx, allowed, denied, args)
+				}
 			}
 			return run(ctx, id, in.ext.Programs, args)
 		},
@@ -194,8 +198,9 @@ func (h *Host) functions(in *installed) map[string]plugin.Function {
 }
 
 // RunProgram is glitched.run: a program the plugin's manifest names, run
-// as the user under the guard's rules, its output as text.
-func RunProgram(ctx context.Context, _ string, allowed []string, raw json.RawMessage) (any, error) {
+// as the user under the guard's rules, kept out of the denied folders,
+// its output as text.
+func RunProgram(ctx context.Context, allowed, denied []string, raw json.RawMessage) (any, error) {
 	var a struct {
 		Program string            `json:"program"`
 		Args    []string          `json:"args"`
@@ -212,7 +217,7 @@ func RunProgram(ctx context.Context, _ string, allowed []string, raw json.RawMes
 	}
 	r, err := guard.Run(ctx, guard.Spec{
 		Program: a.Program, Args: a.Args, Cwd: a.Cwd, Stdin: []byte(a.Stdin), Env: a.Env,
-		Timeout: time.Duration(a.Timeout * float64(time.Second)), Allowed: allowed,
+		Timeout: time.Duration(a.Timeout * float64(time.Second)), Allowed: allowed, Denied: denied,
 	})
 	if errors.Is(err, guard.ErrRefused) {
 		return nil, coded{"refused", err}
