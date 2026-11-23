@@ -494,6 +494,10 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 	case "markdown":
 		ui.Column(kc).LineHeight(1.55).Children(func() { markdown.View(c, n.Text, r.md) })
 	case "badge":
+		if n.Style == "pill" && len(n.Value) > 0 {
+			r.tip(c, meter(kc, n, st), n.Tooltip)
+			return
+		}
 		if n.Style == "pill" {
 			r.tip(c, ui.Text(kc, n.Text).FontSize(11).TextColor(st.Muted).SingleLine().Padding(2, 7).Radius(999).Border(1, st.Border).Shrink(0), n.Tooltip)
 			return
@@ -922,6 +926,44 @@ func (r *renderer) menu(n *widget.Node) func(*ui.Menu) {
 			r.st.MenuEnd(m)
 		}
 	}
+}
+
+// meter is a pill badge with a value: a ring that far round, from the
+// top, before its text, both in its color. The ring is as tall as the
+// text's glyphs, so the pill is as tall as one without it.
+func meter(c *ui.Context, n *widget.Node, st Style) ui.Element {
+	var v float32
+	json.Unmarshal(n.Value, &v)
+	col, ok := st.color(n.Color)
+	if !ok {
+		col = st.Muted
+	}
+	m := ui.Font{Family: c.Theme().Font, Size: 11}.Metrics()
+	d := m.Ascent + m.Descent
+	return ui.Row(c).Gap(4).AlignItems(ui.Center).Padding(2, 7).Radius(999).Border(1, st.Border).Shrink(0).Children(func() {
+		ui.Box(c).Width(d).Height(d).Shrink(0).Draw(func(p *ui.Painter, b ui.Rect) {
+			const width = 1.8
+			track, arc := ring(b, d/2-width/2), ring(b, d/2-width/2)
+			p.StrokePath(track, width, col.Alpha(0.25))
+			if v > 0 {
+				p.StrokePath(arc.Trim(0, v), width, col)
+			}
+		})
+		ui.Text(c, n.Text).FontSize(11).TextColor(col).SingleLine()
+	})
+}
+
+// ring is a circle of radius rad in the middle of b, from its top,
+// clockwise.
+func ring(b ui.Rect, rad float32) *ui.Path {
+	const k = 0.5522847498
+	x, y := b.X+b.W/2, b.Y+b.H/2
+	p := new(ui.Path).MoveTo(x, y-rad)
+	p.CubeTo(x+rad*k, y-rad, x+rad, y-rad*k, x+rad, y)
+	p.CubeTo(x+rad, y+rad*k, x+rad*k, y+rad, x, y+rad)
+	p.CubeTo(x-rad*k, y+rad, x-rad, y+rad*k, x-rad, y)
+	p.CubeTo(x-rad, y-rad*k, x-rad*k, y-rad, x, y-rad)
+	return p
 }
 
 func (r *renderer) tip(c *ui.Context, e ui.Element, tip string) {
