@@ -10,10 +10,10 @@ import (
 	"glitched/internal/client"
 )
 
-// A project is the threads in one workspace, so removing it deletes them,
-// each with the threads under it, and the project goes from the sidebar
-// with its last thread. The folder on disk isn't touched: starting a thread
-// in it again brings the project back.
+// A project is the threads in one workspace, and on this machine a folder
+// added as one, so removing it deletes them, each with the threads under
+// it, and forgets the folder. The folder on disk isn't touched: starting a
+// thread in it again brings the project back.
 
 // projectMenu is a project chip's context menu.
 func (a *app) projectMenu(m *ui.Menu, p *project) {
@@ -129,9 +129,10 @@ func (a *app) projectTrees(p *project) (tops []thread, all []node) {
 }
 
 // removeProject deletes every thread of the project, and with them the
-// threads under them. A draft in its workspace starts over in the home
-// folder, so that the project doesn't come back with the next thread,
-// unless the project is the home folder's, where every new thread starts.
+// threads under them, and forgets the folder if it was added here. A draft
+// in its workspace starts over in the home folder, so that the project
+// doesn't come back with the next thread, unless the project is the home
+// folder's, where every new thread starts.
 func (a *app) removeProject(p *project) {
 	tops, all := a.projectTrees(p)
 	for _, t := range tops {
@@ -139,8 +140,11 @@ func (a *app) removeProject(p *project) {
 	}
 	// Deletes that failed as they were sent, with no engine to take them,
 	// leave the project, and the draft in it.
-	if !slices.ContainsFunc(tops, deleting) {
+	if len(tops) > 0 && !slices.ContainsFunc(tops, deleting) {
 		return
+	}
+	if p.key.server == "" {
+		a.forgetProject(p.key.workspace)
 	}
 	// A draft with no machine is on the first, as current() has it.
 	e := a.fresh.env
@@ -198,6 +202,9 @@ func (a *app) removeAlert(c *ui.Context) {
 	name := a.projectLabel(p)
 	head := "Remove “" + name + "” and its thread?"
 	body := "It's removed from every list and can't be brought back. Its history stays in the engine's log."
+	if len(all) == 0 {
+		head, body = "Remove “"+name+"”?", "It has no threads, so it only leaves the lists."
+	}
 	if len(all) > 1 {
 		head = fmt.Sprintf("Remove “%s” and its %d threads?", name, len(all))
 		body = "They're removed from every list and can't be brought back. Their history stays in the engine's log."

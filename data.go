@@ -537,21 +537,30 @@ func addFiles(files []fileChange, at map[string]int, es []entry) []fileChange {
 	return files
 }
 
-// gather groups every env's threads into projects: this machine's first,
-// then each server's, each machine's by name.
+// gather groups every env's threads into projects, with the folders added
+// on this machine, which may have none: this machine's first, then each
+// server's, each machine's by name.
 func (a *app) gather() []*project {
 	byKey := map[envProject]*project{}
-	for _, t := range a.recent() {
-		if deleting(t) {
-			continue
-		}
-		k := envProject{t.env, keyOf(t.env, t.View.Workspace)}
+	at := func(e *client.Env, workspace string) *project {
+		k := envProject{e, keyOf(e, workspace)}
 		p := byKey[k]
 		if p == nil {
-			p = &project{key: k.key, env: t.env}
+			p = &project{key: k.key, env: e}
 			byKey[k] = p
 		}
-		p.threads = append(p.threads, t)
+		return p
+	}
+	for _, t := range a.recent() {
+		if !deleting(t) {
+			p := at(t.env, t.View.Workspace)
+			p.threads = append(p.threads, t)
+		}
+	}
+	if e := a.localEnv(); e != nil {
+		for _, ap := range a.added {
+			at(e, ap.Workspace)
+		}
 	}
 	var all []*project
 	for _, e := range a.backend.Envs() {
