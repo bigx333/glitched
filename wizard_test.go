@@ -498,9 +498,12 @@ func TestTheWizardClonesOnThisMachine(t *testing.T) {
 }
 
 // chooseParentGives has Choose… give a new folder, Projects, for the
-// clone to go into.
+// clone to go into, made as the picker's New Folder makes it.
 func chooseParentGives(t *testing.T) string {
 	parent := filepath.Join(t.TempDir(), "Projects")
+	if err := os.Mkdir(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	was := chooseCloneParent
 	chooseCloneParent = func(*app) string { return parent }
 	t.Cleanup(func() { chooseCloneParent = was })
@@ -967,5 +970,41 @@ func TestPlacesKeptByLabelAreNoServers(t *testing.T) {
 	}
 	if d, ok := h.a.lastDraft(local); !ok || d.workspace != here {
 		t.Fatalf("this machine's last draft is %+v, %v; want %s", d, ok, here)
+	}
+}
+
+// A folder picked on this machine is the engine's to allow: its state
+// folder, picked as a project or as where a clone goes, is refused with
+// the engine's words, the wizard stays where it was and nothing is kept.
+func TestThePickerCantChooseTheEnginesStateFolder(t *testing.T) {
+	state := inboxDir(t)
+	was, wasParent := chooseFolder, chooseCloneParent
+	chooseFolder = func(*app) string { return state }
+	chooseCloneParent = func(*app) string { return state }
+	t.Cleanup(func() { chooseFolder, chooseCloneParent = was, wasParent })
+	h := start(t, state)
+	newProject(h)
+	h.click("Existing folder")
+	h.until("the refusal", func() bool { return h.a.wizard.failure != "" })
+	h.tt.Frame()
+	if f := h.a.wizard.failure; !strings.Contains(f, "engine's state") || !h.tt.HasText(f) || !showing(h, "Clone a repository") {
+		t.Fatalf("picking the state folder failed with %q, and the window shows %q", f, h.tt.Texts())
+	}
+	if h.a.wizard.folder != "" {
+		t.Fatalf("the wizard took %q", h.a.wizard.folder)
+	}
+	h.click("Clone a repository")
+	parent := h.a.wizard.parent
+	h.click("Choose…")
+	h.until("the refusal", func() bool { return h.a.wizard.failure != "" })
+	h.tt.Frame()
+	if f := h.a.wizard.failure; !strings.Contains(f, "engine's state") || !h.tt.HasText(f) || !showing(h, "Into "+parent) {
+		t.Fatalf("choosing the state folder to clone into failed with %q, and the window shows %q", f, h.tt.Texts())
+	}
+	if ps := addedFile(t, state); len(ps) != 0 {
+		t.Fatalf("projects.json holds %+v", ps)
+	}
+	if _, err := os.Stat(filepath.Join(state, "clone.json")); !os.IsNotExist(err) {
+		t.Fatalf("clone.json is there: %v", err)
 	}
 }

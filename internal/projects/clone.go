@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/url"
 	"os"
@@ -116,12 +117,9 @@ func CloneInto(ctx context.Context, req api.CloneRequest, hide []string, path st
 	if err != nil {
 		return api.Cloned{}, err
 	}
-	if err := refuseHidden(dest, hide); err != nil {
-		return api.Cloned{}, err
-	}
 	ctx, cancel := context.WithTimeout(ctx, CloneTimeout)
 	defer cancel()
-	if err := Clone(ctx, src, dest, path, progress); err != nil {
+	if err := Clone(ctx, src, dest, hide, path, progress); err != nil {
 		return api.Cloned{}, err
 	}
 	return api.Cloned{Path: dest}, nil
@@ -129,21 +127,33 @@ func CloneInto(ctx context.Context, req api.CloneRequest, hide []string, path st
 
 // Clone clones src into dest, a folder that isn't there yet or is empty,
 // with the programs path finds, and says each line they print, with no
-// credentials in them. It clones into a folder of its own beside dest,
-// which goes to dest only once the clone is whole, and is all a clone
-// that fails or is stopped takes away. Its error is the last lines git
-// said, with what to do if it was refused access.
-func Clone(ctx context.Context, src Source, dest, path string, progress func(string)) error {
+// credentials in them. Dest is refused when it is a symlink, or when it
+// is in a folder hide names, as the folder it is in resolves before
+// anything is made. It clones into a folder of its own beside dest, in
+// that resolved folder, which goes to dest only once the clone is whole,
+// and is all a clone that fails or is stopped takes away. Its error is
+// the last lines git said, with what to do if it was refused access.
+func Clone(ctx context.Context, src Source, dest string, hide []string, path string, progress func(string)) error {
+	if info, err := os.Lstat(dest); err == nil && info.Mode()&fs.ModeSymlink != 0 {
+		return errors.New(dest + " is a symlink: choose the folder it points to")
+	}
+	parent, err := resolve(filepath.Dir(dest))
+	if err != nil {
+		return err
+	}
+	real := filepath.Join(parent, filepath.Base(dest))
+	if covers(resolveHidden(hide), real) {
+		return fmt.Errorf("projects: %s: %w", dest, errHidden)
+	}
 	gh, hasGH := guard.Find("gh", path)
 	git, hasGit := guard.Find("git", path)
 	if !hasGit && (src.Repo == "" || !hasGH) {
 		return errors.New(noGit)
 	}
-	parent := filepath.Dir(dest)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return err
 	}
-	if entries, err := os.ReadDir(dest); len(entries) > 0 || err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if entries, err := os.ReadDir(real); len(entries) > 0 || err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return errors.New(dest + " already exists and isn't empty")
 	}
 	env := append(os.Environ(), "PATH="+path, "GIT_TERMINAL_PROMPT=0", "GH_PROMPT_DISABLED=1", "GCM_INTERACTIVE=never")
@@ -193,7 +203,7 @@ func Clone(ctx context.Context, src Source, dest, path string, progress func(str
 	if err == nil {
 		// Renaming onto dest replaces it only while it's an empty folder:
 		// one the user filled meanwhile, or another clone's, stays.
-		if err := os.Rename(stage, dest); err != nil {
+		if err := os.Rename(stage, real); err != nil {
 			if errors.Is(err, fs.ErrExist) {
 				return errors.New(dest + " already exists and isn't empty")
 			}

@@ -79,7 +79,8 @@ type wizard struct {
 	// printed.
 	run  *wizardRun
 	line string
-	// failure is why the last Create or clone failed, "" while none has.
+	// failure is why the last Create or clone failed, or why the engine
+	// refused a folder picked on this machine; "" while none has.
 	failure string
 	// focus is the control each step focuses, which the arrows move.
 	focus string
@@ -252,6 +253,7 @@ func (a *app) wizardPast() {
 // it, and readies what it shows.
 func (a *app) enterStep() {
 	w := &a.wizard
+	w.failure = ""
 	switch w.step {
 	case stepMachine:
 		w.focus = "machine:" + w.machine
@@ -280,7 +282,6 @@ func (a *app) enterStep() {
 		}
 		w.focus = "clone:input"
 	case stepConfirm:
-		w.failure = ""
 		w.focus = "confirm:create"
 		if w.source == sourceClone {
 			if src, ok := projects.ParseSource(w.input); ok && w.name == w.named {
@@ -398,8 +399,8 @@ func (a *app) chooseSource(src wizardSource) {
 }
 
 // pickFolder asks for a folder on this machine, off the main thread, which
-// the picker would block. One picked goes on to Confirm; none leaves the
-// wizard on Source. One picker opens at a time.
+// the picker would block. One picked that the engine lists goes on to
+// Confirm; none leaves the wizard on Source. One picker opens at a time.
 func (a *app) pickFolder() {
 	if a.picking {
 		return
@@ -408,15 +409,36 @@ func (a *app) pickFolder() {
 	go func() {
 		dir := chooseFolder(a)
 		a.post(func() {
-			a.picking = false
-			w := &a.wizard
-			if dir == "" || !w.open || w.step != stepSource || w.machine != "" {
-				return
-			}
-			w.folder = filepath.Clean(dir)
-			a.wizardTo(stepConfirm)
+			a.checkPicked(dir, stepSource, func(dir string) {
+				a.wizard.folder = dir
+				a.wizardTo(stepConfirm)
+			})
 		})
 	}()
+}
+
+// checkPicked has this machine's engine list dir, the folder the system's
+// picker gave on step, and gives use the folder once it does, while the
+// wizard is still on step there. One the engine refuses, as its state
+// folder, stays unused, and the wizard says why.
+func (a *app) checkPicked(dir string, step wizardStep, use func(string)) {
+	e := a.localEnv()
+	if dir == "" || e == nil {
+		a.picking = false
+		return
+	}
+	a.backend.Folders(e, filepath.Clean(dir), func(list api.FolderList, err error) {
+		a.picking = false
+		if w := &a.wizard; !w.open || w.step != step || w.machine != "" {
+			return
+		}
+		if err != nil {
+			a.wizard.failure = a.wizardError(err)
+			return
+		}
+		a.wizard.failure = ""
+		use(list.Path)
+	})
 }
 
 // chooseParent asks for the folder the clone goes into: the system's
@@ -435,10 +457,9 @@ func (a *app) chooseParent() {
 	go func() {
 		dir := chooseCloneParent(a)
 		a.post(func() {
-			a.picking = false
-			if w := &a.wizard; dir != "" && w.open && w.step == stepClone && w.machine == "" {
-				w.parent, w.focus = filepath.Clean(dir), "clone:input"
-			}
+			a.checkPicked(dir, stepClone, func(dir string) {
+				a.wizard.parent, a.wizard.focus = dir, "clone:input"
+			})
 		})
 	}()
 }
@@ -655,6 +676,9 @@ func (a *app) wizardDialog(c *ui.Context) {
 		case stepSource:
 			title("New project on " + a.machineName())
 			a.sourceRows(c)
+			if w.failure != "" {
+				wrapped(w.failure).TextColor(palette.red)
+			}
 		case stepBrowse:
 			if w.source == sourceClone {
 				title("Clone into a folder on " + a.machineName())
@@ -670,6 +694,9 @@ func (a *app) wizardDialog(c *ui.Context) {
 			_, ok := projects.ParseSource(w.input)
 			primary, act, ready = "Next", a.cloneNext, ok
 			a.cloneStep(c, ok)
+			if w.failure != "" {
+				wrapped(w.failure).TextColor(palette.red)
+			}
 		case stepConfirm:
 			title("Create the project")
 			primary, act = "Create", a.createProject
