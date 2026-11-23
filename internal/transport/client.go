@@ -587,6 +587,24 @@ func (e *EndpointClient) Providers(ctx context.Context, fresh bool) ([]ProviderI
 	return out, e.c.call(ctx, "providers", providersQuery{Fresh: fresh}, &out)
 }
 
+// AskCredentials opens a credentials request for an agent and waits for
+// its answer.
+func (e *EndpointClient) AskCredentials(ctx context.Context, a api.Ask) (api.Asked, error) {
+	var out api.Asked
+	return out, e.c.call(ctx, "credentials.ask", a, &out)
+}
+
+// ProvideCredentials gives the engine the values for a credentials
+// request.
+func (e *EndpointClient) ProvideCredentials(ctx context.Context, p api.Provide) error {
+	return e.c.call(ctx, "credentials.provide", p, &struct{}{})
+}
+
+// ForgetCredentials deletes the values a thread's vault holds.
+func (e *EndpointClient) ForgetCredentials(ctx context.Context, thread api.ID) error {
+	return e.c.call(ctx, "credentials.forget", forgetQuery{Thread: thread}, &struct{}{})
+}
+
 func (e *EndpointClient) Submit(ctx context.Context, cmd api.Command) (api.Receipt, error) {
 	var r api.Receipt
 	return r, e.c.call(ctx, "submit", cmd, &r)

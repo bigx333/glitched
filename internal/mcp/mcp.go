@@ -81,7 +81,9 @@ const instructions = `Glitched runs you in a thread. Its MCP server glitched giv
 - Each time a child's turn ends done or failed, its report reaches this thread as a new message, in your next turn. Do not wait or poll for it: carry on, or end your turn.
 - A child that delegates in turn reports each turn it ends done or failed, so it can report before its own children finish and again after. Its latest report is the current one. If you delegate and end your turn while children still work, say so in your reply: that reply is your report to your parent.
 - The user sees each child and can open it. A child cannot get wider permissions than this thread.
-- Use a new client_request_id for each new task, and the same one to retry a call, so a retry does not start a second child.`
+- Use a new client_request_id for each new task, and the same one to retry a call, so a retry does not start a second child.
+
+When you need a secret from the user (an API key, a token, a password), ask with request_credentials, never in chat. The user types the values into a private card; you get back where they are, never the values, and must never print them.`
 
 // Main serves stdin and stdout for the caller its environment names, until
 // stdin closes.
@@ -92,7 +94,7 @@ func Main(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	}
 	ep := transport.NewEndpointClient(transport.Loopback{Network: "unix", Address: engine}, api.ID{})
 	defer ep.Close()
-	return Serve(ctx, stdin, stdout, &Tools{Engine: ep, Origin: o, Plugins: ep})
+	return Serve(ctx, stdin, stdout, &Tools{Engine: ep, Origin: o, Plugins: ep, Secrets: ep})
 }
 
 func fromEnv() (Origin, string, error) {

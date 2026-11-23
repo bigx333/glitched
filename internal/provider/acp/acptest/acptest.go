@@ -89,6 +89,7 @@ type fake struct {
 	model    string
 	level    string
 	sessions int
+	servers  []acp.McpServer // the last session's
 }
 
 var _ acp.Agent = (*fake)(nil)
@@ -291,6 +292,7 @@ func (f *fake) NewSession(ctx context.Context, p acp.NewSessionRequest) (acp.New
 		id = acp.SessionId(fmt.Sprintf("session-%d-%d", os.Getpid(), f.sessions))
 	}
 	f.model, f.level = Models[0].ID, "high"
+	f.servers = p.McpServers
 	options := f.options()
 	f.mu.Unlock()
 	if f.remembers() {
@@ -447,6 +449,24 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 			f.record("child", cmd.Process.Pid)
 		}
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Started a child."))
+	case "credentials":
+		// The agent asks for GLX_PROBE through glitched mcp, then echoes
+		// the value it read, split across two messages a flush apart.
+		result, err := f.askCredentials()
+		f.record("credentials", result)
+		if err != nil {
+			f.send(ctx, sid, acp.UpdateAgentMessageText("The ask failed: "+err.Error()))
+			break
+		}
+		var r struct {
+			Status string
+			Files  map[string]string
+		}
+		json.Unmarshal(result, &r)
+		v, _ := os.ReadFile(r.Files["GLX_PROBE"])
+		f.send(ctx, sid, acp.UpdateAgentMessageText(r.Status+": the key is "+string(v[:len(v)/2])))
+		time.Sleep(150 * time.Millisecond)
+		f.send(ctx, sid, acp.UpdateAgentMessageText(string(v[len(v)/2:])+"."))
 	case "speaks-while-parked":
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Done."))
 		go func() {
@@ -526,4 +546,73 @@ func (f *fake) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (acp.L
 
 func (f *fake) SetSessionMode(context.Context, acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
 	return acp.SetSessionModeResponse{}, acp.NewMethodNotFound("session/set_mode")
+}
+
+// askCredentials calls request_credentials for GLX_PROBE on the session's
+// glitched MCP server, as the real agent would, and returns the text of
+// its result.
+func (f *fake) askCredentials() (json.RawMessage, error) {
+	f.mu.Lock()
+	servers := f.servers
+	f.mu.Unlock()
+	var srv *acp.McpServerStdio
+	for _, s := range servers {
+		if s.Stdio != nil && s.Stdio.Name == "glitched" {
+			srv = s.Stdio
+		}
+	}
+	if srv == nil {
+		return nil, fmt.Errorf("no glitched MCP server in %d", len(servers))
+	}
+	cmd := exec.Command(srv.Command, srv.Args...)
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, Scenario+"=") {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	for _, e := range srv.Env {
+		cmd.Env = append(cmd.Env, e.Name+"="+e.Value)
+	}
+	in, _ := cmd.StdinPipe()
+	out, _ := cmd.StdoutPipe()
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	defer func() { in.Close(); cmd.Wait() }()
+	r := bufio.NewReader(out)
+	call := func(id int, method string, params any) (json.RawMessage, error) {
+		b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+		in.Write(append(b, '\n'))
+		line, err := r.ReadBytes('\n')
+		if err != nil {
+			return nil, err
+		}
+		var reply struct {
+			Result json.RawMessage
+			Error  json.RawMessage
+		}
+		json.Unmarshal(line, &reply)
+		if reply.Error != nil {
+			return nil, fmt.Errorf("%s: %s", method, reply.Error)
+		}
+		return reply.Result, nil
+	}
+	if _, err := call(0, "initialize", map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "fake", "version": "1"}}); err != nil {
+		return nil, err
+	}
+	res, err := call(1, "tools/call", map[string]any{"name": "request_credentials", "arguments": map[string]any{
+		"reason": "probe", "fields": []any{map[string]any{"name": "GLX_PROBE", "label": "Probe key"}}, "client_request_id": "fake-1",
+	}})
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Content []struct{ Text string }
+		IsError bool
+	}
+	json.Unmarshal(res, &result)
+	if len(result.Content) == 0 || result.IsError {
+		return nil, fmt.Errorf("request_credentials: %s", res)
+	}
+	return json.RawMessage(result.Content[0].Text), nil
 }
