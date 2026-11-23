@@ -69,6 +69,7 @@ globalThis.glitched = Object.freeze({
     configure: (thread, options = {}) => app("threads.configure", { ...options, thread }),
     setAccess: (thread, access) => app("threads.setAccess", { thread: thread ?? "", access }),
   }),
+  skills: Object.freeze({ list: (thread) => app("skills.list", { thread }) }),
   models: Object.freeze({
     list: () => app("models.list"),
     ask: (prompt, options = {}) => host.call("models.ask", { ...options, prompt }),

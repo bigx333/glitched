@@ -590,6 +590,14 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		return a.setDispositionEffect(e.Args)
 	case "models.list":
 		return a.modelRecords(), nil
+	case "skills.list":
+		t, err := a.pluginFind(e.Args)
+		if err != nil {
+			return nil, err
+		}
+		return plugins.Pending(func(done func(any, error)) {
+			a.backend.Skills(t.env, t.id(), func(l api.SkillList, err error) { done(l, err) })
+		}), nil
 	case "threads.configure":
 		return a.configureEffect(e.Args)
 	case "threads.setAccess":
