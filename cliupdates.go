@@ -103,10 +103,13 @@ func (a *app) askCLIs() {
 	}
 }
 
-// prune forgets the machines no longer listed, and their updates.
+// prune forgets the machines no longer listed, and their updates, and
+// what an engine that no longer answers for its machine said. A machine
+// no engine has answered for yet keeps when to ask it again.
 func (l *cliLists) prune(envs []*client.Env) {
 	listed := func(e *client.Env) bool {
-		return slices.Contains(envs, e) && (e.Kind == client.Local || l.engine[e] == e.ID)
+		id, answered := l.engine[e]
+		return slices.Contains(envs, e) && (e.Kind == client.Local || !answered || id == e.ID)
 	}
 	maps.DeleteFunc(l.served, func(e *client.Env, _ []transport.ProviderInfo) bool { return !listed(e) })
 	maps.DeleteFunc(l.next, func(e *client.Env, _ time.Time) bool { return !listed(e) })
