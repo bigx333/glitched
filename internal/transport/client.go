@@ -534,7 +534,10 @@ func (st *stream[T]) Close() error {
 // EndpointClient is an api.Endpoint on another node.
 type EndpointClient struct{ c *conn }
 
-var _ api.Endpoint = (*EndpointClient)(nil)
+var (
+	_ api.Endpoint = (*EndpointClient)(nil)
+	_ Projects     = (*EndpointClient)(nil)
+)
 
 func NewEndpointClient(t Transport, machine api.ID) *EndpointClient {
 	return &EndpointClient{dial(t, machine)}
@@ -623,6 +626,32 @@ func (e *EndpointClient) ProvideCredentials(ctx context.Context, p api.Provide) 
 // ForgetCredentials deletes the values a thread's vault holds.
 func (e *EndpointClient) ForgetCredentials(ctx context.Context, thread api.ID) error {
 	return e.c.call(ctx, "credentials.forget", forgetQuery{Thread: thread}, &struct{}{})
+}
+
+// Folders lists a folder on the engine's machine.
+func (e *EndpointClient) Folders(ctx context.Context, q api.FolderQuery) (api.FolderList, error) {
+	var out api.FolderList
+	return out, e.c.call(ctx, "projects.folders", q, &out)
+}
+
+// Clone clones a repository onto the engine's machine, saying each line
+// the clone prints to progress. Its ctx ending stops the clone there.
+func (e *EndpointClient) Clone(ctx context.Context, req api.CloneRequest, progress func(string)) (api.Cloned, error) {
+	st, err := open[cloneItem](ctx, e.c, "projects.clone", req)
+	if err != nil {
+		return api.Cloned{}, err
+	}
+	defer st.Close()
+	for {
+		item, err := st.Next(ctx)
+		switch {
+		case err != nil:
+			return api.Cloned{}, err
+		case item.Path != "":
+			return api.Cloned{Path: item.Path}, nil
+		}
+		progress(item.Line)
+	}
 }
 
 func (e *EndpointClient) Submit(ctx context.Context, cmd api.Command) (api.Receipt, error) {

@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -45,6 +46,9 @@ type Server struct {
 	// Secrets takes the credentials users type for a request, from any
 	// client the server admits.
 	Secrets Secrets
+	// Projects lists the folders on the engine's machine and clones
+	// repositories onto it, for any client the server admits.
+	Projects Projects
 	// Authorize admits a socket whose client proved, in the handshake, that
 	// it holds one of the keys Authorize knows. proved reports whether the
 	// proof was made with a key; Authorize asks it of every key it knows,
@@ -214,7 +218,7 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 		h, known := methods[req.Method]
 		if !known || o != nil {
 			mu.Unlock()
-			send(response{ID: req.ID, Error: &wireError{Code: "bad_request", Message: "unknown method or id in use: " + req.Method}})
+			send(response{ID: req.ID, Error: &wireError{Code: "bad_request", Message: unknownMethod + " or id in use: " + req.Method}})
 			continue
 		}
 		callCtx, stop := context.WithCancel(ctx)
@@ -333,6 +337,72 @@ type Asks interface {
 type Secrets interface {
 	ProvideCredentials(ctx context.Context, p api.Provide) error
 	ForgetCredentials(ctx context.Context, thread api.ID) error
+}
+
+// Projects are what a client adding a project on the engine's machine
+// asks of it.
+type Projects interface {
+	Folders(ctx context.Context, q api.FolderQuery) (api.FolderList, error)
+	// Clone says each line the clone prints to progress, and returns
+	// once it has cloned or failed. A clone whose ctx ends is stopped.
+	Clone(ctx context.Context, req api.CloneRequest, progress func(string)) (api.Cloned, error)
+}
+
+// cloneItem is one item of a projects.clone stream: a line the clone
+// printed, or, last, where it went.
+type cloneItem struct {
+	Line string `json:"line,omitempty"`
+	Path string `json:"path,omitempty"`
+}
+
+var errCloned = errors.New("transport: the clone is done")
+
+// cloneStream runs one clone and gives its lines, then where it went, as
+// a stream's items. The clone stops once the stream's ctx ends, and Close
+// waits for it to have, so a folder it made is gone by then.
+type cloneStream struct {
+	lines  chan string
+	done   chan struct{}
+	cloned api.Cloned
+	err    error
+	given  bool // the item saying where it went was given
+}
+
+func startClone(ctx context.Context, p Projects, req api.CloneRequest) *cloneStream {
+	cs := &cloneStream{lines: make(chan string), done: make(chan struct{})}
+	go func() {
+		defer close(cs.done)
+		cs.cloned, cs.err = p.Clone(ctx, req, func(line string) {
+			select {
+			case cs.lines <- line:
+			case <-ctx.Done():
+			}
+		})
+	}()
+	return cs
+}
+
+func (cs *cloneStream) Next(ctx context.Context) (cloneItem, error) {
+	select {
+	case line := <-cs.lines:
+		return cloneItem{Line: line}, nil
+	case <-cs.done:
+		switch {
+		case cs.err != nil:
+			return cloneItem{}, cs.err
+		case cs.given:
+			return cloneItem{}, errCloned
+		}
+		cs.given = true
+		return cloneItem{Path: cs.cloned.Path}, nil
+	case <-ctx.Done():
+		return cloneItem{}, ctx.Err()
+	}
+}
+
+func (cs *cloneStream) Close() error {
+	<-cs.done
+	return nil
 }
 
 // forgetQuery names the thread whose credentials to forget.
@@ -468,6 +538,12 @@ func (s *Server) methods() map[string]handler {
 		})
 		m["credentials.forget"] = callHandler(func(ctx context.Context, q forgetQuery) (struct{}, error) {
 			return struct{}{}, c.ForgetCredentials(ctx, q.Thread)
+		})
+	}
+	if p := s.Projects; p != nil {
+		m["projects.folders"] = callHandler(p.Folders)
+		m["projects.clone"] = streamHandler(func(ctx context.Context, req api.CloneRequest) (source[cloneItem], error) {
+			return startClone(ctx, p, req), nil
 		})
 	}
 	if h := s.Hub; h != nil {

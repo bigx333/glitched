@@ -166,6 +166,9 @@ type Daemon struct {
 	done       chan struct{}
 	err        error
 	undo       []func() error // run in reverse once serving stops
+	// vault is the folder of the credentials users give agents, which no
+	// client lists or clones into.
+	vault string
 
 	mu        sync.Mutex
 	addrs     []net.Addr
@@ -192,7 +195,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		hubAt = Socket(cfg.HubDir)
 	}
 	ctx, stop := context.WithCancel(ctx)
-	d := &Daemon{stop: stop, done: make(chan struct{})}
+	d := &Daemon{stop: stop, done: make(chan struct{}), vault: secrets.Under(cfg.Dir)}
 	defer func() {
 		if err != nil {
 			stop()
@@ -332,10 +335,10 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	d.undo = append(d.undo, func() error { svc.Close(); return nil })
 	cmds := newCommandLists(ctx, cfg.Providers)
 	ls := &launches{dir: cfg.Dir, mux: cfg.Providers, commands: cmds}
-	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: cmds, Launches: ls, Asks: h, Secrets: h}}
+	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: cmds, Launches: ls, Asks: h, Secrets: h, Projects: endpoint{h, d, false}}}
 	g := &grants{dir: cfg.Dir, base: ctx}
 	tailnetServer := func(tn transport.Transport) *transport.Server {
-		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Launches: ls, Secrets: h, Authorize: g.authorize}
+		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Launches: ls, Secrets: h, Projects: endpoint{h, d, true}, Authorize: g.authorize}
 	}
 	type unbound struct {
 		tn  transport.Tailnet

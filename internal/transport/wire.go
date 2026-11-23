@@ -60,6 +60,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/coder/websocket"
 
@@ -121,6 +122,13 @@ type wireError struct {
 	Acked   uint64 `json:"acked,omitempty"`
 }
 
+// ErrUnknownMethod is a call the engine doesn't serve, as one older than
+// the call answers it. Every engine has answered it with a bad_request
+// whose message starts with unknownMethod.
+var ErrUnknownMethod = errors.New("transport: the engine doesn't serve this call")
+
+const unknownMethod = "unknown method"
+
 var sentinels = []struct {
 	code string
 	err  error
@@ -178,6 +186,9 @@ func (we *wireError) err() error {
 		if we.Code == s.code {
 			return s.err
 		}
+	}
+	if we.Code == "bad_request" && strings.HasPrefix(we.Message, unknownMethod) {
+		return fmt.Errorf("%w: %s", ErrUnknownMethod, we.Message)
 	}
 	return fmt.Errorf("transport: remote %s: %s", we.Code, we.Message)
 }

@@ -1,0 +1,81 @@
+package client
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"glitched/internal/api"
+	"glitched/internal/projects"
+	"glitched/internal/transport"
+)
+
+// ErrTooOld is an engine older than the call asked of it, which it can't
+// answer until Glitched on its machine is updated.
+var ErrTooOld = errors.New("client: the engine is too old for this; update Glitched on its machine")
+
+// foldersTimeout bounds a listing a little past the engine's own bound,
+// so that the engine says why it gave up.
+const foldersTimeout = 15 * time.Second
+
+// Folders lists the folders in path on e's machine; done gets them, or
+// why not, on the UI thread.
+func (m *Manager) Folders(e *Env, path string, done func(api.FolderList, error)) {
+	p, err := projectsOf(e)
+	if err != nil {
+		done(api.FolderList{}, err)
+		return
+	}
+	ectx := e.ctx
+	m.wg.Go(func() {
+		ctx, cancel := context.WithTimeout(ectx, foldersTimeout)
+		defer cancel()
+		list, err := p.Folders(ctx, api.FolderQuery{Path: path})
+		err = tooOld(err)
+		m.post(ectx, func() { done(list, err) })
+	})
+}
+
+// Clone clones a repository onto e's machine. progress gets each line
+// the clone prints and done how it ended, both on the UI thread. cancel
+// stops the clone, which takes away the folder it made; done then gets
+// context.Canceled.
+func (m *Manager) Clone(e *Env, req api.CloneRequest, progress func(string), done func(api.Cloned, error)) (cancel func()) {
+	p, err := projectsOf(e)
+	if err != nil {
+		done(api.Cloned{}, err)
+		return func() {}
+	}
+	ectx := e.ctx
+	// A minute past the clone's own bound, so the engine says it gave up.
+	ctx, cancel := context.WithTimeout(ectx, projects.CloneTimeout+time.Minute)
+	m.wg.Go(func() {
+		defer cancel()
+		cloned, err := p.Clone(ctx, req, func(line string) {
+			m.post(ectx, func() { progress(line) })
+		})
+		err = tooOld(err)
+		m.post(ectx, func() { done(cloned, err) })
+	})
+	return cancel
+}
+
+// projectsOf is the engine e is connected to, as Projects.
+func projectsOf(e *Env) (transport.Projects, error) {
+	s := e.session
+	if s == nil {
+		return nil, errNoEngine
+	}
+	p, ok := s.ep.(transport.Projects)
+	if !ok {
+		return nil, ErrTooOld
+	}
+	return p, nil
+}
+
+func tooOld(err error) error {
+	if errors.Is(err, transport.ErrUnknownMethod) {
+		return ErrTooOld
+	}
+	return err
+}
