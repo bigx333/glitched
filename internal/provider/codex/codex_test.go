@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -392,6 +393,31 @@ func TestMessagesStayApart(t *testing.T) {
 			t.Errorf("%s: text %q, want %q", scenario, got, want)
 		}
 		closeRun(t, g)
+	}
+}
+
+// Each update_plan is the run's plan, whole; the plan's item is no step.
+func TestAPlanUpdateIsThePlan(t *testing.T) {
+	a, _ := fake(t, "plan")
+	g := open(t, a, spec(t))
+	do(t, g, provider.Start{Text: "hi"})
+	var plans []provider.Plan
+	var work []provider.Work
+	for _, e := range turn(t, g) {
+		switch e := e.(type) {
+		case provider.Plan:
+			plans = append(plans, e)
+		case provider.Work:
+			work = append(work, e)
+		}
+	}
+	closeRun(t, g)
+	want := []provider.Plan{
+		{Steps: []api.PlanStep{{Text: "Read the code", Status: api.PlanActive}, {Text: "Fix the bug", Status: api.PlanPending}}},
+		{Steps: []api.PlanStep{{Text: "Read the code", Status: api.PlanDone}, {Text: "Fix the bug", Status: api.PlanActive}}},
+	}
+	if !reflect.DeepEqual(plans, want) || len(work) != 0 {
+		t.Errorf("the turn reported plans %+v and steps %+v, want %+v and no step", plans, work, want)
 	}
 }
 

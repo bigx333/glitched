@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"syscall"
@@ -611,6 +612,35 @@ func TestATurnStreamsIntoTheThread(t *testing.T) {
 	}
 	if !strings.Contains(got.work[3].Output, "denied this tool call") {
 		t.Errorf("the denied write shows %q, want the reason glitched gave", got.work[3].Output)
+	}
+}
+
+// Each TodoWrite that succeeds is the thread's plan, whole, and no step of
+// the work log; a denied or malformed one is no plan, an empty list clears
+// it, and a subagent's own todo list stays out of the thread.
+func TestTodoWriteIsThePlan(t *testing.T) {
+	replay(t, "todo", "")
+	h := host(t, nil)
+	got := turn(t, h, newThread(t, h, api.AccessAsk), "Say hi in three words.")
+	want := []api.PlanUpdated{
+		{Steps: []api.PlanStep{{Text: "Read the code", Status: api.PlanActive}, {Text: "Fix the bug", Status: api.PlanPending}, {Text: "Run the tests", Status: api.PlanPending}}},
+		{Steps: []api.PlanStep{{Text: "Read the code", Status: api.PlanDone}, {Text: "Fix the bug", Status: api.PlanActive}, {Text: "Run the tests", Status: api.PlanPending}}},
+		{},
+	}
+	for i := range got.plans {
+		got.plans[i].Run = api.ID{}
+		if len(got.plans[i].Steps) == 0 {
+			got.plans[i].Steps = nil
+		}
+	}
+	if !reflect.DeepEqual(got.plans, want) {
+		t.Errorf("plans %+v, want %+v", got.plans, want)
+	}
+	if len(got.work) != 0 {
+		t.Errorf("work items %+v, want none: TodoWrite shows as the plan", got.work)
+	}
+	if got.ended.Outcome != api.OutcomeCompleted || got.text != "Hi there, friend." {
+		t.Errorf("turn ended %+v saying %q, want it completed as the tape has it", got.ended, got.text)
 	}
 }
 

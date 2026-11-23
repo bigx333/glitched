@@ -98,6 +98,26 @@ func TestRestoringARunningRunKeepsItsRevision(t *testing.T) {
 	}
 }
 
+// A plan is the transcript's alone, as a work item is: the live run's
+// reaches the log and leaves the thread's state, and its revision, as they
+// were; one of a run that ended is dropped.
+func TestAPlanIsTheLiveRunsAndChangesNoState(t *testing.T) {
+	f, run := running(t)
+	before := f.th
+	plan := api.PlanUpdated{Run: run, Steps: []api.PlanStep{{Text: "Read the code", Status: api.PlanActive}, {Text: "Fix the bug"}}}
+	evs := f.observe(engine.Plan{Plan: plan})
+	if len(evs) != 1 || !reflect.DeepEqual(evs[0].Body, plan) {
+		t.Fatalf("the live run's plan recorded %+v, want one plan.updated", evs)
+	}
+	if after := f.th; after.Revision != before.Revision || !reflect.DeepEqual(after.Runs, before.Runs) || !reflect.DeepEqual(after.Queue, before.Queue) {
+		t.Fatalf("a plan changed the thread: revision %d, runs %+v; want revision %d, runs %+v", after.Revision, after.Runs, before.Revision, before.Runs)
+	}
+	f.observe(engine.Ended{Run: run, Outcome: api.OutcomeCompleted})
+	if evs := f.observe(engine.Plan{Plan: plan}); len(evs) != 0 {
+		t.Fatalf("a plan of a run that ended recorded %+v, want nothing", evs)
+	}
+}
+
 func TestObserveReturnsWhatTheTablesRefuse(t *testing.T) {
 	f, run := running(t)
 	steer := f.must(dispatch("hurry", api.SteerActive))

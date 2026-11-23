@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -222,6 +223,27 @@ func TestToolCallsAreSteps(t *testing.T) {
 		if w != want[i] {
 			t.Errorf("step %d: %+v, want %+v", i, w, want[i])
 		}
+	}
+}
+
+// Each plan the agent sends is the run's plan, whole.
+func TestAPlanIsThePlan(t *testing.T) {
+	a, _ := fake(t, "plan")
+	g := open(t, a, spec(t))
+	do(t, g, provider.Start{Text: "Plan it."})
+	var plans []provider.Plan
+	for _, e := range turn(t, g) {
+		if p, ok := e.(provider.Plan); ok {
+			plans = append(plans, p)
+		}
+	}
+	closeRun(t, g)
+	want := []provider.Plan{
+		{Steps: []api.PlanStep{{Text: "Read the code", Status: api.PlanActive}, {Text: "Fix the bug", Status: api.PlanPending}}},
+		{Steps: []api.PlanStep{{Text: "Read the code", Status: api.PlanDone}, {Text: "Fix the bug", Status: api.PlanActive}}},
+	}
+	if !reflect.DeepEqual(plans, want) {
+		t.Errorf("the turn reported plans %+v, want %+v", plans, want)
 	}
 }
 

@@ -239,15 +239,16 @@ var tools = map[string]tool{
 type turn struct {
 	workspace    string
 	now          func() time.Time
-	steps        []provider.Work // tool uses still open, in the order they opened
-	texted       bool            // a text block already streamed
-	signedOut    string          // what Claude Code said when the API refused its login
-	tokens       int64           // what the results before the last one used
-	used         int64           // the context the turn's last request sent; 0 before one, or since a compaction
-	model        string          // the model that request went to
-	cacheExpires time.Time       // when that request's prompt cache expires; zero when unknown
-	cache        *cacheState     // the process's, which outlives the turn; nil in tests that need none
-	interrupted  bool            // the user stopped the turn
+	steps        []provider.Work          // tool uses still open, in the order they opened
+	plans        map[string]provider.Plan // TodoWrite uses awaiting their results, by tool use
+	texted       bool                     // a text block already streamed
+	signedOut    string                   // what Claude Code said when the API refused its login
+	tokens       int64                    // what the results before the last one used
+	used         int64                    // the context the turn's last request sent; 0 before one, or since a compaction
+	model        string                   // the model that request went to
+	cacheExpires time.Time                // when that request's prompt cache expires; zero when unknown
+	cache        *cacheState              // the process's, which outlives the turn; nil in tests that need none
+	interrupted  bool                     // the user stopped the turn
 }
 
 func newTurn(workspace string) *turn {
@@ -268,12 +269,22 @@ func (t *turn) read(m message) []provider.Event {
 				t.signedOut += b.text()
 			}
 		}
-		// AskUserQuestion shows as its question card, not as a step.
+		// AskUserQuestion shows as its question card, and TodoWrite as
+		// the plan, not as steps.
 		var evs []provider.Event
 		if m.Message != nil {
 			evs = t.sent(&m.Message.request)
 		}
 		for _, b := range m.content() {
+			if b.Type == "tool_use" && b.Name == planTool {
+				if p, ok := plan(b); ok {
+					if t.plans == nil {
+						t.plans = map[string]provider.Plan{}
+					}
+					t.plans[b.ID] = p
+				}
+				continue
+			}
 			if b.Type == "tool_use" && b.Name != askTool {
 				w := t.open(b)
 				t.steps = append(t.steps, w)
@@ -284,6 +295,15 @@ func (t *turn) read(m message) []provider.Event {
 	case "user":
 		var evs []provider.Event
 		for _, b := range m.content() {
+			// A plan is the thread's once its TodoWrite succeeds: one the
+			// user denied, or the tool refused, never was.
+			if p, ok := t.plans[b.ToolUseID]; ok && b.Type == "tool_result" {
+				delete(t.plans, b.ToolUseID)
+				if !b.IsError {
+					evs = append(evs, p)
+				}
+				continue
+			}
 			i := slices.IndexFunc(t.steps, func(w provider.Work) bool { return w.Item == b.ToolUseID })
 			if b.Type != "tool_result" || i < 0 {
 				continue
@@ -361,6 +381,28 @@ func (t *turn) open(b block) provider.Work {
 		w.Title += " " + arg
 	}
 	return w
+}
+
+// planTool is Claude Code's tool that writes its todo list, the whole
+// list each time.
+const planTool = "TodoWrite"
+
+// plan is the todo list a TodoWrite use writes, if its input holds one.
+func plan(b block) (provider.Plan, bool) {
+	var input struct {
+		Todos []struct {
+			Content string `json:"content"`
+			Status  string `json:"status"`
+		} `json:"todos"`
+	}
+	if err := json.Unmarshal(b.Input, &input); err != nil || input.Todos == nil {
+		return provider.Plan{}, false
+	}
+	p := provider.Plan{Steps: make([]api.PlanStep, len(input.Todos))}
+	for i, td := range input.Todos {
+		p.Steps[i] = api.PlanStep{Text: td.Content, Status: provider.PlanStatus(td.Status)}
+	}
+	return p, true
 }
 
 // rel is path as the workspace sees it, when it is inside.

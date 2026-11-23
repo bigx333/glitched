@@ -211,6 +211,17 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 			a.usagePill(c, t)
 		}
 		drew := headerDrew{thread: t.id(), narrow: narrow, step: give, left: left, right: right, pills: pills}
+		drew.plan = t.Transcript != nil && t.Transcript.Plan != nil
+		drew.planV = b2i(give >= giveCompactPlan)
+		var plan *ui.Rect
+		if drew.plan && give < givePlan {
+			drew.planShown = w.plan[drew.planV] >= 0
+			at := a.planPill(c, t, drew.planV == 1, drew.planShown).Bounds()
+			plan = &at
+		} else {
+			// No copy is drawn: the plugin hears its copy went.
+			a.pluginComponent(c, "thread.header.plan", &t)
+		}
 		var slot float32
 		switch {
 		case t.id().IsZero():
@@ -251,8 +262,9 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 		a.pluginComponent(c, "thread.header.actions", &t, cp)
 		// What this frame lays out but the header hasn't measured, the next
 		// frame measures, and draws with: the window may not ask for one.
-		unmeasured := w.base[b2i(narrow)] < 0 || drew.actionsDrawn && !drew.actionsShown || drew.slotDrawn && !drew.slotShown
-		if g.measure(head.Bounds(), heading.Bounds().W, spacer.Bounds().W, actions.Bounds(), slot) || unmeasured {
+		unmeasured := w.base[b2i(narrow)] < 0 || drew.actionsDrawn && !drew.actionsShown || drew.slotDrawn && !drew.slotShown ||
+			drew.plan && give < givePlan && !drew.planShown
+		if g.measure(head.Bounds(), heading.Bounds().W, spacer.Bounds().W, actions.Bounds(), slot, plan) || unmeasured {
 			c.Invalidate()
 		}
 		g.drew = drew
@@ -293,15 +305,19 @@ const (
 )
 
 // What the header gives way, in order, while its row doesn't fit: the
-// actions to their icons, the project's and the machine's pills, the
-// branch's, the plugins' copies to their smallest, then those copies.
-// Under 700 points it starts with the pills gone and the actions as icons.
+// actions to their icons, the plan's pill to its count, the project's and
+// the machine's pills, the branch's, the plugins' copies to their
+// smallest, the plan's pill, then those copies. Under 700 points it
+// starts with the pills gone, the actions as icons and the plan as its
+// count.
 const (
 	giveNone = iota
 	giveActions
+	giveCompactPlan
 	giveProject
 	giveBranch
 	giveCompactPlaces
+	givePlan
 	givePlaces
 )
 
@@ -324,26 +340,29 @@ type headerGive struct {
 }
 
 // headerWidths are what the header measured of a thread's row, -1 for
-// what it hasn't: base, the row but its title, pills, copies and actions,
-// narrow and not; the slot's copies full and smallest, gaps included; the
-// actions with their labels and as icons, with the gap before them.
+// what it hasn't: base, the row but its title, pills, copies, plan and
+// actions, narrow and not; the slot's copies full and smallest, gaps
+// included; the plan's pill with its step and as its count, and the
+// actions with their labels and as icons, each with the gap before it.
 type headerWidths struct {
 	base    [2]float32
 	slot    [2]float32
+	plan    [2]float32
 	actions [2]float32
 }
 
-// headerDrew is what a frame drew of the header: the copies and the
-// actions at which of their widths, whether drawn for it, and whether in
-// the row.
+// headerDrew is what a frame drew of the header: the copies, the plan and
+// the actions at which of their widths, whether drawn for it, and whether
+// in the row; and whether the thread has a plan.
 type headerDrew struct {
 	thread                     api.ID
 	narrow                     bool
 	step                       int
 	left, right                float32
 	pills                      headerPills
-	slotV, actionsV            int
+	slotV, planV, actionsV     int
 	slotDrawn, slotShown       bool
+	plan, planShown            bool
 	actionsDrawn, actionsShown bool
 }
 
@@ -362,6 +381,9 @@ func (w *headerWidths) row(k int, narrow bool, p headerPills) float32 {
 	if k < givePlaces {
 		r += max(w.slot[min(k/giveCompactPlaces, 1)], 0)
 	}
+	if k < givePlan {
+		r += max(w.plan[b2i(k >= giveCompactPlan)], 0)
+	}
 	return r + max(w.actions[min(k, giveActions)], 0)
 }
 
@@ -379,7 +401,7 @@ func (g *headerGive) choose(thread api.ID, narrow bool, room, title float32, p h
 		if len(g.seen) >= 64 || g.seen == nil {
 			g.seen = map[api.ID]*headerWidths{}
 		}
-		g.seen[thread] = &headerWidths{base: [2]float32{-1, -1}, slot: [2]float32{-1, -1}, actions: [2]float32{-1, -1}}
+		g.seen[thread] = &headerWidths{base: [2]float32{-1, -1}, slot: [2]float32{-1, -1}, plan: [2]float32{-1, -1}, actions: [2]float32{-1, -1}}
 	}
 	w := g.seen[thread]
 	least := giveNone
@@ -403,9 +425,11 @@ func (g *headerGive) choose(thread api.ID, narrow bool, room, title float32, p h
 
 // measure keeps what the last frame's layout says of the row it drew: h,
 // the row's bounds, title and spacer the widths of its title and of its
-// spacer, actions the actions' bounds, and slot the slot's copies' width.
-// It says whether that changed what the header knows.
-func (g *headerGive) measure(h ui.Rect, title, spacer float32, actions ui.Rect, slot float32) bool {
+// spacer, actions the actions' bounds, slot the slot's copies' width and
+// plan the plan's pill's bounds, nil if this frame left it out. It says
+// whether that changed what the header knows. A thread's plan gone, it
+// forgets the pill's widths, which the next plan's needn't share.
+func (g *headerGive) measure(h ui.Rect, title, spacer float32, actions ui.Rect, slot float32, plan *ui.Rect) bool {
 	d := g.drew
 	w := g.seen[d.thread]
 	if w == nil || d.thread != g.thread || h.W <= 0 {
@@ -423,6 +447,13 @@ func (g *headerGive) measure(h ui.Rect, title, spacer float32, actions ui.Rect, 
 	if d.slotDrawn && d.step < givePlaces {
 		set(&w.slot[d.slotV], slot)
 	}
+	switch {
+	case !d.plan:
+		set(&w.plan[0], -1)
+		set(&w.plan[1], -1)
+	case d.step < givePlan && plan != nil:
+		set(&w.plan[d.planV], plan.W+headerGap)
+	}
 	end := h.X + h.W - d.right
 	if d.actionsShown {
 		end = max(end, actions.X+actions.W)
@@ -436,6 +467,9 @@ func (g *headerGive) measure(h ui.Rect, title, spacer float32, actions ui.Rect, 
 	}
 	if d.slotShown && d.step < givePlaces {
 		base -= slot
+	}
+	if d.planShown {
+		base -= w.plan[d.planV]
 	}
 	if d.actionsShown {
 		base -= actions.W + headerGap
@@ -900,7 +934,7 @@ type timelineMessage struct {
 	At time.Time `json:"at,omitzero"`
 }
 
-var entryKindNames = map[entryKind]string{entryUser: "user", entryAssistant: "assistant", entryWork: "work", entryFailed: "failed", entryError: "error"}
+var entryKindNames = map[entryKind]string{entryUser: "user", entryAssistant: "assistant", entryWork: "work", entryPlan: "plan", entryFailed: "failed", entryError: "error"}
 
 // transcriptBody draws the timeline row rs.es[i], which body,
 // transcript.body, places. Bare, it draws only what the row says, with
@@ -964,6 +998,8 @@ func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body *widg
 		})
 	case entryWork:
 		a.workLog(c, t, e.key, e, rs.files)
+	case entryPlan:
+		a.planCard(c, t, e)
 	case entryFailed, entryError:
 		if bare {
 			inset(ui.Text(c, e.text).FontSize(12).TextColor(palette.red))

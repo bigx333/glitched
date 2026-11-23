@@ -278,6 +278,24 @@ type Work struct {
 	Output            string
 }
 
+// Plan is the plan the agent works to, whole, as it last said it: an
+// adapter sends it each time the agent changes it, and one with no steps
+// when the agent clears it.
+type Plan struct{ Steps []api.PlanStep }
+
+// PlanStatus is a step's status as an agent names it: in_progress or
+// inProgress is active, completed done, and anything else, as cancelled
+// or a status Glitched doesn't know, pending: not done, nor at work.
+func PlanStatus(s string) api.PlanStatus {
+	switch s {
+	case "completed":
+		return api.PlanDone
+	case "in_progress", "inProgress":
+		return api.PlanActive
+	}
+	return api.PlanPending
+}
+
 type RequestOpened struct {
 	ID   string // the provider's id, unique within the run
 	Kind string // approval | question
@@ -342,6 +360,7 @@ func (TextDelta) event()        {}
 func (Granted) event()          {}
 func (Ran) event()              {}
 func (Work) event()             {}
+func (Plan) event()             {}
 func (RequestOpened) event()    {}
 func (RequestWithdrawn) event() {}
 func (TurnEnded) event()        {}

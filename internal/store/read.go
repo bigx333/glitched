@@ -9,35 +9,36 @@ import (
 )
 
 // RunReply is what a run's agent said last in the thread's log: its text
-// deltas after its last tool call, in order, or all of them when nothing
-// follows that call. It reads without decoding the thread's other events.
+// deltas between two of its tool calls or plans, or after the last, the
+// last of those that says something, in order; or all of them when none
+// does. It reads without decoding the thread's other events.
 func (s *Store) RunReply(ctx context.Context, thread, run api.ID) (string, error) {
-	var last sql.NullInt64
-	if err := s.db.QueryRowContext(ctx, `SELECT max(seq) FROM events
-		WHERE thread = ? AND type = ? AND json_extract(payload, '$.run') = ?`,
-		thread[:], api.EventType(api.WorkItem{}), run.String()).Scan(&last); err != nil {
-		return "", err
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT seq, json_extract(payload, '$.text') FROM events
-		WHERE thread = ? AND type = ? AND json_extract(payload, '$.run') = ? ORDER BY seq`,
-		thread[:], api.EventType(api.AssistantDelta{}), run.String())
+	rows, err := s.db.QueryContext(ctx, `SELECT type, json_extract(payload, '$.text') FROM events
+		WHERE thread = ? AND type IN (?, ?, ?) AND json_extract(payload, '$.run') = ? ORDER BY seq`,
+		thread[:], api.EventType(api.AssistantDelta{}), api.EventType(api.WorkItem{}), api.EventType(api.PlanUpdated{}), run.String())
 	if err != nil {
 		return "", err
 	}
 	defer rows.Close()
-	var all, reply strings.Builder
+	var all, said, reply strings.Builder
 	for rows.Next() {
-		var seq int64
+		var kind string
 		var text sql.NullString
-		if err := rows.Scan(&seq, &text); err != nil {
+		if err := rows.Scan(&kind, &text); err != nil {
 			return "", err
 		}
+		if kind != api.EventType(api.AssistantDelta{}) {
+			said.Reset()
+			continue
+		}
 		all.WriteString(text.String)
-		if seq > last.Int64 {
-			reply.WriteString(text.String)
+		said.WriteString(text.String)
+		if strings.TrimSpace(said.String()) != "" {
+			reply.Reset()
+			reply.WriteString(said.String())
 		}
 	}
-	if strings.TrimSpace(reply.String()) == "" {
+	if reply.Len() == 0 {
 		return all.String(), rows.Err()
 	}
 	return reply.String(), rows.Err()

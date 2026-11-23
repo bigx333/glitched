@@ -492,6 +492,16 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 			acp.WithStartRawInput(map[string]any{"command": "ls"})))
 		f.send(ctx, sid, acp.UpdateToolCall("run-1", acp.WithUpdateStatus(acp.ToolCallStatusFailed), acp.WithUpdateRawOutput("ls: no such file")))
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Read it."))
+	case "plan":
+		// session/update's plan: the whole plan, each time.
+		entry := func(text string, status acp.PlanEntryStatus) acp.PlanEntry {
+			return acp.PlanEntry{Content: text, Priority: acp.PlanEntryPriorityHigh, Status: status}
+		}
+		f.send(ctx, sid, acp.SessionUpdate{Plan: &acp.SessionUpdatePlan{Entries: []acp.PlanEntry{
+			entry("Read the code", acp.PlanEntryStatusInProgress), entry("Fix the bug", acp.PlanEntryStatusPending)}}})
+		f.send(ctx, sid, acp.SessionUpdate{Plan: &acp.SessionUpdatePlan{Entries: []acp.PlanEntry{
+			entry("Read the code", acp.PlanEntryStatusCompleted), entry("Fix the bug", acp.PlanEntryStatusInProgress)}}})
+		f.send(ctx, sid, acp.UpdateAgentMessageText("Planned."))
 	case "permission", "permission-no-allow-once", "permission-once", "permission-glitched", "gui", "gui-once":
 		if f.is("gui") || f.is("gui-once") {
 			f.send(ctx, sid, acp.UpdateAgentMessageText("I'll read the notes, then add a line to them.\n\n"))

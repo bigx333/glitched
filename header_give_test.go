@@ -11,6 +11,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
+	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 
 	"github.com/egoist/mygo/ui"
@@ -21,13 +22,13 @@ const headerBranch = "glitched/header-fixture-3x1sdh"
 // narrowHeader is a thread titled title, or a child so titled, with a
 // branch, 82k tokens and an open pull request, shown with the sidebar
 // hidden under macOS's title bar. add installs plugins in the state
-// directory before the app opens it.
-func narrowHeader(t *testing.T, title string, child bool, add func(dir string)) *harness {
+// directory before the app opens it; its agent's turn plays script.
+func narrowHeader(t *testing.T, title string, child bool, add func(dir string), script ...provider.Event) *harness {
 	t.Helper()
 	work := githubBranch(t)
 	playGh(t)
 	dir := tempDir(t)
-	f := fake.New(nil)
+	f := fake.New(script)
 	f.Tokens = 82000
 	d := engine(t, daemon.Config{Dir: dir}, f)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

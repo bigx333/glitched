@@ -157,6 +157,28 @@ type WorkItem struct {
 	Output string     `json:"output,omitempty"`
 }
 
+// PlanStatus is where a step of an agent's plan stands.
+type PlanStatus uint8
+
+const (
+	PlanPending PlanStatus = iota
+	PlanActive
+	PlanDone
+)
+
+// PlanStep is one step of an agent's plan, in the agent's words.
+type PlanStep struct {
+	Text   string     `json:"text"`
+	Status PlanStatus `json:"status"`
+}
+
+// PlanUpdated is the plan the run's agent works to, whole, as it last
+// said it: each replaces the one before. No steps clears it.
+type PlanUpdated struct {
+	Run   ID         `json:"run"`
+	Steps []PlanStep `json:"steps,omitempty"`
+}
+
 // OutputLimit caps a work item's output in the log: its tail says how a
 // command failed, and every subscriber of the thread replays it.
 const OutputLimit = 8 << 10
@@ -263,6 +285,7 @@ func (TurnRestored) eventType() string        { return "turn.restored" }
 func (TurnUncertain) eventType() string       { return "turn.uncertain" }
 func (AssistantDelta) eventType() string      { return "assistant.delta" }
 func (WorkItem) eventType() string            { return "work.item" }
+func (PlanUpdated) eventType() string         { return "plan.updated" }
 func (RequestOpened) eventType() string       { return "request.opened" }
 func (RequestAnswer) eventType() string       { return "request.answered" }
 func (RequestDelivery) eventType() string     { return "request.delivered" }
@@ -295,6 +318,7 @@ func init() {
 	register[TurnUncertain]()
 	register[AssistantDelta]()
 	register[WorkItem]()
+	register[PlanUpdated]()
 	register[RequestOpened]()
 	register[RequestAnswer]()
 	register[RequestDelivery]()

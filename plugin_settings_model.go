@@ -49,6 +49,7 @@ var partTitles = map[string]string{
 	"message.toolbar":           "Message toolbar",
 	"thread.header.breadcrumb":  "Breadcrumb",
 	"thread.header.usage":       "Token usage",
+	"thread.header.plan":        "Plan",
 	"palette":                   "Command palette",
 	"sidebar.body":              "Sidebar threads",
 	"agents.body":               "Agents panel",

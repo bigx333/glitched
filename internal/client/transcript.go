@@ -35,6 +35,10 @@ type Transcript struct {
 	// folds counts the snapshots that replaced the transcript, each of
 	// which starts its edits again.
 	folds int
+	// Plan is the plan the thread's agent works to, the latest one said:
+	// nil before any, once the agent cleared it, and once the run whose
+	// plan it is ends with every step done.
+	Plan *PlanEntry
 }
 
 // An EditMark is where a reader of a transcript's edits got to.
@@ -92,8 +96,8 @@ type wake struct {
 	run    api.ID
 }
 
-// Entry is sealed: *UserEntry, *AssistantEntry, *WorkEntry, *RequestEntry,
-// *ReportEntry or *ErrorEntry.
+// Entry is sealed: *UserEntry, *AssistantEntry, *WorkEntry, *PlanEntry,
+// *RequestEntry, *ReportEntry, *ErrorEntry or *CompactionEntry.
 type Entry interface{ entry() }
 
 type MessageState uint8
@@ -175,6 +179,24 @@ type WorkStep struct {
 	Ended   time.Time
 }
 
+// PlanEntry is a run's plan, where the run first said one, as it last
+// said it: each of its plans replaces the one before.
+type PlanEntry struct {
+	Run   api.ID
+	Steps []api.PlanStep
+}
+
+// Done counts the plan's steps done.
+func (p *PlanEntry) Done() int {
+	n := 0
+	for _, s := range p.Steps {
+		if s.Status == api.PlanDone {
+			n++
+		}
+	}
+	return n
+}
+
 type RequestEntry struct {
 	Run        api.ID
 	Request    api.ID
@@ -229,6 +251,7 @@ func (*ReportEntry) entry()     {}
 func (*UserEntry) entry()       {}
 func (*AssistantEntry) entry()  {}
 func (*WorkEntry) entry()       {}
+func (*PlanEntry) entry()       {}
 func (*RequestEntry) entry()    {}
 
 // fold builds a transcript from a thread snapshot, which holds every event.
@@ -345,6 +368,11 @@ func (t *Transcript) apply(e api.Event) {
 			break
 		}
 		t.work(b, e.At)
+	case api.PlanUpdated:
+		if t.silent[b.Run] != nil {
+			break
+		}
+		t.plan(b)
 	case api.RequestOpened:
 		if t.silent[b.Run] != nil {
 			break
@@ -383,6 +411,9 @@ func (t *Transcript) apply(e api.Event) {
 			break
 		}
 		t.Ended = e.At
+		if p := t.Plan; p != nil && p.Run == b.Run && p.Done() == len(p.Steps) {
+			t.Plan = nil
+		}
 		end := TurnEnd{Outcome: b.Outcome, At: e.At}
 		if began, ok := t.began[b.Run]; ok {
 			end.Took = e.At.Sub(began)
@@ -543,6 +574,26 @@ func (t *Transcript) work(w api.WorkItem, at time.Time) {
 		into.Ended = at
 	}
 	t.edited(into)
+}
+
+// plan replaces the run's plan in the entry that holds it, else adds one,
+// and makes it the thread's. A plan with no steps clears the thread's and
+// leaves the run's entry as it last said.
+func (t *Transcript) plan(p api.PlanUpdated) {
+	if len(p.Steps) == 0 {
+		t.Plan = nil
+		return
+	}
+	for _, e := range t.since(p.Run) {
+		if pe, ok := e.(*PlanEntry); ok && pe.Run == p.Run {
+			pe.Steps = p.Steps
+			t.Plan = pe
+			t.edited(pe)
+			return
+		}
+	}
+	t.Plan = &PlanEntry{Run: p.Run, Steps: p.Steps}
+	t.add(t.Plan)
 }
 
 // ended keeps how run ended on its last reply that says something, or on

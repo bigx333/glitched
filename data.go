@@ -152,6 +152,7 @@ const (
 	entryReport
 	entryError // why a run failed
 	entryCompact
+	entryPlan
 )
 
 // An entry is a row of the timeline. Its key stays the same while it
@@ -183,6 +184,7 @@ type entry struct {
 	paused  string
 	took    string
 	work    []client.WorkStep
+	plan    []api.PlanStep
 	request *client.RequestEntry
 	run     api.ID // a work entry's
 	// reports are a run of children's reports, one card's.
@@ -245,6 +247,8 @@ func (d *deriving) add(e client.Entry) {
 		d.es = append(d.es, entry{key: d.key("a", e.Run), kind: entryAssistant, text: e.Text, streaming: e.Streaming, at: e.At, ran: ranFor(e.End), retry: unfinished(e.End)})
 	case *client.WorkEntry:
 		d.es = append(d.es, workEntry(d.key("w", e.Run), e))
+	case *client.PlanEntry:
+		d.es = append(d.es, entry{key: d.key("p", e.Run), kind: entryPlan, plan: e.Steps, run: e.Run})
 	case *client.RequestEntry:
 		d.es = append(d.es, entry{key: "r/" + e.Request.String(), kind: entryRequest, request: e})
 	case *client.ErrorEntry:

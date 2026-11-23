@@ -114,6 +114,7 @@ type promptLog struct {
 	workspace string
 	text      string
 	work      []api.WorkItem
+	plans     []api.PlanUpdated
 	requests  []requestLog
 	ended     api.TurnEnded
 }
@@ -227,6 +228,10 @@ func readLog(t *testing.T, h *runtime.Host, thread, run api.ID) (l promptLog, ov
 		case api.WorkItem:
 			if b.Run == run {
 				l.work = append(l.work, b)
+			}
+		case api.PlanUpdated:
+			if b.Run == run {
+				l.plans = append(l.plans, b)
 			}
 		case api.RequestOpened:
 			if b.Run == run {

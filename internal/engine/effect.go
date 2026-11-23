@@ -186,6 +186,9 @@ type Ran struct {
 
 type Work struct{ Item api.WorkItem }
 
+// Plan is the run's agent's plan, as provider.Plan has it.
+type Plan struct{ Plan api.PlanUpdated }
+
 // Surfaced is a request the agent raised. Request is freshly minted; Dedup is
 // the provider's id, so a request surfaced again after a restart is ignored.
 type Surfaced struct {
@@ -267,6 +270,7 @@ func (Ended) observed()          {}
 func (Delta) observed()          {}
 func (Context) observed()        {}
 func (Work) observed()           {}
+func (Plan) observed()           {}
 func (Granted) observed()        {}
 func (Ran) observed()            {}
 func (Surfaced) observed()       {}
