@@ -140,8 +140,8 @@ func (h *Host) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
 			return h.createInWorktree(ctx, c, b)
 		}
 	case api.ThreadDelete:
-		if b.Worktree != api.KeepWorktree {
-			return h.deleteInWorktree(ctx, c, b.Worktree)
+		if b.RemoveWorktree {
+			return h.deleteInWorktree(ctx, c)
 		}
 	}
 	return h.store.Submit(ctx, c, time.Now())

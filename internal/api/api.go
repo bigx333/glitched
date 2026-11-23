@@ -122,23 +122,12 @@ type InboxSet struct {
 }
 
 // ThreadDelete deletes the thread. Its events stay in the log, but no
-// command or read reaches it again. Worktree says what becomes of the
-// worktree of a thread in one; the threads under it share it.
+// command or read reaches it again. With RemoveWorktree, the worktree of
+// a thread in one goes too, with whatever is in it, as the user chose; a
+// branch with commits that aren't merged stays.
 type ThreadDelete struct {
-	Worktree WorktreeEnd `json:"worktree,omitzero"`
+	RemoveWorktree bool `json:"removeWorktree,omitzero"`
 }
-
-type WorktreeEnd uint8
-
-const (
-	// KeepWorktree leaves the worktree and its branch as they are.
-	KeepWorktree WorktreeEnd = iota
-	// RemoveWorktree removes the worktree, and is refused while it has
-	// changes git doesn't ignore, which only RemoveWorktreeChanges
-	// throws away. Either keeps a branch with commits that aren't merged.
-	RemoveWorktree
-	RemoveWorktreeChanges
-)
 
 // ThreadRename retitles the thread. The engine trims the title and refuses
 // an empty one.

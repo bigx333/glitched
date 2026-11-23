@@ -204,9 +204,9 @@ func TestAWorktreeTheRepositoryCantGiveIsRefused(t *testing.T) {
 	}
 }
 
-// Deleting a thread keeps its worktree unless asked; a removal is refused
-// while the worktree has changes, which only a removal with changes throws
-// away; and a branch with commits of its own stays.
+// Deleting a thread keeps its worktree unless asked. Removing it takes
+// what is in it, as the user chose, and the branch only when it has no
+// commits of its own.
 func TestDeletingAThreadInAWorktree(t *testing.T) {
 	w := serveWorktrees(t)
 	project := repo(t)
@@ -219,35 +219,26 @@ func TestDeletingAThreadInAWorktree(t *testing.T) {
 	branches := func() string { return gitIn(t, project, "branch", "--list", "glitched/*") }
 
 	kept := make()
+	os.WriteFile(filepath.Join(kept.Workspace, "notes.txt"), []byte("mine\n"), 0o644)
 	submit(t, w.h, kept.ID, api.ThreadDelete{})
-	if !exists(kept.Workspace) || !strings.Contains(branches(), kept.Branch) {
-		t.Errorf("a plain delete took the worktree or its branch")
+	if !exists(filepath.Join(kept.Workspace, "notes.txt")) || !strings.Contains(branches(), kept.Branch) {
+		t.Errorf("a plain delete took the worktree, its changes or its branch")
 	}
 
 	clean := make()
-	submit(t, w.h, clean.ID, api.ThreadDelete{Worktree: api.RemoveWorktree})
+	submit(t, w.h, clean.ID, api.ThreadDelete{RemoveWorktree: true})
 	if exists(clean.Workspace) || strings.Contains(branches(), clean.Branch) {
-		t.Errorf("a clean worktree's removal left its folder or its branch with nothing on it:\n%s", branches())
+		t.Errorf("a removal left the folder or a branch with nothing on it:\n%s", branches())
 	}
 
-	dirty := make()
-	os.WriteFile(filepath.Join(dirty.Workspace, "notes.txt"), []byte("mine\n"), 0o644)
-	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: dirty.ID, Body: api.ThreadDelete{Worktree: api.RemoveWorktree}})
-	var rej *api.RejectedError
-	if !errors.As(err, &rej) || !strings.Contains(rej.Reason, "1 uncommitted change") {
-		t.Fatalf("removing a worktree with changes: %v, want a refusal", err)
+	committed := make()
+	gitIn(t, committed.Workspace, "commit", "-q", "--allow-empty", "-m", "mine")
+	os.WriteFile(filepath.Join(committed.Workspace, "more.txt"), []byte("more\n"), 0o644)
+	submit(t, w.h, committed.ID, api.ThreadDelete{RemoveWorktree: true})
+	if exists(committed.Workspace) {
+		t.Errorf("a removal left the worktree with changes")
 	}
-	if view(t, w.h, dirty.ID).Deleted || !exists(filepath.Join(dirty.Workspace, "notes.txt")) {
-		t.Fatalf("a refused removal deleted the thread or its changes")
-	}
-	gitIn(t, dirty.Workspace, "add", ".")
-	gitIn(t, dirty.Workspace, "commit", "-q", "-m", "notes")
-	os.WriteFile(filepath.Join(dirty.Workspace, "more.txt"), []byte("more\n"), 0o644)
-	submit(t, w.h, dirty.ID, api.ThreadDelete{Worktree: api.RemoveWorktreeChanges})
-	if exists(dirty.Workspace) {
-		t.Errorf("a removal with changes left the worktree")
-	}
-	if !strings.Contains(branches(), dirty.Branch) {
+	if !strings.Contains(branches(), committed.Branch) {
 		t.Errorf("the branch with a commit of its own went:\n%s", branches())
 	}
 }
@@ -260,29 +251,6 @@ func refusal(t *testing.T, err error, says string) {
 	}
 }
 
-// Changes git hides by its settings still keep a worktree from a plain
-// removal, and an end the API doesn't name removes nothing.
-func TestAWorktreeWithHiddenChangesIsNotRemoved(t *testing.T) {
-	w := serveWorktrees(t)
-	project := repo(t)
-	gitIn(t, project, "config", "status.showUntrackedFiles", "no")
-	thread := api.NewID()
-	submit(t, w.h, thread, inWorktree(project, ""))
-	th := until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
-	note := filepath.Join(th.Workspace, "notes", "mine.txt")
-	os.MkdirAll(filepath.Dir(note), 0o755)
-	os.WriteFile(note, []byte("mine\n"), 0o644)
-	for _, end := range []api.WorktreeEnd{api.RemoveWorktree, 3} {
-		_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadDelete{Worktree: end}})
-		if err == nil {
-			t.Fatalf("a delete with worktree end %d went", end)
-		}
-		if _, err := os.Stat(note); err != nil || view(t, w.h, thread).Deleted {
-			t.Fatalf("a refused delete with end %d took the thread or its note: %v", end, err)
-		}
-	}
-}
-
 // The worktree of a thread still at work stays: its agent may write
 // there after the host looked.
 func TestTheWorktreeOfAThreadAtWorkIsNotRemoved(t *testing.T) {
@@ -291,7 +259,7 @@ func TestTheWorktreeOfAThreadAtWorkIsNotRemoved(t *testing.T) {
 	thread := api.NewID()
 	submit(t, w.h, thread, inWorktree(project, ""))
 	th := until(t, w.h, thread, "the approval", waiting)
-	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadDelete{Worktree: api.RemoveWorktreeChanges}})
+	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadDelete{RemoveWorktree: true}})
 	refusal(t, err, "stop the thread")
 	if _, err := os.Stat(th.Workspace); err != nil {
 		t.Fatalf("the refused delete took the worktree: %v", err)
@@ -299,22 +267,36 @@ func TestTheWorktreeOfAThreadAtWorkIsNotRemoved(t *testing.T) {
 }
 
 // A folder at the worktree's place that isn't the thread's worktree, as
-// another repository's, is never removed for the thread.
+// another repository's, is never removed for the thread, nor is one that
+// can't be told apart from another for its project being gone.
 func TestAReplacedWorktreeIsNotRemoved(t *testing.T) {
 	w := serveWorktrees(t)
-	project := repo(t)
-	thread := api.NewID()
-	submit(t, w.h, thread, inWorktree(project, ""))
-	th := until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
-	gitIn(t, project, "worktree", "move", th.Workspace, filepath.Join(t.TempDir(), "moved"))
-	other := repo(t)
-	gitIn(t, other, "worktree", "add", "-q", "-b", th.Branch, th.Workspace)
-	note := filepath.Join(th.Workspace, "theirs.txt")
-	os.WriteFile(note, []byte("theirs\n"), 0o644)
-	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadDelete{Worktree: api.RemoveWorktreeChanges}})
-	refusal(t, err, "is no longer the thread's worktree")
-	if _, err := os.Stat(note); err != nil {
-		t.Fatalf("another repository's checkout lost its file: %v", err)
+	for _, gone := range []bool{false, true} {
+		project := repo(t)
+		sub := filepath.Join(project, "app")
+		os.Mkdir(sub, 0o755)
+		os.WriteFile(filepath.Join(sub, "main.go"), []byte("package app\n"), 0o644)
+		gitIn(t, project, "add", "app")
+		gitIn(t, project, "commit", "-q", "-m", "app")
+		thread := api.NewID()
+		submit(t, w.h, thread, inWorktree(sub, ""))
+		th := until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
+		dir := filepath.Dir(th.Workspace)
+		gitIn(t, project, "worktree", "move", dir, filepath.Join(t.TempDir(), "moved"))
+		if gone {
+			os.RemoveAll(sub)
+		}
+		other := repo(t)
+		gitIn(t, other, "worktree", "add", "-q", "-b", th.Branch, dir)
+		note := filepath.Join(dir, "theirs.txt")
+		os.WriteFile(note, []byte("theirs\n"), 0o644)
+		_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadDelete{RemoveWorktree: true}})
+		if err == nil {
+			t.Errorf("project gone %v: the delete went", gone)
+		}
+		if _, err := os.Stat(note); err != nil {
+			t.Errorf("project gone %v: another repository's checkout lost its file: %v", gone, err)
+		}
 	}
 }
 
@@ -332,25 +314,15 @@ func TestThreadsWhoseIDsEndAlikeGetWorktreesOfTheirOwn(t *testing.T) {
 	}
 }
 
-// Files git was told not to look at keep a worktree from a plain
-// removal, and one git won't remove, as a locked one, stays.
-func TestAWorktreeGitWontVouchForStays(t *testing.T) {
+// A worktree git won't remove, as a locked one, stays.
+func TestALockedWorktreeStays(t *testing.T) {
 	w := serveWorktrees(t)
 	project := repo(t)
-	make := func() api.Thread {
-		thread := api.NewID()
-		submit(t, w.h, thread, inWorktree(project, ""))
-		return until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
-	}
-	flagged := make()
-	gitIn(t, flagged.Workspace, "update-index", "--skip-worktree", "README")
-	os.WriteFile(filepath.Join(flagged.Workspace, "README"), []byte("mine\n"), 0o644)
-	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: flagged.ID, Body: api.ThreadDelete{Worktree: api.RemoveWorktree}})
-	refusal(t, err, "uncommitted change")
-
-	locked := make()
+	thread := api.NewID()
+	submit(t, w.h, thread, inWorktree(project, ""))
+	locked := until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
 	gitIn(t, project, "worktree", "lock", locked.Workspace)
-	submit(t, w.h, locked.ID, api.ThreadDelete{Worktree: api.RemoveWorktreeChanges})
+	submit(t, w.h, locked.ID, api.ThreadDelete{RemoveWorktree: true})
 	if _, err := os.Stat(locked.Workspace); err != nil {
 		t.Fatalf("a locked worktree went: %v", err)
 	}
@@ -398,7 +370,7 @@ func TestACreateIsCheckedBeforeGitAndKeepsItsReceipt(t *testing.T) {
 	if _, err := w.h.Submit(ctx, other); !errors.Is(err, api.ErrConflict) {
 		t.Errorf("the same ID with another base: %v, want a conflict", err)
 	}
-	submit(t, w.h, thread, api.ThreadDelete{Worktree: api.RemoveWorktree})
+	submit(t, w.h, thread, api.ThreadDelete{RemoveWorktree: true})
 	again, err := w.h.Submit(ctx, c)
 	if err != nil || again.Committed != first.Committed {
 		t.Errorf("the create again after the delete: %+v, %v; want the first receipt", again, err)
@@ -420,4 +392,22 @@ func TestAFolderTheBaseLacksIsRefused(t *testing.T) {
 	if out := gitIn(t, project, "worktree", "list", "--porcelain"); strings.Count(out, "worktree ") != 1 {
 		t.Errorf("the refused create left a worktree:\n%s", out)
 	}
+}
+
+// A folder the checkout turned into a way out of the worktree, as a
+// hook that makes it a link elsewhere, is refused, and the worktree
+// stays for what is in it.
+func TestAFolderTheCheckoutMovedOutIsRefused(t *testing.T) {
+	w := serveWorktrees(t)
+	project := repo(t)
+	sub := filepath.Join(project, "app")
+	os.Mkdir(sub, 0o755)
+	os.WriteFile(filepath.Join(sub, "main.go"), []byte("package app\n"), 0o644)
+	gitIn(t, project, "add", "app")
+	gitIn(t, project, "commit", "-q", "-m", "app")
+	outside := t.TempDir()
+	hook := filepath.Join(project, ".git", "hooks", "post-checkout")
+	os.WriteFile(hook, []byte("#!/bin/sh\nmv app app.real && ln -s "+outside+" app\n"), 0o755)
+	_, err := w.h.Submit(ctx, api.Command{ID: api.NewID(), Target: api.NewID(), Body: inWorktree(sub, "")})
+	refusal(t, err, "isn't a folder of it")
 }
