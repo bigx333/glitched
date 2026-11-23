@@ -53,6 +53,7 @@ type Thread struct {
 	UpdatedAt   time.Time
 	Parent      api.ID      // the thread that started this one; zero for the user's
 	Tokens      int64       // what the thread's own turns used
+	Context     api.Context // how full its context is; zero until an agent says
 	Session     string      // the provider's id for the thread's conversation; "" until a run binds one
 	Reported    time.Time   // when a child last reported back
 	LastReport  *api.Report // never written through; its Cursor has no Log
@@ -213,6 +214,10 @@ func View(t Thread) api.Thread {
 		Parent:      t.Parent,
 		Tokens:      t.Tokens,
 		Reported:    t.Reported,
+	}
+	if t.Context != (api.Context{}) {
+		c := t.Context
+		v.Context = &c
 	}
 	if r := t.Live(); r != nil {
 		v.Turn = &api.Turn{Run: r.ID, Model: r.Model, Access: r.Access}

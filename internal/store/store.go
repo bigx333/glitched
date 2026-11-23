@@ -170,6 +170,10 @@ CREATE TABLE threads (
 	session     TEXT NOT NULL DEFAULT '',
 	project     TEXT NOT NULL DEFAULT '',
 	branch      TEXT NOT NULL DEFAULT '',
+	context_used   INTEGER NOT NULL DEFAULT 0,
+	context_window INTEGER NOT NULL DEFAULT 0,
+	context_stale  INTEGER NOT NULL DEFAULT 0 CHECK (context_stale IN (0, 1)),
+	context_model  TEXT NOT NULL DEFAULT '',
 	CHECK ((disposition = 1) = (until IS NOT NULL))
 ) STRICT;
 
@@ -232,7 +236,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 10
+const schemaVersion = 11
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -326,6 +330,13 @@ WHERE a.thread = runs.thread AND a.generation = runs.generation;
 	9: `
 ALTER TABLE threads ADD COLUMN project TEXT NOT NULL DEFAULT '';
 ALTER TABLE threads ADD COLUMN branch TEXT NOT NULL DEFAULT '';
+`,
+	// How full each thread's context is (ContextReported).
+	10: `
+ALTER TABLE threads ADD COLUMN context_used INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE threads ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE threads ADD COLUMN context_stale INTEGER NOT NULL DEFAULT 0 CHECK (context_stale IN (0, 1));
+ALTER TABLE threads ADD COLUMN context_model TEXT NOT NULL DEFAULT '';
 `,
 }
 

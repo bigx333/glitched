@@ -557,6 +557,9 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 	if version < 10 {
 		sqlText = threadsV9 + sqlText
 	}
+	if version < 11 {
+		sqlText = threadsV10 + sqlText
+	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
@@ -572,6 +575,15 @@ const runsV6 = `
 // session.
 const threadsV8 = `
 	ALTER TABLE threads DROP COLUMN session;
+`
+
+// The threads table up to version 10, before a thread kept how full its
+// context is.
+const threadsV10 = `
+	ALTER TABLE threads DROP COLUMN context_used;
+	ALTER TABLE threads DROP COLUMN context_window;
+	ALTER TABLE threads DROP COLUMN context_stale;
+	ALTER TABLE threads DROP COLUMN context_model;
 `
 
 // The threads table up to version 9, before a thread in a worktree kept
@@ -1097,5 +1109,51 @@ func TestADatabaseFromANewerBuildIsRefused(t *testing.T) {
 	var version int
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 99 {
 		t.Fatalf("the refused database is at version %d (%v)", version, err)
+	}
+}
+
+// A database from before threads kept their context upgrades to the
+// threads table a new one has. Its threads have none; what a live run
+// reports after is kept across a reopen, a report that leaves the window
+// out keeps the one known, and a compaction marks it stale.
+func TestAVersion10DatabaseUpgradesWithAContextPerThread(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	downgrade(t, path, "", 10)
+
+	s = open(t, path)
+	if th := threadOf(t, s, thread); th.Context != (api.Context{}) {
+		t.Errorf("an upgraded thread has context %+v, want none", th.Context)
+	}
+	run := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{ID: run, Target: thread, Body: api.MessageDispatch{Text: "go", Mode: api.StartNow}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range []engine.Observation{
+		engine.Context{Run: run, Used: 30000, Window: 200000, Model: "claude-haiku-5-5"},
+		engine.Context{Run: run, Used: 41000, Model: "claude-haiku-5-5"},
+		engine.Context{Run: run, Compacted: true},
+		engine.Context{Run: api.NewID(), Used: 9, Window: 9},
+	} {
+		if _, err := s.Observe(ctx, thread, o, time.Now(), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	s = open(t, path)
+	if th, want := threadOf(t, s, thread), (api.Context{Used: 41000, Window: 200000, Model: "claude-haiku-5-5", Stale: true}); th.Context != want {
+		t.Errorf("after a reopen the thread's context is %+v, want %+v", th.Context, want)
+	}
+	s.Close()
+	fresh := filepath.Join(t.TempDir(), "host.db")
+	open(t, fresh).Close()
+	if got, want := tableOf(t, path, "threads"), tableOf(t, fresh, "threads"); !reflect.DeepEqual(got, want) {
+		t.Errorf("the threads table\n%+v\nwant a new database's\n%+v", got, want)
 	}
 }

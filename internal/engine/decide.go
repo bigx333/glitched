@@ -622,6 +622,10 @@ func (d *decision) observe(o Observation) error {
 		if isLive(o.Run) {
 			return d.emit(api.AssistantDelta{Run: o.Run, Text: o.Text})
 		}
+	case Context:
+		if isLive(o.Run) {
+			return d.emit(api.ContextReported{Run: o.Run, Used: o.Used, Window: o.Window, Model: o.Model, Compacted: o.Compacted})
+		}
 	case Work:
 		if isLive(o.Item.Run) {
 			return d.emit(o.Item)
