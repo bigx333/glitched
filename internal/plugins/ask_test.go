@@ -208,7 +208,7 @@ export async function update({ state, event }) {
 	return {}
 }`)
 	started, release := make(chan struct{}, 1), make(chan struct{})
-	h := Open(state, Options{Post: u.post, Run: func(ctx context.Context, _ string, _ []string, _ json.RawMessage) (any, error) {
+	h := Open(state, Options{Post: u.post, Run: func(ctx context.Context, _ string, _, _ []string, _ json.RawMessage) (any, error) {
 		started <- struct{}{}
 		<-release
 		return map[string]any{"status": 0, "stdout": "", "stderr": ""}, nil

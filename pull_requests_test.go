@@ -82,14 +82,14 @@ func playGh(t *testing.T) func() []string {
 	var mu sync.Mutex
 	var ran []string
 	was := runPluginProgram
-	runPluginProgram = func(ctx context.Context, id string, allowed []string, raw json.RawMessage) (any, error) {
+	runPluginProgram = func(ctx context.Context, id string, allowed, denied []string, raw json.RawMessage) (any, error) {
 		var a struct {
 			Program string
 			Args    []string
 		}
 		json.Unmarshal(raw, &a)
 		if a.Program != "gh" {
-			return was(ctx, id, allowed, raw)
+			return was(ctx, id, allowed, denied, raw)
 		}
 		mu.Lock()
 		ran = append(ran, strings.Join(a.Args, " "))

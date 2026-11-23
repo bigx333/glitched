@@ -210,7 +210,7 @@ func openPullRequests(t *testing.T, work string, gh *github) *pullRequests {
 		ReleaseKeys: []string{release},
 		CallTimeout: callTimeout,
 		Do:          p.do,
-		Run: func(ctx context.Context, id string, allowed []string, raw json.RawMessage) (any, error) {
+		Run: func(ctx context.Context, id string, allowed, denied []string, raw json.RawMessage) (any, error) {
 			var a struct {
 				Program string
 				Args    []string
@@ -240,7 +240,7 @@ func openPullRequests(t *testing.T, work string, gh *github) *pullRequests {
 				t.Errorf("ran %s %q", a.Program, a.Args)
 				return nil, fmt.Errorf("not in this test")
 			}
-			return plugins.RunProgram(ctx, id, allowed, raw)
+			return plugins.RunProgram(ctx, allowed, denied, raw)
 		},
 		Ask: func(ctx context.Context, _ string, q plugins.AskRequest) (plugins.AskAnswer, error) {
 			at, _ := ctx.Deadline()
