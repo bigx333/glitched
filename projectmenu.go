@@ -156,9 +156,9 @@ func (a *app) removeProject(p *project) {
 	k := keyOf(e, a.fresh.workspace)
 	emptied := k != p.key && slices.ContainsFunc(all, func(n node) bool { return a.threadKey(n.t) == k }) &&
 		!slices.ContainsFunc(a.gather(), func(x *project) bool { return x.key == k })
-	a.forgetLastProject(p.key)
+	a.forgetLastProject(p.env, p.key.workspace)
 	if emptied {
-		a.forgetLastProject(k)
+		a.forgetLastProject(e, k.workspace)
 	}
 	if k == p.key || emptied {
 		a.newDraft(a.defaultDraft(e))

@@ -138,45 +138,52 @@ var chooseCloneParent = func(a *app) string {
 }
 
 // cloneFile is clone.json in the state directory: the parent folder last
-// cloned into on this machine, and on each server by its label.
+// cloned into on this machine, and on each server by its engine's ID. The
+// servers by label that files written before engine IDs hold are read as
+// none.
 type cloneFile struct {
 	Parent  string            `json:"parent"`
-	Servers map[string]string `json:"servers,omitempty"`
+	Engines map[string]string `json:"engines,omitempty"`
 }
 
 func (a *app) cloneFilePath() string { return filepath.Join(a.dir, "clone.json") }
 
-// cloneParent is where a clone on the machine goes: the folder the last
+// cloneParent is where a clone on e's machine goes: the folder the last
 // one there went into, else ~/Projects there, which a server's engine
-// expands.
-func (a *app) cloneParent(label string) string {
+// expands. A server gone from Settings, nil, has none of its own.
+func (a *app) cloneParent(e *client.Env) string {
 	var f cloneFile
 	if err := jsonfile.Load(a.cloneFilePath(), &f); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		log.Printf("glitched: clone: %v", err)
 	}
-	switch {
-	case label != "" && f.Servers[label] != "":
-		return f.Servers[label]
-	case label != "":
+	if e == nil || e.Kind == client.Remote {
+		if key, ok := machineKey(e); ok && f.Engines[key] != "" {
+			return f.Engines[key]
+		}
 		return "~/Projects"
-	case f.Parent != "":
+	}
+	if f.Parent != "" {
 		return f.Parent
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, "Projects")
 }
 
-// rememberParent keeps parent as where the next clone on the machine goes.
-func (a *app) rememberParent(label, parent string) {
+// rememberParent keeps parent as where the next clone on e's machine goes.
+func (a *app) rememberParent(e *client.Env, parent string) {
+	key, ok := machineKey(e)
+	if !ok {
+		return
+	}
 	_, err := jsonfile.EditOrReset(a.cloneFilePath(), func(f *cloneFile) error {
-		if label == "" {
+		if key == "" {
 			f.Parent = parent
 			return nil
 		}
-		if f.Servers == nil {
-			f.Servers = map[string]string{}
+		if f.Engines == nil {
+			f.Engines = map[string]string{}
 		}
-		f.Servers[label] = parent
+		f.Engines[key] = parent
 		return nil
 	})
 	if err != nil {
@@ -269,7 +276,7 @@ func (a *app) enterStep() {
 		}
 	case stepClone:
 		if w.parent == "" {
-			w.parent = a.cloneParent(w.machine)
+			w.parent = a.cloneParent(a.wizardEnv())
 		}
 		w.focus = "clone:input"
 	case stepConfirm:
@@ -570,7 +577,7 @@ func (a *app) createProject() {
 	if !ok {
 		return
 	}
-	label, parent := w.machine, w.parent
+	parent := w.parent
 	run := &wizardRun{}
 	w.run, w.line, w.failure = run, "", ""
 	run.cancel = a.backend.Clone(e, api.CloneRequest{Source: w.input, Dest: a.joinOn(parent, name)}, func(line string) {
@@ -582,7 +589,7 @@ func (a *app) createProject() {
 		// cancelled as it ended: its folder is there either way.
 		if err == nil {
 			a.recordProject(e, cloned.Path)
-			a.rememberParent(label, parent)
+			a.rememberParent(e, parent)
 		}
 		if a.wizard.run != run {
 			return

@@ -172,9 +172,10 @@ type Daemon struct {
 	done       chan struct{}
 	err        error
 	undo       []func() error // run in reverse once serving stops
-	// vault is the folder of the credentials users give agents, which no
-	// client lists or clones into.
-	vault string
+	// stateDir is the engine's state folder, cfg.Dir, with the secrets
+	// users give agents in it, which no client lists, enters or clones
+	// into.
+	stateDir string
 
 	mu        sync.Mutex
 	addrs     []net.Addr
@@ -201,7 +202,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		hubAt = Socket(cfg.HubDir)
 	}
 	ctx, stop := context.WithCancel(ctx)
-	d := &Daemon{stop: stop, done: make(chan struct{}), vault: secrets.Under(cfg.Dir)}
+	d := &Daemon{stop: stop, done: make(chan struct{}), stateDir: cfg.Dir}
 	defer func() {
 		if err != nil {
 			stop()

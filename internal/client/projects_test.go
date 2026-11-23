@@ -2,6 +2,8 @@ package client
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"glitched/internal/api"
@@ -31,12 +33,16 @@ func TestFoldersOfTheLocalEngine(t *testing.T) {
 	m, g := manager(t, dir)
 	env := m.Envs()[0]
 	online(t, g, env)
+	folder := t.TempDir()
+	if err := os.Mkdir(filepath.Join(folder, "lighthouse"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	var list api.FolderList
 	var err error
 	ended := false
-	m.Folders(env, dir, func(l api.FolderList, e error) { list, err, ended = l, e, true })
+	m.Folders(env, folder, func(l api.FolderList, e error) { list, err, ended = l, e, true })
 	g.until(t, "the listing", func() bool { return ended })
-	if err != nil || list.Path != dir {
-		t.Fatalf("listed %+v, %v; want %s", list, err, dir)
+	if err != nil || list.Path != folder || len(list.Folders) != 1 || list.Folders[0].Name != "lighthouse" {
+		t.Fatalf("listed %+v, %v; want lighthouse in %s", list, err, folder)
 	}
 }

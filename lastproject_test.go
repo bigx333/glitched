@@ -200,7 +200,7 @@ func TestNewThreadFollowsAnotherWindowsLastProject(t *testing.T) {
 func TestAServersHomeIsNoLastProjectWithoutAThread(t *testing.T) {
 	h := machines(t)
 	devbox := h.thread("Retry failed invoice webhooks").env
-	h.a.rememberProject(keyOf(devbox, "~"))
+	h.a.rememberProject(devbox, "~")
 	h.a.fresh = draft{devbox, "/srv/billing"}
 	h.a.removeProject(h.a.projectOf(h.thread("Retry failed invoice webhooks")))
 	h.until("billing gone", func() bool {

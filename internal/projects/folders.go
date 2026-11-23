@@ -126,7 +126,7 @@ func Expand(p string) (string, error) {
 	return filepath.Clean(p), nil
 }
 
-var errHidden = errors.New("it holds the engine's secrets, so it isn't shown")
+var errHidden = errors.New("it holds the engine's state, so it isn't shown")
 
 // hiddenDir is a folder no listing shows or enters: its path with every
 // symlink resolved, and what it is on disk, nil while it isn't there.

@@ -581,7 +581,7 @@ func TestACloneOnAServerRunsThere(t *testing.T) {
 		t.Fatalf("projects.json holds %+v", ps)
 	}
 	var f cloneFile
-	if err := jsonfile.Load(filepath.Join(state, "clone.json"), &f); err != nil || f.Servers["build-box"] != root || f.Parent != "" {
+	if err := jsonfile.Load(filepath.Join(state, "clone.json"), &f); err != nil || f.Engines[env.ID.String()] != root || f.Parent != "" {
 		t.Fatalf("clone.json holds %+v, %v", f, err)
 	}
 }
@@ -894,5 +894,78 @@ func TestOnlyAnExistingFolderKeepsTheDraftsWorktree(t *testing.T) {
 	h.until("the draft in the clone", func() bool { return h.a.current().View.Workspace == dest })
 	if h.a.worktree.picked {
 		t.Fatal("the clone's draft kept the worktree choice of the draft before it")
+	}
+}
+
+// Where the last clone went and the last project started in on a server
+// are kept by its engine: another engine paired under the same label gets
+// neither, though the same folder is a project there.
+func TestAReusedLabelGetsNoneOfTheOldEnginesPlaces(t *testing.T) {
+	root := folderTree(t)
+	h, _ := wizardMachines(t, inboxDir(t))
+	old := h.a.serverEnv("build-box")
+	h.a.recordProject(old, root)
+	h.a.rememberParent(old, root)
+	h.a.rememberProject(old, root)
+	h.tt.Frame()
+	if got := h.a.cloneParent(old); got != root {
+		t.Fatalf("build-box's clone parent is %q, want %q", got, root)
+	}
+	if d, ok := h.a.lastDraft(old); !ok || d.workspace != root {
+		t.Fatalf("build-box's last draft is %+v, %v", d, ok)
+	}
+	if err := h.a.backend.RemoveServer("build-box"); err != nil {
+		t.Fatal(err)
+	}
+	_, addr := serverNode(t)
+	var added error = errors.New("not yet")
+	h.a.backend.AddServer(client.Server{Label: "build-box", Addr: addr, Token: "any"}, func(err error) { added = err })
+	h.until("the other engine online", func() bool {
+		e := h.a.serverEnv("build-box")
+		return added == nil && e != nil && h.a.reachable(e)
+	})
+	other := h.a.serverEnv("build-box")
+	h.a.recordProject(other, root)
+	h.tt.Frame()
+	if got := h.a.cloneParent(other); got != "~/Projects" {
+		t.Fatalf("the other engine's clone parent is %q, want ~/Projects", got)
+	}
+	if d, ok := h.a.lastDraft(other); ok {
+		t.Fatalf("the other engine's last draft is the old engine's: %+v", d)
+	}
+	h.a.rememberProject(other, root)
+	if _, ok := h.a.lastDraft(other); !ok {
+		t.Fatal("the other engine's own last project isn't its last draft")
+	}
+}
+
+// clone.json and last-project.json written by label still read: this
+// machine's entries as they were, a server's label as no server.
+func TestPlacesKeptByLabelAreNoServers(t *testing.T) {
+	root := folderTree(t)
+	here, parent := t.TempDir(), t.TempDir()
+	state := inboxDir(t)
+	if err := os.WriteFile(filepath.Join(state, "clone.json"), []byte(`{"parent": "`+parent+`", "servers": {"build-box": "`+root+`"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := jsonfile.Write(filepath.Join(state, "last-project.json"), map[string]string{"": here, "build-box": root}); err != nil {
+		t.Fatal(err)
+	}
+	h, _ := wizardMachines(t, state)
+	box, local := h.a.serverEnv("build-box"), h.a.localEnv()
+	h.a.recordProject(box, root)
+	h.a.recordProject(local, here)
+	h.tt.Frame()
+	if got := h.a.cloneParent(box); got != "~/Projects" {
+		t.Fatalf("build-box's clone parent is %q, want ~/Projects", got)
+	}
+	if got := h.a.cloneParent(local); got != parent {
+		t.Fatalf("this machine's clone parent is %q, want %q", got, parent)
+	}
+	if d, ok := h.a.lastDraft(box); ok {
+		t.Fatalf("build-box's last draft is the label's: %+v", d)
+	}
+	if d, ok := h.a.lastDraft(local); !ok || d.workspace != here {
+		t.Fatalf("this machine's last draft is %+v, %v; want %s", d, ok, here)
 	}
 }
