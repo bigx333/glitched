@@ -37,7 +37,7 @@ func providersFixture(a *app, state string) {
 	}
 	a.models.reported["antigravity"] = agyModels
 	a.models.served["antigravity"] = transport.ProviderInfo{Name: "antigravity", Info: provider.Info{Name: "Antigravity", Version: "1.5.14", Models: agyModels, Path: filepath.Join(home, ".local/bin/agy")}}
-	if state == "two" {
+	if state == "two" || state == "gone" {
 		return
 	}
 	a.models.reported["codex"] = []provider.Model{{ID: "gpt-5.5-codex", Name: "GPT-5.5 Codex"}, {ID: "gpt-5.5", Name: "GPT-5.5"}}
@@ -47,21 +47,20 @@ func providersFixture(a *app, state string) {
 }
 
 // TestProvidersShot writes PNGs of Settings › Providers to the folder
-// PRSHOT names, one per state, theme and window size, in the layout
-// PVARIANT names (A or B).
+// PRSHOT names, one per state, theme and window size.
 func TestProvidersShot(t *testing.T) {
 	out := os.Getenv("PRSHOT")
 	if out == "" {
 		t.Skip()
 	}
 	os.MkdirAll(out, 0o755)
-	if v := os.Getenv("PVARIANT"); v != "" {
-		providersVariant = v
-	}
-	for _, state := range []string{"one", "two", "four"} {
+	for _, state := range []string{"one", "two", "four", "gone"} {
 		a := offline(t)
 		providersFixture(a, state)
 		a.model, a.effort = modelKey{"claude", "claude-opus-5-5"}, "high"
+		if state == "gone" {
+			a.model = modelKey{"claude", "claude-opus-5"}
+		}
 		tt := newTester(t, a, 1320, 860)
 		settleTester(tt)
 		a.router.Push("/settings/providers")
@@ -70,22 +69,23 @@ func TestProvidersShot(t *testing.T) {
 			w, h  int
 			light bool
 			open  bool
+			menu  bool
 		}{
-			{"dark", 1320, 860, false, false},
-			{"light", 1320, 860, true, false},
-			{"dark-open", 1320, 860, false, true},
-			{"light-open", 1320, 860, true, true},
-			{"dark-narrow", 760, 860, false, false},
-			{"dark-narrow-open", 760, 860, false, true},
-			{"light-narrow-open", 760, 860, true, true},
+			{"dark-menu", 1320, 860, false, true, true},
+			{"light-menu", 1320, 860, true, true, true},
+			{"dark", 1320, 860, false, false, false},
+			{"light", 1320, 860, true, false, false},
+			{"dark-open", 1320, 860, false, true, false},
+			{"light-open", 1320, 860, true, true, false},
+			{"dark-narrow", 760, 860, false, false, false},
+			{"dark-narrow-open", 760, 860, false, true, false},
+			{"light-narrow-open", 760, 860, true, true, false},
 		} {
 			clear(a.providersOpen)
-			a.providersTab = 0
 			if v.open {
 				a.providersOpen["claude"] = true
 				if state == "four" {
 					a.providersOpen["claude"], a.providersOpen["codex"] = false, true
-					a.providersTab = 2
 				}
 			}
 			a.settings.theme = darkTheme.name
@@ -95,12 +95,28 @@ func TestProvidersShot(t *testing.T) {
 			tt.SetSize(v.w, v.h)
 			settleTester(tt)
 			tt.Advance(time.Second)
+			if v.menu {
+				r, ok := tt.Find("Default model for new threads")
+				if !ok {
+					t.Fatal("no default model control")
+				}
+				tt.Move(r.X+r.W/2, r.Y+r.H/2)
+				tt.Advance(time.Second)
+				if err := tt.Click("Default model for new threads"); err != nil {
+					t.Fatal(err)
+				}
+				tt.Advance(time.Second)
+			}
 			f, err := os.Create(filepath.Join(out, fmt.Sprintf("%s-%s.png", state, v.name)))
 			if err != nil {
 				t.Fatal(err)
 			}
 			png.Encode(f, tt.Image())
 			f.Close()
+			if v.menu {
+				tt.ClickAt(4, 400)
+				tt.Advance(time.Second)
+			}
 		}
 	}
 }
