@@ -309,6 +309,9 @@ func (g *Agent) notify(m message) {
 			Message string `json:"message"`
 		} `json:"error"`
 		TokenUsage struct {
+			Total struct {
+				TotalTokens int64 `json:"totalTokens"`
+			} `json:"total"`
 			Last struct {
 				TotalTokens int64 `json:"totalTokens"`
 			} `json:"last"`
@@ -333,7 +336,7 @@ func (g *Agent) notify(m message) {
 		live := g.started && !g.ended && (n.TurnID == "" || n.TurnID == g.turn)
 		switch {
 		case !live:
-		case m.Method == "thread/tokenUsage/updated" && n.TokenUsage.Last.TotalTokens > 0:
+		case m.Method == "thread/tokenUsage/updated" && n.TokenUsage.Last.TotalTokens > 0 && g.p.total.Swap(n.TokenUsage.Total.TotalTokens) != n.TokenUsage.Total.TotalTokens:
 			g.queueLocked(provider.Context{Used: n.TokenUsage.Last.TotalTokens, Window: n.TokenUsage.ModelContextWindow})
 		case m.Method == "thread/compacted":
 			g.queueLocked(provider.Context{Compacted: true})

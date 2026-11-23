@@ -83,6 +83,7 @@ type fake struct {
 	turns   int
 	turn    string
 	active  bool
+	spent   int           // the thread's tokens so far
 	stop    chan struct{} // takes an interrupt of the active turn
 	steers  chan string
 
@@ -377,9 +378,12 @@ func (f *fake) complete(status string, turnErr any) {
 	thread, turn := f.ids()
 	f.mu.Lock()
 	f.active = false
+	f.spent += 100
+	spent := f.spent
 	f.mu.Unlock()
-	usage := map[string]any{"totalTokens": 100, "inputTokens": 80, "cachedInputTokens": 0, "outputTokens": 20, "reasoningOutputTokens": 0}
-	f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": usage, "last": usage, "modelContextWindow": 258400}})
+	last := map[string]any{"totalTokens": 100, "inputTokens": 80, "cachedInputTokens": 0, "outputTokens": 20, "reasoningOutputTokens": 0}
+	total := map[string]any{"totalTokens": spent, "inputTokens": spent * 4 / 5, "cachedInputTokens": 0, "outputTokens": spent / 5, "reasoningOutputTokens": 0}
+	f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": total, "last": last, "modelContextWindow": 258400}})
 	f.notify("turn/completed", map[string]any{"threadId": thread, "turn": map[string]any{"id": turn, "status": status, "error": turnErr, "items": []any{}}})
 	f.notify("thread/status/changed", map[string]any{"threadId": thread, "status": map[string]any{"type": "idle"}})
 }
@@ -480,6 +484,15 @@ func (f *fake) play(n int, turn, said string) {
 		f.message("msg-b", "second")
 	case "whole":
 		f.item("item/completed", map[string]any{"type": "agentMessage", "id": "msg-w", "text": "all at once"})
+	case "resent":
+		if n == 2 {
+			f.mu.Lock()
+			spent := f.spent
+			f.mu.Unlock()
+			cached := map[string]any{"totalTokens": spent, "inputTokens": spent, "cachedInputTokens": 0, "outputTokens": 0, "reasoningOutputTokens": 0}
+			f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": cached, "last": cached, "modelContextWindow": 258400}})
+		}
+		f.message("msg-"+turn, "resent")
 	case "compacted":
 		f.item("item/started", map[string]any{"type": "contextCompaction", "id": "compact-1"})
 		f.item("item/completed", map[string]any{"type": "contextCompaction", "id": "compact-1"})
