@@ -70,6 +70,9 @@ func TestAgy1514Replays(t *testing.T) {
 	if got, want := contexts(events), []provider.Context{{Used: 10756, Window: 1048576}, {Used: 11469, Window: 1048576}}; !slices.Equal(got, want) {
 		t.Fatalf("the first turn's context %+v, want %+v: the session's empty start reports nothing", got, want)
 	}
+	if got, want := reports(events), []provider.Event{provider.Granted{Access: api.AccessAsk, Mode: "default"}, provider.Ran{Model: "gemini-3.8-flash", Effort: "high"}}; !slices.Equal(got, want) {
+		t.Fatalf("reported %+v, want %+v", got, want)
+	}
 	var answer string
 	json.Unmarshal(find(t, wire(t, log), "permission answered")[0].Params, &answer)
 	if answer != "allow" {

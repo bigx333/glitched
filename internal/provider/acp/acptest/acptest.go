@@ -314,6 +314,9 @@ func (f *fake) NewSession(ctx context.Context, p acp.NewSessionRequest) (acp.New
 	f.servers = p.McpServers
 	options := f.options()
 	f.mu.Unlock()
+	if f.is("silent") {
+		return acp.NewSessionResponse{SessionId: id}, nil
+	}
 	if f.remembers() {
 		m := memory()
 		m[id] = []string{}
@@ -359,7 +362,9 @@ func (f *fake) SetSessionConfigOption(ctx context.Context, p acp.SetSessionConfi
 		if f.is("reject-model") || f.is("memory-reject-model") {
 			return acp.SetSessionConfigOptionResponse{}, acp.NewInvalidParams("Model not available on your plan")
 		}
-		f.model = string(v.Value)
+		if !f.is("substitute-model") {
+			f.model = string(v.Value)
+		}
 	}
 	if v.ConfigId == "thought_level" {
 		f.level = string(v.Value)
@@ -514,6 +519,16 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 			f.record("child", cmd.Process.Pid)
 		}
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Started a child."))
+	case "switch-mid-turn":
+		// As though the user moved agy's session on in agy itself.
+		f.mu.Lock()
+		f.mode, f.model = "plan", Models[1].ID
+		options := f.options()
+		f.mu.Unlock()
+		f.send(ctx, sid, acp.UpdateAgentMessageText("Before."))
+		f.send(ctx, sid, acp.SessionUpdate{CurrentModeUpdate: &acp.SessionCurrentModeUpdate{CurrentModeId: "plan"}})
+		f.send(ctx, sid, acp.SessionUpdate{ConfigOptionUpdate: &acp.SessionConfigOptionUpdate{ConfigOptions: options}})
+		f.send(ctx, sid, acp.UpdateAgentMessageText("After."))
 	case "usage":
 		// What the session holds, which is no turn's use, then the turn's.
 		f.mu.Lock()
