@@ -290,6 +290,9 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 		m, _ := a.modelOf(a.model)
 		modelTile(c, m.icon, m.color, float32(size))
 	case "model.level":
+		if a.cliEffort(*t) {
+			break
+		}
 		_, e := a.runningModel(*t, "")
 		ui.Text(c, e.label).FontSize(11).FontWeight(600).TextColor(e.color)
 	case "model.zap":

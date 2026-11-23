@@ -195,8 +195,19 @@ func (p *proc) signedIn(ctx context.Context) error {
 
 // models are what Codex offers the account, its default first, each with
 // the efforts it runs at, as Codex orders them, and the one it runs at
-// where a thread names none. The first default is the Default.
+// where a thread names none. The Default is the model a thread that names
+// none runs: the user's config's, as config/read says it, at its effort
+// where it names one; else the first model/list marks isDefault. A model
+// the config names that Codex doesn't list is listed by its id.
 func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
+	var config struct {
+		Config struct {
+			Model  string `json:"model"`
+			Effort string `json:"model_reasoning_effort"`
+		} `json:"config"`
+	}
+	// A Codex without config/read runs model/list's default.
+	p.conn.call(ctx, "config/read", map[string]any{"includeLayers": false}, &config)
 	var out, rest []provider.Model
 	cursor := ""
 	for range 50 {
@@ -242,7 +253,23 @@ func (p *proc) models(ctx context.Context) ([]provider.Model, error) {
 		}
 		cursor = *r.NextCursor
 	}
-	return append(out, rest...), nil
+	all := append(out, rest...)
+	if id := config.Config.Model; id != "" {
+		if !slices.ContainsFunc(all, func(m provider.Model) bool { return m.ID == id }) {
+			all = append(all, provider.Model{ID: id, Name: id})
+		}
+		for i := range all {
+			all[i].Default = all[i].ID == id
+		}
+	}
+	if e := config.Config.Effort; e != "" {
+		for i := range all {
+			if all[i].Default {
+				all[i].DefaultEffort = e
+			}
+		}
+	}
+	return all, nil
 }
 
 // startThread opens the Codex thread the Glitched thread's runs go to,

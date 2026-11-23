@@ -10,9 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/ui"
+
 	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/jsonfile"
+	"glitched/internal/plugins"
 	"glitched/internal/provider"
 	"glitched/internal/provider/acp/acptest"
 	"glitched/internal/provider/codex/codextest"
@@ -227,28 +230,175 @@ func TestAProgramsDefaultTheEngineCantSayIsTheAppsOwn(t *testing.T) {
 }
 
 // A draft on another machine's engine names no model where the default
-// follows the program's own: that machine's program runs its own, which
-// this machine's engine doesn't know, and the picker says so. A model the
-// user picked goes as it is.
+// follows the program's own, and no effort but one the user chose: that
+// machine's program runs its own, which this machine's engine doesn't
+// know, and the picker says so, checking no row of this machine's. A
+// model the user picked goes as it is.
 func TestARemoteDraftLeavesTheModelToItsProgram(t *testing.T) {
 	for _, tc := range providersFollowed {
 		t.Run(tc.name, func(t *testing.T) {
 			h, _ := startReporting(t, tempDir(t), tc.provider, tc.file, cliModels(true))
 			remote := thread{env: &client.Env{Kind: client.Remote}, Thread: &client.Thread{}}
-			if got := h.a.newThreadRef(remote); got.Provider != tc.provider || got.Model != "" || got.Effort != "low" {
-				t.Errorf("a remote draft's thread starts on %+v, want %s naming no model", got, tc.provider)
+			if got := h.a.newThreadRef(remote); got.Provider != tc.provider || got.Model != "" || got.Effort != "" {
+				t.Errorf("a remote draft's thread starts on %+v, want %s naming no model and no effort", got, tc.provider)
 			}
-			if got := h.a.shownModel(remote).name; got != "CLI default" {
-				t.Errorf("a remote draft's picker shows %q", got)
+			var picker composerModel
+			ui.NewTester(func(c *ui.Context) { picker = h.a.composerModelOf(c, remote, plugins.ThreadRecord{}, "panel") }, 500, 500).Frame()
+			if picker.Model != "CLI default" || picker.Key != (modelKey{}).String() {
+				t.Errorf("a remote draft's picker shows %q and checks %q", picker.Model, picker.Key)
 			}
-			if got := h.a.newThreadRef(h.a.current()); got.Model != "beta" {
+			if got := h.a.newThreadRef(h.a.current()); got.Model != "beta" || got.Effort != "low" {
 				t.Errorf("this machine's draft's thread starts on %+v", got)
+			}
+			h.a.effort = "high"
+			h.a.saveComposer()
+			if got := h.a.newThreadRef(remote); got.Model != "" || got.Effort != "high" {
+				t.Errorf("a remote draft's thread at the user's effort starts on %+v", got)
 			}
 			h.a.chooseModel(modelKey{tc.provider, "alpha"})
 			if got := h.a.newThreadRef(remote); got.Model != "alpha" {
 				t.Errorf("a remote draft's thread on the user's pick starts on %+v", got)
 			}
 		})
+	}
+}
+
+// Check again takes a default that moved, though no draft shows: the
+// page shows it at once.
+func TestCheckAgainShowsAMovedDefaultOnTheProvidersPage(t *testing.T) {
+	h, now := startReporting(t, tempDir(t), "claude", "", cliModels(true))
+	openProviders(h, "claude")
+	moved := cliModels(true)
+	moved[1].Default, moved[2].Default, moved[2].DefaultEffort = false, true, "high"
+	now.Store(&moved)
+	h.a.checkProviders()
+	allAnswered(h)
+	h.tt.Frame()
+	if !h.tt.HasText("Gamma · CLI default") || h.a.modelRef().Model != "gamma" {
+		t.Errorf("after Check again, the page shows %q", h.tt.Texts())
+	}
+}
+
+// Going back to the program's own default drops an effort the user chose
+// with it: the effort moves with the program's after.
+func TestGoingBackToTheProgramsDefaultDropsTheEffortChosen(t *testing.T) {
+	dir := tempDir(t)
+	h, now := startReporting(t, dir, "claude", `{"effort":"high"}`, cliModels(true))
+	if got := h.a.modelRef().Effort; got != "high" {
+		t.Fatalf("the effort chosen became %q", got)
+	}
+	openProviders(h, "claude")
+	h.click("Default model for new threads")
+	h.tt.Advance(time.Second)
+	h.click("CLI default · Beta")
+	h.tt.Frame()
+	if got, f := h.a.modelRef().Effort, composerFile(t, dir); got != "low" || f.Effort != "" {
+		t.Fatalf("back to the program's default, the effort is %q and composer.json holds %+v", got, f)
+	}
+	moved := cliModels(true)
+	moved[1].DefaultEffort = "high"
+	now.Store(&moved)
+	h.a.checkProviders()
+	allAnswered(h)
+	h.tt.Frame()
+	if got := h.a.modelRef().Effort; got != "high" {
+		t.Errorf("after the program's effort moved, the default's is %q", got)
+	}
+}
+
+// The effort a program runs its default at is the default's only while
+// it follows that program: a model chosen without an effort, or a
+// fallback where no engine said a default, keeps the app's own.
+func TestAProgramsEffortIsOnlyItsOwnDefaults(t *testing.T) {
+	h, _ := startReporting(t, tempDir(t), "codex", `{"model":{"provider":"codex","id":"beta"}}`, cliModels(true))
+	if got := h.a.modelRef(); got.Model != "beta" || got.Effort != "high" {
+		t.Errorf("a chosen Beta without an effort starts on %+v, want high", got)
+	}
+	unknown := cliModels(false)
+	unknown[0].DefaultEffort = "low"
+	h, _ = startReporting(t, tempDir(t), "codex", `{"model":{"provider":"codex","id":""}}`, unknown)
+	if got := h.a.modelRef(); got.Model != "alpha" || got.Effort != "high" {
+		t.Errorf("with no default said, a new thread starts on %+v, want alpha at high", got)
+	}
+}
+
+// A composer.json that doesn't parse, repaired by a change, keeps
+// following the program's own default.
+func TestARepairedComposerKeepsFollowingTheProgram(t *testing.T) {
+	dir := tempDir(t)
+	h, _ := startReporting(t, dir, "claude", "{", cliModels(true))
+	h.a.fast = true
+	h.a.saveComposer()
+	if f := composerFile(t, dir); f.Model != (modelKey{Provider: "claude"}) || f.Effort != "" || !f.Fast || !h.a.followsCLI {
+		t.Errorf("the repair wrote %+v, following %t", f, h.a.followsCLI)
+	}
+}
+
+// defaulting is a provider whose program's default depends on the
+// workspace, as its settings there name one (provider.Defaulter).
+type defaulting struct {
+	shifting
+	in map[string]string
+}
+
+func (d defaulting) DefaultModel(_ context.Context, workspace string) (string, error) {
+	return d.in[workspace], nil
+}
+
+// A draft in a workspace whose settings name the program's default starts
+// a thread on that one, as the picker shows; another draft's is the
+// engine's.
+func TestADraftsWorkspaceNamesTheProgramsDefault(t *testing.T) {
+	ws := t.TempDir()
+	models := cliModels(true)
+	var now atomic.Pointer[[]provider.Model]
+	now.Store(&models)
+	h := startWith(t, tempDir(t), func(c *daemon.Config) {
+		engineReportsBy(nil)(c)
+		c.Providers["claude"] = defaulting{shifting{c.Providers["claude"], &now}, map[string]string{ws: "gamma"}}
+	})
+	allAnswered(h)
+	h.a.startIn(draft{h.local(), ws})
+	h.until("the workspace's default", func() bool {
+		h.tt.Frame()
+		return h.a.modelRef().Model == "gamma"
+	})
+	if !h.tt.HasText("Gamma") {
+		t.Errorf("the picker doesn't show Gamma: %q", h.tt.Texts())
+	}
+	h.a.draft = "Say hi."
+	h.a.send(h.a.current())
+	h.until("the thread", func() bool { return !h.a.current().id().IsZero() })
+	if got := h.a.current().View.Model; got.Model != "gamma" {
+		t.Errorf("the thread runs %+v, want the Gamma the picker shows", got)
+	}
+	h.a.startIn(draft{h.local(), t.TempDir()})
+	h.until("another workspace's default", func() bool {
+		h.tt.Frame()
+		return h.a.modelRef().Model == "beta"
+	})
+}
+
+// The model Codex's config names is its default, at the config's effort:
+// the picker shows it, and the thread's turn runs it.
+func TestCodexsConfiguredModelIsTheOneItRuns(t *testing.T) {
+	dir := tempDir(t)
+	os.WriteFile(filepath.Join(dir, "composer.json"), []byte(`{"model":{"provider":"codex","id":""}}`), 0o600)
+	h := startWith(t, dir, withCodex(t, "configured"))
+	allAnswered(h)
+	h.until("Codex's configured model", func() bool {
+		h.tt.Frame()
+		return h.a.modelRef().Model == "gpt-6-luna"
+	})
+	if !h.tt.HasText("GPT-6 Luna") || !h.tt.HasText("Low") {
+		t.Fatalf("the picker doesn't show the configured GPT-6 Luna at Low: %q", h.tt.Texts())
+	}
+	sendNew(h, "Say hi.")
+	h.until("the turn", func() bool { return len(wireEntries(t, os.Getenv(codextest.Log), "turn/start")) > 0 })
+	var turn struct{ Model, Effort string }
+	json.Unmarshal(wireEntries(t, os.Getenv(codextest.Log), "turn/start")[0], &turn)
+	if turn.Model != "gpt-6-luna" || turn.Effort != "low" {
+		t.Errorf("Codex's turn runs %+v, want the GPT-6 Luna at low the picker shows", turn)
 	}
 }
 

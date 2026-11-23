@@ -76,12 +76,13 @@ const goneModel = "No longer offered"
 
 // pickerRows are the rows of family f's models: what its engine offers,
 // and the model chosen, of f, where the engine doesn't offer it: no
-// longer, once it answered, or not yet, till it does.
+// longer, once it answered, or not yet, till it does; or the program's
+// own default, which a workspace's settings name and it doesn't list.
 func (a *app) pickerRows(f family) []modelInfo {
 	rows := a.familyModels(f)
 	m, offered := a.modelOf(a.model)
 	if !offered && m.key.Provider == f.provider {
-		if _, answered := a.models.reported[f.provider]; answered {
+		if _, answered := a.models.reported[f.provider]; answered && !a.followsCLI {
 			m.desc = goneModel
 		}
 		if slices.ContainsFunc(a.offeredModels(), func(o modelInfo) bool { return o.name == m.name }) {
@@ -187,7 +188,9 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 				name, runs := a.runningModel(t, m.name)
 				modelTile(c, m.icon, m.color, 18)
 				ui.Text(c, name).FontSize(12).SingleLine()
-				ui.Text(c, runs.label).FontSize(11).FontWeight(600).TextColor(runs.color)
+				if !a.cliEffort(t) {
+					ui.Text(c, runs.label).FontSize(11).FontWeight(600).TextColor(runs.color)
+				}
 				if a.fast {
 					a.zapIcon(c, "trigger-zap", 12)
 				}
@@ -226,7 +229,7 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 					ui.Row(c).AlignItems(ui.Stretch).Children(func() {
 						a.pickerFamilies(c)
 						ui.Box(c).Width(1).Background(palette.border)
-						a.pickerModels(c)
+						a.pickerModels(c, a.pickedIn(t))
 					})
 					ui.Divider(c).Background(palette.border)
 					a.effortSlider(c)
@@ -297,7 +300,7 @@ type modelChoice struct {
 func (a *app) composerModelOf(c *ui.Context, t thread, r plugins.ThreadRecord, part string) composerModel {
 	size := c.Theme().FontSize
 	m := a.shownModel(t)
-	out := composerModel{Thread: r, Part: part, Model: m.name, Key: a.model.String(), Effort: a.efforts()[a.effortLevel()].label, Fast: a.fast, FamilyKey: a.pickerFamily, LockKey: a.pickerLock,
+	out := composerModel{Thread: r, Part: part, Model: m.name, Key: a.pickedIn(t).String(), Effort: a.efforts()[a.effortLevel()].label, Fast: a.fast, FamilyKey: a.pickerFamily, LockKey: a.pickerLock,
 		FamilyRowHeight: familyRowHeight(c),
 		ModelRowHeight:  modelRowHeight(c, size),
 		ModelsMaxHeight: a.modelsMaxHeight(c),
@@ -310,7 +313,7 @@ func (a *app) composerModelOf(c *ui.Context, t thread, r plugins.ThreadRecord, p
 	for _, f := range a.modelFamilies() {
 		out.Families = append(out.Families, modelFamily{f.provider, f.name, f.desc})
 		for _, m := range a.pickerRows(f) {
-			out.Models = append(out.Models, modelChoice{m.key.String(), m.name, m.short, about(m), f.provider, f.name})
+			out.Models = append(out.Models, modelChoice{m.key.String(), m.name, m.short, a.rowAbout(m), f.provider, f.name})
 		}
 	}
 	return out
@@ -327,10 +330,20 @@ func (a *app) shownModel(t thread) modelInfo {
 	return m
 }
 
-// about is what a model's row says of it: that its provider's program
+// pickedIn is the model the picker checks in t's composer: the chosen
+// one, but none where t's provider's program chooses (cliDecides), as no
+// row is the one it runs.
+func (a *app) pickedIn(t thread) modelKey {
+	if a.cliDecides(t) {
+		return modelKey{}
+	}
+	return a.model
+}
+
+// rowAbout is what a model's row says of it: that its provider's program
 // runs it where given none, and what it's for.
-func about(m modelInfo) string {
-	if !m.cliDefault {
+func (a *app) rowAbout(m modelInfo) string {
+	if def, ok := a.cliDefault(m.key.Provider); !ok || def.key != m.key {
 		return m.desc
 	}
 	return strings.Join(slices.DeleteFunc([]string{"CLI default", m.desc}, func(s string) bool { return s == "" }), " · ")
@@ -488,7 +501,7 @@ func (a *app) pickerFamilies(c *ui.Context) {
 // as tall as the longest list whichever shows: the popover keeps its size,
 // and the families stay put under the pointer as it moves between them.
 // Past modelsMaxHeight the lists scroll.
-func (a *app) pickerModels(c *ui.Context) {
+func (a *app) pickerModels(c *ui.Context, picked modelKey) {
 	ui.Scroll(c).Key("models").Grow(1).MaxHeight(a.modelsMaxHeight(c)).Children(func() {
 		ui.Grid(c).Columns(1).Children(func() {
 			for _, f := range a.shownFamilies() {
@@ -498,7 +511,7 @@ func (a *app) pickerModels(c *ui.Context) {
 				}
 				list.Children(func() {
 					for _, m := range a.pickerRows(f) {
-						a.pickerModel(c, m)
+						a.pickerModel(c, m, picked)
 					}
 				})
 			}
@@ -506,12 +519,12 @@ func (a *app) pickerModels(c *ui.Context) {
 	})
 }
 
-func (a *app) pickerModel(c *ui.Context, m modelInfo) {
-	selected := m.key == a.model
+func (a *app) pickerModel(c *ui.Context, m modelInfo, picked modelKey) {
+	selected := m.key == picked
 	if row(c, m.key.String(), selected).Padding(7, 10).Gap(10).Children(func() {
 		ui.Column(c).Grow(1).Shrink(1).Gap(1).Children(func() {
 			ui.Text(c, m.short).FontWeight(500).TextColor(palette.text).SingleLine()
-			ui.Text(c, about(m)).FontSize(11.5).TextColor(palette.muted).SingleLine()
+			ui.Text(c, a.rowAbout(m)).FontSize(11.5).TextColor(palette.muted).SingleLine()
 		})
 		if selected {
 			ui.Icon(c, icCheck).FontSize(14).TextColor(palette.accent)

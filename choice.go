@@ -45,8 +45,8 @@ var ownChoice = choice{Model: modelKey{"claude", "claude-opus-5-5"}, Effort: "hi
 // its first model, else none, which the program chooses. With none
 // chosen, it's Claude Code's own default; else the app's own where its
 // engine offers it, else the first model the engines offer. The effort is
-// file's, else the one the program runs the model at where given none,
-// else the app's own, as the model runs at it (effortFor).
+// file's, else, for a provider's own default, the one its program runs it
+// at, else the app's own, as the model runs at it (effortFor).
 func (a *app) starting(file choice) choice {
 	ch := ownChoice
 	ch.Follow = file.Model.ID == ""
@@ -70,7 +70,10 @@ func (a *app) starting(file choice) choice {
 		}
 	}
 	m, _ := a.modelOf(ch.Model)
-	ch.Effort = effortFor(m, cmp.Or(m.defaultEffort, ownChoice.Effort))
+	ch.Effort = effortFor(m, ownChoice.Effort)
+	if ch.Follow && known {
+		ch.Effort = effortFor(m, cmp.Or(def.defaultEffort, ownChoice.Effort))
+	}
 	if e := effortFor(m, file.Effort); strings.EqualFold(e, file.Effort) {
 		ch.Effort = e
 	}
@@ -105,6 +108,20 @@ func (a *app) loadComposer() {
 	a.savedChoice, a.triedChoice = a.choice(), a.choice()
 }
 
+// reconcile has a default the user left as it was take what the engines
+// now offer as the answer comes, though no draft shows: their first model
+// where none was chosen, a program's own default where it's followed, an
+// effort the model runs at. An edit not yet saved, or the effort's thumb
+// held, leaves it to saveComposer, as that edit is saved.
+func (a *app) reconcile() {
+	if !a.models.changed || a.effortHeld || a.choice() != a.savedChoice {
+		return
+	}
+	a.models.changed = false
+	a.show(a.starting(a.composerFile))
+	a.savedChoice, a.triedChoice = a.choice(), a.choice()
+}
+
 // saveComposer keeps the default for the next start, once it changed and
 // the effort's thumb is let go. Another window on the state directory
 // saves its own: under the file's lock, only what changed here goes onto
@@ -136,10 +153,7 @@ func (a *app) saveComposer() {
 	}
 	file, err := jsonfile.Edit(a.composerPath(), func(f *choice) error {
 		switch {
-		case ch.Follow && (!had.Follow || ch.Model.Provider != had.Model.Provider):
-			// A provider's own default goes with its own effort.
-			f.Model, f.Effort = modelKey{Provider: ch.Model.Provider}, ""
-		case !ch.Follow && (ch.Model != had.Model || had.Follow):
+		case ch.Model != had.Model || !ch.Follow && had.Follow:
 			// The effort goes with the model: one the file holds that
 			// the last model didn't run at mustn't come back with this.
 			f.Model, f.Effort = ch.Model, ch.Effort
@@ -156,8 +170,16 @@ func (a *app) saveComposer() {
 	})
 	syntax, kind := (*json.SyntaxError)(nil), (*json.UnmarshalTypeError)(nil)
 	if errors.As(err, &syntax) || errors.As(err, &kind) {
-		// A file that doesn't parse holds no default to keep.
-		file, err = ch, jsonfile.Write(a.composerPath(), ch)
+		// A file that doesn't parse holds no default to keep: it holds
+		// this one, a provider's own default as the provider alone.
+		file = ch
+		if ch.Follow {
+			file.Model = modelKey{Provider: ch.Model.Provider}
+			if ch.Effort == a.starting(choice{Model: file.Model}).Effort {
+				file.Effort = ""
+			}
+		}
+		err = jsonfile.Write(a.composerPath(), file)
 	}
 	if err != nil {
 		log.Printf("glitched: composer: %v", err)
@@ -210,6 +232,7 @@ func (a *app) threadControls(t thread, build func()) {
 		}
 	}()
 	if t.id().IsZero() {
+		a.draftDefaults(t)
 		build()
 		a.saveComposer()
 		return

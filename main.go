@@ -354,10 +354,17 @@ type app struct {
 	maxAt      time.Time
 	model      modelKey
 	followsCLI bool // the default's model is its provider's program's own (choice)
-	effort     string
-	access     string // one of accessLevels
-	accessOpen bool
-	accessAt   time.Time // when the level last changed, for its effect
+	// cliDefaults are the models each provider's program runs where given
+	// none in a workspace, by provider and workspace, "" where it can't
+	// say (draftDefaults); cliAsking those being asked, and defaultsIn the
+	// workspace of the draft, "" for none or another machine's.
+	cliDefaults map[[2]string]string
+	cliAsking   map[[2]string]bool
+	defaultsIn  string
+	effort      string
+	access      string // one of accessLevels
+	accessOpen  bool
+	accessAt    time.Time // when the level last changed, for its effect
 	// savedChoice is the default for a new thread as composer.json last
 	// gave it, triedChoice the one last saved or tried (saveComposer),
 	// and pickerLock the only family the model picker offers, a thread's
@@ -780,6 +787,8 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 		pluginsOpen:    map[string]bool{},
 		providersOpen:  map[string]bool{},
 		clis:           newCLILists(),
+		cliDefaults:    map[[2]string]string{},
+		cliAsking:      map[[2]string]bool{},
 		pluginRecords:  map[string]string{},
 		pluginSections: map[string]string{},
 		pluginMessages: map[string]*toldMessages{},

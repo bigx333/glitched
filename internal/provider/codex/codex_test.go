@@ -281,11 +281,64 @@ func TestDescribeListsModelsAndEfforts(t *testing.T) {
 		}
 		got = append(got, fmt.Sprintf("%s=%s:%s@%s default=%t", m.ID, m.Name, strings.Join(efforts, ","), m.DefaultEffort, m.Default))
 	}
-	if want := []string{"gpt-6.2-sol=GPT-6.2 Sol:low,medium,high,xhigh@medium default=true", "gpt-6-luna=GPT-6 Luna:low,medium@low default=false"}; !slices.Equal(got, want) {
+	if want := []string{"gpt-6.2-sol=GPT-6.2 Sol:low,medium,high,xhigh@medium default=true", "gpt-6-luna=GPT-6 Luna:low,medium@medium default=false"}; !slices.Equal(got, want) {
 		t.Errorf("models %q, want %q", got, want)
 	}
 	if n := len(sent(t, log, "turn/start")); n != 0 {
 		t.Errorf("Describe started %d turns", n)
+	}
+}
+
+// A Codex whose launch setting names its CODEX_HOME runs the model that
+// folder's config names, though the engine's own CODEX_HOME names
+// another: Describe's Default is that one.
+func TestDescribesDefaultIsTheLaunchFoldersConfig(t *testing.T) {
+	a, _ := fake(t, "hi")
+	engines, home := t.TempDir(), t.TempDir()
+	t.Setenv("CODEX_HOME", engines)
+	os.WriteFile(filepath.Join(engines, "config.toml"), []byte("model = \"gpt-6.2-sol\"\n"), 0o600)
+	os.WriteFile(filepath.Join(home, "config.toml"), []byte("model = \"gpt-6-luna\"\n"), 0o600)
+	a.Place(provider.Launch{Path: a.Path, Home: home})
+	info, err := a.Describe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var defaults []string
+	for _, m := range info.Models {
+		if m.Default {
+			defaults = append(defaults, m.ID)
+		}
+	}
+	if !slices.Equal(defaults, []string{"gpt-6-luna"}) {
+		t.Errorf("with the launch folder's config naming gpt-6-luna, the Default is %q", defaults)
+	}
+}
+
+// The Default is the model a thread naming none runs: the one the user's
+// config names, at its effort where it names one, though model/list marks
+// another, and listed by its id where Codex doesn't list it; with no
+// config/read, model/list's.
+func TestDescribesDefaultIsTheConfigs(t *testing.T) {
+	for scenario, want := range map[string]string{
+		"configured":          "gpt-6-luna@low",
+		"configured-unlisted": "gpt-7-preview@",
+		"no-config-read":      "gpt-6.2-sol@medium",
+		"hi":                  "gpt-6.2-sol@medium",
+	} {
+		a, _ := fake(t, scenario)
+		info, err := a.Describe(context.Background())
+		if err != nil {
+			t.Fatalf("%s: %v", scenario, err)
+		}
+		var defaults []string
+		for _, m := range info.Models {
+			if m.Default {
+				defaults = append(defaults, m.ID+"@"+m.DefaultEffort)
+			}
+		}
+		if !slices.Equal(defaults, []string{want}) {
+			t.Errorf("%s: the Default is %q, want %q", scenario, defaults, want)
+		}
 	}
 }
 
