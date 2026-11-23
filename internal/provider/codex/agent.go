@@ -64,7 +64,6 @@ type ask struct {
 	ids       []string        // Codex's ids of the questions, in order
 	tool      bool            // an MCP tool's approval, asked as a question
 	questions api.Questions   // what the card shows, for a question
-	others    []bool          // whether each question takes an answer of the user's own
 	wanted    json.RawMessage // the permissions asked, for a permissions request
 	deny      string          // the decision that denies a command, of those Codex offers
 	state     askState
@@ -442,7 +441,6 @@ func (g *Agent) request(m message) {
 			ID       string `json:"id"`
 			Header   string `json:"header"`
 			Question string `json:"question"`
-			IsOther  bool   `json:"isOther"`
 			IsSecret bool   `json:"isSecret"`
 			Options  []struct {
 				Label       string `json:"label"`
@@ -484,7 +482,9 @@ func (g *Agent) request(m message) {
 		if b.Command == "" {
 			b.Command = "a command Codex didn't name"
 		}
-		b.Args = extraAccess(r.Network, r.Additional)
+		if extra := extraAccess(r.Network, r.Additional); extra != "" {
+			b.Reason = strings.TrimSpace(b.Reason + "\n" + extra)
+		}
 		a.deny = denial(r.Decisions)
 	case "item/fileChange/requestApproval":
 		b = body{Operation: "edit", Reason: r.Reason}
@@ -523,7 +523,6 @@ func (g *Agent) request(m message) {
 			}
 			a.questions.Questions = append(a.questions.Questions, x)
 			a.ids = append(a.ids, q.ID)
-			a.others = append(a.others, q.IsOther)
 		}
 		raw, _ := json.Marshal(a.questions)
 		_, err := api.ParseQuestions(raw)
@@ -570,11 +569,11 @@ func (g *Agent) withdrawLocked(reason string) {
 // already answered takes nothing more, and one Codex stopped waiting on
 // takes no answer.
 func (g *Agent) respond(ctx context.Context, r provider.Respond) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
 	a, ok := g.asks[r.Request]
 	switch {
 	case !ok:
@@ -597,9 +596,6 @@ func (g *Agent) respond(ctx context.Context, r provider.Respond) error {
 		for i, x := range answers.Answers {
 			picked := append([]string{}, x.Picked...)
 			if strings.TrimSpace(x.Other) != "" {
-				if !a.others[i] {
-					return fmt.Errorf("Codex takes only one of its own answers to %q.", a.questions.Questions[i].Text)
-				}
 				picked = append(picked, x.Other)
 			}
 			out[a.ids[i]] = map[string]any{"answers": picked}
