@@ -314,3 +314,55 @@ func TestAContextReportKeepsCredentialsOut(t *testing.T) {
 		t.Errorf("the thread's context model holds the credential: %q", v.Context.Model)
 	}
 }
+
+// quickAsker is a provider whose agent asks for credentials through
+// glitched mcp before its Open returns, as a quick agent may while the
+// host is still recording the run's start.
+type quickAsker struct {
+	provider.Adapter
+	h     *runtime.Host
+	asked chan askResult
+}
+
+func (q *quickAsker) Open(c context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	go func() {
+		a, err := q.h.AskCredentials(ctx, api.Ask{Thread: spec.Thread, Access: spec.Access, Call: "call-1", Credentials: probeAsk})
+		q.asked <- askResult{a, err}
+	}()
+	select {
+	case r := <-q.asked:
+		q.asked <- r
+	case <-time.After(time.Second):
+	}
+	return q.Adapter.Open(c, spec)
+}
+
+// An ask that comes while the run's start is still being recorded waits
+// for it, and opens its card, rather than being refused.
+func TestCredentialsAskedBeforeTheStartIsRecordedWait(t *testing.T) {
+	st, err := store.Open(dbPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault := secrets.New(t.TempDir())
+	q := &quickAsker{Adapter: fake.New(fake.Turn(true)), asked: make(chan askResult, 1)}
+	h, err := runtime.New(ctx, st, provider.Mux{"fake": q}, runtime.WithVault(vault))
+	if err != nil {
+		st.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Kill(); st.Close() })
+	q.h = h
+	v := vaulted{h: h, vault: vault, thread: newThread(t, h)}
+	submit(t, h, v.thread, dispatch("go", api.StartNow))
+	th := until(t, h, v.thread, "the credentials request", func(th api.Thread) bool {
+		return slices.ContainsFunc(th.Requests, func(r api.Request) bool { return r.Kind == api.KindCredentials })
+	})
+	r := th.Requests[slices.IndexFunc(th.Requests, func(r api.Request) bool { return r.Kind == api.KindCredentials })]
+	if err := v.provide(r, map[string]string{"GLX_PROBE": probe}); err != nil {
+		t.Fatal(err)
+	}
+	if got := wait(t, q.asked); got.err != nil || got.asked.Status != api.AskProvided {
+		t.Fatalf("the ask returned %+v, %v", got.asked, got.err)
+	}
+}

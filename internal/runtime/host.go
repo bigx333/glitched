@@ -72,6 +72,9 @@ type liveRun struct {
 	steering     context.Context
 	stopSteering context.CancelFunc
 	agent        provider.Agent // nil until the start succeeds
+	// started is closed once the run's start is recorded: its agent may
+	// call back through glitched mcp before then.
+	started chan struct{}
 }
 
 var _ api.Endpoint = (*Host)(nil)
@@ -383,6 +386,7 @@ func (h *Host) perform(e store.Effect) {
 		return
 	}
 	if _, started := o.(engine.Started); h.record(e.Thread, o, e.ID) && started {
+		close(lr.started)
 		h.attach(e.Thread, lr)
 	}
 }
@@ -618,7 +622,10 @@ func (h *Host) closeAgent(ag provider.Agent) bool {
 }
 
 func (h *Host) track(run api.ID, provider string, ag provider.Agent) *liveRun {
-	lr := &liveRun{run: run, provider: provider, agent: ag}
+	lr := &liveRun{run: run, provider: provider, agent: ag, started: make(chan struct{})}
+	if ag != nil {
+		close(lr.started)
+	}
 	lr.ctx, lr.cancel = context.WithCancel(h.ctx)
 	lr.steering, lr.stopSteering = context.WithCancel(lr.ctx)
 	h.mu.Lock()
