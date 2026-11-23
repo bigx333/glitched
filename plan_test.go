@@ -136,16 +136,17 @@ func TestALongPlanGivesTheHeaderWay(t *testing.T) {
 	}
 }
 
-// A run that ends with every step of its plan done takes the plan out of
-// the header; its checklist stays in the timeline.
-func TestADonePlanLeavesTheHeader(t *testing.T) {
+// A run that ends with every step of its plan done keeps the plan in the
+// header, all of it done, till the agent says another; its checklist
+// stays in the timeline.
+func TestADonePlanStaysInTheHeader(t *testing.T) {
 	h := planned(t, "plan-done",
 		planOf(api.PlanActive, api.PlanPending, api.PlanPending),
 		planOf(api.PlanDone, api.PlanDone, api.PlanDone),
 		provider.TextDelta{Text: "All done."},
 	)
-	if slices.Contains(h.tt.Texts(), "3 of 3") || drawnBy(h, "thread.header.plan") != "none" {
-		t.Errorf("a done plan still shows in the header: %q", h.tt.Texts())
+	if !slices.Contains(h.tt.Texts(), "3 of 3") || drawnBy(h, "thread.header.plan") != "plan" {
+		t.Errorf("a done plan left the header: %q", h.tt.Texts())
 	}
 	if !h.tt.HasText("3 of 3 done") {
 		t.Errorf("the timeline's checklist is gone: %q", h.tt.Texts())
