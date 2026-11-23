@@ -297,6 +297,18 @@ var grants = provider.Grants{
 	api.AccessFull:      {Mode: "bypassPermissions"},
 }
 
+// levels are the Glitched levels Claude Code's permission modes make,
+// grants read backwards. plan and dontAsk let the agent do less than Ask
+// does, which a run in either says.
+var levels = map[string]api.Access{
+	"default":           api.AccessAsk,
+	"plan":              api.AccessAsk,
+	"dontAsk":           api.AccessAsk,
+	"acceptEdits":       api.AccessAutoEdits,
+	"auto":              api.AccessAutoEdits,
+	"bypassPermissions": api.AccessFull,
+}
+
 // modelOf is the CLI's name for a model the GUI lists, as "Claude Opus 5.5"
 // is claude-opus-5-5. Any other name, such as an alias, goes as it is.
 func modelOf(name string) string {
