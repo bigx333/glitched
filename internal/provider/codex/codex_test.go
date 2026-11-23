@@ -894,7 +894,7 @@ func TestAConversationOpenElsewhereFailsTheRun(t *testing.T) {
 }
 
 // A parked app-server on another conversation than the run's is the
-// thread's no longer: a new one resumes the run's.
+// thread's no longer: it is stopped, and a new one resumes the run's.
 func TestAParkedAppServerOnAnotherConversationIsLeft(t *testing.T) {
 	a, log := fake(t, "memory")
 	s := spec(t)
@@ -903,11 +903,15 @@ func TestAParkedAppServerOnAnotherConversationIsLeft(t *testing.T) {
 	turn(t, g)
 	first := g.(provider.Sessioned).Session()
 	closeRun(t, g)
-	other := open(t, a, spec(t))
+	b := &Adapter{Path: a.Path}
+	other := open(t, b, spec(t))
 	do(t, other, provider.Start{Text: "two"})
 	turn(t, other)
 	second := other.(provider.Sessioned).Session()
 	closeRun(t, other)
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
 	s.Run, s.Session = api.NewID(), second
 	g = open(t, a, s)
 	do(t, g, provider.Start{Text: "three"})
@@ -918,5 +922,25 @@ func TestAParkedAppServerOnAnotherConversationIsLeft(t *testing.T) {
 	}
 	if n := len(sent(t, log, "thread/resume")); n != 1 {
 		t.Errorf("%d resumes", n)
+	}
+}
+
+// A conversation Codex refuses for now, or answers with another, fails
+// the run: the thread keeps its conversation for the next one.
+func TestAResumeCodexRefusesKeepsTheConversation(t *testing.T) {
+	for _, scenario := range []string{"closing", "other-id"} {
+		a, log := fake(t, scenario)
+		s := spec(t)
+		s.Session = "019a0000-0000-7000-8000-kept"
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		g, err := a.Open(ctx, s)
+		if err == nil {
+			g.Close(ctx)
+			t.Errorf("%s: the run opened", scenario)
+		}
+		cancel()
+		if len(sent(t, log, "thread/start")) != 0 {
+			t.Errorf("%s: a new thread started", scenario)
+		}
 	}
 }

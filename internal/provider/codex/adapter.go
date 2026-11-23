@@ -158,7 +158,9 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	// One on another Codex thread than the thread's is the thread's no
 	// longer.
 	if ok && spec.Session != "" && p.threadID() != spec.Session {
-		p.discard()
+		if err := p.Close(ctx); err != nil {
+			return nil, fmt.Errorf("Codex: the thread's earlier app-server may still run: %w", err)
+		}
 		ok = false
 	}
 	lost := false
