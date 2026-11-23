@@ -574,6 +574,13 @@ func (e *EndpointClient) PluginCall(ctx context.Context, call json.RawMessage) (
 	return out, e.c.call(ctx, "plugins.call", call, &out)
 }
 
+// ProviderDescribe is what the engine's provider name says of itself,
+// the one provider asked.
+func (e *EndpointClient) ProviderDescribe(ctx context.Context, name string) (provider.Info, error) {
+	var out provider.Info
+	return out, e.c.call(ctx, "provider.describe", commandsQuery{Provider: name}, &out)
+}
+
 // ProviderDefault is the model a session of the engine's provider name
 // runs in workspace where it names none, "" where the provider can't say
 // one of its own there.
