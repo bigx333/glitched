@@ -227,6 +227,12 @@ func (m *Manager) send(e *Env, th *Thread, cmd api.Command) {
 				return
 			}
 		}
+		select {
+		case e.slots <- struct{}{}:
+		case <-ectx.Done():
+			return
+		}
+		defer func() { <-e.slots }()
 		ctx, cancel := context.WithTimeout(ectx, submitTimeout)
 		defer cancel()
 		var r api.Receipt
