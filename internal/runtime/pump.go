@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"encoding/json"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -79,20 +78,16 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				// command's would fill a catch-up's budget for nothing.
 				var output string
 				if ev.Status == api.WorkFailed || ev.Exit != nil && *ev.Exit != 0 {
-					output = tail(ev.Output, api.OutputLimit)
+					output = tail(redact(ev.Output), api.OutputLimit)
 				}
 				commit(engine.Work{Item: api.WorkItem{Run: run, Item: ev.Item, Kind: ev.Kind, Title: redact(ev.Title), Status: ev.Status,
-					Path: ev.Path, Exit: ev.Exit, Output: redact(output)}})
+					Path: redact(ev.Path), Exit: ev.Exit, Output: output}})
 			case provider.RequestOpened:
 				flushText()
-				body := ev.Body
-				if s := redact(string(body)); s != string(body) {
-					body = json.RawMessage(s)
-				}
-				commit(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: ev.ID, Kind: ev.Kind, Body: body})
+				commit(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: ev.ID, Kind: ev.Kind, Body: secrets.RedactJSON(ev.Body, h.credentials(thread))})
 			case provider.RequestWithdrawn:
 				flushText()
-				commit(engine.Withdrawn{Run: run, Dedup: ev.ID, Reason: ev.Reason})
+				commit(engine.Withdrawn{Run: run, Dedup: ev.ID, Reason: redact(ev.Reason)})
 			case provider.TurnEnded:
 				flushText()
 				if ended = commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: redact(ev.Error), Tokens: ev.Tokens}); ended {
@@ -107,7 +102,7 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 	case h.ctx.Err() != nil:
 		return
 	case lr.ctx.Err() == nil:
-		if !commit(engine.Ended{Run: run, Outcome: api.OutcomeFailed, Error: readErr.Error()}) {
+		if !commit(engine.Ended{Run: run, Outcome: api.OutcomeFailed, Error: redact(readErr.Error())}) {
 			return
 		}
 	}

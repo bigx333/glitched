@@ -85,6 +85,7 @@ func (h *Host) AskCredentials(ctx context.Context, a api.Ask) (api.Asked, error)
 		h.mu.Unlock()
 	}()
 	body, _ := json.Marshal(a.Credentials)
+	body = secrets.RedactJSON(body, h.vault.Values(a.Thread))
 	if err := h.observe(ctx, a.Thread, engine.Surfaced{Run: key.run, Request: api.NewID(), Dedup: key.dedup, Kind: api.KindCredentials, Body: body}, 0); err != nil {
 		return api.Asked{}, err
 	}
