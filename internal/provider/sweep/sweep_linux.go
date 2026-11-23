@@ -1,4 +1,4 @@
-package acp
+package sweep
 
 import (
 	"bytes"
@@ -37,13 +37,13 @@ func processes() []process {
 	return out
 }
 
-func carries(pid int, prefix string) bool {
+func (m Mark) Carries(pid int, prefix string) bool {
 	env, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/environ")
 	if err != nil {
 		return false
 	}
 	for kv := range bytes.SplitSeq(env, []byte{0}) {
-		if marks(string(kv), prefix) {
+		if m.marks(string(kv), prefix) {
 			return true
 		}
 	}

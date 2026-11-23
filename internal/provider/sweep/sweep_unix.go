@@ -1,6 +1,6 @@
 //go:build linux || darwin
 
-package acp
+package sweep
 
 import (
 	"context"
@@ -15,9 +15,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// sysProcAttr puts the agent in a process group of its own, out of reach
+// SysProcAttr puts an agent in a process group of its own, out of reach
 // of a terminal's Ctrl-C to the engine.
-func sysProcAttr() *syscall.SysProcAttr { return &syscall.SysProcAttr{Setpgid: true} }
+func SysProcAttr() *syscall.SysProcAttr { return &syscall.SysProcAttr{Setpgid: true} }
 
 // process is one the system runs, as a sweep reads it.
 type process struct {
@@ -26,30 +26,30 @@ type process struct {
 	zombie          bool
 }
 
-// stopMarked stops every process whose environment carries a mark that
+// Stop stops every process whose environment carries a mark that
 // starts with prefix, and what they started: the agent, its MCP servers
 // and its tools, in sessions of their own included. They get SIGTERM,
 // then SIGKILL once killGrace passes. seen holds what an earlier scan
 // found, as one taken while the agent still lived to be their ancestor.
 // It reports whether any process was found, and fails while one is left
 // once ctx ends.
-func stopMarked(ctx context.Context, prefix string, seen map[int]int64) (bool, error) {
+func (m Mark) Stop(ctx context.Context, prefix string, seen map[int]int64) (bool, error) {
 	if seen == nil {
 		seen = map[int]int64{}
 	}
-	pids := scan(prefix, seen)
+	pids := m.Scan(prefix, seen)
 	if len(pids) == 0 {
 		return false, nil
 	}
 	err := signal(pids, syscall.SIGTERM)
-	deadline := time.Now().Add(killGrace)
+	deadline := time.Now().Add(KillGrace)
 	for {
-		left := scan(prefix, seen)
+		left := m.Scan(prefix, seen)
 		if len(left) == 0 {
 			return true, nil
 		}
 		if ctx.Err() != nil {
-			return true, errors.Join(fmt.Errorf("acp: processes %v of %s still run", left, prefix), err)
+			return true, errors.Join(fmt.Errorf("sweep: processes %v of %s still run", left, prefix), err)
 		}
 		if time.Now().After(deadline) {
 			err = signal(left, syscall.SIGKILL)
@@ -58,11 +58,11 @@ func stopMarked(ctx context.Context, prefix string, seen map[int]int64) (bool, e
 	}
 }
 
-// scan is the PIDs of the processes that carry a mark under prefix, what
+// Scan is the PIDs of the processes that carry a mark under prefix, what
 // they started, and what an earlier scan found that still runs. macOS
 // shows no platform binary's environment, as /bin/sh's, so such a process
 // is found by its marked ancestor, or by an earlier scan that found it so.
-func scan(prefix string, seen map[int]int64) []int {
+func (m Mark) Scan(prefix string, seen map[int]int64) []int {
 	all := processes()
 	children := map[int][]int{}
 	byPID := map[int]process{}
@@ -73,7 +73,7 @@ func scan(prefix string, seen map[int]int64) []int {
 		}
 		byPID[p.pid] = p
 		children[p.ppid] = append(children[p.ppid], p.pid)
-		if start, ok := seen[p.pid]; ok && start == p.start || carries(p.pid, prefix) {
+		if start, ok := seen[p.pid]; ok && start == p.start || m.Carries(p.pid, prefix) {
 			tree = append(tree, p.pid)
 		}
 	}
@@ -100,10 +100,10 @@ func signal(pids []int, sig syscall.Signal) error {
 	return errors.Join(errs...)
 }
 
-// group is what still runs in the process group the agent led, as it
+// Group is what still runs in the process group the agent led, as it
 // is once the agent is reaped: while one of them lives, the system gives
 // no new process that ID, so each is the agent's.
-func group(leader int) map[int]int64 {
+func Group(leader int) map[int]int64 {
 	left := map[int]int64{}
 	for _, p := range processes() {
 		if p.pgid == leader && p.pid != leader && !p.zombie {
@@ -115,7 +115,7 @@ func group(leader int) map[int]int64 {
 
 // marks is whether kv, an entry of a process's environment, carries a
 // mark under prefix.
-func marks(kv, prefix string) bool {
-	v, ok := strings.CutPrefix(kv, procEnv+"=")
+func (m Mark) marks(kv, prefix string) bool {
+	v, ok := strings.CutPrefix(kv, m.Env+"=")
 	return ok && strings.HasPrefix(v, prefix)
 }
