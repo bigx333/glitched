@@ -1354,19 +1354,12 @@ func TestTheDialogLeavesNoGap(t *testing.T) {
 	})
 }
 
-// Create pushes to the URL its dialog showed, not to its remote's name: a
-// remote that points elsewhere by the push doesn't take it, and git still
-// shows the remote's ref at the commit, the branch tracking it.
-func TestCreatePRPushesToTheURLItShowed(t *testing.T) {
+// Create pushes by the remote's name, so git resolves the push URL exactly
+// as the dialog's git remote get-url --push did, a remote's own exceptions
+// to pushInsteadOf included; a literal URL would lose them. Git then shows
+// the remote's ref at the commit, the branch tracking it.
+func TestCreatePRPushesByTheRemoteItShowed(t *testing.T) {
 	p, work, origin := createDialog(t, &github{})
-	p.mu.Lock()
-	p.before = func(args []string) any {
-		if args[1] == "push" {
-			gitIn(work, "remote", "set-url", "--push", "origin", "https://github.com/acme/another.git")
-		}
-		return nil
-	}
-	p.mu.Unlock()
 	p.click("create.go", "go", nil)
 	var push []string
 	for _, r := range p.runs {
@@ -1375,8 +1368,8 @@ func TestCreatePRPushesToTheURLItShowed(t *testing.T) {
 		}
 	}
 	head := gitIn(work, "rev-parse", "HEAD")
-	if len(push) < 2 || push[len(push)-2] != "https://github.com/acme/widgets.git" || gitIn(origin, "rev-parse", "fix-flaky") != head {
-		t.Errorf("pushed with %q; want %s pushed to the URL the dialog showed", push, head)
+	if len(push) < 2 || push[len(push)-2] != "origin" || gitIn(origin, "rev-parse", "fix-flaky") != head {
+		t.Errorf("pushed with %q; want %s pushed by the remote the dialog showed", push, head)
 	}
 	if gitIn(work, "rev-parse", "refs/remotes/origin/fix-flaky") != head || gitIn(work, "rev-parse", "--abbrev-ref", "fix-flaky@{upstream}") != "origin/fix-flaky" || !strings.Contains(p.text(), "#7|") {
 		t.Errorf("after the push: %q", p.text())
