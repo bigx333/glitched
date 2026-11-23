@@ -38,6 +38,12 @@ type message struct {
 		Subtype string `json:"subtype"`
 		canUseTool
 	} `json:"request"` // control_request
+	// Model and PermissionMode are, on a system init, what the session
+	// runs; a system status gives a PermissionMode it switched to.
+	Model          string          `json:"model"`
+	PermissionMode string          `json:"permissionMode"`
+	FallbackModel  string          `json:"fallback_model"` // system model_fallback
+	Content        json.RawMessage `json:"content"`        // system model_fallback: why, as a string
 }
 
 type streamEvent struct {

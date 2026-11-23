@@ -79,6 +79,13 @@ type proc struct {
 
 	wake chan struct{} // closed by Wake, to end the parked watch
 	woke chan bool     // what the parked watch found: true when claude kept quiet
+
+	// What Claude Code last confirmed it runs, which holds for every run of
+	// the claude: its permission mode and why it refused the one asked,
+	// and its model and why it switched to it. Only the run on it reads
+	// and sets them.
+	mode, refused   string
+	model, switched string
 }
 
 var _ park.Process = (*proc)(nil)
@@ -93,6 +100,11 @@ type Agent struct {
 
 	turn    *turn
 	pending []provider.Event
+
+	access  api.Access
+	asked   string           // the run's model
+	granted provider.Granted // the last Granted the run sent
+	ran     provider.Ran     // the last Ran the run sent
 
 	mu          sync.Mutex      // the turn's messages; taken before p.mu
 	started     bool            // the turn's first message went out
@@ -110,7 +122,10 @@ type Agent struct {
 var _ provider.Agent = (*Agent)(nil)
 
 func newAgent(spec provider.SessionSpec, p *proc, keep func(*proc)) *Agent {
-	return &Agent{p: p, keep: keep, turn: newTurn(spec.Workspace), prompts: map[string]*prompt{}, outstanding: map[string]bool{}}
+	g := &Agent{p: p, keep: keep, turn: newTurn(spec.Workspace), prompts: map[string]*prompt{}, outstanding: map[string]bool{},
+		access: spec.Access, asked: spec.Model.Model}
+	g.pending = g.confirmed()
+	return g
 }
 
 // launch runs claude with args for spec's thread and waits for its answer
@@ -259,10 +274,16 @@ func (p *proc) handshake(ctx context.Context) error {
 // nothing else is said.
 func (p *proc) switchMode(ctx context.Context, g provider.Grant) (refused string, err error) {
 	r, err := p.control(ctx, modeRequest, map[string]string{"subtype": "set_permission_mode", "mode": g.Mode})
-	if err != nil || r.Subtype == "success" {
+	if err != nil {
 		return "", err
 	}
-	return cmp.Or(r.Error, "Claude Code refused it"), nil
+	if r.Subtype == "success" {
+		p.mode = g.Mode
+		return "", nil
+	}
+	refused = cmp.Or(r.Error, "Claude Code refused it")
+	p.mode, p.refused = g.Else, refused
+	return refused, nil
 }
 
 // control sends claude a control request and waits for its answer, which
@@ -642,8 +663,61 @@ func (g *Agent) read(ctx context.Context, m message) []provider.Event {
 		if m.Subtype == "init" {
 			g.p.learn(m.Capabilities)
 		}
+		if m.ParentToolUseID == nil {
+			return append(g.confirm(m), g.turn.read(m)...)
+		}
 	}
 	return g.turn.read(m)
+}
+
+// confirm reads what a system message says claude runs: init gives its
+// permission mode and model, status a mode it switched to, and
+// model_fallback a model it switched to, with its words for why.
+func (g *Agent) confirm(m message) []provider.Event {
+	g.p.mode = cmp.Or(m.PermissionMode, g.p.mode)
+	switch {
+	case m.Subtype == "init" && m.Model != "" && m.Model != g.p.model:
+		g.p.model, g.p.switched = m.Model, ""
+	case m.Subtype == "model_fallback" && m.FallbackModel != "":
+		g.p.model, g.p.switched = m.FallbackModel, ""
+		json.Unmarshal(m.Content, &g.p.switched)
+	}
+	return g.confirmed()
+}
+
+// confirmed is what claude confirmed it runs that the run hasn't sent
+// yet. Claude Code never says its effort, so a Ran gives none.
+func (g *Agent) confirmed() []provider.Event {
+	var evs []provider.Event
+	if access, ok := levels[g.p.mode]; ok {
+		e := provider.Granted{Access: access, Mode: g.p.mode}
+		switch grant := grants[g.access]; {
+		case g.p.mode == grant.Mode:
+		case g.p.mode == grant.Else && g.p.refused != "":
+			e.Why = g.p.refused
+		default:
+			e.Why = fmt.Sprintf("Claude Code runs in its %s mode", g.p.mode)
+		}
+		if e != g.granted {
+			g.granted = e
+			evs = append(evs, e)
+		}
+	}
+	if g.p.model != "" {
+		e := provider.Ran{Model: g.p.model}
+		switch {
+		case g.asked == "":
+		case modelOf(g.asked) == g.p.model:
+			e.Model = g.asked
+		default:
+			e.Why = cmp.Or(g.p.switched, "Claude Code runs "+g.p.model)
+		}
+		if e != g.ran {
+			g.ran = e
+			evs = append(evs, e)
+		}
+	}
+	return evs
 }
 
 // open records the prompt a can_use_tool opens, and is the request the
