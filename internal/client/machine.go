@@ -79,9 +79,11 @@ func (m *Manager) Configure(change func(*daemon.Config)) error {
 	}
 	was.Children = cfg.Children
 	was.CompactBeforeExpire = cfg.CompactBeforeExpire
+	was.KeepAwake = cfg.KeepAwake
 	if reflect.DeepEqual(cfg, was) && m.embedded != nil {
 		m.embedded.SetLimits(cfg.Children)
 		m.embedded.SetIdleCompaction(cfg.CompactBeforeExpireEnabled())
+		m.embedded.SetKeepAwake(cfg.KeepAwakeEnabled())
 	} else {
 		m.Restart()
 	}

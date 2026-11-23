@@ -83,6 +83,13 @@ type Config struct {
 	// cache expiry (Claude via reported cache TTL, Antigravity Gemini after
 	// 15 minutes idle). Nil defaults to true.
 	CompactBeforeExpire *bool `json:"compact_before_expire,omitempty"`
+	// KeepAwake keeps the machine from idle sleep while an agent on this
+	// engine works, the display free to sleep. Nil defaults to true; it
+	// does nothing where the engine has no way to, as off a Mac.
+	KeepAwake *bool `json:"keep_awake,omitempty"`
+	// Inhibit holds the machine awake until its ctx ends; nil uses the
+	// system's.
+	Inhibit func(ctx context.Context) error `json:"-"`
 	// PluginRun runs the programs plugins' services ask for; nil runs them with RunProgram.
 	PluginRun func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error) `json:"-"`
 }
@@ -92,6 +99,10 @@ type Config struct {
 func (cfg Config) CompactBeforeExpireEnabled() bool {
 	return cfg.CompactBeforeExpire == nil || *cfg.CompactBeforeExpire
 }
+
+// KeepAwakeEnabled reports whether cfg keeps the machine awake while agents
+// work. It defaults to true when unset.
+func (cfg Config) KeepAwakeEnabled() bool { return cfg.KeepAwake == nil || *cfg.KeepAwake }
 
 const configFile = "engine.json"
 
@@ -172,6 +183,7 @@ func (cfg Config) Save() error {
 // backup.
 type Daemon struct {
 	host  *runtime.Host
+	awake *awake // nil where the engine can't keep the machine awake
 	clis  *clis
 	store *store.Store
 	node  *tailnet.Node // the engine's own, when it needs the tailnet and Tailscale isn't installed
@@ -334,12 +346,26 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 			d.undo = append(d.undo, c.Close)
 		}
 	}
+	hold := cfg.Inhibit
+	if hold == nil {
+		hold = inhibit
+	}
+	if hold != nil {
+		d.awake = newAwake(hold, cfg.KeepAwakeEnabled())
+		opts = append(opts, runtime.WithAwake(d.awake.work))
+	}
 	h, err := runtime.New(ctx, st, cfg.Providers, opts...)
 	if err != nil {
 		return nil, err
 	}
 	d.undo = append(d.undo, h.Close)
 	d.host = h
+	if d.awake != nil {
+		actx, stopAwake := context.WithCancel(ctx)
+		awoke := make(chan struct{})
+		go func() { defer close(awoke); d.awake.run(actx) }()
+		d.undo = append(d.undo, func() error { stopAwake(); <-awoke; return nil })
+	}
 
 	var lns []net.Listener
 	defer func() {
@@ -508,6 +534,14 @@ func (d *Daemon) SetLimits(l engine.Limits) { d.store.SetLimits(l) }
 // SetIdleCompaction applies the compact-before-expire toggle at once, as
 // engine.json's CompactBeforeExpire does at the next start.
 func (d *Daemon) SetIdleCompaction(enabled bool) { d.host.SetIdleCompaction(enabled) }
+
+// SetKeepAwake applies the keep-awake toggle at once, as engine.json's
+// KeepAwake does at the next start.
+func (d *Daemon) SetKeepAwake(enabled bool) {
+	if d.awake != nil {
+		d.awake.enable(enabled)
+	}
+}
 
 // Node is the engine's own tailnet node, which reaches other machines'
 // engines when Tailscale isn't installed; nil when it runs none.
