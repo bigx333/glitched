@@ -602,17 +602,14 @@ func (a *app) gather() []*project {
 			p.threads = append(p.threads, t)
 		}
 	}
+	envs := a.backend.Envs()
 	for _, ap := range a.added {
-		e := a.localEnv()
-		if ap.Server != "" {
-			e = a.serverEnv(ap.Server)
-		}
-		if e != nil {
-			at(e, keyOf(e, ap.Workspace))
+		if i := slices.IndexFunc(envs, func(e *client.Env) bool { return ap.on(e) && a.backend.ShownBy(e) == e }); i >= 0 {
+			at(envs[i], keyOf(envs[i], ap.Workspace))
 		}
 	}
 	var all []*project
-	for _, e := range a.backend.Envs() {
+	for _, e := range envs {
 		var ps []*project
 		for k, p := range byKey {
 			if k.env == e {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/egoist/mygo"
 
+	"glitched/internal/api"
 	"glitched/internal/client"
 	"glitched/internal/jsonfile"
 )
@@ -22,12 +23,22 @@ type addedProject struct {
 	// Server is the label of the server the folder is on, "" for this
 	// machine, which files written before servers had projects mean.
 	Server string `json:"server,omitempty"`
+	// Engine is the engine the folder was added on. A server's folder is
+	// on that engine alone, whatever label reaches it.
+	Engine api.ID `json:"engine,omitzero"`
 	// Added is RFC 3339, kept as text so that one written wrong hides
 	// no project.
 	Added string `json:"added"`
 }
 
-func (p addedProject) key() projectKey { return projectKey{p.Server, p.Workspace} }
+// on is whether the folder is on e: this machine's for one added here, the
+// engine it was added on for a server's, never one not reached yet.
+func (p addedProject) on(e *client.Env) bool {
+	if e.Kind == client.Local {
+		return p.Server == ""
+	}
+	return p.Server != "" && !p.Engine.IsZero() && p.Engine == e.ID
+}
 
 func (a *app) projectsPath() string { return filepath.Join(a.dir, "projects.json") }
 
@@ -59,21 +70,22 @@ func (a *app) editProjects(change func(*[]addedProject)) {
 	a.addedEdits++
 }
 
-// recordProject keeps k's folder as a project on its machine, once.
-func (a *app) recordProject(k projectKey) {
+// recordProject keeps the folder ws as a project on e's machine, once.
+func (a *app) recordProject(e *client.Env, ws string) {
 	a.editProjects(func(ps *[]addedProject) {
-		if !slices.ContainsFunc(*ps, func(p addedProject) bool { return p.key() == k }) {
-			*ps = append(*ps, addedProject{k.workspace, k.server, time.Now().UTC().Format(time.RFC3339)})
+		if !slices.ContainsFunc(*ps, func(p addedProject) bool { return p.Workspace == ws && p.on(e) }) {
+			*ps = append(*ps, addedProject{ws, keyOf(e, "").server, e.ID, time.Now().UTC().Format(time.RFC3339)})
 		}
 	})
 }
 
-// forgetProject drops k from the projects added, and no folder of the
-// same path on another machine. It reads the file, not the list here:
-// another window may have added k since this one loaded.
-func (a *app) forgetProject(k projectKey) {
+// forgetProject drops the folder ws on e's machine from the projects
+// added, and no folder of the same path on another machine. It reads the
+// file, not the list here: another window may have added it since this
+// one loaded.
+func (a *app) forgetProject(e *client.Env, ws string) {
 	a.editProjects(func(ps *[]addedProject) {
-		*ps = slices.DeleteFunc(*ps, func(p addedProject) bool { return p.key() == k })
+		*ps = slices.DeleteFunc(*ps, func(p addedProject) bool { return p.Workspace == ws && p.on(e) })
 	})
 }
 

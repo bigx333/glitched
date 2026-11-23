@@ -487,7 +487,7 @@ func TestTheWizardClonesOnThisMachine(t *testing.T) {
 		t.Fatalf("the clone holds %q, %v", b, err)
 	}
 	h.untilShown("the project's chip", "lighthouse")
-	if ps := addedFile(t, state); len(ps) != 1 || ps[0] != (addedProject{dest, "", ps[0].Added}) {
+	if ps := addedFile(t, state); len(ps) != 1 || ps[0] != (addedProject{dest, "", h.a.localEnv().ID, ps[0].Added}) {
 		t.Fatalf("projects.json holds %+v, want %s", ps, dest)
 	}
 	h.a.openWizard(sourceClone)
@@ -698,13 +698,11 @@ func TestThePaletteOpensTheWizardOnClone(t *testing.T) {
 func TestRemovingAServersProjectKeepsThisMachines(t *testing.T) {
 	state := inboxDir(t)
 	ws := t.TempDir()
-	if err := jsonfile.Write(filepath.Join(state, "projects.json"), []addedProject{
-		{ws, "", "2026-11-23T10:00:00Z"}, {ws, "build-box", "2026-11-23T10:00:00Z"},
-	}); err != nil {
-		t.Fatal(err)
-	}
 	h, _ := wizardMachines(t, state)
 	box := h.a.serverEnv("build-box")
+	h.a.editProjects(func(ps *[]addedProject) {
+		*ps = []addedProject{{ws, "", api.ID{}, "2026-11-23T10:00:00Z"}, {ws, "build-box", box.ID, "2026-11-23T10:00:00Z"}}
+	})
 	var onBox *project
 	h.until("both projects", func() bool {
 		h.tt.Frame()
@@ -729,5 +727,172 @@ func TestRemovingAServersProjectKeepsThisMachines(t *testing.T) {
 	if slices.ContainsFunc(h.a.projects, func(p *project) bool { return p.env == box }) ||
 		!slices.ContainsFunc(h.a.projects, func(p *project) bool { return p.key == projectKey{"", ws} }) {
 		t.Fatal("the projects shown aren't this machine's alone")
+	}
+}
+
+// heldListing are a server's Projects whose listing of path, once begun,
+// waits for release.
+type heldListing struct {
+	transport.Projects
+	path           string
+	began, release chan struct{}
+}
+
+func (p heldListing) Folders(ctx context.Context, q api.FolderQuery) (api.FolderList, error) {
+	if q.Path == p.path {
+		close(p.began)
+		select {
+		case <-p.release:
+		case <-ctx.Done():
+			return api.FolderList{}, ctx.Err()
+		}
+	}
+	return p.Projects.Folders(ctx, q)
+}
+
+// While a folder is being listed none can be chosen, not even the one
+// shown before it: the path field names it and the list says it's
+// listing. One that fails to list leaves the folder before it to choose.
+func TestAFolderBeingListedCantBeChosen(t *testing.T) {
+	root := folderTree(t)
+	h, box := wizardMachines(t, inboxDir(t))
+	alpha := filepath.Join(root, "alpha")
+	began, release := make(chan struct{}), make(chan struct{})
+	box.Projects = heldListing{box.Projects, alpha, began, release}
+	browseTo(h, root)
+	h.replaceIn("Path", alpha)
+	h.key(0, ui.KeyEnter)
+	select {
+	case <-began:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the listing of alpha didn't reach build-box")
+	}
+	h.tt.Frame()
+	if !showing(h, "Listing…") || showing(h, "beta") || h.a.wizard.browse.field != alpha {
+		t.Fatalf("while alpha lists, the path says %q and the window %q", h.a.wizard.browse.field, h.tt.Texts())
+	}
+	h.key(ui.Cmd, ui.KeyEnter)
+	h.tt.Click("Use this folder")
+	h.tt.Frame()
+	if showing(h, "Create the project") {
+		t.Fatalf("a folder was chosen while alpha listed: %q", h.a.wizard.folder)
+	}
+	close(release)
+	h.until("alpha listed", func() bool { return showing(h, "deep") })
+	h.key(ui.Cmd, ui.KeyEnter)
+	h.untilShown("Confirm", "Create the project")
+	if h.a.wizard.folder != alpha {
+		t.Fatalf("Confirm is for %q, want %q", h.a.wizard.folder, alpha)
+	}
+	h.click("Back")
+	h.replaceIn("Path", filepath.Join(root, "missing"))
+	h.key(0, ui.KeyEnter)
+	h.until("the failure", func() bool { return h.a.wizard.browse.failure != "" })
+	h.key(ui.Cmd, ui.KeyEnter)
+	h.untilShown("Confirm", "Create the project")
+	if h.a.wizard.folder != alpha {
+		t.Fatalf("after the failed listing Confirm is for %q, want %q", h.a.wizard.folder, alpha)
+	}
+}
+
+// Escape while a clone runs stops it, and once it has stopped goes back
+// to Clone with the choices kept. Until then it says it's stopping, and
+// no other clone starts.
+func TestEscapeDuringACloneStopsItThenGoesBack(t *testing.T) {
+	h, box := wizardMachines(t, inboxDir(t))
+	box.hold = true
+	newProject(h)
+	h.click("build-box")
+	h.click("Clone a repository")
+	h.replaceIn("URL or owner/name", "o/lighthouse")
+	h.click("Next")
+	h.click("Clone and create")
+	h.untilShown("the clone's progress", "Receiving objects:  10% (1/10)")
+	// The clone's end is posted to the window; until it runs, the clone
+	// is stopping.
+	h.tt.Key(0, ui.KeyEscape)
+	h.tt.Frame()
+	if !showing(h, "Stopping the clone…") || !showing(h, "Create the project") {
+		t.Fatalf("while the clone stops the window shows %q", h.tt.Texts())
+	}
+	h.tt.Click("Clone and create")
+	h.tt.Frame()
+	select {
+	case <-box.stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Escape didn't stop the clone")
+	}
+	h.untilShown("Clone again", "Clone a repository onto build-box")
+	if h.a.wizard.input != "o/lighthouse" || h.a.wizard.failure != "" {
+		t.Fatalf("back on Clone the field holds %q, and the failure is %q", h.a.wizard.input, h.a.wizard.failure)
+	}
+	if n := box.clones.Load(); n != 1 {
+		t.Fatalf("%d clones started", n)
+	}
+}
+
+// A server's project is on the engine it was made on: another engine
+// paired under the same label doesn't show it, and it stays saved.
+func TestAServersProjectStaysOnItsEngine(t *testing.T) {
+	root := folderTree(t)
+	state := inboxDir(t)
+	h, _ := wizardMachines(t, state)
+	browseTo(h, root)
+	h.click("Use this folder")
+	h.click("Create")
+	old := h.a.serverEnv("build-box").ID
+	if ps := addedFile(t, state); len(ps) != 1 || ps[0] != (addedProject{root, "build-box", old, ps[0].Added}) {
+		t.Fatalf("projects.json holds %+v", ps)
+	}
+	if err := h.a.backend.RemoveServer("build-box"); err != nil {
+		t.Fatal(err)
+	}
+	_, addr := serverNode(t)
+	var added error = errors.New("not yet")
+	h.a.backend.AddServer(client.Server{Label: "build-box", Addr: addr, Token: "any"}, func(err error) { added = err })
+	h.until("the other engine online", func() bool {
+		e := h.a.serverEnv("build-box")
+		return added == nil && e != nil && h.a.reachable(e)
+	})
+	other := h.a.serverEnv("build-box")
+	if other.ID == old {
+		t.Fatal("the other engine is the same engine")
+	}
+	h.tt.Frame()
+	if slices.ContainsFunc(h.a.projects, func(p *project) bool { return p.env == other && p.key.workspace == root }) {
+		t.Fatalf("the project made on %s shows on %s", old, other.ID)
+	}
+	if ps := addedFile(t, state); len(ps) != 1 || ps[0].Engine != old {
+		t.Fatalf("projects.json holds %+v", ps)
+	}
+}
+
+// A project in an existing folder starts with the draft's worktree
+// choice, as Add project did; a clone's starts fresh, with Settings'.
+func TestOnlyAnExistingFolderKeepsTheDraftsWorktree(t *testing.T) {
+	dir := t.TempDir()
+	was := chooseFolder
+	chooseFolder = func(*app) string { return dir }
+	t.Cleanup(func() { chooseFolder = was })
+	source := bareRepo(t)
+	parent := chooseParentGives(t)
+	h := start(t, inboxDir(t))
+	h.a.worktree.picked, h.a.worktree.on = true, true
+	addFolder(h)
+	h.until("the draft in the folder", func() bool { return h.a.current().View.Workspace == dir })
+	if !h.a.worktree.picked || !h.a.worktree.on {
+		t.Fatal("the existing folder's draft lost the worktree choice")
+	}
+	newProject(h)
+	h.click("Clone a repository")
+	h.replaceIn("URL or owner/name", source)
+	h.click("Choose…")
+	h.untilShown("the parent", "Into "+parent)
+	h.click("Next")
+	h.click("Clone and create")
+	dest := filepath.Join(parent, "lighthouse")
+	h.until("the draft in the clone", func() bool { return h.a.current().View.Workspace == dest })
+	if h.a.worktree.picked {
+		t.Fatal("the clone's draft kept the worktree choice of the draft before it")
 	}
 }

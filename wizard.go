@@ -86,17 +86,22 @@ type wizard struct {
 }
 
 // wizardRun is one clone the wizard started. Its lines and its end show
-// only while it's the wizard's run.
-type wizardRun struct{ cancel func() }
+// only while it's the wizard's run. One stopping was stopped by Escape,
+// and goes back to Clone once it has ended.
+type wizardRun struct {
+	cancel   func()
+	stopping bool
+}
 
 // folderBrowser is the folders of one folder on a server, as its engine
 // listed them, and the path field over them.
 type folderBrowser struct {
 	field string
 	// shown is the last listing that came, the folder Use this folder
-	// chooses.
+	// chooses once none is pending.
 	shown api.FolderList
-	// pending is the listing asked for, nil while none is.
+	// pending is the listing asked for, nil while none is. While one is,
+	// no folder can be chosen, and its rows don't show.
 	pending *folderQuery
 	failure string
 	hidden  bool
@@ -106,8 +111,11 @@ type folderBrowser struct {
 type folderQuery struct{ _ byte }
 
 // visible are the folders shown, those whose names start with a dot only
-// when hidden ones are.
+// when hidden ones are, and none while a listing is pending.
 func (b *folderBrowser) visible() []api.Folder {
+	if b.pending != nil {
+		return nil
+	}
 	if b.hidden {
 		return b.shown.Folders
 	}
@@ -438,10 +446,13 @@ func (a *app) listFolders(dir string, orHome bool) {
 		return
 	}
 	q := &folderQuery{}
-	a.wizard.browse.pending = q
+	b := &a.wizard.browse
+	b.pending, b.failure = q, ""
+	if dir != "" {
+		b.field = dir
+	}
 	a.backend.Folders(e, dir, func(list api.FolderList, err error) {
 		w := &a.wizard
-		b := &w.browse
 		if b.pending != q {
 			return
 		}
@@ -468,11 +479,12 @@ func (a *app) browseInto(name string) {
 }
 
 // useFolder chooses the folder shown: as the clone's parent, back on
-// Clone, or as the project's folder, on to Confirm.
+// Clone, or as the project's folder, on to Confirm. While another is
+// being listed, it chooses none.
 func (a *app) useFolder() {
 	w := &a.wizard
 	dir := w.browse.shown.Path
-	if dir == "" || w.step != stepBrowse {
+	if dir == "" || w.browse.pending != nil || w.step != stepBrowse {
 		return
 	}
 	if w.source == sourceClone {
@@ -550,7 +562,7 @@ func (a *app) createProject() {
 		return
 	}
 	if w.source == sourceFolder {
-		a.recordProject(keyOf(e, w.folder))
+		a.recordProject(e, w.folder)
 		a.finishWizard(e, w.folder)
 		return
 	}
@@ -569,28 +581,33 @@ func (a *app) createProject() {
 		// A clone that finished is a project, though the wizard was
 		// cancelled as it ended: its folder is there either way.
 		if err == nil {
-			a.recordProject(keyOf(e, cloned.Path))
+			a.recordProject(e, cloned.Path)
 			a.rememberParent(label, parent)
 		}
 		if a.wizard.run != run {
 			return
 		}
 		a.wizard.run = nil
-		if err != nil {
+		switch {
+		case err == nil:
+			a.finishWizard(e, cloned.Path)
+		case run.stopping:
+			a.wizardBack()
+		default:
 			a.wizard.failure = a.wizardError(err)
-			return
 		}
-		a.finishWizard(e, cloned.Path)
 	})
 }
 
-// finishWizard closes the wizard and shows a new thread in the project,
-// keeping the draft's worktree choice as Add project always has.
+// finishWizard closes the wizard and shows a new thread in the project.
+// One in an existing folder keeps the draft's worktree choice, as Add
+// project always has; a clone's starts fresh.
 func (a *app) finishWizard(e *client.Env, dir string) {
+	keep := a.wizard.source == sourceFolder && a.selected.IsZero()
 	a.wizard = wizard{}
-	w, onDraft := a.worktree, a.selected.IsZero()
+	w := a.worktree
 	a.startIn(draft{e, dir})
-	if onDraft {
+	if keep {
 		a.worktree.picked, a.worktree.on = w.picked, w.on
 	}
 	a.draftArea.Focus()
@@ -599,8 +616,8 @@ func (a *app) finishWizard(e *client.Env, dir string) {
 // wizardDialog draws the wizard as the app's alerts are (MyGo's
 // AlertDialog), with their measures but wider, for a path: a title, the
 // step, and Back, Cancel and the step's button. Escape goes back a step,
-// and stops a clone running; a click outside does nothing, as outside an
-// alert, which would lose the choices.
+// once a clone running has stopped; a click outside does nothing, as
+// outside an alert, which would lose the choices.
 func (a *app) wizardDialog(c *ui.Context) {
 	w := &a.wizard
 	if !w.open {
@@ -639,7 +656,7 @@ func (a *app) wizardDialog(c *ui.Context) {
 				title("Choose a folder on " + a.machineName())
 				primary = "Use this folder"
 			}
-			act, ready = a.useFolder, w.browse.shown.Path != ""
+			act, ready = a.useFolder, w.browse.shown.Path != "" && w.browse.pending == nil
 			a.browseStep(c)
 		case stepClone:
 			title("Clone a repository onto " + a.machineName())
@@ -681,8 +698,8 @@ func (a *app) wizardDialog(c *ui.Context) {
 	}
 	w.open = true
 	if r := w.run; r != nil {
+		r.stopping = true
 		r.cancel()
-		w.run = nil
 		return
 	}
 	a.wizardBack()
@@ -806,10 +823,10 @@ func (a *app) browseStep(c *ui.Context) {
 		}).
 		Children(func() {
 			switch {
+			case b.pending != nil:
+				ui.Text(c, "Listing…").TextColor(palette.muted).Padding(t.Space(3)).TextAlign(ui.Center)
 			case len(shown) == 0 && b.shown.Path != "":
 				ui.Text(c, "No folders here").TextColor(palette.muted).Padding(t.Space(3)).TextAlign(ui.Center)
-			case len(shown) == 0 && b.pending != nil:
-				ui.Text(c, "Listing…").TextColor(palette.muted).Padding(t.Space(3)).TextAlign(ui.Center)
 			}
 		})
 	if b.shown.Truncated {
@@ -870,7 +887,11 @@ func (a *app) confirmStep(c *ui.Context, wrapped func(string) ui.Element) {
 	if running {
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 			ui.Spinner(c).Label("Cloning")
-			ui.Text(c, "Cloning…")
+			if w.run.stopping {
+				ui.Text(c, "Stopping the clone…")
+			} else {
+				ui.Text(c, "Cloning…")
+			}
 		})
 		if w.line != "" {
 			wrapped(w.line).TextColor(t.TextMuted).SingleLine()

@@ -145,7 +145,7 @@ func (a *app) removeProject(p *project) {
 	if len(tops) > 0 && !slices.ContainsFunc(tops, deleting) {
 		return
 	}
-	a.forgetProject(p.key)
+	a.forgetProject(p.env, p.key.workspace)
 	// A draft with no machine is on the first, as current() has it.
 	e := a.fresh.env
 	if envs := a.backend.Envs(); e == nil && len(envs) > 0 {
