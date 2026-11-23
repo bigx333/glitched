@@ -289,10 +289,10 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) {
 // work, from the moment its run takes a message until the turn ends: the
 // transcript's last, above the messages still queued or on their way, or
 // the run's own message while the transcript has yet to list it. It is -1
-// while the run waits on the user, or its engine can't be reached to say
-// when it ends.
+// while the run waits on the user, as the transcript may show before the
+// run's state does, or its engine can't be reached to say when it ends.
 func thinkingAt(t thread, rs rows) int {
-	if _, ok := thinkingLabels[t.View.Run]; !ok || t.env != nil && t.env.Status != client.Status(client.Online{}) {
+	if _, ok := thinkingLabels[t.View.Run]; !ok || len(rs.asks) > 0 || t.env != nil && t.env.Status != client.Status(client.Online{}) {
 		return -1
 	}
 	if t.View.Turn != nil {
