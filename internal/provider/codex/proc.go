@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"glitched/internal/api"
 	"glitched/internal/mcp"
 	"glitched/internal/provider"
 	"glitched/internal/provider/park"
@@ -183,7 +184,7 @@ func (p *proc) signedIn(ctx context.Context) error {
 		return p.failure("read its account", err)
 	}
 	if r.RequiresOpenaiAuth && (len(r.Account) == 0 || string(r.Account) == "null") {
-		return fmt.Errorf("%w: %s", provider.ErrSignedOut, signIn)
+		return provider.Needs{Kind: provider.ErrSignedOut, Help: signIn}
 	}
 	return nil
 }
@@ -265,9 +266,9 @@ func (p *proc) startThread(ctx context.Context, spec provider.SessionSpec) (lost
 	}
 	params := map[string]any{
 		"cwd":               spec.Workspace,
-		"approvalPolicy":    askPolicy,
+		"approvalPolicy":    levels[spec.Access].approval,
 		"approvalsReviewer": "user",
-		"sandbox":           "read-only",
+		"sandbox":           levels[spec.Access].sandbox,
 		"config":            map[string]any{"mcp_servers": servers},
 	}
 	if spec.Model.Model != "" {
@@ -322,9 +323,20 @@ func (p *proc) bind(id string) error {
 	return nil
 }
 
-// askPolicy is the approval policy of every run until access levels
-// reach Codex: it asks for anything outside a read-only sandbox.
-const askPolicy = "on-request"
+// level is how one of Glitched's access levels reaches Codex: the
+// approval policy and sandbox a thread starts with, and the sandbox each
+// turn sends. Full access is Codex's own bypass, as
+// --dangerously-bypass-approvals-and-sandbox.
+type level struct {
+	approval, sandbox string
+	policy            map[string]any
+}
+
+var levels = map[api.Access]level{
+	api.AccessAsk:       {"on-request", "read-only", map[string]any{"type": "readOnly", "networkAccess": false}},
+	api.AccessAutoEdits: {"on-request", "workspace-write", map[string]any{"type": "workspaceWrite", "writableRoots": []string{}, "networkAccess": false, "excludeTmpdirEnvVar": false, "excludeSlashTmp": false}},
+	api.AccessFull:      {"never", "danger-full-access", map[string]any{"type": "dangerFullAccess"}},
+}
 
 func (p *proc) threadID() string {
 	p.mu.Lock()

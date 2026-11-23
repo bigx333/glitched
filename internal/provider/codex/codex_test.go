@@ -261,7 +261,7 @@ func TestDescribeListsModelsAndEfforts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Name != "Codex" || info.Version != "0.171.0" {
+	if info.Name != "Codex" || info.Version != "0.171.0" || info.Path != a.Path {
 		t.Errorf("info %+v", info)
 	}
 	var got []string
@@ -285,7 +285,7 @@ func TestDescribeListsModelsAndEfforts(t *testing.T) {
 func TestSignedOut(t *testing.T) {
 	a, log := fake(t, "signed-out")
 	info, err := a.Describe(context.Background())
-	if !errors.Is(err, provider.ErrSignedOut) || !strings.Contains(err.Error(), "codex login") || len(info.Models) != 0 {
+	if !errors.Is(err, provider.ErrSignedOut) || err.Error() != signIn || len(info.Models) != 0 || info.Version != "0.171.0" {
 		t.Errorf("describe: %+v, %v", info, err)
 	}
 	_, err = a.Open(context.Background(), spec(t))
@@ -751,8 +751,11 @@ func TestAnAppServerThatSpeaksWhileParkedIsStopped(t *testing.T) {
 // With no codex found, Open says how to install it.
 func TestAMissingCodexSaysHowToInstall(t *testing.T) {
 	a := &Adapter{Path: filepath.Join(t.TempDir(), "no-codex")}
-	if _, err := a.Open(context.Background(), spec(t)); err == nil || !strings.Contains(err.Error(), "npm install -g @openai/codex") {
+	if _, err := a.Open(context.Background(), spec(t)); !errors.Is(err, provider.ErrNotInstalled) || !strings.Contains(err.Error(), "npm install -g @openai/codex") {
 		t.Errorf("open: %v", err)
+	}
+	if _, err := a.Describe(context.Background()); !errors.Is(err, provider.ErrNotInstalled) {
+		t.Errorf("describe: %v", err)
 	}
 }
 
@@ -930,7 +933,7 @@ func TestAThreadResumesItsConversation(t *testing.T) {
 		DeveloperInstructions string
 	}
 	json.Unmarshal(resumed[0], &p)
-	if p.ThreadID != session || !p.ExcludeTurns || p.Cwd != s.Workspace || p.ApprovalPolicy != askPolicy || len(p.Config.MCPServers) != 2 || p.DeveloperInstructions == "" {
+	if p.ThreadID != session || !p.ExcludeTurns || p.Cwd != s.Workspace || p.ApprovalPolicy != "on-request" || len(p.Config.MCPServers) != 2 || p.DeveloperInstructions == "" {
 		t.Errorf("thread/resume %s", resumed[0])
 	}
 }
@@ -1027,5 +1030,84 @@ func TestAResumeCodexRefusesKeepsTheConversation(t *testing.T) {
 		if len(sent(t, log, "thread/start")) != 0 {
 			t.Errorf("%s: a new thread started", scenario)
 		}
+	}
+}
+
+// Each access level reaches Codex as its approval policy and sandbox, at
+// the thread's start and on each turn: Full access is Codex's own bypass.
+func TestEachAccessLevelReachesCodex(t *testing.T) {
+	for access, want := range map[api.Access][3]string{
+		api.AccessAsk:       {"on-request", "read-only", "readOnly"},
+		api.AccessAutoEdits: {"on-request", "workspace-write", "workspaceWrite"},
+		api.AccessFull:      {"never", "danger-full-access", "dangerFullAccess"},
+	} {
+		a, log := fake(t, "hi")
+		s := spec(t)
+		s.Access = access
+		g := open(t, a, s)
+		do(t, g, provider.Start{Text: "hi"})
+		turn(t, g)
+		closeRun(t, g)
+		var start struct{ ApprovalPolicy, Sandbox string }
+		json.Unmarshal(sent(t, log, "thread/start")[0], &start)
+		var ts struct {
+			ApprovalPolicy string
+			SandboxPolicy  struct{ Type string }
+		}
+		json.Unmarshal(sent(t, log, "turn/start")[0], &ts)
+		if got := [3]string{start.ApprovalPolicy, start.Sandbox, ts.SandboxPolicy.Type}; got != want || ts.ApprovalPolicy != want[0] {
+			t.Errorf("access %v: %q and turn policy %q, want %q", access, got, ts.ApprovalPolicy, want)
+		}
+	}
+}
+
+// A turn says what its model requests used: each of Codex's updates
+// counts its own request.
+func TestATurnSaysWhatItUsed(t *testing.T) {
+	a, _ := fake(t, "hi")
+	g := open(t, a, spec(t))
+	do(t, g, provider.Start{Text: "hi"})
+	end := ended(turn(t, g))
+	closeRun(t, g)
+	if end.Tokens != 100 {
+		t.Errorf("the turn used %d tokens, want 100", end.Tokens)
+	}
+}
+
+// Describe's answer stands until Forget, when Codex is asked again.
+func TestForgetAsksCodexAgain(t *testing.T) {
+	a, log := fake(t, "hi")
+	for _, forget := range []bool{false, true} {
+		if forget {
+			a.Forget()
+		}
+		if _, err := a.Describe(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(sent(t, log, "account/read")); n != 2 {
+		t.Errorf("%d probes, want 2: one before Forget and one after", n)
+	}
+}
+
+// A turn used what each of its requests did: a reading Codex sends again
+// unchanged adds nothing, and one after the turn ended charges no other
+// turn and keeps the app-server.
+func TestUsageCodexRepeatsCountsOnce(t *testing.T) {
+	a, log := fake(t, "usage-again")
+	s := spec(t)
+	for range 2 {
+		s.Run = api.NewID()
+		g := open(t, a, s)
+		do(t, g, provider.Start{Text: "hi"})
+		end := ended(turn(t, g))
+		time.Sleep(100 * time.Millisecond)
+		closeRun(t, g)
+		if end.Tokens != 140 {
+			t.Errorf("the turn used %d tokens, want 140", end.Tokens)
+		}
+	}
+	if n := len(sent(t, log, "initialize")); n != 1 {
+		t.Errorf("%d app-servers started, want the one", n)
 	}
 }

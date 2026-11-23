@@ -76,7 +76,7 @@ func TestWithAgentsServesEveryACPAgent(t *testing.T) {
 		}
 		cfg.AgyPath = agyPath
 		cfg.WithAgents()
-		if got := cfg.Providers.Names(); !slices.Equal(got, []string{"antigravity", "claude"}) {
+		if got := cfg.Providers.Names(); !slices.Equal(got, []string{"antigravity", "claude", "codex"}) {
 			t.Errorf("with agy_path %q, serves %q", agyPath, got)
 		}
 		return cfg.Providers["antigravity"].(*acp.Adapter)

@@ -49,6 +49,7 @@ type Agent struct {
 	texts       map[string]int // how much of each agent message went out
 	last        string         // the agent message the last text was of
 	notices     int
+	tokens      int64 // what the turn's model requests used, so far
 	asks        map[string]*ask
 	asked       int
 }
@@ -153,9 +154,9 @@ func (g *Agent) start(text string) error {
 	params := map[string]any{
 		"threadId":          g.p.threadID(),
 		"input":             input(text),
-		"approvalPolicy":    askPolicy,
+		"approvalPolicy":    levels[g.spec.Access].approval,
 		"approvalsReviewer": "user",
-		"sandboxPolicy":     map[string]any{"type": "readOnly", "networkAccess": false},
+		"sandboxPolicy":     levels[g.spec.Access].policy,
 		"summary":           "auto",
 		"serviceTier":       nil,
 	}
@@ -229,6 +230,7 @@ func (g *Agent) endLocked(end provider.TurnEnded) {
 			g.queueLocked(it.work(g.spec.Workspace))
 		}
 	}
+	end.Tokens = g.tokens
 	g.ended = true
 	if g.turn != "" {
 		g.p.ended(g.turn)
@@ -359,6 +361,11 @@ func (g *Agent) notify(m message) {
 		// fill it, emptying every count but the totals.
 		fresh := u.Last.Input > 0 && (u.Last != prev.Last || u.Window != prev.Window) && u.Total.Total-prev.Total.Total == u.Last.Total
 		filled := u.Window > 0 && u.Total == tokens{Total: u.Window} && u.Last == tokens{Total: u.Last.Total}
+		// The turn spent what each of its requests did: a reading whose
+		// total moved is a new request's.
+		if live && usage && u.Total.Total != prev.Total.Total {
+			g.tokens += u.Last.Total
+		}
 		switch {
 		case !live:
 		case usage && filled:

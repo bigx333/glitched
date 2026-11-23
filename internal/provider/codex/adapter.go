@@ -9,7 +9,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,8 +27,8 @@ import (
 // provider.Mux name it.
 const Provider = "codex"
 
-// install is what Open says when no codex is found.
-const install = "Codex is not installed.\nInstall it with: npm install -g @openai/codex\nor set codex_path in engine.json."
+// errNotInstalled is what Describe and Open say when no codex is found.
+var errNotInstalled error = provider.Needs{Kind: provider.ErrNotInstalled, Help: "Codex is not installed.\nInstall it with: npm install -g @openai/codex\nor set codex_path in engine.json."}
 
 // Adapter runs Codex threads.
 type Adapter struct {
@@ -64,8 +63,17 @@ var (
 
 var (
 	_ provider.Adapter           = (*Adapter)(nil)
+	_ provider.Forgetter         = (*Adapter)(nil)
 	_ interface{ Close() error } = (*Adapter)(nil)
 )
+
+// Forget has the next Describe ask Codex again, as after the user signed
+// in.
+func (a *Adapter) Forget() {
+	a.cmu.Lock()
+	a.until = time.Time{}
+	a.cmu.Unlock()
+}
 
 func (a *Adapter) parked() *park.Pool[*proc] {
 	a.once.Do(func() { a.pool = park.New[*proc](keepIdle, keepMax) })
@@ -87,7 +95,7 @@ func (a *Adapter) Binary() (string, error) {
 		if p, err := exec.LookPath(a.Path); err == nil {
 			return filepath.Abs(p)
 		}
-		return "", errors.New(install)
+		return "", errNotInstalled
 	}
 	if p, err := exec.LookPath("codex"); err == nil {
 		return p, nil
@@ -97,7 +105,7 @@ func (a *Adapter) Binary() (string, error) {
 			return p, nil
 		}
 	}
-	return "", errors.New(install)
+	return "", errNotInstalled
 }
 
 // Describe is the models Codex offers the user's account, with the
@@ -129,12 +137,12 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 		return provider.Info{}, err
 	}
 	defer p.discard()
-	info := provider.Info{Name: "Codex", Version: p.version}
+	info := provider.Info{Name: "Codex", Version: p.version, Path: bin}
 	if err := p.signedIn(ctx); err != nil {
 		return info, err
 	}
 	if info.Models, err = p.models(ctx); err != nil {
-		return provider.Info{Name: "Codex", Version: p.version}, err
+		return provider.Info{Name: "Codex", Version: p.version, Path: bin}, err
 	}
 	return info, nil
 }
