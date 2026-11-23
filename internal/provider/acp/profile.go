@@ -1,5 +1,10 @@
 package acp
 
+import (
+	"glitched/internal/api"
+	"glitched/internal/provider"
+)
+
 // Profile is what one ACP agent needs that the protocol does not say:
 // how to start it, what Glitched calls it, and what it prints that ACP
 // has no message for.
@@ -22,6 +27,14 @@ type Profile struct {
 	// SignedOut are words the agent prints, outside ACP, when its login
 	// went stale.
 	SignedOut []string
+	// Access is how each of Glitched's access levels reaches the agent:
+	// a session mode of its own, or arguments it starts with.
+	Access provider.Grants
+	// TurnUsage is whether the prompt's answer says what that turn alone
+	// used, as seen of the agent on the wire. ACP's usage field may count
+	// the whole session, so an agent not seen to report a turn's own
+	// reports none.
+	TurnUsage bool
 }
 
 // Antigravity is Google's Antigravity CLI, agy, from the user's own
@@ -35,6 +48,15 @@ var Antigravity = Profile{
 	Env:     map[string]string{"BROWSER": "true"},
 	Install: "Antigravity is not installed.\nInstall its CLI with: curl -fsSL https://antigravity.google/cli/install.sh | bash\nor set agy_path in engine.json.",
 	SignIn:  "Antigravity is signed out. Run agy in Terminal to sign in.",
+	// agy's own modes, as `session/new` lists them; it refuses yolo, and
+	// skips its asking only for a process started so.
+	Access: provider.Grants{
+		api.AccessAsk:       {Mode: "default"},
+		api.AccessAutoEdits: {Mode: "accept-edits"},
+		api.AccessFull:      {Args: []string{"--dangerously-skip-permissions"}},
+	},
+	// agy 1.5.14 answered two turns of a session with 22225 and 11858.
+	TurnUsage: true,
 	SignedOut: []string{
 		"Authentication required",
 		"Please sign in",

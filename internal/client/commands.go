@@ -78,12 +78,18 @@ type Answer uint8
 const (
 	Deny Answer = iota
 	AllowOnce
+	// AllowAlways allows the call, and has the agent allow such calls
+	// from now on by its own rules: only where the request offers it.
+	AllowAlways
 )
 
 // Respond answers an approval with {"allow":true} or {"allow":false}, as
 // the CLI does.
 func (m *Manager) Respond(e *Env, thread, request api.ID, a Answer) api.ID {
 	answer, _ := json.Marshal(map[string]bool{"allow": a == AllowOnce})
+	if a == AllowAlways {
+		answer, _ = json.Marshal(map[string]bool{"allow": true, "always": true})
+	}
 	return m.respond(e, thread, request, answer)
 }
 

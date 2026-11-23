@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +39,8 @@ type Entry struct {
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params,omitempty"`
 	PID    int             `json:"pid"`
+	// Argv, on initialize, is what the fake was started with.
+	Argv []string `json:"argv,omitempty"`
 }
 
 // Main plays the fake agent, until its stdin closes, when the environment
@@ -52,7 +55,7 @@ func Main() bool {
 		time.Sleep(time.Hour)
 		return true
 	}
-	f := &fake{scenario: scenario}
+	f := &fake{scenario: scenario, mode: "default"}
 	if f.is("hang-on-initialize") {
 		f.record("started", nil)
 	}
@@ -88,7 +91,9 @@ type fake struct {
 	mu       sync.Mutex
 	model    string
 	level    string
+	mode     string
 	sessions int
+	turns    int
 }
 
 var _ acp.Agent = (*fake)(nil)
@@ -104,7 +109,11 @@ func (f *fake) record(method string, params any) {
 	if params == nil {
 		raw = nil
 	}
-	line, _ := json.Marshal(Entry{Method: method, Params: raw, PID: os.Getpid()})
+	e := Entry{Method: method, Params: raw, PID: os.Getpid()}
+	if method == "initialize" {
+		e.Argv = os.Args[1:]
+	}
+	line, _ := json.Marshal(e)
 	fh, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return
@@ -302,7 +311,20 @@ func (f *fake) NewSession(ctx context.Context, p acp.NewSessionRequest) (acp.New
 		f.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: id, Update: acp.UpdateAgentMessageText("history the run must not show")})
 		f.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: id, Update: acp.SessionUpdate{AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{AvailableCommands: []acp.AvailableCommand{}}}})
 	}
-	return acp.NewSessionResponse{SessionId: id, ConfigOptions: options}, nil
+	return acp.NewSessionResponse{SessionId: id, ConfigOptions: options, Modes: f.modes()}, nil
+}
+
+// Modes are agy's, as `session/new` lists them.
+var Modes = []string{"default", "accept-edits", "auto", "plan"}
+
+func (f *fake) modes() *acp.SessionModeState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s := &acp.SessionModeState{CurrentModeId: acp.SessionModeId(f.mode), AvailableModes: []acp.SessionMode{}}
+	for _, m := range Modes {
+		s.AvailableModes = append(s.AvailableModes, acp.SessionMode{Id: acp.SessionModeId(m), Name: m})
+	}
+	return s
 }
 
 func (f *fake) SetSessionConfigOption(ctx context.Context, p acp.SetSessionConfigOptionRequest) (acp.SetSessionConfigOptionResponse, error) {
@@ -385,15 +407,18 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 			acp.WithStartRawInput(map[string]any{"command": "ls"})))
 		f.send(ctx, sid, acp.UpdateToolCall("run-1", acp.WithUpdateStatus(acp.ToolCallStatusFailed), acp.WithUpdateRawOutput("ls: no such file")))
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Read it."))
-	case "permission", "permission-no-allow-once", "permission-glitched", "gui":
-		if f.is("gui") {
+	case "permission", "permission-no-allow-once", "permission-once", "permission-glitched", "gui", "gui-once":
+		if f.is("gui") || f.is("gui-once") {
 			f.send(ctx, sid, acp.UpdateAgentMessageText("I'll read the notes, then add a line to them.\n\n"))
 			f.send(ctx, sid, acp.StartToolCall("read-1", "Read notes.txt", acp.WithStartKind(acp.ToolKindRead), acp.WithStartStatus(acp.ToolCallStatusCompleted),
 				acp.WithStartLocations([]acp.ToolCallLocation{{Path: cwdOf(p) + "/notes.txt"}})))
 		}
 		options := allOptions
-		if f.is("permission-no-allow-once") {
+		switch f.scenario {
+		case "permission-no-allow-once":
 			options = allOptions[1:]
+		case "permission-once", "gui-once":
+			options = []acp.PermissionOption{allOptions[0], allOptions[2]}
 		}
 		call := acp.ToolCallUpdate{ToolCallId: "edit-1", Title: acp.PatchSet("Edit notes.txt"), Kind: acp.PatchSet(acp.ToolKindEdit),
 			Locations: acp.PatchSet([]acp.ToolCallLocation{{Path: cwdOf(p) + "/notes.txt"}}), RawInput: acp.PatchSet(json.RawMessage(`{"path":"notes.txt","content":"hi"}`))}
@@ -403,7 +428,7 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 		}
 		f.send(ctx, sid, acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{ToolCallId: call.ToolCallId, Title: "Edit notes.txt", Kind: acp.ToolKindEdit, Status: acp.ToolCallStatusPending}})
 		answer := f.ask(ctx, sid, call, options)
-		status := map[bool]acp.ToolCallStatus{true: acp.ToolCallStatusCompleted, false: acp.ToolCallStatusFailed}[answer == "allow-once"]
+		status := map[bool]acp.ToolCallStatus{true: acp.ToolCallStatusCompleted, false: acp.ToolCallStatusFailed}[answer == "allow-once" || answer == "allow-always"]
 		f.send(ctx, sid, acp.UpdateToolCall(call.ToolCallId, acp.WithUpdateStatus(status)))
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Answer: "+answer))
 	case "permission-overlap":
@@ -447,6 +472,15 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 			f.record("child", cmd.Process.Pid)
 		}
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Started a child."))
+	case "usage":
+		// What the session holds, which is no turn's use, then the turn's.
+		f.mu.Lock()
+		f.turns++
+		n := int64(f.turns)
+		f.mu.Unlock()
+		f.send(ctx, sid, acp.SessionUpdate{UsageUpdate: &acp.SessionUsageUpdate{Used: 999999, Size: 1048576}})
+		f.send(ctx, sid, acp.UpdateAgentMessageText("Counted."))
+		return acp.PromptResponse{StopReason: acp.StopReasonEndTurn, Usage: &acp.Usage{InputTokens: 70 * n, OutputTokens: 30 * n, TotalTokens: 100 * n}}, nil
 	case "speaks-while-parked":
 		f.send(ctx, sid, acp.UpdateAgentMessageText("Done."))
 		go func() {
@@ -524,6 +558,16 @@ func (f *fake) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (acp.L
 	return acp.LoadSessionResponse{ConfigOptions: options}, err
 }
 
-func (f *fake) SetSessionMode(context.Context, acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
-	return acp.SetSessionModeResponse{}, acp.NewMethodNotFound("session/set_mode")
+// SetSessionMode takes one of Modes, as agy does, and tells of it before
+// it answers; "mode-refused" takes none.
+func (f *fake) SetSessionMode(ctx context.Context, p acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
+	f.record("session/set_mode", p)
+	if f.is("mode-refused") || !slices.Contains(Modes, string(p.ModeId)) {
+		return acp.SetSessionModeResponse{}, acp.NewInvalidParams("Unknown mode: " + string(p.ModeId))
+	}
+	f.mu.Lock()
+	f.mode = string(p.ModeId)
+	f.mu.Unlock()
+	f.send(ctx, p.SessionId, acp.SessionUpdate{CurrentModeUpdate: &acp.SessionCurrentModeUpdate{CurrentModeId: p.ModeId}})
+	return acp.SetSessionModeResponse{}, nil
 }

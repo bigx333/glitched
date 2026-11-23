@@ -278,7 +278,7 @@ func TestALineTooLongForTheSDKLetsTheBridgeGo(t *testing.T) {
 func TestACommandsWordsStayApartOnItsCard(t *testing.T) {
 	one := step{kind: acpsdk.ToolKindExecute, input: json.RawMessage(`{"command":["demo","a b"]}`)}
 	two := step{kind: acpsdk.ToolKindExecute, input: json.RawMessage(`{"command":["demo","a","b"]}`)}
-	a, b := one.approval("/demo-workspace", "Antigravity"), two.approval("/demo-workspace", "Antigravity")
+	a, b := one.approval("/demo-workspace", "Antigravity", false), two.approval("/demo-workspace", "Antigravity", false)
 	if string(a) == string(b) {
 		t.Fatalf("different argv %s and %s produce indistinguishable cards %s", one.input, two.input, a)
 	}
