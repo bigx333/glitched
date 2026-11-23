@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -10,12 +11,14 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
+	"glitched/internal/provider/acp/acptest"
 )
 
 // resumeFor runs one turn on a new session of the fake's scenario, then
 // resumes it, ResumeOnly, on another process, as idle compaction does.
 func resumeFor(t *testing.T, scenario string) (provider.Agent, string) {
 	t.Helper()
+	t.Setenv(acptest.DefaultModel, "gemini-3-pro")
 	a, log := fake(t, scenario)
 	s := spec(t)
 	first := open(t, a, s)
@@ -77,17 +80,31 @@ func TestSlashCompactAnsweredWithTextFails(t *testing.T) {
 	}
 }
 
-// A session that lists no commands takes no /compact: it is never sent as
-// text into the conversation.
+// A session that lists no commands takes no compaction: it is declined
+// at open, and /compact never goes as text into the conversation.
 func TestSlashCompactWithoutAListIsNotSent(t *testing.T) {
 	was := commandWait
 	commandWait = 300 * time.Millisecond
 	t.Cleanup(func() { commandWait = was })
-	g, log := resumeFor(t, "compact-unlisted")
-	defer closeRun(t, g)
-	err := g.Do(context.Background(), provider.Start{Text: "/compact"})
-	if err == nil || !strings.Contains(err.Error(), "listed no commands") {
-		t.Fatalf("/compact on a session that listed no commands: %v, want it refused", err)
+	t.Setenv(acptest.DefaultModel, "gemini-3-pro")
+	a, log := fake(t, "compact-unlisted")
+	s := spec(t)
+	first := open(t, a, s)
+	do(t, first, provider.Start{Text: "Remember kumquat."})
+	turn(t, first)
+	id := first.(provider.Sessioned).Session()
+	closeRun(t, first)
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b := &Adapter{Profile: Antigravity, Path: a.Path}
+	t.Cleanup(func() { b.Close() })
+	s.Run, s.Generation, s.Session, s.ResumeOnly = api.NewID(), 2, id, true
+	if g, err := b.Open(context.Background(), s); !errors.Is(err, provider.ErrDeclined) {
+		if g != nil {
+			closeRun(t, g)
+		}
+		t.Fatalf("a compaction on a session that listed no commands opened: %v, want it declined", err)
 	}
 	if got := len(find(t, wire(t, log), "session/prompt")); got != 1 {
 		t.Errorf("sent %d prompts, want only the first turn's", got)

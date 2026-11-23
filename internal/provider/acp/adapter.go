@@ -210,6 +210,17 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 			return nil, a.refused(p, keep, err)
 		}
 	}
+	// A compaction goes only to a session that takes /compact, on a model
+	// it applies to: agy lists its commands after the session opens, so
+	// they are waited for here, before the host's last look at the thread.
+	if spec.ResumeOnly {
+		p.mu.Lock()
+		m, _ := option(p.options, acpsdk.SessionConfigOptionCategoryModel)
+		p.mu.Unlock()
+		if offered, err := p.offers(ctx, "compact"); err != nil || !offered || a.Profile.IdleCompacts == nil || !a.Profile.IdleCompacts(string(m.CurrentValue)) {
+			return nil, a.refused(p, keep, provider.ErrDeclined)
+		}
+	}
 	g := newAgent(spec, p, keep)
 	if lost {
 		g.notice(a.Profile.Name + " no longer has this thread's earlier conversation, so this turn starts a new one.")

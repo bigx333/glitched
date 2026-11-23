@@ -250,10 +250,11 @@ func (d *deriving) add(e client.Entry) {
 	case *client.ErrorEntry:
 		d.es = append(d.es, entry{key: d.key("e", e.Run), kind: entryError, text: e.Error})
 	case *client.CompactionEntry:
-		if !e.Running && !e.Compacted {
+		// Only what it did shows: a compaction at work shows nothing.
+		if !e.Compacted {
 			return
 		}
-		d.es = append(d.es, entry{key: "k/" + e.Run.String(), kind: entryCompact, text: compactLabel(e), working: e.Running, at: e.At})
+		d.es = append(d.es, entry{key: "k/" + e.Run.String(), kind: entryCompact, text: compactLabel(e), at: e.At})
 	case *client.ReportEntry:
 		// One after another, they're one card, keyed by its first and
 		// its order among the cards a run's report starts: a run that
@@ -745,9 +746,6 @@ func (a *app) projectOf(t thread) *project {
 }
 
 func compactLabel(e *client.CompactionEntry) string {
-	if e.Running {
-		return "Compacting before cache expires…"
-	}
 	if e.PreTokens > 0 && e.PostTokens > 0 {
 		return fmt.Sprintf("Auto-compacted before cache expiry · %s → %s tokens",
 			contextTokens(float64(e.PreTokens)), contextTokens(float64(e.PostTokens)))

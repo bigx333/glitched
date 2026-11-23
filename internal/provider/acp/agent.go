@@ -51,6 +51,7 @@ type Agent struct {
 	command     bool              // the run is /compact
 	spoke       bool              // the agent answered /compact with text
 	compacted   bool              // the agent said it compacted
+	uncompacted bool              // the agent said its compaction failed or was cancelled
 }
 
 var (
@@ -276,9 +277,12 @@ func (g *Agent) finish(r acpsdk.PromptResponse, err error) {
 	// agy compacts on /compact and says nothing: a command that ends its
 	// turn with no answer did its work, and one it answered did none.
 	if g.command && end.Outcome == api.OutcomeCompleted && !g.compacted {
-		if g.spoke {
+		switch {
+		case g.uncompacted:
+			end.Outcome, end.Error = api.OutcomeFailed, g.p.profile.Name+" could not compact the conversation."
+		case g.spoke:
 			end.Outcome, end.Error = api.OutcomeFailed, g.p.profile.Name+" answered /compact instead of compacting."
-		} else {
+		default:
 			g.queueLocked(provider.Context{Compacted: true})
 		}
 	}
@@ -584,6 +588,9 @@ func (g *Agent) usage(u acpsdk.SessionUsageUpdate) {
 func (g *Agent) compaction(u acpsdk.SessionCompactionUpdate) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.started && !g.ended && (u.Status == acpsdk.CompactionStatusFailed || u.Status == acpsdk.CompactionStatusCancelled) {
+		g.uncompacted = true
+	}
 	if g.started && !g.ended && !g.compacted && u.Status == acpsdk.CompactionStatusCompleted {
 		g.compacted = true
 		g.queueLocked(provider.Context{Compacted: true})

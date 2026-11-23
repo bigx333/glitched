@@ -298,8 +298,8 @@ func (t *turn) read(m message) []provider.Event {
 		}
 		return evs
 	case "rate_limit_event":
-		if t.cache != nil && m.RateLimit != nil {
-			t.cache.limited = m.RateLimit.Status != "allowed"
+		if t.cache != nil && t.cache.limited != nil && m.RateLimit != nil {
+			t.cache.limited.Store(m.RateLimit.Status != "allowed")
 		}
 	case "result":
 		evs := append(t.unfinished(), t.measured(m)...)

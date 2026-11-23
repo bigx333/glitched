@@ -150,6 +150,10 @@ type Commander interface {
 	Commands(ctx context.Context, workspace string) ([]Command, error)
 }
 
+// ErrDeclined is an adapter's answer to a ResumeOnly run its agent would
+// not make now: its own settings, or what it said of the account, say no.
+var ErrDeclined = errors.New("provider: the agent declines the compaction")
+
 type SessionSpec struct {
 	Thread, Run api.ID
 	Generation  uint64
@@ -170,8 +174,12 @@ type SessionSpec struct {
 	Credentials string
 	// ResumeOnly requires the adapter to resume the existing conversation
 	// and fail if it cannot, rather than starting a fresh session. Used for
-	// background maintenance such as idle compaction.
+	// background maintenance such as idle compaction; an adapter whose
+	// agent would not compact now returns ErrDeclined.
 	ResumeOnly bool
+	// CacheExpires is when the thread's prompt cache expires, as its last
+	// run reported; zero when none did.
+	CacheExpires time.Time
 }
 
 // MCPServer is a stdio MCP server an agent starts for itself: Command with
