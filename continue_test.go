@@ -295,32 +295,42 @@ func (e lostReply) Submit(ctx context.Context, c api.Command) (api.Receipt, erro
 	return r, err
 }
 
-// A Continue whose reply was lost holds its place once its run shows.
+// A Continue whose reply was lost holds its place, whether its run shows
+// before the loss or after.
 func TestContinueAllHoldsAPlaceWhoseReplyWasLost(t *testing.T) {
-	held := fake.New(fake.Turn(false))
-	held.HoldStart = true
-	_, d := lostDir(t, held, "One", "Two", "Three")
-	snap, err := d.Endpoint().Read(context.Background(), api.Query{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var lost api.ID
-	for _, v := range snap.Threads {
-		if v.Title == "One" {
-			lost = v.ID
-		}
-	}
-	late := make(chan struct{})
-	h := serveApp(t, lostReply{d.Endpoint(), lost, late})
-	one, two, three := h.thread("One"), h.thread("Two"), h.thread("Three")
-	h.a.continueAll([]thread{one, two, three})
-	h.until("the first two starting", func() bool { return one.View.Run == api.RunStarting && two.View.Run == api.RunStarting })
-	close(late)
-	h.until("the first's reply lost", func() bool {
-		return slices.ContainsFunc(one.Pending, func(p client.Pending) bool { return p.Err != nil })
-	})
-	h.tt.Frame()
-	if len(three.Pending) != 0 || held.Starts() != 2 {
-		t.Fatalf("the third was continued (%d sent, %d started) with both places held", len(three.Pending), held.Starts())
+	for _, shows := range []string{"before", "after"} {
+		t.Run("its run shows "+shows, func(t *testing.T) {
+			held := fake.New(fake.Turn(false))
+			held.HoldStart = true
+			_, d := lostDir(t, held, "One", "Two", "Three")
+			snap, err := d.Endpoint().Read(context.Background(), api.Query{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var lost api.ID
+			for _, v := range snap.Threads {
+				if v.Title == "One" {
+					lost = v.ID
+				}
+			}
+			late := make(chan struct{})
+			if shows == "after" {
+				close(late)
+			}
+			h := serveApp(t, lostReply{d.Endpoint(), lost, late})
+			one, two, three := h.thread("One"), h.thread("Two"), h.thread("Three")
+			h.a.continueAll([]thread{one, two, three})
+			if shows == "before" {
+				h.until("the first two starting", func() bool { return one.View.Run == api.RunStarting && two.View.Run == api.RunStarting })
+				close(late)
+			}
+			h.until("the first's reply lost", func() bool {
+				return slices.ContainsFunc(one.Pending, func(p client.Pending) bool { return p.Err != nil })
+			})
+			h.tt.Frame()
+			if len(three.Pending) != 0 || len(queuedOn(t, d, three.id())) != 1 {
+				t.Fatalf("the third was continued (%d sent, %d queued) with both places held", len(three.Pending), len(queuedOn(t, d, three.id())))
+			}
+		})
 	}
 }
