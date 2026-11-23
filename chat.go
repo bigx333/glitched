@@ -2008,10 +2008,12 @@ func (a *app) sendAs(t thread, text, about string, mode api.DispatchMode) bool {
 		}
 	}
 	// One to a run left uncertain replaces it.
+	var cmd api.ID
 	if continuable(t) {
-		mode = api.RestartActive
+		cmd = a.backend.Replace(t.env, id, text)
+	} else {
+		cmd = a.backend.Send(t.env, id, text, mode)
 	}
-	cmd := a.backend.Send(t.env, id, text, mode)
 	if cmd.IsZero() {
 		return false
 	}

@@ -661,3 +661,36 @@ func TestAMessageAfterSettleWaitsForTheStoppedRun(t *testing.T) {
 		})
 	}
 }
+
+// A message that replaces an uncertain run names it, and the engine takes it
+// only while that run is the live one and uncertain: a second replacing the
+// same run, as another client's or a stale retry, stops nothing.
+func TestAReplaceNamesTheRunItReplaces(t *testing.T) {
+	f, run := running(t)
+	f.must(api.TurnInterrupt{})
+	f.observe(engine.InterruptSent{Run: run})
+	f.must(api.TurnInterrupt{})
+	replace := func(r api.ID, mode api.DispatchMode) (api.ID, []engine.Effect, error) {
+		return f.submit(api.MessageDispatch{Text: "continue", Mode: mode, Replaces: r})
+	}
+	rej := (*api.RejectedError)(nil)
+	if _, _, err := replace(run, api.SteerActive); !errors.As(err, &rej) {
+		t.Fatalf("a steer naming a run to replace: %v, want rejected", err)
+	}
+	if _, _, err := replace(api.NewID(), api.RestartActive); !errors.As(err, &rej) {
+		t.Fatalf("a replace naming another run: %v, want rejected", err)
+	}
+	first, effects, err := replace(run, api.RestartActive)
+	if err != nil || len(effects) != 1 {
+		t.Fatalf("the replace: %v with effects %v, want the new run started", err, effects)
+	}
+	if f.th.Runs[0].Outcome != api.OutcomeAbandoned || f.th.Live() == nil || f.th.Live().ID != first {
+		t.Fatalf("runs %+v, want the uncertain one abandoned and the replace's live", f.th.Runs)
+	}
+	if _, _, err := replace(run, api.RestartActive); !errors.As(err, &rej) || f.th.Live().ID != first || f.th.Live().State == engine.RunStopping {
+		t.Fatalf("a second replace of the same run: %v, live %+v; want rejected and the first's run untouched", err, f.th.Live())
+	}
+	if _, _, err := replace(first, api.RestartActive); !errors.As(err, &rej) {
+		t.Fatalf("a replace of a run that isn't uncertain: %v, want rejected", err)
+	}
+}

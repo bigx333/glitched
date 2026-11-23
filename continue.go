@@ -21,9 +21,10 @@ func continuable(t thread) bool {
 }
 
 // continueRun has the agent of t's uncertain run pick up where it left off,
-// in a run that replaces it.
+// in a run that replaces it: the engine refuses it once the thread moved
+// on from the view this read, as when another client continued it first.
 func (a *app) continueRun(t thread) api.ID {
-	return a.backend.Send(t.env, t.id(), api.ContinueText, api.RestartActive)
+	return a.backend.Replace(t.env, t.id(), api.ContinueText)
 }
 
 // continueButton continues a run left uncertain, beside the Stop that ends
@@ -40,8 +41,9 @@ func (a *app) continueButton(c *ui.Context, t thread) {
 	}
 }
 
-// continuesAtOnce is how many of a Continue all's threads run at once, as
-// a restart that cut off many agents would otherwise start them together.
+// continuesAtOnce is how many of a Continue all's threads run at once on
+// one engine, as a restart that cut off many agents would otherwise start
+// them together.
 const continuesAtOnce = 2
 
 // continuing is a thread Continue all continues, once its turn comes:
@@ -82,12 +84,12 @@ func (a *app) continueAll(ts []thread) {
 	a.paceContinues()
 }
 
-// paceContinues continues the next of a Continue all's threads while fewer
-// than continuesAtOnce of those it continued are at work. One gone, or no
-// longer uncertain before its turn, as the user continued or stopped it
-// meanwhile, is dropped.
+// paceContinues continues the next of a Continue all's threads on each
+// engine while fewer than continuesAtOnce of those it continued there
+// are live. One gone, or no longer uncertain before its turn, as the user
+// continued or stopped it meanwhile, is dropped.
 func (a *app) paceContinues() {
-	busy := 0
+	busy := map[*client.Env]int{}
 	a.continues = slices.DeleteFunc(a.continues, func(j continuing) bool {
 		th := j.env.Threads[j.thread]
 		if th == nil || !slices.Contains(a.backend.Envs(), j.env) {
@@ -97,33 +99,31 @@ func (a *app) paceContinues() {
 		if j.sent.IsZero() {
 			return !continuable(t)
 		}
-		if j.works(t) {
-			busy++
+		if j.live(t) {
+			busy[j.env]++
 			return false
 		}
 		return true
 	})
 	for i := range a.continues {
-		if busy >= continuesAtOnce {
-			return
-		}
-		if j := &a.continues[i]; j.sent.IsZero() {
+		if j := &a.continues[i]; j.sent.IsZero() && busy[j.env] < continuesAtOnce {
 			j.sent = a.continueRun(thread{j.env, j.env.Threads[j.thread]})
-			busy++
+			busy[j.env]++
 		}
 	}
 }
 
-// works is whether the run j's Continue started still works, or its
-// Continue is on its way: the uncertain run it replaces is still t's. A
-// run waiting on the user's answer works no more than one that ended.
-func (j continuing) works(t thread) bool {
+// live is whether the run j's Continue started is live, waiting on the
+// user's answer too, as an answer resumes it without asking for a place;
+// or whether its Continue is on its way: the thread still shows the
+// uncertain run it replaces. A Continue the engine refused started none.
+func (j continuing) live(t thread) bool {
 	if slices.ContainsFunc(t.Pending, func(p client.Pending) bool { return p.Command == j.sent && p.Err != nil }) {
 		return false
 	}
 	v := t.View
 	if v.Turn != nil && v.Turn.Run == j.sent {
-		return v.Run == api.RunStarting || v.Run == api.RunRunning
+		return v.Run != api.RunUncertain
 	}
-	return v.Run == api.RunUncertain
+	return v.Run == api.RunUncertain && (v.LastTurn == nil || v.LastTurn.Run != j.sent)
 }
