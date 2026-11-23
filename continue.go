@@ -55,15 +55,15 @@ type continuing struct {
 }
 
 // lostIn is the threads of the user's own a Continue all in cat's head
-// would continue, which only the inbox has: children are their parents'
-// to pick up again.
+// would continue, which only the inbox has, on engines online: children
+// are their parents' to pick up again.
 func (a *app) lostIn(cat category) []thread {
 	if cat != catInbox {
 		return nil
 	}
 	var ts []thread
 	for _, it := range a.itemsIn(catInbox) {
-		if it.t.View.Parent.IsZero() && continuable(it.t) && !a.continuingAlready(it.t) {
+		if _, online := it.t.env.Status.(client.Online); online && it.t.View.Parent.IsZero() && continuable(it.t) && !a.continuingAlready(it.t) {
 			ts = append(ts, it.t)
 		}
 	}
@@ -106,7 +106,9 @@ func (a *app) paceContinues() {
 		return true
 	})
 	for i := range a.continues {
-		if j := &a.continues[i]; j.sent.IsZero() && busy[j.env] < continuesAtOnce {
+		// One on an engine offline waits for it to come back.
+		_, online := a.continues[i].env.Status.(client.Online)
+		if j := &a.continues[i]; online && j.sent.IsZero() && busy[j.env] < continuesAtOnce {
 			j.sent = a.continueRun(thread{j.env, j.env.Threads[j.thread]})
 			busy[j.env]++
 		}

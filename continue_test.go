@@ -138,6 +138,11 @@ func TestContinueAllContinuesTwoAtATime(t *testing.T) {
 		t.Fatal("Continue all still shows with every lost thread continuing")
 	}
 	answered := in(api.RunWaiting)[0]
+	h.a.select_(answered)
+	h.tt.Advance(time.Second)
+	if _, ok := h.tt.Find("Continue"); ok {
+		t.Fatal("Continue shows on a thread whose continued run waits on its approval")
+	}
 	r := answered.View.Requests[0]
 	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: answered.id(), Body: api.RequestRespond{Request: r.ID, Generation: r.Generation, Answer: json.RawMessage(`{"allow":true}`)}}); err != nil {
 		t.Fatal(err)

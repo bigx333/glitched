@@ -448,8 +448,10 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // and access, which a version 6 engine refuses as an unknown command;
 // version 8 has a stop hold the queue, which a version 7 GUI would show as
 // queued with no way to resume it, and a version 7 engine would refuse
-// the resume as an unknown command.
-const Protocol = 8
+// the resume as an unknown command; version 9 has a message name the
+// uncertain run it replaces, which a version 8 engine would drop and stop
+// whatever run is live.
+const Protocol = 9
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host
