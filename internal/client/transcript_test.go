@@ -176,8 +176,8 @@ func TestFoldInterleavesTextAndWorkInTheOrderTheyHappened(t *testing.T) {
 }
 
 // A run's plans are one entry, where it first said one, holding the last;
-// the thread's plan is the latest, until it is cleared or its run ends
-// with every step done. The next run's plan is an entry of its own.
+// the thread's plan is the latest, done or not, until it is cleared. The
+// next run's plan is an entry of its own.
 func TestFoldKeepsEachRunsLatestPlan(t *testing.T) {
 	a, b := api.NewID(), api.NewID()
 	tr := play(slices.Concat(start(a, "go", 0), []api.EventBody{
@@ -204,8 +204,8 @@ func TestFoldKeepsEachRunsLatestPlan(t *testing.T) {
 		t.Fatalf("after the next run's plan the thread's is %+v and its last entry %s, want the next run's in an entry of its own", tr.Plan, describe(tr.last()))
 	}
 	tr.apply(event(next+5, api.TurnEnded{Run: b, Outcome: api.OutcomeCompleted}))
-	if tr.Plan != nil {
-		t.Fatalf("a run that ended with its plan done leaves the thread's plan %+v, want none", tr.Plan)
+	if tr.Plan == nil || planOf(tr.Plan.Steps) != "[x]Test" {
+		t.Fatalf("a run that ended with its plan done leaves the thread's plan %+v, want it kept till the next", tr.Plan)
 	}
 	cleared := play(slices.Concat(start(a, "go", 0), []api.EventBody{
 		api.PlanUpdated{Run: a, Steps: steps("[>]Read")},

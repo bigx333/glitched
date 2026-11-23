@@ -35,9 +35,8 @@ type Transcript struct {
 	// folds counts the snapshots that replaced the transcript, each of
 	// which starts its edits again.
 	folds int
-	// Plan is the plan the thread's agent works to, the latest one said:
-	// nil before any, once the agent cleared it, and once the run whose
-	// plan it is ends with every step done.
+	// Plan is the plan the thread's agent works to, the latest one said,
+	// done or not: nil before any and once the agent cleared it.
 	Plan *PlanEntry
 }
 
@@ -411,9 +410,6 @@ func (t *Transcript) apply(e api.Event) {
 			break
 		}
 		t.Ended = e.At
-		if p := t.Plan; p != nil && p.Run == b.Run && p.Done() == len(p.Steps) {
-			t.Plan = nil
-		}
 		end := TurnEnd{Outcome: b.Outcome, At: e.At}
 		if began, ok := t.began[b.Run]; ok {
 			end.Took = e.At.Sub(began)
