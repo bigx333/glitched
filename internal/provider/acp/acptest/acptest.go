@@ -220,7 +220,7 @@ func (f *fake) Initialize(ctx context.Context, p acp.InitializeRequest) (acp.Ini
 	}
 	caps := acp.AgentCapabilities{SessionCapabilities: acp.SessionCapabilities{Close: &acp.SessionCloseCapabilities{}}}
 	switch f.scenario {
-	case "memory", "memory-reject-model", "memory-resume-fails", "memory-load-metadata", "compact", "compact-no-cmd":
+	case "memory", "memory-reject-model", "memory-resume-fails", "memory-load-metadata", "compact", "compact-no-cmd", "compact-agy", "compact-replies", "compact-unlisted":
 		caps.LoadSession = true
 		caps.SessionCapabilities.Resume = &acp.SessionResumeCapabilities{}
 	case "memory-load-only":
@@ -342,6 +342,15 @@ func (f *fake) sendCommands(ctx context.Context, id acp.SessionId) {
 		f.send(ctx, id, acp.SessionUpdate{AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
 			AvailableCommands: []acp.AvailableCommand{{Name: "help", Description: "Show help"}},
 		}})
+	case "compact-agy", "compact-replies":
+		// agy 1.5.15 lists its commands only after it answered the
+		// session's resume or creation.
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			f.send(context.Background(), id, acp.SessionUpdate{AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
+				AvailableCommands: []acp.AvailableCommand{{Name: "goal"}, {Name: "compact", Description: "Compact the conversation now"}},
+			}})
+		}()
 	}
 }
 
@@ -425,6 +434,14 @@ func (f *fake) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptRespo
 		f.send(ctx, sid, acp.SessionUpdate{CompactionUpdate: &acp.SessionCompactionUpdate{CompactionId: "cmp-1", Status: acp.CompactionStatusInProgress}})
 		f.send(ctx, sid, acp.SessionUpdate{CompactionSummaryChunk: &acp.SessionUpdateCompactionSummaryChunk{CompactionId: "cmp-1", Content: acp.TextBlock("Summary")}})
 		f.send(ctx, sid, acp.SessionUpdate{CompactionUpdate: &acp.SessionCompactionUpdate{CompactionId: "cmp-1", Status: acp.CompactionStatusCompleted}})
+		return end, nil
+	case f.is("compact-agy") && len(p.Prompt) == 1 && p.Prompt[0].Text != nil && p.Prompt[0].Text.Text == "/compact":
+		// agy 1.5.15 compacts with no compaction update and no text: only
+		// a usage update, of the request that wrote the summary.
+		f.send(ctx, sid, acp.SessionUpdate{UsageUpdate: &acp.SessionUsageUpdate{Used: 250000, Size: 1048576}})
+		return end, nil
+	case f.is("compact-replies") && len(p.Prompt) == 1 && p.Prompt[0].Text != nil && p.Prompt[0].Text.Text == "/compact":
+		f.send(ctx, sid, acp.UpdateAgentMessageText("I can't compact this."))
 		return end, nil
 	case f.remembers():
 		var said []string
@@ -686,7 +703,7 @@ func (f *fake) ListSessions(context.Context, acp.ListSessionsRequest) (acp.ListS
 func (f *fake) ResumeSession(ctx context.Context, p acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
 	f.record("session/resume", p)
 	switch f.scenario {
-	case "memory", "memory-reject-model", "memory-load-metadata", "compact", "compact-no-cmd":
+	case "memory", "memory-reject-model", "memory-load-metadata", "compact", "compact-no-cmd", "compact-agy", "compact-replies", "compact-unlisted":
 	case "memory-resume-fails":
 		return acp.ResumeSessionResponse{}, acp.NewInternalError(map[string]any{"message": "Failed to read session " + string(p.SessionId) + "; retry, or load it with session/load"})
 	default:

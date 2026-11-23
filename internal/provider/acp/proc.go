@@ -92,6 +92,7 @@ type proc struct {
 	refused     string                               // why the session runs the access's Else, as configure last found
 	commands    map[string]bool                      // advertised slash commands; nil until first update
 	pendingCmds map[acpsdk.SessionId]map[string]bool // commands received before open() binds p.session
+	listed      chan struct{}                        // closes once the session's commands are known
 	run         *Agent                               // the run the agent serves, if any
 	prompt      chan struct{}                        // closes once the run's prompt is written
 	parked      bool                                 // it waits for its thread's next run
@@ -127,7 +128,7 @@ func launch(ctx context.Context, profile Profile, prog provider.Program, dir, ma
 	}
 	cmd.Env = prog.Environ(append(cmd.Env, procEnv+"="+mark))
 	cmd.SysProcAttr = sweep.SysProcAttr()
-	p := &proc{profile: profile, cmd: cmd, mark: mark, stderr: &tail{}, heard: make(chan struct{}), read: make(chan struct{}), reaped: make(chan struct{})}
+	p := &proc{profile: profile, cmd: cmd, mark: mark, stderr: &tail{}, heard: make(chan struct{}), read: make(chan struct{}), reaped: make(chan struct{}), listed: make(chan struct{})}
 	// The adapter's own pipes, unlike exec's, leave Wait nothing to wait
 	// for once the agent exits, whoever else still holds them.
 	inR, inW, err1 := os.Pipe()
@@ -268,6 +269,9 @@ func (p *proc) open(ctx context.Context, dir string, servers []provider.MCPServe
 	p.mu.Lock()
 	p.session, p.options, p.mode, p.moded, p.offered = id, options, "", modes != nil, nil
 	p.commands, p.pendingCmds = p.pendingCmds[id], nil
+	if p.commands != nil {
+		p.listedLocked()
+	}
 	if modes != nil {
 		p.mode = string(modes.CurrentModeId)
 		for _, m := range modes.AvailableModes {
@@ -741,12 +745,32 @@ func (p *proc) current(speaking bool, what string) *Agent {
 	return p.run
 }
 
-// lacksCommand is true once the session has advertised its slash commands
-// and name is not among them. Before any list arrives it is false.
-func (p *proc) lacksCommand(name string) bool {
+// commandWait is how long a slash command waits for the session to list
+// the commands it takes: agy lists them only after session/resume answers.
+var commandWait = 10 * time.Second
+
+// offers is whether the session lists the slash command name, once it
+// listed its commands; one that lists none in commandWait offers none.
+func (p *proc) offers(ctx context.Context, name string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, commandWait)
+	defer cancel()
+	select {
+	case <-p.listed:
+	case <-ctx.Done():
+		return false, fmt.Errorf("%s listed no commands for the session", p.profile.Name)
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.commands != nil && !p.commands[strings.ToLower(name)]
+	return p.commands[strings.ToLower(name)], nil
+}
+
+// listedLocked closes listed, once. p.mu is held.
+func (p *proc) listedLocked() {
+	select {
+	case <-p.listed:
+	default:
+		close(p.listed)
+	}
 }
 
 func (p *proc) recordCommands(id acpsdk.SessionId, u *acpsdk.SessionAvailableCommandsUpdate) {
@@ -758,6 +782,7 @@ func (p *proc) recordCommands(id acpsdk.SessionId, u *acpsdk.SessionAvailableCom
 	defer p.mu.Unlock()
 	if p.session != "" && id == p.session {
 		p.commands = cmds
+		p.listedLocked()
 		return
 	}
 	if p.session == "" {
