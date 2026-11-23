@@ -88,7 +88,7 @@ func pluginDirs(t *testing.T, argv string) []string {
 	return out
 }
 
-func threadIn(t *testing.T, h *runtime.Host, ws string) api.ID {
+func askThreadIn(t *testing.T, h *runtime.Host, ws string) api.ID {
 	t.Helper()
 	thread := api.NewID()
 	submit(t, h, thread, api.ThreadCreate{Workspace: ws, Title: "hi", Access: api.AccessAsk, Model: api.ModelRef{Provider: "claude", Model: "haiku"}})
@@ -148,7 +148,7 @@ func TestClaudeGetsGlitchedsSkillsOnlyFromGlitched(t *testing.T) {
 	argv := replay(t, "hi", "")
 	seen := seeing(t)
 	h := host(t, nil, runtime.WithSkills(state))
-	turnEnds(t, h, threadIn(t, h, ws), firstAsk)
+	turnEnds(t, h, askThreadIn(t, h, ws), firstAsk)
 	dirs := pluginDirs(t, argv)
 	if len(dirs) != 1 || filepath.Dir(dirs[0]) != filepath.Join(state, "run-skills") {
 		t.Fatalf("claude started with --plugin-dir %q, want one overlay in the state folder", dirs)
@@ -180,7 +180,7 @@ func TestChangedSkillsStartAClaudeThatResumesTheSession(t *testing.T) {
 	argv, started := keep(t, []string{"hi"}, []string{"again-resume", "again-resume"})
 	seen := seeing(t)
 	h := host(t, nil, runtime.WithSkills(state))
-	thread := threadIn(t, h, ws)
+	thread := askThreadIn(t, h, ws)
 	turnEnds(t, h, thread, firstAsk)
 	skillstest.Write(t, filepath.Join(ws, ".glitched", "skills"), "added", "Added between turns.")
 	turnEnds(t, h, thread, againAsk)
@@ -215,8 +215,8 @@ func TestEachEngineGivesItsOwnSkills(t *testing.T) {
 	seen := seeing(t)
 	a := hostAt(t, filepath.Join(stateA, "engine.db"), nil, runtime.WithSkills(stateA))
 	b := hostAt(t, filepath.Join(stateB, "engine.db"), nil, runtime.WithSkills(stateB))
-	turnEnds(t, a, threadIn(t, a, wsA), firstAsk)
-	turnEnds(t, b, threadIn(t, b, wsB), firstAsk)
+	turnEnds(t, a, askThreadIn(t, a, wsA), firstAsk)
+	turnEnds(t, b, askThreadIn(t, b, wsB), firstAsk)
 	want := [][]string{
 		{"glitched:here: This machine's.", "glitched:this-project: This project's.", native},
 		{"glitched:that-project: That project's.", "glitched:there: That machine's.", native},
@@ -238,9 +238,9 @@ func TestAScratchThreadGetsOnlyTheUsersSkills(t *testing.T) {
 	argv := replay(t, "hi", "")
 	seen := seeing(t)
 	h := host(t, nil, runtime.WithSkills(state))
-	turnEnds(t, h, threadIn(t, h, scratch), firstAsk)
+	turnEnds(t, h, askThreadIn(t, h, scratch), firstAsk)
 	skillstest.Write(t, filepath.Join(state, "skills"), "mine", "Mine.")
-	turnEnds(t, h, threadIn(t, h, scratch), firstAsk)
+	turnEnds(t, h, askThreadIn(t, h, scratch), firstAsk)
 	want := [][]string{{native}, {"glitched:mine: Mine.", native}}
 	if got := seen(); !slices.EqualFunc(got, want, slices.Equal) {
 		t.Errorf("scratch threads' claudes saw %q, want %q", got, want)
@@ -302,7 +302,7 @@ func TestPluginErrorsAreLoggedNotFatal(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(was) })
 	replay(t, "plugin-errors", "")
 	h := host(t, nil, runtime.WithSkills(state))
-	turnEnds(t, h, threadIn(t, h, ws), firstAsk)
+	turnEnds(t, h, askThreadIn(t, h, ws), firstAsk)
 	if !strings.Contains(logs.String(), "plugins didn't load") || !strings.Contains(logs.String(), "skills/review: unreadable") {
 		t.Errorf("logged %s", logs.String())
 	}
