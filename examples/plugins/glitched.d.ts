@@ -839,7 +839,8 @@ interface PlaceArgs<S> {
   at: Slot | Component;
   state: S;
   /** The copies to draw now: every copy shown after an event, a timer, a setting or a reload, otherwise only those that came or changed. A component's copies have its context: HeaderActionsContext for thread.header.actions, DiffPanelContext for thread.panel.diff, and so on. */
-  items: { key: string; context?: ThreadRecord | ComponentContext }[];
+  /** compact: a narrow header asks a thread.header copy for its smallest drawing. */
+  items: { key: string; context?: ThreadRecord | ComponentContext; compact?: boolean }[];
 }
 /** rows draws the rows of a list that Glitched shows: a widget or null each, in the order of keys; null for a key the state no longer has. A row is at most 200 widgets and 16 KiB. */
 interface RowsArgs<S> extends InitArgs {

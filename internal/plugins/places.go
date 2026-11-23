@@ -28,6 +28,9 @@ type PlaceItem struct {
 	Key     string
 	Version string
 	Context any
+	// Compact asks for the copy's smallest drawing, as a narrow header
+	// does; a Version of its own says so.
+	Compact bool
 }
 
 // placeSet is what the app session draws in the plugin's places. The UI
@@ -497,10 +500,11 @@ func (s *Session) drawBatch(pl Place, state json.RawMessage, batch []PlaceItem, 
 	type item struct {
 		Key     string `json:"key"`
 		Context any    `json:"context,omitempty"`
+		Compact bool   `json:"compact,omitempty"`
 	}
 	in := make([]item, len(batch))
 	for i, it := range batch {
-		in[i] = item{it.Key, it.Context}
+		in[i] = item{it.Key, it.Context, it.Compact}
 	}
 	var raw json.RawMessage
 	if err := s.call(ViewTimeout, "place", map[string]any{"id": pl.ID, "at": pl.At, "state": state, "items": in}, &raw); err != nil {

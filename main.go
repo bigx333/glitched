@@ -521,6 +521,8 @@ type app struct {
 	// the chat's, as the last frame laid them out: the panels size to the
 	// one and the header to the other.
 	roomBeside, chatWidth float32
+	// headerGive is what the header gives way to fit its row.
+	headerGive headerGive
 	// effortFlow is the light flowing through the effort bar.
 	effortFlow flowState
 	// composerOpened is the composer brought back to its full size by a

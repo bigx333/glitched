@@ -176,33 +176,116 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 			}
 		}
 		// The title, and a child's way back up before it.
-		a.heading(c, t, narrow)
-		if !narrow {
+		heading := a.heading(c, t, narrow)
+		give := a.headerGive.of(t.id(), narrow)
+		// The step changed last frame: the plugins draw their copies for
+		// it before this frame shows, so the next one measures it whole.
+		moved := a.headerGive.wait > 0
+		if give < giveProject {
 			pill(c, a.projectOf(t).name()).Shrink(0)
-			if t.View.Branch != "" {
-				pill(c, t.View.Branch).Shrink(0)
-			}
 			if len(a.backend.Envs()) > 1 && t.env != nil {
 				a.machinePill(c, t.env)
 			}
+		}
+		if give < giveBranch && t.View.Branch != "" {
+			pill(c, t.View.Branch).Shrink(0)
+		}
+		if !narrow {
 			a.usagePill(c, t)
 		}
-		if !t.id().IsZero() {
-			a.pluginSlot(c, "thread.header", t.id().String(), &t)
+		if give < givePlaces && !t.id().IsZero() {
+			a.pluginSlot(c, "thread.header", t.id().String(), &t, slotAsk{compact: give >= giveCompactPlaces, wait: moved})
 		}
-		ui.Spacer(c)
+		spacer := ui.Spacer(c)
 		a.tabButtons(c)
 		// The rest of the row is a plugin's: the built-in Header actions,
 		// or one of the user's that replaces it.
-		state := headerActions{Local: t.local(), Narrow: narrow, Panels: a.panels(), ChangedFiles: len(files)}
+		state := headerActions{Local: t.local(), Narrow: give >= giveActions, Panels: a.panels(), ChangedFiles: len(files)}
+		var actions ui.Element
 		box := func() ui.Element {
-			return ui.Row(c).Key("component:thread.header.actions").Shrink(0).AlignItems(ui.Center)
+			actions = ui.Row(c).Key("component:thread.header.actions").Shrink(0).AlignItems(ui.Center)
+			return actions
 		}
-		a.pluginComponent(c, "thread.header.actions", &t, componentCopy{key: t.id().String(), box: box, context: func(r plugins.ThreadRecord) any {
+		a.pluginComponent(c, "thread.header.actions", &t, componentCopy{key: t.id().String(), box: box, current: moved, context: func(r plugins.ThreadRecord) any {
 			state.Thread = r
 			return state
 		}})
+		h, ti, sp, ac := head.Bounds(), heading.Bounds(), spacer.Bounds(), actions.Bounds()
+		room := h.W - left - right
+		over := max(0, ac.X+ac.W-(h.X+h.W-right))
+		natural, _ := c.MeasureText(0, ui.Span{Text: title(t), Weight: 600})
+		if a.headerGive.fit(room, room+over-ti.W-sp.W, min(natural, headerTitleRoom)) {
+			c.Invalidate()
+		}
 	})
+}
+
+// headerTitleRoom is the most of its title's width the header keeps
+// before it gives anything else way.
+const headerTitleRoom = 160
+
+// What the header gives way, in order, while its row doesn't fit: the
+// actions to their icons, the project's pill, the branch's, the
+// plugins' copies to their smallest, then those copies. Under 700 points
+// it starts with the pills gone and the actions as icons.
+const (
+	giveNone = iota
+	giveActions
+	giveProject
+	giveBranch
+	giveCompactPlaces
+	givePlaces
+	giveAll
+)
+
+// headerGive is what the header of a thread gives way, and how wide the
+// rest of its row was at each step, as the last frames laid it out. wait
+// counts the frames whose layout is still of the step before: a frame
+// measures the one before it.
+type headerGive struct {
+	thread api.ID
+	narrow bool
+	step   int
+	wait   int
+	rest   [giveAll]float32
+}
+
+// of is the step the header of thread draws at, from the start for a
+// thread or a width it hasn't drawn, whose first frame measures the
+// header before it.
+func (g *headerGive) of(thread api.ID, narrow bool) int {
+	if g.thread != thread || g.narrow != narrow {
+		*g = headerGive{thread: thread, narrow: narrow, wait: 1}
+		if narrow {
+			g.step = giveBranch
+		}
+	}
+	return g.step
+}
+
+// fit takes the room of the row, the width of all in it but the title,
+// and the title's: it gives one more step way while that doesn't fit,
+// and takes one back once the last step's rest left room. It says
+// whether the step changed.
+func (g *headerGive) fit(room, rest, title float32) bool {
+	if room <= 0 {
+		return false
+	}
+	if g.wait > 0 {
+		g.wait--
+		return false
+	}
+	g.rest[g.step] = rest
+	switch {
+	case rest+title > room && g.step < givePlaces:
+		g.step++
+	case g.step > giveNone && !(g.narrow && g.step == giveBranch) && g.rest[g.step-1] > 0 && g.rest[g.step-1]+title+16 <= room:
+		g.step--
+	default:
+		return false
+	}
+	g.wait = 1
+	return true
 }
 
 // headerButton is a button of the header's glass bar: a hairline pill,

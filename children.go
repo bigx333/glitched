@@ -267,11 +267,10 @@ func (a *app) childRow(c *ui.Context, k thread, depth int) {
 // button as Glitched draws it, and thread.heading, the title. The title is
 // in the copy so that the crumbs and it share the header's room as they
 // did beside each other.
-func (a *app) heading(c *ui.Context, t thread, narrow bool) {
+func (a *app) heading(c *ui.Context, t thread, narrow bool) ui.Element {
 	up := a.ancestors(t)
 	if len(up) == 0 {
-		headingTitle(c, t)
-		return
+		return headingTitle(c, t)
 	}
 	b := headerBreadcrumb{Narrow: narrow}
 	for _, x := range up {
@@ -284,10 +283,12 @@ func (a *app) heading(c *ui.Context, t thread, narrow bool) {
 		key += " narrow"
 	}
 	drawn := map[string]int{}
+	var row ui.Element
 	a.pluginComponent(c, "thread.header.breadcrumb", &t, componentCopy{
 		key: key,
 		box: func() ui.Element {
-			return ui.Row(c).Key("component:thread.header.breadcrumb").Gap(8).AlignItems(ui.Center).Shrink(1)
+			row = ui.Row(c).Key("component:thread.header.breadcrumb").Gap(8).AlignItems(ui.Center).Shrink(1)
+			return row
 		},
 		context: func(r plugins.ThreadRecord) any {
 			b.Thread = r
@@ -307,6 +308,7 @@ func (a *app) heading(c *ui.Context, t thread, narrow bool) {
 		},
 		builtin: func() *widget.Node { return breadcrumbRow(b) },
 	})
+	return row
 }
 
 // headerBreadcrumb is the context of thread.header.breadcrumb: the
@@ -344,8 +346,8 @@ func breadcrumbRow(b headerBreadcrumb) *widget.Node {
 }
 
 // headingTitle is the thread's title in the header.
-func headingTitle(c *ui.Context, t thread) {
-	ui.Text(c, title(t)).FontWeight(600).SingleLine().Shrink(1).MinWidth(80)
+func headingTitle(c *ui.Context, t thread) ui.Element {
+	return ui.Text(c, title(t)).FontWeight(600).SingleLine().Shrink(1).MinWidth(80)
 }
 
 // crumb is the nth button back to x, an ancestor of the thread shown, in

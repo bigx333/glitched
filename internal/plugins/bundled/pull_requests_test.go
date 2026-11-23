@@ -1487,3 +1487,29 @@ func TestAnOpenPullRequestIsFoundBeforeOldOnes(t *testing.T) {
 		t.Errorf("with only an old one: %q after %+v", p.text(), gh.ran("pr", "list"))
 	}
 }
+
+// A narrow header asks for the copy's smallest drawing: the pill keeps to
+// its icon, named by its label, and its popover; Create PR to its icon.
+func TestACompactHeaderKeepsThePillToItsIcon(t *testing.T) {
+	compact := func(p *pullRequests) {
+		p.s.SetItems("pr", []plugins.PlaceItem{{Key: "t1", Version: "1 compact", Context: p.ctx, Compact: true}})
+		p.settle()
+	}
+	work, origin := repo(t)
+	onGitHub(t, work, origin, "fix-flaky")
+	p := openPullRequests(t, work, &github{prs: []map[string]any{openPR(12, false, unit)}})
+	compact(p)
+	v := p.view()
+	if v == nil || v.Body.Label != "Pull request #12" || v.Body.Popover == nil || len(v.Body.Children) != 1 || v.Body.Children[0].Name != "pull-request" {
+		t.Errorf("the compact pill: %q", p.text())
+	}
+
+	work, origin = repo(t)
+	onGitHub(t, work, origin, "fix-flaky")
+	git(t, work, "commit", "-qam", "Two")
+	p = openPullRequests(t, work, &github{})
+	compact(p)
+	if b := p.view(); b == nil || b.Body.Label != "Create PR" || !b.Body.Compact {
+		t.Errorf("the compact Create PR: %q", p.text())
+	}
+}
