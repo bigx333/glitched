@@ -1,8 +1,11 @@
 package main
 
 import (
+	"math"
 	"testing"
 	"time"
+
+	"glitched/internal/client"
 )
 
 // Pointing at a message shows its actions, which take no room. Copy
@@ -38,6 +41,69 @@ func TestMessageActions(t *testing.T) {
 	}
 	if len(th.Pending) != 0 {
 		t.Errorf("pointing at messages sent %d commands", len(th.Pending))
+	}
+}
+
+// The pointer reaches a message's actions however slowly it goes down to
+// them: under a message of yours, short or long, drawn by the built-in
+// rows or by a copy that places transcript.body alone, the toolbar shows
+// on every step of the way, and Copy and Edit & resend do what they say
+// where the pointer stops.
+func TestAMessagesActionsStayOnTheWayDownToThem(t *testing.T) {
+	for _, tc := range []struct {
+		name, msg string
+		own       bool // a copy that places transcript.body alone
+	}{
+		{"short", "test", false},
+		{"long", "Sort them by most recent activity.", false},
+		{"in a copy that places the body alone", "Sort them by most recent activity.", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, th := checked(t)
+			if tc.own {
+				writeOwnPlugin(t, h.a, "my-rows", rowsManifest, rowsModule(`{type:"native", id:"body", name:"transcript.body"}`))
+				allow(t, h.a, "my-rows", "ui.replace")
+				settlePlugins(t, h.a, h.tt, h.p)
+			}
+			for _, e := range th.Transcript.Entries {
+				if e, ok := e.(*client.UserEntry); ok {
+					e.Text = tc.msg
+				}
+			}
+			h.a.changed()
+			h.tt.Advance(time.Second)
+			for _, label := range []string{"Copy", "Edit & resend"} {
+				h.tt.Move(800, 30)
+				h.tt.Advance(time.Second)
+				h.hover(tc.msg)
+				h.tt.Advance(time.Second)
+				from, _ := h.tt.Find(tc.msg)
+				to, ok := h.tt.Find(label)
+				if !ok {
+					t.Fatalf("no %s under the message pointed at: %q", label, h.tt.Texts())
+				}
+				x0, y0 := from.X+from.W/2, from.Y+from.H/2
+				x1, y1 := to.X+to.W/2, to.Y+to.H/2
+				steps := int(math.Ceil(float64(max(abs32(x1-x0), abs32(y1-y0)))))
+				for s := 1; s <= steps; s++ {
+					f := float32(s) / float32(steps)
+					x, y := x0+(x1-x0)*f, y0+(y1-y0)*f
+					h.tt.Move(x, y)
+					h.tt.Advance(16 * time.Millisecond)
+					if !h.tt.HasText(label) {
+						t.Fatalf("the toolbar went away at (%v, %v), on the way down to %s at (%v, %v)", x, y, label, x1, y1)
+					}
+				}
+				h.tt.ClickAt(x1, y1)
+				h.tt.Frame()
+			}
+			if h.tt.Clipboard() != tc.msg {
+				t.Errorf("Copy copied %q, want %q", h.tt.Clipboard(), tc.msg)
+			}
+			if h.a.draft != tc.msg {
+				t.Errorf("draft %q after Edit & resend, want %q", h.a.draft, tc.msg)
+			}
+		})
 	}
 }
 
