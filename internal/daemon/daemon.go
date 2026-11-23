@@ -353,6 +353,10 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	if hold != nil {
 		d.awake = newAwake(hold, cfg.KeepAwakeEnabled())
 		opts = append(opts, runtime.WithAwake(d.awake.work))
+		actx, stopAwake := context.WithCancel(ctx)
+		awoke := make(chan struct{})
+		go func() { defer close(awoke); d.awake.run(actx) }()
+		d.undo = append(d.undo, func() error { stopAwake(); <-awoke; return nil })
 	}
 	h, err := runtime.New(ctx, st, cfg.Providers, opts...)
 	if err != nil {
@@ -360,12 +364,6 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	}
 	d.undo = append(d.undo, h.Close)
 	d.host = h
-	if d.awake != nil {
-		actx, stopAwake := context.WithCancel(ctx)
-		awoke := make(chan struct{})
-		go func() { defer close(awoke); d.awake.run(actx) }()
-		d.undo = append(d.undo, func() error { stopAwake(); <-awoke; return nil })
-	}
 
 	var lns []net.Listener
 	defer func() {
