@@ -7,6 +7,7 @@ import (
 	"glitched/internal/provider"
 	"glitched/internal/provider/acp"
 	"glitched/internal/provider/claude"
+	"glitched/internal/provider/codex"
 )
 
 // reporting is an adapter whose provider reports models, as a family's
@@ -44,7 +45,7 @@ func todaysModels(m provider.Mux) {
 	for _, f := range families {
 		p := f.provider
 		switch m[p].(type) {
-		case nil, reporting, undescribed, *claude.Adapter, *acp.Adapter:
+		case nil, reporting, undescribed, *claude.Adapter, *acp.Adapter, *codex.Adapter:
 			continue
 		}
 		m[p] = reporting{m[p], knownOf(p)}
