@@ -216,7 +216,8 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 
 // start sends the turn's prompt. Its answer, at the turn's end, is the
 // run's TurnEnded. The session's first prompt carries the instructions of
-// the run's MCP servers in front, as ACP has no other place for them.
+// the run's MCP servers in front, and the list of Glitched's skills, as
+// ACP has no other place for them.
 func (g *Agent) start(text string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -229,6 +230,9 @@ func (g *Agent) start(text string) error {
 	// The command goes as it is, or the agent would read it as text.
 	if !g.p.briefed && !g.command {
 		g.p.briefed = true
+		if s := skillList(g.spec.Skills); s != "" {
+			text = s + "\n\n" + text
+		}
 		for i := len(g.spec.MCP) - 1; i >= 0; i-- {
 			if s := g.spec.MCP[i].Instructions; s != "" {
 				text = "<instructions>\n" + s + "\n</instructions>\n\n" + text
@@ -243,6 +247,21 @@ func (g *Agent) start(text string) error {
 		g.finish(r, err)
 	}()
 	return nil
+}
+
+// skillList is Glitched's skills as the agent reads them, by the paths
+// of their SKILL.md files, which it reads itself; "" for none.
+func skillList(s provider.Skills) string {
+	if len(s.List) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("<glitched-skills>\nGlitched gives you these skills. When a task matches one, read its SKILL.md and follow it.\n")
+	for _, sk := range s.List {
+		fmt.Fprintf(&b, "- %s: %s (SKILL.md: %s)\n", sk.Name, strings.Join(strings.Fields(sk.Description), " "), sk.Path)
+	}
+	b.WriteString("</glitched-skills>")
+	return b.String()
 }
 
 // finish ends the turn with the prompt's answer. The SDK handles every
