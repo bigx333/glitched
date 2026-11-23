@@ -349,6 +349,14 @@ func (f *fake) message(id string, chunks ...string) {
 	f.item("item/completed", map[string]any{"type": "agentMessage", "id": id, "text": strings.Join(chunks, ""), "phase": "final_answer"})
 }
 
+// usage is the thread's having spent spent tokens, its last reading the
+// request of 100 that brought it to at.
+func usage(spent, at int) map[string]any {
+	last := map[string]any{"totalTokens": 100, "inputTokens": 80, "cachedInputTokens": at / 100, "outputTokens": 20, "reasoningOutputTokens": 0}
+	total := map[string]any{"totalTokens": spent, "inputTokens": spent * 4 / 5, "cachedInputTokens": 0, "outputTokens": spent / 5, "reasoningOutputTokens": 0}
+	return map[string]any{"total": total, "last": last, "modelContextWindow": 258400}
+}
+
 func (f *fake) complete(status string, turnErr any) {
 	thread, turn := f.ids()
 	f.mu.Lock()
@@ -356,9 +364,7 @@ func (f *fake) complete(status string, turnErr any) {
 	f.spent += 100
 	spent := f.spent
 	f.mu.Unlock()
-	last := map[string]any{"totalTokens": 100, "inputTokens": 80, "cachedInputTokens": 0, "outputTokens": 20, "reasoningOutputTokens": 0}
-	total := map[string]any{"totalTokens": spent, "inputTokens": spent * 4 / 5, "cachedInputTokens": 0, "outputTokens": spent / 5, "reasoningOutputTokens": 0}
-	f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": total, "last": last, "modelContextWindow": 258400}})
+	f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": usage(spent, spent)})
 	f.notify("turn/completed", map[string]any{"threadId": thread, "turn": map[string]any{"id": turn, "status": status, "error": turnErr, "items": []any{}}})
 	f.notify("thread/status/changed", map[string]any{"threadId": thread, "status": map[string]any{"type": "idle"}})
 }
@@ -429,16 +435,10 @@ func (f *fake) play(n int, turn, said string) {
 		if n == 2 {
 			f.mu.Lock()
 			spent := f.spent
+			f.spent += 100
 			f.mu.Unlock()
-			cached := map[string]any{"totalTokens": spent, "inputTokens": spent, "cachedInputTokens": 0, "outputTokens": 0, "reasoningOutputTokens": 0}
-			f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": cached, "last": cached, "modelContextWindow": 258400}})
-			f.mu.Lock()
-			f.spent += 512
-			spent = f.spent
-			f.mu.Unlock()
-			last := map[string]any{"totalTokens": 100, "inputTokens": 80, "cachedInputTokens": 0, "outputTokens": 20, "reasoningOutputTokens": 0}
-			cut := map[string]any{"totalTokens": spent, "inputTokens": spent, "cachedInputTokens": 0, "outputTokens": 0, "reasoningOutputTokens": 0}
-			f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": map[string]any{"total": cut, "last": last, "modelContextWindow": 258400}})
+			f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": usage(spent, spent)})
+			f.notify("thread/tokenUsage/updated", map[string]any{"threadId": thread, "turnId": turn, "tokenUsage": usage(spent+100, spent)})
 		}
 		f.message("msg-"+turn, "resent")
 	case "compacted":
