@@ -39,11 +39,11 @@ func (a *app) projectMenu(m *ui.Menu, p *project) {
 // a folder or a clone, and removing one, each stopped first as the chip's menu has it.
 func (a *app) workspaceItems(m *ui.Menu) {
 	m.Separator()
-	if m.Item("Add project…").Disabled(a.picking).Chosen() {
-		a.addProject()
+	if m.Item("Add project…").Disabled(a.wizard.open).Chosen() {
+		a.openWizard(sourceNone)
 	}
-	if m.Item("Clone repository…").Disabled(a.clone.open).Chosen() {
-		a.openClone()
+	if m.Item("Clone repository…").Disabled(a.wizard.open).Chosen() {
+		a.openWizard(sourceClone)
 	}
 	if len(a.projects) == 0 {
 		return
@@ -145,9 +145,7 @@ func (a *app) removeProject(p *project) {
 	if len(tops) > 0 && !slices.ContainsFunc(tops, deleting) {
 		return
 	}
-	if p.key.server == "" {
-		a.forgetProject(p.key.workspace)
-	}
+	a.forgetProject(p.key)
 	// A draft with no machine is on the first, as current() has it.
 	e := a.fresh.env
 	if envs := a.backend.Envs(); e == nil && len(envs) > 0 {
@@ -183,7 +181,7 @@ func (a *app) defaultDraft(e *client.Env) draft {
 	}
 	var newest *project
 	for _, p := range a.gather() {
-		if p.env == e && (newest == nil || newestFirst(p.threads[0], newest.threads[0]) < 0) {
+		if p.env == e && (newest == nil || len(newest.threads) == 0 || len(p.threads) > 0 && newestFirst(p.threads[0], newest.threads[0]) < 0) {
 			newest = p
 		}
 	}

@@ -83,7 +83,7 @@ func (a *app) newProject(e *client.Env, k projectKey) *project {
 // root, where all of them are one project.
 func (a *app) threadKey(t thread) projectKey {
 	ws := t.project()
-	added := slices.ContainsFunc(a.added, func(p addedProject) bool { return p.Workspace == ws })
+	added := slices.ContainsFunc(a.added, func(p addedProject) bool { return p.Server == "" && p.Workspace == ws })
 	if t.local() && filepath.Dir(ws) == a.scratchRoot() && !added {
 		ws = a.scratchRoot()
 	}
@@ -602,8 +602,12 @@ func (a *app) gather() []*project {
 			p.threads = append(p.threads, t)
 		}
 	}
-	if e := a.localEnv(); e != nil {
-		for _, ap := range a.added {
+	for _, ap := range a.added {
+		e := a.localEnv()
+		if ap.Server != "" {
+			e = a.serverEnv(ap.Server)
+		}
+		if e != nil {
 			at(e, keyOf(e, ap.Workspace))
 		}
 	}

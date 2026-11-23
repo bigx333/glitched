@@ -16,7 +16,7 @@ func rememberedState(t *testing.T, state string, added []string, last string) {
 	t.Helper()
 	var ps []addedProject
 	for _, p := range added {
-		ps = append(ps, addedProject{p, "2026-11-23T08:00:00Z"})
+		ps = append(ps, addedProject{Workspace: p, Added: "2026-11-23T08:00:00Z"})
 	}
 	if err := jsonfile.Write(filepath.Join(state, "projects.json"), ps); err != nil {
 		t.Fatal(err)

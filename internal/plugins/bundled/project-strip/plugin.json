@@ -1,7 +1,7 @@
 {
   "id": "project-strip",
   "name": "Project strip",
-  "description": "The sidebar's project strip: All, a chip per project that filters the inbox to it, and Add project. Built into Glitched; make a copy in Settings › Plugins to change it.",
+  "description": "The sidebar's project strip: All, a chip per project that filters the inbox to it, and New project. Built into Glitched; make a copy in Settings › Plugins to change it.",
   "version": "1.0.0",
   "main": "main.js",
   "contract": "glitched",

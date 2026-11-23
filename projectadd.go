@@ -12,23 +12,26 @@ import (
 	"glitched/internal/jsonfile"
 )
 
-// Adding a project picks a folder on this machine, keeps it in
-// projects.json, and starts a new thread in it. A project is the threads
-// in a workspace, and on this machine a folder added too, which shows
-// with no thread at all.
+// A project is the threads in a workspace on one machine, and a folder
+// added there as one, kept in projects.json, which shows with no thread
+// at all. The New project wizard (wizard.go) adds them.
 
-// addedProject is a folder added as a project on this machine, as
-// projects.json holds it.
+// addedProject is a folder added as a project, as projects.json holds it.
 type addedProject struct {
 	Workspace string `json:"workspace"`
+	// Server is the label of the server the folder is on, "" for this
+	// machine, which files written before servers had projects mean.
+	Server string `json:"server,omitempty"`
 	// Added is RFC 3339, kept as text so that one written wrong hides
 	// no project.
 	Added string `json:"added"`
 }
 
+func (p addedProject) key() projectKey { return projectKey{p.Server, p.Workspace} }
+
 func (a *app) projectsPath() string { return filepath.Join(a.dir, "projects.json") }
 
-// loadProjects takes the folders added on this machine.
+// loadProjects takes the folders added.
 func (a *app) loadProjects() {
 	if err := jsonfile.Load(a.projectsPath(), &a.added); err != nil {
 		log.Printf("glitched: projects: %v", err)
@@ -56,20 +59,21 @@ func (a *app) editProjects(change func(*[]addedProject)) {
 	a.addedEdits++
 }
 
-// recordProject keeps dir as a project, once.
-func (a *app) recordProject(dir string) {
+// recordProject keeps k's folder as a project on its machine, once.
+func (a *app) recordProject(k projectKey) {
 	a.editProjects(func(ps *[]addedProject) {
-		if !slices.ContainsFunc(*ps, func(p addedProject) bool { return p.Workspace == dir }) {
-			*ps = append(*ps, addedProject{dir, time.Now().UTC().Format(time.RFC3339)})
+		if !slices.ContainsFunc(*ps, func(p addedProject) bool { return p.key() == k }) {
+			*ps = append(*ps, addedProject{k.workspace, k.server, time.Now().UTC().Format(time.RFC3339)})
 		}
 	})
 }
 
-// forgetProject drops dir from the projects added. It reads the file, not
-// the list here: another window may have added dir since this one loaded.
-func (a *app) forgetProject(dir string) {
+// forgetProject drops k from the projects added, and no folder of the
+// same path on another machine. It reads the file, not the list here:
+// another window may have added k since this one loaded.
+func (a *app) forgetProject(k projectKey) {
 	a.editProjects(func(ps *[]addedProject) {
-		*ps = slices.DeleteFunc(*ps, func(p addedProject) bool { return p.Workspace == dir })
+		*ps = slices.DeleteFunc(*ps, func(p addedProject) bool { return p.key() == k })
 	})
 }
 
@@ -86,34 +90,6 @@ var chooseFolder = func(a *app) string {
 		return ""
 	}
 	return paths[0]
-}
-
-// addProject asks for a folder, off the main thread, which the picker
-// would block, keeps it as a project and shows a new thread in it. One
-// picker opens at a time.
-func (a *app) addProject() {
-	if a.picking {
-		return
-	}
-	a.picking = true
-	go func() {
-		dir := chooseFolder(a)
-		a.post(func() {
-			a.picking = false
-			// This machine's engine is always listed first, so never one
-			// shown by another's.
-			if e := a.localEnv(); dir != "" && e != nil {
-				dir = filepath.Clean(dir)
-				a.recordProject(dir)
-				w, onDraft := a.worktree, a.selected.IsZero()
-				a.startIn(draft{e, dir})
-				if onDraft {
-					a.worktree.picked, a.worktree.on = w.picked, w.on
-				}
-				a.draftArea.Focus()
-			}
-		})
-	}()
 }
 
 // localEnv is this machine's engine, where a folder picked here is.
