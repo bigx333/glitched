@@ -364,3 +364,24 @@ func TestPaletteClonesARepository(t *testing.T) {
 		t.Fatal("Escape left the sheet open")
 	}
 }
+
+// A failed clone leaves an empty folder that was there before it, which
+// is the user's, as it found it.
+func TestCloneFailureKeepsAFolderItDidNotMake(t *testing.T) {
+	bareRepo(t)
+	usePath(t, os.Getenv("PATH"))
+	h := start(t, inboxDir(t))
+	parent := openCloneSheet(h)
+	dest := filepath.Join(parent, "missing")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cloneFrom(h, "file://"+filepath.ToSlash(filepath.Join(t.TempDir(), "missing.git")))
+	if h.a.clone.failure == "" {
+		t.Fatalf("the clone didn't fail; the window shows %q", h.tt.Texts())
+	}
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("the failed clone took away the folder it found: %v", err)
+	}
+}
+

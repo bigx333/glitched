@@ -31,6 +31,9 @@ type command struct {
 }
 
 func (a *app) openCommandPalette() {
+	if a.clone.open {
+		return
+	}
 	a.cmdkOpen, a.cmdkQuery, a.cmdkIndex = true, "", 0
 	a.cmdkOpens++
 }
