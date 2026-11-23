@@ -356,7 +356,7 @@ func (a *app) cloneDialog(c *ui.Context) {
 		w, _ := c.Size()
 		room := w - t.Space(10)
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.4))
-		panel.MinWidth(min(t.Space(75), room)).MaxWidth(room).Padding(t.Space(5)).Gap(t.Space(3)).Radius(t.Space(2.5)).
+		panel.Width(min(t.Space(115), room)).MaxWidth(room).Padding(t.Space(5)).Gap(t.Space(3)).Radius(t.Space(2.5)).
 			Background(t.Background).Label("Clone a repository")
 		panel.Shadow(0, 10, 30, 0, ui.RGBA(0, 0, 0, 0.3))
 		wrapped := func(s string) ui.Element { return ui.Text(c, s).Width(0).MinWidthPercent(100) }
