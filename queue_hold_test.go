@@ -79,7 +79,7 @@ func TestADraftQueuesBehindTheAgentAtWork(t *testing.T) {
 }
 
 // A run left uncertain never ends on its own, so nothing queues behind it:
-// there's no Queue, and ⌘⏎ steers, which the engine refuses.
+// there's no Queue, and ⌘⏎ sends the message in a run that replaces it.
 func TestNothingQueuesBehindAnUncertainRun(t *testing.T) {
 	h := start(t, uncertainDir(t))
 	th := h.thread("Stuck")
@@ -90,11 +90,9 @@ func TestNothingQueuesBehindAnUncertainRun(t *testing.T) {
 		t.Fatalf("run %v, Queue shown %v; want an uncertain run with no Queue", th.View.Run, h.tt.HasText("Queue"))
 	}
 	h.tt.Key(ui.Cmd, ui.KeyEnter)
-	h.until("the steer refused", func() bool {
-		return h.tt.HasText("the agent is uncertain and can't take a message; send it once the run ends")
-	})
-	if q := h.a.current().View.Queued; q != 0 {
-		t.Fatalf("⌘⏎ on an uncertain run queued %d; want none", q)
+	h.until("the run replaced", func() bool { return th.View.Run != api.RunUncertain && len(th.Pending) == 0 })
+	if v := h.a.current().View; v.Queued != 0 || v.LastTurn == nil || v.LastTurn.Outcome != api.OutcomeAbandoned {
+		t.Fatalf("⌘⏎ on an uncertain run queued %d, last turn %+v; want none queued and the uncertain run abandoned", v.Queued, v.LastTurn)
 	}
 }
 
