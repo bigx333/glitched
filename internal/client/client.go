@@ -230,6 +230,9 @@ type Env struct {
 	waiting []chan<- *session  // commands waiting for the next session
 	slots   chan struct{}      // a command's while it waits on the engine; submitsAtOnce of them
 	server  Server             // a remote's entry in gui.json
+	// skillGate has one sync of this machine's skills at a time go to a
+	// remote's engine.
+	skillGate chan struct{}
 }
 
 // Log is the log of e's last shell snapshot, zero before one. Another is
@@ -270,7 +273,7 @@ const (
 type sub struct{ cancel context.CancelFunc }
 
 func (m *Manager) launch(e *Env, r route) *Env {
-	e.Status, e.Threads, e.slots = Connecting{}, map[api.ID]*Thread{}, make(chan struct{}, submitsAtOnce)
+	e.Status, e.Threads, e.slots, e.skillGate = Connecting{}, map[api.ID]*Thread{}, make(chan struct{}, submitsAtOnce), make(chan struct{}, 1)
 	e.Membership++
 	e.ctx, e.stop = context.WithCancel(m.ctx)
 	m.connect(e, r)
@@ -400,9 +403,7 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 			w <- s
 		}
 		e.waiting = nil
-		if src, ok := m.syncSource(e); ok {
-			m.wg.Go(func() { src.push(s.ctx, s.ep) })
-		}
+		m.syncSkills(e)
 		// A snapshot of another log than the views held, as on the first
 		// connect or from a restored database, tells of nothing: its
 		// reports came before, or the views held say nothing of them.

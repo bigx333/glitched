@@ -81,7 +81,7 @@ func (m *Manager) Skills(e *Env, thread api.ID, done func(api.SkillList, error))
 	src, push := m.syncSource(e)
 	m.wg.Go(func() {
 		if push {
-			src.push(ectx, s.ep)
+			src.push(ectx, s.ep, syncFirst)
 		}
 		ctx, cancel := context.WithTimeout(ectx, skillsTimeout)
 		defer cancel()
