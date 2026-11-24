@@ -1,0 +1,14 @@
+{
+  "id": "schedules",
+  "name": "Schedules",
+  "description": "Prompts that start an agent thread on a schedule: every so many minutes, or at a time on chosen days, in a project, with the model and the access you chose. Built into Glitched; make a copy in Settings › Plugins to change it.",
+  "version": "1.0.0",
+  "main": "service.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["service", "threads:read", "threads:write", "threads:access"],
+  "glitched": {
+    "service": "service.js",
+    "timers": [{ "id": "tick", "every": 60 }]
+  }
+}

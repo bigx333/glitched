@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -49,6 +50,10 @@ type ServiceOptions struct {
 	// Idle and TimerScale shorten the idle stop and timers, in tests.
 	Idle       time.Duration
 	TimerScale float64
+	// Bundled and ReleaseKeys are the built-in plugins, as Options has
+	// them: those with a service run it here.
+	Bundled     fs.FS
+	ReleaseKeys []string
 }
 
 // StartServices runs the services of the plugins installed under
@@ -70,6 +75,9 @@ func StartServices(stateDir string, o ServiceOptions) *Services {
 			MemoryLimit: ServiceMemory,
 			IdleTimeout: idle,
 			TimerScale:  o.TimerScale,
+			Bundled:     o.Bundled,
+			ReleaseKeys: o.ReleaseKeys,
+			BundledDir:  filepath.Join(stateDir, "plugin-bundled-services"),
 			Main: func(m plugin.Manifest, x Extension) string {
 				switch {
 				case x.Service != "" && slices.Contains(m.Capabilities, "service"):
@@ -166,18 +174,20 @@ func (s *Services) watch(stateDir, choices, folder string) {
 }
 
 // loadingChanged reports whether plugins.json changed what runs: a plugin
-// turned on or off, a consent, or a service grant.
+// turned on or off, a consent, or service granted or, for a built-in,
+// revoked.
 func loadingChanged(a, b prefs) bool {
-	services := func(p prefs) map[string]bool {
+	service := func(caps map[string][]string) map[string]bool {
 		out := map[string]bool{}
-		for id, g := range p.Grants {
+		for id, g := range caps {
 			if slices.Contains(g, "service") {
-				out[id] = true // only these: no grants and others alike say no
+				out[id] = true // only these: none and others alike say no
 			}
 		}
 		return out
 	}
-	return !slices.Equal(a.Disabled, b.Disabled) || !reflect.DeepEqual(a.Consent, b.Consent) || !maps.Equal(services(a), services(b))
+	return !slices.Equal(a.Disabled, b.Disabled) || !reflect.DeepEqual(a.Consent, b.Consent) ||
+		!maps.Equal(service(a.Grants), service(b.Grants)) || !maps.Equal(service(a.Revoked), service(b.Revoked))
 }
 
 // startTimers wakes each running service on its timers.

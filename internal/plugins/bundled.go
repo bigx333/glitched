@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -46,7 +47,7 @@ func (h *Host) writeBundled() []string {
 		if !e.IsDir() {
 			continue
 		}
-		folder := filepath.Join(BundledDir(h.state), e.Name())
+		folder := filepath.Join(cmp.Or(h.opts.BundledDir, BundledDir(h.state)), e.Name())
 		if err := writeTree(h.opts.Bundled, e.Name(), folder); err != nil {
 			h.opts.Logf("plugins: built-in %s: %v", e.Name(), err)
 			continue
