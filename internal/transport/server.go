@@ -375,6 +375,10 @@ type Secrets interface {
 // asks of it.
 type Projects interface {
 	Folders(ctx context.Context, q api.FolderQuery) (api.FolderList, error)
+	// Repos gives page each page of the GitHub repositories the engine
+	// machine's gh reaches, as they come. A Repos whose ctx ends is
+	// stopped.
+	Repos(ctx context.Context, page func(api.RepoPage)) error
 	// Clone says each line the clone prints to progress, and returns
 	// once it has cloned or failed. A clone whose ctx ends is stopped.
 	Clone(ctx context.Context, req api.CloneRequest, progress func(string)) (api.Cloned, error)
@@ -400,6 +404,50 @@ type cloneItem struct {
 }
 
 var errCloned = errors.New("transport: the clone is done")
+
+var errReposDone = errors.New("transport: the repositories are all given")
+
+// repoStream runs one repositories listing and gives its pages as a
+// stream's items, the last ending it. The listing stops once the
+// stream's ctx ends, and Close waits for it to have.
+type repoStream struct {
+	pages chan api.RepoPage
+	done  chan struct{}
+	err   error
+}
+
+func startRepos(ctx context.Context, p Projects) *repoStream {
+	rs := &repoStream{pages: make(chan api.RepoPage), done: make(chan struct{})}
+	go func() {
+		defer close(rs.done)
+		rs.err = p.Repos(ctx, func(page api.RepoPage) {
+			select {
+			case rs.pages <- page:
+			case <-ctx.Done():
+			}
+		})
+	}()
+	return rs
+}
+
+func (rs *repoStream) Next(ctx context.Context) (api.RepoPage, error) {
+	select {
+	case page := <-rs.pages:
+		return page, nil
+	case <-rs.done:
+		if rs.err != nil {
+			return api.RepoPage{}, rs.err
+		}
+		return api.RepoPage{}, errReposDone
+	case <-ctx.Done():
+		return api.RepoPage{}, ctx.Err()
+	}
+}
+
+func (rs *repoStream) Close() error {
+	<-rs.done
+	return nil
+}
 
 // cloneStream runs one clone and gives its lines, then where it went, as
 // a stream's items. The clone stops once the stream's ctx ends, and Close
@@ -630,6 +678,9 @@ func (s *Server) methods() map[string]handler {
 	}
 	if p := s.Projects; p != nil {
 		m["projects.folders"] = callHandler(p.Folders)
+		m["projects.repos"] = streamHandler(func(ctx context.Context, _ struct{}) (source[api.RepoPage], error) {
+			return startRepos(ctx, p), nil
+		})
 		m["projects.clone"] = streamHandler(func(ctx context.Context, req api.CloneRequest) (source[cloneItem], error) {
 			return startClone(ctx, p, req), nil
 		})

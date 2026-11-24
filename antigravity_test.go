@@ -10,6 +10,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/daemon"
+	"glitched/internal/plugins/guard"
 	"glitched/internal/provider"
 	"glitched/internal/provider/acp"
 	"glitched/internal/provider/acp/acptest"
@@ -20,7 +21,20 @@ func TestMain(m *testing.M) {
 	if acptest.Main() || codextest.Main() {
 		return
 	}
-	os.Exit(m.Run())
+	// The engine in-process runs gh when the wizard's Clone step shows;
+	// no test may reach GitHub. A stub gh that fails, ahead of the real
+	// PATH, keeps them off it; stubGH swaps in a test's own.
+	bin, err := os.MkdirTemp("", "glitched-gh")
+	if err != nil {
+		panic(err)
+	}
+	ghBin = bin
+	writeGH("echo 'gh: stub' >&2\nexit 1")
+	userPath := guard.UserPath
+	guard.UserPath = func() string { return bin + string(os.PathListSeparator) + userPath() }
+	code := m.Run()
+	os.RemoveAll(bin)
+	os.Exit(code)
 }
 
 // withAntigravity has the engine run Antigravity threads through the ACP

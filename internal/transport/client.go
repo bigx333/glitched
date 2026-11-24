@@ -657,6 +657,27 @@ func (e *EndpointClient) Folders(ctx context.Context, q api.FolderQuery) (api.Fo
 	return out, e.c.call(ctx, "projects.folders", q, &out)
 }
 
+// Repos gives page each page of the GitHub repositories the engine
+// machine's gh reaches, as they come, and returns after the page marked
+// Last.
+func (e *EndpointClient) Repos(ctx context.Context, page func(api.RepoPage)) error {
+	st, err := open[api.RepoPage](ctx, e.c, "projects.repos", struct{}{})
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	for {
+		p, err := st.Next(ctx)
+		if err != nil {
+			return err
+		}
+		page(p)
+		if p.Last {
+			return nil
+		}
+	}
+}
+
 // Skills says what skills Glitched gives a thread's agent on the
 // engine's machine.
 func (e *EndpointClient) Skills(ctx context.Context, q api.SkillQuery) (api.SkillList, error) {

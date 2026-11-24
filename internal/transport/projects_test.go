@@ -29,6 +29,11 @@ func (m *machine) Folders(ctx context.Context, q api.FolderQuery) (api.FolderLis
 	return projects.List(ctx, q.Path, m.hide, nil)
 }
 
+func (m *machine) Repos(ctx context.Context, page func(api.RepoPage)) error {
+	m.calls.Add(1)
+	return projects.Repos(ctx, m.bin, page)
+}
+
 func (m *machine) Clone(ctx context.Context, req api.CloneRequest, progress func(string)) (api.Cloned, error) {
 	m.calls.Add(1)
 	return projects.CloneInto(ctx, req, m.hide, m.bin, progress)
@@ -43,11 +48,17 @@ func timeout(t *testing.T) context.Context {
 // gitRunning has the machine's git run script, as sh, in place of git.
 func gitRunning(t *testing.T, script string) *machine {
 	t.Helper()
+	return running(t, "git", script)
+}
+
+// running has the machine's program name run script, as sh.
+func running(t *testing.T, name, script string) *machine {
+	t.Helper()
 	if runtime.GOOS == "windows" {
-		t.Skip("the fake git is a shell script")
+		t.Skip("the fake programs are shell scripts")
 	}
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return &machine{bin: bin}
@@ -74,6 +85,26 @@ func TestProjectsOverASocket(t *testing.T) {
 	}
 	if !slices.Equal(lines, []string{"Cloning into '" + dest + "'...", "Receiving objects: 100% (3/3)"}) {
 		t.Fatalf("the clone said %q", lines)
+	}
+}
+
+// The engine's repositories reach a client over the socket, a page at a
+// time, the last ending the stream.
+func TestReposOverASocket(t *testing.T) {
+	m := running(t, "gh", "[ \"$1\" = auth ] && exit 0\n"+
+		"i=0; while [ $i -lt 150 ]; do echo '{\"name\":\"o/r'$i'\"}'; i=$((i+1)); done")
+	c := NewEndpointClient(start(t, "unix", &Server{Projects: m}), api.ID{})
+	defer c.Close()
+	var pages []api.RepoPage
+	err := c.Repos(timeout(t), func(p api.RepoPage) { pages = append(pages, p) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 2 || len(pages[0].Repos) != 100 || pages[0].Last || len(pages[1].Repos) != 50 || !pages[1].Last {
+		t.Fatalf("the pages are %+v, want 100 then 50 with Last", pages)
+	}
+	if pages[0].Repos[0].Name != "o/r0" || pages[1].Repos[49].Name != "o/r149" {
+		t.Fatalf("the pages came as %q … %q", pages[0].Repos[0].Name, pages[1].Repos[49].Name)
 	}
 }
 
@@ -132,6 +163,9 @@ func TestProjectsRefuseAWrongToken(t *testing.T) {
 	if list, err := bad.Folders(ctx, api.FolderQuery{Path: t.TempDir()}); !errors.Is(err, ErrRefused) {
 		t.Fatalf("a wrong token listed %+v, %v; want ErrRefused", list, err)
 	}
+	if err := bad.Repos(ctx, func(api.RepoPage) {}); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a wrong token's repositories: %v, want ErrRefused", err)
+	}
 	dest := filepath.Join(t.TempDir(), "lighthouse")
 	if _, err := bad.Clone(ctx, api.CloneRequest{Source: "o/lighthouse", Dest: dest}, func(string) {}); !errors.Is(err, ErrRefused) {
 		t.Fatalf("a wrong token's clone: %v, want ErrRefused", err)
@@ -154,6 +188,9 @@ func TestProjectsOfAnEngineWithoutThem(t *testing.T) {
 	ctx := timeout(t)
 	if _, err := c.Folders(ctx, api.FolderQuery{}); !errors.Is(err, ErrUnknownMethod) {
 		t.Fatalf("Folders: %v, want ErrUnknownMethod", err)
+	}
+	if err := c.Repos(ctx, func(api.RepoPage) {}); !errors.Is(err, ErrUnknownMethod) {
+		t.Fatalf("Repos: %v, want ErrUnknownMethod", err)
 	}
 	if _, err := c.Clone(ctx, api.CloneRequest{Source: "o/n", Dest: "~/n"}, func(string) {}); !errors.Is(err, ErrUnknownMethod) {
 		t.Fatalf("Clone: %v, want ErrUnknownMethod", err)
