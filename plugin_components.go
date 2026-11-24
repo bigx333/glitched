@@ -395,7 +395,7 @@ type panelState struct {
 }
 
 func (a *app) panels() panelState {
-	_, sub := a.subagentShown(a.current())
+	_, _, sub := a.subagentShown(a.current())
 	return panelState{Terminal: a.showTerminal, Diff: a.showDiff, Preview: a.showPreview, Subagent: sub}
 }
 
@@ -413,11 +413,13 @@ func (a *app) togglePanel(panel string) error {
 	case "preview":
 		a.togglePreview()
 	case "subagent":
-		// It opens from a subagent's step, which says whose it is.
-		if _, ok := a.subagentShown(a.current()); !ok {
+		// It opens from a subagent's step, which says whose it is. Closed
+		// while another panel covers it, it stays closed after.
+		id := a.current().id()
+		if _, ok := a.subagentStep[id]; !ok {
 			return errors.New("the subagent panel opens from a subagent's step")
 		}
-		delete(a.subagentStep, a.current().id())
+		delete(a.subagentStep, id)
 	default:
 		return fmt.Errorf("no panel %q: terminal, diff, preview or subagent", panel)
 	}
@@ -435,7 +437,8 @@ func (a *app) panelEffect(args json.RawMessage) (any, error) {
 		return nil, err
 	}
 	p := a.panels()
-	now := map[string]bool{"terminal": p.Terminal, "diff": p.Diff, "preview": p.Preview, "subagent": p.Subagent}
+	_, chosen := a.subagentStep[a.current().id()]
+	now := map[string]bool{"terminal": p.Terminal, "diff": p.Diff, "preview": p.Preview, "subagent": chosen}
 	if on, ok := now[in.Panel]; ok && in.Open != nil && *in.Open == on {
 		return a.panels(), nil
 	}

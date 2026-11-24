@@ -529,7 +529,7 @@ type app struct {
 	diffFile map[api.ID]string
 	// subagentStep is the step whose native subagent each thread's panel
 	// shows, by item, while it is open.
-	subagentStep map[api.ID]string
+	subagentStep map[api.ID]subagentSel
 	// shells are the terminal drawer's shells, by workspace.
 	shells map[string]*shell
 	// windDraw paints the wind's field behind the chat, as the frame's
@@ -803,7 +803,7 @@ func newApp(dir string, engine func(*daemon.Config), detect func(context.Context
 		diffLayout:     editor.DiffUnified,
 		diffWrap:       true,
 		diffFile:       map[api.ID]string{},
-		subagentStep:   map[api.ID]string{},
+		subagentStep:   map[api.ID]subagentSel{},
 		childrenOpen:   map[api.ID]bool{},
 		composerSeen:   map[api.ID]bool{},
 		agentsOpen:     map[api.ID]bool{},

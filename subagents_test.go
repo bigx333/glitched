@@ -1,14 +1,21 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/ui"
+
 	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
@@ -95,5 +102,178 @@ func TestAnAgentStepOpensItsSubagentsPanel(t *testing.T) {
 	h.tt.Advance(time.Second)
 	if h.tt.HasText("It sorts in sidebar.go.") || h.a.panels().Subagent {
 		t.Fatalf("Close subagent left its panel open: %q", h.tt.Texts())
+	}
+}
+
+// subagentThreads are the app showing the last of threads named names,
+// each of one turn the script plays, whose reply is "Parent reply.".
+func subagentThreads(t *testing.T, script []provider.Event, names ...string) *harness {
+	t.Helper()
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(append(script, provider.TextDelta{Text: "Parent reply."})))
+	h := start(t, dir)
+	for _, name := range names {
+		id := seed(t, d, "/work/t3code", name)
+		h.a.select_(h.thread(name))
+		if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: "Run " + name, Mode: api.AfterActive}}); err != nil {
+			t.Fatal(err)
+		}
+		h.until("the parent's reply", func() bool {
+			for _, e := range h.a.current().Transcript.Entries {
+				if a, ok := e.(*client.AssistantEntry); ok && a.Text == "Parent reply." && a.End != nil {
+					return true
+				}
+			}
+			return false
+		})
+	}
+	h.tt.Advance(time.Second)
+	return h
+}
+
+func openSubagentOf(t *testing.T, h *harness, title string) {
+	t.Helper()
+	h.click(title)
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Advance(time.Second)
+}
+
+func spawnStep(item string) provider.Work {
+	return provider.Work{Item: item, Kind: "tool", Title: "Agent " + item, Status: api.WorkCompleted}
+}
+
+func nestedText(parent, text string) provider.Nested {
+	return provider.Nested{Parent: parent, Event: provider.TextDelta{Text: text}}
+}
+
+// With no plugin to draw it, the panel says so under the step's title,
+// and Glitched's Close still closes it.
+func TestASubagentPanelNoPluginDrawsStillCloses(t *testing.T) {
+	h := subagentThreads(t, []provider.Event{spawnStep("alpha"), nestedText("alpha", "Alpha's text.")}, "No plugin")
+	if err := h.a.plugins.SetEnabled("subagent-panel", false); err != nil {
+		t.Fatal(err)
+	}
+	h.a.pluginsChanged(nil)
+	openSubagentOf(t, h, "Agent alpha")
+	if !h.a.panels().Subagent || !h.tt.HasText("No plugin draws this panel. Turn on Subagent panel in Settings › Plugins.") {
+		t.Fatalf("with no plugin the panel doesn't say so: %q", h.tt.Texts())
+	}
+	h.click("Close subagent")
+	if h.a.panels().Subagent {
+		t.Fatal("Close subagent left the panel open with no plugin to draw it")
+	}
+}
+
+// A subagent's panel closed while the diff covers it stays closed when
+// the diff closes.
+func TestASubagentPanelClosedUnderTheDiffStaysClosed(t *testing.T) {
+	h := subagentThreads(t, []provider.Event{spawnStep("alpha"), nestedText("alpha", "Alpha's text.")}, "Covered")
+	openSubagentOf(t, h, "Agent alpha")
+	for _, args := range []string{`{"panel":"diff","open":true}`, `{"panel":"subagent","open":false}`, `{"panel":"diff","open":false}`} {
+		if _, err := h.a.panelEffect(json.RawMessage(args)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settlePlugins(t, h.a, h.tt, h.p)
+	if h.a.panels().Subagent || h.tt.HasText("Alpha's text.") {
+		t.Fatal("the subagent's panel, closed under the diff, came back as the diff closed")
+	}
+}
+
+// A step id a later run uses again opens that run's subagent.
+func TestAStepIDALaterRunReusesOpensItsOwnSubagent(t *testing.T) {
+	h := subagentThreads(t, []provider.Event{spawnStep("alpha"), nestedText("alpha", "First child's text.")}, "Reused")
+	run := api.NewID()
+	tr := h.a.current().Transcript
+	for _, body := range []api.EventBody{
+		api.MessageQueued{Message: run, Text: "Next.", Mode: api.AfterActive},
+		api.TurnAdmitted{Run: run}, api.TurnStarted{Run: run},
+		api.WorkItem{Run: run, Item: "alpha", Kind: "tool", Title: "Agent beta", Status: api.WorkCompleted},
+		api.SubagentDelta{Run: run, Parent: "alpha", Text: "Second child's text."},
+		api.SubagentEnded{Run: run, Parent: "alpha"},
+		api.TurnEnded{Run: run},
+	} {
+		p, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor := tr.Cursor
+		cursor.Seq++
+		tr.Apply(api.Event{Cursor: cursor, Type: api.EventType(body), Schema: api.EventSchema, At: time.Now(), Payload: p})
+	}
+	h.a.changed()
+	settlePlugins(t, h.a, h.tt, h.p)
+	h.tt.Advance(time.Second)
+	openSubagentOf(t, h, "Agent beta")
+	if !h.tt.HasText("Second child's text.") || h.tt.HasText("First child's text.") {
+		t.Fatalf("Agent beta opened another run's subagent: %q", h.tt.Texts())
+	}
+}
+
+// At the narrowest window the panel's Close is in it and closes it.
+func TestASubagentPanelClosesAtTheNarrowestWindow(t *testing.T) {
+	for _, bar := range []ui.TitleBar{{Height: 52, Left: 78}, {Height: 52}} {
+		t.Run(fmt.Sprint(bar.Right), func(t *testing.T) {
+			h := subagentThreads(t, []provider.Event{spawnStep("alpha"), nestedText("alpha", "Alpha's text."),
+				provider.Nested{Parent: "alpha", Event: provider.TurnEnded{Outcome: api.OutcomeCompleted}}}, "Narrow")
+			openSubagentOf(t, h, "Agent alpha")
+			h.tt.SetSize(760, 860)
+			h.tt.SetTitleBar(bar)
+			settlePlugins(t, h.a, h.tt, h.p)
+			h.tt.Advance(time.Second)
+			r, ok := h.tt.Find("Close subagent")
+			if !ok || r.X+r.W > 760-bar.Right {
+				t.Fatalf("Close subagent at %+v, found %v, is not within the window's %g points left of its buttons", r, ok, 760-bar.Right)
+			}
+			h.tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
+			if h.a.panels().Subagent {
+				t.Fatal("a click on Close subagent left the panel open")
+			}
+		})
+	}
+}
+
+// Each subagent's panel opens at its start, not where another's was
+// scrolled to.
+func TestEachSubagentsPanelOpensAtItsStart(t *testing.T) {
+	script := []provider.Event{spawnStep("alpha"), spawnStep("beta")}
+	for _, child := range []string{"alpha", "beta"} {
+		script = append(script, nestedText(child, "Start of "+child+"."))
+		for i := range 75 {
+			script = append(script, provider.Nested{Parent: child, Event: provider.Work{Item: fmt.Sprint(i), Kind: "command", Title: fmt.Sprintf("%s command %d", child, i), Status: api.WorkCompleted}})
+		}
+	}
+	h := subagentThreads(t, script, "Scrolled")
+	openSubagentOf(t, h, "Agent alpha")
+	r, ok := h.tt.Find("Start of alpha.")
+	if !ok {
+		t.Fatal("alpha's panel doesn't show its start")
+	}
+	h.tt.Scroll(r.X+r.W/2, r.Y+200, 0, 999)
+	h.tt.Advance(time.Second)
+	if now, ok := h.tt.Find("Start of alpha."); ok && now.Y >= r.Y {
+		t.Fatal("alpha's panel didn't scroll")
+	}
+	openSubagentOf(t, h, "Agent beta")
+	if now, ok := h.tt.Find("Start of beta."); !ok || now.Y < r.Y-1 {
+		t.Fatalf("beta's panel opened at %+v, found %v, scrolled as alpha's was from %+v", now, ok, r)
+	}
+}
+
+// A subagent past what one view of the panel may hold, in steps, their
+// output, a title or its text, shows its latest parts and says how many
+// came before; the panel is the built-in's, not a failed view's.
+func TestALongSubagentShowsItsLatestParts(t *testing.T) {
+	script := []provider.Event{spawnStep("alpha"), nestedText("alpha", strings.Repeat("Words, ", 40000))}
+	for i := range 300 {
+		script = append(script, provider.Nested{Parent: "alpha", Event: provider.Work{Item: fmt.Sprint(i), Kind: "command",
+			Title: strings.Repeat("t", 33000), Status: api.WorkFailed, Output: strings.Repeat("\x1b", 8000)}})
+	}
+	script = append(script, nestedText("alpha", "The last words."))
+	h := subagentThreads(t, script, "Long")
+	openSubagentOf(t, h, "Agent alpha")
+	earlier := slices.ContainsFunc(h.tt.Texts(), func(s string) bool { return strings.HasSuffix(s, " earlier parts not shown") })
+	if !h.tt.HasText("The last words.") || !earlier {
+		t.Fatalf("the long subagent's panel doesn't show its latest parts and how many came before: %v", h.a.plugins.App("subagent-panel").Err)
 	}
 }
