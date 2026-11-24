@@ -101,7 +101,16 @@ target   activates, owner_epoch = epoch+1, starts its queue
 
 ## Host-to-host trust
 
-Hosts don't trust each other by default. Each transfer is authorized by the client, which already holds Operate grants on both hosts. The target mints a ticket that accepts one bundle for one thread and transfer ID. The source presents it. No standing machine-to-machine grant exists.
+Hosts don't trust each other by default. A **link** is the one standing machine-to-machine grant, and only the person on the machine that accepts work mints one (Nelson, 2026-11-24). Agents delegate when nobody has the app open, so a grant that needs the client for each delegation would not work for children on another machine.
+
+- **Who makes it.** On machine B the person runs `glitched pair -name <A> -link -access <level> [-working N] [-all M]`. B mints only while its setting "Children from other machines" is on (`glitched pair -children <ask|auto-edits|full|off>`). That setting is off by default, and a link's access may be no higher than it. Full warns that an agent at Full runs as B's user with no prompts. Each link has a random id that is never reused, so a link minted again under a revoked label is a different link.
+- **Where it lives.** B keeps the link's hash, id, access and counts in `tokens.json`, mode 0600, under a `link` key. The top-level `sha256` stays empty, so an older build that admits every top-level hash to the whole engine skips a link. On A, `glitched link -add <B> -server <addr> -token <token>` asks B through the link which engine it is and which link the token is. A refuses a token that reaches all of B. The machine goes in A's `engine.json` with B's engine id and the link id, and the token goes in `links.json`, mode 0600. The token never enters a database, a log, an effect or an agent's environment.
+- **What it may do.** A link's socket carries a typed principal into every call. One check at method dispatch refuses every call a link may not make, before any handler runs. Today a link may call only `info`, and `info` tells it only B's engine id, name, protocol, log and the link's id. Starting a child on B, reading and following the threads the link made, and steering, stopping and narrowing them come with the remote children work. Each comes with its own check that the thread is one the link made. A link may never provide or forget credentials, clone projects, set provider launches, call plugins, sync skills or reach the hub.
+- **What it may not do.** It never reaches a thread the link did not make, and never raises access above the link's ceiling or B's setting. It carries no vault value, and it does not authorize a handoff. A handoff still needs the client's per-transfer ticket below.
+- **How it is revoked.** On B, `glitched pair -revoke <A>` refuses the link's next handshake at once and closes its live sockets within a second, as for any token (`network.md`). `glitched link -remove <B>` on A only forgets A's copy. The link stays valid on B until B's person revokes it.
+- **What it costs.** A stolen `links.json` reaches B at the link's scope until the link is revoked on B.
+
+A handoff is authorized by the client, which already holds Operate grants on both hosts. The target mints a ticket that accepts one bundle for one thread and transfer ID. The source presents it.
 
 ## Principles applied
 
@@ -109,7 +118,7 @@ Hosts don't trust each other by default. Each transfer is authorized by the clie
 - **Separate before serializing shared state.** Splitting "who writes" from "how data syncs" showed that a CRDT answers the second question, while handoff needs the first.
 - **Make operations idempotent.** Transfer ID, the activate outbox effect, and the receipts that travel with the thread make every retry safe.
 - **Experience first.** One `Move to…` action. Clients re-route on their own, and placement is a default (Any) rather than a setting to manage.
-- **Laziness protocol.** No CRDT, no replicated log, no automatic moves of running threads, no standing host-to-host trust.
+- **Laziness protocol.** No CRDT, no replicated log, no automatic moves of running threads, and no standing host-to-host trust beyond a link its person scoped and can revoke.
 
 ## Build order
 

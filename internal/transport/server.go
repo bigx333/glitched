@@ -60,17 +60,29 @@ type Server struct {
 	// Authorize admits a socket whose client proved, in the handshake, that
 	// it holds one of the keys Authorize knows. proved reports whether the
 	// proof was made with a key; Authorize asks it of every key it knows,
-	// whatever the answers, so the time taken doesn't say which matched. It
-	// returns that key, for the server's own proof, and a ctx whose end
-	// closes the socket, as when its grant is revoked. A Tailnet server must
-	// have one.
-	Authorize func(r *http.Request, proved func(Key) bool) (Key, context.Context, error)
+	// whatever the answers, so the time taken doesn't say which matched. A
+	// Tailnet server must have one.
+	Authorize func(r *http.Request, proved func(Key) bool) (Grant, error)
 
 	keepalive keepalive     // zero means defaultKeepalive
 	handshake time.Duration // how long a client has to prove its key; zero means handshakeWithin
 	idle      time.Duration // each request's read, its response's write and each keep-alive wait; zero means defaultIdle
 	limit     int64         // most bytes one message may hold; zero means maxMessage
 }
+
+// A Grant is what Authorize admitted a socket with.
+type Grant struct {
+	Key Key // for the server's own proof
+	// Done's end closes the socket, as when the grant is revoked.
+	Done context.Context
+	// Link is set for a link's token. Its socket may make only the calls
+	// in linkMethods, each with Link in its ctx (api.LinkOf).
+	Link *api.Link
+}
+
+// linkMethods are the calls a link's socket may make; it is refused every
+// other with api.ErrNotAllowed before any handler runs.
+var linkMethods = map[string]bool{"info": true}
 
 type connKey struct{}
 
@@ -155,7 +167,7 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 		ws.Close(statusProtocol, fmt.Sprintf("this engine speaks protocol %d and the client %d; update the older one", api.Protocol, theirs))
 		return
 	}
-	grant := context.Background()
+	grant := Grant{Done: context.Background()}
 	if s.Authorize != nil {
 		ws.SetReadLimit(helloLimit)
 		if grant, err = s.challenge(ctx, ws, r); err != nil {
@@ -173,7 +185,10 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 	ws.SetReadLimit(limit)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	defer context.AfterFunc(grant, cancel)()
+	defer context.AfterFunc(grant.Done, cancel)()
+	if grant.Link != nil {
+		ctx = api.WithLink(ctx, *grant.Link)
+	}
 	k := s.keepalive
 	if k == (keepalive{}) {
 		k = defaultKeepalive
@@ -227,6 +242,11 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 		if !known || o != nil {
 			mu.Unlock()
 			send(response{ID: req.ID, Error: &wireError{Code: "bad_request", Message: unknownMethod + " or id in use: " + req.Method}})
+			continue
+		}
+		if grant.Link != nil && !linkMethods[req.Method] {
+			mu.Unlock()
+			send(response{ID: req.ID, Error: toWire(fmt.Errorf("%w: %s", api.ErrNotAllowed, req.Method))})
 			continue
 		}
 		callCtx, stop := context.WithCancel(api.WithArrival(ctx, arrivals.Add(1)))

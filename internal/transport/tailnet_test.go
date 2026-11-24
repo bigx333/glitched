@@ -48,9 +48,9 @@ func TestAuthorizeRefusesAnUnknownKeyAndClosesARevokedSocket(t *testing.T) {
 	var revoked atomic.Bool
 	ep := &fakeEndpoint{reads: make(chan error, 2)}
 	admitGood := admit(map[string]context.Context{"good": grant})
-	addr := serveTailnet(t, &Server{Transport: Tailnet{}, Endpoint: ep, Authorize: func(r *http.Request, proved func(Key) bool) (Key, context.Context, error) {
+	addr := serveTailnet(t, &Server{Transport: Tailnet{}, Endpoint: ep, Authorize: func(r *http.Request, proved func(Key) bool) (Grant, error) {
 		if revoked.Load() {
-			return Key{}, nil, errors.New("unknown token")
+			return Grant{}, errors.New("unknown token")
 		}
 		return admitGood(r, proved)
 	}})

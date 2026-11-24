@@ -80,29 +80,29 @@ func readHello(ctx context.Context, ws *websocket.Conn) (hello, error) {
 }
 
 // challenge has the client prove it holds a key Authorize admits, then
-// proves the server holds it too. It returns the ctx of the key's grant.
-func (s *Server) challenge(ctx context.Context, ws *websocket.Conn, r *http.Request) (context.Context, error) {
+// proves the server holds it too. It returns the key's grant.
+func (s *Server) challenge(ctx context.Context, ws *websocket.Conn, r *http.Request) (Grant, error) {
 	ctx, cancel := context.WithTimeout(ctx, cmp.Or(s.handshake, handshakeWithin))
 	defer cancel()
 	nonceS := nonce()
 	if err := writeHello(ctx, ws, hello{Nonce: nonceS}); err != nil {
-		return nil, err
+		return Grant{}, err
 	}
 	h, err := readHello(ctx, ws)
 	if err != nil {
-		return nil, err
+		return Grant{}, err
 	}
 	if len(h.Nonce) != nonceSize || len(h.MAC) != sha256.Size {
-		return nil, errBadHello
+		return Grant{}, errBadHello
 	}
-	key, grant, err := s.Authorize(r, func(k Key) bool {
+	grant, err := s.Authorize(r, func(k Key) bool {
 		return hmac.Equal(h.MAC, mac(k, clientProof, nonceS, h.Nonce))
 	})
 	if err != nil {
-		return nil, err
+		return Grant{}, err
 	}
-	if err := writeHello(ctx, ws, hello{MAC: mac(key, serverProof, h.Nonce, nonceS)}); err != nil {
-		return nil, err
+	if err := writeHello(ctx, ws, hello{MAC: mac(grant.Key, serverProof, h.Nonce, nonceS)}); err != nil {
+		return Grant{}, err
 	}
 	return grant, nil
 }

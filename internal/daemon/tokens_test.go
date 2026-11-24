@@ -76,7 +76,7 @@ func TestARefusedPeerIsLoggedOnceAMinute(t *testing.T) {
 	for _, from := range []string{"100.64.0.5:1001", "100.64.0.5:1002", "100.64.0.5:1003", "100.64.0.6:1001", "100.64.0.5:1004"} {
 		r := httptest.NewRequest("GET", "/ws", nil)
 		r.RemoteAddr = from
-		if _, _, err := g.authorize(r, provedWith("wrong")); err == nil {
+		if _, err := g.authorize(r, provedWith("wrong")); err == nil {
 			t.Fatalf("admitted a wrong token from %s", from)
 		}
 	}
@@ -173,7 +173,7 @@ func TestNoUpgradeAfterARevokeReturnsGetsIn(t *testing.T) {
 		var after sync.WaitGroup
 		for range 64 {
 			after.Go(func() {
-				if _, grant, err := g.authorize(httptest.NewRequest("GET", "/ws", nil), provedWith(token)); err == nil && grant.Err() == nil {
+				if grant, err := g.authorize(httptest.NewRequest("GET", "/ws", nil), provedWith(token)); err == nil && grant.Done.Err() == nil {
 					admitted.Add(1)
 				}
 			})

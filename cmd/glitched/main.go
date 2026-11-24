@@ -42,6 +42,7 @@ var commands = map[string]func(context.Context, []string) error{
 	"serve":       serve,
 	"status":      status,
 	"pair":        pair,
+	"link":        link,
 	"run":         run,
 	"threads":     threads,
 	"replica":     replica,
@@ -54,7 +55,8 @@ const usage = `usage: glitched <command> [flags]
   serve     run the host engine, and the hub role unless -hub=false; the next serve
             on -dir, and the GUI's own engine, run as it did unless a flag says otherwise
   status    whether an engine serves -dir, its hub, its tailnet listeners and its tokens
-  pair      mint a token for a client on the tailnet: glitched pair -name LABEL | -list | -revoke LABEL
+  pair      mint a token for a client on the tailnet: glitched pair -name LABEL [-link] | -list | -revoke LABEL
+  link      add a machine whose engine minted this one a link: glitched link -add LABEL -server ADDR -token TOKEN | -list | -remove LABEL
   run       send a message and stream the turn: glitched run [-thread ID] [-provider claude] [-yes] text...
   threads   list this host's threads
   replica   print a thread's events as the hub holds them: glitched replica -thread ID
@@ -311,15 +313,30 @@ func pair(_ context.Context, args []string) error {
 	name := fs.String("name", "", "mint a token with this label")
 	list := fs.Bool("list", false, "list the tokens")
 	revoke := fs.String("revoke", "", "revoke the token with this label")
+	link := fs.Bool("link", false, "mint, for the engine of the machine -name names, a link: a token its agents start children here with, and nothing else")
+	access := fs.String("access", "auto-edits", "with -link, the most a child the link starts may run at: ask, auto-edits or full")
+	working := fs.Int("working", 0, "with -link, how many of the link's children may work at once; 0 is this engine's child limit")
+	all := fs.Int("all", 0, "with -link, how many children the link may have; 0 is this engine's child limit")
+	children := fs.String("children", "", "set this machine's setting for children from other machines: off, or the most access any link's child may run at, ask, auto-edits or full")
 	fs.Parse(args)
+	set := given(fs)
+	if !*link && (set["access"] || set["working"] || set["all"]) {
+		return usageError("pair: -access, -working and -all go with -link")
+	}
 	switch {
+	case *children != "":
+		return setChildren(*dir, *children)
 	case *list:
 		ts, err := daemon.Tokens(*dir)
 		if err != nil {
 			return err
 		}
 		for _, t := range ts {
-			fmt.Printf("%s  %s\n", t.Created.Local().Format(time.DateTime), t.Label)
+			scope := ""
+			if t.Link != nil {
+				scope = fmt.Sprintf("  link %s, %s", t.Link.ID, daemon.AccessName(t.Link.Access))
+			}
+			fmt.Printf("%s  %s%s\n", t.Created.Local().Format(time.DateTime), t.Label, scope)
 		}
 		return nil
 	case *revoke != "":
@@ -329,16 +346,7 @@ func pair(_ context.Context, args []string) error {
 		fmt.Println("revoked", *revoke)
 		return nil
 	case *name == "":
-		return usageError("pair: give -name, -list or -revoke")
-	}
-	token, err := daemon.Pair(*dir, *name)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Token for %s, shown only this once:\n\n  %s\n\n", *name, token)
-	cmd := "glitched serve"
-	if given(fs)["dir"] {
-		cmd += " -dir " + shellQuote(*dir)
+		return usageError("pair: give -name, -list, -revoke or -children")
 	}
 	host := "<this machine's tailnet name>"
 	probe, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -347,7 +355,97 @@ func pair(_ context.Context, args []string) error {
 	}
 	cancel()
 	addr := net.JoinHostPort(host, daemon.Port)
+	cmd := "glitched serve"
+	if set["dir"] {
+		cmd += " -dir " + shellQuote(*dir)
+	}
+	if *link {
+		a, err := daemon.ParseAccess(*access)
+		if err != nil {
+			return usageError("pair: -access: " + err.Error())
+		}
+		token, l, err := daemon.PairLink(*dir, *name, api.Link{Access: a, Working: *working, All: *all})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Link %s for %s, at %s at most. Its token, shown only this once:\n\n  %s\n\n", l.ID, *name, daemon.AccessName(l.Access), token)
+		fmt.Printf("Serve on the tailnet with:\n\n  %s -tailnet\n\nThen on %s:\n\n  glitched link -add <this machine> -server %s -token %s\n\nRevoke it here with glitched pair -revoke %s.\n", cmd, *name, addr, token, shellQuote(*name))
+		return nil
+	}
+	token, err := daemon.Pair(*dir, *name)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Token for %s, shown only this once:\n\n  %s\n\n", *name, token)
 	fmt.Printf("Serve on the tailnet with:\n\n  %s -tailnet\n\nThen on the other machine:\n\n  glitched run -server %s -token %s hello\n", cmd, addr, token)
+	return nil
+}
+
+// setChildren sets engine.json's ChildrenFromOtherMachines to level, off
+// or an access level's name.
+func setChildren(dir, level string) error {
+	var ceiling *api.Access
+	if level != "off" {
+		a, err := daemon.ParseAccess(level)
+		if err != nil {
+			return usageError("pair: -children: " + err.Error())
+		}
+		ceiling = &a
+	}
+	if _, err := daemon.Edit(dir, func(cfg *daemon.Config) error {
+		cfg.ChildrenFromOtherMachines = ceiling
+		return nil
+	}); err != nil {
+		return err
+	}
+	switch {
+	case ceiling == nil:
+		fmt.Println("Children from other machines are off.")
+	case *ceiling == api.AccessFull:
+		fmt.Println("Children from other machines may run at full access. An agent at full access runs as this machine's user with no prompts, so it can read every thread's credentials here.")
+	default:
+		fmt.Printf("Children from other machines may run at %s at most.\n", daemon.AccessName(*ceiling))
+	}
+	return nil
+}
+
+// link adds, lists and removes the other machines this engine's agents
+// may start children on.
+func link(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("link", flag.ExitOnError)
+	dir := dirFlag(fs)
+	add := fs.String("add", "", "add the machine at -server with this label, with the token its glitched pair -link printed")
+	server := fs.String("server", "", "with -add, the machine's tailnet address")
+	token := fs.String("token", "", "with -add, the link's token")
+	list := fs.Bool("list", false, "list the machines")
+	remove := fs.String("remove", "", "remove the machine with this label and forget its token")
+	fs.Parse(args)
+	switch {
+	case *list:
+		cfg, err := daemon.Defaults(*dir)
+		if err != nil {
+			return err
+		}
+		for _, m := range cfg.Machines {
+			fmt.Printf("%s  %s  engine %s  link %s\n", m.Label, m.Server, m.Engine, m.Link)
+		}
+		return nil
+	case *remove != "":
+		if err := daemon.RemoveMachine(*dir, *remove); err != nil {
+			return err
+		}
+		fmt.Printf("removed %s; its link stays valid there until it is revoked on that machine\n", *remove)
+		return nil
+	case *add == "":
+		return usageError("link: give -add, -list or -remove")
+	case *server == "" || *token == "":
+		return usageError("link: -add needs -server and -token, which glitched pair -link printed on that machine")
+	}
+	m, err := daemon.AddMachine(ctx, *dir, *add, *server, *token)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("added %s: engine %s, link %s\n", m.Label, m.Engine, m.Link)
 	return nil
 }
 

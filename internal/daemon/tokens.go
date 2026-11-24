@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"glitched/internal/api"
 	"glitched/internal/jsonfile"
 	"glitched/internal/transport"
 )
@@ -27,14 +28,78 @@ import (
 // passes for this engine. So the file is the user's alone, mode 0600.
 type Token struct {
 	Label   string    `json:"label"`
-	Hash    string    `json:"sha256"` // hex SHA-256 of the token
+	Hash    string    `json:"sha256,omitempty"` // hex SHA-256 of the token; a link's is in Link
 	Created time.Time `json:"created"`
+	// Link is set for a token another machine's engine holds, which reaches
+	// only what its scope allows. Its hash is kept in it, never in Hash, so
+	// a build from before links, which admits every Hash to the whole
+	// engine, skips the token instead.
+	Link *LinkToken `json:"link,omitempty"`
+}
+
+// A LinkToken is a link's scope as tokens.json keeps it (api.Link).
+type LinkToken struct {
+	ID      api.ID     `json:"id"`
+	Hash    string     `json:"sha256"`
+	Access  api.Access `json:"access"`
+	Working int        `json:"working,omitempty"`
+	All     int        `json:"all,omitempty"`
+}
+
+// hash is the hex SHA-256 of t's token.
+func (t Token) hash() string {
+	if t.Link != nil {
+		return t.Link.Hash
+	}
+	return t.Hash
+}
+
+// link is t's scope, nil for a token that reaches the whole engine.
+func (t Token) link() *api.Link {
+	if t.Link == nil {
+		return nil
+	}
+	return &api.Link{ID: t.Link.ID, Label: t.Label, Access: t.Link.Access, Working: t.Link.Working, All: t.Link.All}
 }
 
 const tokensFile = "tokens.json"
 
 // Pair mints a token for label. It is returned once and never stored.
 func Pair(dir, label string) (string, error) {
+	return mint(dir, label, func(hash string) (Token, error) {
+		return Token{Label: label, Hash: hash}, nil
+	})
+}
+
+// PairLink mints a token for the engine of the machine label names, scoped
+// to l: Label and ID are its own. The scope may be no wider than this
+// engine's setting for children from other machines, which must be on.
+func PairLink(dir, label string, l api.Link) (string, api.Link, error) {
+	l.ID, l.Label = api.NewID(), label
+	token, err := mint(dir, label, func(hash string) (Token, error) {
+		cfg, err := Defaults(dir)
+		if err != nil {
+			return Token{}, err
+		}
+		switch ceiling := cfg.ChildrenFromOtherMachines; {
+		case ceiling == nil:
+			return Token{}, errors.New("pair: children from other machines are off on this machine; turn them on first")
+		case l.Access > *ceiling:
+			return Token{}, fmt.Errorf("pair: a link may run children at %s at most here, as this machine's setting for children from other machines says", AccessName(*ceiling))
+		case l.Working < 0 || l.All < 0:
+			return Token{}, errors.New("pair: a link's counts can't be negative")
+		}
+		return Token{Label: label, Link: &LinkToken{ID: l.ID, Hash: hash, Access: l.Access, Working: l.Working, All: l.All}}, nil
+	})
+	if err != nil {
+		return "", api.Link{}, err
+	}
+	return token, l, nil
+}
+
+// mint adds the token made for a new secret's hash to tokens.json, under
+// label, and returns the secret.
+func mint(dir, label string, made func(hash string) (Token, error)) (string, error) {
 	if strings.TrimSpace(label) == "" {
 		return "", errors.New("pair: a token needs a label")
 	}
@@ -46,7 +111,12 @@ func Pair(dir, label string) (string, error) {
 		if slices.ContainsFunc(*ts, func(t Token) bool { return t.Label == label }) {
 			return fmt.Errorf("pair: %s already has a token; revoke it first", label)
 		}
-		*ts = append(*ts, Token{Label: label, Hash: hex.EncodeToString(key[:]), Created: time.Now().UTC()})
+		t, err := made(hex.EncodeToString(key[:]))
+		if err != nil {
+			return err
+		}
+		t.Created = time.Now().UTC()
+		*ts = append(*ts, t)
 		return nil
 	})
 	if err != nil {
@@ -54,6 +124,27 @@ func Pair(dir, label string) (string, error) {
 	}
 	return token, nil
 }
+
+// AccessName is a's name as pair's flags and messages give it.
+func AccessName(a api.Access) string {
+	for name, v := range accessNames {
+		if v == a {
+			return name
+		}
+	}
+	return fmt.Sprint(int(a))
+}
+
+// ParseAccess is the access level name names (AccessName).
+func ParseAccess(name string) (api.Access, error) {
+	a, ok := accessNames[name]
+	if !ok {
+		return 0, fmt.Errorf("unknown access %q: give ask, auto-edits or full", name)
+	}
+	return a, nil
+}
+
+var accessNames = map[string]api.Access{"ask": api.AccessAsk, "auto-edits": api.AccessAutoEdits, "full": api.AccessFull}
 
 // Revoke removes label's token. An engine refuses it on the next socket and
 // closes the sockets it admitted within a second.
@@ -100,6 +191,7 @@ type grants struct {
 
 type grant struct {
 	label  string
+	link   *api.Link
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -118,7 +210,7 @@ func (g *grants) reload() {
 	live := map[transport.Key]grant{}
 	for _, t := range ts {
 		var sum transport.Key
-		if b, _ := hex.DecodeString(t.Hash); len(b) == len(sum) {
+		if b, _ := hex.DecodeString(t.hash()); len(b) == len(sum) {
 			copy(sum[:], b)
 		} else {
 			continue
@@ -127,7 +219,7 @@ func (g *grants) reload() {
 		if ok {
 			delete(g.live, sum)
 		} else {
-			gr.label = t.Label
+			gr.label, gr.link = t.Label, t.link()
 			gr.ctx, gr.cancel = context.WithCancel(g.base)
 		}
 		live[sum] = gr
@@ -155,7 +247,7 @@ func (g *grants) watch(ctx context.Context) {
 
 var errUnknownToken = errors.New("unknown token")
 
-func (g *grants) authorize(r *http.Request, proved func(transport.Key) bool) (transport.Key, context.Context, error) {
+func (g *grants) authorize(r *http.Request, proved func(transport.Key) bool) (transport.Grant, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.reload()
@@ -169,10 +261,10 @@ func (g *grants) authorize(r *http.Request, proved func(transport.Key) bool) (tr
 	}
 	if match == nil {
 		g.refused(r.RemoteAddr)
-		return transport.Key{}, nil, errUnknownToken
+		return transport.Grant{}, errUnknownToken
 	}
-	slog.Info("admitted a socket", "token", match.label, "from", r.RemoteAddr)
-	return key, match.ctx, nil
+	slog.Info("admitted a socket", "token", match.label, "link", match.link != nil, "from", r.RemoteAddr)
+	return transport.Grant{Key: key, Done: match.ctx, Link: match.link}, nil
 }
 
 // refused logs a peer's refusal at most once a minute, however often it
