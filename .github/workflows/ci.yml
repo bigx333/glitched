@@ -36,6 +36,8 @@ jobs:
           cache-dependency-path: go.sum
       - run: go vet ./...
       - run: go tool mygo vet .
+      - name: The engine and app build for Windows
+        run: GOOS=windows GOARCH=amd64 go build ./cmd/...
 
   # The root package's UI tests take most of the run, so they are split over
   # ROOT_SHARDS runners, balanced by .github/root-test-seconds, and each runs
