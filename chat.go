@@ -106,8 +106,8 @@ func (a *app) chatPage(c *ui.Context) {
 		case a.showPluginTab:
 			ui.Column(c).Key("plugin-tab").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.pluginTabPanel(c, t) })
 		default:
-			if w, ok := a.subagentShown(t); ok {
-				ui.Column(c).Key("subagent").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.subagentPanel(c, t, w) })
+			if sel, w, ok := a.subagentShown(t); ok {
+				ui.Column(c).Key("subagent").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.subagentPanel(c, t, sel, w) })
 			}
 		}
 	})
@@ -169,7 +169,7 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 	// Clear of the window buttons on the right (Windows, Linux) unless a
 	// panel takes that edge.
 	right := float32(12)
-	if _, sub := a.subagentShown(t); !a.showDiff && !a.showPreview && !sub {
+	if _, _, sub := a.subagentShown(t); !a.showDiff && !a.showPreview && !sub {
 		right += bar.Right
 	}
 	head := ui.Row(c).Height(max(bar.Height, headerHeight)).Shrink(0).
@@ -287,7 +287,7 @@ func (a *app) chatRoom() float32 {
 	case a.showPluginTab:
 		w -= a.diffWidth()
 	default:
-		if _, ok := a.subagentShown(a.current()); ok {
+		if _, _, ok := a.subagentShown(a.current()); ok {
 			w -= a.diffWidth()
 		}
 	}
@@ -1093,7 +1093,7 @@ func (a *app) workLog(c *ui.Context, t thread, key string, e entry, files []file
 				ClipY().Transition(fold).Children(func() {
 				for _, w := range e.work {
 					// Each step the agent takes unfolds below the last.
-					a.step(c, t, files, w)
+					a.step(c, t, files, e.run, w)
 				}
 			})
 		})
@@ -1102,7 +1102,7 @@ func (a *app) workLog(c *ui.Context, t thread, key string, e entry, files []file
 // step is one of the agent's steps. A command that finished shows its
 // exit code and how long it took, and what it printed when it failed. An
 // edit of a file the diff lists opens it there.
-func (a *app) step(c *ui.Context, t thread, files []fileChange, w client.WorkStep) {
+func (a *app) step(c *ui.Context, t thread, files []fileChange, run api.ID, w client.WorkStep) {
 	icon := icFile
 	switch w.Kind {
 	case "command":
@@ -1176,7 +1176,7 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, w client.WorkSte
 			a.showDiff, a.showPreview, a.panelsJump = true, false, false
 			a.diffFile[t.id()] = w.Path
 		case sub:
-			a.openSubagent(t, w)
+			a.openSubagent(t, run, w)
 		}
 	}
 	if w.Output != "" && (w.Status == api.WorkFailed || w.Exit != nil && *w.Exit != 0) {

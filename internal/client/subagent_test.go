@@ -70,3 +70,29 @@ func TestASubagentsChangeIsAnEditOfItsStepsEntry(t *testing.T) {
 		mark = next
 	}
 }
+
+// A run that ends before a subagent of its said how it did cuts the
+// subagent off, and its step's entry is edited for it; one that said
+// keeps how it ended.
+func TestARunsEndCutsOffItsUnfinishedSubagents(t *testing.T) {
+	a := api.NewID()
+	tr := play(slices.Concat(start(a, "go", 0), []api.EventBody{
+		api.WorkItem{Run: a, Item: "task-1", Kind: "tool", Title: "Agent alpha", Status: api.WorkStarted},
+		api.WorkItem{Run: a, Item: "task-2", Kind: "tool", Title: "Agent beta", Status: api.WorkStarted},
+		api.SubagentDelta{Run: a, Parent: "task-1", Text: "Working"},
+		api.SubagentDelta{Run: a, Parent: "task-2", Text: "Done here"},
+		api.SubagentEnded{Run: a, Parent: "task-2", Outcome: api.OutcomeFailed},
+	})...)
+	_, _, mark := tr.Edits(EditMark{})
+	tr.apply(event(9, api.TurnEnded{Run: a, Outcome: api.OutcomeInterrupted}))
+	items := tr.Entries[1].(*WorkEntry).Items
+	if s := items[0].Subagent; !s.Cut || s.Ended {
+		t.Fatalf("alpha, which never said how it ended, is cut %v and ended %v, want cut off", s.Cut, s.Ended)
+	}
+	if s := items[1].Subagent; s.Cut || !s.Ended || s.Outcome != api.OutcomeFailed {
+		t.Fatalf("beta, which failed, is cut %v, ended %v with %v, want its own end kept", s.Cut, s.Ended, s.Outcome)
+	}
+	if edited, all, _ := tr.Edits(mark); all || !slices.Contains(edited, 1) {
+		t.Fatalf("the run's end edited %v (all %v), want the work entry among them", edited, all)
+	}
+}

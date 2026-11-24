@@ -209,6 +209,9 @@ type Subagent struct {
 	Ended   bool
 	Outcome api.Outcome
 	Tokens  int64
+	// Cut is that its run ended before saying how the subagent did: it
+	// is over, how is unknown.
+	Cut bool
 }
 
 // SubagentPart is a native subagent's text, or one of its steps.
@@ -806,9 +809,18 @@ func (t *Transcript) end(run api.ID, released MessageState, at time.Time) {
 				t.edited(e)
 			}
 		case *WorkEntry:
-			if e.Run == run && e.Ended.IsZero() {
+			if e.Run != run {
+				continue
+			}
+			if e.Ended.IsZero() {
 				e.Ended = at
 				t.edited(e)
+			}
+			for _, w := range e.Items {
+				if s := w.Subagent; s != nil && !s.Ended && !s.Cut {
+					s.Cut = true
+					t.edited(e)
+				}
 			}
 		}
 	}
