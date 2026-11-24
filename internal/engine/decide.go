@@ -612,7 +612,7 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 			return rejected("the engine continues a turn a usage limit ended only once it resets, on a thread of the user's that waits on nothing else")
 		}
 	}
-	if m.Auto && (!d.t.Parent.IsZero() || d.t.settled() || d.t.Disposition.State == api.Snoozed && d.at.Before(d.t.Disposition.Until)) {
+	if m.Auto && (d.t.child() || d.t.settled() || d.t.Disposition.State == api.Snoozed && d.at.Before(d.t.Disposition.Until)) {
 		return rejected("the engine continues only a run it lost, or a turn a usage limit ended, on a thread of the user's neither settled nor snoozed")
 	}
 	// A run left on a settled thread is the one the settle stopped, and a
@@ -1442,7 +1442,7 @@ func (d *decision) observe(o Observation) error {
 			return d.uncertain(api.TurnUncertain{Run: o.Run, Reason: api.UncertainUnconfirmed})
 		}
 		worked := live.State == RunRunning || live.State == RunStarting
-		return d.uncertain(api.TurnUncertain{Run: o.Run, Reason: api.UncertainRestarted, Continue: o.Continue && worked && d.t.Parent.IsZero()})
+		return d.uncertain(api.TurnUncertain{Run: o.Run, Reason: api.UncertainRestarted, Continue: o.Continue && worked && !d.t.child()})
 	case Rewound:
 		return d.rewound()
 	case Reported:

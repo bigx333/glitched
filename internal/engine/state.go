@@ -191,6 +191,10 @@ func (t Thread) lastTurn() (Run, bool) {
 
 func (t Thread) settled() bool { return t.Disposition.State == api.Settled }
 
+// child is whether the thread is an agent's child: of a parent here, or
+// of one on the machine its link came from.
+func (t Thread) child() bool { return !t.Parent.IsZero() || t.Origin != nil }
+
 // checkpointed is whether the thread keeps checkpoints of its files.
 func (t Thread) checkpointed() bool { return t.Parent.IsZero() && t.Branch != "" }
 

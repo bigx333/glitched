@@ -88,6 +88,12 @@ func TestTheEngineContinuesOnlyATurnAUsageLimitEnded(t *testing.T) {
 	_, err = f.at(after, autoLimit)
 	refused(t, err, "a continue of a child")
 
+	f, _ = limited(t)
+	f.th.Origin = &engine.Origin{Origin: api.Origin{Engine: api.NewID(), Thread: api.NewID(), Depth: 1}}
+	f.th.Workspace = t.TempDir()
+	_, err = f.at(after, autoLimit)
+	refused(t, err, "a continue of another machine's child")
+
 	f, run = running(t)
 	f.observe(engine.Ended{Run: run, Outcome: api.OutcomeFailed, Limit: &api.UsageLimit{}})
 	_, err = f.at(after, autoLimit)
