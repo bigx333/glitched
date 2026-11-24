@@ -55,7 +55,13 @@ type reverting struct {
 
 func twoTurns(t *testing.T, path, dir string, project string) reverting {
 	t.Helper()
-	n := serveCheckpoints(t, path, dir, fake.New(fake.Turn(false)))
+	return twoTurnsWith(t, path, dir, project, fake.New(fake.Turn(false)))
+}
+
+// twoTurnsWith is twoTurns on ad.
+func twoTurnsWith(t *testing.T, path, dir string, project string, ad provider.Adapter) reverting {
+	t.Helper()
+	n := serveCheckpoints(t, path, dir, ad)
 	thread := api.NewID()
 	submit(t, n.h, thread, inWorktree(project, ""))
 	until(t, n.h, thread, "the first turn's end", idle)

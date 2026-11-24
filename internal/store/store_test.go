@@ -523,7 +523,7 @@ func TestAnOlderDatabaseUpgrades(t *testing.T) {
 			updated_at INTEGER NOT NULL, CHECK ((disposition = 1) = (until IS NOT NULL))) STRICT;
 		INSERT INTO threads_v1 SELECT id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at FROM threads;
 		DROP TABLE threads;
-		ALTER TABLE threads_v1 RENAME TO threads;` + runsV6 + runsV12 + runsV13 + commandsV7 + `
+		ALTER TABLE threads_v1 RENAME TO threads;` + runsV6 + runsV12 + runsV13 + runsV14 + commandsV7 + `
 		PRAGMA user_version = 1;`); err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +570,7 @@ func TestAnArchivedThreadUpgradesSettled(t *testing.T) {
 			disposition, until, updated_at, deleted FROM threads;
 		DROP TABLE threads;
 		ALTER TABLE threads_v3 RENAME TO threads;
-		UPDATE threads SET disposition = 3;` + runsV6 + runsV12 + runsV13 + commandsV7 + `
+		UPDATE threads SET disposition = 3;` + runsV6 + runsV12 + runsV13 + runsV14 + commandsV7 + `
 		PRAGMA user_version = 3;`); err != nil {
 		t.Fatal(err)
 	}
@@ -715,6 +715,9 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 	if version < 14 {
 		sqlText += runsV13
 	}
+	if version < 15 {
+		sqlText += runsV14
+	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
@@ -762,6 +765,12 @@ const runsV12 = `
 const runsV13 = `
 	ALTER TABLE runs DROP COLUMN limit_resets;
 	ALTER TABLE runs DROP COLUMN resume_cancelled;
+`
+
+// The runs table up to version 14, before a rewind marked the runs it
+// dropped.
+const runsV14 = `
+	ALTER TABLE runs DROP COLUMN dropped;
 `
 
 // The threads table up to version 9, before a thread in a worktree kept

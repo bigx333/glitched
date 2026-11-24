@@ -47,6 +47,12 @@ const (
 	envModes  = "GLITCHED_FAKE_CLAUDE_MODES"  // a file each run appends the permission modes it was switched to, and how it answered, to
 	envNoAuto = "GLITCHED_FAKE_CLAUDE_NOAUTO" // why a run refuses its auto mode, as Claude Code says it
 	envSkills = "GLITCHED_FAKE_CLAUDE_SKILLS" // a file each run appends the skills it sees to, a JSON list
+	// A folder of the sessions runs made, a file each, which a --resume
+	// must find; without it, every session exists, or none, as the
+	// transcript plays.
+	envSessions    = "GLITCHED_FAKE_CLAUDE_SESSIONS"
+	envRefuseAt    = "GLITCHED_FAKE_CLAUDE_REFUSE_AT"    // a run refuses --resume-session-at, finding no such message
+	envRefuseDrops = "GLITCHED_FAKE_CLAUDE_REFUSE_DROPS" // a run refuses --resume-drops-turn, finding another turn's messages
 )
 
 func TestMain(m *testing.M) {
@@ -102,6 +108,9 @@ func fakeClaude(path string) int {
 		out, _ := os.OpenFile(f, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		out.Write(append(b, '\n'))
 		out.Close()
+	}
+	if code := sessions(); code >= 0 {
+		return code
 	}
 	if f := os.Getenv(envSkills); f != "" {
 		noteSkills(f)
@@ -284,6 +293,51 @@ func fakeClaude(path string) int {
 		}
 	}
 	return 0
+}
+
+// sessions plays how Claude Code finds the session it starts with, and is
+// the code a run that stops there exits with, or -1. A message
+// --resume-session-at names is missing where envRefuseAt is set, and the
+// turn --resume-drops-turn names isn't the rest where envRefuseDrops is,
+// as Claude Code says of them. With envSessions, a --resume finds its
+// session there or says it found none, and a --session-id makes one,
+// unless it exists.
+func sessions() int {
+	arg := func(flag string) string {
+		i := slices.Index(os.Args, flag)
+		if i < 0 || i+1 == len(os.Args) {
+			return ""
+		}
+		return os.Args[i+1]
+	}
+	at, drops := arg("--resume-session-at"), arg("--resume-drops-turn")
+	switch {
+	case at != "" && os.Getenv(envRefuseAt) != "":
+		fmt.Fprintln(os.Stderr, "No message found with message.uuid of: "+at)
+		return 1
+	case drops != "" && os.Getenv(envRefuseDrops) != "":
+		fmt.Fprintf(os.Stderr, "Error: resuming at %s would discard entries not attributable to turn %s: the range holds another turn\n", at, drops)
+		return 1
+	}
+	dir := os.Getenv(envSessions)
+	if dir == "" {
+		return -1
+	}
+	if id := arg("--resume"); id != "" {
+		if _, err := os.Stat(filepath.Join(dir, id)); err != nil {
+			fmt.Fprintln(os.Stderr, "No conversation found with session ID: "+id)
+			return 1
+		}
+	}
+	if id := arg("--session-id"); id != "" {
+		f, err := os.OpenFile(filepath.Join(dir, id), os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: Session ID %s is already in use.\n", id)
+			return 1
+		}
+		f.Close()
+	}
+	return -1
 }
 
 // tapes is what one fake claude plays: the transcripts of the list path,

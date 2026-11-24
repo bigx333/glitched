@@ -668,6 +668,11 @@ func (h *Host) dropIn(ctx context.Context, store string, thread api.ID) error {
 			return err
 		}
 	}
+	for _, line := range strings.Split(listed, "\n") {
+		if ref := strings.TrimPrefix(line, "delete "+checkpointRefs(thread)+"applying/"); ref != line {
+			os.Remove(filepath.Join(journals(store), ref))
+		}
+	}
 	checkpointHook(ctx, "dropped")
 	h.checkpoints.prune(ctx, store)
 	return nil

@@ -1,11 +1,13 @@
 package runtime
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/engine"
+	"glitched/internal/provider"
 	"glitched/internal/store"
 )
 
@@ -30,7 +33,7 @@ func (h *Host) revertInWorktree(ctx context.Context, c api.Command) (api.Receipt
 	if err != nil {
 		return api.Receipt{}, err
 	}
-	if !t.Exists() || t.Deleted || !t.Parent.IsZero() || t.Branch == "" {
+	if !t.Exists() || t.Deleted || !t.Parent.IsZero() || t.Branch == "" || !c.Body.(api.ThreadRevert).Files {
 		return h.store.Submit(ctx, c, h.clock())
 	}
 	if err := h.revertable(ctx, t, api.Thread.Live, func(api.Thread) bool { return true }); err != nil {
@@ -85,6 +88,9 @@ func (h *Host) revert(t engine.Thread, b engine.RevertThread) (o engine.Observat
 	}
 	if err != nil {
 		r.Status, r.Error = api.RevertFailed, err.Error()
+		if b.Conversation {
+			r.Conversation, r.Session, r.From, r.At = api.RewindFailed, "", "", ""
+		}
 	}
 	return engine.Reverted{Revert: r}, true
 }
@@ -117,9 +123,18 @@ func (h *Host) noteReverting(e api.Event, threads []api.Thread) {
 	if e.Type != "thread.reverting" {
 		return
 	}
+	if b, _ := e.Decode(); holdsFiles(b) {
+		return
+	}
 	if i := slices.IndexFunc(threads, func(th api.Thread) bool { return th.ID == e.Thread }); i >= 0 {
 		h.markRestoring(e.Thread, threads[i].Workspace)
 	}
+}
+
+// holdsFiles is whether b is a revert that leaves the files as they are.
+func holdsFiles(b api.EventBody) bool {
+	r, ok := b.(api.ThreadReverting)
+	return ok && r.KeepFiles
 }
 
 // markRestoring counts one more revert of thread's worktree at workspace.
@@ -201,25 +216,47 @@ func (h *Host) waitsOnRevert(e store.Effect) bool {
 }
 
 // change is a path whose file differs between two of a store's trees,
-// with to's mode and blob, "" where to has none; fresh is a path from has
-// none.
+// with from's mode and blob as was and wasBlob, and to's as mode and blob,
+// "" where the tree has none.
 type change struct {
-	path, mode, blob string
-	fresh            bool
+	path, was, wasBlob, mode, blob string
 }
 
+// revertIn rewinds the conversation first, as T3 and Zeron do, once the
+// files are known to be the thread's to put back, so that a rewind that
+// fails leaves them as they are: a replay that finds the plan an earlier
+// attempt left, and so may have written some files already, puts the
+// paths it names back as they were. A revert of the files that fails
+// after the rewind leaves it unused, as revert reports it: a rewind
+// changes nothing until the revert commits.
 func (h *Host) revertIn(ctx context.Context, t engine.Thread, b engine.RevertThread) (api.ThreadReverted, error) {
 	r := api.ThreadReverted{Revert: b.Revert, To: b.To}
-	if h.checkpoints == nil {
-		return r, errors.New("this engine keeps no checkpoints")
+	var top, target, store string
+	if !b.KeepFiles {
+		if h.checkpoints == nil {
+			return r, errors.New("this engine keeps no checkpoints")
+		}
+		if err := h.revertable(ctx, t, h.mayWrite, h.mayWrite); err != nil {
+			return r, err
+		}
+		top = h.ownsDir(t.ID, t.Workspace)
+		var err error
+		if target, store, err = h.checkpointAt(ctx, t.ID, b.To); err != nil {
+			return r, err
+		}
 	}
-	if err := h.revertable(ctx, t, h.mayWrite, h.mayWrite); err != nil {
-		return r, err
+	if b.Conversation {
+		if err := h.rewind(ctx, t, b, &r); err != nil {
+			if b.KeepFiles {
+				return r, fmt.Errorf("%w, so nothing changed", err)
+			}
+			return r, h.unrevert(ctx, t, b, store, &r, err)
+		}
+		checkpointHook(ctx, "rewound")
 	}
-	top := h.ownsDir(t.ID, t.Workspace)
-	target, store, err := h.checkpointAt(ctx, t.ID, b.To)
-	if err != nil {
-		return r, err
+	if b.KeepFiles {
+		r.Status = api.RevertKept
+		return r, nil
 	}
 	// The files as they are, first, so that the revert can be undone, and
 	// put back should it fail. A replay finds the one it took: a tree
@@ -244,16 +281,16 @@ func (h *Host) revertIn(ctx context.Context, t engine.Thread, b engine.RevertThr
 	if err := inTheWay(ctx, store, top, changes); err != nil {
 		return r, err
 	}
-	if done, err := restore(ctx, store, top, b.Revert, target, changes); err != nil {
+	plan, err := h.markApplying(ctx, store, top, t.ID, b.Revert, recovery.Commit, changes)
+	if err != nil {
+		return r, err
+	}
+	checkpointHook(ctx, "planned")
+	if err := restore(ctx, store, top, b.Revert, target, changes); err != nil {
 		if ctx.Err() != nil {
 			return r, err
 		}
-		back, again := diffTrees(ctx, store, target, recovery.Commit)
-		back = slices.DeleteFunc(back, func(c change) bool { return !slices.Contains(done, c.path) })
-		if again == nil {
-			_, again = restore(ctx, store, top, b.Revert, recovery.Commit, back)
-		}
-		if again != nil {
+		if again := undo(ctx, store, top, b.Revert, recovery.Commit, plan); again != nil {
 			return r, fmt.Errorf("%w; putting the files back as they were failed too: %v", err, again)
 		}
 		return r, fmt.Errorf("%w; the files were put back as they were", err)
@@ -261,6 +298,228 @@ func (h *Host) revertIn(ctx context.Context, t engine.Thread, b engine.RevertThr
 	checkpointHook(ctx, "applied")
 	r.Status, r.Changed = api.RevertRestored, len(changes)
 	return r, h.keepRecoveries(ctx, store, t.ID, b)
+}
+
+// applyingRef is the mark a revert leaves in the store before it writes
+// any of thread's files: a commit after the recovery checkpoint it took,
+// whose plan file lists the paths it is to write. A replay that finds it
+// undoes no others, and one that doesn't knows no file moved.
+func applyingRef(thread, revert api.ID) string {
+	return checkpointRefs(thread) + "applying/" + revert.String()
+}
+
+// markApplying leaves revert's applyingRef, with its plan: each of
+// changes, from recovery to the target, whose path in top isn't as the
+// target has it already, in git's raw diff format. A path that is, as an
+// ignored file that holds the target's bytes, is never the revert's to put
+// back. A replay keeps the plan the first attempt left, as the paths that
+// attempt wrote are as the target has them by then. It returns the plan
+// it left or found.
+func (h *Host) markApplying(ctx context.Context, store, top string, thread, revert api.ID, recovery string, changes []change) ([]change, error) {
+	ref := applyingRef(thread, revert)
+	if found, plan, err := readPlan(ctx, store, ref); found != "" || err != nil {
+		return plan, err
+	}
+	var plan []change
+	var text strings.Builder
+	for _, c := range changes {
+		var done bool
+		if c.mode == "" {
+			_, err := os.Lstat(filepath.Join(top, c.path))
+			done = errors.Is(err, os.ErrNotExist)
+		} else {
+			done, _ = isBlob(ctx, store, filepath.Join(top, c.path), c)
+		}
+		if done {
+			continue
+		}
+		plan = append(plan, c)
+		zero := strings.Repeat("0", max(len(c.wasBlob), len(c.blob)))
+		fmt.Fprintf(&text, ":%s %s %s %s M\x00%s\x00", cmp.Or(c.was, "000000"), cmp.Or(c.mode, "000000"), cmp.Or(c.wasBlob, zero), cmp.Or(c.blob, zero), c.path)
+	}
+	unlock, err := h.checkpoints.lock(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	blob, err := storeGit(ctx, store, "", "", []byte(text.String()), "hash-object", "-w", "--stdin")
+	if err != nil {
+		return nil, err
+	}
+	tree, err := storeGit(ctx, store, "", "", []byte("100644 blob "+blob+"\tplan\n"), "mktree")
+	if err != nil {
+		return nil, err
+	}
+	commit, err := storeGit(ctx, store, "", "", nil, "commit-tree", "-m", "glitched applying", "-p", recovery, tree)
+	if err != nil {
+		return nil, err
+	}
+	_, err = storeGit(ctx, store, "", "", nil, "update-ref", ref, commit, "")
+	return plan, err
+}
+
+// readPlan is the recovery commit and the plan of the applying mark at
+// ref, "" with no mark.
+func readPlan(ctx context.Context, store, ref string) (recovery string, plan []change, err error) {
+	recovery, err = storeGit(ctx, store, "", "", nil, "rev-parse", "--verify", "--quiet", ref+"^1")
+	if err != nil {
+		return "", nil, nil
+	}
+	text, err := storeGit(ctx, store, "", "", nil, "cat-file", "blob", ref+":plan")
+	if err == nil {
+		plan, err = parseChanges(text)
+	}
+	return recovery, plan, err
+}
+
+// undo puts back what a revert wrote of plan's paths, as recovery has
+// them: the same apply as the revert's, with each change's sides swapped,
+// going by the revert's journal. It removes or replaces a path only where
+// the journal says the revert wrote what the path still holds.
+func undo(ctx context.Context, store, top string, revert api.ID, recovery string, plan []change) error {
+	back := make([]change, len(plan))
+	for i, c := range plan {
+		back[i] = change{path: c.path, was: c.mode, wasBlob: c.blob, mode: c.was, blob: c.wasBlob}
+	}
+	return apply(ctx, store, top, revert, recovery, back, true)
+}
+
+// unrevert undoes, once the rewind failed with err, what an earlier
+// attempt at b wrote of the paths its plan names, as undo does. With no
+// plan and no journal no attempt moved a file, and nothing changed. A
+// journal with no plan, or a plan that isn't after b's recovery
+// checkpoint, leaves the files as they are, and says which.
+func (h *Host) unrevert(ctx context.Context, t engine.Thread, b engine.RevertThread, store string, r *api.ThreadReverted, err error) error {
+	recovery, plan, again := readPlan(ctx, store, applyingRef(t.ID, b.Revert))
+	if again != nil {
+		return fmt.Errorf("%w; the plan of an earlier attempt couldn't be read, so the files it restored were left as they are: %v", err, again)
+	}
+	if recovery == "" {
+		last, again := readJournal(journalOf(store, b.Revert))
+		switch {
+		case again != nil:
+			return fmt.Errorf("%w; the journal of an earlier attempt couldn't be read, so the files it restored were left as they are: %v", err, again)
+		case len(last) > 0:
+			return fmt.Errorf("%w; with its plan gone, the files an earlier attempt changed couldn't be put back, so they were left as they are: %s", err, strings.Join(slices.Sorted(maps.Keys(last)), ", "))
+		}
+		return fmt.Errorf("%w, so nothing changed", err)
+	}
+	if want, _ := storeGit(ctx, store, "", "", nil, "rev-parse", "--verify", "--quiet", checkpointRef(t.ID, engine.CaptureCheckpoint{Run: b.Revert, Phase: api.CheckpointRecovery})); want != recovery {
+		return fmt.Errorf("%w; the plan of an earlier attempt follows %s, not this revert's recovery checkpoint %q, so the files it restored were left as they are", err, recovery, want)
+	}
+	if again := undo(ctx, store, h.ownsDir(t.ID, t.Workspace), b.Revert, recovery, plan); again != nil {
+		r.Recovery = recovery
+		return fmt.Errorf("%w; putting back the files an earlier attempt restored failed too: %v", err, again)
+	}
+	return fmt.Errorf("%w, so nothing changed: the files an earlier attempt restored were put back as they were", err)
+}
+
+// rewind rewinds t's conversation to the end of b's run, as its provider
+// can, into r: natively, or as a new conversation the thread's next run
+// hands the kept turns to. The conversation is t's as the revert runs,
+// which a rewind decided before it may have cut since: the run must
+// still be in it, and drops only what it still holds.
+func (h *Host) rewind(ctx context.Context, t engine.Thread, b engine.RevertThread, r *api.ThreadReverted) error {
+	at := func(id api.ID) int {
+		return slices.IndexFunc(t.Runs, func(run engine.Run) bool { return run.ID == id })
+	}
+	switch i := at(b.To.ID); {
+	case i < 0:
+		return errors.New("no run of the thread's has that checkpoint")
+	case t.Runs[i].Dropped:
+		return errors.New("A rewind took this turn out of the conversation")
+	}
+	dropped := slices.DeleteFunc(slices.Clone(b.Dropped), func(id api.ID) bool { return at(id) < 0 || t.Runs[at(id)].Dropped })
+	if !slices.ContainsFunc(dropped, func(id api.ID) bool { return !t.Runs[at(id)].Silent }) {
+		return errors.New("The conversation already ends at this turn")
+	}
+	heads, compacted, err := h.store.Heads(ctx, t.ID)
+	if err != nil {
+		return err
+	}
+	spec := provider.RewindSpec{Thread: t.ID, Revert: b.Revert, Workspace: t.Workspace, Session: t.Session, Head: heads[b.To.ID]}
+	for _, run := range dropped {
+		spec.Dropped = append(spec.Dropped, heads[run])
+		spec.Compacted = spec.Compacted || compacted[run]
+	}
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	rw, err := h.providers.Rewind(ctx, t.Model.Provider, spec)
+	if err != nil {
+		return fmt.Errorf("the conversation couldn't be rewound: %w", err)
+	}
+	r.Conversation, r.Session, r.From, r.At, r.Dropped = api.RewindPortable, rw.Session, t.Session, rw.At, dropped
+	if rw.Native {
+		r.Conversation = api.RewindNative
+	}
+	return nil
+}
+
+// handoffCap is the most a handoff takes, in bytes, its own text and all.
+const handoffCap = 48 << 10
+
+// handoff is the turns a rewind kept of t's conversation, to and those
+// the conversation held before it: what the user asked in each, and the
+// reply, newest first, in at most handoffCap bytes, for a new
+// conversation to go on from. The newest is always handed, cut to fit;
+// the oldest are left out where the rest don't fit.
+func (h *Host) handoff(ctx context.Context, t engine.Thread, to api.ID) (string, error) {
+	const (
+		head  = "<rewound_conversation>\nThe user rewound this conversation to an earlier turn, and it goes on in a new session. These are its turns up to there, newest first.%s\n"
+		left  = " %d older turns didn't fit and are left out."
+		tail  = "</rewound_conversation>\n\n"
+		shape = "<turn>\n<user>\n%s\n</user>\n<assistant>\n%s\n</assistant>\n</turn>\n"
+		cut   = "\n[the rest didn't fit]"
+	)
+	// The turns get what the block's own text leaves, its note at its
+	// longest included.
+	room := handoffCap - len(fmt.Sprintf(head, fmt.Sprintf(left, len(t.Runs)))) - len(tail)
+	end := slices.IndexFunc(t.Runs, func(run engine.Run) bool { return run.ID == to })
+	clip := func(s string, n int) string {
+		if len(s) <= n {
+			return s
+		}
+		return strings.ToValidUTF8(s[:max(0, n-len(cut))], "") + cut
+	}
+	var turns []string
+	size, omitted := 0, 0
+	for i := end; i >= 0; i-- {
+		run := t.Runs[i]
+		if run.Silent || run.Dropped {
+			continue
+		}
+		if omitted > 0 {
+			omitted++
+			continue
+		}
+		var asked []string
+		for _, m := range t.Queue {
+			if m.Run == run.ID && m.State == engine.QueueDispatched {
+				asked = append(asked, m.Text)
+			}
+		}
+		reply, err := h.store.RunReply(ctx, t.ID, run.ID)
+		if err != nil {
+			return "", err
+		}
+		said, reply := strings.Join(asked, "\n\n"), strings.TrimSpace(reply)
+		if len(turns) == 0 {
+			said = clip(said, room/2)
+			reply = clip(reply, room-len(shape)-len(said))
+		}
+		turn := fmt.Sprintf(shape, said, reply)
+		if len(turns) > 0 && size+len(turn) > room {
+			omitted++
+			continue
+		}
+		size += len(turn)
+		turns = append(turns, turn)
+	}
+	note := ""
+	if omitted > 0 {
+		note = fmt.Sprintf(left, omitted)
+	}
+	return fmt.Sprintf(head, note) + strings.Join(turns, "") + tail, nil
 }
 
 // checkpointAt is the commit of thread's checkpoint to, and the store
@@ -289,6 +548,11 @@ func diffTrees(ctx context.Context, store, from, to string) ([]change, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseChanges(out)
+}
+
+// parseChanges reads changes in git's raw diff format, with -z.
+func parseChanges(out string) ([]change, error) {
 	var changes []change
 	fields := strings.Split(strings.TrimSuffix(out, "\x00"), "\x00")
 	for i := 0; i+1 < len(fields); i += 2 {
@@ -296,7 +560,10 @@ func diffTrees(ctx context.Context, store, from, to string) ([]change, error) {
 		if len(meta) != 5 {
 			return nil, fmt.Errorf("git diff-tree said %q", fields[i])
 		}
-		c := change{path: fields[i+1], fresh: meta[0] == "000000"}
+		c := change{path: fields[i+1]}
+		if meta[0] != "000000" {
+			c.was, c.wasBlob = meta[0], meta[2]
+		}
 		if meta[1] != "000000" {
 			c.mode, c.blob = meta[1], meta[3]
 		}
@@ -349,7 +616,7 @@ func inTheWay(ctx context.Context, store, top string, changes []change) error {
 			continue
 		}
 		if !fi.IsDir() {
-			if !c.fresh {
+			if c.was != "" {
 				continue
 			}
 			if ok, err := spare(c.path); err != nil || !ok {
@@ -385,39 +652,134 @@ func sameFile(top, a, b string) bool {
 // isBlob is whether the file at path is c's: a symlink for a symlink, an
 // executable for an executable, and the same blob, hashed with no filter.
 func isBlob(ctx context.Context, store, path string, c change) (bool, error) {
-	fi, err := os.Lstat(path)
-	if err != nil {
-		return false, err
-	}
-	link := fi.Mode()&os.ModeSymlink != 0
-	switch {
-	case link != (c.mode == "120000"):
-		return false, nil
-	case !link && (!fi.Mode().IsRegular() || (fi.Mode().Perm()&0o100 != 0) != (c.mode == "100755")):
-		return false, nil
-	}
-	var hash string
-	if link {
-		target, err := os.Readlink(path)
-		if err != nil {
-			return false, err
-		}
-		hash, err = storeGit(ctx, store, "", "", []byte(target), "hash-object", "--no-filters", "--stdin")
-	} else {
-		hash, err = storeGit(ctx, store, "", "", nil, "hash-object", "--no-filters", "--", path)
-	}
-	return err == nil && hash == c.blob, err
+	mode, blob, err := blobAt(ctx, store, path)
+	return err == nil && mode != "" && mode == c.mode && blob == c.blob, err
 }
 
-// restore puts the files of changes in top as tree holds them: it writes
-// tree's into a folder of the store's, then deletes those tree hasn't got
-// and moves each of the rest into place. Doing it again does the same.
-// done is the paths it changed, all of them unless it failed.
-func restore(ctx context.Context, store, top string, revert api.ID, tree string, changes []change) (done []string, err error) {
-	staged := filepath.Join(store, "restore-"+revert.String())
-	index := staged + ".index"
+// blobAt is the mode and blob, hashed with no filter, of the file or
+// symlink at path, or "" for anything else there.
+func blobAt(ctx context.Context, store, path string) (mode, blob string, err error) {
+	fi, err := os.Lstat(path)
+	switch {
+	case err != nil:
+		return "", "", err
+	case fi.Mode()&os.ModeSymlink != 0:
+		target, err := os.Readlink(path)
+		if err != nil {
+			return "", "", err
+		}
+		blob, err = storeGit(ctx, store, "", "", []byte(target), "hash-object", "--no-filters", "--stdin")
+		return "120000", blob, err
+	case !fi.Mode().IsRegular():
+		return "", "", nil
+	case fi.Mode().Perm()&0o100 != 0:
+		mode = "100755"
+	default:
+		mode = "100644"
+	}
+	blob, err = storeGit(ctx, store, "", "", nil, "hash-object", "--no-filters", "--", path)
+	return mode, blob, err
+}
+
+// restore puts changes' to-sides in top as tree holds them, as a revert
+// does, recording each change in the revert's journal.
+func restore(ctx context.Context, store, top string, revert api.ID, tree string, changes []change) error {
+	return apply(ctx, store, top, revert, tree, changes, false)
+}
+
+// journalOf is the file in store where revert records each change it
+// makes to a worktree, once it is made, in order: what a path held after.
+// An undo goes by it, never by what a path happens to hold.
+func journalOf(store string, revert api.ID) string {
+	return filepath.Join(journals(store), revert.String())
+}
+
+// journals is the folder of store's journals.
+func journals(store string) string { return filepath.Join(store, "glitched-applying") }
+
+// step is what a revert left at a path, as its journal records it: a file
+// or a symlink it wrote, with the size and modification time the path had
+// once written, or a file it deleted, or a folder it made or removed.
+type step struct {
+	kind, mode, blob string
+	size, mtime      int64
+}
+
+// The kinds of step.
+const (
+	wroteFile     = "wrote"
+	deletedFile   = "deleted"
+	madeFolder    = "made"
+	removedFolder = "removed"
+)
+
+// readJournal is each path's last step in the journal at path, none for a
+// journal never written. A record cut short, as by a crash, is no step,
+// and readJournal cuts it off the journal, synced, so that the next record
+// appended starts a record of its own.
+func readJournal(path string) (map[string]step, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]step{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if whole := bytes.LastIndexByte(data, 0) + 1; whole < len(data) {
+		f, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			return nil, err
+		}
+		err = f.Truncate(int64(whole))
+		if err == nil {
+			err = f.Sync()
+		}
+		if err = errors.Join(err, f.Close()); err != nil {
+			return nil, err
+		}
+		data = data[:whole]
+	}
+	last := map[string]step{}
+	records := strings.Split(string(data), "\x00")
+	for _, r := range records[:len(records)-1] {
+		f := strings.SplitN(r, " ", 6)
+		if len(f) != 6 {
+			return nil, fmt.Errorf("the revert's journal %s says %q", path, r)
+		}
+		s := step{kind: f[0], mode: f[1], blob: f[2]}
+		fmt.Sscan(f[3], &s.size)
+		fmt.Sscan(f[4], &s.mtime)
+		last[f[5]] = s
+	}
+	return last, nil
+}
+
+// applying is one apply of a revert's changes to top: forward, or an undo.
+type applying struct {
+	ctx                         context.Context
+	store, top, staged, journal string
+	undo                        bool
+	// folders are the to-side's folders above the changes' files.
+	folders map[string]bool
+	// last is each path's last step in the journal.
+	last map[string]step
+	// left are the paths apply refused, each named once.
+	left []string
+}
+
+// apply puts changes' to-sides in top as tree holds them: it writes tree's
+// files into a folder of the store's, then deletes, then writes, each path
+// through put. Doing it again does the same. A path put refuses stays as
+// it is, and fails the apply, by name, once the rest are done.
+func apply(ctx context.Context, store, top string, revert api.ID, tree string, changes []change, undo bool) error {
+	a := &applying{ctx: ctx, store: store, top: top, staged: filepath.Join(store, "restore-"+revert.String()), journal: journalOf(store, revert), undo: undo, folders: map[string]bool{}}
+	var err error
+	if a.last, err = readJournal(a.journal); err != nil {
+		return err
+	}
+	index := a.staged + ".index"
 	clean := func() {
-		os.RemoveAll(staged)
+		os.RemoveAll(a.staged)
 		os.Remove(index)
 		os.Remove(index + ".lock")
 	}
@@ -425,81 +787,261 @@ func restore(ctx context.Context, store, top string, revert api.ID, tree string,
 	defer clean()
 	var paths []byte
 	for _, c := range changes {
-		if c.mode != "" {
-			paths = append(append(paths, c.path...), 0)
-		}
-	}
-	if err := os.MkdirAll(staged, 0o700); err != nil {
-		return nil, err
-	}
-	if _, err := storeGit(ctx, store, staged, index, nil, "read-tree", tree); err != nil {
-		return nil, err
-	}
-	if _, err := storeGit(ctx, store, staged, index, paths, "checkout-index", "-z", "--stdin", "-f"); err != nil {
-		return nil, err
-	}
-	for _, c := range changes {
-		if c.mode != "" {
-			continue
-		}
-		if err := remove(top, c.path); err != nil {
-			return done, fmt.Errorf("%s couldn't be deleted: %w", c.path, err)
-		}
-		done = append(done, c.path)
-		dir := filepath.Dir(filepath.Join(top, c.path))
-		for dir != top && os.Remove(dir) == nil {
-			dir = filepath.Dir(dir)
-		}
-	}
-	for _, c := range changes {
 		if c.mode == "" {
 			continue
 		}
-		checkpointHook(ctx, "applying")
-		if err := ctx.Err(); err != nil {
-			return done, err
-		}
-		to := filepath.Join(top, c.path)
-		if fi, err := os.Lstat(to); err == nil && fi.IsDir() {
-			done = append(done, c.path)
-			if err := os.RemoveAll(to); err != nil {
-				return done, fmt.Errorf("%s couldn't be put back: %w", c.path, err)
-			}
-		}
-		err := os.MkdirAll(filepath.Dir(to), 0o755)
-		if err == nil {
-			err = moveInto(filepath.Join(staged, c.path), to)
-		}
-		if err != nil {
-			return done, fmt.Errorf("%s couldn't be put back: %w", c.path, err)
-		}
-		if !slices.Contains(done, c.path) {
-			done = append(done, c.path)
+		paths = append(append(paths, c.path...), 0)
+		for d := filepath.Dir(c.path); d != "."; d = filepath.Dir(d) {
+			a.folders[filepath.ToSlash(d)] = true
 		}
 	}
-	return done, nil
+	if err := os.MkdirAll(a.staged, 0o700); err != nil {
+		return err
+	}
+	if _, err := storeGit(ctx, store, a.staged, index, nil, "read-tree", tree); err != nil {
+		return err
+	}
+	if _, err := storeGit(ctx, store, a.staged, index, paths, "checkout-index", "-z", "--stdin", "-f"); err != nil {
+		return err
+	}
+	for _, deleting := range []bool{true, false} {
+		for _, c := range changes {
+			if (c.mode == "") != deleting {
+				continue
+			}
+			s := "applying"
+			if deleting {
+				s = "deleting"
+			}
+			checkpointHook(ctx, s)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := a.put(c); err != nil {
+				return err
+			}
+		}
+	}
+	if len(a.left) > 0 {
+		return fmt.Errorf("%s changed since the revert began, so it was left as it is", strings.Join(a.left, ", "))
+	}
+	return nil
 }
 
-// remove deletes the file at rel in top. It is gone already when a file
-// stands where a folder above it was; a folder there is one a replayed
-// revert wrote, its files the revert's, as inTheWay checked.
-func remove(top, rel string) error {
-	for dir := filepath.Dir(rel); dir != "."; dir = filepath.Dir(dir) {
-		if fi, err := os.Lstat(filepath.Join(top, dir)); err == nil && !fi.IsDir() {
+// refuse names rel among the paths apply left.
+func (a *applying) refuse(rel string) {
+	if !slices.Contains(a.left, rel) {
+		a.left = append(a.left, rel)
+	}
+}
+
+// record appends a step at rel to the journal, synced: what the apply just
+// left there, or a folder it is about to remove. An undo counts a folder
+// with no step as one the revert never touched, so a removal is recorded
+// first: a crash between leaves a folder the undo refuses.
+func (a *applying) record(rel string, s step) error {
+	checkpointHook(a.ctx, "journaling")
+	if err := a.ctx.Err(); err != nil {
+		return err
+	}
+	_, missing := os.Stat(a.journal)
+	if err := os.MkdirAll(filepath.Dir(a.journal), 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(a.journal, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(f, "%s %s %s %d %d %s\x00", s.kind, cmp.Or(s.mode, "-"), cmp.Or(s.blob, "-"), s.size, s.mtime, rel)
+	if err == nil {
+		err = f.Sync()
+	}
+	if err = errors.Join(err, f.Close()); err == nil && missing != nil {
+		err = syncDir(filepath.Dir(a.journal))
+	}
+	if err == nil {
+		a.last[rel] = s
+	}
+	return err
+}
+
+// syncDir makes the names in dir durable.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	return errors.Join(d.Sync(), d.Close())
+}
+
+// put is the one way a revert changes a path in top: it puts c's to-side
+// there, the file or symlink staged holds, or nothing. It looks at the
+// path just before it acts, and leaves a path that holds the to-side
+// already. Otherwise it removes or replaces only what holds c's from-side:
+// forward, what the revert found there; in an undo, only what the
+// revert's journal says it left there, a file of the same size and time,
+// or a file it deleted. Any other path it refuses, as it does a folder
+// that isn't one the to-side has or the revert made. It never removes
+// anything recursively, nor a folder that isn't empty, nor writes through
+// a file or a symlink where a folder above the path was. Each change it
+// makes it records in the journal.
+func (a *applying) put(c change) error {
+	for d := filepath.Dir(c.path); d != "."; d = filepath.Dir(d) {
+		if fi, err := os.Lstat(filepath.Join(a.top, d)); err == nil && !fi.IsDir() {
+			if c.mode != "" {
+				a.refuse(filepath.ToSlash(d))
+			}
 			return nil
 		}
 	}
-	path := filepath.Join(top, rel)
+	path := filepath.Join(a.top, c.path)
 	fi, err := os.Lstat(path)
+	var mode, blob string
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		return nil
+		fi = nil
 	case err != nil:
 		return err
-	case fi.IsDir():
-		return os.RemoveAll(path)
+	case !fi.IsDir():
+		if mode, blob, err = blobAt(a.ctx, a.store, path); err != nil {
+			return err
+		}
+		if mode == "" {
+			a.refuse(c.path)
+			return nil
+		}
 	}
-	return os.Remove(path)
+	dir := fi != nil && fi.IsDir()
+	last := a.last[c.path]
+	// ours is whether a folder at path is one the apply may count as the
+	// to-side's, or remove: forward, any it finds; in an undo, one the
+	// revert made, or one it never touched where the to-side has one.
+	ours := !a.undo || last.kind == madeFolder || last.kind == "" && a.folders[c.path]
+	switch {
+	case c.mode != "" && mode == c.mode && blob == c.blob:
+		return nil
+	case c.mode == "" && fi == nil:
+		return a.prune(c.path)
+	case c.mode == "" && dir && a.folders[c.path] && ours:
+		return nil
+	}
+	switch {
+	case dir && c.was == "" && ours && isEmpty(path):
+		if err := a.record(c.path, step{kind: removedFolder}); err != nil {
+			return err
+		}
+		if os.Remove(path) != nil {
+			a.refuse(c.path)
+			return nil
+		}
+		if c.mode == "" {
+			return a.prune(c.path)
+		}
+	case dir && !isEmpty(path):
+		a.refuseFolder(c.path)
+		return nil
+	case dir:
+		a.refuse(c.path)
+		return nil
+	case fi == nil && a.undo && last.kind != deletedFile && last.kind != removedFolder:
+		a.refuse(c.path)
+		return nil
+	case fi == nil:
+	case mode != c.was || blob != c.wasBlob:
+		a.refuse(c.path)
+		return nil
+	case a.undo && (last.kind != wroteFile || last.mode != mode || last.blob != blob || last.size != fi.Size() || last.mtime != fi.ModTime().UnixNano()):
+		a.refuse(c.path)
+		return nil
+	}
+	if c.mode == "" {
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("%s couldn't be deleted: %w", c.path, err)
+		}
+		if err := a.record(c.path, step{kind: deletedFile}); err != nil {
+			return err
+		}
+		return a.prune(c.path)
+	}
+	if ok, err := a.folder(filepath.Dir(c.path)); err != nil || !ok {
+		return err
+	}
+	if err := moveInto(filepath.Join(a.staged, c.path), path); err != nil {
+		return fmt.Errorf("%s couldn't be put back: %w", c.path, err)
+	}
+	fi, err = os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	return a.record(c.path, step{kind: wroteFile, mode: c.mode, blob: c.blob, size: fi.Size(), mtime: fi.ModTime().UnixNano()})
+}
+
+// refuseFolder refuses the folder at rel, naming everything it holds first.
+func (a *applying) refuseFolder(rel string) {
+	root := filepath.Join(a.top, rel)
+	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && p != root && len(a.left) < 20 {
+			r, _ := filepath.Rel(a.top, p)
+			a.refuse(filepath.ToSlash(r))
+		}
+		return nil
+	})
+	a.refuse(rel)
+}
+
+// isEmpty is whether the folder at path holds nothing.
+func isEmpty(path string) bool {
+	entries, err := os.ReadDir(path)
+	return err == nil && len(entries) == 0
+}
+
+// folder makes rel, a folder of top's, with each folder above it the apply
+// makes, as the journal records. It refuses a folder there that an undo
+// finds where the revert left anything but a folder it made, as one made
+// since, and a file or a symlink in the way, reporting whether rel is a
+// folder now.
+func (a *applying) folder(rel string) (bool, error) {
+	if rel == "." {
+		return true, nil
+	}
+	if ok, err := a.folder(filepath.Dir(rel)); err != nil || !ok {
+		return ok, err
+	}
+	rel = filepath.ToSlash(rel)
+	fi, err := os.Lstat(filepath.Join(a.top, rel))
+	switch {
+	case err == nil && fi.IsDir() && a.undo && a.last[rel].kind != "" && a.last[rel].kind != madeFolder:
+		a.refuseFolder(rel)
+		return false, nil
+	case err == nil && fi.IsDir():
+		return true, nil
+	case err == nil:
+		a.refuse(rel)
+		return false, nil
+	case !errors.Is(err, os.ErrNotExist):
+		return false, err
+	}
+	if err := os.Mkdir(filepath.Join(a.top, rel), 0o755); err != nil {
+		return false, err
+	}
+	return true, a.record(rel, step{kind: madeFolder})
+}
+
+// prune removes each folder above rel that is empty now and the apply's
+// to remove: forward, one it found; in an undo, one the revert made.
+func (a *applying) prune(rel string) error {
+	for d := filepath.ToSlash(filepath.Dir(rel)); d != "."; d = filepath.ToSlash(filepath.Dir(d)) {
+		if a.undo && a.last[d].kind != madeFolder || !isEmpty(filepath.Join(a.top, d)) {
+			return nil
+		}
+		if err := a.record(d, step{kind: removedFolder}); err != nil {
+			return err
+		}
+		if os.Remove(filepath.Join(a.top, d)) != nil {
+			return nil
+		}
+	}
+	return nil
 }
 
 // moveInto moves from over to. Where it can't, as from is on another
@@ -572,6 +1114,18 @@ func (h *Host) keepRecoveries(ctx context.Context, store string, thread api.ID, 
 	for _, ref := range refs[:max(0, len(refs)-keptRecoveries)] {
 		if ref != took && ref != to {
 			update += "delete " + ref + "\n"
+		}
+	}
+	// A revert's applying mark matters only until it commits, and an
+	// earlier one of the thread's has: the lane runs them one at a time.
+	marks, err := storeGit(ctx, store, "", "", nil, "for-each-ref", "--format=%(refname)", checkpointRefs(thread)+"applying/")
+	if err != nil {
+		return err
+	}
+	for _, ref := range strings.Fields(marks) {
+		if ref != applyingRef(thread, b.Revert) {
+			update += "delete " + ref + "\n"
+			os.Remove(filepath.Join(journals(store), filepath.Base(ref)))
 		}
 	}
 	if update == "" {

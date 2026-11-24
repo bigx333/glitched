@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -12,11 +13,14 @@ import (
 )
 
 // revertAsk is a revert the alert asks about: of t's files to to, the
-// checkpoint before a turn when undoTurn.
+// checkpoint before a turn when undoTurn; or a rewind of its conversation
+// to to's run, with its files too when files.
 type revertAsk struct {
 	t        thread
 	to       api.CheckpointRef
 	undoTurn bool
+	rewind   bool
+	files    bool
 }
 
 // whyNoRevert is why t's files can't be reverted now, "" when they can,
@@ -29,11 +33,11 @@ func (a *app) whyNoRevert(t thread) string {
 	case t.View.Branch == "":
 		return "Revert needs this thread to run in its own worktree"
 	case t.View.Live():
-		return "Stop the thread before reverting its files"
+		return "Stop the thread before reverting it"
 	case working(a.below(t)) > 0:
 		return "Stop every thread under this one before reverting its files"
 	case t.Transcript != nil && !t.Transcript.Reverting.IsZero():
-		return "A revert of the files is under way"
+		return "A revert is under way"
 	}
 	if other := a.inWorktree(t); other != "" {
 		return fmt.Sprintf("The thread %q runs in this worktree too", other)
@@ -74,37 +78,69 @@ func (a *app) inWorktree(t thread) string {
 	return titles[0]
 }
 
+// whyNoRewind is why t's conversation can't be rewound to run now, "" when
+// it can.
+func (a *app) whyNoRewind(t thread, run api.ID) string {
+	switch {
+	case t.View.Live():
+		return "Stop the thread before reverting it"
+	case !t.Transcript.Reverting.IsZero():
+		return "A revert is under way"
+	case t.Transcript.Dropped(run):
+		return "A rewind took this turn out of the conversation"
+	case !t.Transcript.Followed(run):
+		return "The conversation already ends at this turn"
+	}
+	return ""
+}
+
 // checkpointChip is a top-level run's chip on its work row: how many files
 // the run changed, as its checkpoint saw them, or that they weren't saved
 // and why, with a menu that puts them back as the run left them or as they
-// were before it. Where the thread can't revert, the chip's tooltip says
-// why, and so does the menu, above what it can't do.
+// were before it, or rewinds the conversation to the run, with its files
+// or without. The chip's tooltip says what the chip can do and why it
+// can't do the rest, and the menu leads with the same reasons.
 func (a *app) checkpointChip(c *ui.Context, t thread, run api.ID) {
 	if !t.View.Parent.IsZero() || t.Transcript == nil {
 		return
 	}
 	at, before, saved, hasBefore := t.Transcript.Checkpoint(run)
-	if t.View.Branch != "" && !saved {
+	rewindWhy := a.whyNoRewind(t, run)
+	if t.View.Branch != "" && !saved && rewindWhy != "" {
 		return
 	}
-	// Each action's reason, once, for the chip's tooltip and the menu
-	// alike: the thread's, or the checkpoint's the action puts back.
+	// Each action's reason, once, for the tooltip and the menu alike: the
+	// thread's, or the checkpoint's the action puts back.
 	why := a.whyNoRevert(t)
-	hereWhy, undoWhy, tip := why, why, why
+	hereWhy, undoWhy := why, why
+	var details []string
 	if why == "" && at.Status != api.CheckpointReady {
-		hereWhy, tip = "This turn's files weren't saved", "This turn's files weren't saved"
-		if at.Reason != "" {
-			tip += ": " + at.Reason
-		}
+		hereWhy = "This turn's files weren't saved"
+		details = append(details, strings.TrimSuffix(hereWhy+": "+at.Reason, ": "))
 	}
 	if why == "" && (!hasBefore || before.Status != api.CheckpointReady) {
 		undoWhy = "The files before this turn weren't saved"
-		tip = strings.TrimPrefix(tip+"\n"+undoWhy, "\n")
-		if before.Reason != "" {
-			tip += ": " + before.Reason
-		}
+		details = append(details, strings.TrimSuffix(undoWhy+": "+before.Reason, ": "))
 	}
-	reasons := slices.Compact(slices.DeleteFunc([]string{hereWhy, undoWhy}, func(s string) bool { return s == "" }))
+	bothWhy := cmp.Or(rewindWhy, hereWhy)
+	reasons := slices.Compact(slices.DeleteFunc([]string{hereWhy, undoWhy, rewindWhy}, func(s string) bool { return s == "" }))
+	if why != "" {
+		details = []string{why}
+	}
+	if rewindWhy != "" && rewindWhy != why {
+		details = append(details, rewindWhy)
+	}
+	files, rewind := hereWhy == "" || undoWhy == "", rewindWhy == ""
+	var tip []string
+	switch {
+	case files && rewind:
+		tip = []string{"Revert this turn's files or conversation"}
+	case files:
+		tip = []string{"Revert this turn's files"}
+	case rewind:
+		tip = []string{"Rewind the conversation to this turn"}
+	}
+	tip = append(tip, details...)
 	label := ""
 	switch {
 	case t.View.Branch == "":
@@ -124,10 +160,7 @@ func (a *app) checkpointChip(c *ui.Context, t thread, run api.ID) {
 	if label == "" {
 		b.Label("Checkpoint")
 	}
-	if tip == "" {
-		tip = "Revert this turn's files"
-	}
-	a.tip(c, b, tip)
+	a.tip(c, b, strings.Join(tip, "\n"))
 	b.Menu(func(m *ui.Menu) {
 		// A system menu may show no subtitle on an item it greys out, so
 		// each reason the menu refuses for leads it, on a line of its own.
@@ -140,17 +173,29 @@ func (a *app) checkpointChip(c *ui.Context, t thread, run api.ID) {
 		}
 		here := m.Item("Restore files to here").Disabled(hereWhy != "")
 		undo := m.Item("Undo this turn's files").Disabled(undoWhy != "")
-		if here.Chosen() {
-			a.reverting, a.revertOpen = revertAsk{t: t, to: api.CheckpointRef{Phase: api.CheckpointRun, ID: run}}, true
-		}
-		if undo.Chosen() {
+		m.Separator()
+		rewind := m.Item("Rewind conversation to here").Disabled(rewindWhy != "")
+		both := m.Item("Rewind conversation and files to here").Disabled(bothWhy != "")
+		to := api.CheckpointRef{Phase: api.CheckpointRun, ID: run}
+		switch {
+		case here.Chosen():
+			a.reverting, a.revertOpen = revertAsk{t: t, to: to}, true
+		case undo.Chosen():
 			a.reverting, a.revertOpen = revertAsk{t: t, to: api.CheckpointRef{Phase: before.Phase, ID: before.Run}, undoTurn: true}, true
+		case rewind.Chosen():
+			a.reverting, a.revertOpen = revertAsk{t: t, to: to, rewind: true}, true
+		case both.Chosen():
+			a.reverting, a.revertOpen = revertAsk{t: t, to: to, rewind: true, files: true}, true
 		}
 	})
 }
 
-// revertAlert asks before the files are put back: what goes back, that a
-// checkpoint of them as they are comes first, and that commits stay.
+// rewindBody is what a rewind of the conversation does, as its alert says.
+const rewindBody = "The agent's next turn follows this one, and it forgets the turns after it, which stay in the timeline. Where its provider can't cut its own conversation, it starts a new one that's handed this turn and the ones before it."
+
+// revertAlert asks before the files are put back, or the conversation is
+// rewound: what goes back, that a checkpoint of the files as they are
+// comes first, and that commits stay.
 func (a *app) revertAlert(c *ui.Context) {
 	r := a.reverting
 	if r.t.Thread == nil {
@@ -158,11 +203,20 @@ func (a *app) revertAlert(c *ui.Context) {
 	}
 	head := "Restore the files to this turn?"
 	body := "The worktree's files go back to how this turn left them."
-	if r.undoTurn {
+	files := " Changes made since, by the agent or by hand, go back too. The files as they are now are saved first, so Undo brings them back.\n\nCommits stay: git status shows the restored files as changes."
+	ok := "Restore files"
+	switch {
+	case r.rewind && r.files:
+		head, body, ok = "Rewind the conversation and files to this turn?", rewindBody+"\n\nThe worktree's files go back to how this turn left them too."+files, "Rewind"
+	case r.rewind:
+		head, body, files, ok = "Rewind the conversation to this turn?", rewindBody+" The files stay as they are.", "", "Rewind"
+	case r.undoTurn:
 		head, body = "Undo this turn's files?", "The worktree's files go back to how they were before this turn."
 	}
-	body += " Changes made since, by the agent or by hand, go back too. The files as they are now are saved first, so Undo brings them back.\n\nCommits stay: git status shows the restored files as changes."
-	switch i := a.alert(c, &a.revertOpen, head, body, "Cancel", "Restore files"); {
+	switch i := a.alert(c, &a.revertOpen, head, body+files, "Cancel", ok); {
+	case i == 1 && r.rewind:
+		a.backend.Rewind(r.t.env, r.t.id(), r.to, r.files)
+		a.reverting = revertAsk{}
 	case i == 1:
 		a.backend.Revert(r.t.env, r.t.id(), r.to)
 		a.reverting = revertAsk{}
@@ -172,9 +226,12 @@ func (a *app) revertAlert(c *ui.Context) {
 }
 
 // revertDivider is the row es[i] of the timeline: how a revert of the
-// files ended, with an Undo that puts back the files it saved first, while
-// no message, run or revert came after it: after one that failed too, for
-// files its rollback couldn't put back.
+// files or a rewind of the conversation ended, with an Undo that puts back
+// the files it saved first, while no message, run or revert came after it:
+// after one that failed too, for files its rollback couldn't put back. A
+// rewind says whether the agent kept its own conversation or was handed a
+// new one, as the run after it took it up once one has. Undo puts only the
+// files back.
 func (a *app) revertDivider(c *ui.Context, t thread, es []entry, i int) {
 	r := es[i].revert
 	last := !slices.ContainsFunc(es[i+1:], func(e entry) bool {
@@ -194,15 +251,32 @@ func (a *app) revertDivider(c *ui.Context, t thread, es []entry, i int) {
 	}
 	ui.Row(c).Key(es[i].key).Gap(10).AlignItems(ui.Center).Padding(4, 12).Transition(riseIn).Children(func() {
 		ui.Box(c).Height(1).Grow(1).Background(palette.border)
-		switch r.Status {
-		case api.RevertRestored:
+		switch {
+		case r.Conversation == api.RewindFailed:
+			ui.Text(c, "Couldn't rewind the conversation: "+r.Error).FontSize(11.5).TextColor(palette.red).Shrink(1)
+			undo()
+		case r.Rewound():
+			text := "Rewound the conversation"
+			if r.Status == api.RevertRestored {
+				text += " and restored " + plural(r.Changed, "file")
+			}
+			ui.Text(c, text).FontSize(11.5).TextColor(palette.faint).SingleLine()
+			kind, tip := "Native", "The agent's own conversation, cut after this turn"
+			if cmp.Or(r.Took, r.Conversation) == api.RewindPortable {
+				kind, tip = "Portable", "A new conversation, handed the turns up to here"
+			}
+			a.tip(c, ui.Box(c).Label(kind).Padding(1, 6).Radius(6).Border(1, palette.border).Children(func() {
+				ui.Text(c, kind).FontSize(10.5).TextColor(palette.faint).AccessHidden(true)
+			}), tip)
+			undo()
+		case r.Status == api.RevertRestored:
 			text := "Restored " + plural(r.Changed, "file")
 			if r.To.Phase == api.CheckpointRecovery {
 				text = "Put back " + plural(r.Changed, "file") + " as they were before a revert"
 			}
 			ui.Text(c, text).FontSize(11.5).TextColor(palette.faint).SingleLine()
 			undo()
-		case api.RevertUnchanged:
+		case r.Status == api.RevertUnchanged:
 			ui.Text(c, "The files were already as they were then").FontSize(11.5).TextColor(palette.faint).SingleLine()
 		default:
 			ui.Text(c, "Couldn't revert the files: "+r.Error).FontSize(11.5).TextColor(palette.red).Shrink(1)

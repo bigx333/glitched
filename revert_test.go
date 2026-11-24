@@ -45,7 +45,7 @@ func TestATurnsFilesRevertAndUndo(t *testing.T) {
 	head, branch := gitRun(t, wt, "rev-parse", "HEAD"), branchIn(t, wt)
 	h.click("1 file")
 	h.tt.Advance(time.Second)
-	if m := h.tt.Menu(); !slices.Equal(m, []string{"Restore files to here", "Undo this turn's files"}) {
+	if m := h.tt.Menu(); !slices.Equal(m, []string{"The conversation already ends at this turn", "-", "Restore files to here", "Undo this turn's files", "-", "Rewind conversation to here", "Rewind conversation and files to here"}) {
 		t.Fatalf("the chip's menu: %q", m)
 	}
 	if err := h.tt.ChooseMenuItem("Undo this turn's files"); err != nil {

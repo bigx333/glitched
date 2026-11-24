@@ -422,7 +422,7 @@ func (s *Store) Closing(ctx context.Context) ([]api.ID, error) {
 // Reverting lists the threads of the reverts of files not done, once for
 // each.
 func (s *Store) Reverting(ctx context.Context) ([]api.ID, error) {
-	return ids(ctx, s.db, `SELECT thread FROM effects WHERE kind = ? AND state <> 'done' ORDER BY thread`, engine.EffectKind(engine.RevertThread{}))
+	return ids(ctx, s.db, `SELECT thread FROM effects WHERE kind = ? AND state <> 'done' AND json_extract(payload, '$.KeepFiles') IS NOT 1 ORDER BY thread`, engine.EffectKind(engine.RevertThread{}))
 }
 
 func ids(ctx context.Context, q querier, query string, args ...any) ([]api.ID, error) {
@@ -485,12 +485,12 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 		}
 	}
 
-	err = each(ctx, q, `SELECT id, generation, state, signalled, outcome, error, ended, model, access, silent, limit_resets, resume_cancelled FROM runs WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
+	err = each(ctx, q, `SELECT id, generation, state, signalled, outcome, error, ended, model, access, silent, limit_resets, resume_cancelled, dropped FROM runs WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
 		var r engine.Run
 		var outcome, access sql.NullByte
 		var ended, resets sql.NullInt64
 		var model sql.NullString
-		if err := rows.Scan(idScan{&r.ID}, &r.Generation, &r.State, &r.Signalled, &outcome, &r.Error, &ended, &model, &access, &r.Silent, &resets, &r.ResumeCancelled); err != nil {
+		if err := rows.Scan(idScan{&r.ID}, &r.Generation, &r.State, &r.Signalled, &outcome, &r.Error, &ended, &model, &access, &r.Silent, &resets, &r.ResumeCancelled, &r.Dropped); err != nil {
 			return err
 		}
 		if resets.Valid {
@@ -620,11 +620,11 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO runs (thread, ord, id, generation, state, signalled, outcome, error, ended, model, access, silent, limit_resets, resume_cancelled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO runs (thread, ord, id, generation, state, signalled, outcome, error, ended, model, access, silent, limit_resets, resume_cancelled, dropped) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (thread, ord) DO UPDATE SET state = excluded.state, signalled = excluded.signalled, outcome = excluded.outcome,
 				error = excluded.error, ended = excluded.ended, limit_resets = excluded.limit_resets,
-				resume_cancelled = excluded.resume_cancelled`,
-			t.ID[:], i, r.ID[:], r.Generation, r.State, r.Signalled, outcome, r.Error, ended, string(admitted), r.Access, r.Silent, resets, r.ResumeCancelled); err != nil {
+				resume_cancelled = excluded.resume_cancelled, dropped = excluded.dropped`,
+			t.ID[:], i, r.ID[:], r.Generation, r.State, r.Signalled, outcome, r.Error, ended, string(admitted), r.Access, r.Silent, resets, r.ResumeCancelled, r.Dropped); err != nil {
 			return fmt.Errorf("store: run %s: %w", r.ID, err)
 		}
 	}

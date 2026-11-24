@@ -120,19 +120,26 @@ func (a *Adapter) DefaultModel(ctx context.Context, workspace string) (string, e
 
 // Open runs the run on the thread's claude: the one its last run left,
 // when that claude was started as this run would start one, or else a new
-// one. A thread's first run creates its Claude session, and a later one
-// resumes it; a session that turns out to exist, or not to, takes the
-// other flag. Both answers come before any model call.
+// one. The thread's session is spec.Session, else the thread's uuid. A
+// thread's first run creates its Claude session, and a later one resumes
+// it; a session that turns out to exist, or not to, takes the other flag.
+// Both answers come before any model call. A run that takes up a rewind
+// never runs on the claude an earlier run left, which holds the
+// conversation before it.
 func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
 	prog, err := a.program()
 	if err != nil {
 		return nil, err
 	}
 	args := a.argv(spec)
+	session := cmp.Or(spec.Session, uuidOf(spec.Thread))
 	// What a claude is started with is fixed for its life: a run that
 	// would start it otherwise needs another one.
-	id, _ := json.Marshal([]any{prog.Path, spec.Workspace, prog.Env, prog.Args, args})
+	id, _ := json.Marshal([]any{prog.Path, spec.Workspace, prog.Env, prog.Args, args, session})
 	key := string(id)
+	if spec.ResumeOnly && spec.Rewound != nil {
+		return nil, provider.ErrDeclined
+	}
 	// Claude Code's own gates, read now: the user may have turned idle
 	// compaction off since the thread's last run, and the account may near
 	// its limit on another thread's word.
@@ -142,7 +149,13 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		}
 	}
 	keep := func(p *proc) { a.parked().Park(spec.Thread, key, p) }
-	p, ok, err := a.parked().Take(ctx, spec.Thread, key)
+	var p *proc
+	var ok bool
+	if spec.Rewound != nil {
+		err = a.parked().Drop(ctx, spec.Thread)
+	} else {
+		p, ok, err = a.parked().Take(ctx, spec.Thread, key)
+	}
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("claude: the thread's earlier claude may still run: %w", err)
@@ -150,10 +163,18 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		a.told(spec, p)
 		return newAgent(spec, p, keep), nil
 	}
-	session := uuidOf(spec.Thread)
-	if spec.ResumeOnly {
+	var native bool
+	var took string
+	switch {
+	case spec.Rewound != nil:
+		p, native, took, err = a.rewound(ctx, prog, spec, args, session)
+		if took != session {
+			id, _ = json.Marshal([]any{prog.Path, spec.Workspace, prog.Env, prog.Args, args, took})
+			key = string(id)
+		}
+	case spec.ResumeOnly:
 		p, err = launch(ctx, prog, spec, slices.Concat(args, []string{"--resume", session}))
-	} else {
+	default:
 		flags := []string{"--session-id", "--resume"}
 		if spec.Generation > 1 {
 			slices.Reverse(flags)
@@ -180,7 +201,9 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		}
 	}
 	a.told(spec, p)
-	return newAgent(spec, p, keep), nil
+	g := newAgent(spec, p, keep)
+	g.native, g.session = native, took
+	return g, nil
 }
 
 // told keeps what the run's claude said of its auto mode as Claude

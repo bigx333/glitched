@@ -84,6 +84,9 @@ type Run struct {
 	// the user stopped the engine continuing it once the limit resets.
 	Limit           *api.UsageLimit
 	ResumeCancelled bool
+	// Dropped marks a run a rewind took out of the thread's conversation:
+	// it stays in the timeline, and the agent no longer has it.
+	Dropped bool
 }
 
 type Message struct {

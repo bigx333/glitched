@@ -157,6 +157,10 @@ type TurnEnded struct {
 	// Limit is the provider's usage limit that failed the turn, nil when
 	// none did.
 	Limit *UsageLimit `json:"limit,omitempty"`
+	// Head is where the run left the thread's conversation, in its
+	// provider's terms, which only its adapter reads: a revert rewinds the
+	// conversation to it. "" where the adapter doesn't say.
+	Head string `json:"head,omitempty"`
 }
 
 // ResumeCancelled: the user stopped the engine continuing Run, which a
@@ -320,10 +324,14 @@ type ThreadRenamed struct {
 }
 
 // SessionBound is the provider's id for the thread's conversation, as the
-// run's agent bound it: the thread's later runs resume it.
+// run's agent bound it: the thread's later runs resume it. Rewound is,
+// on the first run after a revert rewound the conversation, how the
+// run's agent took it up: natively, or as a new session the run's
+// message hands the kept turns to.
 type SessionBound struct {
-	Run     ID     `json:"run"`
-	Session string `json:"session"`
+	Run     ID         `json:"run"`
+	Session string     `json:"session"`
+	Rewound RewindKind `json:"rewound,omitempty"`
 }
 
 // ThreadConfigured is the model and access the thread's turns run at from
@@ -427,12 +435,15 @@ type CheckpointCaptured struct {
 	Ms      int64            `json:"ms"`
 }
 
-// ThreadReverting is a revert of the thread's files the engine is to do:
-// Revert is its command, and To the checkpoint it puts back. It moves the
-// thread's revision and nothing else of its view.
+// ThreadReverting is a revert the engine is to do: Revert is its command,
+// and To the checkpoint it goes back to. It puts the files back unless
+// KeepFiles, and rewinds the conversation too when Conversation. It moves
+// the thread's revision and nothing else of its view.
 type ThreadReverting struct {
-	Revert ID            `json:"revert"`
-	To     CheckpointRef `json:"to"`
+	Revert       ID            `json:"revert"`
+	To           CheckpointRef `json:"to"`
+	Conversation bool          `json:"conversation,omitempty"`
+	KeepFiles    bool          `json:"keepFiles,omitempty"`
 }
 
 type RevertStatus string
@@ -441,20 +452,56 @@ const (
 	RevertRestored  RevertStatus = "restored"
 	RevertUnchanged RevertStatus = "unchanged" // the files were as To has them
 	RevertFailed    RevertStatus = "failed"    // nothing changed, or what had was put back
+	RevertKept      RevertStatus = "kept"      // the revert left the files as they were, as asked
+)
+
+// RewindKind is how a revert rewound a thread's conversation.
+type RewindKind string
+
+const (
+	// RewindNative: the provider's own conversation, cut after To's run.
+	RewindNative RewindKind = "native"
+	// RewindPortable: a new conversation, whose first message hands the
+	// agent each kept turn's message and reply.
+	RewindPortable RewindKind = "portable"
+	// RewindFailed: the conversation couldn't be rewound, so nothing changed.
+	RewindFailed RewindKind = "failed"
 )
 
 // ThreadReverted is what a revert did: Changed is how many paths it put
 // back as To has them, and Recovery the commit of the checkpoint it took
 // of the files first, which a revert to it undoes. Error says why one
-// failed. HEAD, the index and the branch stay as they were. It moves the
-// thread's revision and nothing else of its view.
+// failed. HEAD, the index and the branch stay as they were.
+//
+// Conversation is how it rewound the conversation, "" when it wasn't
+// asked to. Session is then the thread's conversation from now on, ""
+// for a new one its provider names, and From the one it was. At is where
+// a native rewind's new conversation branches off From, in its provider's
+// terms, when the provider makes it at the thread's next run. Until that
+// run takes it up, natively or as a portable one where its provider can't
+// or lost the one it made, the rewind is pending. Dropped is the
+// runs after To the conversation held, which it no longer does. A revert
+// either does all it was asked or changes nothing.
+//
+// It moves the thread's revision; one that rewound the conversation sets
+// the thread's session, and clears what the thread knew of its context.
 type ThreadReverted struct {
-	Revert   ID            `json:"revert"`
-	To       CheckpointRef `json:"to"`
-	Status   RevertStatus  `json:"status"`
-	Changed  int           `json:"changed,omitempty"`
-	Recovery string        `json:"recovery,omitempty"`
-	Error    string        `json:"error,omitempty"`
+	Revert       ID            `json:"revert"`
+	To           CheckpointRef `json:"to"`
+	Status       RevertStatus  `json:"status"`
+	Changed      int           `json:"changed,omitempty"`
+	Recovery     string        `json:"recovery,omitempty"`
+	Error        string        `json:"error,omitempty"`
+	Conversation RewindKind    `json:"conversation,omitempty"`
+	Session      string        `json:"session,omitempty"`
+	From         string        `json:"from,omitempty"`
+	At           string        `json:"at,omitempty"`
+	Dropped      []ID          `json:"dropped,omitempty"`
+}
+
+// Rewound is whether the revert rewound the thread's conversation.
+func (r ThreadReverted) Rewound() bool {
+	return r.Conversation == RewindNative || r.Conversation == RewindPortable
 }
 
 func (ThreadCreated) eventType() string       { return "thread.created" }

@@ -28,6 +28,9 @@ type Agent struct {
 	keep func(*proc) // parks p for the thread's next run
 	once sync.Once
 	kept bool
+	// native is that the run resumed the conversation the thread's rewind
+	// forked.
+	native bool
 
 	// ctx ends the turn's calls; only Close cancels it.
 	ctx    context.Context
@@ -73,10 +76,15 @@ type Agent struct {
 var (
 	_ provider.Agent     = (*Agent)(nil)
 	_ provider.Sessioned = (*Agent)(nil)
+	_ provider.Rewinding = (*Agent)(nil)
 )
 
 // Session is Codex's id of the thread's conversation.
 func (g *Agent) Session() string { return g.p.threadID() }
+
+// Native is whether the run resumed the conversation the thread's rewind
+// forked: not where the rewind was portable, or Codex lost the fork.
+func (g *Agent) Native() bool { return g.native }
 
 // ask is a request Codex waits on. It gets one reply: the user's answer,
 // or cancel once the turn stops waiting.
@@ -264,7 +272,7 @@ func (g *Agent) endLocked(end provider.TurnEnded) {
 			g.queueLocked(it.work(g.spec.Workspace))
 		}
 	}
-	end.Tokens = g.tokens
+	end.Tokens, end.Head = g.tokens, g.turn
 	g.ended = true
 	if g.turn != "" {
 		g.p.ended(g.turn)

@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"strings"
 
 	"glitched/internal/api"
@@ -42,6 +44,73 @@ func (s *Store) RunReply(ctx context.Context, thread, run api.ID) (string, error
 		return all.String(), rows.Err()
 	}
 	return reply.String(), rows.Err()
+}
+
+// Heads are where each of the thread's runs left its conversation, as its
+// turn.ended says, by run, while the thread's conversation still holds
+// it, and the runs whose agent compacted it. A run that started a
+// conversation of its own, as a portable rewind's first run does, leaves
+// the heads before it behind.
+func (s *Store) Heads(ctx context.Context, thread api.ID) (heads map[api.ID]string, compacted map[api.ID]bool, err error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT type, json_extract(payload, '$.run'), json_extract(payload, '$.head'),
+			json_extract(payload, '$.session'), json_extract(payload, '$.rewound') FROM events
+		WHERE thread = ? AND (type = ? OR type = ? OR type = ? AND json_extract(payload, '$.compacted') = 1) ORDER BY seq`,
+		thread[:], api.EventType(api.TurnEnded{}), api.EventType(api.SessionBound{}), api.EventType(api.ContextReported{}))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	heads, compacted = map[api.ID]string{}, map[api.ID]bool{}
+	session := ""
+	for rows.Next() {
+		var kind, run string
+		var head, bound, rewound sql.NullString
+		if err := rows.Scan(&kind, &run, &head, &bound, &rewound); err != nil {
+			return nil, nil, err
+		}
+		id, err := api.ParseID(run)
+		if err != nil {
+			return nil, nil, err
+		}
+		switch kind {
+		case api.EventType(api.TurnEnded{}):
+			heads[id] = head.String
+		case api.EventType(api.SessionBound{}):
+			// A conversation of a run's own, not one a native rewind
+			// forked, holds none of the runs before it.
+			if rewound.String == string(api.RewindPortable) || rewound.String == "" && session != "" && bound.String != session {
+				clear(heads)
+			}
+			session = bound.String
+		default:
+			compacted[id] = true
+		}
+	}
+	return heads, compacted, rows.Err()
+}
+
+// Rewound is the revert that last rewound the thread's conversation, while
+// the thread's next run still has to take it up: a new conversation, a
+// native one its provider makes then, or one its provider made already,
+// which the run may find lost. nil when there is none.
+func (s *Store) Rewound(ctx context.Context, thread api.ID) (*api.ThreadReverted, error) {
+	var kind string
+	var payload []byte
+	err := s.db.QueryRowContext(ctx, `SELECT type, payload FROM events WHERE thread = ? AND (
+		type = ? AND json_extract(payload, '$.conversation') IN (?, ?) OR type = ? AND json_extract(payload, '$.rewound') IS NOT NULL)
+		ORDER BY seq DESC LIMIT 1`,
+		thread[:], api.EventType(api.ThreadReverted{}), api.RewindNative, api.RewindPortable, api.EventType(api.SessionBound{})).Scan(&kind, &payload)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && kind != api.EventType(api.ThreadReverted{}) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var r api.ThreadReverted
+	if err := json.Unmarshal(payload, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
 }
 
 // Read answers q from one read transaction, so the projection and the
