@@ -14,7 +14,8 @@ import (
 // deleted there. A report follows the local rules: a run's end reports
 // done or failed unless it was stopping, silent or uncertain, and a
 // request reports the run blocked unless the run is silent. A worktree
-// that wasn't made there reports failed: the child never runs.
+// that wasn't made there reports failed: the child never runs. Settled
+// there before its first run, it starts none.
 func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, bool, error) {
 	if fresh {
 		r.Run, r.Silent, r.Slot, r.Pending = api.ID{}, false, api.RunIdle, nil
@@ -35,6 +36,10 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 		case api.ThreadCreated:
 			if b.Origin != nil {
 				r.Slot = api.RunStarting
+			}
+		case api.DispositionChanged:
+			if b.Disposition.State == api.Settled && r.Run.IsZero() && r.Slot == api.RunStarting {
+				r.Slot = api.RunIdle
 			}
 		case api.WorktreeFailed:
 			key := derive(r.Thread, "worktree")
