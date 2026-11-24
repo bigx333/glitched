@@ -96,7 +96,12 @@ function skipped(s) {
   };
 }
 
+// A popover shuts as its header goes, as another thread shows: it opens
+// again only on a click.
 export function update({ state, event }) {
+  if (event.kind === "app" && event.type === "place.hidden") {
+    return state.open === event.data.key ? { state: { ...state, open: null } } : {};
+  }
   if (event.kind !== "ui" || !event.place) return {};
   switch (event.handler) {
     case "popover.toggle":

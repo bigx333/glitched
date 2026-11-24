@@ -123,3 +123,37 @@ func TestComingBackToTheWindowReadsTheSkillsAgain(t *testing.T) {
 	h.tt.SetWindowActive(true)
 	h.until("the new skill's pill", func() bool { h.tt.Frame(); return h.tt.HasText("Skills 3") })
 }
+
+// The Skills popover shuts as its thread's header goes, and coming back to
+// the thread doesn't open it again without a click.
+func TestTheSkillsPopoverStaysShutAfterSwitchingThreads(t *testing.T) {
+	dir, work := tempDir(t), t.TempDir()
+	const description = "Review the diff without changing it."
+	writeSkill(t, filepath.Join(work, ".glitched", "skills"), "review", description)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(nil))
+	seed(t, d, work, "Thread with skills")
+	seed(t, d, t.TempDir(), "Thread without skills")
+	installOwn(t, dir, "skills")
+	h := start(t, dir)
+	if err := h.a.plugins.SetGranted("skills", "threads:read", true); err != nil {
+		t.Fatal(err)
+	}
+	h.a.select_(h.thread("Thread with skills"))
+	h.until("first header's Skills pill", func() bool { h.tt.Frame(); return h.tt.HasText("Skills 1") })
+	if err := h.tt.Click("Skills 1"); err != nil {
+		t.Fatal(err)
+	}
+	h.until("open Skills popover", func() bool { h.tt.Frame(); return h.tt.HasText(description) })
+	h.a.select_(h.thread("Thread without skills"))
+	h.until("other header", func() bool {
+		h.tt.Frame()
+		return !h.tt.HasText("Skills 1") && !h.tt.HasText(description)
+	})
+	settleTester(h.tt)
+	h.a.select_(h.thread("Thread with skills"))
+	h.until("original header", func() bool { h.tt.Frame(); return h.tt.HasText("Skills 1") })
+	settleTester(h.tt)
+	if h.tt.HasText(description) {
+		t.Fatal("the Skills popover reopened without a click")
+	}
+}
