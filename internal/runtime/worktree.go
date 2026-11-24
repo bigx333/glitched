@@ -133,6 +133,17 @@ func (h *Host) createInWorktree(ctx context.Context, c api.Command, b api.Thread
 			return refuse("the parent runs in this engine's worktrees with no project of its own; start it from its project's folder")
 		}
 	}
+	// A fork from its source's own worktree belongs to the source's
+	// project too, which outlives that worktree.
+	if b.Fork != nil {
+		src, err := h.store.Thread(ctx, b.Fork.Thread)
+		if err != nil {
+			return api.Receipt{}, err
+		}
+		if src.Exists() && b.Workspace == src.Workspace && src.Project != "" {
+			project = src.Project
+		}
+	}
 	target, err := h.store.Thread(ctx, c.Target)
 	if err != nil {
 		return api.Receipt{}, err

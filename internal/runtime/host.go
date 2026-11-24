@@ -942,6 +942,9 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		native = r.Native()
 	}
 	switch {
+	case rewound != nil && forked != nil && slashCommand(text):
+		// A fork's turns would make the command words: the rewind and
+		// the fork wait for the next run, which takes both up.
 	case rewound != nil:
 		took = &engine.Bound{Run: b.Run, Session: session, Rewound: api.RewindPortable}
 		if native {

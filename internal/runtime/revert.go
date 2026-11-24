@@ -9,7 +9,6 @@ import (
 	"io"
 	"io/fs"
 	"maps"
-	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -480,9 +479,30 @@ func (h *Host) handoff(ctx context.Context, t engine.Thread, to api.ID, frame ha
 		cut   = "\n[the rest didn't fit]"
 	)
 	head, tail := frame.head, frame.tail
+	// A fork's conversation goes on from its source's, back to the first
+	// thread of its line that is no fork.
+	type part struct {
+		t  engine.Thread
+		to api.ID
+	}
+	line, runs := []part{{t, to}}, len(t.Runs)
+	for {
+		f, err := h.store.Origin(ctx, line[len(line)-1].t.ID)
+		if err != nil {
+			return "", err
+		}
+		if f == nil {
+			break
+		}
+		src, err := h.forkSource(ctx, *f)
+		if err != nil {
+			return "", err
+		}
+		line, runs = append(line, part{src, f.Run}), runs+len(src.Runs)
+	}
 	// The turns get what the block's own text leaves, its note at its
 	// longest included.
-	room := handoffCap - len(fmt.Sprintf(head, fmt.Sprintf(left, math.MaxInt32))) - len(tail)
+	room := handoffCap - len(fmt.Sprintf(head, fmt.Sprintf(left, runs))) - len(tail)
 	clip := func(s string, n int) string {
 		if len(s) <= n {
 			return s
@@ -491,9 +511,8 @@ func (h *Host) handoff(ctx context.Context, t engine.Thread, to api.ID, frame ha
 	}
 	var turns []string
 	size, omitted := 0, 0
-	// A fork's conversation goes on from its source's, back to the first
-	// thread of its line that is no fork.
-	for {
+	for _, p := range line {
+		t, to := p.t, p.to
 		end := slices.IndexFunc(t.Runs, func(run engine.Run) bool { return run.ID == to })
 		for i := end; i >= 0; i-- {
 			run := t.Runs[i]
@@ -527,17 +546,6 @@ func (h *Host) handoff(ctx context.Context, t engine.Thread, to api.ID, frame ha
 			size += len(turn)
 			turns = append(turns, turn)
 		}
-		f, err := h.store.Origin(ctx, t.ID)
-		if err != nil {
-			return "", err
-		}
-		if f == nil {
-			break
-		}
-		if t, err = h.forkSource(ctx, *f); err != nil {
-			return "", err
-		}
-		to = f.Run
 	}
 	note := ""
 	if omitted > 0 {
