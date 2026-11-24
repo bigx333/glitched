@@ -420,6 +420,13 @@ func TestAllowForThisSession(t *testing.T) {
 				return
 			}
 			h.click("Allow for this session")
+			at, z := h.a.answerAt, h.a.zap
+			if mid := at.session.X + at.session.W/2 - at.row.X; z.request.IsZero() || z.denied || z.ox < mid-1 || z.ox > mid+1 {
+				t.Errorf("the zap %+v breaks up from %v in the row; want Allow for this session's middle, %v", z, z.ox, mid)
+			}
+			if !slices.ContainsFunc(z.parts, func(p zapPart) bool { return p.r.W == at.session.W && p.r.X == at.session.X-at.row.X }) {
+				t.Errorf("the zap's parts %+v leave out Allow for this session", z.parts)
+			}
 			h.until("the session answer", func() bool { return h.tt.HasText("Allowed for this session") })
 			if got := string(lastRequest(th).Answer); got != `{"allow":true,"session":true}` {
 				t.Errorf("Allow for this session answered %s", got)

@@ -799,7 +799,10 @@ func (g *Agent) request(m message) {
 				Description string `json:"description"`
 			} `json:"options"`
 		} `json:"questions"`
-		Mode            string          `json:"mode"`
+		Mode string `json:"mode"`
+		Meta struct {
+			Persist json.RawMessage `json:"persist"`
+		} `json:"_meta"`
 		Message         string          `json:"message"`
 		ServerName      string          `json:"serverName"`
 		RequestedSchema json.RawMessage `json:"requestedSchema"`
@@ -841,8 +844,12 @@ func (g *Agent) request(m message) {
 		b.Session = slices.ContainsFunc(r.Decisions, func(d json.RawMessage) bool { return string(bytes.TrimSpace(d)) == `"acceptForSession"` })
 	case "item/fileChange/requestApproval":
 		// Codex keeps a grant for the session only for a change it asks
-		// about with no reason; one with a reason it asks again about.
-		b = body{Operation: "edit", Reason: r.Reason, Session: r.Reason == ""}
+		// about with no reason; one with a reason, even "", it asks again.
+		var asked struct {
+			Reason *string `json:"reason"`
+		}
+		json.Unmarshal(m.Params, &asked)
+		b = body{Operation: "edit", Reason: r.Reason, Session: asked.Reason == nil}
 		if it := g.items[r.ItemID]; it != nil {
 			b.Path = strings.Join(it.paths(g.spec.Workspace), ", ")
 		}
@@ -860,6 +867,16 @@ func (g *Agent) request(m message) {
 			return
 		}
 		b = body{Operation: "answer " + r.ServerName, Reason: r.Message}
+		// An MCP tool's approval names the grants Codex keeps in its
+		// persist: "session", or a list of them.
+		var one string
+		var persist []string
+		if json.Unmarshal(r.Meta.Persist, &one) == nil {
+			persist = []string{one}
+		} else {
+			json.Unmarshal(r.Meta.Persist, &persist)
+		}
+		b.Session = slices.Contains(persist, "session")
 	case "item/tool/requestUserInput":
 		if len(r.Questions) == 1 && strings.HasPrefix(r.Questions[0].ID, toolApproval) {
 			q := r.Questions[0]
@@ -995,6 +1012,9 @@ func approve(a *ask, allow, session bool) any {
 		}
 		return map[string]any{"permissions": granted, "scope": map[bool]string{true: "session", false: "turn"}[session]}
 	case a.method == "mcpServer/elicitation/request":
+		if session {
+			return map[string]any{"action": "accept", "content": map[string]any{}, "_meta": map[string]any{"persist": "session"}}
+		}
 		if allow {
 			return map[string]any{"action": "accept", "content": map[string]any{}}
 		}

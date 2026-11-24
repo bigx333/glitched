@@ -775,12 +775,15 @@ func (f *fake) play(n int, turn, said string) {
 		}
 		f.item("item/completed", cmd)
 		f.message("msg-"+turn, "decision "+d)
-	case "file", "file-no-reason":
+	case "file", "file-no-reason", "file-empty-reason":
 		fc := map[string]any{"type": "fileChange", "id": "fc-1", "changes": []any{map[string]any{"path": filepath.Join(f.cwd, "a.txt"), "kind": map[string]any{"type": "add"}, "diff": "+hi\n"}}, "status": "inProgress"}
 		f.item("item/started", fc)
 		params := map[string]any{"threadId": thread, "turnId": turn, "itemId": "fc-1", "reason": "write a.txt", "startedAtMs": 1}
-		if f.scenario == "file-no-reason" {
+		switch f.scenario {
+		case "file-no-reason":
 			params["reason"] = nil
+		case "file-empty-reason":
+			params["reason"] = ""
 		}
 		d := decision(f.answer("item/fileChange/requestApproval", params))
 		fc["status"] = map[bool]string{true: "completed", false: "declined"}[strings.HasPrefix(d, "accept")]
@@ -810,12 +813,23 @@ func (f *fake) play(n int, turn, said string) {
 		a := f.answer("item/tool/requestUserInput", map[string]any{"threadId": thread, "turnId": turn, "itemId": "q-1", "isBlocking": true, "autoResolutionMs": nil, "questions": []any{map[string]any{
 			"id": "color", "header": "Color", "question": "Which color?", "isOther": true, "isSecret": false, "options": options}}})
 		f.message("msg-"+turn, "answered "+string(a.Result))
-	case "elicitation", "elicitation-fields":
+	case "elicitation", "elicitation-fields", "elicitation-session", "elicitation-session-always", "elicitation-always":
 		schema := map[string]any{"type": "object", "properties": map[string]any{}}
 		if f.scenario == "elicitation-fields" {
 			schema["properties"] = map[string]any{"name": map[string]any{"type": "string"}}
 		}
-		f.answer("mcpServer/elicitation/request", map[string]any{"threadId": thread, "turnId": turn, "serverName": "glitched-browser", "environmentId": nil, "mode": "form", "_meta": nil, "message": "Open the page?", "requestedSchema": schema})
+		// Codex's own approval of an MCP tool call names the grants it
+		// keeps in _meta.persist: one, or a list.
+		var meta any
+		switch f.scenario {
+		case "elicitation-session":
+			meta = map[string]any{"codex_approval_kind": "mcp_tool_call", "persist": "session"}
+		case "elicitation-session-always":
+			meta = map[string]any{"codex_approval_kind": "mcp_tool_call", "persist": []any{"session", "always"}}
+		case "elicitation-always":
+			meta = map[string]any{"codex_approval_kind": "mcp_tool_call", "persist": "always"}
+		}
+		f.answer("mcpServer/elicitation/request", map[string]any{"threadId": thread, "turnId": turn, "serverName": "glitched-browser", "environmentId": nil, "mode": "form", "_meta": meta, "message": "Open the page?", "requestedSchema": schema})
 		f.message("msg-"+turn, "elicited")
 	case "unknown-request":
 		f.answer("item/weird/request", map[string]any{"threadId": thread, "turnId": turn})
