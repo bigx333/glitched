@@ -308,7 +308,7 @@ func tailnetState(t api.Tailnet) string {
 }
 
 func pair(_ context.Context, args []string) error {
-	fs := flag.NewFlagSet("pair", flag.ExitOnError)
+	fs := flag.NewFlagSet("pair", flag.ContinueOnError)
 	dir := dirFlag(fs)
 	name := fs.String("name", "", "mint a token with this label")
 	list := fs.Bool("list", false, "list the tokens")
@@ -318,7 +318,9 @@ func pair(_ context.Context, args []string) error {
 	working := fs.Int("working", 0, "with -link, how many of the link's children may work at once; 0 is this engine's child limit")
 	all := fs.Int("all", 0, "with -link, how many children the link may have; 0 is this engine's child limit")
 	children := fs.String("children", "", "set this machine's setting for children from other machines: off, or the most access any link's child may run at, ask, auto-edits or full")
-	fs.Parse(args)
+	if err := parseQuiet(fs, args); err != nil {
+		return err
+	}
 	set := given(fs)
 	switch {
 	case fs.NArg() > 0:
@@ -420,14 +422,16 @@ func setChildren(dir, level string) error {
 // link adds, lists and removes the other machines this engine's agents
 // may start children on.
 func link(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("link", flag.ExitOnError)
+	fs := flag.NewFlagSet("link", flag.ContinueOnError)
 	dir := dirFlag(fs)
 	add := fs.String("add", "", "add the machine at -server with this label, with the token its glitched pair -link printed")
 	server := fs.String("server", "", "with -add, the machine's tailnet address")
 	token := fs.String("token", "", "with -add, the link's token")
 	list := fs.Bool("list", false, "list the machines")
 	remove := fs.String("remove", "", "remove the machine with this label and forget its token")
-	fs.Parse(args)
+	if err := parseQuiet(fs, args); err != nil {
+		return err
+	}
 	set := given(fs)
 	switch {
 	case fs.NArg() > 0:
@@ -461,6 +465,24 @@ func link(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("added %s: engine %s, link %s\n", m.Label, m.Engine, m.Link)
+	return nil
+}
+
+// parseQuiet parses args into fs, a set for a command that takes a token,
+// with errors that name no argument: a mistyped token would otherwise be
+// printed back to the terminal. -h prints the flags.
+func parseQuiet(fs *flag.FlagSet, args []string) error {
+	fs.Init(fs.Name(), flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	err := fs.Parse(args)
+	switch {
+	case errors.Is(err, flag.ErrHelp):
+		fs.SetOutput(os.Stderr)
+		fs.PrintDefaults()
+		return usageError(fs.Name() + ": its flags are above")
+	case err != nil:
+		return usageError(fs.Name() + ": an unknown flag, or a flag's value that doesn't parse; see -h")
+	}
 	return nil
 }
 
