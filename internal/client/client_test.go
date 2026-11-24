@@ -597,9 +597,9 @@ func TestATurnRunsFromCreateThroughAnApproval(t *testing.T) {
 
 }
 
-// A StartNow is refused while a run is live. The same command lands once
-// the run is over, so its failed row offers a retry.
-func TestARefusedStartNowLandsOnRetryOnceTheRunEnds(t *testing.T) {
+// A Resume with nothing held is refused while a run is live. The same
+// command lands once the run is over, so its failed row offers a retry.
+func TestARefusedResumeLandsOnRetryOnceTheRunEnds(t *testing.T) {
 	m, g := manager(t, stateDir(t))
 	env := m.Envs()[0]
 	online(t, g, env)
@@ -608,17 +608,17 @@ func TestARefusedStartNowLandsOnRetryOnceTheRunEnds(t *testing.T) {
 	g.until(t, "the first run waiting on its approval", func() bool {
 		return env.Threads[id].View.Run == api.RunWaiting && len(env.Threads[id].Pending) == 0
 	})
-	now := m.Send(env, id, "second", api.StartNow)
-	g.until(t, "the StartNow refused", func() bool { p := env.Threads[id].Pending; return len(p) == 1 && p[0].Err != nil })
+	resume := m.Resume(env, id)
+	g.until(t, "the Resume refused", func() bool { p := env.Threads[id].Pending; return len(p) == 1 && p[0].Err != nil })
 	if p := env.Threads[id].Pending[0]; !errors.As(p.Err, new(*api.RejectedError)) || p.Terminal() {
-		t.Fatalf("a StartNow on a busy thread failed with %v (terminal %v), want a rejection worth a retry", p.Err, p.Terminal())
+		t.Fatalf("a Resume on a busy thread failed with %v (terminal %v), want a rejection worth a retry", p.Err, p.Terminal())
 	}
 
 	m.Interrupt(env, id)
 	g.until(t, "the first run over", func() bool {
 		return env.Threads[id].View.Run == api.RunIdle && len(env.Threads[id].Pending) == 1
 	})
-	m.Retry(env, id, now)
+	m.Retry(env, id, resume)
 	g.until(t, "the retry landed", func() bool { return len(env.Threads[id].Pending) == 0 }, func() string { return describePending(env.Threads[id].Pending) })
 }
 

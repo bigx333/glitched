@@ -336,11 +336,6 @@ func driveModes(t *testing.T, ep api.Endpoint) api.ID {
 	submit(t, ep, thread, dispatch("first", api.StartNow))
 	until(t, ep, thread, "approval", waiting)
 
-	_, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: dispatch("now", api.StartNow)})
-	if rej := (*api.RejectedError)(nil); !errors.As(err, &rej) {
-		t.Fatalf("StartNow on a busy thread: %v, want rejected", err)
-	}
-
 	submit(t, ep, thread, dispatch("hurry", api.SteerActive))
 	until(t, ep, thread, "steer delivered", func(api.Thread) bool {
 		return strings.Contains(transcript(t, events(t, ep, thread)), "steered: hurry")
@@ -459,6 +454,23 @@ func TestCrashMidTurn(t *testing.T) {
 		}
 		assertReplay(t, n.st)
 	})
+}
+
+// A start now on a busy thread waits for the run, first in the queue, and
+// starts the moment the run ends.
+func TestStartNowOnABusyThreadGoesFirst(t *testing.T) {
+	n := start(t, dbPath(t), fake.New(fake.Turn(true)))
+	thread := newThread(t, n.h)
+	submit(t, n.h, thread, dispatch("first", api.StartNow))
+	asked := until(t, n.h, thread, "approval", waiting)
+	submit(t, n.h, thread, dispatch("after", api.AfterActive))
+	now := submit(t, n.h, thread, dispatch("now", api.StartNow)).Command
+	if th := until(t, n.h, thread, "two queued", func(th api.Thread) bool { return th.Queued == 2 }); th.Run != api.RunWaiting {
+		t.Fatalf("a start now on a busy thread changed its run: %v", th.Run)
+	}
+	respond(t, n.h, thread, asked.Requests[0])
+	until(t, n.h, thread, "the start now's turn", func(th api.Thread) bool { return waiting(th) && th.Turn != nil && th.Turn.Run == now && th.Queued == 1 })
+	assertReplay(t, n.st)
 }
 
 func TestReplayMatchesProjections(t *testing.T) {

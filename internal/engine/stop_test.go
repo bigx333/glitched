@@ -112,6 +112,38 @@ func TestAResumeStartsTheWakesAStopHeld(t *testing.T) {
 	}
 }
 
+// A start now on a busy thread stops nothing: it goes first in the
+// queue, ahead of what was queued before it, and starts when the run ends.
+func TestStartNowOnABusyThreadGoesFirst(t *testing.T) {
+	f, run := running(t)
+	queued := f.must(dispatch("queued", api.AfterActive))
+	_, effects, err := f.submit(dispatch("now", api.StartNow))
+	if err != nil || len(effects) != 0 || f.th.Live().ID != run {
+		t.Fatalf("start now on a busy thread: %v, %v; want it queued and the run left alone", effects, err)
+	}
+	s, ok := started(f.see(engine.Ended{Run: run, Outcome: api.OutcomeCompleted}))
+	if !ok || s.Text != "now" || f.state(queued) != engine.QueueReady {
+		t.Fatalf("the run ended and started %+v, %v; want the start now first, the queued message after", s, ok)
+	}
+}
+
+// A run that ends while it stops was stopped, even when its end beats
+// word that its interrupt reached it: the wake a child sent waits.
+func TestARunThatEndsWhileStoppingIsStopped(t *testing.T) {
+	f, run := running(t)
+	f.see(report(api.ReportDone, "child", "result"))
+	f.must(api.TurnInterrupt{})
+	if s, ok := started(f.see(engine.Ended{Run: run, Outcome: api.OutcomeCompleted})); ok {
+		t.Fatalf("a run that completed before its interrupt landed started the wake %q; want it held", s.Text)
+	}
+	if !engine.View(f.th).Resumable {
+		t.Fatal("the held wake is not resumable")
+	}
+	if late := f.see(engine.InterruptSent{Run: run}); len(late) != 0 {
+		t.Fatalf("the interrupt's late word did something: %v", late)
+	}
+}
+
 // Resume is offered only when it starts something: on an idle thread
 // holding what a stop held, or only a wake. While the run still stops, a
 // resume with only a wake waiting is refused, not dropped, so the user

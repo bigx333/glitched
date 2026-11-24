@@ -233,9 +233,6 @@ func TestTablesRefuseUnlistedEdges(t *testing.T) {
 
 func TestRefusedCommandsAreRejected(t *testing.T) {
 	f, _, req := waiting(t)
-	if _, _, err := f.submit(dispatch("now", api.StartNow)); !errors.As(err, new(*api.RejectedError)) {
-		t.Fatalf("StartNow on a busy thread: %v, want rejected", err)
-	}
 	f.must(answer(req))
 	if _, _, err := f.submit(answer(req)); !errors.Is(err, api.ErrAlreadyAnswered) {
 		t.Fatalf("second answer: %v, want ErrAlreadyAnswered", err)
