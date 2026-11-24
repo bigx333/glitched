@@ -203,6 +203,17 @@ func (p *remotes) there() []api.Thread {
 	return out
 }
 
+// parentIdle waits for A's parent to have no turn live or queued, such
+// as the one a report woke: a stop of A while it is live leaves it lost,
+// and the parent's next turn queued behind it.
+func (p *remotes) parentIdle() {
+	p.t.Helper()
+	until(p.t, "the parent idle", func() bool {
+		snap, _ := p.a.Endpoint().Read(context.Background(), api.Query{Thread: p.parent})
+		return len(snap.Threads) == 1 && snap.Threads[0].Run == api.RunIdle && snap.Threads[0].Queued == 0
+	})
+}
+
 func (p *remotes) bound(id api.ID) engine.Remote {
 	p.t.Helper()
 	until(p.t, "the placeholder bound", func() bool { return p.placeholder(id).Remote.State == engine.RemoteBoundState })
@@ -281,10 +292,7 @@ func TestARemoteChildIsCreatedOnceItsMachineIsUpAndReportsBack(t *testing.T) {
 	until(t, "the child idle there", func() bool {
 		return p.placeholder(kid).Remote.Slot == api.RunIdle && p.placeholder(kid).Remote.Run != (api.ID{})
 	})
-	until(t, "the parent's woken turn over", func() bool {
-		snap, _ := p.a.Endpoint().Read(context.Background(), api.Query{Thread: p.parent})
-		return len(snap.Threads) == 1 && snap.Threads[0].Run == api.RunIdle && snap.Threads[0].Queued == 0
-	})
+	p.parentIdle()
 	if _, errs := spawn(t, p.a.Endpoint(), p.adA, p.parent, fake.Child{Title: "here", Task: "go"}); errs[0] != nil {
 		t.Fatalf("a child once the remote one is idle there: %v; want it started", errs[0])
 	}
@@ -819,6 +827,7 @@ func TestAWorktreeBCantMakeReportsFailedOnce(t *testing.T) {
 	kid := p.place("there")
 	there := p.bound(kid).Thread
 	until(t, "the failed report", func() bool { reports, _ := p.reports(kid); return len(reports) == 1 })
+	p.parentIdle()
 	p.stopA()
 	p.renames(there, 140)
 	p.startA()
