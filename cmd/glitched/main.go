@@ -470,7 +470,8 @@ func link(ctx context.Context, args []string) error {
 
 // parseQuiet parses args into fs, a set for a command that takes a token,
 // with errors that name no argument: a mistyped token would otherwise be
-// printed back to the terminal. -h prints the flags.
+// printed back to the terminal. -h prints the flags and exits 0, as
+// flag.ExitOnError does.
 func parseQuiet(fs *flag.FlagSet, args []string) error {
 	fs.Init(fs.Name(), flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -479,7 +480,7 @@ func parseQuiet(fs *flag.FlagSet, args []string) error {
 	case errors.Is(err, flag.ErrHelp):
 		fs.SetOutput(os.Stderr)
 		fs.PrintDefaults()
-		return usageError(fs.Name() + ": its flags are above")
+		os.Exit(0)
 	case err != nil:
 		return usageError(fs.Name() + ": an unknown flag, or a flag's value that doesn't parse; see -h")
 	}
