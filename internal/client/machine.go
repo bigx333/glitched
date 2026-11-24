@@ -83,6 +83,7 @@ func (m *Manager) Configure(change func(*daemon.Config)) error {
 	was.ProviderLog = cfg.ProviderLog
 	// The engine reads it as it starts, which is when it acts on it.
 	was.ContinueAfterRestart = cfg.ContinueAfterRestart
+	was.SyncSkills = cfg.SyncSkills
 	if reflect.DeepEqual(cfg, was) && m.embedded != nil {
 		applyLive(m.embedded, cfg)
 	} else {

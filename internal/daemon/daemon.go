@@ -88,6 +88,10 @@ type Config struct {
 	// engine works, the display free to sleep. Nil defaults to true; it
 	// does nothing where the engine has no way to, as off a Mac.
 	KeepAwake *bool `json:"keep_awake,omitempty"`
+	// SyncSkills has the GUI on this machine give the engines it pairs with
+	// the skills in <Dir>/skills, and drop them there once it is off. Nil
+	// defaults to true. Only the GUI reads it: the engine has nothing to do.
+	SyncSkills *bool `json:"sync_skills,omitempty"`
 	// Inhibit holds the machine awake until its ctx ends; nil uses the
 	// system's.
 	Inhibit func(ctx context.Context) error `json:"-"`
@@ -120,6 +124,10 @@ func (cfg Config) CompactBeforeExpireEnabled() bool {
 // KeepAwakeEnabled reports whether cfg keeps the machine awake while agents
 // work. It defaults to true when unset.
 func (cfg Config) KeepAwakeEnabled() bool { return cfg.KeepAwake == nil || *cfg.KeepAwake }
+
+// SyncSkillsEnabled reports whether the GUI syncs this machine's skills
+// to the engines it pairs with. It defaults to true when unset.
+func (cfg Config) SyncSkillsEnabled() bool { return cfg.SyncSkills == nil || *cfg.SyncSkills }
 
 const configFile = "engine.json"
 

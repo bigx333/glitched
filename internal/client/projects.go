@@ -78,7 +78,11 @@ func (m *Manager) Skills(e *Env, thread api.ID, done func(api.SkillList, error))
 		return
 	}
 	ectx := e.ctx
+	src, push := m.skillSource(e)
 	m.wg.Go(func() {
+		if push {
+			src.push(ectx, s.ep)
+		}
 		ctx, cancel := context.WithTimeout(ectx, skillsTimeout)
 		defer cancel()
 		list, err := k.Skills(ctx, api.SkillQuery{Thread: thread})
