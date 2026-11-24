@@ -241,8 +241,8 @@ func TestADropsGCEndsWithinItsBudget(t *testing.T) {
 func TestADropWhoseGCWasCutShortIsReclaimed(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		// gc is the script of a gc cut short: once, after which a gc gets
-		// its full budget, or every time.
+		// gc is how often a gc is cut short: once, after which git gc
+		// runs as it is with its full budget, or every time.
 		gc   string
 		then func(t *testing.T, h *Host, store string, gone api.ID)
 	}{
@@ -280,12 +280,8 @@ func TestADropWhoseGCWasCutShortIsReclaimed(t *testing.T) {
 			oldLimit := checkpointLimit
 			checkpointLimit = h.checkpoints.total()
 			defer func() { checkpointLimit = oldLimit }()
-			script := "exec sleep 10"
-			if tc.gc == "once" {
-				ran := filepath.Join(t.TempDir(), "ran")
-				script = fmt.Sprintf("[ -e %q ] || { touch %q; exec sleep 10; }", ran, ran)
-			}
-			wrapGit(t, "--prune=now", script)
+			path := os.Getenv("PATH")
+			wrapGit(t, "--prune=now", "exec sleep 10")
 			oldBudget := dropGCBudget
 			dropGCBudget = 100 * time.Millisecond
 			defer func() { dropGCBudget = oldBudget }()
@@ -299,6 +295,7 @@ func TestADropWhoseGCWasCutShortIsReclaimed(t *testing.T) {
 				t.Fatalf("the store holds %d bytes after a gc cut short, want at least %d", h.checkpoints.total(), checkpointLimit)
 			}
 			if tc.gc == "once" {
+				t.Setenv("PATH", path)
 				dropGCBudget = oldBudget
 			}
 			tc.then(t, h, store, gone.ID)
