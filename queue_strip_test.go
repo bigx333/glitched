@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"image"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -243,6 +244,34 @@ func TestTheQueuesActionsLineUpAcrossRows(t *testing.T) {
 	}
 }
 
+// inkWidth is how wide the text at r is drawn: from the first column of
+// its box with a pixel that stands out from the queue's ground just over
+// the box to the last. It looks down the whole box, not along one row, so
+// that where the text falls between pixels doesn't move its ends; and the
+// frosted ground shifts a little with what's behind it, so a pixel counts
+// only as far from its ground as text is drawn.
+func inkWidth(img *image.RGBA, r ui.Rect) float32 {
+	above := int(r.Y) - 1
+	first, last := -1, -1
+	for x := int(r.X); x <= int(r.X+r.W); x++ {
+		g := img.RGBAAt(x, above)
+		for y := int(r.Y); y <= int(r.Y+r.H); y++ {
+			p := img.RGBAAt(x, y)
+			if max(absDiff(p.R, g.R), absDiff(p.G, g.G), absDiff(p.B, g.B)) > 32 {
+				if first < 0 {
+					first = x
+				}
+				last = x
+				break
+			}
+		}
+	}
+	if first < 0 {
+		return 0
+	}
+	return float32(last - first + 1)
+}
+
 // At the window's narrowest, a short queued message shows whole, drawn as
 // wide as at a wide window: the row's actions give way to it.
 func TestAQueuedMessageFitsAtTheNarrowestWindow(t *testing.T) {
@@ -260,7 +289,7 @@ func TestAQueuedMessageFitsAtTheNarrowestWindow(t *testing.T) {
 		if !ok {
 			t.Fatalf("no %q at 1320 points in %q", s, h.tt.Texts())
 		}
-		wide[s] = paintedWidth(h.tt.Image(), r)
+		wide[s] = inkWidth(h.tt.Image(), r)
 	}
 	h.tt.SetSize(760, 860)
 	h.tt.Advance(time.Second)
@@ -269,7 +298,7 @@ func TestAQueuedMessageFitsAtTheNarrowestWindow(t *testing.T) {
 		if !ok {
 			t.Fatalf("no %q in %q", s, h.tt.Texts())
 		}
-		if w := paintedWidth(h.tt.Image(), r); w < wide[s]-1 || wide[s] < 8 {
+		if w := inkWidth(h.tt.Image(), r); w < wide[s]-1 || wide[s] < 8 {
 			t.Errorf("%q at %+v is drawn %.0f points wide; want %.0f as at 1320 points", s, r, w, wide[s])
 		}
 	}
