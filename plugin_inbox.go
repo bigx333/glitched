@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/plugins"
 )
 
@@ -67,6 +68,8 @@ type projectRecord struct {
 	Color     string `json:"color"`
 	// Filtered is whether the sidebar is filtered to it.
 	Filtered bool `json:"filtered,omitempty"`
+	// Local is whether its workspace is on this machine.
+	Local bool `json:"local,omitempty"`
 }
 
 // projectStrip is the context of sidebar.projects.
@@ -91,7 +94,8 @@ func (a *app) projectRecords() []projectRecord {
 		if p.env != nil {
 			machine = p.env.Name
 		}
-		out = append(out, projectRecord{p.key.String(), p.key.workspace, machine, p.name(), icon, color, a.projectFilter[p.key]})
+		local := p.env == nil || p.env.Kind == client.Local
+		out = append(out, projectRecord{p.key.String(), p.key.workspace, machine, p.name(), icon, color, a.projectFilter[p.key], local})
 	}
 	return out
 }

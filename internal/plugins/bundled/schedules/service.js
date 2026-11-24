@@ -303,14 +303,17 @@ function fromRow(r) {
     provider: r.provider, model: r.model, effort: r.effort, fast: r.fast === 1, access: r.access,
     kind: r.kind, every: r.every, at: r.at, weekdays: r.weekdays ? r.weekdays.split(",").map(Number) : [],
     zone: r.zone, anchor: r.anchor, missed: r.missed, enabled: r.enabled === 1,
-    nextDue: r.next_due, revision: r.revision, lastThread: r.last_thread ?? null, starting: r.starting ?? 0,
+    nextDue: r.next_due, revision: r.revision, lastThread: r.last_thread ?? null,
+    lastState: r.last_state ?? null, lastReason: r.last_reason ?? null, starting: r.starting ?? 0,
   };
 }
 
-// SCHEDULE reads schedules with the thread of each one's newest run, and
-// how many of its runs are sent and still starting: turning it off stops
+// SCHEDULE reads schedules with the thread of each one's newest run that
+// has one, the newest run's state and why, and how many of its runs are sent and still starting: turning it off stops
 // none of these.
 const SCHEDULE = `SELECT s.*, (SELECT thread FROM runs WHERE schedule = s.id AND thread IS NOT NULL ORDER BY due DESC, key DESC LIMIT 1) AS last_thread,
+    (SELECT state FROM runs WHERE schedule = s.id ORDER BY due DESC, key DESC LIMIT 1) AS last_state,
+    (SELECT reason FROM runs WHERE schedule = s.id ORDER BY due DESC, key DESC LIMIT 1) AS last_reason,
     (SELECT count(*) FROM runs WHERE schedule = s.id AND state = 'starting' AND sent = 1) AS starting
   FROM schedules s`;
 
@@ -321,16 +324,24 @@ async function load(id) {
 }
 
 // save writes a schedule: a new one under the id it comes with, if any, so
-// a try of it again saves the same one. One whose times and enabled stay as they were
-// keeps its next_due, so an edit drops no run the timer hasn't seen; one
-// turned off drops, after, the runs it meant to start and hadn't sent yet,
-// which no tick sends once it's off. Each save is a new revision, which a
+// a try of it again saves the same one; for one saved, the fields it names
+// over those it has, so a switch that sends enabled alone changes nothing
+// else. It saves over the revision it read, and is refused if another save
+// came between; with a revision, over that one, so a page's edit neither
+// brings back a schedule deleted since it read it nor undoes a save since.
+// One whose times and enabled stay as they were keeps its next_due, so an
+// edit drops no run the timer hasn't seen; one turned off drops, after, the
+// runs it meant to start and hadn't sent yet, which no tick sends once it's
+// off. Each save is a new revision, which a
 // run not yet written is made from.
 async function save(v) {
   const now = Date.now();
   const [row] = v.id === undefined ? [] : await query(SCHEDULE + " WHERE s.id = ?", [v.id]);
   const was = row === undefined ? null : fromRow(row);
-  const s = parse(was === null ? v : { anchor: was.anchor, ...v }, now);
+  if (v.revision !== undefined && was?.revision !== v.revision) {
+    throw new Invalid(was === null ? "this schedule was deleted" : "this schedule was saved since it was read: read it again");
+  }
+  const s = parse(was === null ? v : { ...was, ...v }, now);
   const same = was !== null && ["kind", "every", "at", "zone", "anchor", "enabled"].every((k) => was[k] === s[k]) &&
     was.weekdays.join() === s.weekdays.join();
   const due = !s.enabled ? null : same ? was.nextDue : iso(nextAfter(s, now));
@@ -345,11 +356,13 @@ async function save(v) {
     if (changes === 0) throw new Invalid("there are " + MAX_SCHEDULES + " schedules already, the most there can be");
     return load(s.id);
   }
-  await exec(
+  const { changes } = await exec(
     `UPDATE schedules SET title = ?, prompt = ?, workspace = ?, worktree = ?, provider = ?, model = ?, effort = ?, fast = ?, access = ?,
-       kind = ?, every = ?, at = ?, weekdays = ?, zone = ?, anchor = ?, missed = ?, enabled = ?, next_due = ?, revision = revision + 1 WHERE id = ?`,
-    [...fields, s.id],
+       kind = ?, every = ?, at = ?, weekdays = ?, zone = ?, anchor = ?, missed = ?, enabled = ?, next_due = ?, revision = revision + 1
+     WHERE id = ? AND revision = ?`,
+    [...fields, s.id, was.revision],
   );
+  if (changes === 0) throw new Invalid("this schedule was saved or deleted as this save read it: read it again");
   if (!s.enabled) {
     await exec(
       "UPDATE runs SET state = 'skipped', reason = 'turned off', request = NULL, at = ? WHERE schedule = ? AND manual = 0 AND state = 'starting' AND sent = 0",
@@ -682,16 +695,15 @@ export function timer() {
 const OP = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
 const methods = {
-  // list is a page of the schedules, by title, after the one named.
+  // list is a page of the schedules, by id, after the one named: an id
+  // never changes, so a schedule edited while pages are read is on one.
   async list({ after } = {}) {
-    const rows = await query(SCHEDULE + " WHERE (s.title, s.id) > (?, ?) ORDER BY s.title, s.id LIMIT ?", [
-      after?.title ?? "", after?.id ?? "", LIST_PAGE + 1,
-    ]);
+    const rows = await query(SCHEDULE + " WHERE s.id > ? ORDER BY s.id LIMIT ?", [after ?? "", LIST_PAGE + 1]);
     const schedules = rows.slice(0, LIST_PAGE).map(fromRow);
-    const last = schedules.at(-1);
-    return { schedules, next: rows.length > LIST_PAGE ? { title: last.title, id: last.id } : null };
+    return { schedules, next: rows.length > LIST_PAGE ? schedules.at(-1).id : null };
   },
   save: ({ schedule }) => save(schedule ?? {}),
+  get: ({ id }) => load(id),
   // delete deletes a schedule, or answers as it did for one already gone.
   async delete({ id }) {
     await exec("DELETE FROM schedules WHERE id = ?", [id]);

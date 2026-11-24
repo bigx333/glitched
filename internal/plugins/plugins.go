@@ -757,9 +757,12 @@ func (h *Host) RunCommand(id, command string, args map[string]any, done func(err
 		err := p.Command(command, args, nil)
 		h.opts.Post(func() {
 			defer h.commands.Add(-1)
-			// Its app session hears it ran, to draw what the command changed.
-			if s := h.sessions[pageKey{plugin: id}]; err == nil && s != nil {
-				s.Notify(AppEvent{Kind: "app", Type: "command", Data: map[string]string{"id": command}})
+			// Its app session and pages hear it ran, to draw what the
+			// command changed; its tabs, one per thread, don't.
+			for k, s := range h.sessions {
+				if err == nil && k.plugin == id && k.scope == "" {
+					s.Notify(AppEvent{Kind: "app", Type: "command", Data: map[string]string{"id": command}})
+				}
 			}
 			done(err)
 		})
