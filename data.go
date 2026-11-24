@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"maps"
 	"os"
 	"path/filepath"
@@ -128,10 +127,8 @@ func (p *project) markNames() (string, string) {
 	if p.noProject {
 		return "chat-round-line", "#8e8e93"
 	}
-	h := fnv.New32a()
-	h.Write([]byte(p.name()))
-	n := h.Sum32()
-	return projectIcons[n%uint32(len(projectIcons))], projectColors[n/7%uint32(len(projectColors))]
+	icon, color := hashMark(p.name())
+	return projectIcons[icon], projectColors[color]
 }
 
 // draft is where New thread starts the next thread: a machine, and a
