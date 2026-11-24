@@ -85,6 +85,7 @@ func TestASubagentsTextIsRedactedAsAStreamOfItsOwn(t *testing.T) {
 		wantRoot, wantChild string
 	}{
 		{"child split", []provider.Event{nested(provider.TextDelta{Text: "before " + probe[:8]}), provider.TextDelta{Text: "parent"}, nested(provider.TextDelta{Text: probe[8:] + " after"})}, "parent", "before [GLX_PROBE] after"},
+		{"child split across its own step", []provider.Event{nested(provider.TextDelta{Text: "before " + probe[:8]}), nested(provider.Work{Item: "cmd", Kind: "command", Status: api.WorkCompleted}), nested(provider.TextDelta{Text: probe[8:] + " after"})}, "", "before [GLX_PROBE] after"},
 		{"parent unbroken control", []provider.Event{provider.TextDelta{Text: "before " + probe[:8]}, provider.TextDelta{Text: probe[8:] + " after"}}, "before [GLX_PROBE] after", ""},
 		{"parent split", []provider.Event{provider.TextDelta{Text: "before " + probe[:8]}, nested(provider.TextDelta{Text: "child"}), provider.TextDelta{Text: probe[8:] + " after"}}, "before [GLX_PROBE] after", "child"},
 		{"complete fields", []provider.Event{nested(provider.TextDelta{Text: probe}), nested(provider.Work{Item: "cmd", Kind: "edit", Status: api.WorkFailed, Title: probe, Path: probe, Output: probe}), nested(provider.Work{Item: "success", Kind: "tool", Status: api.WorkCompleted, Output: probe})}, "", "[GLX_PROBE]"},

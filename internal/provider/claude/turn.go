@@ -256,12 +256,12 @@ var taskEnds = map[string]api.Outcome{
 }
 
 // spawn is a native subagent of the turn's: its steps still open, whether
-// it said anything yet, and whether its text streams, so its messages'
-// text blocks only repeat it.
+// it said anything yet, and the text it streamed since its last message,
+// which that message's text blocks repeat.
 type spawn struct {
 	steps    []provider.Work
 	texted   bool
-	streamed bool
+	streamed strings.Builder
 }
 
 // turn turns one run's messages into provider events. A native subagent's
@@ -416,20 +416,25 @@ func (t *turn) nested(parent string, m message) []provider.Event {
 	var evs []provider.Event
 	add := func(e provider.Event) { evs = append(evs, provider.Nested{Parent: parent, Event: e}) }
 	if e := m.Event; m.Type == "stream_event" && e != nil && e.Type == "content_block_delta" && e.Delta != nil && e.Delta.Type == "text_delta" && e.Delta.Text != "" {
-		if s.texted && !s.streamed {
+		if s.texted && s.streamed.Len() == 0 {
 			add(provider.TextDelta{Text: "\n\n"})
 		}
-		s.texted, s.streamed = true, true
+		s.texted = true
+		s.streamed.WriteString(e.Delta.Text)
 		add(provider.TextDelta{Text: e.Delta.Text})
 		return evs
 	}
-	if e := m.Event; m.Type == "stream_event" && e != nil && e.Type == "content_block_start" && e.ContentBlock != nil && e.ContentBlock.Type == "text" && s.texted && s.streamed {
+	if e := m.Event; m.Type == "stream_event" && e != nil && e.Type == "content_block_start" && e.ContentBlock != nil && e.ContentBlock.Type == "text" && s.streamed.Len() > 0 {
 		add(provider.TextDelta{Text: "\n\n"})
 		return evs
 	}
+	streamed := s.streamed.String()
+	if m.Type == "assistant" {
+		s.streamed.Reset()
+	}
 	for _, b := range m.content() {
 		switch {
-		case m.Type == "assistant" && b.Type == "text" && b.Text != "" && !s.streamed:
+		case m.Type == "assistant" && b.Type == "text" && b.Text != "" && !strings.Contains(streamed, b.Text):
 			if s.texted {
 				add(provider.TextDelta{Text: "\n\n"})
 			}

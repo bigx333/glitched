@@ -1,8 +1,6 @@
 package runtime
 
 import (
-	"maps"
-	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -61,6 +59,7 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 	// A native subagent's text is a stream of its own, redacted as the
 	// run's is, apart from it: neither's events end the other's text.
 	nestedText := map[string]*strings.Builder{}
+	var nestedOrder []string // the subagents that spoke, in the order they first did
 	flushNested := func(parent string, final bool) {
 		b := nestedText[parent]
 		if b == nil {
@@ -74,7 +73,7 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 		b.WriteString(kept)
 	}
 	flushAllNested := func() {
-		for _, parent := range slices.Sorted(maps.Keys(nestedText)) {
+		for _, parent := range nestedOrder {
 			flushNested(parent, true)
 		}
 	}
@@ -109,12 +108,14 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				if d, ok := ev.Event.(provider.TextDelta); ok {
 					if nestedText[ev.Parent] == nil {
 						nestedText[ev.Parent] = &strings.Builder{}
+						nestedOrder = append(nestedOrder, ev.Parent)
 					}
 					nestedText[ev.Parent].WriteString(d.Text)
 					flushNested(ev.Parent, false)
 					break
 				}
-				flushNested(ev.Parent, true)
+				_, end := ev.Event.(provider.TurnEnded)
+				flushNested(ev.Parent, end)
 				if b := h.nested(run, ev, redact); b != nil {
 					commit(engine.Subagent{Run: run, Event: b})
 				}
