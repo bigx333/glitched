@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"glitched/internal/daemon"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
+	"glitched/internal/transport"
 )
 
 // queuedOn is every message the engine queued on thread, in order.
@@ -478,5 +480,91 @@ func TestARestoreEndsAContinueAll(t *testing.T) {
 	}
 	if _, ok := h.tt.Find("Continue all"); !ok {
 		t.Fatalf("Continue all isn't offered on the restored threads: %q", h.tt.Texts())
+	}
+}
+
+// servedAt serves ep over the tailnet transport to the token "pair".
+func servedAt(t *testing.T, ep api.Endpoint) string {
+	t.Helper()
+	tn := transport.Tailnet{Address: "127.0.0.1:0"}
+	ctx, cancel := context.WithCancel(context.Background())
+	ln, err := tn.Listen(ctx)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		key := transport.KeyOf("pair")
+		admit := func(_ *http.Request, proved func(transport.Key) bool) (transport.Key, context.Context, error) {
+			if !proved(key) {
+				return transport.Key{}, nil, transport.ErrRefused
+			}
+			return key, ctx, nil
+		}
+		(&transport.Server{Transport: tn, Endpoint: ep, Authorize: admit}).Serve(ctx, ln)
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	return ln.Addr().String()
+}
+
+// A Continue all's places are its engine's, whichever route reaches it: a
+// route found to duplicate another hands its batch to that one, and the
+// runs it continued hold their places there.
+func TestContinueAllKeepsItsPlacesAcrossARouteHandoff(t *testing.T) {
+	held := fake.New(fake.Turn(false))
+	held.HoldStart = true
+	_, d := lostDir(t, held, "One", "Two", "Three", "Four", "Five")
+	first := &switching{}
+	prior := engine(t, daemon.Config{Dir: tempDir(t)}, fake.New(fake.Turn(false)))
+	first.current.Store(prior)
+	earlyAddr, lateAddr := servedAt(t, first), servedAt(t, d.Endpoint())
+	dir := tempDir(t)
+	engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
+	h := start(t, dir)
+	for _, s := range []client.Server{{Label: "Earlier route", Addr: earlyAddr, Token: "pair"}, {Label: "Later route", Addr: lateAddr, Token: "pair"}} {
+		if err := h.addServer(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.until("both engines online", func() bool {
+		envs := h.a.backend.Envs()
+		return envs[1].Status == client.Status(client.Online{}) && envs[2].Status == client.Status(client.Online{})
+	})
+	first.current.Store(nil)
+	if err := prior.Close(); err != nil {
+		t.Fatal(err)
+	}
+	earlier, later := h.a.backend.Envs()[1], h.a.backend.Envs()[2]
+	h.until("the earlier route offline", func() bool { _, off := earlier.Status.(client.Offline); return off })
+	working := func() int {
+		snap, err := d.Endpoint().Read(context.Background(), api.Query{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, v := range snap.Threads {
+			if v.Run == api.RunStarting || v.Run == api.RunRunning {
+				n++
+			}
+		}
+		return n
+	}
+	h.tt.Advance(time.Second)
+	h.click("Continue all")
+	h.until("two continued", func() bool { return held.Starts() == 2 })
+	log := later.Log()
+	first.current.Store(d)
+	h.until("the earlier route reaching the same engine, the later a duplicate", func() bool {
+		_, dup := later.Status.(client.Duplicate)
+		return dup && earlier.Status == client.Status(client.Online{}) && earlier.Log() == log && len(earlier.Threads) == 5
+	})
+	h.tt.Advance(time.Second)
+	if n := len(h.a.lostIn(catInbox)); n != 0 || len(h.a.continues) != 5 {
+		t.Fatalf("after the handoff %d threads are offered to continue and %d held to; want none offered, all five held", n, len(h.a.continues))
+	}
+	if n := working(); n != 2 || held.Starts() != 2 {
+		t.Fatalf("%d runs at work, %d started; want the two continued", n, held.Starts())
 	}
 }
