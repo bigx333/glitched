@@ -782,8 +782,23 @@ func (d *decision) respond(b api.RequestRespond) error {
 // fits is nil when answer answers r. A question takes its answers or a
 // dismissal, and refuses a misfit before the race for the request, which
 // it would win; credentials take the names provided, never values, or
-// none; an approval takes any JSON.
+// none; an approval keeps its grant always or for the session only where
+// its body offers that, and takes any other JSON.
 func fits(r Request, answer json.RawMessage) error {
+	if r.Kind == api.KindApproval {
+		var a, offered struct{ Always, Session bool }
+		json.Unmarshal(answer, &a)
+		json.Unmarshal(r.Body, &offered)
+		switch {
+		case a.Always && a.Session:
+			return errors.New("an answer keeps its grant always or for the session, not both")
+		case a.Always && !offered.Always:
+			return errors.New("the agent offers no way to always allow this")
+		case a.Session && !offered.Session:
+			return errors.New("the agent offers no way to allow this for the session")
+		}
+		return nil
+	}
 	if r.Kind == api.KindCredentials {
 		p, err := api.ParseProvided(answer)
 		if err != nil {

@@ -94,6 +94,33 @@ func TestARequestUnderFullAccessAsksTheUser(t *testing.T) {
 	}
 }
 
+// An ACP agent offers no grant for the session, so an answer for the
+// session fails rather than going to the agent as another answer; the
+// agent hears the one the user gives next.
+func TestNoSessionGrantOnAnACPCard(t *testing.T) {
+	for _, scenario := range []string{"permission", "permission-once"} {
+		a, _ := fake(t, scenario)
+		g := open(t, a, spec(t))
+		do(t, g, provider.Start{Text: "edit"})
+		for {
+			if r, ok := next(t, g).(provider.RequestOpened); ok {
+				if strings.Contains(string(r.Body), "session") {
+					t.Errorf("%s: the card offers a session grant: %s", scenario, r.Body)
+				}
+				if err := g.Do(context.Background(), provider.Respond{Request: r.ID, Answer: json.RawMessage(`{"allow":true,"session":true}`)}); err == nil {
+					t.Errorf("%s: an answer for the session went through", scenario)
+				}
+				do(t, g, provider.Respond{Request: r.ID, Answer: json.RawMessage(`{"allow":false}`)})
+				break
+			}
+		}
+		if got := text(turn(t, g)); got != "Answer: reject-once" {
+			t.Errorf("%s: the agent heard %q, want the deny alone", scenario, got)
+		}
+		closeRun(t, g)
+	}
+}
+
 // The card offers Always allow only where the agent offers to keep the
 // grant, and Always allow picks that option; Allow stays once.
 func TestAlwaysAllowIsTheAgentsOwnOption(t *testing.T) {

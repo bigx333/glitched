@@ -522,11 +522,15 @@ func (g *Agent) respond(r provider.Respond) error {
 // allow is the outcome of a permission request the answer gives.
 func (g *Agent) allow(a *ask, raw json.RawMessage) (acpsdk.RequestPermissionOutcome, error) {
 	var answer struct {
-		Allow  bool `json:"allow"`
-		Always bool `json:"always"`
+		Allow   bool `json:"allow"`
+		Always  bool `json:"always"`
+		Session bool `json:"session"`
 	}
 	if err := json.Unmarshal(raw, &answer); err != nil {
 		return acpsdk.RequestPermissionOutcome{}, fmt.Errorf("acp: an answer the agent can't take: %w", err)
+	}
+	if answer.Session {
+		return acpsdk.RequestPermissionOutcome{}, fmt.Errorf("%s offers no way to allow this for the session. Allow it once, or deny it.", g.p.profile.Name)
 	}
 	if !answer.Allow {
 		if id, ok := pick(a.options, acpsdk.PermissionOptionKindRejectOnce); ok {
