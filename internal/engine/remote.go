@@ -43,6 +43,11 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 			if b.Disposition.State == api.Settled && r.Run.IsZero() && r.Slot == api.RunStarting {
 				r.Slot = api.RunIdle
 			}
+		case api.WorktreeReady:
+			// What starts there next is admitted after this, if anything.
+			if r.Run.IsZero() && r.Slot == api.RunStarting {
+				r.Slot = api.RunIdle
+			}
 		case api.WorktreeFailed:
 			key := derive(r.Thread, "worktree")
 			add(RemoteReport{Key: key, Run: key, Kind: api.ReportFailed, Error: "its worktree there wasn't made: " + b.Error})
@@ -87,7 +92,7 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 				break
 			}
 			if !r.Silent {
-				r.Ended = &b.Outcome
+				r.Ended = &api.TurnResult{Run: b.Run, Outcome: b.Outcome}
 			}
 			if r.Slot != api.RunStopping && r.Slot != api.RunUncertain && !r.Silent {
 				switch b.Outcome {

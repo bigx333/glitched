@@ -80,7 +80,7 @@ func apply(t Thread, e Event) (Thread, error) {
 			t.Remote = &Remote{Engine: r.Engine, Link: r.Link, State: RemoteCreating}
 		}
 		if o := b.Origin; o != nil {
-			t.Origin = &Origin{Origin: *o, Making: true}
+			t.Origin = &Origin{Origin: *o, Making: b.Project != ""}
 		}
 	case api.WorktreeReady, api.WorktreeFailed:
 		if t.Origin == nil || !t.Origin.Making {
@@ -121,6 +121,11 @@ func apply(t Thread, e Event) (Thread, error) {
 		r.Reported = slices.Concat(r.Reported, b.Keys)
 		t.Remote = &r
 	case api.DispositionChanged:
+		if o := t.Origin; o != nil && b.Fence > o.Fence {
+			c := *o
+			c.Fence = b.Fence
+			t.Origin = &c
+		}
 		if r := t.Remote; r != nil && b.Disposition.State == api.Settled {
 			c := *r
 			c.Settles++

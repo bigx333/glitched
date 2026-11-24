@@ -187,11 +187,21 @@ func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, chec
 				if body == nil {
 					return nil, nil, nil
 				}
+				caller := c.Caller
+				if _, settles := c.Body.(api.InboxSet); settles && caller != nil {
+					theirs, err := steeredByUser(ctx, q, id)
+					if err != nil {
+						return nil, nil, err
+					}
+					if theirs {
+						caller = nil
+					}
+				}
 				env, err := s.env(ctx, q, t)
 				if err != nil {
 					return nil, nil, err
 				}
-				return engine.DecideWith(t, api.Command{ID: c.ID, Target: id, Body: body, Caller: c.Caller}, env, now)
+				return engine.DecideWith(t, api.Command{ID: c.ID, Target: id, Body: body, Caller: caller}, env, now)
 			}})
 		}
 		return append(steps, top), nil

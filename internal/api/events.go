@@ -114,7 +114,7 @@ type RemoteSeen struct {
 	// or asked its last stop there, so it is theirs.
 	Taken bool `json:"taken,omitempty"`
 	// Ended is how the child's last run that wasn't silent ended there.
-	Ended *Outcome `json:"ended,omitempty"`
+	Ended *TurnResult `json:"ended,omitempty"`
 }
 
 // RemoteLost is a placeholder whose child this engine no longer reaches
@@ -467,6 +467,8 @@ type ChildReported struct {
 
 type DispositionChanged struct {
 	Disposition Disposition `json:"disposition"`
+	// Fence is a link's settle's, which a link's thread keeps.
+	Fence int `json:"fence,omitempty"`
 }
 
 // CheckpointPhase is when a checkpoint was taken: base before a thread's

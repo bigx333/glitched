@@ -888,13 +888,13 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 		return h.remoteCreate(e, b)
 
 	case engine.RemoteStop:
-		return h.remoteCommand(e, "stop", api.Remote{Engine: b.Engine, Link: b.Link}, b.Create, b.Command)
+		return h.remoteCommand(e, "stop", api.Remote{Engine: b.Engine, Link: b.Link}, b.Create, b.Command, b.Narrow)
 
 	case engine.RemoteSend:
-		return h.remoteCommand(e, "message", api.Remote{Engine: b.Engine, Link: b.Link}, nil, b.Command)
+		return h.remoteCommand(e, "message", api.Remote{Engine: b.Engine, Link: b.Link}, nil, b.Command, nil)
 
 	case engine.RemoteConfigure:
-		return h.remoteCommand(e, "narrowing", api.Remote{Engine: b.Engine, Link: b.Link}, nil, b.Command)
+		return h.remoteCommand(e, "narrowing", api.Remote{Engine: b.Engine, Link: b.Link}, nil, b.Command, nil)
 
 	case engine.CaptureCheckpoint:
 		return h.capture(t, b)
