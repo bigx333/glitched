@@ -153,10 +153,11 @@ func numbered(n int) []provider.Model {
 	return out
 }
 
-// The models' column grows a row with each model, up to eight of them,
-// past which they scroll, in a window with room for many more; the effort
-// stays under them, and the keyboard reaches every one.
-func TestThePickersModelsScrollPastEightRows(t *testing.T) {
+// The models' column grows a row with each model, up to five of them and
+// half of the sixth, past which they scroll, in a window with room for
+// many more; the effort stays under them, and the keyboard reaches every
+// one.
+func TestThePickersModelsScrollPastFiveAndAHalfRows(t *testing.T) {
 	var pitch float32
 	height := func(n int) float32 {
 		h := startWith(t, tempDir(t), engineReports("claude", numbered(n)...))
@@ -173,9 +174,9 @@ func TestThePickersModelsScrollPastEightRows(t *testing.T) {
 		}
 		return effort.Y - top.Y
 	}
-	seven, eight, nine, many := height(7), height(8), height(9), height(30)
-	if pitch <= 0 || abs32(eight-seven-pitch) > 0.5 || nine != eight || many != eight {
-		t.Fatalf("over its effort the popover is %v, %v, %v and %v tall for 7, 8, 9 and 30 models, a row %v; want a row more for the 8th, and no more after", seven, eight, nine, many, pitch)
+	four, five, six, seven, many := height(4), height(5), height(6), height(7), height(30)
+	if pitch <= 0 || abs32(five-four-pitch) > 0.5 || abs32(six-five-pitch/2) > 0.5 || seven != six || many != six {
+		t.Fatalf("over its effort the popover is %v, %v, %v, %v and %v tall for 4, 5, 6, 7 and 30 models, a row %v; want a row more for the 5th, half a row more for the 6th, and no more after", four, five, six, seven, many, pitch)
 	}
 
 	h := startWith(t, tempDir(t), engineReports("claude", numbered(30)...))
@@ -207,6 +208,71 @@ func TestThePickersModelsScrollPastEightRows(t *testing.T) {
 		t.Errorf("Space on the 30th model chose %q", h.a.model)
 	}
 }
+
+// The popover opens on the chosen model, though it is far down a long
+// family's list, and the user scrolls from there; a short family's models
+// show whole wherever the long list was scrolled, and pointing back at the
+// long family shows the chosen model again. Glitched's own popover does as
+// the built-in's does.
+func TestThePickerOpensOnTheChosenModelOfALongList(t *testing.T) {
+	for name, builtin := range map[string]bool{"built-in": true, "Glitched's own": false} {
+		t.Run(name, func(t *testing.T) {
+			h := startWith(t, tempDir(t), engineReportsBy(map[string][]provider.Model{
+				"codex":  numbered(12),
+				"claude": {{ID: "k-00", Name: "K 00", Description: "Short 00"}, {ID: "k-01", Name: "K 01", Description: "Short 01"}},
+			}))
+			allAnswered(h)
+			if !builtin {
+				if err := h.a.plugins.SetEnabled("model-picker", false); err != nil {
+					t.Fatal(err)
+				}
+				h.a.pluginsChanged(nil)
+			}
+			h.a.model = modelKey{"codex", "m-10"}
+			h.tt.Frame()
+			h.click("Model")
+			pickerSettle(t, h)
+			if drawn := h.a.plugins.App("model-picker") != nil && h.a.plugins.App("model-picker").PlaceView("picker", "draft/panel") != nil; drawn != builtin {
+				t.Fatalf("the built-in drew the popover: %v, want %v", drawn, builtin)
+			}
+			top, effort := pickerBox(t, h)
+			shown := func(name, about string) bool {
+				n, ok := h.tt.Find(name)
+				a, there := h.tt.Find(about)
+				return ok && there && n.Y >= top.Y-5 && a.Y+a.H <= effort.Y-12
+			}
+			if !shown("M 10", "About 10") {
+				t.Errorf("the popover opened without the chosen M 10 in view: %v, %v between %v and %v", boxOf(h.tt.Find("M 10")), boxOf(h.tt.Find("About 10")), top, effort)
+			}
+			if shown("M 00", "About 00") && shown("M 11", "About 11") {
+				t.Errorf("all twelve models show at once: the column didn't stop growing")
+			}
+			first, _ := h.tt.Find("About 10")
+			h.tt.Scroll(first.X, first.Y, 0, -2000)
+			pickerSettle(t, h)
+			if !shown("M 00", "About 00") || shown("M 10", "About 10") {
+				t.Errorf("scrolled to the top, the models show M 00 %v and M 10 %v", shown("M 00", "About 00"), shown("M 10", "About 10"))
+			}
+			h.hover("Claude")
+			pickerSettle(t, h)
+			h.hover("Codex")
+			pickerSettle(t, h)
+			if !shown("M 10", "About 10") {
+				t.Errorf("pointing back at Codex doesn't show the chosen M 10: %v", boxOf(h.tt.Find("M 10")))
+			}
+			h.tt.Scroll(first.X, first.Y, 0, 2000)
+			pickerSettle(t, h)
+			h.hover("Claude")
+			pickerSettle(t, h)
+			if !shown("K 00", "Short 00") || !shown("K 01", "Short 01") {
+				t.Errorf("Claude's two models don't show whole after Codex's were scrolled to the end: %v, %v", boxOf(h.tt.Find("K 00")), boxOf(h.tt.Find("Short 01")))
+			}
+		})
+	}
+}
+
+// boxOf is the box Find found, or none.
+func boxOf(r ui.Rect, _ bool) ui.Rect { return r }
 
 // On a short window the popover keeps between the window's top and the
 // button: its models scroll sooner, the whole effort control shows and

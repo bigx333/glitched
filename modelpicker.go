@@ -111,8 +111,18 @@ func (a *app) shownFamilies() []family {
 }
 
 // modelRows is how many model rows the popover shows before its models
-// scroll.
-const modelRows = 8
+// scroll: five, and half of the sixth, so that the cut row shows there
+// are more.
+const modelRows = 5.5
+
+// pickerReveal is the model row the popover scrolls into view as it opens
+// or shows another family: the chosen model's, where it is the family's,
+// else the first. Glitched's own drawing of the models and a copy's each
+// scroll to it once.
+type pickerReveal struct {
+	family, key    string
+	native, copied bool
+}
 
 // efforts are the levels the chosen model runs at, least first.
 func (a *app) efforts() []effortInfo {
@@ -222,6 +232,15 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 	if shown := a.shownFamilies(); len(shown) > 0 && !slices.ContainsFunc(shown, func(f family) bool { return f.provider == a.pickerFamily }) {
 		a.pickerFamily = shown[0].provider
 	}
+	if !a.pickerOpen {
+		a.pickerReveal = pickerReveal{}
+	} else if a.pickerReveal.family != a.pickerFamily {
+		a.pickerReveal = pickerReveal{family: a.pickerFamily}
+		rows := a.pickerRows(familyOf(a.pickerFamily))
+		if i := max(slices.IndexFunc(rows, func(m modelInfo) bool { return m.key == a.pickedIn(t) }), 0); i < len(rows) {
+			a.pickerReveal.key = rows[i].key.String()
+		}
+	}
 	a.pickerAt = b.Bounds()
 	a.popover(c, b, &a.pickerOpen, func(panel ui.Element) {
 		panel.AttachTo(b, ui.AnchorTopStart, ui.AnchorBottomStart).Margin(0, 0, pickerMargin, -4).Width(420).Radius(16).Clip()
@@ -243,6 +262,9 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 				listRow: func(c *ui.Context, list *widget.Node, i int, e ui.Element, _ bool) bool {
 					a.modelListRow(list.ID, list.Items[i].Key, e)
 					return false
+				},
+				reveal: func(list *widget.Node, it widget.ListItem) bool {
+					return list.ID == "models" && !a.pickerReveal.copied && it.Key == a.pickerReveal.key
 				},
 			})
 		})
@@ -409,6 +431,9 @@ func (a *app) modelListRow(list, key string, e ui.Element) {
 			a.pickerFamily = a.shownFamilies()[i].provider
 		}
 	case "models":
+		if key == a.pickerReveal.key {
+			a.pickerReveal.copied = true
+		}
 		i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.key.String() == key || m.name == key })
 		if i < 0 || a.pickerLock != "" && a.offeredModels()[i].key.Provider != a.pickerLock {
 			return
@@ -506,7 +531,7 @@ func (a *app) pickerFamilies(c *ui.Context) {
 // list is built in the same cell, the others invisible, so the column is
 // as tall as the longest list whichever shows: the popover keeps its size,
 // and the families stay put under the pointer as it moves between them.
-// Past modelsMaxHeight the lists scroll.
+// Past modelsMaxHeight the lists scroll, to pickerReveal's row.
 func (a *app) pickerModels(c *ui.Context, t thread) {
 	picked := a.pickedIn(t)
 	ui.Scroll(c).Key("models").Grow(1).MaxHeight(a.modelsMaxHeight(c)).Children(func() {
@@ -516,9 +541,19 @@ func (a *app) pickerModels(c *ui.Context, t thread) {
 				if f.provider != a.pickerFamily {
 					list.Invisible()
 				}
+				reveal := f.provider == a.pickerFamily && !a.pickerReveal.native
 				list.Children(func() {
-					for _, m := range a.pickerRows(f) {
-						a.pickerModel(c, t, m, picked)
+					for i, m := range a.pickerRows(f) {
+						r := a.pickerModel(c, t, m, picked)
+						if !reveal || m.key.String() != a.pickerReveal.key {
+							continue
+						}
+						a.pickerReveal.native = true
+						if i == 0 {
+							list.ScrollIntoView(ui.ScrollIntoViewOptions{Block: ui.ScrollStart})
+						} else {
+							r.ScrollIntoView()
+						}
 					}
 				})
 			}
@@ -526,9 +561,9 @@ func (a *app) pickerModels(c *ui.Context, t thread) {
 	})
 }
 
-func (a *app) pickerModel(c *ui.Context, t thread, m modelInfo, picked modelKey) {
+func (a *app) pickerModel(c *ui.Context, t thread, m modelInfo, picked modelKey) ui.Element {
 	selected := m.key == picked
-	if row(c, m.key.String(), selected).Padding(7, 10).Gap(10).Children(func() {
+	r := row(c, m.key.String(), selected).Padding(7, 10).Gap(10).Children(func() {
 		ui.Column(c).Grow(1).Shrink(1).Gap(1).Children(func() {
 			ui.Text(c, m.short).FontWeight(500).TextColor(palette.text).SingleLine()
 			ui.Text(c, a.rowAbout(t, m)).FontSize(11.5).TextColor(palette.muted).SingleLine()
@@ -536,9 +571,11 @@ func (a *app) pickerModel(c *ui.Context, t thread, m modelInfo, picked modelKey)
 		if selected {
 			ui.Icon(c, icCheck).FontSize(14).TextColor(palette.accent)
 		}
-	}).Clicked() {
+	})
+	if r.Clicked() {
 		a.chooseModel(m.key)
 	}
+	return r
 }
 
 // effortSlider steps from Low to Max, as Codex's: a track whose gradient

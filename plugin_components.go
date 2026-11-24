@@ -47,9 +47,9 @@ type componentCopy struct {
 	// its own (render.Style.ListRow), builtin when the built-in plugin
 	// draws the copy; nil does nothing.
 	listRow func(c *ui.Context, list *widget.Node, i int, e ui.Element, builtin bool) bool
-	// reveal says which thread's item its lists scroll into view
+	// reveal says which item its lists scroll into view
 	// (render.Style.Reveal).
-	reveal func(thread string) bool
+	reveal func(list *widget.Node, it widget.ListItem) bool
 	// current waits for the plugin to draw each new context of the copy,
 	// as for its first drawing, so that what it shows keeps up with the
 	// app's own state, as the sidebar's threads moving between sections.

@@ -341,6 +341,7 @@ type app struct {
 	// effort went Max, for their effects.
 	pickerOpen   bool
 	pickerFamily string
+	pickerReveal pickerReveal
 	fast         bool
 	fastAt       time.Time
 	// The effort slider's drag: held, where it was pressed and last held,
