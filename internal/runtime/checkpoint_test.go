@@ -448,8 +448,8 @@ func TestDeletingAThreadDropsItsCheckpoints(t *testing.T) {
 // child keeps no checkpoints, and its removal, in its own lane, shares no
 // lock or folder with the drop.
 func TestDeletingATreeWithItsWorktreesDropsOnlyTheRootsCheckpoints(t *testing.T) {
-	dir := tempDir(t)
-	n := serveCheckpoints(t, dbPath(t), dir, fake.New(fake.Turn(true)))
+	dir, path := tempDir(t), dbPath(t)
+	n := serveCheckpoints(t, path, dir, fake.New(fake.Turn(true)))
 	project := repo(t)
 	parent := asking(t, n.h, inWorktree(project, ""))
 	kid := child(t, n.h, isolated(parent))
@@ -463,10 +463,21 @@ func TestDeletingATreeWithItsWorktreesDropsOnlyTheRootsCheckpoints(t *testing.T)
 		t.Fatalf("the store holds refs of the child: %s", got)
 	}
 	submit(t, n.h, parent.ID, api.ThreadDelete{RemoveWorktree: true})
-	for deadline := time.Now().Add(10 * time.Second); len(refsOf(t, store, parent.ID)) > 0 || exists(parent.Workspace) || exists(kid.Workspace); time.Sleep(2 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("after the tree's delete: refs %v, the parent's worktree there %v, the child's %v", refsOf(t, store, parent.ID), exists(parent.Workspace), exists(kid.Workspace))
+	db := sideDB(t, path)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(2 * time.Millisecond) {
+		var pending int
+		if err := db.QueryRow("SELECT COUNT(*) FROM effects WHERE kind IN ('agent.close', 'worktree.remove', 'checkpoint.drop') AND state <> 'done'").Scan(&pending); err != nil {
+			t.Fatal(err)
 		}
+		if pending == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d of the tree's delete effects still pending", pending)
+		}
+	}
+	if refs := refsOf(t, store, parent.ID); len(refs) > 0 || exists(parent.Workspace) || exists(kid.Workspace) {
+		t.Fatalf("after the tree's delete: refs %v, the parent's worktree there %v, the child's %v", refs, exists(parent.Workspace), exists(kid.Workspace))
 	}
 	if got := strings.Count(gitIn(t, project, "worktree", "list", "--porcelain"), "worktree "); got != 1 {
 		t.Fatalf("git lists %d worktrees after the tree's delete, want the project's own", got)
