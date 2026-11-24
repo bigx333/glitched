@@ -296,7 +296,7 @@ func (a *app) revertDivider(c *ui.Context, t thread, es []entry, i int) {
 		ui.Box(c).Height(1).Grow(1).Background(palette.border)
 		switch {
 		case r.Conversation == api.RewindFailed:
-			ui.Text(c, "Couldn't rewind the conversation: "+r.Error).FontSize(11.5).TextColor(palette.red).Shrink(1)
+			ui.Text(c, "Couldn't rewind the conversation: "+r.Error).FontSize(11.5).TextColor(palette.red).Shrink(1).MinWidth(0)
 			undo()
 		case r.Rewound():
 			text, restored := "Rewound the conversation", " and restored "
@@ -327,7 +327,7 @@ func (a *app) revertDivider(c *ui.Context, t thread, es []entry, i int) {
 		case r.Status == api.RevertUnchanged:
 			ui.Text(c, "The files were already as they were then").FontSize(11.5).TextColor(palette.faint).TextAlign(ui.Center).Shrink(1)
 		default:
-			ui.Text(c, "Couldn't revert the files: "+r.Error).FontSize(11.5).TextColor(palette.red).Shrink(1)
+			ui.Text(c, "Couldn't revert the files: "+r.Error).FontSize(11.5).TextColor(palette.red).Shrink(1).MinWidth(0)
 			undo()
 		}
 		ui.Box(c).Height(1).Grow(1).Background(palette.border)
