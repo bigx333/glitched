@@ -5,6 +5,9 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/daemon"
+
+	"github.com/egoist/mygo/ui"
 )
 
 // A Stop holds the message queued behind the run: it shows Held, Resume
@@ -38,4 +41,30 @@ func TestAResumeSendsAReportAStopHeld(t *testing.T) {
 	}
 	h.click("Resume")
 	h.until("the report sent to the agent", func() bool { return h.tt.HasText("↳ Sent to the agent") })
+}
+
+// While the agent works, ⌘⏎ and Queue send the draft for after its turn,
+// where Send steers it into the turn: the run goes on, the messages wait.
+func TestADraftQueuesBehindTheAgentAtWork(t *testing.T) {
+	dir := tempDir(t)
+	engine(t, daemon.Config{Dir: dir}, burst{})
+	h := start(t, dir)
+	h.a.draft = "Fix the sidebar."
+	h.tt.Frame()
+	h.click("Send")
+	h.until("the agent at work", func() bool { return h.tt.HasText("Stop") && h.a.current().View.Run == api.RunRunning })
+	run := h.a.current().View.Turn.Run
+	h.a.draft = "Then update the docs."
+	h.tt.Frame()
+	h.tt.Key(ui.Cmd, ui.KeyEnter)
+	h.until("the message queued by ⌘⏎", func() bool {
+		return h.a.current().View.Queued == 1 && h.a.draft == "" && h.tt.HasText("Then update the docs.") && h.tt.HasText("Queued")
+	})
+	h.a.draft = "And the changelog."
+	h.tt.Frame()
+	h.click("Queue")
+	h.until("the message queued by Queue", func() bool { return h.a.current().View.Queued == 2 && h.a.draft == "" })
+	if v := h.a.current().View; v.Run != api.RunRunning || v.Turn == nil || v.Turn.Run != run {
+		t.Fatalf("queueing changed the run: %v, turn %+v; want the first turn running", v.Run, v.Turn)
+	}
 }
