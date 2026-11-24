@@ -160,7 +160,7 @@ func retire(ctx context.Context, dir, name, control string) {
 	if _, err := os.Stat(dir); err != nil {
 		return
 	}
-	node, err := tailnet.Start(dir, name, control)
+	node, err := tailnet.Start(dir, hostname(name), control)
 	if err == nil {
 		out, cancel := context.WithTimeout(ctx, 10*time.Second)
 		err = node.Logout(out)
