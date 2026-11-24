@@ -53,13 +53,6 @@ func TestWhenAConversationRewinds(t *testing.T) {
 			},
 			refuse: "Nothing comes before the thread's first turn",
 		},
-		"to a revert's recovery": {
-			thread: inWorktree,
-			to: func(api.ID, api.ID) api.CheckpointRef {
-				return api.CheckpointRef{Phase: api.CheckpointRecovery, ID: api.NewID()}
-			},
-			refuse: "not to the files a revert put back",
-		},
 		"while a run works": {thread: inWorktree, live: true, refuse: "Stop the thread before rewinding its conversation"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -192,4 +185,29 @@ func TestARunsHeadIsLogged(t *testing.T) {
 		}
 	}
 	t.Fatalf("ended: %+v; want a turn.ended with the head", evs)
+}
+
+// A conversation revert to a rewind's recovery checkpoint undoes the
+// rewind: the engine hands it to the runtime with nothing to drop, and the
+// runs the undo restored are the conversation's again.
+func TestAnUndoOfARewindRestoresItsRuns(t *testing.T) {
+	f := worktreeThread(t, api.ID{})
+	first, second := turned(f, "one"), turned(f, "two")
+	rewind, _, err := f.submit(api.ThreadRevert{To: api.CheckpointRef{Phase: api.CheckpointRun, ID: first}, Conversation: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.see(engine.Reverted{Revert: api.ThreadReverted{Revert: rewind, To: api.CheckpointRef{Phase: api.CheckpointRun, ID: first}, Status: api.RevertKept, Conversation: api.RewindPortable, Dropped: []api.ID{second}}})
+	to := api.CheckpointRef{Phase: api.CheckpointRecovery, ID: rewind}
+	id, effects, err := f.submit(api.ThreadRevert{To: to, Conversation: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []engine.Effect{engine.RevertThread{Revert: id, To: to, Conversation: true, KeepFiles: true}}; !reflect.DeepEqual(effects, want) {
+		t.Fatalf("effects %+v, want %+v", effects, want)
+	}
+	f.see(engine.Reverted{Revert: api.ThreadReverted{Revert: id, To: to, Status: api.RevertKept, Conversation: api.RewindNative, Session: "back", Restored: []api.ID{second}}})
+	if f.th.Session != "back" || f.th.Runs[0].Dropped || f.th.Runs[1].Dropped {
+		t.Fatalf("after the undo: session %q, runs %+v; want the undo's session and no run dropped", f.th.Session, f.th.Runs)
+	}
 }

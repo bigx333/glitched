@@ -55,6 +55,9 @@ func TestATurnsFilesRevertAndUndo(t *testing.T) {
 	if !h.tt.HasText("Undo this turn's files?") {
 		t.Fatalf("no alert asks first")
 	}
+	if n := strings.Count(strings.Join(h.tt.Texts(), "\n"), "Files created since then, by the agent or by hand, are removed; Undo brings them back."); n != 1 {
+		t.Fatalf("the alert says files created since are removed %d times, want once", n)
+	}
 	if _, err := os.Stat(notes); err != nil {
 		t.Fatalf("the alert alone changed the files: %v", err)
 	}

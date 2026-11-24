@@ -203,11 +203,11 @@ func (a *app) revertAlert(c *ui.Context) {
 	}
 	head := "Restore the files to this turn?"
 	body := "The worktree's files go back to how this turn left them."
-	files := " Changes made since, by the agent or by hand, go back too. The files as they are now are saved first, so Undo brings them back.\n\nCommits stay: git status shows the restored files as changes."
+	files := " Changes made since, by the agent or by hand, go back too. The files as they are now are saved first, so Undo brings them back.\n\nFiles created since then, by the agent or by hand, are removed; Undo brings them back.\n\nCommits stay: git status shows the restored files as changes."
 	ok := "Restore files"
 	switch {
 	case r.rewind && r.files:
-		head, body, ok = "Rewind the conversation and files to this turn?", rewindBody+"\n\nThe worktree's files go back to how this turn left them too."+files, "Rewind"
+		head, body, ok = "Rewind the conversation and files to this turn?", rewindBody+"\n\nThe worktree's files go back to how this turn left them too.", "Rewind"
 	case r.rewind:
 		head, body, files, ok = "Rewind the conversation to this turn?", rewindBody+" The files stay as they are.", "", "Rewind"
 	case r.undoTurn:
@@ -226,27 +226,59 @@ func (a *app) revertAlert(c *ui.Context) {
 }
 
 // revertDivider is the row es[i] of the timeline: how a revert of the
-// files or a rewind of the conversation ended, with an Undo that puts back
-// the files it saved first, while no message, run or revert came after it:
-// after one that failed too, for files its rollback couldn't put back. A
-// rewind says whether the agent kept its own conversation or was handed a
-// new one, as the run after it took it up once one has. Undo puts only the
-// files back.
+// files or a rewind of the conversation ended, with an Undo while no
+// message, run or revert came after it. Undo puts back the files the
+// revert saved first, after one that failed too, for files its rollback
+// couldn't put back; after a rewind, it brings back the conversation as it
+// was before it too, the files only where the rewind kept them. Where the
+// conversation can't come back, as after an Undo of a rewind or a rewind
+// that failed, it says before the click that it puts back the files only.
+// An Undo of a rewind that failed changed nothing, so its row puts back
+// the files the rewind saved, as the rewind's own Undo would have.
+// A rewind says whether the agent kept its own conversation or was handed
+// a new one, as the run after it took it up once one has.
 func (a *app) revertDivider(c *ui.Context, t thread, es []entry, i int) {
 	r := es[i].revert
 	last := !slices.ContainsFunc(es[i+1:], func(e entry) bool {
 		return e.kind == entryWork || e.kind == entryRevert || e.kind == entryAssistant || e.kind == entryUser
 	})
+	unrewind := r.Rewound() && len(r.Restored) == 0
+	back, saved := r.Revert, r.Recovery != ""
+	if !saved && r.To.Phase == api.CheckpointRecovery && r.Conversation == api.RewindFailed {
+		back, saved = r.To.ID, slices.ContainsFunc(es[:i], func(e entry) bool {
+			return e.kind == entryRevert && e.revert.Revert == r.To.ID && e.revert.Recovery != ""
+		})
+	}
 	undo := func() {
-		if !last || r.Recovery == "" {
+		if !last || !saved && !unrewind {
 			return
 		}
-		why := a.whyNoRevert(t)
-		b := ghost(c, "undo", false).Padding(2, 6).Children(func() { ui.Text(c, "Undo").FontSize(11.5) })
+		why, label, tip := a.whyNoRevert(t), "Undo", ""
+		switch {
+		case unrewind && r.Recovery == "":
+			why, tip = "", "Brings back the conversation as it was before the rewind"
+			if t.View.Live() {
+				why = "Stop the thread before reverting it"
+			} else if !t.Transcript.Reverting.IsZero() {
+				why = "A revert is under way"
+			}
+		case unrewind:
+			tip = "Brings back the conversation and the files as they were before the rewind"
+		case r.Rewound() || r.Conversation == api.RewindFailed:
+			label, tip = "Undo files only", "Puts back the files; the conversation stays as it is"
+		}
+		b := ghost(c, "undo", false).Padding(2, 6).Children(func() { ui.Text(c, label).FontSize(11.5) })
 		if why != "" {
 			a.tip(c, b.TextColor(palette.faint), why)
-		} else if b.Clicked() {
-			a.backend.Revert(t.env, t.id(), api.CheckpointRef{Phase: api.CheckpointRecovery, ID: r.Revert})
+			return
+		}
+		a.tip(c, b, tip)
+		switch {
+		case !b.Clicked():
+		case unrewind:
+			a.backend.Rewind(t.env, t.id(), api.CheckpointRef{Phase: api.CheckpointRecovery, ID: r.Revert}, r.Recovery != "")
+		default:
+			a.backend.Revert(t.env, t.id(), api.CheckpointRef{Phase: api.CheckpointRecovery, ID: back})
 		}
 	}
 	ui.Row(c).Key(es[i].key).Gap(10).AlignItems(ui.Center).Padding(4, 12).Transition(riseIn).Children(func() {
@@ -256,14 +288,19 @@ func (a *app) revertDivider(c *ui.Context, t thread, es []entry, i int) {
 			ui.Text(c, "Couldn't rewind the conversation: "+r.Error).FontSize(11.5).TextColor(palette.red).Shrink(1)
 			undo()
 		case r.Rewound():
-			text := "Rewound the conversation"
+			text, restored := "Rewound the conversation", " and restored "
+			kind, tip := "Native", "The agent's own conversation, cut after this turn"
+			portable := "A new conversation, handed the turns up to here"
+			if len(r.Restored) > 0 {
+				text, restored = "Brought back the conversation", " and put back "
+				tip, portable = "The agent's own conversation, as it was before the rewind", "A new conversation, handed the turns the rewind took out"
+			}
 			if r.Status == api.RevertRestored {
-				text += " and restored " + plural(r.Changed, "file")
+				text += restored + plural(r.Changed, "file")
 			}
 			ui.Text(c, text).FontSize(11.5).TextColor(palette.faint).SingleLine()
-			kind, tip := "Native", "The agent's own conversation, cut after this turn"
 			if cmp.Or(r.Took, r.Conversation) == api.RewindPortable {
-				kind, tip = "Portable", "A new conversation, handed the turns up to here"
+				kind, tip = "Portable", portable
 			}
 			a.tip(c, ui.Box(c).Label(kind).Padding(1, 6).Radius(6).Border(1, palette.border).Children(func() {
 				ui.Text(c, kind).FontSize(10.5).TextColor(palette.faint).AccessHidden(true)

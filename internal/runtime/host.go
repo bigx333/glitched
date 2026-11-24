@@ -998,7 +998,11 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		}
 		if took.Rewound == api.RewindPortable || forked != nil {
 			var kept string
-			if kept, err = h.handoff(ctx, t, rewound.To.ID, rewindFrame); err == nil {
+			to, frame := rewound.To.ID, rewindFrame
+			if len(rewound.Restored) > 0 {
+				to, frame = rewound.Restored[len(rewound.Restored)-1], unrewindFrame
+			}
+			if kept, err = h.handoff(ctx, t, to, frame); err == nil {
 				text = kept + text
 			}
 		}

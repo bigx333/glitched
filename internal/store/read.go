@@ -142,6 +142,75 @@ func (s *Store) origin(ctx context.Context, thread api.ID, pending bool) (*api.F
 	return &f, nil
 }
 
+// Ended is how a thread's revert ended, and what came after it in the
+// thread's log before another revert, but, was asked for: Turned, whether
+// a turn other than a silent one was admitted once the revert was asked
+// for, and Reverted, whether a revert asked for since either hasn't ended
+// yet or ended without failing.
+type Ended struct {
+	api.ThreadReverted
+	Turned, Reverted bool
+}
+
+// Reverted is how thread's revert ended, nil while it hasn't, and what
+// came after it before but was asked for.
+func (s *Store) Reverted(ctx context.Context, thread, revert, but api.ID) (*Ended, error) {
+	reverting, reverted, admitted := api.EventType(api.ThreadReverting{}), api.EventType(api.ThreadReverted{}), api.EventType(api.TurnAdmitted{})
+	rows, err := s.db.QueryContext(ctx, `SELECT type, payload FROM events WHERE thread = ? AND type IN (?, ?, ?) AND seq >=
+			(SELECT min(seq) FROM events WHERE thread = ? AND type = ? AND json_extract(payload, '$.revert') = ?) ORDER BY seq`,
+		thread[:], reverting, reverted, admitted, thread[:], reverting, revert.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var e *Ended
+	var turned, cut bool
+	since := map[api.ID]bool{} // each revert asked for since, and whether it counts: it hasn't failed
+	for rows.Next() {
+		var kind string
+		var payload []byte
+		if err := rows.Scan(&kind, &payload); err != nil {
+			return nil, err
+		}
+		switch kind {
+		case reverting:
+			var r api.ThreadReverting
+			if err := json.Unmarshal(payload, &r); err != nil {
+				return nil, err
+			}
+			cut = cut || r.Revert == but
+			if !cut && r.Revert != revert {
+				since[r.Revert] = true
+			}
+		case admitted:
+			var a api.TurnAdmitted
+			if err := json.Unmarshal(payload, &a); err != nil {
+				return nil, err
+			}
+			turned = turned || !cut && !a.Silent
+		default:
+			var r api.ThreadReverted
+			if err := json.Unmarshal(payload, &r); err != nil {
+				return nil, err
+			}
+			if _, ok := since[r.Revert]; ok {
+				since[r.Revert] = r.Status != api.RevertFailed
+			}
+			if r.Revert == revert {
+				e = &Ended{ThreadReverted: r}
+			}
+		}
+	}
+	if err := rows.Err(); err != nil || e == nil {
+		return nil, err
+	}
+	e.Turned = turned
+	for _, counts := range since {
+		e.Reverted = e.Reverted || counts
+	}
+	return e, nil
+}
+
 // Read answers q from one read transaction, so the projection and the
 // events agree with the snapshot's cursor.
 func (s *Store) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {

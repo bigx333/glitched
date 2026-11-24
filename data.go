@@ -188,7 +188,7 @@ type entry struct {
 	work    []client.WorkStep
 	plan    []api.PlanStep
 	request *client.RequestEntry
-	run     api.ID // a work entry's
+	run     api.ID // the run a message, a reply or a work entry is of
 	// reports are a run of children's reports, one card's.
 	reports []client.ReportEntry
 	// revert is how a revert of the files ended, a revert entry's.
@@ -259,7 +259,7 @@ func (d *deriving) add(e client.Entry) {
 		d.listed[e.Message] = true
 		d.es = append(d.es, userEntry(e))
 	case *client.AssistantEntry:
-		ae := entry{key: d.key("a", e.Run), kind: entryAssistant, text: e.Text, streaming: e.Streaming, at: e.At, ran: ranFor(e.End), retry: unfinished(e.End)}
+		ae := entry{key: d.key("a", e.Run), kind: entryAssistant, text: e.Text, streaming: e.Streaming, at: e.At, ran: ranFor(e.End), retry: unfinished(e.End), run: e.Run}
 		if e.End != nil {
 			ae.turn = e.Run
 		}
@@ -584,7 +584,7 @@ func userEntry(u *client.UserEntry) entry {
 	if u.Reason != "" {
 		note += ": " + u.Reason
 	}
-	return entry{key: "m/" + u.Message.String(), kind: entryUser, text: u.Text, note: note, at: u.At, retry: unfinished(u.End)}
+	return entry{key: "m/" + u.Message.String(), kind: entryUser, text: u.Text, note: note, at: u.At, retry: unfinished(u.End), run: u.Run()}
 }
 
 // ranFor is how long a turn that ended so ran, zero while it runs.

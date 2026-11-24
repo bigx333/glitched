@@ -66,6 +66,9 @@ func (t *Transcript) Checkpoint(run api.ID) (at, before api.CheckpointCaptured, 
 // Dropped is whether a rewind took run out of the conversation.
 func (t *Transcript) Dropped(run api.ID) bool { return t.dropped[run] }
 
+// Run is the run that claimed the message, zero before one has.
+func (u *UserEntry) Run() api.ID { return u.run }
+
 // Followed is whether a turn of the user's the conversation still holds
 // came after run's, which a rewind of the conversation to run would drop.
 func (t *Transcript) Followed(run api.ID) bool {
@@ -513,6 +516,9 @@ func (t *Transcript) apply(e api.Event) {
 					t.dropped = map[api.ID]bool{}
 				}
 				t.dropped[run] = true
+			}
+			for _, run := range b.Restored {
+				delete(t.dropped, run)
 			}
 		}
 		t.add(&RevertEntry{ThreadReverted: b, At: e.At})

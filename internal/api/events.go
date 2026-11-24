@@ -522,7 +522,10 @@ const (
 // run takes it up, natively or as a portable one where its provider can't
 // or lost the one it made, the rewind is pending. Dropped is the
 // runs after To the conversation held, which it no longer does. A revert
-// either does all it was asked or changes nothing.
+// either does all it was asked or changes nothing. One that undoes a
+// rewind, To the rewind's recovery checkpoint, rewinds the conversation to
+// where it was before it: Restored is the runs the rewind dropped, which
+// the conversation holds again.
 //
 // It moves the thread's revision; one that rewound the conversation sets
 // the thread's session, and clears what the thread knew of its context.
@@ -538,6 +541,7 @@ type ThreadReverted struct {
 	From         string        `json:"from,omitempty"`
 	At           string        `json:"at,omitempty"`
 	Dropped      []ID          `json:"dropped,omitempty"`
+	Restored     []ID          `json:"restored,omitempty"`
 }
 
 // Rewound is whether the revert rewound the thread's conversation.

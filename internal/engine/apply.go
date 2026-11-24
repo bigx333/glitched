@@ -280,7 +280,8 @@ func apply(t Thread, e Event) (Thread, error) {
 		// the revision, for clients to read it, and for the runtime's
 		// commit hook to see the thread whose folder it marks. One that
 		// rewound the conversation gives the thread another, which holds
-		// none of what the last one did, nor the runs it dropped. The lane
+		// none of what the last one did, nor the runs it dropped; one that
+		// undid a rewind holds the runs that rewind dropped again. The lane
 		// runs the revert before a run admitted since, which no agent has
 		// begun yet, whether it is still starting or already stopping.
 		if r, ok := b.(api.ThreadReverted); ok && r.Rewound() {
@@ -290,7 +291,7 @@ func apply(t Thread, e Event) (Thread, error) {
 			t.Session, t.Context = r.Session, api.Context{}
 			t.Runs = slices.Clone(t.Runs)
 			for i := range t.Runs {
-				t.Runs[i].Dropped = t.Runs[i].Dropped || slices.Contains(r.Dropped, t.Runs[i].ID)
+				t.Runs[i].Dropped = (t.Runs[i].Dropped || slices.Contains(r.Dropped, t.Runs[i].ID)) && !slices.Contains(r.Restored, t.Runs[i].ID)
 			}
 		}
 	case api.RequestInvalidation:

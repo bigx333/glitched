@@ -25,6 +25,11 @@ var ErrWithdrawn = errors.New("The agent stopped waiting before the answer reach
 // models, it says nothing of what the account runs.
 var ErrSignedOut = errors.New("signed out")
 
+// ErrNoConversation is what Rewind returns, wrapped with the provider's
+// words, when the provider no longer has the conversation it is to
+// branch off: no branch of it can be made, ever.
+var ErrNoConversation = errors.New("the agent no longer has the conversation")
+
 // ErrNotInstalled is what Describe and Open return, wrapped with how to
 // install it, when the provider's program isn't there.
 var ErrNotInstalled = errors.New("not installed")

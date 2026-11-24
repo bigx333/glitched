@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -475,23 +476,28 @@ func confirmed(ctx context.Context, store, top string, thread, revert api.ID, ta
 	if why == "" {
 		return recovery, nil
 	}
-	again := "; revert again to start from the files as they are now"
 	last, err := readJournal(journalOf(store, revert))
 	switch {
 	case err != nil:
-		return "", fmt.Errorf("%s; the journal of an earlier attempt couldn't be read, so the files it restored were left as they are: %v", why, err)
+		return "", refusal("%s; the journal of an earlier attempt couldn't be read, so the files it restored were left as they are: %v", why, err)
 	case found == "":
-		return "", errors.New(why + ", so nothing changed" + again)
+		return "", refusal("%s, so nothing changed", why)
 	}
 	if err := undo(ctx, store, top, revert, recovery, plan); err != nil && len(last) == 0 {
-		return "", fmt.Errorf("%s; with no change of an earlier attempt's on record, these were left as they are too: %v", why, err)
+		return "", refusal("%s; with no change of an earlier attempt's on record, these were left as they are too: %v", why, err)
 	} else if err != nil {
-		return "", fmt.Errorf("%s; putting back the files an earlier attempt restored failed too: %v", why, err)
+		return "", refusal("%s; putting back the files an earlier attempt restored failed too: %v", why, err)
 	}
 	if len(last) == 0 {
-		return "", errors.New(why + ", so nothing changed" + again)
+		return "", refusal("%s, so nothing changed", why)
 	}
-	return "", errors.New(why + ", so nothing changed: the files an earlier attempt restored were put back as they were" + again)
+	return "", refusal("%s, so nothing changed: the files an earlier attempt restored were put back as they were", why)
+}
+
+// refusal is a replay's refusal, why it refused as format and args say,
+// with what the user is to do then, whatever the files it found.
+func refusal(format string, args ...any) error {
+	return fmt.Errorf(format+"; revert again to start from the files as they are now", args...)
 }
 
 // changedSince lists the paths whose files in top differ from recovery's,
@@ -695,6 +701,9 @@ func (h *Host) unrevert(ctx context.Context, t engine.Thread, b engine.RevertThr
 // which a rewind decided before it may have cut since: the run must
 // still be in it, and drops only what it still holds.
 func (h *Host) rewind(ctx context.Context, t engine.Thread, b engine.RevertThread, r *api.ThreadReverted) error {
+	if b.To.Phase == api.CheckpointRecovery {
+		return h.unrewind(ctx, t, b, r)
+	}
 	at := func(id api.ID) int {
 		return slices.IndexFunc(t.Runs, func(run engine.Run) bool { return run.ID == id })
 	}
@@ -730,6 +739,54 @@ func (h *Host) rewind(ctx context.Context, t engine.Thread, b engine.RevertThrea
 	return nil
 }
 
+// unrewind undoes, into r, the rewind of t's conversation whose recovery
+// checkpoint b reverts to, as Zeron does: the conversation goes on from
+// the one t had before the rewind, which a native rewind left as it was,
+// as far as the last run the rewind dropped, and it holds those runs
+// again. It undoes only the thread's latest revert, and only while no turn
+// was admitted since that one was asked for, as the thread's log has them
+// in order. Where the adapter forks that conversation now and checks
+// where the fork ends, as Codex's does, the undo is native; where the
+// provider no longer has it, or would branch off it only at the next run,
+// unchecked, as Claude's would, the thread's next run is handed the
+// turns, as Zeron's Claude is.
+func (h *Host) unrewind(ctx context.Context, t engine.Thread, b engine.RevertThread, r *api.ThreadReverted) error {
+	was, err := h.store.Reverted(ctx, t.ID, b.To.ID, b.Revert)
+	switch {
+	case err != nil:
+		return err
+	case was == nil || !was.Rewound() || len(was.Dropped) == 0:
+		return errors.New("That revert didn't rewind the conversation")
+	case was.Turned:
+		return errors.New("A turn came after this rewind")
+	case was.Reverted:
+		return errors.New("A revert came after this rewind, and only the latest can be undone")
+	}
+	heads, compacted, err := h.store.Heads(ctx, t.ID)
+	if err != nil {
+		return err
+	}
+	spec := provider.RewindSpec{Thread: t.ID, Revert: b.Revert, Workspace: t.Workspace, Session: was.From, Head: heads[was.Dropped[len(was.Dropped)-1]]}
+	for _, run := range was.Dropped {
+		spec.Compacted = spec.Compacted || compacted[run]
+	}
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	rw, err := h.providers.Rewind(ctx, t.Model.Provider, spec)
+	switch {
+	case errors.Is(err, provider.ErrNoConversation):
+		slog.Warn("runtime: the agent no longer has the conversation from before the rewind, so the undo hands its turns to the next run", "thread", t.ID, "err", err)
+		rw = provider.Rewind{}
+	case err != nil:
+		return fmt.Errorf("the conversation couldn't be brought back: %w", err)
+	}
+	r.Conversation, r.Session, r.From, r.Restored = api.RewindPortable, rw.Session, was.From, was.Dropped
+	if rw.Native && rw.At == "" {
+		r.Conversation = api.RewindNative
+	}
+	return nil
+}
+
 // handoffCap is the most a handoff takes, in bytes, its own text and all.
 const handoffCap = 48 << 10
 
@@ -739,6 +796,13 @@ type handoffFrame struct{ head, tail string }
 
 var rewindFrame = handoffFrame{
 	head: "<rewound_conversation>\nThe user rewound this conversation to an earlier turn, and it goes on in a new session. These are its turns up to there, newest first.%s\n",
+	tail: "</rewound_conversation>\n\n",
+}
+
+// unrewindFrame is the frame of the turns an undo of a rewind brought
+// back.
+var unrewindFrame = handoffFrame{
+	head: "<rewound_conversation>\nThe user undid a rewind of this conversation, and it goes on in a new session. These are its turns, newest first.%s\n",
 	tail: "</rewound_conversation>\n\n",
 }
 
