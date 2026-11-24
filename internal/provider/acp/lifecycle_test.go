@@ -103,15 +103,19 @@ func TestAStartTheAgentNeverGotFails(t *testing.T) {
 	}
 }
 
+// The agent holds the turn until it is cancelled: one that ended the turn
+// first has nothing left to cancel, and gets no cancel.
 func TestAStopRightAfterStartFollowsThePrompt(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "wire")
 	t.Setenv(wireEnv, out)
-	a := wireFake(t, "plain")
+	a := wireFake(t, "hold")
 	g := open(t, a, spec(t))
 	defer closeRun(t, g)
 	do(t, g, provider.Start{Text: "test"})
 	do(t, g, provider.Interrupt{})
-	turn(t, g)
+	if e := ended(t, turn(t, g)); e.Outcome != api.OutcomeInterrupted {
+		t.Fatalf("the stopped turn ended %v, want interrupted", e.Outcome)
+	}
 	data, err := os.ReadFile(out)
 	if err != nil {
 		t.Fatal(err)
@@ -121,6 +125,29 @@ func TestAStopRightAfterStartFollowsThePrompt(t *testing.T) {
 	c := strings.Index(s, `"session/cancel"`)
 	if p < 0 || c < 0 || c < p {
 		t.Fatalf("wire order (byte offsets): prompt=%d cancel=%d", p, c)
+	}
+}
+
+// A stop that comes once the agent answered the prompt finds the turn
+// ended: there is nothing to cancel, and the turn stays completed.
+func TestAStopAfterTheAgentEndedItsTurnSendsNoCancel(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "wire")
+	t.Setenv(wireEnv, out)
+	a := wireFake(t, "plain")
+	g := open(t, a, spec(t))
+	defer closeRun(t, g)
+	do(t, g, provider.Start{Text: "test"})
+	<-g.(*Agent).done
+	do(t, g, provider.Interrupt{})
+	if e := ended(t, turn(t, g)); e.Outcome != api.OutcomeCompleted {
+		t.Fatalf("the turn the agent finished ended %v, want completed", e.Outcome)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"session/cancel"`) {
+		t.Fatal("a cancel went to an agent whose turn had ended")
 	}
 }
 
