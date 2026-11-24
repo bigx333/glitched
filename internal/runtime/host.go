@@ -297,7 +297,7 @@ func (h *Host) Info(context.Context) (api.Environment, error) {
 
 func (h *Host) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 	if link, ok := api.LinkOf(ctx); ok {
-		if err := h.owned(ctx, link, q.Thread); err != nil {
+		if _, err := h.owned(ctx, link, q.Thread); err != nil {
 			return api.Snapshot{}, err
 		}
 	}

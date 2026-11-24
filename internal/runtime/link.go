@@ -21,24 +21,24 @@ import (
 // in a worktree this engine makes of a checkout of the repository it
 // names. Every refusal of scope is api.ErrNotAllowed.
 
-// owned is nil when thread is one link started here, and it isn't
+// owned is thread when it is one link started here, and it isn't
 // deleted; api.ErrNotFound when it is deleted; api.ErrNotAllowed for any
 // other, there or not, so a link learns nothing of what isn't its own.
-func (h *Host) owned(ctx context.Context, link api.Link, thread api.ID) error {
+func (h *Host) owned(ctx context.Context, link api.Link, thread api.ID) (engine.Thread, error) {
 	if thread.IsZero() {
-		return fmt.Errorf("%w: a link reads only a thread it started, by its id", api.ErrNotAllowed)
+		return engine.Thread{}, fmt.Errorf("%w: a link reads only a thread it started, by its id", api.ErrNotAllowed)
 	}
 	t, err := h.store.Thread(ctx, thread)
 	if err != nil {
-		return err
+		return engine.Thread{}, err
 	}
 	if !t.Exists() || t.Origin == nil || t.Origin.Link != link.ID {
-		return fmt.Errorf("%w: the thread isn't one this link started", api.ErrNotAllowed)
+		return engine.Thread{}, fmt.Errorf("%w: the thread isn't one this link started", api.ErrNotAllowed)
 	}
 	if t.Deleted {
-		return api.ErrNotFound
+		return engine.Thread{}, api.ErrNotFound
 	}
-	return nil
+	return t, nil
 }
 
 // linkCommand is the id c's command takes from link: its own and the
@@ -68,15 +68,28 @@ func (h *Host) linkSubmit(ctx context.Context, link api.Link, c api.Command) (ap
 	if b, ok := c.Body.(api.ThreadCreate); ok {
 		return h.createFromLink(ctx, link, c, b)
 	}
-	if err := h.owned(ctx, link, c.Target); err != nil {
+	t, err := h.owned(ctx, link, c.Target)
+	if err != nil {
 		return api.Receipt{}, err
 	}
+	// A message or a stop is the agent's on the machine the link came
+	// from, of the thread the child came from there: as an agent's of a
+	// thread above, it is refused once this engine's person took the
+	// child over, and never takes it over itself. A message to start now
+	// goes after the run, as an agent's does.
 	switch b := c.Body.(type) {
 	case api.MessageDispatch:
 		if b.Auto {
 			return api.Receipt{}, fmt.Errorf("%w: only this engine continues a thread on its own", api.ErrNotAllowed)
 		}
-	case api.TurnInterrupt, api.InboxSet:
+		if b.Mode == api.StartNow {
+			b.Mode = api.AfterActive
+			c.Body = b
+		}
+		c.Caller = &api.Caller{Thread: t.Origin.Thread}
+	case api.TurnInterrupt:
+		c.Caller = &api.Caller{Thread: t.Origin.Thread}
+	case api.InboxSet:
 	case api.ThreadConfigure:
 		narrows := fmt.Errorf("%w: a link only narrows a thread's access", api.ErrNotAllowed)
 		if b.Model != nil || b.Effort != nil || b.Fast != nil || b.Access == nil {
@@ -210,7 +223,7 @@ func (h *Host) checkoutOf(ctx context.Context, r api.Repository) (top, commit st
 // child's report gives it its parent: for a link, of a thread it started.
 func (h *Host) ChildReply(ctx context.Context, q api.ChildReplyQuery) (api.ChildReply, error) {
 	if link, ok := api.LinkOf(ctx); ok {
-		if err := h.owned(ctx, link, q.Thread); err != nil {
+		if _, err := h.owned(ctx, link, q.Thread); err != nil {
 			return api.ChildReply{}, err
 		}
 	}
