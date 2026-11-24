@@ -95,6 +95,10 @@ type Config struct {
 	// programs read and write, never what they said, in
 	// providerlog.Under(Dir).
 	ProviderLog bool `json:"provider_log,omitempty"`
+	// ContinueAfterRestart has the engine, as it starts, continue the runs
+	// of the user's threads its last stop cut off, as Continue does. Off
+	// unless set.
+	ContinueAfterRestart bool `json:"continue_after_restart,omitempty"`
 	// PluginRun runs the programs plugins' services ask for; nil runs them with RunProgram.
 	PluginRun func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error) `json:"-"`
 }
@@ -335,7 +339,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	} else {
 		slog.Warn("agents run without glitched mcp, so they start no child threads", "err", errors.Join(err, absErr))
 	}
-	opts = append(opts, runtime.WithMCPServers(cfg.MCP...), runtime.WithWorktrees(filepath.Join(cfg.Dir, "worktrees")), runtime.WithCheckpoints(filepath.Join(cfg.Dir, "checkpoints")), runtime.WithVault(secrets.New(secrets.Under(cfg.Dir))), runtime.WithIdleCompaction(cfg.CompactBeforeExpireEnabled()))
+	opts = append(opts, runtime.WithMCPServers(cfg.MCP...), runtime.WithWorktrees(filepath.Join(cfg.Dir, "worktrees")), runtime.WithCheckpoints(filepath.Join(cfg.Dir, "checkpoints")), runtime.WithVault(secrets.New(secrets.Under(cfg.Dir))), runtime.WithIdleCompaction(cfg.CompactBeforeExpireEnabled()), runtime.WithAutoContinue(cfg.ContinueAfterRestart))
 	// The skills staged for an agent are read from its workspace too.
 	if dir, err := filepath.Abs(cfg.Dir); err == nil {
 		opts = append(opts, runtime.WithSkills(dir))

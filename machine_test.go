@@ -366,3 +366,44 @@ func TestTheAgentsCardTogglesTheProviderLog(t *testing.T) {
 		h.tt.Advance(time.Second)
 	}
 }
+
+// The Agents card's continue after a restart switch is off until the user
+// turns it on, and saves the setting the engine reads as it next starts,
+// without restarting the engine now, which would cut its agents off.
+func TestTheAgentsCardTogglesContinueAfterARestart(t *testing.T) {
+	dir := tempDir(t)
+	held := fake.New(fake.Turn(false))
+	held.HoldStart = true
+	h := startWith(t, dir, func(c *daemon.Config) { c.Providers["fake"] = held })
+	h.tt.SetSize(1280, 1400)
+	ticking(t, h)
+	ep := transport.NewEndpointClient(daemon.Socket(dir), api.ID{})
+	t.Cleanup(func() { ep.Close() })
+	id := api.NewID()
+	for _, b := range []api.Intent{api.ThreadCreate{Workspace: "/work/t3code", Title: "Busy", Model: fakeModel}, api.MessageDispatch{Text: "go", Mode: api.StartNow}} {
+		if _, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.until("the agent starting", func() bool { return held.Starts() == 1 })
+	h.click("Settings")
+	h.click("This machine")
+	h.until("the Agents card", func() bool { return h.tt.HasText("Continue agents after a restart") && h.a.backend.Machine().Embedded })
+	for _, want := range []bool{true, false} {
+		cfg, err := daemon.Defaults(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ContinueAfterRestart == want {
+			t.Fatalf("continue after a restart is %v before the click, want %v", cfg.ContinueAfterRestart, !want)
+		}
+		h.click("Enable continue agents after a restart")
+		h.tt.Advance(time.Second)
+		if cfg, err = daemon.Defaults(dir); err != nil || cfg.ContinueAfterRestart != want || !h.a.backend.Machine().Embedded {
+			t.Fatalf("continue after a restart %v (%v), embedded %v; want %v, embedded", cfg.ContinueAfterRestart, err, h.a.backend.Machine().Embedded, want)
+		}
+	}
+	if snap, err := ep.Read(context.Background(), api.Query{Thread: id}); err != nil || snap.Threads[0].Run != api.RunStarting || held.Starts() != 1 {
+		t.Fatalf("the agent's run is %v after the switch, started %d times; want it still starting, once", snap.Threads, held.Starts())
+	}
+}

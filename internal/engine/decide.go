@@ -572,7 +572,7 @@ func (d *decision) interrupt(drop bool) error {
 // conversation: it ends, and its agent is closed.
 func (d *decision) lost(r Run) error {
 	if !r.Silent {
-		return d.emit(api.TurnUncertain{Run: r.ID})
+		return d.uncertain(r.ID, api.UncertainStopped)
 	}
 	d.effects = append(d.effects, CloseAgent{Run: r.ID, Generation: r.Generation})
 	return d.emit(api.TurnEnded{Run: r.ID, Outcome: api.OutcomeFailed, Error: "the compaction could not be stopped"})
@@ -1028,7 +1028,10 @@ func (d *decision) observe(o Observation) error {
 		if live.Silent {
 			return d.emit(api.TurnEnded{Run: o.Run, Outcome: api.OutcomeFailed, Error: "the engine restarted during the compaction"})
 		}
-		return d.emit(api.TurnUncertain{Run: o.Run})
+		if o.Failed {
+			return d.uncertain(o.Run, api.UncertainUnconfirmed)
+		}
+		return d.uncertain(o.Run, api.UncertainRestarted)
 	case Rewound:
 		return d.rewound()
 	case Reported:
@@ -1131,9 +1134,22 @@ func (d *decision) report(run api.ID, kind api.ReportKind, failure string, ask j
 	})
 }
 
+// uncertain is that nobody can prove what run's agent is doing, for why.
+// A child's parent hears it waits on the user, as it does of an approval,
+// unless the user stopped it: they asked for that.
+func (d *decision) uncertain(run api.ID, why api.UncertainReason) error {
+	if err := d.emit(api.TurnUncertain{Run: run, Reason: why}); err != nil {
+		return err
+	}
+	if why != api.UncertainStopped {
+		d.report(run, api.ReportBlocked, "", nil)
+	}
+	return nil
+}
+
 func (d *decision) rewound() error {
 	if live := d.t.Live(); live != nil && live.State != RunUncertain {
-		if err := d.emit(api.TurnUncertain{Run: live.ID}); err != nil {
+		if err := d.uncertain(live.ID, api.UncertainRewound); err != nil {
 			return err
 		}
 	}

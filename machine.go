@@ -165,6 +165,13 @@ func (a *app) agentsCard(c *ui.Context, m client.Machine) {
 				a.configure(func(cfg *daemon.Config) { cfg.ProviderLog = v })
 			}
 		})
+		continueOn := m.Config.ContinueAfterRestart
+		settingRow(c, "Continue agents after a restart", "When the engine starts again, it continues the threads of yours whose agent it cut off, two at a time, as Continue does. Not those that waited on you, were stopping, or are settled or snoozed.", func() {
+			if ui.Switch(c.Key("continue-after-restart"), &continueOn).Label("Enable continue agents after a restart").Changed() {
+				v := continueOn
+				a.configure(func(cfg *daemon.Config) { cfg.ContinueAfterRestart = v })
+			}
+		})
 		if !m.Embedded && m.Engine != nil {
 			ui.Text(c, "glitched serve applies a change here when it next starts.").Key("limits-later").Padding(14, 16).FontSize(12).TextColor(palette.muted)
 		}

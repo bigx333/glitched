@@ -51,8 +51,14 @@ type Host struct {
 	idleCompact atomic.Bool
 	// awake hears whether any agent of the host's works, each time that
 	// changes; working is the threads whose run does.
-	awake         func(bool)
-	working       map[api.ID]bool
+	awake   func(bool)
+	working map[api.ID]bool
+	// autoContinue continues the user's threads whose run this boot lost;
+	// lost is those runs, which boot found.
+	autoContinue  bool
+	lost          []lostRun
+	continued     chan struct{} // poked at each commit while continueLost runs
+	lostDone      chan struct{} // closed once continueLost has been through lost
 	compactCheck  chan api.ID
 	compactRescan chan struct{}
 	compactDue    chan compactDue
@@ -124,6 +130,12 @@ func WithAwake(awake func(bool)) Option {
 	return func(h *Host) { h.awake = awake }
 }
 
+// WithAutoContinue has the host continue, at boot, the runs of the user's
+// threads the restart lost, as Continue does, two at a time.
+func WithAutoContinue(on bool) Option {
+	return func(h *Host) { h.autoContinue = on }
+}
+
 // WithClock overrides the host's wall clock, for deterministic tests.
 func WithClock(now func() time.Time) Option {
 	return func(h *Host) { h.now = now }
@@ -145,6 +157,8 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		held:          map[string]chan struct{}{},
 		sent:          map[api.ID]bool{},
 		working:       map[api.ID]bool{},
+		continued:     make(chan struct{}, 1),
+		lostDone:      make(chan struct{}),
 		compactCheck:  make(chan api.ID, 64),
 		compactRescan: make(chan struct{}, 1),
 		compactDue:    make(chan compactDue, 64),
@@ -174,6 +188,10 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 	h.wg.Add(2)
 	go h.work()
 	go h.compactLoop()
+	if h.autoContinue {
+		h.wg.Add(1)
+		go h.continueLost()
+	}
 	return h, nil
 }
 
@@ -256,6 +274,10 @@ func (h *Host) committed(c store.Commit) {
 	h.mu.Unlock()
 	for _, th := range c.Threads {
 		h.noteCompact(th.ID)
+	}
+	select {
+	case h.continued <- struct{}{}:
+	default:
 	}
 	h.poke()
 }
@@ -420,6 +442,9 @@ func (h *Host) boot(ctx context.Context) error {
 			lease = 0
 		}
 		restored, ok := rec.(provider.Restored)
+		if !ok && !failed && !r.Silent {
+			h.lost = append(h.lost, lostRun{thread: id, run: r.ID, was: r.State})
+		}
 		if err := h.observe(ctx, id, engine.Reconciled{Run: r.ID, Restored: ok, Failed: failed}, lease); err != nil {
 			return err
 		}
