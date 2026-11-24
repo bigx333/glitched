@@ -53,6 +53,12 @@ func (s *skillStage) stage(thread api.ID, workspace, project string) provider.Sk
 	defer s.mu.Unlock()
 	root, err := skills.Build(s.dir, set)
 	if err != nil {
+		// A sync may have replaced the synced set Find read: the next
+		// Find reads the one now.
+		set = skills.Find(s.dir, workspace, project)
+		root, err = skills.Build(s.dir, set)
+	}
+	if err != nil {
 		slog.Warn("skills: the run's agent gets none, as they couldn't be copied", "thread", thread, "err", err)
 	}
 	if root == "" {

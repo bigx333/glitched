@@ -270,3 +270,117 @@ func TestStoreRefusesHostileOffers(t *testing.T) {
 		t.Errorf("the node finds %v", got)
 	}
 }
+
+func offer(source api.ID, puts ...api.SkillPut) api.SkillSync {
+	return api.SkillSync{Source: source, Name: "Praetor", Manifest: manifest(puts...)}
+}
+
+// Two apps syncing at once each keep the trees they put till their own
+// sync takes them.
+func TestTwoSyncsKeepEachOthersPuts(t *testing.T) {
+	node, _ := folders(t)
+	s := NewStore(node)
+	a, b := put("one", "a.md", "a"), put("two", "b.md", "b")
+	for _, p := range []api.SkillPut{a, b} {
+		if err := s.Put(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []api.SkillSync{offer(api.NewID(), a), offer(api.NewID(), b)} {
+		got, err := s.Sync(q, time.Now())
+		if err != nil || len(got.Missing) != 0 {
+			t.Fatalf("a sync whose tree was put answered %+v, %v", got, err)
+		}
+	}
+}
+
+// What a crash left, and trees no sync took within staleAfter, go at the
+// next sync, the same set's too.
+func TestSyncCollectsWhatNoSyncTakes(t *testing.T) {
+	node, _ := folders(t)
+	s := NewStore(node)
+	p := put("one", "a.md", "a")
+	if err := s.Put(p); err != nil {
+		t.Fatal(err)
+	}
+	q := offer(api.NewID(), p)
+	if _, err := s.Sync(q, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	stale := put("old", "b.md", "b")
+	if err := s.Put(stale); err != nil {
+		t.Fatal(err)
+	}
+	long := time.Now().Add(-2 * staleAfter)
+	os.Chtimes(s.dir("incoming", stale.Tree), long, long)
+	for _, d := range []string{s.dir("sets", ".tmp-1"), s.dir("incoming", ".tmp-2")} {
+		write(t, filepath.Join(d, "x"), "x")
+	}
+	if _, err := s.Sync(q, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{s.dir("sets", ".tmp-1"), s.dir("incoming", ".tmp-2"), s.dir("incoming", stale.Tree)} {
+		if _, err := os.Lstat(d); !os.IsNotExist(err) {
+			t.Errorf("%s stays: %v", d, err)
+		}
+	}
+}
+
+func TestPutKeepsWaitingTreesWithinALimit(t *testing.T) {
+	node, _ := folders(t)
+	s := NewStore(node)
+	was := waitingLimit
+	waitingLimit = 1 << 20
+	t.Cleanup(func() { waitingLimit = was })
+	if err := s.Put(put("one", "a.bin", strings.Repeat("a", 700<<10))); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(put("two", "b.bin", strings.Repeat("b", 700<<10))); err == nil || !strings.Contains(err.Error(), "no sync has taken yet") {
+		t.Errorf("a put past the limit was answered %v", err)
+	}
+}
+
+// A tree this machine's filesystem can't hold as sent, as two names that
+// differ only in case on one that ignores case, is refused at its put; one
+// that holds it takes it.
+func TestPutRefusesATreeTheFilesystemFolds(t *testing.T) {
+	node, _ := folders(t)
+	write(t, filepath.Join(node, "Probe"), "x")
+	_, err := os.Stat(filepath.Join(node, "probe"))
+	folds := err == nil
+	s := NewStore(node)
+	p := put("cased", "README.md", "upper", "readme.md", "lower")
+	if err := s.Put(p); (err != nil) != folds {
+		t.Fatalf("a put of README.md and readme.md where the filesystem folds case is %v answered %v", folds, err)
+	}
+	if !folds {
+		if got, err := s.Sync(offer(api.NewID(), p), time.Now()); err != nil || len(got.Missing) != 0 {
+			t.Errorf("its sync answered %+v, %v", got, err)
+		}
+	}
+}
+
+// A file's mode comes from what was sent, not from the filesystem the tree
+// waited on, which on Windows keeps none.
+func TestSyncTakesModesFromTheManifest(t *testing.T) {
+	node, _ := folders(t)
+	s := NewStore(node)
+	p := put("runs", "run.sh", "echo hi")
+	p.Files[1].Mode = "755"
+	p.Tree = treeOf(p.Files)
+	if err := s.Put(p); err != nil {
+		t.Fatal(err)
+	}
+	staged := s.dir("incoming", p.Tree, "run.sh")
+	if err := os.Chmod(staged, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Sync(offer(api.NewID(), p), time.Now()); err != nil || len(got.Missing) != 0 {
+		t.Fatalf("the sync answered %+v, %v", got, err)
+	}
+	set := Find(node, "", "")
+	fi, err := os.Stat(filepath.Join(set.Skills[0].Dir, "run.sh"))
+	if err != nil || fi.Mode().Perm()&0o100 == 0 {
+		t.Errorf("run.sh is %v, %v; want it to run", fi, err)
+	}
+}
