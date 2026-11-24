@@ -247,11 +247,21 @@ var tools = map[string]tool{
 // messages carry the tool use as their parent.
 var spawnTools = []string{"Task", "Agent"}
 
-// spawn is a native subagent of the turn's: its steps still open, and
-// whether it said anything yet.
+// taskEnds are the statuses of a task_notification that end its task, as
+// what each makes of it; any other is news of a task still at work.
+var taskEnds = map[string]api.Outcome{
+	"completed": api.OutcomeCompleted,
+	"failed":    api.OutcomeFailed, "error": api.OutcomeFailed,
+	"stopped": api.OutcomeInterrupted, "killed": api.OutcomeInterrupted, "cancelled": api.OutcomeInterrupted, "interrupted": api.OutcomeInterrupted,
+}
+
+// spawn is a native subagent of the turn's: its steps still open, whether
+// it said anything yet, and whether its text streams, so its messages'
+// text blocks only repeat it.
 type spawn struct {
-	steps  []provider.Work
-	texted bool
+	steps    []provider.Work
+	texted   bool
+	streamed bool
 }
 
 // turn turns one run's messages into provider events. A native subagent's
@@ -353,15 +363,8 @@ func (t *turn) read(m message) []provider.Event {
 		evs := append(t.unfinished(), t.measured(m)...)
 		return append(evs, t.end(m))
 	case "system":
-		if s := t.spawns[m.ToolUseID]; s != nil && m.Subtype == "task_notification" {
-			outcome := api.OutcomeCompleted
-			switch m.Status {
-			case "failed", "error":
-				outcome = api.OutcomeFailed
-			case "stopped", "killed", "cancelled", "interrupted":
-				outcome = api.OutcomeInterrupted
-			}
-			return append(t.close(m.ToolUseID, s), provider.Nested{Parent: m.ToolUseID, Event: provider.TurnEnded{Outcome: outcome, Tokens: m.Usage.Total}})
+		if outcome, ok := taskEnds[m.Status]; ok && m.Subtype == "task_notification" && t.spawns[m.ToolUseID] != nil {
+			return append(t.close(m.ToolUseID, t.spawns[m.ToolUseID]), provider.Nested{Parent: m.ToolUseID, Event: provider.TurnEnded{Outcome: outcome, Tokens: m.Usage.Total}})
 		}
 		if m.Subtype == "compact_boundary" {
 			t.used = 0
@@ -412,9 +415,21 @@ func (t *turn) nested(parent string, m message) []provider.Event {
 	}
 	var evs []provider.Event
 	add := func(e provider.Event) { evs = append(evs, provider.Nested{Parent: parent, Event: e}) }
+	if e := m.Event; m.Type == "stream_event" && e != nil && e.Type == "content_block_delta" && e.Delta != nil && e.Delta.Type == "text_delta" && e.Delta.Text != "" {
+		if s.texted && !s.streamed {
+			add(provider.TextDelta{Text: "\n\n"})
+		}
+		s.texted, s.streamed = true, true
+		add(provider.TextDelta{Text: e.Delta.Text})
+		return evs
+	}
+	if e := m.Event; m.Type == "stream_event" && e != nil && e.Type == "content_block_start" && e.ContentBlock != nil && e.ContentBlock.Type == "text" && s.texted && s.streamed {
+		add(provider.TextDelta{Text: "\n\n"})
+		return evs
+	}
 	for _, b := range m.content() {
 		switch {
-		case m.Type == "assistant" && b.Type == "text" && b.Text != "":
+		case m.Type == "assistant" && b.Type == "text" && b.Text != "" && !s.streamed:
 			if s.texted {
 				add(provider.TextDelta{Text: "\n\n"})
 			}

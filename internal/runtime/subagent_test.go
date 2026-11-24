@@ -1,11 +1,15 @@
 package runtime_test
 
 import (
+	"strings"
 	"testing"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
+	"glitched/internal/runtime"
+	"glitched/internal/secrets"
+	"glitched/internal/store"
 )
 
 // A native subagent's events land in its run's log under the step that
@@ -70,3 +74,77 @@ func TestANativeSubagentsEventsAreKeptApartFromItsRun(t *testing.T) {
 		t.Errorf("the log has the subagent ending %+v, want completed with its 7000 tokens", end)
 	}
 }
+
+// A native subagent's text is redacted as a stream of its own: a value
+// split across its deltas, or across the run's around one of its own, is
+// masked, and its steps' fields are too.
+func TestASubagentsTextIsRedactedAsAStreamOfItsOwn(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		script              []provider.Event
+		wantRoot, wantChild string
+	}{
+		{"child split", []provider.Event{nested(provider.TextDelta{Text: "before " + probe[:8]}), provider.TextDelta{Text: "parent"}, nested(provider.TextDelta{Text: probe[8:] + " after"})}, "parent", "before [GLX_PROBE] after"},
+		{"parent unbroken control", []provider.Event{provider.TextDelta{Text: "before " + probe[:8]}, provider.TextDelta{Text: probe[8:] + " after"}}, "before [GLX_PROBE] after", ""},
+		{"parent split", []provider.Event{provider.TextDelta{Text: "before " + probe[:8]}, nested(provider.TextDelta{Text: "child"}), provider.TextDelta{Text: probe[8:] + " after"}}, "before [GLX_PROBE] after", "child"},
+		{"complete fields", []provider.Event{nested(provider.TextDelta{Text: probe}), nested(provider.Work{Item: "cmd", Kind: "edit", Status: api.WorkFailed, Title: probe, Path: probe, Output: probe}), nested(provider.Work{Item: "success", Kind: "tool", Status: api.WorkCompleted, Output: probe})}, "", "[GLX_PROBE]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, err := store.Open(dbPath(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			vault := secrets.New(t.TempDir())
+			script := append([]provider.Event{provider.Work{Item: "spawn", Kind: "tool", Title: "spawn", Status: api.WorkStarted}}, tc.script...)
+			h, err := runtime.New(ctx, st, provider.Mux{"fake": fake.New(script)}, runtime.WithVault(vault))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer h.Kill()
+			thread := newThread(t, h)
+			if err := vault.Put(thread, map[string]string{"GLX_PROBE": probe}); err != nil {
+				t.Fatal(err)
+			}
+			submit(t, h, thread, dispatch("go", api.StartNow))
+			until(t, h, thread, "the turn", idle)
+			var root, child strings.Builder
+			work := map[string]api.SubagentWork{}
+			for _, e := range events(t, h, thread) {
+				b, err := e.Decode()
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch v := b.(type) {
+				case api.AssistantDelta:
+					root.WriteString(v.Text)
+				case api.SubagentDelta:
+					child.WriteString(v.Text)
+				case api.SubagentWork:
+					work[v.Item] = v
+				}
+			}
+			for name, s := range map[string]string{"root": root.String(), "child": child.String()} {
+				if strings.Contains(s, probe) {
+					t.Errorf("%s persisted and reconstructed the full test credential", name)
+				}
+			}
+			for name, pair := range map[string][2]string{"root": {root.String(), tc.wantRoot}, "child": {child.String(), tc.wantChild}} {
+				if !strings.Contains(pair[0], probe) && pair[0] != pair[1] {
+					t.Errorf("%s output %q, want %q", name, pair[0], pair[1])
+				}
+			}
+			if tc.name == "complete fields" {
+				w, ok := work["cmd"]
+				if !ok || w.Title != "[GLX_PROBE]" || w.Path != "[GLX_PROBE]" || w.Output != "[GLX_PROBE]" {
+					t.Error("failed work did not mask its credential fields")
+				}
+				if w, ok := work["success"]; !ok || w.Output != "" {
+					t.Error("successful work should not persist output")
+				}
+			}
+		})
+	}
+}
+
+func nested(e provider.Event) provider.Nested { return provider.Nested{Parent: "spawn", Event: e} }
