@@ -127,3 +127,28 @@ func TestOnlyATasksEndSettlesItsSubagent(t *testing.T) {
 		t.Errorf("tool completion after nonterminal task notification was lost: %v", got)
 	}
 }
+
+// A subagent's message that streamed nothing is its, though an earlier one
+// streamed: only text streamed since its last message is a repeat.
+func TestASubagentsUnstreamedMessageAfterAStreamedOneIsKept(t *testing.T) {
+	tn := newTurn(t.TempDir())
+	var text strings.Builder
+	for _, raw := range []string{
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","id":"spawn"}]}}`,
+		`{"type":"stream_event","parent_tool_use_id":"spawn","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"first"}}}`,
+		`{"type":"assistant","parent_tool_use_id":"spawn","message":{"content":[{"type":"text","text":"first"},{"type":"tool_use","id":"cmd","name":"Bash","input":{"command":"ls"}}]}}`,
+		`{"type":"user","parent_tool_use_id":"spawn","message":{"content":[{"type":"tool_result","tool_use_id":"cmd","content":"a"}]}}`,
+		`{"type":"assistant","parent_tool_use_id":"spawn","message":{"content":[{"type":"text","text":"second"}]}}`,
+	} {
+		for _, e := range tn.read(line(t, raw)) {
+			if n, ok := e.(provider.Nested); ok {
+				if d, ok := n.Event.(provider.TextDelta); ok {
+					text.WriteString(d.Text)
+				}
+			}
+		}
+	}
+	if got := text.String(); got != "first\n\nsecond" {
+		t.Errorf("the subagent said %q, want %q", got, "first\n\nsecond")
+	}
+}

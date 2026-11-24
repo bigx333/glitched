@@ -53,7 +53,7 @@ type Agent struct {
 	last        string               // the agent message the last text was of
 	subagents   map[string]*subagent // native subagents, by their thread
 	pending     map[string][]message // notifications of threads no spawn named yet
-	held        int                  // how many pending holds
+	held        int                  // the bytes pending holds
 	notices     int
 	tokens      int64 // what the turn's model requests used, so far
 	asks        map[string]*ask
@@ -504,10 +504,17 @@ func (g *Agent) notify(m message) {
 	}
 }
 
-// pendingLimit bounds the notifications of threads no spawn has named
-// yet, which a quick child's can be: Codex may send its whole turn before
-// the item that spawned it says whose it is.
-const pendingLimit = 1024
+// pendingLimit bounds, in bytes, the notifications of threads no spawn has
+// named yet, which a quick child's can be: Codex may send its whole turn
+// before the item that spawned it says whose it is. Zeron holds 4 MiB.
+const pendingLimit = 4 << 20
+
+// nestedMethods are the notifications of a child's thread the run maps;
+// no other is held for one.
+var nestedMethods = map[string]bool{
+	"item/agentMessage/delta": true, "item/started": true, "item/completed": true,
+	"thread/tokenUsage/updated": true, "turn/completed": true,
+}
 
 // subagent is a native subagent of the run's, a thread Codex spawned:
 // parent is the item of the run's that started it, and the rest is what
@@ -532,7 +539,8 @@ func (g *Agent) spawnLocked(it *item) (step bool, bound []string) {
 		if it.ActivityKind != "started" || thread == "" || thread == g.p.threadID() || it.AgentPath == "/" || it.AgentPath == "/root" {
 			return false, nil
 		}
-		if s := g.subagents[thread]; s != nil && s.parent != it.ID {
+		// Codex may say a spawn's start again: it is one step, told once.
+		if g.subagents[thread] != nil {
 			return false, nil
 		}
 	}
@@ -554,7 +562,9 @@ func (g *Agent) spawnLocked(it *item) (step bool, bound []string) {
 func (g *Agent) drainLocked(thread string) {
 	held := g.pending[thread]
 	delete(g.pending, thread)
-	g.held -= len(held)
+	for _, m := range held {
+		g.held -= len(m.Params)
+	}
 	for _, m := range held {
 		g.nestedLocked(g.subagents[thread], m)
 	}
@@ -584,13 +594,14 @@ func (g *Agent) nested(thread string, m message) {
 		g.nestedLocked(s, m)
 		return
 	}
-	if g.held < pendingLimit {
-		if g.pending == nil {
-			g.pending = map[string][]message{}
-		}
-		g.pending[thread] = append(g.pending[thread], m)
-		g.held++
+	if !nestedMethods[m.Method] || g.held+len(m.Params) > pendingLimit {
+		return
 	}
+	if g.pending == nil {
+		g.pending = map[string][]message{}
+	}
+	g.pending[thread] = append(g.pending[thread], m)
+	g.held += len(m.Params)
 }
 
 func (g *Agent) nestedLocked(s *subagent, m message) {
