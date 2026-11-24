@@ -4,7 +4,9 @@
 package engine
 
 import (
+	"cmp"
 	"encoding/json"
+	"slices"
 	"time"
 
 	"glitched/internal/api"
@@ -93,6 +95,13 @@ type Message struct {
 // queued for the thread's next turn. A wake is held in AfterActive, which
 // no client's message is: a client's held message is a Defer.
 func (m Message) waking() bool { return m.State == QueueHeld && m.Mode == api.AfterActive }
+
+// waiting is whether m is the user's and waits its turn: ready, or held
+// by a stop or as a Defer. A wake is the engine's, and one claimed, sent
+// or cancelled waits no more.
+func (m Message) waiting() bool {
+	return m.State == QueueReady || m.State == QueueHeld && m.Mode == api.Defer
+}
 
 type Request struct {
 	ID         api.ID
@@ -188,6 +197,19 @@ func (t Thread) next() *Message {
 		}
 	}
 	return best
+}
+
+// line is the messages of the user's that wait their turn, in the order
+// they take it.
+func (t Thread) line() []Message {
+	var line []Message
+	for _, m := range t.Queue {
+		if m.waiting() {
+			line = append(line, m)
+		}
+	}
+	slices.SortStableFunc(line, func(a, b Message) int { return cmp.Compare(a.Pos, b.Pos) })
+	return line
 }
 
 // holding is whether a message of the user's is held: by a stop, or sent

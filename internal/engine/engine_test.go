@@ -203,6 +203,26 @@ func TestTablesRefuseUnlistedEdges(t *testing.T) {
 			f.observe(engine.Reconciled{Run: run})
 			return f.th, api.MessageDispatched{Message: steer}
 		},
+		"message claimed to edited": func(t *testing.T) (engine.Thread, api.EventBody) {
+			f, _ := running(t)
+			steer := f.must(dispatch("hurry", api.SteerActive))
+			return f.th, api.MessageEdited{Message: steer, Text: "later"}
+		},
+		"message dispatched to moved": func(t *testing.T) (engine.Thread, api.EventBody) {
+			f, run := running(t)
+			return f.th, api.MessageMoved{Message: run, Pos: 9}
+		},
+		"message cancelled to edited": func(t *testing.T) (engine.Thread, api.EventBody) {
+			f, _ := running(t)
+			gone := f.must(dispatch("gone", api.AfterActive))
+			f.must(api.QueueCancel{Message: gone})
+			return f.th, api.MessageEdited{Message: gone, Text: "back"}
+		},
+		"wake to moved": func(t *testing.T) (engine.Thread, api.EventBody) {
+			f, _ := running(t)
+			f.see(report(api.ReportDone, "child", "result"))
+			return f.th, api.MessageMoved{Message: f.th.Queue[len(f.th.Queue)-1].ID, Pos: -9}
+		},
 		"request pending to delivered": func(t *testing.T) (engine.Thread, api.EventBody) {
 			f, _, req := waiting(t)
 			return f.th, api.RequestDelivery{Request: req.ID}

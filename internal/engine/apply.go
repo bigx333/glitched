@@ -141,6 +141,18 @@ func apply(t Thread, e Event) (Thread, error) {
 		if err = t.setMessage(b.Message, QueueReady); err == nil {
 			t.Queue[t.messageAt(b.Message)].Mode = api.AfterActive
 		}
+	case api.MessageEdited:
+		var i int
+		if i, err = t.waitingAt(b.Message, "edited"); err == nil {
+			t.Queue = slices.Clone(t.Queue)
+			t.Queue[i].Text = b.Text
+		}
+	case api.MessageMoved:
+		var i int
+		if i, err = t.waitingAt(b.Message, "moved"); err == nil {
+			t.Queue = slices.Clone(t.Queue)
+			t.Queue[i].Pos = b.Pos
+		}
 	case api.MessageUncertain:
 		if m, ok := t.Message(b.Message); ok {
 			silent = t.silentRun(m.Run)
@@ -261,6 +273,21 @@ func (t *Thread) setMessage(id api.ID, to QueueState) error {
 	t.Queue = slices.Clone(t.Queue)
 	t.Queue[i].State = to
 	return nil
+}
+
+// waitingAt is where the message of the user's that waits its turn is in
+// the queue. The tables can't fence a change that leaves a message's state
+// as it is, so this does: one claimed, sent or cancelled, or a wake, is
+// neither edited nor moved.
+func (t Thread) waitingAt(id api.ID, to string) (int, error) {
+	i := t.messageAt(id)
+	if i < 0 {
+		return -1, fmt.Errorf("engine: unknown message %s", id)
+	}
+	if !t.Queue[i].waiting() {
+		return -1, &TransitionError{"message", t.Queue[i].State, to}
+	}
+	return i, nil
 }
 
 func (t *Thread) setRequest(id api.ID, to api.RequestState) error {

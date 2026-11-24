@@ -86,6 +86,19 @@ type MessageReleased struct {
 	Message ID `json:"message"`
 }
 
+// MessageEdited gives a message that waits its turn the user's new words.
+type MessageEdited struct {
+	Message ID     `json:"message"`
+	Text    string `json:"text"`
+}
+
+// MessageMoved gives a message that waits its turn a new Pos, as the user
+// moved it or one moved into its place.
+type MessageMoved struct {
+	Message ID    `json:"message"`
+	Pos     int64 `json:"pos"`
+}
+
 // MessageUncertain: handing the message to the agent was cut off, so nobody
 // knows if it arrived.
 type MessageUncertain struct {
@@ -341,6 +354,8 @@ func (MessageCancelled) eventType() string    { return "message.cancelled" }
 func (MessageUncertain) eventType() string    { return "message.uncertain" }
 func (MessageHeld) eventType() string         { return "message.held" }
 func (MessageReleased) eventType() string     { return "message.released" }
+func (MessageEdited) eventType() string       { return "message.edited" }
+func (MessageMoved) eventType() string        { return "message.moved" }
 func (TurnAdmitted) eventType() string        { return "turn.admitted" }
 func (TurnStarted) eventType() string         { return "turn.started" }
 func (TurnStopping) eventType() string        { return "turn.stopping" }
@@ -378,6 +393,8 @@ func init() {
 	register[MessageUncertain]()
 	register[MessageHeld]()
 	register[MessageReleased]()
+	register[MessageEdited]()
+	register[MessageMoved]()
 	register[TurnAdmitted]()
 	register[TurnStarted]()
 	register[TurnStopping]()

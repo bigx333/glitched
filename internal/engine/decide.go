@@ -72,6 +72,14 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 		err = d.configure(b)
 	case api.QueueResume:
 		err = d.resume()
+	case api.QueueEdit:
+		err = d.edit(b)
+	case api.QueueCancel:
+		err = d.cancel(b)
+	case api.QueueMove:
+		err = d.move(b)
+	case api.QueueSteer:
+		err = d.steer(b)
 	default:
 		err = rejected("unknown intent")
 	}
@@ -384,6 +392,33 @@ func (t Thread) pos(front bool) int64 {
 	return hi + 1
 }
 
+// place makes room in the line for message just before the message
+// before, or last with before zero, and returns the position it takes
+// there. Positions are whole numbers: where the two it goes between leave
+// none free, those from before on move up one each, as far as they must.
+func (d *decision) place(message, before api.ID) (int64, error) {
+	if before.IsZero() {
+		return d.t.pos(false), nil
+	}
+	line := slices.DeleteFunc(d.t.line(), func(m Message) bool { return m.ID == message })
+	i := index(line, func(m Message) bool { return m.ID == before })
+	switch {
+	case i < 0:
+		return 0, rejected("the message to put it before no longer waits in the queue")
+	case i == 0:
+		return line[0].Pos - 1, nil
+	case line[i].Pos-line[i-1].Pos > 1:
+		return line[i-1].Pos + (line[i].Pos-line[i-1].Pos)/2, nil
+	}
+	at := line[i-1].Pos + 1
+	for next := at + 1; i < len(line) && line[i].Pos < next; i, next = i+1, next+1 {
+		if err := d.emit(api.MessageMoved{Message: line[i].ID, Pos: next}); err != nil {
+			return 0, err
+		}
+	}
+	return at, nil
+}
+
 // admit starts message's turn. The wakes that wait go in with it, claimed
 // by its run: the reports first, so the user's words come last.
 func (d *decision) admit(message api.ID) error {
@@ -584,6 +619,87 @@ func (d *decision) resume() error {
 	}
 	d.resumed = true
 	return d.release()
+}
+
+// queued is the message of the user's id names, while it waits its turn:
+// what the queue's intents act on.
+func (d *decision) queued(id api.ID) (Message, error) {
+	if m, ok := d.t.Message(id); ok && m.waiting() {
+		return m, nil
+	}
+	return Message{}, rejected("the message no longer waits in the queue")
+}
+
+func (d *decision) edit(b api.QueueEdit) error {
+	m, err := d.queued(b.Message)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(b.Text) == "" {
+		return rejected("a message needs words; take it out of the queue instead")
+	}
+	if b.Text == m.Text {
+		return nil
+	}
+	return d.emit(api.MessageEdited{Message: m.ID, Text: b.Text})
+}
+
+func (d *decision) cancel(b api.QueueCancel) error {
+	if _, err := d.queued(b.Message); err != nil {
+		return err
+	}
+	return d.emit(api.MessageCancelled{Message: b.Message, Reason: "taken out of the queue"})
+}
+
+// move puts a message in the line just before another, or last. One
+// already there stays, and nothing is recorded.
+func (d *decision) move(b api.QueueMove) error {
+	if _, err := d.queued(b.Message); err != nil {
+		return err
+	}
+	if b.Before == b.Message {
+		return rejected("a message can't go before itself")
+	}
+	line := d.t.line()
+	i := index(line, func(m Message) bool { return m.ID == b.Message })
+	if b.Before.IsZero() && i == len(line)-1 || i+1 < len(line) && line[i+1].ID == b.Before {
+		return nil
+	}
+	pos, err := d.place(b.Message, b.Before)
+	if err != nil {
+		return err
+	}
+	return d.emit(api.MessageMoved{Message: b.Message, Pos: pos})
+}
+
+// steer sends a message that waits its turn now, as a send does: into the
+// live run, as a SteerActive, or with none, as the thread's next turn. It
+// stops nothing, so a run that can't take a message refuses it. Like a
+// send, it's the user's go-ahead for what their stop held, as a row's
+// Steer now is in Zeron.
+func (d *decision) steer(b api.QueueSteer) error {
+	m, err := d.queued(b.Message)
+	if err != nil {
+		return err
+	}
+	live := d.t.Live()
+	switch {
+	case live != nil && live.Silent:
+		return rejected("the agent is compacting its context and can't take a message; it goes once that ends")
+	case live != nil && !steerable[live.State]:
+		return rejected(fmt.Sprintf("the agent is %s and can't take a message; send it once the run ends", live.State))
+	}
+	if err := d.release(); err != nil {
+		return err
+	}
+	if live == nil {
+		return d.admit(m.ID)
+	}
+	if err := d.emit(api.MessageClaimed{Message: m.ID, Run: live.ID}); err != nil {
+		return err
+	}
+	d.effects = append(d.effects, SteerTurn{Run: live.ID, Message: m.ID, Text: m.Text})
+	return nil
 }
 
 // drop cancels the messages waiting their turn, held or ready, so settle
@@ -1003,7 +1119,7 @@ func (d *decision) rewound() error {
 	}
 	var queued []api.ID
 	for _, m := range d.t.Queue {
-		if m.State == QueueReady || m.State == QueueHeld && m.Mode == api.Defer {
+		if m.waiting() {
 			queued = append(queued, m.ID)
 		}
 	}
