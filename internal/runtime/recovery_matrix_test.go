@@ -273,9 +273,15 @@ func blockedAbove(p string) bool {
 }
 
 // copyTree copies the folders, files and symlinks of from into to, with
-// their modification times, as a revert's journal records them.
+// their modification times, as a revert's journal records them. Where
+// to is new it clones from whole, if the disk can: the matrix copies
+// tens of thousands of trees, and a file made one at a time costs a
+// Mac's disk milliseconds.
 func copyTree(t *testing.T, from, to string) {
 	t.Helper()
+	if os.MkdirAll(filepath.Dir(to), 0o755) == nil && cloneTree(from, to) == nil {
+		return
+	}
 	err := filepath.WalkDir(from, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -465,19 +471,42 @@ func TestRecoveryKeepsEveryByteTheUserWrote(t *testing.T) {
 	}
 	controls := map[of][]string{}
 	want, goal := withFolders(recovered), withFolders(target)
+	back, toUndo, err := readPlan(ctx, store, applyingRef(thread, planned))
+	if err != nil {
+		t.Fatalf("the plan: %v", err)
+	}
+	// seen is the tree each control's undo found at each of its steps,
+	// as every cell's undo finds it there until the user acts. A cell
+	// that acts as recovery reaches a step tries its act on a copy of
+	// that tree first: where it doesn't apply, the cell doesn't run, and
+	// takes no undo of its own.
+	seen := func(stop, step int) string { return filepath.Join(root, "seen", fmt.Sprint(stop), fmt.Sprint(step)) }
 	run := func(i int, c *cell) {
 		s := states[c.stop]
-		dir := filepath.Join(root, "w", fmt.Sprint(i))
-		copyTree(t, s.dir, dir)
-		revert := api.NewID()
-		if data, err := os.ReadFile(journalOf(store, s.revert)); err == nil {
-			must(os.MkdirAll(filepath.Dir(journalOf(store, revert)), 0o700))
-			must(os.WriteFile(journalOf(store, revert), data, 0o600))
-		}
 		mark := fmt.Sprintf("the user's own, cell %d\n", i)
+		if c.race >= 0 {
+			if _, err := os.Stat(seen(c.stop, c.race)); errors.Is(err, fs.ErrNotExist) {
+				return
+			} else if err != nil {
+				t.Errorf("stop %d, race %d: the files the control's undo found at the step: %v", c.stop, c.race, err)
+				return
+			}
+			try := filepath.Join(root, "try", fmt.Sprint(i))
+			defer os.RemoveAll(try)
+			copyTree(t, seen(c.stop, c.race), try)
+			if !c.act.do(filepath.Join(try, c.path), c.path, mark) {
+				return
+			}
+		}
+		dir := filepath.Join(root, "w", fmt.Sprint(i))
+		defer os.RemoveAll(dir)
+		copyTree(t, s.dir, dir)
 		var left map[string]entry
 		under := func(p string) bool { return c.path != "." && (p == c.path || strings.HasPrefix(p, c.path+"/")) }
 		doAct := func() {
+			if c.race >= 0 && !maps.Equal(filesIn(t, dir), filesIn(t, seen(c.stop, c.race))) {
+				t.Errorf("stop %d, race %d: the user %s at %s, where the cell's undo found other files than its control's", c.stop, c.race, c.act.name, c.path)
+			}
 			if c.ran = c.act.do(filepath.Join(dir, c.path), c.path, mark); c.ran {
 				left = without(filesIn(t, dir), func(p string) bool { return !under(p) })
 			}
@@ -487,26 +516,32 @@ func TestRecoveryKeepsEveryByteTheUserWrote(t *testing.T) {
 				return
 			}
 		}
+		revert := api.NewID()
+		if data, err := os.ReadFile(journalOf(store, s.revert)); err == nil {
+			must(os.MkdirAll(filepath.Dir(journalOf(store, revert)), 0o700))
+			must(os.WriteFile(journalOf(store, revert), data, 0o600))
+		}
 		var err error
 		if c.stop != -3 {
-			back, plan, read := readPlan(ctx, store, applyingRef(thread, planned))
-			if read != nil {
-				t.Errorf("the plan: %v", read)
-				return
-			}
 			steps := 0
 			undoCtx := context.WithValue(ctx, stepKey{}, func(step string) {
 				if step == "journaling" {
 					return
+				}
+				if c.act.name == still.name {
+					copyTree(t, dir, seen(c.stop, steps))
 				}
 				if steps == c.race {
 					doAct()
 				}
 				steps++
 			})
-			err = undo(undoCtx, store, dir, revert, back, plan)
+			err = undo(undoCtx, store, dir, revert, back, toUndo)
 		}
 		if !c.ran {
+			if c.race >= 0 {
+				t.Errorf("stop %d, race %d: the user %s at %s applied to the files the control's undo found at the step, but the cell's own undo never ran it", c.stop, c.race, c.act.name, c.path)
+			}
 			return
 		}
 		now := filesIn(t, dir)
@@ -563,7 +598,11 @@ func TestRecoveryKeepsEveryByteTheUserWrote(t *testing.T) {
 	replay := func(i int, c *cell) {
 		s := states[c.stop]
 		dir := filepath.Join(root, "w", fmt.Sprint(i))
+		defer os.RemoveAll(dir)
 		copyTree(t, s.dir, dir)
+		if c.ran = c.act.do(filepath.Join(dir, c.path), c.path, fmt.Sprintf("the user's own, cell %d\n", i)); !c.ran {
+			return
+		}
 		revert := api.NewID()
 		if data, err := os.ReadFile(journalOf(store, s.revert)); err == nil {
 			must(os.MkdirAll(filepath.Dir(journalOf(store, revert)), 0o700))
@@ -575,9 +614,6 @@ func TestRecoveryKeepsEveryByteTheUserWrote(t *testing.T) {
 		under := func(p string) bool { return c.path != "." && (p == c.path || strings.HasPrefix(p, c.path+"/")) }
 		journaled, err := readJournal(journalOf(store, revert))
 		must(err)
-		if c.ran = c.act.do(filepath.Join(dir, c.path), c.path, fmt.Sprintf("the user's own, cell %d\n", i)); !c.ran {
-			return
-		}
 		before := filesIn(t, dir)
 		left := without(before, func(p string) bool { return !under(p) })
 		from, err := confirmed(ctx, store, dir, thread, revert, to)
