@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"glitched/internal/api"
 )
@@ -136,7 +137,7 @@ func (t *Tools) tasks(ctx context.Context, name string, raw json.RawMessage, too
 	if err = dec.Decode(&in); err != nil {
 		return nil, fmt.Errorf("%s: %v", name, err)
 	}
-	if len(in.RequestID) > 256 {
+	if utf8.RuneCountInString(in.RequestID) > 256 {
 		return nil, fmt.Errorf("%s: client_request_id is over 256 characters", name)
 	}
 	// An acting call is the turn's that runs as it starts.
