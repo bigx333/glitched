@@ -82,6 +82,35 @@ type Remote struct {
 	Link   ID `json:"link"`
 }
 
+// RemoteAttempted is a placeholder's first try to create its child on
+// its machine: from here on, the child may be there.
+type RemoteAttempted struct{}
+
+// RemoteBound is the child's create the machine took: Thread is the
+// child's there.
+type RemoteBound struct {
+	Thread ID `json:"thread"`
+}
+
+// RemoteSeen is what this engine read of the child on its machine, up to
+// Cursor, a position in that machine's log: the child's last run there,
+// whether it is silent, its slot, and the reports this engine delivered
+// of it, each by its key: the run for a turn's end, the request for one
+// it waits on.
+type RemoteSeen struct {
+	Cursor Cursor   `json:"cursor"`
+	Run    ID       `json:"run,omitzero"`
+	Silent bool     `json:"silent,omitempty"`
+	State  RunState `json:"state"`
+	Keys   []ID     `json:"keys,omitempty"`
+}
+
+// RemoteLost is a placeholder whose child this engine no longer reaches
+// or follows, and why.
+type RemoteLost struct {
+	Reason string `json:"reason"`
+}
+
 // MessageQueued records a dispatched message. The ready message with the
 // lowest Pos starts when the thread is idle; a Held one waits to be promoted.
 // A message with a Report is no client's: the engine queued it to give the
@@ -592,6 +621,10 @@ func (ThreadReverted) eventType() string      { return "thread.reverted" }
 func (ResumeCancelled) eventType() string     { return "resume.cancelled" }
 func (WorktreeReady) eventType() string       { return "worktree.ready" }
 func (WorktreeFailed) eventType() string      { return "worktree.failed" }
+func (RemoteAttempted) eventType() string     { return "remote.attempted" }
+func (RemoteBound) eventType() string         { return "remote.bound" }
+func (RemoteSeen) eventType() string          { return "remote.seen" }
+func (RemoteLost) eventType() string          { return "remote.lost" }
 
 var eventBodies = map[string]func([]byte) (EventBody, error){}
 
@@ -639,6 +672,10 @@ func init() {
 	register[ResumeCancelled]()
 	register[WorktreeReady]()
 	register[WorktreeFailed]()
+	register[RemoteAttempted]()
+	register[RemoteBound]()
+	register[RemoteSeen]()
+	register[RemoteLost]()
 }
 
 func register[B EventBody]() {

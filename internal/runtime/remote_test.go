@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -78,7 +79,7 @@ func refusedWith(t *testing.T, what string, err error, want string) {
 // Its create sent twice makes one, and the stored row is its log's fold.
 func TestARemoteChildIsAPlaceholderThatRunsNothing(t *testing.T) {
 	n, ad := remoteHost(t)
-	parent := newThread(t, n.h)
+	parent := repoThread(t, n.h)
 	starts := ad.Starts()
 	ids, errs := placed(t, n.h, ad, parent, fake.Child{Title: "on the laptop", Task: "run the tests there", Remote: "laptop", Tries: 2})
 	if errs[0] != nil {
@@ -89,7 +90,7 @@ func TestARemoteChildIsAPlaceholderThatRunsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (engine.Remote{Engine: laptop.Engine, Link: laptop.Link, State: engine.RemoteCreating}); th.Remote == nil || *th.Remote != want || th.Parent != parent {
+	if want := (engine.Remote{Engine: laptop.Engine, Link: laptop.Link, State: engine.RemoteCreating}); th.Remote == nil || !reflect.DeepEqual(*th.Remote, want) || th.Parent != parent {
 		t.Fatalf("the placeholder: parent %v, remote %+v; want under %v, %+v", th.Parent, th.Remote, parent, want)
 	}
 	evs := events(t, n.h, kid)
@@ -117,7 +118,7 @@ func types(evs []api.Event) []string {
 // A machine the person didn't add is refused, and nothing is made.
 func TestARemoteChildOnAMachineNotInTheListIsRefused(t *testing.T) {
 	n, ad := remoteHost(t)
-	parent := newThread(t, n.h)
+	parent := repoThread(t, n.h)
 	ids, errs := placed(t, n.h, ad, parent, fake.Child{Title: "elsewhere", Task: "go", Remote: "desktop"})
 	refusedWith(t, "a child on desktop", errs[0], `no machine called "desktop"`)
 	if th, _ := n.st.Thread(ctx, ids[0]); th.Exists() {
@@ -130,7 +131,7 @@ func TestARemoteChildOnAMachineNotInTheListIsRefused(t *testing.T) {
 // refused, and one starts once the placeholder is settled.
 func TestAPlaceholderTakesAPlaceAtWork(t *testing.T) {
 	n, ad := remoteHost(t)
-	parent := newThread(t, n.h)
+	parent := repoThread(t, n.h)
 	kids := []fake.Child{{Title: "remote", Task: "go", Remote: "laptop"}}
 	for i := range 4 {
 		kids = append(kids, fake.Child{Title: fmt.Sprint("local ", i), Task: "go"})
@@ -159,7 +160,7 @@ func TestAPlaceholderTakesAPlaceAtWork(t *testing.T) {
 func TestARemoteTaskWithAVaultValueIsRefused(t *testing.T) {
 	vault := secrets.New(t.TempDir())
 	n, ad := remoteHost(t, runtime.WithVault(vault))
-	parent := newThread(t, n.h)
+	parent := repoThread(t, n.h)
 	if err := vault.Put(parent, map[string]string{"DEPLOY_TOKEN": "tok-8c1f2e9a77", "PIN": "k29Qm7", "OWN_NAME": "[OWN_NAME]"}); err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +211,7 @@ func TestAPlaceholderGoesWithItsTree(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, ad := remoteHost(t)
-			parent := newThread(t, n.h)
+			parent := repoThread(t, n.h)
 			ids, errs := placed(t, n.h, ad, parent, fake.Child{Title: "remote", Task: "go", Remote: "laptop"})
 			if errs[0] != nil {
 				t.Fatal(errs[0])
@@ -270,7 +271,7 @@ func TestAPlaceholderOutlivesARestart(t *testing.T) {
 	ad := fake.New(fake.Turn(false))
 	n := start(t, path, ad)
 	n.st.SetPlaces(onlyLaptop)
-	parent := newThread(t, n.h)
+	parent := repoThread(t, n.h)
 	ids, errs := placed(t, n.h, ad, parent, fake.Child{Title: "remote", Task: "go", Remote: "laptop"})
 	if errs[0] != nil {
 		t.Fatal(errs[0])
@@ -382,4 +383,13 @@ func TestARemoteCreateWaitsForALocalWorktreeOfTheSameThread(t *testing.T) {
 		t.Fatalf("the thread: remote %+v, branch %q; want the local one in its worktree", th.Remote, th.Branch)
 	}
 	assertReplay(t, n.st)
+}
+
+// repoThread is a thread of the user's on a branch of a repository, as a
+// remote child's parent must be.
+func repoThread(t *testing.T, ep api.Endpoint) api.ID {
+	t.Helper()
+	id := api.NewID()
+	submit(t, ep, id, api.ThreadCreate{Workspace: repo(t), Title: "fix it", Model: api.ModelRef{Provider: "fake", Model: "fake"}})
+	return id
 }

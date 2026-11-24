@@ -3,6 +3,7 @@ package engine_test
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -325,7 +326,7 @@ func TestAnUncertainRunSaysWhy(t *testing.T) {
 func TestAPlaceholderFoldsItsMachine(t *testing.T) {
 	at := api.Remote{Engine: api.NewID(), Link: api.NewID()}
 	got := engine.Apply(engine.Thread{}, engine.Event{Thread: api.NewID(), At: now, Body: api.ThreadCreated{Title: "child", Parent: api.NewID(), Remote: &at}})
-	if want := (engine.Remote{Engine: at.Engine, Link: at.Link, State: engine.RemoteCreating}); got.Remote == nil || *got.Remote != want {
+	if want := (engine.Remote{Engine: at.Engine, Link: at.Link, State: engine.RemoteCreating}); got.Remote == nil || !reflect.DeepEqual(*got.Remote, want) {
 		t.Fatalf("the placeholder's remote: %+v; want %+v", got.Remote, want)
 	}
 	if local := engine.Apply(engine.Thread{}, engine.Event{Thread: api.NewID(), At: now, Body: api.ThreadCreated{Title: "child"}}); local.Remote != nil {
