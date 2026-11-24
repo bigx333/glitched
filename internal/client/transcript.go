@@ -212,6 +212,8 @@ type Subagent struct {
 	// Cut is that its run ended before saying how the subagent did: it
 	// is over, how is unknown.
 	Cut bool
+	// Rev counts its changes.
+	Rev int
 }
 
 // SubagentPart is a native subagent's text, or one of its steps.
@@ -467,6 +469,7 @@ func (t *Transcript) apply(e api.Event) {
 			} else {
 				s.Parts = append(s.Parts, SubagentPart{Text: b.Text})
 			}
+			s.Rev++
 			t.edited(we)
 		}
 	case api.SubagentWork:
@@ -487,11 +490,13 @@ func (t *Transcript) apply(e api.Event) {
 				}
 				s.Parts[i].Step = &step
 			}
+			s.Rev++
 			t.edited(we)
 		}
 	case api.SubagentEnded:
 		if s, we := t.subagent(b.Run, b.Parent); s != nil {
 			s.Ended, s.Outcome, s.Tokens = true, b.Outcome, b.Tokens
+			s.Rev++
 			t.edited(we)
 		}
 	case api.RequestOpened:
@@ -819,6 +824,7 @@ func (t *Transcript) end(run api.ID, released MessageState, at time.Time) {
 			for _, w := range e.Items {
 				if s := w.Subagent; s != nil && !s.Ended && !s.Cut {
 					s.Cut = true
+					s.Rev++
 					t.edited(e)
 				}
 			}

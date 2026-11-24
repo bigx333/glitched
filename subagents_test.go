@@ -277,3 +277,35 @@ func TestALongSubagentShowsItsLatestParts(t *testing.T) {
 		t.Fatalf("the long subagent's panel doesn't show its latest parts and how many came before: %v", h.a.plugins.App("subagent-panel").Err)
 	}
 }
+
+// The panel's context keeps a text's end however little of its budget is
+// left, and never a cut with no character in it; text a view would
+// escape past its room keeps its latest words.
+func TestASubagentsContextKeepsItsLatestText(t *testing.T) {
+	for _, left := range []int{1, 2, 3, 4} {
+		newest := strings.Repeat("n", subagentText-left)
+		w := client.WorkStep{Title: "Agent alpha", Subagent: &client.Subagent{Parts: []client.SubagentPart{
+			{Text: "An older paragraph."},
+			{Step: &client.WorkStep{Item: "c", Kind: "command", Title: "ls", Status: api.WorkCompleted}},
+			{Text: newest},
+		}}}
+		p := subagentContext(w)
+		last := p.Parts[len(p.Parts)-1]
+		if last.Text != newest || p.Earlier+len(p.Parts) != 3 {
+			t.Fatalf("with %d bytes left, the context is %d parts and %d earlier, want the newest text whole and every part counted", left, len(p.Parts), p.Earlier)
+		}
+		for _, part := range p.Parts {
+			if part.Step == nil && (part.Text == "" || part.Text == "…") {
+				t.Fatalf("with %d bytes left, the context holds a text cut to %q", left, part.Text)
+			}
+		}
+	}
+	escaped := strings.Repeat("<", 120000) + " The last words."
+	p := subagentContext(client.WorkStep{Title: "Agent alpha", Subagent: &client.Subagent{Parts: []client.SubagentPart{{Text: escaped}}}})
+	if len(p.Parts) != 1 || !strings.HasSuffix(p.Parts[0].Text, " The last words.") {
+		t.Fatalf("text all escapes left the context %d parts, %d earlier, want its end kept", len(p.Parts), p.Earlier)
+	}
+	if b, _ := json.Marshal(p.Parts); len(b) > subagentBytes {
+		t.Fatalf("the context's parts are %d bytes as JSON, past %d", len(b), subagentBytes)
+	}
+}

@@ -530,6 +530,7 @@ type app struct {
 	// subagentStep is the step whose native subagent each thread's panel
 	// shows, by item, while it is open.
 	subagentStep map[api.ID]subagentSel
+	subagentMade subagentMade
 	// shells are the terminal drawer's shells, by workspace.
 	shells map[string]*shell
 	// windDraw paints the wind's field behind the chat, as the frame's
