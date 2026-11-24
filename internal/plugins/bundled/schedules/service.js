@@ -525,11 +525,14 @@ async function unit(id, threads) {
 // latest occurrence, unless that is before its next_due: missed where its
 // next_due shows it was, skipped where a run of it may still go, and
 // starting otherwise; then next_due moves past now, and a run starting is
-// sent. It answers false, and writes nothing, where s was saved since it
-// was read. Every step reads what is there and does what is left, so a
-// crash anywhere comes back to the same end: a run recorded whose next_due
-// didn't move is recorded again under its key, which writes nothing, and
-// one left starting is sent again under its key.
+// sent. A run starts only if no run of s started, or settled, since occur
+// began looking: one that did may still go, though the threads it read
+// were asked for before it. Every step reads what is there and does what
+// is left, so a crash anywhere comes back to the same end: a run recorded
+// at or past next_due, by a tick cut before next_due moved, moves next_due
+// as that tick would have, and one left starting is sent again under its
+// key. It answers false where s is to be read again: saved since it was
+// read, its next_due moved for such a run, or a run of it begun meanwhile.
 async function occur(s, threads) {
   const now = Date.now();
   const advance = () => exec(
@@ -546,6 +549,11 @@ async function occur(s, threads) {
     }
   }
   if (starting.length > 0 || !s.enabled || s.nextDue === null) return true;
+  const [recorded] = await query("SELECT max(due) AS due FROM runs WHERE schedule = ? AND manual = 0 AND due >= ?", [s.id, s.nextDue]);
+  if (recorded.due !== null) {
+    await exec("UPDATE schedules SET next_due = ? WHERE id = ? AND enabled = 1 AND next_due = ?", [iso(nextAfter(s, Date.parse(recorded.due))), s.id, s.nextDue]);
+    return false;
+  }
   const nextDue = Date.parse(s.nextDue);
   const at = latestBy(s, now);
   if (at === null || at < nextDue) return true;
@@ -568,8 +576,9 @@ async function occur(s, threads) {
     `INSERT INTO runs (schedule, key, due, state, request, reason, tried, at)
      SELECT ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN NULL ELSE ${TRIED} END, ?
      WHERE EXISTS (SELECT 1 FROM schedules WHERE id = ? AND enabled = 1 AND next_due = ? AND revision = ?)
+       AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM runs WHERE schedule = ? AND (state = 'starting' OR at >= ?)))
      ON CONFLICT (schedule, key) DO NOTHING`,
-    [s.id, key, occ, state, req, clip(reason), req, iso(now), s.id, s.nextDue, s.revision],
+    [s.id, key, occ, state, req, clip(reason), req, iso(now), s.id, s.nextDue, s.revision, req, s.id, iso(now)],
   );
   const [r] = await query("SELECT * FROM runs WHERE schedule = ? AND key = ?", [s.id, key]);
   if (r === undefined) return false;
