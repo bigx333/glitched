@@ -192,12 +192,12 @@ type entry struct {
 }
 
 // fileChange is a file the agent's edits name, when they last moved, and
-// when the last of them to finish did: an edit under way has started and
-// not yet changed the file.
+// how many of them the agent says it made: one under way, failed or
+// declined isn't, and a later word on one made doesn't count it again.
 type fileChange struct {
-	path   string
-	stamp  time.Time
-	edited time.Time
+	path  string
+	stamp time.Time
+	made  int
 }
 
 // entriesOf is what the timeline lists of a thread: its transcript, the
@@ -614,8 +614,8 @@ func addFiles(files []fileChange, at map[string]int, es []entry) []fileChange {
 					files[i].stamp = t
 				}
 			}
-			if w.Ended.After(files[i].edited) {
-				files[i].edited = w.Ended
+			if w.Status == api.WorkCompleted {
+				files[i].made++
 			}
 		}
 	}

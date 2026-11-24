@@ -381,23 +381,23 @@ func (a *app) emitThreadChanges() {
 	files := a.rowsOf(t).files
 	if was := a.pluginFiles[id]; was == nil || len(was.of) != len(files) || len(files) > 0 && &was.of[0] != &files[0] {
 		var edited []string
-		stamps := make(map[string]time.Time, len(files))
+		made := map[string]int{}
+		if was != nil {
+			made = maps.Clone(was.made)
+		}
 		for _, f := range files {
-			if f.edited.IsZero() {
-				continue
-			}
-			stamps[f.path] = f.edited
-			if was != nil {
-				if at, ok := was.stamps[f.path]; !ok || !at.Equal(f.edited) {
+			if f.made > made[f.path] {
+				if was != nil {
 					edited = append(edited, f.path)
 				}
+				made[f.path] = f.made
 			}
 		}
 		if len(edited) > 0 {
 			ev := map[string]any{"thread": id, "files": edited}
 			a.plugins.Emit("thread.files.changed", func(string) any { return ev })
 		}
-		a.pluginFiles[id] = &toldFiles{stamps: stamps, of: files}
+		a.pluginFiles[id] = &toldFiles{made: made, of: files}
 	}
 	told, known := a.pluginMessages[id]
 	first := !known
@@ -431,10 +431,10 @@ func (a *app) emitThreadChanges() {
 }
 
 // toldFiles are the changed files of a thread the plugins were told of,
-// with each one's last edit, and the files rowsOf gave for them.
+// with how many edits each one had, and the files rowsOf gave for them.
 type toldFiles struct {
-	stamps map[string]time.Time
-	of     []fileChange
+	made map[string]int
+	of   []fileChange
 }
 
 // toldMessages are the messages of a thread the plugins were told of, by
