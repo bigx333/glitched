@@ -47,6 +47,7 @@ type Host struct {
 	now       func() time.Time     // wall clock; defaults to time.Now
 	dial      Dial                 // how remote children's machines are reached; nil reaches none
 	backoff   func(n int) time.Duration
+	step      func(step string, placeholder api.ID)
 
 	checkpoints *checkpointStores // where the threads' checkpoints go; nil keeps none
 
@@ -103,10 +104,13 @@ type Host struct {
 	// before they commit, from before they save them until their submit
 	// returns: a submit of the same command waits for it.
 	confirming map[api.ID]confirmation
-	// creating and followers cancel what reaches a placeholder's machine
-	// for it: its create's tries, and its follower.
-	creating  map[api.ID]context.CancelFunc
+	// reaching and followers cancel what reaches a placeholder's machine
+	// for it: the tries of its create, a message or a narrowing, which a
+	// settle or a delete ends, and its follower, which a delete ends.
+	// heard is when each follower last heard from its child's machine.
+	reaching  map[api.ID]context.CancelFunc
 	followers map[api.ID]context.CancelFunc
+	heard     map[api.ID]time.Time
 }
 
 // confirmation is a revert command being confirmed: its thread, the
@@ -219,9 +223,11 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		compactCheck:  make(chan api.ID, 64),
 		compactRescan: make(chan struct{}, 1),
 		compactDue:    make(chan compactDue, 64),
-		creating:      map[api.ID]context.CancelFunc{},
+		reaching:      map[api.ID]context.CancelFunc{},
 		followers:     map[api.ID]context.CancelFunc{},
+		heard:         map[api.ID]time.Time{},
 		backoff:       remoteBackoff,
+		step:          func(string, api.ID) {},
 	}
 	h.idleCompact.Store(true)
 	for _, o := range opts {
@@ -300,8 +306,31 @@ func (h *Host) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 		if _, err := h.owned(ctx, link, q.Thread); err != nil {
 			return api.Snapshot{}, err
 		}
+		return h.store.Read(ctx, q)
 	}
-	return h.store.Read(ctx, q)
+	snap, err := h.store.Read(ctx, q)
+	if err != nil || h.dial == nil {
+		return snap, err
+	}
+	for i, t := range snap.Threads {
+		r := t.Remote
+		if r == nil {
+			continue
+		}
+		at, err := h.store.Thread(ctx, t.ID)
+		if err != nil {
+			return api.Snapshot{}, err
+		}
+		if label, m, err := h.dial(api.Remote{Engine: at.Remote.Engine, Link: at.Remote.Link}); err == nil {
+			m.Close()
+			r.Machine = label
+		}
+		h.mu.Lock()
+		r.Heard = h.heard[t.ID]
+		h.mu.Unlock()
+		snap.Threads[i].Remote = r
+	}
+	return snap, nil
 }
 
 // Submit commits c. A create in a new worktree makes the worktree first,
@@ -314,6 +343,10 @@ func (h *Host) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
 		return h.submitFromLink(ctx, link, c)
 	}
 	switch b := c.Body.(type) {
+	case api.MessageDispatch:
+		if err := h.leavesNoValue(ctx, c.Target, b.Text); err != nil {
+			return api.Receipt{}, err
+		}
 	case api.ThreadCreate:
 		if b.Origin != nil || b.Repository != nil {
 			return api.Receipt{}, &api.RejectedError{Reason: "only another machine's link starts a thread from there"}
@@ -421,6 +454,7 @@ var (
 	threadDeleted = api.EventType(api.ThreadDeleted{})
 	remoteBound   = api.EventType(api.RemoteBound{})
 	remoteLost    = api.EventType(api.RemoteLost{})
+	disposition   = api.EventType(api.DispositionChanged{})
 )
 
 // follow stops driving a run the log moved past: a stop cancels a start,
@@ -432,6 +466,10 @@ func (h *Host) follow(e api.Event) {
 		h.startFollowing(e.Thread)
 	case remoteLost, threadDeleted:
 		h.stopFollowing(e.Thread)
+	case disposition:
+		if b, err := e.Decode(); err == nil && b.(api.DispositionChanged).Disposition.State == api.Settled {
+			h.stopReaching(e.Thread)
+		}
 	}
 	if e.Type == threadDeleted {
 		h.skills.deleted(e.Thread)
@@ -848,6 +886,15 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 
 	case engine.RemoteCreate:
 		return h.remoteCreate(e, b)
+
+	case engine.RemoteStop:
+		return h.remoteCommand(e, "stop", api.Remote{Engine: b.Engine, Link: b.Link}, b.Create, b.Command)
+
+	case engine.RemoteSend:
+		return h.remoteCommand(e, "message", api.Remote{Engine: b.Engine, Link: b.Link}, nil, b.Command)
+
+	case engine.RemoteConfigure:
+		return h.remoteCommand(e, "narrowing", api.Remote{Engine: b.Engine, Link: b.Link}, nil, b.Command)
 
 	case engine.CaptureCheckpoint:
 		return h.capture(t, b)

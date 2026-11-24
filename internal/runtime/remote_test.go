@@ -218,8 +218,12 @@ func TestAPlaceholderGoesWithItsTree(t *testing.T) {
 			}
 			kid := ids[0]
 			starts := ad.Starts()
-			refusedWith(t, "a message to the placeholder", tryOn(n.h, kid, dispatch("and this", api.StartNow)), "a message doesn't reach it there yet")
-			refusedWith(t, "a stop of the placeholder", tryOn(n.h, kid, api.TurnInterrupt{}), "a stop doesn't reach it there yet")
+			if err := tryOn(n.h, kid, dispatch("and this", api.StartNow)); err != nil {
+				t.Fatalf("a message to the placeholder, for its machine: %v", err)
+			}
+			if err := tryOn(n.h, kid, api.TurnInterrupt{}); err != nil {
+				t.Fatalf("a stop of the placeholder, for its machine: %v", err)
+			}
 			submit(t, n.h, parent, api.TurnInterrupt{Tree: true})
 
 			log, err := n.st.ReadLog(ctx, 0, 0)

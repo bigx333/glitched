@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"glitched/internal/api"
@@ -94,8 +95,12 @@ type TaskState struct {
 	Title  string `json:"title"`
 	// Status is working, waiting_on_user, stopping, uncertain, or, with no
 	// turn running, how its last ended: done, stopped, failed, abandoned,
-	// or idle before any.
+	// or idle before any; or lost, for a task on another machine this
+	// one no longer reaches.
 	Status string `json:"status"`
+	// On is where a task on another machine runs, and when this machine
+	// last heard from it there: its status is as of then.
+	On string `json:"on,omitempty"`
 	Branch string `json:"branch,omitempty"`
 	// Working counts the threads under it at work.
 	Working int `json:"threads_under_it_working,omitempty"`
@@ -324,6 +329,17 @@ func state(th api.Thread, threads []api.Thread, report string) TaskState {
 	for _, u := range under(threads, th.ID) {
 		if u.Working() {
 			s.Working++
+		}
+	}
+	if r := th.Remote; r != nil {
+		machine := cmp.Or(r.Machine, "another machine")
+		s.On = "on " + machine + ", not heard from since this machine's engine started"
+		if !r.Heard.IsZero() {
+			s.On = "on " + machine + ", last heard at " + r.Heard.UTC().Format(time.RFC3339)
+		}
+		if r.Lost != "" {
+			s.Status, s.On = "lost", "on "+machine+": "+r.Lost
+			return s
 		}
 	}
 	switch {
