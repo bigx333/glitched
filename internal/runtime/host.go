@@ -86,6 +86,7 @@ type liveRun struct {
 	steering     context.Context
 	stopSteering context.CancelFunc
 	agent        provider.Agent // nil until the start succeeds
+	cut          bool           // the run was cut short as its agent opened, which may have set it to work
 	// started is closed once the run's start is recorded: its agent may
 	// call back through glitched mcp before then.
 	started chan struct{}
@@ -525,6 +526,9 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 		h.mu.Lock()
 		if err == nil {
 			lr.agent = ag
+			if lr.cut {
+				h.closing[t.ID] = true
+			}
 		}
 		was = h.anyWorks()
 		h.opening--
@@ -951,8 +955,12 @@ func (h *Host) forgetLocked(run api.ID) {
 // admits from being leased first. One cut short as it worked, as a
 // deleted thread's is, works on until its agent closes.
 func (h *Host) leaveLocked(thread, run api.ID, cut bool) {
-	if lr := h.runs[run]; lr != nil && lr.agent != nil {
+	switch lr := h.runs[run]; {
+	case lr == nil:
+	case lr.agent != nil:
 		h.closing[thread] = cut && h.working[thread]
+	default:
+		lr.cut = cut && h.working[thread]
 	}
 	h.forgetLocked(run)
 }
