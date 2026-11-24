@@ -627,3 +627,31 @@ func TestAKilledWorktreeMakeIsFinishedByTheReplay(t *testing.T) {
 		})
 	}
 }
+
+// A link's narrowing is checked against the thread as its commit has it,
+// so one sent as B's person narrows further never widens the thread back.
+func TestALinksNarrowingNeverUndoesBsNarrowing(t *testing.T) {
+	l := newLinked(t, api.Link{Access: api.AccessAutoEdits}, false)
+	ctx := context.Background()
+	thread := l.mustCreate(api.AccessAutoEdits)
+	l.waitFor(thread, "turn.ended", 1)
+	configure := func(access api.Access) api.Command {
+		return api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadConfigure{Access: &access}}
+	}
+	for round := range 40 {
+		if _, err := l.b.Endpoint().Submit(ctx, configure(api.AccessAutoEdits)); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		var linkErr, bErr error
+		wg.Go(func() { _, linkErr = l.ep.Submit(ctx, configure(api.AccessAutoEdits)) })
+		wg.Go(func() { _, bErr = l.b.Endpoint().Submit(ctx, configure(api.AccessAsk)) })
+		wg.Wait()
+		if bErr != nil || linkErr != nil && !errors.Is(linkErr, api.ErrNotAllowed) {
+			t.Fatalf("round %d: the link's configure %v, B's %v", round, linkErr, bErr)
+		}
+		if v := l.view(thread); v.Access != api.AccessAsk {
+			t.Fatalf("round %d: the thread is at %d after B narrowed it to ask and the link sent no widening", round, v.Access)
+		}
+	}
+}

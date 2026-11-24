@@ -71,10 +71,6 @@ func (h *Host) linkSubmit(ctx context.Context, link api.Link, c api.Command) (ap
 	if err := h.owned(ctx, link, c.Target); err != nil {
 		return api.Receipt{}, err
 	}
-	t, err := h.store.Thread(ctx, c.Target)
-	if err != nil {
-		return api.Receipt{}, err
-	}
 	switch b := c.Body.(type) {
 	case api.MessageDispatch:
 		if b.Auto {
@@ -82,9 +78,16 @@ func (h *Host) linkSubmit(ctx context.Context, link api.Link, c api.Command) (ap
 		}
 	case api.TurnInterrupt, api.InboxSet:
 	case api.ThreadConfigure:
-		if b.Model != nil || b.Effort != nil || b.Fast != nil || b.Access == nil || *b.Access > t.Access {
-			return api.Receipt{}, fmt.Errorf("%w: a link only narrows a thread's access", api.ErrNotAllowed)
+		narrows := fmt.Errorf("%w: a link only narrows a thread's access", api.ErrNotAllowed)
+		if b.Model != nil || b.Effort != nil || b.Fast != nil || b.Access == nil {
+			return api.Receipt{}, narrows
 		}
+		return h.store.SubmitChecked(ctx, c, func(t engine.Thread) error {
+			if *b.Access > t.Access {
+				return narrows
+			}
+			return nil
+		}, h.clock())
 	default:
 		return api.Receipt{}, fmt.Errorf("%w: a link may not send %s", api.ErrNotAllowed, api.IntentType(c.Body))
 	}
