@@ -25,7 +25,7 @@ var errStreamClosed = errors.New("runtime: stream closed")
 // moved, and always catches up from a snapshot: it holds no events to replay.
 func (h *Host) Open(ctx context.Context, sub api.Subscription) (api.Stream, error) {
 	if link, ok := api.LinkOf(ctx); ok {
-		if err := h.owned(ctx, link, sub.Thread); err != nil {
+		if _, err := h.owned(ctx, link, sub.Thread); err != nil {
 			return nil, err
 		}
 	}

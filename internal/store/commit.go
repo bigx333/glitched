@@ -111,16 +111,25 @@ func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, chec
 			}
 		}
 		if c.Caller != nil && t.Exists() {
-			line, err := lineOf(ctx, q, c.Target)
-			if err != nil {
-				return nil, nil, err
-			}
 			userLast, err := steeredByUser(ctx, q, c.Target)
 			if err != nil {
 				return nil, nil, err
 			}
-			if err := engine.CheckCaller(line, *c.Caller, userLast); err != nil {
-				return nil, nil, err
+			// A caller with no run here is a link's, for the agent of the
+			// thread its child came from on that machine: this engine's
+			// person who took the child over has it.
+			if o := t.Origin; o != nil && c.Caller.Thread == o.Thread && c.Caller.Run.IsZero() {
+				if userLast {
+					return nil, nil, &api.RejectedError{Reason: "the person on this machine took this thread over: its last message or stop was theirs, so it's theirs to steer"}
+				}
+			} else {
+				line, err := lineOf(ctx, q, c.Target)
+				if err != nil {
+					return nil, nil, err
+				}
+				if err := engine.CheckCaller(line, *c.Caller, userLast); err != nil {
+					return nil, nil, err
+				}
 			}
 		}
 		if b, ok := c.Body.(api.ThreadConfigure); ok && !t.Parent.IsZero() {
