@@ -57,9 +57,9 @@ func (d *Daemon) startPlugins(dir string, run func(ctx context.Context, id strin
 	})
 }
 
-// pluginEffect is what a service may do, with no window: read, start and
-// message threads. The host checked its grant.
-func (d *Daemon) pluginEffect(_ string, e plugins.Effect) (any, error) {
+// pluginEffect is what plugin's service may do, with no window: read,
+// start and message threads. The host checked its grant.
+func (d *Daemon) pluginEffect(plugin string, e plugins.Effect) (any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	ep := d.Endpoint()
@@ -76,56 +76,49 @@ func (d *Daemon) pluginEffect(_ string, e plugins.Effect) (any, error) {
 		slices.SortFunc(out, func(x, y plugins.ThreadRecord) int { return strings.Compare(y.UpdatedAt, x.UpdatedAt) })
 		return out, nil
 	case "threads.create":
-		var a struct {
-			Prompt, Title, Workspace string
-			Access                   *string
-		}
-		if err := json.Unmarshal(e.Args, &a); err != nil {
-			return nil, fmt.Errorf("threads.create: %v", err)
-		}
-		if strings.TrimSpace(a.Prompt) == "" {
-			return nil, errors.New("threads.create needs a prompt")
-		}
-		access, err := plugins.CreateAccess(a.Access)
+		c, err := plugins.ParseCreate(e.Args)
 		if err != nil {
 			return nil, err
 		}
-		ws := a.Workspace
+		ws := c.Workspace
 		if ws == "" {
 			ws, _ = os.UserHomeDir()
 		}
 		if !filepath.IsAbs(ws) {
 			return nil, fmt.Errorf("workspace %q is not an absolute path", ws)
 		}
-		// The model of the thread the user worked in last: a service has
-		// no composer to read it from.
-		snap, err := ep.Read(ctx, api.Query{})
-		if err != nil {
-			return nil, err
-		}
-		var last api.Thread
-		for _, t := range snap.Threads {
-			if t.Parent.IsZero() && t.UpdatedAt.After(last.UpdatedAt) {
-				last = t
-			}
-		}
-		if last.Model.Provider == "" {
-			return nil, errors.New("no thread yet to take a model from: start one first")
-		}
-		id := api.NewID()
-		title := a.Title
-		if title == "" {
-			title = a.Prompt
-		}
-		if r := []rune(title); len(r) > 48 {
-			title = string(r[:48]) + "…"
-		}
-		for _, body := range []api.Intent{api.ThreadCreate{Workspace: ws, Title: title, Model: last.Model, Access: access}, api.MessageDispatch{Text: a.Prompt, Mode: api.SteerActive}} {
-			if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: id, Body: body}); err != nil {
+		model := c.Model
+		if model == nil {
+			// The model of the thread the user worked in last: a service
+			// has no composer to read it from.
+			snap, err := ep.Read(ctx, api.Query{})
+			if err != nil {
 				return nil, err
 			}
+			var last api.Thread
+			for _, t := range snap.Threads {
+				if t.Parent.IsZero() && t.UpdatedAt.After(last.UpdatedAt) {
+					last = t
+				}
+			}
+			if last.Model.Provider == "" {
+				return nil, errors.New("no thread yet to take a model from: start one first")
+			}
+			model = &last.Model
 		}
-		return map[string]string{"thread": id.String()}, nil
+		if _, ok := d.providers[model.Provider]; !ok {
+			return nil, fmt.Errorf("threads.create: this engine runs no provider %q", model.Provider)
+		}
+		thread, cmd := api.NewID(), api.NewID()
+		if c.Key != nil {
+			if thread, cmd, err = c.Key.IDs(plugin); err != nil {
+				return nil, fmt.Errorf("threads.create: %v", err)
+			}
+		}
+		if _, err := ep.Submit(ctx, api.Command{ID: cmd, Target: thread, Body: api.ThreadCreate{Workspace: ws, Title: c.Title, Model: *model, Access: c.Access, Text: c.Prompt, Worktree: c.Worktree}}); err != nil {
+			return nil, err
+		}
+		return map[string]string{"thread": thread.String()}, nil
 	case "threads.send":
 		var a struct{ Thread, Text string }
 		if err := json.Unmarshal(e.Args, &a); err != nil || strings.TrimSpace(a.Text) == "" {

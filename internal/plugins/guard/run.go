@@ -109,7 +109,7 @@ func run(ctx context.Context, s Spec, path string) (Result, error) {
 			return Result{}, err
 		}
 		defer os.RemoveAll(hooks)
-		cmd.Env = append(cmd.Env, gitEnv(hooks)...)
+		cmd.Env = append(cmd.Env, GitEnv(hooks)...)
 	}
 	if s.Stdin != nil {
 		cmd.Stdin = bytes.NewReader(s.Stdin)

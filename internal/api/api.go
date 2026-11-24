@@ -91,8 +91,11 @@ type ThreadCreate struct {
 
 // NewWorktree asks for a thread in a worktree of its own, on a new branch
 // from Base, a branch or commit of the repository; "" is its HEAD.
+// Guarded has git make it with no hooks and no fsmonitor, as a plugin's
+// programs run git: for a worktree a plugin asked for.
 type NewWorktree struct {
-	Base string `json:"base,omitempty"`
+	Base    string `json:"base,omitempty"`
+	Guarded bool   `json:"guarded,omitempty"`
 }
 
 // MaxDepth is how far below a thread of the user's a child may be: a
