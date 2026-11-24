@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -267,7 +269,43 @@ func TestThePickerOpensOnTheChosenModelOfALongList(t *testing.T) {
 			if !shown("K 00", "Short 00") || !shown("K 01", "Short 01") {
 				t.Errorf("Claude's two models don't show whole after Codex's were scrolled to the end: %v, %v", boxOf(h.tt.Find("K 00")), boxOf(h.tt.Find("Short 01")))
 			}
+			h.tt.Key(0, ui.KeyEscape)
+			pickerSettle(t, h)
+			h.tt.Move(0, 0)
+			h.tt.Key(ui.Cmd, ui.KeyK)
+			h.tt.Type("switch model")
+			h.tt.Key(0, ui.KeyEnter)
+			pickerSettle(t, h)
+			if !shown("M 10", "About 10") {
+				t.Errorf("Switch model, after Claude was last pointed at, opened without the chosen M 10: %v", boxOf(h.tt.Find("M 10")))
+			}
 		})
+	}
+}
+
+// A copy of the picker made before models had keys opens on its chosen
+// model too, which it knows by name.
+func TestACopyOfThePickerMadeBeforeKeysOpensOnTheChosenModel(t *testing.T) {
+	h := startWith(t, tempDir(t), engineReportsBy(map[string][]provider.Model{"claude": numbered(20)}))
+	allAnswered(h)
+	js, err := os.ReadFile(filepath.Join("testdata", "model-picker-before-keys.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeOwnPlugin(t, h.a, "mine", pickerManifest, string(js))
+	h.a.plugins.SetGranted("mine", "ui.replace", true)
+	h.a.plugins.SetGranted("mine", "threads:read", true)
+	h.tt.SetSize(1320, 2000)
+	h.a.chooseModel(modelKey{"claude", "m-19"})
+	h.tt.Frame()
+	h.click("Model")
+	pickerSettle(t, h)
+	if app := h.a.plugins.App("mine"); app == nil || app.PlaceView("picker", "draft/panel") == nil {
+		t.Fatalf("the copy doesn't draw the picker: %q", h.tt.Texts())
+	}
+	_, effort := pickerBox(t, h)
+	if r, ok := h.tt.Find("About 19"); !ok || r.Y+r.H > effort.Y-12 {
+		t.Errorf("the copy opened without the chosen M 19 in view: %v, the effort at %v", r, effort)
 	}
 }
 

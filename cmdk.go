@@ -198,7 +198,7 @@ func (a *app) openModelPicker() {
 		a.router.Push("/")
 	}
 	a.pickersIn(a.current().id())
-	a.composerOpened, a.pickerOpen = true, true
+	a.composerOpened, a.pickerOpen, a.pickerFamily = true, true, ""
 }
 
 // commandPalette is a sheet of glass over the blurred window. It's opened
