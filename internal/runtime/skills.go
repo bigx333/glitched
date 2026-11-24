@@ -182,12 +182,17 @@ func (h *Host) Skills(ctx context.Context, q api.SkillQuery) (api.SkillList, err
 		return list, nil
 	}
 	set := skills.Find(h.skills.dir, t.Workspace, t.Project)
-	shadowed := map[string]bool{}
-	for _, sk := range set.Shadowed {
-		shadowed[sk.Name] = true
+	from := ""
+	if o := set.Synced; o != nil {
+		from = o.Name
+		list.Synced = &api.SyncedFrom{Name: o.Name, Pulled: o.Pulled}
 	}
 	for _, sk := range set.Skills {
-		list.Skills = append(list.Skills, api.Skill{Name: sk.Name, Description: sk.Description, Source: string(sk.Source), Shown: sk.Shown, Overrides: shadowed[sk.Name]})
+		s := api.Skill{Name: sk.Name, Description: sk.Description, Source: string(sk.Source), Shown: sk.Shown, Overrides: sk.Replaces != "", Replaces: string(sk.Replaces)}
+		if sk.Source == skills.Synced {
+			s.From = from
+		}
+		list.Skills = append(list.Skills, s)
 	}
 	for _, s := range set.Skipped {
 		list.Skipped = append(list.Skipped, api.SkippedSkill{Source: string(s.Source), Name: s.Name, Why: s.Why})

@@ -64,23 +64,8 @@ func fill(dir string, set Set) error {
 		return err
 	}
 	for _, sk := range set.Skills {
-		to := filepath.Join(dir, "skills", sk.Name)
-		hash, err := walk(sk.Dir, sk.folder, func(rel string, exec bool, data []byte) error {
-			p := filepath.Join(to, filepath.FromSlash(rel))
-			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-				return err
-			}
-			mode := fs.FileMode(0o444)
-			if exec {
-				mode = 0o555
-			}
-			return os.WriteFile(p, data, mode)
-		})
-		if err != nil {
+		if err := copyTree(sk.Dir, sk.folder, filepath.Join(dir, "skills", sk.Name), sk.Hash); err != nil {
 			return fmt.Errorf("skills: copying %s: %w", sk.Name, err)
-		}
-		if hash != sk.Hash {
-			return fmt.Errorf("%w: %s", errChanged, sk.Name)
 		}
 	}
 	return nil

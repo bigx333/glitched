@@ -22,6 +22,7 @@ type Source string
 
 const (
 	Home    Source = "home"
+	Synced  Source = "synced"
 	Project Source = "project"
 )
 
@@ -44,6 +45,9 @@ type Skill struct {
 	Dir         string
 	Shown       string
 	Hash        string
+	// Replaces is the Source of the skill of its name it replaces, "" for
+	// none.
+	Replaces Source
 	// folder is Dir as Find checked it: Build reads it only while Dir is
 	// still that folder.
 	folder os.FileInfo
@@ -58,11 +62,13 @@ type Skipped struct {
 }
 
 // Set is what one workspace's agents get: Skills by name, and Shadowed,
-// the user's own that a project's skill of the same name replaces.
+// the skills of a name another replaces. Synced is where the synced ones
+// came from, nil for none.
 type Set struct {
 	Skills   []Skill
 	Shadowed []Skill
 	Skipped  []Skipped
+	Synced   *Origin
 }
 
 // Hash is the set's identity, by its skills' names and trees.
@@ -75,31 +81,37 @@ func (s Set) Hash() string {
 }
 
 // Find is the skills the agent of a thread in workspace gets: the user's
-// in <stateDir>/skills, and the project's in <workspace>/.glitched/skills,
-// which win by name. A thread in a worktree of project whose worktree has
-// no .glitched/skills, as skills git doesn't track, gets project's. A
+// in <stateDir>/skills, the user's synced from another machine, which win
+// over those by name, and the project's in <workspace>/.glitched/skills,
+// which win over both. A thread in a worktree of project whose worktree
+// has no .glitched/skills, as skills git doesn't track, gets project's. A
 // workspace in stateDir has no project's but for a worktree's: a scratch
 // thread gets only the user's. Find reads nothing else in stateDir.
 func Find(stateDir, workspace, project string) Set {
-	f := finder{state: real(stateDir), homeReal: real(filepath.Join(stateDir, "skills"))}
-	f.homeRoot = filepath.Join(f.state, "skills")
-	f.worktrees = filepath.Join(f.state, "worktrees")
-	f.userHome, _ = os.UserHomeDir()
+	f := newFinder(stateDir)
 	home := f.root(Home, filepath.Join(stateDir, "skills"), "")
+	var synced []Skill
+	if o, ok := readOrigin(stateDir); ok {
+		f.set.Synced = &o
+		synced = f.root(Synced, filepath.Join(stateDir, syncedDir, "sets", o.Set), "")
+	}
 	var mine []Skill
 	if base, dir := f.projectRoot(workspace, project); dir != "" {
 		mine = f.root(Project, dir, base)
 	}
-	byName := map[string]bool{}
-	for _, sk := range mine {
-		byName[sk.Name] = true
-	}
-	f.set.Skills = mine
-	for _, sk := range home {
-		if byName[sk.Name] {
+	byName := map[string]int{}
+	for _, tier := range [][]Skill{mine, synced, home} {
+		for _, sk := range tier {
+			i, ok := byName[sk.Name]
+			if !ok {
+				byName[sk.Name] = len(f.set.Skills)
+				f.set.Skills = append(f.set.Skills, sk)
+				continue
+			}
+			if f.set.Skills[i].Replaces == "" {
+				f.set.Skills[i].Replaces = sk.Source
+			}
 			f.set.Shadowed = append(f.set.Shadowed, sk)
-		} else {
-			f.set.Skills = append(f.set.Skills, sk)
 		}
 	}
 	slices.SortFunc(f.set.Skills, func(a, b Skill) int { return strings.Compare(a.Name, b.Name) })
@@ -107,12 +119,21 @@ func Find(stateDir, workspace, project string) Set {
 }
 
 type finder struct {
-	// state is stateDir, homeRoot <stateDir>/skills and worktrees
-	// <stateDir>/worktrees, with stateDir's links resolved; homeReal is
-	// homeRoot with its own resolved too.
-	state, homeRoot, homeReal, worktrees string
-	userHome                             string
-	set                                  Set
+	// state is stateDir, homeRoot <stateDir>/skills, synced the synced
+	// sets and worktrees <stateDir>/worktrees, with stateDir's links
+	// resolved; homeReal is homeRoot with its own resolved too.
+	state, homeRoot, homeReal, synced, worktrees string
+	userHome                                     string
+	set                                          Set
+}
+
+func newFinder(stateDir string) *finder {
+	f := &finder{state: real(stateDir), homeReal: real(filepath.Join(stateDir, "skills"))}
+	f.homeRoot = filepath.Join(f.state, "skills")
+	f.synced = filepath.Join(f.state, syncedDir, "sets")
+	f.worktrees = filepath.Join(f.state, "worktrees")
+	f.userHome, _ = os.UserHomeDir()
+	return f
 }
 
 // projectRoot is the folder a workspace's project skills are in, and the
@@ -151,6 +172,9 @@ func (f *finder) root(src Source, dir, base string) []Skill {
 		return nil
 	case src == Project && !within(rd, rb):
 		f.skip(src, "", shown+" leads out of its project, so Glitched reads none of it.")
+		return nil
+	case src == Synced && !within(rd, f.synced):
+		f.skip(src, "", shown+" leads out of the synced skills, so Glitched reads none of it.")
 		return nil
 	case within(rd, f.state) && (src == Home && !same(rd, f.homeRoot) || src == Project && !within(rb, f.worktrees)):
 		f.skip(src, "", shown+" leads into Glitched's own folder, so Glitched reads none of it.")
@@ -206,6 +230,8 @@ func (f *finder) skill(src Source, dir, base, name string) (Skill, error) {
 	switch {
 	case src == Project && !within(target, base):
 		return Skill{}, errors.New("It links out of its project.")
+	case src == Synced && !within(target, f.synced):
+		return Skill{}, errors.New("It links out of the synced skills.")
 	case within(target, f.state) && (src == Home && !within(target, f.homeRoot) || src == Project && !within(base, f.worktrees)):
 		return Skill{}, errors.New("It links into Glitched's own folder.")
 	}
