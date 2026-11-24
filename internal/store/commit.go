@@ -447,6 +447,22 @@ func (s *Store) Reverting(ctx context.Context) ([]api.ID, error) {
 	return ids(ctx, s.db, `SELECT thread FROM effects WHERE kind = ? AND state <> 'done' AND json_extract(payload, '$.KeepFiles') IS NOT 1 ORDER BY thread`, engine.EffectKind(engine.RevertThread{}))
 }
 
+// RevertsPending is the reverts of thread's whose effect hasn't ended.
+func (s *Store) RevertsPending(ctx context.Context, thread api.ID) ([]engine.RevertThread, error) {
+	var out []engine.RevertThread
+	err := each(ctx, s.db, `SELECT payload FROM effects WHERE thread = ? AND kind = '`+engine.EffectKind(engine.RevertThread{})+`' AND state <> 'done' ORDER BY id`, thread, func(rows *sql.Rows) error {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return err
+		}
+		var b engine.RevertThread
+		err := json.Unmarshal(payload, &b)
+		out = append(out, b)
+		return err
+	})
+	return out, err
+}
+
 func ids(ctx context.Context, q querier, query string, args ...any) ([]api.ID, error) {
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {

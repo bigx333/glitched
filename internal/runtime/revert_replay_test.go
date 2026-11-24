@@ -297,6 +297,7 @@ func TestAReplayClearsAStaleRestoreIndexLock(t *testing.T) {
 // second.
 func TestTheFolderStaysMarkedUntilEveryRevertEnds(t *testing.T) {
 	r := twoTurns(t, dbPath(t), tempDir(t), repo(t))
+	write(t, filepath.Join(r.ws, "README"), "two\n")
 	first, second, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	num := 0
 	reset := runtime.SetCheckpointHook(func(ctx context.Context, step string) {
@@ -327,9 +328,9 @@ func TestTheFolderStaysMarkedUntilEveryRevertEnds(t *testing.T) {
 			t.Fatal("revert did not reach recovery hook")
 		}
 	}
-	submit(t, r.n.h, r.thread, api.ThreadRevert{To: runCheckpoint(r.first), Files: true})
-	wait(first)
 	submit(t, r.n.h, r.thread, api.ThreadRevert{To: runCheckpoint(r.run), Files: true})
+	wait(first)
+	submit(t, r.n.h, r.thread, api.ThreadRevert{To: runCheckpoint(r.first), Files: true})
 	close(release)
 	wait(second)
 	next := api.NewID()
