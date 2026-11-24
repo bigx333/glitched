@@ -33,7 +33,7 @@ func (h *Host) revertInWorktree(ctx context.Context, c api.Command) (api.Receipt
 	if !t.Exists() || t.Deleted || !t.Parent.IsZero() || t.Branch == "" {
 		return h.store.Submit(ctx, c, h.clock())
 	}
-	if err := h.revertable(ctx, t, api.Thread.Live); err != nil {
+	if err := h.revertable(ctx, t, api.Thread.Live, func(api.Thread) bool { return true }); err != nil {
 		return api.Receipt{}, &api.RejectedError{Reason: err.Error()}
 	}
 	return h.store.Submit(ctx, c, h.clock())
@@ -41,9 +41,11 @@ func (h *Host) revertInWorktree(ctx context.Context, c api.Command) (api.Receipt
 
 // revertable is nil when the files of t's worktree are its own to put
 // back now, else why not: writing is whether a thread under t may be at
-// work in them. The revert checks again once it commits, as a start leased
-// before the commit may since have begun.
-func (h *Host) revertable(ctx context.Context, t engine.Thread, writing func(api.Thread) bool) error {
+// work in them, and there whether another thread in them or around them
+// may be. The revert checks again once it commits, as a start leased
+// before the commit may since have begun; by then a start the restoring
+// mark holds back writes nothing.
+func (h *Host) revertable(ctx context.Context, t engine.Thread, writing, there func(api.Thread) bool) error {
 	dir := h.ownsDir(t.ID, t.Workspace)
 	if dir == "" {
 		return errors.New("Revert needs this thread to run in its own worktree")
@@ -66,7 +68,7 @@ func (h *Host) revertable(ctx context.Context, t engine.Thread, writing func(api
 		}
 	}
 	for _, other := range snap.Threads {
-		if other.ID != t.ID && !slices.ContainsFunc(tree, func(x api.Thread) bool { return x.ID == other.ID }) && (under(dir, other.Workspace) || under(other.Workspace, dir)) {
+		if other.ID != t.ID && !slices.ContainsFunc(tree, func(x api.Thread) bool { return x.ID == other.ID }) && (under(dir, other.Workspace) || under(other.Workspace, dir)) && there(other) {
 			return fmt.Errorf("the thread %q runs in %s too", other.Title, dir)
 		}
 	}
@@ -93,7 +95,7 @@ func (h *Host) revert(t engine.Thread, b engine.RevertThread) (o engine.Observat
 func (h *Host) mayWrite(th api.Thread) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.closing[th.ID] {
+	if h.closing[th.ID] || h.passing[th.ID] {
 		return true
 	}
 	if !th.Live() {
@@ -170,7 +172,8 @@ func (h *Host) bootReverting(ctx context.Context) error {
 
 // waitsOnRevert is whether e, a start, is in a worktree whose files
 // another thread's revert puts back, or around one: it hands its lease
-// back, and its thread waits until the revert ends.
+// back, and its thread waits until the revert ends. A start that goes is
+// passing until it is tracked, so a revert marked meanwhile sees it.
 func (h *Host) waitsOnRevert(e store.Effect) bool {
 	t, err := h.store.Thread(h.ctx, e.Thread)
 	if err != nil {
@@ -184,6 +187,9 @@ func (h *Host) waitsOnRevert(e store.Effect) bool {
 			h.waiting[e.Thread] = true
 			break
 		}
+	}
+	if !waits {
+		h.passing[e.Thread] = true
 	}
 	h.mu.Unlock()
 	if !waits {
@@ -207,7 +213,7 @@ func (h *Host) revertIn(ctx context.Context, t engine.Thread, b engine.RevertThr
 	if h.checkpoints == nil {
 		return r, errors.New("this engine keeps no checkpoints")
 	}
-	if err := h.revertable(ctx, t, h.mayWrite); err != nil {
+	if err := h.revertable(ctx, t, h.mayWrite, h.mayWrite); err != nil {
 		return r, err
 	}
 	top := h.ownsDir(t.ID, t.Workspace)
@@ -306,12 +312,12 @@ func diffTrees(ctx context.Context, store, from, to string) ([]change, error) {
 // to delete under anything but a folder is refused too, as deleting it
 // would reach outside the worktree.
 func inTheWay(ctx context.Context, store, top string, changes []change) error {
-	deleted, blobs := map[string]bool{}, map[string]string{}
+	deleted, written := map[string]bool{}, map[string]change{}
 	for _, c := range changes {
 		if c.mode == "" {
 			deleted[c.path] = true
 		} else {
-			blobs[c.path] = c.blob
+			written[c.path] = c
 		}
 	}
 	// spare is whether the file at rel is the revert's to change: one it
@@ -320,24 +326,26 @@ func inTheWay(ctx context.Context, store, top string, changes []change) error {
 		if deleted[rel] || slices.ContainsFunc(slices.Collect(maps.Keys(deleted)), func(d string) bool { return strings.EqualFold(d, rel) && sameFile(top, d, rel) }) {
 			return true, nil
 		}
-		blob, ok := blobs[rel]
+		c, ok := written[rel]
 		if !ok {
 			return false, nil
 		}
-		hash, err := hashFile(ctx, store, filepath.Join(top, rel))
-		return err == nil && hash == blob, err
+		return isBlob(ctx, store, filepath.Join(top, rel), c)
 	}
 	for _, c := range changes {
 		for dir := filepath.Dir(c.path); dir != "."; dir = filepath.Dir(dir) {
-			if fi, err := os.Lstat(filepath.Join(top, dir)); err == nil && !fi.IsDir() && !deleted[filepath.ToSlash(dir)] {
-				return fmt.Errorf("%s is in the way of %s, and wasn't saved before the revert, so nothing changed", filepath.ToSlash(dir), c.path)
+			fi, err := os.Lstat(filepath.Join(top, dir))
+			if err != nil || fi.IsDir() {
+				continue
+			}
+			// A file where a folder was is one to delete, or, to a replay,
+			// one the revert wrote and so of a path it deleted.
+			if ok, err := spare(filepath.ToSlash(dir)); err != nil || !ok {
+				return cmp.Or(err, fmt.Errorf("%s is in the way of %s, and wasn't saved before the revert, so nothing changed", filepath.ToSlash(dir), c.path))
 			}
 		}
-		if c.mode == "" {
-			continue
-		}
 		fi, err := os.Lstat(filepath.Join(top, c.path))
-		if err != nil {
+		if err != nil || (c.mode == "" && !fi.IsDir()) {
 			continue
 		}
 		if !fi.IsDir() {
@@ -374,21 +382,31 @@ func sameFile(top, a, b string) bool {
 	return errA == nil && errB == nil && os.SameFile(fa, fb)
 }
 
-// hashFile is the blob git would store for the file at path, a symlink's
-// target for a symlink, with no filter.
-func hashFile(ctx context.Context, store, path string) (string, error) {
+// isBlob is whether the file at path is c's: a symlink for a symlink, an
+// executable for an executable, and the same blob, hashed with no filter.
+func isBlob(ctx context.Context, store, path string, c change) (bool, error) {
 	fi, err := os.Lstat(path)
 	if err != nil {
-		return "", err
+		return false, err
 	}
-	if fi.Mode()&os.ModeSymlink != 0 {
+	link := fi.Mode()&os.ModeSymlink != 0
+	switch {
+	case link != (c.mode == "120000"):
+		return false, nil
+	case !link && (!fi.Mode().IsRegular() || (fi.Mode().Perm()&0o100 != 0) != (c.mode == "100755")):
+		return false, nil
+	}
+	var hash string
+	if link {
 		target, err := os.Readlink(path)
 		if err != nil {
-			return "", err
+			return false, err
 		}
-		return storeGit(ctx, store, "", "", []byte(target), "hash-object", "--no-filters", "--stdin")
+		hash, err = storeGit(ctx, store, "", "", []byte(target), "hash-object", "--no-filters", "--stdin")
+	} else {
+		hash, err = storeGit(ctx, store, "", "", nil, "hash-object", "--no-filters", "--", path)
 	}
-	return storeGit(ctx, store, "", "", nil, "hash-object", "--no-filters", "--", path)
+	return err == nil && hash == c.blob, err
 }
 
 // restore puts the files of changes in top as tree holds them: it writes
@@ -424,10 +442,10 @@ func restore(ctx context.Context, store, top string, revert api.ID, tree string,
 		if c.mode != "" {
 			continue
 		}
-		done = append(done, c.path)
-		if err := os.Remove(filepath.Join(top, c.path)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := remove(top, c.path); err != nil {
 			return done, fmt.Errorf("%s couldn't be deleted: %w", c.path, err)
 		}
+		done = append(done, c.path)
 		dir := filepath.Dir(filepath.Join(top, c.path))
 		for dir != top && os.Remove(dir) == nil {
 			dir = filepath.Dir(dir)
@@ -462,6 +480,28 @@ func restore(ctx context.Context, store, top string, revert api.ID, tree string,
 	return done, nil
 }
 
+// remove deletes the file at rel in top. It is gone already when a file
+// stands where a folder above it was; a folder there is one a replayed
+// revert wrote, its files the revert's, as inTheWay checked.
+func remove(top, rel string) error {
+	for dir := filepath.Dir(rel); dir != "."; dir = filepath.Dir(dir) {
+		if fi, err := os.Lstat(filepath.Join(top, dir)); err == nil && !fi.IsDir() {
+			return nil
+		}
+	}
+	path := filepath.Join(top, rel)
+	fi, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil
+	case err != nil:
+		return err
+	case fi.IsDir():
+		return os.RemoveAll(path)
+	}
+	return os.Remove(path)
+}
+
 // moveInto moves from over to. Where it can't, as from is on another
 // disk, it copies from beside to first and then moves the copy over, so
 // that to is either as it was or from, never half written.
@@ -473,9 +513,14 @@ func moveInto(from, to string) error {
 	if err != nil {
 		return err
 	}
-	beside := filepath.Join(filepath.Dir(to), ".glitched-restore-"+filepath.Base(to))
-	os.Remove(beside)
+	f, err := os.CreateTemp(filepath.Dir(to), ".glitched-restore-*")
+	if err != nil {
+		return err
+	}
+	beside := f.Name()
 	if fi.Mode()&os.ModeSymlink != 0 {
+		f.Close()
+		os.Remove(beside)
 		target, err := os.Readlink(from)
 		if err == nil {
 			err = os.Symlink(target, beside)
@@ -483,7 +528,7 @@ func moveInto(from, to string) error {
 		if err != nil {
 			return err
 		}
-	} else if err := copyFile(from, beside, fi.Mode().Perm()); err != nil {
+	} else if err := copyInto(from, f, fi.Mode().Perm()); err != nil {
 		os.Remove(beside)
 		return err
 	}
@@ -494,21 +539,17 @@ func moveInto(from, to string) error {
 	return nil
 }
 
-func copyFile(from, to string, perm os.FileMode) error {
+// copyInto copies from into out, which it closes, with perm.
+func copyInto(from string, out *os.File, perm os.FileMode) error {
 	in, err := os.Open(from)
-	if err != nil {
-		return err
+	if err == nil {
+		defer in.Close()
+		_, err = io.Copy(out, in)
 	}
-	defer in.Close()
-	out, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
-	if err != nil {
-		return err
+	if err == nil {
+		err = out.Chmod(perm)
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
+	return errors.Join(err, out.Close())
 }
 
 // keepRecoveries deletes thread's recovery checkpoints but the newest

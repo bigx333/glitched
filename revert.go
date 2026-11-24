@@ -111,12 +111,25 @@ func (a *app) revertAlert(c *ui.Context) {
 
 // revertDivider is the row es[i] of the timeline: how a revert of the
 // files ended, with an Undo that puts back the files it saved first, while
-// no message, run or revert came after it.
+// no message, run or revert came after it: after one that failed too, for
+// files its rollback couldn't put back.
 func (a *app) revertDivider(c *ui.Context, t thread, es []entry, i int) {
 	r := es[i].revert
 	last := !slices.ContainsFunc(es[i+1:], func(e entry) bool {
 		return e.kind == entryWork || e.kind == entryRevert || e.kind == entryAssistant || e.kind == entryUser
 	})
+	undo := func() {
+		if !last || r.Recovery == "" {
+			return
+		}
+		why := a.whyNoRevert(t)
+		b := ghost(c, "undo", false).Padding(2, 6).Children(func() { ui.Text(c, "Undo").FontSize(11.5) })
+		if why != "" {
+			a.tip(c, b.TextColor(palette.faint), why)
+		} else if b.Clicked() {
+			a.backend.Revert(t.env, t.id(), api.CheckpointRef{Phase: api.CheckpointRecovery, ID: r.Revert})
+		}
+	}
 	ui.Row(c).Key(es[i].key).Gap(10).AlignItems(ui.Center).Padding(4, 12).Transition(riseIn).Children(func() {
 		ui.Box(c).Height(1).Grow(1).Background(palette.border)
 		switch r.Status {
@@ -126,19 +139,12 @@ func (a *app) revertDivider(c *ui.Context, t thread, es []entry, i int) {
 				text = "Put back " + plural(r.Changed, "file") + " as they were before a revert"
 			}
 			ui.Text(c, text).FontSize(11.5).TextColor(palette.faint).SingleLine()
-			if last {
-				why := a.whyNoRevert(t)
-				b := ghost(c, "undo", false).Padding(2, 6).Children(func() { ui.Text(c, "Undo").FontSize(11.5) })
-				if why != "" {
-					a.tip(c, b.TextColor(palette.faint), why)
-				} else if b.Clicked() {
-					a.backend.Revert(t.env, t.id(), api.CheckpointRef{Phase: api.CheckpointRecovery, ID: r.Revert})
-				}
-			}
+			undo()
 		case api.RevertUnchanged:
 			ui.Text(c, "The files were already as they were then").FontSize(11.5).TextColor(palette.faint).SingleLine()
 		default:
 			ui.Text(c, "Couldn't revert the files: "+r.Error).FontSize(11.5).TextColor(palette.red).Shrink(1)
+			undo()
 		}
 		ui.Box(c).Height(1).Grow(1).Background(palette.border)
 	})
