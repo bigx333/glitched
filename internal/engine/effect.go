@@ -76,6 +76,31 @@ type RemoteCreate struct {
 	Command      api.Command
 }
 
+// RemoteStop stops a placeholder's child on its machine, Engine through
+// Link: Command settles it there, or stops its run and those under it.
+// Create is the placeholder's create, sent first while the machine may
+// not have taken it, so a create still in flight can't land after the
+// stop; the machine answers it with the receipt it stored.
+type RemoteStop struct {
+	Engine, Link api.ID
+	Create       *api.Command `json:",omitempty"`
+	Command      api.Command
+}
+
+// RemoteSend sends a placeholder's child a message on its machine,
+// Engine through Link, as Command.
+type RemoteSend struct {
+	Engine, Link api.ID
+	Command      api.Command
+}
+
+// RemoteConfigure narrows a placeholder's child's access on its machine,
+// Engine through Link, as Command.
+type RemoteConfigure struct {
+	Engine, Link api.ID
+	Command      api.Command
+}
+
 // RemoveWorktree removes the worktree a deleted thread ran in, on Branch
 // of Project's repository, with what is in it, when it is still the one
 // Glitched made for the thread. It sits in the outbox until done, so a
@@ -121,6 +146,9 @@ type MakeWorktree struct {
 
 func (MakeWorktree) effectKind() string      { return "worktree.make" }
 func (RemoteCreate) effectKind() string      { return "remote.create" }
+func (RemoteStop) effectKind() string        { return "remote.stop" }
+func (RemoteSend) effectKind() string        { return "remote.send" }
+func (RemoteConfigure) effectKind() string   { return "remote.configure" }
 func (CaptureCheckpoint) effectKind() string { return "checkpoint.capture" }
 func (DropCheckpoints) effectKind() string   { return "checkpoint.drop" }
 func (RevertThread) effectKind() string      { return "thread.revert" }
@@ -163,10 +191,16 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 		// finishes one a host before it began.
 		return t.Origin != nil && t.Origin.Making && !t.Deleted, nil
 	case RemoteCreate:
-		// A placeholder settled before any try has nothing there; one
-		// tried may, so its create goes on until the machine answers.
+		// A placeholder settled or deleted leaves its create to its stop,
+		// which sends it again first when it was tried.
 		r := t.Remote
-		return r != nil && r.State == RemoteCreating && !t.Deleted && (r.Attempted || !t.settled()), nil
+		return r != nil && r.State == RemoteCreating && !t.Deleted && !t.settled(), nil
+	case RemoteStop:
+		// The child there may run whatever became of its placeholder.
+		return true, nil
+	case RemoteSend, RemoteConfigure:
+		r := t.Remote
+		return r != nil && !t.Deleted && r.State != RemoteLostState && (r.State != RemoteCreating || !t.settled()), nil
 	case ReportToParent:
 		// The parent decides, as it observes the report, whether it can
 		// still take it.
@@ -194,9 +228,9 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 // recovery checkpoint it took, and puts the same files back; its rewind
 // makes the conversation again, and leaves unused any it made before. A
 // make finds the worktree its lock names it in, or one it finished. A
-// remote create sends its frozen command again, which the machine
-// answers with the receipt it stored.
-var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true, "worktree.remove": true, "checkpoint.capture": true, "checkpoint.drop": true, "thread.revert": true, "worktree.make": true, "remote.create": true}
+// remote create, stop, send or configure sends its frozen commands again,
+// which the machine answers with the receipts it stored.
+var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true, "worktree.remove": true, "checkpoint.capture": true, "checkpoint.drop": true, "thread.revert": true, "worktree.make": true, "remote.create": true, "remote.stop": true, "remote.send": true, "remote.configure": true}
 
 func ReplaySafe(e Effect) bool { return replaySafe[e.effectKind()] }
 
@@ -210,6 +244,9 @@ var effects = map[string]func([]byte) (Effect, error){
 	"worktree.remove": decodeAs[RemoveWorktree],
 	"worktree.make":   decodeAs[MakeWorktree],
 	"remote.create":   decodeAs[RemoteCreate],
+	"remote.stop":      decodeAs[RemoteStop],
+	"remote.send":      decodeAs[RemoteSend],
+	"remote.configure": decodeAs[RemoteConfigure],
 
 	"checkpoint.capture": decodeAs[CaptureCheckpoint],
 	"checkpoint.drop":    decodeAs[DropCheckpoints],
@@ -427,10 +464,10 @@ func (RemoteBound) observed()     {}
 func (RemoteSeen) observed()      {}
 func (RemoteLost) observed()      {}
 
-// RemoteAttempted is a placeholder's create about to reach its machine for
-// the first time. It is refused once the placeholder is settled or
-// deleted, so no try follows that.
-type RemoteAttempted struct{}
+// RemoteAttempted is a placeholder's create, Create, about to reach its
+// machine for the first time. It is refused once the placeholder is
+// settled or deleted, so no try follows that.
+type RemoteAttempted struct{ Create api.Command }
 
 // RemoteBound is the receipt the machine gave a placeholder's create:
 // Thread is its child there.
@@ -438,14 +475,15 @@ type RemoteBound struct{ Thread api.ID }
 
 // RemoteSeen is what the placeholder's follower read of its child, up to
 // Cursor in its machine's log: its last run there, Run, whether Silent,
-// in Slot, and the reports the events read hold, each by its key, of the
-// machine labelled On.
+// in Slot, whether its person there took it over, and the reports the
+// events read hold, each by its key, of the machine labelled On.
 type RemoteSeen struct {
 	Cursor  api.Cursor
 	Run     api.ID
 	Silent  bool
 	Slot    api.RunState
 	Pending []api.ID
+	Taken   bool
 	Reports []RemoteReport
 	On      string
 }

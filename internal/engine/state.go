@@ -98,7 +98,9 @@ type Run struct {
 // this engine read the child, in the machine's log; Run, Silent and Slot
 // are the child's last run there as of Cursor. Reported are the keys of
 // the reports delivered of it: the run of a turn's end, the request of
-// one it waits on. Lost is why it is lost.
+// one it waits on. Lost is why it is lost. Create is the create its first
+// try sent, and Taken that the machine's person took the child over
+// there: its last message or stop was theirs.
 type Remote struct {
 	Engine    api.ID       `json:"engine"`
 	Link      api.ID       `json:"link"`
@@ -112,6 +114,8 @@ type Remote struct {
 	Pending   []api.ID     `json:"pending,omitempty"`
 	Reported  []api.ID     `json:"reported,omitempty"`
 	Lost      string       `json:"lost,omitempty"`
+	Create    *api.Command `json:"create,omitempty"`
+	Taken     bool         `json:"taken,omitempty"`
 }
 
 // Origin is a link's thread's: where it came from, as api.Origin, its
@@ -121,6 +125,10 @@ type Origin struct {
 	api.Origin
 	Making bool `json:"making,omitempty"`
 }
+
+// tried is whether the placeholder's create may have reached its
+// machine.
+func (r Remote) tried() bool { return r.Attempted || r.State != RemoteCreating }
 
 type RemoteState string
 
@@ -338,6 +346,15 @@ func View(t Thread) api.Thread {
 	if t.Context != (api.Context{}) {
 		c := t.Context
 		v.Context = &c
+	}
+	if r := t.Remote; r != nil {
+		v.Remote = &api.Placement{Lost: r.Lost}
+		switch {
+		case r.State == RemoteBoundState:
+			v.Run = r.Slot
+		case r.State == RemoteCreating && !t.settled():
+			v.Run = api.RunStarting
+		}
 	}
 	if r := t.Live(); r != nil {
 		v.Turn = &api.Turn{Run: r.ID, Model: r.Model, Access: r.Access, Silent: r.Silent}

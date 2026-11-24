@@ -15,10 +15,12 @@ import (
 // done or failed unless it was stopping, silent or uncertain, and a
 // request reports the run blocked unless the run is silent. A worktree
 // that wasn't made there reports failed: the child never runs. Settled
-// there before its first run, it starts none.
+// there before its first run, it starts none. Its last message or stop
+// there with no agent's thread behind it is its person's, which takes it
+// over there, as a local child's user does.
 func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, bool, error) {
 	if fresh {
-		r.Run, r.Silent, r.Slot, r.Pending = api.ID{}, false, api.RunIdle, nil
+		r.Run, r.Silent, r.Slot, r.Pending, r.Taken = api.ID{}, false, api.RunIdle, nil, false
 	}
 	var out []RemoteReport
 	add := func(p RemoteReport) {
@@ -93,6 +95,12 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 				}
 			}
 			r.Slot, r.Pending = api.RunIdle, nil
+		case api.MessageQueued:
+			if b.Report.IsZero() && !b.Silent {
+				r.Taken = b.By.IsZero()
+			}
+		case api.StopAsked:
+			r.Taken = b.By.IsZero()
 		case api.ThreadDeleted:
 			gone = true
 		}

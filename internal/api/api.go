@@ -549,6 +549,19 @@ type Thread struct {
 	// the shell stream sends once so that clients drop it. No read returns
 	// one.
 	Deleted bool `json:"deleted,omitempty"`
+	// Remote is set on a remote child's placeholder: where its child runs,
+	// whose run Run is as this engine last heard.
+	Remote *Placement `json:"remote,omitempty"`
+}
+
+// Placement is where a remote child runs: on the machine labelled
+// Machine, which this engine last heard from for it at Heard, zero before
+// it has since it started; Lost is why it no longer follows the child.
+// A read fills Machine and Heard; a stream's view leaves them out.
+type Placement struct {
+	Machine string    `json:"machine,omitempty"`
+	Heard   time.Time `json:"heard,omitzero"`
+	Lost    string    `json:"lost,omitempty"`
 }
 
 // Context is how full a thread's context is: Used tokens of Model's
