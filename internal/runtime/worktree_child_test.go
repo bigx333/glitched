@@ -3,6 +3,7 @@ package runtime_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -46,8 +47,6 @@ func stopped(t *testing.T, ep api.Endpoint, threads ...api.Thread) {
 		until(t, ep, th.ID, "the turn to stop", idle)
 	}
 }
-
-func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 
 // A child asked for in a worktree runs in one of its own, on a new branch
 // from its parent folder's HEAD, without the folder's uncommitted changes,
@@ -221,5 +220,59 @@ func TestAWorktreeChildsReportNamesItsBranch(t *testing.T) {
 	}
 	if !strings.Contains(wake, `branch="`+kid.Branch+`"`) {
 		t.Errorf("the parent's wake %q doesn't name the child's branch %s", wake, kid.Branch)
+	}
+}
+
+// A worktree child's agent gets the skills of its worktree, and a shared
+// child's those of the folder it shares with its parent.
+func TestAChildGetsTheSkillsOfTheFolderItRunsIn(t *testing.T) {
+	st, err := store.Open(dbPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	state := t.TempDir()
+	h, err := runtime.New(ctx, st, provider.Mux{"fake": fake.New(fake.Turn(true))}, runtime.WithWorktrees(filepath.Join(state, "worktrees")), runtime.WithSkills(state))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Kill() })
+	skill := func(dir, name string) {
+		t.Helper()
+		path := filepath.Join(dir, ".glitched", "skills", name, "SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("---\nname: "+name+"\ndescription: The "+name+" skill.\n---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names := func(th api.Thread) []string {
+		t.Helper()
+		list, err := h.Skills(ctx, api.SkillQuery{Thread: th.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, s := range list.Skills {
+			out = append(out, s.Name)
+		}
+		return out
+	}
+	project := repo(t)
+	skill(project, "shared")
+	gitIn(t, project, "add", ".")
+	gitIn(t, project, "commit", "-q", "-m", "a skill")
+	parent := asking(t, h, api.ThreadCreate{Workspace: project})
+	inFolder := isolated(parent)
+	inFolder.Worktree = nil
+	shared := child(t, h, inFolder)
+	kid := child(t, h, isolated(parent))
+	skill(kid.Workspace, "mine")
+	if got := names(kid); !slices.Equal(got, []string{"mine", "shared"}) {
+		t.Errorf("the worktree child gets %v, want its worktree's mine and shared", got)
+	}
+	if got := names(shared); !slices.Equal(got, []string{"shared"}) {
+		t.Errorf("the shared child gets %v, want its parent folder's shared", got)
 	}
 }
