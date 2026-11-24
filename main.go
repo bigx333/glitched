@@ -283,6 +283,8 @@ type app struct {
 	// sidebarShown is the sidebar's width as this frame draws it: as
 	// dragged, but never leaving the chat less than its least width.
 	sidebarShown float32
+	// windowW is the window's width, as this frame lays it out.
+	windowW float32
 	// sidebarOpen is how far the sidebar has slid in this frame, from 0
 	// to 1; sidebarJump skips the slide, for ⌘B.
 	sidebarOpen float32
@@ -1011,8 +1013,17 @@ func (a *app) view(c *ui.Context) {
 	}
 	root := ui.Row(c).Fill().AlignItems(ui.Stretch)
 	noteGPU(root)
+	w, _ := c.Size()
+	a.windowW = w
+	// As dragged, the sidebar never leaves the chat less than its least
+	// width (and gives way whole to a panel that doesn't fit beside it,
+	// crowded).
+	a.sidebarShown = a.sidebarWidth
+	if w > 0 {
+		a.sidebarShown = max(min(a.sidebarWidth, w-minChatWidth), minSidebarWidth)
+	}
 	target := float32(0)
-	if a.showSidebar {
+	if a.sidebarVisible() {
 		target = 1
 	}
 	if a.sidebarJump {
@@ -1022,9 +1033,7 @@ func (a *app) view(c *ui.Context) {
 	}
 	// Of this frame's sidebar, so that what lays itself out beside it, as
 	// the header, fits the room it has in this frame.
-	a.sidebarShown = a.sidebarWidth
-	if w, _ := c.Size(); w > 0 {
-		a.sidebarShown = max(min(a.sidebarWidth, w-minChatWidth), minSidebarWidth)
+	if w > 0 {
 		a.roomBeside = w - a.sidebarShown*a.sidebarOpen
 	}
 	root.Children(func() {
