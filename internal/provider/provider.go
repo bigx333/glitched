@@ -86,7 +86,8 @@ type Rewinder interface {
 }
 
 // RewindSpec is a rewind of Thread's conversation, Session, to where its
-// run Head left it, which Revert, the revert's command, asks. Dropped are
+// run Head left it, which Revert, the revert's command, asks; or a fork
+// of it there, which Revert, the fork's thread, asks. Dropped are
 // the Heads of the runs after it, oldest first, "" for one that said
 // none. Compacted is that the provider compacted the conversation in one
 // of those.
