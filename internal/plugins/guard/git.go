@@ -43,12 +43,12 @@ func checkArgs(fam family, args []string, cwd string) error {
 	return nil
 }
 
-// gitEnv hardens every git-family run, including the git that gh starts.
+// GitEnv hardens every git-family run, including the git that gh starts.
 // It goes in as GIT_CONFIG_COUNT entries after any the user already has,
 // so it wins over the repository's own config (a planted fsmonitor or
 // hook). Hooks are always off: Glitched has no notion yet of a checkout
 // the user trusts, where Zeron keeps hooks for a commit or push.
-func gitEnv(hooksDir string) []string {
+func GitEnv(hooksDir string) []string {
 	start, _ := strconv.Atoi(os.Getenv("GIT_CONFIG_COUNT"))
 	start = max(start, 0)
 	config := [][2]string{
@@ -112,8 +112,8 @@ var gitRefusedShort = map[string]string{
 }
 
 // gitSafeConfig says whether -c key=value only changes how git prints or
-// who it says you are. -c is read after GIT_CONFIG_COUNT, so the keys gitEnv
-// hardens are accepted only with the value gitEnv already sets.
+// who it says you are. -c is read after GIT_CONFIG_COUNT, so the keys GitEnv
+// hardens are accepted only with the value GitEnv already sets.
 func gitSafeConfig(key, value string) bool {
 	if strings.ContainsAny(value, "\n\x00") {
 		return false

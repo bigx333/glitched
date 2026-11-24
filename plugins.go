@@ -675,21 +675,14 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		}
 		return map[string]string{"message": cmd.String()}, nil
 	case "threads.create":
-		var args struct {
-			Prompt, Title, Workspace string
-			Access                   *string
-		}
-		if err := json.Unmarshal(e.Args, &args); err != nil {
-			return nil, fmt.Errorf("threads.create: %v", err)
-		}
-		if strings.TrimSpace(args.Prompt) == "" {
-			return nil, errors.New("threads.create needs a prompt")
-		}
-		access, err := plugins.CreateAccess(args.Access)
+		c, err := plugins.ParseCreate(e.Args)
 		if err != nil {
 			return nil, err
 		}
-		ws, err := pluginWorkspace(args.Workspace)
+		if c.Key != nil {
+			return nil, errors.New("threads.create takes a key only in a service: the window keeps no create to one across a restart")
+		}
+		ws, err := pluginWorkspace(c.Workspace)
 		if err != nil {
 			return nil, err
 		}
@@ -697,15 +690,18 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 		if len(envs) == 0 {
 			return nil, errors.New("no engine is reached")
 		}
-		title := cmpOr(args.Title, args.Prompt)
-		if r := []rune(title); len(r) > 48 {
-			title = string(r[:48]) + "…"
+		model := a.modelRef()
+		if c.Model != nil {
+			if !slices.ContainsFunc(a.offeredModels(), func(m modelInfo) bool { return m.key.Provider == c.Model.Provider }) {
+				return nil, fmt.Errorf("threads.create: no engine here runs a provider %q", c.Model.Provider)
+			}
+			model = *c.Model
 		}
-		tid := a.backend.Create(envs[0], ws, title, a.modelRef(), access, nil)
+		tid := a.backend.Create(envs[0], ws, c.Title, model, c.Access, c.Worktree)
 		if tid.IsZero() {
 			return nil, errors.New("this machine's engine isn't reached")
 		}
-		a.backend.Send(envs[0], tid, args.Prompt, api.SteerActive)
+		a.backend.Send(envs[0], tid, c.Prompt, api.SteerActive)
 		return map[string]string{"thread": tid.String()}, nil
 	}
 	return nil, fmt.Errorf("unknown effect %q", e.Type)

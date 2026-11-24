@@ -926,7 +926,22 @@ declare const glitched: {
   threads: {
     list(): Promise<ThreadRecord[]>;
     open(thread: string): Promise<void>;
-    create(prompt: string, options?: { title?: string; workspace?: string }): Promise<{ thread: string }>;
+    /**
+     * Starts a thread at Ask for approval, or at access, which needs threads:access too. Needs threads:write.
+     * model: the composer's (a service's: the last thread's) when omitted. worktree: a new one from base, or HEAD.
+     * key: a service's alone, with a model; a repeat of it, even after a restart, answers the first thread.
+     */
+    create(
+      prompt: string,
+      options?: {
+        title?: string;
+        workspace?: string;
+        access?: "Ask for approval" | "Approve for me" | "Full access";
+        model?: { provider: string; model: string; effort?: string; fast?: boolean };
+        worktree?: { base?: string };
+        key?: { id: string; at: string };
+      },
+    ): Promise<{ thread: string }>;
     send(thread: string, text: string): Promise<{ message: string }>;
     /** Up to 200 bytes. Needs threads:write. */
     rename(thread: string, title: string): Promise<void>;

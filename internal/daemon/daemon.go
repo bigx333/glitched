@@ -186,6 +186,9 @@ type Daemon struct {
 	// users give agents in it, which no client lists, enters or clones
 	// into.
 	stateDir string
+	// providers are the ones the engine runs, which a plugin's create
+	// must name.
+	providers provider.Mux
 
 	mu        sync.Mutex
 	addrs     []net.Addr
@@ -212,7 +215,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		hubAt = Socket(cfg.HubDir)
 	}
 	ctx, stop := context.WithCancel(ctx)
-	d := &Daemon{stop: stop, done: make(chan struct{}), stateDir: cfg.Dir}
+	d := &Daemon{stop: stop, done: make(chan struct{}), stateDir: cfg.Dir, providers: cfg.Providers}
 	defer func() {
 		if err != nil {
 			stop()

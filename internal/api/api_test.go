@@ -25,6 +25,29 @@ func TestIDRoundTrip(t *testing.T) {
 	}
 }
 
+// IDAt takes the times an ID's 48 bits of milliseconds hold, from 1970,
+// and refuses one before or after rather than wrap it onto another.
+func TestIDAtRefusesATimeAnIDCantHold(t *testing.T) {
+	bits := [10]byte{1}
+	for _, ms := range []int64{0, 1<<48 - 1} {
+		id, err := IDAt(time.UnixMilli(ms), bits)
+		if err != nil {
+			t.Fatalf("%d ms: %v", ms, err)
+		}
+		if again, _ := IDAt(time.UnixMilli(ms), bits); again != id {
+			t.Fatalf("%d ms derived %s, then %s", ms, id, again)
+		}
+	}
+	if a, _ := IDAt(time.UnixMilli(0), bits); a == (ID{}) {
+		t.Fatal("the epoch's id with bits is zero")
+	}
+	for _, ms := range []int64{-1, 1 << 48} {
+		if id, err := IDAt(time.UnixMilli(ms), bits); err == nil {
+			t.Errorf("%d ms gave %s, want a refusal", ms, id)
+		}
+	}
+}
+
 func TestCommandJSON(t *testing.T) {
 	for _, body := range []Intent{
 		MessageDispatch{Text: "hi", Mode: SteerActive},

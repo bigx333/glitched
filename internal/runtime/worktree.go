@@ -17,6 +17,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/engine"
+	"glitched/internal/plugins/guard"
 )
 
 // WithWorktrees has the host make the worktrees threads ask for under
@@ -25,7 +26,13 @@ func WithWorktrees(root string) Option { return func(h *Host) { h.worktrees = ro
 
 // git runs git in dir and returns its output trimmed, or its complaint.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
+	return gitWith(ctx, nil, dir, args...)
+}
+
+// gitWith is git run in env; nil is the engine's own.
+func gitWith(ctx context.Context, env []string, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = env
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -116,7 +123,19 @@ func (h *Host) createInWorktree(ctx context.Context, c api.Command, b api.Thread
 	if _, _, err := engine.Decide(target, api.Command{ID: c.ID, Target: c.Target, Revision: c.Revision, Expires: c.Expires, Body: dry}, time.Now()); err != nil {
 		return api.Receipt{}, err
 	}
-	top, err := git(ctx, b.Workspace, "rev-parse", "--show-toplevel")
+	run := git
+	if b.Worktree.Guarded {
+		hooks, err := os.MkdirTemp("", "glitched-nohooks-")
+		if err != nil {
+			return refuse("%v", err)
+		}
+		defer os.RemoveAll(hooks)
+		env := append(os.Environ(), guard.GitEnv(hooks)...)
+		run = func(ctx context.Context, dir string, args ...string) (string, error) {
+			return gitWith(ctx, env, dir, args...)
+		}
+	}
+	top, err := run(ctx, b.Workspace, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return refuse("%s is not in a git repository", b.Workspace)
 	}
@@ -127,36 +146,36 @@ func (h *Host) createInWorktree(ctx context.Context, c api.Command, b api.Thread
 	short, long, dir := worktreeNames(h.worktrees, top, c.Target, b.Title)
 	branch := ""
 	if _, err := os.Stat(dir); err == nil {
-		common, _ := git(ctx, top, "rev-parse", "--path-format=absolute", "--git-common-dir")
-		own, ok := ownedBy(ctx, dir, common, c.Target)
+		common, _ := run(ctx, top, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		own, ok := ownedBy(ctx, run, dir, common, c.Target)
 		if _, err := os.Stat(filepath.Join(own, "locked")); own != "" && err == nil {
 			return refuse("the worktree at %s was never finished; it stays for what is in it", dir)
 		}
 		if !ok {
 			return refuse("%s is there, and isn't the thread's worktree of %s", dir, top)
 		}
-		if branch, _ = git(ctx, dir, "branch", "--show-current"); branch != short && branch != long {
+		if branch, _ = run(ctx, dir, "branch", "--show-current"); branch != short && branch != long {
 			return refuse("%s is already there and isn't on the thread's branch", dir)
 		}
 	} else {
-		if _, err := git(ctx, top, "rev-parse", "--verify", "--quiet", "HEAD"); err != nil {
+		if _, err := run(ctx, top, "rev-parse", "--verify", "--quiet", "HEAD"); err != nil {
 			return refuse("the repository at %s has no commits yet", top)
 		}
 		base := b.Worktree.Base
 		if base == "" {
 			base = "HEAD"
 		}
-		commit, err := git(ctx, top, "rev-parse", "--verify", "--quiet", base+"^{commit}")
+		commit, err := run(ctx, top, "rev-parse", "--verify", "--quiet", base+"^{commit}")
 		if err != nil {
 			return refuse("the repository has no branch or commit %q", base)
 		}
 		if rel != "." {
-			if kind, err := git(ctx, top, "cat-file", "-t", commit+":"+filepath.ToSlash(rel)); err != nil || kind != "tree" {
+			if kind, err := run(ctx, top, "cat-file", "-t", commit+":"+filepath.ToSlash(rel)); err != nil || kind != "tree" {
 				return refuse("%s is not a folder on %s", rel, base)
 			}
 		}
 		branch = short
-		if _, err := git(ctx, top, "rev-parse", "--verify", "--quiet", "refs/heads/"+short); err == nil {
+		if _, err := run(ctx, top, "rev-parse", "--verify", "--quiet", "refs/heads/"+short); err == nil {
 			branch = long
 		}
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
@@ -164,15 +183,15 @@ func (h *Host) createInWorktree(ctx context.Context, c api.Command, b api.Thread
 		}
 		// Locked until made, so that a retry can tell a worktree git
 		// finished from one it stopped in.
-		if _, err := git(ctx, top, "worktree", "add", "--lock", "--reason", "glitched: making", "--no-track", "-b", branch, dir, commit); err != nil {
+		if _, err := run(ctx, top, "worktree", "add", "--lock", "--reason", "glitched: making", "--no-track", "-b", branch, dir, commit); err != nil {
 			return refuse("%v", err)
 		}
-		own, err := git(ctx, dir, "rev-parse", "--absolute-git-dir")
+		own, err := run(ctx, dir, "rev-parse", "--absolute-git-dir")
 		if err == nil {
 			err = os.WriteFile(filepath.Join(own, ownerFile), []byte(c.Target.String()), 0o644)
 		}
 		if err == nil {
-			_, err = git(ctx, top, "worktree", "unlock", dir)
+			_, err = run(ctx, top, "worktree", "unlock", dir)
 		}
 		if err != nil {
 			return refuse("%v", err)
@@ -203,7 +222,7 @@ const ownerFile = "glitched-thread"
 // ownedBy is whether dir is a worktree of the repository whose git folder
 // is common, made for thread and registered by git at dir, and its own
 // git folder.
-func ownedBy(ctx context.Context, dir, common string, thread api.ID) (string, bool) {
+func ownedBy(ctx context.Context, git func(context.Context, string, ...string) (string, error), dir, common string, thread api.ID) (string, bool) {
 	top, err := git(ctx, dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", false
@@ -260,7 +279,7 @@ func (h *Host) deleteInWorktree(ctx context.Context, c api.Command) (api.Receipt
 		if _, err := os.Stat(dir); err != nil {
 			return true
 		}
-		_, ok := ownedBy(ctx, dir, common, t.ID)
+		_, ok := ownedBy(ctx, git, dir, common, t.ID)
 		cur, _ := git(ctx, dir, "branch", "--show-current")
 		return ok && cur == t.Branch
 	}
