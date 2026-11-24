@@ -1015,9 +1015,8 @@ func (a *app) view(c *ui.Context) {
 	noteGPU(root)
 	w, _ := c.Size()
 	a.windowW = w
-	// As dragged, the sidebar never leaves the chat less than its least
-	// width (and gives way whole to a panel that doesn't fit beside it,
-	// crowded).
+	// As dragged, but capped so the chat keeps its least width; a panel
+	// that still doesn't fit beside it takes its room whole (crowded).
 	a.sidebarShown = a.sidebarWidth
 	if w > 0 {
 		a.sidebarShown = max(min(a.sidebarWidth, w-minChatWidth), minSidebarWidth)
