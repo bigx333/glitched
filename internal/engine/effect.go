@@ -201,6 +201,7 @@ type Ended struct {
 	Outcome api.Outcome
 	Error   string
 	Tokens  int64
+	Limit   *api.UsageLimit // the usage limit that failed the turn
 }
 
 type Delta struct {

@@ -382,6 +382,46 @@ func TestAFailedTurnSaysWhy(t *testing.T) {
 	closeRun(t, g)
 }
 
+// A turn a usage limit failed says when the spent window resets, from
+// what Codex said of the account's windows before it, or when asked after;
+// with neither, it says only that a limit failed it.
+func TestALimitedTurnSaysWhenTheLimitResets(t *testing.T) {
+	resets := time.Unix(1787199153, 0).UTC()
+	for scenario, want := range map[string]api.UsageLimit{
+		"limit-updated": {Resets: resets},
+		"limit-read":    {Resets: resets},
+		"turn-failed":   {},
+	} {
+		a, log := fake(t, scenario)
+		g := open(t, a, spec(t))
+		do(t, g, provider.Start{Text: "hi"})
+		end := ended(turn(t, g))
+		if end.Outcome != api.OutcomeFailed || end.Limit == nil || *end.Limit != want {
+			t.Errorf("%s: the turn ended %+v with limit %v, want failed with %+v", scenario, end, end.Limit, want)
+		}
+		if asked := len(sent(t, log, "account/rateLimits/read")); asked != map[bool]int{true: 0, false: 1}[scenario == "limit-updated"] {
+			t.Errorf("%s: asked Codex for the account's windows %d times", scenario, asked)
+		}
+		closeRun(t, g)
+	}
+}
+
+// A limited turn whose windows Codex won't say still ends, once the read
+// of them gives up, with a limit that doesn't say when it resets.
+func TestALimitedTurnEndsWhenCodexWontSayWhenItResets(t *testing.T) {
+	a, log := fake(t, "limit-silent")
+	g := open(t, a, spec(t))
+	do(t, g, provider.Start{Text: "hi"})
+	end := ended(turn(t, g))
+	if end.Outcome != api.OutcomeFailed || end.Limit == nil || !end.Limit.Resets.IsZero() {
+		t.Errorf("the turn ended %+v with limit %v, want failed with a limit of no known reset", end, end.Limit)
+	}
+	if asked := len(sent(t, log, "account/rateLimits/read")); asked != 1 {
+		t.Errorf("asked Codex for the account's windows %d times, want once", asked)
+	}
+	closeRun(t, g)
+}
+
 // Two messages of one turn don't run together, and a message Codex sends
 // whole, with no deltas, still reaches the run.
 func TestMessagesStayApart(t *testing.T) {

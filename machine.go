@@ -193,6 +193,13 @@ func (a *app) agentsCard(c *ui.Context, m client.Machine) {
 				a.configure(func(cfg *daemon.Config) { cfg.ContinueAfterRestart = v })
 			}
 		})
+		limitOn := m.Config.ContinueAfterLimit
+		settingRow(c, "Continue agents after a usage limit", "When Claude or Codex stops a thread of yours at its usage limit and says when the limit resets, the engine continues the thread then, two at a time. The thread shows when, and you can cancel it there. Not threads that wait on you, or are settled or snoozed.", func() {
+			if ui.Switch(c.Key("continue-after-limit"), &limitOn).Label("Enable continue agents after a usage limit").Changed() {
+				v := limitOn
+				a.configure(func(cfg *daemon.Config) { cfg.ContinueAfterLimit = v })
+			}
+		})
 		syncOn := m.Config.SyncSkillsEnabled()
 		settingRow(c, "Sync my skills to paired machines", "Threads on the machines this app reaches get your skills in ~/.glitched/skills, and theirs replace a machine's own of the same name. Turned off, each machine drops them the next time this app reaches it.", func() {
 			if ui.Switch(c.Key("sync-skills"), &syncOn).Label("Enable sync my skills to paired machines").Changed() {

@@ -236,6 +236,17 @@ func (f *fake) take(m message, raw []byte) {
 		}
 		f.reply(m.ID, map[string]any{"userAgent": "glitched/0.171.0 (Fake OS; arm64) fake (glitched; 1)", "codexHome": "/fake", "platformFamily": "unix", "platformOs": "macos"})
 	case "initialized":
+	case "account/rateLimits/read":
+		if f.scenario == "limit-silent" {
+			return
+		}
+		if f.scenario != "limit-read" {
+			f.refuse(m.ID, -32601, "unsupported method "+m.Method)
+			return
+		}
+		f.reply(m.ID, map[string]any{"rateLimits": map[string]any{
+			"limitId": "codex", "primary": map[string]any{"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 1787199153}, "secondary": nil,
+		}})
 	case "account/read":
 		if f.scenario == "signed-out" {
 			f.reply(m.ID, map[string]any{"account": nil, "userId": nil, "requiresOpenaiAuth": true, "workspaceRouting": nil})
@@ -873,6 +884,18 @@ func (f *fake) play(n int, turn, said string) {
 		f.message("msg-"+turn, "about to")
 		fmt.Fprintln(os.Stderr, "boom: the fake crashed")
 		os.Exit(3)
+	case "limit-updated", "limit-read", "limit-silent":
+		// Codex says the account's 5-hour window is spent, before the
+		// turn's request, or only when asked.
+		if f.scenario == "limit-updated" {
+			f.notify("account/rateLimits/updated", map[string]any{"rateLimits": map[string]any{
+				"limitId": "codex", "primary": map[string]any{"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 1787199153},
+				"secondary": map[string]any{"usedPercent": 30, "windowDurationMins": 10080, "resetsAt": 1787600000},
+			}})
+		}
+		f.notify("error", map[string]any{"threadId": thread, "turnId": turn, "willRetry": false, "error": map[string]any{"message": "You've hit your usage limit.", "codexErrorInfo": "usageLimitExceeded"}})
+		f.complete("failed", map[string]any{"message": "You've hit your usage limit.", "codexErrorInfo": "usageLimitExceeded", "additionalDetails": nil})
+		return
 	case "turn-failed":
 		f.notify("error", map[string]any{"threadId": thread, "turnId": turn, "willRetry": false, "error": map[string]any{"message": "You've hit your usage limit.", "codexErrorInfo": "usageLimitExceeded"}})
 		f.complete("failed", map[string]any{"message": "You've hit your usage limit.", "codexErrorInfo": "usageLimitExceeded", "additionalDetails": nil})

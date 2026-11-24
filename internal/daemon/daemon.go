@@ -103,6 +103,10 @@ type Config struct {
 	// of the user's threads its last stop cut off, as Continue does. Off
 	// unless set.
 	ContinueAfterRestart bool `json:"continue_after_restart,omitempty"`
+	// ContinueAfterLimit has the engine continue a thread of the user's
+	// once the usage limit that ended its last turn resets, where the
+	// provider said when. Off unless set.
+	ContinueAfterLimit bool `json:"continue_after_limit,omitempty"`
 	// PluginRun runs the programs plugins' services ask for; nil runs them with RunProgram.
 	PluginRun func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error) `json:"-"`
 	// Name is the engine's name, which its clients show; "" is this
@@ -364,7 +368,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	} else {
 		slog.Warn("agents run without glitched mcp, so they start no child threads", "err", errors.Join(err, absErr))
 	}
-	opts = append(opts, runtime.WithMCPServers(cfg.MCP...), runtime.WithWorktrees(filepath.Join(cfg.Dir, "worktrees")), runtime.WithCheckpoints(filepath.Join(cfg.Dir, "checkpoints")), runtime.WithVault(secrets.New(secrets.Under(cfg.Dir))), runtime.WithIdleCompaction(cfg.CompactBeforeExpireEnabled()), runtime.WithAutoContinue(cfg.ContinueAfterRestart), runtime.WithName(cfg.Name))
+	opts = append(opts, runtime.WithMCPServers(cfg.MCP...), runtime.WithWorktrees(filepath.Join(cfg.Dir, "worktrees")), runtime.WithCheckpoints(filepath.Join(cfg.Dir, "checkpoints")), runtime.WithVault(secrets.New(secrets.Under(cfg.Dir))), runtime.WithIdleCompaction(cfg.CompactBeforeExpireEnabled()), runtime.WithAutoContinue(cfg.ContinueAfterRestart), runtime.WithLimitResume(cfg.ContinueAfterLimit), runtime.WithName(cfg.Name))
 	// The skills staged for an agent are read from its workspace too.
 	if dir, err := filepath.Abs(cfg.Dir); err == nil {
 		opts = append(opts, runtime.WithSkills(dir))
@@ -584,6 +588,10 @@ func (d *Daemon) SetKeepAwake(enabled bool) {
 // SetProviderLog applies the provider log's switch at once, as
 // engine.json's ProviderLog does at the next start.
 func (d *Daemon) SetProviderLog(on bool) { d.host.SetProviderLog(on) }
+
+// SetLimitResume applies the continue-after-a-usage-limit switch at once,
+// as engine.json's ContinueAfterLimit does at the next start.
+func (d *Daemon) SetLimitResume(on bool) { d.host.SetLimitResume(on) }
 
 // Node is the engine's own tailnet node, which reaches other machines'
 // engines when Tailscale isn't installed; nil when it runs none.

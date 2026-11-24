@@ -47,10 +47,18 @@ type message struct {
 	} `json:"compact_metadata"` // system compact_boundary
 	RateLimit *struct {
 		Status string `json:"status"`
+		// ResetsAt is when the window resets, in Unix seconds; only
+		// subscription accounts get it.
+		ResetsAt       int64  `json:"resetsAt"`
+		OverageStatus  string `json:"overageStatus"`
+		IsUsingOverage bool   `json:"isUsingOverage"`
 	} `json:"rate_limit_info"` // rate_limit_event
-	Response  *response `json:"response"`   // control_response
-	RequestID string    `json:"request_id"` // control_request, control_cancel_request
-	Request   *struct {
+	// APIErrorStatus is, on a result, the HTTP status of the API error
+	// that failed the turn, if one did.
+	APIErrorStatus *int      `json:"api_error_status"`
+	Response       *response `json:"response"`   // control_response
+	RequestID      string    `json:"request_id"` // control_request, control_cancel_request
+	Request        *struct {
 		Subtype string `json:"subtype"`
 		canUseTool
 	} `json:"request"` // control_request
@@ -281,6 +289,11 @@ type turn struct {
 	cache        *cacheState              // the process's, which outlives the turn; nil in tests that need none
 	interrupted  bool                     // the user stopped the turn
 	spawns       map[string]*spawn        // native subagents, by the tool use that started each
+	// rejected is when each window that refused the turn's requests
+	// resets, 0 for one Claude Code gave no time, and rateLimited that a
+	// synthetic reply said a rate limit stopped the model.
+	rejected    []int64
+	rateLimited bool
 }
 
 func newTurn(workspace string) *turn {
@@ -300,6 +313,9 @@ func (t *turn) read(m message) []provider.Event {
 			for _, b := range m.content() {
 				t.signedOut += b.text()
 			}
+		}
+		if m.Error == "rate_limit" {
+			t.rateLimited = true
 		}
 		// AskUserQuestion shows as its question card, and TodoWrite as
 		// the plan, not as steps.
@@ -358,6 +374,10 @@ func (t *turn) read(m message) []provider.Event {
 	case "rate_limit_event":
 		if t.cache != nil && t.cache.limited != nil && m.RateLimit != nil {
 			t.cache.limited.Store(m.RateLimit.Status != "allowed")
+		}
+		// A window the account's overage carries refuses nothing.
+		if l := m.RateLimit; l != nil && l.Status == "rejected" && l.OverageStatus != "allowed" && !l.IsUsingOverage {
+			t.rejected = append(t.rejected, l.ResetsAt)
 		}
 	case "result":
 		evs := append(t.unfinished(), t.measured(m)...)
@@ -538,6 +558,9 @@ func (t *turn) end(m message) provider.TurnEnded {
 		return e
 	}
 	e.Outcome = api.OutcomeFailed
+	if (len(t.rejected) > 0 || t.rateLimited) && (m.APIErrorStatus == nil || *m.APIErrorStatus == 429) {
+		e.Limit = &api.UsageLimit{Resets: resets(t.rejected)}
+	}
 	switch {
 	case t.signedOut != "":
 		e.Error = notSignedIn(t.signedOut)
@@ -549,6 +572,22 @@ func (t *turn) end(m message) provider.TurnEnded {
 		e.Error = fmt.Sprintf("Claude Code ended the turn with %s.", m.Subtype)
 	}
 	return e
+}
+
+// resets is when the turn may go on: once the last of the windows that
+// refused it resets, zero when Claude Code gave none, or no time for one.
+func resets(windows []int64) time.Time {
+	var last int64
+	for _, w := range windows {
+		if w <= 0 {
+			return time.Time{}
+		}
+		last = max(last, w)
+	}
+	if last == 0 {
+		return time.Time{}
+	}
+	return time.Unix(last, 0).UTC()
 }
 
 func notSignedIn(said string) string {

@@ -1874,6 +1874,9 @@ func (a *app) sendControl(c *ui.Context, t thread, keys bool) {
 	if a.message(t) == "" && continuable(t) {
 		a.continueButton(c, t)
 	}
+	if a.message(t) == "" && limited(t) {
+		a.limitControl(c, t, time.Now())
+	}
 	// The plugin's gives up its room first: however wide it draws, Stop
 	// keeps its own.
 	box := func() ui.Element {

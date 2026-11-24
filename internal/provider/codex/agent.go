@@ -43,6 +43,7 @@ type Agent struct {
 	started     bool
 	interrupted bool
 	ended       bool   // TurnEnded is queued; nothing is queued after it
+	ending      bool   // the turn is over, and its end waits on what Codex says of the usage limit
 	failed      bool   // the turn did not end on its own
 	turn        string // Codex's id of the turn
 	problem     string // the last error Codex said it won't retry
@@ -347,6 +348,57 @@ type tokenUsage struct {
 	Window int64  `json:"modelContextWindow"`
 }
 
+// rateLimits is the account's usage windows as Codex says them, in
+// account/rateLimits/updated and account/rateLimits/read; an update sends
+// only the windows that moved.
+type rateLimits struct {
+	Primary   *rateWindow `json:"primary"`
+	Secondary *rateWindow `json:"secondary"`
+}
+
+type rateWindow struct {
+	UsedPercent float64 `json:"usedPercent"`
+	ResetsAt    *int64  `json:"resetsAt"` // Unix seconds
+}
+
+// merged is l with the windows u sends.
+func (l rateLimits) merged(u rateLimits) rateLimits {
+	if u.Primary != nil {
+		l.Primary = u.Primary
+	}
+	if u.Secondary != nil {
+		l.Secondary = u.Secondary
+	}
+	return l
+}
+
+// resets is when the account may go on: once the last of its spent
+// windows resets. known is false when none is spent, or one spent has no
+// time, as T3 Code reads them.
+func (l rateLimits) resets() (at time.Time, known bool) {
+	var last int64
+	for _, w := range []*rateWindow{l.Primary, l.Secondary} {
+		if w == nil || w.UsedPercent < 100 {
+			continue
+		}
+		if w.ResetsAt == nil || *w.ResetsAt <= 0 {
+			return time.Time{}, false
+		}
+		last = max(last, *w.ResetsAt)
+	}
+	if last == 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(last, 0).UTC(), true
+}
+
+// limitInfos are the codexErrorInfo values of a turn a usage limit failed.
+var limitInfos = map[string]bool{"usageLimitExceeded": true, "rateLimitExceeded": true}
+
+// limitRead bounds the account/rateLimits/read a limited turn's end waits
+// on, when no update said which window is spent.
+const limitRead = 5 * time.Second
+
 // notify is what a notification of the thread's means for the run.
 func (g *Agent) notify(m message) {
 	var n struct {
@@ -424,7 +476,7 @@ func (g *Agent) notify(m message) {
 	if n.TurnID == "" {
 		n.TurnID = turn.ID
 	}
-	if g.ended || !g.started || n.TurnID != "" && (g.p.isOver(n.TurnID) || g.turn != "" && n.TurnID != g.turn) {
+	if g.ended || g.ending || !g.started || n.TurnID != "" && (g.p.isOver(n.TurnID) || g.turn != "" && n.TurnID != g.turn) {
 		g.p.retire(m.Method)
 		return
 	}
@@ -508,11 +560,40 @@ func (g *Agent) notify(m message) {
 			if end.Error == "" {
 				end.Error = "Codex ended the turn without saying why."
 			}
+			if limitInfos[info] {
+				end.Limit = &api.UsageLimit{}
+				if at, known := g.p.limitsNow().resets(); known {
+					end.Limit.Resets = at
+				} else {
+					// The turn's first request can be refused before Codex
+					// says which window it spent: ask, off the reader.
+					g.ending = true
+					go g.endLimited(end)
+					return
+				}
+			}
 		case turn.Status != "completed":
 			end.Outcome, end.Error = api.OutcomeFailed, fmt.Sprintf("Codex ended the turn as %q, which Glitched doesn't know.", turn.Status)
 		}
 		g.endLocked(end)
 	}
+}
+
+// endLimited ends the turn a usage limit failed, once Codex says when the
+// spent window resets, or can't.
+func (g *Agent) endLimited(end provider.TurnEnded) {
+	ctx, cancel := context.WithTimeout(g.ctx, limitRead)
+	defer cancel()
+	var r struct {
+		RateLimits rateLimits `json:"rateLimits"`
+	}
+	if err := g.p.conn.call(ctx, "account/rateLimits/read", nil, &r); err == nil {
+		g.p.limited(r.RateLimits)
+		end.Limit.Resets, _ = g.p.limitsNow().resets()
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.endLocked(end)
 }
 
 // pendingLimit bounds, in bytes, the notifications of threads no spawn has
@@ -832,7 +913,7 @@ func (g *Agent) request(m message) {
 		g.p.conn.reply(m.ID, cancelled(m.Method))
 		return
 	}
-	if !g.started || g.ended || g.interrupted {
+	if !g.started || g.ended || g.ending || g.interrupted {
 		g.p.conn.reply(m.ID, cancelled(m.Method))
 		return
 	}

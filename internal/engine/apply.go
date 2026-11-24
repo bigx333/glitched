@@ -234,7 +234,7 @@ func apply(t Thread, e Event) (Thread, error) {
 		silent = t.silentRun(b.Run)
 		if err = t.setRun(b.Run, RunFinished); err == nil {
 			i := t.runAt(b.Run)
-			t.Runs[i].Outcome, t.Runs[i].Error, t.Runs[i].Ended = b.Outcome, b.Error, e.At
+			t.Runs[i].Outcome, t.Runs[i].Error, t.Runs[i].Ended, t.Runs[i].Limit = b.Outcome, b.Error, e.At, b.Limit
 			t.Tokens += b.Tokens
 			err = t.release(b.Run, QueueCancelled)
 		}
@@ -267,6 +267,13 @@ func apply(t Thread, e Event) (Thread, error) {
 		if err = t.setRequest(b.Request, api.RequestInvalidated); err == nil {
 			err = t.resume(b.Request)
 		}
+	case api.ResumeCancelled:
+		r, ok := t.lastTurn()
+		if !ok || r.ID != b.Run || r.Limit == nil {
+			return t, &TransitionError{"resume", "none", "cancelled on a turn no usage limit ended"}
+		}
+		t.Runs = slices.Clone(t.Runs)
+		t.Runs[t.runAt(b.Run)].ResumeCancelled = true
 	default:
 		return t, nil
 	}

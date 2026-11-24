@@ -485,13 +485,19 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 		}
 	}
 
-	err = each(ctx, q, `SELECT id, generation, state, signalled, outcome, error, ended, model, access, silent FROM runs WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
+	err = each(ctx, q, `SELECT id, generation, state, signalled, outcome, error, ended, model, access, silent, limit_resets, resume_cancelled FROM runs WHERE thread = ? ORDER BY ord`, id, func(rows *sql.Rows) error {
 		var r engine.Run
 		var outcome, access sql.NullByte
-		var ended sql.NullInt64
+		var ended, resets sql.NullInt64
 		var model sql.NullString
-		if err := rows.Scan(idScan{&r.ID}, &r.Generation, &r.State, &r.Signalled, &outcome, &r.Error, &ended, &model, &access, &r.Silent); err != nil {
+		if err := rows.Scan(idScan{&r.ID}, &r.Generation, &r.State, &r.Signalled, &outcome, &r.Error, &ended, &model, &access, &r.Silent, &resets, &r.ResumeCancelled); err != nil {
 			return err
+		}
+		if resets.Valid {
+			r.Limit = &api.UsageLimit{}
+			if resets.Int64 != 0 {
+				r.Limit.Resets = fromNanos(resets.Int64)
+			}
 		}
 		r.Outcome = api.Outcome(outcome.Byte)
 		if ended.Valid {
@@ -600,18 +606,25 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 		if i < len(old.Runs) && old.Runs[i] == r {
 			continue
 		}
-		var outcome, ended any
+		var outcome, ended, resets any
 		if r.State == engine.RunFinished {
 			outcome, ended = r.Outcome, r.Ended.UnixNano()
+		}
+		if l := r.Limit; l != nil {
+			resets = int64(0)
+			if !l.Resets.IsZero() {
+				resets = l.Resets.UnixNano()
+			}
 		}
 		admitted, err := json.Marshal(r.Model)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO runs (thread, ord, id, generation, state, signalled, outcome, error, ended, model, access, silent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO runs (thread, ord, id, generation, state, signalled, outcome, error, ended, model, access, silent, limit_resets, resume_cancelled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (thread, ord) DO UPDATE SET state = excluded.state, signalled = excluded.signalled, outcome = excluded.outcome,
-				error = excluded.error, ended = excluded.ended`,
-			t.ID[:], i, r.ID[:], r.Generation, r.State, r.Signalled, outcome, r.Error, ended, string(admitted), r.Access, r.Silent); err != nil {
+				error = excluded.error, ended = excluded.ended, limit_resets = excluded.limit_resets,
+				resume_cancelled = excluded.resume_cancelled`,
+			t.ID[:], i, r.ID[:], r.Generation, r.State, r.Signalled, outcome, r.Error, ended, string(admitted), r.Access, r.Silent, resets, r.ResumeCancelled); err != nil {
 			return fmt.Errorf("store: run %s: %w", r.ID, err)
 		}
 	}

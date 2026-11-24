@@ -80,6 +80,10 @@ type Run struct {
 	// Silent marks a background maintenance run, such as idle compaction,
 	// that should not mark the thread unread, notify, or bump UpdatedAt.
 	Silent bool
+	// Limit is the usage limit that ended the run, and ResumeCancelled that
+	// the user stopped the engine continuing it once the limit resets.
+	Limit           *api.UsageLimit
+	ResumeCancelled bool
 }
 
 type Message struct {
@@ -123,6 +127,16 @@ func (t Thread) Live() *Run {
 		return &t.Runs[n-1]
 	}
 	return nil
+}
+
+// lastTurn is the thread's last finished run that isn't silent.
+func (t Thread) lastTurn() (Run, bool) {
+	for i := len(t.Runs) - 1; i >= 0; i-- {
+		if r := t.Runs[i]; r.State == RunFinished && !r.Silent {
+			return r, true
+		}
+	}
+	return Run{}, false
 }
 
 func (t Thread) settled() bool { return t.Disposition.State == api.Settled }
@@ -278,11 +292,8 @@ func View(t Thread) api.Thread {
 		r := *t.LastReport
 		v.LastReport = &r
 	}
-	for i := len(t.Runs) - 1; i >= 0; i-- {
-		if r := t.Runs[i]; r.State == RunFinished && !r.Silent {
-			v.LastTurn = &api.TurnResult{Run: r.ID, Model: r.Model, Access: r.Access, Outcome: r.Outcome, Ended: r.Ended}
-			break
-		}
+	if r, ok := t.lastTurn(); ok {
+		v.LastTurn = &api.TurnResult{Run: r.ID, Model: r.Model, Access: r.Access, Outcome: r.Outcome, Ended: r.Ended, Limit: r.Limit, ResumeCancelled: r.ResumeCancelled}
 	}
 	for _, r := range t.Requests {
 		if r.State == api.RequestPending {

@@ -89,6 +89,7 @@ type proc struct {
 	run    *Agent           // the run it serves, if any
 	parked bool             // it waits for its thread's next run
 	spoke  bool             // it spoke while parked
+	limits rateLimits       // the account's usage windows, as Codex last said
 }
 
 var _ park.Process = (*proc)(nil)
@@ -543,6 +544,15 @@ func (p *proc) handle(m message) {
 	if ours && m.Method == "thread/settings/updated" && (scope.TurnID == "" || !p.isOver(scope.TurnID)) {
 		p.settle(scope.ThreadSettings)
 	}
+	// The account's usage windows are no thread's, and no run's alone.
+	if m.Method == "account/rateLimits/updated" {
+		var u struct {
+			RateLimits rateLimits `json:"rateLimits"`
+		}
+		json.Unmarshal(m.Params, &u)
+		p.limited(u.RateLimits)
+		return
+	}
 	switch {
 	case !ours && request:
 		p.conn.refuse(m.ID, -32601, "Glitched runs no such thread here")
@@ -568,6 +578,20 @@ func (p *proc) handle(m message) {
 	case speaks(m.Method):
 		p.quiet(m.Method)
 	}
+}
+
+// limited merges what Codex said of the account's usage windows.
+func (p *proc) limited(u rateLimits) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.limits = p.limits.merged(u)
+}
+
+// limitsNow is the account's usage windows, as Codex last said.
+func (p *proc) limitsNow() rateLimits {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.limits
 }
 
 // speaks is whether a notification is about a turn's work, which no
