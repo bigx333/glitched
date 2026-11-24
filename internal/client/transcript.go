@@ -39,14 +39,16 @@ type Transcript struct {
 	// done or not: nil before any and once the agent cleared it.
 	Plan *PlanEntry
 	// Checkpoints are the thread's checkpoints of its files, the base and
-	// each run's, in the order they were taken, and Reverting the revert
-	// of them under way, zero for none.
+	// each run's, in the order they were taken, with the one each revert
+	// put the files back as where it did; Reverting is the revert of them
+	// under way, zero for none.
 	Checkpoints []api.CheckpointCaptured
 	Reverting   api.ID
 }
 
-// Checkpoint is run's checkpoint of the thread's files, and the one taken
-// before it, the base for the first run, each ok when there is one.
+// Checkpoint is run's checkpoint of the thread's files, and the one the
+// files were as before it: the base for the first run, the run's before,
+// or the one a revert since put back. Each is ok when there is one.
 func (t *Transcript) Checkpoint(run api.ID) (at, before api.CheckpointCaptured, ok, hasBefore bool) {
 	for i, c := range t.Checkpoints {
 		if c.Run == run && c.Phase == api.CheckpointRun {
@@ -420,6 +422,10 @@ func (t *Transcript) apply(e api.Event) {
 	case api.ThreadReverted:
 		if t.Reverting == b.Revert {
 			t.Reverting = api.ID{}
+		}
+		// The files are as To holds them now: what the next run starts on.
+		if b.Status == api.RevertRestored || b.Status == api.RevertUnchanged {
+			t.Checkpoints = append(t.Checkpoints, api.CheckpointCaptured{Run: b.To.ID, Phase: b.To.Phase, Status: api.CheckpointReady})
 		}
 		t.add(&RevertEntry{ThreadReverted: b, At: e.At})
 	case api.RequestOpened:

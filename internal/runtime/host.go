@@ -76,10 +76,10 @@ type Host struct {
 	busy    map[api.ID]bool     // threads with an effect in flight
 	runs    map[api.ID]*liveRun // by run
 	closing map[api.ID]bool     // threads whose run is over but whose agent is not closed yet, true while that agent may still work
-	// restoring is the worktrees whose files a revert puts back, by the
+	// restoring is the worktrees whose files reverts put back, by the
 	// thread reverting, and waiting the threads whose start in one waits
-	// for it to end.
-	restoring map[string]api.ID
+	// for them to end.
+	restoring map[api.ID]*restoreMark
 	waiting   map[api.ID]bool
 	opening   int // provider opens under way, which may have the agent at work
 	subs      map[*stream]struct{}
@@ -160,7 +160,7 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		busy:          map[api.ID]bool{},
 		runs:          map[api.ID]*liveRun{},
 		closing:       map[api.ID]bool{},
-		restoring:     map[string]api.ID{},
+		restoring:     map[api.ID]*restoreMark{},
 		waiting:       map[api.ID]bool{},
 		agents:        map[*liveRun]bool{},
 		subs:          map[*stream]struct{}{},
@@ -568,11 +568,17 @@ func (h *Host) perform(e store.Effect) {
 			return
 		}
 		h.record(e.Thread, skip, e.ID)
+		if _, ok := e.Body.(engine.RevertThread); ok {
+			h.revertEnded(e.Thread)
+		}
 		return
 	}
 	o, ok := h.call(e, t, lr)
 	if !ok {
 		return
+	}
+	if _, ok := e.Body.(engine.RevertThread); ok {
+		defer h.revertEnded(e.Thread)
 	}
 	if _, started := o.(engine.Started); h.record(e.Thread, o, e.ID) && started {
 		close(lr.started)

@@ -25,7 +25,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|credentials (CRED=typed|provided|declined)|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)|revert (REVERT=menu|alert|done)|queued (HELD, QEDIT)|wizard (WIZARD=machine|source|browse|clone|confirm|cloning|failed|offline)
+// SCENE=empty|running|approval|credentials (CRED=typed|provided|declined)|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)|revert (REVERT=menu|alert|done|machine)|queued (HELD, QEDIT)|wizard (WIZARD=machine|source|browse|clone|confirm|cloning|failed|offline)
 // for the engines' threads (none started without one; question takes
 // ASK=<request body>, PICK=<label>,…, OTHER=<text> typed into the Other
 // field named OTHERIN, and QUESTION=answer|dismiss|stop;
@@ -603,6 +603,11 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		switch os.Getenv("REVERT") {
 		case "menu":
 			h.click("1 file")
+		case "machine":
+			h.tt.SetSize(1320, 1700)
+			h.click("Settings")
+			h.click("This machine")
+			h.until("the store's size", func() bool { h.tt.Advance(inspectEvery); return h.tt.HasText("CHECKPOINTS") })
 		case "alert", "done":
 			h.click("1 file")
 			h.tt.Advance(time.Second)
