@@ -105,7 +105,7 @@ func apply(t Thread, e Event) (Thread, error) {
 		}
 		r := *t.Remote
 		if bound, ok := b.(api.RemoteBound); ok {
-			r.State, r.Thread = RemoteBoundState, bound.Thread
+			r.State, r.Thread, r.Slot = RemoteBoundState, bound.Thread, api.RunStarting
 		} else {
 			r.State, r.Lost = RemoteLostState, b.(api.RemoteLost).Reason
 		}
@@ -117,7 +117,7 @@ func apply(t Thread, e Event) (Thread, error) {
 			return t, &TransitionError{"remote", "not bound", "seen"}
 		}
 		r := *t.Remote
-		r.Cursor, r.Run, r.Silent, r.Slot = b.Cursor, b.Run, b.Silent, b.State
+		r.Cursor, r.Run, r.Silent, r.Slot, r.Pending = b.Cursor, b.Run, b.Silent, b.State, b.Pending
 		r.Reported = slices.Concat(r.Reported, b.Keys)
 		t.Remote = &r
 	case api.DispositionChanged:

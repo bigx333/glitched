@@ -299,10 +299,10 @@ func TestARemoteChildIsCreatedOnceItsMachineIsUpAndReportsBack(t *testing.T) {
 // with B's link grants, and passes every call to B's own endpoint but
 // those a test has fail: as B's handlers would, over the wire.
 type proxy struct {
-	t     *testing.T
-	inner endpoint
-	addr  string
-	dirB  string
+	t    *testing.T
+	p    *remotes // B as it is now, across its restarts
+	addr string
+	dirB string
 
 	mu        sync.Mutex
 	submitted chan struct{}   // closed once a create reached B, which it then never answers
@@ -316,13 +316,15 @@ type proxy struct {
 	served    chan struct{}
 }
 
-func newProxy(t *testing.T, b *Daemon, dirB string) *proxy {
+func newProxy(t *testing.T, p *remotes) *proxy {
 	t.Helper()
-	x := &proxy{t: t, inner: endpoint{b.host, b, true}, addr: freeAddr(t), dirB: dirB, submitted: make(chan struct{})}
+	x := &proxy{t: t, p: p, addr: freeAddr(t), dirB: p.dirB, submitted: make(chan struct{})}
 	x.start()
 	t.Cleanup(x.stop)
 	return x
 }
+
+func (x *proxy) inner() endpoint { return endpoint{x.p.b.host, x.p.b, true} }
 
 func (x *proxy) start() {
 	x.t.Helper()
@@ -362,13 +364,13 @@ func (x *proxy) stop() {
 	}
 }
 
-func (x *proxy) Info(ctx context.Context) (api.Environment, error) { return x.inner.Info(ctx) }
+func (x *proxy) Info(ctx context.Context) (api.Environment, error) { return x.inner().Info(ctx) }
 func (x *proxy) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
-	return x.inner.Read(ctx, q)
+	return x.inner().Read(ctx, q)
 }
 
 func (x *proxy) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
-	r, err := x.inner.Submit(ctx, c)
+	r, err := x.inner().Submit(ctx, c)
 	x.mu.Lock()
 	hold := x.hold
 	x.mu.Unlock()
@@ -391,7 +393,7 @@ func (x *proxy) Open(ctx context.Context, s api.Subscription) (api.Stream, error
 	if err != nil {
 		return nil, err
 	}
-	st, err := x.inner.Open(ctx, s)
+	st, err := x.inner().Open(ctx, s)
 	if err != nil {
 		return nil, err
 	}
@@ -423,7 +425,7 @@ func (x *proxy) ChildReply(ctx context.Context, q api.ChildReplyQuery) (api.Chil
 			return api.ChildReply{}, err
 		}
 	}
-	return x.inner.ChildReply(ctx, q)
+	return x.inner().ChildReply(ctx, q)
 }
 
 func (x *proxy) count() (replies, snapshots int) {
@@ -437,7 +439,7 @@ func (x *proxy) count() (replies, snapshots int) {
 // finds B's receipt: one thread there.
 func TestACrashBeforeBsReceiptMakesOneThreadThere(t *testing.T) {
 	p := newRemotes(t, fake.New(fake.Turn(false)), "fake", engine.Limits{})
-	x := newProxy(t, p.b, p.dirB)
+	x := newProxy(t, p)
 	x.hold = true
 	p.machine(x.addr)
 	kid := p.place("there")
@@ -569,7 +571,7 @@ func (p *remotes) message(thread api.ID) {
 // delivered once, and no second snapshot is asked for.
 func TestAnOversizedGapReportsOnceAndSnapshotsOnce(t *testing.T) {
 	p := newRemotes(t, fake.New(fake.Turn(false)), "fake", engine.Limits{})
-	x := newProxy(t, p.b, p.dirB)
+	x := newProxy(t, p)
 	p.machine(x.addr)
 	kid := p.place("there")
 	until(t, "the first report", func() bool { reports, _ := p.reports(kid); return len(reports) == 1 })
@@ -682,7 +684,7 @@ func (p *remotes) lostOnce(kid api.ID, why string) {
 // child, as one that may still run there.
 func TestThreeInternalErrorsFromBLoseTheChild(t *testing.T) {
 	p := newRemotes(t, fake.New(fake.Turn(false)), "fake", engine.Limits{})
-	x := newProxy(t, p.b, p.dirB)
+	x := newProxy(t, p)
 	x.replyErr = func(int) error { return errors.New("b broke") }
 	p.machine(x.addr)
 	kid := p.place("there")
@@ -704,7 +706,7 @@ func TestAScopeRefusalIsFinal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := newRemotes(t, fake.New(fake.Turn(false)), "fake", engine.Limits{})
-			x := newProxy(t, p.b, p.dirB)
+			x := newProxy(t, p)
 			tc.set(x)
 			p.machine(x.addr)
 			kid := p.place("there")
@@ -720,7 +722,7 @@ func TestAScopeRefusalIsFinal(t *testing.T) {
 // network failure starts the count over, and the reply after is reported.
 func TestNetworkFailuresBetweenDefectsResetTheCount(t *testing.T) {
 	p := newRemotes(t, fake.New(fake.Turn(false)), "fake", engine.Limits{})
-	x := newProxy(t, p.b, p.dirB)
+	x := newProxy(t, p)
 	down := make(chan struct{})
 	x.replyErr = func(n int) error {
 		if n == 2 {
@@ -755,7 +757,7 @@ func TestNetworkFailuresBetweenDefectsResetTheCount(t *testing.T) {
 // refused from then on: the second refusal loses the child.
 func TestARevokeOnBLosesTheChildAfterTwoRefusedDials(t *testing.T) {
 	p := newRemotes(t, fake.New(fake.Asking()), "fake", engine.Limits{})
-	x := newProxy(t, p.b, p.dirB)
+	x := newProxy(t, p)
 	p.machine(x.addr)
 	kid := p.place("asks")
 	until(t, "the blocked report", func() bool { reports, _ := p.reports(kid); return len(reports) == 1 })
@@ -804,4 +806,114 @@ func TestAMachineThatIsAnotherOrGoneLosesTheChild(t *testing.T) {
 		p.stopB()
 		p.lostOnce(kid, "its machine was removed from this machine's list")
 	})
+}
+
+// A worktree B can't make for the child reports it failed, once, and the
+// child takes no place at work: it never runs there.
+func TestAWorktreeBCantMakeReportsFailedOnce(t *testing.T) {
+	p := newRemotes(t, fake.New(fake.Turn(false)), "fake", engine.Limits{Working: 1})
+	if err := os.WriteFile(filepath.Join(p.dirB, "worktrees"), []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kid := p.place("there")
+	there := p.bound(kid).Thread
+	until(t, "the failed report", func() bool { reports, _ := p.reports(kid); return len(reports) == 1 })
+	p.stopA()
+	p.renames(there, 140)
+	p.startA()
+	snap, err := p.b.Endpoint().Read(context.Background(), api.Query{Thread: there})
+	if err != nil {
+		t.Fatal(err)
+	}
+	until(t, "A's read of the snapshot", func() bool { return p.placeholder(kid).Remote.Cursor.Seq >= snap.Cursor.Seq })
+	time.Sleep(300 * time.Millisecond)
+	reports, wakes := p.reports(kid)
+	if len(reports) != 1 || reports[0].Kind != api.ReportFailed || !strings.Contains(reports[0].Outcome, "worktree") || len(wakes) != 1 {
+		t.Fatalf("reports %+v, %d wakes; want one failed, about the worktree", reports, len(wakes))
+	}
+	if _, errs := spawn(t, p.a.Endpoint(), p.adA, p.parent, fake.Child{Title: "here", Task: "go"}); errs[0] != nil {
+		t.Fatalf("a child once the remote one failed: %v; want it started", errs[0])
+	}
+	folded(t, p.a.store)
+}
+
+// A child bound on B takes its place at work before A has read anything
+// of it there.
+func TestABoundChildIsAtWorkBeforeItsFirstRead(t *testing.T) {
+	p := newRemotes(t, fake.New(fake.Asking()), "fake", engine.Limits{Working: 1})
+	x := newProxy(t, p)
+	x.openErr = api.ErrProtocol
+	p.machine(x.addr)
+	kid := p.place("first")
+	p.bound(kid)
+	_, errs := spawn(t, p.a.Endpoint(), p.adA, p.parent, fake.Child{Title: "second", Task: "another"})
+	refused(t, "a second child while the bound one hasn't been read", errs[0], "1 child threads of this thread are at work")
+}
+
+// A machine removed from machines.json while A follows a child there
+// loses the child at the next thing A would take from it.
+func TestARemovedMachineLosesTheChildItFollows(t *testing.T) {
+	p := newRemotes(t, fake.New(fake.Turn(false)), "fake", engine.Limits{})
+	kid := p.place("there")
+	there := p.bound(kid).Thread
+	until(t, "the first report", func() bool { reports, _ := p.reports(kid); return len(reports) == 1 })
+	if err := RemoveMachine(p.dirA, "b"); err != nil {
+		t.Fatal(err)
+	}
+	p.message(there)
+	p.lostOnce(kid, "its machine was removed from this machine's list")
+	if reports, _ := p.reports(kid); len(reports) != 2 {
+		t.Fatalf("reports %+v; want the first and the lost one", reports)
+	}
+}
+
+// A restore of B while A asks it for a run's reply leaves B without that
+// run: A reads the child again from B's restored log and keeps it.
+func TestARestoreOfBWhileAReplyIsAskedKeepsTheChild(t *testing.T) {
+	p := newRemotes(t, fake.New(fake.Turn(false)), "fake", engine.Limits{})
+	kid := p.place("there")
+	until(t, "the first report", func() bool { reports, _ := p.reports(kid); return len(reports) == 1 })
+	there := p.bound(kid).Thread
+	until(t, "the child idle there", func() bool { return p.placeholder(kid).Remote.Slot == api.RunIdle })
+	p.stopA()
+	p.stopB()
+	backup := t.TempDir()
+	copyFiles(t, p.dirB, backup)
+	p.startB()
+	x := newProxy(t, p)
+	asked, restored := make(chan struct{}), make(chan struct{})
+	x.replyErr = func(n int) error {
+		if n == 1 {
+			close(asked)
+			<-restored
+		}
+		return nil
+	}
+	p.machine(x.addr)
+	p.startA()
+	p.message(there)
+	select {
+	case <-asked:
+	case <-time.After(30 * time.Second):
+		t.Fatal("A never asked for the reply")
+	}
+	p.stopB()
+	copyFiles(t, backup, p.dirB)
+	p.startB()
+	close(restored)
+	env, err := p.b.Endpoint().Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	until(t, "A's read of b's restored log", func() bool { return p.placeholder(kid).Remote.Cursor.Log == env.Log })
+	time.Sleep(300 * time.Millisecond)
+	if r := p.placeholder(kid).Remote; r.State != engine.RemoteBoundState {
+		t.Fatalf("after the restore the placeholder is %+v; want it followed", r)
+	}
+	if reports, _ := p.reports(kid); len(reports) != 1 {
+		t.Fatalf("reports %+v; want only the one before the restore", reports)
+	}
+	p.message(there)
+	until(t, "a report after the restore", func() bool { reports, _ := p.reports(kid); return len(reports) == 2 })
+	folded(t, p.a.store)
 }

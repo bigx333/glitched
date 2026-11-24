@@ -43,6 +43,8 @@ type ThreadCreated struct {
 	// Remote is the machine a remote child runs on, frozen at its create:
 	// this thread is its placeholder here.
 	Remote *Remote `json:"remote,omitempty"`
+	// Text is a placeholder's task, which its machine runs.
+	Text string `json:"text,omitempty"`
 	// Origin is where a link's thread came from, its link stamped. Such a
 	// thread has no folder until its worktree is made (WorktreeReady).
 	Origin *Origin `json:"origin,omitempty"`
@@ -102,7 +104,9 @@ type RemoteSeen struct {
 	Run    ID       `json:"run,omitzero"`
 	Silent bool     `json:"silent,omitempty"`
 	State  RunState `json:"state"`
-	Keys   []ID     `json:"keys,omitempty"`
+	// Pending are the requests of Run it waits on.
+	Pending []ID `json:"pending,omitempty"`
+	Keys    []ID `json:"keys,omitempty"`
 }
 
 // RemoteLost is a placeholder whose child this engine no longer reaches

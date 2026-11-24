@@ -104,8 +104,9 @@ func classify(err error, label string) (class, string) {
 // end it. A refused handshake loses the child the second time in a row,
 // and three defects in a row lose it as a child that may still run
 // there: T3 Code's wording. An attempt that made progress, as a commit,
-// starts the counts and the backoff over, and a network failure or a
-// refusal between defects starts their count over. A panic is a defect.
+// starts the counts and the backoff over, a network failure or a refusal
+// between defects starts their count over, and a network failure or a
+// defect between refusals starts theirs. A panic is a defect.
 func (h *Host) persist(ctx context.Context, attempt func(context.Context) (label string, progressed bool, err error)) (lost, label string, ok bool) {
 	var n, defects, refusals int
 	for {
@@ -138,11 +139,12 @@ func (h *Host) persist(ctx context.Context, attempt func(context.Context) (label
 			}
 			defects = 0
 		case defect:
+			refusals = 0
 			if defects++; defects >= 3 {
 				return fmt.Sprintf("following the child on %s failed repeatedly, so it may still run there: %v", label, err), label, true
 			}
 		case network:
-			defects = 0
+			defects, refusals = 0, 0
 		case catchUp, obsolete:
 			continue
 		}
@@ -366,14 +368,22 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			rctx, cancel := context.WithTimeout(ctx, callTimeout)
 			reply, err := m.ChildReply(rctx, api.ChildReplyQuery{Thread: r.Thread, Run: p.Run})
 			cancel()
+			if errors.Is(err, api.ErrNotFound) {
+				return progressed, fmt.Errorf("the reply of run %s, which its machine no longer has: %v", p.Run, err)
+			}
 			if err != nil {
 				return progressed, err
 			}
 			reports[i].Reply = reply.Text
 		}
-		if snapshot || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || len(reports) > 0 {
-			o := engine.RemoteSeen{Cursor: next.Cursor, Run: next.Run, Silent: next.Silent, Slot: next.Slot, Reports: reports, On: label}
-			_, err := h.store.Observe(ctx, t.ID, o, h.clock(), 0)
+		if snapshot || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || !slices.Equal(next.Pending, r.Pending) || len(reports) > 0 {
+			_, listed, err := h.dial(api.Remote{Engine: r.Engine, Link: r.Link})
+			if err != nil {
+				return progressed, err
+			}
+			listed.Close()
+			o := engine.RemoteSeen{Cursor: next.Cursor, Run: next.Run, Silent: next.Silent, Slot: next.Slot, Pending: next.Pending, Reports: reports, On: label}
+			_, err = h.store.Observe(ctx, t.ID, o, h.clock(), 0)
 			if errors.Is(err, engine.ErrRefused) {
 				return progressed, errObsolete
 			}

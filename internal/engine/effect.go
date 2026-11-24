@@ -445,6 +445,7 @@ type RemoteSeen struct {
 	Run     api.ID
 	Silent  bool
 	Slot    api.RunState
+	Pending []api.ID
 	Reports []RemoteReport
 	On      string
 }

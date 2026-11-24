@@ -152,3 +152,31 @@ func TestARemoteCreatesFirstTryIsRefusedOnceSettled(t *testing.T) {
 		t.Fatal("a create tried before a settle is not due")
 	}
 }
+
+// A child on B waiting on two requests waits on the second once the
+// first is answered.
+func TestARemoteChildWaitsWhileARequestIsPending(t *testing.T) {
+	f, run := running(t)
+	r := engine.Remote{State: engine.RemoteBoundState, Run: run, Slot: api.RunRunning}
+	var events []api.Event
+	for _, key := range []string{"one", "two"} {
+		for _, e := range f.observe(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: key, Kind: api.KindApproval, Body: []byte("{}")}) {
+			events = append(events, on(t, uint64(len(events)+1), e.Body))
+		}
+	}
+	evs, _, err := engine.Decide(f.th, api.Command{ID: api.NewID(), Target: f.th.ID, Body: answer(f.th.Requests[0])}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.fold(evs)
+	for _, e := range evs {
+		events = append(events, on(t, uint64(len(events)+1), e.Body))
+	}
+	r, _, _, err = engine.Follow(r, events, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.th.Live().State != engine.RunWaiting || r.Slot != api.RunWaiting || len(r.Pending) != 1 {
+		t.Fatalf("B's run is %v; A has the child %+v; want both waiting, on one request", f.th.Live().State, r)
+	}
+}
