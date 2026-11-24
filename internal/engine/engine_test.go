@@ -259,6 +259,35 @@ func TestRefusedCommandsAreRejected(t *testing.T) {
 	}
 }
 
+// An answer that keeps its grant past the call is refused, with nothing
+// recorded, unless the request offers that grant: the agent would hear
+// another answer than the thread shows.
+func TestAnApprovalKeepsOnlyTheGrantItsRequestOffers(t *testing.T) {
+	for _, tc := range []struct {
+		body, answer string
+		ok           bool
+	}{
+		{`{}`, `{"allow":true}`, true},
+		{`{}`, `{"allow":false}`, true},
+		{`{}`, `{"allow":true,"session":true}`, false},
+		{`{}`, `{"allow":true,"always":true}`, false},
+		{`{"always":true}`, `{"allow":true,"always":true}`, true},
+		{`{"always":true}`, `{"allow":true,"session":true}`, false},
+		{`{"session":true}`, `{"allow":true,"session":true}`, true},
+		{`{"session":true}`, `{"allow":true,"always":true}`, false},
+		{`{"always":true,"session":true}`, `{"allow":true,"always":true,"session":true}`, false},
+	} {
+		f, run := running(t)
+		f.observe(engine.Surfaced{Run: run, Request: api.NewID(), Dedup: "r1", Kind: api.KindApproval, Body: json.RawMessage(tc.body)})
+		req := f.th.Requests[0]
+		_, effects, err := f.submit(api.RequestRespond{Request: req.ID, Generation: req.Generation, Answer: json.RawMessage(tc.answer)})
+		r, _ := f.th.Request(req.ID)
+		if tc.ok != (err == nil) || tc.ok != (len(effects) == 1) || tc.ok != (r.State == api.RequestAnswered) {
+			t.Errorf("%s to %s: err %v, %d effects, request %v; want accepted %v", tc.answer, tc.body, err, len(effects), r.State, tc.ok)
+		}
+	}
+}
+
 func TestAnAnswerInFlightOutlivesItsRun(t *testing.T) {
 	f, run, req := waiting(t)
 	f.must(answer(req))
