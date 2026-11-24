@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -915,7 +916,7 @@ func (d *decision) settle() error {
 	if m := d.t.next(); m != nil {
 		return d.admit(m.ID)
 	}
-	if d.t.stopped() && !d.resumed {
+	if (d.t.stopped() || d.t.Origin != nil && d.t.Origin.Quiet) && !d.resumed {
 		return nil
 	}
 	if i := index(d.t.Queue, Message.waking); i >= 0 {
@@ -956,7 +957,11 @@ func (d *decision) interrupt(drop bool) error {
 	case r == nil && !drop && d.t.Origin != nil:
 		// A stop of a link's thread with nothing running holds what
 		// waits, as its first message before its worktree is made or
-		// while its access is over the cap.
+		// while its access is over the cap, and goes quiet: its wakes
+		// wait for the next message, as a stopped run's do.
+		if err := d.emit(api.StopAsked{By: d.by}); err != nil {
+			return err
+		}
 		return d.hold()
 	case r == nil:
 		return nil
@@ -1238,6 +1243,11 @@ func (d *decision) inbox(b api.InboxSet) error {
 		return rejected("only a snoozed thread has an until, and it must")
 	}
 	if v.State == d.t.Disposition.State && v.Until.Equal(d.t.Disposition.Until) {
+		// A link's settle of a thread settled already still fences what
+		// the link sent before it.
+		if o := d.t.Origin; o != nil && b.Fence > o.Fence {
+			return d.emit(api.DispositionChanged{Disposition: v, Fence: b.Fence})
+		}
 		return nil
 	}
 	if err := d.emit(api.DispositionChanged{Disposition: v, Fence: b.Fence}); err != nil {
@@ -1609,10 +1619,10 @@ func (d *decision) remote(o Observation) error {
 				keys, reports = append(keys, p.Key), append(reports, p)
 			}
 		}
-		if o.Cursor == r.Cursor && o.Run == r.Run && o.Silent == r.Silent && o.Slot == r.Slot && slices.Equal(o.Pending, r.Pending) && o.Taken == r.Taken && sameOutcome(o.Ended, r.Ended) && len(keys) == 0 {
+		if o.Cursor == r.Cursor && o.Run == r.Run && o.Silent == r.Silent && o.Slot == r.Slot && slices.Equal(o.Pending, r.Pending) && o.Taken == r.Taken && reflect.DeepEqual(o.Ended, r.Ended) && o.Model == r.Model && o.Access == r.Access && reflect.DeepEqual(o.Turn, r.Turn) && len(keys) == 0 {
 			return nil
 		}
-		if err := d.emit(api.RemoteSeen{Cursor: o.Cursor, Run: o.Run, Silent: o.Silent, State: o.Slot, Pending: o.Pending, Taken: o.Taken, Ended: o.Ended, Keys: keys}); err != nil {
+		if err := d.emit(api.RemoteSeen{Cursor: o.Cursor, Run: o.Run, Silent: o.Silent, State: o.Slot, Pending: o.Pending, Taken: o.Taken, Ended: o.Ended, Model: o.Model, Access: o.Access, Turn: o.Turn, Keys: keys}); err != nil {
 			return err
 		}
 		for _, p := range reports {
@@ -1620,10 +1630,6 @@ func (d *decision) remote(o Observation) error {
 		}
 	}
 	return nil
-}
-
-func sameOutcome(a, b *api.TurnResult) bool {
-	return a == nil && b == nil || a != nil && b != nil && a.Run == b.Run && a.Outcome == b.Outcome
 }
 
 // remoteReport has the placeholder report p to its parent, as report

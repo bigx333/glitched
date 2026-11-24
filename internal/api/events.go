@@ -115,6 +115,11 @@ type RemoteSeen struct {
 	Taken bool `json:"taken,omitempty"`
 	// Ended is how the child's last run that wasn't silent ended there.
 	Ended *TurnResult `json:"ended,omitempty"`
+	// Model and Access are the child's there, and Turn its run as
+	// admitted with them.
+	Model  ModelRef    `json:"model,omitzero"`
+	Access Access      `json:"access,omitempty"`
+	Turn   *TurnResult `json:"turn,omitempty"`
 }
 
 // RemoteLost is a placeholder whose child this engine no longer reaches

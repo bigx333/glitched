@@ -94,6 +94,15 @@ func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, chec
 				}
 			}
 		}
+		if b, ok := c.Body.(api.ThreadCreate); ok && b.Origin != nil && t.Exists() {
+			// A settled create of a link's thread there already is its
+			// settle, decided in the commit either create takes, so the
+			// two creates of one thread serialize on it.
+			if o := t.Origin; !b.Settled || o == nil || o.Link != b.Origin.Link || o.Thread != b.Origin.Thread {
+				return nil, nil, fmt.Errorf("%w: a link creates only a thread that isn't there", api.ErrNotAllowed)
+			}
+			c.Body, c.Caller = api.InboxSet{Disposition: api.Disposition{State: api.Settled}}, &api.Caller{Thread: b.Origin.Thread}
+		}
 		if b, ok := c.Body.(api.ThreadCreate); ok && b.Origin != nil && !t.Exists() {
 			if s.links == nil {
 				return nil, nil, &api.RejectedError{Reason: "this engine takes no threads from other machines"}
@@ -106,7 +115,11 @@ func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, chec
 			if err != nil {
 				return nil, nil, err
 			}
-			if err := engine.CheckOrigin(link, kids, s.limits, b); err != nil {
+			// A settled create admits nothing and makes no worktree, ever:
+			// a record that the thread is done with, which no count, depth
+			// or access holds back. The link must still be there, and the
+			// setting on.
+			if err := engine.CheckOrigin(link, kids, s.limits, b); err != nil && !b.Settled {
 				return nil, nil, err
 			}
 		}
@@ -177,18 +190,10 @@ func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, chec
 				}
 			}
 			steps = append(steps, step{id, func(q querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
-				if r := t.Live(); c.Caller != nil && r != nil && r.State == engine.RunUncertain {
-					return nil, nil, nil
-				}
-				if _, stops := c.Body.(api.TurnInterrupt); stops && c.Caller != nil && t.Remote != nil && t.Remote.Taken {
-					return nil, nil, nil
-				}
-				body := engine.Below(c.Body, t)
-				if body == nil {
-					return nil, nil, nil
-				}
+				// A link's settle goes as the person's on a thread they
+				// steer, so it settles it as their own settle would.
 				caller := c.Caller
-				if _, settles := c.Body.(api.InboxSet); settles && caller != nil {
+				if _, settles := c.Body.(api.InboxSet); settles && caller != nil && caller.Run.IsZero() {
 					theirs, err := steeredByUser(ctx, q, id)
 					if err != nil {
 						return nil, nil, err
@@ -196,6 +201,16 @@ func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, chec
 					if theirs {
 						caller = nil
 					}
+				}
+				if r := t.Live(); caller != nil && r != nil && r.State == engine.RunUncertain {
+					return nil, nil, nil
+				}
+				if _, stops := c.Body.(api.TurnInterrupt); stops && caller != nil && t.Remote != nil && t.Remote.Taken {
+					return nil, nil, nil
+				}
+				body := engine.Below(c.Body, t)
+				if body == nil {
+					return nil, nil, nil
 				}
 				env, err := s.env(ctx, q, t)
 				if err != nil {

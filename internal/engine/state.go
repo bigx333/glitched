@@ -120,6 +120,11 @@ type Remote struct {
 	Taken     bool            `json:"taken,omitempty"`
 	Settles   int             `json:"settles,omitempty"`
 	Ended     *api.TurnResult `json:"ended,omitempty"`
+	// Model and Access are the child's there, which its next run is
+	// admitted with, and Turn its run as admitted.
+	Model  api.ModelRef    `json:"model,omitzero"`
+	Access api.Access      `json:"access,omitempty"`
+	Turn   *api.TurnResult `json:"turn,omitempty"`
 }
 
 // Origin is a link's thread's: where it came from, as api.Origin, its
@@ -129,6 +134,9 @@ type Origin struct {
 	api.Origin
 	Making bool `json:"making,omitempty"`
 	Fence  int  `json:"fence,omitempty"`
+	// Quiet is a stop of the thread with nothing running: its wakes wait
+	// for a message, as a stopped run's do.
+	Quiet bool `json:"quiet,omitempty"`
 }
 
 // tried is whether the placeholder's create may have reached its

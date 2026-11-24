@@ -21,6 +21,7 @@ import (
 func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, bool, error) {
 	if fresh {
 		r.Run, r.Silent, r.Slot, r.Pending, r.Taken, r.Ended = api.ID{}, false, api.RunIdle, nil, false, nil
+		r.Model, r.Access, r.Turn = api.ModelRef{}, 0, nil
 	}
 	var out []RemoteReport
 	add := func(p RemoteReport) {
@@ -36,6 +37,7 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 		}
 		switch b := b.(type) {
 		case api.ThreadCreated:
+			r.Model, r.Access = b.Model, b.Access
 			if b.Origin != nil {
 				r.Slot, first = api.RunStarting, true
 			}
@@ -52,8 +54,11 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 			key := derive(r.Thread, "worktree")
 			add(RemoteReport{Key: key, Run: key, Kind: api.ReportFailed, Error: "its worktree there wasn't made: " + b.Error})
 			r.Slot = api.RunIdle
+		case api.ThreadConfigured:
+			r.Model, r.Access = b.Model, b.Access
 		case api.TurnAdmitted:
 			r.Run, r.Silent, r.Slot, r.Pending = b.Run, b.Silent, api.RunStarting, nil
+			r.Turn = &api.TurnResult{Run: b.Run, Model: r.Model, Access: r.Access}
 		case api.TurnStarted:
 			if b.Run == r.Run && r.Slot == api.RunStarting {
 				r.Slot = api.RunRunning
@@ -92,7 +97,12 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 				break
 			}
 			if !r.Silent {
-				r.Ended = &api.TurnResult{Run: b.Run, Outcome: b.Outcome}
+				end := api.TurnResult{Run: b.Run}
+				if r.Turn != nil && r.Turn.Run == b.Run {
+					end = *r.Turn
+				}
+				end.Outcome, end.Ended, end.Limit = b.Outcome, e.At, b.Limit
+				r.Ended = &end
 			}
 			if r.Slot != api.RunStopping && r.Slot != api.RunUncertain && !r.Silent {
 				switch b.Outcome {

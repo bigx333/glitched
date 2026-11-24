@@ -118,6 +118,7 @@ func apply(t Thread, e Event) (Thread, error) {
 		}
 		r := *t.Remote
 		r.Cursor, r.Run, r.Silent, r.Slot, r.Pending, r.Taken, r.Ended = b.Cursor, b.Run, b.Silent, b.State, b.Pending, b.Taken, b.Ended
+		r.Model, r.Access, r.Turn = b.Model, b.Access, b.Turn
 		r.Reported = slices.Concat(r.Reported, b.Keys)
 		t.Remote = &r
 	case api.DispositionChanged:
@@ -178,7 +179,18 @@ func apply(t Thread, e Event) (Thread, error) {
 			return t, &TransitionError{"thread", "running", "deleted"}
 		}
 		t.Deleted = true
+	case api.StopAsked:
+		if o := t.Origin; o != nil && b.Run.IsZero() {
+			c := *o
+			c.Quiet = true
+			t.Origin = &c
+		}
 	case api.MessageQueued:
+		if o := t.Origin; o != nil && o.Quiet && b.Report.IsZero() {
+			c := *o
+			c.Quiet = false
+			t.Origin = &c
+		}
 		silent = b.Silent
 		state := QueueReady
 		if b.Held {
@@ -236,6 +248,11 @@ func apply(t Thread, e Event) (Thread, error) {
 	case api.TurnAdmitted:
 		if err = runEdges.check("run", t.slot(), RunStarting); err != nil {
 			break
+		}
+		if o := t.Origin; o != nil && o.Quiet {
+			c := *o
+			c.Quiet = false
+			t.Origin = &c
 		}
 		if err = t.claim(b.Run, b.Run); err != nil {
 			break
