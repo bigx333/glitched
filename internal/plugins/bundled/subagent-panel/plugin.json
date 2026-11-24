@@ -1,0 +1,13 @@
+{
+  "id": "subagent-panel",
+  "name": "Subagent panel",
+  "description": "The panel a native subagent's step opens: what a Claude Code Task or Agent, or an agent Codex spawned, said and the steps it took, and how it ended. Built into Glitched; make a copy in Settings › Plugins to change it.",
+  "version": "1.0.0",
+  "main": "main.js",
+  "contract": "glitched",
+  "contractVersion": 2,
+  "capabilities": ["ui.place", "ui.replace", "messages:read"],
+  "glitched": {
+    "places": [{ "id": "panel", "at": "thread.panel.subagent", "replaces": true }]
+  }
+}

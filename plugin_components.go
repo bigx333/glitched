@@ -391,10 +391,12 @@ type panelState struct {
 	Terminal bool `json:"terminal"`
 	Diff     bool `json:"diff"`
 	Preview  bool `json:"preview"`
+	Subagent bool `json:"subagent"`
 }
 
 func (a *app) panels() panelState {
-	return panelState{Terminal: a.showTerminal, Diff: a.showDiff, Preview: a.showPreview}
+	_, sub := a.subagentShown(a.current())
+	return panelState{Terminal: a.showTerminal, Diff: a.showDiff, Preview: a.showPreview, Subagent: sub}
 }
 
 // togglePanel opens or closes a panel beside the chat, as its header
@@ -410,8 +412,14 @@ func (a *app) togglePanel(panel string) error {
 		}
 	case "preview":
 		a.togglePreview()
+	case "subagent":
+		// It opens from a subagent's step, which says whose it is.
+		if _, ok := a.subagentShown(a.current()); !ok {
+			return errors.New("the subagent panel opens from a subagent's step")
+		}
+		delete(a.subagentStep, a.current().id())
 	default:
-		return fmt.Errorf("no panel %q: terminal, diff or preview", panel)
+		return fmt.Errorf("no panel %q: terminal, diff, preview or subagent", panel)
 	}
 	a.panelsJump = false
 	return nil
@@ -426,7 +434,8 @@ func (a *app) panelEffect(args json.RawMessage) (any, error) {
 	if err := json.Unmarshal(args, &in); err != nil {
 		return nil, err
 	}
-	now := map[string]bool{"terminal": a.showTerminal, "diff": a.showDiff, "preview": a.showPreview}
+	p := a.panels()
+	now := map[string]bool{"terminal": p.Terminal, "diff": p.Diff, "preview": p.Preview, "subagent": p.Subagent}
 	if on, ok := now[in.Panel]; ok && in.Open != nil && *in.Open == on {
 		return a.panels(), nil
 	}
