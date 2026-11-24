@@ -373,8 +373,9 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 }
 
 // firstDrawWait bounds how long the UI waits for a component's first
-// drawing: past it, the copy shows empty till the plugin answers.
-const firstDrawWait = 300 * time.Millisecond
+// drawing: past it, the copy shows empty till the plugin answers. A test
+// sets it to say which of the two it means to see.
+var firstDrawWait = 300 * time.Millisecond
 
 // headerActions is the context of thread.header.actions.
 type headerActions struct {
