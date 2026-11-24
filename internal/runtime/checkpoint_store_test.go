@@ -241,7 +241,8 @@ func TestADropsGCEndsWithinItsBudget(t *testing.T) {
 func TestADropWhoseGCWasCutShortIsReclaimed(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		// gc is the script of a gc cut short: once, or every time.
+		// gc is the script of a gc cut short: once, after which a gc gets
+		// its full budget, or every time.
 		gc   string
 		then func(t *testing.T, h *Host, store string, gone api.ID)
 	}{
@@ -296,6 +297,9 @@ func TestADropWhoseGCWasCutShortIsReclaimed(t *testing.T) {
 			}
 			if h.checkpoints.total() < checkpointLimit {
 				t.Fatalf("the store holds %d bytes after a gc cut short, want at least %d", h.checkpoints.total(), checkpointLimit)
+			}
+			if tc.gc == "once" {
+				dropGCBudget = oldBudget
 			}
 			tc.then(t, h, store, gone.ID)
 		})
