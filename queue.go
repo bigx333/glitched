@@ -14,10 +14,11 @@ import (
 
 // The queue over the composer lists the messages of yours that wait their
 // turn, first first, the order they go in: each a row with what can be
-// done with it, Send now, Edit, Up, Down and Remove, as T3 Code and
-// Zeron give a queued row. A row is a copy of composer.queue, which the
-// built-in Queue draws from its natives. Glitched keeps the queue's card,
-// its order and where it sits.
+// done with it, Send now, Edit, Move up, Move down and Remove, as T3 Code
+// and Zeron give a queued row: icons but for Send now, which keeps its
+// label while the messages have room for it. A row is a copy of
+// composer.queue, which the built-in Queue draws from its natives.
+// Glitched keeps the queue's card, its order and where it sits.
 
 // waiting is the messages of the user's that wait their turn in t, in the
 // order they take it: queued, or held by a stop or as a Defer. One on its
@@ -102,6 +103,33 @@ func (a *app) queueStrip(c *ui.Context, t thread) {
 	if len(q) == 0 {
 		return
 	}
+	ids := make([]api.ID, len(q))
+	widest := float32(0)
+	for i, u := range q {
+		ids[i] = u.Message
+		w, _ := c.MeasureText(0, ui.Span{Text: oneLine(u.Text), Size: 12})
+		widest = max(widest, w)
+	}
+	moved := !slices.Equal(ids, a.queueOrder)
+	a.queueOrder = ids
+	// Send now keeps its label only while every message shows whole
+	// beside it: the slot the messages had last frame, as it would be
+	// with Send now an icon, less the label's width.
+	label, _ := c.MeasureText(0, ui.Span{Text: "Send now", Size: 11})
+	label += 4
+	slot := a.queueSlotW
+	if !a.queueCompact {
+		slot += label
+	}
+	if compact := slot-label < widest; compact != a.queueCompact {
+		a.queueCompact = compact
+		c.Invalidate()
+	}
+	stateW := float32(0)
+	for _, s := range []string{"Queued", "Held"} {
+		w, _ := c.MeasureText(0, ui.Span{Text: s, Size: 11})
+		stateW = max(stateW, w)
+	}
 	box := ui.Column(c).Key("queue").Radius(14).Border(1, palette.border).Padding(4).Margin(0, 0, queueGap).Label("Queued messages")
 	if h := box.Bounds().H; h > 0 {
 		a.queueH = h
@@ -109,29 +137,39 @@ func (a *app) queueStrip(c *ui.Context, t thread) {
 	a.frosted(c, box).Children(func() {
 		ui.Scroll(c).Key("rows").Gap(2).MinHeight(0).MaxHeight(queueMaxH).Children(func() {
 			for i, u := range q {
-				a.queueRow(c, t, q, i, u)
+				a.queueRow(c, t, q, i, u, moved, stateW)
 			}
 		})
 	})
 }
 
-// queueRow is the copy of composer.queue for q[i].
-func (a *app) queueRow(c *ui.Context, t thread, q []*client.UserEntry, i int, u *client.UserEntry) {
+// queueRow is the copy of composer.queue for q[i]. With the focus in it,
+// it scrolls into view as the queue's order moved; its state, Queued or
+// Held, takes stateW, so that the messages line up.
+func (a *app) queueRow(c *ui.Context, t thread, q []*client.UserEntry, i int, u *client.UserEntry, moved bool, stateW float32) {
 	editing := a.queueEditing.message == u.Message
 	r := queueRow{Key: u.Message.String(), Index: i, Count: len(q), Held: u.State == client.Held, Editing: editing}
 	move := func(before api.ID) { a.backend.MoveQueued(t.env, t.id(), u.Message, before) }
 	a.pluginComponent(c, "composer.queue", &t, componentCopy{
 		key: r.Key,
 		box: func() ui.Element {
-			return ui.Row(c).Key(r.Key).AlignItems(ui.Center).Padding(2, 2, 2, 10).MinWidth(0)
+			e := ui.Row(c).Key(r.Key).AlignItems(ui.Center).Padding(2, 2, 2, 10).MinWidth(0)
+			if moved && e.FocusWithin() {
+				e.ScrollIntoView()
+			}
+			return e
 		},
 		context: func(plugins.ThreadRecord) any { return r },
 		action: func(n *widget.Node) {
 			switch n.Name {
 			case "queue.text":
-				a.queueText(c, t, u, r)
+				a.queueText(c, t, u, r, stateW)
 			case "queue.steer":
-				if action(c, "steer", icArrowUp, "Send now", !canSteer(t.View)).Clicked() {
+				steer := action
+				if a.queueCompact {
+					steer = a.queueIcon
+				}
+				if steer(c, "steer", icArrowUp, "Send now", !canSteer(t.View)).Clicked() {
 					a.backend.SteerQueued(t.env, t.id(), u.Message)
 				}
 			case "queue.edit":
@@ -144,7 +182,7 @@ func (a *app) queueRow(c *ui.Context, t thread, q []*client.UserEntry, i int, u 
 					}
 					break
 				}
-				edit := action(c, "edit", icPencil, "Edit", false)
+				edit := a.queueIcon(c, "edit", icPencil, "Edit", false)
 				if a.queueRefocus == u.Message {
 					edit.Bind(&a.queueEditButton)
 					a.queueEditButton.Focus()
@@ -155,11 +193,15 @@ func (a *app) queueRow(c *ui.Context, t thread, q []*client.UserEntry, i int, u 
 					a.queueArea.Focus()
 				}
 			case "queue.up":
-				if action(c, "up", icChevronUp, "Up", false).Clicked() {
+				if i == 0 {
+					queueSlot(c, "up", icChevronUp)
+				} else if a.queueIcon(c, "up", icChevronUp, "Move up", false).Clicked() {
 					move(q[i-1].Message)
 				}
 			case "queue.down":
-				if action(c, "down", icChevronD, "Down", false).Clicked() {
+				if i == len(q)-1 {
+					queueSlot(c, "down", icChevronD)
+				} else if a.queueIcon(c, "down", icChevronD, "Move down", false).Clicked() {
 					var before api.ID
 					if i+2 < len(q) {
 						before = q[i+2].Message
@@ -167,21 +209,13 @@ func (a *app) queueRow(c *ui.Context, t thread, q []*client.UserEntry, i int, u 
 					move(before)
 				}
 			case "queue.remove":
-				if action(c, "remove", icX, "Remove", false).Clicked() {
+				if a.queueIcon(c, "remove", icX, "Remove", false).Clicked() {
 					a.backend.CancelQueued(t.env, t.id(), u.Message)
 				}
 			}
 		},
 		absent: func(n *widget.Node) bool {
-			switch n.Name {
-			case "queue.up":
-				return editing || i == 0
-			case "queue.down":
-				return editing || i == len(q)-1
-			case "queue.steer", "queue.remove":
-				return editing
-			}
-			return false
+			return editing && n.Name != "queue.text" && n.Name != "queue.edit"
 		},
 		builtin: func() *widget.Node { return queueRowNode(r) },
 	})
@@ -190,21 +224,44 @@ func (a *app) queueRow(c *ui.Context, t thread, q []*client.UserEntry, i int, u 
 // queueText is a queued message's words, on a line, after whether a stop
 // holds it; or, being edited, the area its new words are written in,
 // which ⌘⏎ saves and Escape leaves as they were.
-func (a *app) queueText(c *ui.Context, t thread, u *client.UserEntry, r queueRow) {
+func (a *app) queueText(c *ui.Context, t thread, u *client.UserEntry, r queueRow, stateW float32) {
 	ui.Row(c).Key("text").Gap(8).AlignItems(ui.Center).Grow(1).Shrink(1).MinWidth(0).Children(func() {
 		state := "Queued"
 		if r.Held {
 			state = "Held"
 		}
-		ui.Text(c, state).FontSize(11).TextColor(palette.faint).Shrink(0)
+		ui.Text(c, state).FontSize(11).TextColor(palette.faint).Shrink(0).MinWidth(stateW)
 		if !r.Editing {
-			ui.Text(c, strings.Join(strings.Fields(u.Text), " ")).FontSize(12).TextColor(palette.text).SingleLine().Grow(1).Shrink(1).MinWidth(0)
+			text := ui.Text(c, oneLine(u.Text)).FontSize(12).TextColor(palette.text).SingleLine().Grow(1).Shrink(1).MinWidth(0)
+			if w := text.Bounds().W; w > 0 && w != a.queueSlotW {
+				a.queueSlotW = w
+				c.Invalidate()
+			}
 			return
 		}
 		e := &a.queueEditing
 		ui.TextArea(c.Key("edit"), &e.text).Bind(&a.queueArea).Label("Edit queued message").FontSize(12).Padding(4, 6).Grow(1).Shrink(1).MinWidth(0).MaxHeight(120)
 		a.queueArea.OnShortcut(c, ui.Cmd, ui.KeyEnter, func() { a.saveQueueEdit(t, u) })
 		a.queueArea.OnShortcut(c, 0, ui.KeyEscape, func() { a.endQueueEdit(u) })
+	})
+}
+
+// oneLine is a queued message's words as its row shows them, on a line.
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// queueIcon is one of a row's actions drawn as its icon alone, named
+// label for assistive technology and in its tooltip.
+func (a *app) queueIcon(c *ui.Context, key any, icon *ui.SVG, label string, disabled bool) ui.Element {
+	return a.tip(c, ghost(c, key, false).Padding(2, 6).Label(label).Disabled(disabled), label).Children(func() {
+		ui.Icon(c, icon).FontSize(11)
+	})
+}
+
+// queueSlot keeps the room of a row's Move up or Move down where it has
+// nowhere to move to, so that the actions line up across the rows.
+func queueSlot(c *ui.Context, key any, icon *ui.SVG) {
+	ui.Box(c.Key(key)).Padding(2, 6).Children(func() {
+		ui.Icon(c, icon).FontSize(11).Opacity(0)
 	})
 }
 
