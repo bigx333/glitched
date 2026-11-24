@@ -52,13 +52,28 @@ type DeliverAnswer struct {
 // the request a blocked one waits on, and Question that request when it
 // is a question, which the parent's agent may answer. Branch is the
 // child's, where it works in a worktree.
+//
+// A remote child's report carries what its machine said: Reply is what a
+// done run said last, which its log here doesn't hold, and On the label
+// of the machine, where the user answers what it asks.
 type ReportToParent struct {
 	Parent, Child, Run api.ID
 	Kind               api.ReportKind
 	Title, Error       string
 	Ask                json.RawMessage
-	Question           api.ID `json:",omitzero"`
-	Branch             string `json:",omitempty"`
+	Question           api.ID  `json:",omitzero"`
+	Branch             string  `json:",omitempty"`
+	Reply              *string `json:",omitempty"`
+	On                 string  `json:",omitempty"`
+}
+
+// RemoteCreate creates a placeholder's child on its machine, Engine
+// through Link. Command is the machine's whole command, frozen as the
+// placeholder was made, so every try sends the same bytes and gets the
+// receipt the first one took.
+type RemoteCreate struct {
+	Engine, Link api.ID
+	Command      api.Command
 }
 
 // RemoveWorktree removes the worktree a deleted thread ran in, on Branch
@@ -105,6 +120,7 @@ type MakeWorktree struct {
 }
 
 func (MakeWorktree) effectKind() string      { return "worktree.make" }
+func (RemoteCreate) effectKind() string      { return "remote.create" }
 func (CaptureCheckpoint) effectKind() string { return "checkpoint.capture" }
 func (DropCheckpoints) effectKind() string   { return "checkpoint.drop" }
 func (RevertThread) effectKind() string      { return "thread.revert" }
@@ -146,6 +162,11 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 		// On a thread settled first, the host makes no worktree, and
 		// finishes one a host before it began.
 		return t.Origin != nil && t.Origin.Making && !t.Deleted, nil
+	case RemoteCreate:
+		// A placeholder settled before any try has nothing there; one
+		// tried may, so its create goes on until the machine answers.
+		r := t.Remote
+		return r != nil && r.State == RemoteCreating && !t.Deleted && (r.Attempted || !t.settled()), nil
 	case ReportToParent:
 		// The parent decides, as it observes the report, whether it can
 		// still take it.
@@ -172,8 +193,10 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 // nothing but what a gc it left pending prunes. A revert finds the
 // recovery checkpoint it took, and puts the same files back; its rewind
 // makes the conversation again, and leaves unused any it made before. A
-// make finds the worktree its lock names it in, or one it finished.
-var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true, "worktree.remove": true, "checkpoint.capture": true, "checkpoint.drop": true, "thread.revert": true, "worktree.make": true}
+// make finds the worktree its lock names it in, or one it finished. A
+// remote create sends its frozen command again, which the machine
+// answers with the receipt it stored.
+var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true, "worktree.remove": true, "checkpoint.capture": true, "checkpoint.drop": true, "thread.revert": true, "worktree.make": true, "remote.create": true}
 
 func ReplaySafe(e Effect) bool { return replaySafe[e.effectKind()] }
 
@@ -186,6 +209,7 @@ var effects = map[string]func([]byte) (Effect, error){
 	"child.report":    decodeAs[ReportToParent],
 	"worktree.remove": decodeAs[RemoveWorktree],
 	"worktree.make":   decodeAs[MakeWorktree],
+	"remote.create":   decodeAs[RemoteCreate],
 
 	"checkpoint.capture": decodeAs[CaptureCheckpoint],
 	"checkpoint.drop":    decodeAs[DropCheckpoints],
@@ -357,6 +381,9 @@ type Reported struct {
 	Branch   string
 	Question api.ID
 	Ask      json.RawMessage
+	// On is the label of the machine a remote child runs on, where the
+	// user answers its question.
+	On string
 }
 
 // IdleCompact asks the engine to start a silent /compact run on an idle
@@ -367,34 +394,77 @@ type IdleCompact struct {
 	AfterRun api.ID
 }
 
-func (Started) observed()        {}
-func (Bound) observed()          {}
-func (Ended) observed()          {}
-func (Delta) observed()          {}
-func (Subagent) observed()       {}
-func (Context) observed()        {}
-func (Work) observed()           {}
-func (Plan) observed()           {}
-func (Captured) observed()       {}
-func (Reverted) observed()       {}
-func (Granted) observed()        {}
-func (Ran) observed()            {}
-func (Surfaced) observed()       {}
-func (Withdrawn) observed()      {}
-func (Delivered) observed()      {}
-func (Unheard) observed()        {}
-func (DeliveryFailed) observed() {}
-func (Steered) observed()        {}
-func (SteerFailed) observed()    {}
-func (SteerLost) observed()      {}
-func (InterruptSent) observed()  {}
-func (InterruptLost) observed()  {}
-func (Reconciled) observed()     {}
-func (Rewound) observed()        {}
-func (Reported) observed()       {}
-func (IdleCompact) observed()    {}
-func (WorktreeReady) observed()  {}
-func (WorktreeFailed) observed() {}
+func (Started) observed()         {}
+func (Bound) observed()           {}
+func (Ended) observed()           {}
+func (Delta) observed()           {}
+func (Subagent) observed()        {}
+func (Context) observed()         {}
+func (Work) observed()            {}
+func (Plan) observed()            {}
+func (Captured) observed()        {}
+func (Reverted) observed()        {}
+func (Granted) observed()         {}
+func (Ran) observed()             {}
+func (Surfaced) observed()        {}
+func (Withdrawn) observed()       {}
+func (Delivered) observed()       {}
+func (Unheard) observed()         {}
+func (DeliveryFailed) observed()  {}
+func (Steered) observed()         {}
+func (SteerFailed) observed()     {}
+func (SteerLost) observed()       {}
+func (InterruptSent) observed()   {}
+func (InterruptLost) observed()   {}
+func (Reconciled) observed()      {}
+func (Rewound) observed()         {}
+func (Reported) observed()        {}
+func (IdleCompact) observed()     {}
+func (WorktreeReady) observed()   {}
+func (WorktreeFailed) observed()  {}
+func (RemoteAttempted) observed() {}
+func (RemoteBound) observed()     {}
+func (RemoteSeen) observed()      {}
+func (RemoteLost) observed()      {}
+
+// RemoteAttempted is a placeholder's create about to reach its machine for
+// the first time. It is refused once the placeholder is settled or
+// deleted, so no try follows that.
+type RemoteAttempted struct{}
+
+// RemoteBound is the receipt the machine gave a placeholder's create:
+// Thread is its child there.
+type RemoteBound struct{ Thread api.ID }
+
+// RemoteSeen is what the placeholder's follower read of its child, up to
+// Cursor in its machine's log: its last run there, Run, whether Silent,
+// in Slot, and the reports the events read hold, each by its key, of the
+// machine labelled On.
+type RemoteSeen struct {
+	Cursor  api.Cursor
+	Run     api.ID
+	Silent  bool
+	Slot    api.RunState
+	Reports []RemoteReport
+	On      string
+}
+
+// RemoteReport is one report of a remote child's: of its run Run, by Key,
+// the run of a turn's end or the request of one it waits on. Reply is
+// what a done run said last, Ask the body of the request a blocked one
+// waits on, and Question that request when it is a question.
+type RemoteReport struct {
+	Key, Run api.ID
+	Kind     api.ReportKind
+	Error    string
+	Reply    string
+	Ask      json.RawMessage
+	Question api.ID
+}
+
+// RemoteLost is a placeholder this engine no longer follows, and why, on
+// the machine labelled On.
+type RemoteLost struct{ Reason, On string }
 
 // WorktreeReady is a link's thread's worktree made: Workspace is the
 // folder in it the thread runs in, and Branch its new branch.

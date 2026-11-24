@@ -38,7 +38,7 @@ func (h *Host) report(e store.Effect, b engine.ReportToParent) {
 		retry(h.drain, "release effect", func(ctx context.Context) error { return h.store.Release(ctx, e.ID) })
 		return
 	}
-	o := engine.Reported{Report: api.ChildReported{Child: b.Child, Run: b.Run, Kind: b.Kind, Title: b.Title, Outcome: outcome}, Reply: reply, Branch: b.Branch, Question: b.Question, Ask: b.Ask}
+	o := engine.Reported{Report: api.ChildReported{Child: b.Child, Run: b.Run, Kind: b.Kind, Title: b.Title, Outcome: outcome}, Reply: reply, Branch: b.Branch, Question: b.Question, Ask: b.Ask, On: b.On}
 	retry(h.drain, "commit report", func(ctx context.Context) error {
 		err := h.observe(ctx, b.Parent, o, e.ID)
 		if errors.Is(err, api.ErrNotFound) {
@@ -51,12 +51,18 @@ func (h *Host) report(e store.Effect, b engine.ReportToParent) {
 // outcome is what came of the child's run, in a line or two: the request
 // it waits on, why it failed, or the last of what it said. The reply is
 // all of why it failed or of what it said last, for the parent's agent.
+// A remote child's done run said its reply on its machine, which the
+// report carries, and what a remote child waits on is answered there.
 func (h *Host) outcome(ctx context.Context, child api.ID, b engine.ReportToParent) (outcome, reply string, err error) {
 	switch {
+	case b.Kind == api.ReportBlocked && b.On != "":
+		return clip(oneLine("Needs you on "+b.On+": "+askLine(b.Ask)), outcomeLimit), "", nil
 	case b.Kind == api.ReportBlocked:
 		return askLine(b.Ask), "", nil
 	case b.Kind == api.ReportFailed && b.Error != "":
 		return clip(oneLine(b.Error), outcomeLimit), b.Error, nil
+	case b.Reply != nil:
+		return summary(*b.Reply), *b.Reply, nil
 	}
 	text, err := h.store.RunReply(ctx, child, b.Run)
 	if err != nil {

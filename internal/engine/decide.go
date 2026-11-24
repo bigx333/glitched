@@ -42,6 +42,11 @@ type Env struct {
 	// error lets it run nothing. Nil caps a thread of this engine's own
 	// at nothing, and lets a link's thread run nothing.
 	Ceiling func() (api.Access, error)
+	// Engine is this engine's id, and Line a child's create's parent and
+	// those above it, as CheckChild had them: what a remote child's
+	// machine is told of where it comes from.
+	Engine api.ID
+	Line   []Thread
 }
 
 // DecideWith is Decide in env.
@@ -330,7 +335,7 @@ func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 		return rejected("this engine forks no threads")
 	}
 	if c.Remote != "" {
-		return d.placeRemote(c)
+		return d.placeRemote(id, c)
 	}
 	if err := d.emit(api.ThreadCreated{Workspace: c.Workspace, Project: c.Project, Branch: c.Branch, Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent, Fork: c.Forked}); err != nil {
 		return err
@@ -375,8 +380,9 @@ func (d *decision) createFromLink(id api.ID, c api.ThreadCreate) error {
 // placeRemote creates a remote child's placeholder: a child here with
 // the machine c names frozen on it, by its engine's and link's ids, and
 // no run, ever. Its task is for the machine, so nothing queues it here,
-// and it has no folder here: none of this machine's is its.
-func (d *decision) placeRemote(c api.ThreadCreate) error {
+// and it has no folder here: none of this machine's is its. The create
+// the machine is sent, command id (id) included, is frozen in its effect.
+func (d *decision) placeRemote(id api.ID, c api.ThreadCreate) error {
 	switch {
 	case c.Parent.IsZero():
 		return rejected("only a child thread runs on another machine")
@@ -384,6 +390,8 @@ func (d *decision) placeRemote(c api.ThreadCreate) error {
 		return rejected("a child on another machine runs in a worktree that machine makes, not in this one's")
 	case strings.TrimSpace(c.Text) == "":
 		return rejected("a child on another machine needs its task")
+	case len(d.env.Line) == 0 || d.env.Line[0].Live() == nil:
+		return rejected("only the parent's live run can start a child thread, and not once it is stopping")
 	}
 	var at api.Remote
 	var ok bool
@@ -396,8 +404,28 @@ func (d *decision) placeRemote(c api.ThreadCreate) error {
 		return rejected(err.Error())
 	case !ok:
 		return rejected(fmt.Sprintf("no machine called %q is in this machine's list; a child runs only on a machine the person added", c.Remote))
+	case c.Repository == nil:
+		return rejected("a child on another machine starts from its parent's branch of its repository, and the parent's folder is on no branch of a repository with a commit")
 	}
-	return d.emit(api.ThreadCreated{Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent, Remote: &at})
+	if err := d.emit(api.ThreadCreated{Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent, Remote: &at}); err != nil {
+		return err
+	}
+	parent := d.env.Line[0]
+	origin := api.Origin{Engine: d.env.Engine, Thread: parent.ID, Title: parent.Title, Depth: len(d.env.Line), Access: min(parent.Access, parent.Live().Access)}
+	d.effects = append(d.effects, RemoteCreate{Engine: at.Engine, Link: at.Link, Command: api.Command{
+		ID: derive(id, "remote"), Target: derive(d.thread, "remote"),
+		Body: api.ThreadCreate{Title: c.Title, Model: c.Model, Access: c.Access, Text: c.Text, Origin: &origin, Repository: c.Repository},
+	}})
+	return nil
+}
+
+// derive is the id of what id makes on a remote child's machine: its
+// command's, of its own command's, and its thread's there, of its
+// placeholder's. The machine's thread is another than the placeholder,
+// so no one id has events in two logs.
+func derive(id api.ID, what string) api.ID {
+	sum := sha256.Sum256([]byte(id.String() + "/" + what))
+	return api.ID(sum[:16])
 }
 
 // Limits cap the children agents start: Working at work at once under one
@@ -428,10 +456,12 @@ func (l Limits) Effective() Limits {
 }
 
 // Kids counts a thread's children that aren't deleted: those whose agent
-// works, with a live run that isn't uncertain, or on another machine,
-// a placeholder not settled whose child is being created there, and all
-// of them. An
-// uncertain run has no agent at work; only the user ends it.
+// works, with a live run that isn't uncertain, or on another machine, a
+// placeholder not settled whose child is being created there, or whose
+// child's run there works or stops as far as this engine read it; and
+// all of them. An uncertain run has no agent at work; only the user ends
+// it. A run the machine started that this engine hasn't read yet takes
+// no place, so the count caps what this engine starts.
 type Kids struct{ Working, All int }
 
 // CheckChild checks a child's create against its parent's line, the
@@ -1426,8 +1456,82 @@ func (d *decision) observe(o Observation) error {
 			return err
 		}
 		return d.drop("Can't make a worktree: " + o.Error)
+	case RemoteAttempted, RemoteBound, RemoteSeen, RemoteLost:
+		return d.remote(o)
 	}
 	return nil
+}
+
+// remote records what the runtime saw of a placeholder's child on its
+// machine. A first try at its create is refused once the placeholder is
+// settled, so nothing reaches the machine after that; one tried before
+// goes on. What the child reports reaches its parent as a local child's
+// report does, once per key, whatever the machine's log replays. A lost
+// child reports it failed, once: lost is where it ends.
+func (d *decision) remote(o Observation) error {
+	r := d.t.Remote
+	if r == nil {
+		return fmt.Errorf("%w: %T: the thread runs here", ErrRefused, o)
+	}
+	switch o := o.(type) {
+	case RemoteAttempted:
+		switch {
+		case r.State != RemoteCreating || d.t.settled() && !r.Attempted:
+			return fmt.Errorf("%w: the placeholder is settled, or its child no longer being created", ErrRefused)
+		case r.Attempted:
+			return nil
+		}
+		return d.emit(api.RemoteAttempted{})
+	case RemoteBound:
+		return d.emit(api.RemoteBound{Thread: o.Thread})
+	case RemoteLost:
+		if err := d.emit(api.RemoteLost{Reason: o.Reason}); err != nil {
+			return err
+		}
+		d.remoteReport(o.On, RemoteReport{Run: lostRun(d.t.ID), Kind: api.ReportFailed, Error: o.Reason})
+		return nil
+	case RemoteSeen:
+		if r.State != RemoteBoundState {
+			return fmt.Errorf("%w: the placeholder isn't following its child", ErrRefused)
+		}
+		var keys []api.ID
+		var reports []RemoteReport
+		for _, p := range o.Reports {
+			if !slices.Contains(r.Reported, p.Key) && !slices.Contains(keys, p.Key) {
+				keys, reports = append(keys, p.Key), append(reports, p)
+			}
+		}
+		if o.Cursor == r.Cursor && o.Run == r.Run && o.Silent == r.Silent && o.Slot == r.Slot && len(keys) == 0 {
+			return nil
+		}
+		if err := d.emit(api.RemoteSeen{Cursor: o.Cursor, Run: o.Run, Silent: o.Silent, State: o.Slot, Keys: keys}); err != nil {
+			return err
+		}
+		for _, p := range reports {
+			d.remoteReport(o.On, p)
+		}
+	}
+	return nil
+}
+
+// remoteReport has the placeholder report p to its parent, as report
+// does for a local child, with what its machine, labelled on, said.
+func (d *decision) remoteReport(on string, p RemoteReport) {
+	r := ReportToParent{Parent: d.t.Parent, Child: d.t.ID, Run: p.Run, Kind: p.Kind, Title: d.t.Title, Error: p.Error, Ask: p.Ask, Question: p.Question, On: on}
+	if p.Kind == api.ReportDone {
+		r.Reply = &p.Reply
+	}
+	d.effects = append(d.effects, r)
+}
+
+// lostRun is the run a lost placeholder reports failed under: there may
+// be no run of its child's to name, and it is lost once.
+func lostRun(placeholder api.ID) api.ID {
+	sum := sha256.Sum256(append([]byte("glitched remote lost "), placeholder[:]...))
+	var id api.ID
+	copy(id[:6], placeholder[:6])
+	copy(id[6:], sum[:])
+	return id
 }
 
 // idleCompact starts a silent /compact run when the thread is still idle,
@@ -1535,8 +1639,12 @@ func askText(o Reported) string {
 			b.WriteString("\n")
 		}
 	}
-	return fmt.Sprintf("<task id=\"%s\" title=\"%s\" state=\"waiting_on_question\" request=\"%s\">\n<task_question>\n%s</task_question>\n</task>\nAnswer it with task_answer, or leave it to the user, who sees it too.",
-		o.Report.Child, html.EscapeString(o.Report.Title), o.Question, b.String())
+	answer := "Answer it with task_answer, or leave it to the user, who sees it too."
+	if o.On != "" {
+		answer = "It runs on " + o.On + ", where the user answers it: task_answer doesn't reach it there yet."
+	}
+	return fmt.Sprintf("<task id=\"%s\" title=\"%s\" state=\"waiting_on_question\" request=\"%s\">\n<task_question>\n%s</task_question>\n</task>\n%s",
+		o.Report.Child, html.EscapeString(o.Report.Title), o.Question, b.String(), answer)
 }
 
 // wakeText gives the parent's agent a child's result, in the tags Zeron

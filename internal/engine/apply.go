@@ -92,6 +92,34 @@ func apply(t Thread, e Event) (Thread, error) {
 		if r, ok := b.(api.WorktreeReady); ok {
 			t.Workspace, t.Branch = r.Workspace, r.Branch
 		}
+	case api.RemoteAttempted:
+		if t.Remote == nil || t.Remote.State != RemoteCreating {
+			return t, &TransitionError{"remote", "not creating", "attempted"}
+		}
+		r := *t.Remote
+		r.Attempted = true
+		t.Remote = &r
+	case api.RemoteBound, api.RemoteLost:
+		if t.Remote == nil {
+			return t, &TransitionError{"remote", "none", api.EventType(b)}
+		}
+		r := *t.Remote
+		if bound, ok := b.(api.RemoteBound); ok {
+			r.State, r.Thread = RemoteBoundState, bound.Thread
+		} else {
+			r.State, r.Lost = RemoteLostState, b.(api.RemoteLost).Reason
+		}
+		if err = remoteEdges.check("remote", t.Remote.State, r.State); err == nil {
+			t.Remote = &r
+		}
+	case api.RemoteSeen:
+		if t.Remote == nil || t.Remote.State != RemoteBoundState {
+			return t, &TransitionError{"remote", "not bound", "seen"}
+		}
+		r := *t.Remote
+		r.Cursor, r.Run, r.Silent, r.Slot = b.Cursor, b.Run, b.Silent, b.State
+		r.Reported = slices.Concat(r.Reported, b.Keys)
+		t.Remote = &r
 	case api.DispositionChanged:
 		t.Disposition = b.Disposition
 	case api.ThreadRenamed:

@@ -69,9 +69,10 @@ func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, chec
 			}
 			c.Body = b
 		}
+		var line []engine.Thread
 		if b, ok := c.Body.(api.ThreadCreate); ok && !b.Parent.IsZero() && !t.Exists() {
-			line, err := lineOf(ctx, q, b.Parent)
-			if err != nil {
+			var err error
+			if line, err = lineOf(ctx, q, b.Parent); err != nil {
 				return nil, nil, err
 			}
 			kids, err := kidsOf(ctx, q, b.Parent)
@@ -135,6 +136,7 @@ func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, chec
 		if err != nil {
 			return nil, nil, err
 		}
+		env.Engine, env.Line = s.host, line
 		return engine.DecideWith(t, c, env, now)
 	}}
 	r := &receipt{id: c.ID, hash: hash[:], thread: c.Target}
@@ -325,6 +327,12 @@ func originOf(ctx context.Context, q querier, t engine.Thread) (*engine.Origin, 
 	return nil, nil
 }
 
+// Bound are the placeholders whose child their machine took, and which
+// are neither lost nor deleted: those a host follows.
+func (s *Store) Bound(ctx context.Context) ([]api.ID, error) {
+	return ids(ctx, s.db, `SELECT id FROM threads WHERE json_extract(remote, '$.state') = ? AND deleted = 0 ORDER BY id`, engine.RemoteBoundState)
+}
+
 // SetLinks has the threads other machines' links start find their link
 // through links from the next commit on, in each commit.
 func (s *Store) SetLinks(links engine.Links) {
@@ -338,8 +346,9 @@ func (s *Store) SetLinks(links engine.Links) {
 func kidsOf(ctx context.Context, q querier, parent api.ID) (engine.Kids, error) {
 	var k engine.Kids
 	err := q.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(EXISTS (SELECT 1 FROM runs WHERE runs.thread = threads.id AND runs.state NOT IN ('finished', 'uncertain'))
-			OR json_extract(remote, '$.state') = 'creating' AND disposition <> ?), 0)
-		FROM threads WHERE parent = ? AND deleted = 0`, api.Settled, parent[:]).Scan(&k.All, &k.Working)
+			OR json_extract(remote, '$.state') = ? AND disposition <> ?
+			OR json_extract(remote, '$.state') = ? AND COALESCE(json_extract(remote, '$.slot'), ?) NOT IN (?, ?)), 0)
+		FROM threads WHERE parent = ? AND deleted = 0`, engine.RemoteCreating, api.Settled, engine.RemoteBoundState, api.RunIdle, api.RunIdle, api.RunUncertain, parent[:]).Scan(&k.All, &k.Working)
 	return k, err
 }
 

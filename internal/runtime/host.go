@@ -11,7 +11,6 @@ import (
 	"maps"
 	"os"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,6 +45,8 @@ type Host struct {
 	skills    *skillStage          // the skills Glitched gives agents; nil gives none
 	wire      *providerlog.Log     // the provider log; nil keeps none
 	now       func() time.Time     // wall clock; defaults to time.Now
+	dial      Dial                 // how remote children's machines are reached; nil reaches none
+	backoff   func(n int) time.Duration
 
 	checkpoints *checkpointStores // where the threads' checkpoints go; nil keeps none
 
@@ -102,6 +103,10 @@ type Host struct {
 	// before they commit, from before they save them until their submit
 	// returns: a submit of the same command waits for it.
 	confirming map[api.ID]confirmation
+	// creating and followers cancel what reaches a placeholder's machine
+	// for it: its create's tries, and its follower.
+	creating  map[api.ID]context.CancelFunc
+	followers map[api.ID]context.CancelFunc
 }
 
 // confirmation is a revert command being confirmed: its thread, the
@@ -214,6 +219,9 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		compactCheck:  make(chan api.ID, 64),
 		compactRescan: make(chan struct{}, 1),
 		compactDue:    make(chan compactDue, 64),
+		creating:      map[api.ID]context.CancelFunc{},
+		followers:     map[api.ID]context.CancelFunc{},
+		backoff:       remoteBackoff,
 	}
 	h.idleCompact.Store(true)
 	for _, o := range opts {
@@ -249,6 +257,16 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 	}
 	h.wg.Add(1)
 	go h.resumeLimits()
+	bound, err := st.Bound(ctx)
+	if err != nil {
+		h.Close()
+		return nil, err
+	}
+	h.mu.Lock()
+	for _, id := range bound {
+		h.startFollowing(id)
+	}
+	h.mu.Unlock()
 	return h, nil
 }
 
@@ -301,18 +319,7 @@ func (h *Host) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
 			return api.Receipt{}, &api.RejectedError{Reason: "only another machine's link starts a thread from there"}
 		}
 		if b.Remote != "" {
-			// What goes to another machine holds no value of the parent's
-			// vault, which never leaves this one, however short.
-			for _, v := range h.credentials(b.Parent) {
-				if v != "" && (strings.Contains(b.Text, v) || strings.Contains(b.Title, v)) {
-					return api.Receipt{}, &api.RejectedError{Reason: "the task holds a credential value; name the variable instead"}
-				}
-			}
-			// A worktree made for a local create of the same thread
-			// commits, or is given back, before the placeholder can.
-			h.making.Lock()
-			defer h.making.Unlock()
-			break
+			return h.createRemote(ctx, c, b)
 		}
 		if b.Worktree != nil {
 			return h.createInWorktree(ctx, c, b)
@@ -412,12 +419,20 @@ var (
 	turnUncertain = api.EventType(api.TurnUncertain{})
 	turnEnded     = api.EventType(api.TurnEnded{})
 	threadDeleted = api.EventType(api.ThreadDeleted{})
+	remoteBound   = api.EventType(api.RemoteBound{})
+	remoteLost    = api.EventType(api.RemoteLost{})
 )
 
 // follow stops driving a run the log moved past: a stop cancels a start,
 // steer or answer still in flight, and an uncertain or finished run gets no
 // more calls. h.mu is held.
 func (h *Host) follow(e api.Event) {
+	switch e.Type {
+	case remoteBound:
+		h.startFollowing(e.Thread)
+	case remoteLost, threadDeleted:
+		h.stopFollowing(e.Thread)
+	}
 	if e.Type == threadDeleted {
 		h.skills.deleted(e.Thread)
 		if h.wire != nil {
@@ -830,6 +845,9 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 
 	case engine.MakeWorktree:
 		return h.makeWorktree(h.ctx, t, b)
+
+	case engine.RemoteCreate:
+		return h.remoteCreate(e, b)
 
 	case engine.CaptureCheckpoint:
 		return h.capture(t, b)

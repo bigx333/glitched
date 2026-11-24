@@ -38,6 +38,13 @@ var requestEdges = edges[api.RequestState]{
 	api.RequestAnswered: {api.RequestDelivered, api.RequestInvalidated},
 }
 
+// A placeholder is lost once, whether its machine never took its child or
+// stopped answering for it after.
+var remoteEdges = edges[RemoteState]{
+	RemoteCreating:   {RemoteBoundState, RemoteLostState},
+	RemoteBoundState: {RemoteLostState},
+}
+
 // steerable runs can take a message mid-turn; the agent exists or is about to.
 var steerable = map[RunState]bool{RunStarting: true, RunRunning: true, RunWaiting: true}
 

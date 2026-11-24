@@ -93,11 +93,24 @@ type Run struct {
 
 // Remote is a placeholder's: the machine its child was placed on, as
 // api.Remote, and where that child stands there, as far as this engine
-// knows.
+// knows. Attempted is that its create may have reached the machine, and
+// Thread is the child's there once the machine took it. Cursor is how far
+// this engine read the child, in the machine's log; Run, Silent and Slot
+// are the child's last run there as of Cursor. Reported are the keys of
+// the reports delivered of it: the run of a turn's end, the request of
+// one it waits on. Lost is why it is lost.
 type Remote struct {
-	Engine api.ID      `json:"engine"`
-	Link   api.ID      `json:"link"`
-	State  RemoteState `json:"state"`
+	Engine    api.ID       `json:"engine"`
+	Link      api.ID       `json:"link"`
+	State     RemoteState  `json:"state"`
+	Attempted bool         `json:"attempted,omitempty"`
+	Thread    api.ID       `json:"thread,omitzero"`
+	Cursor    api.Cursor   `json:"cursor,omitzero"`
+	Run       api.ID       `json:"run,omitzero"`
+	Silent    bool         `json:"silent,omitempty"`
+	Slot      api.RunState `json:"slot,omitempty"`
+	Reported  []api.ID     `json:"reported,omitempty"`
+	Lost      string       `json:"lost,omitempty"`
 }
 
 // Origin is a link's thread's: where it came from, as api.Origin, its
@@ -110,9 +123,17 @@ type Origin struct {
 
 type RemoteState string
 
-// RemoteCreating is a placeholder whose child the machine hasn't
-// confirmed yet.
-const RemoteCreating RemoteState = "creating"
+const (
+	// RemoteCreating is a placeholder whose child the machine hasn't
+	// confirmed yet.
+	RemoteCreating RemoteState = "creating"
+	// RemoteBoundState is one whose child the machine took, which this engine
+	// follows.
+	RemoteBoundState RemoteState = "bound"
+	// RemoteLostState is one this engine no longer follows: its machine
+	// refused it, deleted it, or failed to answer for it.
+	RemoteLostState RemoteState = "lost"
+)
 
 type Message struct {
 	ID    api.ID
