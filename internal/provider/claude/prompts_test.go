@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -196,13 +197,20 @@ func playOn(t *testing.T, h *runtime.Host, thread api.ID, text string, opened fu
 				}
 			}
 		}
-		if over {
+		if over && !l.delivering() {
 			return l
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the turn did not end: %+v", l)
+			t.Fatalf("the turn did not end, or an answer's delivery was never logged: %+v", l)
 		}
 	}
+}
+
+// delivering is whether an answer is still on its way to the agent: the
+// host logs its delivery once the call that gave it returns, which can be
+// after the turn ended.
+func (l promptLog) delivering() bool {
+	return slices.ContainsFunc(l.requests, func(r requestLog) bool { return r.state == api.RequestAnswered })
 }
 
 // readLog is what the thread's log holds of run, and whether the run is

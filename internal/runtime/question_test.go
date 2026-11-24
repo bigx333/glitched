@@ -17,7 +17,8 @@ import (
 // wins, the other six lose the race, and the misfit is refused whenever it
 // lands. The agent gets the winner's answer, once.
 func TestQuestionRaceHasOneWinner(t *testing.T) {
-	n := start(t, dbPath(t), fake.New(fake.Asking()))
+	path := dbPath(t)
+	n := start(t, path, fake.New(fake.Asking()))
 	thread := newThread(t, n.h)
 	submit(t, n.h, thread, dispatch("ask", api.StartNow))
 	req := until(t, n.h, thread, "the questions", waiting).Requests[0]
@@ -62,6 +63,7 @@ func TestQuestionRaceHasOneWinner(t *testing.T) {
 		t.Fatalf(`{"allow":true} got %v, want rejected`, errs[clients-1])
 	}
 	until(t, n.h, thread, "turn end", idle)
+	untilEffectsDone(t, path, "request.deliver")
 	evs := events(t, n.h, thread)
 	if count(evs, "request.answered") != 1 || count(evs, "request.delivered") != 1 {
 		t.Fatalf("answered %d, delivered %d", count(evs, "request.answered"), count(evs, "request.delivered"))
