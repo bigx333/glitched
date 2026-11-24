@@ -147,6 +147,16 @@ func WithAutoContinue(on bool) Option {
 	return func(h *Host) { h.autoContinue = on }
 }
 
+// WithName names the engine as its clients show it, when name isn't "";
+// otherwise it is this machine's hostname.
+func WithName(name string) Option {
+	return func(h *Host) {
+		if name != "" {
+			h.name = name
+		}
+	}
+}
+
 // WithClock overrides the host's wall clock, for deterministic tests.
 func WithClock(now func() time.Time) Option {
 	return func(h *Host) { h.now = now }

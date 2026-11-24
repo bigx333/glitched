@@ -99,7 +99,22 @@ The host checks three things before it submits, as it does for worktree create a
 
 A commit hook marks the folder as restoring when `thread.reverting` commits. A StartTurn whose workspace is inside a restoring folder hands its lease back, as a closing host does (host.go:378-386). Boot sets the mark again from any pending or leased `RevertThread` before work starts. This covers a child or another thread that becomes live between the commit and the effect. The thread's own later StartTurn already waits, because it sits behind the revert in the lane.
 
-As built in PR 2, the intent is `thread.revert {to: {phase: base|run|recovery, id}, files: true}`, and `files: false` is refused until the conversation rewind lands. A base checkpoint is named by the thread's first run. Both events move the thread's revision, so that the runtime's commit hook sees the thread whose folder it marks, and change nothing else of its view. The timeline row reads "Restored 12 files" with Undo, without the turn number, and the confirmation lists the paths the agent's edits named in the runs it undoes, not a diff of the two checkpoints.
+As built in PR 2:
+
+- The intent is `thread.revert {to: {phase: base|run|recovery, id}, files: true}`, protocol 12. `files: false` is refused until the conversation rewind lands. A base checkpoint is named by the thread's first run.
+- `thread.reverting` and `thread.reverted` move the thread's revision, so the runtime's commit hook sees the thread whose folder it marks. They change nothing else in the thread's view.
+- The restoring mark counts the reverts of a worktree that are not done. Each revert's effect ends its count, whether it ran or was skipped for a deleted thread. A StartTurn waits when its workspace is in the folder or around it. A start the mark holds back writes nothing. So when the effect checks again, that start doesn't count as a thread at work, in the tree or outside it.
+- A replay treats a path that already holds the target's blob, of the same kind and executable bit, as one it wrote itself. A delete counts as done only once it succeeds.
+
+What a person sees differs from the plan above:
+
+- The timeline row reads "Restored 12 files" with Undo, without a turn number. A failed revert's row offers Undo too.
+- The confirmation doesn't list the paths that change.
+- A turn with no work log gets no chip.
+- After a revert, a turn's count compares with the previous run, not with the files the revert put back.
+- Pruning keeps 50 run checkpoints and 10 recovery ones. When an Undo or a queued revert needs one that was pruned, it fails with "no checkpoint of the files was saved there".
+- Empty folders aren't saved, so Undo doesn't bring one back.
+- Settings › This machine shows how much the store holds of its 2 GiB cap.
 
 The effect, all steps replay-safe:
 
@@ -140,8 +155,8 @@ Each top-level run's footer in the timeline gets a chip. It reads "3 files", "No
 | --- | --- | --- | --- |
 | Intent | `thread.revert` | `to {kind, id}`, `files`, `conversation` | none |
 | Event | `checkpoint.captured` | `run, phase, status (ready, skipped, failed), reason, files, head, ms` | none, transcript only, like `work.item` |
-| Event | `thread.reverting` | `revert, to, files, conversation` | none |
-| Event | `thread.reverted` | `revert, to, files, changed, recovery, conversation (native, portable, failed, none), session, from, at, error` | `session` and the context columns, which exist |
+| Event | `thread.reverting` | `revert, to, files, conversation` | the thread's revision only |
+| Event | `thread.reverted` | `revert, to, files, changed, recovery, conversation (native, portable, failed, none), session, from, at, error` | the thread's revision; with the conversation rewind, `session` and the context columns, which exist |
 | Field | `turn.ended.head` | provider cursor | none |
 | Effect | `checkpoint.capture` | `run, phase` | replay-safe |
 | Effect | `thread.revert` | `revert, to, files, conversation` | replay-safe |

@@ -20,11 +20,22 @@ import (
 // window that draws its menus, so that a menu shows in the image.
 func workspaceHarness(t *testing.T) (*harness, thread) {
 	t.Helper()
+	return workspaceHarnessWith(t, nil)
+}
+
+// workspaceHarnessWith is workspaceHarness, its app's engine serving as
+// serving has it.
+func workspaceHarnessWith(t *testing.T, serving func(*daemon.Config)) (*harness, thread) {
+	t.Helper()
 	ws := gitWorkspace(t)
 	dir := tempDir(t)
-	d := engine(t, daemon.Config{Dir: dir}, fake.New(checks))
+	cfg := daemon.Config{Dir: dir}
+	if serving != nil {
+		serving(&cfg)
+	}
+	d := engine(t, cfg, fake.New(checks))
 	seed(t, d, ws, "Sort sidebar threads by recent activity", "Sort them by most recent activity.")
-	h := start(t, dir)
+	h := startWith(t, dir, serving)
 	h.tt = ui.NewTester(func(c *ui.Context) {
 		c.SetMenuPresentation(ui.PopoverMenus)
 		h.a.view(c)
