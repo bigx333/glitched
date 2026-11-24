@@ -114,3 +114,92 @@ func TestAForkInANewWorktreeOutlivesItsSourcesWorktree(t *testing.T) {
 		t.Fatalf("fork's independent worktree cannot revert after source cleanup; project points at source=%t, original repository=%t: %s", dst.Project == src.Workspace, dst.Project == project, strings.ReplaceAll(err.Error(), src.Workspace, "<source-worktree>"))
 	}
 }
+
+// Turns its source takes after a fork is made change nothing of what the
+// fork is handed.
+func TestASourcesLaterTurnsLeaveAForksHandoff(t *testing.T) {
+	sourceAd, targetAd := newRewinder(provider.Rewind{}, nil, false), newRewinder(provider.Rewind{}, nil, false)
+	n := serve(t, dbPath(t), provider.Mux{"fake": sourceAd, "other": targetAd})
+	ws, src := t.TempDir(), api.NewID()
+	older := strings.Repeat("A", 24303)
+	newer := strings.Repeat("B", 24303)
+	wait := func(thread api.ID, nturns int) {
+		t.Helper()
+		until(t, n.h, thread, "turn end", func(v api.Thread) bool { return idle(v) && len(runsOf(t, n.h, thread)) == nturns })
+	}
+	submit(t, n.h, src, api.ThreadCreate{Workspace: ws, Model: api.ModelRef{Provider: "fake"}, Text: older})
+	wait(src, 1)
+	to := submit(t, n.h, src, dispatch(newer, api.StartNow)).Command
+	wait(src, 2)
+	first, delayed := api.NewID(), api.NewID()
+	for _, id := range []api.ID{first, delayed} {
+		submit(t, n.h, id, api.ThreadCreate{Workspace: ws, Model: api.ModelRef{Provider: "other"}, Fork: &api.Fork{Thread: src, Run: to}})
+	}
+	send := func(id api.ID) string {
+		submit(t, n.h, id, dispatch("go on", api.StartNow))
+		wait(id, 1)
+		_, _, sent := targetAd.seen()
+		return sent[len(sent)-1]
+	}
+	initial := send(first)
+	if !strings.Contains(initial, older) || !strings.Contains(initial, newer) {
+		t.Fatalf("fixture's first handoff had %d turns, expected two", strings.Count(initial, "<turn>"))
+	}
+	for i := 3; i <= 10; i++ {
+		submit(t, n.h, src, dispatch("unrelated later turn", api.StartNow))
+		wait(src, i)
+	}
+	got := send(delayed)
+	if got != initial {
+		t.Fatalf("two forks created at the same boundary received different handoffs after unrelated source turns: before %d bytes and %d turns; after %d bytes and %d turns", len(initial), strings.Count(initial, "<turn>"), len(got), strings.Count(got, "<turn>"))
+	}
+}
+
+// A fork from its source's worktree, however its path is spelled, belongs
+// to the source's project.
+func TestAForksWorktreeProjectIgnoresHowItsPathIsSpelled(t *testing.T) {
+	for _, suffix := range []string{"", "/."} {
+		t.Run(map[string]string{"": "exact", "/.": "same_path_spelled_differently"}[suffix], func(t *testing.T) {
+			checkGLIT71ForkInNewWorktree(t, suffix)
+		})
+	}
+}
+
+func checkGLIT71ForkInNewWorktree(t *testing.T, suffix string) {
+	t.Helper()
+	project := repo(t)
+	ad := newRewinder(provider.Rewind{}, nil, false)
+	path := dbPath(t)
+	r := twoTurnsWith(t, path, tempDir(t), project, ad)
+	fork := api.NewID()
+	src := view(t, r.n.h, r.thread)
+	submit(t, r.n.h, fork, api.ThreadCreate{
+		Workspace: src.Workspace + suffix, Title: "separate worktree fork", Text: "start", Model: api.ModelRef{Provider: "fake"},
+		Worktree: &api.NewWorktree{Base: src.Branch}, Fork: &api.Fork{Thread: src.ID, Run: r.run.Run},
+	})
+	until(t, r.n.h, fork, "the fork's first run", func(v api.Thread) bool { return idle(v) && v.LastTurn != nil })
+	untilCheckpoints(t, r.n.h, fork, 2)
+	dst := view(t, r.n.h, fork)
+	if dst.Workspace == src.Workspace {
+		t.Fatal("fixture did not create a separate worktree")
+	}
+	submit(t, r.n.h, src.ID, api.ThreadDelete{RemoveWorktree: true})
+	untilEffectsDone(t, path, "worktree.remove")
+	if _, err := os.Stat(src.Workspace); !os.IsNotExist(err) {
+		t.Fatalf("source worktree was not removed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst.Workspace, "README")); err != nil {
+		t.Fatalf("fork should keep its own worktree: %v", err)
+	}
+	write(t, filepath.Join(dst.Workspace, "README"), "a new edit\n")
+	to := api.CheckpointRef{Phase: api.CheckpointRun, ID: dst.LastTurn.Run}
+	_, err := r.n.h.Submit(ctx, api.Command{ID: api.NewID(), Target: dst.ID, Body: api.ThreadRevert{To: to, Files: true}})
+	if err != nil {
+		t.Fatalf("fork's independent worktree cannot revert after source cleanup; project points at source=%t, original repository=%t: %s", filepath.Clean(dst.Project) == src.Workspace, dst.Project == project, strings.ReplaceAll(err.Error(), src.Workspace, "<source-worktree>"))
+	}
+
+	done := untilReverted(t, r.n.h, fork, 1)
+	if done.Status != api.RevertRestored || read(t, filepath.Join(dst.Workspace, "README")) != "hi\n" {
+		t.Fatalf("fork failed to restore its own README after the source was removed: %+v", done)
+	}
+}

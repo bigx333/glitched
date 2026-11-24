@@ -140,7 +140,7 @@ func (h *Host) createInWorktree(ctx context.Context, c api.Command, b api.Thread
 		if err != nil {
 			return api.Receipt{}, err
 		}
-		if src.Exists() && b.Workspace == src.Workspace && src.Project != "" {
+		if src.Exists() && canon(b.Workspace) == canon(src.Workspace) && src.Project != "" {
 			project = src.Project
 		}
 	}
