@@ -48,6 +48,10 @@ func apply(t Thread, e Event) (Thread, error) {
 			t.UpdatedAt = e.At
 		}
 		return t, nil
+	case api.CheckpointCaptured:
+		// Transcript only, and the engine's own doing: nothing the user
+		// sees changes, so neither revision nor UpdatedAt does.
+		return t, nil
 	case api.ThreadCreated:
 		if t.Exists() {
 			return t, &TransitionError{"thread", "created", "created"}

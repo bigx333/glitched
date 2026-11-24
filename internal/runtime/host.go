@@ -44,6 +44,8 @@ type Host struct {
 	skills    *skillStage          // the skills Glitched gives agents; nil gives none
 	now       func() time.Time     // wall clock; defaults to time.Now
 
+	checkpoints *checkpointStores // where the threads' checkpoints go; nil keeps none
+
 	idleCompact atomic.Bool
 	// awake hears whether any agent of the host's works, each time that
 	// changes; working is the threads whose run does.
@@ -151,6 +153,11 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 	}
 	h.ctx, h.cancel = context.WithCancel(context.Background())
 	h.drain, h.stopDrain = context.WithCancel(context.Background())
+	if h.checkpoints != nil {
+		for _, store := range h.checkpoints.stores() {
+			h.checkpoints.measure(ctx, store)
+		}
+	}
 	st.OnCommit(h.committed)
 	if err := h.boot(ctx); err != nil {
 		h.Close()
@@ -180,7 +187,11 @@ func (h *Host) Close() error {
 }
 
 func (h *Host) Info(context.Context) (api.Environment, error) {
-	return api.Environment{ID: h.store.HostID(), Name: h.name, Protocol: api.Protocol, Log: h.store.LogID()}, nil
+	env := api.Environment{ID: h.store.HostID(), Name: h.name, Protocol: api.Protocol, Log: h.store.LogID()}
+	if h.checkpoints != nil {
+		env.Checkpoints = api.CheckpointStore{Bytes: h.checkpoints.total(), Limit: checkpointLimit}
+	}
+	return env, nil
 }
 
 func (h *Host) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
@@ -606,6 +617,12 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 
 	case engine.RemoveWorktree:
 		return nil, h.removeWorktree(h.ctx, e.Thread, b)
+
+	case engine.CaptureCheckpoint:
+		return h.capture(t, b)
+
+	case engine.DropCheckpoints:
+		return nil, h.dropCheckpoints(e.Thread)
 
 	case engine.DeliverAnswer:
 		if isAsk(b.Dedup) {

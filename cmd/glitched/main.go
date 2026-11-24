@@ -231,6 +231,9 @@ func status(ctx context.Context, args []string) error {
 	row := func(k, v string) { fmt.Printf("%-10s %s\n", k, v) }
 	if e := st.Engine; e != nil {
 		row("engine", fmt.Sprintf("serving as %s (host %s, protocol %d)", e.Name, e.ID, e.Protocol))
+		if c := e.Checkpoints; c.Limit > 0 {
+			row("checkpoints", fmt.Sprintf("%d MiB of %d MiB", c.Bytes>>20, c.Limit>>20))
+		}
 	} else {
 		row("engine", "not running: "+st.EngineErr.Error())
 	}

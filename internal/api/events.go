@@ -283,6 +283,45 @@ type DispositionChanged struct {
 	Disposition Disposition `json:"disposition"`
 }
 
+// CheckpointPhase is when a checkpoint was taken: base before a thread's
+// first run, run at the end of each run.
+type CheckpointPhase string
+
+const (
+	CheckpointBase CheckpointPhase = "base"
+	CheckpointRun  CheckpointPhase = "run"
+)
+
+type CheckpointStatus string
+
+const (
+	CheckpointReady   CheckpointStatus = "ready"
+	CheckpointSkipped CheckpointStatus = "skipped" // over a budget, or a folder it can't save whole
+	CheckpointFailed  CheckpointStatus = "failed"  // git failed
+)
+
+// CheckpointCaptured is a checkpoint of the thread's worktree: its files as
+// Run left them, or as they were before it in the base phase, saved in the
+// engine's own store under refs/glitched/<thread>/base or
+// refs/glitched/<thread>/run/<run>. Commit is that ref's commit, Head the
+// checkout's HEAD then, Files and Bytes what it holds, and Changed how many
+// paths differ from Since, the thread's checkpoint before it, if any. Reason
+// says why one is skipped or failed, or on a ready one what it had to do
+// the slow way. Transcript only.
+type CheckpointCaptured struct {
+	Run     ID               `json:"run"`
+	Phase   CheckpointPhase  `json:"phase"`
+	Status  CheckpointStatus `json:"status"`
+	Reason  string           `json:"reason,omitempty"`
+	Commit  string           `json:"commit,omitempty"`
+	Head    string           `json:"head,omitempty"`
+	Files   int              `json:"files,omitempty"`
+	Bytes   int64            `json:"bytes,omitempty"`
+	Changed int              `json:"changed,omitempty"`
+	Since   string           `json:"since,omitempty"`
+	Ms      int64            `json:"ms"`
+}
+
 func (ThreadCreated) eventType() string       { return "thread.created" }
 func (MessageQueued) eventType() string       { return "message.queued" }
 func (MessageClaimed) eventType() string      { return "message.claimed" }
@@ -314,6 +353,7 @@ func (SessionBound) eventType() string        { return "session.bound" }
 func (ContextReported) eventType() string     { return "context.reported" }
 func (AccessGranted) eventType() string       { return "access.granted" }
 func (ModelConfirmed) eventType() string      { return "model.confirmed" }
+func (CheckpointCaptured) eventType() string  { return "checkpoint.captured" }
 
 var eventBodies = map[string]func([]byte) (EventBody, error){}
 
@@ -349,6 +389,7 @@ func init() {
 	register[ContextReported]()
 	register[AccessGranted]()
 	register[ModelConfirmed]()
+	register[CheckpointCaptured]()
 }
 
 func register[B EventBody]() {

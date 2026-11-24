@@ -337,6 +337,7 @@ func (t Thread) pos(front bool) int64 {
 // by its run: the reports first, so the user's words come last.
 func (d *decision) admit(message api.ID) error {
 	m := d.t.Queue[d.t.messageAt(message)]
+	first := len(d.t.Runs) == 0
 	var texts []string
 	var with []api.ID
 	for _, w := range d.t.Queue {
@@ -358,10 +359,24 @@ func (d *decision) admit(message api.ID) error {
 			return err
 		}
 	}
+	if first {
+		d.checkpoint(message, api.CheckpointBase)
+	}
 	d.effects = append(d.effects, StartTurn{
 		Run: message, Generation: gen, Text: strings.Join(texts, "\n\n"), Workspace: d.t.Workspace, Model: d.t.Model, Access: d.t.Access,
 	})
 	return nil
+}
+
+// checkpoint has the runtime save the files of the thread's worktree for
+// run, before anything later in the commit, such as the next turn's start.
+// Only a thread of the user's in a worktree of its own keeps checkpoints:
+// a child's files are its parent's, and a folder the thread shares is
+// never one it can restore. A silent run changes no files.
+func (d *decision) checkpoint(run api.ID, phase api.CheckpointPhase) {
+	if d.t.checkpointed() && !d.t.silentRun(run) {
+		d.effects = append(d.effects, CaptureCheckpoint{Run: run, Phase: phase})
+	}
 }
 
 // sent marks the wakes that went in with run's first message as handed to
@@ -454,7 +469,11 @@ func (d *decision) stop(r Run) error {
 		return nil
 	case RunUncertain:
 		// Ending an uncertain run is the user's explicit decision to move on.
-		return d.emit(api.TurnEnded{Run: r.ID, Outcome: api.OutcomeAbandoned})
+		if err := d.emit(api.TurnEnded{Run: r.ID, Outcome: api.OutcomeAbandoned}); err != nil {
+			return err
+		}
+		d.checkpoint(r.ID, api.CheckpointRun)
+		return nil
 	}
 	if err := d.emit(api.TurnStopping{Run: r.ID}); err != nil {
 		return err
@@ -628,6 +647,9 @@ func (d *decision) delete(b api.ThreadDelete) error {
 	if b.RemoveWorktree && d.t.Branch != "" {
 		d.effects = append(d.effects, RemoveWorktree{Workspace: d.t.Workspace, Project: d.t.Project, Branch: d.t.Branch})
 	}
+	if d.t.checkpointed() {
+		d.effects = append(d.effects, DropCheckpoints{})
+	}
 	return d.emit(api.ThreadDeleted{})
 }
 
@@ -701,6 +723,7 @@ func (d *decision) observe(o Observation) error {
 			if err := d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error, Tokens: o.Tokens}); err != nil {
 				return err
 			}
+			d.checkpoint(o.Run, api.CheckpointRun)
 			// A run being stopped or a silent maintenance run reports nothing.
 			switch {
 			case stopped || silent:
@@ -737,6 +760,10 @@ func (d *decision) observe(o Observation) error {
 	case Plan:
 		if isLive(o.Plan.Run) {
 			return d.emit(o.Plan)
+		}
+	case Captured:
+		if d.t.runAt(o.Checkpoint.Run) >= 0 {
+			return d.emit(o.Checkpoint)
 		}
 	case Surfaced:
 		dup := index(d.t.Requests, func(r Request) bool { return r.Run == o.Run && r.Dedup == o.Dedup }) >= 0

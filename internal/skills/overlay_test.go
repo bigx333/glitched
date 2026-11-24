@@ -113,6 +113,18 @@ func TestSweepAndClear(t *testing.T) {
 	if a == "" || b == "" || a == b {
 		t.Fatalf("built %q and %q", a, b)
 	}
+	checkpoints := filepath.Join(state, "checkpoints", "store.git", "HEAD")
+	if err := os.MkdirAll(filepath.Dir(checkpoints), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(checkpoints, []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := os.Stat(checkpoints); err != nil {
+			t.Errorf("the checkpoint stores beside the overlays went: %v", err)
+		}
+	}()
 	if err := Sweep(state, []string{b}); err != nil {
 		t.Fatal(err)
 	}

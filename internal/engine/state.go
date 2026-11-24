@@ -118,6 +118,9 @@ func (t Thread) Live() *Run {
 
 func (t Thread) settled() bool { return t.Disposition.State == api.Settled }
 
+// checkpointed is whether the thread keeps checkpoints of its files.
+func (t Thread) checkpointed() bool { return t.Parent.IsZero() && t.Branch != "" }
+
 // stopped is whether the thread's last run was stopped: by the user, or by
 // the engine when it couldn't deliver an answer. A stop reached a run that
 // completed as it landed too. A silent run since, such as an idle
