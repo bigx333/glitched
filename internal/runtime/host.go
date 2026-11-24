@@ -443,7 +443,13 @@ func (h *Host) boot(ctx context.Context) error {
 			lease = 0
 		}
 		restored, ok := rec.(provider.Restored)
-		if err := h.observe(ctx, id, engine.Reconciled{Run: r.ID, Restored: ok, Failed: failed, Continue: h.autoContinue}, lease); err != nil {
+		asked := false
+		if r.State == engine.RunStopping {
+			if asked, err = h.stopAsked(ctx, id, r.ID); err != nil {
+				return err
+			}
+		}
+		if err := h.observe(ctx, id, engine.Reconciled{Run: r.ID, Restored: ok, Failed: failed, Continue: h.autoContinue, Asked: asked}, lease); err != nil {
 			return err
 		}
 		if ok {

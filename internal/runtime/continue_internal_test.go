@@ -47,7 +47,7 @@ func (h *history) observe(o engine.Observation, now time.Time) {
 // log has it due and its chain short, and the engine takes the continue.
 func (h *history) continues(now time.Time) bool {
 	r := h.th.Live()
-	if r == nil || r.State != engine.RunUncertain || !dueContinue(h.log, r.ID) || chain(h.log, r.ID, now) >= chainCap {
+	if r == nil || r.State != engine.RunUncertain || !dueContinue(h.log, r.ID) || chain(h.th, h.log, now) >= chainCap {
 		return false
 	}
 	_, _, err := engine.Decide(h.th, api.Command{ID: api.NewID(), Target: h.id, Body: api.MessageDispatch{Text: api.ContinueText, Mode: api.RestartActive, Replaces: r.ID, Auto: true}}, now)

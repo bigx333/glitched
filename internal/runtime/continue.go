@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -64,7 +65,7 @@ func (h *Host) continueLost() {
 			continue
 		}
 		r := t.Live()
-		if r == nil || r.State != engine.RunUncertain || !dueContinue(log, r.ID) || chain(log, r.ID, h.clock()) >= chainCap {
+		if r == nil || r.State != engine.RunUncertain || !dueContinue(log, r.ID) || chain(t, log, h.clock()) >= chainCap {
 			continue
 		}
 		cmd := api.NewID()
@@ -126,18 +127,36 @@ func autoContinued(log []engine.Event, run api.ID) bool {
 	return ok && q.Auto
 }
 
-// chain is how many continues in a row led to run, run's own too, each
-// asked for within chainWindow of now.
-func chain(log []engine.Event, run api.ID, now time.Time) int {
+// chain is how many of t's last runs in a row were continues, the live
+// one too, each asked for within chainWindow of now. A continue queued
+// before messages said what they replace is known by its text.
+func chain(t engine.Thread, log []engine.Event, now time.Time) int {
 	n := 0
-	for {
-		q, at, ok := queued(log, run)
-		if !ok || q.Replaces.IsZero() || now.Sub(at) > chainWindow {
-			return n
+	for i := len(t.Runs) - 1; i >= 0; i-- {
+		q, at, ok := queued(log, t.Runs[i].ID)
+		continued := !q.Replaces.IsZero() || q.Text == api.ContinueText && q.Mode == api.RestartActive
+		if !ok || !continued || now.Sub(at) > chainWindow {
+			break
 		}
 		n++
-		run = q.Replaces
 	}
+	return n
+}
+
+// stopAsked is whether the log has someone asking thread's run to stop.
+func (h *Host) stopAsked(ctx context.Context, thread, run api.ID) (bool, error) {
+	evs, _, err := h.store.Since(ctx, thread, 0, 0)
+	if err != nil {
+		return false, err
+	}
+	for _, e := range evs {
+		if b, err := e.Decode(); err == nil {
+			if s, ok := b.(api.StopAsked); ok && s.Run == run {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // queued is the message that started run, as it was queued, and when.
