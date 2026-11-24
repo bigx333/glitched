@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"glitched/internal/api"
+	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
@@ -149,4 +152,45 @@ func wholeBox(text string, size, width float32) ui.Rect {
 	tt.Frame()
 	r, _ := tt.Find(text)
 	return r
+}
+
+// A failed rewind's row whose error is one long unbroken word, as a long
+// path makes, wraps the error inside the chat at the window's narrowest
+// and keeps its Undo files only whole beside it.
+func TestAFailedRewindsRowKeepsItsUndoAtTheNarrowestWindow(t *testing.T) {
+	h := rewoundAt760(t, fake.New(fake.Turn(false)))
+	var r *client.RevertEntry
+	for _, e := range h.a.current().Transcript.Entries {
+		if rv, ok := e.(*client.RevertEntry); ok {
+			r = rv
+		}
+	}
+	r.Conversation, r.Error = api.RewindFailed, strings.Repeat("a", 64)+".txt couldn't be put back: permission denied"
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	text := "Couldn't rewind the conversation: " + r.Error
+	left, right := 760-h.a.chatWidth, float32(760)
+	shown, ok := h.tt.Find(text)
+	if !ok {
+		t.Fatalf("no failed row in %q", h.tt.Texts())
+	}
+	undo, ok := h.tt.Access("Undo files only")
+	if !ok {
+		t.Fatalf("the failed row offers no Undo files only: %q", h.tt.Texts())
+	}
+	label, _ := h.tt.Find("Undo files only")
+	need := wholeBox("Undo files only", 11.5, 0)
+	if undo.Offscreen || undo.Bounds.X < left || undo.Bounds.X+undo.Bounds.W > right+0.5 {
+		t.Errorf("Undo files only is at %+v, offscreen %t; want it inside the chat, %.1f to %.1f", undo.Bounds, undo.Offscreen, left, right)
+	}
+	if label.W+0.5 < need.W || label.H+0.5 < need.H {
+		t.Errorf("Undo files only's label is %.1f×%.1f; it needs %.1f×%.1f", label.W, label.H, need.W, need.H)
+	}
+	if shown.X < left || shown.X+shown.W > min(undo.Bounds.X, right)+0.5 {
+		t.Errorf("the error is at %+v; want it inside the chat, from %.1f to the Undo at %.1f", shown, left, undo.Bounds.X)
+	}
+	line, whole := wholeBox("a", 11.5, 0), wholeBox(text, 11.5, 0)
+	if lines := float32(math.Ceil(float64(whole.W / shown.W))); shown.H+0.5 < lines*line.H {
+		t.Errorf("the error's box is %.1f×%.1f, too short for its %.1f wide text on %.0f lines of %.1f", shown.W, shown.H, whole.W, lines, line.H)
+	}
 }

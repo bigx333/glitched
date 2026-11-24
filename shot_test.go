@@ -26,7 +26,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|credentials (CRED=typed|provided|declined)|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)|revert (REVERT=menu|alert|done|machine|refused|refusedtip|rewind|rewindalert|rewound|rewoundfiles|undotip|unrewound)|queued (HELD, QEDIT)|wizard (WIZARD=machine|source|browse|clone|repos|confirm|cloning|failed|offline)
+// SCENE=empty|running|approval|credentials (CRED=typed|provided|declined)|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)|revert (REVERT=menu|alert|done|machine|refused|refusedtip|rewind|rewindalert|rewound|rewoundfiles|undotip|unrewound|failed)|queued (HELD, QEDIT)|wizard (WIZARD=machine|source|browse|clone|repos|confirm|cloning|failed|offline)
 // for the engines' threads (none started without one; question takes
 // ASK=<request body>, PICK=<label>,…, OTHER=<text> typed into the Other
 // field named OTHERIN, and QUESTION=answer|dismiss|stop;
@@ -618,7 +618,7 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		switch os.Getenv("REVERT") {
 		case "menu":
 			h.click("1 file")
-		case "rewind", "rewindalert", "rewound", "rewoundfiles", "undotip", "unrewound":
+		case "rewind", "rewindalert", "rewound", "rewoundfiles", "undotip", "unrewound", "failed":
 			// The first turn's chip: its menu, the alert before a rewind
 			// of the conversation, and the row after one, with the files
 			// left or taken back too, the turn it took out forgotten; its
@@ -630,7 +630,7 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 			}
 			h.tt.Advance(time.Second)
 			item, row := "Rewind conversation to here", "Rewound the conversation"
-			if os.Getenv("REVERT") == "rewoundfiles" || os.Getenv("REVERT") == "undotip" || os.Getenv("REVERT") == "unrewound" {
+			if os.Getenv("REVERT") == "rewoundfiles" || os.Getenv("REVERT") == "undotip" || os.Getenv("REVERT") == "unrewound" || os.Getenv("REVERT") == "failed" {
 				item, row = "Rewind conversation and files to here", "Rewound the conversation and restored 1 file"
 			}
 			if err := h.tt.ChooseMenuItem(item); err != nil {
@@ -648,6 +648,14 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 				undo, _ := h.tt.Find("Undo")
 				h.tt.Move(undo.X+undo.W/2, undo.Y+undo.H/2)
 				h.tt.Advance(2 * time.Second)
+			}
+			if os.Getenv("REVERT") == "failed" {
+				for _, e := range h.a.current().Transcript.Entries {
+					if r, ok := e.(*client.RevertEntry); ok {
+						r.Conversation, r.Error = api.RewindFailed, strings.Repeat("a", 64)+".txt couldn't be put back: permission denied"
+					}
+				}
+				h.tt.Frame()
 			}
 			if os.Getenv("REVERT") == "unrewound" {
 				h.tt.Advance(time.Second)

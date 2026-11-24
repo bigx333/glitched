@@ -540,7 +540,7 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 	at := thinkingAt(t, rs)
 	list := ui.List(c.Key(t.id()), l, len(es), func(i int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).MaxWidth(contentWidth).Gap(22).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).MaxWidth(contentWidth).Gap(22).Children(func() {
 				a.entry(c, t, rs, i)
 				if i == at {
 					a.thinkingRow(c, t)
