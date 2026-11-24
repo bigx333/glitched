@@ -31,7 +31,8 @@ func wakes(t *testing.T, h *runtime.Host, thread, child api.ID) []string {
 
 // A child's question wakes its parent's agent with the question and its
 // request, the parent's agent answers it, and the child's turn goes on
-// and ends, which wakes the parent again.
+// and ends, which wakes the parent again. A retry of that answer gets its
+// receipt, and another answer is refused.
 func TestAChildsQuestionWakesItsParentWhichAnswersIt(t *testing.T) {
 	h := engineOf(t, provider.Mux{"fake": fake.New(fake.Asking())})
 	o := working(t, h)
@@ -51,7 +52,7 @@ func TestAChildsQuestionWakesItsParentWhichAnswersIt(t *testing.T) {
 	if err != "" || len(s.Questions) != 1 || s.Questions[0].RequestID != req || len(s.Questions[0].Questions) != 2 {
 		t.Fatalf("task_status: %+v %s, want the question and its request", s, err)
 	}
-	answer := `{"task_id":"` + kid.ID.String() + `","request_id":"` + req + `","answers":[{"picked":["SQLite"]},{"picked":["Unit","Race"]}]}`
+	answer := `{"task_id":"` + kid.ID.String() + `","request_id":"` + req + `","answers":[{"picked":["SQLite"]},{"picked":["Unit","Race"]}],"client_request_id":"pick-store"}`
 	if _, err := task(t, h, o, "task_answer", answer); err != "" {
 		t.Fatalf("task_answer: %s", err)
 	}
@@ -62,7 +63,10 @@ func TestAChildsQuestionWakesItsParentWhichAnswersIt(t *testing.T) {
 	if w := wakes(t, h, o.Thread, kid.ID)[1]; !strings.Contains(w, `state="completed"`) {
 		t.Fatalf("the second wake says %q, want the child's result", w)
 	}
-	if _, err := task(t, h, o, "task_answer", answer); !strings.Contains(err, "no request") {
+	if _, err := task(t, h, o, "task_answer", answer); err != "" {
+		t.Fatalf("task_answer retried: %s, want the first answer's receipt", err)
+	}
+	if _, err := task(t, h, o, "task_answer", strings.Replace(answer, "pick-store", "pick-again", 1)); !strings.Contains(err, "already answered") {
 		t.Fatalf("a second task_answer: %q, want it refused as answered", err)
 	}
 }
