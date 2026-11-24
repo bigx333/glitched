@@ -680,3 +680,29 @@ func TestAnOpenTranscriptResumesAfterAReconnect(t *testing.T) {
 	g.until(t, "the missed message", func() bool { return slices.Equal(lines(box.Threads[id].Transcript), want) },
 		func() string { return strings.Join(lines(box.Threads[id].Transcript), "\n") })
 }
+
+// A window can't use a link another machine's engine holds: pairing with
+// its token is refused, and nothing is saved.
+func TestAWindowIsNotPairedWithALinksToken(t *testing.T) {
+	dir := stateDir(t)
+	ceiling := api.AccessAutoEdits
+	if _, err := daemon.Edit(dir, func(cfg *daemon.Config) error {
+		cfg.ChildrenFromOtherMachines = &ceiling
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := daemon.PairLink(dir, "a", api.Link{Access: api.AccessAsk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := engine(t, dir, "127.0.0.1:0")
+	m, g := manager(t, stateDir(t))
+	err = add(t, g, m, Server{Label: "box", Addr: d.Addrs()[0].String(), Token: token})
+	if err == nil || !strings.Contains(err.Error(), "link") {
+		t.Fatalf("pairing a window with a link's token: %v, want a refusal", err)
+	}
+	if len(m.Envs()) != 1 {
+		t.Fatalf("the window lists %d engines after the refusal, want only its own", len(m.Envs()))
+	}
+}

@@ -320,7 +320,14 @@ func pair(_ context.Context, args []string) error {
 	children := fs.String("children", "", "set this machine's setting for children from other machines: off, or the most access any link's child may run at, ask, auto-edits or full")
 	fs.Parse(args)
 	set := given(fs)
-	if !*link && (set["access"] || set["working"] || set["all"]) {
+	switch {
+	case fs.NArg() > 0:
+		return usageError(fmt.Sprintf("pair: unexpected %q; quote a label with spaces", fs.Arg(0)))
+	case countSet(set, "name", "list", "revoke", "children") > 1:
+		return usageError("pair: give one of -name, -list, -revoke and -children")
+	case *link && *name == "":
+		return usageError("pair: -link goes with -name")
+	case !*link && (set["access"] || set["working"] || set["all"]):
 		return usageError("pair: -access, -working and -all go with -link")
 	}
 	switch {
@@ -355,9 +362,10 @@ func pair(_ context.Context, args []string) error {
 	}
 	cancel()
 	addr := net.JoinHostPort(host, daemon.Port)
-	cmd := "glitched serve"
+	cmd, revokeCmd := "glitched serve", "glitched pair"
 	if set["dir"] {
 		cmd += " -dir " + shellQuote(*dir)
+		revokeCmd += " -dir " + shellQuote(*dir)
 	}
 	if *link {
 		a, err := daemon.ParseAccess(*access)
@@ -369,7 +377,7 @@ func pair(_ context.Context, args []string) error {
 			return err
 		}
 		fmt.Printf("Link %s for %s, at %s at most. Its token, shown only this once:\n\n  %s\n\n", l.ID, *name, daemon.AccessName(l.Access), token)
-		fmt.Printf("Serve on the tailnet with:\n\n  %s -tailnet\n\nThen on %s:\n\n  glitched link -add <this machine> -server %s -token %s\n\nRevoke it here with glitched pair -revoke %s.\n", cmd, *name, addr, token, shellQuote(*name))
+		fmt.Printf("Serve on the tailnet with:\n\n  %s -tailnet\n\nThen on %s:\n\n  glitched link -add <this machine> -server %s -token %s\n\nRevoke it here with %s -revoke %s.\n", cmd, *name, addr, token, revokeCmd, shellQuote(*name))
 		return nil
 	}
 	token, err := daemon.Pair(*dir, *name)
@@ -420,13 +428,20 @@ func link(ctx context.Context, args []string) error {
 	list := fs.Bool("list", false, "list the machines")
 	remove := fs.String("remove", "", "remove the machine with this label and forget its token")
 	fs.Parse(args)
+	set := given(fs)
 	switch {
+	case fs.NArg() > 0:
+		return usageError(fmt.Sprintf("link: unexpected %q; quote a label with spaces", fs.Arg(0)))
+	case countSet(set, "add", "list", "remove") > 1:
+		return usageError("link: give one of -add, -list and -remove")
+	case *add == "" && (set["server"] || set["token"]):
+		return usageError("link: -server and -token go with -add")
 	case *list:
-		cfg, err := daemon.Defaults(*dir)
+		ms, err := daemon.Machines(*dir)
 		if err != nil {
 			return err
 		}
-		for _, m := range cfg.Machines {
+		for _, m := range ms {
 			fmt.Printf("%s  %s  engine %s  link %s\n", m.Label, m.Server, m.Engine, m.Link)
 		}
 		return nil
@@ -447,6 +462,17 @@ func link(ctx context.Context, args []string) error {
 	}
 	fmt.Printf("added %s: engine %s, link %s\n", m.Label, m.Engine, m.Link)
 	return nil
+}
+
+// countSet is how many of names set holds.
+func countSet(set map[string]bool, names ...string) int {
+	n := 0
+	for _, name := range names {
+		if set[name] {
+			n++
+		}
+	}
+	return n
 }
 
 // shellQuote quotes s for a POSIX shell, unless it needs none.

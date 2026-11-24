@@ -204,37 +204,33 @@ func TestAMachineIsAddedOnlyWithALinksToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m != (Machine{Label: "b", Server: addr, Engine: engine.ID, Link: l.ID}) {
+	if m != (Machine{Label: "b", Server: addr, Engine: engine.ID, Link: l.ID, Token: token}) {
 		t.Fatalf("added %+v, want engine %s and link %s", m, engine.ID, l.ID)
 	}
 	if _, err := AddMachine(ctx, a, "b", addr, token); err == nil {
 		t.Fatal("a second machine under a label that holds one")
 	}
-	cfg, err := Defaults(a)
-	if err != nil || len(cfg.Machines) != 1 || cfg.Machines[0] != m {
-		t.Fatalf("engine.json's machines: %+v %v", cfg.Machines, err)
+	if _, err := AddMachine(ctx, a, "alias", addr, token); err == nil {
+		t.Fatal("the same link added again under another label")
 	}
-	raw, err := os.ReadFile(filepath.Join(a, configFile))
-	if err != nil || strings.Contains(string(raw), token) {
-		t.Fatalf("engine.json holds the link's token, or can't be read: %v", err)
+	ms, err := Machines(a)
+	if err != nil || len(ms) != 1 || ms[0] != m || ms[0].Token != token {
+		t.Fatalf("machines.json: %+v %v, want one machine with its token", ms, err)
 	}
-	info, err := os.Stat(filepath.Join(a, linksFile))
+	info, err := os.Stat(filepath.Join(a, machinesFile))
 	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("links.json: %v %v, want mode 0600", info, err)
+		t.Fatalf("machines.json: %v %v, want mode 0600", info, err)
 	}
-	var tokens map[string]string
-	if b, err := os.ReadFile(filepath.Join(a, linksFile)); err != nil || json.Unmarshal(b, &tokens) != nil || tokens[l.ID.String()] != token {
-		t.Fatalf("links.json holds %v, want the token under link %s", tokens, l.ID)
+	if raw, err := os.ReadFile(filepath.Join(a, configFile)); err == nil && strings.Contains(string(raw), token) {
+		t.Fatal("engine.json holds the link's token")
 	}
-
 	if err := RemoveMachine(a, "b"); err != nil {
 		t.Fatal(err)
 	}
-	tokens = nil
-	if b, err := os.ReadFile(filepath.Join(a, linksFile)); err != nil || json.Unmarshal(b, &tokens) != nil || len(tokens) != 0 {
-		t.Fatalf("links.json after the remove: %v %v", tokens, err)
+	if ms, err := Machines(a); err != nil || len(ms) != 0 {
+		t.Fatalf("machines.json after the remove: %+v %v", ms, err)
 	}
-	if cfg, err := Defaults(a); err != nil || len(cfg.Machines) != 0 {
-		t.Fatalf("engine.json's machines after the remove: %+v %v", cfg.Machines, err)
+	if err := RemoveMachine(a, "b"); err == nil {
+		t.Fatal("a second remove of a machine that is gone")
 	}
 }

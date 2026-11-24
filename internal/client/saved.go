@@ -113,6 +113,10 @@ func (m *Manager) AddServer(s Server, done func(error)) {
 				done(fmt.Errorf("client: reaching %s: %w", s.Addr, err))
 				return
 			}
+			if !info.Link.IsZero() {
+				done(fmt.Errorf("client: the token for %s is a link for another machine's engine, which a window can't use; pair a token for this window there with glitched pair -name", s.Addr))
+				return
+			}
 			s.Engine = info.ID
 			done(m.list(s, repair))
 		})
