@@ -14,6 +14,7 @@ import (
 
 	"glitched/internal/api"
 	"glitched/internal/plugins"
+	"glitched/internal/plugins/bundled"
 )
 
 // pluginServer serves the plugins' services and tools over the engine's
@@ -47,13 +48,16 @@ func (p pluginServer) PluginCall(ctx context.Context, raw json.RawMessage) (json
 	return p.s.Call(ctx, c)
 }
 
-// startPlugins runs the plugins' services, whose effects act on the
-// engine itself.
-func (d *Daemon) startPlugins(dir string, run func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error)) *plugins.Services {
-	return plugins.StartServices(dir, plugins.ServiceOptions{
-		Logf: func(format string, args ...any) { slog.Info(fmt.Sprintf(format, args...)) },
-		Do:   d.pluginEffect,
-		Run:  run,
+// startPlugins runs the plugins' services, the built-ins' with them,
+// whose effects act on the engine itself.
+func (d *Daemon) startPlugins(cfg Config) *plugins.Services {
+	return plugins.StartServices(cfg.Dir, plugins.ServiceOptions{
+		Logf:        func(format string, args ...any) { slog.Info(fmt.Sprintf(format, args...)) },
+		Do:          d.pluginEffect,
+		Run:         cfg.PluginRun,
+		TimerScale:  cfg.PluginTimerScale,
+		Bundled:     bundled.FS,
+		ReleaseKeys: []string{bundled.ReleaseKey},
 	})
 }
 

@@ -107,6 +107,8 @@ type Config struct {
 	// Detect reads an installed Tailscale's status; nil reads the one
 	// installed on this machine.
 	Detect func(context.Context) (api.Tailnet, error) `json:"-"`
+	// PluginTimerScale shortens plugins' service timers, in tests.
+	PluginTimerScale float64 `json:"-"`
 }
 
 // CompactBeforeExpireEnabled reports whether automatic idle compaction is
@@ -408,7 +410,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	if err := os.Chmod(sock.Address, 0o600); err != nil {
 		return nil, err
 	}
-	svc := d.startPlugins(cfg.Dir, cfg.PluginRun)
+	svc := d.startPlugins(cfg)
 	d.undo = append(d.undo, func() error { svc.Close(); return nil })
 	d.clis = newCLIs(ctx, cfg.Dir, cfg.Providers, h, cliupdate.NewChecker(cfg.Versions, filepath.Join(cfg.Dir, "cli-versions.json")))
 	cmds := newCommandLists(ctx, cfg.Providers)

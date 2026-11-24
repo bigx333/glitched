@@ -3,13 +3,17 @@ package plugins
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"glitched/internal/plugins/pack"
 )
 
 func writeService(t *testing.T, state, id, extra, main, service string) {
@@ -202,4 +206,134 @@ func TestTheRepoWatchServiceRunsGitOnItsTimer(t *testing.T) {
 		_, err := s.Call(context.Background(), ServiceCall{Plugin: "repo-watch", Method: "check"})
 		return err != nil && strings.Contains(err.Error(), "programs")
 	})
+}
+
+// writeTicker writes a service, as id, that answers who it is and copies
+// who it is on each timer.
+func writeTicker(t *testing.T, dst, id, who string) {
+	t.Helper()
+	files := map[string]string{
+		"plugin.json": `{"id": "` + id + `", "name": "` + id + `", "main": "service.js", "contract": "glitched", "contractVersion": 1, "capabilities": ["service", "clipboard"], "glitched": {"service": "service.js", "timers": [{"id": "tick", "every": 30}]}}`,
+		"service.js": `export function serve() { return "` + who + `" }
+			export async function timer() { await glitched.clipboard.write("` + who + `") }`,
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dst, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A built-in plugin's service runs in the engine as a built-in, granted
+// what it declares, from a folder of the engine's own; a copy of it runs
+// in its place, and the built-in it shadows runs no service or timer.
+func TestABuiltInsServiceRunsTillACopyTakesItsPlace(t *testing.T) {
+	root := t.TempDir()
+	key, err := pack.LoadKey(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTicker(t, filepath.Join(root, "ticker"), "ticker", "built-in")
+	if err := pack.Sign(filepath.Join(root, "ticker"), key); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var told []string
+	start := func(state string) *Services {
+		s := StartServices(state, ServiceOptions{Logf: t.Logf, TimerScale: 0.002, Bundled: os.DirFS(root), ReleaseKeys: []string{key.Public()},
+			Do: func(id string, e Effect) (any, error) {
+				var a struct{ Text string }
+				json.Unmarshal(e.Args, &a)
+				mu.Lock()
+				told = append(told, id+": "+a.Text)
+				mu.Unlock()
+				return nil, nil
+			}})
+		t.Cleanup(s.Close)
+		return s
+	}
+	heard := func(want string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Contains(told, want)
+	}
+
+	state := t.TempDir()
+	s := start(state)
+	if out, err := s.Call(context.Background(), ServiceCall{Plugin: "ticker", Method: "who"}); err != nil || string(out) != `"built-in"` {
+		t.Fatalf("the built-in's service answered %s, %v", out, err)
+	}
+	eventually(t, "the built-in's timer", func() bool { return heard("ticker: built-in") })
+	if _, err := os.Stat(BundledDir(state)); !os.IsNotExist(err) {
+		t.Fatalf("the engine wrote the built-ins where the window does: %v", err)
+	}
+	s.Close()
+
+	writeTicker(t, filepath.Join(Dir(state), "ticker"), "ticker", "copy")
+	signAsOwn(t, state, filepath.Join(Dir(state), "ticker"))
+	grant(t, state, `{"grants": {"ticker": ["service", "clipboard"]}}`)
+	mu.Lock()
+	told = nil
+	mu.Unlock()
+	s = start(state)
+	if out, err := s.Call(context.Background(), ServiceCall{Plugin: "ticker", Method: "who"}); err != nil || string(out) != `"copy"` {
+		t.Fatalf("with a copy, the service answered %s, %v", out, err)
+	}
+	eventually(t, "the copy's timer, twice", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(told) >= 2
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	for _, w := range told {
+		if w != "ticker: copy" {
+			t.Fatalf("with a copy, the timers told %q", told)
+		}
+	}
+}
+
+// Taking service back from a built-in stops its service and its timers, as
+// it never had it.
+func TestABuiltInsServiceStopsWhenServiceIsTakenBack(t *testing.T) {
+	root := t.TempDir()
+	key, err := pack.LoadKey(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTicker(t, filepath.Join(root, "ticker"), "ticker", "built-in")
+	if err := pack.Sign(filepath.Join(root, "ticker"), key); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var ticks int
+	state := t.TempDir()
+	s := StartServices(state, ServiceOptions{Logf: t.Logf, TimerScale: 0.002, Bundled: os.DirFS(root), ReleaseKeys: []string{key.Public()},
+		Do: func(string, Effect) (any, error) {
+			mu.Lock()
+			ticks++
+			mu.Unlock()
+			return nil, nil
+		}})
+	t.Cleanup(s.Close)
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return ticks
+	}
+	eventually(t, "the built-in's timer", func() bool { return count() > 0 })
+
+	grant(t, state, `{"revoked": {"ticker": ["service"]}}`)
+	eventually(t, "the built-in's service stopping", func() bool {
+		_, err := s.Call(context.Background(), ServiceCall{Plugin: "ticker", Method: "who"})
+		return errors.Is(err, ErrNoService)
+	})
+	before := count()
+	time.Sleep(300 * time.Millisecond) // five of its timers
+	if n := count(); n != before {
+		t.Fatalf("with service taken back, its timer ran %d more times", n-before)
+	}
 }

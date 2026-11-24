@@ -98,6 +98,10 @@ type Options struct {
 	// A folder of the user's with the same id is run in its place.
 	Bundled     fs.FS
 	ReleaseKeys []string
+	// BundledDir is where the built-ins are written out, BundledDir(state)
+	// when "": the engine's services write theirs apart from the window's,
+	// which may write at the same time.
+	BundledDir string
 
 	// Main, when set, is the module each plugin runs in place of its
 	// manifest's main, as the service host runs services: a plugin

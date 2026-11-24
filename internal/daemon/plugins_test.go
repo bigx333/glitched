@@ -22,15 +22,19 @@ import (
 )
 
 // codexAt is an engine on dir serving Codex, played by the test binary,
-// with its socket's client. stop closes both, once; the test's end runs it
-// if the test didn't.
-func codexAt(t *testing.T, dir string) (d *Daemon, ep *transport.EndpointClient, stop func()) {
+// with its socket's client, and its plugins' timers scaled by scale, or
+// not. stop closes both, once; the test's end runs it if the test didn't.
+func codexAt(t *testing.T, dir string, scale ...float64) (d *Daemon, ep *transport.EndpointClient, stop func()) {
 	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err = Start(context.Background(), Config{Dir: dir, Hub: true, Providers: provider.Mux{"codex": &codex.Adapter{Path: self}}})
+	cfg := Config{Dir: dir, Hub: true, Providers: provider.Mux{"codex": &codex.Adapter{Path: self}}}
+	if len(scale) > 0 {
+		cfg.PluginTimerScale = scale[0]
+	}
+	d, err = Start(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
