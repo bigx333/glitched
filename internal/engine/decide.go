@@ -48,7 +48,9 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 				return nil, nil, rejected("the thread's run didn't answer its stop, and only the user can end it")
 			}
 		case api.RequestRespond:
-			if i := t.requestAt(b.Request); i < 0 || t.Requests[i].Kind != api.KindQuestion {
+			if i := t.requestAt(b.Request); i < 0 {
+				return nil, nil, api.ErrNotFound
+			} else if t.Requests[i].Kind != api.KindQuestion {
 				return nil, nil, rejected("an agent can answer only a question of a thread under its own: approvals and credentials are the user's")
 			}
 		default:

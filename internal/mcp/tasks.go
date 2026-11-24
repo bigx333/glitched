@@ -136,6 +136,9 @@ func (t *Tools) tasks(ctx context.Context, name string, raw json.RawMessage, too
 	if err = dec.Decode(&in); err != nil {
 		return nil, fmt.Errorf("%s: %v", name, err)
 	}
+	if len(in.RequestID) > 256 {
+		return nil, fmt.Errorf("%s: client_request_id is over 256 characters", name)
+	}
 	// An acting call is the turn's that runs as it starts.
 	var caller api.Caller
 	if name == taskCancel || name == taskSend || name == taskAnswer {
@@ -198,29 +201,61 @@ func (t *Tools) tasks(ctx context.Context, name string, raw json.RawMessage, too
 
 // answer answers a question task waits on, a command of the origin's live
 // run, retried as the same command under key. The engine refuses any
-// other request, and a task the user took over.
+// other request, and a task the user took over. A request answered already
+// is read from the task's log, so a retry of the answer that took it gets
+// that answer's receipt, and any other answer is refused.
 func (t *Tools) answer(ctx context.Context, caller api.Caller, task api.Thread, in taskArgs, key string) (any, error) {
+	if in.Message != "" || in.Mode != "" {
+		return nil, errors.New("task_answer: message and mode are task_send's; give answers")
+	}
+	missing := fmt.Errorf("task_answer: the task waits on no request %q; task_status lists what it waits on", in.Request)
 	id, err := api.ParseID(in.Request)
-	i := slices.IndexFunc(task.Requests, func(r api.Request) bool { return r.ID == id })
-	if err != nil || i < 0 {
-		return nil, fmt.Errorf("task_answer: the task waits on no request %q; it may have been answered, and task_status lists what it waits on", in.Request)
+	if err != nil {
+		return nil, missing
 	}
 	if len(in.Answers) == 0 {
 		return nil, errors.New("task_answer: no answers; to leave the question to the user, don't call this")
 	}
-	r := task.Requests[i]
+	generation, found := uint64(0), false
+	if i := slices.IndexFunc(task.Requests, func(r api.Request) bool { return r.ID == id }); i >= 0 {
+		generation, found = task.Requests[i].Generation, true
+	} else if generation, found, err = t.opened(ctx, task.ID, id); err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, missing
+	}
 	answer, err := json.Marshal(api.Answers{Answers: in.Answers})
 	if err != nil {
 		return nil, err
 	}
-	_, err = t.Engine.Submit(ctx, api.Command{ID: derive(t.Origin.Thread, "answer", key), Target: task.ID, Caller: &caller, Body: api.RequestRespond{Request: r.ID, Generation: r.Generation, Answer: answer}})
+	_, err = t.Engine.Submit(ctx, api.Command{ID: derive(t.Origin.Thread, "answer", key), Target: task.ID, Caller: &caller, Body: api.RequestRespond{Request: id, Generation: generation, Answer: answer}})
 	if errors.Is(err, api.ErrAlreadyAnswered) {
 		return nil, errors.New("task_answer: the question was already answered, by the user or an earlier call")
+	}
+	if errors.Is(err, api.ErrConflict) && in.RequestID != "" {
+		return nil, fmt.Errorf("task_answer: client_request_id %q already answered something else from this thread; use a new client_request_id for a new answer", in.RequestID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("task_answer: %w", refusal(err))
 	}
 	return map[string]any{"task_id": task.ID.String(), "answered": true}, nil
+}
+
+// opened is the generation of request in thread's log, if it opened there.
+func (t *Tools) opened(ctx context.Context, thread, request api.ID) (uint64, bool, error) {
+	snap, err := t.Engine.Read(ctx, api.Query{Thread: thread})
+	if err != nil {
+		return 0, false, err
+	}
+	for _, e := range snap.Events {
+		if b, err := e.Decode(); err == nil {
+			if o, ok := b.(api.RequestOpened); ok && o.Request == request {
+				return o.Generation, true, nil
+			}
+		}
+	}
+	return 0, false, nil
 }
 
 // cancel stops task's run and every run under it in one commit, a
