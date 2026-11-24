@@ -732,10 +732,12 @@ const methods = {
        ON CONFLICT (schedule, key) DO NOTHING`,
       [s.id, key, iso(at), request(s, key, iso(at)), iso(now), s.id, key, s.id],
     );
+    // It answers the run's thread, and the schedule as the run left it.
+    const answer = async (thread) => ({ thread, schedule: await load(s.id).catch(() => null) });
     const [r] = await query("SELECT * FROM runs WHERE schedule = ? AND key = ?", [s.id, key]);
-    if (r !== undefined) return { thread: r.state === "starting" ? await send(r) : r.thread };
+    if (r !== undefined) return answer(r.state === "starting" ? await send(r) : r.thread);
     const [receipt] = await query("SELECT thread FROM ops WHERE key = ?", [key]);
-    if (receipt !== undefined) return { thread: receipt.thread };
+    if (receipt !== undefined) return answer(receipt.thread);
     await load(id);
     throw new Invalid("this schedule has " + MAX_PENDING + " Run nows starting already");
   },
