@@ -52,6 +52,10 @@ const (
 	Defer
 )
 
+// LimitContinueText is the message that continues a thread whose last
+// turn a usage limit ended, sent by Continue or once the limit resets.
+const LimitContinueText = "Continue where you left off."
+
 // ContinueText is the message that continues a run left uncertain, sent
 // RestartActive: the agent picks up where it left off, and checks first
 // that what its last turn started did not already take effect.
@@ -130,8 +134,9 @@ type MessageDispatch struct {
 	// one, as when another message replaced it first, rather than stop a
 	// newer run.
 	Replaces ID `json:"replaces,omitzero"`
-	// Auto is the engine's own continue of a run a restart cut off, which
-	// it refuses on a child or on a thread settled or snoozed.
+	// Auto is the engine's own continue of a run a restart cut off, or of
+	// a turn a usage limit ended once it resets, which it refuses on a
+	// child or on a thread settled or snoozed.
 	Auto bool `json:"auto,omitempty"`
 }
 
@@ -181,6 +186,10 @@ type RequestRespond struct {
 	Generation uint64          `json:"generation"`
 	Answer     json.RawMessage `json:"answer"`
 }
+
+// ResumeCancel stops the engine continuing, once its usage limit resets,
+// the thread's last turn that a limit ended.
+type ResumeCancel struct{}
 
 type InboxSet struct {
 	Disposition Disposition `json:"disposition"`
@@ -258,6 +267,7 @@ func (QueueCancel) intentType() string     { return "queue.cancel" }
 func (QueueMove) intentType() string       { return "queue.move" }
 func (QueueSteer) intentType() string      { return "queue.steer" }
 func (ThreadRevert) intentType() string    { return "thread.revert" }
+func (ResumeCancel) intentType() string    { return "resume.cancel" }
 
 // StartsTurn is whether i may start a turn of its thread's agent: a
 // message, the go-ahead for what a stop held, a queued message sent now,
@@ -287,6 +297,7 @@ var intents = map[string]func() Intent{
 	"queue.move":       func() Intent { return new(QueueMove) },
 	"queue.steer":      func() Intent { return new(QueueSteer) },
 	"thread.revert":    func() Intent { return new(ThreadRevert) },
+	"resume.cancel":    func() Intent { return new(ResumeCancel) },
 }
 
 func IntentType(i Intent) string { return i.intentType() }
@@ -424,6 +435,17 @@ type TurnResult struct {
 	Access  Access    `json:"access,omitempty"`
 	Outcome Outcome   `json:"outcome"`
 	Ended   time.Time `json:"ended"`
+	// Limit is the usage limit that ended the turn, nil when none did, and
+	// ResumeCancelled that the user stopped the engine continuing it once
+	// the limit resets.
+	Limit           *UsageLimit `json:"limit,omitempty"`
+	ResumeCancelled bool        `json:"resumeCancelled,omitempty"`
+}
+
+// UsageLimit is a provider's usage limit that ended a turn: Resets is when
+// the provider said it resets, zero when it didn't say.
+type UsageLimit struct {
+	Resets time.Time `json:"resets,omitzero"`
 }
 
 // Turn is a thread's live run as its view carries it: the model and
@@ -549,8 +571,11 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // version 12 reverts a thread's files, which a version 11 engine refuses
 // as an unknown command; version 13 syncs the GUI's machine's skills to
 // the engines it pairs with, which a version 12 engine would refuse as
-// unknown calls and a version 12 GUI would show as the engine's own.
-const Protocol = 13
+// unknown calls and a version 12 GUI would show as the engine's own;
+// version 14 says a usage limit ended a turn, and lets the user cancel the
+// engine's continue once it resets, which a version 13 engine refuses as an
+// unknown command.
+const Protocol = 14
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host

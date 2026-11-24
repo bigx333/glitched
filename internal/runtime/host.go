@@ -55,10 +55,15 @@ type Host struct {
 	working map[api.ID]bool
 	// autoContinue has the runs a restart cut off as they worked on the
 	// user's threads continued unasked, these and those of earlier boots.
-	autoContinue  bool
-	continued     chan struct{} // poked at each commit while continueLost runs
-	full          chan struct{} // poked as continueLost waits for a continued run to end
-	lostDone      chan struct{} // closed once continueLost has been through every run due
+	autoContinue bool
+	continued    chan struct{} // poked at each commit while continueLost runs
+	full         chan struct{} // poked as continueLost waits for a continued run to end
+	lostDone     chan struct{} // closed once continueLost has been through every run due
+	// limitResume has the engine continue a thread once the usage limit
+	// that ended its last turn resets; limits is poked at each commit
+	// that may change which thread is due.
+	limitResume   atomic.Bool
+	limits        chan struct{}
 	compactCheck  chan api.ID
 	compactRescan chan struct{}
 	compactDue    chan compactDue
@@ -190,6 +195,7 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		continued:     make(chan struct{}, 1),
 		full:          make(chan struct{}, 1),
 		lostDone:      make(chan struct{}),
+		limits:        make(chan struct{}, 1),
 		compactCheck:  make(chan api.ID, 64),
 		compactRescan: make(chan struct{}, 1),
 		compactDue:    make(chan compactDue, 64),
@@ -226,6 +232,8 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		h.wg.Add(1)
 		go h.continueLost()
 	}
+	h.wg.Add(1)
+	go h.resumeLimits()
 	return h, nil
 }
 
@@ -315,6 +323,11 @@ func (h *Host) committed(c store.Commit) {
 	select {
 	case h.continued <- struct{}{}:
 	default:
+	}
+	// A turn's end, a cancel or a thread that moves on, as a run that
+	// leaves the slot does, can change which usage limit is due.
+	if slices.ContainsFunc(c.Threads, func(t api.Thread) bool { return t.LastTurn != nil && t.LastTurn.Limit != nil || !t.Live() }) {
+		h.pokeLimits()
 	}
 	h.poke()
 }

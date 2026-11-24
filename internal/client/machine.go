@@ -84,6 +84,7 @@ func (m *Manager) Configure(change func(*daemon.Config)) error {
 	was.CompactBeforeExpire = cfg.CompactBeforeExpire
 	was.KeepAwake = cfg.KeepAwake
 	was.ProviderLog = cfg.ProviderLog
+	was.ContinueAfterLimit = cfg.ContinueAfterLimit
 	// The engine reads it as it starts, which is when it acts on it.
 	was.ContinueAfterRestart = cfg.ContinueAfterRestart
 	was.SyncSkills = cfg.SyncSkills
@@ -181,4 +182,5 @@ func applyLive(d *daemon.Daemon, cfg daemon.Config) {
 	d.SetIdleCompaction(cfg.CompactBeforeExpireEnabled())
 	d.SetKeepAwake(cfg.KeepAwakeEnabled())
 	d.SetProviderLog(cfg.ProviderLog)
+	d.SetLimitResume(cfg.ContinueAfterLimit)
 }

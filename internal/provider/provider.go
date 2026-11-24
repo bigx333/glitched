@@ -389,6 +389,9 @@ type TurnEnded struct {
 	Outcome api.Outcome
 	Error   string
 	Tokens  int64 // what the turn used, where the provider says
+	// Limit is, on a failed turn, the provider's usage limit that failed
+	// it; nil when none did or the provider can't tell.
+	Limit *api.UsageLimit
 }
 
 // Granted is the access the run's agent runs at, as its provider

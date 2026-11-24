@@ -41,7 +41,7 @@ import (
 // RENAME=<title>, ALERT=<title>, MENU=<title> (its items to
 // SHOT.menu.txt), HOVER=<text>, FAILED, PICKER=<effort>, FAST and
 // STRIKE=30ms, FULL, HOLD=500ms and GRANT=60ms, LEVEL=ask|auto, ATTACH,
-// TICK=<turn>, TINT=0..1, PANELS, SCROLLUP, SIDEBARDOWN, WIDTH=1100, AGENTS, HERO and DOCK,
+// TICK=<turn>, AUTO for limited, TINT=0..1, PANELS, SCROLLUP, SIDEBARDOWN, WIDTH=1100, AGENTS, HERO and DOCK,
 // SNOOZE=<title> for a row's snooze popover, SIDEBAR=<width>,
 // GAG=snooze|settle|undo with AT=350ms, and HIDE=60ms for a frame that
 // long into hiding the sidebar.
@@ -512,6 +512,14 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		h.tt.Advance(time.Second)
 		h.click("Edit plan.md")
 		h.diffsRead()
+	case "limited":
+		// A thread a usage limit stopped, and with AUTO, one the engine
+		// continues once the limit resets.
+		h, _, _ = limitedHarness(t, os.Getenv("AUTO") != "", "Sort sidebar threads by recent activity")
+		h.until("the composer's control", func() bool {
+			return h.tt.HasText(map[bool]string{true: "Continues at", false: "Continue"}[os.Getenv("AUTO") != ""])
+		})
+		h.tt.Advance(time.Second)
 	case "stuck":
 		// A run left uncertain, or with STEER stopping, which refuses a
 		// steer.

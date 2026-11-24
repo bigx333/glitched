@@ -154,6 +154,15 @@ type TurnEnded struct {
 	Outcome Outcome `json:"outcome"`
 	Error   string  `json:"error,omitempty"`
 	Tokens  int64   `json:"tokens,omitempty"` // what the run used, where the agent said
+	// Limit is the provider's usage limit that failed the turn, nil when
+	// none did.
+	Limit *UsageLimit `json:"limit,omitempty"`
+}
+
+// ResumeCancelled: the user stopped the engine continuing Run, which a
+// usage limit ended, once the limit resets.
+type ResumeCancelled struct {
+	Run ID `json:"run"`
 }
 
 // ContextReported is how full the run's context is, as its agent said:
@@ -488,6 +497,7 @@ func (ModelConfirmed) eventType() string      { return "model.confirmed" }
 func (CheckpointCaptured) eventType() string  { return "checkpoint.captured" }
 func (ThreadReverting) eventType() string     { return "thread.reverting" }
 func (ThreadReverted) eventType() string      { return "thread.reverted" }
+func (ResumeCancelled) eventType() string     { return "resume.cancelled" }
 
 var eventBodies = map[string]func([]byte) (EventBody, error){}
 
@@ -532,6 +542,7 @@ func init() {
 	register[CheckpointCaptured]()
 	register[ThreadReverting]()
 	register[ThreadReverted]()
+	register[ResumeCancelled]()
 }
 
 func register[B EventBody]() {

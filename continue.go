@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"slices"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -164,5 +165,70 @@ func (j continuing) live(t thread) bool {
 	return !slices.ContainsFunc(t.Pending, func(p client.Pending) bool {
 		_, refused := errors.AsType[*api.RejectedError](p.Err)
 		return p.Command == j.sent && refused
+	})
+}
+
+// limited is whether a usage limit ended t's last turn, and nothing moved
+// the thread on since: no run is live and no message was sent from here.
+func limited(t thread) bool {
+	l := t.View.LastTurn
+	return l != nil && l.Limit != nil && !t.View.Live() && !slices.ContainsFunc(t.Pending, func(p client.Pending) bool {
+		_, message := p.Body.(api.MessageDispatch)
+		return message && p.Err == nil
+	})
+}
+
+// resumesAt is when the engine continues t, a thread limited, because its
+// usage limit resets, and whether it will: only this machine's engine says
+// whether it was asked to, once its status is read.
+func (a *app) resumesAt(t thread, now time.Time) (time.Time, bool) {
+	if t.env.Kind != client.Local {
+		return time.Time{}, false
+	}
+	m := a.backend.Machine()
+	if m.Read.IsZero() {
+		a.backend.Inspect()
+	}
+	if !m.Config.ContinueAfterLimit {
+		return time.Time{}, false
+	}
+	return t.View.LimitResume(now)
+}
+
+// limitControl is, beside Send, when the engine continues a thread a usage
+// limit stopped, with the Cancel that stops it; or, where it won't, the
+// Continue that sends the agent on now.
+func (a *app) limitControl(c *ui.Context, t thread, now time.Time) {
+	at, ok := a.resumesAt(t, now)
+	if !ok {
+		tip := "The usage limit stopped the agent; continue where it left off"
+		if r := t.View.LastTurn.Limit.Resets; !r.IsZero() {
+			tip = "The usage limit stopped the agent until " + snoozeLabel(r.Local(), now) + "; continue where it left off"
+		}
+		b := a.tip(c, ui.ButtonBase(c.Key("limit-continue")).Label("Continue"), tip).
+			Height(30).Padding(0, 12).Radius(15).Center().Cursor(ui.CursorPointer).Border(1, palette.border).Margin(0, 4, 0, 0)
+		if b.Hovered() {
+			b.Background(palette.hover)
+		}
+		if b.Children(func() { ui.Text(c, "Continue").FontSize(12.5) }).Clicked() {
+			a.backend.Send(t.env, t.id(), api.LimitContinueText, api.StartNow)
+		}
+		return
+	}
+	label := "Continues at " + snoozeLabel(at.Local(), now)
+	if !at.After(now) {
+		label = "Continuing"
+	}
+	ui.Row(c).Key("limit-resume").Height(30).Padding(0, 4, 0, 12).Gap(8).Radius(15).AlignItems(ui.Center).Border(1, palette.border).Margin(0, 4, 0, 0).Shrink(0).Children(func() {
+		ui.Icon(c, icClock).FontSize(12).TextColor(palette.muted)
+		ui.Text(c, label).FontSize(12).TextColor(palette.muted)
+		x := a.tip(c, ui.ButtonBase(c.Key("limit-cancel")).Label("Cancel"), "Don't continue once the usage limit resets").
+			Height(22).Padding(0, 8).Radius(11).Center().Cursor(ui.CursorPointer)
+		if x.Hovered() {
+			x.Background(palette.hover)
+		}
+		if x.Children(func() { ui.Text(c, "Cancel").FontSize(12) }).Clicked() {
+			a.backend.CancelResume(t.env, t.id())
+		}
 	})
 }

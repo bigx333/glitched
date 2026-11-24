@@ -523,7 +523,7 @@ func TestAnOlderDatabaseUpgrades(t *testing.T) {
 			updated_at INTEGER NOT NULL, CHECK ((disposition = 1) = (until IS NOT NULL))) STRICT;
 		INSERT INTO threads_v1 SELECT id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at FROM threads;
 		DROP TABLE threads;
-		ALTER TABLE threads_v1 RENAME TO threads;` + runsV6 + runsV12 + commandsV7 + `
+		ALTER TABLE threads_v1 RENAME TO threads;` + runsV6 + runsV12 + runsV13 + commandsV7 + `
 		PRAGMA user_version = 1;`); err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +570,7 @@ func TestAnArchivedThreadUpgradesSettled(t *testing.T) {
 			disposition, until, updated_at, deleted FROM threads;
 		DROP TABLE threads;
 		ALTER TABLE threads_v3 RENAME TO threads;
-		UPDATE threads SET disposition = 3;` + runsV6 + runsV12 + commandsV7 + `
+		UPDATE threads SET disposition = 3;` + runsV6 + runsV12 + runsV13 + commandsV7 + `
 		PRAGMA user_version = 3;`); err != nil {
 		t.Fatal(err)
 	}
@@ -712,6 +712,9 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 	if version < 13 {
 		sqlText = threadsV12 + sqlText + runsV12
 	}
+	if version < 14 {
+		sqlText += runsV13
+	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
@@ -752,6 +755,13 @@ const threadsV12 = `
 
 const runsV12 = `
 	ALTER TABLE runs DROP COLUMN silent;
+`
+
+// The runs table up to version 13, before a run kept the usage limit that
+// ended it.
+const runsV13 = `
+	ALTER TABLE runs DROP COLUMN limit_resets;
+	ALTER TABLE runs DROP COLUMN resume_cancelled;
 `
 
 // The threads table up to version 9, before a thread in a worktree kept
@@ -1373,6 +1383,71 @@ func TestAVersion11DatabaseUpgradesWithWhatEachThreadsProviderConfirmed(t *testi
 	open(t, fresh).Close()
 	if got, want := tableOf(t, path, "threads"), tableOf(t, fresh, "threads"); !reflect.DeepEqual(got, want) {
 		t.Errorf("the threads table\n%+v\nwant a new database's\n%+v", got, want)
+	}
+}
+
+// A version 13 database upgrades to the runs table a new one has: its runs
+// read as no usage limit ended them, and a run that a limit ends after,
+// whether its provider said when the limit resets or not, keeps it and the
+// user's cancel across reopen.
+func TestAVersion13DatabaseUpgradesWithUsageLimits(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	base := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	if _, err := s.Submit(ctx, api.Command{
+		ID: api.NewID(), Target: thread,
+		Body: api.ThreadCreate{Workspace: "w", Title: "t", Model: api.ModelRef{Provider: "claude", Model: "claude-opus-4-6"}},
+	}, base); err != nil {
+		t.Fatal(err)
+	}
+	turn := func(limit *api.UsageLimit) api.ID {
+		t.Helper()
+		run := api.NewID()
+		if _, err := s.Submit(ctx, api.Command{ID: run, Target: thread, Body: api.MessageDispatch{Text: "go", Mode: api.StartNow}}, base); err != nil {
+			t.Fatal(err)
+		}
+		outcome := api.OutcomeCompleted
+		if limit != nil {
+			outcome = api.OutcomeFailed
+		}
+		for _, o := range []engine.Observation{engine.Started{Run: run}, engine.Ended{Run: run, Outcome: outcome, Limit: limit}} {
+			if _, err := s.Observe(ctx, thread, o, base, 0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return run
+	}
+	turn(nil)
+	s.Close()
+	downgrade(t, path, "", 13)
+
+	s = open(t, path)
+	if th := threadOf(t, s, thread); th.Runs[0].Limit != nil || th.Runs[0].ResumeCancelled {
+		t.Fatalf("an upgraded run reads %+v, want no usage limit", th.Runs[0])
+	}
+	resets := base.Add(time.Hour)
+	turn(&api.UsageLimit{})
+	turn(&api.UsageLimit{Resets: resets})
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ResumeCancel{}}, base); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	s = open(t, path)
+	th := threadOf(t, s, thread)
+	s.Close()
+	if r := th.Runs[1]; r.Limit == nil || !r.Limit.Resets.IsZero() || r.ResumeCancelled {
+		t.Errorf("after reopen the run a limit of no known reset ended reads %+v", r)
+	}
+	if r := th.Runs[2]; r.Limit == nil || !r.Limit.Resets.Equal(resets) || !r.ResumeCancelled {
+		t.Errorf("after reopen the run a limit resetting at %v ended, cancelled, reads %+v", resets, r)
+	}
+	fresh := filepath.Join(t.TempDir(), "host.db")
+	open(t, fresh).Close()
+	if got, want := tableOf(t, path, "runs"), tableOf(t, fresh, "runs"); !reflect.DeepEqual(got, want) {
+		t.Errorf("the runs table\n%+v\nwant a new database's\n%+v", got, want)
 	}
 }
 

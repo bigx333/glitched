@@ -88,6 +88,8 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 		err = d.steer(b)
 	case api.ThreadRevert:
 		err = d.revert(c.ID, b)
+	case api.ResumeCancel:
+		err = d.cancelResume()
 	default:
 		err = rejected("unknown intent")
 	}
@@ -333,8 +335,14 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	if live := d.t.Live(); !m.Replaces.IsZero() && (m.Mode != api.RestartActive || live == nil || live.ID != m.Replaces || live.State != RunUncertain) {
 		return rejected("the run this was to replace has already ended")
 	}
-	if m.Auto && (m.Replaces.IsZero() || !d.t.Parent.IsZero() || d.t.settled() || d.t.Disposition.State == api.Snoozed && d.at.Before(d.t.Disposition.Until)) {
-		return rejected("the engine continues only a run it lost, on a thread of the user's neither settled nor snoozed")
+	if m.Auto {
+		// The engine's own continue is of a run it lost, or of a turn a
+		// usage limit ended that the user didn't stop it continuing.
+		last, ended := d.t.lastTurn()
+		limited := ended && last.Limit != nil && !last.ResumeCancelled && d.t.Live() == nil
+		if m.Replaces.IsZero() && !limited || !d.t.Parent.IsZero() || d.t.settled() || d.t.Disposition.State == api.Snoozed && d.at.Before(d.t.Disposition.Until) {
+			return rejected("the engine continues only a run it lost, or a turn a usage limit ended, on a thread of the user's neither settled nor snoozed")
+		}
 	}
 	// A run left on a settled thread is the one the settle stopped, and a
 	// silent maintenance run (such as idle compaction) cannot be steered.
@@ -644,6 +652,16 @@ func (d *decision) release() error {
 // resume is the user's go-ahead after a stop. A live run holds the
 // wakes until it ends, and a resume can't wait for that: with nothing of
 // the user's held, it's refused, for them to resume once the run ends.
+// cancelResume stops the engine continuing the thread's last turn once the
+// usage limit that ended it resets.
+func (d *decision) cancelResume() error {
+	r, ok := d.t.lastTurn()
+	if !ok || r.Limit == nil || r.ResumeCancelled {
+		return rejected("no usage limit's reset is waited on")
+	}
+	return d.emit(api.ResumeCancelled{Run: r.ID})
+}
+
 func (d *decision) resume() error {
 	if d.t.Live() != nil && !d.t.holding() {
 		return rejected("the agent is still at work; resume once its run ends")
@@ -983,7 +1001,7 @@ func (d *decision) observe(o Observation) error {
 					return err
 				}
 			}
-			if err := d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error, Tokens: o.Tokens}); err != nil {
+			if err := d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error, Tokens: o.Tokens, Limit: o.Limit}); err != nil {
 				return err
 			}
 			d.checkpoint(o.Run, api.CheckpointRun)
