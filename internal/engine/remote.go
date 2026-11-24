@@ -113,6 +113,12 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 				}
 			}
 			r.Slot, r.Pending = api.RunIdle, nil
+		case api.ResumeCancelled:
+			if r.Ended != nil && r.Ended.Run == b.Run {
+				end := *r.Ended
+				end.ResumeCancelled = true
+				r.Ended = &end
+			}
 		case api.MessageQueued:
 			// The create's first message is the origin's, though a log
 			// before it was so named has it unnamed.

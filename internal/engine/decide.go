@@ -916,7 +916,7 @@ func (d *decision) settle() error {
 	if m := d.t.next(); m != nil {
 		return d.admit(m.ID)
 	}
-	if (d.t.stopped() || d.t.Origin != nil && d.t.Origin.Quiet) && !d.resumed {
+	if d.t.stopped() && !d.resumed {
 		return nil
 	}
 	if i := index(d.t.Queue, Message.waking); i >= 0 {
@@ -957,10 +957,15 @@ func (d *decision) interrupt(drop bool) error {
 	case r == nil && !drop && d.t.Origin != nil:
 		// A stop of a link's thread with nothing running holds what
 		// waits, as its first message before its worktree is made or
-		// while its access is over the cap, and goes quiet: its wakes
-		// wait for the next message, as a stopped run's do.
-		if err := d.emit(api.StopAsked{By: d.by}); err != nil {
-			return err
+		// while its access is over the cap, and stops its last run, so
+		// its wakes wait as a stopped run's do.
+		for i := len(d.t.Runs) - 1; i >= 0; i-- {
+			if r := d.t.Runs[i]; !r.Silent {
+				if err := d.emit(api.StopAsked{Run: r.ID, By: d.by}); err != nil {
+					return err
+				}
+				break
+			}
 		}
 		return d.hold()
 	case r == nil:

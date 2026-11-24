@@ -180,17 +180,13 @@ func apply(t Thread, e Event) (Thread, error) {
 		}
 		t.Deleted = true
 	case api.StopAsked:
-		if o := t.Origin; o != nil && b.Run.IsZero() {
-			c := *o
-			c.Quiet = true
-			t.Origin = &c
+		// A stop asked of a run that had ended takes at once: the run
+		// is a stopped one, whose wakes wait.
+		if i := t.runAt(b.Run); i >= 0 && t.Runs[i].State == RunFinished {
+			t.Runs = slices.Clone(t.Runs)
+			t.Runs[i].Signalled = true
 		}
 	case api.MessageQueued:
-		if o := t.Origin; o != nil && o.Quiet && b.Report.IsZero() {
-			c := *o
-			c.Quiet = false
-			t.Origin = &c
-		}
 		silent = b.Silent
 		state := QueueReady
 		if b.Held {
@@ -248,11 +244,6 @@ func apply(t Thread, e Event) (Thread, error) {
 	case api.TurnAdmitted:
 		if err = runEdges.check("run", t.slot(), RunStarting); err != nil {
 			break
-		}
-		if o := t.Origin; o != nil && o.Quiet {
-			c := *o
-			c.Quiet = false
-			t.Origin = &c
 		}
 		if err = t.claim(b.Run, b.Run); err != nil {
 			break

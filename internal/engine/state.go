@@ -134,9 +134,6 @@ type Origin struct {
 	api.Origin
 	Making bool `json:"making,omitempty"`
 	Fence  int  `json:"fence,omitempty"`
-	// Quiet is a stop of the thread with nothing running: its wakes wait
-	// for a message, as a stopped run's do.
-	Quiet bool `json:"quiet,omitempty"`
 }
 
 // tried is whether the placeholder's create may have reached its
