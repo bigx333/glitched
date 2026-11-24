@@ -68,9 +68,10 @@ func TestAPairedEngineTakesOnlySoundSkills(t *testing.T) {
 			sum := sha256.Sum256(f.Data)
 			m.Skills[0].Files = append(m.Skills[0].Files, api.SkillFile{Path: f.Path, Mode: f.Mode, Size: int64(len(f.Data)), SHA256: hex.EncodeToString(sum[:])})
 		}
-		m.Set = strings.Repeat("0", 32)
-		if got, err := c.SyncSkills(ctx, api.SkillSync{Source: laptop, Name: "laptop", Manifest: m}); err == nil {
-			t.Errorf("the engine took a set where %s: %+v", why, got)
+		set := sha256.Sum256([]byte(p.Name + "\x00" + p.Tree + "\n"))
+		m.Set = hex.EncodeToString(set[:16])
+		if got, err := c.SyncSkills(ctx, api.SkillSync{Source: laptop, Name: "laptop", Manifest: m}); err == nil || !strings.Contains(err.Error(), why) {
+			t.Errorf("a set of %s was answered %+v, %v, want that it %s", p.Name, got, err, why)
 		}
 	}
 	after, err := c.Skills(ctx, api.SkillQuery{Thread: thread})

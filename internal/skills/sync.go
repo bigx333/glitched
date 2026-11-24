@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -55,7 +57,17 @@ func (o Origin) synced() api.SkillsSynced {
 const (
 	setHashLen  = 32
 	treeHashLen = 64
+	// maxSetBytes and maxSetFiles bound a synced set, so its manifest
+	// stays well within one message.
+	maxSetBytes = 256 << 20
+	maxSetFiles = 20000
+	// staleAfter is how long a put tree waits for a sync to take it.
+	staleAfter = time.Hour
 )
+
+// waitingLimit is how many bytes the trees put for syncs to come may hold
+// in all: a set's worth.
+var waitingLimit = maxSetBytes
 
 func isHash(s string, n int) bool {
 	if len(s) != n {
@@ -175,10 +187,13 @@ func (s *Store) dir(elem ...string) string {
 }
 
 // Put keeps the files of the skill p.Name for a set to come, once they
-// prove to be the tree p.Tree. A tree it holds already stays as it is.
+// prove to be the tree p.Tree and this machine's filesystem holds them as
+// they are. A tree it holds already stays as it is. Trees no sync takes
+// within staleAfter go, and all it keeps waiting stay within maxSetBytes.
 func (s *Store) Put(p api.SkillPut) error {
 	files := make([]entry, len(p.Files))
 	var md []byte
+	size := 0
 	for i, c := range p.Files {
 		exec, err := parseMode(c.Mode)
 		if err != nil {
@@ -186,6 +201,7 @@ func (s *Store) Put(p api.SkillPut) error {
 		}
 		sum := sha256.Sum256(c.Data)
 		files[i] = entry{rel: c.Path, exec: exec, size: len(c.Data), sum: hex.EncodeToString(sum[:])}
+		size += len(c.Data)
 		if c.Path == "SKILL.md" {
 			md = c.Data
 		}
@@ -202,9 +218,14 @@ func (s *Store) Put(p api.SkillPut) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.collect(time.Now())
 	to := s.dir("incoming", p.Tree)
 	if _, err := os.Lstat(to); err == nil {
-		return nil
+		now := time.Now()
+		return os.Chtimes(to, now, now)
+	}
+	if s.waiting()+size > waitingLimit {
+		return fmt.Errorf("skills: the engine already holds %d MiB of skills no sync has taken yet", waitingLimit>>20)
 	}
 	if err := os.MkdirAll(s.dir("incoming"), 0o700); err != nil {
 		return err
@@ -216,6 +237,10 @@ func (s *Store) Put(p api.SkillPut) error {
 	if err := writeTree(tmp, p.Files); err != nil {
 		os.RemoveAll(tmp)
 		return err
+	}
+	if err := copyFiles(tmp, "", files); err != nil {
+		os.RemoveAll(tmp)
+		return fmt.Errorf("skills: %s: this machine's filesystem doesn't hold it as sent, as where two paths differ only in case: %w", p.Name, err)
 	}
 	return os.Rename(tmp, to)
 }
@@ -234,15 +259,84 @@ func writeTree(dir string, files []api.SkillContent) error {
 				return err
 			}
 		}
-		mode := os.FileMode(0o444)
-		if c.Mode == "755" {
-			mode = 0o555
-		}
-		if err := root.WriteFile(p, c.Data, mode); err != nil {
+		if err := root.WriteFile(p, c.Data, fileMode(c.Mode == "755")); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func fileMode(exec bool) os.FileMode {
+	if exec {
+		return 0o555
+	}
+	return 0o444
+}
+
+// copyFiles copies the skill in dir to a new folder to, read-only, or
+// only checks it where to is "", unless its files aren't files by path,
+// size and sha256. Their modes are files', not the folder's, as a
+// filesystem such as Windows' keeps no mode to run a file.
+func copyFiles(dir, to string, files []entry) error {
+	folder, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	want := map[string]entry{}
+	for _, f := range files {
+		want[f.rel] = f
+	}
+	seen := 0
+	_, err = walk(dir, folder, func(rel string, _ bool, data []byte) error {
+		f, ok := want[rel]
+		sum := sha256.Sum256(data)
+		if !ok || f.size != len(data) || f.sum != hex.EncodeToString(sum[:]) {
+			return fmt.Errorf("%s isn't the file it was sent as", rel)
+		}
+		seen++
+		if to == "" {
+			return nil
+		}
+		p := filepath.Join(to, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(p, data, fileMode(f.exec))
+	})
+	if err == nil && seen != len(files) {
+		err = fmt.Errorf("it holds %d of the %d files it was sent with", seen, len(files))
+	}
+	return err
+}
+
+// collect deletes what no sync will take: a temporary folder a crash left,
+// as none is in use while s.mu is held, and a tree put before now less
+// staleAfter. s.mu must be held.
+func (s *Store) collect(now time.Time) {
+	for _, d := range []string{"sets", "incoming"} {
+		entries, _ := os.ReadDir(s.dir(d))
+		for _, e := range entries {
+			info, err := e.Info()
+			if strings.HasPrefix(e.Name(), ".tmp-") || d == "incoming" && (err != nil || now.Sub(info.ModTime()) > staleAfter) {
+				os.RemoveAll(s.dir(d, e.Name()))
+			}
+		}
+	}
+}
+
+// waiting is how many bytes the trees put for a sync to come hold. s.mu
+// must be held.
+func (s *Store) waiting() int {
+	n := 0
+	filepath.WalkDir(s.dir("incoming"), func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			if info, err := d.Info(); err == nil {
+				n += int(info.Size())
+			}
+		}
+		return nil
+	})
+	return n
 }
 
 // Sync takes q's skills as the ones synced from q.Source's machine, the
@@ -253,11 +347,13 @@ func (s *Store) Sync(q api.SkillSync, now time.Time) (api.SkillsSynced, error) {
 	if q.Source.IsZero() {
 		return api.SkillsSynced{}, errors.New("skills: a sync names no machine")
 	}
-	if err := checkManifest(q.Manifest); err != nil {
+	trees, err := checkManifest(q.Manifest)
+	if err != nil {
 		return api.SkillsSynced{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.collect(time.Now())
 	cur, held := readOrigin(s.state)
 	if _, err := os.Lstat(s.dir("sets", cur.Set)); err != nil {
 		held = false
@@ -292,12 +388,8 @@ func (s *Store) Sync(q api.SkillSync, now time.Time) (api.SkillsSynced, error) {
 		return api.SkillsSynced{}, err
 	}
 	next := Origin{Source: q.Source, Name: q.Name, Set: q.Manifest.Set, Trees: map[string]string{}, Pulled: now}
-	for _, t := range q.Manifest.Skills {
-		fi, err := os.Stat(from[t.Name])
-		if err == nil {
-			err = copyTree(from[t.Name], fi, filepath.Join(tmp, t.Name), t.Tree)
-		}
-		if err != nil {
+	for i, t := range q.Manifest.Skills {
+		if err := copyFiles(from[t.Name], filepath.Join(tmp, t.Name), trees[i]); err != nil {
 			os.RemoveAll(tmp)
 			return api.SkillsSynced{}, fmt.Errorf("skills: %s: %w", t.Name, err)
 		}
@@ -318,7 +410,9 @@ func (s *Store) Sync(q api.SkillSync, now time.Time) (api.SkillsSynced, error) {
 			os.RemoveAll(s.dir("sets", e.Name()))
 		}
 	}
-	os.RemoveAll(s.dir("incoming"))
+	for _, t := range q.Manifest.Skills {
+		os.RemoveAll(s.dir("incoming", t.Tree))
+	}
 	return next.synced(), nil
 }
 
@@ -344,36 +438,43 @@ func parseMode(m string) (bool, error) {
 }
 
 // checkManifest is whether m is a set of skills that holds to the limits
-// and whose hashes are its own.
-func checkManifest(m api.SkillManifest) error {
+// and whose hashes are its own, and each skill's files.
+func checkManifest(m api.SkillManifest) ([][]entry, error) {
 	if len(m.Skills) > maxSkills {
-		return fmt.Errorf("skills: a set of %d skills, past %d", len(m.Skills), maxSkills)
+		return nil, fmt.Errorf("skills: a set of %d skills, past %d", len(m.Skills), maxSkills)
 	}
 	names := map[string]bool{}
-	for _, t := range m.Skills {
+	trees := make([][]entry, len(m.Skills))
+	count, size := 0, 0
+	for i, t := range m.Skills {
 		if names[t.Name] {
-			return fmt.Errorf("skills: %s comes twice", t.Name)
+			return nil, fmt.Errorf("skills: %s comes twice", t.Name)
 		}
 		names[t.Name] = true
 		files := make([]entry, len(t.Files))
-		for i, f := range t.Files {
+		for j, f := range t.Files {
 			exec, err := parseMode(f.Mode)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			if f.Size < 0 || f.Size > maxBytes || !isHash(f.SHA256, treeHashLen) {
-				return fmt.Errorf("skills: %s: %s has no size or sha256 a file can have", t.Name, f.Path)
+			if f.Size < 0 || f.Size > math.MaxInt32 || !isHash(f.SHA256, treeHashLen) {
+				return nil, fmt.Errorf("skills: %s: %s has no size or sha256 a file can have", t.Name, f.Path)
 			}
-			files[i] = entry{rel: f.Path, exec: exec, size: int(f.Size), sum: f.SHA256}
+			files[j] = entry{rel: f.Path, exec: exec, size: int(f.Size), sum: f.SHA256}
+			size += int(f.Size)
 		}
 		if err := checkTree(t.Name, t.Tree, files); err != nil {
-			return err
+			return nil, err
 		}
+		if count += len(files); count > maxSetFiles || size > maxSetBytes {
+			return nil, fmt.Errorf("skills: the set holds more than %d files or %d MiB in all", maxSetFiles, maxSetBytes>>20)
+		}
+		trees[i] = files
 	}
 	if !isHash(m.Set, setHashLen) || setHash(m.Skills) != m.Set {
-		return errors.New("skills: the set's skills don't hash to its set")
+		return nil, errors.New("skills: the set's skills don't hash to its set")
 	}
-	return nil
+	return trees, nil
 }
 
 // checkTree is whether files can be the tree of the skill name in a
