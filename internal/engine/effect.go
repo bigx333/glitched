@@ -88,9 +88,12 @@ type RemoteStop struct {
 }
 
 // RemoteSend sends a placeholder's child a message on its machine,
-// Engine through Link, as Command.
+// Engine through Link, as Command. Settles is how many times the
+// placeholder was settled before it: a settle since cancels it, as a
+// local settle cancels what waits.
 type RemoteSend struct {
 	Engine, Link api.ID
+	Settles      int `json:",omitempty"`
 	Command      api.Command
 }
 
@@ -198,7 +201,10 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 	case RemoteStop:
 		// The child there may run whatever became of its placeholder.
 		return true, nil
-	case RemoteSend, RemoteConfigure:
+	case RemoteSend:
+		r := t.Remote
+		return r != nil && !t.Deleted && r.State != RemoteLostState && !t.settled() && r.Settles == e.Settles, nil
+	case RemoteConfigure:
 		r := t.Remote
 		return r != nil && !t.Deleted && r.State != RemoteLostState && (r.State != RemoteCreating || !t.settled()), nil
 	case ReportToParent:
@@ -484,6 +490,7 @@ type RemoteSeen struct {
 	Slot    api.RunState
 	Pending []api.ID
 	Taken   bool
+	Ended   *api.Outcome
 	Reports []RemoteReport
 	On      string
 }

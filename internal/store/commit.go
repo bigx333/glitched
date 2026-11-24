@@ -119,7 +119,13 @@ func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, chec
 			// thread its child came from on that machine: this engine's
 			// person who took the child over has it.
 			if o := t.Origin; o != nil && c.Caller.Thread == o.Thread && c.Caller.Run.IsZero() {
-				if userLast {
+				_, settles := c.Body.(api.InboxSet)
+				switch {
+				case settles && userLast:
+					// A settle is taken from the link whoever has the
+					// thread, and leaves its person's takeover theirs.
+					c.Caller = nil
+				case userLast:
 					return nil, nil, &api.RejectedError{Reason: "the person on this machine took this thread over: its last message or stop was theirs, so it's theirs to steer"}
 				}
 			} else {
@@ -161,7 +167,7 @@ func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, chec
 		for _, id := range below {
 			// An agent's stop of a tree leaves the threads the user took
 			// over, and the runs only the user can end, to the user.
-			if c.Caller != nil {
+			if _, stops := c.Body.(api.TurnInterrupt); stops && c.Caller != nil {
 				theirs, err := steeredByUser(ctx, q, id)
 				if err != nil {
 					return nil, err
@@ -172,6 +178,9 @@ func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, chec
 			}
 			steps = append(steps, step{id, func(q querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
 				if r := t.Live(); c.Caller != nil && r != nil && r.State == engine.RunUncertain {
+					return nil, nil, nil
+				}
+				if _, stops := c.Body.(api.TurnInterrupt); stops && c.Caller != nil && t.Remote != nil && t.Remote.Taken {
 					return nil, nil, nil
 				}
 				body := engine.Below(c.Body, t)
@@ -225,8 +234,9 @@ func (s *Store) CheckFork(ctx context.Context, b api.ThreadCreate) (*api.Forked,
 func steeredByUser(ctx context.Context, q querier, thread api.ID) (bool, error) {
 	var by sql.NullString
 	err := q.QueryRowContext(ctx, `SELECT json_extract(payload, '$.by') FROM events WHERE thread = ?
-		AND (type = 'stop.asked' OR type = 'message.queued' AND json_extract(payload, '$.report') IS NULL AND json_extract(payload, '$.silent') IS NULL)
-		ORDER BY seq DESC LIMIT 1`, thread[:]).Scan(&by)
+		AND (type = 'stop.asked' OR type = 'message.queued' AND json_extract(payload, '$.report') IS NULL AND json_extract(payload, '$.silent') IS NULL
+			AND NOT (EXISTS (SELECT 1 FROM threads WHERE id = ? AND origin IS NOT NULL) AND seq = (SELECT MIN(seq) FROM events WHERE thread = ? AND type = 'message.queued')))
+		ORDER BY seq DESC LIMIT 1`, thread[:], thread[:], thread[:]).Scan(&by)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

@@ -130,6 +130,9 @@ type ThreadCreate struct {
 	// branch.
 	Origin     *Origin     `json:"origin,omitempty"`
 	Repository *Repository `json:"repository,omitempty"`
+	// Settled is a link's create of a thread its machine settled before
+	// this engine took it: the thread is made settled, and starts nothing.
+	Settled bool `json:"settled,omitempty"`
 }
 
 // Fork asks for a thread that goes on from Run, a finished turn of
@@ -640,8 +643,9 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // 17 engine refuses or drops; version 19 undoes a rewind, conversation and
 // all, which a version 18 engine refuses as a rewind to a recovery
 // checkpoint, and a version 18 GUI would show with the turns it brings back
-// still forgotten.
-const Protocol = 19
+// still forgotten; version 20 takes a link's create of a thread settled
+// on its machine first, which a version 19 engine would start.
+const Protocol = 20
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host
