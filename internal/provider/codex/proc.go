@@ -400,7 +400,8 @@ func (p *proc) startThread(ctx context.Context, spec provider.SessionSpec) (lost
 
 // fork forks the Codex thread session in cwd through its turn head,
 // inclusive, and returns the fork's id, once thread/turns/list shows the
-// fork ends at head: a Codex that ignores lastTurnId forks it whole.
+// fork ends at head: a Codex that ignores lastTurnId forks it whole. It
+// fails with provider.ErrNoConversation where Codex no longer has session.
 func (p *proc) fork(ctx context.Context, cwd, session, head string) (string, error) {
 	var r struct {
 		Thread struct {
@@ -408,6 +409,9 @@ func (p *proc) fork(ctx context.Context, cwd, session, head string) (string, err
 		} `json:"thread"`
 	}
 	if err := p.conn.call(ctx, "thread/fork", map[string]any{"threadId": session, "lastTurnId": head, "cwd": cwd, "excludeTurns": true}, &r); err != nil {
+		if re := (*rpcError)(nil); errors.As(err, &re) && strings.Contains(re.Message, "no rollout found") {
+			return "", fmt.Errorf("%w: %s", provider.ErrNoConversation, re.Message)
+		}
 		return "", p.failure("fork the conversation", err)
 	}
 	if r.Thread.ID == "" || r.Thread.ID == session {

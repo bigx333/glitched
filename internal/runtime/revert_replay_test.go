@@ -164,15 +164,9 @@ func TestADeletedThreadsPendingRevertHoldsNoStart(t *testing.T) {
 	}
 	next := api.NewID()
 	submit(t, n.h, next, api.ThreadCreate{Workspace: r.ws, Title: "after deletion", Model: api.ModelRef{Provider: "fake", Model: "fake"}, Text: "start"})
-	for deadline := time.Now().Add(time.Second); ; time.Sleep(2 * time.Millisecond) {
-		th := view(t, n.h, next)
-		if th.LastTurn != nil && idle(th) {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("revert is drained but new thread is %v, waiting=%t", th.Run, runtime.Waiting(n.h, next))
-		}
-	}
+	until(t, n.h, next, "the new thread's start to go once the revert drained", func(th api.Thread) bool {
+		return th.Run == api.RunRunning || th.LastTurn != nil
+	})
 }
 
 // A start in a folder around the one being reverted waits, and so does

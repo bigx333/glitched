@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -188,5 +189,17 @@ func TestAStartCodexNeverGotFails(t *testing.T) {
 	}
 	if n := len(sent(t, log, "turn/start")); n != 2 {
 		t.Fatalf("Codex got %d turn/start; want the two earlier runs'", n)
+	}
+}
+
+// A rewind of a conversation Codex no longer has fails as one no branch
+// of can be made, which the host can tell from a fork that failed.
+func TestARewindOfAConversationCodexLostSaysSo(t *testing.T) {
+	a, log, spec, original, heads := twoRuns(t, "memory")
+	if err := os.Remove(filepath.Join(filepath.Dir(log), "rollout-"+original)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rewind(a, spec, heads[0], heads[1]); !errors.Is(err, provider.ErrNoConversation) {
+		t.Fatalf("rewind of a lost conversation: %v, want provider.ErrNoConversation", err)
 	}
 }

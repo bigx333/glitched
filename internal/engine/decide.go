@@ -1153,8 +1153,9 @@ func (d *decision) delete(b api.ThreadDelete) error {
 // folder another thread works in before this commits.
 //
 // A conversation rewinds to the end of a run with a turn of the user's
-// after it: the base has no turn before it, and a recovery checkpoint is
-// files a revert put back, not a point in the conversation.
+// after it, as the base has no turn before it; to a recovery checkpoint it
+// undoes the rewind that took it, which the runtime finds and checks is
+// the thread's last.
 func (d *decision) revert(id api.ID, b api.ThreadRevert) error {
 	switch {
 	case !b.Files && !b.Conversation:
@@ -1185,12 +1186,10 @@ func (d *decision) revert(id api.ID, b api.ThreadRevert) error {
 		return rejected("unknown checkpoint")
 	}
 	var dropped []api.ID
-	if b.Conversation {
+	if b.Conversation && b.To.Phase != api.CheckpointRecovery {
 		switch {
 		case b.To.Phase == api.CheckpointBase:
 			return rejected("Nothing comes before the thread's first turn to rewind its conversation to")
-		case b.To.Phase == api.CheckpointRecovery:
-			return rejected("A conversation rewinds to a turn, not to the files a revert put back")
 		case d.t.Runs[d.t.runAt(b.To.ID)].Dropped:
 			return rejected("A rewind took this turn out of the conversation")
 		}

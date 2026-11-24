@@ -111,3 +111,53 @@ func TestATurnsChipRewindsTheConversation(t *testing.T) {
 		})
 	}
 }
+
+// Undo on a rewind's row brings back the conversation as it was before
+// it, and the files where the rewind took them back too; until then the
+// turn it took out reads as forgotten. The rewind's alert says once that
+// the files as they are are saved first, and the undo's own row says
+// before the click that its Undo puts back the files only.
+func TestUndoAfterARewindBringsBackTheConversation(t *testing.T) {
+	for _, files := range []bool{false, true} {
+		t.Run(map[bool]string{false: "leaving the files", true: "with the files"}[files], func(t *testing.T) {
+			h, _, notes := twoTurnsInAWorktree(t, nil)
+			h.click("No file changes")
+			h.tt.Advance(time.Second)
+			item, row, back := "Rewind conversation to here", "Rewound the conversation", "Brought back the conversation"
+			if files {
+				item, row, back = "Rewind conversation and files to here", "Rewound the conversation and restored 1 file", "Brought back the conversation and put back 1 file"
+			}
+			if err := h.tt.ChooseMenuItem(item); err != nil {
+				t.Fatal(err)
+			}
+			h.tt.Advance(time.Second)
+			saved := map[bool]int{false: 0, true: 1}[files]
+			if n := strings.Count(strings.Join(h.tt.Texts(), "\n"), "The files as they are now are saved first"); n != saved {
+				t.Fatalf("the alert says the files are saved first %d times, want %d", n, saved)
+			}
+			if n := strings.Count(strings.Join(h.tt.Texts(), "\n"), "Files created since then, by the agent or by hand, are removed; Undo brings them back."); n != saved {
+				t.Fatalf("the alert says files created since are removed %d times, want %d", n, saved)
+			}
+			h.click("Rewind")
+			h.until("the row saying so", func() bool { h.tt.Frame(); return h.tt.HasText(row) })
+			if !h.tt.HasText(forgottenNote) {
+				t.Fatal("the turn the rewind took out doesn't read as forgotten")
+			}
+			if h.tt.HasText("Undo files only") {
+				t.Fatal("the rewind's Undo says it puts back the files only")
+			}
+			h.tt.Advance(time.Second)
+			h.click("Undo")
+			h.until("the undo's row", func() bool { h.tt.Frame(); return h.tt.HasText(back) })
+			if h.tt.HasText(forgottenNote) {
+				t.Fatal("the turn the undo brought back still reads as forgotten")
+			}
+			if b, err := os.ReadFile(notes); files && (err != nil || string(b) != "mine\n") {
+				t.Fatalf("notes.txt %q, %v after the undo; want it back", b, err)
+			}
+			if got := h.tt.HasText("Undo files only"); got != files {
+				t.Fatalf("the undo's row offers to put back the files only: %v, want %v", got, files)
+			}
+		})
+	}
+}

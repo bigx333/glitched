@@ -249,7 +249,9 @@ type ThreadRename struct {
 // revert to it undoes; only a thread in a worktree of its own keeps them.
 // Conversation rewinds the thread's conversation to the end of To's run,
 // so that its next turn follows that run's, and the runs after it are no
-// longer its agent's to remember. Only a thread of the user's reverts,
+// longer its agent's to remember; to a recovery checkpoint, it undoes the
+// rewind that took it, files and all, while that is the thread's latest
+// revert and no turn came after it. Only a thread of the user's reverts,
 // with no run of its tree live.
 type ThreadRevert struct {
 	To           CheckpointRef `json:"to"`
@@ -622,8 +624,11 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // child on another machine, which a version 16 GUI would show as a child
 // here with an empty transcript; version 18 takes a child from another
 // machine's link, whose create, worktree events and child.reply a version
-// 17 engine refuses or drops.
-const Protocol = 18
+// 17 engine refuses or drops; version 19 undoes a rewind, conversation and
+// all, which a version 18 engine refuses as a rewind to a recovery
+// checkpoint, and a version 18 GUI would show with the turns it brings back
+// still forgotten.
+const Protocol = 19
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host

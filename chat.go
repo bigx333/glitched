@@ -879,11 +879,17 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 		a.forkDivider(c, t, rs.es[i])
 		return
 	}
-	m := timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil, At: e.at}
+	m := timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: noteOf(t, e), Failed: e.failed.Err != nil, At: e.at}
 	acted := false
 	a.pluginComponent(c, "timeline.message", &t, componentCopy{
-		key:     e.key,
-		box:     func() ui.Element { return ui.Column(c).Key(e.key).Transition(riseIn) },
+		key: e.key,
+		box: func() ui.Element {
+			box := ui.Column(c).Key(e.key).Transition(riseIn)
+			if forgotten(t, e) {
+				box = box.Opacity(forgottenOpacity)
+			}
+			return box
+		},
 		context: func(plugins.ThreadRecord) any { return m },
 		native:  func(body *widget.Node) { acted = a.transcriptBody(c, t, rs, i, body) },
 		retry: func() {
@@ -990,7 +996,8 @@ func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body *widg
 			ui.Spacer(c)
 			ui.Column(c).AlignItems(ui.End).Gap(6).MaxWidthPercent(80).Children(func() {
 				words().Padding(10, 14).Radius(16, 16, 4, 16).Background(palette.surface).Border(1, palette.border)
-				if e.note != "" {
+				if note := noteOf(t, e); note != "" {
+					e.note = note
 					a.messageNote(c, t, e)
 				}
 			})
@@ -1006,6 +1013,9 @@ func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body *widg
 				md = markdown.Stream(c, e.text, &a.md)
 			} else {
 				md = markdown.View(c, e.text, &a.md)
+			}
+			if forgotten(t, e) {
+				md.TextColor(palette.faint)
 			}
 			a.followSelection(c, t, e.key, e.text, col, md)
 			a.messageActions(c, t, rs.es, i, col.Hovered() && !e.streaming)
@@ -1029,8 +1039,32 @@ func (a *app) transcriptBody(c *ui.Context, t thread, rs rows, i int, body *widg
 	return e.kind == entryUser || e.kind == entryAssistant
 }
 
+// forgottenNote is under a message whose turn a rewind took out of the
+// agent's conversation, and forgottenOpacity how faint that turn's rows
+// are, so that they read as what the agent no longer has, while they stay
+// in the timeline.
+const (
+	forgottenNote    = "Forgotten: a rewind took this turn out of the agent's conversation"
+	forgottenOpacity = 0.5
+)
+
+// forgotten is whether e is a message, a reply or the work of a turn a
+// rewind took out of t's conversation.
+func forgotten(t thread, e entry) bool {
+	return t.Transcript != nil && !e.run.IsZero() && t.Transcript.Dropped(e.run)
+}
+
+// noteOf is what shows under e, a message: its own note, or that a rewind
+// made the agent forget its turn.
+func noteOf(t thread, e entry) string {
+	if e.note == "" && e.kind == entryUser && forgotten(t, e) {
+		return forgottenNote
+	}
+	return e.note
+}
+
 // messageNote is under a message that hasn't simply been sent: queued,
-// cancelled, or not sent.
+// cancelled, or not sent, or forgotten.
 func (a *app) messageNote(c *ui.Context, t thread, e entry) {
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 		col := palette.faint

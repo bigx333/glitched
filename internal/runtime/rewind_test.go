@@ -926,3 +926,35 @@ func TestAStopAfterTheSendKeepsTheHandoffTaken(t *testing.T) {
 	}
 	assertReplay(t, r.n.st)
 }
+
+// A replay refuses a file the user saved while the host was down, whether
+// they made it or edited one the revert is to put back, and either way it
+// tells them to revert again, from the files as they are now.
+func TestAReplayRefusalSaysToRevertAgain(t *testing.T) {
+	for _, tc := range []struct{ name, path, text string }{
+		{"a new file", "downtime.txt", "written while the host was down\n"},
+		{"an edited one", "README", "edited while the host was down\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path, dir := dbPath(t), tempDir(t)
+			held := &forkHeld{rewinder: newRewinder(provider.Rewind{}, nil, false), entered: make(chan struct{})}
+			r := twoTurnsWith(t, path, dir, repo(t), held)
+			submit(t, r.n.h, r.thread, api.ThreadRevert{To: runCheckpoint(r.first), Files: true, Conversation: true})
+			select {
+			case <-held.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the rewind never ran")
+			}
+			r.n.kill()
+			write(t, filepath.Join(r.ws, tc.path), tc.text)
+			n := serveCheckpoints(t, path, dir, newRewinder(provider.Rewind{}, nil, false))
+			got := untilReverted(t, n.h, r.thread, 1)
+			if got.Status != api.RevertFailed || !strings.Contains(got.Error, tc.path) || !strings.HasSuffix(got.Error, "; revert again to start from the files as they are now") {
+				t.Fatalf("reverted %+v; want it refused, naming %s, saying to revert again", got, tc.path)
+			}
+			if text := read(t, filepath.Join(r.ws, tc.path)); text != tc.text {
+				t.Fatalf("%s %q after the refused replay", tc.path, text)
+			}
+		})
+	}
+}
