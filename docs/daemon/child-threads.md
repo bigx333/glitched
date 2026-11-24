@@ -163,7 +163,7 @@ A child on another machine starts as a placeholder here (design: the captain's r
 
 - `api.ThreadCreate.Remote` names a machine by its label in `machines.json` (`daemon.Machines`). The daemon has the store read the file at each remote create, in its commit (`Store.SetPlaces`), so a machine removed takes no more, and takes each machine's engine and link ids, never its token. A file that can't be read, or holds a machine without its label, server, engine or link, refuses only remote creates and is logged once. `store.Submit` runs `CheckChild` as for any child, and decide refuses a label not in the list.
 - The placeholder is a child with `Remote` set (`api.ThreadCreated.Remote`, `engine.Thread.Remote`, `threads.remote`, schema 16) and no run, ever: its task is for the other machine, so nothing queues it here. `threads.origin` is the other machine's side and stays null.
-- Decide takes a placeholder in its own branch for every intent. Settle, delete, rename and configure go as for a child, so settling or deleting the tree takes it in the one commit. A message or a stop is refused until it can reach the machine. A stop of the tree passes it by (`engine.Below` is nil).
+- Decide takes a placeholder in its own branch for every intent, and it never admits a run here. Settling or deleting the tree takes it in the one commit; what reaches the other machine is in "Remote children (stopped, settled and sent)".
 - `kidsOf` counts a placeholder that is creating as at work.
 - `Host.Submit` refuses a remote create whose task or title holds any value of the parent's vault, literally and whatever its length, before anything is stored. It commits under the lock a worktree create holds, so a local create of the same thread that is making its worktree commits first.
 - Protocol 17: a version 16 GUI would show a placeholder as a child here with an empty transcript.
@@ -197,7 +197,21 @@ The parent's engine creates a placeholder's child on its machine and follows it 
 - The placeholder's `thread.created` holds its task (`Text`), so a `delegate_task` retry in a later turn finds it.
 - The link's token stays in `machines.json` and the dialer: never in the store, a log, an effect or an agent's environment.
 - No wire change between engines beyond protocol 18; the `remote.*` events are this engine's own, and a version 18 client decodes them as unknown and skips them. Protocol stays 18, schema 16.
-- Not yet: a stop, message, settle, delete or configure toward the other machine, and answering its questions from here.
+- Not yet: answering its questions from here.
+
+## Remote children (stopped, settled and sent)
+
+What the parent's engine is asked of a placeholder reaches its child on the other machine as an effect in the placeholder's lane, holding the command that machine is sent, frozen at the commit (design: the captain's remote-children handoff, PR 6). Each command id derives from the placeholder's command, the placeholder and what it is, so two placeholders one tree commit takes send two commands, and the other machine dedupes each by its id. The tree commit stays one transaction here; the other machine catches up through the outbox.
+
+- A settle or a delete sends `remote.stop` with a settle: the child there is settled and keeps its transcript. A placeholder whose create was never tried sends nothing. One tried but not bound sends its create first (`remote.attempted` holds it), so a create in flight can't land after the stop; a link create admits nothing in its own commit, so the cleanup starts no turn there. A placeholder settled before its machine took it stays settled and takes no message.
+- A stop (`task_cancel`, or a stop of a tree it is in) sends `remote.stop` with a stop of the child's tree there. A message (`task_send`) sends `remote.send`, after the run there or into it, and queues nothing here; a message to a settled placeholder brings it back to the inbox, as one to a local child does. A configure that narrows sends `remote.configure`. A message to a lost child is refused; a stop still goes.
+- `remote.stop` is due on a deleted or lost placeholder too, and ends with the effect's completion once the machine answers. `remote.send` and `remote.configure` are not due once the placeholder is deleted, lost, or settled before its machine took it. `remote.create` is not due once the placeholder is settled or deleted: a settle or a delete also ends the tries of its create, message or narrowing (`Host.stopReaching`), so the stop has the lane next. All four are replay-safe.
+- Every try goes through `runtime.classify`, as a create's does. The other machine's refusal of the command (a run uncertain there, its person's takeover) is logged and ends it. A child lost on the way is lost here, saying the command didn't reach it. A revoke blocks the stop: the child is lost saying what runs there is its person's to stop by hand.
+- On the other machine a link's message and stop are the origin thread's agent's (`api.Caller` with the origin's thread and no run): the person there who sent its last message or asked its last stop took it over, and both are refused from then on, as an agent's are for a child the user took over. The link's create's first message is the origin's too. A settle and a narrowing are not refused. The placeholder's follower sees the takeover (`remote.seen` `Taken`), and the placeholder refuses an agent's message or stop at once.
+- A parent answers no question and approves nothing of a remote child: the placeholder refuses an answer, and the link sends none.
+- `Host.Submit` refuses a message to a placeholder that holds a value of its parent's vault.
+- A placeholder's view has `Remote` (`api.Placement`) and its child's run as last heard. A read adds the machine's label and when its follower last heard from it, which `task_status` gives as `on`: "on b, last heard at ...". None of the task tools dials the other machine.
+- No wire change between engines: the link already took a message, a stop, a settle and a narrowing. `api.Thread.Remote`, `remote.attempted`'s `Create` and `remote.seen`'s `Taken` are additive fields a client of the same protocol ignores.
 
 ## Not done
 
