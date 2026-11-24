@@ -176,7 +176,7 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 	if !t.id().IsZero() && a.followsCLI {
 		own += " · the CLI's default model"
 	}
-	b := a.tip(c, ghost(c, "model", a.pickerOpen).Padding(4, 8, 4, 4).Gap(6).Label("Model"), tipOf(p, own))
+	b := a.tip(c, ghost(c, "model", a.pickerOpen).Padding(4, 8, 4, 4).Gap(6).Label("Model").Shrink(1).MinWidth(0), tipOf(p, own))
 	if b.Children(func() {
 		a.unconfirmedMark(c, p)
 		a.pickerGlow(c, b, effort)
@@ -186,14 +186,14 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 		a.pluginComponent(c, "composer.model", &t, componentCopy{
 			key: composerKey(t) + "/button",
 			box: func() ui.Element {
-				return ui.Row(c).Key("component:composer.model/button").Gap(6).AlignItems(ui.Center)
+				return ui.Row(c).Key("component:composer.model/button").Gap(6).AlignItems(ui.Center).Shrink(1).MinWidth(0)
 			},
 			native: func(*widget.Node) {
 				name, runs := a.runningModel(t, m.name)
 				modelTile(c, m.icon, m.color, 18)
-				ui.Text(c, name).FontSize(12).SingleLine()
+				ui.Text(c, name).FontSize(12).SingleLine().Shrink(1).MinWidth(0)
 				if !a.cliEffort(t) && runs.label != "" {
-					ui.Text(c, runs.label).FontSize(11).FontWeight(600).TextColor(runs.color)
+					ui.Text(c, runs.label).FontSize(11).FontWeight(600).TextColor(runs.color).Shrink(0)
 				}
 				if a.fast {
 					a.zapIcon(c, "trigger-zap", 12)

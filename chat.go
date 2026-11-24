@@ -1561,7 +1561,7 @@ func (a *app) composerInput(c *ui.Context, t thread, rs rows, fullW, frameW floa
 				Translate(0, 6*(1-in)), in).Children(func() {
 				a.threadControls(t, func() { a.composerControls(c, t) })
 				ui.Spacer(c)
-				if t.local() && a.iconButton(c, "attach", icPaperclip, "Attach files", false).Clicked() {
+				if t.local() && a.iconButton(c, "attach", icPaperclip, "Attach files", false).Shrink(0).Clicked() {
 					a.pickFiles()
 				}
 				a.sendControl(c, t, !ahead)
@@ -1712,7 +1712,7 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 	if working {
 		label = "Stop"
 	}
-	send := ui.ButtonBase(c.Key("send")).Label(label).Size(30, 30).Radius(15).Center().
+	send := ui.ButtonBase(c.Key("send")).Label(label).Size(30, 30).Radius(15).Center().Shrink(0).
 		Cursor(ui.CursorPointer).Disabled(empty && !working)
 	bg := palette.text
 	if empty && !working {
