@@ -142,6 +142,17 @@ func (s *Store) CheckChild(ctx context.Context, b api.ThreadCreate) error {
 	return engine.CheckChild(line, kids, lim, b)
 }
 
+// CheckFork is where b, a create with a Fork, goes on from, checked
+// against its source as it is now, as the create's own commit will again:
+// what a host checks before it does work for the create.
+func (s *Store) CheckFork(ctx context.Context, b api.ThreadCreate) (*api.Forked, error) {
+	src, err := loadThread(ctx, s.db, b.Fork.Thread)
+	if err != nil {
+		return nil, err
+	}
+	return engine.CheckFork(src, b)
+}
+
 // steeredByUser is whether the user sent thread's last message or asked
 // its last stop: one no agent sent, a child's report that wakes it and
 // the engine's own stops aside.

@@ -132,12 +132,12 @@ func messageToolbarRow(m messageToolbar) *widget.Node {
 		&widget.Node{Type: "native", ID: "copy", Name: "message.copy"},
 		&widget.Node{Type: "native", ID: "edit", Name: "message.edit"},
 		&widget.Node{Type: "native", ID: "retry", Name: "message.retry"},
-		&widget.Node{Type: "native", ID: "fork", Name: "message.fork"},
 	)
 	for i := range m.Items {
 		index, _ := json.Marshal(i)
 		row.Children = append(row.Children, &widget.Node{Type: "native", ID: "item-" + string(index), Name: "message.item", Props: map[string]json.RawMessage{"index": index}})
 	}
+	row.Children = append(row.Children, &widget.Node{Type: "native", ID: "fork", Name: "message.fork"})
 	if m.Role != "user" {
 		row.Children = append(row.Children, stamp)
 	}

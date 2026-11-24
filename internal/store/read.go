@@ -113,14 +113,22 @@ func (s *Store) Rewound(ctx context.Context, thread api.ID) (*api.ThreadReverted
 	return &r, nil
 }
 
-// Forked is where thread, a fork, goes on from, while none of its runs
-// has taken up the conversation it forks; nil for any other thread, and
-// for a fork once one has.
+// Origin is where thread, a fork, goes on from; nil for any other thread.
+func (s *Store) Origin(ctx context.Context, thread api.ID) (*api.Forked, error) {
+	return s.origin(ctx, thread, false)
+}
+
+// Forked is Origin while none of the fork's runs has taken up the
+// conversation it forks; nil once one has.
 func (s *Store) Forked(ctx context.Context, thread api.ID) (*api.Forked, error) {
+	return s.origin(ctx, thread, true)
+}
+
+func (s *Store) origin(ctx context.Context, thread api.ID, pending bool) (*api.Forked, error) {
 	var fork []byte
 	err := s.db.QueryRowContext(ctx, `SELECT json_extract(payload, '$.fork') FROM events WHERE thread = ? AND type = ? AND json_extract(payload, '$.fork') IS NOT NULL
-		AND NOT EXISTS (SELECT 1 FROM events WHERE thread = ? AND type = ? AND json_extract(payload, '$.rewound') IS NOT NULL)`,
-		thread[:], api.EventType(api.ThreadCreated{}), thread[:], api.EventType(api.SessionBound{})).Scan(&fork)
+		AND NOT (? AND EXISTS (SELECT 1 FROM events WHERE thread = ? AND type = ? AND json_extract(payload, '$.rewound') IS NOT NULL))`,
+		thread[:], api.EventType(api.ThreadCreated{}), pending, thread[:], api.EventType(api.SessionBound{})).Scan(&fork)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

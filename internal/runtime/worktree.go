@@ -139,6 +139,11 @@ func (h *Host) createInWorktree(ctx context.Context, c api.Command, b api.Thread
 	}
 	dry := b
 	dry.Worktree, dry.Project, dry.Branch = nil, project, "glitched/dry"
+	if b.Fork != nil {
+		if dry.Forked, err = h.store.CheckFork(ctx, b); err != nil {
+			return api.Receipt{}, err
+		}
+	}
 	if _, _, err := engine.Decide(target, api.Command{ID: c.ID, Target: c.Target, Revision: c.Revision, Expires: c.Expires, Body: dry}, time.Now()); err != nil {
 		return api.Receipt{}, err
 	}
