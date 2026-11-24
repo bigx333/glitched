@@ -269,3 +269,54 @@ func TestALinksCeilingHoldsTheThreadsUnderItsThread(t *testing.T) {
 		t.Fatalf("the child under a revoked link's thread: %+v; want its message waiting and no run", th)
 	}
 }
+
+// A restore's rewind decides with the link's ceiling too: a child's report
+// waiting on an idle thread under a revoked link's thread starts no turn
+// when the rewind cancels what the person queued there.
+func TestARewindAdmitsNoWakeUnderARevokedLinksThread(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, filepath.Join(t.TempDir(), "host.db"))
+	l := &links{}
+	link := api.Link{ID: api.NewID(), Label: "a", Access: api.AccessAutoEdits}
+	l.set(link)
+	s.SetLinks(l.find)
+	c := linkCreate(link.ID, api.AccessAutoEdits, 1)
+	if _, err := s.Submit(ctx, c, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, c.Target, engine.WorktreeReady{Workspace: "/wt/x", Branch: "glitched/x"}, time.Now(), leaseMake(t, s, c.Target)); err != nil {
+		t.Fatal(err)
+	}
+	observe := func(thread api.ID, o engine.Observation) {
+		t.Helper()
+		if _, err := s.Observe(ctx, thread, o, time.Now(), 0); err != nil {
+			t.Fatalf("%T: %v", o, err)
+		}
+	}
+	top := threadOf(t, s, c.Target).Live().ID
+	observe(c.Target, engine.Started{Run: top})
+	kid := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: kid, Body: api.ThreadCreate{
+		Workspace: "/wt/x", Title: "kid", Model: api.ModelRef{Provider: "fake", Model: "m"}, Access: api.AccessAsk, Parent: c.Target, Run: top, Text: "go",
+	}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	run := threadOf(t, s, kid).Live().ID
+	observe(kid, engine.Started{Run: run})
+	observe(kid, engine.Ended{Run: run, Outcome: api.OutcomeCompleted})
+
+	l.revoke(link.ID)
+	observe(kid, engine.Reported{Report: api.ChildReported{Child: api.NewID(), Run: api.NewID(), Kind: api.ReportDone, Title: "grandkid"}, Reply: "done"})
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: "later", Mode: api.Defer}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if th := threadOf(t, s, kid); th.Live() != nil {
+		t.Fatalf("the child under a revoked link's thread started a turn before the rewind: %+v", th)
+	}
+	if err := s.Rewind(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if th := sameAsFold(t, s, kid, "after the rewind"); th.Live() != nil {
+		t.Fatalf("the rewind started a turn on a child under a revoked link's thread: %+v", th.Live())
+	}
+}
