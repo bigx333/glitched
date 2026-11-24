@@ -229,7 +229,7 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 			send(response{ID: req.ID, Error: &wireError{Code: "bad_request", Message: unknownMethod + " or id in use: " + req.Method}})
 			continue
 		}
-		callCtx, stop := context.WithCancel(ctx)
+		callCtx, stop := context.WithCancel(api.WithArrival(ctx, arrivals.Add(1)))
 		o = &op{stop: stop, acked: make(chan struct{}, 1), send: func(f response) {
 			f.ID = req.ID
 			send(f)
@@ -303,6 +303,10 @@ func writeMessage(ctx context.Context, ws *websocket.Conn, b []byte) error {
 // keepalive is how often a socket pings its peer and how late a pong may be
 // before the socket is dropped.
 type keepalive struct{ every, within time.Duration }
+
+// arrivals counts the calls every server in this process has read, for
+// api.Arrival.
+var arrivals atomic.Uint64
 
 var defaultKeepalive = keepalive{every: 15 * time.Second, within: 10 * time.Second}
 

@@ -1,6 +1,9 @@
 package api
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // SkillQuery asks the engine of Thread's machine for the skills Glitched
 // gives its agent.
@@ -109,4 +112,20 @@ type SkillContent struct {
 // SkillDrop has an engine drop the skills it holds from Source's machine.
 type SkillDrop struct {
 	Source ID `json:"source"`
+}
+
+type arrivalKey struct{}
+
+// WithArrival is ctx for a call its engine's server read n-th since the
+// engine started, counting every socket: of two calls one machine sent,
+// the later read came later.
+func WithArrival(ctx context.Context, n uint64) context.Context {
+	return context.WithValue(ctx, arrivalKey{}, n)
+}
+
+// Arrival is n of WithArrival for ctx's call, 0 for one no server read,
+// as one in the engine's own process.
+func Arrival(ctx context.Context) uint64 {
+	n, _ := ctx.Value(arrivalKey{}).(uint64)
+	return n
 }
