@@ -223,3 +223,45 @@ func TestAnAgentThatSpeaksBeforeItsPromptIsNotReused(t *testing.T) {
 		t.Fatalf("the agent that spoke before its prompt was reused: %d", pid)
 	}
 }
+
+// A stop while the prompt still goes to an agent that stopped reading
+// ends the start at once, as it ends the write: the agent never took the
+// prompt, so the start fails, and its close stops the agent.
+func TestAStopEndsAStartTheAgentStoppedReading(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "wire")
+	t.Setenv(wireEnv, out)
+	a := wireFake(t, "deaf")
+	g := open(t, a, spec(t))
+	pid := g.(*Agent).p.cmd.Process.Pid
+	t.Cleanup(func() { g.Close(context.Background()) })
+	ctx, stop := context.WithCancel(t.Context())
+	started := make(chan error, 1)
+	go func() { started <- g.Do(ctx, provider.Start{Text: strings.Repeat("x", 1<<20)}) }()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		if data, _ := os.ReadFile(out); strings.Contains(string(data), `"session/prompt"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the prompt's write never began")
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case err := <-started:
+		t.Fatalf("Start ended %v before the stop, with the agent not reading", err)
+	default:
+	}
+	stop()
+	select {
+	case err := <-started:
+		if err == nil {
+			t.Fatal("Start returned nil for a prompt the agent never read")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a stopped Start still waits on a prompt the agent doesn't read")
+	}
+	closeRun(t, g)
+	if alive(pid) {
+		t.Fatalf("the agent %d that never took the prompt still runs after its close", pid)
+	}
+}

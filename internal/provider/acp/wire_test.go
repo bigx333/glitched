@@ -88,6 +88,9 @@ func runWireFake(mode string) {
 				return
 			}
 			re(req.ID, map[string]any{"sessionId": "ours", "configOptions": options("a")})
+			if mode == "deaf" {
+				time.Sleep(time.Hour)
+			}
 		case "session/set_mode":
 			if mode == "mode-updates-before-reply" {
 				var change struct {
