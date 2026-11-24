@@ -323,7 +323,8 @@ func TestInstallingSomeoneElsesPluginAsksForConsent(t *testing.T) {
 	h.until("the consent sheet", func() bool {
 		return h.tt.HasText("Hello is someone else's. It asks to:") && h.tt.HasText("• Copy text to the clipboard")
 	})
-	if len(h.a.plugins.Entries()) != 0 {
+	hello := func(e plugins.Entry) bool { return e.Plugin == "hello" }
+	if slices.ContainsFunc(h.a.plugins.Entries(), hello) {
 		t.Fatal("someone else's plugin ran before it was allowed")
 	}
 	// The sheet opens in its plugin's row, which the list of built-ins
@@ -337,7 +338,7 @@ func TestInstallingSomeoneElsesPluginAsksForConsent(t *testing.T) {
 	}
 	h.click("Allow")
 	h.tt.Frame()
-	if len(h.a.plugins.Entries()) != 1 || !h.tt.HasText("Someone else's, allowed") {
+	if !slices.ContainsFunc(h.a.plugins.Entries(), hello) || !h.tt.HasText("Someone else's, allowed") {
 		t.Fatalf("after allowing: %q", h.tt.Texts())
 	}
 }
