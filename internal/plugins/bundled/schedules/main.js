@@ -311,21 +311,22 @@ function projectName(projects, workspace) {
 // --- The page ---------------------------------------------------------------
 
 const text = (t, more) => ({ type: "text", text: t, ...more });
-const small = (t) => text(t, { fontSize: 12, style: "muted" });
+const small = (t) => text(t, { fontSize: 12, style: "muted", singleLine: true });
 
 // row is a schedule's, as Settings › Servers lays out a server's: its
-// texts in a column that takes the room left, then its controls.
+// texts in a column that takes the room left, cut short to one line each
+// where it is narrow, then its controls.
 function row(state, s) {
   const next = !s.enabled ? "Off" : s.nextDue ? "Next run " + clock(Date.parse(s.nextDue), s.zone) : "Not due";
   const lines = [
-    text(s.title, { weight: 500 }),
+    text(s.title, { weight: 500, singleLine: true }),
     small(s.project + " · " + when(s)),
     small(next + " · " + last(s)),
   ];
   if (state.notes[s.id]) lines.push(text(state.notes[s.id], { fontSize: 12, style: "error", selectable: true }));
   const controls = [];
   if (s.lastThread) {
-    controls.push({ type: "button", id: "open:" + s.id, label: "Open thread", tooltip: "The newest thread its runs started",
+    controls.push({ type: "button", id: "open:" + s.id, style: "ghost", icon: "square-share-line", label: "Open thread", tooltip: "Open thread",
       onClick: { handler: "open", payload: { thread: s.lastThread } } });
   }
   controls.push(
