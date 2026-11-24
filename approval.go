@@ -292,14 +292,9 @@ func (a *app) inView(c *ui.Context, t thread, request api.ID) (ui.Element, *ui.S
 	}
 	texts := ui.Scroll(c).Key("texts").TrackScroll(st)
 	if a.paneAt.H > 0 {
-		// cardRoom holds one line of answers: as tall as its tallest
-		// button, over the row's padding under it. A row that wrapped
-		// takes its lines past the first from the texts.
-		room := float32(cardRoom)
-		if at := a.answerAt; at.request == request {
-			room += max(0, at.row.H-max(at.allow.H, at.always.H, at.session.H, at.deny.H)-12)
-		}
-		texts.MaxHeight(max(cardTextsMin, a.paneAt.H-composerRoom-a.agentsRoom(t)-room))
+		// cardRoom holds one line of answers; a row that wrapped takes
+		// its lines past the first from the texts.
+		texts.MaxHeight(max(cardTextsMin, a.paneAt.H-composerRoom-a.agentsRoom(t)-cardRoom-a.drew[request].wrapped))
 	}
 	return texts, st
 }
@@ -317,10 +312,12 @@ func markBelow(c *ui.Context, below int) {
 // sight is where the last frame drew a waiting card: its header, the card,
 // the first line of what runs (requestCard's lead) or of the questions,
 // and its texts' box, which clips that once scrolled, with where they are
-// scrolled. A question card's texts are the card, which scrolls nothing.
+// scrolled; and how much taller than one line its answers wrapped. A
+// question card's texts are the card, which scrolls nothing.
 type sight struct {
 	header, card, lead, texts ui.Rect
 	scroll                    *ui.ScrollState
+	wrapped                   float32
 }
 
 // shownText is a text a waiting card shows, by its key, and where the last
@@ -665,6 +662,12 @@ func (a *app) requestAnswers(c *ui.Context, t thread, r *client.RequestEntry) {
 	}
 	allow, always, session, deny, row, labels := a.answerButtons(c, t, r)
 	a.answerAt = answerRow{r.Request, row.Bounds(), allow.Bounds(), always.Bounds(), session.Bounds(), deny.Bounds(), labels}
+	if s, ok := a.drawn[r.Request]; ok {
+		// One line is as tall as the tallest button, over the row's
+		// padding under it.
+		s.wrapped = max(0, row.Bounds().H-max(allow.Bounds().H, always.Bounds().H, session.Bounds().H, deny.Bounds().H)-12)
+		a.drawn[r.Request] = s
+	}
 	began := a.pressBegan(r.Request, allow.Pressed() || always.Valid() && always.Pressed() || session.Valid() && session.Pressed() || deny.Pressed())
 	if allow.Clicked() {
 		a.press(c, t, a.rowsOf(t).es, r, client.AllowOnce, began, false)
