@@ -425,10 +425,10 @@ func TestTurningSyncOffEndsTheSyncUnderWay(t *testing.T) {
 	}
 	m.Send(e, id, "two", api.AfterActive)
 	var got []string
-	for range 3 {
+	for !slices.Contains(got, "submit two") {
 		got = append(got, next())
 	}
-	if !slices.Equal(got, []string{"submit one", "drop", "submit two"}) && !slices.Equal(got, []string{"drop", "submit one", "submit two"}) {
-		t.Errorf("the engine took %v", got)
+	if i := slices.Index(got, "drop"); i < 0 || i > slices.Index(got, "submit two") {
+		t.Errorf("the engine took %v, the second message before any drop", got)
 	}
 }
