@@ -158,7 +158,8 @@ type Peer interface {
 
 // Push syncs the skills of the machine with state in stateDir, whose engine
 // is source, named name, to peer: it offers the set, gives the trees peer
-// says it lacks, and offers the set again.
+// says it lacks, and offers the set again, till peer lacks none or
+// pushRounds rounds have gone.
 func Push(ctx context.Context, stateDir string, source api.ID, name string, peer Peer) (api.SkillsSynced, error) {
 	e, err := Exported(stateDir)
 	if err != nil {
@@ -166,26 +167,31 @@ func Push(ctx context.Context, stateDir string, source api.ID, name string, peer
 	}
 	q := api.SkillSync{Source: source, Name: name, Manifest: e.Manifest}
 	got, err := peer.SyncSkills(ctx, q)
-	if err != nil || len(got.Missing) == 0 {
-		return got, err
-	}
-	for _, t := range e.Manifest.Skills {
-		if !slices.Contains(got.Missing, t.Tree) {
-			continue
+	for round := 0; err == nil && len(got.Missing) > 0; round++ {
+		if round == pushRounds {
+			return got, fmt.Errorf("skills: the engine still lacks %d of the skills", len(got.Missing))
 		}
-		files, err := e.Files(t.Name)
-		if err != nil {
-			return got, err
+		for _, t := range e.Manifest.Skills {
+			if !slices.Contains(got.Missing, t.Tree) {
+				continue
+			}
+			files, err := e.Files(t.Name)
+			if err != nil {
+				return got, err
+			}
+			if err := peer.PutSkill(ctx, api.SkillPut{Name: t.Name, Tree: t.Tree, Files: files}); err != nil {
+				return got, err
+			}
 		}
-		if err := peer.PutSkill(ctx, api.SkillPut{Name: t.Name, Tree: t.Tree, Files: files}); err != nil {
-			return got, err
-		}
-	}
-	if got, err = peer.SyncSkills(ctx, q); err == nil && len(got.Missing) > 0 {
-		err = fmt.Errorf("skills: the engine still lacks %d of the skills", len(got.Missing))
+		got, err = peer.SyncSkills(ctx, q)
 	}
 	return got, err
 }
+
+// pushRounds is how many times Push gives the trees an engine lacks: one
+// it held as Push began can go before Push's offer is whole, as another
+// machine's sync replaces the set that held it.
+const pushRounds = 3
 
 // A Store keeps the skills another machine's GUI syncs to this engine, in
 // <stateDir>/skills-synced. Everything it is given is checked: names,
@@ -200,13 +206,14 @@ type Store struct {
 	// puts: a sync of another machine's set that takes one leaves it for
 	// this machine's next offer.
 	wanted map[api.ID][]string
-	// dropped is, by machine, the Arrival of its last drop: a sync of its
-	// that arrived before then takes nothing.
-	dropped map[api.ID]uint64
+	// applied is, by machine, the Arrival of the last of its syncs and
+	// drops the store took: one of its that arrived before then takes
+	// nothing.
+	applied map[api.ID]uint64
 }
 
 func NewStore(stateDir string) *Store {
-	return &Store{state: stateDir, reading: map[string]int{}, wanted: map[api.ID][]string{}, dropped: map[api.ID]uint64{}}
+	return &Store{state: stateDir, reading: map[string]int{}, wanted: map[api.ID][]string{}, applied: map[api.ID]uint64{}}
 }
 
 // Find is Find for the engine whose state s keeps, holding the synced set
@@ -233,14 +240,15 @@ func (s *Store) Find(workspace, project string) (set Set, done func()) {
 }
 
 // admit is whether a call of ctx from source's machine, which arrived at
-// arrived, may still change what s holds: not once ctx ended, nor after a
-// drop of source's skills that arrived after it. s.mu must be held.
+// arrived, may still change what s holds: not once ctx ended, nor after s
+// took a sync or drop of source's that arrived after it. s.mu must be
+// held.
 func (s *Store) admit(ctx context.Context, source api.ID, arrived uint64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if s.dropped[source] > arrived {
-		return errors.New("skills: a drop of this machine's skills came after this sync")
+	if s.applied[source] > arrived {
+		return errors.New("skills: this machine's skills changed on the engine since this call")
 	}
 	return nil
 }
@@ -294,7 +302,14 @@ func (s *Store) Put(ctx context.Context, p api.SkillPut) error {
 		now := time.Now()
 		return os.Chtimes(to, now, now)
 	}
-	if bytes, _, _ := s.waiting(); bytes+size > waitingLimit {
+	dirs := map[string]bool{}
+	for _, c := range p.Files {
+		for d := path.Dir(c.Path); d != "."; d = path.Dir(d) {
+			dirs[d] = true
+		}
+	}
+	cost := size + (len(p.Files)+len(dirs)+1)*objectCost
+	if bytes, waiting, trees := s.waiting(); bytes+cost > waitingLimit || waiting+len(p.Files) > maxSetFiles || trees >= maxSkills {
 		return errWaiting
 	}
 	if err := os.MkdirAll(s.dir("incoming"), 0o700); err != nil {
@@ -311,10 +326,6 @@ func (s *Store) Put(ctx context.Context, p api.SkillPut) error {
 	if err := copyFiles(tmp, "", files); err != nil {
 		os.RemoveAll(tmp)
 		return fmt.Errorf("skills: %s: this machine's filesystem doesn't hold it as sent, as where two paths differ only in case: %w", p.Name, err)
-	}
-	if bytes, files, trees := s.waiting(); bytes > waitingLimit || files > maxSetFiles || trees > maxSkills {
-		os.RemoveAll(tmp)
-		return errWaiting
 	}
 	return os.Rename(tmp, to)
 }
@@ -393,10 +404,10 @@ func copyFiles(dir, to string, files []entry) error {
 func (s *Store) collect(now time.Time) {
 	var cur Origin
 	known := jsonfile.Load(originPath(s.state), &cur) == nil
-	pointers, _ := filepath.Glob(originPath(s.state) + ".[0-9]*")
-	for _, p := range pointers {
-		if strings.Trim(filepath.Ext(p), ".0123456789") == "" {
-			os.Remove(p)
+	entries, _ := os.ReadDir(s.dir())
+	for _, e := range entries {
+		if n, ok := strings.CutPrefix(e.Name(), "current.json."); ok && n != "" && strings.Trim(n, "0123456789") == "" {
+			os.Remove(s.dir(e.Name()))
 		}
 	}
 	sets, _ := os.ReadDir(s.dir("sets"))
@@ -474,6 +485,7 @@ func (s *Store) Sync(ctx context.Context, q api.SkillSync, now time.Time) (api.S
 		if err := s.admit(ctx, q.Source, arrived); err != nil {
 			return api.SkillsSynced{}, err
 		}
+		s.applied[q.Source] = arrived
 		cur.Source, cur.Name, cur.Pulled = q.Source, q.Name, now
 		return cur.synced(), jsonfile.Write(originPath(s.state), cur)
 	}
@@ -491,6 +503,9 @@ func (s *Store) Sync(ctx context.Context, q api.SkillSync, now time.Time) (api.S
 		}
 	}
 	if len(missing) > 0 {
+		if err := s.admit(ctx, q.Source, arrived); err != nil {
+			return api.SkillsSynced{}, err
+		}
 		s.wanted[q.Source] = nil
 		for _, t := range q.Manifest.Skills {
 			s.wanted[q.Source] = append(s.wanted[q.Source], t.Tree)
@@ -527,6 +542,7 @@ func (s *Store) Sync(ctx context.Context, q api.SkillSync, now time.Time) (api.S
 	if err := jsonfile.Write(originPath(s.state), next); err != nil {
 		return api.SkillsSynced{}, err
 	}
+	s.applied[q.Source] = arrived
 	delete(s.wanted, q.Source)
 	for _, t := range q.Manifest.Skills {
 		if !s.wants(t.Tree) {
@@ -538,20 +554,23 @@ func (s *Store) Sync(ctx context.Context, q api.SkillSync, now time.Time) (api.S
 }
 
 // Drop deletes the skills synced from source's machine, and keeps another
-// machine's. A sync of source's that arrived before it takes nothing.
+// machine's. A sync of source's that arrived before it takes nothing, and
+// it takes nothing once ctx ended or after a sync of source's that arrived
+// after it.
 func (s *Store) Drop(ctx context.Context, source api.ID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.dropped[source] = max(s.dropped[source], api.Arrival(ctx))
+	arrived := api.Arrival(ctx)
+	if err := s.admit(ctx, source, arrived); err != nil {
+		return err
+	}
+	s.applied[source] = arrived
 	delete(s.wanted, source)
+	defer s.collect(time.Now())
 	if cur, ok := readOrigin(s.state); !ok || cur.Source != source {
 		return nil
 	}
-	if err := os.Remove(originPath(s.state)); err != nil {
-		return err
-	}
-	s.collect(time.Now())
-	return nil
+	return os.Remove(originPath(s.state))
 }
 
 func parseMode(m string) (bool, error) {

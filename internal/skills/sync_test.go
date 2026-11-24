@@ -606,4 +606,112 @@ func TestADropSupersedesASyncThatArrivedBeforeIt(t *testing.T) {
 	if got, err := store.Sync(at(4), offer(source, p), time.Now()); err != nil || len(got.Missing) != 0 || Find(node, "", "").Synced == nil {
 		t.Fatalf("a sync that arrived after the drop answered %+v, %v", got, err)
 	}
+	if err := store.Drop(at(3), source); err == nil || Find(node, "", "").Synced == nil {
+		t.Fatalf("a drop that arrived before the sync it reached after answered %v and left %+v", err, Find(node, "", "").Synced)
+	}
+	older := put("older")
+	if err := store.Put(t.Context(), older); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Sync(at(3), offer(source, older), time.Now()); err == nil || Find(node, "", "").Synced.Set != offer(source, p).Manifest.Set {
+		t.Fatalf("a sync that arrived before the one the store took answered %v and left %+v", err, Find(node, "", "").Synced)
+	}
+}
+
+// racer is a Store as a GUI reaches the engine that keeps it, and, after
+// its first put, another machine's sync replacing the set the engine held.
+type racer struct {
+	storePeer
+	other func()
+}
+
+func (p racer) PutSkill(ctx context.Context, q api.SkillPut) error {
+	defer func() {
+		if p.other != nil {
+			p.other()
+		}
+	}()
+	return p.storePeer.PutSkill(ctx, q)
+}
+
+// A push whose offer the engine had half of gives what another machine's
+// sync took from it meanwhile, and its offer is whole.
+func TestAPushGivesATreeAnotherSyncTookMeanwhile(t *testing.T) {
+	src, _ := folders(t)
+	node, _ := folders(t)
+	skill(t, filepath.Join(src, "skills"), "shared", "Both have it.")
+	source := api.NewID()
+	push(t, src, node, source, "Source", time.Now())
+	skill(t, filepath.Join(src, "skills"), "added", "Only the source.")
+	s := NewStore(node)
+	var puts []string
+	other := func() {
+		p := put("theirs")
+		if err := s.Put(t.Context(), p); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.Sync(t.Context(), offer(api.NewID(), p), time.Now()); err != nil || len(got.Missing) != 0 {
+			t.Fatalf("the other machine's sync answered %+v, %v", got, err)
+		}
+	}
+	peer := racer{storePeer{s, time.Now(), &puts}, other}
+	if _, err := Push(t.Context(), src, source, "Source", &peer); err != nil {
+		t.Fatalf("the push failed: %v, after putting %v", err, puts)
+	}
+	if got := names(Find(node, "", "").Skills); !slices.Equal(got, []string{"synced:added", "synced:shared"}) {
+		t.Errorf("the node finds %v", got)
+	}
+}
+
+// A skills folder that is a link to nothing is one that can't be read: the
+// push fails and the node keeps its set.
+func TestASkillsFolderLinkedToNothingKeepsTheNodesSet(t *testing.T) {
+	src, work := folders(t)
+	node, _ := folders(t)
+	source := api.NewID()
+	target := filepath.Join(work, "mine")
+	skill(t, target, "one", "Kept elsewhere.")
+	link(t, target, filepath.Join(src, "skills"))
+	push(t, src, node, source, "Source", time.Now())
+	if err := os.Rename(target, target+".away"); err != nil {
+		t.Fatal(err)
+	}
+	var puts []string
+	if _, err := Push(t.Context(), src, source, "Source", storePeer{NewStore(node), time.Now(), &puts}); err == nil {
+		t.Error("a push of a skills folder linked to nothing succeeded")
+	}
+	if got := names(Find(node, "", "").Skills); !slices.Equal(got, []string{"synced:one"}) {
+		t.Errorf("the node finds %v", got)
+	}
+}
+
+// A drop of a machine whose set isn't held still collects what no one
+// reads, under a state folder whose path holds glob characters too.
+func TestADropOfAnotherMachineCollects(t *testing.T) {
+	node := filepath.Join(t.TempDir(), "[state]")
+	if err := os.MkdirAll(node, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s := NewStore(node)
+	p := put("one")
+	if err := s.Put(t.Context(), p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Sync(t.Context(), offer(api.NewID(), p), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	orphan := s.dir("sets", strings.Repeat("0", setHashLen))
+	write(t, filepath.Join(orphan, "x"), "x")
+	write(t, originPath(node)+".42", "{}")
+	if err := s.Drop(t.Context(), api.NewID()); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{orphan, originPath(node) + ".42"} {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("%s stays: %v", p, err)
+		}
+	}
+	if Find(node, "", "").Synced == nil {
+		t.Error("another machine's drop took the set")
+	}
 }

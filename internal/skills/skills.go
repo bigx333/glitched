@@ -165,11 +165,11 @@ func (f *finder) projectRoot(workspace, project string) (base, dir string) {
 }
 
 // root reads the skills in dir, which a project's may not lead out of
-// base. A dir that isn't there holds none; one it can't read is an error,
-// besides a Skipped.
+// base. A dir that isn't there holds none; one it can't read, a link to
+// nothing included, is an error, besides a Skipped.
 func (f *finder) root(src Source, dir, base string) ([]Skill, error) {
 	rd, err := filepath.EvalSymlinks(dir)
-	if errors.Is(err, fs.ErrNotExist) {
+	if _, lerr := os.Lstat(dir); errors.Is(err, fs.ErrNotExist) && lerr != nil {
 		return nil, nil
 	}
 	shown := f.shown(src, dir, base)
