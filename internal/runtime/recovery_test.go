@@ -107,7 +107,11 @@ func TestCrashWithALeasedEffect(t *testing.T) {
 			respond(t, n.h, thread, until(t, n.h, thread, "approval", waiting).Requests[0])
 		})
 		n := start(t, path, g)
-		until(t, n.h, thread, "turn end", idle)
+		// The agent can finish its turn before the call that answered it
+		// returns, so the answer's delivery may land after the turn's end.
+		until(t, n.h, thread, "turn end and the answer's delivery", func(th api.Thread) bool {
+			return idle(th) && count(events(t, n.h, thread), "request.delivered") > 0
+		})
 		evs := events(t, n.h, thread)
 		if got := outcomes(t, n.h, thread); len(got) != 1 || got[0] != api.OutcomeCompleted || count(evs, "request.delivered") != 1 || g.count(provider.Respond{}) != 1 {
 			t.Fatalf("turn ended %v with %d request.delivered after %d answers reached the agent, want completed, 1 and 1",
