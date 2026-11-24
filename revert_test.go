@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,5 +91,25 @@ func TestAThreadOutsideAWorktreeSaysWhyItCantRevert(t *testing.T) {
 	}
 	if !h.tt.HasText("Revert needs this thread to run in its own worktree") {
 		t.Errorf("the menu doesn't say why")
+	}
+}
+
+// This machine shows how much the checkpoint store holds of its cap, once
+// a thread's turns saved their files there.
+func TestThisMachineShowsTheCheckpointStore(t *testing.T) {
+	h, _, _ := twoTurnsInAWorktree(t)
+	h.click("Settings")
+	h.click("This machine")
+	var got string
+	h.until("the store's size", func() bool {
+		h.tt.Advance(inspectEvery)
+		i := slices.IndexFunc(h.tt.Texts(), func(s string) bool { return strings.HasSuffix(s, " of 2.0 GB") })
+		if i >= 0 {
+			got = h.tt.Texts()[i]
+		}
+		return i >= 0 && !strings.HasPrefix(got, "0 B ")
+	})
+	if !h.tt.HasText("CHECKPOINTS") {
+		t.Errorf("the store's size %q shows with no Checkpoints card", got)
 	}
 }

@@ -419,9 +419,10 @@ func (s *Store) Closing(ctx context.Context) ([]api.ID, error) {
 	return ids(ctx, s.db, `SELECT DISTINCT thread FROM effects WHERE kind = ? AND state <> 'done' ORDER BY thread`, engine.EffectKind(engine.CloseAgent{}))
 }
 
-// Reverting lists threads with a revert of their files not done.
+// Reverting lists the threads of the reverts of files not done, once for
+// each.
 func (s *Store) Reverting(ctx context.Context) ([]api.ID, error) {
-	return ids(ctx, s.db, `SELECT DISTINCT thread FROM effects WHERE kind = ? AND state <> 'done' ORDER BY thread`, engine.EffectKind(engine.RevertThread{}))
+	return ids(ctx, s.db, `SELECT thread FROM effects WHERE kind = ? AND state <> 'done' ORDER BY thread`, engine.EffectKind(engine.RevertThread{}))
 }
 
 func ids(ctx context.Context, q querier, query string, args ...any) ([]api.ID, error) {

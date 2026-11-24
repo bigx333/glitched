@@ -111,10 +111,12 @@ func (a *app) revertAlert(c *ui.Context) {
 
 // revertDivider is the row es[i] of the timeline: how a revert of the
 // files ended, with an Undo that puts back the files it saved first, while
-// no run or revert came after it.
+// no message, run or revert came after it.
 func (a *app) revertDivider(c *ui.Context, t thread, es []entry, i int) {
 	r := es[i].revert
-	last := !slices.ContainsFunc(es[i+1:], func(e entry) bool { return e.kind == entryWork || e.kind == entryRevert })
+	last := !slices.ContainsFunc(es[i+1:], func(e entry) bool {
+		return e.kind == entryWork || e.kind == entryRevert || e.kind == entryAssistant || e.kind == entryUser
+	})
 	ui.Row(c).Key(es[i].key).Gap(10).AlignItems(ui.Center).Padding(4, 12).Transition(riseIn).Children(func() {
 		ui.Box(c).Height(1).Grow(1).Background(palette.border)
 		switch r.Status {

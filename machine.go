@@ -43,6 +43,7 @@ func (a *app) machine(c *ui.Context) {
 	a.tailnetCard(c, m)
 	a.tokensCard(c, m)
 	a.agentsCard(c, m)
+	checkpointsCard(c, m)
 	if a.machineErr != "" {
 		ui.Text(c, a.machineErr).Key("action-err").FontSize(12).TextColor(palette.red)
 	}
@@ -104,6 +105,26 @@ func (a *app) engineCard(c *ui.Context, m client.Machine) {
 		settingRow(c, "Hub", hub, func() {})
 		settingRow(c, "State directory", "", func() {
 			ui.Text(c, cfg.Dir).FontSize(12).Font("monospace").TextColor(palette.muted).Selectable()
+		})
+	})
+}
+
+// checkpointsCard is how much the engine's checkpoint store holds of its
+// cap, when it keeps one.
+func checkpointsCard(c *ui.Context, m client.Machine) {
+	e := m.Engine
+	if e == nil || e.Checkpoints.Limit == 0 {
+		return
+	}
+	card(c, "CHECKPOINTS", func() {
+		cp := e.Checkpoints
+		desc := "The files as each turn left them, for threads in a worktree of their own, so that a turn's files can be put back."
+		col := palette.muted
+		if cp.Bytes >= cp.Limit {
+			desc, col = "Full: new turns' files aren't saved until deleting threads frees room.", palette.amber
+		}
+		settingRow(c, "Store", desc, func() {
+			ui.Text(c, sizeLabel(cp.Bytes)+" of "+sizeLabel(cp.Limit)).Key("checkpoints").FontSize(12).TextColor(col).SingleLine()
 		})
 	})
 }
