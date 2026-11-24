@@ -23,10 +23,14 @@ type Status struct {
 	// Tailnet is as the engine says, or as an installed Tailscale does
 	// when no engine answers.
 	Tailnet api.Tailnet
-	Tokens  []Token
+	// Tokens are tokens.json's, their hashes left out: a hash reaches the
+	// engine as its token does.
+	Tokens []Token
 	// Machines are those this engine's agents may start children on,
-	// their tokens left out.
-	Machines []Machine
+	// their tokens left out, and MachinesErr why machines.json couldn't
+	// be read.
+	Machines    []Machine
+	MachinesErr error
 }
 
 // A Listener is one of Config.Listen, and whether a TCP connection to it
@@ -52,14 +56,20 @@ func Inspect(ctx context.Context, dir string, detect func(context.Context) (api.
 	if err != nil {
 		return Status{}, err
 	}
-	machines, err := Machines(dir)
-	if err != nil {
-		return Status{}, err
+	for i, t := range tokens {
+		t.Hash = ""
+		if t.Link != nil {
+			l := *t.Link
+			l.Hash = ""
+			t.Link = &l
+		}
+		tokens[i] = t
 	}
+	machines, machinesErr := Machines(dir)
 	for i := range machines {
 		machines[i].Token = ""
 	}
-	st := Status{Config: cfg, Tokens: tokens, Machines: machines, Listeners: make([]Listener, len(cfg.Listen))}
+	st := Status{Config: cfg, Tokens: tokens, Machines: machines, MachinesErr: machinesErr, Listeners: make([]Listener, len(cfg.Listen))}
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	var wg sync.WaitGroup

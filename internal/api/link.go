@@ -25,17 +25,16 @@ type Link struct {
 // Origin is where a link's thread came from: Thread, titled Title, on the
 // engine Engine of the machine that holds the link, which starts it as a
 // child of its own, Depth below a thread of its person's, at most at
-// Access, the access that machine says its parent has. Link is the link
-// and Machine its label, which this engine stamps from the token that
-// asked, never from the body.
+// Access, the access that machine says its parent has. Link is the link,
+// which this engine stamps from the token that asked, never from the
+// body.
 type Origin struct {
-	Engine  ID     `json:"engine"`
-	Thread  ID     `json:"thread"`
-	Title   string `json:"title"`
-	Depth   int    `json:"depth"`
-	Access  Access `json:"access"`
-	Link    ID     `json:"link,omitzero"`
-	Machine string `json:"machine,omitempty"`
+	Engine ID     `json:"engine"`
+	Thread ID     `json:"thread"`
+	Title  string `json:"title"`
+	Depth  int    `json:"depth"`
+	Access Access `json:"access"`
+	Link   ID     `json:"link,omitzero"`
 }
 
 // Repository names a repository by its root commit, as placement does

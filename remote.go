@@ -2,9 +2,10 @@ package main
 
 import (
 	"fmt"
-	"net"
 	"net/netip"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -26,6 +27,7 @@ import (
 type minted struct {
 	label, token string
 	link         api.Link
+	at           time.Time
 }
 
 // childLevels are the choices of Children from other machines, off first,
@@ -51,7 +53,11 @@ func (a *app) linksCard(c *ui.Context, m client.Machine) {
 	ceiling := m.Config.ChildrenFromOtherMachines
 	card(c, "CHILDREN FROM OTHER MACHINES", func() {
 		level := levelOf(ceiling)
-		settingRow(c, "Children from other machines", "The most access a child an agent on another machine starts here may run at, through a link minted below. Off, no link starts one.", func() {
+		ui.Column(c).Key("children-from-others").Padding(14, 16).Gap(10).Children(func() {
+			ui.Column(c).Gap(2).Children(func() {
+				ui.Text(c, "Children from other machines").FontWeight(500)
+				ui.Text(c, "The most access a child an agent on another machine starts here may run at, through a link minted below. Off, no link starts one.").FontSize(12).TextColor(palette.muted)
+			})
 			if ui.Segmented(c.Key("children-from-others"), &level, childLevels...).Label("Children from other machines").Changed() {
 				var v *api.Access
 				if level > 0 {
@@ -71,6 +77,10 @@ func (a *app) linksCard(c *ui.Context, m client.Machine) {
 			if t.Link != nil {
 				a.linkRow(c, t, ceiling)
 			}
+		}
+		// A link revoked since it was minted takes its token with it.
+		if p := a.minted; p.token != "" && m.Read.After(p.at) && !slices.ContainsFunc(m.Tokens, func(t daemon.Token) bool { return t.Link != nil && t.Link.ID == p.link.ID }) {
+			a.minted = minted{}
 		}
 		if a.minted.token != "" {
 			a.mintedRow(c, m)
@@ -121,8 +131,9 @@ func (a *app) mintRow(c *ui.Context, ceiling api.Access) {
 		a.mint.access = int(ceiling)
 	}
 	ui.Column(c).Key("mint").Padding(12, 12, 12, 16).Gap(10).Children(func() {
+		ui.TextInput(c.Key("mint-label"), &a.mint.label).Placeholder("The other machine, such as laptop").Label("The other machine's label")
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			ui.TextInput(c.Key("mint-label"), &a.mint.label).Placeholder("The other machine, such as laptop").Label("The other machine's label").Grow(1)
+			ui.Text(c, "At most").FontSize(12).TextColor(palette.muted)
 			ui.Segmented(c.Key("mint-access"), &a.mint.access, childLevels[1:int(ceiling)+2]...).Label("Most access")
 		})
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
@@ -139,7 +150,7 @@ func (a *app) mintRow(c *ui.Context, ceiling api.Access) {
 					a.machineErr = err.Error()
 					return
 				}
-				a.minted, a.mint.label = minted{label, token, l}, ""
+				a.minted, a.mint.label = minted{label, token, l, time.Now()}, ""
 			})
 		})
 		ui.Text(c, "0 takes this machine's own child limits.").FontSize(12).TextColor(palette.faint)
@@ -172,23 +183,26 @@ func (a *app) mintedRow(c *ui.Context, m client.Machine) {
 	} else if m.Engine != nil && m.Engine.Name != "" {
 		self = m.Engine.Name
 	}
-	server := addr
-	if server == "" {
-		server = net.JoinHostPort("<this machine's tailnet name>", daemon.Port)
+	line := ""
+	if addr != "" {
+		line = "glitched link -add " + shellWord(self) + " -server " + shellWord(addr) + " -token " + shellWord(p.token)
 	}
-	line := "glitched link -add " + shellWord(self) + " -server " + server + " -token " + p.token
 	ui.Column(c).Key("minted").Padding(14, 16).Gap(10).Background(palette.green.Alpha(0.06)).Transition(fold).Children(func() {
 		ui.Text(c, "Link for "+p.label+", at "+accessLabel(p.link.Access)+" at most. Its token, shown only this once").FontWeight(500)
 		ui.Text(c, p.token).FontSize(12).Font("monospace").Selectable()
-		hint := "On " + p.label + ", add this machine in Settings › This machine › Machines this one delegates to, or run:"
+		hint := "On " + p.label + ", add this machine at " + addr + " with this token in Settings › This machine › Machines this one delegates to, or run:"
 		if addr == "" {
-			hint = "Turn on Serve on the tailnet for " + p.label + " to reach this machine. Then on " + p.label + ", add it in Settings › This machine, or run:"
+			hint = "Turn on Serve on the tailnet for " + p.label + " to reach this machine. Then on " + p.label + ", add it with this token in Settings › This machine › Machines this one delegates to."
 		}
 		ui.Text(c, hint).FontSize(12).TextColor(palette.muted)
-		ui.Text(c, line).Key("link-line").FontSize(12).Font("monospace").Selectable()
+		if line != "" {
+			ui.Text(c, line).Key("link-line").FontSize(12).Font("monospace").Selectable()
+		}
 		ui.Row(c).Gap(8).Children(func() {
 			ui.Button(c.Key("copy-link-token"), "Copy token").OnClick(func() { a.copy(c, p.token) })
-			ui.Button(c.Key("copy-link-line"), "Copy command").OnClick(func() { a.copy(c, line) })
+			if line != "" {
+				ui.Button(c.Key("copy-link-line"), "Copy command").OnClick(func() { a.copy(c, line) })
+			}
 			ui.Button(c.Key("minted-done"), "Done").OnClick(func() { a.minted = minted{} })
 		})
 	})
@@ -207,7 +221,10 @@ func shellWord(s string) string {
 // removing one.
 func (a *app) delegatesCard(c *ui.Context, m client.Machine) {
 	card(c, "MACHINES THIS ONE DELEGATES TO", func() {
-		if len(m.Machines) == 0 {
+		switch {
+		case m.MachinesErr != nil:
+			ui.Text(c, "Couldn't read the machines: "+m.MachinesErr.Error()).Key("machines-err").FontSize(12).TextColor(palette.red).Padding(14, 16)
+		case len(m.Machines) == 0:
 			ui.Text(c, "None yet. Add a machine with a link it minted for this one, and agents here may start children there.").Key("no-machines").FontSize(12).TextColor(palette.muted).Padding(14, 16)
 		}
 		for _, x := range m.Machines {
@@ -289,7 +306,7 @@ func (a *app) remoteLabel(t thread) string {
 		return r.Machine
 	}
 	if t.env != nil && t.env.Kind != client.Remote {
-		for _, m := range a.backend.Machine().Machines {
+		for _, m := range a.machineStatus().Machines {
 			if m.Link == r.Link {
 				return m.Label
 			}
@@ -299,6 +316,17 @@ func (a *app) remoteLabel(t thread) string {
 		return machineName(e)
 	}
 	return "another machine"
+}
+
+// machineStatus is this machine's engine as last read, which it has read
+// again, in the background, when that is past inspectEvery: a label a
+// link or a machine gives may be newer than the read.
+func (a *app) machineStatus() client.Machine {
+	m := a.backend.Machine()
+	if time.Since(m.Read) >= inspectEvery {
+		a.backend.Inspect()
+	}
+	return m
 }
 
 // envOf is the machine this app pairs whose engine is id, nil for none.
@@ -337,6 +365,8 @@ func (a *app) remoteState(t thread) (string, ui.Color, string) {
 		return "Lost on " + on, palette.red, r.Lost
 	case r.Thread.IsZero() && t.View.Run == api.RunStarting:
 		return "Creating on " + on, palette.muted, ""
+	case t.View.Run == api.RunUncertain:
+		return "Needs you on " + on, palette.amber, "Its run there was cut off, as by a restart of that machine's engine. Continue it or send it a message on " + on + "."
 	case t.View.Run == api.RunWaiting:
 		return "Needs you on " + on, palette.amber, ""
 	case t.View.Working():
@@ -372,6 +402,10 @@ func (a *app) remoteNotice(c *ui.Context, t thread) {
 			}
 			return
 		}
+		if a.envOf(remote(t).Engine) != nil {
+			ui.Text(c, "Its thread opens here once "+on+" has made it.").FontSize(12).TextColor(palette.muted).TextAlign(ui.Center)
+			return
+		}
 		ui.Text(c, "This child's thread is on "+on+". Pair "+on+" in Settings › Servers to open it here.").FontSize(12).TextColor(palette.muted).TextAlign(ui.Center)
 	})
 }
@@ -379,15 +413,12 @@ func (a *app) remoteNotice(c *ui.Context, t thread) {
 // --- A link's thread, on B
 
 // originLabel is the label of the machine a link's thread came from: as
-// this engine stamped it from the link, as this machine's tokens name the
-// link, or as this app pairs that machine's engine.
+// this machine's tokens name the link, or as this app pairs that
+// machine's engine.
 func (a *app) originLabel(t thread) string {
 	o := t.View.Origin
-	if o.Machine != "" {
-		return o.Machine
-	}
 	if t.env != nil && t.env.Kind != client.Remote {
-		for _, k := range a.backend.Machine().Tokens {
+		for _, k := range a.machineStatus().Tokens {
 			if k.Link != nil && k.Link.ID == o.Link {
 				return k.Label
 			}

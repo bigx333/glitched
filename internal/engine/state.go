@@ -358,8 +358,11 @@ func View(t Thread) api.Thread {
 		v.Context = &c
 	}
 	if r := t.Remote; r != nil {
-		v.Remote = &api.Placement{Engine: r.Engine, Link: r.Link, Thread: r.Thread, Lost: r.Lost}
+		v.Remote = &api.Placement{Engine: r.Engine, Link: r.Link, Thread: r.Thread, Run: r.Run, Lost: r.Lost}
 		switch {
+		case r.State == RemoteBoundState && r.Silent && r.Slot != api.RunUncertain:
+			// A silent run there shows nothing, as one here does.
+			v.Run = api.RunIdle
 		case r.State == RemoteBoundState:
 			v.Run = r.Slot
 		case r.State == RemoteCreating && !t.settled():
