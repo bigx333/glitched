@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 
@@ -98,12 +99,26 @@ func (a *app) settle(c *ui.Context, t thread, from category) {
 func (a *app) askDelete(t thread) {
 	if a.settings.confirmDelete {
 		a.deleting, a.deleteOpen = t, true
-		if a.ownsWorktree(t) {
-			a.deleteChanges = changesIn(t)
-		}
+		a.countDeleteChanges(a.worktreesIn(t))
 		return
 	}
 	a.deleteTree(t, false)
+}
+
+// countDeleteChanges counts the changes in own, the worktrees a delete
+// would remove, for the alert, and keeps which they are, so the alert
+// counts again when they change under it.
+func (a *app) countDeleteChanges(own []thread) {
+	a.deleteChanges, a.deleteCounted = 0, nil
+	for _, w := range own {
+		a.deleteCounted = append(a.deleteCounted, w.id())
+		n := changesIn(w)
+		if n < 0 || a.deleteChanges < 0 {
+			a.deleteChanges = -1
+			continue
+		}
+		a.deleteChanges += n
+	}
 }
 
 // deleteAlert asks before a thread is deleted, when the settings say to.
@@ -131,23 +146,42 @@ func (a *app) deleteAlert(c *ui.Context) {
 	// thread's worktree stays unless the user says otherwise, and a
 	// button says when what is in it goes too.
 	buttons, removes := []string{"Delete"}, []bool{false}
-	if tree := append(a.below(a.deleting), node{a.deleting, 0}); a.ownsWorktree(a.deleting) {
-		body += "\n\nIts worktree on " + a.deleting.View.Branch + " stays unless you delete it too. The branch stays while it has commits of its own."
-		buttons = []string{"Keep worktree"}
+	// The worktrees that go are the deleted thread's own and those of the
+	// threads under it that have their own, as the engine removes them.
+	if tree, own := append(a.below(a.deleting), node{a.deleting, 0}), a.worktreesIn(a.deleting); len(own) > 0 {
+		ids := make([]api.ID, len(own))
+		for i, w := range own {
+			ids[i] = w.id()
+		}
+		if !slices.Equal(ids, a.deleteCounted) {
+			a.countDeleteChanges(own)
+		}
+		one := len(own) == 1
+		w, it, its := "worktree", "it", "It has"
+		switch {
+		case one && own[0].id() == a.deleting.id():
+			body += "\n\nIts worktree on " + a.deleting.View.Branch + " stays unless you delete it too. The branch stays while it has commits of its own."
+		case one:
+			body += "\n\nOne thread under it has a worktree on " + own[0].View.Branch + ", which stays unless you delete it too. The branch stays while it has commits of its own."
+		default:
+			w, it, its = "worktrees", "them", "They have"
+			body += fmt.Sprintf("\n\nThe %d worktrees of threads in it stay unless you delete them too. Each branch stays while it has commits of its own.", len(own))
+		}
+		buttons = []string{"Keep " + w}
 		if working(tree) > 0 {
-			body += " To delete the worktree, stop the work first."
+			body += " To delete the " + w + ", stop the work first."
 		} else {
-			remove := "Delete worktree and changes"
-			body += " Deleting it deletes everything in it, files git ignores included."
+			remove := "Delete " + w + " and changes"
+			body += " Deleting " + it + " deletes everything in " + it + ", files git ignores included."
 			switch n := a.deleteChanges; {
 			case n == 0:
-				remove = "Delete worktree"
+				remove = "Delete " + w
 			case n < 0:
-				body += " What is in it can't be counted."
+				body += " What is in " + it + " can't be counted."
 			default:
-				body += " It has " + plural(n, "uncommitted change") + "."
+				body += " " + its + " " + plural(n, "uncommitted change") + "."
 			}
-			buttons, removes = []string{remove, "Keep worktree"}, []bool{true, false}
+			buttons, removes = []string{remove, "Keep " + w}, []bool{true, false}
 		}
 	}
 	switch i := a.alert(c, &a.deleteOpen, head, body, append([]string{"Cancel"}, buttons...)...); {

@@ -65,9 +65,20 @@ func workingAt(t *testing.T, h *runtime.Host, access api.Access) mcp.Origin {
 // workingOn is working, its thread created at model and access.
 func workingOn(t *testing.T, h *runtime.Host, model api.ModelRef, access api.Access) mcp.Origin {
 	t.Helper()
+	return workingAs(t, h, "/src/app", model, access)
+}
+
+// workingIn is working, its thread in workspace.
+func workingIn(t *testing.T, h *runtime.Host, workspace string) mcp.Origin {
+	t.Helper()
+	return workingAs(t, h, workspace, api.ModelRef{Provider: "fake", Model: "fake"}, api.AccessAsk)
+}
+
+func workingAs(t *testing.T, h *runtime.Host, workspace string, model api.ModelRef, access api.Access) mcp.Origin {
+	t.Helper()
 	thread := api.NewID()
 	if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{
-		Workspace: "/src/app", Title: "fix it", Model: model, Access: access,
+		Workspace: workspace, Title: "fix it", Model: model, Access: access,
 	}}); err != nil {
 		t.Fatal(err)
 	}

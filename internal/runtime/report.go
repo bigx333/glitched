@@ -38,7 +38,7 @@ func (h *Host) report(e store.Effect, b engine.ReportToParent) {
 		retry(h.drain, "release effect", func(ctx context.Context) error { return h.store.Release(ctx, e.ID) })
 		return
 	}
-	o := engine.Reported{Report: api.ChildReported{Child: b.Child, Run: b.Run, Kind: b.Kind, Title: b.Title, Outcome: outcome}, Reply: reply}
+	o := engine.Reported{Report: api.ChildReported{Child: b.Child, Run: b.Run, Kind: b.Kind, Title: b.Title, Outcome: outcome}, Reply: reply, Branch: b.Branch}
 	retry(h.drain, "commit report", func(ctx context.Context) error {
 		err := h.observe(ctx, b.Parent, o, e.ID)
 		if errors.Is(err, api.ErrNotFound) {

@@ -107,6 +107,9 @@ type Child struct {
 	Access      api.Access // ignored unless Wider; else the parent's
 	Wider       bool
 	Tries       int
+	// Worktree asks for the child in a worktree of its own, as
+	// delegate_task's isolation worktree does.
+	Worktree bool
 }
 
 // Spawns has every turn whose message is text start kids on ep, in order,
@@ -385,6 +388,11 @@ func (g *Agent) spawn() provider.Event {
 		Workspace: g.spec.Workspace, Title: k.Title, Model: g.spec.Model, Access: access,
 		Parent: g.spec.Thread, Run: g.run, Text: k.Task,
 	}}
+	if k.Worktree {
+		b := c.Body.(api.ThreadCreate)
+		b.Worktree = &api.NewWorktree{}
+		c.Body = b
+	}
 	g.a.mu.Lock()
 	ep := g.a.engine
 	g.a.mu.Unlock()

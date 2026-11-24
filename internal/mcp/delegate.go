@@ -53,7 +53,7 @@ const delegateTask = "delegate_task"
 var catalog = []map[string]any{{
 	"name": delegateTask,
 	"description": "Delegate a self-contained task to a child agent, in a new thread under this one. " +
-		"The child starts at once and the call returns; each time its turn ends done or failed, its report comes to this thread as a new message, so do not wait or poll for it. Folder and permissions inherit. Provider, model and effort inherit unless you pick them; a child on another provider starts at that provider's own default model and effort unless you pick them. " +
+		"The child starts at once and the call returns; each time its turn ends done or failed, its report comes to this thread as a new message, so do not wait or poll for it. Permissions inherit, and the folder too unless isolation is worktree, which gives the child a worktree and branch of its own from this folder's HEAD, without its uncommitted changes. Provider, model and effort inherit unless you pick them; a child on another provider starts at that provider's own default model and effort unless you pick them. " +
 		"This thread's history is not copied, so the task must stand on its own. " +
 		"The user sees the child and can open it. A child cannot gain broader permissions. " +
 		"Reuse client_request_id to retry the same task safely; each new task needs a new one.",
@@ -65,6 +65,7 @@ var catalog = []map[string]any{{
 			"provider":          map[string]any{"type": "string", "description": "The child's provider, as claude or codex; else this thread's. An unknown one fails with the providers there are."},
 			"model":             map[string]any{"type": "string", "description": "The child's model, by its provider's id for it; else this thread's on this thread's provider, and the provider's default on another. An unknown one fails with the ids there are."},
 			"effort":            map[string]any{"type": "string", "description": "The child's reasoning effort; else this thread's on this thread's provider, and the model's default on another."},
+			"isolation":         map[string]any{"type": "string", "enum": []string{"shared", "worktree"}, "default": "shared", "description": "shared: the child works in this thread's folder, uncommitted changes and all, so coordinate children that write. worktree: the child works in a git worktree of its own, on a new branch from this folder's HEAD; this folder's uncommitted changes are not copied. Its report names its branch: tell it to commit there, then merge the branch to use its work."},
 			"client_request_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 256},
 		},
 		"required":             []string{"task"},
@@ -78,6 +79,7 @@ type delegateArgs struct {
 	Provider  string `json:"provider"`
 	Model     string `json:"model"`
 	Effort    string `json:"effort"`
+	Isolation string `json:"isolation"`
 	RequestID string `json:"client_request_id"`
 }
 
@@ -104,6 +106,9 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 	}
 	if strings.TrimSpace(in.Task) == "" {
 		return TaskView{}, errors.New("delegate_task: task is empty")
+	}
+	if in.Isolation != "" && in.Isolation != "shared" && in.Isolation != "worktree" {
+		return TaskView{}, fmt.Errorf("delegate_task: isolation is shared or worktree, not %q", in.Isolation)
 	}
 	parent, err := t.thread(ctx)
 	if err != nil {
@@ -136,23 +141,22 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 	if err != nil {
 		return TaskView{}, err
 	}
-	access := min(turn.Access, parent.Access)
 	title := cmp.Or(in.Title, firstLine(in.Task))
-	_, err = t.Engine.Submit(ctx, api.Command{
-		ID:     derive(t.Origin.Thread, "call", key),
-		Target: child,
-		Body: api.ThreadCreate{
-			Workspace: parent.Workspace,
-			Project:   parent.Project,
-			Branch:    parent.Branch,
-			Title:     title,
-			Model:     model,
-			Access:    access,
-			Parent:    t.Origin.Thread,
-			Run:       turn.Run,
-			Text:      in.Task,
-		},
-	})
+	create := api.ThreadCreate{
+		Workspace: parent.Workspace,
+		Project:   parent.Project,
+		Branch:    parent.Branch,
+		Title:     title,
+		Model:     model,
+		Access:    min(turn.Access, parent.Access),
+		Parent:    t.Origin.Thread,
+		Run:       turn.Run,
+		Text:      in.Task,
+	}
+	if in.Isolation == "worktree" {
+		create.Project, create.Branch, create.Worktree = "", "", &api.NewWorktree{}
+	}
+	_, err = t.Engine.Submit(ctx, api.Command{ID: derive(t.Origin.Thread, "call", key), Target: child, Body: create})
 	if errors.Is(err, api.ErrConflict) {
 		// A retry of the same task finds the child the first try made,
 		// though its command differs: a later turn's is another run's, and

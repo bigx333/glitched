@@ -174,12 +174,24 @@ func (h *Host) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 }
 
 // Submit commits c. A create in a new worktree makes the worktree first,
-// and a delete that removes one removes it once the delete commits.
+// and a delete that removes one leaves its removal to the commit's
+// effects. A create in a folder under the worktrees commits while no
+// worktree is made or removed, so a removal sees every thread in its
+// worktree.
 func (h *Host) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
 	switch b := c.Body.(type) {
 	case api.ThreadCreate:
 		if b.Worktree != nil {
 			return h.createInWorktree(ctx, c, b)
+		}
+		if h.worktrees != "" && under(h.worktrees, b.Workspace) {
+			h.making.Lock()
+			defer h.making.Unlock()
+			if _, err := os.Stat(b.Workspace); err != nil {
+				if t, terr := h.store.Thread(ctx, c.Target); terr != nil || !t.Exists() {
+					return api.Receipt{}, &api.RejectedError{Reason: fmt.Sprintf("Can't start a thread in %s: it is gone", b.Workspace)}
+				}
+			}
 		}
 	case api.ThreadDelete:
 		if b.RemoveWorktree {
@@ -529,6 +541,9 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 		}
 		h.skills.closed(e.Thread)
 		return nil, true
+
+	case engine.RemoveWorktree:
+		return nil, h.removeWorktree(h.ctx, e.Thread, b)
 
 	case engine.DeliverAnswer:
 		if isAsk(b.Dedup) {

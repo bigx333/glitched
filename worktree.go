@@ -115,6 +115,19 @@ func (a *app) ownsWorktree(t thread) bool {
 	return !ok || p.View.Branch != t.View.Branch
 }
 
+// worktreesIn are the threads of t's tree, t first, that run in a
+// worktree of their own: those whose worktree a delete that removes them
+// removes.
+func (a *app) worktreesIn(t thread) []thread {
+	var own []thread
+	for _, n := range append([]node{{t, 0}}, a.below(t)...) {
+		if a.ownsWorktree(n.t) {
+			own = append(own, n.t)
+		}
+	}
+	return own
+}
+
 // changesIn counts the changes git doesn't ignore in the worktree t runs
 // in, from its root: the checkout of its project's repository on its
 // branch, -1 for a thread on another machine or a worktree

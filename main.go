@@ -621,9 +621,11 @@ type app struct {
 	// deleting is the thread the alert asks about deleting.
 	deleting   thread
 	deleteOpen bool
-	// deleteChanges are the changes git doesn't ignore in the worktree
-	// of the thread the alert asks about, -1 where none can tell.
+	// deleteChanges are the changes git doesn't ignore in the worktrees
+	// the alert's delete would remove, -1 where none can tell, and
+	// deleteCounted those worktrees' threads.
 	deleteChanges int
+	deleteCounted []api.ID
 	// removing is the project the alert asks about removing, by key, so
 	// that it removes the threads the project has as it's confirmed.
 	removing   projectKey

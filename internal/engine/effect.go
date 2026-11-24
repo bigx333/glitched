@@ -46,15 +46,27 @@ type DeliverAnswer struct {
 
 // ReportToParent posts a child's report in its parent's log: Title is the
 // child's, Kind how its run went; Error is a failed run's, Ask the body of
-// the request a blocked one waits on.
+// the request a blocked one waits on. Branch is the child's, where it
+// works in a worktree.
 type ReportToParent struct {
 	Parent, Child, Run api.ID
 	Kind               api.ReportKind
 	Title, Error       string
 	Ask                json.RawMessage
+	Branch             string `json:",omitempty"`
+}
+
+// RemoveWorktree removes the worktree a deleted thread ran in, on Branch
+// of Project's repository, with what is in it, when it is still the one
+// Glitched made for the thread. It sits in the outbox until done, so a
+// crash after the delete's commit leaves it for the next host; a thread
+// that ran in another's worktree finds it isn't its own and leaves it.
+type RemoveWorktree struct {
+	Workspace, Project, Branch string
 }
 
 func (StartTurn) effectKind() string      { return "turn.start" }
+func (RemoveWorktree) effectKind() string { return "worktree.remove" }
 func (ReportToParent) effectKind() string { return "child.report" }
 func (SteerTurn) effectKind() string      { return "turn.steer" }
 func (InterruptTurn) effectKind() string  { return "turn.interrupt" }
@@ -82,7 +94,7 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 		return true, nil
 	case InterruptTurn:
 		return r != nil && r.ID == e.Run && r.State == RunStopping, nil
-	case CloseAgent:
+	case CloseAgent, RemoveWorktree:
 		return true, nil
 	case ReportToParent:
 		// The parent decides, as it observes the report, whether it can
@@ -104,8 +116,9 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 // already have reached the agent, so boot reconciles them instead. Adapters
 // treat a repeated interrupt or a repeated answer as a no-op.
 // A report commits with its completion, so one left leased never landed.
-// Closing an agent that is gone does nothing.
-var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true}
+// Closing an agent that is gone does nothing, nor does removing a
+// worktree that is.
+var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true, "worktree.remove": true}
 
 func ReplaySafe(e Effect) bool { return replaySafe[e.effectKind()] }
 
@@ -116,6 +129,7 @@ var effects = map[string]func([]byte) (Effect, error){
 	"agent.close":     decodeAs[CloseAgent],
 	"request.deliver": decodeAs[DeliverAnswer],
 	"child.report":    decodeAs[ReportToParent],
+	"worktree.remove": decodeAs[RemoveWorktree],
 }
 
 func decodeAs[E Effect](b []byte) (Effect, error) {
@@ -250,10 +264,11 @@ type Rewound struct{}
 
 // Reported is a child's report, observed on its parent: what the runtime
 // made of a ReportToParent. Reply is what the child's run said last, or
-// why it failed, for the parent's agent.
+// why it failed, for the parent's agent, and Branch the child's.
 type Reported struct {
 	Report api.ChildReported
 	Reply  string
+	Branch string
 }
 
 // IdleCompact asks the engine to start a silent /compact run on an idle
