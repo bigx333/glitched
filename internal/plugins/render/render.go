@@ -106,6 +106,10 @@ type Controls struct {
 	// pending are the progress buttons clicked, by id, with the click's
 	// number: each shows it runs till a view answers after it.
 	pending map[string]int
+	// later are the progress buttons pressed since their last click, by
+	// id: true while each press was a later one of a double or triple
+	// click, which clicks nothing.
+	later map[string]bool
 	// passes counts the view's builds: a list remembers the one it was
 	// last drawn in, and an input moves only a list drawn.
 	passes int
@@ -132,7 +136,7 @@ type control struct {
 // view syncs them as any new view does, and no change sent to the last
 // session waits on this one.
 func (cs *Controls) Restart() {
-	cs.rev, cs.sent, cs.processed, cs.pending = -1, 0, 0, nil
+	cs.rev, cs.sent, cs.processed, cs.pending, cs.later = -1, 0, 0, nil, nil
 	for _, ctl := range cs.m {
 		ctl.last = 0
 		if ctl.list != nil {
@@ -575,10 +579,27 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			b.TextColor(st.Red)
 		}
 		b.Disabled(n.Disabled || busy).OnClick(func() {
-			if !n.Disabled && !busy {
+			later := r.cs.later[n.ID]
+			delete(r.cs.later, n.ID)
+			if !n.Disabled && !busy && !later {
 				r.fire(n, n.OnClick, "click", nil)
 			}
 		})
+		if n.Progress {
+			// A double or triple click is one click: its later presses
+			// may come once the plugin has answered the first.
+			b.ObserveInput(func(ev ui.InputEvent) {
+				if ev.Kind != ui.InputPointerDown || ev.Button != 0 {
+					return
+				}
+				if r.cs.later == nil {
+					r.cs.later = map[string]bool{}
+				}
+				if _, pressed := r.cs.later[n.ID]; !pressed || ev.Clicks <= 1 {
+					r.cs.later[n.ID] = ev.Clicks > 1
+				}
+			})
+		}
 		r.tip(c, b, n.Tooltip)
 	case "input":
 		ctl := r.cs.m[n.ID]

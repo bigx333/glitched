@@ -340,3 +340,68 @@ func TestNewScheduleOpensThePageOnAnEmptyForm(t *testing.T) {
 		h.frames("no form", func() bool { return !h.tt.HasText("Add schedule") })
 	}
 }
+
+// A double-click on Run now starts one thread, though the first click's
+// answer is drawn before the second comes, as it may be natively.
+func TestADoubleClickOnRunNowStartsOneThread(t *testing.T) {
+	h := schedulesPage(t)
+	s := h.added("Morning triage")
+	r, ok := h.tt.Find("Run now")
+	if !ok {
+		t.Fatalf("no Run now in %q", h.tt.Texts())
+	}
+	x, y := r.X+r.W/2, r.Y+r.H/2
+	h.tt.ClickAt(x, y)
+	// The answer, in the frames the app asks for, with the window's clock
+	// held: the second click, at the same place, is the double-click's.
+	clicked := h.tt.Now()
+	deadline := time.After(30 * time.Second)
+	for _, answered := h.tt.Find("Open thread"); !answered; _, answered = h.tt.Find("Open thread") {
+		if h.p.run() {
+			h.tt.Frame()
+			continue
+		}
+		select {
+		case <-h.p.wake:
+		case <-deadline:
+			t.Fatalf("timed out waiting for the run's thread; the window shows %q", h.tt.Texts())
+		}
+	}
+	if !h.tt.Now().Equal(clicked) {
+		t.Fatal("the window's clock moved: the next click is no double-click's")
+	}
+	h.tt.ClickAt(x, y)
+	// The page takes its events in turn: once it answers an Edit after
+	// them, it has answered both clicks.
+	h.press("Edit")
+	h.frames("the form", func() bool { return h.tt.HasText("EDIT SCHEDULE") })
+	var runs []struct{ Key, Thread, State string }
+	h.service("runs", map[string]any{"id": s.ID}, &runs)
+	if n := len(h.engineThreads()); n != 1 || len(runs) != 1 {
+		t.Fatalf("a double-click on Run now made %d threads and the runs %+v, want 1 of each", n, runs)
+	}
+}
+
+// At 760 pt, a schedule's row after a run keeps its enable switch inside
+// it, and its details a sane width: at least as wide as the row's own Run
+// now label, a word measured in the same font.
+func TestTheEnableSwitchStaysInANarrowRowAfterARun(t *testing.T) {
+	h := schedulesPage(t)
+	h.added("Morning triage")
+	h.press("Run now")
+	h.frames("the run's thread", func() bool { _, ok := h.tt.Find("Open thread"); return ok })
+	h.tt.SetSize(760, 700)
+	h.frames("the narrow page", func() bool { return true })
+	row, _ := h.tt.Find("SCHEDULES") // the card's heading, as wide as its rows
+	on, _ := h.tt.Find("Run Morning triage")
+	details, _ := h.tt.Find("Morning triage")
+	word, _ := h.tt.Find("Run now")
+	if on.W == 0 || on.X < row.X || on.X+on.W > row.X+row.W {
+		t.Fatalf("the switch is at %+v, outside the row's %+v", on, row)
+	}
+	if details.W < word.W {
+		t.Fatalf("the details are %v pt wide, under the %v of Run now's label", details.W, word.W)
+	}
+	t.Logf("the details are %v pt wide, Run now's label %v, the switch at %+v in the row's %+v", details.W, word.W, on, row)
+	h.shot("narrow")
+}

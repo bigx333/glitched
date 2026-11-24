@@ -6,6 +6,7 @@ import (
 	"image"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
@@ -447,6 +448,31 @@ func TestMenuSeparatorsAndProgressButtons(t *testing.T) {
 	tt.Frame()
 	if err := tt.Click("Go"); err != nil || len(s.events) != n+1 {
 		t.Errorf("once answered, the button doesn't fire: %v, %d events", err, len(s.events))
+	}
+}
+
+// A triple-click on a progress button is one click, though the plugin
+// answers each click before the next comes; a click after it is one again.
+func TestATripleClickOnAProgressButtonIsOneClick(t *testing.T) {
+	s := &screen{}
+	view := `{"body": {"type": "button", "id": "go", "label": "Go", "progress": true, "onClick": "go"}}`
+	s.show(t, view)
+	tt := ui.NewTester(s.draw, 800, 300)
+	tt.Frame()
+	for range 3 {
+		if err := tt.Click("Go"); err != nil {
+			t.Fatal(err)
+		}
+		s.processed = len(s.events)
+		s.show(t, view)
+		tt.Frame()
+	}
+	if len(s.events) != 1 {
+		t.Fatalf("a triple-click fired %d clicks, want 1", len(s.events))
+	}
+	tt.Advance(time.Second)
+	if err := tt.Click("Go"); err != nil || len(s.events) != 2 {
+		t.Fatalf("a click after it: %v, %d clicks, want 2", err, len(s.events))
 	}
 }
 
