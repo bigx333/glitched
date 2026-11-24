@@ -121,6 +121,8 @@ type lingering struct {
 	once             sync.Once
 	plays            int           // events of a turn played before it works on; 0 is 2, -1 every one
 	started          chan struct{} // when set, a Start takes effect once it closes, whatever its call's context
+	opening          chan struct{} // closed as a Start held by started is called
+	opened           sync.Once
 }
 
 func (s *lingering) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
@@ -151,6 +153,7 @@ func (g *lingeringAgent) Next(ctx context.Context) (provider.Event, error) {
 
 func (g *lingeringAgent) Do(ctx context.Context, act provider.Action) error {
 	if _, start := act.(provider.Start); start && g.s.started != nil {
+		g.s.opened.Do(func() { close(g.s.opening) })
 		<-g.s.started
 		ctx = context.Background()
 	}
@@ -232,11 +235,11 @@ func TestAwakeUntilADeletedStartCloses(t *testing.T) {
 // starts anyway, counts as working until it closes.
 func TestAwakeUntilADeletedStartThatTookCloses(t *testing.T) {
 	h := &heard{}
-	ad := &lingering{Adapter: fake.New(fake.Turn(false)), closing: make(chan struct{}), release: make(chan struct{}), started: make(chan struct{})}
+	ad := &lingering{Adapter: fake.New(fake.Turn(false)), closing: make(chan struct{}), release: make(chan struct{}), started: make(chan struct{}), opening: make(chan struct{})}
 	n := awakeHost(t, dbPath(t), ad, h)
 	thread := newThread(t, n.h)
 	submit(t, n.h, thread, dispatch("go", api.StartNow))
-	until(t, n.h, thread, "the agent opening", func(th api.Thread) bool { return th.Run == api.RunStarting })
+	<-ad.opening
 	submit(t, n.h, thread, api.ThreadDelete{})
 	close(ad.started)
 	<-ad.closing
