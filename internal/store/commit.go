@@ -95,13 +95,7 @@ func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, chec
 			}
 		}
 		if b, ok := c.Body.(api.ThreadCreate); ok && b.Origin != nil && t.Exists() {
-			// A settled create of a link's thread there already is its
-			// settle, decided in the commit either create takes, so the
-			// two creates of one thread serialize on it.
-			if o := t.Origin; !b.Settled || o == nil || o.Link != b.Origin.Link || o.Thread != b.Origin.Thread {
-				return nil, nil, fmt.Errorf("%w: a link creates only a thread that isn't there", api.ErrNotAllowed)
-			}
-			c.Body, c.Caller = api.InboxSet{Disposition: api.Disposition{State: api.Settled}}, &api.Caller{Thread: b.Origin.Thread}
+			return nil, nil, fmt.Errorf("%w: a link creates only a thread that isn't there", api.ErrNotAllowed)
 		}
 		if b, ok := c.Body.(api.ThreadCreate); ok && b.Origin != nil && !t.Exists() {
 			if s.links == nil {
@@ -169,6 +163,27 @@ func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, chec
 	}}
 	r := &receipt{id: c.ID, hash: hash[:], thread: c.Target}
 	at, err := s.commit(ctx, r, 0, func(q querier) ([]step, error) {
+		if b, ok := c.Body.(api.ThreadCreate); ok && b.Settled && b.Origin != nil {
+			// A settled create of a link's thread there already is the
+			// settle of its tree, decided in the commit either create
+			// takes, so the two creates of one thread serialize on it.
+			t, err := loadThread(ctx, q, c.Target)
+			if err != nil {
+				return nil, err
+			}
+			if t.Exists() {
+				if o := t.Origin; o == nil || o.Link != b.Origin.Link || o.Thread != b.Origin.Thread {
+					return nil, fmt.Errorf("%w: a link creates only a thread that isn't there", api.ErrNotAllowed)
+				}
+				if s.links == nil {
+					return nil, &api.RejectedError{Reason: "this engine takes no threads from other machines"}
+				}
+				if _, err := s.links(b.Origin.Link); err != nil {
+					return nil, &api.RejectedError{Reason: err.Error()}
+				}
+				c.Body, c.Caller = api.InboxSet{Disposition: api.Disposition{State: api.Settled}}, &api.Caller{Thread: b.Origin.Thread}
+			}
+		}
 		if !engine.TakesTree(c.Body) {
 			return []step{top}, nil
 		}
