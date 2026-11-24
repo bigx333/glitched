@@ -26,7 +26,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|credentials (CRED=typed|provided|declined)|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)|revert (REVERT=menu|alert|done|machine)|queued (HELD, QEDIT)|wizard (WIZARD=machine|source|browse|clone|confirm|cloning|failed|offline)
+// SCENE=empty|running|approval|credentials (CRED=typed|provided|declined)|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)|revert (REVERT=menu|alert|done|machine|refused|refusedtip)|queued (HELD, QEDIT)|wizard (WIZARD=machine|source|browse|clone|confirm|cloning|failed|offline)
 // for the engines' threads (none started without one; question takes
 // ASK=<request body>, PICK=<label>,…, OTHER=<text> typed into the Other
 // field named OTHERIN, and QUESTION=answer|dismiss|stop;
@@ -610,6 +610,22 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		switch os.Getenv("REVERT") {
 		case "menu":
 			h.click("1 file")
+		case "refused", "refusedtip":
+			// While a thread under it runs: the chip's tooltip, or its
+			// menu, says why its files can't go back.
+			th := h.a.current()
+			kid := api.NewID()
+			th.env.Threads[kid] = &client.Thread{View: api.Thread{ID: kid, Parent: th.id(), Title: "Check the notes", Workspace: th.View.Workspace, Run: api.RunRunning}}
+			th.env.Membership++
+			h.tt.Frame()
+			h.tt.Advance(time.Second)
+			if os.Getenv("REVERT") == "refused" {
+				h.click("1 file")
+				break
+			}
+			chip, _ := h.tt.Find("1 file")
+			h.tt.Move(chip.X+chip.W/2, chip.Y+chip.H/2)
+			h.tt.Advance(2 * time.Second)
 		case "machine":
 			h.tt.SetSize(1320, 1700)
 			h.click("Settings")

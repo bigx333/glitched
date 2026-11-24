@@ -37,7 +37,8 @@ func (a *app) whyNoRevert(t thread) string {
 // checkpointChip is a top-level run's chip on its work row: how many files
 // the run changed, as its checkpoint saw them, or that they weren't saved
 // and why, with a menu that puts them back as the run left them or as they
-// were before it. Where the thread can't revert, the menu says why.
+// were before it. Where the thread can't revert, the chip's tooltip says
+// why, and so does the menu, above what it can't do.
 func (a *app) checkpointChip(c *ui.Context, t thread, run api.ID) {
 	if !t.View.Parent.IsZero() || t.Transcript == nil {
 		return
@@ -65,10 +66,8 @@ func (a *app) checkpointChip(c *ui.Context, t thread, run api.ID) {
 	if label == "" {
 		b.Label("Checkpoint")
 	}
-	a.tip(c, b, cmp.Or(tip, "Revert this turn's files"))
+	a.tip(c, b, cmp.Or(why, tip, "Revert this turn's files"))
 	b.Menu(func(m *ui.Menu) {
-		here := m.Item("Restore files to here")
-		undo := m.Item("Undo this turn's files")
 		hereWhy, undoWhy := why, why
 		if hereWhy == "" && at.Status != api.CheckpointReady {
 			hereWhy = "This turn's files weren't saved"
@@ -76,8 +75,18 @@ func (a *app) checkpointChip(c *ui.Context, t thread, run api.ID) {
 		if undoWhy == "" && (!hasBefore || before.Status != api.CheckpointReady) {
 			undoWhy = "The files before this turn weren't saved"
 		}
-		here.Disabled(hereWhy != "").Subtitle(hereWhy)
-		undo.Disabled(undoWhy != "").Subtitle(undoWhy)
+		// A system menu may show no subtitle on an item it greys out, so
+		// each reason the menu refuses for leads it, on a line of its own,
+		// once, however many items it refuses.
+		reasons := slices.Compact(slices.DeleteFunc([]string{hereWhy, undoWhy}, func(s string) bool { return s == "" }))
+		for _, r := range reasons {
+			m.Item(r).Disabled(true)
+		}
+		if len(reasons) > 0 {
+			m.Separator()
+		}
+		here := m.Item("Restore files to here").Disabled(hereWhy != "").Tooltip(hereWhy)
+		undo := m.Item("Undo this turn's files").Disabled(undoWhy != "").Tooltip(undoWhy)
 		if here.Chosen() {
 			a.reverting, a.revertOpen = revertAsk{t: t, to: api.CheckpointRef{Phase: api.CheckpointRun, ID: run}}, true
 		}
