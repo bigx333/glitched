@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 
@@ -17,20 +19,28 @@ import (
 // its thread, the user's in dir, the engine's state folder, and its
 // project's, copied to an overlay in dir.
 func WithSkills(dir string) Option {
-	return func(h *Host) { h.skills = &skillStage{dir: dir, using: map[api.ID]string{}} }
+	return func(h *Host) {
+		h.skills = &skillStage{dir: dir, using: map[api.ID]string{}, opening: map[string]int{}, survivors: map[api.ID]bool{}}
+	}
 }
 
-// skillStage keeps the overlays of the skills the host's agents get,
-// each until no thread's agent last opened with it. A nil one gives
-// none.
+// skillStage keeps the overlays of the skills the host's agents get, each
+// while an agent may read it: a thread's agent's own till another opens in
+// its place, one an open is handing an agent, and, while an agent the last
+// engine started may still run, every overlay that engine left. A nil one
+// gives none.
 type skillStage struct {
-	dir   string
-	mu    sync.Mutex
-	using map[api.ID]string // by thread: the overlay its last agent opened with
+	dir       string
+	mu        sync.Mutex
+	using     map[api.ID]string // by thread: the overlay its agent opened with
+	opening   map[string]int    // overlays opens are handing their agents, by count
+	survivors map[api.ID]bool   // threads whose agent the last engine started may run
+	inherited []string          // the overlays the last engine left
 }
 
-// stage is the skills the run of thread in workspace gets. Skills it
-// can't copy are logged and left out: the run goes on without them.
+// stage is the skills the run of thread in workspace gets, held till the
+// open that hands them over says how it went (opened). Skills it can't
+// copy are logged and left out: the run goes on without them.
 func (s *skillStage) stage(thread api.ID, workspace, project string) provider.Skills {
 	if s == nil {
 		return provider.Skills{}
@@ -43,10 +53,9 @@ func (s *skillStage) stage(thread api.ID, workspace, project string) provider.Sk
 		slog.Warn("skills: the run's agent gets none, as they couldn't be copied", "thread", thread, "err", err)
 	}
 	if root == "" {
-		delete(s.using, thread)
 		return provider.Skills{}
 	}
-	s.using[thread] = root
+	s.opening[root]++
 	out := provider.Skills{Root: root}
 	for _, sk := range set.Skills {
 		out.List = append(out.List, provider.Skill{Name: sk.Name, Description: sk.Description, Path: skills.SkillFile(root, sk.Name)})
@@ -54,16 +63,56 @@ func (s *skillStage) stage(thread api.ID, workspace, project string) provider.Sk
 	return out
 }
 
-// sweep deletes the overlays no thread's agent last opened with.
+// opened lets go of root, the overlay staged for thread's open, as the
+// open returns: one that opened an agent makes it the thread's, in place
+// of its last agent's; one that didn't leaves the last agent its own.
+func (s *skillStage) opened(thread api.ID, root string, ok bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if root != "" {
+		if s.opening[root]--; s.opening[root] <= 0 {
+			delete(s.opening, root)
+		}
+	}
+	if !ok {
+		return
+	}
+	delete(s.survivors, thread)
+	if root == "" {
+		delete(s.using, thread)
+		return
+	}
+	s.using[thread] = root
+}
+
+// sweep deletes the overlays no agent may read.
 func (s *skillStage) sweep() {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := skills.Sweep(s.dir, slices.Collect(maps.Values(s.using))); err != nil {
+	keep := slices.Concat(slices.Collect(maps.Values(s.using)), slices.Collect(maps.Keys(s.opening)))
+	if len(s.survivors) > 0 {
+		keep = append(keep, s.inherited...)
+	}
+	if err := skills.Sweep(s.dir, keep); err != nil {
 		slog.Warn("skills: an overlay no agent uses stays", "err", err)
 	}
+}
+
+// ended is that the run of thread ended, so an agent the last engine
+// started for it no longer runs.
+func (s *skillStage) ended(thread api.ID) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.survivors, thread)
 }
 
 func (s *skillStage) forget(thread api.ID) {
@@ -73,16 +122,30 @@ func (s *skillStage) forget(thread api.ID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.using, thread)
+	delete(s.survivors, thread)
 }
 
-// clear deletes every overlay, as no agent of an engine before this one
-// runs once it booted.
-func (s *skillStage) clear() {
+// boot keeps every overlay the last engine left while an agent it started
+// may still run, the runs of survivors, restored or uncertain; with none,
+// it deletes them.
+func (s *skillStage) boot(survivors []api.ID) {
 	if s == nil {
 		return
 	}
-	if err := skills.Clear(s.dir); err != nil {
-		slog.Warn("skills: the last engine's overlays stay", "err", err)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(survivors) == 0 {
+		if err := skills.Clear(s.dir); err != nil {
+			slog.Warn("skills: the last engine's overlays stay", "err", err)
+		}
+		return
+	}
+	for _, id := range survivors {
+		s.survivors[id] = true
+	}
+	entries, _ := os.ReadDir(skills.Runs(s.dir))
+	for _, e := range entries {
+		s.inherited = append(s.inherited, filepath.Join(skills.Runs(s.dir), e.Name()))
 	}
 }
 
