@@ -250,7 +250,8 @@ func (e st2endpoint) Open(context.Context, api.Subscription) (api.Stream, error)
 }
 
 func TestRespondRaceHasOneWinner(t *testing.T) {
-	n := start(t, dbPath(t), fake.New(fake.Turn(true)))
+	path := dbPath(t)
+	n := start(t, path, fake.New(fake.Turn(true)))
 	thread := newThread(t, n.h)
 	submit(t, n.h, thread, dispatch("edit", api.StartNow))
 	req := until(t, n.h, thread, "approval", waiting).Requests[0]
@@ -287,6 +288,7 @@ func TestRespondRaceHasOneWinner(t *testing.T) {
 		t.Fatalf("%d winners", won)
 	}
 	until(t, n.h, thread, "turn end", idle)
+	untilEffectsDone(t, path, "request.deliver")
 	evs := events(t, n.h, thread)
 	if count(evs, "request.answered") != 1 || count(evs, "request.delivered") != 1 {
 		t.Fatalf("answered %d, delivered %d", count(evs, "request.answered"), count(evs, "request.delivered"))
@@ -627,7 +629,8 @@ func TestInterruptDuringDeliveryLogsWhatTheAgentGot(t *testing.T) {
 		}
 		return nil
 	})
-	n := start(t, dbPath(t), g)
+	path := dbPath(t)
+	n := start(t, path, g)
 	thread := newThread(t, n.h)
 	submit(t, n.h, thread, dispatch("edit", api.StartNow))
 	respond(t, n.h, thread, until(t, n.h, thread, "approval", waiting).Requests[0])
@@ -635,6 +638,7 @@ func TestInterruptDuringDeliveryLogsWhatTheAgentGot(t *testing.T) {
 	submit(t, n.h, thread, api.TurnInterrupt{})
 	close(release)
 	until(t, n.h, thread, "turn end", idle)
+	untilEffectsDone(t, path, "request.deliver")
 
 	evs := events(t, n.h, thread)
 	if got := g.count(provider.Respond{}); got != 1 {
