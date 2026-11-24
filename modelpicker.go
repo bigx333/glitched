@@ -115,13 +115,21 @@ func (a *app) shownFamilies() []family {
 // are more.
 const modelRows = 5.5
 
-// pickerReveal is the model row the popover scrolls into view as it opens
-// or shows another family: the chosen model's, where it is the family's,
-// else the first. Glitched's own drawing of the models and a copy's each
-// scroll to it once.
+// pickerReveal is the model row the popover scrolls into view as it opens,
+// shows another family, or its family's models change around the row: the
+// chosen model's, where it is the family's, else the first, at index at.
+// A copy keyed by names (offeredModels) knows it by name. Glitched's own
+// drawing of the models and a copy's each scroll to it once.
 type pickerReveal struct {
-	family, key    string
-	native, copied bool
+	family, key, name string
+	at                int
+	native, copied    bool
+}
+
+// names is whether a copy's row key names the row: by its key, or by its
+// name, as copies made before there were keys do.
+func (r pickerReveal) names(key string) bool {
+	return r.key != "" && (key == r.key || key == r.name)
 }
 
 // efforts are the levels the chosen model runs at, least first.
@@ -234,11 +242,14 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 	}
 	if !a.pickerOpen {
 		a.pickerReveal = pickerReveal{}
-	} else if a.pickerReveal.family != a.pickerFamily {
-		a.pickerReveal = pickerReveal{family: a.pickerFamily}
+	} else {
+		want := pickerReveal{family: a.pickerFamily}
 		rows := a.pickerRows(familyOf(a.pickerFamily))
 		if i := max(slices.IndexFunc(rows, func(m modelInfo) bool { return m.key == a.pickedIn(t) }), 0); i < len(rows) {
-			a.pickerReveal.key = rows[i].key.String()
+			want.key, want.name, want.at = rows[i].key.String(), rows[i].name, i
+		}
+		if r := a.pickerReveal; r.family != want.family || r.key != want.key || r.at != want.at {
+			a.pickerReveal = want
 		}
 	}
 	a.pickerAt = b.Bounds()
@@ -264,7 +275,7 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 					return false
 				},
 				reveal: func(list *widget.Node, it widget.ListItem) bool {
-					return list.ID == "models" && !a.pickerReveal.copied && it.Key == a.pickerReveal.key
+					return list.ID == "models" && !a.pickerReveal.copied && a.pickerReveal.names(it.Key)
 				},
 			})
 		})
@@ -431,7 +442,7 @@ func (a *app) modelListRow(list, key string, e ui.Element) {
 			a.pickerFamily = a.shownFamilies()[i].provider
 		}
 	case "models":
-		if key == a.pickerReveal.key {
+		if a.pickerReveal.names(key) {
 			a.pickerReveal.copied = true
 		}
 		i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.key.String() == key || m.name == key })
