@@ -497,11 +497,11 @@ func servedAt(t *testing.T, ep api.Endpoint) string {
 	go func() {
 		defer close(done)
 		key := transport.KeyOf("pair")
-		admit := func(_ *http.Request, proved func(transport.Key) bool) (transport.Key, context.Context, error) {
+		admit := func(_ *http.Request, proved func(transport.Key) bool) (transport.Grant, error) {
 			if !proved(key) {
-				return transport.Key{}, nil, transport.ErrRefused
+				return transport.Grant{}, transport.ErrRefused
 			}
-			return key, ctx, nil
+			return transport.Grant{Key: key, Done: ctx}, nil
 		}
 		(&transport.Server{Transport: tn, Endpoint: ep, Authorize: admit}).Serve(ctx, ln)
 	}()

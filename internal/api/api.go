@@ -598,6 +598,9 @@ type Environment struct {
 	// ProviderLog is that the engine keeps its provider log now, whatever
 	// its engine.json says it should from its next start.
 	ProviderLog bool `json:"providerLog,omitempty"`
+	// Link is the id of the link whose token asked, which the other
+	// machine keeps to know the link it added; zero for any other caller.
+	Link ID `json:"link,omitzero"`
 }
 
 // CheckpointStore is how much disk the checkpoints of threads' files take,

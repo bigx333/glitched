@@ -97,11 +97,11 @@ func serverNode(t *testing.T) (*nodeProjects, string) {
 	go func() {
 		defer close(served)
 		key := transport.KeyOf("any")
-		admit := func(_ *http.Request, proved func(transport.Key) bool) (transport.Key, context.Context, error) {
+		admit := func(_ *http.Request, proved func(transport.Key) bool) (transport.Grant, error) {
 			if !proved(key) {
-				return transport.Key{}, nil, transport.ErrRefused
+				return transport.Grant{}, transport.ErrRefused
 			}
-			return key, ctx, nil
+			return transport.Grant{Key: key, Done: ctx}, nil
 		}
 		(&transport.Server{Transport: tn, Endpoint: d.Endpoint(), Projects: p, Authorize: admit}).Serve(ctx, ln)
 	}()

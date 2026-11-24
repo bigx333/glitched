@@ -39,8 +39,13 @@ type endpoint struct {
 	remote bool
 }
 
+// Info is the engine as its caller sees it. A link's is only what the
+// other machine keeps of this one: which engine it is and which link.
 func (e endpoint) Info(ctx context.Context) (api.Environment, error) {
 	env, err := e.Host.Info(ctx)
+	if l, ok := api.LinkOf(ctx); ok && err == nil {
+		return api.Environment{ID: env.ID, Name: env.Name, Protocol: env.Protocol, Log: env.Log, Link: l.ID}, nil
+	}
 	if err == nil {
 		env.ProviderLog = e.Host.ProviderLog()
 		env.Tailnet = e.d.tailnet(ctx)

@@ -260,14 +260,14 @@ func TestTailnetSendsNoReusableSecretWhenTheRouteCheckIsWrong(t *testing.T) {
 }
 
 // admit is an Authorize that admits each token in grants until its ctx ends.
-func admit(grants map[string]context.Context) func(*http.Request, func(Key) bool) (Key, context.Context, error) {
-	return func(_ *http.Request, proved func(Key) bool) (Key, context.Context, error) {
+func admit(grants map[string]context.Context) func(*http.Request, func(Key) bool) (Grant, error) {
+	return func(_ *http.Request, proved func(Key) bool) (Grant, error) {
 		for token, grant := range grants {
 			if k := KeyOf(token); proved(k) {
-				return k, grant, nil
+				return Grant{Key: k, Done: grant}, nil
 			}
 		}
-		return Key{}, nil, errors.New("unknown token")
+		return Grant{}, errors.New("unknown token")
 	}
 }
 
