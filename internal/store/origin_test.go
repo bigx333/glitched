@@ -226,3 +226,46 @@ func TestALoweredCeilingHoldsALinksThreadsTurn(t *testing.T) {
 		t.Fatalf("the narrowed thread: %+v; want a run at ask", th)
 	}
 }
+
+// A child under a link's thread runs no wider than the link's thread may
+// at each commit, as the link is then: a widening over a ceiling lowered
+// since is refused, and once the link is revoked a message admits no turn.
+func TestALinksCeilingHoldsTheThreadsUnderItsThread(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, filepath.Join(t.TempDir(), "host.db"))
+	l := &links{}
+	link := api.Link{ID: api.NewID(), Label: "a", Access: api.AccessAutoEdits}
+	l.set(link)
+	s.SetLinks(l.find)
+	c := linkCreate(link.ID, api.AccessAutoEdits, 1)
+	if _, err := s.Submit(ctx, c, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Observe(ctx, c.Target, engine.WorktreeReady{Workspace: "/wt/x", Branch: "glitched/x"}, time.Now(), leaseMake(t, s, c.Target)); err != nil {
+		t.Fatal(err)
+	}
+	live := threadOf(t, s, c.Target).Live()
+	if live == nil {
+		t.Fatal("the link's thread started no turn")
+	}
+	kid := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: kid, Body: api.ThreadCreate{
+		Workspace: "/wt/x", Title: "kid", Model: api.ModelRef{Provider: "fake", Model: "m"}, Access: api.AccessAsk, Parent: c.Target, Run: live.ID,
+	}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	link.Access = api.AccessAsk
+	l.set(link)
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: kid, Body: api.ThreadConfigure{Access: new(api.AccessAutoEdits)}}, time.Now()); err == nil {
+		t.Fatal("a child under the link's thread was widened over the link's lowered ceiling")
+	}
+
+	l.revoke(link.ID)
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: kid, Body: api.MessageDispatch{Text: "go", Mode: api.StartNow}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if th := sameAsFold(t, s, kid, "a message after the revoke"); th.Live() != nil {
+		t.Fatalf("the child under a revoked link's thread: %+v; want its message waiting and no run", th)
+	}
+}

@@ -65,10 +65,14 @@ func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Inte
 			if err := engine.CheckChild(line, kids, s.limits, b); err != nil {
 				return nil, nil, err
 			}
-			// A child of a link's thread runs no wider than the link's
+			// A child under a link's thread runs no wider than the link's
 			// thread may now.
-			if top := line[len(line)-1]; top.Origin != nil {
-				if c, err := s.ceiling(top)(); err != nil || b.Access > min(c, top.Origin.Access) {
+			env, err := s.env(ctx, q, line[0])
+			if err != nil {
+				return nil, nil, err
+			}
+			if env.Ceiling != nil {
+				if c, err := env.Ceiling(); err != nil || b.Access > c {
 					return nil, nil, &api.RejectedError{Reason: "a child thread can't run wider than the thread from another machine it is under may now"}
 				}
 			}
@@ -111,7 +115,11 @@ func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Inte
 				return nil, nil, err
 			}
 		}
-		return engine.DecideWith(t, c, s.env(t), now)
+		env, err := s.env(ctx, q, t)
+		if err != nil {
+			return nil, nil, err
+		}
+		return engine.DecideWith(t, c, env, now)
 	}}
 	r := &receipt{id: c.ID, hash: hash[:], thread: c.Target}
 	at, err := s.commit(ctx, r, 0, func(q querier) ([]step, error) {
@@ -135,7 +143,7 @@ func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Inte
 					continue
 				}
 			}
-			steps = append(steps, step{id, func(_ querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
+			steps = append(steps, step{id, func(q querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
 				if r := t.Live(); c.Caller != nil && r != nil && r.State == engine.RunUncertain {
 					return nil, nil, nil
 				}
@@ -143,7 +151,11 @@ func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Inte
 				if body == nil {
 					return nil, nil, nil
 				}
-				return engine.DecideWith(t, api.Command{ID: c.ID, Target: id, Body: body, Caller: c.Caller}, s.env(t), now)
+				env, err := s.env(ctx, q, t)
+				if err != nil {
+					return nil, nil, err
+				}
+				return engine.DecideWith(t, api.Command{ID: c.ID, Target: id, Body: body, Caller: c.Caller}, env, now)
 			}})
 		}
 		return append(steps, top), nil
@@ -259,26 +271,42 @@ func linkKidsOf(ctx context.Context, q querier, link api.ID) (engine.Kids, error
 	return k, err
 }
 
-// env is what a decision on t reads besides t, as the engine has it now.
+// env is what a decision on t reads besides t, as the engine has it now,
+// through q, the commit's: with the ceiling of the link's thread t is or
+// is under, so the link caps every thread of its tree at each commit.
 // s.mu must be held.
-func (s *Store) env(t engine.Thread) engine.Env {
-	return engine.Env{Places: s.places, Ceiling: s.ceiling(t)}
-}
-
-// ceiling is the most t, a link's thread, may run at now as its link and
-// this engine's setting allow. s.mu must be held.
-func (s *Store) ceiling(t engine.Thread) func() (api.Access, error) {
+func (s *Store) env(ctx context.Context, q querier, t engine.Thread) (engine.Env, error) {
+	env := engine.Env{Places: s.places}
+	o, err := originOf(ctx, q, t)
+	if err != nil || o == nil {
+		return env, err
+	}
 	links := s.links
-	return func() (api.Access, error) {
-		switch {
-		case t.Origin == nil:
-			return api.AccessFull, nil
-		case links == nil:
+	env.Ceiling = func() (api.Access, error) {
+		if links == nil {
 			return 0, errors.New("this engine takes no threads from other machines")
 		}
-		l, err := links(t.Origin.Link)
-		return l.Access, err
+		l, err := links(o.Link)
+		return min(l.Access, o.Access), err
 	}
+	return env, nil
+}
+
+// originOf is the origin of the link's thread t is or is under, through
+// deleted threads too, as far up as api.MaxDepth: nil for a thread of
+// this engine's own line.
+func originOf(ctx context.Context, q querier, t engine.Thread) (*engine.Origin, error) {
+	for range api.MaxDepth + 1 {
+		if t.Origin != nil || t.Parent.IsZero() {
+			return t.Origin, nil
+		}
+		parent, err := loadThread(ctx, q, t.Parent)
+		if err != nil || !parent.Exists() {
+			return nil, err
+		}
+		t = parent
+	}
+	return nil, nil
 }
 
 // SetLinks has the threads other machines' links start find their link
@@ -319,8 +347,12 @@ func (s *Store) SetLimits(l engine.Limits) {
 // when the observation is refused with engine.ErrRefused.
 func (s *Store) Observe(ctx context.Context, thread api.ID, o engine.Observation, now time.Time, done int64) (api.Cursor, error) {
 	return s.commit(ctx, nil, done, func(querier) ([]step, error) {
-		return []step{{thread, func(_ querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
-			return engine.ObserveWith(t, o, s.env(t), now)
+		return []step{{thread, func(q querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
+			env, err := s.env(ctx, q, t)
+			if err != nil {
+				return nil, nil, err
+			}
+			return engine.ObserveWith(t, o, env, now)
 		}}}, nil
 	})
 }
