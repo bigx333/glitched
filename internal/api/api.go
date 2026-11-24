@@ -562,13 +562,21 @@ type Thread struct {
 	// Remote is set on a remote child's placeholder: where its child runs,
 	// whose run Run is as this engine last heard.
 	Remote *Placement `json:"remote,omitempty"`
+	// Origin is set on a thread another machine's link started: the
+	// thread there that started it, and the link's label here.
+	Origin *Origin `json:"origin,omitempty"`
 }
 
 // Placement is where a remote child runs: on the machine labelled
-// Machine, which this engine last heard from for it at Heard, zero before
-// it has since it started; Lost is why it no longer follows the child.
-// A read fills Machine and Heard; a stream's view leaves them out.
+// Machine, whose engine is Engine, through the link Link, as the thread
+// Thread there, zero until that machine took the create. This engine last
+// heard from it for the child at Heard, zero before it has since it
+// started; Lost is why it no longer follows the child. A read fills
+// Machine and Heard; a stream's view leaves them out.
 type Placement struct {
+	Engine  ID        `json:"engine"`
+	Link    ID        `json:"link"`
+	Thread  ID        `json:"thread,omitzero"`
 	Machine string    `json:"machine,omitempty"`
 	Heard   time.Time `json:"heard,omitzero"`
 	Lost    string    `json:"lost,omitempty"`
@@ -653,8 +661,10 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // still forgotten; version 20 takes a link's create of a thread settled
 // on its machine first, which a version 19 engine would start, and fences
 // a link's messages by its settles, which a version 19 engine would let a
-// late message reopen.
-const Protocol = 20
+// late message reopen; version 21 says in a view where a remote child runs
+// and where a link's thread came from, which a version 20 GUI would show
+// as a child it can't open and a thread of the user's.
+const Protocol = 21
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host

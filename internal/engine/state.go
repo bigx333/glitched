@@ -358,7 +358,7 @@ func View(t Thread) api.Thread {
 		v.Context = &c
 	}
 	if r := t.Remote; r != nil {
-		v.Remote = &api.Placement{Lost: r.Lost}
+		v.Remote = &api.Placement{Engine: r.Engine, Link: r.Link, Thread: r.Thread, Lost: r.Lost}
 		switch {
 		case r.State == RemoteBoundState:
 			v.Run = r.Slot
@@ -369,6 +369,10 @@ func View(t Thread) api.Thread {
 			e := *r.Ended
 			v.LastTurn = &e
 		}
+	}
+	if t.Origin != nil {
+		o := t.Origin.Origin
+		v.Origin = &o
 	}
 	if r := t.Live(); r != nil {
 		v.Turn = &api.Turn{Run: r.ID, Model: r.Model, Access: r.Access, Silent: r.Silent}
