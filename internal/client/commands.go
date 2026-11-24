@@ -412,7 +412,7 @@ func (m *Manager) send(e *Env, th *Thread, cmd api.Command) {
 			}
 		}
 		if push {
-			src.push(ectx, s.ep)
+			src.push(ectx, s.ep, syncFirst)
 		}
 		select {
 		case e.slots <- struct{}{}:

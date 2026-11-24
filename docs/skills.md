@@ -44,6 +44,8 @@ was given: an app on it copies only its own.
 
 The copy is kept in the machine's `~/.glitched/skills-synced`. It holds
 one set: the last app to copy its skills there replaces the set before.
+A set holds at most 20,000 files and 256 MiB in all. If the app's skills
+are larger, the machine keeps the set it had and the app logs why.
 
 To stop, turn off **Sync my skills to paired machines** in Settings ›
 This machine. Each machine drops your skills the next time this app reaches
