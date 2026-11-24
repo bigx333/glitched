@@ -149,8 +149,9 @@ func TestEditsToTheThreadsFilesAreTold(t *testing.T) {
 	})
 }
 
-// One edit is one tell: the plugin hears of it as it finishes, not again
-// as it starts, though the transcript shows it under way between the two.
+// One edit is one tell: the plugin hears of it as it finishes, not as it
+// starts, though the transcript shows it under way between the two, and
+// not again as the agent says more of it. A failed edit made none.
 func TestOneEditIsToldOnce(t *testing.T) {
 	dir := tempDir(t)
 	dst := filepath.Join(plugins.Dir(dir), "file-ears")
@@ -168,6 +169,9 @@ func TestOneEditIsToldOnce(t *testing.T) {
 		provider.Work{Item: "e", Kind: "edit", Title: "Edit " + sidebarPath, Status: api.WorkStarted, Path: sidebarPath},
 		provider.RequestOpened{ID: "approve-1", Kind: api.KindApproval, Body: json.RawMessage(`{"operation":"edit","path":"` + sidebarPath + `"}`)},
 		provider.Work{Item: "e", Kind: "edit", Title: "Edit " + sidebarPath, Status: api.WorkCompleted, Path: sidebarPath},
+		provider.Work{Item: "e", Kind: "edit", Title: "Edit " + sidebarPath, Status: api.WorkCompleted, Path: sidebarPath, Output: "1 line changed"},
+		provider.Work{Item: "r", Kind: "edit", Title: "Edit README.md", Status: api.WorkStarted, Path: "README.md"},
+		provider.Work{Item: "r", Kind: "edit", Title: "Edit README.md", Status: api.WorkFailed, Path: "README.md"},
 		provider.TextDelta{Text: "Edited it."},
 	}
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(held))
@@ -181,7 +185,7 @@ func TestOneEditIsToldOnce(t *testing.T) {
 	}
 	h.until("the edit under way", func() bool {
 		fs := changedFiles(entriesOf(h.thread("Held")))
-		return len(fs) == 1 && fs[0].edited.IsZero() && h.thread("Held").View.Run == api.RunWaiting
+		return len(fs) == 1 && fs[0].made == 0 && h.thread("Held").View.Run == api.RunWaiting
 	})
 	snap, err := ep.Read(context.Background(), api.Query{Thread: id})
 	if err != nil || len(snap.Threads) != 1 || len(snap.Threads[0].Requests) != 1 {
@@ -192,7 +196,7 @@ func TestOneEditIsToldOnce(t *testing.T) {
 	}
 	h.until("the run ended with the edit", func() bool {
 		fs := changedFiles(entriesOf(h.thread("Held")))
-		return len(fs) == 1 && !fs[0].edited.IsZero() && h.thread("Held").View.Run == api.RunIdle
+		return len(fs) == 2 && fs[0].made == 1 && fs[1].made == 0 && h.thread("Held").View.Run == api.RunIdle
 	})
 	h.tt.Advance(time.Second)
 	if !h.tt.HasText("edited 1 " + sidebarPath) {
