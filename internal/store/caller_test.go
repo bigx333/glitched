@@ -221,3 +221,19 @@ func TestASilentRunCannotAct(t *testing.T) {
 		t.Fatal("silent maintenance run could send a child a message; expected a non-steerable caller refusal")
 	}
 }
+
+func TestAnAgentsSecondStopHoldsWhatQueuedSinceItsFirst(t *testing.T) {
+	f := newTaskTree(t)
+	f.must(&f.caller, api.TurnInterrupt{})
+	queued := api.NewID()
+	submitTo(t, f.s, api.Command{ID: queued, Target: f.child, Caller: &f.caller, Body: api.MessageDispatch{Mode: api.AfterActive, Text: "queued after the first cancel"}})
+	f.must(&f.caller, api.TurnInterrupt{})
+	if th := f.view(); th.Run != api.RunStopping || th.Queued != 1 {
+		t.Fatalf("before provider ended: got %v with %d queued, want stopping with one queued", th.Run, th.Queued)
+	}
+	f.observe(engine.Ended{Run: f.run, Outcome: api.OutcomeInterrupted})
+	th := f.view()
+	if th.Run != api.RunIdle || !th.Resumable || th.Queued != 1 {
+		t.Fatalf("second cancel didn't hold the new message %s: got run=%v (%+v), resumable=%v, queued=%d; want idle with one held message", queued, th.Run, th.Turn, th.Resumable, th.Queued)
+	}
+}
