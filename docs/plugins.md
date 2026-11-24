@@ -488,7 +488,7 @@ A plugin hears the events its manifest lists, if it may:
 | --- | --- | --- |
 | `thread.changed` | the thread's record (any of it changed), or `{id, deleted: true}` | `threads:read` |
 | `thread.moved` | `{thread, from, to}`, as a thread moves between the sidebar's sections | `threads:read` |
-| `thread.message` | `{thread, role, text}`, each new message of a thread you have open: from when it's first shown, and while you're away from it once it was | `messages:read` |
+| `thread.message` | `{thread, role, text}`, each new message of a thread you have open: from the transcript the engine first gives for it once it's shown, and while you're away from it once it was | `messages:read` |
 | `thread.files.changed` | `{thread, files}`, the files of a thread you have open that the agent edited since you were last told, as `thread.message` is | `threads:read` |
 | `setting.changed` | `{id, value, was}` | |
 | `theme.changed` | `{appearance}` | |
