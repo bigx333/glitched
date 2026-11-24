@@ -497,7 +497,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		})
 	}
 	if installed {
-		background.Go(func() { retire(ctx, filepath.Join(cfg.Dir, nodeDir), hostname(cfg.Name), cfg.Control) })
+		background.Go(func() { retire(ctx, filepath.Join(cfg.Dir, nodeDir), cfg.Name, cfg.Control) })
 	}
 	if len(cfg.Listen) > 0 || cfg.Tailnet {
 		background.Go(func() { g.watch(ctx) })
