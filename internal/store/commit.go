@@ -30,6 +30,17 @@ func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.R
 // c's, so the same c sent again gets it, and another body under c's ID
 // conflicts.
 func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Intent, now time.Time) (api.Receipt, error) {
+	return s.submit(ctx, c, body, nil, now)
+}
+
+// SubmitChecked is Submit of c once check passes on its target as c's
+// own commit has it, so no commit between a read and c's can change what
+// was checked.
+func (s *Store) SubmitChecked(ctx context.Context, c api.Command, check func(engine.Thread) error, now time.Time) (api.Receipt, error) {
+	return s.submit(ctx, c, c.Body, check, now)
+}
+
+func (s *Store) submit(ctx context.Context, c api.Command, body api.Intent, check func(engine.Thread) error, now time.Time) (api.Receipt, error) {
 	c.Expires = c.Expires.UTC()
 	// A caller's run is checked, not kept: the same command sent again by
 	// its agent's next turn gets the receipt the first took.
@@ -43,6 +54,11 @@ func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Inte
 	c.Body = body
 	top := step{c.Target, func(q querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
 		c := c
+		if check != nil {
+			if err := check(t); err != nil {
+				return nil, nil, err
+			}
+		}
 		if b, ok := c.Body.(api.ThreadCreate); ok && b.Fork != nil && !t.Exists() {
 			src, err := loadThread(ctx, q, b.Fork.Thread)
 			if err != nil {
