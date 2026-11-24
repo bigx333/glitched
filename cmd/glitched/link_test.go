@@ -74,6 +74,15 @@ func TestALinkMintedOnOneMachineIsAddedOnAnother(t *testing.T) {
 	if err := link(ctx, []string{"-dir", a, "-add", "b", "-server", addr, "secret-value"}); err == nil || strings.Contains(err.Error(), "secret-value") {
 		t.Errorf("link with a stray argument: %v, want a usage error that does not repeat it", err)
 	}
+	for _, args := range [][]string{{"-dir", a, "-add", "b", "-server", addr, "-secret-value"}, {"-dir", b, "-name", "c", "-link", "-access", "secret-value"}} {
+		cmd := link
+		if args[0] == "-dir" && args[1] == b {
+			cmd = pair
+		}
+		if err := cmd(ctx, args); !errors.As(err, new(usageError)) || strings.Contains(err.Error(), "secret-value") {
+			t.Errorf("%v: %v, want a usage error that does not repeat the value", args, err)
+		}
+	}
 	if ts, err := daemon.Tokens(b); err != nil || len(ts) != 1 || ts[0].Link == nil {
 		t.Fatalf("tokens.json after the refused pairs: %+v %v, want only the link", ts, err)
 	}

@@ -139,7 +139,7 @@ func AccessName(a api.Access) string {
 func ParseAccess(name string) (api.Access, error) {
 	a, ok := accessNames[name]
 	if !ok {
-		return 0, fmt.Errorf("unknown access %q: give ask, auto-edits or full", name)
+		return 0, errors.New("unknown access: give ask, auto-edits or full")
 	}
 	return a, nil
 }
