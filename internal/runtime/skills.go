@@ -190,7 +190,7 @@ func (h *Host) Skills(ctx context.Context, q api.SkillQuery) (api.SkillList, err
 		list.Synced = &api.SyncedFrom{Name: o.Name, Pulled: o.Pulled}
 	}
 	for _, sk := range set.Skills {
-		s := api.Skill{Name: sk.Name, Description: sk.Description, Source: string(sk.Source), Shown: sk.Shown, Overrides: sk.Replaces != "", Replaces: string(sk.Replaces)}
+		s := api.Skill{Name: sk.Name, Description: sk.Description, Source: string(sk.Source), Shown: sk.Shown, Replaces: string(sk.Replaces)}
 		if sk.Source == skills.Synced {
 			s.From = from
 		}

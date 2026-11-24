@@ -23,10 +23,10 @@ type skillSource struct {
 	dir  string
 }
 
-// skillSource is this machine as e gets its skills, and false where e is
+// syncSource is this machine as e gets its skills, and false where e is
 // this machine's own engine, or before that engine has answered. Only the
 // Post thread calls it.
-func (m *Manager) skillSource(e *Env) (skillSource, bool) {
+func (m *Manager) syncSource(e *Env) (skillSource, bool) {
 	if e.Kind != Remote {
 		return skillSource{}, false
 	}

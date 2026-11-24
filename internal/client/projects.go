@@ -78,7 +78,7 @@ func (m *Manager) Skills(e *Env, thread api.ID, done func(api.SkillList, error))
 		return
 	}
 	ectx := e.ctx
-	src, push := m.skillSource(e)
+	src, push := m.syncSource(e)
 	m.wg.Go(func() {
 		if push {
 			src.push(ectx, s.ep)

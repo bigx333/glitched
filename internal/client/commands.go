@@ -396,7 +396,7 @@ func (m *Manager) send(e *Env, th *Thread, cmd api.Command) {
 	prev, done := th.last, make(chan struct{})
 	th.last = done
 	ectx := e.ctx
-	src, push := m.skillSource(e)
+	src, push := m.syncSource(e)
 	switch cmd.Body.(type) {
 	case api.MessageDispatch, api.QueueResume:
 	default:

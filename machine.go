@@ -193,6 +193,13 @@ func (a *app) agentsCard(c *ui.Context, m client.Machine) {
 				a.configure(func(cfg *daemon.Config) { cfg.ContinueAfterRestart = v })
 			}
 		})
+		syncOn := m.Config.SyncSkillsEnabled()
+		settingRow(c, "Sync my skills to paired machines", "Threads on the machines this app reaches get your skills in ~/.glitched/skills, and theirs replace a machine's own of the same name. Turned off, each machine drops them the next time this app reaches it.", func() {
+			if ui.Switch(c.Key("sync-skills"), &syncOn).Label("Enable sync my skills to paired machines").Changed() {
+				v := syncOn
+				a.configure(func(cfg *daemon.Config) { cfg.SyncSkills = &v })
+			}
+		})
 		if !m.Embedded && m.Engine != nil {
 			ui.Text(c, "glitched serve applies a change here when it next starts.").Key("limits-later").Padding(14, 16).FontSize(12).TextColor(palette.muted)
 		}

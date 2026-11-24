@@ -333,13 +333,6 @@ func (s *Store) Drop(source api.ID) error {
 	return os.RemoveAll(s.dir())
 }
 
-// Synced is what Sync last took, as Sync answers it; the zero one for
-// none.
-func (s *Store) Synced() api.SkillsSynced {
-	cur, _ := readOrigin(s.state)
-	return cur.synced()
-}
-
 func parseMode(m string) (bool, error) {
 	switch m {
 	case "644":

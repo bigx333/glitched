@@ -2,13 +2,16 @@
 // the engine of the thread's machine last said them: the header's record
 // holds them as glitched.skills.list answers,
 //
-//   { skills: [{ name, description, source, shown, overrides }], skipped: [{ source, name, why }], delivery }
+//   { skills: [{ name, description, source, shown, from, replaces }], skipped: [{ source, name, why }], delivery, synced: { name, pulled } }
 //
 // and leaves them out till the engine says. source is "home", the user's
-// own, or "project". The pill shows while a thread has a skill or a
-// skipped one; its popover lists them.
+// own on the thread's machine, "synced", the user's from the machine
+// from, or "project"; replaces is the source of the skill of its name it
+// replaces. synced says which machine gave the synced ones, and when it
+// last did. The pill shows while a thread has a skill or a skipped one;
+// its popover lists them.
 
-const SOURCES = { home: "Yours", project: "Project" };
+const SOURCES = { home: "Yours", synced: "Synced", project: "Project" };
 
 export function init() {
   return { state: { open: null } };
@@ -26,7 +29,7 @@ export function place({ state, items }) {
 // the engine says.
 function skillsOf(context) {
   const s = context?.skills;
-  return s ? { skills: s.skills ?? [], skipped: s.skipped ?? [], delivery: s.delivery ?? "" } : null;
+  return s ? { skills: s.skills ?? [], skipped: s.skipped ?? [], delivery: s.delivery ?? "", synced: s.synced ?? null } : null;
 }
 
 // pill is a thread's skills, by count; compact, it keeps to its icon,
@@ -59,8 +62,9 @@ function count(n, what) {
 
 function popover(list) {
   const out = [{ type: "text", text: "Skills", style: "strong" }];
+  if (list.synced) out.push({ type: "text", id: "synced", text: "Synced from " + list.synced.name + " " + ago(list.synced.pulled), style: "muted" });
   if (list.skills.length === 0) out.push({ type: "text", text: "None for this thread.", style: "muted" });
-  for (const s of list.skills) out.push(skill(s));
+  for (const s of list.skills) out.push(skill(s, list.synced));
   if (list.skipped.length) {
     out.push({ type: "text", text: "Skipped", style: "strong" });
     for (const s of list.skipped) out.push(skipped(s));
@@ -69,9 +73,20 @@ function popover(list) {
   return out;
 }
 
-function skill(s) {
-  const badges = [{ type: "badge", text: SOURCES[s.source] ?? s.source, style: s.source === "project" ? "accent" : "pill" }];
-  if (s.overrides) badges.push({ type: "badge", text: "replaces yours", style: "warning" });
+// ago is how long before now at, an ISO time, was, as the app says it.
+function ago(at) {
+  const s = (Date.now() - Date.parse(at)) / 1000;
+  if (!(s >= 60)) return "just now";
+  for (const [unit, n] of [["d", 86400], ["h", 3600], ["m", 60]]) {
+    if (s >= n) return Math.floor(s / n) + unit + " ago";
+  }
+}
+
+const REPLACED = { home: () => "replaces yours", synced: (synced) => "replaces " + (synced?.name ?? "the synced") + "'s" };
+
+function skill(s, synced) {
+  const badges = [{ type: "badge", text: s.source === "synced" ? "From " + s.from : SOURCES[s.source] ?? s.source, style: s.source === "project" ? "accent" : "pill" }];
+  if (REPLACED[s.replaces]) badges.push({ type: "badge", text: REPLACED[s.replaces](synced), style: "warning" });
   return {
     type: "column",
     id: "skill:" + s.source + ":" + s.name,
@@ -79,7 +94,7 @@ function skill(s) {
     children: [
       { type: "row", gap: 6, align: "center", children: [{ type: "text", text: s.name, singleLine: true }, { type: "spacer" }, ...badges] },
       { type: "text", text: s.description, style: "muted", selectable: true },
-      { type: "text", text: s.shown, style: "muted", singleLine: true, selectable: true },
+      ...(s.source === "synced" ? [] : [{ type: "text", text: s.shown, style: "muted", singleLine: true, selectable: true }]),
     ],
   };
 }

@@ -31,7 +31,6 @@ type Skill struct {
 	Description string `json:"description"`
 	Source      string `json:"source"`
 	Shown       string `json:"shown"`
-	Overrides   bool   `json:"overrides,omitempty"`
 	From        string `json:"from,omitempty"`
 	Replaces    string `json:"replaces,omitempty"`
 }

@@ -242,6 +242,37 @@ func TestTheAgentsCardTogglesCompactBeforeExpire(t *testing.T) {
 	}
 }
 
+// Sync my skills to paired machines defaults to on, saves to engine.json
+// when toggled in the Agents card, and leaves the engine embedded: only
+// the app reads it.
+func TestTheAgentsCardTogglesSyncSkills(t *testing.T) {
+	dir := tempDir(t)
+	h := start(t, dir)
+	h.tt.SetSize(1280, 1600)
+	ticking(t, h)
+	h.click("Settings")
+	h.click("This machine")
+	h.until("the Agents card", func() bool {
+		return h.tt.HasText("Sync my skills to paired machines") && h.a.backend.Machine().Embedded
+	})
+	syncs := func(want bool) {
+		t.Helper()
+		cfg, err := daemon.Defaults(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.SyncSkillsEnabled() != want || !h.a.backend.Machine().Embedded {
+			t.Fatalf("sync skills %v, embedded %v; want %v, true", cfg.SyncSkillsEnabled(), h.a.backend.Machine().Embedded, want)
+		}
+	}
+	syncs(true)
+	for _, want := range []bool{false, true} {
+		h.click("Enable sync my skills to paired machines")
+		h.tt.Frame()
+		syncs(want)
+	}
+}
+
 // Keep awake while agents work defaults to on, saves to engine.json when
 // The Agents card's keep awake switch saves the setting and lets the
 // engine embedded here go of its hold on the machine at once, and take it

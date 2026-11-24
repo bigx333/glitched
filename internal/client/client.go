@@ -400,7 +400,7 @@ func (m *Manager) shell(e *Env, s *session, info api.Environment, it api.StreamI
 			w <- s
 		}
 		e.waiting = nil
-		if src, ok := m.skillSource(e); ok {
+		if src, ok := m.syncSource(e); ok {
 			m.wg.Go(func() { src.push(s.ctx, s.ep) })
 		}
 		// A snapshot of another log than the views held, as on the first
