@@ -45,14 +45,16 @@ func Machines(dir string) ([]Machine, error) {
 // places finds a remote child's machine in dir's machines.json as the
 // file is at its create, so a machine removed takes no more: its engine
 // and link, and never its token. A file that can't be read, or holds a
-// machine without its label, server, engine or link, refuses the create,
+// machine without its label, server, engine, link or token, refuses the create,
 // and is logged once until it reads again.
 func places(dir string) engine.Places {
 	var logged atomic.Bool
 	return func(label string) (api.Remote, bool, error) {
 		ms, err := Machines(dir)
-		if i := slices.IndexFunc(ms, func(m Machine) bool { return m.Label == "" || m.Server == "" || m.Engine.IsZero() || m.Link.IsZero() }); err == nil && i >= 0 {
-			err = fmt.Errorf("machine %d has no label, server, engine or link", i+1)
+		if i := slices.IndexFunc(ms, func(m Machine) bool {
+			return m.Label == "" || m.Server == "" || m.Engine.IsZero() || m.Link.IsZero() || m.Token == ""
+		}); err == nil && i >= 0 {
+			err = fmt.Errorf("machine %d has no label, server, engine, link or token", i+1)
 		}
 		if err != nil {
 			if !logged.Swap(true) {

@@ -355,20 +355,30 @@ func TestAnUnreadableMachinesJSONRefusesOnlyRemoteChildren(t *testing.T) {
 	refused(t, "a remote child", errs[1], "machines.json can't be read")
 }
 
-// A machines.json whose machine lacks its link is as unreadable as a
-// corrupt one: no placeholder is made with a zero link, and local children
-// still start.
+// A machines.json whose machine lacks its link or its token is as
+// unreadable as a corrupt one: no placeholder is made on a machine that
+// can't be reached, and local children still start.
 func TestAMachineWithoutItsLinkRefusesOnlyRemoteChildren(t *testing.T) {
-	dir := stateDir(t)
-	b, err := json.Marshal([]map[string]any{{"label": "laptop", "server": "laptop:7777", "engine": api.NewID()}})
-	if err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		name  string
+		entry map[string]any
+	}{
+		{"no link", map[string]any{"label": "laptop", "server": "laptop:7777", "engine": api.NewID(), "token": "link-token-1"}},
+		{"no token", map[string]any{"label": "laptop", "server": "laptop:7777", "engine": api.NewID(), "link": api.NewID()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := stateDir(t)
+			b, err := json.Marshal([]map[string]any{tc.entry})
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeMachines(t, dir, b)
+			ep, ad, parent := remoteEngine(t, dir)
+			_, errs := spawn(t, ep, ad, parent, fake.Child{Title: "here", Task: "go"}, fake.Child{Title: "there", Task: "go", Remote: "laptop"})
+			if errs[0] != nil {
+				t.Fatalf("a local child beside a machine with %s: %v; want it started", tc.name, errs[0])
+			}
+			refused(t, "a child on a machine with "+tc.name, errs[1], "machines.json can't be read")
+		})
 	}
-	writeMachines(t, dir, b)
-	ep, ad, parent := remoteEngine(t, dir)
-	_, errs := spawn(t, ep, ad, parent, fake.Child{Title: "here", Task: "go"}, fake.Child{Title: "there", Task: "go", Remote: "laptop"})
-	if errs[0] != nil {
-		t.Fatalf("a local child beside a machine without its link: %v; want it started", errs[0])
-	}
-	refused(t, "a child on a machine without its link", errs[1], "machines.json can't be read")
 }
