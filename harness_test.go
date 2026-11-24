@@ -208,16 +208,26 @@ func settleTester(tt *ui.Tester) {
 	}
 }
 
+// settleGap, when a test sets it, runs in settlePlugins between a look at
+// the posts that found none and the check that the plugins are idle.
+var settleGap func()
+
 func settlePlugins(t *testing.T, a *app, tt *ui.Tester, p *posts) {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	tt.Frame()
 	for {
+		// Idle first: a worker posts its drawing before it goes idle, so
+		// one posted after the run below is run next time round.
+		idle := a.plugins == nil || a.plugins.Idle()
 		ran := p.run()
 		if ran {
 			tt.Frame()
 		}
-		if !ran && (a.plugins == nil || a.plugins.Idle()) {
+		if !ran && settleGap != nil {
+			settleGap()
+		}
+		if !ran && idle {
 			return
 		}
 		if time.Now().After(deadline) {

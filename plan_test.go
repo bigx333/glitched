@@ -109,6 +109,39 @@ func TestAClearedPlanLeavesThePluginsHeader(t *testing.T) {
 	}
 }
 
+// A drawing the plugin posts while the settle looks at the posts is run
+// before the settle ends: the cleared plan's drawing is held till the
+// settle found no post, then posted, its plugin idle by the check.
+func TestASettleRunsTheDrawingPostedAsItLooked(t *testing.T) {
+	h := planned(t, "plan-cleared-late", planOf(api.PlanActive, api.PlanPending))
+	release := make(chan struct{})
+	defer plugins.HoldPlaceDraws(func(id string) {
+		if id == "plan" {
+			<-release
+		}
+	})()
+	settleGap = func() {
+		settleGap = nil
+		close(release)
+		for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(time.Millisecond) {
+			h.p.mu.Lock()
+			posted := len(h.p.q) > 0
+			h.p.mu.Unlock()
+			if posted && h.a.plugins.Idle() {
+				return
+			}
+		}
+		t.Error("the held drawing was never posted")
+	}
+	defer func() { settleGap = nil }()
+	th := h.a.current()
+	th.Transcript.Plan = nil
+	settlePlugins(t, h.a, h.tt, h.p)
+	if h.a.plugins.App("plan").PlaceView("plan", th.id().String()) != nil {
+		t.Errorf("the settle ended with the cleared plan's drawing unrun: %q", h.tt.Texts())
+	}
+}
+
 // A plan at a long step gives the header's controls their room: its pill
 // keeps to its count, then goes, before any control is cut off; wide
 // again, it says its step.
