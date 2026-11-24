@@ -288,7 +288,10 @@ type step struct {
 func (s *Store) commit(ctx context.Context, r *receipt, done int64, plan func(q querier) ([]step, error)) (api.Cursor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	tx, err := s.db.BeginTx(ctx, nil)
+	// Once its fence is synced the transaction commits, cancelled or not:
+	// one rolled back then leaves the fence ahead, which the next open takes
+	// for a restore. Its statements still stop on ctx, before the fence.
+	tx, err := s.db.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
 		return api.Cursor{}, err
 	}
@@ -349,7 +352,6 @@ func (s *Store) commit(ctx context.Context, r *receipt, done int64, plan func(q 
 		return api.Cursor{}, err
 	}
 	if len(c.Events) > 0 {
-		s.fenceCommitted(head)
 		for _, h := range s.hooks {
 			h(c)
 		}

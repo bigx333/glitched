@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -21,13 +22,9 @@ import (
 
 type Store struct {
 	db    *sql.DB
-	fence *os.File
+	fence fenceFile
 	log   api.ID
 	host  api.ID
-
-	// committed is the head the last write under mu committed, which the
-	// fence records as its floor.
-	committed uint64
 
 	// mu admits one writer at a time, which makes commit order the order
 	// hooks see events in.
@@ -85,10 +82,8 @@ func (s *Store) Rewind(ctx context.Context) error {
 	}
 	if err != nil {
 		s.log = prev
-		return err
 	}
-	s.fenceCommitted(head)
-	return nil
+	return err
 }
 
 // OnCommit registers fn to run after every commit that wrote events, in
@@ -418,7 +413,6 @@ func (s *Store) migrate() error {
 	if err != nil {
 		return err
 	}
-	s.committed = head
 	if s.restored(head) {
 		if head, err = s.rewind(ctx, tx); err != nil {
 			return err
@@ -427,11 +421,7 @@ func (s *Store) migrate() error {
 	if err := s.writeFence(head); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	s.fenceCommitted(head)
-	return nil
+	return tx.Commit()
 }
 
 // upgrade brings a database an older build created to schemaVersion, one
@@ -512,58 +502,43 @@ func (s *Store) rewind(ctx context.Context, tx *sql.Tx) (uint64, error) {
 	return headSeq(ctx, tx)
 }
 
-// The fence file beside the database holds the log id, the highest seq
-// handed out under it, and the head committed before it, its floor. A
-// restored copy brings its own meta table back, so only a file outside the
-// database can tell that the copy is behind what clients have seen. A
-// fence from a build before the floor is the first two alone.
-const (
-	fenceSize = len(api.ID{}) + 16
-	oldFence  = len(api.ID{}) + 8
-)
+// The fence file beside the database holds the log id and the highest seq
+// handed out under it. A restored copy brings its own meta table back, so
+// only a file outside the database can tell that the copy is behind what
+// clients have seen.
+const fenceSize = len(api.ID{}) + 8
+
+type fenceFile interface {
+	io.ReaderAt
+	io.WriterAt
+	Sync() error
+	Close() error
+}
 
 // restored reports whether the database is not the one the fence last saw,
-// or is behind its floor. A database between the floor and the head lost
-// the write the fence was handed out for to a crash or a cancel before it
-// committed, so no reader saw those seqs. A missing or torn fence on a
-// database with events counts as a restore: a new log id costs clients one
-// snapshot, a reused one hands them the wrong events.
+// or is behind it. A missing or torn fence on a database with events counts
+// as a restore: a new log id costs clients one snapshot, a reused one hands
+// them the wrong events.
 func (s *Store) restored(head uint64) bool {
 	var b [fenceSize]byte
-	n, _ := s.fence.ReadAt(b[:], 0)
-	if n != fenceSize && n != oldFence {
+	if n, _ := s.fence.ReadAt(b[:], 0); n != fenceSize {
 		return head > 0
 	}
-	floor := binary.BigEndian.Uint64(b[len(s.log):])
-	if n == fenceSize {
-		floor = binary.BigEndian.Uint64(b[oldFence:])
-	}
-	return api.ID(b[:len(s.log)]) != s.log || head < floor
+	return api.ID(b[:len(s.log)]) != s.log || head < binary.BigEndian.Uint64(b[len(s.log):])
 }
 
 // writeFence records head as handed out under the log, durably, before the
 // transaction that writes it commits: no reader sees a seq the fence doesn't
-// cover.
+// cover. A transaction that then fails leaves the fence ahead, which the
+// next open takes for a restore.
 func (s *Store) writeFence(head uint64) error {
 	var b [fenceSize]byte
 	copy(b[:], s.log[:])
 	binary.BigEndian.PutUint64(b[len(s.log):], head)
-	binary.BigEndian.PutUint64(b[oldFence:], s.committed)
 	if _, err := s.fence.WriteAt(b[:], 0); err != nil {
 		return fmt.Errorf("store: fence: %w", err)
 	}
 	return s.fence.Sync()
-}
-
-// fenceCommitted raises the fence's floor to head once its write committed.
-// It skips the sync, which the next write's fence does: a machine crash
-// before then can only leave the floor where it was, and a restore to just
-// before this write unseen.
-func (s *Store) fenceCommitted(head uint64) {
-	s.committed = head
-	var b [8]byte
-	binary.BigEndian.PutUint64(b[:], head)
-	s.fence.WriteAt(b[:], int64(oldFence))
 }
 
 type querier interface {
