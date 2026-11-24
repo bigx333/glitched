@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -178,19 +179,15 @@ func TestTheDiffPanelOpensDrawn(t *testing.T) {
 	t.Logf("the opening frame took %v", took)
 }
 
-// A first drawing that comes after the wait ran out leaves the panel
-// empty as it opens, and fills it once it comes, in the frame its post
-// brings.
+// A first drawing held past the wait leaves the panel empty as it opens,
+// after the frame waited for it, and the worker's post of it is what
+// fills the panel.
 func TestADiffPanelDrawnLateFillsInOnceDrawn(t *testing.T) {
-	waitingFirstDraws(t, 10*time.Millisecond)
-	h, _ := checked(t)
+	waitingFirstDraws(t, 100*time.Millisecond)
+	h, th := checked(t)
 	writeOwnPlugin(t, h.a, "late-diff", `{"id": "late-diff", "name": "Late diff", "main": "index.js", "contract": "glitched", "contractVersion": 2,
-		"capabilities": ["ui.place", "ui.replace", "threads:read"], "glitched": {"places": [{"id": "panel", "at": "thread.panel.diff", "replaces": true}]}}`, `
-		let held = false
-		export function place({ items }) {
-			if (!held) { held = true; const until = Date.now() + 1000; while (Date.now() < until) {} }
-			return items.map(() => ({ type: "text", text: "Late changes" }))
-		}`)
+		"capabilities": ["ui.place", "ui.replace", "threads:read"], "glitched": {"places": [{"id": "panel", "at": "thread.panel.diff", "replaces": true}]}}`,
+		`export function place({ items }) { return items.map(() => ({ type: "text", text: "Late changes" })) }`)
 	for _, c := range []string{"ui.replace", "threads:read"} {
 		if err := h.a.plugins.SetGranted("late-diff", c, true); err != nil {
 			t.Fatal(err)
@@ -199,13 +196,45 @@ func TestADiffPanelDrawnLateFillsInOnceDrawn(t *testing.T) {
 	h.a.plugins.SetGranted("diff-panel", "ui.replace", false) // the built-in doesn't draw it instead
 	h.a.plugins.Reload()
 	h.tt.Advance(time.Second)
+	// Its drawings wait till the test lets them go.
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	t.Cleanup(plugins.HoldPlaceDraws(func(plugin string) {
+		if plugin == "late-diff" {
+			<-gate
+		}
+	}))
 	h.a.showDiff = true
+	start := time.Now()
 	h.tt.Frame()
+	if took := time.Since(start); took < firstDrawWait {
+		t.Fatalf("the opening frame took %v, less than the wait: it didn't wait for the first drawing", took)
+	}
 	if h.tt.HasText("Late changes") {
 		t.Fatalf("the panel opened drawn, though its drawing came after the wait: %q", h.tt.Texts())
 	}
-	// A frame only once the app posts, as the window's Update draws one.
-	h.until("the late drawing", func() bool { return h.tt.HasText("Late changes") })
+	release()
+	// The drawing comes in the worker's post, with no frame drawn: the
+	// session has it once the post runs.
+	key := th.id().String() + "/header"
+	deadline := time.After(10 * time.Second)
+	for h.a.plugins.Live("late-diff").PlaceView("panel", key) == nil {
+		if h.p.run() {
+			continue
+		}
+		select {
+		case <-h.p.wake:
+		case <-time.After(10 * time.Millisecond):
+		case <-deadline:
+			t.Fatal("the late drawing was never posted")
+		}
+	}
+	h.tt.Frame()
+	if !h.tt.HasText("Late changes") {
+		t.Fatalf("the frame after the drawing's post doesn't show it: %q", h.tt.Texts())
+	}
 }
 
 // A copy your plugin leaves undrawn (null) is waited on once, not on every

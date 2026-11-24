@@ -7,6 +7,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"glitched/internal/plugins/widget"
@@ -207,6 +208,9 @@ func (s *Session) Places() []Place { return s.places.places }
 // renderPlaces draws every copy of every place, a batch at a time, with
 // the plugin's place export, and publishes them with what failed.
 func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed error) {
+	if hold := placeDrawHold.Load(); hold != nil {
+		(*hold)(s.plugin)
+	}
 	start := time.Now()
 	drawn := map[string]map[string]*widget.Node{}
 	asked := map[[2]string]string{}
@@ -273,6 +277,18 @@ func (s *Session) renderPlaces(gen, processed int, state json.RawMessage, failed
 			s.mu.Unlock()
 		}
 	})
+}
+
+// placeDrawHold, when a test sets it, runs on each session's worker before
+// the worker draws its plugin's places.
+var placeDrawHold atomic.Pointer[func(plugin string)]
+
+// HoldPlaceDraws has hold run before each drawing of a plugin's places,
+// on the worker that draws them, till the returned func is called: a test
+// holds a drawing with it.
+func HoldPlaceDraws(hold func(plugin string)) (restore func()) {
+	placeDrawHold.Store(&hold)
+	return func() { placeDrawHold.Store(nil) }
 }
 
 // awaitsApp reports whether the plugin id's runtime is in a call into the
