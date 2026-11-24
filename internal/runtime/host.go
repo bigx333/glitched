@@ -278,6 +278,11 @@ func (h *Host) Info(context.Context) (api.Environment, error) {
 }
 
 func (h *Host) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
+	if link, ok := api.LinkOf(ctx); ok {
+		if err := h.owned(ctx, link, q.Thread); err != nil {
+			return api.Snapshot{}, err
+		}
+	}
 	return h.store.Read(ctx, q)
 }
 
@@ -287,8 +292,14 @@ func (h *Host) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 // worktree is made or removed, so a removal sees every thread in its
 // worktree.
 func (h *Host) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
+	if link, ok := api.LinkOf(ctx); ok {
+		return h.submitFromLink(ctx, link, c)
+	}
 	switch b := c.Body.(type) {
 	case api.ThreadCreate:
+		if b.Origin != nil || b.Repository != nil {
+			return api.Receipt{}, &api.RejectedError{Reason: "only another machine's link starts a thread from there"}
+		}
 		if b.Remote != "" {
 			// What goes to another machine holds no value of the parent's
 			// vault, which never leaves this one, however short.
@@ -816,6 +827,9 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 
 	case engine.RemoveWorktree:
 		return nil, h.removeWorktree(h.ctx, e.Thread, b)
+
+	case engine.MakeWorktree:
+		return h.makeWorktree(h.ctx, t, b)
 
 	case engine.CaptureCheckpoint:
 		return h.capture(t, b)
