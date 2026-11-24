@@ -101,6 +101,12 @@ type Config struct {
 	ContinueAfterRestart bool `json:"continue_after_restart,omitempty"`
 	// PluginRun runs the programs plugins' services ask for; nil runs them with RunProgram.
 	PluginRun func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error) `json:"-"`
+	// Name is the engine's name, which its clients show; "" is this
+	// machine's hostname.
+	Name string `json:"-"`
+	// Detect reads an installed Tailscale's status; nil reads the one
+	// installed on this machine.
+	Detect func(context.Context) (api.Tailnet, error) `json:"-"`
 }
 
 // CompactBeforeExpireEnabled reports whether automatic idle compaction is
@@ -214,6 +220,9 @@ type Daemon struct {
 	mu        sync.Mutex
 	addrs     []net.Addr
 	tailnetAt string // where it serves an installed Tailscale's tailnet, once it does
+	// detect reads an installed Tailscale's status: cfg.Detect, else the
+	// one installed here.
+	detect func(context.Context) (api.Tailnet, error)
 }
 
 // listenOn is Tailnet.Listen; a test swaps it to assign an address late.
@@ -236,7 +245,10 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		hubAt = Socket(cfg.HubDir)
 	}
 	ctx, stop := context.WithCancel(ctx)
-	d := &Daemon{stop: stop, done: make(chan struct{}), stateDir: cfg.Dir, providers: cfg.Providers}
+	d := &Daemon{stop: stop, done: make(chan struct{}), stateDir: cfg.Dir, providers: cfg.Providers, detect: cfg.Detect}
+	if d.detect == nil {
+		d.detect = detect
+	}
 	defer func() {
 		if err != nil {
 			stop()
@@ -278,7 +290,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	var installed bool
 	if cfg.Tailnet || hubOnTailnet {
 		probe, cancel := context.WithTimeout(ctx, time.Second)
-		_, err := detect(probe)
+		_, err := d.detect(probe)
 		cancel()
 		// A missing Tailscale fails at once; one slow to answer is there.
 		installed = err == nil || errors.Is(err, context.DeadlineExceeded)
@@ -339,7 +351,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	} else {
 		slog.Warn("agents run without glitched mcp, so they start no child threads", "err", errors.Join(err, absErr))
 	}
-	opts = append(opts, runtime.WithMCPServers(cfg.MCP...), runtime.WithWorktrees(filepath.Join(cfg.Dir, "worktrees")), runtime.WithCheckpoints(filepath.Join(cfg.Dir, "checkpoints")), runtime.WithVault(secrets.New(secrets.Under(cfg.Dir))), runtime.WithIdleCompaction(cfg.CompactBeforeExpireEnabled()), runtime.WithAutoContinue(cfg.ContinueAfterRestart))
+	opts = append(opts, runtime.WithMCPServers(cfg.MCP...), runtime.WithWorktrees(filepath.Join(cfg.Dir, "worktrees")), runtime.WithCheckpoints(filepath.Join(cfg.Dir, "checkpoints")), runtime.WithVault(secrets.New(secrets.Under(cfg.Dir))), runtime.WithIdleCompaction(cfg.CompactBeforeExpireEnabled()), runtime.WithAutoContinue(cfg.ContinueAfterRestart), runtime.WithName(cfg.Name))
 	// The skills staged for an agent are read from its workspace too.
 	if dir, err := filepath.Abs(cfg.Dir); err == nil {
 		opts = append(opts, runtime.WithSkills(dir))

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image/png"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -414,8 +415,8 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		h.click("Add server")
 		h.until("why devbox-ip wasn't added", func() bool { return h.tt.HasText("already listed as devbox") })
 	case "machine":
-		h = start(t, tempDir(t))
-		h.tt.SetSize(1320, 1200)
+		h = startWith(t, tempDir(t), madeUpMachine)
+		h.tt.SetSize(1320, 1400)
 		ticking(t, h)
 		h.a.router.Push("/settings/machine")
 		h.until("the engine's status", func() bool {
@@ -599,7 +600,7 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		// the chip's menu, the alert before Undo this turn's files, and the
 		// row after it.
 		var notes string
-		h, _, notes = twoTurnsInAWorktree(t)
+		h, _, notes = twoTurnsInAWorktree(t, madeUpMachine)
 		switch os.Getenv("REVERT") {
 		case "menu":
 			h.click("1 file")
@@ -626,6 +627,16 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		t.Fatalf("no scene %q", name)
 	}
 	return h.a, h.tt
+}
+
+// madeUpMachine has an engine serve as one on a made-up machine, on a
+// made-up tailnet, so that a picture of This machine shows neither this
+// machine's name nor its Tailscale login.
+func madeUpMachine(c *daemon.Config) {
+	c.Name = "studio"
+	c.Detect = func(context.Context) (api.Tailnet, error) {
+		return api.Tailnet{Mode: api.TailnetInstalled, State: "Running", Name: "studio.example.ts.net", IP: netip.MustParseAddr("100.64.0.7"), Tailnet: "example.com", User: "sam@example.com"}, nil
+	}
 }
 
 // midTurn is a turn that stops mid-edit, as stalled holds it.

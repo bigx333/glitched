@@ -95,7 +95,7 @@ func (d *Daemon) tailnet(ctx context.Context) api.Tailnet {
 		}
 		return t
 	}
-	t, _ := detect(ctx)
+	t, _ := d.detect(ctx)
 	d.mu.Lock()
 	t.Serving = d.tailnetAt
 	d.mu.Unlock()
@@ -121,7 +121,7 @@ func (d *Daemon) serveInstalled(ctx context.Context, listen []string, server fun
 	failing := ""
 	for delay := 250 * time.Millisecond; ; delay = min(2*delay, 30*time.Second) {
 		probe, cancel := context.WithTimeout(ctx, time.Second)
-		t, err := detect(probe)
+		t, err := d.detect(probe)
 		cancel()
 		why := "Tailscale isn't running"
 		if err == nil && t.Running() && t.IP.IsValid() {

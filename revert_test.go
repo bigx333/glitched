@@ -7,13 +7,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"glitched/internal/daemon"
 )
 
 // twoTurnsInAWorktree is a thread in a worktree of its own whose second
-// turn added notes.txt, as the turn's checkpoint saw it once it ended.
-func twoTurnsInAWorktree(t *testing.T) (*harness, thread, string) {
+// turn added notes.txt, as the turn's checkpoint saw it once it ended, its
+// app's engine serving as serving has it.
+func twoTurnsInAWorktree(t *testing.T, serving func(*daemon.Config)) (*harness, thread, string) {
 	t.Helper()
-	h, seeded := workspaceHarness(t)
+	h, seeded := workspaceHarnessWith(t, serving)
 	th := worktreeThread(t, h, seeded.View.Workspace, "Write the notes")
 	h.until("the first turn's checkpoint", func() bool {
 		th = h.a.current()
@@ -37,7 +40,7 @@ func twoTurnsInAWorktree(t *testing.T) (*harness, thread, string) {
 // touching the worktree's commits, index or branch, and the row that says
 // so puts them back with Undo.
 func TestATurnsFilesRevertAndUndo(t *testing.T) {
-	h, th, notes := twoTurnsInAWorktree(t)
+	h, th, notes := twoTurnsInAWorktree(t, nil)
 	wt := th.View.Workspace
 	head, branch := gitRun(t, wt, "rev-parse", "HEAD"), branchIn(t, wt)
 	h.click("1 file")
@@ -97,7 +100,7 @@ func TestAThreadOutsideAWorktreeSaysWhyItCantRevert(t *testing.T) {
 // This machine shows how much the checkpoint store holds of its cap, once
 // a thread's turns saved their files there.
 func TestThisMachineShowsTheCheckpointStore(t *testing.T) {
-	h, _, _ := twoTurnsInAWorktree(t)
+	h, _, _ := twoTurnsInAWorktree(t, nil)
 	h.click("Settings")
 	h.click("This machine")
 	var got string
