@@ -276,8 +276,8 @@ func (s *Session) push(q queued) bool {
 }
 
 func (s *Session) close() {
-	s.closed = true
 	s.mu.Lock()
+	s.closed = true
 	s.done = true
 	s.queue = nil
 	s.mu.Unlock()
