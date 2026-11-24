@@ -679,6 +679,29 @@ func (f *fake) play(n int, turn, said string) {
 		time.Sleep(150 * time.Millisecond)
 		f.notify("item/agentMessage/delta", map[string]any{"threadId": thread, "turnId": turn, "itemId": id, "delta": string(v[len(v)/2:]) + "."})
 		f.item("item/completed", map[string]any{"type": "agentMessage", "id": id, "text": r.Status + ": the key is " + string(v) + ".", "phase": "final_answer"})
+	case "subagent":
+		// A spawned agent, as Codex 0.146 reports one: its start an item
+		// of the turn's, and its own work on its thread, which ends in a
+		// turn of its own.
+		spawn := map[string]any{"type": "subAgentActivity", "id": "call-spawn", "kind": "started", "agentThreadId": "thread-alpha", "agentPath": "/root/alpha"}
+		f.item("item/started", spawn)
+		f.item("item/completed", spawn)
+		child := func(method string, p map[string]any) {
+			p["threadId"], p["turnId"] = "thread-alpha", "turn-alpha"
+			f.notify(method, p)
+		}
+		child("turn/started", map[string]any{"turn": map[string]any{"id": "turn-alpha", "status": "inProgress"}})
+		child("item/started", map[string]any{"item": map[string]any{"type": "agentMessage", "id": "msg-alpha", "text": ""}})
+		child("item/agentMessage/delta", map[string]any{"itemId": "msg-alpha", "delta": "Looking."})
+		child("item/completed", map[string]any{"item": map[string]any{"type": "agentMessage", "id": "msg-alpha", "text": "Looking."}})
+		cmd := map[string]any{"type": "commandExecution", "id": "cmd-alpha", "command": "go test ./...", "cwd": f.cwd, "status": "inProgress", "commandActions": []any{}}
+		child("item/started", map[string]any{"item": cmd})
+		cmd["status"], cmd["exitCode"], cmd["aggregatedOutput"] = "completed", 0, "ok\n"
+		child("item/completed", map[string]any{"item": cmd})
+		child("thread/tokenUsage/updated", map[string]any{"tokenUsage": usage(5000, 5000)})
+		child("turn/completed", map[string]any{"turn": map[string]any{"id": "turn-alpha", "status": "completed"}})
+		f.notify("item/agentMessage/delta", map[string]any{"threadId": "thread-other", "turnId": "turn-other", "itemId": "msg-other", "delta": "nobody's"})
+		f.message("msg-"+turn, "the agent is done")
 	case "two-messages":
 		f.message("msg-a", "first")
 		f.message("msg-b", "second")

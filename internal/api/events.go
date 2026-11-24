@@ -226,6 +226,34 @@ type WorkItem struct {
 	Output string     `json:"output,omitempty"`
 }
 
+// A native subagent is one the run's agent runs in its own process, as
+// Claude Code's Task tool or Codex's spawned agents do: not a thread, so
+// nothing stops, steers or answers it but its run. Its transcript is under
+// Parent, the Item of the run's step that started it, and none of it is
+// the run's: not its reply, its context, nor its tokens.
+
+// SubagentDelta is text a native subagent said.
+type SubagentDelta struct {
+	Run    ID     `json:"run"`
+	Parent string `json:"parent"`
+	Text   string `json:"text"`
+}
+
+// SubagentWork is a native subagent's step, as WorkItem is the run's.
+type SubagentWork struct {
+	Parent string `json:"parent"`
+	WorkItem
+}
+
+// SubagentEnded is how a native subagent ended, and the tokens it used,
+// where the provider says: they are counted here, not in its run's.
+type SubagentEnded struct {
+	Run     ID      `json:"run"`
+	Parent  string  `json:"parent"`
+	Outcome Outcome `json:"outcome"`
+	Tokens  int64   `json:"tokens,omitempty"`
+}
+
 // PlanStatus is where a step of an agent's plan stands.
 type PlanStatus uint8
 
@@ -398,6 +426,9 @@ func (TurnRestored) eventType() string        { return "turn.restored" }
 func (TurnUncertain) eventType() string       { return "turn.uncertain" }
 func (AssistantDelta) eventType() string      { return "assistant.delta" }
 func (WorkItem) eventType() string            { return "work.item" }
+func (SubagentDelta) eventType() string       { return "subagent.delta" }
+func (SubagentWork) eventType() string        { return "subagent.work" }
+func (SubagentEnded) eventType() string       { return "subagent.ended" }
 func (PlanUpdated) eventType() string         { return "plan.updated" }
 func (RequestOpened) eventType() string       { return "request.opened" }
 func (RequestAnswer) eventType() string       { return "request.answered" }
@@ -437,6 +468,9 @@ func init() {
 	register[TurnUncertain]()
 	register[AssistantDelta]()
 	register[WorkItem]()
+	register[SubagentDelta]()
+	register[SubagentWork]()
+	register[SubagentEnded]()
 	register[PlanUpdated]()
 	register[RequestOpened]()
 	register[RequestAnswer]()

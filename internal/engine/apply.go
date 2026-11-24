@@ -25,6 +25,19 @@ func Apply(t Thread, e Event) Thread {
 	return t
 }
 
+// subagentRun is the run a native subagent's event is under.
+func subagentRun(b api.EventBody) api.ID {
+	switch b := b.(type) {
+	case api.SubagentDelta:
+		return b.Run
+	case api.SubagentWork:
+		return b.Run
+	case api.SubagentEnded:
+		return b.Run
+	}
+	return api.ID{}
+}
+
 // apply never writes through t's slices: callers keep the old state to diff.
 func apply(t Thread, e Event) (Thread, error) {
 	var err error
@@ -39,6 +52,12 @@ func apply(t Thread, e Event) (Thread, error) {
 	case api.WorkItem:
 		// Transcript only: no projection changes, so no revision either.
 		if !t.silentRun(b.Run) {
+			t.UpdatedAt = e.At
+		}
+		return t, nil
+	case api.SubagentDelta, api.SubagentWork, api.SubagentEnded:
+		// Transcript only, as a work item is, and never the run's own.
+		if run := subagentRun(b); !t.silentRun(run) {
 			t.UpdatedAt = e.At
 		}
 		return t, nil

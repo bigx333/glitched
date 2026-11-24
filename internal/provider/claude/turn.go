@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -28,6 +29,10 @@ type message struct {
 	Result  string   `json:"result"`
 	Errors  []string `json:"errors"`
 	Usage   usage    `json:"usage"`
+	// ToolUseID and Status are, on a system task_notification, the step
+	// whose task ended and how.
+	ToolUseID string `json:"tool_use_id"`
+	Status    string `json:"status"`
 	// ModelUsage is, on a result, each model the session called, by id.
 	ModelUsage map[string]modelUsage `json:"modelUsage"`
 	// UserMessageUUIDs is, on a result, the user messages it finished.
@@ -100,6 +105,8 @@ type usage struct {
 	CacheRead     int64          `json:"cache_read_input_tokens"`
 	Output        int64          `json:"output_tokens"`
 	Cache         *cacheCreation `json:"cache_creation"`
+	// Total is, on a task_notification, what the task used in all.
+	Total int64 `json:"total_tokens"`
 }
 
 // cacheTTL is how long the prompt cache this request wrote stays warm,
@@ -236,9 +243,20 @@ var tools = map[string]tool{
 	"Agent":        {"tool", "description"},
 }
 
-// turn turns one run's messages into provider events. Subagents' messages
-// carry a parent tool use and stay out of the thread: their Task step
-// stands for them.
+// spawnTools are Claude Code's tools that start a native subagent, whose
+// messages carry the tool use as their parent.
+var spawnTools = []string{"Task", "Agent"}
+
+// spawn is a native subagent of the turn's: its steps still open, and
+// whether it said anything yet.
+type spawn struct {
+	steps  []provider.Work
+	texted bool
+}
+
+// turn turns one run's messages into provider events. A native subagent's
+// messages carry the tool use that started it, and are its, nested under
+// that step, never the run's own.
 type turn struct {
 	workspace    string
 	now          func() time.Time
@@ -252,6 +270,7 @@ type turn struct {
 	cacheExpires time.Time                // when that request's prompt cache expires; zero when unknown
 	cache        *cacheState              // the process's, which outlives the turn; nil in tests that need none
 	interrupted  bool                     // the user stopped the turn
+	spawns       map[string]*spawn        // native subagents, by the tool use that started each
 }
 
 func newTurn(workspace string) *turn {
@@ -260,7 +279,7 @@ func newTurn(workspace string) *turn {
 
 func (t *turn) read(m message) []provider.Event {
 	if m.ParentToolUseID != nil {
-		return nil
+		return t.nested(*m.ParentToolUseID, m)
 	}
 	switch m.Type {
 	case "stream_event":
@@ -292,6 +311,12 @@ func (t *turn) read(m message) []provider.Event {
 				w := t.open(b)
 				t.steps = append(t.steps, w)
 				evs = append(evs, w)
+				if slices.Contains(spawnTools, b.Name) {
+					if t.spawns == nil {
+						t.spawns = map[string]*spawn{}
+					}
+					t.spawns[b.ID] = &spawn{}
+				}
 			}
 		}
 		return evs
@@ -328,6 +353,16 @@ func (t *turn) read(m message) []provider.Event {
 		evs := append(t.unfinished(), t.measured(m)...)
 		return append(evs, t.end(m))
 	case "system":
+		if s := t.spawns[m.ToolUseID]; s != nil && m.Subtype == "task_notification" {
+			outcome := api.OutcomeCompleted
+			switch m.Status {
+			case "failed", "error":
+				outcome = api.OutcomeFailed
+			case "stopped", "killed", "cancelled", "interrupted":
+				outcome = api.OutcomeInterrupted
+			}
+			return append(t.close(m.ToolUseID, s), provider.Nested{Parent: m.ToolUseID, Event: provider.TurnEnded{Outcome: outcome, Tokens: m.Usage.Total}})
+		}
 		if m.Subtype == "compact_boundary" {
 			t.used = 0
 			t.cacheExpires = time.Time{}
@@ -341,15 +376,68 @@ func (t *turn) read(m message) []provider.Event {
 	return nil
 }
 
-// unfinished fails the steps still open, for a turn that ends without
-// their results.
+// unfinished fails the steps still open, its native subagents' too, for a
+// turn that ends without their results.
 func (t *turn) unfinished() []provider.Event {
-	evs := make([]provider.Event, len(t.steps))
-	for i, w := range t.steps {
+	var evs []provider.Event
+	for _, parent := range slices.Sorted(maps.Keys(t.spawns)) {
+		evs = append(evs, t.close(parent, t.spawns[parent])...)
+	}
+	for _, w := range t.steps {
 		w.Status = api.WorkFailed
-		evs[i] = w
+		evs = append(evs, w)
 	}
 	t.steps = nil
+	return evs
+}
+
+// close fails the steps s still has open, under parent.
+func (t *turn) close(parent string, s *spawn) []provider.Event {
+	var evs []provider.Event
+	for _, w := range s.steps {
+		w.Status = api.WorkFailed
+		evs = append(evs, provider.Nested{Parent: parent, Event: w})
+	}
+	s.steps = nil
+	return evs
+}
+
+// nested is a message of the native subagent parent started, as its own
+// events: its text, and its steps as they open and finish. A message under
+// any other parent, or none of the turn's, is nobody's.
+func (t *turn) nested(parent string, m message) []provider.Event {
+	s := t.spawns[parent]
+	if s == nil {
+		return nil
+	}
+	var evs []provider.Event
+	add := func(e provider.Event) { evs = append(evs, provider.Nested{Parent: parent, Event: e}) }
+	for _, b := range m.content() {
+		switch {
+		case m.Type == "assistant" && b.Type == "text" && b.Text != "":
+			if s.texted {
+				add(provider.TextDelta{Text: "\n\n"})
+			}
+			s.texted = true
+			add(provider.TextDelta{Text: b.Text})
+		case m.Type == "assistant" && b.Type == "tool_use":
+			w := t.open(b)
+			s.steps = append(s.steps, w)
+			add(w)
+		case m.Type == "user" && b.Type == "tool_result":
+			i := slices.IndexFunc(s.steps, func(w provider.Work) bool { return w.Item == b.ToolUseID })
+			if i < 0 {
+				continue
+			}
+			w := s.steps[i]
+			s.steps = slices.Delete(s.steps, i, i+1)
+			w.Status, w.Output = api.WorkCompleted, b.text()
+			if b.IsError {
+				w.Status = api.WorkFailed
+			}
+			add(w)
+		}
+	}
 	return evs
 }
 
