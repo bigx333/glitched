@@ -41,6 +41,7 @@ var partTitles = map[string]string{
 	"sidebar.projects":          "Project strip",
 	"thread.row.actions":        "Thread row actions",
 	"thread.panel.diff":         "Diff panel",
+	"thread.panel.subagent":     "Subagent panel",
 	"approval.card":             "Approval card",
 	"question.card":             "Question card",
 	"credentials.card":          "Credentials card",

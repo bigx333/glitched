@@ -105,6 +105,10 @@ func (a *app) chatPage(c *ui.Context) {
 			ui.Column(c).Key("preview").Width(a.previewWidth()).Transition(panel(16, 0)).Children(func() { a.previewPanel(c) })
 		case a.showPluginTab:
 			ui.Column(c).Key("plugin-tab").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.pluginTabPanel(c, t) })
+		default:
+			if w, ok := a.subagentShown(t); ok {
+				ui.Column(c).Key("subagent").Width(a.diffWidth()).Transition(panel(16, 0)).Children(func() { a.subagentPanel(c, t, w) })
+			}
 		}
 	})
 }
@@ -165,7 +169,7 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 	// Clear of the window buttons on the right (Windows, Linux) unless a
 	// panel takes that edge.
 	right := float32(12)
-	if !a.showDiff && !a.showPreview {
+	if _, sub := a.subagentShown(t); !a.showDiff && !a.showPreview && !sub {
 		right += bar.Right
 	}
 	head := ui.Row(c).Height(max(bar.Height, headerHeight)).Shrink(0).
@@ -282,6 +286,10 @@ func (a *app) chatRoom() float32 {
 		w -= a.previewWidth()
 	case a.showPluginTab:
 		w -= a.diffWidth()
+	default:
+		if _, ok := a.subagentShown(a.current()); ok {
+			w -= a.diffWidth()
+		}
 	}
 	return max(w, minChatWidth)
 }
@@ -1108,8 +1116,12 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, w client.WorkSte
 	if w.Kind == "edit" && w.Path != "" {
 		file = slices.IndexFunc(files, func(f fileChange) bool { return f.path == w.Path })
 	}
+	sub := w.Subagent != nil
+	if sub {
+		icon = icChild
+	}
 	var r ui.Element
-	if file >= 0 {
+	if file >= 0 || sub {
 		r = ghost(c, w.Item, false).Padding(2, 4).Radius(5).Gap(8).ClipY().Transition(fold)
 	} else {
 		r = ui.Row(c).Key(w.Item).Padding(2, 4).Radius(5).Gap(8).AlignItems(ui.Center).ClipY().Transition(fold)
@@ -1135,6 +1147,9 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, w client.WorkSte
 			add, del := a.diffStats(t, files[file])
 			counts(c, add, del)
 		}
+		if sub {
+			ui.Text(c, plural(w.Subagent.Steps(), "step")).FontSize(11.5).SingleLine().Shrink(0).TextColor(palette.faint)
+		}
 		ui.Spacer(c)
 		switch {
 		case w.Status == api.WorkStarted:
@@ -1151,10 +1166,18 @@ func (a *app) step(c *ui.Context, t thread, files []fileChange, w client.WorkSte
 		case file >= 0 && r.Hovered():
 			ui.Text(c, "Open in diff").FontSize(11.5).TextColor(palette.muted)
 			ui.Icon(c, icExternal).FontSize(11).TextColor(palette.muted)
+		case sub && r.Hovered():
+			ui.Text(c, "Open").FontSize(11.5).TextColor(palette.muted)
+			ui.Icon(c, icExternal).FontSize(11).TextColor(palette.muted)
 		}
-	}).Clicked() && file >= 0 {
-		a.showDiff, a.showPreview, a.panelsJump = true, false, false
-		a.diffFile[t.id()] = w.Path
+	}).Clicked() {
+		switch {
+		case file >= 0:
+			a.showDiff, a.showPreview, a.panelsJump = true, false, false
+			a.diffFile[t.id()] = w.Path
+		case sub:
+			a.openSubagent(t, w)
+		}
 	}
 	if w.Output != "" && (w.Status == api.WorkFailed || w.Exit != nil && *w.Exit != 0) {
 		ui.Text(c, w.Output).Key(w.Item+"/output").Selectable().FontSize(11.5).Font("monospace").LineHeight(1.5).TextColor(palette.muted).

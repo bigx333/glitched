@@ -1,6 +1,6 @@
 # Native subagents
 
-Written 2026-11-24 for GLIT-64 gap 5. This is what the branch builds. The GUI that shows it comes in a follow-up PR.
+Written 2026-11-24 for GLIT-64 gap 5: the events, and the panel that shows them.
 
 ## Decision
 
@@ -28,8 +28,11 @@ Written 2026-11-24 for GLIT-64 gap 5. This is what the branch builds. The GUI th
 - **Codex** (`internal/provider/codex`). A `subAgentActivity` item with `kind: started` (Codex 0.146) or a `collabAgentToolCall` `spawnAgent` names the spawned thread. Only the item that first spawns a thread is a step ("Agent <path>"), told once, however often Codex repeats it. Later activity about it, another start of it, and the run's own thread (`/root`) are not, so they never split the run's reply. Notifications on that thread become nested events, as `Agent.nested` maps them: agent messages, shown items, and its `turn/completed` with the thread's `tokenUsage` total. Each child turn ends once, after its open steps fail. A thread's notifications that come before the item naming it wait for that item (only the kinds it maps, up to 4 MiB of them across threads), then play under it in the order they came, as Zeron's `codex/subagents.rs` holds them. Notifications of a thread the run never spawned are dropped, as before.
 - **agy** (ACP): no native subagent traffic. Our wire captures have none, and Zeron's ACP subagent support covers grok, Devin and opencode, not agy.
 
+## The panel
+
+The client's transcript (`internal/client/transcript.go`) folds a subagent's events into the step that started it, as `WorkStep.Subagent`: its text runs between its steps, each step as it last was, and how it ended. Each change is an edit of the step's work entry, so the timeline draws it again. A subagent under a step the transcript doesn't hold is dropped. In the timeline the step shows the count of the subagent's steps. A click opens the panel beside the chat, which the built-in Subagent panel plugin draws as `thread.panel.subagent` (see plugins.md), in place of the diff panel's room. The diff, preview and a tab's panel take its place while one is open.
+
 ## Not done
 
 - **Between turns.** A background Claude subagent that writes after its run's turn ended stops the parked process, as any line written while parked does. A Codex child thread's notifications after the run ended are dropped.
 - **A subagent's requests.** Claude Code asks for a subagent's tool approvals through the run's own `control_request`, so they already show as the run's approvals. Codex sends a spawned thread's requests on that thread, and glitched refuses them ("Glitched runs no such thread here"), as before.
-- The GUI panel that the `Task` step opens.
