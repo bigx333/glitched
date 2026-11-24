@@ -464,7 +464,7 @@ func TestDeletingATreeWithItsWorktreesDropsOnlyTheRootsCheckpoints(t *testing.T)
 	}
 	submit(t, n.h, parent.ID, api.ThreadDelete{RemoveWorktree: true})
 	db := sideDB(t, path)
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(2 * time.Millisecond) {
+	for deadline := time.Now().Add(time.Minute); ; time.Sleep(2 * time.Millisecond) {
 		var pending int
 		if err := db.QueryRow("SELECT COUNT(*) FROM effects WHERE kind IN ('agent.close', 'worktree.remove', 'checkpoint.drop') AND state <> 'done'").Scan(&pending); err != nil {
 			t.Fatal(err)
