@@ -137,11 +137,13 @@ func (a *app) mintRow(c *ui.Context, ceiling api.Access) {
 			ui.Segmented(c.Key("mint-access"), &a.mint.access, childLevels[1:int(ceiling)+2]...).Label("Most access")
 		})
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "At work at once").FontSize(12).TextColor(palette.muted)
+			ui.Text(c, "At work at once").FontSize(12).TextColor(palette.muted).SingleLine().Shrink(0)
 			ui.NumberInput(c.Key("mint-working"), &a.mint.working, 0, 100, 1).Label("At work at once").Width(110)
-			ui.Text(c, "In all").FontSize(12).TextColor(palette.muted)
+			ui.Text(c, "In all").FontSize(12).TextColor(palette.muted).SingleLine().Shrink(0)
 			ui.NumberInput(c.Key("mint-all"), &a.mint.all, 0, 1000, 1).Label("In all").Width(110)
-			ui.Spacer(c)
+		})
+		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "0 takes this machine's own child limits.").FontSize(12).TextColor(palette.faint).Grow(1).Shrink(1)
 			ui.Button(c.Key("mint-link"), "Mint a link").Disabled(strings.TrimSpace(a.mint.label) == "").OnClick(func() {
 				a.machineErr = ""
 				label := strings.TrimSpace(a.mint.label)
@@ -153,7 +155,6 @@ func (a *app) mintRow(c *ui.Context, ceiling api.Access) {
 				a.minted, a.mint.label = minted{label, token, l, time.Now()}, ""
 			})
 		})
-		ui.Text(c, "0 takes this machine's own child limits.").FontSize(12).TextColor(palette.faint)
 	})
 }
 
