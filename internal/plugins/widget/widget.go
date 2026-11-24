@@ -122,11 +122,13 @@ var Natives = map[string]Native{
 	"transcript.retry": {In: []string{"timeline.message"}, Thread: true},
 	// A message's actions, as Glitched draws them under it: Copy, Edit &
 	// resend (a message of yours), Retry (a turn that failed or was
-	// stopped), and the command a plugin put in message.actions at index.
+	// stopped), Fork from here (a turn's last reply, once it ended), and
+	// the command a plugin put in message.actions at index.
 	// One with nothing to do under a message takes no room.
 	"message.copy":  {In: []string{"message.toolbar"}, Thread: true},
 	"message.edit":  {In: []string{"message.toolbar"}, Thread: true},
 	"message.retry": {In: []string{"message.toolbar"}, Thread: true},
+	"message.fork":  {In: []string{"message.toolbar"}, Thread: true},
 	"message.item":  {Props: map[string]string{"index": "number"}, In: []string{"message.toolbar"}, Thread: true},
 	// A queued message's row: its words, or the area they're edited in,
 	// and what can be done with it, Send now, Edit (Save and Cancel while
