@@ -100,6 +100,9 @@ type Intent interface{ intentType() string }
 // in the worktree, Project the Workspace asked for, and Branch the
 // worktree's new branch. Project and Branch given without a Worktree
 // are a child's, which runs in its parent's worktree.
+//
+// With a Fork, the thread is a fork of another thread's conversation,
+// which the other thread keeps as it is.
 type ThreadCreate struct {
 	Workspace string       `json:"workspace"`
 	Title     string       `json:"title"`
@@ -111,6 +114,21 @@ type ThreadCreate struct {
 	Worktree  *NewWorktree `json:"worktree,omitempty"`
 	Project   string       `json:"project,omitempty"`
 	Branch    string       `json:"branch,omitempty"`
+	Fork      *Fork        `json:"fork,omitempty"`
+	// Forked is Fork as the store resolves it in the create's commit,
+	// which no client sends.
+	Forked *Forked `json:"-"`
+}
+
+// Fork asks for a thread that goes on from Run, a finished turn of
+// Thread's, a thread of the user's on the same engine: its first run
+// forks Thread's conversation there, natively where the fork's provider
+// is Thread's and can, else in a new conversation its first message
+// hands the turns up to Run. A fork on another provider is how a thread
+// goes on there.
+type Fork struct {
+	Thread ID `json:"thread"`
+	Run    ID `json:"run"`
 }
 
 // NewWorktree asks for a thread in a worktree of its own, on a new branch
@@ -583,8 +601,10 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // engine's continue once it resets, which a version 13 engine refuses as an
 // unknown command; version 15 rewinds a thread's conversation, which a
 // version 14 engine would drop from a revert and put only the files back,
-// and a version 14 GUI would show as a revert of files it left.
-const Protocol = 15
+// and a version 14 GUI would show as a revert of files it left; version
+// 16 forks a thread, which a version 15 engine would create as a thread
+// with none of the conversation it was to go on from.
+const Protocol = 16
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host
