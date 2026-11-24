@@ -301,6 +301,9 @@ type RequestDelivery struct {
 type RequestInvalidation struct {
 	Request ID     `json:"request"`
 	Reason  string `json:"reason"`
+	// Unconfirmed is that the answer may have reached the agent: the engine
+	// stopped as it gave it, and can no longer tell.
+	Unconfirmed bool `json:"unconfirmed,omitempty"`
 }
 
 type ThreadRenamed struct {

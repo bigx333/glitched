@@ -168,6 +168,9 @@ func TestStopCancelsSteersAndAnswersInFlight(t *testing.T) {
 	if got := outcomes(t, n.h, thread); len(got) != 1 || got[0] != api.OutcomeInterrupted {
 		t.Fatalf("run ended %v, want interrupted", got)
 	}
+	if got := invalidations(t, events(t, n.h, thread)); len(got) != 1 || got[0].Unconfirmed {
+		t.Fatalf("invalidations %+v, want one the engine knows of", got)
+	}
 	assertReplay(t, n.st)
 }
 

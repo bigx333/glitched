@@ -1,11 +1,14 @@
 package runtime_test
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -138,7 +141,7 @@ func TestCrashWithALeasedEffect(t *testing.T) {
 		assertReplay(t, n.st)
 	})
 
-	t.Run("answer for a lost agent is invalidated", func(t *testing.T) {
+	t.Run("answer for a lost agent is closed as unconfirmed", func(t *testing.T) {
 		path, g := dbPath(t), newGated(fake.Turn(true))
 		thread := crashDuring(t, path, g, provider.Respond{}, func(n node, thread api.ID) {
 			respond(t, n.h, thread, until(t, n.h, thread, "approval", waiting).Requests[0])
@@ -154,8 +157,25 @@ func TestCrashWithALeasedEffect(t *testing.T) {
 		if snap.Threads[0].Run != api.RunUncertain || count(snap.Events, "request.delivered") != 0 {
 			t.Fatalf("run %v with %d request.delivered, want uncertain and none", snap.Threads[0].Run, count(snap.Events, "request.delivered"))
 		}
+		if got := invalidations(t, snap.Events); len(got) != 1 || !got[0].Unconfirmed {
+			t.Fatalf("invalidations %+v, want one saying the agent may have the answer", got)
+		}
 		assertReplay(t, n.st)
 	})
+}
+
+// invalidations is the request invalidations in evs.
+func invalidations(t *testing.T, evs []api.Event) []api.RequestInvalidation {
+	t.Helper()
+	var out []api.RequestInvalidation
+	for _, e := range evs {
+		if b, _ := e.Decode(); b != nil {
+			if i, ok := b.(api.RequestInvalidation); ok {
+				out = append(out, i)
+			}
+		}
+	}
+	return out
 }
 
 // copyDB copies a closed database file by file, the way a user restores a
@@ -240,6 +260,61 @@ func TestARestoredDatabaseSendsNothingItHeldInFlight(t *testing.T) {
 	if g.count(provider.Steer{}) != 0 || g.count(provider.Respond{}) != 0 || m.State != engine.QueueUncertain || g.Starts() != 1 {
 		t.Fatalf("after the restore: %d steers and %d answers reached the agent, steer %v, %d starts; want none, none, uncertain and 1",
 			g.count(provider.Steer{}), g.count(provider.Respond{}), m.State, g.Starts())
+	}
+	assertReplay(t, n.st)
+}
+
+// endsFirst opens the fake's agents to end their turn before the call that
+// answered them returns, as an agent that acts on an answer at once does.
+type endsFirst struct {
+	*fake.Adapter
+}
+
+func (a endsFirst) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	g, err := a.Adapter.Open(ctx, spec)
+	return &endsFirstAgent{Agent: g, ended: make(chan struct{})}, err
+}
+
+type endsFirstAgent struct {
+	provider.Agent
+	ended chan struct{}
+	once  sync.Once
+}
+
+func (g *endsFirstAgent) Next(ctx context.Context) (provider.Event, error) {
+	ev, err := g.Agent.Next(ctx)
+	if _, ok := ev.(provider.TurnEnded); ok {
+		g.once.Do(func() { close(g.ended) })
+	}
+	return ev, err
+}
+
+func (g *endsFirstAgent) Do(ctx context.Context, act provider.Action) error {
+	err := g.Agent.Do(ctx, act)
+	if _, ok := act.(provider.Respond); ok && err == nil {
+		<-g.ended
+	}
+	return err
+}
+
+// An answer the agent took is logged as delivered before the turn the
+// agent ended on it, though the agent ended before the call returned.
+func TestADeliveryIsLoggedBeforeTheTurnItEnded(t *testing.T) {
+	path := dbPath(t)
+	n := start(t, path, endsFirst{fake.New(fake.Turn(true))})
+	thread := newThread(t, n.h)
+	submit(t, n.h, thread, dispatch("edit", api.StartNow))
+	respond(t, n.h, thread, until(t, n.h, thread, "approval", waiting).Requests[0])
+	until(t, n.h, thread, "turn end", idle)
+	untilEffectsDone(t, path, "request.deliver")
+	var order []string
+	for _, e := range events(t, n.h, thread) {
+		if e.Type == "request.delivered" || e.Type == "turn.ended" {
+			order = append(order, e.Type)
+		}
+	}
+	if !slices.Equal(order, []string{"request.delivered", "turn.ended"}) {
+		t.Fatalf("logged %v, want the delivery before the turn's end", order)
 	}
 	assertReplay(t, n.st)
 }

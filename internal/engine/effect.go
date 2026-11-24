@@ -278,6 +278,9 @@ type Unheard struct {
 type DeliveryFailed struct {
 	Request api.ID
 	Error   string
+	// Unconfirmed: an engine before this one stopped as it gave the
+	// answer, so the agent may have it.
+	Unconfirmed bool
 }
 
 type Steered struct{ Message api.ID }
