@@ -622,6 +622,54 @@ func TestARefusedResumeLandsOnRetryOnceTheRunEnds(t *testing.T) {
 	g.until(t, "the retry landed", func() bool { return len(env.Threads[id].Pending) == 0 }, func() string { return describePending(env.Threads[id].Pending) })
 }
 
+// The queue's commands reach the engine and show in the open transcript:
+// an edit's words, a move's place, a cancel gone from the queue, a steer
+// handed to the run. One on a message that no longer waits fails for good.
+func TestTheQueueIsManagedFromTheClient(t *testing.T) {
+	m, g := manager(t, stateDir(t))
+	env := m.Envs()[0]
+	online(t, g, env)
+	id := m.Create(env, "/work", "busy", fakeModel, api.AccessAsk, nil)
+	m.OpenThread(env, id)
+	m.Send(env, id, "first", api.AfterActive)
+	g.until(t, "the first run waiting on its approval", func() bool {
+		return env.Threads[id].View.Run == api.RunWaiting && len(env.Threads[id].Pending) == 0
+	})
+	a := m.Send(env, id, "a", api.AfterActive)
+	b := m.Send(env, id, "b", api.AfterActive)
+	c := m.Send(env, id, "c", api.AfterActive)
+	queue := func(states ...MessageState) []string {
+		var out []string
+		for _, u := range env.Threads[id].Transcript.Queue {
+			if slices.Contains(states, u.State) {
+				out = append(out, u.Text)
+			}
+		}
+		return out
+	}
+	shown := func() string {
+		return describePending(env.Threads[id].Pending) + "; queue " + strings.Join(queue(Queued, Held, Claimed), ", ")
+	}
+	g.until(t, "the three queued", func() bool { return slices.Equal(queue(Queued), []string{"a", "b", "c"}) }, shown)
+
+	m.EditQueued(env, id, a, "a, shorter")
+	m.MoveQueued(env, id, c, a)
+	m.CancelQueued(env, id, b)
+	g.until(t, "the edit, the move and the cancel", func() bool {
+		return slices.Equal(queue(Queued), []string{"c", "a, shorter"}) && len(env.Threads[id].Pending) == 0
+	}, shown)
+	m.SteerQueued(env, id, c)
+	g.until(t, "the steer", func() bool {
+		return slices.Equal(queue(Queued), []string{"a, shorter"}) && slices.Equal(queue(Claimed), []string{"c"}) && len(env.Threads[id].Pending) == 0
+	}, shown)
+
+	m.EditQueued(env, id, b, "back again")
+	g.until(t, "the edit refused", func() bool { p := env.Threads[id].Pending; return len(p) == 1 && p[0].Err != nil }, shown)
+	if p := env.Threads[id].Pending[0]; !errors.As(p.Err, new(*api.RejectedError)) || !p.Terminal() {
+		t.Fatalf("an edit of a cancelled message failed with %v (terminal %v), want a rejection with nothing to retry", p.Err, p.Terminal())
+	}
+}
+
 // Interrupting a run voids the request it asked. An answer sent after that
 // is refused, and leaves no row: the request shows how it ended.
 func TestAnAnswerTooLateLeavesNoRow(t *testing.T) {
