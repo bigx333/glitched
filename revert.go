@@ -1,8 +1,10 @@
 package main
 
 import (
-	"cmp"
+	"fmt"
+	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
 
@@ -17,7 +19,9 @@ type revertAsk struct {
 	undoTurn bool
 }
 
-// whyNoRevert is why t's files can't be reverted now, "" when they can.
+// whyNoRevert is why t's files can't be reverted now, "" when they can,
+// as far as the client sees what the engine refuses for. The engine checks
+// again when the revert commits.
 func (a *app) whyNoRevert(t thread) string {
 	switch {
 	case !t.View.Parent.IsZero():
@@ -31,7 +35,43 @@ func (a *app) whyNoRevert(t thread) string {
 	case t.Transcript != nil && !t.Transcript.Reverting.IsZero():
 		return "A revert of the files is under way"
 	}
+	if other := a.inWorktree(t); other != "" {
+		return fmt.Sprintf("The thread %q runs in this worktree too", other)
+	}
 	return ""
+}
+
+// inWorktree is the title of another thread whose folder is in t's
+// worktree or around it, "" when none is: one the revert would put the
+// files back under, as the engine refuses. The worktree is the folder
+// named after t that holds its workspace; a thread under t is t's to stop.
+func (a *app) inWorktree(t thread) string {
+	dir := t.View.Workspace
+	for dir != filepath.Dir(dir) && filepath.Base(dir) != strings.ToLower(t.id().String()) {
+		dir = filepath.Dir(dir)
+	}
+	if dir == filepath.Dir(dir) {
+		dir = t.View.Workspace
+	}
+	in := func(dir, path string) bool {
+		rel, err := filepath.Rel(dir, path)
+		return path != "" && err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	}
+	mine := map[api.ID]bool{t.id(): true}
+	for _, n := range a.below(t) {
+		mine[n.t.id()] = true
+	}
+	var titles []string
+	for id, other := range t.env.Threads {
+		if !mine[id] && !other.View.Deleted && (in(dir, other.View.Workspace) || in(other.View.Workspace, dir)) {
+			titles = append(titles, other.View.Title)
+		}
+	}
+	slices.Sort(titles)
+	if len(titles) == 0 {
+		return ""
+	}
+	return titles[0]
 }
 
 // checkpointChip is a top-level run's chip on its work row: how many files
@@ -44,14 +84,32 @@ func (a *app) checkpointChip(c *ui.Context, t thread, run api.ID) {
 		return
 	}
 	at, before, saved, hasBefore := t.Transcript.Checkpoint(run)
-	why, label, tip := a.whyNoRevert(t), "", ""
+	if t.View.Branch != "" && !saved {
+		return
+	}
+	// Each action's reason, once, for the chip's tooltip and the menu
+	// alike: the thread's, or the checkpoint's the action puts back.
+	why := a.whyNoRevert(t)
+	hereWhy, undoWhy, tip := why, why, why
+	if why == "" && at.Status != api.CheckpointReady {
+		hereWhy, tip = "This turn's files weren't saved", "This turn's files weren't saved"
+		if at.Reason != "" {
+			tip += ": " + at.Reason
+		}
+	}
+	if why == "" && (!hasBefore || before.Status != api.CheckpointReady) {
+		undoWhy = "The files before this turn weren't saved"
+		tip = strings.TrimPrefix(tip+"\n"+undoWhy, "\n")
+		if before.Reason != "" {
+			tip += ": " + before.Reason
+		}
+	}
+	reasons := slices.Compact(slices.DeleteFunc([]string{hereWhy, undoWhy}, func(s string) bool { return s == "" }))
+	label := ""
 	switch {
 	case t.View.Branch == "":
-		tip = why
-	case !saved:
-		return
 	case at.Status != api.CheckpointReady:
-		label, tip = "Not saved", "This turn's files weren't saved: "+at.Reason
+		label = "Not saved"
 	case at.Changed == 0:
 		label = "No file changes"
 	default:
@@ -66,19 +124,14 @@ func (a *app) checkpointChip(c *ui.Context, t thread, run api.ID) {
 	if label == "" {
 		b.Label("Checkpoint")
 	}
-	a.tip(c, b, cmp.Or(why, tip, "Revert this turn's files"))
+	if tip == "" {
+		tip = "Revert this turn's files"
+	}
+	a.tip(c, b, tip)
 	b.Menu(func(m *ui.Menu) {
-		hereWhy, undoWhy := why, why
-		if hereWhy == "" && at.Status != api.CheckpointReady {
-			hereWhy = "This turn's files weren't saved"
-		}
-		if undoWhy == "" && (!hasBefore || before.Status != api.CheckpointReady) {
-			undoWhy = "The files before this turn weren't saved"
-		}
 		// A system menu may show no subtitle on an item it greys out, so
-		// each reason the menu refuses for leads it, on a line of its own,
-		// once, however many items it refuses.
-		reasons := slices.Compact(slices.DeleteFunc([]string{hereWhy, undoWhy}, func(s string) bool { return s == "" }))
+		// each reason the menu refuses for leads it, on a line of its own.
+		// A menu is built as it opens: one open keeps the reasons it had.
 		for _, r := range reasons {
 			m.Item(r).Disabled(true)
 		}
