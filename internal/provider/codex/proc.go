@@ -544,10 +544,11 @@ func (p *proc) handle(m message) {
 		p.settle(scope.ThreadSettings)
 	}
 	switch {
+	case !ours && request:
+		p.conn.refuse(m.ID, -32601, "Glitched runs no such thread here")
+	case !ours && run != nil:
+		run.nested(scope.ThreadID, m)
 	case !ours:
-		if request {
-			p.conn.refuse(m.ID, -32601, "Glitched runs no such thread here")
-		}
 	case run != nil && request:
 		run.request(m)
 	case run != nil:

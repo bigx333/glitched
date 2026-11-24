@@ -82,6 +82,11 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				}
 				commit(engine.Work{Item: api.WorkItem{Run: run, Item: ev.Item, Kind: ev.Kind, Title: redact(ev.Title), Status: ev.Status,
 					Path: redact(ev.Path), Exit: ev.Exit, Output: output}})
+			case provider.Nested:
+				flushText()
+				if b := h.nested(run, ev, redact); b != nil {
+					commit(engine.Subagent{Run: run, Event: b})
+				}
 			case provider.Plan:
 				// What could be the start of a credential stays held, as a
 				// timed flush keeps it: the plan reveals nothing that ends it.
@@ -129,6 +134,25 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 		h.closedAgent(lr)
 		h.closed(thread)
 	}
+}
+
+// nested is a native subagent's event as the log keeps it, redacted as
+// the run's own are; nil for one no event shows.
+func (h *Host) nested(run api.ID, n provider.Nested, redact func(string) string) api.EventBody {
+	switch ev := n.Event.(type) {
+	case provider.TextDelta:
+		return api.SubagentDelta{Run: run, Parent: n.Parent, Text: redact(ev.Text)}
+	case provider.Work:
+		var output string
+		if ev.Status == api.WorkFailed || ev.Exit != nil && *ev.Exit != 0 {
+			output = tail(redact(ev.Output), api.OutputLimit)
+		}
+		return api.SubagentWork{Parent: n.Parent, WorkItem: api.WorkItem{Run: run, Item: ev.Item, Kind: ev.Kind, Title: redact(ev.Title), Status: ev.Status,
+			Path: redact(ev.Path), Exit: ev.Exit, Output: output}}
+	case provider.TurnEnded:
+		return api.SubagentEnded{Run: run, Parent: n.Parent, Outcome: ev.Outcome, Tokens: ev.Tokens}
+	}
+	return nil
 }
 
 // tail is the last n bytes of s, from the start of a UTF-8 character.

@@ -953,6 +953,10 @@ func (d *decision) observe(o Observation) error {
 		if isLive(o.Item.Run) {
 			return d.emit(o.Item)
 		}
+	case Subagent:
+		if isLive(o.Run) {
+			return d.emit(o.Event)
+		}
 	case Plan:
 		if isLive(o.Plan.Run) {
 			return d.emit(o.Plan)

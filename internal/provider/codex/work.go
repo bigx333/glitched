@@ -28,6 +28,25 @@ type item struct {
 	} `json:"error"`
 	Query string `json:"query"`
 	Path  string `json:"path"`
+	// AgentThreadID and AgentPath are, on a subAgentActivity, the thread
+	// of the agent it spawned and its path; ReceiverThreadIDs, on a
+	// collabAgentToolCall, the threads it spawned or messaged.
+	AgentThreadID     string   `json:"agentThreadId"`
+	AgentPath         string   `json:"agentPath"`
+	ActivityKind      string   `json:"kind"`
+	ReceiverThreadIDs []string `json:"receiverThreadIds"`
+}
+
+// spawned is the threads of the native subagents it started: a
+// subAgentActivity's start, or a collabAgentToolCall's spawnAgent.
+func (it *item) spawned() []string {
+	switch {
+	case it.Type == "subAgentActivity" && it.ActivityKind == "started" && it.AgentThreadID != "":
+		return []string{it.AgentThreadID}
+	case it.Type == "collabAgentToolCall" && it.Tool == "spawnAgent":
+		return it.ReceiverThreadIDs
+	}
+	return nil
 }
 
 type change struct {
@@ -42,6 +61,7 @@ var kinds = map[string]string{
 	"mcpToolCall":         "tool",
 	"dynamicToolCall":     "tool",
 	"collabAgentToolCall": "tool",
+	"subAgentActivity":    "tool",
 	"webSearch":           "search",
 	"imageView":           "read",
 }
@@ -90,6 +110,11 @@ func (it *item) work(workspace string) provider.Work {
 		w.Title = "Search the web for " + it.Query
 	case "imageView":
 		w.Title, w.Path = "View "+filepath.Base(it.Path), provider.Rel(workspace, it.Path)
+	case "subAgentActivity":
+		w.Title = strings.TrimSpace("Agent " + filepath.Base(it.AgentPath))
+		if it.Status == "" {
+			w.Status = api.WorkCompleted
+		}
 	default:
 		w.Title = it.Tool
 	}

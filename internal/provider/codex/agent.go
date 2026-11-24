@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,8 +49,9 @@ type Agent struct {
 	deadline    *time.Timer
 	items       map[string]*item
 	order       []string
-	texts       map[string]int // how much of each agent message went out
-	last        string         // the agent message the last text was of
+	texts       map[string]int       // how much of each agent message went out
+	last        string               // the agent message the last text was of
+	subagents   map[string]*subagent // native subagents, by their thread
 	notices     int
 	tokens      int64 // what the turn's model requests used, so far
 	asks        map[string]*ask
@@ -237,6 +240,15 @@ func (g *Agent) endLocked(end provider.TurnEnded) {
 	}
 	g.withdrawLocked("The turn ended before the answer reached Codex.")
 	g.failed = end.Outcome != api.OutcomeCompleted
+	for _, thread := range slices.Sorted(maps.Keys(g.subagents)) {
+		s := g.subagents[thread]
+		for _, id := range s.order {
+			if it := s.items[id]; it.open() {
+				it.Status = "failed"
+				g.queueLocked(provider.Nested{Parent: s.parent, Event: it.work(g.spec.Workspace)})
+			}
+		}
+	}
 	for _, id := range g.order {
 		if it := g.items[id]; it.open() {
 			it.Status = map[bool]string{true: "completed", false: "failed"}[end.Outcome == api.OutcomeCompleted]
@@ -444,6 +456,14 @@ func (g *Agent) notify(m message) {
 		if !it.shown() || it.ID == "" {
 			return
 		}
+		for _, thread := range it.spawned() {
+			if g.subagents == nil {
+				g.subagents = map[string]*subagent{}
+			}
+			if g.subagents[thread] == nil {
+				g.subagents[thread] = &subagent{parent: it.ID, texts: map[string]int{}, items: map[string]*item{}}
+			}
+		}
 		if _, seen := g.items[it.ID]; !seen {
 			g.order = append(g.order, it.ID)
 		}
@@ -486,6 +506,82 @@ func (g *Agent) notify(m message) {
 			end.Outcome, end.Error = api.OutcomeFailed, fmt.Sprintf("Codex ended the turn as %q, which Glitched doesn't know.", turn.Status)
 		}
 		g.endLocked(end)
+	}
+}
+
+// subagent is a native subagent of the run's, a thread Codex spawned:
+// parent is the item of the run's that started it, and the rest is what
+// its own items need, as the run's do.
+type subagent struct {
+	parent string
+	texts  map[string]int
+	last   string
+	items  map[string]*item
+	order  []string
+	tokens int64 // what its thread spent, all told, as Codex last said
+}
+
+// nested is what a notification of a native subagent's thread means for
+// the run: its text and steps under the item that started it, and its end
+// with what its thread spent. A thread the run never spawned is nobody's.
+func (g *Agent) nested(thread string, m message) {
+	var n struct {
+		ItemID     string     `json:"itemId"`
+		Delta      string     `json:"delta"`
+		Item       item       `json:"item"`
+		TokenUsage tokenUsage `json:"tokenUsage"`
+		Turn       struct {
+			Status string `json:"status"`
+		} `json:"turn"`
+	}
+	json.Unmarshal(m.Params, &n)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	s := g.subagents[thread]
+	if s == nil || !g.started || g.ended {
+		return
+	}
+	add := func(e provider.Event) { g.queueLocked(provider.Nested{Parent: s.parent, Event: e}) }
+	text := func(itemID, t string) {
+		if t == "" {
+			return
+		}
+		if s.last != itemID && s.last != "" {
+			add(provider.TextDelta{Text: "\n\n"})
+		}
+		s.last = itemID
+		s.texts[itemID] += len(t)
+		add(provider.TextDelta{Text: t})
+	}
+	switch m.Method {
+	case "item/agentMessage/delta":
+		text(n.ItemID, n.Delta)
+	case "item/started", "item/completed":
+		it := n.Item
+		if it.Type == "agentMessage" && m.Method == "item/completed" {
+			if sent := s.texts[it.ID]; sent < len(it.Text) {
+				text(it.ID, it.Text[sent:])
+			}
+		}
+		if !it.shown() || it.ID == "" {
+			return
+		}
+		if _, seen := s.items[it.ID]; !seen {
+			s.order = append(s.order, it.ID)
+		}
+		s.items[it.ID] = &it
+		add(it.work(g.spec.Workspace))
+	case "thread/tokenUsage/updated":
+		s.tokens = n.TokenUsage.Total.Total
+	case "turn/completed":
+		end := provider.TurnEnded{Outcome: api.OutcomeCompleted, Tokens: s.tokens}
+		switch n.Turn.Status {
+		case "interrupted":
+			end.Outcome = api.OutcomeInterrupted
+		case "failed":
+			end.Outcome = api.OutcomeFailed
+		}
+		add(end)
 	}
 }
 

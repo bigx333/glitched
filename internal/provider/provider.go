@@ -416,6 +416,16 @@ type Ran struct {
 	Why    string
 }
 
+// Nested is an event of a native subagent's (see api.SubagentDelta):
+// Parent is the Item of the run's step that started it, and Event a
+// TextDelta, a Work, or a TurnEnded, how it ended, with the tokens it used
+// where the provider says.
+type Nested struct {
+	Parent string
+	Event  Event
+}
+
+func (Nested) event()           {}
 func (TextDelta) event()        {}
 func (Granted) event()          {}
 func (Ran) event()              {}

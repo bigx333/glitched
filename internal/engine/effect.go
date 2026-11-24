@@ -222,6 +222,13 @@ type Ran struct {
 
 type Work struct{ Item api.WorkItem }
 
+// Subagent is a native subagent's event, as provider.Nested has it: an
+// api.SubagentDelta, SubagentWork or SubagentEnded of Run's.
+type Subagent struct {
+	Run   api.ID
+	Event api.EventBody
+}
+
 // Plan is the run's agent's plan, as provider.Plan has it.
 type Plan struct{ Plan api.PlanUpdated }
 
@@ -308,6 +315,7 @@ func (Started) observed()        {}
 func (Bound) observed()          {}
 func (Ended) observed()          {}
 func (Delta) observed()          {}
+func (Subagent) observed()       {}
 func (Context) observed()        {}
 func (Work) observed()           {}
 func (Plan) observed()           {}
