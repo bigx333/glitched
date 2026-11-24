@@ -338,3 +338,45 @@ func TestAWideSidebarCappedAtTheNarrowestWindowStillGivesWayToAPanel(t *testing.
 		t.Fatalf("at 1320 points the sidebar's edge is at %v and its width %v, want both %v", r.X+r.W, h.a.sidebarWidth, maxSidebarWidth)
 	}
 }
+
+// Show sidebar closes only the panels in its way: a preview the diff
+// covers, which fits beside the sidebar, shows again as the diff closes.
+func TestShowSidebarKeepsACoveredPreviewThatFits(t *testing.T) {
+	a, tt, _ := browsing(t)
+	a.sidebarWidth = minSidebarWidth
+	tt.SetSize(1010, 620)
+	tt.Key(ui.Cmd|ui.Shift, ui.KeyP)
+	tt.Advance(time.Second)
+	if a.sidebarOpen != 1 || !visibleLabel(tt, "Resize preview") {
+		t.Fatalf("at 1010 points the sidebar is %g open beside the preview (shown %v), want both", a.sidebarOpen, visibleLabel(tt, "Resize preview"))
+	}
+	tt.Key(ui.Cmd, ui.KeyD)
+	tt.Advance(time.Second)
+	if a.sidebarOpen != 0 {
+		t.Fatalf("the diff leaves the sidebar %g open, want it in the sidebar's room", a.sidebarOpen)
+	}
+	tt.Key(ui.Cmd, ui.KeyB)
+	tt.Advance(time.Second)
+	if a.sidebarOpen != 1 || a.showDiff || !visibleLabel(tt, "Resize preview") {
+		t.Fatalf("after Show sidebar the sidebar is %g open, the diff open %v, the preview shown %v, want the sidebar beside the preview", a.sidebarOpen, a.showDiff, visibleLabel(tt, "Resize preview"))
+	}
+}
+
+// ⌘B skips the slide of its own toggle only: the sidebar still slides as
+// a panel later takes its room and gives it back.
+func TestTheSidebarSlidesForAPanelAfterTheShortcut(t *testing.T) {
+	a, tt, _ := browsing(t)
+	tt.SetSize(760, 620)
+	tt.Key(ui.Cmd, ui.KeyB)
+	tt.Key(ui.Cmd, ui.KeyB)
+	tt.Advance(time.Second)
+	tt.Key(ui.Cmd, ui.KeyD)
+	tt.Advance(64 * time.Millisecond)
+	out := a.sidebarOpen
+	tt.Advance(time.Second)
+	tt.Key(ui.Cmd, ui.KeyD)
+	tt.Advance(64 * time.Millisecond)
+	if in := a.sidebarOpen; out <= 0 || out >= 1 || in <= 0 || in >= 1 {
+		t.Fatalf("64 ms in, the sidebar is %g open as the diff opens and %g as it closes, want both mid-slide", out, in)
+	}
+}
