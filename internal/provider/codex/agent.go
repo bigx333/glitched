@@ -793,6 +793,7 @@ func (g *Agent) request(m message) {
 			ID       string `json:"id"`
 			Header   string `json:"header"`
 			Question string `json:"question"`
+			IsOther  bool   `json:"isOther"`
 			IsSecret bool   `json:"isSecret"`
 			Options  []struct {
 				Label       string `json:"label"`
@@ -840,8 +841,20 @@ func (g *Agent) request(m message) {
 		if extra := extraAccess(r.Network, r.Additional); extra != "" {
 			b.Reason = strings.TrimSpace(b.Reason + "\n" + extra)
 		}
-		a.deny = denial(r.Decisions)
-		b.Session = slices.ContainsFunc(r.Decisions, func(d json.RawMessage) bool { return string(bytes.TrimSpace(d)) == `"acceptForSession"` })
+		var offered []string
+		for _, d := range r.Decisions {
+			var name string
+			if json.Unmarshal(d, &name) == nil {
+				offered = append(offered, name)
+			}
+		}
+		a.deny = denial(offered)
+		// With no list, absent or null, Codex's own TUI offers the session
+		// for a network prompt alone (codex-rs tui/src/app.rs).
+		b.Session = slices.Contains(offered, "acceptForSession")
+		if r.Decisions == nil {
+			b.Session = len(r.Network) > 0 && string(r.Network) != "null"
+		}
 	case "item/fileChange/requestApproval":
 		// Codex keeps a grant for the session only for a change it asks
 		// about with no reason; one with a reason, even "", it asks again.
@@ -878,14 +891,21 @@ func (g *Agent) request(m message) {
 		}
 		b.Session = slices.Contains(persist, "session")
 	case "item/tool/requestUserInput":
-		if len(r.Questions) == 1 && strings.HasPrefix(r.Questions[0].ID, toolApproval) {
+		// A legacy MCP tool approval is Codex's closed question: the only
+		// one, its id the prefix and the call's, Allow and Cancel among its
+		// options, and no answer of the user's own.
+		var labels []string
+		if len(r.Questions) == 1 {
+			for _, o := range r.Questions[0].Options {
+				labels = append(labels, o.Label)
+			}
+		}
+		if len(r.Questions) == 1 && strings.HasPrefix(r.Questions[0].ID, toolApproval+"_") && !r.Questions[0].IsOther && !r.Questions[0].IsSecret &&
+			slices.Contains(labels, toolAccept) && slices.Contains(labels, toolRefuse) {
 			q := r.Questions[0]
 			a.tool, a.ids = true, []string{q.ID}
-			b = body{Operation: "use a tool", Reason: q.Question}
-			for _, o := range q.Options {
-				b.Session = b.Session || o.Label == toolSession
-			}
-			if it := g.items[strings.TrimPrefix(strings.TrimPrefix(q.ID, toolApproval), "_")]; it != nil {
+			b = body{Operation: "use a tool", Reason: q.Question, Session: slices.Contains(labels, toolSession)}
+			if it := g.items[strings.TrimPrefix(q.ID, toolApproval+"_")]; it != nil {
 				b.Operation, b.Args = "use "+it.Server+": "+it.Tool, argsText(it.Arguments)
 			}
 			break
@@ -1031,17 +1051,11 @@ func approve(a *ask, allow, session bool) any {
 
 // denial is the decision that denies a command once: decline, unless
 // Codex offers only cancel, which also ends the turn.
-func denial(offered []json.RawMessage) string {
-	var cancel bool
-	for _, d := range offered {
-		switch string(bytes.TrimSpace(d)) {
-		case `"decline"`:
-			return "decline"
-		case `"cancel"`:
-			cancel = true
-		}
-	}
-	if cancel {
+func denial(offered []string) string {
+	switch {
+	case slices.Contains(offered, "decline"):
+		return "decline"
+	case slices.Contains(offered, "cancel"):
 		return "cancel"
 	}
 	return ""

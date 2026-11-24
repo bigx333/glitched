@@ -578,6 +578,9 @@ const sessionAnswer = `{"allow":true,"session":true}`
 func TestTheCardOffersCodexsSessionGrant(t *testing.T) {
 	for scenario, want := range map[string]string{
 		"network":                    `{"decision":"acceptForSession"}`,
+		"network-escaped":            `{"decision":"acceptForSession"}`,
+		"network-null":               `{"decision":"acceptForSession"}`,
+		"network-absent":             `{"decision":"acceptForSession"}`,
 		"file-no-reason":             `{"decision":"acceptForSession"}`,
 		"permissions":                `{"permissions":{"network":{"enabled":true}},"scope":"session"}`,
 		"mcp-approval":               `{"answers":{"mcp_tool_call_approval_call-1":{"answers":["Allow for this session"]}}}`,
@@ -737,6 +740,26 @@ func TestAQuestionAsksTheUser(t *testing.T) {
 		if got := answers(t, log); len(got) != 1 || compact(got[0]) != tc.want {
 			t.Errorf("%s: answered %s, want %s", tc.answer, got, tc.want)
 		}
+	}
+}
+
+// An ordinary question whose id and options look like Codex's own MCP
+// approval, but which takes the user's own answer, stays a question: it
+// grants nothing, so the card offers no grant, and the pick goes back as
+// the question's answer.
+func TestAQuestionLikeAnApprovalStaysAQuestion(t *testing.T) {
+	a, log := fake(t, "question-like-approval")
+	g := open(t, a, spec(t))
+	do(t, g, provider.Start{Text: "go"})
+	_, req := until[provider.RequestOpened](t, g)
+	if req.Kind != api.KindQuestion || offersSession(req.Body) {
+		t.Fatalf("a %s request %s, want a question", req.Kind, req.Body)
+	}
+	do(t, g, provider.Respond{Request: req.ID, Answer: json.RawMessage(`{"answers":[{"picked":["Allow for this session"]}]}`)})
+	turn(t, g)
+	closeRun(t, g)
+	if got := answers(t, log); len(got) != 1 || compact(got[0]) != `{"answers":{"mcp_tool_call_approval_call-1":{"answers":["Allow for this session"]}}}` {
+		t.Errorf("answered %s", got)
 	}
 }
 
