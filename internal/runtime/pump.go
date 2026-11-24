@@ -35,6 +35,11 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				readErr = err
 				return
 			}
+			if _, end := ev.(provider.TurnEnded); end {
+				h.mu.Lock()
+				lr.ending = true
+				h.mu.Unlock()
+			}
 			events <- ev
 		}
 	}()
@@ -147,7 +152,7 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				flushAllNested()
 				flushText()
 				// An agent can end its turn before the call that answered
-				// it returns: what that call did is logged first, so a
+				// it returns: the answer's receipt is logged first, so a
 				// crash never leaves an ended turn with an answer the
 				// agent took logged as on its way.
 				h.mu.Lock()
