@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -242,8 +243,8 @@ func TestTurningSyncOffDropsTheSetFromTheNode(t *testing.T) {
 	if got := given(n.runs.next(t)); !slices.Equal(got, []string{"own: The node's own."}) {
 		t.Errorf("with sync off the node's next run got %v", got)
 	}
-	if _, err := os.Lstat(filepath.Join(n.dir, "skills-synced")); !os.IsNotExist(err) {
-		t.Errorf("the node keeps this machine's skills: %v", err)
+	if sets, _ := os.ReadDir(filepath.Join(n.dir, "skills-synced", "sets")); len(sets) != 0 {
+		t.Errorf("the node keeps this machine's skills: %v", sets)
 	}
 	if list := listSkills(t, m, g, box, id); list.Synced != nil {
 		t.Errorf("the node still says its skills came from %+v", list.Synced)
@@ -270,5 +271,106 @@ func TestANodePassesOnOnlyItsOwnSkills(t *testing.T) {
 	say(t, mb, gb, onC, thread(t, mb, gb, onC, stateDir(t)), "one")
 	if got := given(c.runs.next(t)); !slices.Equal(got, []string{"mine: The second machine's."}) {
 		t.Errorf("c's run, given b's skills by b's GUI, got %v", got)
+	}
+}
+
+// heldSync is an engine whose syncs wait on sync, and that says what it is
+// submitted.
+type heldSync struct {
+	api.Endpoint
+	sync      func(context.Context) error
+	submitted chan api.Intent
+}
+
+func (e heldSync) SyncSkills(ctx context.Context, _ api.SkillSync) (api.SkillsSynced, error) {
+	return api.SkillsSynced{}, e.sync(ctx)
+}
+func (e heldSync) PutSkill(context.Context, api.SkillPut) error    { panic("unexpected put") }
+func (e heldSync) DropSkills(context.Context, api.SkillDrop) error { panic("unexpected drop") }
+func (e heldSync) Skills(context.Context, api.SkillQuery) (api.SkillList, error) {
+	panic("unexpected list")
+}
+func (e heldSync) Submit(_ context.Context, cmd api.Command) (api.Receipt, error) {
+	e.submitted <- cmd.Body
+	return api.Receipt{}, nil
+}
+
+// heldRemote is a remote thread on an engine at ep, and m with dir as its
+// state folder.
+func heldRemote(t *testing.T, dir string, ep api.Endpoint) (*Manager, *Env, api.ID) {
+	t.Helper()
+	g := &gui{wake: make(chan struct{}, 1)}
+	m := New(Config{Dir: dir, Post: g.post})
+	t.Cleanup(func() { m.Close() })
+	id := api.NewID()
+	e := &Env{Kind: Remote, ID: api.NewID(), ctx: m.ctx, skills: &skillSync{}, slots: make(chan struct{}, 2), session: &session{ctx: m.ctx, ep: ep}, Threads: map[api.ID]*Thread{id: {View: api.Thread{ID: id}}}}
+	m.envs = []*Env{{Kind: Local, ID: api.NewID()}, e}
+	return m, e, id
+}
+
+// A stop sent while the message before it waits for its sync goes at
+// once, the message just before it: neither waits on the sync.
+func TestAStopNeverWaitsBehindASync(t *testing.T) {
+	begin, release := make(chan struct{}), make(chan struct{})
+	ep := heldSync{sync: func(ctx context.Context) error {
+		close(begin)
+		select {
+		case <-release:
+			return errors.New("test sync refusal")
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}, submitted: make(chan api.Intent, 2)}
+	defer close(release)
+	m, e, id := heldRemote(t, t.TempDir(), ep)
+	m.Send(e, id, "hello", api.AfterActive)
+	select {
+	case <-begin:
+	case <-time.After(time.Second):
+		t.Fatal("no sync reached endpoint")
+	}
+	m.Interrupt(e, id)
+	for _, want := range []string{"send", "stop"} {
+		select {
+		case b := <-ep.submitted:
+			switch b.(type) {
+			case api.MessageDispatch:
+				if want != "send" {
+					t.Fatalf("expected %s, got send", want)
+				}
+			case api.TurnInterrupt:
+				if want != "stop" {
+					t.Fatalf("expected %s, got stop", want)
+				}
+			default:
+				t.Fatalf("unexpected %T", b)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s never submitted while the sync was held", want)
+		}
+	}
+}
+
+// A queued message sent now on an idle thread starts a turn, so it goes
+// after a sync: here the drop of a switch turned off.
+func TestAnIdleQueueSteerSyncsFirst(t *testing.T) {
+	src := stateDir(t)
+	skillstest.Write(t, filepath.Join(src, "skills"), "hello", "First skill.")
+	n := pairedNode(t, "box")
+	m, g := manager(t, src)
+	box := reach(t, m, g, n)
+	id := thread(t, m, g, box, stateDir(t))
+	queued := m.Send(box, id, "deferred", api.Defer)
+	g.until(t, "message is held on idle thread", func() bool {
+		th := box.Threads[id]
+		return th.View.Run == api.RunIdle && len(th.Pending) == 0 && len(th.Transcript.Queue) == 1 && th.Transcript.Queue[0].State == Held
+	})
+	off := false
+	if err := m.Configure(func(cfg *daemon.Config) { cfg.SyncSkills = &off }); err != nil {
+		t.Fatal(err)
+	}
+	m.SteerQueued(box, id, queued)
+	if got := given(n.runs.next(t)); !slices.Equal(got, []string(nil)) {
+		t.Fatalf("first run after app contacted node with switch disabled still got %v", got)
 	}
 }
