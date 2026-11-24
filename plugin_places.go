@@ -383,9 +383,12 @@ func (a *app) emitThreadChanges() {
 		var edited []string
 		stamps := make(map[string]time.Time, len(files))
 		for _, f := range files {
-			stamps[f.path] = f.stamp
+			if f.edited.IsZero() {
+				continue
+			}
+			stamps[f.path] = f.edited
 			if was != nil {
-				if at, ok := was.stamps[f.path]; !ok || !at.Equal(f.stamp) {
+				if at, ok := was.stamps[f.path]; !ok || !at.Equal(f.edited) {
 					edited = append(edited, f.path)
 				}
 			}

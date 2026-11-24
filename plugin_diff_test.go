@@ -15,6 +15,7 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/daemon"
 	"glitched/internal/plugins"
+	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 )
 
@@ -146,6 +147,57 @@ func TestEditsToTheThreadsFilesAreTold(t *testing.T) {
 	h.until("the edits told", func() bool {
 		return slices.ContainsFunc(h.tt.Texts(), func(s string) bool { return strings.HasSuffix(s, " README.md "+sidebarPath) })
 	})
+}
+
+// One edit is one tell: the plugin hears of it as it finishes, not again
+// as it starts, though the transcript shows it under way between the two.
+func TestOneEditIsToldOnce(t *testing.T) {
+	dir := tempDir(t)
+	dst := filepath.Join(plugins.Dir(dir), "file-ears")
+	os.MkdirAll(dst, 0o755)
+	os.WriteFile(filepath.Join(dst, "plugin.json"), []byte(`{"id": "file-ears", "name": "File ears", "main": "index.js",
+		"capabilities": ["ui.place", "threads:read"], "glitched": {"events": ["thread.files.changed"], "places": [{"id": "files", "at": "sidebar.footer"}]}}`), 0o644)
+	os.WriteFile(filepath.Join(dst, "index.js"), []byte(`
+		export function init() { return { state: [] } }
+		export function update({ state, event }) { return event.type === "thread.files.changed" ? { state: [...state, ...event.data.files] } : {} }
+		export function place({ state, items }) { return items.map(() => ({ type: "text", text: "edited " + state.length + " " + state.join(" ") })) }`), 0o644)
+	signAsOwn(t, dir, dst)
+	grant(t, dir, `{"grants": {"file-ears": ["threads:read"]}}`)
+	ws := gitWorkspace(t)
+	held := []provider.Event{
+		provider.Work{Item: "e", Kind: "edit", Title: "Edit " + sidebarPath, Status: api.WorkStarted, Path: sidebarPath},
+		provider.RequestOpened{ID: "approve-1", Kind: api.KindApproval, Body: json.RawMessage(`{"operation":"edit","path":"` + sidebarPath + `"}`)},
+		provider.Work{Item: "e", Kind: "edit", Title: "Edit " + sidebarPath, Status: api.WorkCompleted, Path: sidebarPath},
+		provider.TextDelta{Text: "Edited it."},
+	}
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(held))
+	id := seed(t, d, ws, "Held")
+	h := start(t, dir)
+	h.a.select_(h.thread("Held"))
+	h.until("nothing told of what it had", func() bool { return h.tt.HasText("edited 0 ") })
+	ep := d.Endpoint()
+	if _, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.MessageDispatch{Text: "Edit it."}}); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the edit under way", func() bool {
+		fs := changedFiles(entriesOf(h.thread("Held")))
+		return len(fs) == 1 && fs[0].edited.IsZero() && h.thread("Held").View.Run == api.RunWaiting
+	})
+	snap, err := ep.Read(context.Background(), api.Query{Thread: id})
+	if err != nil || len(snap.Threads) != 1 || len(snap.Threads[0].Requests) != 1 {
+		t.Fatalf("the approval: %+v, %v", snap.Threads, err)
+	}
+	if _, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: id, Body: api.RequestRespond{Request: snap.Threads[0].Requests[0].ID, Generation: snap.Threads[0].Requests[0].Generation, Answer: json.RawMessage(`{"allow":true}`)}}); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the run ended with the edit", func() bool {
+		fs := changedFiles(entriesOf(h.thread("Held")))
+		return len(fs) == 1 && !fs[0].edited.IsZero() && h.thread("Held").View.Run == api.RunIdle
+	})
+	h.tt.Advance(time.Second)
+	if !h.tt.HasText("edited 1 " + sidebarPath) {
+		t.Fatalf("the plugin shows %q, want one tell of the one edit", slices.DeleteFunc(h.tt.Texts(), func(s string) bool { return !strings.HasPrefix(s, "edited ") }))
+	}
 }
 
 // waitingFirstDraws has frames wait up to d for a component's first
