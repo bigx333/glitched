@@ -54,6 +54,9 @@ type MessageQueued struct {
 	Held    bool         `json:"held,omitempty"`
 	Report  ID           `json:"report,omitzero"`
 	Silent  bool         `json:"silent,omitempty"`
+	// By is the thread whose agent sent the message, as a child's first
+	// message or a task tool's; zero for the user's.
+	By ID `json:"by,omitzero"`
 }
 
 // MessageClaimed binds a message to a live run it will be steered into.
@@ -106,6 +109,8 @@ type TurnStarted struct {
 // TurnStopping: an interrupt was sent. Open requests of the run are void.
 type TurnStopping struct {
 	Run ID `json:"run"`
+	// By is the thread whose agent stopped the run; zero for the user.
+	By ID `json:"by,omitzero"`
 }
 
 // TurnSignalled: the run's stop took: its interrupt reached the agent, or

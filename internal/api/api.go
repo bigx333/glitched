@@ -65,6 +65,20 @@ type Command struct {
 	Revision uint64 // 0 skips the optimistic check
 	Expires  time.Time
 	Body     Intent
+	// Caller is the agent's run that sends the command to a thread under
+	// its own, as glitched mcp's task tools do; nil for the user's. The
+	// commit checks it: see Caller.
+	Caller *Caller
+}
+
+// Caller is an agent's run acting on a thread under its own. Only a
+// message or a stop may name one, and the engine takes it only from Run,
+// the live run of Thread, which is above the target, and only while the
+// user hasn't taken the target over: the target's last message or stop
+// was an agent's, not the user's.
+type Caller struct {
+	Thread ID `json:"thread"`
+	Run    ID `json:"run"`
 }
 
 // Intent is sealed: only the types in intents below implement it.
@@ -218,6 +232,7 @@ type commandWire struct {
 	Expires  time.Time       `json:"expires,omitzero"`
 	Type     string          `json:"type"`
 	Body     json.RawMessage `json:"body"`
+	Caller   *Caller         `json:"caller,omitempty"`
 }
 
 func (c Command) MarshalJSON() ([]byte, error) {
@@ -228,7 +243,7 @@ func (c Command) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(commandWire{c.ID, c.Target, c.Revision, c.Expires, c.Body.intentType(), body})
+	return json.Marshal(commandWire{c.ID, c.Target, c.Revision, c.Expires, c.Body.intentType(), body, c.Caller})
 }
 
 func (c *Command) UnmarshalJSON(b []byte) error {
@@ -265,7 +280,7 @@ func (c *Command) UnmarshalJSON(b []byte) error {
 	case *QueueResume:
 		c.Body = *v
 	}
-	c.ID, c.Target, c.Revision, c.Expires = w.ID, w.Target, w.Revision, w.Expires
+	c.ID, c.Target, c.Revision, c.Expires, c.Caller = w.ID, w.Target, w.Revision, w.Expires, w.Caller
 	return nil
 }
 
@@ -450,8 +465,10 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // queued with no way to resume it, and a version 7 engine would refuse
 // the resume as an unknown command; version 9 has a message name the
 // uncertain run it replaces, which a version 8 engine would drop and stop
-// whatever run is live.
-const Protocol = 9
+// whatever run is live; version 10 lets an agent message and stop the
+// threads under its own, a command whose caller a version 9 engine would
+// drop and take as the user's.
+const Protocol = 10
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host

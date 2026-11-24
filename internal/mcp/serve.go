@@ -101,7 +101,7 @@ func handle(ctx context.Context, tools *Tools, m message) reply {
 	case "ping":
 		r.Result = struct{}{}
 	case "tools/list":
-		r.Result = map[string]any{"tools": append(append(slices.Clone(catalog), credentialsTool), tools.pluginCatalog(ctx)...)}
+		r.Result = map[string]any{"tools": append(append(append(slices.Clone(catalog), taskCatalog...), credentialsTool), tools.pluginCatalog(ctx)...)}
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
@@ -127,6 +127,16 @@ func handle(ctx context.Context, tools *Tools, m message) reply {
 		}
 		if p.Name == requestCredentials {
 			v, err := tools.credentials(ctx, p.Arguments, p.Meta.ToolUseID)
+			if err != nil {
+				r.Result = map[string]any{"content": []any{text(err.Error())}, "isError": true}
+				return r
+			}
+			b, _ := json.MarshalIndent(v, "", "  ")
+			r.Result = map[string]any{"content": []any{text(string(b))}, "structuredContent": v, "isError": false}
+			return r
+		}
+		if slices.Contains([]string{listTasks, taskStatus, taskCancel, taskSend}, p.Name) {
+			v, err := tools.tasks(ctx, p.Name, p.Arguments, p.Meta.ToolUseID)
 			if err != nil {
 				r.Result = map[string]any{"content": []any{text(err.Error())}, "isError": true}
 				return r
