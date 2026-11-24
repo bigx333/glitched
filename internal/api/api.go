@@ -130,6 +130,9 @@ type MessageDispatch struct {
 	// one, as when another message replaced it first, rather than stop a
 	// newer run.
 	Replaces ID `json:"replaces,omitzero"`
+	// Auto is the engine's own continue of a run a restart cut off, which
+	// it refuses on a child or on a thread settled or snoozed.
+	Auto bool `json:"auto,omitempty"`
 }
 
 // TurnInterrupt stops the live run. With Drop, it also cancels the

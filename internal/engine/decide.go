@@ -325,6 +325,9 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	if live := d.t.Live(); !m.Replaces.IsZero() && (m.Mode != api.RestartActive || live == nil || live.ID != m.Replaces || live.State != RunUncertain) {
 		return rejected("the run this was to replace has already ended")
 	}
+	if m.Auto && (m.Replaces.IsZero() || !d.t.Parent.IsZero() || d.t.settled() || d.t.Disposition.State == api.Snoozed && d.at.Before(d.t.Disposition.Until)) {
+		return rejected("the engine continues only a run it lost, on a thread of the user's neither settled nor snoozed")
+	}
 	// A run left on a settled thread is the one the settle stopped, and a
 	// silent maintenance run (such as idle compaction) cannot be steered.
 	// A message sent while either is live queues right behind it.
@@ -350,7 +353,7 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 			return err
 		}
 	}
-	q := api.MessageQueued{Message: id, Text: m.Text, Mode: m.Mode, Pos: d.t.pos(false), Held: m.Mode == api.Defer, By: d.by}
+	q := api.MessageQueued{Message: id, Text: m.Text, Mode: m.Mode, Pos: d.t.pos(false), Held: m.Mode == api.Defer, By: d.by, Replaces: m.Replaces, Auto: m.Auto}
 	switch {
 	case m.Mode == api.RestartActive:
 		q.Pos = d.t.pos(true)
@@ -572,7 +575,7 @@ func (d *decision) interrupt(drop bool) error {
 // conversation: it ends, and its agent is closed.
 func (d *decision) lost(r Run) error {
 	if !r.Silent {
-		return d.uncertain(r.ID, api.UncertainStopped)
+		return d.uncertain(api.TurnUncertain{Run: r.ID, Reason: api.UncertainStopped})
 	}
 	d.effects = append(d.effects, CloseAgent{Run: r.ID, Generation: r.Generation})
 	return d.emit(api.TurnEnded{Run: r.ID, Outcome: api.OutcomeFailed, Error: "the compaction could not be stopped"})
@@ -1028,10 +1031,14 @@ func (d *decision) observe(o Observation) error {
 		if live.Silent {
 			return d.emit(api.TurnEnded{Run: o.Run, Outcome: api.OutcomeFailed, Error: "the engine restarted during the compaction"})
 		}
-		if o.Failed {
-			return d.uncertain(o.Run, api.UncertainUnconfirmed)
+		switch {
+		case o.Failed:
+			return d.uncertain(api.TurnUncertain{Run: o.Run, Reason: api.UncertainUnconfirmed})
+		case live.State == RunStopping:
+			return d.uncertain(api.TurnUncertain{Run: o.Run, Reason: api.UncertainStopped})
 		}
-		return d.uncertain(o.Run, api.UncertainRestarted)
+		worked := live.State == RunRunning || live.State == RunStarting
+		return d.uncertain(api.TurnUncertain{Run: o.Run, Reason: api.UncertainRestarted, Continue: o.Continue && worked && d.t.Parent.IsZero()})
 	case Rewound:
 		return d.rewound()
 	case Reported:
@@ -1134,22 +1141,30 @@ func (d *decision) report(run api.ID, kind api.ReportKind, failure string, ask j
 	})
 }
 
-// uncertain is that nobody can prove what run's agent is doing, for why.
-// A child's parent hears it waits on the user, as it does of an approval,
-// unless the user stopped it: they asked for that.
-func (d *decision) uncertain(run api.ID, why api.UncertainReason) error {
-	if err := d.emit(api.TurnUncertain{Run: run, Reason: why}); err != nil {
+// uncertain is that nobody can prove what u's run's agent is doing. A
+// child's parent hears it waits on the user, as it does of an approval,
+// unless it was stopped: that was asked for.
+func (d *decision) uncertain(u api.TurnUncertain) error {
+	if err := d.emit(u); err != nil {
 		return err
 	}
-	if why != api.UncertainStopped {
-		d.report(run, api.ReportBlocked, "", nil)
+	if u.Reason != api.UncertainStopped {
+		d.report(u.Run, api.ReportBlocked, "", nil)
 	}
 	return nil
 }
 
 func (d *decision) rewound() error {
-	if live := d.t.Live(); live != nil && live.State != RunUncertain {
-		if err := d.uncertain(live.ID, api.UncertainRewound); err != nil {
+	// A run already uncertain is so again for the rewind, which no restart
+	// continues: the history it was to go on from may be lost.
+	switch live := d.t.Live(); {
+	case live == nil:
+	case live.State == RunUncertain:
+		if err := d.emit(api.TurnUncertain{Run: live.ID, Reason: api.UncertainRewound}); err != nil {
+			return err
+		}
+	default:
+		if err := d.uncertain(api.TurnUncertain{Run: live.ID, Reason: api.UncertainRewound}); err != nil {
 			return err
 		}
 	}

@@ -8,95 +8,144 @@ import (
 	"glitched/internal/engine"
 )
 
-// lostRun is a run whose agent boot found gone, as it was before: the
-// state it was lost in says whether it waited on the user or was stopping.
-type lostRun struct {
-	thread, run api.ID
-	was         engine.RunState
-}
-
 const (
 	// continuesAtOnce is how many continued runs work at once, as T3 Code's
 	// fix for a boot that restarted 54 runs together caps them.
 	continuesAtOnce = 2
-	// chainCap continues in a row within chainWindow, each lost in turn, end
-	// the chain: a run that brings the engine down is continued no more.
+	// chainCap continues in a row, each asked for within chainWindow of
+	// now, end the chain: a run that brings the engine down is continued no
+	// more.
 	chainCap    = 3
 	chainWindow = 5 * time.Minute
 )
 
-// continueLost continues the runs boot lost that may be, as Continue does,
-// at most continuesAtOnce live at once, in the order boot found them.
+// continueLost continues, as Continue does, each run the log says is to be
+// continued unasked, at most continuesAtOnce of them live at once, those
+// the last boots continued among them.
 func (h *Host) continueLost() {
 	defer h.wg.Done()
 	defer close(h.lostDone)
-	var live []api.ID // continued threads whose run may still be live, by thread
-	for _, l := range h.lost {
-		for len(live) >= continuesAtOnce {
+	threads, err := h.store.LiveThreads(h.ctx)
+	if err != nil {
+		slog.Warn("runtime: couldn't list the runs to continue", "err", err)
+		return
+	}
+	live := map[api.ID]api.ID{} // the continued runs that may still work, by run, to their thread
+	var due []api.ID
+	for _, id := range threads {
+		t, log, err := h.history(id)
+		if err != nil {
+			continue
+		}
+		switch r := t.Live(); {
+		case r == nil:
+		case r.State != engine.RunUncertain:
+			if autoContinued(log, r.ID) {
+				live[r.ID] = id
+			}
+		case dueContinue(log, r.ID):
+			due = append(due, id)
+		}
+	}
+	for _, id := range due {
+		for h.prune(live) >= continuesAtOnce {
+			select {
+			case h.full <- struct{}{}:
+			default:
+			}
 			select {
 			case <-h.ctx.Done():
 				return
 			case <-h.continued:
 			}
-			live = h.stillLive(live)
 		}
-		t, err := h.store.Thread(h.ctx, l.thread)
-		if err != nil || !mayContinue(t, l, h.clock()) {
+		t, log, err := h.history(id)
+		if err != nil {
 			continue
 		}
-		_, err = h.Submit(h.ctx, api.Command{ID: api.NewID(), Target: l.thread, Body: api.MessageDispatch{Text: api.ContinueText, Mode: api.RestartActive, Replaces: l.run}})
-		if err != nil {
+		r := t.Live()
+		if r == nil || r.State != engine.RunUncertain || !dueContinue(log, r.ID) || chain(log, r.ID, h.clock()) >= chainCap {
+			continue
+		}
+		cmd := api.NewID()
+		if _, err := h.Submit(h.ctx, api.Command{ID: cmd, Target: id, Body: api.MessageDispatch{Text: api.ContinueText, Mode: api.RestartActive, Replaces: r.ID, Auto: true}}); err != nil {
 			if h.ctx.Err() == nil {
-				slog.Warn("runtime: couldn't continue a run the restart lost", "thread", l.thread, "err", err)
+				slog.Info("runtime: didn't continue a run a restart cut off", "thread", id, "err", err)
 			}
 			continue
 		}
-		live = append(live, l.thread)
+		live[cmd] = id
 	}
 }
 
-// stillLive is the threads of ts whose live run works or waits, the run a
-// continue started.
-func (h *Host) stillLive(ts []api.ID) []api.ID {
-	var out []api.ID
-	for _, id := range ts {
-		t, err := h.store.Thread(h.ctx, id)
-		if r := t.Live(); err == nil && r != nil && r.State != engine.RunUncertain {
-			out = append(out, id)
+// history is thread as it is and the log it folds from.
+func (h *Host) history(thread api.ID) (engine.Thread, []engine.Event, error) {
+	t, err := h.store.Thread(h.ctx, thread)
+	if err != nil {
+		return t, nil, err
+	}
+	evs, _, err := h.store.Since(h.ctx, thread, 0, 0)
+	if err != nil {
+		return t, nil, err
+	}
+	log := make([]engine.Event, 0, len(evs))
+	for _, e := range evs {
+		if b, err := e.Decode(); err == nil {
+			log = append(log, engine.Event{Thread: thread, At: e.At, Body: b})
 		}
 	}
-	return out
+	return t, log, nil
 }
 
-// mayContinue is whether l, lost at boot, is continued unasked: a thread of
-// the user's, its run still the uncertain one, lost while it worked rather
-// than while it waited on the user's answer or stopped at their word; not
-// settled or snoozed; and not the end of a chain of continues each lost in
-// turn.
-func mayContinue(t engine.Thread, l lostRun, now time.Time) bool {
-	r := t.Live()
-	switch {
-	case !t.Parent.IsZero(), r == nil, r.ID != l.run, r.State != engine.RunUncertain:
-		return false
-	case l.was != engine.RunRunning && l.was != engine.RunStarting:
-		return false
-	case t.Disposition.State == api.Settled, t.Disposition.State == api.Snoozed && now.Before(t.Disposition.Until):
-		return false
+// prune drops from live the runs that no longer work or wait, and says how
+// many are left.
+func (h *Host) prune(live map[api.ID]api.ID) int {
+	for run, id := range live {
+		t, err := h.store.Thread(h.ctx, id)
+		if r := t.Live(); err == nil && (r == nil || r.ID != run || r.State == engine.RunUncertain) {
+			delete(live, run)
+		}
 	}
-	return chain(t, now) < chainCap
+	return len(live)
 }
 
-// chain is how many of t's last runs in a row were continues, the live one
-// too, those that ended within chainWindow of now.
-func chain(t engine.Thread, now time.Time) int {
+// dueContinue is whether the last time run became uncertain, the engine was
+// to continue it unasked.
+func dueContinue(log []engine.Event, run api.ID) bool {
+	for i := len(log) - 1; i >= 0; i-- {
+		if u, ok := log[i].Body.(api.TurnUncertain); ok && u.Run == run {
+			return u.Continue
+		}
+	}
+	return false
+}
+
+// autoContinued is whether run is one the engine continued unasked.
+func autoContinued(log []engine.Event, run api.ID) bool {
+	q, _, ok := queued(log, run)
+	return ok && q.Auto
+}
+
+// chain is how many continues in a row led to run, run's own too, each
+// asked for within chainWindow of now.
+func chain(log []engine.Event, run api.ID, now time.Time) int {
 	n := 0
-	for i := len(t.Runs) - 1; i >= 0; i-- {
-		r := t.Runs[i]
-		m, _ := t.Message(r.ID)
-		if m.Text != api.ContinueText || m.Mode != api.RestartActive || r.State == engine.RunFinished && now.Sub(r.Ended) > chainWindow {
-			break
+	for {
+		q, at, ok := queued(log, run)
+		if !ok || q.Replaces.IsZero() || now.Sub(at) > chainWindow {
+			return n
 		}
 		n++
+		run = q.Replaces
 	}
-	return n
+}
+
+// queued is the message that started run, as it was queued, and when.
+func queued(log []engine.Event, run api.ID) (api.MessageQueued, time.Time, bool) {
+	for _, e := range log {
+		if q, ok := e.Body.(api.MessageQueued); ok && q.Message == run {
+			return q, e.At, true
+		}
+	}
+	return api.MessageQueued{}, time.Time{}, false
 }
