@@ -18,6 +18,7 @@ const (
 	taskStatus = "task_status"
 	taskCancel = "task_cancel"
 	taskSend   = "task_send"
+	taskAnswer = "task_answer"
 )
 
 var taskID = map[string]any{"type": "string", "description": "The task_id delegate_task or list_tasks gave: a child thread of this one."}
@@ -61,6 +62,29 @@ var taskCatalog = []map[string]any{{
 		"required":             []string{"task_id", "message"},
 		"additionalProperties": false,
 	},
+}, {
+	"name": taskAnswer,
+	"description": "Answer a question one task of this thread's waits on, as the user would from its card. Its question reaches this thread on its own with its request_id; task_status lists the ones open. " +
+		"Give one answer per question, in order: the labels picked, your own words in other, or both. Only a question: a task's approval or credentials are the user's, and this refuses them, as it does for a task the user took over. " +
+		"The user sees the question too, and whichever answer lands first is the one the task gets.",
+	"inputSchema": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"task_id":    taskID,
+			"request_id": map[string]any{"type": "string", "description": "The question's request_id, from the task's question or task_status."},
+			"answers": map[string]any{"type": "array", "minItems": 1, "maxItems": 4, "items": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"picked": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Labels of the options picked; more than one only where the question says pick any."},
+					"other":  map[string]any{"type": "string", "description": "An answer in your own words."},
+				},
+				"additionalProperties": false,
+			}},
+			"client_request_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 256},
+		},
+		"required":             []string{"task_id", "request_id", "answers"},
+		"additionalProperties": false,
+	},
 }}
 
 // TaskState is a child as task_status and list_tasks show it.
@@ -76,18 +100,28 @@ type TaskState struct {
 	Working int `json:"threads_under_it_working,omitempty"`
 	// Waiting is what it waits on the user for: approval or question.
 	Waiting []string `json:"waiting_on_user_for,omitempty"`
-	Queued  int      `json:"messages_waiting,omitempty"`
+	// Questions are the questions it waits on, which task_answer answers.
+	Questions []TaskQuestion `json:"questions,omitempty"`
+	Queued    int            `json:"messages_waiting,omitempty"`
 	// Resumable is whether a task_send would start what a stop held: the
 	// task is idle and holds it.
 	Resumable  bool   `json:"resumable,omitempty"`
 	LastReport string `json:"last_report,omitempty"`
 }
 
+// TaskQuestion is a question request a task waits on.
+type TaskQuestion struct {
+	RequestID string         `json:"request_id"`
+	Questions []api.Question `json:"questions"`
+}
+
 type taskArgs struct {
-	TaskID    string `json:"task_id"`
-	Message   string `json:"message"`
-	Mode      string `json:"mode"`
-	RequestID string `json:"client_request_id"`
+	TaskID    string       `json:"task_id"`
+	Message   string       `json:"message"`
+	Mode      string       `json:"mode"`
+	Request   string       `json:"request_id"`
+	Answers   []api.Answer `json:"answers"`
+	RequestID string       `json:"client_request_id"`
 }
 
 // tasks runs one task tool for the origin's thread.
@@ -104,7 +138,7 @@ func (t *Tools) tasks(ctx context.Context, name string, raw json.RawMessage, too
 	}
 	// An acting call is the turn's that runs as it starts.
 	var caller api.Caller
-	if name == taskCancel || name == taskSend {
+	if name == taskCancel || name == taskSend || name == taskAnswer {
 		if caller, err = t.caller(ctx, name); err != nil {
 			return nil, err
 		}
@@ -137,6 +171,8 @@ func (t *Tools) tasks(ctx context.Context, name string, raw json.RawMessage, too
 		return state(task, snap.Threads, reports[task.ID]), nil
 	case taskCancel:
 		return t.cancel(ctx, caller, task, reports, cmp.Or(in.RequestID, toolUse, api.NewID().String()))
+	case taskAnswer:
+		return t.answer(ctx, caller, task, in, cmp.Or(in.RequestID, toolUse, api.NewID().String()))
 	}
 	if strings.TrimSpace(in.Message) == "" {
 		return nil, errors.New("task_send: message is empty")
@@ -158,6 +194,33 @@ func (t *Tools) tasks(ctx context.Context, name string, raw json.RawMessage, too
 		return nil, fmt.Errorf("task_send: %w", refusal(err))
 	}
 	return map[string]any{"task_id": task.ID.String(), "sent": true}, nil
+}
+
+// answer answers a question task waits on, a command of the origin's live
+// run, retried as the same command under key. The engine refuses any
+// other request, and a task the user took over.
+func (t *Tools) answer(ctx context.Context, caller api.Caller, task api.Thread, in taskArgs, key string) (any, error) {
+	id, err := api.ParseID(in.Request)
+	i := slices.IndexFunc(task.Requests, func(r api.Request) bool { return r.ID == id })
+	if err != nil || i < 0 {
+		return nil, fmt.Errorf("task_answer: the task waits on no request %q; it may have been answered, and task_status lists what it waits on", in.Request)
+	}
+	if len(in.Answers) == 0 {
+		return nil, errors.New("task_answer: no answers; to leave the question to the user, don't call this")
+	}
+	r := task.Requests[i]
+	answer, err := json.Marshal(api.Answers{Answers: in.Answers})
+	if err != nil {
+		return nil, err
+	}
+	_, err = t.Engine.Submit(ctx, api.Command{ID: derive(t.Origin.Thread, "answer", key), Target: task.ID, Caller: &caller, Body: api.RequestRespond{Request: r.ID, Generation: r.Generation, Answer: answer}})
+	if errors.Is(err, api.ErrAlreadyAnswered) {
+		return nil, errors.New("task_answer: the question was already answered, by the user or an earlier call")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("task_answer: %w", refusal(err))
+	}
+	return map[string]any{"task_id": task.ID.String(), "answered": true}, nil
 }
 
 // cancel stops task's run and every run under it in one commit, a
@@ -218,6 +281,9 @@ func state(th api.Thread, threads []api.Thread, report string) TaskState {
 	s := TaskState{TaskID: th.ID.String(), Title: th.Title, Branch: th.Branch, Queued: th.Queued, Resumable: th.Resumable, LastReport: report}
 	for _, r := range th.Requests {
 		s.Waiting = append(s.Waiting, r.Kind)
+		if q, err := api.ParseQuestions(r.Body); r.Kind == api.KindQuestion && err == nil {
+			s.Questions = append(s.Questions, TaskQuestion{RequestID: r.ID.String(), Questions: q.Questions})
+		}
 	}
 	for _, u := range under(threads, th.ID) {
 		if u.Working() {

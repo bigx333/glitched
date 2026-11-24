@@ -46,13 +46,15 @@ type DeliverAnswer struct {
 
 // ReportToParent posts a child's report in its parent's log: Title is the
 // child's, Kind how its run went; Error is a failed run's, Ask the body of
-// the request a blocked one waits on. Branch is the child's, where it
-// works in a worktree.
+// the request a blocked one waits on, and Question that request when it
+// is a question, which the parent's agent may answer. Branch is the
+// child's, where it works in a worktree.
 type ReportToParent struct {
 	Parent, Child, Run api.ID
 	Kind               api.ReportKind
 	Title, Error       string
 	Ask                json.RawMessage
+	Question           api.ID `json:",omitzero"`
 	Branch             string `json:",omitempty"`
 }
 
@@ -289,11 +291,14 @@ type Rewound struct{}
 
 // Reported is a child's report, observed on its parent: what the runtime
 // made of a ReportToParent. Reply is what the child's run said last, or
-// why it failed, for the parent's agent, and Branch the child's.
+// why it failed, for the parent's agent, and Branch the child's. Question
+// is the question request a blocked child waits on, and Ask its body.
 type Reported struct {
-	Report api.ChildReported
-	Reply  string
-	Branch string
+	Report   api.ChildReported
+	Reply    string
+	Branch   string
+	Question api.ID
+	Ask      json.RawMessage
 }
 
 // IdleCompact asks the engine to start a silent /compact run on an idle
