@@ -119,12 +119,14 @@ func untilOver(t *testing.T, st *store.Store, thread api.ID) {
 	}
 }
 
-// busyAtStart opens agents that find Codex's agent busy as the host gives
-// them their prompt, as one taking a notification is.
+// busyAtStart opens agents that find Codex busy as the host gives them
+// their prompt: lock takes the lock it holds, the agent's or the
+// connection's, until release.
 type busyAtStart struct {
 	*Adapter
-	agent         *Agent
-	busy, release chan struct{}
+	lock                     func(*Agent) sync.Locker
+	agent                    *Agent
+	busy, cancelled, release chan struct{}
 }
 type busyAgent struct {
 	*Agent
@@ -142,10 +144,13 @@ func (a *busyAtStart) Open(ctx context.Context, s provider.SessionSpec) (provide
 
 func (g busyAgent) Do(ctx context.Context, act provider.Action) error {
 	if _, ok := act.(provider.Start); ok {
-		g.mu.Lock()
+		l := g.ad.lock(g.Agent)
+		l.Lock()
 		go func() {
+			<-ctx.Done()
+			close(g.ad.cancelled)
 			<-g.ad.release
-			g.mu.Unlock()
+			l.Unlock()
 		}()
 		close(g.ad.busy)
 	}
@@ -153,45 +158,57 @@ func (g busyAgent) Do(ctx context.Context, act provider.Action) error {
 }
 
 func TestAStopWhileCodexWaitsToSendSendsNoPrompt(t *testing.T) {
-	a, log := fake(t, "hang")
-	gate := &busyAtStart{Adapter: a, busy: make(chan struct{}), release: make(chan struct{})}
-	st, err := store.Open(filepath.Join(t.TempDir(), "runtime.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	ctx := context.Background()
-	h, err := runtime.New(ctx, st, provider.Mux{Provider: gate}, runtime.WithIdleCompaction(false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	release := sync.OnceFunc(func() { close(gate.release) })
-	defer func() {
-		release()
-		h.Close()
-		if gate.agent != nil {
-			closeRun(t, gate.agent)
-		}
-	}()
-	thread := api.NewID()
-	submit := func(body api.Intent) {
-		t.Helper()
-		if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: body}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	submit(api.ThreadCreate{Title: "review", Workspace: t.TempDir(), Access: api.AccessAsk, Model: api.ModelRef{Provider: Provider}})
-	submit(api.MessageDispatch{Text: "unsent", Mode: api.StartNow})
-	select {
-	case <-gate.busy:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for the host to give the prompt")
-	}
-	submit(api.TurnInterrupt{})
-	release()
-	untilOver(t, st, thread)
-	if got := sent(t, log, "turn/start"); len(got) != 0 {
-		t.Fatalf("Codex received %s after the host committed Stop", got)
+	for name, lock := range map[string]func(*Agent) sync.Locker{
+		"agent":      func(g *Agent) sync.Locker { return &g.mu },
+		"connection": func(g *Agent) sync.Locker { return &g.p.conn.mu },
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, log := fake(t, "hang")
+			gate := &busyAtStart{Adapter: a, lock: lock, busy: make(chan struct{}), cancelled: make(chan struct{}), release: make(chan struct{})}
+			st, err := store.Open(filepath.Join(t.TempDir(), "runtime.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			ctx := context.Background()
+			h, err := runtime.New(ctx, st, provider.Mux{Provider: gate}, runtime.WithIdleCompaction(false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			release := sync.OnceFunc(func() { close(gate.release) })
+			defer func() {
+				release()
+				h.Close()
+				if gate.agent != nil {
+					closeRun(t, gate.agent)
+				}
+			}()
+			thread := api.NewID()
+			submit := func(body api.Intent) {
+				t.Helper()
+				if _, err := h.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: body}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wait := func(ch <-chan struct{}, why string) {
+				t.Helper()
+				select {
+				case <-ch:
+				case <-time.After(5 * time.Second):
+					t.Fatalf("timed out waiting for %s", why)
+				}
+			}
+			submit(api.ThreadCreate{Title: "review", Workspace: t.TempDir(), Access: api.AccessAsk, Model: api.ModelRef{Provider: Provider}})
+			submit(api.MessageDispatch{Text: "unsent", Mode: api.StartNow})
+			wait(gate.busy, "the host to give the prompt")
+			submit(api.TurnInterrupt{})
+			wait(gate.cancelled, "the Stop to cancel the start")
+			release()
+			untilOver(t, st, thread)
+			if got := sent(t, log, "turn/start"); len(got) != 0 {
+				t.Fatalf("Codex received %s after the host committed Stop", got)
+			}
+		})
 	}
 }
 

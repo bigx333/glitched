@@ -120,11 +120,21 @@ func (c *conn) Done() <-chan struct{} { return c.done }
 // call sends method with params and decodes its result into out, if out
 // is not nil. It returns an *rpcError when app-server answers with one.
 func (c *conn) call(ctx context.Context, method string, params, out any) error {
+	wait, err := c.request(ctx, method, params)
+	if err != nil {
+		return err
+	}
+	return wait(ctx, out)
+}
+
+// request queues method with params, unless ctx is done first, and returns
+// what waits for its answer.
+func (c *conn) request(ctx context.Context, method string, params any) (wait func(ctx context.Context, out any) error, err error) {
 	c.mu.Lock()
 	select {
 	case <-c.done:
 		c.mu.Unlock()
-		return errClosed
+		return nil, errClosed
 	default:
 	}
 	c.next++
@@ -137,29 +147,31 @@ func (c *conn) call(ctx context.Context, method string, params, out any) error {
 		delete(c.calls, id)
 		c.mu.Unlock()
 	}
-	if err := c.send(map[string]any{"id": id, "method": method, "params": params}); err != nil {
+	if err := c.put(ctx, map[string]any{"id": id, "method": method, "params": params}); err != nil {
 		forget()
-		return err
+		return nil, err
 	}
-	select {
-	case m := <-ch:
-		if m.Error != nil {
-			return m.Error
-		}
-		if out == nil {
+	return func(ctx context.Context, out any) error {
+		select {
+		case m := <-ch:
+			if m.Error != nil {
+				return m.Error
+			}
+			if out == nil {
+				return nil
+			}
+			if err := json.Unmarshal(m.Result, out); err != nil {
+				return fmt.Errorf("codex: %s answered %s: %w", method, m.Result, err)
+			}
 			return nil
+		case <-c.done:
+			forget()
+			return errClosed
+		case <-ctx.Done():
+			forget()
+			return ctx.Err()
 		}
-		if err := json.Unmarshal(m.Result, out); err != nil {
-			return fmt.Errorf("codex: %s answered %s: %w", method, m.Result, err)
-		}
-		return nil
-	case <-c.done:
-		forget()
-		return errClosed
-	case <-ctx.Done():
-		forget()
-		return ctx.Err()
-	}
+	}, nil
 }
 
 // notify sends a notification, which takes no answer.
@@ -181,7 +193,10 @@ func (c *conn) refuse(id json.RawMessage, code int, text string) error {
 	return c.send(map[string]any{"id": id, "error": rpcError{Code: code, Message: text}})
 }
 
-func (c *conn) send(m any) error {
+func (c *conn) send(m any) error { return c.put(context.Background(), m) }
+
+// put queues m to be written, unless ctx is done first.
+func (c *conn) put(ctx context.Context, m any) error {
 	line, err := json.Marshal(m)
 	if err != nil {
 		return err
@@ -191,6 +206,8 @@ func (c *conn) send(m any) error {
 	select {
 	case <-c.done:
 		return errClosed
+	case <-ctx.Done():
+		return ctx.Err()
 	default:
 	}
 	c.out = append(c.out, append(line, '\n'))

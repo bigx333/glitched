@@ -638,16 +638,44 @@ func (h *Host) perform(e store.Effect) {
 	if _, ok := e.Body.(engine.RevertThread); ok {
 		defer h.revertEnded(e.Thread)
 	}
-	// A closing host leaves the agent running, and its pump closes nothing:
-	// the start's lease is then the record that the agent may still run,
-	// for the next host to take up or close, whatever the run is by then.
-	if _, started := o.(engine.Started); started && h.ctx.Err() != nil {
+	if _, started := o.(engine.Started); !started {
+		h.record(e.Thread, o, e.ID)
 		return
 	}
-	if _, started := o.(engine.Started); h.record(e.Thread, o, e.ID) && started {
-		close(lr.started)
-		h.attach(e.Thread, lr)
+	// The start's lease is the record that the agent may still run, so it
+	// is completed only once the agent is this host's pump's or closed. A
+	// closing host leaves the agent running and its pump closes nothing:
+	// the lease is then the next host's, to take up or close the agent,
+	// whatever the run is by then.
+	if h.ctx.Err() != nil {
+		return
 	}
+	var over bool
+	if !retry(h.drain, "commit", func(ctx context.Context) error {
+		_, err := h.store.Observe(ctx, e.Thread, o, h.clock(), 0)
+		if over = errors.Is(err, engine.ErrRefused); over {
+			return nil
+		}
+		return err
+	}) {
+		return
+	}
+	switch {
+	case over:
+		// The run was over before its start was recorded.
+		if !h.closeAgent(lr.agent) {
+			return
+		}
+		h.closedAgent(lr)
+		h.closed(e.Thread)
+	case h.ctx.Err() != nil:
+		return
+	}
+	if !retry(h.drain, "complete start", func(ctx context.Context) error { return h.store.Complete(ctx, e.ID) }) || over {
+		return
+	}
+	close(lr.started)
+	h.attach(e.Thread, lr)
 }
 
 // call makes the effect's provider call and returns what to record, nil for

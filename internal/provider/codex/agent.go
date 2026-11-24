@@ -165,11 +165,6 @@ func (g *Agent) start(ctx context.Context, text string) error {
 		g.mu.Unlock()
 		return errors.New("codex: the run already started")
 	}
-	// A turn cancelled before it is sent never is.
-	if err := ctx.Err(); err != nil {
-		g.mu.Unlock()
-		return err
-	}
 	g.started = true
 	_, g.effortSince = g.p.settled()
 	g.mu.Unlock()
@@ -191,6 +186,15 @@ func (g *Agent) start(ctx context.Context, text string) error {
 	if e := g.spec.Model.Effort; e != "" {
 		params["effort"] = e
 	}
+	// A turn cancelled before it is queued is never sent; one queued is
+	// the interrupt's to stop.
+	wait, err := g.p.conn.request(ctx, "turn/start", params)
+	if err != nil {
+		g.mu.Lock()
+		g.started = false
+		g.mu.Unlock()
+		return err
+	}
 	go g.watch()
 	go func() {
 		var r struct {
@@ -198,7 +202,7 @@ func (g *Agent) start(ctx context.Context, text string) error {
 				ID string `json:"id"`
 			} `json:"turn"`
 		}
-		err := g.p.conn.call(g.ctx, "turn/start", params, &r)
+		err := wait(g.ctx, &r)
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		if err != nil {
