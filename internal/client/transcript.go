@@ -197,6 +197,35 @@ type WorkStep struct {
 	Output  string
 	Started time.Time
 	Ended   time.Time
+	// Subagent is the native subagent the step started, with what it did,
+	// nil for a step that started none.
+	Subagent *Subagent
+}
+
+// Subagent is a native subagent's transcript (see api.SubagentDelta):
+// what it said and the steps it took, in order, and how it ended.
+type Subagent struct {
+	Parts   []SubagentPart
+	Ended   bool
+	Outcome api.Outcome
+	Tokens  int64
+}
+
+// SubagentPart is a native subagent's text, or one of its steps.
+type SubagentPart struct {
+	Text string
+	Step *WorkStep
+}
+
+// Steps counts the subagent's steps.
+func (s *Subagent) Steps() int {
+	n := 0
+	for _, p := range s.Parts {
+		if p.Step != nil {
+			n++
+		}
+	}
+	return n
 }
 
 // PlanEntry is a run's plan, where the run first said one, as it last
@@ -428,6 +457,40 @@ func (t *Transcript) apply(e api.Event) {
 			t.Checkpoints = append(t.Checkpoints, api.CheckpointCaptured{Run: b.To.ID, Phase: b.To.Phase, Status: api.CheckpointReady})
 		}
 		t.add(&RevertEntry{ThreadReverted: b, At: e.At})
+	case api.SubagentDelta:
+		if s, we := t.subagent(b.Run, b.Parent); s != nil {
+			if n := len(s.Parts); n > 0 && s.Parts[n-1].Step == nil {
+				s.Parts[n-1].Text += b.Text
+			} else {
+				s.Parts = append(s.Parts, SubagentPart{Text: b.Text})
+			}
+			t.edited(we)
+		}
+	case api.SubagentWork:
+		if s, we := t.subagent(b.Run, b.Parent); s != nil {
+			step := WorkStep{Item: b.Item, Kind: b.Kind, Title: b.Title, Status: b.Status, Path: b.Path, Exit: b.Exit, Output: b.Output, Started: e.At}
+			if b.Status != api.WorkStarted {
+				step.Ended = e.At
+			}
+			i := slices.IndexFunc(s.Parts, func(p SubagentPart) bool { return p.Step != nil && p.Step.Item == b.Item })
+			if i < 0 {
+				s.Parts = append(s.Parts, SubagentPart{Step: &step})
+			} else {
+				was := s.Parts[i].Step
+				step.Started = was.Started
+				step.Kind, step.Title, step.Path, step.Output = cmp.Or(step.Kind, was.Kind), cmp.Or(step.Title, was.Title), cmp.Or(step.Path, was.Path), cmp.Or(step.Output, was.Output)
+				if step.Exit == nil {
+					step.Exit = was.Exit
+				}
+				s.Parts[i].Step = &step
+			}
+			t.edited(we)
+		}
+	case api.SubagentEnded:
+		if s, we := t.subagent(b.Run, b.Parent); s != nil {
+			s.Ended, s.Outcome, s.Tokens = true, b.Outcome, b.Tokens
+			t.edited(we)
+		}
 	case api.RequestOpened:
 		if t.silent[b.Run] != nil {
 			break
@@ -616,6 +679,7 @@ func (t *Transcript) work(w api.WorkItem, at time.Time) {
 				if step.Exit == nil {
 					step.Exit = was.Exit
 				}
+				step.Subagent = was.Subagent
 				we.Items[i] = step
 				t.edited(we)
 				break
@@ -636,6 +700,28 @@ func (t *Transcript) work(w api.WorkItem, at time.Time) {
 		into.Ended = at
 	}
 	t.edited(into)
+}
+
+// subagent is the native subagent run's step parent started, made when it
+// is first told of, and the work entry that holds the step; nil for a step
+// the transcript doesn't hold, or a silent run's.
+func (t *Transcript) subagent(run api.ID, parent string) (*Subagent, *WorkEntry) {
+	if t.silent[run] != nil {
+		return nil, nil
+	}
+	for _, e := range t.since(run) {
+		we, ok := e.(*WorkEntry)
+		if !ok || we.Run != run {
+			continue
+		}
+		if i := slices.IndexFunc(we.Items, func(s WorkStep) bool { return s.Item == parent }); i >= 0 {
+			if we.Items[i].Subagent == nil {
+				we.Items[i].Subagent = &Subagent{}
+			}
+			return we.Items[i].Subagent, we
+		}
+	}
+	return nil, nil
 }
 
 // plan replaces the run's plan in the entry that holds it, else adds one,
