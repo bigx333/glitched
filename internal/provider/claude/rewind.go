@@ -34,16 +34,18 @@ type head struct {
 	Prompt string `json:"prompt,omitempty"`
 }
 
-// branch is where a native rewind branches off: At, the message the kept
-// conversation ends with, and Drops, the one run it drops, by its
-// prompt. It is a Rewind's At.
+// branch is where a native rewind branches off: From, the session it
+// forks, At, the message the kept conversation ends with, and Drops, the
+// one run it drops, by its prompt. It is a Rewind's At.
 type branch struct {
+	From  string `json:"from,omitempty"`
 	At    string `json:"at"`
 	Drops string `json:"drops,omitempty"`
 }
 
 // Rewind names the thread's new session, uuidOf the revert: the thread's
-// own uuid may be its session already. The rewind is native where the
+// own uuid may be its session already. A fork's thread is another than
+// spec.Thread, whose session it forks. The rewind is native where the
 // program holds the flags that fork a conversation at a message, the
 // target run said where it left it, and no dropped run compacted it,
 // which leaves the target's messages out of the transcript. The fork is
@@ -59,7 +61,7 @@ func (a *Adapter) Rewind(ctx context.Context, spec provider.RewindSpec) (provide
 	if f := probe(prog.Path); !f[flagResumeAt] || !f[flagFork] {
 		return r, nil
 	}
-	b := branch{At: h.At}
+	b := branch{From: cmp.Or(spec.Session, uuidOf(spec.Thread)), At: h.At}
 	if len(spec.Dropped) == 1 {
 		var d head
 		json.Unmarshal([]byte(spec.Dropped[0]), &d)
@@ -84,7 +86,7 @@ func (a *Adapter) rewound(ctx context.Context, prog provider.Program, spec provi
 	var b branch
 	json.Unmarshal([]byte(spec.Rewound.At), &b)
 	if f := probe(prog.Path); b.At != "" && f[flagResumeAt] && f[flagFork] {
-		fork := []string{"--resume", cmp.Or(spec.Rewound.From, uuidOf(spec.Thread)), flagResumeAt, b.At}
+		fork := []string{"--resume", cmp.Or(b.From, spec.Rewound.From, uuidOf(spec.Thread)), flagResumeAt, b.At}
 		if b.Drops != "" && f[flagDropsTurn] {
 			fork = append(fork, flagDropsTurn, b.Drops)
 		}

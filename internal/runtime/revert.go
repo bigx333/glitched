@@ -458,19 +458,27 @@ func (h *Host) rewind(ctx context.Context, t engine.Thread, b engine.RevertThrea
 // handoffCap is the most a handoff takes, in bytes, its own text and all.
 const handoffCap = 48 << 10
 
+// handoffFrame is what a handoff's turns go between: head, whose %s is
+// the note on the turns left out, and tail.
+type handoffFrame struct{ head, tail string }
+
+var rewindFrame = handoffFrame{
+	head: "<rewound_conversation>\nThe user rewound this conversation to an earlier turn, and it goes on in a new session. These are its turns up to there, newest first.%s\n",
+	tail: "</rewound_conversation>\n\n",
+}
+
 // handoff is the turns a rewind kept of t's conversation, to and those
 // the conversation held before it: what the user asked in each, and the
 // reply, newest first, in at most handoffCap bytes, for a new
 // conversation to go on from. The newest is always handed, cut to fit;
 // the oldest are left out where the rest don't fit.
-func (h *Host) handoff(ctx context.Context, t engine.Thread, to api.ID) (string, error) {
+func (h *Host) handoff(ctx context.Context, t engine.Thread, to api.ID, frame handoffFrame) (string, error) {
 	const (
-		head  = "<rewound_conversation>\nThe user rewound this conversation to an earlier turn, and it goes on in a new session. These are its turns up to there, newest first.%s\n"
 		left  = " %d older turns didn't fit and are left out."
-		tail  = "</rewound_conversation>\n\n"
 		shape = "<turn>\n<user>\n%s\n</user>\n<assistant>\n%s\n</assistant>\n</turn>\n"
 		cut   = "\n[the rest didn't fit]"
 	)
+	head, tail := frame.head, frame.tail
 	// The turns get what the block's own text leaves, its note at its
 	// longest included.
 	room := handoffCap - len(fmt.Sprintf(head, fmt.Sprintf(left, len(t.Runs)))) - len(tail)

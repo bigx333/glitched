@@ -900,11 +900,20 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	if err != nil {
 		return nil, err
 	}
-	if rewound != nil && b.ResumeOnly {
+	var forked *api.Forked
+	if rewound == nil {
+		if forked, err = h.store.Forked(ctx, thread); err != nil {
+			return nil, err
+		}
+	}
+	if (rewound != nil || forked != nil) && b.ResumeOnly {
 		return nil, errCompactNotDue
 	}
-	if rewound != nil {
+	switch {
+	case rewound != nil:
 		spec.Rewound = &provider.Rewound{From: rewound.From, At: rewound.At}
+	case forked != nil:
+		spec.Session, spec.Rewound = h.fork(ctx, thread, b, *forked)
 	}
 	spec.Skills = h.skills.stage(thread, b.Workspace, t.Project)
 	ag, err := h.providers.Open(ctx, spec)
@@ -920,23 +929,35 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	// rewind says how it took the conversation up once its message went
 	// out, which ends the rewind; an agent that didn't take up the native
 	// one gets the kept turns, again if its first message never went.
-	session := t.Session
+	session := spec.Session
 	if s, ok := ag.(provider.Sessioned); ok && s.Session() != "" {
 		session = s.Session()
 	}
 	text := b.Text
 	var took *engine.Bound
+	native := false
+	if r, ok := ag.(provider.Rewinding); ok {
+		native = r.Native()
+	}
 	switch {
 	case rewound != nil:
 		took = &engine.Bound{Run: b.Run, Session: session, Rewound: api.RewindPortable}
-		if r, ok := ag.(provider.Rewinding); ok && r.Native() {
+		if native {
 			took.Rewound = api.RewindNative
 		}
 		if took.Rewound == api.RewindPortable {
 			var kept string
-			if kept, err = h.handoff(ctx, t, rewound.To.ID); err == nil {
+			if kept, err = h.handoff(ctx, t, rewound.To.ID, rewindFrame); err == nil {
 				text = kept + text
 			}
+		}
+	case forked != nil && native:
+		took = &engine.Bound{Run: b.Run, Session: session, Rewound: api.RewindNative}
+	case forked != nil && !slashCommand(text):
+		took = &engine.Bound{Run: b.Run, Session: session, Rewound: api.RewindPortable}
+		var kept string
+		if kept, err = h.forkHandoff(ctx, *forked); err == nil {
+			text = kept + text
 		}
 	case session != t.Session:
 		err = h.observe(ctx, thread, engine.Bound{Run: b.Run, Session: session}, 0)
