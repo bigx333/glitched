@@ -26,10 +26,22 @@ func (e *linkEndpoint) Info(ctx context.Context) (api.Environment, error) {
 	return api.Environment{Name: "b", Link: l.ID}, nil
 }
 
-// A link's socket reaches info and nothing else: every other method a server
-// with every role registers is refused before its handler runs, which would
-// panic here, as each role is a nil interface.
-func TestALinksSocketMayCallOnlyInfo(t *testing.T) {
+// linkReplies answers child.reply for the linkEndpoint's link, as the
+// engine checks its own scope.
+type linkReplies struct{}
+
+func (linkReplies) ChildReply(ctx context.Context, q api.ChildReplyQuery) (api.ChildReply, error) {
+	if _, ok := api.LinkOf(ctx); !ok {
+		return api.ChildReply{}, errors.New("no link")
+	}
+	return api.ChildReply{Text: "said"}, nil
+}
+
+// A link's socket reaches info, read, submit, subscribe and child.reply,
+// each of which checks its scope in the endpoint, and nothing else: every
+// other method a server with every role registers is refused before its
+// handler runs, which would panic here, as each role is a nil interface.
+func TestALinksSocketMayCallOnlyItsMethods(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	link := api.Link{ID: api.NewID(), Label: "a", Access: api.AccessAutoEdits}
@@ -45,6 +57,7 @@ func TestALinksSocketMayCallOnlyInfo(t *testing.T) {
 		Secrets:   struct{ Secrets }{},
 		Projects:  struct{ Projects }{},
 		Skills:    struct{ skillsRole }{},
+		Replies:   linkReplies{},
 		Authorize: func(_ *http.Request, proved func(Key) bool) (Grant, error) {
 			for _, token := range []string{"link", "full"} {
 				if k := KeyOf(token); proved(k) {
@@ -67,13 +80,17 @@ func TestALinksSocketMayCallOnlyInfo(t *testing.T) {
 		t.Fatalf("info on a link's socket: %+v %v, want link %s", env, err, link.ID)
 	}
 	methods := srv.methods()
-	for _, name := range []string{"read", "submit", "subscribe", "credentials.provide", "credentials.forget", "projects.clone", "provider.launch", "plugins.call", "skills.put", "hub.events", "hub.append"} {
+	var said api.ChildReply
+	if err := c.call(ctx, "child.reply", api.ChildReplyQuery{Thread: api.NewID(), Run: api.NewID()}, &said); err != nil || said.Text != "said" {
+		t.Fatalf("child.reply on a link's socket: %+v %v, want the endpoint's answer with the link in its ctx", said, err)
+	}
+	for _, name := range []string{"read", "submit", "subscribe", "child.reply", "credentials.provide", "credentials.forget", "projects.clone", "provider.launch", "plugins.call", "skills.put", "hub.events", "hub.append"} {
 		if methods[name] == nil {
 			t.Fatalf("the server registers no %s; the test means every role to be set", name)
 		}
 	}
 	for name := range methods {
-		if name == "info" {
+		if linkMethods[name] {
 			continue
 		}
 		if err := c.call(ctx, name, struct{}{}, nil); !errors.Is(err, api.ErrNotAllowed) {

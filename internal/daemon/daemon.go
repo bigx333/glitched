@@ -303,6 +303,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	d.undo = append(d.undo, st.Close)
 	st.SetLimits(cfg.Children)
 	st.SetPlaces(places(cfg.Dir))
+	st.SetLinks(links(cfg.Dir))
 	d.store = st
 
 	// The engine runs its own node when it needs the tailnet, to serve it
@@ -438,7 +439,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	servers := []*transport.Server{{Transport: sock, Endpoint: endpoint{h, d, false}, Hub: rep, Plugins: pluginServer{svc}, Providers: cmds, Launches: ls, CLIs: d.clis, Asks: h, Secrets: h, Projects: endpoint{h, d, false}, Skills: h}}
 	g := &grants{dir: cfg.Dir, base: ctx}
 	tailnetServer := func(tn transport.Transport) *transport.Server {
-		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Launches: ls, CLIs: d.clis, Secrets: h, Projects: endpoint{h, d, true}, Skills: h, Authorize: g.authorize}
+		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Launches: ls, CLIs: d.clis, Secrets: h, Projects: endpoint{h, d, true}, Skills: h, Replies: h, Authorize: g.authorize}
 	}
 	type unbound struct {
 		tn  transport.Tailnet

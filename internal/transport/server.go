@@ -57,6 +57,9 @@ type Server struct {
 	// Skills says what skills Glitched gives a thread's agent, for any
 	// client the server admits.
 	Skills Skills
+	// Replies says what a run said last, for a link following a thread it
+	// started here, or any client the server admits.
+	Replies Replies
 	// Authorize admits a socket whose client proved, in the handshake, that
 	// it holds one of the keys Authorize knows. proved reports whether the
 	// proof was made with a key; Authorize asks it of every key it knows,
@@ -81,8 +84,10 @@ type Grant struct {
 }
 
 // linkMethods are the calls a link's socket may make; it is refused every
-// other with api.ErrNotAllowed before any handler runs.
-var linkMethods = map[string]bool{"info": true}
+// other with api.ErrNotAllowed before any handler runs. Each of these but
+// info checks, in the endpoint, that the link started the thread it names
+// (api.LinkOf).
+var linkMethods = map[string]bool{"info": true, "read": true, "submit": true, "subscribe": true, "child.reply": true}
 
 type connKey struct{}
 
@@ -357,6 +362,12 @@ type Plugins interface {
 	PluginTools(ctx context.Context) (json.RawMessage, error)
 	PluginTool(ctx context.Context, call json.RawMessage) (json.RawMessage, error)
 	PluginCall(ctx context.Context, call json.RawMessage) (json.RawMessage, error)
+}
+
+// Replies are what a run of a thread said last, as a child's report gives
+// its parent.
+type Replies interface {
+	ChildReply(ctx context.Context, q api.ChildReplyQuery) (api.ChildReply, error)
 }
 
 // Asks are what glitched mcp asks of the engine for request_credentials.
@@ -694,6 +705,9 @@ func (s *Server) methods() map[string]handler {
 		m["skills.drop"] = callHandler(func(ctx context.Context, d api.SkillDrop) (struct{}, error) {
 			return struct{}{}, k.DropSkills(ctx, d)
 		})
+	}
+	if r := s.Replies; r != nil {
+		m["child.reply"] = callHandler(r.ChildReply)
 	}
 	if h := s.Hub; h != nil {
 		m["hub.append"] = callHandler(h.Append)

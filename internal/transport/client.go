@@ -726,6 +726,12 @@ func (e *EndpointClient) Submit(ctx context.Context, cmd api.Command) (api.Recei
 	return r, e.c.call(ctx, "submit", cmd, &r)
 }
 
+// ChildReply is what a run of a thread on the engine said last.
+func (e *EndpointClient) ChildReply(ctx context.Context, q api.ChildReplyQuery) (api.ChildReply, error) {
+	var r api.ChildReply
+	return r, e.c.call(ctx, "child.reply", q, &r)
+}
+
 func (e *EndpointClient) Open(ctx context.Context, s api.Subscription) (api.Stream, error) {
 	return open[api.StreamItem](ctx, e.c, "subscribe", s)
 }

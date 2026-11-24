@@ -513,6 +513,29 @@ func (s *Store) LiveThreads(ctx context.Context) ([]api.ID, error) {
 	return ids(ctx, s.db, `SELECT thread FROM runs WHERE state <> 'finished' ORDER BY thread`)
 }
 
+// Checkouts are the folders the person's own threads run in, or were
+// started from when in a worktree: each thread's project, or its folder,
+// for every thread of theirs that isn't deleted.
+func (s *Store) Checkouts(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT CASE WHEN project <> '' THEN project ELSE workspace END FROM threads
+		WHERE deleted = 0 AND parent IS NULL AND origin IS NULL AND remote IS NULL ORDER BY 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var dir string
+		if err := rows.Scan(&dir); err != nil {
+			return nil, err
+		}
+		if dir != "" {
+			out = append(out, dir)
+		}
+	}
+	return out, rows.Err()
+}
+
 // Closing lists threads with an agent's close not done, whose agent may
 // still run.
 func (s *Store) Closing(ctx context.Context) ([]api.ID, error) {

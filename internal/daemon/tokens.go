@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/engine"
 	"glitched/internal/jsonfile"
 	"glitched/internal/transport"
 )
@@ -172,6 +173,33 @@ func Tokens(dir string) ([]Token, error) {
 func edit(dir string, change func(*[]Token) error) error {
 	_, err := jsonfile.Edit(filepath.Join(dir, tokensFile), change)
 	return err
+}
+
+// links finds a link in dir's tokens.json as the file is at each call,
+// its access narrowed to engine.json's setting for children from other
+// machines as that is then: a link revoked, or a setting turned off since
+// the link's socket was admitted, starts and runs nothing more.
+func links(dir string) engine.Links {
+	return func(id api.ID) (api.Link, error) {
+		cfg, err := Defaults(dir)
+		if err != nil {
+			return api.Link{}, err
+		}
+		if cfg.ChildrenFromOtherMachines == nil {
+			return api.Link{}, errors.New("children from other machines are off on this machine")
+		}
+		ts, err := Tokens(dir)
+		if err != nil {
+			return api.Link{}, fmt.Errorf("tokens.json can't be read: %w", err)
+		}
+		i := slices.IndexFunc(ts, func(t Token) bool { return t.Link != nil && t.Link.ID == id })
+		if i < 0 {
+			return api.Link{}, errors.New("the link was revoked on this machine")
+		}
+		l := *ts[i].link()
+		l.Access = min(l.Access, *cfg.ChildrenFromOtherMachines)
+		return l, nil
+	}
 }
 
 // grants admits a socket whose token tokens.json holds. It reads the file on
