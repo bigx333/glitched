@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"glitched/internal/api"
 	"glitched/internal/provider"
 	"os"
@@ -126,8 +127,15 @@ func TestAStopRightAfterStartFollowsThePrompt(t *testing.T) {
 	if p < 0 || c < 0 || c < p {
 		t.Fatalf("wire order (byte offsets): prompt=%d cancel=%d", p, c)
 	}
-	if line, _, _ := strings.Cut(s[c:], "\n"); !strings.Contains(line, `"sessionId":"ours"`) {
-		t.Fatalf("the cancel is for another session: %s", line)
+	start := strings.LastIndex(s[:c], "\n") + 1
+	line, _, _ := strings.Cut(strings.TrimPrefix(s[start:], ">> "), "\n")
+	var cancel struct {
+		Params struct {
+			SessionID string `json:"sessionId"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal([]byte(line), &cancel); err != nil || cancel.Params.SessionID != "ours" {
+		t.Fatalf("the cancel is for session %q, want ours: %s (%v)", cancel.Params.SessionID, line, err)
 	}
 }
 
