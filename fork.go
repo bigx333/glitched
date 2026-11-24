@@ -38,9 +38,9 @@ func (a *app) forkDivider(c *ui.Context, t thread, e entry) {
 	found = found && src.env == t.env
 	ui.Row(c).Key(e.key).Gap(10).AlignItems(ui.Center).Padding(4, 12).Transition(riseIn).Children(func() {
 		ui.Box(c).Height(1).Grow(1).Background(palette.border)
-		ui.Text(c, verb).FontSize(11.5).TextColor(palette.faint).SingleLine()
+		ui.Text(c, verb).FontSize(11.5).TextColor(palette.faint).SingleLine().Shrink(0)
 		if found {
-			b := ghost(c, "fork-source", false).Padding(2, 6).Label("Open " + f.Title).Children(func() {
+			b := ghost(c, "fork-source", false).Padding(2, 6).Shrink(1).MinWidth(0).Label("Open " + f.Title).Children(func() {
 				ui.Text(c, f.Title).FontSize(11.5).SingleLine().Shrink(1)
 			})
 			if b.Clicked() {
@@ -54,7 +54,7 @@ func (a *app) forkDivider(c *ui.Context, t thread, e entry) {
 			if f.Took == api.RewindPortable {
 				kind, tip = "Portable", "A new conversation, handed the turns up to there"
 			}
-			a.tip(c, ui.Box(c).Label(kind).Padding(1, 6).Radius(6).Border(1, palette.border).Children(func() {
+			a.tip(c, ui.Box(c).Label(kind).Shrink(0).Padding(1, 6).Radius(6).Border(1, palette.border).Children(func() {
 				ui.Text(c, kind).FontSize(10.5).TextColor(palette.faint).AccessHidden(true)
 			}), tip)
 		}

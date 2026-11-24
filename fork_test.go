@@ -6,7 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/ui"
+
 	"glitched/internal/client"
+	"glitched/internal/daemon"
+	"glitched/internal/provider/fake"
 )
 
 // lastReply is the text of the last reply in t's transcript.
@@ -113,5 +117,58 @@ func TestAThreadsMenuForksItOrContinuesItElsewhere(t *testing.T) {
 	}
 	if fork := h.thread(src.View.Title + " fork"); fork.View.Model.Provider != src.View.Model.Provider {
 		t.Fatalf("the fork is on %+v", fork.View.Model)
+	}
+}
+
+// At the window's narrowest a fork's first row truncates only its source's
+// title: "Forked from" and the Native or Portable badge keep their widths
+// and stay in the window.
+func TestAForksFirstRowTruncatesOnlyTheTitleWhenNarrow(t *testing.T) {
+	const long = "Sort sidebar threads by recent activity and keep the pinned ones on top across every workspace"
+	ws := gitWorkspace(t)
+	dir := tempDir(t)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(checks))
+	seed(t, d, ws, long, "Sort them by most recent activity.")
+	h := start(t, dir)
+	src := h.thread(long)
+	h.a.select_(src)
+	h.until("its transcript", func() bool { return h.tt.HasText("One test fails.") })
+	h.tt.Advance(time.Second)
+	src = h.a.current()
+	pointAt(t, h, strings.TrimSpace(lastReply(t, src)))
+	h.click("Fork from here")
+	h.a.draft = "Go on from there"
+	h.click("Send")
+	h.until("the fork's first turn", func() bool {
+		f := forkEntry(h.a.current())
+		return f != nil && f.Took != "" && !h.a.current().View.Live()
+	})
+	h.tt.Advance(time.Second)
+	measure := func(w int) map[string]ui.Rect {
+		h.tt.SetSize(w, 860)
+		h.tt.Advance(time.Second)
+		got := map[string]ui.Rect{}
+		for _, p := range []string{"Forked from", "Portable"} {
+			r, ok := h.tt.Find(p)
+			if !ok {
+				t.Fatalf("at %v pt the fork's first row has no %q: %q", w, p, h.tt.Texts())
+			}
+			got[p] = r
+		}
+		b, ok := h.tt.Access("Open " + long)
+		if !ok {
+			t.Fatalf("at %v pt the fork's first row has no link to its source", w)
+		}
+		got[long] = b.Bounds
+		return got
+	}
+	wide, narrow := measure(2400), measure(760)
+	for _, p := range []string{"Forked from", "Portable"} {
+		if narrow[p].W < wide[p].W-0.5 || narrow[p].X+narrow[p].W > 760 {
+			t.Errorf("at 760 pt %q is %+v, %v wide with room", p, narrow[p], wide[p].W)
+		}
+	}
+	if l, b := narrow[long], narrow["Portable"]; l.W <= 0 || l.W >= wide[long].W || l.X+l.W > b.X {
+		t.Errorf("at 760 pt the source's link is %+v, %v wide with room, and the badge starts at %v", l, wide[long].W, b.X)
 	}
 }
