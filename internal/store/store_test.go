@@ -445,6 +445,58 @@ func TestRenameIsKept(t *testing.T) {
 	}
 }
 
+// A queued message's new words and place are the stored thread's after a
+// reopen, as the log has them: the projection Decide reads next.
+func TestAnEditedAndMovedMessageIsKept(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	submit := func(body api.Intent) api.ID {
+		t.Helper()
+		c := api.Command{ID: api.NewID(), Target: thread, Body: body}
+		if _, err := s.Submit(ctx, c, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		return c.ID
+	}
+	submit(create(thread).Body)
+	submit(api.MessageDispatch{Text: "first", Mode: api.StartNow})
+	a := submit(api.MessageDispatch{Text: "a", Mode: api.AfterActive})
+	b := submit(api.MessageDispatch{Text: "b", Mode: api.AfterActive})
+	c := submit(api.MessageDispatch{Text: "c", Mode: api.AfterActive})
+	submit(api.QueueEdit{Message: a, Text: "a, but shorter"})
+	submit(api.QueueMove{Message: c, Before: b})
+	s.Close()
+	s = open(t, path)
+
+	got, err := s.Thread(ctx, thread)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log, err := s.ReadLog(ctx, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want engine.Thread
+	for _, e := range log {
+		body, err := e.Decode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = engine.Apply(want, engine.Event{Thread: e.Thread, Seq: e.Cursor.Seq, At: e.At, Body: body})
+	}
+	if !reflect.DeepEqual(got.Queue, want.Queue) {
+		t.Fatalf("stored queue %+v, the log's %+v", got.Queue, want.Queue)
+	}
+	ma, _ := got.Message(a)
+	mb, _ := got.Message(b)
+	mc, _ := got.Message(c)
+	if ma.Text != "a, but shorter" || !(ma.Pos < mc.Pos && mc.Pos < mb.Pos) {
+		t.Fatalf("after a reopen the queue is %+v; want a's new words, and a, c, b in that order", got.Queue)
+	}
+}
+
 // A database from before the tombstone upgrades on open: its threads,
 // runs and messages stay.
 func TestAnOlderDatabaseUpgrades(t *testing.T) {
