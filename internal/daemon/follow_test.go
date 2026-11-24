@@ -121,7 +121,7 @@ func fast(n int) time.Duration {
 
 func (p *remotes) startA() {
 	p.t.Helper()
-	d, err := Start(context.Background(), Config{Dir: p.dirA, Hub: true, Epoch: 1, Children: p.limits, RemoteBackoff: fast, RemoteSteps: p.steps, Providers: provider.Mux{p.model.Provider: p.adA}})
+	d, err := Start(context.Background(), Config{Dir: p.dirA, Hub: true, Epoch: 1, Children: p.limits, RemoteBackoff: fast, RemoteSteps: p.steps, Providers: provider.Mux{p.model.Provider: p.adA}, Inhibit: func(ctx context.Context) error { <-ctx.Done(); return nil }})
 	if err != nil {
 		p.t.Fatal(err)
 	}
