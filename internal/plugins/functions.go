@@ -95,7 +95,6 @@ globalThis.glitched = Object.freeze({
   db: Object.freeze({
     exec: (sql, params) => host.call("db.exec", { sql, params: params ?? [] }),
     query: (sql, params) => host.call("db.query", { sql, params: params ?? [] }),
-    transaction: (statements) => host.call("db.transaction", { statements: statements.map(([sql, params]) => ({ sql, params: params ?? [] })) }),
   }),
   service: Object.freeze({
     call: (method, args, options = {}) => host.call("service.call", { ...options, method, args: args ?? null }),
@@ -134,9 +133,8 @@ func (h *Host) functions(in *installed) map[string]plugin.Function {
 	awaiting := new(atomic.Int32)
 	in.awaiting = awaiting
 	fns := map[string]plugin.Function{
-		"db.exec":        db.exec,
-		"db.query":       db.query,
-		"db.transaction": db.transaction,
+		"db.exec":  db.exec,
+		"db.query": db.query,
 		// app asks the app to do what only it can, checked as it runs on
 		// the UI thread, and answers what it did.
 		"app": func(ctx context.Context, args json.RawMessage) (any, error) {

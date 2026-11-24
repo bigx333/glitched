@@ -70,29 +70,31 @@ func (d *Daemon) startPlugins(cfg Config) *plugins.Services {
 // effects go at once.
 func (d *Daemon) pluginEffect(plugin string, e plugins.Effect) (any, error) {
 	var to struct{ Thread string }
-	if e.Type == "threads.send" && json.Unmarshal(e.Args, &to) == nil && to.Thread != "" {
-		return plugins.Pending(func(done func(any, error)) {
-			d.sends.run(to.Thread, func() { done(d.effect(plugin, e)) })
-		}), nil
+	if e.Type == "threads.send" && json.Unmarshal(e.Args, &to) == nil {
+		if thread, err := api.ParseID(to.Thread); err == nil {
+			return plugins.Pending(func(done func(any, error)) {
+				d.sends.run(thread, func() { done(d.effect(plugin, e)) })
+			}), nil
+		}
 	}
 	return plugins.Pending(func(done func(any, error)) {
 		go func() { done(d.effect(plugin, e)) }()
 	}), nil
 }
 
-// lanes runs the work for each key in the order it came, off the caller's
-// goroutine, and the work of different keys side by side.
+// lanes runs the work for each thread in the order it came, off the
+// caller's goroutine, and the work of different threads side by side.
 type lanes struct {
 	mu   sync.Mutex
-	last map[string]chan struct{} // closed as each key's newest work ends
+	last map[api.ID]chan struct{} // closed as each thread's newest work ends
 }
 
-func (l *lanes) run(key string, fn func()) {
+func (l *lanes) run(key api.ID, fn func()) {
 	l.mu.Lock()
 	before := l.last[key]
 	done := make(chan struct{})
 	if l.last == nil {
-		l.last = map[string]chan struct{}{}
+		l.last = map[api.ID]chan struct{}{}
 	}
 	l.last[key] = done
 	l.mu.Unlock()

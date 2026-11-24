@@ -15,6 +15,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"glitched/internal/api"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/bundled"
 	"glitched/internal/plugins/pack"
@@ -206,8 +207,8 @@ func TestATickWaitsOnItsSlowCreates(t *testing.T) {
 	}
 }
 
-// Run nows at once are a run each, with the key it was created under and
-// the thread that key made.
+// Run nows at once, as many as a schedule has starting at most, are a run
+// each, with the key it was created under and the thread that key made.
 func TestRunNowsAtOnceAreARunEach(t *testing.T) {
 	var mu sync.Mutex
 	created := map[string]string{}
@@ -232,11 +233,11 @@ func TestRunNowsAtOnceAreARunEach(t *testing.T) {
 	}
 	var s struct{ ID string }
 	json.Unmarshal(raw, &s)
-	const n = 32
+	const n = 20
 	var wg sync.WaitGroup
-	for i := range n {
+	for range n {
 		wg.Go(func() {
-			if _, err := call("runNow", map[string]any{"id": s.ID, "op": fmt.Sprint("click-", i)}); err != nil {
+			if _, err := call("runNow", map[string]any{"id": s.ID, "op": api.NewID().String()}); err != nil {
 				t.Errorf("runNow: %v", err)
 			}
 		})

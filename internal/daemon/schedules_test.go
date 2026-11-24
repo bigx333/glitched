@@ -374,7 +374,7 @@ func TestARunNowLeftStartingFinishesOnTheNextTick(t *testing.T) {
 	s := saveSchedule(t, ep, ws, map[string]any{"kind": "interval", "every": 60, "enabled": false})
 	db := pluginDB(t, dir)
 	write(t, db, unsettled)
-	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID, "op": "click"}})
+	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID, "op": api.NewID().String()}})
 	if _, err := ep.PluginCall(context.Background(), raw); err == nil {
 		t.Fatal("Run now answered though its record failed")
 	}
@@ -404,7 +404,7 @@ func TestAnEditBeforeARunIsRecordedKeepsItsThread(t *testing.T) {
 	s := saveSchedule(t, ep, ws, map[string]any{"kind": "interval", "every": 60})
 	db := pluginDB(t, dir)
 	write(t, db, unsettled)
-	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID, "op": "click"}})
+	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID, "op": api.NewID().String()}})
 	if _, err := ep.PluginCall(context.Background(), raw); err == nil {
 		t.Fatal("Run now answered though its record failed")
 	}
@@ -460,7 +460,7 @@ func TestARunNowHidesNoRunStillWaiting(t *testing.T) {
 	}
 	t.Setenv(codextest.Scenario, "memory") // Run now's turn just ends
 	var manual struct{ Thread string }
-	schedules(t, ep, "runNow", map[string]any{"id": s.ID, "op": "click"}, &manual)
+	schedules(t, ep, "runNow", map[string]any{"id": s.ID, "op": api.NewID().String()}, &manual)
 	endedLog(t, ep, mustID(t, manual.Thread))
 
 	next := at(time.Now().Add(-time.Minute))
@@ -531,31 +531,47 @@ func coldSchedules(t *testing.T, fields map[string]any) (dir string, ep *transpo
 	}
 }
 
-// A delete whose caller timed out before the service could write deletes
-// nothing, then or once the service gets to it.
-func TestADeleteThatTimedOutDeletesNothing(t *testing.T) {
-	_, ep, s, db, unlock := coldSchedules(t, map[string]any{"kind": "interval", "every": 60})
+// A delete whose caller timed out may still land, as any call that timed
+// out may: the service had it, and does it once its database lets it.
+// Trying it again answers as the first did, and a list shows it's done.
+func TestADeleteThatTimedOutMayStillLand(t *testing.T) {
+	fakeCodex(t)
+	dir := stateDir(t)
+	installSchedules(t, dir)
+	_, ep, _ := codexAt(t, dir)
+	s := saveSchedule(t, ep, t.TempDir(), map[string]any{"kind": "interval", "every": 60})
+	db := pluginDB(t, dir)
+	c, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
 	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "delete", "args": map[string]any{"id": s.ID}})
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	if _, err := ep.PluginCall(ctx, raw); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("delete answered %v, want its deadline", err)
 	}
-	unlock()
-	// The service takes these after the delete: what it did is done.
-	schedules(t, ep, "runs", map[string]any{"id": s.ID}, nil)
-	saveSchedule(t, ep, t.TempDir(), map[string]any{"id": s.ID, "kind": "interval", "every": 60, "title": "Kept"})
-	var n int
-	if err := db.QueryRow("SELECT count(*) FROM schedules WHERE id = ? AND title = 'Kept'", s.ID).Scan(&n); err != nil || n != 1 {
-		t.Fatalf("the schedule a timed-out delete named is gone: %d, %v", n, err)
+	if _, err := c.ExecContext(context.Background(), "ROLLBACK"); err != nil {
+		t.Fatal(err)
 	}
+	for deadline := time.Now().Add(30 * time.Second); len(list(t, ep)) != 0; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the delete that timed out never landed")
+		}
+	}
+	schedules(t, ep, "delete", map[string]any{"id": s.ID}, nil)
 }
 
 // A Run now tried again under the op of its first try, after that one
 // timed out and after one that answered, starts one thread.
 func TestARunNowTriedAgainStartsOneThread(t *testing.T) {
 	_, ep, s, _, unlock := coldSchedules(t, map[string]any{"kind": "interval", "every": 60, "enabled": false})
-	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID, "op": "click"}})
+	op := api.NewID().String()
+	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID, "op": op}})
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	if _, err := ep.PluginCall(ctx, raw); !errors.Is(err, context.DeadlineExceeded) {
@@ -563,8 +579,8 @@ func TestARunNowTriedAgainStartsOneThread(t *testing.T) {
 	}
 	unlock()
 	var first, again struct{ Thread string }
-	schedules(t, ep, "runNow", map[string]any{"id": s.ID, "op": "click"}, &first)
-	schedules(t, ep, "runNow", map[string]any{"id": s.ID, "op": "click"}, &again)
+	schedules(t, ep, "runNow", map[string]any{"id": s.ID, "op": op}, &first)
+	schedules(t, ep, "runNow", map[string]any{"id": s.ID, "op": op}, &again)
 	runs := runsOnce(t, ep, s.ID, settled)
 	if n := len(threads(t, ep)); n != 1 || len(runs) != 1 || first.Thread == "" || again.Thread != first.Thread {
 		t.Fatalf("one Run now tried three times made %d threads, answered %q then %q, and the runs %+v", n, first.Thread, again.Thread, runs)
@@ -582,7 +598,7 @@ func TestARunKeepsItsThreadPastItsProvider(t *testing.T) {
 	s := saveSchedule(t, ep, t.TempDir(), map[string]any{"kind": "interval", "every": 5, "enabled": false})
 	db := pluginDB(t, dir)
 	write(t, db, unsettled)
-	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID, "op": "click"}})
+	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID, "op": api.NewID().String()}})
 	if _, err := ep.PluginCall(context.Background(), raw); err == nil {
 		t.Fatal("Run now answered though its record failed")
 	}

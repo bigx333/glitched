@@ -328,9 +328,9 @@ var ErrNoService = errors.New("its service doesn't run: it has none, it's off, o
 // Call answers a window's call with the service's serve export, by ctx's
 // deadline or in 30 s. It answers once ctx ends, whatever the call is
 // waiting on: the services' queue, the runtime starting, or serve. A call
-// whose ctx ended before serve runs, by its deadline or its caller's
-// cancel, never runs it. serve hears the deadline, in Unix milliseconds,
-// so that a call it reaches in time can refuse to write once it passes.
+// whose ctx ended before it was handed to the runtime never runs serve;
+// one handed over may still run, and do what it asked, after Call
+// answers, as any call that timed out may.
 func (s *Services) Call(ctx context.Context, c ServiceCall) (json.RawMessage, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -374,7 +374,7 @@ func (s *Services) Call(ctx context.Context, c ServiceCall) (json.RawMessage, er
 	answered := make(chan answer, 1)
 	go func() {
 		var a answer
-		a.err = p.CallWithin(time.Until(deadline), "serve", serveArgs{ctx, c, deadline}, &a.out)
+		a.err = p.CallWithin(time.Until(deadline), "serve", serveArgs{ctx, c}, &a.out)
 		switch {
 		case a.err == nil:
 		case ctx.Err() != nil:
@@ -396,19 +396,15 @@ func (s *Services) Call(ctx context.Context, c ServiceCall) (json.RawMessage, er
 // runs, right before it gives the runtime the call, so a call whose ctx has
 // ended by then fails there, and serve never runs.
 type serveArgs struct {
-	ctx      context.Context
-	call     ServiceCall
-	deadline time.Time
+	ctx  context.Context
+	call ServiceCall
 }
 
 func (a serveArgs) MarshalJSON() ([]byte, error) {
 	if err := a.ctx.Err(); err != nil {
 		return nil, err
 	}
-	if !time.Now().Before(a.deadline) {
-		return nil, context.DeadlineExceeded
-	}
-	return json.Marshal(map[string]any{"method": a.call.Method, "args": a.call.Args, "deadline": a.deadline.UnixMilli()})
+	return json.Marshal(map[string]any{"method": a.call.Method, "args": a.call.Args})
 }
 
 func readPrefs(stateDir string, p *prefs) {
