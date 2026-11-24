@@ -88,7 +88,7 @@ func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Inte
 				return nil, nil, err
 			}
 		}
-		return engine.Decide(t, c, now)
+		return engine.DecideWith(t, c, s.places, now)
 	}}
 	r := &receipt{id: c.ID, hash: hash[:], thread: c.Target}
 	at, err := s.commit(ctx, r, 0, func(q querier) ([]step, error) {
@@ -116,7 +116,11 @@ func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Inte
 				if r := t.Live(); c.Caller != nil && r != nil && r.State == engine.RunUncertain {
 					return nil, nil, nil
 				}
-				return engine.Decide(t, api.Command{ID: c.ID, Target: id, Body: engine.Below(c.Body, t), Caller: c.Caller}, now)
+				body := engine.Below(c.Body, t)
+				if body == nil {
+					return nil, nil, nil
+				}
+				return engine.Decide(t, api.Command{ID: c.ID, Target: id, Body: body, Caller: c.Caller}, now)
 			}})
 		}
 		return append(steps, top), nil
@@ -221,12 +225,22 @@ func lineOf(ctx context.Context, q querier, id api.ID) ([]engine.Thread, error) 
 	return line, nil
 }
 
-// kidsOf counts parent's children that aren't deleted.
+// kidsOf counts parent's children that aren't deleted, as engine.Kids
+// says.
 func kidsOf(ctx context.Context, q querier, parent api.ID) (engine.Kids, error) {
 	var k engine.Kids
-	err := q.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(EXISTS (SELECT 1 FROM runs WHERE runs.thread = threads.id AND runs.state NOT IN ('finished', 'uncertain'))), 0)
-		FROM threads WHERE parent = ? AND deleted = 0`, parent[:]).Scan(&k.All, &k.Working)
+	err := q.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(EXISTS (SELECT 1 FROM runs WHERE runs.thread = threads.id AND runs.state NOT IN ('finished', 'uncertain'))
+			OR json_extract(remote, '$.state') = 'creating' AND disposition <> ?), 0)
+		FROM threads WHERE parent = ? AND deleted = 0`, api.Settled, parent[:]).Scan(&k.All, &k.Working)
 	return k, err
+}
+
+// SetPlaces has a remote child's create find the machine it names
+// through places from the next Submit on, in the create's commit.
+func (s *Store) SetPlaces(places engine.Places) {
+	s.mu.Lock()
+	s.places = places
+	s.mu.Unlock()
 }
 
 // SetLimits caps the children agents start from the next Submit on.
@@ -468,13 +482,13 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 	t := engine.Thread{ID: id}
 	var model []byte
 	var until, reported, cacheExpires sql.NullInt64
-	var report, granted sql.NullString
+	var report, granted, remote sql.NullString
 	var updated int64
 	err := q.QueryRowContext(ctx, `SELECT workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
-			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires
+			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote
 		FROM threads WHERE id = ?`, id[:]).Scan(&t.Workspace, &t.Title, &model, &t.Access, &t.Revision, &t.OwnerEpoch,
 		&t.Generation, &t.Disposition.State, &until, &updated, &t.Deleted, idScan{&t.Parent}, &t.Tokens, &reported, &report, &t.Session,
-		&t.Project, &t.Branch, &t.Context.Used, &t.Context.Window, &t.Context.Stale, &t.Context.Model, &granted, &cacheExpires)
+		&t.Project, &t.Branch, &t.Context.Used, &t.Context.Window, &t.Context.Stale, &t.Context.Model, &granted, &cacheExpires, &remote)
 	if errors.Is(err, sql.ErrNoRows) {
 		return engine.Thread{}, nil
 	}
@@ -503,6 +517,12 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 	}
 	if granted.Valid {
 		if err := json.Unmarshal([]byte(granted.String), &t.Confirmed); err != nil {
+			return t, err
+		}
+	}
+	if remote.Valid {
+		t.Remote = &engine.Remote{}
+		if err := json.Unmarshal([]byte(remote.String), t.Remote); err != nil {
 			return t, err
 		}
 	}
@@ -585,7 +605,14 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 	if err != nil {
 		return err
 	}
-	var until, reported, report, granted, cacheExpires any
+	var until, reported, report, granted, cacheExpires, remote any
+	if t.Remote != nil {
+		b, err := json.Marshal(t.Remote)
+		if err != nil {
+			return err
+		}
+		remote = string(b)
+	}
 	if t.Confirmed != (api.Confirmed{}) {
 		b, err := json.Marshal(t.Confirmed)
 		if err != nil {
@@ -610,18 +637,19 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 		report = string(b)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO threads (id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
-			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET workspace = excluded.workspace, title = excluded.title, model = excluded.model,
 			access = excluded.access, revision = excluded.revision, owner_epoch = excluded.owner_epoch, generation = excluded.generation,
 			disposition = excluded.disposition, until = excluded.until, updated_at = excluded.updated_at, deleted = excluded.deleted,
 			parent = excluded.parent, tokens = excluded.tokens, reported = excluded.reported,
 			report = excluded.report, session = excluded.session, project = excluded.project, branch = excluded.branch,
 			context_used = excluded.context_used, context_window = excluded.context_window, context_stale = excluded.context_stale,
-			context_model = excluded.context_model, granted = excluded.granted, context_cache_expires = excluded.context_cache_expires`,
+			context_model = excluded.context_model, granted = excluded.granted, context_cache_expires = excluded.context_cache_expires,
+			remote = excluded.remote`,
 		t.ID[:], t.Workspace, t.Title, string(model), t.Access, t.Revision, t.OwnerEpoch, t.Generation, t.Disposition.State, until,
 		t.UpdatedAt.UnixNano(), t.Deleted, nullID(t.Parent), t.Tokens, reported, report, t.Session, t.Project, t.Branch,
-		t.Context.Used, t.Context.Window, t.Context.Stale, t.Context.Model, granted, cacheExpires); err != nil {
+		t.Context.Used, t.Context.Window, t.Context.Stale, t.Context.Model, granted, cacheExpires, remote); err != nil {
 		return err
 	}
 	for i, r := range t.Runs {

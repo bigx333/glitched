@@ -11,6 +11,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -275,6 +276,20 @@ func (h *Host) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 func (h *Host) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
 	switch b := c.Body.(type) {
 	case api.ThreadCreate:
+		if b.Remote != "" {
+			// What goes to another machine holds no value of the parent's
+			// vault, which never leaves this one, however short.
+			for _, v := range h.credentials(b.Parent) {
+				if v != "" && (strings.Contains(b.Text, v) || strings.Contains(b.Title, v)) {
+					return api.Receipt{}, &api.RejectedError{Reason: "the task holds a credential value; name the variable instead"}
+				}
+			}
+			// A worktree made for a local create of the same thread
+			// commits, or is given back, before the placeholder can.
+			h.making.Lock()
+			defer h.making.Unlock()
+			break
+		}
 		if b.Worktree != nil {
 			return h.createInWorktree(ctx, c, b)
 		}

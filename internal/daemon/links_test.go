@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/provider"
+	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
 )
 
@@ -233,4 +235,140 @@ func TestAMachineIsAddedOnlyWithALinksToken(t *testing.T) {
 	if err := RemoveMachine(a, "b"); err == nil {
 		t.Fatal("a second remove of a machine that is gone")
 	}
+}
+
+// remoteEngine starts an engine in dir whose fake agent's turn "split"
+// starts kids, and returns its endpoint, the adapter and a top thread.
+func remoteEngine(t *testing.T, dir string) (api.Endpoint, *fake.Adapter, api.ID) {
+	t.Helper()
+	ad := fake.New(fake.Turn(false))
+	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Epoch: 1, Providers: provider.Mux{"fake": ad}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	ep := d.Endpoint()
+	parent := api.NewID()
+	if _, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: parent, Body: api.ThreadCreate{Workspace: "/src", Title: "top", Model: api.ModelRef{Provider: "fake", Model: "fake"}}}); err != nil {
+		t.Fatal(err)
+	}
+	return ep, ad, parent
+}
+
+// spawn has a turn of parent's start kids and returns each create's
+// thread and how it went.
+func spawn(t *testing.T, ep api.Endpoint, ad *fake.Adapter, parent api.ID, kids ...fake.Child) ([]api.ID, []error) {
+	t.Helper()
+	text := api.NewID().String()
+	ad.Spawns(ep, text, kids...)
+	run := api.NewID()
+	if _, err := ep.Submit(context.Background(), api.Command{ID: run, Target: parent, Body: api.MessageDispatch{Text: text, Mode: api.AfterActive}}); err != nil {
+		t.Fatal(err)
+	}
+	ids, errs := make([]api.ID, len(kids)), make([]error, len(kids))
+	for i := range kids {
+		ids[i] = fake.ChildOf(run, i)
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(2 * time.Millisecond) {
+			answered, err := ad.Spawned(ids[i])
+			if answered {
+				errs[i] = err
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("spawn %d was never answered", i)
+			}
+		}
+	}
+	return ids, errs
+}
+
+func writeMachines(t *testing.T, dir string, content []byte) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, machinesFile), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func refused(t *testing.T, what string, err error, want string) {
+	t.Helper()
+	var rej *api.RejectedError
+	if !errors.As(err, &rej) || !strings.Contains(rej.Reason, want) {
+		t.Fatalf("%s: %v; want refused with %q", what, err, want)
+	}
+}
+
+// The engine places a remote child only on a machine machines.json lists
+// as the file is at the create, so a machine removed while the engine
+// runs takes no more, by that machine's engine and link; its token
+// reaches neither the thread nor its log.
+func TestARemoteChildIsPlacedOnlyOnAMachineInMachinesJSON(t *testing.T) {
+	dir := stateDir(t)
+	laptop := Machine{Label: "laptop", Server: "laptop:7777", Engine: api.NewID(), Link: api.NewID(), Token: "link-token-5d1e0c3b9a"}
+	b, err := json.Marshal([]Machine{laptop})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeMachines(t, dir, b)
+	ep, ad, parent := remoteEngine(t, dir)
+	ids, errs := spawn(t, ep, ad, parent, fake.Child{Title: "there", Task: "go", Remote: "laptop"}, fake.Child{Title: "nowhere", Task: "go", Remote: "desktop"})
+	if errs[0] != nil {
+		t.Fatalf("a child on laptop: %v", errs[0])
+	}
+	refused(t, "a child on desktop, which machines.json doesn't list", errs[1], `no machine called "desktop"`)
+	snap, err := ep.Read(context.Background(), api.Query{Thread: ids[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := snap.Events[0].Decode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := created.(api.ThreadCreated).Remote; r == nil || *r != (api.Remote{Engine: laptop.Engine, Link: laptop.Link}) {
+		t.Fatalf("the placeholder's machine: %+v; want laptop's engine and link", r)
+	}
+	if strings.Contains(string(snap.Events[0].Payload), laptop.Token) {
+		t.Fatalf("the create holds the link's token: %s", snap.Events[0].Payload)
+	}
+
+	if err := RemoveMachine(dir, "laptop"); err != nil {
+		t.Fatal(err)
+	}
+	_, errs = spawn(t, ep, ad, parent, fake.Child{Title: "there again", Task: "go", Remote: "laptop"})
+	refused(t, "a child on laptop once it was removed", errs[0], `no machine called "laptop"`)
+	for _, name := range []string{"engine.db", "engine.db-wal"} {
+		if db, err := os.ReadFile(filepath.Join(dir, name)); err == nil && strings.Contains(string(db), laptop.Token) {
+			t.Fatalf("%s holds the link's token", name)
+		}
+	}
+}
+
+// A machines.json that can't be read stops no engine and no local child:
+// only a remote child's create is refused, and says why.
+func TestAnUnreadableMachinesJSONRefusesOnlyRemoteChildren(t *testing.T) {
+	dir := stateDir(t)
+	writeMachines(t, dir, []byte("{not json"))
+	ep, ad, parent := remoteEngine(t, dir)
+	_, errs := spawn(t, ep, ad, parent, fake.Child{Title: "here", Task: "go"}, fake.Child{Title: "there", Task: "go", Remote: "laptop"})
+	if errs[0] != nil {
+		t.Fatalf("a local child beside an unreadable machines.json: %v; want it started", errs[0])
+	}
+	refused(t, "a remote child", errs[1], "machines.json can't be read")
+}
+
+// A machines.json whose machine lacks its link is as unreadable as a
+// corrupt one: no placeholder is made with a zero link, and local children
+// still start.
+func TestAMachineWithoutItsLinkRefusesOnlyRemoteChildren(t *testing.T) {
+	dir := stateDir(t)
+	b, err := json.Marshal([]map[string]any{{"label": "laptop", "server": "laptop:7777", "engine": api.NewID()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeMachines(t, dir, b)
+	ep, ad, parent := remoteEngine(t, dir)
+	_, errs := spawn(t, ep, ad, parent, fake.Child{Title: "here", Task: "go"}, fake.Child{Title: "there", Task: "go", Remote: "laptop"})
+	if errs[0] != nil {
+		t.Fatalf("a local child beside a machine without its link: %v; want it started", errs[0])
+	}
+	refused(t, "a child on a machine without its link", errs[1], "machines.json can't be read")
 }

@@ -302,6 +302,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	}
 	d.undo = append(d.undo, st.Close)
 	st.SetLimits(cfg.Children)
+	st.SetPlaces(places(cfg.Dir))
 	d.store = st
 
 	// The engine runs its own node when it needs the tailnet, to serve it

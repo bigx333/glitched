@@ -287,3 +287,16 @@ func TestAnUncertainRunSaysWhy(t *testing.T) {
 		})
 	}
 }
+
+// A placeholder's create folds to its machine, frozen, and a child there
+// not yet confirmed; a thread created with none is no placeholder.
+func TestAPlaceholderFoldsItsMachine(t *testing.T) {
+	at := api.Remote{Engine: api.NewID(), Link: api.NewID()}
+	got := engine.Apply(engine.Thread{}, engine.Event{Thread: api.NewID(), At: now, Body: api.ThreadCreated{Title: "child", Parent: api.NewID(), Remote: &at}})
+	if want := (engine.Remote{Engine: at.Engine, Link: at.Link, State: engine.RemoteCreating}); got.Remote == nil || *got.Remote != want {
+		t.Fatalf("the placeholder's remote: %+v; want %+v", got.Remote, want)
+	}
+	if local := engine.Apply(engine.Thread{}, engine.Event{Thread: api.NewID(), At: now, Body: api.ThreadCreated{Title: "child"}}); local.Remote != nil {
+		t.Fatalf("a local thread's remote: %+v; want none", local.Remote)
+	}
+}

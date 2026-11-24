@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"glitched/internal/api"
+	"glitched/internal/engine"
 	"glitched/internal/jsonfile"
 	"glitched/internal/transport"
 )
@@ -37,6 +40,33 @@ func Machines(dir string) ([]Machine, error) {
 		return nil, err
 	}
 	return ms, nil
+}
+
+// places finds a remote child's machine in dir's machines.json as the
+// file is at its create, so a machine removed takes no more: its engine
+// and link, and never its token. A file that can't be read, or holds a
+// machine without its label, server, engine or link, refuses the create,
+// and is logged once until it reads again.
+func places(dir string) engine.Places {
+	var logged atomic.Bool
+	return func(label string) (api.Remote, bool, error) {
+		ms, err := Machines(dir)
+		if i := slices.IndexFunc(ms, func(m Machine) bool { return m.Label == "" || m.Server == "" || m.Engine.IsZero() || m.Link.IsZero() }); err == nil && i >= 0 {
+			err = fmt.Errorf("machine %d has no label, server, engine or link", i+1)
+		}
+		if err != nil {
+			if !logged.Swap(true) {
+				slog.Warn("daemon: machines.json can't be read; no child is placed on another machine", "err", err)
+			}
+			return api.Remote{}, false, fmt.Errorf("machines.json can't be read: %w", err)
+		}
+		logged.Store(false)
+		i := slices.IndexFunc(ms, func(m Machine) bool { return m.Label == label })
+		if i < 0 {
+			return api.Remote{}, false, nil
+		}
+		return api.Remote{Engine: ms[i].Engine, Link: ms[i].Link}, true, nil
+	}
 }
 
 // AddMachine adds the engine at server as label, with a token its person

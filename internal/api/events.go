@@ -40,6 +40,9 @@ type ThreadCreated struct {
 	Access    Access   `json:"access"`
 	Parent    ID       `json:"parent,omitzero"`
 	Fork      *Forked  `json:"fork,omitempty"`
+	// Remote is the machine a remote child runs on, frozen at its create:
+	// this thread is its placeholder here.
+	Remote *Remote `json:"remote,omitempty"`
 }
 
 // Forked is where a fork goes on from, as its create's commit found it:
@@ -53,6 +56,14 @@ type Forked struct {
 	Provider string `json:"provider"`
 	Session  string `json:"session,omitempty"`
 	Runs     []ID   `json:"runs"`
+}
+
+// Remote is another machine's engine a child was placed on, and the link
+// it was placed through, by id: the label the person gave the machine can
+// later name another (daemon.Machine).
+type Remote struct {
+	Engine ID `json:"engine"`
+	Link   ID `json:"link"`
 }
 
 // MessageQueued records a dispatched message. The ready message with the

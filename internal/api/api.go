@@ -118,6 +118,10 @@ type ThreadCreate struct {
 	// Forked is Fork as the store resolves it in the create's commit,
 	// which no client sends.
 	Forked *Forked `json:"-"`
+	// Remote names a machine this engine holds a link to, by its label,
+	// for a child that runs there: the thread here is its placeholder,
+	// and never runs an agent.
+	Remote string `json:"remote,omitempty"`
 }
 
 // Fork asks for a thread that goes on from Run, a finished turn of
@@ -604,8 +608,10 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // version 14 engine would drop from a revert and put only the files back,
 // and a version 14 GUI would show as a revert of files it left; version
 // 16 forks a thread, which a version 15 engine would create as a thread
-// with none of the conversation it was to go on from.
-const Protocol = 16
+// with none of the conversation it was to go on from; version 17 places a
+// child on another machine, which a version 16 GUI would show as a child
+// here with an empty transcript.
+const Protocol = 17
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host

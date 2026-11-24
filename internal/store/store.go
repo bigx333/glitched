@@ -30,6 +30,7 @@ type Store struct {
 	mu     sync.Mutex
 	hooks  []func(Commit)
 	limits engine.Limits
+	places engine.Places // where a remote child's create finds its machine
 }
 
 func Open(path string) (*Store, error) {
@@ -176,6 +177,8 @@ CREATE TABLE threads (
 	context_model  TEXT NOT NULL DEFAULT '',
 	granted     TEXT,
 	context_cache_expires INTEGER,
+	remote      TEXT,
+	origin      TEXT,
 	CHECK ((disposition = 1) = (until IS NOT NULL))
 ) STRICT;
 
@@ -242,7 +245,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 15
+const schemaVersion = 16
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -362,6 +365,13 @@ ALTER TABLE runs ADD COLUMN resume_cancelled INTEGER NOT NULL DEFAULT 0 CHECK (r
 	// The runs a rewind took out of their thread's conversation. No build
 	// before rewound one, so none is.
 	14: `ALTER TABLE runs ADD COLUMN dropped INTEGER NOT NULL DEFAULT 0 CHECK (dropped IN (0, 1));`,
+	// A remote child's placeholder, as engine.Remote's JSON, and, on the
+	// machine it runs on, where such a child came from. No build before
+	// placed one.
+	15: `
+ALTER TABLE threads ADD COLUMN remote TEXT;
+ALTER TABLE threads ADD COLUMN origin TEXT;
+`,
 }
 
 func (s *Store) migrate() error {

@@ -718,6 +718,9 @@ func downgrade(t *testing.T, path, sqlText string, version int) {
 	if version < 15 {
 		sqlText += runsV14
 	}
+	if version < 16 {
+		sqlText = threadsV15 + sqlText
+	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF;` + sqlText + fmt.Sprintf(`PRAGMA user_version = %d;`, version)); err != nil {
 		t.Fatal(err)
 	}
@@ -771,6 +774,13 @@ const runsV13 = `
 // dropped.
 const runsV14 = `
 	ALTER TABLE runs DROP COLUMN dropped;
+`
+
+// The threads table up to version 15, before a thread could be a remote
+// child's placeholder or come from another machine.
+const threadsV15 = `
+	ALTER TABLE threads DROP COLUMN remote;
+	ALTER TABLE threads DROP COLUMN origin;
 `
 
 // The threads table up to version 9, before a thread in a worktree kept
@@ -1521,5 +1531,53 @@ func TestAVersion12DatabaseUpgradesWithIdleCompactionFields(t *testing.T) {
 		if got, want := tableOf(t, path, tbl), tableOf(t, fresh, tbl); !reflect.DeepEqual(got, want) {
 			t.Errorf("the %s table\n%+v\nwant a new database's\n%+v", tbl, got, want)
 		}
+	}
+}
+
+// A version 15 database upgrades to the threads table a new one has. Its
+// threads read as no remote child's placeholder, as their logs fold, and
+// its new columns hold nothing.
+func TestAVersion15DatabaseUpgradesWithNoRemoteChild(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	downgrade(t, path, "", 15)
+
+	s = open(t, path)
+	got := threadOf(t, s, thread)
+	log, err := s.ReadLog(ctx, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	var want engine.Thread
+	for _, e := range log {
+		body, err := e.Decode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = engine.Apply(want, engine.Event{Thread: e.Thread, Seq: e.Cursor.Seq, At: e.At, Body: body})
+	}
+	if got.Remote != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("the upgraded thread reads\n%+v\nwant its log's fold, no placeholder\n%+v", got, want)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var nulls int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM threads WHERE remote IS NULL AND origin IS NULL`).Scan(&nulls); err != nil || nulls != 1 {
+		t.Fatalf("%d threads with no remote and no origin (%v); want the one", nulls, err)
+	}
+	fresh := filepath.Join(t.TempDir(), "host.db")
+	open(t, fresh).Close()
+	if got, want := tableOf(t, path, "threads"), tableOf(t, fresh, "threads"); !reflect.DeepEqual(got, want) {
+		t.Errorf("the threads table\n%+v\nwant a new database's\n%+v", got, want)
 	}
 }
