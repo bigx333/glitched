@@ -532,6 +532,27 @@ func TestASettleBeforeTheWorktreeAdmitsNoTurn(t *testing.T) {
 	}
 }
 
+// A settle while git makes the worktree, then a kill, leaves a worktree
+// the next engine finishes for the thread, which starts nothing.
+func TestASettleAndAKillWhileTheWorktreeIsMadeFinishIt(t *testing.T) {
+	l := newLinked(t, api.Link{Access: api.AccessAutoEdits}, true)
+	thread := l.mustCreate(api.AccessAsk)
+	dir := l.making(thread)
+	if err := l.send(thread, api.InboxSet{Disposition: api.Disposition{State: api.Settled}}); err != nil {
+		t.Fatal(err)
+	}
+	l.close()
+	l.open()
+	l.startB()
+	l.waitFor(thread, "worktree.ready", 1)
+	if v := l.view(thread); v.Workspace != dir || l.count(thread, "turn.admitted") != 0 {
+		t.Fatalf("the settled thread after the replay: workspace %q, %d turns; want its worktree and none", v.Workspace, l.count(thread, "turn.admitted"))
+	}
+	if _, err := os.Stat(filepath.Join(l.repo, ".git", "worktrees", filepath.Base(dir), "locked")); !os.IsNotExist(err) {
+		t.Fatalf("the finished worktree is still locked: %v", err)
+	}
+}
+
 // A configure above the cap is refused from B's person too, and a
 // message over a cap lowered since waits.
 func TestALinksThreadStaysUnderItsCap(t *testing.T) {
@@ -565,7 +586,7 @@ func TestALinksThreadStaysUnderItsCap(t *testing.T) {
 // after, leaves the effect leased; the next engine's replay finishes the
 // worktree it finds locked for the thread, and the turn starts.
 func TestAKilledWorktreeMakeIsFinishedByTheReplay(t *testing.T) {
-	for _, kill := range []string{"before git wrote the worktree", "before the owner write", "after the owner write"} {
+	for _, kill := range []string{"before git wrote the worktree", "twice before git wrote the worktree", "before the owner write", "after the owner write"} {
 		t.Run(kill, func(t *testing.T) {
 			l := newLinked(t, api.Link{Access: api.AccessAutoEdits}, true)
 			thread := l.mustCreate(api.AccessAsk)
@@ -577,10 +598,15 @@ func TestAKilledWorktreeMakeIsFinishedByTheReplay(t *testing.T) {
 				t.Fatalf("the killed make's lock: %q %v, want it naming the thread", lock, err)
 			}
 			switch kill {
-			case "before git wrote the worktree":
+			case "before git wrote the worktree", "twice before git wrote the worktree":
 				// What git leaves when killed as it begins: the folder,
-				// empty, and the branch it made.
+				// empty, and the branch it made; a second kill as the
+				// replay began leaves the long branch too.
+				branch := gitIn(t, dir, "branch", "--show-current")
 				gitIn(t, l.repo, "worktree", "remove", "-f", "-f", dir)
+				if kill == "twice before git wrote the worktree" {
+					gitIn(t, l.repo, "branch", strings.ToLower(strings.TrimSuffix(branch, branch[len(branch)-6:])+thread.String()), "main")
+				}
 				if err := os.Mkdir(dir, 0o755); err != nil {
 					t.Fatal(err)
 				}

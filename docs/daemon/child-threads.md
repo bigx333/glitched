@@ -168,6 +168,20 @@ A child on another machine starts as a placeholder here (design: the captain's r
 - `Host.Submit` refuses a remote create whose task or title holds any value of the parent's vault, literally and whatever its length, before anything is stored. It commits under the lock a worktree create holds, so a local create of the same thread that is making its worktree commits first.
 - Protocol 17: a version 16 GUI would show a placeholder as a child here with an empty transcript.
 
+## Remote children (on the machine they run on)
+
+A link (`api.Link`, minted with `daemon.PairLink`) lets another machine's engine start threads here (design: the captain's remote-children handoff, PR 3). Nothing on that machine dials here yet; tests call this engine through the link's token as it would.
+
+- A link's socket may call `info`, `read`, `subscribe`, `submit` and `child.reply` (`transport.linkMethods`), and each checks in `runtime.Host` that the link started the thread it names: `Origin.Link` is the link's id. A query or subscription with no thread, a thread of anyone else's, and a child under the link's thread are refused with `api.ErrNotAllowed`.
+- `submit` takes the closed link create on a new thread, and on a thread the link started a message, a stop, an inbox set or a configure that only narrows its access. A settle or a narrowing takes the threads under it through the tree walk, as for any thread. Each command id is a hash of the link's id and its own, so no receipt crosses links.
+- The link create gives `Origin{Engine, Thread, Title, Depth, Access}`, `Repository{Root, Branch}`, `Title`, `Model`, `Access` and `Text`, nothing else. The host stamps `Origin.Link` from the token, matches the repository by its root commit among the folders the person's threads run in (one checkout, worktrees of one clone counting as one), and finds the branch's commit. Only a link sends an origin.
+- The create's commit reads the link in `tokens.json` as it is then (`Store.SetLinks`), narrowed to `children_from_other_machines`, so a socket that outlived a revoke by its last second creates nothing. It checks `Origin.Depth` is 1 to the depth limit, the access against the origin's and the link's, and the link's `Working` and `All` counted by `Origin.Link` (zero takes the child limits).
+- It commits the thread with `Origin` (`threads.origin`, making), its first message and a `worktree.make` effect, and admits nothing. The effect adds the worktree locked, the thread in the lock's reason, writes the owner file and unlocks, then `worktree.ready` gives the thread its folder and branch and the message starts. A replay finishes a worktree locked for its own thread, or one it finished, and removes the empty folder a kill as git began leaves, taking up the thread's own long branch at the base when an earlier add left it. One locked for anything else, or holding changes, stays, and `worktree.failed` cancels what waited. A thread settled before its worktree was begun never gets one; one settled while git made it gets it finished, and starts nothing.
+- For its life a link's thread runs no wider than the lowest of `Origin.Access`, its link's current ceiling and the current setting (`engine.Env.Ceiling`, read at each commit). A message over a lowered ceiling waits, a steer into a run admitted above it is refused, and a configure that raises the thread past it is refused from anyone. A child under it can't be wider either.
+- `CheckChild` adds `Origin.Depth` to a line that starts at a link's thread, so the depth limit holds across both machines, and refuses a remote child under one.
+- `child.reply{Thread, Run}` is `store.RunReply` for a run of the thread.
+- Protocol 18.
+
 ## Not done
 
 - An agent starting a child (bb's `create_chat` tool): the follow-up PR, likely the first plugin. Until then no path in the app creates a child. The user's "New child thread", the Agents panel's +, and the child's draft were removed on 2026-11-03: a child is always an agent's.
