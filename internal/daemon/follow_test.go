@@ -232,26 +232,38 @@ func (p *remotes) lost(id api.ID) string {
 func folded(t *testing.T, st *store.Store) {
 	t.Helper()
 	ctx := context.Background()
-	log, err := st.ReadLog(ctx, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fold := map[api.ID]engine.Thread{}
-	for _, e := range log {
-		body, err := e.Decode()
-		if err != nil || body == nil {
-			t.Fatalf("decode %s: %v", e.Type, err)
-		}
-		fold[e.Thread] = engine.Apply(fold[e.Thread], engine.Event{Thread: e.Thread, Seq: e.Cursor.Seq, At: e.At, Body: body})
-	}
-	for id, want := range fold {
-		got, err := st.Thread(ctx, id)
+	for {
+		log, err := st.ReadLog(ctx, 0, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want.Remote != nil && !jsonEqual(got.Remote, want.Remote) {
-			t.Fatalf("thread %s: stored remote %+v; the log folds to %+v", id, got.Remote, want.Remote)
+		fold := map[api.ID]engine.Thread{}
+		for _, e := range log {
+			body, err := e.Decode()
+			if err != nil || body == nil {
+				t.Fatalf("decode %s: %v", e.Type, err)
+			}
+			fold[e.Thread] = engine.Apply(fold[e.Thread], engine.Event{Thread: e.Thread, Seq: e.Cursor.Seq, At: e.At, Body: body})
 		}
+		stored := map[api.ID]engine.Thread{}
+		for id := range fold {
+			if stored[id], err = st.Thread(ctx, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// A follower may commit between the two reads: compare only a
+		// log nothing was added to while the threads were read.
+		if again, err := st.ReadLog(ctx, uint64(len(log)), 0); err != nil {
+			t.Fatal(err)
+		} else if len(again) > 0 {
+			continue
+		}
+		for id, want := range fold {
+			if got := stored[id]; want.Remote != nil && !jsonEqual(got.Remote, want.Remote) {
+				t.Fatalf("thread %s: stored remote %+v; the log folds to %+v", id, got.Remote, want.Remote)
+			}
+		}
+		return
 	}
 }
 
