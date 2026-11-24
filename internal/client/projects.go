@@ -65,8 +65,9 @@ func (m *Manager) Clone(e *Env, req api.CloneRequest, progress func(string), don
 const skillsTimeout = 10 * time.Second
 
 // Skills is what Glitched gives the agent of thread on e's machine, by
-// that machine's engine; done gets it, or why not, on the UI thread.
-func (m *Manager) Skills(e *Env, thread api.ID, done func(api.SkillList, error)) {
+// that machine's engine, once a sync of this machine's skills there if
+// sync says so; done gets it, or why not, on the UI thread.
+func (m *Manager) Skills(e *Env, thread api.ID, sync bool, done func(api.SkillList, error)) {
 	s := e.session
 	if s == nil {
 		done(api.SkillList{}, errNoEngine)
@@ -78,7 +79,10 @@ func (m *Manager) Skills(e *Env, thread api.ID, done func(api.SkillList, error))
 		return
 	}
 	ectx := e.ctx
-	synced := m.syncTo(e, s)
+	var synced <-chan struct{}
+	if sync {
+		synced = m.syncTo(e, s)
+	}
 	m.wg.Go(func() {
 		if synced != nil {
 			select {

@@ -118,7 +118,7 @@ func listSkills(t *testing.T, m *Manager, g *gui, e *Env, thread api.ID) api.Ski
 	var list api.SkillList
 	var err error
 	done := false
-	m.Skills(e, thread, func(l api.SkillList, e error) { list, err, done = l, e, true })
+	m.Skills(e, thread, true, func(l api.SkillList, e error) { list, err, done = l, e, true })
 	g.until(t, "the thread's skills", func() bool { return done })
 	if err != nil {
 		t.Fatal(err)
@@ -372,5 +372,63 @@ func TestAnIdleQueueSteerSyncsFirst(t *testing.T) {
 	m.SteerQueued(box, id, queued)
 	if got := given(n.runs.next(t)); !slices.Equal(got, []string(nil)) {
 		t.Fatalf("first run after app contacted node with switch disabled still got %v", got)
+	}
+}
+
+// calls is an engine whose syncs hold till their call ends, and that says
+// each drop and submit it takes, in order.
+type calls struct {
+	api.Endpoint
+	took chan string
+}
+
+func (c calls) SyncSkills(ctx context.Context, _ api.SkillSync) (api.SkillsSynced, error) {
+	c.took <- "sync"
+	<-ctx.Done()
+	return api.SkillsSynced{}, ctx.Err()
+}
+func (c calls) PutSkill(context.Context, api.SkillPut) error { panic("unexpected put") }
+func (c calls) DropSkills(context.Context, api.SkillDrop) error {
+	c.took <- "drop"
+	return nil
+}
+func (c calls) Skills(context.Context, api.SkillQuery) (api.SkillList, error) {
+	panic("unexpected list")
+}
+func (c calls) Submit(_ context.Context, cmd api.Command) (api.Receipt, error) {
+	c.took <- "submit " + cmd.Body.(api.MessageDispatch).Text
+	return api.Receipt{}, nil
+}
+
+// Turning sync off ends a sync under way: the drop goes at once, before
+// the next message, though the sync would have held past its wait.
+func TestTurningSyncOffEndsTheSyncUnderWay(t *testing.T) {
+	ep := calls{took: make(chan string, 8)}
+	m, e, id := heldRemote(t, t.TempDir(), ep)
+	next := func() string {
+		t.Helper()
+		select {
+		case s := <-ep.took:
+			return s
+		case <-time.After(time.Second):
+			t.Fatal("the engine took nothing more")
+			return ""
+		}
+	}
+	m.Send(e, id, "one", api.AfterActive)
+	if got := next(); got != "sync" {
+		t.Fatalf("the engine took %q first", got)
+	}
+	off := false
+	if err := m.Configure(func(cfg *daemon.Config) { cfg.SyncSkills = &off }); err != nil {
+		t.Fatal(err)
+	}
+	m.Send(e, id, "two", api.AfterActive)
+	var got []string
+	for range 3 {
+		got = append(got, next())
+	}
+	if !slices.Equal(got, []string{"submit one", "drop", "submit two"}) && !slices.Equal(got, []string{"drop", "submit one", "submit two"}) {
+		t.Errorf("the engine took %v", got)
 	}
 }

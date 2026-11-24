@@ -35,41 +35,55 @@ type skillSource struct {
 // goroutine: a caller waits for it only as long as it chooses.
 type skillSync struct {
 	mu      sync.Mutex
-	run     func()          // the sync last asked for, nil for none
-	asked   []chan struct{} // closed once the sync begun after each ask ends
+	run     func(context.Context) // the sync last asked for, nil for none
+	asked   chan struct{}         // closed once the sync asked for ends
+	stop    context.CancelFunc    // ends the sync under way, nil for none
 	running bool
 }
 
 // ask has run go once the sync under way, if any, ends, in place of one
 // asked for before it that hasn't begun, and returns a channel closed once
-// it has.
-func (w *skillSync) ask(wg *sync.WaitGroup, run func()) <-chan struct{} {
+// it has. A supersede ends the ctx run gets.
+func (w *skillSync) ask(wg *sync.WaitGroup, run func(context.Context)) <-chan struct{} {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	done := make(chan struct{})
-	w.run, w.asked = run, append(w.asked, done)
+	if w.run == nil {
+		w.asked = make(chan struct{})
+	}
+	w.run = run
 	if !w.running {
 		w.running = true
 		wg.Go(w.loop)
 	}
-	return done
+	return w.asked
+}
+
+// supersede ends the sync under way, as one asked for after it is to go in
+// its place at once.
+func (w *skillSync) supersede() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stop != nil {
+		w.stop()
+	}
 }
 
 func (w *skillSync) loop() {
 	for {
 		w.mu.Lock()
 		run, asked := w.run, w.asked
-		w.run, w.asked = nil, nil
+		w.run = nil
 		if run == nil {
-			w.running = false
+			w.running, w.stop = false, nil
 			w.mu.Unlock()
 			return
 		}
+		ctx, stop := context.WithCancel(context.Background())
+		w.stop = stop
 		w.mu.Unlock()
-		run()
-		for _, c := range asked {
-			close(c)
-		}
+		run(ctx)
+		stop()
+		close(asked)
 	}
 }
 
@@ -96,11 +110,26 @@ func (m *Manager) syncTo(e *Env, s *session) <-chan struct{} {
 	if !ok || s == nil {
 		return nil
 	}
-	return e.skills.ask(&m.wg, func() {
-		if src.push(s.ctx, s.ep) == nil {
+	return e.skills.ask(&m.wg, func(stop context.Context) {
+		ctx, cancel := context.WithCancel(s.ctx)
+		defer context.AfterFunc(stop, cancel)()
+		defer cancel()
+		if src.push(ctx, s.ep) == nil {
 			m.post(s.ctx, func() { e.SkillsChanged++ })
 		}
 	})
+}
+
+// resync has each engine drop or take this machine's skills at once, as
+// the switch to sync them turned: a sync under way, as of the switch
+// before, ends first. Only the Post thread calls it.
+func (m *Manager) resync() {
+	for _, e := range m.envs {
+		if e.skills != nil {
+			e.skills.supersede()
+			m.syncTo(e, e.session)
+		}
+	}
 }
 
 // push has the engine at ep hold this machine's skills, or drop them when

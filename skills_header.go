@@ -6,9 +6,9 @@ import (
 
 // skillsRead is what a thread's engine last said of the skills its agent
 // gets, for the thread's header: list is nil till it answers, and stale
-// says to ask again, as once the window comes back to the front. changed
-// is the engine's SkillsChanged as it answered: a sync it took since makes
-// the answer stale.
+// says to sync this machine's skills there and ask again, as once the
+// window comes back to the front. changed is the engine's SkillsChanged as
+// the last ask went: a sync it took since says to ask again, with no sync.
 type skillsRead struct {
 	list    *api.SkillList
 	asking  bool
@@ -32,14 +32,11 @@ func (a *app) headerSkills(t *thread) *api.SkillList {
 		r = &skillsRead{stale: true}
 		a.skills[t.id()] = r
 	}
-	if r.list != nil && r.changed != t.env.SkillsChanged {
-		r.stale = true
-	}
-	if r.stale && !r.asking {
-		r.asking, r.stale = true, false
-		e := t.env
-		a.backend.Skills(e, t.id(), func(l api.SkillList, err error) {
-			r.asking, r.changed = false, e.SkillsChanged
+	if (r.stale || r.changed != t.env.SkillsChanged) && !r.asking {
+		sync := r.stale
+		r.asking, r.stale, r.changed = true, false, t.env.SkillsChanged
+		a.backend.Skills(t.env, t.id(), sync, func(l api.SkillList, err error) {
+			r.asking = false
 			if err != nil {
 				return
 			}
