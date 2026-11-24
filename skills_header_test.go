@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -284,4 +285,27 @@ func TestTheSkillsPopoverStaysShutAfterSwitchingThreads(t *testing.T) {
 	if h.tt.HasText(description) {
 		t.Fatal("the Skills popover reopened without a click")
 	}
+}
+
+// Once the node takes a change of this machine's skills, here a drop as
+// sync is turned off, the popover shows what the node holds now: no
+// origin for skills it no longer has.
+func TestThePopoverDropsAnOriginTheNodeDropped(t *testing.T) {
+	user := tempDir(t)
+	t.Setenv("HOME", user)
+	h, from := syncedHeader(t, user, false)
+	th := h.thread("Fix the flaky test")
+	off := false
+	if err := h.a.backend.Configure(func(cfg *daemon.Config) { cfg.SyncSkills = &off }); err != nil {
+		t.Fatal(err)
+	}
+	before := th.View.Revision
+	h.a.backend.Send(th.env, th.id(), "message after disabling sync", api.AfterActive)
+	h.until("the turn took the command and the node dropped the set", func() bool {
+		_, err := os.Stat(filepath.Join(user, "box", "skills-synced", "current.json"))
+		return errors.Is(err, os.ErrNotExist) && len(th.Pending) == 0 && th.View.Revision > before && th.View.Run == api.RunIdle
+	})
+	h.until("the popover no longer says where the dropped set came from", func() bool {
+		return !h.tt.HasText("From " + from)
+	})
 }
