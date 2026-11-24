@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"log/slog"
+	"maps"
 	"time"
 
 	"glitched/internal/api"
@@ -14,9 +15,13 @@ func WithLimitResume(on bool) Option {
 	return func(h *Host) { h.limitResume.Store(on) }
 }
 
-// SetLimitResume applies WithLimitResume's switch at once.
+// SetLimitResume applies WithLimitResume's switch at once: once it
+// returns off, the engine starts no continue of its own.
 func (h *Host) SetLimitResume(on bool) {
-	if h.limitResume.Swap(on) != on {
+	h.limitMu.Lock()
+	was := h.limitResume.Swap(on)
+	h.limitMu.Unlock()
+	if was != on {
 		h.pokeLimits()
 	}
 }
@@ -62,12 +67,16 @@ func (h *Host) resumeLimits() {
 			}
 			continue
 		}
-		now := h.clock()
+		// A continue holds its place while its run is live; a thread gone,
+		// as one deleted, holds none.
+		live := map[api.ID]api.ID{}
 		for _, v := range snap.Threads {
-			if run, ok := resumed[v.ID]; ok && (v.Turn == nil || v.Turn.Run != run) {
-				delete(resumed, v.ID)
+			if v.Turn != nil {
+				live[v.ID] = v.Turn.Run
 			}
 		}
+		maps.DeleteFunc(resumed, func(thread, run api.ID) bool { return live[thread] != run })
+		now := h.clock()
 		var next time.Time
 		for _, v := range snap.Threads {
 			at, ok := v.LimitResume(now)
@@ -78,18 +87,31 @@ func (h *Host) resumeLimits() {
 					next = at
 				}
 			case len(resumed) < continuesAtOnce:
-				cmd := api.NewID()
-				if _, err := h.Submit(h.ctx, api.Command{ID: cmd, Target: v.ID, Revision: v.Revision, Body: api.MessageDispatch{Text: api.LimitContinueText, Mode: api.StartNow, Auto: true}}); err != nil {
-					if h.ctx.Err() == nil {
-						slog.Info("runtime: didn't continue a thread whose usage limit reset", "thread", v.ID, "err", err)
-					}
-					continue
+				if cmd, ok := h.continueLimited(v); ok {
+					resumed[v.ID] = cmd
 				}
-				resumed[v.ID] = cmd
 			}
 		}
 		if !next.IsZero() {
 			timer.Reset(next.Sub(now))
 		}
 	}
+}
+
+// continueLimited continues v, whose usage limit reset, unless the switch
+// is off by now, and returns its command, which is its run's ID too.
+func (h *Host) continueLimited(v api.Thread) (api.ID, bool) {
+	h.limitMu.Lock()
+	defer h.limitMu.Unlock()
+	if !h.limitResume.Load() {
+		return api.ID{}, false
+	}
+	cmd := api.NewID()
+	if _, err := h.Submit(h.ctx, api.Command{ID: cmd, Target: v.ID, Revision: v.Revision, Body: api.MessageDispatch{Text: api.LimitContinueText, Mode: api.StartNow, Auto: true}}); err != nil {
+		if h.ctx.Err() == nil {
+			slog.Info("runtime: didn't continue a thread whose usage limit reset", "thread", v.ID, "err", err)
+		}
+		return api.ID{}, false
+	}
+	return cmd, true
 }

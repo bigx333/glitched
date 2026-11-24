@@ -75,6 +75,7 @@ type fake struct {
 	scenario string
 	pid      int
 	cwd      string
+	rateRead json.RawMessage // the account/rateLimits/read limit-stop answers once stopped
 
 	wmu sync.Mutex
 	mu  sync.Mutex
@@ -237,7 +238,15 @@ func (f *fake) take(m message, raw []byte) {
 		f.reply(m.ID, map[string]any{"userAgent": "glitched/0.171.0 (Fake OS; arm64) fake (glitched; 1)", "codexHome": "/fake", "platformFamily": "unix", "platformOs": "macos"})
 	case "initialized":
 	case "account/rateLimits/read":
-		if f.scenario == "limit-silent" {
+		switch f.scenario {
+		case "limit-stop":
+			f.rateRead = m.ID
+			return
+		case "limit-update-during-read":
+			f.notify("account/rateLimits/updated", map[string]any{"rateLimits": accountRates("codex", 1795521600)})
+			f.refuse(m.ID, -32601, "read not supported")
+			return
+		case "limit-silent":
 			return
 		}
 		if f.scenario != "limit-read" {
@@ -389,6 +398,11 @@ func (f *fake) take(m message, raw []byte) {
 		}
 		go f.play(n, turn, string(said))
 	case "turn/interrupt":
+		if f.scenario == "limit-stop" {
+			f.reply(f.rateRead, map[string]any{"rateLimits": accountRates("codex", 1795521600)})
+			f.refuse(m.ID, -32600, "no active turn to interrupt")
+			return
+		}
 		f.mu.Lock()
 		active, stop := f.active, f.stop
 		f.mu.Unlock()
@@ -884,7 +898,12 @@ func (f *fake) play(n int, turn, said string) {
 		f.message("msg-"+turn, "about to")
 		fmt.Fprintln(os.Stderr, "boom: the fake crashed")
 		os.Exit(3)
-	case "limit-updated", "limit-read", "limit-silent":
+	case "limit-model-bucket":
+		f.notify("account/rateLimits/updated", map[string]any{"rateLimits": accountRates("codex", 1795521600)})
+		f.notify("account/rateLimits/updated", map[string]any{"rateLimits": accountRates("codex_model_alias", 1795536000)})
+		f.complete("failed", map[string]any{"message": "You've hit your usage limit.", "codexErrorInfo": "usageLimitExceeded"})
+		return
+	case "limit-stop", "limit-update-during-read", "limit-updated", "limit-read", "limit-silent":
 		// Codex says the account's 5-hour window is spent, before the
 		// turn's request, or only when asked.
 		if f.scenario == "limit-updated" {
@@ -983,4 +1002,8 @@ func (r *replay) take(f *fake, m message) {
 	if m.Method != "" && len(m.ID) > 0 {
 		f.refuse(m.ID, -32601, "the capture has no "+m.Method+" here")
 	}
+}
+
+func accountRates(bucket string, resets int64) map[string]any {
+	return map[string]any{"limitId": bucket, "primary": map[string]any{"usedPercent": 100, "resetsAt": resets}}
 }

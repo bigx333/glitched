@@ -180,7 +180,8 @@ func limited(t thread) bool {
 
 // resumesAt is when the engine continues t, a thread limited, because its
 // usage limit resets, and whether it will: only this machine's engine says
-// whether it was asked to, once its status is read.
+// whether it was asked to, once its status is read, and only one embedded
+// here has surely applied what engine.json says.
 func (a *app) resumesAt(t thread, now time.Time) (time.Time, bool) {
 	if t.env.Kind != client.Local {
 		return time.Time{}, false
@@ -189,7 +190,7 @@ func (a *app) resumesAt(t thread, now time.Time) (time.Time, bool) {
 	if m.Read.IsZero() {
 		a.backend.Inspect()
 	}
-	if !m.Config.ContinueAfterLimit {
+	if !m.Embedded || !m.Config.ContinueAfterLimit {
 		return time.Time{}, false
 	}
 	return t.View.LimitResume(now)
@@ -228,7 +229,7 @@ func (a *app) limitControl(c *ui.Context, t thread, now time.Time) {
 			x.Background(palette.hover)
 		}
 		if x.Children(func() { ui.Text(c, "Cancel").FontSize(12) }).Clicked() {
-			a.backend.CancelResume(t.env, t.id())
+			a.backend.CancelResume(t.env, t.id(), t.View.LastTurn.Run)
 		}
 	})
 }

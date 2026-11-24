@@ -580,8 +580,12 @@ func (p *proc) handle(m message) {
 	}
 }
 
-// limited merges what Codex said of the account's usage windows.
+// limited merges what Codex said of the account's usage windows: a
+// model's own allowance's are not the account's, as T3 Code keeps them.
 func (p *proc) limited(u rateLimits) {
+	if u.LimitID != "" && u.LimitID != "codex" {
+		return
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.limits = p.limits.merged(u)

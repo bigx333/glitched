@@ -58,3 +58,40 @@ func TestATurnAUsageLimitFailedSaysWhenItResets(t *testing.T) {
 		}
 	}
 }
+
+// A 429 that no window Claude Code still calls rejected explains, as one
+// per minute, or one in a window the account's overage carries, or one a
+// later update allowed again, says no time the limit resets: the engine
+// never continues the thread on its own for it. T3 Code still calls one
+// with a synthetic rate_limit reply a usage limit, and so does Glitched.
+func TestATurnAnOrdinaryRateLimitFailedSaysNoReset(t *testing.T) {
+	const (
+		rejected  = `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1795521600,"rateLimitType":"five_hour"}}`
+		allowed   = `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1795521600,"rateLimitType":"five_hour"}}`
+		paid      = `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1795521600,"rateLimitType":"five_hour","overageStatus":"allowed_warning"}}`
+		assistant = `{"type":"assistant","error":"rate_limit","message":{"model":"<synthetic>","content":[{"type":"text","text":"Rate limit reached for requests per minute"}]}}`
+		result    = `{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"terminal_reason":"api_error","result":"Rate limit reached for requests per minute"}`
+	)
+	for name, frames := range map[string][]string{
+		"no window":             {assistant, result},
+		"overage carries it":    {paid, assistant, result},
+		"allowed again":         {rejected, allowed, assistant, result},
+		"overage, no synthetic": {paid, result},
+	} {
+		tn := newTurn(t.TempDir())
+		var end *provider.TurnEnded
+		for _, f := range frames {
+			for _, ev := range tn.read(line(t, f)) {
+				if e, ok := ev.(provider.TurnEnded); ok {
+					end = &e
+				}
+			}
+		}
+		if end == nil {
+			t.Fatalf("%s: no end", name)
+		}
+		if end.Limit != nil && !end.Limit.Resets.IsZero() {
+			t.Errorf("%s: the turn says its limit resets at %v, want no reset", name, end.Limit.Resets)
+		}
+	}
+}
