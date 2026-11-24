@@ -19,6 +19,7 @@ import (
 	"glitched/internal/engine"
 	"glitched/internal/mcp"
 	"glitched/internal/provider"
+	"glitched/internal/providerlog"
 	"glitched/internal/secrets"
 	"glitched/internal/store"
 )
@@ -42,6 +43,7 @@ type Host struct {
 	making    sync.Mutex           // held while a worktree is made, so a create sent twice at once makes one
 	vault     *secrets.Vault       // the credentials users give agents; nil keeps none
 	skills    *skillStage          // the skills Glitched gives agents; nil gives none
+	wire      *providerlog.Log     // the provider log; nil keeps none
 	now       func() time.Time     // wall clock; defaults to time.Now
 
 	checkpoints *checkpointStores // where the threads' checkpoints go; nil keeps none
@@ -162,6 +164,12 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 	if err := h.boot(ctx); err != nil {
 		h.Close()
 		return nil, err
+	}
+	if h.wire != nil {
+		if err := h.forgetGone(ctx); err != nil {
+			h.Close()
+			return nil, err
+		}
 	}
 	h.wg.Add(2)
 	go h.work()
@@ -300,8 +308,13 @@ var (
 func (h *Host) follow(e api.Event) {
 	if e.Type == threadDeleted {
 		h.skills.deleted(e.Thread)
+		if h.wire != nil {
+			if err := h.wire.Forget(e.Thread); err != nil {
+				slog.Warn("the provider log keeps a deleted thread's files until its next sweep", "thread", e.Thread, "err", err)
+			}
+		}
 		if h.vault != nil {
-			go h.vault.Forget(e.Thread)
+			go h.vault.Delete(e.Thread)
 		}
 		return
 	}
@@ -704,7 +717,7 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	thread := t.ID
 	spec := provider.SessionSpec{
 		Thread: thread, Run: b.Run, Generation: b.Generation, Workspace: b.Workspace, Model: b.Model, Access: b.Access,
-		Session: t.Session, ResumeOnly: b.ResumeOnly, CacheExpires: t.Context.CacheExpires,
+		Session: t.Session, ResumeOnly: b.ResumeOnly, CacheExpires: t.Context.CacheExpires, Tap: h.tap(thread),
 	}
 	if h.mcp != nil {
 		spec.MCP = append(spec.MCP, h.mcp.For(thread, b.Access))

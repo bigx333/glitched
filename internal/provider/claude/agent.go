@@ -66,6 +66,7 @@ type proc struct {
 	stop    context.CancelFunc // asks claude to stop, as Command says
 	halted  atomic.Bool        // stop was called: it takes no more runs
 	stderr  *tail
+	tap     provider.Tap  // sees each line on claude's pipes, for every run of it
 	lines   chan []byte   // stdout, closed once the process is gone and its output read
 	reaped  chan struct{} // closed once the process is reaped
 	exitErr error         // set before reaped closes
@@ -150,7 +151,7 @@ func launch(ctx context.Context, prog provider.Program, spec provider.SessionSpe
 	}
 	contain(cmd, m)
 	p := &proc{
-		cmd: cmd, mark: m, stop: stop, stderr: &tail{},
+		cmd: cmd, mark: m, stop: stop, stderr: &tail{}, tap: spec.Tap,
 		lines: make(chan []byte), reaped: make(chan struct{}), done: make(chan struct{}),
 	}
 	// The adapter's own pipes, unlike exec's, leave Wait nothing to wait
@@ -210,6 +211,44 @@ func (p *proc) supervise(started chan<- error) {
 	close(p.reaped)
 }
 
+// lineSizes has tap see the length of each line of claude's stderr
+// written to it, without its line ending, and none of what it said.
+type lineSizes struct {
+	tap  provider.Tap
+	size int
+	cr   bool // the last byte written was a carriage return
+}
+
+func (l *lineSizes) Write(b []byte) (int, error) {
+	n := len(b)
+	for len(b) > 0 {
+		i := bytes.IndexByte(b, '\n')
+		if i < 0 {
+			l.size += len(b)
+			l.cr = b[len(b)-1] == '\r'
+			break
+		}
+		l.size += i
+		if i > 0 {
+			l.cr = b[i-1] == '\r'
+		}
+		if l.cr {
+			l.size--
+		}
+		l.end()
+		b = b[i+1:]
+	}
+	return n, nil
+}
+
+// end has tap see the line written so far, if any.
+func (l *lineSizes) end() {
+	if l.size > 0 {
+		l.tap(provider.ClaudeStreamJSON, provider.Stderr, nil, l.size)
+	}
+	l.size, l.cr = 0, false
+}
+
 // watch reads claude's output until it ends or has been quiet for
 // drainGrace since claude exited.
 func (p *proc) watch(stdout, stderr *os.File) {
@@ -220,7 +259,13 @@ func (p *proc) watch(stdout, stderr *os.File) {
 	}()
 	stderrRead := make(chan struct{})
 	go func() {
-		io.Copy(p.stderr, drain{stderr, p.reaped})
+		if p.tap == nil {
+			io.Copy(p.stderr, drain{stderr, p.reaped})
+		} else {
+			lines := &lineSizes{tap: p.tap}
+			io.Copy(io.MultiWriter(p.stderr, lines), drain{stderr, p.reaped})
+			lines.end()
+		}
 		stderr.Close()
 		close(stderrRead)
 	}()
@@ -228,6 +273,7 @@ func (p *proc) watch(stdout, stderr *os.File) {
 	for {
 		line, err := r.ReadBytes('\n')
 		if len(bytes.TrimSpace(line)) > 0 {
+			p.tap.Line(provider.ClaudeStreamJSON, provider.Stdout, line)
 			select {
 			case p.lines <- line:
 			case <-p.done:
@@ -446,6 +492,7 @@ func (p *proc) sendLocked(ctx context.Context, v any) error {
 	}
 	p.stdin.SetWriteDeadline(time.Time{})
 	if err == nil {
+		p.tap.Line(provider.ClaudeStreamJSON, provider.Stdin, b)
 		return nil
 	}
 	cut := n > 0 || mayBeCut(err)

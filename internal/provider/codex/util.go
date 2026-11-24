@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"glitched/internal/provider"
 )
 
 // tail keeps the last tailLimit bytes written to it.
@@ -88,18 +90,24 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 	return l.f.Write(p)
 }
 
-// tap writes what goes to w to wire too, each write after prefix.
-type tap struct {
+// tapped is app-server's stdin, w: what goes to it goes to wire too,
+// each write after prefix, and tap sees each write that went through.
+type tapped struct {
 	w      io.Writer
 	wire   io.Writer
 	prefix string
+	tap    provider.Tap
 }
 
-func (t tap) Write(p []byte) (int, error) {
+func (t tapped) Write(p []byte) (int, error) {
 	if t.wire != (nopWire{}) {
 		t.wire.Write(append([]byte(t.prefix), p...))
 	}
-	return t.w.Write(p)
+	n, err := t.w.Write(p)
+	if err == nil {
+		t.tap.Line(provider.CodexAppServer, provider.Stdin, p)
+	}
+	return n, err
 }
 
 // argsText is a tool's input as the card shows it: a line per field, its

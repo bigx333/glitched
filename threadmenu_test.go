@@ -1,7 +1,10 @@
 package main
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -11,6 +14,7 @@ import (
 	"glitched/internal/client"
 	"glitched/internal/daemon"
 	"glitched/internal/provider/fake"
+	"glitched/internal/providerlog"
 )
 
 // A thread row's context menu renames the thread in place, snoozes it,
@@ -298,5 +302,46 @@ func TestStopWhileTheComposerHoldsAMessage(t *testing.T) {
 	h.until("the run's end", func() bool { return !th.View.Live() })
 	if h.a.draft != "Next, the README." {
 		t.Fatalf("the composer holds %q after Stop", h.a.draft)
+	}
+}
+
+// A thread on this machine offers to reveal its provider log once it has
+// one.
+func TestTheThreadMenuRevealsTheProviderLog(t *testing.T) {
+	var revealed []string
+	was := revealFile
+	revealFile = func(path string) { revealed = append(revealed, path) }
+	t.Cleanup(func() { revealFile = was })
+	h := start(t, inboxDir(t))
+	const loop = "Investigate websocket reconnect loop"
+	th := h.thread(loop)
+	h.a.backend.Inspect()
+	h.until("the engine's state directory", func() bool { return h.a.backend.Machine().Config.Dir != "" })
+	h.tt.Advance(time.Second)
+	if err := h.tt.RightClick(loop); err != nil {
+		t.Fatal(err)
+	}
+	if m := h.tt.Menu(); slices.Contains(m, "Reveal provider log") {
+		t.Fatalf("the menu of a thread with no log is %q", m)
+	}
+	h.tt.CloseMenu()
+	h.tt.Advance(time.Second)
+
+	path := providerlog.File(providerlog.Under(h.a.backend.Machine().Config.Dir), th.id())
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.tt.RightClick(loop); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.tt.ChooseMenuItem("Reveal provider log"); err != nil {
+		t.Fatalf("%v; the menu is %q", err, h.tt.Menu())
+	}
+	h.tt.Advance(time.Second)
+	if !slices.Equal(revealed, []string{path}) {
+		t.Errorf("revealed %q, want %q", revealed, path)
 	}
 }

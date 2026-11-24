@@ -3,6 +3,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -183,6 +184,9 @@ type SessionSpec struct {
 	// Skills are Glitched's skills the run's agent gets, which each
 	// adapter hands its agent its own way; none adds nothing to its start.
 	Skills Skills
+	// Tap sees each line on the pipes of the program the run's agent runs
+	// in, which may serve the thread's later runs too; nil sees none.
+	Tap Tap
 }
 
 // Skills are Glitched's skills a run's agent gets. Root is a Claude Code
@@ -201,6 +205,42 @@ type Skill struct {
 // Skilled is an Adapter that hands its agents Glitched's skills: Delivery
 // says how, in words for its user.
 type Skilled interface{ SkillDelivery() string }
+
+// Tap sees a line on one of a provider program's pipes as the adapter
+// read it, or wrote it whole, in the protocol the adapter speaks to the
+// program, on the adapter's own goroutine, so it must not block: at most
+// TapCap bytes of it, and how long it was, both without its line ending.
+// The line is the caller's once Tap returns. A nil Tap sees nothing.
+type Tap func(proto Protocol, pipe Pipe, line []byte, size int)
+
+// TapCap is the most of a line a Tap sees.
+const TapCap = 64 << 10
+
+// Line has t see line, less its line ending.
+func (t Tap) Line(proto Protocol, pipe Pipe, line []byte) {
+	if t != nil {
+		line = bytes.TrimSuffix(bytes.TrimSuffix(line, []byte("\n")), []byte("\r"))
+		t(proto, pipe, line[:min(len(line), TapCap)], len(line))
+	}
+}
+
+// Protocol is what an adapter speaks to its provider's program.
+type Protocol string
+
+const (
+	ClaudeStreamJSON Protocol = "claude" // Claude Code's stream-json
+	CodexAppServer   Protocol = "codex"  // Codex's app-server
+	ACP              Protocol = "acp"    // the Agent Client Protocol
+)
+
+// Pipe is which of a provider program's pipes a line went over.
+type Pipe string
+
+const (
+	Stdin  Pipe = "stdin"
+	Stdout Pipe = "stdout"
+	Stderr Pipe = "stderr"
+)
 
 // MCPServer is a stdio MCP server an agent starts for itself: Command with
 // Args and Env. Instructions tell the agent what the server is for. A

@@ -66,6 +66,7 @@ type proc struct {
 	conn    *conn
 	stdin   *os.File
 	stderr  *tail
+	tap     provider.Tap  // sees each line on app-server's pipes, for every run of it
 	heard   chan struct{} // closed once stderr is read to its end
 	reaped  chan struct{} // closed once the process is reaped
 	exitErr error         // set before reaped closes
@@ -92,9 +93,10 @@ type proc struct {
 
 var _ park.Process = (*proc)(nil)
 
-// launch starts app-server in dir under mark and initializes it. ctx
-// bounds only the start; the process lives until Close.
-func launch(ctx context.Context, prog provider.Program, dir, mark string) (*proc, error) {
+// launch starts app-server in dir under mark, with tap seeing its lines,
+// and initializes it. ctx bounds only the start; the process lives until
+// Close.
+func launch(ctx context.Context, prog provider.Program, dir, mark string, tap provider.Tap) (*proc, error) {
 	if err := guard(prog.Path); err != nil {
 		return nil, err
 	}
@@ -107,7 +109,7 @@ func launch(ctx context.Context, prog provider.Program, dir, mark string) (*proc
 	// A stale login must never open a browser tab in the middle of a turn.
 	cmd.Env = prog.Environ(append(cmd.Env, "BROWSER=true", procEnv+"="+mark))
 	cmd.SysProcAttr = sweep.SysProcAttr()
-	p := &proc{cmd: cmd, mark: mark, stderr: &tail{}, heard: make(chan struct{}), reaped: make(chan struct{})}
+	p := &proc{cmd: cmd, mark: mark, stderr: &tail{}, tap: tap, heard: make(chan struct{}), reaped: make(chan struct{})}
 	// The adapter's own pipes, unlike exec's, leave Wait nothing to wait
 	// for once app-server exits, whoever else still holds them.
 	inR, inW, err1 := os.Pipe()
@@ -139,7 +141,7 @@ func launch(ctx context.Context, prog provider.Program, dir, mark string) (*proc
 		close(p.reaped)
 	}()
 	wire := openWire()
-	p.conn = newConn(tap{inW, wire, ">> "}, p.handle)
+	p.conn = newConn(tapped{inW, wire, ">> ", tap}, p.handle)
 	go p.watchStderr(errR, wire)
 	go p.readStdout(outR, wire)
 	go func() {
@@ -658,6 +660,7 @@ func (p *proc) readStdout(stdout *os.File, wire io.Writer) {
 		line, err := lines.ReadBytes('\n')
 		if len(line) > 0 {
 			wire.Write(append([]byte("<< "), line...))
+			p.tap.Line(provider.CodexAppServer, provider.Stdout, line)
 			if t := bytes.TrimSpace(line); len(t) > 0 && t[0] == '{' {
 				p.conn.line(t)
 			}
@@ -681,6 +684,7 @@ func (p *proc) watchStderr(stderr *os.File, wire io.Writer) {
 		line, err := lines.ReadBytes('\n')
 		if len(line) > 0 {
 			wire.Write(append([]byte("!! "), line...))
+			p.tap.Line(provider.CodexAppServer, provider.Stderr, line)
 			p.stderr.Write(line)
 		}
 		if err != nil {

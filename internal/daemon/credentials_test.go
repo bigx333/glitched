@@ -19,6 +19,7 @@ import (
 	"glitched/internal/provider/acp/acptest"
 	"glitched/internal/provider/codex"
 	"glitched/internal/provider/codex/codextest"
+	"glitched/internal/providerlog"
 	"glitched/internal/transport"
 )
 
@@ -35,8 +36,11 @@ func TestAnACPAgentAsksForCredentials(t *testing.T) {
 	wire := filepath.Join(t.TempDir(), "wire.jsonl")
 	t.Setenv(acptest.Scenario, "credentials")
 	t.Setenv(acptest.Log, wire)
-	asksForCredentials(t, provider.Mux{"antigravity": &acp.Adapter{Profile: acp.Antigravity, Path: self}},
+	logged := asksForCredentials(t, provider.Mux{"antigravity": &acp.Adapter{Profile: acp.Antigravity, Path: self}},
 		api.ModelRef{Provider: "antigravity", Model: "fake-pro", Effort: "low"}, wire, 0)
+	if !bytes.Contains(logged, []byte(`"kind":"session/update/agent_message_chunk","json"`)) {
+		t.Errorf("the provider log keeps no streamed piece by its shape:\n%s", logged)
+	}
 }
 
 // A Codex agent does the same, and waits for the user past Codex's 300 s
@@ -52,8 +56,11 @@ func TestACodexAgentAsksForCredentials(t *testing.T) {
 	t.Setenv(codextest.Scenario, "credentials")
 	t.Setenv(codextest.Log, wire)
 	t.Setenv(codextest.Second, "1ms")
-	asksForCredentials(t, provider.Mux{"codex": &codex.Adapter{Path: self}},
+	logged := asksForCredentials(t, provider.Mux{"codex": &codex.Adapter{Path: self}},
 		api.ModelRef{Provider: "codex", Model: "gpt-6-luna", Effort: "low"}, wire, time.Second)
+	if !bytes.Contains(logged, []byte(`"kind":"item/completed","json"`)) || !bytes.Contains(logged, []byte(`"kind":"item/agentMessage/delta","json"`)) {
+		t.Errorf("the provider log holds no message's shape, or no streamed piece's:\n%s", logged)
+	}
 	b, _ := os.ReadFile(wire)
 	for line := range strings.Lines(string(b)) {
 		var e codextest.Entry
@@ -70,8 +77,9 @@ func TestACodexAgentAsksForCredentials(t *testing.T) {
 // asksForCredentials runs a turn on an engine of providers whose agent
 // asks for GLX_PROBE, provides it after delay, and checks where the value
 // went: to the vault and the agent's file, and redacted everywhere else,
-// the agent's wire included.
-func asksForCredentials(t *testing.T, providers provider.Mux, model api.ModelRef, wire string, delay time.Duration) {
+// the agent's wire and the provider log included. It returns the thread's
+// provider log.
+func asksForCredentials(t *testing.T, providers provider.Mux, model api.ModelRef, wire string, delay time.Duration) []byte {
 	t.Helper()
 	const value = "probe-value-0123"
 	var logs bytes.Buffer
@@ -79,7 +87,7 @@ func asksForCredentials(t *testing.T, providers provider.Mux, model api.ModelRef
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	dir := stateDir(t)
-	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Providers: providers})
+	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, Providers: providers, ProviderLog: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,4 +174,11 @@ func asksForCredentials(t *testing.T, providers provider.Mux, model api.ModelRef
 	if b, _ := os.ReadFile(wire); bytes.Contains(b, []byte(value)) {
 		t.Error("the agent was sent the value, not only its file")
 	}
+	logged, err := os.ReadFile(providerlog.File(providerlog.Under(dir), thread))
+	for _, want := range []string{`"pipe":"stdin"`, `"pipe":"stdout"`} {
+		if !bytes.Contains(logged, []byte(want)) {
+			t.Errorf("the provider log (%v) holds no %s:\n%s", err, want, logged)
+		}
+	}
+	return logged
 }

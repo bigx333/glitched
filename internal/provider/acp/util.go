@@ -8,6 +8,8 @@ import (
 	"os"
 	"slices"
 	"sync"
+
+	"glitched/internal/provider"
 )
 
 // tail keeps the last tailLimit bytes written to it.
@@ -73,20 +75,25 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 	return l.w.Write(p)
 }
 
-// tap writes what goes to w to wire too, each write after prefix.
-// sent, if set, hears each write that went through.
-type tap struct {
+// tapped is the agent's stdin, w: what goes to it goes to wire too, each
+// write after prefix, and tap sees each write that went through. sent,
+// if set, hears each too.
+type tapped struct {
 	w      io.Writer
 	wire   io.Writer
 	prefix string
+	tap    provider.Tap
 	sent   func([]byte)
 }
 
-func (t tap) Write(p []byte) (int, error) {
+func (t tapped) Write(p []byte) (int, error) {
 	if t.wire != io.Discard {
 		t.wire.Write(append([]byte(t.prefix), p...))
 	}
 	n, err := t.w.Write(p)
+	if err == nil {
+		t.tap.Line(provider.ACP, provider.Stdin, p)
+	}
 	if err == nil && t.sent != nil {
 		t.sent(p)
 	}

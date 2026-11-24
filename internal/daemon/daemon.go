@@ -30,6 +30,7 @@ import (
 	"glitched/internal/provider/claude"
 	"glitched/internal/provider/codex"
 	"glitched/internal/provider/fake"
+	"glitched/internal/providerlog"
 	"glitched/internal/runtime"
 	"glitched/internal/secrets"
 	"glitched/internal/store"
@@ -90,6 +91,10 @@ type Config struct {
 	// Inhibit holds the machine awake until its ctx ends; nil uses the
 	// system's.
 	Inhibit func(ctx context.Context) error `json:"-"`
+	// ProviderLog keeps the shape of the lines each thread's provider
+	// programs read and write, never what they said, in
+	// providerlog.Under(Dir).
+	ProviderLog bool `json:"provider_log,omitempty"`
 	// PluginRun runs the programs plugins' services ask for; nil runs them with RunProgram.
 	PluginRun func(ctx context.Context, id string, allowed, denied []string, args json.RawMessage) (any, error) `json:"-"`
 }
@@ -337,6 +342,12 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	} else {
 		slog.Warn("agents run without Glitched's skills", "err", err)
 	}
+	if plog, err := providerlog.Open(cfg.Dir); err != nil {
+		slog.Warn("the engine keeps no provider log", "err", err)
+	} else {
+		d.undo = append(d.undo, func() error { plog.Close(); return nil })
+		opts = append(opts, runtime.WithProviderLog(plog, cfg.ProviderLog))
+	}
 	// An adapter that keeps agents between runs stops them once the host
 	// that ran them has.
 	closers := map[io.Closer]bool{}
@@ -540,6 +551,10 @@ func (d *Daemon) SetKeepAwake(enabled bool) {
 		d.awake.enable(enabled)
 	}
 }
+
+// SetProviderLog applies the provider log's switch at once, as
+// engine.json's ProviderLog does at the next start.
+func (d *Daemon) SetProviderLog(on bool) { d.host.SetProviderLog(on) }
 
 // Node is the engine's own tailnet node, which reaches other machines'
 // engines when Tailscale isn't installed; nil when it runs none.

@@ -2,10 +2,14 @@ package secrets
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"glitched/internal/api"
 )
@@ -57,6 +61,180 @@ func TestPutReplacesAndForgetDeletes(t *testing.T) {
 	}
 	if len(v.Values(th)) != 0 {
 		t.Error("a forgotten thread still has values")
+	}
+}
+
+// scanned is v's Held once the vault has read every thread's folder.
+func scanned(t *testing.T, v *Vault) Held {
+	t.Helper()
+	v.Held()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		v.mu.Lock()
+		done := v.scanned
+		v.mu.Unlock()
+		if done {
+			return v.Held()
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the vault never read its threads' folders")
+		}
+	}
+}
+
+// Held holds every value any thread has held, replaced and forgotten ones
+// too, until its thread is deleted.
+func TestHeldKeepsEveryThreadsValuesUntilDelete(t *testing.T) {
+	v := New(t.TempDir())
+	th, other := api.NewID(), api.NewID()
+	for _, value := range []string{"old-value", "new-value"} {
+		if err := v.Put(th, map[string]string{"KEY": value}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := v.Put(other, map[string]string{"KEY": "other-value"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Forget(th); err != nil {
+		t.Fatal(err)
+	}
+	if h := scanned(t, v); !h.Complete || len(h.Values) != 3 || !slices.Contains(h.Values, "old-value") || !slices.Contains(h.Values, "new-value") || !slices.Contains(h.Values, "other-value") {
+		t.Errorf("after a replace and a forget, Held is %+v; want every thread's values, complete", h)
+	}
+	if err := v.Delete(th); err != nil {
+		t.Fatal(err)
+	}
+	if h := v.Held(); !slices.Equal(h.Values, []string{"other-value"}) || !h.Complete {
+		t.Errorf("after a delete, Held is %+v; want the other thread's value alone", h)
+	}
+}
+
+// A vault that has yet to read its threads' folders holds nothing,
+// incomplete, and reads them without the caller waiting: Held never waits
+// on the vault.
+func TestHeldNeverWaits(t *testing.T) {
+	dir := t.TempDir()
+	th := api.NewID()
+	if err := New(dir).Put(th, map[string]string{"KEY": "cold-value"}); err != nil {
+		t.Fatal(err)
+	}
+	v := New(dir)
+	v.mu.Lock()
+	if h := v.Held(); len(h.Values) != 0 || h.Complete {
+		t.Errorf("before the vault read the folders, Held is %+v; want nothing, incomplete", h)
+	}
+	v.mu.Unlock()
+	if h := scanned(t, v); !h.Complete || !slices.Equal(h.Values, []string{"cold-value"}) {
+		t.Errorf("once read, Held is %+v; want the value, complete", h)
+	}
+}
+
+// The vault's values are all known only where every thread's environment
+// script exports the values its files hold, as an interrupted Put leaves
+// it not.
+func TestHeldIsCompleteOnlyWhereEveryScriptAgrees(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		change   func(dir string) error
+		complete bool
+	}{
+		{"as Put left it", func(string) error { return nil }, true},
+		{"a value newer than the script's", func(dir string) error { return os.WriteFile(filepath.Join(dir, "KEY"), []byte("newer"), 0o600) }, false},
+		{"a value gone that the script holds", func(dir string) error { return os.Remove(filepath.Join(dir, "KEY")) }, false},
+		{"the script gone", func(dir string) error { return os.Remove(filepath.Join(dir, EnvScript)) }, false},
+		{"the script no file", func(dir string) error {
+			os.Remove(filepath.Join(dir, EnvScript))
+			return os.Mkdir(filepath.Join(dir, EnvScript), 0o700)
+		}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			th, healthy := api.NewID(), api.NewID()
+			if err := New(dir).Put(th, map[string]string{"KEY": "value-1"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := New(dir).Put(healthy, map[string]string{"KEY": "healthy-value"}); err != nil {
+				t.Fatal(err)
+			}
+			v := New(dir)
+			if err := c.change(v.Dir(th)); err != nil {
+				t.Fatal(err)
+			}
+			if h := scanned(t, v); h.Complete != c.complete || !slices.Contains(h.Values, "healthy-value") {
+				t.Errorf("Held is %+v, want complete %v, the healthy thread's value too", h, c.complete)
+			}
+		})
+	}
+}
+
+// A value Put writes is held before any agent can read it from its file:
+// until Held has it, Held is incomplete.
+func TestAPutsValuesAreHeldBeforeAnAgentCanReadThem(t *testing.T) {
+	v := New(t.TempDir())
+	th := api.NewID()
+	if err := v.Put(th, map[string]string{"KEY": "value-0"}); err != nil {
+		t.Fatal(err)
+	}
+	scanned(t, v)
+	file := filepath.Join(v.Dir(th), "KEY")
+	stop, done := make(chan struct{}), make(chan struct{})
+	var unheld []string
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			b, err := os.ReadFile(file)
+			if h := v.Held(); err == nil && h.Complete && !slices.Contains(h.Values, string(b)) {
+				unheld = append(unheld, string(b))
+			}
+		}
+	}()
+	for i := range 300 {
+		if err := v.Put(th, map[string]string{"KEY": fmt.Sprintf("value-%d", i+1)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(stop)
+	<-done
+	if len(unheld) > 0 {
+		t.Errorf("an agent could read %d values a complete Held lacked, as %q", len(unheld), unheld[0])
+	}
+}
+
+// Prepare, on every run's start, reads nothing for Held: only a provider
+// log that is on asks for it.
+func TestPrepareReadsNothingForHeld(t *testing.T) {
+	v := New(t.TempDir())
+	if _, err := v.Prepare(api.NewID()); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.scanned || v.held.Load() != nil {
+		t.Error("Prepare read the vault for Held")
+	}
+}
+
+// Delete is for good: the vault keeps nothing more of the thread, and
+// prepares no folder for it.
+func TestDeleteIsForGood(t *testing.T) {
+	v := New(t.TempDir())
+	th := api.NewID()
+	if err := v.Delete(th); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Put(th, map[string]string{"KEY": "late"}); !errors.Is(err, ErrDeleted) {
+		t.Errorf("a Put after Delete: %v, want ErrDeleted", err)
+	}
+	if _, err := v.Prepare(th); !errors.Is(err, ErrDeleted) {
+		t.Errorf("a Prepare after Delete: %v, want ErrDeleted", err)
+	}
+	if _, err := os.Stat(v.Dir(th)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the deleted thread's folder: %v, want none", err)
 	}
 }
 

@@ -482,6 +482,9 @@ type Environment struct {
 	// Checkpoints is the engine's checkpoint store; zero when it keeps
 	// none.
 	Checkpoints CheckpointStore `json:"checkpoints,omitzero"`
+	// ProviderLog is that the engine keeps its provider log now, whatever
+	// its engine.json says it should from its next start.
+	ProviderLog bool `json:"providerLog,omitempty"`
 }
 
 // CheckpointStore is how much disk the checkpoints of threads' files take,

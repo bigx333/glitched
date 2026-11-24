@@ -3,14 +3,17 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
 	"sync"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
+	"glitched/internal/providerlog"
 )
 
 // A thread row's context menu holds what is rarely done to a thread, so
@@ -54,6 +57,9 @@ func (a *app) threadMenu(c *ui.Context, m *ui.Menu, t thread, cat category) {
 		if ed := editorCLI(); ed != "" && m.Item("Open in editor").Chosen() {
 			a.openInEditor(c, ed, projectDir(t.View.Workspace))
 		}
+		if path := a.providerLog(t); path != "" && m.Item("Reveal provider log").Chosen() {
+			revealFile(path)
+		}
 	}
 	a.pluginMenuItems(m, "thread.menu", func(plugin string) map[string]any {
 		return map[string]any{"thread": a.plugins.Record(plugin, a.threadRecord(t))}
@@ -64,6 +70,23 @@ func (a *app) threadMenu(c *ui.Context, m *ui.Menu, t thread, cat category) {
 	if m.Item("Delete…").Disabled(t.View.Live()).Chosen() {
 		a.askDelete(t)
 	}
+}
+
+// revealFile shows the file at path in the file manager.
+var revealFile = mygo.Shell.ShowItemInFolder
+
+// providerLog is the current file of the provider log of t, a thread on
+// this machine: "" while it has none.
+func (a *app) providerLog(t thread) string {
+	dir := a.backend.Machine().Config.Dir
+	if dir == "" {
+		return ""
+	}
+	path := providerlog.File(providerlog.Under(dir), t.id())
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return path
 }
 
 // renameInput is the row's title while it's being renamed: Enter keeps
