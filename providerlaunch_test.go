@@ -124,7 +124,7 @@ func TestARemoteMachinesRowSetsItsOwnLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	rp := &placing{}
-	remote, err := daemon.Start(context.Background(), daemon.Config{Dir: rdir, Hub: true, Listen: []string{"127.0.0.1:0"}, Providers: provider.Mux{"claude": rp}})
+	remote, err := startEngine(context.Background(), daemon.Config{Dir: rdir, Hub: true, Listen: []string{"127.0.0.1:0"}, Providers: provider.Mux{"claude": rp}})
 	if err != nil {
 		t.Fatal(err)
 	}

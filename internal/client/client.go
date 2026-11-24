@@ -42,6 +42,10 @@ type Config struct {
 	// engine.json: the GUI has it run the real Claude Code. Left nil, as a
 	// test leaves it, the engine plays every provider with the fake.
 	Engine func(*daemon.Config)
+	// Detect reads an installed Tailscale's status for This machine while
+	// no engine answers, as the engine's own Config.Detect would; nil
+	// reads this machine's.
+	Detect func(context.Context) (api.Tailnet, error)
 }
 
 const (

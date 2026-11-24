@@ -64,7 +64,7 @@ var many = func() []provider.Command {
 func slashEngine(t *testing.T) *harness {
 	t.Helper()
 	dir := tempDir(t)
-	d, err := daemon.Start(context.Background(), daemon.Config{Dir: dir, Hub: true, Providers: provider.Mux{
+	d, err := startEngine(context.Background(), daemon.Config{Dir: dir, Hub: true, Providers: provider.Mux{
 		"fake": fake.New(nil),
 		"claude": skills{fake.New(nil), []provider.Command{
 			{Name: "compact", Description: "Free up context by summarizing the conversation so far"},
@@ -179,7 +179,7 @@ func TestTheFlyoutScrollsToTheChoice(t *testing.T) {
 func TestAFailedListingIsNotAskedAgainAtOnce(t *testing.T) {
 	dir := tempDir(t)
 	var asked atomic.Int32
-	d, err := daemon.Start(context.Background(), daemon.Config{Dir: dir, Hub: true, Providers: provider.Mux{
+	d, err := startEngine(context.Background(), daemon.Config{Dir: dir, Hub: true, Providers: provider.Mux{
 		"claude": broken{fake.New(nil), &asked},
 	}})
 	if err != nil {

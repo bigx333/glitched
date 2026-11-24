@@ -224,7 +224,7 @@ func status(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	dir := dirFlag(fs)
 	fs.Parse(args)
-	st, err := daemon.Inspect(ctx, *dir)
+	st, err := daemon.Inspect(ctx, *dir, nil)
 	if err != nil {
 		return err
 	}

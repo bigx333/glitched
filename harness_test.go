@@ -94,6 +94,31 @@ func init() {
 	}
 }
 
+// madeUpMachine has an engine serve as one on a made-up machine, on a
+// made-up tailnet, so that no test, and no picture of one, reads or shows
+// this machine's name or its Tailscale login. A field the test set itself
+// keeps what it set.
+func madeUpMachine(c *daemon.Config) {
+	if c.Name == "" {
+		c.Name = "studio"
+	}
+	if c.Detect == nil {
+		c.Detect = madeUpTailscale
+	}
+}
+
+// madeUpTailscale is the made-up machine's installed Tailscale.
+func madeUpTailscale(context.Context) (api.Tailnet, error) {
+	return api.Tailnet{Mode: api.TailnetInstalled, State: "Running", Name: "studio.example.ts.net", IP: netip.MustParseAddr("100.64.0.7"), Tailnet: "example.com", User: "sam@example.com"}, nil
+}
+
+// startEngine is daemon.Start on a made-up machine: every root test
+// starts its engines with it.
+func startEngine(ctx context.Context, cfg daemon.Config) (*daemon.Daemon, error) {
+	madeUpMachine(&cfg)
+	return daemon.Start(ctx, cfg)
+}
+
 // testApp is newApp for a test, which it outlives by nothing: its
 // plugins' runtimes stop as the test ends, as the app's do as it quits.
 // A runtime left running holds the app, and with it the window the test
@@ -105,26 +130,15 @@ func init() {
 // has those already, as though they answered before it started: else its
 // picker would offer nothing till they do, and a test without an engine
 // nothing at all.
-// madeUpMachine has an engine serve as one on a made-up machine, on a
-// made-up tailnet, so that no test, and no picture of one, reads or shows
-// this machine's name or its Tailscale login. A test that sets either
-// field itself keeps what it set.
-func madeUpMachine(c *daemon.Config) {
-	c.Name = "studio"
-	c.Detect = func(context.Context) (api.Tailnet, error) {
-		return api.Tailnet{Mode: api.TailnetInstalled, State: "Running", Name: "studio.example.ts.net", IP: netip.MustParseAddr("100.64.0.7"), Tailnet: "example.com", User: "sam@example.com"}, nil
-	}
-}
-
 func testApp(t *testing.T, dir string, engine func(*daemon.Config), post func(func())) *app {
 	_, cached := os.Stat(filepath.Join(dir, "models.json"))
 	a := newApp(dir, func(c *daemon.Config) {
-		madeUpMachine(c)
 		if engine != nil {
 			engine(c)
 		}
+		madeUpMachine(c)
 		todaysModels(c.Providers)
-	}, post)
+	}, madeUpTailscale, post)
 	if cached != nil {
 		for _, f := range families {
 			a.models.reported[f.provider] = knownOf(f.provider)
@@ -356,11 +370,8 @@ func engine(t *testing.T, cfg daemon.Config, adapter provider.Adapter) *daemon.D
 	t.Helper()
 	sd := &seeding{Adapter: adapter, spawner: fake.New(nil), runs: map[api.ID]bool{}}
 	cfg.Hub, cfg.Providers = true, daemon.FakeProviders(sd)
-	if cfg.Name == "" && cfg.Detect == nil {
-		madeUpMachine(&cfg)
-	}
 	todaysModels(cfg.Providers)
-	d, err := daemon.Start(context.Background(), cfg)
+	d, err := startEngine(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

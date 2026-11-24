@@ -295,7 +295,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		// A missing Tailscale fails at once; one slow to answer is there.
 		installed = err == nil || errors.Is(err, context.DeadlineExceeded)
 		if !installed {
-			node, err := tailnet.Start(filepath.Join(cfg.Dir, nodeDir), hostname(), cfg.Control)
+			node, err := tailnet.Start(filepath.Join(cfg.Dir, nodeDir), hostname(cfg.Name), cfg.Control)
 			if err != nil {
 				return nil, err
 			}
@@ -497,7 +497,7 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		})
 	}
 	if installed {
-		background.Go(func() { retire(ctx, filepath.Join(cfg.Dir, nodeDir), cfg.Control) })
+		background.Go(func() { retire(ctx, filepath.Join(cfg.Dir, nodeDir), hostname(cfg.Name), cfg.Control) })
 	}
 	if len(cfg.Listen) > 0 || cfg.Tailnet {
 		background.Go(func() { g.watch(ctx) })

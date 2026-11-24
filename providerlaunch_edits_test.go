@@ -147,7 +147,7 @@ func TestARePairedServersDraftStaysWithItsEngine(t *testing.T) {
 		if _, err := daemon.Edit(dir, func(c *daemon.Config) error { c.Launch = map[string]provider.Launch{"claude": l}; return nil }); err != nil {
 			t.Fatal(err)
 		}
-		d, err := daemon.Start(t.Context(), daemon.Config{Dir: dir, Hub: true, Listen: []string{"127.0.0.1:0"}, Providers: provider.Mux{"claude": &placing{Adapter: fake.New(nil)}}})
+		d, err := startEngine(t.Context(), daemon.Config{Dir: dir, Hub: true, Listen: []string{"127.0.0.1:0"}, Providers: provider.Mux{"claude": &placing{Adapter: fake.New(nil)}}})
 		if err != nil {
 			t.Fatal(err)
 		}

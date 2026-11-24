@@ -165,9 +165,8 @@ func WithClock(now func() time.Time) Option {
 // New reconciles what the last process left in flight, then starts the
 // effect worker. The caller keeps owning st.
 func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...Option) (*Host, error) {
-	name, _ := os.Hostname()
 	h := &Host{
-		store: st, providers: providers, name: name,
+		store: st, providers: providers,
 		wake:          make(chan struct{}, 1),
 		busy:          map[api.ID]bool{},
 		runs:          map[api.ID]*liveRun{},
@@ -191,6 +190,9 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 	h.idleCompact.Store(true)
 	for _, o := range opts {
 		o(h)
+	}
+	if h.name == "" {
+		h.name, _ = os.Hostname()
 	}
 	h.ctx, h.cancel = context.WithCancel(context.Background())
 	h.drain, h.stopDrain = context.WithCancel(context.Background())
