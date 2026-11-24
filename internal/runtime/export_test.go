@@ -2,9 +2,11 @@ package runtime
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"glitched/internal/api"
+	"glitched/internal/store"
 )
 
 func SetCallTimeout(d time.Duration) func() {
@@ -51,11 +53,18 @@ func SetCheckpointHook(f func(ctx context.Context, step string)) func() {
 	return func() { checkpointHook = old }
 }
 
-// Waiting is whether thread's start waits on a revert in its folder.
+// Waiting is whether thread's start waits on a revert in its folder, its
+// lease handed back: a host killed before that leaves the start leased,
+// which the next host can only take for a run that may have begun.
 func Waiting(h *Host, thread api.ID) bool {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.waiting[thread]
+	waits := h.waiting[thread]
+	h.mu.Unlock()
+	if !waits {
+		return false
+	}
+	leased, err := h.store.Leased(h.ctx)
+	return err == nil && !slices.ContainsFunc(leased, func(e store.Effect) bool { return e.Thread == thread })
 }
 
 func SetCloseGrace(d time.Duration) func() {
