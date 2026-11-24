@@ -1703,7 +1703,9 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 	live := t.View.Stoppable()
 	working := live && empty
 	if live && !empty {
-		a.queueButton(c, t)
+		if t.View.Working() {
+			a.queueButton(c, t)
+		}
 		a.stopButton(c, t)
 	}
 	label := "Send"
@@ -1744,7 +1746,7 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 // open, it steers, and doesn't stop the agent.
 func (a *app) sendOrStop(t thread, clicked bool) {
 	switch {
-	case t.View.Stoppable() && t.View.Run != api.RunWaiting && a.message(t) != "" && !clicked && !a.code.on:
+	case a.queues(t) && a.message(t) != "" && !clicked:
 		a.queue(t)
 	case !t.View.Stoppable() || a.message(t) != "":
 		a.send(t)
@@ -1772,12 +1774,19 @@ func (a *app) resumeButton(c *ui.Context, t thread) {
 	}
 }
 
+// queues is whether ⌘⏎ queues the draft rather than steering it: while
+// the agent works, not waiting on a request, with no code block open. A
+// run left uncertain is never at work: it doesn't end on its own.
+func (a *app) queues(t thread) bool {
+	return t.View.Working() && t.View.Run != api.RunWaiting && !a.code.on
+}
+
 // queueButton sends the draft for after the agent's turn, rather than
 // into it, beside Send while the agent works.
 func (a *app) queueButton(c *ui.Context, t thread) {
-	tip := "Send after this turn  ⌘⏎"
-	if t.View.Run == api.RunWaiting {
-		tip = "Send after this turn"
+	tip := "Send after this turn"
+	if a.queues(t) {
+		tip += "  ⌘⏎"
 	}
 	q := a.tip(c, ui.ButtonBase(c.Key("queue")).Label("Queue"), tip).Height(30).Radius(15).Padding(0, 12).
 		Cursor(ui.CursorPointer).Border(1, palette.border).Margin(0, 4, 0, 0).Shrink(0)
@@ -1830,7 +1839,7 @@ func (a *app) sendControl(c *ui.Context, t thread, keys bool) {
 		return
 	}
 	if t.View.Stoppable() {
-		if a.message(t) != "" {
+		if a.message(t) != "" && t.View.Working() {
 			a.queueButton(c, t)
 		}
 		a.stopButton(c, t).Shrink(0)

@@ -67,7 +67,7 @@ type Run struct {
 	ID         api.ID // the admitted message's ID
 	Generation uint64
 	State      RunState
-	Signalled  bool        // an interrupt reached the agent
+	Signalled  bool        // a stop took: an interrupt reached the agent, or it ended stopping
 	Outcome    api.Outcome // set when Finished
 	Error      string
 	Ended      time.Time // set when Finished

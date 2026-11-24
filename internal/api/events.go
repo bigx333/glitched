@@ -108,8 +108,9 @@ type TurnStopping struct {
 	Run ID `json:"run"`
 }
 
-// TurnSignalled: the run's interrupt reached the agent. A run still
-// stopping after it ignores the interrupt.
+// TurnSignalled: the run's stop took: its interrupt reached the agent, or
+// it ended while it stopped, whichever came first. A run still stopping
+// after it ignores the interrupt.
 type TurnSignalled struct {
 	Run ID `json:"run"`
 }
