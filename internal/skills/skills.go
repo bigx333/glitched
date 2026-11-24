@@ -44,6 +44,9 @@ type Skill struct {
 	Dir         string
 	Shown       string
 	Hash        string
+	// folder is Dir as Find checked it: Build reads it only while Dir is
+	// still that folder.
+	folder os.FileInfo
 }
 
 // Skipped is a skill folder no agent gets, Name as the folder is named, ""
@@ -144,12 +147,12 @@ func (f *finder) root(src Source, dir, base string) []Skill {
 	}
 	rb := real(base)
 	switch {
-	case src == Project && rd == f.homeReal:
+	case src == Project && same(rd, f.homeReal):
 		return nil
 	case src == Project && !within(rd, rb):
 		f.skip(src, "", shown+" leads out of its project, so Glitched reads none of it.")
 		return nil
-	case within(rd, f.state) && (src == Home && rd != f.homeRoot || src == Project && !within(rb, f.worktrees)):
+	case within(rd, f.state) && (src == Home && !same(rd, f.homeRoot) || src == Project && !within(rb, f.worktrees)):
 		f.skip(src, "", shown+" leads into Glitched's own folder, so Glitched reads none of it.")
 		return nil
 	}
@@ -196,7 +199,8 @@ func (f *finder) skill(src Source, dir, base, name string) (Skill, error) {
 	if err != nil {
 		return Skill{}, fmt.Errorf("Glitched couldn't open it: %v", err)
 	}
-	if fi, err := os.Stat(target); err != nil || !fi.IsDir() {
+	fi, err := os.Stat(target)
+	if err != nil || !fi.IsDir() {
 		return Skill{}, errors.New("It links to something that isn't a folder.")
 	}
 	switch {
@@ -206,7 +210,7 @@ func (f *finder) skill(src Source, dir, base, name string) (Skill, error) {
 		return Skill{}, errors.New("It links into Glitched's own folder.")
 	}
 	var md []byte
-	hash, err := walk(target, func(rel string, _ bool, data []byte) error {
+	hash, err := walk(target, fi, func(rel string, _ bool, data []byte) error {
 		if rel == "SKILL.md" {
 			md = data
 		}
@@ -225,7 +229,7 @@ func (f *finder) skill(src Source, dir, base, name string) (Skill, error) {
 	if fm.Name != name {
 		return Skill{}, fmt.Errorf("Its SKILL.md names it %q, and its folder %q: the two must match.", fm.Name, name)
 	}
-	return Skill{Name: name, Description: fm.Description, Source: src, Dir: target, Hash: hash}, nil
+	return Skill{Name: name, Description: fm.Description, Source: src, Dir: target, Hash: hash, folder: fi}, nil
 }
 
 func (f *finder) skip(src Source, name, why string) {
@@ -241,8 +245,7 @@ func (f *finder) shown(src Source, dir, base string) string {
 		}
 		return dir
 	}
-	if f.userHome != "" && within(dir, f.userHome) {
-		rel, _ := filepath.Rel(f.userHome, dir)
+	if rel, err := filepath.Rel(f.userHome, dir); f.userHome != "" && err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return filepath.Join("~", rel)
 	}
 	return dir
@@ -277,11 +280,33 @@ func real(path string) string {
 	return filepath.Clean(path)
 }
 
-// within is whether path is dir or in it.
+// within is whether path is dir or in it, by the folders themselves, not
+// how either is spelt: path or a folder it is in is dir, as a filesystem
+// that ignores case or a second name for a folder still says. A dir that
+// isn't there holds nothing, nor does one that is a link: dir names the
+// folder itself.
 func within(path, dir string) bool {
 	if path == "" || dir == "" {
 		return false
 	}
-	rel, err := filepath.Rel(dir, path)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+	d, err := os.Lstat(dir)
+	if err != nil {
+		return false
+	}
+	for p := filepath.Clean(path); ; p = filepath.Dir(p) {
+		if fi, err := os.Stat(p); err == nil && os.SameFile(fi, d) {
+			return true
+		}
+		if p == filepath.Dir(p) {
+			return false
+		}
+	}
+}
+
+// same is whether a is the folder b names, however spelt; a b that is a
+// link is no folder.
+func same(a, b string) bool {
+	fa, errA := os.Stat(a)
+	fb, errB := os.Lstat(b)
+	return errA == nil && errB == nil && os.SameFile(fa, fb)
 }

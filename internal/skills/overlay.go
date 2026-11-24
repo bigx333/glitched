@@ -65,7 +65,7 @@ func fill(dir string, set Set) error {
 	}
 	for _, sk := range set.Skills {
 		to := filepath.Join(dir, "skills", sk.Name)
-		hash, err := walk(sk.Dir, func(rel string, exec bool, data []byte) error {
+		hash, err := walk(sk.Dir, sk.folder, func(rel string, exec bool, data []byte) error {
 			p := filepath.Join(to, filepath.FromSlash(rel))
 			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 				return err
