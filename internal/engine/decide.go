@@ -291,8 +291,10 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 			return err
 		}
 	}
+	// A start now on a busy thread goes first in its queue: it starts the
+	// moment the run ends, and stops nothing.
 	q := api.MessageQueued{Message: id, Text: m.Text, Mode: m.Mode, Pos: d.t.pos(false), Held: m.Mode == api.Defer}
-	if m.Mode == api.RestartActive {
+	if m.Mode == api.RestartActive || m.Mode == api.StartNow && d.t.Live() != nil {
 		q.Pos = d.t.pos(true)
 	}
 	if err := d.emit(q); err != nil {
@@ -300,7 +302,7 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	}
 	live := d.t.Live()
 	switch {
-	case m.Mode == api.StartNow:
+	case m.Mode == api.StartNow && live == nil:
 		return d.admit(id)
 	case m.Mode == api.SteerActive && live != nil && steerable[live.State]:
 		if err := d.emit(api.MessageClaimed{Message: id, Run: live.ID}); err != nil {
@@ -683,6 +685,14 @@ func (d *decision) observe(o Observation) error {
 		if isLive(o.Run) && live.State != RunUncertain {
 			stopped := live.State == RunStopping
 			silent := live.Silent
+			// A run that ended while it stopped was stopped, whichever
+			// came first, its end or its interrupt's word: a stop stays a
+			// stop.
+			if stopped && !live.Signalled {
+				if err := d.emit(api.TurnSignalled{Run: o.Run}); err != nil {
+					return err
+				}
+			}
 			if err := d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error, Tokens: o.Tokens}); err != nil {
 				return err
 			}
