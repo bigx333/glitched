@@ -63,6 +63,7 @@ type Host struct {
 	// that ended its last turn resets; limits is poked at each commit
 	// that may change which thread is due.
 	limitResume   atomic.Bool
+	limitMu       sync.Mutex // orders a switch off before the worker's next continue
 	limits        chan struct{}
 	compactCheck  chan api.ID
 	compactRescan chan struct{}

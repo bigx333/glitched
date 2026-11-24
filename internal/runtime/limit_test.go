@@ -67,7 +67,7 @@ func TestAUsageLimitContinuesTheThreadOnceItResets(t *testing.T) {
 			t.Fatalf("the last turn's limit is %+v, want one that resets at %v", l, resets)
 		}
 	}
-	submit(t, h, cancelled, api.ResumeCancel{})
+	submit(t, h, cancelled, api.ResumeCancel{Run: until(t, h, cancelled, "a read", func(api.Thread) bool { return true }).LastTurn.Run})
 	until(t, h, cancelled, "the cancel", func(th api.Thread) bool { return th.LastTurn.ResumeCancelled })
 	submit(t, h, snoozed, api.InboxSet{Disposition: api.Disposition{State: api.Snoozed, Until: start.Add(2 * time.Hour)}})
 

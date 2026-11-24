@@ -95,8 +95,8 @@ func (m *Manager) Resume(e *Env, thread api.ID) api.ID {
 
 // CancelResume stops the engine continuing the thread once the usage limit
 // that ended its last turn resets.
-func (m *Manager) CancelResume(e *Env, thread api.ID) api.ID {
-	return m.submit(e, thread, api.ResumeCancel{})
+func (m *Manager) CancelResume(e *Env, thread, run api.ID) api.ID {
+	return m.submit(e, thread, api.ResumeCancel{Run: run})
 }
 
 // EditQueued gives a message that waits its turn new words.

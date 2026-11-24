@@ -188,8 +188,11 @@ type RequestRespond struct {
 }
 
 // ResumeCancel stops the engine continuing, once its usage limit resets,
-// the thread's last turn that a limit ended.
-type ResumeCancel struct{}
+// Run, the thread's last turn, which a limit ended: the engine refuses it
+// once another turn is the last.
+type ResumeCancel struct {
+	Run ID `json:"run"`
+}
 
 type InboxSet struct {
 	Disposition Disposition `json:"disposition"`

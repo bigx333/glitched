@@ -50,6 +50,7 @@ type message struct {
 		// ResetsAt is when the window resets, in Unix seconds; only
 		// subscription accounts get it.
 		ResetsAt       int64  `json:"resetsAt"`
+		Type           string `json:"rateLimitType"`
 		OverageStatus  string `json:"overageStatus"`
 		IsUsingOverage bool   `json:"isUsingOverage"`
 	} `json:"rate_limit_info"` // rate_limit_event
@@ -289,10 +290,10 @@ type turn struct {
 	cache        *cacheState              // the process's, which outlives the turn; nil in tests that need none
 	interrupted  bool                     // the user stopped the turn
 	spawns       map[string]*spawn        // native subagents, by the tool use that started each
-	// rejected is when each window that refused the turn's requests
-	// resets, 0 for one Claude Code gave no time, and rateLimited that a
-	// synthetic reply said a rate limit stopped the model.
-	rejected    []int64
+	// rejected is when each window that refuses the turn's requests, by
+	// its type, resets: 0 for one Claude Code gave no time. rateLimited is
+	// that a synthetic reply said a rate limit stopped the model.
+	rejected    map[string]int64
 	rateLimited bool
 }
 
@@ -375,9 +376,18 @@ func (t *turn) read(m message) []provider.Event {
 		if t.cache != nil && t.cache.limited != nil && m.RateLimit != nil {
 			t.cache.limited.Store(m.RateLimit.Status != "allowed")
 		}
-		// A window the account's overage carries refuses nothing.
-		if l := m.RateLimit; l != nil && l.Status == "rejected" && l.OverageStatus != "allowed" && !l.IsUsingOverage {
-			t.rejected = append(t.rejected, l.ResetsAt)
+		// A window the account's overage carries refuses nothing, and a
+		// later word on a window replaces what the last said, as T3 Code
+		// keeps them.
+		if l := m.RateLimit; l != nil {
+			if l.Status == "rejected" && l.OverageStatus != "allowed" && l.OverageStatus != "allowed_warning" && !l.IsUsingOverage {
+				if t.rejected == nil {
+					t.rejected = map[string]int64{}
+				}
+				t.rejected[l.Type] = l.ResetsAt
+			} else {
+				delete(t.rejected, l.Type)
+			}
 		}
 	case "result":
 		evs := append(t.unfinished(), t.measured(m)...)
@@ -559,7 +569,7 @@ func (t *turn) end(m message) provider.TurnEnded {
 	}
 	e.Outcome = api.OutcomeFailed
 	if (len(t.rejected) > 0 || t.rateLimited) && (m.APIErrorStatus == nil || *m.APIErrorStatus == 429) {
-		e.Limit = &api.UsageLimit{Resets: resets(t.rejected)}
+		e.Limit = &api.UsageLimit{Resets: resets(slices.Collect(maps.Values(t.rejected)))}
 	}
 	switch {
 	case t.signedOut != "":

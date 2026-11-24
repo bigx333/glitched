@@ -124,7 +124,9 @@ func TestTheAgentsCardTogglesContinueAfterAUsageLimit(t *testing.T) {
 	h.until("the agent starting", func() bool { return held.Starts() == 1 })
 	h.click("Settings")
 	h.click("This machine")
-	h.until("the Agents card", func() bool { return h.tt.HasText("Continue agents after a usage limit") && h.a.backend.Machine().Embedded })
+	h.until("the Agents card", func() bool {
+		return h.tt.HasText("Continue agents after a usage limit") && h.a.backend.Machine().Embedded
+	})
 	for _, want := range []bool{true, false} {
 		cfg, err := daemon.Defaults(dir)
 		if err != nil {

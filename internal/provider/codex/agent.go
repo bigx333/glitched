@@ -42,11 +42,12 @@ type Agent struct {
 	out         []provider.Event
 	started     bool
 	interrupted bool
-	ended       bool   // TurnEnded is queued; nothing is queued after it
-	ending      bool   // the turn is over, and its end waits on what Codex says of the usage limit
-	failed      bool   // the turn did not end on its own
-	turn        string // Codex's id of the turn
-	problem     string // the last error Codex said it won't retry
+	ended       bool               // TurnEnded is queued; nothing is queued after it
+	ending      bool               // the turn is over, and its end waits on what Codex says of the usage limit
+	endRead     context.CancelFunc // gives up that read
+	failed      bool               // the turn did not end on its own
+	turn        string             // Codex's id of the turn
+	problem     string             // the last error Codex said it won't retry
 	deadline    *time.Timer
 	items       map[string]*item
 	order       []string
@@ -306,6 +307,12 @@ func (g *Agent) interrupt(ctx context.Context) error {
 		g.mu.Unlock()
 		return nil
 	}
+	if g.ending {
+		g.interrupted = true
+		g.endRead()
+		g.mu.Unlock()
+		return nil
+	}
 	g.interrupted = true
 	g.deadline = time.AfterFunc(interruptGrace, g.p.halt)
 	g.withdrawLocked("The turn was stopped.")
@@ -352,6 +359,9 @@ type tokenUsage struct {
 // account/rateLimits/updated and account/rateLimits/read; an update sends
 // only the windows that moved.
 type rateLimits struct {
+	// LimitID names the allowance: "codex" is the account's, and another
+	// is a model's own, which never stands for the account's.
+	LimitID   string      `json:"limitId"`
 	Primary   *rateWindow `json:"primary"`
 	Secondary *rateWindow `json:"secondary"`
 }
@@ -567,8 +577,9 @@ func (g *Agent) notify(m message) {
 				} else {
 					// The turn's first request can be refused before Codex
 					// says which window it spent: ask, off the reader.
-					g.ending = true
-					go g.endLimited(end)
+					ctx, cancel := context.WithTimeout(g.ctx, limitRead)
+					g.ending, g.endRead = true, cancel
+					go g.endLimited(ctx, end)
 					return
 				}
 			}
@@ -581,18 +592,23 @@ func (g *Agent) notify(m message) {
 
 // endLimited ends the turn a usage limit failed, once Codex says when the
 // spent window resets, or can't.
-func (g *Agent) endLimited(end provider.TurnEnded) {
-	ctx, cancel := context.WithTimeout(g.ctx, limitRead)
-	defer cancel()
+// What Codex said of the windows meanwhile counts, whether or not the read
+// was answered. A Stop that came while it read ends the turn as stopped:
+// Codex had already ended it, and no limit holds the thread.
+func (g *Agent) endLimited(ctx context.Context, end provider.TurnEnded) {
 	var r struct {
 		RateLimits rateLimits `json:"rateLimits"`
 	}
 	if err := g.p.conn.call(ctx, "account/rateLimits/read", nil, &r); err == nil {
 		g.p.limited(r.RateLimits)
-		end.Limit.Resets, _ = g.p.limitsNow().resets()
 	}
+	end.Limit.Resets, _ = g.p.limitsNow().resets()
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.endRead()
+	if g.interrupted {
+		end = provider.TurnEnded{Outcome: api.OutcomeInterrupted}
+	}
 	g.endLocked(end)
 }
 

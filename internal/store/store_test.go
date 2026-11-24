@@ -1429,8 +1429,8 @@ func TestAVersion13DatabaseUpgradesWithUsageLimits(t *testing.T) {
 	}
 	resets := base.Add(time.Hour)
 	turn(&api.UsageLimit{})
-	turn(&api.UsageLimit{Resets: resets})
-	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ResumeCancel{}}, base); err != nil {
+	last := turn(&api.UsageLimit{Resets: resets})
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ResumeCancel{Run: last}}, base); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
