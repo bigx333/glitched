@@ -66,6 +66,21 @@ func (m *Manager) Create(e *Env, workspace, title string, model api.ModelRef, ac
 	return id
 }
 
+// Fork adds a thread that goes on from run of source, its last finished
+// turn when zero, on model: in source's folder, at its access, titled
+// title. It is shown at once, as Create shows one.
+func (m *Manager) Fork(e *Env, source api.Thread, run api.ID, title string, model api.ModelRef) api.ID {
+	if m.ShownBy(e) != e {
+		return api.ID{}
+	}
+	id := api.NewID()
+	e.Threads[id] = &Thread{View: api.Thread{ID: id, Workspace: source.Workspace, Project: source.Project, Branch: source.Branch, Title: title, Model: model, Access: source.Access, UpdatedAt: time.Now()}}
+	e.Membership++
+	m.submit(e, id, api.ThreadCreate{Workspace: source.Workspace, Project: source.Project, Branch: source.Branch, Title: title, Model: model, Access: source.Access,
+		Fork: &api.Fork{Thread: source.ID, Run: run}})
+	return id
+}
+
 // Send dispatches a message and returns its ID, which the engine also
 // gives the message and the run it starts.
 func (m *Manager) Send(e *Env, thread api.ID, text string, mode api.DispatchMode) api.ID {

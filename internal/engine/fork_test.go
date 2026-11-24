@@ -1,6 +1,7 @@
 package engine_test
 
 import (
+	"cmp"
 	"reflect"
 	"strings"
 	"testing"
@@ -34,6 +35,8 @@ func TestWhatForks(t *testing.T) {
 		"a turn a rewind dropped": {src: src, create: api.ThreadCreate{Fork: &api.Fork{Run: dropped}}, refuse: "only a finished turn"},
 		"the live run":            {src: src, create: api.ThreadCreate{Fork: &api.Fork{Run: live}}, refuse: "only a finished turn"},
 		"a run of another thread": {src: src, create: api.ThreadCreate{Fork: &api.Fork{Run: api.NewID()}}, refuse: "only a finished turn"},
+		"its last turn":           {src: src, create: api.ThreadCreate{Fork: &api.Fork{}}},
+		"a thread with no turn":   {src: engine.Thread{ID: src.ID}, create: api.ThreadCreate{Fork: &api.Fork{}}, refuse: "only a finished turn"},
 		"a deleted thread":        {src: gone, create: api.ThreadCreate{Fork: &api.Fork{Run: r1}}, refuse: "the thread to fork is gone"},
 		"no thread":               {create: api.ThreadCreate{Fork: &api.Fork{Run: r1}}, refuse: "the thread to fork is gone"},
 		"an agent's child":        {src: src, create: api.ThreadCreate{Parent: api.NewID(), Run: api.NewID(), Fork: &api.Fork{Run: r1}}, refuse: "only you fork"},
@@ -47,7 +50,7 @@ func TestWhatForks(t *testing.T) {
 				}
 				return
 			}
-			want := &api.Forked{Thread: src.ID, Run: tc.create.Fork.Run, Title: "the source", Provider: "codex", Session: "thr", Runs: []api.ID{r1, silent, r4, live}}
+			want := &api.Forked{Thread: src.ID, Run: cmp.Or(tc.create.Fork.Run, r4), Title: "the source", Provider: "codex", Session: "thr", Runs: []api.ID{r1, silent, r4, live}}
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatalf("CheckFork = %+v, %v; want %+v", got, err, want)
 			}

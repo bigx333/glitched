@@ -15,8 +15,8 @@ import (
 
 // Pointing at a message shows what can be done with it, in a toolbar
 // that floats under it: copying it, putting it back in the composer to
-// edit and send again, having the agent answer the message again, or a
-// plugin's command. The toolbar takes no room, so pointing at a message
+// edit and send again, having the agent answer the message again,
+// forking the thread from the turn a reply ended, or a plugin's command. The toolbar takes no room, so pointing at a message
 // moves nothing.
 
 // messageActions is the toolbar under the message es[i], at the edge the
@@ -63,6 +63,10 @@ func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed
 					a.backend.Send(t.env, t.id(), asked, api.SteerActive)
 					a.listFor(t.id()).ScrollToEnd()
 				}
+			case "message.fork":
+				if action(c, "fork", icBranch, "Fork from here", false).Clicked() {
+					a.fork(t, e.turn, t.View.Model)
+				}
 			case "message.time":
 				short, full := a.messageTime(c, e)
 				a.tip(c, ui.Box(c).Label(full).Padding(2, 6).Children(func() {
@@ -89,6 +93,8 @@ func (a *app) messageActions(c *ui.Context, t thread, es []entry, i int, pointed
 				return e.kind != entryUser
 			case "message.retry":
 				return !e.retry
+			case "message.fork":
+				return e.turn.IsZero() || t.Transcript == nil || t.Transcript.Dropped(e.turn)
 			case "message.item":
 				at := itemIndex(n)
 				return at < 0 || at >= len(items)
@@ -126,6 +132,7 @@ func messageToolbarRow(m messageToolbar) *widget.Node {
 		&widget.Node{Type: "native", ID: "copy", Name: "message.copy"},
 		&widget.Node{Type: "native", ID: "edit", Name: "message.edit"},
 		&widget.Node{Type: "native", ID: "retry", Name: "message.retry"},
+		&widget.Node{Type: "native", ID: "fork", Name: "message.fork"},
 	)
 	for i := range m.Items {
 		index, _ := json.Marshal(i)

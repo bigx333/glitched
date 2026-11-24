@@ -121,7 +121,8 @@ type ThreadCreate struct {
 }
 
 // Fork asks for a thread that goes on from Run, a finished turn of
-// Thread's, a thread of the user's on the same engine: its first run
+// Thread's, its last one when zero, a thread of the user's on the same
+// engine: its first run
 // forks Thread's conversation there, natively where the fork's provider
 // is Thread's and can, else in a new conversation its first message
 // hands the turns up to Run. A fork on another provider is how a thread

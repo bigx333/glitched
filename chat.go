@@ -875,6 +875,9 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 	case entryRevert:
 		a.revertDivider(c, t, rs.es, i)
 		return
+	case entryFork:
+		a.forkDivider(c, t, rs.es[i])
+		return
 	}
 	m := timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil, At: e.at}
 	acted := false

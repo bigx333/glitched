@@ -44,6 +44,19 @@ func (a *app) threadMenu(c *ui.Context, m *ui.Menu, t thread, cat category) {
 			a.gag(c, t.id(), gagUndo, cat)
 		}
 	}
+	m.Separator()
+	none := t.View.LastTurn == nil
+	if m.Item("Fork").Disabled(none).Chosen() {
+		a.fork(t, api.ID{}, t.View.Model)
+	}
+	others := slices.DeleteFunc(a.modelFamilies(), func(f family) bool { return f.provider == t.View.Model.Provider })
+	m.Submenu("Continue on", func(m *ui.Menu) {
+		for _, f := range others {
+			if m.Item(f.name).Chosen() {
+				a.fork(t, api.ID{}, api.ModelRef{Provider: f.provider})
+			}
+		}
+	}).Disabled(none || len(others) == 0)
 	if t.local() {
 		m.Separator()
 		if m.Item("Copy branch name").Chosen() {
