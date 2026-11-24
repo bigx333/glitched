@@ -4,12 +4,14 @@ import (
 	"context"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
+	"glitched/internal/runtime"
 )
 
 type lateOpen struct {
@@ -148,5 +150,86 @@ func TestAStopWhileTheAgentOpensSendsNoPrompt(t *testing.T) {
 	case <-ad.entered:
 		t.Fatalf("host called Start after Stop even though no prompt was in flight; provider saw %d Starts", ad.Starts())
 	default:
+	}
+}
+
+// startGate holds the fake's agents after they take their prompt, until
+// release, as an agent slow to say it has started is.
+type startGate struct {
+	*fake.Adapter
+	sent, release chan struct{}
+}
+
+func (a *startGate) Open(ctx context.Context, s provider.SessionSpec) (provider.Agent, error) {
+	g, err := a.Adapter.Open(ctx, s)
+	return startGateAgent{g, a}, err
+}
+
+type startGateAgent struct {
+	provider.Agent
+	ad *startGate
+}
+
+func (g startGateAgent) Do(ctx context.Context, a provider.Action) error {
+	err := g.Agent.Do(ctx, a)
+	if _, ok := a.(provider.Start); ok {
+		close(g.ad.sent)
+		<-g.ad.release
+	}
+	return err
+}
+
+// A run deleted as its start is being recorded, while the host closes,
+// leaves no agent behind once the next host has booted.
+func TestARunDeletedAsItsStartIsRecordedLeavesNoAgent(t *testing.T) {
+	ad := &startGate{fake.New(fake.Turn(true)), make(chan struct{}), make(chan struct{})}
+	release := sync.OnceFunc(func() { close(ad.release) })
+	var arm atomic.Bool
+	paused, resume := make(chan struct{}), make(chan struct{})
+	unpause := sync.OnceFunc(func() { close(resume) })
+	clock := func() time.Time {
+		if arm.CompareAndSwap(true, false) {
+			close(paused)
+			<-resume
+		}
+		return time.Now()
+	}
+	path := dbPath(t)
+	n := serveOpts(t, path, provider.Mux{"fake": ad}, runtime.WithClock(clock), runtime.WithIdleCompaction(false))
+	defer release()
+	defer unpause()
+	thread := newThread(t, n.h)
+	run := submit(t, n.h, thread, dispatch("working", api.StartNow)).Command
+	waitClosed(t, ad.sent, "the agent to take its prompt")
+	arm.Store(true)
+	release()
+	waitClosed(t, paused, "the start to be recorded")
+	submit(t, n.h, thread, api.ThreadDelete{})
+	shut := make(chan struct{})
+	go func() { n.h.Close(); close(shut) }()
+	waitClosed(t, n.h.Closing(), "the host to close")
+	unpause()
+	waitClosed(t, shut, "the host to close")
+	if err := n.st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	n2 := awakeHost(t, path, ad, &heard{})
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		closing, err := n2.st.Closing(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(closing, thread) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the deleted thread's agent was never closed")
+		}
+	}
+	if rec, err := ad.Reconcile(ctx, provider.RuntimeIdentity{Thread: thread, Run: run}); err != nil {
+		t.Fatal(err)
+	} else if r, ok := rec.(provider.Restored); ok {
+		r.Agent.Close(ctx)
+		t.Fatal("the deleted run's agent outlived both hosts")
 	}
 }
