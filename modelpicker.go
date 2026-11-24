@@ -186,7 +186,7 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 		a.pluginComponent(c, "composer.model", &t, componentCopy{
 			key: composerKey(t) + "/button",
 			box: func() ui.Element {
-				return ui.Row(c).Key("component:composer.model/button").Gap(6).AlignItems(ui.Center).Shrink(1).MinWidth(0)
+				return ui.Row(c).Key("component:composer.model/button").Gap(6).AlignItems(ui.Center).Shrink(1).MinWidth(0).ClipX()
 			},
 			native: func(*widget.Node) {
 				name, runs := a.runningModel(t, m.name)
