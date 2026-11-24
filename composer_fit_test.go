@@ -16,25 +16,26 @@ import (
 )
 
 // At the window's narrowest, the composer's actions are drawn whole
-// beside a model whose name doesn't fit: the model's name gives way.
+// beside a model whose name doesn't fit, as wide as at a wide window: the
+// model's name gives way.
 func TestTheComposerActionsFitAtTheNarrowestWindow(t *testing.T) {
 	for name, tc := range map[string]struct {
 		open    func(t *testing.T) *harness
-		actions map[string]float32
+		actions []string
 	}{
 		"draft": {func(t *testing.T) *harness {
 			h := enterReady(t, longModel{burst{}}, "Start work.")
 			h.until("the agent at work", func() bool { return h.a.current().View.Run == api.RunRunning })
 			h.a.draft = "Then update the docs."
 			return h
-		}, map[string]float32{"Queue": 60, "Stop": 30, "Send": 30}},
+		}, []string{"Attach files", "Queue", "Stop", "Send"}},
 		"code": {func(t *testing.T) *harness {
 			h := enterReady(t, longModel{burst{}}, "Start work.")
 			h.until("the agent at work", func() bool { return h.a.current().View.Run == api.RunRunning })
 			h.a.code = blocks(h.a, "go")
 			codeSeg(h.a).text = "var x = 1"
 			return h
-		}, map[string]float32{"Queue": 60, "Stop": 30, "Send": 30}},
+		}, []string{"Attach files", "Queue", "Stop", "Send"}},
 		"held": {func(t *testing.T) *harness {
 			h := enterReady(t, longModel{fake.New(runTests)}, "Run the sidebar tests.")
 			h.until("the approval card", func() bool { return h.tt.HasText("Approval needed") })
@@ -45,10 +46,20 @@ func TestTheComposerActionsFitAtTheNarrowestWindow(t *testing.T) {
 			h.until("Resume", func() bool { return h.tt.HasText("Resume") && !h.a.current().View.Live() })
 			h.a.draft = "And the changelog."
 			return h
-		}, map[string]float32{"Resume": 60, "Send": 30}},
+		}, []string{"Attach files", "Resume", "Send"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := tc.open(t)
+			h.tt.SetSize(1320, 860)
+			h.tt.Advance(time.Second)
+			wide := map[string]float32{}
+			for _, s := range tc.actions {
+				r, ok := h.tt.Find(s)
+				if !ok {
+					t.Fatalf("no %s at 1320 points in %q", s, h.tt.Texts())
+				}
+				wide[s] = paintedWidth(h.tt.Image(), r)
+			}
 			h.tt.SetSize(760, 860)
 			h.tt.Advance(time.Second)
 			if out := os.Getenv("FITSHOTS"); out != "" {
@@ -61,13 +72,13 @@ func TestTheComposerActionsFitAtTheNarrowestWindow(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			for s, want := range tc.actions {
+			for _, s := range tc.actions {
 				r, ok := h.tt.Find(s)
 				if !ok {
 					t.Fatalf("no %s in %q", s, h.tt.Texts())
 				}
-				if w := paintedWidth(h.tt.Image(), r); w < want-1 || r.X+r.W > 760 {
-					t.Errorf("%s at %+v is drawn %.0f points wide; want %.0f, in the window", s, r, w, want)
+				if w := paintedWidth(h.tt.Image(), r); w < wide[s]-1 || wide[s] < 8 || r.X+r.W > 760 {
+					t.Errorf("%s at %+v is drawn %.0f points wide; want %.0f as at 1320 points, in the window", s, r, w, wide[s])
 				}
 			}
 		})
