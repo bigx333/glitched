@@ -8,7 +8,6 @@
   "contractVersion": 2,
   "capabilities": ["ui.place", "threads:read"],
   "glitched": {
-    "places": [{ "id": "skills", "at": "thread.header" }],
-    "events": ["place.shown", "place.hidden", "window.focused"]
+    "places": [{ "id": "skills", "at": "thread.header" }]
   }
 }

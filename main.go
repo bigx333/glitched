@@ -701,6 +701,9 @@ type app struct {
 	// pluginFocused is whether the window was in front, as plugins last
 	// heard it; nil before the first frame.
 	pluginFocused *bool
+	// skills are what each thread's engine last said of its skills, for
+	// its header.
+	skills map[api.ID]*skillsRead
 	// openFolder, when set, chooses a folder in place of the system's
 	// dialog, as in a test.
 	openFolder func() string
@@ -958,6 +961,9 @@ func (a *app) view(c *ui.Context) {
 	if f := c.WindowActive(); a.plugins != nil && (a.pluginFocused == nil || *a.pluginFocused != f) {
 		if a.pluginFocused != nil {
 			a.plugins.Emit("window.focused", func(string) any { return map[string]bool{"focused": f} })
+			if f {
+				a.skillsStale()
+			}
 		}
 		a.pluginFocused = &f
 	}

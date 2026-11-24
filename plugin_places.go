@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -71,7 +72,16 @@ func recordVersion(r plugins.ThreadRecord) string {
 		d = r.Disposition.State + " " + r.Disposition.Until
 	}
 	return strings.Join([]string{r.Title, r.Workspace, r.Status, r.Machine, r.UpdatedAt, r.Section, d, strconv.FormatBool(r.Unread),
-		r.Parent, strings.Join(r.Ancestors, ","), strings.Join(r.Children, ","), strconv.Itoa(r.Requests), strconv.FormatInt(r.Tokens, 10), strconv.FormatBool(r.Local)}, "\x00")
+		r.Parent, strings.Join(r.Ancestors, ","), strings.Join(r.Children, ","), strconv.Itoa(r.Requests), strconv.FormatInt(r.Tokens, 10), strconv.FormatBool(r.Local), skillsVersion(r.Skills)}, "\x00")
+}
+
+// skillsVersion is a header's skills as its record's version counts them.
+func skillsVersion(l *api.SkillList) string {
+	if l == nil {
+		return ""
+	}
+	b, _ := json.Marshal(l)
+	return string(b)
 }
 
 // placeKey names one copy of a plugin's place.
@@ -158,6 +168,9 @@ func (a *app) pluginSlot(c *ui.Context, at, key string, t *thread, compact, know
 	var full plugins.ThreadRecord
 	if t != nil {
 		full = a.threadRecord(*t)
+		if at == "thread.header" {
+			full.Skills = a.headerSkills(t)
+		}
 	}
 	type drawing struct {
 		pl   plugins.PlaceAt

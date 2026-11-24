@@ -56,6 +56,6 @@ never changes your `~/.claude` or `~/.codex`.
 The **Skills N** pill in a thread's header counts the skills that the
 thread's agent gets on its next run. Click it to see each skill, where it
 comes from, the skills that were skipped and why, and how the agent gets
-them. Glitched reads them again each time the thread is shown and each time
-the window comes back into focus. Plugins read the same list with
+them. Glitched reads them as the thread first shows and again each time the
+window comes back to the front. Plugins read the same list with
 `glitched.skills.list(thread)` (see [plugins](plugins.md)).

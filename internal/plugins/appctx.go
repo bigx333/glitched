@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+
+	"glitched/internal/api"
 )
 
 // ThreadRecord is a thread as a plugin sees it. A field the plugin wasn't
@@ -36,6 +38,9 @@ type ThreadRecord struct {
 	// Local says the workspace is on this machine, where glitched.run
 	// runs.
 	Local bool `json:"local,omitempty"`
+	// Skills are what its agent gets on its next run, as its engine last
+	// said: only in a thread header's record, and left out till it says.
+	Skills *api.SkillList `json:"skills,omitempty"`
 }
 
 // Disposition is a thread's inbox state: inbox, snoozed till Until (RFC
