@@ -69,7 +69,8 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 	}
 
 	// The names seen before keep their icons, the first seen of two that
-	// share one keeping it, and the rest pick again.
+	// share one keeping it, and the rest pick again. One this version can't
+	// rewrite holds what it's drawn with, shared or not.
 	var picks []pick
 	seen := map[string]bool{}
 	for i, m := range out {
@@ -78,7 +79,7 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 		}
 		seen[m.Name] = true
 		icon, color := drawn(m)
-		if iconUses[icon] == 0 {
+		if iconUses[icon] == 0 || frozen(m) {
 			hold(icon, color)
 			continue
 		}
@@ -123,7 +124,7 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 		case p.at < 0:
 			out = append(out, m)
 			changed = true
-		case !frozen(out[p.at]) && out[p.at] != m:
+		case out[p.at] != m:
 			out[p.at] = m
 			changed = true
 		}
@@ -133,9 +134,10 @@ func settleMarks(stored []projectMark, shown []string) (out []projectMark, chang
 
 // pickIcon is the icon for a name that hashes to hash and isn't keeping
 // its own: its hash icon while no one holds it; else the first free one
-// from there that no later name hashes to, while that is free; else the
-// first free one. With none free, a re-picker keeps stored while it has a
-// color free with it, and the rest take the least used.
+// from there that no later name hashes to, while that is free. Failing
+// that, a re-picker keeps stored while it has a color free with it, and
+// the rest take the least used of the icons no later name wants, so that
+// a name alone on its hash icon always gets it.
 func pickIcon(hash, stored int, later, uses []int, hasPair func(int) bool) int {
 	if uses[hash] == 0 {
 		return hash
@@ -147,28 +149,17 @@ func pickIcon(hash, stored int, later, uses []int, hasPair func(int) bool) int {
 		}
 	}
 	n := len(uses)
-	first := -1
 	for d := range n {
-		i := (hash + d) % n
-		if uses[i] != 0 {
-			continue
-		}
-		if !wanted[i] {
+		if i := (hash + d) % n; uses[i] == 0 && !wanted[i] {
 			return i
 		}
-		if first < 0 {
-			first = i
-		}
-	}
-	if first >= 0 {
-		return first
 	}
 	if stored >= 0 && hasPair(stored) {
 		return stored
 	}
-	least := hash
+	least := hash // held, so not wanted
 	for d := range n {
-		if i := (hash + d) % n; uses[i] < uses[least] {
+		if i := (hash + d) % n; !wanted[i] && uses[i] < uses[least] {
 			least = i
 		}
 	}

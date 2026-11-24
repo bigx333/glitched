@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"hash/fnv"
+	"math/rand/v2"
 	"slices"
 	"testing"
 )
@@ -259,5 +261,141 @@ func TestAProjectsHashMarkIsAsItWas(t *testing.T) {
 	p := &project{noProject: true}
 	if icon, color := p.markNames(); icon != "chat-round-line" || color != "#8e8e93" {
 		t.Errorf("no project: %s %s", icon, color)
+	}
+}
+
+func TestAProjectAloneOnItsHashIconKeepsItsMarkPastEight(t *testing.T) {
+	// glitched, mygo and pstack-t3 hash to wind, site and bot to fast-tier;
+	// the rest are alone on theirs.
+	shown := []string{"glitched", "mygo", "pstack-t3", "openbot", "fiona-voice", "b", "site", "tools", "bot"}
+	out, _ := settleMarks(nil, shown)
+	for _, want := range []projectMark{
+		{"tools", "global", "#8b5cf6"},
+		{"openbot", "phone", "#22c55e"},
+		{"fiona-voice", "code", "#ec4899"},
+		{"b", "magic-stick-3", "#8b5cf6"},
+		{"glitched", "wind", "#ec4899"},
+	} {
+		if m := markOf(t, out, want.Name); m != want {
+			t.Errorf("%s is %v; want %v", want.Name, m, want)
+		}
+	}
+	distinctPairs(t, out, shown)
+	steady(t, out, shown)
+}
+
+func TestAMarkThisVersionDoesNotKnowHoldsTheIconItIsDrawnWith(t *testing.T) {
+	// openbot is drawn on its hash phone, which aaa, seen first, has too.
+	// q1 folder, q3 magic-stick-3, q4 terminal, q5 code, q6 fast-tier and
+	// q7 wind are alone on their hash icons; sparky hashes to wind.
+	stored := []projectMark{{"aaa", "phone", "#0ea5e9"}, {"openbot", "rocket", "#22c55e"}}
+	eight := []string{"aaa", "openbot", "q1", "q3", "q4", "q5", "q6", "q7"}
+	for _, shown := range [][]string{eight, append(slices.Clone(eight), "sparky")} {
+		out, _ := settleMarks(stored, shown)
+		if out[0] != stored[0] || out[1] != stored[1] {
+			t.Errorf("%v: stored marks moved: %v", shown, out)
+		}
+		by := marksByName(out)
+		icons := map[string]string{}
+		for _, n := range shown {
+			icon := by[n].Icon
+			if o, ok := icons[icon]; ok && n != "openbot" && o != "openbot" {
+				t.Errorf("%v: %s and %s are both drawn on %s", shown, o, n, icon)
+			}
+			icons[icon] = n
+		}
+		if want := min(len(shown)-1, 8); len(icons) != want {
+			t.Errorf("%v: %d icons drawn; want %d", shown, len(icons), want)
+		}
+		steady(t, out, shown)
+	}
+}
+
+// hashOf is name's hash pick, worked out here and not by hashMark.
+func hashOf(name string) projectMark {
+	h := fnv.New32a()
+	h.Write([]byte(name))
+	n := h.Sum32()
+	return projectMark{name, projectIcons[n%8], projectColors[n/7%7]}
+}
+
+func TestMarksSettleForAnySetOfProjects(t *testing.T) {
+	r := rand.New(rand.NewPCG(281, 2026))
+	pool := names(90)
+	randomNames := func(n int) []string {
+		p := slices.Clone(pool)
+		r.Shuffle(len(p), func(i, j int) { p[i], p[j] = p[j], p[i] })
+		return p[:n]
+	}
+	for iter := range 2000 {
+		shown := randomNames(r.IntN(71))
+		var stored []projectMark
+		if r.IntN(3) > 0 {
+			stored, _ = settleMarks(nil, randomNames(r.IntN(30)))
+			for range r.IntN(3) {
+				stored = append(stored, projectMark{pool[r.IntN(len(pool))], projectIcons[r.IntN(8)], projectColors[r.IntN(7)]})
+			}
+			for i := range stored {
+				switch r.IntN(12) {
+				case 0:
+					stored[i].Icon = "rocket"
+				case 1:
+					stored[i].Color = "#123456"
+				}
+			}
+		}
+		before := slices.Clone(stored)
+		out, _ := settleMarks(stored, shown)
+		if !slices.Equal(stored, before) {
+			t.Fatalf("%d: stored was changed", iter)
+		}
+		hasFrozen := false
+		for _, m := range stored {
+			if slices.Contains(shown, m.Name) && frozen(m) {
+				hasFrozen = true
+			}
+		}
+		by := marksByName(out)
+
+		if len(shown) <= 8 && !hasFrozen {
+			icons := map[string]bool{}
+			for _, n := range shown {
+				icons[by[n].Icon] = true
+			}
+			if len(icons) != len(shown) {
+				t.Fatalf("%d: %v drawn on %d icons", iter, shown, len(icons))
+			}
+		}
+		if again, changed := settleMarks(out, shown); changed || !slices.Equal(again, out) {
+			t.Fatalf("%d: settling %v again changed it to %v", iter, out, again)
+		}
+		p := slices.Clone(shown)
+		r.Shuffle(len(p), func(i, j int) { p[i], p[j] = p[j], p[i] })
+		if other, _ := settleMarks(stored, p); !slices.Equal(other, out) {
+			t.Fatalf("%d: the order of %v changed the marks", iter, shown)
+		}
+		if len(stored) == 0 {
+			hashed := map[string]int{}
+			for _, n := range shown {
+				hashed[hashOf(n).Icon]++
+			}
+			for _, n := range shown {
+				if want := hashOf(n); hashed[want.Icon] == 1 && by[n] != want {
+					t.Fatalf("%d: %s alone on its hash icon is %v; want %v", iter, n, by[n], want)
+				}
+			}
+		}
+
+		// New names move none of those seen before.
+		more := slices.Clone(shown)
+		for _, n := range randomNames(r.IntN(10)) {
+			if !slices.ContainsFunc(out, func(m projectMark) bool { return m.Name == n }) {
+				more = append(more, n)
+			}
+		}
+		grown, _ := settleMarks(out, more)
+		if !slices.Equal(grown[:len(out)], out) {
+			t.Fatalf("%d: adding names to %v moved %v", iter, out, grown[:len(out)])
+		}
 	}
 }
