@@ -91,11 +91,38 @@ func (a *app) continueAll(ts []thread) {
 // are live. One gone, or no longer uncertain before its turn, as the user
 // continued or stopped it meanwhile, is dropped, as is one asked on a log
 // the engine has since replaced: what it knew of that log's runs is moot.
+// Its place is the engine's, whichever route reaches it: one on a route
+// found to duplicate another moves to that one.
 func (a *app) paceContinues() {
-	busy := map[*client.Env]int{}
+	envs := a.backend.Envs()
+	for i := range a.continues {
+		j := &a.continues[i]
+		if _, dup := j.env.Status.(client.Duplicate); !dup {
+			continue
+		}
+		if k := slices.IndexFunc(envs, func(e *client.Env) bool {
+			_, dup := e.Status.(client.Duplicate)
+			return e != j.env && e.ID == j.env.ID && !dup && e.Log() == j.log
+		}); k >= 0 {
+			j.env = envs[k]
+		}
+	}
+	busy := map[api.ID]int{}
 	a.continues = slices.DeleteFunc(a.continues, func(j continuing) bool {
+		if !slices.Contains(envs, j.env) {
+			return true
+		}
+		// One whose engine shows through another route, or none yet, waits
+		// for that route's snapshot: its place is the engine's still.
+		log := j.env.Log()
+		if _, dup := j.env.Status.(client.Duplicate); dup || log.IsZero() {
+			if !j.sent.IsZero() {
+				busy[j.env.ID]++
+			}
+			return false
+		}
 		th := j.env.Threads[j.thread]
-		if log := j.env.Log(); th == nil || !slices.Contains(a.backend.Envs(), j.env) || !log.IsZero() && log != j.log {
+		if th == nil || log != j.log {
 			return true
 		}
 		t := thread{j.env, th}
@@ -103,7 +130,7 @@ func (a *app) paceContinues() {
 			return !continuable(t)
 		}
 		if j.live(t) {
-			busy[j.env]++
+			busy[j.env.ID]++
 			return false
 		}
 		return true
@@ -111,10 +138,10 @@ func (a *app) paceContinues() {
 	for i := range a.continues {
 		// One on an engine offline waits for it to come back.
 		_, online := a.continues[i].env.Status.(client.Online)
-		if j := &a.continues[i]; online && j.sent.IsZero() && busy[j.env] < continuesAtOnce {
+		if j := &a.continues[i]; online && j.sent.IsZero() && busy[j.env.ID] < continuesAtOnce {
 			t := thread{j.env, j.env.Threads[j.thread]}
 			j.sent, j.replaces = a.continueRun(t), t.View.Turn.Run
-			busy[j.env]++
+			busy[j.env.ID]++
 		}
 	}
 }
