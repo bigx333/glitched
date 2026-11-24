@@ -119,11 +119,16 @@ type lingering struct {
 	*fake.Adapter
 	closing, release chan struct{}
 	once             sync.Once
+	plays            int // events of a turn played before it works on; 0 is 2, -1 every one
 }
 
 func (s *lingering) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
 	g, err := s.Adapter.Open(ctx, spec)
-	return &lingeringAgent{Agent: g, s: s, left: 2}, err
+	left := s.plays
+	if left == 0 {
+		left = 2
+	}
+	return &lingeringAgent{Agent: g, s: s, left: left}, err
 }
 
 type lingeringAgent struct {
@@ -137,7 +142,9 @@ func (g *lingeringAgent) Next(ctx context.Context) (provider.Event, error) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	g.left--
+	if g.left > 0 {
+		g.left--
+	}
 	return g.Agent.Next(ctx)
 }
 
@@ -166,10 +173,48 @@ func TestAwakeUntilADeletedAgentCloses(t *testing.T) {
 		t.Fatalf("told %v with the deleted thread's agent still closing, want [true]", got)
 	}
 	close(ad.release)
-	for deadline := time.Now().Add(10 * time.Second); !slices.Equal(h.all(), []bool{true, false}); {
+	toldAtLast(t, h, []bool{true, false})
+}
+
+// toldAtLast waits for h to have told want.
+func toldAtLast(t *testing.T, h *heard, want []bool) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); !slices.Equal(h.all(), want); time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatalf("told %v once the agent closed, want [true false]", h.all())
+			t.Fatalf("told %v, want %v", h.all(), want)
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// An agent whose turn completed works no more, even as its close drags.
+func TestAwakeNotForACompletedAgentClosing(t *testing.T) {
+	h := &heard{}
+	ad := &lingering{Adapter: fake.New(fake.Turn(false)), closing: make(chan struct{}), release: make(chan struct{}), plays: -1}
+	n := awakeHost(t, dbPath(t), ad, h)
+	t.Cleanup(func() { close(ad.release) })
+	thread := newThread(t, n.h)
+	submit(t, n.h, thread, dispatch("go", api.StartNow))
+	until(t, n.h, thread, "turn end", idle)
+	<-ad.closing
+	toldAtLast(t, h, []bool{true, false})
+}
+
+// An agent whose thread is deleted as the provider opens it counts as
+// working until the open gives up and the agent closes.
+func TestAwakeUntilADeletedStartCloses(t *testing.T) {
+	h := &heard{}
+	held := fake.New(fake.Turn(false))
+	held.HoldStart = true
+	ad := &lingering{Adapter: held, closing: make(chan struct{}), release: make(chan struct{})}
+	n := awakeHost(t, dbPath(t), ad, h)
+	thread := newThread(t, n.h)
+	submit(t, n.h, thread, dispatch("go", api.StartNow))
+	until(t, n.h, thread, "the agent starting", func(api.Thread) bool { return held.Starts() == 1 })
+	submit(t, n.h, thread, api.ThreadDelete{})
+	<-ad.closing
+	if got := h.all(); !slices.Equal(got, []bool{true}) {
+		t.Fatalf("told %v with the deleted thread's agent still closing, want [true]", got)
+	}
+	close(ad.release)
+	toldAtLast(t, h, []bool{true, false})
 }

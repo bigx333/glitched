@@ -81,9 +81,7 @@ func (m *Manager) Configure(change func(*daemon.Config)) error {
 	was.CompactBeforeExpire = cfg.CompactBeforeExpire
 	was.KeepAwake = cfg.KeepAwake
 	if reflect.DeepEqual(cfg, was) && m.embedded != nil {
-		m.embedded.SetLimits(cfg.Children)
-		m.embedded.SetIdleCompaction(cfg.CompactBeforeExpireEnabled())
-		m.embedded.SetKeepAwake(cfg.KeepAwakeEnabled())
+		applyLive(m.embedded, cfg)
 	} else {
 		m.Restart()
 	}
@@ -158,8 +156,21 @@ func (m *Manager) newLocal() *local {
 			m.restarting, m.again = false, false
 			if again {
 				m.Restart()
+				return
+			}
+			// What the engine applies as it runs may have changed since it
+			// read engine.json, as the user can change it while it starts.
+			if cfg, err := daemon.Defaults(l.dir); embedded && err == nil {
+				applyLive(d, cfg)
 			}
 		})
 	}
 	return l
+}
+
+// applyLive applies what of cfg d applies as it runs.
+func applyLive(d *daemon.Daemon, cfg daemon.Config) {
+	d.SetLimits(cfg.Children)
+	d.SetIdleCompaction(cfg.CompactBeforeExpireEnabled())
+	d.SetKeepAwake(cfg.KeepAwakeEnabled())
 }
