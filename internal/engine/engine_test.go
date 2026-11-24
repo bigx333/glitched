@@ -694,3 +694,26 @@ func TestAReplaceNamesTheRunItReplaces(t *testing.T) {
 		t.Fatalf("a replace of a run that isn't uncertain: %v, want rejected", err)
 	}
 }
+
+// A Continue of a run the user's stops left uncertain is their go-ahead,
+// as a message is: it runs first, and what the stop held runs after it.
+func TestAContinueReleasesWhatTheStopHeld(t *testing.T) {
+	f, run := running(t)
+	held := f.must(dispatch("held", api.AfterActive))
+	f.must(api.TurnInterrupt{})
+	f.observe(engine.InterruptSent{Run: run})
+	f.must(api.TurnInterrupt{})
+	if f.th.Live() == nil || f.th.Live().State != engine.RunUncertain || f.state(held) != engine.QueueHeld {
+		t.Fatalf("after two stops: live %+v, the message %v; want the run uncertain, the message held", f.th.Live(), f.state(held))
+	}
+	cont, effects, err := f.submit(api.MessageDispatch{Text: "continue", Mode: api.RestartActive, Replaces: run})
+	if s, ok := started(effects); err != nil || !ok || s.Run != cont {
+		t.Fatalf("the continue: %+v, %v, %v; want its turn started", s, ok, err)
+	}
+	if f.state(held) != engine.QueueReady {
+		t.Fatalf("the held message is %v after the continue, want ready behind it", f.state(held))
+	}
+	if s, ok := started(f.see(engine.Ended{Run: cont, Outcome: api.OutcomeCompleted})); !ok || s.Run != held {
+		t.Fatalf("the continue ended and started %+v, %v; want the held message's turn", s, ok)
+	}
+}
