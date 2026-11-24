@@ -1,10 +1,7 @@
 package bundled_test
 
 import (
-	"encoding/json"
-	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -14,24 +11,23 @@ import (
 )
 
 // skillsHeader is the built-in Skills plugin on its own host, showing a
-// thread's header, whose engine is played by the test: it answers
-// skills.list later, as the app does, with list or err.
+// thread's header whose record holds the skills its engine said.
 type skillsHeader struct {
-	t   *testing.T
-	h   *plugins.Host
-	s   *plugins.Session
-	q   chan func()
-	ctx map[string]any
-
-	mu    sync.Mutex
-	list  api.SkillList
-	err   error
-	asked []string // the threads skills.list was asked for
+	t       *testing.T
+	h       *plugins.Host
+	s       *plugins.Session
+	q       chan func()
+	ctx     map[string]any
+	version int
+	compact bool
+	effects []string // the app calls the plugin made, by type
 }
 
-func openSkills(t *testing.T, list api.SkillList, compact bool) *skillsHeader {
+// openSkills shows the plugin a thread's header whose engine said list,
+// or nothing yet with nil.
+func openSkills(t *testing.T, list *api.SkillList, compact bool) *skillsHeader {
 	t.Helper()
-	k := &skillsHeader{t: t, q: make(chan func(), 1024), list: list}
+	k := &skillsHeader{t: t, q: make(chan func(), 1024), compact: compact}
 	fsys, release := signedCopy(t, "skills")
 	k.h = plugins.Open(t.TempDir(), plugins.Options{
 		Post:        func(fn func()) { k.q <- fn },
@@ -39,51 +35,43 @@ func openSkills(t *testing.T, list api.SkillList, compact bool) *skillsHeader {
 		Bundled:     fsys,
 		ReleaseKeys: []string{release},
 		CallTimeout: callTimeout,
-		Do:          k.do,
+		Do: func(_ string, e plugins.Effect) (any, error) {
+			k.effects = append(k.effects, e.Type)
+			return nil, nil
+		},
 	})
 	t.Cleanup(k.h.Close)
 	k.s = k.h.App("skills")
 	if k.s == nil {
 		t.Fatalf("Skills doesn't run: %+v", k.h.Installed())
 	}
-	k.ctx = map[string]any{"id": "t1", "title": "Fix the flaky test", "workspace": t.TempDir(), "local": true}
-	k.s.SetItems("skills", []plugins.PlaceItem{{Key: "t1", Version: "1", Context: k.ctx, Compact: compact}})
-	k.settle()
+	k.show(list)
 	return k
 }
 
-func (k *skillsHeader) do(_ string, e plugins.Effect) (any, error) {
-	if e.Type != "skills.list" {
-		k.t.Errorf("the plugin asked the app for %s", e.Type)
-		return nil, nil
+// show has the header's record say list, as the engine's answer does.
+func (k *skillsHeader) show(list *api.SkillList) {
+	k.t.Helper()
+	k.version++
+	k.ctx = map[string]any{"id": "t1", "title": "Fix the flaky test", "workspace": "/work/widgets", "local": true}
+	if list != nil {
+		k.ctx["skills"] = list
 	}
-	var q struct{ Thread string }
-	json.Unmarshal(e.Args, &q)
-	k.mu.Lock()
-	k.asked = append(k.asked, q.Thread)
-	list, err := k.list, k.err
-	k.mu.Unlock()
-	return plugins.Pending(func(done func(any, error)) {
-		k.q <- func() { done(list, err) }
-	}), nil
-}
-
-func (k *skillsHeader) answer(list api.SkillList, err error) {
-	k.mu.Lock()
-	k.list, k.err = list, err
-	k.mu.Unlock()
+	k.s.SetItems("skills", []plugins.PlaceItem{{Key: "t1", Version: string(rune('0' + k.version)), Context: k.ctx, Compact: k.compact}})
+	k.settle()
 }
 
 func (k *skillsHeader) settle() {
 	k.t.Helper()
 	deadline := time.After(30 * time.Second)
+	want := string(rune('0' + k.version))
 	for quiet := 0; quiet < 3; {
 		select {
 		case fn := <-k.q:
 			fn()
 			quiet = 0
 		case <-time.After(20 * time.Millisecond):
-			if k.h.Idle() && k.s.Answered("skills", "t1") != "" {
+			if k.h.Idle() && k.s.Answered("skills", "t1") == want {
 				quiet++
 			}
 		case <-deadline:
@@ -92,6 +80,9 @@ func (k *skillsHeader) settle() {
 	}
 	if err := k.h.Failed("skills"); err != nil {
 		k.t.Fatalf("the plugin failed: %v", err)
+	}
+	if len(k.effects) > 0 {
+		k.t.Fatalf("the plugin asked the app for %q: what it draws is in the header's record", k.effects)
 	}
 }
 
@@ -127,16 +118,10 @@ func (k *skillsHeader) click(handler string) {
 	k.settle()
 }
 
-func (k *skillsHeader) focus() {
-	k.t.Helper()
-	k.s.Notify(plugins.AppEvent{Kind: "app", Type: "window.focused", Data: map[string]bool{"focused": true}})
-	k.settle()
-}
-
-var clash = api.SkillList{
+var clash = &api.SkillList{
 	Skills: []api.Skill{
 		{Name: "deploy", Description: "Ship the app to staging.", Source: "home", Shown: "~/.glitched/skills/deploy"},
-		{Name: "review", Description: "Review the diff as this project does.", Source: "project", Shown: ".glitched/skills/review", Overrides: true},
+		{Name: "review", Description: "Review the diff as this project does.", Source: "project", Shown: "widgets/.glitched/skills/review", Overrides: true},
 	},
 	Delivery: "Claude Code: as /glitched:<name>",
 }
@@ -152,9 +137,6 @@ func TestTheSkillsPillCountsTheThreadsSkillsAndSaysWhereEachIsFrom(t *testing.T)
 	}
 	if c := v.Body.Children; len(c) != 2 || c[0].Name != "magic-stick-3" || c[0].Color != "$text.muted" || c[1].Text != "Skills 2" {
 		t.Errorf("the pill's children: %+v", c)
-	}
-	if len(k.asked) != 1 || k.asked[0] != "t1" {
-		t.Errorf("asked for the skills of %q", k.asked)
 	}
 	k.click("popover.toggle")
 	v = k.view()
@@ -173,7 +155,7 @@ func TestTheSkillsPillCountsTheThreadsSkillsAndSaysWhereEachIsFrom(t *testing.T)
 	if strings.Contains(words(deploy), "replaces yours") {
 		t.Errorf("the user's own skill says it replaces theirs: %s", words(deploy))
 	}
-	for _, want := range []string{"review|", "Project|", "replaces yours|", ".glitched/skills/review|"} {
+	for _, want := range []string{"review|", "Project|", "replaces yours|", "widgets/.glitched/skills/review|"} {
 		if !strings.Contains(words(review), want) {
 			t.Errorf("review's row doesn't say %q: %s", want, words(review))
 		}
@@ -187,28 +169,23 @@ func TestTheSkillsPillCountsTheThreadsSkillsAndSaysWhereEachIsFrom(t *testing.T)
 	}
 }
 
-// none is the engine's answer for a thread with no skills.
-var none = api.SkillList{Skills: []api.Skill{}}
-
-// A thread with no skills, or whose engine can't say, as one too old for
-// the call, shows no pill, and the plugin goes on.
+// A thread whose engine hasn't said, or says it has no skills, shows no
+// pill.
 func TestNoSkillsShowNoPill(t *testing.T) {
-	k := openSkills(t, none, false)
+	k := openSkills(t, nil, false)
+	if k.view() != nil || !k.s.AnsweredNull("skills", "t1") {
+		t.Errorf("a thread whose engine hasn't said: %q", k.text())
+	}
+	k.show(&api.SkillList{Skills: []api.Skill{}})
 	if k.view() != nil || !k.s.AnsweredNull("skills", "t1") {
 		t.Errorf("a thread with no skills: %q", k.text())
-	}
-	k.answer(none, errors.New("the engine is too old to say"))
-	k.focus()
-	if k.view() != nil {
-		t.Errorf("a thread whose engine can't say: %q", k.text())
 	}
 }
 
 // A skill no agent gets tints the pill and says why, under Skipped, even
-// where it is the thread's only one.
+// where it is the thread's only one and the answer's skills are null.
 func TestASkippedSkillTintsThePillAndSaysWhy(t *testing.T) {
-	k := openSkills(t, api.SkillList{
-		Skills:   []api.Skill{},
+	k := openSkills(t, &api.SkillList{
 		Skipped:  []api.SkippedSkill{{Source: "project", Name: "broken", Why: "SKILL.md has no description"}},
 		Delivery: "Codex: as glitched:<name> in its skill list",
 	}, false)
@@ -228,26 +205,15 @@ func TestASkippedSkillTintsThePillAndSaysWhy(t *testing.T) {
 	}
 }
 
-// Coming back to the window reads the skills again, as a skill added
-// while away; a read that fails keeps what the pill showed.
-func TestFocusingTheWindowReadsTheSkillsAgain(t *testing.T) {
-	one := api.SkillList{Skills: clash.Skills[:1], Delivery: clash.Delivery}
-	k := openSkills(t, one, false)
+// The pill follows the header's record as the engine says more.
+func TestThePillFollowsWhatTheEngineSays(t *testing.T) {
+	k := openSkills(t, &api.SkillList{Skills: clash.Skills[:1], Delivery: clash.Delivery}, false)
 	if v := k.view(); v == nil || v.Body.Label != "Skills 1" {
 		t.Fatalf("the pill: %q", k.text())
 	}
-	k.answer(clash, nil)
-	k.focus()
+	k.show(clash)
 	if v := k.view(); v == nil || v.Body.Label != "Skills 2" {
-		t.Errorf("after the window came back: %q", k.text())
-	}
-	k.answer(none, errors.New("the engine is gone"))
-	k.focus()
-	if v := k.view(); v == nil || v.Body.Label != "Skills 2" {
-		t.Errorf("after a read that failed: %q", k.text())
-	}
-	if len(k.asked) != 3 {
-		t.Errorf("asked %d times, want once shown and once each focus", len(k.asked))
+		t.Errorf("after the engine said more: %q", k.text())
 	}
 }
 

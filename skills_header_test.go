@@ -108,3 +108,18 @@ func TestSkillsShot(t *testing.T) {
 		f.Close()
 	}
 }
+
+// A skill added while the window was away shows once it is back: the
+// header asks the engine again for every thread it shows.
+func TestComingBackToTheWindowReadsTheSkillsAgain(t *testing.T) {
+	var home string
+	h := skillsHeader(t, tempDir(t), t.TempDir(), func(h, project string) {
+		home = h
+		clashingSkills(t)(h, project)
+	}, "Skills 2")
+	writeSkill(t, home, "release-notes", "Write the release notes.")
+	h.tt.SetWindowActive(false)
+	h.tt.Frame()
+	h.tt.SetWindowActive(true)
+	h.until("the new skill's pill", func() bool { h.tt.Frame(); return h.tt.HasText("Skills 3") })
+}

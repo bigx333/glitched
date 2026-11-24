@@ -1,31 +1,39 @@
 // The skills Glitched gives a thread's agent, in the thread's header, as
-// the engine of the thread's machine finds them. A thread's List is what
-// glitched.skills.list answers:
+// the engine of the thread's machine last said them: the header's record
+// holds them as glitched.skills.list answers,
 //
 //   { skills: [{ name, description, source, shown, overrides }], skipped: [{ source, name, why }], delivery }
 //
-// source is "home", the user's own, or "project". The pill shows while a
-// thread has a skill or a skipped one; its popover lists them.
+// and leaves them out till the engine says. source is "home", the user's
+// own, or "project". The pill shows while a thread has a skill or a
+// skipped one; its popover lists them.
 
 const SOURCES = { home: "Yours", project: "Project" };
 
 export function init() {
-  return { state: { lists: {}, shown: null, open: null } };
+  return { state: { open: null } };
 }
 
 export function place({ state, items }) {
   return items.map(({ key, context, compact }) => {
-    const list = context?.id ? state.lists[context.id] : null;
-    if (!list || list.skills.length + (list.skipped?.length ?? 0) === 0) return null;
+    const list = skillsOf(context);
+    if (!list || list.skills.length + list.skipped.length === 0) return null;
     return pill(list, state.open === key, compact);
   });
+}
+
+// skillsOf is the header's skills with every list there, or null before
+// the engine says.
+function skillsOf(context) {
+  const s = context?.skills;
+  return s ? { skills: s.skills ?? [], skipped: s.skipped ?? [], delivery: s.delivery ?? "" } : null;
 }
 
 // pill is a thread's skills, by count; compact, it keeps to its icon,
 // and its label names it to assistive tools.
 function pill(list, open, compact) {
   const n = list.skills.length;
-  const skipped = list.skipped?.length ?? 0;
+  const skipped = list.skipped.length;
   return {
     type: "button",
     id: "skills",
@@ -53,7 +61,7 @@ function popover(list) {
   const out = [{ type: "text", text: "Skills", style: "strong" }];
   if (list.skills.length === 0) out.push({ type: "text", text: "None for this thread.", style: "muted" });
   for (const s of list.skills) out.push(skill(s));
-  if (list.skipped?.length) {
+  if (list.skipped.length) {
     out.push({ type: "text", text: "Skipped", style: "strong" });
     for (const s of list.skipped) out.push(skipped(s));
   }
@@ -88,29 +96,7 @@ function skipped(s) {
   };
 }
 
-// read is state with the skills of the thread shown read again. A read
-// that fails, as of an engine too old for the call, keeps what was read.
-async function read(state) {
-  const thread = state.shown?.thread;
-  if (!thread) return { state };
-  const list = await glitched.skills.list(thread).catch(() => null);
-  return list ? { state: { ...state, lists: { ...state.lists, [thread]: list } } } : { state };
-}
-
-export async function update({ state, event }) {
-  if (event.kind === "app") {
-    switch (event.type) {
-      case "place.shown": {
-        const thread = event.data.context?.id;
-        return read({ ...state, shown: thread ? { key: event.data.key, thread } : null, open: null });
-      }
-      case "place.hidden":
-        return { state: { ...state, shown: state.shown?.key === event.data.key ? null : state.shown, open: state.open === event.data.key ? null : state.open } };
-      case "window.focused":
-        return event.data.focused ? read(state) : {};
-    }
-    return {};
-  }
+export function update({ state, event }) {
   if (event.kind !== "ui" || !event.place) return {};
   switch (event.handler) {
     case "popover.toggle":
