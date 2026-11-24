@@ -130,6 +130,7 @@ type body struct {
 	Cwd       string `json:"cwd,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 	Args      string `json:"args,omitempty"`
+	Session   bool   `json:"session,omitempty"`
 }
 
 func (b body) json() json.RawMessage {

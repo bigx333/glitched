@@ -87,6 +87,7 @@ type ask struct {
 	questions api.Questions   // what the card shows, for a question
 	wanted    json.RawMessage // the permissions asked, for a permissions request
 	deny      string          // the decision that denies a command, of those Codex offers
+	session   bool            // Codex offers to allow such calls for its session
 	state     askState
 }
 
@@ -106,6 +107,7 @@ var errNoAsk = errors.New("codex: Codex made no such request")
 const (
 	toolApproval = "mcp_tool_call_approval"
 	toolAccept   = "Allow"
+	toolSession  = "Allow for this session"
 	toolRefuse   = "Cancel"
 )
 
@@ -836,14 +838,17 @@ func (g *Agent) request(m message) {
 			b.Reason = strings.TrimSpace(b.Reason + "\n" + extra)
 		}
 		a.deny = denial(r.Decisions)
+		b.Session = slices.ContainsFunc(r.Decisions, func(d json.RawMessage) bool { return string(bytes.TrimSpace(d)) == `"acceptForSession"` })
 	case "item/fileChange/requestApproval":
-		b = body{Operation: "edit", Reason: r.Reason}
+		// Codex keeps a grant for the session only for a change it asks
+		// about with no reason; one with a reason it asks again about.
+		b = body{Operation: "edit", Reason: r.Reason, Session: r.Reason == ""}
 		if it := g.items[r.ItemID]; it != nil {
 			b.Path = strings.Join(it.paths(g.spec.Workspace), ", ")
 		}
 	case "item/permissions/requestApproval":
 		a.wanted = r.Permissions
-		b = body{Operation: "get more access", Reason: r.Reason, Args: argsText(r.Permissions)}
+		b = body{Operation: "get more access", Reason: r.Reason, Args: argsText(r.Permissions), Session: true}
 	case "mcpServer/elicitation/request":
 		var schema struct {
 			Properties map[string]json.RawMessage `json:"properties"`
@@ -860,6 +865,9 @@ func (g *Agent) request(m message) {
 			q := r.Questions[0]
 			a.tool, a.ids = true, []string{q.ID}
 			b = body{Operation: "use a tool", Reason: q.Question}
+			for _, o := range q.Options {
+				b.Session = b.Session || o.Label == toolSession
+			}
 			if it := g.items[strings.TrimPrefix(strings.TrimPrefix(q.ID, toolApproval), "_")]; it != nil {
 				b.Operation, b.Args = "use "+it.Server+": "+it.Tool, argsText(it.Arguments)
 			}
@@ -895,6 +903,7 @@ func (g *Agent) request(m message) {
 		g.queueLocked(provider.RequestOpened{ID: id, Kind: api.KindQuestion, Body: raw})
 		return
 	}
+	a.session = b.Session
 	g.asked++
 	id := askID(g.asked)
 	g.asks[id] = a
@@ -914,10 +923,10 @@ func (g *Agent) withdrawLocked(reason string) {
 	}
 }
 
-// respond sends a request's one reply. An approval allows only this once;
-// Glitched never picks an answer that lasts past the call. A request
-// already answered takes nothing more, and one Codex stopped waiting on
-// takes no answer.
+// respond sends a request's one reply. An approval allows this once, or
+// for Codex's session where Codex offers that; Glitched never picks an
+// answer that lasts past the session. A request already answered takes
+// nothing more, and one Codex stopped waiting on takes no answer.
 func (g *Agent) respond(ctx context.Context, r provider.Respond) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -953,36 +962,48 @@ func (g *Agent) respond(ctx context.Context, r provider.Respond) error {
 		reply = map[string]any{"answers": out}
 	} else {
 		var answer struct {
-			Allow bool `json:"allow"`
+			Allow   bool `json:"allow"`
+			Session bool `json:"session"`
 		}
 		if err := json.Unmarshal(r.Answer, &answer); err != nil {
 			return fmt.Errorf("codex: an answer Codex can't take: %w", err)
 		}
-		reply = approve(a, answer.Allow)
+		session := answer.Allow && answer.Session
+		if session && !a.session {
+			return errors.New("codex: Codex offers no way to allow this for the session. Allow it once, or deny it.")
+		}
+		reply = approve(a, answer.Allow, session)
 	}
 	a.state = answered
 	return g.p.conn.reply(a.rpc, reply)
 }
 
-// approve is the answer to an approval request: allow or deny, once.
-func approve(a *ask, allow bool) any {
+// approve is the answer to an approval request: allow or deny, once, or
+// allow for the session.
+func approve(a *ask, allow, session bool) any {
 	switch {
 	case a.tool:
 		pick := map[bool]string{true: toolAccept, false: toolRefuse}[allow]
+		if session {
+			pick = toolSession
+		}
 		return map[string]any{"answers": map[string]any{a.ids[0]: map[string]any{"answers": []string{pick}}}}
 	case a.method == "item/permissions/requestApproval":
 		granted := json.RawMessage("{}")
 		if allow && len(a.wanted) > 0 && string(a.wanted) != "null" {
 			granted = a.wanted
 		}
-		return map[string]any{"permissions": granted, "scope": "turn"}
+		return map[string]any{"permissions": granted, "scope": map[bool]string{true: "session", false: "turn"}[session]}
 	case a.method == "mcpServer/elicitation/request":
 		if allow {
 			return map[string]any{"action": "accept", "content": map[string]any{}}
 		}
 		return map[string]any{"action": "decline", "content": nil}
 	}
-	if !allow && a.deny != "" {
+	switch {
+	case session:
+		return map[string]any{"decision": "acceptForSession"}
+	case !allow && a.deny != "":
 		return map[string]any{"decision": a.deny}
 	}
 	return map[string]any{"decision": map[bool]string{true: "accept", false: "decline"}[allow]}

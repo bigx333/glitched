@@ -124,14 +124,20 @@ const (
 	// AllowAlways allows the call, and has the agent allow such calls
 	// from now on by its own rules: only where the request offers it.
 	AllowAlways
+	// AllowSession allows the call, and has the agent allow such calls
+	// until its session ends: only where the request offers it.
+	AllowSession
 )
 
 // Respond answers an approval with {"allow":true} or {"allow":false}, as
 // the CLI does.
 func (m *Manager) Respond(e *Env, thread, request api.ID, a Answer) api.ID {
 	answer, _ := json.Marshal(map[string]bool{"allow": a == AllowOnce})
-	if a == AllowAlways {
+	switch a {
+	case AllowAlways:
 		answer, _ = json.Marshal(map[string]bool{"allow": true, "always": true})
+	case AllowSession:
+		answer, _ = json.Marshal(map[string]bool{"allow": true, "session": true})
 	}
 	return m.respond(e, thread, request, answer)
 }

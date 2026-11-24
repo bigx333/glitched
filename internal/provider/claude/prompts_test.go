@@ -345,10 +345,11 @@ func stdin(t *testing.T) func() map[string][]reply {
 }
 
 type reply struct {
-	subtype      string // the control_response's
-	Behavior     string
-	UpdatedInput json.RawMessage
-	Message      string
+	subtype            string // the control_response's
+	Behavior           string
+	UpdatedInput       json.RawMessage
+	UpdatedPermissions json.RawMessage
+	Message            string
 }
 
 // checkReplies fails unless Claude Code got one reply to each request the

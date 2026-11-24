@@ -22,6 +22,9 @@ type canUseTool struct {
 	Input          json.RawMessage `json:"input"`
 	BlockedPath    string          `json:"blocked_path"`
 	DecisionReason string          `json:"decision_reason"` // may carry ANSI escapes
+	// Suggestions are Claude Code's own permission updates that would
+	// stop it asking about such calls, each to the settings it names.
+	Suggestions []json.RawMessage `json:"permission_suggestions"`
 }
 
 // prompt is a request Claude Code waits on. It gets one reply: the first
@@ -30,7 +33,10 @@ type prompt struct {
 	kind      string          // api.KindApproval or api.KindQuestion
 	input     json.RawMessage // the tool's input, which an allow sends back
 	questions api.Questions   // a question's, by position, as the card shows them
-	state     promptState
+	// session is Claude Code's suggestions, each kept to the session, that
+	// an allow for the session sends back; none where it suggests none.
+	session []map[string]json.RawMessage
+	state   promptState
 }
 
 type promptState int
@@ -61,7 +67,17 @@ func (t *turn) ask(id string, r canUseTool) (provider.RequestOpened, *prompt) {
 		Reason      string `json:"reason,omitempty"`
 		Args        string `json:"args,omitempty"`
 		Unsandboxed bool   `json:"unsandboxed,omitempty"`
+		Session     bool   `json:"session,omitempty"`
 	}
+	var session []map[string]json.RawMessage
+	for _, s := range r.Suggestions {
+		var u map[string]json.RawMessage
+		if json.Unmarshal(s, &u) == nil && u != nil {
+			u["destination"] = json.RawMessage(`"session"`)
+			session = append(session, u)
+		}
+	}
+	b.Session = len(session) > 0
 	var input map[string]any
 	json.Unmarshal(r.Input, &input)
 	tl, ok := tools[r.ToolName]
@@ -88,7 +104,7 @@ func (t *turn) ask(id string, r canUseTool) (provider.RequestOpened, *prompt) {
 		b.Path = t.rel(r.BlockedPath)
 	}
 	body, _ := json.Marshal(b)
-	return provider.RequestOpened{ID: id, Kind: api.KindApproval, Body: body}, &prompt{kind: api.KindApproval, input: r.Input}
+	return provider.RequestOpened{ID: id, Kind: api.KindApproval, Body: body}, &prompt{kind: api.KindApproval, input: r.Input, session: session}
 }
 
 // argsText is a tool's input as text, a line per field in Claude Code's
@@ -222,9 +238,14 @@ func (p *prompt) reply(id string, answer json.RawMessage) (map[string]any, error
 		}
 		return decided(id, decision), nil
 	}
-	var a struct{ Allow bool }
+	var a struct{ Allow, Session bool }
 	json.Unmarshal(answer, &a)
-	if a.Allow {
+	switch {
+	case a.Allow && a.Session && len(p.session) == 0:
+		return nil, errors.New("claude: Claude Code offers no way to allow this for the session. Allow it once, or deny it.")
+	case a.Allow && a.Session:
+		return decided(id, map[string]any{"behavior": "allow", "updatedInput": p.input, "updatedPermissions": p.session}), nil
+	case a.Allow:
 		return decided(id, map[string]any{"behavior": "allow", "updatedInput": p.input}), nil
 	}
 	return decided(id, map[string]any{"behavior": "deny", "message": deniedReason}), nil
