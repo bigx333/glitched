@@ -239,8 +239,7 @@ export async function update({ page, state, event, values }) {
         return { state: note(state, id, "Run now didn't answer: " + e.message + ". Run now tries it again.") };
       }
       host.storage.remove(key);
-      const rows = state.rows.map((r) => (r.id === id ? { ...r, lastThread: started.thread, lastState: "started", lastReason: null } : r));
-      return { state: note({ ...state, rows }, id, null) };
+      return { state: note(started.schedule ? redrawn(state, started.schedule) : state, id, null) };
     }
     case "open":
       if (thread) await glitched.threads.open(thread);
