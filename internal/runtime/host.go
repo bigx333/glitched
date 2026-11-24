@@ -142,7 +142,6 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		h.Close()
 		return nil, err
 	}
-	h.skills.clear()
 	h.wg.Add(2)
 	go h.work()
 	go h.compactLoop()
@@ -257,6 +256,7 @@ func (h *Host) follow(e api.Event) {
 		h.leaveLocked(e.Thread, b.Run)
 	case api.TurnEnded:
 		h.leaveLocked(e.Thread, b.Run)
+		h.skills.ended(e.Thread)
 	}
 }
 
@@ -313,6 +313,7 @@ func (h *Host) boot(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var survivors []api.ID // threads an agent the last engine started may still run for
 	for _, id := range threads {
 		t, err := h.store.Thread(ctx, id)
 		if err != nil {
@@ -320,6 +321,9 @@ func (h *Host) boot(ctx context.Context) error {
 		}
 		r := t.Live()
 		lease, attempted := starts[r.ID]
+		if r.State == engine.RunUncertain {
+			survivors = append(survivors, id)
+		}
 		if r.State == engine.RunUncertain || (r.State == engine.RunStarting && !attempted) {
 			continue
 		}
@@ -338,7 +342,11 @@ func (h *Host) boot(ctx context.Context) error {
 		if ok {
 			h.attach(id, h.track(r.ID, t.Model.Provider, restored.Agent))
 		}
+		if ok || failed {
+			survivors = append(survivors, id)
+		}
 	}
+	h.skills.boot(survivors)
 	return nil
 }
 
@@ -614,6 +622,7 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	}
 	spec.Skills = h.skills.stage(thread, b.Workspace, t.Project)
 	ag, err := h.providers.Open(ctx, spec)
+	h.skills.opened(thread, spec.Skills.Root, err == nil)
 	if errors.Is(err, provider.ErrDeclined) {
 		return nil, errCompactNotDue
 	}
