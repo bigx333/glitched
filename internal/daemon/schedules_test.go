@@ -121,7 +121,7 @@ func settled(runs []scheduleRun) bool {
 // writes as the engine was down: for a crash, or the minutes it missed.
 func pluginDB(t *testing.T, dir string) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(plugins.DataDir(dir), "schedules", "plugin.db"))
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(plugins.DataDir(dir), "schedules", "plugin.db")+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}
