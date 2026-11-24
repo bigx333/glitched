@@ -26,13 +26,17 @@ type entry struct {
 // its path in the tree, with slashes, whether it runs, and its bytes. It
 // returns the tree's hash: of each file's path, mode, size and sha256, by
 // path. A tree of anything but files and folders, or past the limits, is
-// refused whole, and nothing in it leads out of dir.
-func walk(dir string, visit func(rel string, exec bool, data []byte) error) (string, error) {
+// refused whole, and nothing in it leads out of dir. folder is dir as it
+// was checked: a dir that is another folder by now is refused.
+func walk(dir string, folder os.FileInfo, visit func(rel string, exec bool, data []byte) error) (string, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return "", fmt.Errorf("Glitched couldn't open it: %v", err)
 	}
 	defer root.Close()
+	if at, err := root.Stat("."); err != nil || !os.SameFile(at, folder) {
+		return "", errors.New("It was moved or replaced while Glitched read it.")
+	}
 	w := walker{root: root, visit: visit}
 	if err := w.dir(".", 0); err != nil {
 		return "", err
@@ -107,6 +111,9 @@ func (w *walker) file(p string) error {
 	is, err := f.Stat()
 	if err != nil || !os.SameFile(was, is) || !is.Mode().IsRegular() {
 		return changed
+	}
+	if st, ok := is.Sys().(*syscall.Stat_t); !ok || st.Nlink > 1 {
+		return fmt.Errorf("%s in it has another name elsewhere, a hard link, so Glitched can't tell whose it is.", rel)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, int64(maxBytes-w.bytes+1)))
 	if err != nil {
