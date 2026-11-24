@@ -217,10 +217,10 @@ func (a *app) sidebarCopy(c *ui.Context, part string, maxHeight float32, box fun
 		}
 	}
 	a.sidebarRows[part] = now
-	var reveal func(string) bool
+	var reveal func(*widget.Node, widget.ListItem) bool
 	if !a.revealing.IsZero() && a.revealing == a.selected {
-		reveal = func(thread string) bool {
-			id, err := api.ParseID(thread)
+		reveal = func(_ *widget.Node, it widget.ListItem) bool {
+			id, err := api.ParseID(it.Thread)
 			return err == nil && id == a.revealing
 		}
 	}
