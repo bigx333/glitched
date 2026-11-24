@@ -36,9 +36,11 @@ type Links func(id api.ID) (api.Link, error)
 type Env struct {
 	// Places finds the machine a remote child is placed on; nil finds none.
 	Places Places
-	// Ceiling is the most a link's thread may run at now, as its link
-	// and this engine's setting allow, before its origin's access: an
-	// error lets it run nothing. Nil is such an error.
+	// Ceiling is the most the thread may run at now when it is a link's
+	// thread or under one: the lowest of that thread's origin's access,
+	// its link's and this engine's setting, as they are at the commit. An
+	// error lets it run nothing. Nil caps a thread of this engine's own
+	// at nothing, and lets a link's thread run nothing.
 	Ceiling func() (api.Access, error)
 }
 
@@ -262,21 +264,21 @@ type decision struct {
 }
 
 // ceiling is the most the thread may run at now: any access for a
-// thread of this engine's own, and for a link's, the lowest of its
-// origin's, its link's and this engine's setting. ok is false when a
-// link's thread may run at none, as its link was revoked.
+// thread of this engine's own line, and for a link's thread or one under
+// it, the env's ceiling. ok is false when it may run at none, as the
+// link was revoked.
 func (d *decision) ceiling() (c api.Access, ok bool) {
-	if d.t.Origin == nil {
-		return api.AccessFull, true
-	}
 	if d.env.Ceiling == nil {
-		return 0, false
+		return api.AccessFull, d.t.Origin == nil
 	}
 	c, err := d.env.Ceiling()
 	if err != nil {
 		return 0, false
 	}
-	return min(c, d.t.Origin.Access), true
+	if d.t.Origin != nil {
+		c = min(c, d.t.Origin.Access)
+	}
+	return c, true
 }
 
 // under is whether access is within the thread's ceiling now.
@@ -286,10 +288,11 @@ func (d *decision) under(access api.Access) bool {
 }
 
 // runs is whether the thread may start a turn now: a link's thread once
-// its worktree is made, and while its access is within its ceiling, so
-// a message over a ceiling lowered since waits for a narrower access.
+// its worktree is made, and it or one under it while its access is
+// within its ceiling, so a message over a ceiling lowered since waits
+// for a narrower access.
 func (d *decision) runs() bool {
-	return d.t.Origin == nil || d.t.Workspace != "" && d.under(d.t.Access)
+	return (d.t.Origin == nil || d.t.Workspace != "") && d.under(d.t.Access)
 }
 
 func (d *decision) emit(b api.EventBody) error {
