@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"net/netip"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,6 +44,8 @@ func (a *app) machine(c *ui.Context) {
 	a.tokensCard(c, m)
 	a.agentsCard(c, m)
 	checkpointsCard(c, m)
+	a.linksCard(c, m)
+	a.delegatesCard(c, m)
 	if a.machineErr != "" {
 		ui.Text(c, a.machineErr).Key("action-err").FontSize(12).TextColor(palette.red)
 	}
@@ -331,10 +333,13 @@ func (a *app) localRuns() int {
 
 func (a *app) tokensCard(c *ui.Context, m client.Machine) {
 	card(c, "TOKENS", func() {
-		if len(m.Tokens) == 0 {
+		if !slices.ContainsFunc(m.Tokens, func(t daemon.Token) bool { return t.Link == nil }) {
 			ui.Text(c, "No tokens yet. A machine needs one to reach this engine.").Key("none").TextColor(palette.muted).Padding(16)
 		}
 		for _, t := range m.Tokens {
+			if t.Link != nil {
+				continue
+			}
 			ui.Row(c).Key("token "+t.Label).Padding(12, 12, 12, 16).Gap(12).AlignItems(ui.Center).ClipY().Transition(fold).Children(func() {
 				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
 					ui.Text(c, t.Label).FontWeight(500)
@@ -370,17 +375,7 @@ func (a *app) tokensCard(c *ui.Context, m client.Machine) {
 // needs to reach this one.
 func (a *app) pairedRow(c *ui.Context, m client.Machine) {
 	p := a.paired
-	addr := m.Tailnet.Serving
-	for _, l := range m.Listeners {
-		if addr != "" {
-			break
-		}
-		// Another machine can't reach this one's loopback.
-		if ap, err := netip.ParseAddrPort(l.Addr); l.Accepting && err == nil && !ap.Addr().IsLoopback() {
-			addr = l.Addr
-			break
-		}
-	}
+	addr := servingAddr(m)
 	ui.Column(c).Key("paired").Padding(14, 16).Gap(10).Background(palette.green.Alpha(0.06)).Transition(fold).Children(func() {
 		ui.Text(c, "Token for "+p.label+", shown only this once").FontWeight(500)
 		ui.Text(c, p.token).FontSize(12).Font("monospace").Selectable()
