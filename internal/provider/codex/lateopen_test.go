@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -355,6 +356,115 @@ func TestADeletedRunsCodexIsClosedAfterAGracefulRestart(t *testing.T) {
 		status, err := exec.Command("/bin/ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
 		if st := strings.TrimSpace(string(status)); err == nil && st != "" && !strings.HasPrefix(st, "Z") {
 			t.Fatalf("delete CloseAgent drained, but the marked Codex subprocess PID %d is still live (ps stat %s) and received %d Interrupts", pid, st, len(sent(t, log, "turn/interrupt")))
+		}
+	}
+}
+
+// readCheck is a context that says when its Err is first read, as the
+// adapter checks whether an answer is still wanted.
+type readCheck struct {
+	context.Context
+	read chan struct{}
+	once sync.Once
+}
+
+func (c *readCheck) Err() error {
+	err := c.Context.Err()
+	c.once.Do(func() { close(c.read) })
+	return err
+}
+
+// busyAtAnswer opens agents whose connection is busy as the host gives
+// them an answer, until release.
+type busyAtAnswer struct {
+	*Adapter
+	checked, cancelled, release chan struct{}
+}
+type busyAnswerAgent struct {
+	*Agent
+	ad *busyAtAnswer
+}
+
+func (a *busyAtAnswer) Open(ctx context.Context, s provider.SessionSpec) (provider.Agent, error) {
+	g, err := a.Adapter.Open(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+	return busyAnswerAgent{g.(*Agent), a}, nil
+}
+
+func (g busyAnswerAgent) Do(ctx context.Context, act provider.Action) error {
+	if _, ok := act.(provider.Respond); !ok {
+		return g.Agent.Do(ctx, act)
+	}
+	g.p.conn.mu.Lock()
+	go func() {
+		defer g.p.conn.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			close(g.ad.cancelled)
+			<-g.ad.release
+		case <-g.ad.release:
+		}
+	}()
+	return g.Agent.Do(&readCheck{Context: ctx, read: g.ad.checked}, act)
+}
+
+func TestAStopWhileCodexWaitsToAnswerSendsNoApproval(t *testing.T) {
+	a, log := fake(t, "command")
+	gate := &busyAtAnswer{a, make(chan struct{}), make(chan struct{}), make(chan struct{})}
+	release := sync.OnceFunc(func() { close(gate.release) })
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "runtime.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	h, err := runtime.New(ctx, st, provider.Mux{Provider: gate}, runtime.WithIdleCompaction(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { release(); h.Close() }()
+	thread := api.NewID()
+	submit := func(b api.Intent) {
+		t.Helper()
+		if _, err := h.Submit(ctx, api.Command{Target: thread, ID: api.NewID(), Body: b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wait := func(ch <-chan struct{}, why string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for %s", why)
+		}
+	}
+	submit(api.ThreadCreate{Title: "review", Workspace: t.TempDir(), Model: api.ModelRef{Provider: Provider}, Access: api.AccessAsk})
+	submit(api.MessageDispatch{Text: "run a command", Mode: api.StartNow})
+	var req api.Request
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		view, err := h.Read(ctx, api.Query{Thread: thread})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(view.Threads[0].Requests) == 1 {
+			req = view.Threads[0].Requests[0]
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Codex never asked for approval")
+		}
+	}
+	submit(api.RequestRespond{Request: req.ID, Generation: req.Generation, Answer: json.RawMessage(`{"allow":true}`)})
+	wait(gate.checked, "the adapter to check the answer is still wanted")
+	submit(api.TurnInterrupt{})
+	wait(gate.cancelled, "the Stop to cancel the answer")
+	release()
+	untilOver(t, st, thread)
+	for _, got := range answers(t, log) {
+		if compact(got) == `{"decision":"accept"}` {
+			t.Fatalf("Codex got %s after the host committed Stop", got)
 		}
 	}
 }
