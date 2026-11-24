@@ -106,16 +106,46 @@ type Controls struct {
 	// pending are the progress buttons clicked, by id, with the click's
 	// number: each shows it runs till a view answers after it.
 	pending map[string]int
-	// later are the progress buttons pressed since their last click, by
-	// id: true while each press was a later one of a double or triple
-	// click, which clicks nothing.
-	later map[string]bool
+	// press is the last press in the view: the progress button it was on,
+	// if any, and its clicks there, counted as the system counts a double
+	// or triple click's, but over again from a press on another widget;
+	// was is the one before it. tap is a later click of a double or triple
+	// click, let go on its progress button, which skips the button's next
+	// click, or none once the button was drawn let go with no click.
+	press, was multiClick
+	tap        tap
+	// busy are the boxes of the progress buttons running, as last laid
+	// out: a press on one, which it doesn't see, is still its.
+	busy map[string]ui.Rect
 	// passes counts the view's builds: a list remembers the one it was
 	// last drawn in, and an input moves only a list drawn.
 	passes int
 	// sent is the number of the last event sent, and processed of the last
 	// the plugin took before it drew the view shown.
 	sent, processed int
+}
+
+type multiClick struct {
+	id           string
+	base, clicks int
+	// let is whether it was let go on its button, a click of it, or its
+	// try while it ran.
+	let bool
+}
+
+// next is the press after p, on the progress button id, or none, that
+// the system counted the raw-th of its clicks.
+func (p multiClick) next(id string, raw int) multiClick {
+	if id != p.id || raw <= p.base || !p.let {
+		p.base = raw - 1
+	}
+	return multiClick{id: id, base: p.base, clicks: raw - p.base}
+}
+
+type tap struct {
+	id    string
+	n     int
+	ended bool
 }
 
 type control struct {
@@ -136,7 +166,8 @@ type control struct {
 // view syncs them as any new view does, and no change sent to the last
 // session waits on this one.
 func (cs *Controls) Restart() {
-	cs.rev, cs.sent, cs.processed, cs.pending, cs.later = -1, 0, 0, nil, nil
+	cs.rev, cs.sent, cs.processed, cs.pending = -1, 0, 0, nil
+	cs.press, cs.was, cs.tap, cs.busy = multiClick{}, multiClick{}, tap{}, nil
 	for _, ctl := range cs.m {
 		ctl.last = 0
 		if ctl.list != nil {
@@ -269,9 +300,11 @@ func View(c *ui.Context, v *widget.View, cs *Controls, st Style, md *markdown.Op
 		return
 	}
 	cs.passes++
+	cs.busy = nil
 	r := renderer{cs: cs, st: st, md: md, dispatch: dispatch}
 	r.inputs, r.fields = map[string]*widget.Node{}, map[string]*widget.Node{}
 	v.Body.Walk(func(n *widget.Node) {
+		r.progress = r.progress || n.Progress
 		switch {
 		case n.Type == "list" && n.Input != "":
 			r.inputs[n.Input] = n
@@ -297,6 +330,85 @@ type renderer struct {
 	thread  string
 	hovered bool
 	mods    []string
+	// progress is whether the view has a progress button, and tracking
+	// whether a box around what is drawn sees its presses.
+	progress, tracking bool
+}
+
+// track has e see the presses in it, unless a box around it does, for
+// the progress buttons in it: its id over a running one's box, the press
+// before its own over one that isn't running, which sees it next. Its
+// children are drawn before the func it answers is called.
+func (r *renderer) track(e ui.Element) func() {
+	if !r.progress || r.tracking {
+		return func() {}
+	}
+	r.tracking = true
+	at := e.LayoutBounds()
+	e.ObserveInput(func(ev ui.InputEvent) {
+		if ev.Button != 0 {
+			return
+		}
+		id := ""
+		for b, box := range r.cs.busy {
+			if box.Contains(at.X+ev.X, at.Y+ev.Y) {
+				id = b
+			}
+		}
+		switch ev.Kind {
+		case ui.InputPointerDown:
+			r.cs.was, r.cs.press = r.cs.press, r.cs.press.next(id, ev.Clicks)
+		case ui.InputPointerUp:
+			r.cs.press.let = r.cs.press.let || id != "" && id == r.cs.press.id
+		}
+	})
+	return func() { r.tracking = false }
+}
+
+// progressClicks has the progress button b take a double or triple click
+// as one click, as its later presses may come once the plugin answered
+// the first: a later click let go on b is a tap its next click skips.
+func (r *renderer) progressClicks(b ui.Element, id string, busy bool) {
+	if busy {
+		if r.cs.busy == nil {
+			r.cs.busy = map[string]ui.Rect{}
+		}
+		r.cs.busy[id] = b.LayoutBounds()
+	}
+	if t := r.cs.tap; t.id == id {
+		switch {
+		case t.ended:
+			r.cs.tap = tap{}
+		case !b.Pressed():
+			r.cs.tap.ended = true
+		}
+	}
+	tracked := r.tracking
+	b.ObserveInput(func(ev ui.InputEvent) {
+		if ev.Button != 0 {
+			return
+		}
+		switch ev.Kind {
+		case ui.InputPointerDown:
+			if !tracked {
+				r.cs.was = r.cs.press
+			}
+			r.cs.press = r.cs.was.next(id, ev.Clicks)
+		case ui.InputPointerUp:
+			if r.cs.press.id != id {
+				return
+			}
+			r.cs.press.let = true
+			if r.cs.press.clicks < 2 {
+				return
+			}
+			if r.cs.tap.id != id {
+				r.cs.tap = tap{id: id}
+			}
+			r.cs.tap.n++
+			r.cs.tap.ended = false
+		}
+	})
 }
 
 // NativeBox is the box the native n, child i of its parent, draws in. It
@@ -425,10 +537,14 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 		if n.MaxWidthPercent != 0 {
 			e.MaxWidthPercent(float32(n.MaxWidthPercent))
 		}
+		done := r.track(e)
 		e.Children(func() { r.children(c, n) })
+		done()
 	case "card":
+		card := ui.Column(kc)
+		defer r.track(card)()
 		if n.Style == "list" {
-			ui.Column(kc).Children(func() {
+			card.Children(func() {
 				if st.ListCard == nil {
 					ui.Column(c).Radius(12).Border(1, st.Border).Background(st.Surface).Clip().Dividers(1, st.Border).Children(func() { r.children(c, n) })
 					return
@@ -437,7 +553,7 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			})
 			return
 		}
-		ui.Column(kc).Children(func() {
+		card.Children(func() {
 			st.Card(c, n.Title, func() {
 				gap := n.Gap
 				if gap == 0 {
@@ -579,26 +695,16 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			b.TextColor(st.Red)
 		}
 		b.Disabled(n.Disabled || busy).OnClick(func() {
-			later := r.cs.later[n.ID]
-			delete(r.cs.later, n.ID)
-			if !n.Disabled && !busy && !later {
+			skip := 0
+			if r.cs.tap.id == n.ID {
+				skip, r.cs.tap = r.cs.tap.n, tap{}
+			}
+			if !n.Disabled && !busy && b.Clicks() > skip {
 				r.fire(n, n.OnClick, "click", nil)
 			}
 		})
 		if n.Progress {
-			// A double or triple click is one click: its later presses
-			// may come once the plugin has answered the first.
-			b.ObserveInput(func(ev ui.InputEvent) {
-				if ev.Kind != ui.InputPointerDown || ev.Button != 0 {
-					return
-				}
-				if r.cs.later == nil {
-					r.cs.later = map[string]bool{}
-				}
-				if _, pressed := r.cs.later[n.ID]; !pressed || ev.Clicks <= 1 {
-					r.cs.later[n.ID] = ev.Clicks > 1
-				}
-			})
+			r.progressClicks(b, n.ID, busy)
 		}
 		r.tip(c, b, n.Tooltip)
 	case "input":
@@ -747,10 +853,17 @@ func (r *renderer) node(c *ui.Context, n *widget.Node, i int) {
 			st.Modal()
 		}
 		d := ui.Modal(c.Key(st.Scope+"#dialog:"+n.ID), &open, func() {
-			ui.Column(c).Padding(20).Gap(12).MinWidth(320).MaxWidth(560).Children(func() {
+			// Over the view, it sees its own presses.
+			tracking := r.tracking
+			r.tracking = false
+			box := ui.Column(c).Padding(20).Gap(12).MinWidth(320).MaxWidth(560)
+			done := r.track(box)
+			box.Children(func() {
 				ui.Text(c, n.Title).FontSize(16).FontWeight(650)
 				r.children(c, n)
 			})
+			done()
+			r.tracking = tracking
 		})
 		if d.Dismissed() {
 			if r.cs.dismissed == nil {

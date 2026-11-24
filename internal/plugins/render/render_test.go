@@ -476,6 +476,61 @@ func TestATripleClickOnAProgressButtonIsOneClick(t *testing.T) {
 	}
 }
 
+// Progress buttons side by side, each clicked once inside a double-click's
+// time and place, are a click each: the second click begins its own
+// button's clicks, as the system counted it the second of the window's.
+func TestNeighbouringProgressButtonsClickedQuicklyAreAClickEach(t *testing.T) {
+	s := &screen{}
+	view := `{"body": {"type": "row", "gap": 2, "children": [
+		{"type": "button", "id": "one", "label": "One", "progress": true, "onClick": "one"},
+		{"type": "button", "id": "two", "label": "Two", "progress": true, "onClick": "two"}
+	]}}`
+	s.show(t, view)
+	tt := ui.NewTester(s.draw, 800, 300)
+	tt.Frame()
+	one, _ := tt.Find("One")
+	two, _ := tt.Find("Two")
+	mid, y := (one.X+one.W+two.X)/2, one.Y+one.H/2 // the 2 pt between the buttons
+	tt.ClickAt(mid-2, y)
+	s.processed = len(s.events)
+	s.show(t, view)
+	tt.Frame()
+	tt.ClickAt(mid+2, y)
+	var got []string
+	for _, ev := range s.events {
+		got = append(got, ev.Handler)
+	}
+	if strings.Join(got, " ") != "one two" {
+		t.Fatalf("clicking One then Two, 4 pt apart, fired %q, want one, then two", got)
+	}
+}
+
+// A second press on a progress button let go off it clicks nothing, and
+// leaves the next Enter its click.
+func TestAPressLetGoOffAProgressButtonLeavesEnterItsClick(t *testing.T) {
+	s := &screen{}
+	view := `{"body": {"type": "button", "id": "go", "label": "Go", "progress": true, "onClick": "go"}}`
+	s.show(t, view)
+	tt := ui.NewTester(s.draw, 800, 300)
+	tt.Frame()
+	r, _ := tt.Find("Go")
+	x, y := r.X+r.W/2, r.Y+r.H/2
+	tt.ClickAt(x, y)
+	s.processed = len(s.events)
+	s.show(t, view)
+	tt.Frame()
+	tt.Press(x, y)
+	tt.Release(x, y+100)
+	tt.Advance(time.Second)
+	if !tt.Focused("Go") {
+		t.Fatal("Go lost the focus")
+	}
+	tt.Key(0, ui.KeyEnter)
+	if len(s.events) != 2 {
+		t.Fatalf("the click, a press let go off Go, then Enter fired %d clicks, want 2", len(s.events))
+	}
+}
+
 // A progress button keeps the focus while it runs and once answered: the
 // spinner before it takes a key of its own.
 func TestAProgressButtonKeepsTheFocus(t *testing.T) {
