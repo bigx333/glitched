@@ -76,7 +76,7 @@ func TestABuildFromBeforeLinksAdmitsNoLink(t *testing.T) {
 	}
 }
 
-func TestALinksTokenReachesOnlyInfoOnARealEngine(t *testing.T) {
+func TestALinksTokenReachesOnlyItsScopeOnARealEngine(t *testing.T) {
 	quiet(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -102,8 +102,9 @@ func TestALinksTokenReachesOnlyInfoOnARealEngine(t *testing.T) {
 	if _, err := ep.Read(ctx, api.Query{}); !errors.Is(err, api.ErrNotAllowed) {
 		t.Fatalf("read through the link: %v, want api.ErrNotAllowed", err)
 	}
-	if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: api.NewID(), Body: api.ThreadCreate{Title: "x", Model: api.ModelRef{Provider: "fake"}}}); !errors.Is(err, api.ErrNotAllowed) {
-		t.Fatalf("a create through the link: %v, want api.ErrNotAllowed", err)
+	var rej *api.RejectedError
+	if _, err := ep.Submit(ctx, api.Command{ID: api.NewID(), Target: api.NewID(), Body: api.ThreadCreate{Title: "x", Model: api.ModelRef{Provider: "fake"}}}); !errors.As(err, &rej) {
+		t.Fatalf("a create through the link that isn't a link's create: %v, want it refused", err)
 	}
 
 	user := transport.NewEndpointClient(transport.Tailnet{Address: addr, Token: full}, api.ID{})

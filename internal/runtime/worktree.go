@@ -345,6 +345,21 @@ func (h *Host) makeWorktree(ctx context.Context, t engine.Thread, b engine.MakeW
 	}
 	short, long, dir := worktreeNames(h.worktrees, top, t.ID, b.Title)
 	reason := makingReason(t.ID)
+	// A kill as git began leaves the folder empty, before git wrote it as
+	// a worktree, and any lock it wrote for it naming the thread: both go,
+	// and the add starts again.
+	if fi, err := os.Lstat(dir); err == nil && fi.IsDir() && os.Remove(dir) == nil {
+		if entries, err := os.ReadDir(filepath.Join(common, "worktrees")); err == nil {
+			for _, e := range entries {
+				admin := filepath.Join(common, "worktrees", e.Name())
+				lock, _ := os.ReadFile(filepath.Join(admin, "locked"))
+				at, _ := os.ReadFile(filepath.Join(admin, "gitdir"))
+				if strings.TrimSpace(string(lock)) == reason && filepath.Dir(strings.TrimSpace(string(at))) == dir {
+					os.RemoveAll(admin)
+				}
+			}
+		}
+	}
 	if _, err := os.Stat(dir); err != nil {
 		branch := short
 		if _, err := git(ctx, top, "rev-parse", "--verify", "--quiet", "refs/heads/"+short); err == nil {

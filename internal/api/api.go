@@ -404,6 +404,8 @@ func (c *Command) UnmarshalJSON(b []byte) error {
 		c.Body = *v
 	case *ThreadRevert:
 		c.Body = *v
+	case *ResumeCancel:
+		c.Body = *v
 	}
 	c.ID, c.Target, c.Revision, c.Expires, c.Caller = w.ID, w.Target, w.Revision, w.Expires, w.Caller
 	return nil
