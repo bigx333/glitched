@@ -37,8 +37,10 @@ type Listener struct {
 const probeTimeout = 750 * time.Millisecond
 
 // Inspect reads dir's engine.json and tokens.json and probes the socket and
-// each listener. It fails only when a file can't be read.
-func Inspect(ctx context.Context, dir string) (Status, error) {
+// each listener, and reads an installed Tailscale's status with detect,
+// nil for the one on this machine, when no engine answers. It fails only
+// when a file can't be read.
+func Inspect(ctx context.Context, dir string, detect func(context.Context) (api.Tailnet, error)) (Status, error) {
 	cfg, err := Defaults(dir)
 	if err != nil {
 		return Status{}, err
@@ -67,7 +69,10 @@ func Inspect(ctx context.Context, dir string) (Status, error) {
 		st.Engine, st.Tailnet = &info, info.Tailnet
 	} else {
 		st.EngineErr = err
-		st.Tailnet, _ = tailnet.Detect(ctx)
+		if detect == nil {
+			detect = tailnet.Detect
+		}
+		st.Tailnet, _ = detect(ctx)
 	}
 	wg.Wait()
 	return st, nil

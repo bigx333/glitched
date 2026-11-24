@@ -49,7 +49,7 @@ func TestApprovalCardSaysWhatAndWhy(t *testing.T) {
 // that provider's own name, capitalised, as antigravity's is Antigravity.
 func TestApprovalCardNamesTheThreadsProvider(t *testing.T) {
 	dir := tempDir(t)
-	d, err := daemon.Start(context.Background(), daemon.Config{Dir: dir, Hub: true, Providers: provider.Mux{"antigravity": fake.New(runTests)}})
+	d, err := startEngine(context.Background(), daemon.Config{Dir: dir, Hub: true, Providers: provider.Mux{"antigravity": fake.New(runTests)}})
 	if err != nil {
 		t.Fatal(err)
 	}

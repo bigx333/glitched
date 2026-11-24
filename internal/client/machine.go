@@ -34,7 +34,7 @@ func (m *Manager) Inspect() {
 	m.inspecting = true
 	changes := m.changes
 	m.wg.Go(func() {
-		st, err := daemon.Inspect(m.ctx, m.cfg.Dir)
+		st, err := daemon.Inspect(m.ctx, m.cfg.Dir, m.cfg.Detect)
 		m.post(m.ctx, func() {
 			m.inspecting = false
 			if changes != m.changes {

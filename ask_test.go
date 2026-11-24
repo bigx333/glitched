@@ -53,7 +53,7 @@ func askEngine(t *testing.T, f *seenProvider) (*app, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	d, err := daemon.Start(context.Background(), daemon.Config{Dir: dir, Hub: true, Providers: provider.Mux{"asking": f}})
+	d, err := startEngine(context.Background(), daemon.Config{Dir: dir, Hub: true, Providers: provider.Mux{"asking": f}})
 	if err != nil {
 		t.Fatal(err)
 	}

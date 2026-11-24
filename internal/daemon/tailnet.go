@@ -156,11 +156,11 @@ func (d *Daemon) serveInstalled(ctx context.Context, listen []string, server fun
 // retire signs out the node an engine ran before Tailscale was installed,
 // at control, so the tailnet doesn't list the machine twice, and forgets
 // it. One that fails is kept for the next start to retry.
-func retire(ctx context.Context, dir, control string) {
+func retire(ctx context.Context, dir, name, control string) {
 	if _, err := os.Stat(dir); err != nil {
 		return
 	}
-	node, err := tailnet.Start(dir, hostname(), control)
+	node, err := tailnet.Start(dir, name, control)
 	if err == nil {
 		out, cancel := context.WithTimeout(ctx, 10*time.Second)
 		err = node.Logout(out)
@@ -174,8 +174,12 @@ func retire(ctx context.Context, dir, control string) {
 	os.RemoveAll(dir)
 }
 
-// hostname is the name the engine's own node asks the tailnet for.
-func hostname() string {
+// hostname is the name the engine's own node asks the tailnet for: name,
+// else this machine's.
+func hostname(name string) string {
+	if name != "" {
+		return name
+	}
 	h, err := os.Hostname()
 	if err != nil {
 		return "glitched"

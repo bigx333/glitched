@@ -248,7 +248,7 @@ func TestAPairedMachineShowsItsOwnCLIVersions(t *testing.T) {
 	}
 	cfg := daemon.Config{Dir: rdir, Listen: []string{"127.0.0.1:0"}, Hub: true, Providers: daemon.FakeProviders(fake.New(nil))}
 	remote(&cfg)
-	r, err := daemon.Start(context.Background(), cfg)
+	r, err := startEngine(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

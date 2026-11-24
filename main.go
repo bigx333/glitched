@@ -768,7 +768,7 @@ type app struct {
 // manager posts its changes through post, which runs them on the thread
 // that builds the views. An engine it embeds serves as engine has it, or
 // with the fake for every provider when engine is nil, as in a test.
-func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
+func newApp(dir string, engine func(*daemon.Config), detect func(context.Context) (api.Tailnet, error), post func(func())) *app {
 	a := &app{
 		dir:            dir,
 		router:         newRouter(),
@@ -850,7 +850,7 @@ func newApp(dir string, engine func(*daemon.Config), post func(func())) *app {
 			fn()
 			a.changed()
 		})
-	}, Asked: a.notifyAsked, Engine: engine})
+	}, Asked: a.notifyAsked, Engine: engine, Detect: detect})
 	return a
 }
 
@@ -1183,7 +1183,7 @@ func main() {
 	// What's posted before the window exists, as a plugin's timer can,
 	// waits for it.
 	var early windowQueue
-	a = newApp(stateDir(), (*daemon.Config).WithAgents, func(fn func()) {
+	a = newApp(stateDir(), (*daemon.Config).WithAgents, nil, func(fn func()) {
 		early.post(func(w *mygo.Window) {
 			w.Update(func() {
 				fn()

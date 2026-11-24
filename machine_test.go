@@ -407,3 +407,27 @@ func TestTheAgentsCardTogglesContinueAfterARestart(t *testing.T) {
 		t.Fatalf("the agent's run is %v after the switch, started %d times; want it still starting, once", snap.Threads, held.Starts())
 	}
 }
+
+// With no engine to ask, This machine reads Tailscale's status as the
+// app's engine would: a test's, made up, never this machine's.
+func TestThisMachineWithNoEngineReadsTheEnginesTailscale(t *testing.T) {
+	p := &posts{wake: make(chan struct{}, 1)}
+	a := testApp(t, tempDir(t), nil, p.post)
+	a.backend.Inspect()
+	deadline := time.Now().Add(10 * time.Second)
+	for a.backend.Machine().Read.IsZero() {
+		if time.Now().After(deadline) {
+			t.Fatal("no status read")
+		}
+		select {
+		case <-p.wake:
+		case <-time.After(10 * time.Millisecond):
+		}
+		for p.step() {
+		}
+	}
+	m := a.backend.Machine()
+	if m.Status.Engine != nil || m.Status.Tailnet.User != "sam@example.com" || m.Status.Tailnet.Name != "studio.example.ts.net" {
+		t.Fatalf("engine %v, tailnet %+v; want no engine and the made-up machine's tailnet", m.Status.Engine, m.Status.Tailnet)
+	}
+}
