@@ -917,3 +917,56 @@ func TestARestoreOfBWhileAReplyIsAskedKeepsTheChild(t *testing.T) {
 	until(t, "a report after the restore", func() bool { reports, _ := p.reports(kid); return len(reports) == 2 })
 	folded(t, p.a.store)
 }
+
+// A child B settles before its first run takes no place at work here.
+func TestAChildSettledOnBBeforeItsFirstRunTakesNoPlace(t *testing.T) {
+	p := newRemotes(t, fake.New(fake.Turn(false)), "fake", engine.Limits{Working: 1})
+	gate := filepath.Join(t.TempDir(), "gate")
+	defer os.WriteFile(gate, nil, 0600)
+	hook := "#!/bin/sh\nexec >/dev/null 2>&1\ntouch '" + gate + ".held'\nwhile [ ! -f '" + gate + "' ]; do sleep 0.02; done\n"
+	if err := os.WriteFile(filepath.Join(p.repo, ".git", "hooks", "post-checkout"), []byte(hook), 0755); err != nil {
+		t.Fatal(err)
+	}
+	kid := p.place("settled")
+	r := p.bound(kid)
+	until(t, "B inside git checkout", func() bool { _, err := os.Stat(gate + ".held"); return err == nil })
+	if _, err := p.b.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: r.Thread, Body: api.InboxSet{Disposition: api.Disposition{State: api.Settled}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gate, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	until(t, "B settled and worktree ready", func() bool {
+		th, e := p.b.store.Thread(context.Background(), r.Thread)
+		return e == nil && th.Disposition.State == api.Settled && th.Workspace != "" && len(th.Runs) == 0
+	})
+	p.stopA()
+	p.renames(r.Thread, 140)
+	p.startA()
+	s, e := p.b.Endpoint().Read(context.Background(), api.Query{Thread: r.Thread})
+	if e != nil {
+		t.Fatal(e)
+	}
+	until(t, "A consumed the complete settled snapshot", func() bool { return p.placeholder(kid).Remote.Cursor.Seq >= s.Cursor.Seq })
+	_, errs := spawn(t, p.a.Endpoint(), p.adA, p.parent, fake.Child{Title: "another", Task: "go"})
+	if errs[0] != nil {
+		t.Fatalf("B settled, no run was admitted, A folded the snapshot and still refuses the next child: %v", errs[0])
+	}
+}
+
+// A machine removed while its child waits on a question loses the child
+// though nothing more happens there, and frees its place.
+func TestARemovedMachineFreesItsWaitingChildsPlace(t *testing.T) {
+	p := newRemotes(t, fake.New(fake.Asking()), "fake", engine.Limits{Working: 1})
+	kid := p.place("asks")
+	until(t, "waiting on a question", func() bool { return p.placeholder(kid).Remote.Slot == api.RunWaiting })
+	if err := RemoveMachine(p.dirA, "b"); err != nil {
+		t.Fatal(err)
+	}
+	p.renames(p.bound(kid).Thread, 3)
+	time.Sleep(1200 * time.Millisecond)
+	_, es := spawn(t, p.a.Endpoint(), p.adA, p.parent, fake.Child{Title: "another", Task: "go"})
+	if es[0] != nil {
+		t.Fatalf("removed B, received no further run edge, child remains %s, next child refused: %v", p.placeholder(kid).Remote.State, es[0])
+	}
+}

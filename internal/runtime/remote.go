@@ -146,6 +146,7 @@ func (h *Host) persist(ctx context.Context, attempt func(context.Context) (label
 		case network:
 			defects, refusals = 0, 0
 		case catchUp, obsolete:
+			refusals = 0
 			continue
 		}
 		slog.Warn("runtime: a remote child's machine", "machine", label, "err", err)
@@ -305,9 +306,29 @@ func (h *Host) followRemote(ctx context.Context, placeholder api.ID) {
 // a snapshot whole, asks m what each done run said, and commits it, with
 // the reports it holds, whenever it moved the cursor past a snapshot, or
 // changed the child's run or brought a report. progressed is that it
-// committed.
+// committed. A machine removed from the list ends it within a second,
+// whatever the child does.
 func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label string) (progressed bool, err error) {
 	r := *t.Remote
+	ctx, removed := context.WithCancelCause(ctx)
+	defer removed(nil)
+	go func() {
+		tick := time.NewTicker(time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+			if _, listed, err := h.dial(api.Remote{Engine: r.Engine, Link: r.Link}); errors.Is(err, ErrNoMachine) {
+				removed(err)
+				return
+			} else if err == nil {
+				listed.Close()
+			}
+		}
+	}()
 	st, err := m.Open(ctx, api.Subscription{Thread: r.Thread, After: r.Cursor})
 	if err != nil {
 		return false, err
@@ -317,6 +338,9 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 	cancel()
 	for {
 		it, err := st.Next(ctx)
+		if cause := context.Cause(ctx); cause != nil && ctx.Err() != nil && errors.Is(cause, ErrNoMachine) {
+			return progressed, cause
+		}
 		if err != nil {
 			return progressed, err
 		}
