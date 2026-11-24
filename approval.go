@@ -292,7 +292,14 @@ func (a *app) inView(c *ui.Context, t thread, request api.ID) (ui.Element, *ui.S
 	}
 	texts := ui.Scroll(c).Key("texts").TrackScroll(st)
 	if a.paneAt.H > 0 {
-		texts.MaxHeight(max(cardTextsMin, a.paneAt.H-composerRoom-a.agentsRoom(t)-cardRoom))
+		// cardRoom holds one line of answers: as tall as its tallest
+		// button, over the row's padding under it. A row that wrapped
+		// takes its lines past the first from the texts.
+		room := float32(cardRoom)
+		if at := a.answerAt; at.request == request {
+			room += max(0, at.row.H-max(at.allow.H, at.always.H, at.session.H, at.deny.H)-12)
+		}
+		texts.MaxHeight(max(cardTextsMin, a.paneAt.H-composerRoom-a.agentsRoom(t)-room))
 	}
 	return texts, st
 }
@@ -721,6 +728,12 @@ func (a *app) answerButtons(c *ui.Context, t thread, r *client.RequestEntry) (al
 		return e
 	}
 	row = ui.Row(c).Key("decide").Padding(0, 14, 12).Gap(8).AlignItems(ui.Center).Wrap()
+	// The chat keeps its least width past a narrow window's edge: the
+	// answers wrap within what the window shows of them.
+	if at := row.Bounds(); at.W > 0 {
+		w, _ := c.Size()
+		row.MaxWidth(w - at.X)
+	}
 	row.Children(func() {
 		allow = filled(c, "allow", palette.accent, ui.Hex("#ffffff")).Children(func() {
 			text("Allow once", 12.5, 500, ui.Hex("#ffffff"))
