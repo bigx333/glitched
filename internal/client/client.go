@@ -228,6 +228,10 @@ type Env struct {
 	server  Server             // a remote's entry in gui.json
 }
 
+// Log is the log of e's last shell snapshot, zero before one. Another is
+// the engine's log rewound or replaced, as by a restore of its database.
+func (e *Env) Log() api.ID { return e.log }
+
 // session is one shell stream, and where commands go while it lasts.
 // Thread subscriptions run under its ctx, so they end with it.
 type session struct {

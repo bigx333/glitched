@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -295,6 +297,38 @@ func (e lostReply) Submit(ctx context.Context, c api.Command) (api.Receipt, erro
 	return r, err
 }
 
+// gatedShell holds back the shell's thread updates while hold is set.
+type gatedShell struct {
+	api.Endpoint
+	hold *atomic.Bool
+	wake chan struct{}
+}
+
+type gatedShellStream struct {
+	api.Stream
+	s gatedShell
+}
+
+func (e gatedShell) Open(ctx context.Context, q api.Subscription) (api.Stream, error) {
+	st, err := e.Endpoint.Open(ctx, q)
+	if err == nil && q.Thread.IsZero() {
+		st = gatedShellStream{st, e}
+	}
+	return st, err
+}
+
+func (s gatedShellStream) Next(ctx context.Context) (api.StreamItem, error) {
+	it, err := s.Stream.Next(ctx)
+	for err == nil && it.Kind == api.StreamThread && s.s.hold.Load() {
+		select {
+		case <-s.s.wake:
+		case <-ctx.Done():
+			return api.StreamItem{}, ctx.Err()
+		}
+	}
+	return it, err
+}
+
 // A Continue whose reply was lost holds its place, whether its run shows
 // before the loss or after.
 func TestContinueAllHoldsAPlaceWhoseReplyWasLost(t *testing.T) {
@@ -313,12 +347,20 @@ func TestContinueAllHoldsAPlaceWhoseReplyWasLost(t *testing.T) {
 					lost = v.ID
 				}
 			}
-			late := make(chan struct{})
+			late, hold, wake := make(chan struct{}), &atomic.Bool{}, make(chan struct{})
+			h := serveApp(t, gatedShell{lostReply{d.Endpoint(), lost, late}, hold, wake})
+			one, two, three := h.thread("One"), h.thread("Two"), h.thread("Three")
+			placesHeld := func() {
+				t.Helper()
+				h.tt.Frame()
+				if len(three.Pending) != 0 || len(queuedOn(t, d, three.id())) != 1 {
+					t.Fatalf("the third was continued (%d sent, %d queued) with both places held", len(three.Pending), len(queuedOn(t, d, three.id())))
+				}
+			}
 			if shows == "after" {
+				hold.Store(true)
 				close(late)
 			}
-			h := serveApp(t, lostReply{d.Endpoint(), lost, late})
-			one, two, three := h.thread("One"), h.thread("Two"), h.thread("Three")
 			h.a.continueAll([]thread{one, two, three})
 			if shows == "before" {
 				h.until("the first two starting", func() bool { return one.View.Run == api.RunStarting && two.View.Run == api.RunStarting })
@@ -327,10 +369,114 @@ func TestContinueAllHoldsAPlaceWhoseReplyWasLost(t *testing.T) {
 			h.until("the first's reply lost", func() bool {
 				return slices.ContainsFunc(one.Pending, func(p client.Pending) bool { return p.Err != nil })
 			})
-			h.tt.Frame()
-			if len(three.Pending) != 0 || len(queuedOn(t, d, three.id())) != 1 {
-				t.Fatalf("the third was continued (%d sent, %d queued) with both places held", len(three.Pending), len(queuedOn(t, d, three.id())))
+			if shows == "after" && one.View.Run != api.RunUncertain {
+				t.Fatalf("the first shows %v as its reply is lost, want its uncertain run still", one.View.Run)
 			}
+			placesHeld()
+			hold.Store(false)
+			close(wake)
+			h.until("the first two starting", func() bool { return one.View.Run == api.RunStarting && two.View.Run == api.RunStarting })
+			placesHeld()
 		})
+	}
+}
+
+// switching serves whichever engine it holds, none while it holds none.
+type switching struct{ current atomic.Pointer[daemon.Daemon] }
+
+func (s *switching) ep() (api.Endpoint, error) {
+	if d := s.current.Load(); d != nil {
+		return d.Endpoint(), nil
+	}
+	return nil, errors.New("the engine is restarting")
+}
+
+func (s *switching) Info(ctx context.Context) (api.Environment, error) {
+	e, err := s.ep()
+	if err != nil {
+		return api.Environment{}, err
+	}
+	return e.Info(ctx)
+}
+
+func (s *switching) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
+	e, err := s.ep()
+	if err != nil {
+		return api.Snapshot{}, err
+	}
+	return e.Read(ctx, q)
+}
+
+func (s *switching) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
+	e, err := s.ep()
+	if err != nil {
+		return api.Receipt{}, err
+	}
+	return e.Submit(ctx, c)
+}
+
+func (s *switching) Open(ctx context.Context, q api.Subscription) (api.Stream, error) {
+	e, err := s.ep()
+	if err != nil {
+		return nil, err
+	}
+	return e.Open(ctx, q)
+}
+
+func copyDB(t *testing.T, from, to string) {
+	t.Helper()
+	for _, ext := range []string{"", "-wal", "-shm"} {
+		b, err := os.ReadFile(from + ext)
+		if os.IsNotExist(err) {
+			if err := os.Remove(to + ext); err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(to+ext, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A Continue all asked of an engine whose database is then restored from a
+// backup made before it is over: the restored log knows nothing of what
+// it continued, so Continue all is offered again.
+func TestARestoreEndsAContinueAll(t *testing.T) {
+	held := fake.New(fake.Turn(false))
+	held.HoldStart = true
+	dir, d := lostDir(t, held, "One", "Two", "Three")
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, backup := filepath.Join(dir, "engine.db"), filepath.Join(dir, "backup.db")
+	copyDB(t, db, backup)
+	relay := &switching{}
+	relay.current.Store(engine(t, daemon.Config{Dir: dir}, held))
+	h := serveApp(t, relay)
+	one, two, three := h.thread("One"), h.thread("Two"), h.thread("Three")
+	h.a.continueAll([]thread{one, two, three})
+	h.until("two continued", func() bool {
+		return one.View.Run == api.RunStarting && two.View.Run == api.RunStarting && len(one.Pending)+len(two.Pending) == 0
+	})
+	old := relay.current.Swap(nil)
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the engine offline", func() bool { _, off := h.local().Status.(client.Offline); return off })
+	copyDB(t, backup, db)
+	relay.current.Store(engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false))))
+	h.until("the restored engine online, the runs uncertain again", func() bool {
+		return h.local().Status == client.Status(client.Online{}) && one.View.Run == api.RunUncertain && two.View.Run == api.RunUncertain
+	})
+	h.tt.Advance(time.Second)
+	if len(h.a.continues) != 0 || len(queuedOn(t, relay.current.Load(), three.id())) != 1 {
+		t.Fatalf("%d threads still held to continue, the third queued %d; want the old Continue all over", len(h.a.continues), len(queuedOn(t, relay.current.Load(), three.id())))
+	}
+	if _, ok := h.tt.Find("Continue all"); !ok {
+		t.Fatalf("Continue all isn't offered on the restored threads: %q", h.tt.Texts())
 	}
 }

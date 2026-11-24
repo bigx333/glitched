@@ -47,12 +47,12 @@ func (a *app) continueButton(c *ui.Context, t thread) {
 // them together.
 const continuesAtOnce = 2
 
-// continuing is a thread Continue all continues, once its turn comes:
-// sent is the Continue's command, and the run it starts; replaces, the
-// uncertain run it replaces.
+// continuing is a thread Continue all continues, once its turn comes, on
+// the engine's log it was asked on: sent is the Continue's command, and
+// the run it starts; replaces, the uncertain run it replaces.
 type continuing struct {
 	env            *client.Env
-	thread         api.ID
+	thread, log    api.ID
 	sent, replaces api.ID
 }
 
@@ -80,7 +80,7 @@ func (a *app) continuingAlready(t thread) bool {
 func (a *app) continueAll(ts []thread) {
 	for _, t := range ts {
 		if !a.continuingAlready(t) {
-			a.continues = append(a.continues, continuing{env: t.env, thread: t.id()})
+			a.continues = append(a.continues, continuing{env: t.env, thread: t.id(), log: t.env.Log()})
 		}
 	}
 	a.paceContinues()
@@ -89,12 +89,13 @@ func (a *app) continueAll(ts []thread) {
 // paceContinues continues the next of a Continue all's threads on each
 // engine while fewer than continuesAtOnce of those it continued there
 // are live. One gone, or no longer uncertain before its turn, as the user
-// continued or stopped it meanwhile, is dropped.
+// continued or stopped it meanwhile, is dropped, as is one asked on a log
+// the engine has since replaced: what it knew of that log's runs is moot.
 func (a *app) paceContinues() {
 	busy := map[*client.Env]int{}
 	a.continues = slices.DeleteFunc(a.continues, func(j continuing) bool {
 		th := j.env.Threads[j.thread]
-		if th == nil || !slices.Contains(a.backend.Envs(), j.env) {
+		if log := j.env.Log(); th == nil || !slices.Contains(a.backend.Envs(), j.env) || !log.IsZero() && log != j.log {
 			return true
 		}
 		t := thread{j.env, th}
