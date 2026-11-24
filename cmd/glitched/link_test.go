@@ -34,7 +34,7 @@ func TestALinkMintedOnOneMachineIsAddedOnAnother(t *testing.T) {
 	}
 	_, rest, _ := strings.Cut(out, "shown only this once:\n\n  ")
 	token, _, _ := strings.Cut(rest, "\n")
-	if token == "" || !strings.Contains(out, "glitched link -add") {
+	if token == "" || !strings.Contains(out, "glitched link -add") || !strings.Contains(out, "glitched pair -dir "+shellQuote(b)+" -revoke a") {
 		t.Fatalf("pair -link printed no token and add line:\n%s", out)
 	}
 	d, err := daemon.Start(ctx, daemon.Config{Dir: b, Hub: true, Listen: []string{"127.0.0.1:0"}, Providers: provider.Mux{"fake": fake.New(fake.Turn(true))}})
@@ -55,12 +55,23 @@ func TestALinkMintedOnOneMachineIsAddedOnAnother(t *testing.T) {
 	if err := link(ctx, []string{"-dir", a, "-remove", "b"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"-dir", b, "-name", "c", "-access", "full"}, {"-dir", b, "-children", "most"}} {
+	for _, args := range [][]string{
+		{"-dir", b, "-name", "c", "-access", "full"},
+		{"-dir", b, "-children", "most"},
+		{"-dir", b, "-name", "review", "laptop", "-link"},
+		{"-dir", b, "-list", "-revoke", "a"},
+		{"-dir", b, "-link"},
+	} {
 		if err := pair(ctx, args); !errors.As(err, new(usageError)) {
 			t.Errorf("pair %v: %v, want a usage error", args, err)
 		}
 	}
-	if err := link(ctx, []string{"-dir", a, "-add", "b"}); !errors.As(err, new(usageError)) {
-		t.Errorf("link -add without -server: %v, want a usage error", err)
+	for _, args := range [][]string{{"-dir", a, "-add", "b"}, {"-dir", a, "-list", "-remove", "b"}, {"-dir", a, "-list", "b"}, {"-dir", a, "-server", addr}} {
+		if err := link(ctx, args); !errors.As(err, new(usageError)) {
+			t.Errorf("link %v: %v, want a usage error", args, err)
+		}
+	}
+	if ts, err := daemon.Tokens(b); err != nil || len(ts) != 1 || ts[0].Link == nil {
+		t.Fatalf("tokens.json after the refused pairs: %+v %v, want only the link", ts, err)
 	}
 }

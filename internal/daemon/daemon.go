@@ -81,9 +81,6 @@ type Config struct {
 	// machine's agent starts here may run at, over every link this engine
 	// mints (PairLink); nil, the default, mints none.
 	ChildrenFromOtherMachines *api.Access `json:"children_from_other_machines,omitempty"`
-	// Machines are the other machines' engines this one holds a link to,
-	// where its agents may start children. Their tokens are in links.json.
-	Machines []Machine `json:"machines,omitempty"`
 	// Versions looks up the latest versions of the providers' CLIs; nil, as
 	// a test's engine has, looks up none.
 	Versions cliupdate.Lookup `json:"-"`
