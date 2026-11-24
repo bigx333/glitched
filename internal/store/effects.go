@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -70,6 +71,25 @@ func (s *Store) Leased(ctx context.Context) ([]Effect, error) {
 // Release returns a leased effect to pending so it runs again.
 func (s *Store) Release(ctx context.Context, id int64) error {
 	return s.move(ctx, id, "leased", "pending")
+}
+
+// Requeue returns a leased effect to pending as body, which says what the
+// attempt its lease records may have done.
+func (s *Store) Requeue(ctx context.Context, id int64, body engine.Effect) error {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.ExecContext(ctx, `UPDATE effects SET state = 'pending', payload = ? WHERE id = ? AND state = 'leased'`, payload, id)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		return fmt.Errorf("store: effect %d is not leased", id)
+	}
+	return nil
 }
 
 // Complete marks a leased effect done without recording anything else.

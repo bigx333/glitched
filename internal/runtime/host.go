@@ -55,13 +55,10 @@ type Host struct {
 	working map[api.ID]bool
 	// autoContinue has the runs a restart cut off as they worked on the
 	// user's threads continued unasked, these and those of earlier boots.
-	autoContinue bool
-	continued    chan struct{} // poked at each commit while continueLost runs
-	full         chan struct{} // poked as continueLost waits for a continued run to end
-	lostDone     chan struct{} // closed once continueLost has been through every run due
-	// redelivered is the answers' effects boot found leased: the last
-	// engine stopped as it gave them. Written only by boot.
-	redelivered   map[int64]bool
+	autoContinue  bool
+	continued     chan struct{} // poked at each commit while continueLost runs
+	full          chan struct{} // poked as continueLost waits for a continued run to end
+	lostDone      chan struct{} // closed once continueLost has been through every run due
 	compactCheck  chan api.ID
 	compactRescan chan struct{}
 	compactDue    chan compactDue
@@ -115,10 +112,12 @@ type liveRun struct {
 	// call back through glitched mcp before then.
 	started chan struct{}
 	// delivering counts the answers on their way to the agent, from the
-	// call that gives one until what it did is logged; settled is closed
-	// as the count comes back to none. Set under h.mu.
+	// call that gives one until its receipt is tried; settled is closed as
+	// the count comes back to none. ending is set as the pump reads the
+	// agent's end of its turn. Set under h.mu.
 	delivering int
 	settled    chan struct{}
+	ending     bool
 	silent     bool // it runs a compaction; set under h.mu
 }
 
@@ -192,7 +191,6 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		continued:     make(chan struct{}, 1),
 		full:          make(chan struct{}, 1),
 		lostDone:      make(chan struct{}),
-		redelivered:   map[int64]bool{},
 		compactCheck:  make(chan api.ID, 64),
 		compactRescan: make(chan struct{}, 1),
 		compactDue:    make(chan compactDue, 64),
@@ -439,12 +437,14 @@ func (h *Host) boot(ctx context.Context) error {
 			} else {
 				err = h.store.Complete(ctx, e.ID)
 			}
+		case engine.DeliverAnswer:
+			// Kept in the effect, so a crash before it runs again doesn't
+			// lose that the agent may have the answer.
+			b.Retried = true
+			err = h.store.Requeue(ctx, e.ID, b)
 		default:
 			if !engine.ReplaySafe(e.Body) {
 				return fmt.Errorf("runtime: no recovery for leased %s", engine.EffectKind(e.Body))
-			}
-			if _, ok := e.Body.(engine.DeliverAnswer); ok {
-				h.redelivered[e.ID] = true
 			}
 			err = h.store.Release(ctx, e.ID)
 		}
@@ -561,10 +561,14 @@ func (h *Host) perform(e store.Effect) {
 	if _, ok := e.Body.(engine.StartTurn); ok && h.waitsOnRevert(e) {
 		return
 	}
+	var answering *liveRun
 	if b, ok := e.Body.(engine.DeliverAnswer); ok && !isAsk(b.Dedup) {
-		if lr := h.delivering(b.Run); lr != nil {
-			defer h.delivered(lr)
-		}
+		answering = h.delivering(b.Run)
+		defer func() {
+			if answering != nil {
+				h.delivered(answering)
+			}
+		}()
 	}
 	var lr *liveRun
 	if b, ok := e.Body.(engine.StartTurn); ok {
@@ -588,7 +592,7 @@ func (h *Host) perform(e store.Effect) {
 		// An answer the last engine was giving as it stopped may have
 		// reached the agent: one this run can no longer take is not known
 		// to have failed.
-		if f, ok := skip.(engine.DeliveryFailed); ok && h.redelivered[e.ID] {
+		if f, ok := skip.(engine.DeliveryFailed); ok && e.Body.(engine.DeliverAnswer).Retried {
 			f.Error, f.Unconfirmed = "the engine stopped as it gave the answer, so the agent may have it", true
 			skip = f
 		}
@@ -614,6 +618,22 @@ func (h *Host) perform(e store.Effect) {
 	o, ok := h.call(e, t, lr)
 	if !ok {
 		return
+	}
+	if a := answering; a != nil {
+		answering = nil
+		// A turn that ended as its answer went waits for the answer's
+		// receipt, tried once, so a store that won't take it doesn't hold
+		// the turn. An answer that failed after the agent ended its turn
+		// is logged after that end, as it did not stop the turn.
+		if _, took := o.(engine.Delivered); took {
+			err := h.observe(h.drain, e.Thread, o, e.ID)
+			h.delivered(a)
+			if err == nil {
+				return
+			}
+		} else if h.delivered(a) {
+			<-a.ctx.Done()
+		}
 	}
 	if _, ok := e.Body.(engine.RevertThread); ok {
 		defer h.revertEnded(e.Thread)
@@ -932,13 +952,15 @@ func (h *Host) delivering(run api.ID) *liveRun {
 	return lr
 }
 
-// delivered is that what an answer's call did is logged.
-func (h *Host) delivered(lr *liveRun) {
+// delivered is that an answer's call is over, and whether lr's agent ended
+// its turn before it was.
+func (h *Host) delivered(lr *liveRun) (ending bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if lr.delivering--; lr.delivering == 0 {
 		close(lr.settled)
 	}
+	return lr.ending
 }
 
 // closedAgent is that lr's agent, if it opened one, is closed.

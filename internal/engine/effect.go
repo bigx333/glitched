@@ -42,6 +42,9 @@ type DeliverAnswer struct {
 	Run, Request api.ID
 	Dedup        string
 	Answer       json.RawMessage
+	// Retried: an engine before this one took it and stopped before it
+	// finished, so the agent may have the answer. Set only by recovery.
+	Retried bool `json:",omitempty"`
 }
 
 // ReportToParent posts a child's report in its parent's log: Title is the

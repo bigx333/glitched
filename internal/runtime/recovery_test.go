@@ -318,3 +318,156 @@ func TestADeliveryIsLoggedBeforeTheTurnItEnded(t *testing.T) {
 	}
 	assertReplay(t, n.st)
 }
+
+// holdReceipts makes the store refuse to finish any answer's effect, which
+// the receipt of an answer does.
+const holdReceipts = `CREATE TRIGGER hold_receipts BEFORE UPDATE OF state ON effects
+	WHEN NEW.kind = 'request.deliver' AND NEW.state = 'done' BEGIN SELECT RAISE(ABORT, 'held'); END`
+
+// An answer's receipt the store won't take doesn't hold the turn that ended
+// on it; the receipt follows once the store takes it.
+func TestATurnEndsThoughItsAnswersReceiptWontLog(t *testing.T) {
+	path := dbPath(t)
+	n := start(t, path, endsFirst{fake.New(fake.Turn(true))})
+	thread := newThread(t, n.h)
+	submit(t, n.h, thread, dispatch("edit", api.StartNow))
+	req := until(t, n.h, thread, "approval", waiting).Requests[0]
+	db := sideDB(t, path)
+	exec(t, db, holdReceipts)
+	respond(t, n.h, thread, req)
+	until(t, n.h, thread, "turn end", idle)
+	if got := count(events(t, n.h, thread), "request.delivered"); got != 0 {
+		t.Fatalf("%d request.delivered while the store refuses them", got)
+	}
+	exec(t, db, "DROP TRIGGER hold_receipts")
+	untilEffectsDone(t, path, "request.deliver")
+	evs := events(t, n.h, thread)
+	if got := outcomes(t, n.h, thread); len(got) != 1 || got[0] != api.OutcomeCompleted || count(evs, "request.delivered") != 1 || len(invalidations(t, evs)) != 0 {
+		t.Fatalf("turn ended %v with %d request.delivered and %d invalidations, want completed, 1 and none",
+			got, count(evs, "request.delivered"), len(invalidations(t, evs)))
+	}
+	assertReplay(t, n.st)
+}
+
+// An answer a crash cut off stays one the agent may have through a second
+// crash before it is given again.
+func TestAnAnswerACrashCutOffStaysUnconfirmedThroughAnotherCrash(t *testing.T) {
+	path := dbPath(t)
+	ad := endsFirst{fake.New(fake.Turn(true))}
+	n := start(t, path, ad)
+	thread := newThread(t, n.h)
+	submit(t, n.h, thread, dispatch("edit", api.StartNow))
+	req := until(t, n.h, thread, "approval", waiting).Requests[0]
+	db := sideDB(t, path)
+	exec(t, db, holdReceipts)
+	respond(t, n.h, thread, req)
+	until(t, n.h, thread, "turn end", idle)
+	n.kill()
+	exec(t, db, "DROP TRIGGER hold_receipts")
+	exec(t, db, `CREATE TRIGGER hold_leases BEFORE UPDATE OF state ON effects
+		WHEN NEW.kind = 'request.deliver' AND NEW.state = 'leased' BEGIN SELECT RAISE(ABORT, 'held'); END`)
+	n = start(t, path, ad)
+	var state string
+	if err := db.QueryRow("SELECT state FROM effects WHERE kind = 'request.deliver'").Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "pending" {
+		t.Fatalf("the answer's effect is %s after recovery, want pending", state)
+	}
+	n.kill()
+	exec(t, db, "DROP TRIGGER hold_leases")
+	n = start(t, path, ad)
+	untilEffectsDone(t, path, "request.deliver")
+	evs := events(t, n.h, thread)
+	if got := invalidations(t, evs); len(got) != 1 || !got[0].Unconfirmed || count(evs, "request.delivered") != 0 {
+		t.Fatalf("invalidations %+v with %d request.delivered, want one saying the agent may have the answer and none",
+			got, count(evs, "request.delivered"))
+	}
+	assertReplay(t, n.st)
+}
+
+// failsAfterEnd opens the fake's agents to end their turn, completed, as an
+// answer reaches them, and only then fail the call that gave it, as a reply
+// whose transport broke after the agent went on does.
+type failsAfterEnd struct {
+	*fake.Adapter
+}
+
+func (a failsAfterEnd) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	g, err := a.Adapter.Open(ctx, spec)
+	return &failsAfterEndAgent{Agent: g, past: make(chan struct{})}, err
+}
+
+type failsAfterEndAgent struct {
+	provider.Agent
+	ended bool          // read only by the pump's reader
+	past  chan struct{} // closed as the reader asks for what follows the end
+	once  sync.Once
+}
+
+func (g *failsAfterEndAgent) Next(ctx context.Context) (provider.Event, error) {
+	if g.ended {
+		g.once.Do(func() { close(g.past) })
+	}
+	ev, err := g.Agent.Next(ctx)
+	if _, ok := ev.(provider.TurnEnded); ok {
+		g.ended = true
+		ev = provider.TurnEnded{Outcome: api.OutcomeCompleted}
+	}
+	return ev, err
+}
+
+func (g *failsAfterEndAgent) Do(ctx context.Context, act provider.Action) error {
+	if _, ok := act.(provider.Respond); !ok {
+		return g.Agent.Do(ctx, act)
+	}
+	if err := g.Agent.Do(ctx, provider.Interrupt{}); err != nil {
+		return err
+	}
+	select {
+	case <-g.past:
+		return errors.New("the reply's transport broke")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// An answer that fails after the agent ended its turn doesn't stop that
+// turn: it ends as the agent ended it, and a child's parent hears so.
+func TestAnAnswerThatFailsAfterTheTurnEndedLeavesTheTurnsEnd(t *testing.T) {
+	path := dbPath(t)
+	ad := failsAfterEnd{fake.New(fake.Turn(true))}
+	n := start(t, path, ad)
+	parent := newThread(t, n.h)
+	child, err := newChild(t, n.h, ad, parent, api.AccessAsk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submit(t, n.h, parent, api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+	submit(t, n.h, child, dispatch("edit", api.StartNow))
+	respond(t, n.h, child, until(t, n.h, child, "approval", waiting).Requests[0])
+	until(t, n.h, child, "turn end", idle)
+	untilEffectsDone(t, path, "request.deliver")
+	untilEffectsDone(t, path, "child.report")
+	var order []string
+	for _, e := range events(t, n.h, child) {
+		if e.Type == "request.invalidated" || e.Type == "turn.ended" || e.Type == "turn.stopping" {
+			order = append(order, e.Type)
+		}
+	}
+	if got := outcomes(t, n.h, child); len(got) != 1 || got[0] != api.OutcomeCompleted || !slices.Equal(order, []string{"turn.ended", "request.invalidated"}) {
+		t.Fatalf("turn ended %v, logged %v, want completed and its end before the failed answer", got, order)
+	}
+	done := 0
+	for _, e := range events(t, n.h, parent) {
+		if b, _ := e.Decode(); b != nil {
+			if r, ok := b.(api.ChildReported); ok && r.Child == child && r.Kind == api.ReportDone {
+				done++
+			}
+		}
+	}
+	if done != 1 {
+		t.Fatalf("parent heard the child was done %d times, want once", done)
+	}
+	assertReplay(t, n.st)
+}
