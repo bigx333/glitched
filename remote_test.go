@@ -206,7 +206,7 @@ func TestAddingAndRemovingAMachineThisOneDelegatesTo(t *testing.T) {
 
 // remoteChild is a parent with a child the test makes stand for a remote
 // child's placeholder, on the machine desk, which machines.json lists.
-func remoteChild(t *testing.T) (*harness, thread, thread) {
+func remoteChild(t *testing.T) (*harness, string, thread, thread) {
 	t.Helper()
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
@@ -230,13 +230,13 @@ func remoteChild(t *testing.T) (*harness, thread, thread) {
 		s, _, _ := h.a.remoteState(kid)
 		return strings.HasSuffix(s, " on desk")
 	})
-	return h, parent, kid
+	return h, dir, parent, kid
 }
 
 // A placeholder's row, in the agents panel and the sidebar, says where its
 // child runs and what it does there, in each state; lost, why as its tip.
 func TestARemoteChildsRowSaysItsState(t *testing.T) {
-	h, parent, kid := remoteChild(t)
+	h, _, parent, kid := remoteChild(t)
 	h.a.select_(parent)
 	h.a.childrenOpen[parent.id()] = true
 	h.tt.Frame()
@@ -276,7 +276,7 @@ func TestARemoteChildsRowSaysItsState(t *testing.T) {
 // Opening a placeholder whose machine this app doesn't pair says so; the
 // child's thread is there.
 func TestOpeningARemoteChildUnpairedSaysToPairIt(t *testing.T) {
-	h, _, kid := remoteChild(t)
+	h, _, _, kid := remoteChild(t)
 	kid.View.Remote.Thread, kid.View.Run = api.NewID(), api.RunIdle
 	kid.View.Remote.Lost = ""
 	h.a.choose(kid)
@@ -303,7 +303,7 @@ func TestOpeningARemoteChildPairedOpensItThere(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, parent, kid := remoteChild(t)
+	h, _, parent, kid := remoteChild(t)
 	if err := h.addServer(client.Server{Label: "desk", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +384,7 @@ func fits(t *testing.T, h *harness, width float32, texts ...string) {
 // In a narrow window a placeholder's row, its notice and a link's
 // thread's origin stay inside the window.
 func TestRemoteSurfacesFitANarrowWindow(t *testing.T) {
-	h, parent, kid := remoteChild(t)
+	h, dir, parent, kid := remoteChild(t)
 	h.tt.SetSize(760, 860)
 	kid.View.Remote.Thread, kid.View.Run = api.NewID(), api.RunWaiting
 	h.a.select_(parent)
@@ -402,9 +402,12 @@ func TestRemoteSurfacesFitANarrowWindow(t *testing.T) {
 	h.tt.Frame()
 	fits(t, h, 760, "Lost on desk", kid.View.Remote.Lost, "This child's thread is on desk. Pair desk in Settings › Servers to open it here.")
 	shoot(t, h, "a-narrow-notice")
-	parent.View.Origin = &api.Origin{Engine: api.NewID(), Thread: api.NewID(), Title: "A parent thread with a long title that runs on and on", Link: linkFor(t, h.a.backend.Machine().Config.Dir, "laptop")}
+	parent.View.Origin = &api.Origin{Engine: api.NewID(), Thread: api.NewID(), Title: "A parent thread with a long title that runs on and on", Link: linkFor(t, dir, "laptop")}
 	h.a.choose(parent)
-	h.until("where the thread came from", func() bool { h.tt.Frame(); return h.tt.HasText("from A parent thread with a long title that runs on and on on laptop") })
+	h.until("where the thread came from", func() bool {
+		h.tt.Frame()
+		return h.tt.HasText("from A parent thread with a long title that runs on and on on laptop")
+	})
 	h.tt.Advance(time.Second)
 	h.tt.Frame()
 	fits(t, h, 760, "from A parent thread with a long title that runs on and on on laptop")
@@ -439,7 +442,7 @@ func TestARemoteChildPairedButNotYetMadeSaysItOpensOnceMade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, _, kid := remoteChild(t)
+	h, _, _, kid := remoteChild(t)
 	if err := h.addServer(client.Server{Label: "desk", Addr: addr, Token: token}); err != nil {
 		t.Fatal(err)
 	}
