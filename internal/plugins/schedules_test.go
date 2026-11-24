@@ -1144,3 +1144,71 @@ func TestADatabaseOfAnEarlierBuildIsReset(t *testing.T) {
 	}
 	saveSchedule(t, p, nil)
 }
+
+// A cut once a missed run is recorded, before its schedule's next_due
+// moves, loses no later run: the next occurrence, on time, starts.
+func TestACutAfterAMissedRunLosesNoLaterRun(t *testing.T) {
+	p, db, keys := schedulesRuntime(t, movable)
+	s := dueAt1005(t, p, db, map[string]any{"missed": "skip"})
+	if err := p.Call("at", "2026-11-24T10:17:00Z", nil); err != nil {
+		t.Fatal(err)
+	}
+	sqlExec(t, db, "CREATE TRIGGER cut BEFORE UPDATE OF next_due ON schedules BEGIN SELECT RAISE(ABORT, 'the cut'); END")
+	if err := p.Call("timer", nil, nil); err == nil || !strings.Contains(err.Error(), "the cut") {
+		t.Fatalf("the tick answered %v, want the cut", err)
+	}
+	sqlExec(t, db, "DROP TRIGGER cut")
+	p.Close()
+	if err := p.Call("at", "2026-11-24T10:20:00Z", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Call("timer", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	runs := runsOf(t, db, s.ID)
+	if k := keys(); len(k) != 1 || k[0] != s.ID+"@2026-11-24T10:20:00.000Z" || len(runs) != 2 || runs[0].State != "missed" || runs[1].State != "started" {
+		t.Fatalf("runs %+v with creates %q; want 10:15 missed and 10:20 started", runs, k)
+	}
+}
+
+// A thread list asked for as a Run now of the same schedule starts doesn't
+// let the schedule's automatic run start beside it: a run begun since the
+// tick looked counts as one that may still go.
+func TestAListAskedForAsARunNowStartsSkipsItsSchedulesNextRun(t *testing.T) {
+	hooks := &scheduleHooks{}
+	p, db, keys := schedulesRuntimeWith(t, movable, hooks)
+	s := dueAt1005(t, p, db, nil)
+	sqlExec(t, db, "INSERT INTO runs (schedule, key, due, manual, state, thread, open, at) VALUES (?, 'manual:old', ?, 1, 'started', 'gone', 1, ?)", s.ID, from10, from10)
+	if err := p.Call("at", "2026-11-24T10:05:00Z", nil); err != nil {
+		t.Fatal(err)
+	}
+	asked, answer := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	hooks.listed = func() ([]map[string]string, error) {
+		once.Do(func() {
+			close(asked)
+			<-answer
+		})
+		return nil, nil
+	}
+	ticked := make(chan error, 1)
+	go func() { ticked <- p.Call("timer", nil, nil) }()
+	<-asked
+	if err := serveSchedules(p, "runNow", map[string]any{"id": s.ID, "op": op("2026-11-24T10:05:00Z", 1)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Call("wait", 1000, nil); err != nil {
+		t.Fatal(err)
+	}
+	close(answer)
+	if err := <-ticked; err != nil {
+		t.Fatal(err)
+	}
+	var automatic string
+	if err := db.QueryRow("SELECT state || ' ' || coalesce(reason, '') FROM runs WHERE schedule = ? AND manual = 0", s.ID).Scan(&automatic); err != nil {
+		t.Fatal(err)
+	}
+	if automatic != "skipped the previous run is still going" || len(keys()) != 1 {
+		t.Fatalf("the automatic run is %q, with creates %q; want it skipped, and the Run now's create alone", automatic, keys())
+	}
+}
