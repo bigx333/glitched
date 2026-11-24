@@ -171,6 +171,9 @@ func runWireFake(mode string) {
 				promptID = req.ID
 				note("ours", "Ready to be stopped.")
 				continue
+			case "hold":
+				promptID = req.ID
+				continue
 			case "oversize":
 				note("ours", strings.Repeat("x", 12<<20))
 				note("ours", "a trailing update")
@@ -178,6 +181,10 @@ func runWireFake(mode string) {
 			}
 			re(req.ID, map[string]any{"stopReason": "end_turn"})
 		case "session/cancel":
+			if mode == "hold" {
+				re(promptID, map[string]any{"stopReason": "cancelled"})
+				continue
+			}
 			permission("ours", "other")
 		case "":
 			if (mode == "deny-fallback" || mode == "foreign-permission") && string(req.ID) == "100" {
