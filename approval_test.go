@@ -419,13 +419,20 @@ func TestAllowForThisSession(t *testing.T) {
 			if !offered {
 				return
 			}
-			h.click("Allow for this session")
+			if err := h.tt.Click("Allow for this session"); err != nil {
+				t.Fatal(err)
+			}
 			at, z := h.a.answerAt, h.a.zap
 			if mid := at.session.X + at.session.W/2 - at.row.X; z.request.IsZero() || z.denied || z.ox < mid-1 || z.ox > mid+1 {
 				t.Errorf("the zap %+v breaks up from %v in the row; want Allow for this session's middle, %v", z, z.ox, mid)
 			}
 			if !slices.ContainsFunc(z.parts, func(p zapPart) bool { return p.r.W == at.session.W && p.r.X == at.session.X-at.row.X }) {
 				t.Errorf("the zap's parts %+v leave out Allow for this session", z.parts)
+			}
+			// Only the frames the app asks for run the zap to its end.
+			h.tt.Advance(zapTime + time.Second)
+			if !h.a.zap.request.IsZero() {
+				t.Error("the zap did not end on the frames it asked for")
 			}
 			h.until("the session answer", func() bool { return h.tt.HasText("Allowed for this session") })
 			if got := string(lastRequest(th).Answer); got != `{"allow":true,"session":true}` {
