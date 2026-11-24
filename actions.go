@@ -137,10 +137,19 @@ func messageToolbarRow(m messageToolbar) *widget.Node {
 	return row
 }
 
+// A row action's padding, the gap between its icon and its label, and the
+// size of both.
+const (
+	actionPadY = 2
+	actionPadX = 6
+	actionGap  = 4
+	actionSize = 11
+)
+
 func action(c *ui.Context, key any, icon *ui.SVG, label string, disabled bool) ui.Element {
-	return ghost(c, key, false).Padding(2, 6).Gap(4).Disabled(disabled).Children(func() {
-		ui.Icon(c, icon).FontSize(11)
-		ui.Text(c, label).FontSize(11)
+	return ghost(c, key, false).Padding(actionPadY, actionPadX).Gap(actionGap).Disabled(disabled).Children(func() {
+		ui.Icon(c, icon).FontSize(actionSize)
+		ui.Text(c, label).FontSize(actionSize)
 	})
 }
 

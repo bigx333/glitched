@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -80,52 +82,103 @@ func pluginRows(t *testing.T, h *harness, n int, js string) {
 	h.tt.Advance(time.Second)
 }
 
-// In a plugin's rows, each as wide as it lays itself out, Send now keeps
-// its label only while each row's message shows whole, and the queue
-// settles on its choice.
-func TestTheQueueFitsEachRowOfAPluginsLayout(t *testing.T) {
-	h, queue := heldQueue(t, 0)
-	long := strings.Repeat("word ", 10) + "first"
-	queue(long, 0, api.Defer)
-	queue("Second", 1, api.Defer)
-	pluginRows(t, h, 2, `export function place({items}) {
-		return items.map(({context}) => ({type:"row", grow:true, gap:2, align:"center", children:[
-			{type:"native", id:"text", name:"queue.text", grow:true},
-			{type:"native", id:"send", name:"queue.steer"},
-			{type:"button", id:"extra", label: context.index === 0 ? "Extra action with reserved room and a much wider label" : "Extra"},
-			{type:"text", id:"marker", text:"Plugin row"}
-		]}))
-	}`)
-	for _, w := range []int{1320, 1120, 940, 760} {
-		h.tt.SetSize(w, 860)
-		h.tt.Advance(time.Second)
-		if h.tt.FramePending() {
-			t.Errorf("at %d points the queue keeps asking for frames", w)
+// iconOnly fails t unless every Send now in the queue is drawn as its
+// icon, named and with its name as its tooltip.
+func iconOnly(t *testing.T, tt *ui.Tester, when string) {
+	t.Helper()
+	for _, n := range sendNows(t, tt) {
+		if n.Bounds.W > 2*n.Bounds.H || n.Description != "Send now" {
+			t.Errorf("%s, Send now is drawn %.1f by %.1f, described %q; want its icon, described as itself", when, n.Bounds.W, n.Bounds.H, n.Description)
 		}
-		shownWhole(t, h.tt, "at "+strconv.Itoa(w)+" points", long, "Second")
 	}
 }
 
-// A plugin's row with two Send nows gains two labels' width: the queue
-// settles on its choice at each width, without flipping between them.
-func TestTheQueueSettlesWithTwoSendNowsInARow(t *testing.T) {
+// A plugin's row lays itself out as it likes, here in 60% of the queue:
+// its Send now is drawn as its icon, in the first frame at each width as
+// the window widens and narrows, and the queue settles.
+func TestAPluginsQueueRowDrawsSendNowAsItsIcon(t *testing.T) {
 	h, queue := heldQueue(t, 0)
-	text := strings.Repeat("word ", 7) + "last"
+	text := strings.Repeat("word ", 9) + "last"
 	queue(text, 0, api.Defer)
 	pluginRows(t, h, 1, `export function place({items}) {
-		return items.map(() => ({type:"row", grow:true, gap:2, align:"center", children:[
+		return items.map(() => ({type:"row", grow:true, maxWidthPercent:60, gap:2, align:"center", children:[
 			{type:"native", id:"text", name:"queue.text", grow:true},
-			{type:"native", id:"send1", name:"queue.steer"},
-			{type:"native", id:"send2", name:"queue.steer"},
+			{type:"native", id:"send", name:"queue.steer"},
 			{type:"text", id:"marker", text:"Plugin row"}
 		]}))
 	}`)
-	for w := 760; w <= 940; w += 10 {
+	for _, w := range []int{940, 1120, 940, 1120, 760, 1320} {
 		h.tt.SetSize(w, 860)
+		shownWhole(t, h.tt, "at once at "+strconv.Itoa(w)+" points", text)
+		iconOnly(t, h.tt, "at "+strconv.Itoa(w)+" points")
 		if h.tt.FramePending() {
-			t.Fatalf("at %d points the queue still asks for frames after %d", w, 20)
+			t.Errorf("at %d points the queue keeps asking for frames", w)
 		}
-		shownWhole(t, h.tt, "at "+strconv.Itoa(w)+" points", text)
+	}
+}
+
+// The built-in row in a plugin's composer, here 60% of the room, is laid
+// out where Glitched can't tell before it is: its Send now is drawn as its
+// icon at each width.
+func TestTheQueueInAPluginsComposerDrawsSendNowAsItsIcon(t *testing.T) {
+	h, queue := heldQueue(t, 0)
+	text := strings.Repeat("word ", 7) + "last"
+	queue(text, 0, api.Defer)
+	writeOwnPlugin(t, h.a, "outer", replacing("outer", "composer"), `export function place({items}) {
+		return items.map(() => ({type:"column", grow:true, maxWidthPercent:60, children:[
+			{type:"native", id:"input", name:"composer.input"},
+			{type:"text", id:"marker", text:"Outer plugin"}
+		]}))
+	}`)
+	if err := h.a.plugins.SetGranted("outer", "ui.replace", true); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the plugin's composer", func() bool { return h.tt.HasText("Outer plugin") })
+	for _, w := range []int{940, 1120, 940, 1120, 760, 1320} {
+		h.tt.SetSize(w, 860)
+		shownWhole(t, h.tt, "at once at "+strconv.Itoa(w)+" points", text)
+		iconOnly(t, h.tt, "at "+strconv.Itoa(w)+" points")
+	}
+}
+
+// In Glitched's own row and composer, Send now keeps its label exactly
+// while every message fits beside it: labelled, no message is cut; drawn
+// as its icon, the longest wouldn't have fit beside the label. Checked in
+// the first frame at each width, with the sidebar shown and hidden.
+func TestSendNowKeepsItsLabelExactlyWhileTheMessagesFit(t *testing.T) {
+	h, queue := heldQueue(t, 0)
+	long := strings.Repeat("word ", 8) + "last"
+	queue("short", 0, api.Defer)
+	queue(long, 1, api.Defer)
+	h.tt.SetSize(1320, 860)
+	h.tt.Advance(time.Second)
+	if !labelled(t, h.tt) {
+		t.Fatalf("setup: at 1320 points Send now has no label")
+	}
+	label := sendNows(t, h.tt)[0].Bounds.W
+	want := natural(long)
+	both := map[bool]bool{}
+	for _, sidebar := range []bool{true, false} {
+		if h.a.showSidebar != sidebar {
+			h.a.toggleSidebar(false)
+			h.tt.Advance(time.Second)
+		}
+		for w := 760; w <= 1320; w += 7 {
+			h.tt.SetSize(w, 860)
+			r, _ := h.tt.Find(long)
+			on := labelled(t, h.tt)
+			both[on] = true
+			icon := sendNows(t, h.tt)[0].Bounds.W
+			switch {
+			case on && r.W < want-0.5:
+				t.Errorf("sidebar %t, %d points: %q has %.1f of %.1f points beside a labelled Send now", sidebar, w, long, r.W, want)
+			case !on && r.W-(label-icon) >= want+0.5:
+				t.Errorf("sidebar %t, %d points: Send now is an icon though %q has %.1f points, %.1f with the label", sidebar, w, long, r.W, r.W-(label-icon))
+			}
+		}
+	}
+	if !both[true] || !both[false] {
+		t.Errorf("Send now took one form only from 760 to 1320 points: %v", both)
 	}
 }
 
@@ -183,27 +236,66 @@ func TestARowBeingEditedLeavesSendNowItsLabel(t *testing.T) {
 	}
 }
 
-// A row is as tall whether Send now has its label or not: the queue's
-// rows keep their pitch as the window crosses from one to the other.
+// Drawn as its icon, an action is as tall as Send now with its label, so
+// the queue's rows keep the pitch a row with a labelled Send now has,
+// whichever form the window gives it.
 func TestTheQueuesRowsKeepTheirPitchAcrossSendNowsForms(t *testing.T) {
 	h, queue := heldQueue(t, 0)
 	messages := []string{strings.Repeat("word ", 10) + "last", "Sibling A", "Sibling B"}
 	for i, m := range messages {
 		queue(m, int64(i), api.Defer)
 	}
-	pitch := map[bool]float32{}
+	h.tt.SetSize(1320, 860)
+	h.tt.Advance(time.Second)
+	if !labelled(t, h.tt) {
+		t.Fatalf("setup: at 1320 points Send now has no label")
+	}
+	button := sendNows(t, h.tt)[0].Bounds.H
+	if edit, _ := h.tt.Access("Edit"); edit.Bounds.H != button {
+		t.Errorf("Edit is %.3f points tall, Send now with its label %.3f", edit.Bounds.H, button)
+	}
+	// A row: the labelled action in the row's padding, then the gap to
+	// the next.
+	want := button + 2*2 + 2
+	forms := map[bool]bool{}
 	for w := 760; w <= 1320; w += 20 {
 		h.tt.SetSize(w, 860)
-		h.tt.Advance(time.Second)
 		first, _ := h.tt.Find(oneLine(messages[0]))
 		second, _ := h.tt.Find(messages[1])
-		pitch[labelled(t, h.tt)] = second.Y - first.Y
+		on := labelled(t, h.tt)
+		forms[on] = true
+		if pitch := second.Y - first.Y; pitch < want-0.01 || pitch > want+0.01 {
+			t.Errorf("at %d points, Send now labelled %t, rows are %.3f apart; want %.3f", w, on, pitch, want)
+		}
 	}
-	if len(pitch) != 2 {
-		t.Fatalf("Send now drawn in one form only from 760 to 1320 points: %v", pitch)
+	if len(forms) != 2 {
+		t.Fatalf("Send now drawn in one form only from 760 to 1320 points: %v", forms)
 	}
-	if pitch[true] != pitch[false] {
-		t.Errorf("rows are %.2f apart with Send now labelled, %.2f with its icon", pitch[true], pitch[false])
+}
+
+// Queued messages that come and go leave the queue's bindings behind in
+// the window no more than main does: one a message, which isn't the
+// queue's.
+func TestTheQueueKeepsNoBindingsForMessagesGone(t *testing.T) {
+	h, queue := heldQueue(t, 0)
+	var refs int
+	tt := ui.NewTester(func(c *ui.Context) {
+		h.a.view(c)
+		refs = reflect.ValueOf(c).Elem().FieldByName("rt").Elem().FieldByName("refs").Len()
+	}, 1320, 860)
+	tr := h.a.current().Transcript
+	var counts []int
+	for i := range 12 {
+		queue(fmt.Sprintf("Short queued row %d", i), 0, api.Defer)
+		tt.Frame()
+		sendNows(t, tt)
+		applyTo(t, tr, tr.Cursor.Log, api.MessageCancelled{Message: waiting(h.a.current())[0].Message})
+		h.a.changed()
+		tt.Frame()
+		counts = append(counts, refs)
+	}
+	if grew, n := counts[len(counts)-1]-counts[2], len(counts)-3; grew > n {
+		t.Errorf("the window's bindings after each queued message came and went: %v; %d more over %d messages, want at most one a message", counts, grew, n)
 	}
 }
 
