@@ -349,6 +349,7 @@ func (s *Store) commit(ctx context.Context, r *receipt, done int64, plan func(q 
 		return api.Cursor{}, err
 	}
 	if len(c.Events) > 0 {
+		s.fenceCommitted(head)
 		for _, h := range s.hooks {
 			h(c)
 		}
