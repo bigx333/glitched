@@ -1020,8 +1020,13 @@ func (g *Agent) respond(ctx context.Context, r provider.Respond) error {
 		}
 		reply = approve(a, answer.Allow, session)
 	}
+	// An answer cancelled before it is queued is never sent, and the ask
+	// stays open for its turn's end to withdraw.
+	if err := g.p.conn.put(ctx, map[string]any{"id": a.rpc, "result": reply}); err != nil {
+		return err
+	}
 	a.state = answered
-	return g.p.conn.reply(a.rpc, reply)
+	return nil
 }
 
 // approve is the answer to an approval request: allow or deny, once, or
