@@ -396,11 +396,16 @@ func (m *Manager) send(e *Env, th *Thread, cmd api.Command) {
 	prev, done := th.last, make(chan struct{})
 	th.last = done
 	ectx := e.ctx
-	src, push := m.syncSource(e)
-	switch cmd.Body.(type) {
-	case api.MessageDispatch, api.QueueResume:
-	default:
-		push = false
+	var synced, hurry <-chan struct{}
+	switch {
+	case api.StartsTurn(cmd.Body):
+		if th.hurry == nil {
+			th.hurry = make(chan struct{})
+		}
+		synced, hurry = m.syncTo(e, s), th.hurry
+	case th.hurry != nil:
+		close(th.hurry)
+		th.hurry = nil
 	}
 	m.wg.Go(func() {
 		defer close(done)
@@ -411,8 +416,14 @@ func (m *Manager) send(e *Env, th *Thread, cmd api.Command) {
 				return
 			}
 		}
-		if push {
-			src.push(ectx, s.ep, syncFirst)
+		if synced != nil {
+			select {
+			case <-synced:
+			case <-hurry:
+			case <-time.After(syncFirst):
+			case <-ectx.Done():
+				return
+			}
 		}
 		select {
 		case e.slots <- struct{}{}:

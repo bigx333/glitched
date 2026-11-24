@@ -259,6 +259,19 @@ func (QueueMove) intentType() string       { return "queue.move" }
 func (QueueSteer) intentType() string      { return "queue.steer" }
 func (ThreadRevert) intentType() string    { return "thread.revert" }
 
+// StartsTurn is whether i may start a turn of its thread's agent: a
+// message, the go-ahead for what a stop held, a queued message sent now,
+// or a create with a first message.
+func StartsTurn(i Intent) bool {
+	switch b := i.(type) {
+	case MessageDispatch, QueueResume, QueueSteer:
+		return true
+	case ThreadCreate:
+		return b.Text != ""
+	}
+	return false
+}
+
 var intents = map[string]func() Intent{
 	"thread.create":    func() Intent { return new(ThreadCreate) },
 	"message.dispatch": func() Intent { return new(MessageDispatch) },

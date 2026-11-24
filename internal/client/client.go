@@ -230,9 +230,10 @@ type Env struct {
 	waiting []chan<- *session  // commands waiting for the next session
 	slots   chan struct{}      // a command's while it waits on the engine; submitsAtOnce of them
 	server  Server             // a remote's entry in gui.json
-	// skillGate has one sync of this machine's skills at a time go to a
-	// remote's engine.
-	skillGate chan struct{}
+	skills  *skillSync         // the syncs of this machine's skills to a remote's engine
+	// SkillsChanged counts the syncs of this machine's skills e's engine
+	// took: what it said of a thread's skills before the last is stale.
+	SkillsChanged uint64
 }
 
 // Log is the log of e's last shell snapshot, zero before one. Another is
@@ -256,6 +257,9 @@ type Thread struct {
 	open  bool
 	sub   *sub
 	last  chan struct{} // closed once the thread's latest submit returns
+	// hurry is closed by the next command that starts no turn: the turns
+	// sent before it stop waiting for their syncs, so it never waits on one.
+	hurry chan struct{}
 }
 
 // heard is what the user heard of a request a child asks.
@@ -273,7 +277,7 @@ const (
 type sub struct{ cancel context.CancelFunc }
 
 func (m *Manager) launch(e *Env, r route) *Env {
-	e.Status, e.Threads, e.slots, e.skillGate = Connecting{}, map[api.ID]*Thread{}, make(chan struct{}, submitsAtOnce), make(chan struct{}, 1)
+	e.Status, e.Threads, e.slots, e.skills = Connecting{}, map[api.ID]*Thread{}, make(chan struct{}, submitsAtOnce), &skillSync{}
 	e.Membership++
 	e.ctx, e.stop = context.WithCancel(m.ctx)
 	m.connect(e, r)
