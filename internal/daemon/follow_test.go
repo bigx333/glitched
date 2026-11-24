@@ -40,6 +40,7 @@ type remotes struct {
 	parent     api.ID
 	limits     engine.Limits
 	continueB  bool // B continues the runs its restart lost
+	steps      func(step string, placeholder api.ID)
 }
 
 func freeAddr(t *testing.T) string {
@@ -120,7 +121,7 @@ func fast(n int) time.Duration {
 
 func (p *remotes) startA() {
 	p.t.Helper()
-	d, err := Start(context.Background(), Config{Dir: p.dirA, Hub: true, Epoch: 1, Children: p.limits, RemoteBackoff: fast, Providers: provider.Mux{p.model.Provider: p.adA}})
+	d, err := Start(context.Background(), Config{Dir: p.dirA, Hub: true, Epoch: 1, Children: p.limits, RemoteBackoff: fast, RemoteSteps: p.steps, Providers: provider.Mux{p.model.Provider: p.adA}})
 	if err != nil {
 		p.t.Fatal(err)
 	}
@@ -321,6 +322,7 @@ type proxy struct {
 	replies   int             // child.reply calls
 	snapshots int             // snapshots B sent through the proxy
 	refused   int             // handshakes refused
+	infos     int             // calls of info, one each dial makes
 	cancel    context.CancelFunc
 	served    chan struct{}
 }
@@ -373,7 +375,12 @@ func (x *proxy) stop() {
 	}
 }
 
-func (x *proxy) Info(ctx context.Context) (api.Environment, error) { return x.inner().Info(ctx) }
+func (x *proxy) Info(ctx context.Context) (api.Environment, error) {
+	x.mu.Lock()
+	x.infos++
+	x.mu.Unlock()
+	return x.inner().Info(ctx)
+}
 func (x *proxy) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {
 	return x.inner().Read(ctx, q)
 }
