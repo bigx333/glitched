@@ -731,12 +731,6 @@ func (a *app) answerButtons(c *ui.Context, t thread, r *client.RequestEntry) (al
 		return e
 	}
 	row = ui.Row(c).Key("decide").Padding(0, 14, 12).Gap(8).AlignItems(ui.Center).Wrap()
-	// The chat keeps its least width past a narrow window's edge: the
-	// answers wrap within what the window shows of them.
-	if at := row.Bounds(); at.W > 0 {
-		w, _ := c.Size()
-		row.MaxWidth(w - at.X)
-	}
 	row.Children(func() {
 		allow = filled(c, "allow", palette.accent, ui.Hex("#ffffff")).Children(func() {
 			text("Allow once", 12.5, 500, ui.Hex("#ffffff"))

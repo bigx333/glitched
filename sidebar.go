@@ -70,9 +70,9 @@ func kbd(c *ui.Context, keys ...string) {
 // the window's vibrancy, the desktop blurred through it, or a solid fill
 // where there is none.
 func (a *app) sidebarFrame(c *ui.Context) {
-	w := a.sidebarWidth * a.sidebarOpen
+	w := a.sidebarShown * a.sidebarOpen
 	ui.Row(c).Key("sidebar").Width(w).Shrink(0).AlignItems(ui.Stretch).Clip().Children(func() {
-		side := ui.Column(c).Width(a.sidebarWidth).Shrink(0).Margin(0, 0, 0, w-a.sidebarWidth)
+		side := ui.Column(c).Width(a.sidebarShown).Shrink(0).Margin(0, 0, 0, w-a.sidebarShown)
 		// A window's first frame lays the sidebar out for the first
 		// time: it is as tall as the window, which it fills.
 		if a.sidebarTall = side.Bounds().H; a.sidebarTall == 0 {
@@ -118,7 +118,7 @@ func (a *app) sidebarEdge(c *ui.Context) {
 	dx, _, ok := edge.Dragged()
 	a.sidebarPressed = ok
 	if ok && dx != 0 {
-		a.sidebarWidth = min(max(a.sidebarWidth+dx, minSidebarWidth), maxSidebarWidth)
+		a.sidebarWidth = min(max(a.sidebarShown+dx, minSidebarWidth), maxSidebarWidth)
 		a.sidebarHeld = true
 	}
 	if _, _, ok := edge.DragEnded(); ok {
@@ -147,7 +147,7 @@ func (a *app) sidebar(c *ui.Context) {
 		hide := a.iconButton(c, "hide-sidebar", icPanelLeft, "Hide sidebar  ⌘B", false)
 		// As the sidebar slides, the button goes before it would pass under
 		// the window's buttons, and comes back once it has passed them.
-		if a.sidebarWidth*a.sidebarOpen-10-headerIconW < bar.Left {
+		if a.sidebarShown*a.sidebarOpen-10-headerIconW < bar.Left {
 			hide.Invisible()
 		}
 		if hide.Clicked() {
