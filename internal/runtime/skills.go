@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
@@ -20,7 +21,7 @@ import (
 // project's, copied to an overlay in dir.
 func WithSkills(dir string) Option {
 	return func(h *Host) {
-		h.skills = &skillStage{dir: dir, using: map[api.ID]string{}, opening: map[string]int{}, survivors: map[api.ID]bool{}, gone: map[api.ID]bool{}}
+		h.skills = &skillStage{dir: dir, store: skills.NewStore(dir), using: map[api.ID]string{}, opening: map[string]int{}, survivors: map[api.ID]bool{}, gone: map[api.ID]bool{}}
 	}
 }
 
@@ -31,6 +32,7 @@ func WithSkills(dir string) Option {
 // gives none.
 type skillStage struct {
 	dir       string
+	store     *skills.Store // the skills another machine's GUI synced here
 	mu        sync.Mutex
 	using     map[api.ID]string // by thread: the overlay its agent opened with
 	opening   map[string]int    // overlays opens are handing their agents, by count
@@ -201,4 +203,31 @@ func (h *Host) Skills(ctx context.Context, q api.SkillQuery) (api.SkillList, err
 		list.Delivery = d.SkillDelivery()
 	}
 	return list, nil
+}
+
+var errNoSkills = errors.New("this engine gives its agents no skills")
+
+// SyncSkills takes q's skills as the ones the next runs get from q's
+// machine, once the engine holds every tree of them.
+func (h *Host) SyncSkills(_ context.Context, q api.SkillSync) (api.SkillsSynced, error) {
+	if h.skills == nil {
+		return api.SkillsSynced{}, errNoSkills
+	}
+	return h.skills.store.Sync(q, time.Now())
+}
+
+// PutSkill keeps the files of a skill a sync is to take.
+func (h *Host) PutSkill(_ context.Context, p api.SkillPut) error {
+	if h.skills == nil {
+		return errNoSkills
+	}
+	return h.skills.store.Put(p)
+}
+
+// DropSkills drops the skills d's machine synced here, for runs to come.
+func (h *Host) DropSkills(_ context.Context, d api.SkillDrop) error {
+	if h.skills == nil {
+		return errNoSkills
+	}
+	return h.skills.store.Drop(d.Source)
 }

@@ -357,9 +357,15 @@ type Projects interface {
 }
 
 // Skills are what a client shows of the skills Glitched gives a thread's
-// agent on the engine's machine.
+// agent on the engine's machine, and how a GUI gives the engine the skills
+// of its own machine: it offers the set, puts the trees the engine says it
+// lacks, and drops the set once the user stops syncing. Nothing here
+// reads a skill's files back.
 type Skills interface {
 	Skills(ctx context.Context, q api.SkillQuery) (api.SkillList, error)
+	SyncSkills(ctx context.Context, q api.SkillSync) (api.SkillsSynced, error)
+	PutSkill(ctx context.Context, p api.SkillPut) error
+	DropSkills(ctx context.Context, d api.SkillDrop) error
 }
 
 // cloneItem is one item of a projects.clone stream: a line the clone
@@ -606,6 +612,13 @@ func (s *Server) methods() map[string]handler {
 	}
 	if k := s.Skills; k != nil {
 		m["skills.list"] = callHandler(k.Skills)
+		m["skills.sync"] = callHandler(k.SyncSkills)
+		m["skills.put"] = callHandler(func(ctx context.Context, p api.SkillPut) (struct{}, error) {
+			return struct{}{}, k.PutSkill(ctx, p)
+		})
+		m["skills.drop"] = callHandler(func(ctx context.Context, d api.SkillDrop) (struct{}, error) {
+			return struct{}{}, k.DropSkills(ctx, d)
+		})
 	}
 	if h := s.Hub; h != nil {
 		m["hub.append"] = callHandler(h.Append)
