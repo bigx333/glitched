@@ -435,6 +435,41 @@ func TestAllowForThisSession(t *testing.T) {
 	}
 }
 
+// A tall card that offers Allow for this session, at the narrowest window
+// beside the widest sidebar, where the chat runs past the window's edge,
+// draws its header in the pane and every answer whole in the window: as
+// wide as at a wide window.
+func TestATallSessionCardFitsTheNarrowestWindow(t *testing.T) {
+	body, _ := json.Marshal(map[string]any{"command": "go test ./sample\n" + strings.Repeat("go env\n", 15), "cwd": "/tmp/fixture", "reason": "Check local change", "session": true})
+	h, _ := asking(t, []provider.Event{provider.RequestOpened{ID: "request", Kind: api.KindApproval, Body: body}})
+	h.a.sidebarWidth, h.a.showSidebar = maxSidebarWidth, true
+	answers := []string{"Allow once", "Allow for this session", "Deny", askedAt(h.a.current(), lastRequest(h.a.current()))}
+	h.tt.SetSize(1320, 860)
+	h.tt.Advance(time.Second)
+	wide := map[string]float32{}
+	for _, s := range answers {
+		r, ok := h.tt.Find(s)
+		if !ok {
+			t.Fatalf("no %s at 1320 points in %q", s, h.tt.Texts())
+		}
+		wide[s] = paintedWidth(h.tt.Image(), r)
+	}
+	h.tt.SetSize(760, 480)
+	h.tt.Advance(time.Second)
+	if hd := h.a.drew[lastRequest(h.a.current()).Request].header; hd.H == 0 || hd.Y < h.a.paneAt.Y {
+		t.Errorf("the header at %+v, above the pane at %+v", hd, h.a.paneAt)
+	}
+	for _, s := range answers {
+		r, ok := h.tt.Find(s)
+		if !ok {
+			t.Fatalf("no %s in %q", s, h.tt.Texts())
+		}
+		if w := paintedWidth(h.tt.Image(), r); w < wide[s]-1 || wide[s] < 8 || r.X+r.W > 760 || r.Y+r.H > h.a.paneAt.Y+h.a.paneAt.H {
+			t.Errorf("%s at %+v is drawn %.0f points wide; want %.0f as at 1320 points, in the window", s, r, w, wide[s])
+		}
+	}
+}
+
 // With a draft, ⌘⏎ sends it, which steers the agent, and leaves the
 // request waiting.
 func TestCmdEnterWithADraftSteers(t *testing.T) {
