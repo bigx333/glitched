@@ -400,6 +400,34 @@ func TestNoAlwaysAllow(t *testing.T) {
 	}
 }
 
+// The card offers Allow for this session only where the request offers
+// it, and that button answers for the session.
+func TestAllowForThisSession(t *testing.T) {
+	for name, offered := range map[string]bool{"offered": true, "not offered": false} {
+		t.Run(name, func(t *testing.T) {
+			body := `{"operation":"run","command":"bun run test"}`
+			if offered {
+				body = `{"operation":"run","command":"bun run test","session":true}`
+			}
+			h, th := asking(t, []provider.Event{
+				provider.RequestOpened{ID: "run-1", Kind: "approval", Body: json.RawMessage(body)},
+				provider.TextDelta{Text: " The tests pass."},
+			})
+			if got := h.tt.HasText("Allow for this session"); got != offered || !h.tt.HasText("Allow once") || !h.tt.HasText("Deny") {
+				t.Fatalf("the card's answers, Allow for this session %v: %q", offered, h.tt.Texts())
+			}
+			if !offered {
+				return
+			}
+			h.click("Allow for this session")
+			h.until("the session answer", func() bool { return h.tt.HasText("Allowed for this session") })
+			if got := string(lastRequest(th).Answer); got != `{"allow":true,"session":true}` {
+				t.Errorf("Allow for this session answered %s", got)
+			}
+		})
+	}
+}
+
 // With a draft, ⌘⏎ sends it, which steers the agent, and leaves the
 // request waiting.
 func TestCmdEnterWithADraftSteers(t *testing.T) {

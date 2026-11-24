@@ -29,6 +29,9 @@ type ask struct {
 	Unsandboxed bool   `json:"unsandboxed"`
 	// Always is that the agent offers to allow such calls from now on.
 	Always bool `json:"always"`
+	// Session is that the agent offers to allow such calls until its
+	// session ends.
+	Session bool `json:"session"`
 }
 
 func askOf(body json.RawMessage) (ask, bool) {
@@ -77,17 +80,19 @@ func askedAt(t thread, r *client.RequestEntry) string {
 
 // answerOf reads an answer sent to the agent: {"allow":true} or not.
 func answerOf(raw json.RawMessage) client.Answer {
-	var b struct{ Allow, Always bool }
+	var b struct{ Allow, Always, Session bool }
 	switch {
 	case json.Unmarshal(raw, &b) != nil || !b.Allow:
 		return client.Deny
 	case b.Always:
 		return client.AllowAlways
+	case b.Session:
+		return client.AllowSession
 	}
 	return client.AllowOnce
 }
 
-var answerTitles = map[client.Answer]string{client.Deny: "Denied", client.AllowOnce: "Allowed", client.AllowAlways: "Always allowed"}
+var answerTitles = map[client.Answer]string{client.Deny: "Denied", client.AllowOnce: "Allowed", client.AllowAlways: "Always allowed", client.AllowSession: "Allowed for this session"}
 
 // requestCard is the agent's request, in the timeline: what it wants to
 // do first, then where and why, with the answers under it while it waits.
@@ -626,9 +631,9 @@ func more(all, cut string) string {
 }
 
 // requestAnswers are a waiting request's answers, Allow once and Deny,
-// with Always allow where the agent offers to keep the grant; or the
-// answer on its way, or why it wasn't sent. Just answered, they break up
-// (zap.go).
+// with Always allow and Allow for this session where the agent offers to
+// keep the grant; or the answer on its way, or why it wasn't sent. Just
+// answered, they break up (zap.go).
 func (a *app) requestAnswers(c *ui.Context, t thread, r *client.RequestEntry) {
 	sent, sending := responding(t, r.Request)
 	if a.zapping(r) {
@@ -651,14 +656,17 @@ func (a *app) requestAnswers(c *ui.Context, t thread, r *client.RequestEntry) {
 		})
 		return
 	}
-	allow, always, deny, row, labels := a.answerButtons(c, t, r)
-	a.answerAt = answerRow{r.Request, row.Bounds(), allow.Bounds(), always.Bounds(), deny.Bounds(), labels}
-	began := a.pressBegan(r.Request, allow.Pressed() || always.Valid() && always.Pressed() || deny.Pressed())
+	allow, always, session, deny, row, labels := a.answerButtons(c, t, r)
+	a.answerAt = answerRow{r.Request, row.Bounds(), allow.Bounds(), always.Bounds(), session.Bounds(), deny.Bounds(), labels}
+	began := a.pressBegan(r.Request, allow.Pressed() || always.Valid() && always.Pressed() || session.Valid() && session.Pressed() || deny.Pressed())
 	if allow.Clicked() {
 		a.press(c, t, a.rowsOf(t).es, r, client.AllowOnce, began, false)
 	}
 	if always.Valid() && always.Clicked() {
 		a.press(c, t, a.rowsOf(t).es, r, client.AllowAlways, began, false)
+	}
+	if session.Valid() && session.Clicked() {
+		a.press(c, t, a.rowsOf(t).es, r, client.AllowSession, began, false)
 	}
 	if deny.Clicked() {
 		a.press(c, t, a.rowsOf(t).es, r, client.Deny, began, false)
@@ -692,7 +700,7 @@ type pressAt struct {
 // answerButtons lays out the row of a request's answers, and returns its
 // buttons, the row, and its labels as they were laid out in the last
 // frame, for a zap to paint as it breaks the row up.
-func (a *app) answerButtons(c *ui.Context, t thread, r *client.RequestEntry) (allow, always, deny, row ui.Element, labels []zapLabel) {
+func (a *app) answerButtons(c *ui.Context, t thread, r *client.RequestEntry) (allow, always, session, deny, row ui.Element, labels []zapLabel) {
 	// Each label where the last frame laid it out, read as it's built.
 	text := func(s string, size float32, weight int, col ui.Color) ui.Element {
 		e := ui.Text(c, s).FontSize(size).TextColor(col)
@@ -720,11 +728,17 @@ func (a *app) answerButtons(c *ui.Context, t thread, r *client.RequestEntry) (al
 				chip("⌘⏎", ui.Hex("#ffffff").Alpha(0.9), ui.Hex("#ffffff").Alpha(0.2), ui.Color{})
 			}
 		})
-		if b, _ := askOf(r.Body); b.Always {
-			name := agentName(t)
+		b, _ := askOf(r.Body)
+		if b.Always {
 			always = ghost(c, "always", false).TextColor(palette.accent).Padding(5, 10).
-				Description(name + " allows such calls from now on, by its own rules.").Children(func() {
+				Description(agentName(t) + " allows such calls from now on, by its own rules.").Children(func() {
 				text("Always allow", 12.5, 500, palette.accent)
+			})
+		}
+		if b.Session {
+			session = ghost(c, "session", false).TextColor(palette.accent).Padding(5, 10).
+				Description(agentName(t) + " allows such calls until its session ends, by its own rules.").Children(func() {
+				text("Allow for this session", 12.5, 500, palette.accent)
 			})
 		}
 		deny = ghost(c, "deny", false).TextColor(palette.red).Padding(5, 10).Children(func() {
@@ -739,7 +753,7 @@ func (a *app) answerButtons(c *ui.Context, t thread, r *client.RequestEntry) (al
 			text(askedAt(t, r), 11.5, 0, palette.faint)
 		})
 	})
-	return allow, always, deny, row, labels
+	return allow, always, session, deny, row, labels
 }
 
 // filled is a button with a face of its own color.

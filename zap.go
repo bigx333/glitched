@@ -61,16 +61,16 @@ type zapLabel struct {
 // answerRow is where a waiting request's answers were laid out in the last
 // frame, for a zap to break up from the button pressed, its key's too.
 type answerRow struct {
-	request                  api.ID
-	row, allow, always, deny ui.Rect
-	labels                   []zapLabel
+	request                           api.ID
+	row, allow, always, session, deny ui.Rect
+	labels                            []zapLabel
 }
 
 // answer answers r, breaking its answers up from the button for it when
 // the row showed in the last frame.
 func (a *app) answer(c *ui.Context, t thread, r *client.RequestEntry, ans client.Answer) {
 	if at := a.answerAt; at.request == r.Request && at.row.H > 0 {
-		b := map[client.Answer]ui.Rect{client.AllowOnce: at.allow, client.AllowAlways: at.always, client.Deny: at.deny}[ans]
+		b := map[client.Answer]ui.Rect{client.AllowOnce: at.allow, client.AllowAlways: at.always, client.AllowSession: at.session, client.Deny: at.deny}[ans]
 		in := func(x ui.Rect) ui.Rect { return ui.Rect{X: x.X - at.row.X, Y: x.Y - at.row.Y, W: x.W, H: x.H} }
 		labels := make([]zapLabel, len(at.labels))
 		for i, l := range at.labels {
@@ -83,8 +83,10 @@ func (a *app) answer(c *ui.Context, t thread, r *client.RequestEntry, ans client
 			parts:  []zapPart{{in(at.allow), palette.accent}, {in(at.deny), palette.red.Alpha(0.18)}},
 			labels: labels, denied: ans == client.Deny,
 		}
-		if at.always.W > 0 {
-			a.zap.parts = append(a.zap.parts, zapPart{in(at.always), palette.accent.Alpha(0.18)})
+		for _, kept := range []ui.Rect{at.always, at.session} {
+			if kept.W > 0 {
+				a.zap.parts = append(a.zap.parts, zapPart{in(kept), palette.accent.Alpha(0.18)})
+			}
 		}
 	}
 	if a.backend.Respond(t.env, t.id(), r.Request, ans).IsZero() {

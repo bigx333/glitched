@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"slices"
@@ -67,7 +68,8 @@ func TestCodex0171TurnsReplay(t *testing.T) {
 }
 
 // A command codex 0.171.0 asked to run in the read-only sandbox, captured
-// on Praetor: it shows on Glitched's card, and the allowed command ran.
+// on Praetor: it shows on Glitched's card, without the session grant its
+// decisions leave out, and the allowed command ran.
 func TestCodex0171ApprovalReplays(t *testing.T) {
 	a := replay(t, "codex-0.171.0-approval.wire")
 	g := open(t, a, spec(t))
@@ -77,6 +79,12 @@ func TestCodex0171ApprovalReplays(t *testing.T) {
 	json.Unmarshal(req.Body, &b)
 	if req.Kind != api.KindApproval || b["command"] != `/bin/zsh -lc "touch hello.txt && printf 'hi' > hello.txt"` || b["cwd"] != "/tmp/workspace" || b["reason"] == "" {
 		t.Errorf("card %s %s", req.Kind, req.Body)
+	}
+	if offersSession(req.Body) {
+		t.Errorf("card %s offers a session grant", req.Body)
+	}
+	if err := g.Do(context.Background(), provider.Respond{Request: req.ID, Answer: json.RawMessage(sessionAnswer)}); err == nil {
+		t.Error("an answer for the session went through")
 	}
 	do(t, g, provider.Respond{Request: req.ID, Answer: json.RawMessage(`{"allow":true}`)})
 	events := turn(t, g)

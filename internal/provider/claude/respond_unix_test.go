@@ -155,6 +155,86 @@ func TestAPromptBecomesTheCardsAsk(t *testing.T) {
 	}
 }
 
+// sessionAnswer is Allow for this session.
+var sessionAnswer = json.RawMessage(`{"allow":true,"session":true}`)
+
+// offersSession is whether a card's body offers Allow for this session.
+func offersSession(body json.RawMessage) bool {
+	var b struct{ Session bool }
+	json.Unmarshal(body, &b)
+	return b.Session
+}
+
+// Where Claude Code suggests how to stop asking, the card offers Allow for
+// this session, and that answer sends Claude Code's own suggestions back,
+// each kept to the session, never to the settings it names.
+func TestASessionGrantSendsClaudesSuggestionsForTheSession(t *testing.T) {
+	bash := map[string]any{"tool_name": "Bash", "input": map[string]any{"command": "npm test"}}
+	for name, tc := range map[string]struct {
+		request     map[string]any
+		suggestions []any
+		want        string
+	}{
+		"edits": {write(1), []any{map[string]any{"type": "setMode", "mode": "acceptEdits", "destination": "session"}},
+			`[{"type":"setMode","mode":"acceptEdits","destination":"session"}]`},
+		"a command's rule": {bash, []any{map[string]any{"type": "addRules", "rules": []any{map[string]any{"toolName": "Bash", "ruleContent": "npm test:*"}}, "behavior": "allow", "destination": "localSettings"}},
+			`[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test:*"}],"behavior":"allow","destination":"session"}]`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tc.request["permission_suggestions"] = tc.suggestions
+			asks(t, tc.request, false)
+			replies := stdin(t)
+			ag := open(t)
+			if err := ag.Do(ctx, provider.Start{Text: "go"}); err != nil {
+				t.Fatal(err)
+			}
+			r := nextRequest(t, ag)
+			if !offersSession(r.Body) {
+				t.Errorf("card %s offers no session grant", r.Body)
+			}
+			if err := ag.Do(ctx, provider.Respond{Request: r.ID, Answer: sessionAnswer}); err != nil {
+				t.Fatal(err)
+			}
+			if nextRequest(t, ag) != nil {
+				t.Fatal("claude asked again")
+			}
+			ag.Close(ctx)
+			got := replies()[r.ID]
+			if len(got) != 1 || got[0].Behavior != "allow" || !sameJSON(got[0].UpdatedPermissions, json.RawMessage(tc.want)) {
+				t.Errorf("Claude Code got %+v, want an allow with updatedPermissions %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// A prompt Claude Code suggests nothing for offers no session grant: an
+// answer for the session fails, and Allow once sends no permissions.
+func TestNoSessionGrantWithoutClaudesSuggestions(t *testing.T) {
+	asks(t, write(1), false)
+	replies := stdin(t)
+	ag := open(t)
+	if err := ag.Do(ctx, provider.Start{Text: "go"}); err != nil {
+		t.Fatal(err)
+	}
+	r := nextRequest(t, ag)
+	if offersSession(r.Body) {
+		t.Errorf("card %s offers a session grant", r.Body)
+	}
+	if err := ag.Do(ctx, provider.Respond{Request: r.ID, Answer: sessionAnswer}); err == nil {
+		t.Error("an answer for the session went through")
+	}
+	if err := ag.Do(ctx, provider.Respond{Request: r.ID, Answer: json.RawMessage(`{"allow":true}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if nextRequest(t, ag) != nil {
+		t.Fatal("claude asked again")
+	}
+	ag.Close(ctx)
+	if got := replies()[r.ID]; len(got) != 1 || got[0].Behavior != "allow" || got[0].UpdatedPermissions != nil {
+		t.Errorf("Claude Code got %+v, want one allow with no permissions", got)
+	}
+}
+
 // An answer that reaches the adapter once Claude Code stopped waiting on
 // its prompt goes nowhere, and says so.
 func TestAnAnswerClaudeCodeNoLongerWaitsOnFails(t *testing.T) {

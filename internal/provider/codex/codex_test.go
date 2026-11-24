@@ -535,6 +535,16 @@ func compact(raw json.RawMessage) string {
 // card's body, the run's events and what Codex was answered.
 func approvalRun(t *testing.T, scenario string, allow bool) (map[string]string, []provider.Event, string) {
 	t.Helper()
+	body, events, answer := answerRun(t, scenario, `{"allow":`+strconv.FormatBool(allow)+"}")
+	var b map[string]string
+	json.Unmarshal(body, &b)
+	return b, events, answer
+}
+
+// answerRun opens Codex's card in scenario, answers it with answer, and
+// returns the card's body, the run's events and what Codex was answered.
+func answerRun(t *testing.T, scenario, answer string) (json.RawMessage, []provider.Event, string) {
+	t.Helper()
 	a, log := fake(t, scenario)
 	g := open(t, a, spec(t))
 	do(t, g, provider.Start{Text: "go"})
@@ -542,16 +552,70 @@ func approvalRun(t *testing.T, scenario string, allow bool) (map[string]string, 
 	if req.Kind != api.KindApproval {
 		t.Fatalf("a %s request", req.Kind)
 	}
-	var b map[string]string
-	json.Unmarshal(req.Body, &b)
-	do(t, g, provider.Respond{Request: req.ID, Answer: json.RawMessage(`{"allow":` + strconv.FormatBool(allow) + "}")})
+	do(t, g, provider.Respond{Request: req.ID, Answer: json.RawMessage(answer)})
 	events := turn(t, g)
 	closeRun(t, g)
 	got := answers(t, log)
 	if len(got) != 1 {
 		t.Fatalf("answers %s", got)
 	}
-	return b, events, compact(got[0])
+	return req.Body, events, compact(got[0])
+}
+
+// offersSession is whether a card's body offers Allow for this session.
+func offersSession(body json.RawMessage) bool {
+	var b struct{ Session bool }
+	json.Unmarshal(body, &b)
+	return b.Session
+}
+
+const sessionAnswer = `{"allow":true,"session":true}`
+
+// Where Codex offers to allow such calls for its session, the card offers
+// it too, and the answer goes back in Codex's own words: acceptForSession
+// for a command or a file change, the session scope for more access, and
+// Codex's own option for an MCP tool.
+func TestTheCardOffersCodexsSessionGrant(t *testing.T) {
+	for scenario, want := range map[string]string{
+		"network":        `{"decision":"acceptForSession"}`,
+		"file-no-reason": `{"decision":"acceptForSession"}`,
+		"permissions":    `{"permissions":{"network":{"enabled":true}},"scope":"session"}`,
+		"mcp-approval":   `{"answers":{"mcp_tool_call_approval_call-1":{"answers":["Allow for this session"]}}}`,
+	} {
+		body, _, answer := answerRun(t, scenario, sessionAnswer)
+		if !offersSession(body) {
+			t.Errorf("%s: card %s offers no session grant", scenario, body)
+		}
+		if answer != want {
+			t.Errorf("%s: answered %s, want %s", scenario, answer, want)
+		}
+	}
+}
+
+// Where Codex offers no session grant the card offers none, an answer for
+// the session fails, and Codex still gets the user's one answer: a
+// command whose decisions leave it out, a file change Codex asks about
+// with a reason, which it would ask about again, an MCP tool without the
+// option, and an elicitation.
+func TestNoSessionGrantWhereCodexOffersNone(t *testing.T) {
+	for _, scenario := range []string{"command", "file", "mcp-approval-once", "elicitation"} {
+		a, log := fake(t, scenario)
+		g := open(t, a, spec(t))
+		do(t, g, provider.Start{Text: "go"})
+		_, req := until[provider.RequestOpened](t, g)
+		if offersSession(req.Body) {
+			t.Errorf("%s: card %s offers a session grant", scenario, req.Body)
+		}
+		if err := g.Do(context.Background(), provider.Respond{Request: req.ID, Answer: json.RawMessage(sessionAnswer)}); err == nil {
+			t.Errorf("%s: an answer for the session went through", scenario)
+		}
+		do(t, g, provider.Respond{Request: req.ID, Answer: json.RawMessage(`{"allow":true}`)})
+		turn(t, g)
+		closeRun(t, g)
+		if got := answers(t, log); len(got) != 1 || strings.Contains(string(got[0]), "ession") {
+			t.Errorf("%s: answered %s, want one answer for this call", scenario, got)
+		}
+	}
 }
 
 // A command Codex wants to run shows Glitched's card with the command and
@@ -589,7 +653,7 @@ func TestAFileChangeShowsItsPaths(t *testing.T) {
 	}
 }
 
-// More access is granted for the turn only, or not at all.
+// Allow once grants more access for the turn only, and Deny none.
 func TestMoreAccessIsForTheTurn(t *testing.T) {
 	for allow, want := range map[bool]string{
 		true:  `{"permissions":{"network":{"enabled":true}},"scope":"turn"}`,

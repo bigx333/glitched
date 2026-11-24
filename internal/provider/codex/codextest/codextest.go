@@ -632,8 +632,8 @@ func (f *fake) play(n int, turn, said string) {
 		f.item("item/started", cmd)
 		d := decision(f.answer("item/commandExecution/requestApproval", map[string]any{"threadId": thread, "turnId": turn, "itemId": "cmd-n", "command": "curl status.example", "cwd": f.cwd, "reason": "check status", "startedAtMs": 1,
 			"networkApprovalContext": map[string]any{"host": "status.example", "protocol": "https"},
-			"availableDecisions":     []any{"accept", map[string]any{"acceptWithExecpolicyAmendment": map[string]any{"execpolicy_amendment": []any{"curl"}}}, "cancel"}}))
-		cmd["status"] = map[bool]string{true: "completed", false: "declined"}[d == "accept"]
+			"availableDecisions":     []any{"accept", "acceptForSession", "cancel"}}))
+		cmd["status"] = map[bool]string{true: "completed", false: "declined"}[strings.HasPrefix(d, "accept")]
 		f.item("item/completed", cmd)
 		f.message("msg-"+turn, "decision "+d)
 	case "memory":
@@ -775,22 +775,30 @@ func (f *fake) play(n int, turn, said string) {
 		}
 		f.item("item/completed", cmd)
 		f.message("msg-"+turn, "decision "+d)
-	case "file":
+	case "file", "file-no-reason":
 		fc := map[string]any{"type": "fileChange", "id": "fc-1", "changes": []any{map[string]any{"path": filepath.Join(f.cwd, "a.txt"), "kind": map[string]any{"type": "add"}, "diff": "+hi\n"}}, "status": "inProgress"}
 		f.item("item/started", fc)
-		d := decision(f.answer("item/fileChange/requestApproval", map[string]any{"threadId": thread, "turnId": turn, "itemId": "fc-1", "reason": "write a.txt", "startedAtMs": 1}))
-		fc["status"] = map[bool]string{true: "completed", false: "declined"}[d == "accept"]
+		params := map[string]any{"threadId": thread, "turnId": turn, "itemId": "fc-1", "reason": "write a.txt", "startedAtMs": 1}
+		if f.scenario == "file-no-reason" {
+			params["reason"] = nil
+		}
+		d := decision(f.answer("item/fileChange/requestApproval", params))
+		fc["status"] = map[bool]string{true: "completed", false: "declined"}[strings.HasPrefix(d, "accept")]
 		f.item("item/completed", fc)
 		f.message("msg-"+turn, "decision "+d)
 	case "permissions":
 		f.answer("item/permissions/requestApproval", map[string]any{"threadId": thread, "turnId": turn, "itemId": "p-1", "cwd": f.cwd, "reason": "needs the network", "permissions": map[string]any{"network": map[string]any{"enabled": true}}, "startedAtMs": 1, "environmentId": nil})
 		f.message("msg-"+turn, "asked")
-	case "mcp-approval":
+	case "mcp-approval", "mcp-approval-once":
 		call := map[string]any{"type": "mcpToolCall", "id": "call-1", "server": "glitched-browser", "tool": "navigate", "arguments": map[string]any{"url": "https://example.com"}, "status": "inProgress"}
 		f.item("item/started", call)
+		options := []any{map[string]any{"label": "Allow", "description": "Run the tool and continue."}, map[string]any{"label": "Allow for this session", "description": "Remember."}, map[string]any{"label": "Cancel", "description": "Cancel this tool call."}}
+		if f.scenario == "mcp-approval-once" {
+			options = []any{options[0], options[2]}
+		}
 		f.answer("item/tool/requestUserInput", map[string]any{"threadId": thread, "turnId": turn, "itemId": "call-1", "isBlocking": true, "autoResolutionMs": nil, "questions": []any{map[string]any{
 			"id": "mcp_tool_call_approval_call-1", "header": "Approve app tool call?", "question": "Allow glitched-browser to run navigate?", "isOther": false, "isSecret": false,
-			"options": []any{map[string]any{"label": "Allow", "description": "Run the tool and continue."}, map[string]any{"label": "Allow for this session", "description": "Remember."}, map[string]any{"label": "Cancel", "description": "Cancel this tool call."}}}}})
+			"options": options}}})
 		call["status"] = "completed"
 		f.item("item/completed", call)
 		f.message("msg-"+turn, "used the tool")
