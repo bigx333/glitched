@@ -715,7 +715,7 @@ func (d *decision) steer(b api.QueueSteer) error {
 	if live == nil {
 		return d.admit(m.ID)
 	}
-	if err := d.emit(api.MessageClaimed{Message: m.ID, Run: live.ID}); err != nil {
+	if err := d.emit(api.MessageClaimed{Message: m.ID, Run: live.ID, Steer: true}); err != nil {
 		return err
 	}
 	d.effects = append(d.effects, SteerTurn{Run: live.ID, Message: m.ID, Text: m.Text})

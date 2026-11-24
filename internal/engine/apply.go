@@ -117,7 +117,9 @@ func apply(t Thread, e Event) (Thread, error) {
 			return t, &TransitionError{"message", "unclaimed", "claimed by a run that cannot be steered"}
 		}
 		silent = t.silentRun(b.Run)
-		err = t.claim(b.Message, b.Run)
+		if err = t.claim(b.Message, b.Run); err == nil && b.Steer {
+			t.Queue[t.messageAt(b.Message)].Mode = api.SteerActive
+		}
 	case api.MessageDispatched:
 		if m, ok := t.Message(b.Message); ok {
 			silent = t.silentRun(m.Run)
