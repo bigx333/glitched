@@ -140,11 +140,17 @@ func (a *app) queueRow(c *ui.Context, t thread, q []*client.UserEntry, i int, u 
 						a.saveQueueEdit(t, u)
 					}
 					if action(c, "cancel", icX, "Cancel", false).Clicked() {
-						a.queueEditing = queueEdit{}
+						a.endQueueEdit(u)
 					}
 					break
 				}
-				if action(c, "edit", icPencil, "Edit", false).Clicked() {
+				edit := action(c, "edit", icPencil, "Edit", false)
+				if a.queueRefocus == u.Message {
+					edit.Bind(&a.queueEditButton)
+					a.queueEditButton.Focus()
+					a.queueRefocus = api.ID{}
+				}
+				if edit.Clicked() {
 					a.queueEditing = queueEdit{message: u.Message, text: u.Text}
 					a.queueArea.Focus()
 				}
@@ -196,9 +202,9 @@ func (a *app) queueText(c *ui.Context, t thread, u *client.UserEntry, r queueRow
 			return
 		}
 		e := &a.queueEditing
-		ui.TextArea(c.Key("edit"), &e.text).Bind(&a.queueArea).FontSize(12).Padding(4, 6).Grow(1).Shrink(1).MinWidth(0).MaxHeight(120)
+		ui.TextArea(c.Key("edit"), &e.text).Bind(&a.queueArea).Label("Edit queued message").FontSize(12).Padding(4, 6).Grow(1).Shrink(1).MinWidth(0).MaxHeight(120)
 		a.queueArea.OnShortcut(c, ui.Cmd, ui.KeyEnter, func() { a.saveQueueEdit(t, u) })
-		a.queueArea.OnShortcut(c, 0, ui.KeyEscape, func() { a.queueEditing = queueEdit{} })
+		a.queueArea.OnShortcut(c, 0, ui.KeyEscape, func() { a.endQueueEdit(u) })
 	})
 }
 
@@ -206,8 +212,15 @@ func (a *app) queueText(c *ui.Context, t thread, u *client.UserEntry, r queueRow
 // new, and ends the edit.
 func (a *app) saveQueueEdit(t thread, u *client.UserEntry) {
 	text := a.queueEditing.text
-	a.queueEditing = queueEdit{}
+	a.endQueueEdit(u)
 	if strings.TrimSpace(text) != "" && text != u.Text {
 		a.backend.EditQueued(t.env, t.id(), u.Message, text)
 	}
+}
+
+// endQueueEdit ends u's edit, and gives the focus back to its Edit, as
+// a dialog gives it back to what opened it.
+func (a *app) endQueueEdit(u *client.UserEntry) {
+	a.queueEditing = queueEdit{}
+	a.queueRefocus = u.Message
 }

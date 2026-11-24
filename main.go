@@ -612,6 +612,10 @@ type app struct {
 	// queueArea the area it's edited in.
 	queueEditing queueEdit
 	queueArea    ui.Handle
+	// queueRefocus is the queued message whose Edit takes the focus back
+	// as its edit ends, and queueEditButton that Edit.
+	queueRefocus    api.ID
+	queueEditButton ui.Handle
 	// queueH is the queue's height over the composer, as last laid out.
 	queueH float32
 	// snoozeFor is the thread whose snooze popover is open; popoverOpen
