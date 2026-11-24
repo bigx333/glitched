@@ -307,7 +307,8 @@ func CheckChild(line []Thread, kids Kids, lim Limits, c api.ThreadCreate) error 
 // CheckFork checks c, a create with a Fork, against src, the thread it
 // forks, and says where the fork goes on from: only the user forks, a
 // thread that is there, from a finished turn that isn't a silent one
-// and that src's conversation still holds.
+// and that src's conversation still holds, its last such when c names
+// none.
 func CheckFork(src Thread, c api.ThreadCreate) (*api.Forked, error) {
 	if !c.Parent.IsZero() || !c.Run.IsZero() {
 		return nil, rejected("only you fork a thread, not an agent")
@@ -322,8 +323,12 @@ func CheckFork(src Thread, c api.ThreadCreate) (*api.Forked, error) {
 			continue
 		}
 		f.Runs = append(f.Runs, r.ID)
-		if r.ID == c.Fork.Run {
-			finished = r.State == RunFinished && !r.Silent
+		turn := r.State == RunFinished && !r.Silent
+		if c.Fork.Run.IsZero() && turn {
+			f.Run = r.ID
+		}
+		if r.ID == f.Run {
+			finished = turn
 		}
 	}
 	if !finished {

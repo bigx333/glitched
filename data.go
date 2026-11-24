@@ -154,6 +154,7 @@ const (
 	entryCompact
 	entryPlan
 	entryRevert
+	entryFork
 )
 
 // An entry is a row of the timeline. Its key stays the same while it
@@ -192,6 +193,11 @@ type entry struct {
 	reports []client.ReportEntry
 	// revert is how a revert of the files ended, a revert entry's.
 	revert *client.RevertEntry
+	// fork is where a fork goes on from, a fork entry's.
+	fork *client.ForkEntry
+	// turn is the run a turn's last reply is of, once the run ended: a
+	// fork can go on from there.
+	turn api.ID
 }
 
 // fileChange is a file the agent's edits name, when they last moved, and
@@ -253,7 +259,11 @@ func (d *deriving) add(e client.Entry) {
 		d.listed[e.Message] = true
 		d.es = append(d.es, userEntry(e))
 	case *client.AssistantEntry:
-		d.es = append(d.es, entry{key: d.key("a", e.Run), kind: entryAssistant, text: e.Text, streaming: e.Streaming, at: e.At, ran: ranFor(e.End), retry: unfinished(e.End)})
+		ae := entry{key: d.key("a", e.Run), kind: entryAssistant, text: e.Text, streaming: e.Streaming, at: e.At, ran: ranFor(e.End), retry: unfinished(e.End)}
+		if e.End != nil {
+			ae.turn = e.Run
+		}
+		d.es = append(d.es, ae)
 	case *client.WorkEntry:
 		d.es = append(d.es, workEntry(d.key("w", e.Run), e))
 	case *client.PlanEntry:
@@ -270,6 +280,8 @@ func (d *deriving) add(e client.Entry) {
 		d.es = append(d.es, entry{key: "k/" + e.Run.String(), kind: entryCompact, text: compactLabel(e), at: e.At})
 	case *client.RevertEntry:
 		d.es = append(d.es, entry{key: "v/" + e.Revert.String(), kind: entryRevert, at: e.At, revert: e})
+	case *client.ForkEntry:
+		d.es = append(d.es, entry{key: "fork", kind: entryFork, at: e.At, fork: e})
 	case *client.ReportEntry:
 		// One after another, they're one card, keyed by its first and
 		// its order among the cards a run's report starts: a run that

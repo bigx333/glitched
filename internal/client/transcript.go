@@ -338,6 +338,15 @@ type RevertEntry struct {
 	Took api.RewindKind
 }
 
+// ForkEntry is where a fork goes on from, the first of its transcript.
+// Took is how its first run took the conversation up, once one has.
+type ForkEntry struct {
+	api.Forked
+	At   time.Time
+	Took api.RewindKind
+}
+
+func (*ForkEntry) entry()       {}
 func (*ErrorEntry) entry()      {}
 func (*CompactionEntry) entry() {}
 func (*RevertEntry) entry()     {}
@@ -374,6 +383,10 @@ func (t *Transcript) apply(e api.Event) {
 		return
 	}
 	switch b := body.(type) {
+	case api.ThreadCreated:
+		if b.Fork != nil {
+			t.add(&ForkEntry{Forked: *b.Fork, At: e.At})
+		}
 	case api.MessageQueued:
 		if b.Silent {
 			break
@@ -548,6 +561,11 @@ func (t *Transcript) apply(e api.Event) {
 			if r, ok := t.Entries[i].(*RevertEntry); ok && r.Rewound() {
 				r.Took = b.Rewound
 				t.edited(r)
+				break
+			}
+			if f, ok := t.Entries[i].(*ForkEntry); ok {
+				f.Took = b.Rewound
+				t.edited(f)
 				break
 			}
 		}
