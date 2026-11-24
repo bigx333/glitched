@@ -816,20 +816,21 @@ func (f *fake) play(n int, turn, said string) {
 		call["status"] = "completed"
 		f.item("item/completed", call)
 		f.message("msg-"+turn, "used the tool")
-	case "question", "question-unshowable", "question-like-approval":
+	case "question", "question-unshowable", "question-like-approval", "question-closed-like-approval":
 		options := []any{map[string]any{"label": "Red", "description": "warm"}, map[string]any{"label": "Blue", "description": "cool"}}
-		id := "color"
+		id, other := "color", true
 		switch f.scenario {
 		case "question-unshowable":
 			options = options[:1]
-		case "question-like-approval":
-			// An ordinary question the model asks, with an id and options
-			// that only look like Codex's own MCP approval.
-			id = "mcp_tool_call_approval_call-1"
+		case "question-like-approval", "question-closed-like-approval":
+			// An ordinary question, with an id and options that only look
+			// like Codex's own MCP approval; closed, it takes no answer of
+			// the user's own either, but its id isn't its item's.
+			id, other = "mcp_tool_call_approval_call-1", f.scenario == "question-like-approval"
 			options = []any{map[string]any{"label": "Allow", "description": "go"}, map[string]any{"label": "Allow for this session", "description": "keep going"}, map[string]any{"label": "Cancel", "description": "stop"}}
 		}
 		a := f.answer("item/tool/requestUserInput", map[string]any{"threadId": thread, "turnId": turn, "itemId": "q-1", "isBlocking": true, "autoResolutionMs": nil, "questions": []any{map[string]any{
-			"id": id, "header": "Color", "question": "Which color?", "isOther": true, "isSecret": false, "options": options}}})
+			"id": id, "header": "Color", "question": "Which color?", "isOther": other, "isSecret": false, "options": options}}})
 		f.message("msg-"+turn, "answered "+string(a.Result))
 	case "elicitation", "elicitation-fields", "elicitation-session", "elicitation-session-always", "elicitation-always":
 		schema := map[string]any{"type": "object", "properties": map[string]any{}}

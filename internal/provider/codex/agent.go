@@ -900,12 +900,12 @@ func (g *Agent) request(m message) {
 				labels = append(labels, o.Label)
 			}
 		}
-		if len(r.Questions) == 1 && strings.HasPrefix(r.Questions[0].ID, toolApproval+"_") && !r.Questions[0].IsOther && !r.Questions[0].IsSecret &&
+		if len(r.Questions) == 1 && r.Questions[0].ID == toolApproval+"_"+r.ItemID && !r.Questions[0].IsOther && !r.Questions[0].IsSecret &&
 			slices.Contains(labels, toolAccept) && slices.Contains(labels, toolRefuse) {
 			q := r.Questions[0]
 			a.tool, a.ids = true, []string{q.ID}
 			b = body{Operation: "use a tool", Reason: q.Question, Session: slices.Contains(labels, toolSession)}
-			if it := g.items[strings.TrimPrefix(q.ID, toolApproval+"_")]; it != nil {
+			if it := g.items[r.ItemID]; it != nil {
 				b.Operation, b.Args = "use "+it.Server+": "+it.Tool, argsText(it.Arguments)
 			}
 			break

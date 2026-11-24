@@ -748,18 +748,22 @@ func TestAQuestionAsksTheUser(t *testing.T) {
 // grants nothing, so the card offers no grant, and the pick goes back as
 // the question's answer.
 func TestAQuestionLikeAnApprovalStaysAQuestion(t *testing.T) {
-	a, log := fake(t, "question-like-approval")
-	g := open(t, a, spec(t))
-	do(t, g, provider.Start{Text: "go"})
-	_, req := until[provider.RequestOpened](t, g)
-	if req.Kind != api.KindQuestion || offersSession(req.Body) {
-		t.Fatalf("a %s request %s, want a question", req.Kind, req.Body)
-	}
-	do(t, g, provider.Respond{Request: req.ID, Answer: json.RawMessage(`{"answers":[{"picked":["Allow for this session"]}]}`)})
-	turn(t, g)
-	closeRun(t, g)
-	if got := answers(t, log); len(got) != 1 || compact(got[0]) != `{"answers":{"mcp_tool_call_approval_call-1":{"answers":["Allow for this session"]}}}` {
-		t.Errorf("answered %s", got)
+	for _, scenario := range []string{"question-like-approval", "question-closed-like-approval"} {
+		t.Run(scenario, func(t *testing.T) {
+			a, log := fake(t, scenario)
+			g := open(t, a, spec(t))
+			do(t, g, provider.Start{Text: "go"})
+			_, req := until[provider.RequestOpened](t, g)
+			if req.Kind != api.KindQuestion || offersSession(req.Body) {
+				t.Fatalf("a %s request %s, want a question", req.Kind, req.Body)
+			}
+			do(t, g, provider.Respond{Request: req.ID, Answer: json.RawMessage(`{"answers":[{"picked":["Allow for this session"]}]}`)})
+			turn(t, g)
+			closeRun(t, g)
+			if got := answers(t, log); len(got) != 1 || compact(got[0]) != `{"answers":{"mcp_tool_call_approval_call-1":{"answers":["Allow for this session"]}}}` {
+				t.Errorf("answered %s", got)
+			}
+		})
 	}
 }
 
