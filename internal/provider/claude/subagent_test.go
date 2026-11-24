@@ -2,6 +2,7 @@ package claude
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"glitched/internal/api"
@@ -77,5 +78,52 @@ func TestATurnEndingFailsItsSubagentsOpenSteps(t *testing.T) {
 	}
 	if !reflect.DeepEqual(ended, want) {
 		t.Errorf("the turn's end read %+v, want %+v", ended, want)
+	}
+}
+
+// A subagent's text that streams is its, once: the message that repeats
+// it adds nothing, and a stream under a parent the turn never started is
+// nobody's.
+func TestASubagentsStreamedTextIsItsOnce(t *testing.T) {
+	tn := newTurn(t.TempDir())
+	tn.read(line(t, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","id":"spawn"}]}}`))
+	stream := func(parent, text string) []provider.Event {
+		return tn.read(line(t, `{"type":"stream_event","parent_tool_use_id":"`+parent+`","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"`+text+`"}}}`))
+	}
+	if got := stream("unknown", "stray"); len(got) != 0 {
+		t.Fatalf("unknown: %v", got)
+	}
+	if got := stream("spawn", "stream-only"); len(got) != 1 {
+		t.Errorf("tagged stream-only text produced %v", got)
+	}
+	var text strings.Builder
+	for _, ev := range append(stream("spawn", "echo"), tn.read(line(t, `{"type":"assistant","parent_tool_use_id":"spawn","message":{"content":[{"type":"text","text":"echo"}]}}`))...) {
+		if n, ok := ev.(provider.Nested); ok {
+			if s, ok := n.Event.(provider.TextDelta); ok {
+				text.WriteString(s.Text)
+			}
+		}
+	}
+	if strings.Count(text.String(), "echo") != 1 {
+		t.Errorf("stream plus full snapshot duplicated or lost echo: %q", text.String())
+	}
+}
+
+// Only a task_notification that ends a subagent's task settles it, and one
+// of a step of its own, as its Bash, is no subagent's end.
+func TestOnlyATasksEndSettlesItsSubagent(t *testing.T) {
+	tn := newTurn(t.TempDir())
+	emit := func(raw string) []provider.Event { return tn.read(line(t, raw)) }
+	emit(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","id":"spawn"}]}}`)
+	emit(`{"type":"assistant","parent_tool_use_id":"spawn","message":{"content":[{"type":"tool_use","name":"Bash","id":"cmd"}]}}`)
+	if es := emit(`{"type":"system","subtype":"task_notification","tool_use_id":"cmd","status":"completed"}`); len(es) != 0 {
+		t.Errorf("Bash notification: %v", es)
+	}
+	if es := emit(`{"type":"system","subtype":"task_notification","tool_use_id":"spawn","status":"running"}`); len(es) != 0 {
+		t.Errorf("running notification emitted terminal events: %+v", es)
+	}
+	got := emit(`{"type":"user","parent_tool_use_id":"spawn","message":{"content":[{"type":"tool_result","tool_use_id":"cmd","content":"ok"}]}}`)
+	if len(got) != 1 {
+		t.Errorf("tool completion after nonterminal task notification was lost: %v", got)
 	}
 }

@@ -52,6 +52,8 @@ type Agent struct {
 	texts       map[string]int       // how much of each agent message went out
 	last        string               // the agent message the last text was of
 	subagents   map[string]*subagent // native subagents, by their thread
+	pending     map[string][]message // notifications of threads no spawn named yet
+	held        int                  // how many pending holds
 	notices     int
 	tokens      int64 // what the turn's model requests used, so far
 	asks        map[string]*ask
@@ -241,13 +243,7 @@ func (g *Agent) endLocked(end provider.TurnEnded) {
 	g.withdrawLocked("The turn ended before the answer reached Codex.")
 	g.failed = end.Outcome != api.OutcomeCompleted
 	for _, thread := range slices.Sorted(maps.Keys(g.subagents)) {
-		s := g.subagents[thread]
-		for _, id := range s.order {
-			if it := s.items[id]; it.open() {
-				it.Status = "failed"
-				g.queueLocked(provider.Nested{Parent: s.parent, Event: it.work(g.spec.Workspace)})
-			}
-		}
+		g.subagents[thread].closeLocked(g)
 	}
 	for _, id := range g.order {
 		if it := g.items[id]; it.open() {
@@ -453,22 +449,21 @@ func (g *Agent) notify(m message) {
 		if it.Type == "contextCompaction" && m.Method == "item/completed" {
 			g.queueLocked(provider.Context{Compacted: true})
 		}
-		if !it.shown() || it.ID == "" {
+		if it.ID == "" || !it.shown() {
 			return
 		}
-		for _, thread := range it.spawned() {
-			if g.subagents == nil {
-				g.subagents = map[string]*subagent{}
-			}
-			if g.subagents[thread] == nil {
-				g.subagents[thread] = &subagent{parent: it.ID, texts: map[string]int{}, items: map[string]*item{}}
-			}
+		step, bound := g.spawnLocked(&it)
+		if !step {
+			return
 		}
 		if _, seen := g.items[it.ID]; !seen {
 			g.order = append(g.order, it.ID)
 		}
 		g.items[it.ID] = &it
 		g.queueLocked(it.work(g.spec.Workspace))
+		for _, thread := range bound {
+			g.drainLocked(thread)
+		}
 	case "error":
 		if !n.WillRetry && n.Error != nil {
 			g.problem = n.Error.Message
@@ -509,6 +504,11 @@ func (g *Agent) notify(m message) {
 	}
 }
 
+// pendingLimit bounds the notifications of threads no spawn has named
+// yet, which a quick child's can be: Codex may send its whole turn before
+// the item that spawned it says whose it is.
+const pendingLimit = 1024
+
 // subagent is a native subagent of the run's, a thread Codex spawned:
 // parent is the item of the run's that started it, and the rest is what
 // its own items need, as the run's do.
@@ -518,29 +518,94 @@ type subagent struct {
 	last   string
 	items  map[string]*item
 	order  []string
-	tokens int64 // what its thread spent, all told, as Codex last said
+	tokens int64           // what its thread spent, all told, as Codex last said
+	ended  map[string]bool // its turns that ended
+}
+
+// spawnLocked is whether it is a step of the run's, and binds the threads
+// it spawned to it, newly bound. A subAgentActivity is a step only as the
+// start of a thread no earlier item spawned, never the run's own thread;
+// its other kinds are news of a thread already shown. g.mu is held.
+func (g *Agent) spawnLocked(it *item) (step bool, bound []string) {
+	if it.Type == "subAgentActivity" {
+		thread := it.AgentThreadID
+		if it.ActivityKind != "started" || thread == "" || thread == g.p.threadID() || it.AgentPath == "/" || it.AgentPath == "/root" {
+			return false, nil
+		}
+		if s := g.subagents[thread]; s != nil && s.parent != it.ID {
+			return false, nil
+		}
+	}
+	for _, thread := range it.spawned() {
+		if thread == g.p.threadID() || g.subagents[thread] != nil {
+			continue
+		}
+		if g.subagents == nil {
+			g.subagents = map[string]*subagent{}
+		}
+		g.subagents[thread] = &subagent{parent: it.ID, texts: map[string]int{}, items: map[string]*item{}, ended: map[string]bool{}}
+		bound = append(bound, thread)
+	}
+	return true, bound
+}
+
+// drainLocked plays what thread sent before a spawn named it, in the order
+// it came, after the spawn's own step. g.mu is held.
+func (g *Agent) drainLocked(thread string) {
+	held := g.pending[thread]
+	delete(g.pending, thread)
+	g.held -= len(held)
+	for _, m := range held {
+		g.nestedLocked(g.subagents[thread], m)
+	}
+}
+
+// closeLocked fails the steps s still has open. g.mu is held.
+func (s *subagent) closeLocked(g *Agent) {
+	for _, id := range s.order {
+		if it := s.items[id]; it.open() {
+			it.Status = "failed"
+			g.queueLocked(provider.Nested{Parent: s.parent, Event: it.work(g.spec.Workspace)})
+		}
+	}
 }
 
 // nested is what a notification of a native subagent's thread means for
 // the run: its text and steps under the item that started it, and its end
-// with what its thread spent. A thread the run never spawned is nobody's.
+// with what its thread spent. One of a thread no spawn named yet waits for
+// one, within pendingLimit; a thread the run never spawns is nobody's.
 func (g *Agent) nested(thread string, m message) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.started || g.ended {
+		return
+	}
+	if s := g.subagents[thread]; s != nil {
+		g.nestedLocked(s, m)
+		return
+	}
+	if g.held < pendingLimit {
+		if g.pending == nil {
+			g.pending = map[string][]message{}
+		}
+		g.pending[thread] = append(g.pending[thread], m)
+		g.held++
+	}
+}
+
+func (g *Agent) nestedLocked(s *subagent, m message) {
 	var n struct {
+		TurnID     string     `json:"turnId"`
 		ItemID     string     `json:"itemId"`
 		Delta      string     `json:"delta"`
 		Item       item       `json:"item"`
 		TokenUsage tokenUsage `json:"tokenUsage"`
 		Turn       struct {
+			ID     string `json:"id"`
 			Status string `json:"status"`
 		} `json:"turn"`
 	}
 	json.Unmarshal(m.Params, &n)
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	s := g.subagents[thread]
-	if s == nil || !g.started || g.ended {
-		return
-	}
 	add := func(e provider.Event) { g.queueLocked(provider.Nested{Parent: s.parent, Event: e}) }
 	text := func(itemID, t string) {
 		if t == "" {
@@ -563,7 +628,7 @@ func (g *Agent) nested(thread string, m message) {
 				text(it.ID, it.Text[sent:])
 			}
 		}
-		if !it.shown() || it.ID == "" {
+		if !it.shown() || it.ID == "" || it.Type == "subAgentActivity" {
 			return
 		}
 		if _, seen := s.items[it.ID]; !seen {
@@ -574,6 +639,12 @@ func (g *Agent) nested(thread string, m message) {
 	case "thread/tokenUsage/updated":
 		s.tokens = n.TokenUsage.Total.Total
 	case "turn/completed":
+		turn := cmp.Or(n.Turn.ID, n.TurnID)
+		if s.ended[turn] {
+			return
+		}
+		s.ended[turn] = true
+		s.closeLocked(g)
 		end := provider.TurnEnded{Outcome: api.OutcomeCompleted, Tokens: s.tokens}
 		switch n.Turn.Status {
 		case "interrupted":

@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"maps"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -56,6 +58,26 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 		flush = nil
 	}
 	flushText := func() { flushSome(true) }
+	// A native subagent's text is a stream of its own, redacted as the
+	// run's is, apart from it: neither's events end the other's text.
+	nestedText := map[string]*strings.Builder{}
+	flushNested := func(parent string, final bool) {
+		b := nestedText[parent]
+		if b == nil {
+			return
+		}
+		shown, kept := secrets.RedactStream(b.String(), h.credentials(thread), final)
+		if shown != "" {
+			commit(engine.Subagent{Run: run, Event: api.SubagentDelta{Run: run, Parent: parent, Text: shown}})
+		}
+		b.Reset()
+		b.WriteString(kept)
+	}
+	flushAllNested := func() {
+		for _, parent := range slices.Sorted(maps.Keys(nestedText)) {
+			flushNested(parent, true)
+		}
+	}
 	ended := false
 	for done := false; !done; {
 		select {
@@ -83,7 +105,16 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				commit(engine.Work{Item: api.WorkItem{Run: run, Item: ev.Item, Kind: ev.Kind, Title: redact(ev.Title), Status: ev.Status,
 					Path: redact(ev.Path), Exit: ev.Exit, Output: output}})
 			case provider.Nested:
-				flushText()
+				flushSome(false)
+				if d, ok := ev.Event.(provider.TextDelta); ok {
+					if nestedText[ev.Parent] == nil {
+						nestedText[ev.Parent] = &strings.Builder{}
+					}
+					nestedText[ev.Parent].WriteString(d.Text)
+					flushNested(ev.Parent, false)
+					break
+				}
+				flushNested(ev.Parent, true)
 				if b := h.nested(run, ev, redact); b != nil {
 					commit(engine.Subagent{Run: run, Event: b})
 				}
@@ -112,6 +143,7 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 				flushText()
 				commit(engine.Withdrawn{Run: run, Dedup: ev.ID, Reason: redact(ev.Reason)})
 			case provider.TurnEnded:
+				flushAllNested()
 				flushText()
 				if ended = commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: redact(ev.Error), Tokens: ev.Tokens}); ended {
 					h.forget(run)
@@ -119,6 +151,7 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 			}
 		}
 	}
+	flushAllNested()
 	flushText()
 	switch {
 	case ended:
@@ -136,12 +169,11 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 	}
 }
 
-// nested is a native subagent's event as the log keeps it, redacted as
-// the run's own are; nil for one no event shows.
+// nested is a native subagent's step or end as the log keeps it, redacted
+// as the run's own are; nil for one no event shows. Its text is streamed
+// apart (see pump).
 func (h *Host) nested(run api.ID, n provider.Nested, redact func(string) string) api.EventBody {
 	switch ev := n.Event.(type) {
-	case provider.TextDelta:
-		return api.SubagentDelta{Run: run, Parent: n.Parent, Text: redact(ev.Text)}
 	case provider.Work:
 		var output string
 		if ev.Status == api.WorkFailed || ev.Exit != nil && *ev.Exit != 0 {
