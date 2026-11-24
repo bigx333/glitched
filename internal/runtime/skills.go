@@ -48,16 +48,11 @@ func (s *skillStage) stage(thread api.ID, workspace, project string) provider.Sk
 	if s == nil {
 		return provider.Skills{}
 	}
-	set := skills.Find(s.dir, workspace, project)
+	set, done := s.store.Find(workspace, project)
+	defer done()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	root, err := skills.Build(s.dir, set)
-	if err != nil {
-		// A sync may have replaced the synced set Find read: the next
-		// Find reads the one now.
-		set = skills.Find(s.dir, workspace, project)
-		root, err = skills.Build(s.dir, set)
-	}
 	if err != nil {
 		slog.Warn("skills: the run's agent gets none, as they couldn't be copied", "thread", thread, "err", err)
 	}
@@ -189,7 +184,8 @@ func (h *Host) Skills(ctx context.Context, q api.SkillQuery) (api.SkillList, err
 	if h.skills == nil {
 		return list, nil
 	}
-	set := skills.Find(h.skills.dir, t.Workspace, t.Project)
+	set, done := h.skills.store.Find(t.Workspace, t.Project)
+	done()
 	from := ""
 	if o := set.Synced; o != nil {
 		from = o.Name
@@ -215,25 +211,25 @@ var errNoSkills = errors.New("this engine gives its agents no skills")
 
 // SyncSkills takes q's skills as the ones the next runs get from q's
 // machine, once the engine holds every tree of them.
-func (h *Host) SyncSkills(_ context.Context, q api.SkillSync) (api.SkillsSynced, error) {
+func (h *Host) SyncSkills(ctx context.Context, q api.SkillSync) (api.SkillsSynced, error) {
 	if h.skills == nil {
 		return api.SkillsSynced{}, errNoSkills
 	}
-	return h.skills.store.Sync(q, time.Now())
+	return h.skills.store.Sync(ctx, q, time.Now())
 }
 
 // PutSkill keeps the files of a skill a sync is to take.
-func (h *Host) PutSkill(_ context.Context, p api.SkillPut) error {
+func (h *Host) PutSkill(ctx context.Context, p api.SkillPut) error {
 	if h.skills == nil {
 		return errNoSkills
 	}
-	return h.skills.store.Put(p)
+	return h.skills.store.Put(ctx, p)
 }
 
 // DropSkills drops the skills d's machine synced here, for runs to come.
-func (h *Host) DropSkills(_ context.Context, d api.SkillDrop) error {
+func (h *Host) DropSkills(ctx context.Context, d api.SkillDrop) error {
 	if h.skills == nil {
 		return errNoSkills
 	}
-	return h.skills.store.Drop(d.Source)
+	return h.skills.store.Drop(ctx, d.Source)
 }

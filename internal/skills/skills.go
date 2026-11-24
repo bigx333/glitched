@@ -88,16 +88,26 @@ func (s Set) Hash() string {
 // workspace in stateDir has no project's but for a worktree's: a scratch
 // thread gets only the user's. Find reads nothing else in stateDir.
 func Find(stateDir, workspace, project string) Set {
+	o, ok := readOrigin(stateDir)
+	if !ok {
+		return find(stateDir, workspace, project, nil)
+	}
+	return find(stateDir, workspace, project, &o)
+}
+
+// find is Find with the skills synced to the engine, nil for none, as
+// origin names them.
+func find(stateDir, workspace, project string, origin *Origin) Set {
 	f := newFinder(stateDir)
-	home := f.root(Home, filepath.Join(stateDir, "skills"), "")
+	home, _ := f.root(Home, filepath.Join(stateDir, "skills"), "")
 	var synced []Skill
-	if o, ok := readOrigin(stateDir); ok {
-		f.set.Synced = &o
-		synced = f.root(Synced, filepath.Join(stateDir, syncedDir, "sets", o.Set), "")
+	if origin != nil {
+		f.set.Synced = origin
+		synced, _ = f.root(Synced, filepath.Join(stateDir, syncedDir, "sets", origin.Set), "")
 	}
 	var mine []Skill
 	if base, dir := f.projectRoot(workspace, project); dir != "" {
-		mine = f.root(Project, dir, base)
+		mine, _ = f.root(Project, dir, base)
 	}
 	byName := map[string]int{}
 	for _, tier := range [][]Skill{mine, synced, home} {
@@ -155,41 +165,44 @@ func (f *finder) projectRoot(workspace, project string) (base, dir string) {
 }
 
 // root reads the skills in dir, which a project's may not lead out of
-// base.
-func (f *finder) root(src Source, dir, base string) []Skill {
+// base. A dir that isn't there holds none; one it can't read is an error,
+// besides a Skipped.
+func (f *finder) root(src Source, dir, base string) ([]Skill, error) {
 	rd, err := filepath.EvalSymlinks(dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+		return nil, nil
 	}
 	shown := f.shown(src, dir, base)
+	unread := func(err error) ([]Skill, error) {
+		why := fmt.Sprintf("Glitched couldn't read %s: %v", shown, err)
+		f.skip(src, "", why)
+		return nil, errors.New(why)
+	}
 	if err != nil {
-		f.skip(src, "", fmt.Sprintf("Glitched couldn't read %s: %v", shown, err))
-		return nil
+		return unread(err)
 	}
 	rb := real(base)
 	switch {
 	case src == Project && same(rd, f.homeReal):
-		return nil
+		return nil, nil
 	case src == Project && !within(rd, rb):
 		f.skip(src, "", shown+" leads out of its project, so Glitched reads none of it.")
-		return nil
+		return nil, nil
 	case src == Synced && !within(rd, f.synced):
 		f.skip(src, "", shown+" leads out of the synced skills, so Glitched reads none of it.")
-		return nil
+		return nil, nil
 	case within(rd, f.state) && (src == Home && !same(rd, f.homeRoot) || src == Project && !within(rb, f.worktrees)):
 		f.skip(src, "", shown+" leads into Glitched's own folder, so Glitched reads none of it.")
-		return nil
+		return nil, nil
 	}
 	d, err := os.Open(rd)
 	if err != nil {
-		f.skip(src, "", fmt.Sprintf("Glitched couldn't read %s: %v", shown, err))
-		return nil
+		return unread(err)
 	}
 	names, err := d.Readdirnames(-1)
 	d.Close()
 	if err != nil {
-		f.skip(src, "", fmt.Sprintf("Glitched couldn't read %s: %v", shown, err))
-		return nil
+		return unread(err)
 	}
 	names = slices.DeleteFunc(names, func(n string) bool { return strings.HasPrefix(n, ".") })
 	slices.Sort(names)
@@ -211,7 +224,7 @@ func (f *finder) root(src Source, dir, base string) []Skill {
 		sk.Shown = filepath.Join(shown, name)
 		out = append(out, sk)
 	}
-	return out
+	return out, nil
 }
 
 // skill reads the skill in dir, the folder named name in a root.

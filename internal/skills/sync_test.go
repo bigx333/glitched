@@ -23,13 +23,13 @@ type storePeer struct {
 	puts *[]string
 }
 
-func (p storePeer) SyncSkills(_ context.Context, q api.SkillSync) (api.SkillsSynced, error) {
-	return p.s.Sync(q, p.now)
+func (p storePeer) SyncSkills(ctx context.Context, q api.SkillSync) (api.SkillsSynced, error) {
+	return p.s.Sync(ctx, q, p.now)
 }
 
-func (p storePeer) PutSkill(_ context.Context, q api.SkillPut) error {
+func (p storePeer) PutSkill(ctx context.Context, q api.SkillPut) error {
 	*p.puts = append(*p.puts, q.Name)
-	return p.s.Put(q)
+	return p.s.Put(ctx, q)
 }
 
 func push(t *testing.T, from, to string, source api.ID, name string, now time.Time) []string {
@@ -78,8 +78,8 @@ func TestPushSyncsOnlyWhatChanged(t *testing.T) {
 		t.Errorf("the node has review as %+v", set.Skills)
 	}
 	sets, _ := os.ReadDir(filepath.Join(node, syncedDir, "sets"))
-	if len(sets) != 2 {
-		t.Errorf("the node keeps %d sets, want the current one and the one before", len(sets))
+	if len(sets) != 1 {
+		t.Errorf("the node keeps %d sets, want only the current one, as no Find reads the one before", len(sets))
 	}
 }
 
@@ -123,8 +123,12 @@ func TestExportedIsThisMachinesOwn(t *testing.T) {
 	skill(t, filepath.Join(src, "skills"), "theirs", "The source's.")
 	skill(t, filepath.Join(node, "skills"), "mine", "The node's.")
 	push(t, src, node, api.NewID(), "Praetor", time.Now())
+	e, err := Exported(node)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var got []string
-	for _, s := range Exported(node).Manifest.Skills {
+	for _, s := range e.Manifest.Skills {
 		got = append(got, s.Name)
 	}
 	if !slices.Equal(got, []string{"mine"}) {
@@ -139,17 +143,20 @@ func TestDropKeepsAnotherMachinesSet(t *testing.T) {
 	source := api.NewID()
 	push(t, src, node, source, "Praetor", time.Now())
 	s := NewStore(node)
-	if err := s.Drop(api.NewID()); err != nil || Find(node, "", "").Synced == nil {
+	if err := s.Drop(t.Context(), api.NewID()); err != nil || Find(node, "", "").Synced == nil {
 		t.Fatalf("another machine's drop took the set: %v", err)
 	}
-	if err := s.Drop(source); err != nil {
+	if err := s.Drop(t.Context(), source); err != nil {
 		t.Fatal(err)
 	}
 	if set := Find(node, "", ""); set.Synced != nil || len(set.Skills) != 0 {
 		t.Errorf("after its machine's drop the node finds %v from %+v", names(set.Skills), set.Synced)
 	}
-	if _, err := os.Lstat(filepath.Join(node, syncedDir)); !os.IsNotExist(err) {
-		t.Errorf("the synced folder stays: %v", err)
+	if sets, _ := os.ReadDir(filepath.Join(node, syncedDir, "sets")); len(sets) != 0 {
+		t.Errorf("the synced sets stay: %v", sets)
+	}
+	if _, err := os.Lstat(originPath(node)); !os.IsNotExist(err) {
+		t.Errorf("current.json stays: %v", err)
 	}
 }
 
@@ -194,10 +201,10 @@ func TestStoreRefusesHostileOffers(t *testing.T) {
 	s := NewStore(node)
 	good := put("good", "a.md", "ok")
 	source := api.NewID()
-	if err := s.Put(good); err != nil {
+	if err := s.Put(t.Context(), good); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Sync(api.SkillSync{Source: source, Name: "Praetor", Manifest: manifest(good)}, time.Now()); err != nil {
+	if _, err := s.Sync(t.Context(), api.SkillSync{Source: source, Name: "Praetor", Manifest: manifest(good)}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	before := skillstest.Fingerprint(t, filepath.Join(node, syncedDir, "sets"), originPath(node))
@@ -223,7 +230,7 @@ func TestStoreRefusesHostileOffers(t *testing.T) {
 		"a tree that isn't a hash":             {Name: "good", Tree: "../../x", Files: good.Files},
 	}
 	for why, p := range puts {
-		if err := s.Put(p); err == nil {
+		if err := s.Put(t.Context(), p); err == nil {
 			t.Errorf("a put of %s was taken", why)
 		}
 	}
@@ -253,11 +260,11 @@ func TestStoreRefusesHostileOffers(t *testing.T) {
 		"a skill twice":                     setOf(twice),
 	}
 	for why, m := range manifests {
-		if _, err := s.Sync(api.SkillSync{Source: source, Name: "Praetor", Manifest: m}, time.Now()); err == nil {
+		if _, err := s.Sync(t.Context(), api.SkillSync{Source: source, Name: "Praetor", Manifest: m}, time.Now()); err == nil {
 			t.Errorf("a set with %s was taken", why)
 		}
 	}
-	if _, err := s.Sync(api.SkillSync{Name: "Praetor", Manifest: manifest(good)}, time.Now()); err == nil {
+	if _, err := s.Sync(t.Context(), api.SkillSync{Name: "Praetor", Manifest: manifest(good)}, time.Now()); err == nil {
 		t.Error("a set from no machine was taken")
 	}
 	if after := skillstest.Fingerprint(t, filepath.Join(node, syncedDir, "sets"), originPath(node)); after != before {
@@ -282,12 +289,12 @@ func TestTwoSyncsKeepEachOthersPuts(t *testing.T) {
 	s := NewStore(node)
 	a, b := put("one", "a.md", "a"), put("two", "b.md", "b")
 	for _, p := range []api.SkillPut{a, b} {
-		if err := s.Put(p); err != nil {
+		if err := s.Put(t.Context(), p); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, q := range []api.SkillSync{offer(api.NewID(), a), offer(api.NewID(), b)} {
-		got, err := s.Sync(q, time.Now())
+		got, err := s.Sync(t.Context(), q, time.Now())
 		if err != nil || len(got.Missing) != 0 {
 			t.Fatalf("a sync whose tree was put answered %+v, %v", got, err)
 		}
@@ -300,15 +307,15 @@ func TestSyncCollectsWhatNoSyncTakes(t *testing.T) {
 	node, _ := folders(t)
 	s := NewStore(node)
 	p := put("one", "a.md", "a")
-	if err := s.Put(p); err != nil {
+	if err := s.Put(t.Context(), p); err != nil {
 		t.Fatal(err)
 	}
 	q := offer(api.NewID(), p)
-	if _, err := s.Sync(q, time.Now()); err != nil {
+	if _, err := s.Sync(t.Context(), q, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	stale := put("old", "b.md", "b")
-	if err := s.Put(stale); err != nil {
+	if err := s.Put(t.Context(), stale); err != nil {
 		t.Fatal(err)
 	}
 	long := time.Now().Add(-2 * staleAfter)
@@ -316,7 +323,7 @@ func TestSyncCollectsWhatNoSyncTakes(t *testing.T) {
 	for _, d := range []string{s.dir("sets", ".tmp-1"), s.dir("incoming", ".tmp-2")} {
 		write(t, filepath.Join(d, "x"), "x")
 	}
-	if _, err := s.Sync(q, time.Now()); err != nil {
+	if _, err := s.Sync(t.Context(), q, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	for _, d := range []string{s.dir("sets", ".tmp-1"), s.dir("incoming", ".tmp-2"), s.dir("incoming", stale.Tree)} {
@@ -332,10 +339,10 @@ func TestPutKeepsWaitingTreesWithinALimit(t *testing.T) {
 	was := waitingLimit
 	waitingLimit = 1 << 20
 	t.Cleanup(func() { waitingLimit = was })
-	if err := s.Put(put("one", "a.bin", strings.Repeat("a", 700<<10))); err != nil {
+	if err := s.Put(t.Context(), put("one", "a.bin", strings.Repeat("a", 700<<10))); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put(put("two", "b.bin", strings.Repeat("b", 700<<10))); err == nil || !strings.Contains(err.Error(), "no sync has taken yet") {
+	if err := s.Put(t.Context(), put("two", "b.bin", strings.Repeat("b", 700<<10))); err == nil || !strings.Contains(err.Error(), "no sync has taken yet") {
 		t.Errorf("a put past the limit was answered %v", err)
 	}
 }
@@ -350,11 +357,11 @@ func TestPutRefusesATreeTheFilesystemFolds(t *testing.T) {
 	folds := err == nil
 	s := NewStore(node)
 	p := put("cased", "README.md", "upper", "readme.md", "lower")
-	if err := s.Put(p); (err != nil) != folds {
+	if err := s.Put(t.Context(), p); (err != nil) != folds {
 		t.Fatalf("a put of README.md and readme.md where the filesystem folds case is %v answered %v", folds, err)
 	}
 	if !folds {
-		if got, err := s.Sync(offer(api.NewID(), p), time.Now()); err != nil || len(got.Missing) != 0 {
+		if got, err := s.Sync(t.Context(), offer(api.NewID(), p), time.Now()); err != nil || len(got.Missing) != 0 {
 			t.Errorf("its sync answered %+v, %v", got, err)
 		}
 	}
@@ -368,19 +375,235 @@ func TestSyncTakesModesFromTheManifest(t *testing.T) {
 	p := put("runs", "run.sh", "echo hi")
 	p.Files[1].Mode = "755"
 	p.Tree = treeOf(p.Files)
-	if err := s.Put(p); err != nil {
+	if err := s.Put(t.Context(), p); err != nil {
 		t.Fatal(err)
 	}
 	staged := s.dir("incoming", p.Tree, "run.sh")
 	if err := os.Chmod(staged, 0o444); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.Sync(offer(api.NewID(), p), time.Now()); err != nil || len(got.Missing) != 0 {
+	if got, err := s.Sync(t.Context(), offer(api.NewID(), p), time.Now()); err != nil || len(got.Missing) != 0 {
 		t.Fatalf("the sync answered %+v, %v", got, err)
 	}
 	set := Find(node, "", "")
 	fi, err := os.Stat(filepath.Join(set.Skills[0].Dir, "run.sh"))
 	if err != nil || fi.Mode().Perm()&0o100 == 0 {
 		t.Errorf("run.sh is %v, %v; want it to run", fi, err)
+	}
+}
+
+// A run that found a synced set reads it whole as it builds, though syncs
+// or a drop replace it in between.
+func TestARunKeepsTheSetItFoundTillItIsBuilt(t *testing.T) {
+	for _, reason := range []string{"two-commits", "drop"} {
+		t.Run(reason, func(t *testing.T) {
+			node, _ := folders(t)
+			store := NewStore(node)
+			source := api.NewID()
+			commit := func(p api.SkillPut) {
+				t.Helper()
+				if err := store.Put(t.Context(), p); err != nil {
+					t.Fatal(err)
+				}
+				if r, err := store.Sync(t.Context(), offer(source, p), time.Now()); err != nil || len(r.Missing) != 0 {
+					t.Fatalf("commit: %+v %v", r, err)
+				}
+			}
+			commit(put("one"))
+			snapshot, done := store.Find("", "")
+			defer done()
+			if len(snapshot.Skills) != 1 {
+				t.Fatalf("initial Find: %+v", snapshot)
+			}
+			otherOverlay, err := Build(t.TempDir(), snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reason == "drop" {
+				if err := store.Drop(t.Context(), source); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				commit(put("two"))
+				commit(put("three"))
+			}
+			if _, err := os.ReadFile(SkillFile(otherOverlay, "one")); err != nil {
+				t.Fatalf("already built overlay lost: %v", err)
+			}
+			if _, err := Build(node, snapshot); err != nil {
+				t.Fatalf("the set returned by Find was reclaimed before Build: %v", err)
+			}
+			done()
+			if sets, _ := os.ReadDir(store.dir("sets")); reason == "drop" && len(sets) != 0 || reason != "drop" && len(sets) != 1 {
+				t.Errorf("once its read was done, the sets left are %v", sets)
+			}
+		})
+	}
+}
+
+// Two machines whose offers share a tree: one's sync taking it leaves it
+// for the other's, which needs no second put.
+func TestAnOfferKeepsATreeAnotherMachinesSyncTook(t *testing.T) {
+	node, _ := folders(t)
+	store := NewStore(node)
+	shared, a, b := put("shared"), put("first"), put("second")
+	qa, qb, qc := offer(api.NewID(), shared, a), offer(api.NewID(), shared, b), offer(api.NewID(), put("third"))
+	sync := func(q api.SkillSync) api.SkillsSynced {
+		t.Helper()
+		r, err := store.Sync(t.Context(), q, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	qc.Source = qb.Source
+	if len(sync(qa).Missing) != 2 || len(sync(qb).Missing) != 2 {
+		t.Fatal("offers should both start missing")
+	}
+	for _, p := range []api.SkillPut{shared, a, b} {
+		if err := store.Put(t.Context(), p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r := sync(qb); len(r.Missing) != 0 {
+		t.Fatalf("second app: %+v", r)
+	}
+	if err := store.Put(t.Context(), put("third")); err != nil {
+		t.Fatal(err)
+	}
+	if r := sync(qc); len(r.Missing) != 0 {
+		t.Fatalf("second app after update: %+v", r)
+	}
+	if r := sync(qa); slices.Contains(r.Missing, shared.Tree) {
+		t.Fatalf("first app successfully staged the common tree, but final sync asked for it again and left source %s current", r.Source)
+	}
+}
+
+// A set a publish left in place without current.json naming it, as a crash
+// between the two leaves, goes at the next sync, one of the set held
+// already included, after a restart.
+func TestASyncCollectsASetAPublishLeftBehind(t *testing.T) {
+	node, _ := folders(t)
+	store := NewStore(node)
+	a, b := put("one"), put("two")
+	source := api.NewID()
+	qa, qb := offer(source, a), offer(source, b)
+	if err := store.Put(t.Context(), a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Sync(t.Context(), qa, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(t.Context(), b); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(originPath(node), originPath(node)+".save"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(originPath(node), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Sync(t.Context(), qb, time.Now()); err == nil {
+		t.Fatal("expected publish failure")
+	}
+	if err := os.Remove(originPath(node)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(originPath(node)+".save", originPath(node)); err != nil {
+		t.Fatal(err)
+	}
+	orphan := store.dir("sets", qb.Manifest.Set)
+	if _, err := os.Stat(orphan); err != nil {
+		t.Fatalf("expected directory to have been committed before pointer: %v", err)
+	}
+	write(t, originPath(node)+".123", "{}")
+	if got, err := NewStore(node).Sync(t.Context(), qa, time.Now()); err != nil || len(got.Missing) != 0 {
+		t.Fatalf("the unchanged sync answered %+v, %v", got, err)
+	}
+	if _, err := os.Stat(orphan); err == nil {
+		t.Error("old final-name generation left by failed pointer publish escaped cleanup after restart and an unchanged sync")
+	}
+	if _, err := os.Stat(originPath(node) + ".123"); err == nil {
+		t.Error("a current.json a write left half done stays")
+	}
+}
+
+// Only skills in the folder this machine exports go: one linked in from
+// elsewhere stays this machine's.
+func TestExportSendsNoSkillLinkedInFromOutside(t *testing.T) {
+	state, work := folders(t)
+	skill(t, work, "outside", "Synthetic skill outside state.")
+	skill(t, filepath.Join(state, "skills"), "inside", "Synthetic skill inside state.")
+	link(t, filepath.Join(work, "outside"), filepath.Join(state, "skills", "outside"))
+	e, err := Exported(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, entry := range e.Manifest.Skills {
+		got = append(got, entry.Name)
+	}
+	if !slices.Equal(got, []string{"inside"}) {
+		t.Errorf("the export holds %v", got)
+	}
+	if local := names(Find(state, "", "").Skills); !slices.Equal(local, []string{"home:inside", "home:outside"}) {
+		t.Errorf("this machine's own agents get %v", local)
+	}
+}
+
+// A skills folder that can't be read fails the push, and the node keeps
+// the set it held; one that isn't there clears it.
+func TestAnUnreadableSkillsFolderKeepsTheNodesSet(t *testing.T) {
+	src, _ := folders(t)
+	node, _ := folders(t)
+	source := api.NewID()
+	home := filepath.Join(src, "skills")
+	skill(t, home, "one", "Present before I/O error.")
+	push(t, src, node, source, "Source", time.Now())
+	if err := os.Rename(home, home+".save"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, home, "regular file simulating a failed directory read")
+	var puts []string
+	if _, err := Push(t.Context(), src, source, "Source", storePeer{NewStore(node), time.Now(), &puts}); err == nil {
+		t.Error("a push of a skills folder that couldn't be read succeeded")
+	}
+	if got := names(Find(node, "", "").Skills); len(got) != 1 {
+		t.Fatalf("the push cleared the node's skills when the source root couldn't be read: %v", got)
+	}
+	if err := os.Remove(home); err != nil {
+		t.Fatal(err)
+	}
+	push(t, src, node, source, "Source", time.Now())
+	if got := names(Find(node, "", "").Skills); len(got) != 0 {
+		t.Errorf("a push with no skills folder left the node %v", got)
+	}
+}
+
+// A drop supersedes a sync of the same machine that arrived before it,
+// though that sync reaches the store after: it takes nothing. A sync whose
+// call ended takes nothing either; one that arrived after the drop takes.
+func TestADropSupersedesASyncThatArrivedBeforeIt(t *testing.T) {
+	node, _ := folders(t)
+	store := NewStore(node)
+	source := api.NewID()
+	p := put("one")
+	if err := store.Put(t.Context(), p); err != nil {
+		t.Fatal(err)
+	}
+	at := func(n uint64) context.Context { return api.WithArrival(t.Context(), n) }
+	if err := store.Drop(at(2), source); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Sync(at(1), offer(source, p), time.Now()); err == nil || Find(node, "", "").Synced != nil {
+		t.Fatalf("a sync that arrived before the drop answered %v and left %+v", err, Find(node, "", "").Synced)
+	}
+	ended, cancel := context.WithCancel(at(3))
+	cancel()
+	if _, err := store.Sync(ended, offer(source, p), time.Now()); err == nil || Find(node, "", "").Synced != nil {
+		t.Fatalf("a sync whose call ended answered %v and left %+v", err, Find(node, "", "").Synced)
+	}
+	if got, err := store.Sync(at(4), offer(source, p), time.Now()); err != nil || len(got.Missing) != 0 || Find(node, "", "").Synced == nil {
+		t.Fatalf("a sync that arrived after the drop answered %+v, %v", got, err)
 	}
 }
