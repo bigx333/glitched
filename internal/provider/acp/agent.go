@@ -207,18 +207,31 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 			return err
 		}
 		// The prompt goes on a call of its own: Start ends once it is
-		// written, or once the call ended without writing it.
+		// written, or once the call ended without writing it. ctx bounds
+		// the write, as Claude's: an agent that stopped reading would hold
+		// it for good, and a stop or a delete with it.
+		ran := make(chan struct{})
+		expire := context.AfterFunc(ctx, func() {
+			g.p.stdin.SetWriteDeadline(time.Now())
+			close(ran)
+		})
 		select {
 		case <-g.sent:
-			return nil
 		case <-g.done:
+		}
+		if !expire() {
+			<-ran
+			g.p.stdin.SetWriteDeadline(time.Time{})
 		}
 		select {
 		case <-g.sent:
 			return nil
 		default:
-			return fmt.Errorf("%s never got the prompt", g.p.profile.Name)
 		}
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("%s never took the prompt: %w", g.p.profile.Name, err)
+		}
+		return fmt.Errorf("%s never got the prompt", g.p.profile.Name)
 	case provider.Interrupt:
 		return g.interrupt(ctx)
 	case provider.Respond:
