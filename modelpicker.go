@@ -119,7 +119,9 @@ const modelRows = 5.5
 // shows another family, or its family's models change around the row: the
 // chosen model's, where it is the family's, else the first, at index at.
 // A copy keyed by names (offeredModels) knows it by name. Glitched's own
-// drawing of the models and a copy's each scroll to it once.
+// drawing of the models and a copy's each scroll to it once, a copy only
+// in a view that has it at at: a view of the models before they changed
+// doesn't.
 type pickerReveal struct {
 	family, key, name string
 	at                int
@@ -271,11 +273,15 @@ func (a *app) modelPicker(c *ui.Context, t thread) {
 				current: true,
 				context: func(r plugins.ThreadRecord) any { return a.composerModelOf(c, t, r, "panel") },
 				listRow: func(c *ui.Context, list *widget.Node, i int, e ui.Element, _ bool) bool {
+					if list.ID == "models" && i == a.pickerReveal.at && a.pickerReveal.names(list.Items[i].Key) {
+						a.pickerReveal.copied = true
+					}
 					a.modelListRow(list.ID, list.Items[i].Key, e)
 					return false
 				},
 				reveal: func(list *widget.Node, it widget.ListItem) bool {
-					return list.ID == "models" && !a.pickerReveal.copied && a.pickerReveal.names(it.Key)
+					r := a.pickerReveal
+					return list.ID == "models" && !r.copied && r.names(it.Key) && r.at < len(list.Items) && list.Items[r.at].Key == it.Key
 				},
 			})
 		})
@@ -442,9 +448,6 @@ func (a *app) modelListRow(list, key string, e ui.Element) {
 			a.pickerFamily = a.shownFamilies()[i].provider
 		}
 	case "models":
-		if a.pickerReveal.names(key) {
-			a.pickerReveal.copied = true
-		}
 		i := slices.IndexFunc(a.offeredModels(), func(m modelInfo) bool { return m.key.String() == key || m.name == key })
 		if i < 0 || a.pickerLock != "" && a.offeredModels()[i].key.Provider != a.pickerLock {
 			return
