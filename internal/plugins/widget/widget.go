@@ -130,7 +130,8 @@ var Natives = map[string]Native{
 	"message.item":  {Props: map[string]string{"index": "number"}, In: []string{"message.toolbar"}, Thread: true},
 	// A queued message's row: its words, or the area they're edited in,
 	// and what can be done with it, Send now, Edit (Save and Cancel while
-	// edited), Up, Down and Remove. One with nothing to do takes no room.
+	// edited), Move up, Move down and Remove, each but Send now an icon.
+	// Move up and Move down keep their room where the row can't move.
 	"queue.text":   {In: []string{"composer.queue"}, Thread: true},
 	"queue.steer":  {In: []string{"composer.queue"}, Thread: true},
 	"queue.edit":   {In: []string{"composer.queue"}, Thread: true},

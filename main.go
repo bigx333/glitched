@@ -618,6 +618,12 @@ type app struct {
 	queueEditButton ui.Handle
 	// queueH is the queue's height over the composer, as last laid out.
 	queueH float32
+	// queueSlotW is the width its rows left their messages, as last laid
+	// out, and queueCompact whether Send now was drawn as an icon to
+	// leave it. queueOrder is the queue's messages as last drawn.
+	queueSlotW   float32
+	queueCompact bool
+	queueOrder   []api.ID
 	// snoozeFor is the thread whose snooze popover is open; popoverOpen
 	// says a plugin's popover drew open, as its row's actions are drawn.
 	snoozeFor   api.ID

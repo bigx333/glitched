@@ -32,7 +32,7 @@ func queueTexts(h *harness) []string {
 
 // The messages that wait their turn are listed over the composer, not in
 // the timeline, each with what can be done with it: Remove takes one out,
-// Down and Up move it past its neighbour, Edit changes its words in place,
+// Move down and Move up move it past its neighbour, Edit changes its words in place,
 // ⌘⏎ saving them and Escape leaving them, and Send now hands it to the
 // agent's turn. None of it stops the run.
 func TestTheQueueOverTheComposerManagesEachMessage(t *testing.T) {
@@ -52,9 +52,9 @@ func TestTheQueueOverTheComposerManagesEachMessage(t *testing.T) {
 
 	h.click("Remove")
 	h.until("the first removed", func() bool { return slices.Equal(queueTexts(h), []string{"Second queued.", "Third queued."}) })
-	h.click("Down")
+	h.click("Move down")
 	h.until("the second moved down", func() bool { return slices.Equal(queueTexts(h), []string{"Third queued.", "Second queued."}) })
-	h.click("Up")
+	h.click("Move up")
 	h.until("the second moved back up", func() bool { return slices.Equal(queueTexts(h), []string{"Second queued.", "Third queued."}) })
 
 	h.click("Edit")
@@ -134,53 +134,149 @@ func TestTheBuiltInQueueIsItsNativeCopy(t *testing.T) {
 	}
 }
 
-// A queued message's row keeps the keyboard focus as messages are queued
-// ahead of it: the focus follows the message, not the place it was in.
-func TestAQueuedRowKeepsTheFocus(t *testing.T) {
+// heldQueue is a thread with n messages held in its queue, "Queued turn
+// 0" first, laid out; queue folds another in at pos, as the engine would.
+func heldQueue(t *testing.T, n int) (h *harness, queue func(text string, pos int64, mode api.DispatchMode)) {
+	t.Helper()
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
 	seed(t, d, "/work/glitched", "Queued history")
-	h := start(t, dir)
+	h = start(t, dir)
 	th := h.thread("Queued history")
 	h.a.select_(th)
 	h.until("initial snapshot", func() bool { return th.Transcript != nil && th.Transcript.Cursor.Seq > 0 })
 	tr := th.Transcript
-	queue := func(text string, pos int64, mode api.DispatchMode) {
+	queue = func(text string, pos int64, mode api.DispatchMode) {
 		applyTo(t, tr, tr.Cursor.Log, api.MessageQueued{Message: api.NewID(), Text: text, Pos: pos, Mode: mode, Held: mode == api.Defer})
 		h.a.changed()
 	}
-	for i := range 12 {
+	for i := range n {
 		queue(fmt.Sprintf("Queued turn %d", i), int64(i), api.Defer)
 	}
 	h.tt.Advance(time.Second)
-	removeOf := func(text string) bool {
-		row, ok := h.tt.Find(text)
-		if !ok {
-			return false
-		}
-		for _, n := range h.tt.AccessAll() {
-			if n.Focused && n.Name == "Remove" {
-				mid := n.Bounds.Y + n.Bounds.H/2
-				return mid > row.Y-4 && mid < row.Y+row.H+4
-			}
-		}
+	return h, queue
+}
+
+// removeOf is whether the focus is on the Remove of the row showing text,
+// as drawn: a row scrolled out of the queue's sight shows nothing.
+func removeOf(h *harness, text string) bool {
+	row, ok := h.tt.Find(text)
+	if !ok || row.H <= 0 {
 		return false
 	}
+	n, ok := focusedNode(h)
+	if !ok || n.Name != "Remove" || n.Bounds.H <= 0 {
+		return false
+	}
+	mid := n.Bounds.Y + n.Bounds.H/2
+	return mid > row.Y-4 && mid < row.Y+row.H+4
+}
+
+// tabToRemoveOf tabs till the Remove of the row showing text has the focus.
+func tabToRemoveOf(t *testing.T, h *harness, text string) {
+	t.Helper()
 	for range 400 {
-		if removeOf("Queued turn 3") {
-			break
+		if removeOf(h, text) {
+			return
 		}
 		h.tt.Key(0, ui.KeyTab)
 		h.tt.Frame()
 	}
-	if !removeOf("Queued turn 3") {
-		t.Fatalf("setup: Tab never reached the Remove of turn 3: %q", h.tt.Texts())
-	}
+	t.Fatalf("setup: Tab never reached the Remove of %q: %q", text, h.tt.Texts())
+}
+
+// A queued message's row keeps the keyboard focus as messages are queued
+// ahead of it: the focus follows the message, not the place it was in.
+func TestAQueuedRowKeepsTheFocus(t *testing.T) {
+	h, queue := heldQueue(t, 12)
+	tabToRemoveOf(t, h, "Queued turn 3")
 	queue("New first", -1, api.RestartActive)
 	queue("New second", -2, api.RestartActive)
 	h.tt.Frame()
-	if !removeOf("Queued turn 3") {
+	if !removeOf(h, "Queued turn 3") {
 		t.Fatalf("after two messages queued ahead, the focus left turn 3's Remove: %q", h.tt.Texts())
+	}
+}
+
+// The queue scrolls to keep the row with the focus in sight as messages
+// queued ahead of it push it past the queue's end.
+func TestTheQueueKeepsTheFocusedRowInSight(t *testing.T) {
+	h, queue := heldQueue(t, 12)
+	tabToRemoveOf(t, h, "Queued turn 5")
+	for i := range 4 {
+		queue(fmt.Sprintf("New %d", i), int64(-1-i), api.RestartActive)
+	}
+	h.tt.Frame()
+	if !removeOf(h, "Queued turn 5") {
+		r, _ := h.tt.Find("Queued turn 5")
+		n, _ := focusedNode(h)
+		t.Fatalf("after four messages queued ahead, turn 5 is drawn at %v and the focus, on %q, at %v; want both in sight", r, n.Name, n.Bounds)
+	}
+}
+
+// Each of a row's actions sits where the same action sits in the other
+// rows, whether or not the row can move up or down.
+func TestTheQueuesActionsLineUpAcrossRows(t *testing.T) {
+	h, _ := heldQueue(t, 3)
+	xs := map[string][]float32{}
+	for _, n := range h.tt.AccessAll() {
+		switch n.Name {
+		case "Send now", "Edit", "Move up", "Move down", "Remove":
+			xs[n.Name] = append(xs[n.Name], n.Bounds.X)
+		}
+	}
+	for _, a := range []struct {
+		name string
+		rows int
+	}{{"Send now", 3}, {"Edit", 3}, {"Remove", 3}, {"Move up", 2}, {"Move down", 2}} {
+		name := a.name
+		if len(xs[name]) != a.rows {
+			t.Errorf("%d of %s, want %d", len(xs[name]), name, a.rows)
+			continue
+		}
+		for _, x := range xs[name] {
+			if x != xs[name][0] {
+				t.Errorf("%s at x %v across the rows; want them lined up", name, xs[name])
+				break
+			}
+		}
+	}
+}
+
+// At the window's narrowest, a short queued message shows whole, drawn as
+// wide as at a wide window: the row's actions give way to it.
+func TestAQueuedMessageFitsAtTheNarrowestWindow(t *testing.T) {
+	h, th := asking(t, runTests)
+	messages := []string{"Then update the docs.", "Dark beta 241", "Finally, open a pull request."}
+	for _, text := range messages {
+		h.a.backend.Send(th.env, th.id(), text, api.AfterActive)
+	}
+	h.until("the queued messages", func() bool { return h.a.current().View.Queued == 3 && h.tt.HasText(messages[2]) })
+	h.tt.SetSize(1320, 860)
+	h.tt.Advance(time.Second)
+	wide := map[string]float32{}
+	for _, s := range messages {
+		r, ok := h.tt.Find(s)
+		if !ok {
+			t.Fatalf("no %q at 1320 points in %q", s, h.tt.Texts())
+		}
+		wide[s] = paintedWidth(h.tt.Image(), r)
+	}
+	h.tt.SetSize(760, 860)
+	h.tt.Advance(time.Second)
+	for _, s := range messages {
+		r, ok := h.tt.Find(s)
+		if !ok {
+			t.Fatalf("no %q in %q", s, h.tt.Texts())
+		}
+		if w := paintedWidth(h.tt.Image(), r); w < wide[s]-1 || wide[s] < 8 {
+			t.Errorf("%q at %+v is drawn %.0f points wide; want %.0f as at 1320 points", s, r, w, wide[s])
+		}
+	}
+	for _, name := range []string{"Send now", "Edit", "Remove"} {
+		if n, ok := h.tt.Access(name); !ok || n.Bounds.X+n.Bounds.W > 760 {
+			t.Errorf("%s at %+v, want it in the window", name, n.Bounds)
+		}
 	}
 }
 
