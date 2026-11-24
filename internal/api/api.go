@@ -534,8 +534,10 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // steers a queued message, which a version 10 engine refuses as unknown
 // commands, and a version 10 GUI would show at its old words and place;
 // version 12 reverts a thread's files, which a version 11 engine refuses
-// as an unknown command.
-const Protocol = 12
+// as an unknown command; version 13 syncs the GUI's machine's skills to
+// the engines it pairs with, which a version 12 engine would refuse as
+// unknown calls and a version 12 GUI would show as the engine's own.
+const Protocol = 13
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host
