@@ -302,3 +302,39 @@ func TestTheHeaderFitsAsTheSidebarGivesWay(t *testing.T) {
 		}
 	}
 }
+
+// At the narrowest window a sidebar dragged to its widest is first capped,
+// so the chat keeps its least width, and still gives its room whole to a
+// panel that doesn't fit beside the capped sidebar. Its dragged width is
+// kept through both: it comes back capped as the panel closes, and whole
+// as the window widens.
+func TestAWideSidebarCappedAtTheNarrowestWindowStillGivesWayToAPanel(t *testing.T) {
+	long := "The sidebar sorts its threads by when each last changed, the newest first, in sidebar.go."
+	h := subagentThreads(t, []provider.Event{spawnStep("alpha"), nestedText("alpha", long)}, "Wide sidebar")
+	h.a.sidebarWidth = maxSidebarWidth
+	h.tt.SetSize(760, 860)
+	h.tt.Advance(time.Second)
+	if r, _ := h.tt.Find("Resize sidebar"); r.X+r.W != 760-minChatWidth {
+		t.Fatalf("with no panel the sidebar's edge is at %v, want it capped at %v", r.X+r.W, 760-minChatWidth)
+	}
+	openSubagentOf(t, h, "Agent alpha")
+	h.tt.Advance(time.Second)
+	r, ok := h.tt.Find(long)
+	if !ok || r.W < 280 || r.X+r.W > 760 {
+		t.Fatalf("beside a %v-point sidebar the subagent's transcript is %g points wide at %g, found %v, want at least 280 within the window", maxSidebarWidth, r.W, r.X, ok)
+	}
+	if h.a.sidebarOpen != 0 || !h.a.showSidebar || h.a.sidebarWidth != maxSidebarWidth {
+		t.Fatalf("the sidebar is %g open, shown %v, %v wide, want it out of the way, still the user's choice at %v", h.a.sidebarOpen, h.a.showSidebar, h.a.sidebarWidth, maxSidebarWidth)
+	}
+	delete(h.a.subagentStep, h.a.current().id())
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if r, _ := h.tt.Find("Resize sidebar"); h.a.sidebarOpen != 1 || r.X+r.W != 760-minChatWidth {
+		t.Fatalf("with the panel closed the sidebar is %g open with its edge at %v, want it back, capped at %v", h.a.sidebarOpen, r.X+r.W, 760-minChatWidth)
+	}
+	h.tt.SetSize(1320, 860)
+	h.tt.Advance(time.Second)
+	if r, _ := h.tt.Find("Resize sidebar"); r.X+r.W != maxSidebarWidth || h.a.sidebarWidth != maxSidebarWidth {
+		t.Fatalf("at 1320 points the sidebar's edge is at %v and its width %v, want both %v", r.X+r.W, h.a.sidebarWidth, maxSidebarWidth)
+	}
+}
