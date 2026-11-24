@@ -411,7 +411,11 @@ func (h *Host) makeWorktree(ctx context.Context, t engine.Thread, b engine.MakeW
 	case locked && strings.TrimSpace(string(lock)) != reason:
 		return fail("the worktree at %s is locked for something else; it stays for what is in it", dir)
 	case locked:
-		if owner, err := os.ReadFile(filepath.Join(own, ownerFile)); err == nil && string(owner) != t.ID.String() {
+		switch owner, err := os.ReadFile(filepath.Join(own, ownerFile)); {
+		case errors.Is(err, os.ErrNotExist):
+		case err != nil:
+			return fail("the owner file of the worktree at %s can't be read (%v); it stays for what is in it", dir, err)
+		case string(owner) != t.ID.String():
 			return fail("the worktree at %s is another thread's; it stays for what is in it", dir)
 		}
 		if status, err := git(ctx, dir, "status", "--porcelain"); err != nil || status != "" {

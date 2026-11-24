@@ -698,7 +698,7 @@ func TestAWorktreeMakeTakesUpNoBranchItDidntMake(t *testing.T) {
 // moved to another branch, fails the thread before anything is changed,
 // and stays locked as it was.
 func TestAReplayLeavesAWorktreeThatIsntTheThreads(t *testing.T) {
-	for _, tamper := range []string{"owner names another thread", "on another branch"} {
+	for _, tamper := range []string{"owner names another thread", "owner can't be read", "on another branch"} {
 		t.Run(tamper, func(t *testing.T) {
 			l := newLinked(t, api.Link{Access: api.AccessAutoEdits}, true)
 			thread := l.mustCreate(api.AccessAsk)
@@ -708,6 +708,10 @@ func TestAReplayLeavesAWorktreeThatIsntTheThreads(t *testing.T) {
 			switch tamper {
 			case "owner names another thread":
 				if err := os.WriteFile(filepath.Join(own, "glitched-thread"), []byte(other), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "owner can't be read":
+				if err := os.WriteFile(filepath.Join(own, "glitched-thread"), []byte(other), 0o200); err != nil {
 					t.Fatal(err)
 				}
 			case "on another branch":
@@ -720,9 +724,14 @@ func TestAReplayLeavesAWorktreeThatIsntTheThreads(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(own, "locked")); err != nil {
 				t.Fatalf("the worktree that isn't the thread's was unlocked: %v", err)
 			}
+			if tamper == "owner can't be read" {
+				if err := os.Chmod(filepath.Join(own, "glitched-thread"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			owner, err := os.ReadFile(filepath.Join(own, "glitched-thread"))
 			switch tamper {
-			case "owner names another thread":
+			case "owner names another thread", "owner can't be read":
 				if string(owner) != other {
 					t.Fatalf("the owner file says %q, want the other thread's %q left as it was", owner, other)
 				}
