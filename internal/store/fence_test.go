@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -109,5 +111,40 @@ func TestAWriteCancelledAfterItsFenceStillCommits(t *testing.T) {
 	}
 	if m, ok := th.Message(last); cancelled != nil || !ok || m.State != engine.QueueReady {
 		t.Fatalf("the write cancelled after its fence returned %v and left its message %+v, want it committed and waiting", cancelled, m)
+	}
+}
+
+// A write cancelled before its fence stops there, and doesn't wait out the
+// write lock another connection holds, as a host that closes would.
+func TestAWriteCancelledBeforeItsFenceStops(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	other, err := sql.Open("sqlite", path+"?_txlock=immediate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	locked, err := other.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locked.Rollback()
+
+	closing, cancel := context.WithCancel(ctx)
+	time.AfterFunc(50*time.Millisecond, cancel)
+	began := time.Now()
+	settle := api.Command{ID: api.NewID(), Target: thread, Body: api.InboxSet{Disposition: api.Disposition{State: api.Settled}}}
+	_, err = s.Submit(closing, settle, time.Now())
+	if took := time.Since(began); !errors.Is(err, context.Canceled) || took > time.Second {
+		t.Fatalf("a write cancelled waiting for the lock returned %v after %s, want context.Canceled at once", err, took)
 	}
 }
