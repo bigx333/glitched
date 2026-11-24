@@ -104,22 +104,22 @@ type Run struct {
 // placeholder's settles here, and Ended is how the child's last run that
 // wasn't silent ended there.
 type Remote struct {
-	Engine    api.ID       `json:"engine"`
-	Link      api.ID       `json:"link"`
-	State     RemoteState  `json:"state"`
-	Attempted bool         `json:"attempted,omitempty"`
-	Thread    api.ID       `json:"thread,omitzero"`
-	Cursor    api.Cursor   `json:"cursor,omitzero"`
-	Run       api.ID       `json:"run,omitzero"`
-	Silent    bool         `json:"silent,omitempty"`
-	Slot      api.RunState `json:"slot,omitempty"`
-	Pending   []api.ID     `json:"pending,omitempty"`
-	Reported  []api.ID     `json:"reported,omitempty"`
-	Lost      string       `json:"lost,omitempty"`
-	Create    *api.Command `json:"create,omitempty"`
-	Taken     bool         `json:"taken,omitempty"`
-	Settles   int          `json:"settles,omitempty"`
-	Ended     *api.Outcome `json:"ended,omitempty"`
+	Engine    api.ID          `json:"engine"`
+	Link      api.ID          `json:"link"`
+	State     RemoteState     `json:"state"`
+	Attempted bool            `json:"attempted,omitempty"`
+	Thread    api.ID          `json:"thread,omitzero"`
+	Cursor    api.Cursor      `json:"cursor,omitzero"`
+	Run       api.ID          `json:"run,omitzero"`
+	Silent    bool            `json:"silent,omitempty"`
+	Slot      api.RunState    `json:"slot,omitempty"`
+	Pending   []api.ID        `json:"pending,omitempty"`
+	Reported  []api.ID        `json:"reported,omitempty"`
+	Lost      string          `json:"lost,omitempty"`
+	Create    *api.Command    `json:"create,omitempty"`
+	Taken     bool            `json:"taken,omitempty"`
+	Settles   int             `json:"settles,omitempty"`
+	Ended     *api.TurnResult `json:"ended,omitempty"`
 }
 
 // Origin is a link's thread's: where it came from, as api.Origin, its
@@ -128,6 +128,7 @@ type Remote struct {
 type Origin struct {
 	api.Origin
 	Making bool `json:"making,omitempty"`
+	Fence  int  `json:"fence,omitempty"`
 }
 
 // tried is whether the placeholder's create may have reached its
@@ -360,7 +361,8 @@ func View(t Thread) api.Thread {
 			v.Run = api.RunStarting
 		}
 		if r.Ended != nil {
-			v.LastTurn = &api.TurnResult{Run: r.Run, Outcome: *r.Ended}
+			e := *r.Ended
+			v.LastTurn = &e
 		}
 	}
 	if r := t.Live(); r != nil {

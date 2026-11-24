@@ -172,6 +172,10 @@ type MessageDispatch struct {
 	// a turn a usage limit ended once it resets, which it refuses on a
 	// child or on a thread settled or snoozed.
 	Auto bool `json:"auto,omitempty"`
+	// Fence is a link's: how many settles of the child its machine had
+	// sent before this message. A settle with a higher one, landed first,
+	// refuses it, so a message delayed on the way can't reopen the child.
+	Fence int `json:"fence,omitempty"`
 }
 
 // TurnInterrupt stops the live run. With Drop, it also cancels the
@@ -230,6 +234,9 @@ type ResumeCancel struct {
 
 type InboxSet struct {
 	Disposition Disposition `json:"disposition"`
+	// Fence is a link's settle's: its count of the child's settles,
+	// which refuses the link's messages sent before it.
+	Fence int `json:"fence,omitempty"`
 }
 
 // ThreadDelete deletes the thread. Its events stay in the log, but no
@@ -644,7 +651,9 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // all, which a version 18 engine refuses as a rewind to a recovery
 // checkpoint, and a version 18 GUI would show with the turns it brings back
 // still forgotten; version 20 takes a link's create of a thread settled
-// on its machine first, which a version 19 engine would start.
+// on its machine first, which a version 19 engine would start, and fences
+// a link's messages by its settles, which a version 19 engine would let a
+// late message reopen.
 const Protocol = 20
 
 type Environment struct {

@@ -43,7 +43,7 @@ func (p *remotes) tool(name, args string) (mcp.TaskState, string) {
 	}
 	var r struct {
 		Result struct {
-			IsError bool `json:"isError"`
+			IsError bool                    `json:"isError"`
 			Content []struct{ Text string } `json:"content"`
 		} `json:"result"`
 	}

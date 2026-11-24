@@ -85,6 +85,9 @@ type RemoteStop struct {
 	Engine, Link api.ID
 	Create       *api.Command `json:",omitempty"`
 	Command      api.Command
+	// Narrow, after Command, gives a child the first create made the
+	// access the placeholder was narrowed to since.
+	Narrow *api.Command `json:",omitempty"`
 }
 
 // RemoteSend sends a placeholder's child a message on its machine,
@@ -241,15 +244,15 @@ var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true
 func ReplaySafe(e Effect) bool { return replaySafe[e.effectKind()] }
 
 var effects = map[string]func([]byte) (Effect, error){
-	"turn.start":      decodeAs[StartTurn],
-	"turn.steer":      decodeAs[SteerTurn],
-	"turn.interrupt":  decodeAs[InterruptTurn],
-	"agent.close":     decodeAs[CloseAgent],
-	"request.deliver": decodeAs[DeliverAnswer],
-	"child.report":    decodeAs[ReportToParent],
-	"worktree.remove": decodeAs[RemoveWorktree],
-	"worktree.make":   decodeAs[MakeWorktree],
-	"remote.create":   decodeAs[RemoteCreate],
+	"turn.start":       decodeAs[StartTurn],
+	"turn.steer":       decodeAs[SteerTurn],
+	"turn.interrupt":   decodeAs[InterruptTurn],
+	"agent.close":      decodeAs[CloseAgent],
+	"request.deliver":  decodeAs[DeliverAnswer],
+	"child.report":     decodeAs[ReportToParent],
+	"worktree.remove":  decodeAs[RemoveWorktree],
+	"worktree.make":    decodeAs[MakeWorktree],
+	"remote.create":    decodeAs[RemoteCreate],
 	"remote.stop":      decodeAs[RemoteStop],
 	"remote.send":      decodeAs[RemoteSend],
 	"remote.configure": decodeAs[RemoteConfigure],
@@ -490,7 +493,7 @@ type RemoteSeen struct {
 	Slot    api.RunState
 	Pending []api.ID
 	Taken   bool
-	Ended   *api.Outcome
+	Ended   *api.TurnResult
 	Reports []RemoteReport
 	On      string
 }

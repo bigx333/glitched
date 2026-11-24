@@ -142,6 +142,11 @@ func (h *Host) createFromLink(ctx context.Context, link api.Link, c api.Command,
 	} else if t.Exists() {
 		return api.Receipt{}, fmt.Errorf("%w: a link creates only a thread that isn't there", api.ErrNotAllowed)
 	}
+	if b.Settled {
+		// Settled before it came, it holds the thread's place, so the
+		// create it was settled after finds it here and makes nothing.
+		return h.store.Submit(ctx, c, h.clock())
+	}
 	if h.worktrees == "" {
 		return refuse("this engine makes no worktrees, so it takes no thread from another machine")
 	}

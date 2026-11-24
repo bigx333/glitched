@@ -137,7 +137,7 @@ func (d *decision) placeholder(id api.ID, b api.Intent) error {
 			return err
 		}
 		if !was && b.Disposition.State == api.Settled && r.tried() {
-			d.stopThere(id, api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+			d.stopThere(id, api.InboxSet{Disposition: api.Disposition{State: api.Settled}, Fence: d.t.Remote.Settles})
 		}
 		return nil
 	case api.ThreadDelete:
@@ -145,7 +145,7 @@ func (d *decision) placeholder(id api.ID, b api.Intent) error {
 			return err
 		}
 		if r.tried() {
-			d.stopThere(id, api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+			d.stopThere(id, api.InboxSet{Disposition: api.Disposition{State: api.Settled}, Fence: r.Settles + 1})
 		}
 		return nil
 	case api.ThreadRename:
@@ -187,7 +187,7 @@ func (d *decision) placeholder(id api.ID, b api.Intent) error {
 				return err
 			}
 		}
-		d.effects = append(d.effects, RemoteSend{Engine: r.Engine, Link: r.Link, Settles: d.t.Remote.Settles, Command: d.there(id, "send", api.MessageDispatch{Text: b.Text, Mode: b.Mode})})
+		d.effects = append(d.effects, RemoteSend{Engine: r.Engine, Link: r.Link, Settles: d.t.Remote.Settles, Command: d.there(id, "send", api.MessageDispatch{Text: b.Text, Mode: b.Mode, Fence: d.t.Remote.Settles})})
 		return nil
 	case api.RequestRespond:
 		return rejected("this child runs on another machine, and what it asks is answered there")
@@ -220,6 +220,11 @@ func (d *decision) stopThere(id api.ID, b api.Intent) {
 	if r.Thread.IsZero() && r.Create != nil {
 		c := *r.Create
 		if create, ok := c.Body.(api.ThreadCreate); ok {
+			if d.t.Access < create.Access {
+				access := d.t.Access
+				s.Narrow = &api.Command{ID: derive(id, d.t.ID.String()+"/narrow"), Target: c.Target, Body: api.ThreadConfigure{Access: &access}}
+				create.Access = access
+			}
 			create.Settled = true
 			c.ID, c.Body = derive(c.ID, "settled"), create
 			s.Create = &c
@@ -453,7 +458,7 @@ func (d *decision) createFromLink(id api.ID, c api.ThreadCreate) error {
 		return rejected("a thread from another machine comes through a link")
 	case !c.Parent.IsZero() || !c.Run.IsZero() || c.Fork != nil || c.Remote != "" || c.Workspace != "" || c.Branch != "":
 		return rejected("a thread from another machine is a thread of its own here, in a worktree this engine makes")
-	case c.Project == "" || c.Worktree == nil || c.Worktree.Base == "":
+	case !c.Settled && (c.Project == "" || c.Worktree == nil || c.Worktree.Base == ""):
 		return rejected("a thread from another machine needs the checkout and the commit its worktree is made from")
 	case strings.TrimSpace(c.Text) == "":
 		return rejected("a thread from another machine needs its task")
@@ -465,10 +470,10 @@ func (d *decision) createFromLink(id api.ID, c api.ThreadCreate) error {
 	if err := d.emit(api.MessageQueued{Message: id, Text: c.Text, Mode: api.StartNow, By: origin.Thread}); err != nil {
 		return err
 	}
-	d.effects = append(d.effects, MakeWorktree{Project: c.Project, Base: c.Worktree.Base, Title: c.Title})
 	if c.Settled {
 		return d.inbox(api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
 	}
+	d.effects = append(d.effects, MakeWorktree{Project: c.Project, Base: c.Worktree.Base, Title: c.Title})
 	return nil
 }
 
@@ -696,6 +701,9 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	}
 	if o := d.t.Origin; o != nil && !o.Making && d.t.Workspace == "" {
 		return rejected("this thread's worktree couldn't be made, so it runs nothing")
+	}
+	if o := d.t.Origin; o != nil && d.by == o.Thread && m.Fence < o.Fence {
+		return rejected("the link's message was sent before a settle that came after it")
 	}
 	if live := d.t.Live(); !m.Replaces.IsZero() && (m.Mode != api.RestartActive || live == nil || live.ID != m.Replaces || live.State != RunUncertain) {
 		return rejected("the run this was to replace has already ended")
@@ -945,9 +953,10 @@ func (d *decision) interrupt(drop bool) error {
 		}
 	}
 	switch {
-	case r == nil && !drop && d.t.Origin != nil && d.t.Origin.Making:
-		// A stop before a link's thread's worktree is made holds its
-		// first message, which would start once it is.
+	case r == nil && !drop && d.t.Origin != nil:
+		// A stop of a link's thread with nothing running holds what
+		// waits, as its first message before its worktree is made or
+		// while its access is over the cap.
 		return d.hold()
 	case r == nil:
 		return nil
@@ -1231,7 +1240,7 @@ func (d *decision) inbox(b api.InboxSet) error {
 	if v.State == d.t.Disposition.State && v.Until.Equal(d.t.Disposition.Until) {
 		return nil
 	}
-	if err := d.emit(api.DispositionChanged{Disposition: v}); err != nil {
+	if err := d.emit(api.DispositionChanged{Disposition: v, Fence: b.Fence}); err != nil {
 		return err
 	}
 	if v.State != api.Settled {
@@ -1613,7 +1622,9 @@ func (d *decision) remote(o Observation) error {
 	return nil
 }
 
-func sameOutcome(a, b *api.Outcome) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
+func sameOutcome(a, b *api.TurnResult) bool {
+	return a == nil && b == nil || a != nil && b != nil && a.Run == b.Run && a.Outcome == b.Outcome
+}
 
 // remoteReport has the placeholder report p to its parent, as report
 // does for a local child, with what its machine, labelled on, said.

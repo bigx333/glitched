@@ -100,7 +100,7 @@ type TaskState struct {
 	Status string `json:"status"`
 	// On is where a task on another machine runs, and when this machine
 	// last heard from it there: its status is as of then.
-	On string `json:"on,omitempty"`
+	On     string `json:"on,omitempty"`
 	Branch string `json:"branch,omitempty"`
 	// Working counts the threads under it at work.
 	Working int `json:"threads_under_it_working,omitempty"`

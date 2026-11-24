@@ -307,7 +307,7 @@ func (h *Host) hear(placeholder api.ID) {
 // lost on the way is lost here too, the stop that didn't reach it said:
 // what runs there is its person's to stop. A message or a narrowing is
 // ended by a settle or a delete, which the stop after it takes up.
-func (h *Host) remoteCommand(e store.Effect, what string, at api.Remote, create *api.Command, c api.Command) (engine.Observation, bool) {
+func (h *Host) remoteCommand(e store.Effect, what string, at api.Remote, create *api.Command, c api.Command, narrow *api.Command) (engine.Observation, bool) {
 	ctx := h.ctx
 	if what == "message" {
 		var done func()
@@ -335,17 +335,23 @@ func (h *Host) remoteCommand(e store.Effect, what string, at api.Remote, create 
 		}
 		var rej *api.RejectedError
 		if create != nil {
-			// A machine that already has the child refuses a second create
-			// of it, and takes c.
+			// A machine that already has the child, or makes it from the
+			// first create as this one lands, refuses this one, and c,
+			// next, finds the child.
 			if err = send(*create); errors.As(err, &rej) {
 				refused = "its create was refused there, so nothing is there: " + rej.Reason
 				return label, false, nil
-			} else if errors.Is(err, api.ErrNotAllowed) {
-				err = nil
+			} else if err != nil && !errors.Is(err, api.ErrNotAllowed) {
+				last = err
+				return label, false, err
 			}
 		}
-		if err == nil {
-			if err = send(c); errors.As(err, &rej) {
+		if err = send(c); errors.As(err, &rej) {
+			refused = rej.Reason
+			return label, false, nil
+		}
+		if err == nil && narrow != nil {
+			if err = send(*narrow); errors.As(err, &rej) {
 				refused = rej.Reason
 				return label, false, nil
 			}
@@ -437,7 +443,13 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			}
 		}
 	}()
-	st, err := m.Open(ctx, api.Subscription{Thread: r.Thread, After: r.Cursor})
+	// A child whose run ended before this engine kept how runs end there
+	// is read from the start once, its reports kept by key.
+	after := r.Cursor
+	if r.Ended == nil && !r.Run.IsZero() && r.Slot == api.RunIdle {
+		after = api.Cursor{}
+	}
+	st, err := m.Open(ctx, api.Subscription{Thread: r.Thread, After: after})
 	if err != nil {
 		return false, err
 	}
