@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"glitched/internal/provider"
 	"glitched/internal/provider/codex"
 	"glitched/internal/provider/codex/codextest"
+	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
 )
 
@@ -54,7 +56,8 @@ func codexAt(t *testing.T, dir string, scale ...float64) (d *Daemon, ep *transpo
 
 // installStarters installs in dir, each signed with this machine's own key,
 // a plugin per id whose service starts the thread a call names with
-// glitched.threads.create, granted what grants gives it.
+// glitched.threads.create, and answers its method deadline with the
+// deadline it heard, granted what grants gives it.
 func installStarters(t *testing.T, dir string, grants map[string][]string) {
 	t.Helper()
 	key, err := pack.LoadKey(dir)
@@ -67,7 +70,8 @@ func installStarters(t *testing.T, dir string, grants map[string][]string) {
 			"plugin.json": `{"id": "` + id + `", "name": "` + id + `", "main": "index.js", "contract": "glitched", "contractVersion": 1, "capabilities": ["service", "threads:write", "threads:access"], "glitched": {"service": "service.js"}}`,
 			"index.js":    `export function view() {}`,
 			"service.js": `
-				export async function serve({ args }) {
+				export async function serve({ method, args, deadline }) {
+					if (method === "deadline") return { deadline }
 					try { return await glitched.threads.create(args.prompt, args.options) }
 					catch (e) { return { code: e.code ?? "", message: e.message } }
 				}`,
@@ -430,5 +434,64 @@ func TestAPluginsWorktreeRunsNoGitHooks(t *testing.T) {
 	}
 	if b, err := os.ReadFile(ran); err != nil || string(b) != "post-checkout\n" {
 		t.Fatalf("the user's own worktree ran the hook as %q, %v; want once", b, err)
+	}
+}
+
+// A service hears its caller's deadline across the socket, a short one and
+// a long one alike, not the engine's own.
+func TestAServiceHearsItsCallersDeadline(t *testing.T) {
+	dir := stateDir(t)
+	installStarters(t, dir, map[string][]string{"starter": {"service"}})
+	_, ep, _ := codexAt(t, dir)
+	for _, within := range []time.Duration{3 * time.Second, 90 * time.Second} {
+		ctx, cancel := context.WithTimeout(context.Background(), within)
+		want, _ := ctx.Deadline()
+		out, err := ep.PluginCall(ctx, json.RawMessage(`{"plugin": "starter", "method": "deadline"}`))
+		cancel()
+		var got struct{ Deadline int64 }
+		if err != nil || json.Unmarshal(out, &got) != nil || got.Deadline != want.UnixMilli() {
+			t.Fatalf("a caller of %s: the service heard %s, %v; want %d", within, out, err, want.UnixMilli())
+		}
+	}
+}
+
+// Messages a service sends one thread, all at once, reach it in the order
+// the host took them.
+func TestAServicesMessagesToOneThreadKeepTheirOrder(t *testing.T) {
+	no := false
+	d, err := Start(context.Background(), Config{Dir: stateDir(t), Hub: true, KeepAwake: &no, Providers: provider.Mux{"fake": fake.New(nil)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	thread := api.NewID()
+	if _, err := d.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: thread, Body: api.ThreadCreate{Workspace: t.TempDir(), Model: api.ModelRef{Provider: "fake", Model: "fake"}}}); err != nil {
+		t.Fatal(err)
+	}
+	const n = 16
+	var want []string
+	answers := make(chan error, n)
+	for i := range n {
+		want = append(want, fmt.Sprintf("message %02d", i))
+		args, _ := json.Marshal(map[string]string{"thread": thread.String(), "text": want[i]})
+		v, err := d.pluginEffect("starter", plugins.Effect{Type: "threads.send", Args: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		v.(plugins.Pending)(func(_ any, err error) { answers <- err })
+	}
+	for range n {
+		if err := <-answers; err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []string
+	for _, b := range threadLog(t, d.Endpoint(), thread) {
+		if m, ok := b.(api.MessageQueued); ok {
+			got = append(got, m.Text)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the thread has the messages %q, want %q", got, want)
 	}
 }

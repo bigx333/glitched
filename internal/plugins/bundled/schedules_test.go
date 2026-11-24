@@ -234,9 +234,9 @@ func TestRunNowsAtOnceAreARunEach(t *testing.T) {
 	json.Unmarshal(raw, &s)
 	const n = 32
 	var wg sync.WaitGroup
-	for range n {
+	for i := range n {
 		wg.Go(func() {
-			if _, err := call("runNow", map[string]any{"id": s.ID}); err != nil {
+			if _, err := call("runNow", map[string]any{"id": s.ID, "op": fmt.Sprint("click-", i)}); err != nil {
 				t.Errorf("runNow: %v", err)
 			}
 		})

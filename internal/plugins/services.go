@@ -190,9 +190,12 @@ func loadingChanged(a, b prefs) bool {
 		!maps.Equal(service(a.Grants), service(b.Grants)) || !maps.Equal(service(a.Revoked), service(b.Revoked))
 }
 
-// MaxTimerCall is the longest a service's timer call may take. Till then it
-// has its timer's period, so a timer that waits on slow effects answers
-// before the next, and the host hears how it went.
+// MaxTimerCall is the longest a service's timer call may take. A timer runs
+// one call at a time: a tick that comes while the last call still runs,
+// past its period too, waits for the next, so a timer that waits on slow
+// effects never overlaps itself and the host hears how each call went. A
+// call past MaxTimerCall stops its runtime, so that nothing it left running
+// goes on beside the next.
 const MaxTimerCall = 5 * time.Minute
 
 // startTimers wakes each running service on its timers.
@@ -211,6 +214,7 @@ func (s *Services) startTimers() {
 			go func() {
 				tick := time.NewTicker(every)
 				defer tick.Stop()
+				var last chan struct{} // closed as the last call ends
 				for {
 					select {
 					case <-s.stop:
@@ -220,9 +224,26 @@ func (s *Services) startTimers() {
 					if s.h.running1(id) == nil || s.h.running1(id).p != p {
 						return // reloaded: the new one has timers of its own
 					}
-					if err := p.CallWithin(min(time.Duration(t.Every)*time.Second, MaxTimerCall), "timer", map[string]string{"id": t.ID}, nil); err != nil {
-						s.h.opts.Logf("plugins: %s: timer %s: %v", id, t.ID, err)
+					if last != nil {
+						select {
+						case <-last:
+						default:
+							s.h.opts.Logf("plugins: %s: timer %s: its last call still runs, so this tick waits for the next", id, t.ID)
+							continue
+						}
 					}
+					done := make(chan struct{})
+					last = done
+					go func() {
+						defer close(done)
+						begun := time.Now()
+						if err := p.CallWithin(MaxTimerCall, "timer", map[string]string{"id": t.ID}, nil); err != nil {
+							s.h.opts.Logf("plugins: %s: timer %s: %v", id, t.ID, err)
+						}
+						if time.Since(begun) >= MaxTimerCall {
+							p.Close()
+						}
+					}()
 				}
 			}()
 		}
@@ -305,24 +326,35 @@ type ServiceCall struct {
 var ErrNoService = errors.New("its service doesn't run: it has none, it's off, or service isn't granted")
 
 // Call answers a window's call with the service's serve export, by ctx's
-// deadline or in 30 s. serve hears the deadline, in Unix milliseconds, so
-// that a call it reaches late can refuse to write; a call whose deadline
-// passes before it reaches serve never does.
+// deadline or in 30 s. It answers once ctx ends, whatever the call is
+// waiting on: the services' queue, the runtime starting, or serve. A call
+// whose ctx ended before serve runs, by its deadline or its caller's
+// cancel, never runs it. serve hears the deadline, in Unix milliseconds,
+// so that a call it reaches in time can refuse to write once it passes.
 func (s *Services) Call(ctx context.Context, c ServiceCall) (json.RawMessage, error) {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		deadline = time.Now().Add(30 * time.Second)
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
 	}
+	deadline, _ := ctx.Deadline()
 	found := make(chan *plugin.Plugin, 1)
-	s.post(func() {
+	lookup := func() {
 		in := s.h.running1(c.Plugin)
 		if in == nil || in.ext.Service == "" || !s.h.Allowed(c.Plugin, "service") {
 			found <- nil
 			return
 		}
 		found <- in.p
-	})
+	}
 	var p *plugin.Plugin
+	select {
+	case s.queue <- lookup:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-s.stop:
+		return nil, ErrNoService
+	}
 	select {
 	case p = <-found:
 	case <-ctx.Done():
@@ -335,13 +367,48 @@ func (s *Services) Call(ctx context.Context, c ServiceCall) (json.RawMessage, er
 	if !p.Can("serve") {
 		return nil, fmt.Errorf("plugin %s's service has no serve export", c.Plugin)
 	}
-	timeout := time.Until(deadline)
-	if timeout <= 0 {
+	type answer struct {
+		out json.RawMessage
+		err error
+	}
+	answered := make(chan answer, 1)
+	go func() {
+		var a answer
+		a.err = p.CallWithin(time.Until(deadline), "serve", serveArgs{ctx, c, deadline}, &a.out)
+		switch {
+		case a.err == nil:
+		case ctx.Err() != nil:
+			a.err = ctx.Err()
+		case !time.Now().Before(deadline):
+			a.err = context.DeadlineExceeded
+		}
+		answered <- a
+	}()
+	select {
+	case a := <-answered:
+		return a.out, a.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// serveArgs are serve's argument. CallWithin encodes it once the runtime
+// runs, right before it gives the runtime the call, so a call whose ctx has
+// ended by then fails there, and serve never runs.
+type serveArgs struct {
+	ctx      context.Context
+	call     ServiceCall
+	deadline time.Time
+}
+
+func (a serveArgs) MarshalJSON() ([]byte, error) {
+	if err := a.ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !time.Now().Before(a.deadline) {
 		return nil, context.DeadlineExceeded
 	}
-	var out json.RawMessage
-	err := p.CallWithin(timeout, "serve", map[string]any{"method": c.Method, "args": c.Args, "deadline": deadline.UnixMilli()}, &out)
-	return out, err
+	return json.Marshal(map[string]any{"method": a.call.Method, "args": a.call.Args, "deadline": a.deadline.UnixMilli()})
 }
 
 func readPrefs(stateDir string, p *prefs) {

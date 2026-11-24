@@ -230,6 +230,9 @@ func (s *Server) serveSocket(ctx context.Context, w http.ResponseWriter, r *http
 			continue
 		}
 		callCtx, stop := context.WithCancel(ctx)
+		if req.Deadline > 0 {
+			callCtx, stop = context.WithDeadline(ctx, time.UnixMilli(req.Deadline))
+		}
 		o = &op{stop: stop, acked: make(chan struct{}, 1), send: func(f response) {
 			f.ID = req.ID
 			send(f)

@@ -8,6 +8,9 @@
 // it is sent; a run left starting is sent again with that same request, so
 // the engine answers the thread it may already have made. Nothing waits on
 // a create but the run it is for: the page's writes go at once.
+//
+// Turning a schedule off stops each run it hadn't sent; one already sent
+// may still start after, as the engine may have it.
 
 const ACCESS = ["Ask for approval", "Approve for me", "Full access"];
 const MINUTE = 60_000;
@@ -17,14 +20,23 @@ const GRACE = 10 * MINUTE;
 // How long a tick starts runs for, so it ends inside its timer's minute;
 // what is left goes on the next.
 const BUDGET = 20_000;
-// The most schedules, and runs left starting, a tick reads at once.
+// The most schedules, and runs left starting, a tick reads at once; it
+// reads page after page while it has time.
 const PAGE = 50;
+// The most runs whose threads a tick checks at once.
+const OPEN_PAGE = 500;
 // The most schedules list answers at once.
 const LIST_PAGE = 100;
 // The finished runs a schedule keeps, newest first.
-const KEEP = 200;
+const KEEP = 50;
 // The most schedules there can be.
 const MAX_SCHEDULES = 1000;
+// The longest prompt, and reason a run records, in characters: 1000
+// schedules of the longest, each with a run starting and its whole
+// history, leave a third of the 100 MB database, for the copies of the
+// prompts that Run nows write as they start.
+const MAX_PROMPT = 4000;
+const MAX_REASON = 100;
 
 let ready = null;
 
@@ -48,6 +60,7 @@ function db() {
         missed TEXT NOT NULL CHECK (missed IN ('once', 'skip')),
         enabled INTEGER NOT NULL,
         next_due TEXT,
+        revision INTEGER NOT NULL DEFAULT 0,
         CHECK ((kind = 'interval') = (every IS NOT NULL AND at IS NULL))
       );
       CREATE TABLE IF NOT EXISTS runs (
@@ -58,6 +71,7 @@ function db() {
         state TEXT NOT NULL CHECK (state IN ('starting', 'started', 'skipped', 'missed', 'failed')),
         request TEXT,
         sent INTEGER NOT NULL DEFAULT 0,
+        tried TEXT,
         thread TEXT,
         open INTEGER NOT NULL DEFAULT 0,
         reason TEXT,
@@ -67,6 +81,8 @@ function db() {
         CHECK (open = 0 OR thread IS NOT NULL)
       );
       CREATE INDEX IF NOT EXISTS history ON runs (schedule, due);
+      CREATE INDEX IF NOT EXISTS starting ON runs (manual, tried) WHERE state = 'starting';
+      CREATE INDEX IF NOT EXISTS open ON runs (schedule, key) WHERE open = 1;
       CREATE TRIGGER IF NOT EXISTS runs_go_with_their_schedule AFTER DELETE ON schedules BEGIN
         DELETE FROM runs WHERE schedule = old.id;
       END;
@@ -83,6 +99,7 @@ function db() {
 
 const query = (sql, params) => glitched.db.query(sql, params);
 const exec = (sql, params) => glitched.db.exec(sql, params);
+const transaction = (statements) => glitched.db.transaction(statements);
 
 // --- When a schedule runs ---------------------------------------------------
 
@@ -180,10 +197,10 @@ function time(v) {
 }
 
 // absolute is whether Go's filepath.IsAbs holds for p on Unix or on
-// Windows, a drive's or a share's: the engine that starts the run checks it
-// again for its own.
+// Windows, a drive's, by its ASCII letter, or a share's: the engine that
+// starts the run checks it again for its own.
 function absolute(p) {
-  return /^(\/|[\\/]{2}|[^]:[\\/])/.test(p);
+  return /^(\/|[\\/]{2}|[A-Za-z]:[\\/])/.test(p);
 }
 
 function zoneOK(zone) {
@@ -208,7 +225,7 @@ function parse(v, now) {
   const s = {
     id: v.id ?? ulid(now),
     title: text("title", 200),
-    prompt: text("prompt", 100_000),
+    prompt: text("prompt", MAX_PROMPT),
     workspace: text("workspace", 4096),
     worktree: v.worktree === true,
     provider: text("provider", 100),
@@ -253,12 +270,15 @@ function fromRow(r) {
     provider: r.provider, model: r.model, effort: r.effort, fast: r.fast === 1, access: r.access,
     kind: r.kind, every: r.every, at: r.at, weekdays: r.weekdays ? r.weekdays.split(",").map(Number) : [],
     zone: r.zone, anchor: r.anchor, missed: r.missed, enabled: r.enabled === 1,
-    nextDue: r.next_due, lastThread: r.last_thread ?? null,
+    nextDue: r.next_due, revision: r.revision, lastThread: r.last_thread ?? null, starting: r.starting ?? 0,
   };
 }
 
-// SCHEDULE reads schedules with the thread of each one's newest run.
-const SCHEDULE = `SELECT s.*, (SELECT thread FROM runs WHERE schedule = s.id AND thread IS NOT NULL ORDER BY due DESC, key DESC LIMIT 1) AS last_thread
+// SCHEDULE reads schedules with the thread of each one's newest run, and
+// how many of its runs are sent and still starting: turning it off stops
+// none of these.
+const SCHEDULE = `SELECT s.*, (SELECT thread FROM runs WHERE schedule = s.id AND thread IS NOT NULL ORDER BY due DESC, key DESC LIMIT 1) AS last_thread,
+    (SELECT count(*) FROM runs WHERE schedule = s.id AND state = 'starting' AND sent = 1) AS starting
   FROM schedules s`;
 
 async function load(id) {
@@ -267,15 +287,17 @@ async function load(id) {
   return fromRow(rows[0]);
 }
 
-// late refuses a write whose call has run out of time, so a call that
-// timed out never writes after.
+// late refuses a call that has run out of time: as serve takes it, and
+// before each write, so a call that timed out never writes after.
 function late(deadline) {
   if (deadline !== undefined && Date.now() > deadline) throw new Error("the call ran out of time before it wrote");
 }
 
 // save writes a schedule. One whose times and enabled stay as they were
 // keeps its next_due, so an edit drops no run the timer hasn't seen; one
-// turned off drops the runs it meant to start and hadn't sent yet.
+// turned off drops, with it, the runs it meant to start and hadn't sent
+// yet. Each save is a new revision, which a run not yet written is made
+// from.
 async function save(v, deadline) {
   const now = Date.now();
   const was = v.id === undefined ? null : await load(v.id);
@@ -293,19 +315,20 @@ async function save(v, deadline) {
       [s.id, ...fields],
     );
     if (changes === 0) throw new Invalid("there are " + MAX_SCHEDULES + " schedules already, the most there can be");
-  } else {
-    await exec(
-      `UPDATE schedules SET title = ?, prompt = ?, workspace = ?, worktree = ?, provider = ?, model = ?, effort = ?, fast = ?, access = ?,
-         kind = ?, every = ?, at = ?, weekdays = ?, zone = ?, anchor = ?, missed = ?, enabled = ?, next_due = ? WHERE id = ?`,
-      [...fields, s.id],
-    );
-    if (!s.enabled) {
-      await exec(
-        "UPDATE runs SET state = 'skipped', reason = 'turned off', request = NULL, at = ? WHERE schedule = ? AND manual = 0 AND state = 'starting' AND sent = 0",
-        [iso(now), s.id],
-      );
-    }
+    return load(s.id);
   }
+  const statements = [[
+    `UPDATE schedules SET title = ?, prompt = ?, workspace = ?, worktree = ?, provider = ?, model = ?, effort = ?, fast = ?, access = ?,
+       kind = ?, every = ?, at = ?, weekdays = ?, zone = ?, anchor = ?, missed = ?, enabled = ?, next_due = ?, revision = revision + 1 WHERE id = ?`,
+    [...fields, s.id],
+  ]];
+  if (!s.enabled) {
+    statements.push([
+      "UPDATE runs SET state = 'skipped', reason = 'turned off', request = NULL, at = ? WHERE schedule = ? AND manual = 0 AND state = 'starting' AND sent = 0",
+      [iso(now), s.id],
+    ]);
+  }
+  await transaction(statements);
   return load(s.id);
 }
 
@@ -338,164 +361,248 @@ async function prune(schedule) {
 }
 
 // settle ends run r as state, a thread with it counting as one that may
-// still go.
-async function settle(r, state, { thread = null, reason = null } = {}) {
-  await exec(
-    "UPDATE runs SET state = ?, thread = ?, open = ?, reason = ?, request = NULL, at = ? WHERE schedule = ? AND key = ?",
-    [state, thread, thread === null ? 0 : 1, reason, iso(Date.now()), r.schedule, r.key],
-  );
+// still go, and writes also with it, all or none.
+async function settle(r, state, { thread = null, reason = null, also = [] } = {}) {
+  await transaction([
+    [
+      "UPDATE runs SET state = ?, thread = ?, open = ?, reason = ?, request = NULL, at = ? WHERE schedule = ? AND key = ?",
+      [state, thread, thread === null ? 0 : 1, reason?.slice(0, MAX_REASON) ?? null, iso(Date.now()), r.schedule, r.key],
+    ],
+    ...also,
+  ]);
   await prune(r.schedule);
 }
 
-// note records an automatic run of s, as long as s is still on and due
-// where the tick found it; whether it did.
-async function note(s, key, due, state, { reason = null, request = null } = {}) {
-  const { changes } = await exec(
-    `INSERT INTO runs (schedule, key, due, state, request, reason, at)
-     SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM schedules WHERE id = ? AND enabled = 1 AND next_due = ?)
-     ON CONFLICT (schedule, key) DO NOTHING`,
-    [s.id, key, due, state, request, reason, iso(Date.now()), s.id, s.nextDue],
-  );
-  if (state !== "starting") await prune(s.id);
-  return changes === 1;
+// inflight are the creates this runtime is sending, by run: a second send
+// of one answers the first's thread.
+const inflight = new Map();
+const runID = (r) => r.schedule + "\n" + r.key;
+
+// send sends run r's create and settles it on the answer, writing also
+// with the settle; it answers the thread, or null. A run not sent yet is
+// sent only if it is still starting: turning its schedule off skips it in
+// the same write. A write that fails after the create leaves the run
+// starting, to be sent again.
+function send(r, also = []) {
+  const id = runID(r);
+  if (!inflight.has(id)) {
+    inflight.set(id, sending(r, also).finally(() => inflight.delete(id)));
+  }
+  return inflight.get(id);
 }
 
-// inflight are the runs this runtime is sending, which a tick doesn't send
-// again.
-const inflight = new Set();
-
-// send sends run r's create and settles it on the answer. A run not sent
-// yet is sent only if it is still meant to be. A write that fails after
-// the create leaves the run starting, to be sent again.
-async function send(r) {
-  const id = r.schedule + "\n" + r.key;
-  if (inflight.has(id)) return null;
-  inflight.add(id);
+async function sending(r, also) {
+  if (r.sent === 0) {
+    const { changes } = await exec(
+      "UPDATE runs SET sent = 1 WHERE schedule = ? AND key = ? AND state = 'starting' AND sent = 0",
+      [r.schedule, r.key],
+    );
+    if (changes === 0) return null;
+  }
+  const { prompt, options } = JSON.parse(r.request);
+  let thread;
   try {
-    if (r.sent === 0) {
-      const { changes } = await exec(
-        "UPDATE runs SET sent = 1 WHERE schedule = ? AND key = ? AND state = 'starting' AND sent = 0",
-        [r.schedule, r.key],
-      );
-      if (changes === 0) return null;
+    ({ thread } = await glitched.threads.create(prompt, options));
+  } catch (e) {
+    await settle(r, "failed", { reason: e.message, also });
+    return null;
+  }
+  await settle(r, "started", { thread, also });
+  return thread;
+}
+
+// retry sends again run r, left starting, unless this runtime is sending
+// it already, and records the try, so a tick tries the runs it tried
+// longest ago first, across restarts too.
+async function retry(r, also = []) {
+  await exec("UPDATE runs SET tried = ? WHERE schedule = ? AND key = ?", [iso(Date.now()), r.schedule, r.key]);
+  if (!inflight.has(runID(r))) await send(r, also);
+}
+
+// threadsOf reads the engine's threads once for a tick, when the tick
+// first needs them, and when it read them.
+function threadsOf() {
+  let read = null;
+  return () => (read ??= glitched.threads.list().then((list) => ({ status: new Map(list.map((t) => [t.id, t.status])), at: Date.now() })));
+}
+
+// reconcile checks the threads of runs that may still go, schedule's or
+// every schedule's, a page at a time: one that has stopped, or is gone,
+// stops counting, and its schedule keeps its newest history again. It
+// answers whether one still works or waits on you; a run settled since
+// the threads were read counts as one that does.
+async function reconcile(threads, schedule = null) {
+  let after = ["", ""];
+  let busy = false;
+  for (;;) {
+    const rows = await query(
+      `SELECT schedule, key, thread, at FROM runs WHERE open = 1 AND (? IS NULL OR schedule = ?) AND (schedule, key) > (?, ?)
+       ORDER BY schedule, key LIMIT ?`,
+      [schedule, schedule, ...after, OPEN_PAGE],
+    );
+    const { status, at } = rows.length > 0 ? await threads() : {};
+    const stopped = new Map();
+    for (const r of rows) {
+      const s = status.get(r.thread);
+      if (Date.parse(r.at) >= at || s === "working" || s === "waiting") {
+        busy = true;
+      } else {
+        stopped.set(r.schedule, [...(stopped.get(r.schedule) ?? []), r.key]);
+      }
     }
-    const { prompt, options } = JSON.parse(r.request);
-    let thread;
-    try {
-      ({ thread } = await glitched.threads.create(prompt, options));
-    } catch (e) {
-      await settle(r, "failed", { reason: e.message });
-      return null;
+    for (const [id, keys] of stopped) {
+      await exec("UPDATE runs SET open = 0 WHERE schedule = ? AND key IN (SELECT value FROM json_each(?))", [id, JSON.stringify(keys)]);
+      await prune(id);
     }
-    await settle(r, "started", { thread });
-    return thread;
-  } finally {
-    inflight.delete(id);
+    if (rows.length < OPEN_PAGE) return busy;
+    after = [rows.at(-1).schedule, rows.at(-1).key];
   }
 }
 
 // going is whether a run of s may still go: one starting, or one whose
-// thread works or waits on you. Each thread that has stopped, or is gone,
-// stops counting.
-async function going(s) {
+// thread works or waits on you.
+async function going(s, threads) {
   const [starting] = await query("SELECT 1 FROM runs WHERE schedule = ? AND state = 'starting' LIMIT 1", [s.id]);
-  if (starting !== undefined) return true;
-  const open = await query("SELECT key, thread FROM runs WHERE schedule = ? AND open = 1", [s.id]);
-  if (open.length === 0) return false;
-  const threads = await glitched.threads.list();
-  let busy = false;
-  for (const r of open) {
-    const t = threads.find((x) => x.id === r.thread);
-    if (t !== undefined && (t.status === "working" || t.status === "waiting")) {
-      busy = true;
-    } else {
-      await exec("UPDATE runs SET open = 0 WHERE schedule = ? AND key = ?", [s.id, r.key]);
-    }
-  }
-  return busy;
+  return starting !== undefined || reconcile(threads, s.id);
 }
 
-// unit does what s's automatic runs need, as one: it sends again a run
-// left starting, or, on and due, starts its latest occurrence, unless that
-// is before its next_due, it records the occurrence's run, it skips a run
-// its next_due shows was missed, or a run of it may still go; then it
-// moves next_due past now. A run sent again is the catch-up. Every step
-// reads what is there and does what is left, so a crash anywhere comes
-// back to the same end.
-async function unit(s) {
+// unit does what schedule id's automatic runs need, from what it is now:
+// occur, read again for a schedule saved meanwhile.
+async function unit(id, threads) {
+  for (let i = 0; i < 3; i++) {
+    const [row] = await query("SELECT * FROM schedules WHERE id = ?", [id]);
+    if (row === undefined || (await occur(fromRow(row), threads))) return;
+  }
+}
+
+// occur sends again a run of s left starting, as its catch-up, and moves
+// next_due past now with its record. Else, on and due, it records the run
+// of its latest occurrence, unless that is before its next_due: missed
+// where its next_due shows it was, skipped where a run of it may still go,
+// and starting otherwise, which it then sends; next_due moves past now
+// with that record. It answers false, and writes nothing, where s was
+// saved since it was read. Every step reads what is there and does what
+// is left, so a crash anywhere comes back to the same end.
+async function occur(s, threads) {
   const now = Date.now();
-  let replayed = false;
-  for (const r of await query("SELECT * FROM runs WHERE schedule = ? AND manual = 0 AND state = 'starting' ORDER BY due", [s.id])) {
+  const advance = ["UPDATE schedules SET next_due = ? WHERE id = ? AND enabled = 1 AND next_due = ?", [iso(nextAfter(s, now)), s.id, s.nextDue]];
+  const starting = await query("SELECT * FROM runs WHERE schedule = ? AND manual = 0 AND state = 'starting' ORDER BY due", [s.id]);
+  for (const r of starting) {
     if (r.sent === 0 && !s.enabled) {
       await settle(r, "skipped", { reason: "turned off" });
-      continue;
+    } else {
+      await retry(r, [advance]);
     }
-    await send(r);
-    replayed = true;
   }
-  if (!s.enabled || s.nextDue === null) return;
+  if (starting.length > 0 || !s.enabled || s.nextDue === null) return true;
   const nextDue = Date.parse(s.nextDue);
   const at = latestBy(s, now);
-  if (at === null || at < nextDue) return;
+  if (at === null || at < nextDue) return true;
   const occ = iso(at);
   const key = s.id + "@" + occ;
-  let intent = null;
-  if (!replayed) {
-    if (s.missed === "skip" && now - nextDue > GRACE) {
-      await note(s, key, occ, "missed", { reason: "Glitched wasn't running then" });
-    } else {
-      const busy = await going(s).catch((e) => e);
-      if (busy instanceof Error) {
-        await note(s, key, occ, "failed", { reason: "its runs couldn't be checked: " + busy.message });
-      } else if (busy) {
-        await note(s, key, occ, "skipped", { reason: "the previous run is still going" });
-      } else {
-        intent = { schedule: s.id, key, sent: 0, request: request(s, key, occ) };
-        if (!(await note(s, key, occ, "starting", { request: intent.request }))) intent = null;
-      }
+  let state = "starting";
+  let reason = null;
+  if (s.missed === "skip" && now - nextDue > GRACE) {
+    [state, reason] = ["missed", "Glitched wasn't running then"];
+  } else {
+    const busy = await going(s, threads).catch((e) => e);
+    if (busy instanceof Error) {
+      [state, reason] = ["failed", "its runs couldn't be checked: " + busy.message];
+    } else if (busy) {
+      [state, reason] = ["skipped", "the previous run is still going"];
     }
   }
-  await exec("UPDATE schedules SET next_due = ? WHERE id = ? AND enabled = 1 AND next_due = ?", [iso(nextAfter(s, now)), s.id, s.nextDue]);
-  if (intent !== null) await send(intent);
+  const r = { schedule: s.id, key, sent: 0, request: state === "starting" ? request(s, key, occ) : null };
+  const [{ changes }] = await transaction([
+    [
+      `INSERT INTO runs (schedule, key, due, state, request, reason, tried, at)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM schedules WHERE id = ? AND enabled = 1 AND next_due = ? AND revision = ?)
+       ON CONFLICT (schedule, key) DO NOTHING`,
+      [s.id, key, occ, state, r.request, reason, r.request === null ? null : iso(now), iso(now), s.id, s.nextDue, s.revision],
+    ],
+    [advance[0] + " AND revision = ?", [...advance[1], s.revision]],
+  ]);
+  if (changes === 0) return false;
+  if (state === "starting") {
+    await send(r);
+  } else {
+    await prune(s.id);
+  }
+  return true;
 }
 
-// The cursors of the tick's two pages, so a page that can't settle doesn't
-// keep the rest from their turn.
-let manualAfter = ["", ""];
-let unitAfter = "";
+// pages are one kind of a tick's work, read PAGE at a time as it goes:
+// next answers the next row the tick hasn't taken, by key, or null at the
+// end.
+function pages(read) {
+  const taken = new Set();
+  let rows = [];
+  let end = false;
+  return async (key) => {
+    while (rows.length === 0 && !end) {
+      const page = await read();
+      rows = page.filter((r) => !taken.has(key(r)));
+      end = page.length < PAGE || rows.length === 0;
+    }
+    const r = rows.shift() ?? null;
+    if (r !== null) taken.add(key(r));
+    return r;
+  };
+}
 
-// tick sends again every Run now left starting, then does each schedule's
-// unit that is due or has a run left starting, a page of each, till its
-// budget is spent. One that fails holds up none of the rest; the host logs
+// tick checks the threads of runs that may still go, then takes turns: a
+// Run now left starting, then a schedule's unit that is due or has a run
+// left starting, and so on, each kind's tried longest ago first, till both
+// are done or its budget is spent. Which kind goes first alternates from
+// tick to tick. One that fails holds up none of the rest; the host logs
 // what failed once the tick ends.
 async function tick() {
   await db();
   const begun = Date.now();
   const failed = [];
-  const manual = await query(
-    "SELECT * FROM runs WHERE manual = 1 AND state = 'starting' AND (schedule, key) > (?, ?) ORDER BY schedule, key LIMIT ?",
-    [...manualAfter, PAGE],
-  );
-  const units = await query(
-    `SELECT * FROM schedules s WHERE s.id > ?
-       AND ((s.enabled = 1 AND s.next_due <= ?) OR EXISTS (SELECT 1 FROM runs WHERE schedule = s.id AND manual = 0 AND state = 'starting'))
-     ORDER BY s.id LIMIT ?`,
-    [unitAfter, iso(begun), PAGE],
-  );
-  let spent = false;
-  const page = async (rows, does, after) => {
-    for (const r of rows) {
-      if (Date.now() - begun > BUDGET) {
-        spent = true;
-        return;
-      }
-      after(r);
-      await does(r).catch((e) => failed.push(e.message));
-    }
-    if (rows.length < PAGE) after(null);
+  const threads = threadsOf();
+  await reconcile(threads).catch((e) => failed.push(e.message));
+  const [turn] = await query("SELECT value FROM meta WHERE key = 'turn'");
+  const manualFirst = turn?.value !== "automatic";
+  await exec("INSERT INTO meta (key, value) VALUES ('turn', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [manualFirst ? "automatic" : "manual"]);
+  const manual = {
+    next: pages(() => query(
+      `SELECT * FROM runs WHERE manual = 1 AND state = 'starting' AND (tried IS NULL OR tried <= ?)
+       ORDER BY tried IS NOT NULL, tried, schedule, key LIMIT ?`,
+      [iso(begun), PAGE],
+    )),
+    key: runID,
+    does: (r) => retry(r),
   };
-  await page(manual, send, (r) => (manualAfter = r === null ? ["", ""] : [r.schedule, r.key]));
-  if (!spent) await page(units, (r) => unit(fromRow(r)), (r) => (unitAfter = r === null ? "" : r.id));
+  const automatic = {
+    next: pages(() => query(
+      `SELECT s.id FROM schedules s
+       LEFT JOIN (SELECT schedule, max(tried) AS tried FROM runs WHERE manual = 0 AND state = 'starting' GROUP BY schedule) w ON w.schedule = s.id
+       WHERE ((s.enabled = 1 AND s.next_due <= ?) OR w.schedule IS NOT NULL) AND (w.tried IS NULL OR w.tried <= ?)
+       ORDER BY w.tried IS NOT NULL, w.tried, s.id LIMIT ?`,
+      [iso(begun), iso(begun), PAGE],
+    )),
+    key: (s) => s.id,
+    does: (s) => unit(s.id, threads),
+  };
+  let kinds = manualFirst ? [manual, automatic] : [automatic, manual];
+  while (kinds.length > 0) {
+    for (const k of kinds.slice()) {
+      if (Date.now() - begun > BUDGET) {
+        kinds = [];
+        break;
+      }
+      const r = await k.next(k.key).catch((e) => {
+        failed.push(e.message);
+        return null;
+      });
+      if (r === null) {
+        kinds = kinds.filter((x) => x !== k);
+      } else {
+        await k.does(r).catch((e) => failed.push(e.message));
+      }
+    }
+  }
   if (failed.length > 0) throw new Error(failed.join("; "));
 }
 
@@ -504,6 +611,10 @@ async function tick() {
 export function timer() {
   return tick();
 }
+
+// OP is what names one Run now: the page makes one for each click, and
+// sends the same on each try of it.
+const OP = /^[0-9A-Za-z_-]{1,36}$/;
 
 const methods = {
   // list is a page of the schedules, by title, after the one named.
@@ -527,20 +638,23 @@ const methods = {
     return query("SELECT schedule, due, key, thread, state, reason, at FROM runs WHERE schedule = ? ORDER BY due DESC, key DESC LIMIT ?", [id, n]);
   },
   // runNow starts s now, as the person asked for it: past the check that
-  // a run of it may still go.
-  async runNow({ id }, deadline) {
+  // a run of it may still go. A try of an op already written answers its
+  // run's thread, and starts no other.
+  async runNow({ id, op }, deadline) {
+    if (typeof op !== "string" || !OP.test(op)) throw new Invalid("op is 1 to 36 letters, digits, - or _, the same on each try of one Run now");
     const s = await load(id);
-    const now = Date.now();
-    const r = { schedule: s.id, key: "manual:" + ulid(now), sent: 1 };
-    r.request = request(s, r.key, iso(now));
+    const now = iso(Date.now());
+    const key = "manual:" + s.id + ":" + op;
     late(deadline);
-    const { changes } = await exec(
-      `INSERT INTO runs (schedule, key, due, manual, state, request, sent, at)
-       SELECT ?, ?, ?, 1, 'starting', ?, 1, ? WHERE EXISTS (SELECT 1 FROM schedules WHERE id = ?)`,
-      [s.id, r.key, iso(now), r.request, iso(now), s.id],
+    await exec(
+      `INSERT INTO runs (schedule, key, due, manual, state, request, sent, tried, at)
+       SELECT ?, ?, ?, 1, 'starting', ?, 1, ?, ? WHERE EXISTS (SELECT 1 FROM schedules WHERE id = ?)
+       ON CONFLICT (schedule, key) DO NOTHING`,
+      [s.id, key, now, request(s, key, now), now, now, s.id],
     );
-    if (changes === 0) throw new Invalid("no schedule " + id);
-    return { thread: await send(r) };
+    const [r] = await query("SELECT * FROM runs WHERE schedule = ? AND key = ?", [s.id, key]);
+    if (r === undefined) throw new Invalid("no schedule " + id);
+    return { thread: r.state === "starting" ? await send(r) : r.thread };
   },
   // preview is when a schedule, saved or not, runs next: count occurrences
   // after from, which is now without one.
@@ -559,11 +673,16 @@ const methods = {
   },
 };
 
-// serve answers the page, each call as it comes. A write refuses once the
-// call's deadline has passed.
+// serve answers the page, each call as it comes. A call refuses once its
+// deadline has passed: as it comes, once the database is ready, and before
+// each write.
 export function serve({ method, args, deadline }) {
   const m = methods[method];
   if (!m) throw new Error("no method " + method);
+  late(deadline);
   if (method === "preview") return m(args ?? {});
-  return db().then(() => m(args ?? {}, deadline));
+  return db().then(() => {
+    late(deadline);
+    return m(args ?? {}, deadline);
+  });
 }

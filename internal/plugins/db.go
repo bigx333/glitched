@@ -220,6 +220,42 @@ func (d *pluginDB) exec(ctx context.Context, raw json.RawMessage) (any, error) {
 	return map[string]int64{"changes": changes, "last_id": last}, nil
 }
 
+// transaction runs statements, each with its bound parameters, in one
+// transaction: all of them or, where one fails, none. It answers each
+// one's {changes, last_id}.
+func (d *pluginDB) transaction(ctx context.Context, raw json.RawMessage) (any, error) {
+	var c struct{ Statements []dbCall }
+	if err := json.Unmarshal(raw, &c); err != nil || len(c.Statements) == 0 || slices.ContainsFunc(c.Statements, func(s dbCall) bool { return s.SQL == "" }) {
+		return nil, errors.New("db.transaction takes [[sql, params?], ...]")
+	}
+	for _, s := range c.Statements {
+		if err := refused(s.SQL); err != nil {
+			return nil, err
+		}
+	}
+	db, done, err := d.use()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	out := []map[string]int64{}
+	for _, s := range c.Statements {
+		res, err := tx.ExecContext(ctx, s.SQL, s.Params...)
+		if err != nil {
+			return nil, err
+		}
+		changes, _ := res.RowsAffected()
+		last, _ := res.LastInsertId()
+		out = append(out, map[string]int64{"changes": changes, "last_id": last})
+	}
+	return out, tx.Commit()
+}
+
 // query answers a statement's rows, each an object by column name.
 func (d *pluginDB) query(ctx context.Context, raw json.RawMessage) (any, error) {
 	var c dbCall

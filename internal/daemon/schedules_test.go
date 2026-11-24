@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -17,7 +18,9 @@ import (
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/bundled"
 	"glitched/internal/plugins/pack"
+	"glitched/internal/provider"
 	"glitched/internal/provider/codex/codextest"
+	"glitched/internal/provider/fake"
 	"glitched/internal/transport"
 )
 
@@ -371,7 +374,7 @@ func TestARunNowLeftStartingFinishesOnTheNextTick(t *testing.T) {
 	s := saveSchedule(t, ep, ws, map[string]any{"kind": "interval", "every": 60, "enabled": false})
 	db := pluginDB(t, dir)
 	write(t, db, unsettled)
-	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID}})
+	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID, "op": "click"}})
 	if _, err := ep.PluginCall(context.Background(), raw); err == nil {
 		t.Fatal("Run now answered though its record failed")
 	}
@@ -401,7 +404,7 @@ func TestAnEditBeforeARunIsRecordedKeepsItsThread(t *testing.T) {
 	s := saveSchedule(t, ep, ws, map[string]any{"kind": "interval", "every": 60})
 	db := pluginDB(t, dir)
 	write(t, db, unsettled)
-	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID}})
+	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID, "op": "click"}})
 	if _, err := ep.PluginCall(context.Background(), raw); err == nil {
 		t.Fatal("Run now answered though its record failed")
 	}
@@ -457,7 +460,7 @@ func TestARunNowHidesNoRunStillWaiting(t *testing.T) {
 	}
 	t.Setenv(codextest.Scenario, "memory") // Run now's turn just ends
 	var manual struct{ Thread string }
-	schedules(t, ep, "runNow", map[string]any{"id": s.ID}, &manual)
+	schedules(t, ep, "runNow", map[string]any{"id": s.ID, "op": "click"}, &manual)
 	endedLog(t, ep, mustID(t, manual.Thread))
 
 	next := at(time.Now().Add(-time.Minute))
@@ -496,5 +499,105 @@ func TestAScheduleThatCantBeCheckedHoldsUpNoOther(t *testing.T) {
 	}
 	if runs := runsOnce(t, ep, b.ID, settled); len(runs) != 1 || runs[0].State != "started" {
 		t.Fatalf("B's runs %+v, want one started", runs)
+	}
+}
+
+// coldSchedules is an engine on dir whose Schedules has schedule s, saved
+// by fields, and has not started since, with the Schedules database
+// locked: as the service starts, its database waits, as it does on a
+// slow disk. unlock lets it go on.
+func coldSchedules(t *testing.T, fields map[string]any) (dir string, ep *transport.EndpointClient, s savedSchedule, db *sql.DB, unlock func()) {
+	t.Helper()
+	fakeCodex(t)
+	dir = stateDir(t)
+	installSchedules(t, dir)
+	_, ep, stop := codexAt(t, dir)
+	s = saveSchedule(t, ep, t.TempDir(), fields)
+	stop()
+	_, ep, _ = codexAt(t, dir)
+	db = pluginDB(t, dir)
+	c, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	if _, err := c.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	return dir, ep, s, db, func() {
+		if _, err := c.ExecContext(context.Background(), "ROLLBACK"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A delete whose caller timed out before the service could write deletes
+// nothing, then or once the service gets to it.
+func TestADeleteThatTimedOutDeletesNothing(t *testing.T) {
+	_, ep, s, db, unlock := coldSchedules(t, map[string]any{"kind": "interval", "every": 60})
+	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "delete", "args": map[string]any{"id": s.ID}})
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := ep.PluginCall(ctx, raw); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("delete answered %v, want its deadline", err)
+	}
+	unlock()
+	// The service takes these after the delete: what it did is done.
+	schedules(t, ep, "runs", map[string]any{"id": s.ID}, nil)
+	saveSchedule(t, ep, t.TempDir(), map[string]any{"id": s.ID, "kind": "interval", "every": 60, "title": "Kept"})
+	var n int
+	if err := db.QueryRow("SELECT count(*) FROM schedules WHERE id = ? AND title = 'Kept'", s.ID).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("the schedule a timed-out delete named is gone: %d, %v", n, err)
+	}
+}
+
+// A Run now tried again under the op of its first try, after that one
+// timed out and after one that answered, starts one thread.
+func TestARunNowTriedAgainStartsOneThread(t *testing.T) {
+	_, ep, s, _, unlock := coldSchedules(t, map[string]any{"kind": "interval", "every": 60, "enabled": false})
+	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID, "op": "click"}})
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := ep.PluginCall(ctx, raw); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run now answered %v, want its deadline", err)
+	}
+	unlock()
+	var first, again struct{ Thread string }
+	schedules(t, ep, "runNow", map[string]any{"id": s.ID, "op": "click"}, &first)
+	schedules(t, ep, "runNow", map[string]any{"id": s.ID, "op": "click"}, &again)
+	runs := runsOnce(t, ep, s.ID, settled)
+	if n := len(threads(t, ep)); n != 1 || len(runs) != 1 || first.Thread == "" || again.Thread != first.Thread {
+		t.Fatalf("one Run now tried three times made %d threads, answered %q then %q, and the runs %+v", n, first.Thread, again.Thread, runs)
+	}
+}
+
+// A run whose create the engine took, but whose record failed to write,
+// keeps its thread though the engine, restarted, no longer runs the
+// provider it named.
+func TestARunKeepsItsThreadPastItsProvider(t *testing.T) {
+	fakeCodex(t)
+	dir := stateDir(t)
+	installSchedules(t, dir)
+	_, ep, stop := codexAt(t, dir)
+	s := saveSchedule(t, ep, t.TempDir(), map[string]any{"kind": "interval", "every": 5, "enabled": false})
+	db := pluginDB(t, dir)
+	write(t, db, unsettled)
+	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID, "op": "click"}})
+	if _, err := ep.PluginCall(context.Background(), raw); err == nil {
+		t.Fatal("Run now answered though its record failed")
+	}
+	made := threads(t, ep)
+	stop()
+	write(t, db, "DROP TRIGGER unsettled")
+	d, err := Start(context.Background(), Config{Dir: dir, Hub: true, PluginTimerScale: tick, Providers: provider.Mux{"fake": fake.New(nil)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	ep = transport.NewEndpointClient(Socket(dir), api.ID{})
+	defer ep.Close()
+	runs := runsOnce(t, ep, s.ID, settled)
+	if len(made) != 1 || len(runs) != 1 || runs[0].State != "started" || runs[0].Thread != made[0].ID.String() {
+		t.Fatalf("the engine made %+v; the run is %+v", made, runs)
 	}
 }
