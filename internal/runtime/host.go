@@ -77,10 +77,12 @@ type Host struct {
 	runs    map[api.ID]*liveRun // by run
 	closing map[api.ID]bool     // threads whose run is over but whose agent is not closed yet, true while that agent may still work
 	// restoring is the worktrees whose files reverts put back, by the
-	// thread reverting, and waiting the threads whose start in one waits
-	// for them to end.
+	// thread reverting, waiting the threads whose start in one waits for
+	// them to end, and passing those whose start got past them and isn't
+	// tracked yet.
 	restoring map[api.ID]*restoreMark
 	waiting   map[api.ID]bool
+	passing   map[api.ID]bool
 	opening   int // provider opens under way, which may have the agent at work
 	subs      map[*stream]struct{}
 	asks      map[askKey]chan json.RawMessage // credentials requests glitched mcp waits on
@@ -162,6 +164,7 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		closing:       map[api.ID]bool{},
 		restoring:     map[api.ID]*restoreMark{},
 		waiting:       map[api.ID]bool{},
+		passing:       map[api.ID]bool{},
 		agents:        map[*liveRun]bool{},
 		subs:          map[*stream]struct{}{},
 		asks:          map[askKey]chan json.RawMessage{},
@@ -543,6 +546,7 @@ func (h *Host) perform(e store.Effect) {
 		lr = h.track(b.Run, b.Model.Provider, nil)
 		h.mu.Lock()
 		lr.silent = b.ResumeOnly
+		delete(h.passing, e.Thread)
 		h.mu.Unlock()
 	}
 	var t engine.Thread
