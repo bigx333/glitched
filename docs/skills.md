@@ -29,8 +29,12 @@ A thread on a machine the app reaches as a server gets two sets of yours:
 
 - **The app's.** The app copies the skills in its own machine's
   `~/.glitched/skills` to each paired machine. It does so when it
-  connects, before each message or resume it sends, and before it shows a
-  thread's skills. Only the skills that changed travel.
+  connects, before each message, resume or queued message sent now, and
+  before it shows a thread's skills. Only the skills that changed travel.
+  A message waits at most 10 seconds for the copy, and a stop never
+  waits for it. A skill linked into `~/.glitched/skills` from another
+  folder stays on this machine. If the app can't read the folder, each
+  machine keeps the set it had.
 - **The machine's own**, in its `~/.glitched/skills`.
 
 A skill from the app replaces the machine's own skill of the same name. A
