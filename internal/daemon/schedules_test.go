@@ -133,6 +133,18 @@ func write(t *testing.T, db *sql.DB, q string, args ...any) {
 	}
 }
 
+// list is the schedules' first page, which here is all of them.
+func list(t *testing.T, ep *transport.EndpointClient) []savedSchedule {
+	t.Helper()
+	var page struct{ Schedules []savedSchedule }
+	schedules(t, ep, "list", nil, &page)
+	return page.Schedules
+}
+
+// unsettled makes the service's record of a started run fail, as a crash
+// right after its create would leave it: the run stays starting.
+const unsettled = "CREATE TRIGGER unsettled BEFORE UPDATE OF state ON runs WHEN NEW.state = 'started' BEGIN SELECT RAISE(ABORT, 'crash'); END"
+
 // at is t as the service writes times.
 func at(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05.000Z") }
 
@@ -173,10 +185,8 @@ func TestAnOverdueScheduleRunsOnceForItsMissedOccurrences(t *testing.T) {
 	if len(queued) != 1 || queued[0].Text != "Check the build." {
 		t.Fatalf("the run's messages %+v", queued)
 	}
-	var list []savedSchedule
-	schedules(t, ep, "list", nil, &list)
-	if len(list) != 1 || list[0].NextDue != at(anchor.Add(20*time.Minute)) || list[0].LastThread != runs[0].Thread {
-		t.Fatalf("the schedule %+v, want next at %s and its last thread the run's", list, at(anchor.Add(20*time.Minute)))
+	if l := list(t, ep); len(l) != 1 || l[0].NextDue != at(anchor.Add(20*time.Minute)) || l[0].LastThread != runs[0].Thread {
+		t.Fatalf("the schedule %+v, want next at %s and its last thread the run's", l, at(anchor.Add(20*time.Minute)))
 	}
 }
 
@@ -209,10 +219,8 @@ func TestASkippingScheduleRecordsTheRunItMissed(t *testing.T) {
 	if th := threads(t, ep); len(th) != 0 {
 		t.Fatalf("threads %+v, want none", th)
 	}
-	var list []savedSchedule
-	schedules(t, ep, "list", nil, &list)
-	if list[0].NextDue != at(anchor.Add(time.Hour)) {
-		t.Fatalf("next run at %s, want %s", list[0].NextDue, at(anchor.Add(time.Hour)))
+	if l := list(t, ep); l[0].NextDue != at(anchor.Add(time.Hour)) {
+		t.Fatalf("next run at %s, want %s", l[0].NextDue, at(anchor.Add(time.Hour)))
 	}
 }
 
@@ -243,9 +251,8 @@ func TestAScheduleWhoseLastRunGoesOnSkipsTheNext(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	runsOnce(t, ep, s.ID, func([]scheduleRun) bool {
-		var list []savedSchedule
-		schedules(t, ep, "list", nil, &list)
-		return list[0].LastThread == runs[0].Thread && list[0].NextDue > at(time.Now())
+		l := list(t, ep)
+		return l[0].LastThread == runs[0].Thread && l[0].NextDue > at(time.Now())
 	})
 
 	next := first.Add(time.Minute)
@@ -259,36 +266,42 @@ func TestAScheduleWhoseLastRunGoesOnSkipsTheNext(t *testing.T) {
 	}
 }
 
-// A crash between a run's starting row and its create, or between the
-// create and the row's end, comes back to one thread with one message and
-// one turn: the engine after it starts the run again under its key.
+// A crash between a run's intent and its create, or between the create
+// and the run's record, comes back to one thread with one message and one
+// turn: the engine after it sends the run again, under its key.
 func TestACrashMidRunStartsOneThread(t *testing.T) {
 	fakeCodex(t)
 	dir, ws := stateDir(t), t.TempDir()
 	installSchedules(t, dir)
 	_, ep, stop := codexAt(t, dir, tick)
 	s := saveSchedule(t, ep, ws, map[string]any{"kind": "interval", "every": 60})
+	db := pluginDB(t, dir)
+	write(t, db, "CREATE TRIGGER unsent BEFORE UPDATE OF sent ON runs BEGIN SELECT RAISE(ABORT, 'crash'); END")
+	anchor := time.Now().Add(-5 * time.Minute).Truncate(time.Second)
+	write(t, db, "UPDATE schedules SET anchor = ?, next_due = ? WHERE id = ?", at(anchor), at(anchor), s.ID)
+	runsOnce(t, ep, s.ID, func(rs []scheduleRun) bool { return len(rs) == 1 })
+	if th := threads(t, ep); len(th) != 0 {
+		t.Fatalf("threads %+v, want none before the create", th)
+	}
 	stop()
 
-	anchor := time.Now().Add(-5 * time.Minute).Truncate(time.Second)
-	db := pluginDB(t, dir)
-	write(t, db, "UPDATE schedules SET anchor = ?, next_due = ? WHERE id = ?", at(anchor), at(anchor), s.ID)
-	write(t, db, "INSERT INTO runs (schedule, due, key, state, at) VALUES (?, ?, ?, 'starting', ?)", s.ID, at(anchor), s.ID+"@"+at(anchor), at(anchor))
+	write(t, db, "DROP TRIGGER unsent")
+	write(t, db, unsettled)
 	_, ep, stop = codexAt(t, dir, tick)
-	runs := runsOnce(t, ep, s.ID, settled)
-	if len(runs) != 1 || runs[0].State != "started" || runs[0].Due != at(anchor) {
-		t.Fatalf("runs %+v, want the run left starting started", runs)
+	for deadline := time.Now().Add(30 * time.Second); len(threads(t, ep)) == 0; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the run sent again made no thread")
+		}
 	}
-	first := mustID(t, runs[0].Thread)
+	first := threads(t, ep)[0].ID
 	endedLog(t, ep, first)
 	stop()
 
-	write(t, db, "UPDATE runs SET state = 'starting', thread = NULL WHERE schedule = ?", s.ID)
-	write(t, db, "UPDATE schedules SET next_due = ? WHERE id = ?", at(anchor), s.ID)
+	write(t, db, "DROP TRIGGER unsettled")
 	_, ep, _ = codexAt(t, dir, tick)
-	runs = runsOnce(t, ep, s.ID, settled)
-	if len(runs) != 1 || runs[0].State != "started" || runs[0].Thread != first.String() {
-		t.Fatalf("runs %+v, want the one run started again as %s", runs, first)
+	runs := runsOnce(t, ep, s.ID, settled)
+	if len(runs) != 1 || runs[0].State != "started" || runs[0].Due != at(anchor) || runs[0].Thread != first.String() {
+		t.Fatalf("runs %+v, want the one run started as %s", runs, first)
 	}
 	if th := threads(t, ep); len(th) != 1 || th[0].ID != first {
 		t.Fatalf("threads %+v, want %s alone", th, first)
@@ -348,32 +361,38 @@ func TestEditingASchedulesTextKeepsItsDueRun(t *testing.T) {
 	}
 }
 
-// A Run now a crash left starting finishes on the next tick, under its
-// own key, though its schedule is off and so never due.
+// A Run now a crash left starting finishes on the next tick, with the
+// thread its create made, though its schedule is off and so never due.
 func TestARunNowLeftStartingFinishesOnTheNextTick(t *testing.T) {
 	fakeCodex(t)
 	dir, ws := stateDir(t), t.TempDir()
 	installSchedules(t, dir)
-	_, ep, stop := codexAt(t, dir, tick)
+	_, ep, _ := codexAt(t, dir, tick)
 	s := saveSchedule(t, ep, ws, map[string]any{"kind": "interval", "every": 60, "enabled": false})
-	stop()
-
-	due := time.Now().Add(-time.Minute).Truncate(time.Second)
-	write(t, pluginDB(t, dir), "INSERT INTO runs (schedule, due, key, state, at) VALUES (?, ?, 'manual:01M85G4HXV540JRFTZA18F6P9N', 'starting', ?)", s.ID, at(due), at(due))
-	_, ep, _ = codexAt(t, dir, tick)
-	runs := runsOnce(t, ep, s.ID, settled)
-	if len(runs) != 1 || runs[0].State != "started" || runs[0].Thread == "" {
-		t.Fatalf("runs %+v, want the Run now started", runs)
+	db := pluginDB(t, dir)
+	write(t, db, unsettled)
+	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID}})
+	if _, err := ep.PluginCall(context.Background(), raw); err == nil {
+		t.Fatal("Run now answered though its record failed")
 	}
-	if th := threads(t, ep); len(th) != 1 || th[0].ID.String() != runs[0].Thread {
-		t.Fatalf("threads %+v, want the run's %s alone", th, runs[0].Thread)
+	th := threads(t, ep)
+	if len(th) != 1 {
+		t.Fatalf("threads %+v, want Run now's", th)
+	}
+	write(t, db, "DROP TRIGGER unsettled")
+	runs := runsOnce(t, ep, s.ID, settled)
+	if len(runs) != 1 || runs[0].State != "started" || runs[0].Thread != th[0].ID.String() {
+		t.Fatalf("runs %+v, want Run now's started as %s", runs, th[0].ID)
+	}
+	if th := threads(t, ep); len(th) != 1 {
+		t.Fatalf("threads %+v, want Run now's alone", th)
 	}
 }
 
-// A run whose thread started but whose record fails to write stays
-// starting, and counts as a run still going, till a tick finishes it with
-// that same thread.
-func TestARunWhoseRecordFailsFinishesWithItsThread(t *testing.T) {
+// A run left starting keeps the thread its create made though its schedule
+// is edited before the run is recorded: it is sent again as it was first,
+// and counts as a run still going till then.
+func TestAnEditBeforeARunIsRecordedKeepsItsThread(t *testing.T) {
 	fakeCodex(t)
 	t.Setenv(codextest.Scenario, "command") // the turn waits on an approval
 	dir, ws := stateDir(t), t.TempDir()
@@ -381,14 +400,17 @@ func TestARunWhoseRecordFailsFinishesWithItsThread(t *testing.T) {
 	_, ep, _ := codexAt(t, dir, tick)
 	s := saveSchedule(t, ep, ws, map[string]any{"kind": "interval", "every": 60})
 	db := pluginDB(t, dir)
-	write(t, db, "CREATE TRIGGER no_last_thread BEFORE UPDATE OF last_thread ON schedules BEGIN SELECT RAISE(ABORT, 'disk full'); END")
+	write(t, db, unsettled)
 	raw, _ := json.Marshal(map[string]any{"plugin": "schedules", "method": "runNow", "args": map[string]any{"id": s.ID}})
 	if _, err := ep.PluginCall(context.Background(), raw); err == nil {
 		t.Fatal("Run now answered though its record failed")
 	}
-	if th := threads(t, ep); len(th) != 1 {
-		t.Fatalf("threads %+v, want Run now's", th)
+	th := threads(t, ep)
+	if len(th) != 1 || th[0].Access != api.AccessAsk {
+		t.Fatalf("threads %+v, want Run now's, asking for approval", th)
 	}
+	first := th[0].ID
+	saveSchedule(t, ep, ws, map[string]any{"id": s.ID, "kind": "interval", "every": 60, "access": "Full access", "prompt": "Check it all."})
 
 	due := time.Now().Add(-time.Minute).Truncate(time.Second)
 	write(t, db, "UPDATE schedules SET anchor = ?, next_due = ? WHERE id = ?", at(due), at(due), s.ID)
@@ -396,16 +418,56 @@ func TestARunWhoseRecordFailsFinishesWithItsThread(t *testing.T) {
 	if runs[1].Due != at(due) || runs[1].State != "skipped" || runs[0].State != "starting" {
 		t.Fatalf("runs %+v, want the due run skipped while Run now's still starts", runs)
 	}
-	write(t, db, "DROP TRIGGER no_last_thread")
+	write(t, db, "DROP TRIGGER unsettled")
 	runs = runsOnce(t, ep, s.ID, settled)
-	th := threads(t, ep)
-	if len(th) != 1 || runs[0].State != "started" || runs[0].Thread != th[0].ID.String() {
-		t.Fatalf("runs %+v and threads %+v, want Run now's started with its thread, alone", runs, th)
+	if runs[0].State != "started" || runs[0].Thread != first.String() {
+		t.Fatalf("runs %+v, want Run now's started as %s", runs, first)
+	}
+	if th := threads(t, ep); len(th) != 1 || th[0].ID != first || th[0].Access != api.AccessAsk {
+		t.Fatalf("threads %+v, want %s alone, asking for approval", th, first)
 	}
 
 	schedules(t, ep, "delete", map[string]any{"id": s.ID}, nil)
 	if runs := runsOnce(t, ep, s.ID, func([]scheduleRun) bool { return true }); len(runs) != 0 {
 		t.Fatalf("a deleted schedule kept its runs %+v", runs)
+	}
+}
+
+// A Run now that ends first doesn't hide an earlier run that still waits
+// on you: an automatic run checks every thread of its schedule that may
+// still go.
+func TestARunNowHidesNoRunStillWaiting(t *testing.T) {
+	fakeCodex(t)
+	t.Setenv(codextest.Scenario, "command") // the first turn waits on an approval
+	dir, ws := stateDir(t), t.TempDir()
+	installSchedules(t, dir)
+	_, ep, _ := codexAt(t, dir, tick)
+	s := saveSchedule(t, ep, ws, map[string]any{"kind": "interval", "every": 5})
+	db := pluginDB(t, dir)
+	first := at(time.Now().Add(-2 * time.Minute))
+	write(t, db, "UPDATE schedules SET anchor = ?, next_due = ? WHERE id = ?", first, first, s.ID)
+	waiting := mustID(t, runsOnce(t, ep, s.ID, settled)[0].Thread)
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if th := threads(t, ep); len(th) == 1 && len(th[0].Requests) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the first run never waited on its approval")
+		}
+	}
+	t.Setenv(codextest.Scenario, "memory") // Run now's turn just ends
+	var manual struct{ Thread string }
+	schedules(t, ep, "runNow", map[string]any{"id": s.ID}, &manual)
+	endedLog(t, ep, mustID(t, manual.Thread))
+
+	next := at(time.Now().Add(-time.Minute))
+	write(t, db, "UPDATE schedules SET anchor = ?, next_due = ? WHERE id = ?", next, next, s.ID)
+	runs := runsOnce(t, ep, s.ID, func(rs []scheduleRun) bool { return len(rs) == 3 && settled(rs) })
+	if runs[1].Due != next || runs[1].State != "skipped" {
+		t.Fatalf("runs %+v, want the next skipped while the first waits", runs)
+	}
+	if th := threads(t, ep); len(th) != 2 {
+		t.Fatalf("threads %+v, want the first, %s, and Run now's", th, waiting)
 	}
 }
 
@@ -425,10 +487,11 @@ func TestAScheduleThatCantBeCheckedHoldsUpNoOther(t *testing.T) {
 
 	db := pluginDB(t, dir)
 	first, second := time.Now().Add(-2*time.Minute).Truncate(time.Second), time.Now().Add(-time.Minute).Truncate(time.Second)
-	write(t, db, "UPDATE schedules SET anchor = ?, next_due = ?, last_thread = 'gone' WHERE id = ?", at(first), at(first), a.ID)
+	write(t, db, "UPDATE schedules SET anchor = ?, next_due = ? WHERE id = ?", at(first), at(first), a.ID)
+	write(t, db, "INSERT INTO runs (schedule, key, due, state, thread, open, at) VALUES (?, 'manual:gone', ?, 'started', 'gone', 1, ?)", a.ID, at(first.Add(-time.Hour)), at(first))
 	write(t, db, "UPDATE schedules SET anchor = ?, next_due = ? WHERE id = ?", at(second), at(second), b.ID)
 	_, ep, _ = codexAt(t, dir, tick)
-	if runs := runsOnce(t, ep, a.ID, settled); len(runs) != 1 || runs[0].State != "failed" || !strings.Contains(runs[0].Reason, "couldn't be checked") {
+	if runs := runsOnce(t, ep, a.ID, func(rs []scheduleRun) bool { return len(rs) == 2 }); runs[0].State != "failed" || !strings.Contains(runs[0].Reason, "couldn't be checked") {
 		t.Fatalf("A's runs %+v, want one failed as its last thread couldn't be checked", runs)
 	}
 	if runs := runsOnce(t, ep, b.ID, settled); len(runs) != 1 || runs[0].State != "started" {

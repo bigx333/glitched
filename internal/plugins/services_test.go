@@ -331,9 +331,9 @@ func TestABuiltInsServiceStopsWhenServiceIsTakenBack(t *testing.T) {
 		_, err := s.Call(context.Background(), ServiceCall{Plugin: "ticker", Method: "who"})
 		return errors.Is(err, ErrNoService)
 	})
-	before := count()
-	time.Sleep(300 * time.Millisecond) // five of its timers
-	if n := count(); n != before {
-		t.Fatalf("with service taken back, its timer ran %d more times", n-before)
+	var running bool
+	s.do(func() { running = s.h.running1("ticker") != nil })
+	if running {
+		t.Fatal("with service taken back, its service still runs, timers and all")
 	}
 }

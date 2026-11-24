@@ -190,6 +190,11 @@ func loadingChanged(a, b prefs) bool {
 		!maps.Equal(service(a.Grants), service(b.Grants)) || !maps.Equal(service(a.Revoked), service(b.Revoked))
 }
 
+// MaxTimerCall is the longest a service's timer call may take. Till then it
+// has its timer's period, so a timer that waits on slow effects answers
+// before the next, and the host hears how it went.
+const MaxTimerCall = 5 * time.Minute
+
 // startTimers wakes each running service on its timers.
 func (s *Services) startTimers() {
 	for _, in := range s.h.running() {
@@ -215,7 +220,7 @@ func (s *Services) startTimers() {
 					if s.h.running1(id) == nil || s.h.running1(id).p != p {
 						return // reloaded: the new one has timers of its own
 					}
-					if err := p.Call("timer", map[string]string{"id": t.ID}, nil); err != nil {
+					if err := p.CallWithin(min(time.Duration(t.Every)*time.Second, MaxTimerCall), "timer", map[string]string{"id": t.ID}, nil); err != nil {
 						s.h.opts.Logf("plugins: %s: timer %s: %v", id, t.ID, err)
 					}
 				}
@@ -299,28 +304,43 @@ type ServiceCall struct {
 // ErrNoService is a call of a plugin whose service doesn't run here.
 var ErrNoService = errors.New("its service doesn't run: it has none, it's off, or service isn't granted")
 
-// Call answers a window's call with the service's serve export.
+// Call answers a window's call with the service's serve export, by ctx's
+// deadline or in 30 s. serve hears the deadline, in Unix milliseconds, so
+// that a call it reaches late can refuse to write; a call whose deadline
+// passes before it reaches serve never does.
 func (s *Services) Call(ctx context.Context, c ServiceCall) (json.RawMessage, error) {
-	var p *plugin.Plugin
-	s.do(func() {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(30 * time.Second)
+	}
+	found := make(chan *plugin.Plugin, 1)
+	s.post(func() {
 		in := s.h.running1(c.Plugin)
 		if in == nil || in.ext.Service == "" || !s.h.Allowed(c.Plugin, "service") {
+			found <- nil
 			return
 		}
-		p = in.p
+		found <- in.p
 	})
+	var p *plugin.Plugin
+	select {
+	case p = <-found:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-s.stop:
+	}
 	if p == nil {
 		return nil, ErrNoService
 	}
 	if !p.Can("serve") {
 		return nil, fmt.Errorf("plugin %s's service has no serve export", c.Plugin)
 	}
-	timeout := 30 * time.Second
-	if d, ok := ctx.Deadline(); ok {
-		timeout = time.Until(d)
+	timeout := time.Until(deadline)
+	if timeout <= 0 {
+		return nil, context.DeadlineExceeded
 	}
 	var out json.RawMessage
-	err := p.CallWithin(timeout, "serve", map[string]any{"method": c.Method, "args": c.Args}, &out)
+	err := p.CallWithin(timeout, "serve", map[string]any{"method": c.Method, "args": c.Args, "deadline": deadline.UnixMilli()}, &out)
 	return out, err
 }
 
