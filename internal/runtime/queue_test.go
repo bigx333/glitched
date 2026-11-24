@@ -2,6 +2,7 @@ package runtime_test
 
 import (
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -77,8 +78,8 @@ func TestTheQueueIsManagedAcrossACrash(t *testing.T) {
 // A queued message steered in while the run still starts goes to the
 // agent as a steer once it has started, ready or held alike: the start
 // doesn't take it for a wake that went in with its first prompt. The log
-// is replayed once the turn waits on its question, when it streams no
-// more.
+// is replayed once the turn waits on its question and the agent has
+// echoed the steer, when it streams no more.
 func TestASteeredQueuedMessageReachesARunStillStarting(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -105,8 +106,9 @@ func TestASteeredQueuedMessageReachesARunStillStarting(t *testing.T) {
 			queued := submit(t, n.h, id, dispatch("urgent", tc.mode)).Command
 			submit(t, n.h, id, api.QueueSteer{Message: queued})
 			close(release)
-			until(t, n.h, id, "the steer delivered, the turn at its question", func(th api.Thread) bool {
-				return waiting(th) && count(events(t, n.h, id), "message.dispatched") > 0
+			until(t, n.h, id, "the steer delivered and echoed, the turn at its question", func(th api.Thread) bool {
+				evs := events(t, n.h, id)
+				return waiting(th) && count(evs, "message.dispatched") > 0 && strings.Contains(transcript(t, evs), "steered: urgent")
 			})
 			if got := steers.Load(); got != 1 {
 				t.Fatalf("the agent got %d steers; want the queued message steered in once", got)
