@@ -53,12 +53,12 @@ func remoteBackoff(n int) time.Duration { return min(2*time.Second<<min(n, 8), 5
 type class uint8
 
 const (
-	network  class = iota // try again after the backoff, forever
-	catchUp               // read again from the cursor stored, at once
-	obsolete              // the placeholder moved on: look at it again, at once
-	refusal               // the handshake was refused: final the second time in a row
-	final                 // the child is lost
-	defect                // count it: three in a row lose the child
+	network          class = iota // try again after the backoff, forever
+	catchUp                       // read again from the cursor stored, at once
+	obsolete                      // the placeholder moved on: look at it again, at once
+	handshakeRefused              // the handshake was refused: final the second time in a row
+	final                         // the child is lost
+	defect                        // count it: three in a row lose the child
 )
 
 var (
@@ -80,7 +80,7 @@ func classify(err error, label string) (class, string) {
 	case errors.Is(err, api.ErrOverflow):
 		return catchUp, ""
 	case errors.Is(err, transport.ErrRefused):
-		return refusal, label + " no longer accepts this machine's link"
+		return handshakeRefused, label + " no longer accepts this machine's link"
 	case errors.As(err, &rej):
 		return final, label + " refused the child: " + rej.Reason
 	case errors.Is(err, api.ErrNotAllowed):
@@ -133,7 +133,7 @@ func (h *Host) persist(ctx context.Context, attempt func(context.Context) (label
 		switch c {
 		case final:
 			return reason, label, true
-		case refusal:
+		case handshakeRefused:
 			if refusals++; refusals >= 2 {
 				return reason, label, true
 			}
