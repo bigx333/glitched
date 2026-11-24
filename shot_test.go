@@ -25,7 +25,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|credentials (CRED=typed|provided|declined)|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)|queued (HELD, QEDIT)|wizard (WIZARD=machine|source|browse|clone|confirm|cloning|failed|offline)
+// SCENE=empty|running|approval|credentials (CRED=typed|provided|declined)|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)|revert (REVERT=menu|alert|done)|queued (HELD, QEDIT)|wizard (WIZARD=machine|source|browse|clone|confirm|cloning|failed|offline)
 // for the engines' threads (none started without one; question takes
 // ASK=<request body>, PICK=<label>,…, OTHER=<text> typed into the Other
 // field named OTHERIN, and QUESTION=answer|dismiss|stop;
@@ -594,6 +594,29 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		h.until("the server's transcript", func() bool { return h.tt.HasText("Which keys are older than 90 days?") })
 	case "wizard":
 		h = wizardShot(t, os.Getenv("WIZARD"))
+	case "revert":
+		// A worktree thread's second turn, which added notes.txt: its chip,
+		// the chip's menu, the alert before Undo this turn's files, and the
+		// row after it.
+		var notes string
+		h, _, notes = twoTurnsInAWorktree(t)
+		switch os.Getenv("REVERT") {
+		case "menu":
+			h.click("1 file")
+		case "alert", "done":
+			h.click("1 file")
+			h.tt.Advance(time.Second)
+			if err := h.tt.ChooseMenuItem("Undo this turn's files"); err != nil {
+				t.Fatal(err)
+			}
+			if os.Getenv("REVERT") == "done" {
+				h.tt.Advance(time.Second)
+				h.click("Restore files")
+				h.until("the files before the turn", func() bool { _, err := os.Stat(notes); return os.IsNotExist(err) })
+				h.until("the row saying so", func() bool { h.tt.Frame(); return h.tt.HasText("Restored 1 file") })
+			}
+		}
+		h.tt.Advance(time.Second)
 	default:
 		t.Fatalf("no scene %q", name)
 	}

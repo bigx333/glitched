@@ -99,6 +99,8 @@ The host checks three things before it submits, as it does for worktree create a
 
 A commit hook marks the folder as restoring when `thread.reverting` commits. A StartTurn whose workspace is inside a restoring folder hands its lease back, as a closing host does (host.go:378-386). Boot sets the mark again from any pending or leased `RevertThread` before work starts. This covers a child or another thread that becomes live between the commit and the effect. The thread's own later StartTurn already waits, because it sits behind the revert in the lane.
 
+As built in PR 2, the intent is `thread.revert {to: {phase: base|run|recovery, id}, files: true}`, and `files: false` is refused until the conversation rewind lands. A base checkpoint is named by the thread's first run. Both events move the thread's revision, so that the runtime's commit hook sees the thread whose folder it marks, and change nothing else of its view. The timeline row reads "Restored 12 files" with Undo, without the turn number, and the confirmation lists the paths the agent's edits named in the runs it undoes, not a diff of the two checkpoints.
+
 The effect, all steps replay-safe:
 
 1. Capture `recovery/<command>` unless it exists. A replay never retakes it, because a half-applied tree must not become the recovery.

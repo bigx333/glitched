@@ -368,13 +368,22 @@ type DispositionChanged struct {
 }
 
 // CheckpointPhase is when a checkpoint was taken: base before a thread's
-// first run, run at the end of each run.
+// first run, run at the end of each run, and recovery before a revert
+// put files back, so that the revert can be undone.
 type CheckpointPhase string
 
 const (
-	CheckpointBase CheckpointPhase = "base"
-	CheckpointRun  CheckpointPhase = "run"
+	CheckpointBase     CheckpointPhase = "base"
+	CheckpointRun      CheckpointPhase = "run"
+	CheckpointRecovery CheckpointPhase = "recovery"
 )
+
+// CheckpointRef names one of a thread's checkpoints: the base or a run's
+// by the run, and a recovery one by the revert that took it.
+type CheckpointRef struct {
+	Phase CheckpointPhase `json:"phase"`
+	ID    ID              `json:"id"`
+}
 
 type CheckpointStatus string
 
@@ -404,6 +413,36 @@ type CheckpointCaptured struct {
 	Changed int              `json:"changed,omitempty"`
 	Since   string           `json:"since,omitempty"`
 	Ms      int64            `json:"ms"`
+}
+
+// ThreadReverting is a revert of the thread's files the engine is to do:
+// Revert is its command, and To the checkpoint it puts back. It moves the
+// thread's revision and nothing else of its view.
+type ThreadReverting struct {
+	Revert ID            `json:"revert"`
+	To     CheckpointRef `json:"to"`
+}
+
+type RevertStatus string
+
+const (
+	RevertRestored  RevertStatus = "restored"
+	RevertUnchanged RevertStatus = "unchanged" // the files were as To has them
+	RevertFailed    RevertStatus = "failed"    // nothing changed, or what had was put back
+)
+
+// ThreadReverted is what a revert did: Changed is how many paths it put
+// back as To has them, and Recovery the commit of the checkpoint it took
+// of the files first, which a revert to it undoes. Error says why one
+// failed. HEAD, the index and the branch stay as they were. It moves the
+// thread's revision and nothing else of its view.
+type ThreadReverted struct {
+	Revert   ID            `json:"revert"`
+	To       CheckpointRef `json:"to"`
+	Status   RevertStatus  `json:"status"`
+	Changed  int           `json:"changed,omitempty"`
+	Recovery string        `json:"recovery,omitempty"`
+	Error    string        `json:"error,omitempty"`
 }
 
 func (ThreadCreated) eventType() string       { return "thread.created" }
@@ -444,6 +483,8 @@ func (ContextReported) eventType() string     { return "context.reported" }
 func (AccessGranted) eventType() string       { return "access.granted" }
 func (ModelConfirmed) eventType() string      { return "model.confirmed" }
 func (CheckpointCaptured) eventType() string  { return "checkpoint.captured" }
+func (ThreadReverting) eventType() string     { return "thread.reverting" }
+func (ThreadReverted) eventType() string      { return "thread.reverted" }
 
 var eventBodies = map[string]func([]byte) (EventBody, error){}
 
@@ -486,6 +527,8 @@ func init() {
 	register[AccessGranted]()
 	register[ModelConfirmed]()
 	register[CheckpointCaptured]()
+	register[ThreadReverting]()
+	register[ThreadReverted]()
 }
 
 func register[B EventBody]() {

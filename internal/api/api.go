@@ -200,6 +200,16 @@ type ThreadRename struct {
 	Title string `json:"title"`
 }
 
+// ThreadRevert puts the files of the thread's worktree back as To holds
+// them, after a checkpoint of them as they are, which a revert to it
+// undoes. Files must be set: a revert of the conversation is to come. Only
+// a thread of the user's in a worktree of its own reverts, with no run of
+// its tree live.
+type ThreadRevert struct {
+	To    CheckpointRef `json:"to"`
+	Files bool          `json:"files"`
+}
+
 // ThreadConfigure changes the model and the access the thread's next turn
 // runs at: a turn already running keeps its own. It gives only what its
 // sender chose: the model's name, its effort, fast mode, the access. What
@@ -247,6 +257,7 @@ func (QueueEdit) intentType() string       { return "queue.edit" }
 func (QueueCancel) intentType() string     { return "queue.cancel" }
 func (QueueMove) intentType() string       { return "queue.move" }
 func (QueueSteer) intentType() string      { return "queue.steer" }
+func (ThreadRevert) intentType() string    { return "thread.revert" }
 
 var intents = map[string]func() Intent{
 	"thread.create":    func() Intent { return new(ThreadCreate) },
@@ -262,6 +273,7 @@ var intents = map[string]func() Intent{
 	"queue.cancel":     func() Intent { return new(QueueCancel) },
 	"queue.move":       func() Intent { return new(QueueMove) },
 	"queue.steer":      func() Intent { return new(QueueSteer) },
+	"thread.revert":    func() Intent { return new(ThreadRevert) },
 }
 
 func IntentType(i Intent) string { return i.intentType() }
@@ -327,6 +339,8 @@ func (c *Command) UnmarshalJSON(b []byte) error {
 	case *QueueMove:
 		c.Body = *v
 	case *QueueSteer:
+		c.Body = *v
+	case *ThreadRevert:
 		c.Body = *v
 	}
 	c.ID, c.Target, c.Revision, c.Expires, c.Caller = w.ID, w.Target, w.Revision, w.Expires, w.Caller
@@ -518,8 +532,10 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // threads under its own, a command whose caller a version 9 engine would
 // drop and take as the user's; version 11 edits, cancels, moves and
 // steers a queued message, which a version 10 engine refuses as unknown
-// commands, and a version 10 GUI would show at its old words and place.
-const Protocol = 11
+// commands, and a version 10 GUI would show at its old words and place;
+// version 12 reverts a thread's files, which a version 11 engine refuses
+// as an unknown command.
+const Protocol = 12
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host

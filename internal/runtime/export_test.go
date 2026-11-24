@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"time"
+
+	"glitched/internal/api"
 )
 
 func SetCallTimeout(d time.Duration) func() {
@@ -47,6 +49,13 @@ func SetCheckpointHook(f func(ctx context.Context, step string)) func() {
 	old := checkpointHook
 	checkpointHook = f
 	return func() { checkpointHook = old }
+}
+
+// Waiting is whether thread's start waits on a revert in its folder.
+func Waiting(h *Host, thread api.ID) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.waiting[thread]
 }
 
 func SetCloseGrace(d time.Duration) func() {

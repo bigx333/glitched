@@ -79,8 +79,17 @@ type CaptureCheckpoint struct {
 // DropCheckpoints deletes a deleted thread's checkpoints.
 type DropCheckpoints struct{}
 
+// RevertThread puts the files of the thread's worktree back as To holds
+// them, after a recovery checkpoint of them as they are, which a replay
+// finds and never takes again.
+type RevertThread struct {
+	Revert api.ID
+	To     api.CheckpointRef
+}
+
 func (CaptureCheckpoint) effectKind() string { return "checkpoint.capture" }
 func (DropCheckpoints) effectKind() string   { return "checkpoint.drop" }
+func (RevertThread) effectKind() string      { return "thread.revert" }
 
 func (StartTurn) effectKind() string      { return "turn.start" }
 func (RemoveWorktree) effectKind() string { return "worktree.remove" }
@@ -113,7 +122,7 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 		return r != nil && r.ID == e.Run && r.State == RunStopping, nil
 	case CloseAgent, RemoveWorktree, DropCheckpoints:
 		return true, nil
-	case CaptureCheckpoint:
+	case CaptureCheckpoint, RevertThread:
 		return !t.Deleted, nil
 	case ReportToParent:
 		// The parent decides, as it observes the report, whether it can
@@ -138,8 +147,9 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 // Closing an agent that is gone does nothing, nor does removing a
 // worktree that is. A capture whose ref is there reports what that ref
 // holds and writes nothing, and a drop of refs that are gone deletes
-// nothing but what a gc it left pending prunes.
-var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true, "worktree.remove": true, "checkpoint.capture": true, "checkpoint.drop": true}
+// nothing but what a gc it left pending prunes. A revert finds the
+// recovery checkpoint it took, and puts the same files back.
+var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true, "worktree.remove": true, "checkpoint.capture": true, "checkpoint.drop": true, "thread.revert": true}
 
 func ReplaySafe(e Effect) bool { return replaySafe[e.effectKind()] }
 
@@ -154,6 +164,7 @@ var effects = map[string]func([]byte) (Effect, error){
 
 	"checkpoint.capture": decodeAs[CaptureCheckpoint],
 	"checkpoint.drop":    decodeAs[DropCheckpoints],
+	"thread.revert":      decodeAs[RevertThread],
 }
 
 func decodeAs[E Effect](b []byte) (Effect, error) {
@@ -236,6 +247,9 @@ type Plan struct{ Plan api.PlanUpdated }
 
 // Captured is what a CaptureCheckpoint saved, or why it saved nothing.
 type Captured struct{ Checkpoint api.CheckpointCaptured }
+
+// Reverted is what a RevertThread did.
+type Reverted struct{ Revert api.ThreadReverted }
 
 // Surfaced is a request the agent raised. Request is freshly minted; Dedup is
 // the provider's id, so a request surfaced again after a restart is ignored.
@@ -330,6 +344,7 @@ func (Context) observed()        {}
 func (Work) observed()           {}
 func (Plan) observed()           {}
 func (Captured) observed()       {}
+func (Reverted) observed()       {}
 func (Granted) observed()        {}
 func (Ran) observed()            {}
 func (Surfaced) observed()       {}
