@@ -85,8 +85,8 @@ func (a *app) checkpointChip(c *ui.Context, t thread, run api.ID) {
 		if len(reasons) > 0 {
 			m.Separator()
 		}
-		here := m.Item("Restore files to here").Disabled(hereWhy != "").Tooltip(hereWhy)
-		undo := m.Item("Undo this turn's files").Disabled(undoWhy != "").Tooltip(undoWhy)
+		here := m.Item("Restore files to here").Disabled(hereWhy != "")
+		undo := m.Item("Undo this turn's files").Disabled(undoWhy != "")
 		if here.Chosen() {
 			a.reverting, a.revertOpen = revertAsk{t: t, to: api.CheckpointRef{Phase: api.CheckpointRun, ID: run}}, true
 		}
