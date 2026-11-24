@@ -487,11 +487,6 @@ func (d *decision) interrupt(drop bool) error {
 		}
 	}
 	r := d.t.Live()
-	// An agent stops a run that runs: one already stopping is the user's
-	// to give up on.
-	if !d.by.IsZero() && r != nil && r.State == RunStopping {
-		return nil
-	}
 	if r != nil && !r.Silent {
 		if err := d.emit(api.StopAsked{Run: r.ID, By: d.by}); err != nil {
 			return err
@@ -507,6 +502,10 @@ func (d *decision) interrupt(drop bool) error {
 		return nil
 	case drop || r.State != RunStopping:
 		return d.stop(*r)
+	case !d.by.IsZero():
+		// An agent stops a run that runs: one already stopping is the
+		// user's to give up on.
+		return nil
 	case r.Signalled:
 		return d.lost(*r)
 	}
