@@ -1045,7 +1045,7 @@ func (d *decision) observe(o Observation) error {
 	case Unheard:
 		return d.emit(api.RequestInvalidation{Request: o.Request, Reason: o.Reason})
 	case DeliveryFailed:
-		if err := d.emit(api.RequestInvalidation{Request: o.Request, Reason: o.Error}); err != nil {
+		if err := d.emit(api.RequestInvalidation{Request: o.Request, Reason: o.Error, Unconfirmed: o.Unconfirmed}); err != nil {
 			return err
 		}
 		// An answer that can't be delivered is never assumed; the run that

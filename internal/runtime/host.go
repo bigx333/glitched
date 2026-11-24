@@ -55,10 +55,13 @@ type Host struct {
 	working map[api.ID]bool
 	// autoContinue has the runs a restart cut off as they worked on the
 	// user's threads continued unasked, these and those of earlier boots.
-	autoContinue  bool
-	continued     chan struct{} // poked at each commit while continueLost runs
-	full          chan struct{} // poked as continueLost waits for a continued run to end
-	lostDone      chan struct{} // closed once continueLost has been through every run due
+	autoContinue bool
+	continued    chan struct{} // poked at each commit while continueLost runs
+	full         chan struct{} // poked as continueLost waits for a continued run to end
+	lostDone     chan struct{} // closed once continueLost has been through every run due
+	// redelivered is the answers' effects boot found leased: the last
+	// engine stopped as it gave them. Written only by boot.
+	redelivered   map[int64]bool
 	compactCheck  chan api.ID
 	compactRescan chan struct{}
 	compactDue    chan compactDue
@@ -111,7 +114,12 @@ type liveRun struct {
 	// started is closed once the run's start is recorded: its agent may
 	// call back through glitched mcp before then.
 	started chan struct{}
-	silent  bool // it runs a compaction; set under h.mu
+	// delivering counts the answers on their way to the agent, from the
+	// call that gives one until what it did is logged; settled is closed
+	// as the count comes back to none. Set under h.mu.
+	delivering int
+	settled    chan struct{}
+	silent     bool // it runs a compaction; set under h.mu
 }
 
 var _ api.Endpoint = (*Host)(nil)
@@ -184,6 +192,7 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		continued:     make(chan struct{}, 1),
 		full:          make(chan struct{}, 1),
 		lostDone:      make(chan struct{}),
+		redelivered:   map[int64]bool{},
 		compactCheck:  make(chan api.ID, 64),
 		compactRescan: make(chan struct{}, 1),
 		compactDue:    make(chan compactDue, 64),
@@ -434,6 +443,9 @@ func (h *Host) boot(ctx context.Context) error {
 			if !engine.ReplaySafe(e.Body) {
 				return fmt.Errorf("runtime: no recovery for leased %s", engine.EffectKind(e.Body))
 			}
+			if _, ok := e.Body.(engine.DeliverAnswer); ok {
+				h.redelivered[e.ID] = true
+			}
 			err = h.store.Release(ctx, e.ID)
 		}
 		if err != nil {
@@ -549,6 +561,11 @@ func (h *Host) perform(e store.Effect) {
 	if _, ok := e.Body.(engine.StartTurn); ok && h.waitsOnRevert(e) {
 		return
 	}
+	if b, ok := e.Body.(engine.DeliverAnswer); ok && !isAsk(b.Dedup) {
+		if lr := h.delivering(b.Run); lr != nil {
+			defer h.delivered(lr)
+		}
+	}
 	var lr *liveRun
 	if b, ok := e.Body.(engine.StartTurn); ok {
 		// Tracked before the check, so a stop that commits after it still
@@ -568,6 +585,13 @@ func (h *Host) perform(e store.Effect) {
 	var skip engine.Observation
 	if loaded {
 		due, skip = engine.Due(t, e.Body)
+		// An answer the last engine was giving as it stopped may have
+		// reached the agent: one this run can no longer take is not known
+		// to have failed.
+		if f, ok := skip.(engine.DeliveryFailed); ok && h.redelivered[e.ID] {
+			f.Error, f.Unconfirmed = "the engine stopped as it gave the answer, so the agent may have it", true
+			skip = f
+		}
 		if b, ok := e.Body.(engine.StartTurn); ok && due && b.ResumeOnly && !h.ownCompaction(b.Run, t) {
 			due, skip = false, engine.Ended{Run: b.Run, Outcome: api.OutcomeInterrupted, Error: errCompactNotDue.Error()}
 		}
@@ -891,6 +915,30 @@ func (h *Host) track(run api.ID, provider string, ag provider.Agent) *liveRun {
 	h.agents[lr] = true
 	h.mu.Unlock()
 	return lr
+}
+
+// delivering is the live run an answer is on its way to, or nil.
+func (h *Host) delivering(run api.ID) *liveRun {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	lr := h.runs[run]
+	if lr == nil {
+		return nil
+	}
+	if lr.delivering == 0 {
+		lr.settled = make(chan struct{})
+	}
+	lr.delivering++
+	return lr
+}
+
+// delivered is that what an answer's call did is logged.
+func (h *Host) delivered(lr *liveRun) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if lr.delivering--; lr.delivering == 0 {
+		close(lr.settled)
+	}
 }
 
 // closedAgent is that lr's agent, if it opened one, is closed.

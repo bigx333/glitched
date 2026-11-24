@@ -146,6 +146,19 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 			case provider.TurnEnded:
 				flushAllNested()
 				flushText()
+				// An agent can end its turn before the call that answered
+				// it returns: what that call did is logged first, so a
+				// crash never leaves an ended turn with an answer the
+				// agent took logged as on its way.
+				h.mu.Lock()
+				settled := lr.settled
+				h.mu.Unlock()
+				if settled != nil {
+					select {
+					case <-settled:
+					case <-lr.ctx.Done():
+					}
+				}
 				if ended = commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: redact(ev.Error), Tokens: ev.Tokens}); ended {
 					h.forget(run)
 				}
