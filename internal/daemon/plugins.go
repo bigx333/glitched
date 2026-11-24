@@ -62,8 +62,16 @@ func (d *Daemon) startPlugins(cfg Config) *plugins.Services {
 }
 
 // pluginEffect is what plugin's service may do, with no window: read,
-// start and message threads. The host checked its grant.
+// start and message threads. The host checked its grant. It answers
+// later, off the services' queue, so a slow create holds up no other
+// service, call or timer.
 func (d *Daemon) pluginEffect(plugin string, e plugins.Effect) (any, error) {
+	return plugins.Pending(func(done func(any, error)) {
+		go func() { done(d.effect(plugin, e)) }()
+	}), nil
+}
+
+func (d *Daemon) effect(plugin string, e plugins.Effect) (any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	ep := d.Endpoint()

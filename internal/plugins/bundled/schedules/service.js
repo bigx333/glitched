@@ -3,17 +3,28 @@
 // once per occurrence, under a key the host keeps to one thread across
 // restarts. It never wakes the Mac: a run missed while the engine was down
 // runs once when it's back, or is skipped, as the schedule says.
+//
+// A run is written as an intent, with the create request it sends, before
+// it is sent; a run left starting is sent again with that same request, so
+// the engine answers the thread it may already have made. Nothing waits on
+// a create but the run it is for: the page's writes go at once.
 
 const ACCESS = ["Ask for approval", "Approve for me", "Full access"];
 const MINUTE = 60_000;
 const DAY = 1440 * MINUTE;
 // A run this late is missed, for a schedule that skips missed runs.
 const GRACE = 10 * MINUTE;
-// How long a tick starts runs for, so a write of the page waits on it no
-// longer; what is left is due on the next.
+// How long a tick starts runs for, so it ends inside its timer's minute;
+// what is left goes on the next.
 const BUDGET = 20_000;
-// The most rows a tick reads of each kind, well past what a budget starts.
-const PAGE = 500;
+// The most schedules, and runs left starting, a tick reads at once.
+const PAGE = 50;
+// The most schedules list answers at once.
+const LIST_PAGE = 100;
+// The finished runs a schedule keeps, newest first.
+const KEEP = 200;
+// The most schedules there can be.
+const MAX_SCHEDULES = 1000;
 
 let ready = null;
 
@@ -37,19 +48,25 @@ function db() {
         missed TEXT NOT NULL CHECK (missed IN ('once', 'skip')),
         enabled INTEGER NOT NULL,
         next_due TEXT,
-        last_thread TEXT,
         CHECK ((kind = 'interval') = (every IS NOT NULL AND at IS NULL))
       );
       CREATE TABLE IF NOT EXISTS runs (
         schedule TEXT NOT NULL,
-        due TEXT NOT NULL,
         key TEXT NOT NULL,
-        thread TEXT,
+        due TEXT NOT NULL,
+        manual INTEGER NOT NULL DEFAULT 0,
         state TEXT NOT NULL CHECK (state IN ('starting', 'started', 'skipped', 'missed', 'failed')),
+        request TEXT,
+        sent INTEGER NOT NULL DEFAULT 0,
+        thread TEXT,
+        open INTEGER NOT NULL DEFAULT 0,
         reason TEXT,
         at TEXT NOT NULL,
-        PRIMARY KEY (schedule, due)
+        PRIMARY KEY (schedule, key),
+        CHECK ((state = 'starting') = (request IS NOT NULL)),
+        CHECK (open = 0 OR thread IS NOT NULL)
       );
+      CREATE INDEX IF NOT EXISTS history ON runs (schedule, due);
       CREATE TRIGGER IF NOT EXISTS runs_go_with_their_schedule AFTER DELETE ON schedules BEGIN
         DELETE FROM runs WHERE schedule = old.id;
       END;
@@ -64,14 +81,8 @@ function db() {
   return ready;
 }
 
-// serial runs fn after every call before it has settled: a tick and a
-// call of the page never interleave their writes.
-let queue = Promise.resolve();
-function serial(fn) {
-  const done = queue.then(fn);
-  queue = done.catch(() => {});
-  return done;
-}
+const query = (sql, params) => glitched.db.query(sql, params);
+const exec = (sql, params) => glitched.db.exec(sql, params);
 
 // --- When a schedule runs ---------------------------------------------------
 
@@ -168,6 +179,13 @@ function time(v) {
   return Date.parse(v);
 }
 
+// absolute is whether Go's filepath.IsAbs holds for p on Unix or on
+// Windows, a drive's or a share's: the engine that starts the run checks it
+// again for its own.
+function absolute(p) {
+  return /^(\/|[\\/]{2}|[^]:[\\/])/.test(p);
+}
+
 function zoneOK(zone) {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: zone });
@@ -208,7 +226,7 @@ function parse(v, now) {
     enabled: v.enabled !== false,
   };
   if (typeof s.id !== "string" || !/^[0-9A-Z]{26}$/.test(s.id)) throw new Invalid("id is a schedule's");
-  if (!s.workspace.startsWith("/")) throw new Invalid("workspace is an absolute folder");
+  if (!absolute(s.workspace)) throw new Invalid("workspace is an absolute folder");
   if (typeof s.effort !== "string" || s.effort.length > 100) throw new Invalid("effort is text");
   if (!ACCESS.includes(s.access)) throw new Invalid("access is one of " + ACCESS.join(", "));
   if (s.kind !== "interval" && s.kind !== "weekly") throw new Invalid("kind is interval or weekly");
@@ -235,183 +253,294 @@ function fromRow(r) {
     provider: r.provider, model: r.model, effort: r.effort, fast: r.fast === 1, access: r.access,
     kind: r.kind, every: r.every, at: r.at, weekdays: r.weekdays ? r.weekdays.split(",").map(Number) : [],
     zone: r.zone, anchor: r.anchor, missed: r.missed, enabled: r.enabled === 1,
-    nextDue: r.next_due, lastThread: r.last_thread,
+    nextDue: r.next_due, lastThread: r.last_thread ?? null,
   };
 }
 
+// SCHEDULE reads schedules with the thread of each one's newest run.
+const SCHEDULE = `SELECT s.*, (SELECT thread FROM runs WHERE schedule = s.id AND thread IS NOT NULL ORDER BY due DESC, key DESC LIMIT 1) AS last_thread
+  FROM schedules s`;
+
 async function load(id) {
-  const rows = await glitched.db.query("SELECT * FROM schedules WHERE id = ?", [id]);
+  const rows = await query(SCHEDULE + " WHERE s.id = ?", [id]);
   if (rows.length === 0) throw new Invalid("no schedule " + id);
   return fromRow(rows[0]);
 }
 
+// late refuses a write whose call has run out of time, so a call that
+// timed out never writes after.
+function late(deadline) {
+  if (deadline !== undefined && Date.now() > deadline) throw new Error("the call ran out of time before it wrote");
+}
+
 // save writes a schedule. One whose times and enabled stay as they were
-// keeps its next_due, so an edit drops no run the timer hasn't seen.
-async function save(v) {
+// keeps its next_due, so an edit drops no run the timer hasn't seen; one
+// turned off drops the runs it meant to start and hadn't sent yet.
+async function save(v, deadline) {
   const now = Date.now();
-  let was = null;
-  if (v.id !== undefined) {
-    was = await load(v.id);
-    v = { anchor: was.anchor, ...v };
-  }
-  const s = parse(v, now);
+  const was = v.id === undefined ? null : await load(v.id);
+  const s = parse(was === null ? v : { anchor: was.anchor, ...v }, now);
   const same = was !== null && ["kind", "every", "at", "zone", "anchor", "enabled"].every((k) => was[k] === s[k]) &&
     was.weekdays.join() === s.weekdays.join();
   const due = !s.enabled ? null : same ? was.nextDue : iso(nextAfter(s, now));
-  await glitched.db.exec(
-    `INSERT INTO schedules (id, title, prompt, workspace, worktree, provider, model, effort, fast, access, kind, every, at, weekdays, zone, anchor, missed, enabled, next_due)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT (id) DO UPDATE SET title = excluded.title, prompt = excluded.prompt, workspace = excluded.workspace,
-       worktree = excluded.worktree, provider = excluded.provider, model = excluded.model, effort = excluded.effort,
-       fast = excluded.fast, access = excluded.access, kind = excluded.kind, every = excluded.every, at = excluded.at,
-       weekdays = excluded.weekdays, zone = excluded.zone, anchor = excluded.anchor, missed = excluded.missed,
-       enabled = excluded.enabled, next_due = excluded.next_due`,
-    [s.id, s.title, s.prompt, s.workspace, s.worktree ? 1 : 0, s.provider, s.model, s.effort, s.fast ? 1 : 0, s.access,
-      s.kind, s.every, s.at, s.kind === "weekly" ? s.weekdays.join(",") : null, s.zone, s.anchor, s.missed, s.enabled ? 1 : 0, due],
-  );
+  const fields = [s.title, s.prompt, s.workspace, s.worktree ? 1 : 0, s.provider, s.model, s.effort, s.fast ? 1 : 0, s.access,
+    s.kind, s.every, s.at, s.kind === "weekly" ? s.weekdays.join(",") : null, s.zone, s.anchor, s.missed, s.enabled ? 1 : 0, due];
+  late(deadline);
+  if (was === null) {
+    const { changes } = await exec(
+      `INSERT INTO schedules (id, title, prompt, workspace, worktree, provider, model, effort, fast, access, kind, every, at, weekdays, zone, anchor, missed, enabled, next_due)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT count(*) FROM schedules) < ${MAX_SCHEDULES}`,
+      [s.id, ...fields],
+    );
+    if (changes === 0) throw new Invalid("there are " + MAX_SCHEDULES + " schedules already, the most there can be");
+  } else {
+    await exec(
+      `UPDATE schedules SET title = ?, prompt = ?, workspace = ?, worktree = ?, provider = ?, model = ?, effort = ?, fast = ?, access = ?,
+         kind = ?, every = ?, at = ?, weekdays = ?, zone = ?, anchor = ?, missed = ?, enabled = ?, next_due = ? WHERE id = ?`,
+      [...fields, s.id],
+    );
+    if (!s.enabled) {
+      await exec(
+        "UPDATE runs SET state = 'skipped', reason = 'turned off', request = NULL, at = ? WHERE schedule = ? AND manual = 0 AND state = 'starting' AND sent = 0",
+        [iso(now), s.id],
+      );
+    }
+  }
   return load(s.id);
 }
 
 // --- Starting runs -----------------------------------------------------------------
 
-async function record(s, due, key, state, fields = {}) {
-  await glitched.db.exec(
-    `INSERT INTO runs (schedule, due, key, thread, state, reason, at) VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT (schedule, due) DO UPDATE SET thread = excluded.thread, state = excluded.state, reason = excluded.reason, at = excluded.at`,
-    [s.id, due, key, fields.thread ?? null, state, fields.reason ?? null, iso(Date.now())],
-  );
-}
-
-// start asks the host for s's thread under key, at due, and records how it
-// went. The key makes a repeat, as after a crash, answer the first thread,
-// so a write that fails after the create leaves the run starting, and the
-// next tick finishes it.
-async function start(s, due, key) {
-  let thread;
-  try {
-    ({ thread } = await glitched.threads.create(s.prompt, {
+// request is the create a run of s sends, under key, at due: written with
+// the run's intent, and sent the same on every try.
+function request(s, key, due) {
+  return JSON.stringify({
+    prompt: s.prompt,
+    options: {
       title: s.title,
       workspace: s.workspace,
       model: { provider: s.provider, model: s.model, effort: s.effort, fast: s.fast },
       access: s.access,
       ...(s.worktree ? { worktree: {} } : {}),
       key: { id: key, at: due },
-    }));
-  } catch (e) {
-    await record(s, due, key, "failed", { reason: e.message });
-    return null;
+    },
+  });
+}
+
+// prune drops schedule's finished runs past its newest KEEP, but for one
+// whose thread may still go.
+async function prune(schedule) {
+  await exec(
+    `DELETE FROM runs WHERE schedule = ? AND state <> 'starting' AND open = 0
+       AND key NOT IN (SELECT key FROM runs WHERE schedule = ? ORDER BY due DESC, key DESC LIMIT ${KEEP})`,
+    [schedule, schedule],
+  );
+}
+
+// settle ends run r as state, a thread with it counting as one that may
+// still go.
+async function settle(r, state, { thread = null, reason = null } = {}) {
+  await exec(
+    "UPDATE runs SET state = ?, thread = ?, open = ?, reason = ?, request = NULL, at = ? WHERE schedule = ? AND key = ?",
+    [state, thread, thread === null ? 0 : 1, reason, iso(Date.now()), r.schedule, r.key],
+  );
+  await prune(r.schedule);
+}
+
+// note records an automatic run of s, as long as s is still on and due
+// where the tick found it; whether it did.
+async function note(s, key, due, state, { reason = null, request = null } = {}) {
+  const { changes } = await exec(
+    `INSERT INTO runs (schedule, key, due, state, request, reason, at)
+     SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM schedules WHERE id = ? AND enabled = 1 AND next_due = ?)
+     ON CONFLICT (schedule, key) DO NOTHING`,
+    [s.id, key, due, state, request, reason, iso(Date.now()), s.id, s.nextDue],
+  );
+  if (state !== "starting") await prune(s.id);
+  return changes === 1;
+}
+
+// inflight are the runs this runtime is sending, which a tick doesn't send
+// again.
+const inflight = new Set();
+
+// send sends run r's create and settles it on the answer. A run not sent
+// yet is sent only if it is still meant to be. A write that fails after
+// the create leaves the run starting, to be sent again.
+async function send(r) {
+  const id = r.schedule + "\n" + r.key;
+  if (inflight.has(id)) return null;
+  inflight.add(id);
+  try {
+    if (r.sent === 0) {
+      const { changes } = await exec(
+        "UPDATE runs SET sent = 1 WHERE schedule = ? AND key = ? AND state = 'starting' AND sent = 0",
+        [r.schedule, r.key],
+      );
+      if (changes === 0) return null;
+    }
+    const { prompt, options } = JSON.parse(r.request);
+    let thread;
+    try {
+      ({ thread } = await glitched.threads.create(prompt, options));
+    } catch (e) {
+      await settle(r, "failed", { reason: e.message });
+      return null;
+    }
+    await settle(r, "started", { thread });
+    return thread;
+  } finally {
+    inflight.delete(id);
   }
-  await glitched.db.exec("UPDATE schedules SET last_thread = ? WHERE id = ?", [thread, s.id]);
-  await record(s, due, key, "started", { thread });
-  return thread;
 }
 
-// busy is whether the thread is still working or waiting on you. A thread
-// that's gone isn't.
-async function busy(thread) {
-  if (!thread) return false;
-  const t = (await glitched.threads.list()).find((r) => r.id === thread);
-  return t !== undefined && (t.status === "working" || t.status === "waiting");
+// going is whether a run of s may still go: one starting, or one whose
+// thread works or waits on you. Each thread that has stopped, or is gone,
+// stops counting.
+async function going(s) {
+  const [starting] = await query("SELECT 1 FROM runs WHERE schedule = ? AND state = 'starting' LIMIT 1", [s.id]);
+  if (starting !== undefined) return true;
+  const open = await query("SELECT key, thread FROM runs WHERE schedule = ? AND open = 1", [s.id]);
+  if (open.length === 0) return false;
+  const threads = await glitched.threads.list();
+  let busy = false;
+  for (const r of open) {
+    const t = threads.find((x) => x.id === r.thread);
+    if (t !== undefined && (t.status === "working" || t.status === "waiting")) {
+      busy = true;
+    } else {
+      await exec("UPDATE runs SET open = 0 WHERE schedule = ? AND key = ?", [s.id, r.key]);
+    }
+  }
+  return busy;
 }
 
-// due starts s's latest occurrence by now, once, unless a run of it is
-// recorded, the schedule skips a run its next_due shows was missed, or its
-// last run still goes. Every step reads what is there and does what is
-// left, so a crash anywhere comes back to the same end.
-async function due(s, now) {
+// unit does what s's automatic runs need, as one: it sends again a run
+// left starting, or, on and due, starts its latest occurrence, unless that
+// is before its next_due, it records the occurrence's run, it skips a run
+// its next_due shows was missed, or a run of it may still go; then it
+// moves next_due past now. A run sent again is the catch-up. Every step
+// reads what is there and does what is left, so a crash anywhere comes
+// back to the same end.
+async function unit(s) {
+  const now = Date.now();
+  let replayed = false;
+  for (const r of await query("SELECT * FROM runs WHERE schedule = ? AND manual = 0 AND state = 'starting' ORDER BY due", [s.id])) {
+    if (r.sent === 0 && !s.enabled) {
+      await settle(r, "skipped", { reason: "turned off" });
+      continue;
+    }
+    await send(r);
+    replayed = true;
+  }
+  if (!s.enabled || s.nextDue === null) return;
+  const nextDue = Date.parse(s.nextDue);
   const at = latestBy(s, now);
-  if (at !== null) {
-    const occ = iso(at);
-    const key = s.id + "@" + occ;
-    const [run] = await glitched.db.query("SELECT state FROM runs WHERE schedule = ? AND due = ?", [s.id, occ]);
-    if (run === undefined) {
-      if (s.missed === "skip" && now - Date.parse(s.nextDue) > GRACE) {
-        await record(s, occ, key, "missed", { reason: "Glitched wasn't running then" });
+  if (at === null || at < nextDue) return;
+  const occ = iso(at);
+  const key = s.id + "@" + occ;
+  let intent = null;
+  if (!replayed) {
+    if (s.missed === "skip" && now - nextDue > GRACE) {
+      await note(s, key, occ, "missed", { reason: "Glitched wasn't running then" });
+    } else {
+      const busy = await going(s).catch((e) => e);
+      if (busy instanceof Error) {
+        await note(s, key, occ, "failed", { reason: "its runs couldn't be checked: " + busy.message });
+      } else if (busy) {
+        await note(s, key, occ, "skipped", { reason: "the previous run is still going" });
       } else {
-        const [pending] = await glitched.db.query("SELECT 1 FROM runs WHERE schedule = ? AND state = 'starting' LIMIT 1", [s.id]);
-        const going = pending !== undefined || (await busy((await load(s.id)).lastThread).catch((e) => e));
-        if (going instanceof Error) {
-          await record(s, occ, key, "failed", { reason: "its last run couldn't be checked: " + going.message });
-        } else if (going) {
-          await record(s, occ, key, "skipped", { reason: "the previous run is still going" });
-        } else {
-          await record(s, occ, key, "starting");
-          await start(s, occ, key);
-        }
+        intent = { schedule: s.id, key, sent: 0, request: request(s, key, occ) };
+        if (!(await note(s, key, occ, "starting", { request: intent.request }))) intent = null;
       }
     }
   }
-  await glitched.db.exec("UPDATE schedules SET next_due = ? WHERE id = ? AND enabled = 1", [iso(nextAfter(s, now)), s.id]);
+  await exec("UPDATE schedules SET next_due = ? WHERE id = ? AND enabled = 1 AND next_due = ?", [iso(nextAfter(s, now)), s.id, s.nextDue]);
+  if (intent !== null) await send(intent);
 }
 
-// tick first finishes every run a crash or a failed write left starting,
-// a Run now's and a disabled schedule's too, under its own key, then
-// starts what is due, in next_due order, till its budget is spent. One
-// schedule that fails doesn't hold up the rest; the host logs what failed.
+// The cursors of the tick's two pages, so a page that can't settle doesn't
+// keep the rest from their turn.
+let manualAfter = ["", ""];
+let unitAfter = "";
+
+// tick sends again every Run now left starting, then does each schedule's
+// unit that is due or has a run left starting, a page of each, till its
+// budget is spent. One that fails holds up none of the rest; the host logs
+// what failed once the tick ends.
 async function tick() {
   await db();
   const begun = Date.now();
-  const starting = await glitched.db.query(
-    "SELECT s.*, r.due AS run_due, r.key AS run_key FROM runs r JOIN schedules s ON s.id = r.schedule WHERE r.state = 'starting' ORDER BY r.due LIMIT ?",
-    [PAGE],
-  );
-  const rows = await glitched.db.query("SELECT * FROM schedules WHERE enabled = 1 AND next_due <= ? ORDER BY next_due LIMIT ?", [iso(begun), PAGE]);
-  const work = [
-    ...starting.map((r) => () => start(fromRow(r), r.run_due, r.run_key)),
-    ...rows.map((r) => () => due(fromRow(r), Date.now())),
-  ];
   const failed = [];
-  for (const w of work) {
-    if (Date.now() - begun > BUDGET) break;
-    await w().catch((e) => failed.push(e.message));
-  }
+  const manual = await query(
+    "SELECT * FROM runs WHERE manual = 1 AND state = 'starting' AND (schedule, key) > (?, ?) ORDER BY schedule, key LIMIT ?",
+    [...manualAfter, PAGE],
+  );
+  const units = await query(
+    `SELECT * FROM schedules s WHERE s.id > ?
+       AND ((s.enabled = 1 AND s.next_due <= ?) OR EXISTS (SELECT 1 FROM runs WHERE schedule = s.id AND manual = 0 AND state = 'starting'))
+     ORDER BY s.id LIMIT ?`,
+    [unitAfter, iso(begun), PAGE],
+  );
+  let spent = false;
+  const page = async (rows, does, after) => {
+    for (const r of rows) {
+      if (Date.now() - begun > BUDGET) {
+        spent = true;
+        return;
+      }
+      after(r);
+      await does(r).catch((e) => failed.push(e.message));
+    }
+    if (rows.length < PAGE) after(null);
+  };
+  await page(manual, send, (r) => (manualAfter = r === null ? ["", ""] : [r.schedule, r.key]));
+  if (!spent) await page(units, (r) => unit(fromRow(r)), (r) => (unitAfter = r === null ? "" : r.id));
   if (failed.length > 0) throw new Error(failed.join("; "));
 }
 
 // --- What the engine calls -----------------------------------------------------------
 
-// timer starts a tick, unless one still goes, and answers at once: a tick
-// waits on creates of up to 30 s each, past what the timer's call may take.
-// A tick that failed says so on the timer after it.
-let ticking = null;
-let failed = null;
 export function timer() {
-  ticking ??= serial(tick)
-    .catch((e) => {
-      failed = e;
-    })
-    .finally(() => {
-      ticking = null;
-    });
-  const e = failed;
-  failed = null;
-  if (e) throw e;
+  return tick();
 }
 
 const methods = {
-  async list() {
-    const rows = await glitched.db.query("SELECT * FROM schedules ORDER BY title, id");
-    return rows.map(fromRow);
+  // list is a page of the schedules, by title, after the one named.
+  async list({ after } = {}) {
+    const rows = await query(SCHEDULE + " WHERE (s.title, s.id) > (?, ?) ORDER BY s.title, s.id LIMIT ?", [
+      after?.title ?? "", after?.id ?? "", LIST_PAGE + 1,
+    ]);
+    const schedules = rows.slice(0, LIST_PAGE).map(fromRow);
+    const last = schedules.at(-1);
+    return { schedules, next: rows.length > LIST_PAGE ? { title: last.title, id: last.id } : null };
   },
-  save: ({ schedule }) => save(schedule ?? {}),
-  async delete({ id }) {
+  save: ({ schedule }, deadline) => save(schedule ?? {}, deadline),
+  async delete({ id }, deadline) {
     await load(id);
-    await glitched.db.exec("DELETE FROM schedules WHERE id = ?", [id]);
+    late(deadline);
+    await exec("DELETE FROM schedules WHERE id = ?", [id]);
     return null;
   },
   async runs({ id, limit }) {
-    const n = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 200) : 50;
-    return glitched.db.query("SELECT schedule, due, key, thread, state, reason, at FROM runs WHERE schedule = ? ORDER BY due DESC LIMIT ?", [id, n]);
+    const n = Number.isInteger(limit) && limit > 0 ? Math.min(limit, KEEP) : 50;
+    return query("SELECT schedule, due, key, thread, state, reason, at FROM runs WHERE schedule = ? ORDER BY due DESC, key DESC LIMIT ?", [id, n]);
   },
   // runNow starts s now, as the person asked for it: past the check that
-  // its last run still goes.
-  async runNow({ id }) {
+  // a run of it may still go.
+  async runNow({ id }, deadline) {
     const s = await load(id);
     const now = Date.now();
-    const occ = iso(now);
-    const key = "manual:" + ulid(now);
-    await record(s, occ, key, "starting");
-    return { thread: await start(s, occ, key) };
+    const r = { schedule: s.id, key: "manual:" + ulid(now), sent: 1 };
+    r.request = request(s, r.key, iso(now));
+    late(deadline);
+    const { changes } = await exec(
+      `INSERT INTO runs (schedule, key, due, manual, state, request, sent, at)
+       SELECT ?, ?, ?, 1, 'starting', ?, 1, ? WHERE EXISTS (SELECT 1 FROM schedules WHERE id = ?)`,
+      [s.id, r.key, iso(now), r.request, iso(now), s.id],
+    );
+    if (changes === 0) throw new Invalid("no schedule " + id);
+    return { thread: await send(r) };
   },
   // preview is when a schedule, saved or not, runs next: count occurrences
   // after from, which is now without one.
@@ -430,15 +559,11 @@ const methods = {
   },
 };
 
-// serve answers the page. A read goes at once; a write waits its turn
-// behind the tick.
-export function serve({ method, args }) {
+// serve answers the page, each call as it comes. A write refuses once the
+// call's deadline has passed.
+export function serve({ method, args, deadline }) {
   const m = methods[method];
   if (!m) throw new Error("no method " + method);
   if (method === "preview") return m(args ?? {});
-  if (method === "list" || method === "runs") return db().then(() => m(args ?? {}));
-  return serial(async () => {
-    await db();
-    return m(args ?? {});
-  });
+  return db().then(() => m(args ?? {}, deadline));
 }

@@ -132,15 +132,16 @@ func TestAScheduleItCantRunIsRefused(t *testing.T) {
 			t.Errorf("%v: %v, want an error saying %q", c.fields, err, c.want)
 		}
 	}
-	if out, _ := call("list", nil); string(out) != "[]" {
+	if out, _ := call("list", nil); string(out) != `{"schedules":[],"next":null}` {
 		t.Fatalf("the refused saves left %s", out)
 	}
 }
 
-// A tick's slow starts don't hold up the timer that began it: two creates
-// of 16 s each, both inside what the host gives one, start both, with no
-// timer that didn't answer, and a page's read waits on one create at most.
-func TestATickOfSlowStartsLeavesItsTimerFree(t *testing.T) {
+// A tick waits on its slow creates, past the 30 s of a call, inside its
+// timer's minute: two creates of 16 s each, as an engine answers one out
+// of its queue, start both, with no timer that didn't answer, and the
+// page's reads answer while they go.
+func TestATickWaitsOnItsSlowCreates(t *testing.T) {
 	state := t.TempDir()
 	const slow = 16 * time.Second
 	var mu sync.Mutex
@@ -158,11 +159,14 @@ func TestATickOfSlowStartsLeavesItsTimerFree(t *testing.T) {
 			if e.Type != "threads.create" {
 				return nil, fmt.Errorf("no %s here", e.Type)
 			}
-			time.Sleep(slow)
-			mu.Lock()
-			creates++
-			mu.Unlock()
-			return map[string]string{"thread": "01M85GA51SCFWW12ATRT8FAVAF"}, nil
+			return plugins.Pending(func(done func(any, error)) {
+				time.AfterFunc(slow, func() {
+					mu.Lock()
+					creates++
+					mu.Unlock()
+					done(map[string]string{"thread": "01M85GA51SCFWW12ATRT8FAVAF"}, nil)
+				})
+			}), nil
 		}})
 	const n = 2
 	for range n {
@@ -180,27 +184,76 @@ func TestATickOfSlowStartsLeavesItsTimerFree(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := func() int {
-		mu.Lock()
-		defer mu.Unlock()
-		return creates
+		var runs int
+		if err := db.QueryRow("SELECT count(*) FROM runs WHERE state = 'started'").Scan(&runs); err != nil {
+			t.Fatal(err)
+		}
+		return runs
 	}
-	for deadline := time.Now().Add(60 * time.Second); started() < n; time.Sleep(500 * time.Millisecond) {
+	for deadline := time.Now().Add(60 * time.Second); started() < n; time.Sleep(200 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("%d of %d schedules started", started(), n)
 		}
 		begun := time.Now()
-		if _, err := call("list", nil); err != nil || time.Since(begun) > slow+time.Second {
+		if _, err := call("list", nil); err != nil || time.Since(begun) > time.Second {
 			t.Fatalf("with %d started, the list answered in %v: %v", started(), time.Since(begun), err)
 		}
-	}
-	time.Sleep(2 * time.Second) // the runs' records, and a timer more
-	var runs int
-	if err := db.QueryRow("SELECT count(*) FROM runs WHERE state = 'started'").Scan(&runs); err != nil || runs != n {
-		t.Fatalf("%d runs started, %v, want %d", runs, err, n)
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(late) > 0 || creates != n {
 		t.Fatalf("%d creates, and the host said %q", creates, late)
+	}
+}
+
+// Run nows at once are a run each, with the key it was created under and
+// the thread that key made.
+func TestRunNowsAtOnceAreARunEach(t *testing.T) {
+	var mu sync.Mutex
+	created := map[string]string{}
+	call := schedulesService(t, t.TempDir(), plugins.ServiceOptions{
+		Do: func(_ string, e plugins.Effect) (any, error) {
+			if e.Type != "threads.create" {
+				return nil, fmt.Errorf("no %s here", e.Type)
+			}
+			var a struct{ Key struct{ ID string } }
+			if err := json.Unmarshal(e.Args, &a); err != nil {
+				return nil, err
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			thread := fmt.Sprintf("%026d", len(created)+1)
+			created[a.Key.ID] = thread
+			return map[string]string{"thread": thread}, nil
+		}})
+	raw, err := call("save", map[string]any{"schedule": schedule(map[string]any{"kind": "interval", "every": 60})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct{ ID string }
+	json.Unmarshal(raw, &s)
+	const n = 32
+	var wg sync.WaitGroup
+	for range n {
+		wg.Go(func() {
+			if _, err := call("runNow", map[string]any{"id": s.ID}); err != nil {
+				t.Errorf("runNow: %v", err)
+			}
+		})
+	}
+	wg.Wait()
+	raw, err = call("runs", map[string]any{"id": s.ID, "limit": n})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runs []struct{ Key, Thread string }
+	json.Unmarshal(raw, &runs)
+	if len(runs) != n || len(created) != n {
+		t.Fatalf("%d runs of %d creates, want %d", len(runs), len(created), n)
+	}
+	for _, r := range runs {
+		if created[r.Key] != r.Thread {
+			t.Fatalf("run %+v isn't the thread its key made, %s", r, created[r.Key])
+		}
 	}
 }
