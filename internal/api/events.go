@@ -39,6 +39,20 @@ type ThreadCreated struct {
 	Model     ModelRef `json:"model"`
 	Access    Access   `json:"access"`
 	Parent    ID       `json:"parent,omitzero"`
+	Fork      *Forked  `json:"fork,omitempty"`
+}
+
+// Forked is where a fork goes on from, as its create's commit found it:
+// Run of Thread, whose title was Title, on Provider, in the conversation
+// Session, "" where the provider names it after the thread. Runs are the
+// runs that conversation held then, oldest first, Run among them.
+type Forked struct {
+	Thread   ID     `json:"thread"`
+	Run      ID     `json:"run"`
+	Title    string `json:"title"`
+	Provider string `json:"provider"`
+	Session  string `json:"session,omitempty"`
+	Runs     []ID   `json:"runs"`
 }
 
 // MessageQueued records a dispatched message. The ready message with the

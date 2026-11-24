@@ -42,6 +42,17 @@ func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Inte
 	hash := sha256.Sum256(wire)
 	c.Body = body
 	top := step{c.Target, func(q querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
+		c := c
+		if b, ok := c.Body.(api.ThreadCreate); ok && b.Fork != nil && !t.Exists() {
+			src, err := loadThread(ctx, q, b.Fork.Thread)
+			if err != nil {
+				return nil, nil, err
+			}
+			if b.Forked, err = engine.CheckFork(src, b); err != nil {
+				return nil, nil, err
+			}
+			c.Body = b
+		}
 		if b, ok := c.Body.(api.ThreadCreate); ok && !b.Parent.IsZero() && !t.Exists() {
 			line, err := lineOf(ctx, q, b.Parent)
 			if err != nil {

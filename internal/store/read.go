@@ -113,6 +113,27 @@ func (s *Store) Rewound(ctx context.Context, thread api.ID) (*api.ThreadReverted
 	return &r, nil
 }
 
+// Forked is where thread, a fork, goes on from, while none of its runs
+// has taken up the conversation it forks; nil for any other thread, and
+// for a fork once one has.
+func (s *Store) Forked(ctx context.Context, thread api.ID) (*api.Forked, error) {
+	var fork []byte
+	err := s.db.QueryRowContext(ctx, `SELECT json_extract(payload, '$.fork') FROM events WHERE thread = ? AND type = ? AND json_extract(payload, '$.fork') IS NOT NULL
+		AND NOT EXISTS (SELECT 1 FROM events WHERE thread = ? AND type = ? AND json_extract(payload, '$.rewound') IS NOT NULL)`,
+		thread[:], api.EventType(api.ThreadCreated{}), thread[:], api.EventType(api.SessionBound{})).Scan(&fork)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var f api.Forked
+	if err := json.Unmarshal(fork, &f); err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
 // Read answers q from one read transaction, so the projection and the
 // events agree with the snapshot's cursor.
 func (s *Store) Read(ctx context.Context, q api.Query) (api.Snapshot, error) {

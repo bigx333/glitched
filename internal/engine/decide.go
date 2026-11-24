@@ -218,7 +218,10 @@ func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 	if (c.Project == "") != (c.Branch == "") {
 		return rejected("a thread in a worktree has both its project and its branch")
 	}
-	if err := d.emit(api.ThreadCreated{Workspace: c.Workspace, Project: c.Project, Branch: c.Branch, Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent}); err != nil {
+	if c.Fork != nil && c.Forked == nil {
+		return rejected("this engine forks no threads")
+	}
+	if err := d.emit(api.ThreadCreated{Workspace: c.Workspace, Project: c.Project, Branch: c.Branch, Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent, Fork: c.Forked}); err != nil {
 		return err
 	}
 	if c.Text == "" {
@@ -299,6 +302,34 @@ func CheckChild(line []Thread, kids Kids, lim Limits, c api.ThreadCreate) error 
 		return rejected(fmt.Sprintf("this thread has %d child threads, the most it may; start another once one is deleted", lim.All))
 	}
 	return nil
+}
+
+// CheckFork checks c, a create with a Fork, against src, the thread it
+// forks, and says where the fork goes on from: only the user forks, a
+// thread that is there, from a finished turn that isn't a silent one
+// and that src's conversation still holds.
+func CheckFork(src Thread, c api.ThreadCreate) (*api.Forked, error) {
+	if !c.Parent.IsZero() || !c.Run.IsZero() {
+		return nil, rejected("only you fork a thread, not an agent")
+	}
+	if !src.Exists() || src.Deleted {
+		return nil, rejected("the thread to fork is gone")
+	}
+	f := &api.Forked{Thread: src.ID, Run: c.Fork.Run, Title: src.Title, Provider: src.Model.Provider, Session: src.Session}
+	finished := false
+	for _, r := range src.Runs {
+		if r.Dropped {
+			continue
+		}
+		f.Runs = append(f.Runs, r.ID)
+		if r.ID == c.Fork.Run {
+			finished = r.State == RunFinished && !r.Silent
+		}
+	}
+	if !finished {
+		return nil, rejected("only a finished turn the thread's conversation still holds can be forked")
+	}
+	return f, nil
 }
 
 // CheckCaller checks c, an agent's run, against line, the thread it acts
