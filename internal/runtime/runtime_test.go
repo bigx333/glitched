@@ -139,13 +139,12 @@ func respond(t *testing.T, ep api.Endpoint, thread api.ID, r api.Request) {
 }
 
 // assertReplay folds the whole log through engine.Apply and expects exactly
-// the projections the store holds.
+// the projections the store holds, as one view of the store: a host may
+// still commit as it runs, and an event commits with its projection, so
+// projections read while the log didn't grow are of that log.
 func assertReplay(t *testing.T, st *store.Store) {
 	t.Helper()
-	log, err := st.ReadLog(ctx, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	log, stored := consistentView(t, st)
 	folded := map[api.ID]engine.Thread{}
 	for i, e := range log {
 		if e.Cursor.Seq != uint64(i+1) {
@@ -161,14 +160,41 @@ func assertReplay(t *testing.T, st *store.Store) {
 		t.Fatal("empty log")
 	}
 	for id, want := range folded {
-		got, err := st.Thread(ctx, id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(got, want) {
+		if got := stored[id]; !reflect.DeepEqual(got, want) {
 			g, _ := json.MarshalIndent(got, "", " ")
 			w, _ := json.MarshalIndent(want, "", " ")
 			t.Fatalf("thread %s: stored projection\n%s\nreplayed log\n%s", id, g, w)
+		}
+	}
+}
+
+// consistentView reads the log and the projection of each thread in it,
+// again until the log is the same after the projections as before them.
+func consistentView(t *testing.T, st *store.Store) ([]api.Event, map[api.ID]engine.Thread) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		log, err := st.ReadLog(ctx, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored := map[api.ID]engine.Thread{}
+		for _, e := range log {
+			if _, ok := stored[e.Thread]; ok {
+				continue
+			}
+			if stored[e.Thread], err = st.Thread(ctx, e.Thread); err != nil {
+				t.Fatal(err)
+			}
+		}
+		after, err := st.ReadLog(ctx, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(after) == len(log) {
+			return log, stored
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the log grew from %d to %d events under every read of its projections", len(log), len(after))
 		}
 	}
 }
