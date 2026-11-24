@@ -496,8 +496,7 @@ func wakeLine(t thread, rs []client.ReportEntry) string {
 	}
 	v := t.View
 	switch {
-	case waiting && v.Run == api.RunIdle && v.LastTurn != nil &&
-		(v.LastTurn.Outcome == api.OutcomeInterrupted || v.LastTurn.Outcome == api.OutcomeAbandoned):
+	case waiting && v.Resumable:
 		return "↳ Goes to the agent with your next message"
 	case waiting:
 		return "↳ Goes to the agent after this turn"
