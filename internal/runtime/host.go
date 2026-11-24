@@ -638,6 +638,12 @@ func (h *Host) perform(e store.Effect) {
 	if _, ok := e.Body.(engine.RevertThread); ok {
 		defer h.revertEnded(e.Thread)
 	}
+	// A closing host leaves the agent running, and its pump closes nothing:
+	// the start's lease is then the record that the agent may still run,
+	// for the next host to take up or close, whatever the run is by then.
+	if _, started := o.(engine.Started); started && h.ctx.Err() != nil {
+		return
+	}
 	if _, started := o.(engine.Started); h.record(e.Thread, o, e.ID) && started {
 		close(lr.started)
 		h.attach(e.Thread, lr)
@@ -867,6 +873,11 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		if now, err = h.store.Thread(ctx, thread); err == nil && !h.stillCompacting(now, b) {
 			err = errCompactNotDue
 		}
+	}
+	// A stop while the agent opened means the prompt was never sent: an
+	// agent that starts on a context of its own would send it anyway.
+	if err == nil {
+		err = ctx.Err()
 	}
 	if err == nil {
 		err = ag.Do(ctx, provider.Start{Text: b.Text})

@@ -78,3 +78,6 @@ func (h *Host) LostContinued() <-chan struct{} { return h.lostDone }
 // ContinuesFull is poked as an auto-continuing host waits for one of the
 // runs it continued to end before it continues another.
 func (h *Host) ContinuesFull() <-chan struct{} { return h.full }
+
+// Closing is closed once h begins to close.
+func (h *Host) Closing() <-chan struct{} { return h.ctx.Done() }

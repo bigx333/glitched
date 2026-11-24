@@ -141,7 +141,7 @@ func (g *Agent) noticeLocked(text string) {
 func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 	switch a := act.(type) {
 	case provider.Start:
-		return g.start(a.Text)
+		return g.start(ctx, a.Text)
 	case provider.Steer:
 		return g.steer(ctx, a.Text)
 	case provider.Interrupt:
@@ -159,11 +159,16 @@ func input(text string) []map[string]any {
 // start sends the turn. Codex answers turn/start at once, and the turn's
 // end arrives as turn/completed. Each setting is sent on every turn, as
 // Codex keeps the last one a turn set.
-func (g *Agent) start(text string) error {
+func (g *Agent) start(ctx context.Context, text string) error {
 	g.mu.Lock()
 	if g.started {
 		g.mu.Unlock()
 		return errors.New("codex: the run already started")
+	}
+	// A turn cancelled before it is sent never is.
+	if err := ctx.Err(); err != nil {
+		g.mu.Unlock()
+		return err
 	}
 	g.started = true
 	_, g.effortSince = g.p.settled()
