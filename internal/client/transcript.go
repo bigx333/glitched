@@ -291,11 +291,7 @@ func (t *Transcript) apply(e api.Event) {
 		if b.Held {
 			state = Held
 		}
-		i := slices.IndexFunc(t.Queue, func(u *UserEntry) bool { return u.pos > b.Pos })
-		if i < 0 {
-			i = len(t.Queue)
-		}
-		t.Queue = slices.Insert(t.Queue, i, &UserEntry{Message: b.Message, Text: b.Text, State: state, At: e.At, pos: b.Pos})
+		t.enqueue(&UserEntry{Message: b.Message, Text: b.Text, State: state, At: e.At, pos: b.Pos})
 	case api.MessageClaimed:
 		if i := t.waiting(b.Message); i >= 0 {
 			t.Queue[i].State, t.Queue[i].run = Claimed, b.Run
@@ -347,6 +343,17 @@ func (t *Transcript) apply(e api.Event) {
 	case api.MessageReleased:
 		if i := t.waiting(b.Message); i >= 0 {
 			t.Queue[i].State = Queued
+		}
+	case api.MessageEdited:
+		if i := t.waiting(b.Message); i >= 0 {
+			t.Queue[i].Text = b.Text
+		}
+	case api.MessageMoved:
+		if i := t.waiting(b.Message); i >= 0 {
+			u := t.Queue[i]
+			u.pos = b.Pos
+			t.Queue = slices.Delete(t.Queue, i, i+1)
+			t.enqueue(u)
 		}
 	case api.ContextReported:
 		if ce := t.silent[b.Run]; ce != nil && b.Compacted {
@@ -459,6 +466,16 @@ func (t *Transcript) add(e Entry) {
 
 func (t *Transcript) waiting(message api.ID) int {
 	return slices.IndexFunc(t.Queue, func(u *UserEntry) bool { return u.Message == message })
+}
+
+// enqueue puts u in Queue in its place: after those at its position or
+// before it.
+func (t *Transcript) enqueue(u *UserEntry) {
+	i := slices.IndexFunc(t.Queue, func(q *UserEntry) bool { return q.pos > u.pos })
+	if i < 0 {
+		i = len(t.Queue)
+	}
+	t.Queue = slices.Insert(t.Queue, i, u)
 }
 
 // join moves Queue[i] into the conversation.

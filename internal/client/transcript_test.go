@@ -1,6 +1,7 @@
 package client
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"runtime"
@@ -352,6 +353,28 @@ func TestFoldHoldsWhatAStopHeld(t *testing.T) {
 	)
 }
 
+// An edit changes a queued message's words where it waits, and a move its
+// place, before and after one that ties with it.
+func TestFoldShowsAQueuedMessagesNewWordsAndPlace(t *testing.T) {
+	a, b, c, d := api.NewID(), api.NewID(), api.NewID(), api.NewID()
+	evs := slices.Concat(start(a, "one", 0), []api.EventBody{
+		api.MessageQueued{Message: b, Text: "two", Mode: api.AfterActive, Pos: 1},
+		api.MessageQueued{Message: c, Text: "three", Mode: api.AfterActive, Pos: 2},
+		api.MessageQueued{Message: d, Text: "four", Mode: api.Defer, Pos: 3, Held: true},
+		api.MessageEdited{Message: c, Text: "three, shorter"},
+		api.MessageMoved{Message: d, Pos: 0},
+		api.MessageMoved{Message: c, Pos: 1},
+		api.MessageMoved{Message: b, Pos: 2},
+	})
+	expect(t, play(evs...),
+		`user "one" sent`,
+		"--",
+		`user "four" held`,
+		`user "three, shorter" queued`,
+		`user "two" queued`,
+	)
+}
+
 // A failed turn shows why it failed, whether its agent never started or
 // started and then failed; a turn that ended any other way shows no error.
 func TestFoldShowsWhyATurnFailed(t *testing.T) {
@@ -491,7 +514,7 @@ var engineStates = map[eng.QueueState]MessageState{
 // The fold reads events as the engine's Apply does: after every event of a
 // play, each message and request is in the state the engine holds.
 func TestFoldAgreesWithTheEngine(t *testing.T) {
-	a, b, c, req := api.NewID(), api.NewID(), api.NewID(), api.NewID()
+	a, b, c, d, req := api.NewID(), api.NewID(), api.NewID(), api.NewID(), api.NewID()
 	opened := api.RequestOpened{Request: req, Run: a, Generation: 1, Kind: "approval", Body: json.RawMessage(`{}`)}
 	queued := func(id api.ID, mode api.DispatchMode, pos int64) api.MessageQueued {
 		return api.MessageQueued{Message: id, Text: "x", Mode: mode, Pos: pos, Held: mode == api.Defer}
@@ -566,6 +589,20 @@ func TestFoldAgreesWithTheEngine(t *testing.T) {
 			api.TurnRestored{Run: a},
 			api.TurnEnded{Run: a, Outcome: api.OutcomeInterrupted},
 		}},
+		{"edited and moved", slices.Concat(start(a, "one", 0), []api.EventBody{
+			queued(b, api.AfterActive, 1),
+			queued(c, api.AfterActive, 2),
+			queued(d, api.Defer, 3),
+			api.MessageEdited{Message: b, Text: "two"},
+			api.MessageMoved{Message: d, Pos: 0},
+			api.MessageMoved{Message: b, Pos: 4},
+			api.MessageMoved{Message: c, Pos: 5},
+			api.MessageEdited{Message: d, Text: "first"},
+			api.TurnEnded{Run: a, Outcome: api.OutcomeCompleted},
+			api.TurnAdmitted{Run: b, Generation: 2},
+			api.MessageMoved{Message: d, Pos: 6},
+			api.MessageCancelled{Message: c, Reason: "taken out of the queue"},
+		})},
 		{"uncertain", slices.Concat(start(a, "one", 0), []api.EventBody{
 			queued(b, api.SteerActive, 1),
 			api.MessageClaimed{Message: b, Run: a},
@@ -586,10 +623,27 @@ func TestFoldAgreesWithTheEngine(t *testing.T) {
 			for i, b := range events {
 				et = eng.Apply(et, eng.Event{Thread: thread, At: at(i + 1), Body: b})
 				tr.apply(event(i+1, b))
+				var line []eng.Message
 				for _, m := range et.Queue {
-					if u := tr.message(m.ID); u == nil || u.State != engineStates[m.State] {
-						t.Fatalf("after event %d, %s, the fold shows message %s as %s, want %s", i, api.EventType(b), m.ID, describe(u), m.State)
+					if u := tr.message(m.ID); u == nil || u.State != engineStates[m.State] || u.Text != m.Text {
+						t.Fatalf("after event %d, %s, the fold shows message %s as %s, want %s %q", i, api.EventType(b), m.ID, describe(u), m.State, m.Text)
 					}
+					if m.State == eng.QueueReady || m.State == eng.QueueHeld && m.Mode == api.Defer {
+						line = append(line, m)
+					}
+				}
+				slices.SortStableFunc(line, func(x, y eng.Message) int { return cmp.Compare(x.Pos, y.Pos) })
+				var want, got []api.ID
+				for _, m := range line {
+					want = append(want, m.ID)
+				}
+				for _, u := range tr.Queue {
+					if u.State == Queued || u.State == Held {
+						got = append(got, u.Message)
+					}
+				}
+				if !slices.Equal(got, want) {
+					t.Fatalf("after event %d, %s, the fold queues %v, the engine %v", i, api.EventType(b), got, want)
 				}
 				for _, r := range et.Requests {
 					if e := tr.request(r.ID); e == nil || e.State != r.State {

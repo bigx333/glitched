@@ -42,6 +42,9 @@ func (p Pending) Terminal() bool {
 	switch p.Body.(type) {
 	case api.RequestRespond, api.TurnInterrupt:
 		return errors.Is(p.Err, api.ErrNotFound)
+	case api.QueueEdit, api.QueueCancel, api.QueueMove:
+		// A message that no longer waits its turn never waits again.
+		return errors.Is(p.Err, api.ErrNotFound) || errors.As(p.Err, new(*api.RejectedError))
 	}
 	return false
 }
@@ -88,6 +91,28 @@ func (m *Manager) Interrupt(e *Env, thread api.ID) api.ID {
 // Resume starts what a stop held.
 func (m *Manager) Resume(e *Env, thread api.ID) api.ID {
 	return m.submit(e, thread, api.QueueResume{})
+}
+
+// EditQueued gives a message that waits its turn new words.
+func (m *Manager) EditQueued(e *Env, thread, message api.ID, text string) api.ID {
+	return m.submit(e, thread, api.QueueEdit{Message: message, Text: text})
+}
+
+// CancelQueued takes a message out of the queue.
+func (m *Manager) CancelQueued(e *Env, thread, message api.ID) api.ID {
+	return m.submit(e, thread, api.QueueCancel{Message: message})
+}
+
+// MoveQueued puts a queued message just before another, or last with
+// before zero.
+func (m *Manager) MoveQueued(e *Env, thread, message, before api.ID) api.ID {
+	return m.submit(e, thread, api.QueueMove{Message: message, Before: before})
+}
+
+// SteerQueued sends a queued message now: into the agent's turn, or as the
+// next turn of an idle thread.
+func (m *Manager) SteerQueued(e *Env, thread, message api.ID) api.ID {
+	return m.submit(e, thread, api.QueueSteer{Message: message})
 }
 
 // Answer is how the user answers an approval.
