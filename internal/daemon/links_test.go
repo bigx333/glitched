@@ -249,8 +249,12 @@ func remoteEngine(t *testing.T, dir string) (api.Endpoint, *fake.Adapter, api.ID
 	}
 	t.Cleanup(func() { d.Close() })
 	ep := d.Endpoint()
+	// A remote child starts from its parent's branch of its repository.
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", "first")
 	parent := api.NewID()
-	if _, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: parent, Body: api.ThreadCreate{Workspace: "/src", Title: "top", Model: api.ModelRef{Provider: "fake", Model: "fake"}}}); err != nil {
+	if _, err := ep.Submit(context.Background(), api.Command{ID: api.NewID(), Target: parent, Body: api.ThreadCreate{Workspace: repo, Title: "top", Model: api.ModelRef{Provider: "fake", Model: "fake"}}}); err != nil {
 		t.Fatal(err)
 	}
 	return ep, ad, parent

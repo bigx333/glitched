@@ -29,6 +29,9 @@ type Tools struct {
 	// provider, model or effort is checked against; nil checks nothing,
 	// and refuses a provider other than the caller's.
 	Providers Providers
+	// Machines are the labels of the machines a child may be placed on,
+	// as the engine listed them when the agent started.
+	Machines []string
 }
 
 // Providers are the engine's providers, as provider.Mux serves them: each
@@ -50,28 +53,44 @@ type PluginTools interface {
 
 const delegateTask = "delegate_task"
 
-var catalog = []map[string]any{{
-	"name": delegateTask,
-	"description": "Delegate a self-contained task to a child agent, in a new thread under this one. " +
-		"The child starts at once and the call returns; each time its turn ends done or failed, its report comes to this thread as a new message, so do not wait or poll for it. Permissions inherit, and the folder too unless isolation is worktree, which gives the child a worktree and branch of its own from this folder's HEAD, without its uncommitted changes. Provider, model and effort inherit unless you pick them; a child on another provider starts at that provider's own default model and effort unless you pick them. " +
-		"This thread's history is not copied, so the task must stand on its own. " +
-		"The user sees the child and can open it. A child cannot gain broader permissions. " +
-		"Reuse client_request_id to retry the same task safely; each new task needs a new one.",
-	"inputSchema": map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"task":              map[string]any{"type": "string", "minLength": 1, "maxLength": 120000, "description": "The child's first message: a complete brief."},
-			"title":             map[string]any{"type": "string", "maxLength": 512, "description": "A short name for the child's thread."},
-			"provider":          map[string]any{"type": "string", "description": "The child's provider, as claude or codex; else this thread's. An unknown one fails with the providers there are."},
-			"model":             map[string]any{"type": "string", "description": "The child's model, by its provider's id for it; else this thread's on this thread's provider, and the provider's default on another. An unknown one fails with the ids there are."},
-			"effort":            map[string]any{"type": "string", "description": "The child's reasoning effort; else this thread's on this thread's provider, and the model's default on another."},
-			"isolation":         map[string]any{"type": "string", "enum": []string{"shared", "worktree"}, "default": "shared", "description": "shared: the child works in this thread's folder, uncommitted changes and all, so coordinate children that write. worktree: the child works in a git worktree of its own, on a new branch from this folder's HEAD; this folder's uncommitted changes are not copied. Its report names its branch: tell it to commit there, then merge the branch to use its work."},
-			"client_request_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 256},
+// delegateTool is delegate_task as an agent sees it, with machine offered
+// when there are machines to place a child on, which it lists.
+func delegateTool(machines []string) map[string]any {
+	tool := delegateCatalog()
+	if len(machines) == 0 {
+		return tool
+	}
+	tool["inputSchema"].(map[string]any)["properties"].(map[string]any)["machine"] = map[string]any{
+		"type": "string", "enum": machines,
+		"description": "Run the child on another machine, by its label: " + strings.Join(machines, ", ") + ". It works there in a worktree of its own, from this repository's branch as that machine has it, and its report comes here as a local child's does; what it asks is answered on that machine. Leave it out for a child on this machine.",
+	}
+	return tool
+}
+
+func delegateCatalog() map[string]any {
+	return map[string]any{
+		"name": delegateTask,
+		"description": "Delegate a self-contained task to a child agent, in a new thread under this one. " +
+			"The child starts at once and the call returns; each time its turn ends done or failed, its report comes to this thread as a new message, so do not wait or poll for it. Permissions inherit, and the folder too unless isolation is worktree, which gives the child a worktree and branch of its own from this folder's HEAD, without its uncommitted changes. Provider, model and effort inherit unless you pick them; a child on another provider starts at that provider's own default model and effort unless you pick them. " +
+			"This thread's history is not copied, so the task must stand on its own. " +
+			"The user sees the child and can open it. A child cannot gain broader permissions. " +
+			"Reuse client_request_id to retry the same task safely; each new task needs a new one.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"task":              map[string]any{"type": "string", "minLength": 1, "maxLength": 120000, "description": "The child's first message: a complete brief."},
+				"title":             map[string]any{"type": "string", "maxLength": 512, "description": "A short name for the child's thread."},
+				"provider":          map[string]any{"type": "string", "description": "The child's provider, as claude or codex; else this thread's. An unknown one fails with the providers there are."},
+				"model":             map[string]any{"type": "string", "description": "The child's model, by its provider's id for it; else this thread's on this thread's provider, and the provider's default on another. An unknown one fails with the ids there are."},
+				"effort":            map[string]any{"type": "string", "description": "The child's reasoning effort; else this thread's on this thread's provider, and the model's default on another."},
+				"isolation":         map[string]any{"type": "string", "enum": []string{"shared", "worktree"}, "default": "shared", "description": "shared: the child works in this thread's folder, uncommitted changes and all, so coordinate children that write. worktree: the child works in a git worktree of its own, on a new branch from this folder's HEAD; this folder's uncommitted changes are not copied. Its report names its branch: tell it to commit there, then merge the branch to use its work."},
+				"client_request_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 256},
+			},
+			"required":             []string{"task"},
+			"additionalProperties": false,
 		},
-		"required":             []string{"task"},
-		"additionalProperties": false,
-	},
-}}
+	}
+}
 
 type delegateArgs struct {
 	Task      string `json:"task"`
@@ -80,6 +99,7 @@ type delegateArgs struct {
 	Model     string `json:"model"`
 	Effort    string `json:"effort"`
 	Isolation string `json:"isolation"`
+	Machine   string `json:"machine"`
 	RequestID string `json:"client_request_id"`
 }
 
@@ -109,6 +129,9 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 	}
 	if in.Isolation != "" && in.Isolation != "shared" && in.Isolation != "worktree" {
 		return TaskView{}, fmt.Errorf("delegate_task: isolation is shared or worktree, not %q", in.Isolation)
+	}
+	if in.Machine != "" && in.Isolation == "shared" {
+		return TaskView{}, errors.New("delegate_task: a child on another machine works in a worktree of its own there, so it can't share this folder")
 	}
 	parent, err := t.thread(ctx)
 	if err != nil {
@@ -153,7 +176,10 @@ func (t *Tools) delegate(ctx context.Context, raw json.RawMessage, toolUse strin
 		Run:       turn.Run,
 		Text:      in.Task,
 	}
-	if in.Isolation == "worktree" {
+	switch {
+	case in.Machine != "":
+		create.Workspace, create.Project, create.Branch, create.Remote = "", "", "", in.Machine
+	case in.Isolation == "worktree":
 		create.Project, create.Branch, create.Worktree = "", "", &api.NewWorktree{}
 	}
 	_, err = t.Engine.Submit(ctx, api.Command{ID: derive(t.Origin.Thread, "call", key), Target: child, Body: create})
