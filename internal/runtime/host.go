@@ -66,6 +66,7 @@ type Host struct {
 	busy    map[api.ID]bool     // threads with an effect in flight
 	runs    map[api.ID]*liveRun // by run
 	closing map[api.ID]bool     // threads whose run is over but whose agent is not closed yet, true while that agent may still work
+	opening int                 // provider opens under way, which may have the agent at work
 	subs    map[*stream]struct{}
 	asks    map[askKey]chan json.RawMessage // credentials requests glitched mcp waits on
 	held    map[string]chan struct{}        // providers Hold holds, each closed on its release
@@ -254,10 +255,11 @@ func (h *Host) noteWorking(thread api.ID, working bool) {
 	h.tellAwake(was)
 }
 
-// anyWorks is whether any run works, or any agent whose run ended while
-// it worked is not closed yet. h.mu is held.
+// anyWorks is whether any run works, a provider is opening an agent, or
+// an agent whose run was cut short as it worked is not closed yet. h.mu
+// is held.
 func (h *Host) anyWorks() bool {
-	return len(h.working) > 0 || slices.Contains(slices.Collect(maps.Values(h.closing)), true)
+	return len(h.working) > 0 || h.opening > 0 || slices.Contains(slices.Collect(maps.Values(h.closing)), true)
 }
 
 func (h *Host) tellAwake(was bool) {
@@ -307,9 +309,9 @@ func (h *Host) follow(e api.Event) {
 			}
 		}
 	case api.TurnUncertain:
-		h.leaveLocked(e.Thread, b.Run)
+		h.leaveLocked(e.Thread, b.Run, false)
 	case api.TurnEnded:
-		h.leaveLocked(e.Thread, b.Run)
+		h.leaveLocked(e.Thread, b.Run, b.Outcome == api.OutcomeAbandoned)
 		h.skills.ended(e.Thread)
 	}
 }
@@ -513,11 +515,22 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 	var err error
 	switch b := e.Body.(type) {
 	case engine.StartTurn:
+		h.mu.Lock()
+		was := h.anyWorks()
+		h.opening++
+		h.tellAwake(was)
+		h.mu.Unlock()
 		var ag provider.Agent
-		if ag, err = h.open(lr.ctx, t, b); err == nil {
-			h.mu.Lock()
+		ag, err = h.open(lr.ctx, t, b)
+		h.mu.Lock()
+		if err == nil {
 			lr.agent = ag
-			h.mu.Unlock()
+		}
+		was = h.anyWorks()
+		h.opening--
+		h.tellAwake(was)
+		h.mu.Unlock()
+		if err == nil {
 			return engine.Started{Run: b.Run}, true
 		}
 		outcome := api.OutcomeFailed
@@ -935,10 +948,11 @@ func (h *Host) forgetLocked(run api.ID) {
 // leaveLocked forgets a run that is over for this host. A thread whose run
 // leaves an agent behind takes no effect until the pump closes it. Marking
 // that here, in the commit that ends the run, keeps a start the same commit
-// admits from being leased first.
-func (h *Host) leaveLocked(thread, run api.ID) {
+// admits from being leased first. One cut short as it worked, as a
+// deleted thread's is, works on until its agent closes.
+func (h *Host) leaveLocked(thread, run api.ID, cut bool) {
 	if lr := h.runs[run]; lr != nil && lr.agent != nil {
-		h.closing[thread] = h.working[thread]
+		h.closing[thread] = cut && h.working[thread]
 	}
 	h.forgetLocked(run)
 }

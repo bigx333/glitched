@@ -87,9 +87,8 @@ type Manager struct {
 	// node is the embedded engine's own tailnet node, which remotes dial
 	// through while it runs; the link goroutines read it, so it's atomic.
 	node atomic.Pointer[node]
-	// restarting: a local engine is starting, first or after Restart
-	// stopped the embedded one, and has not reported in; again, whether
-	// Restart was called meanwhile.
+	// restarting: Restart stopped the embedded engine and no new one has
+	// reported in; again, whether Restart was called meanwhile.
 	restarting, again bool
 	// embedded is the engine embedded here, once it reported in.
 	embedded *daemon.Daemon
@@ -108,7 +107,7 @@ func (m *Manager) Start() error {
 	if err := jsonfile.Load(m.savedPath(), &m.saved); err != nil {
 		return err
 	}
-	m.local, m.restarting = m.newLocal(), true
+	m.local = m.newLocal()
 	m.envs = []*Env{m.launch(&Env{Kind: Local, Name: "local"}, m.local)}
 	m.sync("")
 	return nil
