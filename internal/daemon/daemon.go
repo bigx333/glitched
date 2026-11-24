@@ -125,6 +125,9 @@ type Config struct {
 	// a call to a remote child's machine; nil is T3 Code's, from 2s
 	// doubling to 5 minutes. Tests shorten it.
 	RemoteBackoff func(n int) time.Duration `json:"-"`
+	// RemoteSteps is called as a remote child's create reaches each step,
+	// as runtime.WithRemoteSteps says: where tests hold it.
+	RemoteSteps func(step string, placeholder api.ID) `json:"-"`
 }
 
 // CompactBeforeExpireEnabled reports whether automatic idle compaction is
@@ -370,6 +373,9 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	}
 
 	opts := []runtime.Option{runtime.WithRemotes(dialer(cfg.Dir, d.node))}
+	if cfg.RemoteSteps != nil {
+		opts = append(opts, runtime.WithRemoteSteps(cfg.RemoteSteps))
+	}
 	if cfg.RemoteBackoff != nil {
 		opts = append(opts, runtime.WithRemoteBackoff(cfg.RemoteBackoff))
 	}

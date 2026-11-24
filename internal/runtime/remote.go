@@ -46,6 +46,14 @@ func WithRemoteBackoff(backoff func(n int) time.Duration) Option {
 	return func(h *Host) { h.backoff = backoff }
 }
 
+// WithRemoteSteps has the host call step as a remote child's create
+// reaches each of its steps: "due" once its effect is found due, before
+// its first try is recorded, and "try" before each try at its machine.
+// Tests hold the create there.
+func WithRemoteSteps(step func(step string, placeholder api.ID)) Option {
+	return func(h *Host) { h.step = step }
+}
+
 // remoteBackoff is T3 Code's: from 2s, doubling, at most 5 minutes.
 func remoteBackoff(n int) time.Duration { return min(2*time.Second<<min(n, 8), 5*time.Minute) }
 
@@ -80,7 +88,7 @@ func classify(err error, label string) (class, string) {
 	case errors.Is(err, api.ErrOverflow):
 		return catchUp, ""
 	case errors.Is(err, transport.ErrRefused):
-		return handshakeRefused, label + " no longer accepts this machine's link"
+		return handshakeRefused, label + " no longer accepts this machine's link, so what runs there is its person's to stop by hand"
 	case errors.As(err, &rej):
 		return final, label + " refused the child: " + rej.Reason
 	case errors.Is(err, api.ErrNotAllowed):
@@ -189,25 +197,18 @@ func (h *Host) reach(ctx context.Context, at api.Remote) (Machine, string, error
 // the placeholder, a refusal loses it. ok is false when the host closed
 // first, which leaves the lease for the next host to replay.
 func (h *Host) remoteCreate(e store.Effect, b engine.RemoteCreate) (engine.Observation, bool) {
-	ctx, cancel := context.WithCancel(h.ctx)
-	defer cancel()
-	h.mu.Lock()
-	h.creating[e.Thread] = cancel
-	h.mu.Unlock()
-	defer func() {
-		h.mu.Lock()
-		delete(h.creating, e.Thread)
-		h.mu.Unlock()
-	}()
+	ctx, done := h.reachFor(e.Thread)
+	defer done()
 	if h.dial == nil {
 		// Nothing tried, the lease waits for a host that reaches the
 		// machine, unless the placeholder is deleted first.
 		<-ctx.Done()
 		return nil, h.ctx.Err() == nil
 	}
+	h.step("due", e.Thread)
 	tried := false
 	if !retry(ctx, "record a remote create's try", func(ctx context.Context) error {
-		_, err := h.store.Observe(ctx, e.Thread, engine.RemoteAttempted{}, h.clock(), 0)
+		_, err := h.store.Observe(ctx, e.Thread, engine.RemoteAttempted{Create: b.Command}, h.clock(), 0)
 		if errors.Is(err, engine.ErrRefused) {
 			return nil
 		}
@@ -220,6 +221,7 @@ func (h *Host) remoteCreate(e store.Effect, b engine.RemoteCreate) (engine.Obser
 		return nil, true
 	}
 	lost, label, ok := h.persist(ctx, func(ctx context.Context) (string, bool, error) {
+		h.step("try", e.Thread)
 		m, label, err := h.reach(ctx, api.Remote{Engine: b.Engine, Link: b.Link})
 		if err != nil {
 			return label, false, err
@@ -232,7 +234,8 @@ func (h *Host) remoteCreate(e store.Effect, b engine.RemoteCreate) (engine.Obser
 	})
 	switch {
 	case !ok:
-		// Deleted, it binds nothing; else the host closed.
+		// Settled or deleted, it binds nothing, and its stop sends it
+		// again; else the host closed.
 		return nil, h.ctx.Err() == nil
 	case lost != "":
 		return engine.RemoteLost{Reason: lost, On: label}, true
@@ -252,15 +255,113 @@ func (h *Host) startFollowing(placeholder api.ID) {
 	go h.followRemote(ctx, placeholder)
 }
 
-// stopFollowing stops what reaches placeholder's machine for it: its
-// create's tries and its follower. h.mu is held.
+// stopFollowing stops what reaches placeholder's machine for it but its
+// stop: its follower, and the tries stopReaching ends. h.mu is held.
 func (h *Host) stopFollowing(placeholder api.ID) {
-	if cancel := h.creating[placeholder]; cancel != nil {
-		cancel()
-	}
+	h.stopReaching(placeholder)
 	if cancel := h.followers[placeholder]; cancel != nil {
 		cancel()
 	}
+	delete(h.heard, placeholder)
+}
+
+// stopReaching ends the tries of placeholder's create, message or
+// narrowing, so its stop, after them in its lane, goes next. h.mu is
+// held.
+func (h *Host) stopReaching(placeholder api.ID) {
+	if cancel := h.reaching[placeholder]; cancel != nil {
+		cancel()
+	}
+}
+
+// reachFor is the context of a try to reach placeholder's machine for it
+// that stopReaching ends, and done, which forgets it.
+func (h *Host) reachFor(placeholder api.ID) (ctx context.Context, done func()) {
+	ctx, cancel := context.WithCancel(h.ctx)
+	h.mu.Lock()
+	h.reaching[placeholder] = cancel
+	h.mu.Unlock()
+	return ctx, func() {
+		cancel()
+		h.mu.Lock()
+		delete(h.reaching, placeholder)
+		h.mu.Unlock()
+	}
+}
+
+// hear records that placeholder's follower heard from its machine now.
+func (h *Host) hear(placeholder api.ID) {
+	h.mu.Lock()
+	h.heard[placeholder] = h.clock()
+	h.mu.Unlock()
+}
+
+// remoteCommand sends c, a command of a placeholder's settle, delete,
+// stop, message or narrowing, which what names, to its child on its
+// machine at, until the machine answers, with each try classified as a
+// create's or a follower's is. Create, when set, goes first, so a create
+// in flight can't land after c: one its machine refuses left nothing
+// there. A refusal of c is logged and ends it, as a refused stop of a
+// local child records nothing: the child there stays as it is. A child
+// lost on the way is lost here too, the stop that didn't reach it said:
+// what runs there is its person's to stop. A message or a narrowing is
+// ended by a settle or a delete, which the stop after it takes up.
+func (h *Host) remoteCommand(e store.Effect, what string, at api.Remote, create *api.Command, c api.Command) (engine.Observation, bool) {
+	ctx := h.ctx
+	if what != "stop" {
+		var done func()
+		ctx, done = h.reachFor(e.Thread)
+		defer done()
+	}
+	if h.dial == nil {
+		<-ctx.Done()
+		return nil, h.ctx.Err() == nil
+	}
+	var refused string
+	var last error
+	lost, label, ok := h.persist(ctx, func(ctx context.Context) (string, bool, error) {
+		m, label, err := h.reach(ctx, at)
+		if err != nil {
+			last = err
+			return label, false, err
+		}
+		defer m.Close()
+		send := func(c api.Command) error {
+			ctx, cancel := context.WithTimeout(ctx, callTimeout)
+			defer cancel()
+			_, err := m.Submit(ctx, c)
+			return err
+		}
+		var rej *api.RejectedError
+		if create != nil {
+			if err = send(*create); errors.As(err, &rej) {
+				refused = "its create was refused there, so nothing is there: " + rej.Reason
+				return label, false, nil
+			}
+		}
+		if err == nil {
+			if err = send(c); errors.As(err, &rej) {
+				refused = rej.Reason
+				return label, false, nil
+			}
+		}
+		last = err
+		return label, false, err
+	})
+	switch {
+	case !ok:
+		return nil, h.ctx.Err() == nil
+	case refused != "":
+		slog.Warn("runtime: a remote child's machine refused this machine's "+what, "machine", label, "thread", e.Thread, "reason", refused)
+		return nil, true
+	case lost != "":
+		if !errors.Is(last, api.ErrNotFound) {
+			lost = fmt.Sprintf("%s; this machine's %s didn't reach the child there", lost, what)
+		}
+		slog.Warn("runtime: a remote child's machine can't be reached for this machine's "+what, "machine", label, "thread", e.Thread, "reason", lost)
+		return engine.RemoteLost{Reason: lost, On: label}, true
+	}
+	return nil, true
 }
 
 // followRemote follows placeholder's child on its machine while the
@@ -286,6 +387,7 @@ func (h *Host) followRemote(ctx context.Context, placeholder api.ID) {
 			return label, false, err
 		}
 		defer m.Close()
+		h.hear(placeholder)
 		progressed, err := h.readRemote(ctx, m, t, label)
 		return label, progressed, err
 	})
@@ -345,6 +447,7 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 		if err != nil {
 			return progressed, err
 		}
+		h.hear(t.ID)
 		items := []api.StreamItem{it}
 		var later error
 		for {
@@ -401,13 +504,13 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			}
 			reports[i].Reply = reply.Text
 		}
-		if snapshot || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || !slices.Equal(next.Pending, r.Pending) || len(reports) > 0 {
+		if snapshot || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || !slices.Equal(next.Pending, r.Pending) || next.Taken != r.Taken || len(reports) > 0 {
 			_, listed, err := h.dial(at)
 			if err != nil {
 				return progressed, err
 			}
 			listed.Close()
-			o := engine.RemoteSeen{Cursor: next.Cursor, Run: next.Run, Silent: next.Silent, Slot: next.Slot, Pending: next.Pending, Reports: reports, On: label}
+			o := engine.RemoteSeen{Cursor: next.Cursor, Run: next.Run, Silent: next.Silent, Slot: next.Slot, Pending: next.Pending, Taken: next.Taken, Reports: reports, On: label}
 			_, err = h.store.Observe(ctx, t.ID, o, h.clock(), 0)
 			if errors.Is(err, engine.ErrRefused) {
 				return progressed, errObsolete
@@ -454,6 +557,22 @@ func (h *Host) createRemote(ctx context.Context, c api.Command, b api.ThreadCrea
 	h.making.Lock()
 	defer h.making.Unlock()
 	return h.store.SubmitResolved(ctx, c, in, h.clock())
+}
+
+// leavesNoValue refuses text, a message to thread, when thread is a
+// remote child's placeholder and text holds a value of its parent's
+// vault, which never leaves this machine.
+func (h *Host) leavesNoValue(ctx context.Context, thread api.ID, text string) error {
+	t, err := h.store.Thread(ctx, thread)
+	if err != nil || t.Remote == nil {
+		return err
+	}
+	for _, v := range h.credentials(t.Parent) {
+		if v != "" && strings.Contains(text, v) {
+			return &api.RejectedError{Reason: "the message holds a credential value; name the variable instead"}
+		}
+	}
+	return nil
 }
 
 // repositoryOf is the repository a remote child of a thread in dir starts
