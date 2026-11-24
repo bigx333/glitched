@@ -256,6 +256,10 @@ func apply(t Thread, e Event) (Thread, error) {
 		}
 	case api.RequestDelivery:
 		err = t.setRequest(b.Request, api.RequestDelivered)
+	case api.ThreadReverting, api.ThreadReverted:
+		// A revert changes the files, not the thread's fields; it moves
+		// the revision, for clients to read it, and for the runtime's
+		// commit hook to see the thread whose folder it marks.
 	case api.RequestInvalidation:
 		if err = t.setRequest(b.Request, api.RequestInvalidated); err == nil {
 			err = t.resume(b.Request)

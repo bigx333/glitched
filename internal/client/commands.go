@@ -322,6 +322,12 @@ func (m *Manager) Delete(e *Env, thread api.ID, removeWorktree bool) api.ID {
 	return m.submit(e, thread, api.ThreadDelete{RemoveWorktree: removeWorktree})
 }
 
+// Revert puts the files of the thread's worktree back as the checkpoint
+// to holds them.
+func (m *Manager) Revert(e *Env, thread api.ID, to api.CheckpointRef) api.ID {
+	return m.submit(e, thread, api.ThreadRevert{To: to, Files: true})
+}
+
 // Retry sends a failed command again under its ID, so one that did land
 // before the failure is not applied twice.
 func (m *Manager) Retry(e *Env, thread, command api.ID) {

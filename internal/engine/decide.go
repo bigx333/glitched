@@ -86,6 +86,8 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 		err = d.move(b)
 	case api.QueueSteer:
 		err = d.steer(b)
+	case api.ThreadRevert:
+		err = d.revert(c.ID, b)
 	default:
 		err = rejected("unknown intent")
 	}
@@ -858,6 +860,47 @@ func (d *decision) delete(b api.ThreadDelete) error {
 	return d.emit(api.ThreadDeleted{})
 }
 
+// revert has the runtime put the thread's files back as a checkpoint of
+// the thread's holds them. A thread with no worktree of its own keeps no
+// checkpoints, nor does a child, whose work reaches the user through its
+// parent's branch; and a run at work could write the files under the
+// revert, so the thread is idle. The runtime finds whether the
+// checkpoint was saved, and refuses a tree at work or a folder another
+// thread works in before this commits.
+func (d *decision) revert(id api.ID, b api.ThreadRevert) error {
+	switch {
+	case !b.Files:
+		return rejected("a revert puts files back; rewinding the conversation is to come")
+	case !d.t.Parent.IsZero():
+		return rejected("A child thread keeps no checkpoints; revert its parent instead")
+	case !d.t.checkpointed():
+		return rejected("Revert needs this thread to run in its own worktree")
+	case d.t.Live() != nil:
+		return rejected("Stop the thread before reverting its files")
+	}
+	switch b.To.Phase {
+	case api.CheckpointBase:
+		if len(d.t.Runs) == 0 || d.t.Runs[0].ID != b.To.ID {
+			return rejected("the base checkpoint is its first run's")
+		}
+	case api.CheckpointRun:
+		if d.t.runAt(b.To.ID) < 0 || d.t.silentRun(b.To.ID) {
+			return rejected("no run of the thread's has that checkpoint")
+		}
+	case api.CheckpointRecovery:
+		if b.To.ID.IsZero() {
+			return rejected("a recovery checkpoint is named by its revert")
+		}
+	default:
+		return rejected("unknown checkpoint")
+	}
+	if err := d.emit(api.ThreadReverting{Revert: id, To: b.To}); err != nil {
+		return err
+	}
+	d.effects = append(d.effects, RevertThread{Revert: id, To: b.To})
+	return nil
+}
+
 func (d *decision) rename(b api.ThreadRename) error {
 	title := strings.TrimSpace(b.Title)
 	if title == "" {
@@ -974,6 +1017,8 @@ func (d *decision) observe(o Observation) error {
 		if d.t.runAt(o.Checkpoint.Run) >= 0 {
 			return d.emit(o.Checkpoint)
 		}
+	case Reverted:
+		return d.emit(o.Revert)
 	case Surfaced:
 		dup := index(d.t.Requests, func(r Request) bool { return r.Run == o.Run && r.Dedup == o.Dedup }) >= 0
 		if isLive(o.Run) && !dup && live.Silent {

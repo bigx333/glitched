@@ -233,9 +233,14 @@ func skipf(format string, args ...any) error { return errSkipped(fmt.Sprintf(for
 
 func checkpointRefs(thread api.ID) string { return "refs/glitched/" + thread.String() + "/" }
 
+// checkpointRef is b's ref: a recovery checkpoint's Run is the revert
+// that took it.
 func checkpointRef(thread api.ID, b engine.CaptureCheckpoint) string {
-	if b.Phase == api.CheckpointBase {
+	switch b.Phase {
+	case api.CheckpointBase:
 		return checkpointRefs(thread) + "base"
+	case api.CheckpointRecovery:
+		return checkpointRefs(thread) + "recovery/" + b.Run.String()
 	}
 	return checkpointRefs(thread) + "run/" + b.Run.String()
 }

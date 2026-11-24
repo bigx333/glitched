@@ -76,11 +76,16 @@ type Host struct {
 	busy    map[api.ID]bool     // threads with an effect in flight
 	runs    map[api.ID]*liveRun // by run
 	closing map[api.ID]bool     // threads whose run is over but whose agent is not closed yet, true while that agent may still work
-	opening int                 // provider opens under way, which may have the agent at work
-	subs    map[*stream]struct{}
-	asks    map[askKey]chan json.RawMessage // credentials requests glitched mcp waits on
-	held    map[string]chan struct{}        // providers Hold holds, each closed on its release
-	sent    map[api.ID]bool                 // compactions compactLoop started, until their start is performed
+	// restoring is the worktrees whose files a revert puts back, by the
+	// thread reverting, and waiting the threads whose start in one waits
+	// for it to end.
+	restoring map[string]api.ID
+	waiting   map[api.ID]bool
+	opening   int // provider opens under way, which may have the agent at work
+	subs      map[*stream]struct{}
+	asks      map[askKey]chan json.RawMessage // credentials requests glitched mcp waits on
+	held      map[string]chan struct{}        // providers Hold holds, each closed on its release
+	sent      map[api.ID]bool                 // compactions compactLoop started, until their start is performed
 	// agents are the runs whose agent may run here: from their start until
 	// it is closed, on past the run's own end.
 	agents map[*liveRun]bool
@@ -155,6 +160,8 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		busy:          map[api.ID]bool{},
 		runs:          map[api.ID]*liveRun{},
 		closing:       map[api.ID]bool{},
+		restoring:     map[string]api.ID{},
+		waiting:       map[api.ID]bool{},
 		agents:        map[*liveRun]bool{},
 		subs:          map[*stream]struct{}{},
 		asks:          map[askKey]chan json.RawMessage{},
@@ -253,6 +260,8 @@ func (h *Host) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
 		if b.RemoveWorktree {
 			return h.deleteInWorktree(ctx, c)
 		}
+	case api.ThreadRevert:
+		return h.revertInWorktree(ctx, c)
 	}
 	return h.store.Submit(ctx, c, h.clock())
 }
@@ -272,6 +281,7 @@ func (h *Host) committed(c store.Commit) {
 	}
 	for _, e := range c.Events {
 		h.follow(e)
+		h.noteReverting(e, c.Threads)
 	}
 	for _, th := range c.Threads {
 		h.noteWorking(th.ID, works[th.Run])
@@ -468,7 +478,7 @@ func (h *Host) boot(ctx context.Context) error {
 		return err
 	}
 	h.skills.boot(append(survivors, closing...))
-	return nil
+	return h.bootReverting(ctx)
 }
 
 // work leases effects for threads that have none in flight, so one thread's
@@ -499,7 +509,7 @@ func (h *Host) work() {
 func (h *Host) busyThreads() []api.ID {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return append(slices.Collect(maps.Keys(h.busy)), slices.Collect(maps.Keys(h.closing))...)
+	return slices.Concat(slices.Collect(maps.Keys(h.busy)), slices.Collect(maps.Keys(h.closing)), slices.Collect(maps.Keys(h.waiting)))
 }
 
 func (h *Host) lane(e store.Effect) {
@@ -521,6 +531,9 @@ func (h *Host) perform(e store.Effect) {
 	// A report reaches no agent: it goes to the parent's log.
 	if b, ok := e.Body.(engine.ReportToParent); ok {
 		h.report(e, b)
+		return
+	}
+	if _, ok := e.Body.(engine.StartTurn); ok && h.waitsOnRevert(e) {
 		return
 	}
 	var lr *liveRun
@@ -669,6 +682,9 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 
 	case engine.DropCheckpoints:
 		return nil, h.dropCheckpoints(e.Thread)
+
+	case engine.RevertThread:
+		return h.revert(t, b)
 
 	case engine.DeliverAnswer:
 		if isAsk(b.Dedup) {

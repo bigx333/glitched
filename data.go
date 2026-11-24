@@ -153,6 +153,7 @@ const (
 	entryError // why a run failed
 	entryCompact
 	entryPlan
+	entryRevert
 )
 
 // An entry is a row of the timeline. Its key stays the same while it
@@ -189,6 +190,8 @@ type entry struct {
 	run     api.ID // a work entry's
 	// reports are a run of children's reports, one card's.
 	reports []client.ReportEntry
+	// revert is how a revert of the files ended, a revert entry's.
+	revert *client.RevertEntry
 }
 
 // fileChange is a file the agent's edits name, when they last moved, and
@@ -265,6 +268,8 @@ func (d *deriving) add(e client.Entry) {
 			return
 		}
 		d.es = append(d.es, entry{key: "k/" + e.Run.String(), kind: entryCompact, text: compactLabel(e), at: e.At})
+	case *client.RevertEntry:
+		d.es = append(d.es, entry{key: "v/" + e.Revert.String(), kind: entryRevert, at: e.At, revert: e})
 	case *client.ReportEntry:
 		// One after another, they're one card, keyed by its first and
 		// its order among the cards a run's report starts: a run that
@@ -860,6 +865,8 @@ func failedTo(p client.Pending) string {
 		return "rename the thread"
 	case api.ThreadDelete:
 		return "delete the thread"
+	case api.ThreadRevert:
+		return "revert the files"
 	case api.ThreadConfigure:
 		return "change the thread's " + given(b)
 	}

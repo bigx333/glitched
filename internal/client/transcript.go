@@ -38,6 +38,25 @@ type Transcript struct {
 	// Plan is the plan the thread's agent works to, the latest one said,
 	// done or not: nil before any and once the agent cleared it.
 	Plan *PlanEntry
+	// Checkpoints are the thread's checkpoints of its files, the base and
+	// each run's, in the order they were taken, and Reverting the revert
+	// of them under way, zero for none.
+	Checkpoints []api.CheckpointCaptured
+	Reverting   api.ID
+}
+
+// Checkpoint is run's checkpoint of the thread's files, and the one taken
+// before it, the base for the first run, each ok when there is one.
+func (t *Transcript) Checkpoint(run api.ID) (at, before api.CheckpointCaptured, ok, hasBefore bool) {
+	for i, c := range t.Checkpoints {
+		if c.Run == run && c.Phase == api.CheckpointRun {
+			if i > 0 {
+				before, hasBefore = t.Checkpoints[i-1], true
+			}
+			return c, before, true, hasBefore
+		}
+	}
+	return at, before, false, false
 }
 
 // An EditMark is where a reader of a transcript's edits got to.
@@ -244,8 +263,15 @@ type CompactionEntry struct {
 	At         time.Time
 }
 
+// RevertEntry is how a revert of the thread's files ended.
+type RevertEntry struct {
+	api.ThreadReverted
+	At time.Time
+}
+
 func (*ErrorEntry) entry()      {}
 func (*CompactionEntry) entry() {}
+func (*RevertEntry) entry()     {}
 func (*ReportEntry) entry()     {}
 func (*UserEntry) entry()       {}
 func (*AssistantEntry) entry()  {}
@@ -387,6 +413,15 @@ func (t *Transcript) apply(e api.Event) {
 			break
 		}
 		t.plan(b)
+	case api.CheckpointCaptured:
+		t.Checkpoints = append(t.Checkpoints, b)
+	case api.ThreadReverting:
+		t.Reverting = b.Revert
+	case api.ThreadReverted:
+		if t.Reverting == b.Revert {
+			t.Reverting = api.ID{}
+		}
+		t.add(&RevertEntry{ThreadReverted: b, At: e.At})
 	case api.RequestOpened:
 		if t.silent[b.Run] != nil {
 			break

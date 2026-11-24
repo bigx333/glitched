@@ -864,6 +864,9 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 	case entryCompact:
 		a.compactDivider(c, e)
 		return
+	case entryRevert:
+		a.revertDivider(c, t, rs.es, i)
+		return
 	}
 	m := timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil, At: e.at}
 	acted := false
@@ -1054,22 +1057,27 @@ func (a *app) workLog(c *ui.Context, t thread, key string, e entry, files []file
 	open := !a.collapsed[key]
 	ui.Column(c).Key(key).Radius(12).Border(1, palette.border).Background(palette.bg.Alpha(0.6)).Clip().
 		Children(func() {
-			if ghost(c, "head", false).Radius(0).Padding(8, 12).Children(func() {
-				switch {
-				case e.paused != "":
-					ui.Icon(c, icClock).FontSize(12).TextColor(palette.amber)
-					ui.Text(c, e.paused).FontSize(12).Grow(1)
-				case working:
-					a.statusMark(c, statusWorking)
-					shimmerText(c, e.took, 12, palette.muted, palette.text)
-				default:
-					ui.Text(c, e.took).FontSize(12).Grow(1)
+			ui.Row(c).Key("bar").AlignItems(ui.Center).Children(func() {
+				if ghost(c, "head", false).Radius(0).Padding(8, 12).Grow(1).Children(func() {
+					switch {
+					case e.paused != "":
+						ui.Icon(c, icClock).FontSize(12).TextColor(palette.amber)
+						ui.Text(c, e.paused).FontSize(12).Grow(1)
+					case working:
+						a.statusMark(c, statusWorking)
+						shimmerText(c, e.took, 12, palette.muted, palette.text)
+					default:
+						ui.Text(c, e.took).FontSize(12).Grow(1)
+					}
+					ui.Text(c, plural(len(e.work), "step")).FontSize(11).TextColor(palette.faint)
+					chevron(c, open)
+				}).Clicked() {
+					a.collapsed[key] = open
 				}
-				ui.Text(c, plural(len(e.work), "step")).FontSize(11).TextColor(palette.faint)
-				chevron(c, open)
-			}).Clicked() {
-				a.collapsed[key] = open
-			}
+				if !working {
+					ui.Row(c).Key("checkpoint").Padding(0, 8, 0, 0).Children(func() { a.checkpointChip(c, t, e.run) })
+				}
+			})
 			if !open {
 				return
 			}
