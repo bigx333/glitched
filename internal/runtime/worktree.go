@@ -365,24 +365,36 @@ func (h *Host) makeWorktree(ctx context.Context, t engine.Thread, b engine.MakeW
 		if t.Disposition.State == api.Settled {
 			return engine.WorktreeFailed{Error: "the thread was settled before its worktree was made"}, true
 		}
-		// The long branch names the whole thread, so only an add of this
-		// thread's that a kill stopped made it: one at the base that no
-		// worktree has is taken up again.
-		add := []string{"worktree", "add", "--lock", "--reason", reason, "--no-track", "-b", short, dir, b.Base}
-		if _, err := git(ctx, top, "rev-parse", "--verify", "--quiet", "refs/heads/"+short); err == nil {
-			add[7] = long
-		}
-		if at, err := git(ctx, top, "rev-parse", "--verify", "--quiet", "refs/heads/"+long); err == nil {
-			list, _ := git(ctx, top, "worktree", "list", "--porcelain")
-			if at != b.Base || slices.Contains(strings.Fields(list), "refs/heads/"+long) {
-				return fail("the branch %s is there and isn't the thread's to take up; it stays", long)
+		// The branch is made before the worktree, its reflog's first
+		// entry naming the thread, so a branch a kill left is told from
+		// another's by what made it: one made so, at the base and in no
+		// worktree, is taken up again. Any other stays.
+		list, _ := git(ctx, top, "worktree", "list", "--porcelain")
+		var branch string
+		for _, name := range []string{short, long} {
+			ref := "refs/heads/" + name
+			at, err := git(ctx, top, "rev-parse", "--verify", "--quiet", ref)
+			if err != nil {
+				if _, err := git(ctx, top, "update-ref", "--create-reflog", "-m", reason, ref, b.Base, ""); err != nil {
+					return fail("%v", err)
+				}
+				branch = name
+				break
 			}
-			add = []string{"worktree", "add", "--lock", "--reason", reason, dir, long}
+			made, _ := git(ctx, top, "reflog", "show", "--format=%gs", ref)
+			entries := strings.Split(made, "\n")
+			if at == b.Base && entries[len(entries)-1] == reason && !slices.Contains(strings.Fields(list), ref) {
+				branch = name
+				break
+			}
+		}
+		if branch == "" {
+			return fail("the branches %s and %s are there, and neither was made for the thread; they stay", short, long)
 		}
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 			return fail("%v", err)
 		}
-		if _, err := git(ctx, top, add...); err != nil {
+		if _, err := git(ctx, top, "worktree", "add", "--lock", "--reason", reason, dir, branch); err != nil {
 			return fail("%v", err)
 		}
 	}
@@ -390,11 +402,18 @@ func (h *Host) makeWorktree(ctx context.Context, t engine.Thread, b engine.MakeW
 	if !at {
 		return fail("%s is there, and isn't a worktree of %s; it stays for what is in it", dir, top)
 	}
+	branch, _ := git(ctx, dir, "branch", "--show-current")
+	if branch != short && branch != long {
+		return fail("the worktree at %s isn't on the thread's branch; it stays for what is in it", dir)
+	}
 	lock, err := os.ReadFile(filepath.Join(own, "locked"))
 	switch locked := err == nil; {
 	case locked && strings.TrimSpace(string(lock)) != reason:
 		return fail("the worktree at %s is locked for something else; it stays for what is in it", dir)
 	case locked:
+		if owner, err := os.ReadFile(filepath.Join(own, ownerFile)); err == nil && string(owner) != t.ID.String() {
+			return fail("the worktree at %s is another thread's; it stays for what is in it", dir)
+		}
 		if status, err := git(ctx, dir, "status", "--porcelain"); err != nil || status != "" {
 			return fail("the worktree at %s holds changes; it stays for what is in it", dir)
 		}
@@ -408,10 +427,6 @@ func (h *Host) makeWorktree(ctx context.Context, t engine.Thread, b engine.MakeW
 		if _, mine := ownedBy(ctx, git, dir, common, t.ID); !mine {
 			return fail("%s is there, and isn't the thread's worktree; it stays for what is in it", dir)
 		}
-	}
-	branch, _ := git(ctx, dir, "branch", "--show-current")
-	if branch != short && branch != long {
-		return fail("the worktree at %s isn't on the thread's branch; it stays for what is in it", dir)
 	}
 	return engine.WorktreeReady{Workspace: dir, Branch: branch}, true
 }
