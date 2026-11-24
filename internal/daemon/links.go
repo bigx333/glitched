@@ -13,6 +13,8 @@ import (
 	"glitched/internal/api"
 	"glitched/internal/engine"
 	"glitched/internal/jsonfile"
+	"glitched/internal/runtime"
+	"glitched/internal/tailnet"
 	"glitched/internal/transport"
 )
 
@@ -68,6 +70,44 @@ func places(dir string) engine.Places {
 			return api.Remote{}, false, nil
 		}
 		return api.Remote{Engine: ms[i].Engine, Link: ms[i].Link}, true, nil
+	}
+}
+
+// dialer reaches a remote child's machine by its link, as dir's
+// machines.json has it at each dial, with the link's token, which nothing
+// but the client holds: not the store, a log, an effect or an agent. A
+// machine on the tailnet is dialled through node, the engine's own, when
+// it runs one, as a hub is.
+func dialer(dir string, node *tailnet.Node) runtime.Dial {
+	return func(at api.Remote) (string, runtime.Machine, error) {
+		ms, err := Machines(dir)
+		if err != nil {
+			return "", nil, fmt.Errorf("machines.json can't be read: %w", err)
+		}
+		i := slices.IndexFunc(ms, func(m Machine) bool { return m.Link == at.Link })
+		if i < 0 {
+			return "", nil, runtime.ErrNoMachine
+		}
+		m := ms[i]
+		var t transport.Transport = transport.Tailnet{Address: m.Server, Token: m.Token}
+		if node != nil && !loopback(m.Server) {
+			t = transport.Embedded{Node: node, Address: m.Server, Token: m.Token}
+		}
+		return m.Label, transport.NewEndpointClient(t, api.ID{}), nil
+	}
+}
+
+// labels are the machines dir's machines.json lists, by label, as the
+// file is when an agent starts: where it may start a child. A file that
+// can't be read lists none.
+func labels(dir string) func() []string {
+	return func() []string {
+		ms, _ := Machines(dir)
+		var out []string
+		for _, m := range ms {
+			out = append(out, m.Label)
+		}
+		return out
 	}
 }
 

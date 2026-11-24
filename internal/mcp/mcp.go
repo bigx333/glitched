@@ -11,6 +11,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -30,13 +31,16 @@ const (
 	EnvThread = "GLITCHED_THREAD"
 	EnvAccess = "GLITCHED_ACCESS"
 	EnvEngine = "GLITCHED_ENGINE"
+	// EnvMachines lists, as a JSON array, the labels of the machines a
+	// child may be placed on: labels only, never a link's token.
+	EnvMachines = "GLITCHED_MACHINES"
 )
 
 // Routing reports whether the environment variable k names a caller. A
 // process the engine starts drops any it inherited, so an engine inside a
 // run never speaks for that run's thread.
 func Routing(k string) bool {
-	for _, e := range []string{EnvThread, EnvAccess, EnvEngine} {
+	for _, e := range []string{EnvThread, EnvAccess, EnvEngine, EnvMachines} {
 		if strings.EqualFold(k, e) {
 			return true
 		}
@@ -56,11 +60,24 @@ type Origin struct {
 type Launcher struct {
 	Command string
 	Engine  string
+	// Machines lists the machines a child may be placed on as an agent
+	// starts; nil lists none.
+	Machines func() []string
 }
 
 // For is the server for an agent of thread started at access, whichever of
 // the thread's runs at that access the agent serves.
 func (l Launcher) For(thread api.ID, access api.Access) provider.MCPServer {
+	s := l.server(thread, access)
+	if l.Machines != nil {
+		if b, err := json.Marshal(l.Machines()); err == nil {
+			s.Env[EnvMachines] = string(b)
+		}
+	}
+	return s
+}
+
+func (l Launcher) server(thread api.ID, access api.Access) provider.MCPServer {
 	return provider.MCPServer{
 		Name:    "glitched",
 		Command: l.Command,
@@ -99,7 +116,9 @@ func Main(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	}
 	ep := transport.NewEndpointClient(transport.Loopback{Network: "unix", Address: engine}, api.ID{})
 	defer ep.Close()
-	return Serve(ctx, stdin, stdout, &Tools{Engine: ep, Origin: o, Plugins: ep, Secrets: ep, Providers: engineProviders{ep}})
+	var machines []string
+	json.Unmarshal([]byte(os.Getenv(EnvMachines)), &machines)
+	return Serve(ctx, stdin, stdout, &Tools{Engine: ep, Origin: o, Plugins: ep, Secrets: ep, Providers: engineProviders{ep}, Machines: machines})
 }
 
 // engineProviders are the providers of the engine ep reaches.

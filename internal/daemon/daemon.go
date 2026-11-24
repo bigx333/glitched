@@ -121,6 +121,10 @@ type Config struct {
 	Detect func(context.Context) (api.Tailnet, error) `json:"-"`
 	// PluginTimerScale shortens plugins' service timers, in tests.
 	PluginTimerScale float64 `json:"-"`
+	// RemoteBackoff is how long the engine waits before its nth retry of
+	// a call to a remote child's machine; nil is T3 Code's, from 2s
+	// doubling to 5 minutes. Tests shorten it.
+	RemoteBackoff func(n int) time.Duration `json:"-"`
 }
 
 // CompactBeforeExpireEnabled reports whether automatic idle compaction is
@@ -365,12 +369,15 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 		}
 	}
 
-	var opts []runtime.Option
+	opts := []runtime.Option{runtime.WithRemotes(dialer(cfg.Dir, d.node))}
+	if cfg.RemoteBackoff != nil {
+		opts = append(opts, runtime.WithRemoteBackoff(cfg.RemoteBackoff))
+	}
 	// The agent's glitched mcp runs in the agent's workspace, not ours, so it
 	// gets the socket's absolute path.
 	engineAt, absErr := filepath.Abs(sock.Address)
 	if exe, err := os.Executable(); err == nil && absErr == nil {
-		opts = append(opts, runtime.WithMCP(mcp.Launcher{Command: exe, Engine: engineAt}))
+		opts = append(opts, runtime.WithMCP(mcp.Launcher{Command: exe, Engine: engineAt, Machines: labels(cfg.Dir)}))
 	} else {
 		slog.Warn("agents run without glitched mcp, so they start no child threads", "err", errors.Join(err, absErr))
 	}

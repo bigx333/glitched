@@ -101,7 +101,7 @@ func handle(ctx context.Context, tools *Tools, m message) reply {
 	case "ping":
 		r.Result = struct{}{}
 	case "tools/list":
-		r.Result = map[string]any{"tools": append(append(append(slices.Clone(catalog), taskCatalog...), credentialsTool), tools.pluginCatalog(ctx)...)}
+		r.Result = map[string]any{"tools": append(append(append([]map[string]any{delegateTool(tools.Machines)}, taskCatalog...), credentialsTool), tools.pluginCatalog(ctx)...)}
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
