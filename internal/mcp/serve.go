@@ -135,7 +135,7 @@ func handle(ctx context.Context, tools *Tools, m message) reply {
 			r.Result = map[string]any{"content": []any{text(string(b))}, "structuredContent": v, "isError": false}
 			return r
 		}
-		if slices.Contains([]string{listTasks, taskStatus, taskCancel, taskSend}, p.Name) {
+		if slices.Contains([]string{listTasks, taskStatus, taskCancel, taskSend, taskAnswer}, p.Name) {
 			v, err := tools.tasks(ctx, p.Name, p.Arguments, p.Meta.ToolUseID)
 			if err != nil {
 				r.Result = map[string]any{"content": []any{text(err.Error())}, "isError": true}

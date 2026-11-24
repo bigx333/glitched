@@ -47,8 +47,12 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 			if r := t.Live(); r != nil && r.State == RunUncertain {
 				return nil, nil, rejected("the thread's run didn't answer its stop, and only the user can end it")
 			}
+		case api.RequestRespond:
+			if i := t.requestAt(b.Request); i < 0 || t.Requests[i].Kind != api.KindQuestion {
+				return nil, nil, rejected("an agent can answer only a question of a thread under its own: approvals and credentials are the user's")
+			}
 		default:
-			return nil, nil, rejected("an agent can only message or stop a thread under its own")
+			return nil, nil, rejected("an agent can only message, stop or answer the question of a thread under its own")
 		}
 		d.by = c.Caller.Thread
 	}
@@ -974,7 +978,7 @@ func (d *decision) observe(o Observation) error {
 			}); err != nil {
 				return err
 			}
-			d.report(o.Run, api.ReportBlocked, "", o.Body)
+			d.report(o.Run, api.ReportBlocked, "", &api.Request{ID: o.Request, Kind: o.Kind, Body: o.Body})
 		}
 	case Withdrawn:
 		// An answer already given is left to its delivery.
@@ -1065,13 +1069,18 @@ func (d *decision) idleCompact(o IdleCompact) error {
 // reported logs a child's report. It brings a snoozed parent, and only its
 // parent, back to the inbox. A done or failed one queues a wake, which
 // gives the parent's agent the child's result with its next turn (see
-// settle). A settled parent stays settled and takes no wake: settling
+// settle), and so does a question the child waits on, with a wake of its
+// own, for the parent's agent to answer or leave to the user. An approval
+// or credentials are the user's alone, and wake nothing. A settled parent stays settled and takes no wake: settling
 // halted the tree, so this is a run that ended before its stop landed, and
 // the user is done with the thread. The report is logged either way. A
 // report the parent already took a wake for is a replay, and changes
 // nothing.
 func (d *decision) reported(o Reported) error {
-	id := wakeID(o.Report.Run)
+	id, text := wakeID(o.Report.Run), wakeText(o, d.t.Branch)
+	if !o.Question.IsZero() {
+		id, text = askWakeID(o.Question), askText(o)
+	}
 	if d.t.messageAt(id) >= 0 {
 		return nil
 	}
@@ -1083,11 +1092,11 @@ func (d *decision) reported(o Reported) error {
 			return err
 		}
 	}
-	if o.Report.Kind == api.ReportBlocked || d.t.settled() {
+	if o.Report.Kind == api.ReportBlocked && o.Question.IsZero() || d.t.settled() {
 		return nil
 	}
 	return d.emit(api.MessageQueued{
-		Message: id, Text: wakeText(o, d.t.Branch), Mode: api.AfterActive, Pos: d.t.pos(false), Held: true, Report: o.Report.Child,
+		Message: id, Text: text, Mode: api.AfterActive, Pos: d.t.pos(false), Held: true, Report: o.Report.Child,
 	})
 }
 
@@ -1100,6 +1109,44 @@ func wakeID(run api.ID) api.ID {
 	copy(id[:6], run[:6])
 	copy(id[6:], sum[:])
 	return id
+}
+
+// askWakeID is the wake for a child's question, one per question request,
+// apart from its run's: the run's own report still wakes the parent when
+// it ends.
+func askWakeID(request api.ID) api.ID {
+	sum := sha256.Sum256(append([]byte("glitched ask wake "), request[:]...))
+	var id api.ID
+	copy(id[:6], request[:6])
+	copy(id[6:], sum[:])
+	return id
+}
+
+// askText gives the parent's agent a child's question, in the task tags
+// wakeText uses, with the request task_answer names. A body no card can
+// show is the user's to dismiss.
+func askText(o Reported) string {
+	var b strings.Builder
+	q, err := api.ParseQuestions(o.Ask)
+	if err != nil {
+		b.WriteString(o.Report.Outcome + "\n")
+	}
+	for i, x := range q.Questions {
+		fmt.Fprintf(&b, "%d. %s", i+1, x.Text)
+		if x.Multi {
+			b.WriteString(" (pick any)")
+		}
+		b.WriteString("\n")
+		for _, opt := range x.Options {
+			fmt.Fprintf(&b, "   - %s", opt.Label)
+			if opt.About != "" {
+				fmt.Fprintf(&b, ": %s", opt.About)
+			}
+			b.WriteString("\n")
+		}
+	}
+	return fmt.Sprintf("<task id=\"%s\" title=\"%s\" state=\"waiting_on_question\" request=\"%s\">\n<task_question>\n%s</task_question>\n</task>\nAnswer it with task_answer, or leave it to the user, who sees it too.",
+		o.Report.Child, html.EscapeString(o.Report.Title), o.Question, b.String())
 }
 
 // wakeText gives the parent's agent a child's result, in the tags Zeron
@@ -1121,14 +1168,20 @@ func wakeText(o Reported, parentBranch string) string {
 }
 
 // report has a child's run report to its parent, after the commit, as how
-// it went. A run the user stopped reports nothing: they asked for it.
-func (d *decision) report(run api.ID, kind api.ReportKind, failure string, ask json.RawMessage) {
+// it went, with the request a blocked run waits on. A run the user stopped
+// reports nothing: they asked for it.
+func (d *decision) report(run api.ID, kind api.ReportKind, failure string, ask *api.Request) {
 	if d.t.Parent.IsZero() {
 		return
 	}
-	d.effects = append(d.effects, ReportToParent{
-		Parent: d.t.Parent, Child: d.t.ID, Run: run, Kind: kind, Title: d.t.Title, Error: failure, Ask: ask, Branch: d.t.Branch,
-	})
+	r := ReportToParent{Parent: d.t.Parent, Child: d.t.ID, Run: run, Kind: kind, Title: d.t.Title, Error: failure, Branch: d.t.Branch}
+	if ask != nil {
+		r.Ask = ask.Body
+		if ask.Kind == api.KindQuestion {
+			r.Question = ask.ID
+		}
+	}
+	d.effects = append(d.effects, r)
 }
 
 func (d *decision) rewound() error {
