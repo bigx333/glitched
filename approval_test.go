@@ -477,6 +477,26 @@ func TestATallSessionCardFitsTheNarrowestWindow(t *testing.T) {
 	}
 }
 
+// Two tall cards that offer Allow for this session, waiting together at
+// the narrowest window beside the widest sidebar, leave the newest its
+// header in the pane and its answers under it, as one card does.
+func TestTwoTallSessionCardsKeepTheNewestInThePane(t *testing.T) {
+	body, _ := json.Marshal(map[string]any{"command": "go test ./sample\n" + strings.Repeat("go env\n", 15), "cwd": "/tmp/fixture", "reason": "Check local change", "session": true})
+	h := askedIn(t, 760, 480,
+		provider.RequestOpened{ID: "first", Kind: api.KindApproval, Body: body},
+		provider.RequestOpened{ID: "second", Kind: api.KindApproval, Body: body})
+	h.a.sidebarWidth, h.a.showSidebar = maxSidebarWidth, true
+	h.until("both cards", func() bool { return len(h.a.current().View.Requests) == 2 })
+	h.tt.Advance(time.Second)
+	newest := lastRequest(h.a.current()).Request
+	if hd := h.a.drew[newest].header; hd.H == 0 || hd.Y < h.a.paneAt.Y {
+		t.Errorf("the newest card's header at %+v, above the pane at %+v", hd, h.a.paneAt)
+	}
+	if at := h.a.answerAt; at.request != newest || at.row.H == 0 || at.row.Y+at.row.H > h.a.paneAt.Y+h.a.paneAt.H {
+		t.Errorf("the newest card's answers at %+v, past the pane at %+v", at.row, h.a.paneAt)
+	}
+}
+
 // With a draft, ⌘⏎ sends it, which steers the agent, and leaves the
 // request waiting.
 func TestCmdEnterWithADraftSteers(t *testing.T) {
