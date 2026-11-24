@@ -198,8 +198,9 @@ type fileChange struct {
 }
 
 // entriesOf is what the timeline lists of a thread: its transcript, the
-// messages waiting their turn, then those sent from here that it doesn't
-// show yet, and the other commands sent from here that failed.
+// messages on their way into the run, then those sent from here that it
+// doesn't show yet, and the other commands sent from here that failed.
+// Those that wait their turn are the queue's, over the composer.
 func entriesOf(t thread) []entry {
 	d := newDeriving(nil, nil, nil)
 	if tr := t.Transcript; tr != nil {
@@ -209,7 +210,9 @@ func entriesOf(t thread) []entry {
 		markPaused(d.es)
 		for _, u := range tr.Queue {
 			d.listed[u.Message] = true
-			d.es = append(d.es, userEntry(u))
+			if !waits(u) {
+				d.es = append(d.es, userEntry(u))
+			}
 		}
 	}
 	return append(d.es, pendingEntries(t.Pending, d.isListed)...)
@@ -445,7 +448,9 @@ func (c *rowsCache) derive(tr *client.Transcript) {
 	if tr != nil {
 		for _, u := range tr.Queue {
 			live.listed[u.Message] = true
-			live.es = append(live.es, userEntry(u))
+			if !waits(u) {
+				live.es = append(live.es, userEntry(u))
+			}
 		}
 	}
 	c.live, c.head = live, live.es
@@ -549,6 +554,10 @@ var messageNotes = map[client.MessageState]string{
 	client.Cancelled: "Cancelled",
 	client.Uncertain: "May not have reached the agent",
 }
+
+// waits is whether u waits its turn, queued or held: the queue over the
+// composer lists it, not the timeline, until it goes in.
+func waits(u *client.UserEntry) bool { return u.State == client.Queued || u.State == client.Held }
 
 func userEntry(u *client.UserEntry) entry {
 	note := messageNotes[u.State]
@@ -825,6 +834,14 @@ func failedTo(p client.Pending) string {
 		return "stop the agent"
 	case api.QueueResume:
 		return "resume the queue"
+	case api.QueueEdit:
+		return "edit the queued message"
+	case api.QueueCancel:
+		return "take the message out of the queue"
+	case api.QueueMove:
+		return "move the queued message"
+	case api.QueueSteer:
+		return "send the queued message now"
 	case api.InboxSet:
 		switch b.Disposition.State {
 		case api.Settled:

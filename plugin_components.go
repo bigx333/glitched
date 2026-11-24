@@ -355,7 +355,8 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 		cp.native(n)
 	case "transcript.retry":
 		cp.retry()
-	case "message.copy", "message.edit", "message.retry", "message.item", "message.time", "thread.crumb", "thread.heading":
+	case "message.copy", "message.edit", "message.retry", "message.item", "message.time", "thread.crumb", "thread.heading",
+		"queue.text", "queue.steer", "queue.edit", "queue.up", "queue.down", "queue.remove":
 		cp.action(n)
 	case "diff.body":
 		var path string

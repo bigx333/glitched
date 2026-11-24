@@ -128,6 +128,15 @@ var Natives = map[string]Native{
 	"message.edit":  {In: []string{"message.toolbar"}, Thread: true},
 	"message.retry": {In: []string{"message.toolbar"}, Thread: true},
 	"message.item":  {Props: map[string]string{"index": "number"}, In: []string{"message.toolbar"}, Thread: true},
+	// A queued message's row: its words, or the area they're edited in,
+	// and what can be done with it, Send now, Edit (Save and Cancel while
+	// edited), Up, Down and Remove. One with nothing to do takes no room.
+	"queue.text":   {In: []string{"composer.queue"}, Thread: true},
+	"queue.steer":  {In: []string{"composer.queue"}, Thread: true},
+	"queue.edit":   {In: []string{"composer.queue"}, Thread: true},
+	"queue.up":     {In: []string{"composer.queue"}, Thread: true},
+	"queue.down":   {In: []string{"composer.queue"}, Thread: true},
+	"queue.remove": {In: []string{"composer.queue"}, Thread: true},
 	// message.time is when the message was sent or the reply came, and
 	// how long a turn ran under its last reply, in the user's formats.
 	"message.time": {In: []string{"message.toolbar"}, Thread: true},

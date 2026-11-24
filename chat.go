@@ -528,7 +528,7 @@ func (a *app) timeline(c *ui.Context, t thread, rs rows) (laid bool) {
 	l.FollowEnd = true
 	l.FollowAnimation = &ui.Smooth
 	// The agents strip sits over the composer: the end clears it too.
-	room := composerRoom + a.agentsRoom(t)
+	room := composerRoom + a.agentsRoom(t) + a.queueRoom(t)
 	at := thinkingAt(t, rs)
 	list := ui.List(c.Key(t.id()), l, len(es), func(i int) {
 		ui.Row(c).Justify(ui.Center).Children(func() {
@@ -1303,11 +1303,15 @@ func (a *app) composerHeight(c *ui.Context, t thread) float32 {
 	k := a.composerK
 	compactH, fullH := a.cardHeights(c)
 	h := compactH + (fullH-compactH)*k
-	if len(a.shown(t)) > 0 {
+	if a.hasAbove(t) {
 		h += a.aboveH * k
 	}
 	return h + a.envH*k + a.composerAround.h
 }
+
+// hasAbove is whether anything sits over t's composer card: the agents
+// strip, or the messages that wait their turn.
+func (a *app) hasAbove(t thread) bool { return len(a.shown(t)) > 0 || len(waiting(t)) > 0 }
 
 // composer is the card the user writes in, over the end of the chat.
 //
@@ -1405,9 +1409,9 @@ func (a *app) composerInput(c *ui.Context, t thread, rs rows, fullW, frameW floa
 	compactH, fullH := a.cardHeights(c)
 	d := a.dockK
 	a.heroHeading(c, d)
-	// The agents strip sits over the card, the room it takes going
-	// with it as it slides down into it.
-	if k > 0 && len(a.shown(t)) > 0 {
+	// The agents strip and the queue sit over the card, the room they
+	// take going with them as they slide down into it.
+	if k > 0 && a.hasAbove(t) {
 		s := fadeIn(k, 0.45, 0.55)
 		above := ui.Column(c).Key("above").Justify(ui.End).PassThrough()
 		if morphing {
@@ -1419,7 +1423,10 @@ func (a *app) composerInput(c *ui.Context, t thread, rs rows, fullW, frameW floa
 			if h := in.Bounds().H; h > 0 {
 				a.aboveH = h
 			}
-			in.Children(func() { a.agents(c, t, frameW, s) })
+			in.Children(func() {
+				a.queueStrip(c, t)
+				a.agents(c, t, frameW, s)
+			})
 		})
 	}
 	// What the last frame measured was laid out under the settings

@@ -2,14 +2,11 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 	"time"
-
-	"github.com/egoist/mygo/ui"
 
 	"glitched/internal/api"
 	"glitched/internal/client"
@@ -116,42 +113,5 @@ func TestARefoldTellsItsNewMessage(t *testing.T) {
 			}
 		}
 		t.Fatalf("plugin output = %q, want %q", got, "heard | before | after")
-	}
-}
-
-// TestAQueuedMarkerKeepsTheFocus tabs to a far queued turn's marker, then
-// queues messages before it: the marker keeps the focus.
-func TestAQueuedMarkerKeepsTheFocus(t *testing.T) {
-	dir := tempDir(t)
-	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
-	seed(t, d, "/work/glitched", "Queued history")
-	h := start(t, dir)
-	th := h.thread("Queued history")
-	h.a.select_(th)
-	h.until("initial snapshot", func() bool { return th.Transcript != nil && th.Transcript.Cursor.Seq > 0 })
-	tr := th.Transcript
-	queue := func(text string, pos int64, mode api.DispatchMode) {
-		applyTo(t, tr, tr.Cursor.Log, api.MessageQueued{Message: api.NewID(), Text: text, Pos: pos, Mode: mode, Held: mode == api.Defer})
-		h.a.changed()
-	}
-	for i := range 90 {
-		queue(fmt.Sprintf("Queued turn %d", i), int64(i), api.Defer)
-	}
-	h.tt.Advance(time.Second)
-	h.click("Go to: Queued turn 0")
-	h.tt.Move(1000, 200)
-	for i := 1; i <= 55; i++ {
-		h.tt.Key(0, ui.KeyTab)
-		h.tt.Frame()
-		if !h.tt.Focused(fmt.Sprintf("Go to: Queued turn %d", i)) {
-			t.Fatalf("setup: forward Tab %d did not focus turn %d", i, i)
-		}
-	}
-	queue("New first", -1, api.RestartActive)
-	queue("New second", -2, api.RestartActive)
-	h.tt.Frame()
-	if !h.tt.Focused("Go to: Queued turn 55") {
-		_, built := h.tt.Access("Go to: Queued turn 55")
-		t.Fatalf("after two front inserts before the next frame, original marker focused=false, built=%t", built)
 	}
 }

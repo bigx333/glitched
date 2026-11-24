@@ -25,7 +25,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|credentials (CRED=typed|provided|declined)|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)|wizard (WIZARD=machine|source|browse|clone|confirm|cloning|failed|offline)
+// SCENE=empty|running|approval|credentials (CRED=typed|provided|declined)|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)|queued (HELD, QEDIT)|wizard (WIZARD=machine|source|browse|clone|confirm|cloning|failed|offline)
 // for the engines' threads (none started without one; question takes
 // ASK=<request body>, PICK=<label>,…, OTHER=<text> typed into the Other
 // field named OTHERIN, and QUESTION=answer|dismiss|stop;
@@ -566,6 +566,28 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 			h.until("the message", func() bool { return h.tt.HasText(text) && !h.a.current().View.Working() })
 			h.tt.Advance(time.Second)
 		}
+	case "queued":
+		// A turn waiting on its approval with three messages queued
+		// behind it; HELD stops the run, which holds them, and QEDIT
+		// edits the second in its row.
+		var th thread
+		h, th = asking(t, runTests)
+		for _, text := range []string{"Then update the docs.", "And the changelog, with a line for each fix.", "Finally, open a pull request."} {
+			h.a.backend.Send(th.env, th.id(), text, api.AfterActive)
+		}
+		h.until("the queued messages", func() bool {
+			return h.a.current().View.Queued == 3 && h.tt.HasText("Finally, open a pull request.")
+		})
+		if os.Getenv("HELD") != "" {
+			h.click("Stop")
+			h.until("the queue held", func() bool { return !h.a.current().View.Live() && h.tt.HasText("Resume") })
+		}
+		if os.Getenv("QEDIT") != "" {
+			h.click("Edit")
+			h.until("the edit", func() bool { return h.tt.HasText("Save") })
+		}
+		h.tt.Advance(time.Second)
+
 	case "machines":
 		h = machines(t)
 		h.a.select_(h.thread("Rotate the API keys"))
