@@ -494,6 +494,9 @@ type RemoteSeen struct {
 	Pending []api.ID
 	Taken   bool
 	Ended   *api.TurnResult
+	Model   api.ModelRef
+	Access  api.Access
+	Turn    *api.TurnResult
 	Reports []RemoteReport
 	On      string
 }

@@ -335,13 +335,11 @@ func (h *Host) remoteCommand(e store.Effect, what string, at api.Remote, create 
 		}
 		var rej *api.RejectedError
 		if create != nil {
-			// A machine that already has the child, or makes it from the
-			// first create as this one lands, refuses this one, and c,
-			// next, finds the child.
-			if err = send(*create); errors.As(err, &rej) {
-				refused = "its create was refused there, so nothing is there: " + rej.Reason
-				return label, false, nil
-			} else if err != nil && !errors.Is(err, api.ErrNotAllowed) {
+			// The machine makes the child settled, or settles the one the
+			// first create made, in the commit it takes either in. It
+			// refuses this create only once the link or the setting is
+			// gone, which loses the child.
+			if err = send(*create); err != nil {
 				last = err
 				return label, false, err
 			}
@@ -443,10 +441,11 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			}
 		}
 	}()
-	// A child whose run ended before this engine kept how runs end there
-	// is read from the start once, its reports kept by key.
+	// A child followed before this engine kept its runs as admitted there
+	// and how they ended is read from the start, its reports kept by key,
+	// until a run it reads has ended.
 	after := r.Cursor
-	if r.Ended == nil && !r.Run.IsZero() && r.Slot == api.RunIdle {
+	if (r.Turn == nil || r.Ended == nil) && !r.Run.IsZero() {
 		after = api.Cursor{}
 	}
 	st, err := m.Open(ctx, api.Subscription{Thread: r.Thread, After: after})
@@ -521,13 +520,13 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			}
 			reports[i].Reply = reply.Text
 		}
-		if snapshot || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || !slices.Equal(next.Pending, r.Pending) || next.Taken != r.Taken || next.Ended != r.Ended || len(reports) > 0 {
+		if snapshot || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || !slices.Equal(next.Pending, r.Pending) || next.Taken != r.Taken || next.Ended != r.Ended || next.Model != r.Model || next.Access != r.Access || next.Turn != r.Turn || len(reports) > 0 {
 			_, listed, err := h.dial(at)
 			if err != nil {
 				return progressed, err
 			}
 			listed.Close()
-			o := engine.RemoteSeen{Cursor: next.Cursor, Run: next.Run, Silent: next.Silent, Slot: next.Slot, Pending: next.Pending, Taken: next.Taken, Ended: next.Ended, Reports: reports, On: label}
+			o := engine.RemoteSeen{Cursor: next.Cursor, Run: next.Run, Silent: next.Silent, Slot: next.Slot, Pending: next.Pending, Taken: next.Taken, Ended: next.Ended, Model: next.Model, Access: next.Access, Turn: next.Turn, Reports: reports, On: label}
 			_, err = h.store.Observe(ctx, t.ID, o, h.clock(), 0)
 			if errors.Is(err, engine.ErrRefused) {
 				return progressed, errObsolete
