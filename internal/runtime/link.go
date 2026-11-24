@@ -128,7 +128,7 @@ func (h *Host) createFromLink(ctx context.Context, link api.Link, c api.Command,
 		return refuse("a link's create names the engine and the thread it came from")
 	}
 	origin := *b.Origin
-	origin.Link = link.ID
+	origin.Link, origin.Machine = link.ID, link.Label
 	b.Origin = &origin
 	c.Body = b
 	if done, err := h.store.Committed(ctx, c.ID); err != nil || done {
