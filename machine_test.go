@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -298,5 +299,70 @@ func TestTheAgentsCardTogglesKeepAwake(t *testing.T) {
 	}
 	if held.Starts() != 1 {
 		t.Fatalf("the agent started %d times, want once: the switch restarted the engine", held.Starts())
+	}
+}
+
+// An engine another process runs keeps its provider log as it started
+// with: once the switch is saved otherwise, the switch's row says how
+// the engine keeps it, and the card says once when it applies the switch.
+func TestAnAttachedEnginesProviderLogSwitchSaysWhenItApplies(t *testing.T) {
+	dir := tempDir(t)
+	cfg, err := daemon.Defaults(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ProviderLog = true
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	engine(t, cfg, fake.New(fake.Turn(false)))
+	h := start(t, dir)
+	h.tt.SetSize(1280, 1400)
+	ticking(t, h)
+	h.click("Settings")
+	h.click("This machine")
+	const about = "Keep the shape of what each thread's agent CLI reads and writes"
+	h.until("the attached engine's Agents card", func() bool {
+		m := h.a.backend.Machine()
+		return h.tt.HasText(about) && !m.Embedded && m.Engine != nil && m.Engine.ProviderLog
+	})
+	h.click("Enable provider log")
+	h.until("the switch's row to say the log stays on", func() bool {
+		m := h.a.backend.Machine()
+		return h.tt.HasText("glitched serve keeps the provider log on.") && !m.Config.ProviderLog && m.Engine != nil && m.Engine.ProviderLog
+	})
+	notes, agents := 0, false
+	for _, s := range h.tt.Texts() {
+		agents = agents || s == "AGENTS"
+		if agents && strings.Contains(s, "next starts") {
+			notes++
+		}
+	}
+	if notes != 1 {
+		t.Errorf("the Agents card says when glitched serve applies a change %d times, want once: %q", notes, h.tt.Texts())
+	}
+}
+
+// The provider log is off by default; its switch in the Agents card saves
+// it to engine.json, and the engine embedded here applies it without a
+// restart.
+func TestTheAgentsCardTogglesTheProviderLog(t *testing.T) {
+	dir := tempDir(t)
+	h := start(t, dir)
+	h.tt.SetSize(1280, 1400)
+	ticking(t, h)
+	h.click("Settings")
+	h.click("This machine")
+	h.until("the Agents card", func() bool { return h.tt.HasText("Provider log") && h.a.backend.Machine().Embedded })
+	for _, want := range []bool{false, true, false} {
+		cfg, err := daemon.Defaults(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ProviderLog != want || !h.a.backend.Machine().Embedded {
+			t.Fatalf("the provider log is on %v, embedded %v; want %v, true", cfg.ProviderLog, h.a.backend.Machine().Embedded, want)
+		}
+		h.click("Enable provider log")
+		h.tt.Advance(time.Second)
 	}
 }

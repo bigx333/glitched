@@ -50,9 +50,9 @@ func (m *Manager) Inspect() {
 }
 
 // Configure changes engine.json, and restarts the engine embedded here to
-// apply the change, except a change to the child limits alone, which it
-// applies at once. An engine another process runs applies it when it next
-// starts.
+// apply the change, except a change to the child limits, idle
+// compaction, keep awake or the provider log alone, which it applies at
+// once. An engine another process runs applies it when it next starts.
 func (m *Manager) Configure(change func(*daemon.Config)) error {
 	var was daemon.Config
 	cfg, err := daemon.Edit(m.cfg.Dir, func(cfg *daemon.Config) error {
@@ -80,6 +80,7 @@ func (m *Manager) Configure(change func(*daemon.Config)) error {
 	was.Children = cfg.Children
 	was.CompactBeforeExpire = cfg.CompactBeforeExpire
 	was.KeepAwake = cfg.KeepAwake
+	was.ProviderLog = cfg.ProviderLog
 	if reflect.DeepEqual(cfg, was) && m.embedded != nil {
 		applyLive(m.embedded, cfg)
 	} else {
@@ -173,4 +174,5 @@ func applyLive(d *daemon.Daemon, cfg daemon.Config) {
 	d.SetLimits(cfg.Children)
 	d.SetIdleCompaction(cfg.CompactBeforeExpireEnabled())
 	d.SetKeepAwake(cfg.KeepAwakeEnabled())
+	d.SetProviderLog(cfg.ProviderLog)
 }

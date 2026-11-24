@@ -12,6 +12,7 @@ import (
 	"glitched/internal/client"
 	"glitched/internal/daemon"
 	eng "glitched/internal/engine"
+	"glitched/internal/providerlog"
 )
 
 // pairing is a token the This machine page minted, shown until dismissed:
@@ -146,6 +147,22 @@ func (a *app) agentsCard(c *ui.Context, m client.Machine) {
 			if ui.Switch(c.Key("keep-awake"), &awakeOn).Label("Enable keep awake while agents work").Changed() {
 				v := awakeOn
 				a.configure(func(cfg *daemon.Config) { cfg.KeepAwake = &v })
+			}
+		})
+		logOn := m.Config.ProviderLog
+		desc := "Keep the shape of what each thread's agent CLI reads and writes (which messages, fields and sizes, never their text), for Reveal provider log in the thread's menu. Up to 30 MB a thread and 512 MB in all, for 14 days."
+		switch {
+		case !providerlog.Supported:
+			desc = "This system can't keep the provider log to its folder, so the engine keeps none."
+		case !m.Embedded && m.Engine != nil && m.Engine.ProviderLog != logOn && m.Engine.ProviderLog:
+			desc = "glitched serve keeps the provider log on."
+		case !m.Embedded && m.Engine != nil && m.Engine.ProviderLog != logOn:
+			desc = "glitched serve keeps the provider log off."
+		}
+		settingRow(c, "Provider log", desc, func() {
+			if ui.Switch(c.Key("provider-log"), &logOn).Label("Enable provider log").Disabled(!providerlog.Supported).Changed() {
+				v := logOn
+				a.configure(func(cfg *daemon.Config) { cfg.ProviderLog = v })
 			}
 		})
 		if !m.Embedded && m.Engine != nil {

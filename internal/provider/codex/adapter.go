@@ -136,7 +136,7 @@ func (a *Adapter) probe(ctx context.Context) (provider.Info, error) {
 		return provider.Info{}, err
 	}
 	home, _ := os.UserHomeDir()
-	p, err := launch(ctx, prog, home, "probe-"+api.NewID().String())
+	p, err := launch(ctx, prog, home, "probe-"+api.NewID().String(), nil)
 	if err != nil {
 		return provider.Info{}, err
 	}
@@ -159,7 +159,7 @@ func (a *Adapter) DefaultModel(ctx context.Context, workspace string) (string, e
 	if err != nil {
 		return "", err
 	}
-	p, err := launch(ctx, prog, workspace, "probe-"+api.NewID().String())
+	p, err := launch(ctx, prog, workspace, "probe-"+api.NewID().String(), nil)
 	if err != nil {
 		return "", err
 	}
@@ -195,7 +195,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	}
 	lost, refused := false, ""
 	if !ok {
-		if p, err = launch(ctx, prog, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String()); err != nil {
+		if p, err = launch(ctx, prog, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String(), spec.Tap); err != nil {
 			return nil, err
 		}
 		err = p.signedIn(ctx)

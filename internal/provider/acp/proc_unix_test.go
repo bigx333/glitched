@@ -204,5 +204,5 @@ func TestATestCantRunARealAgent(t *testing.T) {
 			t.Fatalf("recovered %v", r)
 		}
 	}()
-	launch(context.Background(), Antigravity, provider.Program{Path: "/bin/sh"}, t.TempDir(), "test-"+api.NewID().String(), nil)
+	launch(context.Background(), Antigravity, provider.Program{Path: "/bin/sh"}, t.TempDir(), "test-"+api.NewID().String(), nil, nil)
 }

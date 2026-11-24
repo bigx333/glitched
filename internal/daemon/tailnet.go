@@ -42,6 +42,7 @@ type endpoint struct {
 func (e endpoint) Info(ctx context.Context) (api.Environment, error) {
 	env, err := e.Host.Info(ctx)
 	if err == nil {
+		env.ProviderLog = e.Host.ProviderLog()
 		env.Tailnet = e.d.tailnet(ctx)
 		if e.remote {
 			env.Tailnet.AuthURL = ""

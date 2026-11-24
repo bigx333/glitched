@@ -1,0 +1,12 @@
+{"argv":["-p","--verbose","--input-format","stream-json","--output-format","stream-json","--include-partial-messages","--permission-mode","default","--permission-prompt-tool","stdio","--disallowedTools","AskUserQuestion","--model","haiku","--session-id","01a1a7b6-2ac8-8de3-8157-92cc1294747b"]}
+{"sent":{"request":{"subtype":"initialize"},"request_id":"glitched-init","type":"control_request"}}
+{"recv":{"response":{"pending_permission_requests":[],"pending_user_dialog_requests":[],"request_id":"glitched-init","response":{},"subtype":"success"},"type":"control_response"}}
+{"sent":{"message":{"content":"My key is probe-value-0123.","role":"user"},"parent_tool_use_id":null,"session_id":"","type":"user"}}
+{"recv":{"claude_code_version":"2.1.317","cwd":"$WORKSPACE","model":"claude-haiku-5-5","permissionMode":"default","session_id":"01a1a7b6-2ac8-8de3-8157-92cc1294747b","subtype":"init","type":"system","uuid":"83113e76-1640-4dfb-a20c-c921269629b0"}}
+{"recv":{"api_message_id":"msg_provider_log","event":{"content_block":{"text":"","type":"text"},"index":0,"type":"content_block_start"},"parent_tool_use_id":null,"session_id":"01a1a7b6-2ac8-8de3-8157-92cc1294747b","type":"stream_event","uuid":"6a1c0b2e-0f3d-4a51-9c47-2b8e1f0d7a01"}}
+{"recv":{"api_message_id":"msg_provider_log","event":{"delta":{"text":"The key is probe-va","type":"text_delta"},"index":0,"type":"content_block_delta"},"parent_tool_use_id":null,"session_id":"01a1a7b6-2ac8-8de3-8157-92cc1294747b","type":"stream_event","uuid":"6a1c0b2e-0f3d-4a51-9c47-2b8e1f0d7a02"}}
+{"recv":{"api_message_id":"msg_provider_log","event":{"delta":{"text":"lue-0123.","type":"text_delta"},"index":0,"type":"content_block_delta"},"parent_tool_use_id":null,"session_id":"01a1a7b6-2ac8-8de3-8157-92cc1294747b","type":"stream_event","uuid":"6a1c0b2e-0f3d-4a51-9c47-2b8e1f0d7a03"}}
+{"recv":{"message":{"content":[{"text":"The key is probe-value-0123.","type":"text"}],"id":"msg_provider_log","model":"claude-haiku-5-5","role":"assistant","stop_reason":null,"type":"message"},"parent_tool_use_id":null,"session_id":"01a1a7b6-2ac8-8de3-8157-92cc1294747b","type":"assistant","uuid":"6a1c0b2e-0f3d-4a51-9c47-2b8e1f0d7a04"}}
+{"stderr":"warning: slow network"}
+{"stderr":"warning: saw probe-value-0123"}
+{"exit":1}

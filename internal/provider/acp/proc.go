@@ -65,6 +65,7 @@ type proc struct {
 	conn    *acpsdk.ClientSideConnection
 	stdin   *os.File
 	stderr  *tail
+	tap     provider.Tap  // sees each line on the agent's pipes, for every run of it
 	heard   chan struct{} // closed once stderr is read to its end
 	read    chan struct{} // closed once stdout is read to its end and let go
 	// release has the bridge from stdout let go now, sending the SDK
@@ -110,9 +111,9 @@ var (
 )
 
 // launch starts the agent in dir under mark, with args after the
-// profile's, and initializes it. ctx bounds only the start; the process
-// lives until Close.
-func launch(ctx context.Context, profile Profile, prog provider.Program, dir, mark string, args []string) (*proc, error) {
+// profile's and tap seeing its lines, and initializes it. ctx bounds only
+// the start; the process lives until Close.
+func launch(ctx context.Context, profile Profile, prog provider.Program, dir, mark string, args []string, tap provider.Tap) (*proc, error) {
 	cmd := exec.Command(prog.Path, slices.Concat(profile.Args, prog.Args, args)...)
 	if err := guard(prog.Path); err != nil {
 		return nil, err
@@ -128,7 +129,7 @@ func launch(ctx context.Context, profile Profile, prog provider.Program, dir, ma
 	}
 	cmd.Env = prog.Environ(append(cmd.Env, procEnv+"="+mark))
 	cmd.SysProcAttr = sweep.SysProcAttr()
-	p := &proc{profile: profile, cmd: cmd, mark: mark, stderr: &tail{}, heard: make(chan struct{}), read: make(chan struct{}), reaped: make(chan struct{}), listed: make(chan struct{})}
+	p := &proc{profile: profile, cmd: cmd, mark: mark, stderr: &tail{}, tap: tap, heard: make(chan struct{}), read: make(chan struct{}), reaped: make(chan struct{}), listed: make(chan struct{})}
 	// The adapter's own pipes, unlike exec's, leave Wait nothing to wait
 	// for once the agent exits, whoever else still holds them.
 	inR, inW, err1 := os.Pipe()
@@ -162,7 +163,7 @@ func launch(ctx context.Context, profile Profile, prog provider.Program, dir, ma
 	wire := openWire()
 	go p.watchStderr(errR, wire)
 	in := p.readStdout(outR, wire)
-	p.conn = acpsdk.NewClientSideConnection(p, tap{inW, wire, ">> ", p.wrote}, in)
+	p.conn = acpsdk.NewClientSideConnection(p, tapped{inW, wire, ">> ", tap, p.wrote}, in)
 	p.conn.SetLogger(slog.New(redacted{slog.Default().Handler()}))
 	// The SDK stops reading at a line it can't take, as one past its size
 	// limit: the bridge to it lets go, so the agent's stdout closes.
@@ -520,6 +521,7 @@ func (p *proc) readStdout(stdout *os.File, wire io.Writer) *io.PipeReader {
 			line, err := lines.ReadBytes('\n')
 			if len(line) > 0 {
 				wire.Write(append([]byte("<< "), line...))
+				p.tap.Line(provider.ACP, provider.Stdout, line)
 				if t := bytes.TrimSpace(line); len(t) > 0 && t[0] != '{' {
 					p.notice(string(t))
 				} else if _, werr := w.Write(line); werr != nil {
@@ -547,6 +549,7 @@ func (p *proc) watchStderr(stderr *os.File, wire io.Writer) {
 		line, err := lines.ReadBytes('\n')
 		if len(line) > 0 {
 			wire.Write(append([]byte("!! "), line...))
+			p.tap.Line(provider.ACP, provider.Stderr, line)
 			p.stderr.Write(line)
 			p.notice(string(bytes.TrimSpace(line)))
 		}
