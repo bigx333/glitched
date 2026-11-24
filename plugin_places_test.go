@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -162,6 +163,55 @@ func TestAPageAsksItsServiceWhichRunsGit(t *testing.T) {
 		}
 		return n >= 2
 	})
+}
+
+// A thread opened tells nothing of what it had, its messages or its
+// files' edits, though a change the manager posts comes before its
+// transcript does: the first look is at what the engine said of it.
+func TestAThreadOpenedTellsNothingItHad(t *testing.T) {
+	dir := tempDir(t)
+	dst := filepath.Join(plugins.Dir(dir), "ears")
+	os.MkdirAll(dst, 0o755)
+	os.WriteFile(filepath.Join(dst, "plugin.json"), []byte(`{"id": "ears", "name": "Ears", "main": "index.js",
+		"capabilities": ["ui.place", "messages:read", "threads:read"], "glitched": {"events": ["thread.message", "thread.files.changed"], "places": [{"id": "count", "at": "sidebar.footer"}]}}`), 0o644)
+	os.WriteFile(filepath.Join(dst, "index.js"), []byte(`
+		export function init() { return { state: [] } }
+		export function update({ state, event }) {
+			if (event.type === "thread.message") return { state: [...state, event.data.role + ":" + event.data.text] }
+			if (event.type === "thread.files.changed") return { state: [...state, ...event.data.files.map((f) => "edited:" + f)] }
+			return {}
+		}
+		export function place({ state, items }) { return items.map(() => ({ type: "text", text: "heard " + state.length + " " + state.join(" | ") })) }`), 0o644)
+	signAsOwn(t, dir, dst)
+	grant(t, dir, `{"grants": {"ears": ["messages:read", "threads:read"]}}`)
+	d := engine(t, daemon.Config{Dir: dir}, fake.New(twoEdits))
+	seed(t, d, gitWorkspace(t), "Both", "Edit both.")
+	h := start(t, dir)
+	h.until("the footer", func() bool { return h.tt.HasText("heard 0") })
+	// The thread opens, and a change the manager posts of something else
+	// comes before its transcript does.
+	h.a.select_(h.thread("Both"))
+	h.a.changed()
+	// Till the plugin heard all it was told and drew it: a frame after
+	// each post, as the window's Update draws one.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		idle := h.a.plugins.Idle()
+		if h.p.run() {
+			h.tt.Frame()
+			continue
+		}
+		if idle && h.tt.HasText("Edited both.") && len(changedFiles(entriesOf(h.a.current()))) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the transcript never showed: %q", h.tt.Texts())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !h.tt.HasText("heard 0") {
+		t.Fatalf("told of what the thread had as it opened: %q", h.tt.Texts())
+	}
 }
 
 // A plugin that hears thread.message is told of each new message of the

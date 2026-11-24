@@ -366,8 +366,10 @@ func (a *app) emitThreadChanges() {
 			a.plugins.Emit("thread.changed", func(string) any { return map[string]any{"id": id, "deleted": true} })
 		}
 	}
+	// The first look at a thread is at a transcript the engine filled: one
+	// just opened holds nothing yet, and what comes in it isn't new.
 	t, ok := a.find(a.selected)
-	if !ok || t.Transcript == nil {
+	if !ok || t.Transcript == nil || t.Transcript.Cursor == (api.Cursor{}) {
 		return
 	}
 	// Messages by their keys, which a message keeps as more come: the
