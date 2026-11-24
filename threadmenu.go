@@ -49,14 +49,18 @@ func (a *app) threadMenu(c *ui.Context, m *ui.Menu, t thread, cat category) {
 	if m.Item("Fork").Disabled(none).Chosen() {
 		a.fork(t, api.ID{}, t.View.Model)
 	}
-	others := slices.DeleteFunc(a.modelFamilies(), func(f family) bool { return f.provider == t.View.Model.Provider })
-	m.Submenu("Continue on", func(m *ui.Menu) {
-		for _, f := range others {
-			if m.Item(f.name).Chosen() {
-				a.fork(t, api.ID{}, api.ModelRef{Provider: f.provider})
+	// The providers the picker knows are this machine's engine's, where a
+	// fork of a thread here runs.
+	if t.local() {
+		others := slices.DeleteFunc(a.modelFamilies(), func(f family) bool { return f.provider == t.View.Model.Provider })
+		m.Submenu("Continue on", func(m *ui.Menu) {
+			for _, f := range others {
+				if m.Item(f.name).Chosen() {
+					a.fork(t, api.ID{}, api.ModelRef{Provider: f.provider})
+				}
 			}
-		}
-	}).Disabled(none || len(others) == 0)
+		}).Disabled(none || len(others) == 0)
+	}
 	if t.local() {
 		m.Separator()
 		if m.Item("Copy branch name").Chosen() {

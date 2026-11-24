@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -481,8 +482,7 @@ func (h *Host) handoff(ctx context.Context, t engine.Thread, to api.ID, frame ha
 	head, tail := frame.head, frame.tail
 	// The turns get what the block's own text leaves, its note at its
 	// longest included.
-	room := handoffCap - len(fmt.Sprintf(head, fmt.Sprintf(left, len(t.Runs)))) - len(tail)
-	end := slices.IndexFunc(t.Runs, func(run engine.Run) bool { return run.ID == to })
+	room := handoffCap - len(fmt.Sprintf(head, fmt.Sprintf(left, math.MaxInt32))) - len(tail)
 	clip := func(s string, n int) string {
 		if len(s) <= n {
 			return s
@@ -491,37 +491,53 @@ func (h *Host) handoff(ctx context.Context, t engine.Thread, to api.ID, frame ha
 	}
 	var turns []string
 	size, omitted := 0, 0
-	for i := end; i >= 0; i-- {
-		run := t.Runs[i]
-		if run.Silent || run.Dropped {
-			continue
-		}
-		if omitted > 0 {
-			omitted++
-			continue
-		}
-		var asked []string
-		for _, m := range t.Queue {
-			if m.Run == run.ID && m.State == engine.QueueDispatched {
-				asked = append(asked, m.Text)
+	// A fork's conversation goes on from its source's, back to the first
+	// thread of its line that is no fork.
+	for {
+		end := slices.IndexFunc(t.Runs, func(run engine.Run) bool { return run.ID == to })
+		for i := end; i >= 0; i-- {
+			run := t.Runs[i]
+			if run.Silent || run.Dropped {
+				continue
 			}
+			if omitted > 0 {
+				omitted++
+				continue
+			}
+			var asked []string
+			for _, m := range t.Queue {
+				if m.Run == run.ID && m.State == engine.QueueDispatched {
+					asked = append(asked, m.Text)
+				}
+			}
+			reply, err := h.store.RunReply(ctx, t.ID, run.ID)
+			if err != nil {
+				return "", err
+			}
+			said, reply := strings.Join(asked, "\n\n"), strings.TrimSpace(reply)
+			if len(turns) == 0 {
+				said = clip(said, room/2)
+				reply = clip(reply, room-len(shape)-len(said))
+			}
+			turn := fmt.Sprintf(shape, said, reply)
+			if len(turns) > 0 && size+len(turn) > room {
+				omitted++
+				continue
+			}
+			size += len(turn)
+			turns = append(turns, turn)
 		}
-		reply, err := h.store.RunReply(ctx, t.ID, run.ID)
+		f, err := h.store.Origin(ctx, t.ID)
 		if err != nil {
 			return "", err
 		}
-		said, reply := strings.Join(asked, "\n\n"), strings.TrimSpace(reply)
-		if len(turns) == 0 {
-			said = clip(said, room/2)
-			reply = clip(reply, room-len(shape)-len(said))
+		if f == nil {
+			break
 		}
-		turn := fmt.Sprintf(shape, said, reply)
-		if len(turns) > 0 && size+len(turn) > room {
-			omitted++
-			continue
+		if t, err = h.forkSource(ctx, *f); err != nil {
+			return "", err
 		}
-		size += len(turn)
-		turns = append(turns, turn)
+		to = f.Run
 	}
 	note := ""
 	if omitted > 0 {

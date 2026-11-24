@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"log/slog"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -48,24 +49,37 @@ func (h *Host) fork(ctx context.Context, thread api.ID, b engine.StartTurn, f ap
 	return rw.Session, &provider.Rewound{From: f.Session, At: rw.At}
 }
 
-// forkHandoff is the turns up to f.Run of f's thread, as its
-// conversation held them when the fork was made, for a fork's first
-// message.
+// forkHandoff is the turns up to f.Run of f's thread, and of the line
+// it forks in turn, for a fork's first message.
 func (h *Host) forkHandoff(ctx context.Context, f api.Forked) (string, error) {
-	src, err := h.store.Thread(ctx, f.Thread)
+	src, err := h.forkSource(ctx, f)
 	if err != nil {
 		return "", err
+	}
+	return h.handoff(ctx, src, f.Run, forkFrame)
+}
+
+// forkSource is f's thread as its conversation was when the fork was
+// made: the runs it held then, and none since.
+func (h *Host) forkSource(ctx context.Context, f api.Forked) (engine.Thread, error) {
+	src, err := h.store.Thread(ctx, f.Thread)
+	if err != nil {
+		return engine.Thread{}, err
 	}
 	src.Runs = slices.Clone(src.Runs)
 	for i := range src.Runs {
 		src.Runs[i].Dropped = !slices.Contains(f.Runs, src.Runs[i].ID)
 	}
-	return h.handoff(ctx, src, f.Run, forkFrame)
+	return src, nil
 }
+
+// command is a slash command's first word: a slash, then a name with no
+// slash in it, as /status or /review:pr, not a path.
+var command = regexp.MustCompile(`^/[^/\s]+(\s|$)`)
 
 // slashCommand is whether text is a command of the agent's, which a
 // handoff ahead of it would make words: a fork's first run that sends
 // one hands the turns over with the next.
 func slashCommand(text string) bool {
-	return strings.HasPrefix(strings.TrimSpace(text), "/")
+	return command.MatchString(strings.TrimSpace(text))
 }

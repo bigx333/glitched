@@ -900,11 +900,13 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	if err != nil {
 		return nil, err
 	}
-	var forked *api.Forked
-	if rewound == nil {
-		if forked, err = h.store.Forked(ctx, thread); err != nil {
-			return nil, err
-		}
+	// A fork whose runs have yet to take its source up does so as a
+	// rewind's next run does; one whose first message was a command of
+	// the agent's has a conversation of its own already, which the next
+	// run goes on in, handed the source's turns.
+	forked, err := h.store.Forked(ctx, thread)
+	if err != nil {
+		return nil, err
 	}
 	if (rewound != nil || forked != nil) && b.ResumeOnly {
 		return nil, errCompactNotDue
@@ -912,7 +914,7 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	switch {
 	case rewound != nil:
 		spec.Rewound = &provider.Rewound{From: rewound.From, At: rewound.At}
-	case forked != nil:
+	case forked != nil && t.Session == "":
 		spec.Session, spec.Rewound = h.fork(ctx, thread, b, *forked)
 	}
 	spec.Skills = h.skills.stage(thread, b.Workspace, t.Project)
@@ -945,7 +947,7 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		if native {
 			took.Rewound = api.RewindNative
 		}
-		if took.Rewound == api.RewindPortable {
+		if took.Rewound == api.RewindPortable || forked != nil {
 			var kept string
 			if kept, err = h.handoff(ctx, t, rewound.To.ID, rewindFrame); err == nil {
 				text = kept + text
