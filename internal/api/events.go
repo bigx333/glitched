@@ -60,9 +60,13 @@ type MessageQueued struct {
 }
 
 // MessageClaimed binds a message to a live run it will be steered into.
+// With Steer, the message waited its turn and is steered in now: it takes
+// the steer's mode, so the run's start doesn't count it as a wake that
+// went in with its first prompt.
 type MessageClaimed struct {
-	Message ID `json:"message"`
-	Run     ID `json:"run"`
+	Message ID   `json:"message"`
+	Run     ID   `json:"run"`
+	Steer   bool `json:"steer,omitempty"`
 }
 
 type MessageDispatched struct {

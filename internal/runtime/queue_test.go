@@ -2,9 +2,11 @@ package runtime_test
 
 import (
 	"slices"
+	"sync/atomic"
 	"testing"
 
 	"glitched/internal/api"
+	"glitched/internal/provider"
 	"glitched/internal/provider/fake"
 )
 
@@ -70,4 +72,42 @@ func TestTheQueueIsManagedAcrossACrash(t *testing.T) {
 		t.Fatalf("the log has %d moves and no edit of a; want the edit and three moves", count(evs, "message.moved"))
 	}
 	assertReplay(t, n.st)
+}
+
+// A queued message steered in while the run still starts goes to the
+// agent as a steer once it has started, ready or held alike: the start
+// doesn't take it for a wake that went in with its first prompt.
+func TestASteeredQueuedMessageReachesARunStillStarting(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode api.DispatchMode
+	}{{"ready", api.AfterActive}, {"held", api.Defer}} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newGated(fake.Turn(true))
+			n := start(t, dbPath(t), g)
+			id := newThread(t, n.h)
+			entered, release := make(chan struct{}, 1), make(chan struct{})
+			var steers atomic.Int32
+			g.setGate(func(_ api.ID, a provider.Action) <-chan struct{} {
+				switch a.(type) {
+				case provider.Start:
+					entered <- struct{}{}
+					return release
+				case provider.Steer:
+					steers.Add(1)
+				}
+				return nil
+			})
+			submit(t, n.h, id, dispatch("start", api.StartNow))
+			<-entered
+			queued := submit(t, n.h, id, dispatch("urgent", tc.mode)).Command
+			submit(t, n.h, id, api.QueueSteer{Message: queued})
+			close(release)
+			until(t, n.h, id, "the steer delivered", func(api.Thread) bool { return count(events(t, n.h, id), "message.dispatched") > 0 })
+			if got := steers.Load(); got != 1 {
+				t.Fatalf("the agent got %d steers; want the queued message steered in once", got)
+			}
+			assertReplay(t, n.st)
+		})
+	}
 }
