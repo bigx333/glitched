@@ -574,13 +574,15 @@ const sessionAnswer = `{"allow":true,"session":true}`
 // Where Codex offers to allow such calls for its session, the card offers
 // it too, and the answer goes back in Codex's own words: acceptForSession
 // for a command or a file change, the session scope for more access, and
-// Codex's own option for an MCP tool.
+// Codex's own option or persist for an MCP tool.
 func TestTheCardOffersCodexsSessionGrant(t *testing.T) {
 	for scenario, want := range map[string]string{
-		"network":        `{"decision":"acceptForSession"}`,
-		"file-no-reason": `{"decision":"acceptForSession"}`,
-		"permissions":    `{"permissions":{"network":{"enabled":true}},"scope":"session"}`,
-		"mcp-approval":   `{"answers":{"mcp_tool_call_approval_call-1":{"answers":["Allow for this session"]}}}`,
+		"network":                    `{"decision":"acceptForSession"}`,
+		"file-no-reason":             `{"decision":"acceptForSession"}`,
+		"permissions":                `{"permissions":{"network":{"enabled":true}},"scope":"session"}`,
+		"mcp-approval":               `{"answers":{"mcp_tool_call_approval_call-1":{"answers":["Allow for this session"]}}}`,
+		"elicitation-session":        `{"_meta":{"persist":"session"},"action":"accept","content":{}}`,
+		"elicitation-session-always": `{"_meta":{"persist":"session"},"action":"accept","content":{}}`,
 	} {
 		body, _, answer := answerRun(t, scenario, sessionAnswer)
 		if !offersSession(body) {
@@ -595,10 +597,10 @@ func TestTheCardOffersCodexsSessionGrant(t *testing.T) {
 // Where Codex offers no session grant the card offers none, an answer for
 // the session fails, and Codex still gets the user's one answer: a
 // command whose decisions leave it out, a file change Codex asks about
-// with a reason, which it would ask about again, an MCP tool without the
-// option, and an elicitation.
+// with a reason, even an empty one, which it would ask about again, an MCP tool without the
+// option or the persist, and an elicitation.
 func TestNoSessionGrantWhereCodexOffersNone(t *testing.T) {
-	for _, scenario := range []string{"command", "file", "mcp-approval-once", "elicitation"} {
+	for _, scenario := range []string{"command", "file", "file-empty-reason", "mcp-approval-once", "elicitation", "elicitation-always"} {
 		a, log := fake(t, scenario)
 		g := open(t, a, spec(t))
 		do(t, g, provider.Start{Text: "go"})
