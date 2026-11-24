@@ -112,7 +112,7 @@ func (w *walker) file(p string) error {
 	if err != nil || !os.SameFile(was, is) || !is.Mode().IsRegular() {
 		return changed
 	}
-	if st, ok := is.Sys().(*syscall.Stat_t); !ok || st.Nlink > 1 {
+	if n, err := links(f, is); err != nil || n > 1 {
 		return fmt.Errorf("%s in it has another name elsewhere, a hard link, so Glitched can't tell whose it is.", rel)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, int64(maxBytes-w.bytes+1)))
