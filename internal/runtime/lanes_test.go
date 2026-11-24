@@ -376,3 +376,64 @@ func TestASteerDuringAStopIsRefused(t *testing.T) {
 	}
 	assertReplay(t, n.st)
 }
+
+// lateStart opens the fake's agents to take their Start only once the
+// start's context ends, as a CLI that already read the prompt does.
+type lateStart struct {
+	*fake.Adapter
+	entered    chan struct{}
+	once       sync.Once
+	mu         sync.Mutex
+	interrupts int
+}
+
+func (s *lateStart) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
+	g, err := s.Adapter.Open(ctx, spec)
+	return &lateStartAgent{Agent: g, s: s}, err
+}
+
+func (s *lateStart) interrupted() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.interrupts
+}
+
+type lateStartAgent struct {
+	provider.Agent
+	s *lateStart
+}
+
+func (g *lateStartAgent) Do(ctx context.Context, act provider.Action) error {
+	switch act.(type) {
+	case provider.Start:
+		g.s.once.Do(func() { close(g.s.entered) })
+		<-ctx.Done()
+		return g.Agent.Do(context.Background(), act)
+	case provider.Interrupt:
+		g.s.mu.Lock()
+		g.s.interrupts++
+		g.s.mu.Unlock()
+	}
+	return g.Agent.Do(ctx, act)
+}
+
+// A stop cancels a start in flight, but a start can take anyway: the stop
+// then goes to the agent it gave, and the run ends on that agent's word.
+func TestAStopReachesAStartThatTookAfterIt(t *testing.T) {
+	h := &heard{}
+	ad := &lateStart{Adapter: fake.New(fake.Turn(true)), entered: make(chan struct{})}
+	n := awakeHost(t, dbPath(t), ad, h)
+	thread := newThread(t, n.h)
+	submit(t, n.h, thread, dispatch("go", api.StartNow))
+	<-ad.entered
+	submit(t, n.h, thread, api.TurnInterrupt{})
+	h.until(t, thread, "the stopped run's end", idle)
+	evs := events(t, n.h, thread)
+	if got := outcomes(t, n.h, thread); !slices.Equal(got, []api.Outcome{api.OutcomeInterrupted}) || ad.interrupted() != 1 || count(evs, "turn.signalled") != 1 {
+		t.Fatalf("outcomes %v after %d interrupts reached the agent, %d turn.signalled; want interrupted after 1, signalled once", got, ad.interrupted(), count(evs, "turn.signalled"))
+	}
+	if got := h.all(); !slices.Equal(got, []bool{true, false}) {
+		t.Fatalf("told %v once the run ended, want [true false]", got)
+	}
+	assertReplay(t, n.st)
+}

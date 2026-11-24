@@ -91,6 +91,12 @@ type liveRun struct {
 	stopSteering context.CancelFunc
 	agent        provider.Agent // nil until the start succeeds
 	cut          bool           // the run was cut short as its agent opened, which may have set it to work
+	// start is the start's own context: a stop cancels it, and the run
+	// lives on, as the start may take anyway. opened is closed once the
+	// start has returned, with an agent or not.
+	start     context.Context
+	stopStart context.CancelFunc
+	opened    chan struct{}
 	// started is closed once the run's start is recorded: its agent may
 	// call back through glitched mcp before then.
 	started chan struct{}
@@ -330,7 +336,7 @@ func (h *Host) follow(e api.Event) {
 		if lr := h.runs[b.Run]; lr != nil {
 			lr.stopSteering()
 			if lr.agent == nil {
-				lr.cancel()
+				lr.stopStart()
 			}
 		}
 	case api.TurnUncertain:
@@ -546,7 +552,7 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 		h.tellAwake(was)
 		h.mu.Unlock()
 		var ag provider.Agent
-		ag, err = h.open(lr.ctx, t, b)
+		ag, err = h.open(lr.start, t, b)
 		h.mu.Lock()
 		if err == nil {
 			lr.agent = ag
@@ -558,11 +564,12 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 		h.opening--
 		h.tellAwake(was)
 		h.mu.Unlock()
+		close(lr.opened)
 		if err == nil {
 			return engine.Started{Run: b.Run}, true
 		}
 		outcome := api.OutcomeFailed
-		if lr.ctx.Err() != nil || errors.Is(err, errCompactNotDue) {
+		if lr.start.Err() != nil || errors.Is(err, errCompactNotDue) {
 			outcome = api.OutcomeInterrupted
 		}
 		h.forget(b.Run)
@@ -786,16 +793,32 @@ func (h *Host) act(run api.ID, a provider.Action) error {
 	h.mu.Lock()
 	lr := h.runs[run]
 	h.mu.Unlock()
-	if lr == nil || lr.agent == nil {
+	if lr == nil {
 		return errNoAgent
 	}
 	parent := lr.steering
-	if _, ok := a.(provider.Interrupt); ok {
+	_, stop := a.(provider.Interrupt)
+	if stop {
 		parent = lr.ctx
 	}
 	ctx, cancel := context.WithTimeout(parent, callTimeout)
 	defer cancel()
-	return lr.agent.Do(ctx, a)
+	// A stop that finds the agent still opening goes to the agent the
+	// start gives, if it gives one: the stop cancelled the start, but a
+	// start can take anyway.
+	if stop && lr.opened != nil {
+		select {
+		case <-lr.opened:
+		case <-ctx.Done():
+		}
+	}
+	h.mu.Lock()
+	ag := lr.agent
+	h.mu.Unlock()
+	if ag == nil {
+		return errNoAgent
+	}
+	return ag.Do(ctx, a)
 }
 
 // closeAgent retries a failed close until it succeeds or the host closes,
@@ -816,6 +839,10 @@ func (h *Host) track(run api.ID, provider string, ag provider.Agent) *liveRun {
 	}
 	lr.ctx, lr.cancel = context.WithCancel(h.ctx)
 	lr.steering, lr.stopSteering = context.WithCancel(lr.ctx)
+	lr.start, lr.stopStart = context.WithCancel(lr.ctx)
+	if ag == nil {
+		lr.opened = make(chan struct{})
+	}
 	h.mu.Lock()
 	h.runs[run] = lr
 	h.agents[lr] = true
