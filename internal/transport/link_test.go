@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -84,15 +85,26 @@ func TestALinksSocketMayCallOnlyItsMethods(t *testing.T) {
 	if err := c.call(ctx, "child.reply", api.ChildReplyQuery{Thread: api.NewID(), Run: api.NewID()}, &said); err != nil || said.Text != "said" {
 		t.Fatalf("child.reply on a link's socket: %+v %v, want the endpoint's answer with the link in its ctx", said, err)
 	}
-	for _, name := range []string{"read", "submit", "subscribe", "child.reply", "credentials.provide", "credentials.forget", "projects.clone", "provider.launch", "plugins.call", "skills.put", "hub.events", "hub.append"} {
+	allowed := []string{"info", "read", "submit", "subscribe", "child.reply"}
+	refused := []string{
+		"plugins.tools", "plugins.tool", "plugins.call",
+		"provider.commands", "provider.describe", "provider.default", "provider.ask", "provider.launches", "provider.launch",
+		"providers", "provider.update", "credentials.ask", "credentials.provide", "credentials.forget",
+		"projects.folders", "projects.repos", "projects.clone",
+		"skills.list", "skills.sync", "skills.put", "skills.drop",
+		"hub.append", "hub.acked", "hub.events", "hub.follow",
+	}
+	for _, name := range slices.Concat(allowed, refused) {
 		if methods[name] == nil {
 			t.Fatalf("the server registers no %s; the test means every role to be set", name)
 		}
 	}
 	for name := range methods {
-		if linkMethods[name] {
-			continue
+		if !slices.Contains(allowed, name) && !slices.Contains(refused, name) {
+			t.Errorf("the server registers %s, which this test neither allows nor refuses a link; name it in one list", name)
 		}
+	}
+	for _, name := range refused {
 		if err := c.call(ctx, name, struct{}{}, nil); !errors.Is(err, api.ErrNotAllowed) {
 			t.Errorf("%s on a link's socket: %v, want api.ErrNotAllowed", name, err)
 		}
