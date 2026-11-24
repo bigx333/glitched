@@ -280,6 +280,9 @@ type app struct {
 	showDiff     bool
 	showTerminal bool
 	sidebarWidth float32
+	// sidebarShown is the sidebar's width as this frame draws it: as
+	// dragged, but never leaving the chat less than its least width.
+	sidebarShown float32
 	// sidebarOpen is how far the sidebar has slid in this frame, from 0
 	// to 1; sidebarJump skips the slide, for ⌘B.
 	sidebarOpen float32
@@ -1019,8 +1022,10 @@ func (a *app) view(c *ui.Context) {
 	}
 	// Of this frame's sidebar, so that what lays itself out beside it, as
 	// the header, fits the room it has in this frame.
+	a.sidebarShown = a.sidebarWidth
 	if w, _ := c.Size(); w > 0 {
-		a.roomBeside = w - a.sidebarWidth*a.sidebarOpen
+		a.sidebarShown = max(min(a.sidebarWidth, w-minChatWidth), minSidebarWidth)
+		a.roomBeside = w - a.sidebarShown*a.sidebarOpen
 	}
 	root.Children(func() {
 		a.sidebarFrame(c)

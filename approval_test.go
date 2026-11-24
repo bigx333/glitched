@@ -443,9 +443,8 @@ func TestAllowForThisSession(t *testing.T) {
 }
 
 // A tall card that offers Allow for this session, at the narrowest window
-// beside the widest sidebar, where the chat runs past the window's edge,
-// draws its header in the pane and every answer whole in the window: as
-// wide as at a wide window.
+// beside the widest sidebar, draws its header in the pane and every
+// answer whole in the window: as wide as at a wide window.
 func TestATallSessionCardFitsTheNarrowestWindow(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{"command": "go test ./sample\n" + strings.Repeat("go env\n", 15), "cwd": "/tmp/fixture", "reason": "Check local change", "session": true})
 	h, _ := asking(t, []provider.Event{provider.RequestOpened{ID: "request", Kind: api.KindApproval, Body: body}})
@@ -494,6 +493,50 @@ func TestTwoTallSessionCardsKeepTheNewestInThePane(t *testing.T) {
 	}
 	if at := h.a.answerAt; at.request != newest || at.row.H == 0 || at.row.Y+at.row.H > h.a.paneAt.Y+h.a.paneAt.H {
 		t.Errorf("the newest card's answers at %+v, past the pane at %+v", at.row, h.a.paneAt)
+	}
+}
+
+// At the narrowest window beside the widest sidebar dragged, the chat
+// keeps its least width inside the window: the waiting card, its answers
+// and Stop are drawn whole in the window and the card in its pane. In the
+// window as the Mac drew it, 514 points tall with its title bar, the card
+// is read whole, and Allow for this session, clicked, sends the session
+// grant; at the least height asked for, its last line is under its texts'
+// box, which a click reads on to first.
+func TestTheNarrowestWindowKeepsTheCardInIt(t *testing.T) {
+	for _, size := range [][2]int{{760, 514}, {760, 480}} {
+		t.Run(fmt.Sprint(size[0], "x", size[1]), func(t *testing.T) {
+			h, th := asking(t, []provider.Event{provider.RequestOpened{ID: "request", Kind: api.KindApproval,
+				Body: json.RawMessage(`{"command":"go test ./sample","cwd":"/tmp/fixture","reason":"Check local change","session":true}`)}})
+			h.a.sidebarWidth, h.a.showSidebar = maxSidebarWidth, true
+			h.tt.SetSize(size[0], size[1])
+			h.tt.Advance(time.Second)
+			window := ui.Rect{W: float32(size[0]), H: float32(size[1])}
+			// The pane's border on the right and below tucks under the
+			// window's edge (contentCard).
+			if p := h.a.paneAt; !within(p, ui.Rect{W: window.W + 1, H: window.H + 1}) {
+				t.Errorf("the chat's pane at %+v, past the window at %+v", p, window)
+			}
+			if c := h.a.drew[lastRequest(th).Request].card; !within(c, h.a.paneAt) || !within(c, window) {
+				t.Errorf("the card at %+v, past the pane at %+v or the window", c, h.a.paneAt)
+			}
+			for _, s := range []string{"Approval needed", "go test ./sample", "Allow once", "Allow for this session", "Deny", "Stop"} {
+				r, ok := h.tt.Find(s)
+				if !ok {
+					t.Fatalf("no %s in %q", s, h.tt.Texts())
+				}
+				if w := paintedWidth(h.tt.Image(), r); !within(r, window) || w < r.W/2 {
+					t.Errorf("%s at %+v is drawn %.0f points wide, in a window %v wide", s, r, w, window.W)
+				}
+			}
+			if size[1] < 514 {
+				return
+			}
+			if err := h.tt.Click("Allow for this session"); err != nil {
+				t.Fatal(err)
+			}
+			h.until("the session grant", func() bool { return string(lastRequest(th).Answer) == `{"allow":true,"session":true}` })
+		})
 	}
 }
 
