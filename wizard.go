@@ -68,6 +68,9 @@ type wizard struct {
 	// folder is the existing folder chosen, absolute on the machine.
 	folder string
 	browse folderBrowser
+	// repoList is the Clone step's repository list; its rows follow
+	// their names as the machine's listing fills in.
+	repoList ui.ListState
 	// input is the clone's URL or owner/name, as typed.
 	input string
 	// parent is the folder the clone goes into; "" until Clone shows.
@@ -110,6 +113,190 @@ type folderBrowser struct {
 }
 
 type folderQuery struct{ _ byte }
+
+// repoCache is the repositories one machine's gh reaches, as last
+// listed, and the listing under way.
+type repoCache struct {
+	// repos is the last complete listing.
+	repos     []api.Repo
+	truncated bool
+	// listed is when that listing completed, zero while none has.
+	listed time.Time
+	// fetch is the listing under way, nil while none is.
+	fetch *repoFetch
+	// failure is why the last listing failed, "" while none has.
+	failure string
+}
+
+// repoFetch is one listing under way.
+type repoFetch struct {
+	// repos is the pages that have come.
+	repos  []api.Repo
+	cancel func()
+}
+
+// shown is the repositories to show: those the fetch under way has given
+// so far, then the cached ones it hasn't replaced, or the cache alone
+// while nothing fetches.
+func (e *repoCache) shown() []api.Repo {
+	if e.fetch == nil {
+		return e.repos
+	}
+	seen := make(map[string]bool, len(e.fetch.repos))
+	for _, r := range e.fetch.repos {
+		seen[r.Name] = true
+	}
+	out := slices.Clone(e.fetch.repos)
+	for _, r := range e.repos {
+		if !seen[r.Name] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// reposOf is the repository cache of e's machine; a machine machineKey
+// can't name shares one loose cache, which a new wizard throws away.
+func (a *app) reposOf(e *client.Env) *repoCache {
+	key, ok := machineKey(e)
+	if !ok {
+		if a.repoLoose == nil {
+			a.repoLoose = &repoCache{}
+		}
+		return a.repoLoose
+	}
+	if a.repoLists == nil {
+		a.repoLists = map[string]*repoCache{}
+	}
+	c := a.repoLists[key]
+	if c == nil {
+		c = &repoCache{}
+		a.repoLists[key] = c
+	}
+	return c
+}
+
+// reposFresh is how long a machine's last listing counts as fresh, which
+// showing the Clone step again doesn't fetch another for.
+const reposFresh = 30 * time.Second
+
+// refreshRepos starts a listing of the repositories e's machine's gh
+// reaches, unless one is under way — a reopened wizard doesn't start
+// another — or the last is fresh and force doesn't say otherwise. Pages
+// fill the cache as they come, and the wizard closing doesn't stop the
+// listing; what answers a listing another replaced is dropped.
+func (a *app) refreshRepos(e *client.Env, force bool) {
+	if e == nil {
+		return
+	}
+	c := a.reposOf(e)
+	if c.fetch != nil || !force && !c.listed.IsZero() && a.now.Sub(c.listed) < reposFresh {
+		return
+	}
+	f := &repoFetch{}
+	c.fetch, c.failure = f, ""
+	f.cancel = a.backend.Repos(e, func(p api.RepoPage) {
+		if c.fetch != f {
+			return
+		}
+		for _, r := range p.Repos {
+			if !slices.ContainsFunc(f.repos, func(have api.Repo) bool { return have.Name == r.Name }) {
+				f.repos = append(f.repos, r)
+			}
+		}
+		if p.Last {
+			c.truncated = p.Truncated
+		}
+	}, func(err error) {
+		if c.fetch != f {
+			return
+		}
+		if err == nil {
+			c.repos, c.listed, c.fetch = f.repos, a.now, nil
+			return
+		}
+		// Whatever pages came stay, merged with the cache, but the
+		// listing still counts as none: the next showing asks again.
+		c.repos, c.fetch = c.shown(), nil
+		if errors.Is(err, client.ErrTooOld) {
+			c.failure = "Update Glitched on " + reposMachine(e) + " to list your repositories"
+		} else {
+			c.failure = a.wizardError(err)
+		}
+	})
+}
+
+// reposMachine names e's machine as the wizard's messages do, which a
+// listing that outlives the wizard still names right.
+func reposMachine(e *client.Env) string {
+	if name := keyOf(e, "").server; name != "" {
+		return name
+	}
+	return "this machine"
+}
+
+// retryRepos lists the chosen machine's repositories again, whatever
+// the cache holds.
+func (a *app) retryRepos() {
+	a.refreshRepos(a.wizardEnv(), true)
+}
+
+// filterRepos is the repositories whose name or description holds every
+// word of query, whatever its case: the one named it first, then names
+// starting with it, then those with every word in their name, then the
+// rest, each rank in the order given.
+func filterRepos(repos []api.Repo, query string) []api.Repo {
+	q := strings.TrimSpace(query)
+	words := strings.Fields(strings.ToLower(q))
+	if len(words) == 0 {
+		return repos
+	}
+	lq := strings.ToLower(q)
+	type ranked struct {
+		repo api.Repo
+		rank int
+	}
+	var out []ranked
+	for _, repo := range repos {
+		name := strings.ToLower(repo.Name)
+		desc := strings.ToLower(repo.Description)
+		// A repository matches when each word is in its name or its
+		// description; the rank is where they matched.
+		matched, named := true, true
+		for _, w := range words {
+			if !strings.Contains(name, w) {
+				named = false
+				if !strings.Contains(desc, w) {
+					matched = false
+					break
+				}
+			}
+		}
+		if !matched {
+			continue
+		}
+		part := name
+		if i := strings.LastIndex(name, "/"); i >= 0 {
+			part = name[i+1:]
+		}
+		rank := 3
+		switch {
+		case strings.EqualFold(repo.Name, q) || strings.EqualFold(part, q):
+			rank = 0
+		case strings.HasPrefix(part, lq) || strings.HasPrefix(name, lq):
+			rank = 1
+		case named:
+			rank = 2
+		}
+		out = append(out, ranked{repo, rank})
+	}
+	slices.SortStableFunc(out, func(a, b ranked) int { return a.rank - b.rank })
+	repos = make([]api.Repo, len(out))
+	for i, r := range out {
+		repos[i] = r.repo
+	}
+	return repos
+}
 
 // visible are the folders shown, those whose names start with a dot only
 // when hidden ones are, and none while a listing is pending.
@@ -199,6 +386,7 @@ func (a *app) openWizard(src wizardSource) {
 	if a.wizard.open || len(envs) == 0 {
 		return
 	}
+	a.repoLoose = nil
 	a.wizard = wizard{open: true, step: stepMachine, source: src, skipSource: src == sourceClone}
 	if len(envs) > 1 {
 		a.enterStep()
@@ -281,6 +469,7 @@ func (a *app) enterStep() {
 			w.parent = a.cloneParent(a.wizardEnv())
 		}
 		w.focus = "clone:input"
+		a.refreshRepos(a.wizardEnv(), false)
 	case stepConfirm:
 		w.focus = "confirm:create"
 		if w.source == sourceClone {
@@ -374,6 +563,7 @@ func (a *app) chooseMachine(label string) {
 	if label != w.machine {
 		w.machine, w.folder, w.parent = label, "", ""
 		w.browse = folderBrowser{hidden: w.browse.hidden}
+		w.repoList = ui.ListState{}
 	}
 	w.back = append(w.back, w.step)
 	w.step = stepSource
@@ -524,6 +714,14 @@ func (a *app) useFolder() {
 	a.wizardTo(stepConfirm)
 }
 
+// chooseRepo chooses a listed repository: the field takes its
+// owner/name, which Confirm names the clone's folder after.
+func (a *app) chooseRepo(name string) {
+	w := &a.wizard
+	w.input = name
+	a.wizardTo(stepConfirm)
+}
+
 // cloneNext goes on from Clone, once the field names a repository.
 func (a *app) cloneNext() {
 	if _, ok := projects.ParseSource(a.wizard.input); ok && a.wizard.step == stepClone {
@@ -555,6 +753,11 @@ func (a *app) moveFocus(c *ui.Context, d int) {
 		for _, f := range w.browse.visible() {
 			keys = append(keys, "row:"+f.Name)
 		}
+	case stepClone:
+		keys = []string{"clone:input"}
+		for _, r := range filterRepos(a.reposOf(a.wizardEnv()).shown(), w.input) {
+			keys = append(keys, "repo:"+r.Name)
+		}
 	}
 	if len(keys) == 0 {
 		return
@@ -563,7 +766,7 @@ func (a *app) moveFocus(c *ui.Context, d int) {
 	// the first row.
 	i := slices.Index(keys, ui.FocusedValue(c, &w.focus))
 	switch {
-	case i < 0 && w.step == stepBrowse:
+	case i < 0 && (w.step == stepBrowse || w.step == stepClone):
 		i = 1
 	case i < 0:
 		i = 0
@@ -572,8 +775,13 @@ func (a *app) moveFocus(c *ui.Context, d int) {
 	}
 	i = max(0, min(i, len(keys)-1))
 	w.focus = keys[i]
-	if w.step == stepBrowse && i > 0 {
-		w.browse.list.ScrollIntoView(i - 1)
+	if i > 0 {
+		switch w.step {
+		case stepBrowse:
+			w.browse.list.ScrollIntoView(i - 1)
+		case stepClone:
+			w.repoList.ScrollIntoView(i - 1)
+		}
 	}
 }
 
@@ -784,7 +992,7 @@ func (a *app) sourceRows(c *ui.Context) {
 			icon               *ui.SVG
 		}{
 			{sourceFolder, "source:folder", "Existing folder", "A folder on " + a.machineName(), icFolderOpen},
-			{sourceClone, "source:clone", "Clone a repository", "Into a new folder on " + a.machineName(), icBranch},
+			{sourceClone, "source:clone", "Clone a repository", "From your GitHub repositories, or a URL", icBranch},
 		} {
 			r := row(c, s.key, ui.FocusedValue(c, &w.focus) == s.key).Disabled(a.picking).FocusBind(&w.focus, s.key).Label(s.label)
 			r.Children(func() {
@@ -871,14 +1079,87 @@ func (a *app) browseStep(c *ui.Context) {
 	}
 }
 
-// cloneStep is the repository's field and the folder the clone goes into.
+// cloneStep is the repository's field, under it the repositories the
+// machine's gh reaches filtered by what the field holds, and the folder
+// the clone goes into. A row, or Enter on the first of them, chooses it;
+// a URL or owner/name typed goes on as it always has. The list is as
+// tall as browseRows of the row helper's rows, so the dialog doesn't
+// jump.
 func (a *app) cloneStep(c *ui.Context, ok bool) {
 	w := &a.wizard
 	t := c.Theme()
-	ui.TextInput(c.Key("clone source"), &w.input).Placeholder("URL or owner/name").Label("URL or owner/name").
-		FocusBind(&w.focus, "clone:input").Width(0).MinWidthPercent(100).OnSubmit(a.cloneNext)
-	if strings.TrimSpace(w.input) != "" && !ok {
+	cache := a.reposOf(a.wizardEnv())
+	fetching := cache.fetch != nil
+	shown := cache.shown()
+	filtered := filterRepos(shown, w.input)
+	// The arrows move the focus from the field too, which keeps them, as
+	// the browser's path field does.
+	switch {
+	case c.Shortcut(0, ui.KeyDown):
+		a.moveFocus(c, 1)
+	case c.Shortcut(0, ui.KeyUp):
+		a.moveFocus(c, -1)
+	}
+	ui.TextInput(c.Key("clone source"), &w.input).Placeholder("Search your repositories, or paste a URL").Label("Repository").
+		FocusBind(&w.focus, "clone:input").Width(0).MinWidthPercent(100).OnSubmit(func() {
+		if len(filtered) > 0 {
+			a.chooseRepo(filtered[0].Name)
+			return
+		}
+		a.cloneNext()
+	})
+	if strings.TrimSpace(w.input) != "" && !ok && len(filtered) == 0 {
 		ui.Text(c, "Enter a clone URL or owner/name").TextColor(palette.red).Width(0).MinWidthPercent(100)
+	}
+	icon := t.FontSize + 1
+	rowH := 12 + max(icon, lineHeight(c, t.FontSize, 0))
+	l := &w.repoList
+	l.Key = func(i int) any { return filtered[i].Name }
+	ui.List(c.Key("clone repos"), l, len(filtered), func(i int) {
+		repo := filtered[i]
+		key := "repo:" + repo.Name
+		// While the focus is in the field, the first row shows what
+		// Enter picks.
+		focus := ui.FocusedValue(c, &w.focus)
+		r := row(c, key, focus == key || i == 0 && focus == "clone:input").FocusBind(&w.focus, key).Label(repo.Name)
+		r.Children(func() {
+			ui.Icon(c, icBranch).FontSize(icon).Shrink(0)
+			ui.Text(c, repo.Name).TextColor(palette.text).SingleLine()
+			if repo.Description != "" {
+				ui.Text(c, repo.Description).FontSize(t.FontSize - 1).TextColor(palette.muted).SingleLine().Grow(1).Shrink(1)
+			} else {
+				ui.Spacer(c)
+			}
+			if repo.Private {
+				ui.Text(c, "Private").FontSize(t.FontSize - 1).TextColor(palette.muted).Shrink(0)
+			}
+		})
+		r.OnClick(func() { a.chooseRepo(repo.Name) })
+	}).Height(browseRows*rowH).Radius(t.Space(1.5)).Border(1, palette.border).
+		Children(func() {
+			switch {
+			case len(filtered) > 0:
+			case fetching:
+				ui.Text(c, "Loading your repositories…").TextColor(palette.muted).Padding(t.Space(3)).TextAlign(ui.Center)
+			case cache.failure != "" && len(shown) == 0:
+				ui.Text(c, cache.failure).TextColor(palette.muted).Padding(t.Space(3), t.Space(3), t.Space(1), t.Space(3)).TextAlign(ui.Center)
+				ui.Row(c).Justify(ui.Center).Padding(0, 0, t.Space(3), 0).Children(func() {
+					ui.Button(c.Key("repos retry"), "Retry").OnClick(a.retryRepos)
+				})
+			case !cache.listed.IsZero() || len(shown) > 0:
+				ui.Text(c, "No repositories match").TextColor(palette.muted).Padding(t.Space(3)).TextAlign(ui.Center)
+			}
+		})
+	switch {
+	case len(filtered) > 0 && fetching:
+		ui.Text(c, "Checking for new repositories…").TextColor(t.TextMuted).Width(0).MinWidthPercent(100)
+	case len(shown) > 0 && cache.failure != "":
+		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, cache.failure).TextColor(t.TextMuted).Width(0).Grow(1).Shrink(1)
+			ui.Button(c.Key("repos retry"), "Retry").FontSize(t.FontSize - 1).OnClick(a.retryRepos)
+		})
+	case cache.truncated:
+		ui.Text(c, "Only your 1000 most recently pushed repositories are listed.").TextColor(t.TextMuted).Width(0).MinWidthPercent(100)
 	}
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "Into "+w.parent).TextColor(t.TextMuted).Width(0).Grow(1).Shrink(1)

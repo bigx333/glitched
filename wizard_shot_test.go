@@ -4,8 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"glitched/internal/api"
 )
 
 // wizardShot is the New project wizard at step, on this machine and two
@@ -57,12 +60,34 @@ func wizardShot(t *testing.T, step string) *harness {
 		h.click("Create")
 		return h
 	}
+	if step == "repos" {
+		stubRepos(t,
+			api.Repo{Name: "acme/lighthouse", Description: "Status page and beacon service", Private: true},
+			api.Repo{Name: "acme/harbor", Description: "Deploy previews"},
+			api.Repo{Name: "acme/billing"},
+			api.Repo{Name: "infra/terraform", Description: "Network and clusters"},
+			api.Repo{Name: "me/dotfiles"},
+			api.Repo{Name: "me/notes", Description: "Scratch notes"},
+		)
+		h.click("Clone a repository")
+		h.untilShown("the repositories", "acme/lighthouse")
+		h.click("Back")
+		// Back with a stale cache and a gh that won't answer, so the
+		// cached list shows under "Checking for new repositories…".
+		stubGH(t, "[ \"$1\" = auth ] && exit 0\n/bin/sleep 25\nexit 0")
+		h.tt.Advance(31 * time.Second)
+		h.tt.Frame()
+		h.click("Clone a repository")
+		h.untilShown("the refresh", "Checking for new repositories…")
+		h.replaceIn("Repository", "acme")
+		return h
+	}
 	h.click("Clone a repository")
 	source := "acme/lighthouse"
 	if step == "failed" {
 		source = "file://" + filepath.ToSlash(filepath.Join(root, "missing.git"))
 	}
-	h.replaceIn("URL or owner/name", source)
+	h.replaceIn("Repository", source)
 	if step == "clone" {
 		return h
 	}

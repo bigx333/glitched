@@ -27,6 +27,43 @@ import (
 	"glitched/internal/transport"
 )
 
+// ghBin is the bin dir TestMain puts ahead of the real PATH: its stub gh
+// keeps the tests' engines off GitHub.
+var ghBin string
+
+// writeGH puts a gh of script, a shell script, in ghBin. On Windows a
+// shell script is no gh.exe, which guard.Find alone finds: gh isn't
+// installed there at all.
+func writeGH(script string) {
+	if err := os.WriteFile(filepath.Join(ghBin, "gh"), []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+		panic(err)
+	}
+}
+
+// stubGH swaps in a gh of script for the engines of tests, and puts the
+// default stub, which fails, back when t ends.
+func stubGH(t *testing.T, script string) {
+	t.Helper()
+	writeGH(script)
+	t.Cleanup(func() { writeGH("echo 'gh: stub' >&2\nexit 1") })
+}
+
+// stubRepos swaps in a gh that is signed in to github.com and whose api
+// emits each repository, an object a line.
+func stubRepos(t *testing.T, repos ...api.Repo) {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("[ \"$1\" = auth ] && exit 0\n")
+	for _, r := range repos {
+		j, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.WriteString("echo '" + string(j) + "'\n")
+	}
+	stubGH(t, b.String())
+}
+
 // bareRepo is a bare repository, lighthouse.git, whose one commit holds
 // README.md, and its file:// URL.
 func bareRepo(t *testing.T) string {
@@ -298,7 +335,7 @@ func TestWizardBackKeepsTheChoices(t *testing.T) {
 		t.Fatal("Back to Source doesn't keep Existing folder chosen")
 	}
 	h.click("Clone a repository")
-	h.replaceIn("URL or owner/name", "o/lighthouse")
+	h.replaceIn("Repository", "o/lighthouse")
 	if !showing(h, "Into ~/Projects") {
 		t.Fatalf("a clone on a server doesn't go into ~/Projects there: %q", h.tt.Texts())
 	}
@@ -314,7 +351,7 @@ func TestWizardBackKeepsTheChoices(t *testing.T) {
 	h.replaceIn("Name", "beacon")
 	h.untilShown("the name", filepath.Join(root, "beacon"))
 	h.click("Back")
-	if h.a.wizard.input != "o/lighthouse" || !showing(h, "Into "+root) || !h.tt.Focused("URL or owner/name") {
+	if h.a.wizard.input != "o/lighthouse" || !showing(h, "Into "+root) || !h.tt.Focused("Repository") {
 		t.Fatalf("Back to Clone lost the repository or its parent: %q", h.tt.Texts())
 	}
 	h.click("Back")
@@ -458,7 +495,7 @@ func TestTheWizardClonesOnThisMachine(t *testing.T) {
 	parent := chooseParentGives(t)
 	newProject(h)
 	h.click("Clone a repository")
-	if !h.tt.Focused("URL or owner/name") {
+	if !h.tt.Focused("Repository") {
 		t.Fatal("Clone's field doesn't have the focus")
 	}
 	h.tt.ClickAt(4, 4)
@@ -466,10 +503,10 @@ func TestTheWizardClonesOnThisMachine(t *testing.T) {
 	if !h.a.wizard.open {
 		t.Fatal("a click outside closed the wizard")
 	}
-	h.replaceIn("URL or owner/name", source)
+	h.replaceIn("Repository", source)
 	h.click("Choose…")
 	h.untilShown("the parent", "Into "+parent)
-	if !h.tt.Focused("URL or owner/name") {
+	if !h.tt.Focused("Repository") {
 		t.Fatal("the field doesn't have the focus back after Choose…")
 	}
 	h.key(0, ui.KeyEnter)
@@ -522,7 +559,7 @@ func TestAFailedCloneOffersRetry(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.git")
 	newProject(h)
 	h.click("Clone a repository")
-	h.replaceIn("URL or owner/name", "file://"+filepath.ToSlash(missing))
+	h.replaceIn("Repository", "file://"+filepath.ToSlash(missing))
 	h.click("Choose…")
 	h.untilShown("the parent", "Into "+parent)
 	h.click("Next")
@@ -561,7 +598,7 @@ func TestACloneOnAServerRunsThere(t *testing.T) {
 	newProject(h)
 	h.click("build-box")
 	h.click("Clone a repository")
-	h.replaceIn("URL or owner/name", source)
+	h.replaceIn("Repository", source)
 	h.click("Choose…")
 	h.untilShown("the parent's browser", "Clone into a folder on build-box")
 	h.replaceIn("Path", root)
@@ -598,7 +635,7 @@ func TestCancelStopsTheClone(t *testing.T) {
 	newProject(h)
 	h.click("build-box")
 	h.click("Clone a repository")
-	h.replaceIn("URL or owner/name", "o/lighthouse")
+	h.replaceIn("Repository", "o/lighthouse")
 	h.click("Next")
 	h.click("Clone and create")
 	h.untilShown("the clone's progress", "Receiving objects:  10% (1/10)")
@@ -807,7 +844,7 @@ func TestEscapeDuringACloneStopsItThenGoesBack(t *testing.T) {
 	newProject(h)
 	h.click("build-box")
 	h.click("Clone a repository")
-	h.replaceIn("URL or owner/name", "o/lighthouse")
+	h.replaceIn("Repository", "o/lighthouse")
 	h.click("Next")
 	h.click("Clone and create")
 	h.untilShown("the clone's progress", "Receiving objects:  10% (1/10)")
@@ -888,7 +925,7 @@ func TestOnlyAnExistingFolderKeepsTheDraftsWorktree(t *testing.T) {
 	}
 	newProject(h)
 	h.click("Clone a repository")
-	h.replaceIn("URL or owner/name", source)
+	h.replaceIn("Repository", source)
 	h.click("Choose…")
 	h.untilShown("the parent", "Into "+parent)
 	h.click("Next")
@@ -1006,5 +1043,338 @@ func TestThePickerCantChooseTheEnginesStateFolder(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(state, "clone.json")); !os.IsNotExist(err) {
 		t.Fatalf("clone.json is there: %v", err)
+	}
+}
+
+// The Clone step lists the repositories the machine's gh reaches,
+// filtered by what the field holds; Enter picks the first, which
+// Confirm names the clone's folder after.
+func TestTheCloneStepListsTheMachinesRepositories(t *testing.T) {
+	stubRepos(t,
+		api.Repo{Name: "acme/lighthouse", Description: "A beacon for ships"},
+		api.Repo{Name: "acme/harbor", Private: true},
+		api.Repo{Name: "me/notes"},
+	)
+	h := start(t, inboxDir(t))
+	h.thread("SIP re-INVITE handling")
+	newProject(h)
+	h.click("Clone a repository")
+	h.untilShown("the repositories", "acme/lighthouse")
+	if !showing(h, "A beacon for ships") || !showing(h, "Private") || !showing(h, "me/notes") {
+		t.Fatalf("the repositories don't show fully: %q", h.tt.Texts())
+	}
+	h.replaceIn("Repository", "HARB")
+	if !showing(h, "acme/harbor") || showing(h, "acme/lighthouse") || showing(h, "me/notes") {
+		t.Fatalf("\"HARB\" filters to %q", h.tt.Texts())
+	}
+	h.key(0, ui.KeyEnter)
+	h.untilShown("Confirm", "Create the project")
+	if h.a.wizard.input != "acme/harbor" || h.a.wizard.name != "harbor" {
+		t.Fatalf("Enter chose %q named %q, want acme/harbor", h.a.wizard.input, h.a.wizard.name)
+	}
+}
+
+// Down from the field moves into the list, and Enter on a row chooses
+// it, as a click does.
+func TestTheArrowsChooseARepository(t *testing.T) {
+	stubRepos(t,
+		api.Repo{Name: "acme/lighthouse"},
+		api.Repo{Name: "acme/harbor"},
+	)
+	h := start(t, inboxDir(t))
+	h.thread("SIP re-INVITE handling")
+	newProject(h)
+	h.click("Clone a repository")
+	h.untilShown("the repositories", "acme/harbor")
+	if !h.tt.Focused("Repository") {
+		t.Fatal("the field doesn't have the focus")
+	}
+	h.key(0, ui.KeyDown)
+	if !h.tt.Focused("acme/lighthouse") {
+		t.Fatalf("Down focused %q, want the first repository", h.tt.Texts())
+	}
+	h.key(0, ui.KeyDown)
+	if !h.tt.Focused("acme/harbor") {
+		t.Fatal("Down didn't focus the second repository")
+	}
+	h.key(0, ui.KeyEnter)
+	h.untilShown("Confirm", "Create the project")
+	if h.a.wizard.input != "acme/harbor" {
+		t.Fatalf("Enter chose %q, want acme/harbor", h.a.wizard.input)
+	}
+}
+
+// A URL no repository matches still goes on through the field, as it
+// always has, the list saying so.
+func TestAURLNoRepositoryMatchesStillGoesOn(t *testing.T) {
+	source := bareRepo(t)
+	stubRepos(t, api.Repo{Name: "acme/lighthouse"})
+	h := start(t, inboxDir(t))
+	h.thread("SIP re-INVITE handling")
+	newProject(h)
+	h.click("Clone a repository")
+	h.untilShown("the repositories", "acme/lighthouse")
+	h.replaceIn("Repository", source)
+	h.untilShown("no match", "No repositories match")
+	h.key(0, ui.KeyEnter)
+	h.untilShown("Confirm", "Create the project")
+	if h.a.wizard.name != "lighthouse" {
+		t.Fatalf("the URL's clone is named %q", h.a.wizard.name)
+	}
+}
+
+// When the engine can't list the repositories, the list says why,
+// muted, and the field still takes a URL or owner/name.
+func TestAListingFailureStillLetsTheFieldWork(t *testing.T) {
+	stubGH(t, "echo 'gh: stub' >&2\nexit 1")
+	h := start(t, inboxDir(t))
+	h.thread("SIP re-INVITE handling")
+	newProject(h)
+	h.click("Clone a repository")
+	h.untilShown("the reason", "gh isn't signed in to github.com on this machine: run gh auth login there")
+	h.replaceIn("Repository", "o/lighthouse")
+	h.click("Next")
+	h.untilShown("Confirm", "Create the project")
+	if h.a.wizard.input != "o/lighthouse" {
+		t.Fatalf("the field lost %q", h.a.wizard.input)
+	}
+}
+
+// A server's repositories are its engine's: build-box's gh lists them.
+func TestACloneOnAServerListsItsRepositories(t *testing.T) {
+	stubRepos(t,
+		api.Repo{Name: "ops/lighthouse", Description: "Status page"},
+		api.Repo{Name: "ops/harbor"},
+	)
+	h, _ := wizardMachines(t, inboxDir(t))
+	newProject(h)
+	h.click("build-box")
+	h.click("Clone a repository")
+	h.untilShown("build-box's repositories", "ops/lighthouse")
+	h.click("ops/harbor")
+	h.untilShown("Confirm", "Create the project")
+	if h.a.wizard.input != "ops/harbor" {
+		t.Fatalf("clicking a repository chose %q", h.a.wizard.input)
+	}
+}
+
+// filterRepos puts the likeliest repository for a query first: an exact
+// name or repository part, then a name starting with it, then a name
+// holding every word, then a match the description helped, each rank
+// keeping the listing's order.
+func TestFilterReposRanks(t *testing.T) {
+	repos := []api.Repo{
+		{Name: "o/alight"},
+		{Name: "acme/lighthouse", Description: "Status page"},
+		{Name: "zzz/light"},
+		{Name: "acme/harbor", Description: "A lighthouse for deploys"},
+		{Name: "me/notes"},
+	}
+	for _, tc := range []struct {
+		query string
+		want  []string
+	}{
+		{"", []string{"o/alight", "acme/lighthouse", "zzz/light", "acme/harbor", "me/notes"}},
+		{"light", []string{"zzz/light", "acme/lighthouse", "o/alight", "acme/harbor"}},
+		{"LIGHT", []string{"zzz/light", "acme/lighthouse", "o/alight", "acme/harbor"}},
+		{"acme light", []string{"acme/lighthouse", "acme/harbor"}},
+		{"acme/harbor", []string{"acme/harbor"}},
+		{"nowhere", nil},
+	} {
+		var got []string
+		for _, r := range filterRepos(repos, tc.query) {
+			got = append(got, r.Name)
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("filterRepos(%q) = %v, want %v", tc.query, got, tc.want)
+		}
+	}
+}
+
+// A listing comes page by page: the first hundred repositories show,
+// searchable and pickable, while the rest still come, under "Checking
+// for new repositories…".
+func TestTheRepositoriesComeInPages(t *testing.T) {
+	sig := t.TempDir()
+	release := filepath.Join(sig, "release")
+	stubGH(t, "[ \"$1\" = auth ] && exit 0\n"+
+		"i=0; while [ $i -lt 100 ]; do echo '{\"name\":\"o/r'$i'\"}'; i=$((i+1)); done\n"+
+		"while [ ! -e '"+release+"' ]; do /bin/sleep 0.02; done\n"+
+		"i=100; while [ $i -lt 150 ]; do echo '{\"name\":\"o/r'$i'\"}'; i=$((i+1)); done")
+	h := start(t, inboxDir(t))
+	h.a.openWizard(sourceClone)
+	h.tt.Frame()
+	h.until("the first page", func() bool {
+		c := h.a.reposOf(h.a.localEnv())
+		return c.fetch != nil && len(c.fetch.repos) == 100
+	})
+	if !showing(h, "o/r0") || !showing(h, "Checking for new repositories…") {
+		t.Fatalf("a listing still coming shows no rows or says nothing: %q", h.tt.Texts())
+	}
+	h.replaceIn("Repository", "o/r4")
+	h.key(0, ui.KeyEnter)
+	h.untilShown("Confirm", "Create the project")
+	if h.a.wizard.input != "o/r4" {
+		t.Fatalf("Enter picked %q, want o/r4", h.a.wizard.input)
+	}
+	h.click("Back")
+	h.replaceIn("Repository", "")
+	if !showing(h, "Checking for new repositories…") {
+		t.Fatal("Back hides the listing still coming")
+	}
+	if err := os.WriteFile(release, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the rest", func() bool {
+		c := h.a.reposOf(h.a.localEnv())
+		return c.fetch == nil && len(c.repos) == 150
+	})
+	h.tt.Frame()
+	if showing(h, "Checking for new repositories…") {
+		t.Fatal("a finished listing still says it's coming")
+	}
+}
+
+// A machine's repositories are cached: a stale cache shows at once
+// while a fresh listing runs, whose new repositories go on top; a fresh
+// cache lists nothing again.
+func TestTheRepositoriesAreCachedPerMachine(t *testing.T) {
+	sig := t.TempDir()
+	count := filepath.Join(sig, "api.calls")
+	release := filepath.Join(sig, "release")
+	stubGH(t, "[ \"$1\" = auth ] && exit 0\necho api >> '"+count+"'\n"+
+		"echo '{\"name\":\"acme/lighthouse\"}'\n"+
+		"echo '{\"name\":\"me/notes\"}'")
+	h := start(t, inboxDir(t))
+	h.a.openWizard(sourceClone)
+	h.tt.Frame()
+	h.untilShown("the repositories", "acme/lighthouse")
+	h.a.closeWizard()
+	h.tt.Frame()
+	// Stale: the next showing lists again, and a repository pushed
+	// meanwhile goes on top once it does.
+	stubGH(t, "[ \"$1\" = auth ] && exit 0\necho api >> '"+count+"'\n"+
+		"while [ ! -e '"+release+"' ]; do /bin/sleep 0.02; done\n"+
+		"echo '{\"name\":\"acme/new\"}'\n"+
+		"echo '{\"name\":\"acme/lighthouse\"}'\n"+
+		"echo '{\"name\":\"me/notes\"}'")
+	h.tt.Advance(31 * time.Second)
+	h.tt.Frame()
+	h.a.openWizard(sourceClone)
+	h.tt.Frame()
+	if !showing(h, "acme/lighthouse") || !showing(h, "me/notes") {
+		t.Fatalf("the cache doesn't show while the refresh runs: %q", h.tt.Texts())
+	}
+	if !showing(h, "Checking for new repositories…") {
+		t.Fatal("the refresh runs silently")
+	}
+	if err := os.WriteFile(release, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.until("the new repository on top", func() bool {
+		c := h.a.reposOf(h.a.localEnv())
+		return c.fetch == nil && len(c.repos) == 3 && c.repos[0].Name == "acme/new"
+	})
+	h.a.closeWizard()
+	h.tt.Frame()
+	// Fresh: showing it again lists nothing.
+	h.a.openWizard(sourceClone)
+	h.tt.Frame()
+	h.untilShown("the repositories", "acme/new")
+	calls, err := os.ReadFile(count)
+	if err != nil || len(strings.Fields(string(calls))) != 2 {
+		t.Fatalf("gh api ran %q, want twice", calls)
+	}
+}
+
+// A wizard shown again while a listing still runs joins it rather than
+// listing again.
+func TestAReopenJoinsTheRunningListing(t *testing.T) {
+	sig := t.TempDir()
+	count := filepath.Join(sig, "api.calls")
+	release := filepath.Join(sig, "release")
+	stubGH(t, "[ \"$1\" = auth ] && exit 0\necho api >> '"+count+"'\n"+
+		"while [ ! -e '"+release+"' ]; do /bin/sleep 0.02; done\n"+
+		"echo '{\"name\":\"acme/lighthouse\"}'")
+	h := start(t, inboxDir(t))
+	h.a.openWizard(sourceClone)
+	h.tt.Frame()
+	h.untilShown("the listing", "Loading your repositories…")
+	h.a.closeWizard()
+	h.tt.Frame()
+	h.a.openWizard(sourceClone)
+	h.tt.Frame()
+	if err := os.WriteFile(release, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.untilShown("the repositories", "acme/lighthouse")
+	calls, err := os.ReadFile(count)
+	if err != nil || len(strings.Fields(string(calls))) != 1 {
+		t.Fatalf("gh api ran %q, want once", calls)
+	}
+}
+
+// A listing that fails with nothing cached says why, muted, with a
+// Retry that lists once gh works.
+func TestAFailedListingRetries(t *testing.T) {
+	stubGH(t, "[ \"$1\" = auth ] && exit 0\necho 'list broke' >&2\nexit 4")
+	h := start(t, inboxDir(t))
+	h.a.openWizard(sourceClone)
+	h.tt.Frame()
+	h.untilShown("the failure", "list broke")
+	if !showing(h, "Retry") {
+		t.Fatal("a failed listing offers no Retry")
+	}
+	stubRepos(t, api.Repo{Name: "acme/lighthouse"})
+	h.click("Retry")
+	h.untilShown("the repositories", "acme/lighthouse")
+}
+
+// A refresh that fails keeps the cached repositories showing, the
+// failure and Retry under them.
+func TestAFailedRefreshKeepsTheCache(t *testing.T) {
+	stubRepos(t, api.Repo{Name: "acme/lighthouse"})
+	h := start(t, inboxDir(t))
+	h.a.openWizard(sourceClone)
+	h.tt.Frame()
+	h.untilShown("the repositories", "acme/lighthouse")
+	h.a.closeWizard()
+	h.tt.Frame()
+	stubGH(t, "[ \"$1\" = auth ] && exit 0\necho 'list broke' >&2\nexit 4")
+	h.tt.Advance(31 * time.Second)
+	h.tt.Frame()
+	h.a.openWizard(sourceClone)
+	h.tt.Frame()
+	h.untilShown("the failure", "list broke")
+	if !showing(h, "acme/lighthouse") || !showing(h, "Retry") {
+		t.Fatalf("the cache or Retry is gone: %q", h.tt.Texts())
+	}
+}
+
+// A repository gone from a fresh complete listing leaves the cache when
+// the refresh completes.
+func TestARefreshDropsDeletedRepositories(t *testing.T) {
+	stubRepos(t,
+		api.Repo{Name: "acme/lighthouse"},
+		api.Repo{Name: "acme/harbor"},
+	)
+	h := start(t, inboxDir(t))
+	h.a.openWizard(sourceClone)
+	h.tt.Frame()
+	h.untilShown("the repositories", "acme/harbor")
+	h.a.closeWizard()
+	h.tt.Frame()
+	stubRepos(t, api.Repo{Name: "acme/lighthouse"})
+	h.tt.Advance(31 * time.Second)
+	h.tt.Frame()
+	h.a.openWizard(sourceClone)
+	h.tt.Frame()
+	h.until("the refresh done", func() bool {
+		c := h.a.reposOf(h.a.localEnv())
+		return c.fetch == nil && len(c.repos) == 1
+	})
+	h.tt.Frame()
+	if showing(h, "acme/harbor") {
+		t.Fatal("a deleted repository still shows")
 	}
 }

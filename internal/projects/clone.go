@@ -156,13 +156,9 @@ func Clone(ctx context.Context, src Source, dest string, hide []string, path str
 	if entries, err := os.ReadDir(real); len(entries) > 0 || err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return errors.New(dest + " already exists and isn't empty")
 	}
-	env := append(os.Environ(), "PATH="+path, "GIT_TERMINAL_PROMPT=0", "GH_PROMPT_DISABLED=1", "GCM_INTERACTIVE=never")
+	env := toolEnv(path)
 	command := func(program string, args ...string) *exec.Cmd {
-		cmd := exec.CommandContext(ctx, program, args...)
-		cmd.Env = env
-		guard.OwnGroup(cmd)
-		cmd.WaitDelay = time.Second
-		return cmd
+		return tool(ctx, env, program, args...)
 	}
 	useGH := src.Repo != "" && hasGH && command(gh, "auth", "status", "--hostname", "github.com").Run() == nil
 	if !useGH && !hasGit {
@@ -223,6 +219,22 @@ func Clone(ctx context.Context, src Source, dest string, hide []string, path str
 		tail = append(tail, CloneHint)
 	}
 	return errors.New(strings.Join(tail, "\n"))
+}
+
+// toolEnv is the environment the programs Clone and Repos run under:
+// those path finds, and no prompt, which a GUI can't answer.
+func toolEnv(path string) []string {
+	return append(os.Environ(), "PATH="+path, "GIT_TERMINAL_PROMPT=0", "GH_PROMPT_DISABLED=1", "GCM_INTERACTIVE=never")
+}
+
+// tool runs program with args in env under ctx, in a process group of
+// its own, which ctx's end stops outright, stragglers and all.
+func tool(ctx context.Context, env []string, program string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, program, args...)
+	cmd.Env = env
+	guard.OwnGroup(cmd)
+	cmd.WaitDelay = time.Second
+	return cmd
 }
 
 // splitLines splits git's output at each \r as well as each \n: a

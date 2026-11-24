@@ -36,6 +36,29 @@ func (m *Manager) Folders(e *Env, path string, done func(api.FolderList, error))
 	})
 }
 
+// Repos gives page each page of the GitHub repositories gh on e's
+// machine is signed in to reach and done how the listing ended, both on
+// the UI thread. cancel stops the listing; done then gets
+// context.Canceled.
+func (m *Manager) Repos(e *Env, page func(api.RepoPage), done func(error)) (cancel func()) {
+	p, err := projectsOf(e)
+	if err != nil {
+		done(err)
+		return func() {}
+	}
+	ectx := e.ctx
+	ctx, cancel := context.WithTimeout(ectx, projects.ReposTimeout+5*time.Second)
+	m.wg.Go(func() {
+		defer cancel()
+		err := p.Repos(ctx, func(p api.RepoPage) {
+			m.post(ectx, func() { page(p) })
+		})
+		err = tooOld(err)
+		m.post(ectx, func() { done(err) })
+	})
+	return cancel
+}
+
 // Clone clones a repository onto e's machine. progress gets each line
 // the clone prints and done how it ended, both on the UI thread. cancel
 // stops the clone, which takes away the folder it made; done then gets

@@ -229,7 +229,13 @@ type app struct {
 	fresh    draft
 	worktree worktreeChoice  // where the next new thread runs
 	repos    map[string]repo // what git said of the folders a new thread could start in
-	opened   opened
+	// repoLists are each machine's cached GitHub repositories, by
+	// machineKey, which the wizard's Clone step searches. repoLoose is
+	// one for a machine no key names, thrown away each time the wizard
+	// opens.
+	repoLists map[string]*repoCache
+	repoLoose *repoCache
+	opened    opened
 	// kids are the threads by parent, as the frame being built shows them;
 	// childrenOpen the threads whose children the sidebar shows.
 	kids         map[api.ID][]thread

@@ -26,6 +26,23 @@ type Folder struct {
 	Repo bool `json:"repo,omitempty"`
 }
 
+// RepoPage is one page of the GitHub repositories the engine machine's
+// gh is signed in to reach, most recently pushed first. The last page
+// has Last set, and Truncated when more than the listing's cap exist.
+type RepoPage struct {
+	Repos     []Repo `json:"repos"`
+	Last      bool   `json:"last,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+// Repo is one repository in a RepoPage.
+type Repo struct {
+	Name        string `json:"name"` // owner/name
+	Description string `json:"description,omitempty"`
+	Private     bool   `json:"private,omitempty"`
+	Fork        bool   `json:"fork,omitempty"`
+}
+
 // CloneRequest asks an engine to clone Source, a URL or owner/name, into
 // Dest on its machine: a folder, absolute or under ~, that isn't there yet
 // or is empty.

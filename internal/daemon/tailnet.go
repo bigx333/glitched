@@ -72,6 +72,12 @@ func (e endpoint) Clone(ctx context.Context, req api.CloneRequest, progress func
 	return projects.CloneInto(ctx, req, []string{e.d.stateDir}, guard.UserPath(), progress)
 }
 
+// Repos gives page each page of the GitHub repositories this machine's
+// gh is signed in to reach, as the user's terminal finds it.
+func (e endpoint) Repos(ctx context.Context, page func(api.RepoPage)) error {
+	return projects.Repos(ctx, guard.UserPath(), page)
+}
+
 // Providers is every provider the engine serves, as its socket's
 // "providers" says, for a window that embeds the engine.
 func (e endpoint) Providers(ctx context.Context, fresh, check bool) ([]transport.ProviderInfo, error) {
