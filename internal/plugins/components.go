@@ -61,6 +61,7 @@ var Components = []Component{
 	{Name: "thread.header.usage", Provides: "headerUsage", Needs: "threads:read", Native: true, About: "The header's pill of a thread's tokens, and with children, everything under it rolled up."},
 	{Name: "thread.header.plan", Provides: "headerPlan", Needs: "messages:read", Native: true, About: "The header's pill of the plan the thread's agent works to: how many of its steps are done, and the one it is at."},
 	{Name: "message.toolbar", Provides: "messageToolbar", Native: true, About: "The actions under a message, shown while it's pointed at: Copy, Edit & resend, Retry under a turn that failed or was stopped, plugins' commands and when the message was sent, each the native Glitched draws. Glitched keeps where the toolbar sits and when it shows."},
+	{Name: "composer.queue", Provides: "composerQueue", Native: true, About: "A row of the queue over the composer: a message of yours that waits its turn, its words and what can be done with it, Send now, Edit, Up, Down and Remove, each the native Glitched draws. Glitched keeps the queue's card and its order."},
 	{Name: "approval.card", Locked: widget.Locked["approval.card"]},
 	{Name: "question.card", Locked: widget.Locked["question.card"]},
 	{Name: "credentials.card", Locked: widget.Locked["credentials.card"]},

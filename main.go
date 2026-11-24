@@ -608,6 +608,12 @@ type app struct {
 	steers map[api.ID]steer
 	// continues are the threads Continue all continues, in order.
 	continues []continuing
+	// queueEditing is the queued message being edited in its row, and
+	// queueArea the area it's edited in.
+	queueEditing queueEdit
+	queueArea    ui.Handle
+	// queueH is the queue's height over the composer, as last laid out.
+	queueH float32
 	// snoozeFor is the thread whose snooze popover is open; popoverOpen
 	// says a plugin's popover drew open, as its row's actions are drawn.
 	snoozeFor   api.ID

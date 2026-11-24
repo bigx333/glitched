@@ -47,6 +47,7 @@ var partTitles = map[string]string{
 	"composer":                  "Composer",
 	"timeline.message":          "Timeline rows",
 	"message.toolbar":           "Message toolbar",
+	"composer.queue":            "Queue",
 	"thread.header.breadcrumb":  "Breadcrumb",
 	"thread.header.usage":       "Token usage",
 	"thread.header.plan":        "Plan",
