@@ -32,6 +32,28 @@ func (f *thread) rejects(body api.Intent, why string) {
 	}
 }
 
+// A start now on a busy thread goes ahead of what waits its turn, but
+// behind the start nows sent before it and a restart's message, so they
+// start in the order they were sent.
+func TestAStartNowOnABusyThreadWaitsBehindTheStartNowsAheadOfIt(t *testing.T) {
+	f, run := running(t)
+	f.must(dispatch("queued", api.AfterActive))
+	f.must(dispatch("first now", api.StartNow))
+	f.must(dispatch("second now", api.StartNow))
+	f.must(dispatch("third now", api.StartNow))
+	if got, want := f.turns(run), []string{"first now", "second now", "third now", "queued"}; !slices.Equal(got, want) {
+		t.Fatalf("the turns went %q, want %q", got, want)
+	}
+
+	f, run = running(t)
+	f.must(dispatch("queued", api.AfterActive))
+	f.must(dispatch("restart", api.RestartActive))
+	f.must(dispatch("now", api.StartNow))
+	if got, want := f.turns(run), []string{"restart", "now", "queued"}; !slices.Equal(got, want) {
+		t.Fatalf("after a restart the turns went %q, want %q", got, want)
+	}
+}
+
 // An edit changes what the agent is given when the message's turn comes,
 // held or ready; one that changes nothing records nothing, and one with no
 // words is refused.

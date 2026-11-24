@@ -350,11 +350,19 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 			return err
 		}
 	}
-	// A start now on a busy thread goes first in its queue: it starts the
-	// moment the run ends, and stops nothing.
 	q := api.MessageQueued{Message: id, Text: m.Text, Mode: m.Mode, Pos: d.t.pos(false), Held: m.Mode == api.Defer, By: d.by}
-	if m.Mode == api.RestartActive || m.Mode == api.StartNow && d.t.Live() != nil {
+	switch {
+	case m.Mode == api.RestartActive:
 		q.Pos = d.t.pos(true)
+	case m.Mode == api.StartNow && d.t.Live() != nil:
+		// A start now on a busy thread starts the moment the run ends, and
+		// stops nothing: it goes ahead of what waits, behind the start
+		// nows sent before it.
+		pos, err := d.place(id, d.t.afterStarts())
+		if err != nil {
+			return err
+		}
+		q.Pos = pos
 	}
 	if err := d.emit(q); err != nil {
 		return err
@@ -390,6 +398,18 @@ func (t Thread) pos(front bool) int64 {
 		return lo - 1
 	}
 	return hi + 1
+}
+
+// afterStarts is the first message waiting its turn that isn't a start
+// now ready to go, or a restart's: where a start now sent while the thread
+// is busy goes. Zero when there is none.
+func (t Thread) afterStarts() api.ID {
+	for _, m := range t.line() {
+		if m.State != QueueReady || m.Mode != api.StartNow && m.Mode != api.RestartActive {
+			return m.ID
+		}
+	}
+	return api.ID{}
 }
 
 // place makes room in the line for message just before the message
