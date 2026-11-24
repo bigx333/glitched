@@ -143,15 +143,9 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 	case CaptureCheckpoint, RevertThread:
 		return !t.Deleted, nil
 	case MakeWorktree:
-		// A thread settled first is done with before it ran: its worktree
-		// is never made.
-		if t.Origin == nil || !t.Origin.Making || t.Deleted {
-			return false, nil
-		}
-		if t.settled() {
-			return false, WorktreeFailed{Error: "the thread was settled before its worktree was made"}
-		}
-		return true, nil
+		// On a thread settled first, the host makes no worktree, and
+		// finishes one a host before it began.
+		return t.Origin != nil && t.Origin.Making && !t.Deleted, nil
 	case ReportToParent:
 		// The parent decides, as it observes the report, whether it can
 		// still take it.
