@@ -199,6 +199,9 @@ func apply(t Thread, e Event) (Thread, error) {
 		t.Runs[len(t.Runs)-1].Signalled = true
 	case api.TurnUncertain:
 		silent = t.silentRun(b.Run)
+		if i := t.runAt(b.Run); i >= 0 && t.Runs[i].State == RunUncertain {
+			break
+		}
 		if err = t.setRun(b.Run, RunUncertain); err == nil {
 			err = t.release(b.Run, QueueUncertain)
 		}

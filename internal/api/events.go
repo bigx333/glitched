@@ -57,6 +57,10 @@ type MessageQueued struct {
 	// By is the thread whose agent sent the message, as a child's first
 	// message or a task tool's; zero for the user's.
 	By ID `json:"by,omitzero"`
+	// Replaces is the uncertain run the message replaced; Auto, that the
+	// engine sent it to continue a run a restart cut off.
+	Replaces ID   `json:"replaces,omitzero"`
+	Auto     bool `json:"auto,omitempty"`
 }
 
 // MessageClaimed binds a message to a live run it will be steered into.
@@ -178,6 +182,10 @@ type TurnRestored struct {
 type TurnUncertain struct {
 	Run    ID              `json:"run"`
 	Reason UncertainReason `json:"reason,omitzero"`
+	// Continue is that the engine continues the run unasked, as Continue
+	// does, once it can: the user has it continue the runs a restart cut
+	// off as they worked on a thread of theirs.
+	Continue bool `json:"continue,omitempty"`
 }
 
 // UncertainReason is why a run became uncertain.

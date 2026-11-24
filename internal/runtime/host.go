@@ -53,12 +53,12 @@ type Host struct {
 	// changes; working is the threads whose run does.
 	awake   func(bool)
 	working map[api.ID]bool
-	// autoContinue continues the user's threads whose run this boot lost;
-	// lost is those runs, which boot found.
+	// autoContinue has the runs a restart cut off as they worked on the
+	// user's threads continued unasked, these and those of earlier boots.
 	autoContinue  bool
-	lost          []lostRun
 	continued     chan struct{} // poked at each commit while continueLost runs
-	lostDone      chan struct{} // closed once continueLost has been through lost
+	full          chan struct{} // poked as continueLost waits for a continued run to end
+	lostDone      chan struct{} // closed once continueLost has been through every run due
 	compactCheck  chan api.ID
 	compactRescan chan struct{}
 	compactDue    chan compactDue
@@ -162,6 +162,7 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		sent:          map[api.ID]bool{},
 		working:       map[api.ID]bool{},
 		continued:     make(chan struct{}, 1),
+		full:          make(chan struct{}, 1),
 		lostDone:      make(chan struct{}),
 		compactCheck:  make(chan api.ID, 64),
 		compactRescan: make(chan struct{}, 1),
@@ -446,10 +447,7 @@ func (h *Host) boot(ctx context.Context) error {
 			lease = 0
 		}
 		restored, ok := rec.(provider.Restored)
-		if !ok && !failed && !r.Silent {
-			h.lost = append(h.lost, lostRun{thread: id, run: r.ID, was: r.State})
-		}
-		if err := h.observe(ctx, id, engine.Reconciled{Run: r.ID, Restored: ok, Failed: failed}, lease); err != nil {
+		if err := h.observe(ctx, id, engine.Reconciled{Run: r.ID, Restored: ok, Failed: failed, Continue: h.autoContinue}, lease); err != nil {
 			return err
 		}
 		if ok {

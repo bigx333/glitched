@@ -283,6 +283,8 @@ type Reconciled struct {
 	Run      api.ID
 	Restored bool
 	Failed   bool
+	// Continue has a run of the user's lost as it worked continued unasked.
+	Continue bool
 }
 
 // Rewound: the database came back from a backup and lost history. The live

@@ -65,3 +65,7 @@ func (h *Host) Kill() {
 // LostContinued is closed once an auto-continuing host has decided each
 // run its boot lost.
 func (h *Host) LostContinued() <-chan struct{} { return h.lostDone }
+
+// ContinuesFull is poked as an auto-continuing host waits for one of the
+// runs it continued to end before it continues another.
+func (h *Host) ContinuesFull() <-chan struct{} { return h.full }
