@@ -177,13 +177,29 @@ func (a *app) hideSidebar(keyboard bool) {
 }
 
 // revealSidebar shows the sidebar. Where the window has no room for it
-// beside the chat and the panel open there, the panel closes: the user's
-// latest choice wins, as Zeron's shell evicts its oldest column.
+// beside the chat and the panel open there, the next frame closes panels
+// until it fits, at that frame's size: the user's latest choice wins, as
+// Zeron's shell evicts its oldest column.
 func (a *app) revealSidebar(keyboard bool) {
-	a.showSidebar, a.sidebarJump = true, keyboard
-	if a.crowded() {
-		a.showDiff, a.showPreview, a.showPluginTab = false, false, false
-		delete(a.subagentStep, a.current().id())
+	a.showSidebar, a.sidebarJump, a.sidebarAsked = true, keyboard, true
+}
+
+// makeRoomForSidebar closes the panels beside the chat, the one shown
+// first, while the sidebar the user asked for doesn't fit beside them.
+func (a *app) makeRoomForSidebar() {
+	for range 4 {
+		switch {
+		case !a.crowded():
+			return
+		case a.showDiff:
+			a.showDiff = false
+		case a.showPreview:
+			a.showPreview = false
+		case a.showPluginTab:
+			a.showPluginTab = false
+		default:
+			delete(a.subagentStep, a.current().id())
+		}
 	}
 }
 

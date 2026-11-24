@@ -286,7 +286,7 @@ type app struct {
 	// windowW is the window's width, as this frame lays it out.
 	windowW float32
 	// sidebarOpen is how far the sidebar has slid in this frame, from 0
-	// to 1; sidebarJump skips the slide, for ⌘B.
+	// to 1; sidebarJump skips the next slide, for ⌘B.
 	sidebarOpen float32
 	// sidebarTall is how tall the sidebar was as last laid out, or the
 	// window, before it was.
@@ -305,6 +305,9 @@ type app struct {
 	// counted them, for the headers its plugin places.
 	sectionCounts map[category]int
 	sidebarJump   bool
+	// sidebarAsked is whether the user asked for the sidebar since the last
+	// frame, which makes room for it at its own size.
+	sidebarAsked bool
 	// vibrant is whether the sidebar shows the window's vibrancy.
 	vibrant bool
 	// panelsJump shows the diff panel and the terminal without motion,
@@ -1021,12 +1024,17 @@ func (a *app) view(c *ui.Context) {
 	if w > 0 {
 		a.sidebarShown = max(min(a.sidebarWidth, w-minChatWidth), minSidebarWidth)
 	}
+	if a.sidebarAsked {
+		a.sidebarAsked = false
+		a.makeRoomForSidebar()
+	}
 	target := float32(0)
 	if a.sidebarVisible() {
 		target = 1
 	}
 	if a.sidebarJump {
 		a.sidebarOpen = root.Jump("sidebar", target)
+		a.sidebarJump = false
 	} else {
 		a.sidebarOpen = root.AnimateTo("sidebar", target, sidebarSlide)
 	}
