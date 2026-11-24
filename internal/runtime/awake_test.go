@@ -119,7 +119,8 @@ type lingering struct {
 	*fake.Adapter
 	closing, release chan struct{}
 	once             sync.Once
-	plays            int // events of a turn played before it works on; 0 is 2, -1 every one
+	plays            int           // events of a turn played before it works on; 0 is 2, -1 every one
+	started          chan struct{} // when set, a Start takes effect once it closes, whatever its call's context
 }
 
 func (s *lingering) Open(ctx context.Context, spec provider.SessionSpec) (provider.Agent, error) {
@@ -146,6 +147,14 @@ func (g *lingeringAgent) Next(ctx context.Context) (provider.Event, error) {
 		g.left--
 	}
 	return g.Agent.Next(ctx)
+}
+
+func (g *lingeringAgent) Do(ctx context.Context, act provider.Action) error {
+	if _, start := act.(provider.Start); start && g.s.started != nil {
+		<-g.s.started
+		ctx = context.Background()
+	}
+	return g.Agent.Do(ctx, act)
 }
 
 func (g *lingeringAgent) Close(ctx context.Context) error {
@@ -214,6 +223,25 @@ func TestAwakeUntilADeletedStartCloses(t *testing.T) {
 	<-ad.closing
 	if got := h.all(); !slices.Equal(got, []bool{true}) {
 		t.Fatalf("told %v with the deleted thread's agent still closing, want [true]", got)
+	}
+	close(ad.release)
+	toldAtLast(t, h, []bool{true, false})
+}
+
+// An agent whose thread is deleted as the provider opens it, and which
+// starts anyway, counts as working until it closes.
+func TestAwakeUntilADeletedStartThatTookCloses(t *testing.T) {
+	h := &heard{}
+	ad := &lingering{Adapter: fake.New(fake.Turn(false)), closing: make(chan struct{}), release: make(chan struct{}), started: make(chan struct{})}
+	n := awakeHost(t, dbPath(t), ad, h)
+	thread := newThread(t, n.h)
+	submit(t, n.h, thread, dispatch("go", api.StartNow))
+	until(t, n.h, thread, "the agent opening", func(th api.Thread) bool { return th.Run == api.RunStarting })
+	submit(t, n.h, thread, api.ThreadDelete{})
+	close(ad.started)
+	<-ad.closing
+	if got := h.all(); !slices.Equal(got, []bool{true}) {
+		t.Fatalf("told %v with the deleted thread's started agent still closing, want [true]", got)
 	}
 	close(ad.release)
 	toldAtLast(t, h, []bool{true, false})
