@@ -493,8 +493,12 @@ func (s *Store) rewind(ctx context.Context, tx *sql.Tx) (uint64, error) {
 	}
 	now := time.Now()
 	for _, id := range threads {
-		if _, _, err := s.write(ctx, tx, id, func(_ querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
-			return engine.Observe(t, engine.Rewound{}, now)
+		if _, _, err := s.write(ctx, tx, id, func(q querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
+			env, err := s.env(ctx, q, t)
+			if err != nil {
+				return nil, nil, err
+			}
+			return engine.ObserveWith(t, engine.Rewound{}, env, now)
 		}); err != nil {
 			return 0, err
 		}
