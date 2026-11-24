@@ -153,7 +153,7 @@ func (a *app) sidebar(c *ui.Context) {
 			hide.Invisible()
 		}
 		if hide.Clicked() {
-			a.toggleSidebar(false)
+			a.hideSidebar(false)
 		}
 	})
 	if inSettings {
@@ -163,9 +163,63 @@ func (a *app) sidebar(c *ui.Context) {
 	}
 }
 
+// toggleSidebar hides the sidebar shown, or shows it.
 func (a *app) toggleSidebar(keyboard bool) {
-	a.showSidebar = !a.showSidebar
-	a.sidebarJump = keyboard
+	if a.sidebarVisible() {
+		a.hideSidebar(keyboard)
+		return
+	}
+	a.revealSidebar(keyboard)
+}
+
+func (a *app) hideSidebar(keyboard bool) {
+	a.showSidebar, a.sidebarJump = false, keyboard
+}
+
+// revealSidebar shows the sidebar. Where the window has no room for it
+// beside the chat and the panel open there, the panel closes: the user's
+// latest choice wins, as Zeron's shell evicts its oldest column.
+func (a *app) revealSidebar(keyboard bool) {
+	a.showSidebar, a.sidebarJump = true, keyboard
+	if a.crowded() {
+		a.showDiff, a.showPreview, a.showPluginTab = false, false, false
+		delete(a.subagentStep, a.current().id())
+	}
+}
+
+// sidebarVisible is whether the sidebar is shown: the user's choice, unless
+// it gives its room to the panel beside the chat.
+func (a *app) sidebarVisible() bool { return a.showSidebar && !a.crowded() }
+
+// crowded is whether the window is too narrow for the sidebar, at the width
+// it is shown at once capped for the chat, the chat and the panel open
+// beside it, on the chat's page: the sidebar then gives way, and comes back
+// as the panel closes or the window widens.
+func (a *app) crowded() bool {
+	path := a.router.Path()
+	if strings.HasPrefix(path, "/settings") || strings.HasPrefix(path, "/plugins/") {
+		return false
+	}
+	least := a.sidePanelMin()
+	return least > 0 && a.windowW > 0 && a.windowW-a.sidebarShown < minChatWidth+least
+}
+
+// sidePanelMin is the least width of the panel shown beside the chat, in
+// the order the chat picks the one it shows, 0 with none. The preview's is
+// the least it drags to, so that a drag never changes it.
+func (a *app) sidePanelMin() float32 {
+	switch {
+	case a.showDiff:
+		return diffMin
+	case a.showPreview:
+		return minPreviewWidth
+	case a.showPluginTab:
+		return diffMin
+	}
+	if _, _, ok := a.subagentShown(a.current()); ok {
+		return diffMin
+	}
+	return 0
 }
 
 // statusMark shows what a thread is doing, before its title. Only work

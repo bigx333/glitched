@@ -543,11 +543,15 @@ func (a *app) hunkBar(c *ui.Context, d *editor.DiffState) {
 	})
 }
 
+// diffMin is the least width of the diff panel, and of the panels that
+// take its width, as the window allows.
+const diffMin = 380
+
 // diffWidth is the panel's width: a share of the room beside the sidebar,
 // wider side by side, and never so wide the chat has less than
 // minChatWidth.
 func (a *app) diffWidth() float32 {
-	share, lo, hi := float32(0.42), float32(380), float32(520)
+	share, lo, hi := float32(0.42), float32(diffMin), float32(520)
 	if a.layout() == editor.DiffSplit {
 		share, lo, hi = 0.58, splitWidth, 900
 	}

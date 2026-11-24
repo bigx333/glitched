@@ -175,9 +175,9 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 	head := ui.Row(c).Height(max(bar.Height, headerHeight)).Shrink(0).
 		Padding(0, right, 0, left).Gap(headerGap).AlignItems(ui.Center).ClipX()
 	head.DragWindow().Children(func() {
-		if !a.showSidebar {
+		if !a.sidebarVisible() {
 			if a.iconButton(c, "show-sidebar", icPanelLeft, "Show sidebar  ⌘B", false).Clicked() {
-				a.toggleSidebar(false)
+				a.revealSidebar(false)
 			}
 		}
 		project, branch := a.projectOf(t).name(), t.View.Branch
@@ -193,7 +193,7 @@ func (a *app) header(c *ui.Context, t thread, files []fileChange) {
 		if branch != "" {
 			pills.branch = text(branch, 11) + 2*pillPadX + 2 + headerGap
 		}
-		if !a.showSidebar {
+		if !a.sidebarVisible() {
 			pills.sidebar = headerIconW + headerGap
 		}
 		natural, _ := c.MeasureText(0, ui.Span{Text: title(t), Weight: 600})

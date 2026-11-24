@@ -309,3 +309,44 @@ func TestASubagentsContextKeepsItsLatestText(t *testing.T) {
 		t.Fatalf("the context's parts are %d bytes as JSON, past %d", len(b), subagentBytes)
 	}
 }
+
+// At the narrowest window, with the sidebar shown, a subagent's panel
+// takes the sidebar's room rather than squeeze its transcript beside the
+// chat, as the diff panel does; Show sidebar brings the sidebar back in
+// the panel's place. A window with room for all three keeps them.
+func TestAtTheNarrowestWindowASidePanelTakesTheSidebarsRoom(t *testing.T) {
+	long := "The sidebar sorts its threads by when each last changed, the newest first, in sidebar.go."
+	h := subagentThreads(t, []provider.Event{spawnStep("alpha"), nestedText("alpha", long)}, "Narrow room")
+	h.tt.SetSize(760, 860)
+	h.tt.Advance(time.Second)
+	openSubagentOf(t, h, "Agent alpha")
+	h.tt.Advance(time.Second)
+	subagentShot(t, h, "narrow-760")
+	r, ok := h.tt.Find(long)
+	if !ok || r.W < 280 || r.X+r.W > 760 {
+		t.Fatalf("at 760 points the subagent's transcript is %g points wide at %g, found %v, want at least 280 within the window", r.W, r.X, ok)
+	}
+	if h.a.sidebarOpen != 0 || !h.a.showSidebar {
+		t.Fatalf("the sidebar is %g open, shown %v, want it out of the way, still the user's choice", h.a.sidebarOpen, h.a.showSidebar)
+	}
+	h.click("Show sidebar  ⌘B")
+	h.tt.Advance(time.Second)
+	if h.a.panels().Subagent || h.a.sidebarOpen != 1 {
+		t.Fatalf("Show sidebar left the panel open %v and the sidebar %g open, want the sidebar in its place", h.a.panels().Subagent, h.a.sidebarOpen)
+	}
+	h.a.showDiff = true
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	if h.a.sidebarOpen != 0 || h.a.diffWidth() < 300 {
+		t.Fatalf("the diff panel at 760 points leaves the sidebar %g open and is %g wide, want it in the sidebar's room", h.a.sidebarOpen, h.a.diffWidth())
+	}
+	h.a.showDiff = false
+	h.tt.Frame()
+	h.tt.SetSize(1320, 860)
+	h.tt.Advance(time.Second)
+	openSubagentOf(t, h, "Agent alpha")
+	h.tt.Advance(time.Second)
+	if h.a.sidebarOpen != 1 || !h.a.panels().Subagent {
+		t.Fatalf("at 1320 points the sidebar is %g open beside the panel (open %v), want both", h.a.sidebarOpen, h.a.panels().Subagent)
+	}
+}

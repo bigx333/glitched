@@ -97,7 +97,7 @@ func (a *app) actions() []command {
 		action("terminal.toggle", "Toggle terminal", "⌘J", "terminal", func() { a.showTerminal = !a.showTerminal }),
 		action("preview.toggle", "Toggle preview", "⇧⌘P", "global", a.togglePreview),
 		action("browser.newTab", "New browser tab", "⌘T", "plus", func() { a.newTab("") }),
-		action("sidebar.toggle", "Toggle sidebar", "⌘B", "sidebar-minimalistic", func() { a.showSidebar = !a.showSidebar }),
+		action("sidebar.toggle", "Toggle sidebar", "⌘B", "sidebar-minimalistic", func() { a.toggleSidebar(false) }),
 		action("theme.toggle", "Toggle light / dark", "⇧⌘L", "pallete-2", a.toggleLightDark),
 	)
 	for i, s := range settingsSections {
