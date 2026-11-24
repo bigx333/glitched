@@ -322,7 +322,7 @@ func pair(_ context.Context, args []string) error {
 	set := given(fs)
 	switch {
 	case fs.NArg() > 0:
-		return usageError(fmt.Sprintf("pair: unexpected %q; quote a label with spaces", fs.Arg(0)))
+		return usageError("pair: takes no arguments after its flags; quote a label with spaces")
 	case countSet(set, "name", "list", "revoke", "children") > 1:
 		return usageError("pair: give one of -name, -list, -revoke and -children")
 	case *link && *name == "":
@@ -377,7 +377,7 @@ func pair(_ context.Context, args []string) error {
 			return err
 		}
 		fmt.Printf("Link %s for %s, at %s at most. Its token, shown only this once:\n\n  %s\n\n", l.ID, *name, daemon.AccessName(l.Access), token)
-		fmt.Printf("Serve on the tailnet with:\n\n  %s -tailnet\n\nThen on %s:\n\n  glitched link -add <this machine> -server %s -token %s\n\nRevoke it here with %s -revoke %s.\n", cmd, *name, addr, token, revokeCmd, shellQuote(*name))
+		fmt.Printf("Serve on the tailnet with:\n\n  %s -tailnet\n\nThen on %s:\n\n  glitched link -add <this machine> -server %s -token %s\n\nRevoke it here with:\n\n  %s -revoke %s\n", cmd, *name, addr, token, revokeCmd, shellQuote(*name))
 		return nil
 	}
 	token, err := daemon.Pair(*dir, *name)
@@ -431,7 +431,7 @@ func link(ctx context.Context, args []string) error {
 	set := given(fs)
 	switch {
 	case fs.NArg() > 0:
-		return usageError(fmt.Sprintf("link: unexpected %q; quote a label with spaces", fs.Arg(0)))
+		return usageError("link: takes no arguments after its flags; quote a label with spaces")
 	case countSet(set, "add", "list", "remove") > 1:
 		return usageError("link: give one of -add, -list and -remove")
 	case *add == "" && (set["server"] || set["token"]):
