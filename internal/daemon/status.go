@@ -24,6 +24,9 @@ type Status struct {
 	// when no engine answers.
 	Tailnet api.Tailnet
 	Tokens  []Token
+	// Machines are those this engine's agents may start children on,
+	// their tokens left out.
+	Machines []Machine
 }
 
 // A Listener is one of Config.Listen, and whether a TCP connection to it
@@ -49,7 +52,14 @@ func Inspect(ctx context.Context, dir string, detect func(context.Context) (api.
 	if err != nil {
 		return Status{}, err
 	}
-	st := Status{Config: cfg, Tokens: tokens, Listeners: make([]Listener, len(cfg.Listen))}
+	machines, err := Machines(dir)
+	if err != nil {
+		return Status{}, err
+	}
+	for i := range machines {
+		machines[i].Token = ""
+	}
+	st := Status{Config: cfg, Tokens: tokens, Machines: machines, Listeners: make([]Listener, len(cfg.Listen))}
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	var wg sync.WaitGroup
