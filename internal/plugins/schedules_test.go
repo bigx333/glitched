@@ -111,7 +111,7 @@ func schedulesRuntimeWith(t *testing.T, clock string, hooks *scheduleHooks) (*pl
 			return out, err
 		}
 	}
-	p, err := plugin.Load(folder, plugin.Options{Prelude: Prelude, Contract: Contract, ContractVersion: ContractVersion, DataDir: DataDir(state),
+	p, err := plugin.Load(folder, plugin.Options{Main: "service.js", Prelude: Prelude, Contract: Contract, ContractVersion: ContractVersion, DataDir: DataDir(state),
 		Functions: map[string]plugin.Function{"db.query": d.query, "db.exec": after(d.exec), "app": app}})
 	if err != nil {
 		t.Fatal(err)
@@ -331,7 +331,7 @@ func TestAScheduleTakesUnixAndWindowsFolders(t *testing.T) {
 }
 
 // There are at most 1000 schedules, and list answers them a page at a
-// time, by title.
+// time, by id.
 func TestSchedulesStopAtTheirMostAndListAPageAtATime(t *testing.T) {
 	p, db, _ := schedulesRuntime(t, "")
 	saveSchedule(t, p, map[string]any{"title": "a"})
@@ -342,7 +342,7 @@ func TestSchedulesStopAtTheirMostAndListAPageAtATime(t *testing.T) {
 	if err := serveSchedules(p, "save", map[string]any{"schedule": map[string]any{"title": "one too many", "prompt": "Check.", "workspace": "/project", "provider": "codex", "model": "fake", "kind": "interval", "every": 5}}, nil); err == nil || !strings.Contains(err.Error(), "1000") {
 		t.Fatalf("the 1001st schedule saved: %v", err)
 	}
-	var titles []string
+	var ids []string
 	var after any
 	for pages := 0; ; pages++ {
 		var page struct {
@@ -353,7 +353,7 @@ func TestSchedulesStopAtTheirMostAndListAPageAtATime(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, s := range page.Schedules {
-			titles = append(titles, s.Title)
+			ids = append(ids, s.ID)
 		}
 		if page.Next == nil {
 			break
@@ -362,8 +362,8 @@ func TestSchedulesStopAtTheirMostAndListAPageAtATime(t *testing.T) {
 			t.Fatal("list never ends")
 		}
 	}
-	if len(titles) != 1000 || !slices.IsSorted(titles) || titles[0] != "a" || titles[999] != "z" {
-		t.Fatalf("list answered %d schedules, from %q to %q, want 1000 by title", len(titles), titles[0], titles[len(titles)-1])
+	if len(ids) != 1000 || !slices.IsSorted(ids) || len(slices.Compact(slices.Clone(ids))) != 1000 {
+		t.Fatalf("list answered %d schedules, from %q to %q, want 1000 by id, each once", len(ids), ids[0], ids[len(ids)-1])
 	}
 }
 

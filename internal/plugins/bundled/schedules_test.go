@@ -258,3 +258,113 @@ func TestRunNowsAtOnceAreARunEach(t *testing.T) {
 		}
 	}
 }
+
+// A list read page by page while schedules are renamed and deleted lists
+// each schedule still there once, and none deleted before its page: a
+// rename moves no schedule from one page to another.
+func TestAListReadWhileSchedulesAreEditedListsEachOnce(t *testing.T) {
+	call := schedulesService(t, t.TempDir(), plugins.ServiceOptions{})
+	type saved struct{ ID, Title string }
+	var all []saved
+	for i := range 150 {
+		out, err := call("save", map[string]any{"schedule": schedule(map[string]any{"title": fmt.Sprintf("s%03d", i), "kind": "interval", "every": 30})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var s saved
+		json.Unmarshal(out, &s)
+		all = append(all, s)
+	}
+	type page struct {
+		Schedules []saved
+		Next      any
+	}
+	read := func(after any) page {
+		out, err := call("list", map[string]any{"after": after})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var p page
+		json.Unmarshal(out, &p)
+		return p
+	}
+	first := read(nil)
+	if len(first.Schedules) != 100 || first.Next == nil {
+		t.Fatalf("the first page has %d schedules and next %v", len(first.Schedules), first.Next)
+	}
+	// Between the pages: one listed already is renamed to sort last, one
+	// not yet listed is renamed to sort first, and one not yet listed is
+	// deleted.
+	listed := first.Schedules[0]
+	seen := map[string]int{}
+	for _, s := range first.Schedules {
+		seen[s.ID]++
+	}
+	var rest []saved
+	for _, s := range all {
+		if seen[s.ID] == 0 {
+			rest = append(rest, s)
+		}
+	}
+	unlisted, gone := rest[0], rest[1]
+	for _, edit := range []struct {
+		s     saved
+		title string
+	}{{listed, "zzz"}, {unlisted, "aaa"}} {
+		s := schedule(map[string]any{"id": edit.s.ID, "title": edit.title, "kind": "interval", "every": 30})
+		if _, err := call("save", map[string]any{"schedule": s}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := call("delete", map[string]any{"id": gone.ID}); err != nil {
+		t.Fatal(err)
+	}
+	for p := first; p.Next != nil; {
+		p = read(p.Next)
+		for _, s := range p.Schedules {
+			seen[s.ID]++
+		}
+	}
+	for _, s := range all {
+		want := 1
+		if s.ID == gone.ID {
+			want = 0
+		}
+		if seen[s.ID] != want {
+			t.Errorf("%s (%s) listed %d times, want %d", s.ID, s.Title, seen[s.ID], want)
+		}
+	}
+}
+
+// A save over a revision is refused once another save or a delete came
+// after it was read: an edit brings back no schedule deleted since, and
+// undoes no switch since.
+func TestASaveOverAnOldRevisionIsRefused(t *testing.T) {
+	call := schedulesService(t, t.TempDir(), plugins.ServiceOptions{})
+	out, err := call("save", map[string]any{"schedule": schedule(map[string]any{"kind": "interval", "every": 30})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var read struct {
+		ID       string
+		Revision int
+	}
+	json.Unmarshal(out, &read)
+	if _, err := call("save", map[string]any{"schedule": map[string]any{"id": read.ID, "enabled": false, "revision": read.Revision}}); err != nil {
+		t.Fatal(err)
+	}
+	edit := schedule(map[string]any{"id": read.ID, "title": "Edited", "kind": "interval", "every": 30, "revision": read.Revision})
+	if _, err := call("save", map[string]any{"schedule": edit}); err == nil || !strings.Contains(err.Error(), "saved since it was read") {
+		t.Fatalf("an edit over the revision before the switch: %v", err)
+	}
+	if _, err := call("delete", map[string]any{"id": read.ID}); err != nil {
+		t.Fatal(err)
+	}
+	edit["revision"] = read.Revision + 1
+	if _, err := call("save", map[string]any{"schedule": edit}); err == nil || !strings.Contains(err.Error(), "was deleted") {
+		t.Fatalf("an edit of a schedule deleted since: %v", err)
+	}
+	if out, _ := call("list", nil); string(out) != `{"schedules":[],"next":null}` {
+		t.Fatalf("the refused edit left %s", out)
+	}
+}
