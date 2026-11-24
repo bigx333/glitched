@@ -39,6 +39,7 @@ type remotes struct {
 	engineB    api.ID
 	parent     api.ID
 	limits     engine.Limits
+	continueB  bool // B continues the runs its restart lost
 }
 
 func freeAddr(t *testing.T) string {
@@ -96,7 +97,7 @@ func (p *remotes) machine(server string) {
 
 func (p *remotes) startB() {
 	p.t.Helper()
-	d, err := Start(context.Background(), Config{Dir: p.dirB, Hub: true, Epoch: 1, Listen: []string{p.addrB}, Providers: provider.Mux{p.model.Provider: p.adB}})
+	d, err := Start(context.Background(), Config{Dir: p.dirB, Hub: true, Epoch: 1, Listen: []string{p.addrB}, ContinueAfterRestart: p.continueB, Providers: provider.Mux{p.model.Provider: p.adB}})
 	if err != nil {
 		p.t.Fatal(err)
 	}
@@ -968,5 +969,48 @@ func TestARemovedMachineFreesItsWaitingChildsPlace(t *testing.T) {
 	_, es := spawn(t, p.a.Endpoint(), p.adA, p.parent, fake.Child{Title: "another", Task: "go"})
 	if es[0] != nil {
 		t.Fatalf("removed B, received no further run edge, child remains %s, next child refused: %v", p.placeholder(kid).Remote.State, es[0])
+	}
+}
+
+// B's restart with continue-after-restart on continues its person's run
+// it lost, and never a link's child: continue-after-restart applies to no
+// child, whichever machine its parent is on.
+func TestBContinuesNoLinkChildAfterARestart(t *testing.T) {
+	adB := fake.New(fake.Turn(false))
+	adB.HoldStart = true
+	p := newRemotes(t, adB, "fake", engine.Limits{})
+	snap, err := p.b.Endpoint().Read(context.Background(), api.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mine api.ID
+	for _, th := range snap.Threads {
+		if th.Title == "mine" {
+			mine = th.ID
+		}
+	}
+	if _, err := p.b.Endpoint().Submit(context.Background(), api.Command{ID: api.NewID(), Target: mine, Body: api.MessageDispatch{Text: "go", Mode: api.StartNow}}); err != nil {
+		t.Fatal(err)
+	}
+	kid := p.place("there")
+	there := p.bound(kid).Thread
+	until(t, "both runs started on b", func() bool { return adB.Starts() >= 2 })
+	p.stopA()
+	p.stopB()
+	next := fake.New(fake.Turn(false))
+	next.HoldStart = true
+	p.adB, p.continueB = next, true
+	p.startB()
+	until(t, "b's person's run continued", func() bool { return next.Starts() >= 1 })
+	time.Sleep(time.Second)
+	if n := next.Starts(); n != 1 {
+		t.Fatalf("%d runs started on b after its restart; want only its person's", n)
+	}
+	for _, e := range eventsOf(t, p.b.Endpoint(), there) {
+		if b, _ := e.Decode(); b != nil {
+			if u, ok := b.(api.TurnUncertain); ok && u.Continue {
+				t.Fatalf("the link's child was lost as one to continue: %+v", u)
+			}
+		}
 	}
 }
