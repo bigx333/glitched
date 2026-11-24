@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -359,5 +360,27 @@ func TestAGivenRunnerKeepsTheVaultOut(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("no run")
+	}
+}
+
+// A session closing as its worker shows a drawing, as Close does while a
+// host without a UI thread draws on the worker, shares nothing with it
+// unguarded: the race detector sees no race.
+func TestASessionClosesAsItsDrawingIsShown(t *testing.T) {
+	state := t.TempDir()
+	writeModule(t, state, "badges", badgeManifest(`"ui.place", "threads:read"`), badgeModule)
+	h := Open(state, Options{Logf: t.Logf})
+	t.Cleanup(h.Close)
+	s := h.App("badges")
+	if s == nil {
+		t.Fatal("no app session")
+	}
+	for range 50 {
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Go(func() { <-start; s.publish(placeDraw{}) })
+		wg.Go(func() { <-start; s.close() })
+		close(start)
+		wg.Wait()
 	}
 }
