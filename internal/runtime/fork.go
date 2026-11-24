@@ -66,9 +66,9 @@ func (h *Host) forkSource(ctx context.Context, f api.Forked) (engine.Thread, err
 	if err != nil {
 		return engine.Thread{}, err
 	}
-	src.Runs = slices.Clone(src.Runs)
+	src.Runs = slices.DeleteFunc(slices.Clone(src.Runs), func(r engine.Run) bool { return !slices.Contains(f.Runs, r.ID) })
 	for i := range src.Runs {
-		src.Runs[i].Dropped = !slices.Contains(f.Runs, src.Runs[i].ID)
+		src.Runs[i].Dropped = false
 	}
 	return src, nil
 }
