@@ -276,30 +276,33 @@ func inkWidth(img *image.RGBA, r ui.Rect) float32 {
 // wide as at a wide window: the row's actions give way to it.
 func TestAQueuedMessageFitsAtTheNarrowestWindow(t *testing.T) {
 	h, th := asking(t, runTests)
-	messages := []string{"Then update the docs.", "Dark beta 241", "Finally, open a pull request."}
+	messages := []string{"Then update the docs.", "Dark beta 241", "Finally, open a pull request today."}
 	for _, text := range messages {
 		h.a.backend.Send(th.env, th.id(), text, api.AfterActive)
 	}
 	h.until("the queued messages", func() bool { return h.a.current().View.Queued == 3 && h.tt.HasText(messages[2]) })
 	h.tt.SetSize(1320, 860)
 	h.tt.Advance(time.Second)
-	wide := map[string]float32{}
-	for _, s := range messages {
-		r, ok := h.tt.Find(s)
-		if !ok {
-			t.Fatalf("no %q at 1320 points in %q", s, h.tt.Texts())
-		}
-		wide[s] = inkWidth(h.tt.Image(), r)
+	if !labelled(t, h.tt) {
+		t.Errorf("at 1320 points, with room for every message, Send now has no label")
 	}
+	label := sendNows(t, h.tt)[0].Bounds.W
 	h.tt.SetSize(760, 860)
 	h.tt.Advance(time.Second)
+	if labelled(t, h.tt) {
+		t.Errorf("at 760 points Send now keeps its label")
+	}
+	icon := sendNows(t, h.tt)[0].Bounds.W
+	if r, _ := h.tt.Find(messages[2]); r.W-(label-icon) >= natural(messages[2]) {
+		t.Fatalf("setup: at 760 points %q would show whole beside a labelled Send now", messages[2])
+	}
 	for _, s := range messages {
 		r, ok := h.tt.Find(s)
 		if !ok {
 			t.Fatalf("no %q in %q", s, h.tt.Texts())
 		}
-		if w := inkWidth(h.tt.Image(), r); w < wide[s]-1 || wide[s] < 8 {
-			t.Errorf("%q at %+v is drawn %.0f points wide; want %.0f as at 1320 points", s, r, w, wide[s])
+		if w, want := inkWidth(h.tt.Image(), r), inkOf(t, s); w < want-1 || want < 8 {
+			t.Errorf("%q at %+v is drawn %.0f points wide; want %.0f as drawn alone", s, r, w, want)
 		}
 	}
 	for _, name := range []string{"Send now", "Edit", "Remove"} {
