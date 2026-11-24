@@ -664,6 +664,22 @@ func (e *EndpointClient) Skills(ctx context.Context, q api.SkillQuery) (api.Skil
 	return out, e.c.call(ctx, "skills.list", q, &out)
 }
 
+// SyncSkills offers the engine the skills of the GUI's machine.
+func (e *EndpointClient) SyncSkills(ctx context.Context, q api.SkillSync) (api.SkillsSynced, error) {
+	var out api.SkillsSynced
+	return out, e.c.call(ctx, "skills.sync", q, &out)
+}
+
+// PutSkill gives the engine the files of a skill it lacks.
+func (e *EndpointClient) PutSkill(ctx context.Context, p api.SkillPut) error {
+	return e.c.call(ctx, "skills.put", p, &struct{}{})
+}
+
+// DropSkills has the engine drop the skills a machine synced to it.
+func (e *EndpointClient) DropSkills(ctx context.Context, d api.SkillDrop) error {
+	return e.c.call(ctx, "skills.drop", d, &struct{}{})
+}
+
 // Clone clones a repository onto the engine's machine, saying each line
 // the clone prints to progress. Its ctx ending stops the clone there.
 func (e *EndpointClient) Clone(ctx context.Context, req api.CloneRequest, progress func(string)) (api.Cloned, error) {
