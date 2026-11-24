@@ -159,7 +159,7 @@ Settle and Delete are engine-side (decided 2026-11-05, open question 1). The GUI
 
 ## Remote children (placeholder)
 
-A child on another machine starts as a placeholder here (design: the captain's remote-children handoff, PR 2). Nothing reaches the other machine yet, and `delegate_task` doesn't offer a machine, so only tests make one.
+A child on another machine starts as a placeholder here (design: the captain's remote-children handoff, PR 2). Its create and follow are in "Remote children (created and followed)".
 
 - `api.ThreadCreate.Remote` names a machine by its label in `machines.json` (`daemon.Machines`). The daemon has the store read the file at each remote create, in its commit (`Store.SetPlaces`), so a machine removed takes no more, and takes each machine's engine and link ids, never its token. A file that can't be read, or holds a machine without its label, server, engine or link, refuses only remote creates and is logged once. `store.Submit` runs `CheckChild` as for any child, and decide refuses a label not in the list.
 - The placeholder is a child with `Remote` set (`api.ThreadCreated.Remote`, `engine.Thread.Remote`, `threads.remote`, schema 16) and no run, ever: its task is for the other machine, so nothing queues it here. `threads.origin` is the other machine's side and stays null.
@@ -182,10 +182,26 @@ A link (`api.Link`, minted with `daemon.PairLink`) lets another machine's engine
 - `child.reply{Thread, Run}` is `store.RunReply` for a run of the thread.
 - Protocol 18.
 
+## Remote children (created and followed)
+
+The parent's engine creates a placeholder's child on its machine and follows it there (design: the captain's remote-children handoff, PR 5).
+
+- `delegate_task` takes `machine`, one of the labels in `machines.json` when the agent started (`GLITCHED_MACHINES`, labels only). It sets `ThreadCreate.Remote` and leaves the workspace, project and branch to the other machine. A machine with `isolation: "shared"` is refused: no folder is shared across machines.
+- The placeholder's create commits a `remote.create` effect holding the frozen link create: its command id and thread id derive from the placeholder's, `Origin` is this engine, the parent, its title, its depth and the lower of the parent's and the run's access, and `Repository` is the parent's folder's root and branch. A parent on no branch of a repository with a commit, or with no live run, is refused.
+- The effect records its first try (`remote.attempted`) before it dials, and none once the placeholder is settled or deleted without one. It sends the same command until the machine answers: a receipt binds the placeholder (`remote.bound`), a refusal loses it. A kill before the receipt leaves the effect leased; the next boot replays it, and the other machine's receipt for that command id means one thread there.
+- A bound placeholder has a follower: it subscribes to the child's thread from the cursor the placeholder stores, folds what it reads with `engine.Follow` under the local rules (a done or failed end reports unless stopping, silent or uncertain; a request reports blocked unless silent), asks `child.reply` for each done run, and commits `remote.seen` with the cursor, run, slot and the keys it reported. A report is delivered once per key (the run, or the request), across restarts, snapshots and a restore of the other machine's log. A snapshot's fence is committed once.
+- A blocked child's report says it runs on the machine, where the user answers it: `task_answer` doesn't reach it there yet.
+- Every failed call goes through `runtime.classify`. A network failure retries on `WithRemoteBackoff` (2s doubling, capped at 5m) forever. A refused handshake loses the child the second time in a row. A refusal, `ErrNotAllowed`, `ErrConflict`, `ErrNotFound`, a machine that answers as another engine or link, or one gone from `machines.json` loses it at once. Three defects in a row (an internal error from a handler, a fold that fails, a panic) lose it as a child that may still run there. Progress, a network failure or a refusal starts the defect count over.
+- A lost placeholder (`remote.lost`) reports failed once, saying why.
+- `kidsOf` counts a placeholder creating, or bound with its child's slot neither idle nor uncertain, as at work.
+- The link's token stays in `machines.json` and the dialer: never in the store, a log, an effect or an agent's environment.
+- No wire change between engines beyond protocol 18; the `remote.*` events are this engine's own, and a version 18 client decodes them as unknown and skips them. Protocol stays 18, schema 16.
+- Not yet: a stop, message, settle, delete or configure toward the other machine, and answering its questions from here.
+
 ## Not done
 
 - An agent starting a child (bb's `create_chat` tool): the follow-up PR, likely the first plugin. Until then no path in the app creates a child. The user's "New child thread", the Agents panel's +, and the child's draft were removed on 2026-11-03: a child is always an agent's.
-- Children on another engine than their parent, and moving a thread to another parent.
+- Moving a thread to another parent.
 - An engine-side Stop all.
 - Indexing parents in the hub replica.
 - Real token counts from Claude or Codex.
