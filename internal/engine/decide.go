@@ -958,14 +958,17 @@ func (d *decision) interrupt(drop bool) error {
 		// A stop of a link's thread with nothing running holds what
 		// waits, as its first message before its worktree is made or
 		// while its access is over the cap, and stops its last run, so
-		// its wakes wait as a stopped run's do.
+		// its wakes wait as a stopped run's do. With no run yet the stop
+		// is still asked, so whose it was is kept.
+		var last api.ID
 		for i := len(d.t.Runs) - 1; i >= 0; i-- {
 			if r := d.t.Runs[i]; !r.Silent {
-				if err := d.emit(api.StopAsked{Run: r.ID, By: d.by}); err != nil {
-					return err
-				}
+				last = r.ID
 				break
 			}
+		}
+		if err := d.emit(api.StopAsked{Run: last, By: d.by}); err != nil {
+			return err
 		}
 		return d.hold()
 	case r == nil:
