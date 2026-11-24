@@ -183,3 +183,63 @@ func TestAQueuedRowKeepsTheFocus(t *testing.T) {
 		t.Fatalf("after two messages queued ahead, the focus left turn 3's Remove: %q", h.tt.Texts())
 	}
 }
+
+// focusedNode is what has the keyboard focus, as assistive technology
+// reads it.
+func focusedNode(h *harness) (ui.AccessInfo, bool) {
+	for _, n := range h.tt.AccessAll() {
+		if n.Focused {
+			return n, true
+		}
+	}
+	return ui.AccessInfo{}, false
+}
+
+// tabTo tabs till name has the focus.
+func tabTo(t *testing.T, h *harness, name string) {
+	t.Helper()
+	for range 150 {
+		if n, ok := focusedNode(h); ok && n.Name == name {
+			return
+		}
+		h.tt.Key(0, ui.KeyTab)
+		h.tt.Frame()
+	}
+	t.Fatalf("Tab never reached %q", name)
+}
+
+// A queued message's words are edited from the keyboard alone: the area
+// they're edited in says what it is, and as the edit ends, saved or not,
+// the focus goes back to the row's Edit.
+func TestAQueuedMessageIsEditedFromTheKeyboard(t *testing.T) {
+	h := enterReady(t, burst{}, "Start work.")
+	h.until("the agent at work", func() bool { return h.a.current().View.Run == api.RunRunning })
+	th := h.a.current()
+	h.a.backend.Send(th.env, th.id(), "The queued text", api.AfterActive)
+	h.until("the queued row", func() bool { _, edit := h.tt.Access("Edit"); return len(queueTexts(h)) == 1 && edit })
+	tabTo(t, h, "Edit")
+	h.tt.Key(0, ui.KeyEnter)
+	h.tt.Frame()
+	if n, ok := focusedNode(h); !ok || !n.Multiline || n.Name != "Edit queued message" {
+		t.Fatalf("Edit gave the focus to %+v; want the area named Edit queued message", n)
+	}
+	h.tt.Key(ui.Cmd, ui.KeyA)
+	h.tt.Type("Changed by keyboard")
+	h.tt.Key(ui.Cmd, ui.KeyEnter)
+	h.until("the edit saved", func() bool { q := queueTexts(h); return len(q) == 1 && q[0] == "Changed by keyboard" })
+	if n, ok := focusedNode(h); !ok || n.Name != "Edit" {
+		t.Errorf("after the save the focus is on %+v; want the row's Edit", n)
+	}
+	tabTo(t, h, "Edit")
+	h.tt.Key(0, ui.KeyEnter)
+	h.tt.Frame()
+	h.tt.Type("Discard this")
+	h.tt.Key(0, ui.KeyEscape)
+	h.tt.Frame()
+	if n, ok := focusedNode(h); !ok || n.Name != "Edit" {
+		t.Errorf("after Escape the focus is on %+v; want the row's Edit", n)
+	}
+	if q := queueTexts(h); h.tt.HasText("Save") || q[0] != "Changed by keyboard" {
+		t.Fatalf("Escape kept the edit: %q", q)
+	}
+}
