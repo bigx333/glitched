@@ -2,6 +2,7 @@ package claude
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -18,6 +19,7 @@ import (
 type message struct {
 	Type            string       `json:"type"`
 	Subtype         string       `json:"subtype"`
+	UUID            string       `json:"uuid"`
 	ParentToolUseID *string      `json:"parent_tool_use_id"`
 	Event           *streamEvent `json:"event"` // stream_event
 	Message         *struct {
@@ -289,6 +291,8 @@ type turn struct {
 	cacheExpires time.Time                // when that request's prompt cache expires; zero when unknown
 	cache        *cacheState              // the process's, which outlives the turn; nil in tests that need none
 	interrupted  bool                     // the user stopped the turn
+	prompt       string                   // the uuid of the run's first message
+	at           string                   // the uuid of the last assistant message of the run's own
 	spawns       map[string]*spawn        // native subagents, by the tool use that started each
 	// rejected is when each window that refuses the turn's requests, by
 	// its type, resets: 0 for one Claude Code gave no time. rateLimited is
@@ -318,6 +322,7 @@ func (t *turn) read(m message) []provider.Event {
 		if m.Error == "rate_limit" {
 			t.rateLimited = true
 		}
+		t.at = cmp.Or(m.UUID, t.at)
 		// AskUserQuestion shows as its question card, and TodoWrite as
 		// the plan, not as steps.
 		var evs []provider.Event
@@ -560,6 +565,10 @@ func (t *turn) tally(m message) []provider.Event {
 
 func (t *turn) end(m message) provider.TurnEnded {
 	e := provider.TurnEnded{Outcome: api.OutcomeCompleted, Tokens: t.tokens + m.Usage.total()}
+	if t.at != "" {
+		h, _ := json.Marshal(head{At: t.at, Prompt: t.prompt})
+		e.Head = string(h)
+	}
 	if t.interrupted {
 		e.Outcome = api.OutcomeInterrupted
 		return e

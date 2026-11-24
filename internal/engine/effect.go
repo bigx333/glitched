@@ -84,10 +84,16 @@ type DropCheckpoints struct{}
 
 // RevertThread puts the files of the thread's worktree back as To holds
 // them, after a recovery checkpoint of them as they are, which a replay
-// finds and never takes again.
+// finds and never takes again; unless KeepFiles. Conversation rewinds the
+// thread's conversation to To's run first, and a rewind that fails
+// leaves the files as they are. Dropped is the runs after To the
+// conversation holds as the revert is decided, oldest first.
 type RevertThread struct {
-	Revert api.ID
-	To     api.CheckpointRef
+	Revert       api.ID
+	To           api.CheckpointRef
+	Conversation bool
+	Dropped      []api.ID
+	KeepFiles    bool
 }
 
 func (CaptureCheckpoint) effectKind() string { return "checkpoint.capture" }
@@ -151,7 +157,8 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 // worktree that is. A capture whose ref is there reports what that ref
 // holds and writes nothing, and a drop of refs that are gone deletes
 // nothing but what a gc it left pending prunes. A revert finds the
-// recovery checkpoint it took, and puts the same files back.
+// recovery checkpoint it took, and puts the same files back; its rewind
+// makes the conversation again, and leaves unused any it made before.
 var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true, "worktree.remove": true, "checkpoint.capture": true, "checkpoint.drop": true, "thread.revert": true}
 
 func ReplaySafe(e Effect) bool { return replaySafe[e.effectKind()] }
@@ -190,10 +197,12 @@ type Observation interface{ observed() }
 type Started struct{ Run api.ID }
 
 // Bound is the session the run's agent opened or resumed, before its
-// first prompt.
+// first prompt; Rewound how it took up a rewound conversation, on the
+// first run after the rewind.
 type Bound struct {
 	Run     api.ID
 	Session string
+	Rewound api.RewindKind
 }
 
 type Ended struct {
@@ -202,6 +211,7 @@ type Ended struct {
 	Error   string
 	Tokens  int64
 	Limit   *api.UsageLimit // the usage limit that failed the turn
+	Head    string
 }
 
 type Delta struct {

@@ -895,22 +895,29 @@ func (d *decision) delete(b api.ThreadDelete) error {
 }
 
 // revert has the runtime put the thread's files back as a checkpoint of
-// the thread's holds them. A thread with no worktree of its own keeps no
+// the thread's holds them, rewind its conversation to that checkpoint's
+// run, or both. A thread with no worktree of its own keeps no
 // checkpoints, nor does a child, whose work reaches the user through its
 // parent's branch; and a run at work could write the files under the
-// revert, so the thread is idle. The runtime finds whether the
-// checkpoint was saved, and refuses a tree at work or a folder another
-// thread works in before this commits.
+// revert, or add to the conversation, so the thread is idle. The runtime
+// finds whether the checkpoint was saved, and refuses a tree at work or a
+// folder another thread works in before this commits.
+//
+// A conversation rewinds to the end of a run with a turn of the user's
+// after it: the base has no turn before it, and a recovery checkpoint is
+// files a revert put back, not a point in the conversation.
 func (d *decision) revert(id api.ID, b api.ThreadRevert) error {
 	switch {
-	case !b.Files:
-		return rejected("a revert puts files back; rewinding the conversation is to come")
+	case !b.Files && !b.Conversation:
+		return rejected("a revert puts back the files, the conversation, or both")
 	case !d.t.Parent.IsZero():
 		return rejected("A child thread keeps no checkpoints; revert its parent instead")
-	case !d.t.checkpointed():
+	case b.Files && !d.t.checkpointed():
 		return rejected("Revert needs this thread to run in its own worktree")
-	case d.t.Live() != nil:
+	case d.t.Live() != nil && b.Files:
 		return rejected("Stop the thread before reverting its files")
+	case d.t.Live() != nil:
+		return rejected("Stop the thread before rewinding its conversation")
 	}
 	switch b.To.Phase {
 	case api.CheckpointBase:
@@ -928,10 +935,31 @@ func (d *decision) revert(id api.ID, b api.ThreadRevert) error {
 	default:
 		return rejected("unknown checkpoint")
 	}
-	if err := d.emit(api.ThreadReverting{Revert: id, To: b.To}); err != nil {
+	var dropped []api.ID
+	if b.Conversation {
+		switch {
+		case b.To.Phase == api.CheckpointBase:
+			return rejected("Nothing comes before the thread's first turn to rewind its conversation to")
+		case b.To.Phase == api.CheckpointRecovery:
+			return rejected("A conversation rewinds to a turn, not to the files a revert put back")
+		case d.t.Runs[d.t.runAt(b.To.ID)].Dropped:
+			return rejected("A rewind took this turn out of the conversation")
+		}
+		user := false
+		for _, r := range d.t.Runs[d.t.runAt(b.To.ID)+1:] {
+			if !r.Dropped {
+				dropped = append(dropped, r.ID)
+				user = user || !r.Silent
+			}
+		}
+		if !user {
+			return rejected("The conversation already ends at this turn")
+		}
+	}
+	if err := d.emit(api.ThreadReverting{Revert: id, To: b.To, Conversation: b.Conversation, KeepFiles: !b.Files}); err != nil {
 		return err
 	}
-	d.effects = append(d.effects, RevertThread{Revert: id, To: b.To})
+	d.effects = append(d.effects, RevertThread{Revert: id, To: b.To, Conversation: b.Conversation, KeepFiles: !b.Files, Dropped: dropped})
 	return nil
 }
 
@@ -971,8 +999,8 @@ func (d *decision) observe(o Observation) error {
 	switch o := o.(type) {
 	case Bound:
 		// A run that is no longer the thread's binds nothing.
-		if isLive(o.Run) && o.Session != "" && o.Session != d.t.Session {
-			return d.emit(api.SessionBound{Run: o.Run, Session: o.Session})
+		if isLive(o.Run) && (o.Rewound != "" || o.Session != "" && o.Session != d.t.Session) {
+			return d.emit(api.SessionBound{Run: o.Run, Session: o.Session, Rewound: o.Rewound})
 		}
 	case Started:
 		if !isLive(o.Run) {
@@ -1008,7 +1036,7 @@ func (d *decision) observe(o Observation) error {
 			if stopped {
 				limit = nil
 			}
-			if err := d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error, Tokens: o.Tokens, Limit: limit}); err != nil {
+			if err := d.emit(api.TurnEnded{Run: o.Run, Outcome: o.Outcome, Error: o.Error, Tokens: o.Tokens, Limit: limit, Head: o.Head}); err != nil {
 				return err
 			}
 			d.checkpoint(o.Run, api.CheckpointRun)

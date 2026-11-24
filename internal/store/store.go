@@ -194,6 +194,7 @@ CREATE TABLE runs (
 	silent     INTEGER NOT NULL DEFAULT 0 CHECK (silent IN (0, 1)),
 	limit_resets     INTEGER,
 	resume_cancelled INTEGER NOT NULL DEFAULT 0 CHECK (resume_cancelled IN (0, 1)),
+	dropped    INTEGER NOT NULL DEFAULT 0 CHECK (dropped IN (0, 1)),
 	PRIMARY KEY (thread, ord),
 	CHECK ((state = 'finished') = (outcome IS NOT NULL)),
 	CHECK ((state = 'finished') = (ended IS NOT NULL))
@@ -241,7 +242,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 14
+const schemaVersion = 15
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -358,6 +359,9 @@ ALTER TABLE runs ADD COLUMN silent INTEGER NOT NULL DEFAULT 0 CHECK (silent IN (
 ALTER TABLE runs ADD COLUMN limit_resets INTEGER;
 ALTER TABLE runs ADD COLUMN resume_cancelled INTEGER NOT NULL DEFAULT 0 CHECK (resume_cancelled IN (0, 1));
 `,
+	// The runs a rewind took out of their thread's conversation. No build
+	// before rewound one, so none is.
+	14: `ALTER TABLE runs ADD COLUMN dropped INTEGER NOT NULL DEFAULT 0 CHECK (dropped IN (0, 1));`,
 }
 
 func (s *Store) migrate() error {

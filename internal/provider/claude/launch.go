@@ -22,7 +22,7 @@ var placement = provider.Placement{
 		{Flags: []string{"-p", "--print", "--input-format", "--output-format", "--include-partial-messages", "--verbose"}},
 		{Flags: []string{"--permission-mode", "--permission-prompt-tool", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions", "--allowedTools", "--allowed-tools"}},
 		{Flags: []string{"--mcp-config", "--strict-mcp-config"}},
-		{Flags: []string{"--session-id", "-r", "--resume", "-c", "--continue", "--fork-session", "--no-session-persistence"}},
+		{Flags: []string{"--session-id", "-r", "--resume", "-c", "--continue", "--fork-session", "--resume-session-at", "--resume-drops-turn", "--no-session-persistence"}},
 		{Flags: []string{"--model", "--effort", "--system-prompt", "--append-system-prompt"}},
 	},
 }

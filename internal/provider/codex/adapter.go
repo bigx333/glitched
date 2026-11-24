@@ -69,6 +69,7 @@ var (
 var (
 	_ provider.Adapter           = (*Adapter)(nil)
 	_ provider.Forgetter         = (*Adapter)(nil)
+	_ provider.Rewinder          = (*Adapter)(nil)
 	_ interface{ Close() error } = (*Adapter)(nil)
 )
 
@@ -168,6 +169,34 @@ func (a *Adapter) DefaultModel(ctx context.Context, workspace string) (string, e
 	return c.Model, err
 }
 
+// Rewind forks the thread's Codex thread through the turn spec.Head, on
+// an app-server of its own that approves nothing, and the thread's later
+// runs resume the fork. It forks rather than thread/revert, which cuts
+// the thread in place: a crash before the host records the rewind leaves
+// at most an orphan fork, and the old conversation stays as it was. With
+// no conversation or no turn to fork at, the rewind is portable.
+func (a *Adapter) Rewind(ctx context.Context, spec provider.RewindSpec) (provider.Rewind, error) {
+	if spec.Session == "" || spec.Head == "" {
+		return provider.Rewind{}, nil
+	}
+	prog, err := a.program()
+	if err != nil {
+		return provider.Rewind{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	p, err := launch(ctx, prog, spec.Workspace, spec.Thread.String()+"-"+api.NewID().String(), nil)
+	if err != nil {
+		return provider.Rewind{}, err
+	}
+	defer p.discard()
+	forked, err := p.fork(ctx, spec.Workspace, spec.Session, spec.Head)
+	if err != nil {
+		return provider.Rewind{}, err
+	}
+	return provider.Rewind{Session: forked, Native: true}, nil
+}
+
 // Open runs the run on the thread's app-server: the one its last run
 // left, when that one was started as this run would start one, or else a
 // new one with a new Codex thread.
@@ -186,8 +215,8 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		return nil, fmt.Errorf("Codex: the thread's earlier app-server may still run: %w", err)
 	}
 	// One on another Codex thread than the thread's is the thread's no
-	// longer.
-	if ok && spec.Session != "" && p.threadID() != spec.Session {
+	// longer, nor one that holds the conversation before a rewind.
+	if ok && (spec.Rewound != nil || spec.Session != "" && p.threadID() != spec.Session) {
 		if err := p.Close(ctx); err != nil {
 			return nil, fmt.Errorf("Codex: the thread's earlier app-server may still run: %w", err)
 		}
@@ -220,6 +249,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 		a.noAuto.Store(&refused)
 	}
 	g := newAgent(spec, p, keep)
+	g.native = spec.Rewound != nil && spec.Session != "" && !lost
 	// What a kept app-server said before this run is confirmed for it only
 	// where it is what the run asks.
 	if ok {

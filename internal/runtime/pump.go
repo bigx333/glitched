@@ -164,7 +164,7 @@ func (h *Host) pump(thread api.ID, lr *liveRun) {
 					case <-lr.ctx.Done():
 					}
 				}
-				if ended = commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: redact(ev.Error), Tokens: ev.Tokens, Limit: limitOf(ev)}); ended {
+				if ended = commit(engine.Ended{Run: run, Outcome: ev.Outcome, Error: redact(ev.Error), Tokens: ev.Tokens, Limit: limitOf(ev), Head: ev.Head}); ended {
 					h.forget(run)
 				}
 			}

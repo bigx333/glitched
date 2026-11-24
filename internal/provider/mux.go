@@ -54,6 +54,19 @@ func (m Mux) Reconcile(ctx context.Context, id RuntimeIdentity) (Recovery, error
 	return a.Reconcile(ctx, id)
 }
 
+// Rewind rewinds a conversation of name's, or answers a portable Rewind
+// for an adapter that can't.
+func (m Mux) Rewind(ctx context.Context, name string, spec RewindSpec) (Rewind, error) {
+	a, err := m.adapter(name)
+	if err != nil {
+		return Rewind{}, err
+	}
+	if r, ok := a.(Rewinder); ok {
+		return r.Rewind(ctx, spec)
+	}
+	return Rewind{}, nil
+}
+
 // Commands are the slash commands of name's sessions in workspace, or
 // none for an adapter that can't list them.
 func (m Mux) Commands(ctx context.Context, name, workspace string) ([]Command, error) {

@@ -203,7 +203,22 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 				return fmt.Errorf("%s does not offer /compact in this session", g.p.profile.Name)
 			}
 		}
-		return g.start(a.Text)
+		if err := g.start(a.Text); err != nil {
+			return err
+		}
+		// The prompt goes on a call of its own: Start ends once it is
+		// written, or once the call ended without writing it.
+		select {
+		case <-g.sent:
+			return nil
+		case <-g.done:
+		}
+		select {
+		case <-g.sent:
+			return nil
+		default:
+			return fmt.Errorf("%s never got the prompt", g.p.profile.Name)
+		}
 	case provider.Interrupt:
 		return g.interrupt(ctx)
 	case provider.Respond:

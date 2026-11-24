@@ -617,7 +617,7 @@ func (h *Host) perform(e store.Effect) {
 			return
 		}
 		h.record(e.Thread, skip, e.ID)
-		if _, ok := e.Body.(engine.RevertThread); ok {
+		if b, ok := e.Body.(engine.RevertThread); ok && !b.KeepFiles {
 			h.revertEnded(e.Thread)
 		}
 		return
@@ -649,7 +649,7 @@ func (h *Host) perform(e store.Effect) {
 			<-a.ctx.Done()
 		}
 	}
-	if _, ok := e.Body.(engine.RevertThread); ok {
+	if b, ok := e.Body.(engine.RevertThread); ok && !b.KeepFiles {
 		defer h.revertEnded(e.Thread)
 	}
 	if _, started := o.(engine.Started); !started {
@@ -894,6 +894,18 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		s.Args, s.Env = slices.Clone(s.Args), maps.Clone(s.Env)
 		spec.MCP = append(spec.MCP, s)
 	}
+	// A rewound conversation the thread's runs have yet to take up has
+	// nothing of the thread's to compact.
+	rewound, err := h.store.Rewound(ctx, thread)
+	if err != nil {
+		return nil, err
+	}
+	if rewound != nil && b.ResumeOnly {
+		return nil, errCompactNotDue
+	}
+	if rewound != nil {
+		spec.Rewound = &provider.Rewound{From: rewound.From, At: rewound.At}
+	}
 	spec.Skills = h.skills.stage(thread, b.Workspace, t.Project)
 	ag, err := h.providers.Open(ctx, spec)
 	h.skills.opened(thread, spec.Skills.Root, err == nil)
@@ -904,9 +916,30 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		return nil, err
 	}
 	// The session is stored before the prompt goes out, so a crash after
-	// it still has the conversation to resume.
-	if s, ok := ag.(provider.Sessioned); ok && s.Session() != "" && s.Session() != t.Session {
-		err = h.observe(ctx, thread, engine.Bound{Run: b.Run, Session: s.Session()}, 0)
+	// it still has the conversation to resume. The first run after a
+	// rewind says how it took the conversation up once its message went
+	// out, which ends the rewind; an agent that didn't take up the native
+	// one gets the kept turns, again if its first message never went.
+	session := t.Session
+	if s, ok := ag.(provider.Sessioned); ok && s.Session() != "" {
+		session = s.Session()
+	}
+	text := b.Text
+	var took *engine.Bound
+	switch {
+	case rewound != nil:
+		took = &engine.Bound{Run: b.Run, Session: session, Rewound: api.RewindPortable}
+		if r, ok := ag.(provider.Rewinding); ok && r.Native() {
+			took.Rewound = api.RewindNative
+		}
+		if took.Rewound == api.RewindPortable {
+			var kept string
+			if kept, err = h.handoff(ctx, t, rewound.To.ID); err == nil {
+				text = kept + text
+			}
+		}
+	case session != t.Session:
+		err = h.observe(ctx, thread, engine.Bound{Run: b.Run, Session: session}, 0)
 	}
 	// What the user did while the agent opened, or the time it took,
 	// may have made a compaction due no longer.
@@ -922,7 +955,11 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		err = ctx.Err()
 	}
 	if err == nil {
-		err = ag.Do(ctx, provider.Start{Text: b.Text})
+		err = ag.Do(ctx, provider.Start{Text: text})
+	}
+	// Sent, the message holds the kept turns whatever a stop does now.
+	if err == nil && took != nil {
+		err = h.observe(h.drain, thread, *took, 0)
 	}
 	if err != nil && h.ctx.Err() == nil {
 		h.closeAgent(ag)

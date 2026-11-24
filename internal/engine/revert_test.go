@@ -50,10 +50,10 @@ func TestWhenAThreadReverts(t *testing.T) {
 				return api.CheckpointRef{Phase: api.CheckpointRecovery, ID: api.NewID()}
 			},
 		},
-		"of the conversation alone": {
+		"of the conversation alone, to its only turn": {
 			thread:       func(t *testing.T) (*thread, api.ID) { return idleWorktreeThread(t, api.ID{}) },
 			conversation: true,
-			refuse:       "rewinding the conversation is to come",
+			refuse:       "The conversation already ends at this turn",
 		},
 		"of a child, in a worktree of its own too": {
 			thread: func(t *testing.T) (*thread, api.ID) { return idleWorktreeThread(t, api.NewID()) },
@@ -102,7 +102,7 @@ func TestWhenAThreadReverts(t *testing.T) {
 				to = tc.to(run)
 			}
 			before := f.th
-			id, effects, err := f.submit(api.ThreadRevert{To: to, Files: !tc.conversation})
+			id, effects, err := f.submit(api.ThreadRevert{To: to, Files: !tc.conversation, Conversation: tc.conversation})
 			if tc.refuse != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.refuse) {
 					t.Fatalf("revert: %v, %v; want it refused with %q", kinds(effects), err, tc.refuse)

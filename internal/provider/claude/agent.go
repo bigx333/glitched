@@ -108,9 +108,12 @@ type Agent struct {
 	asked   string           // the run's model
 	granted provider.Granted // the last Granted the run sent
 	ran     provider.Ran     // the last Ran the run sent
+	native  bool             // claude holds the conversation a rewind kept
+	session string           // the session a run that took up a rewind runs
 
 	mu          sync.Mutex      // the turn's messages; taken before p.mu
 	started     bool            // the turn's first message went out
+	prompt      string          // the uuid of the turn's first message
 	outstanding map[string]bool // messages sent, by uuid, that no result has finished yet, true for a steer
 	interrupted bool            // an interrupt went out, or claude was stopped in its place
 	ended       bool            // the turn's end was read
@@ -122,7 +125,18 @@ type Agent struct {
 	prompts map[string]*prompt // by Claude Code's request id
 }
 
-var _ provider.Agent = (*Agent)(nil)
+var (
+	_ provider.Agent     = (*Agent)(nil)
+	_ provider.Rewinding = (*Agent)(nil)
+)
+
+// Native is whether the run's claude holds the conversation a rewind
+// kept, as Claude Code had it.
+func (g *Agent) Native() bool { return g.native }
+
+// Session is the session claude runs where a run that took up a rewind
+// started it, "" where claude runs the thread's own.
+func (g *Agent) Session() string { return g.session }
 
 func newAgent(spec provider.SessionSpec, p *proc, keep func(*proc)) *Agent {
 	g := &Agent{p: p, keep: keep, turn: newTurn(spec.Workspace), prompts: map[string]*prompt{}, outstanding: map[string]bool{},
@@ -558,8 +572,11 @@ func (g *Agent) userLocked(ctx context.Context, text string, steer bool) error {
 	g.outstanding[id] = steer
 	err := g.p.send(ctx, map[string]any{"type": "user", "uuid": id, "session_id": "", "parent_tool_use_id": nil,
 		"message": map[string]string{"role": "user", "content": text}})
-	if err != nil {
+	switch {
+	case err != nil:
 		delete(g.outstanding, id)
+	case !steer:
+		g.prompt = id
 	}
 	return err
 }
@@ -568,9 +585,11 @@ func (g *Agent) userLocked(ctx context.Context, text string, steer bool) error {
 // ends the turn: it finished every message sent, or an interrupt went out.
 // A result that lists no messages finishes them all. The interrupt cut
 // the turn short unless Claude Code says it completed the turn first.
+// The turn learns the uuid of its first message, for its head.
 func (g *Agent) over(m message) (over, interrupted bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.turn.prompt = g.prompt
 	if m.UserMessageUUIDs == nil {
 		clear(g.outstanding)
 	}

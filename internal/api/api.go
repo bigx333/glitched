@@ -212,14 +212,18 @@ type ThreadRename struct {
 	Title string `json:"title"`
 }
 
-// ThreadRevert puts the files of the thread's worktree back as To holds
-// them, after a checkpoint of them as they are, which a revert to it
-// undoes. Files must be set: a revert of the conversation is to come. Only
-// a thread of the user's in a worktree of its own reverts, with no run of
-// its tree live.
+// ThreadRevert takes the thread back to a checkpoint of its: its files,
+// its conversation, or both. Files puts the files of the thread's worktree
+// back as To holds them, after a checkpoint of them as they are, which a
+// revert to it undoes; only a thread in a worktree of its own keeps them.
+// Conversation rewinds the thread's conversation to the end of To's run,
+// so that its next turn follows that run's, and the runs after it are no
+// longer its agent's to remember. Only a thread of the user's reverts,
+// with no run of its tree live.
 type ThreadRevert struct {
-	To    CheckpointRef `json:"to"`
-	Files bool          `json:"files"`
+	To           CheckpointRef `json:"to"`
+	Files        bool          `json:"files"`
+	Conversation bool          `json:"conversation,omitempty"`
 }
 
 // ThreadConfigure changes the model and the access the thread's next turn
@@ -577,8 +581,10 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // unknown calls and a version 12 GUI would show as the engine's own;
 // version 14 says a usage limit ended a turn, and lets the user cancel the
 // engine's continue once it resets, which a version 13 engine refuses as an
-// unknown command.
-const Protocol = 14
+// unknown command; version 15 rewinds a thread's conversation, which a
+// version 14 engine would drop from a revert and put only the files back,
+// and a version 14 GUI would show as a revert of files it left.
+const Protocol = 15
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host

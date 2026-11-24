@@ -44,6 +44,8 @@ type Transcript struct {
 	// under way, zero for none.
 	Checkpoints []api.CheckpointCaptured
 	Reverting   api.ID
+	// dropped is the runs a rewind took out of the conversation.
+	dropped map[api.ID]bool
 }
 
 // Checkpoint is run's checkpoint of the thread's files, and the one the
@@ -59,6 +61,33 @@ func (t *Transcript) Checkpoint(run api.ID) (at, before api.CheckpointCaptured, 
 		}
 	}
 	return at, before, false, false
+}
+
+// Dropped is whether a rewind took run out of the conversation.
+func (t *Transcript) Dropped(run api.ID) bool { return t.dropped[run] }
+
+// Followed is whether a turn of the user's the conversation still holds
+// came after run's, which a rewind of the conversation to run would drop.
+func (t *Transcript) Followed(run api.ID) bool {
+	seen := false
+	for _, e := range t.Entries {
+		var r api.ID
+		switch e := e.(type) {
+		case *UserEntry:
+			r = e.run
+		case *AssistantEntry:
+			r = e.Run
+		case *WorkEntry:
+			r = e.Run
+		}
+		switch {
+		case r == run:
+			seen = true
+		case seen && !r.IsZero() && !t.dropped[r]:
+			return true
+		}
+	}
+	return false
 }
 
 // An EditMark is where a reader of a transcript's edits got to.
@@ -299,10 +328,14 @@ type CompactionEntry struct {
 	At         time.Time
 }
 
-// RevertEntry is how a revert of the thread's files ended.
+// RevertEntry is how a revert of the thread's files, or a rewind of its
+// conversation, ended. Took is how the next run took the rewound
+// conversation up, once one has: a native rewind its provider couldn't
+// make then is a portable one.
 type RevertEntry struct {
 	api.ThreadReverted
-	At time.Time
+	At   time.Time
+	Took api.RewindKind
 }
 
 func (*ErrorEntry) entry()      {}
@@ -461,6 +494,14 @@ func (t *Transcript) apply(e api.Event) {
 		if b.Status == api.RevertRestored || b.Status == api.RevertUnchanged {
 			t.Checkpoints = append(t.Checkpoints, api.CheckpointCaptured{Run: b.To.ID, Phase: b.To.Phase, Status: api.CheckpointReady})
 		}
+		if b.Rewound() {
+			for _, run := range b.Dropped {
+				if t.dropped == nil {
+					t.dropped = map[api.ID]bool{}
+				}
+				t.dropped[run] = true
+			}
+		}
 		t.add(&RevertEntry{ThreadReverted: b, At: e.At})
 	case api.SubagentDelta:
 		if s, we := t.subagent(b.Run, b.Parent); s != nil {
@@ -498,6 +539,17 @@ func (t *Transcript) apply(e api.Event) {
 			s.Ended, s.Outcome, s.Tokens = true, b.Outcome, b.Tokens
 			s.Rev++
 			t.edited(we)
+		}
+	case api.SessionBound:
+		if b.Rewound == "" {
+			break
+		}
+		for i := len(t.Entries) - 1; i >= 0; i-- {
+			if r, ok := t.Entries[i].(*RevertEntry); ok && r.Rewound() {
+				r.Took = b.Rewound
+				t.edited(r)
+				break
+			}
 		}
 	case api.RequestOpened:
 		if t.silent[b.Run] != nil {

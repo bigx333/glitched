@@ -398,6 +398,35 @@ func (p *proc) startThread(ctx context.Context, spec provider.SessionSpec) (lost
 	return lost, p.bind(r.Thread.ID)
 }
 
+// fork forks the Codex thread session in cwd through its turn head,
+// inclusive, and returns the fork's id, once thread/turns/list shows the
+// fork ends at head: a Codex that ignores lastTurnId forks it whole.
+func (p *proc) fork(ctx context.Context, cwd, session, head string) (string, error) {
+	var r struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
+	if err := p.conn.call(ctx, "thread/fork", map[string]any{"threadId": session, "lastTurnId": head, "cwd": cwd, "excludeTurns": true}, &r); err != nil {
+		return "", p.failure("fork the conversation", err)
+	}
+	if r.Thread.ID == "" || r.Thread.ID == session {
+		return "", fmt.Errorf("Codex forked thread %q as %q.", session, r.Thread.ID)
+	}
+	var turns struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := p.conn.call(ctx, "thread/turns/list", map[string]any{"threadId": r.Thread.ID, "limit": 1, "sortDirection": "desc", "itemsView": "notLoaded"}, &turns); err != nil {
+		return "", p.failure("list the fork's turns", err)
+	}
+	if len(turns.Data) == 0 || turns.Data[0].ID != head {
+		return "", errors.New("Codex didn't fork the conversation at that turn.")
+	}
+	return r.Thread.ID, nil
+}
+
 // inUse is why a run can't go on with a conversation another Codex
 // client has open (T3's wording).
 const inUse = "This conversation is open in another Codex client, such as the Codex app, the Codex CLI, or an IDE extension. Codex lets one client write to a conversation at a time."

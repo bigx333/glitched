@@ -356,6 +356,50 @@ func (f *fake) take(m message, raw []byte) {
 		f.reply(m.ID, f.reviewed(m.Params, map[string]any{"thread": map[string]any{"id": thread}, "model": "gpt-6.2-sol"}))
 		f.notify("thread/started", map[string]any{"thread": map[string]any{"id": thread}})
 		f.notify("mcpServer/startupStatus/updated", map[string]any{"name": "glitched", "status": "starting"})
+	case "thread/fork":
+		// A fork through lastTurnId, inclusive, as a new thread with the
+		// rollout's turns up to it: "fork-past" forks the thread whole, as
+		// a Codex that ignores lastTurnId would, and "fork-refused" refuses.
+		var p struct{ ThreadID, LastTurnID string }
+		json.Unmarshal(m.Params, &p)
+		if f.scenario == "fork-refused" {
+			f.refuse(m.ID, -32600, "thread "+p.ThreadID+" can't be forked")
+			return
+		}
+		said, err := os.ReadFile(f.rollout(p.ThreadID))
+		if err != nil {
+			f.refuse(m.ID, -32600, "no rollout found for thread id "+p.ThreadID)
+			return
+		}
+		ids, _ := os.ReadFile(f.rollout(p.ThreadID) + ".turns")
+		texts, turns := slices.Collect(strings.Lines(string(said))), slices.Collect(strings.Lines(string(ids)))
+		keep := len(turns)
+		if f.scenario != "fork-past" {
+			keep = slices.Index(turns, p.LastTurnID+"\n") + 1
+		}
+		if keep == 0 {
+			f.refuse(m.ID, -32600, "no turn "+p.LastTurnID+" in thread "+p.ThreadID)
+			return
+		}
+		thread := fmt.Sprintf("019a0000-0000-7000-8001-%012d", f.pid)
+		os.WriteFile(f.rollout(thread), []byte(strings.Join(texts[:keep], "")), 0o600)
+		os.WriteFile(f.rollout(thread)+".turns", []byte(strings.Join(turns[:keep], "")), 0o600)
+		f.reply(m.ID, map[string]any{"thread": map[string]any{"id": thread}, "model": "gpt-6.2-sol"})
+		f.notify("thread/started", map[string]any{"thread": map[string]any{"id": thread}})
+	case "thread/turns/list":
+		// The thread's latest turn, as a page of one in descending order.
+		var p struct{ ThreadID string }
+		json.Unmarshal(m.Params, &p)
+		if _, err := os.Stat(f.rollout(p.ThreadID)); err != nil {
+			f.refuse(m.ID, -32600, "no rollout found for thread id "+p.ThreadID)
+			return
+		}
+		ids, _ := os.ReadFile(f.rollout(p.ThreadID) + ".turns")
+		data := []any{}
+		if turns := strings.Fields(string(ids)); len(turns) > 0 {
+			data = append(data, map[string]any{"id": turns[len(turns)-1], "status": "completed", "items": []any{}})
+		}
+		f.reply(m.ID, map[string]any{"data": data, "nextCursor": nil, "backwardsCursor": nil})
 	case "skills/extraRoots/set":
 		switch f.scenario {
 		case "no-skills-call":
@@ -395,6 +439,8 @@ func (f *fake) take(m message, raw []byte) {
 		said, _ := os.ReadFile(f.rollout(thread))
 		if len(p.Input) > 0 {
 			os.WriteFile(f.rollout(thread), append(said, p.Input[0].Text+"\n"...), 0o600)
+			ids, _ := os.ReadFile(f.rollout(thread) + ".turns")
+			os.WriteFile(f.rollout(thread)+".turns", append(ids, turn+"\n"...), 0o600)
 		}
 		go f.play(n, turn, string(said))
 	case "turn/interrupt":

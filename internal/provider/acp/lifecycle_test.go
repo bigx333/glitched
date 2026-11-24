@@ -84,6 +84,25 @@ func TestACrashedAgentsToolIsStoppedOnClose(t *testing.T) {
 	}
 }
 
+// Start returns only once the prompt is written: an agent that can't
+// take it fails the start, which never claims a send.
+func TestAStartTheAgentNeverGotFails(t *testing.T) {
+	a, log := fake(t, "hi")
+	g := open(t, a, spec(t))
+	defer closeRun(t, g)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := g.(*Agent).p.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Do(context.Background(), provider.Start{Text: "never sent"}); err == nil {
+		t.Fatal("Start returned nil for a prompt the agent never got")
+	}
+	if n := len(find(t, wire(t, log), "session/prompt")); n != 0 {
+		t.Fatalf("the agent got %d prompts; want none", n)
+	}
+}
+
 func TestAStopRightAfterStartFollowsThePrompt(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "wire")
 	t.Setenv(wireEnv, out)
