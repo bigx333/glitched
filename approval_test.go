@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
 	"maps"
 	"slices"
 	"strings"
@@ -498,17 +500,30 @@ func TestTwoTallSessionCardsKeepTheNewestInThePane(t *testing.T) {
 
 // At the narrowest window beside the widest sidebar dragged, the chat
 // keeps its least width inside the window: the waiting card, its answers
-// and Stop are drawn whole in the window and the card in its pane. In the
+// and Stop are drawn whole in the window, inked as at a wide one, and the
+// card in its pane. In the
 // window as the Mac drew it, 514 points tall with its title bar, the card
 // is read whole, and Allow for this session, clicked, sends the session
 // grant; at the least height asked for, its last line is under its texts'
-// box, which a click reads on to first.
+// box, so the first click reads on to it and answers nothing, and the
+// next sends the grant.
 func TestTheNarrowestWindowKeepsTheCardInIt(t *testing.T) {
 	for _, size := range [][2]int{{760, 514}, {760, 480}} {
 		t.Run(fmt.Sprint(size[0], "x", size[1]), func(t *testing.T) {
 			h, th := asking(t, []provider.Event{provider.RequestOpened{ID: "request", Kind: api.KindApproval,
 				Body: json.RawMessage(`{"command":"go test ./sample","cwd":"/tmp/fixture","reason":"Check local change","session":true}`)}})
 			h.a.sidebarWidth, h.a.showSidebar = maxSidebarWidth, true
+			labels := []string{"Approval needed", "go test ./sample", "Allow once", "Allow for this session", "Deny", "Stop"}
+			h.tt.SetSize(1320, 860)
+			h.tt.Advance(time.Second)
+			wide := map[string]int{}
+			for _, s := range labels {
+				r, ok := h.tt.Find(s)
+				if !ok {
+					t.Fatalf("no %s at 1320 points in %q", s, h.tt.Texts())
+				}
+				wide[s] = inkOnFill(h.tt.Image(), r)
+			}
 			h.tt.SetSize(size[0], size[1])
 			h.tt.Advance(time.Second)
 			window := ui.Rect{W: float32(size[0]), H: float32(size[1])}
@@ -520,24 +535,66 @@ func TestTheNarrowestWindowKeepsTheCardInIt(t *testing.T) {
 			if c := h.a.drew[lastRequest(th).Request].card; !within(c, h.a.paneAt) || !within(c, window) {
 				t.Errorf("the card at %+v, past the pane at %+v or the window", c, h.a.paneAt)
 			}
-			for _, s := range []string{"Approval needed", "go test ./sample", "Allow once", "Allow for this session", "Deny", "Stop"} {
+			for _, s := range labels {
 				r, ok := h.tt.Find(s)
 				if !ok {
 					t.Fatalf("no %s in %q", s, h.tt.Texts())
 				}
-				if w := paintedWidth(h.tt.Image(), r); !within(r, window) || w < r.W/2 {
-					t.Errorf("%s at %+v is drawn %.0f points wide, in a window %v wide", s, r, w, window.W)
+				if n := inkOnFill(h.tt.Image(), r); !within(r, window) || n < wide[s]*9/10 || wide[s] < 20 {
+					t.Errorf("%s at %+v has %d pixels of ink, in a window %v wide; want %d, as at 1320 points", s, r, n, window.W, wide[s])
+				}
+			}
+			req := lastRequest(th).Request
+			click := func() {
+				if err := h.tt.Click("Allow for this session"); err != nil {
+					t.Fatal(err)
 				}
 			}
 			if size[1] < 514 {
-				return
+				click()
+				for end := time.Now().Add(300 * time.Millisecond); time.Now().Before(end); {
+					h.p.run()
+					h.tt.Frame()
+				}
+				if r, st := lastRequest(th), h.a.drew[req].scroll; r.State != api.RequestPending || len(r.Answer) > 0 || st == nil || st.Y <= 0 {
+					t.Fatalf("the first click, with the card's last line unread, left the request %v answered %s, its texts scrolled %+v; want it waiting, read on", r.State, r.Answer, st)
+				}
+				h.tt.Advance(time.Second)
 			}
-			if err := h.tt.Click("Allow for this session"); err != nil {
-				t.Fatal(err)
-			}
+			click()
 			h.until("the session grant", func() bool { return string(lastRequest(th).Answer) == `{"allow":true,"session":true}` })
 		})
 	}
+}
+
+// inkOnFill is how much of r is inked: its pixels that stand out from
+// the fill under it, the color most of r has, as far as text is drawn from
+// it (inkWidth), so that a button's face, or a card's ground that shifts a
+// little, with no label drawn on it is no ink. A label inks as much
+// wrapped as on one line.
+func inkOnFill(img *image.RGBA, r ui.Rect) int {
+	b := image.Rect(int(r.X), int(r.Y), int(r.X+r.W), int(r.Y+r.H)).Intersect(img.Bounds())
+	n := map[color.RGBA]int{}
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			n[img.RGBAAt(x, y)]++
+		}
+	}
+	var fill color.RGBA
+	for c, k := range n {
+		if k > n[fill] {
+			fill = c
+		}
+	}
+	ink := 0
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if p := img.RGBAAt(x, y); max(absDiff(p.R, fill.R), absDiff(p.G, fill.G), absDiff(p.B, fill.B)) > 32 {
+				ink++
+			}
+		}
+	}
+	return ink
 }
 
 // With a draft, ⌘⏎ sends it, which steers the agent, and leaves the

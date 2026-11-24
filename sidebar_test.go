@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -49,6 +50,39 @@ func TestSidebarEdge(t *testing.T) {
 	tt.Release(x-500, y)
 	if a.sidebarWidth != minSidebarWidth {
 		t.Errorf("sidebar %v wide after dragging far left, want %v", a.sidebarWidth, minSidebarWidth)
+	}
+}
+
+// Where the window is too narrow for the sidebar as dragged, its edge
+// moves nothing outward and keeps the width dragged for a wider window;
+// inward, it narrows the sidebar from where it's drawn. The window
+// narrows mid-drag, as it can while the edge is held.
+func TestACappedSidebarKeepsItsWidth(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		dx   float32
+		want float32
+	}{{"outward", 10, maxSidebarWidth}, {"inward", -10, 760 - minChatWidth - 10}} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := offline(t)
+			a.sidebarWidth = maxSidebarWidth
+			tt := ui.NewTester(a.view, 1320, 700)
+			tt.Advance(time.Second)
+			r, ok := tt.Find("Resize sidebar")
+			if !ok {
+				t.Fatal("no edge to drag")
+			}
+			x, y := r.X+r.W/2, r.Y+r.H/2
+			tt.Press(x, y)
+			tt.SetSize(760, 700)
+			tt.Move(x+tc.dx, y)
+			tt.Release(x+tc.dx, y)
+			tt.SetSize(1320, 700)
+			tt.Advance(time.Second)
+			if r, _ := tt.Find("Resize sidebar"); r.X+r.W != tc.want {
+				t.Errorf("the sidebar's edge at %v in a wide window after a drag of %v in a narrow one, want %v", r.X+r.W, tc.dx, tc.want)
+			}
+		})
 	}
 }
 
