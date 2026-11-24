@@ -310,6 +310,7 @@ func (h *Host) followRemote(ctx context.Context, placeholder api.ID) {
 // whatever the child does.
 func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label string) (progressed bool, err error) {
 	r := *t.Remote
+	at := api.Remote{Engine: r.Engine, Link: r.Link}
 	ctx, removed := context.WithCancelCause(ctx)
 	defer removed(nil)
 	go func() {
@@ -321,7 +322,7 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 				return
 			case <-tick.C:
 			}
-			if _, listed, err := h.dial(api.Remote{Engine: r.Engine, Link: r.Link}); errors.Is(err, ErrNoMachine) {
+			if _, listed, err := h.dial(at); errors.Is(err, ErrNoMachine) {
 				removed(err)
 				return
 			} else if err == nil {
@@ -401,7 +402,7 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			reports[i].Reply = reply.Text
 		}
 		if snapshot || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || !slices.Equal(next.Pending, r.Pending) || len(reports) > 0 {
-			_, listed, err := h.dial(api.Remote{Engine: r.Engine, Link: r.Link})
+			_, listed, err := h.dial(at)
 			if err != nil {
 				return progressed, err
 			}
