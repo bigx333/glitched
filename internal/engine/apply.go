@@ -97,7 +97,7 @@ func apply(t Thread, e Event) (Thread, error) {
 			return t, &TransitionError{"remote", "not creating", "attempted"}
 		}
 		r := *t.Remote
-		r.Attempted = true
+		r.Attempted, r.Create = true, b.Create
 		t.Remote = &r
 	case api.RemoteBound, api.RemoteLost:
 		if t.Remote == nil {
@@ -117,7 +117,7 @@ func apply(t Thread, e Event) (Thread, error) {
 			return t, &TransitionError{"remote", "not bound", "seen"}
 		}
 		r := *t.Remote
-		r.Cursor, r.Run, r.Silent, r.Slot, r.Pending = b.Cursor, b.Run, b.Silent, b.State, b.Pending
+		r.Cursor, r.Run, r.Silent, r.Slot, r.Pending, r.Taken = b.Cursor, b.Run, b.Silent, b.State, b.Pending, b.Taken
 		r.Reported = slices.Concat(r.Reported, b.Keys)
 		t.Remote = &r
 	case api.DispositionChanged:

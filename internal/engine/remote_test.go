@@ -129,7 +129,8 @@ func TestAPlaceholderReportsEachKeyOnce(t *testing.T) {
 }
 
 // A placeholder settled before its create's first try refuses the try,
-// so nothing reaches its machine; one tried before goes on.
+// so nothing reaches its machine. Once settled, a create tried before is
+// no longer due either: the settle's stop sends it again, then settles.
 func TestARemoteCreatesFirstTryIsRefusedOnceSettled(t *testing.T) {
 	at := api.Remote{Engine: api.NewID(), Link: api.NewID()}
 	fresh := engine.Apply(engine.Thread{}, engine.Event{Thread: api.NewID(), At: time.Now(), Body: api.ThreadCreated{Title: "there", Parent: api.NewID(), Remote: &at}})
@@ -148,8 +149,8 @@ func TestARemoteCreatesFirstTryIsRefusedOnceSettled(t *testing.T) {
 	if due, _ := engine.Due(settled, engine.RemoteCreate{}); due {
 		t.Fatal("a create of a placeholder settled before any try is due")
 	}
-	if due, _ := engine.Due(tried, engine.RemoteCreate{}); !due {
-		t.Fatal("a create tried before a settle is not due")
+	if due, _ := engine.Due(tried, engine.RemoteCreate{}); due {
+		t.Fatal("a create tried before a settle is still due; its stop sends it")
 	}
 }
 

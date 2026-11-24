@@ -94,7 +94,7 @@ func DecideWith(t Thread, c api.Command, env Env, now time.Time) ([]Event, []Eff
 	}
 	var err error
 	if t.Remote != nil {
-		err = d.placeholder(c.Body)
+		err = d.placeholder(c.ID, c.Body)
 	} else {
 		err = d.local(c.ID, c.Body)
 	}
@@ -110,26 +110,111 @@ func DecideWith(t Thread, c api.Command, env Env, now time.Time) ([]Event, []Eff
 	return d.events, d.effects, nil
 }
 
-// placeholder decides b on a remote child's placeholder, which never runs
-// an agent here. It goes with its tree when the tree is settled or
-// deleted, and has no run to stop or close. Nothing reaches its machine
-// yet, so a message or a stop for its child is refused, not dropped.
-func (d *decision) placeholder(b api.Intent) error {
+// placeholder decides b, the intent of command id, on a remote child's
+// placeholder, which never runs an agent here. What b asks of the child
+// reaches its machine as an effect, which sends it there as a command
+// frozen now: a settle or a delete settles the child there, where it
+// keeps its transcript, a stop stops its run, a message is sent there and
+// queues nothing here, and a narrower access narrows it there. A
+// placeholder whose create was never tried has nothing there to settle.
+// The machine's person who took the child over there has it from then
+// on: an agent's message or stop is refused, as for a local child the
+// user took over.
+func (d *decision) placeholder(id api.ID, b api.Intent) error {
+	r := d.t.Remote
+	theirs := !d.by.IsZero() && r.Taken
 	switch b := b.(type) {
 	case api.InboxSet:
-		return d.inbox(b)
+		was := d.t.settled()
+		if was && b.Disposition.State != api.Settled && r.State == RemoteCreating {
+			return rejected("this child was settled before its machine started it, so it stays settled; start another")
+		}
+		if err := d.inbox(b); err != nil {
+			return err
+		}
+		if !was && b.Disposition.State == api.Settled && r.tried() {
+			d.stopThere(id, api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+		}
+		return nil
 	case api.ThreadDelete:
-		return d.delete(b)
+		if err := d.delete(b); err != nil {
+			return err
+		}
+		if r.tried() {
+			d.stopThere(id, api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+		}
+		return nil
 	case api.ThreadRename:
 		return d.rename(b)
 	case api.ThreadConfigure:
-		return d.configure(b)
-	case api.MessageDispatch:
-		return rejected("this child runs on another machine, and a message doesn't reach it there yet")
+		before := d.t.Access
+		if err := d.configure(b); err != nil {
+			return err
+		}
+		if _, access := b.Onto(d.t.Model, before); access < before && d.reaches() {
+			d.effects = append(d.effects, RemoteConfigure{Engine: r.Engine, Link: r.Link, Command: d.there(id, "configure", api.ThreadConfigure{Access: &access})})
+		}
+		return nil
 	case api.TurnInterrupt:
-		return rejected("this child runs on another machine, and a stop doesn't reach it there yet")
+		if theirs {
+			return rejected("the person on this child's machine took it over there: its last message or stop was theirs, so it's theirs to stop")
+		}
+		if r.State == RemoteCreating && d.t.settled() {
+			return nil
+		}
+		d.effects = append(d.effects, RemoteStop{Engine: r.Engine, Link: r.Link, Command: d.there(id, "stop", api.TurnInterrupt{Tree: b.Tree})})
+		return nil
+	case api.MessageDispatch:
+		switch {
+		case r.State == RemoteLostState:
+			return rejected("this child's machine no longer has it here: " + r.Lost)
+		case r.State == RemoteCreating && d.t.settled():
+			return rejected("this child was settled before its machine started it, so it takes no message; start another")
+		case theirs:
+			return rejected("the person on this child's machine took it over there: its last message or stop was theirs, so it's theirs to steer")
+		case b.Auto || !b.Replaces.IsZero() || b.Mode != api.AfterActive && b.Mode != api.SteerActive && b.Mode != api.StartNow:
+			return rejected("a child on another machine takes a message after its run, or into it")
+		}
+		if b.Mode == api.StartNow {
+			b.Mode = api.AfterActive
+		}
+		if d.t.settled() {
+			if err := d.emit(api.DispositionChanged{Disposition: api.Disposition{}}); err != nil {
+				return err
+			}
+		}
+		d.effects = append(d.effects, RemoteSend{Engine: r.Engine, Link: r.Link, Command: d.there(id, "send", api.MessageDispatch{Text: b.Text, Mode: b.Mode})})
+		return nil
+	case api.RequestRespond:
+		return rejected("this child runs on another machine, and what it asks is answered there")
 	}
 	return rejected("this child runs on another machine, and runs nothing here")
+}
+
+// reaches is whether what the placeholder is asked still reaches its
+// child: its machine may have it, or will.
+func (d *decision) reaches() bool {
+	r := d.t.Remote
+	return r.State != RemoteLostState && (r.State != RemoteCreating || !d.t.settled())
+}
+
+// there is the command the placeholder's child's machine is sent for
+// b, of command id: its id is of id's, the placeholder's and what, so
+// two placeholders a command takes on one machine send two commands.
+func (d *decision) there(id api.ID, what string, b api.Intent) api.Command {
+	return api.Command{ID: derive(id, d.t.ID.String()+"/"+what), Target: derive(d.t.ID, "remote"), Body: b}
+}
+
+// stopThere has the placeholder's child settled or stopped there with
+// b, after the create its first try sent while the machine may not have
+// taken it.
+func (d *decision) stopThere(id api.ID, b api.Intent) {
+	r := d.t.Remote
+	s := RemoteStop{Engine: r.Engine, Link: r.Link, Command: d.there(id, "stop", b)}
+	if r.State == RemoteCreating {
+		s.Create = r.Create
+	}
+	d.effects = append(d.effects, s)
 }
 
 // local decides b, the intent of command id, on a thread that runs here.
@@ -192,13 +277,9 @@ func TakesTree(b api.Intent) bool {
 
 // Below is what b on a thread decides on t, a thread under it, when b
 // takes the tree: a configure narrows t's access to the one it gives, and
-// leaves t's model as it is. It is nil when b takes nothing of t: a stop
-// of the tree finds nothing running on a remote child's placeholder, and
-// doesn't reach its machine yet.
+// leaves t's model as it is. A stop of the tree stops a remote child's
+// tree on its machine too.
 func Below(b api.Intent, t Thread) api.Intent {
-	if _, stop := b.(api.TurnInterrupt); stop && t.Remote != nil {
-		return nil
-	}
 	if c, ok := b.(api.ThreadConfigure); ok {
 		var below api.ThreadConfigure
 		if c.Access != nil {
@@ -207,7 +288,7 @@ func Below(b api.Intent, t Thread) api.Intent {
 		return below
 	}
 	if i, ok := b.(api.TurnInterrupt); ok {
-		i.Tree = false
+		i.Tree = t.Remote != nil
 		return i
 	}
 	return b
@@ -370,7 +451,7 @@ func (d *decision) createFromLink(id api.ID, c api.ThreadCreate) error {
 	if err := d.emit(api.ThreadCreated{Project: c.Project, Title: c.Title, Model: c.Model, Access: c.Access, Origin: &origin}); err != nil {
 		return err
 	}
-	if err := d.emit(api.MessageQueued{Message: id, Text: c.Text, Mode: api.StartNow}); err != nil {
+	if err := d.emit(api.MessageQueued{Message: id, Text: c.Text, Mode: api.StartNow, By: origin.Thread}); err != nil {
 		return err
 	}
 	d.effects = append(d.effects, MakeWorktree{Project: c.Project, Base: c.Worktree.Base, Title: c.Title})
@@ -1481,7 +1562,7 @@ func (d *decision) remote(o Observation) error {
 		case r.Attempted:
 			return nil
 		}
-		return d.emit(api.RemoteAttempted{})
+		return d.emit(api.RemoteAttempted{Create: &o.Create})
 	case RemoteBound:
 		return d.emit(api.RemoteBound{Thread: o.Thread})
 	case RemoteLost:
@@ -1501,10 +1582,10 @@ func (d *decision) remote(o Observation) error {
 				keys, reports = append(keys, p.Key), append(reports, p)
 			}
 		}
-		if o.Cursor == r.Cursor && o.Run == r.Run && o.Silent == r.Silent && o.Slot == r.Slot && slices.Equal(o.Pending, r.Pending) && len(keys) == 0 {
+		if o.Cursor == r.Cursor && o.Run == r.Run && o.Silent == r.Silent && o.Slot == r.Slot && slices.Equal(o.Pending, r.Pending) && o.Taken == r.Taken && len(keys) == 0 {
 			return nil
 		}
-		if err := d.emit(api.RemoteSeen{Cursor: o.Cursor, Run: o.Run, Silent: o.Silent, State: o.Slot, Pending: o.Pending, Keys: keys}); err != nil {
+		if err := d.emit(api.RemoteSeen{Cursor: o.Cursor, Run: o.Run, Silent: o.Silent, State: o.Slot, Pending: o.Pending, Taken: o.Taken, Keys: keys}); err != nil {
 			return err
 		}
 		for _, p := range reports {

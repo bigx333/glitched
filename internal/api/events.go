@@ -85,8 +85,11 @@ type Remote struct {
 }
 
 // RemoteAttempted is a placeholder's first try to create its child on
-// its machine: from here on, the child may be there.
-type RemoteAttempted struct{}
+// its machine: from here on, the child may be there. Create is the
+// command tried, which a stop sends again before it.
+type RemoteAttempted struct {
+	Create *Command `json:"create,omitempty"`
+}
 
 // RemoteBound is the child's create the machine took: Thread is the
 // child's there.
@@ -107,6 +110,9 @@ type RemoteSeen struct {
 	// Pending are the requests of Run it waits on.
 	Pending []ID `json:"pending,omitempty"`
 	Keys    []ID `json:"keys,omitempty"`
+	// Taken is that the machine's person sent the child's last message
+	// or asked its last stop there, so it is theirs.
+	Taken bool `json:"taken,omitempty"`
 }
 
 // RemoteLost is a placeholder whose child this engine no longer reaches
