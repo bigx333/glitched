@@ -72,7 +72,8 @@ type Command struct {
 }
 
 // Caller is an agent's run acting on a thread under its own. Only a
-// message or a stop may name one, and the engine takes it only from Run,
+// message after or into the live run, or a stop that drops nothing, may
+// name one, and the engine takes it only from Run,
 // the live run of Thread, which is above the target, and only while the
 // user hasn't taken the target over: the target's last message or stop
 // was an agent's, not the user's.
@@ -136,6 +137,8 @@ type MessageDispatch struct {
 // run ends: what a delete that waits on the stop sends.
 type TurnInterrupt struct {
 	Drop bool `json:"drop,omitzero"`
+	// Tree stops every thread under the thread too, in the same commit.
+	Tree bool `json:"tree,omitzero"`
 }
 
 // QueueResume releases the messages a Stop held, and with none, has the
