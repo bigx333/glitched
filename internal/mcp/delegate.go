@@ -290,10 +290,13 @@ func (t *Tools) child(ctx context.Context, id api.ID) (api.Thread, string, bool)
 		return api.Thread{}, "", false
 	}
 	for _, e := range snap.Events {
-		if b, err := e.Decode(); err == nil {
-			if m, ok := b.(api.MessageQueued); ok {
-				return snap.Threads[i], m.Text, true
+		switch b, _ := e.Decode(); b := b.(type) {
+		case api.ThreadCreated:
+			if b.Remote != nil {
+				return snap.Threads[i], b.Text, true
 			}
+		case api.MessageQueued:
+			return snap.Threads[i], b.Text, true
 		}
 	}
 	return api.Thread{}, "", false

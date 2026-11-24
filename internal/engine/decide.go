@@ -407,7 +407,7 @@ func (d *decision) placeRemote(id api.ID, c api.ThreadCreate) error {
 	case c.Repository == nil:
 		return rejected("a child on another machine starts from its parent's branch of its repository, and the parent's folder is on no branch of a repository with a commit")
 	}
-	if err := d.emit(api.ThreadCreated{Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent, Remote: &at}); err != nil {
+	if err := d.emit(api.ThreadCreated{Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent, Remote: &at, Text: c.Text}); err != nil {
 		return err
 	}
 	parent := d.env.Line[0]
@@ -1501,10 +1501,10 @@ func (d *decision) remote(o Observation) error {
 				keys, reports = append(keys, p.Key), append(reports, p)
 			}
 		}
-		if o.Cursor == r.Cursor && o.Run == r.Run && o.Silent == r.Silent && o.Slot == r.Slot && len(keys) == 0 {
+		if o.Cursor == r.Cursor && o.Run == r.Run && o.Silent == r.Silent && o.Slot == r.Slot && slices.Equal(o.Pending, r.Pending) && len(keys) == 0 {
 			return nil
 		}
-		if err := d.emit(api.RemoteSeen{Cursor: o.Cursor, Run: o.Run, Silent: o.Silent, State: o.Slot, Keys: keys}); err != nil {
+		if err := d.emit(api.RemoteSeen{Cursor: o.Cursor, Run: o.Run, Silent: o.Silent, State: o.Slot, Pending: o.Pending, Keys: keys}); err != nil {
 			return err
 		}
 		for _, p := range reports {
