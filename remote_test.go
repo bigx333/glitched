@@ -336,3 +336,48 @@ func TestALinksThreadSaysWhereItCameFrom(t *testing.T) {
 	}
 	shoot(t, h, "b-origin")
 }
+
+// fits fails t when a text the window shows runs past its right edge.
+func fits(t *testing.T, h *harness, width float32, texts ...string) {
+	t.Helper()
+	for _, s := range texts {
+		r, ok := h.tt.Find(s)
+		if !ok {
+			t.Errorf("no %q in %q", s, h.tt.Texts())
+			continue
+		}
+		if r.X < 0 || r.X+r.W > width {
+			t.Errorf("%q spans %v..%v, past the window's %v", s, r.X, r.X+r.W, width)
+		}
+	}
+}
+
+// In a narrow window a placeholder's row, its notice and a link's
+// thread's origin stay inside the window.
+func TestRemoteSurfacesFitANarrowWindow(t *testing.T) {
+	h, parent, kid := remoteChild(t)
+	h.tt.SetSize(760, 860)
+	kid.View.Remote.Thread, kid.View.Run = api.NewID(), api.RunWaiting
+	h.a.select_(parent)
+	h.a.childrenOpen[parent.id()] = true
+	h.tt.Frame()
+	h.click("Agents")
+	h.tt.Advance(time.Second)
+	h.tt.Frame()
+	fits(t, h, 760, "Needs you on desk")
+	shoot(t, h, "a-narrow-row")
+	kid.View.Run, kid.View.Remote.Lost = api.RunIdle, "the link was revoked on desk, so this engine no longer follows the child there"
+	h.a.choose(kid)
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	h.tt.Frame()
+	fits(t, h, 760, "Lost on desk", kid.View.Remote.Lost, "This child's thread is on desk. Pair desk in Settings › Servers to open it here.")
+	shoot(t, h, "a-narrow-notice")
+	parent.View.Origin = &api.Origin{Engine: api.NewID(), Thread: api.NewID(), Title: "A parent thread with a long title that runs on and on", Link: api.NewID(), Machine: "laptop"}
+	h.a.choose(parent)
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	h.tt.Frame()
+	fits(t, h, 760, "from A parent thread with a long title that runs on and on on laptop")
+	shoot(t, h, "b-narrow-origin")
+}
