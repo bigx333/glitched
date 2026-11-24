@@ -71,6 +71,26 @@ func TestPlansOutliveACrash(t *testing.T) {
 	assertReplay(t, n.st)
 }
 
+// untilEffectsDone waits for the host to finish every effect of kind: a
+// run can end on its agent's word before the host records what its call
+// to that agent did.
+func untilEffectsDone(t *testing.T, path, kind string) {
+	t.Helper()
+	db := sideDB(t, path)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(2 * time.Millisecond) {
+		var open int
+		if err := db.QueryRow("SELECT COUNT(*) FROM effects WHERE kind = ? AND state <> 'done'", kind).Scan(&open); err != nil {
+			t.Fatal(err)
+		}
+		if open == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d %s effects still open", open, kind)
+		}
+	}
+}
+
 func TestCrashWithALeasedEffect(t *testing.T) {
 	t.Run("steer becomes uncertain and is never sent again", func(t *testing.T) {
 		path, g := dbPath(t), newGated(fake.Turn(true))
@@ -95,6 +115,7 @@ func TestCrashWithALeasedEffect(t *testing.T) {
 		})
 		n := start(t, path, g)
 		until(t, n.h, thread, "turn end", idle)
+		untilEffectsDone(t, path, "turn.interrupt")
 		if got := outcomes(t, n.h, thread); len(got) != 1 || got[0] != api.OutcomeInterrupted || g.count(provider.Interrupt{}) != 1 {
 			t.Fatalf("turn ended %v after %d interrupts reached the agent, want interrupted after 1", got, g.count(provider.Interrupt{}))
 		}
@@ -108,6 +129,7 @@ func TestCrashWithALeasedEffect(t *testing.T) {
 		})
 		n := start(t, path, g)
 		until(t, n.h, thread, "turn end", idle)
+		untilEffectsDone(t, path, "request.deliver")
 		evs := events(t, n.h, thread)
 		if got := outcomes(t, n.h, thread); len(got) != 1 || got[0] != api.OutcomeCompleted || count(evs, "request.delivered") != 1 || g.count(provider.Respond{}) != 1 {
 			t.Fatalf("turn ended %v with %d request.delivered after %d answers reached the agent, want completed, 1 and 1",
