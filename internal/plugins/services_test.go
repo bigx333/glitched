@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -335,5 +336,120 @@ func TestABuiltInsServiceStopsWhenServiceIsTakenBack(t *testing.T) {
 	s.do(func() { running = s.h.running1("ticker") != nil })
 	if running {
 		t.Fatal("with service taken back, its service still runs, timers and all")
+	}
+}
+
+// A call waits for no services' queue past its deadline, though the queue
+// is full.
+func TestAServiceCallWaitsOnNoFullQueuePastItsDeadline(t *testing.T) {
+	s := StartServices(t.TempDir(), ServiceOptions{Logf: t.Logf})
+	defer s.Close()
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	s.post(func() { close(entered); <-release })
+	<-entered
+	for range cap(s.queue) {
+		s.post(func() {})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+	defer cancel()
+	answered := make(chan error, 1)
+	go func() {
+		_, err := s.Call(ctx, ServiceCall{Plugin: "absent"})
+		answered <- err
+	}()
+	<-ctx.Done()
+	select {
+	case err := <-answered:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("the call answered %v, want its deadline", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call still waits on the queue, 5s past its deadline")
+	}
+}
+
+// A call whose ctx ends while its service's runtime starts, by its
+// deadline or its caller's cancel, answers then, and never runs serve.
+func TestACallThatEndsAsItsServiceStartsNeverRunsIt(t *testing.T) {
+	for _, end := range []string{"deadline", "cancel"} {
+		t.Run(end, func(t *testing.T) {
+			state := t.TempDir()
+			writeService(t, state, "counter", `"capabilities": ["service"], "glitched": {"service": "service.js"},`, "export function view() {}", `
+				console.log("starting")
+				export function serve({ method }) {
+					if (method === "write") host.storage.set("writes", (host.storage.get("writes") ?? 0) + 1)
+					return host.storage.get("writes") ?? 0
+				}`)
+			grant(t, state, `{"grants": {"counter": ["service"]}}`)
+			starting, started := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			s := StartServices(state, ServiceOptions{Logf: func(format string, args ...any) {
+				if strings.Contains(fmt.Sprintf(format, args...), "starting") {
+					once.Do(func() { close(starting); <-started })
+				}
+			}})
+			t.Cleanup(s.Close)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			if end == "deadline" {
+				ctx, cancel = context.WithTimeout(context.Background(), 200*time.Millisecond)
+			}
+			defer cancel()
+			answered := make(chan error, 1)
+			go func() {
+				_, err := s.Call(ctx, ServiceCall{Plugin: "counter", Method: "write"})
+				answered <- err
+			}()
+			<-starting
+			if end == "cancel" {
+				cancel()
+			}
+			err := <-answered
+			close(started)
+			raw, readErr := s.Call(context.Background(), ServiceCall{Plugin: "counter", Method: "read"})
+			if err == nil || ctx.Err() == nil || !errors.Is(err, ctx.Err()) || readErr != nil || string(raw) != "0" {
+				t.Fatalf("the call answered %v as its ctx ended with %v; then writes %s, %v; want none", err, ctx.Err(), raw, readErr)
+			}
+		})
+	}
+}
+
+// A timer runs one call at a time: a tick that comes while its last call
+// still waits on an effect, past its period too, waits for the next.
+func TestATimerRunsOneCallAtATime(t *testing.T) {
+	state := t.TempDir()
+	writeService(t, state, "hourglass", `"capabilities": ["service", "clipboard"], "glitched": {"service": "service.js", "timers": [{"id": "minute", "every": 60}]},`, "export function view() {}", `
+		let started = 0, finished = []
+		export function serve() { return { started, finished } }
+		export async function timer() {
+			const n = ++started
+			await glitched.clipboard.write(String(n))
+			finished.push(n)
+		}`)
+	grant(t, state, `{"grants": {"hourglass": ["service"]}}`)
+	effects, waited := make(chan func(any, error), 4), make(chan struct{}, 1)
+	s := StartServices(state, ServiceOptions{TimerScale: 0.01, Logf: func(format string, args ...any) {
+		if strings.Contains(fmt.Sprintf(format, args...), "its last call still runs") {
+			select {
+			case waited <- struct{}{}:
+			default:
+			}
+		}
+	}, Do: func(string, Effect) (any, error) {
+		return Pending(func(done func(any, error)) { effects <- done }), nil
+	}})
+	t.Cleanup(s.Close)
+	first := <-effects
+	select {
+	case <-waited:
+	case <-effects:
+		t.Fatal("a tick called the timer while its last call still ran")
+	}
+	first(nil, nil)
+	second := <-effects
+	raw, err := s.Call(context.Background(), ServiceCall{Plugin: "hourglass"})
+	second(nil, nil)
+	if err != nil || string(raw) != `{"started":2,"finished":[1]}` {
+		t.Fatalf("as the second call started, the timer was %s, %v; want the first finished", raw, err)
 	}
 }

@@ -218,6 +218,9 @@ type Daemon struct {
 	// providers are the ones the engine runs, which a plugin's create
 	// must name.
 	providers provider.Mux
+	// sends keeps a plugin's messages to one thread in the order the
+	// services admitted them.
+	sends lanes
 
 	mu        sync.Mutex
 	addrs     []net.Addr

@@ -371,7 +371,11 @@ func (c *conn) start(ctx context.Context, method string, in any, k sink) (*socke
 	if err != nil {
 		return nil, 0, err
 	}
-	b, err := json.Marshal(request{ID: id, Method: method, Params: params})
+	req := request{ID: id, Method: method, Params: params}
+	if d, ok := ctx.Deadline(); ok {
+		req.Deadline = d.UnixMilli()
+	}
+	b, err := json.Marshal(req)
 	if err == nil && len(b) > maxMessage {
 		err = fmt.Errorf("%w: %s is %d bytes", errTooLarge, method, len(b))
 	}

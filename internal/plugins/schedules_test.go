@@ -27,6 +27,20 @@ import (
 // Date.now(). It answers the runtime, the database as a test writes it,
 // and the keys each create was sent, in order.
 func schedulesRuntime(t *testing.T, clock string) (*plugin.Plugin, *sql.DB, func() []string) {
+	return schedulesRuntimeWith(t, clock, &scheduleHooks{})
+}
+
+// scheduleHooks change what schedulesRuntimeWith's host does, read as it
+// does it: created, when set, runs as a create is sent, and its error is
+// the create's; wrote, when set, runs after each db.exec or
+// db.transaction that wrote, with its SQL, and its error is the write's,
+// though the write stands.
+type scheduleHooks struct {
+	created func(prompt string) error
+	wrote   func(sql string) error
+}
+
+func schedulesRuntimeWith(t *testing.T, clock string, hooks *scheduleHooks) (*plugin.Plugin, *sql.DB, func() []string) {
 	t.Helper()
 	state := t.TempDir()
 	folder := filepath.Join(state, "code")
@@ -49,11 +63,16 @@ func schedulesRuntime(t *testing.T, clock string) (*plugin.Plugin, *sql.DB, func
 	var keys []string
 	app := func(_ context.Context, raw json.RawMessage) (any, error) {
 		var e struct {
-			Type string
-			Key  struct{ ID string }
+			Type, Prompt string
+			Key          struct{ ID string }
 		}
 		if err := json.Unmarshal(raw, &e); err != nil {
 			return nil, err
+		}
+		if e.Type == "threads.create" && hooks.created != nil {
+			if err := hooks.created(e.Prompt); err != nil {
+				return nil, err
+			}
 		}
 		mu.Lock()
 		defer mu.Unlock()
@@ -70,8 +89,17 @@ func schedulesRuntime(t *testing.T, clock string) (*plugin.Plugin, *sql.DB, func
 		}
 		return nil, fmt.Errorf("no %s here", e.Type)
 	}
+	after := func(write plugin.Function) plugin.Function {
+		return func(ctx context.Context, raw json.RawMessage) (any, error) {
+			out, err := write(ctx, raw)
+			if err == nil && hooks.wrote != nil {
+				err = hooks.wrote(string(raw))
+			}
+			return out, err
+		}
+	}
 	p, err := plugin.Load(folder, plugin.Options{Prelude: Prelude, Contract: Contract, ContractVersion: ContractVersion, DataDir: DataDir(state),
-		Functions: map[string]plugin.Function{"db.query": d.query, "db.exec": d.exec, "app": app}})
+		Functions: map[string]plugin.Function{"db.query": d.query, "db.exec": after(d.exec), "db.transaction": after(d.transaction), "app": app}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +128,7 @@ func serveSchedules(p *plugin.Plugin, method string, args, out any) error {
 type schedule struct {
 	ID, Title, NextDue string
 	Enabled            bool
+	Starting           int
 }
 
 // saveSchedule saves an interval schedule of five minutes, with fields
@@ -207,8 +236,8 @@ func TestAClockSetBackMidTickStartsNoEarlierRun(t *testing.T) {
 func TestTwoRunNowsInOneMillisecondAreTwoRuns(t *testing.T) {
 	p, db, keys := schedulesRuntime(t, `const clock = () => Date.parse("2026-11-24T10:00:00Z");`)
 	s := saveSchedule(t, p, nil)
-	for range 2 {
-		if err := serveSchedules(p, "runNow", map[string]any{"id": s.ID}, nil); err != nil {
+	for i := range 2 {
+		if err := serveSchedules(p, "runNow", map[string]any{"id": s.ID, "op": fmt.Sprint("click-", i)}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -266,6 +295,7 @@ func TestAScheduleTakesUnixAndWindowsFolders(t *testing.T) {
 		{"C:work", false},
 		{`\work\app`, false},
 		{"work/app", false},
+		{`é:\notes`, false},
 	} {
 		args := map[string]any{"schedule": map[string]any{"title": "Nightly", "prompt": "Check.", "workspace": c.folder, "provider": "codex", "model": "fake", "kind": "interval", "every": 5}}
 		if err := serveSchedules(p, "save", args, nil); (err == nil) != c.ok {
@@ -281,7 +311,7 @@ func TestSchedulesStopAtTheirMostAndListAPageAtATime(t *testing.T) {
 	saveSchedule(t, p, map[string]any{"title": "a"})
 	sqlExec(t, db, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 998)
 		INSERT INTO schedules SELECT printf('%026d', n.i), printf('t%04d', n.i), prompt, workspace, worktree, provider, model, effort, fast, access,
-			kind, every, at, weekdays, zone, anchor, missed, enabled, next_due FROM schedules, n`)
+			kind, every, at, weekdays, zone, anchor, missed, enabled, next_due, revision FROM schedules, n`)
 	saveSchedule(t, p, map[string]any{"title": "z"})
 	if err := serveSchedules(p, "save", map[string]any{"schedule": map[string]any{"title": "one too many", "prompt": "Check.", "workspace": "/project", "provider": "codex", "model": "fake", "kind": "interval", "every": 5}}, nil); err == nil || !strings.Contains(err.Error(), "1000") {
 		t.Fatalf("the 1001st schedule saved: %v", err)
@@ -311,7 +341,7 @@ func TestSchedulesStopAtTheirMostAndListAPageAtATime(t *testing.T) {
 	}
 }
 
-// A schedule keeps its newest 200 runs, and a run whose thread may still go
+// A schedule keeps its newest 50 runs, and a run whose thread may still go
 // however old it is.
 func TestASchedulesHistoryKeepsItsNewest(t *testing.T) {
 	p, db, _ := schedulesRuntime(t, "")
@@ -319,12 +349,12 @@ func TestASchedulesHistoryKeepsItsNewest(t *testing.T) {
 	sqlExec(t, db, `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 300)
 		INSERT INTO runs (schedule, key, due, state, thread, open, at)
 		SELECT ?, 'old-' || i, strftime('%Y-%m-%dT%H:%M:%fZ', '1970-01-01', printf('+%d minutes', 5 * i)), 'started', 'thread-old-' || i, i = 0, '1970-01-01T00:00:00.000Z' FROM n`, s.ID)
-	if err := serveSchedules(p, "runNow", map[string]any{"id": s.ID}, nil); err != nil {
+	if err := serveSchedules(p, "runNow", map[string]any{"id": s.ID, "op": "click"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	runs := runsOf(t, db, s.ID)
-	if len(runs) != 201 || runs[0].Key != "old-0" || runs[1].Key != "old-102" || runs[200].Key[:7] != "manual:" {
-		t.Fatalf("%d runs kept, from %s, %s to %s; want the open old-0, then old-102 to old-300 and Run now's", len(runs), runs[0].Key, runs[1].Key, runs[len(runs)-1].Key)
+	if len(runs) != keptRuns+1 || runs[0].Key != "old-0" || runs[1].Key != "old-252" || runs[keptRuns].Key[:7] != "manual:" {
+		t.Fatalf("%d runs kept, from %s, %s to %s; want the open old-0, then old-252 to old-300 and Run now's", len(runs), runs[0].Key, runs[1].Key, runs[len(runs)-1].Key)
 	}
 }
 
@@ -382,7 +412,7 @@ func TestAWriteReachedLateRefuses(t *testing.T) {
 		args   map[string]any
 	}{
 		{"save", map[string]any{"schedule": map[string]any{"id": s.ID, "title": "Renamed", "prompt": "Check.", "workspace": "/project", "provider": "codex", "model": "fake", "kind": "interval", "every": 5}}},
-		{"runNow", map[string]any{"id": s.ID}},
+		{"runNow", map[string]any{"id": s.ID, "op": "click"}},
 		{"delete", map[string]any{"id": s.ID}},
 	} {
 		if err := p.Call("serve", map[string]any{"method": c.method, "args": c.args, "deadline": late}, nil); err == nil || !strings.Contains(err.Error(), "ran out of time") {
@@ -500,5 +530,307 @@ func TestACallThatTimedOutNeverWritesAfter(t *testing.T) {
 	var n int
 	if err := db.QueryRow("SELECT count(*) FROM schedules WHERE id = ?", s.ID).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("the timed-out delete deleted the schedule after: %d, %v", n, err)
+	}
+}
+
+// The clocks these tests give the service: one at 10:17, past a 10:05 run
+// of a schedule from 10:00, and one a test moves, with at and wait.
+const (
+	at1017  = "const clock = () => Date.parse('2026-11-24T10:17:00Z');"
+	movable = "let now = Date.parse('2026-11-24T10:00:00Z'); const clock = () => now; export function at(t) { now = Date.parse(t) } export function wait(ms) { now += ms }"
+	from10  = "2026-11-24T10:00:00.000Z"
+	due1005 = "2026-11-24T10:05:00.000Z"
+)
+
+// dueAt1005 saves a five-minute schedule from 10:00, fields over it, whose
+// 10:05 run is due.
+func dueAt1005(t *testing.T, p *plugin.Plugin, db *sql.DB, fields map[string]any) schedule {
+	t.Helper()
+	s := saveSchedule(t, p, map[string]any{"anchor": from10})
+	if fields != nil {
+		fields["id"] = s.ID
+		s = saveSchedule(t, p, fields)
+	}
+	sqlExec(t, db, "UPDATE schedules SET next_due = ? WHERE id = ?", due1005, s.ID)
+	return s
+}
+
+// A run its schedule marked sent before it was turned off may still start
+// after, as the engine may have it; turning the schedule off answers how
+// many such runs it has.
+func TestARunSentBeforeItsScheduleTurnedOffMayStillStart(t *testing.T) {
+	hooks := &scheduleHooks{wrote: func(q string) error {
+		if strings.Contains(q, "SET sent = 1") {
+			return errors.New("cut once the run was marked sent")
+		}
+		return nil
+	}}
+	p, db, keys := schedulesRuntimeWith(t, at1017, hooks)
+	s := dueAt1005(t, p, db, nil)
+	if err := p.Call("timer", nil, nil); err == nil || !strings.Contains(err.Error(), "cut once") {
+		t.Fatalf("the tick answered %v, want the cut", err)
+	}
+	p.Close()
+	hooks.wrote = nil
+	off := saveSchedule(t, p, map[string]any{"id": s.ID, "enabled": false})
+	if off.Starting != 1 || len(keys()) != 0 {
+		t.Fatalf("turned off with %d runs starting and creates %q; want the one marked sent, not sent yet", off.Starting, keys())
+	}
+	if err := p.Call("timer", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if runs := runsOf(t, db, s.ID); len(keys()) != 1 || len(runs) != 1 || runs[0].State != "started" {
+		t.Fatalf("creates %q, runs %+v; want the run marked sent started", keys(), runs)
+	}
+}
+
+// A run its schedule hadn't marked sent when it was turned off never
+// starts, though turning it off lands as the tick writes the run, and
+// goes on only once the tick has tried to mark it sent.
+func TestARunNotSentWhenItsScheduleTurnedOffNeverStarts(t *testing.T) {
+	hooks := &scheduleHooks{}
+	p, db, keys := schedulesRuntimeWith(t, at1017, hooks)
+	s := dueAt1005(t, p, db, nil)
+	saved, offWrote, marked := make(chan error, 1), make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	hooks.wrote = func(q string) error {
+		switch {
+		case strings.Contains(q, "INSERT INTO runs"):
+			once.Do(func() {
+				go func() {
+					saved <- serveSchedules(p, "save", map[string]any{"schedule": map[string]any{"id": s.ID, "title": "Nightly", "prompt": "Check.", "workspace": "/project", "provider": "codex", "model": "fake", "kind": "interval", "every": 5, "enabled": false}}, nil)
+				}()
+				<-offWrote
+			})
+		case strings.Contains(q, "UPDATE schedules SET title"):
+			close(offWrote)
+			<-marked
+		case strings.Contains(q, "SET sent = 1"):
+			close(marked)
+		}
+		return nil
+	}
+	if err := p.Call("timer", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-saved; err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Call("timer", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if runs := runsOf(t, db, s.ID); len(keys()) != 0 || len(runs) != 1 || runs[0].State+" "+runs[0].Reason != "skipped turned off" {
+		t.Fatalf("creates %q, runs %+v; want the run skipped, turned off", keys(), runs)
+	}
+}
+
+// A schedule saved while the tick sends another's run starts its next run
+// with what was saved.
+func TestAnEditBeforeItsRunIsWrittenStartsTheEdit(t *testing.T) {
+	hooks := &scheduleHooks{}
+	p, db, _ := schedulesRuntimeWith(t, at1017, hooks)
+	a := dueAt1005(t, p, db, map[string]any{"prompt": "old"})
+	b := dueAt1005(t, p, db, map[string]any{"prompt": "old"})
+	if b.ID < a.ID {
+		a, b = b, a
+	}
+	in, release := make(chan struct{}), make(chan struct{})
+	var prompts []string
+	hooks.created = func(prompt string) error {
+		prompts = append(prompts, prompt)
+		if len(prompts) == 1 {
+			close(in)
+			<-release
+		}
+		return nil
+	}
+	ticked := make(chan error, 1)
+	go func() { ticked <- p.Call("timer", nil, nil) }()
+	<-in
+	saveSchedule(t, p, map[string]any{"id": b.ID, "prompt": "new"})
+	close(release)
+	if err := <-ticked; err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(prompts, []string{"old", "new"}) {
+		t.Fatalf("the tick sent the prompts %q, want old, then the edit", prompts)
+	}
+}
+
+// A cut between a catch-up's record and its schedule's next_due leaves
+// both as they were, so the next tick sends the same catch-up again, and
+// no later occurrence.
+func TestACutBetweenACatchUpAndItsNextDueRunsNoOther(t *testing.T) {
+	p, db, keys := schedulesRuntime(t, at1017)
+	s := dueAt1005(t, p, db, nil)
+	catchUp := s.ID + "@" + due1005
+	intent(t, db, s.ID, catchUp, due1005, false, false)
+	sqlExec(t, db, "CREATE TRIGGER cut BEFORE UPDATE OF next_due ON schedules BEGIN SELECT RAISE(ABORT, 'cut before next_due'); END")
+	if err := p.Call("timer", nil, nil); err == nil || !strings.Contains(err.Error(), "cut before next_due") {
+		t.Fatalf("the tick answered %v, want the cut", err)
+	}
+	if runs := runsOf(t, db, s.ID); len(runs) != 1 || runs[0].State != "starting" {
+		t.Fatalf("after the cut the runs are %+v, want the catch-up still starting", runs)
+	}
+	p.Close()
+	sqlExec(t, db, "DROP TRIGGER cut")
+	if err := p.Call("timer", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	var next string
+	if err := db.QueryRow("SELECT next_due FROM schedules").Scan(&next); err != nil {
+		t.Fatal(err)
+	}
+	runs := runsOf(t, db, s.ID)
+	if k := slices.Compact(keys()); len(k) != 1 || k[0] != catchUp || len(runs) != 1 || runs[0].State != "started" || next != "2026-11-24T10:20:00.000Z" {
+		t.Fatalf("creates %q, runs %+v, next due %s; want the one catch-up, then 10:20", keys(), runs, next)
+	}
+}
+
+// A Run now left starting that takes a tick's whole budget holds up no
+// schedule: the two kinds of work take turns, from tick to tick too.
+func TestAStuckRunNowHoldsUpNoSchedule(t *testing.T) {
+	var p *plugin.Plugin
+	hooks := &scheduleHooks{created: func(string) error { return p.Call("wait", 21_000, nil) }}
+	p, db, _ := schedulesRuntimeWith(t, movable, hooks)
+	a := saveSchedule(t, p, map[string]any{"enabled": false})
+	b := dueAt1005(t, p, db, nil)
+	if err := p.Call("at", "2026-11-24T10:05:00Z", nil); err != nil {
+		t.Fatal(err)
+	}
+	intent(t, db, a.ID, "manual:stuck", due1005, true, true)
+	sqlExec(t, db, "CREATE TRIGGER stuck BEFORE UPDATE OF state ON runs WHEN OLD.manual = 1 BEGIN SELECT RAISE(ABORT, 'stuck'); END")
+	for range 2 {
+		p.Call("timer", nil, nil)
+	}
+	if runs := runsOf(t, db, b.ID); len(runs) != 1 || runs[0].State != "started" {
+		t.Fatalf("after two ticks the due schedule's runs are %+v, want one started", runs)
+	}
+}
+
+// A service restarted between ticks goes on to the Run nows it hasn't
+// tried, not those it tried last: a run's last try is in its record.
+func TestARestartedServiceTriesTheRunsItTriedLongestAgoFirst(t *testing.T) {
+	var p *plugin.Plugin
+	hooks := &scheduleHooks{created: func(string) error { return p.Call("wait", 1000, nil) }}
+	p, db, _ := schedulesRuntimeWith(t, movable, hooks)
+	a := saveSchedule(t, p, map[string]any{"enabled": false})
+	b := saveSchedule(t, p, map[string]any{"enabled": false})
+	if b.ID < a.ID {
+		a, b = b, a
+	}
+	for i := range 50 {
+		intent(t, db, a.ID, fmt.Sprintf("manual:%02d", i), from10, true, true)
+	}
+	intent(t, db, b.ID, "manual:healthy", from10, true, true)
+	sqlExec(t, db, "CREATE TRIGGER stuck BEFORE UPDATE OF state ON runs WHEN OLD.schedule = '"+a.ID+"' BEGIN SELECT RAISE(ABORT, 'stuck'); END")
+	for i := range 3 {
+		if err := p.Call("at", fmt.Sprintf("2026-11-24T10:%02d:00Z", 10+i), nil); err != nil {
+			t.Fatal(err)
+		}
+		p.Call("timer", nil, nil)
+		p.Close()
+	}
+	if runs := runsOf(t, db, b.ID); len(runs) != 1 || runs[0].State != "started" {
+		t.Fatalf("after three ticks, each in a new runtime, the 51st Run now is %+v, want started", runs)
+	}
+}
+
+// Every schedule due in a minute starts its run in it, however many there
+// are, while the tick has time.
+func TestEveryDueScheduleStartsInItsMinute(t *testing.T) {
+	p, db, keys := schedulesRuntime(t, "const clock = () => Date.parse('2026-11-24T10:05:00Z');")
+	s := dueAt1005(t, p, db, nil)
+	sqlExec(t, db, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 299)
+		INSERT INTO schedules (id, title, prompt, workspace, worktree, provider, model, effort, fast, access, kind, every, at, weekdays, zone, anchor, missed, enabled, next_due)
+		SELECT printf('%026d', n.i), title, prompt, workspace, worktree, provider, model, effort, fast, access, kind, every, at, weekdays, zone, anchor, missed, enabled, next_due
+		FROM schedules, n WHERE id = ?`, s.ID)
+	if err := p.Call("timer", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := db.QueryRow("SELECT count(*) FROM runs WHERE due = ? AND state = 'started'", due1005).Scan(&n); err != nil || n != 300 || len(keys()) != 300 {
+		t.Fatalf("%d of 300 due schedules started at 10:05, with %d creates, %v", n, len(keys()), err)
+	}
+}
+
+// A schedule that's off keeps its newest history, however many Run nows
+// it had: their threads, once stopped, stop counting.
+func TestTheHistoryOfAScheduleThatsOffStaysItsNewest(t *testing.T) {
+	p, db, _ := schedulesRuntime(t, movable)
+	s := saveSchedule(t, p, map[string]any{"enabled": false})
+	for i := range keptRuns + 40 {
+		if err := serveSchedules(p, "runNow", map[string]any{"id": s.ID, "op": fmt.Sprint("click-", i)}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := p.Call("at", "2026-11-24T10:01:00Z", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Call("timer", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	var n, open int
+	if err := db.QueryRow("SELECT count(*), sum(open) FROM runs").Scan(&n, &open); err != nil || n != keptRuns || open != 0 {
+		t.Fatalf("%d runs kept, %d of them open, %v; want the newest %d, none open", n, open, err, keptRuns)
+	}
+}
+
+// Ten thousand runs whose threads may still go hold up no schedule's
+// next run: their threads are checked a page at a time.
+func TestTenThousandOpenRunsHoldUpNoSchedule(t *testing.T) {
+	p, db, keys := schedulesRuntime(t, at1017)
+	s := dueAt1005(t, p, db, nil)
+	sqlExec(t, db, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i <= 10000)
+		INSERT INTO runs (schedule, key, due, manual, state, sent, open, thread, at)
+		SELECT ?, printf('manual:%05d', i), ?, 1, 'started', 1, 1, printf('gone-%d', i), ? FROM n`, s.ID, from10, from10)
+	if err := p.Call("timer", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	if err := db.QueryRow("SELECT state FROM runs WHERE manual = 0").Scan(&state); err != nil || state != "started" || len(keys()) != 1 {
+		t.Fatalf("the due run is %q, with creates %q, %v; want it started", state, keys(), err)
+	}
+}
+
+// The longest of a schedule's texts, in characters.
+const (
+	maxPrompt = 4000
+	maxReason = 100
+	keptRuns  = 50
+)
+
+// A thousand schedules of the longest prompt and title, each with a run
+// starting and its whole history of the longest reasons, leave a third of
+// their database for what they write as they run: at the longest, some
+// 2,500 Run nows starting at once.
+func TestAThousandOfTheLongestSchedulesLeaveAThirdOfTheirDatabase(t *testing.T) {
+	p, db, _ := schedulesRuntime(t, "")
+	long := func(n int) string { return strings.Repeat("€", n) }
+	fields := map[string]any{"title": long(200), "prompt": long(maxPrompt + 1), "workspace": "/" + strings.Repeat("a", 1023), "provider": "codex", "model": "fake", "kind": "interval", "every": 5, "enabled": false}
+	if err := serveSchedules(p, "save", map[string]any{"schedule": fields}, nil); err == nil || !strings.Contains(err.Error(), "prompt") {
+		t.Fatalf("a prompt of %d characters answered %v, want refused", maxPrompt+1, err)
+	}
+	fields["prompt"] = long(maxPrompt)
+	s := saveSchedule(t, p, fields)
+	sqlExec(t, db, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 999)
+		INSERT INTO schedules (id, title, prompt, workspace, worktree, provider, model, effort, fast, access, kind, every, at, weekdays, zone, anchor, missed, enabled, next_due)
+		SELECT printf('%026d', n.i), title, prompt, workspace, worktree, provider, model, effort, fast, access, kind, every, at, weekdays, zone, anchor, missed, enabled, next_due
+		FROM schedules, n WHERE id = ?`, s.ID)
+	sqlExec(t, db, `INSERT INTO runs (schedule, key, due, state, request, sent, tried, at)
+		SELECT id, id || '@2026-11-24T10:05:00.000Z', '2026-11-24T10:05:00.000Z', 'starting', json_object('prompt', prompt, 'options', json_object('title', title, 'workspace', workspace,
+			'model', json_object('provider', provider, 'model', model, 'effort', effort, 'fast', json('false')), 'access', access,
+			'key', json_object('id', id || '@2026-11-24T10:05:00.000Z', 'at', '2026-11-24T10:05:00.000Z'))), 1, '2026-11-24T10:05:00.000Z', '2026-11-24T10:05:00.000Z'
+		FROM schedules`)
+	sqlExec(t, db, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+		INSERT INTO runs (schedule, key, due, manual, state, thread, reason, at)
+		SELECT id, printf('manual:%s:%036d', id, i), strftime('%Y-%m-%dT%H:%M:%fZ', '2026-01-01', printf('+%d minutes', i)), 1, 'failed', '01M85PZFWMFKKYRY8FQB3M67BZ', ?, '2026-11-24T10:05:00.000Z'
+		FROM schedules, n`, keptRuns, long(maxReason))
+	var pages, size int
+	if err := db.QueryRow("SELECT page_count, page_size FROM pragma_page_count(), pragma_page_size()").Scan(&pages, &size); err != nil {
+		t.Fatal(err)
+	}
+	if pages*size > MaxDBBytes*2/3 {
+		t.Fatalf("they take %d MiB of their database's %d", pages*size>>20, MaxDBBytes>>20)
 	}
 }

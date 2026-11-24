@@ -29,6 +29,8 @@
 // Then the client sends text messages, one JSON object each:
 //
 //	{"id":1,"method":"submit","params":{...}}  start a call or a stream
+//	{"id":2,"method":"plugins.call","params":{...},"deadline":1767225600000}
+//	                                          one its caller gives up on then
 //	{"id":1,"cancel":true}                    abandon a call, or end a stream
 //	{"id":1,"ack":1048576}                    the reader took this many bytes of items
 //
@@ -40,7 +42,10 @@
 //	{"id":1,"error":{...}}   why a call or an open failed, or why a stream ended
 //
 // Ids are the client's and unique per socket. Calls and streams interleave
-// freely. A stream ends only with an error, because nothing upstream ends
+// freely. A deadline is the caller's ctx's, in Unix milliseconds: the
+// handler's ctx ends then, as the caller's does, so a call the caller gave
+// up on is not still at work on the server. Both ends read their own
+// clock; a unix socket's share one. A stream ends only with an error, because nothing upstream ends
 // cleanly. The server closes a socket that sends a message over 64 MiB, so
 // the client refuses to send one.
 //
@@ -55,6 +60,7 @@
 package transport
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -87,11 +93,12 @@ func protocolOf(h http.Header) int {
 }
 
 type request struct {
-	ID     uint64          `json:"id"`
-	Method string          `json:"method,omitempty"`
-	Params json.RawMessage `json:"params,omitempty"`
-	Cancel bool            `json:"cancel,omitempty"`
-	Ack    int64           `json:"ack,omitempty"`
+	ID       uint64          `json:"id"`
+	Method   string          `json:"method,omitempty"`
+	Params   json.RawMessage `json:"params,omitempty"`
+	Deadline int64           `json:"deadline,omitempty"`
+	Cancel   bool            `json:"cancel,omitempty"`
+	Ack      int64           `json:"ack,omitempty"`
 }
 
 // The uploader caps a batch at 8 MiB; this leaves room for JSON overhead.
@@ -145,6 +152,7 @@ var sentinels = []struct {
 	{"rewound", hub.ErrRewound},
 	{"unsupported", provider.ErrUnsupported},
 	{"unavailable", provider.ErrUnavailable},
+	{"deadline", context.DeadlineExceeded}, // the call's deadline, which the server hears too
 }
 
 func toWire(err error) *wireError {
