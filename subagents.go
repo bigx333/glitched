@@ -102,6 +102,15 @@ const (
 	subagentBytes  = 640 << 10
 )
 
+// subagentMade is the context last made for a subagent's panel, as its
+// subagent was at rev, under a step of that title.
+type subagentMade struct {
+	of    *client.Subagent
+	rev   int
+	title string
+	panel subagentPanel
+}
+
 // closeWidth is an iconButton's: its icon, 15 points, and its padding of
 // 6 on either side.
 const closeWidth = 15 + 2*6
@@ -117,35 +126,37 @@ func subagentContext(w client.WorkStep) subagentPanel {
 	case s.Cut:
 		panel.Outcome = "cut"
 	}
+	// From the latest part back, each as much as the budgets left take:
+	// text by its bytes, everything as JSON escapes it, as a view
+	// carries it. A text cut to fit keeps its end; past one that can't
+	// keep a character, or a step that doesn't fit, the rest are left out.
 	parts := s.Parts[max(len(s.Parts)-subagentParts, 0):]
 	panel.Earlier = len(s.Parts) - len(parts)
-	text := subagentText
+	text, room := subagentText, subagentBytes
 	for i := len(parts) - 1; i >= 0; i-- {
 		p := parts[i]
+		var part subagentPart
 		if p.Step != nil {
-			panel.Parts = append(panel.Parts, subagentPart{Step: &subagentStep{Kind: p.Step.Kind, Title: cutEnd(p.Step.Title, subagentTitle), Status: workStatuses[p.Step.Status], Exit: p.Step.Exit, Output: cutStart(p.Step.Output, subagentOutput)}})
-			continue
+			part.Step = &subagentStep{Kind: p.Step.Kind, Title: cutEnd(p.Step.Title, subagentTitle), Status: workStatuses[p.Step.Status], Exit: p.Step.Exit, Output: cutStart(p.Step.Output, subagentOutput)}
+		} else {
+			part.Text = cutStart(p.Text, text)
 		}
-		if text <= 0 {
+		b, _ := json.Marshal(part)
+		if len(b) > room && p.Step == nil {
+			// Escaped, a byte may take six: what is left of the room
+			// holds that many of the text's bytes, whatever they are.
+			part.Text = cutStart(p.Text, min(text, (room-len(`{"text":""}`))/6))
+			b, _ = json.Marshal(part)
+		}
+		if len(b) > room || p.Step == nil && part.Text == "" {
 			panel.Earlier += i + 1
 			break
 		}
-		cut := cutStart(p.Text, text)
-		text -= len(cut)
-		panel.Parts = append(panel.Parts, subagentPart{Text: cut})
+		room -= len(b) + 1
+		text -= len(part.Text)
+		panel.Parts = append(panel.Parts, part)
 	}
 	slices.Reverse(panel.Parts)
-	// What it says, escaped as a view carries it, may still be too much,
-	// as output that is all control characters: then its earliest parts
-	// go too.
-	for {
-		b, _ := json.Marshal(panel.Parts)
-		if len(b) <= subagentBytes || len(panel.Parts) == 0 {
-			break
-		}
-		n := max(len(panel.Parts)/4, 1)
-		panel.Parts, panel.Earlier = panel.Parts[n:], panel.Earlier+n
-	}
 	return panel
 }
 
@@ -163,10 +174,13 @@ func cutEnd(s string, n int) string {
 }
 
 // cutStart is the end of s, at most n bytes of it, at a character, with
-// an ellipsis where it was cut.
+// an ellipsis where it was cut: "" when that leaves no room for one.
 func cutStart(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	if n <= len("…") {
+		return ""
 	}
 	i := len(s) - n + len("…")
 	for i < len(s) && !utf8.RuneStart(s[i]) {
@@ -180,7 +194,11 @@ func cutStart(s string, n int) string {
 // the window's title bar, the body's below it. Glitched keeps the
 // header's Close, which closes it whatever draws the panel, or fails to.
 func (a *app) subagentPanel(c *ui.Context, t thread, sel subagentSel, w client.WorkStep) {
-	panel := subagentContext(w)
+	// Measuring what fits is work: once for each change of the subagent.
+	if m := &a.subagentMade; m.of != w.Subagent || m.rev != w.Subagent.Rev || m.title != w.Title {
+		*m = subagentMade{w.Subagent, w.Subagent.Rev, w.Title, subagentContext(w)}
+	}
+	panel := a.subagentMade.panel
 	copyOf := func(part string) func(plugins.ThreadRecord) any {
 		return func(r plugins.ThreadRecord) any {
 			p := panel

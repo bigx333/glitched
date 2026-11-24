@@ -437,6 +437,14 @@ func (a *app) panelEffect(args json.RawMessage) (any, error) {
 		return nil, err
 	}
 	p := a.panels()
+	// A subagent's panel opens only from its step: open, it is shown.
+	// Closed, it is the one chosen, though another panel covers it.
+	if in.Panel == "subagent" && in.Open != nil && *in.Open {
+		if p.Subagent {
+			return p, nil
+		}
+		return nil, errors.New("the subagent panel opens from a subagent's step")
+	}
 	_, chosen := a.subagentStep[a.current().id()]
 	now := map[string]bool{"terminal": p.Terminal, "diff": p.Diff, "preview": p.Preview, "subagent": chosen}
 	if on, ok := now[in.Panel]; ok && in.Open != nil && *in.Open == on {
