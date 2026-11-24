@@ -100,7 +100,9 @@ type Run struct {
 // the reports delivered of it: the run of a turn's end, the request of
 // one it waits on. Lost is why it is lost. Create is the create its first
 // try sent, and Taken that the machine's person took the child over
-// there: its last message or stop was theirs.
+// there: its last message or stop was theirs. Settles counts the
+// placeholder's settles here, and Ended is how the child's last run that
+// wasn't silent ended there.
 type Remote struct {
 	Engine    api.ID       `json:"engine"`
 	Link      api.ID       `json:"link"`
@@ -116,6 +118,8 @@ type Remote struct {
 	Lost      string       `json:"lost,omitempty"`
 	Create    *api.Command `json:"create,omitempty"`
 	Taken     bool         `json:"taken,omitempty"`
+	Settles   int          `json:"settles,omitempty"`
+	Ended     *api.Outcome `json:"ended,omitempty"`
 }
 
 // Origin is a link's thread's: where it came from, as api.Origin, its
@@ -354,6 +358,9 @@ func View(t Thread) api.Thread {
 			v.Run = r.Slot
 		case r.State == RemoteCreating && !t.settled():
 			v.Run = api.RunStarting
+		}
+		if r.Ended != nil {
+			v.LastTurn = &api.TurnResult{Run: r.Run, Outcome: *r.Ended}
 		}
 	}
 	if r := t.Live(); r != nil {

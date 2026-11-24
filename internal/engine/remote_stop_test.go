@@ -70,7 +70,7 @@ func TestASettleOrDeleteSettlesTheChildThere(t *testing.T) {
 			if body, ok := s[0].Command.Body.(api.InboxSet); !ok || body.Disposition.State != api.Settled {
 				t.Fatalf("%s %T: the stop sends %+v; want a settle there", c.name, b, s[0].Command.Body)
 			}
-			if c.create != (s[0].Create != nil) || c.create && s[0].Create.ID != create.ID {
+			if c.create != (s[0].Create != nil) || c.create && (s[0].Create.Target != create.Target || s[0].Create.ID == create.ID || !s[0].Create.Body.(api.ThreadCreate).Settled) {
 				t.Fatalf("%s %T: the stop's create %+v; want it only while unbound", c.name, b, s[0].Create)
 			}
 			if s[0].Engine != c.th.Remote.Engine || s[0].Link != c.th.Remote.Link || s[0].Command.Target.IsZero() {

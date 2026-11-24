@@ -81,6 +81,10 @@ func DecideWith(t Thread, c api.Command, env Env, now time.Time) ([]Event, []Eff
 			if r := t.Live(); r != nil && r.State == RunUncertain {
 				return nil, nil, rejected("the thread's run didn't answer its stop, and only the user can end it")
 			}
+		case api.InboxSet:
+			if !c.Caller.Run.IsZero() || b.Disposition.State != api.Settled {
+				return nil, nil, rejected("an agent can only message, stop or answer the question of a thread under its own")
+			}
 		case api.RequestRespond:
 			if i := t.requestAt(b.Request); i < 0 {
 				return nil, nil, api.ErrNotFound
@@ -183,7 +187,7 @@ func (d *decision) placeholder(id api.ID, b api.Intent) error {
 				return err
 			}
 		}
-		d.effects = append(d.effects, RemoteSend{Engine: r.Engine, Link: r.Link, Command: d.there(id, "send", api.MessageDispatch{Text: b.Text, Mode: b.Mode})})
+		d.effects = append(d.effects, RemoteSend{Engine: r.Engine, Link: r.Link, Settles: d.t.Remote.Settles, Command: d.there(id, "send", api.MessageDispatch{Text: b.Text, Mode: b.Mode})})
 		return nil
 	case api.RequestRespond:
 		return rejected("this child runs on another machine, and what it asks is answered there")
@@ -206,13 +210,20 @@ func (d *decision) there(id api.ID, what string, b api.Intent) api.Command {
 }
 
 // stopThere has the placeholder's child settled or stopped there with
-// b, after the create its first try sent while the machine may not have
-// taken it.
+// b. While the machine never answered the create its first try sent,
+// that create goes first, made settled under an id of its own: the
+// machine either makes the child settled, so it never starts, or finds
+// the child the first create made and takes b.
 func (d *decision) stopThere(id api.ID, b api.Intent) {
 	r := d.t.Remote
 	s := RemoteStop{Engine: r.Engine, Link: r.Link, Command: d.there(id, "stop", b)}
-	if r.State == RemoteCreating {
-		s.Create = r.Create
+	if r.Thread.IsZero() && r.Create != nil {
+		c := *r.Create
+		if create, ok := c.Body.(api.ThreadCreate); ok {
+			create.Settled = true
+			c.ID, c.Body = derive(c.ID, "settled"), create
+			s.Create = &c
+		}
 	}
 	d.effects = append(d.effects, s)
 }
@@ -455,6 +466,9 @@ func (d *decision) createFromLink(id api.ID, c api.ThreadCreate) error {
 		return err
 	}
 	d.effects = append(d.effects, MakeWorktree{Project: c.Project, Base: c.Worktree.Base, Title: c.Title})
+	if c.Settled {
+		return d.inbox(api.InboxSet{Disposition: api.Disposition{State: api.Settled}})
+	}
 	return nil
 }
 
@@ -931,6 +945,10 @@ func (d *decision) interrupt(drop bool) error {
 		}
 	}
 	switch {
+	case r == nil && !drop && d.t.Origin != nil && d.t.Origin.Making:
+		// A stop before a link's thread's worktree is made holds its
+		// first message, which would start once it is.
+		return d.hold()
 	case r == nil:
 		return nil
 	case drop || r.State != RunStopping:
@@ -1582,10 +1600,10 @@ func (d *decision) remote(o Observation) error {
 				keys, reports = append(keys, p.Key), append(reports, p)
 			}
 		}
-		if o.Cursor == r.Cursor && o.Run == r.Run && o.Silent == r.Silent && o.Slot == r.Slot && slices.Equal(o.Pending, r.Pending) && o.Taken == r.Taken && len(keys) == 0 {
+		if o.Cursor == r.Cursor && o.Run == r.Run && o.Silent == r.Silent && o.Slot == r.Slot && slices.Equal(o.Pending, r.Pending) && o.Taken == r.Taken && sameOutcome(o.Ended, r.Ended) && len(keys) == 0 {
 			return nil
 		}
-		if err := d.emit(api.RemoteSeen{Cursor: o.Cursor, Run: o.Run, Silent: o.Silent, State: o.Slot, Pending: o.Pending, Taken: o.Taken, Keys: keys}); err != nil {
+		if err := d.emit(api.RemoteSeen{Cursor: o.Cursor, Run: o.Run, Silent: o.Silent, State: o.Slot, Pending: o.Pending, Taken: o.Taken, Ended: o.Ended, Keys: keys}); err != nil {
 			return err
 		}
 		for _, p := range reports {
@@ -1594,6 +1612,8 @@ func (d *decision) remote(o Observation) error {
 	}
 	return nil
 }
+
+func sameOutcome(a, b *api.Outcome) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
 
 // remoteReport has the placeholder report p to its parent, as report
 // does for a local child, with what its machine, labelled on, said.

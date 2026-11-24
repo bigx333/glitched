@@ -113,6 +113,8 @@ type RemoteSeen struct {
 	// Taken is that the machine's person sent the child's last message
 	// or asked its last stop there, so it is theirs.
 	Taken bool `json:"taken,omitempty"`
+	// Ended is how the child's last run that wasn't silent ended there.
+	Ended *Outcome `json:"ended,omitempty"`
 }
 
 // RemoteLost is a placeholder whose child this engine no longer reaches

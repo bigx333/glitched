@@ -299,8 +299,9 @@ func (h *Host) hear(placeholder api.ID) {
 // remoteCommand sends c, a command of a placeholder's settle, delete,
 // stop, message or narrowing, which what names, to its child on its
 // machine at, until the machine answers, with each try classified as a
-// create's or a follower's is. Create, when set, goes first, so a create
-// in flight can't land after c: one its machine refuses left nothing
+// create's or a follower's is. Create, when set, is the placeholder's
+// create made settled, and goes first: the machine makes the child
+// settled, or already has it and takes c; one it refuses left nothing
 // there. A refusal of c is logged and ends it, as a refused stop of a
 // local child records nothing: the child there stays as it is. A child
 // lost on the way is lost here too, the stop that didn't reach it said:
@@ -308,7 +309,7 @@ func (h *Host) hear(placeholder api.ID) {
 // ended by a settle or a delete, which the stop after it takes up.
 func (h *Host) remoteCommand(e store.Effect, what string, at api.Remote, create *api.Command, c api.Command) (engine.Observation, bool) {
 	ctx := h.ctx
-	if what != "stop" {
+	if what == "message" {
 		var done func()
 		ctx, done = h.reachFor(e.Thread)
 		defer done()
@@ -334,9 +335,13 @@ func (h *Host) remoteCommand(e store.Effect, what string, at api.Remote, create 
 		}
 		var rej *api.RejectedError
 		if create != nil {
+			// A machine that already has the child refuses a second create
+			// of it, and takes c.
 			if err = send(*create); errors.As(err, &rej) {
 				refused = "its create was refused there, so nothing is there: " + rej.Reason
 				return label, false, nil
+			} else if errors.Is(err, api.ErrNotAllowed) {
+				err = nil
 			}
 		}
 		if err == nil {
@@ -504,13 +509,13 @@ func (h *Host) readRemote(ctx context.Context, m Machine, t engine.Thread, label
 			}
 			reports[i].Reply = reply.Text
 		}
-		if snapshot || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || !slices.Equal(next.Pending, r.Pending) || next.Taken != r.Taken || len(reports) > 0 {
+		if snapshot || next.Run != r.Run || next.Silent != r.Silent || next.Slot != r.Slot || !slices.Equal(next.Pending, r.Pending) || next.Taken != r.Taken || next.Ended != r.Ended || len(reports) > 0 {
 			_, listed, err := h.dial(at)
 			if err != nil {
 				return progressed, err
 			}
 			listed.Close()
-			o := engine.RemoteSeen{Cursor: next.Cursor, Run: next.Run, Silent: next.Silent, Slot: next.Slot, Pending: next.Pending, Taken: next.Taken, Reports: reports, On: label}
+			o := engine.RemoteSeen{Cursor: next.Cursor, Run: next.Run, Silent: next.Silent, Slot: next.Slot, Pending: next.Pending, Taken: next.Taken, Ended: next.Ended, Reports: reports, On: label}
 			_, err = h.store.Observe(ctx, t.ID, o, h.clock(), 0)
 			if errors.Is(err, engine.ErrRefused) {
 				return progressed, errObsolete

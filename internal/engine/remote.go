@@ -20,7 +20,7 @@ import (
 // over there, as a local child's user does.
 func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, bool, error) {
 	if fresh {
-		r.Run, r.Silent, r.Slot, r.Pending, r.Taken = api.ID{}, false, api.RunIdle, nil, false
+		r.Run, r.Silent, r.Slot, r.Pending, r.Taken, r.Ended = api.ID{}, false, api.RunIdle, nil, false, nil
 	}
 	var out []RemoteReport
 	add := func(p RemoteReport) {
@@ -28,7 +28,7 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 			out = append(out, p)
 		}
 	}
-	gone := false
+	gone, first := false, false
 	for _, e := range events {
 		b, err := e.Decode()
 		if err != nil {
@@ -37,7 +37,7 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 		switch b := b.(type) {
 		case api.ThreadCreated:
 			if b.Origin != nil {
-				r.Slot = api.RunStarting
+				r.Slot, first = api.RunStarting, true
 			}
 		case api.DispositionChanged:
 			if b.Disposition.State == api.Settled && r.Run.IsZero() && r.Slot == api.RunStarting {
@@ -86,6 +86,9 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 			if b.Run != r.Run {
 				break
 			}
+			if !r.Silent {
+				r.Ended = &b.Outcome
+			}
 			if r.Slot != api.RunStopping && r.Slot != api.RunUncertain && !r.Silent {
 				switch b.Outcome {
 				case api.OutcomeCompleted:
@@ -96,9 +99,12 @@ func Follow(r Remote, events []api.Event, fresh bool) (Remote, []RemoteReport, b
 			}
 			r.Slot, r.Pending = api.RunIdle, nil
 		case api.MessageQueued:
-			if b.Report.IsZero() && !b.Silent {
+			// The create's first message is the origin's, though a log
+			// before it was so named has it unnamed.
+			if b.Report.IsZero() && !b.Silent && !first {
 				r.Taken = b.By.IsZero()
 			}
+			first = false
 		case api.StopAsked:
 			r.Taken = b.By.IsZero()
 		case api.ThreadDeleted:

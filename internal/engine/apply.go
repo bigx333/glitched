@@ -117,10 +117,15 @@ func apply(t Thread, e Event) (Thread, error) {
 			return t, &TransitionError{"remote", "not bound", "seen"}
 		}
 		r := *t.Remote
-		r.Cursor, r.Run, r.Silent, r.Slot, r.Pending, r.Taken = b.Cursor, b.Run, b.Silent, b.State, b.Pending, b.Taken
+		r.Cursor, r.Run, r.Silent, r.Slot, r.Pending, r.Taken, r.Ended = b.Cursor, b.Run, b.Silent, b.State, b.Pending, b.Taken, b.Ended
 		r.Reported = slices.Concat(r.Reported, b.Keys)
 		t.Remote = &r
 	case api.DispositionChanged:
+		if r := t.Remote; r != nil && b.Disposition.State == api.Settled {
+			c := *r
+			c.Settles++
+			t.Remote = &c
+		}
 		t.Disposition = b.Disposition
 	case api.ThreadRenamed:
 		t.Title = b.Title

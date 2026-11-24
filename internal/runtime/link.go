@@ -90,6 +90,9 @@ func (h *Host) linkSubmit(ctx context.Context, link api.Link, c api.Command) (ap
 	case api.TurnInterrupt:
 		c.Caller = &api.Caller{Thread: t.Origin.Thread}
 	case api.InboxSet:
+		if b.Disposition.State == api.Settled {
+			c.Caller = &api.Caller{Thread: t.Origin.Thread}
+		}
 	case api.ThreadConfigure:
 		narrows := fmt.Errorf("%w: a link only narrows a thread's access", api.ErrNotAllowed)
 		if b.Model != nil || b.Effort != nil || b.Fast != nil || b.Access == nil {

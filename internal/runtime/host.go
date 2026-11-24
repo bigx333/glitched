@@ -394,7 +394,7 @@ func (h *Host) committed(c store.Commit) {
 		h.noteReverting(e, c.Threads)
 	}
 	for _, th := range c.Threads {
-		h.noteWorking(th.ID, works[th.Run])
+		h.noteWorking(th.ID, works[th.Run] && th.Remote == nil)
 	}
 	h.mu.Unlock()
 	for _, th := range c.Threads {
@@ -571,7 +571,7 @@ func (h *Host) boot(ctx context.Context) error {
 			return err
 		}
 		h.mu.Lock()
-		h.noteWorking(id, works[engine.View(t).Run])
+		h.noteWorking(id, works[engine.View(t).Run] && t.Remote == nil)
 		h.mu.Unlock()
 		r := t.Live()
 		lease, attempted := starts[r.ID]
