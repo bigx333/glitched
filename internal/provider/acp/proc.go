@@ -75,6 +75,7 @@ type proc struct {
 	exitErr error         // set before reaped closes
 	left    map[int]int64 // what ran in its process group as it was reaped; set before reaped closes
 	halted  atomic.Bool   // it was stopped, and takes no more runs
+	cut     atomic.Bool   // a write to it may have been cut short, so it takes no more runs
 	stale   atomic.Bool   // it printed that its login went stale
 	closing sync.Once
 
@@ -629,7 +630,7 @@ func (p *proc) Wake() bool {
 	p.mu.Lock()
 	spoke := p.spoke
 	p.mu.Unlock()
-	if spoke || p.halted.Load() {
+	if spoke || p.halted.Load() || p.cut.Load() {
 		return false
 	}
 	select {

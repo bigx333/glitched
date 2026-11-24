@@ -552,13 +552,18 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 			g.p.halt()
 			return nil
 		}
+		// The grace runs from the stop, not from the interrupt's write: a
+		// Claude Code that stopped reading would hold the write past it.
+		deadline := time.AfterFunc(interruptGrace, g.p.halt)
 		err := g.p.send(ctx, map[string]any{"type": "control_request", "request_id": interruptRequest,
 			"request": map[string]any{"subtype": "interrupt", "cancel_queued": true}})
-		if err == nil {
-			g.interrupted = true
-			g.deadline = time.AfterFunc(interruptGrace, g.p.halt)
+		if err != nil && !g.p.halted.Load() {
+			deadline.Stop()
+			return err
 		}
-		return err
+		g.interrupted = true
+		g.deadline = deadline
+		return nil
 	case provider.Respond:
 		return g.respondLocked(ctx, a)
 	}
