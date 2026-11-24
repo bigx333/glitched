@@ -405,7 +405,10 @@ func TestCodexsConfiguredModelIsTheOneItRuns(t *testing.T) {
 	}
 	sendNew(h, "Say hi.")
 	namesNoModel(t, 1)
-	h.until("the first turn's end", func() bool { return h.tt.HasText("hi") && !h.a.current().View.Working() })
+	h.until("the first turn's end", func() bool {
+		v := h.a.current().View
+		return v.LastTurn != nil && !v.Working()
+	})
 	h.a.draft = "Say it again."
 	h.a.send(h.a.current())
 	namesNoModel(t, 2)
