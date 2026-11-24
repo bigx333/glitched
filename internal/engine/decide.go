@@ -1038,10 +1038,10 @@ func (d *decision) observe(o Observation) error {
 			return d.emit(api.TurnEnded{Run: o.Run, Outcome: api.OutcomeFailed, Error: "the engine restarted during the compaction"})
 		}
 		switch {
+		case o.Asked:
+			return d.uncertain(api.TurnUncertain{Run: o.Run, Reason: api.UncertainStopped})
 		case o.Failed:
 			return d.uncertain(api.TurnUncertain{Run: o.Run, Reason: api.UncertainUnconfirmed})
-		case live.State == RunStopping:
-			return d.uncertain(api.TurnUncertain{Run: o.Run, Reason: api.UncertainStopped})
 		}
 		worked := live.State == RunRunning || live.State == RunStarting
 		return d.uncertain(api.TurnUncertain{Run: o.Run, Reason: api.UncertainRestarted, Continue: o.Continue && worked && d.t.Parent.IsZero()})

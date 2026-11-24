@@ -285,6 +285,9 @@ type Reconciled struct {
 	Failed   bool
 	// Continue has a run of the user's lost as it worked continued unasked.
 	Continue bool
+	// Asked is that someone asked the run to stop, as the user's Stop or
+	// an agent's task_cancel, rather than the engine replacing it.
+	Asked bool
 }
 
 // Rewound: the database came back from a backup and lost history. The live
