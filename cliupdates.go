@@ -260,50 +260,84 @@ func (a *app) runUpdate(e *client.Env, name string, whenIdle bool, done func(tra
 }
 
 // cliUpdate is a CLI's update, as a provider's row and the sidebar's list
-// show it: what's installed and what's newer, the Update button or the
-// command to run instead, and how the last update went.
-func (a *app) cliUpdate(c *ui.Context, en cliEntry) {
+// show it: what's newer and what's installed, the Update button or the
+// command to run instead, and how the last update went. Title, when not
+// "", is the row's heading in place of what the update itself would say,
+// as the sidebar's list names the CLI and its machine instead.
+func (a *app) cliUpdate(c *ui.Context, en cliEntry, title string) {
 	if !a.cliUpdateShows(en) {
 		return
 	}
 	u, r := en.info.Update, a.clis.runs[en.key]
 	name := familyOf(en.key.provider).name
-	ui.Column(c).Key("update:" + en.key.provider).Gap(8).Children(func() {
-		if u.Available || r != nil && r.running {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-				ui.Text(c, fmt.Sprintf("Update available: %s → %s", u.Installed, u.Latest)).Key("available").FontSize(12.5).FontWeight(550).TextColor(palette.blue).Grow(1)
+	waiting := r != nil && r.waiting
+	running := r != nil && r.running
+	failed := r != nil && r.failed != ""
+	busy := r != nil && r.busy
+	manual := u.Manual != "" && u.Available
+	command := strings.Join(u.Command, " ")
+	tip := ""
+	if len(u.Command) > 0 {
+		words := append([]string{displayPath(u.Command[0])}, u.Command[1:]...)
+		tip = "Runs " + strings.Join(words, " ") + " on " + machineWords(en.env) + "."
+	}
+	named := title != ""
+	if !named {
+		title = "Updated to " + u.Installed
+		switch {
+		case u.Available || running:
+			title = "Update to " + u.Latest
+		case failed:
+			title = "Version " + u.Installed
+		}
+	}
+	ui.Column(c).Key("update:" + en.key.provider).Gap(10).Children(func() {
+		ui.Row(c).GapX(16).GapY(10).AlignItems(ui.Center).Wrap().Children(func() {
+			ui.Column(c).Grow(1).Shrink(1).Basis(200).Gap(2).Children(func() {
+				ui.Text(c, title).Key("available").FontWeight(500)
 				switch {
-				case r != nil && r.waiting:
-					ui.Spinner(c)
+				case waiting:
 					ui.Text(c, "Waiting for the turn to end…").FontSize(12).TextColor(palette.muted)
-					ui.Button(c.Key("cancel"), "Cancel").OnClick(r.cancel)
-				case r != nil && r.running:
-					ui.Spinner(c)
+				case running:
 					ui.Text(c, "Updating…").FontSize(12).TextColor(palette.muted)
-				case u != nil && u.Manual != "":
-				case r != nil && r.busy:
-					ui.Button(c.Key("later"), "Update when it ends").Disabled(!online(en.env)).OnClick(func() { a.updateCLI(en, true) })
-				default:
-					ui.Button(c.Key("update"), "Update").Disabled(!online(en.env)).OnClick(func() { a.updateCLI(en, false) })
+				case failed:
+					ui.Text(c, "The update failed: "+clip(r.failed, 300)).Key("failed").Selectable().FontSize(12).TextColor(palette.red)
+				case busy:
+					ui.Text(c, name+" has a turn running on "+machineWords(en.env)+", so it can't update now.").Key("busy").FontSize(12).TextColor(palette.amber)
+				case manual:
+					ui.Text(c, u.Manual+" Run this in Terminal on "+machineWords(en.env)+":").Key("manual").FontSize(12).TextColor(palette.muted)
+				case u.Available:
+					line := u.Installed + " is installed."
+					if named {
+						line = fmt.Sprintf("%s → %s", u.Installed, u.Latest)
+					}
+					ui.Text(c, line).FontSize(12).TextColor(palette.muted)
+				case named:
+					ui.Text(c, "Updated to "+u.Installed).FontSize(12).TextColor(palette.muted)
 				}
 			})
-		}
-		if r != nil && r.busy {
-			ui.Text(c, name+" has a turn running on "+machineWords(en.env)+", so it can't update now.").Key("busy").FontSize(12).TextColor(palette.amber)
-		}
-		if r != nil && r.failed != "" {
-			ui.Text(c, "The update failed: "+clip(r.failed, 300)).Key("failed").Selectable().FontSize(12).TextColor(palette.red)
-		}
-		manual := u.Manual != "" && u.Available
-		if manual {
-			ui.Text(c, u.Manual+" Run this in Terminal on "+machineWords(en.env)+":").Key("manual").FontSize(12).TextColor(palette.muted)
-		}
-		if command := strings.Join(u.Command, " "); command != "" && (u.Available || r != nil && r.running) {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			if waiting || running || failed || busy || u.Available && !manual {
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Children(func() {
+					switch {
+					case waiting:
+						ui.Spinner(c)
+						ui.Button(c.Key("cancel"), "Cancel").OnClick(r.cancel)
+					case running:
+						ui.Spinner(c)
+					case busy && !failed:
+						b := ui.Button(c.Key("later"), "Update when it ends").Disabled(!online(en.env)).OnClick(func() { a.updateCLI(en, true) })
+						a.tip(c, b, tip)
+					default:
+						b := ui.Button(c.Key("update"), "Update").Disabled(!online(en.env)).OnClick(func() { a.updateCLI(en, false) })
+						a.tip(c, b, tip)
+					}
+				})
+			}
+		})
+		if manual && command != "" {
+			ui.Row(c).Radius(6).Background(palette.bg.Alpha(0.6)).Padding(8, 10).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, command).Key("command").Selectable().Font("monospace").FontSize(11.5).TextColor(palette.text).Grow(1).Shrink(1)
-				if manual {
-					ui.Button(c.Key("copy"), "Copy").OnClick(func() { c.WriteClipboard(command) })
-				}
+				ui.Button(c.Key("copy"), "Copy").OnClick(func() { c.WriteClipboard(command) })
 			})
 		}
 		if r != nil && r.output != "" && !r.running {
@@ -393,16 +427,15 @@ func (a *app) cliUpdatesButton(c *ui.Context) {
 		})
 		several := len(a.backend.Envs()) > 1
 		for _, en := range pending {
-			ui.Row(c).Key(fmt.Sprintf("cli:%p/%s", en.env, en.key.provider)).Gap(10).Children(func() {
+			ui.Row(c).Key(fmt.Sprintf("cli:%p/%s", en.env, en.key.provider)).Gap(10).AlignItems(ui.Start).Children(func() {
 				f := familyOf(en.key.provider)
-				modelTile(c, f.icon, f.color, 22)
-				ui.Column(c).Grow(1).Shrink(1).Gap(6).Children(func() {
-					title := f.name
-					if several {
-						title += " on " + machineWords(en.env)
-					}
-					ui.Text(c, title).FontWeight(550).SingleLine()
-					a.cliUpdate(c, en)
+				ui.Box(c).Margin(1, 0, 0, 0).Children(func() { modelTile(c, f.icon, f.color, 22) })
+				title := f.name
+				if several {
+					title += " on " + machineWords(en.env)
+				}
+				ui.Column(c).Grow(1).Shrink(1).Children(func() {
+					a.cliUpdate(c, en, title)
 				})
 			})
 		}

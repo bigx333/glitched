@@ -140,13 +140,15 @@ func (a *app) providerDetail(c *ui.Context, r providerRow) {
 						ui.Text(c, displayPath(r.info.Info.Path)).Selectable().Font("monospace").FontSize(12).TextColor(palette.muted)
 					})
 				}
-				if v := r.version(); v != "" {
+				en, local := a.localCLI(r)
+				upd := local && a.cliUpdateShows(en)
+				if v := r.version(); v != "" && !upd {
 					optionRow(c, "Version", "", func() {
 						ui.Text(c, v).Selectable().FontSize(12).TextColor(palette.muted)
 					})
 				}
-				if en, ok := a.localCLI(r); ok && a.cliUpdateShows(en) {
-					ui.Column(c).Padding(0, 16, 12).Children(func() { a.cliUpdate(c, en) })
+				if upd {
+					ui.Column(c).Padding(12, 16).Children(func() { a.cliUpdate(c, en, "") })
 				}
 				if s := r.info.Info.NoAuto; s != "" {
 					optionRow(c, accessAuto, s+", so Approve for me ran without it and asked you more.", func() {})
@@ -395,7 +397,9 @@ func (a *app) remoteProviders(c *ui.Context, e *client.Env) {
 						statePill(c, state, t)
 					})
 					if a.settings.checkCLIs {
-						a.cliUpdate(c, cliEntry{cliKey{e, p.Name}, e, p})
+						ui.Column(c).Padding(0, 0, 0, 40).Children(func() {
+							a.cliUpdate(c, cliEntry{cliKey{e, p.Name}, e, p}, "")
+						})
 					}
 				})
 			}

@@ -76,14 +76,14 @@ func TestAPendingCLIUpdateShowsInTheSidebar(t *testing.T) {
 	h.until("the update", func() bool { return showing(h, "Agent CLI updates") })
 	h.click("Agent CLI updates")
 	h.tt.Advance(time.Second)
-	for _, s := range []string{"CLI updates", "Update available: 1.5.14 → 1.5.15", "Update"} {
+	for _, s := range []string{"CLI updates", "Antigravity", "1.5.14 → 1.5.15", "Update"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("the list doesn't show %q: %q", s, h.tt.Texts())
 		}
 	}
 	h.click("Agent CLI updates")
 	openProviders(h, "antigravity")
-	for _, s := range []string{"Update available", "Update available: 1.5.14 → 1.5.15"} {
+	for _, s := range []string{"Update available", "Update to 1.5.15"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("the Providers page doesn't show %q: %q", s, h.tt.Texts())
 		}
@@ -129,7 +129,7 @@ func TestTheCLICheckTurnsOff(t *testing.T) {
 		t.Error("the check is off, and an update shows")
 	}
 	h.click("Check for CLI updates")
-	h.until("the update", func() bool { return h.tt.HasText("Update available: 1.5.14 → 1.5.15") })
+	h.until("the update", func() bool { return h.tt.HasText("Update to 1.5.15") })
 }
 
 // The sidebar's update stays, with why, when the update fails, and goes
@@ -260,7 +260,7 @@ func TestAPairedMachineShowsItsOwnCLIVersions(t *testing.T) {
 	h.until("devbox's update", func() bool { return showing(h, "Agent CLI updates") })
 	openProviders(h)
 	h.until("devbox's rows", func() bool { return h.tt.HasText("DEVBOX") })
-	for _, s := range []string{"DEVBOX", "v1.5.14", "Update available: 1.5.14 → 1.5.15"} {
+	for _, s := range []string{"DEVBOX", "v1.5.14", "Update to 1.5.15"} {
 		if !h.tt.HasText(s) {
 			t.Errorf("the page doesn't show %q: %q", s, h.tt.Texts())
 		}
@@ -281,7 +281,7 @@ func TestAFailedUpdateKeepsItsNoticeThoughTheVersionIsUnknown(t *testing.T) {
 	h.a.updateCLI(h.a.pendingCLIs()[0], false)
 	h.until("the update's end", func() bool { return !h.a.clis.runs[cliKey{h.local(), "claude"}].running })
 	openProviders(h, "claude")
-	if !h.tt.HasText("Update available: 1.0.0 → 1.1.0") || !h.tt.HasText("The update failed: updater failed") {
+	if !h.tt.HasText("Update to 1.1.0") || !h.tt.HasText("The update failed: updater failed") {
 		t.Errorf("a failed update lost its notice: %q", h.tt.Texts())
 	}
 }
@@ -393,7 +393,7 @@ func TestAnUpdateWaitingForATurnCanBeCancelled(t *testing.T) {
 	h.until("the wait", func() bool { return h.tt.HasText("Waiting for the turn to end…") })
 	h.click("Cancel")
 	h.until("the wait's end", func() bool { return !h.tt.HasText("Waiting for the turn to end…") })
-	if ran || !h.tt.HasText("Update available: 1.0.0 → 1.1.0") || h.tt.HasText("The update failed") {
+	if ran || !h.tt.HasText("1.0.0 → 1.1.0") || h.tt.HasText("The update failed") {
 		t.Errorf("a cancelled wait didn't leave the update as it was: %q", h.tt.Texts())
 	}
 }
@@ -554,20 +554,38 @@ func TestAnUpdatingCLIWithNoVersionsStaysOnTheButton(t *testing.T) {
 	}
 }
 
-// An update Glitched runs shows the command it will run before the click,
-// in Settings › Providers and in the sidebar's list.
+// An update Glitched runs says the command it will run before the click,
+// as the Update button's tooltip, in Settings › Providers and in the
+// sidebar's list.
 func TestAnUpdateShowsItsCommandBeforeItRuns(t *testing.T) {
 	h := start(t, tempDir(t))
 	allAnswered(h)
 	pending(h, "claude")
-	h.click("Agent CLI updates")
-	h.tt.Advance(time.Second)
-	if !showing(h, "/bin/claude update") || !showing(h, "Update") {
-		t.Errorf("the list doesn't show the command beside Update: %q", h.tt.Texts())
+	tip := func() string {
+		t.Helper()
+		r, ok := h.tt.Find("Update")
+		if !ok {
+			t.Fatalf("no Update button: %q", h.tt.Texts())
+		}
+		h.tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		h.tt.Advance(2 * time.Second)
+		for _, s := range h.tt.Texts() {
+			if strings.Contains(s, "Runs ") {
+				return s
+			}
+		}
+		t.Fatalf("Update shows no command: %q", h.tt.Texts())
+		return ""
 	}
 	h.click("Agent CLI updates")
+	h.tt.Advance(time.Second)
+	if s := tip(); s != "Runs /bin/claude update on this machine." {
+		t.Errorf("the list's Update says %q", s)
+	}
+	h.tt.Move(0, 0)
+	h.click("Agent CLI updates")
 	openProviders(h, "claude")
-	if !showing(h, "/bin/claude update") || !showing(h, "Update") {
-		t.Errorf("the Providers row doesn't show the command beside Update: %q", h.tt.Texts())
+	if s := tip(); s != "Runs /bin/claude update on this machine." {
+		t.Errorf("the Providers Update says %q", s)
 	}
 }
