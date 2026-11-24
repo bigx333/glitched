@@ -563,13 +563,14 @@ type Thread struct {
 	// whose run Run is as this engine last heard.
 	Remote *Placement `json:"remote,omitempty"`
 	// Origin is set on a thread another machine's link started: the
-	// thread there that started it, and the link's label here.
+	// thread there that started it, through which link.
 	Origin *Origin `json:"origin,omitempty"`
 }
 
 // Placement is where a remote child runs: on the machine labelled
 // Machine, whose engine is Engine, through the link Link, as the thread
-// Thread there, zero until that machine took the create. This engine last
+// Thread there, zero until that machine took the create, whose last run
+// there is Run. This engine last
 // heard from it for the child at Heard, zero before it has since it
 // started; Lost is why it no longer follows the child. A read fills
 // Machine and Heard; a stream's view leaves them out.
@@ -577,6 +578,7 @@ type Placement struct {
 	Engine  ID        `json:"engine"`
 	Link    ID        `json:"link"`
 	Thread  ID        `json:"thread,omitzero"`
+	Run     ID        `json:"run,omitzero"`
 	Machine string    `json:"machine,omitempty"`
 	Heard   time.Time `json:"heard,omitzero"`
 	Lost    string    `json:"lost,omitempty"`

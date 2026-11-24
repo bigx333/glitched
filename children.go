@@ -477,8 +477,8 @@ func contextTokens(n float64) string {
 // waits on one on its machine while the placeholder says it waits.
 func stillBlocked(t, child thread, r client.ReportEntry) bool {
 	waits := slices.ContainsFunc(child.View.Requests, func(q api.Request) bool { return q.Run == r.Run })
-	if remote(child) != nil {
-		waits = child.View.Run == api.RunWaiting
+	if p := remote(child); p != nil {
+		waits = child.View.Run == api.RunWaiting && p.Run == r.Run
 	}
 	if !waits || t.Transcript == nil {
 		return false

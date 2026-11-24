@@ -90,20 +90,17 @@ func TestMintingALinkShowsItsTokenOnceAndRevokes(t *testing.T) {
 	if err != nil || len(ts) != 1 || ts[0].Link == nil || ts[0].Link.Access != api.AccessAutoEdits || ts[0].Link.Working != 2 || ts[0].Label != "laptop" {
 		t.Fatalf("tokens.json holds %+v (%v), want laptop's link at auto edits, 2 at work", ts, err)
 	}
-	line := slices.IndexFunc(h.tt.Texts(), func(s string) bool {
-		return strings.HasPrefix(s, "glitched link -add ") && strings.HasSuffix(s, " -token "+token)
-	})
-	if line < 0 {
-		t.Errorf("the page shows %q, want the line to run on laptop", h.tt.Texts())
+	if !h.tt.HasText("Turn on Serve on the tailnet for laptop to reach this machine. Then on laptop, add it with this token in Settings › This machine › Machines this one delegates to.") || h.tt.HasText("Copy command") {
+		t.Errorf("the page shows %q, want how laptop reaches this machine once it serves, and no command to copy before it does", h.tt.Texts())
 	}
 	if h.tt.HasText("No tokens yet. A machine needs one to reach this engine.") == false {
 		t.Error("the Tokens card lists the link, which reaches no more than its scope")
 	}
 	shoot(t, h, "b-minted")
-	h.click("Copy command")
+	h.click("Copy token")
 	h.tt.Frame()
-	if c := h.tt.Clipboard(); !strings.Contains(c, "glitched link -add") || !strings.Contains(c, token) {
-		t.Errorf("copied %q, want the line with the token", c)
+	if c := h.tt.Clipboard(); c != token {
+		t.Errorf("copied %q, want the token", c)
 	}
 	h.click("Done")
 	h.tt.Frame()
@@ -120,6 +117,32 @@ func TestMintingALinkShowsItsTokenOnceAndRevokes(t *testing.T) {
 		ts, _ := daemon.Tokens(dir)
 		return len(ts) == 0 && !h.tt.HasText("laptop")
 	})
+
+	h.a.mint.label = "tablet"
+	h.tt.Frame()
+	h.click("Mint a link")
+	h.until("tablet's token", func() bool { return h.a.minted.token != "" && h.tt.HasText(h.a.minted.token) })
+	token = h.a.minted.token
+	h.tt.Advance(time.Second)
+	h.click("Revoke")
+	h.until("the revoked link's token gone", func() bool { return !h.tt.HasText(token) && h.a.minted.token == "" })
+}
+
+// In the narrowest window, the setting's choices, minting and adding a
+// machine stay inside it.
+func TestTheLinkCardsFitANarrowWindow(t *testing.T) {
+	dir := tempDir(t)
+	full := api.AccessFull
+	if _, err := daemon.Edit(dir, func(c *daemon.Config) error { c.ChildrenFromOtherMachines = &full; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, dir)
+	thisMachine(t, h)
+	h.tt.SetSize(760, 2400)
+	h.tt.Advance(time.Second)
+	h.tt.Frame()
+	fits(t, h, 760, "Off", "Full access", fullWarning, "Mint a link", "Add machine", "The link's token")
+	shoot(t, h, "b-narrow-settings")
 }
 
 // On A, a machine is added with the link it minted for this one, refused
@@ -198,11 +221,15 @@ func remoteChild(t *testing.T) (*harness, thread, thread) {
 		t.Fatal(err)
 	}
 	h := start(t, dir)
-	h.a.backend.Inspect()
-	h.until("desk read", func() bool { return len(h.a.backend.Machine().Machines) == 1 })
 	parent, kid := h.thread("Ship the sidebar sort"), h.thread("Port the sort")
 	kid.View.Remote = &api.Placement{Engine: api.NewID(), Link: link}
 	kid.View.LastTurn = nil
+	// Nothing opened Settings: the app reads machines.json for the label.
+	h.until("desk named", func() bool {
+		h.tt.Frame()
+		s, _, _ := h.a.remoteState(kid)
+		return strings.HasSuffix(s, " on desk")
+	})
 	return h, parent, kid
 }
 
@@ -224,6 +251,7 @@ func TestARemoteChildsRowSaysItsState(t *testing.T) {
 		{"working", func(v *api.Thread) { v.Remote.Thread, v.Run = api.NewID(), api.RunRunning }, "Working on desk"},
 		{"needs-you", func(v *api.Thread) { v.Run = api.RunWaiting }, "Needs you on desk"},
 		{"idle", func(v *api.Thread) { v.Run = api.RunIdle }, "Idle on desk"},
+		{"cut-off", func(v *api.Thread) { v.Run = api.RunUncertain }, "Needs you on desk"},
 		{"lost", func(v *api.Thread) { v.Remote.Lost = "the link was revoked on desk" }, "Lost on desk"},
 	} {
 		c.set(&kid.View)
@@ -307,7 +335,7 @@ func TestARemoteChildsBlockedReportNeedsYouOnItsMachine(t *testing.T) {
 	h.until("the blocked report", func() bool { return h.tt.HasText("Needs you") && h.tt.HasText("Wants to edit main.go") })
 	child := h.thread("Write the tests")
 	h.until("the child waits", func() bool { return child.View.Run == api.RunWaiting })
-	child.View.Remote = &api.Placement{Engine: api.NewID(), Link: api.NewID(), Thread: api.NewID(), Machine: "desk"}
+	child.View.Remote = &api.Placement{Engine: api.NewID(), Link: api.NewID(), Thread: api.NewID(), Run: child.View.Turn.Run, Machine: "desk"}
 	child.View.Requests = nil
 	h.tt.Frame()
 	h.tt.Advance(time.Second)
@@ -316,6 +344,11 @@ func TestARemoteChildsBlockedReportNeedsYouOnItsMachine(t *testing.T) {
 		t.Errorf("the card shows %q, want Needs you on desk", h.tt.Texts())
 	}
 	shoot(t, h, "a-needs-you-card")
+	child.View.Remote.Run = api.NewID()
+	h.tt.Frame()
+	if h.tt.HasText("Needs you on desk") || !h.tt.HasText("Was waiting") {
+		t.Errorf("with another run waiting there, the card shows %q, want its own run's report was waiting", h.tt.Texts())
+	}
 }
 
 // A thread a link started says, before its title, which thread on which
@@ -324,16 +357,12 @@ func TestALinksThreadSaysWhereItCameFrom(t *testing.T) {
 	dir := tempDir(t)
 	d := engine(t, daemon.Config{Dir: dir}, fake.New(fake.Turn(false)))
 	seed(t, d, "/work/t3code", "Port the sort", "port it")
+	link := linkFor(t, dir, "laptop")
 	h := start(t, dir)
 	k := h.thread("Port the sort")
-	k.View.Origin = &api.Origin{Engine: api.NewID(), Thread: api.NewID(), Title: "Ship the sidebar sort", Link: api.NewID(), Machine: "laptop"}
+	k.View.Origin = &api.Origin{Engine: api.NewID(), Thread: api.NewID(), Title: "Ship the sidebar sort", Link: link}
 	h.a.choose(k)
-	h.tt.Frame()
-	h.tt.Advance(time.Second)
-	h.tt.Frame()
-	if !h.tt.HasText("from Ship the sidebar sort on laptop") {
-		t.Errorf("the header shows %q, want where the thread came from", h.tt.Texts())
-	}
+	h.until("where the thread came from", func() bool { h.tt.Frame(); return h.tt.HasText("from Ship the sidebar sort on laptop") })
 	shoot(t, h, "b-origin")
 }
 
@@ -373,11 +402,54 @@ func TestRemoteSurfacesFitANarrowWindow(t *testing.T) {
 	h.tt.Frame()
 	fits(t, h, 760, "Lost on desk", kid.View.Remote.Lost, "This child's thread is on desk. Pair desk in Settings › Servers to open it here.")
 	shoot(t, h, "a-narrow-notice")
-	parent.View.Origin = &api.Origin{Engine: api.NewID(), Thread: api.NewID(), Title: "A parent thread with a long title that runs on and on", Link: api.NewID(), Machine: "laptop"}
+	parent.View.Origin = &api.Origin{Engine: api.NewID(), Thread: api.NewID(), Title: "A parent thread with a long title that runs on and on", Link: linkFor(t, h.a.backend.Machine().Config.Dir, "laptop")}
 	h.a.choose(parent)
-	h.tt.Frame()
+	h.until("where the thread came from", func() bool { h.tt.Frame(); return h.tt.HasText("from A parent thread with a long title that runs on and on on laptop") })
 	h.tt.Advance(time.Second)
 	h.tt.Frame()
 	fits(t, h, 760, "from A parent thread with a long title that runs on and on on laptop")
 	shoot(t, h, "b-narrow-origin")
+}
+
+// linkFor mints a link in dir for the machine label names, and returns
+// its id.
+func linkFor(t *testing.T, dir, label string) api.ID {
+	t.Helper()
+	auto := api.AccessAutoEdits
+	if _, err := daemon.Edit(dir, func(c *daemon.Config) error { c.ChildrenFromOtherMachines = &auto; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	_, l, err := daemon.PairLink(dir, label, api.Link{Access: auto})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l.ID
+}
+
+// A placeholder whose machine this app pairs, before that machine made
+// its thread, says it opens here once it has.
+func TestARemoteChildPairedButNotYetMadeSaysItOpensOnceMade(t *testing.T) {
+	b, addr := tempDir(t), freeAddr(t)
+	token, err := daemon.Pair(b, "gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := engine(t, daemon.Config{Dir: b, Listen: []string{addr}}, fake.New(fake.Turn(false)))
+	env, err := db.Endpoint().Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, _, kid := remoteChild(t)
+	if err := h.addServer(client.Server{Label: "desk", Addr: addr, Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	h.until("desk online", func() bool { return h.a.envOf(env.ID) != nil })
+	kid.View.Remote.Engine, kid.View.Run = env.ID, api.RunStarting
+	h.a.choose(kid)
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	h.tt.Frame()
+	if !h.tt.HasText("Creating on desk") || !h.tt.HasText("Its thread opens here once desk has made it.") || h.tt.HasText("Pair desk in Settings") {
+		t.Errorf("the placeholder shows %q, want it opens once desk made it", h.tt.Texts())
+	}
 }
