@@ -69,10 +69,12 @@ type Launcher struct {
 // the thread's runs at that access the agent serves.
 func (l Launcher) For(thread api.ID, access api.Access) provider.MCPServer {
 	s := l.server(thread, access)
-	if l.Machines != nil {
-		if b, err := json.Marshal(l.Machines()); err == nil {
-			s.Env[EnvMachines] = string(b)
-		}
+	if l.Machines == nil {
+		return s
+	}
+	if ms := l.Machines(); len(ms) > 0 {
+		b, _ := json.Marshal(ms)
+		s.Env[EnvMachines] = string(b)
 	}
 	return s
 }
