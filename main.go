@@ -618,12 +618,10 @@ type app struct {
 	queueEditButton ui.Handle
 	// queueH is the queue's height over the composer, as last laid out.
 	queueH float32
-	// queueSlotW is the width its rows left their messages, as last laid
-	// out, and queueCompact whether Send now was drawn as an icon to
-	// leave it. queueOrder is the queue's messages as last drawn.
-	queueSlotW   float32
-	queueCompact bool
-	queueOrder   []api.ID
+	// queueFit chooses the form of its Send nows, and queueOrder is the
+	// queue's messages as last drawn.
+	queueFit   queueFit
+	queueOrder []api.ID
 	// snoozeFor is the thread whose snooze popover is open; popoverOpen
 	// says a plugin's popover drew open, as its row's actions are drawn.
 	snoozeFor   api.ID
@@ -1305,6 +1303,16 @@ func (a *app) contentCard(e ui.Element) ui.Element {
 	}
 	return e.Background(palette.bg).Radius(r, 0, 0, 0).Border(1, palette.border).
 		Margin(0, -1, -1, left).Clip()
+}
+
+// contentInner is the width inside the content card when the chat has
+// w: its right edge tucked under the window's, and its left too while the
+// sidebar is shut, less its border.
+func (a *app) contentInner(w float32) float32 {
+	if a.sidebarOpen == 0 {
+		w++
+	}
+	return w + 1 - 2
 }
 
 // glassTint is the tint over the window's bars, and the panels when they

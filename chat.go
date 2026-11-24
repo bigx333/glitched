@@ -1337,8 +1337,6 @@ func (a *app) hasAbove(t thread) bool { return len(a.shown(t)) > 0 || len(waitin
 // Mid-way, what isn't in the card's flow is held to its top, the card
 // clipping it.
 func (a *app) composer(c *ui.Context, t thread, rs rows) {
-	k := a.composerK
-	lerp := func(from, to float32) float32 { return from + (to-from)*k }
 	// The bar lets the pointer through, but for the composer in it, to
 	// what is around it, as the pill taking the user to the end.
 	// d is how far it is from the hero to its dock (hero.go). Docked, it's
@@ -1346,7 +1344,7 @@ func (a *app) composer(c *ui.Context, t thread, rs rows) {
 	// no transcript nor turn markers, is in the middle of the pane, the
 	// marker column's room coming in as the transcript does.
 	d := a.dockK
-	left := columnRight + (columnLeft-columnRight)*transcriptK(d)
+	left := a.composerLeft()
 	bar := ui.Column(c).Key("composer-bar").Absolute().Bottom(a.heroLift()*(1-d)).Left(0).Right(0).AlignItems(ui.Center).
 		Padding(0, columnRight, composerBarBottom, left).PassThrough()
 	// The full composer's width at rest, as the last frame had room for:
@@ -1356,7 +1354,7 @@ func (a *app) composer(c *ui.Context, t thread, rs rows) {
 		fullW = max(0, min(w, contentWidth)-2*a.paneBorder())
 	}
 	bar.Children(func() {
-		frame := ui.Column(c).Key("composer-frame").WidthPercent(100).MaxWidth(lerp(compactWidth, contentWidth)).PassThrough().
+		frame := ui.Column(c).Key("composer-frame").WidthPercent(100).MaxWidth(a.composerMaxW()).PassThrough().
 			Bind(&a.composerH)
 		frame.Children(func() {
 			// The composer plugin's layout, around the native
@@ -1379,6 +1377,18 @@ func (a *app) composer(c *ui.Context, t thread, rs rows) {
 			}
 		})
 	})
+}
+
+// composerLeft is the composer bar's room at its left, from the hero's to
+// the dock's, as the transcript's column has it docked.
+func (a *app) composerLeft() float32 {
+	return columnRight + (columnLeft-columnRight)*transcriptK(a.dockK)
+}
+
+// composerMaxW is the most the composer's frame takes, from the compact
+// line's to the full card's.
+func (a *app) composerMaxW() float32 {
+	return compactWidth + (contentWidth-compactWidth)*a.composerK
 }
 
 // composerContext is the context of composer.
