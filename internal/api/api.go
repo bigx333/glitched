@@ -447,6 +447,17 @@ type Environment struct {
 	Protocol int     `json:"protocol"`
 	Log      ID      `json:"log"`
 	Tailnet  Tailnet `json:"tailnet,omitzero"`
+	// Checkpoints is the engine's checkpoint store; zero when it keeps
+	// none.
+	Checkpoints CheckpointStore `json:"checkpoints,omitzero"`
+}
+
+// CheckpointStore is how much disk the checkpoints of threads' files take,
+// as git counts the store's objects, and the most they may: a capture
+// while Bytes is over Limit is skipped.
+type CheckpointStore struct {
+	Bytes int64 `json:"bytes"`
+	Limit int64 `json:"limit"`
 }
 
 type TailnetMode string

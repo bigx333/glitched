@@ -65,6 +65,21 @@ type RemoveWorktree struct {
 	Workspace, Project, Branch string
 }
 
+// CaptureCheckpoint saves the files of the thread's worktree in the engine's
+// checkpoint store: as Run left them, or, in the base phase, before Run,
+// the thread's first, starts. It sits before the thread's next start, so
+// that turn starts on the files saved.
+type CaptureCheckpoint struct {
+	Run   api.ID
+	Phase api.CheckpointPhase
+}
+
+// DropCheckpoints deletes a deleted thread's checkpoints.
+type DropCheckpoints struct{}
+
+func (CaptureCheckpoint) effectKind() string { return "checkpoint.capture" }
+func (DropCheckpoints) effectKind() string   { return "checkpoint.drop" }
+
 func (StartTurn) effectKind() string      { return "turn.start" }
 func (RemoveWorktree) effectKind() string { return "worktree.remove" }
 func (ReportToParent) effectKind() string { return "child.report" }
@@ -94,8 +109,10 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 		return true, nil
 	case InterruptTurn:
 		return r != nil && r.ID == e.Run && r.State == RunStopping, nil
-	case CloseAgent, RemoveWorktree:
+	case CloseAgent, RemoveWorktree, DropCheckpoints:
 		return true, nil
+	case CaptureCheckpoint:
+		return !t.Deleted, nil
 	case ReportToParent:
 		// The parent decides, as it observes the report, whether it can
 		// still take it.
@@ -117,8 +134,10 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 // treat a repeated interrupt or a repeated answer as a no-op.
 // A report commits with its completion, so one left leased never landed.
 // Closing an agent that is gone does nothing, nor does removing a
-// worktree that is.
-var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true, "worktree.remove": true}
+// worktree that is. A capture whose ref is there reports what that ref
+// holds and writes nothing, and a drop of refs that are gone deletes
+// nothing but what a gc it left pending prunes.
+var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true, "worktree.remove": true, "checkpoint.capture": true, "checkpoint.drop": true}
 
 func ReplaySafe(e Effect) bool { return replaySafe[e.effectKind()] }
 
@@ -130,6 +149,9 @@ var effects = map[string]func([]byte) (Effect, error){
 	"request.deliver": decodeAs[DeliverAnswer],
 	"child.report":    decodeAs[ReportToParent],
 	"worktree.remove": decodeAs[RemoveWorktree],
+
+	"checkpoint.capture": decodeAs[CaptureCheckpoint],
+	"checkpoint.drop":    decodeAs[DropCheckpoints],
 }
 
 func decodeAs[E Effect](b []byte) (Effect, error) {
@@ -202,6 +224,9 @@ type Work struct{ Item api.WorkItem }
 
 // Plan is the run's agent's plan, as provider.Plan has it.
 type Plan struct{ Plan api.PlanUpdated }
+
+// Captured is what a CaptureCheckpoint saved, or why it saved nothing.
+type Captured struct{ Checkpoint api.CheckpointCaptured }
 
 // Surfaced is a request the agent raised. Request is freshly minted; Dedup is
 // the provider's id, so a request surfaced again after a restart is ignored.
@@ -286,6 +311,7 @@ func (Delta) observed()          {}
 func (Context) observed()        {}
 func (Work) observed()           {}
 func (Plan) observed()           {}
+func (Captured) observed()       {}
 func (Granted) observed()        {}
 func (Ran) observed()            {}
 func (Surfaced) observed()       {}
