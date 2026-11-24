@@ -85,7 +85,8 @@ const (
 )
 
 // The queue's border and padding, a row's padding at its sides, the gap
-// between a row's state and its message, and between its actions.
+// between a row's state and its message, and between its actions, the
+// size of its messages' text, and an action's width as its icon alone.
 const (
 	queueBorder    = 1
 	queuePad       = 4
@@ -93,6 +94,8 @@ const (
 	queueRowPadR   = 2
 	queueTextGap   = 8
 	queueActionGap = 2
+	queueTextSize  = 12
+	queueIconW     = 2*actionPadX + actionSize
 )
 
 // queueRoom is the room the queue takes over t's composer, as it was last
@@ -122,10 +125,10 @@ func (a *app) queueStrip(c *ui.Context, t thread) {
 	a.queueOrder = ids
 	stateW := float32(0)
 	for _, s := range []string{"Queued", "Held"} {
-		w, _ := c.MeasureText(0, ui.Span{Text: s, Size: 11})
+		w, _ := c.MeasureText(0, ui.Span{Text: s, Size: actionSize})
 		stateW = max(stateW, w)
 	}
-	a.queueFit.choose(c, a, q, stateW)
+	compact := a.queueCompact(c, q, stateW)
 	box := ui.Column(c).Key("queue").Radius(14).Border(queueBorder, palette.border).Padding(queuePad).Margin(0, 0, queueGap).Label("Queued messages")
 	if h := box.Bounds().H; h > 0 {
 		a.queueH = h
@@ -133,7 +136,7 @@ func (a *app) queueStrip(c *ui.Context, t thread) {
 	a.frosted(c, box).Children(func() {
 		ui.Scroll(c).Key("rows").Gap(2).MinHeight(0).MaxHeight(queueMaxH).Children(func() {
 			for i, u := range q {
-				a.queueRow(c, t, q, i, u, moved, stateW)
+				a.queueRow(c, t, q, i, u, moved, stateW, compact)
 			}
 		})
 	})
@@ -141,8 +144,9 @@ func (a *app) queueStrip(c *ui.Context, t thread) {
 
 // queueRow is the copy of composer.queue for q[i]. With the focus in it,
 // it scrolls into view as the queue's order moved; its state, Queued or
-// Held, takes stateW, so that the messages line up.
-func (a *app) queueRow(c *ui.Context, t thread, q []*client.UserEntry, i int, u *client.UserEntry, moved bool, stateW float32) {
+// Held, takes stateW, so that the messages line up; compact draws its
+// Send now as its icon.
+func (a *app) queueRow(c *ui.Context, t thread, q []*client.UserEntry, i int, u *client.UserEntry, moved bool, stateW float32, compact bool) {
 	editing := a.queueEditing.message == u.Message
 	r := queueRow{Key: u.Message.String(), Index: i, Count: len(q), Held: u.State == client.Held, Editing: editing}
 	move := func(before api.ID) { a.backend.MoveQueued(t.env, t.id(), u.Message, before) }
@@ -150,9 +154,6 @@ func (a *app) queueRow(c *ui.Context, t thread, q []*client.UserEntry, i int, u 
 		key: r.Key,
 		box: func() ui.Element {
 			e := ui.Row(c).Key(r.Key).AlignItems(ui.Center).Padding(2, queueRowPadR, 2, queueRowPadL).MinWidth(0)
-			if !editing {
-				e.Bind(&a.queueFit.row(u.Message).box)
-			}
 			if moved && e.FocusWithin() {
 				e.ScrollIntoView()
 			}
@@ -165,12 +166,10 @@ func (a *app) queueRow(c *ui.Context, t thread, q []*client.UserEntry, i int, u 
 				a.queueText(c, t, u, r, stateW)
 			case "queue.steer":
 				steer := action
-				if a.queueFit.compact {
+				if compact {
 					steer = a.queueIcon
 				}
-				e := steer(c, "steer", icArrowUp, "Send now", !canSteer(t.View)).Bind(a.queueFit.row(u.Message).steer())
-				a.queueFit.sawSteer(e.Bounds().W)
-				if e.Clicked() {
+				if steer(c, "steer", icArrowUp, "Send now", !canSteer(t.View)).Clicked() {
 					a.backend.SteerQueued(t.env, t.id(), u.Message)
 				}
 			case "queue.edit":
@@ -184,9 +183,6 @@ func (a *app) queueRow(c *ui.Context, t thread, q []*client.UserEntry, i int, u 
 					break
 				}
 				edit := a.queueIcon(c, "edit", icPencil, "Edit", false)
-				if w := edit.Bounds().W; w > 0 {
-					a.queueFit.icon = w
-				}
 				if a.queueRefocus == u.Message {
 					edit.Bind(&a.queueEditButton)
 					a.queueEditButton.Focus()
@@ -234,12 +230,9 @@ func (a *app) queueText(c *ui.Context, t thread, u *client.UserEntry, r queueRow
 		if r.Held {
 			state = "Held"
 		}
-		ui.Text(c, state).FontSize(11).TextColor(palette.faint).Shrink(0).MinWidth(stateW)
+		ui.Text(c, state).FontSize(actionSize).TextColor(palette.faint).Shrink(0).MinWidth(stateW)
 		if !r.Editing {
-			text := ui.Text(c, oneLine(u.Text)).FontSize(12).TextColor(palette.text).SingleLine().Grow(1).Shrink(1).MinWidth(0)
-			if slot := &a.queueFit.row(u.Message).slot; !c.Resolve(*slot).Valid() {
-				text.Bind(slot)
-			}
+			ui.Text(c, oneLine(u.Text)).FontSize(queueTextSize).TextColor(palette.text).SingleLine().Grow(1).Shrink(1).MinWidth(0)
 			return
 		}
 		e := &a.queueEditing
@@ -253,26 +246,27 @@ func (a *app) queueText(c *ui.Context, t thread, u *client.UserEntry, r queueRow
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // queueIcon is one of a row's actions drawn as its icon alone, named
-// label for assistive technology and in its tooltip. It's as tall as a
-// labelled action, so that a row is as tall either way.
+// label for assistive technology and in its tooltip.
 func (a *app) queueIcon(c *ui.Context, key any, icon *ui.SVG, label string, disabled bool) ui.Element {
-	return a.tip(c, ghost(c, key, false).Padding(2, 6).MinHeight(actionHeight(c)).Label(label).Disabled(disabled), label).Children(func() {
-		ui.Icon(c, icon).FontSize(11)
+	return a.tip(c, ghost(c, key, false).Padding(actionPadY, actionPadX).Gap(0).Label(label).Disabled(disabled), label).Children(func() {
+		ui.Icon(c, icon).FontSize(actionSize)
+		actionLine(c)
 	})
 }
 
-// actionHeight is the height of a row action with its label, as action
-// draws it: a line of its 11 point text in its padding.
-func actionHeight(c *ui.Context) float32 {
-	_, line := c.MeasureText(0, ui.Span{Text: "Send now", Size: 11})
-	return line + 2*2
+// actionLine is an unseen line of a row action's text, no wide, so that
+// an action drawn as its icon is as tall as one with its label, and a
+// row as tall either way.
+func actionLine(c *ui.Context) {
+	ui.Text(c, "Send now").FontSize(actionSize).SingleLine().Width(0).MinWidth(0).Invisible()
 }
 
 // queueSlot keeps the room of a row's Move up or Move down where it has
 // nowhere to move to, so that the actions line up across the rows.
 func queueSlot(c *ui.Context, key any, icon *ui.SVG) {
-	ui.Box(c.Key(key)).Padding(2, 6).MinHeight(actionHeight(c)).Children(func() {
-		ui.Icon(c, icon).FontSize(11).Opacity(0)
+	ui.Row(c.Key(key)).AlignItems(ui.Center).Padding(actionPadY, actionPadX).Children(func() {
+		ui.Icon(c, icon).FontSize(actionSize).Opacity(0)
+		actionLine(c)
 	})
 }
 
