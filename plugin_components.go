@@ -305,6 +305,10 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 	case "model.effort":
 		a.effortSlider(c)
 	case "thread.age":
+		if remote(*t) != nil {
+			a.remoteMark(c, *t, 11)
+			break
+		}
 		if component == "agents.body" {
 			ui.Text(c, ago(t.View.UpdatedAt, a.now)).FontSize(11).TextColor(palette.faint).Shrink(0)
 			break
@@ -338,6 +342,8 @@ func (a *app) drawNative(c *ui.Context, component string, t *thread, row string,
 		switch {
 		case !child:
 			a.rowMark(c, *t, a.shownIn(*t), t.id() == a.selected && a.router.Path() == "/")
+		case remote(*t) != nil:
+			a.remoteMark(c, *t, 11)
 		case len(a.shown(*t)) == 0:
 			ui.Text(c, ago(t.View.UpdatedAt, a.now)).FontSize(11).TextColor(palette.faint).Shrink(0)
 		}

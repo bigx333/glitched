@@ -276,6 +276,13 @@ type app struct {
 	pairLabel  string
 	paired     pairing
 	machineErr string
+	// mint is the This machine page's form for a link, and minted the link
+	// it minted last, shown until dismissed; delegate is its form for
+	// adding a machine, and removed the machine it removed last.
+	mint     mintForm
+	minted   minted
+	delegate delegateForm
+	removed  string
 	// control is the This machine page's draft of the control server.
 	control string
 	// limits are the Agents card's inputs, as read from limitsOf.
