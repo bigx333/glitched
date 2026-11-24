@@ -60,6 +60,7 @@ type Thread struct {
 	Reported    time.Time   // when a child last reported back
 	LastReport  *api.Report // never written through; its Cursor has no Log
 	Confirmed   api.Confirmed
+	Remote      *Remote // set on a remote child's placeholder, which runs nothing here
 	Runs        []Run
 	Queue       []Message
 	Requests    []Request
@@ -88,6 +89,21 @@ type Run struct {
 	// it stays in the timeline, and the agent no longer has it.
 	Dropped bool
 }
+
+// Remote is a placeholder's: the machine its child was placed on, as
+// api.Remote, and where that child stands there, as far as this engine
+// knows.
+type Remote struct {
+	Engine api.ID      `json:"engine"`
+	Link   api.ID      `json:"link"`
+	State  RemoteState `json:"state"`
+}
+
+type RemoteState string
+
+// RemoteCreating is a placeholder whose child the machine hasn't
+// confirmed yet.
+const RemoteCreating RemoteState = "creating"
 
 type Message struct {
 	ID    api.ID

@@ -17,6 +17,17 @@ import (
 // Decide checks a client command against the thread and returns what to
 // commit. A command the tables refuse comes back as *api.RejectedError.
 func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
+	return DecideWith(t, c, nil, now)
+}
+
+// Places finds the machine this engine holds a link to under label: ok is
+// whether there is one, and err that the list couldn't be read, its text
+// the reason a remote child's create is refused.
+type Places func(label string) (at api.Remote, ok bool, err error)
+
+// DecideWith is Decide with places, where a remote child's create finds
+// the machine it names; nil finds none.
+func DecideWith(t Thread, c api.Command, places Places, now time.Time) ([]Event, []Effect, error) {
 	now = now.UTC().Round(0)
 	if c.ID.IsZero() || c.Target.IsZero() {
 		return nil, nil, rejected("a command needs an id and a target")
@@ -33,7 +44,7 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 	if c.Revision != 0 && c.Revision != t.Revision {
 		return nil, nil, api.ErrRevision
 	}
-	d := &decision{t: t, thread: c.Target, at: now}
+	d := &decision{t: t, thread: c.Target, at: now, places: places}
 	if c.Caller != nil {
 		switch b := c.Body.(type) {
 		case api.MessageDispatch:
@@ -59,11 +70,53 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 		d.by = c.Caller.Thread
 	}
 	var err error
-	switch b := c.Body.(type) {
-	case api.ThreadCreate:
-		err = d.create(c.ID, b)
+	if t.Remote != nil {
+		err = d.placeholder(c.Body)
+	} else {
+		err = d.local(c.ID, c.Body)
+	}
+	if err == nil {
+		err = d.settle()
+	}
+	if te := (*TransitionError)(nil); errors.As(err, &te) {
+		err = rejected(te.Error())
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return d.events, d.effects, nil
+}
+
+// placeholder decides b on a remote child's placeholder, which never runs
+// an agent here. It goes with its tree when the tree is settled or
+// deleted, and has no run to stop or close. Nothing reaches its machine
+// yet, so a message or a stop for its child is refused, not dropped.
+func (d *decision) placeholder(b api.Intent) error {
+	switch b := b.(type) {
+	case api.InboxSet:
+		return d.inbox(b)
+	case api.ThreadDelete:
+		return d.delete(b)
+	case api.ThreadRename:
+		return d.rename(b)
+	case api.ThreadConfigure:
+		return d.configure(b)
 	case api.MessageDispatch:
-		err = d.dispatch(c.ID, b)
+		return rejected("this child runs on another machine, and a message doesn't reach it there yet")
+	case api.TurnInterrupt:
+		return rejected("this child runs on another machine, and a stop doesn't reach it there yet")
+	}
+	return rejected("this child runs on another machine, and runs nothing here")
+}
+
+// local decides b, the intent of command id, on a thread that runs here.
+func (d *decision) local(id api.ID, b api.Intent) error {
+	var err error
+	switch b := b.(type) {
+	case api.ThreadCreate:
+		err = d.create(id, b)
+	case api.MessageDispatch:
+		err = d.dispatch(id, b)
 	case api.TurnInterrupt:
 		err = d.interrupt(b.Drop)
 	case api.RequestRespond:
@@ -87,22 +140,13 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 	case api.QueueSteer:
 		err = d.steer(b)
 	case api.ThreadRevert:
-		err = d.revert(c.ID, b)
+		err = d.revert(id, b)
 	case api.ResumeCancel:
 		err = d.cancelResume(b)
 	default:
 		err = rejected("unknown intent")
 	}
-	if err == nil {
-		err = d.settle()
-	}
-	if te := (*TransitionError)(nil); errors.As(err, &te) {
-		err = rejected(te.Error())
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-	return d.events, d.effects, nil
+	return err
 }
 
 // TakesTree is whether b on a thread applies to every thread under it
@@ -125,8 +169,13 @@ func TakesTree(b api.Intent) bool {
 
 // Below is what b on a thread decides on t, a thread under it, when b
 // takes the tree: a configure narrows t's access to the one it gives, and
-// leaves t's model as it is.
+// leaves t's model as it is. It is nil when b takes nothing of t: a stop
+// of the tree finds nothing running on a remote child's placeholder, and
+// doesn't reach its machine yet.
 func Below(b api.Intent, t Thread) api.Intent {
+	if _, stop := b.(api.TurnInterrupt); stop && t.Remote != nil {
+		return nil
+	}
 	if c, ok := b.(api.ThreadConfigure); ok {
 		var below api.ThreadConfigure
 		if c.Access != nil {
@@ -188,6 +237,8 @@ type decision struct {
 	effects []Effect
 	resumed bool   // the user resumed the queue: settle starts the wakes after a stop
 	by      api.ID // the thread whose agent sent the command; zero for the user
+	// places finds the machine a remote child is placed on; nil finds none.
+	places Places
 }
 
 func (d *decision) emit(b api.EventBody) error {
@@ -221,6 +272,9 @@ func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 	if c.Fork != nil && c.Forked == nil {
 		return rejected("this engine forks no threads")
 	}
+	if c.Remote != "" {
+		return d.placeRemote(c)
+	}
 	if err := d.emit(api.ThreadCreated{Workspace: c.Workspace, Project: c.Project, Branch: c.Branch, Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent, Fork: c.Forked}); err != nil {
 		return err
 	}
@@ -231,6 +285,34 @@ func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 		return err
 	}
 	return d.admit(id)
+}
+
+// placeRemote creates a remote child's placeholder: a child here with
+// the machine c names frozen on it, by its engine's and link's ids, and
+// no run, ever. Its task is for the machine, so nothing queues it here,
+// and it has no folder here: none of this machine's is its.
+func (d *decision) placeRemote(c api.ThreadCreate) error {
+	switch {
+	case c.Parent.IsZero():
+		return rejected("only a child thread runs on another machine")
+	case c.Project != "":
+		return rejected("a child on another machine runs in a worktree that machine makes, not in this one's")
+	case strings.TrimSpace(c.Text) == "":
+		return rejected("a child on another machine needs its task")
+	}
+	var at api.Remote
+	var ok bool
+	var err error
+	if d.places != nil {
+		at, ok, err = d.places(c.Remote)
+	}
+	switch {
+	case err != nil:
+		return rejected(err.Error())
+	case !ok:
+		return rejected(fmt.Sprintf("no machine called %q is in this machine's list; a child runs only on a machine the person added", c.Remote))
+	}
+	return d.emit(api.ThreadCreated{Title: c.Title, Model: c.Model, Access: c.Access, Parent: c.Parent, Remote: &at})
 }
 
 // Limits cap the children agents start: Working at work at once under one
@@ -261,7 +343,9 @@ func (l Limits) Effective() Limits {
 }
 
 // Kids counts a thread's children that aren't deleted: those whose agent
-// works, with a live run that isn't uncertain, and all of them. An
+// works, with a live run that isn't uncertain, or on another machine,
+// a placeholder not settled whose child is being created there, and all
+// of them. An
 // uncertain run has no agent at work; only the user ends it.
 type Kids struct{ Working, All int }
 
@@ -560,12 +644,13 @@ func (d *decision) sent(run api.ID) error {
 
 // settle starts the next ready message whenever the thread is idle, so
 // admission happens in the same commit as whatever freed the thread. A
-// settled or deleted thread starts nothing. With no ready message, a wake
+// settled or deleted thread starts nothing, nor does a remote child's
+// placeholder, ever. With no ready message, a wake
 // starts a turn of its own, unless the last run was stopped: a stop stays
 // a stop, and the wakes go in with the next message the user sends, or
 // start once they resume the queue.
 func (d *decision) settle() error {
-	if d.t.Live() != nil || d.t.settled() || d.t.Deleted {
+	if d.t.Live() != nil || d.t.settled() || d.t.Deleted || d.t.Remote != nil {
 		return nil
 	}
 	if m := d.t.next(); m != nil {

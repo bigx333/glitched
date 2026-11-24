@@ -110,6 +110,8 @@ type Child struct {
 	// Worktree asks for the child in a worktree of its own, as
 	// delegate_task's isolation worktree does.
 	Worktree bool
+	// Remote places the child on the machine of that label.
+	Remote string
 }
 
 // Spawns has every turn whose message is text start kids on ep, in order,
@@ -386,7 +388,7 @@ func (g *Agent) spawn() provider.Event {
 	}
 	c := api.Command{ID: derive(g.run, "call", n), Target: ChildOf(g.run, n), Body: api.ThreadCreate{
 		Workspace: g.spec.Workspace, Title: k.Title, Model: g.spec.Model, Access: access,
-		Parent: g.spec.Thread, Run: g.run, Text: k.Task,
+		Parent: g.spec.Thread, Run: g.run, Text: k.Task, Remote: k.Remote,
 	}}
 	if k.Worktree {
 		b := c.Body.(api.ThreadCreate)

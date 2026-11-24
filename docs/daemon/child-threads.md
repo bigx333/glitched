@@ -157,6 +157,17 @@ Settle and Delete are engine-side (decided 2026-11-05, open question 1). The GUI
 - A settle or a delete takes the thread's tree in its commit. `api.Protocol` is 6: a protocol 5 GUI sends a command per thread, which an engine of 6 has already taken, and a protocol 5 engine would leave a child of a settled or deleted thread at work behind a protocol 6 GUI's one command. So each refuses the other. No store schema change.
 - `api.MessageQueued.Report` (spawn PR 3) is new within protocol 6, with no release in between. A client that drops it would show a wake as the user's message.
 
+## Remote children (placeholder)
+
+A child on another machine starts as a placeholder here (design: the captain's remote-children handoff, PR 2). Nothing reaches the other machine yet, and `delegate_task` doesn't offer a machine, so only tests make one.
+
+- `api.ThreadCreate.Remote` names a machine by its label in `machines.json` (`daemon.Machines`). The daemon has the store read the file at each remote create, in its commit (`Store.SetPlaces`), so a machine removed takes no more, and takes each machine's engine and link ids, never its token. A file that can't be read, or holds a machine without its label, server, engine or link, refuses only remote creates and is logged once. `store.Submit` runs `CheckChild` as for any child, and decide refuses a label not in the list.
+- The placeholder is a child with `Remote` set (`api.ThreadCreated.Remote`, `engine.Thread.Remote`, `threads.remote`, schema 16) and no run, ever: its task is for the other machine, so nothing queues it here. `threads.origin` is the other machine's side and stays null.
+- Decide takes a placeholder in its own branch for every intent. Settle, delete, rename and configure go as for a child, so settling or deleting the tree takes it in the one commit. A message or a stop is refused until it can reach the machine. A stop of the tree passes it by (`engine.Below` is nil).
+- `kidsOf` counts a placeholder that is creating as at work.
+- `Host.Submit` refuses a remote create whose task or title holds any value of the parent's vault, literally and whatever its length, before anything is stored. It commits under the lock a worktree create holds, so a local create of the same thread that is making its worktree commits first.
+- Protocol 17: a version 16 GUI would show a placeholder as a child here with an empty transcript.
+
 ## Not done
 
 - An agent starting a child (bb's `create_chat` tool): the follow-up PR, likely the first plugin. Until then no path in the app creates a child. The user's "New child thread", the Agents panel's +, and the child's draft were removed on 2026-11-03: a child is always an agent's.

@@ -76,6 +76,9 @@ func apply(t Thread, e Event) (Thread, error) {
 			return t, &TransitionError{"thread", "created", "created"}
 		}
 		t = Thread{ID: e.Thread, Workspace: b.Workspace, Project: b.Project, Branch: b.Branch, Title: b.Title, Model: b.Model, Access: b.Access, OwnerEpoch: 1, Parent: b.Parent}
+		if r := b.Remote; r != nil {
+			t.Remote = &Remote{Engine: r.Engine, Link: r.Link, State: RemoteCreating}
+		}
 	case api.DispositionChanged:
 		t.Disposition = b.Disposition
 	case api.ThreadRenamed:
