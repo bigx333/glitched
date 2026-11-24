@@ -22,6 +22,41 @@ type Link struct {
 	All     int `json:"all,omitempty"`
 }
 
+// Origin is where a link's thread came from: Thread, titled Title, on the
+// engine Engine of the machine that holds the link, which starts it as a
+// child of its own, Depth below a thread of its person's, at most at
+// Access, the access that machine says its parent has. Link is the link,
+// which this engine stamps from the token that asked, never from the
+// body.
+type Origin struct {
+	Engine ID     `json:"engine"`
+	Thread ID     `json:"thread"`
+	Title  string `json:"title"`
+	Depth  int    `json:"depth"`
+	Access Access `json:"access"`
+	Link   ID     `json:"link,omitzero"`
+}
+
+// Repository names a repository by its root commit, as placement does
+// (docs/daemon/placement-and-handoff.md), and the branch of it a link's
+// thread starts from.
+type Repository struct {
+	Root   string `json:"root"`
+	Branch string `json:"branch"`
+}
+
+// ChildReplyQuery asks for what Run, a run of Thread's, said last.
+type ChildReplyQuery struct {
+	Thread ID `json:"thread"`
+	Run    ID `json:"run"`
+}
+
+// ChildReply is what a run's agent said last, as a local child's report
+// carries it.
+type ChildReply struct {
+	Text string `json:"text"`
+}
+
 // ErrNotAllowed is a call's error when the caller's link may not make it.
 var ErrNotAllowed = errors.New("api: a link from another machine may not make this call")
 

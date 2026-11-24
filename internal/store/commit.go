@@ -65,6 +65,29 @@ func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Inte
 			if err := engine.CheckChild(line, kids, s.limits, b); err != nil {
 				return nil, nil, err
 			}
+			// A child of a link's thread runs no wider than the link's
+			// thread may now.
+			if top := line[len(line)-1]; top.Origin != nil {
+				if c, err := s.ceiling(top)(); err != nil || b.Access > min(c, top.Origin.Access) {
+					return nil, nil, &api.RejectedError{Reason: "a child thread can't run wider than the thread from another machine it is under may now"}
+				}
+			}
+		}
+		if b, ok := c.Body.(api.ThreadCreate); ok && b.Origin != nil && !t.Exists() {
+			if s.links == nil {
+				return nil, nil, &api.RejectedError{Reason: "this engine takes no threads from other machines"}
+			}
+			link, err := s.links(b.Origin.Link)
+			if err != nil {
+				return nil, nil, &api.RejectedError{Reason: err.Error()}
+			}
+			kids, err := linkKidsOf(ctx, q, b.Origin.Link)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := engine.CheckOrigin(link, kids, s.limits, b); err != nil {
+				return nil, nil, err
+			}
 		}
 		if c.Caller != nil && t.Exists() {
 			line, err := lineOf(ctx, q, c.Target)
@@ -88,7 +111,7 @@ func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Inte
 				return nil, nil, err
 			}
 		}
-		return engine.DecideWith(t, c, s.places, now)
+		return engine.DecideWith(t, c, s.env(t), now)
 	}}
 	r := &receipt{id: c.ID, hash: hash[:], thread: c.Target}
 	at, err := s.commit(ctx, r, 0, func(q querier) ([]step, error) {
@@ -120,7 +143,7 @@ func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Inte
 				if body == nil {
 					return nil, nil, nil
 				}
-				return engine.Decide(t, api.Command{ID: c.ID, Target: id, Body: body, Caller: c.Caller}, now)
+				return engine.DecideWith(t, api.Command{ID: c.ID, Target: id, Body: body, Caller: c.Caller}, s.env(t), now)
 			}})
 		}
 		return append(steps, top), nil
@@ -225,6 +248,47 @@ func lineOf(ctx context.Context, q querier, id api.ID) ([]engine.Thread, error) 
 	return line, nil
 }
 
+// linkKidsOf counts the threads link started here that aren't deleted,
+// as engine.Kids says: one whose worktree is being made, and isn't
+// settled, is at work.
+func linkKidsOf(ctx context.Context, q querier, link api.ID) (engine.Kids, error) {
+	var k engine.Kids
+	err := q.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(EXISTS (SELECT 1 FROM runs WHERE runs.thread = threads.id AND runs.state NOT IN ('finished', 'uncertain'))
+			OR json_extract(origin, '$.making') AND disposition <> ?), 0)
+		FROM threads WHERE json_extract(origin, '$.link') = ? AND deleted = 0`, api.Settled, link.String()).Scan(&k.All, &k.Working)
+	return k, err
+}
+
+// env is what a decision on t reads besides t, as the engine has it now.
+// s.mu must be held.
+func (s *Store) env(t engine.Thread) engine.Env {
+	return engine.Env{Places: s.places, Ceiling: s.ceiling(t)}
+}
+
+// ceiling is the most t, a link's thread, may run at now as its link and
+// this engine's setting allow. s.mu must be held.
+func (s *Store) ceiling(t engine.Thread) func() (api.Access, error) {
+	links := s.links
+	return func() (api.Access, error) {
+		switch {
+		case t.Origin == nil:
+			return api.AccessFull, nil
+		case links == nil:
+			return 0, errors.New("this engine takes no threads from other machines")
+		}
+		l, err := links(t.Origin.Link)
+		return l.Access, err
+	}
+}
+
+// SetLinks has the threads other machines' links start find their link
+// through links from the next commit on, in each commit.
+func (s *Store) SetLinks(links engine.Links) {
+	s.mu.Lock()
+	s.links = links
+	s.mu.Unlock()
+}
+
 // kidsOf counts parent's children that aren't deleted, as engine.Kids
 // says.
 func kidsOf(ctx context.Context, q querier, parent api.ID) (engine.Kids, error) {
@@ -256,7 +320,7 @@ func (s *Store) SetLimits(l engine.Limits) {
 func (s *Store) Observe(ctx context.Context, thread api.ID, o engine.Observation, now time.Time, done int64) (api.Cursor, error) {
 	return s.commit(ctx, nil, done, func(querier) ([]step, error) {
 		return []step{{thread, func(_ querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
-			return engine.Observe(t, o, now)
+			return engine.ObserveWith(t, o, s.env(t), now)
 		}}}, nil
 	})
 }
@@ -498,13 +562,13 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 	t := engine.Thread{ID: id}
 	var model []byte
 	var until, reported, cacheExpires sql.NullInt64
-	var report, granted, remote sql.NullString
+	var report, granted, remote, origin sql.NullString
 	var updated int64
 	err := q.QueryRowContext(ctx, `SELECT workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
-			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote
+			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin
 		FROM threads WHERE id = ?`, id[:]).Scan(&t.Workspace, &t.Title, &model, &t.Access, &t.Revision, &t.OwnerEpoch,
 		&t.Generation, &t.Disposition.State, &until, &updated, &t.Deleted, idScan{&t.Parent}, &t.Tokens, &reported, &report, &t.Session,
-		&t.Project, &t.Branch, &t.Context.Used, &t.Context.Window, &t.Context.Stale, &t.Context.Model, &granted, &cacheExpires, &remote)
+		&t.Project, &t.Branch, &t.Context.Used, &t.Context.Window, &t.Context.Stale, &t.Context.Model, &granted, &cacheExpires, &remote, &origin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return engine.Thread{}, nil
 	}
@@ -539,6 +603,12 @@ func loadThread(ctx context.Context, q querier, id api.ID) (engine.Thread, error
 	if remote.Valid {
 		t.Remote = &engine.Remote{}
 		if err := json.Unmarshal([]byte(remote.String), t.Remote); err != nil {
+			return t, err
+		}
+	}
+	if origin.Valid {
+		t.Origin = &engine.Origin{}
+		if err := json.Unmarshal([]byte(origin.String), t.Origin); err != nil {
 			return t, err
 		}
 	}
@@ -621,7 +691,14 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 	if err != nil {
 		return err
 	}
-	var until, reported, report, granted, cacheExpires, remote any
+	var until, reported, report, granted, cacheExpires, remote, origin any
+	if t.Origin != nil {
+		b, err := json.Marshal(t.Origin)
+		if err != nil {
+			return err
+		}
+		origin = string(b)
+	}
 	if t.Remote != nil {
 		b, err := json.Marshal(t.Remote)
 		if err != nil {
@@ -653,8 +730,8 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 		report = string(b)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO threads (id, workspace, title, model, access, revision, owner_epoch, generation, disposition, until, updated_at, deleted,
-			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			parent, tokens, reported, report, session, project, branch, context_used, context_window, context_stale, context_model, granted, context_cache_expires, remote, origin)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET workspace = excluded.workspace, title = excluded.title, model = excluded.model,
 			access = excluded.access, revision = excluded.revision, owner_epoch = excluded.owner_epoch, generation = excluded.generation,
 			disposition = excluded.disposition, until = excluded.until, updated_at = excluded.updated_at, deleted = excluded.deleted,
@@ -662,10 +739,10 @@ func writeThread(ctx context.Context, tx *sql.Tx, old, t engine.Thread) error {
 			report = excluded.report, session = excluded.session, project = excluded.project, branch = excluded.branch,
 			context_used = excluded.context_used, context_window = excluded.context_window, context_stale = excluded.context_stale,
 			context_model = excluded.context_model, granted = excluded.granted, context_cache_expires = excluded.context_cache_expires,
-			remote = excluded.remote`,
+			remote = excluded.remote, origin = excluded.origin`,
 		t.ID[:], t.Workspace, t.Title, string(model), t.Access, t.Revision, t.OwnerEpoch, t.Generation, t.Disposition.State, until,
 		t.UpdatedAt.UnixNano(), t.Deleted, nullID(t.Parent), t.Tokens, reported, report, t.Session, t.Project, t.Branch,
-		t.Context.Used, t.Context.Window, t.Context.Stale, t.Context.Model, granted, cacheExpires, remote); err != nil {
+		t.Context.Used, t.Context.Window, t.Context.Stale, t.Context.Model, granted, cacheExpires, remote, origin); err != nil {
 		return err
 	}
 	for i, r := range t.Runs {

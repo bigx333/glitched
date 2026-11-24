@@ -61,6 +61,7 @@ type Thread struct {
 	LastReport  *api.Report // never written through; its Cursor has no Log
 	Confirmed   api.Confirmed
 	Remote      *Remote // set on a remote child's placeholder, which runs nothing here
+	Origin      *Origin // set on a thread another machine's link started here
 	Runs        []Run
 	Queue       []Message
 	Requests    []Request
@@ -97,6 +98,14 @@ type Remote struct {
 	Engine api.ID      `json:"engine"`
 	Link   api.ID      `json:"link"`
 	State  RemoteState `json:"state"`
+}
+
+// Origin is a link's thread's: where it came from, as api.Origin, its
+// link stamped, and whether its worktree is still being made. Until it
+// is, the thread has no folder and runs nothing.
+type Origin struct {
+	api.Origin
+	Making bool `json:"making,omitempty"`
 }
 
 type RemoteState string

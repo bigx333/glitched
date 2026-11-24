@@ -122,6 +122,14 @@ type ThreadCreate struct {
 	// for a child that runs there: the thread here is its placeholder,
 	// and never runs an agent.
 	Remote string `json:"remote,omitempty"`
+	// Origin and Repository make a link's create: a thread here that
+	// another machine's agent starts through the link, as a child of its
+	// own, in a worktree this engine makes of the checkout of Repository.
+	// Only a link sends them, and with them nothing but Title, Model,
+	// Access and Text: this engine picks the folder, the worktree and its
+	// branch.
+	Origin     *Origin     `json:"origin,omitempty"`
+	Repository *Repository `json:"repository,omitempty"`
 }
 
 // Fork asks for a thread that goes on from Run, a finished turn of
@@ -610,8 +618,10 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // 16 forks a thread, which a version 15 engine would create as a thread
 // with none of the conversation it was to go on from; version 17 places a
 // child on another machine, which a version 16 GUI would show as a child
-// here with an empty transcript.
-const Protocol = 17
+// here with an empty transcript; version 18 takes a child from another
+// machine's link, whose create, worktree events and child.reply a version
+// 17 engine refuses or drops.
+const Protocol = 18
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host

@@ -96,6 +96,15 @@ type RevertThread struct {
 	KeepFiles    bool
 }
 
+// MakeWorktree makes a link's thread's worktree, of the checkout
+// Project, from Base, a commit, on a new branch named by Title. Git
+// writes the worktree locked, the thread named in the lock's reason, so a
+// replay finds one it made and finishes it.
+type MakeWorktree struct {
+	Project, Base, Title string
+}
+
+func (MakeWorktree) effectKind() string      { return "worktree.make" }
 func (CaptureCheckpoint) effectKind() string { return "checkpoint.capture" }
 func (DropCheckpoints) effectKind() string   { return "checkpoint.drop" }
 func (RevertThread) effectKind() string      { return "thread.revert" }
@@ -133,6 +142,16 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 		return true, nil
 	case CaptureCheckpoint, RevertThread:
 		return !t.Deleted, nil
+	case MakeWorktree:
+		// A thread settled first is done with before it ran: its worktree
+		// is never made.
+		if t.Origin == nil || !t.Origin.Making || t.Deleted {
+			return false, nil
+		}
+		if t.settled() {
+			return false, WorktreeFailed{Error: "the thread was settled before its worktree was made"}
+		}
+		return true, nil
 	case ReportToParent:
 		// The parent decides, as it observes the report, whether it can
 		// still take it.
@@ -158,8 +177,9 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 // holds and writes nothing, and a drop of refs that are gone deletes
 // nothing but what a gc it left pending prunes. A revert finds the
 // recovery checkpoint it took, and puts the same files back; its rewind
-// makes the conversation again, and leaves unused any it made before.
-var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true, "worktree.remove": true, "checkpoint.capture": true, "checkpoint.drop": true, "thread.revert": true}
+// makes the conversation again, and leaves unused any it made before. A
+// make finds the worktree its lock names it in, or one it finished.
+var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true, "worktree.remove": true, "checkpoint.capture": true, "checkpoint.drop": true, "thread.revert": true, "worktree.make": true}
 
 func ReplaySafe(e Effect) bool { return replaySafe[e.effectKind()] }
 
@@ -171,6 +191,7 @@ var effects = map[string]func([]byte) (Effect, error){
 	"request.deliver": decodeAs[DeliverAnswer],
 	"child.report":    decodeAs[ReportToParent],
 	"worktree.remove": decodeAs[RemoveWorktree],
+	"worktree.make":   decodeAs[MakeWorktree],
 
 	"checkpoint.capture": decodeAs[CaptureCheckpoint],
 	"checkpoint.drop":    decodeAs[DropCheckpoints],
@@ -378,3 +399,13 @@ func (Reconciled) observed()     {}
 func (Rewound) observed()        {}
 func (Reported) observed()       {}
 func (IdleCompact) observed()    {}
+func (WorktreeReady) observed()  {}
+func (WorktreeFailed) observed() {}
+
+// WorktreeReady is a link's thread's worktree made: Workspace is the
+// folder in it the thread runs in, and Branch its new branch.
+type WorktreeReady struct{ Workspace, Branch string }
+
+// WorktreeFailed is a link's thread whose worktree wasn't made, and won't
+// be: what waited its turn is cancelled.
+type WorktreeFailed struct{ Error string }
