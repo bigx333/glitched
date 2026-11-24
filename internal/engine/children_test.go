@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"glitched/internal/api"
@@ -67,6 +68,37 @@ func TestCheckChild(t *testing.T) {
 	refused("a twenty-first", line, engine.Kids{All: 20}, lim, api.ThreadCreate{Parent: top.ID, Run: run})
 	if err := engine.CheckChild(line, engine.Kids{Working: 5, All: 19}, engine.Limits{Working: 6}, api.ThreadCreate{Parent: top.ID, Run: run}); err != nil {
 		t.Errorf("a sixth at work under a limit of 6: %v", err)
+	}
+}
+
+// A thread another machine's link started counts its depth there, so a
+// child under it is that much deeper here, and its line starts no child
+// on another machine.
+func TestCheckChildUnderALinksThread(t *testing.T) {
+	run := api.NewID()
+	top := newThread(t).th
+	top.Access = api.AccessAutoEdits
+	top.Runs = []engine.Run{{ID: run, State: engine.RunRunning, Access: api.AccessAutoEdits}}
+	top.Origin = &engine.Origin{Origin: api.Origin{Depth: 2, Access: api.AccessAutoEdits}}
+	none, lim := engine.Kids{}, engine.Limits{}
+	if err := engine.CheckChild([]engine.Thread{top}, none, lim, api.ThreadCreate{Parent: top.ID, Run: run}); err != nil {
+		t.Errorf("a child 3 below a thread of the person's there: %v", err)
+	}
+	mid := top
+	mid.Origin = nil
+	mid.ID = api.NewID()
+	if err := engine.CheckChild([]engine.Thread{mid, top}, none, lim, api.ThreadCreate{Parent: mid.ID, Run: run}); err != nil {
+		t.Errorf("a child 4 below: %v", err)
+	}
+	var rej *api.RejectedError
+	if err := engine.CheckChild([]engine.Thread{mid, mid, top}, none, lim, api.ThreadCreate{Parent: mid.ID, Run: run}); !errors.As(err, &rej) {
+		t.Errorf("a child 5 below, counting the depth there: %v, want a rejection", err)
+	}
+	if err := engine.CheckChild([]engine.Thread{top}, none, lim, api.ThreadCreate{Parent: top.ID, Run: run, Remote: "c"}); !errors.As(err, &rej) || !strings.Contains(rej.Reason, "other machines") {
+		t.Errorf("a remote child under a link's thread: %v, want a rejection", err)
+	}
+	if err := engine.CheckChild([]engine.Thread{mid, top}, none, lim, api.ThreadCreate{Parent: mid.ID, Run: run, Remote: "c"}); !errors.As(err, &rej) {
+		t.Errorf("a remote child below a link's thread: %v, want a rejection", err)
 	}
 }
 

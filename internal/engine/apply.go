@@ -79,6 +79,19 @@ func apply(t Thread, e Event) (Thread, error) {
 		if r := b.Remote; r != nil {
 			t.Remote = &Remote{Engine: r.Engine, Link: r.Link, State: RemoteCreating}
 		}
+		if o := b.Origin; o != nil {
+			t.Origin = &Origin{Origin: *o, Making: true}
+		}
+	case api.WorktreeReady, api.WorktreeFailed:
+		if t.Origin == nil || !t.Origin.Making {
+			return t, &TransitionError{"worktree", "made", api.EventType(b)}
+		}
+		o := *t.Origin
+		o.Making = false
+		t.Origin = &o
+		if r, ok := b.(api.WorktreeReady); ok {
+			t.Workspace, t.Branch = r.Workspace, r.Branch
+		}
 	case api.DispositionChanged:
 		t.Disposition = b.Disposition
 	case api.ThreadRenamed:

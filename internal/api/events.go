@@ -43,6 +43,22 @@ type ThreadCreated struct {
 	// Remote is the machine a remote child runs on, frozen at its create:
 	// this thread is its placeholder here.
 	Remote *Remote `json:"remote,omitempty"`
+	// Origin is where a link's thread came from, its link stamped. Such a
+	// thread has no folder until its worktree is made (WorktreeReady).
+	Origin *Origin `json:"origin,omitempty"`
+}
+
+// WorktreeReady is a link's thread's worktree made: Workspace is the
+// folder in it, and Branch its new branch.
+type WorktreeReady struct {
+	Workspace string `json:"workspace"`
+	Branch    string `json:"branch"`
+}
+
+// WorktreeFailed is a link's thread whose worktree wasn't made, and never
+// will be: it runs nothing.
+type WorktreeFailed struct {
+	Error string `json:"error"`
 }
 
 // Forked is where a fork goes on from, as its create's commit found it:
@@ -570,6 +586,8 @@ func (CheckpointCaptured) eventType() string  { return "checkpoint.captured" }
 func (ThreadReverting) eventType() string     { return "thread.reverting" }
 func (ThreadReverted) eventType() string      { return "thread.reverted" }
 func (ResumeCancelled) eventType() string     { return "resume.cancelled" }
+func (WorktreeReady) eventType() string       { return "worktree.ready" }
+func (WorktreeFailed) eventType() string      { return "worktree.failed" }
 
 var eventBodies = map[string]func([]byte) (EventBody, error){}
 
@@ -615,6 +633,8 @@ func init() {
 	register[ThreadReverting]()
 	register[ThreadReverted]()
 	register[ResumeCancelled]()
+	register[WorktreeReady]()
+	register[WorktreeFailed]()
 }
 
 func register[B EventBody]() {

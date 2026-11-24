@@ -17,7 +17,7 @@ import (
 // Decide checks a client command against the thread and returns what to
 // commit. A command the tables refuse comes back as *api.RejectedError.
 func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
-	return DecideWith(t, c, nil, now)
+	return DecideWith(t, c, Env{}, now)
 }
 
 // Places finds the machine this engine holds a link to under label: ok is
@@ -25,9 +25,25 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 // the reason a remote child's create is refused.
 type Places func(label string) (at api.Remote, ok bool, err error)
 
-// DecideWith is Decide with places, where a remote child's create finds
-// the machine it names; nil finds none.
-func DecideWith(t Thread, c api.Command, places Places, now time.Time) ([]Event, []Effect, error) {
+// Links finds a link this engine minted by its id, as tokens.json has it
+// now, its access narrowed to this engine's setting for children from
+// other machines. An error is that it may start or run nothing, as it was
+// revoked or the setting is off: its text is the reason.
+type Links func(id api.ID) (api.Link, error)
+
+// Env is what a decision reads besides its thread, as the engine has it
+// at the commit.
+type Env struct {
+	// Places finds the machine a remote child is placed on; nil finds none.
+	Places Places
+	// Ceiling is the most a link's thread may run at now, as its link
+	// and this engine's setting allow, before its origin's access: an
+	// error lets it run nothing. Nil is such an error.
+	Ceiling func() (api.Access, error)
+}
+
+// DecideWith is Decide in env.
+func DecideWith(t Thread, c api.Command, env Env, now time.Time) ([]Event, []Effect, error) {
 	now = now.UTC().Round(0)
 	if c.ID.IsZero() || c.Target.IsZero() {
 		return nil, nil, rejected("a command needs an id and a target")
@@ -44,7 +60,7 @@ func DecideWith(t Thread, c api.Command, places Places, now time.Time) ([]Event,
 	if c.Revision != 0 && c.Revision != t.Revision {
 		return nil, nil, api.ErrRevision
 	}
-	d := &decision{t: t, thread: c.Target, at: now, places: places}
+	d := &decision{t: t, thread: c.Target, at: now, env: env}
 	if c.Caller != nil {
 		switch b := c.Body.(type) {
 		case api.MessageDispatch:
@@ -207,6 +223,11 @@ var ErrRefused = errors.New("engine: observation refused")
 // Observe records what an agent or the adapter did. An observation the
 // tables refuse returns ErrRefused.
 func Observe(t Thread, o Observation, now time.Time) ([]Event, []Effect, error) {
+	return ObserveWith(t, o, Env{}, now)
+}
+
+// ObserveWith is Observe in env.
+func ObserveWith(t Thread, o Observation, env Env, now time.Time) ([]Event, []Effect, error) {
 	if !t.Exists() {
 		return nil, nil, api.ErrNotFound
 	}
@@ -215,7 +236,7 @@ func Observe(t Thread, o Observation, now time.Time) ([]Event, []Effect, error) 
 		// nothing on a thread no one can read.
 		return nil, nil, fmt.Errorf("%w: %T: the thread was deleted", ErrRefused, o)
 	}
-	d := &decision{t: t, thread: t.ID, at: now.UTC().Round(0)}
+	d := &decision{t: t, thread: t.ID, at: now.UTC().Round(0), env: env}
 	err := d.observe(o)
 	if err == nil {
 		err = d.settle()
@@ -237,8 +258,38 @@ type decision struct {
 	effects []Effect
 	resumed bool   // the user resumed the queue: settle starts the wakes after a stop
 	by      api.ID // the thread whose agent sent the command; zero for the user
-	// places finds the machine a remote child is placed on; nil finds none.
-	places Places
+	env     Env
+}
+
+// ceiling is the most the thread may run at now: any access for a
+// thread of this engine's own, and for a link's, the lowest of its
+// origin's, its link's and this engine's setting. ok is false when a
+// link's thread may run at none, as its link was revoked.
+func (d *decision) ceiling() (c api.Access, ok bool) {
+	if d.t.Origin == nil {
+		return api.AccessFull, true
+	}
+	if d.env.Ceiling == nil {
+		return 0, false
+	}
+	c, err := d.env.Ceiling()
+	if err != nil {
+		return 0, false
+	}
+	return min(c, d.t.Origin.Access), true
+}
+
+// under is whether access is within the thread's ceiling now.
+func (d *decision) under(access api.Access) bool {
+	c, ok := d.ceiling()
+	return ok && access <= c
+}
+
+// runs is whether the thread may start a turn now: a link's thread once
+// its worktree is made, and while its access is within its ceiling, so
+// a message over a ceiling lowered since waits for a narrower access.
+func (d *decision) runs() bool {
+	return d.t.Origin == nil || d.t.Workspace != "" && d.under(d.t.Access)
 }
 
 func (d *decision) emit(b api.EventBody) error {
@@ -262,6 +313,9 @@ func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 	}
 	if !c.Run.IsZero() && c.Parent.IsZero() {
 		return rejected("a run starts only a child thread")
+	}
+	if c.Origin != nil {
+		return d.createFromLink(id, c)
 	}
 	if c.Worktree != nil {
 		return rejected("this engine makes no worktrees")
@@ -287,6 +341,34 @@ func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 	return d.admit(id)
 }
 
+// createFromLink creates a thread a link's create asked for, as the host
+// resolved it: in the checkout Project, from the commit Worktree.Base,
+// with its origin's link stamped. It holds its first message until its
+// worktree is made, which its own effect does after the commit, so a
+// crash leaves the thread to finish, and a settle in between leaves it
+// nothing to start.
+func (d *decision) createFromLink(id api.ID, c api.ThreadCreate) error {
+	switch {
+	case c.Origin.Link.IsZero():
+		return rejected("a thread from another machine comes through a link")
+	case !c.Parent.IsZero() || !c.Run.IsZero() || c.Fork != nil || c.Remote != "" || c.Workspace != "" || c.Branch != "":
+		return rejected("a thread from another machine is a thread of its own here, in a worktree this engine makes")
+	case c.Project == "" || c.Worktree == nil || c.Worktree.Base == "":
+		return rejected("a thread from another machine needs the checkout and the commit its worktree is made from")
+	case strings.TrimSpace(c.Text) == "":
+		return rejected("a thread from another machine needs its task")
+	}
+	origin := *c.Origin
+	if err := d.emit(api.ThreadCreated{Project: c.Project, Title: c.Title, Model: c.Model, Access: c.Access, Origin: &origin}); err != nil {
+		return err
+	}
+	if err := d.emit(api.MessageQueued{Message: id, Text: c.Text, Mode: api.StartNow}); err != nil {
+		return err
+	}
+	d.effects = append(d.effects, MakeWorktree{Project: c.Project, Base: c.Worktree.Base, Title: c.Title})
+	return nil
+}
+
 // placeRemote creates a remote child's placeholder: a child here with
 // the machine c names frozen on it, by its engine's and link's ids, and
 // no run, ever. Its task is for the machine, so nothing queues it here,
@@ -303,8 +385,8 @@ func (d *decision) placeRemote(c api.ThreadCreate) error {
 	var at api.Remote
 	var ok bool
 	var err error
-	if d.places != nil {
-		at, ok, err = d.places(c.Remote)
+	if d.env.Places != nil {
+		at, ok, err = d.env.Places(c.Remote)
 	}
 	switch {
 	case err != nil:
@@ -368,8 +450,18 @@ func CheckChild(line []Thread, kids Kids, lim Limits, c api.ThreadCreate) error 
 	if live == nil || live.ID != c.Run || !steerable[live.State] {
 		return rejected("only the parent's live run can start a child thread, and not once it is stopping")
 	}
-	if len(line) > lim.Depth {
+	// A thread another machine's link started is as deep here as there,
+	// so the depth counts across both, and a line from another machine
+	// starts no children on a third: no A to B to A.
+	depth := len(line)
+	if o := line[len(line)-1].Origin; o != nil {
+		depth += o.Depth
+	}
+	if depth > lim.Depth {
 		return rejected(fmt.Sprintf("a child thread can be at most %d below a thread of yours", lim.Depth))
+	}
+	if c.Remote != "" && slices.ContainsFunc(line, func(t Thread) bool { return t.Origin != nil }) {
+		return rejected("a thread another machine started here can't start children on other machines")
 	}
 	// The run keeps the access it was admitted at, whatever the thread was
 	// given since for its next turn.
@@ -384,6 +476,30 @@ func CheckChild(line []Thread, kids Kids, lim Limits, c api.ThreadCreate) error 
 	}
 	if kids.All >= lim.All {
 		return rejected(fmt.Sprintf("this thread has %d child threads, the most it may; start another once one is deleted", lim.All))
+	}
+	return nil
+}
+
+// CheckOrigin checks a link's create against link, as tokens.json has it
+// now and narrowed to this engine's setting, and kids, the link's threads
+// here: its origin is 1 to lim's Depth below a thread of its person's,
+// its access no wider than its origin's nor the link's, and the link is
+// under its counts, lim's where it gives none.
+func CheckOrigin(link api.Link, kids Kids, lim Limits, c api.ThreadCreate) error {
+	lim = lim.Effective()
+	o := c.Origin
+	working, all := cmp.Or(link.Working, lim.Working), cmp.Or(link.All, lim.All)
+	switch {
+	case o.Depth < 1 || o.Depth > lim.Depth:
+		return rejected(fmt.Sprintf("a thread from another machine is 1 to %d below a thread of its person's there, not %d", lim.Depth, o.Depth))
+	case c.Access > o.Access:
+		return rejected("a thread from another machine can't run wider than its parent there")
+	case c.Access > link.Access:
+		return rejected("the link lets its threads run no wider than its ceiling and this machine's setting for children from other machines")
+	case kids.Working >= working:
+		return rejected(fmt.Sprintf("%d threads of this link are at work, the most at once; start another once one of them stops", working))
+	case kids.All >= all:
+		return rejected(fmt.Sprintf("this link has %d threads here, the most it may; start another once one is deleted", all))
 	}
 	return nil
 }
@@ -443,14 +559,15 @@ func CheckCaller(line []Thread, c api.Caller, userLast bool) error {
 	return nil
 }
 
-func ceiling() api.Access { return api.AccessFull }
-
 func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	if m.Mode > api.Defer {
 		return rejected("unknown dispatch mode")
 	}
-	if d.t.Access > ceiling() {
+	if d.t.Access > api.AccessFull {
 		return rejected("thread access is above the client's ceiling")
+	}
+	if o := d.t.Origin; o != nil && !o.Making && d.t.Workspace == "" {
+		return rejected("this thread's worktree couldn't be made, so it runs nothing")
 	}
 	if live := d.t.Live(); !m.Replaces.IsZero() && (m.Mode != api.RestartActive || live == nil || live.ID != m.Replaces || live.State != RunUncertain) {
 		return rejected("the run this was to replace has already ended")
@@ -475,6 +592,9 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	// start a turn of its own once the run ends, after the user moved on.
 	if live := d.t.Live(); m.Mode == api.SteerActive && live != nil && !steerable[live.State] {
 		return rejected(fmt.Sprintf("the agent is %s and can't take a message; send it once the run ends", live.State))
+	}
+	if live := d.t.Live(); m.Mode == api.SteerActive && live != nil && !d.under(live.Access) {
+		return rejected("the run was admitted wider than this thread may run at now, so it takes no message")
 	}
 	// A message is new work: a settled thread comes back to the inbox with
 	// it, whichever client sent it. What waited before the settle stays
@@ -582,6 +702,9 @@ func (d *decision) place(message, before api.ID) (int64, error) {
 // admit starts message's turn. The wakes that wait go in with it, claimed
 // by its run: the reports first, so the user's words come last.
 func (d *decision) admit(message api.ID) error {
+	if !d.runs() {
+		return nil
+	}
 	m := d.t.Queue[d.t.messageAt(message)]
 	first := len(d.t.Runs) == 0
 	var texts []string
@@ -859,6 +982,8 @@ func (d *decision) steer(b api.QueueSteer) error {
 		return rejected("the agent is compacting its context and can't take a message; it goes once that ends")
 	case live != nil && !steerable[live.State]:
 		return rejected(fmt.Sprintf("the agent is %s and can't take a message; send it once the run ends", live.State))
+	case live != nil && !d.under(live.Access):
+		return rejected("the run was admitted wider than this thread may run at now, so it takes no message")
 	}
 	if err := d.release(); err != nil {
 		return err
@@ -1100,8 +1225,11 @@ func (d *decision) rename(b api.ThreadRename) error {
 // last saw of it. The provider is none of b's to give.
 func (d *decision) configure(b api.ThreadConfigure) error {
 	m, access := b.Onto(d.t.Model, d.t.Access)
-	if access > ceiling() {
+	if access > api.AccessFull {
 		return rejected("unknown access level")
+	}
+	if access > d.t.Access && !d.under(access) {
+		return rejected("this thread came from another machine, and may run no wider than its parent there, its link and this machine's setting allow")
 	}
 	if m.Model == "" && d.t.Model.Model != "" {
 		return rejected("a thread needs a model")
@@ -1289,6 +1417,13 @@ func (d *decision) observe(o Observation) error {
 		return d.reported(o)
 	case IdleCompact:
 		return d.idleCompact(o)
+	case WorktreeReady:
+		return d.emit(api.WorktreeReady{Workspace: o.Workspace, Branch: o.Branch})
+	case WorktreeFailed:
+		if err := d.emit(api.WorktreeFailed{Error: o.Error}); err != nil {
+			return err
+		}
+		return d.drop("Can't make a worktree: " + o.Error)
 	}
 	return nil
 }
@@ -1302,6 +1437,9 @@ func (d *decision) idleCompact(o IdleCompact) error {
 	}
 	if o.Run.IsZero() {
 		return fmt.Errorf("%w: idle compaction needs a run id", ErrRefused)
+	}
+	if !d.runs() {
+		return fmt.Errorf("%w: the thread may run nothing now", ErrRefused)
 	}
 	if err := d.emit(api.MessageQueued{Message: o.Run, Text: "/compact", Mode: api.StartNow, Pos: d.t.pos(false), Silent: true}); err != nil {
 		return err

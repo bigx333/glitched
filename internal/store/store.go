@@ -31,6 +31,7 @@ type Store struct {
 	hooks  []func(Commit)
 	limits engine.Limits
 	places engine.Places // where a remote child's create finds its machine
+	links  engine.Links  // the links this engine minted, as they are at each commit
 }
 
 func Open(path string) (*Store, error) {
