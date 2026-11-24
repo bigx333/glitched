@@ -20,7 +20,7 @@ import (
 // project's, copied to an overlay in dir.
 func WithSkills(dir string) Option {
 	return func(h *Host) {
-		h.skills = &skillStage{dir: dir, using: map[api.ID]string{}, opening: map[string]int{}, survivors: map[api.ID]bool{}}
+		h.skills = &skillStage{dir: dir, using: map[api.ID]string{}, opening: map[string]int{}, survivors: map[api.ID]bool{}, gone: map[api.ID]bool{}}
 	}
 }
 
@@ -35,6 +35,7 @@ type skillStage struct {
 	using     map[api.ID]string // by thread: the overlay its agent opened with
 	opening   map[string]int    // overlays opens are handing their agents, by count
 	survivors map[api.ID]bool   // threads whose agent the last engine started may run
+	gone      map[api.ID]bool   // deleted threads whose agent's close isn't done
 	inherited []string          // the overlays the last engine left
 }
 
@@ -115,19 +116,36 @@ func (s *skillStage) ended(thread api.ID) {
 	delete(s.survivors, thread)
 }
 
-func (s *skillStage) forget(thread api.ID) {
+// deleted is that thread was deleted: its agent's overlay stays till its
+// provider has closed the agent (closed).
+func (s *skillStage) deleted(thread api.ID) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.using, thread)
+	s.gone[thread] = true
+}
+
+// closed is that thread's provider closed its agent, so an agent the last
+// engine started for it no longer runs, and a deleted thread's overlay is
+// no one's.
+func (s *skillStage) closed(thread api.ID) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.survivors, thread)
+	if s.gone[thread] {
+		delete(s.using, thread)
+		delete(s.gone, thread)
+	}
 }
 
 // boot keeps every overlay the last engine left while an agent it started
-// may still run, the runs of survivors, restored or uncertain; with none,
-// it deletes them.
+// may still run, the survivors' (restored, uncertain, or with a close not
+// done); with none, it deletes them.
 func (s *skillStage) boot(survivors []api.ID) {
 	if s == nil {
 		return

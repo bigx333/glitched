@@ -231,7 +231,7 @@ var (
 // more calls. h.mu is held.
 func (h *Host) follow(e api.Event) {
 	if e.Type == threadDeleted {
-		h.skills.forget(e.Thread)
+		h.skills.deleted(e.Thread)
 		if h.vault != nil {
 			go h.vault.Forget(e.Thread)
 		}
@@ -346,7 +346,11 @@ func (h *Host) boot(ctx context.Context) error {
 			survivors = append(survivors, id)
 		}
 	}
-	h.skills.boot(survivors)
+	closing, err := h.store.Closing(ctx)
+	if err != nil {
+		return err
+	}
+	h.skills.boot(append(survivors, closing...))
 	return nil
 }
 
@@ -502,6 +506,7 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 		// agent of an earlier run, and an earlier start can leave a process
 		// whatever its message reached.
 		if m, _ := t.Message(b.Run); m.State == engine.QueueCancelled && start == 0 && t.Generation <= 1 {
+			h.skills.closed(e.Thread)
 			return nil, true
 		}
 		// This host's pump closed the agent it held before the thread took
@@ -522,6 +527,7 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 		if start != 0 && !retry(h.ctx, "complete start", func(ctx context.Context) error { return h.store.Complete(ctx, start) }) {
 			return nil, false
 		}
+		h.skills.closed(e.Thread)
 		return nil, true
 
 	case engine.DeliverAnswer:
