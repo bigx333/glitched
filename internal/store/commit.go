@@ -82,6 +82,24 @@ func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Inte
 	return api.Receipt{Command: c.ID, Committed: at, Revision: r.revision}, err
 }
 
+// CheckChild checks a child's create against its parent's line and
+// children as they are now, as the create's own commit will again: what
+// a host checks before it does work for the create, as making a worktree.
+func (s *Store) CheckChild(ctx context.Context, b api.ThreadCreate) error {
+	line, err := lineOf(ctx, s.db, b.Parent)
+	if err != nil {
+		return err
+	}
+	kids, err := kidsOf(ctx, s.db, b.Parent)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	lim := s.limits
+	s.mu.Unlock()
+	return engine.CheckChild(line, kids, lim, b)
+}
+
 // Committed is whether a command under id was committed.
 func (s *Store) Committed(ctx context.Context, id api.ID) (bool, error) {
 	var n int

@@ -609,7 +609,9 @@ func (d *decision) inbox(b api.InboxSet) error {
 // close too, for an agent its provider kept for the next run.
 //
 // One that removes the worktree waits for the tree to be still: an agent
-// closing may still write there, after the host looked for changes.
+// closing may still write there, after the host looked for changes. It
+// removes the worktree of each thread of the tree in one, after its agent's
+// close, as an effect a crash leaves for the next host.
 func (d *decision) delete(b api.ThreadDelete) error {
 	if b.RemoveWorktree && d.t.Live() != nil {
 		return rejected("stop the thread, and every thread under it, before its worktree goes")
@@ -622,6 +624,9 @@ func (d *decision) delete(b api.ThreadDelete) error {
 	} else if n := len(d.t.Runs); n > 0 {
 		r := d.t.Runs[n-1]
 		d.effects = append(d.effects, CloseAgent{Run: r.ID, Generation: r.Generation})
+	}
+	if b.RemoveWorktree && d.t.Branch != "" {
+		d.effects = append(d.effects, RemoveWorktree{Workspace: d.t.Workspace, Project: d.t.Project, Branch: d.t.Branch})
 	}
 	return d.emit(api.ThreadDeleted{})
 }
@@ -859,7 +864,7 @@ func (d *decision) reported(o Reported) error {
 		return nil
 	}
 	return d.emit(api.MessageQueued{
-		Message: id, Text: wakeText(o), Mode: api.AfterActive, Pos: d.t.pos(false), Held: true, Report: o.Report.Child,
+		Message: id, Text: wakeText(o, d.t.Branch), Mode: api.AfterActive, Pos: d.t.pos(false), Held: true, Report: o.Report.Child,
 	})
 }
 
@@ -875,15 +880,21 @@ func wakeID(run api.ID) api.ID {
 }
 
 // wakeText gives the parent's agent a child's result, in the tags Zeron
-// gives a task's: which child, how it ended, and what it said last.
-func wakeText(o Reported) string {
+// gives a task's: which child, how it ended, and what it said last. A
+// child on a branch other than the parent's, in a worktree of its own,
+// names it, for the parent to merge.
+func wakeText(o Reported, parentBranch string) string {
 	state := "completed"
 	if o.Report.Kind == api.ReportFailed {
 		state = "failed"
 	}
 	reply := cmp.Or(strings.TrimSpace(o.Reply), o.Report.Outcome)
-	return fmt.Sprintf("<task id=\"%s\" title=\"%s\" state=\"%s\">\n<task_result>\n%s\n</task_result>\n</task>",
-		o.Report.Child, html.EscapeString(o.Report.Title), state, reply)
+	branch := ""
+	if o.Branch != "" && o.Branch != parentBranch {
+		branch = fmt.Sprintf(" branch=\"%s\"", html.EscapeString(o.Branch))
+	}
+	return fmt.Sprintf("<task id=\"%s\" title=\"%s\" state=\"%s\"%s>\n<task_result>\n%s\n</task_result>\n</task>",
+		o.Report.Child, html.EscapeString(o.Report.Title), state, branch, reply)
 }
 
 // report has a child's run report to its parent, after the commit, as how
@@ -893,7 +904,7 @@ func (d *decision) report(run api.ID, kind api.ReportKind, failure string, ask j
 		return
 	}
 	d.effects = append(d.effects, ReportToParent{
-		Parent: d.t.Parent, Child: d.t.ID, Run: run, Kind: kind, Title: d.t.Title, Error: failure, Ask: ask,
+		Parent: d.t.Parent, Child: d.t.ID, Run: run, Kind: kind, Title: d.t.Title, Error: failure, Ask: ask, Branch: d.t.Branch,
 	})
 }
 

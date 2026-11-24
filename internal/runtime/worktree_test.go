@@ -2,6 +2,7 @@ package runtime_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	osexec "os/exec"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"glitched/internal/api"
 	"glitched/internal/provider"
@@ -73,6 +75,32 @@ type worktreeHost struct {
 	h    *runtime.Host
 	ad   *opened
 	root string
+	db   *sql.DB
+}
+
+// remove deletes thread with its worktree and waits for the removals the
+// delete left to run.
+func (w worktreeHost) remove(t *testing.T, thread api.ID) {
+	t.Helper()
+	submit(t, w.h, thread, api.ThreadDelete{RemoveWorktree: true})
+	w.settle(t)
+}
+
+// settle waits for every worktree removal a delete left to run.
+func (w worktreeHost) settle(t *testing.T) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(2 * time.Millisecond) {
+		var n int
+		if err := w.db.QueryRow("SELECT COUNT(*) FROM effects WHERE kind = 'worktree.remove' AND state <> 'done'").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d worktree removals still pending", n)
+		}
+	}
 }
 
 func serveWorktrees(t *testing.T) worktreeHost { return serveWorktreesAsking(t, false) }
@@ -81,7 +109,8 @@ func serveWorktrees(t *testing.T) worktreeHost { return serveWorktreesAsking(t, 
 // approval while ask.
 func serveWorktreesAsking(t *testing.T, ask bool) worktreeHost {
 	t.Helper()
-	st, err := store.Open(dbPath(t))
+	path := dbPath(t)
+	st, err := store.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +122,7 @@ func serveWorktreesAsking(t *testing.T, ask bool) worktreeHost {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { h.Kill(); st.Close() })
-	return worktreeHost{h, ad, root}
+	return worktreeHost{h, ad, root, sideDB(t, path)}
 }
 
 func inWorktree(workspace, base string) api.ThreadCreate {
@@ -226,7 +255,7 @@ func TestDeletingAThreadInAWorktree(t *testing.T) {
 	}
 
 	clean := make()
-	submit(t, w.h, clean.ID, api.ThreadDelete{RemoveWorktree: true})
+	w.remove(t, clean.ID)
 	if exists(clean.Workspace) || strings.Contains(branches(), clean.Branch) {
 		t.Errorf("a removal left the folder or a branch with nothing on it:\n%s", branches())
 	}
@@ -234,7 +263,7 @@ func TestDeletingAThreadInAWorktree(t *testing.T) {
 	committed := make()
 	gitIn(t, committed.Workspace, "commit", "-q", "--allow-empty", "-m", "mine")
 	os.WriteFile(filepath.Join(committed.Workspace, "more.txt"), []byte("more\n"), 0o644)
-	submit(t, w.h, committed.ID, api.ThreadDelete{RemoveWorktree: true})
+	w.remove(t, committed.ID)
 	if exists(committed.Workspace) {
 		t.Errorf("a removal left the worktree with changes")
 	}
@@ -329,7 +358,7 @@ func TestALockedWorktreeStays(t *testing.T) {
 		t.Fatalf("a refused delete of a locked worktree took it or the thread: %v", err)
 	}
 	gitIn(t, project, "worktree", "unlock", locked.Workspace)
-	submit(t, w.h, thread, api.ThreadDelete{RemoveWorktree: true})
+	w.remove(t, thread)
 	if _, err := os.Stat(locked.Workspace); err == nil {
 		t.Errorf("the delete after the unlock left the worktree")
 	}
@@ -413,7 +442,7 @@ func TestACreateIsCheckedBeforeGitAndKeepsItsReceipt(t *testing.T) {
 	if _, err := w.h.Submit(ctx, other); !errors.Is(err, api.ErrConflict) {
 		t.Errorf("the same ID with another base: %v, want a conflict", err)
 	}
-	submit(t, w.h, thread, api.ThreadDelete{RemoveWorktree: true})
+	w.remove(t, thread)
 	again, err := w.h.Submit(ctx, c)
 	if err != nil || again.Committed != first.Committed {
 		t.Errorf("the create again after the delete: %+v, %v; want the first receipt", again, err)
@@ -513,7 +542,7 @@ func TestAWorktreeGoneFromItsPathLeavesWhatGitRegistersThere(t *testing.T) {
 	if err := os.Rename(th.Workspace, aside); err != nil {
 		t.Fatal(err)
 	}
-	submit(t, w.h, thread, api.ThreadDelete{RemoveWorktree: true})
+	w.remove(t, thread)
 	if got := gitIn(t, aside, "show", ":staged.txt"); got != "theirs" {
 		t.Fatalf("the other checkout's staged file is %q", got)
 	}
@@ -548,7 +577,7 @@ func TestAWorktreeRegisteredByARelativePathIsRemoved(t *testing.T) {
 	thread := api.NewID()
 	submit(t, w.h, thread, inWorktree(project, ""))
 	th := until(t, w.h, thread, "the first turn's end", func(th api.Thread) bool { return th.LastTurn != nil })
-	submit(t, w.h, thread, api.ThreadDelete{RemoveWorktree: true})
+	w.remove(t, thread)
 	if _, err := os.Stat(th.Workspace); err == nil {
 		t.Fatal("the worktree stayed")
 	}
