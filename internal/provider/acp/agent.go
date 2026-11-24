@@ -210,9 +210,15 @@ func (g *Agent) Do(ctx context.Context, act provider.Action) error {
 		// written, or once the call ended without writing it. ctx bounds
 		// the write, as Claude's: an agent that stopped reading would hold
 		// it for good, and a stop or a delete with it.
+		// The deadline is the file's, so any write it meets may be cut:
+		// the agent takes no other run. A pipe that takes none, as on
+		// Windows, is ended by stopping the agent.
 		ran := make(chan struct{})
 		expire := context.AfterFunc(ctx, func() {
-			g.p.stdin.SetWriteDeadline(time.Now())
+			g.p.cut.Store(true)
+			if err := g.p.stdin.SetWriteDeadline(time.Now()); err != nil {
+				g.p.halt()
+			}
 			close(ran)
 		})
 		select {
@@ -689,7 +695,7 @@ func (g *Agent) Close(ctx context.Context) error {
 		over := g.started && g.ended && !g.interrupted && g.failed == nil
 		g.mu.Unlock()
 		g.cancel()
-		if !over || g.keep == nil || g.p.halted.Load() {
+		if !over || g.keep == nil || g.p.halted.Load() || g.p.cut.Load() {
 			g.p.attach(nil)
 			return
 		}
