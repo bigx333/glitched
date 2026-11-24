@@ -34,7 +34,7 @@ func TestALinkMintedOnOneMachineIsAddedOnAnother(t *testing.T) {
 	}
 	_, rest, _ := strings.Cut(out, "shown only this once:\n\n  ")
 	token, _, _ := strings.Cut(rest, "\n")
-	if token == "" || !strings.Contains(out, "glitched link -add") || !strings.Contains(out, "glitched pair -dir "+shellQuote(b)+" -revoke a") {
+	if token == "" || !strings.Contains(out, "glitched link -add") || !strings.Contains(out, "\n  glitched pair -dir "+shellQuote(b)+" -revoke a\n") {
 		t.Fatalf("pair -link printed no token and add line:\n%s", out)
 	}
 	d, err := daemon.Start(ctx, daemon.Config{Dir: b, Hub: true, Listen: []string{"127.0.0.1:0"}, Providers: provider.Mux{"fake": fake.New(fake.Turn(true))}})
@@ -70,6 +70,9 @@ func TestALinkMintedOnOneMachineIsAddedOnAnother(t *testing.T) {
 		if err := link(ctx, args); !errors.As(err, new(usageError)) {
 			t.Errorf("link %v: %v, want a usage error", args, err)
 		}
+	}
+	if err := link(ctx, []string{"-dir", a, "-add", "b", "-server", addr, "secret-value"}); err == nil || strings.Contains(err.Error(), "secret-value") {
+		t.Errorf("link with a stray argument: %v, want a usage error that does not repeat it", err)
 	}
 	if ts, err := daemon.Tokens(b); err != nil || len(ts) != 1 || ts[0].Link == nil {
 		t.Fatalf("tokens.json after the refused pairs: %+v %v, want only the link", ts, err)
