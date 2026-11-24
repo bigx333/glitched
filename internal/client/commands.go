@@ -396,6 +396,12 @@ func (m *Manager) send(e *Env, th *Thread, cmd api.Command) {
 	prev, done := th.last, make(chan struct{})
 	th.last = done
 	ectx := e.ctx
+	src, push := m.skillSource(e)
+	switch cmd.Body.(type) {
+	case api.MessageDispatch, api.QueueResume:
+	default:
+		push = false
+	}
 	m.wg.Go(func() {
 		defer close(done)
 		if prev != nil {
@@ -404,6 +410,9 @@ func (m *Manager) send(e *Env, th *Thread, cmd api.Command) {
 			case <-ectx.Done():
 				return
 			}
+		}
+		if push {
+			src.push(ectx, s.ep)
 		}
 		select {
 		case e.slots <- struct{}{}:
