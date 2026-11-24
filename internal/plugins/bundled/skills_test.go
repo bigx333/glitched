@@ -121,7 +121,7 @@ func (k *skillsHeader) click(handler string) {
 var clash = &api.SkillList{
 	Skills: []api.Skill{
 		{Name: "deploy", Description: "Ship the app to staging.", Source: "home", Shown: "~/.glitched/skills/deploy"},
-		{Name: "review", Description: "Review the diff as this project does.", Source: "project", Shown: "widgets/.glitched/skills/review", Overrides: true},
+		{Name: "review", Description: "Review the diff as this project does.", Source: "project", Shown: "widgets/.glitched/skills/review", Replaces: "home"},
 	},
 	Delivery: "Claude Code: as /glitched:<name>",
 }
@@ -223,5 +223,46 @@ func TestACompactHeaderKeepsTheSkillsPillToItsIcon(t *testing.T) {
 	v := k.view()
 	if v == nil || v.Body.Label != "Skills 2" || len(v.Body.Children) != 1 || v.Body.Children[0].Name != "magic-stick-3" {
 		t.Errorf("the compact pill: %q", k.text())
+	}
+}
+
+// A synced skill says the machine it came from and what it replaces, a
+// project's that replaces it names that machine, and the popover says how
+// long ago that machine last synced them.
+func TestSyncedSkillsSayTheirMachineWhatTheyReplaceAndHowOld(t *testing.T) {
+	k := openSkills(t, &api.SkillList{
+		Skills: []api.Skill{
+			{Name: "deploy", Description: "The project's deploy.", Source: "project", Shown: "widgets/.glitched/skills/deploy", Replaces: "synced"},
+			{Name: "hello", Description: "Praetor's hello.", Source: "synced", Shown: "/state/skills-synced/sets/x/hello", From: "Praetor", Replaces: "home"},
+			{Name: "notes", Description: "This machine's notes.", Source: "home", Shown: "~/.glitched/skills/notes"},
+		},
+		Synced: &api.SyncedFrom{Name: "Praetor", Pulled: time.Now().Add(-3*time.Hour - time.Minute)},
+	}, false)
+	k.click("popover.toggle")
+	v := k.view()
+	if s := v.Find("synced"); s == nil || s.Text != "Synced from Praetor 3h ago" {
+		t.Errorf("the synced line: %+v", s)
+	}
+	rows := map[string][]string{
+		"skill:synced:hello":   {"From Praetor|", "replaces yours|", "Praetor's hello.|"},
+		"skill:project:deploy": {"Project|", "replaces Praetor's|"},
+		"skill:home:notes":     {"Yours|", "~/.glitched/skills/notes|"},
+	}
+	for id, wants := range rows {
+		row := v.Find(id)
+		if row == nil {
+			t.Fatalf("no row %s: %q", id, k.text())
+		}
+		for _, want := range wants {
+			if !strings.Contains(words(row), want) {
+				t.Errorf("%s doesn't say %q: %s", id, want, words(row))
+			}
+		}
+	}
+	if strings.Contains(words(v.Find("skill:synced:hello")), "skills-synced") {
+		t.Errorf("the synced row shows where the engine keeps it: %s", words(v.Find("skill:synced:hello")))
+	}
+	if strings.Contains(words(v.Find("skill:home:notes")), "replaces") {
+		t.Errorf("a skill that replaces none says it does: %s", words(v.Find("skill:home:notes")))
 	}
 }

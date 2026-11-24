@@ -179,9 +179,9 @@ func TestSkillsSaysWhatAThreadsNextRunGets(t *testing.T) {
 	}
 	var got []string
 	for _, sk := range list.Skills {
-		got = append(got, sk.Source+":"+sk.Name+":"+sk.Description+map[bool]string{true: ":overrides"}[sk.Overrides])
+		got = append(got, sk.Source+":"+sk.Name+":"+sk.Description+map[bool]string{true: ":replaces "}[sk.Replaces != ""]+sk.Replaces)
 	}
-	if want := []string{"home:mine:The mine skill.", "project:review:The review skill.:overrides"}; !slices.Equal(got, want) {
+	if want := []string{"home:mine:The mine skill.", "project:review:The review skill.:replaces home"}; !slices.Equal(got, want) {
 		t.Errorf("skills %q, want %q", got, want)
 	}
 	if len(list.Skipped) != 1 || list.Skipped[0].Name != "Upper" || list.Skipped[0].Source != "project" || list.Skipped[0].Why == "" || list.Delivery != "Fake: by magic" {
