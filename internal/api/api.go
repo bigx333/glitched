@@ -146,6 +146,33 @@ type TurnInterrupt struct {
 // message the user sends, but a Defer, does it too.
 type QueueResume struct{}
 
+// QueueEdit gives a message of the user's that waits its turn new words.
+// Like the queue's other intents, it is refused once the message is no
+// longer waiting: claimed, sent, cancelled, or a wake the engine queued.
+type QueueEdit struct {
+	Message ID     `json:"message"`
+	Text    string `json:"text"`
+}
+
+// QueueCancel takes a message of the user's out of the queue.
+type QueueCancel struct {
+	Message ID `json:"message"`
+}
+
+// QueueMove puts a message of the user's that waits its turn just before
+// Before, another, or last with Before zero.
+type QueueMove struct {
+	Message ID `json:"message"`
+	Before  ID `json:"before,omitzero"`
+}
+
+// QueueSteer sends a message of the user's that waits its turn now: into
+// the live run, as a SteerActive does, or, with none, as the thread's next
+// turn. Like a send, it releases what a stop held.
+type QueueSteer struct {
+	Message ID `json:"message"`
+}
+
 type RequestRespond struct {
 	Request    ID              `json:"request"`
 	Generation uint64          `json:"generation"`
@@ -213,6 +240,10 @@ func (ThreadRename) intentType() string    { return "thread.rename" }
 func (ThreadDelete) intentType() string    { return "thread.delete" }
 func (ThreadConfigure) intentType() string { return "thread.configure" }
 func (QueueResume) intentType() string     { return "queue.resume" }
+func (QueueEdit) intentType() string       { return "queue.edit" }
+func (QueueCancel) intentType() string     { return "queue.cancel" }
+func (QueueMove) intentType() string       { return "queue.move" }
+func (QueueSteer) intentType() string      { return "queue.steer" }
 
 var intents = map[string]func() Intent{
 	"thread.create":    func() Intent { return new(ThreadCreate) },
@@ -224,6 +255,10 @@ var intents = map[string]func() Intent{
 	"thread.delete":    func() Intent { return new(ThreadDelete) },
 	"thread.configure": func() Intent { return new(ThreadConfigure) },
 	"queue.resume":     func() Intent { return new(QueueResume) },
+	"queue.edit":       func() Intent { return new(QueueEdit) },
+	"queue.cancel":     func() Intent { return new(QueueCancel) },
+	"queue.move":       func() Intent { return new(QueueMove) },
+	"queue.steer":      func() Intent { return new(QueueSteer) },
 }
 
 func IntentType(i Intent) string { return i.intentType() }
@@ -281,6 +316,14 @@ func (c *Command) UnmarshalJSON(b []byte) error {
 	case *ThreadConfigure:
 		c.Body = *v
 	case *QueueResume:
+		c.Body = *v
+	case *QueueEdit:
+		c.Body = *v
+	case *QueueCancel:
+		c.Body = *v
+	case *QueueMove:
+		c.Body = *v
+	case *QueueSteer:
 		c.Body = *v
 	}
 	c.ID, c.Target, c.Revision, c.Expires, c.Caller = w.ID, w.Target, w.Revision, w.Expires, w.Caller
@@ -470,8 +513,10 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // uncertain run it replaces, which a version 8 engine would drop and stop
 // whatever run is live; version 10 lets an agent message and stop the
 // threads under its own, a command whose caller a version 9 engine would
-// drop and take as the user's.
-const Protocol = 10
+// drop and take as the user's; version 11 edits, cancels, moves and
+// steers a queued message, which a version 10 engine refuses as unknown
+// commands, and a version 10 GUI would show at its old words and place.
+const Protocol = 11
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host
