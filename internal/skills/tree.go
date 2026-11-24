@@ -41,16 +41,50 @@ func walk(dir string, folder os.FileInfo, visit func(rel string, exec bool, data
 	if err := w.dir(".", 0); err != nil {
 		return "", err
 	}
-	slices.SortFunc(w.files, func(a, b entry) int { return strings.Compare(a.rel, b.rel) })
+	return treeHash(w.files), nil
+}
+
+// treeHash is the hash of a tree of files: of each file's path, mode, size
+// and sha256, by path.
+func treeHash(files []entry) string {
+	files = slices.Clone(files)
+	slices.SortFunc(files, func(a, b entry) int { return strings.Compare(a.rel, b.rel) })
 	h := sha256.New()
-	for _, f := range w.files {
-		mode := "644"
-		if f.exec {
-			mode = "755"
-		}
-		fmt.Fprintf(h, "%s\x00%s\x00%d\x00%s\n", f.rel, mode, f.size, f.sum)
+	for _, f := range files {
+		fmt.Fprintf(h, "%s\x00%s\x00%d\x00%s\n", f.rel, modeOf(f.exec), f.size, f.sum)
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// modeOf is a file's mode as a tree's hash, and a SkillFile, says it.
+func modeOf(exec bool) string {
+	if exec {
+		return "755"
+	}
+	return "644"
+}
+
+// copyTree copies the skill in dir, the folder folder, to a new folder to,
+// its files read-only, unless its tree's hash is no longer hash.
+func copyTree(dir string, folder os.FileInfo, to, hash string) error {
+	got, err := walk(dir, folder, func(rel string, exec bool, data []byte) error {
+		p := filepath.Join(to, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		mode := fs.FileMode(0o444)
+		if exec {
+			mode = 0o555
+		}
+		return os.WriteFile(p, data, mode)
+	})
+	if err != nil {
+		return err
+	}
+	if got != hash {
+		return errChanged
+	}
+	return nil
 }
 
 type walker struct {

@@ -39,7 +39,7 @@ func TestEachEngineSaysItsThreadsSkills(t *testing.T) {
 		}
 		want := []api.Skill{
 			{Name: own, Description: "This machine's.", Source: "home", Shown: filepath.Join(dir, "skills", own)},
-			{Name: "review", Description: "The project's review.", Source: "project", Shown: filepath.Join(filepath.Base(ws), ".glitched", "skills", "review"), Overrides: true},
+			{Name: "review", Description: "The project's review.", Source: "project", Shown: filepath.Join(filepath.Base(ws), ".glitched", "skills", "review"), Overrides: true, Replaces: "home"},
 		}
 		slices.SortFunc(want, func(a, b api.Skill) int { return strings.Compare(a.Name, b.Name) })
 		for name, k := range map[string]transport.Skills{"the tailnet": remote(t, d, token), "the unix socket": unix, "the embedded engine": embedded} {
