@@ -30,6 +30,13 @@ func (r reporting) Commands(ctx context.Context, workspace string) ([]provider.C
 	return nil, nil
 }
 
+func (r reporting) Rewind(ctx context.Context, spec provider.RewindSpec) (provider.Rewind, error) {
+	if rw, ok := r.Adapter.(provider.Rewinder); ok {
+		return rw.Rewind(ctx, spec)
+	}
+	return provider.Rewind{}, nil
+}
+
 // undescribed is an adapter whose provider can't say what it runs.
 type undescribed struct{ provider.Adapter }
 

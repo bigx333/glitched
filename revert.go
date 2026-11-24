@@ -236,7 +236,12 @@ func (a *app) revertAlert(c *ui.Context) {
 // An Undo of a rewind that failed changed nothing, so its row puts back
 // the files the rewind saved, as the rewind's own Undo would have.
 // A rewind says whether the agent kept its own conversation or was handed
-// a new one, as the run after it took it up once one has.
+// a new one, as the run after it took it up once one has, and its Undo
+// says before the click which of the two it will be: native only after a
+// rewind the agent forked at once, as Codex's, and portable after one it
+// would branch only at its next run, as Claude's, or couldn't at all. Its
+// sentence wraps rather than clip, so the badge and the Undo keep their
+// width.
 func (a *app) revertDivider(c *ui.Context, t thread, es []entry, i int) {
 	r := es[i].revert
 	last := !slices.ContainsFunc(es[i+1:], func(e entry) bool {
@@ -254,20 +259,26 @@ func (a *app) revertDivider(c *ui.Context, t thread, es []entry, i int) {
 			return
 		}
 		why, label, tip := a.whyNoRevert(t), "Undo", ""
+		native := r.Conversation == api.RewindNative && r.ThreadReverted.At == ""
 		switch {
 		case unrewind && r.Recovery == "":
-			why, tip = "", "Brings back the conversation as it was before the rewind"
+			why, tip = "", "Native: brings back the agent's own conversation as it was before the rewind"
+			if !native {
+				tip = "Portable: hands the conversation's turns, the ones the rewind took out among them, to a new conversation"
+			}
 			if t.View.Live() {
 				why = "Stop the thread before reverting it"
 			} else if !t.Transcript.Reverting.IsZero() {
 				why = "A revert is under way"
 			}
+		case unrewind && native:
+			tip = "Native: brings back the agent's own conversation and the files as they were before the rewind"
 		case unrewind:
-			tip = "Brings back the conversation and the files as they were before the rewind"
+			tip = "Portable: brings back the files as they were before the rewind, and hands the conversation's turns to a new conversation"
 		case r.Rewound() || r.Conversation == api.RewindFailed:
 			label, tip = "Undo files only", "Puts back the files; the conversation stays as it is"
 		}
-		b := ghost(c, "undo", false).Padding(2, 6).Children(func() { ui.Text(c, label).FontSize(11.5) })
+		b := ghost(c, "undo", false).Padding(2, 6).Shrink(0).Children(func() { ui.Text(c, label).FontSize(11.5) })
 		if why != "" {
 			a.tip(c, b.TextColor(palette.faint), why)
 			return
@@ -298,11 +309,11 @@ func (a *app) revertDivider(c *ui.Context, t thread, es []entry, i int) {
 			if r.Status == api.RevertRestored {
 				text += restored + plural(r.Changed, "file")
 			}
-			ui.Text(c, text).FontSize(11.5).TextColor(palette.faint).SingleLine()
+			ui.Text(c, text).FontSize(11.5).TextColor(palette.faint).TextAlign(ui.Center).Shrink(1)
 			if cmp.Or(r.Took, r.Conversation) == api.RewindPortable {
 				kind, tip = "Portable", portable
 			}
-			a.tip(c, ui.Box(c).Label(kind).Padding(1, 6).Radius(6).Border(1, palette.border).Children(func() {
+			a.tip(c, ui.Box(c).Label(kind).Padding(1, 6).Radius(6).Border(1, palette.border).Shrink(0).Children(func() {
 				ui.Text(c, kind).FontSize(10.5).TextColor(palette.faint).AccessHidden(true)
 			}), tip)
 			undo()
@@ -311,10 +322,10 @@ func (a *app) revertDivider(c *ui.Context, t thread, es []entry, i int) {
 			if r.To.Phase == api.CheckpointRecovery {
 				text = "Put back " + plural(r.Changed, "file") + " as they were before a revert"
 			}
-			ui.Text(c, text).FontSize(11.5).TextColor(palette.faint).SingleLine()
+			ui.Text(c, text).FontSize(11.5).TextColor(palette.faint).TextAlign(ui.Center).Shrink(1)
 			undo()
 		case r.Status == api.RevertUnchanged:
-			ui.Text(c, "The files were already as they were then").FontSize(11.5).TextColor(palette.faint).SingleLine()
+			ui.Text(c, "The files were already as they were then").FontSize(11.5).TextColor(palette.faint).TextAlign(ui.Center).Shrink(1)
 		default:
 			ui.Text(c, "Couldn't revert the files: "+r.Error).FontSize(11.5).TextColor(palette.red).Shrink(1)
 			undo()
