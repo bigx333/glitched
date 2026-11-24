@@ -92,11 +92,9 @@ type liveRun struct {
 	agent        provider.Agent // nil until the start succeeds
 	cut          bool           // the run was cut short as its agent opened, which may have set it to work
 	// start is the start's own context: a stop cancels it, and the run
-	// lives on, as the start may take anyway. opened is closed once the
-	// start has returned, with an agent or not.
+	// lives on, as the start may take anyway.
 	start     context.Context
 	stopStart context.CancelFunc
-	opened    chan struct{}
 	// started is closed once the run's start is recorded: its agent may
 	// call back through glitched mcp before then.
 	started chan struct{}
@@ -564,7 +562,6 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 		h.opening--
 		h.tellAwake(was)
 		h.mu.Unlock()
-		close(lr.opened)
 		if err == nil {
 			return engine.Started{Run: b.Run}, true
 		}
@@ -793,32 +790,16 @@ func (h *Host) act(run api.ID, a provider.Action) error {
 	h.mu.Lock()
 	lr := h.runs[run]
 	h.mu.Unlock()
-	if lr == nil {
+	if lr == nil || lr.agent == nil {
 		return errNoAgent
 	}
 	parent := lr.steering
-	_, stop := a.(provider.Interrupt)
-	if stop {
+	if _, ok := a.(provider.Interrupt); ok {
 		parent = lr.ctx
 	}
 	ctx, cancel := context.WithTimeout(parent, callTimeout)
 	defer cancel()
-	// A stop that finds the agent still opening goes to the agent the
-	// start gives, if it gives one: the stop cancelled the start, but a
-	// start can take anyway.
-	if stop && lr.opened != nil {
-		select {
-		case <-lr.opened:
-		case <-ctx.Done():
-		}
-	}
-	h.mu.Lock()
-	ag := lr.agent
-	h.mu.Unlock()
-	if ag == nil {
-		return errNoAgent
-	}
-	return ag.Do(ctx, a)
+	return lr.agent.Do(ctx, a)
 }
 
 // closeAgent retries a failed close until it succeeds or the host closes,
@@ -840,9 +821,6 @@ func (h *Host) track(run api.ID, provider string, ag provider.Agent) *liveRun {
 	lr.ctx, lr.cancel = context.WithCancel(h.ctx)
 	lr.steering, lr.stopSteering = context.WithCancel(lr.ctx)
 	lr.start, lr.stopStart = context.WithCancel(lr.ctx)
-	if ag == nil {
-		lr.opened = make(chan struct{})
-	}
 	h.mu.Lock()
 	h.runs[run] = lr
 	h.agents[lr] = true
