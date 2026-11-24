@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/ui"
+
 	"glitched/internal/api"
 	"glitched/internal/plugins"
 	"glitched/internal/plugins/bundled"
@@ -101,6 +103,21 @@ func (h *harness) fill(label, text string) {
 	h.tt.Advance(16 * time.Millisecond)
 }
 
+// replace selects what the plugin's input under label holds, and types
+// text over it.
+func (h *harness) replace(label, text string) {
+	h.t.Helper()
+	r, ok := h.tt.Find(label)
+	if !ok {
+		h.t.Fatalf("no %q in %q", label, h.tt.Texts())
+	}
+	h.tt.ClickAt(r.X+20, r.Y+r.H-14)
+	h.tt.Advance(16 * time.Millisecond)
+	h.tt.Key(ui.Cmd, ui.KeyA)
+	h.tt.Type(text)
+	h.tt.Advance(16 * time.Millisecond)
+}
+
 // service calls the Schedules service as the page does.
 func (h *harness) service(method string, args, out any) {
 	h.t.Helper()
@@ -159,6 +176,8 @@ func (h *harness) added(title string) pageSchedule {
 	h.frames("the form", func() bool { return h.tt.HasText("Add schedule") })
 	h.fill("Title", title)
 	h.fill("Prompt", "Read the open issues and sort them.")
+	// A zone of its own, not the machine's, which the form starts with.
+	h.replace("Time zone", "Europe/Berlin")
 	h.press("Add schedule")
 	var s pageSchedule
 	h.frames("the schedule's row", func() bool {
@@ -201,7 +220,7 @@ func TestASavedScheduleIsARowWithItsNextRun(t *testing.T) {
 	}
 	line := nextRun(t, s) + " · No runs yet"
 	h.frames("its next run", func() bool { return h.tt.HasText(line) })
-	if words := "orchard · Weekdays at 09:00, " + s.Zone; !h.tt.HasText(words) {
+	if words := "orchard · Weekdays at 09:00, Europe/Berlin"; !h.tt.HasText(words) {
 		t.Fatalf("no %q in %q", words, h.tt.Texts())
 	}
 	h.shot("after")
