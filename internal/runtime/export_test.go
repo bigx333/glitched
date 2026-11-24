@@ -61,3 +61,7 @@ func (h *Host) Kill() {
 	h.stopDrain()
 	h.Close()
 }
+
+// LostContinued is closed once an auto-continuing host has decided each
+// run its boot lost.
+func (h *Host) LostContinued() <-chan struct{} { return h.lostDone }

@@ -81,6 +81,8 @@ func (m *Manager) Configure(change func(*daemon.Config)) error {
 	was.CompactBeforeExpire = cfg.CompactBeforeExpire
 	was.KeepAwake = cfg.KeepAwake
 	was.ProviderLog = cfg.ProviderLog
+	// The engine reads it as it starts, which is when it acts on it.
+	was.ContinueAfterRestart = cfg.ContinueAfterRestart
 	if reflect.DeepEqual(cfg, was) && m.embedded != nil {
 		applyLive(m.embedded, cfg)
 	} else {

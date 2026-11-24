@@ -3,6 +3,7 @@ package engine_test
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 
 	"glitched/internal/api"
@@ -223,5 +224,66 @@ func TestASettledParentTakesNoChild(t *testing.T) {
 	var rej *api.RejectedError
 	if err := engine.CheckChild([]engine.Thread{parent.th}, engine.Kids{}, engine.Limits{}, api.ThreadCreate{Parent: parent.th.ID}); !errors.As(err, &rej) {
 		t.Errorf("a child of a settled thread: %v, want a rejection", err)
+	}
+}
+
+// A run turns uncertain for a reason its event names: the user's second
+// stop, a restart that found no agent, one that couldn't ask its provider,
+// or a restored database. A child's parent hears its child waits on the
+// user, unless the user stopped it.
+func TestAnUncertainRunSaysWhy(t *testing.T) {
+	parent := newThread(t)
+	observe := func(f *thread, o engine.Observation) ([]engine.Event, []engine.Effect) {
+		t.Helper()
+		evs, effects, err := engine.Observe(f.th, o, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f.fold(evs), effects
+	}
+	for _, tc := range []struct {
+		name   string
+		lose   func(f *thread, run api.ID) ([]engine.Event, []engine.Effect)
+		reason api.UncertainReason
+	}{
+		{"stopped twice", func(f *thread, run api.ID) ([]engine.Event, []engine.Effect) {
+			f.must(api.TurnInterrupt{})
+			f.observe(engine.InterruptSent{Run: run})
+			evs, effects, err := engine.Decide(f.th, api.Command{ID: api.NewID(), Target: f.th.ID, Body: api.TurnInterrupt{}}, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return f.fold(evs), effects
+		}, api.UncertainStopped},
+		{"restarted", func(f *thread, run api.ID) ([]engine.Event, []engine.Effect) {
+			return observe(f, engine.Reconciled{Run: run})
+		}, api.UncertainRestarted},
+		{"unconfirmed", func(f *thread, run api.ID) ([]engine.Event, []engine.Effect) {
+			return observe(f, engine.Reconciled{Run: run, Failed: true})
+		}, api.UncertainUnconfirmed},
+		{"rewound", func(f *thread, run api.ID) ([]engine.Event, []engine.Effect) { return observe(f, engine.Rewound{}) }, api.UncertainRewound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := child(t, parent.th)
+			run := c.must(dispatch("go", api.StartNow))
+			c.observe(engine.Started{Run: run})
+			evs, effects := tc.lose(c, run)
+			var got []api.TurnUncertain
+			for _, e := range evs {
+				if u, ok := e.Body.(api.TurnUncertain); ok {
+					got = append(got, u)
+				}
+			}
+			if len(got) != 1 || got[0].Run != run || got[0].Reason != tc.reason {
+				t.Errorf("turn.uncertain %+v, want one for run %v, %v", got, run, tc.reason)
+			}
+			blocked := slices.ContainsFunc(effects, func(e engine.Effect) bool {
+				r, ok := e.(engine.ReportToParent)
+				return ok && r.Kind == api.ReportBlocked && r.Run == run
+			})
+			if want := tc.reason != api.UncertainStopped; blocked != want {
+				t.Errorf("the parent heard its child waits on the user: %v, want %v", blocked, want)
+			}
+		})
 	}
 }

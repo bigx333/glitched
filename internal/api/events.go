@@ -173,11 +173,31 @@ type TurnRestored struct {
 	Run ID `json:"run"`
 }
 
-// TurnUncertain: after a restart nobody can prove what the agent is doing.
-// The run blocks the thread until the user ends it.
+// TurnUncertain: nobody can prove what the agent is doing, for Reason.
+// The run blocks the thread until the user ends or replaces it.
 type TurnUncertain struct {
-	Run ID `json:"run"`
+	Run    ID              `json:"run"`
+	Reason UncertainReason `json:"reason,omitzero"`
 }
+
+// UncertainReason is why a run became uncertain.
+type UncertainReason uint8
+
+const (
+	// UncertainUnknown is a run logged uncertain before reasons were.
+	UncertainUnknown UncertainReason = iota
+	// UncertainStopped: the user stopped a run whose agent took the first
+	// stop and never ended, or the stop never reached its agent.
+	UncertainStopped
+	// UncertainRestarted: the engine restarted, and its provider said no
+	// agent of the run is left.
+	UncertainRestarted
+	// UncertainUnconfirmed: the engine restarted, and its provider couldn't
+	// say whether the run's agent is left: it may still be working.
+	UncertainUnconfirmed
+	// UncertainRewound: the database was restored to before the run's end.
+	UncertainRewound
+)
 
 type AssistantDelta struct {
 	Run  ID     `json:"run"`
