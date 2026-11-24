@@ -596,7 +596,7 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 			return nil, err
 		}
 		return plugins.Pending(func(done func(any, error)) {
-			a.backend.Skills(t.env, t.id(), func(l api.SkillList, err error) { done(l, err) })
+			a.backend.Skills(t.env, t.id(), true, func(l api.SkillList, err error) { done(l, err) })
 		}), nil
 	case "threads.configure":
 		return a.configureEffect(e.Args)

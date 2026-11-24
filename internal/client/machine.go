@@ -77,6 +77,9 @@ func (m *Manager) Configure(change func(*daemon.Config)) error {
 	for _, a := range cfg.Listen {
 		m.machine.Listeners = append(m.machine.Listeners, daemon.Listener{Addr: a})
 	}
+	if was.SyncSkillsEnabled() != cfg.SyncSkillsEnabled() {
+		m.resync()
+	}
 	was.Children = cfg.Children
 	was.CompactBeforeExpire = cfg.CompactBeforeExpire
 	was.KeepAwake = cfg.KeepAwake

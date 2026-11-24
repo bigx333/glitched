@@ -37,7 +37,7 @@ func TestSkillsOfAnOlderEngineAreTooOld(t *testing.T) {
 	online(t, g, env)
 	var got error
 	ended := false
-	m.Skills(env, api.NewID(), func(_ api.SkillList, err error) { got, ended = err, true })
+	m.Skills(env, api.NewID(), true, func(_ api.SkillList, err error) { got, ended = err, true })
 	g.until(t, "the answer", func() bool { return ended })
 	if !errors.Is(got, ErrTooOld) {
 		t.Fatalf("an older engine's skills: %v, want ErrTooOld", got)
