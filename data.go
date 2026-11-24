@@ -191,10 +191,13 @@ type entry struct {
 	reports []client.ReportEntry
 }
 
-// fileChange is a file the agent's edits name, and when they last moved.
+// fileChange is a file the agent's edits name, when they last moved, and
+// when the last of them to finish did: an edit under way has started and
+// not yet changed the file.
 type fileChange struct {
-	path  string
-	stamp time.Time
+	path   string
+	stamp  time.Time
+	edited time.Time
 }
 
 // entriesOf is what the timeline lists of a thread: its transcript, the
@@ -610,6 +613,9 @@ func addFiles(files []fileChange, at map[string]int, es []entry) []fileChange {
 				if t.After(files[i].stamp) {
 					files[i].stamp = t
 				}
+			}
+			if w.Ended.After(files[i].edited) {
+				files[i].edited = w.Ended
 			}
 		}
 	}
