@@ -561,15 +561,6 @@ func (h *Host) perform(e store.Effect) {
 	if _, ok := e.Body.(engine.StartTurn); ok && h.waitsOnRevert(e) {
 		return
 	}
-	var answering *liveRun
-	if b, ok := e.Body.(engine.DeliverAnswer); ok && !isAsk(b.Dedup) {
-		answering = h.delivering(b.Run)
-		defer func() {
-			if answering != nil {
-				h.delivered(answering)
-			}
-		}()
-	}
 	var lr *liveRun
 	if b, ok := e.Body.(engine.StartTurn); ok {
 		// Tracked before the check, so a stop that commits after it still
@@ -615,12 +606,19 @@ func (h *Host) perform(e store.Effect) {
 		}
 		return
 	}
+	// Only an answer that is given holds the turn's end.
+	var answering *liveRun
+	if b, ok := e.Body.(engine.DeliverAnswer); ok && !isAsk(b.Dedup) {
+		answering = h.delivering(b.Run)
+	}
 	o, ok := h.call(e, t, lr)
 	if !ok {
+		if answering != nil {
+			h.delivered(answering)
+		}
 		return
 	}
 	if a := answering; a != nil {
-		answering = nil
 		// A turn that ended as its answer went waits for the answer's
 		// receipt, tried once, so a store that won't take it doesn't hold
 		// the turn. An answer that failed after the agent ended its turn
