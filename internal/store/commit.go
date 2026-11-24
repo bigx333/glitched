@@ -51,6 +51,19 @@ func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Inte
 				return nil, nil, err
 			}
 		}
+		if c.Caller != nil && t.Exists() {
+			line, err := lineOf(ctx, q, c.Target)
+			if err != nil {
+				return nil, nil, err
+			}
+			userLast, err := steeredByUser(ctx, q, c.Target)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := engine.CheckCaller(line, *c.Caller, userLast); err != nil {
+				return nil, nil, err
+			}
+		}
 		if b, ok := c.Body.(api.ThreadConfigure); ok && !t.Parent.IsZero() {
 			parent, err := loadThread(ctx, q, t.Parent)
 			if err != nil {
@@ -98,6 +111,19 @@ func (s *Store) CheckChild(ctx context.Context, b api.ThreadCreate) error {
 	lim := s.limits
 	s.mu.Unlock()
 	return engine.CheckChild(line, kids, lim, b)
+}
+
+// steeredByUser is whether the user sent thread's last message or stop:
+// one no agent sent, a child's report that wakes it aside.
+func steeredByUser(ctx context.Context, q querier, thread api.ID) (bool, error) {
+	var by sql.NullString
+	err := q.QueryRowContext(ctx, `SELECT json_extract(payload, '$.by') FROM events WHERE thread = ?
+		AND (type = 'turn.stopping' OR type = 'message.queued' AND json_extract(payload, '$.report') IS NULL AND json_extract(payload, '$.silent') IS NULL)
+		ORDER BY seq DESC LIMIT 1`, thread[:]).Scan(&by)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return !by.Valid, err
 }
 
 // Committed is whether a command under id was committed.

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,6 +34,21 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 		return nil, nil, api.ErrRevision
 	}
 	d := &decision{t: t, thread: c.Target, at: now}
+	if c.Caller != nil {
+		switch b := c.Body.(type) {
+		case api.MessageDispatch:
+		case api.TurnInterrupt:
+			if b.Drop {
+				return nil, nil, rejected("an agent can't drop the messages waiting in a thread")
+			}
+			if r := t.Live(); r != nil && r.State == RunUncertain {
+				return nil, nil, rejected("the thread's run didn't answer its stop, and only the user can end it")
+			}
+		default:
+			return nil, nil, rejected("an agent can only message or stop a thread under its own")
+		}
+		d.by = c.Caller.Thread
+	}
 	var err error
 	switch b := c.Body.(type) {
 	case api.ThreadCreate:
@@ -143,7 +159,8 @@ type decision struct {
 	at      time.Time
 	events  []Event
 	effects []Effect
-	resumed bool // the user resumed the queue: settle starts the wakes after a stop
+	resumed bool   // the user resumed the queue: settle starts the wakes after a stop
+	by      api.ID // the thread whose agent sent the command; zero for the user
 }
 
 func (d *decision) emit(b api.EventBody) error {
@@ -180,7 +197,7 @@ func (d *decision) create(id api.ID, c api.ThreadCreate) error {
 	if c.Text == "" {
 		return nil
 	}
-	if err := d.emit(api.MessageQueued{Message: id, Text: c.Text, Mode: api.StartNow}); err != nil {
+	if err := d.emit(api.MessageQueued{Message: id, Text: c.Text, Mode: api.StartNow, By: c.Parent}); err != nil {
 		return err
 	}
 	return d.admit(id)
@@ -257,6 +274,28 @@ func CheckChild(line []Thread, kids Kids, lim Limits, c api.ThreadCreate) error 
 	return nil
 }
 
+// CheckCaller checks c, an agent's run, against line, the thread it acts
+// on and those above it, and userLast, whether the user sent the thread's
+// last message or stop: c's thread is above it and c's run is that
+// thread's live run, still steerable, and the user hasn't taken the
+// thread over.
+func CheckCaller(line []Thread, c api.Caller, userLast bool) error {
+	i := slices.IndexFunc(line, func(t Thread) bool { return t.ID == c.Thread })
+	if i < 1 {
+		return rejected("an agent can only act on a thread under its own")
+	}
+	if line[i].Deleted || line[i].settled() {
+		return rejected("the agent's thread is settled or gone")
+	}
+	if live := line[i].Live(); live == nil || live.ID != c.Run || !steerable[live.State] {
+		return rejected("only the live run of the thread above can act on it, and not once it is stopping")
+	}
+	if userLast {
+		return rejected("the user took this thread over: its last message or stop was theirs, so it's theirs to steer")
+	}
+	return nil
+}
+
 func ceiling() api.Access { return api.AccessFull }
 
 func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
@@ -296,7 +335,7 @@ func (d *decision) dispatch(id api.ID, m api.MessageDispatch) error {
 	}
 	// A start now on a busy thread goes first in its queue: it starts the
 	// moment the run ends, and stops nothing.
-	q := api.MessageQueued{Message: id, Text: m.Text, Mode: m.Mode, Pos: d.t.pos(false), Held: m.Mode == api.Defer}
+	q := api.MessageQueued{Message: id, Text: m.Text, Mode: m.Mode, Pos: d.t.pos(false), Held: m.Mode == api.Defer, By: d.by}
 	if m.Mode == api.RestartActive || m.Mode == api.StartNow && d.t.Live() != nil {
 		q.Pos = d.t.pos(true)
 	}
@@ -478,7 +517,7 @@ func (d *decision) stop(r Run) error {
 		d.checkpoint(r.ID, api.CheckpointRun)
 		return nil
 	}
-	if err := d.emit(api.TurnStopping{Run: r.ID}); err != nil {
+	if err := d.emit(api.TurnStopping{Run: r.ID, By: d.by}); err != nil {
 		return err
 	}
 	d.effects = append(d.effects, InterruptTurn{Run: r.ID})
