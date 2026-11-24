@@ -31,7 +31,11 @@ func (s *Store) Submit(ctx context.Context, c api.Command, now time.Time) (api.R
 // conflicts.
 func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Intent, now time.Time) (api.Receipt, error) {
 	c.Expires = c.Expires.UTC()
-	wire, err := json.Marshal(c)
+	// A caller's run is checked, not kept: the same command sent again by
+	// its agent's next turn gets the receipt the first took.
+	kept := c
+	kept.Caller = nil
+	wire, err := json.Marshal(kept)
 	if err != nil {
 		return api.Receipt{}, &api.RejectedError{Reason: err.Error()}
 	}
@@ -86,8 +90,22 @@ func (s *Store) SubmitResolved(ctx context.Context, c api.Command, body api.Inte
 		}
 		var steps []step
 		for _, id := range below {
+			// An agent's stop of a tree leaves the threads the user took
+			// over, and the runs only the user can end, to the user.
+			if c.Caller != nil {
+				theirs, err := steeredByUser(ctx, q, id)
+				if err != nil {
+					return nil, err
+				}
+				if theirs {
+					continue
+				}
+			}
 			steps = append(steps, step{id, func(_ querier, t engine.Thread) ([]engine.Event, []engine.Effect, error) {
-				return engine.Decide(t, api.Command{ID: c.ID, Target: id, Body: engine.Below(c.Body, t)}, now)
+				if r := t.Live(); c.Caller != nil && r != nil && r.State == engine.RunUncertain {
+					return nil, nil, nil
+				}
+				return engine.Decide(t, api.Command{ID: c.ID, Target: id, Body: engine.Below(c.Body, t), Caller: c.Caller}, now)
 			}})
 		}
 		return append(steps, top), nil
@@ -113,12 +131,13 @@ func (s *Store) CheckChild(ctx context.Context, b api.ThreadCreate) error {
 	return engine.CheckChild(line, kids, lim, b)
 }
 
-// steeredByUser is whether the user sent thread's last message or stop:
-// one no agent sent, a child's report that wakes it aside.
+// steeredByUser is whether the user sent thread's last message or asked
+// its last stop: one no agent sent, a child's report that wakes it and
+// the engine's own stops aside.
 func steeredByUser(ctx context.Context, q querier, thread api.ID) (bool, error) {
 	var by sql.NullString
 	err := q.QueryRowContext(ctx, `SELECT json_extract(payload, '$.by') FROM events WHERE thread = ?
-		AND (type = 'turn.stopping' OR type = 'message.queued' AND json_extract(payload, '$.report') IS NULL AND json_extract(payload, '$.silent') IS NULL)
+		AND (type = 'stop.asked' OR type = 'message.queued' AND json_extract(payload, '$.report') IS NULL AND json_extract(payload, '$.silent') IS NULL)
 		ORDER BY seq DESC LIMIT 1`, thread[:]).Scan(&by)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil

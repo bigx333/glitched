@@ -37,6 +37,9 @@ func Decide(t Thread, c api.Command, now time.Time) ([]Event, []Effect, error) {
 	if c.Caller != nil {
 		switch b := c.Body.(type) {
 		case api.MessageDispatch:
+			if b.Mode != api.AfterActive && b.Mode != api.SteerActive {
+				return nil, nil, rejected("an agent's message to a thread under its own goes after its run or into it")
+			}
 		case api.TurnInterrupt:
 			if b.Drop {
 				return nil, nil, rejected("an agent can't drop the messages waiting in a thread")
@@ -96,6 +99,8 @@ func TakesTree(b api.Intent) bool {
 		return b.Disposition.State == api.Settled
 	case api.ThreadConfigure:
 		return b.Access != nil
+	case api.TurnInterrupt:
+		return b.Tree
 	}
 	return false
 }
@@ -110,6 +115,10 @@ func Below(b api.Intent, t Thread) api.Intent {
 			below.Access = new(min(t.Access, *c.Access))
 		}
 		return below
+	}
+	if i, ok := b.(api.TurnInterrupt); ok {
+		i.Tree = false
+		return i
 	}
 	return b
 }
@@ -277,8 +286,8 @@ func CheckChild(line []Thread, kids Kids, lim Limits, c api.ThreadCreate) error 
 // CheckCaller checks c, an agent's run, against line, the thread it acts
 // on and those above it, and userLast, whether the user sent the thread's
 // last message or stop: c's thread is above it and c's run is that
-// thread's live run, still steerable, and the user hasn't taken the
-// thread over.
+// thread's live run, still steerable and not a silent one, and the user
+// hasn't taken the thread over.
 func CheckCaller(line []Thread, c api.Caller, userLast bool) error {
 	i := slices.IndexFunc(line, func(t Thread) bool { return t.ID == c.Thread })
 	if i < 1 {
@@ -287,7 +296,7 @@ func CheckCaller(line []Thread, c api.Caller, userLast bool) error {
 	if line[i].Deleted || line[i].settled() {
 		return rejected("the agent's thread is settled or gone")
 	}
-	if live := line[i].Live(); live == nil || live.ID != c.Run || !steerable[live.State] {
+	if live := line[i].Live(); live == nil || live.ID != c.Run || !steerable[live.State] || live.Silent {
 		return rejected("only the live run of the thread above can act on it, and not once it is stopping")
 	}
 	if userLast {
@@ -478,6 +487,16 @@ func (d *decision) interrupt(drop bool) error {
 		}
 	}
 	r := d.t.Live()
+	// An agent stops a run that runs: one already stopping is the user's
+	// to give up on.
+	if !d.by.IsZero() && r != nil && r.State == RunStopping {
+		return nil
+	}
+	if r != nil && !r.Silent {
+		if err := d.emit(api.StopAsked{Run: r.ID, By: d.by}); err != nil {
+			return err
+		}
+	}
 	if r != nil && !r.Silent && !drop {
 		if err := d.hold(); err != nil {
 			return err
@@ -517,7 +536,7 @@ func (d *decision) stop(r Run) error {
 		d.checkpoint(r.ID, api.CheckpointRun)
 		return nil
 	}
-	if err := d.emit(api.TurnStopping{Run: r.ID, By: d.by}); err != nil {
+	if err := d.emit(api.TurnStopping{Run: r.ID}); err != nil {
 		return err
 	}
 	d.effects = append(d.effects, InterruptTurn{Run: r.ID})

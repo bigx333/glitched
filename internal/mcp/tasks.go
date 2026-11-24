@@ -38,7 +38,7 @@ var taskCatalog = []map[string]any{{
 	},
 }, {
 	"name": taskCancel,
-	"description": "Stop one task of this thread's and every thread under it. Their waiting messages are held, not dropped, and a task_send to the task releases them; the threads and any worktree stay. A stopped turn sends no report. " +
+	"description": "Stop one task of this thread's and every thread under it, in one step; a thread under it the user took over stays theirs. Their waiting messages are held, not dropped, and a task_send to the task releases them; the threads and any worktree stay. A stopped turn sends no report. " +
 		"A task the user took over (its last message or stop was the user's) is theirs to stop, and this refuses.",
 	"inputSchema": map[string]any{
 		"type":                 "object",
@@ -77,8 +77,9 @@ type TaskState struct {
 	// Waiting is what it waits on the user for: approval or question.
 	Waiting []string `json:"waiting_on_user_for,omitempty"`
 	Queued  int      `json:"messages_waiting,omitempty"`
-	// Held is whether a stop holds what waits, till a message releases it.
-	Held       bool   `json:"held,omitempty"`
+	// Resumable is whether a task_send would start what a stop held: the
+	// task is idle and holds it.
+	Resumable  bool   `json:"resumable,omitempty"`
 	LastReport string `json:"last_report,omitempty"`
 }
 
@@ -92,13 +93,21 @@ type taskArgs struct {
 // tasks runs one task tool for the origin's thread.
 func (t *Tools) tasks(ctx context.Context, name string, raw json.RawMessage, toolUse string) (any, error) {
 	var in taskArgs
+	var err error
 	if len(raw) == 0 {
 		raw = json.RawMessage("{}")
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&in); err != nil {
+	if err = dec.Decode(&in); err != nil {
 		return nil, fmt.Errorf("%s: %v", name, err)
+	}
+	// An acting call is the turn's that runs as it starts.
+	var caller api.Caller
+	if name == taskCancel || name == taskSend {
+		if caller, err = t.caller(ctx, name); err != nil {
+			return nil, err
+		}
 	}
 	snap, err := t.Engine.Read(ctx, api.Query{})
 	if err != nil {
@@ -127,7 +136,7 @@ func (t *Tools) tasks(ctx context.Context, name string, raw json.RawMessage, too
 	case taskStatus:
 		return state(task, snap.Threads, reports[task.ID]), nil
 	case taskCancel:
-		return t.cancel(ctx, task, snap.Threads, reports, cmp.Or(in.RequestID, toolUse, api.NewID().String()))
+		return t.cancel(ctx, caller, task, reports, cmp.Or(in.RequestID, toolUse, api.NewID().String()))
 	}
 	if strings.TrimSpace(in.Message) == "" {
 		return nil, errors.New("task_send: message is empty")
@@ -140,10 +149,6 @@ func (t *Tools) tasks(ctx context.Context, name string, raw json.RawMessage, too
 	default:
 		return nil, fmt.Errorf("task_send: mode is queue or steer, not %q", in.Mode)
 	}
-	caller, err := t.caller(ctx, name)
-	if err != nil {
-		return nil, err
-	}
 	key := cmp.Or(in.RequestID, toolUse, api.NewID().String())
 	_, err = t.Engine.Submit(ctx, api.Command{ID: derive(t.Origin.Thread, "send", key), Target: task.ID, Caller: &caller, Body: api.MessageDispatch{Text: in.Message, Mode: mode}})
 	if errors.Is(err, api.ErrConflict) && in.RequestID != "" {
@@ -155,31 +160,12 @@ func (t *Tools) tasks(ctx context.Context, name string, raw json.RawMessage, too
 	return map[string]any{"task_id": task.ID.String(), "sent": true}, nil
 }
 
-// cancel stops task's run and then the runs under it, each a command of
-// the origin's live run, retried as the same commands under key.
-func (t *Tools) cancel(ctx context.Context, task api.Thread, threads []api.Thread, reports map[api.ID]string, key string) (TaskState, error) {
-	caller, err := t.caller(ctx, taskCancel)
-	if err != nil {
-		return TaskState{}, err
-	}
-	stop := func(th api.Thread) error {
-		_, err := t.Engine.Submit(ctx, api.Command{ID: derive(t.Origin.Thread, "cancel/"+th.ID.String(), key), Target: th.ID, Caller: &caller, Body: api.TurnInterrupt{}})
-		return refusal(err)
-	}
-	if err := stop(task); err != nil {
-		return TaskState{}, fmt.Errorf("task_cancel: %w", err)
-	}
-	var failed []string
-	for _, th := range under(threads, task.ID) {
-		if th.Run == api.RunIdle || th.Silent() {
-			continue
-		}
-		if err := stop(th); err != nil {
-			failed = append(failed, fmt.Sprintf("%q: %v", th.Title, err))
-		}
-	}
-	if len(failed) > 0 {
-		return TaskState{}, fmt.Errorf("task_cancel: the task stopped, but not every thread under it: %s", strings.Join(failed, "; "))
+// cancel stops task's run and every run under it in one commit, a
+// command of the origin's live run, retried as the same command under key.
+// What the user took over stays theirs.
+func (t *Tools) cancel(ctx context.Context, caller api.Caller, task api.Thread, reports map[api.ID]string, key string) (TaskState, error) {
+	if _, err := t.Engine.Submit(ctx, api.Command{ID: derive(t.Origin.Thread, "cancel", key), Target: task.ID, Caller: &caller, Body: api.TurnInterrupt{Tree: true}}); err != nil {
+		return TaskState{}, fmt.Errorf("task_cancel: %w", refusal(err))
 	}
 	snap, err := t.Engine.Read(ctx, api.Query{})
 	if err != nil {
@@ -229,7 +215,7 @@ func (t *Tools) reports(ctx context.Context) (map[api.ID]string, error) {
 
 // state is th as a task, among threads, with report its last.
 func state(th api.Thread, threads []api.Thread, report string) TaskState {
-	s := TaskState{TaskID: th.ID.String(), Title: th.Title, Branch: th.Branch, Queued: th.Queued, Held: th.Resumable, LastReport: report}
+	s := TaskState{TaskID: th.ID.String(), Title: th.Title, Branch: th.Branch, Queued: th.Queued, Resumable: th.Resumable, LastReport: report}
 	for _, r := range th.Requests {
 		s.Waiting = append(s.Waiting, r.Kind)
 	}

@@ -109,8 +109,14 @@ type TurnStarted struct {
 // TurnStopping: an interrupt was sent. Open requests of the run are void.
 type TurnStopping struct {
 	Run ID `json:"run"`
-	// By is the thread whose agent stopped the run; zero for the user.
-	By ID `json:"by,omitzero"`
+}
+
+// StopAsked: someone asked the live run to stop, as the user's Stop or an
+// agent's task_cancel, whatever the run then did. By is the thread whose
+// agent asked; zero for the user. The engine's own stops ask nothing.
+type StopAsked struct {
+	Run ID `json:"run"`
+	By  ID `json:"by,omitzero"`
 }
 
 // TurnSignalled: the run's stop took: its interrupt reached the agent, or
@@ -338,6 +344,7 @@ func (MessageReleased) eventType() string     { return "message.released" }
 func (TurnAdmitted) eventType() string        { return "turn.admitted" }
 func (TurnStarted) eventType() string         { return "turn.started" }
 func (TurnStopping) eventType() string        { return "turn.stopping" }
+func (StopAsked) eventType() string           { return "stop.asked" }
 func (TurnSignalled) eventType() string       { return "turn.signalled" }
 func (TurnEnded) eventType() string           { return "turn.ended" }
 func (TurnRestored) eventType() string        { return "turn.restored" }
@@ -374,6 +381,7 @@ func init() {
 	register[TurnAdmitted]()
 	register[TurnStarted]()
 	register[TurnStopping]()
+	register[StopAsked]()
 	register[TurnSignalled]()
 	register[TurnEnded]()
 	register[TurnRestored]()
