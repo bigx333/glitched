@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"glitched/internal/api"
 	"glitched/internal/engine"
@@ -39,7 +40,130 @@ func (h *Host) revertInWorktree(ctx context.Context, c api.Command) (api.Receipt
 	if err := h.revertable(ctx, t, api.Thread.Live, func(api.Thread) bool { return true }); err != nil {
 		return api.Receipt{}, &api.RejectedError{Reason: err.Error()}
 	}
-	return h.store.Submit(ctx, c, h.clock())
+	store, target, release, err := h.reserve(ctx, t, c)
+	if err != nil {
+		return api.Receipt{}, err
+	}
+	defer release()
+	var receipt api.Receipt
+	saved, err := h.confirmFiles(ctx, t, c, store, target)
+	if err != nil {
+		err = &api.RejectedError{Reason: err.Error()}
+	} else {
+		checkpointHook(ctx, "saved")
+		receipt, err = h.store.Submit(ctx, c, h.clock())
+	}
+	if saved && err != nil {
+		if committed, again := h.store.Committed(h.drain, c.ID); again == nil && !committed {
+			if unlock, again := h.checkpoints.lock(h.drain, store); again == nil {
+				forgetConfirmation(h.drain, store, t.ID, c.ID)
+				unlock()
+			}
+		}
+	}
+	return receipt, err
+}
+
+// reserve registers c among the confirmations, and finds the store and the
+// commit of its target, "" where none is saved, under that store's lock,
+// as the sweep reads the confirmations: a sweep either saw c, and keeps
+// what c is to put back, or had ended when c looked, and c finds what it
+// left. A recovery and a plan an earlier attempt at c saved are c's only
+// once c committed; else c drops them, to save the files as they are now.
+// release forgets c.
+func (h *Host) reserve(ctx context.Context, t engine.Thread, c api.Command) (store, target string, release func(), err error) {
+	checkpointHook(ctx, "reserving")
+	to := c.Body.(api.ThreadRevert).To
+	for {
+		unlock := func() {}
+		if h.checkpoints != nil {
+			if _, store, err = h.checkpointAt(ctx, t.ID, to); err != nil && ctx.Err() != nil {
+				return "", "", nil, ctx.Err()
+			}
+		}
+		if store != "" {
+			if unlock, err = h.checkpoints.lock(ctx, store); err != nil {
+				return "", "", nil, err
+			}
+		}
+		h.mu.Lock()
+		other := h.confirming[c.ID].done
+		if other == nil {
+			done := make(chan struct{})
+			h.confirming[c.ID] = confirmation{thread: t.ID, to: to, done: done}
+			release = func() {
+				h.mu.Lock()
+				delete(h.confirming, c.ID)
+				close(done)
+				h.mu.Unlock()
+			}
+		}
+		h.mu.Unlock()
+		if other == nil {
+			defer unlock()
+			break
+		}
+		unlock()
+		select {
+		case <-other:
+		case <-ctx.Done():
+			return "", "", nil, ctx.Err()
+		}
+	}
+	if store == "" {
+		return "", "", release, nil
+	}
+	target, _ = storeGit(ctx, store, "", "", nil, "rev-parse", "--verify", "--quiet", checkpointRef(t.ID, engine.CaptureCheckpoint{Run: to.ID, Phase: to.Phase})+"^{commit}")
+	committed, err := h.store.Committed(ctx, c.ID)
+	switch {
+	case err != nil:
+		release()
+		return "", "", nil, err
+	case committed || target == "":
+		return store, "", release, nil
+	}
+	if err := forgetConfirmation(ctx, store, t.ID, c.ID); err != nil {
+		release()
+		return "", "", nil, err
+	}
+	return store, target, release, nil
+}
+
+// forgetConfirmation deletes the recovery and the plan a confirmation of
+// revert saved in store, whose lock the caller holds.
+func forgetConfirmation(ctx context.Context, store string, thread, revert api.ID) error {
+	update := "delete " + checkpointRef(thread, engine.CaptureCheckpoint{Run: revert, Phase: api.CheckpointRecovery}) + "\ndelete " + applyingRef(thread, revert) + "\n"
+	_, err := storeGit(ctx, store, "", "", []byte(update), "update-ref", "--stdin")
+	return err
+}
+
+// confirmFiles saves the files of t's worktree as they are when the user
+// confirms c, before c commits, in store, which reserve found holds
+// target, c's target: the revert's recovery checkpoint, and the plan of
+// the paths it is to write. The revert, and any replay of it, goes by
+// them, never by the files as they are by then. It saves nothing where
+// reserve found no target, and says whether it saved the recovery there.
+func (h *Host) confirmFiles(ctx context.Context, t engine.Thread, c api.Command, store, target string) (bool, error) {
+	if target == "" {
+		return false, nil
+	}
+	saved, err := h.captureIn(ctx, t, engine.CaptureCheckpoint{Run: c.ID, Phase: api.CheckpointRecovery})
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("the files as they are couldn't be saved first, so nothing changed: %w", err)
+	case saved.Commit == "" || !holdsCommit(ctx, store, saved.Commit):
+		return false, errors.New("the files as they are were saved in another repository's store, so nothing changed")
+	}
+	changes, err := diffTrees(ctx, store, saved.Commit, target)
+	if err != nil {
+		return true, err
+	}
+	top := h.ownsDir(t.ID, t.Workspace)
+	if len(changes) == 0 || inTheWay(ctx, store, top, changes) != nil {
+		return true, nil
+	}
+	_, err = h.markApplying(ctx, store, top, t.ID, c.ID, saved.Commit, changes)
+	return true, err
 }
 
 // revertable is nil when the files of t's worktree are its own to put
@@ -223,7 +347,8 @@ type change struct {
 }
 
 // revertIn rewinds the conversation first, as T3 and Zeron do, once the
-// files are known to be the thread's to put back, so that a rewind that
+// files are known to be the thread's to put back and as the user
+// confirmed them, so that a rewind that
 // fails leaves them as they are: a replay that finds the plan an earlier
 // attempt left, and so may have written some files already, puts the
 // paths it names back as they were. A revert of the files that fails
@@ -231,7 +356,7 @@ type change struct {
 // changes nothing until the revert commits.
 func (h *Host) revertIn(ctx context.Context, t engine.Thread, b engine.RevertThread) (api.ThreadReverted, error) {
 	r := api.ThreadReverted{Revert: b.Revert, To: b.To}
-	var top, target, store string
+	var top, target, store, recovery string
 	if !b.KeepFiles {
 		if h.checkpoints == nil {
 			return r, errors.New("this engine keeps no checkpoints")
@@ -242,6 +367,9 @@ func (h *Host) revertIn(ctx context.Context, t engine.Thread, b engine.RevertThr
 		top = h.ownsDir(t.ID, t.Workspace)
 		var err error
 		if target, store, err = h.checkpointAt(ctx, t.ID, b.To); err != nil {
+			return r, err
+		}
+		if recovery, err = confirmed(ctx, store, top, t.ID, b.Revert, target); err != nil {
 			return r, err
 		}
 	}
@@ -258,46 +386,193 @@ func (h *Host) revertIn(ctx context.Context, t engine.Thread, b engine.RevertThr
 		r.Status = api.RevertKept
 		return r, nil
 	}
-	// The files as they are, first, so that the revert can be undone, and
-	// put back should it fail. A replay finds the one it took: a tree
-	// half put back must never become the recovery.
-	recovery, err := h.captureIn(ctx, t, engine.CaptureCheckpoint{Run: b.Revert, Phase: api.CheckpointRecovery})
-	switch {
-	case err != nil:
-		return r, fmt.Errorf("the files as they are couldn't be saved first, so nothing changed: %w", err)
-	case recovery.Commit == "" || !holdsCommit(ctx, store, recovery.Commit):
-		return r, errors.New("the files as they are were saved in another repository's store, so nothing changed")
-	}
-	r.Recovery = recovery.Commit
+	r.Recovery = recovery
 	checkpointHook(ctx, "recovered")
-	changes, err := diffTrees(ctx, store, recovery.Commit, target)
+	changed, err := h.putBack(ctx, store, top, t.ID, b.Revert, recovery, target)
 	if err != nil {
 		return r, err
 	}
-	if len(changes) == 0 {
+	r.Status, r.Changed = api.RevertRestored, changed
+	if changed == 0 {
 		r.Status = api.RevertUnchanged
-		return r, h.keepRecoveries(ctx, store, t.ID, b)
 	}
-	if err := inTheWay(ctx, store, top, changes); err != nil {
-		return r, err
+	return r, h.keepRecoveries(ctx, store, t.ID, b)
+}
+
+// putBack puts top's files as target has them, from recovery, the files
+// the user confirmed revert with, and reports how many paths it changed.
+// It writes only the paths of the revert's plan: a path that held the
+// target's already when the user confirmed, as an ignored file can, it
+// leaves as it is since. A revert that fails puts back what it wrote, as
+// undo does.
+func (h *Host) putBack(ctx context.Context, store, top string, thread, revert api.ID, recovery, target string) (int, error) {
+	changes, err := diffTrees(ctx, store, recovery, target)
+	if err != nil || len(changes) == 0 {
+		return 0, err
 	}
-	plan, err := h.markApplying(ctx, store, top, t.ID, b.Revert, recovery.Commit, changes)
+	plan, err := h.markApplying(ctx, store, top, thread, revert, recovery, changes)
 	if err != nil {
-		return r, err
+		return 0, err
 	}
 	checkpointHook(ctx, "planned")
-	if err := restore(ctx, store, top, b.Revert, target, changes); err != nil {
+	if err := restore(ctx, store, top, revert, target, plan); err != nil {
 		if ctx.Err() != nil {
-			return r, err
+			return 0, err
 		}
-		if again := undo(ctx, store, top, b.Revert, recovery.Commit, plan); again != nil {
-			return r, fmt.Errorf("%w; putting the files back as they were failed too: %v", err, again)
+		if again := undo(ctx, store, top, revert, recovery, plan); again != nil {
+			return 0, fmt.Errorf("%w; putting the files back as they were failed too: %v", err, again)
 		}
-		return r, fmt.Errorf("%w; the files were put back as they were", err)
+		return 0, fmt.Errorf("%w; the files were put back as they were", err)
 	}
 	checkpointHook(ctx, "applied")
-	r.Status, r.Changed = api.RevertRestored, len(changes)
-	return r, h.keepRecoveries(ctx, store, t.ID, b)
+	return len(plan), nil
+}
+
+// confirmed is the recovery checkpoint the user confirmed revert to
+// target with, once top's files are as they were then, but for those the
+// revert's journal says it wrote since and those that hold the target's
+// already. A path the plan left out as the target's already when the user
+// confirmed, as an ignored file can be, must still be. Where they aren't, someone changed them after the user
+// confirmed, and the revert must not count those changes as what it puts
+// back: it puts back what an earlier attempt wrote, leaves the rest as it
+// is, and fails naming what changed.
+func confirmed(ctx context.Context, store, top string, thread, revert api.ID, target string) (string, error) {
+	recovery, err := storeGit(ctx, store, "", "", nil, "rev-parse", "--verify", "--quiet", checkpointRef(thread, engine.CaptureCheckpoint{Run: revert, Phase: api.CheckpointRecovery})+"^{commit}")
+	if err != nil {
+		return "", cmp.Or(ctx.Err(), errors.New("the files weren't saved when the revert was confirmed, so nothing changed"))
+	}
+	found, plan, err := readPlan(ctx, store, applyingRef(thread, revert))
+	switch {
+	case err != nil:
+		return "", err
+	case found != "" && found != recovery:
+		return "", fmt.Errorf("the revert's plan follows %s, not the recovery checkpoint %s saved when it was confirmed, so nothing changed", found, recovery)
+	}
+	changes, err := diffTrees(ctx, store, recovery, target)
+	if err != nil {
+		return "", err
+	}
+	changed, err := changedSince(ctx, store, top, revert, recovery, changes)
+	for _, c := range changes {
+		if found != "" && !slices.ContainsFunc(plan, func(p change) bool { return p.path == c.path }) && !atTarget(ctx, store, top, c) && !slices.Contains(changed, c.path) {
+			changed = append(changed, c.path)
+		}
+	}
+	slices.Sort(changed)
+	var why string
+	switch {
+	case ctx.Err() != nil:
+		return "", ctx.Err()
+	case err != nil:
+		why = "the files couldn't be compared with those saved when the revert was confirmed: " + err.Error()
+	case len(changed) > 0:
+		why = strings.Join(changed, ", ") + " changed since the revert was confirmed"
+	default:
+		if err := inTheWay(ctx, store, top, changes); err != nil {
+			why = strings.TrimSuffix(err.Error(), ", so nothing changed")
+		}
+	}
+	if why == "" {
+		return recovery, nil
+	}
+	again := "; revert again to start from the files as they are now"
+	last, err := readJournal(journalOf(store, revert))
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("%s; the journal of an earlier attempt couldn't be read, so the files it restored were left as they are: %v", why, err)
+	case found == "":
+		return "", errors.New(why + ", so nothing changed" + again)
+	}
+	if err := undo(ctx, store, top, revert, recovery, plan); err != nil && len(last) == 0 {
+		return "", fmt.Errorf("%s; with no change of an earlier attempt's on record, these were left as they are too: %v", why, err)
+	} else if err != nil {
+		return "", fmt.Errorf("%s; putting back the files an earlier attempt restored failed too: %v", why, err)
+	}
+	if len(last) == 0 {
+		return "", errors.New(why + ", so nothing changed" + again)
+	}
+	return "", errors.New(why + ", so nothing changed: the files an earlier attempt restored were put back as they were" + again)
+}
+
+// changedSince lists the paths whose files in top differ from recovery's,
+// as a checkpoint lists them, and those revert's journal names that don't
+// hold what its last step left there, as a file it deleted that someone
+// put back. It leaves out those whose last step left them as they are,
+// and those of to, the changes from recovery to the target, that hold the
+// target's already, which the revert leaves as they are: a file a deleted
+// .gitignore no longer hides, say.
+func changedSince(ctx context.Context, store, top string, revert api.ID, recovery string, to []change) ([]string, error) {
+	paths, err := checkpointPaths(ctx, top, &api.CheckpointCaptured{})
+	if err != nil {
+		return nil, err
+	}
+	index := filepath.Join(store, "confirmed-"+revert.String()+".index")
+	clean := func() {
+		os.Remove(index)
+		os.Remove(index + ".lock")
+	}
+	clean()
+	defer clean()
+	tree, err := writeTree(ctx, store, top, index, paths)
+	if err != nil {
+		return nil, err
+	}
+	diff, err := storeGit(ctx, store, "", "", nil, "diff-tree", "-r", "-z", "--no-renames", "--name-only", recovery, tree)
+	if err != nil {
+		return nil, err
+	}
+	last, err := readJournal(journalOf(store, revert))
+	if err != nil {
+		return nil, err
+	}
+	names := slices.DeleteFunc(strings.Split(diff, "\x00"), func(name string) bool { return name == "" })
+	for name := range last {
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	var changed []string
+	for _, name := range names {
+		path := filepath.Join(top, name)
+		if stepHolds(ctx, store, path, last[name]) {
+			continue
+		}
+		if i := slices.IndexFunc(to, func(c change) bool { return c.path == name }); i >= 0 && atTarget(ctx, store, top, to[i]) {
+			continue
+		}
+		changed = append(changed, name)
+	}
+	return changed, nil
+}
+
+// atTarget is whether c's path in top is as c's to-side has it.
+func atTarget(ctx context.Context, store, top string, c change) bool {
+	path := filepath.Join(top, c.path)
+	if c.mode == "" {
+		_, err := os.Lstat(path)
+		return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+	}
+	done, _ := isBlob(ctx, store, path, c)
+	return done
+}
+
+// stepHolds is whether path holds what step s of a journal left there.
+func stepHolds(ctx context.Context, store, path string, s step) bool {
+	fi, err := os.Lstat(path)
+	switch s.kind {
+	case wroteFile:
+		if err != nil || fi.IsDir() {
+			return false
+		}
+		mode, blob, err := blobAt(ctx, store, path)
+		return err == nil && mode == s.mode && blob == s.blob && fi.Size() == s.size && fi.ModTime().UnixNano() == s.mtime
+	case deletedFile, removedFolder:
+		return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+	case madeFolder:
+		return err == nil && fi.IsDir()
+	}
+	return false
 }
 
 // applyingRef is the mark a revert leaves in the store before it writes
@@ -791,8 +1066,9 @@ type applying struct {
 	ctx                         context.Context
 	store, top, staged, journal string
 	undo                        bool
-	// folders are the to-side's folders above the changes' files.
-	folders map[string]bool
+	// folders are the to-side's folders above the changes' files, and
+	// found the from-side's.
+	folders, found map[string]bool
 	// last is each path's last step in the journal.
 	last map[string]step
 	// left are the paths apply refused, each named once.
@@ -804,7 +1080,7 @@ type applying struct {
 // through put. Doing it again does the same. A path put refuses stays as
 // it is, and fails the apply, by name, once the rest are done.
 func apply(ctx context.Context, store, top string, revert api.ID, tree string, changes []change, undo bool) error {
-	a := &applying{ctx: ctx, store: store, top: top, staged: filepath.Join(store, "restore-"+revert.String()), journal: journalOf(store, revert), undo: undo, folders: map[string]bool{}}
+	a := &applying{ctx: ctx, store: store, top: top, staged: filepath.Join(store, "restore-"+revert.String()), journal: journalOf(store, revert), undo: undo, folders: map[string]bool{}, found: map[string]bool{}}
 	var err error
 	if a.last, err = readJournal(a.journal); err != nil {
 		return err
@@ -819,6 +1095,9 @@ func apply(ctx context.Context, store, top string, revert api.ID, tree string, c
 	defer clean()
 	var paths []byte
 	for _, c := range changes {
+		for d := filepath.Dir(c.path); c.was != "" && d != "."; d = filepath.Dir(d) {
+			a.found[filepath.ToSlash(d)] = true
+		}
 		if c.mode == "" {
 			continue
 		}
@@ -946,9 +1225,10 @@ func (a *applying) put(c change) error {
 	dir := fi != nil && fi.IsDir()
 	last := a.last[c.path]
 	// ours is whether a folder at path is one the apply may count as the
-	// to-side's, or remove: forward, any it finds; in an undo, one the
-	// revert made, or one it never touched where the to-side has one.
-	ours := !a.undo || last.kind == madeFolder || last.kind == "" && a.folders[c.path]
+	// to-side's, or remove: forward, one the from-side or the to-side has;
+	// in an undo, one the revert made, or one it never touched where the
+	// to-side has one.
+	ours := !a.undo && (a.found[c.path] || a.folders[c.path]) || a.undo && (last.kind == madeFolder || last.kind == "" && a.folders[c.path])
 	switch {
 	case c.mode != "" && mode == c.mode && blob == c.blob:
 		return nil
@@ -976,6 +1256,9 @@ func (a *applying) put(c change) error {
 		a.refuse(c.path)
 		return nil
 	case fi == nil && a.undo && last.kind != deletedFile && last.kind != removedFolder:
+		a.refuse(c.path)
+		return nil
+	case fi == nil && !a.undo && c.was != "" && last.kind != deletedFile:
 		a.refuse(c.path)
 		return nil
 	case fi == nil:
@@ -1126,9 +1409,15 @@ func copyInto(from string, out *os.File, perm os.FileMode) error {
 	return errors.Join(err, out.Close())
 }
 
-// keepRecoveries deletes thread's recovery checkpoints but the newest
-// keptRecoveries, the one b took, and the one it put back, so that a
-// replay finds them.
+// keepRecoveries deletes the recovery checkpoints and the applying marks
+// of thread's finished reverts, but the newest keptRecoveries of those
+// recoveries, b's among them, b's mark and the checkpoint b put back, so
+// that a replay finds them. The reverts still to run, and those being
+// confirmed, keep their recovery, their mark and the checkpoint they are
+// to put back, none of which counts against keptRecoveries. It reads the reverts being confirmed before those
+// still to run: a confirmation saves its refs only once it is among them
+// and leaves them only once it has committed, so a revert whose refs it
+// lists is in one or the other.
 func (h *Host) keepRecoveries(ctx context.Context, store string, thread api.ID, b engine.RevertThread) error {
 	unlock, err := h.checkpoints.lock(ctx, store)
 	if err != nil {
@@ -1139,23 +1428,47 @@ func (h *Host) keepRecoveries(ctx context.Context, store string, thread api.ID, 
 	if err != nil || listed == "" {
 		return err
 	}
-	took := checkpointRef(thread, engine.CaptureCheckpoint{Run: b.Revert, Phase: api.CheckpointRecovery})
-	to := checkpointRef(thread, engine.CaptureCheckpoint{Run: b.To.ID, Phase: b.To.Phase})
-	refs := strings.Split(listed, "\n")
-	var update string
-	for _, ref := range refs[:max(0, len(refs)-keptRecoveries)] {
-		if ref != took && ref != to {
-			update += "delete " + ref + "\n"
-		}
-	}
-	// A revert's applying mark matters only until it commits, and an
-	// earlier one of the thread's has: the lane runs them one at a time.
 	marks, err := storeGit(ctx, store, "", "", nil, "for-each-ref", "--format=%(refname)", checkpointRefs(thread)+"applying/")
 	if err != nil {
 		return err
 	}
+	var unfinished []engine.RevertThread
+	h.mu.Lock()
+	for id, c := range h.confirming {
+		if c.thread == thread {
+			unfinished = append(unfinished, engine.RevertThread{Revert: id, To: c.to})
+		}
+	}
+	h.mu.Unlock()
+	checkpointHook(ctx, "sweeping")
+	pending, err := h.store.RevertsPending(ctx, thread)
+	if err != nil {
+		return err
+	}
+	kept := map[string]bool{}
+	for _, r := range append(unfinished, pending...) {
+		if r.Revert != b.Revert {
+			kept[checkpointRef(thread, engine.CaptureCheckpoint{Run: r.Revert, Phase: api.CheckpointRecovery})] = true
+			kept[checkpointRef(thread, engine.CaptureCheckpoint{Run: r.To.ID, Phase: r.To.Phase})] = true
+			kept[applyingRef(thread, r.Revert)] = true
+		}
+	}
+	var finished []string
+	for _, ref := range strings.Split(listed, "\n") {
+		if !kept[ref] {
+			finished = append(finished, ref)
+		}
+	}
+	took := checkpointRef(thread, engine.CaptureCheckpoint{Run: b.Revert, Phase: api.CheckpointRecovery})
+	to := checkpointRef(thread, engine.CaptureCheckpoint{Run: b.To.ID, Phase: b.To.Phase})
+	var update string
+	for _, ref := range finished[:max(0, len(finished)-keptRecoveries)] {
+		if ref != took && ref != to {
+			update += "delete " + ref + "\n"
+		}
+	}
 	for _, ref := range strings.Fields(marks) {
-		if ref != applyingRef(thread, b.Revert) {
+		if !kept[ref] && ref != applyingRef(thread, b.Revert) {
 			update += "delete " + ref + "\n"
 			os.Remove(filepath.Join(journals(store), filepath.Base(ref)))
 		}

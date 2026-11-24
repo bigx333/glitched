@@ -200,7 +200,7 @@ func storeGit(ctx context.Context, store, top, index string, stdin []byte, args 
 	if index != "" {
 		env = append(env, "GIT_INDEX_FILE="+index)
 	}
-	return runGit(ctx, top, env, stdin, append([]string{"-c", "core.fsync=committed", "-c", "core.fsyncMethod=batch"}, args...)...)
+	return runGit(ctx, top, env, stdin, append([]string{"-c", "core.fsync=committed,reference", "-c", "core.fsyncMethod=batch"}, args...)...)
 }
 
 // isolatedGit is the engine's environment without git's variables, with
@@ -375,13 +375,7 @@ func (h *Host) captureIn(ctx context.Context, t engine.Thread, b engine.CaptureC
 	index := filepath.Join(store, "capture-"+b.Run.String()+"-"+string(b.Phase)+".index")
 	os.Remove(index)
 	defer os.Remove(index)
-	if _, err := storeGit(ctx, store, top, index, nil, "read-tree", "--empty"); err != nil {
-		return c, err
-	}
-	if _, err := storeGit(ctx, store, top, index, paths, "update-index", "--add", "-z", "--stdin"); err != nil {
-		return c, err
-	}
-	tree, err := storeGit(ctx, store, top, index, nil, "write-tree")
+	tree, err := writeTree(ctx, store, top, index, paths)
 	if err != nil {
 		return c, err
 	}
@@ -440,6 +434,18 @@ func (h *Host) captureIn(ctx context.Context, t engine.Thread, b engine.CaptureC
 	s.measure(measure, store)
 	cancel()
 	return c, nil
+}
+
+// writeTree writes the tree of paths, files of top, into store, through a
+// new index at index.
+func writeTree(ctx context.Context, store, top, index string, paths []byte) (string, error) {
+	if _, err := storeGit(ctx, store, top, index, nil, "read-tree", "--empty"); err != nil {
+		return "", err
+	}
+	if _, err := storeGit(ctx, store, top, index, paths, "update-index", "--add", "-z", "--stdin"); err != nil {
+		return "", err
+	}
+	return storeGit(ctx, store, top, index, nil, "write-tree")
 }
 
 // seedStore packs HEAD's versions of paths, the files a capture of n

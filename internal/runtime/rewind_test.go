@@ -265,8 +265,8 @@ func TestARewindThatFailsLeavesTheFiles(t *testing.T) {
 	if text := read(t, filepath.Join(r.ws, "README")); text != "three\n" || !exists(filepath.Join(r.ws, "new.txt")) {
 		t.Fatalf("README %q: the files moved", text)
 	}
-	if refs := refsOf(t, theStore(t, dir), r.thread); slices.ContainsFunc(refs, func(ref string) bool { return strings.Contains(ref, "/recovery/") }) {
-		t.Fatalf("refs %v; a failed rewind took a recovery checkpoint", refs)
+	if refs := refsOf(t, theStore(t, dir), r.thread); !slices.ContainsFunc(refs, func(ref string) bool { return strings.Contains(ref, "/recovery/") }) {
+		t.Fatalf("refs %v; the confirmation saved no recovery checkpoint", refs)
 	}
 	if s := sessionOf(t, r.n.st, r.thread); s != before {
 		t.Fatalf("the session went from %q to %q", before, s)
@@ -316,6 +316,136 @@ func TestARewindCutOffRunsAgain(t *testing.T) {
 	got := untilReverted(t, n.h, r.thread, 1)
 	if specs, _, _ := again.seen(); got.Session != "made" || len(specs) != 1 || len(revertsOf(t, n.h, r.thread)) != 1 {
 		t.Fatalf("after the restart: %+v, rewound %d times here; want the next host's one rewind", got, len(specs))
+	}
+	assertReplay(t, n.st)
+}
+
+// forkHeld holds its one rewind, as a provider's fork that hasn't
+// answered, until release closes or the host stops.
+type forkHeld struct {
+	*rewinder
+	entered, release chan struct{}
+}
+
+func (f *forkHeld) Rewind(ctx context.Context, spec provider.RewindSpec) (provider.Rewind, error) {
+	close(f.entered)
+	select {
+	case <-f.release:
+		return f.rewinder.Rewind(ctx, spec)
+	case <-ctx.Done():
+		return provider.Rewind{}, ctx.Err()
+	}
+}
+
+// A host that stops while the provider's fork is pending, before the
+// revert has written a file, replays the revert from the files the user
+// confirmed it with. A file saved while the host was down isn't one of
+// them: the replay refuses before it rewinds, names it, and leaves every
+// file as it is, and the rewind can be asked for again, from the files as
+// they are by then.
+func TestAReplayRefusesAFileSavedWhileTheHostWasDown(t *testing.T) {
+	path, dir := dbPath(t), tempDir(t)
+	held := &forkHeld{rewinder: newRewinder(provider.Rewind{}, nil, false), entered: make(chan struct{})}
+	r := twoTurnsWith(t, path, dir, repo(t), held)
+	submit(t, r.n.h, r.thread, api.ThreadRevert{To: runCheckpoint(r.first), Files: true, Conversation: true})
+	select {
+	case <-held.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the rewind never ran")
+	}
+	r.n.kill()
+	downtime := filepath.Join(r.ws, "downtime.txt")
+	write(t, downtime, "written while the host was down\n")
+	again := newRewinder(provider.Rewind{}, nil, false)
+	n := serveCheckpoints(t, path, dir, again)
+	got := untilReverted(t, n.h, r.thread, 1)
+	if got.Status != api.RevertFailed || !strings.Contains(got.Error, "downtime.txt changed since the revert was confirmed") {
+		t.Fatalf("reverted %+v; want it refused, naming downtime.txt", got)
+	}
+	if specs, _, _ := again.seen(); len(specs) != 0 {
+		t.Fatalf("the replay rewound %d times; want it refused first", len(specs))
+	}
+	if text := read(t, downtime); text != "written while the host was down\n" {
+		t.Fatalf("downtime.txt %q after the refused replay", text)
+	}
+	if text := read(t, filepath.Join(r.ws, "README")); text != "three\n" || !exists(filepath.Join(r.ws, "new.txt")) {
+		t.Fatalf("README %q, new.txt there %v; want the files as the user left them", text, exists(filepath.Join(r.ws, "new.txt")))
+	}
+	submit(t, n.h, r.thread, api.ThreadRevert{To: runCheckpoint(r.first), Files: true, Conversation: true})
+	second := untilReverted(t, n.h, r.thread, 2)
+	if second.Status != api.RevertRestored || second.Recovery == "" {
+		t.Fatalf("reverted again %+v; want the files restored", second)
+	}
+	if text := gitIn(t, theStore(t, dir), "show", second.Recovery+":downtime.txt"); text != "written while the host was down" {
+		t.Fatalf("the second revert's recovery checkpoint holds downtime.txt as %q", text)
+	}
+	assertReplay(t, n.st)
+}
+
+// A file the user deletes while the replay's fork is pending stays
+// deleted: the replay writes a file only where it finds what the user
+// confirmed, or what the revert's journal says it left.
+func TestAReplayLeavesAFileDeletedWhileTheForkIsPending(t *testing.T) {
+	path, dir := dbPath(t), tempDir(t)
+	first := &forkHeld{rewinder: newRewinder(provider.Rewind{}, nil, false), entered: make(chan struct{})}
+	r := twoTurnsWith(t, path, dir, repo(t), first)
+	submit(t, r.n.h, r.thread, api.ThreadRevert{To: runCheckpoint(r.first), Files: true, Conversation: true})
+	select {
+	case <-first.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the rewind never ran")
+	}
+	r.n.kill()
+	second := &forkHeld{rewinder: newRewinder(provider.Rewind{}, nil, false), entered: make(chan struct{}), release: make(chan struct{})}
+	n := serveCheckpoints(t, path, dir, second)
+	select {
+	case <-second.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the replay never rewound")
+	}
+	readme := filepath.Join(r.ws, "README")
+	if err := os.Remove(readme); err != nil {
+		t.Fatal(err)
+	}
+	close(second.release)
+	got := untilReverted(t, n.h, r.thread, 1)
+	if got.Status != api.RevertFailed || !strings.Contains(got.Error, "README") || exists(readme) {
+		t.Fatalf("reverted %+v, README there %v; want it failed naming README, and README still deleted", got, exists(readme))
+	}
+	assertReplay(t, n.st)
+}
+
+// An ignored file that held the target's bytes when the user confirmed is
+// no path of the plan's, and one the user deletes while the host is down
+// stays deleted: the replay refuses, naming it.
+func TestAReplayLeavesAnIgnoredFileDeletedWhileTheHostWasDown(t *testing.T) {
+	path, dir := dbPath(t), tempDir(t)
+	r := twoTurnsWith(t, path, dir, repo(t), newRewinder(provider.Rewind{}, nil, false))
+	draft := filepath.Join(r.ws, "new.txt")
+	write(t, filepath.Join(r.ws, ".gitignore"), "new.txt\n")
+	entered := make(chan struct{})
+	reset := runtime.SetCheckpointHook(func(ctx context.Context, step string) {
+		if step == "recovered" {
+			close(entered)
+			<-ctx.Done()
+		}
+	})
+	defer reset()
+	submit(t, r.n.h, r.thread, api.ThreadRevert{To: runCheckpoint(r.run), Files: true})
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the revert never read the files it was confirmed with")
+	}
+	r.n.kill()
+	reset()
+	if err := os.Remove(draft); err != nil {
+		t.Fatal(err)
+	}
+	n := serveCheckpoints(t, path, dir, newRewinder(provider.Rewind{}, nil, false))
+	got := untilReverted(t, n.h, r.thread, 1)
+	if got.Status != api.RevertFailed || !strings.Contains(got.Error, "new.txt changed since the revert was confirmed") || exists(draft) {
+		t.Fatalf("reverted %+v, new.txt there %v; want it refused naming new.txt, and new.txt still deleted", got, exists(draft))
 	}
 	assertReplay(t, n.st)
 }
@@ -377,9 +507,9 @@ func TestARewindLeavesAFileRevertsMark(t *testing.T) {
 	defer once.Do(func() { close(release) })
 	submit(t, r.n.h, r.thread, api.ThreadRevert{To: runCheckpoint(r.first), Conversation: true})
 	<-rewinding
+	write(t, filepath.Join(r.ws, "sub", "notes"), "x\n")
 	submit(t, r.n.h, r.thread, api.ThreadRevert{To: runCheckpoint(r.first), Files: true})
 	other := api.NewID()
-	write(t, filepath.Join(r.ws, "sub", "notes"), "x\n")
 	submit(t, r.n.h, other, api.ThreadCreate{Workspace: filepath.Join(r.ws, "sub"), Title: "Other", Model: api.ModelRef{Provider: "fake", Model: "fake"}})
 	close(rewound)
 	<-held
@@ -493,9 +623,9 @@ func TestAHandoffKeepsTheTurnItRewoundTo(t *testing.T) {
 	assertReplay(t, r.n.st)
 }
 
-// A replay of a revert cut off before it began to put the files back,
-// whose rewind the provider now refuses, touches no file: an ignored
-// draft at a path the target holds stays.
+// A replay of a revert cut off before it began to put the files back
+// touches no file: an ignored draft saved while the host was down, at a
+// path the target holds, stays, and the replay refuses before it rewinds.
 func TestAReplayCutOffBeforeTheFilesMovedTouchesNone(t *testing.T) {
 	path, dir := dbPath(t), tempDir(t)
 	r := twoTurnsWith(t, path, dir, repo(t), newRewinder(provider.Rewind{}, nil, false))
@@ -503,7 +633,9 @@ func TestAReplayCutOffBeforeTheFilesMovedTouchesNone(t *testing.T) {
 	until(t, r.n.h, r.thread, "the third turn", func(th api.Thread) bool { return idle(th) && len(runsOf(t, r.n.h, r.thread)) == 3 })
 	draft := filepath.Join(r.ws, "new.txt")
 	write(t, filepath.Join(r.ws, ".gitignore"), "new.txt\n")
-	write(t, draft, "a draft, in no checkpoint\n")
+	if err := os.Remove(draft); err != nil {
+		t.Fatal(err)
+	}
 	entered := make(chan struct{})
 	reset := runtime.SetCheckpointHook(func(ctx context.Context, step string) {
 		if step == "recovered" {
@@ -520,10 +652,12 @@ func TestAReplayCutOffBeforeTheFilesMovedTouchesNone(t *testing.T) {
 	}
 	r.n.kill()
 	reset()
-	n := serveCheckpoints(t, path, dir, newRewinder(provider.Rewind{}, errors.New("fork refused after restart"), false))
+	write(t, draft, "a draft, in no checkpoint\n")
+	again := newRewinder(provider.Rewind{}, nil, false)
+	n := serveCheckpoints(t, path, dir, again)
 	got := untilReverted(t, n.h, r.thread, 1)
-	if got.Status != api.RevertFailed || strings.Contains(got.Error, "put back") {
-		t.Fatalf("reverted %+v; want it failed, with no file put back", got)
+	if specs, _, _ := again.seen(); got.Status != api.RevertFailed || !strings.Contains(got.Error, "new.txt is in the way") || strings.Contains(got.Error, "put back") || len(specs) != 0 {
+		t.Fatalf("reverted %+v, rewound %d times; want it refused before the rewind, naming new.txt, with no file put back", got, len(specs))
 	}
 	if text := read(t, draft); text != "a draft, in no checkpoint\n" {
 		t.Fatalf("new.txt %q; the replay wrote over a draft the attempt never touched", text)
@@ -560,7 +694,7 @@ func TestARefusedReplayPutsBackOnlyThePathsItsPlanNamed(t *testing.T) {
 			step, want := "applied", "before the revert\n"
 			if c == "an ignored file already the target's" {
 				write(t, filepath.Join(r.ws, ".gitignore"), "slot\n")
-				before, step, want = slot, "applying", "the target's\n"
+				before, step, want = slot, "applied", "the target's\n"
 			}
 			write(t, before, want)
 			submit(t, r.n.h, r.thread, dispatch("after the target", api.StartNow))
@@ -640,9 +774,10 @@ func TestASecondCutOffReplayKeepsTheFirstAttemptsPlan(t *testing.T) {
 	assertReplay(t, n.st)
 }
 
-// A refused replay undoes only what the cut-off attempt wrote, so a file
-// saved while the host was down stays. Where that leaves a path the plan
-// names as recovery doesn't have it, the revert says so.
+// A replay that finds a file saved while the host was down refuses before
+// it rewinds, names the file, and undoes only what the cut-off attempt
+// wrote, so the file stays. Where that leaves a path the plan names as
+// recovery doesn't have it, the revert says so.
 func TestARefusedReplayKeepsWhatWasSavedSince(t *testing.T) {
 	for _, c := range []struct {
 		name, step, draft, left string
@@ -697,8 +832,8 @@ func TestARefusedReplayKeepsWhatWasSavedSince(t *testing.T) {
 			write(t, in(c.draft), "saved while the host was down\n")
 			n := serveCheckpoints(t, path, dir, newRewinder(provider.Rewind{}, errors.New("fork refused after restart"), false))
 			got := untilReverted(t, n.h, r.thread, 1)
-			if got.Status != api.RevertFailed || !strings.Contains(got.Error, "fork refused after restart") {
-				t.Fatalf("reverted %+v; want it failed by the refused rewind", got)
+			if got.Status != api.RevertFailed || !strings.Contains(got.Error, c.draft) || !strings.Contains(got.Error, "changed since the revert was confirmed") || strings.Contains(got.Error, "fork refused") {
+				t.Fatalf("reverted %+v; want it refused before the rewind, naming %s", got, c.draft)
 			}
 			if text := read(t, in(c.draft)); text != "saved while the host was down\n" {
 				t.Fatalf("%s %q after the refused replay; want the file saved since", c.draft, text)
@@ -708,7 +843,7 @@ func TestARefusedReplayKeepsWhatWasSavedSince(t *testing.T) {
 					t.Fatalf("reverted %+v; want it to say %s was left as it is", got, c.left)
 				}
 			} else {
-				if strings.Contains(got.Error, "changed since") {
+				if strings.Contains(got.Error, "changed since the revert began") {
 					t.Fatalf("reverted %+v; want every path put back", got)
 				}
 				for _, f := range c.saved {

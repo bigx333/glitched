@@ -37,6 +37,13 @@ func SetCheckpointBudgets(base time.Duration, files int, bytes, limit int64, kep
 	return func() { baseBudget, maxCheckpointFiles, maxCheckpointBytes, checkpointLimit, keptRuns = b, f, n, l, k }
 }
 
+// SetKeptRecoveries sets how many recovery checkpoints a thread keeps.
+func SetKeptRecoveries(n int) func() {
+	old := keptRecoveries
+	keptRecoveries = n
+	return func() { keptRecoveries = old }
+}
+
 // SetSeedBudget sets how long seeding an empty checkpoint store may take.
 func SetSeedBudget(d time.Duration) func() {
 	old := seedBudget

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -16,9 +17,12 @@ import (
 	"testing"
 	"time"
 
+	"regexp"
+
 	"golang.org/x/sys/unix"
 
 	"glitched/internal/api"
+	"glitched/internal/engine"
 )
 
 // entry is a file, a symlink or a folder of a tree, as a path holds it.
@@ -29,6 +33,10 @@ type entry struct {
 }
 
 func file(text string) entry { return entry{kind: "file", text: text} }
+
+// namedIn finds each list of paths a replay's error names: those it says
+// changed, and one in the way.
+var namedIn = regexp.MustCompile(`(?:^|: |; )([^:;]+?)(?: changed since the revert| is in the way of)`)
 
 // recovered is the worktree a revert's recovery checkpoint holds, and
 // target the one it reverts to: a file edited, added and deleted, a folder
@@ -308,7 +316,12 @@ type stepKey struct{}
 // still there after. Either recovery succeeded, every path the plan names
 // is as the recovery checkpoint has it and the tree is as the checkpoint
 // holds it everywhere but where the user acted, or it failed naming the
-// path the user acted at.
+// path the user acted at. The replay that goes on with the revert keeps
+// them too, at each of those stops, and at an untracked file of the
+// user's own: it goes on only where the tree is as the user confirmed it,
+// but for what the revert wrote, and puts the files as the target has
+// them; or it fails naming the path, with the rest as the recovery
+// checkpoint has it.
 func TestRecoveryKeepsEveryByteTheUserWrote(t *testing.T) {
 	ctx := context.Background()
 	defer SetCheckpointHook(func(ctx context.Context, step string) {
@@ -323,6 +336,9 @@ func TestRecoveryKeepsEveryByteTheUserWrote(t *testing.T) {
 	}
 	h := &Host{}
 	WithCheckpoints(root)(h)
+	if _, err := checkoutGit(ctx, root, "init", "--quiet"); err != nil {
+		t.Fatal(err)
+	}
 	recovery, to := commitOf(t, ctx, store, recovered), commitOf(t, ctx, store, target)
 	changes, err := diffTrees(ctx, store, recovery, to)
 	if err != nil {
@@ -332,6 +348,10 @@ func TestRecoveryKeepsEveryByteTheUserWrote(t *testing.T) {
 	template := filepath.Join(root, "template")
 	lay(t, template, recovered)
 	if _, err := h.markApplying(ctx, store, template, thread, planned, recovery, changes); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := storeGit(ctx, store, "", "", nil, "rev-parse", applyingRef(thread, planned))
+	if err != nil {
 		t.Fatal(err)
 	}
 	var planPaths, targets []string
@@ -397,13 +417,14 @@ func TestRecoveryKeepsEveryByteTheUserWrote(t *testing.T) {
 	// still is the control: the user does nothing.
 	still := act{"does nothing", func(string, string, string) bool { return true }}
 	type cell struct {
-		stop  int    // the revert's stop, a key of states
-		race  int    // recovery's step the user acts at, or -1 while the host is down
-		path  string // where the user acts
-		act   act
-		ran   bool
-		lost  string   // what broke the rule, if anything
-		named []string // the paths a failed recovery named, sorted
+		forward bool   // whether the replay goes on with the revert, not undo it
+		stop    int    // the revert's stop, a key of states
+		race    int    // recovery's step the user acts at, or -1 while the host is down
+		path    string // where the user acts
+		act     act
+		ran     bool
+		lost    string   // what broke the rule, if anything
+		named   []string // the paths a failed recovery named, sorted
 	}
 	var cells []*cell
 	for stop := range states {
@@ -411,6 +432,12 @@ func TestRecoveryKeepsEveryByteTheUserWrote(t *testing.T) {
 		for _, p := range targets {
 			for _, a := range acts {
 				cells = append(cells, &cell{stop: stop, race: -1, path: p, act: a})
+			}
+		}
+		cells = append(cells, &cell{forward: true, stop: stop, race: -1, path: ".", act: still})
+		for _, p := range append(slices.Clone(targets), "downtime.txt") {
+			for _, a := range acts {
+				cells = append(cells, &cell{forward: true, stop: stop, race: -1, path: p, act: a})
 			}
 		}
 		if stop == -3 {
@@ -432,8 +459,12 @@ func TestRecoveryKeepsEveryByteTheUserWrote(t *testing.T) {
 	// The controls run first: where a crash cut a change off from its
 	// record, recovery refuses with nothing changed, and a cell may fail
 	// naming just what its control names, as the user's act was no reason.
-	controls := map[int][]string{}
-	want := withFolders(recovered)
+	type of struct {
+		forward bool
+		stop    int
+	}
+	controls := map[of][]string{}
+	want, goal := withFolders(recovered), withFolders(target)
 	run := func(i int, c *cell) {
 		s := states[c.stop]
 		dir := filepath.Join(root, "w", fmt.Sprint(i))
@@ -499,7 +530,7 @@ func TestRecoveryKeepsEveryByteTheUserWrote(t *testing.T) {
 			case c.act.name == still.name && s.at != "journaling":
 				c.lost = "recovery failed with nothing changed since: " + err.Error()
 			case c.act.name == still.name:
-			case !slices.Contains(c.named, c.path) && !slices.Equal(c.named, controls[c.stop]):
+			case !slices.Contains(c.named, c.path) && !slices.Equal(c.named, controls[of{false, c.stop}]):
 				c.lost = "recovery failed without naming " + c.path + ": " + err.Error()
 			}
 			return
@@ -527,6 +558,110 @@ func TestRecoveryKeepsEveryByteTheUserWrote(t *testing.T) {
 			}
 		}
 	}
+	// replay is a cell of the replay that goes on with the revert, as the
+	// host does on its next start: the user acted while the host was down.
+	replay := func(i int, c *cell) {
+		s := states[c.stop]
+		dir := filepath.Join(root, "w", fmt.Sprint(i))
+		copyTree(t, s.dir, dir)
+		revert := api.NewID()
+		if data, err := os.ReadFile(journalOf(store, s.revert)); err == nil {
+			must(os.MkdirAll(filepath.Dir(journalOf(store, revert)), 0o700))
+			must(os.WriteFile(journalOf(store, revert), data, 0o600))
+		}
+		confirmedAs := checkpointRef(thread, engine.CaptureCheckpoint{Run: revert, Phase: api.CheckpointRecovery})
+		_, err := storeGit(ctx, store, "", "", []byte("update "+confirmedAs+" "+recovery+"\nupdate "+applyingRef(thread, revert)+" "+plan+"\n"), "update-ref", "--stdin")
+		must(err)
+		under := func(p string) bool { return c.path != "." && (p == c.path || strings.HasPrefix(p, c.path+"/")) }
+		journaled, err := readJournal(journalOf(store, revert))
+		must(err)
+		if c.ran = c.act.do(filepath.Join(dir, c.path), c.path, fmt.Sprintf("the user's own, cell %d\n", i)); !c.ran {
+			return
+		}
+		before := filesIn(t, dir)
+		left := without(before, func(p string) bool { return !under(p) })
+		from, err := confirmed(ctx, store, dir, thread, revert, to)
+		if err == nil {
+			_, err = h.putBack(ctx, store, dir, thread, revert, from, to)
+		}
+		now := filesIn(t, dir)
+		// A crash between a change and its record, undone by the user to
+		// the very files the revert was confirmed with, leaves nothing to
+		// tell the user's from the confirmed: the replay may go on there.
+		asConfirmed := s.at == "journaling" && maps.Equal(left, without(want, func(p string) bool { return !under(p) }))
+		for p, e := range left {
+			if got, ok := now[p]; (!ok || got != e) && !(asConfirmed && err == nil) {
+				c.lost = fmt.Sprintf("the user left %+v at %s, and it is now %+v (the replay said %v)", e, p, got, err)
+				return
+			}
+		}
+		for p := range now {
+			if _, ok := left[p]; under(p) && !ok && !(asConfirmed && err == nil) {
+				c.lost = fmt.Sprintf("%s holds %+v, which the user didn't leave there (the replay said %v)", p, now[p], err)
+				return
+			}
+		}
+		paths := slices.Collect(maps.Keys(now))
+		paths = slices.AppendSeq(paths, maps.Keys(want))
+		paths = slices.AppendSeq(paths, maps.Keys(goal))
+		if err != nil {
+			c.named = nil
+			for _, m := range namedIn.FindAllStringSubmatch(err.Error(), -1) {
+				c.named = append(c.named, strings.Split(m[1], ", ")...)
+			}
+			slices.Sort(c.named)
+			c.named = slices.Compact(c.named)
+			switch {
+			case len(c.named) == 0:
+				c.lost = "the replay failed naming no path: " + err.Error()
+				return
+			case c.act.name == still.name && s.at != "journaling":
+				c.lost = "the replay failed with nothing changed since: " + err.Error()
+				return
+			case c.act.name != still.name && !slices.ContainsFunc(c.named, under) && !slices.Equal(c.named, controls[of{true, c.stop}]):
+				c.lost = "the replay failed without naming " + c.path + ": " + err.Error()
+				return
+			}
+			named := func(p string) bool {
+				return slices.ContainsFunc(c.named, func(n string) bool {
+					return p == n || strings.HasPrefix(p, n+"/") || strings.HasPrefix(n, p+"/")
+				})
+			}
+			// A path the replay names it may leave as it found it, or put
+			// back as the recovery checkpoint has it where the earlier
+			// attempt's journal says it wrote; a folder the checkpoint has
+			// may be gone with a file it names inside. None of these is
+			// under the user's act, whose paths the checks above hold to
+			// what the user left, whatever the replay names.
+			for _, p := range paths {
+				got, ok := now[p]
+				w, has := want[p]
+				was, had := before[p]
+				wrote := slices.ContainsFunc(slices.Collect(maps.Keys(journaled)), func(j string) bool { return j == p || strings.HasPrefix(j, p+"/") })
+				kept := named(p) && (had == ok && got == was || !ok && has && w.kind == "dir")
+				if named(p) && !kept && (had != ok || got != was) && !wrote {
+					c.lost = fmt.Sprintf("the replay failed naming %s, and put it back as %+v though no earlier attempt wrote it (it said %v)", p, got, err)
+					return
+				}
+				if !under(p) && !kept && (has != ok || got != w) {
+					c.lost = fmt.Sprintf("the replay failed, but left %s as %+v, not %+v (it said %v)", p, got, w, err)
+					return
+				}
+			}
+			return
+		}
+		for _, p := range paths {
+			got, ok := now[p]
+			w, has := goal[p]
+			if under(p) && (left[p].kind == "dir" || strings.HasSuffix(p, ".tmp")) {
+				continue
+			}
+			if has != ok || got != w {
+				c.lost = fmt.Sprintf("the replay reported success, but %s is %+v, not the target's %+v", p, got, w)
+				return
+			}
+		}
+	}
 	start := time.Now()
 	for _, control := range []bool{true, false} {
 		work := make(chan int)
@@ -536,7 +671,11 @@ func TestRecoveryKeepsEveryByteTheUserWrote(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for i := range work {
-					run(i, cells[i])
+					if cells[i].forward {
+						replay(i, cells[i])
+					} else {
+						run(i, cells[i])
+					}
 				}
 			}()
 		}
@@ -549,12 +688,13 @@ func TestRecoveryKeepsEveryByteTheUserWrote(t *testing.T) {
 		wg.Wait()
 		for _, c := range cells {
 			if control && c.act.name == still.name && c.named != nil {
-				controls[c.stop] = c.named
+				controls[of{c.forward, c.stop}] = c.named
 			}
 		}
 	}
 
 	ran, broke, failed := 0, 0, 0
+	goingOn := [2]int{}
 	by := map[string]int{}
 	var first []string
 	shown := map[string]int{}
@@ -566,25 +706,33 @@ func TestRecoveryKeepsEveryByteTheUserWrote(t *testing.T) {
 		if c.named != nil {
 			failed++
 		}
+		if c.forward {
+			goingOn[0]++
+			if c.lost != "" {
+				goingOn[1]++
+			}
+		}
 		if c.lost == "" {
 			continue
 		}
 		broke++
 		kind := "as recovery ran"
 		switch {
+		case c.forward:
+			kind = "as the replay went on"
 		case c.act.name == still.name:
 			kind = "with nothing changed"
 		case c.race == -1:
 			kind = "while the host was down"
 		}
 		by[kind]++
-		line := fmt.Sprintf("stop %d (%s), race %d: the user %s at %s: %s", c.stop, states[c.stop].at, c.race, c.act.name, c.path, c.lost)
+		line := fmt.Sprintf("forward %v, stop %d (%s), race %d: the user %s at %s: %s", c.forward, c.stop, states[c.stop].at, c.race, c.act.name, c.path, c.lost)
 		t.Log("broke: " + line)
 		if shown[kind]++; shown[kind] <= 4 {
 			first = append(first, line)
 		}
 	}
-	t.Logf("%d cells of %d ran in %v (%d stops, %d recovery steps, %d paths, %d acts); %d failed, %d broke the rule %v", ran, len(cells), time.Since(start).Round(time.Second), len(states), len(undoing), len(targets), len(acts), failed, broke, by)
+	t.Logf("%d cells of %d ran in %v (%d stops, %d recovery steps, %d paths, %d acts); %d failed, %d broke the rule %v; the replay that goes on: %d cells ran, %d broke", ran, len(cells), time.Since(start).Round(time.Second), len(states), len(undoing), len(targets), len(acts), failed, broke, by, goingOn[0], goingOn[1])
 	if broke > 0 {
 		t.Errorf("%d of %d cells broke the rule; the first:\n%s", broke, ran, strings.Join(first, "\n"))
 	}

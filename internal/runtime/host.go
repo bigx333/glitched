@@ -98,6 +98,18 @@ type Host struct {
 	// agents are the runs whose agent may run here: from their start until
 	// it is closed, on past the run's own end.
 	agents map[*liveRun]bool
+	// confirming is the revert commands whose files are being saved
+	// before they commit, from before they save them until their submit
+	// returns: a submit of the same command waits for it.
+	confirming map[api.ID]confirmation
+}
+
+// confirmation is a revert command being confirmed: its thread, the
+// checkpoint it is to put back, and done, closed once its submit returns.
+type confirmation struct {
+	thread api.ID
+	to     api.CheckpointRef
+	done   chan struct{}
 }
 
 // liveRun is a run this host drives. Cancelling ctx ends the run's provider
@@ -186,6 +198,7 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		runs:          map[api.ID]*liveRun{},
 		closing:       map[api.ID]bool{},
 		restoring:     map[api.ID]*restoreMark{},
+		confirming:    map[api.ID]confirmation{},
 		waiting:       map[api.ID]bool{},
 		passing:       map[api.ID]bool{},
 		agents:        map[*liveRun]bool{},
