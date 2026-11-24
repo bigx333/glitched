@@ -1703,6 +1703,7 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 	live := t.View.Stoppable()
 	working := live && empty
 	if live && !empty {
+		a.queueButton(c, t)
 		a.stopButton(c, t)
 	}
 	label := "Send"
@@ -1735,10 +1736,16 @@ func (a *app) sendButton(c *ui.Context, t thread, keys bool) {
 }
 
 // sendOrStop is what Send does, clicked or by ⌘⏎: it sends the draft, or
-// with none stops the agent at work. ⌘⏎ is how a code block sends: with a
-// block open, it doesn't stop the agent.
+// with none stops the agent at work. While the agent works, ⌘⏎ queues the
+// draft for after its turn where Send and Enter steer it, as T3 Code's
+// alternate send does; while it waits on a request, the draft steers, as
+// a send does in T3 Code with an approval shown, since a queued message
+// would wait for an answer. ⌘⏎ is how a code block sends: with a block
+// open, it steers, and doesn't stop the agent.
 func (a *app) sendOrStop(t thread, clicked bool) {
 	switch {
+	case t.View.Stoppable() && t.View.Run != api.RunWaiting && a.message(t) != "" && !clicked && !a.code.on:
+		a.queue(t)
 	case !t.View.Stoppable() || a.message(t) != "":
 		a.send(t)
 	case clicked || !a.code.on:
@@ -1762,6 +1769,28 @@ func (a *app) resumeButton(c *ui.Context, t thread) {
 		})
 	}).Clicked() {
 		a.backend.Resume(t.env, t.id())
+	}
+}
+
+// queueButton sends the draft for after the agent's turn, rather than
+// into it, beside Send while the agent works.
+func (a *app) queueButton(c *ui.Context, t thread) {
+	tip := "Send after this turn  ⌘⏎"
+	if t.View.Run == api.RunWaiting {
+		tip = "Send after this turn"
+	}
+	q := a.tip(c, ui.ButtonBase(c.Key("queue")).Label("Queue"), tip).Height(30).Radius(15).Padding(0, 12).
+		Cursor(ui.CursorPointer).Border(1, palette.border).Margin(0, 4, 0, 0).Shrink(0)
+	if q.Hovered() {
+		q.Background(palette.hover)
+	}
+	if q.Children(func() {
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, icClock).FontSize(12)
+			ui.Text(c, "Queue").FontSize(12)
+		})
+	}).Clicked() {
+		a.queue(t)
 	}
 }
 
@@ -1801,6 +1830,9 @@ func (a *app) sendControl(c *ui.Context, t thread, keys bool) {
 		return
 	}
 	if t.View.Stoppable() {
+		if a.message(t) != "" {
+			a.queueButton(c, t)
+		}
 		a.stopButton(c, t).Shrink(0)
 	}
 	if keys && c.Shortcut(ui.Cmd, ui.KeyEnter) {
@@ -1887,12 +1919,17 @@ func (a *app) composerControls(c *ui.Context, t thread) {
 // send sends the draft in the thread, creating it first when it's the
 // draft. A snoozed thread comes back to the inbox with it, as the engine
 // brings a settled one back with any message.
-func (a *app) send(t thread) {
+func (a *app) send(t thread) { a.sendDraft(t, api.SteerActive) }
+
+// queue sends the draft as send does, for after the agent's turn.
+func (a *app) queue(t thread) { a.sendDraft(t, api.AfterActive) }
+
+func (a *app) sendDraft(t thread, mode api.DispatchMode) {
 	about := a.said(t)
 	if ct := codeTitle(about); a.code.on && ct != "" {
 		about = ct
 	}
-	if !a.sendText(t, a.message(t), about) {
+	if !a.sendAs(t, a.message(t), about, mode) {
 		return
 	}
 	if a.code.on {
@@ -1907,6 +1944,12 @@ func (a *app) send(t thread) {
 // sendText sends text in the thread, creating it first when it's the draft,
 // titled from about, or text without it, and reports whether it went.
 func (a *app) sendText(t thread, text, about string) bool {
+	return a.sendAs(t, text, about, api.SteerActive)
+}
+
+// sendAs is sendText in mode: a steer reaches a working agent now, an
+// AfterActive waits for its turn to end.
+func (a *app) sendAs(t thread, text, about string, mode api.DispatchMode) bool {
 	if text == "" || t.env == nil {
 		return false
 	}
@@ -1952,9 +1995,7 @@ func (a *app) sendText(t thread, text, about string) bool {
 			a.backend.ConfigureThread(t.env, id, api.ThreadConfigure{Effort: &e})
 		}
 	}
-	// Steer only: a message reaches a working agent now, rather than
-	// waiting its turn.
-	cmd := a.backend.Send(t.env, id, text, api.SteerActive)
+	cmd := a.backend.Send(t.env, id, text, mode)
 	if cmd.IsZero() {
 		return false
 	}
