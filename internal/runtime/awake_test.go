@@ -14,10 +14,13 @@ import (
 	"glitched/internal/store"
 )
 
-// heard is what a host told WithAwake, in order.
+// heard is what a host told WithAwake, in order, and each thread as the
+// last commit its store's hooks ran for left it.
 type heard struct {
-	mu   sync.Mutex
-	told []bool
+	mu    sync.Mutex
+	told  []bool
+	views map[api.ID]api.Thread
+	moved chan struct{} // closed by the next commit
 }
 
 func (h *heard) tell(working bool) {
@@ -32,6 +35,48 @@ func (h *heard) all() []bool {
 	return slices.Clone(h.told)
 }
 
+func (h *heard) commit(c store.Commit) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.views == nil {
+		h.views = map[api.ID]api.Thread{}
+	}
+	for _, th := range c.Threads {
+		h.views[th.ID] = th
+	}
+	if h.moved != nil {
+		close(h.moved)
+		h.moved = nil
+	}
+}
+
+// until waits for a commit to leave thread ok. The store runs its hooks in
+// the order they were added, the host's first, so the host has told awake
+// what that commit changed; a read of the store can see the commit before
+// it has.
+func (h *heard) until(t *testing.T, thread api.ID, what string, ok func(api.Thread) bool) api.Thread {
+	t.Helper()
+	timeout := time.After(5 * time.Second)
+	for {
+		h.mu.Lock()
+		th, seen := h.views[thread]
+		if seen && ok(th) {
+			h.mu.Unlock()
+			return th
+		}
+		if h.moved == nil {
+			h.moved = make(chan struct{})
+		}
+		moved := h.moved
+		h.mu.Unlock()
+		select {
+		case <-moved:
+		case <-timeout:
+			t.Fatalf("timed out waiting for %s: %+v", what, th)
+		}
+	}
+}
+
 func awakeHost(t *testing.T, path string, ad provider.Adapter, h *heard) node {
 	t.Helper()
 	st, err := store.Open(path)
@@ -43,6 +88,7 @@ func awakeHost(t *testing.T, path string, ad provider.Adapter, h *heard) node {
 		st.Close()
 		t.Fatal(err)
 	}
+	st.OnCommit(h.commit)
 	n := node{st, host}
 	t.Cleanup(n.kill)
 	return n
@@ -55,12 +101,12 @@ func TestAwakeHearsWhetherAnAgentWorks(t *testing.T) {
 	n := awakeHost(t, dbPath(t), fake.New(fake.Turn(true)), h)
 	thread := newThread(t, n.h)
 	submit(t, n.h, thread, dispatch("go", api.StartNow))
-	req := until(t, n.h, thread, "approval", waiting).Requests[0]
+	req := h.until(t, thread, "approval", waiting).Requests[0]
 	if got := h.all(); !slices.Equal(got, []bool{true, false}) {
 		t.Fatalf("told %v once the run came to wait, want [true false]", got)
 	}
 	respond(t, n.h, thread, req)
-	until(t, n.h, thread, "turn end", idle)
+	h.until(t, thread, "turn end", idle)
 	if got := h.all(); !slices.Equal(got, []bool{true, false, true, false}) {
 		t.Fatalf("told %v once the answered run ended, want [true false true false]", got)
 	}
@@ -78,12 +124,12 @@ func TestAwakeSpansEveryThread(t *testing.T) {
 	submit(t, n.h, two, dispatch("go", api.StartNow))
 	until(t, n.h, two, "both starting", func(api.Thread) bool { return held.Starts() == 2 })
 	submit(t, n.h, one, api.TurnInterrupt{})
-	until(t, n.h, one, "the first stopped", idle)
+	h.until(t, one, "the first stopped", idle)
 	if got := h.all(); !slices.Equal(got, []bool{true}) {
 		t.Fatalf("told %v with the second still starting, want [true]", got)
 	}
 	submit(t, n.h, two, api.TurnInterrupt{})
-	until(t, n.h, two, "the second stopped", idle)
+	h.until(t, two, "the second stopped", idle)
 	if got := h.all(); !slices.Equal(got, []bool{true, false}) {
 		t.Fatalf("told %v once both stopped, want [true false]", got)
 	}
@@ -106,7 +152,7 @@ func TestAwakeAfterARestart(t *testing.T) {
 		t.Fatalf("told %v for a run that waits on the user", got)
 	}
 	respond(t, n.h, thread, req)
-	until(t, n.h, thread, "turn end", idle)
+	h.until(t, thread, "turn end", idle)
 	if got := h.all(); !slices.Equal(got, []bool{true, false}) {
 		t.Fatalf("told %v once answered, want [true false]", got)
 	}
