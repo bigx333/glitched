@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -1831,5 +1832,37 @@ func TestMaintainKeepsTheNewestReceiptsAndRefusesAForgottenOne(t *testing.T) {
 	}
 	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.TurnInterrupt{}}, time.Now()); err != nil {
 		t.Fatalf("a new command after pruning: %v", err)
+	}
+}
+
+// The list of threads reads what each thread's view shows, not the text
+// of every message its threads were ever sent.
+func TestReadingTheThreadListSkipsMessageText(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, filepath.Join(t.TempDir(), "host.db"))
+	text := strings.Repeat("x", 1<<20)
+	const threads, messages = 20, 2
+	for range threads {
+		th := api.NewID()
+		if _, err := s.Submit(ctx, create(th), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		for range messages {
+			if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: th, Body: api.MessageDispatch{Text: text, Mode: api.AfterActive}}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	snap, err := s.Read(ctx, api.Query{})
+	runtime.ReadMemStats(&after)
+	if err != nil || len(snap.Threads) != threads {
+		t.Fatalf("Read: %d threads, %v", len(snap.Threads), err)
+	}
+	const sent = threads * messages << 20
+	if got := after.TotalAlloc - before.TotalAlloc; got > sent/8 {
+		t.Fatalf("reading the thread list allocated %d MiB, with %d MiB of message text stored", got>>20, sent>>20)
 	}
 }
