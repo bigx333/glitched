@@ -477,11 +477,15 @@ func TestMarksSettleForAnySetOfProjects(t *testing.T) {
 			}
 		}
 
-		// P1 and P2: no two share an icon while icons go round, nor a pair
-		// while pairs do. Those with marks this version doesn't know take up
-		// what they're drawn with, and the rest share none among them.
+		// P1 and P2: no two share an icon while icons go round, nor, made at
+		// once, a pair while pairs do. Those with marks this version doesn't
+		// know take up what they're drawn with, and the rest share none
+		// among them. Past 8 a mark seen before never moves, so two from a
+		// file may share a pair; only a new name must take one no one shown
+		// has.
 		var thawed []projectMark
 		frozenIcons, frozenPairs := map[string]bool{}, map[[2]string]bool{}
+		pairUses := map[[2]string]int{}
 		for _, n := range shown {
 			i := slices.IndexFunc(out, func(m projectMark) bool { return m.Name == n })
 			if i < 0 {
@@ -490,7 +494,11 @@ func TestMarksSettleForAnySetOfProjects(t *testing.T) {
 			d, f := drawnHere(out[i])
 			if !f {
 				thawed = append(thawed, d)
+				pairUses[[2]string{d.Icon, d.Color}]++
 				continue
+			}
+			if k := [2]string{d.Icon, d.Color}; !frozenPairs[k] {
+				pairUses[k]++
 			}
 			frozenIcons[d.Icon] = true
 			frozenPairs[[2]string{d.Icon, d.Color}] = true
@@ -503,12 +511,41 @@ func TestMarksSettleForAnySetOfProjects(t *testing.T) {
 		if len(thawed)+len(frozenIcons) <= 8 && len(icons) != len(thawed) {
 			t.Fatalf("%d: %d names drawn on %d icons", iter, len(thawed), len(icons))
 		}
-		if len(thawed)+len(frozenPairs) <= 56 && len(pairs) != len(thawed) {
+		pairsGoRound := len(thawed)+len(frozenPairs) <= 56
+		if len(stored) == 0 && pairsGoRound && len(pairs) != len(thawed) {
 			t.Fatalf("%d: %d names drawn with %d pairs", iter, len(thawed), len(pairs))
+		}
+		if pairsGoRound {
+			for _, d := range thawed {
+				if !slices.ContainsFunc(stored, func(m projectMark) bool { return m.Name == d.Name }) && pairUses[[2]string{d.Icon, d.Color}] > 1 {
+					t.Fatalf("%d: new %q is drawn with a pair another shown has: %v", iter, d.Name, d)
+				}
+			}
 		}
 		if !hasFrozen && len(shown) <= 8 && len(icons) != len(shown) {
 			t.Fatalf("%d: %d names drawn on %d icons", iter, len(shown), len(icons))
 		}
+
+		// R: only a newer project moves, and only off an icon one seen
+		// before it, and shown, has while icons go round.
+		for i := range stored {
+			if out[i] == stored[i] {
+				continue
+			}
+			firstOf := func(j int) bool {
+				return slices.IndexFunc(stored, func(m projectMark) bool { return m.Name == stored[j].Name }) == j
+			}
+			d, f := drawnHere(stored[i])
+			older := false
+			for j := range i {
+				o, _ := drawnHere(stored[j])
+				older = older || firstOf(j) && slices.Contains(shown, o.Name) && o.Icon == d.Icon
+			}
+			if f || !firstOf(i) || !older || len(thawed)+len(frozenIcons) > 8 {
+				t.Fatalf("%d: %v moved to %v", iter, stored[i], out[i])
+			}
+		}
+
 		// P3: settling its own output changes nothing.
 		if again, changed := settleMarks(out, shown); changed || !slices.Equal(again, out) {
 			t.Fatalf("%d: settling %d names again changed them", iter, len(shown))
@@ -546,25 +583,62 @@ func TestMarksSettleForAnySetOfProjects(t *testing.T) {
 		}
 
 		// P7: shown one way and another by turns, as a server comes and
-		// goes, the marks settle in a round and then stay.
-		// Nested sets always do; two that overlap do while all the names
-		// the file holds fit, so that none need take another's mark.
-		a := shown[:r.IntN(len(shown)+1)]
-		b := slices.Clone(shown)
-		if r.IntN(2) == 0 {
-			b = append(b[len(a)/2:], randomNames(r.IntN(20))...)
-			all := map[string]bool{}
-			for _, m := range stored {
-				all[m.Name] = true
+		// goes or two windows show different projects, the marks settle in
+		// a round and then stay: one set inside the other, either first;
+		// two that overlap; two apart. Two that overlap, each of 8 or fewer
+		// but more together, can still go round a while: a name moved for
+		// one set may land on an icon one only the other shows has.
+		bucket := func() int {
+			switch r.IntN(4) {
+			case 0:
+				return 1 + r.IntN(8)
+			case 1:
+				return 9 + r.IntN(8)
+			case 2:
+				return 48 + r.IntN(17)
 			}
-			for _, n := range slices.Concat(a, b) {
-				all[n] = true
+			return 1 + r.IntN(70)
+		}
+		na, nb := bucket(), bucket()
+		u := randomNames(na + nb)
+		var a, b []string
+		switch kind := iter % 4; kind {
+		case 0, 1:
+			a, b = u[:min(na, nb)], u[:max(na, nb)]
+			if kind == 1 {
+				a, b = b, a
 			}
-			if fits := len(all) <= 8 || len(a) > 8 && len(b) > 8 && len(all) <= 56; !fits || hasFrozen {
-				b = shown
+		case 2:
+			k := 1 + r.IntN(min(na, nb))
+			a, b = u[:na], u[na-k:na-k+nb]
+			if na <= 8 && nb <= 8 && na+nb-k > 8 {
+				continue
+			}
+		case 3:
+			a, b = u[:na], u[na:]
+		}
+		var hist []projectMark
+		switch r.IntN(3) {
+		case 1:
+			for _, n := range slices.Concat(randomNames(r.IntN(30)), a, b) {
+				if r.IntN(2) == 0 {
+					hist, _ = settleMarks(hist, []string{n})
+				}
+			}
+			hist, _ = settleMarks(hist, randomNames(r.IntN(20)))
+		case 2:
+			for _, n := range slices.Concat(randomNames(r.IntN(30)), a, b) {
+				if r.IntN(2) == 0 {
+					hist = append(hist, projectMark{n, projectIcons[r.IntN(8)], projectColors[r.IntN(7)]})
+				}
 			}
 		}
-		s := stored
+		for i := range hist {
+			if r.IntN(8) == 0 {
+				hist[i].Icon = "rocket"
+			}
+		}
+		s := hist
 		s, _ = settleMarks(s, a)
 		s, _ = settleMarks(s, b)
 		for round := range 3 {
@@ -937,5 +1011,99 @@ func TestMarksThatCantBeSavedHoldForTheSession(t *testing.T) {
 	by := marksDrawn(a)
 	if by["glitched"].Icon == by["mygo"].Icon || by["mygo"].Icon == by["pstack-t3"].Icon || by["glitched"].Icon == by["pstack-t3"].Icon {
 		t.Errorf("drawn %v", by)
+	}
+}
+
+func TestANewProjectPastEightKeepsOffAPairOneNotShownHas(t *testing.T) {
+	// openbot hashes to phone #22c55e, which aaa, not shown, has. Nine
+	// others are shown, none on phone.
+	stored := []projectMark{{"aaa", "phone", "#22c55e"}}
+	var shown []string
+	for i := 0; len(shown) < 9; i++ {
+		if m := hashOf(fmt.Sprintf("s%d", i)); m.Icon != "phone" {
+			stored = append(stored, m)
+			shown = append(shown, m.Name)
+		}
+	}
+	shown = append(shown, "openbot")
+	out, _ := settleMarks(stored, shown)
+	if m := markOf(t, out, "openbot"); m != (projectMark{"openbot", "phone", "#f97316"}) {
+		t.Errorf("openbot is %v; want phone #f97316", m)
+	}
+	steady(t, out, shown)
+}
+
+// serverProjects are 56 projects a server and this computer show, the
+// first five of them this computer's, from a run that rewrote marks.json
+// on every start.
+var serverProjects = strings.Fields(`
+itbko7rutp zt i 5c0_gc h4_p y 5fof6arp z p49r6xrd. q h-awmjhw
+wca6xxxa3 _s g1vd qbrl6wc x276xdf __j_yan 9 lu4vr.yl nz1kvid
+t0ihau7y f47505.1s z-z6vtgo n4g2 i_u8kom8e6 p7n kk wp. rbbn g43
+mygo th_q 7y ksth8 mk54r1y nc 4_ kjiko8 mv6k .hgw q3ynwhw2fj 0rkwa
+.ziu75 d.zx6wt6 kc0qz nsu 562nomst1 3aqf04mo rbxjzfwu 54odg2za
+7lnqxc 1pzg ci8bplfjxd r3zq1bvq lv95bq wpwged_dba`)
+
+// writes is how many times marks.json in dir changes over steps.
+func writes(t *testing.T, dir string, steps func(step func())) int {
+	t.Helper()
+	path := filepath.Join(dir, "marks.json")
+	prev, _ := os.ReadFile(path)
+	n := 0
+	steps(func() {
+		now, _ := os.ReadFile(path)
+		if !bytes.Equal(now, prev) {
+			n++
+		}
+		prev = now
+	})
+	return n
+}
+
+// serverMarks is a state directory whose marks.json was settled with all
+// of serverProjects shown.
+func serverMarks(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	ms, _ := settleMarks(nil, serverProjects)
+	b, _ := json.Marshal(ms)
+	if err := os.WriteFile(filepath.Join(dir, "marks.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestMarksStayPutOverRestartsAsAServersProjectsArrive(t *testing.T) {
+	// Each start shows this computer's projects, then the server's too.
+	dir := serverMarks(t)
+	n := writes(t, dir, func(step func()) {
+		for range 6 {
+			a := marksApp(dir, serverProjects[:5]...)
+			step()
+			showMarks(a, serverProjects...)
+			step()
+		}
+	})
+	if n > 1 {
+		t.Errorf("marks.json written %d times over 6 starts", n)
+	}
+}
+
+func TestTwoWindowsShowingDifferentProjectsWriteMarksOnce(t *testing.T) {
+	dir := serverMarks(t)
+	here, both := marksApp(dir), marksApp(dir)
+	n := writes(t, dir, func(step func()) {
+		for range 20 {
+			// Apart in time, so that each sees what the other wrote.
+			time.Sleep(2 * time.Millisecond)
+			showMarks(here, serverProjects[:5]...)
+			step()
+			time.Sleep(2 * time.Millisecond)
+			showMarks(both, serverProjects...)
+			step()
+		}
+	})
+	if n > 1 {
+		t.Errorf("marks.json written %d times over 40 rebuilds", n)
 	}
 }
