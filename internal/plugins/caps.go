@@ -75,6 +75,7 @@ var Effects = map[string]string{
 	"threads.configure":      "threads:write",
 	"threads.setAccess":      "threads:access",
 	"composer.submit":        "threads:write",
+	"composer.quote":         "threads:write",
 	"models.list":            "",
 	"skills.list":            "threads:read",
 	"projects.remove":        "threads:write",

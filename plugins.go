@@ -60,6 +60,7 @@ var pluginIcons = map[string]*ui.SVG{
 	"file":     icFile,
 	"wrap":     icWrap,
 	"copy":     icCopy,
+	"quote":    icQuote,
 	"note":     icFile,
 	"inbox":    icInbox,
 	"child":    icChild,
@@ -607,6 +608,8 @@ func (a *app) pluginEffect(id string, e plugins.Effect) (any, error) {
 			return nil, fmt.Errorf("%w: composer.submit would start a thread at %s, which needs the threads:access capability", plugins.ErrDenied, a.access)
 		}
 		return a.submitEffect(e.Args)
+	case "composer.quote":
+		return a.quoteEffect(e.Args)
 	case "threads.markRead":
 		t, err := a.pluginFind(e.Args)
 		if err != nil {

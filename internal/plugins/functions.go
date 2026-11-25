@@ -55,6 +55,7 @@ globalThis.glitched = Object.freeze({
   composer: Object.freeze({
     draft: (text, where) => app("composer.draft", typeof where === "object" && where !== null ? { ...where, text } : { text, workspace: where }),
     submit: (thread) => app("composer.submit", { thread: thread ?? "" }),
+    quote: (thread, ask) => app("composer.quote", { thread: thread ?? "", ask: ask ?? "" }),
   }),
   threads: Object.freeze({
     list: () => app("threads.list"),
