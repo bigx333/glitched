@@ -9,6 +9,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,8 +18,9 @@ import (
 	"time"
 )
 
-// Label is the launchd job label and base identifier.
-const Label = "com.glitched.engine"
+// Label is the launchd job label and base identifier. scripts/glitched
+// installs the same job.
+const Label = "com.example.glitched.daemon"
 
 // ErrUnsupported is returned when background service installation is
 // requested on an unsupported operating system.
@@ -32,7 +34,8 @@ type Options struct {
 	Home   string // override for $HOME (mostly tests)
 }
 
-// Status describes the installed state and live health of the background service.
+// Status describes the installed state and live health of the background
+// service. Binary, Dir and LogPath are what the installed definition runs.
 type Status struct {
 	Supported bool   `json:"supported"`
 	Installed bool   `json:"installed"`
@@ -41,7 +44,150 @@ type Status struct {
 	UnitPath  string `json:"unitPath,omitempty"`
 	LogPath   string `json:"logPath,omitempty"`
 	Binary    string `json:"binary,omitempty"`
+	Dir       string `json:"dir,omitempty"`
 	Detail    string `json:"detail,omitempty"`
+}
+
+// manager is the OS's service manager, which runs the definition Install
+// writes.
+type manager interface {
+	// path is where the definition lives for the user whose home is home.
+	path(home string) string
+	render(Options) ([]byte, error)
+	// parse reads what a definition runs.
+	parse(data []byte) (binary, dir, log string)
+	// load has the manager run the definition at path, starting it if it
+	// stopped. restart: the definition changed, so a running job restarts
+	// to apply it.
+	load(ctx context.Context, path string, restart bool) error
+	// unload stops the job and has the manager drop it. The definition
+	// stays on disk.
+	unload(ctx context.Context) error
+	state(ctx context.Context) (running bool, pid int)
+}
+
+// osManager is this OS's manager, nil where none is supported.
+var osManager = func() manager {
+	switch runtime.GOOS {
+	case "darwin":
+		return launchd{}
+	case "linux":
+		return systemd{}
+	}
+	return nil
+}()
+
+// Install writes the service's definition and has the manager run it. A
+// definition that is installed already and unchanged leaves its engine
+// running; a changed one restarts it. When the manager refuses, what was
+// installed before is put back.
+func Install(ctx context.Context, opts Options) (Status, error) {
+	m := osManager
+	if m == nil {
+		return Inspect(ctx, opts), ErrUnsupported
+	}
+	opts, err := resolveOptions(opts)
+	if err != nil {
+		return Status{}, err
+	}
+	if err := os.MkdirAll(opts.Dir, 0o700); err != nil {
+		return Status{}, err
+	}
+	data, err := m.render(opts)
+	if err != nil {
+		return Status{}, err
+	}
+	path := m.path(opts.Home)
+	old, err := os.ReadFile(path)
+	had := err == nil
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return Status{}, err
+	}
+	if had && bytes.Equal(old, data) {
+		if err := m.load(ctx, path, false); err != nil {
+			return Inspect(ctx, opts), fmt.Errorf("service: install: %w", err)
+		}
+		return Inspect(ctx, opts), nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return Status{}, err
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return Status{}, err
+	}
+	if err := m.load(ctx, path, had); err != nil {
+		var undo error
+		if had {
+			undo = os.WriteFile(path, old, 0o644)
+			if undo == nil {
+				undo = m.load(ctx, path, true)
+			}
+		} else {
+			_ = m.unload(ctx) // it may never have loaded
+			undo = os.Remove(path)
+		}
+		if undo != nil {
+			err = fmt.Errorf("%w; putting back what was installed: %w", err, undo)
+		}
+		return Inspect(ctx, opts), fmt.Errorf("service: install: %w", err)
+	}
+	return Inspect(ctx, opts), nil
+}
+
+// Uninstall stops the service and removes its definition. When the
+// manager refuses to stop it, the definition stays.
+func Uninstall(ctx context.Context, opts Options) (Status, error) {
+	m := osManager
+	if m == nil {
+		return Inspect(ctx, opts), ErrUnsupported
+	}
+	home, err := homeOf(opts)
+	if err != nil {
+		return Status{}, err
+	}
+	opts.Home = home
+	path := m.path(home)
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return Inspect(ctx, opts), nil
+	}
+	if err := m.unload(ctx); err != nil {
+		return Inspect(ctx, opts), fmt.Errorf("service: uninstall: %w", err)
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return Inspect(ctx, opts), err
+	}
+	return Inspect(ctx, opts), nil
+}
+
+// Inspect reads the installed definition and asks the manager whether it
+// runs.
+func Inspect(ctx context.Context, opts Options) Status {
+	m := osManager
+	if m == nil {
+		return Status{Detail: ErrUnsupported.Error()}
+	}
+	st := Status{Supported: true}
+	home, err := homeOf(opts)
+	if err != nil {
+		st.Detail = err.Error()
+		return st
+	}
+	st.UnitPath = m.path(home)
+	data, err := os.ReadFile(st.UnitPath)
+	if err != nil {
+		return st
+	}
+	st.Installed = true
+	st.Binary, st.Dir, st.LogPath = m.parse(data)
+	st.Running, st.PID = m.state(ctx)
+	return st
+}
+
+func homeOf(opts Options) (string, error) {
+	if opts.Home != "" {
+		return opts.Home, nil
+	}
+	return os.UserHomeDir()
 }
 
 // ResolveBinary returns explicit if non-empty, otherwise glitched from PATH
@@ -60,6 +206,10 @@ func ResolveBinary(explicit string) (string, error) {
 	return filepath.Abs(exe)
 }
 
+// pathMark comes before the PATH the login shell prints, so what its
+// profile prints first stays out.
+const pathMark = "\x00glitched-path\x00"
+
 // CapturePATH captures the user's login-shell PATH so backgrounded agents
 // find user-installed CLIs (claude, codex, agy, gemini, opencode, git, node).
 func CapturePATH() string {
@@ -76,24 +226,21 @@ func CapturePATH() string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, shell, "-lc", `printf %s "$PATH"`).Output()
+	out, err := exec.CommandContext(ctx, shell, "-lc", `printf '\000glitched-path\000%s' "$PATH"`).Output()
 	if err != nil {
 		return fallback
 	}
-	if p := strings.TrimSpace(string(out)); p != "" {
+	_, p, ok := strings.Cut(string(out), pathMark)
+	if p = strings.TrimSpace(p); ok && p != "" {
 		return p
 	}
 	return fallback
 }
 
 func resolveOptions(opts Options) (Options, error) {
-	home := opts.Home
-	if home == "" {
-		var err error
-		home, err = os.UserHomeDir()
-		if err != nil {
-			return opts, err
-		}
+	home, err := homeOf(opts)
+	if err != nil {
+		return opts, err
 	}
 	opts.Home = home
 	if opts.Dir == "" {
@@ -111,6 +258,19 @@ func resolveOptions(opts Options) (Options, error) {
 		opts.PATH = CapturePATH()
 	}
 	return opts, nil
+}
+
+// command runs a manager's command, its output in the error when it fails.
+func command(ctx context.Context, name string, args ...string) ([]byte, error) {
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return out, fmt.Errorf("%s %s: %s", name, strings.Join(args, " "), msg)
+	}
+	return out, nil
 }
 
 func xmlText(s string) string {
@@ -135,10 +295,9 @@ func RenderPlist(opts Options) ([]byte, error) {
 	b.WriteString(`<dict>` + "\n")
 	b.WriteString("\t<key>Label</key>\n\t<string>" + xmlText(Label) + "</string>\n")
 	b.WriteString("\t<key>ProgramArguments</key>\n\t<array>\n")
-	b.WriteString("\t\t<string>" + xmlText(opts.Binary) + "</string>\n")
-	b.WriteString("\t\t<string>serve</string>\n")
-	b.WriteString("\t\t<string>-dir</string>\n")
-	b.WriteString("\t\t<string>" + xmlText(opts.Dir) + "</string>\n")
+	for _, arg := range serveArgs(opts) {
+		b.WriteString("\t\t<string>" + xmlText(arg) + "</string>\n")
+	}
 	b.WriteString("\t</array>\n")
 	b.WriteString("\t<key>EnvironmentVariables</key>\n\t<dict>\n")
 	if opts.PATH != "" {
@@ -157,6 +316,25 @@ func RenderPlist(opts Options) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
+// serveArgs is what the service runs. -wait-lock has it wait while the
+// app's own engine holds the state directory, which the app hands over to
+// it, instead of exiting.
+func serveArgs(opts Options) []string {
+	return []string{opts.Binary, "serve", "-dir", opts.Dir, "-wait-lock"}
+}
+
+// unitQuote quotes s for a systemd unit line, where % starts a specifier
+// and, in ExecStart, $ a variable.
+func unitQuote(s string, exec bool) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, `%`, `%%`)
+	if exec {
+		s = strings.ReplaceAll(s, `$`, `$$`)
+	}
+	return `"` + s + `"`
+}
+
 // RenderSystemdUnit returns the systemd user unit contents for opts.
 func RenderSystemdUnit(opts Options) ([]byte, error) {
 	if opts.Binary == "" {
@@ -165,22 +343,19 @@ func RenderSystemdUnit(opts Options) ([]byte, error) {
 	if opts.Dir == "" {
 		return nil, errors.New("service: state directory is required")
 	}
-	quote := func(s string) string {
-		s = strings.ReplaceAll(s, `\`, `\\`)
-		s = strings.ReplaceAll(s, `"`, `\"`)
-		return `"` + s + `"`
+	var exec []string
+	for _, arg := range serveArgs(opts) {
+		exec = append(exec, unitQuote(arg, true))
 	}
 	var b strings.Builder
 	b.WriteString("[Unit]\nDescription=Glitched Engine\nAfter=network.target\n\n")
 	b.WriteString("[Service]\n")
 	b.WriteString("Type=simple\n")
-	b.WriteString("ExecStart=" + quote(opts.Binary) + " serve -dir " + quote(opts.Dir) + "\n")
+	b.WriteString("ExecStart=" + strings.Join(exec, " ") + "\n")
 	if opts.PATH != "" {
-		b.WriteString("Environment=" + quote("PATH="+opts.PATH) + "\n")
+		b.WriteString("Environment=" + unitQuote("PATH="+opts.PATH, false) + "\n")
 	}
 	b.WriteString("Restart=on-failure\n")
-	// Exit code 3 means another engine holds engine.lock.
-	b.WriteString("RestartPreventExitStatus=3\n")
 	b.WriteString("RestartSec=2\n\n")
 	b.WriteString("[Install]\nWantedBy=default.target\n")
 	return []byte(b.String()), nil

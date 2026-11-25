@@ -76,6 +76,9 @@ func serviceCmd(ctx context.Context, args []string) error {
 	default:
 		fmt.Printf("status     installed (stopped)\nunit       %s\n", st.UnitPath)
 	}
+	if st.Dir != "" && st.Installed {
+		fmt.Printf("dir        %s\n", st.Dir)
+	}
 	if st.LogPath != "" && st.Installed {
 		fmt.Printf("log        %s\n", st.LogPath)
 	}

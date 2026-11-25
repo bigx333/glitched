@@ -22,7 +22,7 @@ func TestRenderPlistAndEscaping(t *testing.T) {
 		t.Fatalf("invalid XML plist: %v\n%s", err, data)
 	}
 	text := string(data)
-	for _, want := range []string{Label, "<string>serve</string>", "<key>KeepAlive</key>", "<key>SuccessfulExit</key>", "<false/>", "&amp;", "&lt;1&gt;"} {
+	for _, want := range []string{Label, "<string>serve</string>", "<string>-wait-lock</string>", "<key>KeepAlive</key>", "<key>SuccessfulExit</key>", "<false/>", "&amp;", "&lt;1&gt;"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("plist missing %q:\n%s", want, text)
 		}
@@ -32,7 +32,7 @@ func TestRenderPlistAndEscaping(t *testing.T) {
 func TestRenderSystemdUnit(t *testing.T) {
 	data, err := RenderSystemdUnit(Options{
 		Binary: "/usr/local/bin/glitched",
-		Dir:    "/home/user/.glitched",
+		Dir:    "/home/user/100% $HOME",
 		PATH:   "/home/user/.local/bin:/usr/bin",
 	})
 	if err != nil {
@@ -40,10 +40,9 @@ func TestRenderSystemdUnit(t *testing.T) {
 	}
 	text := string(data)
 	for _, want := range []string{
-		`ExecStart="/usr/local/bin/glitched" serve -dir "/home/user/.glitched"`,
+		`ExecStart="/usr/local/bin/glitched" "serve" "-dir" "/home/user/100%% $$HOME" "-wait-lock"`,
 		`Environment="PATH=/home/user/.local/bin:/usr/bin"`,
 		`Restart=on-failure`,
-		`RestartPreventExitStatus=3`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("unit missing %q:\n%s", want, text)

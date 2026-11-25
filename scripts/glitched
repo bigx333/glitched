@@ -312,6 +312,7 @@ write_launchd_plist() {
     <string>serve</string>
     <string>-dir</string>
     <string>$esc_dir</string>
+    <string>-wait-lock</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -373,7 +374,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-ExecStart="$GLITCHED_CLI" serve -dir "$GLITCHED_DIR"
+ExecStart="$GLITCHED_CLI" serve -dir "$GLITCHED_DIR" -wait-lock
 Environment="PATH=$svc_path"
 Restart=on-failure
 RestartPreventExitStatus=3
