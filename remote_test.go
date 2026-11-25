@@ -252,6 +252,7 @@ func TestARemoteChildsRowSaysItsState(t *testing.T) {
 		{"needs-you", func(v *api.Thread) { v.Run = api.RunWaiting }, "Needs you on desk"},
 		{"idle", func(v *api.Thread) { v.Run = api.RunIdle }, "Idle on desk"},
 		{"cut-off", func(v *api.Thread) { v.Run = api.RunUncertain }, "Needs you on desk"},
+		{"held", func(v *api.Thread) { v.Run, v.Remote.Held = api.RunIdle, true }, "Held on desk"},
 		{"lost", func(v *api.Thread) { v.Remote.Lost = "the link was revoked on desk" }, "Lost on desk"},
 	} {
 		c.set(&kid.View)
@@ -271,6 +272,15 @@ func TestARemoteChildsRowSaysItsState(t *testing.T) {
 	if !h.tt.HasText("the link was revoked on desk") {
 		t.Errorf("the lost row's tip shows %q, want why", h.tt.Texts())
 	}
+	kid.View.Remote.Lost, kid.View.Remote.Held = "", true
+	h.a.choose(kid)
+	h.tt.Frame()
+	h.tt.Advance(time.Second)
+	h.tt.Frame()
+	if h.tt.HasText("Resume") || !h.tt.HasText("Stopped there with messages or reports waiting. They start when someone resumes it on desk; it can't be resumed here.") {
+		t.Errorf("a child held on desk shows %q; want why, and no Resume here", h.tt.Texts())
+	}
+	shoot(t, h, "a-held-notice")
 }
 
 // Opening a placeholder whose machine this app doesn't pair says so; the

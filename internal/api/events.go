@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -120,6 +121,27 @@ type RemoteSeen struct {
 	Model  ModelRef    `json:"model,omitzero"`
 	Access Access      `json:"access,omitempty"`
 	Turn   *TurnResult `json:"turn,omitempty"`
+	// Hold is what a stop there left waiting, which only its person
+	// there resumes.
+	Hold Hold `json:"hold,omitzero"`
+}
+
+// Hold is what a stop of a child on another machine left waiting there:
+// the messages of the user's it holds, the wakes held behind it, and
+// whether its last run that wasn't silent was stopped, which holds them.
+type Hold struct {
+	Messages []ID `json:"messages,omitempty"`
+	Wakes    []ID `json:"wakes,omitempty"`
+	Stopped  bool `json:"stopped,omitempty"`
+}
+
+// Holding is whether a resume there would start something, as a thread's
+// Resumable says of an idle one.
+func (h Hold) Holding() bool { return len(h.Messages) > 0 || h.Stopped && len(h.Wakes) > 0 }
+
+// Equal is whether h and o hold the same.
+func (h Hold) Equal(o Hold) bool {
+	return slices.Equal(h.Messages, o.Messages) && slices.Equal(h.Wakes, o.Wakes) && h.Stopped == o.Stopped
 }
 
 // RemoteLost is a placeholder whose child this engine no longer reaches

@@ -575,10 +575,13 @@ type Thread struct {
 // started; Lost is why it no longer follows the child. A read fills
 // Machine and Heard; a stream's view leaves them out.
 type Placement struct {
-	Engine  ID        `json:"engine"`
-	Link    ID        `json:"link"`
-	Thread  ID        `json:"thread,omitzero"`
-	Run     ID        `json:"run,omitzero"`
+	Engine ID `json:"engine"`
+	Link   ID `json:"link"`
+	Thread ID `json:"thread,omitzero"`
+	Run    ID `json:"run,omitzero"`
+	// Held is that a stop there left messages or reports waiting, which
+	// only a resume there starts.
+	Held    bool      `json:"held,omitempty"`
 	Machine string    `json:"machine,omitempty"`
 	Heard   time.Time `json:"heard,omitzero"`
 	Lost    string    `json:"lost,omitempty"`

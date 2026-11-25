@@ -372,6 +372,8 @@ func (a *app) remoteState(t thread) (string, ui.Color, string) {
 		return "Needs you on " + on, palette.amber, ""
 	case t.View.Working():
 		return "Working on " + on, palette.blue, ""
+	case r.Held:
+		return "Held on " + on, palette.amber, "Stopped there with messages or reports waiting. They start when someone resumes it on " + on + "; it can't be resumed here."
 	}
 	return "Idle on " + on, palette.faint, ""
 }

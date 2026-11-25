@@ -125,6 +125,8 @@ type Remote struct {
 	Model  api.ModelRef    `json:"model,omitzero"`
 	Access api.Access      `json:"access,omitempty"`
 	Turn   *api.TurnResult `json:"turn,omitempty"`
+	// Hold is what a stop there left waiting.
+	Hold api.Hold `json:"hold,omitzero"`
 }
 
 // Origin is a link's thread's: where it came from, as api.Origin, its
@@ -359,6 +361,7 @@ func View(t Thread) api.Thread {
 	}
 	if r := t.Remote; r != nil {
 		v.Remote = &api.Placement{Engine: r.Engine, Link: r.Link, Thread: r.Thread, Run: r.Run, Lost: r.Lost}
+		v.Remote.Held = r.State == RemoteBoundState && r.Slot == api.RunIdle && r.Hold.Holding() && !t.settled()
 		switch {
 		case r.State == RemoteBoundState && r.Silent && r.Slot != api.RunUncertain:
 			// A silent run there shows nothing, as one here does.
