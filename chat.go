@@ -878,7 +878,7 @@ func (a *app) entry(c *ui.Context, t thread, rs rows, i int) {
 		a.forkDivider(c, t, rs.es[i])
 		return
 	}
-	m := timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil, At: e.at}
+	m := timelineMessage{Key: e.key, Kind: entryKindNames[e.kind], Streaming: e.streaming, Note: e.note, Failed: e.failed.Err != nil, At: e.at, Working: e.working, Paused: e.paused, Took: e.took, Work: timelineWork(e.work), Plan: e.plan}
 	acted := false
 	a.pluginComponent(c, "timeline.message", &t, componentCopy{
 		key: e.key,
@@ -947,6 +947,45 @@ type timelineMessage struct {
 	Failed    bool   `json:"failed,omitempty"`
 	// At is when a message was sent or a reply's words came.
 	At time.Time `json:"at,omitzero"`
+	// Working, Paused, Took, Work and Plan structure work and plan rows.
+	Working bool               `json:"working,omitempty"`
+	Paused  string             `json:"paused,omitempty"`
+	Took    string             `json:"took,omitempty"`
+	Work    []timelineWorkStep `json:"work,omitempty"`
+	Plan    []api.PlanStep     `json:"plan,omitempty"`
+}
+
+// timelineWorkStep is a step of a work row, structured for a plugin's own
+// work log. Its output is included only while the row shows it: a failed
+// command's.
+type timelineWorkStep struct {
+	Item     string    `json:"item"`
+	Kind     string    `json:"kind"`
+	Title    string    `json:"title"`
+	Status   string    `json:"status"`
+	Path     string    `json:"path,omitempty"`
+	Exit     *int      `json:"exit,omitempty"`
+	Output   string    `json:"output,omitempty"`
+	Started  time.Time `json:"started,omitzero"`
+	Ended    time.Time `json:"ended,omitzero"`
+	Subagent bool      `json:"subagent,omitempty"`
+	Steps    int       `json:"steps,omitempty"`
+}
+
+func timelineWork(ws []client.WorkStep) []timelineWorkStep {
+	out := make([]timelineWorkStep, 0, len(ws))
+	for _, w := range ws {
+		steps := 0
+		if w.Subagent != nil {
+			steps = w.Subagent.Steps()
+		}
+		out = append(out, timelineWorkStep{
+			Item: w.Item, Kind: w.Kind, Title: w.Title, Status: string(w.Status), Path: w.Path,
+			Exit: w.Exit, Output: w.Output, Started: w.Started, Ended: w.Ended,
+			Subagent: w.Subagent != nil, Steps: steps,
+		})
+	}
+	return out
 }
 
 var entryKindNames = map[entryKind]string{entryUser: "user", entryAssistant: "assistant", entryWork: "work", entryPlan: "plan", entryFailed: "failed", entryError: "error"}

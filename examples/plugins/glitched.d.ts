@@ -677,6 +677,13 @@ interface TimelineMessageContext {
   failed?: boolean;
   /** When you sent a message of yours (as the engine took it in, even while it waits, is held or was cancelled), or a reply's first words came, in ISO 8601; left out before the engine takes a message in and for other rows. */
   at?: string;
+  /** A work row's state and steps, structured for the plugin's own log. */
+  working?: boolean;
+  paused?: string;
+  took?: string;
+  work?: { item: string; kind: string; title: string; status: string; path?: string; exit?: number; output?: string; started?: string; ended?: string; subagent?: boolean; steps?: number }[];
+  /** A plan row's steps. */
+  plan?: { text: string; status: string }[];
 }
 
 /**
