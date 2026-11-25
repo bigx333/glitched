@@ -305,7 +305,10 @@ func (h *Host) hear(placeholder api.ID) {
 // there. A refusal of c is logged and ends it, as a refused stop of a
 // local child records nothing: the child there stays as it is. A child
 // lost on the way is lost here too, the stop that didn't reach it said:
-// what runs there is its person's to stop. A message or a narrowing is
+// what runs there is its person's to stop. An answer a machine's link
+// may not send, as one from before links took answers says, is refused
+// too: the answer is lost, never the child, and its question stays its
+// person's there. A message or a narrowing is
 // ended by a settle or a delete, which the stop after it takes up.
 func (h *Host) remoteCommand(e store.Effect, what string, at api.Remote, create *api.Command, c api.Command, narrow *api.Command) (engine.Observation, bool) {
 	ctx := h.ctx
@@ -344,8 +347,13 @@ func (h *Host) remoteCommand(e store.Effect, what string, at api.Remote, create 
 				return label, false, err
 			}
 		}
-		if err = send(c); errors.As(err, &rej) {
+		err = send(c)
+		if errors.As(err, &rej) {
 			refused = rej.Reason
+			return label, false, nil
+		}
+		if _, answer := c.Body.(api.RequestRespond); answer && errors.Is(err, api.ErrNotAllowed) {
+			refused = err.Error()
 			return label, false, nil
 		}
 		if err == nil && narrow != nil {
