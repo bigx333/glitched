@@ -2253,7 +2253,7 @@ func (a *app) terminal(c *ui.Context, t thread, workspace string) {
 			native: func(*widget.Node) { a.terminalHeader(c, title) },
 		})
 		a.pluginComponent(c, "thread.panel.terminal", &t, componentCopy{
-			key: key + "/body", box: func() ui.Element { return ui.Row(c).Grow(1).Shrink(1).Basis(0) }, context: ctx("body"),
+			key: key + "/body", box: func() ui.Element { return ui.Column(c).Grow(1).Shrink(1).Basis(0).FillWidth() }, context: ctx("body"),
 			native: func(*widget.Node) { a.terminalBody(c, s, err) },
 		})
 	})
