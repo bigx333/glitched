@@ -137,7 +137,7 @@ func TestAnUnreadableTokensFileIsLoggedOncePerError(t *testing.T) {
 	}
 }
 
-func TestNoUpgradeAfterARevokeReturnsGetsIn(t *testing.T) {
+func TestNoUpgradeAfterARemovalReturnsGetsIn(t *testing.T) {
 	quiet(t)
 	for attempt := range 50 {
 		dir := stateDir(t)
@@ -166,7 +166,7 @@ func TestNoUpgradeAfterARevokeReturnsGetsIn(t *testing.T) {
 			})
 		}
 		time.Sleep(2 * time.Millisecond)
-		if err := Revoke(dir, "laptop"); err != nil {
+		if err := RemoveToken(dir, "laptop"); err != nil {
 			t.Fatal(err)
 		}
 		var admitted atomic.Int32
@@ -182,7 +182,7 @@ func TestNoUpgradeAfterARevokeReturnsGetsIn(t *testing.T) {
 		running.Store(false)
 		bg.Wait()
 		if n := admitted.Load(); n > 0 {
-			t.Fatalf("attempt %d: %d upgrades that began after Revoke returned got in with the revoked token", attempt, n)
+			t.Fatalf("attempt %d: %d upgrades that began after RemoveToken returned got in with the removed token", attempt, n)
 		}
 	}
 }

@@ -126,7 +126,7 @@ func TestTCPAdmitsOnlyAPairedToken(t *testing.T) {
 		t.Fatalf("reached host %s, want %s", env.ID, local.ID)
 	}
 
-	// The engine is not restarted between pairing, use and revoking.
+	// The engine is not restarted between pairing, use and removing.
 	phone, err := Pair(dir, "phone")
 	if err != nil {
 		t.Fatal(err)
@@ -134,15 +134,15 @@ func TestTCPAdmitsOnlyAPairedToken(t *testing.T) {
 	if _, err := remote(t, d, phone).Info(context.Background()); err != nil {
 		t.Fatalf("a token paired while serving: %v", err)
 	}
-	if err := Revoke(dir, "phone"); err != nil {
+	if err := RemoveToken(dir, "phone"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := remote(t, d, phone).Info(context.Background()); !errors.Is(err, transport.ErrRefused) {
-		t.Fatalf("a new socket with a revoked token: %v, want ErrRefused", err)
+		t.Fatalf("a new socket with a removed token: %v, want ErrRefused", err)
 	}
 }
 
-func TestRevokingATokenClosesItsLiveSockets(t *testing.T) {
+func TestRemovingATokenClosesItsLiveSockets(t *testing.T) {
 	dir := stateDir(t)
 	token, err := Pair(dir, "laptop")
 	if err != nil {
@@ -153,7 +153,7 @@ func TestRevokingATokenClosesItsLiveSockets(t *testing.T) {
 	if _, err := live.Info(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := Revoke(dir, "laptop"); err != nil {
+	if err := RemoveToken(dir, "laptop"); err != nil {
 		t.Fatal(err)
 	}
 	// Nothing dials meanwhile, so only the engine's own reread can close the
@@ -165,7 +165,7 @@ func TestRevokingATokenClosesItsLiveSockets(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("a socket admitted before the revoke still answers: %v", err)
+			t.Fatalf("a socket admitted before the removal still answers: %v", err)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -208,8 +208,8 @@ func TestPairKeepsOnlyTheTokensHash(t *testing.T) {
 	if err != nil || len(ts) != 1 || ts[0].Label != "laptop" || ts[0].Created.IsZero() {
 		t.Fatalf("tokens: %+v %v", ts, err)
 	}
-	if err := Revoke(dir, "phone"); err == nil {
-		t.Fatal("revoked a label that has no token")
+	if err := RemoveToken(dir, "phone"); err == nil {
+		t.Fatal("removed a label that has no token")
 	}
 }
 

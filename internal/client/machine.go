@@ -135,8 +135,8 @@ func (m *Manager) AddMachine(label, server, token string, done func(error)) {
 	})
 }
 
-// RemoveMachine removes label's machine and its token here. Its link stays
-// valid on that machine until its person revokes it there.
+// RemoveMachine removes label's machine and its token here. Its link still
+// works on that machine until its person removes this one there.
 func (m *Manager) RemoveMachine(label string) error {
 	err := daemon.RemoveMachine(m.cfg.Dir, label)
 	m.changes++
@@ -144,10 +144,10 @@ func (m *Manager) RemoveMachine(label string) error {
 	return err
 }
 
-// Revoke removes label's token. The engine closes the sockets it admitted
-// within a second.
-func (m *Manager) Revoke(label string) error {
-	err := daemon.Revoke(m.cfg.Dir, label)
+// RemoveToken removes label's token. The engine closes the sockets it
+// admitted within a second.
+func (m *Manager) RemoveToken(label string) error {
+	err := daemon.RemoveToken(m.cfg.Dir, label)
 	m.changes++
 	m.Inspect()
 	return err

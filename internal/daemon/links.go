@@ -149,8 +149,9 @@ func AddMachine(ctx context.Context, dir, label, server, token string) (Machine,
 	return m, nil
 }
 
-// RemoveMachine removes label's machine and its token. The link stays
-// valid on that machine until its person revokes it there.
+// RemoveMachine removes label's machine and its token. The link still
+// works on that machine until its person removes this one there, or turns
+// children from other machines off.
 func RemoveMachine(dir, label string) error {
 	_, err := jsonfile.Edit(filepath.Join(dir, machinesFile), func(ms *[]Machine) error {
 		i := slices.IndexFunc(*ms, func(m Machine) bool { return m.Label == label })

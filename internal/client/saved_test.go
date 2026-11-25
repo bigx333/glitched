@@ -292,7 +292,7 @@ func TestRepairingATokenKeepsTheServersThreads(t *testing.T) {
 	online(t, g, box)
 	id := m.Create(box, "/work", "draft", fakeModel, api.AccessAsk, nil)
 	g.until(t, "the create confirmed", func() bool { th := box.Threads[id]; return th.known && len(th.Pending) == 0 })
-	if err := daemon.Revoke(rdir, "gui"); err != nil {
+	if err := daemon.RemoveToken(rdir, "gui"); err != nil {
 		t.Fatal(err)
 	}
 	g.until(t, "refused", func() bool { return box.Status == Status(Refused{}) })
@@ -659,7 +659,7 @@ func TestAnOpenTranscriptResumesAfterAReconnect(t *testing.T) {
 	online(t, g, box)
 	id := finishTurn(t, m, g, box)
 
-	if err := daemon.Revoke(rdir, "gui"); err != nil {
+	if err := daemon.RemoveToken(rdir, "gui"); err != nil {
 		t.Fatal(err)
 	}
 	g.until(t, "refused", func() bool { return box.Status == Status(Refused{}) })

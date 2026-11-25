@@ -41,15 +41,15 @@ func TestTailnetListensOnlyOnLoopbackOrTailscale(t *testing.T) {
 	}
 }
 
-func TestAuthorizeRefusesAnUnknownKeyAndClosesARevokedSocket(t *testing.T) {
+func TestAuthorizeRefusesAnUnknownKeyAndClosesARemovedTokensSocket(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	grant, revoke := context.WithCancel(ctx)
-	var revoked atomic.Bool
+	grant, remove := context.WithCancel(ctx)
+	var removed atomic.Bool
 	ep := &fakeEndpoint{reads: make(chan error, 2)}
 	admitGood := admit(map[string]context.Context{"good": grant})
 	addr := serveTailnet(t, &Server{Transport: Tailnet{}, Endpoint: ep, Authorize: func(r *http.Request, proved func(Key) bool) (Grant, error) {
-		if revoked.Load() {
+		if removed.Load() {
 			return Grant{}, errors.New("unknown token")
 		}
 		return admitGood(r, proved)
@@ -71,13 +71,13 @@ func TestAuthorizeRefusesAnUnknownKeyAndClosesARevokedSocket(t *testing.T) {
 		blocked <- err
 	}()
 	<-ep.reads
-	revoked.Store(true)
-	revoke()
+	removed.Store(true)
+	remove()
 	if err := <-blocked; !errors.Is(err, errLost) {
 		t.Fatalf("a call on a socket whose grant ended: %v, want the connection lost", err)
 	}
 	if _, err := good.Info(ctx); !errors.Is(err, ErrRefused) {
-		t.Fatalf("redialling with a revoked token: %v, want ErrRefused", err)
+		t.Fatalf("redialling with a removed token: %v, want ErrRefused", err)
 	}
 }
 

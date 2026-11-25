@@ -76,7 +76,7 @@ type Server struct {
 // A Grant is what Authorize admitted a socket with.
 type Grant struct {
 	Key Key // for the server's own proof
-	// Done's end closes the socket, as when the grant is revoked.
+	// Done's end closes the socket, as when its token is removed.
 	Done context.Context
 	// Link is set for a link's token. Its socket may make only the calls
 	// in linkMethods, each with Link in its ctx (api.LinkOf).

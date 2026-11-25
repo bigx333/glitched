@@ -28,8 +28,8 @@ type Places func(label string) (at api.Remote, ok bool, err error)
 
 // Links finds a link this engine minted by its id, as tokens.json has it
 // now, its access narrowed to this engine's setting for children from
-// other machines. An error is that it may start or run nothing, as it was
-// revoked or the setting is off: its text is the reason.
+// other machines. An error is that it may start or run nothing, as its
+// machine was removed or the setting is off: its text is the reason.
 type Links func(id api.ID) (api.Link, error)
 
 // Env is what a decision reads besides its thread, as the engine has it
@@ -389,7 +389,7 @@ type decision struct {
 // ceiling is the most the thread may run at now: any access for a
 // thread of this engine's own line, and for a link's thread or one under
 // it, the env's ceiling. ok is false when it may run at none, as the
-// link was revoked.
+// link's machine was removed.
 func (d *decision) ceiling() (c api.Access, ok bool) {
 	if d.env.Ceiling == nil {
 		return api.AccessFull, d.t.Origin == nil
