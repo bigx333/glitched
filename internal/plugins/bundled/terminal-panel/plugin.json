@@ -6,6 +6,6 @@
   "main": "main.js",
   "contract": "glitched",
   "contractVersion": 2,
-  "capabilities": ["ui.place", "ui.replace"],
+  "capabilities": ["ui.place", "ui.replace", "threads:read"],
   "glitched": { "places": [{ "id": "panel", "at": "thread.panel.terminal", "replaces": true }] }
 }

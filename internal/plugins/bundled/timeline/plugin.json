@@ -6,7 +6,7 @@
   "main": "main.js",
   "contract": "glitched",
   "contractVersion": 2,
-  "capabilities": ["ui.place", "ui.replace"],
+  "capabilities": ["ui.place", "ui.replace", "messages:read"],
   "glitched": {
     "places": [{ "id": "row", "at": "timeline.message", "replaces": true }]
   }
