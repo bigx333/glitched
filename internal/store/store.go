@@ -247,7 +247,7 @@ CREATE INDEX effects_open ON effects (state, id) WHERE state <> 'done';
 
 // schemaVersion is the user_version of a database this build created or
 // upgraded; upgrades[v] takes one at version v to v+1.
-const schemaVersion = 16
+const schemaVersion = 17
 
 var upgrades = map[int]string{
 	// Archived threads: disposition 3, which upgrade 3 drops. SQLite
@@ -374,6 +374,8 @@ ALTER TABLE runs ADD COLUMN resume_cancelled INTEGER NOT NULL DEFAULT 0 CHECK (r
 ALTER TABLE threads ADD COLUMN remote TEXT;
 ALTER TABLE threads ADD COLUMN origin TEXT;
 `,
+	// Retire old outbox work without replaying changes to the worktree.
+	16: `UPDATE effects SET state = 'done' WHERE kind IN ('checkpoint.capture', 'checkpoint.drop', 'thread.revert') AND state <> 'done';`,
 }
 
 func (s *Store) migrate() error {

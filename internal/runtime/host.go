@@ -49,8 +49,6 @@ type Host struct {
 	backoff   func(n int) time.Duration
 	step      func(step string, placeholder api.ID)
 
-	checkpoints *checkpointStores // where the threads' checkpoints go; nil keeps none
-
 	idleCompact atomic.Bool
 	// awake hears whether any agent of the host's works, each time that
 	// changes; working is the threads whose run does.
@@ -85,25 +83,14 @@ type Host struct {
 	busy    map[api.ID]bool     // threads with an effect in flight
 	runs    map[api.ID]*liveRun // by run
 	closing map[api.ID]bool     // threads whose run is over but whose agent is not closed yet, true while that agent may still work
-	// restoring is the worktrees whose files reverts put back, by the
-	// thread reverting, waiting the threads whose start in one waits for
-	// them to end, and passing those whose start got past them and isn't
-	// tracked yet.
-	restoring map[api.ID]*restoreMark
-	waiting   map[api.ID]bool
-	passing   map[api.ID]bool
-	opening   int // provider opens under way, which may have the agent at work
-	subs      map[*stream]struct{}
-	asks      map[askKey]chan json.RawMessage // credentials requests glitched mcp waits on
-	held      map[string]chan struct{}        // providers Hold holds, each closed on its release
-	sent      map[api.ID]bool                 // compactions compactLoop started, until their start is performed
+	opening int                 // provider opens under way, which may have the agent at work
+	subs    map[*stream]struct{}
+	asks    map[askKey]chan json.RawMessage // credentials requests glitched mcp waits on
+	held    map[string]chan struct{}        // providers Hold holds, each closed on its release
+	sent    map[api.ID]bool                 // compactions compactLoop started, until their start is performed
 	// agents are the runs whose agent may run here: from their start until
 	// it is closed, on past the run's own end.
 	agents map[*liveRun]bool
-	// confirming is the revert commands whose files are being saved
-	// before they commit, from before they save them until their submit
-	// returns: a submit of the same command waits for it.
-	confirming map[api.ID]confirmation
 	// reaching and followers cancel what reaches a placeholder's machine
 	// for it: the tries of its create, a message or a narrowing, which a
 	// settle or a delete ends, and its follower, which a delete ends.
@@ -111,14 +98,6 @@ type Host struct {
 	reaching  map[api.ID]context.CancelFunc
 	followers map[api.ID]context.CancelFunc
 	heard     map[api.ID]time.Time
-}
-
-// confirmation is a revert command being confirmed: its thread, the
-// checkpoint it is to put back, and done, closed once its submit returns.
-type confirmation struct {
-	thread api.ID
-	to     api.CheckpointRef
-	done   chan struct{}
 }
 
 // liveRun is a run this host drives. Cancelling ctx ends the run's provider
@@ -206,10 +185,6 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 		busy:          map[api.ID]bool{},
 		runs:          map[api.ID]*liveRun{},
 		closing:       map[api.ID]bool{},
-		restoring:     map[api.ID]*restoreMark{},
-		confirming:    map[api.ID]confirmation{},
-		waiting:       map[api.ID]bool{},
-		passing:       map[api.ID]bool{},
 		agents:        map[*liveRun]bool{},
 		subs:          map[*stream]struct{}{},
 		asks:          map[askKey]chan json.RawMessage{},
@@ -238,11 +213,6 @@ func New(ctx context.Context, st *store.Store, providers provider.Mux, opts ...O
 	}
 	h.ctx, h.cancel = context.WithCancel(context.Background())
 	h.drain, h.stopDrain = context.WithCancel(context.Background())
-	if h.checkpoints != nil {
-		for _, store := range h.checkpoints.stores() {
-			h.checkpoints.measure(ctx, store)
-		}
-	}
 	st.OnCommit(h.committed)
 	if err := h.boot(ctx); err != nil {
 		h.Close()
@@ -295,9 +265,6 @@ func (h *Host) Close() error {
 
 func (h *Host) Info(context.Context) (api.Environment, error) {
 	env := api.Environment{ID: h.store.HostID(), Name: h.name, Protocol: api.Protocol, Log: h.store.LogID()}
-	if h.checkpoints != nil {
-		env.Checkpoints = api.CheckpointStore{Bytes: h.checkpoints.total(), Limit: checkpointLimit}
-	}
 	return env, nil
 }
 
@@ -370,8 +337,6 @@ func (h *Host) Submit(ctx context.Context, c api.Command) (api.Receipt, error) {
 		if b.RemoveWorktree {
 			return h.deleteInWorktree(ctx, c)
 		}
-	case api.ThreadRevert:
-		return h.revertInWorktree(ctx, c)
 	}
 	return h.store.Submit(ctx, c, h.clock())
 }
@@ -391,7 +356,6 @@ func (h *Host) committed(c store.Commit) {
 	}
 	for _, e := range c.Events {
 		h.follow(e)
-		h.noteReverting(e, c.Threads)
 	}
 	for _, th := range c.Threads {
 		h.noteWorking(th.ID, works[th.Run] && th.Remote == nil)
@@ -611,7 +575,7 @@ func (h *Host) boot(ctx context.Context) error {
 		return err
 	}
 	h.skills.boot(append(survivors, closing...))
-	return h.bootReverting(ctx)
+	return nil
 }
 
 // work leases effects for threads that have none in flight, so one thread's
@@ -642,7 +606,7 @@ func (h *Host) work() {
 func (h *Host) busyThreads() []api.ID {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return slices.Concat(slices.Collect(maps.Keys(h.busy)), slices.Collect(maps.Keys(h.closing)), slices.Collect(maps.Keys(h.waiting)))
+	return slices.Concat(slices.Collect(maps.Keys(h.busy)), slices.Collect(maps.Keys(h.closing)))
 }
 
 func (h *Host) lane(e store.Effect) {
@@ -666,9 +630,6 @@ func (h *Host) perform(e store.Effect) {
 		h.report(e, b)
 		return
 	}
-	if _, ok := e.Body.(engine.StartTurn); ok && h.waitsOnRevert(e) {
-		return
-	}
 	var lr *liveRun
 	if b, ok := e.Body.(engine.StartTurn); ok {
 		// Tracked before the check, so a stop that commits after it still
@@ -676,7 +637,6 @@ func (h *Host) perform(e store.Effect) {
 		lr = h.track(b.Run, b.Model.Provider, nil)
 		h.mu.Lock()
 		lr.silent = b.ResumeOnly
-		delete(h.passing, e.Thread)
 		h.mu.Unlock()
 	}
 	var t engine.Thread
@@ -709,9 +669,6 @@ func (h *Host) perform(e store.Effect) {
 			return
 		}
 		h.record(e.Thread, skip, e.ID)
-		if b, ok := e.Body.(engine.RevertThread); ok && !b.KeepFiles {
-			h.revertEnded(e.Thread)
-		}
 		return
 	}
 	// Only an answer that is given holds the turn's end.
@@ -740,9 +697,6 @@ func (h *Host) perform(e store.Effect) {
 		} else if h.delivered(a) {
 			<-a.ctx.Done()
 		}
-	}
-	if b, ok := e.Body.(engine.RevertThread); ok && !b.KeepFiles {
-		defer h.revertEnded(e.Thread)
 	}
 	if _, started := o.(engine.Started); !started {
 		h.record(e.Thread, o, e.ID)
@@ -896,15 +850,6 @@ func (h *Host) call(e store.Effect, t engine.Thread, lr *liveRun) (o engine.Obse
 	case engine.RemoteConfigure:
 		return h.remoteCommand(e, "narrowing", api.Remote{Engine: b.Engine, Link: b.Link}, nil, b.Command, nil)
 
-	case engine.CaptureCheckpoint:
-		return h.capture(t, b)
-
-	case engine.DropCheckpoints:
-		return nil, h.dropCheckpoints(e.Thread)
-
-	case engine.RevertThread:
-		return h.revert(t, b)
-
 	case engine.DeliverAnswer:
 		if isAsk(b.Dedup) {
 			return h.answerAsk(b), true
@@ -1001,28 +946,16 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		s.Args, s.Env = slices.Clone(s.Args), maps.Clone(s.Env)
 		spec.MCP = append(spec.MCP, s)
 	}
-	// A rewound conversation the thread's runs have yet to take up has
-	// nothing of the thread's to compact.
-	rewound, err := h.store.Rewound(ctx, thread)
-	if err != nil {
-		return nil, err
-	}
-	// A fork whose runs have yet to take its source up does so as a
-	// rewind's next run does; one whose first message was a command of
-	// the agent's has a conversation of its own already, which the next
-	// run goes on in, handed the source's turns.
+	// A fork that first sent a slash command already has a session.
 	forked, err := h.store.Forked(ctx, thread)
 	if err != nil {
 		return nil, err
 	}
-	if (rewound != nil || forked != nil) && b.ResumeOnly {
+	if forked != nil && b.ResumeOnly {
 		return nil, errCompactNotDue
 	}
-	switch {
-	case rewound != nil:
-		spec.Rewound = &provider.Rewound{From: rewound.From, At: rewound.At}
-	case forked != nil && t.Session == "":
-		spec.Session, spec.Rewound = h.fork(ctx, thread, b, *forked)
+	if forked != nil && t.Session == "" {
+		spec.Session, spec.Fork = h.fork(ctx, thread, b, *forked)
 	}
 	spec.Skills = h.skills.stage(thread, b.Workspace, t.Project)
 	ag, err := h.providers.Open(ctx, spec)
@@ -1034,10 +967,8 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 		return nil, err
 	}
 	// The session is stored before the prompt goes out, so a crash after
-	// it still has the conversation to resume. The first run after a
-	// rewind says how it took the conversation up once its message went
-	// out, which ends the rewind; an agent that didn't take up the native
-	// one gets the kept turns, again if its first message never went.
+	// it still has the conversation to resume. A fork records how it took
+	// up the source conversation only after sending its first prompt.
 	session := spec.Session
 	if s, ok := ag.(provider.Sessioned); ok && s.Session() != "" {
 		session = s.Session()
@@ -1045,36 +976,14 @@ func (h *Host) open(ctx context.Context, t engine.Thread, b engine.StartTurn) (p
 	text := b.Text
 	var took *engine.Bound
 	native := false
-	if r, ok := ag.(provider.Rewinding); ok {
+	if r, ok := ag.(provider.NativeFork); ok {
 		native = r.Native()
 	}
 	switch {
-	case rewound != nil && forked != nil && slashCommand(text):
-		// A fork's turns would make the command words: the rewind and
-		// the fork wait for the next run, which takes both up in the
-		// conversation the command ran in.
-		if session != t.Session {
-			err = h.observe(ctx, thread, engine.Bound{Run: b.Run, Session: session}, 0)
-		}
-	case rewound != nil:
-		took = &engine.Bound{Run: b.Run, Session: session, Rewound: api.RewindPortable}
-		if native {
-			took.Rewound = api.RewindNative
-		}
-		if took.Rewound == api.RewindPortable || forked != nil {
-			var kept string
-			to, frame := rewound.To.ID, rewindFrame
-			if len(rewound.Restored) > 0 {
-				to, frame = rewound.Restored[len(rewound.Restored)-1], unrewindFrame
-			}
-			if kept, err = h.handoff(ctx, t, to, frame); err == nil {
-				text = kept + text
-			}
-		}
 	case forked != nil && native:
-		took = &engine.Bound{Run: b.Run, Session: session, Rewound: api.RewindNative}
+		took = &engine.Bound{Run: b.Run, Session: session, Fork: api.ForkNative}
 	case forked != nil && !slashCommand(text):
-		took = &engine.Bound{Run: b.Run, Session: session, Rewound: api.RewindPortable}
+		took = &engine.Bound{Run: b.Run, Session: session, Fork: api.ForkPortable}
 		var kept string
 		if kept, err = h.forkHandoff(ctx, *forked); err == nil {
 			text = kept + text

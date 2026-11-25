@@ -38,60 +38,10 @@ type Transcript struct {
 	// Plan is the plan the thread's agent works to, the latest one said,
 	// done or not: nil before any and once the agent cleared it.
 	Plan *PlanEntry
-	// Checkpoints are the thread's checkpoints of its files, the base and
-	// each run's, in the order they were taken, with the one each revert
-	// put the files back as where it did; Reverting is the revert of them
-	// under way, zero for none.
-	Checkpoints []api.CheckpointCaptured
-	Reverting   api.ID
-	// dropped is the runs a rewind took out of the conversation.
-	dropped map[api.ID]bool
 }
-
-// Checkpoint is run's checkpoint of the thread's files, and the one the
-// files were as before it: the base for the first run, the run's before,
-// or the one a revert since put back. Each is ok when there is one.
-func (t *Transcript) Checkpoint(run api.ID) (at, before api.CheckpointCaptured, ok, hasBefore bool) {
-	for i, c := range t.Checkpoints {
-		if c.Run == run && c.Phase == api.CheckpointRun {
-			if i > 0 {
-				before, hasBefore = t.Checkpoints[i-1], true
-			}
-			return c, before, true, hasBefore
-		}
-	}
-	return at, before, false, false
-}
-
-// Dropped is whether a rewind took run out of the conversation.
-func (t *Transcript) Dropped(run api.ID) bool { return t.dropped[run] }
 
 // Run is the run that claimed the message, zero before one has.
 func (u *UserEntry) Run() api.ID { return u.run }
-
-// Followed is whether a turn of the user's the conversation still holds
-// came after run's, which a rewind of the conversation to run would drop.
-func (t *Transcript) Followed(run api.ID) bool {
-	seen := false
-	for _, e := range t.Entries {
-		var r api.ID
-		switch e := e.(type) {
-		case *UserEntry:
-			r = e.run
-		case *AssistantEntry:
-			r = e.Run
-		case *WorkEntry:
-			r = e.Run
-		}
-		switch {
-		case r == run:
-			seen = true
-		case seen && !r.IsZero() && !t.dropped[r]:
-			return true
-		}
-	}
-	return false
-}
 
 // An EditMark is where a reader of a transcript's edits got to.
 type EditMark struct{ folds, n int }
@@ -331,28 +281,17 @@ type CompactionEntry struct {
 	At         time.Time
 }
 
-// RevertEntry is how a revert of the thread's files, or a rewind of its
-// conversation, ended. Took is how the next run took the rewound
-// conversation up, once one has: a native rewind its provider couldn't
-// make then is a portable one.
-type RevertEntry struct {
-	api.ThreadReverted
-	At   time.Time
-	Took api.RewindKind
-}
-
 // ForkEntry is where a fork goes on from, the first of its transcript.
 // Took is how its first run took the conversation up, once one has.
 type ForkEntry struct {
 	api.Forked
 	At   time.Time
-	Took api.RewindKind
+	Took api.ForkKind
 }
 
 func (*ForkEntry) entry()       {}
 func (*ErrorEntry) entry()      {}
 func (*CompactionEntry) entry() {}
-func (*RevertEntry) entry()     {}
 func (*ReportEntry) entry()     {}
 func (*UserEntry) entry()       {}
 func (*AssistantEntry) entry()  {}
@@ -498,30 +437,6 @@ func (t *Transcript) apply(e api.Event) {
 			break
 		}
 		t.plan(b)
-	case api.CheckpointCaptured:
-		t.Checkpoints = append(t.Checkpoints, b)
-	case api.ThreadReverting:
-		t.Reverting = b.Revert
-	case api.ThreadReverted:
-		if t.Reverting == b.Revert {
-			t.Reverting = api.ID{}
-		}
-		// The files are as To holds them now: what the next run starts on.
-		if b.Status == api.RevertRestored || b.Status == api.RevertUnchanged {
-			t.Checkpoints = append(t.Checkpoints, api.CheckpointCaptured{Run: b.To.ID, Phase: b.To.Phase, Status: api.CheckpointReady})
-		}
-		if b.Rewound() {
-			for _, run := range b.Dropped {
-				if t.dropped == nil {
-					t.dropped = map[api.ID]bool{}
-				}
-				t.dropped[run] = true
-			}
-			for _, run := range b.Restored {
-				delete(t.dropped, run)
-			}
-		}
-		t.add(&RevertEntry{ThreadReverted: b, At: e.At})
 	case api.SubagentDelta:
 		if s, we := t.subagent(b.Run, b.Parent); s != nil {
 			if n := len(s.Parts); n > 0 && s.Parts[n-1].Step == nil {
@@ -560,17 +475,12 @@ func (t *Transcript) apply(e api.Event) {
 			t.edited(we)
 		}
 	case api.SessionBound:
-		if b.Rewound == "" {
+		if b.Fork == "" {
 			break
 		}
 		for i := len(t.Entries) - 1; i >= 0; i-- {
-			if r, ok := t.Entries[i].(*RevertEntry); ok && r.Rewound() {
-				r.Took = b.Rewound
-				t.edited(r)
-				break
-			}
 			if f, ok := t.Entries[i].(*ForkEntry); ok {
-				f.Took = b.Rewound
+				f.Took = b.Fork
 				t.edited(f)
 				break
 			}

@@ -13,8 +13,7 @@ import (
 	"glitched/internal/provider/claude"
 )
 
-// A fork of a thread's conversation at its first turn, made as a rewind
-// is, forks the source's own session there into the fork's, and leaves
+// A fork of a thread's conversation at its first turn branches the source's own session there into the fork's, and leaves
 // the source's session for the source's next run to resume.
 func TestAForkForksTheSourcesSession(t *testing.T) {
 	path := wrapper(t, hiddenFlags...)
@@ -40,15 +39,15 @@ func TestAForkForksTheSourcesSession(t *testing.T) {
 		}
 	}
 
-	rw := must(ad.Rewind(bounded, provider.RewindSpec{Thread: src, Revert: fork, Workspace: ws, Head: heads[0], Dropped: heads[1:]}))
+	rw := must(ad.ForkConversation(bounded, provider.ForkSpec{Thread: src, Target: fork, Workspace: ws, Head: heads[0], Dropped: heads[1:]}))
 	if rw.Session != claude.SessionOf(fork) || !rw.Native {
-		t.Fatalf("the fork's rewind is %+v, want native on the fork's own session", rw)
+		t.Fatalf("the fork is %+v, want native on the fork's own session", rw)
 	}
 	s := spec(fork, 1)
-	s.Session, s.Rewound = rw.Session, &provider.Rewound{At: rw.At}
+	s.Session, s.Fork = rw.Session, &provider.ForkLaunch{At: rw.At}
 	ag := must(ad.Open(bounded, s))
-	if !ag.(provider.Rewinding).Native() || ag.(provider.Sessioned).Session() != claude.SessionOf(fork) {
-		t.Fatalf("the fork's claude says native %v on %q", ag.(provider.Rewinding).Native(), ag.(provider.Sessioned).Session())
+	if !ag.(provider.NativeFork).Native() || ag.(provider.Sessioned).Session() != claude.SessionOf(fork) {
+		t.Fatalf("the fork's claude says native %v on %q", ag.(provider.NativeFork).Native(), ag.(provider.Sessioned).Session())
 	}
 	if e := finish(t, bounded, ag, "Go on."); e.Outcome != api.OutcomeCompleted {
 		t.Fatalf("the fork's run ended %+v", e)

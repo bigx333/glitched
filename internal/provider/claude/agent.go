@@ -126,8 +126,8 @@ type Agent struct {
 }
 
 var (
-	_ provider.Agent     = (*Agent)(nil)
-	_ provider.Rewinding = (*Agent)(nil)
+	_ provider.Agent      = (*Agent)(nil)
+	_ provider.NativeFork = (*Agent)(nil)
 )
 
 // Native is whether the run's claude holds the conversation a rewind

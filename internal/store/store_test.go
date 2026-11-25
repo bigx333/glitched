@@ -770,6 +770,39 @@ const runsV13 = `
 	ALTER TABLE runs DROP COLUMN resume_cancelled;
 `
 
+func TestUpgradeRetiresCheckpointAndRevertEffects(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "host.db")
+	s := open(t, path)
+	thread := api.NewID()
+	if _, err := s.Submit(ctx, create(thread), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Submit(ctx, api.Command{ID: api.NewID(), Target: thread, Body: api.MessageDispatch{Text: "go", Mode: api.StartNow}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	downgrade(t, path, `
+		INSERT INTO effects (thread, kind, payload, state) VALUES
+			(zeroblob(16), 'checkpoint.capture', x'7b7d', 'pending'),
+			(zeroblob(16), 'checkpoint.drop', x'7b7d', 'leased'),
+			(zeroblob(16), 'thread.revert', x'7b7d', 'leased'),
+			(zeroblob(16), 'thread.revert', x'7b7d', 'pending');
+	`, 16)
+	s = open(t, path)
+	defer s.Close()
+	if leased, err := s.Leased(ctx); err != nil || len(leased) != 0 {
+		t.Fatalf("leased effects after upgrade: %v, %v", leased, err)
+	}
+	e, ok, err := s.Lease(ctx, nil)
+	if _, start := e.Body.(engine.StartTurn); err != nil || !ok || !start {
+		t.Fatalf("expected existing turn start after upgrade: %+v, %v, %v", e, ok, err)
+	}
+	if e, ok, err := s.Lease(ctx, nil); err != nil || ok {
+		t.Fatalf("remaining pending effect after upgrade: %+v, %v, %v", e, ok, err)
+	}
+}
+
 // The runs table up to version 14, before a rewind marked the runs it
 // dropped.
 const runsV14 = `

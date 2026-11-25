@@ -67,10 +67,6 @@ func apply(t Thread, e Event) (Thread, error) {
 			t.UpdatedAt = e.At
 		}
 		return t, nil
-	case api.CheckpointCaptured:
-		// Transcript only, and the engine's own doing: nothing the user
-		// sees changes, so neither revision nor UpdatedAt does.
-		return t, nil
 	case api.ThreadCreated:
 		if t.Exists() {
 			return t, &TransitionError{"thread", "created", "created"}
@@ -321,25 +317,6 @@ func apply(t Thread, e Event) (Thread, error) {
 		}
 	case api.RequestDelivery:
 		err = t.setRequest(b.Request, api.RequestDelivered)
-	case api.ThreadReverting, api.ThreadReverted:
-		// A revert of the files changes no field of the thread's; it moves
-		// the revision, for clients to read it, and for the runtime's
-		// commit hook to see the thread whose folder it marks. One that
-		// rewound the conversation gives the thread another, which holds
-		// none of what the last one did, nor the runs it dropped; one that
-		// undid a rewind holds the runs that rewind dropped again. The lane
-		// runs the revert before a run admitted since, which no agent has
-		// begun yet, whether it is still starting or already stopping.
-		if r, ok := b.(api.ThreadReverted); ok && r.Rewound() {
-			if live := t.Live(); live != nil && live.State != RunStarting && live.State != RunStopping {
-				return t, &TransitionError{"thread", "reverted", "rewound under a run at work"}
-			}
-			t.Session, t.Context = r.Session, api.Context{}
-			t.Runs = slices.Clone(t.Runs)
-			for i := range t.Runs {
-				t.Runs[i].Dropped = (t.Runs[i].Dropped || slices.Contains(r.Dropped, t.Runs[i].ID)) && !slices.Contains(r.Restored, t.Runs[i].ID)
-			}
-		}
 	case api.RequestInvalidation:
 		if err = t.setRequest(b.Request, api.RequestInvalidated); err == nil {
 			err = t.resume(b.Request)

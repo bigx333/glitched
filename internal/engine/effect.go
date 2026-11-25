@@ -116,32 +116,6 @@ type RemoveWorktree struct {
 	Workspace, Project, Branch string
 }
 
-// CaptureCheckpoint saves the files of the thread's worktree in the engine's
-// checkpoint store: as Run left them, or, in the base phase, before Run,
-// the thread's first, starts. It sits before the thread's next start, so
-// that turn starts on the files saved.
-type CaptureCheckpoint struct {
-	Run   api.ID
-	Phase api.CheckpointPhase
-}
-
-// DropCheckpoints deletes a deleted thread's checkpoints.
-type DropCheckpoints struct{}
-
-// RevertThread puts the files of the thread's worktree back as To holds
-// them, after a recovery checkpoint of them as they are, which a replay
-// finds and never takes again; unless KeepFiles. Conversation rewinds the
-// thread's conversation to To's run first, and a rewind that fails
-// leaves the files as they are. Dropped is the runs after To the
-// conversation holds as the revert is decided, oldest first.
-type RevertThread struct {
-	Revert       api.ID
-	To           api.CheckpointRef
-	Conversation bool
-	Dropped      []api.ID
-	KeepFiles    bool
-}
-
 // MakeWorktree makes a link's thread's worktree, of the checkout
 // Project, from Base, a commit, on a new branch named by Title. Git
 // writes the worktree locked, the thread named in the lock's reason, so a
@@ -150,14 +124,11 @@ type MakeWorktree struct {
 	Project, Base, Title string
 }
 
-func (MakeWorktree) effectKind() string      { return "worktree.make" }
-func (RemoteCreate) effectKind() string      { return "remote.create" }
-func (RemoteStop) effectKind() string        { return "remote.stop" }
-func (RemoteSend) effectKind() string        { return "remote.send" }
-func (RemoteConfigure) effectKind() string   { return "remote.configure" }
-func (CaptureCheckpoint) effectKind() string { return "checkpoint.capture" }
-func (DropCheckpoints) effectKind() string   { return "checkpoint.drop" }
-func (RevertThread) effectKind() string      { return "thread.revert" }
+func (MakeWorktree) effectKind() string    { return "worktree.make" }
+func (RemoteCreate) effectKind() string    { return "remote.create" }
+func (RemoteStop) effectKind() string      { return "remote.stop" }
+func (RemoteSend) effectKind() string      { return "remote.send" }
+func (RemoteConfigure) effectKind() string { return "remote.configure" }
 
 func (StartTurn) effectKind() string      { return "turn.start" }
 func (RemoveWorktree) effectKind() string { return "worktree.remove" }
@@ -188,10 +159,8 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 		return true, nil
 	case InterruptTurn:
 		return r != nil && r.ID == e.Run && r.State == RunStopping, nil
-	case CloseAgent, RemoveWorktree, DropCheckpoints:
+	case CloseAgent, RemoveWorktree:
 		return true, nil
-	case CaptureCheckpoint, RevertThread:
-		return !t.Deleted, nil
 	case MakeWorktree:
 		// On a thread settled first, the host makes no worktree, and
 		// finishes one a host before it began.
@@ -231,15 +200,11 @@ func Due(t Thread, e Effect) (due bool, skip Observation) {
 // treat a repeated interrupt or a repeated answer as a no-op.
 // A report commits with its completion, so one left leased never landed.
 // Closing an agent that is gone does nothing, nor does removing a
-// worktree that is. A capture whose ref is there reports what that ref
-// holds and writes nothing, and a drop of refs that are gone deletes
-// nothing but what a gc it left pending prunes. A revert finds the
-// recovery checkpoint it took, and puts the same files back; its rewind
-// makes the conversation again, and leaves unused any it made before. A
-// make finds the worktree its lock names it in, or one it finished. A
+// worktree that is. A make finds the worktree its lock names it in, or one
+// it finished. A
 // remote create, stop, send or configure sends its frozen commands again,
 // which the machine answers with the receipts it stored.
-var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true, "worktree.remove": true, "checkpoint.capture": true, "checkpoint.drop": true, "thread.revert": true, "worktree.make": true, "remote.create": true, "remote.stop": true, "remote.send": true, "remote.configure": true}
+var replaySafe = map[string]bool{"turn.interrupt": true, "request.deliver": true, "child.report": true, "agent.close": true, "worktree.remove": true, "worktree.make": true, "remote.create": true, "remote.stop": true, "remote.send": true, "remote.configure": true}
 
 func ReplaySafe(e Effect) bool { return replaySafe[e.effectKind()] }
 
@@ -256,10 +221,6 @@ var effects = map[string]func([]byte) (Effect, error){
 	"remote.stop":      decodeAs[RemoteStop],
 	"remote.send":      decodeAs[RemoteSend],
 	"remote.configure": decodeAs[RemoteConfigure],
-
-	"checkpoint.capture": decodeAs[CaptureCheckpoint],
-	"checkpoint.drop":    decodeAs[DropCheckpoints],
-	"thread.revert":      decodeAs[RevertThread],
 }
 
 func decodeAs[E Effect](b []byte) (Effect, error) {
@@ -282,12 +243,11 @@ type Observation interface{ observed() }
 type Started struct{ Run api.ID }
 
 // Bound is the session the run's agent opened or resumed, before its
-// first prompt; Rewound how it took up a rewound conversation, on the
-// first run after the rewind.
+// first prompt; Fork records how it took up the source conversation.
 type Bound struct {
 	Run     api.ID
 	Session string
-	Rewound api.RewindKind
+	Fork    api.ForkKind
 }
 
 type Ended struct {
@@ -343,12 +303,6 @@ type Subagent struct {
 
 // Plan is the run's agent's plan, as provider.Plan has it.
 type Plan struct{ Plan api.PlanUpdated }
-
-// Captured is what a CaptureCheckpoint saved, or why it saved nothing.
-type Captured struct{ Checkpoint api.CheckpointCaptured }
-
-// Reverted is what a RevertThread did.
-type Reverted struct{ Revert api.ThreadReverted }
 
 // Surfaced is a request the agent raised. Request is freshly minted; Dedup is
 // the provider's id, so a request surfaced again after a restart is ignored.
@@ -448,8 +402,6 @@ func (Subagent) observed()        {}
 func (Context) observed()         {}
 func (Work) observed()            {}
 func (Plan) observed()            {}
-func (Captured) observed()        {}
-func (Reverted) observed()        {}
 func (Granted) observed()         {}
 func (Ran) observed()             {}
 func (Surfaced) observed()        {}

@@ -315,7 +315,6 @@ func TestALinkReachesOnlyTheThreadsItStarted(t *testing.T) {
 		api.QueueCancel{Message: api.NewID()},
 		api.QueueMove{Message: api.NewID()},
 		api.QueueSteer{Message: api.NewID()},
-		api.ThreadRevert{To: api.CheckpointRef{ID: api.NewID(), Phase: api.CheckpointRun}, Files: true},
 		api.ResumeCancel{Run: api.NewID()},
 		api.ThreadConfigure{Model: new("other")},
 		api.ThreadConfigure{Access: new(api.AccessFull)},

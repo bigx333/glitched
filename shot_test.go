@@ -26,7 +26,7 @@ import (
 )
 
 // TestShot writes a PNG of the window: SHOT=out.png, with
-// SCENE=empty|running|approval|credentials (CRED=typed|provided|declined)|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)|revert (REVERT=menu|alert|done|machine|refused|refusedtip|rewind|rewindalert|rewound|rewoundfiles|undotip|unrewound|failed)|queued (HELD, QEDIT)|wizard (WIZARD=machine|source|browse|clone|repos|confirm|cloning|failed|offline)
+// SCENE=empty|running|approval|credentials (CRED=typed|provided|declined)|asked (ASK=<request body>)|question|both|servers|machine|engine (on the tailnet)|machines|inbox|checks|stamped|twodays|broke|silent|refused|plain|stuck|children|blocked|held (SEND=<text>)|queued (HELD, QEDIT)|wizard (WIZARD=machine|source|browse|clone|repos|confirm|cloning|failed|offline)
 // for the engines' threads (none started without one; question takes
 // ASK=<request body>, PICK=<label>,…, OTHER=<text> typed into the Other
 // field named OTHERIN, and QUESTION=answer|dismiss|stop;
@@ -609,96 +609,6 @@ func scene(t *testing.T, name string) (*app, *ui.Tester) {
 		h.until("the server's transcript", func() bool { return h.tt.HasText("Which keys are older than 90 days?") })
 	case "wizard":
 		h = wizardShot(t, os.Getenv("WIZARD"))
-	case "revert":
-		// A worktree thread's second turn, which added notes.txt: its chip,
-		// the chip's menu, the alert before Undo this turn's files, and the
-		// row after it.
-		var notes string
-		h, _, notes = twoTurnsInAWorktree(t, madeUpMachine)
-		switch os.Getenv("REVERT") {
-		case "menu":
-			h.click("1 file")
-		case "rewind", "rewindalert", "rewound", "rewoundfiles", "undotip", "unrewound", "failed":
-			// The first turn's chip: its menu, the alert before a rewind
-			// of the conversation, and the row after one, with the files
-			// left or taken back too, the turn it took out forgotten; its
-			// Undo's tooltip, in the window at its narrowest; and the row
-			// after its Undo, which brought both back.
-			h.click("No file changes")
-			if os.Getenv("REVERT") == "rewind" {
-				break
-			}
-			h.tt.Advance(time.Second)
-			item, row := "Rewind conversation to here", "Rewound the conversation"
-			if os.Getenv("REVERT") == "rewoundfiles" || os.Getenv("REVERT") == "undotip" || os.Getenv("REVERT") == "unrewound" || os.Getenv("REVERT") == "failed" {
-				item, row = "Rewind conversation and files to here", "Rewound the conversation and restored 1 file"
-			}
-			if err := h.tt.ChooseMenuItem(item); err != nil {
-				t.Fatal(err)
-			}
-			if os.Getenv("REVERT") == "rewindalert" {
-				break
-			}
-			h.tt.Advance(time.Second)
-			h.click("Rewind")
-			h.until("the row saying so", func() bool { h.tt.Frame(); return h.tt.HasText(row) })
-			if os.Getenv("REVERT") == "undotip" {
-				h.tt.SetSize(760, 860)
-				h.tt.Advance(time.Second)
-				undo, _ := h.tt.Find("Undo")
-				h.tt.Move(undo.X+undo.W/2, undo.Y+undo.H/2)
-				h.tt.Advance(2 * time.Second)
-			}
-			if os.Getenv("REVERT") == "failed" {
-				for _, e := range h.a.current().Transcript.Entries {
-					if r, ok := e.(*client.RevertEntry); ok {
-						r.Conversation, r.Error = api.RewindFailed, strings.Repeat("a", 64)+".txt couldn't be put back: permission denied"
-					}
-				}
-				h.tt.Frame()
-			}
-			if os.Getenv("REVERT") == "unrewound" {
-				h.tt.Advance(time.Second)
-				h.click("Undo")
-				h.until("the undo's row", func() bool { h.tt.Frame(); return h.tt.HasText("Brought back the conversation and put back 1 file") })
-			}
-		case "refused", "refusedtip":
-			// While a thread under it runs: the chip's tooltip, or its
-			// menu, says why its files can't go back.
-			th := h.a.current()
-			kid := api.NewID()
-			th.env.Threads[kid] = &client.Thread{View: api.Thread{ID: kid, Parent: th.id(), Title: "Check the notes", Workspace: th.View.Workspace, Run: api.RunRunning}}
-			th.env.Membership++
-			h.tt.Frame()
-			h.tt.Advance(time.Second)
-			if os.Getenv("REVERT") == "refused" {
-				h.click("1 file")
-				break
-			}
-			chip, _ := h.tt.Find("1 file")
-			h.tt.Move(chip.X+chip.W/2, chip.Y+chip.H/2)
-			h.tt.Advance(2 * time.Second)
-		case "machine":
-			h.tt.SetSize(1320, 1700)
-			h.click("Settings")
-			h.click("This machine")
-			h.until("the store's size", func() bool { h.tt.Advance(inspectEvery); return h.tt.HasText("CHECKPOINTS") })
-		case "alert", "done":
-			h.click("1 file")
-			h.tt.Advance(time.Second)
-			if err := h.tt.ChooseMenuItem("Undo this turn's files"); err != nil {
-				t.Fatal(err)
-			}
-			if os.Getenv("REVERT") == "done" {
-				h.tt.Advance(time.Second)
-				h.click("Restore files")
-				h.until("the files before the turn", func() bool { _, err := os.Stat(notes); return os.IsNotExist(err) })
-				h.until("the row saying so", func() bool { h.tt.Frame(); return h.tt.HasText("Restored 1 file") })
-			}
-		}
-		h.tt.Advance(time.Second)
-	default:
-		t.Fatalf("no scene %q", name)
 	}
 	return h.a, h.tt
 }

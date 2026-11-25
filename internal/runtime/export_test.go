@@ -1,12 +1,7 @@
 package runtime
 
 import (
-	"context"
-	"slices"
 	"time"
-
-	"glitched/internal/api"
-	"glitched/internal/store"
 )
 
 func SetCallTimeout(d time.Duration) func() {
@@ -26,52 +21,6 @@ func SetAwaitingStart(f func()) func() {
 	old := awaitingStart
 	awaitingStart = f
 	return func() { awaitingStart = old }
-}
-
-// SetCheckpointBudgets sets the base capture's budget, the most files and
-// bytes a checkpoint holds, the most the stores hold, and the run
-// checkpoints a thread keeps.
-func SetCheckpointBudgets(base time.Duration, files int, bytes, limit int64, kept int) func() {
-	b, f, n, l, k := baseBudget, maxCheckpointFiles, maxCheckpointBytes, checkpointLimit, keptRuns
-	baseBudget, maxCheckpointFiles, maxCheckpointBytes, checkpointLimit, keptRuns = base, files, bytes, limit, kept
-	return func() { baseBudget, maxCheckpointFiles, maxCheckpointBytes, checkpointLimit, keptRuns = b, f, n, l, k }
-}
-
-// SetKeptRecoveries sets how many recovery checkpoints a thread keeps.
-func SetKeptRecoveries(n int) func() {
-	old := keptRecoveries
-	keptRecoveries = n
-	return func() { keptRecoveries = old }
-}
-
-// SetSeedBudget sets how long seeding an empty checkpoint store may take.
-func SetSeedBudget(d time.Duration) func() {
-	old := seedBudget
-	seedBudget = d
-	return func() { seedBudget = old }
-}
-
-// SetCheckpointHook calls f as a checkpoint store's refs change: step is
-// "captured" after a capture wrote its ref, "dropped" after a drop deleted
-// a store's.
-func SetCheckpointHook(f func(ctx context.Context, step string)) func() {
-	old := checkpointHook
-	checkpointHook = f
-	return func() { checkpointHook = old }
-}
-
-// Waiting is whether thread's start waits on a revert in its folder, its
-// lease handed back: a host killed before that leaves the start leased,
-// which the next host can only take for a run that may have begun.
-func Waiting(h *Host, thread api.ID) bool {
-	h.mu.Lock()
-	waits := h.waiting[thread]
-	h.mu.Unlock()
-	if !waits {
-		return false
-	}
-	leased, err := h.store.Leased(h.ctx)
-	return err == nil && !slices.ContainsFunc(leased, func(e store.Effect) bool { return e.Thread == thread })
 }
 
 func SetCloseGrace(d time.Duration) func() {

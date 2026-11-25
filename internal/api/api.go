@@ -253,22 +253,6 @@ type ThreadRename struct {
 	Title string `json:"title"`
 }
 
-// ThreadRevert takes the thread back to a checkpoint of its: its files,
-// its conversation, or both. Files puts the files of the thread's worktree
-// back as To holds them, after a checkpoint of them as they are, which a
-// revert to it undoes; only a thread in a worktree of its own keeps them.
-// Conversation rewinds the thread's conversation to the end of To's run,
-// so that its next turn follows that run's, and the runs after it are no
-// longer its agent's to remember; to a recovery checkpoint, it undoes the
-// rewind that took it, files and all, while that is the thread's latest
-// revert and no turn came after it. Only a thread of the user's reverts,
-// with no run of its tree live.
-type ThreadRevert struct {
-	To           CheckpointRef `json:"to"`
-	Files        bool          `json:"files"`
-	Conversation bool          `json:"conversation,omitempty"`
-}
-
 // ThreadConfigure changes the model and the access the thread's next turn
 // runs at: a turn already running keeps its own. It gives only what its
 // sender chose: the model's name, its effort, fast mode, the access. What
@@ -316,7 +300,6 @@ func (QueueEdit) intentType() string       { return "queue.edit" }
 func (QueueCancel) intentType() string     { return "queue.cancel" }
 func (QueueMove) intentType() string       { return "queue.move" }
 func (QueueSteer) intentType() string      { return "queue.steer" }
-func (ThreadRevert) intentType() string    { return "thread.revert" }
 func (ResumeCancel) intentType() string    { return "resume.cancel" }
 
 // StartsTurn is whether i may start a turn of its thread's agent: a
@@ -346,7 +329,6 @@ var intents = map[string]func() Intent{
 	"queue.cancel":     func() Intent { return new(QueueCancel) },
 	"queue.move":       func() Intent { return new(QueueMove) },
 	"queue.steer":      func() Intent { return new(QueueSteer) },
-	"thread.revert":    func() Intent { return new(ThreadRevert) },
 	"resume.cancel":    func() Intent { return new(ResumeCancel) },
 }
 
@@ -413,8 +395,6 @@ func (c *Command) UnmarshalJSON(b []byte) error {
 	case *QueueMove:
 		c.Body = *v
 	case *QueueSteer:
-		c.Body = *v
-	case *ThreadRevert:
 		c.Body = *v
 	case *ResumeCancel:
 		c.Body = *v
@@ -653,8 +633,9 @@ func (t Thread) Live() bool { return t.Run != RunIdle }
 // still forgotten; version 20 takes a link's create of a thread settled
 // on its machine first, which a version 19 engine would start, and fences
 // a link's messages by its settles, which a version 19 engine would let a
-// late message reopen.
-const Protocol = 20
+// late message reopen; version 21 removes thread.revert and records fork
+// handoffs separately from old conversation rewinds.
+const Protocol = 21
 
 type Environment struct {
 	ID       ID      `json:"id"` // the host
@@ -662,23 +643,12 @@ type Environment struct {
 	Protocol int     `json:"protocol"`
 	Log      ID      `json:"log"`
 	Tailnet  Tailnet `json:"tailnet,omitzero"`
-	// Checkpoints is the engine's checkpoint store; zero when it keeps
-	// none.
-	Checkpoints CheckpointStore `json:"checkpoints,omitzero"`
 	// ProviderLog is that the engine keeps its provider log now, whatever
 	// its engine.json says it should from its next start.
 	ProviderLog bool `json:"providerLog,omitempty"`
 	// Link is the id of the link whose token asked, which the other
 	// machine keeps to know the link it added; zero for any other caller.
 	Link ID `json:"link,omitzero"`
-}
-
-// CheckpointStore is how much disk the checkpoints of threads' files take,
-// as git counts the store's objects, and the most they may: a capture
-// while Bytes is over Limit is skipped.
-type CheckpointStore struct {
-	Bytes int64 `json:"bytes"`
-	Limit int64 `json:"limit"`
 }
 
 type TailnetMode string

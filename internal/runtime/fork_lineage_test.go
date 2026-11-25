@@ -1,7 +1,6 @@
 package runtime_test
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -13,7 +12,7 @@ import (
 // check before it makes the worktree resolves the fork as the commit does.
 func TestAForkGoesIntoANewWorktree(t *testing.T) {
 	project := repo(t)
-	ad := newRewinder(provider.Rewind{}, nil, false)
+	ad := newForkAdapter(provider.ConversationFork{}, nil, false)
 	r := twoTurnsWith(t, dbPath(t), tempDir(t), project, ad)
 	fork := api.NewID()
 	c := api.Command{ID: api.NewID(), Target: fork, Body: api.ThreadCreate{
@@ -34,7 +33,7 @@ func TestAForkGoesIntoANewWorktree(t *testing.T) {
 // A portable fork of a portable fork hands its agent the turns of the
 // whole line, newest first, up to each fork's turn.
 func TestAForkOfAForkKeepsItsAncestors(t *testing.T) {
-	f := newForking(t, provider.Rewind{}, false)
+	f := newForking(t, provider.ConversationFork{}, false)
 	first := f.fork(t, 1, "other", "child request")
 	_, _, sent := f.other.seen()
 	if !strings.Contains(sent[0], "<user>\none\n</user>") || !strings.Contains(sent[0], "<user>\ntwo\n</user>") {
@@ -52,42 +51,10 @@ func TestAForkOfAForkKeepsItsAncestors(t *testing.T) {
 	}
 }
 
-// A portable rewind of a fork hands its agent the source's turns too,
-// whether or not the fork had taken its source up yet.
-func TestARewindOfAForkKeepsItsOrigin(t *testing.T) {
-	for _, pending := range []bool{false, true} {
-		t.Run(fmt.Sprintf("origin_pending_%t", pending), func(t *testing.T) {
-			f := newForking(t, provider.Rewind{}, false)
-			first, second := "child request", "child later request"
-			if pending {
-				first, second = "/status", "/help"
-			}
-			fork := f.fork(t, 1, "other", first)
-			f.again(t, fork, second, 2)
-			origin, err := f.n.st.Forked(ctx, fork)
-			if err != nil || (origin != nil) != pending {
-				t.Fatalf("fixture pending=%v, got %+v, %v", pending, origin, err)
-			}
-			to := runsOf(t, f.n.h, fork)[0].Run
-			submit(t, f.n.h, fork, api.ThreadRevert{To: api.CheckpointRef{Phase: api.CheckpointRun, ID: to}, Conversation: true})
-			if got := untilReverted(t, f.n.h, fork, 1); got.Conversation != api.RewindPortable {
-				t.Fatalf("fixture failed to rewind: %+v", got)
-			}
-			f.again(t, fork, "after rewind", 3)
-			_, _, sent := f.other.seen()
-			got := sent[len(sent)-1]
-			if !strings.Contains(got, "<user>\none\n</user>") || !strings.Contains(got, "<user>\ntwo\n</user>") {
-				remaining, err := f.n.st.Forked(ctx, fork)
-				t.Fatalf("rewound fork's provider received %q; ancestor's turns one and two missing; pending origin after send=%v, store error=%v", got, remaining != nil, err)
-			}
-		})
-	}
-}
-
 // A first message that starts with a path is no command: it is handed
 // the source's turns.
 func TestAForkHandsTheTurnsToAPathPrompt(t *testing.T) {
-	f := newForking(t, provider.Rewind{}, false)
+	f := newForking(t, provider.ConversationFork{}, false)
 	const first = "/tmp/example/repro.txt shows the failure. Explain it using our previous conclusion."
 	fork := f.fork(t, 1, "other", first)
 	_, _, sent := f.other.seen()

@@ -137,7 +137,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	// would start it otherwise needs another one.
 	id, _ := json.Marshal([]any{prog.Path, spec.Workspace, prog.Env, prog.Args, args, session})
 	key := string(id)
-	if spec.ResumeOnly && spec.Rewound != nil {
+	if spec.ResumeOnly && spec.Fork != nil {
 		return nil, provider.ErrDeclined
 	}
 	// Claude Code's own gates, read now: the user may have turned idle
@@ -151,7 +151,7 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	keep := func(p *proc) { a.parked().Park(spec.Thread, key, p) }
 	var p *proc
 	var ok bool
-	if spec.Rewound != nil {
+	if spec.Fork != nil {
 		err = a.parked().Drop(ctx, spec.Thread)
 	} else {
 		p, ok, err = a.parked().Take(ctx, spec.Thread, key)
@@ -166,8 +166,8 @@ func (a *Adapter) Open(ctx context.Context, spec provider.SessionSpec) (provider
 	var native bool
 	var took string
 	switch {
-	case spec.Rewound != nil:
-		p, native, took, err = a.rewound(ctx, prog, spec, args, session)
+	case spec.Fork != nil:
+		p, native, took, err = a.launchFork(ctx, prog, spec, args, session)
 		if took != session {
 			id, _ = json.Marshal([]any{prog.Path, spec.Workspace, prog.Env, prog.Args, args, took})
 			key = string(id)

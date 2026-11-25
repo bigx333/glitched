@@ -30,11 +30,11 @@ func (r reporting) Commands(ctx context.Context, workspace string) ([]provider.C
 	return nil, nil
 }
 
-func (r reporting) Rewind(ctx context.Context, spec provider.RewindSpec) (provider.Rewind, error) {
-	if rw, ok := r.Adapter.(provider.Rewinder); ok {
-		return rw.Rewind(ctx, spec)
+func (r reporting) ForkConversation(ctx context.Context, spec provider.ForkSpec) (provider.ConversationFork, error) {
+	if rw, ok := r.Adapter.(provider.ConversationForker); ok {
+		return rw.ForkConversation(ctx, spec)
 	}
-	return provider.Rewind{}, nil
+	return provider.ConversationFork{}, nil
 }
 
 // undescribed is an adapter whose provider can't say what it runs.

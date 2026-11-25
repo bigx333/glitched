@@ -54,17 +54,16 @@ func (m Mux) Reconcile(ctx context.Context, id RuntimeIdentity) (Recovery, error
 	return a.Reconcile(ctx, id)
 }
 
-// Rewind rewinds a conversation of name's, or answers a portable Rewind
-// for an adapter that can't.
-func (m Mux) Rewind(ctx context.Context, name string, spec RewindSpec) (Rewind, error) {
+// ForkConversation tries to branch the source, or returns a portable fork.
+func (m Mux) ForkConversation(ctx context.Context, name string, spec ForkSpec) (ConversationFork, error) {
 	a, err := m.adapter(name)
 	if err != nil {
-		return Rewind{}, err
+		return ConversationFork{}, err
 	}
-	if r, ok := a.(Rewinder); ok {
-		return r.Rewind(ctx, spec)
+	if r, ok := a.(ConversationForker); ok {
+		return r.ForkConversation(ctx, spec)
 	}
-	return Rewind{}, nil
+	return ConversationFork{}, nil
 }
 
 // Commands are the slash commands of name's sessions in workspace, or

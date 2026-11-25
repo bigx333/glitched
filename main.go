@@ -654,9 +654,6 @@ type app struct {
 	// deleting is the thread the alert asks about deleting.
 	deleting   thread
 	deleteOpen bool
-	// reverting is the revert of files the alert asks about.
-	reverting  revertAsk
-	revertOpen bool
 	// deleteChanges are the changes git doesn't ignore in the worktrees
 	// the alert's delete would remove, -1 where none can tell, and
 	// deleteCounted those worktrees' threads.
@@ -1063,7 +1060,6 @@ func (a *app) view(c *ui.Context) {
 	})
 	a.commandPalette(c)
 	a.deleteAlert(c)
-	a.revertAlert(c)
 	a.removeAlert(c)
 	a.wizardDialog(c)
 	for _, fn := range a.pluginLater {

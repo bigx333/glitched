@@ -41,7 +41,7 @@ func TestStatusSaysWhetherTheEngineServes(t *testing.T) {
 	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(out, addr) && time.Now().Before(deadline); out = read() {
 		time.Sleep(10 * time.Millisecond)
 	}
-	for _, want := range []string{"engine     serving as ", "checkpoints 0 MiB of 2048 MiB", "hub        this engine", "listen     " + addr + "  accepting", "token      laptop  "} {
+	for _, want := range []string{"engine     serving as ", "hub        this engine", "listen     " + addr + "  accepting", "token      laptop  "} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status while serving lacks %q:\n%s", want, out)
 		}

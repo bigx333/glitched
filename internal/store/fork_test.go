@@ -71,7 +71,7 @@ func TestAForkCommitsItsOrigin(t *testing.T) {
 	if got, _ := s.Forked(ctx, fork); got == nil {
 		t.Fatal("a session that took nothing up ended the fork's wait")
 	}
-	if _, err := s.Observe(ctx, fork, engine.Bound{Run: c.ID, Session: "s", Rewound: api.RewindPortable}, time.Now(), 0); err != nil {
+	if _, err := s.Observe(ctx, fork, engine.Bound{Run: c.ID, Session: "s", Fork: api.ForkPortable}, time.Now(), 0); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.Forked(ctx, fork); err != nil || got != nil {

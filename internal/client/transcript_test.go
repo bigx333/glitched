@@ -859,16 +859,3 @@ func TestFoldFoldsSilentCompaction(t *testing.T) {
 		t.Errorf("Transcript.Ended = %v, want %v (last non-silent turn)", tr.Ended, at(5))
 	}
 }
-
-// A rewind's runs read as dropped until an undo of it brings them back.
-func TestFoldBringsBackTheRunsAnUndoneRewindDropped(t *testing.T) {
-	kept, dropped, rewind := api.NewID(), api.NewID(), api.NewID()
-	tr := play(api.ThreadReverted{Revert: rewind, To: api.CheckpointRef{Phase: api.CheckpointRun, ID: kept}, Status: api.RevertKept, Conversation: api.RewindPortable, Dropped: []api.ID{dropped}})
-	if !tr.Dropped(dropped) || tr.Dropped(kept) {
-		t.Fatalf("after the rewind dropped %v, kept %v; want only the later run dropped", tr.Dropped(dropped), tr.Dropped(kept))
-	}
-	tr.apply(event(2, api.ThreadReverted{Revert: api.NewID(), To: api.CheckpointRef{Phase: api.CheckpointRecovery, ID: rewind}, Status: api.RevertKept, Conversation: api.RewindNative, Restored: []api.ID{dropped}}))
-	if tr.Dropped(dropped) {
-		t.Fatal("the run the undo brought back still reads as dropped")
-	}
-}
