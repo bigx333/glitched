@@ -148,3 +148,80 @@ func TestRemoteTerminalStreamInputResizeAndLease(t *testing.T) {
 	}
 	readTermUntil(t, ctx, st1, "recovered-222")
 }
+
+// releaseSpy reports each client whose terminal leases the server releases.
+type releaseSpy struct {
+	*pty.Manager
+	released chan string
+}
+
+func (r releaseSpy) ReleaseTerminalClient(client string) {
+	r.Manager.ReleaseTerminalClient(client)
+	r.released <- client
+}
+
+func TestClosingAStaleSocketKeepsTheReconnectedClientsLease(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	mgr := pty.New(pty.Options{Command: []string{"/bin/sh"}})
+	t.Cleanup(func() { _ = mgr.Close() })
+	spy := releaseSpy{Manager: mgr, released: make(chan string, 16)}
+	srv := &Server{
+		Transport: Tailnet{},
+		Endpoint:  &fakeEndpoint{},
+		Terminals: spy,
+		Authorize: func(_ *http.Request, proved func(Key) bool) (Grant, error) {
+			for _, tok := range []string{"tok-a", "tok-b"} {
+				if k := KeyOf(tok); proved(k) {
+					return Grant{Key: k, Done: context.Background()}, nil
+				}
+			}
+			return Grant{}, errors.New("unknown token")
+		},
+	}
+	addr := serveTailnet(t, srv)
+	ws := t.TempDir()
+
+	stale := NewEndpointClient(Tailnet{Address: addr, Token: "tok-a"}, api.ID{})
+	defer stale.Close()
+	st1, err := stale.OpenTerminal(ctx, api.TerminalOpen{Workspace: ws, Client: "client-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := st1.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A client only this socket used, whose release tells the socket's
+	// teardown ran.
+	_ = stale.TerminalInput(ctx, api.TerminalInput{Workspace: ws, Session: first.Session, Client: "probe"})
+
+	fresh := NewEndpointClient(Tailnet{Address: addr, Token: "tok-a"}, api.ID{})
+	defer fresh.Close()
+	st2, err := fresh.OpenTerminal(ctx, api.TerminalOpen{Workspace: ws, Session: first.Session, Client: "client-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	if _, err := st2.Next(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	st1.Close()
+	stale.Close()
+	for got := ""; got != "probe"; {
+		select {
+		case got = <-spy.released:
+		case <-ctx.Done():
+			t.Fatal("the stale socket's teardown never released its clients")
+		}
+	}
+
+	other := NewEndpointClient(Tailnet{Address: addr, Token: "tok-b"}, api.ID{})
+	defer other.Close()
+	err = other.TerminalInput(ctx, api.TerminalInput{Workspace: ws, Session: first.Session, Client: "client-b", Data: []byte("echo hijacked\n")})
+	if !errors.Is(err, api.ErrLeaseHeld) {
+		t.Fatalf("client-b's input: %v, want api.ErrLeaseHeld while client-a's live socket holds the lease", err)
+	}
+}
