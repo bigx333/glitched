@@ -16,14 +16,14 @@ export function place({ items }) {
 }
 
 function header(ctx) {
-  const address = ctx.draft || ctx.url;
+  const address = ctx.draft;
   return { type: "row", height: ctx.barHeight, padding: [0, 10], gap: 4, align: "center", children: [
     iconButton("back", "arrow-left", "Back", click("back", ctx.active), !ctx.canBack),
     iconButton("forward", "arrow-right", "Forward", click("forward", ctx.active), !ctx.canForward),
     ctx.loading
       ? iconButton("stop", "close", "Stop", click("stop", ctx.active), false)
       : iconButton("reload", "refresh", "Reload  ⌘R", click("reload", ctx.active), !ctx.page && !ctx.error),
-    { type: "input", id: "address", label: "Address", placeholder: "Type an address", value: address, controlled: true, focus: ctx.focus, grow: true, onChange: "address", onSubmit: "navigate", onBlur: "blur" },
+    { type: "input", id: "address", label: "Address", placeholder: "Type an address", value: address, focus: ctx.focus, grow: true, onChange: "address", onSubmit: "navigate", onBlur: "blur" },
     iconButton("new-tab", "plus", "New tab  ⌘T", "newTab", false),
     iconButton("external", "square-share-line", "Open in browser", "external", !ctx.url),
     iconButton("close-preview", "close", "Close preview", "closePreview", false),
