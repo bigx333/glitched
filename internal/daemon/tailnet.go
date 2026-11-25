@@ -2,11 +2,14 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"log/slog"
@@ -137,18 +140,27 @@ func (d *Daemon) serveInstalled(ctx context.Context, listen []string, server fun
 		why := "Tailscale isn't running"
 		if err == nil && t.Running() && t.IP.IsValid() {
 			tn := transport.Tailnet{Address: net.JoinHostPort(t.IP.String(), Port)}
-			if slices.Contains(listen, tn.Address) {
+			if listed(listen, tn.Address) {
 				// Listen serves it already.
 				d.servingTailnet(tn.Address, t.Name)
 				return nil
 			}
 			ln, err := listenOn(tn, ctx)
+			if ctx.Err() != nil {
+				if ln != nil {
+					ln.Close()
+				}
+				return nil
+			}
 			if err == nil {
 				d.mu.Lock()
 				d.addrs = append(d.addrs, ln.Addr())
 				d.mu.Unlock()
 				d.servingTailnet(tn.Address, t.Name)
 				return server(tn).Serve(ctx, ln)
+			}
+			if !errors.Is(err, syscall.EADDRNOTAVAIL) {
+				return cantListen(tn.Address, err)
 			}
 			why = err.Error()
 		}
@@ -200,7 +212,23 @@ func hostname(name string) string {
 }
 
 // loopback reports whether addr, a host:port, is a loopback IP.
+// listed reports whether listen names addr, however it spells the address.
+func listed(listen []string, addr string) bool {
+	want, err := netip.ParseAddrPort(addr)
+	return slices.ContainsFunc(listen, func(l string) bool {
+		got, gerr := netip.ParseAddrPort(l)
+		if err != nil || gerr != nil {
+			return l == addr
+		}
+		return got.Addr().Unmap() == want.Addr().Unmap() && got.Port() == want.Port()
+	})
+}
+
 func loopback(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
-	return err == nil && net.ParseIP(host).IsLoopback()
+	if err != nil {
+		return false
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.Unmap().IsLoopback()
 }

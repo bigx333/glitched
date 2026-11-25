@@ -10,12 +10,14 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -600,5 +602,114 @@ func TestARunsMCPServersAreItsOwn(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("run %d never opened", i)
 		}
+	}
+}
+
+// An engine serving the tailnet on an installed Tailscale that has its
+// address binds it before anything else, and refuses to start, its store
+// never opened, when another process holds the port there.
+func TestStartRefusesAnInstalledTailscalesPortInUse(t *testing.T) {
+	dir := stateDir(t)
+	ip := netip.MustParseAddr("100.64.0.9")
+	addr := net.JoinHostPort(ip.String(), Port)
+	real := listenOn
+	t.Cleanup(func() { listenOn = real })
+	listenOn = func(tn transport.Tailnet, ctx context.Context) (net.Listener, error) {
+		if tn.Address == addr {
+			return nil, &net.OpError{Op: "listen", Net: "tcp", Err: os.NewSyscallError("bind", syscall.EADDRINUSE)}
+		}
+		return real(tn, ctx)
+	}
+	running := func(context.Context) (api.Tailnet, error) { return api.Tailnet{State: "Running", IP: ip}, nil }
+	_, err := Start(context.Background(), Config{Dir: dir, Hub: true, Tailnet: true, Detect: running, Providers: provider.Mux{"fake": fake.New(nil)}})
+	if want := "can't listen on " + addr + ": address already in use"; err == nil || err.Error() != want || !errors.Is(err, syscall.EADDRINUSE) {
+		t.Fatalf("start with the tailnet's port in use: %v, want %q", err, want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "engine.db")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the refused start opened its store: %v", err)
+	}
+	if _, err := os.Stat(Socket(dir).Address); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the refused start left its socket: %v", err)
+	}
+}
+
+// A loopback address the engine can't bind refuses the start, even when the
+// system says it isn't assigned: only a Tailscale address is waited for.
+func TestStartRefusesALoopbackAddressItCantBind(t *testing.T) {
+	dir := stateDir(t)
+	real := listenOn
+	t.Cleanup(func() { listenOn = real })
+	listenOn = func(tn transport.Tailnet, ctx context.Context) (net.Listener, error) {
+		return nil, &net.OpError{Op: "listen", Net: "tcp", Err: os.NewSyscallError("bind", syscall.EADDRNOTAVAIL)}
+	}
+	for _, addr := range []string{"127.0.0.42:7465", "[::ffff:127.0.0.42%lo0]:7465"} {
+		_, err := Start(context.Background(), Config{Dir: dir, Hub: true, Listen: []string{addr}, Providers: provider.Mux{"fake": fake.New(nil)}})
+		if err == nil || !strings.HasPrefix(err.Error(), "can't listen on "+addr+": ") {
+			t.Fatalf("start on a loopback address it can't bind: %v, want a refusal naming %s", err, addr)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "engine.db")); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("the refused start on %s opened its store: %v", addr, err)
+		}
+	}
+}
+
+// A Tailscale address assigned after the engine started whose port another
+// process holds stops the engine with where and why, rather than waiting
+// for the port.
+func TestALateAddressWhosePortIsTakenStopsTheEngine(t *testing.T) {
+	quiet(t)
+	real := listenOn
+	t.Cleanup(func() { listenOn = real })
+	var tries atomic.Int32
+	listenOn = func(tn transport.Tailnet, ctx context.Context) (net.Listener, error) {
+		if tn.Address != unassigned {
+			return real(tn, ctx)
+		}
+		errno := syscall.EADDRINUSE
+		if tries.Add(1) == 1 {
+			errno = syscall.EADDRNOTAVAIL
+		}
+		return nil, &net.OpError{Op: "listen", Net: "tcp", Err: os.NewSyscallError("bind", errno)}
+	}
+	d, err := Start(context.Background(), Config{Dir: stateDir(t), Hub: true, Listen: []string{unassigned}, Providers: provider.Mux{"fake": fake.New(nil)}})
+	if err != nil {
+		t.Fatalf("start while the address is unassigned: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+	stopped := make(chan error, 1)
+	go func() { stopped <- d.Wait() }()
+	select {
+	case err := <-stopped:
+		if want := "can't listen on " + unassigned + ": address already in use"; err == nil || err.Error() != want {
+			t.Fatalf("the engine stopped with %v, want %q", err, want)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the engine kept waiting for a port in use after %d binds", tries.Load())
+	}
+}
+
+// An installed Tailscale's address that -listen names in another spelling
+// is bound once, by -listen.
+func TestAnInstalledAddressListenSpellsOtherwiseBindsOnce(t *testing.T) {
+	quiet(t)
+	ip := netip.MustParseAddr("100.64.0.9")
+	mapped := net.JoinHostPort(netip.AddrFrom16(ip.As16()).String(), Port)
+	real := listenOn
+	t.Cleanup(func() { listenOn = real })
+	var binds atomic.Int32
+	listenOn = func(tn transport.Tailnet, ctx context.Context) (net.Listener, error) {
+		if binds.Add(1) > 1 {
+			return nil, &net.OpError{Op: "listen", Net: "tcp", Err: os.NewSyscallError("bind", syscall.EADDRINUSE)}
+		}
+		return real(transport.Tailnet{Address: "127.0.0.1:0"}, ctx)
+	}
+	running := func(context.Context) (api.Tailnet, error) { return api.Tailnet{State: "Running", IP: ip}, nil }
+	d, err := Start(context.Background(), Config{Dir: stateDir(t), Hub: true, Tailnet: true, Listen: []string{mapped}, Detect: running, Providers: provider.Mux{"fake": fake.New(nil)}})
+	if err != nil {
+		t.Fatalf("start with %s listed and Tailscale at %s: %v", mapped, ip, err)
+	}
+	t.Cleanup(func() { d.Close() })
+	if n := binds.Load(); n != 1 {
+		t.Fatalf("%d binds, want 1", n)
 	}
 }

@@ -303,25 +303,58 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	// The lock is ours, so a socket file left here is from a dead engine.
 	os.Remove(sock.Address)
 
-	st, err := store.Open(filepath.Join(cfg.Dir, "engine.db"))
+	// Every listener binds before the engine opens its store, so one that
+	// can't serve where it was told to refuses to start having changed
+	// nothing: no run reconciled or continued, no effect run.
+	var lns []net.Listener
+	tns := []transport.Transport{sock} // where each of lns serves
+	defer func() {
+		if err != nil {
+			for _, ln := range lns {
+				ln.Close()
+			}
+		}
+	}()
+	ln, err := sock.Listen(ctx)
 	if err != nil {
+		return nil, cantListen(sock.Address, err)
+	}
+	lns = append(lns, ln)
+	if err := os.Chmod(sock.Address, 0o600); err != nil {
 		return nil, err
 	}
-	d.undo = append(d.undo, st.Close)
-	st.SetLimits(cfg.Children)
-	st.SetPlaces(places(cfg.Dir))
-	st.SetLinks(links(cfg.Dir))
-	d.store = st
+	type unbound struct {
+		tn  transport.Tailnet
+		err error
+	}
+	var later []unbound
+	for _, addr := range cfg.Listen {
+		tn := transport.Tailnet{Address: addr}
+		ln, err := listenOn(tn, ctx)
+		switch {
+		case errors.Is(err, syscall.EADDRNOTAVAIL) && !loopback(addr):
+			// At boot Tailscale may not have assigned the address yet.
+			later = append(later, unbound{tn, err})
+			continue
+		case err != nil:
+			return nil, cantListen(addr, err)
+		}
+		lns = append(lns, ln)
+		tns = append(tns, tn)
+		d.addrs = append(d.addrs, ln.Addr())
+	}
 
 	// The engine runs its own node when it needs the tailnet, to serve it
 	// or to reach a hub on it, and Tailscale isn't installed. A hub on
 	// loopback is on this machine, which no node reaches.
 	hubOnTailnet := cfg.HubServer != "" && !loopback(cfg.HubServer)
 	var installed bool
+	var ts api.Tailnet // the installed Tailscale's status as the engine starts
 	if cfg.Tailnet || hubOnTailnet {
 		probe, cancel := context.WithTimeout(ctx, time.Second)
-		_, err := d.detect(probe)
+		t, err := d.detect(probe)
 		cancel()
+		ts = t
 		// A missing Tailscale fails at once; one slow to answer is there.
 		installed = err == nil || errors.Is(err, context.DeadlineExceeded)
 		if !installed {
@@ -336,6 +369,45 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 			}
 		}
 	}
+	if cfg.Tailnet && d.node != nil {
+		tn := transport.Embedded{Node: d.node, Address: ":" + Port}
+		ln, err := tn.Listen(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("daemon: listen on the embedded node: %w", err)
+		}
+		lns = append(lns, ln)
+		tns = append(tns, tn)
+		d.nodeServes = true
+	}
+	// An installed Tailscale that has its address already is bound now
+	// too; serveInstalled waits for one that has none yet.
+	var tailnetAt string
+	if installed && cfg.Tailnet && ts.Running() && ts.IP.IsValid() {
+		if addr := net.JoinHostPort(ts.IP.String(), Port); !listed(cfg.Listen, addr) {
+			tn := transport.Tailnet{Address: addr}
+			ln, err := listenOn(tn, ctx)
+			switch {
+			case errors.Is(err, syscall.EADDRNOTAVAIL):
+			case err != nil:
+				return nil, cantListen(addr, err)
+			default:
+				lns = append(lns, ln)
+				tns = append(tns, tn)
+				d.addrs = append(d.addrs, ln.Addr())
+				tailnetAt = addr
+			}
+		}
+	}
+
+	st, err := store.Open(filepath.Join(cfg.Dir, "engine.db"))
+	if err != nil {
+		return nil, err
+	}
+	d.undo = append(d.undo, st.Close)
+	st.SetLimits(cfg.Children)
+	st.SetPlaces(places(cfg.Dir))
+	st.SetLinks(links(cfg.Dir))
+	d.store = st
 
 	var rep *hub.Replica
 	var hubc hub.Client
@@ -428,22 +500,6 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	d.undo = append(d.undo, h.Close)
 	d.host = h
 
-	var lns []net.Listener
-	defer func() {
-		if err != nil {
-			for _, ln := range lns {
-				ln.Close()
-			}
-		}
-	}()
-	ln, err := sock.Listen(ctx)
-	if err != nil {
-		return nil, err
-	}
-	lns = append(lns, ln)
-	if err := os.Chmod(sock.Address, 0o600); err != nil {
-		return nil, err
-	}
 	svc := d.startPlugins(cfg)
 	d.undo = append(d.undo, func() error { svc.Close(); return nil })
 	d.clis = newCLIs(ctx, cfg.Dir, cfg.Providers, h, cliupdate.NewChecker(cfg.Versions, filepath.Join(cfg.Dir, "cli-versions.json")))
@@ -454,36 +510,8 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	tailnetServer := func(tn transport.Transport) *transport.Server {
 		return &transport.Server{Transport: tn, Endpoint: endpoint{h, d, true}, Hub: rep, Launches: ls, CLIs: d.clis, Secrets: h, Projects: endpoint{h, d, true}, Skills: h, Replies: h, Authorize: g.authorize}
 	}
-	type unbound struct {
-		tn  transport.Tailnet
-		err error
-	}
-	var later []unbound
-	for _, addr := range cfg.Listen {
-		tn := transport.Tailnet{Address: addr}
-		ln, err := listenOn(tn, ctx)
-		switch {
-		case errors.Is(err, syscall.EADDRNOTAVAIL):
-			// At boot Tailscale may not have assigned the address yet.
-			later = append(later, unbound{tn, err})
-			continue
-		case err != nil:
-			return nil, err
-		}
-		lns = append(lns, ln)
-		d.addrs = append(d.addrs, ln.Addr())
+	for _, tn := range tns[1:] {
 		servers = append(servers, tailnetServer(tn))
-	}
-
-	if cfg.Tailnet && d.node != nil {
-		tn := transport.Embedded{Node: d.node, Address: ":" + Port}
-		ln, err := tn.Listen(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("daemon: listen on the embedded node: %w", err)
-		}
-		lns = append(lns, ln)
-		servers = append(servers, tailnetServer(tn))
-		d.nodeServes = true
 	}
 
 	var serving, background sync.WaitGroup
@@ -501,7 +529,10 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	}
 	for _, u := range later {
 		serving.Go(func() {
-			ln := d.listenLater(ctx, u.tn, u.err)
+			ln, err := d.listenLater(ctx, u.tn, u.err)
+			if err != nil {
+				fail(err)
+			}
 			if ln == nil {
 				return
 			}
@@ -525,7 +556,9 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 			}
 		})
 	}
-	if installed && cfg.Tailnet {
+	if tailnetAt != "" {
+		d.servingTailnet(tailnetAt, ts.Name)
+	} else if installed && cfg.Tailnet {
 		serving.Go(func() {
 			if err := d.serveInstalled(ctx, cfg.Listen, tailnetServer); err != nil {
 				fail(err)
@@ -551,29 +584,44 @@ func Start(ctx context.Context, cfg Config) (_ *Daemon, err error) {
 	return d, nil
 }
 
-// listenLater retries tn's address until it binds or ctx ends, logging each
-// new error once.
-func (d *Daemon) listenLater(ctx context.Context, tn transport.Tailnet, err error) net.Listener {
-	failing := err.Error()
+// cantListen is Start's error for an address it can't bind: the address
+// and what the system said, as "address already in use".
+func cantListen(addr string, err error) error {
+	var se *os.SyscallError
+	if !errors.As(err, &se) {
+		return err
+	}
+	return fmt.Errorf("can't listen on %s: %w", addr, se.Err)
+}
+
+// listenLater retries tn's address while Tailscale hasn't assigned it, until
+// it binds or ctx ends. Once assigned, an address it can't bind is Start's
+// error for it: a port in use isn't waited for.
+func (d *Daemon) listenLater(ctx context.Context, tn transport.Tailnet, err error) (net.Listener, error) {
 	slog.Warn("waiting to listen", "addr", tn.Address, "err", err)
 	for delay := 250 * time.Millisecond; ; delay = min(2*delay, 30*time.Second) {
 		select {
 		case <-ctx.Done():
-			return nil
+			return nil, nil
 		case <-time.After(delay):
 		}
 		ln, err := listenOn(tn, ctx)
-		if err == nil {
-			d.mu.Lock()
-			d.addrs = append(d.addrs, ln.Addr())
-			d.mu.Unlock()
-			slog.Info("listening", "addr", ln.Addr())
-			return ln
+		switch {
+		case ctx.Err() != nil:
+			if ln != nil {
+				ln.Close()
+			}
+			return nil, nil
+		case errors.Is(err, syscall.EADDRNOTAVAIL):
+			continue
+		case err != nil:
+			return nil, cantListen(tn.Address, err)
 		}
-		if err.Error() != failing {
-			failing = err.Error()
-			slog.Warn("waiting to listen", "addr", tn.Address, "err", err)
-		}
+		d.mu.Lock()
+		d.addrs = append(d.addrs, ln.Addr())
+		d.mu.Unlock()
+		slog.Info("listening", "addr", ln.Addr())
+		return ln, nil
 	}
 }
 

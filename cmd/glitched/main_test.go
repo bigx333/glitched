@@ -17,6 +17,15 @@ import (
 	"glitched/internal/transport"
 )
 
+// TestMain runs the program itself in a process a test starts as glitched.
+func TestMain(m *testing.M) {
+	if os.Getenv("GLITCHED_TEST_MAIN") != "" {
+		main()
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
 func TestServeRunAndReplicate(t *testing.T) {
 	// A short path: unix socket paths are limited to about 100 bytes.
 	dir, err := os.MkdirTemp("", "gl")
